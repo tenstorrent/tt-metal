@@ -41,7 +41,6 @@ ALWI void mask_tile_init() {
 // clang-format on
 ALWI void mask_tile(uint32_t idst_data, uint32_t idst2_mask, DataFormat data_format = DataFormat::Float16_b) {
 #ifdef ARCH_QUASAR
-    // The Quasar bodies read the mask from the tile after the data.
     if (data_format == DataFormat::Float16_b || data_format == DataFormat::Float16) {
         MATH(SFPU_UNARY_CALL(
             DST_SYNC_MODE, DST_ACCUM_MODE, calculate_mask, (true /* APPROXIMATE */), idst_data, VectorMode::RC));
@@ -62,7 +61,7 @@ ALWI void mask_tile(uint32_t idst_data, uint32_t idst2_mask, DataFormat data_for
             VectorMode::RC));
     } else if (data_format == DataFormat::Int32) {
 #ifdef ARCH_BLACKHOLE
-        // One call per tile: VectorMode::None runs the body once, and 32 iterations cover the four faces.
+        // VectorMode::None with 32 iterations covers the four faces in one call.
         MATH(SFPU_BINARY_CALL(
             DST_SYNC_MODE,
             DST_ACCUM_MODE,

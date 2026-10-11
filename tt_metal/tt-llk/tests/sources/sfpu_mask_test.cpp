@@ -2,8 +2,7 @@
 //
 // SPDX-License-Identifier: Apache-2.0
 
-// Driver for the mask SFPU bodies (llk_sfpu/ckernel_sfpu_mask.h) with the data tile (buffer_A) at DEST index
-// MASK_DATA_DST_INDEX and the mask tile (buffer_B) at MASK_MASK_DST_INDEX; Int32 drives calculate_int_mask, MASK_POSINF calculate_mask_posinf.
+// Data tile (buffer_A) at DEST index MASK_DATA_DST_INDEX, mask tile (buffer_B) at MASK_MASK_DST_INDEX.
 
 #include <cstdint>
 
@@ -11,7 +10,6 @@
 #include "llk_defs.h"
 #include "params.h"
 
-// Globals required by the test framework.
 std::uint32_t unp_cfg_context          = 0;
 std::uint32_t pack_sync_tile_dst_ptr   = 0;
 std::uint32_t math_sync_tile_dst_index = 0;
@@ -67,7 +65,6 @@ void run_kernel(RUNTIME_PARAMETERS params)
     _llk_math_eltwise_unary_datacopy_init_wrapper_<DataCopyType::A2D, is_fp32_dest_acc_en, BroadcastType::NONE, false /* is_int_fpu_en */, PackMode::Default>(
         TILE_NUM_FACES, formats.math);
 
-    // mask_tile_init: the unary SFPU init for the mask op (ADDR_MOD_7 with a zero DEST step, counters reset).
     _llk_math_eltwise_unary_sfpu_init_<SfpuType::mask>();
     sfpu::mask_init();
 
@@ -85,7 +82,6 @@ void run_kernel(RUNTIME_PARAMETERS params)
     }
     else if constexpr (int_mask)
     {
-        // MASK_ONE_CALL: one 32-row call per tile, as the Blackhole Int32 mask_tile issues it.
         constexpr int MASK_ITERATIONS         = MASK_ONE_CALL ? 32 : 8;
         constexpr VectorMode MASK_VECTOR_MODE = MASK_ONE_CALL ? VectorMode::None : VectorMode::RC;
         _llk_math_eltwise_binary_sfpu_params_(

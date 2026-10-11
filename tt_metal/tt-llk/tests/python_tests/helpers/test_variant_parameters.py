@@ -2230,8 +2230,7 @@ class SFPU_MISC_OP(TemplateParameter):
 
 @dataclass
 class SFPU_MASK_PLACEMENT(TemplateParameter):
-    """DEST tile indices of the data and the mask tile for sources/sfpu_mask_test.cpp, and whether
-    the tile runs as one 32-row call (VectorMode::None) instead of four 8-row calls."""
+    """DEST tile indices of the data and mask tiles for sfpu_mask_test.cpp, and whether it runs one 32-row call."""
 
     mask_data_dst_index: int = 0
     mask_mask_dst_index: int = 1

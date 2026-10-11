@@ -1823,7 +1823,6 @@ void call_binary_sfpu_operation_init()
     }
     else if constexpr (BINOP == BinaryOp::MASK)
     {
-        // mask_init programs the DEST row step that the mask body's store uses.
         SFPU_BINARY_INIT_FN_NO_ARGS(add1, sfpu::mask_init);
     }
     else

@@ -20,13 +20,11 @@ namespace sfpu {
 
 inline void mask_init() { math::reset_counters(p_setrwc::SET_ABD_F); }
 
-// The bodies take the data and the mask tile as absolute DEST tile indices and write the result in place. The five
-// instructions of the first row are recorded into replay slots 0 to 4 while they execute and replayed for the rest.
+// The first row's instructions are recorded into the replay buffer while they execute and replayed for the rest.
 namespace mask_detail {
-// One DEST tile is 64 rows for the SFPU load and store address field, in both DEST widths.
 constexpr std::uint32_t dst_tile_rows = 64;
 constexpr std::uint32_t row_instructions = 5;
-}  // namespace mask_detail
+}
 
 template <bool APPROXIMATION_MODE, int ITERATIONS = 8>
 inline void calculate_mask(
@@ -67,7 +65,6 @@ inline void calculate_mask_posinf(
     const std::uint32_t dst_index_data, const std::uint32_t dst_index_mask, const std::uint32_t /* dst_index_out */) {
     const std::uint32_t data_addr = dst_index_data * mask_detail::dst_tile_rows;
     const std::uint32_t mask_addr = dst_index_mask * mask_detail::dst_tile_rows;
-    // +infinity as a bf16 immediate in the high half of the register.
     TTI_SFPLOADI(p_sfpu::LREG1, sfpi::SFPLOADI_MOD0_FLOATB, 0x7F80);
     TTI_REPLAY(0, mask_detail::row_instructions, 1, 1);
     TT_SFPLOAD(p_sfpu::LREG0, InstrModLoadStore::DEFAULT, ADDR_MOD_3, mask_addr);

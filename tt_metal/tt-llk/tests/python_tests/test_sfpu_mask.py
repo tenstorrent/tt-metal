@@ -1,8 +1,6 @@
 # SPDX-FileCopyrightText: © 2026 Tenstorrent AI ULC
 # SPDX-License-Identifier: Apache-2.0
-"""Mask with the data and the mask tile at any two DEST indices of the acquired half; Float16_b
-drives calculate_mask and calculate_mask_posinf, Int32 calculate_int_mask, on Blackhole also in the
-one 32-row call per tile that the Int32 mask_tile issues there."""
+"""Mask with the data and mask tiles at any two DEST indices, including the one-call Blackhole Int32 form."""
 
 import torch
 from helpers.chip_architecture import ChipArchitecture, get_chip_architecture
@@ -17,7 +15,6 @@ from helpers.test_variant_parameters import SFPU_MASK_PLACEMENT, TILE_COUNT
 FLOAT_FORMATS = input_output_formats([DataFormat.Float16_b], same=True)
 INT_FORMATS = input_output_formats([DataFormat.Int32], same=True)
 
-# (data tile, mask tile) placements; the first pair is the one the in-tree callers pass.
 PLACEMENTS_16BIT_DEST = [(0, 1), (1, 0), (0, 2), (0, 7), (7, 0), (3, 5), (6, 2)]
 PLACEMENTS_32BIT_DEST = [(0, 1), (1, 0), (0, 3), (3, 0), (2, 1)]
 ONE_CALL_FORMS = (
@@ -34,7 +31,7 @@ def _placements(dest_acc):
 
 
 def _stimuli(torch_format):
-    """Non-zero data (a ramp of 1..8) and a mask with an exact zero in about every third element."""
+    """Non-zero data and a mask with an exact zero in about every third element."""
     torch.manual_seed(0)
     position = torch.arange(ELEMENTS_PER_TILE)
     data = (position % 8 + 1).to(torch_format)
