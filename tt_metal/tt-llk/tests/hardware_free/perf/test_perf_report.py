@@ -32,6 +32,7 @@ from helpers.perf.core import (
     _prune_runs,
     _refresh_latest,
     _reject_duplicate_keys,
+    add_pipeline_coupling,
     assert_zones_dont_overlap,
     combine_perf_reports,
     postprocess_tile_loop,
@@ -127,6 +128,39 @@ def test_report_columns_conform_to_output_schema():
         stat_column("MATH_ISOLATE", STD),
     ]:
         assert expected in combined.columns, f"missing expected column {expected!r}"
+
+
+def test_pipeline_coupling_is_l1_to_l1_minus_the_slowest_stage():
+    frame = pd.DataFrame(
+        {
+            "marker": ["INIT", "TILE_LOOP"],
+            stat_column("L1_TO_L1", MEAN): [50.0, 100.0],
+            stat_column("UNPACK_ISOLATE", MEAN): [40.0, 60.0],
+            stat_column("MATH_ISOLATE", MEAN): [45.0, 80.0],
+            stat_column("PACK_ISOLATE", MEAN): [30.0, float("nan")],
+        }
+    )
+    coupling = add_pipeline_coupling(frame)[stat_column("COUPLING", MEAN)]
+    assert pd.isna(coupling[0]), "INIT rows carry no coupling"
+    assert (
+        coupling[1] == 20.0
+    ), "a missing stage is skipped, the slowest present one counts"
+    # Without isolates (or without L1_TO_L1) there is nothing to compare: no column, so the schema stays per-test.
+    only_pipeline = pd.DataFrame(
+        {"marker": ["TILE_LOOP"], stat_column("L1_TO_L1", MEAN): [1.0]}
+    )
+    assert (
+        stat_column("COUPLING", MEAN)
+        not in add_pipeline_coupling(only_pipeline).columns
+    )
+    # The report the run writes carries it, and per tile after post-processing like the other timing columns.
+    combined = _build(_fake_formats())
+    assert stat_column("COUPLING", MEAN) in combined.columns
+    post = postprocess_tile_loop(combined.copy())
+    tile = post[post["marker"] == "TILE_LOOP"].iloc[0]
+    assert (
+        tile[stat_column("COUPLING", MEAN)] == 0.0
+    )  # L1_TO_L1 20 - MATH_ISOLATE 20, divided by 4 tiles
 
 
 def test_report_without_formats_still_conforms():

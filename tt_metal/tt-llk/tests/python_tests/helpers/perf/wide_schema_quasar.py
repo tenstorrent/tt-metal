@@ -19,6 +19,7 @@ Imports no device libraries, so it loads without hardware.
 from tt_llk_perf import metrics as _mc
 
 from .schema import (
+    COUPLING_BASE,
     MEAN,
     METRIC_BASES,
     RUN_TYPE_NAMES,
@@ -45,7 +46,7 @@ _TIMING_COLUMNS = [
     Column(stat_column(base, kind), "float64", True, "timing")
     for base in _TIMING_BASES
     for kind in (MEAN, STD)
-]
+] + [Column(stat_column(COUPLING_BASE, MEAN), "float64", True, "timing")]
 
 
 # ── The published Quasar table: headers + provenance ─────────────────────────
