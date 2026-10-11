@@ -1,0 +1,8 @@
+{
+  "MainPID": "759228",
+  "Result": "success",
+  "ControlGroup": "/user.slice/user-1000.slice/user@1000.service/app.slice/qwen38-gdn-combined-padding-v1-20261011.service",
+  "LoadState": "loaded",
+  "ActiveState": "active",
+  "InvocationID": "28043374fa9447778241fb4f4828de90"
+}

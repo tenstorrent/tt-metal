@@ -7,7 +7,9 @@ from models.demos.qwen38_27b_qb2.tests.compact_gdn import (
     BASELINE,
     CANDIDATE,
     COMBINED_GDN_POLICY,
+    PADDING_GDN_POLICY,
     changing_input_checkpoints,
+    policy_pair,
     validate_long_horizon,
 )
 
@@ -71,13 +73,20 @@ def test_incomplete_or_invalid_boundary_evidence_rejected(corruption, expect_err
         validate_long_horizon(value)
 
 
-def test_combined_boundary_requires_its_explicit_policy_pair(expect_error):
+@pytest.mark.parametrize("candidate", [COMBINED_GDN_POLICY, PADDING_GDN_POLICY])
+def test_combined_boundary_requires_its_explicit_policy_pair(expect_error, candidate):
     value = report()
-    value.update(baseline=CANDIDATE, candidate=COMBINED_GDN_POLICY)
+    value.update(baseline=CANDIDATE, candidate=candidate)
     with expect_error(ValueError, "policies differ"):
         validate_long_horizon(value)
-    assert validate_long_horizon(value, baseline=CANDIDATE, candidate=COMBINED_GDN_POLICY)[
-        "exact_boundary_comparison_passed"
-    ]
+    assert validate_long_horizon(value, baseline=CANDIDATE, candidate=candidate)["exact_boundary_comparison_passed"]
     with expect_error(ValueError, "Unsupported"):
-        validate_long_horizon(value, baseline=BASELINE, candidate=COMBINED_GDN_POLICY)
+        validate_long_horizon(value, baseline=BASELINE, candidate=candidate)
+
+
+def test_experiment_selection_preserves_original_controls_and_rejects_ambiguous_modes(expect_error):
+    assert policy_pair() == (BASELINE, CANDIDATE)
+    assert policy_pair(combined=True) == (CANDIDATE, COMBINED_GDN_POLICY)
+    assert policy_pair(padding=True) == (CANDIDATE, PADDING_GDN_POLICY)
+    with expect_error(ValueError, "one combined"):
+        policy_pair(combined=True, padding=True)

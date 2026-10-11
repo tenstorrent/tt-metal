@@ -11,8 +11,9 @@ import torch
 import ttnn
 from models.demos.qwen38_27b_qb2.tt import decoder
 from models.demos.qwen38_27b_qb2.tt.gdn_step.workspace import (
-    COMBINED_GDN_POLICY,
     COMPACT_GDN_POLICIES,
+    PADDING_GDN_POLICY,
+    RESIDENT_GDN_POLICIES,
     CompactScratch,
     DecodeWorkspace,
 )
@@ -367,25 +368,27 @@ def test_flat_prepare_policy_selects_preallocated_buffers_and_retains_fallback(m
     ]
 
 
-def test_combined_artifact_keeps_qualified_precision_and_changes_only_decode_policy():
+@pytest.mark.parametrize("recurrence", RESIDENT_GDN_POLICIES)
+def test_combined_artifact_keeps_qualified_precision_and_changes_only_decode_policy(recurrence):
     config = Path(__file__).resolve().parents[2] / "config"
     before = load_precision(config / "precision_single_step_compact_gdn_bfp8_all.json")
-    after = load_precision(config / f"precision_{COMBINED_GDN_POLICY}_bfp8_all.json")
+    after = load_precision(config / f"precision_{recurrence}_bfp8_all.json")
     assert {k: v for k, v in before.items() if k not in ("config_id", "decode_recurrence")} == {
         k: v for k, v in after.items() if k not in ("config_id", "decode_recurrence")
     }
-    assert decoder_policy(after, 0)["decode_recurrence"] == COMBINED_GDN_POLICY
+    assert decoder_policy(after, 0)["decode_recurrence"] == recurrence
 
 
 @pytest.mark.parametrize("batch", [1, 8, 16, 32])
-def test_combined_resident_kernel_only_receives_prepared_compact_buckets(monkeypatch, batch):
+@pytest.mark.parametrize("recurrence", RESIDENT_GDN_POLICIES)
+def test_combined_resident_kernel_only_receives_prepared_compact_buckets(monkeypatch, batch, recurrence):
     captured = []
     scratch = object()
     monkeypatch.setattr(decoder, "step_from_flat", lambda *a, **k: captured.append(k) or scratch)
     compact = batch in (16, 32)
     layer = SimpleNamespace(
         config=SimpleNamespace(linear_num_value_heads=12),
-        policy={"decode_recurrence": COMBINED_GDN_POLICY},
+        policy={"decode_recurrence": recurrence},
         gdn_decode_workspace=SimpleNamespace(
             output=lambda b: scratch,
             shared_qk=lambda b: None,
@@ -404,3 +407,28 @@ def test_combined_resident_kernel_only_receives_prepared_compact_buckets(monkeyp
     assert result is scratch
     assert captured[0].get("resident_state", False) is compact
     assert captured[0].get("compact_gates", False) is compact
+
+
+@pytest.mark.parametrize("recurrence", COMPACT_GDN_POLICIES)
+def test_compact_model_selects_padding_skip_only_for_new_policy(monkeypatch, recurrence):
+    epilogue_calls = []
+    packed, q, k, v, output, decay, beta = (object() for _ in range(7))
+    monkeypatch.setattr(ttnn, "to_memory_config", lambda tensor, config: tensor)
+    monkeypatch.setattr(ttnn, "reshape", lambda tensor, shape: tensor)
+    monkeypatch.setattr(decoder, "gdn_gates_from_packed", lambda *a, **k: (decay, beta))
+    monkeypatch.setattr(decoder, "compact_gdn_convolution", lambda *a, **k: None)
+    monkeypatch.setattr(decoder, "gdn_epilogue", lambda *a, **k: epilogue_calls.append(k))
+    layer = SimpleNamespace(
+        policy={"decode_recurrence": recurrence, "dram": True},
+        gdn_decode_workspace=SimpleNamespace(compact_buffers=lambda batch: (q, k, v, output)),
+        _linear=lambda *a, **k: packed,
+        _delta_recurrence=lambda *a, **k: output,
+        a_neg=object(),
+        dt_bias=object(),
+        conv_taps=object(),
+        weights={"linear_attn.norm.weight": object()},
+        eps=1e-6,
+    )
+    decoder.Qwen38Decoder._delta_compact(layer, object(), SimpleNamespace(conv=object()), 16)
+    assert len(epilogue_calls) == 1 and epilogue_calls[0]["compact_output"] is True
+    assert epilogue_calls[0].get("input_padding", "zero") == ("skip" if recurrence == PADDING_GDN_POLICY else "zero")

@@ -1,0 +1,77 @@
+{
+  "state": "running",
+  "steps": [
+    {
+      "name": "combined-4k",
+      "state": "completed",
+      "command": [
+        "/bin/bash",
+        "/home/ttuser/qwen38-artifacts-20261007/gdn-combined-padding-source-v1/scripts/run_safe_pytest.sh",
+        "/home/ttuser/qwen38-artifacts-20261007/gdn-combined-padding-source-v1/models/demos/qwen38_27b_qb2/tests/test_compact_gdn_long_horizon.py",
+        "--rootdir=/home/ttuser/qwen38-artifacts-20261007/gdn-combined-padding-source-v1",
+        "-c",
+        "/home/ttuser/qwen38-artifacts-20261007/gdn-combined-padding-source-v1/pytest.ini",
+        "-vv",
+        "-s",
+        "--tb=short",
+        "--timeout=1620",
+        "--junitxml=/home/ttuser/qwen38-artifacts-20261007/gdn-combined-padding-v1/combined-4k/hardware.xml"
+      ],
+      "timeout_seconds": 1800,
+      "started_at": 1791685356.608094,
+      "finished_at": 1791685390.649797
+    },
+    {
+      "name": "before",
+      "state": "running",
+      "command": [
+        "/bin/bash",
+        "/home/ttuser/qwen38-artifacts-20261007/gdn-combined-padding-source-v1/scripts/run_safe_pytest.sh",
+        "/home/ttuser/qwen38-artifacts-20261007/gdn-combined-padding-source-v1/models/demos/qwen38_27b_qb2/tests/test_galaxy_perf_sweep.py",
+        "--rootdir=/home/ttuser/qwen38-artifacts-20261007/gdn-combined-padding-source-v1",
+        "-c",
+        "/home/ttuser/qwen38-artifacts-20261007/gdn-combined-padding-source-v1/pytest.ini",
+        "-vv",
+        "-s",
+        "--tb=short",
+        "--timeout=5220",
+        "--junitxml=/home/ttuser/qwen38-artifacts-20261007/gdn-combined-padding-v1/before/hardware.xml"
+      ],
+      "timeout_seconds": 5400,
+      "started_at": 1791685390.6662385
+    }
+  ],
+  "cleanup_completed": false,
+  "hardware_started": true,
+  "survives_disconnect": true,
+  "resumes_after_reboot": false,
+  "promoted_to_serving": false,
+  "predecessor_unit": "qwen38-gdn-epilogue-padding-v3-20261010.service",
+  "predecessor_invocation": "0d1d3c7e58be42c4addf2a54f3df5a1a",
+  "hardware_lock": "/tmp/tt-device.lock",
+  "started_at": 1791685356.58676,
+  "target_tsu": 30,
+  "speculative_decoding": false,
+  "baseline_recurrence": "single_step_compact_gdn",
+  "candidate_recurrence": "single_step_compact_gdn_resident_gates_padding",
+  "updated_at": "2026-10-11T02:23:10Z",
+  "predecessor": {
+    "MainPID": "0",
+    "Result": "success",
+    "LoadState": "not-found",
+    "ActiveState": "inactive",
+    "InvocationID": ""
+  },
+  "active_stage": "before",
+  "combined_validation": {
+    "updates_per_batch": 4096,
+    "batches": [
+      16,
+      32
+    ],
+    "exact_boundary_comparison_passed": true,
+    "independent_dense_reference": false,
+    "full_model_qualified": false,
+    "promoted_to_serving": false
+  }
+}

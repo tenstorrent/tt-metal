@@ -3,7 +3,9 @@
 """Persistent scratch independent of request state; compact L1 can be replica-shared."""
 
 COMBINED_GDN_POLICY = "single_step_compact_gdn_resident_gates"
-COMPACT_GDN_POLICIES = ("single_step_compact_gdn", COMBINED_GDN_POLICY)
+PADDING_GDN_POLICY = "single_step_compact_gdn_resident_gates_padding"
+RESIDENT_GDN_POLICIES = (COMBINED_GDN_POLICY, PADDING_GDN_POLICY)
+COMPACT_GDN_POLICIES = ("single_step_compact_gdn", *RESIDENT_GDN_POLICIES)
 
 SINGLE_STEP_POLICIES = (
     "single_step",

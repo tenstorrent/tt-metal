@@ -2,13 +2,20 @@
 # SPDX-License-Identifier: Apache-2.0
 """Frozen compact GDN coverage, independent of device imports."""
 
-from models.demos.qwen38_27b_qb2.tt.gdn_step.workspace import COMBINED_GDN_POLICY
+from models.demos.qwen38_27b_qb2.tt.gdn_step.workspace import COMBINED_GDN_POLICY, PADDING_GDN_POLICY
 
 MODES = ((False, False, 0), (False, True, 0), (True, False, 0), (True, True, 0), (True, True, 2560))
 CASES = [(b, m, mode) for b in (16, 32) for m in ("l1", "dram") for mode in MODES]
 CASES += [(b, m, MODES[-1]) for b in (1, 17, 31) for m in ("l1", "dram")]
 BASELINE = "single_step_flat_prepare_epilogue"
 CANDIDATE = "single_step_compact_gdn"
+POLICY_PAIRS = ((BASELINE, CANDIDATE), (CANDIDATE, COMBINED_GDN_POLICY), (CANDIDATE, PADDING_GDN_POLICY))
+
+
+def policy_pair(*, combined=False, padding=False):
+    if type(combined) is not bool or type(padding) is not bool or (combined and padding):
+        raise ValueError("Select one combined GDN experiment mode")
+    return POLICY_PAIRS[2 if padding else 1 if combined else 0]
 
 
 def changing_input_checkpoints(updates):
@@ -19,7 +26,7 @@ def changing_input_checkpoints(updates):
 
 
 def validate_long_horizon(report, *, baseline=BASELINE, candidate=CANDIDATE):
-    if (baseline, candidate) not in ((BASELINE, CANDIDATE), (CANDIDATE, COMBINED_GDN_POLICY)):
+    if (baseline, candidate) not in POLICY_PAIRS:
         raise ValueError("Unsupported long-horizon policy pair")
     if report.get("state") != "completed" or report.get("cleanup_completed") is not True:
         raise ValueError("Long-horizon comparison did not complete cleanly")

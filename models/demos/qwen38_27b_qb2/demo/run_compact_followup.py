@@ -16,7 +16,7 @@ from models.demos.qwen38_27b_qb2.demo.run_bounded_layer_profile import run_captu
 from models.demos.qwen38_27b_qb2.demo.run_compact_gdn import compare_sweeps
 from models.demos.qwen38_27b_qb2.demo.run_long_context_capacity import environment, save
 from models.demos.qwen38_27b_qb2.demo.run_overnight_qualification import run as qualify
-from models.demos.qwen38_27b_qb2.tests.compact_gdn import BASELINE, CANDIDATE, COMBINED_GDN_POLICY
+from models.demos.qwen38_27b_qb2.tests.compact_gdn import BASELINE, CANDIDATE, POLICY_PAIRS, policy_pair
 from models.demos.qwen38_27b_qb2.tests.full_trace_profile import ARTIFACT_BUDGET, collect
 from models.demos.qwen38_27b_qb2.tests.gdn_epilogue import predecessor_ready
 from models.demos.qwen38_27b_qb2.tests.sweep_recovery import normalized_configuration, resume_measurements
@@ -27,7 +27,7 @@ MODEL_PREFIX = "models/demos/qwen38_27b_qb2/"
 
 def measured_win(directory, receipt, manifest, *, baseline=BASELINE, candidate=CANDIDATE):
     """Recompute the comparison from raw arms; status booleans alone are insufficient."""
-    if (baseline, candidate) not in ((BASELINE, CANDIDATE), (CANDIDATE, COMBINED_GDN_POLICY)):
+    if (baseline, candidate) not in POLICY_PAIRS:
         raise ValueError("Unsupported compact measurement policy pair")
     arms = {name: json.loads((directory / name / "sweep.json").read_text()) for name in ("before", "compact", "after")}
     sources = {
@@ -93,7 +93,7 @@ def verify_model_source(source, compact_manifest):
 
 def run(args):
     combined = getattr(args, "combined", False)
-    baseline, candidate = (CANDIDATE, COMBINED_GDN_POLICY) if combined else (BASELINE, CANDIDATE)
+    baseline, candidate = policy_pair(combined=combined, padding=getattr(args, "padding", False))
     policy = f"precision_{candidate}_bfp8_all.json"
     args.output.mkdir()
     status_path = args.output / "queue.json"
@@ -300,7 +300,9 @@ if __name__ == "__main__":
         "compact-results",
     ):
         parser.add_argument("--" + name, required=True, type=Path)
-    parser.add_argument("--combined", action="store_true")
+    modes = parser.add_mutually_exclusive_group()
+    modes.add_argument("--combined", action="store_true")
+    modes.add_argument("--padding", action="store_true")
     parser.add_argument(
         "--skip-profile", action="store_true", help="Run qualification only after the measured gain gate"
     )

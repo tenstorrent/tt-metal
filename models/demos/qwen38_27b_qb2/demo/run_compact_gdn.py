@@ -15,13 +15,7 @@ from pathlib import Path
 from models.demos.qwen38_27b_qb2.demo.run_b16_followup import passing_test, summarize_b16
 from models.demos.qwen38_27b_qb2.demo.run_bounded_layer_profile import run_capture
 from models.demos.qwen38_27b_qb2.demo.run_long_context_capacity import environment, save
-from models.demos.qwen38_27b_qb2.tests.compact_gdn import (
-    BASELINE,
-    CANDIDATE,
-    CASES,
-    COMBINED_GDN_POLICY,
-    validate_long_horizon,
-)
+from models.demos.qwen38_27b_qb2.tests.compact_gdn import CANDIDATE, CASES, policy_pair, validate_long_horizon
 from models.demos.qwen38_27b_qb2.tests.gdn_epilogue import predecessor_ready
 from models.demos.qwen38_27b_qb2.tests.gdn_epilogue_layer import compare
 from models.demos.qwen38_27b_qb2.tests.sweep_report import make_plan, save_report
@@ -100,7 +94,8 @@ def run(args):
         speculative_decoding=False,
     )
     combined = getattr(args, "combined", False)
-    baseline, candidate = (CANDIDATE, COMBINED_GDN_POLICY) if combined else (BASELINE, CANDIDATE)
+    padding = getattr(args, "padding", False)
+    baseline, candidate = policy_pair(combined=combined, padding=padding)
     status.update(baseline_recurrence=baseline, candidate_recurrence=candidate)
     model = args.source / "models/demos/qwen38_27b_qb2"
     manifest = json.loads(args.manifest.read_text())
@@ -195,13 +190,13 @@ def run(args):
             if predecessor_ready(props, receipt, args.after_invocation):
                 break
             time.sleep(20)
-        if combined:
+        if combined or padding:
             directory = stage(
                 "combined-4k",
                 "test_compact_gdn_long_horizon.py",
                 dict(
                     QWEN_COMPACT_LONG_HORIZON="1",
-                    QWEN_COMPACT_COMBINED="1",
+                    QWEN_COMPACT_COMBINED="2" if padding else "1",
                     QWEN_COMPACT_LONG_HORIZON_RECEIPT=str(args.output / "combined-4k/long-horizon.json"),
                 ),
                 1800,
@@ -273,9 +268,11 @@ if __name__ == "__main__":
     parser = argparse.ArgumentParser(description=__doc__)
     for name in ("task", "source", "weights", "output", "manifest", "after-receipt"):
         parser.add_argument("--" + name, type=Path, required=True)
-    parser.add_argument(
+    modes = parser.add_mutually_exclusive_group()
+    modes.add_argument(
         "--combined", action="store_true", help="Compare resident state plus compact gates to qualified compact GDN"
     )
+    modes.add_argument("--padding", action="store_true", help="Also skip unused epilogue input padding")
     parser.add_argument("--after-unit", required=True)
     parser.add_argument("--after-invocation", required=True)
     run(parser.parse_args())

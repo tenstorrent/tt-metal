@@ -26,8 +26,9 @@ from models.demos.qwen38_27b_qb2.tt.gdn_frontend.op import convolution as compac
 from models.demos.qwen38_27b_qb2.tt.gdn_step.gates import from_packed as gdn_gates_from_packed
 from models.demos.qwen38_27b_qb2.tt.gdn_step.model_adapter import step_from_flat
 from models.demos.qwen38_27b_qb2.tt.gdn_step.workspace import (
-    COMBINED_GDN_POLICY,
     COMPACT_GDN_POLICIES,
+    PADDING_GDN_POLICY,
+    RESIDENT_GDN_POLICIES,
     SHARED_QK_POLICIES,
     SINGLE_STEP_POLICIES,
     DecodeWorkspace,
@@ -892,7 +893,7 @@ class Qwen38Decoder(LightweightModule):
                 options["flat_prepare_outputs"] = self.gdn_decode_workspace.flat_outputs(b)
             if compact_qkv:
                 options["compact_qkv"] = True
-                if recurrence == COMBINED_GDN_POLICY:
+                if recurrence in RESIDENT_GDN_POLICIES:
                     options["resident_state"] = True
             if compact_gates:
                 options["compact_gates"] = True
@@ -938,7 +939,7 @@ class Qwen38Decoder(LightweightModule):
         packed = self._linear(x, "linear_attn.packed", keep_sharded=True)
         packed = ttnn.to_memory_config(packed, ttnn.L1_MEMORY_CONFIG)
         packed = ttnn.reshape(packed, [1, batch, 4160])
-        compact_gates = self.policy.get("decode_recurrence") == COMBINED_GDN_POLICY or self.policy.get(
+        compact_gates = self.policy.get("decode_recurrence") in RESIDENT_GDN_POLICIES or self.policy.get(
             "compact_gdn_gates", False
         )
         g, beta = gdn_gates_from_packed(packed, self.a_neg, self.dt_bias, compact=compact_gates)
@@ -964,6 +965,7 @@ class Qwen38Decoder(LightweightModule):
             compact_gate=True,
             compact_output=True,
             gate_offset=2560,
+            **({"input_padding": "skip"} if self.policy.get("decode_recurrence") == PADDING_GDN_POLICY else {}),
         )
         # Four-dimensional compact rows select the decode matmul. [1,B,C]
         # would be interpreted as a B-token prefill by the existing dispatcher.

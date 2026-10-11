@@ -19,12 +19,7 @@ from transformers import AutoConfig
 import ttnn
 from models.demos.qwen38_27b_qb2.demo.galaxy_serving import model_source_hashes
 from models.demos.qwen38_27b_qb2.demo.run_long_context_capacity import save
-from models.demos.qwen38_27b_qb2.tests.compact_gdn import (
-    BASELINE,
-    CANDIDATE,
-    COMBINED_GDN_POLICY,
-    validate_long_horizon,
-)
+from models.demos.qwen38_27b_qb2.tests.compact_gdn import policy_pair, validate_long_horizon
 from models.demos.qwen38_27b_qb2.tests.test_gdn_epilogue_layer import changing_input_comparison
 from models.demos.qwen38_27b_qb2.tt.decoder_tp import Qwen38TPDecoder
 from models.demos.qwen38_27b_qb2.tt.generator import configure_fabric
@@ -43,8 +38,8 @@ def test_compact_gdn_long_horizon():
     source = Path(__file__).resolve().parents[1]
     checkpoint = checkpoint_path()
     mode = os.getenv("QWEN_COMPACT_COMBINED", "0")
-    assert mode in ("0", "1"), "Unknown combined GDN experiment mode"
-    baseline, candidate = (CANDIDATE, COMBINED_GDN_POLICY) if mode == "1" else (BASELINE, CANDIDATE)
+    assert mode in ("0", "1", "2"), "Unknown combined GDN experiment mode"
+    baseline, candidate = policy_pair(combined=mode == "1", padding=mode == "2")
     precision = load_precision(source / f"config/precision_{candidate}_bfp8_all.json")
     report = dict(
         state="opening",

@@ -1,0 +1,82 @@
+{
+  "captured_at": "2026-10-11T02:32:07.065896+00:00",
+  "host": "10.228.203.98",
+  "units": {
+    "qwen38-gdn-combined-padding-v1-20261011.service": {
+      "MainPID": "759228",
+      "ExecMainStatus": "0",
+      "ActiveState": "active",
+      "SubState": "running",
+      "InvocationID": "28043374fa9447778241fb4f4828de90"
+    },
+    "qwen38-gdn-combined-padding-followup-v1-20261011.service": {
+      "MainPID": "759231",
+      "ExecMainStatus": "0",
+      "ActiveState": "active",
+      "SubState": "running",
+      "InvocationID": "3b91a375acef4a09b5cc4a9835bcc9ff"
+    }
+  },
+  "files": [
+    {
+      "path": "receipts/gdn-combined-padding-control-v1/launch.json",
+      "bytes": 2379,
+      "sha256": "fc3d19b30e81522ed1128459aaa10ceb6e74f5c1f6b4f601877cfd9d9dd0e078"
+    },
+    {
+      "path": "receipts/gdn-combined-padding-control-v1/launch-unit.json",
+      "bytes": 280,
+      "sha256": "d673f98938dbccb279504d2df1a52e50c11604befb65ae8bcbec435a4a8424bc"
+    },
+    {
+      "path": "receipts/gdn-combined-padding-control-v1/source-manifest.json",
+      "bytes": 38799,
+      "sha256": "1586c35ad3a95c3fbfe9cc6ee6ce594a45c0fbd0fde1001100c52f6e0d5e9425"
+    },
+    {
+      "path": "receipts/gdn-combined-padding-control-v1/preflight.log.gz",
+      "bytes": 316,
+      "sha256": "cde655098558d57944f9a365298880710eacb2ddd202f1524ce70a616eebe4d5"
+    },
+    {
+      "path": "receipts/gdn-combined-padding-control-v1/unit.xml.gz",
+      "bytes": 13767,
+      "sha256": "bcd0f60cf975bfbae7fcf74fd3677474508219a224c10649b13991ca4daa1562"
+    },
+    {
+      "path": "receipts/gdn-combined-padding-control-v1/collect.log.gz",
+      "bytes": 306,
+      "sha256": "a02ccacb83424be68b5ec18accbcddc28f6b3206658c1060a09c07b6b301a5e1"
+    },
+    {
+      "path": "receipts/gdn-combined-padding-followup-control-v1/launch.json",
+      "bytes": 2214,
+      "sha256": "5b90ea2ca7f78269dd5c2e2cccc0c44d489fde5292dcb337154426687ceb4eb2"
+    },
+    {
+      "path": "receipts/gdn-combined-padding-followup-control-v1/launch-unit.json",
+      "bytes": 289,
+      "sha256": "effecfe408612f84be045fac1fd7d701450bf43091b00c94d042d7f5ad47fbdc"
+    },
+    {
+      "path": "receipts/gdn-combined-padding-v1/queue-at-capture.json",
+      "bytes": 2749,
+      "sha256": "fc590e04d8a1061ff0dc6132e5b6f06564ff6c9b81df51824cdfd703713d007c"
+    },
+    {
+      "path": "receipts/gdn-combined-padding-v1/combined-4k/long-horizon.json",
+      "bytes": 38226,
+      "sha256": "15a3fbe49c9db6e53ba4cf99612d917999500ebeca7a9e1b92cf240f6afcab64"
+    },
+    {
+      "path": "receipts/gdn-combined-padding-v1/combined-4k/hardware.xml.gz",
+      "bytes": 305,
+      "sha256": "779b3f56990a7c8dcc7a670d9b856c655b7787a3444ec2ec8f2b7d82c8ce34a4"
+    },
+    {
+      "path": "receipts/gdn-combined-padding-followup-v1/queue-at-capture.json",
+      "bytes": 721,
+      "sha256": "61df6eab3f504802e6e19b8f82cef4468c57d27ba32527884f7a8b68c38c5f8c"
+    }
+  ]
+}

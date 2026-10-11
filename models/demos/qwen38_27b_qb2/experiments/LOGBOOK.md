@@ -2373,3 +2373,33 @@ still needed. [Final receipts](../galaxy-evidence/gdn-followup-results-v1/README
   pytest invocation omitted the root expect_error fixture (13 setup errors);
   reran with the exact root fixture AST loaded without TT device imports.
   Pre-commit reformatted the controller, then passed. No hardware result changed.
+
+## October 11, 02:15-02:32 UTC - Combined padding and profiling audit
+
+- Implemented a separate opt-in resident/compact-gate/padding-skip policy,
+  preserving qualified defaults, all precisions and small-batch fallback.
+  Real model glue selects padding skip; no test-only patch is needed. Extended
+  policy-pair checks, matched comparison and conditional qualification paths.
+- Frozen source passed 746 CPU tests, one skipped and 104 subtests in 4.30s.
+  Pre-commit formatted then passed. Hardware collection passed. Persistent
+  comparison launched as qwen38-gdn-combined-padding-v1-20261011, PID759228,
+  invocation28043374fa9447778241fb4f4828de90. Its 4096-update B16/B32 hardware
+  check passed with clean teardown; full-model before-control is active.
+- Conditional follower PID759231, invocation3b91a375acef4a09b5cc4a9835bcc9ff,
+  is waiting. It recomputes matched results and requires at least 1 absolute
+  TSU gain before G0/API/full GPQA. No new broad profile is automatically
+  queued. Kept hardware lock, stage timeouts and disconnect persistence.
+- Published launch/source/CPU/component receipts, distinguishing snapshot
+  status from final results. Combined20.8-20.9TSU remains a projection.
+- Audited old phase evidence before proposing new profiling. Earlier probe
+  covered nonresident recurrence, not current resident compute or epilogue.
+  Existing full-model profile has4.43% overhead and no physical DRAM/NoC
+  utilization data. Added PROFILING-AUDIT.md with coverage and attribution gaps.
+- Verified pinned Metal counter support and its existing multipass planner:
+  at most one L1 bank and three counter groups per pass. L1 NoC-port counters
+  are not DRAM-controller counters. Targeted current-kernel phase/counter work
+  is planned, not launched; the running comparison was not changed.
+- Issues: a guessed resident-kernel path did not exist; no code depended on
+  it. A documentation patch failed its final context check atomically and was
+  reapplied with the exact context. SSH collection used approved escalation.
+- Evidence: galaxy-evidence/gdn-combined-padding-launch-v1/README.md.

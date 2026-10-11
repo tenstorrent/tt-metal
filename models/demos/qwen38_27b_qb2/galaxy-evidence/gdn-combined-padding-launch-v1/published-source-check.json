@@ -1,0 +1,56 @@
+{
+  "frozen_base_revision": "57d4640a6504f03ed64d1525a441a1a2237c0450",
+  "all_byte_identical": true,
+  "files": [
+    {
+      "path": "demo/run_compact_followup.py",
+      "sha256": "66fc0fd41615f10713329f54a356959e5948341a102691be7e29c19c98441e10",
+      "byte_identical": true
+    },
+    {
+      "path": "demo/run_compact_gdn.py",
+      "sha256": "a5599d6b501ba4393fc576b429d58303d72040b3071fac471a2f00d79a0c8ade",
+      "byte_identical": true
+    },
+    {
+      "path": "tests/compact_gdn.py",
+      "sha256": "c8820e9a8724e3631a60b02b68898e0c37f04656241f130080f20e2b9c47d974",
+      "byte_identical": true
+    },
+    {
+      "path": "tests/test_compact_gdn_long_horizon.py",
+      "sha256": "727e2e68daf4c37a9c1e6ee199b1d8e7f6ac07da8404e79ab21d374ebf715113",
+      "byte_identical": true
+    },
+    {
+      "path": "tests/unit/test_compact_followup.py",
+      "sha256": "400f7b5584002f86ef6ea7cc9fa8f90be64d51eb5a94504ba87cd1d9e6b97506",
+      "byte_identical": true
+    },
+    {
+      "path": "tests/unit/test_compact_long_horizon.py",
+      "sha256": "2a7d3a5fb91edcbe1ad74d5514dfcc9f9383470cb7234f0d34977935f4df17d4",
+      "byte_identical": true
+    },
+    {
+      "path": "tests/unit/test_gdn_decode_integration.py",
+      "sha256": "47c99f45b7490af7b0be782b5fdb4d4d5cf3b498323fb37950e3340b2163e9a5",
+      "byte_identical": true
+    },
+    {
+      "path": "tt/decoder.py",
+      "sha256": "af1df5f651d997f8dc0fe6e6823709d279905a620bb37d5e6e1f9052f7b9d347",
+      "byte_identical": true
+    },
+    {
+      "path": "tt/gdn_step/workspace.py",
+      "sha256": "15b9dd9922428d9e196b7dd31a1b67e8ab6692dac7f6f8ab060b32d2e137bef7",
+      "byte_identical": true
+    },
+    {
+      "path": "config/precision_single_step_compact_gdn_resident_gates_padding_bfp8_all.json",
+      "sha256": "e69a3a599667b2629ce8c19c4891dd8cc03cf1cb01751a7d10737c028234454b",
+      "byte_identical": true
+    }
+  ]
+}

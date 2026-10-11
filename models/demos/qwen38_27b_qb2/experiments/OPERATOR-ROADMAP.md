@@ -13,15 +13,18 @@ combined candidate. The automatic compact qualification follower now requires
 at least 1 TSU measured gain, replacing its former 1% threshold. Prefix/SSD
 restore correctness remains a functional gate independent of decode TSU.
 
-October 11, 02:00 UTC queue update: no running or waiting experiment remains
-in the checked user systemd queue. Full-64-layer prefix restore passed on the
-isolated branch; serving integration remains open. Epilogue padding skip passed
-with a B16 packed-L1 change from 66.254 to 39.336 us (1.292-ms/48-layer projection,
-not measured full-model gain). The old epilogue/prefill dependency followers
-are failed historical jobs, not pending work. Next is the
-[GDN fusion design](GDN-FUSION-PLAN.md), followed by component experiments once
-implemented. AgentX remains gated on prefix caching plus SSD offload through
-serving; small kernel gains are batched before full qualification.
+October 11, 02:32 UTC queue update: the combined resident-state/compact-gates/
+epilogue-padding-skip comparison is running persistently. It passed 746 CPU
+tests and 4096 changing-input updates at B16/B32, then began the full-model
+before/candidate/after comparison at 32K and 16K. The conditional follower is
+waiting; it requires at least 1 TSU matched gain before G0/API/full GPQA and
+skips a new full profile. No full-model gain is claimed yet. See the
+[launch evidence](../galaxy-evidence/gdn-combined-padding-launch-v1/README.md).
+The [profiling audit](PROFILING-AUDIT.md) identifies current-kernel phase and
+hardware-counter gaps; that targeted diagnostic is planned, not queued.
+[GDN fusion](GDN-FUSION-PLAN.md) remains design work. Full-64-layer prefix
+restore passed on the isolated branch; serving integration remains open.
+AgentX remains gated on prefix caching plus SSD offload through serving.
 
 ## Evidence and boundaries
 

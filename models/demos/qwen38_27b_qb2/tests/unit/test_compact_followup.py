@@ -11,14 +11,13 @@ import pytest
 
 from models.demos.qwen38_27b_qb2.demo import run_compact_followup as queue
 from models.demos.qwen38_27b_qb2.demo.run_compact_gdn import compare_sweeps
+from models.demos.qwen38_27b_qb2.tests.compact_gdn import COMBINED_GDN_POLICY, PADDING_GDN_POLICY, policy_pair
 from models.demos.qwen38_27b_qb2.tests.sweep_report import make_plan, summarize
 from models.demos.qwen38_27b_qb2.tests.unit.test_compact_gdn_queue import arms
 
 
-def evidence(tmp_path, gain=1.2, *, combined=False):
-    baseline, candidate = (
-        (queue.CANDIDATE, queue.COMBINED_GDN_POLICY) if combined else (queue.BASELINE, queue.CANDIDATE)
-    )
+def evidence(tmp_path, gain=1.2, *, combined=False, padding=False):
+    baseline, candidate = policy_pair(combined=combined, padding=padding)
     source = tmp_path / "source"
     manifest = {}
     for name in (
@@ -79,6 +78,8 @@ def evidence(tmp_path, gain=1.2, *, combined=False):
             weights=tmp_path / "weights",
             after_unit="compact.service",
             after_invocation="original",
+            combined=combined,
+            padding=padding,
         ),
         receipt,
         manifest,
@@ -141,8 +142,10 @@ def test_model_identity_includes_added_and_deleted_files(tmp_path, change, expec
 
 
 @pytest.mark.parametrize("gain,score_passes", [(1.0, False), (1.02, False), (1.2, False), (1.2, True)])
-def test_controller_orders_qualification_and_matching_profiles(tmp_path, monkeypatch, gain, score_passes):
-    args, _, _ = evidence(tmp_path, gain)
+@pytest.mark.parametrize("padding", [False, True])
+def test_controller_orders_qualification_and_matching_profiles(tmp_path, monkeypatch, gain, score_passes, padding):
+    args, _, _ = evidence(tmp_path, gain, padding=padding)
+    candidate = PADDING_GDN_POLICY if padding else queue.CANDIDATE
     calls = []
     monkeypatch.setattr(queue.signal, "signal", lambda *args: None)
     monkeypatch.setattr(
@@ -154,7 +157,8 @@ def test_controller_orders_qualification_and_matching_profiles(tmp_path, monkeyp
 
     def qualify(options):
         calls.append("qualify")
-        assert options.control_precision == queue.POLICY and options.accuracy_only and options.native_control_only
+        assert options.control_precision == f"precision_{candidate}_bfp8_all.json"
+        assert options.accuracy_only and options.native_control_only
         options.results.mkdir()
         (options.results / "queue.json").write_text(
             json.dumps(
@@ -174,7 +178,7 @@ def test_controller_orders_qualification_and_matching_profiles(tmp_path, monkeyp
     def capture(command, *, env, root, **kwargs):
         assert calls[0] == "qualify"
         calls.append(root.name)
-        assert env["QWEN_PROFILE_RECURRENCE"] == queue.CANDIDATE
+        assert env["QWEN_PROFILE_RECURRENCE"] == candidate
         assert env["QWEN_PROFILE_BATCH"] == "16" and env["QWEN_PROFILE_CONTEXT"] == "32768"
         assert ("--profile-ops" in command) == (root.name == "profiled")
         (root / "hardware.xml").write_text(
@@ -185,7 +189,7 @@ def test_controller_orders_qualification_and_matching_profiles(tmp_path, monkeyp
                 dict(
                     passed=True,
                     cleanup_completed=True,
-                    precision={"decode_recurrence": queue.CANDIDATE},
+                    precision={"decode_recurrence": candidate},
                     output_hashes=["same"],
                     token_hashes=["same"],
                     operand_hashes={"input": "same"},
@@ -208,12 +212,15 @@ def test_controller_orders_qualification_and_matching_profiles(tmp_path, monkeyp
         assert result["accuracy_passed"] is score_passes
 
 
-def test_combined_measurement_cannot_be_mistaken_for_the_old_policy_pair(tmp_path, expect_error):
-    args, receipt, manifest = evidence(tmp_path, combined=True)
+@pytest.mark.parametrize("candidate", [COMBINED_GDN_POLICY, PADDING_GDN_POLICY])
+def test_combined_measurement_cannot_be_mistaken_for_the_old_policy_pair(tmp_path, expect_error, candidate):
+    args, receipt, manifest = evidence(
+        tmp_path, combined=candidate == COMBINED_GDN_POLICY, padding=candidate == PADDING_GDN_POLICY
+    )
     with expect_error(ValueError, ".*"):
         queue.measured_win(args.compact_results, receipt, manifest)
     winning, comparisons = queue.measured_win(
-        args.compact_results, receipt, manifest, baseline=queue.CANDIDATE, candidate=queue.COMBINED_GDN_POLICY
+        args.compact_results, receipt, manifest, baseline=queue.CANDIDATE, candidate=candidate
     )
     assert winning and len(comparisons) == 2
     assert all(not r["gpqa_qualified"] for r in comparisons)
