@@ -116,7 +116,7 @@ void run_kernel(RUNTIME_PARAMETERS params)
                         /* partial face */ false,
                         CT_DIM,
                         RT_DIM,
-                        KT_DIM);
+                        KT_DIM); LLK_EXP_UNOP_HOOK();
                 }
             }
         }
@@ -256,7 +256,7 @@ void run_kernel(RUNTIME_PARAMETERS params)
                     LLK_ASSERT(
                         (tile_index < get_dest_max_tiles<dest_sync, is_fp32_dest_acc_en, DstTileShape::Tile32x32>()),
                         "Block tile index exceeds maximum destination tiles for matmul");
-                    _llk_pack_<dest_sync, is_fp32_dest_acc_en, ckernel::PackMode::Default>(tile_index, PERF_ADDRESS(PERF_OUTPUT, tile_index));
+                    _llk_pack_<dest_sync, is_fp32_dest_acc_en, ckernel::PackMode::Default>(tile_index, PERF_ADDRESS(PERF_OUTPUT, tile_index)); LLK_EXP_PNOP_HOOK();
                 }
                 // Wormhole: release the dest section as production's tile_regs_release does, so every section starts with drained packers
                 if constexpr (PERF_PACK_SECTION_RELEASE)
@@ -281,7 +281,7 @@ void run_kernel(RUNTIME_PARAMETERS params)
                     {
                         LLK_ASSERT(is_valid_L1_address(L1_ADDRESS(buffer_Res[i])), "pack result real-buffer address is outside L1");
                     }
-                    _llk_pack_<dest_sync, is_fp32_dest_acc_en, ckernel::PackMode::Default>(i, addr);
+                    _llk_pack_<dest_sync, is_fp32_dest_acc_en, ckernel::PackMode::Default>(i, addr); LLK_EXP_PNOP_HOOK();
                 }
                 _llk_pack_dest_section_done_<dest_sync, is_fp32_dest_acc_en>();
             }

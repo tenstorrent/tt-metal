@@ -112,6 +112,23 @@ constexpr std::uint32_t RELEASE_PHASES[llk_barrier::L1_CONGESTION_PHASES][2] = {
     {UMP, spins(15, 0, 0)}, {UMP, spins(0, 0, 32)},
 };
 
+// experiment hook (nikola, 644c094a879): LLK_RELEASE_GAP nops between the plain TILE_LOOP release stores
+#if defined(LLK_RELEASE_GAP)
+#define LLK_GAP_XSTR_(x) #x
+#define LLK_GAP_XSTR(x)  LLK_GAP_XSTR_(x)
+#define LLK_GAP_ASM      ".rept " LLK_GAP_XSTR(LLK_RELEASE_GAP) "\n\tnop\n\t.endr\n\t"
+#else
+#define LLK_GAP_ASM ""
+#endif
+// experiment hook (holdall): LLK_RELEASE_GAP_SCHED nops between the scheduled releases (the schedule's analog of F)
+#if defined(LLK_RELEASE_GAP_SCHED)
+#define LLK_GAPS_XSTR_(x)  #x
+#define LLK_GAPS_XSTR(x)   LLK_GAPS_XSTR_(x)
+#define LLK_GAP_SCHED_ASM ".rept " LLK_GAPS_XSTR(LLK_RELEASE_GAP_SCHED) "\n\tnop\n\t.endr\n\t"
+#else
+#define LLK_GAP_SCHED_ASM ""
+#endif
+
 // Serve loop, one rendezvous per pass: wait until all TRISCs park, let them halt, flush them and release them together.
 // Pinned in assembly (GCC's code for the C version) in its own 1 KiB section, so no other BRISC change moves its timing.
 // PHASES (serve_phases) adds the .if blocks, which assemble to nothing in serve().
@@ -198,7 +215,7 @@ __attribute__((always_inline)) inline void serve_loop()
         "srli  a4, s5, 2\n\tli    a3, %[nphases]\n\tbleu  a4, a3, 80f\n"
         "79:\n\t"
         ".endif\n\t"
-        "sw    zero, 0(t1)\n\tsw    zero, 0(a7)\n\tsw    zero, 0(a6)\n\t" // release: unpack, math, pack back to back
+        "sw    zero, 0(t1)\n\t" LLK_GAP_ASM "sw    zero, 0(a7)\n\t" LLK_GAP_ASM "sw    zero, 0(a6)\n\t" // release: unpack, math, pack back to back
         "j     1b\n"
         ".if %[phases]\n"
         "80:\n\t" // a4 = k + 1: the three release stores in phase k's order with its spins (s3, s4 are free here)
@@ -279,7 +296,7 @@ __attribute__((always_inline)) inline void serve_loop()
         "sw    a2, %[cntl0](a5)\n"
         "53:\n\t"
         "lw    a4, %[status0](a5)\n\tbltz  a4, 53b\n\t"
-        "srli  s4, s4, 2\n\tli    a4, %[sched_end]\n\tbeq   s4, a4, 1b\n\t"
+        "srli  s4, s4, 2\n\tli    a4, %[sched_end]\n\tbeq   s4, a4, 1b\n\t" LLK_GAP_SCHED_ASM // experiment hook (holdall)
         "li    a4, %[gap]\n"
         "54:\n\t"
         "nop\n\taddi  a4, a4, -1\n\tbnez  a4, 54b\n\t"
