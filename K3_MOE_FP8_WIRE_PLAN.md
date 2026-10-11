@@ -75,7 +75,9 @@ fp8 dispatch wire (`MOE_SPLIT_SHARED=1/0` forces it).
 
 **Status of the goals that remain open.**
 - G1: met on the LB (above).
-- G2 (standalone Q2 ≤ 60 µs): not met, 91 µs. Units of 2 chunks (256 columns) balance the work best (1 chunk
+- G2 (standalone Q2 ≤ 60 µs): not met, 88 µs. Units are split by grid row (weight 1 + 0.4·y/(rows−1)) to offset
+  the NoC gradient (91 → 88 µs). Coalescing each core's row writes into one transaction per run was tried and
+  did not help (89.5 µs): with balanced work Q2 is bound by per-tile compute, not by its 256-B writes. Before: Units of 2 chunks (256 columns) balance the work best (1 chunk
   102, 2 chunks 91, 4 chunks 92, 7 chunks 100 µs); phases run across a whole unit (one LLK init per phase per unit). Per core: compute 47–89 µs (median 61), writer 59–100 µs (median 73); the spread
   is the NoC gradient (top grid rows ~40% slower) plus the 3-vs-2 unit split. Perfectly balanced compute alone
   would be ~45 µs, so ≤ 60 µs needs both balancing for the gradient and cheaper per-tile work. Earlier: The writer now issues its row writes before staging the scales

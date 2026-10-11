@@ -157,7 +157,7 @@ void kernel_main() {
     (void)ca_num_cores;
     const uint32_t block_offset = 0, num_blocks = 0;  // per-row walks `work` instead
 #else
-    const CountAwareRange range = count_aware_block_range(
+    const CountAwareRange range = count_aware_block_range_frac(
         noc,
         region,
         counts,
@@ -168,9 +168,11 @@ void kernel_main() {
         ca_experts_per_chip,
         ca_max_rows,
         tile_h,
-        chunks_per_row / Q_UNIT,  // units per row
-        core_id,
-        ca_num_cores);
+        chunks_per_row / Q_UNIT,   // units per row
+        get_arg_val<uint32_t>(2),  // host-weighted share [start, end) in 1/65536 units (matches the reader)
+        get_arg_val<uint32_t>(3));
+    (void)core_id;
+    (void)ca_num_cores;
     const uint32_t block_offset = range.first_block;
     const uint32_t num_blocks = range.num_blocks;
 #endif

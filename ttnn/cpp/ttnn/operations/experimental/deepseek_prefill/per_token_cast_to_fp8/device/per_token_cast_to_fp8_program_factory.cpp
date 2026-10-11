@@ -4,6 +4,8 @@
 
 #include "per_token_cast_to_fp8_program_factory.hpp"
 
+#include <cmath>
+
 #include <array>
 #include <bit>
 #include <map>
@@ -478,6 +480,27 @@ ttnn::device_operation::CachedProgram<PerTokenCastToFp8SharedVariables> create_p
         return args;
     };
     uint32_t offset = 0;  // ROW_MAJOR: first row; TILE: first 128-block. Advances by this core's unit count.
+    // Count-aware work split, weighted by grid row: with the reader on NoC 0 and the writer on NoC 1 the top rows
+    // run slower than the bottom ones (measured ~1.45x at K3 load), so core i gets [frac_bounds[i], frac_bounds[i+1])
+    // of the units in 1/65536 units, with weight 1 + skew * y / (rows - 1).
+    std::vector<uint32_t> frac_bounds(num_cores + 1, 0);
+    {
+        // 0.3–0.5 measured best (Q2 91 -> 88 us at K3 load).
+        constexpr double skew = 0.4;
+        uint32_t max_y = 0;
+        for (const auto& c : all_cores_vec) {
+            max_y = std::max<uint32_t>(max_y, c.y);
+        }
+        std::vector<double> prefix(num_cores + 1, 0.0);
+        for (uint32_t i = 0; i < num_cores; ++i) {
+            const double w = 1.0 + (max_y > 0 ? skew * all_cores_vec[i].y / max_y : 0.0);
+            prefix[i + 1] = prefix[i] + w;
+        }
+        for (uint32_t i = 0; i <= num_cores; ++i) {
+            frac_bounds[i] = static_cast<uint32_t>(std::llround(65536.0 * prefix[i] / prefix[num_cores]));
+        }
+        frac_bounds[num_cores] = 65536;
+    }
     for (uint32_t i = 0; i < num_cores; ++i) {
         const auto& core = all_cores_vec[i];
         if (attrs.per_row_scale && !attrs.token_count_aware) {
@@ -497,6 +520,7 @@ ttnn::device_operation::CachedProgram<PerTokenCastToFp8SharedVariables> create_p
         const uint32_t core_units = units_for_core_from_split(core, crs1, crs2, upc1, upc2);
         uint32_t num_blocks = 0;
         if (attrs.token_count_aware) {
+            const uint32_t frac_start = frac_bounds[i], frac_end = frac_bounds[i + 1];
             SetRuntimeArgs(
                 program,
                 k.reader,
@@ -505,12 +529,14 @@ ttnn::device_operation::CachedProgram<PerTokenCastToFp8SharedVariables> create_p
                  tensor_args.expert_region_offsets->buffer()->address(),
                  tensor_args.expert_token_counts->buffer()->address(),
                  tensor_args.global_expert_idx_table->buffer()->address(),
-                 i});
+                 i,
+                 frac_start,
+                 frac_end});
             std::vector<uint32_t> wargs{
                 dst_e4m3_addr,
                 dst_scale_addr,
-                0u,
-                0u,
+                frac_start,
+                frac_end,
                 rows_per_plane,
                 row_tiles_per_plane,
                 tensor_args.expert_region_offsets->buffer()->address(),
@@ -562,7 +588,8 @@ void apply_io_overrides(
         auto& writer_args = tt::tt_metal::GetRuntimeArgs(cached_program.program, shared.writer_kernel_id, core);
         writer_args[0] = dst_e4m3_addr;
         writer_args[1] = dst_scale_addr;
-        if (tensor_args.expert_region_offsets.has_value() && reader_args.size() == 5) {
+        // Count-aware reader args: src, region, counts, table, core id, work-split fraction start / end.
+        if (tensor_args.expert_region_offsets.has_value() && reader_args.size() == 7) {
             const uint32_t r = tensor_args.expert_region_offsets->buffer()->address();
             const uint32_t c = tensor_args.expert_token_counts->buffer()->address();
             const uint32_t t = tensor_args.global_expert_idx_table->buffer()->address();

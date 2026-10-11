@@ -115,7 +115,11 @@ void kernel_main() {
     (void)ca_chunks_per_row;
     (void)ca_num_cores;
 #else
-    const CountAwareRange range = count_aware_block_range(
+    // Host-weighted share of the units (runtime args 5 / 6, 1/65536 units): the top grid rows run slower (NoC
+    // gradient), so they get fewer units.
+    (void)core_id;
+    (void)ca_num_cores;
+    const CountAwareRange range = count_aware_block_range_frac(
         noc,
         region,
         counts,
@@ -127,8 +131,8 @@ void kernel_main() {
         ca_max_rows,
         tile_h,
         ca_chunks_per_row,  // units per row (Q_UNIT chunks each)
-        core_id,
-        ca_num_cores);
+        get_arg_val<uint32_t>(5),
+        get_arg_val<uint32_t>(6));
     const uint32_t block_offset = range.first_block;
     const uint32_t num_blocks = range.num_blocks;
 #endif

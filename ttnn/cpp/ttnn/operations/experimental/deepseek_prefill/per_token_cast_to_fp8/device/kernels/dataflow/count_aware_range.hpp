@@ -63,6 +63,30 @@ inline uint32_t count_aware_valid_tile_rows(
     return (valid_rows + tile_h - 1) / tile_h;
 }
 
+// Same, but this core's share is [frac_start, frac_end) of the blocks in 1/65536 units (host-weighted split).
+template <typename RegionT, typename CountsT, typename TableT>
+inline CountAwareRange count_aware_block_range_frac(
+    Noc& noc,
+    const RegionT& region,
+    const CountsT& counts,
+    const TableT& table,
+    CircularBuffer& region_scratch,
+    CircularBuffer& counts_scratch,
+    CircularBuffer& table_scratch,
+    uint32_t experts_per_chip,
+    uint32_t max_rows,
+    uint32_t tile_h,
+    uint32_t chunks_per_row,
+    uint32_t frac_start,
+    uint32_t frac_end) {
+    const uint32_t valid_tile_rows = count_aware_valid_tile_rows(
+        noc, region, counts, table, region_scratch, counts_scratch, table_scratch, experts_per_chip, max_rows, tile_h);
+    const uint64_t total_blocks = static_cast<uint64_t>(valid_tile_rows) * chunks_per_row;
+    const uint32_t start = static_cast<uint32_t>((total_blocks * frac_start) >> 16);
+    const uint32_t end = static_cast<uint32_t>((total_blocks * frac_end) >> 16);
+    return {start, end - start};
+}
+
 template <typename RegionT, typename CountsT, typename TableT>
 inline CountAwareRange count_aware_block_range(
     Noc& noc,
