@@ -744,10 +744,14 @@ def assert_zones_dont_overlap(profiler_data: ProfilerData) -> None:
     zones = profiler_data.zones().frame()
     if zones.empty:
         return
-    zones = zones.assign(finish=zones["timestamp"] + zones["duration"])
+    zones = zones.assign(
+        finish=zones["timestamp"] + zones["duration"],
+        # a phased L1_CONGESTION launch repeats INIT and TILE_LOOP: the k-th zone of a name is its own phase
+        occurrence=zones.groupby([MARKER, "thread"]).cumcount(),
+    )
     # Identity is the name: marker_id is a per-callsite hash, different on every thread.
     span = (
-        zones.groupby([MARKER, "thread"])
+        zones.groupby([MARKER, "occurrence", "thread"])
         .agg(begin=("timestamp", "min"), finish=("finish", "max"))
         .reset_index()
     )
@@ -763,7 +767,7 @@ def assert_zones_dont_overlap(profiler_data: ProfilerData) -> None:
                     wrappers.add(a[MARKER])
     phases = (
         span[~span[MARKER].isin(wrappers)]
-        .groupby(MARKER)
+        .groupby([MARKER, "occurrence"])
         .agg(first_open=("begin", "min"), last_close=("finish", "max"))
         .sort_values("first_open")
         .reset_index()
@@ -784,6 +788,21 @@ def assert_zones_dont_overlap(profiler_data: ProfilerData) -> None:
                 f"supplies the cross-thread rendezvous at zone entry."
             )
         prev = row
+
+
+# Release phases of a Wormhole L1_CONGESTION launch (barrier.h L1_CONGESTION_PHASES, brisc.cpp serve_phases).
+L1_CONGESTION_PHASES = 32
+
+
+def assert_one_zone_per_phase(profiler_data: ProfilerData) -> None:
+    """A phased L1_CONGESTION launch records one TILE_LOOP zone per release phase on every thread."""
+    zones = profiler_data.zones().marker(TILE_LOOP_MARKER).raw()
+    counts = zones[zones["type"] == "ZONE_START"].groupby("thread").size()
+    if counts.empty or (counts != L1_CONGESTION_PHASES).any():
+        raise AssertionError(
+            f"L1_CONGESTION recorded {counts.to_dict()} TILE_LOOP zones per thread, "
+            f"expected {L1_CONGESTION_PHASES} (one per BRISC release phase)"
+        )
 
 
 RUN_TYPE_PRESETS = {
@@ -1113,6 +1132,8 @@ class PerfConfig(TestConfig):
                     self.test_name, self.variant_id, TestConfig.TENSIX_LOCATION
                 )
                 assert_zones_dont_overlap(profiler_data)
+                if self._l1_congestion_phases():
+                    assert_one_zone_per_phase(profiler_data)
 
                 if TestConfig.ENABLE_PERF_COUNTERS:
                     try:
@@ -1237,6 +1258,12 @@ class PerfConfig(TestConfig):
                             target.loc[target[MARKER] == "INIT", column] = row[
                                 column
                             ].values[0]
+                        elif (
+                            run_type == PerfRunType.L1_CONGESTION
+                            and column.startswith(stat_prefix(STD))
+                        ):
+                            # one INIT launch has no spread (the phased launch ran INIT once per phase)
+                            target.loc[target[MARKER] == "INIT", column] = float("nan")
             finally:
                 self.init_launch = False
 
