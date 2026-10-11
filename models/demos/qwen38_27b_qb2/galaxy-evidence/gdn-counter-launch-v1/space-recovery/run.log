@@ -1,0 +1,2 @@
+{"state": "compressing", "source_fingerprint": [64517, 12582922, 67507433703, 1791383980116351970], "source_mode": 432, "source_bytes": 67507433703, "compression": ["pigz", "-1", "-p", "2", "-c"]}
+{"state": "verifying_archive", "archive_bytes": 3201699574}

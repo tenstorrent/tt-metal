@@ -1,0 +1,27 @@
+{
+  "state": "verifying_archive",
+  "source": "/home/ttuser/qwen38-artifacts-20261007/layer-profile-v5/tracy/.logs/tracy_ops_times.csv",
+  "archive": "/home/ttuser/qwen38-artifacts-20261007/layer-profile-v5/tracy/.logs/tracy_ops_times.csv.gz",
+  "reversible": true,
+  "restore_command": "pigz -d -- /home/ttuser/qwen38-artifacts-20261007/layer-profile-v5/tracy/.logs/tracy_ops_times.csv.gz",
+  "native_installation_changed": false,
+  "started_at": 1791695269.2405438,
+  "free_before_bytes": 16926765056,
+  "source_fingerprint": [
+    64517,
+    12582922,
+    67507433703,
+    1791383980116351970
+  ],
+  "source_mode": 432,
+  "source_bytes": 67507433703,
+  "compression": [
+    "pigz",
+    "-1",
+    "-p",
+    "2",
+    "-c"
+  ],
+  "updated_at": 1791695384.3822398,
+  "archive_bytes": 3201699574
+}

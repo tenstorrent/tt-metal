@@ -1,0 +1,61 @@
+{
+  "state": "remaining_counter_passes",
+  "source": "/home/ttuser/qwen38-artifacts-20261007/layer-profile-v5/tracy/.logs/tracy_ops_times.csv",
+  "archive": "/home/ttuser/qwen38-artifacts-20261007/layer-profile-v5/tracy/.logs/tracy_ops_times.csv.gz",
+  "reversible": true,
+  "restore_command": "pigz -d -- /home/ttuser/qwen38-artifacts-20261007/layer-profile-v5/tracy/.logs/tracy_ops_times.csv.gz",
+  "native_installation_changed": false,
+  "started_at": 1791695269.2405438,
+  "free_before_bytes": 16926765056,
+  "source_fingerprint": [
+    64517,
+    12582922,
+    67507433703,
+    1791383980116351970
+  ],
+  "source_mode": 432,
+  "source_bytes": 67507433703,
+  "compression": [
+    "pigz",
+    "-1",
+    "-p",
+    "2",
+    "-c"
+  ],
+  "updated_at": 1791695554.7022538,
+  "archive_bytes": 3201699574,
+  "source_sha256": "da19f0967b7f6f8af51ed677dc746db6746349440b8143fa1a65d76a30bca0d4",
+  "archive_sha256": "671f1cf31c26387482333542d586a5b654ca230952994949395a025467f21ccf",
+  "full_decompression_verified": true,
+  "free_after_bytes": 81229254656,
+  "instruction_hardware_rerun": false,
+  "instruction_exact_output_match": true,
+  "instruction_active_core_calls": 23040,
+  "original_failed_queue_sha256": "b0261d40f556b01a4d9c2f432f8bc96381c683d2d73b9f69661659a9764d252c",
+  "continuation_command": [
+    "/home/ttuser/kimi-prefill.Ubx2wY/runtime/qwen38-27b-20261006/python_env/bin/python3.10",
+    "-m",
+    "models.demos.qwen38_27b_qb2.demo.run_gdn_counter_profile",
+    "--task",
+    "/home/ttuser/kimi-prefill.Ubx2wY/runtime/qwen38-27b-20261006",
+    "--source",
+    "/home/ttuser/qwen38-artifacts-20261007/gdn-counter-source-v4",
+    "--weights",
+    "/home/ttuser/qwen38-artifacts-20261007/checkpoint-pinned-1d4bf0f2",
+    "--output",
+    "/home/ttuser/qwen38-artifacts-20261007/gdn-counter-v5",
+    "--manifest",
+    "/home/ttuser/qwen38-artifacts-20261007/gdn-counter-control-v4/source-manifest.json",
+    "--baseline",
+    "/home/ttuser/qwen38-artifacts-20261007/gdn-counter-v1/before",
+    "--groups",
+    "l1_0,l1_1,l1_2,l1_3,l1_4,l1_5"
+  ],
+  "reset_requested": false,
+  "completed_groups": [
+    "fpu",
+    "pack",
+    "unpack",
+    "instrn"
+  ]
+}

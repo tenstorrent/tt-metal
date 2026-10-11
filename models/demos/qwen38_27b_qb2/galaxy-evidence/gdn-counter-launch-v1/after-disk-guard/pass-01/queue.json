@@ -1,0 +1,63 @@
+{
+  "state": "completed",
+  "cleanup_completed": true,
+  "hardware_lock": "/tmp/tt-device.lock",
+  "survives_disconnect": true,
+  "resumes_after_reboot": false,
+  "promoted_to_serving": false,
+  "pipeline": true,
+  "predecessor_unit": null,
+  "predecessor_invocation": null,
+  "started_at": 1791694052.0976074,
+  "updated_at": "2026-10-11T04:48:47Z",
+  "counter_groups": [
+    "pack"
+  ],
+  "counter_mask": 2,
+  "command": [
+    "/bin/bash",
+    "/home/ttuser/qwen38-artifacts-20261007/gdn-counter-source-v4/scripts/run_safe_pytest.sh",
+    "--profile-counters",
+    "/home/ttuser/qwen38-artifacts-20261007/gdn-counter-source-v4/models/demos/qwen38_27b_qb2/tests/test_gdn_pipeline_profile.py",
+    "--rootdir=/home/ttuser/qwen38-artifacts-20261007/gdn-counter-source-v4",
+    "-c",
+    "/home/ttuser/qwen38-artifacts-20261007/gdn-counter-source-v4/pytest.ini",
+    "-vv",
+    "-s",
+    "--tb=short",
+    "--timeout=1200",
+    "--junitxml=/home/ttuser/qwen38-artifacts-20261007/gdn-counter-v4/pass-01/hardware.xml"
+  ],
+  "raw_device_logs": [
+    "/home/ttuser/qwen38-artifacts-20261007/gdn-counter-v4/pass-01/tracy/reports/2026_10_11_04_48_36/profile_log_device.csv",
+    "/home/ttuser/qwen38-artifacts-20261007/gdn-counter-v4/pass-01/tracy/.logs/profile_log_device.csv"
+  ],
+  "required_markers_present": [
+    "GDN_EP_INPUT_WAIT",
+    "GDN_EP_MEAN_SQUARE",
+    "GDN_EP_NORMALIZE",
+    "GDN_EP_OUTPUT",
+    "GDN_EP_READER_CB_RESERVE",
+    "GDN_EP_READER_DMA",
+    "GDN_EP_READER_FORMAT",
+    "GDN_EP_READER_PADDING",
+    "GDN_EP_READER_WEIGHT",
+    "GDN_EP_WEIGHT_AND_GATE",
+    "GDN_EP_WRITER_DMA",
+    "GDN_EP_WRITER_WAIT",
+    "GDN_READER_CB_RESERVE",
+    "GDN_READER_DRAM_ISSUE_AND_WAIT",
+    "GDN_READER_L1_PREPARE",
+    "GDN_RESIDENT_DELTA",
+    "GDN_RESIDENT_INPUT_WAIT",
+    "GDN_RESIDENT_OUTPUT",
+    "GDN_RESIDENT_OUTPUT_AND_DEST_WAIT",
+    "GDN_RESIDENT_PACK",
+    "GDN_RESIDENT_STATE_UPDATE",
+    "GDN_WRITER_DRAM_ISSUE_AND_OUTPUT_WAIT",
+    "GDN_WRITER_OUTPUT_AND_BARRIER",
+    "GDN_WRITER_STATE_CB_WAIT"
+  ],
+  "causal_bottleneck_proven": false,
+  "finished_at": 1791694127.9443748
+}

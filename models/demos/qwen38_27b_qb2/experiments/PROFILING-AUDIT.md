@@ -112,3 +112,25 @@ combined-padding model comparison is running and its conditional qualification
 follower is waiting. The follower requires at least 1 TSU measured gain and
 does not automatically run another full profile. Do not instrument or replace
 the running comparison in place.
+
+## October 11 continuation after artifact headroom guard
+
+Metadata-preserving FPU, pack and unpack captures passed complete per-core
+coverage and exact outputs. The instruction device test passed and closed
+cleanly, but analysis stopped at the 16-GiB free-space guard. This is a collector
+failure, not a failed model output or a reason to reset clean hardware.
+
+A persistent recovery sequence losslessly archived a closed historical 63-GiB
+Tracy CSV, verified full decompression against the original SHA256 and left
+75.65 GiB free. It then recovers the retained instruction analysis and
+continues L1 banks 0-5 plus the final control. Exact failed and successful receipts
+remain separate in `galaxy-evidence/gdn-counter-launch-v1`. Do not credit the
+queued passes before their coverage and output checks complete. No new model
+throughput or physical DRAM-utilization claim follows from this recovery.
+
+
+At 05:13 UTC, offline instruction recovery passed all requested counters on
+23,040 active-core operation records with exact state/output matches and no
+device rerun. The persistent service advanced to the six L1-bank captures and
+final control. `space-recovery-verified` retains this later observation; earlier
+failed and in-progress snapshots remain unchanged.

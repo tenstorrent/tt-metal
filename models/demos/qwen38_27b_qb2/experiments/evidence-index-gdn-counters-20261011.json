@@ -1,5 +1,5 @@
 {
-  "generated_at": "2026-10-11T04:51:29.133560+00:00",
+  "generated_at": "2026-10-11T05:14:20.167052+00:00",
   "scope": "New counter launch and recovery evidence; recorded status is not release qualification.",
   "entries": [
     {
@@ -8,19 +8,69 @@
       "sha256": "d507d113d2446b236648cec579bc2bde2b66634bbc30c0b98856ee5a7aba2179"
     },
     {
-      "path": "tests/gdn_counter_profile.py",
-      "bytes": 7908,
-      "sha256": "008769ee17c2234e0edb03d141e3b1ac520fd597ce29d1778fd7333c53a2e118"
-    },
-    {
-      "path": "tests/unit/test_gdn_counter_profile.py",
-      "bytes": 4750,
-      "sha256": "ce44f8048fbf651e4111736730953e9bbca6c01e0633b1c8834913343c11d067"
-    },
-    {
       "path": "galaxy-evidence/gdn-counter-launch-v1/README.md",
-      "bytes": 6108,
-      "sha256": "0ba09cba550d1a58b8df48507c243390098f9d1c9e2de65020633ecbe26a9cb4"
+      "bytes": 8341,
+      "sha256": "7dbde611d2fdb3ad71bbd26caccddcb3bc0fef1cd6cfc6f0e6216815e759a2ad"
+    },
+    {
+      "path": "galaxy-evidence/gdn-counter-launch-v1/after-disk-guard/pass-01/counters.json.gz",
+      "bytes": 10978,
+      "sha256": "11d5c57f40aeab1bfb864ae35dfc50b4550fe9cbc3e9bd14db93e434cfaf38fd"
+    },
+    {
+      "path": "galaxy-evidence/gdn-counter-launch-v1/after-disk-guard/pass-01/hardware.xml.gz",
+      "bytes": 301,
+      "sha256": "7397733d1345e7c140b0588a1404f2ebb2b2ec9edd6c0eac232a12649f379519"
+    },
+    {
+      "path": "galaxy-evidence/gdn-counter-launch-v1/after-disk-guard/pass-01/phase.json",
+      "bytes": 28947,
+      "sha256": "fb17515b888dcc43d4c4fd7c315a8cbcc6980088c3d0d69d7f2104d153a678ff"
+    },
+    {
+      "path": "galaxy-evidence/gdn-counter-launch-v1/after-disk-guard/pass-01/queue.json",
+      "bytes": 2099,
+      "sha256": "77b3af7fcb3d6c65d519b1c3977811f2b3fbd52d44a8447691e3e038e2cf4307"
+    },
+    {
+      "path": "galaxy-evidence/gdn-counter-launch-v1/after-disk-guard/pass-02/counters.json.gz",
+      "bytes": 24126,
+      "sha256": "cd0a2878029ce855e7bb274b97d8b0692d20c29f5d678bb3a991379517666d28"
+    },
+    {
+      "path": "galaxy-evidence/gdn-counter-launch-v1/after-disk-guard/pass-02/hardware.xml.gz",
+      "bytes": 300,
+      "sha256": "a886d6328c5ee8e8acd9275646f0dc7553fd63c6efda3cf4c0f41ee76b5ae925"
+    },
+    {
+      "path": "galaxy-evidence/gdn-counter-launch-v1/after-disk-guard/pass-02/phase.json",
+      "bytes": 28947,
+      "sha256": "77e9d29e925cb2677b429c9979c36eacb4bbec6d462bbe2b72f750127bea2f5f"
+    },
+    {
+      "path": "galaxy-evidence/gdn-counter-launch-v1/after-disk-guard/pass-02/queue.json",
+      "bytes": 2100,
+      "sha256": "9718a908bce34f9e5c6389c72db83b4c0998a01b28f61a0050c444b54b8d510b"
+    },
+    {
+      "path": "galaxy-evidence/gdn-counter-launch-v1/after-disk-guard/pass-03/hardware.xml.gz",
+      "bytes": 301,
+      "sha256": "b6a35b76629cf09c71e42e8d6a49150aec689be6ea5252b1a7de36be4bb05433"
+    },
+    {
+      "path": "galaxy-evidence/gdn-counter-launch-v1/after-disk-guard/pass-03/phase.json",
+      "bytes": 28948,
+      "sha256": "c16347ed49eea9d014a1777fe1c39ccff359365e995e017d07973ed07be4a432"
+    },
+    {
+      "path": "galaxy-evidence/gdn-counter-launch-v1/after-disk-guard/pass-03/queue.json",
+      "bytes": 1147,
+      "sha256": "5f750e6a655c65cb7314173183bcf5180929d9a4bf3a5f286fcf0c45c4fdc050"
+    },
+    {
+      "path": "galaxy-evidence/gdn-counter-launch-v1/after-disk-guard/queue.json",
+      "bytes": 2715,
+      "sha256": "b0261d40f556b01a4d9c2f432f8bc96381c683d2d73b9f69661659a9764d252c"
     },
     {
       "path": "galaxy-evidence/gdn-counter-launch-v1/attempt-01/before-phase.json",
@@ -168,6 +218,11 @@
       "sha256": "081a9a1ae199d38315d7bc6f41696bf722f8e8aa1ed87a6f7c9ee5af2e8557df"
     },
     {
+      "path": "galaxy-evidence/gdn-counter-launch-v1/disk-recovery-capture.json",
+      "bytes": 3175,
+      "sha256": "269bf52749de8ad0c0ea13180db1de5c7dd3f06a078d0d12f540c4fcfa138a5c"
+    },
+    {
       "path": "galaxy-evidence/gdn-counter-launch-v1/first-verified-pass/capture.json",
       "bytes": 174,
       "sha256": "3130b9c41e4f86823ad204f053d3b722b2f49dc93cce07b34fec4c7a771b3519"
@@ -233,26 +288,6 @@
       "sha256": "ae693c79d370419af7c2744ab989a4695228bd796dfcd2d74ed3c2c6d6e7026e"
     },
     {
-      "path": "galaxy-evidence/gdn-counter-launch-v1/source/demo/run_gdn_counter_profile.py.gz",
-      "bytes": 2358,
-      "sha256": "927e6f945da74a5298c5e727ab1f13800d0f36f37933cf8d87f57335e6cf1364"
-    },
-    {
-      "path": "galaxy-evidence/gdn-counter-launch-v1/source/demo/run_gdn_phase_profile.py.gz",
-      "bytes": 2775,
-      "sha256": "6d8ca3fe51f725cd685d454a0638fb9b6dea95aeda85d0780387e069b8802d33"
-    },
-    {
-      "path": "galaxy-evidence/gdn-counter-launch-v1/source/tests/gdn_counter_profile.py.gz",
-      "bytes": 2820,
-      "sha256": "4f2160df2f8756eb5360afff5f3d177a6ff71201164c3a6a8320a31ccfb06f9c"
-    },
-    {
-      "path": "galaxy-evidence/gdn-counter-launch-v1/source/tests/unit/test_gdn_counter_profile.py.gz",
-      "bytes": 1677,
-      "sha256": "c8737ec24d40ec50cbf63b49ca5f23f2e993dfa3fc682641fcb9967880d8373a"
-    },
-    {
       "path": "galaxy-evidence/gdn-counter-launch-v1/source-final/demo/run_gdn_counter_profile.py.gz",
       "bytes": 2358,
       "sha256": "927e6f945da74a5298c5e727ab1f13800d0f36f37933cf8d87f57335e6cf1364"
@@ -276,6 +311,101 @@
       "path": "galaxy-evidence/gdn-counter-launch-v1/source-final/tests/unit/test_gdn_counter_profile.py.gz",
       "bytes": 1677,
       "sha256": "c8737ec24d40ec50cbf63b49ca5f23f2e993dfa3fc682641fcb9967880d8373a"
+    },
+    {
+      "path": "galaxy-evidence/gdn-counter-launch-v1/source/demo/run_gdn_counter_profile.py.gz",
+      "bytes": 2358,
+      "sha256": "927e6f945da74a5298c5e727ab1f13800d0f36f37933cf8d87f57335e6cf1364"
+    },
+    {
+      "path": "galaxy-evidence/gdn-counter-launch-v1/source/demo/run_gdn_phase_profile.py.gz",
+      "bytes": 2775,
+      "sha256": "6d8ca3fe51f725cd685d454a0638fb9b6dea95aeda85d0780387e069b8802d33"
+    },
+    {
+      "path": "galaxy-evidence/gdn-counter-launch-v1/source/tests/gdn_counter_profile.py.gz",
+      "bytes": 2820,
+      "sha256": "4f2160df2f8756eb5360afff5f3d177a6ff71201164c3a6a8320a31ccfb06f9c"
+    },
+    {
+      "path": "galaxy-evidence/gdn-counter-launch-v1/source/tests/unit/test_gdn_counter_profile.py.gz",
+      "bytes": 1677,
+      "sha256": "c8737ec24d40ec50cbf63b49ca5f23f2e993dfa3fc682641fcb9967880d8373a"
+    },
+    {
+      "path": "galaxy-evidence/gdn-counter-launch-v1/space-recovery-verified/capture.json",
+      "bytes": 48,
+      "sha256": "6a0cb36b5e984c30cb753a51dad43881942fe3774444bf89ed3fdb55b8efbef1"
+    },
+    {
+      "path": "galaxy-evidence/gdn-counter-launch-v1/space-recovery-verified/continuation-queue.json",
+      "bytes": 1697,
+      "sha256": "f43901031b0a2fb57b780880924bba732cac3a65f18c300fa57e167427b4e07f"
+    },
+    {
+      "path": "galaxy-evidence/gdn-counter-launch-v1/space-recovery-verified/counter-continuation.log.gz",
+      "bytes": 31453,
+      "sha256": "d22e673a00d6295aecf1edeff771b5d68e892bcb66b257b89db6b96073949e23"
+    },
+    {
+      "path": "galaxy-evidence/gdn-counter-launch-v1/space-recovery-verified/instruction-counters.json.gz",
+      "bytes": 88821,
+      "sha256": "c2066ce38a7782880683a24547ab11b6b87e250ef66896f8c2c0eb621f84d77c"
+    },
+    {
+      "path": "galaxy-evidence/gdn-counter-launch-v1/space-recovery-verified/run.log.gz",
+      "bytes": 769,
+      "sha256": "2635a3ab529dc6b4e59a785b029f5ee688ac05affc279e6acffc594f2cd1f4c0"
+    },
+    {
+      "path": "galaxy-evidence/gdn-counter-launch-v1/space-recovery-verified/status.json",
+      "bytes": 2164,
+      "sha256": "ae9d38ce43112c98801e6ea76f34f9896143931180cee6d997f6d73b278caa26"
+    },
+    {
+      "path": "galaxy-evidence/gdn-counter-launch-v1/space-recovery/launch-unit.txt",
+      "bytes": 80,
+      "sha256": "c49e37e83e0a68be24d48d9b4c412593197ef50ec3d15a0b157d342549169b7b"
+    },
+    {
+      "path": "galaxy-evidence/gdn-counter-launch-v1/space-recovery/launch.json",
+      "bytes": 1713,
+      "sha256": "bed2c7386e74451c79402e403510942eb316ccf239f58b90399af95cebc6bf54"
+    },
+    {
+      "path": "galaxy-evidence/gdn-counter-launch-v1/space-recovery/qwen38-gdn-counter-space-recovery-v1-20261011.service.txt",
+      "bytes": 95,
+      "sha256": "6cf06e564ca435cd9bdbb0614e07755bab6ce202fce43f746064f828d3878763"
+    },
+    {
+      "path": "galaxy-evidence/gdn-counter-launch-v1/space-recovery/qwen38-gdn-counter-v4-20261011.service.txt",
+      "bytes": 92,
+      "sha256": "03b95904d4be6510c254a87a3075069faf0d07f66714464c7e3ce2783eafd0aa"
+    },
+    {
+      "path": "galaxy-evidence/gdn-counter-launch-v1/space-recovery/recover.py.gz",
+      "bytes": 2970,
+      "sha256": "b7be0ee70ccd412cbb54b29b5ed2354e84a0f925d26ad5fb4fe2a59a7ccdb1bf"
+    },
+    {
+      "path": "galaxy-evidence/gdn-counter-launch-v1/space-recovery/run.log",
+      "bytes": 257,
+      "sha256": "4b64bd9ca725ac6e3fee16b3a00896090406bab2bf0036d1c8f96a811afba370"
+    },
+    {
+      "path": "galaxy-evidence/gdn-counter-launch-v1/space-recovery/status.json",
+      "bytes": 796,
+      "sha256": "af9b4f7aac9819d6fff23b6f13d5cdd1f86354d582dea890979367116d73869a"
+    },
+    {
+      "path": "tests/gdn_counter_profile.py",
+      "bytes": 7908,
+      "sha256": "008769ee17c2234e0edb03d141e3b1ac520fd597ce29d1778fd7333c53a2e118"
+    },
+    {
+      "path": "tests/unit/test_gdn_counter_profile.py",
+      "bytes": 4750,
+      "sha256": "ce44f8048fbf651e4111736730953e9bbca6c01e0633b1c8834913343c11d067"
     }
   ]
 }

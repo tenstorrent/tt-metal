@@ -1,0 +1,29 @@
+{
+  "command": [
+    "systemd-run",
+    "--user",
+    "--unit=qwen38-gdn-counter-space-recovery-v1-20261011",
+    "--property=RuntimeMaxSec=3h",
+    "--property=TimeoutStopSec=210",
+    "--property=KillMode=control-group",
+    "--property=MemoryMax=128G",
+    "--property=CPUQuota=800%",
+    "--working-directory=/home/ttuser/qwen38-artifacts-20261007/gdn-counter-source-v4",
+    "--setenv=PYTHONPATH=/home/ttuser/qwen38-artifacts-20261007/gdn-counter-source-v4:/home/ttuser/kimi-prefill.Ubx2wY/runtime/qwen38-27b-20261006/metal:/home/ttuser/kimi-prefill.Ubx2wY/runtime/qwen38-27b-20261006/metal/tools",
+    "--setenv=PYTHONUNBUFFERED=1",
+    "--setenv=LD_LIBRARY_PATH=/home/ttuser/kimi-prefill.Ubx2wY/runtime/qwen38-27b-20261006/metal-install/lib:/home/ttuser/kimi-prefill.Ubx2wY/runtime/qwen38-27b-20261006/metal-build/lib",
+    "--setenv=ARCH_NAME=blackhole",
+    "--property=StandardOutput=append:/home/ttuser/qwen38-artifacts-20261007/gdn-counter-space-recovery-v1/run.log",
+    "--property=StandardError=append:/home/ttuser/qwen38-artifacts-20261007/gdn-counter-space-recovery-v1/run.log",
+    "/home/ttuser/kimi-prefill.Ubx2wY/runtime/qwen38-27b-20261006/python_env/bin/python3.10",
+    "/home/ttuser/qwen38-artifacts-20261007/gdn-counter-space-recovery-v1/recover.py"
+  ],
+  "script_sha256": "6ab3d19953b3ce54d8e40bb3a35d3818dd2fe99eb1e69805ef1592ed8761f24b",
+  "scope": "Lossless archival of one closed historical CSV; recover instruction analysis; remaining six L1 bank passes and final mask-zero control",
+  "survives_disconnect": true,
+  "resumes_after_reboot": false,
+  "hardware_lock": "/tmp/tt-device.lock",
+  "precision_change": false,
+  "promoted_to_serving": false,
+  "agentx_launched": false
+}

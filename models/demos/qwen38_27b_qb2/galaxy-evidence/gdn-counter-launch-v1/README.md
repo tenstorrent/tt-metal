@@ -99,3 +99,41 @@ SFPU activity is 0.2706-0.2714 and 0.4365-0.4375. These reference-window ratios 
 not physical DRAM utilization, peak FLOP efficiency or full-model critical-path
 shares. Pack/unpack, instruction and L1 passes plus before/after overhead controls
 remain necessary before assigning the inactive portion to a bottleneck.
+
+## Disk guard and persistent continuation
+
+Attempt 4 subsequently verified FPU, pack and unpack with exact cross-pass
+outputs. The instruction hardware test passed all 48 calls and clean teardown;
+the collector stopped afterward because filesystem free space fell below 16 GiB.
+`after-disk-guard` preserves the failed controller receipt and the successful
+device receipts separately. Instruction counter analysis is not credited from
+the device test alone.
+
+The persistent recovery sequence archives one closed historical profiling CSV,
+recovers instruction analysis without rerunning hardware, then runs the six
+remaining L1 banks and a final control into `gdn-counter-v5`. It reuses the
+unchanged frozen source/manifest, uses the shared exclusive device lock, keeps
+the existing capture guards and does not reset hardware. Its service is
+`qwen38-gdn-counter-space-recovery-v1-20261011.service`, with a three-hour bound,
+128-GiB memory ceiling and process-group cleanup. It survives SSH disconnect,
+but is not configured to resume after a reboot.
+
+Archival preserved the 67,507,433,703-byte historical CSV in a 3,201,699,574-byte
+gzip archive. Full decompression and unchanged-source SHA256 verification
+passed before retiring the uncompressed copy; free space rose to 75.65 GiB.
+Restore instructions, original byte count, source/archive hashes and the exact
+operational script are retained in the recovery evidence. No unique source
+content, weights or native installations were discarded. The 05:11 UTC capture
+shows verification in progress; subsequent completion receipts are separate.
+
+The verified pack/unpack ratios describe their native reference windows.
+Neither these ratios nor the L1 request/grant counters directly measure DRAM
+bandwidth or isolate a full-model bottleneck. Counter overhead controls and
+matched unprofiled measurements remain necessary.
+
+
+At 05:13 UTC, offline instruction recovery passed all requested counters on
+23,040 active-core operation records with exact state/output matches and no
+device rerun. The persistent service advanced to the six L1-bank captures and
+final control. `space-recovery-verified` retains this later observation; earlier
+failed and in-progress snapshots remain unchanged.

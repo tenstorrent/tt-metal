@@ -1,0 +1,4 @@
+MainPID=0
+Result=exit-code
+ActiveState=failed
+InvocationID=d2427244c3c449feb7c4fe9d2f245d47

@@ -2606,3 +2606,39 @@ medians 31.85-31.94%; epilogue 47.59-47.71%. These are instrumented compute-wind
 activity counters, not DRAM utilization or whole-model efficiency. Remaining
 passes and overhead controls are still required. Receipts are in
 `galaxy-evidence/gdn-counter-launch-v1/first-verified-pass`.
+
+## October 11, 05:12 UTC: disk guard, retained counters and persistent recovery
+
+Attempt 4 verified FPU, pack and unpack, including complete counter coverage and
+exact state/output matches. Its instruction hardware test also completed all 48
+calls with clean teardown and zero XML failures, but the collector stopped at
+the 16-GiB free-space guard. The original failed queues remain unchanged. No
+hardware reset was required or performed for this analysis/storage failure.
+
+The artifact filesystem had 15.76 GiB free. A closed historical layer-profile-v5
+Tracy operations CSV used 67,507,433,703 bytes. The persistent recovery service
+losslessly compressed it to 3,201,699,574 bytes, verified the full decompressed
+SHA256 against the unchanged original and recorded a restore command before
+replacing the uncompressed copy. Free space became 75.65 GiB. Weights, native
+installations and unique profiling content were preserved.
+
+`qwen38-gdn-counter-space-recovery-v1-20261011.service` is active, with a
+three-hour outer deadline and control-group cleanup. Its sequence is archival,
+offline instruction-counter recovery, then the six remaining L1-bank passes
+and final mask-zero control using the unchanged frozen source. The continuation
+uses the existing exclusive device lock and artifact guards. No instruction
+device rerun is requested. The new stages stop on failed validation; being in
+this persistent sequence does not establish successful hardware completion.
+
+Best model performance remains 20.8846 TSU at B16/32K/TP4; the last separately
+qualified compact configuration scored 177/198 GPQA. Prefix/SSD and multimodal
+hardware probes are prepared separately and are not launched. AgentX remains
+gated on serving prefix/SSD validation; full GPQA remains gated on 25 TSU. Counter
+coverage is diagnostic evidence, not physical DRAM utilization or a speedup.
+
+
+At 05:13 UTC, offline instruction recovery passed all requested counters on
+23,040 active-core operation records with exact state/output matches and no
+device rerun. The persistent service advanced to the six L1-bank captures and
+final control. `space-recovery-verified` retains this later observation; earlier
+failed and in-progress snapshots remain unchanged.

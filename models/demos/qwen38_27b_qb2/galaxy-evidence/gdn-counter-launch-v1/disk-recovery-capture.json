@@ -1,0 +1,79 @@
+{
+  "captured_at_utc": "2026-10-11T05:11:21Z",
+  "files": {
+    "after-disk-guard/queue.json": {
+      "sha256": "b0261d40f556b01a4d9c2f432f8bc96381c683d2d73b9f69661659a9764d252c",
+      "original_bytes": 2715
+    },
+    "after-disk-guard/pass-01/queue.json": {
+      "sha256": "77b3af7fcb3d6c65d519b1c3977811f2b3fbd52d44a8447691e3e038e2cf4307",
+      "original_bytes": 2099
+    },
+    "after-disk-guard/pass-01/phase.json": {
+      "sha256": "fb17515b888dcc43d4c4fd7c315a8cbcc6980088c3d0d69d7f2104d153a678ff",
+      "original_bytes": 28947
+    },
+    "after-disk-guard/pass-01/hardware.xml.gz": {
+      "sha256": "7397733d1345e7c140b0588a1404f2ebb2b2ec9edd6c0eac232a12649f379519",
+      "original_bytes": 543
+    },
+    "after-disk-guard/pass-01/counters.json.gz": {
+      "sha256": "11d5c57f40aeab1bfb864ae35dfc50b4550fe9cbc3e9bd14db93e434cfaf38fd",
+      "original_bytes": 128897
+    },
+    "after-disk-guard/pass-02/queue.json": {
+      "sha256": "9718a908bce34f9e5c6389c72db83b4c0998a01b28f61a0050c444b54b8d510b",
+      "original_bytes": 2100
+    },
+    "after-disk-guard/pass-02/phase.json": {
+      "sha256": "77e9d29e925cb2677b429c9979c36eacb4bbec6d462bbe2b72f750127bea2f5f",
+      "original_bytes": 28947
+    },
+    "after-disk-guard/pass-02/hardware.xml.gz": {
+      "sha256": "a886d6328c5ee8e8acd9275646f0dc7553fd63c6efda3cf4c0f41ee76b5ae925",
+      "original_bytes": 543
+    },
+    "after-disk-guard/pass-02/counters.json.gz": {
+      "sha256": "cd0a2878029ce855e7bb274b97d8b0692d20c29f5d678bb3a991379517666d28",
+      "original_bytes": 412513
+    },
+    "after-disk-guard/pass-03/queue.json": {
+      "sha256": "5f750e6a655c65cb7314173183bcf5180929d9a4bf3a5f286fcf0c45c4fdc050",
+      "original_bytes": 1147
+    },
+    "after-disk-guard/pass-03/phase.json": {
+      "sha256": "c16347ed49eea9d014a1777fe1c39ccff359365e995e017d07973ed07be4a432",
+      "original_bytes": 28948
+    },
+    "after-disk-guard/pass-03/hardware.xml.gz": {
+      "sha256": "b6a35b76629cf09c71e42e8d6a49150aec689be6ea5252b1a7de36be4bb05433",
+      "original_bytes": 543
+    },
+    "space-recovery/status.json": {
+      "sha256": "af9b4f7aac9819d6fff23b6f13d5cdd1f86354d582dea890979367116d73869a",
+      "original_bytes": 796
+    },
+    "space-recovery/launch.json": {
+      "sha256": "bed2c7386e74451c79402e403510942eb316ccf239f58b90399af95cebc6bf54",
+      "original_bytes": 1713
+    },
+    "space-recovery/launch-unit.txt": {
+      "sha256": "c49e37e83e0a68be24d48d9b4c412593197ef50ec3d15a0b157d342549169b7b",
+      "original_bytes": 80
+    },
+    "space-recovery/run.log": {
+      "sha256": "4b64bd9ca725ac6e3fee16b3a00896090406bab2bf0036d1c8f96a811afba370",
+      "original_bytes": 257
+    },
+    "space-recovery/recover.py.gz": {
+      "sha256": "b7be0ee70ccd412cbb54b29b5ed2354e84a0f925d26ad5fb4fe2a59a7ccdb1bf",
+      "original_bytes": 8093
+    },
+    "space-recovery/qwen38-gdn-counter-v4-20261011.service.txt": {
+      "sha256": "03b95904d4be6510c254a87a3075069faf0d07f66714464c7e3ce2783eafd0aa"
+    },
+    "space-recovery/qwen38-gdn-counter-space-recovery-v1-20261011.service.txt": {
+      "sha256": "6cf06e564ca435cd9bdbb0614e07755bab6ce202fce43f746064f828d3878763"
+    }
+  }
+}
