@@ -431,6 +431,10 @@ TEST_P(WatcherAssertTest, TestWatcherAssert) {
             is_dram ? "DRAM" : (is_dispatch ? "DISPATCH" : "IDLE_ETH"));
         GTEST_SKIP();
     }
+    bool is_active_eth = (params.processor.core_type == HalProgrammableCoreType::ACTIVE_ETH);
+    if (is_active_eth && !using_slow_dispatch) {
+        GTEST_SKIP() << "fast dispatch to active ethernet has been removed";
+    }
     if (using_slow_dispatch && !is_quasar && !is_idle_eth && !is_dram && !is_dispatch) {
         GTEST_SKIP() << "Slow Dispatch tests only run on Quasar, IDLE_ETH, DRAM, or DISPATCH cores";
     }
