@@ -131,7 +131,7 @@ void run_custom_mm_operands(
 TEST_F(LLKBlackholeSingleCardFixture, CustomMatmulOperandOverloads) {
     for (const auto rows : {1u, 2u, 4u, 8u}) {
         for (const bool mixed : {false, true}) {
-            for (const auto mode : {0u, 1u, 2u}) {
+            for (const auto mode : {0u, 1u, 2u, 3u}) {
                 for (const bool full_sync : {false, true}) {
                     SCOPED_TRACE(
                         ::testing::Message()
