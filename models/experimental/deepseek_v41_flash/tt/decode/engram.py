@@ -15,12 +15,13 @@ the device does the rest of the checkpoint's ``Engram.forward``::
     gate  = sigmoid(sign(dot) * sqrt(max(|dot|, 1e-6)))
     out   = h + gate * value
 
-``kv`` is bf16 out of the matmul; everything after it is fp32.
+``kv`` is bf16 out of the matmul; everything after it is one ``ttnn.experimental.deepseek.engram_gate``
+call (fp32 inside), on ROW_MAJOR WIDTH_SHARDED streams / kv.
 
-With the prefetcher, ``wkv`` is a ``matmul_decode`` whose weight streams through its own 80-receiver ring
-(see :mod:`.decode_prefetch`) and whose A is a ROW_MAJOR HEIGHT_SHARDED replica of the rows on every
-receiver. Without it, ``wkv`` stays a tiled ``ttnn.linear``: the weight split over 80 cores is ~2 MB a
-core, more L1 than the per-call copy of the non-prefetched ``matmul_decode`` path has.
+``wkv`` is a ``matmul_decode`` whose weight streams through its own 80-receiver ring (see
+:mod:`.decode_prefetch`) and whose A is a ROW_MAJOR HEIGHT_SHARDED replica of the rows on every receiver,
+so ``kv`` comes out ROW_MAJOR WIDTH_SHARDED. The layer needs the prefetcher: split over 80 cores the
+weight is ~2 MB a core, more L1 than a per-call copy into the matmul's own buffer has.
 """
 
 from typing import Optional
@@ -28,10 +29,11 @@ from typing import Optional
 import torch
 import ttnn
 
-from models.experimental.deepseek_v4_flash.tt.common import _HIFI4, DeepSeekV4Module
+from models.experimental.deepseek_v4_flash.tt.common import DeepSeekV4Module, width_sharded_l1_config
 from models.experimental.deepseek_v4_flash.tt.decode.attention import _decode_activation
 from models.experimental.deepseek_v4_flash.tt.decode.decode_prefetch import ring_prefetch
-from models.experimental.deepseek_v4_flash.tt.layers import Linear, LinearDecode
+from models.experimental.deepseek_v4_flash.tt.decode.hyperconnection import _HC_COLLAPSE_CORES
+from models.experimental.deepseek_v4_flash.tt.layers import LinearDecode
 from models.experimental.deepseek_v4_flash.tt.system_config import active_system_config
 from models.experimental.deepseek_v4_flash.tt.weight_cache import WeightCache, _as_cache, _load_weight, _materialize
 
@@ -44,18 +46,14 @@ DECODE_LAYOUTS = {
 
 # Clear of the cores V4's pipeline sockets use: (0,0) / (0,1) hand-off, (0,2) packet, (0,3) output.
 ROWS_SOCKET_CORE = (0, 4)
-# |dot| floor before the signed square root (the checkpoint's ``Engram.clamp_value``).
-_GATE_CLAMP = 1e-6
+# engram_gate computes on the cores its gate weight is sharded on (at most 32), splitting D over
+# them; each one's slice must sit inside one streams shard. The streams are sharded over the
+# hyperconnection's 8 collapse cores, too few to fit the gate's per-core buffers beside the rest of L1.
+GATE_CORES = 16
 
 
 def _value(weight) -> torch.Tensor:
     return weight() if callable(weight) else weight
-
-
-def _rsqrt_mean_square(x: ttnn.Tensor, eps: float) -> ttnn.Tensor:
-    """``[..., D]`` fp32 -> ``rsqrt(mean(x^2) + eps)`` ``[..., 1]``."""
-    mean_square = ttnn.mean(ttnn.multiply(x, x), dim=-1, keepdim=True, compute_kernel_config=_HIFI4)
-    return ttnn.rsqrt(ttnn.add(mean_square, eps))
 
 
 class DeepSeekV41Engram(DeepSeekV4Module):
@@ -67,13 +65,12 @@ class DeepSeekV41Engram(DeepSeekV4Module):
         layer_idx: int,
         weights: dict,
         device: ttnn.MeshDevice,
+        prefetch_buffers: dict,
         batch: int = 1,
         cache: Optional[WeightCache] = None,
         weight_dtype: ttnn.DataType = ttnn.bfloat8_b,
         fifo_pages: int = 2,
         socket_core: tuple = ROWS_SOCKET_CORE,
-        use_prefetcher: bool = False,
-        prefetch_buffers: Optional[dict] = None,
     ):
         """``weights`` is :func:`~models.experimental.deepseek_v41_flash.tt.config.engram_weights` (tensors or
         thunks). One socket page is one user's rows, and a socket's L1 FIFO on ``socket_core`` holds
@@ -81,8 +78,8 @@ class DeepSeekV41Engram(DeepSeekV4Module):
         own and the layer runs replicated (a TP stage's streams are). The sockets allocate L1, so build the
         layer before any trace capture on ``device``.
 
-        ``use_prefetcher`` streams ``wkv`` through the ``engram.wkv`` ring of ``prefetch_buffers``, the
-        per-device mapping every other layer on ``device`` shares.
+        ``wkv`` streams through the ``engram.wkv`` ring of ``prefetch_buffers``, the per-device mapping
+        every other layer on ``device`` shares; call ``wkv.fetch_weights()`` ahead of each :meth:`forward`.
         """
         cache = _as_cache(cache)
         self.layer_idx = layer_idx
@@ -92,31 +89,40 @@ class DeepSeekV41Engram(DeepSeekV4Module):
         self.kin = (config.engram_max_ngram_size - 1) * config.engram_n_heads * config.engram_head_dim
         hc, d = self.hc, self.dim
 
-        self.use_prefetcher = use_prefetcher
-        if use_prefetcher:
-            assert prefetch_buffers is not None, "the prefetched wkv needs the device's shared prefetch_buffers"
-            layout = DECODE_LAYOUTS["wkv"]
-            assert (layout["K"], layout["N"]) == (self.kin, (hc + 1) * d), (layout, self.kin, (hc + 1) * d)
-            self.wkv = LinearDecode(
-                weights["wkv.weight"],
-                device,
-                cache.file("wkv"),
-                dtype=weight_dtype,
-                **layout,
-                **ring_prefetch(prefetch_rings(), "engram.wkv", prefetch_buffers, device, weight_dtype),
-                use_rm_hs=True,
-            )
-        else:
-            self.wkv = Linear(weights["wkv.weight"], device, cache.file("wkv"), dtype=weight_dtype)
-        gate_file = cache.file("gate_weight")
+        if prefetch_buffers is None:
+            raise ValueError("Engram's wkv needs the prefetcher: pass the device's shared prefetch_buffers")
+        layout = DECODE_LAYOUTS["wkv"]
+        assert (layout["K"], layout["N"]) == (self.kin, (hc + 1) * d), (layout, self.kin, (hc + 1) * d)
+        self.wkv = LinearDecode(
+            weights["wkv.weight"],
+            device,
+            cache.file("wkv"),
+            dtype=weight_dtype,
+            **layout,
+            **ring_prefetch(prefetch_rings(), "engram.wkv", prefetch_buffers, device, weight_dtype),
+            use_rm_hs=True,
+        )
+        # engram_gate takes the gate weight as one fp32 tile row: row i is the weight of copy i % hc.
+        # The cache file keeps the memory config it was written with, so the name records the placement.
+        gate_file = cache.file(f"gate_weight_tile_l1_{GATE_CORES}c")
         gate_weight = _materialize(
-            lambda: (_value(weights["q_weight"]).float() * _value(weights["k_weight"]).float() * d**-0.5).reshape(
-                1, 1, hc, d
-            ),
+            lambda: (_value(weights["q_weight"]).float() * _value(weights["k_weight"]).float() * d**-0.5)
+            .repeat(ttnn.TILE_SIZE // hc, 1)
+            .reshape(1, 1, ttnn.TILE_SIZE, d),
             gate_file,
             ttnn.float32,
         )
-        self.gate_weight = _load_weight(gate_weight, device, cache_file_name=gate_file, dtype=ttnn.float32)
+        self.gate_weight = _load_weight(
+            gate_weight,
+            device,
+            cache_file_name=gate_file,
+            dtype=ttnn.float32,
+            memory_config=width_sharded_l1_config(ttnn.TILE_SIZE, d, device, num_cores=GATE_CORES),
+        )
+        # The ROW_MAJOR WIDTH_SHARDED layout forward takes streams in (and returns them in).
+        self.streams_memory_config = width_sharded_l1_config(
+            batch * hc, d, device, num_cores=_HC_COLLAPSE_CORES, tile_height=1
+        )
 
         self.page_bytes = self.kin * 2  # bf16
         alignment = active_system_config().pipeline.pcie_alignment
@@ -158,29 +164,19 @@ class DeepSeekV41Engram(DeepSeekV4Module):
             socket.write_tensor(rows.view(torch.int16))
 
     def forward(self, streams: ttnn.Tensor) -> ttnn.Tensor:
-        """``streams`` ``[B, 1, hc, D]`` (TILE) -> the same shape and dtype, with this step's rows written in."""
+        """``streams`` ``[B, 1, hc, D]`` bf16 ROW_MAJOR in :attr:`streams_memory_config` -> the same shape and
+        layout, with this step's rows written in."""
         b, hc, d = self.batch, self.hc, self.dim
         assert tuple(streams.shape) == (b, 1, hc, d), tuple(streams.shape)
+        assert streams.layout == ttnn.ROW_MAJOR_LAYOUT, streams.layout
+        assert streams.memory_config() == self.streams_memory_config, streams.memory_config()
         for socket in self.sockets:
             ttnn.experimental.recv_async_h2d(self.rows, socket)
-        if self.use_prefetcher:
-            rows = _decode_activation(self.wkv, self.rows)
-            kv = ttnn.to_memory_config(self.wkv(rows), ttnn.DRAM_MEMORY_CONFIG)
-            ttnn.deallocate(rows)
-            kv = ttnn.to_layout(kv, ttnn.ROW_MAJOR_LAYOUT)
-        else:
-            kv = ttnn.to_layout(self.wkv(ttnn.to_layout(self.rows, ttnn.TILE_LAYOUT)), ttnn.ROW_MAJOR_LAYOUT)
-        # Split in row-major, where the [1, 1, B, *] -> [B, 1, *, D] reshapes are views.
-        key = ttnn.reshape(ttnn.slice(kv, [0, 0, 0, 0], [1, 1, b, hc * d]), [b, 1, hc, d])
-        value = ttnn.reshape(ttnn.slice(kv, [0, 0, 0, hc * d], [1, 1, b, (hc + 1) * d]), [b, 1, 1, d])
-        key = ttnn.typecast(ttnn.to_layout(key, ttnn.TILE_LAYOUT), ttnn.float32)
-        value = ttnn.repeat(
-            ttnn.typecast(ttnn.to_layout(value, ttnn.TILE_LAYOUT), ttnn.float32), ttnn.Shape([1, 1, hc, 1])
-        )
+        # ROW_MAJOR A, so kv comes out ROW_MAJOR WIDTH_SHARDED over the ring's receivers.
+        rows = _decode_activation(self.wkv, self.rows)
+        kv = self.wkv(rows)
+        ttnn.deallocate(rows)
 
-        x = ttnn.typecast(streams, ttnn.float32)
-        rstd = ttnn.multiply(_rsqrt_mean_square(x, self.eps), _rsqrt_mean_square(key, self.eps))
-        weighted = ttnn.multiply(ttnn.multiply(x, self.gate_weight), key)
-        dot = ttnn.multiply(ttnn.sum(weighted, dim=-1, keepdim=True, compute_kernel_config=_HIFI4), rstd)
-        gate = ttnn.sigmoid(ttnn.multiply(ttnn.sqrt(ttnn.clamp(ttnn.abs(dot), min=_GATE_CLAMP)), ttnn.sign(dot)))
-        return ttnn.typecast(ttnn.add(x, ttnn.multiply(gate, value)), streams.dtype)
+        out = ttnn.experimental.deepseek.engram_gate(streams, kv, self.gate_weight, self.eps)
+        ttnn.deallocate(kv)
+        return out

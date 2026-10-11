@@ -6,6 +6,7 @@ import pytest
 import torch
 
 import ttnn
+from models.common.utility_functions import is_blackhole
 from tests.ttnn.utils_for_testing import assert_with_pcc
 
 
@@ -84,6 +85,116 @@ def test_matmul_decode_large_k(device, m, k, n, num_cores, b_dtype, reduce_fan_i
         assert len(out_cores) == 1 and (out_cores[0].x, out_cores[0].y) == (root.x, root.y)
 
         assert_with_pcc(torch_a.float() @ torch_b, ttnn.to_torch(tt_out).float(), 0.99)
+
+
+@pytest.mark.parametrize(
+    "m, k, n, num_cores, b_dtype",
+    [
+        # The hyper-connection fn projection: V4 (D = 4096) and V4.1 (D = 5120), hc = 4.
+        (1, 16384, 32, 32, ttnn.bfloat16),
+        (1, 20480, 32, 32, ttnn.bfloat8_b),
+        # Odd tile count per core: the general matmul path.
+        (1, 13 * 96, 64, 13, ttnn.bfloat16),
+        # M > 1: one sum(A^2) tile per row rides the tree.
+        (4, 8192, 64, 16, ttnn.bfloat16),
+        # A single core: the root normalizes its own partial.
+        (1, 512, 32, 1, ttnn.bfloat16),
+    ],
+)
+@pytest.mark.parametrize("reduce_fan_in", [2, 4])
+@pytest.mark.parametrize("out_dtype", [ttnn.bfloat16, ttnn.float32])
+@pytest.mark.skipif(not is_blackhole(), reason="the fused rms_norm is Blackhole-only")
+def test_matmul_decode_large_k_rms_norm(device, m, k, n, num_cores, b_dtype, reduce_fan_in, out_dtype):
+    """``rms_norm=True`` computes ``rms_norm(A) @ B`` with the unweighted norm over all of K."""
+    torch.manual_seed(0)
+    eps = 1e-6
+    core_grid, a_memory_config, tt_b = _make_operands(device, m, k, n, num_cores, b_dtype)
+    torch_b = ttnn.to_torch(tt_b).float()
+
+    for _ in range(3):
+        # Rows of very different magnitude, so a scale applied to the wrong row (or not at all) is
+        # caught -- PCC alone is blind to a uniform scale, hence the norm-ratio check as well.
+        row_scale = torch.logspace(-1, 2, m).reshape(m, 1)
+        torch_a = (torch.randn((m, k)) * row_scale).to(torch.bfloat16)
+        tt_a = ttnn.from_torch(
+            torch_a, dtype=ttnn.bfloat16, layout=ttnn.ROW_MAJOR_LAYOUT, device=device, memory_config=a_memory_config
+        )
+        tt_out = ttnn.experimental.matmul_decode_large_k(
+            tt_a, tt_b, dtype=out_dtype, reduce_fan_in=reduce_fan_in, rms_norm=True, rms_norm_epsilon=eps
+        )
+        assert list(tt_out.shape) == [m, n]
+        # The same matmul without the norm, so the scale check below measures the fused norm alone
+        # and not the matmul's own precision (custom_mm runs at LoFi).
+        tt_plain = ttnn.experimental.matmul_decode_large_k(tt_a, tt_b, dtype=out_dtype, reduce_fan_in=reduce_fan_in)
+
+        a = torch_a.float()
+        scale = torch.rsqrt(a.pow(2).mean(dim=-1, keepdim=True) + eps)
+        actual = ttnn.to_torch(tt_out).float()
+        assert_with_pcc((a * scale) @ torch_b, actual, 0.99)
+        expected = ttnn.to_torch(tt_plain).float() * scale
+        ratio = actual.norm(dim=-1) / expected.norm(dim=-1)
+        assert torch.allclose(ratio, torch.ones_like(ratio), atol=0.01), ratio
+
+
+@pytest.mark.parametrize(
+    "hc, d, num_cores, rms_norm",
+    [
+        # The V4.1 hyper-connection's ROW_MAJOR streams [hc, D] on the 8 collapse cores.
+        (4, 5120, 8, True),
+        (4, 5120, 8, False),
+        (4, 4096, 8, True),
+        # Fewer streams and cores.
+        (2, 1024, 2, False),
+    ],
+)
+@pytest.mark.skipif(not is_blackhole(), reason="the fused rms_norm is Blackhole-only")
+def test_matmul_decode_large_k_fold_rows(device, hc, d, num_cores, rms_norm):
+    """``fold_rows=hc`` reads ``[1, 1, hc, D]`` width-sharded streams as the ``[1, hc*D]`` row
+    each core's shard lays out core-major, against a weight whose K is in that order."""
+    torch.manual_seed(0)
+    eps = 1e-6
+    n = 32
+    k = hc * d
+    w = d // num_cores
+    grid = device.compute_with_storage_grid_size()
+    core_grid = ttnn.num_cores_to_corerangeset(num_cores, grid, row_wise=True)
+    streams_memory_config = ttnn.create_sharded_memory_config(
+        (hc, w),
+        core_grid=core_grid,
+        strategy=ttnn.ShardStrategy.WIDTH,
+        orientation=ttnn.ShardOrientation.ROW_MAJOR,
+        use_height_and_width_as_shard_shape=True,
+    )
+    b_memory_config = ttnn.create_sharded_memory_config(
+        (k // num_cores, n),
+        core_grid=core_grid,
+        strategy=ttnn.ShardStrategy.HEIGHT,
+        orientation=ttnn.ShardOrientation.ROW_MAJOR,
+        use_height_and_width_as_shard_shape=True,
+    )
+
+    torch_streams = torch.randn((1, 1, hc, d), dtype=torch.bfloat16)
+    # Stream-major weight [hc*D, N] (the checkpoint order), reordered to (core, stream, column).
+    torch_b = torch.randn((k, n), dtype=torch.bfloat16)
+    torch_b_core_major = torch_b.reshape(hc, num_cores, w, n).permute(1, 0, 2, 3).reshape(k, n)
+    tt_streams = ttnn.from_torch(
+        torch_streams,
+        dtype=ttnn.bfloat16,
+        layout=ttnn.ROW_MAJOR_LAYOUT,
+        device=device,
+        memory_config=streams_memory_config,
+    )
+    tt_b = ttnn.from_torch(
+        torch_b_core_major, dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT, device=device, memory_config=b_memory_config
+    )
+    rms_kwargs = {"rms_norm": True, "rms_norm_epsilon": eps} if rms_norm else {}
+    tt_out = ttnn.experimental.matmul_decode_large_k(tt_streams, tt_b, fold_rows=hc, **rms_kwargs)
+
+    assert list(tt_out.shape) == [1, 1, 1, n]
+    a = torch_streams.float().reshape(1, k)
+    if rms_norm:
+        a = a * torch.rsqrt(a.pow(2).mean(dim=-1, keepdim=True) + eps)
+    assert_with_pcc(a @ torch_b.float(), ttnn.to_torch(tt_out).float().reshape(1, n), 0.99)
 
 
 @pytest.mark.parametrize("m", [1, 8])

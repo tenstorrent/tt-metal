@@ -54,9 +54,14 @@ void validate_single_user_tensors(const FusedSingleUserParams& attributes, const
         fused_w.layout() == Layout::TILE || fused_w.layout() == Layout::ROW_MAJOR,
         "fused_w must use TILE or ROW_MAJOR layout, got {}",
         fused_w.layout());
-    for (const auto* tensor : {&pre_bias, &post_bias, &comb_bias, &hidden_streams}) {
-        TT_FATAL(tensor->layout() == Layout::TILE, "fused hyperconnection biases and hidden_streams must use TILE");
+    for (const auto* tensor : {&pre_bias, &post_bias, &comb_bias}) {
+        TT_FATAL(tensor->layout() == Layout::TILE, "fused hyperconnection biases must use TILE");
     }
+    // ROW_MAJOR hidden_streams: the collapse cores gather their [H, D/8] shard into tiles locally.
+    TT_FATAL(
+        hidden_streams.layout() == Layout::TILE || hidden_streams.layout() == Layout::ROW_MAJOR,
+        "hidden_streams must use TILE or ROW_MAJOR, got {}",
+        hidden_streams.layout());
 
     const uint32_t hc = attributes.num_streams;
     const auto& fused_shape = fused_w.logical_shape();
@@ -102,6 +107,14 @@ void validate_single_user_tensors(const FusedSingleUserParams& attributes, const
 
     validate_width_shard(fused_w, 1, static_cast<uint32_t>(fused_w.padded_shape()[-1]), "fused_w");
     validate_width_shard(hidden_streams, kCollapseCores, d, "hidden_streams");
+    if (hidden_streams.layout() == Layout::ROW_MAJOR) {
+        TT_FATAL(
+            hidden_streams.buffer()->buffer_type() == tt::tt_metal::BufferType::L1 &&
+                hidden_streams.shard_spec()->shape[0] == hc,
+            "ROW_MAJOR hidden_streams must be L1 with shard height H = {}, got {}",
+            hc,
+            hidden_streams.memory_config());
+    }
 
     if (tensor_args.pre_mix.has_value()) {
         const auto& pre_mix = *tensor_args.pre_mix;
@@ -188,7 +201,15 @@ std::vector<Tensor> fused_hyperconnection_single_user(
     const std::optional<Tensor>& pre_mix) {
     using OperationType = ttnn::operations::experimental::deepseek::hyperconnection::FusedSingleUserDeviceOperation;
     const MemoryConfig post_comb_output_mem_config = memory_config.value_or(ttnn::DRAM_MEMORY_CONFIG);
-    const MemoryConfig collapsed_output_mem_config = memory_config.value_or(hidden_streams.memory_config());
+    // collapsed is TILE: it keeps the input's grid and shard width, with a tile-high shard.
+    MemoryConfig collapsed_output_mem_config = hidden_streams.memory_config();
+    if (hidden_streams.layout() == Layout::ROW_MAJOR && hidden_streams.shard_spec().has_value()) {
+        auto shard_spec = hidden_streams.shard_spec().value();
+        shard_spec.shape[0] = tt::constants::TILE_HEIGHT;
+        collapsed_output_mem_config = MemoryConfig(
+            hidden_streams.memory_config().memory_layout(), hidden_streams.memory_config().buffer_type(), shard_spec);
+    }
+    collapsed_output_mem_config = memory_config.value_or(collapsed_output_mem_config);
     auto operation_attributes = OperationType::operation_attributes_t{
         .num_streams = num_streams,
         .sinkhorn_iters = sinkhorn_iters,

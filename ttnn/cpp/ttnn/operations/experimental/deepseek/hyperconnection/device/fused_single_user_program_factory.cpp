@@ -128,15 +128,20 @@ FusedSingleUserProgramFactory::cached_program_t FusedSingleUserProgramFactory::c
 
     // Collapse branch: hidden input and collapsed output are both local,
     // globally-addressed width shards.
+    // A ROW_MAJOR hidden shard is gathered into tiles in a CB of its own instead.
+    const bool hidden_row_major = hidden_streams.layout() == Layout::ROW_MAJOR;
+    const uint32_t hidden_row_bytes = hidden_streams.shard_spec()->shape[1] * hidden_streams.element_size();
     CBHandle hidden_cb = 0;
     CBHandle collapsed_output_cb = 0;
     {
         auto config = CircularBufferConfig(
                           d_tiles_per_core * tile_size_bytes,
                           {{kFsCbHidden, datatype_to_dataformat_converter(hidden_streams.dtype())}})
-                          .set_page_size(kFsCbHidden, tile_size_bytes)
-                          .set_tile_dims(kFsCbHidden, hidden_streams.tensor_spec().tile())
-                          .set_globally_allocated_address(*hidden_streams.buffer());
+                          .set_page_size(kFsCbHidden, tile_size_bytes);
+        if (!hidden_row_major) {
+            config.set_tile_dims(kFsCbHidden, hidden_streams.tensor_spec().tile())
+                .set_globally_allocated_address(*hidden_streams.buffer());
+        }
         hidden_cb = CreateCircularBuffer(program, collapse_cores, config);
     }
     {
@@ -213,6 +218,8 @@ FusedSingleUserProgramFactory::cached_program_t FusedSingleUserProgramFactory::c
             fused_w_read_bytes,
             kFsCbPre,
             use_pre_mix ? 1u : 0u,
+            hidden_row_major ? 1u : 0u,
+            hidden_row_bytes,
         };
         TensorAccessorArgs(fused_w.buffer()).append_to(args);
         TensorAccessorArgs(pre_bias.buffer()).append_to(args);
@@ -364,7 +371,9 @@ void FusedSingleUserProgramFactory::override_runtime_arguments(
     const uint32_t post_addr = tensor_return_value[0].buffer()->address();
     const uint32_t comb_addr = tensor_return_value[1].buffer()->address();
     const uint32_t pre_out_addr = tensor_args.pre_mix.has_value() ? tensor_return_value[3].buffer()->address() : 0u;
-    UpdateDynamicCircularBufferAddress(program, shared.hidden_cb, *tensor_args.hidden_streams.buffer());
+    if (tensor_args.hidden_streams.layout() != Layout::ROW_MAJOR) {
+        UpdateDynamicCircularBufferAddress(program, shared.hidden_cb, *tensor_args.hidden_streams.buffer());
+    }
     UpdateDynamicCircularBufferAddress(program, shared.collapsed_output_cb, *tensor_return_value[2].buffer());
 
     auto& collapse_reader_args = GetRuntimeArgs(program, shared.collapse_reader_kernel_id);
