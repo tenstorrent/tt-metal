@@ -34,6 +34,7 @@ from helpers.perf.core import (
     _prune_runs,
     _refresh_latest,
     _reject_duplicate_keys,
+    _selected_run_types,
     add_pipeline_coupling,
     assert_zones_dont_overlap,
     combine_perf_reports,
@@ -164,6 +165,17 @@ def test_pipeline_coupling_is_l1_to_l1_minus_the_slowest_stage():
     assert (
         tile[stat_column("COUPLING", MEAN)] == 0.0
     )  # L1_TO_L1 20 - MATH_ISOLATE 20, divided by 4 tiles
+
+
+def test_l1_congestion_runs_only_when_asked_for(monkeypatch):
+    every = list(PerfRunType)
+    monkeypatch.delenv("LLK_PERF_RUN_TYPES", raising=False)
+    assert PerfRunType.L1_CONGESTION not in _selected_run_types(every)
+    assert PerfRunType.L1_TO_L1 in _selected_run_types(every)
+    monkeypatch.setenv("LLK_PERF_RUN_TYPES", "ALL_MODES_AND_CONGESTION")
+    assert PerfRunType.L1_CONGESTION in _selected_run_types(every)
+    monkeypatch.setenv("LLK_PERF_RUN_TYPES", "L1_CONGESTION")
+    assert _selected_run_types(every) == [PerfRunType.L1_CONGESTION]
 
 
 def test_report_without_formats_still_conforms():
