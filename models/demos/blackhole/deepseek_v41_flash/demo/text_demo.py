@@ -168,6 +168,15 @@ SCENARIOS = [
     _s(
         "/mnt/tt-data/ssinghal/dsv4-logs/perf/gsm8k_8shot_16.json", 16, 70000, 256, "gsm8k8shot_b16_c70k", instruct=True
     ),
+    # the same 16 prompts at the 131072 build (like-for-like with the vLLM B=16 / 131072 / k=5 server)
+    _s(
+        "/mnt/tt-data/ssinghal/dsv4-logs/perf/gsm8k_8shot_16.json",
+        16,
+        131072,
+        256,
+        "gsm8k8shot_b16_m131072",
+        instruct=True,
+    ),
     _s(f"{PROMPTS}/input_data_long_256k_exact.json", 16, 270000, 64, "isl256k_b16"),
     _s(GSM, 32, 512, 384, "gsm8k_b32", instruct=True, stop_at_eos=True),
     _s(f"{LONG}/input_data_long_32k.json", 32, 40000, 64, "isl32k_b32"),
