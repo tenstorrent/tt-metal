@@ -139,6 +139,7 @@ DB_SCHEMA = [
     Column("partial_face_math", "bool", True, "configuration"),
     Column("partial_face_pack", "bool", True, "configuration"),
     Column("pool_type", "string", True, "configuration"),
+    Column("preserve_src_zero_flag", "bool", True, "configuration"),
     Column("r_dimm", "int64", True, "configuration"),
     Column("read_transposed", "bool", True, "configuration"),
     Column("reduce_pool_type", "string", True, "configuration"),

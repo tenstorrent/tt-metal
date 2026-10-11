@@ -640,6 +640,7 @@ PERF_TEST_SCHEMAS = {
             "num_faces",
             "num_faces_A",
             "num_faces_B",
+            "preserve_src_zero_flag",
             "r_dimm",
             "read_transposed",
             "sdpa_input_tile_offset",
