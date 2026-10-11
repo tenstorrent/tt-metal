@@ -29,6 +29,7 @@ from models.demos.deepseek_v3_d_p.reference.kda.ops import (
     causal_depthwise_conv_reference,
     kda_gate_reference,
     kda_recurrent_reference,
+    l2_norm_reference,
     sigmoid_gated_rms_norm_reference,
 )
 
@@ -65,12 +66,90 @@ def dense_mlp(x: torch.Tensor, w: Mapping[str, torch.Tensor], rows: torch.Tensor
 # ---------------------------------------------------------------------------------------------- KDA
 
 
+_FACTORED_EXPONENT_LIMIT = 80.0  # e^80 ~ 5.5e34 < fp32 max; e^-80 ~ 1.8e-35 > fp32 min normal
+
+
+def kda_recurrence_chunked(
+    q: torch.Tensor,
+    k: torch.Tensor,
+    v: torch.Tensor,
+    gate: torch.Tensor,
+    beta: torch.Tensor,
+    initial_state: torch.Tensor | None = None,
+    chunk: int = 16,
+) -> tuple[torch.Tensor, torch.Tensor]:
+    """``kda_recurrent_reference`` (same inputs, same normalization, same result to fp32 rounding),
+    a block of ``chunk`` tokens at a time instead of one token at a time.
+
+    Per head the token loop is ``S <- diag(exp g_t) S;  u_t = beta_t (v_t - S^T k_t);
+    S <- S + k_t u_t^T;  o_t = S^T q_t``. Within a block, with ``G`` the running sum of ``g`` from
+    the block start and ``S0`` the state entering it:
+
+        u = (I + diag(beta) L)^-1 diag(beta) (V - (K * e^G) S0),  L_jm = sum_d k_jd k_md e^(G_jd - G_md), m < j
+        o_i = (q_i * e^G_i)^T S0 + sum_{j <= i} (sum_d q_id k_jd e^(G_id - G_jd)) u_j
+        S_end = diag(e^G_C) S0 + sum_j (k_j * e^(G_C - G_j)) u_j^T
+
+    The pairwise decays are factored as ``e^(G_i) e^(-G_j)`` so every term is a matmul; with K3's
+    gate floor (-5 per token) a 16-token block keeps ``|G| <= 80``, inside fp32's range. A block whose
+    decay goes further falls back to forming ``e^(G_i - G_j)`` pairwise (every exponent <= 0).
+    ``[B, T, H, D]`` layout, like the token loop.
+    """
+    batch, sequence, heads, key_dim = q.shape
+    value_dim = v.shape[-1]
+    expected = {
+        "k": (k, (batch, sequence, heads, key_dim)),
+        "v": (v, (batch, sequence, heads, value_dim)),
+        "gate": (gate, (batch, sequence, heads, key_dim)),
+        "beta": (beta, (batch, sequence, heads)),
+    }
+    if initial_state is not None:
+        expected["initial_state"] = (initial_state, (batch, heads, key_dim, value_dim))
+    for name, (tensor, shape) in expected.items():
+        if tuple(tensor.shape) != shape:
+            raise ValueError(f"{name} shape {tuple(tensor.shape)} != {shape}")
+    q = l2_norm_reference(q) * (key_dim**-0.5)
+    k = l2_norm_reference(k)
+    v, gate, beta = v.float(), gate.float(), beta.float()
+    state = torch.zeros(batch, heads, key_dim, v.shape[-1]) if initial_state is None else initial_state.float().clone()
+    output = torch.empty(batch, sequence, heads, v.shape[-1])
+    # [B, H, T, D] for the block algebra.
+    q, k, v, gate = (x.transpose(1, 2) for x in (q, k, v, gate))
+    beta = beta.transpose(1, 2)
+    for start in range(0, sequence, chunk):
+        end = min(start + chunk, sequence)
+        qc, kc, vc, bc = q[:, :, start:end], k[:, :, start:end], v[:, :, start:end], beta[:, :, start:end]
+        cumulative = gate[:, :, start:end].cumsum(dim=2)  # [B, H, C, D], <= 0 and decreasing
+        size = end - start
+        lower = torch.ones(size, size, dtype=torch.bool).tril()
+        if cumulative.min() >= -_FACTORED_EXPONENT_LIMIT:
+            # e^(G_i - G_j) = e^(G_i) e^(-G_j): plain matmuls. Exact enough while |G| stays well
+            # inside fp32's exponent range, which the limit guarantees.
+            grow, shrink = cumulative.exp(), (-cumulative).exp()
+            pair_k = (kc * grow) @ (kc * shrink).transpose(-1, -2)  # [B, H, C(i), C(j)]
+            pair_q = (qc * grow) @ (kc * shrink).transpose(-1, -2)
+        else:
+            difference = cumulative.unsqueeze(3) - cumulative.unsqueeze(2)
+            decay = torch.where(lower[..., None], difference, torch.full_like(difference, -torch.inf)).exp()
+            pair_k = torch.einsum("bhid,bhjd,bhijd->bhij", kc, kc, decay)
+            pair_q = torch.einsum("bhid,bhjd,bhijd->bhij", qc, kc, decay)
+        strict = pair_k * (lower & ~torch.eye(size, dtype=torch.bool))
+        system = torch.eye(size) + bc.unsqueeze(-1) * strict
+        rhs = bc.unsqueeze(-1) * (vc - (kc * cumulative.exp()) @ state)
+        u = torch.linalg.solve_triangular(system, rhs, upper=False)
+        out = (qc * cumulative.exp()) @ state + (pair_q * lower) @ u
+        output[:, start:end] = out.transpose(1, 2)
+        last = cumulative[:, :, -1:]  # [B, H, 1, D]
+        state = last.squeeze(2).exp().unsqueeze(-1) * state + (kc * (last - cumulative).exp()).transpose(-1, -2) @ u
+    return output, state
+
+
 def kda_forward(
     hidden: torch.Tensor,
     weights: Mapping[str, torch.Tensor],
     config: KDAConfig,
     state: KDAReferenceState | None = None,
     rows: torch.Tensor | None = None,
+    token_loop: bool = False,
 ) -> tuple[torch.Tensor, KDAReferenceState]:
     """``kda_forward_reference`` over ``hidden [T, d]``; the output is computed for ``rows`` only.
 
@@ -100,7 +179,8 @@ def kda_forward(
     )
     gate = kda_gate_reference(raw_gate, weights["A_log"], weights["dt_bias"], config.gate_lower_bound)
     beta = torch.sigmoid(F.linear(x, weights["b_proj.weight"].float()))
-    output, recurrent = kda_recurrent_reference(q, k, v, gate, beta, state.recurrent)
+    recurrence = kda_recurrent_reference if token_loop else kda_recurrence_chunked
+    output, recurrent = recurrence(q, k, v, gate, beta, state.recurrent)
 
     output = _select(output[0], rows)
     x_rows = _select(x[0], rows)

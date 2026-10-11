@@ -58,6 +58,7 @@ class LayerResult:
     kvpe: torch.Tensor | None = None  # [T, 576] this chunk's MLA KV rows
     routing: tuple[torch.Tensor, torch.Tensor] | None = None
     model_out: torch.Tensor | None = None  # [R, d] q_out read + final norm (full tail only)
+    ffn_input: torch.Tensor | None = None  # [R, d] the FFN's input: normed post-read
     # Mean softmax entropy of each AttnRes read as a fraction of log(candidates): near 0 is one-hot
     # (other planes untested), near 1 uniform (the query untested).
     entropy: dict = field(default_factory=dict)
@@ -137,6 +138,7 @@ def reference_layer(
     entropy["post"] = _entropy(live_rows, sealed_rows, q_post)
     h = attn_res(live_rows, sealed_rows, q_post, EPS)
     normed = rms_norm(h, state["ffn_norm_weight"], eps)
+    out.ffn_input = normed
     if "ffn_weights" in state:
         ffn_rows = dense_mlp(normed, state["ffn_weights"])
     else:

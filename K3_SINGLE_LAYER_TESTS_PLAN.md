@@ -377,6 +377,24 @@ Reading:
   the **CI runner hosts** (LB and GH runners via dispatch) — still required before the CI budget
   request, because the KDA loop is single-thread-latency bound and runner CPUs differ.
 
+**Re-measured 2026-10-11, same host, 32 threads, after the chunked KDA recurrence (16-token blocks
+in matmul form instead of the per-token loop):**
+
+| Component | variant | T=1280 | T=2560 | T=5120 | T=10240 |
+|---|---|---:|---:|---:|---:|
+| KDA | full | 1.4 s | 2.6 s | 5.0 s | 9.9 s |
+| KDA | sampled | 1.3 s | 2.3 s | 3.9 s | 7.8 s |
+| MLA | full | 0.9 s | 2.3 s | 6.1 s | 18.8 s |
+| MLA | sampled | 0.4 s | 0.7 s | 1.0 s | 1.7 s |
+| MoE | full | 1.0 s | 2.2 s | 6.2 s | 12.0 s |
+| MoE | sampled | 0.5 s | 0.5 s | 0.5 s | 0.5 s |
+
+KDA is now linear in T (~0.8 ms/token sampled, dominated by the fp32 projections); sampled MLA and
+MoE stay near constant. GH (4x the tokens per chunk) therefore costs ~4x LB on KDA layers'
+reference and about the same on the sampled MoE/MLA terms. Estimate for a GH KDA+MoE case: reference
+~55 s (LB 18 s), plus ~4x on synthetic request inputs and host readback/placement (~25 s more) --
+roughly 2 min a case, ~15-18 min for P0 -- unmeasured until a GH run.
+
 **Budget model:** for each case, wall time = synthetic weight gen + device weight build/upload + device
 scenarios + **reference on the critical path**. CI time = Σ over the cases in the leg + mesh open.
 Go/no-go: the reference on the critical path is ≤ ~25% of per-case wall, and the leg fits the bucket
@@ -459,7 +477,33 @@ Deleting a command without lowering its entry's timeout frees nothing.
 | 0 | MoE option **(c) chosen and built**; rest partly measured | `PooledRoutedExperts`: 16 pools replicated, each (chip, slot) expert made distinct on device by row-sign flips of `down^T`, exact under bf4 (all 112 slots x 8 chips checked; only signed zeros differ). Build: 112 slots/chip in **7.5 s** on LB. Per-case S1 wall on LB (warm JIT, incl. weight gen + build + reference): **23-100 s**, all 11 cases 4 min. Not yet measured: GH, trace region, peak DRAM/L1. |
 | 1 | **done** (commit `cfdee245060`) | 93-layer split walk bitwise-equal to a settled undivided walk at every tested split on LB; tests/attn_res 813 pass. Owed: GH-only `test_transformer_pipeline_split.py`. Found and fixed an op bug on the way: `attn_res_weighted_reduce_nc` overran its CBs for R = 7, 11, ..., 31 (commit `1bbcb98ef8a`). |
 | 2 | S1 green for **all 11 cases** on LB | Synthetic MLA weights recalibrated so the attention branch is visible (default 0.02 std hid it under the FFN); every comparison asserts PCC and relative L2; branch-visibility and AttnRes-entropy guards. Device MLA alone measures PCC ~0.998 vs the reference, so MLA cases carry a looser layer bar. Deferred to Phase 3: device-routed MoE reference + top-k flip rate (needs an eager routing export), rotation-aware KV unrotate for rotated starts. |
-| 3, 4 | not started | |
+| 3 | **S1-S9 implemented; all green on LB** (one test per case; S6 traced and S8 one-shot reuse the case's model, S7 builds a two-slot one) | Per-case model runs S1 (+ guards, MoE checks) -> S5 -> S2 -> S4 -> S3. MoE: device gate vs reference gate on identical bf16 input disagrees on 0.63-0.86% of picks; MoE alone with the reference driven by the DEVICE's routing (eager `moe_diagnostic`) matches at PCC 0.99913; S9(a) one-chip mis-dispatch caught (1-PCC 0.022 vs bar 0.0017); dispatch never near capacity. S6: traced replays are **bitwise equal to eager** here (better than the planned 0.999), replay-vs-replay bitwise, traced restart bitwise. S7 interleaved slots bitwise. S8 chunked vs one-shot carries PCC 1.000000. S9(b): live<->sealed swap is a no-op at sealing and kv_only layers (set semantics) -- used only where it is a real perturbation; plane duplication otherwise. LB wall: see §7.2. GH not run (needs push + Blaze dispatch). |
+| 4 | YAML drafted locally, not committed | needs: budget approval (LB e2e has 18 min free vs 14.9 min measured for the whole directory, ~10 min for P0 + MoE exactness; GH bh_sc1 has 0), and moving the device split-walk test out of the 10-min `bh-lb-kimi-k3-attn-res` entry. |
+
+### 7.2 LB wall time (2x4, warm JIT, 2026-10-11)
+
+`test_single_layer` is ONE test per case: the one-shot model (P0 KDA cases, built first, see the
+open issue below), the case's model for S1+guards+MoE, S5, S2, S4, S3, S8 and S6, then a two-slot
+model for S7/S8 (traced K3 is single-slot). The large synthetic matrices (attention, FFN, MoE)
+are shared by every layer of a kind and memoized (norms and AttnRes queries stay per layer; the two
+layers of a multi-layer case get different variants). Whole directory on LB: **25 passed in
+14.9 min**; the 11 cases 803 s of calls -- P0 51-113 s (L92kv 51, L27 59, L12 63, L0 69, L36 83,
+L87 96, L84 113; P0 total ~8.9 min), P1 58-83 s, P2 38-91 s; `test_synthetic_moe` 74 s.
+History: 33.8 min for the whole directory (36 tests) on 2026-10-10, before the reference speed-ups
+(chunked KDA recurrence, row sampling, shard-concat readback) and the per-case merge.
+
+Per L12 case (profiled, 47 s before the merge): host reference 18 s (KDA projections ~8, MoE on the
+sampled rows 6, KDA recurrence 4), model build 16 s (synthetic weights 6, upload conversion 5,
+expert placement 3), request inputs 5 s, device runs + readback ~4 s.
+
+**Open issue found in Phase 3 (not a production path, reproduced):** on one mesh, after a 2-slot
+`TtKimiK3Transformer` (L36) has run a forward and been closed, a NEW model with a different chunk size
+computes a wrong MoE (MoE alone PCC 0.954 vs 0.999; layer 0.977 vs 0.998). Not reproduced by: a
+2-slot model that never ran, a 1-slot first model, a same-size second model. Clearing the program
+cache does not cure it, and filling DRAM with garbage does not reproduce it. Hypothesis (unproven):
+per-mesh state (semaphores / sub-device managers / CCL) rather than programs; stale DRAM is not
+ruled out. The suite avoids the pattern: in each case's test the one-shot model is built first, and
+`mesh_device` is function-scoped, so no two-slot model precedes it on the same mesh. Worth a ticket.
 
 **Commit gate (every phase, every commit).** No code is committed until it has been reviewed by
 **both** of these:

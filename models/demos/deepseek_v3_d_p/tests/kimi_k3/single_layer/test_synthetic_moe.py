@@ -57,26 +57,30 @@ def test_pooled_experts_are_exact_sign_flips(mesh_device, device_params):
     assert torch.unique(reference.sign, dim=0).shape[0] == EXPERTS, "two experts share a sign vector"
     table = ExpertMapping.create_global_expert_idx_table(experts_per_chip, rows, cols)
     assert reference.down.abs().max() > 0, "dequantized pools are empty"
+    # Gate and up are the pool's own tensors, shared by every slot on that pool, so each pool is checked
+    # once on every chip. That is complete only while every slot holds its pool's tensor OBJECT -- the
+    # identity assert below fails if the provider ever builds per-slot copies. Down is per (chip, slot).
+    pools = provider.pools
     for slot in range(experts_per_chip):
-        down_chips = ttnn.get_device_tensors(down[slot])
-        gate_chips = ttnn.get_device_tensors(gate[slot])
-        up_chips = ttnn.get_device_tensors(up[slot])
-        for chip, (d_tt, g_tt, u_tt) in enumerate(zip(down_chips, gate_chips, up_chips, strict=True)):
+        assert gate[slot] is gate[slot % pools] and up[slot] is up[slot % pools], f"slot {slot} not on its pool"
+    for pool in range(pools):
+        for chip, (g_tt, u_tt) in enumerate(
+            zip(ttnn.get_device_tensors(gate[pool]), ttnn.get_device_tensors(up[pool]), strict=True)
+        ):
+            assert torch.equal(ttnn.to_torch(g_tt).float().T, reference.gate[pool]), f"pool {pool} chip {chip}: gate"
+            assert torch.equal(ttnn.to_torch(u_tt).float().T, reference.up[pool]), f"pool {pool} chip {chip}: up"
+    for slot in range(experts_per_chip):
+        down_chips = [ttnn.to_torch(d_tt).float().T for d_tt in ttnn.get_device_tensors(down[slot])]
+        for chip, got_down in enumerate(down_chips):
             row, col = divmod(chip, cols)
-            expert = int(table[col, row, slot])
-            want = reference.expert(expert)
-            got_down = ttnn.to_torch(d_tt).float().T
+            want = reference.expert(int(table[col, row, slot]))["down_proj"]
             # Equal values; bit patterns may differ ONLY in the sign of a zero (the device's bf4 repack
             # writes +0 where sign * Q(pool) gives -0), which no matmul can tell apart.
-            assert torch.equal(got_down, want["down_proj"]), f"slot {slot} chip {chip}: down is not sign * Q(pool)"
-            differing_bits = got_down.view(torch.int32) != want["down_proj"].view(torch.int32)
-            assert (want["down_proj"][differing_bits] == 0).all(), f"slot {slot} chip {chip}: non-zero bit mismatch"
-            assert torch.equal(ttnn.to_torch(g_tt).float().T, want["gate_proj"]), f"slot {slot} chip {chip}: gate"
-            assert torch.equal(ttnn.to_torch(u_tt).float().T, want["up_proj"]), f"slot {slot} chip {chip}: up"
+            assert torch.equal(got_down, want), f"slot {slot} chip {chip}: down is not sign * Q(pool)"
+            differing_bits = got_down.view(torch.int32) != want.view(torch.int32)
+            assert (want[differing_bits] == 0).all(), f"slot {slot} chip {chip}: non-zero bit mismatch"
         # Distinct experts on distinct chips in the same slot.
-        assert not torch.equal(
-            ttnn.to_torch(down_chips[0]).float(), ttnn.to_torch(down_chips[-1]).float()
-        ), f"slot {slot}: first and last chip hold the same expert"
+        assert not torch.equal(down_chips[0], down_chips[-1]), f"slot {slot}: first and last chip hold the same expert"
 
     for tensor in down:
         ttnn.deallocate(tensor)

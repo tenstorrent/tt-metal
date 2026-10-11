@@ -279,3 +279,22 @@
   owner_id: U09LK84G4TF # Nikola Milicevic
   team: models
   budget_type: e2e
+
+- id: bh-lb-kimi-k3-single-layer
+  name: bh_lb_Kimi_K3_single_layer
+  model-name: kimi_k3
+  # Kimi K3 one layer at a time at real dims through the production stack, synthetic weights,
+  # against a host fp32 reference (K3_SINGLE_LAYER_TESTS_PLAN.md). P0 + P1 cases on 2x4; the
+  # pooled-expert exactness check and the reference ops' host tests come along.
+  # K3_SINGLE_LAYER_EXPECT_PASSED: a leg whose tests all skipped (mesh gate, selector) must not pass.
+  # TODO(budget): timeout is a first-measurement guess; set it to measured + 50% (plan §6).
+  cmd: |
+    pytest models/demos/deepseek_v3_d_p/tests/kimi_k3/single_layer/test_reference_ops.py -vvv --tb=short || exit $?
+    K3_SINGLE_LAYER_EXPECT_PASSED=9 scripts/run_safe_pytest.sh --run-all models/demos/deepseek_v3_d_p/tests/kimi_k3/single_layer/test_single_layer.py -k "LB-2x4 and (P0 or P1)" -vvv --tb=short --durations=0 || exit $?
+    K3_SINGLE_LAYER_EXPECT_PASSED=1 scripts/run_safe_pytest.sh models/demos/deepseek_v3_d_p/tests/kimi_k3/single_layer/test_synthetic_moe.py -k "LB-2x4" -vvv --tb=short --durations=0 || exit $?
+  skus:
+    bh_loudbox:
+      timeout: 30
+  owner_id: U09LK84G4TF # Nikola Milicevic -- TODO(owner): confirm the suite's owner
+  team: models
+  budget_type: e2e

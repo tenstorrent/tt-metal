@@ -278,3 +278,47 @@ def test_moe_route_matches_kimi_gate(generator, top_k, scaling):
     order, expected_order = idx.argsort(-1), expected_idx.argsort(-1)
     assert torch.equal(idx.gather(1, order), expected_idx.gather(1, expected_order))
     _close(weight.gather(1, order), expected_weight.gather(1, expected_order), "gate weights")
+
+
+@pytest.mark.parametrize("gate_floor", [-5.0, -40.0], ids=["k3_gate_floor", "past_factoring_limit"])
+@pytest.mark.parametrize("tokens", [1, 17, 70])
+def test_chunked_kda_recurrence_matches_token_loop(generator, gate_floor, tokens):
+    """The suite's chunked recurrence against the reference token loop: blocks that end mid-way,
+    a carried-in state, and decays strong enough to take the pairwise (non-factored) path."""
+    from models.demos.deepseek_v3_d_p.reference.kda.ops import kda_recurrent_reference
+    from models.demos.deepseek_v3_d_p.tests.kimi_k3.single_layer.reference_ops import kda_recurrence_chunked
+
+    heads, dim = 3, 16
+    q, k, v = (torch.randn(1, tokens, heads, dim, generator=generator) for _ in range(3))
+    gate = gate_floor * torch.rand(1, tokens, heads, dim, generator=generator)
+    beta = torch.rand(1, tokens, heads, generator=generator)
+    state = torch.randn(1, heads, dim, dim, generator=generator) * 0.3
+    want_out, want_state = kda_recurrent_reference(q, k, v, gate, beta, state)
+    got_out, got_state = kda_recurrence_chunked(q, k, v, gate, beta, state)
+    _close(got_out, want_out, "chunked output")
+    _close(got_state, want_state, "chunked state")
+
+
+def test_chunked_kda_recurrence_long_sequence_real_dims(generator):
+    """K3's head dim over an LB chunk (80 blocks of carried state), K3's gate floor: the regime the
+    suite runs in, where accumulated block-to-block error would show."""
+    from models.demos.deepseek_v3_d_p.reference.kda.ops import kda_recurrent_reference
+    from models.demos.deepseek_v3_d_p.reference.kimi_k3_config import KimiK3Config
+    from models.demos.deepseek_v3_d_p.tests.kimi_k3.single_layer.reference_ops import kda_recurrence_chunked
+
+    tokens, heads, dim = 1280, 2, KimiK3Config.KDA_HEAD_DIM
+    q, k, v = (torch.randn(1, tokens, heads, dim, generator=generator) for _ in range(3))
+    gate = -5.0 * torch.rand(1, tokens, heads, dim, generator=generator) ** 4  # mostly weak decay: long memory
+    beta = torch.rand(1, tokens, heads, generator=generator)
+    want_out, want_state = kda_recurrent_reference(q, k, v, gate, beta)
+    got_out, got_state = kda_recurrence_chunked(q, k, v, gate, beta)
+    _close(got_out, want_out, "chunked output")
+    _close(got_state, want_state, "chunked state")
+
+
+def test_chunked_kda_recurrence_rejects_mismatched_shapes(generator, expect_error):
+    from models.demos.deepseek_v3_d_p.tests.kimi_k3.single_layer.reference_ops import kda_recurrence_chunked
+
+    q = k = v = torch.randn(1, 4, 2, 8, generator=generator)
+    with expect_error(ValueError, "gate shape"):
+        kda_recurrence_chunked(q, k, v, torch.zeros(1, 2, 4, 8), torch.zeros(1, 4, 2))

@@ -208,9 +208,18 @@ def _windows():
                 yield first, count
 
 
-@pytest.mark.parametrize("first, count", list(_windows()))
-def test_rank_groups_refine_the_undivided_walk(first, count):
+# One test over every window rather than one per window: ~360 windows are milliseconds of
+# bookkeeping each, and as separate pytest items they were most of this file's runtime.
+def test_rank_groups_refine_the_undivided_walk():
     depth_of, global_groups = _global_groups()
+    for first, count in _windows():
+        try:
+            _check_window_groups(first, count, depth_of, global_groups)
+        except AssertionError as error:
+            raise AssertionError(f"window first={first} count={count}: {error}") from error
+
+
+def _check_window_groups(first, count, depth_of, global_groups):
     head, groups = rank_site_groups(first, count, BLOCK_SIZE)
     named = _named(first, ([head] if head is not None else []) + groups)
     is_last = first + count == NUM
@@ -347,16 +356,18 @@ def _walk_reads(first, count, monkeypatch):
     return op.reads
 
 
-@pytest.mark.parametrize("first, count", list(_windows()))
-def test_walk_reads_every_site_against_the_undivided_depth(first, count, monkeypatch):
+def test_walk_reads_every_site_against_the_undivided_depth(monkeypatch):
     depth_of, _ = _global_groups()
     pre, post, q_out = _queries(NUM)
-    expected = walk_sites(pre[first : first + count], post[first : first + count], None, first_pre_issued=first > 0)
-    if first + count == NUM:
-        expected = expected + [q_out]
-    reads = _walk_reads(first, count, monkeypatch)
-    assert [q for q, _ in reads] == expected
-    assert all(depth == depth_of[q] for q, depth in reads), [(q, d, depth_of[q]) for q, d in reads if d != depth_of[q]]
+    for first, count in _windows():
+        expected = walk_sites(pre[first : first + count], post[first : first + count], None, first_pre_issued=first > 0)
+        if first + count == NUM:
+            expected = expected + [q_out]
+        reads = _walk_reads(first, count, monkeypatch)
+        where = f"window first={first} count={count}"
+        assert [q for q, _ in reads] == expected, where
+        wrong = [(q, d, depth_of[q]) for q, d in reads if d != depth_of[q]]
+        assert not wrong, f"{where}: {wrong}"
 
 
 def test_walk_rejects_a_wrong_inherited_depth(monkeypatch, expect_error):

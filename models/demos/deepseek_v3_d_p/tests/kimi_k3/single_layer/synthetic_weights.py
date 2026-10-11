@@ -2,8 +2,11 @@
 # SPDX-License-Identifier: Apache-2.0
 """Synthetic Kimi-K3 weights for one layer, at real dims, keyed exactly as the model consumes them.
 
-Everything is a pure function of ``(layer, seed)``, so LB and Galaxy build identical weights and a
-failure reproduces from the test id alone. Norm weights are drawn around one rather than set to
+Everything is a pure function of ``(layer, seed, variant)``, so LB and Galaxy build identical
+weights and a failure reproduces from the test id alone. The large matrices (attention projections,
+FFN, MoE) do not depend on the layer -- they are synthetic, and drawing them is most of a model
+build's host time -- so every case reuses them. ``variant`` (the layer's position in its case)
+keeps two layers of one case apart; the per-layer norms and AttnRes queries are always the layer's own. Norm weights are drawn around one rather than set to
 one: a norm whose weight goes missing becomes ``torch.empty`` on device (#54841), and a unit weight
 would hide that.
 
@@ -14,6 +17,8 @@ Key layout (plan §10): per layer ``attn_norm_weight``, ``ffn_norm_weight``, the
 """
 
 from __future__ import annotations
+
+import functools
 
 import torch
 
@@ -39,6 +44,11 @@ def component_seed(seed: int, layer: int, component: str) -> int:
     return (seed * 1_000 + layer) * 100 + _COMPONENT[component]
 
 
+def shared_seed(seed: int, variant: int, component: str) -> int:
+    """Seed of a layer-independent component; ``100 + variant`` never collides with a layer id (0..93)."""
+    return component_seed(seed, 100 + variant, component)
+
+
 def _gen(seed: int, layer: int, component: str) -> torch.Generator:
     return torch.Generator().manual_seed(component_seed(seed, layer, component))
 
@@ -61,8 +71,9 @@ MLA_KV_B_STD = 0.06
 MLA_O_STD = 0.05
 
 
-def mla_weights(layer: int, seed: int) -> dict[str, torch.Tensor]:
-    g = _gen(seed, layer, "mla")
+@functools.lru_cache(maxsize=2)
+def mla_weights(seed: int, variant: int = 0) -> dict[str, torch.Tensor]:
+    g = torch.Generator().manual_seed(shared_seed(seed, variant, "mla"))
     heads = KimiK3Config.NUM_ATTENTION_HEADS
     nope, rope, v = KimiK3Config.QK_NOPE_HEAD_DIM, KimiK3Config.QK_ROPE_HEAD_DIM, KimiK3Config.V_HEAD_DIM
     q_rank, kv_rank = KimiK3Config.Q_LORA_RANK, KimiK3Config.KV_LORA_RANK
@@ -78,9 +89,51 @@ def mla_weights(layer: int, seed: int) -> dict[str, torch.Tensor]:
     }
 
 
-def make_layer_state(layer: int, *, seed: int, kv_only: bool = False) -> dict:
+# The cached tensors are only read; the routed-expert provider re-derives its device experts on every
+# build. maxsize 2: a case holds at most two variants.
+@functools.lru_cache(maxsize=2)
+def kda_weights(seed: int, variant: int = 0) -> dict[str, torch.Tensor]:
+    return {
+        name: tensor.bfloat16()
+        for name, tensor in kda_random_weights(kimi_k3_kda_config(), shared_seed(seed, variant, "kda")).items()
+    }
+
+
+@functools.lru_cache(maxsize=2)
+def dense_ffn_weights(seed: int, variant: int = 0) -> dict[str, torch.Tensor]:
+    g = torch.Generator().manual_seed(shared_seed(seed, variant, "dense"))
+    inter = KimiK3Config.INTERMEDIATE_SIZE
+    return {"gate_proj": _normal(g, inter, H), "up_proj": _normal(g, inter, H), "down_proj": _normal(g, H, inter)}
+
+
+@functools.lru_cache(maxsize=2)
+def moe_weights(seed: int, variant: int = 0) -> dict:
+    """The MoE quartet. bf16 gate, as TtMoEGatePrefill uploads it: an fp32 reference gate would flip
+    top-k picks the device's rounded weights do not make (the 16th/17th score gap is ~3e-3 at 896)."""
+    return {
+        "gate_weights": create_gate_weights(
+            KimiK3Config.NUM_ROUTED_EXPERTS, H, dtype=torch.bfloat16, seed=shared_seed(seed, variant, "gate")
+        ),
+        "shared_expert_weights": create_shared_expert_weights(
+            H, KimiK3Config.SHARED_EXPERT_INTERMEDIATE_SIZE, seed=shared_seed(seed, variant, "shared")
+        ),
+        "latent_weights": create_latent_weights(
+            H, KimiK3Config.ROUTED_EXPERT_HIDDEN_SIZE, seed=shared_seed(seed, variant, "latent")
+        ),
+        "routed_expert_weights": PooledRoutedExperts(
+            KimiK3Config.NUM_ROUTED_EXPERTS,
+            ROUTED_POOLS,
+            KimiK3Config.ROUTED_EXPERT_HIDDEN_SIZE,
+            KimiK3Config.MOE_INTERMEDIATE_SIZE,
+            seed=shared_seed(seed, variant, "routed"),
+        ),
+    }
+
+
+def make_layer_state(layer: int, *, seed: int, variant: int = 0, kv_only: bool = False) -> dict:
     """One layer's ``state_dict["layers"][i]`` entry for ``TtKimiK3Transformer``.
 
+    ``variant``: the layer's position in its case (layers of one case must not share weights).
     ``kv_only`` leaves out the FFN (the block never builds it) and the FFN norm.
     """
     if not 0 <= layer < KimiK3Config.NUM_LAYERS:
@@ -90,46 +143,19 @@ def make_layer_state(layer: int, *, seed: int, kv_only: bool = False) -> dict:
     ffn_norm = _around_one(norms, H)
 
     if layer in KimiK3Config.mla_layer_ids():
-        state["mla_weights"] = mla_weights(layer, seed)
+        state["mla_weights"] = mla_weights(seed, variant)
     else:
         if kv_only:
             raise ValueError(f"layer {layer} is KDA; only an MLA layer can be kv_only")
-        state["kda_weights"] = {
-            name: tensor.bfloat16()
-            for name, tensor in kda_random_weights(kimi_k3_kda_config(), component_seed(seed, layer, "kda")).items()
-        }
+        state["kda_weights"] = kda_weights(seed, variant)
     if kv_only:
         return state
 
     state["ffn_norm_weight"] = ffn_norm
     if layer < KimiK3Config.NUM_DENSE_LAYERS:
-        g = _gen(seed, layer, "dense")
-        inter = KimiK3Config.INTERMEDIATE_SIZE
-        state["ffn_weights"] = {
-            "gate_proj": _normal(g, inter, H),
-            "up_proj": _normal(g, inter, H),
-            "down_proj": _normal(g, H, inter),
-        }
-        return state
-
-    # bf16, as TtMoEGatePrefill uploads it: an fp32 reference gate would flip top-k picks the device's
-    # rounded weights do not make (the 16th/17th score gap is ~3e-3 at 896 experts).
-    state["gate_weights"] = create_gate_weights(
-        KimiK3Config.NUM_ROUTED_EXPERTS, H, dtype=torch.bfloat16, seed=component_seed(seed, layer, "gate")
-    )
-    state["shared_expert_weights"] = create_shared_expert_weights(
-        H, KimiK3Config.SHARED_EXPERT_INTERMEDIATE_SIZE, seed=component_seed(seed, layer, "shared")
-    )
-    state["latent_weights"] = create_latent_weights(
-        H, KimiK3Config.ROUTED_EXPERT_HIDDEN_SIZE, seed=component_seed(seed, layer, "latent")
-    )
-    state["routed_expert_weights"] = PooledRoutedExperts(
-        KimiK3Config.NUM_ROUTED_EXPERTS,
-        ROUTED_POOLS,
-        KimiK3Config.ROUTED_EXPERT_HIDDEN_SIZE,
-        KimiK3Config.MOE_INTERMEDIATE_SIZE,
-        seed=component_seed(seed, layer, "routed"),
-    )
+        state["ffn_weights"] = dense_ffn_weights(seed, variant)
+    else:
+        state.update(moe_weights(seed, variant))
     return state
 
 
@@ -159,6 +185,7 @@ def make_attn_res_weights(
     return weights
 
 
+@functools.lru_cache(maxsize=1)
 def make_embedding(seed: int) -> torch.Tensor:
     """``[vocab, d]`` bf16, drawn in bf16-sized chunks so the fp32 intermediate never exists whole."""
     g = torch.Generator().manual_seed(component_seed(seed, 0, "norms") + 17)
