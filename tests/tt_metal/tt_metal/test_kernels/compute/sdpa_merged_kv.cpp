@@ -15,6 +15,8 @@ void kernel_main() {
     constexpr std::uint32_t row_tiles = get_compile_time_arg_val(3);
     constexpr std::uint32_t v_offset = get_compile_time_arg_val(4);
     constexpr bool test_correction_fidelity = get_compile_time_arg_val(5);
+    constexpr bool pipelined = get_compile_time_arg_val(6);
+    static_assert(!pipelined || layout != 2, "the pipelined entry reads V at offset 0 of the K row or from cb_v");
     constexpr std::uint32_t corr_fidelity = test_correction_fidelity ? 4 : SDPA_FIDELITY_PROGRAM_DEFAULT;
     constexpr std::uint32_t chunk_tiles = 2;
     constexpr std::uint32_t qk_tiles = 2;
@@ -44,68 +46,99 @@ void kernel_main() {
         cb_reserve_back(cb_out, v_tiles);
         cb_reserve_back(cb_stats, 1);
         tile_regs_acquire();
-        for (std::uint32_t chunk = 0; chunk < chunks; ++chunk) {
-            // The original shared/separate layouts keep the API defaults.
-            if constexpr (layout == 2) {
-                compute_sdpa_chunk<
-                    chunk_tiles,
-                    row_tiles,
-                    v_tiles,
-                    scale,
-                    true,
-                    false,
-                    packed_tile_size,
-                    false,
-                    1,
-                    1,
-                    v_tiles,
-                    false,
-                    false,
-                    false,
-                    v_offset,
-                    qk_tiles,
-                    corr_fidelity>(
-                    cb_q,
-                    cb_k,
-                    cb_v,
-                    cb_q,
-                    cb_out,
-                    scores_offset,
-                    output_offset,
-                    max_offset,
-                    sum_offset,
-                    correction_offset,
-                    chunk == 0,
-                    chunk == chunks - 1,
-                    false);
-            } else {
-                compute_sdpa_chunk<
-                    chunk_tiles,
-                    row_tiles,
-                    v_tiles,
-                    scale,
-                    true,
-                    false,
-                    packed_tile_size,
-                    false,
-                    1,
-                    1,
-                    v_tiles,
-                    false,
-                    layout == 1>(
-                    cb_q,
-                    cb_k,
-                    cb_v,
-                    cb_q,
-                    cb_out,
-                    scores_offset,
-                    output_offset,
-                    max_offset,
-                    sum_offset,
-                    correction_offset,
-                    chunk == 0,
-                    chunk == chunks - 1,
-                    false);
+        if constexpr (pipelined) {
+            compute_sdpa_chunks_pipelined<
+                chunk_tiles,
+                row_tiles,
+                v_tiles,
+                scale,
+                true,
+                false,
+                packed_tile_size,
+                false,
+                1,
+                1,
+                v_tiles,
+                false,
+                layout == 1>(
+                cb_q,
+                cb_k,
+                cb_v,
+                cb_q,
+                cb_out,
+                scores_offset,
+                scores_offset + chunk_tiles * packed_tile_size,
+                output_offset,
+                max_offset,
+                sum_offset,
+                correction_offset,
+                chunks,
+                false /*mask_last_chunk*/,
+                true /*signal_last_chunk*/);
+        } else {
+            for (std::uint32_t chunk = 0; chunk < chunks; ++chunk) {
+                // The original shared/separate layouts keep the API defaults.
+                if constexpr (layout == 2) {
+                    compute_sdpa_chunk<
+                        chunk_tiles,
+                        row_tiles,
+                        v_tiles,
+                        scale,
+                        true,
+                        false,
+                        packed_tile_size,
+                        false,
+                        1,
+                        1,
+                        v_tiles,
+                        false,
+                        false,
+                        false,
+                        v_offset,
+                        qk_tiles,
+                        corr_fidelity>(
+                        cb_q,
+                        cb_k,
+                        cb_v,
+                        cb_q,
+                        cb_out,
+                        scores_offset,
+                        output_offset,
+                        max_offset,
+                        sum_offset,
+                        correction_offset,
+                        chunk == 0,
+                        chunk == chunks - 1,
+                        false);
+                } else {
+                    compute_sdpa_chunk<
+                        chunk_tiles,
+                        row_tiles,
+                        v_tiles,
+                        scale,
+                        true,
+                        false,
+                        packed_tile_size,
+                        false,
+                        1,
+                        1,
+                        v_tiles,
+                        false,
+                        layout == 1>(
+                        cb_q,
+                        cb_k,
+                        cb_v,
+                        cb_q,
+                        cb_out,
+                        scores_offset,
+                        output_offset,
+                        max_offset,
+                        sum_offset,
+                        correction_offset,
+                        chunk == 0,
+                        chunk == chunks - 1,
+                        false);
+                }
             }
         }
         // Emit the partial O and max/sum exactly as a distributed SDPA worker.

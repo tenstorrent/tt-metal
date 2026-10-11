@@ -274,12 +274,20 @@ void run_sdpa_tail(
 // Run the chunk API through its partial-output path, including online softmax
 // across chunks. Layout 0 preserves the original shared K/V defaults; layout 1
 // preserves separate V; layout 2 stores [K, padding, V, padding] in each row.
-template <bool test_correction_fidelity = false>
-void run_sdpa_merged_kv(distributed::MeshDevice& mesh, std::uint32_t layout, bool full_sync) {
+// pipelined runs compute_sdpa_chunks_pipelined, one call per round. Raw output
+// and stats words go to outputs when given.
+template <
+    bool test_correction_fidelity = false,
+    std::uint32_t chunks = test_correction_fidelity ? 3 : 2,
+    bool pipelined = false>
+void run_sdpa_merged_kv(
+    distributed::MeshDevice& mesh,
+    std::uint32_t layout,
+    bool full_sync,
+    std::vector<std::uint32_t>* outputs = nullptr) {
     auto& cq = mesh.mesh_command_queue();
     const CoreCoord core{0, 0};
     constexpr std::uint32_t rounds = 3;
-    constexpr std::uint32_t chunks = test_correction_fidelity ? 3 : 2;
     constexpr std::uint32_t chunk_tiles = 2;
     constexpr std::uint32_t qk_tiles = 2;
     constexpr std::uint32_t v_tiles = 2;
@@ -311,15 +319,19 @@ void run_sdpa_merged_kv(distributed::MeshDevice& mesh, std::uint32_t layout, boo
                 .set_page_size(cb, short_tile_bytes)
                 .set_tile_dims(cb, Tile({sdpa_tail_rows, sdpa_tail_cols})));
     }
+    // The pipelined entry keeps a chunk at the front of cb_k while it reads the
+    // next one, so cb_k holds two chunks and later chunks wrap to its start.
+    const std::uint32_t k_cb_chunks = pipelined ? 2 : 1;
     for (const auto cb : {tt::CBIndex::c_1, tt::CBIndex::c_2}) {
-        const auto tiles = chunk_tiles * (cb == tt::CBIndex::c_1 ? row_tiles : v_tiles);
+        const auto tiles = chunk_tiles * (cb == tt::CBIndex::c_1 ? k_cb_chunks * row_tiles : v_tiles);
         CreateCircularBuffer(
             program,
             core,
             CircularBufferConfig(tiles * full_tile_bytes, {{cb, tt::DataFormat::Float16_b}})
                 .set_page_size(cb, full_tile_bytes));
     }
-    const std::vector<std::uint32_t> args{rounds, chunks, layout, row_tiles, v_offset, test_correction_fidelity};
+    const std::vector<std::uint32_t> args{
+        rounds, chunks, layout, row_tiles, v_offset, test_correction_fidelity, pipelined};
     const auto reader = CreateKernel(
         program,
         "tests/tt_metal/tt_metal/test_kernels/dataflow/reader_sdpa_merged_kv.cpp",
@@ -373,8 +385,11 @@ void run_sdpa_merged_kv(distributed::MeshDevice& mesh, std::uint32_t layout, boo
         }
         // This exactly representable chunk bias changes the running maximum
         // for some query rows, exercising the previous-output correction too.
+        // It alternates so BF16 DEST accumulation of Q K^T stays within the
+        // tolerances below at three chunks.
         const auto chunk_index = token / (chunk_tiles * 32);
-        return static_cast<float>((round * 5 + token * 7 + dim * 3) % 17) / 16.0f + static_cast<float>(chunk_index);
+        return static_cast<float>((round * 5 + token * 7 + dim * 3) % 17) / 16.0f +
+               static_cast<float>(chunk_index % 2);
     };
     auto v_value = [&](std::uint32_t round, std::uint32_t token, std::uint32_t dim) {
         if constexpr (test_correction_fidelity) {
@@ -455,8 +470,14 @@ void run_sdpa_merged_kv(distributed::MeshDevice& mesh, std::uint32_t layout, boo
     distributed::EnqueueReadMeshBuffer(cq, result, output, true);
     const auto actual = unpack_uint32_vec_into_bfloat16_vec(result);
     ASSERT_EQ(actual.size(), golden.size());
+    if (outputs != nullptr) {
+        *outputs = result;
+    }
     distributed::EnqueueReadMeshBuffer(cq, result, output_stats, true);
     const auto actual_stats = unpack_uint32_vec_into_bfloat16_vec(result);
+    if (outputs != nullptr) {
+        outputs->insert(outputs->end(), result.begin(), result.end());
+    }
     ASSERT_EQ(actual_stats.size(), rounds * sdpa_tail_elements);
     for (std::uint32_t round = 0; round < rounds; ++round) {
         for (std::uint32_t row = 0; row < sdpa_tail_rows; ++row) {
@@ -495,7 +516,9 @@ void run_sdpa_merged_kv(distributed::MeshDevice& mesh, std::uint32_t layout, boo
     ASSERT_LT(std::sqrt(squared_error / squared_golden), 0.02);
 }
 
-Program make_sdpa_chunk_compile_program(const std::vector<std::uint32_t>& args) {
+Program make_sdpa_chunk_compile_program(
+    const std::vector<std::uint32_t>& args,
+    const char* kernel = "tests/tt_metal/tt_metal/test_kernels/compute/sdpa_chunk_compile_limits.cpp") {
     Program program = CreateProgram();
     const CoreCoord core{0, 0};
     for (const auto cb : {tt::CBIndex::c_0, tt::CBIndex::c_1, tt::CBIndex::c_2, tt::CBIndex::c_3, tt::CBIndex::c_16}) {
@@ -507,7 +530,7 @@ Program make_sdpa_chunk_compile_program(const std::vector<std::uint32_t>& args) 
     }
     CreateKernel(
         program,
-        "tests/tt_metal/tt_metal/test_kernels/compute/sdpa_chunk_compile_limits.cpp",
+        kernel,
         core,
         ComputeConfig{.math_fidelity = MathFidelity::LoFi, .fp32_dest_acc_en = false, .compile_args = args});
     return program;
@@ -549,6 +572,21 @@ TEST_F(LLKBlackholeSingleCardFixture, SdpaChunkMergedKvAndDefaultLayouts) {
         for (const bool full_sync : {false, true}) {
             SCOPED_TRACE(::testing::Message() << "layout=" << layout << ", full_sync=" << full_sync);
             run_sdpa_merged_kv(*devices_.at(0), layout, full_sync);
+        }
+    }
+}
+
+TEST_F(LLKBlackholeSingleCardFixture, SdpaChunksPipelinedWrapsKAndMatchesSerial) {
+    // cb_k holds two chunks and each call runs three, so the third chunk's K
+    // tiles wrap to the CB start; the three calls start in alternating halves.
+    for (const auto layout : {0u, 1u}) {
+        for (const bool full_sync : {false, true}) {
+            SCOPED_TRACE(::testing::Message() << "layout=" << layout << ", full_sync=" << full_sync);
+            std::vector<std::uint32_t> serial;
+            std::vector<std::uint32_t> pipelined;
+            run_sdpa_merged_kv<false, 3, false>(*devices_.at(0), layout, full_sync, &serial);
+            run_sdpa_merged_kv<false, 3, true>(*devices_.at(0), layout, full_sync, &pipelined);
+            EXPECT_EQ(pipelined, serial);
         }
     }
 }
@@ -605,6 +643,33 @@ TEST_F(LLKBlackholeSingleCardFixture, SdpaChunkMergedKvCompileLimits) {
                                  << ", qk_tiles=" << test[3] << ", separate_v=" << test[4]);
         auto program = make_sdpa_chunk_compile_program({2, 1, 1, test[0], test[1], test[2], test[3], test[4]});
         if (test[5]) {
+            EXPECT_NO_THROW(program.impl().compile(&this->device()));
+        } else {
+            EXPECT_THROW(program.impl().compile(&this->device()), std::runtime_error);
+        }
+    }
+}
+
+TEST_F(LLKBlackholeSingleCardFixture, SdpaChunksPipelinedCompileLimits) {
+    // chunk, QK and exp granularity, row_tiles, V width, separate-V, accepted.
+    // A chunk's exp posts and token stay outstanding with the next chunk's QK
+    // posts, and shared-CB V must fit inside the K row.
+    const std::array<std::array<std::uint32_t, 7>, 6> cases{{
+        {6, 1, 1, 2, 2, 0, 1},
+        {8, 1, 1, 2, 2, 0, 0},
+        {8, 2, 2, 2, 2, 0, 1},
+        {8, 2, 1, 2, 2, 0, 1},
+        {2, 1, 1, 2, 4, 0, 0},
+        {2, 1, 1, 2, 4, 1, 1},
+    }};
+    for (const auto& test : cases) {
+        SCOPED_TRACE(
+            ::testing::Message() << "chunk=" << test[0] << ", qk=" << test[1] << ", exp=" << test[2]
+                                 << ", row_tiles=" << test[3] << ", v_tiles=" << test[4] << ", separate_v=" << test[5]);
+        auto program = make_sdpa_chunk_compile_program(
+            {test[0], test[1], test[2], test[3], test[4], test[5]},
+            "tests/tt_metal/tt_metal/test_kernels/compute/sdpa_chunks_pipelined_compile_limits.cpp");
+        if (test[6]) {
             EXPECT_NO_THROW(program.impl().compile(&this->device()));
         } else {
             EXPECT_THROW(program.impl().compile(&this->device()), std::runtime_error);
