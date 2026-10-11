@@ -680,7 +680,6 @@ void call_unary_sfpu_operation_init(std::uint32_t math_format)
     }
     else if constexpr (OPERATION == SfpuType::cumsum)
     {
-        // Records the eight-add scan program into the replay buffer.
         llk_math_eltwise_unary_sfpu_init<OPERATION>(cumsum_init<APPROX_MODE>);
     }
     else if constexpr (OPERATION == SfpuType::typecast)
@@ -1673,7 +1672,7 @@ void call_unary_sfpu_operation(
     }
     else if constexpr (OPERATION == SfpuType::cumsum)
     {
-        // Whole-tile op, one call per tile (RC_custom); `first` clears the carry, false continues the scan.
+        // One call per tile; `first` false continues the carry of the previous tile.
         SFPU_UNARY_CALL(DST_SYNC_MODE, DST_ACCUM_MODE, calculate_cumsum, (APPROX_MODE, ITERATIONS), dst_index, VectorMode::RC_custom, first);
     }
     else if constexpr (OPERATION == SfpuType::typecast)

@@ -1,8 +1,7 @@
 # SPDX-FileCopyrightText: © 2026 Tenstorrent AI ULC
 # SPDX-License-Identifier: Apache-2.0
 
-"""Column-wise cumulative sum over two tiles in one DEST block, each tile its own scan or, with `chain`,
-the second continuing the first."""
+"""Column-wise cumulative sum over two tiles in one DEST block, scanned separately or chained."""
 
 import torch
 from helpers.format_config import DataFormat, InputOutputFormat
@@ -35,12 +34,10 @@ from helpers.test_variant_parameters import (
 from helpers.tilize_untilize import tilize_block, untilize_block
 from helpers.utils import passed_test
 
-# Two tiles down one column, one DEST block, so the chained variant scans 64 rows.
 INPUT_DIMENSIONS = [2 * TILE_DIM, TILE_DIM]
 TILE_CNT = 2
 
-# A 32-bit add chain of at most 64 terms is good to about 1e-6; the default tolerance would also pass a sum
-# that went through a 16-bit DEST.
+# Tight enough to reject a sum that went through a 16-bit DEST.
 FLOAT32_TOLERANCE = {"custom_atol": 1e-4, "custom_rtol": 1e-4}
 
 
@@ -60,7 +57,6 @@ def test_sfpu_cumsum(formats, dest_acc, chain):
         formats.input_format.is_32_bit() and dest_acc == DestAccumulation.Yes
     )
 
-    # Up to 64 adds per column; |x| <= 1 keeps every partial sum inside the formats.
     src_A = (
         torch.empty((TILE_CNT * ELEMENTS_PER_TILE,), dtype=torch.float32)
         .uniform_(-1.0, 1.0)

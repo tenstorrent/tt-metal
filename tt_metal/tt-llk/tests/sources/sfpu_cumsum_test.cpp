@@ -2,8 +2,7 @@
 //
 // SPDX-License-Identifier: Apache-2.0
 
-// Functional driver for the column-wise cumulative sum (SfpuType::cumsum through the harness dispatch). With
-// CUMSUM_CHAIN every tile after the first of a DEST block continues the scan of the tile before (`first` false).
+// Functional driver for the column-wise cumulative sum; with CUMSUM_CHAIN each tile continues the scan of the one before.
 
 #include <algorithm>
 #include <cstdint>

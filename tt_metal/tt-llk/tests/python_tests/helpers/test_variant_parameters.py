@@ -815,8 +815,7 @@ class CLAMP_NEGATIVE(TemplateParameter):
 
 @dataclass
 class CUMSUM_CHAIN(TemplateParameter):
-    """Whether sfpu_cumsum_test.cpp chains the tiles of a DEST block into one column scan
-    (``first`` true for the first tile only) or scans every tile on its own."""
+    """Whether sfpu_cumsum_test.cpp chains the tiles of a DEST block into one column scan."""
 
     cumsum_chain: bool = False
 
