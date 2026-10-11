@@ -7,7 +7,7 @@ set -uo pipefail
 cd /work
 T=models/demos/deepseek_v3_b1/tests/unit_tests/test_moe_mlp.py
 SRAM=models/demos/deepseek_v3_b1/unified_kernels/matmul_expert_compressed_sram.hpp
-ROUNDS=${ROUNDS:-3}
+ROUNDS=${ROUNDS:-4}
 python3 -c "import tracy" 2>/dev/null || export PYTHONPATH=/work:/work/tools
 # As the CI bucket that runs test_moe_mlp.py (run_isolated_unit_tests.py, fabric_2d): slow dispatch leaves the 13x10
 # worker grid the test requires (fast dispatch reads 12x10 on these runners), and the hybrid allocator.
@@ -24,8 +24,11 @@ export AB_NODES_FILE=/work/generated/ab_nodes.txt
 mkdir -p /work/generated
 printf '%s\n' "${IDS[@]}" > "$AB_NODES_FILE"
 fail=0
+ARMS=(banked onebank banked2)
 for r in $(seq "$ROUNDS"); do
-  for v in banked onebank banked2; do
+  # The arm order rotates per round, so no arm always runs first.
+  for i in 0 1 2; do
+    v=${ARMS[$(( (i + r - 1) % 3 ))]}
     cp ci_ab/sram_$v.hpp $SRAM
     out=/work/generated/ab/${v}_$r; rm -rf "$out"; mkdir -p "$out"
     t0=$(date +%s)
