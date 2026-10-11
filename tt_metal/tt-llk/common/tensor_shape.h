@@ -70,6 +70,18 @@ struct __attribute__((packed)) TensorShape
     {
         return num_faces_r_dim * num_faces_c_dim;
     }
+
+    /// @brief Whether both shapes have the same face dimensions and face grid
+    constexpr bool operator==(const TensorShape& other) const
+    {
+        return face_r_dim == other.face_r_dim && face_c_dim == other.face_c_dim && num_faces_r_dim == other.num_faces_r_dim &&
+               num_faces_c_dim == other.num_faces_c_dim;
+    }
+
+    constexpr bool operator!=(const TensorShape& other) const
+    {
+        return !(*this == other);
+    }
 };
 
 static_assert(sizeof(TensorShape) == 4, "TensorShape must be 4 bytes");
