@@ -167,10 +167,9 @@ inline void _llk_math_hadamard_h128_(std::uint32_t dst_index)
     // keep H_16; MM2 reads only rows 0..7, so the residue is harmless.
     TTI_MOVD2B(0, 0, ADDR_MOD_7, p_movd2b::MOV_4_ROWS, 16);
     TTI_MOVD2B(0, 4, ADDR_MOD_7, p_movd2b::MOV_4_ROWS, 20);
-    // MOVD2B.md: the FPU takes no other instruction for three cycles after a MOVD2B; MM2 needs no drain for the data.
+    // The FPU takes no other instruction for three cycles after a MOVD2B.
     if constexpr (high_fidelity && !normalize)
     {
-        // Without the normalize tail an earlier high fidelity MM2 only shifts the pack into the unpack: keep the drain.
         TTI_STALLWAIT(p_stall::STALL_MATH, p_stall::MATH);
     }
 
@@ -194,7 +193,7 @@ inline void _llk_math_hadamard_h128_(std::uint32_t dst_index)
     // Normalize: dst[0..7] *= kH128NormScale (LREG12 = 1/sqrt(128)).
     if constexpr (normalize)
     {
-        // SFPLOAD.md: three unrelated Tensix instructions between MM2's dst write and the SFPLOADs.
+        // SFPLOAD needs three unrelated instructions after MM2's dst write.
         TTI_NOP;
         TTI_NOP;
         TTI_NOP;

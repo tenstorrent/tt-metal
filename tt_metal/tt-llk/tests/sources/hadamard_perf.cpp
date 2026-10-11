@@ -1,8 +1,7 @@
 // SPDX-FileCopyrightText: © 2026 Tenstorrent AI ULC
 // SPDX-License-Identifier: Apache-2.0
 
-// Perf kernel of the Blackhole H128 Hadamard transform: per iteration one DEST section of TILE_CNT vectors. Data-valid
-// cadence per vector: SrcB (H16), SrcA (the input), SrcA (H16 again).
+// Perf kernel of the Blackhole H128 Hadamard transform: one DEST section of TILE_CNT vectors per iteration.
 
 #include <cstdint>
 
@@ -107,7 +106,7 @@ void run_kernel(RUNTIME_PARAMETERS params)
         _llk_math_pack_sync_init_<dest_sync, is_fp32_dest_acc_en>();
         _llk_math_hw_configure_<is_fp32_dest_acc_en>(formats.math, formats.math);
         _llk_math_hadamard_h128_init_<MATH_FIDELITY, HADAMARD_NORMALIZE>();
-        // The op needs a zero DEST on entry; after the first section the packer clears each half it releases.
+        // The op needs a zeroed DEST on entry.
         TTI_ZEROACC(p_zeroacc::CLR_ALL, is_fp32_dest_acc_en, 0, ADDR_MOD_7, 0);
         PROFILER_SYNC();
     }

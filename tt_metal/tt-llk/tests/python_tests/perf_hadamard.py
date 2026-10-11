@@ -1,8 +1,7 @@
 # SPDX-FileCopyrightText: © 2026 Tenstorrent AI ULC
 # SPDX-License-Identifier: Apache-2.0
 
-"""Perf of the Blackhole H128 Hadamard transform (hadamard_h128, sources/hadamard_perf.cpp); unit: one 128-element
-vector."""
+"""Perf of the Blackhole H128 Hadamard transform; unit: one 128-element vector."""
 
 import pytest
 from conftest import skip_for_quasar, skip_for_wormhole
@@ -24,7 +23,6 @@ pytestmark = [skip_for_wormhole, skip_for_quasar]
 
 BF16 = DataFormat.Float16_b
 
-# (vectors per section, fidelity, normalise)
 VARIANTS = [
     (num_vectors, fidelity, normalize)
     for num_vectors in (1, 4, 8)
