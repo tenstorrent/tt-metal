@@ -297,27 +297,45 @@ def _thermal_step(label: str, run_once):
     """Run a device-running gate step under optimize's thermal layers (e2e_thermal.device_step): hold at
     the safety ceiling before it, cool after it, and re-run it from a cool board when the board reached
     the abort limit while it ran. Returns whatever run_once returns."""
-    try:
-        from ..e2e_thermal import device_step
-    except Exception as exc:  # noqa: BLE001 -- protection that cannot load must not stop the step
-        print("  [thermal-gate] WARNING: %s runs with NO thermal gating (%s)" % (label, exc), file=sys.stderr)
+    device_step = _thermal_api("device_step", "%s runs with NO thermal gating" % label)
+    if device_step is None:
         return run_once()
     return device_step(label, run_once)
 
 
+def _thermal_api(name: str, without_it: str):
+    """e2e_thermal.<name>, or None after a warning that says what runs `without_it` -- protection that
+    cannot load must not stop the work it protects."""
+    try:
+        from .. import e2e_thermal
+
+        return getattr(e2e_thermal, name)
+    except Exception as exc:  # noqa: BLE001
+        print("  [thermal-gate] WARNING: %s (%s)" % (without_it, exc), file=sys.stderr)
+        return None
+
+
 def _device_gate_step(label: str, run_once):
     """A device-running gate step: re-run once on a wedged board (_retry_after_wedge), inside the thermal
-    layers (_thermal_step). One label names both, so the two can never disagree about which step it is."""
-    return _thermal_step(label, lambda: _retry_after_wedge(label, run_once))
+    layers (_thermal_step), and -- as optimize does with its readings -- a FAILURE taken on a board that
+    ran hot is discarded and re-run from a cooled board (e2e_thermal.rerun_failed_hot). One label names
+    all three, so they can never disagree about which step it is. Returns (final _StepResult, notes)."""
+
+    def _attempt():
+        return _thermal_step(label, lambda: _retry_after_wedge(label, run_once))
+
+    rerun_failed_hot = _thermal_api("rerun_failed_hot", "%s failures taken hot are NOT discarded" % label)
+    if rerun_failed_hot is None:
+        return _attempt()
+    (result, notes), hot_notes = rerun_failed_hot(label, _attempt, lambda r: None if r[0].ok else r[0].output)
+    return result, notes + hot_notes
 
 
 def _thermal_env(env: dict) -> dict:
     """`env` carrying this run's thermal tag and pytest plugin (e2e_thermal.agent_env), or `env` unchanged
     with a warning when that cannot load -- a child without protection still runs."""
-    try:
-        from ..e2e_thermal import agent_env
-    except Exception as exc:  # noqa: BLE001
-        print("  [thermal-gate] WARNING: child env carries NO thermal protection (%s)" % exc, file=sys.stderr)
+    agent_env = _thermal_api("agent_env", "child env carries NO thermal protection")
+    if agent_env is None:
         return dict(env)
     return agent_env(env)
 

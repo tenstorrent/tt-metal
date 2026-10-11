@@ -85,8 +85,9 @@ def _no_thermal_watcher_from_this_suite(monkeypatch):
     """emit-e2e's thermal layers (e2e_thermal) read the REAL board and, at the abort limit, end device
     holders. A test that reaches cmd_emit_e2e would otherwise start a watcher thread that outlives the
     test and export the run tag and PYTEST_PLUGINS into every later test's subprocesses; a test that
-    reaches a gate step would wait on the real board's temperature. Both are replaced for the whole
-    suite. test_emit_e2e_thermal_protection exercises the real functions against a fake thermometer."""
+    reaches a gate step would wait on the real board's temperature, and have its failure judged by it.
+    All are replaced for the whole suite. test_emit_e2e_thermal_protection exercises the real functions
+    against a fake thermometer."""
     try:
         from scripts.tt_hw_planner import e2e_thermal
     except Exception:  # noqa: BLE001 -- a checkout without it cannot reach it either
@@ -94,6 +95,7 @@ def _no_thermal_watcher_from_this_suite(monkeypatch):
         return
     monkeypatch.setattr(e2e_thermal, "install", lambda recover=None: "")
     monkeypatch.setattr(e2e_thermal, "hold_if_hot", lambda label: None)
+    monkeypatch.setattr(e2e_thermal, "_peak_during", lambda run_once: (run_once(), None))
     monkeypatch.delenv(e2e_thermal.RUN_ENV, raising=False)
     yield
 

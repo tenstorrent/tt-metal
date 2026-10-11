@@ -30,6 +30,7 @@ from models.experimental.perf_automation.agent import thermal_pytest_plugin as P
 
 # Captured at import, before the suite conftest swaps them out for each test.
 _REAL_HOLD = T.hold_if_hot
+_REAL_PEAK = T._peak_during
 REPO = Path(T.__file__).resolve().parents[2]
 
 
@@ -297,6 +298,12 @@ def test_the_plugin_loads_in_a_pytest_the_agent_starts_anywhere(tmp_path, record
             assert request.config.pluginmanager.has_plugin("%s")
         """
         % PL.PLUGIN_MODULE,
+        # A cool board, faked: unfaked, the session-start hold reads the REAL board and, while a live
+        # run has it at the ceiling, waits past this test's timeout.
+        conftest="""
+        from models.experimental.perf_automation.agent import probes as PR
+        PR._cc_optimize("perf_mcp")._read_die_temp_c = lambda: 40.0
+        """,
     )
     assert r.returncode == 0, r.stdout + r.stderr
 
@@ -475,3 +482,122 @@ def test_every_device_launch_in_the_gate_is_a_thermal_step():
     ):
         assert re.search(r"_(thermal|device_gate)_step\(\s*" + re.escape(label), gate_src), label
     assert re.search(r"_thermal_step\(\s*\"trace-capture probe\"", inspect.getsource(M._run_probe))
+
+
+# ---- a gate failure taken on a hot board is discarded and re-run from a cooled one ----------------------
+
+
+def _cooldowns(monkeypatch, cooled=True, at=60.0):
+    calls = []
+    monkeypatch.setattr(_pm(), "_cooldown_after_clamp", lambda *a, **k: (calls.append(1), (cooled, at))[1])
+    return calls
+
+
+def _steps(*results):
+    """attempt() returning (_StepResult, wedge notes) in order, each with the peak its run reached."""
+    seq = list(results)
+    calls = []
+
+    def attempt():
+        ok, out, peak = seq.pop(0) if len(seq) > 1 else seq[0]
+        calls.append(1)
+        T._STATE["peak"] = peak
+        return E._StepResult(ok, out), []
+
+    return attempt, calls
+
+
+def _failed(r):
+    return None if r[0].ok else r[0].output
+
+
+def test_the_peak_is_the_hottest_reading_while_the_run_ran(monkeypatch):
+    monkeypatch.setattr(T, "WATCH_POLL_S", 0.01)
+    it = iter([70.0, 93.5, 81.0])
+    monkeypatch.setattr(_pm(), "_read_die_temp_c", lambda: next(it, 75.0))
+    result, peak = _REAL_PEAK(lambda: (time.sleep(0.2), "verdict")[1])
+    assert result == "verdict" and peak == 93.5
+
+
+def test_an_unreadable_thermometer_gives_no_peak(monkeypatch):
+    monkeypatch.setattr(T, "WATCH_POLL_S", 0.01)
+    monkeypatch.setattr(_pm(), "_read_die_temp_c", lambda: None)
+    assert _REAL_PEAK(lambda: "verdict") == ("verdict", None)
+
+
+def test_a_failure_the_device_reported_clamped_is_discarded_and_rerun_cool(monkeypatch, capsys):
+    cools = _cooldowns(monkeypatch)
+    clamp = "UMD | AICLK failed to settle after 200 ms. Expected 1350, observed 800.\n1 failed"
+    attempt, calls = _steps((False, clamp, 70.0), (True, "1 passed", 70.0))
+    (res, _), notes = T.rerun_failed_hot("G2/G3 tests/e2e", attempt, _failed)
+    assert res.ok and len(calls) == 2 and len(cools) == 1
+    assert "DISCARDED G2/G3 tests/e2e failure" in capsys.readouterr().err
+    assert any("discarded" in n for n in notes)
+
+
+def test_a_failure_while_the_board_reached_the_ceiling_is_discarded(monkeypatch):
+    cools = _cooldowns(monkeypatch)
+    hot = _pm()._SAFETY_CEILING_C + 1
+    attempt, calls = _steps((False, "AssertionError: TT drew a different token", hot), (True, "1 passed", 70.0))
+    (res, _), _ = T.rerun_failed_hot("G2/G3 tests/e2e", attempt, _failed)
+    assert res.ok and len(calls) == 2 and len(cools) == 1
+
+
+def test_a_failure_on_a_cool_board_stands_as_the_models(monkeypatch):
+    cools = _cooldowns(monkeypatch)
+    attempt, calls = _steps((False, "AssertionError: PCC 0.5 < 0.99", _pm()._SAFETY_CEILING_C - 1))
+    (res, _), notes = T.rerun_failed_hot("G2/G3 tests/e2e", attempt, _failed)
+    assert not res.ok and len(calls) == 1 and cools == [] and notes == []
+
+
+def test_a_pass_is_never_discarded_however_hot(monkeypatch):
+    cools = _cooldowns(monkeypatch)
+    attempt, calls = _steps((True, "AICLK failed to settle\n1 passed", _pm()._ABORT_CEILING_C))
+    (res, _), notes = T.rerun_failed_hot("G6 trace", attempt, _failed)
+    assert res.ok and len(calls) == 1 and cools == [] and notes == []
+
+
+def test_a_board_hot_on_every_attempt_is_not_retried_forever_and_says_so(monkeypatch):
+    _cooldowns(monkeypatch)
+    hot = _pm()._SAFETY_CEILING_C + 2
+    attempt, calls = _steps((False, "1 failed", hot))
+    (res, _), notes = T.rerun_failed_hot("G2/G3 tests/e2e", attempt, _failed)
+    assert not res.ok and len(calls) == 1 + _pm()._THERMAL_RETRIES
+    assert "may be the board's" in notes[-1]
+
+
+def test_a_board_that_stops_cooling_is_not_rerun_hot(monkeypatch):
+    cools = _cooldowns(monkeypatch, cooled=False, at=79.0)
+    attempt, calls = _steps((False, "1 failed", _pm()._SAFETY_CEILING_C + 2))
+    (res, _), notes = T.rerun_failed_hot("G2/G3 tests/e2e", attempt, _failed)
+    assert not res.ok and len(calls) == 1 and len(cools) == 1
+    assert "stopped cooling at 79.0C" in notes[-1]
+
+
+def test_the_gate_step_judges_a_failure_by_the_peak_its_own_run_reached(monkeypatch, record):
+    """End to end through _device_gate_step: device_step's sampler reads the board while the run is in
+    flight, and the failure it saw hot is replaced by the re-run from the cooled board."""
+    _holds(monkeypatch)
+    cools = _cooldowns(monkeypatch)
+    monkeypatch.setattr(T, "_peak_during", _REAL_PEAK)
+    monkeypatch.setattr(T, "WATCH_POLL_S", 0.01)
+    board = [_pm()._SAFETY_CEILING_C + 3]
+    monkeypatch.setattr(_pm(), "_read_die_temp_c", lambda: board[0])
+    runs = []
+
+    def once():
+        runs.append(board[0])
+        time.sleep(0.1)
+        ok = len(runs) > 1
+        board[0] = 62.0  # the cooldown brought it down; the re-run stays cool
+        return E._StepResult(ok, "1 passed" if ok else "AssertionError: TT drew a different token")
+
+    res, notes = E._device_gate_step("G2/G3 tests/e2e", once)
+    assert res.ok and len(runs) == 2 and len(cools) == 1, (runs, notes)
+
+
+def test_without_the_discard_the_gate_step_still_runs(monkeypatch, capsys):
+    monkeypatch.delattr(T, "rerun_failed_hot")
+    res, notes = E._device_gate_step("G6 trace", lambda: E._StepResult(False, "1 failed"))
+    assert not res.ok
+    assert "G6 trace failures taken hot are NOT discarded" in capsys.readouterr().err

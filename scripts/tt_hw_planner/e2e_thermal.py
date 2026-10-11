@@ -57,7 +57,7 @@ _ABORT_GRACE_S = 2 * WATCH_POLL_S
 # How long a step waits for the watcher's reset after an abort before re-running anyway.
 _RECOVERY_WAIT_S = 900.0
 
-_STATE = {"thread": None, "recover": None}
+_STATE = {"thread": None, "recover": None, "peak": None}
 _LOCK = threading.Lock()
 
 
@@ -227,16 +227,107 @@ def install(recover=None) -> str:
         return path
 
 
+def _peak_during(run_once):
+    """(run_once(), the hottest die temperature read while it ran -- None when none could be read).
+    perf_mcp's thermometer, every WATCH_POLL_S, from a thread that ends with the run."""
+    pm = thermal_owner("perf_mcp")
+    if pm is None:
+        return run_once(), None
+    peak, done = [None], threading.Event()
+
+    def _sample():
+        while True:
+            try:
+                cur = pm._read_die_temp_c()
+            except Exception:  # noqa: BLE001 -- a thermometer that cannot be read is not a hot board
+                cur = None
+            if cur is not None and (peak[0] is None or cur > peak[0]):
+                peak[0] = cur
+            if done.wait(WATCH_POLL_S):
+                return
+
+    t = threading.Thread(target=_sample, name="e2e-step-peak", daemon=True)
+    t.start()
+    try:
+        result = run_once()
+    finally:
+        done.set()
+        t.join()
+    return result, peak[0]
+
+
+def _why_untrusted(pm, output: str, peak_c) -> str:
+    """Why a FAILED run's verdict says nothing about the model ('' when it does) -- optimize's own two
+    signs that a run was taken hot: the device reporting its clock clamped (perf_mcp._run_reported_clamp,
+    which discards optimize's readings), or the board reaching the safety ceiling while it ran."""
+    try:
+        if pm._run_reported_clamp(output or ""):
+            return "the device reported its own clock clamped"
+        if peak_c is not None and peak_c >= pm._SAFETY_CEILING_C:
+            return "the board reached %.1fC, at or above the %.1fC safety ceiling" % (peak_c, pm._SAFETY_CEILING_C)
+    except Exception:  # noqa: BLE001 -- a check that cannot run leaves the verdict as it was
+        return ""
+    return ""
+
+
+def rerun_failed_hot(label: str, attempt, failure_output):
+    """optimize's discard-and-re-measure for a pass/fail step. Returns (attempt's last result, notes).
+
+    WHY. optimize never trusts a reading taken hot: _measure_full_pipeline_guarded discards it, cools the
+    board with _cooldown_after_clamp and measures again, at most _THERMAL_RETRIES more times. emit-e2e
+    had only the hardware half (hold at the ceiling, end at the abort limit), so a gate that FAILED hot
+    was reported to the fix-loop as the model's fault. Measured 2026-10-11 on a 4-chip p300c: three
+    termination checks failed G2/G3 on tokens TT drew from one narrow band of ids at non-tie steps,
+    with the board at 84-95C, while the same code passed that test started from a ~62C board.
+
+    A failure is discarded only when its run was hot (_why_untrusted); a failure on a cool board, and
+    every pass, stands as it is. `failure_output(result)` is the failed run's output, or None for a pass."""
+    pm = thermal_owner("perf_mcp")
+    notes = []
+    retries = max(0, int(getattr(pm, "_THERMAL_RETRIES", 0))) if pm is not None else 0
+    for n in range(1 + retries):
+        _STATE["peak"] = None
+        result = attempt()
+        output = failure_output(result)
+        if output is None or pm is None:
+            return result, notes
+        why = _why_untrusted(pm, output, _STATE["peak"])
+        if not why:
+            return result, notes
+        if n >= retries:
+            notes.append(
+                "%s: failed on a hot board on all %d attempts (%s) -- this failure may be the board's, "
+                "not the model's" % (label, n + 1, why)
+            )
+            return result, notes
+        print(
+            "  [thermal-gate] DISCARDED %s failure: %s, so it says nothing about the model; re-running "
+            "from a cooled board (attempt %d of %d)" % (label, why, n + 2, retries + 1),
+            file=sys.stderr,
+            flush=True,
+        )
+        cooled, cur = pm._cooldown_after_clamp()
+        if not cooled:
+            notes.append(
+                "%s: failed on a hot board (%s) and the board stopped cooling at %s, so it was not re-run "
+                "-- this failure may be the board's, not the model's"
+                % (label, why, ("%.1fC" % cur) if cur is not None else "an unknown temperature")
+            )
+            return result, notes
+        notes.append("%s: a failure on a hot board was discarded (%s) and the step re-run" % (label, why))
+    return result, notes
+
+
 def device_step(label: str, run_once):
     """Run one device step the way optimize's _run_device_step runs one: hold before, cool after, and
     re-run it (run.rerun_after_thermal_abort) when the board reached the abort limit while it ran.
-    Returns whatever run_once returns."""
+    Returns whatever run_once returns. The hottest reading while it ran is kept for rerun_failed_hot."""
     aborted = [False]
 
     def _attempt():
         hold_if_hot(label)
         before = _counts()[0]
-        result = run_once()
+        result, _STATE["peak"] = _peak_during(run_once)
         aborted[0] = _counts()[0] > before
         if aborted[0]:
             # The watcher resets the board after an abort; do not start the re-run on top of that reset.
