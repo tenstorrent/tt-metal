@@ -243,7 +243,7 @@ KernelIds build_kernels_and_cbs(
         all_cores,
         DataMovementConfig{
             .processor = DataMovementProcessor::RISCV_1,
-            .noc = NOC::RISCV_1_default,
+            .noc = NOC::RISCV_0_default,
             .compile_args = reader_ct_args,
             .defines = defines});
 
@@ -278,6 +278,8 @@ KernelIds build_kernels_and_cbs(
         TensorAccessorArgs(tensor_args.expert_token_counts->buffer()).append_to(writer_ct_args);
         TensorAccessorArgs(tensor_args.global_expert_idx_table->buffer()).append_to(writer_ct_args);
     }
+    // Reader on NoC 0, writer on NoC 1: at K3 Galaxy load the default assignment congested the top grid rows
+    // (Q2 125 -> 104 us, Q1 33 -> 27 us with the swap).
     ids.writer = CreateKernel(
         program,
         "ttnn/cpp/ttnn/operations/experimental/deepseek_prefill/per_token_cast_to_fp8/device/kernels/dataflow/"
@@ -285,7 +287,7 @@ KernelIds build_kernels_and_cbs(
         all_cores,
         DataMovementConfig{
             .processor = DataMovementProcessor::RISCV_0,
-            .noc = NOC::RISCV_0_default,
+            .noc = NOC::RISCV_1_default,
             .compile_args = writer_ct_args,
             .defines = defines});
 
