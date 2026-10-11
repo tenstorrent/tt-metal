@@ -434,8 +434,21 @@ void transpose_and_pack(const uint32_t input_cb_index, const uint32_t output_cb_
     }
 }
 
-// rank_tag: the rank-tag stable engine is valid only when tile j holds indices above every index in
-// tiles 0..j-1 (single-group expert top-k: yes; the sum-ordered winning groups of the grouped path: no).
+#if defined(ARCH_BLACKHOLE)
+// The datacopy MOP for cb_id's format, without the address modes, CLR_DVALID write and counter reset of a full init,
+// which nothing in a top-k step changes (its SFPU code uses ADDR_MOD_6 and 7).
+ALWI void datacopy_mop_only(uint32_t cb_id) {
+    state_configure(cb_id, __builtin_LINE());
+    MATH((eltwise_unary_configure_mop<DataCopyType::A2D, DST_ACCUM_MODE, BroadcastType::NONE, false, false>(
+        p_mova2d::MOV_8_ROWS,
+        16,
+        get_operand_num_faces(get_operand_id(cb_id)),
+        get_operand_dst_format(get_operand_id(cb_id)))));
+}
+#endif
+
+// rank_tag: valid only when tile j holds indices above every index in tiles 0..j-1: the single-group top-k,
+// and on Blackhole the grouped path, whose writer gathers winning groups by id.
 template <bool stable_sort = false, bool indices_pretransposed = false, bool rank_tag = false>
 void topk(
     const uint32_t cb_winning_group_scores_id,
@@ -487,14 +500,37 @@ void topk(
 
     // Use insertion sort; discard lower half and keep upper half
     // Compare upper half with the next tile; insert into correct position
+#if defined(ARCH_BLACKHOLE)
+    // The score and template inits share everything but the unpack transpose and the move op, so only those are
+    // switched after the first pair's full inits.
+    constexpr bool switch_mop_only = indices_pretransposed;
+#else
+    constexpr bool switch_mop_only = false;
+#endif
     for (uint32_t j = 2; j < tiles; j++) {
         reconfig_data_format_srca(cb_winning_group_scores_id);
-        transpose_init(cb_winning_group_scores_id);
+        if constexpr (switch_mop_only) {
+            UNPACK((llk_unpack_A_init<BroadcastType::NONE, true, EltwiseBinaryReuseDestType::NONE>(
+                true, true, cb_winning_group_scores_id)));
+#if defined(ARCH_BLACKHOLE)
+            datacopy_mop_only(cb_winning_group_scores_id);
+#endif
+        } else {
+            transpose_init(cb_winning_group_scores_id);
+        }
         transpose_tile(cb_winning_group_scores_id, j, 1);
 
         reconfig_data_format_srca(cb_winning_group_indices_id);
         if constexpr (indices_pretransposed) {
-            copy_init(cb_winning_group_indices_id);
+            if constexpr (switch_mop_only) {
+                UNPACK((llk_unpack_A_init<BroadcastType::NONE, false, EltwiseBinaryReuseDestType::NONE, UnpackToDestEn>(
+                    0, false, cb_winning_group_indices_id)));
+#if defined(ARCH_BLACKHOLE)
+                datacopy_mop_only(cb_winning_group_indices_id);
+#endif
+            } else {
+                copy_init(cb_winning_group_indices_id);
+            }
             copy_tile(cb_winning_group_indices_id, j, 3);
         } else {
             transpose_init(cb_winning_group_indices_id);
