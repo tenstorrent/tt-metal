@@ -40,6 +40,7 @@
 #include "impl/context/metal_context.hpp"
 #include "impl/profiler/profiler_state.hpp"
 #include "impl/profiler/profiler_state_manager.hpp"
+#include "tt_metal/tools/profiler/tt_metal_tracy.hpp"
 
 #include <ttnn/graph/graph_query_op_constraints.hpp>
 #include <ttnn/operations/ccl/all_gather/all_gather.hpp>
@@ -294,7 +295,8 @@ void ExpectDeviceProfilerActiveOnSilicon(distributed::MeshDevice& silicon_mesh_d
         << "Test expects device profiler option to be enabled.";
     EXPECT_TRUE(MetalContext::instance(silicon_context_id).rtoptions().get_profiler_sync_enabled())
         << "Test expects profiler host-device sync to be enabled.";
-    EXPECT_TRUE(getDeviceProfilerState(silicon_context_id)) << "Device profiler must remain enabled on the real device";
+    EXPECT_TRUE(getDeviceProfilerState(silicon_mesh_device.impl().metal_env()))
+        << "Device profiler must remain enabled on the real device";
 }
 
 // Even though profiling + sync were requested, the device profiler must never be started on a
@@ -303,7 +305,7 @@ void ExpectDeviceProfilerSkippedOnMock(distributed::MeshDevice& mock_mesh_device
     const ContextId mock_context_id = mock_mesh_device.impl().get_context_id();
     ASSERT_NE(mock_context_id, DEFAULT_CONTEXT_ID);
     ASSERT_TRUE(MetalContext::instance(mock_context_id).get_cluster().is_mock_or_emulated());
-    EXPECT_FALSE(getDeviceProfilerState(mock_context_id))
+    EXPECT_FALSE(getDeviceProfilerState(mock_mesh_device.impl().metal_env()))
         << "getDeviceProfilerState() must be false for a mock context even when profiling is requested";
     const auto& profiler_state_manager = MetalContext::instance(mock_context_id).profiler_state_manager();
     ASSERT_NE(profiler_state_manager, nullptr);
@@ -312,6 +314,18 @@ void ExpectDeviceProfilerSkippedOnMock(distributed::MeshDevice& mock_mesh_device
             << "Device profiler was started on mock device " << device_id
             << " -- it must be skipped for mock/emulated clusters";
     }
+
+#if defined(TRACY_ENABLE)
+    // The trace hooks must act on the mock mesh's own (empty) profiler state and never reach the silicon profiler's.
+    // The chip id is one the silicon profiler cannot know, so a hook that wrongly used the silicon state would throw.
+    const std::vector<ChipId> unknown_device_ids{100000};
+    constexpr uint32_t trace_id = 0;
+    EXPECT_NO_THROW({
+        TracyTTMetalBeginMeshTrace(mock_mesh_device.impl(), unknown_device_ids, trace_id);
+        TracyTTMetalReplayMeshTrace(mock_mesh_device.impl(), unknown_device_ids, trace_id);
+        TracyTTMetalEndMeshTrace(mock_mesh_device.impl(), unknown_device_ids, trace_id);
+    });
+#endif
 }
 
 // Shared body: open a real silicon mesh first, then two mock meshes on the same arch. When
