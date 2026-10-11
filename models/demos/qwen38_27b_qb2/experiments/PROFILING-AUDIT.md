@@ -8,7 +8,8 @@ Update at03:13UTC: the current resident/epilogue phase diagnostic completed
 all eight cases with all24 required labels and clean teardown. See
 [results](../galaxy-evidence/gdn-combined-padding-results-v1/README.md) and
 [launch evidence](../galaxy-evidence/gdn-pipeline-phase-launch-v1/README.md).
-Phase analysis and hardware-counter capture remain outstanding.
+Phase analysis is now retained with those results: all 3,460,608 selected
+events pair and expected item counts match. Hardware counters remain outstanding.
 
 ## Existing evidence
 
@@ -28,10 +29,12 @@ preparation would save 66 us. Do not repeat this diagnostic unchanged.
 
 ## Remaining attribution gaps
 
-1. Current resident recurrence and epilogue now have a completed phase capture.
-   Internal timings still need analysis and reconciliation; diagnostic-only
-   annotations retain math, barrier ordering and precision, with exact output
-   comparisons between plain and annotated variants on physical hardware.
+1. Current resident recurrence and epilogue now have a completed phase capture
+   and paired-event analysis. Full-model critical-path reconciliation remains;
+   diagnostic-only annotations retain math, barrier ordering and precision,
+   with exact output comparisons on physical hardware. Math regions include
+   synchronization and pack regions include register waits; they are not pure
+   arithmetic/packing durations. Native profiling is active in both controls.
 2. Existing reports have no populated physical DRAM utilization or NoC
    congestion data. Useful bytes divided by elapsed time and assumed peak is
    a model, not bus activity. Hardware counters are needed to distinguish

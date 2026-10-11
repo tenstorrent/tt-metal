@@ -1,0 +1,6584 @@
+{
+  "scope": "Synthetic current GDN pipeline; three eager calls, four ranks; not serving throughput",
+  "limitations": [
+    "RISC phases overlap; never add across processors",
+    "Math zones include synchronization; no hardware activity counters",
+    "DMA intervals include issue and wait; no physical DRAM utilization claim",
+    "Eager diagnostic placement is not a full-model critical path"
+  ],
+  "architecture": "ARCH: blackhole, CHIP_FREQ[MHz]: 1350, Max Compute Cores: 130",
+  "frequency_mhz": 1350,
+  "selected_raw_rows": 3460608,
+  "excluded_raw_rows": 407360,
+  "all_phase_pairs_complete": true,
+  "all_expected_item_counts_match": true,
+  "source_sha256": {
+    "/home/ttuser/qwen38-artifacts-20261007/gdn-pipeline-phase-v1/tracy/reports/2026_10_11_03_13_43/ops_perf_results_2026_10_11_03_13_43.csv": "916627f91e89f5d9cf85742706cea3bc35791e0c15361e832f83738d973cfb31",
+    "/home/ttuser/qwen38-artifacts-20261007/gdn-pipeline-phase-v1/tracy/.logs/profile_log_device.csv": "b1d03794046f08b5e438e0d45e3ca6e0c10d1e2cdd80ab69bf9d64e0636eaedc",
+    "/home/ttuser/qwen38-artifacts-20261007/gdn-pipeline-phase-v1/phase.json": "aa1c5ee0edac324d3b4a09cd7140201c4dbe8fb6a4a017700ba3120282d813b4"
+  },
+  "kernels": [
+    {
+      "batch": 16,
+      "padding": "skip",
+      "profiled": 0,
+      "kind": "epilogue",
+      "duration_us": {
+        "n": 12,
+        "min": 31.313,
+        "median": 31.5355,
+        "mean": 31.532583333333335,
+        "p90": 31.616,
+        "max": 31.688
+      }
+    },
+    {
+      "batch": 16,
+      "padding": "skip",
+      "profiled": 0,
+      "kind": "recurrence",
+      "duration_us": {
+        "n": 12,
+        "min": 78.469,
+        "median": 79.64099999999999,
+        "mean": 79.76841666666667,
+        "p90": 81.307,
+        "max": 82.077
+      }
+    },
+    {
+      "batch": 16,
+      "padding": "skip",
+      "profiled": 1,
+      "kind": "epilogue",
+      "duration_us": {
+        "n": 12,
+        "min": 31.839,
+        "median": 32.052499999999995,
+        "mean": 32.071083333333334,
+        "p90": 32.247,
+        "max": 32.261
+      }
+    },
+    {
+      "batch": 16,
+      "padding": "skip",
+      "profiled": 1,
+      "kind": "recurrence",
+      "duration_us": {
+        "n": 12,
+        "min": 78.229,
+        "median": 79.57849999999999,
+        "mean": 79.72483333333334,
+        "p90": 80.535,
+        "max": 81.57
+      }
+    },
+    {
+      "batch": 16,
+      "padding": "zero",
+      "profiled": 0,
+      "kind": "epilogue",
+      "duration_us": {
+        "n": 12,
+        "min": 58.386,
+        "median": 58.605999999999995,
+        "mean": 58.614916666666666,
+        "p90": 58.748,
+        "max": 58.754
+      }
+    },
+    {
+      "batch": 16,
+      "padding": "zero",
+      "profiled": 0,
+      "kind": "recurrence",
+      "duration_us": {
+        "n": 12,
+        "min": 78.475,
+        "median": 79.6,
+        "mean": 80.25283333333333,
+        "p90": 84.075,
+        "max": 84.869
+      }
+    },
+    {
+      "batch": 16,
+      "padding": "zero",
+      "profiled": 1,
+      "kind": "epilogue",
+      "duration_us": {
+        "n": 12,
+        "min": 59.24,
+        "median": 59.34,
+        "mean": 59.35491666666667,
+        "p90": 59.458,
+        "max": 59.52
+      }
+    },
+    {
+      "batch": 16,
+      "padding": "zero",
+      "profiled": 1,
+      "kind": "recurrence",
+      "duration_us": {
+        "n": 12,
+        "min": 77.674,
+        "median": 80.0835,
+        "mean": 80.02458333333334,
+        "p90": 80.877,
+        "max": 81.627
+      }
+    },
+    {
+      "batch": 32,
+      "padding": "skip",
+      "profiled": 0,
+      "kind": "epilogue",
+      "duration_us": {
+        "n": 12,
+        "min": 49.115,
+        "median": 49.183,
+        "mean": 49.195750000000004,
+        "p90": 49.267,
+        "max": 49.281
+      }
+    },
+    {
+      "batch": 32,
+      "padding": "skip",
+      "profiled": 0,
+      "kind": "recurrence",
+      "duration_us": {
+        "n": 12,
+        "min": 137.573,
+        "median": 139.4855,
+        "mean": 140.59025,
+        "p90": 144.911,
+        "max": 146.095
+      }
+    },
+    {
+      "batch": 32,
+      "padding": "skip",
+      "profiled": 1,
+      "kind": "epilogue",
+      "duration_us": {
+        "n": 12,
+        "min": 50.144,
+        "median": 50.229,
+        "mean": 50.23191666666666,
+        "p90": 50.312,
+        "max": 50.364
+      }
+    },
+    {
+      "batch": 32,
+      "padding": "skip",
+      "profiled": 1,
+      "kind": "recurrence",
+      "duration_us": {
+        "n": 12,
+        "min": 136.744,
+        "median": 139.815,
+        "mean": 140.145,
+        "p90": 143.786,
+        "max": 146.786
+      }
+    },
+    {
+      "batch": 32,
+      "padding": "zero",
+      "profiled": 0,
+      "kind": "epilogue",
+      "duration_us": {
+        "n": 12,
+        "min": 76.369,
+        "median": 76.438,
+        "mean": 76.43925,
+        "p90": 76.49,
+        "max": 76.506
+      }
+    },
+    {
+      "batch": 32,
+      "padding": "zero",
+      "profiled": 0,
+      "kind": "recurrence",
+      "duration_us": {
+        "n": 12,
+        "min": 137.393,
+        "median": 141.095,
+        "mean": 142.61483333333334,
+        "p90": 148.512,
+        "max": 153.627
+      }
+    },
+    {
+      "batch": 32,
+      "padding": "zero",
+      "profiled": 1,
+      "kind": "epilogue",
+      "duration_us": {
+        "n": 12,
+        "min": 77.444,
+        "median": 77.545,
+        "mean": 77.53391666666667,
+        "p90": 77.596,
+        "max": 77.639
+      }
+    },
+    {
+      "batch": 32,
+      "padding": "zero",
+      "profiled": 1,
+      "kind": "recurrence",
+      "duration_us": {
+        "n": 12,
+        "min": 137.56,
+        "median": 140.0315,
+        "mean": 140.55733333333333,
+        "p90": 144.057,
+        "max": 145.39
+      }
+    }
+  ],
+  "phase_summaries": [
+    {
+      "batch": 16,
+      "padding": "skip",
+      "profiled": 0,
+      "kind": "epilogue",
+      "risc": "BRISC",
+      "zone": "BRISC-KERNEL",
+      "core_total_us": {
+        "n": 1440,
+        "min": 15.248148148148148,
+        "median": 27.625555555555557,
+        "mean": 23.936925925925927,
+        "p90": 28.568148148148147,
+        "max": 31.454074074074075
+      },
+      "items_per_core": {
+        "n": 1440,
+        "min": 1,
+        "median": 1.0,
+        "mean": 1,
+        "p90": 1,
+        "max": 1
+      }
+    },
+    {
+      "batch": 16,
+      "padding": "skip",
+      "profiled": 0,
+      "kind": "epilogue",
+      "risc": "NCRISC",
+      "zone": "NCRISC-KERNEL",
+      "core_total_us": {
+        "n": 1440,
+        "min": 4.242962962962963,
+        "median": 9.352962962962962,
+        "mean": 8.32839609053498,
+        "p90": 10.106666666666667,
+        "max": 10.410370370370371
+      },
+      "items_per_core": {
+        "n": 1440,
+        "min": 1,
+        "median": 1.0,
+        "mean": 1,
+        "p90": 1,
+        "max": 1
+      }
+    },
+    {
+      "batch": 16,
+      "padding": "skip",
+      "profiled": 0,
+      "kind": "epilogue",
+      "risc": "TRISC_0",
+      "zone": "TRISC-KERNEL",
+      "core_total_us": {
+        "n": 1440,
+        "min": 13.935555555555556,
+        "median": 26.255555555555556,
+        "mean": 22.3454670781893,
+        "p90": 27.00888888888889,
+        "max": 27.333333333333332
+      },
+      "items_per_core": {
+        "n": 1440,
+        "min": 1,
+        "median": 1.0,
+        "mean": 1,
+        "p90": 1,
+        "max": 1
+      }
+    },
+    {
+      "batch": 16,
+      "padding": "skip",
+      "profiled": 0,
+      "kind": "epilogue",
+      "risc": "TRISC_1",
+      "zone": "TRISC-KERNEL",
+      "core_total_us": {
+        "n": 1440,
+        "min": 14.785925925925927,
+        "median": 27.166296296296295,
+        "mean": 23.279348251028807,
+        "p90": 27.96962962962963,
+        "max": 28.261481481481482
+      },
+      "items_per_core": {
+        "n": 1440,
+        "min": 1,
+        "median": 1.0,
+        "mean": 1,
+        "p90": 1,
+        "max": 1
+      }
+    },
+    {
+      "batch": 16,
+      "padding": "skip",
+      "profiled": 0,
+      "kind": "epilogue",
+      "risc": "TRISC_2",
+      "zone": "TRISC-KERNEL",
+      "core_total_us": {
+        "n": 1440,
+        "min": 14.195555555555556,
+        "median": 26.515925925925927,
+        "mean": 22.618427983539096,
+        "p90": 27.285185185185185,
+        "max": 27.635555555555555
+      },
+      "items_per_core": {
+        "n": 1440,
+        "min": 1,
+        "median": 1.0,
+        "mean": 1,
+        "p90": 1,
+        "max": 1
+      }
+    },
+    {
+      "batch": 16,
+      "padding": "skip",
+      "profiled": 0,
+      "kind": "recurrence",
+      "risc": "BRISC",
+      "zone": "BRISC-KERNEL",
+      "core_total_us": {
+        "n": 1440,
+        "min": 58.194074074074074,
+        "median": 65.31333333333333,
+        "mean": 67.26777057613168,
+        "p90": 75.83407407407407,
+        "max": 81.94592592592592
+      },
+      "items_per_core": {
+        "n": 1440,
+        "min": 1,
+        "median": 1.0,
+        "mean": 1,
+        "p90": 1,
+        "max": 1
+      }
+    },
+    {
+      "batch": 16,
+      "padding": "skip",
+      "profiled": 0,
+      "kind": "recurrence",
+      "risc": "NCRISC",
+      "zone": "NCRISC-KERNEL",
+      "core_total_us": {
+        "n": 1440,
+        "min": 46.93703703703704,
+        "median": 55.33296296296297,
+        "mean": 56.414220164609056,
+        "p90": 63.73481481481482,
+        "max": 69.70074074074074
+      },
+      "items_per_core": {
+        "n": 1440,
+        "min": 1,
+        "median": 1.0,
+        "mean": 1,
+        "p90": 1,
+        "max": 1
+      }
+    },
+    {
+      "batch": 16,
+      "padding": "skip",
+      "profiled": 0,
+      "kind": "recurrence",
+      "risc": "TRISC_0",
+      "zone": "TRISC-KERNEL",
+      "core_total_us": {
+        "n": 1440,
+        "min": 56.71037037037037,
+        "median": 63.590370370370366,
+        "mean": 65.65024691358025,
+        "p90": 74.32,
+        "max": 80.44222222222223
+      },
+      "items_per_core": {
+        "n": 1440,
+        "min": 1,
+        "median": 1.0,
+        "mean": 1,
+        "p90": 1,
+        "max": 1
+      }
+    },
+    {
+      "batch": 16,
+      "padding": "skip",
+      "profiled": 0,
+      "kind": "recurrence",
+      "risc": "TRISC_1",
+      "zone": "TRISC-KERNEL",
+      "core_total_us": {
+        "n": 1440,
+        "min": 57.22592592592593,
+        "median": 64.07222222222222,
+        "mean": 66.15048868312758,
+        "p90": 74.82222222222222,
+        "max": 80.80222222222223
+      },
+      "items_per_core": {
+        "n": 1440,
+        "min": 1,
+        "median": 1.0,
+        "mean": 1,
+        "p90": 1,
+        "max": 1
+      }
+    },
+    {
+      "batch": 16,
+      "padding": "skip",
+      "profiled": 0,
+      "kind": "recurrence",
+      "risc": "TRISC_2",
+      "zone": "TRISC-KERNEL",
+      "core_total_us": {
+        "n": 1440,
+        "min": 57.303703703703704,
+        "median": 64.1937037037037,
+        "mean": 66.25663477366255,
+        "p90": 74.92148148148148,
+        "max": 81.07111111111111
+      },
+      "items_per_core": {
+        "n": 1440,
+        "min": 1,
+        "median": 1.0,
+        "mean": 1,
+        "p90": 1,
+        "max": 1
+      }
+    },
+    {
+      "batch": 16,
+      "padding": "skip",
+      "profiled": 1,
+      "kind": "epilogue",
+      "risc": "BRISC",
+      "zone": "BRISC-KERNEL",
+      "core_total_us": {
+        "n": 1440,
+        "min": 15.703703703703704,
+        "median": 28.09111111111111,
+        "mean": 24.3610066872428,
+        "p90": 29.247407407407408,
+        "max": 32.05037037037037
+      },
+      "items_per_core": {
+        "n": 1440,
+        "min": 1,
+        "median": 1.0,
+        "mean": 1,
+        "p90": 1,
+        "max": 1
+      }
+    },
+    {
+      "batch": 16,
+      "padding": "skip",
+      "profiled": 1,
+      "kind": "epilogue",
+      "risc": "BRISC",
+      "zone": "GDN_EP_WRITER_DMA",
+      "core_total_us": {
+        "n": 1440,
+        "min": 0.42962962962962964,
+        "median": 0.9755555555555555,
+        "mean": 1.0479104938271604,
+        "p90": 0.9940740740740741,
+        "max": 3.7911111111111113
+      },
+      "items_per_core": {
+        "n": 1440,
+        "min": 1,
+        "median": 2.0,
+        "mean": 1.6,
+        "p90": 2,
+        "max": 2
+      }
+    },
+    {
+      "batch": 16,
+      "padding": "skip",
+      "profiled": 1,
+      "kind": "epilogue",
+      "risc": "BRISC",
+      "zone": "GDN_EP_WRITER_WAIT",
+      "core_total_us": {
+        "n": 1440,
+        "min": 15.064444444444444,
+        "median": 26.915925925925926,
+        "mean": 23.12101903292181,
+        "p90": 27.705925925925925,
+        "max": 28.086666666666666
+      },
+      "items_per_core": {
+        "n": 1440,
+        "min": 1,
+        "median": 2.0,
+        "mean": 1.6,
+        "p90": 2,
+        "max": 2
+      }
+    },
+    {
+      "batch": 16,
+      "padding": "skip",
+      "profiled": 1,
+      "kind": "epilogue",
+      "risc": "NCRISC",
+      "zone": "GDN_EP_READER_CB_RESERVE",
+      "core_total_us": {
+        "n": 1440,
+        "min": 0.05333333333333334,
+        "median": 0.10740740740740741,
+        "mean": 0.08627109053497943,
+        "p90": 0.10814814814814815,
+        "max": 0.11333333333333333
+      },
+      "items_per_core": {
+        "n": 1440,
+        "min": 1,
+        "median": 2.0,
+        "mean": 1.6,
+        "p90": 2,
+        "max": 2
+      }
+    },
+    {
+      "batch": 16,
+      "padding": "skip",
+      "profiled": 1,
+      "kind": "epilogue",
+      "risc": "NCRISC",
+      "zone": "GDN_EP_READER_DMA",
+      "core_total_us": {
+        "n": 1440,
+        "min": 0.44,
+        "median": 1.0896296296296297,
+        "mean": 0.938125,
+        "p90": 1.1266666666666667,
+        "max": 2.311111111111111
+      },
+      "items_per_core": {
+        "n": 1440,
+        "min": 1,
+        "median": 2.0,
+        "mean": 1.6,
+        "p90": 2,
+        "max": 2
+      }
+    },
+    {
+      "batch": 16,
+      "padding": "skip",
+      "profiled": 1,
+      "kind": "epilogue",
+      "risc": "NCRISC",
+      "zone": "GDN_EP_READER_FORMAT",
+      "core_total_us": {
+        "n": 1440,
+        "min": 2.542222222222222,
+        "median": 5.119259259259259,
+        "mean": 4.092026748971193,
+        "p90": 5.126666666666667,
+        "max": 5.137037037037037
+      },
+      "items_per_core": {
+        "n": 1440,
+        "min": 1,
+        "median": 2.0,
+        "mean": 1.6,
+        "p90": 2,
+        "max": 2
+      }
+    },
+    {
+      "batch": 16,
+      "padding": "skip",
+      "profiled": 1,
+      "kind": "epilogue",
+      "risc": "NCRISC",
+      "zone": "GDN_EP_READER_PADDING",
+      "core_total_us": {
+        "n": 1440,
+        "min": 0.013333333333333334,
+        "median": 0.013333333333333334,
+        "mean": 0.013333333333333334,
+        "p90": 0.013333333333333334,
+        "max": 0.013333333333333334
+      },
+      "items_per_core": {
+        "n": 1440,
+        "min": 1,
+        "median": 1.0,
+        "mean": 1,
+        "p90": 1,
+        "max": 1
+      }
+    },
+    {
+      "batch": 16,
+      "padding": "skip",
+      "profiled": 1,
+      "kind": "epilogue",
+      "risc": "NCRISC",
+      "zone": "GDN_EP_READER_WEIGHT",
+      "core_total_us": {
+        "n": 1440,
+        "min": 0.6681481481481482,
+        "median": 2.7985185185185184,
+        "mean": 2.652593621399177,
+        "p90": 3.294814814814815,
+        "max": 3.5614814814814815
+      },
+      "items_per_core": {
+        "n": 1440,
+        "min": 1,
+        "median": 1.0,
+        "mean": 1,
+        "p90": 1,
+        "max": 1
+      }
+    },
+    {
+      "batch": 16,
+      "padding": "skip",
+      "profiled": 1,
+      "kind": "epilogue",
+      "risc": "NCRISC",
+      "zone": "NCRISC-KERNEL",
+      "core_total_us": {
+        "n": 1440,
+        "min": 4.59037037037037,
+        "median": 9.682222222222222,
+        "mean": 8.599753600823044,
+        "p90": 10.462222222222222,
+        "max": 10.77037037037037
+      },
+      "items_per_core": {
+        "n": 1440,
+        "min": 1,
+        "median": 1.0,
+        "mean": 1,
+        "p90": 1,
+        "max": 1
+      }
+    },
+    {
+      "batch": 16,
+      "padding": "skip",
+      "profiled": 1,
+      "kind": "epilogue",
+      "risc": "TRISC_0",
+      "zone": "GDN_EP_INPUT_WAIT",
+      "core_total_us": {
+        "n": 1440,
+        "min": 3.1081481481481483,
+        "median": 3.274814814814815,
+        "mean": 3.3294804526748973,
+        "p90": 3.506666666666667,
+        "max": 4.95037037037037
+      },
+      "items_per_core": {
+        "n": 1440,
+        "min": 1,
+        "median": 2.0,
+        "mean": 1.6,
+        "p90": 2,
+        "max": 2
+      }
+    },
+    {
+      "batch": 16,
+      "padding": "skip",
+      "profiled": 1,
+      "kind": "epilogue",
+      "risc": "TRISC_0",
+      "zone": "GDN_EP_MEAN_SQUARE",
+      "core_total_us": {
+        "n": 1440,
+        "min": 0.7703703703703704,
+        "median": 2.3133333333333335,
+        "mean": 1.7111496913580246,
+        "p90": 2.354814814814815,
+        "max": 2.3925925925925924
+      },
+      "items_per_core": {
+        "n": 1440,
+        "min": 1,
+        "median": 2.0,
+        "mean": 1.6,
+        "p90": 2,
+        "max": 2
+      }
+    },
+    {
+      "batch": 16,
+      "padding": "skip",
+      "profiled": 1,
+      "kind": "epilogue",
+      "risc": "TRISC_0",
+      "zone": "GDN_EP_NORMALIZE",
+      "core_total_us": {
+        "n": 1440,
+        "min": 1.2355555555555555,
+        "median": 2.507037037037037,
+        "mean": 2.0152824074074074,
+        "p90": 2.542962962962963,
+        "max": 2.5755555555555554
+      },
+      "items_per_core": {
+        "n": 1440,
+        "min": 1,
+        "median": 2.0,
+        "mean": 1.6,
+        "p90": 2,
+        "max": 2
+      }
+    },
+    {
+      "batch": 16,
+      "padding": "skip",
+      "profiled": 1,
+      "kind": "epilogue",
+      "risc": "TRISC_0",
+      "zone": "GDN_EP_OUTPUT",
+      "core_total_us": {
+        "n": 1440,
+        "min": 1.402962962962963,
+        "median": 2.854814814814815,
+        "mean": 2.286327160493827,
+        "p90": 2.865925925925926,
+        "max": 2.8814814814814813
+      },
+      "items_per_core": {
+        "n": 1440,
+        "min": 1,
+        "median": 2.0,
+        "mean": 1.6,
+        "p90": 2,
+        "max": 2
+      }
+    },
+    {
+      "batch": 16,
+      "padding": "skip",
+      "profiled": 1,
+      "kind": "epilogue",
+      "risc": "TRISC_0",
+      "zone": "GDN_EP_WEIGHT_AND_GATE",
+      "core_total_us": {
+        "n": 1440,
+        "min": 6.163703703703704,
+        "median": 12.314074074074075,
+        "mean": 9.863091049382716,
+        "p90": 12.334074074074074,
+        "max": 12.356296296296296
+      },
+      "items_per_core": {
+        "n": 1440,
+        "min": 1,
+        "median": 2.0,
+        "mean": 1.6,
+        "p90": 2,
+        "max": 2
+      }
+    },
+    {
+      "batch": 16,
+      "padding": "skip",
+      "profiled": 1,
+      "kind": "epilogue",
+      "risc": "TRISC_0",
+      "zone": "TRISC-KERNEL",
+      "core_total_us": {
+        "n": 1440,
+        "min": 14.316296296296295,
+        "median": 26.74111111111111,
+        "mean": 22.722640946502057,
+        "p90": 27.50962962962963,
+        "max": 27.894074074074073
+      },
+      "items_per_core": {
+        "n": 1440,
+        "min": 1,
+        "median": 1.0,
+        "mean": 1,
+        "p90": 1,
+        "max": 1
+      }
+    },
+    {
+      "batch": 16,
+      "padding": "skip",
+      "profiled": 1,
+      "kind": "epilogue",
+      "risc": "TRISC_1",
+      "zone": "GDN_EP_INPUT_WAIT",
+      "core_total_us": {
+        "n": 1440,
+        "min": 0.013333333333333334,
+        "median": 0.02666666666666667,
+        "mean": 0.023174897119341564,
+        "p90": 0.03037037037037037,
+        "max": 0.04
+      },
+      "items_per_core": {
+        "n": 1440,
+        "min": 1,
+        "median": 2.0,
+        "mean": 1.6,
+        "p90": 2,
+        "max": 2
+      }
+    },
+    {
+      "batch": 16,
+      "padding": "skip",
+      "profiled": 1,
+      "kind": "epilogue",
+      "risc": "TRISC_1",
+      "zone": "GDN_EP_MEAN_SQUARE",
+      "core_total_us": {
+        "n": 1440,
+        "min": 4.968148148148148,
+        "median": 7.332222222222223,
+        "mean": 7.246298868312757,
+        "p90": 7.9837037037037035,
+        "max": 8.245925925925926
+      },
+      "items_per_core": {
+        "n": 1440,
+        "min": 1,
+        "median": 2.0,
+        "mean": 1.6,
+        "p90": 2,
+        "max": 2
+      }
+    },
+    {
+      "batch": 16,
+      "padding": "skip",
+      "profiled": 1,
+      "kind": "epilogue",
+      "risc": "TRISC_1",
+      "zone": "GDN_EP_NORMALIZE",
+      "core_total_us": {
+        "n": 1440,
+        "min": 1.3111111111111111,
+        "median": 2.636296296296296,
+        "mean": 2.1254171810699587,
+        "p90": 2.676296296296296,
+        "max": 2.7274074074074073
+      },
+      "items_per_core": {
+        "n": 1440,
+        "min": 1,
+        "median": 2.0,
+        "mean": 1.6,
+        "p90": 2,
+        "max": 2
+      }
+    },
+    {
+      "batch": 16,
+      "padding": "skip",
+      "profiled": 1,
+      "kind": "epilogue",
+      "risc": "TRISC_1",
+      "zone": "GDN_EP_OUTPUT",
+      "core_total_us": {
+        "n": 1440,
+        "min": 2.4762962962962964,
+        "median": 4.9911111111111115,
+        "mean": 3.995162551440329,
+        "p90": 5.000740740740741,
+        "max": 5.021481481481482
+      },
+      "items_per_core": {
+        "n": 1440,
+        "min": 1,
+        "median": 2.0,
+        "mean": 1.6,
+        "p90": 2,
+        "max": 2
+      }
+    },
+    {
+      "batch": 16,
+      "padding": "skip",
+      "profiled": 1,
+      "kind": "epilogue",
+      "risc": "TRISC_1",
+      "zone": "GDN_EP_WEIGHT_AND_GATE",
+      "core_total_us": {
+        "n": 1440,
+        "min": 6.199259259259259,
+        "median": 12.402962962962963,
+        "mean": 9.93303086419753,
+        "p90": 12.426666666666666,
+        "max": 12.447407407407407
+      },
+      "items_per_core": {
+        "n": 1440,
+        "min": 1,
+        "median": 2.0,
+        "mean": 1.6,
+        "p90": 2,
+        "max": 2
+      }
+    },
+    {
+      "batch": 16,
+      "padding": "skip",
+      "profiled": 1,
+      "kind": "epilogue",
+      "risc": "TRISC_1",
+      "zone": "TRISC-KERNEL",
+      "core_total_us": {
+        "n": 1440,
+        "min": 15.268148148148148,
+        "median": 27.651111111111113,
+        "mean": 23.64854681069959,
+        "p90": 28.45259259259259,
+        "max": 28.783703703703704
+      },
+      "items_per_core": {
+        "n": 1440,
+        "min": 1,
+        "median": 1.0,
+        "mean": 1,
+        "p90": 1,
+        "max": 1
+      }
+    },
+    {
+      "batch": 16,
+      "padding": "skip",
+      "profiled": 1,
+      "kind": "epilogue",
+      "risc": "TRISC_2",
+      "zone": "GDN_EP_INPUT_WAIT",
+      "core_total_us": {
+        "n": 1440,
+        "min": 0.014074074074074074,
+        "median": 0.028148148148148148,
+        "mean": 0.023166152263374484,
+        "p90": 0.028888888888888888,
+        "max": 0.03185185185185185
+      },
+      "items_per_core": {
+        "n": 1440,
+        "min": 1,
+        "median": 2.0,
+        "mean": 1.6,
+        "p90": 2,
+        "max": 2
+      }
+    },
+    {
+      "batch": 16,
+      "padding": "skip",
+      "profiled": 1,
+      "kind": "epilogue",
+      "risc": "TRISC_2",
+      "zone": "GDN_EP_MEAN_SQUARE",
+      "core_total_us": {
+        "n": 1440,
+        "min": 4.851851851851852,
+        "median": 7.768148148148148,
+        "mean": 7.583751028806584,
+        "p90": 8.574814814814815,
+        "max": 8.90148148148148
+      },
+      "items_per_core": {
+        "n": 1440,
+        "min": 1,
+        "median": 2.0,
+        "mean": 1.6,
+        "p90": 2,
+        "max": 2
+      }
+    },
+    {
+      "batch": 16,
+      "padding": "skip",
+      "profiled": 1,
+      "kind": "epilogue",
+      "risc": "TRISC_2",
+      "zone": "GDN_EP_NORMALIZE",
+      "core_total_us": {
+        "n": 1440,
+        "min": 1.3044444444444445,
+        "median": 2.634074074074074,
+        "mean": 2.119317901234568,
+        "p90": 2.6637037037037037,
+        "max": 2.7177777777777776
+      },
+      "items_per_core": {
+        "n": 1440,
+        "min": 1,
+        "median": 2.0,
+        "mean": 1.6,
+        "p90": 2,
+        "max": 2
+      }
+    },
+    {
+      "batch": 16,
+      "padding": "skip",
+      "profiled": 1,
+      "kind": "epilogue",
+      "risc": "TRISC_2",
+      "zone": "GDN_EP_OUTPUT",
+      "core_total_us": {
+        "n": 1440,
+        "min": 1.8111111111111111,
+        "median": 3.6655555555555557,
+        "mean": 2.9350735596707818,
+        "p90": 3.6748148148148148,
+        "max": 3.68962962962963
+      },
+      "items_per_core": {
+        "n": 1440,
+        "min": 1,
+        "median": 2.0,
+        "mean": 1.6,
+        "p90": 2,
+        "max": 2
+      }
+    },
+    {
+      "batch": 16,
+      "padding": "skip",
+      "profiled": 1,
+      "kind": "epilogue",
+      "risc": "TRISC_2",
+      "zone": "GDN_EP_WEIGHT_AND_GATE",
+      "core_total_us": {
+        "n": 1440,
+        "min": 6.217777777777778,
+        "median": 12.438518518518519,
+        "mean": 9.965023148148148,
+        "p90": 12.46962962962963,
+        "max": 12.493333333333334
+      },
+      "items_per_core": {
+        "n": 1440,
+        "min": 1,
+        "median": 2.0,
+        "mean": 1.6,
+        "p90": 2,
+        "max": 2
+      }
+    },
+    {
+      "batch": 16,
+      "padding": "skip",
+      "profiled": 1,
+      "kind": "epilogue",
+      "risc": "TRISC_2",
+      "zone": "TRISC-KERNEL",
+      "core_total_us": {
+        "n": 1440,
+        "min": 14.60962962962963,
+        "median": 27.02148148148148,
+        "mean": 23.00157355967078,
+        "p90": 27.8,
+        "max": 28.174074074074074
+      },
+      "items_per_core": {
+        "n": 1440,
+        "min": 1,
+        "median": 1.0,
+        "mean": 1,
+        "p90": 1,
+        "max": 1
+      }
+    },
+    {
+      "batch": 16,
+      "padding": "skip",
+      "profiled": 1,
+      "kind": "recurrence",
+      "risc": "BRISC",
+      "zone": "BRISC-KERNEL",
+      "core_total_us": {
+        "n": 1440,
+        "min": 59.345925925925926,
+        "median": 66.11333333333334,
+        "mean": 68.07889351851851,
+        "p90": 76.32592592592593,
+        "max": 81.27185185185185
+      },
+      "items_per_core": {
+        "n": 1440,
+        "min": 1,
+        "median": 1.0,
+        "mean": 1,
+        "p90": 1,
+        "max": 1
+      }
+    },
+    {
+      "batch": 16,
+      "padding": "skip",
+      "profiled": 1,
+      "kind": "recurrence",
+      "risc": "BRISC",
+      "zone": "GDN_WRITER_DRAM_ISSUE_AND_OUTPUT_WAIT",
+      "core_total_us": {
+        "n": 1440,
+        "min": 1.177037037037037,
+        "median": 3.5792592592592594,
+        "mean": 5.671534465020576,
+        "p90": 13.063703703703704,
+        "max": 29.839259259259258
+      },
+      "items_per_core": {
+        "n": 1440,
+        "min": 6,
+        "median": 6.0,
+        "mean": 6.4,
+        "p90": 7,
+        "max": 7
+      }
+    },
+    {
+      "batch": 16,
+      "padding": "skip",
+      "profiled": 1,
+      "kind": "recurrence",
+      "risc": "BRISC",
+      "zone": "GDN_WRITER_OUTPUT_AND_BARRIER",
+      "core_total_us": {
+        "n": 1440,
+        "min": 4.128148148148148,
+        "median": 8.472222222222221,
+        "mean": 9.978401234567901,
+        "p90": 17.20888888888889,
+        "max": 32.10666666666667
+      },
+      "items_per_core": {
+        "n": 1440,
+        "min": 6,
+        "median": 6.0,
+        "mean": 6.4,
+        "p90": 7,
+        "max": 7
+      }
+    },
+    {
+      "batch": 16,
+      "padding": "skip",
+      "profiled": 1,
+      "kind": "recurrence",
+      "risc": "BRISC",
+      "zone": "GDN_WRITER_STATE_CB_WAIT",
+      "core_total_us": {
+        "n": 1440,
+        "min": 23.98,
+        "median": 52.68629629629629,
+        "mean": 51.64239146090535,
+        "p90": 64.10444444444444,
+        "max": 71.88074074074073
+      },
+      "items_per_core": {
+        "n": 1440,
+        "min": 6,
+        "median": 6.0,
+        "mean": 6.4,
+        "p90": 7,
+        "max": 7
+      }
+    },
+    {
+      "batch": 16,
+      "padding": "skip",
+      "profiled": 1,
+      "kind": "recurrence",
+      "risc": "NCRISC",
+      "zone": "GDN_READER_CB_RESERVE",
+      "core_total_us": {
+        "n": 1440,
+        "min": 0.7437037037037038,
+        "median": 2.724074074074074,
+        "mean": 3.7648024691358026,
+        "p90": 7.336296296296296,
+        "max": 19.904444444444444
+      },
+      "items_per_core": {
+        "n": 1440,
+        "min": 6,
+        "median": 6.0,
+        "mean": 6.4,
+        "p90": 7,
+        "max": 7
+      }
+    },
+    {
+      "batch": 16,
+      "padding": "skip",
+      "profiled": 1,
+      "kind": "recurrence",
+      "risc": "NCRISC",
+      "zone": "GDN_READER_DRAM_ISSUE_AND_WAIT",
+      "core_total_us": {
+        "n": 1440,
+        "min": 6.984444444444445,
+        "median": 19.875185185185185,
+        "mean": 18.97517181069959,
+        "p90": 24.687407407407406,
+        "max": 28.11777777777778
+      },
+      "items_per_core": {
+        "n": 1440,
+        "min": 6,
+        "median": 6.0,
+        "mean": 6.4,
+        "p90": 7,
+        "max": 7
+      }
+    },
+    {
+      "batch": 16,
+      "padding": "skip",
+      "profiled": 1,
+      "kind": "recurrence",
+      "risc": "NCRISC",
+      "zone": "GDN_READER_L1_PREPARE",
+      "core_total_us": {
+        "n": 1440,
+        "min": 30.845185185185183,
+        "median": 30.94814814814815,
+        "mean": 32.978807613168726,
+        "p90": 36.095555555555556,
+        "max": 36.165925925925926
+      },
+      "items_per_core": {
+        "n": 1440,
+        "min": 6,
+        "median": 6.0,
+        "mean": 6.4,
+        "p90": 7,
+        "max": 7
+      }
+    },
+    {
+      "batch": 16,
+      "padding": "skip",
+      "profiled": 1,
+      "kind": "recurrence",
+      "risc": "NCRISC",
+      "zone": "NCRISC-KERNEL",
+      "core_total_us": {
+        "n": 1440,
+        "min": 47.55407407407407,
+        "median": 55.89148148148148,
+        "mean": 56.94987808641975,
+        "p90": 64.18296296296296,
+        "max": 68.83481481481482
+      },
+      "items_per_core": {
+        "n": 1440,
+        "min": 1,
+        "median": 1.0,
+        "mean": 1,
+        "p90": 1,
+        "max": 1
+      }
+    },
+    {
+      "batch": 16,
+      "padding": "skip",
+      "profiled": 1,
+      "kind": "recurrence",
+      "risc": "TRISC_0",
+      "zone": "GDN_RESIDENT_DELTA",
+      "core_total_us": {
+        "n": 1440,
+        "min": 25.36074074074074,
+        "median": 26.844444444444445,
+        "mean": 28.22221193415638,
+        "p90": 30.68074074074074,
+        "max": 44.50592592592593
+      },
+      "items_per_core": {
+        "n": 1440,
+        "min": 6,
+        "median": 6.0,
+        "mean": 6.4,
+        "p90": 7,
+        "max": 7
+      }
+    },
+    {
+      "batch": 16,
+      "padding": "skip",
+      "profiled": 1,
+      "kind": "recurrence",
+      "risc": "TRISC_0",
+      "zone": "GDN_RESIDENT_INPUT_WAIT",
+      "core_total_us": {
+        "n": 1440,
+        "min": 6.649629629629629,
+        "median": 12.156296296296297,
+        "mean": 12.204506687242798,
+        "p90": 16.12962962962963,
+        "max": 21.128888888888888
+      },
+      "items_per_core": {
+        "n": 1440,
+        "min": 6,
+        "median": 6.0,
+        "mean": 6.4,
+        "p90": 7,
+        "max": 7
+      }
+    },
+    {
+      "batch": 16,
+      "padding": "skip",
+      "profiled": 1,
+      "kind": "recurrence",
+      "risc": "TRISC_0",
+      "zone": "GDN_RESIDENT_OUTPUT",
+      "core_total_us": {
+        "n": 1440,
+        "min": 10.893333333333333,
+        "median": 10.971481481481483,
+        "mean": 11.687969650205762,
+        "p90": 12.794074074074073,
+        "max": 12.830370370370371
+      },
+      "items_per_core": {
+        "n": 1440,
+        "min": 6,
+        "median": 6.0,
+        "mean": 6.4,
+        "p90": 7,
+        "max": 7
+      }
+    },
+    {
+      "batch": 16,
+      "padding": "skip",
+      "profiled": 1,
+      "kind": "recurrence",
+      "risc": "TRISC_0",
+      "zone": "GDN_RESIDENT_OUTPUT_AND_DEST_WAIT",
+      "core_total_us": {
+        "n": 1440,
+        "min": 0.08148148148148149,
+        "median": 0.09444444444444444,
+        "mean": 0.09503652263374486,
+        "p90": 0.10592592592592592,
+        "max": 0.11851851851851852
+      },
+      "items_per_core": {
+        "n": 1440,
+        "min": 6,
+        "median": 6.0,
+        "mean": 6.4,
+        "p90": 7,
+        "max": 7
+      }
+    },
+    {
+      "batch": 16,
+      "padding": "skip",
+      "profiled": 1,
+      "kind": "recurrence",
+      "risc": "TRISC_0",
+      "zone": "GDN_RESIDENT_PACK",
+      "core_total_us": {
+        "n": 1440,
+        "min": 0.08,
+        "median": 0.08592592592592592,
+        "mean": 0.08861985596707819,
+        "p90": 0.09777777777777778,
+        "max": 0.10962962962962963
+      },
+      "items_per_core": {
+        "n": 1440,
+        "min": 6,
+        "median": 6.0,
+        "mean": 6.4,
+        "p90": 7,
+        "max": 7
+      }
+    },
+    {
+      "batch": 16,
+      "padding": "skip",
+      "profiled": 1,
+      "kind": "recurrence",
+      "risc": "TRISC_0",
+      "zone": "GDN_RESIDENT_STATE_UPDATE",
+      "core_total_us": {
+        "n": 1440,
+        "min": 11.277777777777779,
+        "median": 11.34962962962963,
+        "mean": 12.096251028806584,
+        "p90": 13.247407407407408,
+        "max": 13.287407407407407
+      },
+      "items_per_core": {
+        "n": 1440,
+        "min": 6,
+        "median": 6.0,
+        "mean": 6.4,
+        "p90": 7,
+        "max": 7
+      }
+    },
+    {
+      "batch": 16,
+      "padding": "skip",
+      "profiled": 1,
+      "kind": "recurrence",
+      "risc": "TRISC_0",
+      "zone": "TRISC-KERNEL",
+      "core_total_us": {
+        "n": 1440,
+        "min": 57.83259259259259,
+        "median": 64.39777777777778,
+        "mean": 66.42568621399177,
+        "p90": 74.7637037037037,
+        "max": 79.73925925925926
+      },
+      "items_per_core": {
+        "n": 1440,
+        "min": 1,
+        "median": 1.0,
+        "mean": 1,
+        "p90": 1,
+        "max": 1
+      }
+    },
+    {
+      "batch": 16,
+      "padding": "skip",
+      "profiled": 1,
+      "kind": "recurrence",
+      "risc": "TRISC_1",
+      "zone": "GDN_RESIDENT_DELTA",
+      "core_total_us": {
+        "n": 1440,
+        "min": 33.01481481481481,
+        "median": 39.53074074074074,
+        "mean": 39.92803806584362,
+        "p90": 45.84222222222222,
+        "max": 53.7562962962963
+      },
+      "items_per_core": {
+        "n": 1440,
+        "min": 6,
+        "median": 6.0,
+        "mean": 6.4,
+        "p90": 7,
+        "max": 7
+      }
+    },
+    {
+      "batch": 16,
+      "padding": "skip",
+      "profiled": 1,
+      "kind": "recurrence",
+      "risc": "TRISC_1",
+      "zone": "GDN_RESIDENT_INPUT_WAIT",
+      "core_total_us": {
+        "n": 1440,
+        "min": 0.08518518518518518,
+        "median": 0.09037037037037036,
+        "mean": 0.09511265432098766,
+        "p90": 0.10518518518518519,
+        "max": 0.1162962962962963
+      },
+      "items_per_core": {
+        "n": 1440,
+        "min": 6,
+        "median": 6.0,
+        "mean": 6.4,
+        "p90": 7,
+        "max": 7
+      }
+    },
+    {
+      "batch": 16,
+      "padding": "skip",
+      "profiled": 1,
+      "kind": "recurrence",
+      "risc": "TRISC_1",
+      "zone": "GDN_RESIDENT_OUTPUT",
+      "core_total_us": {
+        "n": 1440,
+        "min": 11.473333333333333,
+        "median": 11.508148148148148,
+        "mean": 12.260027263374486,
+        "p90": 13.417777777777777,
+        "max": 13.456296296296296
+      },
+      "items_per_core": {
+        "n": 1440,
+        "min": 6,
+        "median": 6.0,
+        "mean": 6.4,
+        "p90": 7,
+        "max": 7
+      }
+    },
+    {
+      "batch": 16,
+      "padding": "skip",
+      "profiled": 1,
+      "kind": "recurrence",
+      "risc": "TRISC_1",
+      "zone": "GDN_RESIDENT_OUTPUT_AND_DEST_WAIT",
+      "core_total_us": {
+        "n": 1440,
+        "min": 0.08814814814814814,
+        "median": 0.09555555555555556,
+        "mean": 0.09908384773662551,
+        "p90": 0.10962962962962963,
+        "max": 0.1274074074074074
+      },
+      "items_per_core": {
+        "n": 1440,
+        "min": 6,
+        "median": 6.0,
+        "mean": 6.4,
+        "p90": 7,
+        "max": 7
+      }
+    },
+    {
+      "batch": 16,
+      "padding": "skip",
+      "profiled": 1,
+      "kind": "recurrence",
+      "risc": "TRISC_1",
+      "zone": "GDN_RESIDENT_PACK",
+      "core_total_us": {
+        "n": 1440,
+        "min": 0.08444444444444445,
+        "median": 0.08962962962962963,
+        "mean": 0.09415689300411523,
+        "p90": 0.1037037037037037,
+        "max": 0.11555555555555555
+      },
+      "items_per_core": {
+        "n": 1440,
+        "min": 6,
+        "median": 6.0,
+        "mean": 6.4,
+        "p90": 7,
+        "max": 7
+      }
+    },
+    {
+      "batch": 16,
+      "padding": "skip",
+      "profiled": 1,
+      "kind": "recurrence",
+      "risc": "TRISC_1",
+      "zone": "GDN_RESIDENT_STATE_UPDATE",
+      "core_total_us": {
+        "n": 1440,
+        "min": 12.51037037037037,
+        "median": 12.566666666666666,
+        "mean": 13.381258744855968,
+        "p90": 14.654074074074074,
+        "max": 14.692592592592593
+      },
+      "items_per_core": {
+        "n": 1440,
+        "min": 6,
+        "median": 6.0,
+        "mean": 6.4,
+        "p90": 7,
+        "max": 7
+      }
+    },
+    {
+      "batch": 16,
+      "padding": "skip",
+      "profiled": 1,
+      "kind": "recurrence",
+      "risc": "TRISC_1",
+      "zone": "TRISC-KERNEL",
+      "core_total_us": {
+        "n": 1440,
+        "min": 58.297037037037036,
+        "median": 64.83888888888889,
+        "mean": 66.90141255144033,
+        "p90": 75.25925925925925,
+        "max": 80.29407407407408
+      },
+      "items_per_core": {
+        "n": 1440,
+        "min": 1,
+        "median": 1.0,
+        "mean": 1,
+        "p90": 1,
+        "max": 1
+      }
+    },
+    {
+      "batch": 16,
+      "padding": "skip",
+      "profiled": 1,
+      "kind": "recurrence",
+      "risc": "TRISC_2",
+      "zone": "GDN_RESIDENT_DELTA",
+      "core_total_us": {
+        "n": 1440,
+        "min": 0.08666666666666667,
+        "median": 0.09259259259259259,
+        "mean": 0.09778960905349794,
+        "p90": 0.10814814814814815,
+        "max": 0.11555555555555555
+      },
+      "items_per_core": {
+        "n": 1440,
+        "min": 6,
+        "median": 6.0,
+        "mean": 6.4,
+        "p90": 7,
+        "max": 7
+      }
+    },
+    {
+      "batch": 16,
+      "padding": "skip",
+      "profiled": 1,
+      "kind": "recurrence",
+      "risc": "TRISC_2",
+      "zone": "GDN_RESIDENT_INPUT_WAIT",
+      "core_total_us": {
+        "n": 1440,
+        "min": 0.08148148148148149,
+        "median": 0.0962962962962963,
+        "mean": 0.09759825102880658,
+        "p90": 0.1111111111111111,
+        "max": 0.12666666666666668
+      },
+      "items_per_core": {
+        "n": 1440,
+        "min": 6,
+        "median": 6.0,
+        "mean": 6.4,
+        "p90": 7,
+        "max": 7
+      }
+    },
+    {
+      "batch": 16,
+      "padding": "skip",
+      "profiled": 1,
+      "kind": "recurrence",
+      "risc": "TRISC_2",
+      "zone": "GDN_RESIDENT_OUTPUT",
+      "core_total_us": {
+        "n": 1440,
+        "min": 0.08666666666666667,
+        "median": 0.09111111111111111,
+        "mean": 0.09606327160493827,
+        "p90": 0.10518518518518519,
+        "max": 0.11925925925925926
+      },
+      "items_per_core": {
+        "n": 1440,
+        "min": 6,
+        "median": 6.0,
+        "mean": 6.4,
+        "p90": 7,
+        "max": 7
+      }
+    },
+    {
+      "batch": 16,
+      "padding": "skip",
+      "profiled": 1,
+      "kind": "recurrence",
+      "risc": "TRISC_2",
+      "zone": "GDN_RESIDENT_OUTPUT_AND_DEST_WAIT",
+      "core_total_us": {
+        "n": 1440,
+        "min": 4.842222222222222,
+        "median": 12.855555555555556,
+        "mean": 15.025271604938272,
+        "p90": 27.519259259259258,
+        "max": 40.85777777777778
+      },
+      "items_per_core": {
+        "n": 1440,
+        "min": 6,
+        "median": 6.0,
+        "mean": 6.4,
+        "p90": 7,
+        "max": 7
+      }
+    },
+    {
+      "batch": 16,
+      "padding": "skip",
+      "profiled": 1,
+      "kind": "recurrence",
+      "risc": "TRISC_2",
+      "zone": "GDN_RESIDENT_PACK",
+      "core_total_us": {
+        "n": 1440,
+        "min": 23.057777777777776,
+        "median": 51.751111111111115,
+        "mean": 50.69693981481481,
+        "p90": 63.07555555555555,
+        "max": 70.86444444444444
+      },
+      "items_per_core": {
+        "n": 1440,
+        "min": 6,
+        "median": 6.0,
+        "mean": 6.4,
+        "p90": 7,
+        "max": 7
+      }
+    },
+    {
+      "batch": 16,
+      "padding": "skip",
+      "profiled": 1,
+      "kind": "recurrence",
+      "risc": "TRISC_2",
+      "zone": "GDN_RESIDENT_STATE_UPDATE",
+      "core_total_us": {
+        "n": 1440,
+        "min": 0.08296296296296296,
+        "median": 0.08592592592592592,
+        "mean": 0.09096759259259259,
+        "p90": 0.1,
+        "max": 0.11185185185185186
+      },
+      "items_per_core": {
+        "n": 1440,
+        "min": 6,
+        "median": 6.0,
+        "mean": 6.4,
+        "p90": 7,
+        "max": 7
+      }
+    },
+    {
+      "batch": 16,
+      "padding": "skip",
+      "profiled": 1,
+      "kind": "recurrence",
+      "risc": "TRISC_2",
+      "zone": "TRISC-KERNEL",
+      "core_total_us": {
+        "n": 1440,
+        "min": 58.37925925925926,
+        "median": 64.96185185185186,
+        "mean": 66.99418261316872,
+        "p90": 75.34296296296296,
+        "max": 80.30518518518518
+      },
+      "items_per_core": {
+        "n": 1440,
+        "min": 1,
+        "median": 1.0,
+        "mean": 1,
+        "p90": 1,
+        "max": 1
+      }
+    },
+    {
+      "batch": 16,
+      "padding": "zero",
+      "profiled": 0,
+      "kind": "epilogue",
+      "risc": "BRISC",
+      "zone": "BRISC-KERNEL",
+      "core_total_us": {
+        "n": 1440,
+        "min": 42.44222222222222,
+        "median": 54.68592592592593,
+        "mean": 51.03030144032922,
+        "p90": 55.77111111111111,
+        "max": 58.557037037037034
+      },
+      "items_per_core": {
+        "n": 1440,
+        "min": 1,
+        "median": 1.0,
+        "mean": 1,
+        "p90": 1,
+        "max": 1
+      }
+    },
+    {
+      "batch": 16,
+      "padding": "zero",
+      "profiled": 0,
+      "kind": "epilogue",
+      "risc": "NCRISC",
+      "zone": "NCRISC-KERNEL",
+      "core_total_us": {
+        "n": 1440,
+        "min": 31.51851851851852,
+        "median": 36.52962962962963,
+        "mean": 35.50332561728395,
+        "p90": 37.34740740740741,
+        "max": 37.56666666666667
+      },
+      "items_per_core": {
+        "n": 1440,
+        "min": 1,
+        "median": 1.0,
+        "mean": 1,
+        "p90": 1,
+        "max": 1
+      }
+    },
+    {
+      "batch": 16,
+      "padding": "zero",
+      "profiled": 0,
+      "kind": "epilogue",
+      "risc": "TRISC_0",
+      "zone": "TRISC-KERNEL",
+      "core_total_us": {
+        "n": 1440,
+        "min": 41.14,
+        "median": 53.33888888888889,
+        "mean": 49.44760390946502,
+        "p90": 54.17703703703704,
+        "max": 54.47555555555556
+      },
+      "items_per_core": {
+        "n": 1440,
+        "min": 1,
+        "median": 1.0,
+        "mean": 1,
+        "p90": 1,
+        "max": 1
+      }
+    },
+    {
+      "batch": 16,
+      "padding": "zero",
+      "profiled": 0,
+      "kind": "epilogue",
+      "risc": "TRISC_1",
+      "zone": "TRISC-KERNEL",
+      "core_total_us": {
+        "n": 1440,
+        "min": 41.99111111111111,
+        "median": 54.22814814814815,
+        "mean": 50.37499485596708,
+        "p90": 55.111111111111114,
+        "max": 55.394814814814815
+      },
+      "items_per_core": {
+        "n": 1440,
+        "min": 1,
+        "median": 1.0,
+        "mean": 1,
+        "p90": 1,
+        "max": 1
+      }
+    },
+    {
+      "batch": 16,
+      "padding": "zero",
+      "profiled": 0,
+      "kind": "epilogue",
+      "risc": "TRISC_2",
+      "zone": "TRISC-KERNEL",
+      "core_total_us": {
+        "n": 1440,
+        "min": 41.37777777777778,
+        "median": 53.60925925925926,
+        "mean": 49.709607510288066,
+        "p90": 54.44518518518519,
+        "max": 54.74148148148148
+      },
+      "items_per_core": {
+        "n": 1440,
+        "min": 1,
+        "median": 1.0,
+        "mean": 1,
+        "p90": 1,
+        "max": 1
+      }
+    },
+    {
+      "batch": 16,
+      "padding": "zero",
+      "profiled": 0,
+      "kind": "recurrence",
+      "risc": "BRISC",
+      "zone": "BRISC-KERNEL",
+      "core_total_us": {
+        "n": 1440,
+        "min": 58.09407407407407,
+        "median": 65.26444444444445,
+        "mean": 67.12706430041152,
+        "p90": 75.56296296296296,
+        "max": 84.61259259259259
+      },
+      "items_per_core": {
+        "n": 1440,
+        "min": 1,
+        "median": 1.0,
+        "mean": 1,
+        "p90": 1,
+        "max": 1
+      }
+    },
+    {
+      "batch": 16,
+      "padding": "zero",
+      "profiled": 0,
+      "kind": "recurrence",
+      "risc": "NCRISC",
+      "zone": "NCRISC-KERNEL",
+      "core_total_us": {
+        "n": 1440,
+        "min": 46.473333333333336,
+        "median": 55.367037037037036,
+        "mean": 56.293033950617286,
+        "p90": 63.412592592592596,
+        "max": 72.19185185185185
+      },
+      "items_per_core": {
+        "n": 1440,
+        "min": 1,
+        "median": 1.0,
+        "mean": 1,
+        "p90": 1,
+        "max": 1
+      }
+    },
+    {
+      "batch": 16,
+      "padding": "zero",
+      "profiled": 0,
+      "kind": "recurrence",
+      "risc": "TRISC_0",
+      "zone": "TRISC-KERNEL",
+      "core_total_us": {
+        "n": 1440,
+        "min": 56.56296296296296,
+        "median": 63.50592592592593,
+        "mean": 65.5088091563786,
+        "p90": 74.03851851851852,
+        "max": 83.16814814814815
+      },
+      "items_per_core": {
+        "n": 1440,
+        "min": 1,
+        "median": 1.0,
+        "mean": 1,
+        "p90": 1,
+        "max": 1
+      }
+    },
+    {
+      "batch": 16,
+      "padding": "zero",
+      "profiled": 0,
+      "kind": "recurrence",
+      "risc": "TRISC_1",
+      "zone": "TRISC-KERNEL",
+      "core_total_us": {
+        "n": 1440,
+        "min": 57.077777777777776,
+        "median": 64.02666666666667,
+        "mean": 66.01565534979424,
+        "p90": 74.55407407407408,
+        "max": 83.66222222222223
+      },
+      "items_per_core": {
+        "n": 1440,
+        "min": 1,
+        "median": 1.0,
+        "mean": 1,
+        "p90": 1,
+        "max": 1
+      }
+    },
+    {
+      "batch": 16,
+      "padding": "zero",
+      "profiled": 0,
+      "kind": "recurrence",
+      "risc": "TRISC_2",
+      "zone": "TRISC-KERNEL",
+      "core_total_us": {
+        "n": 1440,
+        "min": 57.18222222222222,
+        "median": 64.11666666666667,
+        "mean": 66.11785288065843,
+        "p90": 74.63555555555556,
+        "max": 83.74
+      },
+      "items_per_core": {
+        "n": 1440,
+        "min": 1,
+        "median": 1.0,
+        "mean": 1,
+        "p90": 1,
+        "max": 1
+      }
+    },
+    {
+      "batch": 16,
+      "padding": "zero",
+      "profiled": 1,
+      "kind": "epilogue",
+      "risc": "BRISC",
+      "zone": "BRISC-KERNEL",
+      "core_total_us": {
+        "n": 1440,
+        "min": 42.952592592592595,
+        "median": 55.35740740740741,
+        "mean": 51.623933641975306,
+        "p90": 56.513333333333335,
+        "max": 59.30888888888889
+      },
+      "items_per_core": {
+        "n": 1440,
+        "min": 1,
+        "median": 1.0,
+        "mean": 1,
+        "p90": 1,
+        "max": 1
+      }
+    },
+    {
+      "batch": 16,
+      "padding": "zero",
+      "profiled": 1,
+      "kind": "epilogue",
+      "risc": "BRISC",
+      "zone": "GDN_EP_WRITER_DMA",
+      "core_total_us": {
+        "n": 1440,
+        "min": 0.4318518518518519,
+        "median": 0.9777777777777777,
+        "mean": 1.051204732510288,
+        "p90": 0.9992592592592593,
+        "max": 3.8177777777777777
+      },
+      "items_per_core": {
+        "n": 1440,
+        "min": 1,
+        "median": 2.0,
+        "mean": 1.6,
+        "p90": 2,
+        "max": 2
+      }
+    },
+    {
+      "batch": 16,
+      "padding": "zero",
+      "profiled": 1,
+      "kind": "epilogue",
+      "risc": "BRISC",
+      "zone": "GDN_EP_WRITER_WAIT",
+      "core_total_us": {
+        "n": 1440,
+        "min": 42.315555555555555,
+        "median": 54.15888888888889,
+        "mean": 50.378844650205764,
+        "p90": 55.01111111111111,
+        "max": 55.29037037037037
+      },
+      "items_per_core": {
+        "n": 1440,
+        "min": 1,
+        "median": 2.0,
+        "mean": 1.6,
+        "p90": 2,
+        "max": 2
+      }
+    },
+    {
+      "batch": 16,
+      "padding": "zero",
+      "profiled": 1,
+      "kind": "epilogue",
+      "risc": "NCRISC",
+      "zone": "GDN_EP_READER_CB_RESERVE",
+      "core_total_us": {
+        "n": 1440,
+        "min": 0.05407407407407407,
+        "median": 0.10740740740740741,
+        "mean": 0.08606635802469136,
+        "p90": 0.10740740740740741,
+        "max": 0.10888888888888888
+      },
+      "items_per_core": {
+        "n": 1440,
+        "min": 1,
+        "median": 2.0,
+        "mean": 1.6,
+        "p90": 2,
+        "max": 2
+      }
+    },
+    {
+      "batch": 16,
+      "padding": "zero",
+      "profiled": 1,
+      "kind": "epilogue",
+      "risc": "NCRISC",
+      "zone": "GDN_EP_READER_DMA",
+      "core_total_us": {
+        "n": 1440,
+        "min": 0.44,
+        "median": 0.9718518518518519,
+        "mean": 0.8592453703703704,
+        "p90": 1.097037037037037,
+        "max": 1.1244444444444444
+      },
+      "items_per_core": {
+        "n": 1440,
+        "min": 1,
+        "median": 2.0,
+        "mean": 1.6,
+        "p90": 2,
+        "max": 2
+      }
+    },
+    {
+      "batch": 16,
+      "padding": "zero",
+      "profiled": 1,
+      "kind": "epilogue",
+      "risc": "NCRISC",
+      "zone": "GDN_EP_READER_FORMAT",
+      "core_total_us": {
+        "n": 1440,
+        "min": 2.542222222222222,
+        "median": 5.119259259259259,
+        "mean": 4.0933945473251026,
+        "p90": 5.127407407407407,
+        "max": 5.134814814814815
+      },
+      "items_per_core": {
+        "n": 1440,
+        "min": 1,
+        "median": 2.0,
+        "mean": 1.6,
+        "p90": 2,
+        "max": 2
+      }
+    },
+    {
+      "batch": 16,
+      "padding": "zero",
+      "profiled": 1,
+      "kind": "epilogue",
+      "risc": "NCRISC",
+      "zone": "GDN_EP_READER_PADDING",
+      "core_total_us": {
+        "n": 1440,
+        "min": 27.343703703703703,
+        "median": 27.344444444444445,
+        "mean": 27.345044238683126,
+        "p90": 27.346666666666668,
+        "max": 27.347407407407406
+      },
+      "items_per_core": {
+        "n": 1440,
+        "min": 1,
+        "median": 1.0,
+        "mean": 1,
+        "p90": 1,
+        "max": 1
+      }
+    },
+    {
+      "batch": 16,
+      "padding": "zero",
+      "profiled": 1,
+      "kind": "epilogue",
+      "risc": "NCRISC",
+      "zone": "GDN_EP_READER_WEIGHT",
+      "core_total_us": {
+        "n": 1440,
+        "min": 0.642962962962963,
+        "median": 2.7911111111111113,
+        "mean": 2.6062515432098765,
+        "p90": 3.2133333333333334,
+        "max": 3.391111111111111
+      },
+      "items_per_core": {
+        "n": 1440,
+        "min": 1,
+        "median": 1.0,
+        "mean": 1,
+        "p90": 1,
+        "max": 1
+      }
+    },
+    {
+      "batch": 16,
+      "padding": "zero",
+      "profiled": 1,
+      "kind": "epilogue",
+      "risc": "NCRISC",
+      "zone": "NCRISC-KERNEL",
+      "core_total_us": {
+        "n": 1440,
+        "min": 31.894814814814815,
+        "median": 36.88666666666666,
+        "mean": 35.8027237654321,
+        "p90": 37.72222222222222,
+        "max": 37.9
+      },
+      "items_per_core": {
+        "n": 1440,
+        "min": 1,
+        "median": 1.0,
+        "mean": 1,
+        "p90": 1,
+        "max": 1
+      }
+    },
+    {
+      "batch": 16,
+      "padding": "zero",
+      "profiled": 1,
+      "kind": "epilogue",
+      "risc": "TRISC_0",
+      "zone": "GDN_EP_INPUT_WAIT",
+      "core_total_us": {
+        "n": 1440,
+        "min": 30.44074074074074,
+        "median": 30.577037037037037,
+        "mean": 30.574824588477366,
+        "p90": 30.61037037037037,
+        "max": 30.626666666666665
+      },
+      "items_per_core": {
+        "n": 1440,
+        "min": 1,
+        "median": 2.0,
+        "mean": 1.6,
+        "p90": 2,
+        "max": 2
+      }
+    },
+    {
+      "batch": 16,
+      "padding": "zero",
+      "profiled": 1,
+      "kind": "epilogue",
+      "risc": "TRISC_0",
+      "zone": "GDN_EP_MEAN_SQUARE",
+      "core_total_us": {
+        "n": 1440,
+        "min": 0.7703703703703704,
+        "median": 2.3296296296296295,
+        "mean": 1.7190725308641974,
+        "p90": 2.36,
+        "max": 2.388888888888889
+      },
+      "items_per_core": {
+        "n": 1440,
+        "min": 1,
+        "median": 2.0,
+        "mean": 1.6,
+        "p90": 2,
+        "max": 2
+      }
+    },
+    {
+      "batch": 16,
+      "padding": "zero",
+      "profiled": 1,
+      "kind": "epilogue",
+      "risc": "TRISC_0",
+      "zone": "GDN_EP_NORMALIZE",
+      "core_total_us": {
+        "n": 1440,
+        "min": 1.2392592592592593,
+        "median": 2.5103703703703704,
+        "mean": 2.029082818930041,
+        "p90": 2.557777777777778,
+        "max": 2.6133333333333333
+      },
+      "items_per_core": {
+        "n": 1440,
+        "min": 1,
+        "median": 2.0,
+        "mean": 1.6,
+        "p90": 2,
+        "max": 2
+      }
+    },
+    {
+      "batch": 16,
+      "padding": "zero",
+      "profiled": 1,
+      "kind": "epilogue",
+      "risc": "TRISC_0",
+      "zone": "GDN_EP_OUTPUT",
+      "core_total_us": {
+        "n": 1440,
+        "min": 1.4022222222222223,
+        "median": 2.8555555555555556,
+        "mean": 2.2886918724279837,
+        "p90": 2.8666666666666667,
+        "max": 2.8733333333333335
+      },
+      "items_per_core": {
+        "n": 1440,
+        "min": 1,
+        "median": 2.0,
+        "mean": 1.6,
+        "p90": 2,
+        "max": 2
+      }
+    },
+    {
+      "batch": 16,
+      "padding": "zero",
+      "profiled": 1,
+      "kind": "epilogue",
+      "risc": "TRISC_0",
+      "zone": "GDN_EP_WEIGHT_AND_GATE",
+      "core_total_us": {
+        "n": 1440,
+        "min": 6.163703703703704,
+        "median": 12.324444444444444,
+        "mean": 9.8965920781893,
+        "p90": 12.42,
+        "max": 12.442962962962962
+      },
+      "items_per_core": {
+        "n": 1440,
+        "min": 1,
+        "median": 2.0,
+        "mean": 1.6,
+        "p90": 2,
+        "max": 2
+      }
+    },
+    {
+      "batch": 16,
+      "padding": "zero",
+      "profiled": 1,
+      "kind": "epilogue",
+      "risc": "TRISC_0",
+      "zone": "TRISC-KERNEL",
+      "core_total_us": {
+        "n": 1440,
+        "min": 41.57555555555555,
+        "median": 53.98851851851852,
+        "mean": 49.994375,
+        "p90": 54.84518518518519,
+        "max": 55.16814814814815
+      },
+      "items_per_core": {
+        "n": 1440,
+        "min": 1,
+        "median": 1.0,
+        "mean": 1,
+        "p90": 1,
+        "max": 1
+      }
+    },
+    {
+      "batch": 16,
+      "padding": "zero",
+      "profiled": 1,
+      "kind": "epilogue",
+      "risc": "TRISC_1",
+      "zone": "GDN_EP_INPUT_WAIT",
+      "core_total_us": {
+        "n": 1440,
+        "min": 0.013333333333333334,
+        "median": 0.02666666666666667,
+        "mean": 0.022497427983539094,
+        "p90": 0.028888888888888888,
+        "max": 0.03925925925925926
+      },
+      "items_per_core": {
+        "n": 1440,
+        "min": 1,
+        "median": 2.0,
+        "mean": 1.6,
+        "p90": 2,
+        "max": 2
+      }
+    },
+    {
+      "batch": 16,
+      "padding": "zero",
+      "profiled": 1,
+      "kind": "epilogue",
+      "risc": "TRISC_1",
+      "zone": "GDN_EP_MEAN_SQUARE",
+      "core_total_us": {
+        "n": 1440,
+        "min": 32.196296296296296,
+        "median": 34.66185185185185,
+        "mean": 34.465760802469134,
+        "p90": 35.24814814814815,
+        "max": 35.42888888888889
+      },
+      "items_per_core": {
+        "n": 1440,
+        "min": 1,
+        "median": 2.0,
+        "mean": 1.6,
+        "p90": 2,
+        "max": 2
+      }
+    },
+    {
+      "batch": 16,
+      "padding": "zero",
+      "profiled": 1,
+      "kind": "epilogue",
+      "risc": "TRISC_1",
+      "zone": "GDN_EP_NORMALIZE",
+      "core_total_us": {
+        "n": 1440,
+        "min": 1.3162962962962963,
+        "median": 2.64962962962963,
+        "mean": 2.1428652263374484,
+        "p90": 2.7014814814814816,
+        "max": 2.7474074074074073
+      },
+      "items_per_core": {
+        "n": 1440,
+        "min": 1,
+        "median": 2.0,
+        "mean": 1.6,
+        "p90": 2,
+        "max": 2
+      }
+    },
+    {
+      "batch": 16,
+      "padding": "zero",
+      "profiled": 1,
+      "kind": "epilogue",
+      "risc": "TRISC_1",
+      "zone": "GDN_EP_OUTPUT",
+      "core_total_us": {
+        "n": 1440,
+        "min": 2.471111111111111,
+        "median": 4.991851851851852,
+        "mean": 3.9994871399176954,
+        "p90": 5.00962962962963,
+        "max": 5.022222222222222
+      },
+      "items_per_core": {
+        "n": 1440,
+        "min": 1,
+        "median": 2.0,
+        "mean": 1.6,
+        "p90": 2,
+        "max": 2
+      }
+    },
+    {
+      "batch": 16,
+      "padding": "zero",
+      "profiled": 1,
+      "kind": "epilogue",
+      "risc": "TRISC_1",
+      "zone": "GDN_EP_WEIGHT_AND_GATE",
+      "core_total_us": {
+        "n": 1440,
+        "min": 6.199259259259259,
+        "median": 12.411851851851852,
+        "mean": 9.967651748971193,
+        "p90": 12.512592592592593,
+        "max": 12.545185185185185
+      },
+      "items_per_core": {
+        "n": 1440,
+        "min": 1,
+        "median": 2.0,
+        "mean": 1.6,
+        "p90": 2,
+        "max": 2
+      }
+    },
+    {
+      "batch": 16,
+      "padding": "zero",
+      "profiled": 1,
+      "kind": "epilogue",
+      "risc": "TRISC_1",
+      "zone": "TRISC-KERNEL",
+      "core_total_us": {
+        "n": 1440,
+        "min": 42.51111111111111,
+        "median": 54.91259259259259,
+        "mean": 50.922876543209874,
+        "p90": 55.78296296296296,
+        "max": 56.09703703703704
+      },
+      "items_per_core": {
+        "n": 1440,
+        "min": 1,
+        "median": 1.0,
+        "mean": 1,
+        "p90": 1,
+        "max": 1
+      }
+    },
+    {
+      "batch": 16,
+      "padding": "zero",
+      "profiled": 1,
+      "kind": "epilogue",
+      "risc": "TRISC_2",
+      "zone": "GDN_EP_INPUT_WAIT",
+      "core_total_us": {
+        "n": 1440,
+        "min": 0.014074074074074074,
+        "median": 0.028148148148148148,
+        "mean": 0.024731995884773664,
+        "p90": 0.03333333333333333,
+        "max": 0.03777777777777778
+      },
+      "items_per_core": {
+        "n": 1440,
+        "min": 1,
+        "median": 2.0,
+        "mean": 1.6,
+        "p90": 2,
+        "max": 2
+      }
+    },
+    {
+      "batch": 16,
+      "padding": "zero",
+      "profiled": 1,
+      "kind": "epilogue",
+      "risc": "TRISC_2",
+      "zone": "GDN_EP_MEAN_SQUARE",
+      "core_total_us": {
+        "n": 1440,
+        "min": 32.174814814814816,
+        "median": 34.973703703703706,
+        "mean": 34.78293621399177,
+        "p90": 35.828148148148145,
+        "max": 36.03037037037037
+      },
+      "items_per_core": {
+        "n": 1440,
+        "min": 1,
+        "median": 2.0,
+        "mean": 1.6,
+        "p90": 2,
+        "max": 2
+      }
+    },
+    {
+      "batch": 16,
+      "padding": "zero",
+      "profiled": 1,
+      "kind": "epilogue",
+      "risc": "TRISC_2",
+      "zone": "GDN_EP_NORMALIZE",
+      "core_total_us": {
+        "n": 1440,
+        "min": 1.3014814814814815,
+        "median": 2.6437037037037037,
+        "mean": 2.1310293209876545,
+        "p90": 2.68,
+        "max": 2.711851851851852
+      },
+      "items_per_core": {
+        "n": 1440,
+        "min": 1,
+        "median": 2.0,
+        "mean": 1.6,
+        "p90": 2,
+        "max": 2
+      }
+    },
+    {
+      "batch": 16,
+      "padding": "zero",
+      "profiled": 1,
+      "kind": "epilogue",
+      "risc": "TRISC_2",
+      "zone": "GDN_EP_OUTPUT",
+      "core_total_us": {
+        "n": 1440,
+        "min": 1.8074074074074074,
+        "median": 3.6614814814814816,
+        "mean": 2.93201646090535,
+        "p90": 3.6733333333333333,
+        "max": 3.680740740740741
+      },
+      "items_per_core": {
+        "n": 1440,
+        "min": 1,
+        "median": 2.0,
+        "mean": 1.6,
+        "p90": 2,
+        "max": 2
+      }
+    },
+    {
+      "batch": 16,
+      "padding": "zero",
+      "profiled": 1,
+      "kind": "epilogue",
+      "risc": "TRISC_2",
+      "zone": "GDN_EP_WEIGHT_AND_GATE",
+      "core_total_us": {
+        "n": 1440,
+        "min": 6.220740740740741,
+        "median": 12.451851851851853,
+        "mean": 10.004979938271605,
+        "p90": 12.566666666666666,
+        "max": 12.6
+      },
+      "items_per_core": {
+        "n": 1440,
+        "min": 1,
+        "median": 2.0,
+        "mean": 1.6,
+        "p90": 2,
+        "max": 2
+      }
+    },
+    {
+      "batch": 16,
+      "padding": "zero",
+      "profiled": 1,
+      "kind": "epilogue",
+      "risc": "TRISC_2",
+      "zone": "TRISC-KERNEL",
+      "core_total_us": {
+        "n": 1440,
+        "min": 41.846666666666664,
+        "median": 54.25814814814815,
+        "mean": 50.26529989711934,
+        "p90": 55.12,
+        "max": 55.41777777777778
+      },
+      "items_per_core": {
+        "n": 1440,
+        "min": 1,
+        "median": 1.0,
+        "mean": 1,
+        "p90": 1,
+        "max": 1
+      }
+    },
+    {
+      "batch": 16,
+      "padding": "zero",
+      "profiled": 1,
+      "kind": "recurrence",
+      "risc": "BRISC",
+      "zone": "BRISC-KERNEL",
+      "core_total_us": {
+        "n": 1440,
+        "min": 59.40518518518518,
+        "median": 65.81703703703704,
+        "mean": 68.03108127572017,
+        "p90": 76.36296296296297,
+        "max": 81.35259259259259
+      },
+      "items_per_core": {
+        "n": 1440,
+        "min": 1,
+        "median": 1.0,
+        "mean": 1,
+        "p90": 1,
+        "max": 1
+      }
+    },
+    {
+      "batch": 16,
+      "padding": "zero",
+      "profiled": 1,
+      "kind": "recurrence",
+      "risc": "BRISC",
+      "zone": "GDN_WRITER_DRAM_ISSUE_AND_OUTPUT_WAIT",
+      "core_total_us": {
+        "n": 1440,
+        "min": 1.1814814814814816,
+        "median": 3.705925925925926,
+        "mean": 5.803638374485597,
+        "p90": 13.834814814814814,
+        "max": 30.304444444444446
+      },
+      "items_per_core": {
+        "n": 1440,
+        "min": 6,
+        "median": 6.0,
+        "mean": 6.4,
+        "p90": 7,
+        "max": 7
+      }
+    },
+    {
+      "batch": 16,
+      "padding": "zero",
+      "profiled": 1,
+      "kind": "recurrence",
+      "risc": "BRISC",
+      "zone": "GDN_WRITER_OUTPUT_AND_BARRIER",
+      "core_total_us": {
+        "n": 1440,
+        "min": 4.319259259259259,
+        "median": 8.552962962962962,
+        "mean": 10.081853909465021,
+        "p90": 16.88962962962963,
+        "max": 33.10444444444445
+      },
+      "items_per_core": {
+        "n": 1440,
+        "min": 6,
+        "median": 6.0,
+        "mean": 6.4,
+        "p90": 7,
+        "max": 7
+      }
+    },
+    {
+      "batch": 16,
+      "padding": "zero",
+      "profiled": 1,
+      "kind": "recurrence",
+      "risc": "BRISC",
+      "zone": "GDN_WRITER_STATE_CB_WAIT",
+      "core_total_us": {
+        "n": 1440,
+        "min": 25.261481481481482,
+        "median": 52.56666666666666,
+        "mean": 51.360979938271605,
+        "p90": 63.74962962962963,
+        "max": 71.94074074074074
+      },
+      "items_per_core": {
+        "n": 1440,
+        "min": 6,
+        "median": 6.0,
+        "mean": 6.4,
+        "p90": 7,
+        "max": 7
+      }
+    },
+    {
+      "batch": 16,
+      "padding": "zero",
+      "profiled": 1,
+      "kind": "recurrence",
+      "risc": "NCRISC",
+      "zone": "GDN_READER_CB_RESERVE",
+      "core_total_us": {
+        "n": 1440,
+        "min": 0.7548148148148148,
+        "median": 2.761111111111111,
+        "mean": 3.7728024691358026,
+        "p90": 7.542962962962963,
+        "max": 21.576296296296295
+      },
+      "items_per_core": {
+        "n": 1440,
+        "min": 6,
+        "median": 6.0,
+        "mean": 6.4,
+        "p90": 7,
+        "max": 7
+      }
+    },
+    {
+      "batch": 16,
+      "padding": "zero",
+      "profiled": 1,
+      "kind": "recurrence",
+      "risc": "NCRISC",
+      "zone": "GDN_READER_DRAM_ISSUE_AND_WAIT",
+      "core_total_us": {
+        "n": 1440,
+        "min": 6.500740740740741,
+        "median": 19.738888888888887,
+        "mean": 18.907498456790123,
+        "p90": 24.714074074074073,
+        "max": 28.08888888888889
+      },
+      "items_per_core": {
+        "n": 1440,
+        "min": 6,
+        "median": 6.0,
+        "mean": 6.4,
+        "p90": 7,
+        "max": 7
+      }
+    },
+    {
+      "batch": 16,
+      "padding": "zero",
+      "profiled": 1,
+      "kind": "recurrence",
+      "risc": "NCRISC",
+      "zone": "GDN_READER_L1_PREPARE",
+      "core_total_us": {
+        "n": 1440,
+        "min": 30.83851851851852,
+        "median": 30.95259259259259,
+        "mean": 32.9779279835391,
+        "p90": 36.09111111111111,
+        "max": 36.18
+      },
+      "items_per_core": {
+        "n": 1440,
+        "min": 6,
+        "median": 6.0,
+        "mean": 6.4,
+        "p90": 7,
+        "max": 7
+      }
+    },
+    {
+      "batch": 16,
+      "padding": "zero",
+      "profiled": 1,
+      "kind": "recurrence",
+      "risc": "NCRISC",
+      "zone": "NCRISC-KERNEL",
+      "core_total_us": {
+        "n": 1440,
+        "min": 47.7837037037037,
+        "median": 55.64851851851852,
+        "mean": 56.89899948559671,
+        "p90": 64.08814814814815,
+        "max": 68.77555555555556
+      },
+      "items_per_core": {
+        "n": 1440,
+        "min": 1,
+        "median": 1.0,
+        "mean": 1,
+        "p90": 1,
+        "max": 1
+      }
+    },
+    {
+      "batch": 16,
+      "padding": "zero",
+      "profiled": 1,
+      "kind": "recurrence",
+      "risc": "TRISC_0",
+      "zone": "GDN_RESIDENT_DELTA",
+      "core_total_us": {
+        "n": 1440,
+        "min": 25.37851851851852,
+        "median": 26.926296296296297,
+        "mean": 28.249347736625513,
+        "p90": 30.847407407407406,
+        "max": 45.09851851851852
+      },
+      "items_per_core": {
+        "n": 1440,
+        "min": 6,
+        "median": 6.0,
+        "mean": 6.4,
+        "p90": 7,
+        "max": 7
+      }
+    },
+    {
+      "batch": 16,
+      "padding": "zero",
+      "profiled": 1,
+      "kind": "recurrence",
+      "risc": "TRISC_0",
+      "zone": "GDN_RESIDENT_INPUT_WAIT",
+      "core_total_us": {
+        "n": 1440,
+        "min": 6.627407407407407,
+        "median": 12.116296296296296,
+        "mean": 12.106024176954733,
+        "p90": 16.032592592592593,
+        "max": 20.968888888888888
+      },
+      "items_per_core": {
+        "n": 1440,
+        "min": 6,
+        "median": 6.0,
+        "mean": 6.4,
+        "p90": 7,
+        "max": 7
+      }
+    },
+    {
+      "batch": 16,
+      "padding": "zero",
+      "profiled": 1,
+      "kind": "recurrence",
+      "risc": "TRISC_0",
+      "zone": "GDN_RESIDENT_OUTPUT",
+      "core_total_us": {
+        "n": 1440,
+        "min": 10.882962962962964,
+        "median": 10.968518518518518,
+        "mean": 11.68334670781893,
+        "p90": 12.787407407407407,
+        "max": 12.81925925925926
+      },
+      "items_per_core": {
+        "n": 1440,
+        "min": 6,
+        "median": 6.0,
+        "mean": 6.4,
+        "p90": 7,
+        "max": 7
+      }
+    },
+    {
+      "batch": 16,
+      "padding": "zero",
+      "profiled": 1,
+      "kind": "recurrence",
+      "risc": "TRISC_0",
+      "zone": "GDN_RESIDENT_OUTPUT_AND_DEST_WAIT",
+      "core_total_us": {
+        "n": 1440,
+        "min": 0.08148148148148149,
+        "median": 0.09259259259259259,
+        "mean": 0.09461316872427984,
+        "p90": 0.10518518518518519,
+        "max": 0.11925925925925926
+      },
+      "items_per_core": {
+        "n": 1440,
+        "min": 6,
+        "median": 6.0,
+        "mean": 6.4,
+        "p90": 7,
+        "max": 7
+      }
+    },
+    {
+      "batch": 16,
+      "padding": "zero",
+      "profiled": 1,
+      "kind": "recurrence",
+      "risc": "TRISC_0",
+      "zone": "GDN_RESIDENT_PACK",
+      "core_total_us": {
+        "n": 1440,
+        "min": 0.08,
+        "median": 0.08592592592592592,
+        "mean": 0.0886954732510288,
+        "p90": 0.09777777777777778,
+        "max": 0.10592592592592592
+      },
+      "items_per_core": {
+        "n": 1440,
+        "min": 6,
+        "median": 6.0,
+        "mean": 6.4,
+        "p90": 7,
+        "max": 7
+      }
+    },
+    {
+      "batch": 16,
+      "padding": "zero",
+      "profiled": 1,
+      "kind": "recurrence",
+      "risc": "TRISC_0",
+      "zone": "GDN_RESIDENT_STATE_UPDATE",
+      "core_total_us": {
+        "n": 1440,
+        "min": 11.28962962962963,
+        "median": 11.367407407407407,
+        "mean": 12.110794238683127,
+        "p90": 13.266666666666667,
+        "max": 13.311111111111112
+      },
+      "items_per_core": {
+        "n": 1440,
+        "min": 6,
+        "median": 6.0,
+        "mean": 6.4,
+        "p90": 7,
+        "max": 7
+      }
+    },
+    {
+      "batch": 16,
+      "padding": "zero",
+      "profiled": 1,
+      "kind": "recurrence",
+      "risc": "TRISC_0",
+      "zone": "TRISC-KERNEL",
+      "core_total_us": {
+        "n": 1440,
+        "min": 57.9,
+        "median": 64.0874074074074,
+        "mean": 66.38884310699588,
+        "p90": 74.82,
+        "max": 79.83111111111111
+      },
+      "items_per_core": {
+        "n": 1440,
+        "min": 1,
+        "median": 1.0,
+        "mean": 1,
+        "p90": 1,
+        "max": 1
+      }
+    },
+    {
+      "batch": 16,
+      "padding": "zero",
+      "profiled": 1,
+      "kind": "recurrence",
+      "risc": "TRISC_1",
+      "zone": "GDN_RESIDENT_DELTA",
+      "core_total_us": {
+        "n": 1440,
+        "min": 33.05925925925926,
+        "median": 39.16074074074074,
+        "mean": 39.86849022633745,
+        "p90": 45.903703703703705,
+        "max": 53.507407407407406
+      },
+      "items_per_core": {
+        "n": 1440,
+        "min": 6,
+        "median": 6.0,
+        "mean": 6.4,
+        "p90": 7,
+        "max": 7
+      }
+    },
+    {
+      "batch": 16,
+      "padding": "zero",
+      "profiled": 1,
+      "kind": "recurrence",
+      "risc": "TRISC_1",
+      "zone": "GDN_RESIDENT_INPUT_WAIT",
+      "core_total_us": {
+        "n": 1440,
+        "min": 0.08518518518518518,
+        "median": 0.09037037037037036,
+        "mean": 0.09481172839506173,
+        "p90": 0.10444444444444445,
+        "max": 0.11407407407407408
+      },
+      "items_per_core": {
+        "n": 1440,
+        "min": 6,
+        "median": 6.0,
+        "mean": 6.4,
+        "p90": 7,
+        "max": 7
+      }
+    },
+    {
+      "batch": 16,
+      "padding": "zero",
+      "profiled": 1,
+      "kind": "recurrence",
+      "risc": "TRISC_1",
+      "zone": "GDN_RESIDENT_OUTPUT",
+      "core_total_us": {
+        "n": 1440,
+        "min": 11.473333333333333,
+        "median": 11.508148148148148,
+        "mean": 12.258719135802469,
+        "p90": 13.416296296296297,
+        "max": 13.44962962962963
+      },
+      "items_per_core": {
+        "n": 1440,
+        "min": 6,
+        "median": 6.0,
+        "mean": 6.4,
+        "p90": 7,
+        "max": 7
+      }
+    },
+    {
+      "batch": 16,
+      "padding": "zero",
+      "profiled": 1,
+      "kind": "recurrence",
+      "risc": "TRISC_1",
+      "zone": "GDN_RESIDENT_OUTPUT_AND_DEST_WAIT",
+      "core_total_us": {
+        "n": 1440,
+        "min": 0.0874074074074074,
+        "median": 0.09518518518518518,
+        "mean": 0.09868106995884773,
+        "p90": 0.10888888888888888,
+        "max": 0.1259259259259259
+      },
+      "items_per_core": {
+        "n": 1440,
+        "min": 6,
+        "median": 6.0,
+        "mean": 6.4,
+        "p90": 7,
+        "max": 7
+      }
+    },
+    {
+      "batch": 16,
+      "padding": "zero",
+      "profiled": 1,
+      "kind": "recurrence",
+      "risc": "TRISC_1",
+      "zone": "GDN_RESIDENT_PACK",
+      "core_total_us": {
+        "n": 1440,
+        "min": 0.08296296296296296,
+        "median": 0.09037037037037036,
+        "mean": 0.09451800411522633,
+        "p90": 0.1037037037037037,
+        "max": 0.11703703703703704
+      },
+      "items_per_core": {
+        "n": 1440,
+        "min": 6,
+        "median": 6.0,
+        "mean": 6.4,
+        "p90": 7,
+        "max": 7
+      }
+    },
+    {
+      "batch": 16,
+      "padding": "zero",
+      "profiled": 1,
+      "kind": "recurrence",
+      "risc": "TRISC_1",
+      "zone": "GDN_RESIDENT_STATE_UPDATE",
+      "core_total_us": {
+        "n": 1440,
+        "min": 12.52,
+        "median": 12.583703703703703,
+        "mean": 13.40188220164609,
+        "p90": 14.68074074074074,
+        "max": 14.718518518518518
+      },
+      "items_per_core": {
+        "n": 1440,
+        "min": 6,
+        "median": 6.0,
+        "mean": 6.4,
+        "p90": 7,
+        "max": 7
+      }
+    },
+    {
+      "batch": 16,
+      "padding": "zero",
+      "profiled": 1,
+      "kind": "recurrence",
+      "risc": "TRISC_1",
+      "zone": "TRISC-KERNEL",
+      "core_total_us": {
+        "n": 1440,
+        "min": 58.38814814814815,
+        "median": 64.52777777777777,
+        "mean": 66.87278806584362,
+        "p90": 75.26296296296296,
+        "max": 80.37925925925926
+      },
+      "items_per_core": {
+        "n": 1440,
+        "min": 1,
+        "median": 1.0,
+        "mean": 1,
+        "p90": 1,
+        "max": 1
+      }
+    },
+    {
+      "batch": 16,
+      "padding": "zero",
+      "profiled": 1,
+      "kind": "recurrence",
+      "risc": "TRISC_2",
+      "zone": "GDN_RESIDENT_DELTA",
+      "core_total_us": {
+        "n": 1440,
+        "min": 0.08592592592592592,
+        "median": 0.09185185185185185,
+        "mean": 0.09689763374485597,
+        "p90": 0.10666666666666667,
+        "max": 0.11259259259259259
+      },
+      "items_per_core": {
+        "n": 1440,
+        "min": 6,
+        "median": 6.0,
+        "mean": 6.4,
+        "p90": 7,
+        "max": 7
+      }
+    },
+    {
+      "batch": 16,
+      "padding": "zero",
+      "profiled": 1,
+      "kind": "recurrence",
+      "risc": "TRISC_2",
+      "zone": "GDN_RESIDENT_INPUT_WAIT",
+      "core_total_us": {
+        "n": 1440,
+        "min": 0.08148148148148149,
+        "median": 0.09703703703703703,
+        "mean": 0.0975812757201646,
+        "p90": 0.1111111111111111,
+        "max": 0.1259259259259259
+      },
+      "items_per_core": {
+        "n": 1440,
+        "min": 6,
+        "median": 6.0,
+        "mean": 6.4,
+        "p90": 7,
+        "max": 7
+      }
+    },
+    {
+      "batch": 16,
+      "padding": "zero",
+      "profiled": 1,
+      "kind": "recurrence",
+      "risc": "TRISC_2",
+      "zone": "GDN_RESIDENT_OUTPUT",
+      "core_total_us": {
+        "n": 1440,
+        "min": 0.08666666666666667,
+        "median": 0.09037037037037036,
+        "mean": 0.09572633744855967,
+        "p90": 0.10518518518518519,
+        "max": 0.11037037037037037
+      },
+      "items_per_core": {
+        "n": 1440,
+        "min": 6,
+        "median": 6.0,
+        "mean": 6.4,
+        "p90": 7,
+        "max": 7
+      }
+    },
+    {
+      "batch": 16,
+      "padding": "zero",
+      "profiled": 1,
+      "kind": "recurrence",
+      "risc": "TRISC_2",
+      "zone": "GDN_RESIDENT_OUTPUT_AND_DEST_WAIT",
+      "core_total_us": {
+        "n": 1440,
+        "min": 5.116296296296296,
+        "median": 13.262222222222222,
+        "mean": 15.270365740740742,
+        "p90": 27.692592592592593,
+        "max": 42.30814814814815
+      },
+      "items_per_core": {
+        "n": 1440,
+        "min": 6,
+        "median": 6.0,
+        "mean": 6.4,
+        "p90": 7,
+        "max": 7
+      }
+    },
+    {
+      "batch": 16,
+      "padding": "zero",
+      "profiled": 1,
+      "kind": "recurrence",
+      "risc": "TRISC_2",
+      "zone": "GDN_RESIDENT_PACK",
+      "core_total_us": {
+        "n": 1440,
+        "min": 24.266666666666666,
+        "median": 51.59481481481481,
+        "mean": 50.39428600823045,
+        "p90": 62.72148148148148,
+        "max": 70.84
+      },
+      "items_per_core": {
+        "n": 1440,
+        "min": 6,
+        "median": 6.0,
+        "mean": 6.4,
+        "p90": 7,
+        "max": 7
+      }
+    },
+    {
+      "batch": 16,
+      "padding": "zero",
+      "profiled": 1,
+      "kind": "recurrence",
+      "risc": "TRISC_2",
+      "zone": "GDN_RESIDENT_STATE_UPDATE",
+      "core_total_us": {
+        "n": 1440,
+        "min": 0.08296296296296296,
+        "median": 0.08592592592592592,
+        "mean": 0.09077006172839507,
+        "p90": 0.1,
+        "max": 0.11037037037037037
+      },
+      "items_per_core": {
+        "n": 1440,
+        "min": 6,
+        "median": 6.0,
+        "mean": 6.4,
+        "p90": 7,
+        "max": 7
+      }
+    },
+    {
+      "batch": 16,
+      "padding": "zero",
+      "profiled": 1,
+      "kind": "recurrence",
+      "risc": "TRISC_2",
+      "zone": "TRISC-KERNEL",
+      "core_total_us": {
+        "n": 1440,
+        "min": 58.46074074074074,
+        "median": 64.62777777777778,
+        "mean": 66.94055864197531,
+        "p90": 75.36444444444444,
+        "max": 80.36296296296297
+      },
+      "items_per_core": {
+        "n": 1440,
+        "min": 1,
+        "median": 1.0,
+        "mean": 1,
+        "p90": 1,
+        "max": 1
+      }
+    },
+    {
+      "batch": 32,
+      "padding": "skip",
+      "profiled": 0,
+      "kind": "epilogue",
+      "risc": "BRISC",
+      "zone": "BRISC-KERNEL",
+      "core_total_us": {
+        "n": 1440,
+        "min": 35.83259259259259,
+        "median": 38.22592592592593,
+        "mean": 40.115004115226334,
+        "p90": 48.54518518518518,
+        "max": 48.94222222222222
+      },
+      "items_per_core": {
+        "n": 1440,
+        "min": 1,
+        "median": 1.0,
+        "mean": 1,
+        "p90": 1,
+        "max": 1
+      }
+    },
+    {
+      "batch": 32,
+      "padding": "skip",
+      "profiled": 0,
+      "kind": "epilogue",
+      "risc": "NCRISC",
+      "zone": "NCRISC-KERNEL",
+      "core_total_us": {
+        "n": 1440,
+        "min": 17.414814814814815,
+        "median": 19.84111111111111,
+        "mean": 21.74277880658436,
+        "p90": 30.205185185185186,
+        "max": 30.60962962962963
+      },
+      "items_per_core": {
+        "n": 1440,
+        "min": 1,
+        "median": 1.0,
+        "mean": 1,
+        "p90": 1,
+        "max": 1
+      }
+    },
+    {
+      "batch": 32,
+      "padding": "skip",
+      "profiled": 0,
+      "kind": "epilogue",
+      "risc": "TRISC_0",
+      "zone": "TRISC-KERNEL",
+      "core_total_us": {
+        "n": 1440,
+        "min": 34.54592592592593,
+        "median": 36.92333333333333,
+        "mean": 38.814609567901236,
+        "p90": 47.242222222222225,
+        "max": 47.62518518518519
+      },
+      "items_per_core": {
+        "n": 1440,
+        "min": 1,
+        "median": 1.0,
+        "mean": 1,
+        "p90": 1,
+        "max": 1
+      }
+    },
+    {
+      "batch": 32,
+      "padding": "skip",
+      "profiled": 0,
+      "kind": "epilogue",
+      "risc": "TRISC_1",
+      "zone": "TRISC-KERNEL",
+      "core_total_us": {
+        "n": 1440,
+        "min": 35.48740740740741,
+        "median": 37.882592592592594,
+        "mean": 39.76380606995885,
+        "p90": 48.245185185185186,
+        "max": 48.72592592592593
+      },
+      "items_per_core": {
+        "n": 1440,
+        "min": 1,
+        "median": 1.0,
+        "mean": 1,
+        "p90": 1,
+        "max": 1
+      }
+    },
+    {
+      "batch": 32,
+      "padding": "skip",
+      "profiled": 0,
+      "kind": "epilogue",
+      "risc": "TRISC_2",
+      "zone": "TRISC-KERNEL",
+      "core_total_us": {
+        "n": 1440,
+        "min": 34.81111111111111,
+        "median": 37.21259259259259,
+        "mean": 39.09964351851852,
+        "p90": 47.51481481481481,
+        "max": 47.92296296296296
+      },
+      "items_per_core": {
+        "n": 1440,
+        "min": 1,
+        "median": 1.0,
+        "mean": 1,
+        "p90": 1,
+        "max": 1
+      }
+    },
+    {
+      "batch": 32,
+      "padding": "skip",
+      "profiled": 0,
+      "kind": "recurrence",
+      "risc": "BRISC",
+      "zone": "BRISC-KERNEL",
+      "core_total_us": {
+        "n": 1440,
+        "min": 109.04222222222222,
+        "median": 125.67814814814815,
+        "mean": 124.90524382716049,
+        "p90": 133.66222222222223,
+        "max": 145.7237037037037
+      },
+      "items_per_core": {
+        "n": 1440,
+        "min": 1,
+        "median": 1.0,
+        "mean": 1,
+        "p90": 1,
+        "max": 1
+      }
+    },
+    {
+      "batch": 32,
+      "padding": "skip",
+      "profiled": 0,
+      "kind": "recurrence",
+      "risc": "NCRISC",
+      "zone": "NCRISC-KERNEL",
+      "core_total_us": {
+        "n": 1440,
+        "min": 97.69185185185185,
+        "median": 114.92777777777778,
+        "mean": 113.82627726337448,
+        "p90": 121.47037037037038,
+        "max": 133.29185185185185
+      },
+      "items_per_core": {
+        "n": 1440,
+        "min": 1,
+        "median": 1.0,
+        "mean": 1,
+        "p90": 1,
+        "max": 1
+      }
+    },
+    {
+      "batch": 32,
+      "padding": "skip",
+      "profiled": 0,
+      "kind": "recurrence",
+      "risc": "TRISC_0",
+      "zone": "TRISC-KERNEL",
+      "core_total_us": {
+        "n": 1440,
+        "min": 107.51777777777778,
+        "median": 124.06629629629629,
+        "mean": 123.28753395061729,
+        "p90": 132.19407407407408,
+        "max": 144.2525925925926
+      },
+      "items_per_core": {
+        "n": 1440,
+        "min": 1,
+        "median": 1.0,
+        "mean": 1,
+        "p90": 1,
+        "max": 1
+      }
+    },
+    {
+      "batch": 32,
+      "padding": "skip",
+      "profiled": 0,
+      "kind": "recurrence",
+      "risc": "TRISC_1",
+      "zone": "TRISC-KERNEL",
+      "core_total_us": {
+        "n": 1440,
+        "min": 107.92962962962963,
+        "median": 124.5925925925926,
+        "mean": 123.79476594650205,
+        "p90": 132.60666666666665,
+        "max": 144.81703703703704
+      },
+      "items_per_core": {
+        "n": 1440,
+        "min": 1,
+        "median": 1.0,
+        "mean": 1,
+        "p90": 1,
+        "max": 1
+      }
+    },
+    {
+      "batch": 32,
+      "padding": "skip",
+      "profiled": 0,
+      "kind": "recurrence",
+      "risc": "TRISC_2",
+      "zone": "TRISC-KERNEL",
+      "core_total_us": {
+        "n": 1440,
+        "min": 108.10888888888888,
+        "median": 124.68074074074073,
+        "mean": 123.89991975308642,
+        "p90": 132.77555555555554,
+        "max": 144.84666666666666
+      },
+      "items_per_core": {
+        "n": 1440,
+        "min": 1,
+        "median": 1.0,
+        "mean": 1,
+        "p90": 1,
+        "max": 1
+      }
+    },
+    {
+      "batch": 32,
+      "padding": "skip",
+      "profiled": 1,
+      "kind": "epilogue",
+      "risc": "BRISC",
+      "zone": "BRISC-KERNEL",
+      "core_total_us": {
+        "n": 1440,
+        "min": 36.767407407407404,
+        "median": 39.09148148148148,
+        "mean": 40.99429115226337,
+        "p90": 49.54518518518518,
+        "max": 50.077777777777776
+      },
+      "items_per_core": {
+        "n": 1440,
+        "min": 1,
+        "median": 1.0,
+        "mean": 1,
+        "p90": 1,
+        "max": 1
+      }
+    },
+    {
+      "batch": 32,
+      "padding": "skip",
+      "profiled": 1,
+      "kind": "epilogue",
+      "risc": "BRISC",
+      "zone": "GDN_EP_WRITER_DMA",
+      "core_total_us": {
+        "n": 1440,
+        "min": 1.2651851851851852,
+        "median": 1.4392592592592592,
+        "mean": 1.5033369341563787,
+        "p90": 1.9192592592592592,
+        "max": 1.9348148148148148
+      },
+      "items_per_core": {
+        "n": 1440,
+        "min": 3,
+        "median": 3.0,
+        "mean": 3.2,
+        "p90": 4,
+        "max": 4
+      }
+    },
+    {
+      "batch": 32,
+      "padding": "skip",
+      "profiled": 1,
+      "kind": "epilogue",
+      "risc": "BRISC",
+      "zone": "GDN_EP_WRITER_WAIT",
+      "core_total_us": {
+        "n": 1440,
+        "min": 35.04518518518518,
+        "median": 37.40814814814814,
+        "mean": 39.20512705761317,
+        "p90": 47.38444444444445,
+        "max": 47.94
+      },
+      "items_per_core": {
+        "n": 1440,
+        "min": 3,
+        "median": 3.0,
+        "mean": 3.2,
+        "p90": 4,
+        "max": 4
+      }
+    },
+    {
+      "batch": 32,
+      "padding": "skip",
+      "profiled": 1,
+      "kind": "epilogue",
+      "risc": "NCRISC",
+      "zone": "GDN_EP_READER_CB_RESERVE",
+      "core_total_us": {
+        "n": 1440,
+        "min": 6.992592592592593,
+        "median": 7.06,
+        "mean": 8.535783950617285,
+        "p90": 14.414814814814815,
+        "max": 14.642222222222221
+      },
+      "items_per_core": {
+        "n": 1440,
+        "min": 3,
+        "median": 3.0,
+        "mean": 3.2,
+        "p90": 4,
+        "max": 4
+      }
+    },
+    {
+      "batch": 32,
+      "padding": "skip",
+      "profiled": 1,
+      "kind": "epilogue",
+      "risc": "NCRISC",
+      "zone": "GDN_EP_READER_DMA",
+      "core_total_us": {
+        "n": 1440,
+        "min": 1.2933333333333332,
+        "median": 1.64,
+        "mean": 1.783755658436214,
+        "p90": 2.1844444444444444,
+        "max": 3.568888888888889
+      },
+      "items_per_core": {
+        "n": 1440,
+        "min": 3,
+        "median": 3.0,
+        "mean": 3.2,
+        "p90": 4,
+        "max": 4
+      }
+    },
+    {
+      "batch": 32,
+      "padding": "skip",
+      "profiled": 1,
+      "kind": "epilogue",
+      "risc": "NCRISC",
+      "zone": "GDN_EP_READER_FORMAT",
+      "core_total_us": {
+        "n": 1440,
+        "min": 7.662222222222222,
+        "median": 7.684444444444445,
+        "mean": 8.197066872427984,
+        "p90": 10.257037037037037,
+        "max": 10.285185185185185
+      },
+      "items_per_core": {
+        "n": 1440,
+        "min": 3,
+        "median": 3.0,
+        "mean": 3.2,
+        "p90": 4,
+        "max": 4
+      }
+    },
+    {
+      "batch": 32,
+      "padding": "skip",
+      "profiled": 1,
+      "kind": "epilogue",
+      "risc": "NCRISC",
+      "zone": "GDN_EP_READER_PADDING",
+      "core_total_us": {
+        "n": 1440,
+        "min": 0.013333333333333334,
+        "median": 0.013333333333333334,
+        "mean": 0.013333333333333334,
+        "p90": 0.013333333333333334,
+        "max": 0.013333333333333334
+      },
+      "items_per_core": {
+        "n": 1440,
+        "min": 1,
+        "median": 1.0,
+        "mean": 1,
+        "p90": 1,
+        "max": 1
+      }
+    },
+    {
+      "batch": 32,
+      "padding": "skip",
+      "profiled": 1,
+      "kind": "epilogue",
+      "risc": "NCRISC",
+      "zone": "GDN_EP_READER_WEIGHT",
+      "core_total_us": {
+        "n": 1440,
+        "min": 0.642962962962963,
+        "median": 2.8207407407407405,
+        "mean": 2.6600529835390945,
+        "p90": 3.294814814814815,
+        "max": 3.531851851851852
+      },
+      "items_per_core": {
+        "n": 1440,
+        "min": 1,
+        "median": 1.0,
+        "mean": 1,
+        "p90": 1,
+        "max": 1
+      }
+    },
+    {
+      "batch": 32,
+      "padding": "skip",
+      "profiled": 1,
+      "kind": "epilogue",
+      "risc": "NCRISC",
+      "zone": "NCRISC-KERNEL",
+      "core_total_us": {
+        "n": 1440,
+        "min": 17.826666666666668,
+        "median": 20.22222222222222,
+        "mean": 22.140252057613168,
+        "p90": 30.74,
+        "max": 31.224444444444444
+      },
+      "items_per_core": {
+        "n": 1440,
+        "min": 1,
+        "median": 1.0,
+        "mean": 1,
+        "p90": 1,
+        "max": 1
+      }
+    },
+    {
+      "batch": 32,
+      "padding": "skip",
+      "profiled": 1,
+      "kind": "epilogue",
+      "risc": "TRISC_0",
+      "zone": "GDN_EP_INPUT_WAIT",
+      "core_total_us": {
+        "n": 1440,
+        "min": 3.1866666666666665,
+        "median": 3.322962962962963,
+        "mean": 3.3885643004115225,
+        "p90": 3.5674074074074076,
+        "max": 5.256296296296297
+      },
+      "items_per_core": {
+        "n": 1440,
+        "min": 3,
+        "median": 3.0,
+        "mean": 3.2,
+        "p90": 4,
+        "max": 4
+      }
+    },
+    {
+      "batch": 32,
+      "padding": "skip",
+      "profiled": 1,
+      "kind": "epilogue",
+      "risc": "TRISC_0",
+      "zone": "GDN_EP_MEAN_SQUARE",
+      "core_total_us": {
+        "n": 1440,
+        "min": 3.862962962962963,
+        "median": 3.9066666666666667,
+        "mean": 4.2090118312757205,
+        "p90": 5.427407407407407,
+        "max": 5.49037037037037
+      },
+      "items_per_core": {
+        "n": 1440,
+        "min": 3,
+        "median": 3.0,
+        "mean": 3.2,
+        "p90": 4,
+        "max": 4
+      }
+    },
+    {
+      "batch": 32,
+      "padding": "skip",
+      "profiled": 1,
+      "kind": "epilogue",
+      "risc": "TRISC_0",
+      "zone": "GDN_EP_NORMALIZE",
+      "core_total_us": {
+        "n": 1440,
+        "min": 3.725925925925926,
+        "median": 3.7622222222222224,
+        "mean": 4.016009773662551,
+        "p90": 5.015555555555555,
+        "max": 5.08
+      },
+      "items_per_core": {
+        "n": 1440,
+        "min": 3,
+        "median": 3.0,
+        "mean": 3.2,
+        "p90": 4,
+        "max": 4
+      }
+    },
+    {
+      "batch": 32,
+      "padding": "skip",
+      "profiled": 1,
+      "kind": "epilogue",
+      "risc": "TRISC_0",
+      "zone": "GDN_EP_OUTPUT",
+      "core_total_us": {
+        "n": 1440,
+        "min": 4.262222222222222,
+        "median": 4.285185185185185,
+        "mean": 4.570461934156379,
+        "p90": 5.716296296296297,
+        "max": 5.731851851851852
+      },
+      "items_per_core": {
+        "n": 1440,
+        "min": 3,
+        "median": 3.0,
+        "mean": 3.2,
+        "p90": 4,
+        "max": 4
+      }
+    },
+    {
+      "batch": 32,
+      "padding": "skip",
+      "profiled": 1,
+      "kind": "epilogue",
+      "risc": "TRISC_0",
+      "zone": "GDN_EP_WEIGHT_AND_GATE",
+      "core_total_us": {
+        "n": 1440,
+        "min": 18.477037037037036,
+        "median": 18.496296296296297,
+        "mean": 19.723463477366256,
+        "p90": 24.637037037037036,
+        "max": 24.679259259259258
+      },
+      "items_per_core": {
+        "n": 1440,
+        "min": 3,
+        "median": 3.0,
+        "mean": 3.2,
+        "p90": 4,
+        "max": 4
+      }
+    },
+    {
+      "batch": 32,
+      "padding": "skip",
+      "profiled": 1,
+      "kind": "epilogue",
+      "risc": "TRISC_0",
+      "zone": "TRISC-KERNEL",
+      "core_total_us": {
+        "n": 1440,
+        "min": 35.3837037037037,
+        "median": 37.73444444444445,
+        "mean": 39.63972582304527,
+        "p90": 48.196296296296296,
+        "max": 48.72666666666667
+      },
+      "items_per_core": {
+        "n": 1440,
+        "min": 1,
+        "median": 1.0,
+        "mean": 1,
+        "p90": 1,
+        "max": 1
+      }
+    },
+    {
+      "batch": 32,
+      "padding": "skip",
+      "profiled": 1,
+      "kind": "epilogue",
+      "risc": "TRISC_1",
+      "zone": "GDN_EP_INPUT_WAIT",
+      "core_total_us": {
+        "n": 1440,
+        "min": 0.040740740740740744,
+        "median": 0.04296296296296296,
+        "mean": 0.04664866255144033,
+        "p90": 0.05925925925925926,
+        "max": 0.07185185185185185
+      },
+      "items_per_core": {
+        "n": 1440,
+        "min": 3,
+        "median": 3.0,
+        "mean": 3.2,
+        "p90": 4,
+        "max": 4
+      }
+    },
+    {
+      "batch": 32,
+      "padding": "skip",
+      "profiled": 1,
+      "kind": "epilogue",
+      "risc": "TRISC_1",
+      "zone": "GDN_EP_MEAN_SQUARE",
+      "core_total_us": {
+        "n": 1440,
+        "min": 5.720740740740741,
+        "median": 7.96037037037037,
+        "mean": 7.882497427983539,
+        "p90": 8.511851851851851,
+        "max": 8.897037037037038
+      },
+      "items_per_core": {
+        "n": 1440,
+        "min": 3,
+        "median": 3.0,
+        "mean": 3.2,
+        "p90": 4,
+        "max": 4
+      }
+    },
+    {
+      "batch": 32,
+      "padding": "skip",
+      "profiled": 1,
+      "kind": "epilogue",
+      "risc": "TRISC_1",
+      "zone": "GDN_EP_NORMALIZE",
+      "core_total_us": {
+        "n": 1440,
+        "min": 3.9474074074074075,
+        "median": 3.9837037037037035,
+        "mean": 4.245864711934156,
+        "p90": 5.288888888888889,
+        "max": 5.356296296296296
+      },
+      "items_per_core": {
+        "n": 1440,
+        "min": 3,
+        "median": 3.0,
+        "mean": 3.2,
+        "p90": 4,
+        "max": 4
+      }
+    },
+    {
+      "batch": 32,
+      "padding": "skip",
+      "profiled": 1,
+      "kind": "epilogue",
+      "risc": "TRISC_1",
+      "zone": "GDN_EP_OUTPUT",
+      "core_total_us": {
+        "n": 1440,
+        "min": 7.461481481481481,
+        "median": 7.488148148148148,
+        "mean": 7.985115226337449,
+        "p90": 9.986666666666666,
+        "max": 10.003703703703703
+      },
+      "items_per_core": {
+        "n": 1440,
+        "min": 3,
+        "median": 3.0,
+        "mean": 3.2,
+        "p90": 4,
+        "max": 4
+      }
+    },
+    {
+      "batch": 32,
+      "padding": "skip",
+      "profiled": 1,
+      "kind": "epilogue",
+      "risc": "TRISC_1",
+      "zone": "GDN_EP_WEIGHT_AND_GATE",
+      "core_total_us": {
+        "n": 1440,
+        "min": 18.605185185185185,
+        "median": 18.635555555555555,
+        "mean": 19.87246193415638,
+        "p90": 24.82814814814815,
+        "max": 24.87851851851852
+      },
+      "items_per_core": {
+        "n": 1440,
+        "min": 3,
+        "median": 3.0,
+        "mean": 3.2,
+        "p90": 4,
+        "max": 4
+      }
+    },
+    {
+      "batch": 32,
+      "padding": "skip",
+      "profiled": 1,
+      "kind": "epilogue",
+      "risc": "TRISC_1",
+      "zone": "TRISC-KERNEL",
+      "core_total_us": {
+        "n": 1440,
+        "min": 36.39333333333333,
+        "median": 38.66962962962963,
+        "mean": 40.56870679012346,
+        "p90": 49.16518518518519,
+        "max": 49.74888888888889
+      },
+      "items_per_core": {
+        "n": 1440,
+        "min": 1,
+        "median": 1.0,
+        "mean": 1,
+        "p90": 1,
+        "max": 1
+      }
+    },
+    {
+      "batch": 32,
+      "padding": "skip",
+      "profiled": 1,
+      "kind": "epilogue",
+      "risc": "TRISC_2",
+      "zone": "GDN_EP_INPUT_WAIT",
+      "core_total_us": {
+        "n": 1440,
+        "min": 0.040740740740740744,
+        "median": 0.0437037037037037,
+        "mean": 0.04635082304526749,
+        "p90": 0.05925925925925926,
+        "max": 0.0637037037037037
+      },
+      "items_per_core": {
+        "n": 1440,
+        "min": 3,
+        "median": 3.0,
+        "mean": 3.2,
+        "p90": 4,
+        "max": 4
+      }
+    },
+    {
+      "batch": 32,
+      "padding": "skip",
+      "profiled": 1,
+      "kind": "epilogue",
+      "risc": "TRISC_2",
+      "zone": "GDN_EP_MEAN_SQUARE",
+      "core_total_us": {
+        "n": 1440,
+        "min": 6.877777777777778,
+        "median": 9.208518518518519,
+        "mean": 9.251793724279835,
+        "p90": 10.194814814814816,
+        "max": 10.672592592592592
+      },
+      "items_per_core": {
+        "n": 1440,
+        "min": 3,
+        "median": 3.0,
+        "mean": 3.2,
+        "p90": 4,
+        "max": 4
+      }
+    },
+    {
+      "batch": 32,
+      "padding": "skip",
+      "profiled": 1,
+      "kind": "epilogue",
+      "risc": "TRISC_2",
+      "zone": "GDN_EP_NORMALIZE",
+      "core_total_us": {
+        "n": 1440,
+        "min": 3.9266666666666667,
+        "median": 3.974814814814815,
+        "mean": 4.232609053497942,
+        "p90": 5.275555555555556,
+        "max": 5.337777777777778
+      },
+      "items_per_core": {
+        "n": 1440,
+        "min": 3,
+        "median": 3.0,
+        "mean": 3.2,
+        "p90": 4,
+        "max": 4
+      }
+    },
+    {
+      "batch": 32,
+      "padding": "skip",
+      "profiled": 1,
+      "kind": "epilogue",
+      "risc": "TRISC_2",
+      "zone": "GDN_EP_OUTPUT",
+      "core_total_us": {
+        "n": 1440,
+        "min": 5.474814814814815,
+        "median": 5.499259259259259,
+        "mean": 5.865847736625515,
+        "p90": 7.33925925925926,
+        "max": 7.352592592592592
+      },
+      "items_per_core": {
+        "n": 1440,
+        "min": 3,
+        "median": 3.0,
+        "mean": 3.2,
+        "p90": 4,
+        "max": 4
+      }
+    },
+    {
+      "batch": 32,
+      "padding": "skip",
+      "profiled": 1,
+      "kind": "epilogue",
+      "risc": "TRISC_2",
+      "zone": "GDN_EP_WEIGHT_AND_GATE",
+      "core_total_us": {
+        "n": 1440,
+        "min": 18.65851851851852,
+        "median": 18.695555555555554,
+        "mean": 19.93657561728395,
+        "p90": 24.90962962962963,
+        "max": 24.96814814814815
+      },
+      "items_per_core": {
+        "n": 1440,
+        "min": 3,
+        "median": 3.0,
+        "mean": 3.2,
+        "p90": 4,
+        "max": 4
+      }
+    },
+    {
+      "batch": 32,
+      "padding": "skip",
+      "profiled": 1,
+      "kind": "epilogue",
+      "risc": "TRISC_2",
+      "zone": "TRISC-KERNEL",
+      "core_total_us": {
+        "n": 1440,
+        "min": 35.65037037037037,
+        "median": 38.01925925925926,
+        "mean": 39.91788477366255,
+        "p90": 48.47037037037037,
+        "max": 48.97925925925926
+      },
+      "items_per_core": {
+        "n": 1440,
+        "min": 1,
+        "median": 1.0,
+        "mean": 1,
+        "p90": 1,
+        "max": 1
+      }
+    },
+    {
+      "batch": 32,
+      "padding": "skip",
+      "profiled": 1,
+      "kind": "recurrence",
+      "risc": "BRISC",
+      "zone": "BRISC-KERNEL",
+      "core_total_us": {
+        "n": 1440,
+        "min": 111.11777777777777,
+        "median": 126.87592592592593,
+        "mean": 125.98315534979425,
+        "p90": 134.1725925925926,
+        "max": 146.4622222222222
+      },
+      "items_per_core": {
+        "n": 1440,
+        "min": 1,
+        "median": 1.0,
+        "mean": 1,
+        "p90": 1,
+        "max": 1
+      }
+    },
+    {
+      "batch": 32,
+      "padding": "skip",
+      "profiled": 1,
+      "kind": "recurrence",
+      "risc": "BRISC",
+      "zone": "GDN_WRITER_DRAM_ISSUE_AND_OUTPUT_WAIT",
+      "core_total_us": {
+        "n": 1440,
+        "min": 2.391111111111111,
+        "median": 7.301851851851852,
+        "mean": 9.708685185185185,
+        "p90": 20.000740740740742,
+        "max": 55.32962962962963
+      },
+      "items_per_core": {
+        "n": 1440,
+        "min": 12,
+        "median": 13.0,
+        "mean": 12.8,
+        "p90": 13,
+        "max": 13
+      }
+    },
+    {
+      "batch": 32,
+      "padding": "skip",
+      "profiled": 1,
+      "kind": "recurrence",
+      "risc": "BRISC",
+      "zone": "GDN_WRITER_OUTPUT_AND_BARRIER",
+      "core_total_us": {
+        "n": 1440,
+        "min": 8.882222222222222,
+        "median": 17.077037037037037,
+        "mean": 19.55718878600823,
+        "p90": 30.958518518518517,
+        "max": 59.739259259259256
+      },
+      "items_per_core": {
+        "n": 1440,
+        "min": 12,
+        "median": 13.0,
+        "mean": 12.8,
+        "p90": 13,
+        "max": 13
+      }
+    },
+    {
+      "batch": 32,
+      "padding": "skip",
+      "profiled": 1,
+      "kind": "recurrence",
+      "risc": "BRISC",
+      "zone": "GDN_WRITER_STATE_CB_WAIT",
+      "core_total_us": {
+        "n": 1440,
+        "min": 37.623703703703704,
+        "median": 97.29518518518518,
+        "mean": 95.21949176954732,
+        "p90": 112.0325925925926,
+        "max": 121.52666666666667
+      },
+      "items_per_core": {
+        "n": 1440,
+        "min": 12,
+        "median": 13.0,
+        "mean": 12.8,
+        "p90": 13,
+        "max": 13
+      }
+    },
+    {
+      "batch": 32,
+      "padding": "skip",
+      "profiled": 1,
+      "kind": "recurrence",
+      "risc": "NCRISC",
+      "zone": "GDN_READER_CB_RESERVE",
+      "core_total_us": {
+        "n": 1440,
+        "min": 1.6985185185185185,
+        "median": 4.455555555555556,
+        "mean": 5.991041666666667,
+        "p90": 11.636296296296296,
+        "max": 28.513333333333332
+      },
+      "items_per_core": {
+        "n": 1440,
+        "min": 12,
+        "median": 13.0,
+        "mean": 12.8,
+        "p90": 13,
+        "max": 13
+      }
+    },
+    {
+      "batch": 32,
+      "padding": "skip",
+      "profiled": 1,
+      "kind": "recurrence",
+      "risc": "NCRISC",
+      "zone": "GDN_READER_DRAM_ISSUE_AND_WAIT",
+      "core_total_us": {
+        "n": 1440,
+        "min": 16.373333333333335,
+        "median": 41.76518518518519,
+        "mean": 40.1810396090535,
+        "p90": 48.977037037037036,
+        "max": 54.09703703703704
+      },
+      "items_per_core": {
+        "n": 1440,
+        "min": 12,
+        "median": 13.0,
+        "mean": 12.8,
+        "p90": 13,
+        "max": 13
+      }
+    },
+    {
+      "batch": 32,
+      "padding": "skip",
+      "profiled": 1,
+      "kind": "recurrence",
+      "risc": "NCRISC",
+      "zone": "GDN_READER_L1_PREPARE",
+      "core_total_us": {
+        "n": 1440,
+        "min": 61.70444444444445,
+        "median": 67.00074074074074,
+        "mean": 65.9794614197531,
+        "p90": 67.09185185185186,
+        "max": 67.26666666666667
+      },
+      "items_per_core": {
+        "n": 1440,
+        "min": 12,
+        "median": 13.0,
+        "mean": 12.8,
+        "p90": 13,
+        "max": 13
+      }
+    },
+    {
+      "batch": 32,
+      "padding": "skip",
+      "profiled": 1,
+      "kind": "recurrence",
+      "risc": "NCRISC",
+      "zone": "NCRISC-KERNEL",
+      "core_total_us": {
+        "n": 1440,
+        "min": 98.85555555555555,
+        "median": 115.66740740740741,
+        "mean": 114.49083847736625,
+        "p90": 121.85925925925926,
+        "max": 133.7451851851852
+      },
+      "items_per_core": {
+        "n": 1440,
+        "min": 1,
+        "median": 1.0,
+        "mean": 1,
+        "p90": 1,
+        "max": 1
+      }
+    },
+    {
+      "batch": 32,
+      "padding": "skip",
+      "profiled": 1,
+      "kind": "recurrence",
+      "risc": "TRISC_0",
+      "zone": "GDN_RESIDENT_DELTA",
+      "core_total_us": {
+        "n": 1440,
+        "min": 50.98074074074074,
+        "median": 56.196296296296296,
+        "mean": 56.244277263374485,
+        "p90": 57.95407407407407,
+        "max": 77.67777777777778
+      },
+      "items_per_core": {
+        "n": 1440,
+        "min": 12,
+        "median": 13.0,
+        "mean": 12.8,
+        "p90": 13,
+        "max": 13
+      }
+    },
+    {
+      "batch": 32,
+      "padding": "skip",
+      "profiled": 1,
+      "kind": "recurrence",
+      "risc": "TRISC_0",
+      "zone": "GDN_RESIDENT_INPUT_WAIT",
+      "core_total_us": {
+        "n": 1440,
+        "min": 7.131851851851851,
+        "median": 15.914814814814815,
+        "mean": 16.23302314814815,
+        "p90": 23.87925925925926,
+        "max": 31.08074074074074
+      },
+      "items_per_core": {
+        "n": 1440,
+        "min": 12,
+        "median": 13.0,
+        "mean": 12.8,
+        "p90": 13,
+        "max": 13
+      }
+    },
+    {
+      "batch": 32,
+      "padding": "skip",
+      "profiled": 1,
+      "kind": "recurrence",
+      "risc": "TRISC_0",
+      "zone": "GDN_RESIDENT_OUTPUT",
+      "core_total_us": {
+        "n": 1440,
+        "min": 21.865925925925925,
+        "median": 23.730740740740742,
+        "mean": 23.375586934156377,
+        "p90": 23.774074074074075,
+        "max": 23.813333333333333
+      },
+      "items_per_core": {
+        "n": 1440,
+        "min": 12,
+        "median": 13.0,
+        "mean": 12.8,
+        "p90": 13,
+        "max": 13
+      }
+    },
+    {
+      "batch": 32,
+      "padding": "skip",
+      "profiled": 1,
+      "kind": "recurrence",
+      "risc": "TRISC_0",
+      "zone": "GDN_RESIDENT_OUTPUT_AND_DEST_WAIT",
+      "core_total_us": {
+        "n": 1440,
+        "min": 0.16296296296296298,
+        "median": 0.19037037037037038,
+        "mean": 0.1893775720164609,
+        "p90": 0.20222222222222222,
+        "max": 0.2162962962962963
+      },
+      "items_per_core": {
+        "n": 1440,
+        "min": 12,
+        "median": 13.0,
+        "mean": 12.8,
+        "p90": 13,
+        "max": 13
+      }
+    },
+    {
+      "batch": 32,
+      "padding": "skip",
+      "profiled": 1,
+      "kind": "recurrence",
+      "risc": "TRISC_0",
+      "zone": "GDN_RESIDENT_PACK",
+      "core_total_us": {
+        "n": 1440,
+        "min": 0.16148148148148148,
+        "median": 0.17777777777777778,
+        "mean": 0.17721553497942386,
+        "p90": 0.1837037037037037,
+        "max": 0.19111111111111112
+      },
+      "items_per_core": {
+        "n": 1440,
+        "min": 12,
+        "median": 13.0,
+        "mean": 12.8,
+        "p90": 13,
+        "max": 13
+      }
+    },
+    {
+      "batch": 32,
+      "padding": "skip",
+      "profiled": 1,
+      "kind": "recurrence",
+      "risc": "TRISC_0",
+      "zone": "GDN_RESIDENT_STATE_UPDATE",
+      "core_total_us": {
+        "n": 1440,
+        "min": 22.63259259259259,
+        "median": 24.60074074074074,
+        "mean": 24.226018004115225,
+        "p90": 24.635555555555555,
+        "max": 24.705185185185186
+      },
+      "items_per_core": {
+        "n": 1440,
+        "min": 12,
+        "median": 13.0,
+        "mean": 12.8,
+        "p90": 13,
+        "max": 13
+      }
+    },
+    {
+      "batch": 32,
+      "padding": "skip",
+      "profiled": 1,
+      "kind": "recurrence",
+      "risc": "TRISC_0",
+      "zone": "TRISC-KERNEL",
+      "core_total_us": {
+        "n": 1440,
+        "min": 109.51407407407407,
+        "median": 125.23185185185186,
+        "mean": 124.3353024691358,
+        "p90": 132.59333333333333,
+        "max": 144.94444444444446
+      },
+      "items_per_core": {
+        "n": 1440,
+        "min": 1,
+        "median": 1.0,
+        "mean": 1,
+        "p90": 1,
+        "max": 1
+      }
+    },
+    {
+      "batch": 32,
+      "padding": "skip",
+      "profiled": 1,
+      "kind": "recurrence",
+      "risc": "TRISC_1",
+      "zone": "GDN_RESIDENT_DELTA",
+      "core_total_us": {
+        "n": 1440,
+        "min": 59.63037037037037,
+        "median": 71.14851851851851,
+        "mean": 71.02627263374485,
+        "p90": 78.49851851851852,
+        "max": 90.90518518518519
+      },
+      "items_per_core": {
+        "n": 1440,
+        "min": 12,
+        "median": 13.0,
+        "mean": 12.8,
+        "p90": 13,
+        "max": 13
+      }
+    },
+    {
+      "batch": 32,
+      "padding": "skip",
+      "profiled": 1,
+      "kind": "recurrence",
+      "risc": "TRISC_1",
+      "zone": "GDN_RESIDENT_INPUT_WAIT",
+      "core_total_us": {
+        "n": 1440,
+        "min": 0.1725925925925926,
+        "median": 0.1925925925925926,
+        "mean": 0.1906275720164609,
+        "p90": 0.19703703703703704,
+        "max": 0.2088888888888889
+      },
+      "items_per_core": {
+        "n": 1440,
+        "min": 12,
+        "median": 13.0,
+        "mean": 12.8,
+        "p90": 13,
+        "max": 13
+      }
+    },
+    {
+      "batch": 32,
+      "padding": "skip",
+      "profiled": 1,
+      "kind": "recurrence",
+      "risc": "TRISC_1",
+      "zone": "GDN_RESIDENT_OUTPUT",
+      "core_total_us": {
+        "n": 1440,
+        "min": 22.947407407407407,
+        "median": 24.888148148148147,
+        "mean": 24.51817695473251,
+        "p90": 24.93259259259259,
+        "max": 24.98296296296296
+      },
+      "items_per_core": {
+        "n": 1440,
+        "min": 12,
+        "median": 13.0,
+        "mean": 12.8,
+        "p90": 13,
+        "max": 13
+      }
+    },
+    {
+      "batch": 32,
+      "padding": "skip",
+      "profiled": 1,
+      "kind": "recurrence",
+      "risc": "TRISC_1",
+      "zone": "GDN_RESIDENT_OUTPUT_AND_DEST_WAIT",
+      "core_total_us": {
+        "n": 1440,
+        "min": 0.17703703703703705,
+        "median": 0.1962962962962963,
+        "mean": 0.1953945473251029,
+        "p90": 0.2037037037037037,
+        "max": 0.22074074074074074
+      },
+      "items_per_core": {
+        "n": 1440,
+        "min": 12,
+        "median": 13.0,
+        "mean": 12.8,
+        "p90": 13,
+        "max": 13
+      }
+    },
+    {
+      "batch": 32,
+      "padding": "skip",
+      "profiled": 1,
+      "kind": "recurrence",
+      "risc": "TRISC_1",
+      "zone": "GDN_RESIDENT_PACK",
+      "core_total_us": {
+        "n": 1440,
+        "min": 0.1725925925925926,
+        "median": 0.19185185185185186,
+        "mean": 0.1901661522633745,
+        "p90": 0.19703703703703704,
+        "max": 0.21185185185185185
+      },
+      "items_per_core": {
+        "n": 1440,
+        "min": 12,
+        "median": 13.0,
+        "mean": 12.8,
+        "p90": 13,
+        "max": 13
+      }
+    },
+    {
+      "batch": 32,
+      "padding": "skip",
+      "profiled": 1,
+      "kind": "recurrence",
+      "risc": "TRISC_1",
+      "zone": "GDN_RESIDENT_STATE_UPDATE",
+      "core_total_us": {
+        "n": 1440,
+        "min": 25.041481481481483,
+        "median": 27.155555555555555,
+        "mean": 26.75513220164609,
+        "p90": 27.20888888888889,
+        "max": 27.252592592592592
+      },
+      "items_per_core": {
+        "n": 1440,
+        "min": 12,
+        "median": 13.0,
+        "mean": 12.8,
+        "p90": 13,
+        "max": 13
+      }
+    },
+    {
+      "batch": 32,
+      "padding": "skip",
+      "profiled": 1,
+      "kind": "recurrence",
+      "risc": "TRISC_1",
+      "zone": "TRISC-KERNEL",
+      "core_total_us": {
+        "n": 1440,
+        "min": 110.06444444444445,
+        "median": 125.72185185185185,
+        "mean": 124.82585082304527,
+        "p90": 133.08814814814815,
+        "max": 145.50666666666666
+      },
+      "items_per_core": {
+        "n": 1440,
+        "min": 1,
+        "median": 1.0,
+        "mean": 1,
+        "p90": 1,
+        "max": 1
+      }
+    },
+    {
+      "batch": 32,
+      "padding": "skip",
+      "profiled": 1,
+      "kind": "recurrence",
+      "risc": "TRISC_2",
+      "zone": "GDN_RESIDENT_DELTA",
+      "core_total_us": {
+        "n": 1440,
+        "min": 0.18,
+        "median": 0.19925925925925925,
+        "mean": 0.19687088477366255,
+        "p90": 0.20222222222222222,
+        "max": 0.21703703703703703
+      },
+      "items_per_core": {
+        "n": 1440,
+        "min": 12,
+        "median": 13.0,
+        "mean": 12.8,
+        "p90": 13,
+        "max": 13
+      }
+    },
+    {
+      "batch": 32,
+      "padding": "skip",
+      "profiled": 1,
+      "kind": "recurrence",
+      "risc": "TRISC_2",
+      "zone": "GDN_RESIDENT_INPUT_WAIT",
+      "core_total_us": {
+        "n": 1440,
+        "min": 0.16444444444444445,
+        "median": 0.19777777777777777,
+        "mean": 0.19693724279835392,
+        "p90": 0.21481481481481482,
+        "max": 0.2325925925925926
+      },
+      "items_per_core": {
+        "n": 1440,
+        "min": 12,
+        "median": 13.0,
+        "mean": 12.8,
+        "p90": 13,
+        "max": 13
+      }
+    },
+    {
+      "batch": 32,
+      "padding": "skip",
+      "profiled": 1,
+      "kind": "recurrence",
+      "risc": "TRISC_2",
+      "zone": "GDN_RESIDENT_OUTPUT",
+      "core_total_us": {
+        "n": 1440,
+        "min": 0.1748148148148148,
+        "median": 0.1925925925925926,
+        "mean": 0.19092181069958847,
+        "p90": 0.19555555555555557,
+        "max": 0.20592592592592593
+      },
+      "items_per_core": {
+        "n": 1440,
+        "min": 12,
+        "median": 13.0,
+        "mean": 12.8,
+        "p90": 13,
+        "max": 13
+      }
+    },
+    {
+      "batch": 32,
+      "padding": "skip",
+      "profiled": 1,
+      "kind": "recurrence",
+      "risc": "TRISC_2",
+      "zone": "GDN_RESIDENT_OUTPUT_AND_DEST_WAIT",
+      "core_total_us": {
+        "n": 1440,
+        "min": 11.508148148148148,
+        "median": 25.43296296296296,
+        "mean": 29.082823559670782,
+        "p90": 49.257777777777775,
+        "max": 89.28370370370371
+      },
+      "items_per_core": {
+        "n": 1440,
+        "min": 12,
+        "median": 13.0,
+        "mean": 12.8,
+        "p90": 13,
+        "max": 13
+      }
+    },
+    {
+      "batch": 32,
+      "padding": "skip",
+      "profiled": 1,
+      "kind": "recurrence",
+      "risc": "TRISC_2",
+      "zone": "GDN_RESIDENT_PACK",
+      "core_total_us": {
+        "n": 1440,
+        "min": 35.90518518518518,
+        "median": 95.57222222222222,
+        "mean": 93.44844187242798,
+        "p90": 110.23851851851852,
+        "max": 119.72
+      },
+      "items_per_core": {
+        "n": 1440,
+        "min": 12,
+        "median": 13.0,
+        "mean": 12.8,
+        "p90": 13,
+        "max": 13
+      }
+    },
+    {
+      "batch": 32,
+      "padding": "skip",
+      "profiled": 1,
+      "kind": "recurrence",
+      "risc": "TRISC_2",
+      "zone": "GDN_RESIDENT_STATE_UPDATE",
+      "core_total_us": {
+        "n": 1440,
+        "min": 0.1674074074074074,
+        "median": 0.1837037037037037,
+        "mean": 0.18148765432098765,
+        "p90": 0.18592592592592594,
+        "max": 0.19703703703703704
+      },
+      "items_per_core": {
+        "n": 1440,
+        "min": 12,
+        "median": 13.0,
+        "mean": 12.8,
+        "p90": 13,
+        "max": 13
+      }
+    },
+    {
+      "batch": 32,
+      "padding": "skip",
+      "profiled": 1,
+      "kind": "recurrence",
+      "risc": "TRISC_2",
+      "zone": "TRISC-KERNEL",
+      "core_total_us": {
+        "n": 1440,
+        "min": 110.0962962962963,
+        "median": 125.81444444444443,
+        "mean": 124.9166054526749,
+        "p90": 133.23481481481483,
+        "max": 145.51925925925926
+      },
+      "items_per_core": {
+        "n": 1440,
+        "min": 1,
+        "median": 1.0,
+        "mean": 1,
+        "p90": 1,
+        "max": 1
+      }
+    },
+    {
+      "batch": 32,
+      "padding": "zero",
+      "profiled": 0,
+      "kind": "epilogue",
+      "risc": "BRISC",
+      "zone": "BRISC-KERNEL",
+      "core_total_us": {
+        "n": 1440,
+        "min": 63.13407407407407,
+        "median": 65.52111111111111,
+        "mean": 67.29621399176955,
+        "p90": 75.81703703703704,
+        "max": 76.20370370370371
+      },
+      "items_per_core": {
+        "n": 1440,
+        "min": 1,
+        "median": 1.0,
+        "mean": 1,
+        "p90": 1,
+        "max": 1
+      }
+    },
+    {
+      "batch": 32,
+      "padding": "zero",
+      "profiled": 0,
+      "kind": "epilogue",
+      "risc": "NCRISC",
+      "zone": "NCRISC-KERNEL",
+      "core_total_us": {
+        "n": 1440,
+        "min": 44.77037037037037,
+        "median": 47.136296296296294,
+        "mean": 48.92641306584362,
+        "p90": 57.46,
+        "max": 57.83925925925926
+      },
+      "items_per_core": {
+        "n": 1440,
+        "min": 1,
+        "median": 1.0,
+        "mean": 1,
+        "p90": 1,
+        "max": 1
+      }
+    },
+    {
+      "batch": 32,
+      "padding": "zero",
+      "profiled": 0,
+      "kind": "epilogue",
+      "risc": "TRISC_0",
+      "zone": "TRISC-KERNEL",
+      "core_total_us": {
+        "n": 1440,
+        "min": 61.84888888888889,
+        "median": 64.22444444444444,
+        "mean": 66.00332613168725,
+        "p90": 74.52444444444444,
+        "max": 74.87703703703704
+      },
+      "items_per_core": {
+        "n": 1440,
+        "min": 1,
+        "median": 1.0,
+        "mean": 1,
+        "p90": 1,
+        "max": 1
+      }
+    },
+    {
+      "batch": 32,
+      "padding": "zero",
+      "profiled": 0,
+      "kind": "epilogue",
+      "risc": "TRISC_1",
+      "zone": "TRISC-KERNEL",
+      "core_total_us": {
+        "n": 1440,
+        "min": 62.7,
+        "median": 65.17925925925925,
+        "mean": 66.94479012345678,
+        "p90": 75.50296296296297,
+        "max": 75.95555555555555
+      },
+      "items_per_core": {
+        "n": 1440,
+        "min": 1,
+        "median": 1.0,
+        "mean": 1,
+        "p90": 1,
+        "max": 1
+      }
+    },
+    {
+      "batch": 32,
+      "padding": "zero",
+      "profiled": 0,
+      "kind": "epilogue",
+      "risc": "TRISC_2",
+      "zone": "TRISC-KERNEL",
+      "core_total_us": {
+        "n": 1440,
+        "min": 62.111111111111114,
+        "median": 64.50555555555556,
+        "mean": 66.28080555555556,
+        "p90": 74.79407407407408,
+        "max": 75.15481481481481
+      },
+      "items_per_core": {
+        "n": 1440,
+        "min": 1,
+        "median": 1.0,
+        "mean": 1,
+        "p90": 1,
+        "max": 1
+      }
+    },
+    {
+      "batch": 32,
+      "padding": "zero",
+      "profiled": 0,
+      "kind": "recurrence",
+      "risc": "BRISC",
+      "zone": "BRISC-KERNEL",
+      "core_total_us": {
+        "n": 1440,
+        "min": 109.12814814814814,
+        "median": 125.6762962962963,
+        "mean": 124.98425514403293,
+        "p90": 133.8837037037037,
+        "max": 153.3111111111111
+      },
+      "items_per_core": {
+        "n": 1440,
+        "min": 1,
+        "median": 1.0,
+        "mean": 1,
+        "p90": 1,
+        "max": 1
+      }
+    },
+    {
+      "batch": 32,
+      "padding": "zero",
+      "profiled": 0,
+      "kind": "recurrence",
+      "risc": "NCRISC",
+      "zone": "NCRISC-KERNEL",
+      "core_total_us": {
+        "n": 1440,
+        "min": 97.29703703703704,
+        "median": 114.81740740740742,
+        "mean": 113.70616563786008,
+        "p90": 121.5562962962963,
+        "max": 140.79111111111112
+      },
+      "items_per_core": {
+        "n": 1440,
+        "min": 1,
+        "median": 1.0,
+        "mean": 1,
+        "p90": 1,
+        "max": 1
+      }
+    },
+    {
+      "batch": 32,
+      "padding": "zero",
+      "profiled": 0,
+      "kind": "recurrence",
+      "risc": "TRISC_0",
+      "zone": "TRISC-KERNEL",
+      "core_total_us": {
+        "n": 1440,
+        "min": 107.53555555555556,
+        "median": 124.11037037037036,
+        "mean": 123.36561265432098,
+        "p90": 132.35555555555555,
+        "max": 151.82148148148147
+      },
+      "items_per_core": {
+        "n": 1440,
+        "min": 1,
+        "median": 1.0,
+        "mean": 1,
+        "p90": 1,
+        "max": 1
+      }
+    },
+    {
+      "batch": 32,
+      "padding": "zero",
+      "profiled": 0,
+      "kind": "recurrence",
+      "risc": "TRISC_1",
+      "zone": "TRISC-KERNEL",
+      "core_total_us": {
+        "n": 1440,
+        "min": 108.00074074074074,
+        "median": 124.62962962962962,
+        "mean": 123.86973868312757,
+        "p90": 132.8614814814815,
+        "max": 152.36
+      },
+      "items_per_core": {
+        "n": 1440,
+        "min": 1,
+        "median": 1.0,
+        "mean": 1,
+        "p90": 1,
+        "max": 1
+      }
+    },
+    {
+      "batch": 32,
+      "padding": "zero",
+      "profiled": 0,
+      "kind": "recurrence",
+      "risc": "TRISC_2",
+      "zone": "TRISC-KERNEL",
+      "core_total_us": {
+        "n": 1440,
+        "min": 108.10518518518519,
+        "median": 124.72444444444444,
+        "mean": 123.9750524691358,
+        "p90": 132.9911111111111,
+        "max": 152.41407407407408
+      },
+      "items_per_core": {
+        "n": 1440,
+        "min": 1,
+        "median": 1.0,
+        "mean": 1,
+        "p90": 1,
+        "max": 1
+      }
+    },
+    {
+      "batch": 32,
+      "padding": "zero",
+      "profiled": 1,
+      "kind": "epilogue",
+      "risc": "BRISC",
+      "zone": "BRISC-KERNEL",
+      "core_total_us": {
+        "n": 1440,
+        "min": 64.20518518518519,
+        "median": 66.39703703703704,
+        "mean": 68.2097304526749,
+        "p90": 76.86222222222223,
+        "max": 77.33703703703704
+      },
+      "items_per_core": {
+        "n": 1440,
+        "min": 1,
+        "median": 1.0,
+        "mean": 1,
+        "p90": 1,
+        "max": 1
+      }
+    },
+    {
+      "batch": 32,
+      "padding": "zero",
+      "profiled": 1,
+      "kind": "epilogue",
+      "risc": "BRISC",
+      "zone": "GDN_EP_WRITER_DMA",
+      "core_total_us": {
+        "n": 1440,
+        "min": 1.265925925925926,
+        "median": 1.44,
+        "mean": 1.5027818930041152,
+        "p90": 1.9177777777777778,
+        "max": 1.9325925925925926
+      },
+      "items_per_core": {
+        "n": 1440,
+        "min": 3,
+        "median": 3.0,
+        "mean": 3.2,
+        "p90": 4,
+        "max": 4
+      }
+    },
+    {
+      "batch": 32,
+      "padding": "zero",
+      "profiled": 1,
+      "kind": "epilogue",
+      "risc": "BRISC",
+      "zone": "GDN_EP_WRITER_WAIT",
+      "core_total_us": {
+        "n": 1440,
+        "min": 62.51259259259259,
+        "median": 64.70518518518519,
+        "mean": 66.42170576131687,
+        "p90": 74.68814814814814,
+        "max": 75.21259259259259
+      },
+      "items_per_core": {
+        "n": 1440,
+        "min": 3,
+        "median": 3.0,
+        "mean": 3.2,
+        "p90": 4,
+        "max": 4
+      }
+    },
+    {
+      "batch": 32,
+      "padding": "zero",
+      "profiled": 1,
+      "kind": "epilogue",
+      "risc": "NCRISC",
+      "zone": "GDN_EP_READER_CB_RESERVE",
+      "core_total_us": {
+        "n": 1440,
+        "min": 6.988148148148148,
+        "median": 7.054814814814815,
+        "mean": 8.526575617283951,
+        "p90": 14.411851851851852,
+        "max": 14.639259259259259
+      },
+      "items_per_core": {
+        "n": 1440,
+        "min": 3,
+        "median": 3.0,
+        "mean": 3.2,
+        "p90": 4,
+        "max": 4
+      }
+    },
+    {
+      "batch": 32,
+      "padding": "zero",
+      "profiled": 1,
+      "kind": "epilogue",
+      "risc": "NCRISC",
+      "zone": "GDN_EP_READER_DMA",
+      "core_total_us": {
+        "n": 1440,
+        "min": 1.291111111111111,
+        "median": 1.637037037037037,
+        "mean": 1.7092700617283951,
+        "p90": 2.1785185185185183,
+        "max": 2.1985185185185183
+      },
+      "items_per_core": {
+        "n": 1440,
+        "min": 3,
+        "median": 3.0,
+        "mean": 3.2,
+        "p90": 4,
+        "max": 4
+      }
+    },
+    {
+      "batch": 32,
+      "padding": "zero",
+      "profiled": 1,
+      "kind": "epilogue",
+      "risc": "NCRISC",
+      "zone": "GDN_EP_READER_FORMAT",
+      "core_total_us": {
+        "n": 1440,
+        "min": 7.659259259259259,
+        "median": 7.6829629629629625,
+        "mean": 8.195876543209877,
+        "p90": 10.256296296296297,
+        "max": 10.282962962962962
+      },
+      "items_per_core": {
+        "n": 1440,
+        "min": 3,
+        "median": 3.0,
+        "mean": 3.2,
+        "p90": 4,
+        "max": 4
+      }
+    },
+    {
+      "batch": 32,
+      "padding": "zero",
+      "profiled": 1,
+      "kind": "epilogue",
+      "risc": "NCRISC",
+      "zone": "GDN_EP_READER_PADDING",
+      "core_total_us": {
+        "n": 1440,
+        "min": 27.343703703703703,
+        "median": 27.345185185185183,
+        "mean": 27.345162037037035,
+        "p90": 27.347407407407406,
+        "max": 27.347407407407406
+      },
+      "items_per_core": {
+        "n": 1440,
+        "min": 1,
+        "median": 1.0,
+        "mean": 1,
+        "p90": 1,
+        "max": 1
+      }
+    },
+    {
+      "batch": 32,
+      "padding": "zero",
+      "profiled": 1,
+      "kind": "epilogue",
+      "risc": "NCRISC",
+      "zone": "GDN_EP_READER_WEIGHT",
+      "core_total_us": {
+        "n": 1440,
+        "min": 0.7051851851851851,
+        "median": 2.783703703703704,
+        "mean": 2.619,
+        "p90": 3.220740740740741,
+        "max": 3.383703703703704
+      },
+      "items_per_core": {
+        "n": 1440,
+        "min": 1,
+        "median": 1.0,
+        "mean": 1,
+        "p90": 1,
+        "max": 1
+      }
+    },
+    {
+      "batch": 32,
+      "padding": "zero",
+      "profiled": 1,
+      "kind": "epilogue",
+      "risc": "NCRISC",
+      "zone": "NCRISC-KERNEL",
+      "core_total_us": {
+        "n": 1440,
+        "min": 45.305925925925926,
+        "median": 47.50703703703704,
+        "mean": 49.34920679012345,
+        "p90": 58.03259259259259,
+        "max": 58.508148148148145
+      },
+      "items_per_core": {
+        "n": 1440,
+        "min": 1,
+        "median": 1.0,
+        "mean": 1,
+        "p90": 1,
+        "max": 1
+      }
+    },
+    {
+      "batch": 32,
+      "padding": "zero",
+      "profiled": 1,
+      "kind": "epilogue",
+      "risc": "TRISC_0",
+      "zone": "GDN_EP_INPUT_WAIT",
+      "core_total_us": {
+        "n": 1440,
+        "min": 30.517777777777777,
+        "median": 30.651851851851852,
+        "mean": 30.646602366255145,
+        "p90": 30.69037037037037,
+        "max": 30.711111111111112
+      },
+      "items_per_core": {
+        "n": 1440,
+        "min": 3,
+        "median": 3.0,
+        "mean": 3.2,
+        "p90": 4,
+        "max": 4
+      }
+    },
+    {
+      "batch": 32,
+      "padding": "zero",
+      "profiled": 1,
+      "kind": "epilogue",
+      "risc": "TRISC_0",
+      "zone": "GDN_EP_MEAN_SQUARE",
+      "core_total_us": {
+        "n": 1440,
+        "min": 3.8740740740740742,
+        "median": 3.9103703703703703,
+        "mean": 4.215274691358025,
+        "p90": 5.442222222222222,
+        "max": 5.503703703703704
+      },
+      "items_per_core": {
+        "n": 1440,
+        "min": 3,
+        "median": 3.0,
+        "mean": 3.2,
+        "p90": 4,
+        "max": 4
+      }
+    },
+    {
+      "batch": 32,
+      "padding": "zero",
+      "profiled": 1,
+      "kind": "epilogue",
+      "risc": "TRISC_0",
+      "zone": "GDN_EP_NORMALIZE",
+      "core_total_us": {
+        "n": 1440,
+        "min": 3.7311111111111113,
+        "median": 3.7666666666666666,
+        "mean": 4.019644032921811,
+        "p90": 5.025185185185185,
+        "max": 5.083703703703704
+      },
+      "items_per_core": {
+        "n": 1440,
+        "min": 3,
+        "median": 3.0,
+        "mean": 3.2,
+        "p90": 4,
+        "max": 4
+      }
+    },
+    {
+      "batch": 32,
+      "padding": "zero",
+      "profiled": 1,
+      "kind": "epilogue",
+      "risc": "TRISC_0",
+      "zone": "GDN_EP_OUTPUT",
+      "core_total_us": {
+        "n": 1440,
+        "min": 4.248888888888889,
+        "median": 4.274074074074074,
+        "mean": 4.559381172839506,
+        "p90": 5.708148148148148,
+        "max": 5.733333333333333
+      },
+      "items_per_core": {
+        "n": 1440,
+        "min": 3,
+        "median": 3.0,
+        "mean": 3.2,
+        "p90": 4,
+        "max": 4
+      }
+    },
+    {
+      "batch": 32,
+      "padding": "zero",
+      "profiled": 1,
+      "kind": "epilogue",
+      "risc": "TRISC_0",
+      "zone": "GDN_EP_WEIGHT_AND_GATE",
+      "core_total_us": {
+        "n": 1440,
+        "min": 18.473333333333333,
+        "median": 18.492592592592594,
+        "mean": 19.71967026748971,
+        "p90": 24.633333333333333,
+        "max": 24.673333333333332
+      },
+      "items_per_core": {
+        "n": 1440,
+        "min": 3,
+        "median": 3.0,
+        "mean": 3.2,
+        "p90": 4,
+        "max": 4
+      }
+    },
+    {
+      "batch": 32,
+      "padding": "zero",
+      "profiled": 1,
+      "kind": "epilogue",
+      "risc": "TRISC_0",
+      "zone": "TRISC-KERNEL",
+      "core_total_us": {
+        "n": 1440,
+        "min": 62.86148148148148,
+        "median": 65.04407407407408,
+        "mean": 66.86749845679013,
+        "p90": 75.52740740740741,
+        "max": 75.97925925925927
+      },
+      "items_per_core": {
+        "n": 1440,
+        "min": 1,
+        "median": 1.0,
+        "mean": 1,
+        "p90": 1,
+        "max": 1
+      }
+    },
+    {
+      "batch": 32,
+      "padding": "zero",
+      "profiled": 1,
+      "kind": "epilogue",
+      "risc": "TRISC_1",
+      "zone": "GDN_EP_INPUT_WAIT",
+      "core_total_us": {
+        "n": 1440,
+        "min": 0.040740740740740744,
+        "median": 0.04296296296296296,
+        "mean": 0.04609104938271605,
+        "p90": 0.05703703703703704,
+        "max": 0.06518518518518518
+      },
+      "items_per_core": {
+        "n": 1440,
+        "min": 3,
+        "median": 3.0,
+        "mean": 3.2,
+        "p90": 4,
+        "max": 4
+      }
+    },
+    {
+      "batch": 32,
+      "padding": "zero",
+      "profiled": 1,
+      "kind": "epilogue",
+      "risc": "TRISC_1",
+      "zone": "GDN_EP_MEAN_SQUARE",
+      "core_total_us": {
+        "n": 1440,
+        "min": 33.093333333333334,
+        "median": 35.22555555555556,
+        "mean": 35.10851903292181,
+        "p90": 35.75037037037037,
+        "max": 36.17629629629629
+      },
+      "items_per_core": {
+        "n": 1440,
+        "min": 3,
+        "median": 3.0,
+        "mean": 3.2,
+        "p90": 4,
+        "max": 4
+      }
+    },
+    {
+      "batch": 32,
+      "padding": "zero",
+      "profiled": 1,
+      "kind": "epilogue",
+      "risc": "TRISC_1",
+      "zone": "GDN_EP_NORMALIZE",
+      "core_total_us": {
+        "n": 1440,
+        "min": 3.9518518518518517,
+        "median": 3.9851851851851854,
+        "mean": 4.248847736625514,
+        "p90": 5.298518518518518,
+        "max": 5.371111111111111
+      },
+      "items_per_core": {
+        "n": 1440,
+        "min": 3,
+        "median": 3.0,
+        "mean": 3.2,
+        "p90": 4,
+        "max": 4
+      }
+    },
+    {
+      "batch": 32,
+      "padding": "zero",
+      "profiled": 1,
+      "kind": "epilogue",
+      "risc": "TRISC_1",
+      "zone": "GDN_EP_OUTPUT",
+      "core_total_us": {
+        "n": 1440,
+        "min": 7.454814814814815,
+        "median": 7.482222222222222,
+        "mean": 7.977051440329218,
+        "p90": 9.972592592592592,
+        "max": 10.001481481481482
+      },
+      "items_per_core": {
+        "n": 1440,
+        "min": 3,
+        "median": 3.0,
+        "mean": 3.2,
+        "p90": 4,
+        "max": 4
+      }
+    },
+    {
+      "batch": 32,
+      "padding": "zero",
+      "profiled": 1,
+      "kind": "epilogue",
+      "risc": "TRISC_1",
+      "zone": "GDN_EP_WEIGHT_AND_GATE",
+      "core_total_us": {
+        "n": 1440,
+        "min": 18.603703703703705,
+        "median": 18.634074074074075,
+        "mean": 19.871477880658436,
+        "p90": 24.836296296296297,
+        "max": 24.86888888888889
+      },
+      "items_per_core": {
+        "n": 1440,
+        "min": 3,
+        "median": 3.0,
+        "mean": 3.2,
+        "p90": 4,
+        "max": 4
+      }
+    },
+    {
+      "batch": 32,
+      "padding": "zero",
+      "profiled": 1,
+      "kind": "epilogue",
+      "risc": "TRISC_1",
+      "zone": "TRISC-KERNEL",
+      "core_total_us": {
+        "n": 1440,
+        "min": 63.7437037037037,
+        "median": 65.97925925925927,
+        "mean": 67.79230452674896,
+        "p90": 76.49111111111111,
+        "max": 77.04074074074074
+      },
+      "items_per_core": {
+        "n": 1440,
+        "min": 1,
+        "median": 1.0,
+        "mean": 1,
+        "p90": 1,
+        "max": 1
+      }
+    },
+    {
+      "batch": 32,
+      "padding": "zero",
+      "profiled": 1,
+      "kind": "epilogue",
+      "risc": "TRISC_2",
+      "zone": "GDN_EP_INPUT_WAIT",
+      "core_total_us": {
+        "n": 1440,
+        "min": 0.040740740740740744,
+        "median": 0.04296296296296296,
+        "mean": 0.0461358024691358,
+        "p90": 0.06,
+        "max": 0.06296296296296296
+      },
+      "items_per_core": {
+        "n": 1440,
+        "min": 3,
+        "median": 3.0,
+        "mean": 3.2,
+        "p90": 4,
+        "max": 4
+      }
+    },
+    {
+      "batch": 32,
+      "padding": "zero",
+      "profiled": 1,
+      "kind": "epilogue",
+      "risc": "TRISC_2",
+      "zone": "GDN_EP_MEAN_SQUARE",
+      "core_total_us": {
+        "n": 1440,
+        "min": 34.34962962962963,
+        "median": 36.522222222222226,
+        "mean": 36.48174434156378,
+        "p90": 37.54666666666667,
+        "max": 37.942962962962966
+      },
+      "items_per_core": {
+        "n": 1440,
+        "min": 3,
+        "median": 3.0,
+        "mean": 3.2,
+        "p90": 4,
+        "max": 4
+      }
+    },
+    {
+      "batch": 32,
+      "padding": "zero",
+      "profiled": 1,
+      "kind": "epilogue",
+      "risc": "TRISC_2",
+      "zone": "GDN_EP_NORMALIZE",
+      "core_total_us": {
+        "n": 1440,
+        "min": 3.9266666666666667,
+        "median": 3.9755555555555557,
+        "mean": 4.237209362139918,
+        "p90": 5.285925925925926,
+        "max": 5.351111111111111
+      },
+      "items_per_core": {
+        "n": 1440,
+        "min": 3,
+        "median": 3.0,
+        "mean": 3.2,
+        "p90": 4,
+        "max": 4
+      }
+    },
+    {
+      "batch": 32,
+      "padding": "zero",
+      "profiled": 1,
+      "kind": "epilogue",
+      "risc": "TRISC_2",
+      "zone": "GDN_EP_OUTPUT",
+      "core_total_us": {
+        "n": 1440,
+        "min": 5.471111111111111,
+        "median": 5.491851851851852,
+        "mean": 5.8586280864197535,
+        "p90": 7.32962962962963,
+        "max": 7.347407407407408
+      },
+      "items_per_core": {
+        "n": 1440,
+        "min": 3,
+        "median": 3.0,
+        "mean": 3.2,
+        "p90": 4,
+        "max": 4
+      }
+    },
+    {
+      "batch": 32,
+      "padding": "zero",
+      "profiled": 1,
+      "kind": "epilogue",
+      "risc": "TRISC_2",
+      "zone": "GDN_EP_WEIGHT_AND_GATE",
+      "core_total_us": {
+        "n": 1440,
+        "min": 18.663703703703703,
+        "median": 18.692592592592593,
+        "mean": 19.93364917695473,
+        "p90": 24.913333333333334,
+        "max": 24.956296296296298
+      },
+      "items_per_core": {
+        "n": 1440,
+        "min": 3,
+        "median": 3.0,
+        "mean": 3.2,
+        "p90": 4,
+        "max": 4
+      }
+    },
+    {
+      "batch": 32,
+      "padding": "zero",
+      "profiled": 1,
+      "kind": "epilogue",
+      "risc": "TRISC_2",
+      "zone": "TRISC-KERNEL",
+      "core_total_us": {
+        "n": 1440,
+        "min": 63.141481481481485,
+        "median": 65.32037037037037,
+        "mean": 67.13967695473251,
+        "p90": 75.79777777777778,
+        "max": 76.26148148148148
+      },
+      "items_per_core": {
+        "n": 1440,
+        "min": 1,
+        "median": 1.0,
+        "mean": 1,
+        "p90": 1,
+        "max": 1
+      }
+    },
+    {
+      "batch": 32,
+      "padding": "zero",
+      "profiled": 1,
+      "kind": "recurrence",
+      "risc": "BRISC",
+      "zone": "BRISC-KERNEL",
+      "core_total_us": {
+        "n": 1440,
+        "min": 111.06962962962963,
+        "median": 127.03851851851852,
+        "mean": 126.0614079218107,
+        "p90": 134.42,
+        "max": 145.0874074074074
+      },
+      "items_per_core": {
+        "n": 1440,
+        "min": 1,
+        "median": 1.0,
+        "mean": 1,
+        "p90": 1,
+        "max": 1
+      }
+    },
+    {
+      "batch": 32,
+      "padding": "zero",
+      "profiled": 1,
+      "kind": "recurrence",
+      "risc": "BRISC",
+      "zone": "GDN_WRITER_DRAM_ISSUE_AND_OUTPUT_WAIT",
+      "core_total_us": {
+        "n": 1440,
+        "min": 2.3903703703703703,
+        "median": 7.311111111111111,
+        "mean": 9.84089146090535,
+        "p90": 20.04888888888889,
+        "max": 47.41407407407407
+      },
+      "items_per_core": {
+        "n": 1440,
+        "min": 12,
+        "median": 13.0,
+        "mean": 12.8,
+        "p90": 13,
+        "max": 13
+      }
+    },
+    {
+      "batch": 32,
+      "padding": "zero",
+      "profiled": 1,
+      "kind": "recurrence",
+      "risc": "BRISC",
+      "zone": "GDN_WRITER_OUTPUT_AND_BARRIER",
+      "core_total_us": {
+        "n": 1440,
+        "min": 9.008148148148148,
+        "median": 17.343333333333334,
+        "mean": 19.824927983539094,
+        "p90": 31.712592592592593,
+        "max": 68.22592592592592
+      },
+      "items_per_core": {
+        "n": 1440,
+        "min": 12,
+        "median": 13.0,
+        "mean": 12.8,
+        "p90": 13,
+        "max": 13
+      }
+    },
+    {
+      "batch": 32,
+      "padding": "zero",
+      "profiled": 1,
+      "kind": "recurrence",
+      "risc": "BRISC",
+      "zone": "GDN_WRITER_STATE_CB_WAIT",
+      "core_total_us": {
+        "n": 1440,
+        "min": 35.947407407407404,
+        "median": 96.71148148148148,
+        "mean": 94.89976028806585,
+        "p90": 112.15555555555555,
+        "max": 122.89555555555556
+      },
+      "items_per_core": {
+        "n": 1440,
+        "min": 12,
+        "median": 13.0,
+        "mean": 12.8,
+        "p90": 13,
+        "max": 13
+      }
+    },
+    {
+      "batch": 32,
+      "padding": "zero",
+      "profiled": 1,
+      "kind": "recurrence",
+      "risc": "NCRISC",
+      "zone": "GDN_READER_CB_RESERVE",
+      "core_total_us": {
+        "n": 1440,
+        "min": 1.6444444444444444,
+        "median": 4.42,
+        "mean": 6.125238683127572,
+        "p90": 12.013333333333334,
+        "max": 28.085185185185185
+      },
+      "items_per_core": {
+        "n": 1440,
+        "min": 12,
+        "median": 13.0,
+        "mean": 12.8,
+        "p90": 13,
+        "max": 13
+      }
+    },
+    {
+      "batch": 32,
+      "padding": "zero",
+      "profiled": 1,
+      "kind": "recurrence",
+      "risc": "NCRISC",
+      "zone": "GDN_READER_DRAM_ISSUE_AND_WAIT",
+      "core_total_us": {
+        "n": 1440,
+        "min": 14.54962962962963,
+        "median": 41.938148148148144,
+        "mean": 40.07015740740741,
+        "p90": 49.14222222222222,
+        "max": 55.696296296296296
+      },
+      "items_per_core": {
+        "n": 1440,
+        "min": 12,
+        "median": 13.0,
+        "mean": 12.8,
+        "p90": 13,
+        "max": 13
+      }
+    },
+    {
+      "batch": 32,
+      "padding": "zero",
+      "profiled": 1,
+      "kind": "recurrence",
+      "risc": "NCRISC",
+      "zone": "GDN_READER_L1_PREPARE",
+      "core_total_us": {
+        "n": 1440,
+        "min": 61.717777777777776,
+        "median": 67.0111111111111,
+        "mean": 65.98314866255144,
+        "p90": 67.09925925925926,
+        "max": 67.2
+      },
+      "items_per_core": {
+        "n": 1440,
+        "min": 12,
+        "median": 13.0,
+        "mean": 12.8,
+        "p90": 13,
+        "max": 13
+      }
+    },
+    {
+      "batch": 32,
+      "padding": "zero",
+      "profiled": 1,
+      "kind": "recurrence",
+      "risc": "NCRISC",
+      "zone": "NCRISC-KERNEL",
+      "core_total_us": {
+        "n": 1440,
+        "min": 98.77185185185185,
+        "median": 115.74592592592593,
+        "mean": 114.5193878600823,
+        "p90": 121.90444444444445,
+        "max": 132.26666666666668
+      },
+      "items_per_core": {
+        "n": 1440,
+        "min": 1,
+        "median": 1.0,
+        "mean": 1,
+        "p90": 1,
+        "max": 1
+      }
+    },
+    {
+      "batch": 32,
+      "padding": "zero",
+      "profiled": 1,
+      "kind": "recurrence",
+      "risc": "TRISC_0",
+      "zone": "GDN_RESIDENT_DELTA",
+      "core_total_us": {
+        "n": 1440,
+        "min": 51.46222222222222,
+        "median": 56.11962962962963,
+        "mean": 56.296170267489714,
+        "p90": 58.10666666666667,
+        "max": 77.34222222222222
+      },
+      "items_per_core": {
+        "n": 1440,
+        "min": 12,
+        "median": 13.0,
+        "mean": 12.8,
+        "p90": 13,
+        "max": 13
+      }
+    },
+    {
+      "batch": 32,
+      "padding": "zero",
+      "profiled": 1,
+      "kind": "recurrence",
+      "risc": "TRISC_0",
+      "zone": "GDN_RESIDENT_INPUT_WAIT",
+      "core_total_us": {
+        "n": 1440,
+        "min": 7.102222222222222,
+        "median": 15.853703703703705,
+        "mean": 16.275127572016462,
+        "p90": 24.19185185185185,
+        "max": 31.366666666666667
+      },
+      "items_per_core": {
+        "n": 1440,
+        "min": 12,
+        "median": 13.0,
+        "mean": 12.8,
+        "p90": 13,
+        "max": 13
+      }
+    },
+    {
+      "batch": 32,
+      "padding": "zero",
+      "profiled": 1,
+      "kind": "recurrence",
+      "risc": "TRISC_0",
+      "zone": "GDN_RESIDENT_OUTPUT",
+      "core_total_us": {
+        "n": 1440,
+        "min": 21.85037037037037,
+        "median": 23.725925925925925,
+        "mean": 23.36985853909465,
+        "p90": 23.767407407407408,
+        "max": 23.82
+      },
+      "items_per_core": {
+        "n": 1440,
+        "min": 12,
+        "median": 13.0,
+        "mean": 12.8,
+        "p90": 13,
+        "max": 13
+      }
+    },
+    {
+      "batch": 32,
+      "padding": "zero",
+      "profiled": 1,
+      "kind": "recurrence",
+      "risc": "TRISC_0",
+      "zone": "GDN_RESIDENT_OUTPUT_AND_DEST_WAIT",
+      "core_total_us": {
+        "n": 1440,
+        "min": 0.1622222222222222,
+        "median": 0.18962962962962962,
+        "mean": 0.18781430041152264,
+        "p90": 0.19925925925925925,
+        "max": 0.21555555555555556
+      },
+      "items_per_core": {
+        "n": 1440,
+        "min": 12,
+        "median": 13.0,
+        "mean": 12.8,
+        "p90": 13,
+        "max": 13
+      }
+    },
+    {
+      "batch": 32,
+      "padding": "zero",
+      "profiled": 1,
+      "kind": "recurrence",
+      "risc": "TRISC_0",
+      "zone": "GDN_RESIDENT_PACK",
+      "core_total_us": {
+        "n": 1440,
+        "min": 0.16148148148148148,
+        "median": 0.17777777777777778,
+        "mean": 0.17726594650205763,
+        "p90": 0.1837037037037037,
+        "max": 0.1925925925925926
+      },
+      "items_per_core": {
+        "n": 1440,
+        "min": 12,
+        "median": 13.0,
+        "mean": 12.8,
+        "p90": 13,
+        "max": 13
+      }
+    },
+    {
+      "batch": 32,
+      "padding": "zero",
+      "profiled": 1,
+      "kind": "recurrence",
+      "risc": "TRISC_0",
+      "zone": "GDN_RESIDENT_STATE_UPDATE",
+      "core_total_us": {
+        "n": 1440,
+        "min": 22.624444444444446,
+        "median": 24.606666666666666,
+        "mean": 24.230975823045267,
+        "p90": 24.63851851851852,
+        "max": 24.68888888888889
+      },
+      "items_per_core": {
+        "n": 1440,
+        "min": 12,
+        "median": 13.0,
+        "mean": 12.8,
+        "p90": 13,
+        "max": 13
+      }
+    },
+    {
+      "batch": 32,
+      "padding": "zero",
+      "profiled": 1,
+      "kind": "recurrence",
+      "risc": "TRISC_0",
+      "zone": "TRISC-KERNEL",
+      "core_total_us": {
+        "n": 1440,
+        "min": 109.51703703703704,
+        "median": 125.2937037037037,
+        "mean": 124.42560596707818,
+        "p90": 132.9051851851852,
+        "max": 143.57185185185185
+      },
+      "items_per_core": {
+        "n": 1440,
+        "min": 1,
+        "median": 1.0,
+        "mean": 1,
+        "p90": 1,
+        "max": 1
+      }
+    },
+    {
+      "batch": 32,
+      "padding": "zero",
+      "profiled": 1,
+      "kind": "recurrence",
+      "risc": "TRISC_1",
+      "zone": "GDN_RESIDENT_DELTA",
+      "core_total_us": {
+        "n": 1440,
+        "min": 59.577777777777776,
+        "median": 71.20851851851852,
+        "mean": 71.10709362139917,
+        "p90": 78.83185185185185,
+        "max": 89.44444444444444
+      },
+      "items_per_core": {
+        "n": 1440,
+        "min": 12,
+        "median": 13.0,
+        "mean": 12.8,
+        "p90": 13,
+        "max": 13
+      }
+    },
+    {
+      "batch": 32,
+      "padding": "zero",
+      "profiled": 1,
+      "kind": "recurrence",
+      "risc": "TRISC_1",
+      "zone": "GDN_RESIDENT_INPUT_WAIT",
+      "core_total_us": {
+        "n": 1440,
+        "min": 0.17407407407407408,
+        "median": 0.19185185185185186,
+        "mean": 0.19053189300411522,
+        "p90": 0.1962962962962963,
+        "max": 0.21703703703703703
+      },
+      "items_per_core": {
+        "n": 1440,
+        "min": 12,
+        "median": 13.0,
+        "mean": 12.8,
+        "p90": 13,
+        "max": 13
+      }
+    },
+    {
+      "batch": 32,
+      "padding": "zero",
+      "profiled": 1,
+      "kind": "recurrence",
+      "risc": "TRISC_1",
+      "zone": "GDN_RESIDENT_OUTPUT",
+      "core_total_us": {
+        "n": 1440,
+        "min": 22.942962962962962,
+        "median": 24.88740740740741,
+        "mean": 24.514253600823046,
+        "p90": 24.925925925925927,
+        "max": 24.97925925925926
+      },
+      "items_per_core": {
+        "n": 1440,
+        "min": 12,
+        "median": 13.0,
+        "mean": 12.8,
+        "p90": 13,
+        "max": 13
+      }
+    },
+    {
+      "batch": 32,
+      "padding": "zero",
+      "profiled": 1,
+      "kind": "recurrence",
+      "risc": "TRISC_1",
+      "zone": "GDN_RESIDENT_OUTPUT_AND_DEST_WAIT",
+      "core_total_us": {
+        "n": 1440,
+        "min": 0.17703703703703705,
+        "median": 0.1962962962962963,
+        "mean": 0.1951332304526749,
+        "p90": 0.2037037037037037,
+        "max": 0.2162962962962963
+      },
+      "items_per_core": {
+        "n": 1440,
+        "min": 12,
+        "median": 13.0,
+        "mean": 12.8,
+        "p90": 13,
+        "max": 13
+      }
+    },
+    {
+      "batch": 32,
+      "padding": "zero",
+      "profiled": 1,
+      "kind": "recurrence",
+      "risc": "TRISC_1",
+      "zone": "GDN_RESIDENT_PACK",
+      "core_total_us": {
+        "n": 1440,
+        "min": 0.1711111111111111,
+        "median": 0.19185185185185186,
+        "mean": 0.1902659465020576,
+        "p90": 0.1962962962962963,
+        "max": 0.20962962962962964
+      },
+      "items_per_core": {
+        "n": 1440,
+        "min": 12,
+        "median": 13.0,
+        "mean": 12.8,
+        "p90": 13,
+        "max": 13
+      }
+    },
+    {
+      "batch": 32,
+      "padding": "zero",
+      "profiled": 1,
+      "kind": "recurrence",
+      "risc": "TRISC_1",
+      "zone": "GDN_RESIDENT_STATE_UPDATE",
+      "core_total_us": {
+        "n": 1440,
+        "min": 25.042962962962964,
+        "median": 27.15851851851852,
+        "mean": 26.758364197530863,
+        "p90": 27.214074074074073,
+        "max": 27.245925925925928
+      },
+      "items_per_core": {
+        "n": 1440,
+        "min": 12,
+        "median": 13.0,
+        "mean": 12.8,
+        "p90": 13,
+        "max": 13
+      }
+    },
+    {
+      "batch": 32,
+      "padding": "zero",
+      "profiled": 1,
+      "kind": "recurrence",
+      "risc": "TRISC_1",
+      "zone": "TRISC-KERNEL",
+      "core_total_us": {
+        "n": 1440,
+        "min": 110.0237037037037,
+        "median": 125.78518518518518,
+        "mean": 124.90510699588478,
+        "p90": 133.40740740740742,
+        "max": 144.11851851851853
+      },
+      "items_per_core": {
+        "n": 1440,
+        "min": 1,
+        "median": 1.0,
+        "mean": 1,
+        "p90": 1,
+        "max": 1
+      }
+    },
+    {
+      "batch": 32,
+      "padding": "zero",
+      "profiled": 1,
+      "kind": "recurrence",
+      "risc": "TRISC_2",
+      "zone": "GDN_RESIDENT_DELTA",
+      "core_total_us": {
+        "n": 1440,
+        "min": 0.17851851851851852,
+        "median": 0.19925925925925925,
+        "mean": 0.19693518518518519,
+        "p90": 0.20222222222222222,
+        "max": 0.2162962962962963
+      },
+      "items_per_core": {
+        "n": 1440,
+        "min": 12,
+        "median": 13.0,
+        "mean": 12.8,
+        "p90": 13,
+        "max": 13
+      }
+    },
+    {
+      "batch": 32,
+      "padding": "zero",
+      "profiled": 1,
+      "kind": "recurrence",
+      "risc": "TRISC_2",
+      "zone": "GDN_RESIDENT_INPUT_WAIT",
+      "core_total_us": {
+        "n": 1440,
+        "min": 0.1637037037037037,
+        "median": 0.1985185185185185,
+        "mean": 0.19697530864197532,
+        "p90": 0.21481481481481482,
+        "max": 0.2348148148148148
+      },
+      "items_per_core": {
+        "n": 1440,
+        "min": 12,
+        "median": 13.0,
+        "mean": 12.8,
+        "p90": 13,
+        "max": 13
+      }
+    },
+    {
+      "batch": 32,
+      "padding": "zero",
+      "profiled": 1,
+      "kind": "recurrence",
+      "risc": "TRISC_2",
+      "zone": "GDN_RESIDENT_OUTPUT",
+      "core_total_us": {
+        "n": 1440,
+        "min": 0.17629629629629628,
+        "median": 0.19333333333333333,
+        "mean": 0.1911543209876543,
+        "p90": 0.1962962962962963,
+        "max": 0.20444444444444446
+      },
+      "items_per_core": {
+        "n": 1440,
+        "min": 12,
+        "median": 13.0,
+        "mean": 12.8,
+        "p90": 13,
+        "max": 13
+      }
+    },
+    {
+      "batch": 32,
+      "padding": "zero",
+      "profiled": 1,
+      "kind": "recurrence",
+      "risc": "TRISC_2",
+      "zone": "GDN_RESIDENT_OUTPUT_AND_DEST_WAIT",
+      "core_total_us": {
+        "n": 1440,
+        "min": 11.248888888888889,
+        "median": 25.92925925925926,
+        "mean": 29.483851851851853,
+        "p90": 48.74888888888889,
+        "max": 87.54074074074074
+      },
+      "items_per_core": {
+        "n": 1440,
+        "min": 12,
+        "median": 13.0,
+        "mean": 12.8,
+        "p90": 13,
+        "max": 13
+      }
+    },
+    {
+      "batch": 32,
+      "padding": "zero",
+      "profiled": 1,
+      "kind": "recurrence",
+      "risc": "TRISC_2",
+      "zone": "GDN_RESIDENT_PACK",
+      "core_total_us": {
+        "n": 1440,
+        "min": 34.27037037037037,
+        "median": 94.92222222222222,
+        "mean": 93.13003395061729,
+        "p90": 110.37851851851852,
+        "max": 121.13703703703703
+      },
+      "items_per_core": {
+        "n": 1440,
+        "min": 12,
+        "median": 13.0,
+        "mean": 12.8,
+        "p90": 13,
+        "max": 13
+      }
+    },
+    {
+      "batch": 32,
+      "padding": "zero",
+      "profiled": 1,
+      "kind": "recurrence",
+      "risc": "TRISC_2",
+      "zone": "GDN_RESIDENT_STATE_UPDATE",
+      "core_total_us": {
+        "n": 1440,
+        "min": 0.16666666666666666,
+        "median": 0.1837037037037037,
+        "mean": 0.1814130658436214,
+        "p90": 0.18592592592592594,
+        "max": 0.19555555555555557
+      },
+      "items_per_core": {
+        "n": 1440,
+        "min": 12,
+        "median": 13.0,
+        "mean": 12.8,
+        "p90": 13,
+        "max": 13
+      }
+    },
+    {
+      "batch": 32,
+      "padding": "zero",
+      "profiled": 1,
+      "kind": "recurrence",
+      "risc": "TRISC_2",
+      "zone": "TRISC-KERNEL",
+      "core_total_us": {
+        "n": 1440,
+        "min": 110.08222222222223,
+        "median": 125.87814814814814,
+        "mean": 124.99788683127572,
+        "p90": 133.47925925925927,
+        "max": 144.1325925925926
+      },
+      "items_per_core": {
+        "n": 1440,
+        "min": 1,
+        "median": 1.0,
+        "mean": 1,
+        "p90": 1,
+        "max": 1
+      }
+    }
+  ]
+}

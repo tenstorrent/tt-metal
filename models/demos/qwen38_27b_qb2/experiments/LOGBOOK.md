@@ -2501,3 +2501,28 @@ still needed. [Final receipts](../galaxy-evidence/gdn-followup-results-v1/README
   standalone restore passes but serving integration and transfer tuning are open.
   Future evals must identify cold/warm conditions; full GPQA still waits for25TSU.
 - Evidence: galaxy-evidence/gdn-combined-padding-results-v1/README.md.
+
+## October 11 - Current phase analysis and parallel feature progress
+
+- Paired3,460,608 selected events from the445MB raw device CSV with exact call,
+  device and signpost identities. All24 zone counts and interval pairs passed.
+  B16 skip-padding eager medians: recurrence79.641us,epilogue31.536us. Native
+  profiler is active in both plain and custom-zone controls, so this is not
+  a profiler-on/off overhead claim or full-model traced timing.
+- Useful leads: reader formatting32.98us/core overlaps math; unpack input wait
+  12.21us/core remains. Math's delta39.93,state-update13.38,output12.26us/core
+  contain synchronization. Pack's50.70us includes waiting for DEST; do not
+  call it pure packing. Keep hardware counters and broader operator attribution
+  ahead of assumptions about NoC or DRAM saturation. Analysis/script published
+  beside completed measurement receipts; no new hardware job launched.
+- Multimodal Metal candidate125d649dd166214b2c1393c9c84196444d860b26 pushed to
+  anatarajan/qwen38-multimodal-20261010;42 CPU tests and pre-commit pass.
+  Plugin candidatef06225fbb4dfece4a6494517a9850c23db880615 passes646 host-stub
+  tests but SSH and HTTPS pushes are denied write access for anatarajan-tt.
+  No remote plugin feature branch exists; local commit and patch retained.
+  Native import/processor compatibility work continues without device access.
+- Prefix candidate61a0099bfd1189dcc495c16d38ad6ea6ad53b382 pushed to the isolated
+  prefix branch;38 CPU tests and pre-commit pass. Adds exclusive ownership and
+  bounded asynchronous transfer submission. A fake32-window read uses one fence
+  instead of32, which is a mechanism result, not a physical speedup. Scheduler
+  admission/worker integration continues; no serving enablement or merge yet.
