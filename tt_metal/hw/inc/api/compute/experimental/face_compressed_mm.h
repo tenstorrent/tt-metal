@@ -53,8 +53,7 @@ namespace ckernel {
 // clang-format off
 /**
  * Short initialization for face_compressed_mm_block operation. Must be called before face_compressed_mm_block and is safe to call at any point in the kernel.
- * Call it again after any other op has run, in particular one that writes SrcB: face_compressed_mm_block does not
- * clear SrcB per call, the clear_src clear happens only here.
+ * Call it again after any other op has run, in particular one that writes SrcB.
  * At the beginning of a kernel, bring the op up by hand: the unpack, math and pack hw configures, the math
  * pack-sync init and the pack dest init, then pack_init_mutex_ADC as the only pack init.
  * deepseek_compute_kernel_hw_startup cannot stand in for that until it takes a mutex_ADC option.

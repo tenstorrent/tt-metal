@@ -133,8 +133,7 @@ def meta_math_header(m, ct):
 
 
 def buffer_b_words(a_tiles):
-    # buffer_B base in L1_ADDRESS units (= byte/16 - 1): B follows A, which is a_tiles
-    # (= K//32) 32x32 Float16_b tiles of 2048 B each.
+    # buffer_B base in L1_ADDRESS units (= byte/16 - 1): B follows A, a_tiles Float16_b tiles of 2048 B.
     buf_a_addr = (
         StimuliConfig.STIMULI_L1_ADDRESS_DEBUG
         if StimuliConfig.WITH_COVERAGE
@@ -147,8 +146,7 @@ def encode_meta(assignment, ct, kt, chunk_info, buf_b_words=None):
     # Build the face-compressed meta buffer, laid out as:
     #   math_words | iters | address_words | index_words
     # ct/kt are face columns/rows (N//16, K//16); chunk_info is pack_b's per-chunk
-    # (bfp2, bfp4) exp-section offset + Y_OFF; buf_b_words is where those offsets start
-    # (default: buffer_B of a single call over all kt face rows).
+    # (bfp2, bfp4) exp-section offset + Y_OFF; buf_b_words defaults to one call over all kt face rows.
     if buf_b_words is None:
         buf_b_words = buffer_b_words(kt // 2)
 
@@ -447,9 +445,8 @@ def test_matmul_face_compressed_deepseek(shape, switch_mult, seed):
     run_face_compressed(M, K, N, assignment)
 
 
-# K splits over two-K-tile calls into one DEST (see CUSTOM_MM_CALLS). race uses one format, so no SrcA clear inside a
-# call hides a both-bank SrcB clear; rearm adds a -inf SrcA clear per call, which format-switch clears would mask;
-# reinit runs the init again between the calls, with ct_dim > 1 or rearm so a call does not end on the clear-to-0 stall.
+# race uses one format so no SrcA clear inside a call hides a both-bank SrcB clear; rearm adds a -inf SrcA clear per
+# call; reinit reruns the init between calls, with ct_dim > 1 or rearm so a call does not end on the clear-to-0 stall.
 MULTI_CALL_CASES = [
     # (id, M, K, N, per-call face pattern, rearm, reinit)
     ("calls", 1, 1024, 64, ["bfp4", "bfp2"], False, False),
@@ -465,11 +462,11 @@ MULTI_CALL_CASES = [
     ("reinit-rearm", 1, 1024, 64, ["bfp4", "bfp2"], True, True),
 ]
 MULTI_CALL_KT = 2
-# Healthy face runs sit at 0.9999 or above; the default gate would pass a run that drops one face.
+# Tighter than the default gate, which would pass a run that drops one face.
 MULTI_CALL_PCC = 0.9995
-# Per-call meta words besides the index words: the kernel's meta_bytes_per_call in matmul_face_compressed_test.cpp.
+# Matches meta_bytes_per_call in matmul_face_compressed_test.cpp.
 META_OVERHEAD_WORDS = 8
-# A call's B slot holds its faces at the bfp4 size, each a face's exponent bytes plus its mantissa bytes, and a pad.
+# A call's B slot holds its faces at the bfp4 size plus a pad.
 EXPONENT_BYTES_PER_FACE = 16
 BFP4_MANTISSA_BYTES_PER_FACE = 128
 B_SLOT_PAD_BYTES = 256

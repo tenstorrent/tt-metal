@@ -1,8 +1,7 @@
 # SPDX-FileCopyrightText: © 2026 Tenstorrent AI ULC
 # SPDX-License-Identifier: Apache-2.0
 
-"""Perf sweep of the Blackhole face_compressed_mm LLK pair (sources/face_compressed_mm_perf.cpp, the perf twin of
-test_matmul_face_compressed.py); the figures are per weight tile, zero faces counted."""
+"""face_compressed_mm perf sweep; the figures are per weight tile, zero faces counted."""
 
 import math
 from dataclasses import dataclass
@@ -53,7 +52,6 @@ def face_assignment(pattern, K, N):
 
 
 def build_meta(pattern, ct, kt):
-    """The meta words, the non-zero face count per activation block and the packed weight bytes of a kt x ct call."""
     K, N = kt * 32, ct * 32
     ct_f, kt_f = N // 16, K // 16
     assignment = promote_assignment(face_assignment(pattern, K, N), ct_f)
@@ -74,7 +72,6 @@ def build_meta(pattern, ct, kt):
 
 @dataclass
 class FACE_COMPRESSED_MM_META(TemplateParameter):
-    """The meta buffer of a kt x ct call and the non-zero face count per activation block, baked into the build header."""
 
     face_pattern: str = "bfp4"
     face_kt: int = 2
@@ -91,8 +88,6 @@ class FACE_COMPRESSED_MM_META(TemplateParameter):
         )
 
 
-# (pattern, M, ct, kt): one, two and eight output tiles per call, the bfp2 data bound, the DeepSeek face distribution
-# with doubled format switches, and M 1.
 CASES = [
     ("bfp4", 8, 1, 16),
     ("bfp4", 8, 2, 16),

@@ -15,7 +15,7 @@ std::uint32_t unp_cfg_context          = 0;
 std::uint32_t pack_sync_tile_dst_ptr   = 0;
 std::uint32_t math_sync_tile_dst_index = 0;
 
-// K splits over CUSTOM_MM_NUM_CALLS calls into one DEST, each with its meta buffer in a fixed slot the driver matches.
+// Each call has its meta buffer in a fixed slot the driver matches.
 constexpr std::uint32_t num_calls           = CUSTOM_MM_NUM_CALLS;
 constexpr std::uint32_t kt_per_call         = KT_DIM / num_calls;
 constexpr std::uint32_t meta_bytes_per_call = (kt_per_call * CT_DIM + 8) * sizeof(std::uint32_t);
@@ -47,19 +47,19 @@ void run_kernel(RUNTIME_PARAMETERS params)
 
     if constexpr (num_calls > 1)
     {
-        // A both-bank SrcB clear only corrupts the SrcA writes it overlaps while unpacker 0's last SrcA clear value is
-        // non-zero, and that value outlives kernels.
+        // A both-bank SrcB clear only corrupts SrcA writes while unpacker 0's last SrcA clear value is non-zero, which
+        // outlives kernels.
         TTI_UNPACR_NOP(SrcA, 0, 0, 0, 0, 0, 0, p_unpacr_nop::CLR_SRC_1, p_unpacr_nop::CLR_SRC);
     }
 
     _llk_unpack_AB_face_compressed_mm_init_<false /* transpose */, true /* clear_src */>(params.in0_face_r_dim);
 
-    // An activation tile is 2 faces x in0_face_r_dim rows x 16 Float16_b datums = 4 * in0_face_r_dim 16-byte words.
+    // An activation tile is 4 * in0_face_r_dim 16-byte words.
     for (std::uint32_t call = 0; call < num_calls; call++)
     {
         if constexpr (CUSTOM_MM_REINIT)
         {
-            // Another op's init between the calls, whose SrcB clear meets the previous call's unpacks.
+            // Its SrcB clear meets the previous call's unpacks.
             if (call > 0)
             {
                 _llk_unpack_AB_face_compressed_mm_init_<false /* transpose */, true /* clear_src */>(params.in0_face_r_dim);
@@ -69,7 +69,7 @@ void run_kernel(RUNTIME_PARAMETERS params)
             L1_ADDRESS(params.buffer_A[0]) + call * kt_per_call * 4 * params.in0_face_r_dim, params.buffer_C[0] + call * meta_bytes_per_call, kt_per_call);
         if constexpr (CUSTOM_MM_REARM)
         {
-            // A -inf SrcA clear after every call, as a max-reduce between calls would; it waits for its bank.
+            // As a max-reduce between calls would.
             TTI_UNPACR_NOP(SrcA, 0, 0, 0, 0, 1 /* Stall_Clr_Cntrl */, 0, p_unpacr_nop::CLR_SRC_NEGINF, p_unpacr_nop::CLR_SRC);
         }
     }
@@ -101,7 +101,7 @@ void run_kernel(RUNTIME_PARAMETERS params)
     {
         if constexpr (num_calls > 1)
         {
-            // Hold math back so the unpacker reaches call c + 1 while math still holds call c's banks.
+            // Math lags so the unpacker reaches the next call while math still holds this call's banks.
             ckernel::wait(2000);
         }
         _llk_math_face_compressed_mm_<CT_DIM, true>(params.buffer_C[0] + call * meta_bytes_per_call, params.in0_face_r_dim, 0, kt_per_call);

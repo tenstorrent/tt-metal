@@ -184,14 +184,12 @@ inline void _llk_unpack_AB_face_compressed_mm_mop_config_()
  * @brief Configure the unpack thread for a face-granular compressed matmul.
  *
  * @tparam transpose: Haloize the SrcA read, values = <true/false>
- * @tparam clear_src: Zero both SrcB banks once here, values = <true/false>. Only the first 4 * unpB_face_r_dim
- *                    SrcB rows are unpacked, so zeroing the rest saves FPU power.
+ * @tparam clear_src: Zero both SrcB banks once here, values = <true/false>
  * @param unpB_face_r_dim: Activation rows per face, 1 or 8. Sets unpacker 1's X end.
  * @note Call this before @ref _llk_unpack_AB_face_compressed_mm_, and
  *       @ref _llk_unpack_AB_face_compressed_mm_uninit_ after the last one, to put back the tile descriptor
  *       num_faces this forces to a single face. Call it again after any other op has run, in particular one that
- *       writes SrcB: the execute does not reprogram the MOP, the replay buffer, the context formats, the z-dim
- *       override or the CH1 X ends, and the SrcB clear happens only here.
+ *       writes SrcB: the execute does not redo this setup and the SrcB clear is only here.
  * @note On the math thread, pair with @ref _llk_math_face_compressed_mm_init_.
  */
 template <bool transpose = false, bool clear_src = true>

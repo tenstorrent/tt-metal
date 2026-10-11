@@ -2,8 +2,7 @@
 //
 // SPDX-License-Identifier: Apache-2.0
 
-// Perf twin of sources/matmul_face_compressed_test.cpp; the unit is one weight tile. META and META_NZ_BLOCKS (the
-// non-zero face count of each activation block) are baked into the build header by perf_face_compressed_mm.py.
+// The unit is one weight tile.
 
 #include <cstdint>
 

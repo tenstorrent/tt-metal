@@ -2,8 +2,7 @@
 //
 // SPDX-License-Identifier: Apache-2.0
 
-// Perf twin of sources/compressed_custom_mm_test.cpp. The tile format metadata (META, META_NZ) is baked into the build
-// header by perf_compressed_custom_mm.py; TILE_COUNT is kt x ct weight tiles per call, zero tiles included.
+// TILE_COUNT counts every weight tile of a call, zero tiles included.
 
 #include <cstdint>
 
@@ -36,8 +35,8 @@ void run_kernel(RUNTIME_PARAMETERS params)
     {
         START_PERF_MEASURE("INIT")
         _llk_unpack_hw_configure_<is_fp32_dest_acc_en>(
-            formats.unpack_B_src, // SrcA <- in1 (full tile, BFP-compressed)
-            formats.unpack_A_src, // SrcB <- in0 (partial tile, bf16)
+            formats.unpack_B_src,
+            formats.unpack_A_src,
             formats.unpack_B_dst,
             formats.unpack_A_dst,
             FACE_R_DIM,

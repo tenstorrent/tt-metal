@@ -1,8 +1,7 @@
 # SPDX-FileCopyrightText: © 2026 Tenstorrent AI ULC
 # SPDX-License-Identifier: Apache-2.0
 
-"""Perf sweep of the Blackhole compressed_custom_mm LLK pair (sources/compressed_custom_mm_perf.cpp, the perf twin of
-test_compressed_custom_mm.py); the figures are per weight tile, zero tiles counted."""
+"""compressed_custom_mm perf sweep; the figures are per weight tile, zero tiles counted."""
 
 from dataclasses import dataclass
 
@@ -27,7 +26,7 @@ pytestmark = [skip_for_wormhole, skip_for_quasar]
 
 BF16 = DataFormat.Float16_b
 
-# The L1 format the harness reserves the in1 buffer with; the LLK strides the stream by its own per-format tile size.
+# The harness only reserves the in1 buffer with this format; the LLK strides by each tile's own format.
 DECLARED_IN1 = {
     "bfp8": DataFormat.Bfp8_b,
     "bfp4": DataFormat.Bfp4_b,
@@ -40,7 +39,6 @@ DECLARED_IN1 = {
 
 
 def tile_formats(pattern, kt, ct):
-    """Row-major kt x ct list of FMT_CODEs for a named metadata pattern."""
     codes = []
     for k in range(kt):
         for c in range(ct):
@@ -62,7 +60,6 @@ def tile_formats(pattern, kt, ct):
 
 @dataclass
 class COMPRESSED_MM_META(TemplateParameter):
-    """The metadata words of a kt x ct pattern and the non-zero tile count per k row, baked into the build header."""
 
     pattern: str = "bfp8"
     kt: int = 2
@@ -87,7 +84,6 @@ class COMPRESSED_MM_META(TemplateParameter):
         )
 
 
-# (pattern, M, ct, kt): the patterns at the DeepSeek decode call shape, and the one-tile and full-width k rows.
 CASES = [
     (p, 8, 8, 16)
     for p in ("bfp8", "bfp4", "bfp2", "alt84", "alt82", "zero50_4", "zero50_8")
