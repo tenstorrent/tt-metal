@@ -147,6 +147,7 @@ KernelIds build_kernels_and_cbs(
     // Per-row scale: the reader keeps whole column segments resident (both passes read them); even rows go to
     // cb_in and odd rows to c_21 (the compute holds rows k and k+1 at once), two segments each.
     const uint32_t q_unit = defines.contains("Q_UNIT") ? std::stoul(defines.at("Q_UNIT")) : 1u;
+    const uint32_t q_wgroup = defines.contains("Q_WGROUP") ? std::stoul(defines.at("Q_WGROUP")) : 1u;
     const uint32_t in_block_tiles = attrs.per_row_scale
                                         ? (chunks_per_row / std::stoul(defines.at("PR_SEGMENTS"))) * tiles_per_block
                                         : q_unit * tiles_per_block;
@@ -196,7 +197,8 @@ KernelIds build_kernels_and_cbs(
     // cb_output_e4m3: e4m3 output, always row-major, one tile per page, double-buffered.
     // Identical for both input layouts (ROW_MAJOR and TILE).
     CircularBufferConfig cb_output_e4m3_cfg =
-        CircularBufferConfig(2 * q_unit * tiles_per_block * output_e4m3_page_bytes, {{cb_output_e4m3_idx, fp8_df}})
+        CircularBufferConfig(
+            2 * q_unit * q_wgroup * tiles_per_block * output_e4m3_page_bytes, {{cb_output_e4m3_idx, fp8_df}})
             .set_page_size(cb_output_e4m3_idx, output_e4m3_page_bytes);
     CreateCircularBuffer(program, all_cores, cb_output_e4m3_cfg);
 
@@ -412,6 +414,12 @@ ttnn::device_operation::CachedProgram<PerTokenCastToFp8SharedVariables> create_p
                 --q_unit;
             }
             defines["Q_UNIT"] = std::to_string(q_unit);
+            // Write groups of 4 units: the compute packs 4 consecutive units of a tile-row side by side and the writer
+            // moves one 1 KB run per row instead of four 256 B ones (K3 Q2 81 -> 71 us; 3: 73, 5: 72, 14: 71).
+            if (defines.contains("DIRECT_SRC")) {  // the grouped pack lives in the direct tiled compute loop
+                defines["Q_WGROUP"] = "4";
+                defines["Q_UPR"] = std::to_string(chunks_per_row / q_unit);
+            }
         }
     }
 
@@ -482,27 +490,19 @@ ttnn::device_operation::CachedProgram<PerTokenCastToFp8SharedVariables> create_p
         return args;
     };
     uint32_t offset = 0;  // ROW_MAJOR: first row; TILE: first 128-block. Advances by this core's unit count.
-    // Count-aware work split, weighted by grid row: with the reader on NoC 0 and the writer on NoC 1 the top rows
-    // run slower than the bottom ones (measured ~1.45x at K3 load), so core i gets [frac_bounds[i], frac_bounds[i+1])
-    // of the units in 1/65536 units, with weight 1 + skew * y / (rows - 1).
+    // Count-aware work split: core i gets [frac_bounds[i], frac_bounds[i+1]) of the units, in 1/65536 units. Even
+    // shares: the grid-row weighting that paid off while every core read the routing tables itself (Q2 91 -> 88 us)
+    // costs time since those reads are multicast, and no row or per-core weighting beat even shares at K3 load
+    // once the work became NoC-bound (the congestion moves with the load).
     std::vector<uint32_t> frac_bounds(num_cores + 1, 0);
-    {
-        // 0.3–0.5 measured best (Q2 91 -> 88 us at K3 load).
-        constexpr double skew = 0.4;
-        uint32_t max_y = 0;
-        for (const auto& c : all_cores_vec) {
-            max_y = std::max<uint32_t>(max_y, c.y);
-        }
-        std::vector<double> prefix(num_cores + 1, 0.0);
-        for (uint32_t i = 0; i < num_cores; ++i) {
-            const double w = 1.0 + (max_y > 0 ? skew * all_cores_vec[i].y / max_y : 0.0);
-            prefix[i + 1] = prefix[i] + w;
-        }
-        for (uint32_t i = 0; i <= num_cores; ++i) {
-            frac_bounds[i] = static_cast<uint32_t>(std::llround(65536.0 * prefix[i] / prefix[num_cores]));
-        }
-        frac_bounds[num_cores] = 65536;
+    for (uint32_t i = 0; i <= num_cores; ++i) {
+        frac_bounds[i] = static_cast<uint32_t>((65536ull * i) / num_cores);
     }
+    // Count-aware (non per-row): core 0's reader multicasts the valid tile-row count to every core's semaphore.
+    const bool mcast_rows = attrs.token_count_aware && !attrs.per_row_scale;
+    const uint32_t rows_sem = mcast_rows ? CreateSemaphore(program, all_cores, 0) : 0;
+    const auto mcast_start = input.device()->worker_core_from_logical_core(all_cores.bounding_box().start_coord);
+    const auto mcast_end = input.device()->worker_core_from_logical_core(all_cores.bounding_box().end_coord);
     for (uint32_t i = 0; i < num_cores; ++i) {
         const auto& core = all_cores_vec[i];
         if (attrs.per_row_scale && !attrs.token_count_aware) {
@@ -523,17 +523,25 @@ ttnn::device_operation::CachedProgram<PerTokenCastToFp8SharedVariables> create_p
         uint32_t num_blocks = 0;
         if (attrs.token_count_aware) {
             const uint32_t frac_start = frac_bounds[i], frac_end = frac_bounds[i + 1];
-            SetRuntimeArgs(
-                program,
-                k.reader,
-                core,
-                {src_addr,
-                 tensor_args.expert_region_offsets->buffer()->address(),
-                 tensor_args.expert_token_counts->buffer()->address(),
-                 tensor_args.global_expert_idx_table->buffer()->address(),
-                 i,
-                 frac_start,
-                 frac_end});
+            std::vector<uint32_t> rargs{
+                src_addr,
+                tensor_args.expert_region_offsets->buffer()->address(),
+                tensor_args.expert_token_counts->buffer()->address(),
+                tensor_args.global_expert_idx_table->buffer()->address(),
+                i,
+                frac_start,
+                frac_end};
+            if (mcast_rows) {
+                rargs.insert(
+                    rargs.end(),
+                    {rows_sem,
+                     static_cast<uint32_t>(mcast_start.x),
+                     static_cast<uint32_t>(mcast_start.y),
+                     static_cast<uint32_t>(mcast_end.x),
+                     static_cast<uint32_t>(mcast_end.y),
+                     num_cores});
+            }
+            SetRuntimeArgs(program, k.reader, core, rargs);
             std::vector<uint32_t> wargs{
                 dst_e4m3_addr,
                 dst_scale_addr,
@@ -548,6 +556,9 @@ ttnn::device_operation::CachedProgram<PerTokenCastToFp8SharedVariables> create_p
             if (attrs.per_row_scale) {
                 const auto x = per_row_exchange_args(i);
                 wargs.insert(wargs.end(), x.begin(), x.end());
+            }
+            if (mcast_rows) {
+                wargs.push_back(rows_sem);
             }
             SetRuntimeArgs(program, k.writer, core, wargs);
             SetRuntimeArgs(program, k.compute, core, {0u});
@@ -590,8 +601,9 @@ void apply_io_overrides(
         auto& writer_args = tt::tt_metal::GetRuntimeArgs(cached_program.program, shared.writer_kernel_id, core);
         writer_args[0] = dst_e4m3_addr;
         writer_args[1] = dst_scale_addr;
-        // Count-aware reader args: src, region, counts, table, core id, work-split fraction start / end.
-        if (tensor_args.expert_region_offsets.has_value() && reader_args.size() == 7) {
+        // Count-aware reader args: src, region, counts, table, core id, work-split fraction start / end (then the
+        // valid-rows multicast args).
+        if (tensor_args.expert_region_offsets.has_value() && reader_args.size() >= 7) {
             const uint32_t r = tensor_args.expert_region_offsets->buffer()->address();
             const uint32_t c = tensor_args.expert_token_counts->buffer()->address();
             const uint32_t t = tensor_args.global_expert_idx_table->buffer()->address();

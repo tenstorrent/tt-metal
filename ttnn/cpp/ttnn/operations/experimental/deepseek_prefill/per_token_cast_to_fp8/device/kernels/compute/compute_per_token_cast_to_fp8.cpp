@@ -161,6 +161,7 @@ void kernel_main() {
     CircularBuffer cb_loop_count(cb_loop_count_id);
     cb_loop_count.wait_front(1);
     uint32_t num_blocks = cb_loop_count.read_tile_value(0, 0);
+    const uint32_t first_unit = cb_loop_count.read_tile_value(0, 1);  // global index of this core's first unit
     cb_loop_count.pop_front(1);
 #else
     uint32_t num_blocks = get_arg_val<uint32_t>(0);  // tile_h x 128 blocks for this core
@@ -411,11 +412,24 @@ void kernel_main() {
 #if defined(DIRECT_SRC) && defined(INPUT_TILE_LAYOUT)
     // Tiled bf16 / bf8_b input: run each phase across the whole unit (Q_UNIT chunks) so every LLK init runs once
     // per unit instead of once per 4-tile chunk.
+#ifndef Q_WGROUP
+#define Q_WGROUP 1
+#endif
+#ifndef Q_UPR
+#define Q_UPR 1
+#endif
+    // Write groups: Q_WGROUP consecutive units of one tile-row share one output block, each unit's chunks at their
+    // column of a Q_WGROUP * unit wide row, so the writer moves one run of up to Q_WGROUP units per row.
+    constexpr uint32_t group_tiles = Q_WGROUP * unit_tiles;
+#ifndef TOKEN_COUNT_AWARE
+    constexpr uint32_t first_unit = 0;
+#endif
+    uint32_t group_pos = 0;
     for (uint32_t unit = 0; unit < num_blocks; ++unit) {
         cb_src.wait_front(unit_tiles);
 
 #ifdef Q_SFPU_AMAX
-        // A+B in DEST: copy -> |x| -> SFPU row max (column 0) -> pow2 1/scale; no |x| round trip through L1.
+        // A+B in DEST: copy, then one fused SFPU pass per tile (|x| -> row max -> pow2 1/scale, kept in registers).
         cb_scale_tiles.reserve_back(unit_tiles);
         cb_inv_scale_tiles.reserve_back(unit_tiles);
         reconfig_full_operand_srca(cb_src_id);
@@ -426,17 +440,9 @@ void kernel_main() {
             for (uint32_t k = 0; k < tiles_per_block; ++k) {
                 copy_tile(cb_src_id, c * tiles_per_block + k, k);
             }
-            abs_tile_init();
-            for (uint32_t k = 0; k < tiles_per_block; ++k) {
-                abs_tile(k);
-            }
-            sfpu_reduce_init<PoolType::MAX, DataFormat::Float32>();
-            for (uint32_t k = 0; k < tiles_per_block; ++k) {
-                sfpu_reduce<PoolType::MAX, DataFormat::Float32, ReduceDim::REDUCE_ROW>(k);
-            }
             MATH((SFPU_UNARY_INIT(unused)));
             for (uint32_t k = 0; k < tiles_per_block; ++k) {
-                MATH((pow2_inv_scale_tile(k, clamp_min_bits, inv_448_bits)));
+                MATH((amax_pow2_inv_scale_tile(k, clamp_min_bits, inv_448_bits)));
             }
             tile_regs_commit();
             tile_regs_wait();
@@ -509,8 +515,10 @@ void kernel_main() {
         cb_inv_scale_tiles.wait_front(unit_tiles);
         reconfig_data_format(cb_src_id, cb_inv_scale_tiles_id);
         mul_bcast_cols_init(cb_src_id, cb_inv_scale_tiles_id);
-        pack_untilize_dest_init<tiles_per_block, unit_tiles>(cb_output_e4m3_id);
-        cb_output_e4m3.reserve_back(unit_tiles);
+        pack_untilize_dest_init<tiles_per_block, group_tiles>(cb_output_e4m3_id);
+        if (group_pos == 0) {
+            cb_output_e4m3.reserve_back(group_tiles);
+        }
         for (uint32_t c = 0; c < Q_UNIT; ++c) {
             tile_regs_acquire();
             for (uint32_t k = 0; k < tiles_per_block; ++k) {
@@ -525,11 +533,17 @@ void kernel_main() {
             }
             tile_regs_commit();
             tile_regs_wait();
-            pack_untilize_dest<tiles_per_block, unit_tiles>(cb_output_e4m3_id, 1, c);
+            pack_untilize_dest<tiles_per_block, group_tiles>(cb_output_e4m3_id, 1, group_pos * Q_UNIT + c);
             tile_regs_release();
         }
         pack_untilize_uninit(cb_output_e4m3_id);
-        cb_output_e4m3.push_back(unit_tiles);
+        const uint32_t g = first_unit + unit;
+        if (group_pos + 1 == Q_WGROUP || (g + 1) % Q_UPR == 0 || unit + 1 == num_blocks) {
+            cb_output_e4m3.push_back(group_tiles);
+            group_pos = 0;
+        } else {
+            ++group_pos;
+        }
         cb_src.pop_front(unit_tiles);
         cb_inv_scale_tiles.pop_front(unit_tiles);
     }

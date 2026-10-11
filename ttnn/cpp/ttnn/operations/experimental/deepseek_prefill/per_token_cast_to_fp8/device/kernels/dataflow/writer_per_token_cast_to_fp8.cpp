@@ -157,17 +157,12 @@ void kernel_main() {
     (void)ca_num_cores;
     const uint32_t block_offset = 0, num_blocks = 0;  // per-row walks `work` instead
 #else
-    const CountAwareRange range = count_aware_block_range_frac(
-        noc,
-        region,
-        counts,
-        table,
-        cb_region_scratch_obj,
-        cb_counts_scratch_obj,
-        cb_table_scratch_obj,
-        ca_experts_per_chip,
-        ca_max_rows,
-        tile_h,
+    // The valid tile-row count arrives in the semaphore the reader of core 0 multicasts (arg 10).
+    volatile tt_l1_ptr uint32_t* rows_sem =
+        reinterpret_cast<volatile tt_l1_ptr uint32_t*>(get_semaphore(get_arg_val<uint32_t>(10)));
+    noc_semaphore_wait_min(rows_sem, 1);
+    const CountAwareRange range = count_aware_block_range_frac_rows(
+        *rows_sem - 1,
         chunks_per_row / Q_UNIT,   // units per row
         get_arg_val<uint32_t>(2),  // host-weighted share [start, end) in 1/65536 units (matches the reader)
         get_arg_val<uint32_t>(3));
@@ -333,6 +328,17 @@ void kernel_main() {
     constexpr uint32_t units_per_row = chunks_per_row / Q_UNIT;
     constexpr uint32_t unit_scale_tiles = Q_UNIT * chunk_scale_blocks;
     constexpr uint32_t unit_row_bytes = Q_UNIT * output_e4m3_block_bytes;
+#ifdef FAST_1X32
+    // NoC address of each output row of the open row-tile, resolved once per row-tile (not once per unit).
+    uint64_t row_noc_addr[tile_h];
+    const uint32_t scale_tile_elems = get_tile_size(cb_scale_tiles) / sizeof(uint16_t);
+#ifndef Q_WGROUP
+#define Q_WGROUP 1
+#endif
+    constexpr uint32_t group_tiles = Q_WGROUP * Q_UNIT * tiles_per_block;
+    constexpr uint32_t group_row_bytes = Q_WGROUP * unit_row_bytes;
+    uint32_t group_pos = 0, group_col_byte = 0;
+#endif
     for (uint32_t global_block = block_offset; global_block < global_block_end; ++global_block) {
         const uint32_t row_tile = global_block / units_per_row;
         const uint32_t col_block = (global_block % units_per_row) * Q_UNIT;  // first chunk of the unit
@@ -349,38 +355,66 @@ void kernel_main() {
             real_rows = rows_left < tile_h ? rows_left : tile_h;
             current_row_tile = row_tile;
             owned_first_col = col_block;
+#ifdef FAST_1X32
+            for (uint32_t r = 0; r < real_rows; ++r) {
+                row_noc_addr[r] = output_e4m3.get_noc_addr(output_row_base + r);
+            }
+#endif
         }
         owned_last_col = col_block + Q_UNIT - 1;
 
+#ifdef FAST_1X32
+        cb_scale_tiles_obj.wait_front(unit_scale_tiles);
+#else
         cb_output_e4m3_obj.wait_front(Q_UNIT * tiles_per_block);
         cb_scale_tiles_obj.wait_front(unit_scale_tiles);
+#endif
         const uint32_t col_byte_offset = col_block * block_w;
 #ifdef FAST_1X32
-        // Issue the e4m3 row writes first, then stage the scales while they are in flight. The 1/scale tiles are
-        // bf16 powers of two: each column-0 element becomes its fp32 scale bits in one pass, straight into the
-        // row-tile's scale staging (no per-tile temporary).
-        for (uint32_t row_in_tile = 0; row_in_tile < real_rows; ++row_in_tile) {
-            noc.async_write(
-                cb_output_e4m3_obj,
-                output_e4m3,
-                unit_row_bytes,
-                {.offset_bytes = row_in_tile * unit_row_bytes},
-                {.page_id = output_row_base + row_in_tile, .offset_bytes = col_byte_offset});
-        }
+        // Stage this unit's scales, then write the e4m3 block once the write group (Q_WGROUP units) is complete. The
+        // 1/scale tiles are bf16 powers of two: each column-0 element becomes its fp32 scale bits in one pass,
+        // straight into the row-tile's scale staging (no per-tile temporary).
         {
-            const volatile tt_l1_ptr uint16_t* inv =
-                reinterpret_cast<const volatile tt_l1_ptr uint16_t*>(cb_scale_tiles_obj.get_read_ptr());
-            const uint32_t tile_elems = get_tile_size(cb_scale_tiles) / sizeof(uint16_t);
+            // Plain (cached) loads after one invalidate, gathered per row before the stores, so the 8 L1 reads of a
+            // row issue back to back instead of one volatile load-convert-store at a time (2.9 -> 1.3 us per unit).
+            invalidate_l1_cache();
+            const uint16_t* inv = reinterpret_cast<const uint16_t*>(cb_scale_tiles_obj.get_read_ptr());
             volatile tt_l1_ptr uint32_t* stage =
                 reinterpret_cast<volatile tt_l1_ptr uint32_t*>(cb_scale_scratch_obj.get_write_ptr()) +
                 col_block * chunk_scale_blocks;
             for (uint32_t row_in_tile = 0; row_in_tile < real_rows; ++row_in_tile) {
-                const uint32_t col0 = (row_in_tile / face_h) * FACE_ROW_STRIDE + (row_in_tile % face_h) * face_w;
-                volatile tt_l1_ptr uint32_t* dst = stage + row_in_tile * scale_page_words;
+                const uint16_t* src = inv + (row_in_tile / face_h) * FACE_ROW_STRIDE + (row_in_tile % face_h) * face_w;
+                uint32_t v[unit_scale_tiles];
+#pragma GCC unroll 16
                 for (uint32_t st = 0; st < unit_scale_tiles; ++st) {
-                    dst[st] = (254u << 23) - (static_cast<uint32_t>(inv[st * tile_elems + col0]) << 16);
+                    v[st] = src[st * scale_tile_elems];
+                }
+                volatile tt_l1_ptr uint32_t* dst = stage + row_in_tile * scale_page_words;
+#pragma GCC unroll 16
+                for (uint32_t st = 0; st < unit_scale_tiles; ++st) {
+                    dst[st] = (254u << 23) - (v[st] << 16);
                 }
             }
+        }
+        cb_scale_tiles_obj.pop_front(unit_scale_tiles);
+        // The group's e4m3 block arrives once its last unit is packed: one run of the group's units per row.
+        if (group_pos == 0) {
+            group_col_byte = col_byte_offset;
+        }
+        if (group_pos + 1 == Q_WGROUP || (global_block + 1) % units_per_row == 0 ||
+            global_block + 1 == global_block_end) {
+            const uint32_t run_bytes = (group_pos + 1) * unit_row_bytes;
+            cb_output_e4m3_obj.wait_front(group_tiles);
+            const uint32_t e4m3_l1 = cb_output_e4m3_obj.get_read_ptr();
+            for (uint32_t row_in_tile = 0; row_in_tile < real_rows; ++row_in_tile) {
+                noc_async_write(
+                    e4m3_l1 + row_in_tile * group_row_bytes, row_noc_addr[row_in_tile] + group_col_byte, run_bytes);
+            }
+            noc.async_writes_flushed();  // the block only needs the writes to have left L1
+            cb_output_e4m3_obj.pop_front(group_tiles);
+            group_pos = 0;
+        } else {
+            ++group_pos;
         }
 #else
         for (uint32_t st = 0; st < unit_scale_tiles; ++st) {
@@ -403,9 +437,13 @@ void kernel_main() {
                 {.page_id = output_row_base + row_in_tile, .offset_bytes = col_byte_offset});
         }
 #endif
-        noc.async_write_barrier();  // drain e4m3 writes before the CB page is reused
+        // The CB page only needs the e4m3 writes to have left L1; flush_scale's barrier (and the final one) waits for
+        // their completion.
+#ifndef FAST_1X32
+        noc.async_writes_flushed();
         cb_output_e4m3_obj.pop_front(Q_UNIT * tiles_per_block);
         cb_scale_tiles_obj.pop_front(unit_scale_tiles);
+#endif
     }
 
     if (current_row_tile != NO_ROW_TILE_OPEN) {

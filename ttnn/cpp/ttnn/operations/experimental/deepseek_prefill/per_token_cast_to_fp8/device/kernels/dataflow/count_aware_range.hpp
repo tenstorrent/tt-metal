@@ -63,6 +63,56 @@ inline uint32_t count_aware_valid_tile_rows(
     return (valid_rows + tile_h - 1) / tile_h;
 }
 
+// Valid tile-rows, read once per chip: the root core reads the three tables and multicasts valid_tile_rows + 1 into
+// every core's semaphore (loopback included); the others poll theirs. 240 kernels reading the same three DRAM pages
+// queued on one bank and delayed the first unit by up to ~15 us at K3 load.
+template <typename RegionT, typename CountsT, typename TableT>
+inline uint32_t count_aware_valid_tile_rows_mcast(
+    Noc& noc,
+    const RegionT& region,
+    const CountsT& counts,
+    const TableT& table,
+    CircularBuffer& region_scratch,
+    CircularBuffer& counts_scratch,
+    CircularBuffer& table_scratch,
+    uint32_t experts_per_chip,
+    uint32_t max_rows,
+    uint32_t tile_h,
+    bool is_root,
+    uint32_t sem_addr,
+    uint64_t mcast_sem_noc_addr,
+    uint32_t num_dests) {
+    volatile tt_l1_ptr uint32_t* sem = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(sem_addr);
+    if (is_root) {
+        const uint32_t rows = count_aware_valid_tile_rows(
+            noc,
+            region,
+            counts,
+            table,
+            region_scratch,
+            counts_scratch,
+            table_scratch,
+            experts_per_chip,
+            max_rows,
+            tile_h);
+        *sem = rows + 1;
+        noc_semaphore_set_multicast_loopback_src(sem_addr, mcast_sem_noc_addr, num_dests);
+        noc_async_write_barrier();
+        return rows;
+    }
+    noc_semaphore_wait_min(sem, 1);
+    return *sem - 1;
+}
+
+// This core's share [frac_start, frac_end) (1/65536 units) of valid_tile_rows * chunks_per_row blocks.
+inline CountAwareRange count_aware_block_range_frac_rows(
+    uint32_t valid_tile_rows, uint32_t chunks_per_row, uint32_t frac_start, uint32_t frac_end) {
+    const uint64_t total_blocks = static_cast<uint64_t>(valid_tile_rows) * chunks_per_row;
+    const uint32_t start = static_cast<uint32_t>((total_blocks * frac_start) >> 16);
+    const uint32_t end = static_cast<uint32_t>((total_blocks * frac_end) >> 16);
+    return {start, end - start};
+}
+
 // Same, but this core's share is [frac_start, frac_end) of the blocks in 1/65536 units (host-weighted split).
 template <typename RegionT, typename CountsT, typename TableT>
 inline CountAwareRange count_aware_block_range_frac(

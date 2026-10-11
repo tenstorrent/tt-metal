@@ -33,7 +33,88 @@ inline void calculate_pow2_inv_scale(uint32_t clamp_min_bits, uint32_t inv_448_b
     }
 }
 
+// Fused |x| -> row max -> pow2 1/scale for one 32x32 tile, kept in registers: per 8-row group, load the 4 + 4 row
+// slices of both faces with |.|, fold left / right faces and the 8 SFPU columns (the row max of |x| ends up in every
+// column), then turn it into 1/scale with integer ops and store it over the group's left-face rows (column 0
+// included). 1/scale = 2^-ceil(log2(max(amax, clamp) / 448)) has bits (254 << 23) - ((bits(v) + 0x7FFFFF) &
+// 0x7F800000) for v = max(amax, clamp) * (1/448) > 0, bit-exact with calculate_pow2_inv_scale. The rest of the
+// tile keeps x (the multiply re-reads x from L1). Replaces abs_tile + sfpu_reduce<MAX, REDUCE_ROW> +
+// pow2_inv_scale_tile: 4 vectors of pow2 math per tile instead of 16, and no |x| pass over DEST.
+inline void load_const_lreg(uint32_t lreg, uint32_t bits) {
+    TT_SFPLOADI(lreg, SFPLOADI_MOD0_LOWER, bits & 0xFFFF);
+    TT_SFPLOADI(lreg, SFPLOADI_MOD0_UPPER, bits >> 16);
+}
+
+inline void pow2_inv_scale_lreg(uint32_t r, uint32_t clamp_lreg) {
+    TTI_SFPSWAP(0, r, clamp_lreg, 1);                      // r = max(r, clamp) (MAX direction)
+    TTI_SFPMAD(r, p_sfpu::LREG2, p_sfpu::LCONST_0, r, 0);  // r *= 1/448
+    TTI_SFPNOP;
+    TTI_SFPIADD(0, p_sfpu::LREG3, r, sfpi::SFPIADD_MOD1_CC_NONE);  // + 0x7FFFFF: round the exponent up
+    TTI_SFPAND(0, p_sfpu::LREG5, r, 0);                            // & 0x7F800000: biased ceil exponent
+    TTI_SFPIADD(
+        0, p_sfpu::LREG6, r, sfpi::SFPIADD_MOD1_CC_NONE | sfpi::SFPIADD_MOD1_ARG_2SCOMP_LREG_DST);  // (254<<23) - r
+}
+
+inline void calculate_amax_pow2_inv_scale(uint32_t clamp_min_bits, uint32_t inv_448_bits) {
+    constexpr uint32_t mode = static_cast<uint32_t>(InstrModLoadStore::FP32);
+    set_sfpswap_direction<false>();  // SFPSWAP keeps the max in its first operand
+#pragma GCC unroll 2
+    for (uint32_t face_pair = 0; face_pair < 2; ++face_pair) {
+        const uint32_t base = face_pair * 2 * ROWS_PER_FACE;
+#pragma GCC unroll 2
+        for (uint32_t row_group = 0; row_group < 2; ++row_group) {
+            const uint32_t r0 = base + row_group * 8;
+            const uint32_t r1 = r0 + 4;
+            TT_SFPLOAD(p_sfpu::LREG0, mode, ADDR_MOD_7, r0);
+            TT_SFPLOAD(p_sfpu::LREG1, mode, ADDR_MOD_7, r0 + 2);
+            TT_SFPLOAD(p_sfpu::LREG2, mode, ADDR_MOD_7, r0 + ROWS_PER_FACE);
+            TT_SFPLOAD(p_sfpu::LREG3, mode, ADDR_MOD_7, r0 + ROWS_PER_FACE + 2);
+            TT_SFPLOAD(p_sfpu::LREG4, mode, ADDR_MOD_7, r1);
+            TT_SFPLOAD(p_sfpu::LREG5, mode, ADDR_MOD_7, r1 + 2);
+            TT_SFPLOAD(p_sfpu::LREG6, mode, ADDR_MOD_7, r1 + ROWS_PER_FACE);
+            TT_SFPLOAD(p_sfpu::LREG7, mode, ADDR_MOD_7, r1 + ROWS_PER_FACE + 2);
+            TTI_SFPABS(0, p_sfpu::LREG0, p_sfpu::LREG0, sfpi::SFPABS_MOD1_FLOAT);
+            TTI_SFPABS(0, p_sfpu::LREG1, p_sfpu::LREG1, sfpi::SFPABS_MOD1_FLOAT);
+            TTI_SFPABS(0, p_sfpu::LREG2, p_sfpu::LREG2, sfpi::SFPABS_MOD1_FLOAT);
+            TTI_SFPABS(0, p_sfpu::LREG3, p_sfpu::LREG3, sfpi::SFPABS_MOD1_FLOAT);
+            TTI_SFPABS(0, p_sfpu::LREG4, p_sfpu::LREG4, sfpi::SFPABS_MOD1_FLOAT);
+            TTI_SFPABS(0, p_sfpu::LREG5, p_sfpu::LREG5, sfpi::SFPABS_MOD1_FLOAT);
+            TTI_SFPABS(0, p_sfpu::LREG6, p_sfpu::LREG6, sfpi::SFPABS_MOD1_FLOAT);
+            TTI_SFPABS(0, p_sfpu::LREG7, p_sfpu::LREG7, sfpi::SFPABS_MOD1_FLOAT);
+            // Left / right faces and the two column halves of each face (same folds as sfpu_reduce's row MAX).
+            TTI_SFPSWAP(0, p_sfpu::LREG0, p_sfpu::LREG2, 1);
+            TTI_SFPSWAP(0, p_sfpu::LREG4, p_sfpu::LREG6, 1);
+            TTI_SFPSWAP(0, p_sfpu::LREG1, p_sfpu::LREG3, 1);
+            TTI_SFPSWAP(0, p_sfpu::LREG5, p_sfpu::LREG7, 1);
+            TTI_SFPSWAP(0, p_sfpu::LREG0, p_sfpu::LREG1, 1);
+            TTI_SFPSWAP(0, p_sfpu::LREG4, p_sfpu::LREG5, 1);
+            horizontal_reduce_max();  // LREG0 / LREG4: row max of |x| in every column
+            load_const_lreg(p_sfpu::LREG1, clamp_min_bits);
+            load_const_lreg(p_sfpu::LREG7, clamp_min_bits);
+            load_const_lreg(p_sfpu::LREG2, inv_448_bits);
+            load_const_lreg(p_sfpu::LREG3, 0x007FFFFFu);
+            load_const_lreg(p_sfpu::LREG5, 0x7F800000u);
+            load_const_lreg(p_sfpu::LREG6, 254u << 23);
+            pow2_inv_scale_lreg(p_sfpu::LREG0, p_sfpu::LREG1);
+            pow2_inv_scale_lreg(p_sfpu::LREG4, p_sfpu::LREG7);
+            TT_SFPSTORE(p_sfpu::LREG0, mode, ADDR_MOD_7, r0);
+            TT_SFPSTORE(p_sfpu::LREG4, mode, ADDR_MOD_7, r1);
+        }
+    }
+}
+
 }  // namespace ckernel::sfpu
+
+inline void amax_pow2_inv_scale_tile(uint32_t idst, uint32_t clamp_min_bits, uint32_t inv_448_bits) {
+    SFPU_UNARY_CALL_NO_TEMPLATE_ARGS(
+        DST_SYNC_MODE,
+        DST_ACCUM_MODE,
+        calculate_amax_pow2_inv_scale,
+        idst,
+        VectorMode::RC_custom,
+        clamp_min_bits,
+        inv_448_bits);
+}
 
 // Column 0 lives in faces 0 and 2, so VectorMode::C (the left faces) covers it at half the work.
 inline void pow2_inv_scale_tile(uint32_t idst, uint32_t clamp_min_bits, uint32_t inv_448_bits) {
@@ -49,4 +130,5 @@ inline void pow2_inv_scale_tile(uint32_t idst, uint32_t clamp_min_bits, uint32_t
 }
 #else
 inline void pow2_inv_scale_tile(uint32_t, uint32_t, uint32_t) {}
+inline void amax_pow2_inv_scale_tile(uint32_t, uint32_t, uint32_t) {}
 #endif

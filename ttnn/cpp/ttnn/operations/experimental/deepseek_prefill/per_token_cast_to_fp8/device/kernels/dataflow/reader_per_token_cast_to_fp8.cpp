@@ -115,11 +115,12 @@ void kernel_main() {
     (void)ca_chunks_per_row;
     (void)ca_num_cores;
 #else
-    // Host-weighted share of the units (runtime args 5 / 6, 1/65536 units): the top grid rows run slower (NoC
-    // gradient), so they get fewer units.
-    (void)core_id;
+    // Host-assigned share of the units (runtime args 5 / 6, 1/65536 units).
+    // Core 0 reads the routing tables and multicasts the valid tile-row count (args 7..12: semaphore id, NoC 0
+    // multicast rectangle, destination count); the writer reads it from the same semaphore.
     (void)ca_num_cores;
-    const CountAwareRange range = count_aware_block_range_frac(
+    const uint32_t rows_sem_addr = get_semaphore(get_arg_val<uint32_t>(7));
+    const uint32_t valid_tile_rows = count_aware_valid_tile_rows_mcast(
         noc,
         region,
         counts,
@@ -130,6 +131,24 @@ void kernel_main() {
         ca_experts_per_chip,
         ca_max_rows,
         tile_h,
+        core_id == 0,
+        rows_sem_addr,
+        // NoC 1 multicasts take the rectangle corners in reverse order.
+        noc_index == 0 ? get_noc_multicast_addr(
+                             get_arg_val<uint32_t>(8),
+                             get_arg_val<uint32_t>(9),
+                             get_arg_val<uint32_t>(10),
+                             get_arg_val<uint32_t>(11),
+                             rows_sem_addr)
+                       : get_noc_multicast_addr(
+                             get_arg_val<uint32_t>(10),
+                             get_arg_val<uint32_t>(11),
+                             get_arg_val<uint32_t>(8),
+                             get_arg_val<uint32_t>(9),
+                             rows_sem_addr),
+        get_arg_val<uint32_t>(12));
+    const CountAwareRange range = count_aware_block_range_frac_rows(
+        valid_tile_rows,
         ca_chunks_per_row,  // units per row (Q_UNIT chunks each)
         get_arg_val<uint32_t>(5),
         get_arg_val<uint32_t>(6));
@@ -140,6 +159,10 @@ void kernel_main() {
         CircularBuffer cb_loop_count_obj(cb_loop_count);
         cb_loop_count_obj.reserve_back(1);
         reinterpret_cast<volatile tt_l1_ptr uint32_t*>(cb_loop_count_obj.get_write_ptr())[0] = num_blocks;
+#ifndef PER_ROW_SCALE
+        // First unit's global index: the compute closes write groups at tile-row ends.
+        reinterpret_cast<volatile tt_l1_ptr uint32_t*>(cb_loop_count_obj.get_write_ptr())[1] = block_offset;
+#endif
         cb_loop_count_obj.push_back(1);
     }
 #endif
