@@ -31,6 +31,9 @@ struct PerTokenCastBackParams {
     bool scales_in_row_tail = false;
     // One scale per token row (scale tensor / metadata tail holds a single fp32; packed rows end in a 64-B tail).
     bool per_row_scale = false;
+    // Token-count-aware, 1x32 row-tail scales only: write TILE output (output_dtype BFLOAT8_B / BFLOAT16) so the
+    // consumer skips its tilize; nothing is untilized here.
+    bool tile_output = false;
 };
 
 struct PerTokenCastBackInputs {

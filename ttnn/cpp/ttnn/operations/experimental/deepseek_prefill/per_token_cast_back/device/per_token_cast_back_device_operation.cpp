@@ -148,9 +148,20 @@ void PerTokenCastBackDeviceOperation::validate_on_program_cache_miss(
     TT_FATAL(
         sbw == 32 || sbw == 64 || sbw == 128, "per_token_cast_back: scale_block_w must be 32, 64 or 128, got {}", sbw);
     TT_FATAL(sbw % tile_w == 0, "per_token_cast_back: tile width {} must divide scale_block_w={}", tile_w, sbw);
-    TT_FATAL(
-        attrs.output_dtype == tt::tt_metal::DataType::BFLOAT16 || attrs.output_dtype == tt::tt_metal::DataType::FLOAT32,
-        "per_token_cast_back: output_dtype must be BFLOAT16 or FLOAT32");
+    if (attrs.tile_output) {
+        TT_FATAL(
+            token_count_aware && attrs.scales_in_row_tail && sbw == 32 && !attrs.per_row_scale,
+            "per_token_cast_back: tile_output needs token_count_aware, scales_in_row_tail and scale_block_w 32");
+        TT_FATAL(
+            attrs.output_dtype == tt::tt_metal::DataType::BFLOAT8_B ||
+                attrs.output_dtype == tt::tt_metal::DataType::BFLOAT16,
+            "per_token_cast_back: tile_output dtype must be BFLOAT8_B or BFLOAT16");
+    } else {
+        TT_FATAL(
+            attrs.output_dtype == tt::tt_metal::DataType::BFLOAT16 ||
+                attrs.output_dtype == tt::tt_metal::DataType::FLOAT32,
+            "per_token_cast_back: output_dtype must be BFLOAT16 or FLOAT32");
+    }
 
     const auto& e4m3_shape = input_e4m3.logical_shape();
     const auto& scale_shape = input_scale.logical_shape();
@@ -241,7 +252,9 @@ PerTokenCastBackDeviceOperation::spec_return_value_t PerTokenCastBackDeviceOpera
     return tt::tt_metal::TensorSpec(
         out_shape,
         tt::tt_metal::TensorLayout(
-            attrs.output_dtype, tt::tt_metal::PageConfig(tt::tt_metal::Layout::ROW_MAJOR), attrs.output_memory_config));
+            attrs.output_dtype,
+            tt::tt_metal::PageConfig(attrs.tile_output ? tt::tt_metal::Layout::TILE : tt::tt_metal::Layout::ROW_MAJOR),
+            attrs.output_memory_config));
 }
 
 PerTokenCastBackDeviceOperation::tensor_return_value_t PerTokenCastBackDeviceOperation::create_output_tensors(
@@ -284,7 +297,8 @@ ttnn::Tensor per_token_cast_back(
     bool scales_from_metadata,
     uint32_t scale_block_w,
     bool scales_in_row_tail,
-    bool per_row_scale) {
+    bool per_row_scale,
+    bool tile_output) {
     using OperationType = ttnn::experimental::prim::per_token_cast_back::PerTokenCastBackDeviceOperation;
     auto operation_attributes = OperationType::operation_attributes_t{
         .output_dtype = output_dtype,
@@ -295,7 +309,8 @@ ttnn::Tensor per_token_cast_back(
         .scales_from_metadata = scales_from_metadata,
         .scale_block_w = scale_block_w,
         .scales_in_row_tail = scales_in_row_tail,
-        .per_row_scale = per_row_scale};
+        .per_row_scale = per_row_scale,
+        .tile_output = tile_output};
     auto tensor_args = OperationType::tensor_args_t{
         .input_e4m3 = input_e4m3,
         .input_scale = input_scale,

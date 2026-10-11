@@ -703,6 +703,53 @@ def test_count_aware_packed_round_trip(device, scale_block_w):
     assert rel < 0.08
 
 
+@pytest.mark.parametrize("out_dtype", [ttnn.bfloat16, ttnn.bfloat8_b], ids=["bf16", "bf8"])
+def test_count_aware_packed_tile_output(device, out_dtype):
+    """1x32 count-aware dequant straight to TILE output (the routed expert's tiled-x input): the valid prefix
+    must match the row-major path (bf16 exactly; bf8_b within its shared-exponent rounding)."""
+    torch.manual_seed(6)
+    H, capacity = K3_LATENT, 2048
+    counts = [23 + (7 * i) % 40 for i in range(20)]
+    epc = len(counts)
+    table = [2 * s + 1 for s in range(epc)]
+    region, tok = [0] * (2 * epc), [0] * (2 * epc)
+    off = 0
+    for slot, c in enumerate(counts):
+        region[table[slot]], tok[table[slot]] = off, c
+        off += _ceil_tile(c)
+    x = torch.randn(capacity, H) * torch.pow(2.0, torch.randint(-4, 4, (capacity, H // 32)).float()).repeat_interleave(
+        32, dim=1
+    )
+    x_tt = ttnn.from_torch(x, dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT, device=device)
+    packed_tt, _ = ttnn.experimental.deepseek_prefill.per_token_cast_to_fp8(
+        x_tt, round_scale_to_power_of_two=True, pack_scales_in_row=True, scale_block_w=32
+    )
+    ca = dict(
+        token_count_aware=True,
+        expert_region_offsets=create_u32_tensor(device, region),
+        expert_token_counts=create_u32_tensor(device, tok),
+        global_expert_idx_table=create_u32_tensor(device, table),
+        experts_per_chip=epc,
+        scales_in_row_tail=True,
+        scale_block_w=32,
+    )
+    ref = ttnn.to_torch(
+        ttnn.experimental.deepseek_prefill.per_token_cast_back(packed_tt, None, output_dtype=ttnn.float32, **ca)
+    ).float()
+    tiled_tt = ttnn.experimental.deepseek_prefill.per_token_cast_back(
+        packed_tt, None, output_dtype=out_dtype, tile_output=True, **ca
+    )
+    assert tiled_tt.layout == ttnn.TILE_LAYOUT and tiled_tt.dtype == out_dtype
+    tiled = ttnn.to_torch(tiled_tt).float()
+    assert tuple(tiled.shape) == (capacity, H)
+    if out_dtype == ttnn.bfloat16:
+        assert torch.equal(tiled[:off], ref[:off]), "tile output differs from the row-major dequant"
+    else:
+        rel = ((tiled[:off] - ref[:off]).norm() / ref[:off].norm()).item()
+        logger.info(f"tile output bf8 vs row-major: rel err {rel:.4f}")
+        assert rel < 0.02
+
+
 def _ref_pow2_row_scale(x_fp32):
     amax = x_fp32.abs().amax(dim=-1, keepdim=True).clamp(min=1e-4)
     return torch.pow(2.0, torch.ceil(torch.log2(amax / E4M3_MAX)))

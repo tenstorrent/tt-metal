@@ -44,6 +44,8 @@ _MOE_MEM_PROBE = os.environ.get("MOE_MEM_PROBE") == "1"
 # to 32-bit DEST, scaled by weight * row scale on the SFPU; 1x32 scales: 32 tokens' local slots tilized and scaled
 # with column-broadcast multiplies. MOE_FUSED_DQ2=0 or 64/128-wide scales use the standalone per_token_cast_back.
 _MOE_FUSED_DQ2 = os.environ.get("MOE_FUSED_DQ2", "1") == "1"
+# 1x32 DQ1 writes bf8_b tiles for the routed expert's tiled-x path (MOE_DQ1_TILE=0: bf16 rows).
+_MOE_DQ1_TILE = os.environ.get("MOE_DQ1_TILE", "1") == "1"
 # Per-token fp8 dispatch: the routed expert consumes the e4m3 rows and applies the scale to its gate/up
 # accumulators (fused DQ1, default); MOE_FUSED_DQ1=0 dequantizes with per_token_cast_back first.
 _MOE_FUSED_DQ1 = os.environ.get("MOE_FUSED_DQ1", "1") == "1"
@@ -1044,13 +1046,16 @@ class TtMoe(LightweightModule):
             # each token's scale (word 3 of the dispatch metadata) in compute.
             expert_row_scales = metadata
         elif self.dispatch_fp8 and not self.fp8_per_row:
-            # DQ1 (block scales): unpack the valid prefix of [H e4m3 | H/block fp32] rows back to bf16 rows, reading
-            # each row's scales from its own tail; the routed expert then takes the bf16 fast-tilize path.
+            # DQ1 (block scales): unpack the valid prefix of [H e4m3 | H/block fp32] rows, reading each row's scales
+            # from its own tail. 1x32: straight to bf8_b tiles (the expert's tiled-x path, written in place: no
+            # untilize here, no per-core tilize there); otherwise bf16 rows for the expert's fast tilize.
+            dq1_tile = _MOE_DQ1_TILE and self.fp8_scale_block == 32
             dispatched_fp8 = dispatched_buffer
             dispatched_buffer = ttnn.experimental.deepseek_prefill.per_token_cast_back(
                 dispatched_fp8,
                 None,
-                output_dtype=ttnn.bfloat16,
+                output_dtype=ttnn.bfloat8_b if dq1_tile else ttnn.bfloat16,
+                tile_output=dq1_tile,
                 memory_config=ttnn.DRAM_MEMORY_CONFIG,
                 scales_in_row_tail=True,
                 token_count_aware=True,
@@ -1082,11 +1087,6 @@ class TtMoe(LightweightModule):
             )
             mem_mark("after_dq1")
             ttnn.deallocate(dispatched_fp8)
-        if os.environ.get("MOE_EXPERT_TILE_INPUT") == "1" and dispatched_buffer.layout == ttnn.ROW_MAJOR_LAYOUT:
-            # Experiment: hand the routed expert a bf8_b TILE buffer (its non-tilizing input path).
-            dispatched_tile = ttnn.to_layout(dispatched_buffer, ttnn.TILE_LAYOUT, dtype=ttnn.bfloat8_b)
-            ttnn.deallocate(dispatched_buffer)
-            dispatched_buffer = dispatched_tile
         squeezed_dispatch = ttnn.squeeze(ttnn.squeeze(dispatched_buffer, dim=0), dim=0)
         expert_outputs = self.routed_expert(
             squeezed_dispatch,
@@ -1097,7 +1097,8 @@ class TtMoe(LightweightModule):
             else ttnn.squeeze(ttnn.squeeze(expert_row_scales, dim=0), dim=0),
         )
         mem_mark("after_routed_expert")
-        if not return_intermediates:
+        if not return_intermediates and dispatched_buffer.layout != ttnn.TILE_LAYOUT:
+            # A TILE buffer was consumed in place: it IS the expert output.
             dispatched_buffer = ttnn.deallocate(dispatched_buffer)
         if DEBUG_LOGGING_ENABLED:
             logger.debug(f"[TtMoe.forward] expert_outputs shape: {expert_outputs.shape}")

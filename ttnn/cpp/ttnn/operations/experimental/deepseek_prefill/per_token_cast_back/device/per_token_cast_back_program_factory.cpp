@@ -57,12 +57,183 @@ uint32_t rows_for_core_from_split(
     return 0;
 }
 
+// Tile output (token-count-aware, 1x32 row-tail scales): units of one tile-row x G tiles; reader stacks the 32
+// rows' e4m3 slice + builds bf16 column-0 scale tiles, compute tilizes and column-broadcast multiplies, writer
+// writes the result tiles. See reader_per_token_cast_back_tile.cpp.
+PerTokenCastBackProgramFactory::cached_program_t create_tile_output_program(
+    const PerTokenCastBackParams& operation_attributes, const PerTokenCastBackInputs& tensor_args, Tensor& output) {
+    using namespace tt;
+    using namespace tt::tt_metal;
+
+    const auto& input_e4m3 = tensor_args.input_e4m3;
+    const auto [M, row_bytes] = fold_M_H(input_e4m3.logical_shape());
+    const uint32_t H = row_bytes * 32 / 36;  // [H e4m3 | H/32 fp32]
+    const uint32_t Wt = H / 32;
+    // Wide units (28 tiles = 896 B per row read) keep the per-read overhead down; measured flat from 16 to 28.
+    uint32_t G = 28;
+    while (Wt % G != 0) {
+        G -= 4;
+    }
+    TT_FATAL(G >= 4, "per_token_cast_back tile_output: {} tiles per row need a multiple of 4", Wt);
+    constexpr uint32_t DRAM_ALIGN = 64;
+    const uint32_t scale_slot_bytes = tt::round_up(DRAM_ALIGN - 4 + G * 4, DRAM_ALIGN);
+
+    auto* src_buffer = input_e4m3.buffer();
+    auto* dst_buffer = output.buffer();
+    auto* region_buffer = tensor_args.expert_region_offsets->buffer();
+    auto* counts_buffer = tensor_args.expert_token_counts->buffer();
+    auto* table_buffer = tensor_args.global_expert_idx_table->buffer();
+
+    Program program{};
+    const auto grid = input_e4m3.device()->compute_with_storage_grid_size();
+    const uint32_t num_cores = grid.x * grid.y;
+    const CoreRangeSet all_cores{CoreRange{{0, 0}, {grid.x - 1, grid.y - 1}}};
+
+    constexpr uint32_t cb_in = CBIndex::c_0;
+    constexpr uint32_t cb_scale = CBIndex::c_1;
+    constexpr uint32_t cb_tiles = CBIndex::c_2;
+    constexpr uint32_t cb_loop_count = CBIndex::c_5;
+    constexpr uint32_t cb_scale_scratch = CBIndex::c_6;
+    constexpr uint32_t cb_region_r = CBIndex::c_7;
+    constexpr uint32_t cb_counts_r = CBIndex::c_8;
+    constexpr uint32_t cb_table_r = CBIndex::c_9;
+    constexpr uint32_t cb_region_w = CBIndex::c_10;
+    constexpr uint32_t cb_counts_w = CBIndex::c_11;
+    constexpr uint32_t cb_table_w = CBIndex::c_12;
+    constexpr uint32_t cb_scale_scratch_w = CBIndex::c_13;
+    constexpr uint32_t cb_out = CBIndex::c_16;
+    auto make_cb = [&](uint32_t idx, DataFormat df, uint32_t page, uint32_t pages) {
+        CreateCircularBuffer(
+            program, all_cores, CircularBufferConfig(page * pages, {{idx, df}}).set_page_size(idx, page));
+    };
+    const DataFormat out_df = datatype_to_dataformat_converter(operation_attributes.output_dtype);
+    make_cb(cb_in, DataFormat::Fp8_e4m3, tt::tile_size(DataFormat::Fp8_e4m3), 2 * G);
+    make_cb(cb_scale, DataFormat::Float16_b, tt::tile_size(DataFormat::Float16_b), 2 * G);
+    make_cb(cb_tiles, DataFormat::Float16_b, tt::tile_size(DataFormat::Float16_b), G);
+    make_cb(cb_out, out_df, tt::tile_size(out_df), 2 * G);
+    make_cb(cb_loop_count, DataFormat::Float32, tt::align(sizeof(uint32_t), hal::get_l1_alignment()), 1);
+    make_cb(cb_scale_scratch, DataFormat::Float32, 32 * scale_slot_bytes, 1);
+    make_cb(cb_scale_scratch_w, DataFormat::Float32, 32 * scale_slot_bytes, 1);
+    const DataFormat idx_df = datatype_to_dataformat_converter(tensor_args.expert_token_counts->dtype());
+    for (auto [idx, buf] : std::initializer_list<std::pair<uint32_t, Buffer*>>{
+             {cb_region_r, region_buffer},
+             {cb_counts_r, counts_buffer},
+             {cb_table_r, table_buffer},
+             {cb_region_w, region_buffer},
+             {cb_counts_w, counts_buffer},
+             {cb_table_w, table_buffer}}) {
+        make_cb(idx, idx_df, buf->aligned_page_size(), 1);
+    }
+
+    const uint32_t max_rows = M;
+    std::vector<uint32_t> reader_ct = {
+        cb_in,
+        cb_scale,
+        cb_loop_count,
+        cb_region_r,
+        cb_counts_r,
+        cb_table_r,
+        cb_scale_scratch,
+        G,
+        Wt,
+        H,
+        operation_attributes.experts_per_chip,
+        max_rows,
+        num_cores,
+        scale_slot_bytes};
+    TensorAccessorArgs(src_buffer).append_to(reader_ct);
+    TensorAccessorArgs(region_buffer).append_to(reader_ct);
+    TensorAccessorArgs(counts_buffer).append_to(reader_ct);
+    TensorAccessorArgs(table_buffer).append_to(reader_ct);
+    const std::string kdir =
+        "ttnn/cpp/ttnn/operations/experimental/deepseek_prefill/per_token_cast_back/device/kernels/";
+    // Reader on NoC 0, writer on NoC 1 (the reverse of the row-major path): measured 110 -> 90 us at K3 Galaxy load;
+    // with the default assignment the top grid rows ran ~2x slower than the bottom ones (NoC congestion).
+    KernelHandle reader_kernel_id = CreateKernel(
+        program,
+        kdir + "dataflow/reader_per_token_cast_back_tile.cpp",
+        all_cores,
+        DataMovementConfig{
+            .processor = DataMovementProcessor::RISCV_1,
+            .noc = NOC::RISCV_0_default,
+            .compile_args = reader_ct,
+            .defines = {{"SCALES_ON_WRITER", "1"}}});
+
+    std::vector<uint32_t> writer_ct = {
+        cb_out,
+        cb_region_w,
+        cb_counts_w,
+        cb_table_w,
+        G,
+        Wt,
+        operation_attributes.experts_per_chip,
+        max_rows,
+        num_cores};
+    TensorAccessorArgs(dst_buffer).append_to(writer_ct);
+    TensorAccessorArgs(region_buffer).append_to(writer_ct);
+    TensorAccessorArgs(counts_buffer).append_to(writer_ct);
+    TensorAccessorArgs(table_buffer).append_to(writer_ct);
+    writer_ct.insert(writer_ct.end(), {cb_scale, cb_scale_scratch_w, H, scale_slot_bytes});
+    TensorAccessorArgs(src_buffer).append_to(writer_ct);
+    KernelHandle writer_kernel_id = CreateKernel(
+        program,
+        kdir + "dataflow/writer_per_token_cast_back_tile.cpp",
+        all_cores,
+        DataMovementConfig{
+            .processor = DataMovementProcessor::RISCV_0, .noc = NOC::RISCV_1_default, .compile_args = writer_ct});
+
+    // Fp8 CBs on Blackhole need 32-bit DEST. bf16 data x pow2 bf16 scale is exact at HiFi2.
+    std::vector<UnpackToDestMode> unpack_to_dest_mode(NUM_CIRCULAR_BUFFERS, UnpackToDestMode::Default);
+    unpack_to_dest_mode[cb_in] = UnpackToDestMode::UnpackToDestFp32;
+    KernelHandle compute_kernel_id = CreateKernel(
+        program,
+        kdir + "compute/compute_per_token_cast_back_tile.cpp",
+        all_cores,
+        ComputeConfig{
+            .math_fidelity = MathFidelity::HiFi2,
+            .fp32_dest_acc_en = true,
+            .unpack_to_dest_mode = unpack_to_dest_mode,
+            .compile_args = {cb_in, cb_tiles, cb_scale, cb_out, cb_loop_count, G}});
+
+    auto all_cores_vec = corerange_to_cores(all_cores, num_cores, true);
+    for (uint32_t i = 0; i < num_cores; ++i) {
+        const auto& core = all_cores_vec[i];
+        // Same argument slots as the row-major count-aware path, so override_runtime_arguments serves both.
+        SetRuntimeArgs(
+            program,
+            reader_kernel_id,
+            core,
+            {src_buffer->address(),
+             src_buffer->address(),
+             region_buffer->address(),
+             counts_buffer->address(),
+             table_buffer->address(),
+             i});
+        SetRuntimeArgs(
+            program,
+            writer_kernel_id,
+            core,
+            {dst_buffer->address(),
+             region_buffer->address(),
+             counts_buffer->address(),
+             table_buffer->address(),
+             i,
+             src_buffer->address()});
+        SetRuntimeArgs(program, compute_kernel_id, core, {});
+    }
+    return PerTokenCastBackProgramFactory::cached_program_t{
+        std::move(program), {reader_kernel_id, writer_kernel_id, compute_kernel_id, std::move(all_cores_vec)}};
+}
+
 }  // namespace
 
 PerTokenCastBackProgramFactory::cached_program_t PerTokenCastBackProgramFactory::create(
     const PerTokenCastBackParams& operation_attributes,
     const PerTokenCastBackInputs& tensor_args,
     Tensor& tensor_return_value) {
+    if (operation_attributes.tile_output) {
+        return create_tile_output_program(operation_attributes, tensor_args, tensor_return_value);
+    }
     using namespace tt;
     using namespace tt::tt_metal;
 
@@ -491,6 +662,9 @@ void PerTokenCastBackProgramFactory::override_runtime_arguments(
             writer_args[1] = region_addr;
             writer_args[2] = counts_addr;
             writer_args[3] = table_addr;
+            if (operation_attributes.tile_output) {
+                writer_args[5] = src_e4m3_addr;  // the writer reads the scale windows on the tile path
+            }
         }
     } else {
         for (const auto& core : shared.all_cores_vec) {
