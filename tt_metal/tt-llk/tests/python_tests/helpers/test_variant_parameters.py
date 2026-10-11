@@ -848,8 +848,6 @@ class ENABLE_DIRECT_INDEXING(TemplateParameter):
 
 @dataclass
 class PERF_STAGE(TemplateParameter):
-    """How much of a perf kernel's iteration runs; 0 is the frame alone, to subtract from the other stages."""
-
     perf_stage: int = 1
 
     def convert_to_cpp(self) -> str:
@@ -858,8 +856,6 @@ class PERF_STAGE(TemplateParameter):
 
 @dataclass
 class SINKHORN_ITERS(TemplateParameter):
-    """Row and column normalisation passes of sinkhorn_4x4."""
-
     sinkhorn_iters: int = 20
 
     def convert_to_cpp(self) -> str:
@@ -2086,6 +2082,8 @@ class SDPA_CUSTOM_MM_FLAGS(TemplateParameter):
     sdpa_row_stride    : physical SrcA row width in tiles for read_transposed. None
                          omits the LLK argument; zero and kt_dim retain tight packing.
     sdpa_input_tile_offset : leading SrcA tiles skipped before the matmul input.
+    preserve_src_zero_flag : math leaves the Src zero flag at keep before the init, as a preceding
+                         copy_tile_init does.
     """
 
     signal_granularity: int = 1
@@ -2093,6 +2091,7 @@ class SDPA_CUSTOM_MM_FLAGS(TemplateParameter):
     mm_transpose: bool = False
     sdpa_row_stride: int | None = None
     sdpa_input_tile_offset: int = 0
+    preserve_src_zero_flag: bool = False
 
     def convert_to_cpp(self) -> str:
         lines = [
@@ -2100,6 +2099,7 @@ class SDPA_CUSTOM_MM_FLAGS(TemplateParameter):
             f"#define READ_TRANSPOSED {str(self.read_transposed).lower()}",
             f"#define MM_TRANSPOSE {str(self.mm_transpose).lower()}",
             f"#define SDPA_INPUT_TILE_OFFSET {self.sdpa_input_tile_offset}",
+            f"#define SDPA_PRESERVE_SRC_ZERO_FLAG {str(self.preserve_src_zero_flag).lower()}",
         ]
         if self.sdpa_row_stride is not None:
             lines.append(f"#define SDPA_ROW_STRIDE {self.sdpa_row_stride}")

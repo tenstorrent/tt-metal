@@ -81,7 +81,7 @@ void run_kernel(RUNTIME_PARAMETERS params)
 
 using namespace ckernel;
 
-// The default EPS_BITS of sinkhorn_4x4 (api/compute/experimental/sinkhorn.h).
+// Matches the default EPS_BITS of sinkhorn_4x4.
 constexpr std::uint32_t SINKHORN_EPS_BITS = 0x35890000;
 
 inline void tile_math(const std::uint32_t tile, const std::uint32_t math_format)
