@@ -1005,6 +1005,12 @@ with tempfile.TemporaryDirectory() as td:
 
     verdicts = {}
     for arm, workers in (("serial", 1), ("conc", 8)):
+        # Each arm models a fresh sweep process.  LEG-MEMO is deliberately
+        # process-local, so without this reset the concurrent arm would reuse
+        # the serial arm's fixture builds instead of exercising contention on
+        # its own shared OFF baseline.
+        with sweep._LEG_MEMO_LOCK:
+            sweep._LEG_MEMO.clear()
         sw = mk_cls_pool_sweep(td, arm, workers)
         # pre-cached verdict + duplicate spec: neither may cost a session
         cw = sw.ev / "kop/knobs/k-cached/sem-perf"
@@ -1047,20 +1053,22 @@ with tempfile.TemporaryDirectory() as td:
         if arm == "serial":
             check(
                 "solo pool: workers=1 is a no-op (legacy inline compiles, "
-                "strictly one session at a time)",
+                "strictly one session at a time; four knobs share one "
+                "memoised OFF baseline)",
                 pool_sessions == 0
-                and sw._selftest_stats["sessions"] == 8
+                and sw._selftest_stats["sessions"] == 5
                 and sw._selftest_stats["max_active"] == 1,
                 sw._selftest_stats,
             )
             st_serial = sw
         else:
             check(
-                "solo pool: workers=8 compiles every pending verdict "
-                "concurrently (sessions overlapped), replay is 100% cached "
-                "(zero extra sessions), cached/duplicate specs never enter",
-                pool_sessions == 8
-                and sw._selftest_stats["sessions"] == 8
+                "solo pool: workers=8 compiles every distinct leg "
+                "concurrently (sessions overlapped; four knobs share one "
+                "memoised OFF baseline), replay is 100% cached (zero extra "
+                "sessions), cached/duplicate specs never enter",
+                pool_sessions == 5
+                and sw._selftest_stats["sessions"] == 5
                 and sw._selftest_stats["max_active"] > 1,
                 sw._selftest_stats,
             )
@@ -1084,11 +1092,41 @@ with tempfile.TemporaryDirectory() as td:
     )
     t_serial = tree_of(td / "serial")
     t_conc = tree_of(td / "conc")
+
+    # Which verdict wins the concurrent race to compile the common OFF leg is
+    # intentionally unspecified.  The winner has compile-off.log; the other
+    # three have REUSED-off.txt.  Compare all stable evidence, including the
+    # copied hashes and ELF archives, while checking that provenance shape
+    # independently in each arm.
+    def without_memo_carrier_evidence(tree):
+        return {
+            k: v
+            for k, v in tree.items()
+            if not (k.endswith("/compile-off.log") or k.endswith("/REUSED-off.txt"))
+        }
+
+    for arm, tree in (("serial", t_serial), ("conc", t_conc)):
+        reused_off = [k for k in tree if k.endswith("/REUSED-off.txt")]
+        compiled_off = [k for k in tree if k.endswith("/compile-off.log")]
+        check(
+            f"solo pool ({arm}): shared OFF baseline has one producer and "
+            "three named memo reuses",
+            len(compiled_off) == 1
+            and len(reused_off) == 3
+            and all("byte-identical leg" in tree[k] for k in reused_off),
+            (compiled_off, reused_off),
+        )
     check(
-        "solo pool: evidence trees BYTE-IDENTICAL serial vs concurrent "
-        "(every verdict.json/node.txt/flags/hashes/log/ELF archive)",
-        t_serial == t_conc and len(t_serial) > 20,
-        (set(t_serial) ^ set(t_conc)) or "content diff",
+        "solo pool: stable evidence is BYTE-IDENTICAL serial vs concurrent "
+        "(verdict/node/flags/hashes/ELF and non-memo compile logs; memo "
+        "producer identity may differ)",
+        without_memo_carrier_evidence(t_serial) == without_memo_carrier_evidence(t_conc)
+        and len(t_serial) > 20,
+        (
+            set(without_memo_carrier_evidence(t_serial))
+            ^ set(without_memo_carrier_evidence(t_conc))
+        )
+        or "content diff",
     )
     check(
         "solo pool: COMPILE_FAIL stops the verdict's later legs in both "
@@ -1106,6 +1144,8 @@ with tempfile.TemporaryDirectory() as td:
         and any("kop/sem-perf: compile knob failed" in r for r in st_conc.reds),
         (st_serial.reds, st_conc.reds),
     )
+    with sweep._LEG_MEMO_LOCK:
+        sweep._LEG_MEMO.clear()
 
 if FAILS:
     print(f"batched-silicon self-test: FAILED ({len(FAILS)}: {', '.join(FAILS)})")

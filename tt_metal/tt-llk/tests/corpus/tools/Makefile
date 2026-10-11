@@ -8,7 +8,13 @@ FORMAL_OUT ?= $(HOME)/craq-keep/formal-current
 FORMAL_OPS ?= *
 
 .PHONY: prove-all prove-all-anchor prove-all-selftest prove-all-manifest \
-        prove-all-force shard-selftest tri-manifest-selftest formal formal-selftest
+        prove-all-force shard-selftest tri-manifest-selftest formal formal-selftest \
+        host-selftest
+
+## bootstrap-safe host validation: current formal tools plus explicitly labelled
+## historical prove_all unit coverage (no simulator, compiler, or device needed)
+host-selftest:
+	python3 selftest_host.py
 
 ## prove current LLK/knob selections; requires FORMAL_SIM and FORMAL_SELECTION
 formal:
@@ -25,7 +31,7 @@ prove-all:
 	python3 prove_all.py --all --out $(OUT) --jobs $(JOBS)
 
 ## same, but first take the bitexact leg's DEVICE ANCHORS on silicon, so its
-## executor-validation gate can pass (needs a board; anchors are then re-used
+## executor-validation gate can pass (needs a board; anchors are then reused
 ## by every later plain `prove-all` on the same OUT tree)
 prove-all-anchor:
 	python3 prove_all.py --all --allow-hardware --out $(OUT) --jobs $(JOBS)

@@ -141,7 +141,11 @@ def _run_formal_fake(rc, payload):
         t = Path(out_dir) / f"trace-{op}-{leg}.log"
         t.write_text("SFPUJO I\n")
         # distinct .text hashes so the REFUSED-IDENTITY short-circuit is not hit
-        return t, {"path": str(t), "text_sha256": ("a" if leg == "sem" else "b") * 64}, None
+        return (
+            t,
+            {"path": str(t), "text_sha256": ("a" if leg == "sem" else "b") * 64},
+            None,
+        )
 
     def fake_run(cmd, **kw):
         out = Path(cmd[cmd.index("--out") + 1])
@@ -188,11 +192,18 @@ def part_a_formal_routing():
     got = _run_formal_fake(1, {"row": "op", "verdict": "NO-Z3"})
     assert got["class"] == "UNSWEPT" and got["verdict"] == "NO-Z3", got
     # genuine prover failures keep the UNSWEPT / PROVER-FAILED path
-    for rc, payload in ((0, None), (1, None), (2, None), (2, "{ not json"),
-                        (2, {"row": "op"})):
+    for rc, payload in (
+        (0, None),
+        (1, None),
+        (2, None),
+        (2, "{ not json"),
+        (2, {"row": "op"}),
+    ):
         got = _run_formal_fake(rc, payload)
         assert got["class"] == "UNSWEPT" and got["verdict"] == "PROVER-FAILED", (
-            rc, payload, got
+            rc,
+            payload,
+            got,
         )
     print("PART A (formal_equiv exit-code/verdict routing): PASS")
 
@@ -203,18 +214,32 @@ def part_a_fast_census():
     CLASS_ORDER) — never infeasible / scope-refused / unswept ops."""
     fast = ["c1", "c2", "d1", "g1", "g2", "g3"]
     rows = [
-        {"op": "c1", "provability_class": "SMT-PROVEN-ALL-INPUTS",
-         "machine_certified_equal": "YES"},
-        {"op": "c2", "provability_class": "SMT-PROVEN-DOMAIN",
-         "machine_certified_equal": "no"},
-        {"op": "d1", "provability_class": "DIVERGENCE-CERTIFIED",
-         "machine_certified_equal": "no"},
-        {"op": "g1", "provability_class": "INFEASIBLE-2^32",
-         "machine_certified_equal": "no"},
-        {"op": "g2", "provability_class": "SCOPE-REFUSED",
-         "machine_certified_equal": "no"},
-        {"op": "g3", "provability_class": "UNSWEPT",
-         "machine_certified_equal": "no"},
+        {
+            "op": "c1",
+            "provability_class": "SMT-PROVEN-ALL-INPUTS",
+            "machine_certified_equal": "YES",
+        },
+        {
+            "op": "c2",
+            "provability_class": "SMT-PROVEN-DOMAIN",
+            "machine_certified_equal": "no",
+        },
+        {
+            "op": "d1",
+            "provability_class": "DIVERGENCE-CERTIFIED",
+            "machine_certified_equal": "no",
+        },
+        {
+            "op": "g1",
+            "provability_class": "INFEASIBLE-2^32",
+            "machine_certified_equal": "no",
+        },
+        {
+            "op": "g2",
+            "provability_class": "SCOPE-REFUSED",
+            "machine_certified_equal": "no",
+        },
+        {"op": "g3", "provability_class": "UNSWEPT", "machine_certified_equal": "no"},
     ]
     tmp = Path(tempfile.mkdtemp(prefix="prove_all_census_"))
     txt = PA.write_summary(tmp, rows, {"shas": {}, "timestamp": "t"}, "0s", fast)
@@ -230,8 +255,15 @@ def part_a_fast_census():
 
 
 def part_a_manifest():
-    """Routing sanity: the 3 selftest ops route to the expected engines."""
-    board = PA.load_board()
+    """Routing sanity without depending on a developer's archival board path.
+
+    prove_all is a historical reproducer and its real run deliberately resolves
+    the external pin-59 board.  This host unit test only exercises the checked-in
+    routing manifest, so reconstruct the board keys/classes from that manifest
+    instead of requiring ``~/sfpi-uplift/laneFM-*`` to exist.
+    """
+    manifest_rows = PA.read_tsv(PA.MANIFEST)
+    board = {row["op"]: row["board_class"] for row in manifest_rows}
     man = PA.load_manifest(board)
     exp = {
         "zeropad-fresh": "formal_equiv",
@@ -263,7 +295,7 @@ SILICON_MAN_ROW = {
 }
 
 
-def _stub_farm(work, *, idmap_sem_body=b"sem-text\n"):
+def _stub_farm(work, *, idmap_sem_body=b"selected-text\n"):
     """A stub FARM_ROOT + the IDMAP galaxy_shard.sh gates against."""
     farm = SGS.Farm(work, "fp32")  # single-operand space -> fp32 streamer
     idmap = work / "idmap.tsv"
@@ -271,14 +303,20 @@ def _stub_farm(work, *, idmap_sem_body=b"sem-text\n"):
         "myop\tAAA\t%s\tBBB\t%s\n"
         % (
             hashlib.sha256(idmap_sem_body).hexdigest(),
-            hashlib.sha256(b"hand-text\n").hexdigest(),
+            hashlib.sha256(b"baseline-sem-text\n").hexdigest(),
         )
     )
     return farm, idmap
 
 
 def _run_silicon_stub(
-    work, *, dead="", band_bits=10, npar=8, sem_body=b"sem-text\n", extra_env=None
+    work,
+    *,
+    dead="",
+    band_bits=10,
+    npar=8,
+    sem_body=b"selected-text\n",
+    extra_env=None,
 ):
     """Invoke prove_all's silicon_stream engine over the stub farm."""
     work.mkdir(parents=True, exist_ok=True)

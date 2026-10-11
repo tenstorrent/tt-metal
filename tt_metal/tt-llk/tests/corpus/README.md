@@ -309,11 +309,18 @@ Sweep-hardening round 2 (adversarial review, 2026-08-16):
 
 One entrypoint, `sweep.sh --mode {headline,nightly,weekly}`.
 
-`sweep.sh --mode nightly` (02:00) runs validate → classify → CRAQ → BH
-silicon → report against the chip-class baseline and the previous nightly
-run.  `--mode weekly` (Sun 04:00) adds per-knob attribution (each optimization
+GitHub Actions deployment, required lab resources, serialization, artifact
+retention, and fail-closed status semantics are documented in
+[resource-owner workflow guide](../../../../.github/workflows/tt-llk-sfpu-corpus-resource-owner.md).
+
+`sweep.sh --mode nightly` (02:00) runs validate → classify → BH silicon →
+report against the chip-class baseline and the previous nightly run. Device
+golden correctness gates each performance cell. The current owner-ratified
+wrapper passes `--skip-craq-gate`; CRAQ is a separate debug/lane-validation
+campaign, and the skip is recorded as taint in sweep evidence. `--mode weekly`
+(Sun 04:00) adds per-knob attribution (each optimization
 flag toggled individually; per-knob silicon legs for the `HEADLINE_ROWS`
-only), the WH CRAQ matrix for macro rows, and the DejaGnu byte-parity suites
+only) and the DejaGnu byte-parity suites
 (`loadmacro*`, `macro-planner*`) against the pinned toolchain build tree
 (SKIP if absent).  All knobs/rows/paths live in `sweep_2x2.conf`
 (env-overridable EXCEPT the reviewed `PINNED_*` toolchain pins, which reject

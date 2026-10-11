@@ -1,5 +1,24 @@
 # Current-tuple SFPU formal validation
 
+## Bootstrap and host selftests
+
+The current formal/validation host tools have one pinned dependency file and
+one hardware-free selftest entry point:
+
+```sh
+python3 -m venv /tmp/sfpi-formal-host
+/tmp/sfpi-formal-host/bin/python -m pip install \
+  -r requirements-formal.txt
+/tmp/sfpi-formal-host/bin/python selftest_host.py
+```
+
+The runner labels every check as current tooling, a host utility, or the
+historical pin-59 reproducer. It runs `prove_all` only in `--no-live` unit mode.
+Simulator/compiler capture, the full installed-harness oracle cross-check, and
+silicon tests are reported as explicit integration skips rather than silently
+substituted with weaker claims. Use `python3 selftest_host.py --current-only`
+when changing only the current-tuple path.
+
 `formal_campaign.py` answers two independent questions about the exact compiler
 configuration being considered now:
 

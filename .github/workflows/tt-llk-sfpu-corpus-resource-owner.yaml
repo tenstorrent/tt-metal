@@ -1,0 +1,226 @@
+name: "TT-LLK SFPU corpus resource owner"
+
+# This workflow owns orchestration only.  Corpus selection, pin validation,
+# device-golden correctness-before-performance, device locking, and verdicts
+# remain in corpus/sweep.sh and sweep_2x2.py.  Deployment requirements and
+# exact validation/status semantics are documented beside this file in
+# tt-llk-sfpu-corpus-resource-owner.md.
+on:
+  workflow_dispatch:
+    inputs:
+      mode:
+        description: "Host checks only, or dispatch a serialized P150 corpus sweep"
+        required: true
+        default: host-only
+        type: choice
+        options:
+          - host-only
+          - headline
+          - nightly
+          - weekly
+  schedule:
+    - cron: "0 2 * * 1-6"
+    - cron: "0 4 * * 0"
+
+permissions:
+  contents: read
+
+jobs:
+  canonical-host:
+    name: "Canonical host contract"
+    uses: ./.github/workflows/tt-llk-sfpu-corpus.yaml
+
+  silicon:
+    name: "Serialized P150 silicon (${{ github.event_name == 'schedule' && (github.event.schedule == '0 4 * * 0' && 'weekly' || 'nightly') || inputs.mode }})"
+    needs: canonical-host
+    if: ${{ github.event_name == 'schedule' || inputs.mode != 'host-only' }}
+    runs-on: tt-ubuntu-2204-P150b-stable
+    timeout-minutes: 360
+    environment: sfpu-corpus-silicon
+    concurrency:
+      group: tt-llk-sfpu-corpus-p150-silicon
+      cancel-in-progress: false
+    env:
+      SWEEP_MODE: ${{ github.event_name == 'schedule' && (github.event.schedule == '0 4 * * 0' && 'weekly' || 'nightly') || inputs.mode }}
+      CRAQ_SETUP_STATE: ${{ vars.SFPU_CORPUS_SETUP_STATE }}
+      SIM_BH: ${{ vars.SFPU_CORPUS_SIM_BH }}
+      SIM_WH: ${{ vars.SFPU_CORPUS_SIM_WH }}
+    steps:
+      - name: Checkout workflow revision
+        uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
+        with:
+          fetch-depth: 1
+
+      - name: Establish evidence paths
+        shell: bash
+        run: |
+          set -euo pipefail
+          echo "RUN_ROOT=$RUNNER_TEMP/sfpu-corpus-${GITHUB_RUN_ID}-${GITHUB_RUN_ATTEMPT}" >> "$GITHUB_ENV"
+          echo "ARTIFACT_ROOT=$GITHUB_WORKSPACE/sfpu-corpus-evidence" >> "$GITHUB_ENV"
+          mkdir -p "$GITHUB_WORKSPACE/sfpu-corpus-evidence"
+
+      - name: Refuse an unprovisioned or stale lab runner
+        shell: bash
+        run: |
+          set -euo pipefail
+          status="$ARTIFACT_ROOT/resource-preflight.txt"
+          : > "$status"
+          for value in CRAQ_SETUP_STATE SIM_BH SIM_WH; do
+            path="${!value:-}"
+            if [[ -z "$path" || ! -f "$path" ]]; then
+              echo "MISSING_RESOURCE: $value does not name a file" | tee -a "$status"
+              exit 2
+            fi
+          done
+          if [[ ! -e /dev/tenstorrent || ! -r /dev/tenstorrent ]]; then
+            echo "MISSING_RESOURCE: /dev/tenstorrent is absent or unreadable" | tee -a "$status"
+            exit 2
+          fi
+
+          # The resource owner provisions all four campaign repositories.  Do
+          # not mutate them here; prove that the configured tt-metal checkout
+          # is exactly the revision requested by Actions and is pristine.
+          # shellcheck source=/dev/null
+          source "$CRAQ_SETUP_STATE"
+          if [[ "${CRAQ_METAL_SHA:-}" != "$GITHUB_SHA" ]]; then
+            echo "STALE_RESOURCE: configured tt-metal ${CRAQ_METAL_SHA:-unset} != requested $GITHUB_SHA" | tee -a "$status"
+            exit 2
+          fi
+          if [[ -z "${CRAQ_METAL_DIR:-}" ]] ||
+             ! git -C "$CRAQ_METAL_DIR" rev-parse --git-dir >/dev/null 2>&1; then
+            echo "MISSING_RESOURCE: CRAQ_METAL_DIR is not a checkout" | tee -a "$status"
+            exit 2
+          fi
+          if [[ "$(git -C "$CRAQ_METAL_DIR" rev-parse HEAD)" != "$GITHUB_SHA" ]]; then
+            echo "STALE_RESOURCE: configured tt-metal is not at the requested revision" | tee -a "$status"
+            exit 2
+          fi
+
+          source "$CRAQ_METAL_DIR/tt_metal/tt-llk/tests/corpus/setup_state_lib.sh"
+          verify_craq_setup_state "$CRAQ_SETUP_STATE" | tee -a "$status"
+          for repo in SFPI GCC METAL BLAZE; do
+            dir_var="CRAQ_${repo}_DIR"
+            repo_dir="${!dir_var:-}"
+            if [[ -n "$(git -C "$repo_dir" status --porcelain=v1 --untracked-files=all)" ]]; then
+              echo "STALE_RESOURCE: $repo checkout has tracked or non-ignored untracked changes" | tee -a "$status"
+              exit 2
+            fi
+          done
+          harness_compiler="$CRAQ_METAL_DIR/tt_metal/tt-llk/tests/sfpi/compiler/bin/riscv-tt-elf-g++"
+          if [[ ! -x "$harness_compiler" ]] ||
+             [[ "$(readlink -f "$harness_compiler")" != "$(readlink -f "$CRAQ_COMPILER")" ]]; then
+            echo "STALE_RESOURCE: sweep harness compiler does not resolve to CRAQ_COMPILER" | tee -a "$status"
+            exit 2
+          fi
+          {
+            echo 'CRAQ_METAL_DIR<<SFPU_CORPUS_PATH'
+            printf '%s\n' "$CRAQ_METAL_DIR"
+            echo 'SFPU_CORPUS_PATH'
+            echo 'CRAQ_COMPILER<<SFPU_CORPUS_COMPILER'
+            printf '%s\n' "$CRAQ_COMPILER"
+            echo 'SFPU_CORPUS_COMPILER'
+          } >> "$GITHUB_ENV"
+          echo "RESOURCE_READY: exact revision, four-repo setup, selected compiler, simulators, and device are present" | tee -a "$status"
+
+      - name: Stage the reviewed pin record
+        shell: bash
+        run: |
+          set -euo pipefail
+          corpus="$CRAQ_METAL_DIR/tt_metal/tt-llk/tests/corpus"
+          # shellcheck source=/dev/null
+          source "$corpus/sweep_2x2.conf"
+          pin_record="$corpus/review_records/REVIEW_RECORD-${PINNED_CC1PLUS_SHA256:0:12}.md"
+          test -f "$pin_record"
+          cp "$pin_record" "$(dirname "$RUN_ROOT")/"
+
+      - name: Run the canonical corpus sweep
+        shell: bash
+        run: |
+          set -euo pipefail
+          cd "$CRAQ_METAL_DIR"
+          bash tt_metal/tt-llk/tests/corpus/sweep.sh \
+            --mode "$SWEEP_MODE" \
+            --evidence-root "$RUN_ROOT" \
+            --compiler "$CRAQ_COMPILER" \
+            2>&1 | tee "$ARTIFACT_ROOT/sweep.log"
+
+      - name: Stage complete silicon evidence
+        if: always()
+        shell: bash
+        run: |
+          set -euo pipefail
+          mkdir -p "$ARTIFACT_ROOT"
+          if [[ -d "$RUN_ROOT" ]]; then
+            cp -a "$RUN_ROOT" "$ARTIFACT_ROOT/evidence"
+          else
+            echo "NO_EVIDENCE_ROOT: sweep refused before creating $RUN_ROOT" > "$ARTIFACT_ROOT/no-evidence-root.txt"
+          fi
+          {
+            echo "event=${{ github.event_name }}"
+            echo "mode=$SWEEP_MODE"
+            echo "sha=$GITHUB_SHA"
+            echo "run=${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}"
+          } > "$ARTIFACT_ROOT/dispatch.txt"
+
+      - name: Upload silicon evidence
+        if: always()
+        uses: actions/upload-artifact@bbbca2ddaa5d8feaa63e36b76fdaad77386f024f # v7.0.0
+        with:
+          name: sfpu-corpus-silicon-${{ github.run_id }}-${{ github.run_attempt }}
+          path: sfpu-corpus-evidence
+          if-no-files-found: error
+          retention-days: 30
+
+  status:
+    name: "Required corpus status"
+    if: always()
+    needs: [canonical-host, silicon]
+    runs-on: ubuntu-24.04
+    timeout-minutes: 5
+    steps:
+      - name: Publish and enforce run status
+        shell: bash
+        env:
+          HOST_RESULT: ${{ needs.canonical-host.result }}
+          SILICON_RESULT: ${{ needs.silicon.result }}
+          SILICON_REQUESTED: ${{ github.event_name == 'schedule' || inputs.mode != 'host-only' }}
+        run: |
+          set -euo pipefail
+          {
+            echo "## SFPU corpus resource-owner status"
+            echo
+            echo "- Host contract: **$HOST_RESULT**"
+            if [[ "$SILICON_REQUESTED" == true ]]; then
+              echo "- Silicon: **$SILICON_RESULT** (required)"
+            else
+              echo "- Silicon: **NOT_REQUESTED** (manual host-only run)"
+            fi
+          } >> "$GITHUB_STEP_SUMMARY"
+
+          if [[ "$HOST_RESULT" != success ]]; then
+            echo "::error::Canonical host contract did not pass"
+            exit 1
+          fi
+          if [[ "$SILICON_REQUESTED" == true && "$SILICON_RESULT" != success ]]; then
+            echo "::error::Requested silicon did not pass; queued, missing-resource, cancelled, and skipped states are not green"
+            exit 1
+          fi
+
+  notify-scheduled-owner:
+    name: "Notify scheduled-run owner"
+    if: always() && github.event_name == 'schedule'
+    needs: status
+    runs-on: ubuntu-24.04
+    timeout-minutes: 5
+    steps:
+      - name: Checkout notification action
+        uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
+        with:
+          fetch-depth: 1
+      - name: Report scheduled corpus status
+        uses: ./.github/actions/report-failure
+        with:
+          test_name: "TT-LLK SFPU corpus (${{ github.event.schedule == '0 4 * * 0' && 'weekly' || 'nightly' }})"
+          slack_bot_token: ${{ secrets.LLK_SLACK_REPORTING_BOT_TOKEN }}
+          slack_channel_id: ${{ secrets.LLK_CI_STATUS_CHANNEL_ID }}
+          status: ${{ needs.status.result }}

@@ -6,15 +6,40 @@ on:
       - "tt_metal/tt-llk/tt_llk_*/common/inc/sfpu/**"
       - "tt_metal/tt-llk/tests/corpus/**"
       - ".github/workflows/tt-llk-sfpu-corpus.yaml"
+      - ".github/workflows/tt-llk-sfpu-corpus-resource-owner.yaml"
+      - ".github/workflows/tt-llk-sfpu-corpus-resource-owner.md"
   workflow_dispatch:
+  workflow_call:
+
+permissions:
+  contents: read
 
 jobs:
   inventory-and-plan:
     runs-on: ubuntu-latest
+    timeout-minutes: 20
     steps:
-      - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd
+      - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
+        with:
+          fetch-depth: 1
       - name: Reject SFPU inventory drift
         run: python3 tt_metal/tt-llk/tests/corpus/sfpu_corpus.py --validate
+      - name: Exercise campaign refusal and coverage gates
+        run: |
+          python3 tt_metal/tt-llk/tests/corpus/tools/selftest_campaign_fail_closed.py
+          bash -n tt_metal/tt-llk/tests/corpus/tools/galaxy_shard.sh
+      - name: Exercise hardware-free sweep orchestration gates
+        working-directory: tt_metal/tt-llk/tests/corpus
+        run: |
+          python3 selftest_sweep_2x2_report.py
+          python3 selftest_enforcement_gates.py
+          python3 selftest_witness_preflight.py
+          python3 selftest_batched_silicon.py
+          python3 selftest_sweep_core_overhaul.py
+          python3 selftest_knob_legs_semleg.py
+          python3 selftest_dst_layout_32b.py
+          python3 selftest_e2e_metric.py
+          python3 selftest_perf_schema_columns.py
       - name: Materialize compile and CRAQ plans
         run: |
           python3 tt_metal/tt-llk/tests/corpus/sfpu_corpus.py --arch bh --list > sfpu-bh-plan.tsv
@@ -29,30 +54,40 @@ jobs:
           test "$(wc -l < sfpu-bh-plan.tsv)" -eq 152
           test "$(wc -l < sfpu-wh-plan.tsv)" -eq 138
           test "$(wc -l < sfpu-qsr-plan.tsv)" -eq 42
-      - uses: actions/upload-artifact@bbbca2ddaa5d8feaa63e36b76fdaad77386f024f
+      - uses: actions/upload-artifact@bbbca2ddaa5d8feaa63e36b76fdaad77386f024f # v7.0.0
         with:
           name: sfpu-corpus-plans
-          path: sfpu-*-plan.tsv
+          path: |
+            sfpu-*-plan.tsv
+            sfpu-*-plan.json
+            sfpu-*-plan.md
+          if-no-files-found: error
+          retention-days: 14
 
   compile-mapped-corpus:
     runs-on: tt-ubuntu-2204-large-stable
+    timeout-minutes: 120
     strategy:
       # QSR remains in the 42-path inventory/plan artifact but has no audited
       # functional-module mapping yet.  Do not advertise an all-skip QSR job
       # as a compile gate; add it here with its first reviewed mapping.
       matrix: {arch: [bh, wh]}
     steps:
-      - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd
+      - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
+        with:
+          fetch-depth: 1
       - name: Provision pinned LLK compiler environment
         working-directory: tt_metal/tt-llk/tests
         run: CHIP_ARCH=${{ matrix.arch == 'bh' && 'blackhole' || matrix.arch == 'wh' && 'wormhole' || 'quasar' }} ./setup_testing_env.sh
       - name: Compile every mapped corpus module
         run: python3 tt_metal/tt-llk/tests/corpus/sfpu_corpus.py --mode compile --arch ${{ matrix.arch }} --execute --require-executed-mapped --run-root sfpu-${{ matrix.arch }}-compile
-      - uses: actions/upload-artifact@bbbca2ddaa5d8feaa63e36b76fdaad77386f024f
+      - uses: actions/upload-artifact@bbbca2ddaa5d8feaa63e36b76fdaad77386f024f # v7.0.0
         if: always()
         with:
           name: sfpu-${{ matrix.arch }}-compile
           path: sfpu-${{ matrix.arch }}-compile
+          if-no-files-found: error
+          retention-days: 14
 
 # CRAQ needs a pinned libttsim.so supplied by the simulator artifact workflow;
 # silicon needs a serialized lab runner. Those resource-owning workflows call

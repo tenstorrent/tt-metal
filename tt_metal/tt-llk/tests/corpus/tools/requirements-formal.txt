@@ -1,3 +1,6 @@
-# Minimal reproducible dependency set for LLK formal proof scripts.
+# Reproducible host dependency set for the current SFPI formal campaign and
+# corpus validation selftests.  Device/harness dependencies intentionally stay
+# out of this file; the host runner names those integration checks as skips.
+numpy==1.26.4
 pyelftools==0.32
 z3-solver==4.15.4.0

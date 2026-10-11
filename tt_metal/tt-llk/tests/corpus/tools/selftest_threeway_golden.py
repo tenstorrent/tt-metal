@@ -19,6 +19,7 @@ Cases:
 
 Run from tests/: python corpus/tools/selftest_threeway_golden.py
 """
+import argparse
 import sys
 from pathlib import Path
 
@@ -53,7 +54,6 @@ def _bf16(xs_f32):
     call in this file that needs a bf16 operand goes through here.
     """
     import torch
-
     from helpers.golden_generators import cast_preserving_nan_sign
 
     return cast_preserving_nan_sign(
@@ -90,7 +90,9 @@ def _explain(mine, ref, nan_source, atol, rtol):
     nan_sign = np.isinf(g) & np.isinf(m) & ~matched_inf & xn
     nan_pair = np.isnan(g) & np.isnan(m)
     stale_ovf = (
-        np.isinf(g) & np.isfinite(m) & (np.abs(m) <= F32MAX)
+        np.isinf(g)
+        & np.isfinite(m)
+        & (np.abs(m) <= F32MAX)
         & (np.signbit(g) == np.signbit(m))
     )
     explained = rounding | matched_inf | nan_sign | nan_pair
@@ -279,7 +281,8 @@ def case_faithful():
         n_ungraded = int(np.count_nonzero(~graded))
         ungraded_note = (
             f"; {n_ungraded}/1024 undefined (out-of-domain or pole) not graded"
-            if n_ungraded else ""
+            if n_ungraded
+            else ""
         )
         try:
             ref = _scalar_golden(mathop, u)
@@ -394,10 +397,10 @@ _BF16_OP_TO_MATHOP_NAME = {
 
 def _scalar_golden_bf16(mathop, u16):
     """The in-repo oracle on the Float16_b -> Float16_b, dest_acc=No row."""
+    import torch
     from helpers.format_config import DataFormat
     from helpers.golden_generators import UnarySFPUGolden
     from helpers.llk_params import DestAccumulation
-    import torch
 
     operand = (u16.astype(np.uint32) << np.uint32(16)).view(np.float32).copy()
     g = UnarySFPUGolden()(
@@ -441,10 +444,11 @@ def _bf16_faithful_one(op, mathop_name, u16):
     n_graded = int(np.count_nonzero(graded))
     tail = f"; {n_ungraded}/{u16.size} undefined (out-of-domain or pole) not graded"
     if d.size == 0:
-        return True, f"{n_graded}/{n_graded} bit-identical over the WHOLE bf16 space{tail}"
-    ok, parts = _explain(
-        mine[d], ref[d], np.isnan(mine_hp[d]), spec.atol, spec.rtol
-    )
+        return (
+            True,
+            f"{n_graded}/{n_graded} bit-identical over the WHOLE bf16 space{tail}",
+        )
+    ok, parts = _explain(mine[d], ref[d], np.isnan(mine_hp[d]), spec.atol, spec.rtol)
     return ok, f"{d.size}/{n_graded} differ: " + parts + tail
 
 
@@ -464,6 +468,7 @@ def case_faithful_bf16(ops=None, n=None):
         except Exception as e:
             ok, note = False, f"raised: {type(e).__name__}: {e}"
         check(f"faithful-bf16[{op}]", ok, note)
+
 
 # ── case 1d: the blaze / coverage vehicle goldens ────────────────────────────
 # These rows are NOT graded by UnarySFPUGolden -- each carries its own golden
@@ -520,9 +525,8 @@ def _capture_coverage_goldens():
 
 def case_faithful_blaze():
     print("case 1d: blaze/coverage goldens == their OWN test-file closures")
-    import torch
-
     import test_sfpu_blaze as bz
+    import torch
 
     u16 = np.arange(65536, dtype=np.uint32)
     xs = tg._bf16_bits_to_f32(u16)
@@ -532,15 +536,11 @@ def case_faithful_blaze():
     oracles = {}
     for base, attr in _BLAZE_ORACLE.items():
         oracles[f"blaze-{base}"] = getattr(bz, attr)
-    oracles.update(
-        {k: v for k, v in _capture_coverage_goldens().items()}
-    )
+    oracles.update({k: v for k, v in _capture_coverage_goldens().items()})
     # Every graded blaze/coverage spec must have an oracle here, or it ships
     # unverified -- the same rule case 1c enforces for the bf16 corpus.
-    graded = {
-        spec.op
-        for spec in (tg._CORPUS_BLAZE + tg._CORPUS_COVERAGE)
-    }
+    graded = {spec.op for spec in (tg._CORPUS_BLAZE + tg._CORPUS_COVERAGE)}
+
     # t8/t32 twins are the same math as their 1-tile row; verifying the math once
     # per op verifies them, so they map onto the base row's oracle.
     def base_of(op):
@@ -574,15 +574,21 @@ def case_faithful_blaze():
         rb[rb == 0x80000000] = 0
         d = np.where(mb != rb)[0]
         if d.size == 0:
-            check(f"faithful-blaze[{op}]", True, "65536/65536 bit-identical to the row's own golden")
+            check(
+                f"faithful-blaze[{op}]",
+                True,
+                "65536/65536 bit-identical to the row's own golden",
+            )
             continue
         # The test-file closures evaluate in fp32; this module uses fp64. Admit a diff
         # only through the shared explainer -- the row's own contract, a matched
         # infinity, or the NaN-operand infinity-sign policy.
         ok, parts = _explain(
-            mine[d], ref[d],
+            mine[d],
+            ref[d],
             np.isnan(mine_hp[d]) | np.isnan(ref_hp[d]),
-            spec.atol, spec.rtol,
+            spec.atol,
+            spec.rtol,
         )
         note = f"{d.size}/65536 differ: " + parts
         check(f"faithful-blaze[{op}]", ok, note)
@@ -611,9 +617,7 @@ def case_faithful_vehicles():
         "binopscalar": lambda: ScalarBinopGolden()(
             MathOperation.ScalarAdd,
             xt,
-            int(
-                np.array([np.float32(tg.BINOP_SCALAR_ADD)]).view(np.uint32)[0]
-            ),
+            int(np.array([np.float32(tg.BINOP_SCALAR_ADD)]).view(np.uint32)[0]),
             DataFormat.Float16_b,
         ),
     }
@@ -627,15 +631,24 @@ def case_faithful_vehicles():
         except Exception as e:
             check(f"faithful-vehicle[{op}]", False, f"raised: {type(e).__name__}: {e}")
             continue
-        mb = mine.view(np.uint32).copy(); rb = ref.view(np.uint32).copy()
-        mb[mb == 0x80000000] = 0; rb[rb == 0x80000000] = 0
+        mb = mine.view(np.uint32).copy()
+        rb = ref.view(np.uint32).copy()
+        mb[mb == 0x80000000] = 0
+        rb[rb == 0x80000000] = 0
         d = np.where(mb != rb)[0]
         if d.size == 0:
-            check(f"faithful-vehicle[{op}]", True, "65536/65536 bit-identical to the in-repo golden class")
+            check(
+                f"faithful-vehicle[{op}]",
+                True,
+                "65536/65536 bit-identical to the in-repo golden class",
+            )
             continue
         ok, parts = _explain(
-            mine[d], ref[d], np.isnan(mine_hp[d]) | np.isnan(ref_hp[d]),
-            spec.atol, spec.rtol,
+            mine[d],
+            ref[d],
+            np.isnan(mine_hp[d]) | np.isnan(ref_hp[d]),
+            spec.atol,
+            spec.rtol,
         )
         check(f"faithful-vehicle[{op}]", ok, f"{d.size}/65536 differ: " + parts)
 
@@ -661,7 +674,11 @@ def case_faithful_destacc():
         ("expm1cw-destacc", "Expm1Cw"),
     ):
         spec = tg.get_spec(op)
-        check(f"destacc-flag[{op}]", spec is not None and spec.dst_acc, "dst_acc must be True")
+        check(
+            f"destacc-flag[{op}]",
+            spec is not None and spec.dst_acc,
+            "dst_acc must be True",
+        )
         ref = (
             UnarySFPUGolden()(
                 getattr(MathOperation, mathop_name),
@@ -683,11 +700,17 @@ def case_faithful_destacc():
         # Compare like with like here, and check the substitution itself below.
         mine_hp = np.asarray(spec.evaluate(xs), dtype=np.float64)
         mine = tg.format_golden_f32_acc(mine_hp)
-        mb = mine.view(np.uint32).copy(); rb = ref.view(np.uint32).copy()
-        mb[mb == 0x80000000] = 0; rb[rb == 0x80000000] = 0
+        mb = mine.view(np.uint32).copy()
+        rb = ref.view(np.uint32).copy()
+        mb[mb == 0x80000000] = 0
+        rb[rb == 0x80000000] = 0
         d = np.where(mb != rb)[0]
         if d.size == 0:
-            check(f"faithful-destacc[{op}]", True, "65536/65536 bit-identical at fp32 DEST")
+            check(
+                f"faithful-destacc[{op}]",
+                True,
+                "65536/65536 bit-identical at fp32 DEST",
+            )
             continue
         ok, parts = _explain(
             mine[d], ref[d], np.isnan(mine_hp[d]), spec.atol, spec.rtol
@@ -704,10 +727,18 @@ def case_faithful_destacc():
         int(nan_in.sum()) == 254
         and bool(np.all(np.isinf(xu[nan_in])))
         and bool(np.all(np.signbit(xu[nan_in]) == sb[nan_in]))
-        and bool(np.array_equal(xu[~nan_in].view(np.uint32), xs[~nan_in].view(np.uint32))),
+        and bool(
+            np.array_equal(xu[~nan_in].view(np.uint32), xs[~nan_in].view(np.uint32))
+        ),
         "254 NaN patterns -> same-signed inf, the other 65282 bit-identical",
     )
-    for op in ("sigmoid-destacc", "softplus-destacc", "i0-destacc", "i1-destacc", "expm1cw-destacc"):
+    for op in (
+        "sigmoid-destacc",
+        "softplus-destacc",
+        "i0-destacc",
+        "i1-destacc",
+        "expm1cw-destacc",
+    ):
         spec = tg.get_spec(op)
         acc = tg.CorrectnessAccumulator(spec, in_bytes=2, out_bytes=4)
         want = tg.format_golden_f32_acc(np.asarray(spec.evaluate(xu), dtype=np.float64))
@@ -725,7 +756,9 @@ def case_faithful_destacc():
         float(np.finfo(np.float32).tiny) == tg.BF16_TINY == 2.0**-126,
         f"fp32 tiny={float(np.finfo(np.float32).tiny)!r} BF16_TINY={tg.BF16_TINY!r}",
     )
-    sg = float(tg.format_golden_f32_acc(tg._sigmoid(np.array([-89.0], dtype=np.float32)))[0])
+    sg = float(
+        tg.format_golden_f32_acc(tg._sigmoid(np.array([-89.0], dtype=np.float32)))[0]
+    )
     check(
         "sigmoid-89-flushes-at-fp32-dest-too",
         sg == 0.0,
@@ -756,12 +789,8 @@ def case_fitter_ulp():
 
 def case_special_numeric_policy():
     print("case 2c: non-finite tolerance and ULP policy")
-    golden = np.array(
-        [np.inf, -np.inf, np.nan, np.inf, np.nan], dtype=np.float32
-    )
-    device = np.array(
-        [1.0, np.inf, 1.0, np.inf, np.float32(np.nan)], dtype=np.float32
-    )
+    golden = np.array([np.inf, -np.inf, np.nan, np.inf, np.nan], dtype=np.float32)
+    device = np.array([1.0, np.inf, 1.0, np.inf, np.float32(np.nan)], dtype=np.float32)
     ulp, within = tg.numeric_comparison(golden, device, 0.05, 0.05)
     check(
         "special-within-policy",
@@ -830,9 +859,7 @@ def case_domain():
         "class-in-domain",
         acc._classify(0x3F000000, 0.5) == "in_domain_finite_normal",
     )
-    check(
-        "class-pos-inf", acc._classify(0x7F800000, float("inf")) == "pos_inf_input"
-    )
+    check("class-pos-inf", acc._classify(0x7F800000, float("inf")) == "pos_inf_input")
     raw = np.array(
         [
             0x7FC00000,
@@ -919,14 +946,23 @@ _BINARY_OP_TO_MATHOP = {
 # Representative bases, chosen to be the hard ones: both zeros, both units, both
 # infinities, a NaN, a subnormal, the bf16 near-max, and two ordinary values.
 _BINARY_BASES = [
-    0x0000, 0x8000, 0x3F80, 0xBF80, 0x7F80, 0xFF80, 0x7FC0, 0x0001,
-    0x7F70, 0x4130, 0xC0A1, 0x3F70,
+    0x0000,
+    0x8000,
+    0x3F80,
+    0xBF80,
+    0x7F80,
+    0xFF80,
+    0x7FC0,
+    0x0001,
+    0x7F70,
+    0x4130,
+    0xC0A1,
+    0x3F70,
 ]
 
 
 def case_binary_registry():
     print("case 6b: BINARY_REGISTRY goldens == BinarySFPUGolden, per base stratum")
-    import torch
     from helpers.golden_generators import BinarySFPUGolden
     from helpers.llk_params import MathOperation
 
@@ -957,7 +993,9 @@ def case_binary_registry():
                 )
             except Exception as e:
                 ok_all = False
-                worst_note = f"oracle raised at base 0x{base_bits:04x}: {type(e).__name__}: {e}"
+                worst_note = (
+                    f"oracle raised at base 0x{base_bits:04x}: {type(e).__name__}: {e}"
+                )
                 break
             ref = tg.format_golden_f32_noacc(ref_hp)
             mine_hp = np.asarray(
@@ -965,16 +1003,20 @@ def case_binary_registry():
                 dtype=np.float64,
             )
             mine = tg.format_golden_f32_noacc(mine_hp)
-            mb = mine.view(np.uint32).copy(); rb = ref.view(np.uint32).copy()
-            mb[mb == 0x80000000] = 0; rb[rb == 0x80000000] = 0
+            mb = mine.view(np.uint32).copy()
+            rb = ref.view(np.uint32).copy()
+            mb[mb == 0x80000000] = 0
+            rb[rb == 0x80000000] = 0
             d = np.where(mb != rb)[0]
             total_n += 65536
             total_diff += d.size
             if d.size:
                 ok, parts = _explain(
-                    mine[d], ref[d],
+                    mine[d],
+                    ref[d],
                     np.isnan(mine_hp[d]) | np.isnan(ref_hp[d]),
-                    spec.atol, spec.rtol,
+                    spec.atol,
+                    spec.rtol,
                 )
                 if not ok:
                     ok_all = False
@@ -1075,9 +1117,9 @@ def case_modelling_contracts():
     #     exhaustive silicon leg attributed to it.
     expect_ftz = {
         # op: (device answer at the witness, witness bf16 pattern)
-        "sqrt-fresh": (0.0, 0x8001),      # sqrt(-9.18e-41): NaN->+inf before, 0 now
+        "sqrt-fresh": (0.0, 0x8001),  # sqrt(-9.18e-41): NaN->+inf before, 0 now
         "log-fresh": (-math.inf, 0x0001),  # log(9.18e-41): -92.0 before, -inf now
-        "ceil-fresh": (0.0, 0x0001),       # ceil(tiny+): 1.0 before, 0 now
+        "ceil-fresh": (0.0, 0x0001),  # ceil(tiny+): 1.0 before, 0 now
     }
     for op, (dev, patt) in expect_ftz.items():
         spec = tg.get_spec(op)
@@ -1181,10 +1223,11 @@ def case_modelling_contracts():
     # The recorded silicon facts. Two are witness values; two are the absence of a
     # miss against a golden that was +inf at every NaN.
     recorded = {
-        ("max", 0x7F81): math.inf,   # not among the 127 misses vs a +inf golden
-        ("max", 0xFF81): 0.0,        # recorded graded_witness_dev
-        ("min", 0x7F81): 0.0,        # recorded graded_witness_dev
+        ("max", 0x7F81): math.inf,  # not among the 127 misses vs a +inf golden
+        ("max", 0xFF81): 0.0,  # recorded graded_witness_dev
+        ("min", 0x7F81): 0.0,  # recorded graded_witness_dev
     }
+
     # min(-NaN, 0.0) is the model's PREDICTION (-inf); the record cannot distinguish
     # it from 0.0, because both miss a +inf golden. It is what the silicon re-run of
     # unarymaxmin-min is for.
@@ -1212,7 +1255,10 @@ def case_modelling_contracts():
         gmin = tg.format_golden_f32_noacc(hmin)
         agrees = all(
             float({"max": gmax, "min": gmin}[side][u16 == patt][0]) == want
-            or (math.isinf(want) and float({"max": gmax, "min": gmin}[side][u16 == patt][0]) == want)
+            or (
+                math.isinf(want)
+                and float({"max": gmax, "min": gmin}[side][u16 == patt][0]) == want
+            )
             for (side, patt), want in recorded.items()
         )
         verdicts[name] = agrees
@@ -1228,10 +1274,16 @@ def case_modelling_contracts():
     # +inf) must come back at 127 / 254, which is how the rows were reported.
     _, w_max = tg.numeric_comparison(
         old_pipeline(np.maximum(xs.astype(np.float64), float(C)))[nan],
-        tg.format_golden_f32_noacc(tg.sfpu_max(xs, C))[nan], 0.05, 0.05)
+        tg.format_golden_f32_noacc(tg.sfpu_max(xs, C))[nan],
+        0.05,
+        0.05,
+    )
     _, w_min = tg.numeric_comparison(
         old_pipeline(np.minimum(xs.astype(np.float64), float(C)))[nan],
-        tg.format_golden_f32_noacc(tg.sfpu_min(xs, C))[nan], 0.05, 0.05)
+        tg.format_golden_f32_noacc(tg.sfpu_min(xs, C))[nan],
+        0.05,
+        0.05,
+    )
     check(
         "minmax-old-golden-miss-counts",
         (int(np.count_nonzero(~w_max)), int(np.count_nonzero(~w_min))) == (127, 254),
@@ -1249,12 +1301,16 @@ def case_modelling_contracts():
                 spec.evaluate(tg._bf16_bits_to_f32(np.array([0xFF80], dtype=np.uint32)))
             )[0]
         )
-        check(f"gelu-neg-inf-limit[{op}]", v == 0.0, f"golden at -inf = {v!r} (device 0.0)")
+        check(
+            f"gelu-neg-inf-limit[{op}]",
+            v == 0.0,
+            f"golden at -inf = {v!r} (device 0.0)",
+        )
 
     # (5) i0/i1 can SEE a defect in [89, 91.5] -- the fp64 golden is finite there,
     #     the fp32 oracle was +inf, and the bisected overflow constants come back.
-    from helpers.golden_generators import UnarySFPUGolden
     from helpers.format_config import DataFormat
+    from helpers.golden_generators import UnarySFPUGolden
     from helpers.llk_params import DestAccumulation, MathOperation
 
     band = np.array([89.0, 89.5, 90.0, 90.5, 91.0, 91.5], dtype=np.float32)
@@ -1329,8 +1385,31 @@ def case_modelling_contracts():
     )
 
 
-def main():
+def main(argv=None):
+    parser = argparse.ArgumentParser()
+    parser.add_argument(
+        "--portable",
+        action="store_true",
+        help=(
+            "run the dependency-light numeric-policy/classification checks only; "
+            "the full oracle-parity suite imports the installed TT-LLK harness"
+        ),
+    )
+    args = parser.parse_args(argv)
     print("laneMR three-way golden selftest")
+    if args.portable:
+        print(
+            "portable mode: TT-LLK harness oracle-parity cases skipped "
+            "(they require the installed harness/toolchain environment)"
+        )
+        case_special_numeric_policy()
+        case_domain()
+        print()
+        if FAILED:
+            print(f"FAILED: {FAILED}")
+            return 1
+        print("PORTABLE HOST CHECKS PASS")
+        return 0
     case_faithful()
     case_faithful_bf16()
     case_faithful_blaze()
