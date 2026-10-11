@@ -2,9 +2,7 @@
 #
 # SPDX-License-Identifier: Apache-2.0
 
-"""Hardware-free test of TestConfig.run_elf_files with stubbed device calls: LAST_LOADED_ELFS names a
-variant only while all its ELFs are on the core, so no core starts on code a previous variant left.
-"""
+"""Hardware-free test: LAST_LOADED_ELFS names a variant only while all its ELFs are on the core."""
 
 from pathlib import Path
 from types import SimpleNamespace
