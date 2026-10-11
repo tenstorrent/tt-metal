@@ -83,7 +83,7 @@ void run_kernel(RUNTIME_PARAMETERS params)
             num_faces_B,    // in1
             num_faces_A,    // in0
             PARTIAL_FACE_B, // in1
-            PARTIAL_FACE_A  // in0
+            PARTIAL_FACE_A
                 MATMUL_STREAM_NARROW_ARG(stream_narrow));
         PROFILER_SYNC();
     }

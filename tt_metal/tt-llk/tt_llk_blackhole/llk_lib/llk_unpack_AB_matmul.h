@@ -32,9 +32,7 @@ inline constexpr bool unpack_matmul_ttsync_restored = true;
 inline constexpr bool unpack_matmul_ttsync_restored = false;
 #endif
 
-/**
- * @brief Turn Auto TTSync off and restore the MOP and REPLAY declarations if a ttsync matmul init changed them.
- */
+// Turn Auto TTSync off and restore the MOP and REPLAY declarations if a ttsync matmul init changed them.
 inline void _llk_unpack_AB_matmul_ttsync_restore_()
 {
     if (unpack_matmul_ttsync_on)
@@ -61,14 +59,6 @@ inline void _llk_unpack_AB_matmul_set_in1_column_stride_(const std::uint32_t til
     TT_SETDMAREG(0, LOWER_HALFWORD(tile_size * stride_tiles), 0, LO_16(p_gpr_unpack::TILE_SIZE_A));
 }
 
-/**
- * @brief Whether a format holds 8 bits per datum or less (block float, fp8 and 8-bit integer formats).
- *
- * The unpacker moves such a tile in half the time of a 16-bit one, faster than the GPR address advance (RDCFG,
- * ADDDMAREG, STALLWAIT, WRCFG) can follow, so these formats take the CFGSHIFTMASK advance.
- *
- * @param unpack_src_format: Unpacker input (L1) data format.
- */
 inline constexpr bool _llk_unpack_AB_matmul_narrow_format_(const std::uint32_t unpack_src_format)
 {
     switch (unpack_src_format)
@@ -90,16 +80,7 @@ inline constexpr bool _llk_unpack_AB_matmul_narrow_format_(const std::uint32_t u
 }
 
 /**
- * @brief Whether the operand a matmul streams holds 8 bits per datum or less: the value of the stream_narrow argument of
- *        @ref _llk_unpack_AB_matmul_init_.
- *
- * The streamed operand is in1 (unpacked into SrcA) when ct_dim >= rt_dim and in0 (SrcB) otherwise.
- *
- * @param ct_dim: Number of column tiles in the output block.
- * @param rt_dim: Number of row tiles in the output block.
- * @param unpA_src_format: Unpacker input (L1) data format of in1, the operand unpacked into SrcA, as given to
- *                         @ref _llk_unpack_hw_configure_.
- * @param unpB_src_format: Unpacker input (L1) data format of in0, the operand unpacked into SrcB.
+ * Whether the operand a matmul streams holds 8 bits per datum or less: the value of the stream_narrow argument of @ref _llk_unpack_AB_matmul_init_.
  * @param fp32_dest_acc_en: Whether DEST holds 32-bit data; such a kernel keeps the GPR advance for every format.
  */
 inline constexpr bool _llk_unpack_AB_matmul_stream_narrow_(
@@ -113,14 +94,7 @@ inline constexpr bool _llk_unpack_AB_matmul_stream_narrow_(
 }
 
 /**
- * @brief Record the replay body for one streamed tile of a matmul row: the UNPACR group, the address advance and the NOP.
- *
- * @tparam SRC: SrcA or SrcB, the source register (and unpacker) of the streamed operand.
- * @tparam CFG_REG: Base address register of the streamed operand's unpacker in the config context this copy serves.
- * @tparam STRIDE_GPR: GPR holding the streamed tile stride for the GPR advance.
- * @tparam ADVANCE: False under kernel broadcast (the base address is not advanced).
- * @param partial_face: Whether the streamed operand is unpacked face-by-face.
- * @param narrow: Whether the streamed operand's format holds 8 bits per datum or less.
+ * Record the replay body for one streamed tile of a matmul row: the UNPACR group, the address advance and the NOP.
  */
 template <std::uint32_t SRC, std::uint32_t CFG_REG, std::uint32_t STRIDE_GPR, bool ADVANCE>
 inline void _llk_unpack_AB_matmul_stream_tile_body_(const bool partial_face, const bool narrow)
@@ -130,7 +104,7 @@ inline void _llk_unpack_AB_matmul_stream_tile_body_(const bool partial_face, con
         TTI_UNPACR_NOP(SRC, 0, 0, 0 /*Set Dvalid*/, 0, p_unpacr_nop::WAIT_LIKE_UNPACR, 0, 0, p_unpacr_nop::UNP_ZEROSRC);
         TTI_UNPACR(SRC, 0b00010001, 0, 0, 0, 1 /*Set OvrdThreadId*/, 0 /*Set Dvalid*/, p_unpacr::RAREFYB_DISABLE, 0, 0 /* Set ContextIdInc */, 0, 0, 1);
         TTI_UNPACR(SRC, 0b00010001, 0, 0, 0, 1 /*Set OvrdThreadId*/, 1 /*Set Dvalid*/, p_unpacr::RAREFYB_DISABLE, 0, 0 /* Set ContextIdInc */, 0, 0, 1);
-        TTI_SETADCZW((SRC == SrcA) ? p_setadc::UNP_A : p_setadc::UNP_B, 0, 0, 0, 0, 0b0101); // Set ch0_z=0, ch1_z=0
+        TTI_SETADCZW((SRC == SrcA) ? p_setadc::UNP_A : p_setadc::UNP_B, 0, 0, 0, 0, 0b0101);
     }
     else
     {
@@ -151,7 +125,7 @@ inline void _llk_unpack_AB_matmul_stream_tile_body_(const bool partial_face, con
     else if (narrow)
     {
         // CFG_REG += SCRATCH_SEC0_val; the stride is copied from the GPR every tile, so it follows a data format reconfig
-        TTI_STALLWAIT(p_stall::STALL_CFG, p_stall::THCON); // a WRCFG can pass the THCON write of the stride GPR
+        TTI_STALLWAIT(p_stall::STALL_CFG, p_stall::THCON);
         TTI_WRCFG(STRIDE_GPR, p_cfg::WRCFG_32b, SCRATCH_SEC0_val_ADDR32);
         TTI_CFGSHIFTMASK(1, 0b011, 32 - 1, 0, 0, CFG_REG);
     }
@@ -180,7 +154,6 @@ inline void _llk_unpack_AB_matmul_stream_tile_body_(const bool partial_face, con
  * @param rt_dim: Number of row tiles in the output block.
  * @param unpA_partial_face: Whether operand A is unpacked face-by-face (partial faces).
  * @param unpB_partial_face: Whether operand B is unpacked face-by-face (partial faces).
- * @param stream_narrow: Whether the streamed operand's format holds 8 bits per datum or less (CFGSHIFTMASK address advance).
  */
 template <std::uint32_t kernel_broadcast_a = 0, std::uint32_t kernel_broadcast_b = 0>
 inline void _llk_unpack_AB_matmul_mop_config_(
@@ -379,7 +352,6 @@ inline void _llk_unpack_AB_matmul_uninit_()
  * @param ct_dim: Number of column tiles in the output block.
  * @param rt_dim: Number of row tiles in the output block.
  * @param kt_dim: Number of tiles along the contraction (K) dimension.
- * @tparam ttsync: The value @ref _llk_unpack_AB_matmul_init_ was called with.
  * @note Call @ref _llk_unpack_AB_matmul_init_ with matching template args before this function, and
  *       @ref _llk_unpack_AB_matmul_uninit_ after it to restore modified state.
  * @ref _llk_math_matmul_ on the math thread consumes the SrcA/SrcB tiles unpacked here.
@@ -447,7 +419,7 @@ inline void _llk_unpack_AB_matmul_(
                 TTI_WRCFG(p_gpr_unpack::MATMUL_ROW_ADDR_B, p_cfg::WRCFG_32b, THCON_SEC0_REG3_Base_cntx1_address_ADDR32);
                 TTI_WRCFG(p_gpr_unpack::MATMUL_ROW_ADDR_A, p_cfg::WRCFG_32b, THCON_SEC1_REG3_Base_cntx1_address_ADDR32);
             }
-            TTI_NOP; // the instruction after a WRCFG must not read the config it writes
+            TTI_NOP;
         }
         else
         {
@@ -498,7 +470,7 @@ inline void _llk_unpack_AB_matmul_(
             }
         }
 
-        TT_MOP(0, (reuse_a ? ct_dim : rt_dim) - 1, unp_cfg_context == 0 ? 0 : 0xffff); // Run the MOP
+        TT_MOP(0, (reuse_a ? ct_dim : rt_dim) - 1, unp_cfg_context == 0 ? 0 : 0xffff);
 
         // T6::SEMGET for context release
         t6_semaphore_get(semaphore::UNPACK_SYNC);

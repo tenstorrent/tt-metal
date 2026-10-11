@@ -55,7 +55,7 @@ void run_kernel(RUNTIME_PARAMETERS params)
         params.num_faces_B,    // in1
         params.num_faces_A,    // in0
         params.PARTIAL_FACE_B, // in1
-        params.PARTIAL_FACE_A  // in0
+        params.PARTIAL_FACE_A
             MATMUL_STREAM_NARROW_ARG(stream_narrow));
     for (std::uint32_t j = 0; j < params.KT_DIM; j++)
     {

@@ -464,11 +464,7 @@ constexpr std::uint32_t matmul_row_dest_stride(const std::uint32_t ct_dim, const
     return ((ct_dim >= rt_dim) ? 1 : ct_dim) * 64;
 }
 
-/**
- * @brief Program the DEST word of ADDR_MOD_3: the end of a row tile moves DEST on through the carriage return register.
- *
- * @param dest_tile_stride: DEST rows from one tile of the row to the next, see @ref matmul_row_dest_stride.
- */
+// Program the DEST word of ADDR_MOD_3: the end of a row tile moves DEST on through the carriage return register.
 inline void matmul_set_row_tile_end_dest(const std::uint32_t dest_tile_stride)
 {
     constexpr addr_mod_t::addr_mod_dest_t dest {.incr = 0, .clr = 0, .cr = 1};
@@ -476,21 +472,7 @@ inline void matmul_set_row_tile_end_dest(const std::uint32_t dest_tile_stride)
     TT_SETC16(ADDR_MOD_DST_SEC3_DestIncr_ADDR32, (dest_tile_stride & DEST_INCR_MASK) | dest.val() | (fidelity.val() << 13));
 }
 
-/**
- * @brief Build the matmul MOP for a whole reuse row of full 32x32 tiles, the opt-in form of @ref matmul_configure_mop.
- *
- * MVMUL 16 of a tile is the loop instruction: ADDR_MOD_7 between fidelity phases (DEST back to the tile base),
- * ADDR_MOD_3 at the end of a tile (DEST to the next tile of the row) and ADDR_MOD_6 at the end of the row.
- *
- * @tparam math_fidelity: Math fidelity for controlling precision, values = <LoFi/HiFi2/HiFi3/HiFi4>
- * @param ct_dim: Number of column tiles in the output block.
- * @param rt_dim: Number of row tiles in the output block.
- * @param in0_tile_r_dim: Row dimension of an in0 tile.
- * @param in0_tile_c_dim: Column dimension of an in0 tile.
- * @param in1_tile_r_dim: Row dimension of an in1 tile.
- * @param in1_tile_c_dim: Column dimension of an in1 tile.
- * @param partial_face: True when the tile has fewer than the full set of faces.
- */
+// Build the matmul MOP for a whole reuse row of full 32x32 tiles, the opt-in form of @ref matmul_configure_mop.
 template <MathFidelity math_fidelity>
 inline void matmul_configure_row_mop(
     const std::uint32_t ct_dim,
@@ -543,24 +525,24 @@ inline void matmul_configure_row_mop(
         15,
         []
         {
-            TTI_MVMUL(p_setrwc::CLR_NONE, 0, ADDR_MOD_0, 0); // B0A0
-            TTI_MVMUL(p_setrwc::CLR_NONE, 0, ADDR_MOD_1, 0); // B0A0
-            TTI_MVMUL(p_setrwc::CLR_NONE, 0, ADDR_MOD_0, 0); // B0A1
-            TTI_MVMUL(p_setrwc::CLR_NONE, 0, ADDR_MOD_2, 0); // B0A1
+            TTI_MVMUL(p_setrwc::CLR_NONE, 0, ADDR_MOD_0, 0);
+            TTI_MVMUL(p_setrwc::CLR_NONE, 0, ADDR_MOD_1, 0);
+            TTI_MVMUL(p_setrwc::CLR_NONE, 0, ADDR_MOD_0, 0);
+            TTI_MVMUL(p_setrwc::CLR_NONE, 0, ADDR_MOD_2, 0);
 
-            TTI_MVMUL(p_setrwc::CLR_NONE, 0, ADDR_MOD_0, 0); // B2A0
-            TTI_MVMUL(p_setrwc::CLR_NONE, 0, ADDR_MOD_1, 0); // B2A0
-            TTI_MVMUL(p_setrwc::CLR_NONE, 0, ADDR_MOD_0, 0); // B2A1
-            TTI_MVMUL(p_setrwc::CLR_NONE, 0, ADDR_MOD_4, 0); // B2A1
+            TTI_MVMUL(p_setrwc::CLR_NONE, 0, ADDR_MOD_0, 0);
+            TTI_MVMUL(p_setrwc::CLR_NONE, 0, ADDR_MOD_1, 0);
+            TTI_MVMUL(p_setrwc::CLR_NONE, 0, ADDR_MOD_0, 0);
+            TTI_MVMUL(p_setrwc::CLR_NONE, 0, ADDR_MOD_4, 0);
 
-            TTI_MVMUL(p_setrwc::CLR_NONE, 0, ADDR_MOD_0, 0); // B1A2
-            TTI_MVMUL(p_setrwc::CLR_NONE, 0, ADDR_MOD_1, 0); // B1A2
-            TTI_MVMUL(p_setrwc::CLR_NONE, 0, ADDR_MOD_0, 0); // B1A3
-            TTI_MVMUL(p_setrwc::CLR_NONE, 0, ADDR_MOD_2, 0); // B1A3
+            TTI_MVMUL(p_setrwc::CLR_NONE, 0, ADDR_MOD_0, 0);
+            TTI_MVMUL(p_setrwc::CLR_NONE, 0, ADDR_MOD_1, 0);
+            TTI_MVMUL(p_setrwc::CLR_NONE, 0, ADDR_MOD_0, 0);
+            TTI_MVMUL(p_setrwc::CLR_NONE, 0, ADDR_MOD_2, 0);
 
-            TTI_MVMUL(p_setrwc::CLR_NONE, 0, ADDR_MOD_0, 0); // B3A2
-            TTI_MVMUL(p_setrwc::CLR_NONE, 0, ADDR_MOD_1, 0); // B3A2
-            TTI_MVMUL(p_setrwc::CLR_NONE, 0, ADDR_MOD_0, 0); // B3A3
+            TTI_MVMUL(p_setrwc::CLR_NONE, 0, ADDR_MOD_0, 0);
+            TTI_MVMUL(p_setrwc::CLR_NONE, 0, ADDR_MOD_1, 0);
+            TTI_MVMUL(p_setrwc::CLR_NONE, 0, ADDR_MOD_0, 0);
         });
 
     constexpr std::uint32_t inner_loops = high_fidelity ? to_underlying(math_fidelity) : 1;
@@ -568,22 +550,14 @@ inline void matmul_configure_row_mop(
         reuse_a ? ct_dim : rt_dim /* outer loop: tiles of the row */,
         inner_loops,
         lltt::replay_insn(ckernel::math::replay_buf_offset, 15),
-        TT_OP_MVMUL(p_setrwc::CLR_NONE, 0, ADDR_MOD_7, 0)); // B3A3
+        TT_OP_MVMUL(p_setrwc::CLR_NONE, 0, ADDR_MOD_7, 0));
     tmp.set_last_inner_loop_instr(TT_OP_MVMUL(reuse_a ? p_setrwc::CLR_A : p_setrwc::CLR_B, 0, ADDR_MOD_3, 0));
     tmp.set_last_outer_loop_instr(TT_OP_MVMUL(p_setrwc::CLR_AB, 0, ADDR_MOD_6, 0));
     tmp.program();
     matmul_row_mop_dims = matmul_block_dims(ct_dim, rt_dim);
 }
 
-/**
- * @brief Run a matmul block on the row MOP of @ref matmul_configure_row_mop: one DEST offset and one MOP per reuse row.
- *
- * A call narrower than its init (a padded block's valid columns) first updates the row length and the DEST stride.
- *
- * @param dst_index: Base tile index into the destination register for the output block.
- * @param ct_dim: Number of column tiles in the output block.
- * @param rt_dim: Number of row tiles in the output block.
- */
+// Run a matmul block on the row MOP of @ref matmul_configure_row_mop: one DEST offset and one MOP per reuse row.
 inline void matmul_run_row_mop(const std::uint32_t dst_index, const std::uint32_t ct_dim, const std::uint32_t rt_dim)
 {
     const std::uint32_t programmed_dims = matmul_row_mop_dims;
@@ -886,7 +860,6 @@ inline void _llk_math_matmul_uninit_()
  *
  * @tparam math_fidelity: Math fidelity for controlling precision, values = <LoFi/HiFi2/HiFi3/HiFi4>
  * @tparam THROTTLE_LEVEL: Compute-throughput throttle level; must match the value used at init.
- * @tparam row_mop: Must match the value used at init.
  * @param dst_index: Base tile index into the destination register for the output block.
  * @param ct_dim: Number of column tiles in the output block.
  * @param rt_dim: Number of row tiles in the output block.
