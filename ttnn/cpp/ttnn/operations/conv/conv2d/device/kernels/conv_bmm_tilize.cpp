@@ -258,13 +258,14 @@ void kernel_main() {
     constexpr uint32_t untilize_mode_out_cb_id = untilize_out ? matmul_partials_cb : out_cb_id;
 #ifdef ARCH_BLACKHOLE
     // The block run is kept only at the models' shapes where it measured faster, none with relu: block-sharded 2 x 4
-    // with L1 accumulate and a 2 x 2 downsampler, height-sharded 1 x 4 and 4 x 1 over 12 or more and two conv_ins.
+    // with L1 accumulate, a 2 x 2 downsampler, height-sharded 4 x 1 and multi-subblock 1 x 4 over 12+, two conv_ins.
     constexpr bool block_pack_subblocks =
         !pack_relu && ((!height_sharded && packer_l1_acc && out_subblock_h == 2 && out_subblock_w == 4) ||
                        (!height_sharded && !packer_l1_acc && out_subblock_h == 2 && out_subblock_w == 2 &&
                         in0_block_w == 6 && in0_num_blocks_w == 30) ||
                        (height_sharded && !packer_l1_acc && in0_block_w >= 12 &&
-                        ((out_subblock_h == 1 && out_subblock_w == 4 && in0_num_blocks_h > 1) ||
+                        ((out_subblock_h == 1 && out_subblock_w == 4 && in0_num_blocks_h > 1 &&
+                          in0_num_subblocks * in1_num_subblocks > 1) ||
                          (out_subblock_h == 4 && out_subblock_w == 1))) ||
                        (height_sharded && !packer_l1_acc && in0_block_w == 3 && in0_num_blocks_w == 3 &&
                         in0_num_blocks_h == 1 && out_subblock_h == 1 && (out_subblock_w == 4 || out_subblock_w == 5)));
