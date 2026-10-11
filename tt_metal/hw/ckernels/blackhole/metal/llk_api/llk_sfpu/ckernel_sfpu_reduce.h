@@ -303,7 +303,7 @@ inline void perform_reduce_col_sum_avg() {
 //   init_reduce_sum_avg:                [0, 9)   column tree-add windows; row SUM/AVG replays [0, 6)
 //   init_reduce_max_min:                [0, 11)  LOADMACRO column window (float, UInt16 in a 16-bit Dest)
 //   init_reduce_max_min_int32:          [0, 3)   manual 3-swap window (UInt16 in 32-bit Dest)
-//   init_reduce_max_min_int32_signed:   [0, 15)  signed Int32 column window
+//   init_reduce_max_min_int32_signed:   [0, 15)  signed Int32 (and bit-31-flipped UInt32) column window
 //
 // SFPSWAP direction (SFPCONFIG bit 8): the row paths and the manual column paths read opposite SFPSWAP
 // operands, so the same pool type needs opposite directions. Each of them sets its own on entry
@@ -1906,8 +1906,6 @@ inline void calculate_reduce(
         (format == DataFormat::UInt32 && (pool_type == PoolType::MAX || pool_type == PoolType::MIN));
     constexpr bool int32_max_min =
         uint32_max_min || (format == DataFormat::Int32 && (pool_type == PoolType::MAX || pool_type == PoolType::MIN));
-    constexpr bool int32_max_min_col = int32_max_min && (reduce_dim == ReduceDim::REDUCE_COL);
-    constexpr bool int32_max_min_row = int32_max_min && (reduce_dim == ReduceDim::REDUCE_ROW);
     constexpr InstrModLoadStore INSTRUCTION_MODE =
         int32_max_min ? InstrModLoadStore::INT32 : GetSfpLoadStoreInstrMod<format, is_fp32_dest_acc_en>();
 
@@ -1930,28 +1928,27 @@ inline void calculate_reduce(
 
     // Dispatch to appropriate reduction kernel based on PoolType
     if constexpr (pool_type == PoolType::MAX || pool_type == PoolType::MIN) {
-        if constexpr (int32_max_min_col) {
-            // Int32 (and bit-31-flipped UInt32) column MAX/MIN: two's-complement compare-and-swap path (handles
-            // INT32_MIN, issue #49803). Single-tile (32x32) kernel that ignores block_ct_dim/block_rt_dim, so guard the
-            // single-tile contract loudly rather than silently dropping tiles.
-            LLK_ASSERT(
-                block_ct_dim == 1 && block_rt_dim == 1,
-                "Int32/UInt32 column MAX/MIN reduce only supports a single tile (block_ct_dim == block_rt_dim == 1)");
-            if constexpr (uint32_max_min) {
-                flip_sign_bits(1 /*num_tiles*/);
+        if constexpr (int32_max_min) {
+            // Int32 (and bit-31-flipped UInt32) MAX/MIN: two's-complement compare-and-swap path (handles INT32_MIN).
+            // The column kernel is single-tile (32x32) and ignores block_ct_dim/block_rt_dim, so guard the
+            // single-tile contract loudly rather than silently dropping tiles if a caller passes >1.
+            if constexpr (reduce_dim == ReduceDim::REDUCE_COL) {
+                LLK_ASSERT(
+                    block_ct_dim == 1 && block_rt_dim == 1,
+                    "Int32/UInt32 column MAX/MIN reduce is single-tile (block_ct_dim == block_rt_dim == 1)");
             }
-            calculate_reduce_max_min_int32_col<pool_type, reduce_dim>();
-            if constexpr (uint32_max_min) {
-                flip_sign_bits(1 /*num_tiles*/);
-            }
-        } else if constexpr (int32_max_min_row) {
-            // Int32 (and bit-31-flipped UInt32) row MAX/MIN: two's-complement compare-and-swap path (handles
-            // INT32_MIN).
             [[maybe_unused]] const std::uint32_t num_tiles = block_ct_dim * block_rt_dim;
             if constexpr (uint32_max_min) {
                 flip_sign_bits(num_tiles);
             }
-            perform_reduce_row_max_min_int32<pool_type>(block_ct_dim, block_rt_dim);
+            if constexpr (reduce_dim == ReduceDim::REDUCE_COL) {
+                calculate_reduce_max_min_int32_col<pool_type, reduce_dim>();
+            } else {
+                static_assert(
+                    reduce_dim == ReduceDim::REDUCE_ROW,
+                    "Int32/UInt32 MAX/MIN reduce supports REDUCE_COL and REDUCE_ROW");
+                perform_reduce_row_max_min_int32<pool_type>(block_ct_dim, block_rt_dim);
+            }
             if constexpr (uint32_max_min) {
                 flip_sign_bits(num_tiles);
             }

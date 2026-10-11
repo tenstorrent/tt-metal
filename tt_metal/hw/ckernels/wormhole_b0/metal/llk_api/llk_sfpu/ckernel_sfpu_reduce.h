@@ -529,8 +529,8 @@ inline void horizontal_reduce_max_int32() {
  * 4. Use horizontal_reduce_max to consolidate 8 SFPU columns into column 0
  * 5. Store the per-row max into column 0
  *
- * @tparam INSTRUCTION_MODE Load/store instruction mode (FP32, FP16B, or plain INT32 for UInt16 extrema).
- *         Signed Int32 MAX/MIN does not use this helper; it takes perform_reduce_row_max_tile_int32.
+ * @tparam INSTRUCTION_MODE Load/store instruction mode (FP32, FP16B or LO16).
+ *         Int32 and UInt32 MAX/MIN do not use this helper; they take perform_reduce_row_max_tile_int32.
  * @tparam clear_high_bits Whether to mask the garbage high bits on load (true for UInt16 in a 32-bit dest).
  * @param tile_row_offset Base row offset for this tile in the dest register
  * @param result_store_mode SFPSTORE mode for the per-row result (plain instruction mode, or mode 9 for UInt16 output)
@@ -790,8 +790,8 @@ inline void sum_first_columns_across_tiles(
  * Mirrors sum_first_columns_across_tiles but uses SFPSWAP instead of SFPADD
  * to keep maximum values rather than sums.
  *
- * @tparam INSTRUCTION_MODE Load/store instruction mode (FP32, FP16B, or plain INT32 for UInt16 extrema).
- *         Signed Int32 MAX/MIN does not use this helper; it takes max_first_columns_across_tiles_int32.
+ * @tparam INSTRUCTION_MODE Load/store instruction mode (FP32, FP16B or LO16).
+ *         Int32 and UInt32 MAX/MIN do not use this helper; they take max_first_columns_across_tiles_int32.
  * @tparam clear_high_bits Whether to mask the garbage high bits on load (true for UInt16 in a 32-bit dest).
  * @tparam pack_low16 Whether the final store uses mode 9 (low->high 16-bit) for a UInt16 output.
  * @param tile_row_base Base address of the first tile in this row of tiles
@@ -895,11 +895,11 @@ inline void perform_reduce_row_sum_avg(std::uint32_t block_ct_dim, std::uint32_t
  * comparator direction, set once here via SFPCONFIG bit 8 (0 = MAX, 1 = MIN). The data
  * representation seen by SFPSWAP (float, or the non-negative sign-magnitude range for UInt16)
  * is identical for MAX and MIN, so flipping bit 8 cleanly inverts the result for every format that
- * reaches here. Signed Int32 MAX/MIN does not use this function; it takes the dedicated
+ * reaches here. Int32 and UInt32 MAX/MIN do not use this function; they take the dedicated
  * two's-complement path (perform_reduce_row_max_min_int32 / calculate_reduce_max_min_int32_col).
  *
  * @tparam pool_type MAX or MIN.
- * @tparam INSTRUCTION_MODE Load/store instruction mode (FP32, FP16B, or plain INT32 for UInt16 extrema)
+ * @tparam INSTRUCTION_MODE Load/store instruction mode (FP32, FP16B or LO16)
  * @param block_ct_dim Number of tiles along x axis of tensor (column tiles)
  * @param block_rt_dim Number of tiles along y axis of tensor (row tiles)
  */
@@ -1531,8 +1531,9 @@ inline void calculate_reduce_max_min_int32_col() {
  * @tparam pool_type The PoolType enum value (MAX or MIN). MIN uses inverted swap direction for minimum reduction.
  * @tparam reduce_dim The reduction dimension: REDUCE_COL for column-wise, REDUCE_ROW for row-wise (MAX and MIN).
  * @tparam INSTRUCTION_MODE The instruction mode for the float/unsigned formats that reach here: DEFAULT (FP32,
- * FP16B) or LO16. Int32 and UInt32 MAX/MIN use the dedicated two's-complement path, and UInt16 in a 32-bit Dest the
- * manual column path (calculate_reduce_max_min_int32_col / perform_reduce_row_max_min_int32) instead.
+ * FP16B) or LO16. Int32 and UInt32 MAX/MIN use the dedicated two's-complement path
+ * (calculate_reduce_max_min_int32_col / perform_reduce_row_max_min_int32), and UInt16 in a 32-bit Dest the manual
+ * column path (calculate_reduce_max_min_uint16), instead.
  * @param block_ct_dim Number of tiles along x axis (column tiles, default 1).
  * @param block_rt_dim Number of tiles along y axis (row tiles, default 1).
  */
@@ -1810,10 +1811,8 @@ inline void calculate_reduce(std::uint32_t block_ct_dim = 1, std::uint32_t block
         (format == DataFormat::UInt32 && (pool_type == PoolType::MAX || pool_type == PoolType::MIN));
     constexpr bool int32_max_min =
         uint32_max_min || (format == DataFormat::Int32 && (pool_type == PoolType::MAX || pool_type == PoolType::MIN));
-    // Int32 MAX/MIN (both column and row) use a dedicated two's-complement compare-and-swap path that
-    // loads with plain INT32 (see the per-reduction note above).
-    constexpr bool int32_max_min_col = int32_max_min && (reduce_dim == ReduceDim::REDUCE_COL);
-    constexpr bool int32_max_min_row = int32_max_min && (reduce_dim == ReduceDim::REDUCE_ROW);
+    // Int32 and UInt32 MAX/MIN (both column and row) use a dedicated two's-complement compare-and-swap path
+    // that loads with plain INT32 (see the per-reduction note above).
     constexpr InstrModLoadStore INSTRUCTION_MODE = int32_max_min ? InstrModLoadStore::INT32
                                                    : (format == DataFormat::Float16_b)
                                                        ? InstrModLoadStore::DEFAULT
@@ -1837,28 +1836,27 @@ inline void calculate_reduce(std::uint32_t block_ct_dim = 1, std::uint32_t block
 
     // Dispatch to appropriate reduction kernel based on PoolType
     if constexpr (pool_type == PoolType::MAX || pool_type == PoolType::MIN) {
-        if constexpr (int32_max_min_col) {
-            // Int32 (and bit-31-flipped UInt32) column MAX/MIN: two's-complement compare-and-swap path (handles
-            // INT32_MIN). This is a single-tile (32x32) kernel and ignores block_ct_dim/block_rt_dim, so guard the
+        if constexpr (int32_max_min) {
+            // Int32 (and bit-31-flipped UInt32) MAX/MIN: two's-complement compare-and-swap path (handles INT32_MIN).
+            // The column kernel is single-tile (32x32) and ignores block_ct_dim/block_rt_dim, so guard the
             // single-tile contract loudly rather than silently dropping tiles if a caller passes >1.
-            LLK_ASSERT(
-                block_ct_dim == 1 && block_rt_dim == 1,
-                "Int32/UInt32 column MAX/MIN reduce only supports a single tile (block_ct_dim == block_rt_dim == 1)");
-            if constexpr (uint32_max_min) {
-                flip_sign_bits(1 /*num_tiles*/);
+            if constexpr (reduce_dim == ReduceDim::REDUCE_COL) {
+                LLK_ASSERT(
+                    block_ct_dim == 1 && block_rt_dim == 1,
+                    "Int32/UInt32 column MAX/MIN reduce is single-tile (block_ct_dim == block_rt_dim == 1)");
             }
-            calculate_reduce_max_min_int32_col<pool_type, reduce_dim>();
-            if constexpr (uint32_max_min) {
-                flip_sign_bits(1 /*num_tiles*/);
-            }
-        } else if constexpr (int32_max_min_row) {
-            // Int32 (and bit-31-flipped UInt32) row MAX/MIN: two's-complement compare-and-swap path (handles
-            // INT32_MIN).
             [[maybe_unused]] const std::uint32_t num_tiles = block_ct_dim * block_rt_dim;
             if constexpr (uint32_max_min) {
                 flip_sign_bits(num_tiles);
             }
-            perform_reduce_row_max_min_int32<pool_type>(block_ct_dim, block_rt_dim);
+            if constexpr (reduce_dim == ReduceDim::REDUCE_COL) {
+                calculate_reduce_max_min_int32_col<pool_type, reduce_dim>();
+            } else {
+                static_assert(
+                    reduce_dim == ReduceDim::REDUCE_ROW,
+                    "Int32/UInt32 MAX/MIN reduce supports REDUCE_COL and REDUCE_ROW");
+                perform_reduce_row_max_min_int32<pool_type>(block_ct_dim, block_rt_dim);
+            }
             if constexpr (uint32_max_min) {
                 flip_sign_bits(num_tiles);
             }

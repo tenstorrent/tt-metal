@@ -668,17 +668,19 @@ def test_uint32_reduce_max_min_bit31(mathop, dims, reduce_pool):
     values[::3] = torch.randint(0, 1000, values[::3].shape, dtype=torch.int64)
     for i, extreme in enumerate([3, INT32_MAX, UINT32_BIT31 + 5]):
         values[(5 * i) % TILE_DIM, (7 * i + 1) % TILE_DIM] = extreme
-    # Lanes where 0 vs 0x80000000 decides the result (after the flip they are the +0 / -0 pair): row and
-    # column 25 hold 0x80000000 with a lone 0 (MIN must find the 0), row and column 26 hold 0 with a lone
-    # 0x80000000 (MAX must find it).
-    values[25, :] = UINT32_BIT31
-    values[25, 10] = 0
-    values[26, :] = 0
-    values[26, 12] = UINT32_BIT31
-    values[:, 25] = UINT32_BIT31
-    values[7, 25] = 0
-    values[:, 26] = 0
-    values[9, 26] = UINT32_BIT31
+    # Lanes where 0 vs 0x80000000 decides the result (after the flip they are the +0 / -0 pair). Row and
+    # column MIN_LANE are 0x80000000 with a planted 0 (MIN must find a 0); row and column MAX_LANE are 0 with a
+    # planted 0x80000000 (MAX must find it). The lanes cross: row MIN_LANE also holds column MAX_LANE's 0 and
+    # row MAX_LANE holds column MIN_LANE's 0x80000000, which are further instances of the same pair.
+    MIN_LANE, MAX_LANE = 25, 26
+    values[MIN_LANE, :] = UINT32_BIT31
+    values[MIN_LANE, 10] = 0
+    values[MAX_LANE, :] = 0
+    values[MAX_LANE, 12] = UINT32_BIT31
+    values[:, MIN_LANE] = UINT32_BIT31
+    values[7, MIN_LANE] = 0
+    values[:, MAX_LANE] = 0
+    values[9, MAX_LANE] = UINT32_BIT31
     values[3, 5] = UINT32_MAX
     reduce_axis = 0 if mathop == MathOperation.ReduceColumn else 1
     golden = (
