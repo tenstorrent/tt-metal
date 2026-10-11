@@ -40,7 +40,7 @@ Full plan: https://claude.ai/artifact/Ss6fYA8Bk5b9gt7ALQCehy
 | `8712e1c` | `LTX_ENHANCER_TRACE=1` knob, `AB_HOST_PARITY=0` gate | traced rewrite in-pipeline **55 tok/s** |
 | `b392577` | **Phase 1: device PLI** behind `GEMMA4_DEVICE_PLI=1` | trace-device **17.4 → 14.5 ms/step** (65.5 tok/s), see below |
 | `2fbc3ce` | `GEMMA4_IMPL_SURVEY.md` | comparison of other Gemma4 implementations, ranked next steps |
-| (Phase 2) | **on-device token feedback** with device PLI | trace-device **13.5 ms/step**, p90 13.5 (74 tok/s); 1 host restage per request |
+| `312ce72` | **on-device token feedback** with device PLI | trace-device **13.5 ms/step**, p90 13.5 (74 tok/s); 1 host restage per request |
 
 Numbers come from 188-step greedy runs of `e2b_bringup.py::test_e2b_decode_timing`. The first four rows were measured on `bh-glx-110-d07u02`.
 
@@ -99,6 +99,29 @@ Numbers come from 188-step greedy runs of `e2b_bringup.py::test_e2b_decode_timin
   - vLLM: `generator_vllm.py` still disables async decode for PLI models.
   - `text_demo.py` E2B with the flag.
   - Temperature > 0 with feedback.
+
+## Phases 3 and 4: feasibility review (2026-10-11, read-only, no jobs)
+
+**Phase 3 (enhancer integration and run-ahead).** Doable standalone now. Inside LTX it delivers nothing until the open bug below is fixed: a traced enhancer hangs even with an untraced DiT (`metal-galaxy-ltx-ab.sh`), and feedback/run-ahead only exist on the traced path.
+- **Stage A, ship first.** Add an `LTX_ENHANCER_DEVICE_PLI` knob that sets `GEMMA4_DEVICE_PLI=1` around model construction in `ensure_loaded`, and keep `reload_inputs=True`.
+  - About 14.5 ms/step, ~0.5 s saved per 188-token rewrite. Works at the serving temperature of 0.7.
+  - Test separately: device PLI alone makes the eager sampler write into the feedback buffer (gemma4 generator.py ~1150, ~1281).
+- **Stage B, greedy only.** At prompt_enhancer.py ~752/760, set `reload = step == 0 or not use_feedback`. About 1 ms/step more, ~0.19 s per rewrite. Serving at temperature 0.7 doesn't get it until temperature > 0 with feedback is validated.
+- **Stage C, lagged readback: defer.** Gain ≤ ~0.1 s per rewrite, and it is risky:
+  - The sampled token tensor *is* the feedback buffer, so token N must be read before step N+1 is dispatched.
+  - The `read_from_device=False` return shape differs from the current `out, _ =` unpacking.
+- **Stale test.** `test_ltx_prompt_enhancer.py:308-310` still asserts `sampling_params is None`, which predates `848e97b`. Fix it before Stage A.
+- **Unmeasured:** DRAM headroom for device PLI's ~615 MB/chip with LTX resident.
+- **Scale of the win.** Against a ~30 s request, Stage A is ~2%. At the 512-token serving cap the rewrite is ~7.7 s even with Stage A.
+
+**Phase 4 (device PLI for prefill).** Feasible (Python only, prefill stays eager, so the bug doesn't apply). **Not recommended.**
+- The whole 976-token prefill is already ~0.24 s after `4e6eb1f` (jobs 128320, 128881). The old 0.61 s figure is stale.
+- Do system-prompt KV prefix reuse (PROMPT_ENHANCER_HANDOFF.md open item 5) first. It makes Phase 4 moot.
+- Cheaper fallbacks, if prefix reuse is ruled out:
+  - one `[1,1,S,8960]` upload plus device slices, replacing the 35 per-layer `from_torch` calls;
+  - a per-prefix PLI cache.
+- If Phase 4 is ever done, `compute_device_pli` only handles the `[1,1,35,256]` decode shape. Prefill needs its own column-slice chain.
+- First experiment, if any: time the host PLI share of eager prefill at S=1024/2048 on b02u08. Also explain the 0.669 s prefill outlier in job 128880.
 
 ## Open bug (do NOT re-debug blind; file or hand to runtime)
 
