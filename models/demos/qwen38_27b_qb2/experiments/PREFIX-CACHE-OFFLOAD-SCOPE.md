@@ -4,6 +4,64 @@ October 10, 2026. This is an implementation scope, not a supported feature or
 an enabled serving change. Compact GPQA and kernel qualification stay ahead
 of this work. Preserve BFP8 KV, FP32 recurrent state and existing trace safety.
 
+## October 11, 04:30 UTC: opt-in serving scheduler and worker integration
+
+The paired plugin implementation now uses vLLM 0.26's actual KVConnector
+matched-token admission, private block allocation, scheduler metadata and
+invalid-block recomputation path. The new [`tt/prefix_backend.py`](../tt/prefix_backend.py)
+connects that contract to the complete-state coordinator, atomic bounded file
+store and exact-byte TT transfer driver. Model hooks follow recurrent slot
+permutations and release generations on finish/preemption. Decode page growth
+is recorded before new admissions; restore never shares another request's pages.
+
+The plugin's first implementation is synchronous, one TP4 mesh per worker;
+ordinary attention-only APC remains disabled. `QWEN_COMPLETE_PREFIX_EXPERIMENT=1`
+exposes chunked prefill only for an explicit experiment. The original text
+scheduler default is unchanged. Capture requires an actually consumed aligned
+frontier, with `long_prefill_token_threshold=capture_interval` (initially 4096).
+No generated-token resume or sampler checkpoint is implied. Multimodal,
+prompt-embedding, LoRA and prompt-logprobs requests bypass reuse/capture.
+
+The CPU integration reproduced and fixed a real scheduler bookkeeping defect:
+TT inherits AsyncScheduler even with synchronous execution. A failed external
+load skipped normal output handling, leaving one output placeholder; the retry
+then scheduled 258 tokens from a 257-token prompt. The connector-specific
+recovery now retires that placeholder and marks recomputation as prefill.
+Failed rows do not reach inference or sampling. A second test verifies a good
+request in the same batch still produces its real output with its slot intact.
+
+**641/641 plugin host-stub tests passed** on the pinned vLLM 0.26 / torch 2.11 CPU
+environment, including actual scheduler allocation, chunked checkpoint
+frontiers, corrupt/missing-load fallback mechanics, subset input construction,
+namespace/identity guards and ordinary scheduler/runner regressions.
+**45/45 model-side CPU prefix tests passed**, including the real local-file
+store and model-backend lifecycle. Prefix matching now hashes token history
+once across candidate frontiers, preserving the existing exact uint32 key.
+Both repositories' explicit pre-commit checks pass.
+
+Plugin branch `anatarajan/qwen38-prefix-offload-20261011`, based on published
+`e5b02d58bda26ee326fe0e7cbed9e4828adb9426`, is preserved locally at `13b9777`.
+Parent investigation reports upstream publication denied for the current GitHub
+identity; this workstream did not retry credentials. Patch:
+`/private/tmp/qwen38-prefix-plugin-13b9777.patch`. Operator instructions are in
+that branch's `docs/complete-prefix-checkpoints.md`, including exact connector
+config, required flags, tenant namespace, immutable weight-artifact identity,
+bounded store setup and rollback. Source/precision/architecture/runtime and
+local weight metadata are bound into the cache identity. The supplied trusted
+weight revision is not replaced by a claim of full weight-content hashing.
+
+**Still unqualified:** no serving/device run of this new integration, no native
+timing of the batched transfer candidate, no eviction-policy/LMCache connector,
+no repeated concurrent serving correctness and no AgentX. The reference file
+store serializes transfers within one root, so shared eight-replica contention
+must be measured. Old 4K serial restore is still 3.542 s versus 1.185 s prefill;
+this integration makes hits correct, not yet faster. Follow the existing
+physical transfer + full64 continuation gate in matching batched/serial mode,
+then cold/warm concurrent HTTP requests with suffix divergence, cancellation,
+preemption, corruption, quota exhaustion, restart and neighbouring-slot checks.
+Do not merge/enable serving defaults before those gates consistently pass.
+No device/reset/service actions were taken; profiling remains first in the queue.
+
 ## October 11, 03:35 UTC: lifecycle coordinator and batched-transfer candidate
 
 The isolated branch now contains [`tt/prefix_serving.py`](../tt/prefix_serving.py),

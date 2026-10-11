@@ -280,12 +280,28 @@ def find_prefix(store, identity, layout, tokens, frontiers):
     At an exact-prefix hit without cached logits, use an earlier checkpoint.
     This helper is a reference policy; production block matching stays in vLLM.
     """
-    for frontier in sorted(set(frontiers), reverse=True):
+    candidates = []
+    for frontier in sorted(set(frontiers)):
         if not positive(frontier) or frontier % layout.page_tokens:
             raise ValueError("Candidate frontiers must be positive complete page boundaries")
         if frontier >= len(tokens):
             continue
-        checkpoint = Checkpoint.for_tokens(identity, layout, tokens, frontier)
+        candidates.append(frontier)
+    if not candidates:
+        return None
+    # A 256K miss across 4K checkpoints must not hash the same token history
+    # 64 times. Preserve the exact uint32 digest while streaming it once.
+    wanted, checkpoints, hasher = set(candidates), {}, hashlib.sha256()
+    for index in range(candidates[-1]):
+        token = tokens[index]
+        if type(token) is not int or not 0 <= token < 2**32:
+            raise ValueError("Token IDs must be uint32 integers")
+        hasher.update(struct.pack("<I", token))
+        consumed = index + 1
+        if consumed in wanted:
+            checkpoints[consumed] = Checkpoint(identity, layout, consumed, hasher.hexdigest())
+    for frontier in reversed(candidates):
+        checkpoint = checkpoints[frontier]
         if store.contains(checkpoint.key):
             return checkpoint
     return None

@@ -2265,3 +2265,40 @@ No session connection is needed for that queue to continue.
   explicitly rejected pending media/processor and M-RoPE checkpoint identity.
 - Keep AgentX gated on both features through serving and full GPQA gated on
   measured B16/32K/TP4 reaching 25 TSU. No default capability was enabled.
+
+## 2026-10-11 04:30 UTC — complete-prefix serving admission and worker bridge
+
+- Added an opt-in paired vLLM KVConnector and model backend. Scheduler admission
+  allocates all restored-prefix and suffix pages before the worker writes KV,
+  GDN and conv state under the shared execution lease. No attention-only APC.
+- Model backend binds source, architecture, precision, Qwen runtime flags, trusted
+  weight revision plus local index/config/file metadata, and tenant/cache salt.
+  Exact restored frontiers require fingerprint agreement between scheduler and
+  worker. No full weight-content hash claim. Store remains bounded/task-owned.
+- Follow slot remaps, finish/preemption release and private decode-page growth.
+  Multimodal, prompt-embedding, LoRA and prompt-logprobs requests bypass reuse.
+  Preserve text defaults; experiment requires QWEN_COMPLETE_PREFIX_EXPERIMENT=1
+  and explicit connector flags with synchronous chunked prefill.
+- Real vLLM tests caught a failed-load placeholder leak: TT inherits the async
+  scheduler even in sync mode; skipped output handling left one placeholder and
+  scheduled 258 inputs for a 257-token retry. The narrow connector recovery
+  now retires that placeholder; failed rows emit no token, and surviving rows
+  keep their true slots and outputs. This was fixed before hardware access.
+- Validation: 641 plugin host-stub tests passed in 10.46 s on pinned vLLM0.26 /
+  torch2.11 CPU; 45 model prefix CPU tests passed in 0.379 s; both explicit
+  pre-commit suites passed. Added operator launch/rollback documentation.
+- Prefix lookup hashes each token once across all checkpoint candidates, rather
+  than rehashing each shorter prefix. Test verifies old key compatibility and
+  one visit per token. No device throughput improvement claimed from this.
+- Plugin commit13b9777 on local anatarajan/qwen38-prefix-offload-20261011 is
+  preserved in /private/tmp/qwen38-prefix-plugin-13b9777.patch; parent reports
+  upstream push permission denied, so no repeated credential attempts.
+- Remaining gate: matching-mode native transfer and full64 continuation, then
+  repeated concurrent serving restore/recompute/slot-reuse correctness and actual
+  warm TTFT/agent throughput. No device, reset, service, install or deploy changes.
+  AgentX still waits for integrated caching+file offload; full GPQA waits for
+  measured25TSU at B16/32K/TP4. No release/default merge yet.
+- Final review added standard local Hugging Face blob-symlink support and
+  eviction of a failed reconstructable checkpoint key, so cold recomputation
+  can repair it instead of repeatedly encountering an immutable corrupt file.
+  Both cases have real-file CPU regressions; final prefix count is 45.

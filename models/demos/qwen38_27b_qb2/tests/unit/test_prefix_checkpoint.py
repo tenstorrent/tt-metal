@@ -387,6 +387,32 @@ with store.read(sys.argv[3]) as stream:
         with self.assertRaisesRegex(ValueError, "all 64 Qwen layers"):
             Layout.qwen_tp4_bfp8(["linear_attention"] * 3 + ["full_attention"])
 
+    def test_lookup_hashes_history_once_and_preserves_checkpoint_keys(self):
+        tokens = list(range(257))
+        expected = Checkpoint.for_tokens(self.identity, self.layout, tokens, 128)
+        visited, checked = [], []
+
+        class History:
+            def __len__(self):
+                return len(tokens)
+
+            def __getitem__(self, index):
+                visited.append(index)
+                return tokens[index]
+
+        class Store:
+            def contains(self, key):
+                checked.append(key)
+                return key == expected.key
+
+        found = find_prefix(Store(), self.identity, self.layout, History(), range(32, 257, 32))
+        self.assertEqual(found, expected)
+        self.assertEqual(visited, list(range(256)))
+        self.assertEqual(
+            checked,
+            [Checkpoint.for_tokens(self.identity, self.layout, tokens, n).key for n in (256, 224, 192, 160, 128)],
+        )
+
     def test_full_qwen_size_matches_published_capacity_scope(self):
         layout = Layout.qwen_tp4_bfp8((["linear_attention"] * 3 + ["full_attention"]) * 16)
         checkpoint = Checkpoint.for_tokens(self.identity, layout, [42] * 32768, 32768)

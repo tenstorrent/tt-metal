@@ -25,6 +25,10 @@ class Qwen38ForCausalLM:
 
     model_capabilities = {
         "supports_prefix_caching": False,
+        # Prefix serving is opt-in while the paired lifecycle is qualified.
+        # Preserve the qualified default scheduler behavior until then.
+        "supports_chunked_prefill": os.getenv("QWEN_COMPLETE_PREFIX_EXPERIMENT", "0") == "1",
+        "complete_prefix_backend": "models.demos.qwen38_27b_qb2.tt.prefix_backend.Qwen38PrefixBackend",
         "supports_async_decode": True,
         "supports_sample_on_device": True,
         "max_device_top_k": 32,
@@ -61,6 +65,7 @@ class Qwen38ForCausalLM:
         self.batch_size, self.context = batch_size, context
         self.host_compatibility = os.environ.get("QWEN_VLLM_HOST_COMPATIBILITY") in ("1", "all")
         self.cache = None
+        self._complete_prefix_backend = None
         self._sampling_key = None
         self._decode_bound = False
         self._last_device_sampling = None
@@ -133,6 +138,14 @@ class Qwen38ForCausalLM:
     def _cache(self, kv_cache):
         if kv_cache is not self.cache or self.generator.cache is not kv_cache:
             raise ValueError("Serving must pass the exact vLLM allocated cache")
+
+    def release_request(self, slot):
+        if self._complete_prefix_backend is not None:
+            self._complete_prefix_backend.release_slot(slot)
+
+    def note_state_slots_moved(self, moves):
+        if self._complete_prefix_backend is not None:
+            self._complete_prefix_backend.remap_slots(moves)
 
     def _table(self, page_table, slots=None):
         if self.generator.page_host is None:
