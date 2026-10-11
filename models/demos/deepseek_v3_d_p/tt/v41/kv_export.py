@@ -192,17 +192,24 @@ def export_chunk(exp: V41KvExport, pf, slot: int, start: int, end: int) -> None:
             continue
         attn._write_rm(exp.win, carry, exp.win_batch(slot, L), row0)
         if r.mode == "full":
-            _export_entries(exp, attn, st, slot, L, start, end, ratio=r.compress_ratio, ent=exp.ent2, idx=exp.idx2)
+            _export_entries(
+                exp, attn, st, slot, L, start, end, ratio=r.compress_ratio, ent=exp.ent2, idx=exp.idx2, chunk=pf.chunk
+            )
     if pf.kv_attn is not None:
         L, attn, st = pf.kv_only_layer, pf.kv_attn, pf.kv_state
         row0, carry = _carry_ring_block(st, E)
         attn._write_rm(exp.win, carry, exp.win_batch(slot, L), row0)
-        _export_entries(exp, attn, st, slot, L, start, end, ratio=1, ent=exp.ent1, idx=exp.idx1)
+        _export_entries(exp, attn, st, slot, L, start, end, ratio=1, ent=exp.ent1, idx=exp.idx1, chunk=pf.chunk)
 
 
-def _export_entries(exp, attn, st, slot, L, start, end, *, ratio, ent, idx):
+def _export_entries(exp, attn, st, slot, L, start, end, *, ratio, ent, idx, chunk):
     e0, e1 = int(start) // ratio, -(-int(end) // ratio)
-    n = -(-(e1 - e0) // TILE) * TILE  # whole tiles (a ragged tail's extra rows are the next chunk's to overwrite)
+    # A FULL chunk's whole tiles even for a ragged chunk (DS41F-0037 10-11): one slice / write shape per chunk width, so a
+    # prompt whose length is not a chunk multiple builds no new programs (a ragged-length shape cost ~3 s of export at
+    # 64K). The rows past `end` lie past the prompt -- never migrated, and a next chunk overwrites them. Clamped to the
+    # export's per-slot capacity (MAXSEQ a chunk multiple keeps the clamp a no-op).
+    n = -(-max(e1 - e0, int(chunk) // ratio) // TILE) * TILE
+    n = min(n, exp.max_seq_len // ratio - e0)
     b = exp.ent_batch(slot, L)
     rows = ttnn.slice(st.compressed_kv, [0, 0, e0, 0], [1, 1, e0 + n, HEAD_DIM])
     attn._write_rm(ent, rows, b, e0)
