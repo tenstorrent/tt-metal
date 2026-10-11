@@ -528,7 +528,28 @@ constexpr bool is_measured_thread(PerfRunType run_type)
 // A peer of the pack thread in PACK_ISOLATE, at its TILE_LOOP zone: holds its epilogue until pack is done (profiler.h).
 constexpr bool holds_quiet(PerfRunType run_type, bool tile_loop)
 {
+#if defined(LLK_DBG_BARRIER) && defined(LLK_BARRIER_ON_TRISC) && !defined(LLK_PERF_INIT_ONLY)
+    // With the release schedule every other thread starts before the measured one, so none of their start-up is in the
+    // window; held at their TILE_LOOP end, none of their epilogue is either. L1_TO_L1 ends at pack's end: unpack and math
+    // hold until pack is done.
+    if (run_type == PerfRunType::L1_TO_L1)
+    {
+        return tile_loop && llk_barrier::THREAD_ID != 2;
+    }
+    return tile_loop && is_single_thread_runtype(run_type) && !is_measured_thread(run_type);
+#else
     return tile_loop && run_type == PerfRunType::PACK_ISOLATE && !is_measured_thread(run_type);
+#endif
+}
+
+// The thread that ends the held peers' wait after its TILE_LOOP: the measured thread, or pack in L1_TO_L1.
+constexpr bool releases_holds(PerfRunType run_type)
+{
+#if defined(LLK_DBG_BARRIER) && defined(LLK_BARRIER_ON_TRISC) && !defined(LLK_PERF_INIT_ONLY)
+    return run_type == PerfRunType::L1_TO_L1 ? llk_barrier::THREAD_ID == 2 : is_measured_thread(run_type);
+#else
+    return run_type == PerfRunType::PACK_ISOLATE && is_measured_thread(run_type);
+#endif
 }
 
 // The thread that reads the last zone of a single thread run type after run_kernel: the measured thread itself, whose
@@ -537,6 +558,46 @@ constexpr bool is_reader_thread(PerfRunType run_type)
 {
     return is_single_thread_runtype(run_type) && is_measured_thread(run_type);
 }
+
+#if defined(LLK_DBG_BARRIER) && defined(LLK_BARRIER_ON_TRISC) && !defined(LLK_PERF_INIT_ONLY)
+// The order in which BRISC releases the threads from the TILE_LOOP park, each by its own flush (barrier.h schedule):
+// threads that only wait or idle first, the measured thread last, so every one starts from the same state whatever code
+// ran before the park, and the measured window holds no other thread's start-up. 0: all three released together.
+constexpr std::uint32_t release_schedule(PerfRunType run_type)
+{
+    switch (run_type)
+    {
+        case PerfRunType::UNPACK_ISOLATE:
+            return llk_barrier::schedule(2, 1, 0); // idle pack, the math mock that consumes, unpack
+        case PerfRunType::MATH_ISOLATE:
+            return llk_barrier::schedule(2, 0, 1); // idle pack, the unpack mock that produces, math
+        case PerfRunType::PACK_ISOLATE:
+            return llk_barrier::schedule(0, 1, 2); // idle unpack and math, pack
+        case PerfRunType::L1_TO_L1:
+            return llk_barrier::schedule(2, 1, 0); // pack and math wait for data, unpack starts the chain
+        default:
+            return 0;
+    }
+}
+
+// The last thread of a schedule names it to BRISC and arms the counters after its release, so they count its window only.
+// The INIT measurement build keeps the plain release (its TILE_LOOP is not reported): its code stays as it was, so the
+// INIT helpers placed after run_kernel do not move.
+constexpr bool releases_last(PerfRunType run_type)
+{
+    return release_schedule(run_type) != 0 && ((release_schedule(run_type) >> 4) & 3) == llk_barrier::THREAD_ID;
+}
+#else
+constexpr std::uint32_t release_schedule(PerfRunType)
+{
+    return 0;
+}
+
+constexpr bool releases_last(PerfRunType)
+{
+    return false;
+}
+#endif
 
 #if defined(PERF_COUNTERS_COMPILED)
 namespace detail
@@ -575,7 +636,17 @@ struct perf_counter_scoped
             detail::reader_here = true;
         }
 #endif
-        llk_barrier::rendezvous(
+#if defined(LLK_DBG_BARRIER)
+        if constexpr (LOOP_PAD && releases_last(RUN_TYPE))
+        {
+            llk_barrier::announce_schedule(release_schedule(RUN_TYPE));
+        }
+#endif
+#if defined(LLK_PERF_INIT_ONLY)
+        llk_barrier::rendezvous<LOOP_PAD ? llk_barrier::PARK_LOOP : llk_barrier::PARK_INIT_TS>(
+#else
+        llk_barrier::rendezvous<LOOP_PAD>(
+#endif
             llk_barrier::is_action_thread(),
             [zid]
             {
@@ -590,13 +661,32 @@ struct perf_counter_scoped
                         read_pending_zone();
                     }
                 }
-                arm_all_counters(zid); // START, or 0 (no command) when the zone is not counted
+                if constexpr (!(LOOP_PAD && release_schedule(RUN_TYPE) != 0))
+                {
+                    arm_all_counters(zid); // START, or 0 (no command) when the zone is not counted
+                }
 #endif
             });
+#if defined(PERF_COUNTERS_COMPILED)
+        if constexpr (LOOP_PAD && releases_last(RUN_TYPE)) // released last, by its own flush: the window starts here
+        {
+            arm_all_counters(zone_id);
+        }
+#endif
 #if defined(LLK_DBG_BARRIER)
         if constexpr (holds_quiet(RUN_TYPE, LOOP_PAD)) // after the entry release: the level the pack thread flips when done
         {
+#if !defined(LLK_PERF_INIT_ONLY) // opaque, as quiet_wait_here (profiler.h): the kernel compiles as if it were not there
+            asm volatile(
+                "addi  sp, sp, -16\n\tsw    t0, 0(sp)\n\tsw    t1, 4(sp)\n\t"
+                "lui   t0, %%hi(%[sem])\n\tlw    t1, %%lo(%[sem])(t0)\n\tandi  t1, t1, 0xff\n\tsw    t1, %[seen]\n\t"
+                "lw    t1, 4(sp)\n\tlw    t0, 0(sp)\n\taddi  sp, sp, 16"
+                : [seen] "=m"(llk_profiler::quiet_seen)
+                : [sem] "i"(PC_BUF_BASE + 4 * (ckernel::PC_BUF_SEMAPHORE_BASE + llk_barrier::RELEASE_SEM))
+                : "memory");
+#else
             llk_profiler::quiet_seen = llk_barrier::detail::settled(ckernel::semaphore_read(llk_barrier::RELEASE_SEM));
+#endif
         }
 #endif
         ckernel::fence_compiler();
@@ -621,6 +711,12 @@ struct perf_counter_scoped
         }
         else
         {
+#if defined(LLK_DBG_BARRIER)
+            if constexpr (LOOP_PAD && releases_holds(RUN_TYPE)) // pack's TILE_LOOP has ended: let the held peers go on
+            {
+                llk_barrier::detail::flip(llk_barrier::RELEASE_SEM);
+            }
+#endif
             llk_barrier::rendezvous(
                 llk_barrier::is_action_thread(),
                 [zid]
@@ -751,8 +847,9 @@ struct init_measurement_no_zone // START_PERF_MEASURE("INIT") in the INIT measur
         llk_perf::init_measurement_second_object>                                                                                                  \
         _zone_scoped_;
 #elif defined(LLK_PROFILER)
-#define START_PERF_MEASURE(zone_name) \
-    MEASURE_PERF_COUNTERS(zone_name)  \
+#define START_PERF_MEASURE(zone_name)                  \
+    LLK_ZONE_PRERESERVE_(LLK_IS_TILE_LOOP_(zone_name)) \
+    MEASURE_PERF_COUNTERS(zone_name)                   \
     ZONE_SCOPED_Q(zone_name, llk_perf::holds_quiet(PERF_RUN_TYPE, LLK_IS_TILE_LOOP_(zone_name)))
 #else
 #define START_PERF_MEASURE(zone_name) MEASURE_PERF_COUNTERS(zone_name)

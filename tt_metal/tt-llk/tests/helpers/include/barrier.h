@@ -26,6 +26,21 @@ constexpr std::uint32_t NUM_THREADS = 4; // unpack, math, pack, sfpu
 constexpr std::uint32_t NUM_THREADS = 3; // unpack, math, pack
 #endif
 
+#if defined(ARCH_WORMHOLE)
+// The TILE_LOOP release schedule (Wormhole perf builds): the last thread of a schedule writes it to this register before
+// it parks, and BRISC (brisc.cpp serve) releases the three threads by their own debug flushes in that order, a fixed gap
+// apart, so each thread starts from a fresh front end at a fixed time after the one before. STREAM_SCRATCH_1 of overlay
+// stream 3 (boot.h host_signal uses STREAM_SCRATCH_0 of streams 0-3; streams 4 and up have no scratch registers on a
+// Tensix core): a register, so neither side touches the L1 under test.
+constexpr std::uint32_t SCHEDULE_REG   = 0xFFB40000 + 3 * 0x1000 + 249 * 4;
+constexpr std::uint32_t SCHEDULE_VALID = 0x100; // BRISC shifts the order out two bits per release: 0x100 >> 6 ends it
+
+constexpr std::uint32_t schedule(std::uint32_t first, std::uint32_t second, std::uint32_t last)
+{
+    return SCHEDULE_VALID | first | (second << 2) | (last << 4);
+}
+#endif
+
 #if defined(LLK_BARRIER_ON_TRISC)
 
 // Lives here, not in profiler.h, because the barrier needs it first; profiler.h aliases TRISC_ID onto it.
@@ -319,6 +334,16 @@ __attribute__((always_inline)) inline void rendezvous(bool is_action_thread)
 {
     rendezvous(is_action_thread, [] {});
 }
+
+#if defined(LLK_DBG_BARRIER)
+// Names this park's release schedule to BRISC; the read back makes it land before this thread arrives.
+__attribute__((always_inline)) inline void announce_schedule(std::uint32_t order)
+{
+    volatile std::uint32_t* reg = reinterpret_cast<volatile std::uint32_t*>(SCHEDULE_REG);
+    *reg                        = order;
+    (void)detail::settled(*reg);
+}
+#endif
 
 #endif // LLK_BARRIER_ON_TRISC
 
