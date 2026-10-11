@@ -75,8 +75,12 @@ fp8 dispatch wire (`MOE_SPLIT_SHARED=1/0` forces it).
 
 **Status of the goals that remain open.**
 - G1: met on the LB (above).
-- G2 (standalone Q2 ≤ 60 µs): not met, ~106 µs; compute (~1000 cycles per tile) and the writer's scale
-  extraction are balanced at ~70–80 µs per core.
+- G2 (standalone Q2 ≤ 60 µs): not met, ~103 µs. The writer now issues its row writes before staging the scales
+  and converts each 1/scale straight into the staging rows (106 → 103 µs). Compute is ~1000 cycles per tile over
+  three phases (|x|, FPU row-max + SFPU pow2 1/scale, column-broadcast multiply + pack_untilize); the |x| pass
+  can't be folded into the reduce (GMPOOL takes the max of SrcA only, the scaler is not applied for MAX).
+- G1 margin: traced p50 4.795–4.813 ms over three runs (min 4.766–4.786), so the target sits inside the
+  ±0.015 ms run-to-run noise.
 - G6 (Galaxy run): needs the 8×4 hardware.
 
 **Combine (2026-10-11): no packet lever found.** Combine already sends one packet per row. A deeper reader→writer

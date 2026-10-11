@@ -352,6 +352,35 @@ void kernel_main() {
 
         cb_output_e4m3_obj.wait_front(Q_UNIT * tiles_per_block);
         cb_scale_tiles_obj.wait_front(unit_scale_tiles);
+        const uint32_t col_byte_offset = col_block * block_w;
+#ifdef FAST_1X32
+        // Issue the e4m3 row writes first, then stage the scales while they are in flight. The 1/scale tiles are
+        // bf16 powers of two: each column-0 element becomes its fp32 scale bits in one pass, straight into the
+        // row-tile's scale staging (no per-tile temporary).
+        for (uint32_t row_in_tile = 0; row_in_tile < real_rows; ++row_in_tile) {
+            noc.async_write(
+                cb_output_e4m3_obj,
+                output_e4m3,
+                unit_row_bytes,
+                {.offset_bytes = row_in_tile * unit_row_bytes},
+                {.page_id = output_row_base + row_in_tile, .offset_bytes = col_byte_offset});
+        }
+        {
+            const volatile tt_l1_ptr uint16_t* inv =
+                reinterpret_cast<const volatile tt_l1_ptr uint16_t*>(cb_scale_tiles_obj.get_read_ptr());
+            const uint32_t tile_elems = get_tile_size(cb_scale_tiles) / sizeof(uint16_t);
+            volatile tt_l1_ptr uint32_t* stage =
+                reinterpret_cast<volatile tt_l1_ptr uint32_t*>(cb_scale_scratch_obj.get_write_ptr()) +
+                col_block * chunk_scale_blocks;
+            for (uint32_t row_in_tile = 0; row_in_tile < real_rows; ++row_in_tile) {
+                const uint32_t col0 = (row_in_tile / face_h) * FACE_ROW_STRIDE + (row_in_tile % face_h) * face_w;
+                volatile tt_l1_ptr uint32_t* dst = stage + row_in_tile * scale_page_words;
+                for (uint32_t st = 0; st < unit_scale_tiles; ++st) {
+                    dst[st] = (254u << 23) - (static_cast<uint32_t>(inv[st * tile_elems + col0]) << 16);
+                }
+            }
+        }
+#else
         for (uint32_t st = 0; st < unit_scale_tiles; ++st) {
             extract_first_column<face_h, face_w, FACE_ROWS, FACE_ROW_STRIDE>(
                 reinterpret_cast<volatile tt_l1_ptr uint32_t*>(
@@ -363,7 +392,6 @@ void kernel_main() {
             }
         }
 
-        const uint32_t col_byte_offset = col_block * block_w;
         for (uint32_t row_in_tile = 0; row_in_tile < real_rows; ++row_in_tile) {
             noc.async_write(
                 cb_output_e4m3_obj,
@@ -372,6 +400,7 @@ void kernel_main() {
                 {.offset_bytes = row_in_tile * unit_row_bytes},
                 {.page_id = output_row_base + row_in_tile, .offset_bytes = col_byte_offset});
         }
+#endif
         noc.async_write_barrier();  // drain e4m3 writes before the CB page is reused
         cb_output_e4m3_obj.pop_front(Q_UNIT * tiles_per_block);
         cb_scale_tiles_obj.pop_front(unit_scale_tiles);
