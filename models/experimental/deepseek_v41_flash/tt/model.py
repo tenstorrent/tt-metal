@@ -13,8 +13,11 @@ replaces the parts V4.1 changed.
   one-hot ``[1, 0, 0, 0]``; the last one collapses the streams (there is no ``hc_head``).
 * Engram layers (1 and 14) take their rows on a per-rank H2D socket. The host writes them in
   :meth:`_write_packet`, before the step that receives them.
-* A compressed group shares ``sel_kv``, ``comp_kv`` and ``idx_key_cache``. Each stage that holds
-  part of a group keeps its own copies, and a pipeline edge sends the groups the two stages share.
+* A compressed group shares a tiled ``[ring | selected]`` buffer (``sel_tile``); stages with an
+  index source of the group also keep ``sel_kv``, ``comp_kv`` and ``idx_key_cache``. A pipeline
+  edge sends ``sel_tile`` of each group the two stages share and, when a stage without the
+  group's kv source selects from it, the one compressed-KV row and index key the source wrote
+  this step -- not the whole caches, which grow with the context.
 """
 
 from __future__ import annotations
@@ -34,7 +37,7 @@ from models.experimental.deepseek_v41_flash.tt.config import (
     dequantized,
     expert_provider,
 )
-from models.experimental.deepseek_v41_flash.tt.decode.attention import _SELECT_KV_RATE
+from models.experimental.deepseek_v41_flash.tt.decode.attention import _SELECT_KV_RATE, DeepSeekV41LayerCache
 from models.experimental.deepseek_v41_flash.tt.decode.decoder_layer import DeepSeekV41DecoderLayer
 from models.experimental.deepseek_v41_flash.tt.decode.moe import DeepSeekV41PreloadedExperts
 from models.experimental.deepseek_v41_flash.tt.engram_lookup import (
@@ -45,7 +48,6 @@ from models.experimental.deepseek_v41_flash.tt.engram_lookup import (
 from models.experimental.deepseek_v4_flash.tt.common import _MASK_NEG, _profile, _traced_decode_enabled
 from models.experimental.deepseek_v4_flash.tt.decode.attention import (
     CSA_INDEX_BLOCK_SIZE,
-    _StaticLayerCache,
     _index_key_pool,
 )
 from models.experimental.deepseek_v4_flash.tt.embedding import DeepSeekV4Embedding
@@ -62,7 +64,7 @@ from models.experimental.deepseek_v4_flash.tt.weight_loader import DeepseekV4Wei
 
 # Host RAM kept free above the Engram tables, matching the decoder-layer test.
 _ENGRAM_RAM_MARGIN = 1.25
-_SHARED_KV_NAMES = ("sel_kv", "comp_kv", "idx_key_cache")
+_ROW_NAMES = ("new_kv_row", "new_key_row")
 
 
 def _host_mem_available() -> int:
@@ -367,6 +369,21 @@ class DeepSeekV41Model(DeepSeekV4Model):
 
         hc, hidden, window = cfg.hc_mult, cfg.hidden_size, self.sliding_window
         ids = self.layer_submesh_ids
+        self._kv_source_of = {
+            li: max(s for s in cfg.kv_source_layer_ids if s <= li)
+            for li in range(self.num_layers)
+            if cfg.compress_ratios[li]
+        }
+        # The first index source of a group on each stage that lacks the group's kv source
+        # writes the rows that source sent.
+        self._row_writers = set()
+        for li in range(self.num_layers):
+            src = self._kv_source_of.get(li)
+            if src is None or li == src or li not in cfg.index_source_layer_ids or ids[li] == ids[src]:
+                continue
+            if not any((ids[w], self._kv_source_of[w]) == (ids[li], src) for w in self._row_writers):
+                self._row_writers.add(li)
+        self._row_groups = {self._kv_source_of[li] for li in self._row_writers}
         self.submeshes_io = []
         for stage in self.pipeline_submesh_ids:
             device = self.submeshes[stage]
@@ -376,6 +393,7 @@ class DeepSeekV41Model(DeepSeekV4Model):
             index_ratios = sorted(
                 {int(cfg.compress_ratios[li]) for li in layers_here if li in cfg.index_source_layer_ids}
             )
+            row_ratios = sorted({int(cfg.compress_ratios[li]) for li in layers_here if li in self._row_writers})
             sm = {
                 "device": device,
                 "index": stage,
@@ -385,9 +403,10 @@ class DeepSeekV41Model(DeepSeekV4Model):
                 "ratios": stage_ratios,
                 "kv_ratios": kv_ratios,
                 "index_ratios": index_ratios,
+                "row_ratios": row_ratios,
                 "has_sliding": any(cfg.compress_ratios[li] == 0 for li in layers_here),
                 "has_compressed": bool(stage_ratios),
-                "has_r2_pool": 2 in kv_ratios,
+                "has_r2_pool": 2 in kv_ratios or 2 in row_ratios,
                 "has_r2_select": 2 in index_ratios,
                 "traces": {},
                 "tids": {},
@@ -448,13 +467,16 @@ class DeepSeekV41Model(DeepSeekV4Model):
             logger.info(f"Engram host lookup: layers {[layer_idx for layer_idx, _ in self._engram_layers]}")
 
     def _allocate_shared_caches(self, max_seq: int) -> None:
-        """Per-stage KV. A group is aliased inside a stage and copied across a pipeline edge.
+        """Per-stage KV. A group is aliased inside a stage and handed over across a pipeline edge.
 
         ``win_kv`` / ``win_gate`` stay on the stage that owns the kv source. Every stage of the
-        group gets ``sel_kv``, ``comp_kv``, ``idx_key_cache`` and its own identity page table.
+        group gets ``sel_tile``; a stage with an index source of the group also gets ``sel_kv``,
+        ``comp_kv``, ``idx_key_cache`` and its own identity page table. Groups some stage selects
+        from without holding their source carry ``new_kv_row`` / ``new_key_row`` on every stage.
         """
         cfg = self.config
         window, head_dim = self.sliding_window, cfg.head_dim
+        rows = window + cfg.index_topk
         by_stage: dict[int, dict[int, dict]] = {}
         for sm in self.submeshes_io:
             stage = sm["index"]
@@ -464,38 +486,49 @@ class DeepSeekV41Model(DeepSeekV4Model):
                 ratio = int(cfg.compress_ratios[li])
                 ring = _device_zeros((1, 1, window, head_dim), device)
                 if not ratio:
-                    sm["scaches"][li] = _StaticLayerCache(kv=ring)
+                    sm["scaches"][li] = DeepSeekV41LayerCache(kv=ring)
                     continue
-                src = max(s for s in cfg.kv_source_layer_ids if s <= li)
+                src = self._kv_source_of[li]
                 if src not in shared_here:
-                    blocks = -(-(max_seq // ratio) // CSA_INDEX_BLOCK_SIZE)
                     owns_window = src in sm["layers"] and ratio > 1
-                    shared_here[src] = {
+                    group = {
                         "win_kv": _device_zeros((1, 1, ratio, head_dim), device) if owns_window else None,
                         "win_gate": _device_zeros((1, 1, ratio, head_dim), device) if owns_window else None,
-                        "idx_key_cache": _index_key_pool(device, blocks, CSA_INDEX_BLOCK_SIZE, cfg.index_head_dim),
-                        "comp_kv": _device_zeros(
-                            (blocks, 1, CSA_INDEX_BLOCK_SIZE, head_dim), device, layout=ttnn.ROW_MAJOR_LAYOUT
-                        ),
-                        "idx_page_table": ttnn.from_torch(
-                            torch.arange(blocks, dtype=torch.int32).reshape(1, blocks),
-                            dtype=ttnn.int32,
-                            layout=ttnn.ROW_MAJOR_LAYOUT,
-                            device=device,
-                            memory_config=ttnn.DRAM_MEMORY_CONFIG,
-                        ),
-                        "sel_kv": _device_zeros(
-                            (1, 1, window + cfg.index_topk, head_dim), device, layout=ttnn.ROW_MAJOR_LAYOUT
-                        ),
+                        "sel_tile": _device_zeros((1, 1, rows, head_dim), device),
                     }
-                sm["scaches"][li] = _StaticLayerCache(kv=ring, **shared_here[src])
+                    if src in self._row_groups:
+                        group["new_kv_row"] = _device_zeros((1, 1, 1, head_dim), device, layout=ttnn.ROW_MAJOR_LAYOUT)
+                        group["new_key_row"] = _device_zeros(
+                            (1, 1, 1, cfg.index_head_dim), device, layout=ttnn.ROW_MAJOR_LAYOUT
+                        )
+                    selects_here = any(
+                        w in cfg.index_source_layer_ids and self._kv_source_of.get(w) == src for w in sm["layers"]
+                    )
+                    if selects_here:
+                        blocks = -(-(max_seq // ratio) // CSA_INDEX_BLOCK_SIZE)
+                        group.update(
+                            idx_key_cache=_index_key_pool(device, blocks, CSA_INDEX_BLOCK_SIZE, cfg.index_head_dim),
+                            comp_kv=_device_zeros(
+                                (blocks, 1, CSA_INDEX_BLOCK_SIZE, head_dim), device, layout=ttnn.ROW_MAJOR_LAYOUT
+                            ),
+                            idx_page_table=ttnn.from_torch(
+                                torch.arange(blocks, dtype=torch.int32).reshape(1, blocks),
+                                dtype=ttnn.int32,
+                                layout=ttnn.ROW_MAJOR_LAYOUT,
+                                device=device,
+                                memory_config=ttnn.DRAM_MEMORY_CONFIG,
+                            ),
+                            sel_kv=_device_zeros((1, 1, rows, head_dim), device, layout=ttnn.ROW_MAJOR_LAYOUT),
+                        )
+                    shared_here[src] = group
+                sm["scaches"][li] = DeepSeekV41LayerCache(kv=ring, **shared_here[src])
             by_stage[stage] = shared_here
         self._cache_handoff = {}
         for src_stage, dst_stage in self.pipeline_edges:
             common = sorted(set(by_stage[src_stage]) & set(by_stage[dst_stage]))
             send, recv = [], []
             for src in common:
-                for name in _SHARED_KV_NAMES:
+                for name in ("sel_tile",) + (_ROW_NAMES if src in self._row_groups else ()):
                     send.append(by_stage[src_stage][src][name])
                     recv.append(by_stage[dst_stage][src][name])
             self._cache_handoff[(src_stage, dst_stage)] = (send, recv)
@@ -652,6 +685,9 @@ class DeepSeekV41Model(DeepSeekV4Model):
                 cos_win, sin_win, _ = self._device_rope(inv, scale, win_pos)
                 ctx["win_rope"][ratio] = (cos_win, sin_win)
                 ctx["entry"][ratio] = self._entry_index(pos_f, ratio)
+        for ratio in sm["row_ratios"]:
+            if ratio not in ctx["entry"] and (ratio == 1 or (ratio == 2 and r2_pool)):
+                ctx["entry"][ratio] = self._entry_index(pos_f, ratio)
         for ratio in sm["index_ratios"]:
             if ratio == 1 or (ratio == 2 and r2_select):
                 ctx["index_pos"][ratio] = self._index_position(pos_f, ratio)
@@ -703,6 +739,8 @@ class DeepSeekV41Model(DeepSeekV4Model):
         if attn.is_index_source and (ratio == 1 or (ratio == 2 and r2_select)):
             inputs["select"] = True
             inputs["index_pos"] = ctx["index_pos"][ratio]
+            if attn.layer_idx in self._row_writers and (ratio == 1 or r2_pool):
+                inputs["received_entry"] = ctx["entry"][ratio]
         if causal:
             inputs["sdpa_cur_pos"] = ctx["curpos"][ratio]
         else:
@@ -750,6 +788,15 @@ class DeepSeekV41Model(DeepSeekV4Model):
             is_first = li == 0
             is_last = li == self.num_layers - 1
             recv = li > 0 and ids[li - 1] != stage
+            if self.use_prefetcher:
+                # One layer ahead: a run's first layer is queued before its receive blocks,
+                # and each layer queues its successor on this stage before decoding. Every ring
+                # is a FIFO consumed in layer order, so a request may only follow its layer's
+                # predecessors' -- which holds since each layer is queued exactly once, in order.
+                if is_first or recv:
+                    layer.prefetch_weights()
+                if not is_last and ids[li + 1] == stage:
+                    self.layers[li + 1].prefetch_weights()
             if is_first:
                 pkt = sm["pkt"]
                 ttnn.experimental.recv_async_h2d(pkt, self._pkt_socket)
@@ -804,7 +851,4 @@ class DeepSeekV41Model(DeepSeekV4Model):
                     pre_mix.deallocate()
                 if pre_send not in persistent:
                     pre_send.deallocate()
-                next_on_device = self._next_layer_on_submesh(li)
-                if self.use_prefetcher and next_on_device is not None:
-                    self.layers[next_on_device].prefetch_weights()
         return out if out is not None else streams

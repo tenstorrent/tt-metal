@@ -75,6 +75,7 @@
 //   6: core_index      (this core's flat grid index, x*8 + y)
 //   7: hub0_noc_x    8: hub0_noc_y   (the two gather/broadcast hubs of this core's group, as the
 //   9: hub1_noc_x   10: hub1_noc_y    ascending corners of its multicast rectangle)
+//   11: down_local  (this core's down slot in its expert group; see run_reader_loop)
 void kernel_main() {
     constexpr uint32_t cb_input_id = get_compile_time_arg_val(0);
     constexpr uint32_t input_page_size = get_compile_time_arg_val(1);
@@ -245,5 +246,6 @@ void kernel_main() {
         num_expert_groups,
         gather,
         sem_reduce_id,
-        cb_reduce_id);
+        cb_reduce_id,
+        get_arg_val<uint32_t>(11));
 }

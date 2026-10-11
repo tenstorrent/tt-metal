@@ -107,6 +107,19 @@ class DeepSeekV41DecoderLayer(DeepSeekV4DecoderLayer):
             config, _strip_prefix(weights, "ffn_hc"), device, cache=cache.sub("hc_ffn")
         )
 
+    def prefetch_weights(self, *, index_sparse: bool = False):
+        """Queue this layer's ring requests: attention's q_a, q_b, kv, o_a, o_b, then the shared
+        expert's down -- the order :meth:`decode` pops them.
+
+        Only weights on a ring (see :func:`~.decode_prefetch.prefetch_rings`) are queued. The
+        router gate and the shared gate/up keep their per-call DRAM -> L1 copy, which V4's
+        ``prefetch_weights`` would instead run here and hold in L1 until this layer decodes.
+        """
+        self.self_attn.prefetch_weights()
+        down = self.mlp.shared_experts.down_proj
+        if down.use_prefetcher:
+            down.fetch_weights()
+
     def decode(
         self, hidden_streams: ttnn.Tensor, pre_mix: ttnn.Tensor, scache: _StaticLayerCache, **attn_inputs
     ) -> tuple[ttnn.Tensor, ttnn.Tensor]:

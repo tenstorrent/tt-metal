@@ -556,12 +556,20 @@ class DeepSeekV4HashRouter(DeepSeekV4Module):
 # The tile is a hardware invariant, unlike the core count and bank count, which are
 # ``moe.fused_num_cores`` / ``moe.fused_dram_banks`` in the system profile.
 _FUSED_TILE = 32
-# Compute-grid geometry from ``fused_experts_program_factory``: 6 selected experts run on
-# 12x8 (16 cores each); anything else stays on the serial ``num_cores / 8`` x 8 grid (8x8 at
-# the 64-core default), including when the device cannot host 12x8.
+# Compute-grid geometry from ``fused_experts_program_factory``: 6 selected experts run on 12x8
+# (16 cores each) when the per-rank ``I / 32`` divides by 16, else on 12x9 (18 gate_up cores each,
+# down still on the bottom 2x8); anything else stays on the serial ``num_cores / 8`` x 8 grid (8x8
+# at the 64-core default), including when the device cannot host the parallel grid.
 _FUSED_PARALLEL_EXPERTS = 6
 _FUSED_GRID_Y = 8
 _FUSED_PARALLEL_GRID_X = _FUSED_PARALLEL_EXPERTS * 2
+_FUSED_DOWN_CORES_PER_EXPERT = 2 * _FUSED_GRID_Y
+
+
+def _fused_parallel_grid_y(intermediate: int) -> int:
+    """Rows of the 6-expert grid for a per-rank ``intermediate``: 8, or 9 when its tiles do not
+    split evenly over 16 cores. Mirrors ``parallel_grid_y`` in the program factory."""
+    return _FUSED_GRID_Y if (intermediate // _FUSED_TILE) % _FUSED_DOWN_CORES_PER_EXPERT == 0 else _FUSED_GRID_Y + 1
 
 
 def _fused_hidden(num_cores: int) -> int:
@@ -570,19 +578,24 @@ def _fused_hidden(num_cores: int) -> int:
     return num_cores * 2 * _FUSED_TILE
 
 
-def _fused_compute_core_range_set(top_k: int, device, num_cores: int) -> ttnn.CoreRangeSet:
-    """Cores ``fused_experts`` occupies for ``top_k`` selected experts, as a ``CoreRangeSet``.
+def _fused_compute_core_range_set(top_k: int, device, num_cores: int, intermediate: int) -> ttnn.CoreRangeSet:
+    """Cores ``fused_experts`` occupies for ``top_k`` selected experts and a per-rank
+    ``intermediate``, as a ``CoreRangeSet``.
 
-    The ``[(0,0) .. (11,7)]`` rectangle (12x8, one expert per 2x8 column pair) on the 6-expert
-    path, the ``num_cores``-core serial grid ``[(0,0) .. (num_cores/8 - 1, 7)]`` otherwise. The
-    replica ``all_gather_for_matmul`` multicasts has to cover every one of these: the op aliases
+    On the 6-expert path the ``[(0,0) .. (11,7)]`` rectangle (one expert per 2x8 column pair), or
+    ``[(0,0) .. (11,8)]`` when ``intermediate`` needs 18 gate_up cores per expert; the
+    ``num_cores``-core serial grid ``[(0,0) .. (num_cores/8 - 1, 7)]`` otherwise. The replica
+    ``all_gather_for_matmul`` multicasts has to cover every one of these: the op aliases
     ``cb_input`` over each core's shard and will not broadcast a row that is already supposed to
     be local.
     """
     grid = device.compute_with_storage_grid_size()
-    parallel = top_k == _FUSED_PARALLEL_EXPERTS and grid.x >= _FUSED_PARALLEL_GRID_X and grid.y >= _FUSED_GRID_Y
+    gy = _fused_parallel_grid_y(intermediate)
+    parallel = top_k == _FUSED_PARALLEL_EXPERTS and grid.x >= _FUSED_PARALLEL_GRID_X and grid.y >= gy
+    if not parallel:
+        gy = _FUSED_GRID_Y
     gx = _FUSED_PARALLEL_GRID_X if parallel else num_cores // _FUSED_GRID_Y
-    return ttnn.CoreRangeSet({ttnn.CoreRange(ttnn.CoreCoord(0, 0), ttnn.CoreCoord(gx - 1, _FUSED_GRID_Y - 1))})
+    return ttnn.CoreRangeSet({ttnn.CoreRange(ttnn.CoreCoord(0, 0), ttnn.CoreCoord(gx - 1, gy - 1))})
 
 
 def _swiglu_cols_per_core(intermediate: int, num_cores: Optional[int] = None) -> int:
@@ -786,13 +799,13 @@ class DeepSeekV4PreloadedExperts(DeepSeekV4Module):
         self.tp_size = tp_size
         self.num_experts = config.num_local_experts
         self.top_k = config.num_experts_per_tok
-        self._core_grid = _fused_compute_core_range_set(self.top_k, device, num_cores)
         intermediate_full = config.moe_intermediate_size
         if intermediate_full % tp_size:
             raise ValueError(f"moe_intermediate_size {intermediate_full} is not divisible by tp_size {tp_size}")
         # Each TP rank runs fused_experts on its I-slice; the full width is recovered
         # by all-reducing the down-proj partials in :class:`DeepSeekV4SparseMoeBlock`.
         self.intermediate = intermediate_full // tp_size
+        self._core_grid = _fused_compute_core_range_set(self.top_k, device, num_cores, self.intermediate)
         self.hidden = config.hidden_size
         self.limit = config.swiglu_limit
         # Applied inside the op on the sparse path, where the weights are derived here
@@ -875,7 +888,8 @@ class DeepSeekV4PreloadedExperts(DeepSeekV4Module):
 
     def core_grid(self) -> ttnn.CoreRangeSet:
         """Compute cores the fused_experts op occupies for this layer's ``top_k``, as the
-        ``[(0,0) .. (11,7)]`` rectangle at ``top_k == 6`` (else ``[(0,0) .. (7,7)]``).
+        ``[(0,0) .. (11,7)]`` rectangle at ``top_k == 6`` (``(11,8)`` when the per-rank ``I`` needs
+        18 gate_up cores per expert; else ``[(0,0) .. (7,7)]``).
 
         ``all_gather_for_matmul`` has to multicast onto (at least) this set so every
         compute core already holds the activation replica.

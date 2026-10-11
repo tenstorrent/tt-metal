@@ -56,6 +56,8 @@
 //   2: hub0_noc_x     3: hub0_noc_y (this core's group's hub0, the low-I gather target)
 //   4: reduce_noc_x   5: reduce_noc_y (group-0 counterpart, 6-expert path only)
 //   6: hub1_noc_x     7: hub1_noc_y (this core's group's hub1, the high-I gather target)
+//   8: down_local     (6-expert path: this core's slot among its group's 16 down cores, picking its
+//                      H columns; 0xFFFFFFFF on a gate_up-only 9th-row core, which writes no output)
 //
 // A producer scatters its I slice to whichever hub owns it (the slice's first column decides: below
 // `split_col` goes to hub0, at or above it to hub1) and bumps BOTH hubs' gather semaphores. Bumping
@@ -93,6 +95,9 @@ void kernel_main() {
     const uint32_t reduce_noc_y = get_arg_val<uint32_t>(5);
     const uint32_t hub1_noc_x = get_arg_val<uint32_t>(6);
     const uint32_t hub1_noc_y = get_arg_val<uint32_t>(7);
+    const uint32_t down_local = get_arg_val<uint32_t>(8);
+    const bool down_core = down_local != 0xFFFFFFFFu;
+    (void)down_core;
 
     constexpr uint32_t kOutTiles = 2;
     constexpr uint32_t swiglu_tiles =
@@ -103,7 +108,7 @@ void kernel_main() {
     const uint32_t swiglu_col_start =
         num_expert_groups > 1 ? local_idx * i_shards_per_core * swiglu_tiles : core_index * swiglu_tiles;
     const uint32_t out_col_start =
-        num_expert_groups > 1 ? local_idx * shards_per_core * kOutTiles : core_index * kOutTiles;
+        num_expert_groups > 1 ? down_local * shards_per_core * kOutTiles : core_index * kOutTiles;
     // This core's chunk belongs to hub1 if it starts at or past the I split; otherwise to hub0. With
     // one hub `split_col == i_tiles`, so every chunk goes to hub0.
     const bool chunk_is_hub1 = swiglu_col_start >= split_col;
@@ -153,6 +158,9 @@ void kernel_main() {
             noc.async_write_barrier();
             bump_gather();
             cb_out.pop_front(scatter_tiles);
+        }
+        if (!down_core) {
+            return;
         }
 
         constexpr uint32_t kLocalTiles = shards_per_core * kOutTiles;
