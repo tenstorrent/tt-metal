@@ -19,10 +19,10 @@ A standard tiled matmul ``C[M,N] = A[M,K] @ B[K,N]`` with the header's tile-shap
   in1 (B)  -> SrcA, full ``[32,32]`` tiles.
   rt_dim = 1, ct_dim in [1,16], kt_dim in [1,256], LoFi only.
 
-``split_acc=false`` / ``finalize=false``, so there is no finalization merge and DEST
-holds the plain accumulated product (custom_mm.h: finalize must be false when split_acc
-is false). The result is packed as ``ct_dim`` output tiles; inside each tile the two
-16-col faces (M x 16, row-major) sit contiguously, then pad out to a full 32-row tile.
+With ``split_acc`` the finalize merges the two K halves of every output tile; without it
+DEST holds the plain accumulated product. The result is packed as ``ct_dim`` output tiles;
+inside each tile the two 16-col faces (M x 16, row-major) sit contiguously, then pad out
+to a full 32-row tile.
 
 Only defined lanes are asserted
 -------------------------------
@@ -125,6 +125,14 @@ class CUSTOM_MM_PRESERVE_SRC_ZERO_FLAG(TemplateParameter):
         return f"constexpr bool CUSTOM_MM_PRESERVE_SRC_ZERO_FLAG = {str(self.preserve).lower()};"
 
 
+@dataclass
+class CUSTOM_MM_READ_TRANSPOSED(TemplateParameter):
+    custom_mm_read_transposed: bool = False
+
+    def convert_to_cpp(self) -> str:
+        return f"constexpr bool CUSTOM_MM_READ_TRANSPOSED = {str(self.custom_mm_read_transposed).lower()};"
+
+
 class CustomMMStimuliConfig(StimuliConfig):
     """A into buffer_A (kt*2 faces of [M,16]), B tilized into buffer_B (kt*ct full tiles).
 
@@ -168,6 +176,7 @@ def _run_custom_mm(
     reuse_replay=False,
     preserve_zero_flag=False,
     operands=None,
+    read_transposed=False,
 ):
     """Run custom_mm and check it against the golden; return the (M, N) result.
 
@@ -257,6 +266,7 @@ def _run_custom_mm(
                 custom_mm_reuse_replay=reuse_replay,
             ),
             CUSTOM_MM_PRESERVE_SRC_ZERO_FLAG(preserve_zero_flag),
+            CUSTOM_MM_READ_TRANSPOSED(read_transposed),
         ],
         runtimes=[
             # Result / in0 use 2 faces (M x 16 each); in1 (B) uses 4 full faces.
@@ -347,7 +357,7 @@ def test_custom_mm(formats, M, kt, ct):
     formats=CUSTOM_MM_FORMATS,
     M=list(SUPPORTED_M),
     kt=[1, 2, 4],
-    ct=CT_DIMS,
+    ct=CT_DIMS + [3],
 )
 def test_custom_mm_split_acc(formats, M, kt, ct):
     """split_acc with the finalize, which merges the two K halves of every output tile."""
@@ -358,15 +368,14 @@ def test_custom_mm_split_acc(formats, M, kt, ct):
 @parametrize(
     formats=CUSTOM_MM_FORMATS,
     M=[1, 8],
-    kt=[2],
-    ct=[1, 4],
+    ct=[1, 3, 4],
     split_acc=[True, False],
 )
-def test_custom_mm_finalize_tile_stride(formats, M, kt, ct, split_acc):
+def test_custom_mm_finalize_tile_stride(formats, M, ct, split_acc):
     """The finalize with output tiles a full tile apart in DEST (dense_packing off), with and without split_acc."""
     _run_custom_mm(
         M,
-        kt,
+        2,
         ct,
         formats,
         _dest_acc_for(formats),
@@ -379,18 +388,24 @@ def test_custom_mm_finalize_tile_stride(formats, M, kt, ct, split_acc):
 @blackhole_only
 @parametrize(formats=CUSTOM_MM_FORMATS, M=[1, 8], kt=[1, 2], ct=[2, 4, 5, 16])
 def test_custom_mm_split_acc_reuse_replay(formats, M, kt, ct):
-    """The split_acc finalize with the reuse replay program loaded between the init and the call, the order of a
-    custom_mm chained into custom_mm_reuse_dest_srcb."""
+    """The split_acc finalize with the reuse replay program loaded between the init and the call."""
     _run_custom_mm(
         M, kt, ct, formats, _dest_acc_for(formats), split_acc=True, reuse_replay=True
     )
 
 
 @blackhole_only
-@parametrize(formats=CUSTOM_MM_FORMATS, M=[1, 8], kt=[2], ct=[1, 4])
-def test_custom_mm_finalize_without_split(formats, M, kt, ct):
+@parametrize(formats=CUSTOM_MM_FORMATS, M=[1, 8], ct=[1, 4])
+def test_custom_mm_finalize_without_split(formats, M, ct):
     """A finalize without split_acc adds the zeroed rows 8 and 24 back, so the product is unchanged."""
-    _run_custom_mm(M, kt, ct, formats, _dest_acc_for(formats), finalize=True)
+    _run_custom_mm(M, 2, ct, formats, _dest_acc_for(formats), finalize=True)
+
+
+@blackhole_only
+@parametrize(formats=CUSTOM_MM_FORMATS, M=[1, 8], kt=[2, 5])
+def test_custom_mm_read_transposed_one_column(formats, M, kt):
+    """At ct 1 the transposed walk is the contiguous one, so it must step one weight tile per k."""
+    _run_custom_mm(M, kt, 1, formats, _dest_acc_for(formats), read_transposed=True)
 
 
 ODD_K_CASES = [
@@ -460,9 +475,7 @@ MULTI_CALL_CASES = [
     [pytest.param(*case[1:], id=case[0]) for case in MULTI_CALL_CASES],
 )
 def test_custom_mm_multi_call(M, kt, ct, num_calls, in1_format, banked):
-    """Back-to-back calls into one DEST, checked against the full-K golden; banked calls alternate the
-    configuration banks, so each call's configuration is written while the previous call runs.
-    """
+    """Back-to-back calls into one DEST against the full-K golden, on one bank or banked."""
     formats = InputOutputFormat(DataFormat.Float16_b, DataFormat.Float16_b, in1_format)
     _run_custom_mm(
         M,
@@ -498,9 +511,7 @@ BANKED_SEQUENCE_CASES = [
 def test_custom_mm_banked_sequence(
     M, kt, ct, num_calls, in1_format, banked, bank_split
 ):
-    """split_acc calls into one DEST section, the finalize on the last, checked against the full-K golden.
-    The split cases end the banked sequence and start another after one call (second bank) or two (first bank).
-    """
+    """split_acc calls into one DEST section, the finalize on the last; the split cases start a second sequence."""
     formats = InputOutputFormat(DataFormat.Float16_b, DataFormat.Float16_b, in1_format)
     _run_custom_mm(
         M,

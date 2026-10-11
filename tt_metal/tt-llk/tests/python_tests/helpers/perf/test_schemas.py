@@ -19,10 +19,7 @@ PERF_TEST_SCHEMAS = {
         "version": 1,
         "columns": [
             "c_dimm",
-            "clear_src",
-            "dense_layout",
             "dest_acc",
-            "finalize",
             "formats.input_A",
             "formats.input_B",
             "formats.output",

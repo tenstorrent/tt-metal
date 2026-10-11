@@ -3,7 +3,7 @@
 // SPDX-License-Identifier: Apache-2.0
 
 // Perf twin of sources/custom_mm_test.cpp: one custom_mm call per loop iteration, TILE_COUNT = kt x ct weight tiles.
-// SPLIT_ACC, FINALIZE, DENSE_PACKING and CLEAR_SRC come from perf_custom_mm.py (CUSTOM_MM_PERF_FLAGS).
+// SPLIT_ACC comes from perf_custom_mm.py (CUSTOM_MM_PERF_FLAGS).
 
 #include <cstdint>
 
@@ -20,7 +20,10 @@ std::uint32_t unp_cfg_context          = 0;
 std::uint32_t pack_sync_tile_dst_ptr   = 0;
 std::uint32_t math_sync_tile_dst_index = 0;
 
-static_assert(!FINALIZE || SPLIT_ACC, "finalize needs split_acc");
+// The production configuration
+constexpr bool DENSE_PACKING = true;
+constexpr bool CLEAR_SRC     = true;
+constexpr bool FINALIZE      = SPLIT_ACC;
 
 #ifdef LLK_TRISC_UNPACK
 

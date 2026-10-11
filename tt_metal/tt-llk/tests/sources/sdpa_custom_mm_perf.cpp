@@ -2,8 +2,7 @@
 //
 // SPDX-License-Identifier: Apache-2.0
 
-// Perf twin of sources/sdpa_custom_mm_test.cpp; the pack thread stands in for the SFPU consumer of the FPU_SFPU posts.
-// TILE_COUNT is kt x ct K tiles per call; the flags come from SDPA_CUSTOM_MM_FLAGS.
+// The pack thread stands in for the SFPU consumer of the FPU_SFPU posts.
 
 #include <cstdint>
 
@@ -16,7 +15,6 @@
 #include "counters.h"
 #include "profiler.h"
 
-// Globals required by the test framework.
 std::uint32_t unp_cfg_context          = 0;
 std::uint32_t pack_sync_tile_dst_ptr   = 0;
 std::uint32_t math_sync_tile_dst_index = 0;
@@ -76,16 +74,16 @@ void run_kernel(RUNTIME_PARAMETERS params)
             for (std::uint32_t loop = 0; loop < LOOP_FACTOR; ++loop)
             {
                 _llk_unpack_AB_sdpa_custom_mm_<READ_TRANSPOSED, false /* configure_mask_extent */>(
-                    L1_ADDRESS(params.buffer_A[0]), // in1 (SrcA, rhs)
-                    L1_ADDRESS(params.buffer_B[0]), // in0 (SrcB, lhs)
-                    0,                              // base_address_mask
-                    0,                              // tile_index_a
-                    0,                              // tile_index_b
+                    L1_ADDRESS(params.buffer_A[0]),
+                    L1_ADDRESS(params.buffer_B[0]),
+                    /* base_address_mask */ 0,
+                    /* tile_index_a */ 0,
+                    /* tile_index_b */ 0,
                     params.TILE_SIZE_UNPACK_A,
                     params.TILE_SIZE_UNPACK_B,
                     KT_DIM,
                     CT_DIM,
-                    false, // mask_chunk
+                    /* mask_chunk */ false,
                     params.in0_face_r_dim);
             }
         }
@@ -154,7 +152,7 @@ void run_kernel(RUNTIME_PARAMETERS params)
 
 using namespace ckernel;
 
-// The SFPU consumer stand-in: one FPU_SFPU get per post; the wait keeps the pack thread behind the math.
+// The wait keeps the pack thread behind the math.
 inline void consume_fpu_sfpu_posts()
 {
     for (std::uint32_t signal = 0; signal < CT_DIM / SIGNAL_GRANULARITY; ++signal)
@@ -177,7 +175,7 @@ void run_kernel(RUNTIME_PARAMETERS params)
             formats.pack_src, formats.pack_dst, params.TILE_SIZE_PACK, params.in0_face_r_dim, TILE_C_DIM, params.num_faces, true /*partial_face*/);
         _llk_pack_init_<PackMode::Default, false /*zero_output*/, false /*skip_addrmod_config*/, true /*skip_packer_strides*/>(
             formats.pack_src, params.in0_face_r_dim, TILE_C_DIM, params.num_faces, 1 /*num_tiles*/, false /*skip_bh_tilize_workaround*/);
-        // sdpa_custom_mm_block_init_pack_short(): the dense 16-row output tile.
+        // Dense 16-row output tile.
         cfg_reg_rmw_tensix<PCK0_ADDR_CTRL_ZW_REG_0_Zstride_RMW>(FACE_C_DIM * 8 * 2);
         cfg_reg_rmw_tensix<PCK0_ADDR_CTRL_ZW_REG_0_Wstride_RMW>((TILE_NUM_FACES / 2) * FACE_C_DIM * 8 * 2);
         PROFILER_SYNC();
@@ -219,7 +217,7 @@ void run_kernel(RUNTIME_PARAMETERS params)
         }
         PROFILER_SYNC();
     }
-    // sdpa_custom_mm_block_uninit(): restore the default tile strides.
+    // Restore the default tile strides.
     cfg_reg_rmw_tensix<PCK0_ADDR_CTRL_ZW_REG_0_Zstride_RMW>(FACE_C_DIM * FACE_R_DIM * 2);
     cfg_reg_rmw_tensix<PCK0_ADDR_CTRL_ZW_REG_0_Wstride_RMW>(TILE_NUM_FACES * FACE_C_DIM * FACE_R_DIM * 2);
 }

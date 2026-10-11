@@ -45,10 +45,8 @@
 //                           SrcA CFGSHIFTMASK walk reads them with read_transposed=false,
 //                           block_increment = inner_increment = tile_size).
 //
-// The single unpack call issues one MOP covering the whole kt walk; the single math call
-// loops kt internally -- both are invoked ONCE (not per k-tile), exactly as the LLK's own
-// run wrappers do (_llk_unpack_AB_custom_mm_run_ issues TT_MOP once for kt/2-1; the finalize
-// path is disabled here).
+// Each call's unpack issues one MOP over its kt walk and its math loops kt internally (not per
+// k-tile), as the LLK's own run wrappers do; the last call finalizes when CUSTOM_MM_FINALIZE.
 
 #include <algorithm>
 #include <cstdint>
@@ -74,6 +72,9 @@ static_assert(kt_per_call * num_calls == KT_DIM, "K tiles must split evenly acro
 
 #include "experimental/llk_unpack_AB_custom_mm.h"
 #include "llk_unpack_common.h"
+
+// The kernel has one configuration, so any key but CUSTOM_MM_NO_BANK_KEY names it
+constexpr std::uint64_t BANK_KEY = 0;
 
 void run_kernel(RUNTIME_PARAMETERS params)
 {
@@ -110,8 +111,7 @@ void run_kernel(RUNTIME_PARAMETERS params)
     _llk_unpack_AB_custom_mm_init_<false /* transpose */, true /* clear_src */>(params.in0_face_r_dim, formats.unpack_B_dst, CT_DIM);
     if constexpr (CUSTOM_MM_BANKED)
     {
-        // The kernel has one configuration, so any key but ~0 names it
-        _llk_unpack_AB_custom_mm_bank_init_(0);
+        _llk_unpack_AB_custom_mm_bank_init_(BANK_KEY);
     }
 
     // SrcA=buffer_B (B matrix, full tiles), SrcB=buffer_A (A matrix). Call c takes K tiles
@@ -120,7 +120,7 @@ void run_kernel(RUNTIME_PARAMETERS params)
     // Within a call the SrcA walk covers its kt*ct grid via CFGSHIFTMASK, the SrcB walk covers kt via counters.
     for (std::uint32_t call = 0; call < num_calls; call++)
     {
-        _llk_unpack_AB_custom_mm_<false /* read_transposed */, CUSTOM_MM_BANKED>(
+        _llk_unpack_AB_custom_mm_<CUSTOM_MM_READ_TRANSPOSED, CUSTOM_MM_BANKED>(
             L1_ADDRESS(params.buffer_B[0]),
             L1_ADDRESS(params.buffer_A[0]) + call * kt_per_call * 4 * params.in0_face_r_dim,
             call * kt_per_call * CT_DIM /* tile_index_a */,
@@ -135,7 +135,7 @@ void run_kernel(RUNTIME_PARAMETERS params)
             {
                 // End the sequence, on the second bank after an odd count, and start one whose init skips the copy
                 _llk_unpack_AB_custom_mm_bank_end_();
-                _llk_unpack_AB_custom_mm_bank_init_(0);
+                _llk_unpack_AB_custom_mm_bank_init_(BANK_KEY);
             }
         }
     }
@@ -193,14 +193,15 @@ void run_kernel(RUNTIME_PARAMETERS params)
             // writes. Without the delay math keeps up with the unpacker and the boundary is never contended.
             ckernel::wait(2000);
         }
-        if (CUSTOM_MM_FINALIZE && call == num_calls - 1)
+        if constexpr (CUSTOM_MM_FINALIZE)
         {
-            _llk_math_custom_mm_<true /* finalize */>(params.in0_face_r_dim, 0 /* dst_index */, kt_per_call, CT_DIM);
+            if (call == num_calls - 1)
+            {
+                _llk_math_custom_mm_<true /* finalize */>(params.in0_face_r_dim, 0 /* dst_index */, kt_per_call, CT_DIM);
+                break;
+            }
         }
-        else
-        {
-            _llk_math_custom_mm_<false /* finalize */>(params.in0_face_r_dim, 0 /* dst_index */, kt_per_call, CT_DIM);
-        }
+        _llk_math_custom_mm_<false /* finalize */>(params.in0_face_r_dim, 0 /* dst_index */, kt_per_call, CT_DIM);
     }
 
     _llk_math_dest_section_done_<DstSync::SyncHalf, is_fp32_dest_acc_en>();

@@ -535,9 +535,8 @@ class CUSTOM_MM_CALLS(TemplateParameter):
     ``CUSTOM_MM_REARM``      compressed kernel only: leave a -inf SrcA clear value after every call,
                              as a max-reduce or top-k between calls would. It undoes the end-of-call
                              stall's clear to 0, which otherwise hides a both-bank clear in the execute.
-    ``CUSTOM_MM_REINIT``     face kernel only: run the init again before every call after the first, as a
-                             kernel that interleaves other ops does, so its SrcB clear meets the previous
-                             call's unpacks (it needs rearm or ct_dim > 1, or the call ends on the stall).
+    ``CUSTOM_MM_REINIT``     face kernel only: run the init again before every later call, so its SrcB clear
+                             meets the previous call's unpacks (needs rearm or ct_dim > 1).
     ``CUSTOM_MM_BANKED``     custom_mm kernel only: the calls alternate the two configuration banks.
     ``CUSTOM_MM_BANK_SPLIT`` with banked: end the sequence after this many calls and start another (0: one
                              sequence), so an odd count ends the first sequence on the second bank.
@@ -2126,8 +2125,6 @@ class SDPA_CUSTOM_MM_REUSE_DEST(TemplateParameter):
 
 @dataclass
 class SDPA_REUSE_DEST_LAYOUT(TemplateParameter):
-    """DEST placement of the sdpa_custom_mm_reuse_dest_srcb kernels: dst_first puts O at tile 0 and P above it."""
-
     dst_first: bool = False
 
     def convert_to_cpp(self) -> str:

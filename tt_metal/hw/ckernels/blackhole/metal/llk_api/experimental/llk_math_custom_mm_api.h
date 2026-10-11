@@ -14,7 +14,7 @@
  * in0 tile shape: [{1, 2, 4, 8}, 32]
  * in1 tile shape: [32, 32]
  * rt_dim: 1
- * ct_dim: any integer from 1 to 16
+ * ct_dim: any integer from 1 to 16, the same in a call as in its init
  * kt_dim: any integer from 1 to 256 (inclusive)
  * fidelity: LoFi only
  * throttle: not supported

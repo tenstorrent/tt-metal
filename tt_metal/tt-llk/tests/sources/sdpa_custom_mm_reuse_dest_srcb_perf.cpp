@@ -2,8 +2,7 @@
 //
 // SPDX-License-Identifier: Apache-2.0
 
-// Perf twin of sources/sdpa_custom_mm_reuse_dest_srcb_test.cpp. L1_TO_L1 repeats the whole pass (P preload included)
-// per iteration; the isolates preload P once in INIT and loop the reuse matmul. The pack thread stands in for the SFPU.
+// L1_TO_L1 repeats the whole pass (P preload included) per iteration; the isolates preload P once in INIT.
 
 #include <cstdint>
 
@@ -16,7 +15,6 @@
 #include "counters.h"
 #include "profiler.h"
 
-// Globals required by the test framework.
 std::uint32_t unp_cfg_context          = 0;
 std::uint32_t pack_sync_tile_dst_ptr   = 0;
 std::uint32_t math_sync_tile_dst_index = 0;
@@ -26,23 +24,23 @@ static constexpr ckernel::DstSync DST_SYNC = ckernel::DstSync::SyncHalf;
 #ifndef DST_FIRST
 #define DST_FIRST false
 #endif
-// DST_FIRST: O at tile 0 and P above it (the placement of compute_sdpa_chunk); otherwise P at tile 0 and O above it.
-constexpr std::uint32_t DEST_TILE_ROWS  = 64;                                                    // DEST rows of a 32x32 tile
-constexpr std::uint32_t DEST_HALF_TILES = 8;                                                     // 32x32 tiles in a DEST half
-constexpr std::uint32_t P_TILES         = (KT_DIM + 3) / 4;                                      // datacopy tiles holding the KT 16-row P chunks
-constexpr std::uint32_t O_TILES    = (NT_DIM + 3) / 4;                                      // 32x32 tiles covered by the NT 16-row O tiles
-constexpr std::uint32_t SRC_TILE   = DST_FIRST ? (O_TILES > 2 ? O_TILES : 2) : 0;           // P tile base for the datacopy preload
-constexpr std::uint32_t SRC_INDEX       = DEST_TILE_ROWS * SRC_TILE;                             // P DEST row base (SrcB source)
-constexpr std::uint32_t DST_TILE   = DST_FIRST ? 0 : (P_TILES > 2 ? P_TILES : 2);           // O tile base
-constexpr std::uint32_t DST_INDEX       = DEST_TILE_ROWS * DST_TILE;                             // O DEST row base
-constexpr std::uint32_t PACK_TILES = O_TILES;                                               // only the tiles the outputs occupy
+// DST_FIRST: O at tile 0 and P above it; otherwise P at tile 0 and O above it.
+constexpr std::uint32_t DEST_TILE_ROWS  = 64;
+constexpr std::uint32_t DEST_HALF_TILES = 8;
+constexpr std::uint32_t P_TILES         = (KT_DIM + 3) / 4;
+constexpr std::uint32_t O_TILES         = (NT_DIM + 3) / 4;
+constexpr std::uint32_t SRC_TILE        = DST_FIRST ? (O_TILES > 2 ? O_TILES : 2) : 0;
+constexpr std::uint32_t SRC_INDEX       = DEST_TILE_ROWS * SRC_TILE;
+constexpr std::uint32_t DST_TILE        = DST_FIRST ? 0 : (P_TILES > 2 ? P_TILES : 2);
+constexpr std::uint32_t DST_INDEX       = DEST_TILE_ROWS * DST_TILE;
+constexpr std::uint32_t PACK_TILES      = O_TILES;
 static_assert(DST_TILE + O_TILES <= DEST_HALF_TILES, "O tiles must stay inside the DEST half");
 static_assert(SRC_TILE + P_TILES <= DEST_HALF_TILES, "P tiles must stay inside the DEST half");
 constexpr std::uint32_t SEM_MAX = (2 * KT_DIM < ckernel::semaphore::SEMAPHORE_MAX_VALUE)
                                       ? 2 * KT_DIM
                                       : ckernel::semaphore::SEMAPHORE_MAX_VALUE; // UNPACK_MATH_DONE depth: one call ahead where it fits
 constexpr bool PRELOAD_IN_LOOP  = PERF_RUN_TYPE == PerfRunType::L1_TO_L1;
-// Math is mocked only for UNPACK_ISOLATE, so L1_CONGESTION would run the real reuse path against a pack that posts no tokens.
+// L1_CONGESTION would run the real reuse path against a pack that posts no tokens.
 static_assert(PERF_RUN_TYPE != PerfRunType::L1_CONGESTION, "L1 congestion mode is not supported for the reuse twin");
 
 #ifdef LLK_TRISC_UNPACK
@@ -227,7 +225,7 @@ void run_kernel(RUNTIME_PARAMETERS params)
 
 using namespace ckernel;
 
-// SFPU-producer stand-in: KT tokens per math call, each posted once the semaphore is below its max.
+// Stands in for the SFPU: KT tokens per math call, each posted once the semaphore is below its max.
 inline void post_tokens()
 {
     for (std::uint32_t i = 0; i < KT_DIM; ++i)
@@ -275,12 +273,12 @@ void run_kernel(RUNTIME_PARAMETERS params)
         }
         else
         {
-            post_tokens(); // call 0
+            post_tokens();
             for (std::uint32_t loop = 0; loop < LOOP_FACTOR; ++loop)
             {
                 if (loop + 1 < LOOP_FACTOR)
                 {
-                    post_tokens(); // call loop + 1, one ahead of the pack
+                    post_tokens(); // one call ahead of the pack
                 }
                 _llk_packer_wait_for_math_done_();
                 for (std::uint32_t i = 0; i < PACK_TILES; ++i)
