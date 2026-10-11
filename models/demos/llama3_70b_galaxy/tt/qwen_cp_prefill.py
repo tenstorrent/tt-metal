@@ -355,10 +355,16 @@ def ff13_fp32_acc() -> bool:
     return os.environ.get("QWEN_CP_FF13_FP32", "0") == "1"
 
 
-def ff2_bf8_rs() -> bool:
+def ff2_bf8_rs(layer_num=None, n_layers=None) -> bool:
     """FF2 output (and its row reduce-scatter) in bf8 instead of bf16: half the RS bytes (job163: RS [S/4, 5120]
-    bf16 1.756 ms, bf8 0.942 ms). The residual add still writes bf16."""
-    return os.environ.get("QWEN_CP_FF2_BF8", "1") == "1"
+    bf16 1.756 ms, bf8 0.942 ms). The residual add still writes bf16.
+    The last QWEN_CP_FF2_BF16_LAST layers (default 8) keep bf16: the ring RS re-rounds the partial sum to bf8 at every
+    hop (local error ~2x one bf8 rounding), and on the real 40k prompt that RS is 46% of layer 63's own error
+    (layer_err.py, P0 kC-2l), 11-13% at layers 0 / 32."""
+    if os.environ.get("QWEN_CP_FF2_BF8", "1") != "1":
+        return False
+    last = int(os.environ.get("QWEN_CP_FF2_BF16_LAST", "8"))
+    return layer_num is None or n_layers is None or layer_num < n_layers - last
 
 
 def sdpa_fp16_acc() -> bool:
@@ -615,7 +621,7 @@ def mlp_prefill(ctx: CPContext, tt_ccl, mlp, x_local, w):
         input_tensor=w2_in,
         weight_tensor=w["w2"],
         config=FF2_CFG,
-        dtype=ttnn.bfloat8_b if ff2_bf8_rs() else mlp.prefill_output_dtype,
+        dtype=ttnn.bfloat8_b if ff2_bf8_rs(mlp.layer_num, args.full_model_n_layers) else mlp.prefill_output_dtype,
         compute_kernel_config=args.compute_kernel_config_hifi2,  # fp32 dest acc (keep 17)
         memory_config=ttnn.DRAM_MEMORY_CONFIG,
     )  # [1, 1, S/4, 5120]
