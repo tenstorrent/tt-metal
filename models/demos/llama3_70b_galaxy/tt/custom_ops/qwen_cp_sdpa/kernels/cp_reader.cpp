@@ -125,6 +125,16 @@ void kernel_main() {
             const uint32_t kv_row_tile_count = kv_row_end_tile - kv_row_start_tile;
 
             const uint32_t k_chunk_start_row_num = k_chunk * Sk_chunk_t;
+#ifdef CP_SKIP_KV_DRAM
+            // Measurement only (cp_step.hpp knobs): hand the compute stale K / V pages without the DRAM reads.
+            {
+                CircularBuffer cbk(cb_k_in);
+                cbk.reserve_back(Sk_chunk_t * DHt);
+                cbk.push_back(Sk_chunk_t * DHt);
+            }
+            (void)kv_row_tile_count;
+            (void)k_chunk_start_row_num;
+#else
             read_paged_chunk_with_padding<NKH, block_size_t, DHt>(
                 k_reader,
                 cb_k_in,
@@ -139,6 +149,7 @@ void kernel_main() {
                 page_table_ptr,
                 true  // transpose=true for K reads
             );
+#endif
 
             if constexpr (use_q_subblock_push) {
                 if (k_chunk == 0) {
@@ -158,6 +169,14 @@ void kernel_main() {
             }
 
             const uint32_t kv_chunk_start_row_num = k_chunk * Sk_chunk_t;
+#ifdef CP_SKIP_KV_DRAM
+            {
+                CircularBuffer cbv(cb_v_in);
+                cbv.reserve_back(Sk_chunk_t * vDHt);
+                cbv.push_back(Sk_chunk_t * vDHt);
+            }
+            (void)kv_chunk_start_row_num;
+#else
             read_paged_chunk_with_padding<NVH, block_size_t, DHt>(
                 v_reader,
                 cb_v_in,
@@ -172,6 +191,7 @@ void kernel_main() {
                 page_table_ptr,
                 false,
                 0);
+#endif
         }
     }
     cb_page_table.pop_front(1);

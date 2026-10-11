@@ -18,8 +18,9 @@ to a descriptor or a kernel needs no `_ttnn.so` rebuild. Conventions follow
             kernels/             wnorm_common.hpp, reader.cpp, compute.cpp, writer.cpp
         qwen_cp_sdpa/            Qwen context-parallel causal SDPA, both ring slices of a column in one program
             __init__.py, op.py
-            kernels/             cp_{reader,compute,writer}.cpp (the op), stock_{reader,compute,writer}.cpp
-                                 (verbatim copies of the stock SDPA kernels, used by chunked_sdpa_port)
+            kernels/             cp_{reader,compute,writer}.cpp (the op), cp_step.hpp (its K-chunk step),
+                                 stock_{reader,compute,writer}.cpp (verbatim copies of the stock SDPA kernels,
+                                 used by chunked_sdpa_port)
 
 ## Conventions
 
@@ -261,3 +262,9 @@ files) `torch.equal` to the stock call; `qwen_cp_sdpa` `torch.equal` to the pair
 devices at S = 16384 / 32768 / 40960. 40k pipelined: 13.364 -> 12.476 ms per layer. The gain is bounded by the
 q320 item granularity (busiest core 120-123 K iterations vs 130 for the pair); smaller q chunks change bits.
 `QWEN_CP_LOCAL_SDPA=0` runs the stock pair.
+
+The K-chunk step is `cp_inner_loop_step` (`kernels/cp_step.hpp`): the stock streaming `sdpa_inner_loop_step`
+specialised to this configuration, with two packer-stall cuts that leave every value unchanged (row-sum packs
+grouped to one L1-acc switch per sub_exp block; no mask stamp for row groups wholly below the diagonal). 40k
+pipelined: 12.490 -> 12.230 ms per call; output `torch.equal` to the stock pair. `QWEN_CP_SDPA_DEFINES` passes
+extra compile-time defines to the kernels (measurement knobs listed in `cp_step.hpp`; unset in the model).

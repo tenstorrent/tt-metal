@@ -15,6 +15,7 @@ from __future__ import annotations
 
 import functools
 import math
+import os
 import random
 import struct
 from dataclasses import dataclass
@@ -506,7 +507,19 @@ def schedule(
     return tuple(tuple(b) for b in bins)
 
 
-def _build_cp(q0, q1, k, v, page_table, out, *, col, cols, scale, ckc, exp_approx, grid, g, concat_heads):
+def extra_defines() -> tuple[tuple[str, str], ...]:
+    """QWEN_CP_SDPA_DEFINES="NAME[=VALUE],...": extra compile-time defines for the local kernels (cp_step.hpp
+    measurement knobs; unset in the model)."""
+    out = []
+    for item in os.environ.get("QWEN_CP_SDPA_DEFINES", "").split(","):
+        item = item.strip()
+        if item:
+            name, _, value = item.partition("=")
+            out.append((name, value or "1"))
+    return tuple(out)
+
+
+def _build_cp(q0, q1, k, v, page_table, out, *, col, cols, scale, ckc, exp_approx, grid, g, concat_heads, extra=()):
     gx, gy = grid
     cores = ttnn.CoreRangeSet({ttnn.CoreRange(ttnn.CoreCoord(0, 0), ttnn.CoreCoord(gx - 1, gy - 1))})
     dst_size = 8
@@ -569,7 +582,7 @@ def _build_cp(q0, q1, k, v, page_table, out, *, col, cols, scale, ckc, exp_appro
         ("DHT_GRANULARITY", str(dht_g)),
         ("REDUCE_GRANULARITY", str(valid_granularity(Sq_chunk_t, dst_size // 2))),
         ("EXP_APPROX_MODE", str(int(bool(exp_approx)))),
-    ]
+    ] + list(extra)
 
     reader_rt, writer_rt, compute_rt = [], [], []
     head = [_addr(q0), _addr(q1), _addr(k), _addr(v), _addr(page_table)] + offsets
@@ -661,8 +674,10 @@ def qwen_cp_sdpa(
     exp_approx = True if exp_approx is None else bool(exp_approx)
     shape = [1, 1, 2 * sl, NQH * DH] if concat_heads else [1, NQH, 2 * sl, DH]
     out = ttnn.allocate_tensor_on_device(ttnn.Shape(shape), q0.dtype, ttnn.TILE_LAYOUT, device, ttnn.DRAM_MEMORY_CONFIG)
+    extra = extra_defines()
     key = (
         "cp",
+        extra,
         concat_heads,
         tuple(device.shape),
         grid,
@@ -693,6 +708,7 @@ def qwen_cp_sdpa(
                 grid=grid,
                 g=g,
                 concat_heads=concat_heads,
+                extra=extra,
             )
             mesh_program[
                 ttnn.MeshCoordinateRange(ttnn.MeshCoordinate(0, col), ttnn.MeshCoordinate(rows - 1, col))
