@@ -9,6 +9,8 @@ T=models/demos/deepseek_v3_b1/tests/unit_tests/test_moe_mlp.py
 SRAM=models/demos/deepseek_v3_b1/unified_kernels/matmul_expert_compressed_sram.hpp
 ROUNDS=${ROUNDS:-3}
 python3 -c "import tracy" 2>/dev/null || export PYTHONPATH=/work:/work/tools
+# The CI bucket that runs test_moe_mlp.py (run_isolated_unit_tests.py, fabric_2d) exports this for every test.
+export TT_METAL_ALLOCATOR_MODE_HYBRID=1
 echo "== $(date -u +%FT%TZ) $(git log -1 --format='%h %s' 2>/dev/null)"
 # pytest.ini's -vvs makes --collect-only print "<Function name[...]>", so the node ids are rebuilt from the param ids.
 mapfile -t IDS < <(python3 -m pytest --collect-only -q "$T::test_moe_fused_with_reduce" 2>/dev/null |
@@ -28,8 +30,11 @@ for r in $(seq "$ROUNDS"); do
     t0=$(date +%s)
     TT_METAL_CACHE=/tmp/ttcache_$v python3 -m tracy -p -r --no-web-server -o "$out" ci_ab/run_nodes.py > "$out.log" 2>&1
     rc=$?
-    echo "== round $r $v rc=$rc $(( $(date +%s) - t0 )) s: $(grep -E '[0-9]+ (passed|failed)' "$out.log" | tail -1)"
-    [[ $rc -eq 0 ]] || { fail=1; tail -40 "$out.log"; }
+    echo "== round $r $v rc=$rc $(( $(date +%s) - t0 )) s: $(grep -E '[0-9]+ (passed|failed|skipped|error)' "$out.log" | tail -1)"
+    if [[ $rc -ne 0 ]] || ! grep -qE '[0-9]+ passed' "$out.log"; then
+      fail=1; grep -E '^(SKIPPED|FAILED|ERROR)' "$out.log" | head -5; tail -40 "$out.log"
+      [[ $r -eq 1 ]] && { echo "first round did not pass, stopping"; exit 1; }
+    fi
     python3 ci_ab/devtime.py "$out" "$v" "$r"
   done
 done
