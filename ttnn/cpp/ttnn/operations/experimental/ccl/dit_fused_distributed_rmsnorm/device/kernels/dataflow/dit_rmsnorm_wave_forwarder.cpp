@@ -35,48 +35,48 @@
 #include "tools/profiler/kernel_profiler.hpp"
 
 // ---------- compile-time args ----------
-constexpr std::uint32_t packet_cb = get_compile_time_arg_val(0);  // outbound packet buffer (unit_packet x2)
-constexpr std::uint32_t reserved_packet_header_cb = get_compile_time_arg_val(1);
-constexpr std::uint32_t ring_size = get_compile_time_arg_val(2);
-constexpr std::uint32_t my_device_index = get_compile_time_arg_val(3);
-constexpr std::uint32_t num_targets_forward = get_compile_time_arg_val(4);
-constexpr std::uint32_t num_targets_backward = get_compile_time_arg_val(5);
-constexpr std::uint32_t forwarder_index = get_compile_time_arg_val(6);  // which link/group on this chip
-constexpr std::uint32_t num_forwarders = get_compile_time_arg_val(7);
-constexpr std::uint32_t group_size = get_compile_time_arg_val(8);  // workers in this forwarder's group
-constexpr std::uint32_t max_rounds = get_compile_time_arg_val(9);  // 1 (one row per worker)
-constexpr std::uint32_t stick_bytes = get_compile_time_arg_val(10);
-constexpr std::uint32_t num_chunks_per_device = get_compile_time_arg_val(11);  // = num_forwarders * max_rounds
-constexpr std::uint32_t arrival_sem_id = get_compile_time_arg_val(12);         // workers inc; forwarder waits
-constexpr std::uint32_t go_sem_id = get_compile_time_arg_val(13);              // forwarder incs; workers wait
+constexpr uint32_t packet_cb = get_compile_time_arg_val(0);  // outbound packet buffer (unit_packet x2)
+constexpr uint32_t reserved_packet_header_cb = get_compile_time_arg_val(1);
+constexpr uint32_t ring_size = get_compile_time_arg_val(2);
+constexpr uint32_t my_device_index = get_compile_time_arg_val(3);
+constexpr uint32_t num_targets_forward = get_compile_time_arg_val(4);
+constexpr uint32_t num_targets_backward = get_compile_time_arg_val(5);
+constexpr uint32_t forwarder_index = get_compile_time_arg_val(6);  // which link/group on this chip
+constexpr uint32_t num_forwarders = get_compile_time_arg_val(7);
+constexpr uint32_t group_size = get_compile_time_arg_val(8);  // workers in this forwarder's group
+constexpr uint32_t max_rounds = get_compile_time_arg_val(9);  // 1 (one row per worker)
+constexpr uint32_t stick_bytes = get_compile_time_arg_val(10);
+constexpr uint32_t num_chunks_per_device = get_compile_time_arg_val(11);  // = num_forwarders * max_rounds
+constexpr uint32_t arrival_sem_id = get_compile_time_arg_val(12);         // workers inc; forwarder waits
+constexpr uint32_t go_sem_id = get_compile_time_arg_val(13);              // forwarder incs; workers wait
 constexpr auto stats_dram_args = TensorAccessorArgs<14>();
 constexpr auto forward_route =
     ccl_routing_utils::get_line_multicast_route_info_from_args<stats_dram_args.next_compile_time_args_offset()>();
 constexpr auto backward_route = ccl_routing_utils::get_line_multicast_route_info_from_args<
     stats_dram_args.next_compile_time_args_offset() + ccl_routing_utils::num_line_multicast_args>();
-constexpr std::uint32_t kWaveArgs =
+constexpr uint32_t kWaveArgs =
     stats_dram_args.next_compile_time_args_offset() + 2 * ccl_routing_utils::num_line_multicast_args;
-constexpr std::uint32_t wave_slots = get_compile_time_arg_val(kWaveArgs);           // sticks (workers) per wave
-constexpr std::uint32_t wave_span_bytes = get_compile_time_arg_val(kWaveArgs + 1);  // wave region in the page
-constexpr std::uint32_t kNumWaves = 2u;
+constexpr uint32_t wave_slots = get_compile_time_arg_val(kWaveArgs);           // sticks (workers) per wave
+constexpr uint32_t wave_span_bytes = get_compile_time_arg_val(kWaveArgs + 1);  // wave region in the page
+constexpr uint32_t kNumWaves = 2u;
 static_assert(max_rounds == 1, "two-wave forwarder needs a single row-round");
 static_assert(group_size == kNumWaves * wave_slots, "two-wave forwarder: group must be two full waves");
-constexpr std::uint32_t kWaveFieldBits = 16u;
-constexpr std::uint32_t kWaveFieldMask = (1u << kWaveFieldBits) - 1u;
+constexpr uint32_t kWaveFieldBits = 16u;
+constexpr uint32_t kWaveFieldMask = (1u << kWaveFieldBits) - 1u;
 
 void kernel_main() {
     size_t arg_idx = 0;
-    const std::uint32_t stats_dram_addr = get_arg_val<std::uint32_t>(arg_idx++);
+    const uint32_t stats_dram_addr = get_arg_val<uint32_t>(arg_idx++);
     // out_ready_sem: a GlobalSemaphore — PEER forwarders fuse-inc it over fabric
     // (same L1 addr on every chip). Local pointer for the wait + reset.
-    const std::uint32_t out_ready_sem_addr = get_arg_val<std::uint32_t>(arg_idx++);
+    const uint32_t out_ready_sem_addr = get_arg_val<uint32_t>(arg_idx++);
     // Group worker NoC coords (x,y), wave-major slot order, then present_count[0] (unused: every slot is
     // present with one row per worker).
-    std::uint32_t worker_x[group_size];
-    std::uint32_t worker_y[group_size];
-    for (std::uint32_t i = 0; i < group_size; i++) {
-        worker_x[i] = get_arg_val<std::uint32_t>(arg_idx++);
-        worker_y[i] = get_arg_val<std::uint32_t>(arg_idx++);
+    uint32_t worker_x[group_size];
+    uint32_t worker_y[group_size];
+    for (uint32_t i = 0; i < group_size; i++) {
+        worker_x[i] = get_arg_val<uint32_t>(arg_idx++);
+        worker_y[i] = get_arg_val<uint32_t>(arg_idx++);
     }
     arg_idx += max_rounds;
     Noc noc;
@@ -105,26 +105,25 @@ void kernel_main() {
     }
 
     const auto stats_dram = TensorAccessor(stats_dram_args, stats_dram_addr);
-    const std::uint32_t packet_base = cb_packet.get_read_ptr();
+    const uint32_t packet_base = cb_packet.get_read_ptr();
 
-    const std::uint64_t out_ready_sem_noc = safe_get_noc_addr(my_x[0], my_y[0], out_ready_sem_addr, 0);
-    volatile tt_l1_ptr std::uint32_t* out_ready_sem_ptr =
-        reinterpret_cast<volatile tt_l1_ptr std::uint32_t*>(out_ready_sem_addr);
-    volatile tt_l1_ptr std::uint32_t* arrival_ptr =
-        reinterpret_cast<volatile tt_l1_ptr std::uint32_t*>(get_semaphore(arrival_sem_id));
+    const uint64_t out_ready_sem_noc = safe_get_noc_addr(my_x[0], my_y[0], out_ready_sem_addr, 0);
+    volatile tt_l1_ptr uint32_t* out_ready_sem_ptr = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(out_ready_sem_addr);
+    volatile tt_l1_ptr uint32_t* arrival_ptr =
+        reinterpret_cast<volatile tt_l1_ptr uint32_t*>(get_semaphore(arrival_sem_id));
 
-    const std::uint32_t page_idx = my_device_index * num_chunks_per_device + forwarder_index * max_rounds;
-    std::uint32_t sent = 0;
-    std::uint32_t released = 0;
+    const uint32_t page_idx = my_device_index * num_chunks_per_device + forwarder_index * max_rounds;
+    uint32_t sent = 0;
+    uint32_t released = 0;
     while (released < kNumWaves) {
         invalidate_l1_cache();
         if (sent < kNumWaves) {
-            const std::uint32_t shift = sent * kWaveFieldBits;
+            const uint32_t shift = sent * kWaveFieldBits;
             if (((*arrival_ptr >> shift) & kWaveFieldMask) >= wave_slots) {
                 DeviceZoneScopedN("F_SEND");
                 // Wave `sent`'s region of packet_buf[0] -> the same offset of page (my_device, fwd, 0).
-                const std::uint32_t off = sent * wave_span_bytes;
-                const std::uint64_t dram_dest =
+                const uint32_t off = sent * wave_span_bytes;
+                const uint64_t dram_dest =
                     tt::tt_fabric::linear::addrgen_detail::get_noc_address(stats_dram, page_idx, off);
                 size_t l1_read_addr = packet_base + off;
                 fused_write_atomic_and_advance_local_read_address_for_fabric_write(
@@ -142,12 +141,12 @@ void kernel_main() {
             }
         }
         if (released < sent) {
-            const std::uint32_t shift = released * kWaveFieldBits;
+            const uint32_t shift = released * kWaveFieldBits;
             if (((*out_ready_sem_ptr >> shift) & kWaveFieldMask) >= ring_size - 1) {
                 DeviceZoneScopedN("F_GO");
                 // Our own local write of this wave must have landed before its workers read it.
                 noc.async_write_barrier();
-                for (std::uint32_t i = released * wave_slots; i < (released + 1) * wave_slots; i++) {
+                for (uint32_t i = released * wave_slots; i < (released + 1) * wave_slots; i++) {
                     group_go_sem.up(noc, worker_x[i], worker_y[i], 1);
                 }
                 released++;

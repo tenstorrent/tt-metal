@@ -30,31 +30,31 @@
 #include "api/debug/kernel_profiler.hpp"
 
 void kernel_main() {
-    constexpr std::uint32_t input_cb = get_compile_time_arg_val(0);
-    constexpr std::uint32_t weight_cb = get_compile_time_arg_val(1);
-    constexpr std::uint32_t rope_cos_cb = get_compile_time_arg_val(2);
-    constexpr std::uint32_t rope_sin_cb = get_compile_time_arg_val(3);
-    constexpr std::uint32_t num_tile_cols = get_compile_time_arg_val(4);
-    constexpr std::uint32_t block_size = get_compile_time_arg_val(5);
-    constexpr std::uint32_t has_weight = get_compile_time_arg_val(6);
-    constexpr std::uint32_t fuse_rope = get_compile_time_arg_val(7);
-    constexpr std::uint32_t head_dim_tiles = get_compile_time_arg_val(8);
-    constexpr std::uint32_t chunk_size_rows = 1u;  // chunk size is always 1 (no CT arg)
-    constexpr std::uint32_t per_head_rope = get_compile_time_arg_val(9);
-    constexpr std::uint32_t rope_seqlen_tiles = get_compile_time_arg_val(10);
-    constexpr std::uint32_t bias_cb = get_compile_time_arg_val(11);
-    constexpr std::uint32_t has_bias = get_compile_time_arg_val(12);
+    constexpr uint32_t input_cb = get_compile_time_arg_val(0);
+    constexpr uint32_t weight_cb = get_compile_time_arg_val(1);
+    constexpr uint32_t rope_cos_cb = get_compile_time_arg_val(2);
+    constexpr uint32_t rope_sin_cb = get_compile_time_arg_val(3);
+    constexpr uint32_t num_tile_cols = get_compile_time_arg_val(4);
+    constexpr uint32_t block_size = get_compile_time_arg_val(5);
+    constexpr uint32_t has_weight = get_compile_time_arg_val(6);
+    constexpr uint32_t fuse_rope = get_compile_time_arg_val(7);
+    constexpr uint32_t head_dim_tiles = get_compile_time_arg_val(8);
+    constexpr uint32_t chunk_size_rows = 1u;  // chunk size is always 1 (no CT arg)
+    constexpr uint32_t per_head_rope = get_compile_time_arg_val(9);
+    constexpr uint32_t rope_seqlen_tiles = get_compile_time_arg_val(10);
+    constexpr uint32_t bias_cb = get_compile_time_arg_val(11);
+    constexpr uint32_t has_bias = get_compile_time_arg_val(12);
     // Per-token weight/bias: shape [N, H] (vs broadcast [1, H]). Read pattern
     // is per-row (after each row's input is pushed) using a full-page
     // noc.async_read for full 4 KB/tile (vs face_row_bytes for the broadcast
     // case). Compute uses mul_tiles / add_tiles directly (no _bcast_rows).
-    constexpr std::uint32_t per_token_weight = get_compile_time_arg_val(13);
-    constexpr std::uint32_t per_token_bias = get_compile_time_arg_val(14);
+    constexpr uint32_t per_token_weight = get_compile_time_arg_val(13);
+    constexpr uint32_t per_token_bias = get_compile_time_arg_val(14);
     // Streaming low-L1: input_cb is block-sized, so the row is read in two
     // passes (PRE sum-of-squares, then a POST re-read for x*(1/rms)) in
     // block_size-tile pushes that compute pops as it consumes. The resident
     // fast path reads the whole row once. See program_factory.
-    constexpr std::uint32_t streaming_low_l1 = get_compile_time_arg_val(15);
+    constexpr uint32_t streaming_low_l1 = get_compile_time_arg_val(15);
     // input_schedule: WHERE the streaming input passes are read relative to the
     // resident weight/bias/cos pushes. The block-major POST consumes weight/bias/cos
     // mid-(POST pass), so they must be pushed BEFORE the POST pass — but PRE needs the
@@ -69,32 +69,32 @@ void kernel_main() {
     //   2 SPLIT: read the PRE pass at the top (stats produced ASAP -> ring gather starts),
     //     push side inputs, then read the POST pass (weight now resident). The AG
     //     (ring>1) block-major path: avoids the deadlock without delaying the gather.
-    constexpr std::uint32_t input_schedule = get_compile_time_arg_val(16);
-    constexpr std::uint32_t SCHED_INPUT_FIRST = 0u;
-    constexpr std::uint32_t SCHED_DEFER_ALL = 1u;
-    constexpr std::uint32_t SCHED_SPLIT = 2u;
+    constexpr uint32_t input_schedule = get_compile_time_arg_val(16);
+    constexpr uint32_t SCHED_INPUT_FIRST = 0u;
+    constexpr uint32_t SCHED_DEFER_ALL = 1u;
+    constexpr uint32_t SCHED_SPLIT = 2u;
     // Welford reciprocal LUT (LayerNorm). When use_recip_lut, read the reciprocals DRAM
     // tensor once into recip_lut_cb at the top so compute reads it as the LLK's
     // reciprocal_lut (array load vs soft-float 1/(N+1) per sample). recip accessor is the
     // last TensorAccessorArgs; recip DRAM addr is reader RT arg 7.
-    constexpr std::uint32_t use_recip_lut = get_compile_time_arg_val(17);
-    constexpr std::uint32_t recip_lut_cb = get_compile_time_arg_val(18);
+    constexpr uint32_t use_recip_lut = get_compile_time_arg_val(17);
+    constexpr uint32_t recip_lut_cb = get_compile_time_arg_val(18);
     // Broadcast affine read count (CT 19/20): num_tile_cols — only TRUE broadcast [1,1,H]
     // weight/bias uses the one-shot resident face-row read. per-batch adaLN streams per row.
-    constexpr std::uint32_t weight_bcast_tiles = get_compile_time_arg_val(19);
-    constexpr std::uint32_t bias_bcast_tiles = get_compile_time_arg_val(20);
+    constexpr uint32_t weight_bcast_tiles = get_compile_time_arg_val(19);
+    constexpr uint32_t bias_bcast_tiles = get_compile_time_arg_val(20);
     // Batched RoPE (CT 21): per-batch stride into cos/sin, in tiles (== one batch's whole cos/sin
     // block). 0 -> broadcast the same cos/sin to every input batch. The reader always indexes
     // cos/sin by the WITHIN-batch seq row (global_row % rope_seqlen_tiles) and adds
     // (global_row / rope_seqlen_tiles) * rope_batch_stride_tiles; at batch=1 both terms collapse
     // to the original single-batch indexing.
-    constexpr std::uint32_t rope_batch_stride_tiles = get_compile_time_arg_val(21);
+    constexpr uint32_t rope_batch_stride_tiles = get_compile_time_arg_val(21);
     // Per-batch adaLN weight/bias (CT 22/23/24): [batch,1,H] — broadcast over seq but distinct per
     // batch. Streamed like per-token (per-row push + compute pops per row), but the read is the
     // face-row broadcast read at wbatch*num_tile_cols, wbatch = tile_row / rows_per_batch_tiles.
-    constexpr std::uint32_t per_batch_weight = get_compile_time_arg_val(22);
-    constexpr std::uint32_t per_batch_bias = get_compile_time_arg_val(23);
-    constexpr std::uint32_t rows_per_batch_tiles = get_compile_time_arg_val(24);
+    constexpr uint32_t per_batch_weight = get_compile_time_arg_val(22);
+    constexpr uint32_t per_batch_bias = get_compile_time_arg_val(23);
+    constexpr uint32_t rows_per_batch_tiles = get_compile_time_arg_val(24);
     // The WRITER always populates the reduce_scalar_* / epsilon / trans_mat CBs,
     // so the reader's first NoC op is the input read (starts streaming ASAP).
     constexpr auto input_args = TensorAccessorArgs<25>();
@@ -105,37 +105,37 @@ void kernel_main() {
     constexpr auto recip_args = TensorAccessorArgs<rope_sin_args.next_compile_time_args_offset()>();
     // Broadcast gamma read by the worker writer (BRISC) at kernel start instead of here, so the
     // NCRISC read queue carries only the input row (see the factory's writer_reads_weight).
-    constexpr std::uint32_t weight_from_writer = get_compile_time_arg_val(recip_args.next_compile_time_args_offset());
+    constexpr uint32_t weight_from_writer = get_compile_time_arg_val(recip_args.next_compile_time_args_offset());
     // Two-wave column split: the DRAM row stride (the worker reads num_tile_cols tiles from col_offset),
     // and the start semaphore a wave-B worker waits on. Its wave-A partner ups it once its own read is
     // kWaveSignalLeadBlocks blocks from landing, so B's reads queue right behind A's and each wave reads
     // with the DRAM to itself.
-    constexpr std::uint32_t row_stride_tiles = get_compile_time_arg_val(recip_args.next_compile_time_args_offset() + 1);
-    constexpr std::uint32_t start_sem_id = get_compile_time_arg_val(recip_args.next_compile_time_args_offset() + 2);
-    constexpr std::uint32_t kWaveSignal = 1u;
-    constexpr std::uint32_t kWaveWait = 2u;
-    constexpr std::uint32_t kWaveSignalLeadBlocks = 2u;
+    constexpr uint32_t row_stride_tiles = get_compile_time_arg_val(recip_args.next_compile_time_args_offset() + 1);
+    constexpr uint32_t start_sem_id = get_compile_time_arg_val(recip_args.next_compile_time_args_offset() + 2);
+    constexpr uint32_t kWaveSignal = 1u;
+    constexpr uint32_t kWaveWait = 2u;
+    constexpr uint32_t kWaveSignalLeadBlocks = 2u;
 
 #ifdef AFFINE_TILE_ROW_MAP
-    constexpr std::uint32_t tile_row_map_cb = get_compile_time_arg_val(recip_args.next_compile_time_args_offset() + 3);
+    constexpr uint32_t tile_row_map_cb = get_compile_time_arg_val(recip_args.next_compile_time_args_offset() + 3);
     constexpr auto tile_row_map_args = TensorAccessorArgs<recip_args.next_compile_time_args_offset() + 4>();
 #endif
 
-    std::uint32_t arg_idx = 0;
-    const std::uint32_t input_addr = get_common_arg_val<std::uint32_t>(0);
-    const std::uint32_t weight_addr = get_common_arg_val<std::uint32_t>(1);
-    const std::uint32_t bias_addr = get_common_arg_val<std::uint32_t>(2);
-    const std::uint32_t rope_cos_addr = get_common_arg_val<std::uint32_t>(3);
-    const std::uint32_t rope_sin_addr = get_common_arg_val<std::uint32_t>(4);
-    const std::uint32_t tile_row_start = get_arg_val<std::uint32_t>(arg_idx++);
-    const std::uint32_t tile_row_end = get_arg_val<std::uint32_t>(arg_idx++);
-    const std::uint32_t recip_addr = get_common_arg_val<std::uint32_t>(5);
-    const std::uint32_t col_offset = get_arg_val<std::uint32_t>(arg_idx++);
-    const std::uint32_t wave_role = get_arg_val<std::uint32_t>(arg_idx++);
-    const std::uint32_t partner_x = get_arg_val<std::uint32_t>(arg_idx++);
-    const std::uint32_t partner_y = get_arg_val<std::uint32_t>(arg_idx++);
+    uint32_t arg_idx = 0;
+    const uint32_t input_addr = get_common_arg_val<uint32_t>(0);
+    const uint32_t weight_addr = get_common_arg_val<uint32_t>(1);
+    const uint32_t bias_addr = get_common_arg_val<uint32_t>(2);
+    const uint32_t rope_cos_addr = get_common_arg_val<uint32_t>(3);
+    const uint32_t rope_sin_addr = get_common_arg_val<uint32_t>(4);
+    const uint32_t tile_row_start = get_arg_val<uint32_t>(arg_idx++);
+    const uint32_t tile_row_end = get_arg_val<uint32_t>(arg_idx++);
+    const uint32_t recip_addr = get_common_arg_val<uint32_t>(5);
+    const uint32_t col_offset = get_arg_val<uint32_t>(arg_idx++);
+    const uint32_t wave_role = get_arg_val<uint32_t>(arg_idx++);
+    const uint32_t partner_x = get_arg_val<uint32_t>(arg_idx++);
+    const uint32_t partner_y = get_arg_val<uint32_t>(arg_idx++);
 #ifdef AFFINE_TILE_ROW_MAP
-    const std::uint32_t tile_row_map_addr = get_common_arg_val<std::uint32_t>(6);
+    const uint32_t tile_row_map_addr = get_common_arg_val<uint32_t>(6);
 #endif
 
     Noc noc;
@@ -146,11 +146,11 @@ void kernel_main() {
     CircularBuffer cb_rope_cos(rope_cos_cb);
     CircularBuffer cb_rope_sin(rope_sin_cb);
 
-    const std::uint32_t input_tile_bytes = cb_input.get_tile_size();
-    const std::uint32_t weight_tile_bytes = cb_weight.get_tile_size();
-    const std::uint32_t bias_tile_bytes = cb_bias.get_tile_size();
-    const std::uint32_t rope_cos_tile_bytes = cb_rope_cos.get_tile_size();
-    const std::uint32_t rope_sin_tile_bytes = cb_rope_sin.get_tile_size();
+    const uint32_t input_tile_bytes = cb_input.get_tile_size();
+    const uint32_t weight_tile_bytes = cb_weight.get_tile_size();
+    const uint32_t bias_tile_bytes = cb_bias.get_tile_size();
+    const uint32_t rope_cos_tile_bytes = cb_rope_cos.get_tile_size();
+    const uint32_t rope_sin_tile_bytes = cb_rope_sin.get_tile_size();
 
     const auto input_accessor = TensorAccessor(input_args, input_addr);
     const auto weight_accessor = TensorAccessor(weight_args, weight_addr);
@@ -160,11 +160,11 @@ void kernel_main() {
 
     // Full-page read sizes. The face-row reads further down deliberately do NOT use
     // these — they read a fraction of a page.
-    const std::uint32_t input_page_bytes = input_accessor.get_aligned_page_size();
-    const std::uint32_t weight_page_bytes = weight_accessor.get_aligned_page_size();
-    const std::uint32_t bias_page_bytes = bias_accessor.get_aligned_page_size();
-    const std::uint32_t rope_cos_page_bytes = rope_cos_accessor.get_aligned_page_size();
-    const std::uint32_t rope_sin_page_bytes = rope_sin_accessor.get_aligned_page_size();
+    const uint32_t input_page_bytes = input_accessor.get_aligned_page_size();
+    const uint32_t weight_page_bytes = weight_accessor.get_aligned_page_size();
+    const uint32_t bias_page_bytes = bias_accessor.get_aligned_page_size();
+    const uint32_t rope_cos_page_bytes = rope_cos_accessor.get_aligned_page_size();
+    const uint32_t rope_sin_page_bytes = rope_sin_accessor.get_aligned_page_size();
 
     // Welford reciprocal LUT: read the whole [1, reduce_width] fp32 page (one DRAM page,
     // reduce_width == num_tile_cols * 32 -> num_tile_cols * 128 bytes) into recip_lut_cb
@@ -173,7 +173,7 @@ void kernel_main() {
     if constexpr (use_recip_lut) {
         const auto recip_accessor = TensorAccessor(recip_args, recip_addr);
         CircularBuffer cb_recip_lut(recip_lut_cb);
-        constexpr std::uint32_t recip_bytes = num_tile_cols * 128u;  // reduce_width * sizeof(float)
+        constexpr uint32_t recip_bytes = num_tile_cols * 128u;  // reduce_width * sizeof(float)
         cb_recip_lut.reserve_back(1);
         // Size is recip_bytes, not the accessor's page size: the LUT is one DRAM page but
         // we only want the [1, reduce_width] prefix.
@@ -199,13 +199,13 @@ void kernel_main() {
     // cost (measured ~13% e2e win on the N=2368 Wan config). The datum size is
     // derived from the CB tile size (tile_bytes / TILE_HW) so the read works for
     // both bf16 (2 B) and fp32 (4 B) weight/bias.
-    constexpr std::uint32_t kTileHW = tt::constants::TILE_HEIGHT * tt::constants::TILE_WIDTH;  // 1024
-    const std::uint32_t weight_datum_bytes = weight_tile_bytes / kTileHW;
-    const std::uint32_t weight_face_row_bytes = tt::constants::FACE_WIDTH * weight_datum_bytes;
-    const std::uint32_t weight_face_bytes = tt::constants::FACE_HW * weight_datum_bytes;
-    const std::uint32_t bias_datum_bytes = bias_tile_bytes / kTileHW;
-    const std::uint32_t bias_face_row_bytes = tt::constants::FACE_WIDTH * bias_datum_bytes;
-    const std::uint32_t bias_face_bytes = tt::constants::FACE_HW * bias_datum_bytes;
+    constexpr uint32_t kTileHW = tt::constants::TILE_HEIGHT * tt::constants::TILE_WIDTH;  // 1024
+    const uint32_t weight_datum_bytes = weight_tile_bytes / kTileHW;
+    const uint32_t weight_face_row_bytes = tt::constants::FACE_WIDTH * weight_datum_bytes;
+    const uint32_t weight_face_bytes = tt::constants::FACE_HW * weight_datum_bytes;
+    const uint32_t bias_datum_bytes = bias_tile_bytes / kTileHW;
+    const uint32_t bias_face_row_bytes = tt::constants::FACE_WIDTH * bias_datum_bytes;
+    const uint32_t bias_face_bytes = tt::constants::FACE_HW * bias_datum_bytes;
 
     // Weight + bias are consumed in the POST phase (sub-phases 2 / 2.5) which
     // only start after chunk 0's AG completes. So both reads can be deferred
@@ -219,16 +219,16 @@ void kernel_main() {
     // pushes, deep-barriered per block. Streaming reads this twice (PRE then a POST
     // re-read); resident reads it once (compute holds the whole row). The schedule
     // logic below decides WHEN each pass runs relative to the side-input pushes.
-    auto read_input_pass = [&](std::uint32_t input_tile_idx) {
-        for (std::uint32_t col_tile = 0; col_tile < num_tile_cols; col_tile += block_size) {
-            const std::uint32_t tiles_in_block =
+    auto read_input_pass = [&](uint32_t input_tile_idx) {
+        for (uint32_t col_tile = 0; col_tile < num_tile_cols; col_tile += block_size) {
+            const uint32_t tiles_in_block =
                 ((num_tile_cols - col_tile) >= block_size) ? block_size : (num_tile_cols - col_tile);
             cb_input.reserve_back(tiles_in_block);
-            std::uint32_t input_wr_ptr = cb_input.get_write_ptr();
-            for (std::uint32_t i = 0; i < tiles_in_block; i++) {
+            uint32_t input_wr_ptr = cb_input.get_write_ptr();
+            for (uint32_t i = 0; i < tiles_in_block; i++) {
                 noc.async_read(
                     input_accessor,
-                    CoreLocalMem<std::uint32_t>(input_wr_ptr),
+                    CoreLocalMem<uint32_t>(input_wr_ptr),
                     input_page_bytes,
                     {.page_id = input_tile_idx + col_tile + i},
                     {});
@@ -246,49 +246,49 @@ void kernel_main() {
     // gamma face-row reads for each block are issued right behind its input reads (one
     // shared trid), so gamma is resident as soon as the input row is, instead of a second
     // per-block-barriered pass after it.
-    constexpr std::uint32_t kInputTrids = 14u;  // trids 1..14 for input blocks
-    constexpr std::uint32_t kWeightTrid = 15u;
-    constexpr std::uint32_t kInputLookahead = 4u;
-    constexpr std::uint32_t num_input_blocks = (num_tile_cols + block_size - 1u) / block_size;
-    constexpr std::uint32_t wave_signal_block =
+    constexpr uint32_t kInputTrids = 14u;  // trids 1..14 for input blocks
+    constexpr uint32_t kWeightTrid = 15u;
+    constexpr uint32_t kInputLookahead = 4u;
+    constexpr uint32_t num_input_blocks = (num_tile_cols + block_size - 1u) / block_size;
+    constexpr uint32_t wave_signal_block =
         (num_input_blocks > kWaveSignalLeadBlocks) ? (num_input_blocks - 1u - kWaveSignalLeadBlocks) : 0u;
-    auto read_input_pass_pipelined = [&](std::uint32_t input_tile_idx, bool with_weight) {
+    auto read_input_pass_pipelined = [&](uint32_t input_tile_idx, bool with_weight) {
         cb_input.reserve_back(num_tile_cols);
-        const std::uint32_t input_base = cb_input.get_write_ptr();
-        std::uint32_t weight_base = 0;
+        const uint32_t input_base = cb_input.get_write_ptr();
+        uint32_t weight_base = 0;
         if (with_weight) {
             cb_weight.reserve_back(weight_bcast_tiles);
             weight_base = cb_weight.get_write_ptr();
         }
-        for (std::uint32_t k = 0; k < num_input_blocks + kInputLookahead; k++) {
+        for (uint32_t k = 0; k < num_input_blocks + kInputLookahead; k++) {
             if (k < num_input_blocks) {
-                const std::uint32_t col_tile = k * block_size;
-                const std::uint32_t tiles_in_block =
+                const uint32_t col_tile = k * block_size;
+                const uint32_t tiles_in_block =
                     ((num_tile_cols - col_tile) >= block_size) ? block_size : (num_tile_cols - col_tile);
-                const std::uint32_t trid = 1u + (k % kInputTrids);
-                for (std::uint32_t i = 0; i < tiles_in_block; i++) {
+                const uint32_t trid = 1u + (k % kInputTrids);
+                for (uint32_t i = 0; i < tiles_in_block; i++) {
                     noc.async_read<NocOptions::TXN_ID>(
                         input_accessor,
-                        CoreLocalMem<std::uint32_t>(input_base + (col_tile + i) * input_tile_bytes),
+                        CoreLocalMem<uint32_t>(input_base + (col_tile + i) * input_tile_bytes),
                         input_page_bytes,
                         {.page_id = input_tile_idx + col_tile + i},
                         {},
                         {.trid = trid});
                 }
                 if (with_weight) {
-                    for (std::uint32_t i = 0; i < tiles_in_block; i++) {
-                        const std::uint32_t w_page = col_tile + i;
-                        const std::uint32_t w_dst = weight_base + w_page * weight_tile_bytes;
+                    for (uint32_t i = 0; i < tiles_in_block; i++) {
+                        const uint32_t w_page = col_tile + i;
+                        const uint32_t w_dst = weight_base + w_page * weight_tile_bytes;
                         noc.async_read<NocOptions::TXN_ID>(
                             weight_accessor,
-                            CoreLocalMem<std::uint32_t>(w_dst),
+                            CoreLocalMem<uint32_t>(w_dst),
                             weight_face_row_bytes,
                             {.page_id = w_page},
                             {},
                             {.trid = kWeightTrid});
                         noc.async_read<NocOptions::TXN_ID>(
                             weight_accessor,
-                            CoreLocalMem<std::uint32_t>(w_dst + weight_face_bytes),
+                            CoreLocalMem<uint32_t>(w_dst + weight_face_bytes),
                             weight_face_row_bytes,
                             {.page_id = w_page, .offset_bytes = weight_face_bytes},
                             {},
@@ -297,9 +297,9 @@ void kernel_main() {
                 }
             }
             if (k >= kInputLookahead) {
-                const std::uint32_t kb = k - kInputLookahead;
-                const std::uint32_t col_tile = kb * block_size;
-                const std::uint32_t tiles_in_block =
+                const uint32_t kb = k - kInputLookahead;
+                const uint32_t col_tile = kb * block_size;
+                const uint32_t tiles_in_block =
                     ((num_tile_cols - col_tile) >= block_size) ? block_size : (num_tile_cols - col_tile);
                 noc.async_read_barrier<NocOptions::TXN_ID>({.trid = 1u + (kb % kInputTrids)});
                 cb_input.push_back(tiles_in_block);
@@ -317,7 +317,7 @@ void kernel_main() {
     };
     static_assert(kInputLookahead < kInputTrids, "lookahead must not reuse an in-flight trid");
 
-    for (std::uint32_t tile_row = tile_row_start; tile_row < tile_row_end; tile_row++) {
+    for (uint32_t tile_row = tile_row_start; tile_row < tile_row_end; tile_row++) {
         // Deep input read: issue the whole row's tiles, then ONE barrier, so
         // num_tile_cols reads are in flight at once (keeps DRAM-read latency hidden;
         // a per-block barrier would cap outstanding reads at block_size and expose
@@ -329,7 +329,7 @@ void kernel_main() {
         // sum-of-squares starts as soon as input lands; cos/sin are issued AFTER (see
         // below) so their DRAM read latency overlaps PRE — they aren't consumed until
         // the POST RoPE phase.
-        const std::uint32_t input_tile_idx = tile_row * row_stride_tiles + col_offset;
+        const uint32_t input_tile_idx = tile_row * row_stride_tiles + col_offset;
         if (wave_role == kWaveWait && tile_row == tile_row_start) {
             DeviceZoneScopedN("R_WAVEWAIT");
             Semaphore<> start_sem(start_sem_id);
@@ -378,16 +378,16 @@ void kernel_main() {
         [[maybe_unused]] const uint32_t affine_tile_row = tile_row;
 #endif
         if constexpr (per_token_weight != 0) {
-            for (std::uint32_t col_tile = 0; col_tile < num_tile_cols; col_tile += block_size) {
-                const std::uint32_t tiles_in_block =
+            for (uint32_t col_tile = 0; col_tile < num_tile_cols; col_tile += block_size) {
+                const uint32_t tiles_in_block =
                     ((num_tile_cols - col_tile) >= block_size) ? block_size : (num_tile_cols - col_tile);
                 cb_weight.reserve_back(tiles_in_block);
-                std::uint32_t weight_wr_ptr = cb_weight.get_write_ptr();
-                for (std::uint32_t i = 0; i < tiles_in_block; i++) {
-                    const std::uint32_t w_idx = affine_tile_row * num_tile_cols + col_tile + i;
+                uint32_t weight_wr_ptr = cb_weight.get_write_ptr();
+                for (uint32_t i = 0; i < tiles_in_block; i++) {
+                    const uint32_t w_idx = affine_tile_row * num_tile_cols + col_tile + i;
                     noc.async_read(
                         weight_accessor,
-                        CoreLocalMem<std::uint32_t>(weight_wr_ptr),
+                        CoreLocalMem<uint32_t>(weight_wr_ptr),
                         weight_page_bytes,
                         {.page_id = w_idx},
                         {});
@@ -398,19 +398,15 @@ void kernel_main() {
             }
         }
         if constexpr (per_token_bias != 0) {
-            for (std::uint32_t col_tile = 0; col_tile < num_tile_cols; col_tile += block_size) {
-                const std::uint32_t tiles_in_block =
+            for (uint32_t col_tile = 0; col_tile < num_tile_cols; col_tile += block_size) {
+                const uint32_t tiles_in_block =
                     ((num_tile_cols - col_tile) >= block_size) ? block_size : (num_tile_cols - col_tile);
                 cb_bias.reserve_back(tiles_in_block);
-                std::uint32_t bias_wr_ptr = cb_bias.get_write_ptr();
-                for (std::uint32_t i = 0; i < tiles_in_block; i++) {
-                    const std::uint32_t b_idx = affine_tile_row * num_tile_cols + col_tile + i;
+                uint32_t bias_wr_ptr = cb_bias.get_write_ptr();
+                for (uint32_t i = 0; i < tiles_in_block; i++) {
+                    const uint32_t b_idx = affine_tile_row * num_tile_cols + col_tile + i;
                     noc.async_read(
-                        bias_accessor,
-                        CoreLocalMem<std::uint32_t>(bias_wr_ptr),
-                        bias_page_bytes,
-                        {.page_id = b_idx},
-                        {});
+                        bias_accessor, CoreLocalMem<uint32_t>(bias_wr_ptr), bias_page_bytes, {.page_id = b_idx}, {});
                     bias_wr_ptr += bias_tile_bytes;
                 }
                 noc.async_read_barrier();
@@ -423,25 +419,25 @@ void kernel_main() {
         // wbatch*num_tile_cols where wbatch = tile_row / rows_per_batch_tiles. Streamed (not
         // all-batches-resident), so weight_cb stays 1 row and a wide per-batch shard fits L1.
         if constexpr (per_batch_weight != 0) {
-            const std::uint32_t w_base =
+            const uint32_t w_base =
                 ((rows_per_batch_tiles != 0) ? (tile_row / rows_per_batch_tiles) : 0u) * num_tile_cols;
-            for (std::uint32_t col_tile = 0; col_tile < num_tile_cols; col_tile += block_size) {
-                const std::uint32_t tiles_in_block =
+            for (uint32_t col_tile = 0; col_tile < num_tile_cols; col_tile += block_size) {
+                const uint32_t tiles_in_block =
                     ((num_tile_cols - col_tile) >= block_size) ? block_size : (num_tile_cols - col_tile);
                 cb_weight.reserve_back(tiles_in_block);
-                std::uint32_t weight_wr_ptr = cb_weight.get_write_ptr();
-                for (std::uint32_t i = 0; i < tiles_in_block; i++) {
+                uint32_t weight_wr_ptr = cb_weight.get_write_ptr();
+                for (uint32_t i = 0; i < tiles_in_block; i++) {
                     // Two sub-page reads per tile: face_00 row 0, then face_01 row 0.
-                    const std::uint32_t w_page = w_base + col_tile + i;
+                    const uint32_t w_page = w_base + col_tile + i;
                     noc.async_read(
                         weight_accessor,
-                        CoreLocalMem<std::uint32_t>(weight_wr_ptr),
+                        CoreLocalMem<uint32_t>(weight_wr_ptr),
                         weight_face_row_bytes,
                         {.page_id = w_page},
                         {});
                     noc.async_read(
                         weight_accessor,
-                        CoreLocalMem<std::uint32_t>(weight_wr_ptr + weight_face_bytes),
+                        CoreLocalMem<uint32_t>(weight_wr_ptr + weight_face_bytes),
                         weight_face_row_bytes,
                         {.page_id = w_page, .offset_bytes = weight_face_bytes},
                         {});
@@ -452,25 +448,25 @@ void kernel_main() {
             }
         }
         if constexpr (per_batch_bias != 0) {
-            const std::uint32_t b_base =
+            const uint32_t b_base =
                 ((rows_per_batch_tiles != 0) ? (tile_row / rows_per_batch_tiles) : 0u) * num_tile_cols;
-            for (std::uint32_t col_tile = 0; col_tile < num_tile_cols; col_tile += block_size) {
-                const std::uint32_t tiles_in_block =
+            for (uint32_t col_tile = 0; col_tile < num_tile_cols; col_tile += block_size) {
+                const uint32_t tiles_in_block =
                     ((num_tile_cols - col_tile) >= block_size) ? block_size : (num_tile_cols - col_tile);
                 cb_bias.reserve_back(tiles_in_block);
-                std::uint32_t bias_wr_ptr = cb_bias.get_write_ptr();
-                for (std::uint32_t i = 0; i < tiles_in_block; i++) {
+                uint32_t bias_wr_ptr = cb_bias.get_write_ptr();
+                for (uint32_t i = 0; i < tiles_in_block; i++) {
                     // face_00 row 0 + face_01 row 0, as for weight above.
-                    const std::uint32_t b_page = b_base + col_tile + i;
+                    const uint32_t b_page = b_base + col_tile + i;
                     noc.async_read(
                         bias_accessor,
-                        CoreLocalMem<std::uint32_t>(bias_wr_ptr),
+                        CoreLocalMem<uint32_t>(bias_wr_ptr),
                         bias_face_row_bytes,
                         {.page_id = b_page},
                         {});
                     noc.async_read(
                         bias_accessor,
-                        CoreLocalMem<std::uint32_t>(bias_wr_ptr + bias_face_bytes),
+                        CoreLocalMem<uint32_t>(bias_wr_ptr + bias_face_bytes),
                         bias_face_row_bytes,
                         {.page_id = b_page, .offset_bytes = bias_face_bytes},
                         {});
@@ -485,29 +481,29 @@ void kernel_main() {
         // end-of-worker if the worker has fewer rows than chunk_size_rows),
         // issue the reads once for the whole worker. Latency hides behind
         // chunk 0's pre compute + fabric mcast + fabric wait.
-        const std::uint32_t rows_pushed = tile_row + 1 - tile_row_start;
+        const uint32_t rows_pushed = tile_row + 1 - tile_row_start;
         const bool first_chunk_done = (rows_pushed >= chunk_size_rows);
         const bool last_row = (tile_row + 1 == tile_row_end);
         const bool should_issue_side_inputs = first_chunk_done || last_row;
         if constexpr (per_token_weight == 0 && per_batch_weight == 0) {
             if (!weight_pushed && should_issue_side_inputs) {
-                for (std::uint32_t col_tile = 0; col_tile < weight_bcast_tiles; col_tile += block_size) {
-                    const std::uint32_t tiles_in_block =
+                for (uint32_t col_tile = 0; col_tile < weight_bcast_tiles; col_tile += block_size) {
+                    const uint32_t tiles_in_block =
                         ((weight_bcast_tiles - col_tile) >= block_size) ? block_size : (weight_bcast_tiles - col_tile);
                     cb_weight.reserve_back(tiles_in_block);
-                    std::uint32_t weight_wr_ptr = cb_weight.get_write_ptr();
-                    for (std::uint32_t i = 0; i < tiles_in_block; i++) {
+                    uint32_t weight_wr_ptr = cb_weight.get_write_ptr();
+                    for (uint32_t i = 0; i < tiles_in_block; i++) {
                         // face_00 row 0 + face_01 row 0, as for the per-batch read above.
-                        const std::uint32_t w_page = col_tile + i;
+                        const uint32_t w_page = col_tile + i;
                         noc.async_read(
                             weight_accessor,
-                            CoreLocalMem<std::uint32_t>(weight_wr_ptr),
+                            CoreLocalMem<uint32_t>(weight_wr_ptr),
                             weight_face_row_bytes,
                             {.page_id = w_page},
                             {});
                         noc.async_read(
                             weight_accessor,
-                            CoreLocalMem<std::uint32_t>(weight_wr_ptr + weight_face_bytes),
+                            CoreLocalMem<uint32_t>(weight_wr_ptr + weight_face_bytes),
                             weight_face_row_bytes,
                             {.page_id = w_page, .offset_bytes = weight_face_bytes},
                             {});
@@ -521,23 +517,23 @@ void kernel_main() {
         }
         if constexpr (per_token_bias == 0 && per_batch_bias == 0) {
             if (!bias_pushed && should_issue_side_inputs) {
-                for (std::uint32_t col_tile = 0; col_tile < bias_bcast_tiles; col_tile += block_size) {
-                    const std::uint32_t tiles_in_block =
+                for (uint32_t col_tile = 0; col_tile < bias_bcast_tiles; col_tile += block_size) {
+                    const uint32_t tiles_in_block =
                         ((bias_bcast_tiles - col_tile) >= block_size) ? block_size : (bias_bcast_tiles - col_tile);
                     cb_bias.reserve_back(tiles_in_block);
-                    std::uint32_t bias_wr_ptr = cb_bias.get_write_ptr();
-                    for (std::uint32_t i = 0; i < tiles_in_block; i++) {
+                    uint32_t bias_wr_ptr = cb_bias.get_write_ptr();
+                    for (uint32_t i = 0; i < tiles_in_block; i++) {
                         // face_00 row 0 + face_01 row 0, as for the per-batch read above.
-                        const std::uint32_t b_page = col_tile + i;
+                        const uint32_t b_page = col_tile + i;
                         noc.async_read(
                             bias_accessor,
-                            CoreLocalMem<std::uint32_t>(bias_wr_ptr),
+                            CoreLocalMem<uint32_t>(bias_wr_ptr),
                             bias_face_row_bytes,
                             {.page_id = b_page},
                             {});
                         noc.async_read(
                             bias_accessor,
-                            CoreLocalMem<std::uint32_t>(bias_wr_ptr + bias_face_bytes),
+                            CoreLocalMem<uint32_t>(bias_wr_ptr + bias_face_bytes),
                             bias_face_row_bytes,
                             {.page_id = b_page, .offset_bytes = bias_face_bytes},
                             {});
@@ -559,17 +555,17 @@ void kernel_main() {
         // overlaps the AG wait + POST. Still pushed per row so POST can start as
         // each row lands.
         if constexpr (fuse_rope) {
-            const std::uint32_t pos_in_chunk = (tile_row - tile_row_start) % chunk_size_rows;
+            const uint32_t pos_in_chunk = (tile_row - tile_row_start) % chunk_size_rows;
             const bool chunk_input_done = (pos_in_chunk + 1 == chunk_size_rows) || (tile_row + 1 == tile_row_end);
             if (chunk_input_done) {
-                const std::uint32_t chunk_first = tile_row - pos_in_chunk;
-                for (std::uint32_t r = chunk_first; r <= tile_row; r++) {
+                const uint32_t chunk_first = tile_row - pos_in_chunk;
+                for (uint32_t r = chunk_first; r <= tile_row; r++) {
                     // Batched RoPE: fold the global row r into (batch b, within-batch seq row
                     // r_seq) so each input batch reuses cos/sin at seq row r_seq. b selects the
                     // per-batch cos/sin block via rope_batch_stride_tiles (0 => broadcast, all
                     // batches share block 0). At batch=1: r_seq==r, rope_batch_off==0 (unchanged).
-                    const std::uint32_t r_seq = (rope_seqlen_tiles != 0) ? (r % rope_seqlen_tiles) : r;
-                    const std::uint32_t rope_batch_off =
+                    const uint32_t r_seq = (rope_seqlen_tiles != 0) ? (r % rope_seqlen_tiles) : r;
+                    const uint32_t rope_batch_off =
                         (rope_seqlen_tiles != 0) ? ((r / rope_seqlen_tiles) * rope_batch_stride_tiles) : 0u;
                     // Per-head RoPE: cos/sin shape [B, num_heads, N, head_dim] — all
                     // heads' head_dim_tiles tiles for row r_seq, idx (+ per-batch offset)
@@ -586,21 +582,21 @@ void kernel_main() {
                     // many chunks (the selfattn_qk_s2 traced hang: ~2300 reads issued
                     // but unreturned). Compute's cumulative wait_front absorbs the
                     // block-wise pushes (same pattern as the input read above).
-                    const std::uint32_t rope_tiles_this_row = (per_head_rope != 0) ? num_tile_cols : head_dim_tiles;
-                    for (std::uint32_t t0 = 0; t0 < rope_tiles_this_row; t0 += block_size) {
-                        const std::uint32_t grp =
+                    const uint32_t rope_tiles_this_row = (per_head_rope != 0) ? num_tile_cols : head_dim_tiles;
+                    for (uint32_t t0 = 0; t0 < rope_tiles_this_row; t0 += block_size) {
+                        const uint32_t grp =
                             ((rope_tiles_this_row - t0) >= block_size) ? block_size : (rope_tiles_this_row - t0);
                         cb_rope_cos.reserve_back(grp);
                         cb_rope_sin.reserve_back(grp);
-                        std::uint32_t rope_cos_wr_ptr = cb_rope_cos.get_write_ptr();
-                        std::uint32_t rope_sin_wr_ptr = cb_rope_sin.get_write_ptr();
-                        for (std::uint32_t j = 0; j < grp; j++) {
-                            const std::uint32_t t = t0 + j;
-                            std::uint32_t src_idx;
+                        uint32_t rope_cos_wr_ptr = cb_rope_cos.get_write_ptr();
+                        uint32_t rope_sin_wr_ptr = cb_rope_sin.get_write_ptr();
+                        for (uint32_t j = 0; j < grp; j++) {
+                            const uint32_t t = t0 + j;
+                            uint32_t src_idx;
                             if constexpr (per_head_rope != 0) {
                                 // tile t -> head (t / head_dim_tiles), within-head (t % head_dim_tiles)
-                                const std::uint32_t h = t / head_dim_tiles;
-                                const std::uint32_t within = t - h * head_dim_tiles;
+                                const uint32_t h = t / head_dim_tiles;
+                                const uint32_t within = t - h * head_dim_tiles;
                                 src_idx = rope_batch_off + h * rope_seqlen_tiles * head_dim_tiles +
                                           r_seq * head_dim_tiles + within;
                             } else {
@@ -608,13 +604,13 @@ void kernel_main() {
                             }
                             noc.async_read(
                                 rope_cos_accessor,
-                                CoreLocalMem<std::uint32_t>(rope_cos_wr_ptr),
+                                CoreLocalMem<uint32_t>(rope_cos_wr_ptr),
                                 rope_cos_page_bytes,
                                 {.page_id = src_idx},
                                 {});
                             noc.async_read(
                                 rope_sin_accessor,
-                                CoreLocalMem<std::uint32_t>(rope_sin_wr_ptr),
+                                CoreLocalMem<uint32_t>(rope_sin_wr_ptr),
                                 rope_sin_page_bytes,
                                 {.page_id = src_idx},
                                 {});
