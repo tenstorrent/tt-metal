@@ -91,7 +91,21 @@ jobs:
               ".github/workflows/runtime-sanity-tests.yaml",
               ".github/workflows/runtime-unit-tests.yaml",
               ".github/workflows/runtime-integration-tests.yaml",
-              ".github/workflows/runtime-perf-tests.yaml"
+              ".github/workflows/runtime-perf-tests.yaml",
+
+              ".github/workflows/multi-host-physical.yaml",
+              ".github/workflows/multi-host-deepseekv3.yaml",
+              ".github/workflows/fabric-multihost-exabox.yaml",
+              ".github/workflows/upstream-tests.yaml",
+              ".github/workflows/sanity-tests-manylinux-nightly.yaml",
+              ".github/workflows/package-and-release.yaml",
+              ".github/workflows/demo-sp-release.yaml",
+              ".github/workflows/models-t1-sweep-tests.yaml",
+              ".github/workflows/agentic-research-model-tests.yaml",
+              ".github/workflows/blaze-models-prefill-tests.yaml",
+              ".github/workflows/llk-e2e.yaml",
+              ".github/workflows/llk-perf-gate.yaml",
+              ".github/workflows/ttnop-injector.yaml"
             ]
       - name: Upload workflow data
         uses: actions/upload-artifact@bbbca2ddaa5d8feaa63e36b76fdaad77386f024f # v7.0.0
