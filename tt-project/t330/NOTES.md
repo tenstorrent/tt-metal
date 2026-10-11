@@ -23,12 +23,18 @@ hand off waiting on its probe. Then: grep "[t330]", "-> rung", Total Pipeline, A
 out_t2va/run.log; ffmpeg stills (same frame times as #314 stills) + frame 0 as kf_t2va_f0.png;
 compare with tt-project/baselines/fasth3/still_t5.jpg.
 
-## Run 4 (2026-10-10 05:03 PDT / 12:03 UTC): blx03 still down, nothing submitted
-- tt-project/state/ready/g14blx03.READY exists but is stale: written 04:36 UTC, before the UBB1 outage (#364).
-- Live check 12:03 UTC: broker active, but the device is HELD (degraded) for 4h52m: "device is dirty and unverified:
-  gate/post-job: 8/32 chip". Before that: health-gate jobs 884/886/888/892 failed, bridge-reset chips 8-15 failed (885/887),
-  startup 890 "no chips exposed in sysfs". Runner on blx03 idle (queue empty), logging "wait: broker busy".
-- Not our drop: no project job was running. Nothing enqueued.
-- Probe for resume (exits 0 when no HELD job is running/started and the broker is active):
-  tt-project/t330/blx03_ok.sh
-- Next step on pass: tt-project/harness/templates/blx03-runner/blx03-enqueue.sh tt-project/t330/specs/t2va.txt
+## Run 5 (2026-10-10 22:45 PDT / 05:45 UTC): moved to blx01, t2va submitted
+- Tree blx01 /var/tmp/fasth3/t288/b @ ba23bc2e27 (staged by #388), env tt-project/t330/env330-blx01.yaml,
+  run330.sh identical to the blx01 copy. Lightx2v adapter header has no `hyperflow` marker, so the
+  test's 3-step warm pass (the #288 bug) does not apply here.
+- Specs blx01/{t2va,fl2va}.txt changed: -t 600, pytest kill 570 s, warm deadline 300 s (270 s before the
+  kill; the coordinator's "170 s" would trip the guard before keyframe layouts, which end ~200 s even
+  cached), late 420 s. Rungs: t2va only 38912 (seq 38765, cold, ~60 s by fill 4's cold rungs),
+  fl2va only 41984 (JIT-filled). Expected job ~400 s at the 900 MHz clamp.
+- t2va = blx01 broker job 642 (queued 05:45 UTC).
+- Chain tt-project/t330/chain330.sh (ttp detach chain330, run 1490): waits for 642, stills at 0/2.5/4.5 s
+  to tt-project/t330/stills/, frame 0 -> blx01 /var/tmp/fasth3/t330/kf_t2va_f0.png, submits fl2va
+  (retries while another smarton job holds blx01), waits, stills. Log tt-project/t330/chain.log, last line
+  T330_CHAIN_DONE <rc>.
+- Next: read chain.log + run_*.log; compare stills with tt-project/worktrees/t286/tt-project/baselines/fasth3/still_t5.jpg
+  (commit 0b22be8499c); verdict; delete blx01 out_* mp4s after copying a small one back.

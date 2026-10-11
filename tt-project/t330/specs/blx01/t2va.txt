@@ -1,0 +1,8 @@
+ID=t330-t2va-5s
+TASK=t330
+WORKDIR=/var/tmp/fasth3/t330
+ENV=/var/tmp/fasth3/t330/env330.yaml
+CONFIG=h3turbo-5s-t2va
+TIMEOUT=600
+CMD=env T286_WARM_DEADLINE_S=300 T286_RUNGS=38912 T286_WARM_LATE_S=420 T330_PY_TIMEOUT=570 T286_SKIP_VAE_WARM=1 bash /var/tmp/fasth3/t330/run330.sh t2va 5 t2va
+NEEDS=/var/tmp/fasth3/models/MiniMax-H3/READ_OK,/var/tmp/fasth3/models/lightx2v-h3-turbo/minimax_h3_fl2v_turbo_4step_v1.2_768p_bf16.safetensors,/var/tmp/fasth3/t288/b/ttnn/ttnn/_ttnn.so,/var/tmp/fasth3/t286/t286_skipvaewarm.py
