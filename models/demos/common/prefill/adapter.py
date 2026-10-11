@@ -86,6 +86,9 @@ class PrefillRunParams:
     # rather than re-read from the env downstream so one resolution decides which drafter gets built.
     dflash_checkpoint_path: str = ""
     mtp_levels: int = 0
+    # Chunks per H2D message (PREFILL_BATCH_MAX_LANES). 1 (default) is one chunk of one request per step; more
+    # needs an adapter with supports_batched_steps, whose runtime implements prefill_step. See step_message.py.
+    max_lanes: int = 1
 
     @property
     def sp_factor(self) -> int:
@@ -141,6 +144,8 @@ class PrefillModelAdapter(ABC):
     dflash_model_default: str = ""
     dflash_golden_default: str = ""
     supports_mtp: bool = False
+    # Whether the runtime serves multi-lane step messages (prefill_step; see step_message.py).
+    supports_batched_steps: bool = False
 
     def pipeline_activation_planes(self, boundary_layer_idx: int) -> int:
         """Planes on dim 1 of the D2D payload at a rank boundary placed before `boundary_layer_idx`.
