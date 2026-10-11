@@ -874,8 +874,7 @@ class PERF_RUN_TYPE(TemplateParameter):
 
 @dataclass
 class PACK_UNTILIZE_INIT(TemplateParameter):
-    """Where the pack untilize init runs: "once" before the loop, or per block as "standard" (pack_untilize_dest_init)
-    or "custom" (custom_pack_untilize_dest_init)."""
+    """Where the pack untilize init runs: once, or per block as the standard or the custom init."""
 
     pack_untilize_init: str = "once"
 

@@ -1,8 +1,7 @@
 // SPDX-FileCopyrightText: © 2026 Tenstorrent AI ULC
 // SPDX-License-Identifier: Apache-2.0
 
-// Perf kernel of the Blackhole pack untilize init forms: per block a one-tile matmul into DEST, packed with the pack
-// untilize; PACK_UNTILIZE_INIT 0 inits once, 1 re-runs pack_untilize_dest_init per block, 2 custom_pack_untilize_dest_init.
+// Perf kernel of the Blackhole pack untilize init forms; PACK_UNTILIZE_INIT 0 inits once, 1 per block, 2 per block custom.
 
 #include <cstdint>
 
