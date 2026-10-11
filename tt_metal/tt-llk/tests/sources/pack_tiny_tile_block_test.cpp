@@ -3,8 +3,7 @@
 // SPDX-License-Identifier: Apache-2.0
 
 // Test: Pack tiny tiles from sparse DEST (Tile32x32 slots) to dense L1
-// using _llk_pack_block_contiguous_ with a single _llk_pack_ call
-// (tiny_pack_mode 0), _llk_pack_block_closed_ (1) or _llk_pack_ per tile (2).
+// using _llk_pack_block_contiguous_ (tiny_pack_mode 0), _llk_pack_block_closed_ (1) or _llk_pack_ per tile (2).
 //
 // Math uses standard datacopy (Tile32x32 DEST addressing — sparse).
 // Pack uses the new block-contiguous MOP that reads from sparse DEST
@@ -164,8 +163,6 @@ void run_kernel(RUNTIME_PARAMETERS params)
 #ifdef ARCH_BLACKHOLE
         if constexpr (tiny_pack_mode == 0)
         {
-            // Single call packs all tiles from sparse DEST to dense L1.
-            // num_tiles is passed at runtime; no prior mop_cfg patching needed.
             _llk_pack_block_contiguous_<DstSync::SyncHalf, is_fp32_dest_acc_en>(
                 0, L1_ADDRESS(params.buffer_Res[block * num_tiles_in_block]), num_tiles_in_block);
         }

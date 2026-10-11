@@ -201,7 +201,6 @@ inline void reblock_and_untilize(
 }
 
 #ifdef ARCH_BLACKHOLE
-// Main's pack_block: the subblocks the gate below leaves out build main's pack thread byte for byte.
 template <bool is_fp32_dest_acc_en = DST_ACCUM_MODE>
 ALWI void pack_block_per_tile(std::uint32_t ifrom_dst, std::uint32_t icb, std::uint32_t ntiles) {
     LLK_SAN_FUNCTION();
@@ -257,8 +256,7 @@ void kernel_main() {
 
     constexpr uint32_t untilize_mode_out_cb_id = untilize_out ? matmul_partials_cb : out_cb_id;
 #ifdef ARCH_BLACKHOLE
-    // The block run is kept only at the models' shapes where it measured faster, none with relu: block-sharded 2 x 4
-    // with L1 accumulate, a 2 x 2 downsampler, height-sharded 4 x 1 and multi-subblock 1 x 4 over 12+, two conv_ins.
+    // Block pack only where it helps; relu keeps the per-tile pack.
     constexpr bool block_pack_subblocks =
         !pack_relu && ((!height_sharded && packer_l1_acc && out_subblock_h == 2 && out_subblock_w == 4) ||
                        (!height_sharded && !packer_l1_acc && out_subblock_h == 2 && out_subblock_w == 2 &&

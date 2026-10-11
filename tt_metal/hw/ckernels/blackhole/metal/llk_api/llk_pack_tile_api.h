@@ -159,7 +159,7 @@ inline void llk_matmul_pack(
     }
 }
 
-// True when one pack program run writes the tiles back to back: plain format, full 32x32 tiles, one tile per CB page.
+// What one pack run can write back to back: plain format, full 32x32 tiles, one tile per CB page.
 inline bool llk_pack_block_is_contiguous(const std::uint32_t output_id) {
     const std::uint32_t dst_format = pack_dst_format[output_id];
     if (IS_BFP_FORMAT(dst_format)) {
@@ -173,13 +173,11 @@ inline bool llk_pack_block_is_contiguous(const std::uint32_t output_id) {
     return get_local_cb_interface(output_id).fifo_page_size == tile_words;
 }
 
-// True when the CB page fits the packer's W stride, so a block may run the per-tile program once per tile.
+// The CB page must fit the packer's W stride.
 inline bool llk_pack_block_is_closable(const std::uint32_t output_id) {
     return get_local_cb_interface(output_id).fifo_page_size < 0x1000;
 }
 
-// Same arguments, CB contract and default pack program as llk_matmul_pack with PackMode::Default; blocks that one run
-// cannot write back to back (block-float, padded pages, tiny tiles) close every tile instead.
 template <bool is_fp32_dest_acc_en>
 inline void llk_pack_block(std::uint32_t start_tile_index, std::uint32_t output, std::uint32_t ntiles) {
     std::uint8_t output_id = get_output_id(output);

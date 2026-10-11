@@ -129,7 +129,7 @@ inline void _llk_pack_rows_init_(const std::uint32_t num_rows)
     // Reset Z/W counters
     TTI_SETADCZW(p_setadc::PAC, 0, 0, 0, 0, 0b1111);
 
-    // The per-call address write leaves byte 3 of the destination register as it is: bit 31, as every full write sets it.
+    // The per-call address write leaves byte 3 as it is, so bit 31 stays set from here.
     TTI_RMWCIB3(0xff, 0x80, THCON_SEC0_REG1_L1_Dest_addr_ADDR32);
 }
 
@@ -139,7 +139,7 @@ inline void _llk_pack_rows_init_(const std::uint32_t num_rows)
  * This function performs the actual row packing operation:
  * 1. Sets the W counter to the tile_index to select which dest tile to read from
  * 2. Programs the packer destination address in L1 where data will be written
- * 3. Executes the MOP template (its address modifiers never move Z, so no counter reset follows)
+ * 3. Executes the MOP template
  *
  * @param tile_index: Index of the tile in the destination register to read from.
  * @param address: L1 memory address where the packed rows will be written.

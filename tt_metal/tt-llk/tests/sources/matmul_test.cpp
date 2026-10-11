@@ -224,7 +224,7 @@ void run_kernel(RUNTIME_PARAMETERS params)
     const Operand& buffer_Res          = params.buffer_Res;
 #endif
 #if defined(ARCH_BLACKHOLE)
-    // Block-float tiles are not written back to back by one pack run; they and one-tile blocks keep the per-tile pack.
+    // Block-float and one-tile blocks keep the per-tile pack.
     const bool block_pack = (CT_DIM * RT_DIM > 1) && !IS_BFP_FORMAT(formats.pack_dst);
 #endif
 

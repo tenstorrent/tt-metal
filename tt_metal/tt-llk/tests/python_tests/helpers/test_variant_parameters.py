@@ -822,7 +822,7 @@ class TILIZE(TemplateParameter):
 
 @dataclass
 class PACK_BLOCK(TemplateParameter):
-    """Pack every dest block with one _llk_pack_block_ run instead of one _llk_pack_ per tile (Blackhole)."""
+    """Pack every dest block with one _llk_pack_block_ run (Blackhole)."""
 
     pack_block: bool = False
 
@@ -832,7 +832,7 @@ class PACK_BLOCK(TemplateParameter):
 
 @dataclass
 class TINY_PACK_MODE(TemplateParameter):
-    """Pack of a block of tiny tiles (Blackhole): 0 one block-contiguous run, 1 one closed run per tile, 2 one _llk_pack_ per tile."""
+    """Tiny-tile block pack (Blackhole): 0 block-contiguous run, 1 closed run per tile, 2 _llk_pack_ per tile."""
 
     tiny_pack_mode: int = 0
 

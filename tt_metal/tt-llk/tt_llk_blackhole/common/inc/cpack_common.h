@@ -682,8 +682,7 @@ inline void select_packer_dest_registers()
 }
 
 // Program packer destination addresses from GPRs
-// keep_output_addr: leave OUTPUT_ADDR holding the plain address, which fast tilize advances from; without it the address is
-// written with byte writes and OUTPUT_ADDR is not touched.
+// keep_output_addr: leave OUTPUT_ADDR holding the plain address, which fast tilize advances from.
 template <bool keep_output_addr = true>
 inline void program_packer_destination(std::uint32_t addr)
 {
@@ -695,8 +694,8 @@ inline void program_packer_destination(std::uint32_t addr)
     // only the GPR-producer fence: it ensures the SETDMAREG write to OUTPUT_ADDR retires before WRCFG reads it.
     if constexpr (!keep_output_addr)
     {
-        // Single-cycle byte writes from immediates: no GPR, fence or NOP. Byte 3 (bit 31) is the row pack init's; any other
-        // pack program between two row packs replaces the row pack's MOP, so the init runs again before the next one.
+        // Byte 3 (bit 31) is the row pack init's; another pack program between two row packs replaces the row pack's MOP,
+        // so the init runs again before the next one.
         TT_RMWCIB0(0xff, addr & 0xff, THCON_SEC0_REG1_L1_Dest_addr_ADDR32);
         TT_RMWCIB1(0xff, (addr >> 8) & 0xff, THCON_SEC0_REG1_L1_Dest_addr_ADDR32);
         TT_RMWCIB2(0xff, (addr >> 16) & 0xff, THCON_SEC0_REG1_L1_Dest_addr_ADDR32);

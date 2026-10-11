@@ -205,7 +205,7 @@ void run_kernel(RUNTIME_PARAMETERS params)
     const Operand& buffer_Res              = params.buffer_Res;
 #endif
 #if defined(ARCH_BLACKHOLE)
-    // Block-float blocks close every tile (_llk_pack_block_closed_); one-tile blocks keep the per-tile pack.
+    // Block-float and one-tile blocks keep the per-tile pack.
     [[maybe_unused]] const bool block_pack  = pack_block_en && NUM_TILES_IN_BLOCK > 1 && !IS_BFP_FORMAT(formats.pack_dst);
     [[maybe_unused]] const bool closed_pack = pack_block_en && NUM_TILES_IN_BLOCK > 1 && IS_BFP_FORMAT(formats.pack_dst);
 #endif

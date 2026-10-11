@@ -606,8 +606,7 @@ inline void _llk_pack_(const std::uint32_t tile_index, const std::uint32_t addre
 }
 
 /**
- * @brief Pack num_tiles consecutive 32x32 tiles from the destination register to consecutive L1 tiles with one run of the packer
- *        program: the PackMode::Default program of @ref _llk_pack_init_ with its outer loop lengthened to num_faces * num_tiles for this run.
+ * @brief Pack num_tiles consecutive 32x32 tiles to consecutive L1 tiles with one run of the PackMode::Default program.
  *
  * @tparam Dst: Destination sync mode, values = <SyncHalf/SyncFull>
  * @tparam is_fp32_dest_acc_en: True if the destination register accumulates in FP32.
@@ -615,8 +614,7 @@ inline void _llk_pack_(const std::uint32_t tile_index, const std::uint32_t addre
  * @param start_tile_index: Index of the first source tile in the destination register.
  * @param address: L1 destination address of the first tile.
  * @param num_tiles: Number of consecutive tiles to pack; start_tile_index + num_tiles must fit the dest sync region.
- * @note Requires the program of @ref _llk_pack_init_<PackMode::Default> for four-face tiles of FACE_R_DIM rows; BFP outputs must use
- *       @ref _llk_pack_block_closed_ or @ref _llk_pack_ per tile.
+ * @note Block-float outputs must use _llk_pack_block_closed_ or _llk_pack_ per tile.
  */
 template <DstSync Dst, bool is_fp32_dest_acc_en, PackMode pack_mode = PackMode::Default>
 inline void _llk_pack_block_(const std::uint32_t start_tile_index, const std::uint32_t address, const std::uint32_t num_tiles)
@@ -632,18 +630,15 @@ inline void _llk_pack_block_(const std::uint32_t start_tile_index, const std::ui
 
     program_packer_destination(address);
 
-    // Template 1 MOP: non-zero bits 19:10 override the programmed outer loop count for this run only, bits 9:0 left zero keep
-    // the programmed inner count (tt-isa-documentation TensixCoprocessor/MOPExpander.md, Blackhole template 1).
+    // Template 1 MOP: non-zero bits 19:10 override the programmed outer loop count for this run only.
     const std::uint32_t outer_loop_len = TILE_NUM_FACES * num_tiles;
     TT_MOP(1, outer_loop_len >> 6, (outer_loop_len & 0x3F) << 10);
 
-    TTI_SETADCZW(p_setadc::PAC, 0, 0, 0, 0, 0b0101); // reset z counters
+    TTI_SETADCZW(p_setadc::PAC, 0, 0, 0, 0, 0b0101);
 }
 
 /**
- * @brief Pack num_tiles consecutive tiles from the destination register to L1 tiles tile_stride bytes apart, one run of the
- *        per-tile packer program per tile with the L1 address programmed once. Every tile is closed, so a block-float tile keeps
- *        its exponent section and a page larger than the tile keeps its padding.
+ * @brief Pack num_tiles consecutive tiles to L1 tiles tile_stride bytes apart, closing every tile so block-float and padded pages stay intact.
  *
  * @tparam Dst: Destination sync mode, values = <SyncHalf/SyncFull>
  * @tparam is_fp32_dest_acc_en: True if the destination register accumulates in FP32.
@@ -652,7 +647,6 @@ inline void _llk_pack_block_(const std::uint32_t start_tile_index, const std::ui
  * @param num_tiles: Number of consecutive tiles to pack; start_tile_index + num_tiles must fit the dest sync region.
  * @param tile_stride: Bytes from one L1 tile to the next, a multiple of 16 below 64 KB.
  * @param num_faces: Faces per tile, values = <1, 2, 4>.
- * @note Requires the program of @ref _llk_pack_init_<PackMode::Default> for the output's tile shape.
  */
 template <DstSync Dst, bool is_fp32_dest_acc_en>
 inline void _llk_pack_block_closed_(
@@ -673,14 +667,14 @@ inline void _llk_pack_block_closed_(
 
     program_packer_destination(address);
 
-    // The output address adds the packer W counter of channel 1 times this stride; no other pack program moves that counter.
+    // The output address adds the packer W counter of channel 1 times this stride; no other pack program moves it.
     cfg_reg_rmw_tensix<PCK0_ADDR_CTRL_ZW_REG_1_Wstride_RMW>(tile_stride);
 
     for (std::uint32_t tile = 0; tile < num_tiles; tile++)
     {
         TT_MOP(1, 0, num_faces << 10);
-        TTI_INCADCZW(p_setadc::PAC, 1, 0, 1, 0); // next L1 tile (channel 1 W) and next dest tile (channel 0 W)
+        TTI_INCADCZW(p_setadc::PAC, 1, 0, 1, 0);
     }
 
-    TTI_SETADCZW(p_setadc::PAC, 0, 0, 0, 0, 0b1101); // reset the z counters and the channel 1 W counter
+    TTI_SETADCZW(p_setadc::PAC, 0, 0, 0, 0, 0b1101);
 }

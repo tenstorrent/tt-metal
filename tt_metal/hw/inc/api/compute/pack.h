@@ -118,7 +118,7 @@ ALWI void pack_tile(std::uint32_t ifrom_dst, std::uint32_t icb, std::uint32_t ou
  * API call.
  *
  * NOTE: On Blackhole the block is one packer program run where the layout allows, which needs the default pack
- * program installed (the tilize and untilize uninits restore it); Quasar packs the block in its LLK, Wormhole per tile.
+ * program installed (the tilize and untilize uninits restore it).
  *
  * Return value: None
  *

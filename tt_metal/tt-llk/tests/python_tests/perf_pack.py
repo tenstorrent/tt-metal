@@ -42,7 +42,6 @@ def test_perf_pack(
     )
 
 
-# Same columns as test_perf_pack, so the block rows land in the same perf_pack.csv.
 @pytest.mark.perf
 @skip_for_wormhole
 @parametrize(
