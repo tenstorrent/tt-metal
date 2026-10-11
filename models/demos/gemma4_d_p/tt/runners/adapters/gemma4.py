@@ -16,6 +16,9 @@ class Gemma4ServiceConfig:
     CHUNK_SIZE = int(os.environ.get("GEMMA4_TEST_CHUNK_SIZE", 8192))
     MAX_SEQ_LEN = 262144
     MAX_USER_SLOTS = 6
+    # Batched steps (PREFILL_BATCH_MAX_LANES > 1; manifest_batched.json): every lane is one 2048-token chunk.
+    BATCHED_CHUNK_SIZE = 2048
+    MAX_LANES = 4
 
 
 def is_global_layer_by_index(layer_idx):
@@ -30,7 +33,9 @@ def validate_params(params):
         "is_first_rank": True,
         "is_last_rank": True,
         "max_seq_len": Gemma4ServiceConfig.MAX_SEQ_LEN,
-        "chunk_size": Gemma4ServiceConfig.CHUNK_SIZE,
+        "chunk_size": Gemma4ServiceConfig.CHUNK_SIZE
+        if params.max_lanes == 1
+        else Gemma4ServiceConfig.BATCHED_CHUNK_SIZE,
         "sp_axis": 0,
         "tp_axis": 1,
         "use_trace": True,
@@ -39,6 +44,8 @@ def validate_params(params):
     for name, value in expected.items():
         if getattr(params, name) != value:
             raise ValueError(f"Gemma4 prefill requires {name}={value}, got {getattr(params, name)}")
+    if not 1 <= params.max_lanes <= Gemma4ServiceConfig.MAX_LANES:
+        raise ValueError(f"Gemma4 prefill serves 1 to {Gemma4ServiceConfig.MAX_LANES} lanes per step")
     if not 1 <= params.num_users <= Gemma4ServiceConfig.MAX_USER_SLOTS:
         raise ValueError(f"Gemma4 prefill requires 1 to {Gemma4ServiceConfig.MAX_USER_SLOTS} KV slots")
 
@@ -50,6 +57,7 @@ class Gemma4PrefillAdapter(PrefillModelAdapter):
     ttnn_cache_default = ""
     prefill_trace_default = "/mnt/models/huggingface/gpu_traces/gemma4_d_p/gutenberg-135"
     pipeline_activation_emb_tp_sharded = False
+    supports_batched_steps = True
 
     @property
     def hf_model_id(self):
@@ -105,8 +113,11 @@ class Gemma4PrefillAdapter(PrefillModelAdapter):
 
     def build_runtime(self, *, mesh_device, hf_config, params):
         validate_params(params)
-        from models.demos.gemma4_d_p.tt.runners.runtime import Gemma4PrefillRuntime
+        if params.max_lanes > 1:
+            from models.demos.gemma4_d_p.tt.runners.batched_runtime import Gemma4BatchedPrefillRuntime as runtime_class
+        else:
+            from models.demos.gemma4_d_p.tt.runners.runtime import Gemma4PrefillRuntime as runtime_class
 
-        return Gemma4PrefillRuntime(
+        return runtime_class(
             mesh_device=mesh_device, hf_model_id=self.hf_model_id, tt_cache_path=self.tt_cache_path, config=params
         )
