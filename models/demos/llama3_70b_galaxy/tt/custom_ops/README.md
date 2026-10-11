@@ -16,6 +16,10 @@ to a descriptor or a kernel needs no `_ttnn.so` rebuild. Conventions follow
         qwen_width_norm/         Qwen context-parallel local RMSNorm, width split with a partial-sum exchange
             __init__.py, op.py
             kernels/             wnorm_common.hpp, reader.cpp, compute.cpp, writer.cpp
+        qwen_cp_sdpa/            Qwen context-parallel causal SDPA, both ring slices of a column in one program
+            __init__.py, op.py
+            kernels/             cp_{reader,compute,writer}.cpp (the op), stock_{reader,compute,writer}.cpp
+                                 (verbatim copies of the stock SDPA kernels, used by chunked_sdpa_port)
 
 ## Conventions
 
@@ -236,3 +240,24 @@ Not bit-identical to the stock form (fp32 partials instead of bf16 stats; the mo
 cpb_sweep job211 S=40960: 0.580 -> 0.296 ms per norm, rel_l2 vs fp32 1.329e-2 -> 1.230e-2;
 `tests/test_qwen_width_norm_op.py` passes at S = 16k/24k/32k/40k for bf16 and bf8 inputs (closer to fp32 than the
 stock form at every bucket); b1 40k TTFT 2129.9 -> 2070.0 ms; 40k gate PASS (pcc40k 0.9993625 -> 0.9995179).
+
+## qwen_cp_sdpa
+
+Replaces the attention core of the context-parallel prefill (`tt/qwen_cp_prefill.py`): two stock
+`chunked_scaled_dot_product_attention` calls (one per owned ring slice, per-device chunk start), `ttnn.concat` and
+`nlp_concat_heads`. `qwen_cp_sdpa(q0, q1, k, v, page_table, *, scale, compute_kernel_config, program_config)` takes
+the two per-slice Q buffers of `qwen_q_prep(q_out1=...)`, the scratch K / V `[S/64, 1, 64, 128]` and the identity
+page table, and returns `[1, 1, S/4, H * 128]` in the column's local order.
+
+Program (one per mesh column): the work items are every (slice, head, q chunk) of both slices; each core runs an
+explicit list of them (runtime args), balanced over all 7x10 cores by K-chunk cost (LPT + seeded annealing,
+`schedule`). The reader / compute / writer are the stock streaming SDPA kernels reduced to the path the prefill runs
+(causal, paged K / V, lightweight mask); the compute is `sdpa_standard_v2` with only the Q loop changed, so each Q
+chunk is computed exactly as its stock call computes it (same K-chunk order and inner step). The writer stores each
+chunk at its local row in the concat-heads layout.
+
+Checks (`tests/test_qwen_cp_sdpa_op.py`): `chunked_sdpa_port` (the stock factory in Python, stock or local kernel
+files) `torch.equal` to the stock call; `qwen_cp_sdpa` `torch.equal` to the pair + `nlp_concat_heads` on all 32
+devices at S = 16384 / 32768 / 40960. 40k pipelined: 13.364 -> 12.476 ms per layer. The gain is bounded by the
+q320 item granularity (busiest core 120-123 K iterations vs 130 for the pair); smaller q chunks change bits.
+`QWEN_CP_LOCAL_SDPA=0` runs the stock pair.
