@@ -25,14 +25,14 @@ kernel time (`scripts/run_safe_pytest.sh --profile`, `K3_PERF_ITERS=1`), median 
 
 | | bf16 wire | fp8 1×32 now | Δ |
 |---|---|---|---|
-| **T_moe (traced)** | **4.93 ms** | **4.68 ms** (split shared expert, combine output in L1) | **−0.25 ms** |
+| **T_moe (traced)** | **4.79 ms** (4.93 before the shared combine/PCR fixes) | **4.62 ms** | **−0.17 ms** |
 | dispatch | 582 µs | 325 µs (one packet per token-expert) | −257 |
-| combine | 417 µs | 375 µs | −42 |
-| post_combine_reduce (DQ2 fused) | 196 µs | 101 µs (source in L1) | −95 |
+| combine | 336 µs (was 417) | 251 µs (was 381) | −85 |
+| post_combine_reduce (DQ2 fused) | 134 µs (was 196) | 101 µs (source in L1) | −33 |
 | routed expert | 2551 µs | 2545 µs | −6 (bf8_b tiles in) |
 | latent all-gather | 87 µs (bf16) | 67 µs (fp8, high_bw_all_gather) | −20 |
 | Q1 / Q2 / DQ1 (standalone) | — | 12 / 69 / 73 µs | +154 |
-| final_output PCC | 0.99424 | 0.99424 | 0 |
+| final_output PCC | 0.99424 | 0.99404 | −0.0002 |
 
 The wire now saves ~200 µs and the three standalone passes cost ~154 µs.
 
@@ -40,7 +40,7 @@ The wire now saves ~200 µs and the three standalone passes cost ~154 µs.
 
 | Goal | Target | Status |
 |---|---|---|
-| **G1 (headline)** fp8 traced T_moe beats bf16 at Galaxy load | ≤ 4.80 ms, final_output PCC ≥ 0.994 | met: 4.683 ms p50 (min 4.672), PCC 0.99424; bf16 4.93 ms |
+| **G1 (headline)** fp8 traced T_moe beats bf16 at Galaxy load | ≤ 4.80 ms, final_output PCC ≥ 0.994 | met: 4.620 ms p50 (min 4.604), PCC 0.994043; bf16 4.788 ms with the same combine/PCR fixes |
 | **G2** Q2 | standalone Q2 ≤ 60 µs (the expert epilogue measured +~300 µs, parked) | met with packed rows in L1 (48.8 µs); the default now spends that L1 on combine's output instead (Q2 69 µs, PCR −31 µs) |
 | **G3** Q1 before the latent all-gather | Q1 on each chip's slice; fp8 gather | done: Q1 27 → 14 µs, gather 87 → 67 µs |
 | **G4** DQ1 | ≤ 90 µs; full fusion only with a shared-tilize expert | met: 73 µs (multicast valid rows, fast scale staging); 49 µs with an L1 output, which overlaps the expert's CBs by ~9 KB |
@@ -95,6 +95,14 @@ fp8 dispatch wire (`MOE_SPLIT_SHARED=1/0` forces it).
   fits costs +42 µs.
 - G1 margin: traced p50 4.683 ms, ~120 µs under the target.
 - G6 (Galaxy run): needs the 8×4 hardware.
+
+**Combine (2026-10-11, revised): imbalance and per-row cost, not link bandwidth.** On the LB the remote rows are
+~5 MB per chip over 2 links, ~52 µs at 50 GB/s, against 381 µs measured. Per-core zones showed (1) untilizer
+batches of 32 rows dealt round-robin left 5 of 8 untilizers idle and put ~2/3 of the rows on one sender (fixed with
+4-row ROW_MAJOR batches: 381 → 290 µs), and (2) each row left the sender with a flush-blocking header, 0.35 µs per
+row with only 0.04 µs of link-slot wait (fixed with 4 rows in flight, non-blocking into the EDM slot: → 251 µs; the
+bf16 TILE path 417 → 336 µs). The old "near link bandwidth" note and the batched-flush attempt below predate this.
+Combine on the Galaxy should be checked the same way (per-core spans, sender vs untilizer end times).
 
 **Combine (2026-10-11): no packet lever found.** Combine already sends one packet per row. A deeper reader→writer
 CB (2 → 8 rows) changed nothing (369 vs 365 µs); batching the per-packet flush over 4 rows with rotating headers

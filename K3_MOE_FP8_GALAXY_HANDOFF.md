@@ -6,6 +6,7 @@ Everything so far ran on a 2×4 Blackhole LoudBox at Galaxy-equivalent per-chip 
 
 - Branch: `pjosipovic/k3-moe-fp8-wire` (based on `main`). The plan and full history: `K3_MOE_FP8_WIRE_PLAN.md`.
 - Recent commits worth knowing (newest first):
+  - `e7e3c59a71f` combine: 4-row ROW_MAJOR batches over all untilizers, pipelined fabric sender (381 → 251 µs)
   - `8f827ae14d2` combine output to L1; fast DQ2 scale staging in post_combine_reduce
   - `2075be95433` DQ1 (`per_token_cast_back` tile output): multicast valid rows, fast scale staging
   - `c536d6b205b` Q2 output may go to L1 (`MOE_Q2_L1`)
@@ -27,11 +28,13 @@ Tokens cross the fabric as packed rows `[H e4m3 | H/32 fp32 power-of-two scales]
 
 | | bf16 wire | fp8 wire |
 |---|---|---|
-| traced T_moe p50 | 4.93 ms | **4.683 ms** (min 4.672) |
-| dispatch / combine | 582 / 417 µs | 325 / 375 µs |
-| post_combine_reduce | 196 µs | 101 µs |
+| traced T_moe p50 | 4.788 ms | **4.620 ms** (min 4.604) |
+| dispatch / combine | 582 / 336 µs | 325 / 251 µs |
+| post_combine_reduce | 134 µs | 101 µs |
 | Q1 / DQ1 / Q2 | — | 12 / 73 / 69 µs |
-| final_output PCC | 0.99424 | 0.994239 |
+| final_output PCC | 0.994239 | 0.994043 |
+
+(bf16 numbers include the combine/PCR changes that help both wires; before them bf16 was 4.93 ms.)
 
 Expected on the Galaxy: dispatch/combine span more hops (sp = 8, up to 4 hops on axis 0), so the wire saving should
 be larger than on the LB; the Q/DQ costs are per-chip and should be about the same. Treat LB gains as a lower bound.
@@ -71,7 +74,7 @@ Feature flags (defaults are the shipped configuration; flip one only to bisect):
    MOE_DISPATCH_WIRE=fp8 MOE_COMBINE_WIRE=fp8 MOE_FP8_SCALE_BLOCK=32 scripts/run_safe_pytest.sh \
      "models/demos/deepseek_v3_d_p/tests/pcc/test_ttnn_moe.py::test_kimi_k3_moe" -k "torus-xy-8x4 and pcc"
    ```
-   Pass criteria: `final_output` PCC ≥ 0.994 (LB: 0.994239), `routed_output` ≥ 0.96. Run the same without the
+   Pass criteria: `final_output` PCC ≥ 0.994 (LB fp8: 0.994043, bf16: 0.994239), `routed_output` ≥ 0.96. Run the same without the
    three env vars for the bf16 reference numbers.
 2. **Traced perf, fp8 vs bf16.** The scratch LB perf test takes the mesh from the environment:
    ```bash
@@ -91,6 +94,9 @@ Feature flags (defaults are the shipped configuration; flip one only to bisect):
    (see the plan's CI-gate row: expected 6.21 ms ± 3% for the bf16 baseline; set the expected value to `None` for a
    report-only recalibration). Run it with and without the fp8 env vars.
 
+**PCC must be run with the three wire env vars set**; without them the run is bf16 (an LB helper script missed this
+once and reported the bf16 PCC as fp8).
+
 ## Risks and what to do
 
 - **L1 fit.** Two L1-interleaved buffers were placed against per-core budgets measured on the LB. If a run fails
@@ -107,6 +113,12 @@ Feature flags (defaults are the shipped configuration; flip one only to bisect):
 - PCC for fp8 and bf16 (`final_output`, `routed_output`).
 - Traced T_moe p50/min for fp8 and bf16, and the per-op medians above.
 - Any L1 clash or flag that had to change.
+
+## Combine on the Galaxy
+
+Combine was found to be imbalance- and per-row-bound on the LB, not link-bound (see the plan's Combine note). If the
+Galaxy fp8 combine win is still small, profile per-core spans of `CombineDeviceOperation`: senders are the first core
+of each group on the dispatch row; compare sender writer end vs reader end vs untilizer ends.
 
 ## Open follow-ups (not needed for G6)
 
