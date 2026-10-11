@@ -121,9 +121,14 @@ class VisionTransformer(LightweightModule):
         x,
         unpadded_seq_len,
         rot_mats,
+        trim_before_merger=True,
     ):
         """
         Forward pass through the Vision Transformer blocks.
+
+        trim_before_merger=False keeps the merger on the full PADDED length (rows are independent, so the valid
+        rows are unchanged) so every device op depends only on the padded sequence bucket, never on the exact
+        request size; the caller trims the valid rows on host.
 
         Args:
             x (ttnn.Tensor): Input tensor [batch_size, 1, seq_len, hidden_dim].
@@ -146,7 +151,8 @@ class VisionTransformer(LightweightModule):
         # directly (its first op is a DistributedLayerNorm that all-gathers
         # internally) and produces a fractured-along-dim=3 output. No
         # pre-merger all-gather is needed.
-        x = x[:, :, :unpadded_seq_len, :]
+        if trim_before_merger:
+            x = x[:, :, :unpadded_seq_len, :]
         x = self.patch_merger(x)
         return x
 
@@ -202,7 +208,7 @@ class DropInVisionTransformer(torch.nn.Module):
     def spatial_merge_size(self):
         return self.model_args.hf_config.vision_config.spatial_merge_size
 
-    def forward(self, pixel_values: torch.Tensor, grid_thw: torch.Tensor) -> torch.Tensor:
+    def forward(self, pixel_values: torch.Tensor, grid_thw: torch.Tensor, host_trim: bool = False):
         """
         Forward pass mimicking the Qwen3_5_VisionTransformerPretrainedModel interface.
 
@@ -212,8 +218,14 @@ class DropInVisionTransformer(torch.nn.Module):
             grid_thw (torch.Tensor): Tensor describing the grid dimensions (time, height, width) for each image/video.
                                      Shape [num_images_or_videos, 3].
 
+        host_trim: shape-stable mode for serving. The tower + merger run on the padded bucket only (no device op
+            depends on the exact patch count, so nothing new is compiled for a new image size after the prefill
+            traces were captured -- a program first dispatched after capture can be clobbered by a later trace replay
+            and hang the next vision call), the valid merged rows are trimmed on HOST and uploaded as one 2D
+            [num_merged_tokens, out_hidden] bf16 TILE tensor, hidden-sharded across the mesh.
+
         Returns:
-            torch.Tensor: Output tensor with shape [1, B, seq_len, out_hidden_size].
+            torch.Tensor: Output tensor with shape [1, B, seq_len, out_hidden_size] (host_trim: [n_tokens, hidden]).
         """
         # process pixel_values for each image/video separately
         all_pixel_values = pixel_values
@@ -283,6 +295,7 @@ class DropInVisionTransformer(torch.nn.Module):
                 tt_input,
                 unpadded_seq_len=unpadded_seq_len,
                 rot_mats=rot_mats,  # Use rot_mats generated in this forward pass
+                trim_before_merger=not host_trim,
             )
 
             # deallocate device tensors that are not needed by decode
@@ -291,6 +304,16 @@ class DropInVisionTransformer(torch.nn.Module):
             ttnn.deallocate(sin)
             ttnn.deallocate(rot_mats[0])
             ttnn.deallocate(rot_mats[1])
+
+            if host_trim:
+                out_hidden_full = self.model_args.hf_config.vision_config.out_hidden_size
+                merge_sq = self.model_args.hf_config.vision_config.spatial_merge_size**2
+                n_valid = unpadded_seq_len // merge_sq
+                mesh = self.model_args.mesh_device
+                host = ttnn.to_torch(tt_out, mesh_composer=ttnn.ConcatMeshToTensor(mesh, dim=3))
+                ttnn.deallocate(tt_out)
+                final_outputs.append(host.reshape(-1, host.shape[-1])[:n_valid, :out_hidden_full].to(torch.bfloat16))
+                continue
 
             # --- Postprocessing ---
             # 1. Extract the relevant output part and adjust shape (matching test logic).
@@ -318,6 +341,18 @@ class DropInVisionTransformer(torch.nn.Module):
 
             # 3. Aggregate in batched users list
             final_outputs.append(tt_out)
+
+        if host_trim:
+            rows = torch.cat(final_outputs, dim=0)
+            mesh = self.model_args.mesh_device
+            return ttnn.from_torch(
+                rows,
+                dtype=ttnn.bfloat16,
+                layout=ttnn.TILE_LAYOUT,
+                device=mesh,
+                memory_config=ttnn.DRAM_MEMORY_CONFIG,
+                mesh_mapper=ttnn.ShardTensorToMesh(mesh, dim=1),
+            )
 
         # concatenate all the outputs. With a single image, ttnn.concat aliases
         # its lone input, so deallocating the sources would free the return.

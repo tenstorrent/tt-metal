@@ -304,6 +304,9 @@ class Qwen36Model:
         self._gdn_prefill_scratch = None
         # GDN prefix-state cache (APC, see prefix_cache.py); built by the vLLM wrapper before warmup. None = off.
         self._prefix_cache = None
+        # Per-decode-slot M-RoPE delta (batched serving, max_batch_size > 1): decode rope row = kv_pos + delta[slot].
+        # Set at each user's prefill (0 for text), moved with the GDN state on a slot_remap. B=1 keeps rope.rope_delta.
+        self._slot_rope_delta = torch.zeros(max(int(args.max_batch_size), 1), dtype=torch.int64)
         # True while the short-trace init buffers (dn._prefill_init_*) hold a carried state instead of zeros.
         self._prefill_init_dirty = False
 
@@ -394,13 +397,14 @@ class Qwen36Model:
         # Clear any stale video grid so the modality (and thus the placeholder token id) is image.
         self._req_image_grid_thw = image_grid_thw
         self._req_video_grid_thw = None
-        image_features = self.vision_model.forward(pixel_values, grid_thw=image_grid_thw)
+        image_features = self.vision_model.forward(pixel_values, grid_thw=image_grid_thw, host_trim=True)
         # The vision tower returns [1, B, S, H]; flatten the leading (batch/seq) dims to the
         # packed [num_image_tokens, H] rows the text-model splice (_scatter_vision_tokens /
         # _set_vision_merge) expects. The hidden dim is unchanged so the mesh hidden-fracture
         # is preserved. B == 1 for now.
-        hidden = image_features.shape[-1]
-        return ttnn.reshape(image_features, (-1, hidden))
+        # host_trim=True already returns the packed 2D [num_image_tokens, H] tensor (shape-stable: no device op
+        # depends on the exact request size).
+        return image_features
 
     def get_video_features(self, pixel_values_videos, video_grid_thw):
         """Run the vision tower over a single user's video frames.
@@ -416,9 +420,8 @@ class Qwen36Model:
         # placeholder token id) is video.
         self._req_video_grid_thw = video_grid_thw
         self._req_image_grid_thw = None
-        video_features = self.vision_model.forward(pixel_values_videos, grid_thw=video_grid_thw)
-        hidden = video_features.shape[-1]
-        return ttnn.reshape(video_features, (-1, hidden))
+        video_features = self.vision_model.forward(pixel_values_videos, grid_thw=video_grid_thw, host_trim=True)
+        return video_features  # packed 2D [num_video_tokens, H] (see get_image_features)
 
     def _vision_placeholder_token_id(self):
         """The input-id the current request's vision embeddings splice into: ``video_token_id`` for
@@ -3808,7 +3811,9 @@ class Qwen36Model:
             for hl in host_logits
         ]
 
-    def prefill_paged_slots(self, token_ids_list, page_table, empty_slots, valid_lens=None, start_positions=None):
+    def prefill_paged_slots(
+        self, token_ids_list, page_table, empty_slots, valid_lens=None, start_positions=None, vision_tokens_list=None
+    ):
         """vLLM continuous-batching TP prefill: prefill each new request into ITS decode slot.
 
         QWEN36_PREFILL_BUCKET_TRACE=1 (default): each user's prompt runs against the persistent B=1 GDN scratch
@@ -3820,7 +3825,16 @@ class Qwen36Model:
         start_positions (optional, per request): number of leading tokens whose paged KV is already in the request's
         page-table row (vLLM automatic prefix caching). With a GdnPrefixStateCache attached (self._prefix_cache) the
         prefill resumes from the largest cached GDN snapshot at or below it (_prefill_with_prefix_cache); otherwise it
-        is ignored and the prompt is recomputed from 0 (correct, slower). Requires the traced path (default)."""
+        is ignored and the prompt is recomputed from 0 (correct, slower). Requires the traced path (default).
+
+        vision_tokens_list (optional, per request): None (text), or a CALLABLE returning the request's packed vision
+        embeddings (ttnn [n_vision_tokens, H]) -- called right before that user's prefill because the vision tower
+        stashes MODEL-GLOBAL grids (_req_image_grid_thw / _req_video_grid_thw) that the prefill's M-RoPE build reads --
+        and deallocated right after it. A multimodal user bypasses the prefix cache entirely (start position ignored,
+        no snapshot lookup, no saves). After every user's prefill its M-RoPE delta (0 for text) is recorded per decode
+        slot (set_slot_rope_delta) for the batched decode rope index."""
+        if vision_tokens_list is not None and not self.short_prefill_trace_enabled():
+            raise NotImplementedError("batched multimodal prefill requires QWEN36_PREFILL_BUCKET_TRACE=1")
         if not self.short_prefill_trace_enabled():
             return self._prefill_paged_slots_host(token_ids_list, page_table, empty_slots, valid_lens=valid_lens)
         assert self.num_devices > 1, "prefill_paged_slots is the TP (num_devices>1) path"
@@ -3836,11 +3850,29 @@ class Qwen36Model:
             assert actual >= 1, f"request {u}: empty prompt (actual_len={actual})"
             # Bind the persistent B=1 scratch for THIS user only (the traces baked its addresses at warmup);
             # always rebind the batched decode buffers (a mid-loop assert must not leave GDN on the scratch).
+            vt_src = vision_tokens_list[u] if vision_tokens_list is not None else None
+            vt = None
             prev = self._bind_gdn_prefill_scratch()
             try:
-                start = int(start_positions[u]) if start_positions is not None else 0
-                plan = self._plan_prefix_prefill(toks[:, :actual], actual, start)
-                if plan is None:  # cache off / nothing to resume or save: the unchanged path
+                if vt_src is not None:
+                    # Multimodal: vision tower right before THIS user's prefill (model-global grid stash), prefix cache
+                    # bypassed (plan None; the cache path is text-only and would rebuild a text rope / save snapshots).
+                    vt = vt_src() if callable(vt_src) else vt_src
+                    start, plan = 0, None
+                else:
+                    start = int(start_positions[u]) if start_positions is not None else 0
+                    plan = self._plan_prefix_prefill(toks[:, :actual], actual, start)
+                if vt is not None:
+                    host_logits.append(
+                        self.prefill_traced_chunked(
+                            toks[:, :actual],
+                            pt[u : u + 1],
+                            actual_len=actual,
+                            vision_tokens=vt,
+                            return_host_logits=True,
+                        )
+                    )
+                elif plan is None:  # cache off / nothing to resume or save: the unchanged path
                     host_logits.append(
                         self.prefill_traced_chunked(
                             toks[:, :actual], pt[u : u + 1], actual_len=actual, return_host_logits=True
@@ -3850,6 +3882,10 @@ class Qwen36Model:
                     host_logits.append(self._prefill_with_prefix_cache(toks[:, :actual], pt[u : u + 1], actual, plan))
             finally:
                 self._unbind_gdn_prefill_scratch(prev)
+                if vt is not None:
+                    ttnn.deallocate(vt)
+            # This user's M-RoPE delta (build_request_rope set it for MM, cleared it to 0 for text) follows its slot.
+            self.set_slot_rope_delta(int(empty_slots[u]), self.rope.rope_delta)
             # Device-to-device: scratch (B=1) -> row empty_slots[u] of the batched buffers, other rows untouched. All
             # temporaries are consumed here, before the next user's replay can alias them.
             self._write_gdn_slot_from_scratch(int(empty_slots[u]))
@@ -4155,6 +4191,24 @@ class Qwen36Model:
         self._remap_gdn_slots(list(range(self.args.max_batch_size))[::-1])
         ttnn.synchronize_device(self.mesh_device)
         self._gdn_slot_ops_warmed = True
+
+    def set_slot_rope_delta(self, slot, delta):
+        """Record decode slot `slot`'s M-RoPE delta (0 for text); read by the batched decode rope index."""
+        self._slot_rope_delta[int(slot)] = int(delta)
+
+    def remap_slot_rope_delta(self, remap):
+        """Apply a vLLM slot_remap to the per-slot rope deltas (slot i takes the delta previously at slot remap[i];
+        rows beyond len(remap) are unchanged). Same semantics as _remap_gdn_slots."""
+        r = torch.as_tensor([int(x) for x in remap], dtype=torch.int64)
+        new = self._slot_rope_delta.clone()
+        new[: r.shape[0]] = self._slot_rope_delta[r]
+        self._slot_rope_delta = new
+
+    def _decode_rope_delta(self, B):
+        """Rope delta for a B-wide decode: per-slot vector when batched, else the scalar request delta."""
+        if self.args.max_batch_size > 1:
+            return self._slot_rope_delta[:B]
+        return self.rope.rope_delta
 
     def _remap_gdn_slots(self, remap):
         """Apply a vLLM batch-condense slot_remap to every GDN layer's batched decode state
@@ -5585,7 +5639,7 @@ class Qwen36Model:
         # RoPE position is the KV position offset by rope_delta (multimodal compresses the position
         # space; post-image text has t==h==w so 1D RoPE at rope_pos is correct). cur_pos_tt below
         # stays the true KV position. rope_delta is 0 for text, so this is a no-op there.
-        rope_pos_vec = pos_vec + self.rope.rope_delta
+        rope_pos_vec = pos_vec + torch.as_tensor(self._decode_rope_delta(B)).to(pos_vec.dtype)
         if self.num_devices > 1:
             # TP: rope_tp cos/sin [1,B,1,rope_dim] packed on host.
             rd = self.args.rope_head_dim
@@ -5627,7 +5681,7 @@ class Qwen36Model:
             assert pos_vec.shape[0] == B, f"current_pos length {pos_vec.shape[0]} != batch {B}"
         else:
             pos_vec = torch.full((B,), int(current_pos), dtype=torch.int32)
-        rope_idx = self._resident_rope_index(pos_vec, self.rope.rope_delta, self.rope.max_seq_len)
+        rope_idx = self._resident_rope_index(pos_vec, self._decode_rope_delta(B), self.rope.max_seq_len)
         rope_idx_tt = ttnn.from_torch(rope_idx, dtype=ttnn.uint32, layout=ttnn.ROW_MAJOR_LAYOUT)
         cur_pos_tt = ttnn.from_torch(pos_vec, dtype=ttnn.int32, layout=ttnn.ROW_MAJOR_LAYOUT)
         page_table_tt = (
@@ -5652,7 +5706,8 @@ class Qwen36Model:
         rope_delta is 0 for text; multimodal compresses the position space. This is the position the host path fed
         rope.cos/sin: max(pos, 0) keeps idle rows (pos -1) in range; the clamp to the table also bounds a negative
         delta (or stale host positions on a non-reload step) so the in-trace embedding never reads out of range."""
-        idx = pos_vec.reshape(-1).to(torch.int64).clamp(min=0) + int(rope_delta)
+        delta = rope_delta.to(torch.int64) if isinstance(rope_delta, torch.Tensor) else int(rope_delta)
+        idx = pos_vec.reshape(-1).to(torch.int64).clamp(min=0) + delta  # scalar, or per-row [B] (batched serving)
         return idx.clamp(0, int(max_seq_len) - 1).to(torch.int32).reshape(1, -1)
 
     def _resident_rope_cos_sin(self, rope_idx):

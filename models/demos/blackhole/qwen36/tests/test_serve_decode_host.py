@@ -26,6 +26,7 @@ class _Recorder:
     def __init__(self):
         self.calls = []  # Generator.decode_forward kwargs, in order
         self.remaps = []  # GDN remaps, in order
+        self.rope_remaps = []  # per-slot rope-delta remaps, in order
         self.events = []  # interleaved order of "remap" / "forward"
 
 
@@ -52,6 +53,7 @@ def harness(monkeypatch):
         args=SimpleNamespace(max_batch_size=WIDTH),
         _serve_device_decode=True,
         _remap_gdn_slots=remap,
+        remap_slot_rope_delta=lambda r: rec.rope_remaps.append(list(r)),
         sampling=None,
     )
     gen = Qwen36ForCausalLM.__new__(Qwen36ForCausalLM)
@@ -267,7 +269,7 @@ def test_prefill_invalidates_resident_inputs(harness, expect_error, monkeypatch)
     _call(gen, 3)
     model = gen.model[0]
     model.prefill_paged_slots = lambda *a, **k: [torch.zeros(4)]
-    monkeypatch.setattr(Qwen36ForCausalLM, "_has_visual", staticmethod(lambda kwargs, key: False))
+    monkeypatch.setattr(Qwen36ForCausalLM, "_has_visual", staticmethod(lambda kwargs, key, u=0: False))
     gen.prefill_forward(
         torch.ones(1, 4, dtype=torch.int32), torch.zeros(1, 4, dtype=torch.int32), None, [4], empty_slots=[0]
     )
@@ -316,6 +318,7 @@ def test_single_device_model_takes_the_legacy_path(harness):
     _call(gen, 3, remap=[1, 2, 0, 3, 4, 5, 6, 7])
     assert rec.calls[-1]["tokens"].shape[0] == WIDTH
     assert rec.remaps == []  # legacy: GDN remap only for TP batched
+    assert rec.rope_remaps == []
 
 
 # ---------------------------------------------------------------------------------------------------------------------
@@ -338,9 +341,28 @@ def test_resident_rope_index_matches_host_position_rule():
     assert idx.tolist() == [[5, 100, 0, 7]]  # idle row -> max(-1, 0)
     assert Qwen36Model._resident_rope_index(pos, 10, 4096).tolist() == [[15, 110, 10, 17]]  # M-RoPE delta
     assert Qwen36Model._resident_rope_index(pos, -50, 4096).tolist() == [[0, 50, 0, 0]]  # negative delta clamps at 0
+    # per-slot delta vector (batched serving): one delta per row; idle row still clamps its position to 0
+    delta = torch.tensor([0, 10, 3, -50], dtype=torch.int64)
+    assert Qwen36Model._resident_rope_index(pos, delta, 4096).tolist() == [[5, 110, 3, 0]]
     big = torch.tensor([10**9], dtype=torch.int32)  # stale host position on a non-reload step: still in range
     assert Qwen36Model._resident_rope_index(big, 0, 4096).tolist() == [[4095]]
 
 
 def test_module_exports():
     assert qwen36_vllm._MAX_DEVICE_TOP_K == 32
+
+
+def test_slot_rope_delta_remap_follows_gdn_slot_semantics():
+    m = Qwen36Model.__new__(Qwen36Model)
+    m.args = SimpleNamespace(max_batch_size=4)
+    m._slot_rope_delta = torch.zeros(4, dtype=torch.int64)
+    for slot, d in enumerate([0, 11, 0, 33]):
+        m.set_slot_rope_delta(slot, d)
+    m.remap_slot_rope_delta([1, 3, 2, 0])  # slot i takes the delta previously at slot remap[i]
+    assert m._slot_rope_delta.tolist() == [11, 33, 0, 0]
+    m.remap_slot_rope_delta([1, 0])  # rows beyond len(remap) unchanged
+    assert m._slot_rope_delta.tolist() == [33, 11, 0, 0]
+    assert m._decode_rope_delta(2).tolist() == [33, 11]
+    m.args.max_batch_size = 1
+    m.rope = SimpleNamespace(rope_delta=7)
+    assert m._decode_rope_delta(1) == 7
