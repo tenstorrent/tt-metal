@@ -371,3 +371,16 @@ norm reduce to fit.
 - Whole model, real weights (tests/test_perf.py, 56320 tokens in 5120 chunks, with the full-mesh MoE input above):
   warm prefill 6.01 s (9367 tok/s; was 7.03-7.09 s), chunks 541-560 ms; cold 12.59 s; last-chunk top1 vs text
   0.6744 / top5 0.8804 (was 0.652 top1).
+
+## Full-mesh reduce-scatter as one ring (2026-10-11), GLM_SCATTER_OP=fabric_ring (default)
+
+common.scatter_rows (shared expert, dense MLP) reduces over the whole mesh with one fabric_reduce_scatter
+(cluster_axis=None, Ring: the 2x4 snake closes) instead of axis 0 then axis 1; meshes whose snake does not close keep
+the two calls. The MLP still emits its down output in bf16 for it (mlp.py keyed that on the op name: without it the
+ring path added a 0.28 ms typecast and a slower fp32 linear).
+- Op, model shape (per chip [5120, 4096] bf16, 2 links, 8192 B payload): 427.7 vs 548.6 us
+  (tests/unit/test_fabric_rs_model_shapes.py in fabric_reduce_scatter_ttnn).
+- Per layer, real weights, device (busiest chip): kda_dense 8.72 -> 8.59, dsa_moe 14.79 -> 14.69, kda_moe 9.35 ->
+  9.20 ms; block outputs vs the two calls rel 2e-4 .. 1.2e-3 (bf16 summation order).
+- Whole model (test_perf): warm 56k prefill 6.07 s (6.01 before: the eager run is partly host-bound, the device
+  saving of ~6 ms per chunk does not show in wall time); last-chunk top1 0.6726 / top5 0.8801 (0.6744 / 0.8804).
