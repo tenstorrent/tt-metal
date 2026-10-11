@@ -173,6 +173,34 @@ def reference_kind(index: int, entry: Any) -> str:
     return entry.kind
 
 
+def check_reference_kinds(kinds: list[str]) -> None:
+    """Enforce the per-request reference limits on the modality of each entry, in request order.
+
+    The "audio cannot be alone" rule is the reference's: an audio reference has to be paired with at
+    least one image or video, because a ref2va request with no visual reference has nothing to
+    condition the picture on.
+    """
+    if not kinds:
+        raise ValueError("ref2va needs at least one reference; use a t2va call for text-only requests")
+    for kind, limit in (
+        ("image", MINIMAX_H3_MAX_REFERENCE_IMAGES),
+        ("video", MINIMAX_H3_MAX_REFERENCE_VIDEOS),
+        ("audio", MINIMAX_H3_MAX_REFERENCE_AUDIOS),
+    ):
+        if kinds.count(kind) > limit:
+            raise ValueError(f"H3 accepts at most {limit} {kind} references, got {kinds.count(kind)}")
+    if len(kinds) > MINIMAX_H3_MAX_REFERENCES:
+        raise ValueError(f"H3 accepts at most {MINIMAX_H3_MAX_REFERENCES} references in total, got {len(kinds)}")
+    if set(kinds) == {"audio"}:
+        raise ValueError("an audio reference must be paired with at least one image or video reference")
+
+
+def check_reference_aspect_ratio(name: str, width: int, height: int) -> None:
+    """A reference image or video must be within 1:4 and 4:1."""
+    if width > 4 * height or height > 4 * width:
+        raise ValueError(f"{name} must be within 1:4 and 4:1, got {width}x{height}")
+
+
 def _temporal_position_span(num_latent_frames: int) -> float:
     """Rotary time a video reference advances the shared clock by.
 
@@ -360,8 +388,7 @@ def resolve_reference_image_size(
     """
     if width <= 0 or height <= 0:
         raise ValueError(f"a reference image must have a positive size, got {width}x{height}")
-    if width > 4 * height or height > 4 * width:
-        raise ValueError(f"a reference image must be within 1:4 and 4:1, got {width}x{height}")
+    check_reference_aspect_ratio("a reference image", width, height)
 
     if mode == "match":
         if target_width is None or target_height is None:
