@@ -396,7 +396,7 @@ def test_perf_eltwise_unary_sfpu_comp_uint32(
     ).run(perf_report)
 
 
-# The approximate exp with its input clamping on, the compute API default, which the main sweep does not measure.
+# Approximate exp with input clamping on (the compute API default), which the main sweep does not cover.
 @skip_for_wormhole
 @pytest.mark.perf
 @parametrize(

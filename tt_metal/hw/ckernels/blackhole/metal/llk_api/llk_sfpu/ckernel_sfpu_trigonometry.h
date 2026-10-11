@@ -673,7 +673,7 @@ sfpi_inline sfpi::vFloat _sfpu_quarter_exp_abs_(sfpi::vFloat x, sfpi::vFloat ln2
 
     } else {
         f = j * sfpi::vConstFloatPrgm1 + a;  // f = a - j * ln(2)_hi
-        f = j * ln2_lo + f;                  // f = f - j * ln(2)_lo
+        f = j * ln2_lo + f;
 
         r = 1.37805939e-3f;
         r = r * f + p1;
@@ -760,7 +760,7 @@ sfpi_inline sfpi::vFloat _sfpu_quarter_expm1_abs_(sfpi::vFloat x, sfpi::vFloat l
 
     } else {
         f = j * sfpi::vConstFloatPrgm1 + a;  // f = a - j * ln(2)_hi
-        f = j * ln2_lo + f;                  // f = f - j * ln(2)_lo
+        f = j * ln2_lo + f;
 
         r = 1.974105835e-04f;
         r = r * f + 1.393107930e-3f;

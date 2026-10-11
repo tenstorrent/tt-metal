@@ -110,8 +110,8 @@ inline void calculate_lgamma_stirling_fp32(
     constexpr float r2 = 0.0007936507f;   // 1/1260
     constexpr float r3 = -0.0005952380f;  // -1/1680
 
-    // Held across the rows: as literals in the loop each costs two SFPLOADI per row. Programmed per call, since another
-    // op's init can run between lgamma_stirling_init and this call; vConstFloatPrgm0 stays 2.0 for the reciprocal.
+    // Programmed per call, since another op's init can run between lgamma_stirling_init and this call;
+    // vConstFloatPrgm0 stays 2.0 for the reciprocal.
     sfpi::vConstFloatPrgm1 = LOG_SQRT_2PI;
     sfpi::vConstFloatPrgm2 = r0;
     const sfpi::vFloat k_r1 = r1;

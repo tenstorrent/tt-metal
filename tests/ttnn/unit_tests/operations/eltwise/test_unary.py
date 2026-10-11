@@ -358,7 +358,7 @@ def test_unary_chain_several_tiles_per_core(device, ops, golden, dtype, sharded)
         x = x.to(torch.bfloat16)
     mem = ttnn.DRAM_MEMORY_CONFIG
     if sharded:
-        # 64 tiles per core: the bf16 chains run in op-major blocks
+        # Large shards make the bf16 chains run in op-major blocks.
         mem = ttnn.create_sharded_memory_config(
             shape=[64, 1024],
             core_grid=ttnn.CoreGrid(y=2, x=8),

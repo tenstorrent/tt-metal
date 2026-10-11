@@ -467,12 +467,10 @@ sfpi_inline sfpi::vFloat _sfpu_exp_(sfpi::vFloat val) {
     return val;
 }
 
-// The clamped approximate exponential over N vectors (8 or 32): every LOADMACRO carries its DEST row offset as an
-// immediate (ADDR_MOD_7 does not increment) and rotates the loaded value through LREG0 to LREG3.
+// Every LOADMACRO carries its DEST row offset as an immediate because ADDR_MOD_7 does not increment.
 template <int VEC, int N>
 sfpi_inline void _exp_approx_clamped_sanitise_vector_() {
-    // Macro sequence 1: load, SFPSWAP against LREG14 (-88.5), store back. The SWAP takes two cycles, so an SFPNOP
-    // follows every LOADMACRO but the last.
+    // The SWAP needs a delay slot, so an SFPNOP follows every LOADMACRO but the last.
     TTI_SFPLOADMACRO(4 | (VEC & 3), 0, ADDR_MOD_7, 2 * VEC);
     if constexpr (VEC + 1 < N) {
         TTI_SFPNOP;
@@ -486,7 +484,6 @@ sfpi_inline void _exp_approx_clamped_sanitise_pass_(std::integer_sequence<int, V
 
 template <int... VEC>
 sfpi_inline void _exp_approx_clamped_exp_pass_(std::integer_sequence<int, VEC...>) {
-    // Macro sequence register 0: load, MAD, round, shift, store.
     (TTI_SFPLOADMACRO(VEC & 3, 0, ADDR_MOD_7, 2 * VEC), ...);
 }
 
@@ -540,7 +537,7 @@ void calculate_exponential(const uint exp_base_scale_factor = p_sfpu::kCONST_1_F
         if constexpr (ITERATIONS == 32) {
             _exp_approx_clamped_sanitise_pass_(std::make_integer_sequence<int, 32>{});
             _exp_approx_clamped_exp_pass_(std::make_integer_sequence<int, 32>{});
-            // The last macro stores four instructions after its LOADMACRO; drain it before the caller's next SFPU op.
+            // The last macro's store lands after its LOADMACRO; drain it before the caller's next SFPU op.
             TTI_SFPNOP;
             TTI_SFPNOP;
             TTI_SFPNOP;
@@ -548,7 +545,7 @@ void calculate_exponential(const uint exp_base_scale_factor = p_sfpu::kCONST_1_F
             return;
         }
 
-        // Code below is hand-unrolled for 8 iterations (one face).
+        // Code below is hand-unrolled for 8 iterations.
 
         // Sanitize the input values by loading from DEST, comparing against the value -88.5, and if the input value is
         // more negative than that, swap the input value with -88.5 and store back to DEST
@@ -750,8 +747,7 @@ constexpr auto bits = [](float x) constexpr { return __builtin_bit_cast(std::uin
 constexpr auto lo16 = [](float x) constexpr { return static_cast<std::uint16_t>(bits(x) & 0xFFFFu); };
 constexpr auto hi16 = [](float x) constexpr { return static_cast<std::uint16_t>(bits(x) >> 16); };
 
-// common_init, constants and upper_macros false (the clamped approximate exp): a later tile of the ttnn unary chain,
-// without the common part, LREG12-14, or macro instructions 2 and 3 and sequence 1.
+// The false flags skip state another op of the ttnn unary chain already holds on a later tile.
 template <
     bool APPROXIMATION_MODE,
     uint32_t scale,

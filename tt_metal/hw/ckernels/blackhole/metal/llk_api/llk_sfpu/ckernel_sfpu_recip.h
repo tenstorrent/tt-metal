@@ -86,7 +86,6 @@ sfpi_inline void _recip_8b_step_() {
     constexpr auto e = [](int v) { return 3 + v % 2; };
     constexpr int x = p_sfpu::LREG6;
     if constexpr (R < N) {
-        // The stores advance the RWC and lag the loads by two vectors.
         TTI_SFPLOADMACRO((0 << 2) | y(R), InstrModLoadStore::DEFAULT, ADDR_MOD_7, R < 2 ? 2 * R : 4);
     }
     if constexpr (R >= 2 && R - 2 < N) {
@@ -293,7 +292,7 @@ inline void _record_reciprocal_fast_24b_5c_() {
         TTI_SFPLOADMACRO((0 << 2) | (y & 3), 0, ADDR_MOD_7, offset | (y >> 2));
         TTI_SFPLOADMACRO((2 << 2) | (t2 & 3), 0, ADDR_MOD_7, prev_offset | (t2 >> 2));
         TTI_SFPLOADMACRO((1 << 2) | (e & 3), 0, ADDR_MOD_7, offset | (e >> 2));
-        TTI_SFPMAD(p_sfpu::LREG0, y, p_sfpu::LCONST_1, 0, 1);  // SFPMAD_MOD1_NEGATE_VA
+        TTI_SFPMAD(p_sfpu::LREG0, y, p_sfpu::LCONST_1, 0, 1);
         TTI_SFPLOADMACRO((3 << 2) | (z & 3), 0, ADDR_MOD_6, prev_offset | (z >> 2));
         TTI_SFPLOADMACRO((3 << 2) | (z & 3), 0, ADDR_MOD_7, prev_offset | (z >> 2));
     });
@@ -354,11 +353,8 @@ inline void _init_reciprocal_fast_24b_5c_() {
 
         // Macro 3: [z]
         {
-            // Keep the corrected result in z. Macro 0 still needs L16 for its delayed
-            // store of the next vector's approximate reciprocal. Even with instruction-
-            // counted delays, an issued MAD completes during scalar stalls (e.g. gcov),
-            // so writing its result to L16 can clobber that value before macro 0 stores it.
-            // The next load of z follows this macro's store, so z has no such overlap.
+            // Keep the result in z, not L16: macro 0 still needs L16 for its delayed store, and an issued MAD can
+            // complete during scalar stalls (e.g. gcov) and clobber it. The next load of z follows this store.
             constexpr std::uint32_t simple_bits = 0;
             constexpr std::uint32_t mad_bits = 0x80 | 0x00 | (1 << 3) | (4 + 2);
             constexpr std::uint32_t round_bits = 0;
@@ -400,8 +396,8 @@ inline void calculate_reciprocal() {
     }
 }
 
-// common_init false: a later tile of the ttnn unary chain; iter_constant false: without sfpu_reciprocal_iter's Prgm0;
-// own_state false: without ADDR_MOD_6 and the 32-bit program's macros 2 and 3, which no other op of the chain writes.
+// The false flags skip state another op of the ttnn unary chain already holds on a later tile; own_state covers
+// ADDR_MOD_6 and the 32-bit program's macros 2 and 3.
 template <
     bool APPROXIMATION_MODE,
     bool is_fp32_dest_acc_en,
@@ -428,7 +424,7 @@ void recip_init() {
         math::reset_counters(p_setrwc::SET_ABD_F);
     }
     if constexpr (iter_constant) {
-        sfpu_reciprocal_init<false>();  // set vConstFloatPrgm0 for sfpu_reciprocal_iter
+        sfpu_reciprocal_init<false>();
     }
     if constexpr (APPROXIMATION_MODE) {
         _init_reciprocal_fast_7b_();

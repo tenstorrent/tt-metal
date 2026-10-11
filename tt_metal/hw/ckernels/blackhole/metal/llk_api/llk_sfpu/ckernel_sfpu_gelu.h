@@ -201,9 +201,8 @@ sfpi_inline sfpi::vFloat calculate_gelu_piecewise(sfpi::vFloat x) {
     return result;
 }
 
-// FP32 erf: n16/d16 parity rational coefficients, MaxULP=1 vs FP64.
+// FP32 erf: n16/d16 parity rational coefficients.
 // Split from ERF_LUT (ckernel_sfpu_erf.h INP_FLOAT32 branch) entries [2..18] (num) and [19..35] (den).
-// piecewise_rational_eval_parity_numer_denom() takes const float* — no std::array needed.
 constexpr float GELU_ERF_NUM[17] = {  // odd powers only (c0=0, c2=0, ..., c16=0)
     0.0f,
     1.1283791065e+00f,
@@ -304,7 +303,7 @@ inline void calculate_gelu() {
         // unroll 8 fills the SFPU pipeline across 8 independent dst-tile chains.
         constexpr float INV_SQRT2 = 0.7071067811865475f;
         constexpr float GELU_SAT = -5.54259443f;  // 0xc0b15cef: first x where libm erff=-1.0
-        // The four leading erf coefficients stay in registers (two from gelu_init) instead of loads in every row.
+        // The leading erf coefficients stay in registers (two from gelu_init) so rows do not reload them.
         const sfpi::vFloat den_next = GELU_ERF_DEN[14];
         const sfpi::vFloat num_next = GELU_ERF_NUM[13];
 #pragma GCC unroll 0
