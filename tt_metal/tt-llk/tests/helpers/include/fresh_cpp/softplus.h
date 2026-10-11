@@ -3,25 +3,20 @@
 
 #pragma once
 
-// Canonical semantic body for the softplus op (storm contract:
-// fresh_cpp/README.md).  Migrated verbatim from fresh_cpp_operations.h
-// (Lane BR batch 3); byte-stable algorithm, only the file moved.
+// Canonical semantic body for softplus; see fresh_cpp/README.md for its contract.
 
 #include <cstdint>
 
-// Shared helper (fresh_exp_21f) still lives in the legacy header pending
-// full migration (fresh_cpp/README.md legacy note).
+// The aggregator provides the shared fresh_exp_21f helper from helpers.h.
 #include "fresh_cpp_operations.h"
 
 namespace ckernel::sfpu
 {
 
-// Softplus (production: calculate_softplus — bit-punned scalar params and a
-// store-only-under-predicate linear region; the arithmetic itself is already
-// constexpr-clean).  Same residual polynomials and tail handling per format
-// arm (the format arm is the contract, selected the same way production
-// selects it); the linear region is stated as an explicit identity arm with
-// one unconditional store.  Scalars are the golden's fixed dispatch values.
+// softplus(t)/beta = (max(t, 0) + log1p(exp(-abs(t)))) / beta.
+// The residual is the whole result for negative t, so it cannot be discarded
+// as a small correction. The bf16 arm fits log1p(u)/u with the endpoint
+// values 1 and log(2), where u is the zero-normalized exponential estimate.
 template <int ITERATIONS>
 __attribute__((noinline)) void calculate_softplus_fresh_cpp(const float beta, const float beta_reciprocal, const float threshold)
 {
@@ -48,7 +43,7 @@ __attribute__((noinline)) void calculate_softplus_fresh_cpp(const float beta, co
                 p              = p * a + -4.9926245213e-01f;
                 residual       = p * a + 6.9310557842e-01f;
             }
-            // Tail: f(a) ~= e - e^2/2 + e^3/3 with e = exp(-a).
+            // log1p(e) = e - e^2/2 + e^3/3 + O(e^4), e = exp(-a).
             v_if (a > 5.0f)
             {
                 const sfpi::vFloat e = fresh_exp_21f(-a);
@@ -56,23 +51,17 @@ __attribute__((noinline)) void calculate_softplus_fresh_cpp(const float beta, co
             }
             v_endif;
 #else
-            // Degree-6 bf16 fit (production constants); past the fit domain the
-            // true residual is below bf16 rounding, so it clamps to zero.
-            sfpi::vFloat residual;
-            {
-                sfpi::vFloat p = -3.1273466851e-05f;
-                p              = p * a + 5.0152968088e-04f;
-                p              = p * a + -1.8627923291e-03f;
-                p              = p * a + -1.3000584069e-02f;
-                p              = p * a + 1.4279095486e-01f;
-                p              = p * a + -5.0932420424e-01f;
-                residual       = p * a + 6.9423984729e-01f;
-            }
-            v_if (a > 5.0f)
-            {
-                residual = 0.0f;
-            }
-            v_endif;
+            // Degree-3 endpoint-constrained fit of log1p(u)/u on [0, 1].
+            // fresh_exp_21f(0) = C0 = 1.0017248f. Fold u = e/C0 into
+            // coefficient k by dividing it by C0^(k+1), avoiding an extra
+            // multiply while retaining the correct log(2) value at t = 0.
+            // Reproduce with corpus/tools/fit_softplus_residual.py.
+            const sfpi::vFloat e        = fresh_exp_21f(-a);
+            sfpi::vFloat p              = -0.07473333925008774f;
+            p                           = p * e + 0.25558772683143616f;
+            p                           = p * e + -0.48683419823646545f;
+            p                           = p * e + 0.9982781410217285f;
+            const sfpi::vFloat residual = e * p;
 #endif
             const sfpi::vFloat sp = sfpi::max(t, 0.0f) + residual;
             result                = sfpi::convert<sfpi::vFloat16b>(beta_reciprocal * sp, sfpi::RoundMode::Nearest);

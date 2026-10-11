@@ -2126,6 +2126,38 @@ def test_softplus_boundary_and_negative_tail(
 
 
 @pytest.mark.parametrize("fresh_cpp_impl", [0, 1], ids=["production", "fresh_cpp"])
+def test_softplus_bf16_origin(fresh_cpp_impl):
+    """Require exact bf16 log(2) for both zeros and signed input subnormals.
+
+    All these inputs round to the same bf16 reference output. An origin-biased
+    exponential approximation must not consume a one-ULP error where production
+    is exact, even if the ordinary relative tolerance would permit that error.
+    """
+    eltwise_unary_sfpu(
+        "sources/eltwise_unary_sfpu_test.cpp",
+        InputOutputFormat(DataFormat.Float16_b, DataFormat.Float16_b),
+        DestAccumulation.No,
+        ApproximationMode.No,
+        MathOperation.Softplus,
+        FastMode.No,
+        [32, 32],
+        spec_A=StimuliSpec.custom(
+            values=[
+                0.0,
+                -0.0,
+                2.0**-133,
+                -(2.0**-133),
+                127 * 2.0**-133,
+                -127 * 2.0**-133,
+            ]
+        ),
+        custom_atol=0.0,
+        custom_rtol=0.0,
+        fresh_cpp_impl=fresh_cpp_impl,
+    )
+
+
+@pytest.mark.parametrize("fresh_cpp_impl", [0, 1], ids=["production", "fresh_cpp"])
 def test_softplus_fresh_cpp_admission(fresh_cpp_impl):
     """Check every bf16 value in [-40, 30] on the measured 16-bit Dest path.
 
