@@ -6,8 +6,7 @@
 Three tests, all driving `sources/sfpu_ema_test.cpp` through `_run_ema_on_device`:
 
 - `test_sfpu_ema` -- the default-suite check, one alpha over 1/2/4 time tiles.
-- `test_sfpu_ema_after_binary_init` -- the same with an eltwise binary init between the
-  datacopy and `ema_tile` in every DEST section.
+- `test_sfpu_ema_after_binary_init` -- the same with an eltwise binary init before each `ema_tile`.
 - `test_sfpu_ema_alpha_sweep` -- nightly, 1000 alphas against an fp64 reference.
 
 The sweep exists because the value the functional test pins, alpha = 0.25, is the
@@ -52,7 +51,6 @@ EMA_BETA = 1.0 - EMA_ALPHA
 # rounding differences to accumulate through the carry.
 SWEEP_NUM_TIME_TILES = 2
 
-# Two time tiles, so the carry crosses a DEST section after the interleaved init.
 AFTER_INIT_NUM_TIME_TILES = 2
 
 # k/1000 for k in 0..999. alpha=0 is a degenerate pass-through (beta=1) and is kept
@@ -112,8 +110,7 @@ def _run_ema_on_device(
     Returns (untilized device result, untilized 2D input view). Row = time step,
     column = parallel channel, for both.
 
-    With ``binary_init_before_ema`` the kernel issues an eltwise binary init between
-    the datacopy and ``ema_tile`` in every DEST section, as a fused kernel would.
+    With ``binary_init_before_ema`` an eltwise binary init runs between the datacopy and ``ema_tile``.
     """
     torch.manual_seed(0)
 
@@ -188,7 +185,6 @@ def test_sfpu_ema(dest_acc, num_time_tiles):
     ), "EMA result does not match golden"
 
 
-# Another math init in the same DEST section must not change the EMA result.
 # One axis, so pytest's own parametrize: the harness helper hands a single axis over as a tuple.
 @pytest.mark.parametrize(
     "dest_acc",
