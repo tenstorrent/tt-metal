@@ -401,4 +401,7 @@ __attribute__((always_inline)) inline void rendezvous(bool is_action_thread)
 
 #endif // LLK_BARRIER_ON_TRISC
 
+// Wormhole L1_CONGESTION runs its kernel once per BRISC release phase (brisc.cpp serve_phases) and reports their mean.
+constexpr std::uint32_t L1_CONGESTION_PHASES = 32;
+
 } // namespace llk_barrier
