@@ -7,7 +7,14 @@ import pytest
 
 from models.tt_dit.utils.conv3d import _BLOCKINGS
 
-from ..wan2_2.bruteforce_conv3d_sweep import HaloSpec, build_all_blockings, halo_masks, halo_sticks, prefetch_shard_fits
+from ..wan2_2.bruteforce_conv3d_sweep import (
+    HaloSpec,
+    build_all_blockings,
+    halo_masks,
+    halo_sticks,
+    prefetch_shard_fits,
+    vol2col_ring_safe,
+)
 from .bruteforce_conv3d_sweep_ltx import _SWEEP_LAYERS_LTX25_544P_145F_HALO
 
 
@@ -86,3 +93,29 @@ def test_ltx_table_blockings_without_prefetch_shard():
         if k[2] in (128, 256, 512, 1024) and k[4] == (3, 3, 3) and not prefetch_shard_fits(*v, k[4], k[2])
     }
     assert no_shard == set()
+
+
+@pytest.mark.parametrize(
+    "blocking, safe",
+    [
+        ((5, 2, 8), False),
+        ((5, 4, 4), False),
+        ((7, 2, 8), False),
+        ((5, 4, 8), True),
+        ((7, 2, 4), True),
+        ((1, 1, 1), True),
+        ((3, 2, 16), True),
+    ],
+)
+def test_vol2col_ring_safe(blocking, safe):
+    assert vol2col_ring_safe(*blocking) == safe
+
+
+def test_table_blockings_are_ring_safe():
+    assert [k for k, v in _BLOCKINGS.items() if not vol2col_ring_safe(*v[2:])] == []
+
+
+@pytest.mark.parametrize("name, C_in, C_out, T, H, W, key, logical_hw", _SWEEP_LAYERS_LTX25_544P_145F_HALO)
+def test_ltx25_halo_sweep_blockings_are_ring_safe(name, C_in, C_out, T, H, W, key, logical_hw):
+    combos = build_all_blockings(C_in, C_out, (3, 3, 3), H, W, T, max_t_block=8, hw_product=(16, 32, 64))
+    assert combos and all(vol2col_ring_safe(*c[2:]) for c in combos)

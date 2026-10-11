@@ -160,4 +160,5 @@ def test_bruteforce_sweep_ltx25_544p_145f_halo(
         max_seconds=float(os.environ.get("SWEEP_MAX_SECONDS", "720")),
         near_table=True,
         only_blockings=only_blockings,
+        combo_watchdog_s=float(os.environ.get("SWEEP_COMBO_WATCHDOG_S", "90")),
     )
