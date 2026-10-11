@@ -25,25 +25,25 @@ kernel time (`scripts/run_safe_pytest.sh --profile`, `K3_PERF_ITERS=1`), median 
 
 | | bf16 wire | fp8 1×32 now | Δ |
 |---|---|---|---|
-| **T_moe (traced)** | **4.93 ms** | **4.72 ms** (split shared expert, Q2 into L1) | **−0.21 ms** |
+| **T_moe (traced)** | **4.93 ms** | **4.68 ms** (split shared expert, combine output in L1) | **−0.25 ms** |
 | dispatch | 582 µs | 325 µs (one packet per token-expert) | −257 |
 | combine | 417 µs | 375 µs | −42 |
-| post_combine_reduce (DQ2 fused) | 196 µs | 141 µs | −55 |
+| post_combine_reduce (DQ2 fused) | 196 µs | 101 µs (source in L1) | −95 |
 | routed expert | 2551 µs | 2545 µs | −6 (bf8_b tiles in) |
 | latent all-gather | 87 µs (bf16) | 67 µs (fp8, high_bw_all_gather) | −20 |
-| Q1 / Q2 / DQ1 (standalone) | — | 12 / 49 / 91 µs | +152 |
+| Q1 / Q2 / DQ1 (standalone) | — | 12 / 69 / 73 µs | +154 |
 | final_output PCC | 0.99424 | 0.99424 | 0 |
 
-The wire now saves ~160 µs and the three standalone passes cost ~152 µs.
+The wire now saves ~200 µs and the three standalone passes cost ~154 µs.
 
 **Goals, in order:**
 
 | Goal | Target | Status |
 |---|---|---|
-| **G1 (headline)** fp8 traced T_moe beats bf16 at Galaxy load | ≤ 4.80 ms, final_output PCC ≥ 0.994 | met: 4.721 ms p50 (min 4.709), PCC 0.99424; bf16 4.93 ms |
-| **G2** Q2 | standalone Q2 ≤ 60 µs (the expert epilogue measured +~300 µs, parked) | met: 48.8 µs in the K3 MoE (packed rows to L1) |
+| **G1 (headline)** fp8 traced T_moe beats bf16 at Galaxy load | ≤ 4.80 ms, final_output PCC ≥ 0.994 | met: 4.683 ms p50 (min 4.672), PCC 0.99424; bf16 4.93 ms |
+| **G2** Q2 | standalone Q2 ≤ 60 µs (the expert epilogue measured +~300 µs, parked) | met with packed rows in L1 (48.8 µs); the default now spends that L1 on combine's output instead (Q2 69 µs, PCR −31 µs) |
 | **G3** Q1 before the latent all-gather | Q1 on each chip's slice; fp8 gather | done: Q1 27 → 14 µs, gather 87 → 67 µs |
-| **G4** DQ1 | ≤ 90 µs; full fusion only with a shared-tilize expert | 91 µs, reads the segmented rows |
+| **G4** DQ1 | ≤ 90 µs; full fusion only with a shared-tilize expert | met: 73 µs (multicast valid rows, fast scale staging); 49 µs with an L1 output, which overlaps the expert's CBs by ~9 KB |
 | **G5** quick wins | NoC reassignment where the top grid rows congest | DQ1 110 → 90, Q2 125 → 104 µs |
 | **G6** docs and Galaxy | this doc current; then the 8×4 Galaxy run (§5 P5) | LB only so far |
 
@@ -88,7 +88,12 @@ fp8 dispatch wire (`MOE_SPLIT_SHARED=1/0` forces it).
     clone): top grid rows starve, and no row or per-core weighting, NoC swap or reader read-ahead fixed it. Writing
     the packed rows to **L1 interleaved** (combine reads them from there) removes the partial-row DRAM writes:
     standalone 65 → 47 µs (input in L1 too: 45; input only: 67). `MOE_Q2_L1=1` (default).
-- G1 margin: traced p50 4.721 ms with Q2 at 49 µs, ~80 µs under the target.
+- L1 placement (2026-10-11): the Q/DQ passes and PCR were bound by DRAM-endpoint NoC traffic, not DRAM bandwidth.
+  L1-interleaved buffers spread it over 120 endpoints. Only two fit beside the concurrent kernels: combine's output
+  (PCR 132 → 101 µs, default) or Q2's output (Q2 69 → 49 µs); both together overlap the shared expert's CBs by
+  ~111 KB. DQ1's output in L1 (73 → 49 µs) overlaps the routed expert's CBs by ~9 KB; the w = 7 expert config that
+  fits costs +42 µs.
+- G1 margin: traced p50 4.683 ms, ~120 µs under the target.
 - G6 (Galaxy run): needs the 8×4 hardware.
 
 **Combine (2026-10-11): no packet lever found.** Combine already sends one packet per row. A deeper reader→writer
