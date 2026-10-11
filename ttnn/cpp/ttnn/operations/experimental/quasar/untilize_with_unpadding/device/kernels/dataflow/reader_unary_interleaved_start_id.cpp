@@ -12,16 +12,10 @@ void kernel_main() {
     const uint32_t num_pages = get_arg(args::num_pages);
     const uint32_t start_id = get_arg(args::start_id);
 
-    // ublocks size defined in pages (works for both TILE and ROW_MAJOR layouts)
-    constexpr uint32_t onepage = 1;
-
     const auto s = TensorAccessor(tensor::input);
 
     Noc noc;
     DataflowBuffer cb(dfb::in);
-    // QSR: read page size from the DFB object (get_entry_size), not the stale get_local_cb_interface().fifo_page_size;
-    // must be after DFB construction
-    const uint32_t page_bytes = cb.get_entry_size();
 
 // read a ublock of pages from src to CB, and then push the ublock to unpacker
 #ifdef BACKWARDS
@@ -31,9 +25,7 @@ void kernel_main() {
     uint32_t end_id = start_id + num_pages;
     for (uint32_t i = start_id; i < end_id; ++i) {
 #endif
-        cb.reserve_back(onepage);
-        noc.async_read(s, cb, page_bytes, {.page_id = i}, {.offset_bytes = 0});
-        noc.async_read_barrier();
-        cb.push_back(onepage);
+        // Implicit sync: the TXN_ID read claims a DFB entry and posts its credit when it lands.
+        noc.async_read<NocOptions::TXN_ID>(s, cb, {.page_id = i}, {});
     }
 }
