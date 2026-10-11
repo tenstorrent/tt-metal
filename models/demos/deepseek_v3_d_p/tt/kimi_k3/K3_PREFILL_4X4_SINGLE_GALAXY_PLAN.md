@@ -618,5 +618,42 @@ compute rows directly and the communication rows only as ratios.
 - Compute rows scale about 2x with 2x tokens per chip: per chunk, a 12-layer 4x4 stage (about 120 ms)
   and the 24-layer 8x4 (2 x 63 = about 125 ms) do the same compute per chip.
 - Communication rows grow less than 2x (smaller groups), which is the only place the split can gain; in
-  the traced runner it does not outweigh the stage hop (section above).
+  the traced runner it did not outweigh the stage hop until the 1280 tokens/chip configs below were
+  fixed.
 - CSVs: `generated/profiler/reports/2026_10_10_01_20_38`, `..._01_25_47`, `..._01_35_32`.
+
+### Configs tuned only at 640 tokens/chip (fixed)
+
+A 4x4 stage at 5120-token chunks runs 1280 tokens/chip; three K3 configs were keyed to 640 and fell
+back silently:
+
+| Op | Before (1280/chip) | Fix |
+|---|---|---|
+| KDA input projection (7168x12448) | generic matmul, 18.4 ms / 12 layers | `_TUNED_PROJECTION_ROWS = (640, 1280)`: tuned `minimal_matmul` (13.5 ms, 1.97x of 8x4) and output projection |
+| MoE gate matmul (1792x896) | auto config on 20 cores, 393 us | K3 entries at 1280 in both gate tables (`per_core_M` 2 -> 4 in the 2D table) |
+| Chunked MLA SDPA | default `k_chunk=32` | `MLA_SDPA_CONFIG[1280]`: `q_chunk=32, k_chunk=256` (`k_chunk=640` clashes with resident L1 on the second stage; 256 already saturates PCC in the K3 sweep) |
+
+Per-op check (eager, 12 layers, top half, `2d`):
+
+- At 2560-token chunks (640/chip, every tuned config applies) a 4x4 stage matches 8x4 op for op
+  (matmul 11.18 vs 11.20 ms), except routed experts at 1.89x: 56 experts/chip instead of 28 for the
+  same token-expert pairs. Expert time tracks weight reads, not tokens (640 -> 1280/chip on 4x4: 56.0
+  -> 58.6 ms). Per chunk the split is a wash for experts (8x4: 2 x 29.6 ms; 4x4 stage: 58.7 ms).
+- Communication is cheaper on 4 chips at the same per-chip load: dispatch 0.73x, combine 0.56x,
+  SP-axis gathers and reduce-scatter about 0.6x, ring SDPA 0.54x.
+- CSVs: `generated/profiler/reports/2026_10_11_15_53_33` (4x4 @2560), `..._15_58_59` (4x4 @5120 tuned).
+
+Two-stage runner, `2d`, 5120-token chunks, traced, 56320-token golden, sync on, after the fixes:
+
+| Configuration | Steady-state tok/s | Stage compute | KV PCC |
+|---|---|---|---|
+| 2 x 4x4, `2d`, tuned (3 runs) | **19,376 / 20,112 / 20,560 (mean 20,016)** | 240 / 221 ms | 0.9943 / 0.9968 |
+| 2 x 4x4, `2d`, before | 16,697-16,976 | 286 / 255 ms | 0.9938 / 0.9967 |
+| 8x4, one stage, `2d` (B1) | 17,472 | 292 ms | 0.9938 |
+| 8x4, one stage, TorusXY (production) | 19,413 | 262 ms | 0.9938 |
+
+**G3 revisited: two stages per galaxy now beat the like-for-like one-stage baseline by about 15% and
+match or beat production, without any ring links.** The SDPA fallback was the largest handicap (it grows
+with context). Not yet measured: two-stage with `TORUS_X`/`TORUS_Y` after the fixes (needs the tray
+1<->3 / 2<->4 port 5/6 cables, which are down), and larger chunks (expert weight reads amortize; blocked
+by the runner's fixed 5120-token KV period).

@@ -793,6 +793,18 @@ MLA_SDPA_CONFIG = {
             "chunked_only": True,
         },
     ],
+    # 5k total seq_len → 1280 per device on a 4x4 pipeline stage (Kimi-K3, two stages per galaxy).
+    # k=640 clashes with resident L1 buffers on the second stage (static CBs end above an L1
+    # buffer), so use k=256, where the K3 sweep above already saturates PCC (0.99936 vs 0.99938).
+    # Without an entry the stage fell back to k=32 (slower, and ~0.0035 lower final-chunk PCC above).
+    1280: [
+        {
+            "q_chunk_size": 32,
+            "k_chunk_size": 256,
+            "num_heads": 96,
+            "chunked_only": True,
+        },
+    ],
 }
 
 

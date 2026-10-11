@@ -53,7 +53,7 @@ class KDAProgramConfig:
     tp_ccl_topology: ttnn.Topology = ttnn.Topology.Linear
     gated_rms_output_dtype: ttnn.DataType = ttnn.float32
     output_projection_math_fidelity: ttnn.MathFidelity = ttnn.MathFidelity.HiFi4
-    # Use the projection matmul schedules tuned at _TUNED_PROJECTION_ROWS; False keeps the
+    # Use the tuned projection matmul schedules (rows in _TUNED_PROJECTION_ROWS); False keeps the
     # auto-selected ttnn.linear configs.
     tuned_projection_matmuls: bool = False
 
@@ -67,8 +67,9 @@ class KDAProgramConfig:
             raise ValueError("gated_rms_output_dtype must be ttnn.float32 or ttnn.bfloat16")
 
 
-# Rows per device the projection schedules were tuned at: Galaxy SP8xTP4 at T=5120.
-_TUNED_PROJECTION_ROWS = 640
+# Rows per device the projection schedules apply at: tuned on Galaxy SP8xTP4 at T=5120 (640), and
+# used unchanged for a 4x4 stage at T=5120 (1280); the blocking is derived from the row count.
+_TUNED_PROJECTION_ROWS = (640, 1280)
 
 
 def tuned_projection_matmul_configs(
@@ -128,5 +129,5 @@ def kimi_k3_program_config(*, active_seq_len_local: int, tp_ccl_topology: ttnn.T
         gated_rms_output_dtype=ttnn.bfloat16,
         output_projection_math_fidelity=ttnn.MathFidelity.HiFi2,
         # Galaxy SP8xTP4 at T=5120; other geometries keep the auto-selected projection configs.
-        tuned_projection_matmuls=active_seq_len_local == _TUNED_PROJECTION_ROWS,
+        tuned_projection_matmuls=active_seq_len_local in _TUNED_PROJECTION_ROWS,
     )

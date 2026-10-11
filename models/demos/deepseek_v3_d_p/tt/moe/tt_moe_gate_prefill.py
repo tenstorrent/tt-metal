@@ -94,6 +94,8 @@ def assert_gate_mode_matches_adapter(variant, gate_fallback_mode: GateComputeMod
 # Per-chip prefill sequence the production deployment runs at, and the depth the MoE/gate tests
 # drive. Every tuned matmul entry is keyed to it; other depths fall back to TTNN's default tiling.
 GATE_PRODUCTION_SP_DIM = PREFILL_CHUNK_TOKENS_PER_CHIP
+# A 4x4 pipeline stage at the production chunk runs twice the tokens per chip (K3 two-stage on one galaxy).
+GATE_STAGE_4X4_SP_DIM = 2 * PREFILL_CHUNK_TOKENS_PER_CHIP
 
 
 def gate_mm_config_key(sp_dim: int, per_device_emb_dim: int, n_routed_experts: int) -> tuple[int, int, int]:
@@ -171,6 +173,20 @@ class TtMoEGateConfig:
                 )
             ),
             (GATE_PRODUCTION_SP_DIM, KimiK3Config.EMB_SIZE // 4, KimiK3Config.NUM_ROUTED_EXPERTS): (
+                ttnn.MatmulMultiCoreReuseMultiCast1DProgramConfig(
+                    compute_with_storage_grid_size=ttnn.CoreCoord(11, 10),
+                    in0_block_w=14,
+                    out_subblock_h=1,
+                    out_subblock_w=2,
+                    out_block_h=1,
+                    out_block_w=14,
+                    per_core_M=1,
+                    per_core_N=28,
+                    fuse_batch=True,
+                    mcast_in0=False,
+                )
+            ),
+            (GATE_STAGE_4X4_SP_DIM, KimiK3Config.EMB_SIZE // 4, KimiK3Config.NUM_ROUTED_EXPERTS): (
                 ttnn.MatmulMultiCoreReuseMultiCast1DProgramConfig(
                     compute_with_storage_grid_size=ttnn.CoreCoord(11, 10),
                     in0_block_w=14,
@@ -307,6 +323,20 @@ class TtMoEGateConfig:
                     out_block_h=2,
                     out_block_w=3,
                     per_core_M=2,
+                    per_core_N=3,
+                    transpose_mcast=False,
+                    fuse_batch=True,
+                )
+            ),
+            (GATE_STAGE_4X4_SP_DIM, KimiK3Config.EMB_SIZE // 4, KimiK3Config.NUM_ROUTED_EXPERTS): (
+                ttnn.MatmulMultiCoreReuseMultiCastProgramConfig(
+                    compute_with_storage_grid_size=ttnn.CoreCoord(10, 10),
+                    in0_block_w=14,
+                    out_subblock_h=1,
+                    out_subblock_w=3,
+                    out_block_h=4,
+                    out_block_w=3,
+                    per_core_M=4,
                     per_core_N=3,
                     transpose_mcast=False,
                     fuse_batch=True,
