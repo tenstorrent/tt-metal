@@ -1954,3 +1954,25 @@
   team: ttnn
   budget_type: demo
   sp_config: sc1
+
+# Throwaway (#57586, never merge): wake-up latency of a parked thread on the CI Blackhole Galaxy host.
+- name: "(#57586 throwaway) parked-thread wake-up probe"
+  cmd: |
+    P=${TT_METAL_HOME:-$PWD}/tests/scripts/wake_probe
+    bash $P/host_idle_info.sh
+    B=$P/wake_probe
+    if command -v cc >/dev/null && cc -O2 -pthread -o /tmp/wake_probe $P/wake_probe.c; then B=/tmp/wake_probe; echo "WAKE_PROBE built in job"; fi
+    for pair in "0 1" "1 2" "4 20" "30 31"; do $B $pair 2000; done
+    bash $P/host_idle_info.sh | grep -E 'usage=|loadavg'
+  test_type: wake_probe
+  test_tags: [wake_probe]
+  test_group: module
+  skus:
+    bh_sc1_high_power:
+      timeout: 15
+      tier: 2
+      release_ready: false
+  owner_id: U07N3CUUN05
+  team: models
+  budget_type: demo
+  sp_config: sc1
