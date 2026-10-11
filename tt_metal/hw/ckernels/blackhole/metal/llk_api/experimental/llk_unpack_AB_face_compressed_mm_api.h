@@ -39,7 +39,8 @@
  *                  @ref llk_unpack_AB_face_compressed_mm_uninit.
  * @note Call this before @ref llk_unpack_AB_face_compressed_mm, and
  *       @ref llk_unpack_AB_face_compressed_mm_uninit after the last one. Call it again after any other op
- *       that writes SrcB.
+ *       has run, in particular one that writes SrcB: the execute does not reprogram the MOP, the replay buffer,
+ *       the context formats, the z-dim override or the CH1 X ends, and the SrcB clear happens only here.
  * @note On the math thread, pair with @ref llk_math_face_compressed_mm_init.
  */
 template <bool transpose = false, bool clear_src = true>
