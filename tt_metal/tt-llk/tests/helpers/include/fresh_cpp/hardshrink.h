@@ -8,7 +8,9 @@
 // semantics; golden_generators._hardshrink with the dispatch constant
 // lambda = 0.5; |x| == lambda maps to 0 on both sides).  Production: metal
 // calculate_hardshrink.  Fresh statement: the piecewise definition as one
-// typed magnitude predicate.
+// typed magnitude predicate. Use an explicit sign-clear rather than SFPABS:
+// float-mode SFPABS preserves a negative NaN's sign, which would make that
+// lane spuriously satisfy the <= lambda predicate and overwrite it with zero.
 #include <cstdint>
 
 namespace ckernel::sfpu
@@ -27,7 +29,8 @@ __attribute__((noinline)) void calculate_hardshrink_fresh_cpp(const float lambda
     {
         const sfpi::vFloat v = sfpi::dst_reg[0];
         sfpi::vFloat r       = v;
-        v_if (sfpi::abs(v) <= lambda)
+        const sfpi::vFloat magnitude = sfpi::setsgn(v, 0);
+        v_if (magnitude <= lambda)
         {
             r = 0.0f;
         }

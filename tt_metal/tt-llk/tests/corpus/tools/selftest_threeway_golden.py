@@ -343,6 +343,7 @@ _BF16_OP_TO_MATHOP_NAME = {
     "fill-fresh": "Fill",
     "activations": "Hardsigmoid",
     "hardsigmoid-fresh": "Hardsigmoid",
+    "hardshrink-fresh": "Hardshrink",
     "square": "Square",
     "square-fresh": "Square",
     "tanh": "Tanh",

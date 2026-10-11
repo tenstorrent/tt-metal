@@ -2034,6 +2034,105 @@ def test_relu_fresh_cpp_admission():
     )
 
 
+@pytest.mark.parametrize("fresh_cpp_impl", [0, 1], ids=["production", "fresh_cpp"])
+def test_hardshrink_fresh_cpp_admission(fresh_cpp_impl):
+    """Gate Hardshrink on its broad domain and packed FP32 specials.
+
+    The ordinary Float32 invocation preserves the coverage formerly supplied
+    by the shared causal-lift node. A strict finite BF16 invocation binds the
+    measured row's format at zero, subnormal, and lambda boundaries. The final
+    strict FP32 invocation adds infinities and both NaN signs without the sign
+    canonicalization of host BF16 tensor construction. The golden path applies
+    the same input FTZ and sign-preserving NaN-to-infinity packing policy as the
+    raw admission oracle. Exhaustive raw evidence remains authoritative for
+    every BF16 payload and signed-zero bit.
+    """
+    custom_atol, custom_rtol = CUSTOM_TOLERANCES.get(
+        MathOperation.Hardshrink, (None, None)
+    )
+
+    eltwise_unary_sfpu(
+        "sources/eltwise_unary_sfpu_test.cpp",
+        InputOutputFormat(DataFormat.Float32, DataFormat.Float32),
+        DestAccumulation.No,
+        ApproximationMode.No,
+        MathOperation.Hardshrink,
+        FastMode.No,
+        [64, 64],
+        custom_atol=custom_atol,
+        custom_rtol=custom_rtol,
+        fresh_cpp_impl=fresh_cpp_impl,
+    )
+
+    eltwise_unary_sfpu(
+        "sources/eltwise_unary_sfpu_test.cpp",
+        InputOutputFormat(DataFormat.Float16_b, DataFormat.Float16_b),
+        DestAccumulation.No,
+        ApproximationMode.No,
+        MathOperation.Hardshrink,
+        FastMode.No,
+        [32, 32],
+        spec_A=StimuliSpec.custom(
+            values=[
+                0.0,
+                -0.0,
+                2.0**-133,
+                127 * 2.0**-133,
+                -(2.0**-133),
+                -(127 * 2.0**-133),
+                -1.0,
+                -0.50390625,
+                -0.5,
+                -0.498046875,
+                0.498046875,
+                0.5,
+                0.50390625,
+                1.0,
+            ]
+        ),
+        custom_atol=0.0,
+        custom_rtol=0.0,
+        fresh_cpp_impl=fresh_cpp_impl,
+    )
+
+    # Keep this last so SFPU_DUMP captures the sign-sensitive FP32 inputs when
+    # the admission node is run as an evidence vehicle.
+    eltwise_unary_sfpu(
+        "sources/eltwise_unary_sfpu_test.cpp",
+        InputOutputFormat(DataFormat.Float32, DataFormat.Float32),
+        DestAccumulation.No,
+        ApproximationMode.No,
+        MathOperation.Hardshrink,
+        FastMode.No,
+        [32, 32],
+        spec_A=StimuliSpec.custom(
+            values=[
+                0.0,
+                -0.0,
+                2.0**-149,
+                (2.0**-126) - (2.0**-149),
+                -(2.0**-149),
+                -((2.0**-126) - (2.0**-149)),
+                -1.0,
+                -0.5000000596046448,
+                -0.5,
+                -0.4999999701976776,
+                0.4999999701976776,
+                0.5,
+                0.5000000596046448,
+                1.0,
+                float("inf"),
+                -float("inf"),
+                float("nan"),
+                -float("nan"),
+            ]
+        ),
+        custom_atol=0.0,
+        custom_rtol=0.0,
+        fresh_cpp_impl=fresh_cpp_impl,
+    )
+
+
 @pytest.mark.parametrize(
     "mathop,dest_acc,fresh_cpp_impl",
     [

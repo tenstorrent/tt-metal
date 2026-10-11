@@ -2534,9 +2534,7 @@ class UnarySFPUGolden:
         # canonicalize every NaN to a NEGATIVE NaN before the op ever runs, and the
         # sign is now load-bearing (convert_nan_to_inf preserves it).
         tensor = (
-            cast_preserving_nan_sign(
-                operand1.clone().detach(), format_dict[dst_format]
-            )
+            cast_preserving_nan_sign(operand1.clone().detach(), format_dict[dst_format])
             if isinstance(operand1, torch.Tensor)
             else to_tensor(operand1, dst_format)
         )
@@ -2740,7 +2738,6 @@ class UnarySFPUGolden:
         # logical_not(x) = (x == 0) ? 1 : 0. NaN != 0, so logical_not(nan) = 0.
         return 1.0 if x == 0 else 0.0
 
-
     # Lane GW SFPARECIP-mode probes: the golden IS the ISA functional model
     # (tt-isa-documentation BlackholeA0 SFPARECIP.md supporting definitions),
     # transcribed mechanically (laneGW-evidence-20260825 extraction; the
@@ -2748,6 +2745,7 @@ class UnarySFPUGolden:
     # rows compare EXACTLY (atol=rtol=0) on the Float32/dest_acc=Yes
     # pipeline, so a CRAQ pass certifies the sim extension and a device pass
     # adjudicates doc-vs-silicon.
+    # fmt: off
     _ARECIP_RECIP_LUT = (
         127, 125, 123, 121, 119, 117, 116, 114, 112, 110, 109, 107, 105, 104, 102, 100, 99, 97, 96, 94, 93, 91, 90, 88, 87,
         85, 84, 83, 81, 80, 79, 77, 76, 75, 74, 72, 71, 70, 69, 68, 66, 65, 64, 63, 62, 61, 60, 59, 58, 57,
@@ -2794,6 +2792,8 @@ class UnarySFPUGolden:
         165, 166, 167, 168, 170, 171, 172, 174, 175, 177, 178, 179, 181, 182, 184, 185, 187, 188, 189, 191, 192, 194, 196, 197, 199,
         200, 202, 203, 205, 207, 208, 210, 211, 213, 215, 216, 218, 220, 222, 223, 225, 227, 229, 230, 232, 234,
     )
+
+    # fmt: on
 
     @staticmethod
     def _approx_recip_model(mag):
@@ -3421,8 +3421,13 @@ class UnarySFPUGolden:
         return self._XIELU_ALPHA_N * (math.expm1(x) - x) + beta_mul_x
 
     def _hardshrink(self, x):
-        # hardshrink(x) = x when |x| > lambda, else 0.
-        return x if abs(x) > self._HARDSHRINK_LAMBDA else 0.0
+        # Use the framework reference rather than spelling the predicate with
+        # Python abs/comparison: torch hardshrink propagates NaN, while
+        # `abs(nan) > lambda` is false and would incorrectly return zero.
+        return self._torch_unary(
+            x,
+            lambda t: torch.nn.functional.hardshrink(t, lambd=self._HARDSHRINK_LAMBDA),
+        )
 
     def _softplus(self, x):
         # softplus(x) = (1/beta) * ln(1 + exp(beta*x)); linear above threshold.
