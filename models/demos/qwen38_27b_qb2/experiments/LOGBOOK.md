@@ -2323,3 +2323,11 @@ No session connection is needed for that queue to continue.
 - Local CPU prefix suite: 57 tests, 56 passed and one Linux process-group test
   deferred to the device host's disposable CPU environment. No device/service
   launch was performed; main counter profiling retains device priority.
+- Frozen preparation commit0abc8429901 was staged as 283 files into the new host
+  prefix-qualification-20261011-v1 directory. All57 CPU tests passed there in
+  0.782s, including the Linux process-group test; sealing completed on CPU.
+  Bundle SHA25630c67c050b982e7e9751d44f2b67cc3e860f519391fdf05c729ce1312e406e59;
+  seal SHA256c4600a16336d813579e94513c1f95348a6d7a531901541027edfac0e1dfe0c94.
+  Copied manifests and unexecuted scripts into galaxy-evidence/
+  prefix-serving-preparation-v1. Native/HTTP launch remains explicitly withheld
+  while the parent's counter-space-recovery unit owns the hardware lock.

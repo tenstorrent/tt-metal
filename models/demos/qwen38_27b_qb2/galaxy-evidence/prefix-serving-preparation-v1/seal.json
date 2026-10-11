@@ -1,0 +1,95 @@
+{
+  "bundle_sha256": "30c67c050b982e7e9751d44f2b67cc3e860f519391fdf05c729ce1312e406e59",
+  "hardware_launched": false,
+  "native_libraries": {
+    "metal-install/lib/_ttnn.so": "0dbe9afd7dd243451c53f7b80b5228b3ece0d471d130a35c73f56e74c5300665",
+    "metal-install/lib/_ttnncpp.so": "03f29893322e1086e5f802b5a148fc1a7d5e5a109b01a7002617c8b8cd11fcdc",
+    "metal-install/lib/libbenchmark.so": "f1a8fb5bcb0b5d7d50c8eb7f91f20346f558549b01eb2d2c5bbd9fae8fc4767d",
+    "metal-install/lib/libbenchmark_main.so": "bb43cc3c48fc33192e119280e3ba936600af531d8ec6c3a877818a4462eba057",
+    "metal-install/lib/libfmt.so": "65218d4fa5700a1a883fb34d02fbb848f831d715f1037a4a5f08e79d20224037",
+    "metal-install/lib/libtracy.so": "27c1942ab9054a991ec5fe3331c8fef419076582d7e72e5ee9f361a45cdc7edb",
+    "metal-install/lib/libtt-umd.so": "9fcd363f9f0c83e0ba548530d3548a427794042c53adaea423a09e26a2590cc9",
+    "metal-install/lib/libtt_metal.so": "86a4cdeb457f927a798e9f21fe96134fa477b3a60b33e56e12dc4e6a3673e04a",
+    "metal-install/lib/libtt_stl.so": "e7e4e4b2de9ea98d0e97da80f2338daae253d0b6f8a4471dee764cf514ae7e6a"
+  },
+  "prompts_sha256": "6f03c5f0f41b6e0365a5628a1412a7c2293105b6b0b384715358f7931feb80ad",
+  "sealed_at": 1791695520.5910456,
+  "weight_metadata": {
+    "config": "191e0af232104ed8b65258cf3fb2b842e288008baca7633c11b82a1ac7203aab",
+    "files": {
+      "model-00001-of-00018.safetensors": [
+        3966730552,
+        1791360795110812934
+      ],
+      "model-00002-of-00018.safetensors": [
+        3043080328,
+        1791360807572951580
+      ],
+      "model-00003-of-00018.safetensors": [
+        2542796952,
+        1791360817739064582
+      ],
+      "model-00004-of-00018.safetensors": [
+        3988973152,
+        1791360830976211592
+      ],
+      "model-00005-of-00018.safetensors": [
+        2099339864,
+        1791360841088323797
+      ],
+      "model-00006-of-00018.safetensors": [
+        3979553696,
+        1791360853744464116
+      ],
+      "model-00007-of-00018.safetensors": [
+        2108759344,
+        1791360863876576360
+      ],
+      "model-00008-of-00018.safetensors": [
+        3979553696,
+        1791360876682718114
+      ],
+      "model-00009-of-00018.safetensors": [
+        2108759344,
+        1791360886873830834
+      ],
+      "model-00010-of-00018.safetensors": [
+        3979553696,
+        1791360899631971839
+      ],
+      "model-00011-of-00018.safetensors": [
+        2108759344,
+        1791360909779083902
+      ],
+      "model-00012-of-00018.safetensors": [
+        3979553696,
+        1791360922499224279
+      ],
+      "model-00013-of-00018.safetensors": [
+        2108759344,
+        1791360932668336424
+      ],
+      "model-00014-of-00018.safetensors": [
+        3979553696,
+        1791360945333475997
+      ],
+      "model-00015-of-00018.safetensors": [
+        2108759344,
+        1791360955510588075
+      ],
+      "model-00016-of-00018.safetensors": [
+        3979564040,
+        1791360968278728594
+      ],
+      "model-00017-of-00018.safetensors": [
+        2108759344,
+        1791360978502841040
+      ],
+      "model-00018-of-00018.safetensors": [
+        3392197344,
+        1791360989729964444
+      ]
+    },
+    "index": "77042094076611b69791a610065f28b7013b8c621795fa86ddccc8bac7d1b9df"
+  }
+}
