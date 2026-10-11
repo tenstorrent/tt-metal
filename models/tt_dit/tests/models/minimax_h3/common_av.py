@@ -489,7 +489,10 @@ def artifact_dir(name: str) -> Path:
 
 def run_warm_generation(pipeline, prompt: str, *, seed: int, profiler=None, profiler_iteration: int = 0, **gen_kwargs):
     """The timed generation; `profiler` (a `BenchmarkProfiler`), when given, wraps only this call in `"run"`."""
-    warmup_kwargs = {**gen_kwargs, "num_inference_steps": 3}
+    warmup_kwargs = dict(gen_kwargs)
+    # A fixed-grid adapter refuses any other step count, and its grid fixes the compiled programs anyway.
+    if getattr(pipeline, "hyperflow", None) is None:
+        warmup_kwargs["num_inference_steps"] = 3
 
     # # The pipeline warms its whole bucket ladder at construction, so `last_seq_len` does not yet
     # # reflect this request's rung. The quiet compile pass runs the *real* request, so it establishes
