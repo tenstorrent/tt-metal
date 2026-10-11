@@ -46,6 +46,10 @@ CHECKS = (
     # minutes on an otherwise idle CI host.  Keep a bound, but do not mistake
     # a normal comprehensive run for a hung test.
     python_check("formal instruction model", "selftest_formal_equiv.py", timeout=900),
+    python_check(
+        "GELU asymptote host model",
+        "selftest_gelu_appx_asymptote.py",
+    ),
     python_check("staged variant identity", "selftest_staged_variant.py"),
     python_check("binary stream accounting", "selftest_binary_stream.py"),
     python_check("fp32 stream accounting", "selftest_fp32_stream.py"),

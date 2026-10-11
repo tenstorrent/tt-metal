@@ -13,11 +13,11 @@ namespace ckernel::sfpu
 //
 // Hand arm = calculate_gelu_appx: SFPLUTFP32 FP16 6-entry TABLE1 (lut2_sign
 // over LReg0/1/2/4/5/6, knees 0.5/1/1.5/2/3) computing the even part
-// g(|x|) = gelu(x) - 0.5x, plus 0.5x.  Measured max |err| vs exact gelu on
-// the row's golden domain (all finite bf16 — the GeluAppx stimulus is an
-// UNTRUNCATED Gaussian): 0.023411 raw / 0.023854 bf16-stored, at x ~ 0.249
-// (the [0,0.5) segment is a chord through the origin; laneGI accuracy
-// oracle, exact fma_model_bh pipeline).
+// g(|x|) = gelu(x) - 0.5x, plus 0.5x.  Current exhaustive bf16 device
+// measurements over all finite inputs give max error 0.023887 between the
+// stored device output and exact-double GELU, and 0.023926 against the
+// bf16-rounded golden, at x ~ 0.249 (the [0,0.5) segment is a chord through
+// the origin).
 //
 // LANE GU (2026-08-25; supersedes the laneGI 4-region poly-leaf tree, err
 // 0.0097 but +559% delivery): the licensed arm is re-expressed in EXACTLY
@@ -29,14 +29,17 @@ namespace ckernel::sfpu
 // hand kernel's exact instruction.  Multipartite refit (fixed
 // architectural breakpoints; per-segment minimax affine on the LUT16
 // lattice through the exact fma_model_bh pipeline, both fusion
-// orderings): max |err| vs exact gelu over all finite bf16 stimuli
-// 0.017778 raw / 0.018187 bf16-stored — BEATS the hand bar on both
-// metrics (laneGU-evidence-20260825/fits/fit_gu6.out).  The tree<->LUT
-// delivery is BIT-EXACT on BH for every 2^32 input (all-affine slots,
-// exact LUT16 re-encode, six-way bucket agreement certified all-2^32:
-// laneGU-evidence-20260825/admission-proofs/certifier6-run2.log), so the
-// formation needs no finite-math license and the knob leg pairs CRAQ
-// bit-exactly with the plain leg.
+// orderings).  The [3, inf) slot uses GELU's asymptotic line: its zero
+// intercept makes finite bf16 positive-tail inputs exactly x and finite bf16
+// negative-tail inputs exactly zero before the truncating Float16_b store.
+// Every coefficient remains
+// exactly encodable on the LUT16 lattice; the formation is required to
+// preserve the typed tree's results and is checked exhaustively over the bf16
+// input space.  Current exhaustive device measurements over all finite bf16
+// inputs give max error 0.018938 between stored output and exact-double GELU,
+// and 0.018066 against the bf16-rounded golden, below both hand maxima above.
+// This is a maximum-error license, not pointwise dominance: 79 finite negative
+// tail inputs regress by at most 0.00003624 while the global maxima improve.
 template <int ITERATIONS>
 __attribute__((noinline)) void calculate_gelu_appx_licensed_cpp()
 {
@@ -56,8 +59,9 @@ __attribute__((noinline)) void calculate_gelu_appx_licensed_cpp()
     {
         const sfpi::vFloat x = sfpi::dst_reg[0];
         const sfpi::vFloat a = sfpi::abs(x);
-        // [3, inf): the asymptote slope with the fitted lattice intercept.
-        sfpi::vFloat g = a * 0x1p-1f + -0x1.2fcp-15f;
+        // [3, inf): asymptotic line; zero intercept avoids a one-step downward
+        // bias for finite bf16 positive-tail inputs stored as Float16_b.
+        sfpi::vFloat g = a * 0x1p-1f + 0.0f;
         v_if (a < 0.5f)
         {
             g = a * 0x1.58p-3f + -0x1.2fcp-15f;
