@@ -443,15 +443,18 @@ def predict(g, p, parts=False):
         pad = np.where(g["kpad"] > 0, obh * (lat0 + g["kpad"] * p["pad_elem"]), 0.0)
         block = block + pad
     core = g["nob"] * block
+    if on("reusetail"):  # Reuse: the last round runs on the tail's share of the cores, so its reads see less contention
+        ft = g["rtail"]  # Reuse reads without multicast: each core fetches its own blocks
+        f0 = fetch(b0, g["src_a"], g["rd0"] * ft, ea, cg0, g["tb_a"])
+        f1 = fetch(b1, g["src_b"], g["rd1"] * ft, eb, cg1, g["tb_b"])
+        read_t = np.maximum(np.maximum(f0, f1), shared * ft)
+        saved = (read - read_t) + np.maximum(nK - 1, 0) * (np.maximum(read, comp) - np.maximum(read_t, comp))
+        core = np.where(g["fam"] == "reuse", core - g["rbsf"] * saved, core)
     if on("batchfix"):
         core = core + np.where(g["bloop"] > 1, g["bloop"] * p["batch_fixed"], 0.0)
     if on("reuseovl"):  # one pipeline over all of the core's blocks: K steps of every block back to back
         stream = read + (g["nob"] * nK - 1) * np.maximum(read, comp) + comp + g["nob"] * (epi + write + pad)
         if on("reusetail"):  # the last round's K steps at the tail's share of the chip-wide bound
-            ft = g["rtail"]  # Reuse reads without multicast: each core fetches its own blocks
-            f0 = fetch(b0, g["src_a"], g["rd0"] * ft, ea, cg0, g["tb_a"])
-            f1 = fetch(b1, g["src_b"], g["rd1"] * ft, eb, cg1, g["tb_b"])
-            read_t = np.maximum(np.maximum(f0, f1), shared * ft)
             nt = g["rbsf"] * nK
             stream = stream - nt * (np.maximum(read, comp) - np.maximum(read_t, comp))
         core = np.where(g["fam"] == "reuse", stream, core)
