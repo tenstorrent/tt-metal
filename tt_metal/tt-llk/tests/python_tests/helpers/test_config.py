@@ -1444,8 +1444,8 @@ class TestConfig:
             "launch_token",
             # Which ELF set a launch runs (the INIT measurement launch); the variant is the same.
             "init_launch",
-            # Which run type's variant also builds the INIT measurement ELFs (perf/core.py); the variant is the same.
-            "init_run_type",
+            # Which run types' variants also build the INIT measurement ELFs (perf/core.py); the variant is the same.
+            "init_run_types",
         ]
 
         if not TestConfig.SPEED_OF_LIGHT:
@@ -2336,14 +2336,15 @@ class TestConfig:
 
     def _builds_init_elfs(self) -> bool:
         """Wormhole perf: whether this variant also builds the INIT measurement ELFs (LLK_PERF_INIT_ONLY). INIT's timed
-        window (its body, the callee slot and the trampoline's timed part, in fixed sections ahead of main) does not
-        depend on the run type, so one run type of a test builds them for all of its INIT rows (perf/core.py).
+        window (its body, the callee slot and the trampoline's timed part) sits in fixed sections ahead of main, so
+        L1_TO_L1 builds them for all of a test's INIT rows, or without it each run type for its own row (perf/core.py
+        init_run_types).
         """
         return (
             self._wormhole_perf_barrier()
             and TestConfig.PERF_INIT_LAUNCH
-            and getattr(self, "init_run_type", None) is not None
-            and getattr(self, "current_run_type", None) == self.init_run_type
+            and getattr(self, "current_run_type", None)
+            in getattr(self, "init_run_types", ())
         )
 
     def _build_init_elfs(self, variant_dir: Path, jobs):
