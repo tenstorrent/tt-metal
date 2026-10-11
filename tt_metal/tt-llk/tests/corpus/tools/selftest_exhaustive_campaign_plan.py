@@ -181,6 +181,19 @@ def main():
         assert category == "structural_unhooked"
         assert full_space is None
 
+    # Exercise the real classification sets together, not just individual
+    # selectors or the reduced fixture's replacement UNARY_32 set.
+    full_plan = P.plan(
+        checked_in,
+        {op: search(op) for op in checked_in},
+        {},
+        "-mbaseline",
+    )
+    assert {row["op"] for row in full_plan} == {
+        op for op, row in checked_in.items() if row["kind"] == "full2x2"
+    }
+    assert not any(row["state"] == "COMPLETE" for row in full_plan)
+
     bad = {op: search(op) for op in corpus}
     bad["abs"]["proposal"]["frozen_baseline_flags"] = "-mother-baseline"
     try:
