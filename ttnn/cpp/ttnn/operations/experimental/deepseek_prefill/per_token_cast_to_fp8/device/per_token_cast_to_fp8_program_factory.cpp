@@ -401,9 +401,9 @@ ttnn::device_operation::CachedProgram<PerTokenCastToFp8SharedVariables> create_p
             defines["DIRECT_SRC"] = "1";  // bf16 / bf8_b tiles are exact in SrcA: no fp32 copy
         }
         if (tile_layout && attrs.token_count_aware) {
-            // Wide units: up to 7 chunks (896 columns) of one tile-row per unit, so the writer moves one long run
-            // per row instead of a 128-B write per chunk (the standalone quantize was bound by those writes).
-            uint32_t q_unit = 7;
+            // Units of 2 chunks (256 columns) of one tile-row: 256-B row writes, and enough units per core to even
+            // out the work (K3 Q2: 1 chunk 102 us, 2 chunks 91 us, 4 chunks 92 us, 7 chunks 100 us).
+            uint32_t q_unit = 2;
             while (chunks_per_row % q_unit != 0) {
                 --q_unit;
             }
