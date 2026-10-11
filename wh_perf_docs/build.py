@@ -84,7 +84,7 @@ for i in range(1, 10):
     if i >= 0:
         j = d["hw"].index("</li>", i) + len("</li>")
         cap = ('<p class="small">Who shares which L1 port. The thick lines are the packers. Port numbers as in <code>tt_tensix.sv</code>; '
-               'the NoC ports and the other unpacker read ports are not drawn. The RTL comment above port 8 says "packer 2", but the signal is packer index 0.</p>')
+               'the NoC ports and the other unpacker read ports are not drawn. After the port, every access still competes for one of the 16 L1 banks with all other ports, so an own port does not mean an own bank. The RTL comment above port 8 says "packer 2", but the signal is packer index 0.</p>')
         d["hw"] = d["hw"][:j] + "</ul>" + l1_ports_svg() + cap + "<ul>" + d["hw"][j:]
     open(f"{OUT}/{d['id']}.html", "w").write(page(d))
 open(f"{OUT}/WH-00.html", "w").write(index())
