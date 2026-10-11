@@ -2,8 +2,8 @@
 //
 // SPDX-License-Identifier: Apache-2.0
 
-// Perf kernel of the experimental block row max (experimental/llk_{math,unpack_AB}_reduce_custom.h) in the shape of reduce_perf.cpp.
-// TILE_CNT counts input tiles, as in perf_reduce.py, so the report's cycles per tile are per input tile; the scaler is tile 0 of operand B.
+// Perf kernel of the experimental block row max, in the shape of reduce_perf.cpp.
+// TILE_CNT counts input tiles; the scaler is tile 0 of operand B.
 #include <algorithm>
 #include <cstdint>
 #include <cstdio>

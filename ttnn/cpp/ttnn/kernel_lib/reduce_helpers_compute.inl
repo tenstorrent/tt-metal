@@ -180,8 +180,7 @@ constexpr bool manages_cb(ReduceInputPolicy p) {
     return p != ReduceInputPolicy::NoWaitNoPop;
 }
 
-// A kernel whose reduce scalers are all powers of two (1.0 included) defines REDUCE_POW2_SCALER before this header:
-// on Blackhole its SUM and AVG then run at the fewest fidelity phases that keep the bits (reduce.h).
+// A kernel whose reduce scalers are all powers of two defines REDUCE_POW2_SCALER before this header (see reduce.h).
 #ifdef REDUCE_POW2_SCALER
 constexpr bool reduce_pow2_scaler = true;
 #else

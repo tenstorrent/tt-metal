@@ -81,7 +81,6 @@ inline void llk_unpack_AB_reduce(
     llk_unpack_AB_reduce_impl<pool_type, reduce_dim>(address_a, address_b);
 }
 
-// Block of num_tiles consecutive tiles of operandA from tile_index_a, against the scaler tile tile_index_b of operandB.
 template <PoolType pool_type, ReduceDim reduce_dim>
 inline void llk_unpack_AB_reduce_block(
     const std::uint32_t operandA,
@@ -105,7 +104,7 @@ inline void llk_unpack_AB_reduce_block(
     [[maybe_unused]] const std::uint32_t unpA_operand_id = swap_operands ? operandB_id : operandA_id;
     [[maybe_unused]] const std::uint32_t unpB_operand_id = swap_operands ? operandA_id : operandB_id;
 
-    // One execute per tile; the state is identical for every tile, so it is restated once.
+    // The state is identical for every tile, so one execute covers the block.
     SAN_HOOK(execute<OperationUnpackReduce>(
         StateVal<OperationUnpackReduce::PoolType>(to_underlying(pool_type)),
         StateVal<OperationUnpackReduce::ReduceDim>(to_underlying(reduce_dim)),

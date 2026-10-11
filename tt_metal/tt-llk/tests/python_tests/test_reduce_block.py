@@ -47,7 +47,7 @@ mathop_mapping = {
 
 
 def _fidelities(formats, pool_type):
-    """MAX has no fidelity phases; SUM takes the high and one low fidelity (the block math differs between LoFi and HiFi)."""
+    """MAX has no fidelity phases; SUM takes HiFi4 and one low fidelity, as the block math differs."""
     if pool_type == ReducePool.Max:
         return [MathFidelity.HiFi4]
     if formats.input_format in [DataFormat.Float16_b, DataFormat.Float32]:
@@ -215,7 +215,7 @@ def test_reduce_block(
     is_reduce_to_one,
     tile_dimensions,
 ):
-    """Blocks of a DEST section into their own DEST tiles; reduce to one accumulates 16 tiles in calls of 9 and 7."""
+    """Block calls into their own DEST tiles, or accumulated into one."""
     _run_reduce_block(
         formats,
         reduce_dim,
@@ -244,7 +244,7 @@ def test_reduce_block(
     call_tiles=[40, 35],
 )
 def test_reduce_block_chunks(formats, reduce_dim, pool_type, call_tiles):
-    """40 full tiles accumulated by block calls: one call of 40 (chunks of 32 and 8), or calls of 35 (32 and 3) and 5."""
+    """Block calls that span unpack chunks accumulate like a single call."""
     _run_reduce_block(
         formats,
         reduce_dim,

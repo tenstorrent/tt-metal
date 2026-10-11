@@ -38,7 +38,7 @@ template <bool is_int_fpu_en>
 inline void reduce_row_perform_transpose()
 {
     // The MOVD2B/ELWADD below read the Src zero substitution flag (FlushDenormals = !flag): the caller sets it to preserve,
-    // or a datum whose low byte is zero would be flushed to 0 mid-reduction.
+    // or a datum with a zero low byte would be flushed to 0 mid-reduction.
     if constexpr (is_int_fpu_en)
     {
         TTI_STALLWAIT(p_stall::STALL_SFPU, p_stall::MATH);
@@ -119,10 +119,6 @@ inline void reduce_row_pool_all_faces(const std::uint32_t num_faces_c_dim)
 
 /**
  * @brief Pool one row of faces and release the source banks of every face.
- *
- * @tparam type: Pooling op, values = <SUM/AVG/MAX>
- * @tparam high_fidelity: Run the multi-phase fidelity MOP instead of a single GAPOOL.
- * @param num_faces_c_dim: Number of column faces in the row.
  */
 template <PoolType type, bool high_fidelity>
 inline void reduce_row_pool_all_faces_release(const std::uint32_t num_faces_c_dim)
@@ -283,8 +279,8 @@ inline void _llk_math_reduce_(const std::uint32_t dst_index, const ckernel::Tens
 
         if constexpr (type == PoolType::MAX)
         {
-            // The pools run under the operand default of the Src zero flag and the transposes under preserve: both face
-            // rows are pooled first, so the flag changes twice per tile; the last face's banks stay for the transposes.
+            // The pools run under the operand default of the Src zero flag and the transposes under preserve, so both face
+            // rows are pooled first; the last face's banks stay for the transposes.
             math::_configure_default_zero_flag_state_();
             if (tensor_shape.num_faces_r_dim > 1)
             {
@@ -330,7 +326,7 @@ inline void _llk_math_reduce_(const std::uint32_t dst_index, const ckernel::Tens
     {
         if constexpr (type == PoolType::MAX)
         {
-            // GMPOOL takes the max with the scratch row; a tile copied into DST leaves it 0, not undefined (minus infinity)
+            // GMPOOL takes the max with the scratch row, so a tile copied into DST must leave it 0, not minus infinity.
             TTI_ZEROACC(p_zeroacc::CLR_SPECIFIC, 0, 0, ADDR_MOD_0, 4);
         }
         for (std::uint32_t face_num = 0; face_num < static_cast<std::uint32_t>(tensor_shape.total_num_faces() - 1); face_num++)
@@ -382,19 +378,7 @@ inline void _llk_math_reduce_(const std::uint32_t dst_index, const ckernel::Tens
 /**
  * @brief Reduce a block of tiles on the math thread, the counterpart of @ref _llk_unpack_AB_reduce_block_.
  *
- * A stride of 0 accumulates the block into one tile. With @ref reduce_block_holds_scaler the scaler stays in SrcA for a
- * chunk of @ref REDUCE_BLOCK_MAX_TILES tiles, so each tile releases only SrcB and the chunk releases SrcA once.
- *
- * @tparam type: Pooling op, values = <SUM/AVG/MAX>
- * @tparam dim: Reduction dimension, values = <REDUCE_ROW/REDUCE_COL/REDUCE_SCALAR>
- * @tparam is_fp32_dest_acc_en: Enable FP32 accumulation in the destination register.
- * @tparam math_fidelity: Math fidelity for controlling precision, values = <LoFi/HiFi2/HiFi3/HiFi4>
- * @tparam is_int_fpu_en: Enable integer FPU datapath (casts int32 dest datums to int8 before moving to SrcB).
- * @param dst_index: Destination tile of the first tile of the block.
- * @param num_tiles: Number of tiles in the block.
- * @param dst_stride: Destination tile step between consecutive tiles of the block.
- * @param tensor_shape: Tensor shape describing tile dimensions.
- * @note Call @ref _llk_math_reduce_init_ with matching template args before this function.
+ * A stride of 0 accumulates the block into one tile.
  */
 template <PoolType type, ReduceDim dim, bool is_fp32_dest_acc_en, MathFidelity math_fidelity, bool is_int_fpu_en = false>
 inline void _llk_math_reduce_block_(

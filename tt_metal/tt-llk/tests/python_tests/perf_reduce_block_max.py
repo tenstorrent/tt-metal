@@ -1,10 +1,7 @@
 # SPDX-FileCopyrightText: © 2026 Tenstorrent AI ULC
 # SPDX-License-Identifier: Apache-2.0
 
-"""Perf sweep of the experimental block row max (reduce_block_max_row).
-
-tile_cnt counts input tiles, as in perf_reduce.py, so the report's cycles per tile are per input tile.
-"""
+"""Perf sweep of the experimental block row max (reduce_block_max_row)."""
 
 import pytest
 from helpers.format_config import DataFormat, InputOutputFormat

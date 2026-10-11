@@ -59,7 +59,6 @@ inline void llk_math_reduce(const std::uint32_t operandA, const std::uint32_t op
     _llk_math_reduce_<type, dim, is_fp32_dest_acc_en, math_fidelity, is_int_fpu_en>(dst_index, tensor_shape);
 }
 
-// Block of num_tiles tiles: tile i goes to dst_index + i * dst_stride (0 accumulates into one tile).
 template <
     PoolType type,
     ReduceDim dim,
@@ -80,7 +79,7 @@ inline void llk_math_reduce_block(
     const std::uint32_t operand_id = get_operand_id(operandA);
     const ckernel::TensorShape tensor_shape = get_operand_tensor_shape(operand_id);
 
-    // One execute per tile; the state is identical for every tile, so it is restated once.
+    // The state is identical for every tile, so one execute covers the block.
     SAN_HOOK(execute<OperationFpuReduce>(
         StateVal<OperationFpuReduce::PoolType>(to_underlying(type)),
         StateVal<OperationFpuReduce::ReduceDim>(to_underlying(dim)),

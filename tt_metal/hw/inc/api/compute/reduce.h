@@ -74,8 +74,8 @@ constexpr MathFidelity reduce_math_fidelity(MathFidelity kernel_fidelity) {
  * | Function   | icb_scaler                | CB holding scaling factors (see above)                                                  | uint32_t  | 0 to 31                                        | True     |
  * | Function   | ocb                       | The identifier of the output circular buffer (CB)                                       | uint32_t  | 0 to 31                                        | True     |
  *
- * pow2_scaler (template, default false): every scaler is a power of two, 1.0 included; on Blackhole SUM and AVG then
- * run at the fewest fidelity phases that keep the bits. Pass the same value to reduce_tile and reduce_block.
+ * pow2_scaler (template, default false): every scaler is a power of two; Blackhole SUM and AVG then run at fewer
+ * fidelity phases with the same bits. Pass the same value to reduce_tile and reduce_block.
  */
 // clang-format on
 template <
@@ -199,16 +199,16 @@ ALWI void reduce_tile(
 /**
  * Performs a reduction operation *B = reduce(A)* on `ntiles` consecutive tiles from the input CB, writing the
  * result of tile i to DST register slot `start_idst + i * idst_stride`. This is the uniform block entry point for the
- * reduce op group: it has `reduce_tile`'s semantics and requires the same initialization (`reduce_init`) to have been
- * called first. The scaling-factor tile (`itile_scaler`) is reused for every tile in the block. The `ntiles` tiles must
- * not wrap around the end of the CB. The DST register buffer must be in acquired state via *acquire_dst* call.
+ * reduce op group and requires the same initialization (`reduce_init`) to have been called first. The scaling-factor
+ * tile (`itile_scaler`) is reused for every tile in the block. The `ntiles` tiles must not wrap around the end of the
+ * CB. The DST register buffer must be in acquired state via *acquire_dst* call.
  *
  * NOTE: The loop implementation is transitional. In the future this for-loop must be folded into a
  * hardware MOP / REPLAY buffer (as is being done for Quasar) so the whole block issues as a single
  * packed op; the blocking then lives in llk-lib without changing this signature. Tracked under the
  * Compute API Split effort (tt-metal#35739); the per-op push-down lands in tt-metal#47478.
- * NOTE: On Blackhole the block is one LLK call per thread, and a block of bfp tiles overwrites the unpacker scratch
- * register a tilize init sets: call that init again.
+ * NOTE: On Blackhole a block of bfp tiles overwrites the unpacker scratch register a tilize init sets: call that init
+ * again.
  * NOTE: Before the next operation is initialized, the `reduce_uninit` function must be called to reset the packer
  * state to default.
  *

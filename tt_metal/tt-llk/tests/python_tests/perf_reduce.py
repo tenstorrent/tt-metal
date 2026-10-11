@@ -31,7 +31,7 @@ REDUCE_MATHOP = {
     ReduceDimension.Scalar: MathOperation.ReduceScalar,
 }
 
-# ttnn reduce accumulates in fp32 DEST by default, so same-format pairs are swept in both DEST modes.
+# ttnn reduce accumulates in fp32 DEST by default, so same-format pairs run in both DEST modes.
 _DEST_ACC_FORMATS = {
     (DataFormat.Float16_b, DataFormat.Float16_b),
     (DataFormat.Float32, DataFormat.Float32),

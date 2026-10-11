@@ -1,12 +1,7 @@
 # SPDX-FileCopyrightText: © 2026 Tenstorrent AI ULC
 # SPDX-License-Identifier: Apache-2.0
 
-"""Perf sweep of the block reduce (_llk_unpack_AB_reduce_block_, _llk_math_reduce_block_).
-
-REDUCE_ROW and REDUCE_SCALAR accumulate eight input tiles into one output tile, REDUCE_COL writes one output tile per input
-tile; block_ct_dim is the number of tiles per call, 1 being the per tile calls, so each configuration carries its own
-reference row. tile_cnt counts input tiles.
-"""
+"""Perf sweep of the block reduce (_llk_unpack_AB_reduce_block_, _llk_math_reduce_block_)."""
 
 import pytest
 from conftest import skip_for_quasar, skip_for_wormhole

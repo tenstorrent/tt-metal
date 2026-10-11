@@ -2,8 +2,7 @@
 //
 // SPDX-License-Identifier: Apache-2.0
 
-// Block reduce at production shapes: ROW and SCALAR accumulate 8 input tiles per output, COL writes one per tile;
-// calls of REDUCE_BLOCK_CT_DIM tiles (1 is the per tile call), TILE_CNT input tiles at their CB page size.
+// ROW and SCALAR accumulate 8 input tiles per output, COL writes one per tile; REDUCE_BLOCK_CT_DIM of 1 is the per tile call.
 #include <algorithm>
 #include <cstdint>
 #include <cstdio>

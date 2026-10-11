@@ -198,22 +198,10 @@ inline void _llk_unpack_AB_reduce_(const std::uint32_t address_a, const std::uin
 }
 
 /**
- * @brief Unpack a block of consecutive data tiles against one scaler tile with one context acquire per chunk of
+ * @brief Unpack a block of consecutive data tiles against one scaler tile, one context acquire per chunk of
  *        @ref REDUCE_BLOCK_MAX_TILES tiles.
  *
- * Each tile runs the init's MOP, so the source registers get what the per tile call gives them; the data address
- * advances in the instruction stream (Z counter or CFGSHIFTMASK), and a held scaler is unpacked once per chunk.
- *
- * @tparam pool_type: Type of pooling operation, values = <SUM/AVG/MAX>
- * @tparam reduce_dim: Dimension along which to reduce, values = <REDUCE_ROW/REDUCE_COL/REDUCE_SCALAR>
- * @param address_a: L1 address of the first data tile (16 B units).
- * @param address_b: L1 address of the scaler tile (16 B units).
- * @param num_tiles: Number of consecutive data tiles.
- * @param tile_stride_16B: Distance between the starts of consecutive data tiles in L1 (16 B units).
- * @param unpack_src_format: L1 data format of the data tiles.
- * @param tensor_shape: Shape of the data tile, the one the init received.
- * @note Call @ref _llk_unpack_AB_reduce_init_ with matching template args before this function.
- * @note Pair with @ref _llk_math_reduce_block_ on the math thread with the same tile count.
+ * Pair with @ref _llk_math_reduce_block_ on the math thread with the same tile count.
  */
 template <PoolType pool_type, ReduceDim reduce_dim>
 inline void _llk_unpack_AB_reduce_block_(
@@ -246,8 +234,8 @@ inline void _llk_unpack_AB_reduce_block_(
 
     if (!contiguous)
     {
-        // The tile stride for CFGSHIFTMASK, written in the instruction stream behind the CFGSHIFTMASKs of an earlier block
-        // SCRATCH_SEC0 is shared: the tilize, tilizeA_B and compressed custom_mm inits set it and run again after this
+        // SCRATCH_SEC0 holds the tile stride for CFGSHIFTMASK; the tilize, tilizeA_B and compressed custom_mm inits share it
+        // and must run again after this.
         TT_SETDMAREG(0, LOWER_HALFWORD(tile_stride_16B), 0, LO_16(p_gpr_unpack::TMP0));
         TT_SETDMAREG(0, UPPER_HALFWORD(tile_stride_16B), 0, HI_16(p_gpr_unpack::TMP0));
         TTI_STALLWAIT(p_stall::STALL_CFG, p_stall::THCON);
@@ -270,11 +258,10 @@ inline void _llk_unpack_AB_reduce_block_(
 
         wait_for_next_context(2);
 
-        // The CFGSHIFTMASK form adds the stride before every tile, the first one included
+        // The CFGSHIFTMASK form adds the stride before every tile, the first one included.
         cfg[data_reg]   = contiguous ? address_a : address_a - tile_stride_16B;
         cfg[scaler_reg] = address_b;
 
-        // Trisc::SEMPOST for context acquire
         semaphore_post(semaphore::UNPACK_SYNC);
 
         // Hold the UNPACRs and the CFGSHIFTMASKs until the base address stores from the RISC have landed
@@ -288,7 +275,7 @@ inline void _llk_unpack_AB_reduce_block_(
                 if (contiguous)
                 {
                     TTI_UNPACR(Srcs::SrcB, 0, 0, 0, 0, 1, 1, p_unpacr::RAREFYB_DISABLE, 0, 0, 0, 0, 1);
-                    // Z runs past the tile's Z dim into the next tile, linear in L1 (as in the block row max)
+                    // Z runs past the tile's Z dim into the next tile, linear in L1
                     TTI_INCADCZW(data_unp, 0, 0, 0, 4);
                 }
                 else
@@ -305,8 +292,7 @@ inline void _llk_unpack_AB_reduce_block_(
             {
                 if (contiguous)
                 {
-                    // The data Z counter runs past the tile's Z dim into the next tile, linear in L1 (as in the block
-                    // row max); the scaler restarts at its first face
+                    // Data Z runs into the next tile, linear in L1; the scaler restarts at its first face
                     TTI_SETADCZW(scaler_unp, 0, 0, 0, 0, 0b1111);
                 }
                 else
@@ -318,10 +304,8 @@ inline void _llk_unpack_AB_reduce_block_(
             }
         }
 
-        // T6::SEMGET for context release
         t6_semaphore_get(semaphore::UNPACK_SYNC);
 
-        // Switch unpacker config context
         switch_config_context(unp_cfg_context);
 
         address_a += chunk * tile_stride_16B;

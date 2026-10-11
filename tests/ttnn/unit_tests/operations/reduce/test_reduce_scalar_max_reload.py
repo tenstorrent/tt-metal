@@ -2,8 +2,7 @@
 #
 # SPDX-License-Identifier: Apache-2.0
 
-# A REDUCE_SCALAR MAX whose running result is packed and copied back into DST before the next tile, as tt-mlir's D2M
-# kernels do across reduction blocks: the copied tile must not clamp an all-negative maximum at 0.
+# A REDUCE_SCALAR MAX reloaded from a packed tile into DST must not clamp an all-negative maximum at 0.
 
 import pytest
 import torch

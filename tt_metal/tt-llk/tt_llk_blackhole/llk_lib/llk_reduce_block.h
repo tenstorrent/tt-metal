@@ -12,11 +12,10 @@
 namespace ckernel
 {
 
-// Tiles per unpack context of a block reduce: the data unpacker's Z counter addresses 256 faces.
+// Tiles per unpack context: the data unpacker's Z counter addresses 256 faces.
 constexpr std::uint32_t REDUCE_BLOCK_MAX_TILES = 32;
 
-// The unpack and math sides of a block reduce agree on this: SUM/AVG REDUCE_ROW of full 32x32 tiles keeps the scaler
-// tile in SrcA for a whole chunk of the block, so it is unpacked once and released once per chunk.
+// Unpack and math agree on this: SUM/AVG REDUCE_ROW of full 32x32 tiles keeps the scaler in SrcA for a whole chunk.
 template <PoolType pool_type, ReduceDim reduce_dim>
 constexpr bool reduce_block_holds_scaler(const TensorShape& tensor_shape)
 {
