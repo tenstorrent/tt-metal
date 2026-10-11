@@ -56,3 +56,7 @@ def test_chunk_decay_statistics_counts_ceiling_and_weak_chunks() -> None:
     assert stats["above_144"] == 1
     assert stats["weak_below_2^-9"] == 1
     assert stats["p50"] == 32.0
+
+
+def test_chunk_decay_statistics_without_a_full_chunk_reports_nothing() -> None:
+    assert chunk_decay_statistics(torch.full((31, 1, 2), -5.0)) == {"chunk_channels": 0}

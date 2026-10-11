@@ -105,9 +105,11 @@ def chunk_decay_statistics(gate: torch.Tensor, chunk: int = 32, ceiling: float =
 
     Reports quantiles, how many chunk-channels sit at the K3 bound's ceiling (``-5`` per token, so 160 per
     32 tokens), and how many are weak enough that ``exp(-|G_last|)`` rounds to 1 in BF16 (below 2^-9).
-    Trailing tokens that do not fill a chunk are ignored.
+    Trailing tokens that do not fill a chunk are ignored; with no full chunk only ``chunk_channels`` (0) is reported.
     """
     usable = gate.shape[0] // chunk * chunk
+    if not usable:
+        return {"chunk_channels": 0}
     g_last = gate[:usable].double().reshape(-1, chunk, *gate.shape[1:]).sum(1).abs().flatten()
     # torch.quantile accepts at most 2^24 values; a fixed stride keeps larger inputs deterministic.
     sample = g_last[:: max(1, -(-g_last.numel() // 2**24))]
