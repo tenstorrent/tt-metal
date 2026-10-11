@@ -190,18 +190,27 @@ void kernel_main() {
                 reinterpret_cast<volatile tt_l1_ptr uint16_t*>(cb_scale.get_write_ptr());
             volatile tt_l1_ptr uint16_t* weight_tile =
                 reinterpret_cast<volatile tt_l1_ptr uint16_t*>(cb_weight_col.get_write_ptr());
+            // Plain (cached) loads after one invalidate, a token's part_wt scales gathered before their strided
+            // stores (the volatile load-shift-store per element serialized the staging).
+            invalidate_l1_cache();
             for (uint32_t t = 0; t < TOKENS_PER_CHUNK; t++) {
                 const uint32_t col0 = tile_col0_offset(t);
                 if (s < num_local[t]) {
                     const uint32_t k = local_slots[t][s];
                     // bf16 weight = the page's first element; pow2 fp32 scale -> bf16 is its high half (exact).
-                    weight_tile[col0] = reinterpret_cast<volatile tt_l1_ptr uint16_t*>(
+                    weight_tile[col0] = reinterpret_cast<const uint16_t*>(
                         weight_scratch + (t * num_experts + k) * weight_read_bytes)[0];
-                    const volatile tt_l1_ptr uint32_t* row_scales =
-                        reinterpret_cast<volatile tt_l1_ptr uint32_t*>(scale_scratch + t * scale_slot_bytes) +
-                        scale_skip_words;
+                    const uint32_t* row_scales =
+                        reinterpret_cast<const uint32_t*>(scale_scratch + t * scale_slot_bytes) + scale_skip_words;
+                    uint32_t v[part_wt];
+#pragma GCC unroll 32
                     for (uint32_t j = 0; j < part_wt; j++) {
-                        scale_tiles[j * tt::constants::TILE_HW + col0] = row_scales[j] >> 16;
+                        v[j] = row_scales[j];
+                    }
+                    volatile tt_l1_ptr uint16_t* dst = scale_tiles + col0;
+#pragma GCC unroll 32
+                    for (uint32_t j = 0; j < part_wt; j++) {
+                        dst[j * tt::constants::TILE_HW] = v[j] >> 16;
                     }
                 } else {
                     weight_tile[col0] = 0;

@@ -48,7 +48,11 @@ _MOE_FUSED_DQ2 = os.environ.get("MOE_FUSED_DQ2", "1") == "1"
 # projection + reduce-scatter run beside combine, in a second sub-device window. Default on for the fp8 dispatch
 # wire, whose dispatch (~325 us) is shorter than the whole shared expert (~520 us); the bf16 dispatch (~580 us) is
 # longer, so there the split only adds a window. MOE_SPLIT_SHARED=1 / 0 forces it.
-_MOE_Q2_L1 = os.environ.get("MOE_Q2_L1", "1") == "1"
+# Combine output (the post_combine_reduce source) in L1: PCR 132 -> 101 us. Q2's packed rows in L1 save ~20 us
+# more, but both L1 buffers together overlap the shared expert's CBs (it runs beside combine), so Q2 defaults to
+# DRAM whenever combine's output is in L1.
+_MOE_COMBINE_L1 = os.environ.get("MOE_COMBINE_L1", "1") == "1"
+_MOE_Q2_L1 = os.environ.get("MOE_Q2_L1", "0" if _MOE_COMBINE_L1 else "1") == "1"
 _MOE_SPLIT_SHARED = os.environ.get("MOE_SPLIT_SHARED")
 # 1x32 fp8 dispatch under LatentMoE: Q1 on each chip's to_latent slice before the all-gather (MOE_Q1_PRE_GATHER=0:
 # gather bf16, then quantize the full latent).
@@ -566,6 +570,7 @@ class TtMoe(LightweightModule):
             topology=self.row_topology,
             init_zeros=False,
             fp8_scaled=self.combine_fp8,
+            memory_config=ttnn.L1_MEMORY_CONFIG if _MOE_COMBINE_L1 else ttnn.DRAM_MEMORY_CONFIG,
         )
 
         # Build (group, chip, local_expert) -> global expert id table, sharded
