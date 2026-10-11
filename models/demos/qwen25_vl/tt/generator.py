@@ -706,18 +706,24 @@ class Generator(ModelCapabilitiesMixin, WarmupForwardMixin):
             rot_mats = (cos, sin)
         num_blocks = num_blocks_in_seq(end, block_size)
         # Only the blocks the prompt owns may be written: a scheduler row can retain a previous
-        # request's block IDs past the prompt, and the padded suffix must not land in them. Pad with
-        # -1, which paged_fill_cache treats as "skip" (same rule as the shared generator's
-        # _get_prefill_user_page_table).
+        # request's block IDs past the prompt, and the padded suffix must not land in them. The fill
+        # table pads with -1, which paged_fill_cache treats as "skip" (same rule as the shared
+        # generator's _get_prefill_user_page_table).
         owned_blocks = num_blocks_in_seq(seq_len, block_size)
         page_table_user = page_table[0:1, :owned_blocks]
+        sdpa_page_table_user = page_table_user
         if page_table_user.shape[1] < num_blocks:
+            tail = num_blocks - page_table_user.shape[1]
             page_table_user = torch.cat(
-                [
-                    page_table_user,
-                    torch.full((1, num_blocks - page_table_user.shape[1]), -1, dtype=page_table_user.dtype),
-                ],
-                dim=-1,
+                [page_table_user, torch.full((1, tail), -1, dtype=page_table_user.dtype)], dim=-1
+            )
+            # The chunked SDPA reads whole K/V chunks up to the end of the q-chunk that holds the last
+            # real token, which can run into the padded tail. Those rows are masked for every real
+            # query, but a -1 there is read as block 0xFFFFFFFF and fetches arbitrary DRAM; on some
+            # devices that is non-finite and poisons the chunk. Point the tail at the prompt's last
+            # block instead: its contents are finite and never attended by a real query.
+            sdpa_page_table_user = torch.cat(
+                [sdpa_page_table_user, sdpa_page_table_user[:, -1:].expand(-1, tail)], dim=-1
             )
         chunk_size = (
             padded_suffix
@@ -738,7 +744,7 @@ class Generator(ModelCapabilitiesMixin, WarmupForwardMixin):
                 chunk_tokens,
                 rot_mats=rot_mats,
                 start_pos=chunk_start,
-                page_table=page_table_user,
+                page_table=sdpa_page_table_user,
                 chunk_page_table=chunk_page_table,
             )
             holds_last = chunk_start <= last_token_idx < chunk_end
