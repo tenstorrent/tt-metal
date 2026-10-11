@@ -68,7 +68,7 @@ void run_kernel(RUNTIME_PARAMETERS params)
         }
         else if constexpr (PERF_RUN_TYPE == PerfRunType::MATH_ISOLATE)
         {
-            _perf_unpack_loop_set_valid<true, true>(LOOP_FACTOR * TILE_CNT * DVALIDS_PER_TILE);
+            _perf_unpack_loop_set_valid<true, true, PERF_RUN_TYPE>(LOOP_FACTOR * TILE_CNT * DVALIDS_PER_TILE);
             return;
         }
         else
@@ -126,7 +126,7 @@ void run_kernel(RUNTIME_PARAMETERS params)
         }
         else if constexpr (PERF_RUN_TYPE == PerfRunType::UNPACK_ISOLATE || PERF_RUN_TYPE == PerfRunType::L1_CONGESTION)
         {
-            _perf_math_loop_clear_valid<true, true>(LOOP_FACTOR * TILE_CNT * DVALIDS_PER_TILE);
+            _perf_math_loop_clear_valid<true, true, PERF_RUN_TYPE>(LOOP_FACTOR * TILE_CNT * DVALIDS_PER_TILE);
             return;
         }
         else if constexpr (PERF_RUN_TYPE == PerfRunType::MATH_ISOLATE)
