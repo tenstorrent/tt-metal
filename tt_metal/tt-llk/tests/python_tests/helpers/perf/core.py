@@ -27,6 +27,9 @@ from ..stimuli_config import StimuliConfig
 from ..test_config import BuildMode, ProfilerBuild, TestConfig
 from ..test_variant_parameters import PERF_RUN_TYPE, RuntimeParameter, TemplateParameter
 from .schema import (
+    COUPLING_BASE,
+    COUPLING_PIPELINE_RUN_TYPE,
+    COUPLING_STAGE_RUN_TYPES,
     FLAG_HEADERS,
     FORMAT_HEADERS,
     LOOP_FACTOR_COLUMN,
@@ -38,6 +41,7 @@ from .schema import (
     TILE_CNT_COLUMN,
     PerfSchemaError,
     assert_unique_columns,
+    stat_column,
     stat_prefix,
     text_size_column,
 )
@@ -85,6 +89,25 @@ _CODE_SIZE_COMPONENTS = {
 }
 
 # Common postprocessing
+
+
+def add_pipeline_coupling(frame: pd.DataFrame) -> pd.DataFrame:
+    """mean(COUPLING) on TILE_LOOP rows: mean(L1_TO_L1) minus the slowest isolate stage measured alone.
+    Left out when a run has no L1_TO_L1 or no isolate (LLK_PERF_RUN_TYPES), so a test's cases keep one schema.
+    """
+    pipeline = stat_column(COUPLING_PIPELINE_RUN_TYPE, MEAN)
+    stages = [
+        stat_column(rt, MEAN)
+        for rt in COUPLING_STAGE_RUN_TYPES
+        if stat_column(rt, MEAN) in frame.columns
+    ]
+    if frame.empty or pipeline not in frame.columns or not stages:
+        return frame
+    slowest = frame[stages].max(axis=1, skipna=True)
+    frame[stat_column(COUPLING_BASE, MEAN)] = (frame[pipeline] - slowest).where(
+        frame[MARKER] == TILE_LOOP_MARKER
+    )
+    return frame
 
 
 def postprocess_tile_loop(frame: pd.DataFrame) -> pd.DataFrame:
@@ -937,7 +960,7 @@ class PerfConfig(TestConfig):
             passed_templates,
             passed_runtimes,
         )
-        combined = sweep.merge(run_results, how="cross")
+        combined = add_pipeline_coupling(sweep.merge(run_results, how="cross"))
 
         text_size_cols = [c for c in combined.columns if c.startswith(TEXT_SIZE_PREFIX)]
         other_cols = [c for c in combined.columns if not c.startswith(TEXT_SIZE_PREFIX)]
