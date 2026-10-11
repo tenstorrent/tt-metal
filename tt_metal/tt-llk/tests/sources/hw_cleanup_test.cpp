@@ -2,27 +2,9 @@
 //
 // SPDX-License-Identifier: Apache-2.0
 
-// Compile/smoke test for the Blackhole-only experimental hardware-teardown LLK
-// family "hw_cleanup" (compute_kernel_hw_cleanup.h ->
-// llk_{unpack,math,pack}_hw_cleanup.h + shared llk_hw_cleanup.h).
-//
-// hw_cleanup is a TEARDOWN family with NO numeric output of its own: it drains
-// the three TRISCs, rendezvouses T0/T1/T2 through hardware mailboxes
-// (Unpack/Pack -> READY; Math grants CONFIGURE to both, all three configure; then
-// CONFIGURED -> CLEANUP_DONE, see llk_hw_cleanup.h start()/finish()), and
-// reprograms cfg bank 0 to a canonical Float16_b 32x32 / four-face / 2048B
-// tile geometry and leaves it selected. It deliberately poisons pack MOP /
-// strides / PAC X, so a following op must re-init pack before packing.
-//
-// GOLDEN: two identity datacopies with the cleanup between them; each thread enters it after its first tile, the pack
-// included (the API's precondition), and re-inits after it. Both tiles must equal their inputs, and nothing may hang.
-//
-// The per-thread cleanup calls are the same entry points compute_kernel_hw_cleanup()
-// dispatches (UNPACK -> _llk_unpack_hw_cleanup_canonical_<DST_ACCUM_MODE>,
-// MATH  -> _llk_math_hw_cleanup_canonical_<DST_SYNC_MODE, DST_ACCUM_MODE>,
-// PACK  -> _llk_pack_hw_cleanup_canonical_<DST_SYNC_MODE, DST_ACCUM_MODE>);
-// this test drives each thread's canonical directly since the LLK test harness
-// builds one kernel per TRISC.
+// Two identity datacopies with the hw_cleanup teardown between them; each thread enters it after its first tile (the
+// API's precondition) and re-inits after it. Each thread's canonical cleanup is called directly: the harness builds one
+// kernel per TRISC.
 
 #include <cstdint>
 
@@ -35,7 +17,6 @@ std::uint32_t unp_cfg_context          = 0;
 std::uint32_t pack_sync_tile_dst_ptr   = 0;
 std::uint32_t math_sync_tile_dst_index = 0;
 
-// One config: two 32x32 tiles, four faces, SyncHalf.
 static constexpr ckernel::DstSync HW_CLEANUP_DST_SYNC = ckernel::DstSync::SyncHalf;
 constexpr std::uint32_t HW_CLEANUP_NUM_FACES          = 4;
 

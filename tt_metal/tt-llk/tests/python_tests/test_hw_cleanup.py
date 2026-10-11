@@ -1,21 +1,7 @@
 # SPDX-FileCopyrightText: © 2026 Tenstorrent AI ULC
 # SPDX-License-Identifier: Apache-2.0
 
-"""
-Compile/smoke test for the Blackhole-only experimental hardware-teardown LLK
-family "hw_cleanup" (compute_kernel_hw_cleanup.h ->
-llk_{unpack,math,pack}_hw_cleanup.h + shared llk_hw_cleanup.h).
-
-hw_cleanup is a TEARDOWN family with NO numeric output of its own. It drains the
-three TRISCs, rendezvouses T0/T1/T2 through hardware mailboxes, and reprograms
-cfg bank 0 to a canonical Float16_b 32x32 / four-face / 2048B geometry and
-leaves it selected (see the header docstrings).
-
-The C++ source copies two tiles with the per-thread cleanup between them, entered after the first tile (the API's
-precondition) and followed by a re-init on every thread. The golden is the identity of both tiles.
-
-Blackhole-only.
-"""
+"""Blackhole-only: two identity datacopies with the hw_cleanup teardown between them must both equal their inputs."""
 
 import torch
 from conftest import blackhole_only
@@ -31,8 +17,6 @@ from helpers.utils import passed_test
 
 pytestmark = blackhole_only
 
-# Single config: the canonical geometry cleanup itself restores (32x32 tiles,
-# four faces, Float16_b in and out), one tile before the cleanup and one after.
 NUM_FACES_VALUE = 4
 
 
@@ -49,7 +33,6 @@ def test_hw_cleanup(formats, dest_acc, input_dimensions):
         input_dimensions_B=input_dimensions,
     )
 
-    # Golden: identity datacopy of both tiles; the cleanup contributes no data.
     generate_golden = get_golden_generator(DataCopyGolden)
     golden_tensor = generate_golden(
         src_A,
@@ -86,5 +69,4 @@ def test_hw_cleanup(formats, dest_acc, input_dimensions):
     torch_format = format_dict[formats.output_format]
     res_tensor = torch.tensor(res_from_L1, dtype=torch_format)
 
-    # Every lane of both tiles is defined (full identity datacopy).
     assert passed_test(golden_tensor, res_tensor, formats.output_format)
