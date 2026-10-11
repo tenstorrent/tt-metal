@@ -862,12 +862,15 @@ class PerfConfig(TestConfig):
             )
             for run_type in _selected_run_types(run_types)
         ]
-        # The run type whose variant builds and launches the INIT measurement ELFs for every run type (test_config.py)
+        # The run types whose variants build and launch the INIT measurement ELFs (test_config.py): L1_TO_L1 for every row
+        # when selected, as its kernel runs every thread's own loop; else each run type for its own row. In an isolate
+        # kernel the other threads run a mock or nothing, so GCC drops the INIT stores only their own loop reads (pack's
+        # INIT in MATH_ISOLATE has 2 fewer): their INIT is not the one production runs.
         selected = [rt for _, _, rt in self.run_configs]
-        self.init_run_type = (
-            PerfRunType.L1_TO_L1
+        self.init_run_types = (
+            (PerfRunType.L1_TO_L1,)
             if PerfRunType.L1_TO_L1 in selected
-            else (selected[0] if selected else None)
+            else tuple(selected)
         )
         # L1_TO_L1 keeps the state the kernel before it left, so a run without isolate kernels also warms up the
         # first isolate kernel of the test, which sets that state; otherwise the previous test still shows through.
@@ -1167,20 +1170,24 @@ class PerfConfig(TestConfig):
                     if not counter_csv_df.empty:
                         counter_results_list.append(counter_csv_df)
 
-        # Wormhole perf: INIT comes from the INIT measurement build of init_run_type (test_config.py _init_build_dir: a
+        # Wormhole perf: INIT comes from the INIT measurement build of init_run_types (test_config.py _init_build_dir: a
         # speed-of-light build, shared by tests of the same INIT in a run without --speed-of-light), launched after the
-        # measured kernels so they keep their predecessors, after one unrecorded launch of itself. Its INIT window does
-        # not depend on the run type (fixed sections ahead of main) and BRISC releases the three INITs one after
-        # another, so one launch gives every run type's INIT row.
-        init_config = next(
-            (c for c in self.run_configs if c[2] == self.init_run_type), None
-        )
-        if (
+        # measured kernels so they keep their predecessors, after one unrecorded launch of itself. Its INIT window sits
+        # in fixed sections ahead of main, so the loop code cannot move it, and BRISC releases the three INITs one after
+        # another, so L1_TO_L1's one launch gives every run type's INIT row; an isolate's launch gives its own row.
+        init_configs = [c for c in self.run_configs if c[2] in self.init_run_types]
+        while (
             self._wormhole_perf_barrier()
             and TestConfig.PERF_INIT_LAUNCH
             and not TestConfig.TEST_TARGET.run_simulator
-            and init_config is not None
+            and init_configs
         ):
+            init_config = init_configs.pop(0)
+            rows = (
+                self.run_configs
+                if init_config[2] == PerfRunType.L1_TO_L1
+                else [init_config]
+            )
             self.init_launch = True
             try:
                 self._select_run_type(*init_config)
@@ -1194,7 +1201,7 @@ class PerfConfig(TestConfig):
                     TestConfig.TENSIX_LOCATION,
                 )
                 init_data.df["run_index"] = 0
-                for templates, runtimes, run_type in self.run_configs:
+                for templates, runtimes, run_type in rows:
                     init_stats = Profiler.STATS_FUNCTION[run_type](
                         ProfilerData.concat([init_data])
                     )
