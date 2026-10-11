@@ -19,6 +19,11 @@ on:
       slack-channel-id:
         description: "Slack channel ID for notifications. Leave empty to use repo secret FULL_CI_TRIAGE_CHANNEL."
         required: false
+      skip-slack:
+        description: "TEST MODE. Do not post to Slack. This also skips the regression-analysis dispatch."
+        required: false
+        type: boolean
+        default: false
       failures-to-elevate:
         description: 'TEST MODE. When set to N>0, discards real regressions and replaces them with N currently-stayed-failing JOBS (not pipelines). Produces exactly N top-level Slack messages, suppresses the "X other pipelines are failing" footer. Empty/0 = normal production behavior.'
         required: false
@@ -305,6 +310,7 @@ jobs:
           # Add any additional failure handling steps here
       - name: Post regressions to Slack
         id: slack-report
+        if: ${{ github.event.inputs.skip-slack != 'true' }}
         continue-on-error: true
         uses: ./.github/actions/slack-report-analyze-workflow-data
         with:
