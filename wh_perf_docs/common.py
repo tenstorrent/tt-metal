@@ -203,3 +203,10 @@ LP_CSS = """
 .lp .arh{stroke:var(--accent);stroke-width:2.2;fill:none}
 """
 EXTRA_CSS += LP_CSS + ".steps li{margin-bottom:8px}"
+
+# Layout: a centred page no wider than 1200 px; text in a ~80-character reading column, figures and tables use the full page width.
+EXTRA_CSS += """
+.wrap{max-width:min(100%,1200px)}
+header>*,section>p,section>ul,section>ol,section>h2,section>h3,section>details,.sketch p{max-width:80ch}
+.figwrap,.tw{max-width:100%;overflow-x:auto}
+"""
