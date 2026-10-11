@@ -174,7 +174,12 @@ void kernel_main() {
     for (uint32_t s = 0; s < num_workers; s++) {
         ring_route_base[s] = get_write_ptr(ring_route_cb[s]);
         ring_payload_base[s] = get_write_ptr(ring_payload_cb[s]);
+#ifdef DISPATCH_FUSED_META
+        // [payload | metadata] slots: the metadata page sits right after its payload page.
+        ring_meta_base[s] = ring_payload_base[s] + aligned_output_page_size;
+#else
         ring_meta_base[s] = get_write_ptr(ring_meta_cb[s]);
+#endif
         uint64_t mailbox = get_noc_addr(ring_noc_x[s], ring_noc_y[s], cross_addr_sem_l1_offset);
         noc_inline_dw_write(mailbox + 0 * sizeof(uint32_t), ring_route_base[s]);
         noc_inline_dw_write(mailbox + 1 * sizeof(uint32_t), ring_payload_base[s]);
@@ -428,8 +433,13 @@ void kernel_main() {
                     uint32_t distance = route_info[1];
                     uint32_t page_idx = route_info[2];
                     uint32_t dst_chip_index = route_info[3];
+#ifdef DISPATCH_FUSED_META
+                    uint32_t payload_addr = ring_payload_base[s] + slot * FUSED_SLOT_BYTES;
+                    uint32_t metadata_addr = ring_meta_base[s] + slot * FUSED_SLOT_BYTES;
+#else
                     uint32_t payload_addr = ring_payload_base[s] + slot * aligned_output_page_size;
                     uint32_t metadata_addr = ring_meta_base[s] + slot * aligned_metadata_page_size;
+#endif
                     DPRINT_DISPATCH("ring={} send: route={} page={}\n", s, route, page_idx);
 #ifdef DEST_CHIP_ID
                     // route_info layout (written by writer_worker_dispatch): [0]=route (1D EDM
@@ -462,6 +472,26 @@ void kernel_main() {
 #else
                     auto& payload_sender = fabric_connections[fabric_route];
 #endif
+#ifdef DISPATCH_FUSED_META
+                    {
+                        // One packet: the contiguous [payload | metadata] slot, scattered to the output page
+                        // and the metadata page (two NoC chunks) instead of two fabric packets.
+                        (void)metadata_addr;
+                        ccl_routing_utils::fabric_set_line_unicast_route(
+                            pkt_hdr_for_route_helper(unicast_packet_header), pkt_route_info);
+                        const uint64_t out_noc =
+                            tt::tt_fabric::addrgen_detail::get_noc_address(output_addr_gen, page_idx, 0);
+                        const uint64_t meta_noc =
+                            tt::tt_fabric::addrgen_detail::get_noc_address(metadata_addr_gen, page_idx, 0);
+                        unicast_packet_header->to_noc_unicast_scatter_write(
+                            NocUnicastScatterCommandHeader(
+                                {out_noc, meta_noc}, {static_cast<uint16_t>(aligned_output_page_size)}),
+                            FUSED_SLOT_BYTES);
+                        perform_payload_send<true, true>(
+                            payload_sender, payload_addr, FUSED_SLOT_BYTES, unicast_packet_header);
+                        noc_async_writes_flushed();  // Ensure the slot departed L1 before freeing it
+                    }
+#else
                     {
                         // Send payload
                         ccl_routing_utils::fabric_set_line_unicast_route(
@@ -488,6 +518,7 @@ void kernel_main() {
                             l1_alignment);
                         noc_async_writes_flushed();  // Ensure payload+metadata departed L1 before freeing CB slots
                     }
+#endif  // DISPATCH_FUSED_META
 #endif
 #endif  // SPARSE_MCAST_DISPATCH
                     noc_semaphore_inc<true>(ring_space_avail_noc[s], 1);

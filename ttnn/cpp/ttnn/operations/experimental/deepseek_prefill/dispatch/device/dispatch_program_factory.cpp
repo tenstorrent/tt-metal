@@ -505,6 +505,15 @@ tt::tt_metal::ProgramDescriptor create_dispatch_program(
     // further sets take consecutive free indices from c_19 up. Large N runs out of CB indices
     // and CB creation asserts — that is the intended "breaks if too many" behaviour.
     std::vector<std::array<uint32_t, 3>> writer_cb_ids(num_workers);  // {route, payload, metadata}
+    // Fused payload+metadata send (per-expert path, no sparse multicast): each sender ring slot holds
+    // [payload page | metadata page] contiguously so one fabric scatter-write packet carries both (two
+    // chunks to two NoC destinations) instead of two packets. Needs both pages to fit one packet.
+    const uint32_t fused_payload_bytes = detail::get_aligned_page_size(output_tensor);
+    const uint32_t fused_meta_bytes = detail::get_aligned_page_size(metadata_tensor);
+    const bool fused_meta =
+        !enable_sparse_mcast &&
+        fused_payload_bytes + fused_meta_bytes <= tt::tt_fabric::get_tt_fabric_max_payload_size_bytes() &&
+        fused_payload_bytes <= 0xFFFFu;
     {
         uint32_t route_info_page_size = route_info_slot_stride_bytes;
         uint32_t next_free_cb = static_cast<uint32_t>(tt::CBIndex::c_19);
@@ -536,13 +545,26 @@ tt::tt_metal::ProgramDescriptor create_dispatch_program(
                     .page_size = route_info_page_size,
                 }}},
             });
-            detail::create_tensor_cb(
-                desc,
-                sender_core_grid,
-                output_tensor,
-                /*buffering_factor=*/writer_cb_size,
-                /*cb_id=*/static_cast<tt::CBIndex>(ids[1]),
-                "payload_for_writer_" + std::to_string(s));
+            if (fused_meta) {
+                const uint32_t slot_bytes = fused_payload_bytes + fused_meta_bytes;
+                desc.cbs.push_back(tt::tt_metal::CBDescriptor{
+                    .total_size = writer_cb_size * slot_bytes,
+                    .core_ranges = sender_core_grid,
+                    .format_descriptors = {{tt::tt_metal::CBFormatDescriptor{
+                        .buffer_index = static_cast<uint8_t>(ids[1]),
+                        .data_format = tt::tt_metal::datatype_to_dataformat_converter(output_tensor.dtype()),
+                        .page_size = slot_bytes,
+                    }}},
+                });
+            } else {
+                detail::create_tensor_cb(
+                    desc,
+                    sender_core_grid,
+                    output_tensor,
+                    /*buffering_factor=*/writer_cb_size,
+                    /*cb_id=*/static_cast<tt::CBIndex>(ids[1]),
+                    "payload_for_writer_" + std::to_string(s));
+            }
             detail::create_tensor_cb(
                 desc,
                 sender_core_grid,
@@ -692,6 +714,11 @@ tt::tt_metal::ProgramDescriptor create_dispatch_program(
     // writer_sender (ring consumer / sender). Gated on the widened route_info slot above.
     if (enable_sparse_mcast) {
         fabric_defines["SPARSE_MCAST_DISPATCH"] = "1";
+    }
+    if (fused_meta) {
+        // Sender ring slots are [payload | metadata] (stride FUSED_SLOT_BYTES) for both producer and consumer.
+        fabric_defines["DISPATCH_FUSED_META"] = "1";
+        fabric_defines["FUSED_SLOT_BYTES"] = std::to_string(fused_payload_bytes + fused_meta_bytes);
     }
 
     // ==================== Sender writer kernel ====================

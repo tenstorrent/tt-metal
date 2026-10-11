@@ -43,6 +43,16 @@
 //
 
 #include <cstdint>
+
+// DISPATCH_FUSED_META: the sender's ring slots are [payload page | metadata page] (FUSED_SLOT_BYTES each); the
+// sender hands out c_6's base as c_5's base + payload page, so both writes stride by the fused slot.
+#ifdef DISPATCH_FUSED_META
+#define C5_SLOT_STRIDE FUSED_SLOT_BYTES
+#define C6_SLOT_STRIDE FUSED_SLOT_BYTES
+#else
+#define C5_SLOT_STRIDE aligned_output_page_size
+#define C6_SLOT_STRIDE aligned_metadata_page_size
+#endif
 #include "api/dataflow/dataflow_api.h"
 #include "api/dataflow/noc.h"
 #include "api/dataflow/circular_buffer.h"
@@ -255,7 +265,7 @@ void kernel_main() {
 
             // Payload: the token's untilized row, chunked to NOC_MAX_BURST_SIZE packets. Every slot of a
             // token reads the same src_addr; the sender fans it out to gcount pages.
-            uint64_t c5_slot = sender_c5_base_noc_addr + slot * aligned_output_page_size;
+            uint64_t c5_slot = sender_c5_base_noc_addr + slot * C5_SLOT_STRIDE;
             uint32_t off = 0;
             while (off < aligned_output_page_size) {
                 uint32_t chunk = (aligned_output_page_size - off > (uint32_t)NOC_MAX_BURST_SIZE)
@@ -282,7 +292,7 @@ void kernel_main() {
                 for (uint32_t w = 0; w < num_scale_words; w++) {
                     meta[3 + w] = (int32_t)src_scales[w];
                 }
-                uint64_t c6_slot = sender_c6_base_noc_addr + slot * aligned_metadata_page_size;
+                uint64_t c6_slot = sender_c6_base_noc_addr + slot * C6_SLOT_STRIDE;
                 noc_async_write_one_packet_with_trid(
                     xdev_metadata_scratch_addr, c6_slot, aligned_metadata_page_size, TRID_NON_LOCAL_WRITE);
             }
@@ -508,7 +518,7 @@ void kernel_main() {
                         route_info_scratch_addr, c4_slot, route_info_slot_stride, TRID_NON_LOCAL_WRITE);
 
                     // Payload: chunk to NOC_MAX_BURST_SIZE packets, each tagged with TRID.
-                    uint64_t c5_slot = sender_c5_base_noc_addr + slot * aligned_output_page_size;
+                    uint64_t c5_slot = sender_c5_base_noc_addr + slot * C5_SLOT_STRIDE;
                     uint32_t off = 0;
                     while (off < aligned_output_page_size) {
                         uint32_t chunk = (aligned_output_page_size - off > (uint32_t)NOC_MAX_BURST_SIZE)
@@ -537,7 +547,7 @@ void kernel_main() {
                         }
                     }
 #endif
-                    uint64_t c6_slot = sender_c6_base_noc_addr + slot * aligned_metadata_page_size;
+                    uint64_t c6_slot = sender_c6_base_noc_addr + slot * C6_SLOT_STRIDE;
                     noc_async_write_one_packet_with_trid(
                         xdev_metadata_scratch_addr, c6_slot, aligned_metadata_page_size, TRID_NON_LOCAL_WRITE);
 
