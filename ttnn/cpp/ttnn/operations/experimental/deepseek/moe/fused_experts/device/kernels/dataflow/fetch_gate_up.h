@@ -420,12 +420,15 @@ inline void build_routing_scalars(
 //   Phase 2: fetch the block's remaining down slices. The compute kernel runs the down matmul for
 //            the block's experts against the now-resident activations and accumulates.
 //
-// When `num_expert_groups > 1` (the 6-expert / 96-core path), the 12x8 grid is partitioned into
-// groups of `cores_per_expert` cores, one group per hit expert. Each core covers `i_shards_per_core`
-// gate_up/I shards (I/32 / 16; one shard at TP I=512, four at I=2048) and `shards_per_core` down/H
-// shards (always 4 of the 64). The gather/broadcast is per-group (two hubs per group, the group
-// rectangle's two corners), and the 6 groups' matching H-slices are reduced onto group 0 (see the
-// writer / compute kernels).
+// When `num_expert_groups > 1` (the 6-expert path), the 12x8 or 12x9 grid is partitioned into
+// 2-column groups of `cores_per_expert` cores, one group per hit expert. Each core covers
+// `i_shards_per_core` gate_up/I shards (I/32 / cores_per_expert). Down runs on the group's bottom
+// 2x8 only: `down_local` is the core's slot there, picking its `shards_per_core` down/H shards, or
+// kNoDownShard for a 9th-row core, which does gate_up and the gather but no down or reduce. The
+// gather/broadcast is per-group (two hubs per group, the group rectangle's two corners), and the 6
+// groups' matching H-slices are reduced onto group 0 (see the writer / compute kernels).
+constexpr uint32_t kNoDownShard = 0xFFFFFFFFu;
+
 template <typename GateUpArgs, typename DownArgs>
 inline void run_reader_loop(
     const Noc& noc,
@@ -473,17 +476,19 @@ inline void run_reader_loop(
     uint32_t num_expert_groups,
     const ActGatherConfig& gather,
     uint32_t sem_reduce_id,
-    uint32_t cb_reduce_id) {
+    uint32_t cb_reduce_id,
+    uint32_t down_local) {
     constexpr uint32_t kOutTilesPerCore = 2;
     const bool is_hub = gather.role != 0;
 
-    // ---- 6-expert path: 16 cores per expert; I-shards scale with local I, H-shards stay 4. ----
+    // ---- 6-expert path: 16 or 18 gate_up cores per expert, 16 down cores. ----
     if (num_expert_groups > 1) {
         const uint32_t local_idx = core_index % cores_per_expert;
         const uint32_t expert_group = core_index / cores_per_expert;
         const uint32_t swiglu_tiles = i_tiles / (cores_per_expert * i_shards_per_core);
         const uint32_t gate_up_slice_tiles = k_tiles * (2u * swiglu_tiles);
-        const bool is_root = expert_group == 0;
+        const bool down_core = down_local != kNoDownShard;
+        const bool is_root = expert_group == 0 && down_core;
         const uint32_t out_tiles = shards_per_core * kOutTilesPerCore;
         const uint32_t reduce_tiles = (num_expert_groups - 1u) * out_tiles;
 
@@ -513,7 +518,7 @@ inline void run_reader_loop(
             }
         }
 
-        {
+        if (down_core) {
             DeviceZoneScopedN("FE_RSCALARS");
             build_routing_scalars(
                 cb_bcast_id,
@@ -528,8 +533,9 @@ inline void run_reader_loop(
                 rscalar_tile_bytes);
         }
 
-        uint32_t j_down = 0;
-        if (!is_hub) {
+        // A gate_up-only core has no down shards: start past them.
+        uint32_t j_down = down_core ? 0u : shards_per_core;
+        if (!is_hub && down_core) {
             DeviceZoneScopedN("FE_DOWN_PREFETCH");
             const uint32_t prefetch = down_prefetch < shards_per_core ? down_prefetch : shards_per_core;
             for (; j_down < prefetch; ++j_down) {
@@ -541,7 +547,7 @@ inline void run_reader_loop(
                     down_slice_tiles,
                     down_reserve_tiles,
                     down_tile_bytes,
-                    local_idx * shards_per_core + j_down,
+                    down_local * shards_per_core + j_down,
                     down_args,
                     ct_down_addr_base);
             }
@@ -603,7 +609,7 @@ inline void run_reader_loop(
                     down_slice_tiles,
                     down_reserve_tiles,
                     down_tile_bytes,
-                    local_idx * shards_per_core + j_down,
+                    down_local * shards_per_core + j_down,
                     down_args,
                     ct_down_addr_base);
             }
@@ -620,6 +626,7 @@ inline void run_reader_loop(
     // Both the gate_up and the down DRAM shards for this core are shard `core_index`; the
     // first `num_producers` cores also own a slice of the SwiGLU I dim.
     (void)i_shards_per_core;
+    (void)down_local;
     const bool swiglu_core = core_index < num_producers;
     const uint32_t shard_id = core_index;
     const uint32_t swiglu_tiles = i_tiles / num_producers;

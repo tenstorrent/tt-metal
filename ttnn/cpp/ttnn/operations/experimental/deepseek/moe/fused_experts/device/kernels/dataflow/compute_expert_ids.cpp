@@ -110,6 +110,7 @@
 //   13: hub0_noc_x   14: hub0_noc_y   (this core's group's two gather/broadcast hubs, ascending
 //   15: hub1_noc_x   16: hub1_noc_y    rectangle corners; hub0 is this core on the sender path)
 //   17: ranking base address (the row top-k'd when the ranking form drives the selection)
+//   18: down_local     (this core's down slot in its expert group; see run_reader_loop)
 
 namespace {
 
@@ -561,5 +562,6 @@ void kernel_main() {
         num_expert_groups,
         gather,
         sem_reduce_id,
-        cb_reduce_id);
+        cb_reduce_id,
+        get_arg_val<uint32_t>(18));
 }
