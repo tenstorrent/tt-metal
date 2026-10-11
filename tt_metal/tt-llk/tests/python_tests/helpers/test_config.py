@@ -1263,6 +1263,8 @@ class TestConfig:
             self._wormhole_perf_barrier()
             and getattr(self, "current_run_type", None) == PerfRunType.L1_CONGESTION
             and not getattr(self, "init_launch", False)
+            # experiment hook (congpr): -DLLK_EXP_NO_PHASES runs L1_CONGESTION as one sample, as before the phases
+            and "-DLLK_EXP_NO_PHASES" not in os.environ.get("LLK_EXP_CFLAGS", "")
         )
 
     def _kernel_placement_include(self) -> str:
@@ -1455,6 +1457,8 @@ class TestConfig:
         if self._wormhole_perf_barrier():
             # BRISC restarts the TRISCs at every rendezvous (see barrier.h); per thread INIT placement: PERF_OOL_THREADS
             OPTIONS_COMPILE += "-DLLK_DBG_BARRIER "
+            if os.environ.get("LLK_EXP_CFLAGS"):  # experiment hook (congpr): extra flags
+                OPTIONS_COMPILE += os.environ["LLK_EXP_CFLAGS"] + " "
 
         if os.environ.get("TT_METAL_DISABLE_SFPLOADMACRO") == "1":
             OPTIONS_COMPILE += "-DDISABLE_SFPLOADMACRO "
