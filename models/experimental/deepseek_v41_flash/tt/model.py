@@ -596,18 +596,25 @@ class DeepSeekV41Model(DeepSeekV4Model):
         return
 
     def _write_packet(self, token_id, pos: int) -> None:
-        """Engram rows, then the V4 packet. Compile runs push zeros and do not advance the hash."""
-        self._write_engram_rows(token_id, pos)
+        """The V4 packet, then each Engram layer's rows in layer order. Compile runs push zeros and do not
+        advance the hash.
+
+        The packet goes first so layer 0 can start while the host looks up the first Engram layer's rows;
+        each later layer's lookup runs only after the earlier layer's rows are on their socket.
+        """
         DeepSeekV4Model._write_packet(self, token_id, pos)
+        self._write_engram_rows(token_id, pos)
 
     def _write_engram_rows(self, token_id, pos: int) -> None:
         if not self._engram_layers:
             return
         if self._eager_decode or self._traces_compiled:
             ids = torch.tensor(self._step_tokens(token_id), dtype=torch.long).reshape(-1, 1)
-            rows = self._engram_lookup(ids, pos)
+            lookup = self._engram_lookup
+            hashes = lookup.hash(ids, pos)  # [B, 1, n_engram_layers, n_hash_cols]
             for layer_idx, engram in self._engram_layers:
-                engram.write_rows(rows[layer_idx])
+                ids_of_layer = hashes[:, :, lookup.layout.layer_ids.index(layer_idx)]
+                engram.write_rows(lookup.gather(layer_idx, ids_of_layer).flatten(-2))
         else:
             for _, engram in self._engram_layers:
                 engram.write_rows(torch.zeros(engram.batch, engram.kin, dtype=torch.bfloat16))
