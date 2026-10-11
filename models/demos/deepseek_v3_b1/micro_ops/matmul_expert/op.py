@@ -46,7 +46,7 @@ def _assignment_to_llk_fmt(idx: int) -> int:
 
 
 def _assert_sram_weights_bfp4(sram_cts: list, sram_cores: list, device_coords: list) -> None:
-    """The plain SRAM path reads one bfp4_b page per tile, so it rejects any other SRAM tile format."""
+    """The plain SRAM path reads one bfp4_b page per tile."""
     bfp4 = COMPRESSED_FORMATS.index("bfp4")
     for coord in device_coords:
         for core in sram_cores:
@@ -437,7 +437,7 @@ def _build_program_for_device(
     cb0_desc = ttnn.cb_descriptor_from_sharded_tensor(cb_in0, a_tensor)
     cb1_descs = sram_cts[0].cb_descriptor_from_compressed_tensor(cb_in1, device_coord=coord) if sram_cts else []
     if not sram_use_compression:
-        # Plain custom_mm steps by the CB page, so declare one uniform bfp4_b tile, as the fused MoE op does
+        # Plain custom_mm steps by the CB page, so declare one uniform bfp4_b tile
         bfp4_tile_size = _TILE_SIZES[1]
         for desc in cb1_descs:
             desc.total_size = bfp4_tile_size

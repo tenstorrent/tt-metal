@@ -50,7 +50,7 @@ inline void _llk_unpack_hw_cleanup_canonical_()
     _llk_unpack_hw_cleanup_configure_current_bank_<is_fp32_dest_acc_en>();
 
     hw_cleanup::select_cfg_state(0);
-    custom_mm_bank_key = ~std::uint64_t {0};
+    custom_mm_bank_key = CUSTOM_MM_NO_BANK_KEY;
 
     // 1x1 NOP double-loop so accidental MOP runs (template or unpack-template) are inert.
     ckernel_template(1, 1).program();

@@ -535,9 +535,8 @@ class CUSTOM_MM_CALLS(TemplateParameter):
     ``CUSTOM_MM_REARM``      compressed kernel only: leave a -inf SrcA clear value after every call,
                              as a max-reduce or top-k between calls would. It undoes the end-of-call
                              stall's clear to 0, which otherwise hides a both-bank clear in the execute.
-    ``CUSTOM_MM_REINIT``     face kernel only: run the init again before every call after the first, as a
-                             kernel that interleaves other ops does, so its SrcB clear meets the previous
-                             call's unpacks (it needs rearm or ct_dim > 1, or the call ends on the stall).
+    ``CUSTOM_MM_REINIT``     face kernel only: run the init again before every later call, so its SrcB clear
+                             meets the previous call's unpacks (needs rearm or ct_dim > 1).
     ``CUSTOM_MM_BANKED``     custom_mm kernel only: the calls alternate the two configuration banks.
     ``CUSTOM_MM_BANK_SPLIT`` with banked: end the sequence after this many calls and start another (0: one
                              sequence), so an odd count ends the first sequence on the second bank.
@@ -2078,6 +2077,8 @@ class SDPA_CUSTOM_MM_FLAGS(TemplateParameter):
     sdpa_row_stride    : physical SrcA row width in tiles for read_transposed. None
                          omits the LLK argument; zero and kt_dim retain tight packing.
     sdpa_input_tile_offset : leading SrcA tiles skipped before the matmul input.
+    preserve_src_zero_flag : math leaves the Src zero flag at keep before the init, as a preceding
+                         copy_tile_init does.
     """
 
     signal_granularity: int = 1
@@ -2085,6 +2086,7 @@ class SDPA_CUSTOM_MM_FLAGS(TemplateParameter):
     mm_transpose: bool = False
     sdpa_row_stride: int | None = None
     sdpa_input_tile_offset: int = 0
+    preserve_src_zero_flag: bool = False
 
     def convert_to_cpp(self) -> str:
         lines = [
@@ -2092,6 +2094,7 @@ class SDPA_CUSTOM_MM_FLAGS(TemplateParameter):
             f"#define READ_TRANSPOSED {str(self.read_transposed).lower()}",
             f"#define MM_TRANSPOSE {str(self.mm_transpose).lower()}",
             f"#define SDPA_INPUT_TILE_OFFSET {self.sdpa_input_tile_offset}",
+            f"#define SDPA_PRESERVE_SRC_ZERO_FLAG {str(self.preserve_src_zero_flag).lower()}",
         ]
         if self.sdpa_row_stride is not None:
             lines.append(f"#define SDPA_ROW_STRIDE {self.sdpa_row_stride}")

@@ -19,10 +19,10 @@ A standard tiled matmul ``C[M,N] = A[M,K] @ B[K,N]`` with the header's tile-shap
   in1 (B)  -> SrcA, full ``[32,32]`` tiles.
   rt_dim = 1, ct_dim in [1,16], kt_dim in [1,256], LoFi only.
 
-``split_acc=false`` / ``finalize=false``, so there is no finalization merge and DEST
-holds the plain accumulated product (custom_mm.h: finalize must be false when split_acc
-is false). The result is packed as ``ct_dim`` output tiles; inside each tile the two
-16-col faces (M x 16, row-major) sit contiguously, then pad out to a full 32-row tile.
+With ``split_acc`` the finalize merges the two K halves of every output tile; without it
+DEST holds the plain accumulated product. The result is packed as ``ct_dim`` output tiles;
+inside each tile the two 16-col faces (M x 16, row-major) sit contiguously, then pad out
+to a full 32-row tile.
 
 Only defined lanes are asserted
 -------------------------------
@@ -115,6 +115,24 @@ _BFP_UNPACKERS = {
 }
 
 
+@dataclass
+class CUSTOM_MM_PRESERVE_SRC_ZERO_FLAG(TemplateParameter):
+    """Math sets the Src zero flag to keep before the custom_mm init, as a preceding copy_tile_init does."""
+
+    preserve: bool = False
+
+    def convert_to_cpp(self) -> str:
+        return f"constexpr bool CUSTOM_MM_PRESERVE_SRC_ZERO_FLAG = {str(self.preserve).lower()};"
+
+
+@dataclass
+class CUSTOM_MM_READ_TRANSPOSED(TemplateParameter):
+    custom_mm_read_transposed: bool = False
+
+    def convert_to_cpp(self) -> str:
+        return f"constexpr bool CUSTOM_MM_READ_TRANSPOSED = {str(self.custom_mm_read_transposed).lower()};"
+
+
 class CustomMMStimuliConfig(StimuliConfig):
     """A into buffer_A (kt*2 faces of [M,16]), B tilized into buffer_B (kt*ct full tiles).
 
@@ -156,7 +174,14 @@ def _run_custom_mm(
     finalize=None,
     dense_packing=True,
     reuse_replay=False,
+    preserve_zero_flag=False,
+    operands=None,
+    read_transposed=False,
 ):
+    """Run custom_mm and check it against the golden; return the (M, N) result.
+
+    ``operands`` optionally supplies ``(A, B)`` instead of the seeded random operands.
+    """
     finalize = split_acc if finalize is None else finalize
     K = kt * DEFAULT_TILE_R_DIM
     N = ct * DEFAULT_TILE_C_DIM
@@ -166,9 +191,12 @@ def _run_custom_mm(
     in0_packer = _PACKERS[in0_format]
     in1_packer = _PACKERS[in1_format]
 
-    torch.manual_seed(0)
-    torch_a = torch.randn((M, K), dtype=torch.float32)
-    torch_b = torch.randn((K, N), dtype=torch.float32)
+    if operands is None:
+        torch.manual_seed(0)
+        torch_a = torch.randn((M, K), dtype=torch.float32)
+        torch_b = torch.randn((K, N), dtype=torch.float32)
+    else:
+        torch_a, torch_b = operands
 
     # in0 (A -> SrcB): kt*2 faces of [M, 16], column-face order along K, contiguous.
     packed_a = b""
@@ -237,6 +265,8 @@ def _run_custom_mm(
                 custom_mm_dense_packing=dense_packing,
                 custom_mm_reuse_replay=reuse_replay,
             ),
+            CUSTOM_MM_PRESERVE_SRC_ZERO_FLAG(preserve_zero_flag),
+            CUSTOM_MM_READ_TRANSPOSED(read_transposed),
         ],
         runtimes=[
             # Result / in0 use 2 faces (M x 16 each); in1 (B) uses 4 full faces.
@@ -287,6 +317,7 @@ def _run_custom_mm(
     assert passed_test(
         golden, res_tensor, out_format, custom_atol=custom_atol, print_pcc=True
     ), f"custom_mm matmul failed for M={M} kt={kt} ct={ct} formats={formats}"
+    return res_tensor
 
 
 # LoFi-only per the header ("fidelity: LoFi only"). Float16_b (16-bit dest) and Float32
@@ -326,7 +357,7 @@ def test_custom_mm(formats, M, kt, ct):
     formats=CUSTOM_MM_FORMATS,
     M=list(SUPPORTED_M),
     kt=[1, 2, 4],
-    ct=CT_DIMS,
+    ct=CT_DIMS + [3],
 )
 def test_custom_mm_split_acc(formats, M, kt, ct):
     """split_acc with the finalize, which merges the two K halves of every output tile."""
@@ -337,15 +368,14 @@ def test_custom_mm_split_acc(formats, M, kt, ct):
 @parametrize(
     formats=CUSTOM_MM_FORMATS,
     M=[1, 8],
-    kt=[2],
-    ct=[1, 4],
+    ct=[1, 3, 4],
     split_acc=[True, False],
 )
-def test_custom_mm_finalize_tile_stride(formats, M, kt, ct, split_acc):
+def test_custom_mm_finalize_tile_stride(formats, M, ct, split_acc):
     """The finalize with output tiles a full tile apart in DEST (dense_packing off), with and without split_acc."""
     _run_custom_mm(
         M,
-        kt,
+        2,
         ct,
         formats,
         _dest_acc_for(formats),
@@ -358,18 +388,24 @@ def test_custom_mm_finalize_tile_stride(formats, M, kt, ct, split_acc):
 @blackhole_only
 @parametrize(formats=CUSTOM_MM_FORMATS, M=[1, 8], kt=[1, 2], ct=[2, 4, 5, 16])
 def test_custom_mm_split_acc_reuse_replay(formats, M, kt, ct):
-    """The split_acc finalize with the reuse replay program loaded between the init and the call, the order of a
-    custom_mm chained into custom_mm_reuse_dest_srcb."""
+    """The split_acc finalize with the reuse replay program loaded between the init and the call."""
     _run_custom_mm(
         M, kt, ct, formats, _dest_acc_for(formats), split_acc=True, reuse_replay=True
     )
 
 
 @blackhole_only
-@parametrize(formats=CUSTOM_MM_FORMATS, M=[1, 8], kt=[2], ct=[1, 4])
-def test_custom_mm_finalize_without_split(formats, M, kt, ct):
+@parametrize(formats=CUSTOM_MM_FORMATS, M=[1, 8], ct=[1, 4])
+def test_custom_mm_finalize_without_split(formats, M, ct):
     """A finalize without split_acc adds the zeroed rows 8 and 24 back, so the product is unchanged."""
-    _run_custom_mm(M, kt, ct, formats, _dest_acc_for(formats), finalize=True)
+    _run_custom_mm(M, 2, ct, formats, _dest_acc_for(formats), finalize=True)
+
+
+@blackhole_only
+@parametrize(formats=CUSTOM_MM_FORMATS, M=[1, 8], kt=[2, 5])
+def test_custom_mm_read_transposed_one_column(formats, M, kt):
+    """At ct 1 the transposed walk is the contiguous one, so it must step one weight tile per k."""
+    _run_custom_mm(M, kt, 1, formats, _dest_acc_for(formats), read_transposed=True)
 
 
 ODD_K_CASES = [
@@ -439,9 +475,7 @@ MULTI_CALL_CASES = [
     [pytest.param(*case[1:], id=case[0]) for case in MULTI_CALL_CASES],
 )
 def test_custom_mm_multi_call(M, kt, ct, num_calls, in1_format, banked):
-    """Back-to-back calls into one DEST, checked against the full-K golden; banked calls alternate the
-    configuration banks, so each call's configuration is written while the previous call runs.
-    """
+    """Back-to-back calls into one DEST against the full-K golden, on one bank or banked."""
     formats = InputOutputFormat(DataFormat.Float16_b, DataFormat.Float16_b, in1_format)
     _run_custom_mm(
         M,
@@ -477,9 +511,7 @@ BANKED_SEQUENCE_CASES = [
 def test_custom_mm_banked_sequence(
     M, kt, ct, num_calls, in1_format, banked, bank_split
 ):
-    """split_acc calls into one DEST section, the finalize on the last, checked against the full-K golden.
-    The split cases end the banked sequence and start another after one call (second bank) or two (first bank).
-    """
+    """split_acc calls into one DEST section, the finalize on the last; the split cases start a second sequence."""
     formats = InputOutputFormat(DataFormat.Float16_b, DataFormat.Float16_b, in1_format)
     _run_custom_mm(
         M,
@@ -555,3 +587,49 @@ BFP2_CASES = [
 def test_custom_mm_bfp2_in1(formats, M, kt, ct):
     """Bfp2_b weights on the plain (uncompressed) custom_mm path."""
     _run_custom_mm(M, kt, ct, formats, DestAccumulation.No)
+
+
+# Smallest positive bf16 denormal, 2^-133; bf16 denormals are its multiples 1..127 (7 mantissa bits).
+BF16_DENORMAL_MIN = 2.0**-133
+BF16_DENORMAL_MANTISSAS = 1 << 7
+# B is scaled up so a kept denormal gives a visibly nonzero product; the normal rows of A are scaled down
+# by the same amount so their products stay O(1).
+OPERAND_SCALE = 2.0**100
+
+
+@blackhole_only
+@pytest.mark.parametrize("ct", [1, 2])
+def test_custom_mm_flushes_denormal_srcb_after_keep_flag(ct):
+    """The init must restore the Src zero flag a preceding datacopy left at keep.
+
+    Rows 0-3 of A (SrcB) are bf16 denormals, which a bf16 MVMUL flushes to zero; scaled by B they give nonzero
+    products if kept, so those rows must come out exactly 0. The golden cannot tell flushed rows from kept
+    ones at its tolerance, so only the exact-zero check guards them. Rows 4-7 are normal and check the rest
+    of the product.
+    """
+    M, kt = 8, 2
+    K, N = kt * DEFAULT_TILE_R_DIM, ct * DEFAULT_TILE_C_DIM
+    denormal_rows = 4
+
+    torch.manual_seed(0)
+    torch_a = torch.randn((M, K), dtype=torch.float32) / OPERAND_SCALE
+    torch_a[:denormal_rows] = (
+        BF16_DENORMAL_MIN
+        * torch.randint(1, BF16_DENORMAL_MANTISSAS, (denormal_rows, K)).float()
+    )
+    torch_b = torch.randn((K, N), dtype=torch.float32) * OPERAND_SCALE
+
+    formats = InputOutputFormat(DataFormat.Float16_b, DataFormat.Float16_b)
+    res = _run_custom_mm(
+        M,
+        kt,
+        ct,
+        formats,
+        DestAccumulation.No,
+        preserve_zero_flag=True,
+        operands=(torch_a, torch_b),
+    )
+    kept = res[:denormal_rows].float()
+    assert (
+        torch.count_nonzero(kept) == 0
+    ), f"denormal SrcB rows were not flushed: max |value| {kept.abs().max().item():.3e}"

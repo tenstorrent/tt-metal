@@ -143,10 +143,8 @@ ALWI void custom_mm_block_init_short(
  * | in1_tile_index  | The index of the tile in block B from the second input CB                                                       | uint32_t | Must be less than the size of the CB             | True                  |
  * | dst_index       | The index of the tile in DST REG to which the result C will be written                                          | uint32_t | Must be less than the acquired size of DST REG   | True                  |
  * | kt_dim          | The inner dimension in tiles                                                                                    | uint32_t | Any integer from 1 to 256 (inclusive)            | True                  |
- * | ct_dim          | The width of the output matrix in tiles                                                                         | uint32_t | 1 to 16                                          | False (default 1)     |
- *
- * banked (template, default false): alternate the two configuration banks between custom_mm_block_bank_init and
- * custom_mm_block_bank_end; the calls in between use weight CBs of one page size and do not read transposed.
+ * | ct_dim          | The width of the output matrix in tiles                                                                         | uint32_t | 1 to 16, the same as at the init                 | False (default 1)     |
+ * | banked          | Alternate the two configuration banks, between custom_mm_block_bank_init and custom_mm_block_bank_end           | bool     | true/false (one weight page size)                | False (default false) |
  */
 // clang-format on
 template <bool finalize = true, bool read_transposed = false, bool banked = false>
@@ -189,7 +187,7 @@ ALWI void custom_mm_block(
  * | in0_tile_index  | The index of the tile in block A from the first input CB                                                        | uint32_t | Must be less than the size of the CB             | True                  |
  * | in1_tile_index  | The index of the tile in block B from the second input CB                                                       | uint32_t | Must be less than the size of the CB             | True                  |
  * | kt_dim          | The inner dimension in tiles                                                                                    | uint32_t | Any integer from 1 to 256 (inclusive)            | True                  |
- * | ct_dim          | The width of the output matrix in tiles                                                                         | uint32_t | 1 to 16                                          | False (default 1)     |
+ * | ct_dim          | The width of the output matrix in tiles                                                                         | uint32_t | 1 to 16, the same as at the init                 | False (default 1)     |
  */
 // clang-format on
 template <bool read_transposed = false>
@@ -229,7 +227,7 @@ ALWI void custom_mm_block_unpack(
  * | in1_cb_id       | The identifier of the second input circular buffer (CB)                                                        | uint32_t | 0 to 31                                          | True                  |
  * | dst_index       | The index of the tile in DST REG to which the result C will be written                                         | uint32_t | Must be less than the acquired size of DST REG   | True                  |
  * | kt_dim          | The inner dimension in tiles                                                                                   | uint32_t | Any integer from 1 to 256 (inclusive)            | True                  |
- * | ct_dim          | The width of the output matrix in tiles                                                                        | uint32_t | 1 to 16                                          | False (default 1)     |
+ * | ct_dim          | The width of the output matrix in tiles                                                                        | uint32_t | 1 to 16, the same as at the init                 | False (default 1)     |
  */
 // clang-format on
 template <bool finalize = true>
@@ -242,19 +240,31 @@ ALWI void custom_mm_block_math(
     MATH((llk_math_custom_mm<finalize>(in0_cb_id, in1_cb_id, dst_index, kt_dim, ct_dim)));
 }
 
+// clang-format off
 /**
- * Copies the unpacker configuration into the second bank for banked custom_mm_block calls, unless it already holds it.
- * Call it after the init, with the init's CBs and transpose, outside a banked sequence.
+ * Prepares the second configuration bank for banked custom_mm_block calls; call it after the init, outside a banked sequence.
+ *
+ * Return value: None
+ *
+ * | Argument  | Description                                             | Type     | Valid Range | Required              |
+ * |-----------|---------------------------------------------------------|----------|-------------|-----------------------|
+ * | transpose | The init's transpose                                    | bool     | true/false  | False (default false) |
+ * | in0_cb_id | The identifier of the first input circular buffer (CB)  | uint32_t | 0 to 31     | True                  |
+ * | in1_cb_id | The identifier of the second input circular buffer (CB) | uint32_t | 0 to 31     | True                  |
  */
+// clang-format on
 template <bool transpose = false>
 ALWI void custom_mm_block_bank_init(const std::uint32_t in0_cb_id, const std::uint32_t in1_cb_id) {
     UNPACK((llk_unpack_AB_custom_mm_bank_init<transpose>(in0_cb_id, in1_cb_id)));
 }
 
+// clang-format off
 /**
- * Returns the unpack thread to the first configuration bank after a sequence of banked custom_mm_block calls. Call it
- * before any other operation's unpack.
+ * Returns the unpack thread to the first configuration bank after banked custom_mm_block calls, before any other unpack.
+ *
+ * Return value: None
  */
+// clang-format on
 ALWI void custom_mm_block_bank_end() { UNPACK((llk_unpack_AB_custom_mm_bank_end())); }
 
 // clang-format off

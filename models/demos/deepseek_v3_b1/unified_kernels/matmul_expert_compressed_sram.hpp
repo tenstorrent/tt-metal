@@ -245,13 +245,15 @@ struct MatmulExpertCompressedSRAM {
                                 if constexpr (CTArgs::use_compression) {
                                     compressed_custom_mm_block<false>(cb_in0, cb_in1, meta_addr, 0, k_for_mm, out_w);
                                 } else {
-                                    custom_mm_block<false, false, banked>(cb_in0, cb_in1, 0, 0, 0, k_for_mm, out_w);
+                                    custom_mm_block<false /*finalize*/, false /*read_transposed*/, banked>(
+                                        cb_in0, cb_in1, 0, 0, 0, k_for_mm, out_w);
                                 }
                             } else {
                                 if constexpr (CTArgs::use_compression) {
                                     compressed_custom_mm_block<true>(cb_in0, cb_in1, meta_addr, 0, k_for_mm, out_w);
                                 } else {
-                                    custom_mm_block<true, false, banked>(cb_in0, cb_in1, 0, 0, 0, k_for_mm, out_w);
+                                    custom_mm_block<true /*finalize*/, false /*read_transposed*/, banked>(
+                                        cb_in0, cb_in1, 0, 0, 0, k_for_mm, out_w);
                                 }
                             }
                         }
