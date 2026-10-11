@@ -275,6 +275,65 @@ void kernel_main() {
     {
         // DeviceZoneScopedN("combine-ethernet-flow");
         //  Sentinel-terminated fabric send loop
+#if COMBINE_PIPE > 1 && defined(DEST_CHIP_ID)
+        // Pipelined send: up to COMBINE_PIPE rows in flight to the fabric, each with its own packet header (headers
+        // 2.. of cb_packet_header), sent non-blocking into the current EDM slot. The CB slots and headers are
+        // released together after one flush per group, instead of a flush-blocking header write per row.
+        const uint32_t merged_page_bytes = l1_alignment + aligned_output_page_size;
+        const uint32_t fifo_limit = get_local_cb_interface(cb_route_info_id).fifo_limit;
+        const uint32_t fifo_size = get_local_cb_interface(cb_route_info_id).fifo_size;
+        uint32_t pending = 0;
+        while (true) {
+            cb_wait_front(cb_route_info_id, pending + 1);
+            uint32_t cb_base = get_read_ptr(cb_route_info_id) + pending * merged_page_bytes;
+            if (cb_base >= fifo_limit) {
+                cb_base -= fifo_size;
+            }
+            volatile tt_l1_ptr uint32_t* route_info = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(cb_base);
+            const uint32_t route = route_info[0];
+            if (route == ROUTE_INFO_SENTINEL) {
+                noc_async_writes_flushed();
+                cb_pop_front(cb_route_info_id, pending + 1);
+                break;
+            }
+            const uint32_t distance = route_info[1];
+            const uint32_t output_page_idx = route_info[2];
+            const uint32_t output_data_addr = cb_base + l1_alignment;
+            auto* hdr = reinterpret_cast<volatile PACKET_HEADER_TYPE*>(
+                packet_header_buffer_address + (2 + pending) * sizeof(PACKET_HEADER_TYPE));
+
+            ccl_routing_utils::line_unicast_route_info_t pkt_route_info{};
+            uint32_t fabric_route;
+            if constexpr (
+                std::is_same_v<PACKET_HEADER_TYPE, tt::tt_fabric::HybridMeshPacketHeader> ||
+                std::is_same_v<PACKET_HEADER_TYPE, tt::tt_fabric::UDMHybridMeshPacketHeader>) {
+                const uint32_t dst_chip_device_id = route_info[3];
+                pkt_route_info.dst_chip_id = dest_chip_ids[dst_chip_device_id];
+                pkt_route_info.dst_mesh_id = dest_mesh_ids[dst_chip_device_id];
+                fabric_route = static_cast<uint32_t>(get_next_hop_router_direction(
+                    dest_mesh_ids[dst_chip_device_id], dest_chip_ids[dst_chip_device_id]));
+            } else {
+                pkt_route_info.distance_in_hops = static_cast<uint16_t>(distance);
+                fabric_route = route;
+            }
+#ifdef FABRIC_2D
+            auto& payload_sender = fabric_connections.get(dir_to_slot[fabric_route]).sender;
+#else
+            auto& payload_sender = fabric_connections[fabric_route];
+#endif
+            ccl_routing_utils::fabric_set_line_unicast_route(pkt_hdr_for_route_helper(hdr), pkt_route_info);
+            tt::tt_fabric::linear::to_noc_unicast_write(
+                align(aligned_output_page_size, l1_alignment), hdr, output_page_idx, output_addr_gen, 0);
+            payload_sender.wait_for_empty_write_slot();
+            payload_sender.send_current_slot_non_blocking(
+                output_data_addr, aligned_output_page_size, reinterpret_cast<uint32_t>(hdr));
+            if (++pending == COMBINE_PIPE) {
+                noc_async_writes_flushed();  // payloads and headers left L1: free the CB slots and headers
+                cb_pop_front(cb_route_info_id, pending);
+                pending = 0;
+            }
+        }
+#else
         while (true) {
             cb_wait_front(cb_route_info_id, 1);
             uint32_t cb_base = get_read_ptr(cb_route_info_id);
@@ -339,6 +398,7 @@ void kernel_main() {
             // Pop the route-info CB, which also carries the output payload (merged CB).
             cb_pop_front(cb_route_info_id, 1);
         }
+#endif
     }
 
 #ifdef DEST_CHIP_ID

@@ -91,7 +91,7 @@ void kernel_main() {
     //                                               receive_buf_addr lives at the trailer
     //   +2: experts_tok_counter_pages             - number of counter pages multicasted
     //   +3: aligned_experts_tok_counter_page_size - aligned counter page size (L1 stride)
-    //   +4: read_batch_size                       - number of rows per untilize batch (== tile_height)
+    //   +4: read_batch_size                       - number of rows per untilize batch (tile height for TILE)
     //   +5: cb_metadata_batch_id                  - CB this kernel pops per-batch metadata pages
     //                                               from (pushed by reader_untilize on this same core)
     //   +6: num_experts_per_tok                   - number of experts each token is routed to (for output_page_idx)
@@ -142,8 +142,9 @@ void kernel_main() {
     constexpr uint32_t untilize_row_stride = fp8_scaled ? data_row_bytes : aligned_output_page_size;
     constexpr uint32_t scale_row_bytes = fp8_scaled ? data_row_bytes / 8 : 0;  // data_row_bytes/32 fp32
     constexpr uint32_t counter_data_total_size = experts_tok_counter_pages * aligned_experts_tok_counter_page_size;
-    // read_batch_size doubles as tile_height: one tile-row of input -> read_batch_size element rows.
-    constexpr uint32_t tile_height = read_batch_size;
+    // Dispatch lays each expert's region out tile-row aligned (32 rows) whatever the batch size: the region
+    // stride uses the tile height, not read_batch_size (ROW_MAJOR batches can be smaller than a tile).
+    constexpr uint32_t tile_height = 32;
     constexpr uint32_t tiles_per_batch = full_ct_dim;
 
     // Runtime args appended after the INIT_ZEROS sender NOC-coordinate args above:

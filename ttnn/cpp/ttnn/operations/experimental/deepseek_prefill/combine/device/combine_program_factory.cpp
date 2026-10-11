@@ -399,18 +399,23 @@ tt::tt_metal::ProgramDescriptor build_program_for_coord(
     uint32_t output_init_complete_semaphore_id = add_sema(sender_core_grid);
     uint32_t output_init_barrier_semaphore_id = add_sema(sender_core_grid);
 
-    // Rows per untilize batch.  Both layouts route through the untilizer pipeline and share the
-    // same receive_buf ring / sender polling loop, so ROW_MAJOR uses the same batch size as TILE
-    // (tile height = 32) rather than diverging.
-    const uint32_t read_batch_size =
-        is_tile_layout ? dispatched_buffer.tensor_spec().tile().get_height() : tt::constants::TILE_HEIGHT;
+    // Rows the sender keeps in flight to the fabric: each row gets its own packet header and goes into the
+    // current EDM slot non-blocking, with one flush per group instead of a flush-blocking header per row
+    // (K3 fp8 combine 290 -> 251 us; 2: 257, 8: 249).
+    constexpr uint32_t combine_pipe = 4;
+    // Rows per untilize batch. Both layouts route through the untilizer pipeline and share the same receive_buf
+    // ring / sender polling loop. TILE input is untilized a tile height at a time; ROW_MAJOR rows go in batches
+    // of 4: batches are dealt round-robin over all untilizer cores (alternating senders), and at ~90 tokens per
+    // expert 32-row batches made only 3 batches per expert -- 3 of 8 untilizers busy and ~2/3 of the rows on one
+    // sender (K3 fp8 combine 381 -> 290 us; 8: 299, 16: 335).
+    const uint32_t read_batch_size = is_tile_layout ? dispatched_buffer.tensor_spec().tile().get_height() : 4u;
 
     // c_1: dispatched_metadata scratch (reader-only, batched DRAM reads)
     detail::create_tensor_cb(
         desc,
         sender_core_grid,
         dispatched_metadata,
-        /*buffering_factor=*/read_batch_size,
+        /*buffering_factor=*/std::max<uint32_t>(read_batch_size, tt::constants::TILE_HEIGHT),
         /*cb_id=*/tt::CBIndex::c_1,
         "dispatched_metadata_scratch");
 
@@ -481,7 +486,7 @@ tt::tt_metal::ProgramDescriptor build_program_for_coord(
     //                    [l1_alignment..page_size) = output data
     //   One reserve/push per row replaces the previous c_3 + c_4 pair.
     {
-        constexpr uint32_t rw_buffering = 2;
+        const uint32_t rw_buffering = 2 * combine_pipe;
 
         uint32_t route_info_page_size = l1_alignment;
         uint32_t output_payload_page_size = detail::get_aligned_page_size(output_tensor);
@@ -499,7 +504,7 @@ tt::tt_metal::ProgramDescriptor build_program_for_coord(
 
     // c_5: packet header CB for fabric sends (writer-only)
     if (num_links > 0) {
-        constexpr uint32_t num_packet_headers = 2;
+        const uint32_t num_packet_headers = 2 + combine_pipe;
         auto packet_header_size_bytes = tt::tt_fabric::get_tt_fabric_packet_header_size_bytes();
         uint32_t packet_header_cb_size = num_packet_headers * packet_header_size_bytes;
 
@@ -941,6 +946,7 @@ tt::tt_metal::ProgramDescriptor build_program_for_coord(
 
     std::map<std::string, std::string> writer_defines = fabric_defines;
     writer_defines["INIT_ZEROS"] = operation_attributes.init_zeros ? "1" : "0";
+    writer_defines["COMBINE_PIPE"] = std::to_string(combine_pipe);
 
     // writer_untilize runs on untilizer cores for BOTH layouts now: it consumes cb_untilize_id
     // (c_2 — produced by the compute kernel in TILE, or directly by reader_untilize in ROW_MAJOR)
