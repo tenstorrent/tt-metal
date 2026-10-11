@@ -2702,6 +2702,12 @@ class MiniMaxH3Pipeline:
         decoder = self._audio_decoder
         if decoder is not None:
             decoder.release_trace()
+        self._release_denoise_traces()
+
+    def _release_denoise_traces(self) -> None:
+        """Release only the denoise traces. The audio decoder's release also drops the vocoder's
+        tpad masks, which only an eager decode rebuilds; an audio capture after that would write
+        them inside the trace."""
         transformer = self._transformer
         if transformer is None:
             return
@@ -2790,13 +2796,13 @@ class MiniMaxH3Pipeline:
             transformer.traced_adaln_cache = adaln_cache
             if adaln_cache is not self._trace_adaln_cache:
                 # A capture binds the resident tables by address and would replay the old ones.
-                self.release_traces()
+                self._release_denoise_traces()
                 for bucket in self._buckets.values():
                     bucket.warm = False
                 self._trace_adaln_cache = adaln_cache
         traced = self.trace_denoise and state.warm
         if self.trace_denoise and not state.warm:
-            self.release_traces()
+            self._release_denoise_traces()
 
         t_rope = time.time()
         rope_cos, rope_sin = self._device_metadata(layout, rung)
