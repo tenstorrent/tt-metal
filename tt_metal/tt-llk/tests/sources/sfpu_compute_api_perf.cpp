@@ -78,13 +78,13 @@ void run_kernel(RUNTIME_PARAMETERS params)
                     /* iterations*/ num_faces * TILE_CNT * LOOP_FACTOR);
             }
         }
-        else if constexpr (PERF_RUN_TYPE != PerfRunType::PACK_ISOLATE) // UNPACK_ISOLATE, L1_TO_L1, L1_CONGESTION
+        else if constexpr (PERF_RUN_TYPE != PerfRunType::PACK_ISOLATE)
         {
             for (std::uint32_t loop = 0; loop < LOOP_FACTOR; ++loop)
             {
                 for (std::uint32_t i = 0; i < TILE_CNT; ++i)
                 {
-                    _llk_unpack_A_<BROADCAST_TYPE, false /* acc_to_dest (see init) */, reuse_dest_type, unpack_to_dest>(
+                    _llk_unpack_A_<BROADCAST_TYPE, false, reuse_dest_type, unpack_to_dest>(
                         L1_ADDRESS(buffer_A[i]), formats.unpack_A_src, formats.unpack_A_dst);
                 }
             }
