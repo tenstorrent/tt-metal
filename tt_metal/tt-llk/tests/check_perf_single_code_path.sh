@@ -13,6 +13,8 @@ ARCHES=("$@")
 [ ${#ARCHES[@]} -gt 0 ] || ARCHES=(wormhole blackhole quasar)
 PER_FILE="${PER_FILE:-3}"
 JOBS="${JOBS:-8}"
+# every run type, the opt-in ones included, so their builds stay one program too
+export LLK_PERF_RUN_TYPES="${LLK_PERF_RUN_TYPES:-L1_TO_L1,UNPACK_ISOLATE,MATH_ISOLATE,PACK_ISOLATE,L1_CONGESTION,SFPU_ISOLATE}"
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 cd "$SCRIPT_DIR/python_tests"
