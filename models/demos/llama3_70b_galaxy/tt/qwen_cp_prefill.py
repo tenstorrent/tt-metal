@@ -347,6 +347,7 @@ QKV_CFG = _mmc(16, 8, 4, 1, 4)
 FF13_CFG = _mmc(16, 8, 10, 4, 2)
 FF13_FP32_CFG = _mmc(8, 8, 8, 1, 4)  # HiFi2 fp32 acc fallback, 3.725 ms
 FF2_CFG = _mmc(16, 10, 4, 1, 4)
+FF2_FP16_CFG = _mmc(16, 10, 8, 2, 4)  # LoFi 16-bit dest (ff2_fp16_dest)
 WO_CFG = _mmc(16, 8, 4, 1, 4)  # the seq-parallel path keeps WO_PREFILL_MINIMAL_PROGCFG (m16k8n4 s2x2)
 
 
@@ -367,7 +368,14 @@ def ff2_bf8_rs(layer_num=None, n_layers=None) -> bool:
     return layer_num is None or n_layers is None or layer_num < n_layers - last
 
 
-def ff2_compute_config(args):
+def ff2_fp16_dest() -> bool:
+    """FF2 LoFi with 16-bit dest accumulation and the larger N block / 2x4 subblock that it allows (FF2_FP16_CFG)
+    on the bf8-output layers (QWEN_CP_FF2_FP16=1, default). cpb_sweep job266: LoFi fp32 dest FF2_CFG 2.509 -> 16-bit dest m16k10n8 s2x4
+    2.026 ms."""
+    return os.environ.get("QWEN_CP_FF2_LOFI", "1") == "1" and os.environ.get("QWEN_CP_FF2_FP16", "1") == "1"
+
+
+def ff2_compute_config(args, fp16=False):
     """FF2 matmul compute config: LoFi with fp32 dest accumulation (QWEN_CP_FF2_LOFI=1, default) or the model's HiFi2
     fp32-dest config (keep 17). cpb_sweep job266 (S=40960, FF2_CFG): HiFi2 3.28 -> LoFi 2.51 ms per call."""
     if os.environ.get("QWEN_CP_FF2_LOFI", "1") != "1":
@@ -376,7 +384,7 @@ def ff2_compute_config(args):
     return ttnn.WormholeComputeKernelConfig(
         math_fidelity=ttnn.MathFidelity.LoFi,
         math_approx_mode=base.math_approx_mode,
-        fp32_dest_acc_en=True,
+        fp32_dest_acc_en=not fp16,
         packer_l1_acc=base.packer_l1_acc,
         dst_full_sync_en=base.dst_full_sync_en,
     )
@@ -632,12 +640,14 @@ def mlp_prefill(ctx: CPContext, tt_ccl, mlp, x_local, w):
     )
     ttnn.deallocate(w1o)
     ttnn.deallocate(w3o)
+    bf8_out = ff2_bf8_rs(mlp.layer_num, args.full_model_n_layers)
+    fp16 = bf8_out and ff2_fp16_dest()  # the bf16-output layers keep fp32 dest and FF2_CFG
     w2o = ttnn.experimental.minimal_matmul(
         input_tensor=w2_in,
         weight_tensor=w["w2"],
-        config=FF2_CFG,
-        dtype=ttnn.bfloat8_b if ff2_bf8_rs(mlp.layer_num, args.full_model_n_layers) else mlp.prefill_output_dtype,
-        compute_kernel_config=ff2_compute_config(args),  # fp32 dest acc (keep 17)
+        config=FF2_FP16_CFG if fp16 else FF2_CFG,
+        dtype=ttnn.bfloat8_b if bf8_out else mlp.prefill_output_dtype,
+        compute_kernel_config=ff2_compute_config(args, fp16),
         memory_config=ttnn.DRAM_MEMORY_CONFIG,
     )  # [1, 1, S/4, 5120]
     ttnn.deallocate(w2_in)
