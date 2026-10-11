@@ -15,8 +15,10 @@ Layout per device (r, c), S = padded prefill length:
     cache is column-local (user u lives on column u // 8; block ids repeat across columns), so only the owner column
     writes it (the device page table is -1 on the other columns) and SDPA, which runs on every column, must not read
     K / V through it.
-  - attention core: two stock chunked SDPA calls on the scratch K / V (identity page table), call j = slice
-    slices(c)[j] with a per-device chunk_start_idx_tensor (chunked_sdpa_pair); QWEN_CP_CHUNKED_SDPA=0 keeps ring SDPA.
+  - attention core: one model-local program per device (custom_ops/qwen_cp_sdpa) on the scratch K / V (identity page
+    table) computing both owned slices, written in the concat-heads layout; QWEN_CP_LOCAL_SDPA=0 runs the two stock
+    chunked SDPA calls instead (call j = slice slices(c)[j], per-device chunk_start_idx_tensor, chunked_sdpa_pair),
+    bit-identical; QWEN_CP_CHUNKED_SDPA=0 keeps ring SDPA.
 
 Guard (cp_prefill_applies): Qwen, Wormhole, prefetcher, batch 1, start_pos 0 (no prefix cache), S > 8192,
 S % 1024 == 0, env QWEN_CP_PREFILL=1 (the default). QWEN_CP_PREFILL=0 selects the keep-14 seq-parallel path.
@@ -426,6 +428,15 @@ def chunked_sdpa_enabled() -> bool:
     return os.environ.get("QWEN_CP_CHUNKED_SDPA", "1") == "1"
 
 
+def local_sdpa_enabled() -> bool:
+    """Chunked-pair attention core as ONE model-local generic_op program per device (custom_ops/qwen_cp_sdpa): both
+    owned slices' Q chunks spread over all grid cores by cost, each computed exactly as by its stock chunked call, the
+    output written straight in the concat-heads layout WO reads (no concat, no nlp_concat_heads). Bit-identical to the
+    pair. 40k unit (test_qwen_cp_sdpa_op.py, pipelined): 13.364 -> 12.476 ms per layer. QWEN_CP_LOCAL_SDPA=0 keeps the
+    stock pair."""
+    return os.environ.get("QWEN_CP_LOCAL_SDPA", "0") == "1"
+
+
 def chunked_sdpa_config(ring_pc, sl):
     """SDPAProgramConfig of the chunked pair: the ring config's grid / exp mode / chunks, with each chunk reduced to
     a divisor of the slice length sl (the chunk start s * sl must be a multiple of both chunks). Env overrides
@@ -602,7 +613,24 @@ def attention_prefill(ctx: CPContext, tt_ccl, attn, x_local, rot_mats, w, user_i
         ttnn.fill_cache(keys, k_fill, user_id % attn.batch_size_per_device_group)
         ttnn.fill_cache(values, v_fill, user_id % attn.batch_size_per_device_group)
 
-    if use_chunked:
+    cat = None
+    if use_chunked and local_sdpa_enabled():
+        from models.demos.llama3_70b_galaxy.tt.custom_ops.qwen_cp_sdpa import qwen_cp_sdpa
+
+        # Both slices in one program, written as [1, 1, S/4, H*D] in the local order (what the pair + concat +
+        # nlp_concat_heads give, bit for bit).
+        cat = qwen_cp_sdpa(
+            q_8b[0],
+            q_8b[1],
+            ks,
+            vs,
+            ctx.identity_page_table(),
+            scale=float(torch.tensor(attn.scale, dtype=torch.float32)),
+            compute_kernel_config=ckc,
+            program_config=chunked_sdpa_config(ring_pc, ctx.lay.sl),
+            concat_heads=True,
+        )
+    elif use_chunked:
         # The scratch buffers [S/64, 1, 64, 128] read as a paged cache through the identity table.
         attn_out = chunked_sdpa_pair(
             ctx, q_8b, ks, vs, ctx.identity_page_table(), attn.scale, ckc, chunked_sdpa_config(ring_pc, ctx.lay.sl)
@@ -622,8 +650,9 @@ def attention_prefill(ctx: CPContext, tt_ccl, attn, x_local, rot_mats, w, user_i
         )
     for t in q_8b:
         ttnn.deallocate(t)
-    cat = ttnn.experimental.nlp_concat_heads(attn_out, memory_config=ttnn.DRAM_MEMORY_CONFIG)  # [1, 1, S/4, H*D]
-    ttnn.deallocate(attn_out)
+    if cat is None:
+        cat = ttnn.experimental.nlp_concat_heads(attn_out, memory_config=ttnn.DRAM_MEMORY_CONFIG)  # [1, 1, S/4, H*D]
+        ttnn.deallocate(attn_out)
     o = ttnn.experimental.minimal_matmul(
         input_tensor=cat,
         weight_tensor=w["wo"],
