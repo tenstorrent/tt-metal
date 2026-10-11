@@ -38,3 +38,20 @@ compare with tt-project/baselines/fasth3/still_t5.jpg.
   T330_CHAIN_DONE <rc>.
 - Next: read chain.log + run_*.log; compare stills with tt-project/worktrees/t286/tt-project/baselines/fasth3/still_t5.jpg
   (commit 0b22be8499c); verdict; delete blx01 out_* mp4s after copying a small one back.
+
+## Result (2026-10-10 22:56 PDT): verdict INPUT MISMATCH, not a device artifact
+- blx01 broker job 642 (t2va, fox prompt, no keyframe, seed 0, 768p 5 s, 4x8, Turbo 4-step):
+  PASS, seq_len 37749 -> rung 38912, wall 235 s. Job 643 (fl2va, keyframe = t2va frame 0): PASS,
+  seq_len 39773 -> rung 41984, wall 211 s. Both at the 900 MHz AICLK clamp, so timings are relative
+  only (steady denoise 1.22 s/step t2va, 1.42 s/step fl2va; VAE decode 1.01 s). No drops.
+- Stills (0 / 2.5 / 4.5 s): stills/still_{t2va,fl2va}_*.jpg. Neither clip has white swirls, purple/
+  blue colour casts or the hazy lake-house background seen in the #314 baseline
+  (worktrees/t286/tt-project/baselines/fasth3/still_t5.jpg). Same build, same adapter, same seed, so
+  the swirls came from the lake-house keyframe fighting the fox prompt.
+- Remaining artifact: the t2va clip shows a second, translucent "ghost" fox behind the main one at
+  2.5 s and 4.5 s. The fl2va clip with the matched keyframe has none. Probably a 4-step Turbo t2va
+  trait; not checked against a reference GPU run (tt-inference-server#5308 has timings only).
+- mp4s (not in git): tt-project/t330/mp4/{t2va,fl2va}_turbo_1344x768_5s_4fwd.mp4 and the keyframe
+  mp4/kf_t2va_f0.png on g15blx02. blx01 /var/tmp/fasth3/t330 deleted after md5 check.
+- Recommended FastH3 baseline: fl2va, keyframe = mp4/kf_t2va_f0.png (frame 0 of the t2va fox clip,
+  1344x768), prompt CALIBRATED_FOX_PROMPT, seed 0. Stop using t209/kf_first.png with the fox prompt.

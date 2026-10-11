@@ -1,0 +1,1010 @@
+[t330] host=g15blx01 commit=931b486dce7a7d4884e3eaf2a661aaa8f359077a tag=t2va dur=5 task=t2va kf=none job= 2026-10-11 05:47:55 UTC
+[t330] cmd: timeout --foreground -k 10 570 python -u -m pytest -sv -p no:cacheprovider -p t286_skipvaewarm models/tt_dit/tests/models/minimax_h3/test_pipeline_turbo_minimax_h3.py -k '5s and 4x8 and not 15s and not 4x32 and not WH'
+MINIMAX_H3_MODEL_PATH=/var/tmp/fasth3/models/MiniMax-H3
+MINIMAX_H3_TURBO_LORA_PATH=/var/tmp/fasth3/models/lightx2v-h3-turbo/minimax_h3_fl2v_turbo_4step_v1.2_768p_bf16.safetensors
+MINIMAX_H3_TURBO_NFE=4
+MINIMAX_H3_TURBO_POINT=768p
+MINIMAX_H3_TURBO_TASK=t2va
+TT_DEVICE_MCP_EXPECTED_CHIPS=32
+TT_DEVICE_MCP_FABRIC_CHECK_CMD=/opt/tt-device-broker/fabric-check.sh
+TT_DEVICE_MCP_POLLER_SERVICES=tt-telemetry.service,tt-metrics-exporter.service,tt-fmax-cap.service
+TT_DEVICE_MCP_PRIVSEP=1
+TT_DEVICE_MCP_RESET_MODE=galaxy
+TT_DIT_CACHE_DIR=/var/tmp/fasth3/cache/dit-h3hf
+TT_METAL_CACHE=/var/tmp/fasth3/cache/tt-metal-cache-h3hf
+TT_METAL_HOME=/var/tmp/fasth3/t288/b
+2026-10-11 05:47:58.952 | DEBUG    | ttnn:<module>:45 - Initial ttnn.CONFIG:
+Config{cache_path=/var/tmp/fasth3/home/.cache/ttnn,model_cache_path=/var/tmp/fasth3/home/.cache/ttnn/models,tmp_dir=/tmp/ttnn,enable_model_cache=false,enable_fast_runtime_mode=true,validate_program_args=false,throw_exception_on_fallback=false,enable_logging=false,enable_graph_report=false,enable_graph_python_stack_traces=false,enable_detailed_buffer_report=false,enable_detailed_tensor_report=false,enable_comparison_mode=false,comparison_mode_should_raise_exception=false,comparison_mode_pcc=0.9999,root_report_path=generated/ttnn/reports,report_name=std::nullopt,std::nullopt}
+2026-10-11 05:47:59.982 | INFO     | models.tt_dit.tests.conftest:<module>:89 - Setting torch num_threads to 64
+============================= test session starts ==============================
+platform linux -- Python 3.10.19, pytest-9.0.3, pluggy-1.6.0 -- /var/tmp/fasth3/t48/python_env/bin/python
+benchmark: 5.2.3 (defaults: timer=time.perf_counter disable_gc=False min_rounds=5 min_time=0.000005 max_time=1.0 calibration_precision=10 warmup=False warmup_iterations=100000)
+rootdir: /var/tmp/fasth3/t288/b
+configfile: pytest.ini
+plugins: timeout-2.4.0, split-0.11.0, repeat-0.9.4, cov-7.0.0, anyio-4.15.1, github-actions-annotate-failures-0.3.0, benchmark-5.2.3, dash-2.15.0
+timeout: 300.0s
+timeout method: signal
+timeout func_only: False
+collecting ... 2026-10-11 05:48:00.059 | WARNING  | models.perf.benchmarking_utils:<module>:19 - Skipping import of pydantic_models for benchmarking since not running in CI environment
+collected 9 items / 8 deselected / 1 selected
+
+models/tt_dit/tests/models/minimax_h3/test_pipeline_turbo_minimax_h3.py::test_turbo_end_to_end[blackhole-4x8-5s]
+
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+[2mtest_pipeline_turbo_minimax_h3.py[0m  [1mtest_turbo_end_to_end[0m  [2m(blackhole, 4x8, 5s)[0m
+
+2026-10-11 05:48:00.234 | info     |          Device | Opening user mode device driver (tt_cluster.cpp:223)
+2026-10-11 05:48:00.234 | info     |             UMD | Cluster constructor started. (cluster.cpp:405)
+2026-10-11 05:48:00.248 | info     |             UMD | Creating TopologyDiscovery for architecture: blackhole (topology_discovery.cpp:131)
+2026-10-11 05:48:00.248 | info     |             UMD | Starting topology discovery. (topology_discovery.cpp:150)
+2026-10-11 05:48:00.337 | info     |             UMD | Established firmware bundle version: 19.15.0 (topology_discovery.cpp:654)
+2026-10-11 05:48:00.341 | info     |             UMD | Completed topology discovery. (topology_discovery.cpp:154)
+2026-10-11 05:48:00.401 | info     |             UMD | Opening local chip ids/PCIe ids: {0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16, 17, 18, 19, 20, 21, 22, 23, 24, 25, 26, 27, 28, 29, 30, 31}/[0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 24, 25, 26, 27, 28, 29, 30, 31, 16, 17, 18, 19, 20, 21, 22, 23] and remote chip ids {} (cluster.cpp:172)
+2026-10-11 05:48:00.401 | info     |             UMD | IOMMU: disabled (cluster.cpp:146)
+2026-10-11 05:48:00.401 | info     |             UMD | KMD version: 2.11.0 (cluster.cpp:149)
+2026-10-11 05:48:00.401 | info     |             UMD | Cluster constructor completed. (cluster.cpp:719)
+2026-10-11 05:48:00.420 | info     |             UMD | Starting devices in cluster (cluster.cpp:1305)
+2026-10-11 05:48:06.859 | info     |             UMD | Starting devices in cluster completed. (cluster.cpp:1314)
+2026-10-11 05:48:06.938 | info     |     Distributed | Using auto discovery to generate mesh graph. (metal_env.cpp:439)
+2026-10-11 05:48:06.938 | info     |     Distributed | Constructing control plane using auto-discovery (no mesh graph descriptor). (metal_env.cpp:501)
+2026-10-11 05:48:06.957 | info     |          Fabric | Logical multi-mesh adjacency: intermesh degree histogram {0:1}; intra-mesh degree histograms mesh0 {2:4, 3:16, 4:12} (topology_mapper_utils.cpp:3190)
+2026-10-11 05:48:06.957 | info     |          Fabric | Physical multi-mesh adjacency: intermesh degree histogram {0:1}; intra-mesh degree histograms mesh0 {4:32} (topology_mapper_utils.cpp:3198)
+2026-10-11 05:48:06.960 | INFO     | conftest:mesh_device:650 - No trace region size for (4, 8)
+2026-10-11 05:48:06.960 | info     |           Metal | Fabric config changed from FabricConfig::DISABLED to FabricConfig::FABRIC_1D_RING, reinitializing control plane (metal_env.cpp:335)
+2026-10-11 05:48:06.960 | info     |     Distributed | Using auto discovery to generate mesh graph. (metal_env.cpp:439)
+2026-10-11 05:48:06.960 | info     |     Distributed | Constructing control plane using auto-discovery (no mesh graph descriptor). (metal_env.cpp:501)
+2026-10-11 05:48:06.977 | info     |          Fabric | Logical multi-mesh adjacency: intermesh degree histogram {0:1}; intra-mesh degree histograms mesh0 {4:32} (topology_mapper_utils.cpp:3190)
+2026-10-11 05:48:06.977 | info     |          Fabric | Physical multi-mesh adjacency: intermesh degree histogram {0:1}; intra-mesh degree histograms mesh0 {4:32} (topology_mapper_utils.cpp:3198)
+2026-10-11 05:48:07.644 | warning  |           Metal | Failed to create shared memory /tt_device_7987323219243235790_memory: Permission denied (memory_stats_shm.cpp:57)
+2026-10-11 05:48:07.644 | warning  |           Metal | Failed to create shared memory /tt_device_5852850894824359047_memory: Permission denied (memory_stats_shm.cpp:57)
+2026-10-11 05:48:07.644 | warning  |           Metal | Failed to create shared memory /tt_device_5289323809530442173_memory: Permission denied (memory_stats_shm.cpp:57)
+2026-10-11 05:48:07.644 | warning  |           Metal | Failed to create shared memory /tt_device_2140361422826815101_memory: Permission denied (memory_stats_shm.cpp:57)
+2026-10-11 05:48:07.645 | warning  |           Metal | Failed to create shared memory /tt_device_2490318166664904631_memory: Permission denied (memory_stats_shm.cpp:57)
+2026-10-11 05:48:07.645 | warning  |           Metal | Failed to create shared memory /tt_device_2337385936412545560_memory: Permission denied (memory_stats_shm.cpp:57)
+2026-10-11 05:48:07.645 | warning  |           Metal | Failed to create shared memory /tt_device_2693824347736688345_memory: Permission denied (memory_stats_shm.cpp:57)
+2026-10-11 05:48:07.645 | warning  |           Metal | Failed to create shared memory /tt_device_13061284983621005418_memory: Permission denied (memory_stats_shm.cpp:57)
+2026-10-11 05:48:07.646 | warning  |           Metal | Failed to create shared memory /tt_device_17516611957009563041_memory: Permission denied (memory_stats_shm.cpp:57)
+2026-10-11 05:48:07.646 | warning  |           Metal | Failed to create shared memory /tt_device_7691932081090118572_memory: Permission denied (memory_stats_shm.cpp:57)
+2026-10-11 05:48:07.646 | warning  |           Metal | Failed to create shared memory /tt_device_15328992972022447826_memory: Permission denied (memory_stats_shm.cpp:57)
+2026-10-11 05:48:07.646 | warning  |           Metal | Failed to create shared memory /tt_device_17871450125770813819_memory: Permission denied (memory_stats_shm.cpp:57)
+2026-10-11 05:48:07.646 | warning  |           Metal | Failed to create shared memory /tt_device_10590000977558091718_memory: Permission denied (memory_stats_shm.cpp:57)
+2026-10-11 05:48:07.647 | warning  |           Metal | Failed to create shared memory /tt_device_17309516618834576542_memory: Permission denied (memory_stats_shm.cpp:57)
+2026-10-11 05:48:07.647 | warning  |           Metal | Failed to create shared memory /tt_device_3712418579317434306_memory: Permission denied (memory_stats_shm.cpp:57)
+2026-10-11 05:48:07.648 | warning  |           Metal | Failed to create shared memory /tt_device_8532089653804000921_memory: Permission denied (memory_stats_shm.cpp:57)
+2026-10-11 05:48:07.648 | warning  |           Metal | Failed to create shared memory /tt_device_13805777771611706594_memory: Permission denied (memory_stats_shm.cpp:57)
+2026-10-11 05:48:07.648 | warning  |           Metal | Failed to create shared memory /tt_device_1376518536784308788_memory: Permission denied (memory_stats_shm.cpp:57)
+2026-10-11 05:48:07.649 | warning  |           Metal | Failed to create shared memory /tt_device_6164447563418800190_memory: Permission denied (memory_stats_shm.cpp:57)
+2026-10-11 05:48:07.649 | warning  |           Metal | Failed to create shared memory /tt_device_8602280185256423817_memory: Permission denied (memory_stats_shm.cpp:57)
+2026-10-11 05:48:07.650 | warning  |           Metal | Failed to create shared memory /tt_device_1264434834976107325_memory: Permission denied (memory_stats_shm.cpp:57)
+2026-10-11 05:48:07.650 | warning  |           Metal | Failed to create shared memory /tt_device_14473282280201691324_memory: Permission denied (memory_stats_shm.cpp:57)
+2026-10-11 05:48:07.651 | warning  |           Metal | Failed to create shared memory /tt_device_8096580279616919496_memory: Permission denied (memory_stats_shm.cpp:57)
+2026-10-11 05:48:07.651 | warning  |           Metal | Failed to create shared memory /tt_device_244971260684719129_memory: Permission denied (memory_stats_shm.cpp:57)
+2026-10-11 05:48:07.652 | warning  |           Metal | Failed to create shared memory /tt_device_12873465740093535752_memory: Permission denied (memory_stats_shm.cpp:57)
+2026-10-11 05:48:07.652 | warning  |           Metal | Failed to create shared memory /tt_device_11286909251055038287_memory: Permission denied (memory_stats_shm.cpp:57)
+2026-10-11 05:48:07.652 | warning  |           Metal | Failed to create shared memory /tt_device_18392966922360723107_memory: Permission denied (memory_stats_shm.cpp:57)
+2026-10-11 05:48:07.653 | warning  |           Metal | Failed to create shared memory /tt_device_13067805327561268112_memory: Permission denied (memory_stats_shm.cpp:57)
+2026-10-11 05:48:07.653 | warning  |           Metal | Failed to create shared memory /tt_device_1651813602821454919_memory: Permission denied (memory_stats_shm.cpp:57)
+2026-10-11 05:48:07.654 | warning  |           Metal | Failed to create shared memory /tt_device_1871540970055882014_memory: Permission denied (memory_stats_shm.cpp:57)
+2026-10-11 05:48:07.654 | warning  |           Metal | Failed to create shared memory /tt_device_7084529680144901978_memory: Permission denied (memory_stats_shm.cpp:57)
+2026-10-11 05:48:07.655 | warning  |           Metal | Failed to create shared memory /tt_device_7666123230497465830_memory: Permission denied (memory_stats_shm.cpp:57)
+2026-10-11 05:48:07.742 | info     |           Metal | Initializing Fabric (fabric_firmware_initializer.cpp:320)
+2026-10-11 05:48:07.977 | info     |           Metal | Fabric initialized on 32 devices (fabric_firmware_initializer.cpp:467)
+2026-10-11 05:48:07.977 | info     |           Metal | Fabric Initialized with config FabricConfig::FABRIC_1D_RING (fabric_firmware_initializer.cpp:337)
+2026-10-11 05:48:08.151 | DEBUG    | conftest:mesh_device:668 - multidevice with 32 devices is created
+2026-10-11 05:48:08.442 | INFO     | models.tt_dit.pipelines.minimax_h3.pipeline_minimax_h3:_host_log:859 - building the Qwen3-VL text encoder
+2026-10-11 05:48:08.554 | INFO     | models.tt_dit.pipelines.minimax_h3.pipeline_minimax_h3:_host_log:859 - building the 50-layer transformer from transformer/, TP=4/SP=8 (resident_adaln)
+2026-10-11 05:48:08.608 | INFO     | models.tt_dit.pipelines.minimax_h3.pipeline_minimax_h3:_host_log:859 - building the video VAE
+2026-10-11 05:48:08.657 | WARNING  | models.tt_dit.utils.conv3d:get_conv3d_config:775 - conv3d blocking [fallback] (1, 1, 32, 128, (1, 3, 3), 0, 0, 0) -> channel_key=(32, 128, (1, 3, 3)) -> Cin=32 Cout=128 T=3 H=2 W=16
+2026-10-11 05:48:08.658 | WARNING  | models.tt_dit.utils.conv3d:get_conv3d_config:775 - conv3d blocking [fallback] (1, 1, 128, 128, (1, 3, 3), 0, 0, 0) -> channel_key=(128, 128, (1, 3, 3)) -> Cin=64 Cout=128 T=1 H=16 W=2
+2026-10-11 05:48:08.658 | WARNING  | models.tt_dit.utils.conv3d:get_conv3d_config:775 - conv3d blocking [fallback] (1, 1, 128, 128, (1, 3, 3), 0, 0, 0) -> channel_key=(128, 128, (1, 3, 3)) -> Cin=64 Cout=128 T=1 H=16 W=2
+2026-10-11 05:48:08.658 | WARNING  | models.tt_dit.utils.conv3d:get_conv3d_config:775 - conv3d blocking [fallback] (1, 1, 128, 128, (1, 3, 3), 0, 0, 0) -> channel_key=(128, 128, (1, 3, 3)) -> Cin=64 Cout=128 T=1 H=16 W=2
+2026-10-11 05:48:08.658 | WARNING  | models.tt_dit.utils.conv3d:get_conv3d_config:775 - conv3d blocking [fallback] (1, 1, 128, 128, (1, 3, 3), 0, 0, 0) -> channel_key=(128, 128, (1, 3, 3)) -> Cin=64 Cout=128 T=1 H=16 W=2
+2026-10-11 05:48:08.658 | WARNING  | models.tt_dit.utils.conv3d:get_conv3d_config:775 - conv3d blocking [fallback] (1, 1, 128, 128, (1, 3, 3), 0, 0, 0) -> channel_key=(128, 128, (1, 3, 3)) -> Cin=64 Cout=128 T=1 H=16 W=2
+2026-10-11 05:48:08.659 | WARNING  | models.tt_dit.utils.conv3d:get_conv3d_config:775 - conv3d blocking [fallback] (1, 1, 128, 256, (1, 3, 3), 0, 0, 0) -> channel_key=(128, 256, (1, 3, 3)) -> Cin=32 Cout=256 T=3 H=16 W=2
+2026-10-11 05:48:08.659 | WARNING  | models.tt_dit.utils.conv3d:get_conv3d_config:775 - conv3d blocking [fallback] (1, 1, 256, 256, (1, 3, 3), 0, 0, 0) -> channel_key=(256, 256, (1, 3, 3)) -> Cin=64 Cout=128 T=1 H=16 W=2
+2026-10-11 05:48:08.659 | WARNING  | models.tt_dit.utils.conv3d:get_conv3d_config:775 - conv3d blocking [fallback] (1, 1, 128, 256, (1, 1, 1), 0, 0, 0) -> channel_key=(128, 256, (1, 1, 1)) -> Cin=128 Cout=256 T=16 H=1 W=32
+2026-10-11 05:48:08.659 | WARNING  | models.tt_dit.utils.conv3d:get_conv3d_config:775 - conv3d blocking [fallback] (1, 1, 256, 256, (1, 3, 3), 0, 0, 0) -> channel_key=(256, 256, (1, 3, 3)) -> Cin=64 Cout=128 T=1 H=16 W=2
+2026-10-11 05:48:08.659 | WARNING  | models.tt_dit.utils.conv3d:get_conv3d_config:775 - conv3d blocking [fallback] (1, 1, 256, 256, (1, 3, 3), 0, 0, 0) -> channel_key=(256, 256, (1, 3, 3)) -> Cin=64 Cout=128 T=1 H=16 W=2
+2026-10-11 05:48:08.659 | WARNING  | models.tt_dit.utils.conv3d:get_conv3d_config:775 - conv3d blocking [fallback] (1, 1, 256, 256, (1, 3, 3), 0, 0, 0) -> channel_key=(256, 256, (1, 3, 3)) -> Cin=64 Cout=128 T=1 H=16 W=2
+2026-10-11 05:48:08.659 | WARNING  | models.tt_dit.utils.conv3d:get_conv3d_config:775 - conv3d blocking [fallback] (1, 1, 256, 256, (1, 3, 3), 0, 0, 0) -> channel_key=(256, 256, (1, 3, 3)) -> Cin=64 Cout=128 T=1 H=16 W=2
+2026-10-11 05:48:08.660 | WARNING  | models.tt_dit.utils.conv3d:get_conv3d_config:775 - conv3d blocking [fallback] (1, 1, 256, 256, (1, 3, 3), 0, 0, 0) -> channel_key=(256, 256, (1, 3, 3)) -> Cin=64 Cout=128 T=1 H=16 W=2
+2026-10-11 05:48:08.660 | WARNING  | models.tt_dit.utils.conv3d:get_conv3d_config:775 - conv3d blocking [fallback] (1, 1, 256, 256, (1, 3, 3), 0, 0, 0) -> channel_key=(256, 256, (1, 3, 3)) -> Cin=64 Cout=128 T=1 H=16 W=2
+2026-10-11 05:48:08.660 | WARNING  | models.tt_dit.utils.conv3d:get_conv3d_config:775 - conv3d blocking [fallback] (1, 1, 256, 256, (1, 3, 3), 0, 0, 0) -> channel_key=(256, 256, (1, 3, 3)) -> Cin=64 Cout=128 T=1 H=16 W=2
+2026-10-11 05:48:08.660 | WARNING  | models.tt_dit.utils.conv3d:get_conv3d_config:775 - conv3d blocking [fallback] (1, 1, 256, 256, (1, 3, 3), 0, 0, 0) -> channel_key=(256, 256, (1, 3, 3)) -> Cin=64 Cout=128 T=1 H=16 W=2
+2026-10-11 05:48:08.660 | WARNING  | models.tt_dit.utils.conv3d:get_conv3d_config:775 - conv3d blocking [fallback] (1, 1, 256, 512, (1, 3, 3), 0, 0, 0) -> channel_key=(256, 512, (1, 3, 3)) -> Cin=64 Cout=128 T=1 H=16 W=2
+2026-10-11 05:48:08.661 | WARNING  | models.tt_dit.utils.conv3d:get_conv3d_config:775 - conv3d blocking [fallback] (1, 1, 512, 512, (1, 3, 3), 0, 0, 0) -> channel_key=(512, 512, (1, 3, 3)) -> Cin=64 Cout=128 T=1 H=16 W=2
+2026-10-11 05:48:08.661 | WARNING  | models.tt_dit.utils.conv3d:get_conv3d_config:781 - conv3d blocking [NONE] (1, 1, 256, 512, (1, 1, 1), 0, 0, 0) -> no match in any table, using hardcoded default: Cin=256 Cout=32 T=1 H=1 W=1
+2026-10-11 05:48:08.661 | WARNING  | models.tt_dit.utils.conv3d:get_conv3d_config:775 - conv3d blocking [fallback] (1, 1, 512, 512, (1, 3, 3), 0, 0, 0) -> channel_key=(512, 512, (1, 3, 3)) -> Cin=64 Cout=128 T=1 H=16 W=2
+2026-10-11 05:48:08.661 | WARNING  | models.tt_dit.utils.conv3d:get_conv3d_config:775 - conv3d blocking [fallback] (1, 1, 512, 512, (1, 3, 3), 0, 0, 0) -> channel_key=(512, 512, (1, 3, 3)) -> Cin=64 Cout=128 T=1 H=16 W=2
+2026-10-11 05:48:08.661 | WARNING  | models.tt_dit.utils.conv3d:get_conv3d_config:775 - conv3d blocking [fallback] (1, 1, 512, 512, (1, 3, 3), 0, 0, 0) -> channel_key=(512, 512, (1, 3, 3)) -> Cin=64 Cout=128 T=1 H=16 W=2
+2026-10-11 05:48:08.661 | WARNING  | models.tt_dit.utils.conv3d:get_conv3d_config:775 - conv3d blocking [fallback] (1, 1, 512, 512, (1, 3, 3), 0, 0, 0) -> channel_key=(512, 512, (1, 3, 3)) -> Cin=64 Cout=128 T=1 H=16 W=2
+2026-10-11 05:48:08.662 | WARNING  | models.tt_dit.utils.conv3d:get_conv3d_config:775 - conv3d blocking [fallback] (1, 1, 512, 512, (1, 3, 3), 0, 0, 0) -> channel_key=(512, 512, (1, 3, 3)) -> Cin=64 Cout=128 T=1 H=16 W=2
+2026-10-11 05:48:08.662 | WARNING  | models.tt_dit.utils.conv3d:get_conv3d_config:775 - conv3d blocking [fallback] (1, 1, 512, 512, (1, 3, 3), 0, 0, 0) -> channel_key=(512, 512, (1, 3, 3)) -> Cin=64 Cout=128 T=1 H=16 W=2
+2026-10-11 05:48:08.662 | WARNING  | models.tt_dit.utils.conv3d:get_conv3d_config:775 - conv3d blocking [fallback] (1, 1, 512, 512, (1, 3, 3), 0, 0, 0) -> channel_key=(512, 512, (1, 3, 3)) -> Cin=64 Cout=128 T=1 H=16 W=2
+2026-10-11 05:48:08.662 | WARNING  | models.tt_dit.utils.conv3d:get_conv3d_config:775 - conv3d blocking [fallback] (1, 1, 512, 1024, (1, 3, 3), 0, 0, 0) -> channel_key=(512, 1024, (1, 3, 3)) -> Cin=64 Cout=128 T=1 H=8 W=4
+2026-10-11 05:48:08.662 | WARNING  | models.tt_dit.utils.conv3d:get_conv3d_config:775 - conv3d blocking [fallback] (1, 1, 1024, 1024, (1, 3, 3), 0, 0, 0) -> channel_key=(1024, 1024, (1, 3, 3)) -> Cin=64 Cout=64 T=5 H=16 W=2
+2026-10-11 05:48:08.662 | WARNING  | models.tt_dit.utils.conv3d:get_conv3d_config:781 - conv3d blocking [NONE] (1, 1, 512, 1024, (1, 1, 1), 0, 0, 0) -> no match in any table, using hardcoded default: Cin=512 Cout=32 T=1 H=1 W=1
+2026-10-11 05:48:08.663 | WARNING  | models.tt_dit.utils.conv3d:get_conv3d_config:775 - conv3d blocking [fallback] (1, 1, 1024, 1024, (1, 3, 3), 0, 0, 0) -> channel_key=(1024, 1024, (1, 3, 3)) -> Cin=64 Cout=64 T=5 H=16 W=2
+2026-10-11 05:48:08.663 | WARNING  | models.tt_dit.utils.conv3d:get_conv3d_config:775 - conv3d blocking [fallback] (1, 1, 1024, 1024, (1, 3, 3), 0, 0, 0) -> channel_key=(1024, 1024, (1, 3, 3)) -> Cin=64 Cout=64 T=5 H=16 W=2
+2026-10-11 05:48:08.663 | WARNING  | models.tt_dit.utils.conv3d:get_conv3d_config:775 - conv3d blocking [fallback] (1, 1, 1024, 48, (1, 3, 3), 0, 0, 0) -> channel_key=(1024, 48, (1, 3, 3)) -> Cin=128 Cout=32 T=1 H=16 W=2
+2026-10-11 05:48:08.681 | INFO     | models.tt_dit.utils.cache:load_model:194 - loading cache at '/var/tmp/fasth3/cache/dit-h3hf/minimax-h3/transformer_resident_adaln/TP4_0_SP8_1_mesh4x8_bf16'.
+2026-10-11 05:48:08.682 | INFO     | models.tt_dit.layers.module:load:238 - loading 534 cached weight tensors from '/var/tmp/fasth3/cache/dit-h3hf/minimax-h3/transformer_resident_adaln/TP4_0_SP8_1_mesh4x8_bf16'...
+2026-10-11 05:48:20.222 | INFO     | models.tt_dit.utils.progress:__exit__:62 - load-cache MiniMaxH3Transformer3DModel: done in 12s
+2026-10-11 05:48:22.785 | info     |    BuildKernels | compiled writer_unary_interleaved_start_id_wh/17942968001869673565/ in 286 ms (build.cpp:1113)
+2026-10-11 05:48:22.939 | info     |    BuildKernels | compiled reader_unary_pad_multicore_both_dims/11734669789200727378/ in 440 ms (build.cpp:1113)
+2026-10-11 05:48:23.245 | info     |    BuildKernels | compiled reader_bmm_tile_layout_in0_receiver_metal2/13478303148936499926/ in 294 ms (build.cpp:1113)
+2026-10-11 05:48:23.248 | info     |    BuildKernels | compiled reader_bmm_tile_layout_in0_receiver_metal2/3608064860497970611/ in 297 ms (build.cpp:1113)
+2026-10-11 05:48:23.298 | info     |    BuildKernels | compiled reader_bmm_tile_layout_in1_receiver_writer_padding_metal2/2935979527724949805/ in 347 ms (build.cpp:1113)
+2026-10-11 05:48:23.301 | info     |    BuildKernels | compiled reader_bmm_tile_layout_in1_receiver_writer_padding_metal2/5896321136486594580/ in 350 ms (build.cpp:1113)
+2026-10-11 05:48:23.325 | info     |    BuildKernels | compiled reader_bmm_tile_layout_in0_sender_padding_metal2/17555771688796410332/ in 373 ms (build.cpp:1113)
+2026-10-11 05:48:23.362 | info     |    BuildKernels | compiled bmm_large_block_zm_fused_bias_activation_metal2/4124932949797569383/ in 411 ms (build.cpp:1113)
+2026-10-11 05:48:23.366 | info     |    BuildKernels | compiled reader_bmm_tile_layout_in1_sender_writer_padding_metal2/11817103483995499846/ in 415 ms (build.cpp:1113)
+2026-10-11 05:48:23.396 | info     |    BuildKernels | compiled bmm_large_block_zm_fused_bias_activation_metal2/4124932949797569383/ in 445 ms (build.cpp:1113)
+2026-10-11 05:48:23.438 | info     |    BuildKernels | compiled bmm_large_block_zm_fused_bias_activation_metal2/4124932949797569383/ in 487 ms (build.cpp:1113)
+2026-10-11 05:48:23.753 | info     |    BuildKernels | compiled writer_unary_interleaved_start_id_wh/14093248232944916313/ in 286 ms (build.cpp:1113)
+2026-10-11 05:48:23.912 | info     |    BuildKernels | compiled reader_unary_pad_multicore_both_dims/15799648399912567001/ in 444 ms (build.cpp:1113)
+2026-10-11 05:48:24.220 | info     |    BuildKernels | compiled reader_bmm_tile_layout_in0_receiver_metal2/11956396459801001384/ in 297 ms (build.cpp:1113)
+2026-10-11 05:48:24.223 | info     |    BuildKernels | compiled reader_bmm_tile_layout_in0_receiver_metal2/14979649698833345730/ in 299 ms (build.cpp:1113)
+2026-10-11 05:48:24.291 | info     |    BuildKernels | compiled reader_bmm_tile_layout_in0_sender_padding_metal2/18120403027924025611/ in 367 ms (build.cpp:1113)
+2026-10-11 05:48:24.293 | info     |    BuildKernels | compiled reader_bmm_tile_layout_in1_receiver_writer_padding_metal2/12670494097267267289/ in 370 ms (build.cpp:1113)
+2026-10-11 05:48:24.293 | info     |    BuildKernels | compiled reader_bmm_tile_layout_in1_receiver_writer_padding_metal2/12209802347797858273/ in 369 ms (build.cpp:1113)
+2026-10-11 05:48:24.324 | info     |    BuildKernels | compiled bmm_large_block_zm_fused_bias_activation_metal2/14461640976647369027/ in 400 ms (build.cpp:1113)
+2026-10-11 05:48:24.356 | info     |    BuildKernels | compiled reader_bmm_tile_layout_in1_sender_writer_padding_metal2/2626661839752622993/ in 432 ms (build.cpp:1113)
+2026-10-11 05:48:24.383 | info     |    BuildKernels | compiled bmm_large_block_zm_fused_bias_activation_metal2/14461640976647369027/ in 459 ms (build.cpp:1113)
+2026-10-11 05:48:24.421 | info     |    BuildKernels | compiled bmm_large_block_zm_fused_bias_activation_metal2/14461640976647369027/ in 497 ms (build.cpp:1113)
+2026-10-11 05:48:24.792 | info     |    BuildKernels | compiled tilize_metal2/4912195045167448112/ in 359 ms (build.cpp:1113)
+2026-10-11 05:48:24.810 | info     |    BuildKernels | compiled tilize_metal2/4912195045167448112/ in 377 ms (build.cpp:1113)
+2026-10-11 05:48:24.819 | info     |    BuildKernels | compiled tilize_metal2/4912195045167448112/ in 386 ms (build.cpp:1113)
+2026-10-11 05:48:25.114 | info     |    BuildKernels | compiled writer_unary_interleaved_start_id_wh/2066453655260426395/ in 288 ms (build.cpp:1113)
+2026-10-11 05:48:25.203 | info     |    BuildKernels | compiled tilize_wh/17181033757688324577/ in 376 ms (build.cpp:1113)
+2026-10-11 05:48:25.214 | info     |    BuildKernels | compiled tilize_wh/17181033757688324577/ in 387 ms (build.cpp:1113)
+2026-10-11 05:48:25.215 | info     |    BuildKernels | compiled tilize_wh/17181033757688324577/ in 388 ms (build.cpp:1113)
+2026-10-11 05:48:25.272 | info     |    BuildKernels | compiled reader_unary_pad_multicore_both_dims/5620825834572086565/ in 446 ms (build.cpp:1113)
+2026-10-11 05:48:25.578 | info     |    BuildKernels | compiled reader_bmm_tile_layout_in0_receiver_metal2/3558138633393434675/ in 298 ms (build.cpp:1113)
+2026-10-11 05:48:25.584 | info     |    BuildKernels | compiled reader_bmm_tile_layout_in0_receiver_metal2/5454509103245305961/ in 303 ms (build.cpp:1113)
+2026-10-11 05:48:25.634 | info     |    BuildKernels | compiled reader_bmm_tile_layout_in1_receiver_writer_padding_metal2/5337647968772941118/ in 353 ms (build.cpp:1113)
+2026-10-11 05:48:25.635 | info     |    BuildKernels | compiled reader_bmm_tile_layout_in1_receiver_writer_padding_metal2/15646375379509784022/ in 354 ms (build.cpp:1113)
+2026-10-11 05:48:25.653 | info     |    BuildKernels | compiled reader_bmm_tile_layout_in0_sender_padding_metal2/11885372542370062145/ in 372 ms (build.cpp:1113)
+2026-10-11 05:48:25.690 | info     |    BuildKernels | compiled bmm_large_block_zm_fused_bias_activation_metal2/3722212273325578262/ in 409 ms (build.cpp:1113)
+2026-10-11 05:48:25.697 | info     |    BuildKernels | compiled reader_bmm_tile_layout_in1_sender_writer_padding_metal2/6097361286267996537/ in 416 ms (build.cpp:1113)
+2026-10-11 05:48:25.733 | info     |    BuildKernels | compiled bmm_large_block_zm_fused_bias_activation_metal2/3722212273325578262/ in 451 ms (build.cpp:1113)
+2026-10-11 05:48:25.770 | info     |    BuildKernels | compiled bmm_large_block_zm_fused_bias_activation_metal2/3722212273325578262/ in 488 ms (build.cpp:1113)
+2026-10-11 05:48:28.388 | info     |    BuildKernels | compiled reader_unary_stick_layout_split_rows_multicore/12381494798139363176/ in 296 ms (build.cpp:1113)
+2026-10-11 05:48:28.459 | info     |    BuildKernels | compiled tilize_metal2/12814601265171970069/ in 366 ms (build.cpp:1113)
+2026-10-11 05:48:28.478 | info     |    BuildKernels | compiled tilize_metal2/12814601265171970069/ in 386 ms (build.cpp:1113)
+2026-10-11 05:48:28.483 | info     |    BuildKernels | compiled tilize_metal2/12814601265171970069/ in 391 ms (build.cpp:1113)
+2026-10-11 05:48:28.794 | info     |    BuildKernels | compiled writer_unary_interleaved_start_id_wh/1555031254140716187/ in 290 ms (build.cpp:1113)
+2026-10-11 05:48:28.880 | info     |    BuildKernels | compiled tilize_wh/3877582081797038603/ in 374 ms (build.cpp:1113)
+2026-10-11 05:48:28.885 | info     |    BuildKernels | compiled tilize_wh/12188583817196584551/ in 379 ms (build.cpp:1113)
+2026-10-11 05:48:28.887 | info     |    BuildKernels | compiled tilize_wh/3968017136369699075/ in 381 ms (build.cpp:1113)
+2026-10-11 05:48:28.889 | info     |    BuildKernels | compiled tilize_wh/13870929758979306623/ in 383 ms (build.cpp:1113)
+2026-10-11 05:48:28.889 | info     |    BuildKernels | compiled tilize_wh/3968017136369699075/ in 384 ms (build.cpp:1113)
+2026-10-11 05:48:28.890 | info     |    BuildKernels | compiled tilize_wh/13870929758979306623/ in 383 ms (build.cpp:1113)
+2026-10-11 05:48:28.891 | info     |    BuildKernels | compiled tilize_wh/3877582081797038603/ in 385 ms (build.cpp:1113)
+2026-10-11 05:48:28.893 | info     |    BuildKernels | compiled tilize_wh/12188583817196584551/ in 387 ms (build.cpp:1113)
+2026-10-11 05:48:28.900 | info     |    BuildKernels | compiled tilize_wh/3968017136369699075/ in 394 ms (build.cpp:1113)
+2026-10-11 05:48:28.903 | info     |    BuildKernels | compiled tilize_wh/13870929758979306623/ in 397 ms (build.cpp:1113)
+2026-10-11 05:48:28.905 | info     |    BuildKernels | compiled tilize_wh/12188583817196584551/ in 399 ms (build.cpp:1113)
+2026-10-11 05:48:28.906 | info     |    BuildKernels | compiled tilize_wh/3877582081797038603/ in 400 ms (build.cpp:1113)
+2026-10-11 05:48:28.949 | info     |    BuildKernels | compiled reader_unary_pad_multicore_both_dims/3711475919831654475/ in 445 ms (build.cpp:1113)
+2026-10-11 05:48:28.956 | info     |    BuildKernels | compiled reader_unary_pad_multicore_both_dims/9651432678408363258/ in 450 ms (build.cpp:1113)
+2026-10-11 05:48:29.267 | info     |    BuildKernels | compiled reader_bmm_tile_layout_in0_receiver_metal2/2515159745688697167/ in 299 ms (build.cpp:1113)
+2026-10-11 05:48:29.270 | info     |    BuildKernels | compiled reader_bmm_tile_layout_in0_receiver_metal2/2147457508187768447/ in 303 ms (build.cpp:1113)
+2026-10-11 05:48:29.336 | info     |    BuildKernels | compiled reader_bmm_tile_layout_in1_receiver_writer_padding_metal2/5694952901825834547/ in 368 ms (build.cpp:1113)
+2026-10-11 05:48:29.337 | info     |    BuildKernels | compiled reader_bmm_tile_layout_in1_receiver_writer_padding_metal2/12174977757359043498/ in 370 ms (build.cpp:1113)
+2026-10-11 05:48:29.343 | info     |    BuildKernels | compiled reader_bmm_tile_layout_in0_sender_padding_metal2/11387442099601303110/ in 376 ms (build.cpp:1113)
+2026-10-11 05:48:29.370 | info     |    BuildKernels | compiled bmm_large_block_zm_fused_bias_activation_metal2/18389959949089076427/ in 402 ms (build.cpp:1113)
+2026-10-11 05:48:29.395 | info     |    BuildKernels | compiled reader_bmm_tile_layout_in1_sender_writer_padding_metal2/9447951761411898986/ in 426 ms (build.cpp:1113)
+2026-10-11 05:48:29.425 | info     |    BuildKernels | compiled bmm_large_block_zm_fused_bias_activation_metal2/18389959949089076427/ in 457 ms (build.cpp:1113)
+2026-10-11 05:48:29.464 | info     |    BuildKernels | compiled bmm_large_block_zm_fused_bias_activation_metal2/18389959949089076427/ in 497 ms (build.cpp:1113)
+2026-10-11 05:48:31.870 | INFO     | models.tt_dit.experimental.lora.h3_adapter_loader:load_h3_adapter_into:169 - minimax_h3_fl2v_turbo_4step_v1.2_768p_bf16.safetensors: bound 208 LoRA targets over 266 promoted linears
+2026-10-11 05:48:31.922 | INFO     | models.tt_dit.pipelines.minimax_h3.pipeline_minimax_h3_turbo:_prepare_transformer:162 - turbo adapter minimax_h3_fl2v_turbo_4step_v1.2_768p_bf16.safetensors: 208 targets, strength 1
+2026-10-11 05:48:31.922 | INFO     | models.tt_dit.utils.cache:load_model:194 - loading cache at '/var/tmp/fasth3/cache/dit-h3hf/minimax-h3/text_encoder/TP4_0_SP8_1_mesh4x8_bf16_FSDP'.
+2026-10-11 05:48:31.923 | INFO     | models.tt_dit.layers.module:load:238 - loading 452 cached weight tensors from '/var/tmp/fasth3/cache/dit-h3hf/minimax-h3/text_encoder/TP4_0_SP8_1_mesh4x8_bf16_FSDP'...
+2026-10-11 05:48:34.719 | INFO     | models.tt_dit.utils.progress:__exit__:62 - load-cache Qwen3VlTextEncoder: done in 3s
+2026-10-11 05:48:34.720 | INFO     | models.tt_dit.pipelines.minimax_h3.pipeline_minimax_h3:_host_log:859 - building the audio decoder (factor 8 over mesh axis 1)
+2026-10-11 05:48:34.723 | WARNING  | models.tt_dit.layers.audio_ops:_warn_once:340 - Padding out_channels from 16 to 32
+2026-10-11 05:48:35.702 | WARNING  | models.tt_dit.layers.audio_ops:_warn_once:340 - Padding out_channels from 1 to 32
+2026-10-11 05:48:35.702 | INFO     | models.tt_dit.utils.cache:load_model:194 - loading cache at '/var/tmp/fasth3/cache/dit-h3hf/minimax-h3/audio_decoder_split-full_pack5x2-6x4_pp_act-fused_wp3/TP1_0_mesh4x8_fp32'.
+2026-10-11 05:48:35.703 | INFO     | models.tt_dit.layers.module:load:238 - loading 534 cached weight tensors from '/var/tmp/fasth3/cache/dit-h3hf/minimax-h3/audio_decoder_split-full_pack5x2-6x4_pp_act-fused_wp3/TP1_0_mesh4x8_fp32'...
+2026-10-11 05:48:36.057 | INFO     | models.tt_dit.utils.progress:__exit__:62 - load-cache MiniMaxH3AudioDecoder: done in 0s
+
+[A[KWarming VAE decode canvases:   0%|          | 0/93 [00:00<?, ?it/s]
+[A[KWarming VAE decode canvases:  18%|█▊        | 17/93 [00:00<00:00, 166.18it/s]
+2026-10-11 05:48:36.178 | INFO     | models.tt_dit.utils.cache:load_model:194 - loading cache at '/var/tmp/fasth3/cache/dit-h3hf/minimax-h3/vae_decoder_t7_h16_w16_pxdenorm/TP1_0_mesh4x8_fp32'.
+2026-10-11 05:48:36.178 | INFO     | models.tt_dit.layers.module:load:238 - loading 369 cached weight tensors from '/var/tmp/fasth3/cache/dit-h3hf/minimax-h3/vae_decoder_t7_h16_w16_pxdenorm/TP1_0_mesh4x8_fp32'...
+2026-10-11 05:48:39.240 | INFO     | models.tt_dit.utils.progress:__exit__:62 - load-cache MiniMaxH3ViTDecoder3d: done in 3s
+2026-10-11 05:48:39.259 | WARNING  | models.tt_dit.utils.matmul:log_warning:50 - No known best blocking for (M, K, N) = (1792, 32, 2048) on 11x10 core grid; using default 8x8x8
+2026-10-11 05:48:39.286 | WARNING  | models.tt_dit.utils.matmul:log_warning:50 - No known best blocking for (M, K, N) = (1824, 2048, 6144) on 11x10 core grid; using default 8x8x8
+2026-10-11 05:48:39.335 | WARNING  | models.tt_dit.utils.matmul:log_warning:50 - No known best blocking for (M, K, N) = (1824, 2048, 2048) on 11x10 core grid; using default 8x8x8
+2026-10-11 05:48:39.353 | WARNING  | models.tt_dit.utils.matmul:log_warning:50 - No known best blocking for (M, K, N) = (1824, 2048, 16384) on 11x10 core grid; using default 8x8x8
+2026-10-11 05:48:39.370 | WARNING  | models.tt_dit.utils.matmul:log_warning:50 - No known best blocking for (M, K, N) = (1824, 8192, 2048) on 11x10 core grid; using default 8x8x8
+2026-10-11 05:48:39.448 | WARNING  | models.tt_dit.utils.matmul:log_warning:50 - No known best blocking for (M, K, N) = (1824, 2048, 3072) on 11x10 core grid; using default 8x8x8
+2026-10-11 05:48:39.526 | warning  |              Op | The following ttnn.all_gather args are deprecated and will be removed in September-2026: num_links, topology, chunks_per_sync, num_workers_per_link, num_buffers_per_channel, use_l1_small_for_semaphores. (all_gather.cpp:148)
+2026-10-11 05:48:39.533 | warning  |              Op | Fabric packet size 8192 B is suboptimal for transporting 1024 B pages. Configure 4096 B packet size to maximize throughput. (ccl_common.cpp:80)
+2026-10-11 05:48:39.709 | warning  |              Op | The following ttnn.all_gather args are deprecated and will be removed in September-2026: num_links, topology, chunks_per_sync, num_workers_per_link, num_buffers_per_channel, use_l1_small_for_semaphores. (all_gather.cpp:148)
+2026-10-11 05:48:39.818 | warning  |              Op | The following ttnn.all_gather args are deprecated and will be removed in September-2026: num_links, topology, chunks_per_sync, num_workers_per_link, num_buffers_per_channel, use_l1_small_for_semaphores. (all_gather.cpp:148)
+2026-10-11 05:48:39.825 | warning  |              Op | Fabric packet size 8192 B is suboptimal for transporting 320 B pages. Configure 1280 B packet size to maximize throughput. (ccl_common.cpp:80)
+2026-10-11 05:48:40.076 | INFO     | models.tt_dit.models.vae.minimax_h3.vae_minimax_h3:_report_profile:572 -     readback per wave: min 119 / median 119 / max 119 ms  [119]  on (1, 3, 28, 768, 1344) DataType.FLOAT32
+2026-10-11 05:48:40.076 | INFO     | models.tt_dit.models.vae.minimax_h3.vae_minimax_h3:_report_profile:579 -     device   per wave: min 79 / median 79 / max 79 ms  [79]
+2026-10-11 05:48:40.076 | INFO     | models.tt_dit.models.vae.minimax_h3.vae_minimax_h3:_report_profile:585 - VAE decode profile: 0.84 s over 1 waves / 28 units (32 devices, 28.0 units/wave)
+2026-10-11 05:48:40.077 | INFO     | models.tt_dit.models.vae.minimax_h3.vae_minimax_h3:_report_profile:603 -     device         0.69 s  (82.1 %)     686 ms/wave
+2026-10-11 05:48:40.077 | INFO     | models.tt_dit.models.vae.minimax_h3.vae_minimax_h3:_report_profile:603 -     readback       0.12 s  (14.3 %)     119 ms/wave
+2026-10-11 05:48:40.077 | INFO     | models.tt_dit.models.vae.minimax_h3.vae_minimax_h3:_report_profile:603 -     readback_join   0.01 s  ( 0.9 %)
+2026-10-11 05:48:40.077 | INFO     | models.tt_dit.models.vae.minimax_h3.vae_minimax_h3:_report_profile:603 -     stitch         0.00 s  ( 0.0 %)
+2026-10-11 05:48:40.077 | INFO     | models.tt_dit.models.vae.minimax_h3.vae_minimax_h3:_report_profile:603 -     unpatchify     0.00 s  ( 0.0 %)
+2026-10-11 05:48:40.077 | INFO     | models.tt_dit.models.vae.minimax_h3.vae_minimax_h3:_report_profile:603 -     tiling         0.00 s  ( 0.0 %)
+2026-10-11 05:48:40.077 | INFO     | models.tt_dit.models.vae.minimax_h3.vae_minimax_h3:_report_profile:603 -     upload         0.02 s  ( 1.9 %)
+2026-10-11 05:48:40.077 | INFO     | models.tt_dit.models.vae.minimax_h3.vae_minimax_h3:_report_profile:603 -     host_prep      0.00 s  ( 0.2 %)
+2026-10-11 05:48:40.077 | INFO     | models.tt_dit.models.vae.minimax_h3.vae_minimax_h3:_report_profile:603 -     residual       0.01 s  ( 1.1 %)
+2026-10-11 05:48:40.077 | INFO     | models.tt_dit.models.vae.minimax_h3.vae_minimax_h3:_report_profile:604 -     readback volume 0.04 GB
+[A[KWarming VAE decode canvases:  49%|████▉     | 46/93 [00:04<00:04, 10.29it/s]
+ [A[KWarming VAE decode canvases:  69%|██████▉   | 64/93 [00:04<00:01, 16.15it/s]
+[A[KWarming VAE decode canvases: 100%|██████████| 93/93 [00:04<00:00, 22.56it/s]
+
+2026-10-11 05:48:40.196 | INFO     | models.tt_dit.pipelines.minimax_h3.pipeline_minimax_h3:_host_log:859 - VAE decode warmed: +66 programs
+[t286] VAE warmup: kept [(768, 1344)] + full-wave canvas, skipped 92 canvases
+
+[A[KWarming audio decode lengths:   0%|          | 0/12 [00:00<?, ?it/s]
+[A[KWarming audio decode lengths:   8%|▊         | 1/12 [00:05<00:57,  5.20s/it]
+[A[KWarming audio decode lengths:  17%|█▋        | 2/12 [00:05<00:24,  2.40s/it]
+[A[KWarming audio decode lengths:  25%|██▌       | 3/12 [00:09<00:29,  3.26s/it]
+[A[KWarming audio decode lengths:  33%|███▎      | 4/12 [00:14<00:28,  3.59s/it]
+[A[KWarming audio decode lengths:  42%|████▏     | 5/12 [00:17<00:25,  3.68s/it]
+[A[KWarming audio decode lengths:  50%|█████     | 6/12 [00:22<00:23,  3.93s/it]
+[A[KWarming audio decode lengths:  58%|█████▊    | 7/12 [00:26<00:20,  4.09s/it]
+[A[KWarming audio decode lengths:  67%|██████▋   | 8/12 [00:30<00:16,  4.13s/it]
+[A[KWarming audio decode lengths:  75%|███████▌  | 9/12 [00:35<00:12,  4.16s/it]
+[A[KWarming audio decode lengths:  83%|████████▎ | 10/12 [00:39<00:08,  4.25s/it]
+[A[KWarming audio decode lengths:  92%|█████████▏| 11/12 [00:43<00:04,  4.18s/it]
+[A[KWarming audio decode lengths: 100%|██████████| 12/12 [00:47<00:00,  4.19s/it]
+[A[KWarming audio decode lengths: 100%|██████████| 12/12 [00:47<00:00,  3.99s/it]
+
+2026-10-11 05:49:28.044 | INFO     | models.tt_dit.pipelines.minimax_h3.pipeline_minimax_h3:_host_log:859 - audio decode warmed: +2180 programs
+
+[A[KWarming prompt encoder keyframe layouts:   0%|          | 0/3 [00:00<?, ?it/s]
+2026-10-11 05:49:29.438 | WARNING  | models.tt_dit.utils.matmul:log_warning:50 - No known best blocking for (M, K, N) = (32, 5120, 2560) on 11x10 core grid; using default 2x8x8
+2026-10-11 05:49:29.737 | WARNING  | models.tt_dit.utils.matmul:log_warning:50 - No known best blocking for (M, K, N) = (32, 8192, 1280) on 11x10 core grid; using default 2x8x8
+2026-10-11 05:49:29.857 | WARNING  | models.tt_dit.utils.matmul:log_warning:50 - No known best blocking for (M, K, N) = (32, 5120, 6400) on 11x10 core grid; using default 2x8x8
+2026-10-11 05:49:29.949 | WARNING  | models.tt_dit.utils.matmul:log_warning:50 - No known best blocking for (M, K, N) = (32, 6400, 5120) on 11x10 core grid; using default 2x8x8
+2026-10-11 05:49:30.547 | WARNING  | models.tt_dit.utils.matmul:log_warning:50 - No known best blocking for (M, K, N) = (64, 5120, 2560) on 11x10 core grid; using default 2x8x8
+2026-10-11 05:49:30.747 | WARNING  | models.tt_dit.utils.matmul:log_warning:50 - No known best blocking for (M, K, N) = (64, 8192, 1280) on 11x10 core grid; using default 2x8x8
+2026-10-11 05:49:30.802 | WARNING  | models.tt_dit.utils.matmul:log_warning:50 - No known best blocking for (M, K, N) = (64, 5120, 6400) on 11x10 core grid; using default 2x8x8
+2026-10-11 05:49:30.815 | WARNING  | models.tt_dit.utils.matmul:log_warning:50 - No known best blocking for (M, K, N) = (64, 6400, 5120) on 11x10 core grid; using default 2x8x8
+2026-10-11 05:49:31.401 | WARNING  | models.tt_dit.utils.matmul:log_warning:50 - No known best blocking for (M, K, N) = (96, 5120, 2560) on 11x10 core grid; using default 2x8x8
+2026-10-11 05:49:31.600 | WARNING  | models.tt_dit.utils.matmul:log_warning:50 - No known best blocking for (M, K, N) = (96, 8192, 1280) on 11x10 core grid; using default 2x8x8
+2026-10-11 05:49:31.655 | WARNING  | models.tt_dit.utils.matmul:log_warning:50 - No known best blocking for (M, K, N) = (96, 5120, 6400) on 11x10 core grid; using default 2x8x8
+2026-10-11 05:49:31.668 | WARNING  | models.tt_dit.utils.matmul:log_warning:50 - No known best blocking for (M, K, N) = (96, 6400, 5120) on 11x10 core grid; using default 2x8x8
+2026-10-11 05:49:32.251 | WARNING  | models.tt_dit.utils.matmul:log_warning:50 - No known best blocking for (M, K, N) = (128, 5120, 2560) on 11x10 core grid; using default 2x8x8
+2026-10-11 05:49:32.457 | WARNING  | models.tt_dit.utils.matmul:log_warning:50 - No known best blocking for (M, K, N) = (128, 8192, 1280) on 11x10 core grid; using default 2x8x8
+2026-10-11 05:49:32.513 | WARNING  | models.tt_dit.utils.matmul:log_warning:50 - No known best blocking for (M, K, N) = (128, 5120, 6400) on 11x10 core grid; using default 2x8x8
+2026-10-11 05:49:32.525 | WARNING  | models.tt_dit.utils.matmul:log_warning:50 - No known best blocking for (M, K, N) = (128, 6400, 5120) on 11x10 core grid; using default 2x8x8
+2026-10-11 05:49:33.133 | WARNING  | models.tt_dit.utils.matmul:log_warning:50 - No known best blocking for (M, K, N) = (160, 5120, 2560) on 11x10 core grid; using default 2x8x8
+2026-10-11 05:49:33.333 | WARNING  | models.tt_dit.utils.matmul:log_warning:50 - No known best blocking for (M, K, N) = (160, 8192, 1280) on 11x10 core grid; using default 2x8x8
+2026-10-11 05:49:33.389 | WARNING  | models.tt_dit.utils.matmul:log_warning:50 - No known best blocking for (M, K, N) = (160, 5120, 6400) on 11x10 core grid; using default 2x8x8
+2026-10-11 05:49:33.403 | WARNING  | models.tt_dit.utils.matmul:log_warning:50 - No known best blocking for (M, K, N) = (160, 6400, 5120) on 11x10 core grid; using default 2x8x8
+2026-10-11 05:49:33.999 | WARNING  | models.tt_dit.utils.matmul:log_warning:50 - No known best blocking for (M, K, N) = (192, 5120, 2560) on 11x10 core grid; using default 2x8x8
+2026-10-11 05:49:34.194 | WARNING  | models.tt_dit.utils.matmul:log_warning:50 - No known best blocking for (M, K, N) = (192, 8192, 1280) on 11x10 core grid; using default 2x8x8
+2026-10-11 05:49:34.250 | WARNING  | models.tt_dit.utils.matmul:log_warning:50 - No known best blocking for (M, K, N) = (192, 5120, 6400) on 11x10 core grid; using default 2x8x8
+2026-10-11 05:49:34.263 | WARNING  | models.tt_dit.utils.matmul:log_warning:50 - No known best blocking for (M, K, N) = (192, 6400, 5120) on 11x10 core grid; using default 2x8x8
+2026-10-11 05:49:34.939 | WARNING  | models.tt_dit.utils.matmul:log_warning:50 - No known best blocking for (M, K, N) = (224, 5120, 2560) on 11x10 core grid; using default 2x8x8
+2026-10-11 05:49:35.130 | WARNING  | models.tt_dit.utils.matmul:log_warning:50 - No known best blocking for (M, K, N) = (224, 8192, 1280) on 11x10 core grid; using default 2x8x8
+2026-10-11 05:49:35.183 | WARNING  | models.tt_dit.utils.matmul:log_warning:50 - No known best blocking for (M, K, N) = (224, 5120, 6400) on 11x10 core grid; using default 2x8x8
+2026-10-11 05:49:35.194 | WARNING  | models.tt_dit.utils.matmul:log_warning:50 - No known best blocking for (M, K, N) = (224, 6400, 5120) on 11x10 core grid; using default 2x8x8
+2026-10-11 05:49:35.762 | WARNING  | models.tt_dit.utils.matmul:log_warning:50 - No known best blocking for (M, K, N) = (256, 5120, 2560) on 11x10 core grid; using default 8x8x8
+2026-10-11 05:49:35.963 | WARNING  | models.tt_dit.utils.matmul:log_warning:50 - No known best blocking for (M, K, N) = (256, 8192, 1280) on 11x10 core grid; using default 8x8x8
+2026-10-11 05:49:35.980 | WARNING  | models.tt_dit.utils.matmul:log_warning:50 - No known best blocking for (M, K, N) = (256, 5120, 6400) on 11x10 core grid; using default 8x8x8
+2026-10-11 05:49:35.997 | WARNING  | models.tt_dit.utils.matmul:log_warning:50 - No known best blocking for (M, K, N) = (256, 6400, 5120) on 11x10 core grid; using default 8x8x8
+2026-10-11 05:49:36.555 | WARNING  | models.tt_dit.utils.matmul:log_warning:50 - No known best blocking for (M, K, N) = (288, 5120, 2560) on 11x10 core grid; using default 8x8x8
+2026-10-11 05:49:36.749 | WARNING  | models.tt_dit.utils.matmul:log_warning:50 - No known best blocking for (M, K, N) = (288, 8192, 1280) on 11x10 core grid; using default 8x8x8
+2026-10-11 05:49:36.803 | WARNING  | models.tt_dit.utils.matmul:log_warning:50 - No known best blocking for (M, K, N) = (288, 5120, 6400) on 11x10 core grid; using default 8x8x8
+2026-10-11 05:49:36.815 | WARNING  | models.tt_dit.utils.matmul:log_warning:50 - No known best blocking for (M, K, N) = (288, 6400, 5120) on 11x10 core grid; using default 8x8x8
+2026-10-11 05:49:37.364 | WARNING  | models.tt_dit.utils.matmul:log_warning:50 - No known best blocking for (M, K, N) = (320, 5120, 2560) on 11x10 core grid; using default 8x8x8
+2026-10-11 05:49:37.563 | WARNING  | models.tt_dit.utils.matmul:log_warning:50 - No known best blocking for (M, K, N) = (320, 8192, 1280) on 11x10 core grid; using default 8x8x8
+2026-10-11 05:49:37.618 | WARNING  | models.tt_dit.utils.matmul:log_warning:50 - No known best blocking for (M, K, N) = (320, 5120, 6400) on 11x10 core grid; using default 8x8x8
+2026-10-11 05:49:37.630 | WARNING  | models.tt_dit.utils.matmul:log_warning:50 - No known best blocking for (M, K, N) = (320, 6400, 5120) on 11x10 core grid; using default 8x8x8
+2026-10-11 05:49:38.195 | WARNING  | models.tt_dit.utils.matmul:log_warning:50 - No known best blocking for (M, K, N) = (352, 5120, 2560) on 11x10 core grid; using default 8x8x8
+2026-10-11 05:49:38.390 | WARNING  | models.tt_dit.utils.matmul:log_warning:50 - No known best blocking for (M, K, N) = (352, 8192, 1280) on 11x10 core grid; using default 8x8x8
+2026-10-11 05:49:38.444 | WARNING  | models.tt_dit.utils.matmul:log_warning:50 - No known best blocking for (M, K, N) = (352, 5120, 6400) on 11x10 core grid; using default 8x8x8
+2026-10-11 05:49:38.457 | WARNING  | models.tt_dit.utils.matmul:log_warning:50 - No known best blocking for (M, K, N) = (352, 6400, 5120) on 11x10 core grid; using default 8x8x8
+2026-10-11 05:49:39.011 | INFO     | models.tt_dit.utils.matmul:log_info:55 - No exact blocking for (M, K, N) = (384, 5120, 2560) on 11x10; using the entry swept at M=512, which has the same M_per_core (2 M tiles per core)
+2026-10-11 05:49:39.209 | WARNING  | models.tt_dit.utils.matmul:log_warning:50 - No known best blocking for (M, K, N) = (384, 8192, 1280) on 11x10 core grid; using default 8x8x8
+2026-10-11 05:49:39.265 | WARNING  | models.tt_dit.utils.matmul:log_warning:50 - No known best blocking for (M, K, N) = (384, 5120, 6400) on 11x10 core grid; using default 8x8x8
+2026-10-11 05:49:39.278 | WARNING  | models.tt_dit.utils.matmul:log_warning:50 - No known best blocking for (M, K, N) = (384, 6400, 5120) on 11x10 core grid; using default 8x8x8
+[A[KWarming prompt encoder keyframe layouts:  33%|███▎      | 1/3 [00:11<00:23, 11.63s/it]
+2026-10-11 05:49:39.822 | INFO     | models.tt_dit.pipelines.minimax_h3.pipeline_minimax_h3:_host_log:859 - building the Qwen3-VL vision tower (tp4_sp8)
+2026-10-11 05:49:39.845 | INFO     | models.tt_dit.encoders.qwen3vl.loader_minimax_h3:load_minimax_h3_vision_state_dict:239 - MiniMax-H3 vision tower: 351 tensors from 1 of 14 shards, 1.19 GB bf16
+2026-10-11 05:49:42.644 | INFO     | models.tt_dit.layers.module:tick:62 - converting weights to device: 350/350 tensors (100%), 3s
+2026-10-11 05:49:42.645 | INFO     | models.tt_dit.utils.progress:__exit__:62 - convert Qwen3VlVisionModel: done in 3s
+2026-10-11 05:49:42.802 | WARNING  | models.tt_dit.utils.matmul:log_warning:50 - No known best blocking for (M, K, N) = (512, 1536, 1152) on 11x10 core grid; using default 8x8x8
+2026-10-11 05:49:42.829 | WARNING  | models.tt_dit.utils.matmul:log_warning:50 - No known best blocking for (M, K, N) = (512, 1152, 1152) on 11x10 core grid; using default 8x8x8
+2026-10-11 05:49:42.949 | WARNING  | models.tt_dit.utils.matmul:log_warning:50 - No known best blocking for (M, K, N) = (512, 384, 1152) on 11x10 core grid; using default 8x8x8
+2026-10-11 05:49:43.082 | WARNING  | models.tt_dit.utils.matmul:log_warning:50 - No known best blocking for (M, K, N) = (512, 1152, 1088) on 11x10 core grid; using default 8x8x8
+2026-10-11 05:49:43.104 | WARNING  | models.tt_dit.utils.matmul:log_warning:50 - No known best blocking for (M, K, N) = (512, 1088, 1152) on 11x10 core grid; using default 8x8x8
+2026-10-11 05:49:43.185 | WARNING  | models.tt_dit.utils.matmul:log_warning:50 - No known best blocking for (M, K, N) = (128, 4608, 1152) on 11x10 core grid; using default 2x8x8
+2026-10-11 05:49:43.201 | WARNING  | models.tt_dit.utils.matmul:log_warning:50 - No known best blocking for (M, K, N) = (128, 1152, 5120) on 11x10 core grid; using default 2x8x8
+2026-10-11 05:49:48.483 | INFO     | models.tt_dit.utils.matmul:log_info:55 - No exact blocking for (M, K, N) = (416, 5120, 2560) on 11x10; using the entry swept at M=512, which has the same M_per_core (2 M tiles per core)
+2026-10-11 05:49:48.671 | WARNING  | models.tt_dit.utils.matmul:log_warning:50 - No known best blocking for (M, K, N) = (416, 8192, 1280) on 11x10 core grid; using default 8x8x8
+2026-10-11 05:49:48.726 | WARNING  | models.tt_dit.utils.matmul:log_warning:50 - No known best blocking for (M, K, N) = (416, 5120, 6400) on 11x10 core grid; using default 8x8x8
+2026-10-11 05:49:48.740 | WARNING  | models.tt_dit.utils.matmul:log_warning:50 - No known best blocking for (M, K, N) = (416, 6400, 5120) on 11x10 core grid; using default 8x8x8
+2026-10-11 05:49:49.651 | INFO     | models.tt_dit.utils.matmul:log_info:55 - No exact blocking for (M, K, N) = (448, 5120, 2560) on 11x10; using the entry swept at M=512, which has the same M_per_core (2 M tiles per core)
+2026-10-11 05:49:49.842 | WARNING  | models.tt_dit.utils.matmul:log_warning:50 - No known best blocking for (M, K, N) = (448, 8192, 1280) on 11x10 core grid; using default 8x8x8
+2026-10-11 05:49:49.894 | WARNING  | models.tt_dit.utils.matmul:log_warning:50 - No known best blocking for (M, K, N) = (448, 5120, 6400) on 11x10 core grid; using default 8x8x8
+2026-10-11 05:49:49.907 | WARNING  | models.tt_dit.utils.matmul:log_warning:50 - No known best blocking for (M, K, N) = (448, 6400, 5120) on 11x10 core grid; using default 8x8x8
+2026-10-11 05:49:50.728 | INFO     | models.tt_dit.utils.matmul:log_info:55 - No exact blocking for (M, K, N) = (480, 5120, 2560) on 11x10; using the entry swept at M=512, which has the same M_per_core (2 M tiles per core)
+2026-10-11 05:49:50.916 | WARNING  | models.tt_dit.utils.matmul:log_warning:50 - No known best blocking for (M, K, N) = (480, 8192, 1280) on 11x10 core grid; using default 8x8x8
+2026-10-11 05:49:50.969 | WARNING  | models.tt_dit.utils.matmul:log_warning:50 - No known best blocking for (M, K, N) = (480, 5120, 6400) on 11x10 core grid; using default 8x8x8
+2026-10-11 05:49:50.981 | WARNING  | models.tt_dit.utils.matmul:log_warning:50 - No known best blocking for (M, K, N) = (480, 6400, 5120) on 11x10 core grid; using default 8x8x8
+2026-10-11 05:49:52.011 | WARNING  | models.tt_dit.utils.matmul:log_warning:50 - No known best blocking for (M, K, N) = (512, 8192, 1280) on 11x10 core grid; using default 8x8x8
+2026-10-11 05:49:52.024 | WARNING  | models.tt_dit.utils.matmul:log_warning:50 - No known best blocking for (M, K, N) = (512, 5120, 6400) on 11x10 core grid; using default 8x8x8
+2026-10-11 05:49:52.036 | WARNING  | models.tt_dit.utils.matmul:log_warning:50 - No known best blocking for (M, K, N) = (512, 6400, 5120) on 11x10 core grid; using default 8x8x8
+[A[KWarming prompt encoder keyframe layouts:  67%|██████▋   | 2/3 [00:24<00:12, 12.29s/it]
+2026-10-11 05:49:52.685 | WARNING  | models.tt_dit.utils.matmul:log_warning:50 - No known best blocking for (M, K, N) = (1024, 1536, 1152) on 11x10 core grid; using default 8x8x8
+2026-10-11 05:49:52.696 | WARNING  | models.tt_dit.utils.matmul:log_warning:50 - No known best blocking for (M, K, N) = (1024, 1152, 1152) on 11x10 core grid; using default 8x8x8
+2026-10-11 05:49:52.792 | WARNING  | models.tt_dit.utils.matmul:log_warning:50 - No known best blocking for (M, K, N) = (1024, 384, 1152) on 11x10 core grid; using default 8x8x8
+2026-10-11 05:49:52.894 | WARNING  | models.tt_dit.utils.matmul:log_warning:50 - No known best blocking for (M, K, N) = (1024, 1152, 1088) on 11x10 core grid; using default 8x8x8
+2026-10-11 05:49:52.908 | WARNING  | models.tt_dit.utils.matmul:log_warning:50 - No known best blocking for (M, K, N) = (1024, 1088, 1152) on 11x10 core grid; using default 8x8x8
+2026-10-11 05:49:52.975 | WARNING  | models.tt_dit.utils.matmul:log_warning:50 - No known best blocking for (M, K, N) = (256, 4608, 1152) on 11x10 core grid; using default 8x8x8
+2026-10-11 05:49:52.992 | WARNING  | models.tt_dit.utils.matmul:log_warning:50 - No known best blocking for (M, K, N) = (256, 1152, 5120) on 11x10 core grid; using default 8x8x8
+2026-10-11 05:49:58.832 | INFO     | models.tt_dit.utils.matmul:log_info:55 - No exact blocking for (M, K, N) = (544, 5120, 2560) on 11x10; using the entry swept at M=512, which has the same M_per_core (2 M tiles per core)
+2026-10-11 05:49:59.031 | WARNING  | models.tt_dit.utils.matmul:log_warning:50 - No known best blocking for (M, K, N) = (544, 8192, 1280) on 11x10 core grid; using default 8x8x8
+2026-10-11 05:49:59.089 | WARNING  | models.tt_dit.utils.matmul:log_warning:50 - No known best blocking for (M, K, N) = (544, 5120, 6400) on 11x10 core grid; using default 8x8x8
+2026-10-11 05:49:59.104 | WARNING  | models.tt_dit.utils.matmul:log_warning:50 - No known best blocking for (M, K, N) = (544, 6400, 5120) on 11x10 core grid; using default 8x8x8
+2026-10-11 05:50:00.069 | INFO     | models.tt_dit.utils.matmul:log_info:55 - No exact blocking for (M, K, N) = (576, 5120, 2560) on 11x10; using the entry swept at M=512, which has the same M_per_core (2 M tiles per core)
+2026-10-11 05:50:00.262 | WARNING  | models.tt_dit.utils.matmul:log_warning:50 - No known best blocking for (M, K, N) = (576, 8192, 1280) on 11x10 core grid; using default 8x8x8
+2026-10-11 05:50:00.321 | WARNING  | models.tt_dit.utils.matmul:log_warning:50 - No known best blocking for (M, K, N) = (576, 5120, 6400) on 11x10 core grid; using default 8x8x8
+2026-10-11 05:50:00.334 | WARNING  | models.tt_dit.utils.matmul:log_warning:50 - No known best blocking for (M, K, N) = (576, 6400, 5120) on 11x10 core grid; using default 8x8x8
+2026-10-11 05:50:01.368 | INFO     | models.tt_dit.utils.matmul:log_info:55 - No exact blocking for (M, K, N) = (608, 5120, 2560) on 11x10; using the entry swept at M=512, which has the same M_per_core (2 M tiles per core)
+2026-10-11 05:50:01.561 | WARNING  | models.tt_dit.utils.matmul:log_warning:50 - No known best blocking for (M, K, N) = (608, 8192, 1280) on 11x10 core grid; using default 8x8x8
+2026-10-11 05:50:01.621 | WARNING  | models.tt_dit.utils.matmul:log_warning:50 - No known best blocking for (M, K, N) = (608, 5120, 6400) on 11x10 core grid; using default 8x8x8
+2026-10-11 05:50:01.633 | WARNING  | models.tt_dit.utils.matmul:log_warning:50 - No known best blocking for (M, K, N) = (608, 6400, 5120) on 11x10 core grid; using default 8x8x8
+2026-10-11 05:50:02.764 | INFO     | models.tt_dit.utils.matmul:log_info:55 - No exact blocking for (M, K, N) = (640, 5120, 2560) on 11x10; using the entry swept at M=512, which has the same M_per_core (2 M tiles per core)
+2026-10-11 05:50:02.957 | WARNING  | models.tt_dit.utils.matmul:log_warning:50 - No known best blocking for (M, K, N) = (640, 8192, 1280) on 11x10 core grid; using default 8x8x8
+2026-10-11 05:50:03.018 | WARNING  | models.tt_dit.utils.matmul:log_warning:50 - No known best blocking for (M, K, N) = (640, 5120, 6400) on 11x10 core grid; using default 8x8x8
+2026-10-11 05:50:03.029 | WARNING  | models.tt_dit.utils.matmul:log_warning:50 - No known best blocking for (M, K, N) = (640, 6400, 5120) on 11x10 core grid; using default 8x8x8
+[A[KWarming prompt encoder keyframe layouts: 100%|██████████| 3/3 [00:35<00:00, 11.72s/it]
+[A[KWarming prompt encoder keyframe layouts: 100%|██████████| 3/3 [00:35<00:00, 11.81s/it]
+
+
+[A[KWarming vision merge sequence lengths:   0%|          | 0/20 [00:00<?, ?it/s]
+[A[KWarming vision merge sequence lengths:  25%|██▌       | 5/20 [00:00<00:00, 37.14it/s]
+[A[KWarming vision merge sequence lengths:  45%|████▌     | 9/20 [00:00<00:00, 25.73it/s]
+[A[KWarming vision merge sequence lengths:  60%|██████    | 12/20 [00:00<00:00, 23.63it/s]
+[A[KWarming vision merge sequence lengths:  75%|███████▌  | 15/20 [00:00<00:00, 22.67it/s]
+[A[KWarming vision merge sequence lengths:  90%|█████████ | 18/20 [00:00<00:00, 22.14it/s]
+[A[KWarming vision merge sequence lengths: 100%|██████████| 20/20 [00:00<00:00, 22.91it/s]
+
+2026-10-11 05:50:04.406 | INFO     | models.tt_dit.pipelines.minimax_h3.pipeline_minimax_h3:_host_log:859 - prompt encoder envelope warmed: +670 programs
+[t286] denoise rungs: warming (38912, 120320) of 26
+
+[A[KInitializing bucket buffers: 120320,38912:   0%|          | 0/2 [00:00<?, ?it/s]
+2026-10-11 05:50:05.243 | INFO     | models.tt_dit.utils.cache:load_model:194 - loading cache at '/var/tmp/fasth3/cache/dit-h3hf/minimax-h3/vae_encoder_t1_h256_w256_taps1_pxnorm_bfloat16_cin40278e44/TP1_0_mesh4x8_fp32'.
+2026-10-11 05:50:05.243 | INFO     | models.tt_dit.layers.module:load:238 - loading 166 cached weight tensors from '/var/tmp/fasth3/cache/dit-h3hf/minimax-h3/vae_encoder_t1_h256_w256_taps1_pxnorm_bfloat16_cin40278e44/TP1_0_mesh4x8_fp32'...
+2026-10-11 05:50:05.358 | INFO     | models.tt_dit.utils.progress:__exit__:62 - load-cache MiniMaxH3Encoder3d: done in 0s
+2026-10-11 05:50:07.991 | WARNING  | models.tt_dit.utils.matmul:log_warning:50 - No known best blocking for (M, K, N) = (5120, 5120, 1344) on 11x10 core grid; using default 8x8x8
+2026-10-11 05:50:08.082 | WARNING  | models.tt_dit.utils.matmul:log_warning:50 - No known best blocking for (M, K, N) = (5120, 5376, 5376) on 11x10 core grid; using default 4x6x16
+2026-10-11 05:50:08.345 | WARNING  | models.tt_dit.utils.matmul:log_warning:50 - No known best blocking for (M, K, N) = (5120, 7168, 1344) on 12x9 core grid; using default 8x8x6
+2026-10-11 05:50:08.562 | WARNING  | models.tt_dit.utils.matmul:log_warning:50 - No known best blocking for (M, K, N) = (5120, 5376, 7168) on 12x9 core grid; using default 4x3x16
+2026-10-11 05:50:08.774 | WARNING  | models.tt_dit.utils.matmul:log_warning:50 - No known best blocking for (M, K, N) = (5120, 3584, 5376) on 11x10 core grid; using default 8x8x8
+2026-10-11 05:50:08.856 | WARNING  | models.tt_dit.utils.matmul:log_warning:50 - No known best blocking for (M, K, N) = (2112, 96, 1344) on 11x10 core grid; using default 8x8x8
+
+
+[A[KDenoising:   0%|          | 0/1 [00:00<?, ?it/s]
+[A2026-10-11 05:50:08.959 | WARNING  | models.tt_dit.utils.matmul:log_warning:50 - No known best blocking for (M, K, N) = (1216, 32, 1344) on 11x10 core grid; using default 8x8x8
+2026-10-11 05:50:08.972 | WARNING  | models.tt_dit.utils.matmul:log_warning:50 - No known best blocking for (M, K, N) = (111712, 96, 1344) on 11x10 core grid; using default 8x8x8
+2026-10-11 05:50:09.148 | WARNING  | models.tt_dit.utils.matmul:log_warning:50 - No known best blocking for (M, K, N) = (32, 256, 5376) on 11x10 core grid; using default 2x8x8
+2026-10-11 05:50:09.189 | WARNING  | models.tt_dit.utils.matmul:log_warning:50 - No known best blocking for (M, K, N) = (32, 5376, 2688) on 11x10 core grid; using default 2x8x8
+2026-10-11 05:50:09.231 | WARNING  | models.tt_dit.utils.matmul:log_warning:50 - No known best blocking for (M, K, N) = (32, 2688, 24192) on 11x10 core grid; using default 2x8x8
+2026-10-11 05:50:09.492 | WARNING  | models.tt_dit.utils.matmul:log_warning:50 - No known best blocking for (M, K, N) = (15040, 5376, 5376) on 12x9 core grid; using default 6x6x16
+2026-10-11 05:50:09.747 | info     |              Op | Ring joint rotated Q split declined: base=7 floats=56 groups_needed=0 of 0 groups, balanced=false head_chain=true streaming=true attention_sink=false kv_chains=true groups="no row-wide mcast family is live"; using the static flat split. (ring_joint_sdpa_program_factory.cpp:2558)
+2026-10-11 05:50:09.749 | info     |              Op | Ring joint rotated Q split declined: base=7 floats=56 groups_needed=0 of 0 groups, balanced=false head_chain=true streaming=true attention_sink=false kv_chains=true groups="no row-wide mcast family is live"; using the static flat split. (ring_joint_sdpa_program_factory.cpp:2558)
+2026-10-11 05:50:09.750 | info     |              Op | Ring joint rotated Q split declined: base=7 floats=56 groups_needed=0 of 0 groups, balanced=false head_chain=true streaming=true attention_sink=false kv_chains=true groups="no row-wide mcast family is live"; using the static flat split. (ring_joint_sdpa_program_factory.cpp:2558)
+2026-10-11 05:50:09.751 | info     |              Op | Ring joint rotated Q split declined: base=7 floats=56 groups_needed=0 of 0 groups, balanced=false head_chain=true streaming=true attention_sink=false kv_chains=true groups="no row-wide mcast family is live"; using the static flat split. (ring_joint_sdpa_program_factory.cpp:2558)
+2026-10-11 05:50:09.752 | info     |              Op | Ring joint rotated Q split declined: base=7 floats=56 groups_needed=0 of 0 groups, balanced=false head_chain=true streaming=true attention_sink=false kv_chains=true groups="no row-wide mcast family is live"; using the static flat split. (ring_joint_sdpa_program_factory.cpp:2558)
+2026-10-11 05:50:09.753 | info     |              Op | Ring joint rotated Q split declined: base=7 floats=56 groups_needed=0 of 0 groups, balanced=false head_chain=true streaming=true attention_sink=false kv_chains=true groups="no row-wide mcast family is live"; using the static flat split. (ring_joint_sdpa_program_factory.cpp:2558)
+2026-10-11 05:50:09.754 | info     |              Op | Ring joint rotated Q split declined: base=7 floats=56 groups_needed=0 of 0 groups, balanced=false head_chain=true streaming=true attention_sink=false kv_chains=true groups="no row-wide mcast family is live"; using the static flat split. (ring_joint_sdpa_program_factory.cpp:2558)
+2026-10-11 05:50:09.755 | info     |              Op | Ring joint rotated Q split declined: base=7 floats=56 groups_needed=0 of 0 groups, balanced=false head_chain=true streaming=true attention_sink=false kv_chains=true groups="no row-wide mcast family is live"; using the static flat split. (ring_joint_sdpa_program_factory.cpp:2558)
+2026-10-11 05:50:09.756 | info     |              Op | Ring joint rotated Q split declined: base=7 floats=56 groups_needed=0 of 0 groups, balanced=false head_chain=true streaming=true attention_sink=false kv_chains=true groups="no row-wide mcast family is live"; using the static flat split. (ring_joint_sdpa_program_factory.cpp:2558)
+2026-10-11 05:50:09.758 | info     |              Op | Ring joint rotated Q split declined: base=7 floats=56 groups_needed=0 of 0 groups, balanced=false head_chain=true streaming=true attention_sink=false kv_chains=true groups="no row-wide mcast family is live"; using the static flat split. (ring_joint_sdpa_program_factory.cpp:2558)
+2026-10-11 05:50:09.759 | info     |              Op | Ring joint rotated Q split declined: base=7 floats=56 groups_needed=0 of 0 groups, balanced=false head_chain=true streaming=true attention_sink=false kv_chains=true groups="no row-wide mcast family is live"; using the static flat split. (ring_joint_sdpa_program_factory.cpp:2558)
+2026-10-11 05:50:09.760 | info     |              Op | Ring joint rotated Q split declined: base=7 floats=56 groups_needed=0 of 0 groups, balanced=false head_chain=true streaming=true attention_sink=false kv_chains=true groups="no row-wide mcast family is live"; using the static flat split. (ring_joint_sdpa_program_factory.cpp:2558)
+2026-10-11 05:50:09.761 | info     |              Op | Ring joint rotated Q split declined: base=7 floats=56 groups_needed=0 of 0 groups, balanced=false head_chain=true streaming=true attention_sink=false kv_chains=true groups="no row-wide mcast family is live"; using the static flat split. (ring_joint_sdpa_program_factory.cpp:2558)
+2026-10-11 05:50:09.762 | info     |              Op | Ring joint rotated Q split declined: base=7 floats=56 groups_needed=0 of 0 groups, balanced=false head_chain=true streaming=true attention_sink=false kv_chains=true groups="no row-wide mcast family is live"; using the static flat split. (ring_joint_sdpa_program_factory.cpp:2558)
+2026-10-11 05:50:09.763 | info     |              Op | Ring joint rotated Q split declined: base=7 floats=56 groups_needed=0 of 0 groups, balanced=false head_chain=true streaming=true attention_sink=false kv_chains=true groups="no row-wide mcast family is live"; using the static flat split. (ring_joint_sdpa_program_factory.cpp:2558)
+2026-10-11 05:50:09.765 | info     |              Op | Ring joint rotated Q split declined: base=7 floats=56 groups_needed=0 of 0 groups, balanced=false head_chain=true streaming=true attention_sink=false kv_chains=true groups="no row-wide mcast family is live"; using the static flat split. (ring_joint_sdpa_program_factory.cpp:2558)
+2026-10-11 05:50:09.766 | info     |              Op | Ring joint rotated Q split declined: base=7 floats=56 groups_needed=0 of 0 groups, balanced=false head_chain=true streaming=true attention_sink=false kv_chains=true groups="no row-wide mcast family is live"; using the static flat split. (ring_joint_sdpa_program_factory.cpp:2558)
+2026-10-11 05:50:09.767 | info     |              Op | Ring joint rotated Q split declined: base=7 floats=56 groups_needed=0 of 0 groups, balanced=false head_chain=true streaming=true attention_sink=false kv_chains=true groups="no row-wide mcast family is live"; using the static flat split. (ring_joint_sdpa_program_factory.cpp:2558)
+2026-10-11 05:50:09.768 | info     |              Op | Ring joint rotated Q split declined: base=7 floats=56 groups_needed=0 of 0 groups, balanced=false head_chain=true streaming=true attention_sink=false kv_chains=true groups="no row-wide mcast family is live"; using the static flat split. (ring_joint_sdpa_program_factory.cpp:2558)
+2026-10-11 05:50:09.769 | info     |              Op | Ring joint rotated Q split declined: base=7 floats=56 groups_needed=0 of 0 groups, balanced=false head_chain=true streaming=true attention_sink=false kv_chains=true groups="no row-wide mcast family is live"; using the static flat split. (ring_joint_sdpa_program_factory.cpp:2558)
+2026-10-11 05:50:09.770 | info     |              Op | Ring joint rotated Q split declined: base=7 floats=56 groups_needed=0 of 0 groups, balanced=false head_chain=true streaming=true attention_sink=false kv_chains=true groups="no row-wide mcast family is live"; using the static flat split. (ring_joint_sdpa_program_factory.cpp:2558)
+2026-10-11 05:50:09.771 | info     |              Op | Ring joint rotated Q split declined: base=7 floats=56 groups_needed=0 of 0 groups, balanced=false head_chain=true streaming=true attention_sink=false kv_chains=true groups="no row-wide mcast family is live"; using the static flat split. (ring_joint_sdpa_program_factory.cpp:2558)
+2026-10-11 05:50:09.772 | info     |              Op | Ring joint rotated Q split declined: base=7 floats=56 groups_needed=0 of 0 groups, balanced=false head_chain=true streaming=true attention_sink=false kv_chains=true groups="no row-wide mcast family is live"; using the static flat split. (ring_joint_sdpa_program_factory.cpp:2558)
+2026-10-11 05:50:09.774 | info     |              Op | Ring joint rotated Q split declined: base=7 floats=56 groups_needed=0 of 0 groups, balanced=false head_chain=true streaming=true attention_sink=false kv_chains=true groups="no row-wide mcast family is live"; using the static flat split. (ring_joint_sdpa_program_factory.cpp:2558)
+2026-10-11 05:50:09.775 | info     |              Op | Ring joint rotated Q split declined: base=7 floats=56 groups_needed=0 of 0 groups, balanced=false head_chain=true streaming=true attention_sink=false kv_chains=true groups="no row-wide mcast family is live"; using the static flat split. (ring_joint_sdpa_program_factory.cpp:2558)
+2026-10-11 05:50:09.776 | info     |              Op | Ring joint rotated Q split declined: base=7 floats=56 groups_needed=0 of 0 groups, balanced=false head_chain=true streaming=true attention_sink=false kv_chains=true groups="no row-wide mcast family is live"; using the static flat split. (ring_joint_sdpa_program_factory.cpp:2558)
+2026-10-11 05:50:09.777 | info     |              Op | Ring joint rotated Q split declined: base=7 floats=56 groups_needed=0 of 0 groups, balanced=false head_chain=true streaming=true attention_sink=false kv_chains=true groups="no row-wide mcast family is live"; using the static flat split. (ring_joint_sdpa_program_factory.cpp:2558)
+2026-10-11 05:50:09.778 | info     |              Op | Ring joint rotated Q split declined: base=7 floats=56 groups_needed=0 of 0 groups, balanced=false head_chain=true streaming=true attention_sink=false kv_chains=true groups="no row-wide mcast family is live"; using the static flat split. (ring_joint_sdpa_program_factory.cpp:2558)
+2026-10-11 05:50:09.779 | info     |              Op | Ring joint rotated Q split declined: base=7 floats=56 groups_needed=0 of 0 groups, balanced=false head_chain=true streaming=true attention_sink=false kv_chains=true groups="no row-wide mcast family is live"; using the static flat split. (ring_joint_sdpa_program_factory.cpp:2558)
+2026-10-11 05:50:09.780 | info     |              Op | Ring joint rotated Q split declined: base=7 floats=56 groups_needed=0 of 0 groups, balanced=false head_chain=true streaming=true attention_sink=false kv_chains=true groups="no row-wide mcast family is live"; using the static flat split. (ring_joint_sdpa_program_factory.cpp:2558)
+2026-10-11 05:50:09.781 | info     |              Op | Ring joint rotated Q split declined: base=7 floats=56 groups_needed=0 of 0 groups, balanced=false head_chain=true streaming=true attention_sink=false kv_chains=true groups="no row-wide mcast family is live"; using the static flat split. (ring_joint_sdpa_program_factory.cpp:2558)
+2026-10-11 05:50:09.782 | info     |              Op | Ring joint rotated Q split declined: base=7 floats=56 groups_needed=0 of 0 groups, balanced=false head_chain=true streaming=true attention_sink=false kv_chains=true groups="no row-wide mcast family is live"; using the static flat split. (ring_joint_sdpa_program_factory.cpp:2558)
+2026-10-11 05:50:09.877 | WARNING  | models.tt_dit.utils.matmul:log_warning:50 - No known best blocking for (M, K, N) = (15040, 7168, 1344) on 12x9 core grid; using default 10x8x6
+2026-10-11 05:50:10.132 | WARNING  | models.tt_dit.utils.matmul:log_warning:50 - No known best blocking for (M, K, N) = (15040, 5376, 7168) on 12x9 core grid; using default 6x3x16
+2026-10-11 05:50:10.363 | INFO     | models.tt_dit.utils.matmul:log_info:55 - MMRS v2.3 rule config for (M, K, N) = (15040, 3584, 5376): FusedMMRSConfig(ttnn.CoreCoord(12, 8), 6, 4, 8, 2, 2, None, 1)  # paste into fused_mmrs_configs after sweeping to override
+2026-10-11 05:50:12.535 | WARNING  | models.tt_dit.utils.matmul:log_warning:50 - No known best blocking for (M, K, N) = (32, 2688, 2688) on 11x10 core grid; using default 2x8x8
+2026-10-11 05:50:14.542 | WARNING  | models.tt_dit.utils.matmul:log_warning:50 - No known best blocking for (M, K, N) = (15040, 5376, 96) on 11x10 core grid; using default 8x8x2
+2026-10-11 05:50:14.564 | WARNING  | models.tt_dit.utils.matmul:log_warning:50 - No known best blocking for (M, K, N) = (15040, 5376, 32) on 11x10 core grid; using default 8x8x2
+
+[A[KDenoising: 100%|██████████| 1/1 [00:05<00:00,  5.87s/it]
+[A[A[KDenoising: 100%|██████████| 1/1 [00:05<00:00,  5.87s/it]
+
+2026-10-11 05:50:14.950 | warning  |              Op | The following ttnn.all_gather args are deprecated and will be removed in September-2026: num_links, topology, chunks_per_sync, num_workers_per_link, num_buffers_per_channel, use_l1_small_for_semaphores. (all_gather.cpp:148)
+2026-10-11 05:50:14.953 | warning  |              Op | The following ttnn.all_gather args are deprecated and will be removed in September-2026: num_links, topology, chunks_per_sync, num_workers_per_link, num_buffers_per_channel, use_l1_small_for_semaphores. (all_gather.cpp:148)
+2026-10-11 05:50:14.954 | warning  |              Op | The following ttnn.all_gather args are deprecated and will be removed in September-2026: num_links, topology, chunks_per_sync, num_workers_per_link, num_buffers_per_channel, use_l1_small_for_semaphores. (all_gather.cpp:148)
+2026-10-11 05:50:15.022 | warning  |              Op | The following ttnn.all_gather args are deprecated and will be removed in September-2026: num_links, topology, chunks_per_sync, num_workers_per_link, num_buffers_per_channel, use_l1_small_for_semaphores. (all_gather.cpp:148)
+2026-10-11 05:50:15.026 | warning  |              Op | The following ttnn.all_gather args are deprecated and will be removed in September-2026: num_links, topology, chunks_per_sync, num_workers_per_link, num_buffers_per_channel, use_l1_small_for_semaphores. (all_gather.cpp:148)
+2026-10-11 05:50:15.027 | warning  |              Op | The following ttnn.all_gather args are deprecated and will be removed in September-2026: num_links, topology, chunks_per_sync, num_workers_per_link, num_buffers_per_channel, use_l1_small_for_semaphores. (all_gather.cpp:148)
+2026-10-11 05:50:15.110 | warning  |              Op | The following ttnn.all_gather args are deprecated and will be removed in September-2026: num_links, topology, chunks_per_sync, num_workers_per_link, num_buffers_per_channel, use_l1_small_for_semaphores. (all_gather.cpp:148)
+2026-10-11 05:50:15.114 | warning  |              Op | The following ttnn.all_gather args are deprecated and will be removed in September-2026: num_links, topology, chunks_per_sync, num_workers_per_link, num_buffers_per_channel, use_l1_small_for_semaphores. (all_gather.cpp:148)
+2026-10-11 05:50:15.115 | warning  |              Op | The following ttnn.all_gather args are deprecated and will be removed in September-2026: num_links, topology, chunks_per_sync, num_workers_per_link, num_buffers_per_channel, use_l1_small_for_semaphores. (all_gather.cpp:148)
+2026-10-11 05:50:15.246 | warning  |              Op | The following ttnn.all_gather args are deprecated and will be removed in September-2026: num_links, topology, chunks_per_sync, num_workers_per_link, num_buffers_per_channel, use_l1_small_for_semaphores. (all_gather.cpp:148)
+2026-10-11 05:50:15.251 | warning  |              Op | The following ttnn.all_gather args are deprecated and will be removed in September-2026: num_links, topology, chunks_per_sync, num_workers_per_link, num_buffers_per_channel, use_l1_small_for_semaphores. (all_gather.cpp:148)
+2026-10-11 05:50:15.251 | warning  |              Op | The following ttnn.all_gather args are deprecated and will be removed in September-2026: num_links, topology, chunks_per_sync, num_workers_per_link, num_buffers_per_channel, use_l1_small_for_semaphores. (all_gather.cpp:148)
+2026-10-11 05:50:15.383 | warning  |              Op | The following ttnn.all_gather args are deprecated and will be removed in September-2026: num_links, topology, chunks_per_sync, num_workers_per_link, num_buffers_per_channel, use_l1_small_for_semaphores. (all_gather.cpp:148)
+2026-10-11 05:50:15.387 | warning  |              Op | The following ttnn.all_gather args are deprecated and will be removed in September-2026: num_links, topology, chunks_per_sync, num_workers_per_link, num_buffers_per_channel, use_l1_small_for_semaphores. (all_gather.cpp:148)
+2026-10-11 05:50:15.388 | warning  |              Op | The following ttnn.all_gather args are deprecated and will be removed in September-2026: num_links, topology, chunks_per_sync, num_workers_per_link, num_buffers_per_channel, use_l1_small_for_semaphores. (all_gather.cpp:148)
+2026-10-11 05:50:15.517 | warning  |              Op | The following ttnn.all_gather args are deprecated and will be removed in September-2026: num_links, topology, chunks_per_sync, num_workers_per_link, num_buffers_per_channel, use_l1_small_for_semaphores. (all_gather.cpp:148)
+2026-10-11 05:50:15.522 | warning  |              Op | The following ttnn.all_gather args are deprecated and will be removed in September-2026: num_links, topology, chunks_per_sync, num_workers_per_link, num_buffers_per_channel, use_l1_small_for_semaphores. (all_gather.cpp:148)
+2026-10-11 05:50:15.523 | warning  |              Op | The following ttnn.all_gather args are deprecated and will be removed in September-2026: num_links, topology, chunks_per_sync, num_workers_per_link, num_buffers_per_channel, use_l1_small_for_semaphores. (all_gather.cpp:148)
+2026-10-11 05:50:15.654 | warning  |              Op | The following ttnn.all_gather args are deprecated and will be removed in September-2026: num_links, topology, chunks_per_sync, num_workers_per_link, num_buffers_per_channel, use_l1_small_for_semaphores. (all_gather.cpp:148)
+2026-10-11 05:50:15.658 | warning  |              Op | The following ttnn.all_gather args are deprecated and will be removed in September-2026: num_links, topology, chunks_per_sync, num_workers_per_link, num_buffers_per_channel, use_l1_small_for_semaphores. (all_gather.cpp:148)
+2026-10-11 05:50:15.659 | warning  |              Op | The following ttnn.all_gather args are deprecated and will be removed in September-2026: num_links, topology, chunks_per_sync, num_workers_per_link, num_buffers_per_channel, use_l1_small_for_semaphores. (all_gather.cpp:148)
+[A[KInitializing bucket buffers: 120320,38912:  50%|█████     | 1/2 [00:11<00:11, 11.85s/it]
+
+
+[A[KDenoising:   0%|          | 0/1 [00:00<?, ?it/s]
+[A2026-10-11 05:50:18.073 | info     |    BuildKernels | compiled reader_typecast_rm_chunked/1100119625719514488/ in 296 ms (build.cpp:1113)
+2026-10-11 05:50:18.076 | info     |    BuildKernels | compiled writer_typecast_rm_chunked/12984342505177502496/ in 299 ms (build.cpp:1113)
+2026-10-11 05:50:18.235 | info     |    BuildKernels | compiled eltwise_typecast/11950595372569612480/ in 458 ms (build.cpp:1113)
+2026-10-11 05:50:18.322 | info     |    BuildKernels | compiled eltwise_typecast/11950595372569612480/ in 545 ms (build.cpp:1113)
+2026-10-11 05:50:18.423 | info     |    BuildKernels | compiled eltwise_typecast/11950595372569612480/ in 646 ms (build.cpp:1113)
+2026-10-11 05:50:18.743 | info     |    BuildKernels | compiled embeddings_tilize/9952095133565686470/ in 313 ms (build.cpp:1113)
+2026-10-11 05:50:19.140 | info     |    BuildKernels | compiled reader_typecast_rm_chunked/14141886260140285505/ in 302 ms (build.cpp:1113)
+2026-10-11 05:50:19.144 | info     |    BuildKernels | compiled writer_typecast_rm_chunked/9759273272192510542/ in 306 ms (build.cpp:1113)
+2026-10-11 05:50:19.292 | info     |    BuildKernels | compiled eltwise_typecast/17658544708300822770/ in 453 ms (build.cpp:1113)
+2026-10-11 05:50:19.382 | info     |    BuildKernels | compiled eltwise_typecast/17658544708300822770/ in 543 ms (build.cpp:1113)
+2026-10-11 05:50:19.456 | info     |    BuildKernels | compiled eltwise_typecast/17658544708300822770/ in 618 ms (build.cpp:1113)
+2026-10-11 05:50:19.780 | info     |    BuildKernels | compiled embeddings_tilize/7191864049619381631/ in 314 ms (build.cpp:1113)
+2026-10-11 05:50:20.151 | info     |    BuildKernels | compiled dit_rmsnorm_fused_reader/8294357526370826150/ in 314 ms (build.cpp:1113)
+2026-10-11 05:50:20.331 | info     |    BuildKernels | compiled dit_rmsnorm_fused_worker_writer/17209721726732074163/ in 494 ms (build.cpp:1113)
+2026-10-11 05:50:20.494 | info     |    BuildKernels | compiled dit_rmsnorm_fused_compute/11920281601972688295/ in 655 ms (build.cpp:1113)
+2026-10-11 05:50:20.537 | info     |    BuildKernels | compiled dit_rmsnorm_fused_compute/11920281601972688295/ in 698 ms (build.cpp:1113)
+2026-10-11 05:50:20.807 | info     |    BuildKernels | compiled dit_rmsnorm_fused_compute/11920281601972688295/ in 968 ms (build.cpp:1113)
+2026-10-11 05:50:20.874 | WARNING  | models.tt_dit.utils.matmul:log_warning:50 - No known best blocking for (M, K, N) = (4864, 5376, 5376) on 11x10 core grid; using default 4x6x16
+2026-10-11 05:50:21.455 | info     |    BuildKernels | compiled dm_in0_sender/8213870804058372724/ in 443 ms (build.cpp:1113)
+2026-10-11 05:50:21.457 | info     |    BuildKernels | compiled dm_in0_sender/398716560769887331/ in 447 ms (build.cpp:1113)
+2026-10-11 05:50:21.460 | info     |    BuildKernels | compiled dm_in0_sender/14806019146624845680/ in 451 ms (build.cpp:1113)
+2026-10-11 05:50:21.464 | info     |    BuildKernels | compiled dm_in0_sender/823113696811005204/ in 456 ms (build.cpp:1113)
+2026-10-11 05:50:21.533 | info     |    BuildKernels | compiled dm_in0_sender/10641941904053725420/ in 521 ms (build.cpp:1113)
+2026-10-11 05:50:21.537 | info     |    BuildKernels | compiled dm_in0_sender/11748459211126871787/ in 526 ms (build.cpp:1113)
+2026-10-11 05:50:21.541 | info     |    BuildKernels | compiled dm_in1_sender_out/4563880075571521372/ in 533 ms (build.cpp:1113)
+2026-10-11 05:50:21.541 | info     |    BuildKernels | compiled dm_in0_sender/13531473785124978426/ in 533 ms (build.cpp:1113)
+2026-10-11 05:50:21.542 | info     |    BuildKernels | compiled dm_in1_sender_out/9128804263068832576/ in 533 ms (build.cpp:1113)
+2026-10-11 05:50:21.544 | info     |    BuildKernels | compiled dm_in1_sender_out/16434619593216057768/ in 533 ms (build.cpp:1113)
+2026-10-11 05:50:21.545 | info     |    BuildKernels | compiled dm_in0_sender/9363737489893498184/ in 538 ms (build.cpp:1113)
+2026-10-11 05:50:21.546 | info     |    BuildKernels | compiled dm_in1_sender_out/15319287333690117076/ in 535 ms (build.cpp:1113)
+2026-10-11 05:50:21.549 | info     |    BuildKernels | compiled dm_in1_sender_out/372308323087774453/ in 540 ms (build.cpp:1113)
+2026-10-11 05:50:21.550 | info     |    BuildKernels | compiled dm_in1_sender_out/3929147165169131868/ in 540 ms (build.cpp:1113)
+2026-10-11 05:50:21.552 | info     |    BuildKernels | compiled dm_in1_sender_out/9364887634021764563/ in 543 ms (build.cpp:1113)
+2026-10-11 05:50:21.561 | info     |    BuildKernels | compiled dm_in1_sender_out/2623701484066878649/ in 552 ms (build.cpp:1113)
+2026-10-11 05:50:22.311 | info     |    BuildKernels | compiled dm_in0_sender/18146946681728570254/ in 1301 ms (build.cpp:1113)
+2026-10-11 05:50:22.312 | info     |    BuildKernels | compiled dm_in0_sender/12753740481925934478/ in 1304 ms (build.cpp:1113)
+2026-10-11 05:50:22.314 | info     |    BuildKernels | compiled dm_in0_sender/9882483509453366600/ in 1302 ms (build.cpp:1113)
+2026-10-11 05:50:22.317 | info     |    BuildKernels | compiled dm_in0_sender/4882398500445053018/ in 1304 ms (build.cpp:1113)
+2026-10-11 05:50:22.729 | info     |    BuildKernels | compiled dit_rmsnorm_fused_reader/4803949865822433231/ in 348 ms (build.cpp:1113)
+2026-10-11 05:50:22.892 | info     |    BuildKernels | compiled dit_rmsnorm_fused_writer/3811145053571504206/ in 513 ms (build.cpp:1113)
+2026-10-11 05:50:23.052 | info     |    BuildKernels | compiled dit_rmsnorm_fused_compute/2394545849343997133/ in 671 ms (build.cpp:1113)
+2026-10-11 05:50:23.101 | info     |    BuildKernels | compiled dit_rmsnorm_fused_compute/2394545849343997133/ in 721 ms (build.cpp:1113)
+2026-10-11 05:50:23.396 | info     |    BuildKernels | compiled dit_rmsnorm_fused_compute/2394545849343997133/ in 1016 ms (build.cpp:1113)
+2026-10-11 05:50:23.690 | info     |    BuildKernels | compiled reader_tm_tile_layout_nlp_create_qkv_heads/17270323592716939256/ in 285 ms (build.cpp:1113)
+2026-10-11 05:50:23.719 | info     |    BuildKernels | compiled writer_tm_tile_layout_nlp_create_qkv_heads/12162445035161277821/ in 314 ms (build.cpp:1113)
+2026-10-11 05:50:23.727 | info     |              Op | Ring joint rotated Q split declined: base=2 floats=46 groups_needed=0 of 0 groups, balanced=false head_chain=true streaming=true attention_sink=false kv_chains=true groups="no row-wide mcast family is live"; using the static flat split. (ring_joint_sdpa_program_factory.cpp:2558)
+2026-10-11 05:50:23.730 | info     |              Op | Ring joint rotated Q split declined: base=2 floats=46 groups_needed=0 of 0 groups, balanced=false head_chain=true streaming=true attention_sink=false kv_chains=true groups="no row-wide mcast family is live"; using the static flat split. (ring_joint_sdpa_program_factory.cpp:2558)
+2026-10-11 05:50:23.732 | info     |              Op | Ring joint rotated Q split declined: base=2 floats=46 groups_needed=0 of 0 groups, balanced=false head_chain=true streaming=true attention_sink=false kv_chains=true groups="no row-wide mcast family is live"; using the static flat split. (ring_joint_sdpa_program_factory.cpp:2558)
+2026-10-11 05:50:23.735 | info     |              Op | Ring joint rotated Q split declined: base=2 floats=46 groups_needed=0 of 0 groups, balanced=false head_chain=true streaming=true attention_sink=false kv_chains=true groups="no row-wide mcast family is live"; using the static flat split. (ring_joint_sdpa_program_factory.cpp:2558)
+2026-10-11 05:50:23.738 | info     |              Op | Ring joint rotated Q split declined: base=2 floats=46 groups_needed=0 of 0 groups, balanced=false head_chain=true streaming=true attention_sink=false kv_chains=true groups="no row-wide mcast family is live"; using the static flat split. (ring_joint_sdpa_program_factory.cpp:2558)
+2026-10-11 05:50:23.740 | info     |              Op | Ring joint rotated Q split declined: base=2 floats=46 groups_needed=0 of 0 groups, balanced=false head_chain=true streaming=true attention_sink=false kv_chains=true groups="no row-wide mcast family is live"; using the static flat split. (ring_joint_sdpa_program_factory.cpp:2558)
+2026-10-11 05:50:23.743 | info     |              Op | Ring joint rotated Q split declined: base=2 floats=46 groups_needed=0 of 0 groups, balanced=false head_chain=true streaming=true attention_sink=false kv_chains=true groups="no row-wide mcast family is live"; using the static flat split. (ring_joint_sdpa_program_factory.cpp:2558)
+2026-10-11 05:50:23.745 | info     |              Op | Ring joint rotated Q split declined: base=2 floats=46 groups_needed=0 of 0 groups, balanced=false head_chain=true streaming=true attention_sink=false kv_chains=true groups="no row-wide mcast family is live"; using the static flat split. (ring_joint_sdpa_program_factory.cpp:2558)
+2026-10-11 05:50:23.748 | info     |              Op | Ring joint rotated Q split declined: base=2 floats=46 groups_needed=0 of 0 groups, balanced=false head_chain=true streaming=true attention_sink=false kv_chains=true groups="no row-wide mcast family is live"; using the static flat split. (ring_joint_sdpa_program_factory.cpp:2558)
+2026-10-11 05:50:23.750 | info     |              Op | Ring joint rotated Q split declined: base=2 floats=46 groups_needed=0 of 0 groups, balanced=false head_chain=true streaming=true attention_sink=false kv_chains=true groups="no row-wide mcast family is live"; using the static flat split. (ring_joint_sdpa_program_factory.cpp:2558)
+2026-10-11 05:50:23.753 | info     |              Op | Ring joint rotated Q split declined: base=2 floats=46 groups_needed=0 of 0 groups, balanced=false head_chain=true streaming=true attention_sink=false kv_chains=true groups="no row-wide mcast family is live"; using the static flat split. (ring_joint_sdpa_program_factory.cpp:2558)
+2026-10-11 05:50:23.755 | info     |              Op | Ring joint rotated Q split declined: base=2 floats=46 groups_needed=0 of 0 groups, balanced=false head_chain=true streaming=true attention_sink=false kv_chains=true groups="no row-wide mcast family is live"; using the static flat split. (ring_joint_sdpa_program_factory.cpp:2558)
+2026-10-11 05:50:23.758 | info     |              Op | Ring joint rotated Q split declined: base=2 floats=46 groups_needed=0 of 0 groups, balanced=false head_chain=true streaming=true attention_sink=false kv_chains=true groups="no row-wide mcast family is live"; using the static flat split. (ring_joint_sdpa_program_factory.cpp:2558)
+2026-10-11 05:50:23.760 | info     |              Op | Ring joint rotated Q split declined: base=2 floats=46 groups_needed=0 of 0 groups, balanced=false head_chain=true streaming=true attention_sink=false kv_chains=true groups="no row-wide mcast family is live"; using the static flat split. (ring_joint_sdpa_program_factory.cpp:2558)
+2026-10-11 05:50:23.763 | info     |              Op | Ring joint rotated Q split declined: base=2 floats=46 groups_needed=0 of 0 groups, balanced=false head_chain=true streaming=true attention_sink=false kv_chains=true groups="no row-wide mcast family is live"; using the static flat split. (ring_joint_sdpa_program_factory.cpp:2558)
+2026-10-11 05:50:23.765 | info     |              Op | Ring joint rotated Q split declined: base=2 floats=46 groups_needed=0 of 0 groups, balanced=false head_chain=true streaming=true attention_sink=false kv_chains=true groups="no row-wide mcast family is live"; using the static flat split. (ring_joint_sdpa_program_factory.cpp:2558)
+2026-10-11 05:50:23.767 | info     |              Op | Ring joint rotated Q split declined: base=2 floats=46 groups_needed=0 of 0 groups, balanced=false head_chain=true streaming=true attention_sink=false kv_chains=true groups="no row-wide mcast family is live"; using the static flat split. (ring_joint_sdpa_program_factory.cpp:2558)
+2026-10-11 05:50:23.769 | info     |              Op | Ring joint rotated Q split declined: base=2 floats=46 groups_needed=0 of 0 groups, balanced=false head_chain=true streaming=true attention_sink=false kv_chains=true groups="no row-wide mcast family is live"; using the static flat split. (ring_joint_sdpa_program_factory.cpp:2558)
+2026-10-11 05:50:23.770 | info     |              Op | Ring joint rotated Q split declined: base=2 floats=46 groups_needed=0 of 0 groups, balanced=false head_chain=true streaming=true attention_sink=false kv_chains=true groups="no row-wide mcast family is live"; using the static flat split. (ring_joint_sdpa_program_factory.cpp:2558)
+2026-10-11 05:50:23.772 | info     |              Op | Ring joint rotated Q split declined: base=2 floats=46 groups_needed=0 of 0 groups, balanced=false head_chain=true streaming=true attention_sink=false kv_chains=true groups="no row-wide mcast family is live"; using the static flat split. (ring_joint_sdpa_program_factory.cpp:2558)
+2026-10-11 05:50:23.774 | info     |              Op | Ring joint rotated Q split declined: base=2 floats=46 groups_needed=0 of 0 groups, balanced=false head_chain=true streaming=true attention_sink=false kv_chains=true groups="no row-wide mcast family is live"; using the static flat split. (ring_joint_sdpa_program_factory.cpp:2558)
+2026-10-11 05:50:23.776 | info     |              Op | Ring joint rotated Q split declined: base=2 floats=46 groups_needed=0 of 0 groups, balanced=false head_chain=true streaming=true attention_sink=false kv_chains=true groups="no row-wide mcast family is live"; using the static flat split. (ring_joint_sdpa_program_factory.cpp:2558)
+2026-10-11 05:50:23.778 | info     |              Op | Ring joint rotated Q split declined: base=2 floats=46 groups_needed=0 of 0 groups, balanced=false head_chain=true streaming=true attention_sink=false kv_chains=true groups="no row-wide mcast family is live"; using the static flat split. (ring_joint_sdpa_program_factory.cpp:2558)
+2026-10-11 05:50:23.780 | info     |              Op | Ring joint rotated Q split declined: base=2 floats=46 groups_needed=0 of 0 groups, balanced=false head_chain=true streaming=true attention_sink=false kv_chains=true groups="no row-wide mcast family is live"; using the static flat split. (ring_joint_sdpa_program_factory.cpp:2558)
+2026-10-11 05:50:23.781 | info     |              Op | Ring joint rotated Q split declined: base=2 floats=46 groups_needed=0 of 0 groups, balanced=false head_chain=true streaming=true attention_sink=false kv_chains=true groups="no row-wide mcast family is live"; using the static flat split. (ring_joint_sdpa_program_factory.cpp:2558)
+2026-10-11 05:50:23.783 | info     |              Op | Ring joint rotated Q split declined: base=2 floats=46 groups_needed=0 of 0 groups, balanced=false head_chain=true streaming=true attention_sink=false kv_chains=true groups="no row-wide mcast family is live"; using the static flat split. (ring_joint_sdpa_program_factory.cpp:2558)
+2026-10-11 05:50:23.785 | info     |              Op | Ring joint rotated Q split declined: base=2 floats=46 groups_needed=0 of 0 groups, balanced=false head_chain=true streaming=true attention_sink=false kv_chains=true groups="no row-wide mcast family is live"; using the static flat split. (ring_joint_sdpa_program_factory.cpp:2558)
+2026-10-11 05:50:23.787 | info     |              Op | Ring joint rotated Q split declined: base=2 floats=46 groups_needed=0 of 0 groups, balanced=false head_chain=true streaming=true attention_sink=false kv_chains=true groups="no row-wide mcast family is live"; using the static flat split. (ring_joint_sdpa_program_factory.cpp:2558)
+2026-10-11 05:50:23.788 | info     |              Op | Ring joint rotated Q split declined: base=2 floats=46 groups_needed=0 of 0 groups, balanced=false head_chain=true streaming=true attention_sink=false kv_chains=true groups="no row-wide mcast family is live"; using the static flat split. (ring_joint_sdpa_program_factory.cpp:2558)
+2026-10-11 05:50:23.789 | info     |              Op | Ring joint rotated Q split declined: base=2 floats=46 groups_needed=0 of 0 groups, balanced=false head_chain=true streaming=true attention_sink=false kv_chains=true groups="no row-wide mcast family is live"; using the static flat split. (ring_joint_sdpa_program_factory.cpp:2558)
+2026-10-11 05:50:23.790 | info     |              Op | Ring joint rotated Q split declined: base=2 floats=46 groups_needed=0 of 0 groups, balanced=false head_chain=true streaming=true attention_sink=false kv_chains=true groups="no row-wide mcast family is live"; using the static flat split. (ring_joint_sdpa_program_factory.cpp:2558)
+2026-10-11 05:50:23.791 | info     |              Op | Ring joint rotated Q split declined: base=2 floats=46 groups_needed=0 of 0 groups, balanced=false head_chain=true streaming=true attention_sink=false kv_chains=true groups="no row-wide mcast family is live"; using the static flat split. (ring_joint_sdpa_program_factory.cpp:2558)
+2026-10-11 05:50:24.465 | info     |    BuildKernels | compiled ring_joint_reader/17713006888406788936/ in 655 ms (build.cpp:1113)
+2026-10-11 05:50:24.526 | info     |    BuildKernels | compiled ring_joint_writer/3592558026763855728/ in 716 ms (build.cpp:1113)
+2026-10-11 05:50:24.883 | info     |    BuildKernels | compiled ring_joint_sdpa/7392491976661588088/ in 1072 ms (build.cpp:1113)
+2026-10-11 05:50:25.034 | info     |    BuildKernels | compiled ring_joint_sdpa/7392491976661588088/ in 1223 ms (build.cpp:1113)
+2026-10-11 05:50:25.167 | info     |    BuildKernels | compiled ring_joint_sdpa/7392491976661588088/ in 1357 ms (build.cpp:1113)
+2026-10-11 05:50:25.553 | info     |    BuildKernels | compiled reader_tm_tile_layout_nlp_concat_heads/13649643282735000447/ in 302 ms (build.cpp:1113)
+2026-10-11 05:50:25.559 | WARNING  | models.tt_dit.utils.matmul:log_warning:50 - No known best blocking for (M, K, N) = (4864, 7168, 1344) on 12x9 core grid; using default 2x14x6
+2026-10-11 05:50:26.194 | info     |    BuildKernels | compiled dm_in1_sender_out/17328103319865331664/ in 481 ms (build.cpp:1113)
+2026-10-11 05:50:26.198 | info     |    BuildKernels | compiled dm_in1_sender_out/8099450314764867942/ in 481 ms (build.cpp:1113)
+2026-10-11 05:50:26.200 | info     |    BuildKernels | compiled dm_in1_sender_out/236862367804879385/ in 485 ms (build.cpp:1113)
+2026-10-11 05:50:26.200 | info     |    BuildKernels | compiled dm_in1_sender_out/14679967503727465110/ in 487 ms (build.cpp:1113)
+2026-10-11 05:50:26.209 | info     |    BuildKernels | compiled dm_in0_sender/9807132184964982674/ in 492 ms (build.cpp:1113)
+2026-10-11 05:50:26.213 | info     |    BuildKernels | compiled dm_in0_sender/2002481474509857485/ in 498 ms (build.cpp:1113)
+2026-10-11 05:50:26.214 | info     |    BuildKernels | compiled dm_in0_sender/953695814629338552/ in 497 ms (build.cpp:1113)
+2026-10-11 05:50:26.217 | info     |    BuildKernels | compiled dm_in0_sender/2394174320465833873/ in 499 ms (build.cpp:1113)
+2026-10-11 05:50:26.244 | info     |    BuildKernels | compiled dm_in1_sender_out/7740770667906129466/ in 528 ms (build.cpp:1113)
+2026-10-11 05:50:26.246 | info     |    BuildKernels | compiled dm_in1_sender_out/8911995763001204198/ in 531 ms (build.cpp:1113)
+2026-10-11 05:50:26.260 | info     |    BuildKernels | compiled dm_in1_sender_out/3510597203999347035/ in 544 ms (build.cpp:1113)
+2026-10-11 05:50:26.260 | info     |    BuildKernels | compiled dm_in1_sender_out/8877000599158483267/ in 545 ms (build.cpp:1113)
+2026-10-11 05:50:26.267 | info     |    BuildKernels | compiled dm_in0_sender/7180840611374794339/ in 550 ms (build.cpp:1113)
+2026-10-11 05:50:26.268 | info     |    BuildKernels | compiled dm_in0_sender/1316273983748602220/ in 553 ms (build.cpp:1113)
+2026-10-11 05:50:26.271 | info     |    BuildKernels | compiled compute/7941090952148766647/ in 552 ms (build.cpp:1113)
+2026-10-11 05:50:26.274 | info     |    BuildKernels | compiled dm_in0_sender/16867306416835651378/ in 556 ms (build.cpp:1113)
+2026-10-11 05:50:26.280 | info     |    BuildKernels | compiled dm_in0_sender/7697124727724153411/ in 565 ms (build.cpp:1113)
+2026-10-11 05:50:26.868 | info     |    BuildKernels | compiled compute/7941090952148766647/ in 597 ms (build.cpp:1113)
+2026-10-11 05:50:27.046 | info     |    BuildKernels | compiled compute/7941090952148766647/ in 774 ms (build.cpp:1113)
+2026-10-11 05:50:27.109 | info     |    BuildKernels | compiled dm_in0_sender/5275360337028224863/ in 1395 ms (build.cpp:1113)
+2026-10-11 05:50:27.118 | info     |    BuildKernels | compiled dm_in0_sender/6453301526443298924/ in 1405 ms (build.cpp:1113)
+2026-10-11 05:50:27.128 | info     |    BuildKernels | compiled dm_in0_sender/9267579314624938165/ in 1410 ms (build.cpp:1113)
+2026-10-11 05:50:27.139 | info     |    BuildKernels | compiled dm_in0_sender/5941453857894011921/ in 1425 ms (build.cpp:1113)
+2026-10-11 05:50:27.247 | WARNING  | models.tt_dit.utils.matmul:log_warning:50 - No known best blocking for (M, K, N) = (4864, 5376, 7168) on 11x10 core grid; using default 4x3x16
+2026-10-11 05:50:27.800 | info     |    BuildKernels | compiled dm_in0_sender/9742029219684547868/ in 428 ms (build.cpp:1113)
+2026-10-11 05:50:27.803 | info     |    BuildKernels | compiled dm_in0_sender/17226753932624170089/ in 430 ms (build.cpp:1113)
+2026-10-11 05:50:27.805 | info     |    BuildKernels | compiled dm_in0_sender/6566888500490315268/ in 434 ms (build.cpp:1113)
+2026-10-11 05:50:27.808 | info     |    BuildKernels | compiled dm_in0_sender/8909891519030851550/ in 437 ms (build.cpp:1113)
+2026-10-11 05:50:27.821 | info     |    BuildKernels | compiled dm_in1_sender_out/1066674046083018472/ in 452 ms (build.cpp:1113)
+2026-10-11 05:50:27.827 | info     |    BuildKernels | compiled dm_in1_sender_out/15527415194459825625/ in 455 ms (build.cpp:1113)
+2026-10-11 05:50:27.829 | info     |    BuildKernels | compiled dm_in1_sender_out/8544139961549378355/ in 459 ms (build.cpp:1113)
+2026-10-11 05:50:27.832 | info     |    BuildKernels | compiled dm_in1_sender_out/11044240971118650222/ in 463 ms (build.cpp:1113)
+2026-10-11 05:50:27.860 | info     |    BuildKernels | compiled dm_in1_sender_out/12019133454088709833/ in 488 ms (build.cpp:1113)
+2026-10-11 05:50:27.860 | info     |    BuildKernels | compiled dm_in1_sender_out/1772802254633484248/ in 490 ms (build.cpp:1113)
+2026-10-11 05:50:27.864 | info     |    BuildKernels | compiled dm_in1_sender_out/15845827435217010299/ in 493 ms (build.cpp:1113)
+2026-10-11 05:50:27.869 | info     |    BuildKernels | compiled dm_in1_sender_out/4345885763885915385/ in 499 ms (build.cpp:1113)
+2026-10-11 05:50:27.890 | info     |    BuildKernels | compiled dm_in0_sender/1252432251534025856/ in 517 ms (build.cpp:1113)
+2026-10-11 05:50:27.895 | info     |    BuildKernels | compiled dm_in0_sender/5448513952542406557/ in 524 ms (build.cpp:1113)
+2026-10-11 05:50:27.895 | info     |    BuildKernels | compiled dm_in0_sender/17824109408471336578/ in 522 ms (build.cpp:1113)
+2026-10-11 05:50:27.898 | info     |    BuildKernels | compiled dm_in0_sender/6876626114946071121/ in 526 ms (build.cpp:1113)
+2026-10-11 05:50:28.681 | info     |    BuildKernels | compiled dm_in0_sender/9700120209763379860/ in 1308 ms (build.cpp:1113)
+2026-10-11 05:50:28.683 | info     |    BuildKernels | compiled dm_in0_sender/11979417180154161516/ in 1310 ms (build.cpp:1113)
+2026-10-11 05:50:28.684 | info     |    BuildKernels | compiled dm_in0_sender/16669310532228906302/ in 1312 ms (build.cpp:1113)
+2026-10-11 05:50:28.696 | info     |    BuildKernels | compiled dm_in0_sender/17483146710465051913/ in 1324 ms (build.cpp:1113)
+2026-10-11 05:50:28.797 | INFO     | models.tt_dit.utils.matmul:log_info:55 - MMRS v2.3 rule config for (M, K, N) = (4864, 3584, 5376): FusedMMRSConfig(ttnn.CoreCoord(12, 8), 6, 4, 8, 2, 2, None, 1)  # paste into fused_mmrs_configs after sweeping to override
+2026-10-11 05:50:29.355 | info     |    BuildKernels | compiled dm_in1_sender_out/10841875060097558365/ in 413 ms (build.cpp:1113)
+2026-10-11 05:50:29.397 | info     |    BuildKernels | compiled dm_in1_sender_out/15479742853464934307/ in 456 ms (build.cpp:1113)
+2026-10-11 05:50:29.419 | info     |    BuildKernels | compiled minimal_ring_reduction/14153629157347565556/ in 475 ms (build.cpp:1113)
+2026-10-11 05:50:29.437 | info     |    BuildKernels | compiled minimal_ring_reduction/2532990805561212874/ in 493 ms (build.cpp:1113)
+2026-10-11 05:50:29.441 | info     |    BuildKernels | compiled minimal_ring_reduction/7105764610836109092/ in 497 ms (build.cpp:1113)
+2026-10-11 05:50:29.441 | info     |    BuildKernels | compiled dm_in0_sender/2351570420043532478/ in 499 ms (build.cpp:1113)
+2026-10-11 05:50:29.461 | info     |    BuildKernels | compiled minimal_ring_strided_reduce_scatter_async_reader/5566976726036041573/ in 520 ms (build.cpp:1113)
+2026-10-11 05:50:29.461 | info     |    BuildKernels | compiled minimal_ring_strided_reduce_scatter_async_reader/779123667059912310/ in 520 ms (build.cpp:1113)
+2026-10-11 05:50:29.462 | info     |    BuildKernels | compiled minimal_ring_strided_reduce_scatter_async_reader/1035934602387247878/ in 520 ms (build.cpp:1113)
+2026-10-11 05:50:29.478 | info     |    BuildKernels | compiled dm_in0_sender/231075920694421023/ in 536 ms (build.cpp:1113)
+2026-10-11 05:50:29.833 | info     |    BuildKernels | compiled minimal_ring_reduction/12731704019124533713/ in 476 ms (build.cpp:1113)
+2026-10-11 05:50:29.904 | info     |    BuildKernels | compiled minimal_ring_reduction/14153629157347565556/ in 484 ms (build.cpp:1113)
+2026-10-11 05:50:29.930 | info     |    BuildKernels | compiled minimal_ring_reduction/14153629157347565556/ in 511 ms (build.cpp:1113)
+2026-10-11 05:50:29.949 | info     |    BuildKernels | compiled minimal_ring_reduction/2532990805561212874/ in 512 ms (build.cpp:1113)
+2026-10-11 05:50:29.949 | info     |    BuildKernels | compiled minimal_ring_reduction/7105764610836109092/ in 509 ms (build.cpp:1113)
+2026-10-11 05:50:29.994 | info     |    BuildKernels | compiled minimal_ring_strided_reduce_scatter_async_reader/17152610261207200809/ in 515 ms (build.cpp:1113)
+2026-10-11 05:50:30.058 | info     |    BuildKernels | compiled minimal_ring_strided_reduce_scatter_async_writer/37496432591223394/ in 1116 ms (build.cpp:1113)
+2026-10-11 05:50:30.063 | info     |    BuildKernels | compiled minimal_ring_strided_reduce_scatter_async_writer/4839280375492408889/ in 1122 ms (build.cpp:1113)
+2026-10-11 05:50:30.074 | info     |    BuildKernels | compiled minimal_ring_strided_reduce_scatter_async_writer/16284214679290732334/ in 1132 ms (build.cpp:1113)
+2026-10-11 05:50:30.317 | info     |    BuildKernels | compiled minimal_ring_reduction/12731704019124533713/ in 485 ms (build.cpp:1113)
+2026-10-11 05:50:30.360 | info     |    BuildKernels | compiled minimal_ring_reduction/12731704019124533713/ in 527 ms (build.cpp:1113)
+2026-10-11 05:50:30.434 | info     |    BuildKernels | compiled minimal_ring_reduction/2532990805561212874/ in 484 ms (build.cpp:1113)
+2026-10-11 05:50:30.439 | info     |    BuildKernels | compiled minimal_ring_reduction/7105764610836109092/ in 490 ms (build.cpp:1113)
+2026-10-11 05:50:30.558 | info     |    BuildKernels | compiled minimal_ring_strided_reduce_scatter_async_writer/6732963069730735712/ in 1115 ms (build.cpp:1113)
+2026-10-11 05:50:32.109 | info     |    BuildKernels | compiled dit_rmsnorm_fused_reader/1695032550802833973/ in 334 ms (build.cpp:1113)
+2026-10-11 05:50:32.437 | info     |    BuildKernels | compiled dit_rmsnorm_fused_compute/16999563906777650645/ in 662 ms (build.cpp:1113)
+2026-10-11 05:50:32.736 | info     |    BuildKernels | compiled dit_rmsnorm_fused_compute/16999563906777650645/ in 960 ms (build.cpp:1113)
+2026-10-11 05:50:33.361 | info     |    BuildKernels | compiled dit_rmsnorm_fused_compute/16999563906777650645/ in 625 ms (build.cpp:1113)
+2026-10-11 05:50:33.792 | info     |    BuildKernels | compiled minimal_default_reader/5265959822615940590/ in 375 ms (build.cpp:1113)
+2026-10-11 05:50:33.793 | info     |    BuildKernels | compiled minimal_default_reader/10942681346666620009/ in 377 ms (build.cpp:1113)
+2026-10-11 05:50:33.794 | info     |    BuildKernels | compiled minimal_default_reader/2432067725729281558/ in 379 ms (build.cpp:1113)
+2026-10-11 05:50:33.795 | info     |    BuildKernels | compiled minimal_default_reader/1615163709531864618/ in 379 ms (build.cpp:1113)
+2026-10-11 05:50:34.671 | info     |    BuildKernels | compiled minimal_default_writer/6113961912734792394/ in 1255 ms (build.cpp:1113)
+2026-10-11 05:50:34.674 | info     |    BuildKernels | compiled minimal_default_writer/17525330214299545449/ in 1258 ms (build.cpp:1113)
+2026-10-11 05:50:34.679 | info     |    BuildKernels | compiled minimal_default_writer/16463416465953380042/ in 1262 ms (build.cpp:1113)
+2026-10-11 05:50:34.700 | info     |    BuildKernels | compiled minimal_default_writer/12839765241254737145/ in 1285 ms (build.cpp:1113)
+2026-10-11 05:50:34.741 | WARNING  | models.tt_dit.utils.matmul:log_warning:50 - No known best blocking for (M, K, N) = (4864, 5376, 96) on 11x10 core grid; using default 8x8x2
+Building brisc, compile step:
+/var/tmp/fasth3/t288/b/runtime/sfpi/compiler/bin/riscv-tt-elf-g++ -O2 -std=c++17 -ftt-nttp -ftt-constinit -ftt-consteval -ftt-no-dyninit -flto=1 -flto-partition=one -ffast-math -fno-finite-math-only -fsigned-zeros -fno-associative-math -fno-exceptions -fno-rtti -fno-use-cxa-atexit -g -MMD -Wall -Werror -Wno-error=deprecated-declarations -Wno-error=multistatement-macros -Wno-error=parentheses -Wno-error=unused-but-set-variable -Wno-unused-variable -Wno-unused-function --param=min-pagesize=0 -mcpu=tt-bh -fno-tree-loop-distribute-patterns -Winvalid-pch -Wno-error=invalid-pch -I. -I.. -I/var/tmp/fasth3/t288/b/ -I/var/tmp/fasth3/t288/b/ttnn -I/var/tmp/fasth3/t288/b/ttnn/cpp -I/var/tmp/fasth3/t288/b/tt_metal -I/var/tmp/fasth3/t288/b/tt_metal/hw/inc -I/var/tmp/fasth3/t288/b/tt_metal/tt-llk/common -I/var/tmp/fasth3/t288/b/tt_metal/tt-llk/tools/include -I/var/tmp/fasth3/t288/b/tt_metal/hostdevcommon/api -I/var/tmp/fasth3/t288/b/tt_metal/api/ -I/var/tmp/fasth3/t288/b/tt_metal/hw/ckernels/blackhole/metal/common -I/var/tmp/fasth3/t288/b/tt_metal/hw/ckernels/blackhole/metal/llk_io -I/var/tmp/fasth3/t288/b/tt_metal/hw/inc/internal/tt-1xx -I/var/tmp/fasth3/t288/b/tt_metal/hw/inc/internal/tt-1xx/blackhole -I/var/tmp/fasth3/t288/b/tt_metal/hw/inc/internal/tt-1xx/blackhole/blackhole_defines -I/var/tmp/fasth3/t288/b/tt_metal/hw/inc/internal/tt-1xx/blackhole/noc -I/var/tmp/fasth3/t288/b/tt_metal/tt-llk/tt_llk_blackhole/common/inc -I/var/tmp/fasth3/t288/b/tt_metal/tt-llk/tt_llk_blackhole/llk_lib -I/var/tmp/fasth3/t288/b/tt_metal/tt-llk/tt_llk_blackhole/llk_lib/hal -I/var/tmp/fasth3/t288/b/tt_metal/hw/firmware/src/tt-1xx -I/var/tmp/fasth3/t288/b/ttnn/cpp/ttnn/operations/experimental/minimal_matmul/device/kernels -include /var/tmp/fasth3/cache/tt-metal-cache-h3hf/tt-metal-cache/pch/9a5f53ec9f7b2c44/pch.h -DIS_NOT_POW2_NUM_L1_BANKS=1 -DLOG_BASE_2_OF_NUM_DRAM_BANKS=3 -DNUM_DRAM_BANKS=8 -DNUM_L1_BANKS=120 -DPCIE_NOC_X=19 -DPCIE_NOC_Y=24 -DTENSIX_FIRMWARE -DLOCAL_MEM_EN=0 -DPROCESSOR_INDEX=0 -DCOMPILE_FOR_BRISC -DPROGRAMMABLE_CORE_TYPE=0 -DARCH_BLACKHOLE -DDISPATCH_MESSAGE_ADDR=4290184248 -DKERNEL_BUILD -DFUSE_BIAS=1 -DNOC_INDEX=0 -DNOC_MODE=0 -DFULL_KERNEL_NAME="dm_in0_sender_metal2/3916288769902286440/" -DKERNEL_COMPILE_TIME_ARGS=2,2048,2,2048,2,2048 -include named_ct_arg_map_generated.h -c -o /var/tmp/fasth3/cache/tt-metal-cache-h3hf/tt-metal-cache9268051462127607463/kernels/dm_in0_sender_metal2/3916288769902286440/brisc/brisck.17351952906995265195_59310.o /var/tmp/fasth3/t288/b/tt_metal/hw/firmware/src/tt-1xx/brisck.cc -MF /var/tmp/fasth3/cache/tt-metal-cache-h3hf/tt-metal-cache9268051462127607463/kernels/dm_in0_sender_metal2/3916288769902286440/brisc/brisck.17351952906995265195_59310.d
+In file included from ../kernel_includes.hpp:4,
+                 from /var/tmp/fasth3/t288/b/tt_metal/hw/firmware/src/tt-1xx/brisck.cc:21:
+/var/tmp/fasth3/t288/b/ttnn/cpp/ttnn/operations/experimental/minimal_matmul/device/kernels/dm_in0_sender_metal2.cpp: In function 'void kernel_main()':
+/var/tmp/fasth3/t288/b/ttnn/cpp/ttnn/operations/experimental/minimal_matmul/device/kernels/dm_in0_sender_metal2.cpp:76:10: warning: variable 'outputs_tuple' set but not used [-Wunused-but-set-variable]
+   76 |     auto outputs_tuple = make_tensor_accessors(tensor::outputs);
+      |          ^~~~~~~~~~~~~
+/var/tmp/fasth3/t288/b/ttnn/cpp/ttnn/operations/experimental/minimal_matmul/device/kernels/dm_in0_sender_metal2.cpp:203:14: warning: variable 'defer_write_m_tile' set but not used [-Wunused-but-set-variable]
+  203 |     uint32_t defer_write_m_tile = 0;
+      |              ^~~~~~~~~~~~~~~~~~
+/var/tmp/fasth3/t288/b/ttnn/cpp/ttnn/operations/experimental/minimal_matmul/device/kernels/dm_in0_sender_metal2.cpp:204:14: warning: variable 'defer_write_m_tile_end' set but not used [-Wunused-but-set-variable]
+  204 |     uint32_t defer_write_m_tile_end = 0;
+      |              ^~~~~~~~~~~~~~~~~~~~~~
+/var/tmp/fasth3/t288/b/ttnn/cpp/ttnn/operations/experimental/minimal_matmul/device/kernels/dm_in0_sender_metal2.cpp:205:14: warning: variable 'defer_write_n_tile' set but not used [-Wunused-but-set-variable]
+  205 |     uint32_t defer_write_n_tile = 0;
+      |              ^~~~~~~~~~~~~~~~~~
+/var/tmp/fasth3/t288/b/ttnn/cpp/ttnn/operations/experimental/minimal_matmul/device/kernels/dm_in0_sender_metal2.cpp:206:14: warning: variable 'defer_write_n_tile_end' set but not used [-Wunused-but-set-variable]
+  206 |     uint32_t defer_write_n_tile_end = 0;
+      |              ^~~~~~~~~~~~~~~~~~~~~~
+Building ncrisc, compile step:
+/var/tmp/fasth3/t288/b/runtime/sfpi/compiler/bin/riscv-tt-elf-g++ -O2 -std=c++17 -ftt-nttp -ftt-constinit -ftt-consteval -ftt-no-dyninit -flto=1 -flto-partition=one -ffast-math -fno-finite-math-only -fsigned-zeros -fno-associative-math -fno-exceptions -fno-rtti -fno-use-cxa-atexit -g -MMD -Wall -Werror -Wno-error=deprecated-declarations -Wno-error=multistatement-macros -Wno-error=parentheses -Wno-error=unused-but-set-variable -Wno-unused-variable -Wno-unused-function --param=min-pagesize=0 -mcpu=tt-bh -fno-tree-loop-distribute-patterns -Winvalid-pch -Wno-error=invalid-pch -I. -I.. -I/var/tmp/fasth3/t288/b/ -I/var/tmp/fasth3/t288/b/ttnn -I/var/tmp/fasth3/t288/b/ttnn/cpp -I/var/tmp/fasth3/t288/b/tt_metal -I/var/tmp/fasth3/t288/b/tt_metal/hw/inc -I/var/tmp/fasth3/t288/b/tt_metal/tt-llk/common -I/var/tmp/fasth3/t288/b/tt_metal/tt-llk/tools/include -I/var/tmp/fasth3/t288/b/tt_metal/hostdevcommon/api -I/var/tmp/fasth3/t288/b/tt_metal/api/ -I/var/tmp/fasth3/t288/b/tt_metal/hw/ckernels/blackhole/metal/common -I/var/tmp/fasth3/t288/b/tt_metal/hw/ckernels/blackhole/metal/llk_io -I/var/tmp/fasth3/t288/b/tt_metal/hw/inc/internal/tt-1xx -I/var/tmp/fasth3/t288/b/tt_metal/hw/inc/internal/tt-1xx/blackhole -I/var/tmp/fasth3/t288/b/tt_metal/hw/inc/internal/tt-1xx/blackhole/blackhole_defines -I/var/tmp/fasth3/t288/b/tt_metal/hw/inc/internal/tt-1xx/blackhole/noc -I/var/tmp/fasth3/t288/b/tt_metal/tt-llk/tt_llk_blackhole/common/inc -I/var/tmp/fasth3/t288/b/tt_metal/tt-llk/tt_llk_blackhole/llk_lib -I/var/tmp/fasth3/t288/b/tt_metal/tt-llk/tt_llk_blackhole/llk_lib/hal -I/var/tmp/fasth3/t288/b/tt_metal/hw/firmware/src/tt-1xx -I/var/tmp/fasth3/t288/b/ttnn/cpp/ttnn/operations/experimental/minimal_matmul/device/kernels -include /var/tmp/fasth3/cache/tt-metal-cache-h3hf/tt-metal-cache/pch/9a5f53ec9f7b2c44/pch.h -DIS_NOT_POW2_NUM_L1_BANKS=1 -DLOG_BASE_2_OF_NUM_DRAM_BANKS=3 -DNUM_DRAM_BANKS=8 -DNUM_L1_BANKS=120 -DPCIE_NOC_X=19 -DPCIE_NOC_Y=24 -DTENSIX_FIRMWARE -DLOCAL_MEM_EN=0 -DPROCESSOR_INDEX=1 -DCOMPILE_FOR_NCRISC -DPROGRAMMABLE_CORE_TYPE=0 -DARCH_BLACKHOLE -DDISPATCH_MESSAGE_ADDR=4290184248 -DKERNEL_BUILD -DFUSE_BIAS=1 -DIS_OUTPUT_WRITER=1 -DNOC_INDEX=1 -DNOC_MODE=0 -DFULL_KERNEL_NAME="dm_in1_sender_out_metal2/7885715391506110621/" -DKERNEL_COMPILE_TIME_ARGS=2,2048,2,2048,2,2048 -include named_ct_arg_map_generated.h -c -o /var/tmp/fasth3/cache/tt-metal-cache-h3hf/tt-metal-cache9268051462127607463/kernels/dm_in1_sender_out_metal2/7885715391506110621/ncrisc/ncrisck.17351952906995265195_59310.o /var/tmp/fasth3/t288/b/tt_metal/hw/firmware/src/tt-1xx/ncrisck.cc -MF /var/tmp/fasth3/cache/tt-metal-cache-h3hf/tt-metal-cache9268051462127607463/kernels/dm_in1_sender_out_metal2/7885715391506110621/ncrisc/ncrisck.17351952906995265195_59310.d
+In file included from ../kernel_includes.hpp:4,
+                 from /var/tmp/fasth3/t288/b/tt_metal/hw/firmware/src/tt-1xx/ncrisck.cc:23:
+/var/tmp/fasth3/t288/b/ttnn/cpp/ttnn/operations/experimental/minimal_matmul/device/kernels/dm_in1_sender_out_metal2.cpp: In function 'void kernel_main()':
+/var/tmp/fasth3/t288/b/ttnn/cpp/ttnn/operations/experimental/minimal_matmul/device/kernels/dm_in1_sender_out_metal2.cpp:79:16: warning: variable 'in2_reader' set but not used [-Wunused-but-set-variable]
+   79 |     const auto in2_reader = TensorAccessor(tensor::in2);
+      |                ^~~~~~~~~~
+Building brisc, compile step:
+/var/tmp/fasth3/t288/b/runtime/sfpi/compiler/bin/riscv-tt-elf-g++ -O2 -std=c++17 -ftt-nttp -ftt-constinit -ftt-consteval -ftt-no-dyninit -flto=1 -flto-partition=one -ffast-math -fno-finite-math-only -fsigned-zeros -fno-associative-math -fno-exceptions -fno-rtti -fno-use-cxa-atexit -g -MMD -Wall -Werror -Wno-error=deprecated-declarations -Wno-error=multistatement-macros -Wno-error=parentheses -Wno-error=unused-but-set-variable -Wno-unused-variable -Wno-unused-function --param=min-pagesize=0 -mcpu=tt-bh -fno-tree-loop-distribute-patterns -Winvalid-pch -Wno-error=invalid-pch -I. -I.. -I/var/tmp/fasth3/t288/b/ -I/var/tmp/fasth3/t288/b/ttnn -I/var/tmp/fasth3/t288/b/ttnn/cpp -I/var/tmp/fasth3/t288/b/tt_metal -I/var/tmp/fasth3/t288/b/tt_metal/hw/inc -I/var/tmp/fasth3/t288/b/tt_metal/tt-llk/common -I/var/tmp/fasth3/t288/b/tt_metal/tt-llk/tools/include -I/var/tmp/fasth3/t288/b/tt_metal/hostdevcommon/api -I/var/tmp/fasth3/t288/b/tt_metal/api/ -I/var/tmp/fasth3/t288/b/tt_metal/hw/ckernels/blackhole/metal/common -I/var/tmp/fasth3/t288/b/tt_metal/hw/ckernels/blackhole/metal/llk_io -I/var/tmp/fasth3/t288/b/tt_metal/hw/inc/internal/tt-1xx -I/var/tmp/fasth3/t288/b/tt_metal/hw/inc/internal/tt-1xx/blackhole -I/var/tmp/fasth3/t288/b/tt_metal/hw/inc/internal/tt-1xx/blackhole/blackhole_defines -I/var/tmp/fasth3/t288/b/tt_metal/hw/inc/internal/tt-1xx/blackhole/noc -I/var/tmp/fasth3/t288/b/tt_metal/tt-llk/tt_llk_blackhole/common/inc -I/var/tmp/fasth3/t288/b/tt_metal/tt-llk/tt_llk_blackhole/llk_lib -I/var/tmp/fasth3/t288/b/tt_metal/tt-llk/tt_llk_blackhole/llk_lib/hal -I/var/tmp/fasth3/t288/b/tt_metal/hw/firmware/src/tt-1xx -I/var/tmp/fasth3/t288/b/ttnn/cpp/ttnn/operations/experimental/minimal_matmul/device/kernels -include /var/tmp/fasth3/cache/tt-metal-cache-h3hf/tt-metal-cache/pch/9a5f53ec9f7b2c44/pch.h -DIS_NOT_POW2_NUM_L1_BANKS=1 -DLOG_BASE_2_OF_NUM_DRAM_BANKS=3 -DNUM_DRAM_BANKS=8 -DNUM_L1_BANKS=120 -DPCIE_NOC_X=19 -DPCIE_NOC_Y=24 -DTENSIX_FIRMWARE -DLOCAL_MEM_EN=0 -DPROCESSOR_INDEX=0 -DCOMPILE_FOR_BRISC -DPROGRAMMABLE_CORE_TYPE=0 -DARCH_BLACKHOLE -DDISPATCH_MESSAGE_ADDR=4290184248 -DKERNEL_BUILD -DFUSE_BIAS=1 -DNOC_INDEX=0 -DNOC_MODE=0 -DFULL_KERNEL_NAME="dm_in0_sender_metal2/13067271645149543495/" -DKERNEL_COMPILE_TIME_ARGS=2,2048,2,2048,2,2048 -include named_ct_arg_map_generated.h -c -o /var/tmp/fasth3/cache/tt-metal-cache-h3hf/tt-metal-cache9268051462127607463/kernels/dm_in0_sender_metal2/13067271645149543495/brisc/brisck.17351952906995265195_59310.o /var/tmp/fasth3/t288/b/tt_metal/hw/firmware/src/tt-1xx/brisck.cc -MF /var/tmp/fasth3/cache/tt-metal-cache-h3hf/tt-metal-cache9268051462127607463/kernels/dm_in0_sender_metal2/13067271645149543495/brisc/brisck.17351952906995265195_59310.d
+In file included from ../kernel_includes.hpp:4,
+                 from /var/tmp/fasth3/t288/b/tt_metal/hw/firmware/src/tt-1xx/brisck.cc:21:
+/var/tmp/fasth3/t288/b/ttnn/cpp/ttnn/operations/experimental/minimal_matmul/device/kernels/dm_in0_sender_metal2.cpp: In function 'void kernel_main()':
+/var/tmp/fasth3/t288/b/ttnn/cpp/ttnn/operations/experimental/minimal_matmul/device/kernels/dm_in0_sender_metal2.cpp:76:10: warning: variable 'outputs_tuple' set but not used [-Wunused-but-set-variable]
+   76 |     auto outputs_tuple = make_tensor_accessors(tensor::outputs);
+      |          ^~~~~~~~~~~~~
+/var/tmp/fasth3/t288/b/ttnn/cpp/ttnn/operations/experimental/minimal_matmul/device/kernels/dm_in0_sender_metal2.cpp:203:14: warning: variable 'defer_write_m_tile' set but not used [-Wunused-but-set-variable]
+  203 |     uint32_t defer_write_m_tile = 0;
+      |              ^~~~~~~~~~~~~~~~~~
+/var/tmp/fasth3/t288/b/ttnn/cpp/ttnn/operations/experimental/minimal_matmul/device/kernels/dm_in0_sender_metal2.cpp:204:14: warning: variable 'defer_write_m_tile_end' set but not used [-Wunused-but-set-variable]
+  204 |     uint32_t defer_write_m_tile_end = 0;
+      |              ^~~~~~~~~~~~~~~~~~~~~~
+/var/tmp/fasth3/t288/b/ttnn/cpp/ttnn/operations/experimental/minimal_matmul/device/kernels/dm_in0_sender_metal2.cpp:205:14: warning: variable 'defer_write_n_tile' set but not used [-Wunused-but-set-variable]
+  205 |     uint32_t defer_write_n_tile = 0;
+      |              ^~~~~~~~~~~~~~~~~~
+/var/tmp/fasth3/t288/b/ttnn/cpp/ttnn/operations/experimental/minimal_matmul/device/kernels/dm_in0_sender_metal2.cpp:206:14: warning: variable 'defer_write_n_tile_end' set but not used [-Wunused-but-set-variable]
+  206 |     uint32_t defer_write_n_tile_end = 0;
+      |              ^~~~~~~~~~~~~~~~~~~~~~
+Building ncrisc, compile step:
+/var/tmp/fasth3/t288/b/runtime/sfpi/compiler/bin/riscv-tt-elf-g++ -O2 -std=c++17 -ftt-nttp -ftt-constinit -ftt-consteval -ftt-no-dyninit -flto=1 -flto-partition=one -ffast-math -fno-finite-math-only -fsigned-zeros -fno-associative-math -fno-exceptions -fno-rtti -fno-use-cxa-atexit -g -MMD -Wall -Werror -Wno-error=deprecated-declarations -Wno-error=multistatement-macros -Wno-error=parentheses -Wno-error=unused-but-set-variable -Wno-unused-variable -Wno-unused-function --param=min-pagesize=0 -mcpu=tt-bh -fno-tree-loop-distribute-patterns -Winvalid-pch -Wno-error=invalid-pch -I. -I.. -I/var/tmp/fasth3/t288/b/ -I/var/tmp/fasth3/t288/b/ttnn -I/var/tmp/fasth3/t288/b/ttnn/cpp -I/var/tmp/fasth3/t288/b/tt_metal -I/var/tmp/fasth3/t288/b/tt_metal/hw/inc -I/var/tmp/fasth3/t288/b/tt_metal/tt-llk/common -I/var/tmp/fasth3/t288/b/tt_metal/tt-llk/tools/include -I/var/tmp/fasth3/t288/b/tt_metal/hostdevcommon/api -I/var/tmp/fasth3/t288/b/tt_metal/api/ -I/var/tmp/fasth3/t288/b/tt_metal/hw/ckernels/blackhole/metal/common -I/var/tmp/fasth3/t288/b/tt_metal/hw/ckernels/blackhole/metal/llk_io -I/var/tmp/fasth3/t288/b/tt_metal/hw/inc/internal/tt-1xx -I/var/tmp/fasth3/t288/b/tt_metal/hw/inc/internal/tt-1xx/blackhole -I/var/tmp/fasth3/t288/b/tt_metal/hw/inc/internal/tt-1xx/blackhole/blackhole_defines -I/var/tmp/fasth3/t288/b/tt_metal/hw/inc/internal/tt-1xx/blackhole/noc -I/var/tmp/fasth3/t288/b/tt_metal/tt-llk/tt_llk_blackhole/common/inc -I/var/tmp/fasth3/t288/b/tt_metal/tt-llk/tt_llk_blackhole/llk_lib -I/var/tmp/fasth3/t288/b/tt_metal/tt-llk/tt_llk_blackhole/llk_lib/hal -I/var/tmp/fasth3/t288/b/tt_metal/hw/firmware/src/tt-1xx -I/var/tmp/fasth3/t288/b/ttnn/cpp/ttnn/operations/experimental/minimal_matmul/device/kernels -include /var/tmp/fasth3/cache/tt-metal-cache-h3hf/tt-metal-cache/pch/9a5f53ec9f7b2c44/pch.h -DIS_NOT_POW2_NUM_L1_BANKS=1 -DLOG_BASE_2_OF_NUM_DRAM_BANKS=3 -DNUM_DRAM_BANKS=8 -DNUM_L1_BANKS=120 -DPCIE_NOC_X=19 -DPCIE_NOC_Y=24 -DTENSIX_FIRMWARE -DLOCAL_MEM_EN=0 -DPROCESSOR_INDEX=1 -DCOMPILE_FOR_NCRISC -DPROGRAMMABLE_CORE_TYPE=0 -DARCH_BLACKHOLE -DDISPATCH_MESSAGE_ADDR=4290184248 -DKERNEL_BUILD -DFUSE_BIAS=1 -DIS_OUTPUT_WRITER=1 -DNOC_INDEX=1 -DNOC_MODE=0 -DFULL_KERNEL_NAME="dm_in1_sender_out_metal2/3430571521731374430/" -DKERNEL_COMPILE_TIME_ARGS=2,2048,2,2048,2,2048 -include named_ct_arg_map_generated.h -c -o /var/tmp/fasth3/cache/tt-metal-cache-h3hf/tt-metal-cache9268051462127607463/kernels/dm_in1_sender_out_metal2/3430571521731374430/ncrisc/ncrisck.17351952906995265195_59310.o /var/tmp/fasth3/t288/b/tt_metal/hw/firmware/src/tt-1xx/ncrisck.cc -MF /var/tmp/fasth3/cache/tt-metal-cache-h3hf/tt-metal-cache9268051462127607463/kernels/dm_in1_sender_out_metal2/3430571521731374430/ncrisc/ncrisck.17351952906995265195_59310.d
+In file included from ../kernel_includes.hpp:4,
+                 from /var/tmp/fasth3/t288/b/tt_metal/hw/firmware/src/tt-1xx/ncrisck.cc:23:
+/var/tmp/fasth3/t288/b/ttnn/cpp/ttnn/operations/experimental/minimal_matmul/device/kernels/dm_in1_sender_out_metal2.cpp: In function 'void kernel_main()':
+/var/tmp/fasth3/t288/b/ttnn/cpp/ttnn/operations/experimental/minimal_matmul/device/kernels/dm_in1_sender_out_metal2.cpp:79:16: warning: variable 'in2_reader' set but not used [-Wunused-but-set-variable]
+   79 |     const auto in2_reader = TensorAccessor(tensor::in2);
+      |                ^~~~~~~~~~
+2026-10-11 05:50:35.206 | info     |    BuildKernels | compiled dm_in0_sender_metal2/3916288769902286440/ in 459 ms (build.cpp:1113)
+2026-10-11 05:50:35.238 | info     |    BuildKernels | compiled dm_in1_sender_out_metal2/7885715391506110621/ in 491 ms (build.cpp:1113)
+2026-10-11 05:50:35.250 | info     |    BuildKernels | compiled dm_in0_sender_metal2/13067271645149543495/ in 504 ms (build.cpp:1113)
+2026-10-11 05:50:35.251 | info     |    BuildKernels | compiled dm_in1_sender_out_metal2/3430571521731374430/ in 504 ms (build.cpp:1113)
+2026-10-11 05:50:35.257 | WARNING  | models.tt_dit.utils.matmul:log_warning:50 - No known best blocking for (M, K, N) = (4864, 5376, 32) on 11x10 core grid; using default 8x8x2
+Building brisc, compile step:
+/var/tmp/fasth3/t288/b/runtime/sfpi/compiler/bin/riscv-tt-elf-g++ -O2 -std=c++17 -ftt-nttp -ftt-constinit -ftt-consteval -ftt-no-dyninit -flto=1 -flto-partition=one -ffast-math -fno-finite-math-only -fsigned-zeros -fno-associative-math -fno-exceptions -fno-rtti -fno-use-cxa-atexit -g -MMD -Wall -Werror -Wno-error=deprecated-declarations -Wno-error=multistatement-macros -Wno-error=parentheses -Wno-error=unused-but-set-variable -Wno-unused-variable -Wno-unused-function --param=min-pagesize=0 -mcpu=tt-bh -fno-tree-loop-distribute-patterns -Winvalid-pch -Wno-error=invalid-pch -I. -I.. -I/var/tmp/fasth3/t288/b/ -I/var/tmp/fasth3/t288/b/ttnn -I/var/tmp/fasth3/t288/b/ttnn/cpp -I/var/tmp/fasth3/t288/b/tt_metal -I/var/tmp/fasth3/t288/b/tt_metal/hw/inc -I/var/tmp/fasth3/t288/b/tt_metal/tt-llk/common -I/var/tmp/fasth3/t288/b/tt_metal/tt-llk/tools/include -I/var/tmp/fasth3/t288/b/tt_metal/hostdevcommon/api -I/var/tmp/fasth3/t288/b/tt_metal/api/ -I/var/tmp/fasth3/t288/b/tt_metal/hw/ckernels/blackhole/metal/common -I/var/tmp/fasth3/t288/b/tt_metal/hw/ckernels/blackhole/metal/llk_io -I/var/tmp/fasth3/t288/b/tt_metal/hw/inc/internal/tt-1xx -I/var/tmp/fasth3/t288/b/tt_metal/hw/inc/internal/tt-1xx/blackhole -I/var/tmp/fasth3/t288/b/tt_metal/hw/inc/internal/tt-1xx/blackhole/blackhole_defines -I/var/tmp/fasth3/t288/b/tt_metal/hw/inc/internal/tt-1xx/blackhole/noc -I/var/tmp/fasth3/t288/b/tt_metal/tt-llk/tt_llk_blackhole/common/inc -I/var/tmp/fasth3/t288/b/tt_metal/tt-llk/tt_llk_blackhole/llk_lib -I/var/tmp/fasth3/t288/b/tt_metal/tt-llk/tt_llk_blackhole/llk_lib/hal -I/var/tmp/fasth3/t288/b/tt_metal/hw/firmware/src/tt-1xx -I/var/tmp/fasth3/t288/b/ttnn/cpp/ttnn/operations/experimental/minimal_matmul/device/kernels -include /var/tmp/fasth3/cache/tt-metal-cache-h3hf/tt-metal-cache/pch/9a5f53ec9f7b2c44/pch.h -DIS_NOT_POW2_NUM_L1_BANKS=1 -DLOG_BASE_2_OF_NUM_DRAM_BANKS=3 -DNUM_DRAM_BANKS=8 -DNUM_L1_BANKS=120 -DPCIE_NOC_X=19 -DPCIE_NOC_Y=24 -DTENSIX_FIRMWARE -DLOCAL_MEM_EN=0 -DPROCESSOR_INDEX=0 -DCOMPILE_FOR_BRISC -DPROGRAMMABLE_CORE_TYPE=0 -DARCH_BLACKHOLE -DDISPATCH_MESSAGE_ADDR=4290184248 -DKERNEL_BUILD -DFUSE_BIAS=1 -DNOC_INDEX=0 -DNOC_MODE=0 -DFULL_KERNEL_NAME="dm_in0_sender_metal2/850272692003226896/" -DKERNEL_COMPILE_TIME_ARGS=2,2048,2,2048,2,2048 -include named_ct_arg_map_generated.h -c -o /var/tmp/fasth3/cache/tt-metal-cache-h3hf/tt-metal-cache9268051462127607463/kernels/dm_in0_sender_metal2/850272692003226896/brisc/brisck.17351952906995265195_59310.o /var/tmp/fasth3/t288/b/tt_metal/hw/firmware/src/tt-1xx/brisck.cc -MF /var/tmp/fasth3/cache/tt-metal-cache-h3hf/tt-metal-cache9268051462127607463/kernels/dm_in0_sender_metal2/850272692003226896/brisc/brisck.17351952906995265195_59310.d
+In file included from ../kernel_includes.hpp:4,
+                 from /var/tmp/fasth3/t288/b/tt_metal/hw/firmware/src/tt-1xx/brisck.cc:21:
+/var/tmp/fasth3/t288/b/ttnn/cpp/ttnn/operations/experimental/minimal_matmul/device/kernels/dm_in0_sender_metal2.cpp: In function 'void kernel_main()':
+/var/tmp/fasth3/t288/b/ttnn/cpp/ttnn/operations/experimental/minimal_matmul/device/kernels/dm_in0_sender_metal2.cpp:76:10: warning: variable 'outputs_tuple' set but not used [-Wunused-but-set-variable]
+   76 |     auto outputs_tuple = make_tensor_accessors(tensor::outputs);
+      |          ^~~~~~~~~~~~~
+/var/tmp/fasth3/t288/b/ttnn/cpp/ttnn/operations/experimental/minimal_matmul/device/kernels/dm_in0_sender_metal2.cpp:203:14: warning: variable 'defer_write_m_tile' set but not used [-Wunused-but-set-variable]
+  203 |     uint32_t defer_write_m_tile = 0;
+      |              ^~~~~~~~~~~~~~~~~~
+/var/tmp/fasth3/t288/b/ttnn/cpp/ttnn/operations/experimental/minimal_matmul/device/kernels/dm_in0_sender_metal2.cpp:204:14: warning: variable 'defer_write_m_tile_end' set but not used [-Wunused-but-set-variable]
+  204 |     uint32_t defer_write_m_tile_end = 0;
+      |              ^~~~~~~~~~~~~~~~~~~~~~
+/var/tmp/fasth3/t288/b/ttnn/cpp/ttnn/operations/experimental/minimal_matmul/device/kernels/dm_in0_sender_metal2.cpp:205:14: warning: variable 'defer_write_n_tile' set but not used [-Wunused-but-set-variable]
+  205 |     uint32_t defer_write_n_tile = 0;
+      |              ^~~~~~~~~~~~~~~~~~
+/var/tmp/fasth3/t288/b/ttnn/cpp/ttnn/operations/experimental/minimal_matmul/device/kernels/dm_in0_sender_metal2.cpp:206:14: warning: variable 'defer_write_n_tile_end' set but not used [-Wunused-but-set-variable]
+  206 |     uint32_t defer_write_n_tile_end = 0;
+      |              ^~~~~~~~~~~~~~~~~~~~~~
+Building ncrisc, compile step:
+/var/tmp/fasth3/t288/b/runtime/sfpi/compiler/bin/riscv-tt-elf-g++ -O2 -std=c++17 -ftt-nttp -ftt-constinit -ftt-consteval -ftt-no-dyninit -flto=1 -flto-partition=one -ffast-math -fno-finite-math-only -fsigned-zeros -fno-associative-math -fno-exceptions -fno-rtti -fno-use-cxa-atexit -g -MMD -Wall -Werror -Wno-error=deprecated-declarations -Wno-error=multistatement-macros -Wno-error=parentheses -Wno-error=unused-but-set-variable -Wno-unused-variable -Wno-unused-function --param=min-pagesize=0 -mcpu=tt-bh -fno-tree-loop-distribute-patterns -Winvalid-pch -Wno-error=invalid-pch -I. -I.. -I/var/tmp/fasth3/t288/b/ -I/var/tmp/fasth3/t288/b/ttnn -I/var/tmp/fasth3/t288/b/ttnn/cpp -I/var/tmp/fasth3/t288/b/tt_metal -I/var/tmp/fasth3/t288/b/tt_metal/hw/inc -I/var/tmp/fasth3/t288/b/tt_metal/tt-llk/common -I/var/tmp/fasth3/t288/b/tt_metal/tt-llk/tools/include -I/var/tmp/fasth3/t288/b/tt_metal/hostdevcommon/api -I/var/tmp/fasth3/t288/b/tt_metal/api/ -I/var/tmp/fasth3/t288/b/tt_metal/hw/ckernels/blackhole/metal/common -I/var/tmp/fasth3/t288/b/tt_metal/hw/ckernels/blackhole/metal/llk_io -I/var/tmp/fasth3/t288/b/tt_metal/hw/inc/internal/tt-1xx -I/var/tmp/fasth3/t288/b/tt_metal/hw/inc/internal/tt-1xx/blackhole -I/var/tmp/fasth3/t288/b/tt_metal/hw/inc/internal/tt-1xx/blackhole/blackhole_defines -I/var/tmp/fasth3/t288/b/tt_metal/hw/inc/internal/tt-1xx/blackhole/noc -I/var/tmp/fasth3/t288/b/tt_metal/tt-llk/tt_llk_blackhole/common/inc -I/var/tmp/fasth3/t288/b/tt_metal/tt-llk/tt_llk_blackhole/llk_lib -I/var/tmp/fasth3/t288/b/tt_metal/tt-llk/tt_llk_blackhole/llk_lib/hal -I/var/tmp/fasth3/t288/b/tt_metal/hw/firmware/src/tt-1xx -I/var/tmp/fasth3/t288/b/ttnn/cpp/ttnn/operations/experimental/minimal_matmul/device/kernels -include /var/tmp/fasth3/cache/tt-metal-cache-h3hf/tt-metal-cache/pch/9a5f53ec9f7b2c44/pch.h -DIS_NOT_POW2_NUM_L1_BANKS=1 -DLOG_BASE_2_OF_NUM_DRAM_BANKS=3 -DNUM_DRAM_BANKS=8 -DNUM_L1_BANKS=120 -DPCIE_NOC_X=19 -DPCIE_NOC_Y=24 -DTENSIX_FIRMWARE -DLOCAL_MEM_EN=0 -DPROCESSOR_INDEX=1 -DCOMPILE_FOR_NCRISC -DPROGRAMMABLE_CORE_TYPE=0 -DARCH_BLACKHOLE -DDISPATCH_MESSAGE_ADDR=4290184248 -DKERNEL_BUILD -DFUSE_BIAS=1 -DIS_OUTPUT_WRITER=1 -DNOC_INDEX=1 -DNOC_MODE=0 -DFULL_KERNEL_NAME="dm_in1_sender_out_metal2/6478911535046219829/" -DKERNEL_COMPILE_TIME_ARGS=2,2048,2,2048,2,2048 -include named_ct_arg_map_generated.h -c -o /var/tmp/fasth3/cache/tt-metal-cache-h3hf/tt-metal-cache9268051462127607463/kernels/dm_in1_sender_out_metal2/6478911535046219829/ncrisc/ncrisck.17351952906995265195_59310.o /var/tmp/fasth3/t288/b/tt_metal/hw/firmware/src/tt-1xx/ncrisck.cc -MF /var/tmp/fasth3/cache/tt-metal-cache-h3hf/tt-metal-cache9268051462127607463/kernels/dm_in1_sender_out_metal2/6478911535046219829/ncrisc/ncrisck.17351952906995265195_59310.d
+In file included from ../kernel_includes.hpp:4,
+                 from /var/tmp/fasth3/t288/b/tt_metal/hw/firmware/src/tt-1xx/ncrisck.cc:23:
+/var/tmp/fasth3/t288/b/ttnn/cpp/ttnn/operations/experimental/minimal_matmul/device/kernels/dm_in1_sender_out_metal2.cpp: In function 'void kernel_main()':
+/var/tmp/fasth3/t288/b/ttnn/cpp/ttnn/operations/experimental/minimal_matmul/device/kernels/dm_in1_sender_out_metal2.cpp:79:16: warning: variable 'in2_reader' set but not used [-Wunused-but-set-variable]
+   79 |     const auto in2_reader = TensorAccessor(tensor::in2);
+      |                ^~~~~~~~~~
+Building brisc, compile step:
+/var/tmp/fasth3/t288/b/runtime/sfpi/compiler/bin/riscv-tt-elf-g++ -O2 -std=c++17 -ftt-nttp -ftt-constinit -ftt-consteval -ftt-no-dyninit -flto=1 -flto-partition=one -ffast-math -fno-finite-math-only -fsigned-zeros -fno-associative-math -fno-exceptions -fno-rtti -fno-use-cxa-atexit -g -MMD -Wall -Werror -Wno-error=deprecated-declarations -Wno-error=multistatement-macros -Wno-error=parentheses -Wno-error=unused-but-set-variable -Wno-unused-variable -Wno-unused-function --param=min-pagesize=0 -mcpu=tt-bh -fno-tree-loop-distribute-patterns -Winvalid-pch -Wno-error=invalid-pch -I. -I.. -I/var/tmp/fasth3/t288/b/ -I/var/tmp/fasth3/t288/b/ttnn -I/var/tmp/fasth3/t288/b/ttnn/cpp -I/var/tmp/fasth3/t288/b/tt_metal -I/var/tmp/fasth3/t288/b/tt_metal/hw/inc -I/var/tmp/fasth3/t288/b/tt_metal/tt-llk/common -I/var/tmp/fasth3/t288/b/tt_metal/tt-llk/tools/include -I/var/tmp/fasth3/t288/b/tt_metal/hostdevcommon/api -I/var/tmp/fasth3/t288/b/tt_metal/api/ -I/var/tmp/fasth3/t288/b/tt_metal/hw/ckernels/blackhole/metal/common -I/var/tmp/fasth3/t288/b/tt_metal/hw/ckernels/blackhole/metal/llk_io -I/var/tmp/fasth3/t288/b/tt_metal/hw/inc/internal/tt-1xx -I/var/tmp/fasth3/t288/b/tt_metal/hw/inc/internal/tt-1xx/blackhole -I/var/tmp/fasth3/t288/b/tt_metal/hw/inc/internal/tt-1xx/blackhole/blackhole_defines -I/var/tmp/fasth3/t288/b/tt_metal/hw/inc/internal/tt-1xx/blackhole/noc -I/var/tmp/fasth3/t288/b/tt_metal/tt-llk/tt_llk_blackhole/common/inc -I/var/tmp/fasth3/t288/b/tt_metal/tt-llk/tt_llk_blackhole/llk_lib -I/var/tmp/fasth3/t288/b/tt_metal/tt-llk/tt_llk_blackhole/llk_lib/hal -I/var/tmp/fasth3/t288/b/tt_metal/hw/firmware/src/tt-1xx -I/var/tmp/fasth3/t288/b/ttnn/cpp/ttnn/operations/experimental/minimal_matmul/device/kernels -include /var/tmp/fasth3/cache/tt-metal-cache-h3hf/tt-metal-cache/pch/9a5f53ec9f7b2c44/pch.h -DIS_NOT_POW2_NUM_L1_BANKS=1 -DLOG_BASE_2_OF_NUM_DRAM_BANKS=3 -DNUM_DRAM_BANKS=8 -DNUM_L1_BANKS=120 -DPCIE_NOC_X=19 -DPCIE_NOC_Y=24 -DTENSIX_FIRMWARE -DLOCAL_MEM_EN=0 -DPROCESSOR_INDEX=0 -DCOMPILE_FOR_BRISC -DPROGRAMMABLE_CORE_TYPE=0 -DARCH_BLACKHOLE -DDISPATCH_MESSAGE_ADDR=4290184248 -DKERNEL_BUILD -DFUSE_BIAS=1 -DNOC_INDEX=0 -DNOC_MODE=0 -DFULL_KERNEL_NAME="dm_in0_sender_metal2/9220062426086727994/" -DKERNEL_COMPILE_TIME_ARGS=2,2048,2,2048,2,2048 -include named_ct_arg_map_generated.h -c -o /var/tmp/fasth3/cache/tt-metal-cache-h3hf/tt-metal-cache9268051462127607463/kernels/dm_in0_sender_metal2/9220062426086727994/brisc/brisck.17351952906995265195_59310.o /var/tmp/fasth3/t288/b/tt_metal/hw/firmware/src/tt-1xx/brisck.cc -MF /var/tmp/fasth3/cache/tt-metal-cache-h3hf/tt-metal-cache9268051462127607463/kernels/dm_in0_sender_metal2/9220062426086727994/brisc/brisck.17351952906995265195_59310.d
+In file included from ../kernel_includes.hpp:4,
+                 from /var/tmp/fasth3/t288/b/tt_metal/hw/firmware/src/tt-1xx/brisck.cc:21:
+/var/tmp/fasth3/t288/b/ttnn/cpp/ttnn/operations/experimental/minimal_matmul/device/kernels/dm_in0_sender_metal2.cpp: In function 'void kernel_main()':
+/var/tmp/fasth3/t288/b/ttnn/cpp/ttnn/operations/experimental/minimal_matmul/device/kernels/dm_in0_sender_metal2.cpp:76:10: warning: variable 'outputs_tuple' set but not used [-Wunused-but-set-variable]
+   76 |     auto outputs_tuple = make_tensor_accessors(tensor::outputs);
+      |          ^~~~~~~~~~~~~
+/var/tmp/fasth3/t288/b/ttnn/cpp/ttnn/operations/experimental/minimal_matmul/device/kernels/dm_in0_sender_metal2.cpp:203:14: warning: variable 'defer_write_m_tile' set but not used [-Wunused-but-set-variable]
+  203 |     uint32_t defer_write_m_tile = 0;
+      |              ^~~~~~~~~~~~~~~~~~
+/var/tmp/fasth3/t288/b/ttnn/cpp/ttnn/operations/experimental/minimal_matmul/device/kernels/dm_in0_sender_metal2.cpp:204:14: warning: variable 'defer_write_m_tile_end' set but not used [-Wunused-but-set-variable]
+  204 |     uint32_t defer_write_m_tile_end = 0;
+      |              ^~~~~~~~~~~~~~~~~~~~~~
+/var/tmp/fasth3/t288/b/ttnn/cpp/ttnn/operations/experimental/minimal_matmul/device/kernels/dm_in0_sender_metal2.cpp:205:14: warning: variable 'defer_write_n_tile' set but not used [-Wunused-but-set-variable]
+  205 |     uint32_t defer_write_n_tile = 0;
+      |              ^~~~~~~~~~~~~~~~~~
+/var/tmp/fasth3/t288/b/ttnn/cpp/ttnn/operations/experimental/minimal_matmul/device/kernels/dm_in0_sender_metal2.cpp:206:14: warning: variable 'defer_write_n_tile_end' set but not used [-Wunused-but-set-variable]
+  206 |     uint32_t defer_write_n_tile_end = 0;
+      |              ^~~~~~~~~~~~~~~~~~~~~~
+Building ncrisc, compile step:
+/var/tmp/fasth3/t288/b/runtime/sfpi/compiler/bin/riscv-tt-elf-g++ -O2 -std=c++17 -ftt-nttp -ftt-constinit -ftt-consteval -ftt-no-dyninit -flto=1 -flto-partition=one -ffast-math -fno-finite-math-only -fsigned-zeros -fno-associative-math -fno-exceptions -fno-rtti -fno-use-cxa-atexit -g -MMD -Wall -Werror -Wno-error=deprecated-declarations -Wno-error=multistatement-macros -Wno-error=parentheses -Wno-error=unused-but-set-variable -Wno-unused-variable -Wno-unused-function --param=min-pagesize=0 -mcpu=tt-bh -fno-tree-loop-distribute-patterns -Winvalid-pch -Wno-error=invalid-pch -I. -I.. -I/var/tmp/fasth3/t288/b/ -I/var/tmp/fasth3/t288/b/ttnn -I/var/tmp/fasth3/t288/b/ttnn/cpp -I/var/tmp/fasth3/t288/b/tt_metal -I/var/tmp/fasth3/t288/b/tt_metal/hw/inc -I/var/tmp/fasth3/t288/b/tt_metal/tt-llk/common -I/var/tmp/fasth3/t288/b/tt_metal/tt-llk/tools/include -I/var/tmp/fasth3/t288/b/tt_metal/hostdevcommon/api -I/var/tmp/fasth3/t288/b/tt_metal/api/ -I/var/tmp/fasth3/t288/b/tt_metal/hw/ckernels/blackhole/metal/common -I/var/tmp/fasth3/t288/b/tt_metal/hw/ckernels/blackhole/metal/llk_io -I/var/tmp/fasth3/t288/b/tt_metal/hw/inc/internal/tt-1xx -I/var/tmp/fasth3/t288/b/tt_metal/hw/inc/internal/tt-1xx/blackhole -I/var/tmp/fasth3/t288/b/tt_metal/hw/inc/internal/tt-1xx/blackhole/blackhole_defines -I/var/tmp/fasth3/t288/b/tt_metal/hw/inc/internal/tt-1xx/blackhole/noc -I/var/tmp/fasth3/t288/b/tt_metal/tt-llk/tt_llk_blackhole/common/inc -I/var/tmp/fasth3/t288/b/tt_metal/tt-llk/tt_llk_blackhole/llk_lib -I/var/tmp/fasth3/t288/b/tt_metal/tt-llk/tt_llk_blackhole/llk_lib/hal -I/var/tmp/fasth3/t288/b/tt_metal/hw/firmware/src/tt-1xx -I/var/tmp/fasth3/t288/b/ttnn/cpp/ttnn/operations/experimental/minimal_matmul/device/kernels -include /var/tmp/fasth3/cache/tt-metal-cache-h3hf/tt-metal-cache/pch/9a5f53ec9f7b2c44/pch.h -DIS_NOT_POW2_NUM_L1_BANKS=1 -DLOG_BASE_2_OF_NUM_DRAM_BANKS=3 -DNUM_DRAM_BANKS=8 -DNUM_L1_BANKS=120 -DPCIE_NOC_X=19 -DPCIE_NOC_Y=24 -DTENSIX_FIRMWARE -DLOCAL_MEM_EN=0 -DPROCESSOR_INDEX=1 -DCOMPILE_FOR_NCRISC -DPROGRAMMABLE_CORE_TYPE=0 -DARCH_BLACKHOLE -DDISPATCH_MESSAGE_ADDR=4290184248 -DKERNEL_BUILD -DFUSE_BIAS=1 -DIS_OUTPUT_WRITER=1 -DNOC_INDEX=1 -DNOC_MODE=0 -DFULL_KERNEL_NAME="dm_in1_sender_out_metal2/16085277731652037711/" -DKERNEL_COMPILE_TIME_ARGS=2,2048,2,2048,2,2048 -include named_ct_arg_map_generated.h -c -o /var/tmp/fasth3/cache/tt-metal-cache-h3hf/tt-metal-cache9268051462127607463/kernels/dm_in1_sender_out_metal2/16085277731652037711/ncrisc/ncrisck.17351952906995265195_59310.o /var/tmp/fasth3/t288/b/tt_metal/hw/firmware/src/tt-1xx/ncrisck.cc -MF /var/tmp/fasth3/cache/tt-metal-cache-h3hf/tt-metal-cache9268051462127607463/kernels/dm_in1_sender_out_metal2/16085277731652037711/ncrisc/ncrisck.17351952906995265195_59310.d
+In file included from ../kernel_includes.hpp:4,
+                 from /var/tmp/fasth3/t288/b/tt_metal/hw/firmware/src/tt-1xx/ncrisck.cc:23:
+/var/tmp/fasth3/t288/b/ttnn/cpp/ttnn/operations/experimental/minimal_matmul/device/kernels/dm_in1_sender_out_metal2.cpp: In function 'void kernel_main()':
+/var/tmp/fasth3/t288/b/ttnn/cpp/ttnn/operations/experimental/minimal_matmul/device/kernels/dm_in1_sender_out_metal2.cpp:79:16: warning: variable 'in2_reader' set but not used [-Wunused-but-set-variable]
+   79 |     const auto in2_reader = TensorAccessor(tensor::in2);
+      |                ^~~~~~~~~~
+2026-10-11 05:50:35.720 | info     |    BuildKernels | compiled dm_in0_sender_metal2/850272692003226896/ in 455 ms (build.cpp:1113)
+2026-10-11 05:50:35.755 | info     |    BuildKernels | compiled dm_in0_sender_metal2/9220062426086727994/ in 490 ms (build.cpp:1113)
+2026-10-11 05:50:35.758 | info     |    BuildKernels | compiled dm_in1_sender_out_metal2/6478911535046219829/ in 493 ms (build.cpp:1113)
+2026-10-11 05:50:35.769 | info     |    BuildKernels | compiled dm_in1_sender_out_metal2/16085277731652037711/ in 504 ms (build.cpp:1113)
+2026-10-11 05:50:36.192 | info     |    BuildKernels | compiled minimal_default_reader/3464033626493753208/ in 382 ms (build.cpp:1113)
+2026-10-11 05:50:36.198 | info     |    BuildKernels | compiled minimal_default_reader/4210039879713364199/ in 388 ms (build.cpp:1113)
+2026-10-11 05:50:36.198 | info     |    BuildKernels | compiled minimal_default_reader/5384284877700250257/ in 387 ms (build.cpp:1113)
+2026-10-11 05:50:36.198 | info     |    BuildKernels | compiled minimal_default_reader/18312837599462798478/ in 387 ms (build.cpp:1113)
+2026-10-11 05:50:36.199 | info     |    BuildKernels | compiled minimal_default_reader/9866084052996171891/ in 390 ms (build.cpp:1113)
+2026-10-11 05:50:36.200 | info     |    BuildKernels | compiled minimal_default_reader/6688406986952472604/ in 390 ms (build.cpp:1113)
+2026-10-11 05:50:36.203 | info     |    BuildKernels | compiled minimal_default_reader/7496481435522850170/ in 392 ms (build.cpp:1113)
+2026-10-11 05:50:36.207 | info     |    BuildKernels | compiled minimal_default_reader/15291998754152463144/ in 396 ms (build.cpp:1113)
+2026-10-11 05:50:37.095 | info     |    BuildKernels | compiled minimal_default_writer/1714752481201645305/ in 1284 ms (build.cpp:1113)
+2026-10-11 05:50:37.103 | info     |    BuildKernels | compiled minimal_default_writer/5100636188280862828/ in 1294 ms (build.cpp:1113)
+2026-10-11 05:50:37.109 | info     |    BuildKernels | compiled minimal_default_writer/16905593286279994153/ in 1297 ms (build.cpp:1113)
+2026-10-11 05:50:37.112 | info     |    BuildKernels | compiled minimal_default_writer/10050393697431689591/ in 1301 ms (build.cpp:1113)
+2026-10-11 05:50:37.114 | info     |    BuildKernels | compiled minimal_default_writer/9241398088554111775/ in 1304 ms (build.cpp:1113)
+2026-10-11 05:50:37.130 | info     |    BuildKernels | compiled minimal_default_writer/10064452798511877393/ in 1319 ms (build.cpp:1113)
+2026-10-11 05:50:37.133 | info     |    BuildKernels | compiled minimal_default_writer/14695181727753380503/ in 1324 ms (build.cpp:1113)
+2026-10-11 05:50:37.143 | info     |    BuildKernels | compiled minimal_default_writer/5783337861905698811/ in 1333 ms (build.cpp:1113)
+2026-10-11 05:50:37.620 | info     |    BuildKernels | compiled minimal_default_reader/5076914163067427280/ in 388 ms (build.cpp:1113)
+2026-10-11 05:50:37.620 | info     |    BuildKernels | compiled minimal_default_reader/14444117880046488921/ in 387 ms (build.cpp:1113)
+2026-10-11 05:50:37.621 | info     |    BuildKernels | compiled minimal_default_reader/11900887677188814968/ in 389 ms (build.cpp:1113)
+2026-10-11 05:50:37.621 | info     |    BuildKernels | compiled minimal_default_reader/15263235266675975313/ in 388 ms (build.cpp:1113)
+2026-10-11 05:50:37.622 | info     |    BuildKernels | compiled minimal_default_reader/2086456497103203296/ in 388 ms (build.cpp:1113)
+2026-10-11 05:50:37.623 | info     |    BuildKernels | compiled minimal_default_reader/4229475461583074437/ in 391 ms (build.cpp:1113)
+2026-10-11 05:50:37.625 | info     |    BuildKernels | compiled minimal_default_reader/11537294398919739406/ in 394 ms (build.cpp:1113)
+2026-10-11 05:50:37.626 | info     |    BuildKernels | compiled minimal_default_reader/4324994435722786545/ in 394 ms (build.cpp:1113)
+2026-10-11 05:50:38.528 | info     |    BuildKernels | compiled minimal_default_writer/10118967453498791523/ in 1295 ms (build.cpp:1113)
+2026-10-11 05:50:38.534 | info     |    BuildKernels | compiled minimal_default_writer/14826346395671788981/ in 1301 ms (build.cpp:1113)
+2026-10-11 05:50:38.534 | info     |    BuildKernels | compiled minimal_default_writer/8808193490407255127/ in 1300 ms (build.cpp:1113)
+2026-10-11 05:50:38.535 | info     |    BuildKernels | compiled minimal_default_writer/2079225586651514712/ in 1302 ms (build.cpp:1113)
+2026-10-11 05:50:38.537 | info     |    BuildKernels | compiled minimal_default_writer/13368294546434853498/ in 1304 ms (build.cpp:1113)
+2026-10-11 05:50:38.537 | info     |    BuildKernels | compiled minimal_default_writer/18222416539414402595/ in 1305 ms (build.cpp:1113)
+2026-10-11 05:50:38.550 | info     |    BuildKernels | compiled minimal_default_writer/4344409783535473152/ in 1316 ms (build.cpp:1113)
+2026-10-11 05:50:38.566 | info     |    BuildKernels | compiled minimal_default_writer/8005364435652777062/ in 1334 ms (build.cpp:1113)
+
+[A[KDenoising: 100%|██████████| 1/1 [00:20<00:00, 20.88s/it]
+[A[A[KDenoising: 100%|██████████| 1/1 [00:20<00:00, 20.88s/it]
+
+2026-10-11 05:50:38.787 | warning  |              Op | The following ttnn.all_gather args are deprecated and will be removed in September-2026: num_links, topology, chunks_per_sync, num_workers_per_link, num_buffers_per_channel, use_l1_small_for_semaphores. (all_gather.cpp:148)
+2026-10-11 05:50:38.790 | warning  |              Op | The following ttnn.all_gather args are deprecated and will be removed in September-2026: num_links, topology, chunks_per_sync, num_workers_per_link, num_buffers_per_channel, use_l1_small_for_semaphores. (all_gather.cpp:148)
+2026-10-11 05:50:38.791 | warning  |              Op | The following ttnn.all_gather args are deprecated and will be removed in September-2026: num_links, topology, chunks_per_sync, num_workers_per_link, num_buffers_per_channel, use_l1_small_for_semaphores. (all_gather.cpp:148)
+2026-10-11 05:50:38.854 | warning  |              Op | The following ttnn.all_gather args are deprecated and will be removed in September-2026: num_links, topology, chunks_per_sync, num_workers_per_link, num_buffers_per_channel, use_l1_small_for_semaphores. (all_gather.cpp:148)
+2026-10-11 05:50:38.859 | warning  |              Op | The following ttnn.all_gather args are deprecated and will be removed in September-2026: num_links, topology, chunks_per_sync, num_workers_per_link, num_buffers_per_channel, use_l1_small_for_semaphores. (all_gather.cpp:148)
+2026-10-11 05:50:38.859 | warning  |              Op | The following ttnn.all_gather args are deprecated and will be removed in September-2026: num_links, topology, chunks_per_sync, num_workers_per_link, num_buffers_per_channel, use_l1_small_for_semaphores. (all_gather.cpp:148)
+2026-10-11 05:50:38.947 | warning  |              Op | The following ttnn.all_gather args are deprecated and will be removed in September-2026: num_links, topology, chunks_per_sync, num_workers_per_link, num_buffers_per_channel, use_l1_small_for_semaphores. (all_gather.cpp:148)
+2026-10-11 05:50:38.952 | warning  |              Op | The following ttnn.all_gather args are deprecated and will be removed in September-2026: num_links, topology, chunks_per_sync, num_workers_per_link, num_buffers_per_channel, use_l1_small_for_semaphores. (all_gather.cpp:148)
+2026-10-11 05:50:38.952 | warning  |              Op | The following ttnn.all_gather args are deprecated and will be removed in September-2026: num_links, topology, chunks_per_sync, num_workers_per_link, num_buffers_per_channel, use_l1_small_for_semaphores. (all_gather.cpp:148)
+2026-10-11 05:50:39.084 | warning  |              Op | The following ttnn.all_gather args are deprecated and will be removed in September-2026: num_links, topology, chunks_per_sync, num_workers_per_link, num_buffers_per_channel, use_l1_small_for_semaphores. (all_gather.cpp:148)
+2026-10-11 05:50:39.088 | warning  |              Op | The following ttnn.all_gather args are deprecated and will be removed in September-2026: num_links, topology, chunks_per_sync, num_workers_per_link, num_buffers_per_channel, use_l1_small_for_semaphores. (all_gather.cpp:148)
+2026-10-11 05:50:39.089 | warning  |              Op | The following ttnn.all_gather args are deprecated and will be removed in September-2026: num_links, topology, chunks_per_sync, num_workers_per_link, num_buffers_per_channel, use_l1_small_for_semaphores. (all_gather.cpp:148)
+[A[KInitializing bucket buffers: 120320,38912: 100%|██████████| 2/2 [00:35<00:00, 18.72s/it]
+[A[KInitializing bucket buffers: 120320,38912: 100%|██████████| 2/2 [00:35<00:00, 17.69s/it]
+
+
+[A[KCapturing audio decode traces:   0%|          | 0/12 [00:00<?, ?it/s]
+2026-10-11 05:50:39.805 | DEBUG    | models.tt_dit.utils.tracing:_capture:279 - capturing trace...
+[A[KCapturing audio decode traces:   8%|▊         | 1/12 [00:03<00:41,  3.75s/it]
+2026-10-11 05:50:43.550 | warning  |           Metal | Allocating device buffers is potentially unsafe due to the existence of an active trace. These buffers may be corrupted once a trace is executed if they are not released before then. Use the trace allocation tracker to verify. (allocator.cpp:140)
+2026-10-11 05:50:43.556 | DEBUG    | models.tt_dit.utils.tracing:_capture:279 - capturing trace...
+[A[KCapturing audio decode traces:  17%|█▋        | 2/12 [00:05<00:27,  2.79s/it]
+2026-10-11 05:50:45.677 | DEBUG    | models.tt_dit.utils.tracing:_capture:279 - capturing trace...
+[A[KCapturing audio decode traces:  25%|██▌       | 3/12 [00:09<00:29,  3.25s/it]
+2026-10-11 05:50:49.472 | DEBUG    | models.tt_dit.utils.tracing:_capture:279 - capturing trace...
+[A[KCapturing audio decode traces:  33%|███▎      | 4/12 [00:13<00:28,  3.51s/it]
+2026-10-11 05:50:53.381 | DEBUG    | models.tt_dit.utils.tracing:_capture:279 - capturing trace...
+[A[KCapturing audio decode traces:  42%|████▏     | 5/12 [00:15<00:21,  3.08s/it]
+2026-10-11 05:50:55.689 | DEBUG    | models.tt_dit.utils.tracing:_capture:279 - capturing trace...
+[A[KCapturing audio decode traces:  50%|█████     | 6/12 [00:19<00:20,  3.38s/it]
+2026-10-11 05:50:59.648 | DEBUG    | models.tt_dit.utils.tracing:_capture:279 - capturing trace...
+[A[KCapturing audio decode traces:  58%|█████▊    | 7/12 [00:23<00:17,  3.56s/it]
+2026-10-11 05:51:03.582 | DEBUG    | models.tt_dit.utils.tracing:_capture:279 - capturing trace...
+[A[KCapturing audio decode traces:  67%|██████▋   | 8/12 [00:27<00:14,  3.69s/it]
+2026-10-11 05:51:07.538 | DEBUG    | models.tt_dit.utils.tracing:_capture:279 - capturing trace...
+[A[KCapturing audio decode traces:  75%|███████▌  | 9/12 [00:31<00:11,  3.79s/it]
+2026-10-11 05:51:11.568 | DEBUG    | models.tt_dit.utils.tracing:_capture:279 - capturing trace...
+[A[KCapturing audio decode traces:  83%|████████▎ | 10/12 [00:35<00:07,  3.87s/it]
+2026-10-11 05:51:15.601 | DEBUG    | models.tt_dit.utils.tracing:_capture:279 - capturing trace...
+[A[KCapturing audio decode traces:  92%|█████████▏| 11/12 [00:39<00:03,  3.92s/it]
+2026-10-11 05:51:19.647 | DEBUG    | models.tt_dit.utils.tracing:_capture:279 - capturing trace...
+[A[KCapturing audio decode traces: 100%|██████████| 12/12 [00:43<00:00,  3.97s/it]
+[A[KCapturing audio decode traces: 100%|██████████| 12/12 [00:43<00:00,  3.66s/it]
+
+2026-10-11 05:51:23.701 | INFO     | models.tt_dit.pipelines.minimax_h3.pipeline_minimax_h3:_host_log:859 - audio decode traces captured: 12
+[t286] construction warmup done at 204 s
+[t286] seq_len 37749 -> rung 38912
+
+[A[KDenoising:   0%|          | 0/4 [00:00<?, ?it/s]
+[A[KDenoising:  25%|██▌       | 1/4 [00:01<00:03,  1.23s/it]
+[A[KDenoising:  50%|█████     | 2/4 [00:02<00:02,  1.22s/it]
+[A[KDenoising:  75%|███████▌  | 3/4 [00:03<00:01,  1.22s/it]
+[A[KDenoising: 100%|██████████| 4/4 [00:04<00:00,  1.22s/it]
+[A[KDenoising: 100%|██████████| 4/4 [00:04<00:00,  1.22s/it]
+
+2026-10-11 05:51:29.254 | warning  |              Op | The following ttnn.all_gather args are deprecated and will be removed in September-2026: num_links, topology, chunks_per_sync, num_workers_per_link, num_buffers_per_channel, use_l1_small_for_semaphores. (all_gather.cpp:148)
+2026-10-11 05:51:29.258 | warning  |              Op | The following ttnn.all_gather args are deprecated and will be removed in September-2026: num_links, topology, chunks_per_sync, num_workers_per_link, num_buffers_per_channel, use_l1_small_for_semaphores. (all_gather.cpp:148)
+2026-10-11 05:51:29.259 | warning  |              Op | The following ttnn.all_gather args are deprecated and will be removed in September-2026: num_links, topology, chunks_per_sync, num_workers_per_link, num_buffers_per_channel, use_l1_small_for_semaphores. (all_gather.cpp:148)
+2026-10-11 05:51:29.331 | warning  |              Op | The following ttnn.all_gather args are deprecated and will be removed in September-2026: num_links, topology, chunks_per_sync, num_workers_per_link, num_buffers_per_channel, use_l1_small_for_semaphores. (all_gather.cpp:148)
+2026-10-11 05:51:29.337 | warning  |              Op | The following ttnn.all_gather args are deprecated and will be removed in September-2026: num_links, topology, chunks_per_sync, num_workers_per_link, num_buffers_per_channel, use_l1_small_for_semaphores. (all_gather.cpp:148)
+2026-10-11 05:51:29.337 | warning  |              Op | The following ttnn.all_gather args are deprecated and will be removed in September-2026: num_links, topology, chunks_per_sync, num_workers_per_link, num_buffers_per_channel, use_l1_small_for_semaphores. (all_gather.cpp:148)
+2026-10-11 05:51:29.411 | warning  |              Op | The following ttnn.all_gather args are deprecated and will be removed in September-2026: num_links, topology, chunks_per_sync, num_workers_per_link, num_buffers_per_channel, use_l1_small_for_semaphores. (all_gather.cpp:148)
+2026-10-11 05:51:29.416 | warning  |              Op | The following ttnn.all_gather args are deprecated and will be removed in September-2026: num_links, topology, chunks_per_sync, num_workers_per_link, num_buffers_per_channel, use_l1_small_for_semaphores. (all_gather.cpp:148)
+2026-10-11 05:51:29.417 | warning  |              Op | The following ttnn.all_gather args are deprecated and will be removed in September-2026: num_links, topology, chunks_per_sync, num_workers_per_link, num_buffers_per_channel, use_l1_small_for_semaphores. (all_gather.cpp:148)
+2026-10-11 05:51:29.551 | warning  |              Op | The following ttnn.all_gather args are deprecated and will be removed in September-2026: num_links, topology, chunks_per_sync, num_workers_per_link, num_buffers_per_channel, use_l1_small_for_semaphores. (all_gather.cpp:148)
+2026-10-11 05:51:29.557 | warning  |              Op | The following ttnn.all_gather args are deprecated and will be removed in September-2026: num_links, topology, chunks_per_sync, num_workers_per_link, num_buffers_per_channel, use_l1_small_for_semaphores. (all_gather.cpp:148)
+2026-10-11 05:51:29.557 | warning  |              Op | The following ttnn.all_gather args are deprecated and will be removed in September-2026: num_links, topology, chunks_per_sync, num_workers_per_link, num_buffers_per_channel, use_l1_small_for_semaphores. (all_gather.cpp:148)
+2026-10-11 05:51:29.687 | warning  |              Op | The following ttnn.all_gather args are deprecated and will be removed in September-2026: num_links, topology, chunks_per_sync, num_workers_per_link, num_buffers_per_channel, use_l1_small_for_semaphores. (all_gather.cpp:148)
+2026-10-11 05:51:29.693 | warning  |              Op | The following ttnn.all_gather args are deprecated and will be removed in September-2026: num_links, topology, chunks_per_sync, num_workers_per_link, num_buffers_per_channel, use_l1_small_for_semaphores. (all_gather.cpp:148)
+2026-10-11 05:51:29.694 | warning  |              Op | The following ttnn.all_gather args are deprecated and will be removed in September-2026: num_links, topology, chunks_per_sync, num_workers_per_link, num_buffers_per_channel, use_l1_small_for_semaphores. (all_gather.cpp:148)
+2026-10-11 05:51:29.824 | warning  |              Op | The following ttnn.all_gather args are deprecated and will be removed in September-2026: num_links, topology, chunks_per_sync, num_workers_per_link, num_buffers_per_channel, use_l1_small_for_semaphores. (all_gather.cpp:148)
+2026-10-11 05:51:29.830 | warning  |              Op | The following ttnn.all_gather args are deprecated and will be removed in September-2026: num_links, topology, chunks_per_sync, num_workers_per_link, num_buffers_per_channel, use_l1_small_for_semaphores. (all_gather.cpp:148)
+2026-10-11 05:51:29.830 | warning  |              Op | The following ttnn.all_gather args are deprecated and will be removed in September-2026: num_links, topology, chunks_per_sync, num_workers_per_link, num_buffers_per_channel, use_l1_small_for_semaphores. (all_gather.cpp:148)
+2026-10-11 05:51:29.960 | warning  |              Op | The following ttnn.all_gather args are deprecated and will be removed in September-2026: num_links, topology, chunks_per_sync, num_workers_per_link, num_buffers_per_channel, use_l1_small_for_semaphores. (all_gather.cpp:148)
+2026-10-11 05:51:29.965 | warning  |              Op | The following ttnn.all_gather args are deprecated and will be removed in September-2026: num_links, topology, chunks_per_sync, num_workers_per_link, num_buffers_per_channel, use_l1_small_for_semaphores. (all_gather.cpp:148)
+2026-10-11 05:51:29.966 | warning  |              Op | The following ttnn.all_gather args are deprecated and will be removed in September-2026: num_links, topology, chunks_per_sync, num_workers_per_link, num_buffers_per_channel, use_l1_small_for_semaphores. (all_gather.cpp:148)
+[t286] generation compiled +1 programs
+[t286] seq_len 37749 -> rung 38912
+
+[A[KDenoising:   0%|          | 0/2 [00:00<?, ?it/s]
+[A[KDenoising:  50%|█████     | 1/2 [00:01<00:01,  1.23s/it]
+[A[KDenoising: 100%|██████████| 2/2 [00:02<00:00,  1.22s/it]
+[A[KDenoising: 100%|██████████| 2/2 [00:02<00:00,  1.22s/it]
+
+2026-10-11 05:51:33.529 | warning  |              Op | The following ttnn.all_gather args are deprecated and will be removed in September-2026: num_links, topology, chunks_per_sync, num_workers_per_link, num_buffers_per_channel, use_l1_small_for_semaphores. (all_gather.cpp:148)
+2026-10-11 05:51:33.533 | warning  |              Op | The following ttnn.all_gather args are deprecated and will be removed in September-2026: num_links, topology, chunks_per_sync, num_workers_per_link, num_buffers_per_channel, use_l1_small_for_semaphores. (all_gather.cpp:148)
+2026-10-11 05:51:33.534 | warning  |              Op | The following ttnn.all_gather args are deprecated and will be removed in September-2026: num_links, topology, chunks_per_sync, num_workers_per_link, num_buffers_per_channel, use_l1_small_for_semaphores. (all_gather.cpp:148)
+2026-10-11 05:51:33.606 | warning  |              Op | The following ttnn.all_gather args are deprecated and will be removed in September-2026: num_links, topology, chunks_per_sync, num_workers_per_link, num_buffers_per_channel, use_l1_small_for_semaphores. (all_gather.cpp:148)
+2026-10-11 05:51:33.612 | warning  |              Op | The following ttnn.all_gather args are deprecated and will be removed in September-2026: num_links, topology, chunks_per_sync, num_workers_per_link, num_buffers_per_channel, use_l1_small_for_semaphores. (all_gather.cpp:148)
+2026-10-11 05:51:33.612 | warning  |              Op | The following ttnn.all_gather args are deprecated and will be removed in September-2026: num_links, topology, chunks_per_sync, num_workers_per_link, num_buffers_per_channel, use_l1_small_for_semaphores. (all_gather.cpp:148)
+2026-10-11 05:51:33.692 | warning  |              Op | The following ttnn.all_gather args are deprecated and will be removed in September-2026: num_links, topology, chunks_per_sync, num_workers_per_link, num_buffers_per_channel, use_l1_small_for_semaphores. (all_gather.cpp:148)
+2026-10-11 05:51:33.698 | warning  |              Op | The following ttnn.all_gather args are deprecated and will be removed in September-2026: num_links, topology, chunks_per_sync, num_workers_per_link, num_buffers_per_channel, use_l1_small_for_semaphores. (all_gather.cpp:148)
+2026-10-11 05:51:33.698 | warning  |              Op | The following ttnn.all_gather args are deprecated and will be removed in September-2026: num_links, topology, chunks_per_sync, num_workers_per_link, num_buffers_per_channel, use_l1_small_for_semaphores. (all_gather.cpp:148)
+2026-10-11 05:51:33.826 | warning  |              Op | The following ttnn.all_gather args are deprecated and will be removed in September-2026: num_links, topology, chunks_per_sync, num_workers_per_link, num_buffers_per_channel, use_l1_small_for_semaphores. (all_gather.cpp:148)
+2026-10-11 05:51:33.831 | warning  |              Op | The following ttnn.all_gather args are deprecated and will be removed in September-2026: num_links, topology, chunks_per_sync, num_workers_per_link, num_buffers_per_channel, use_l1_small_for_semaphores. (all_gather.cpp:148)
+2026-10-11 05:51:33.832 | warning  |              Op | The following ttnn.all_gather args are deprecated and will be removed in September-2026: num_links, topology, chunks_per_sync, num_workers_per_link, num_buffers_per_channel, use_l1_small_for_semaphores. (all_gather.cpp:148)
+2026-10-11 05:51:33.962 | warning  |              Op | The following ttnn.all_gather args are deprecated and will be removed in September-2026: num_links, topology, chunks_per_sync, num_workers_per_link, num_buffers_per_channel, use_l1_small_for_semaphores. (all_gather.cpp:148)
+2026-10-11 05:51:33.968 | warning  |              Op | The following ttnn.all_gather args are deprecated and will be removed in September-2026: num_links, topology, chunks_per_sync, num_workers_per_link, num_buffers_per_channel, use_l1_small_for_semaphores. (all_gather.cpp:148)
+2026-10-11 05:51:33.968 | warning  |              Op | The following ttnn.all_gather args are deprecated and will be removed in September-2026: num_links, topology, chunks_per_sync, num_workers_per_link, num_buffers_per_channel, use_l1_small_for_semaphores. (all_gather.cpp:148)
+2026-10-11 05:51:34.099 | warning  |              Op | The following ttnn.all_gather args are deprecated and will be removed in September-2026: num_links, topology, chunks_per_sync, num_workers_per_link, num_buffers_per_channel, use_l1_small_for_semaphores. (all_gather.cpp:148)
+2026-10-11 05:51:34.104 | warning  |              Op | The following ttnn.all_gather args are deprecated and will be removed in September-2026: num_links, topology, chunks_per_sync, num_workers_per_link, num_buffers_per_channel, use_l1_small_for_semaphores. (all_gather.cpp:148)
+2026-10-11 05:51:34.105 | warning  |              Op | The following ttnn.all_gather args are deprecated and will be removed in September-2026: num_links, topology, chunks_per_sync, num_workers_per_link, num_buffers_per_channel, use_l1_small_for_semaphores. (all_gather.cpp:148)
+2026-10-11 05:51:34.234 | warning  |              Op | The following ttnn.all_gather args are deprecated and will be removed in September-2026: num_links, topology, chunks_per_sync, num_workers_per_link, num_buffers_per_channel, use_l1_small_for_semaphores. (all_gather.cpp:148)
+2026-10-11 05:51:34.240 | warning  |              Op | The following ttnn.all_gather args are deprecated and will be removed in September-2026: num_links, topology, chunks_per_sync, num_workers_per_link, num_buffers_per_channel, use_l1_small_for_semaphores. (all_gather.cpp:148)
+2026-10-11 05:51:34.240 | warning  |              Op | The following ttnn.all_gather args are deprecated and will be removed in September-2026: num_links, topology, chunks_per_sync, num_workers_per_link, num_buffers_per_channel, use_l1_small_for_semaphores. (all_gather.cpp:148)
+[t286] generation compiled +0 programs
+2026-10-11 05:51:34.605 | INFO     | models.tt_dit.pipelines.minimax_h3.pipeline_minimax_h3:_host_log:859 - t2va 1344x768, 124 frames (5.17 s), 37 latent frames, 207 audio latents, 5 steps, anchors=()
+2026-10-11 05:51:34.606 | INFO     | models.tt_dit.pipelines.minimax_h3.pipeline_minimax_h3:_host_log:859 - encoding 39 presentation tokens on device
+[t286] seq_len 37749 -> rung 38912
+2026-10-11 05:51:35.052 | INFO     | models.tt_dit.pipelines.minimax_h3.pipeline_minimax_h3:_host_log:859 - packed sequence 37749 -> bucket 38912, 4864 rows/device, 0 condition rows
+
+[A[KDenoising:   0%|          | 0/4 [00:00<?, ?it/s]
+[A[KDenoising:  25%|██▌       | 1/4 [00:01<00:03,  1.22s/it]
+[A[KDenoising:  50%|█████     | 2/4 [00:02<00:02,  1.22s/it]
+[A[KDenoising:  75%|███████▌  | 3/4 [00:03<00:01,  1.22s/it]
+[A[KDenoising: 100%|██████████| 4/4 [00:04<00:00,  1.22s/it]
+[A[KDenoising: 100%|██████████| 4/4 [00:04<00:00,  1.22s/it]
+
+2026-10-11 05:51:40.278 | INFO     | models.tt_dit.pipelines.minimax_h3.pipeline_minimax_h3:_host_log:859 - denoise breakdown: preamble 0.3s (rope 0.1s) | first step 1.2s | steady 3.7s over 3 steps (1221 ms/step)
+2026-10-11 05:51:40.390 | warning  |              Op | The following ttnn.all_gather args are deprecated and will be removed in September-2026: num_links, topology, chunks_per_sync, num_workers_per_link, num_buffers_per_channel, use_l1_small_for_semaphores. (all_gather.cpp:148)
+2026-10-11 05:51:40.394 | warning  |              Op | The following ttnn.all_gather args are deprecated and will be removed in September-2026: num_links, topology, chunks_per_sync, num_workers_per_link, num_buffers_per_channel, use_l1_small_for_semaphores. (all_gather.cpp:148)
+2026-10-11 05:51:40.395 | warning  |              Op | The following ttnn.all_gather args are deprecated and will be removed in September-2026: num_links, topology, chunks_per_sync, num_workers_per_link, num_buffers_per_channel, use_l1_small_for_semaphores. (all_gather.cpp:148)
+2026-10-11 05:51:40.471 | warning  |              Op | The following ttnn.all_gather args are deprecated and will be removed in September-2026: num_links, topology, chunks_per_sync, num_workers_per_link, num_buffers_per_channel, use_l1_small_for_semaphores. (all_gather.cpp:148)
+2026-10-11 05:51:40.476 | warning  |              Op | The following ttnn.all_gather args are deprecated and will be removed in September-2026: num_links, topology, chunks_per_sync, num_workers_per_link, num_buffers_per_channel, use_l1_small_for_semaphores. (all_gather.cpp:148)
+2026-10-11 05:51:40.477 | warning  |              Op | The following ttnn.all_gather args are deprecated and will be removed in September-2026: num_links, topology, chunks_per_sync, num_workers_per_link, num_buffers_per_channel, use_l1_small_for_semaphores. (all_gather.cpp:148)
+2026-10-11 05:51:40.551 | warning  |              Op | The following ttnn.all_gather args are deprecated and will be removed in September-2026: num_links, topology, chunks_per_sync, num_workers_per_link, num_buffers_per_channel, use_l1_small_for_semaphores. (all_gather.cpp:148)
+2026-10-11 05:51:40.556 | warning  |              Op | The following ttnn.all_gather args are deprecated and will be removed in September-2026: num_links, topology, chunks_per_sync, num_workers_per_link, num_buffers_per_channel, use_l1_small_for_semaphores. (all_gather.cpp:148)
+2026-10-11 05:51:40.557 | warning  |              Op | The following ttnn.all_gather args are deprecated and will be removed in September-2026: num_links, topology, chunks_per_sync, num_workers_per_link, num_buffers_per_channel, use_l1_small_for_semaphores. (all_gather.cpp:148)
+2026-10-11 05:51:40.686 | warning  |              Op | The following ttnn.all_gather args are deprecated and will be removed in September-2026: num_links, topology, chunks_per_sync, num_workers_per_link, num_buffers_per_channel, use_l1_small_for_semaphores. (all_gather.cpp:148)
+2026-10-11 05:51:40.691 | warning  |              Op | The following ttnn.all_gather args are deprecated and will be removed in September-2026: num_links, topology, chunks_per_sync, num_workers_per_link, num_buffers_per_channel, use_l1_small_for_semaphores. (all_gather.cpp:148)
+2026-10-11 05:51:40.692 | warning  |              Op | The following ttnn.all_gather args are deprecated and will be removed in September-2026: num_links, topology, chunks_per_sync, num_workers_per_link, num_buffers_per_channel, use_l1_small_for_semaphores. (all_gather.cpp:148)
+2026-10-11 05:51:40.821 | warning  |              Op | The following ttnn.all_gather args are deprecated and will be removed in September-2026: num_links, topology, chunks_per_sync, num_workers_per_link, num_buffers_per_channel, use_l1_small_for_semaphores. (all_gather.cpp:148)
+2026-10-11 05:51:40.827 | warning  |              Op | The following ttnn.all_gather args are deprecated and will be removed in September-2026: num_links, topology, chunks_per_sync, num_workers_per_link, num_buffers_per_channel, use_l1_small_for_semaphores. (all_gather.cpp:148)
+2026-10-11 05:51:40.827 | warning  |              Op | The following ttnn.all_gather args are deprecated and will be removed in September-2026: num_links, topology, chunks_per_sync, num_workers_per_link, num_buffers_per_channel, use_l1_small_for_semaphores. (all_gather.cpp:148)
+2026-10-11 05:51:40.958 | warning  |              Op | The following ttnn.all_gather args are deprecated and will be removed in September-2026: num_links, topology, chunks_per_sync, num_workers_per_link, num_buffers_per_channel, use_l1_small_for_semaphores. (all_gather.cpp:148)
+2026-10-11 05:51:40.963 | warning  |              Op | The following ttnn.all_gather args are deprecated and will be removed in September-2026: num_links, topology, chunks_per_sync, num_workers_per_link, num_buffers_per_channel, use_l1_small_for_semaphores. (all_gather.cpp:148)
+2026-10-11 05:51:40.964 | warning  |              Op | The following ttnn.all_gather args are deprecated and will be removed in September-2026: num_links, topology, chunks_per_sync, num_workers_per_link, num_buffers_per_channel, use_l1_small_for_semaphores. (all_gather.cpp:148)
+2026-10-11 05:51:41.094 | warning  |              Op | The following ttnn.all_gather args are deprecated and will be removed in September-2026: num_links, topology, chunks_per_sync, num_workers_per_link, num_buffers_per_channel, use_l1_small_for_semaphores. (all_gather.cpp:148)
+2026-10-11 05:51:41.099 | warning  |              Op | The following ttnn.all_gather args are deprecated and will be removed in September-2026: num_links, topology, chunks_per_sync, num_workers_per_link, num_buffers_per_channel, use_l1_small_for_semaphores. (all_gather.cpp:148)
+2026-10-11 05:51:41.100 | warning  |              Op | The following ttnn.all_gather args are deprecated and will be removed in September-2026: num_links, topology, chunks_per_sync, num_workers_per_link, num_buffers_per_channel, use_l1_small_for_semaphores. (all_gather.cpp:148)
+2026-10-11 05:51:41.343 | INFO     | models.tt_dit.models.vae.minimax_h3.vae_minimax_h3:_report_profile:572 -     readback per wave: min 4 / median 5 / max 7 ms  [7 4 4 4 6 7 5]  on (1, 3, 28, 768, 1344) DataType.FLOAT32
+2026-10-11 05:51:41.343 | INFO     | models.tt_dit.models.vae.minimax_h3.vae_minimax_h3:_report_profile:579 -     device   per wave: min 6 / median 7 / max 7 ms  [6 6 7 7 7 7 7]
+2026-10-11 05:51:41.343 | INFO     | models.tt_dit.models.vae.minimax_h3.vae_minimax_h3:_report_profile:585 - VAE decode profile: 1.01 s over 7 waves / 196 units (32 devices, 28.0 units/wave)
+2026-10-11 05:51:41.344 | INFO     | models.tt_dit.models.vae.minimax_h3.vae_minimax_h3:_report_profile:603 -     device         0.50 s  (49.2 %)      71 ms/wave
+2026-10-11 05:51:41.344 | INFO     | models.tt_dit.models.vae.minimax_h3.vae_minimax_h3:_report_profile:603 -     readback       0.04 s  ( 3.6 %)       5 ms/wave
+2026-10-11 05:51:41.344 | INFO     | models.tt_dit.models.vae.minimax_h3.vae_minimax_h3:_report_profile:603 -     readback_join   0.40 s  (39.3 %)
+2026-10-11 05:51:41.344 | INFO     | models.tt_dit.models.vae.minimax_h3.vae_minimax_h3:_report_profile:603 -     stitch         0.00 s  ( 0.0 %)
+2026-10-11 05:51:41.344 | INFO     | models.tt_dit.models.vae.minimax_h3.vae_minimax_h3:_report_profile:603 -     unpatchify     0.00 s  ( 0.0 %)
+2026-10-11 05:51:41.344 | INFO     | models.tt_dit.models.vae.minimax_h3.vae_minimax_h3:_report_profile:603 -     tiling         0.00 s  ( 0.1 %)
+2026-10-11 05:51:41.344 | INFO     | models.tt_dit.models.vae.minimax_h3.vae_minimax_h3:_report_profile:603 -     upload         0.01 s  ( 1.3 %)
+2026-10-11 05:51:41.344 | INFO     | models.tt_dit.models.vae.minimax_h3.vae_minimax_h3:_report_profile:603 -     host_prep      0.02 s  ( 2.4 %)
+2026-10-11 05:51:41.344 | INFO     | models.tt_dit.models.vae.minimax_h3.vae_minimax_h3:_report_profile:603 -     residual       0.40 s  (39.5 %)
+2026-10-11 05:51:41.344 | INFO     | models.tt_dit.models.vae.minimax_h3.vae_minimax_h3:_report_profile:604 -     readback volume 0.30 GB
+2026-10-11 05:51:41.433 | INFO     | models.tt_dit.pipelines.minimax_h3.pipeline_minimax_h3:_host_log:859 - program cache misses: {'encoder': 0, 'denoising': 0, 'vae': 0, 'audio': 0}
+[t286] generation compiled +0 programs
+2026-10-11 05:51:41.441 | INFO     | models.tt_dit.tests.models.minimax_h3.test_pipeline_turbo_minimax_h3:test_turbo_end_to_end:211 - adapter minimax_h3_fl2v_turbo_4step_v1.2_768p_bf16.safetensors: 208 bound targets
+2026-10-11 05:51:41.441 | INFO     | models.tt_dit.tests.models.minimax_h3.common_av:log_pipeline_perf:590 -
+================================================================================
+MINIMAX-H3 PERFORMANCE RESULTS
+================================================================================
+Task: t2va-turbo
+Image Size: 1344x768
+Num Frames: 124 @ 24 fps (5.17 s)
+Inference Steps: 5 (4 denoise steps)
+sequence_length:37749, bucket:38912, waste:3.0%
+DiT Configuration: sp=8 axis 1, tp=4 axis 0
+Mesh Shape: (4, 8)
+Topology: Ring, 2 links
+adapter minimax_h3_fl2v_turbo_4step_v1.2_768p_bf16.safetensors
+video shift 6.0, audio shift 3.0
+--------------------------------------------------------------------------------
+Text Encoding             |   0.3848s
+Denoising (total)         |   5.2671s
+Denoising (per step)      |   1.3168s
+VAE Decoding              |   1.0263s
+Audio Decoding            |   0.0868s
+Total Pipeline            |   6.8362s
+================================================================================
+2026-10-11 05:51:42.271 | INFO     | models.tt_dit.utils.video:export_video_audio_yuv:205 - Saved: /var/tmp/fasth3/home/h3_turbo_artifacts/t2va_turbo_1344x768_5s_4fwd.mp4 (124f @ 24fps, yuv420p fast path)
+2026-10-11 05:51:42.285 | INFO     | models.tt_dit.tests.models.minimax_h3.test_pipeline_turbo_minimax_h3:test_turbo_end_to_end:250 - wrote /var/tmp/fasth3/home/h3_turbo_artifacts/t2va_turbo_1344x768_5s_4fwd.mp4
+PASSED
+==========================================================================
+WALL-TIME LEDGER · models/tt_dit/tests/models/minimax_h3/test_pipeline_turbo_minimax_h3.py::test_turbo_end_to_end[blackhole-4x8-5s]
+--------------------------------------------------------------------------
+category             seconds   %wall   count   notes
+weight_load             17.9    8.3%       5   5 HIT / 0 MISS
+untracked              196.3   91.7%
+--------------------------------------------------------------------------
+TOTAL (tracked)         17.9    8.3%
+TOTAL (wall)           214.1  100.0%
+
+ANOMALIES: none
+==========================================================================
+
+
+=============================== warnings summary ===============================
+models/tt_dit/tests/models/minimax_h3/test_pipeline_turbo_minimax_h3.py::test_turbo_end_to_end[blackhole-4x8-5s]
+  <frozen importlib._bootstrap>:241: DeprecationWarning: builtin type SwigPyPacked has no __module__ attribute
+
+models/tt_dit/tests/models/minimax_h3/test_pipeline_turbo_minimax_h3.py::test_turbo_end_to_end[blackhole-4x8-5s]
+  <frozen importlib._bootstrap>:241: DeprecationWarning: builtin type SwigPyObject has no __module__ attribute
+
+-- Docs: https://docs.pytest.org/en/stable/how-to/capture-warnings.html
+==================================== PASSES ====================================
+- generated xml file: /var/tmp/fasth3/t288/b/generated/test_reports/most_recent_tests.xml -
+============================= slowest 25 durations =============================
+214.13s call     models/tt_dit/tests/models/minimax_h3/test_pipeline_turbo_minimax_h3.py::test_turbo_end_to_end[blackhole-4x8-5s]
+8.08s setup    models/tt_dit/tests/models/minimax_h3/test_pipeline_turbo_minimax_h3.py::test_turbo_end_to_end[blackhole-4x8-5s]
+0.57s teardown models/tt_dit/tests/models/minimax_h3/test_pipeline_turbo_minimax_h3.py::test_turbo_end_to_end[blackhole-4x8-5s]
+=========================== short test summary info ============================
+PASSED models/tt_dit/tests/models/minimax_h3/test_pipeline_turbo_minimax_h3.py::test_turbo_end_to_end[blackhole-4x8-5s]
+=========== 1 passed, 8 deselected, 2 warnings in 222.82s (0:03:42) ============
+sys:1: DeprecationWarning: builtin type swigvarlink has no __module__ attribute
+2026-10-11 05:51:47.568 | info     |    BuildKernels | JIT cache stats: 6087/6323 hits (96.3%) [6087 cached, 108914 build-once dedup, 0 merged artifacts, 0 merged genfiles] (build_cache_telemetry.cpp:268)
+2026-10-11 05:51:47.568 | info     |    BuildKernels | JIT telemetry: 43 registered TelemetryTokens (build_cache_telemetry.cpp:325)
+2026-10-11 05:51:47.984 | info     |          Device | Closing user mode device drivers (tt_cluster.cpp:519)
+2026-10-11 05:51:47.984 | info     |             UMD | Closing devices in cluster (cluster.cpp:1319)
+2026-10-11 05:51:50.070 | info     |             UMD | Closing devices in cluster completed. (cluster.cpp:1329)
+2026-10-11 05:51:50.070 | info     |             UMD | Cluster destructor started. (cluster.cpp:1050)
+2026-10-11 05:51:50.070 | info     |             UMD | Cluster destructor completed. (cluster.cpp:1063)
+[t330] process wall 235 s
+T330_EXIT=0
