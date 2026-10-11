@@ -1,8 +1,7 @@
 // SPDX-FileCopyrightText: © 2026 Tenstorrent AI ULC
 // SPDX-License-Identifier: Apache-2.0
 
-// Perf kernel of the Blackhole chunked mul_reduce_scalar row (mul_reduce_scalar_chunked_tile): per iteration one row of
-// TILE_CNT tiles in batches of CHUNK_SIZE - 1, the accumulator in slot CHUNK_SIZE - 1, one masked pack of it.
+// Perf kernel of the chunked mul_reduce_scalar row: batches of CHUNK_SIZE - 1 tiles, the accumulator in slot CHUNK_SIZE - 1.
 
 #include <cstdint>
 
@@ -121,7 +120,6 @@ void run_kernel(RUNTIME_PARAMETERS params)
 #include "sfpu/ckernel_sfpu_fill.h"
 
 static constexpr float REDUCE_SCALER = 1.0f;
-// The batch's first product slot, where each batch's reduce runs.
 static constexpr std::uint32_t DST_INDEX = 0;
 
 inline void row_math(const std::uint32_t tile_cnt, const std::uint32_t batch_size, const ckernel::TensorShape& tensor_shape)

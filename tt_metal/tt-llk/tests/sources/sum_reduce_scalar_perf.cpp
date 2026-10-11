@@ -1,7 +1,7 @@
 // SPDX-FileCopyrightText: © 2026 Tenstorrent AI ULC
 // SPDX-License-Identifier: Apache-2.0
 
-// Perf kernel of the sum_reduce_scalar row: per iteration TILE_CNT copies, the reduce tail and one masked pack.
+// Perf kernel of the sum_reduce_scalar row.
 // The unpack A MOP publishes a SrcB dummy valid with every SrcA face, so the valids per row match the multiply form's.
 
 #include <cstdint>

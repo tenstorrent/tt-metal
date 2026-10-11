@@ -5,7 +5,7 @@
 // Fused multiply + reduce-to-scalar LLK test (experimental, Blackhole only).
 //
 // Mirrors the ttnn compute-kernel flow of ckernel::mul_reduce_scalar_tile:
-//   1. Multiply phase: C[i] = A[i] * B[i] element-wise (ELWMUL) into DEST tiles (two 16x32 products per slot).
+//   1. Multiply phase: C[i] = A[i] * B[i] element-wise (ELWMUL) into DEST tiles.
 //   2. Switch UNPACK -> reduce phase (DEST reused as SrcA/SrcB via MOVD2A/MOVD2B).
 //   3. Column-reduce every tile with GAPOOL, accumulating into DEST[0].
 //   4. Collapse DEST[0] to a single scalar (transpose + GAPOOL).
@@ -122,7 +122,7 @@ void run_kernel(RUNTIME_PARAMETERS params)
 
     _llk_math_wait_for_dest_available_<DST_SYNC>();
 
-    // Step 1 - multiply phase: C[i] = A[i] * B[i] into DEST[i], or for 16x32 tiles rows 32 * (i % 2) of DEST[i / 2].
+    // Step 1 - multiply phase: C[i] = A[i] * B[i] into DEST[i].
     for (std::uint32_t i = 0; i < tile_cnt; ++i)
     {
         LLK_ASSERT((i < get_dest_max_tiles<DST_SYNC, is_fp32_dest_acc_en, DstTileShape::Tile32x32>()), "Multiply tile index exceeds maximum destination tiles");
@@ -153,7 +153,6 @@ void run_kernel(RUNTIME_PARAMETERS params)
     // Step 6 - column-reduce every tile, accumulating into DEST[0].
     // (narrow_tile / num_faces are derived internally from the TensorShape.)
     _llk_math_mul_reduce_column_<MATH_FIDELITY, false /* tile_setup */>(DST_INDEX, tensor_shape);
-    // The tile count is a runtime argument here; the API unrolls this loop when its caller passes a constant count.
     for (std::uint32_t i = 1; i < tile_cnt; ++i)
     {
         _llk_math_mul_reduce_scalar_move_product_<true /* share_slots */>(i, tile_cnt, tensor_shape);

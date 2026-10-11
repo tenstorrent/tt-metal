@@ -2,8 +2,7 @@
 //
 // SPDX-License-Identifier: Apache-2.0
 
-// mul_reduce_scalar_chunked_tile (api/compute/experimental/rmsnorm.h) expanded into its _llk_* calls (Blackhole only).
-// CHUNK_SIZE is the API's dst_capacity: slot CHUNK_SIZE - 1 accumulates, the others stage a batch of products.
+// mul_reduce_scalar_chunked_tile expanded into its _llk_* calls; slot CHUNK_SIZE - 1 accumulates, the others stage products.
 
 #include <cstdint>
 
@@ -49,7 +48,6 @@ void run_kernel(RUNTIME_PARAMETERS params)
         tensor_shape.total_num_faces(),
         tensor_shape.total_num_faces());
 
-    // mul_reduce_scalar_init
     _llk_unpack_AB_init_<BroadcastType::NONE>(tensor_shape, ckernel::Transpose::None);
 
     const std::uint32_t tile_cnt   = params.TILE_CNT;
@@ -83,7 +81,6 @@ void run_kernel(RUNTIME_PARAMETERS params)
 
 // Scaler multiplier applied to the reduction (matches the Compute API default).
 static constexpr float REDUCE_SCALER = 1.0f;
-// The batch's first product slot, where each batch's reduce runs.
 static constexpr std::uint32_t DST_INDEX = 0;
 
 void run_kernel(RUNTIME_PARAMETERS params)
@@ -107,7 +104,6 @@ void run_kernel(RUNTIME_PARAMETERS params)
     _llk_math_hw_configure_<is_fp32_dest_acc_en>(formats.math, formats.math);
     _llk_math_eltwise_unary_sfpu_init_once_();
 
-    // mul_reduce_scalar_init, fill_tile_init, add_binary_tile_init
     _llk_math_eltwise_binary_init_<EltwiseBinaryType::ELWMUL, BroadcastType::NONE, MATH_FIDELITY, EltwiseBinaryReuseDestType::NONE>(
         tensor_shape, 0 /* acc_to_dest */);
     _llk_math_eltwise_unary_sfpu_init_<SfpuType::fill>();

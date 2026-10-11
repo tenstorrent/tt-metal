@@ -68,7 +68,6 @@ ALWI void mul_reduce_scalar_tile_impl(uint32_t icb0, uint32_t icb1, uint32_t ocb
     for (uint32_t i = 0; i < num_tiles; i++) {
         UNPACK((llk_unpack_AB(icb0, icb1, i, i)));
 #if defined(ARCH_BLACKHOLE)
-        // Two 16x32 products share a DEST slot, so one burst of moves feeds both column passes.
         MATH((llk_math_eltwise_mul_reduce_scalar<is_fp32_dest_acc_en, mul_f, !accumulate_in_one_tile>(
             accumulate_in_one_tile ? 0 : i, icb0)));
 #else
@@ -84,7 +83,7 @@ ALWI void mul_reduce_scalar_tile_impl(uint32_t icb0, uint32_t icb1, uint32_t ocb
     MATH((llk_math_mul_reduce_scalar_reduce_init<is_fp32_dest_acc_en, reduce_f>()));
 
     // Step 4: Prepare data for first tile's scalar reduction
-    // Move dest[0] (the first product, and on Blackhole the second when two share the slot) to srcA
+    // Move dest[0] (first multiply result) to srcA
 #if defined(ARCH_BLACKHOLE)
     MATH((llk_math_mul_reduce_scalar_move_product<!accumulate_in_one_tile>(0 /*i*/, product_tiles, icb0)));
 #else
@@ -122,15 +121,14 @@ ALWI void mul_reduce_scalar_tile_impl(uint32_t icb0, uint32_t icb1, uint32_t ocb
     // Step 6: Perform column reduction for each product tile, accumulating into dest[0]
     // First iteration (i=0) - no move needed
 #if defined(ARCH_BLACKHOLE)
-    // The scaler move drained the SFPU and the clear left the DEST address at tile 0.
+    // The SFPU has drained and the DEST address is at tile 0, so no tile setup.
     MATH((llk_math_mul_reduce_column<reduce_f, false /*tile_setup*/>(0 /*dst_index*/, icb0)));
 #else
     MATH((llk_math_mul_reduce_column<reduce_f>(0, icb0)));
 #endif
 
-    // Remaining iterations - move each product, or on Blackhole each pair that shares a slot
+    // Remaining iterations - always move
 #if defined(ARCH_BLACKHOLE)
-    // Unrolled when the caller passes a constant count; the scaler move drained the SFPU and the clear set the address.
 #pragma GCC unroll 8
     for (uint32_t i = 1; i < product_tiles; i++) {
         MATH((llk_math_mul_reduce_scalar_move_product<!accumulate_in_one_tile>(i, product_tiles, icb0)));
@@ -162,8 +160,8 @@ ALWI void mul_reduce_scalar_tile_impl(uint32_t icb0, uint32_t icb1, uint32_t ocb
  * The final scalar result is stored in dest[0] at element position [0].
  *
  * The multiply accumulates into DEST, so the tiles it writes must be zero on entry; the packer clears each
- * DEST half it releases. By default product i goes to dest[i] (on Blackhole, two 16x32 products share a slot: product i
- * goes to rows 32 * (i % 2) of dest[i / 2]), which bounds num_tiles by the DEST capacity.
+ * DEST half it releases. By default product i goes to dest[i] (on Blackhole, two 16x32 products share a slot), which
+ * bounds num_tiles by the DEST capacity.
  * accumulate_in_one_tile sums every product in dest[0] instead: num_tiles is then unbounded, and one column
  * reduce serves the whole row. With a bf16 DEST each element's running sum is rounded to bf16 at every
  * accumulate, so its error grows with num_tiles.

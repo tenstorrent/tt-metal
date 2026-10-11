@@ -1,8 +1,7 @@
 # SPDX-FileCopyrightText: © 2026 Tenstorrent AI ULC
 # SPDX-License-Identifier: Apache-2.0
 
-"""Perf of the Blackhole chunked mul_reduce_scalar row (mul_reduce_scalar_chunked_tile,
-sources/mul_reduce_scalar_chunked_perf.cpp); unit: one input tile of the row."""
+"""Perf of the chunked mul_reduce_scalar row; unit: one input tile of the row."""
 
 import pytest
 from conftest import skip_for_quasar, skip_for_wormhole
@@ -24,7 +23,6 @@ pytestmark = [skip_for_wormhole, skip_for_quasar]
 
 BF16 = DataFormat.Float16_b
 
-# (fidelity, DEST slots including the accumulator, tiles per row)
 VARIANTS = [
     (MathFidelity.LoFi, 8, 9),
     (MathFidelity.LoFi, 8, 14),

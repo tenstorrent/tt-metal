@@ -102,7 +102,6 @@ ALWI void rmsnorm_mul_bcast_scalar_reuse_tiles(
 }
 
 namespace detail {
-// _calculate_fill_ over the first SFPU rows of dst_index, the rows the scalar reduce reads and writes.
 template <bool is_fp32_dest_acc_en>
 ALWI void fill_reduce_rows(uint32_t dst_index, float value) {
     MATH(SFPU_UNARY_CALL(
@@ -148,14 +147,14 @@ ALWI void mul_reduce_scalar_chunked_tile(uint32_t icb0, uint32_t icb1, uint32_t 
     constexpr uint32_t num_batches = (num_tiles + batch_size - 1) / batch_size;
     constexpr uint32_t last_batch_size = num_tiles - (num_batches - 1) * batch_size;
 
-    // Only element 0 of the accumulator is defined: the fill completes its first four rows, the add covers one vector.
+    // Only element 0 of the accumulator is defined, so fill just the rows the reduce reads.
     detail::fill_reduce_rows<is_fp32_dest_acc_en>(accumulator, 0.0f /*value*/);
 
     for (uint32_t batch = 0; batch < num_batches; ++batch) {
         const uint32_t input_start = batch * batch_size;
         const uint32_t count = batch + 1 < num_batches ? batch_size : last_batch_size;
 
-        // The reduce phase rewrites the multiply's address modifiers, not its MOP or the unpacker's state.
+        // A reduce rewrites only the multiply's address modifiers.
         if (batch > 0) {
             MATH((llk_math_eltwise_mul_reduce_scalar_reinit<MATH_FIDELITY>()));
         }

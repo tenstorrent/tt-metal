@@ -1,8 +1,7 @@
 // SPDX-FileCopyrightText: © 2026 Tenstorrent AI ULC
 // SPDX-License-Identifier: Apache-2.0
 
-// Perf kernel of the Blackhole mul_reduce_scalar row: per iteration TILE_CNT multiplies, the reduce tail and one masked
-// pack. ROW_TILES > 0 compiles the row length in, so the math thread runs the API's form for a compile-time count.
+// Perf kernel of the mul_reduce_scalar row; ROW_TILES > 0 compiles the row length in, as the API runs a constant count.
 
 #include <cstdint>
 
@@ -108,7 +107,6 @@ void run_kernel(RUNTIME_PARAMETERS params)
 
 static constexpr float REDUCE_SCALER = 1.0f;
 
-// mul_reduce_scalar_tile's later tiles for a compile-time count, as the API runs them on Blackhole.
 template <std::uint32_t row_tiles>
 inline void reduce_later_tiles(const ckernel::TensorShape& tensor_shape)
 {

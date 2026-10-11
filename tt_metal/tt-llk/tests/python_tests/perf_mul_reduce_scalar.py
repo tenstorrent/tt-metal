@@ -1,8 +1,7 @@
 # SPDX-FileCopyrightText: © 2026 Tenstorrent AI ULC
 # SPDX-License-Identifier: Apache-2.0
 
-"""Perf of the Blackhole mul_reduce_scalar row (mul_reduce_scalar_tile, sources/mul_reduce_scalar_perf.cpp); unit: one
-input tile of the row."""
+"""Perf of the mul_reduce_scalar row; unit: one input tile of the row."""
 
 import pytest
 from conftest import skip_for_quasar, skip_for_wormhole
@@ -25,8 +24,6 @@ pytestmark = [skip_for_wormhole, skip_for_quasar]
 
 BF16 = DataFormat.Float16_b
 
-# (fidelity, tiles per row, the row length compiled in rather than a runtime count, tile rows). The last three are the
-# DeepSeek RMSNorm's rows at LoFi: one and three 16x32 tiles (512 and 1536 wide) and seven 32x32 tiles (7168 wide).
 VARIANTS = [
     (fidelity, num_tiles, False, 32)
     for num_tiles in (1, 2, 4, 8)

@@ -93,8 +93,7 @@ inline void execute_high_fidelity_gapool()
 /**
  * @brief Move destination tile to source registers for mul_reduce_scalar
  *
- * Moves a whole tile from destination registers to source A, or its first 16 rows to source B (the scaler rows 0 to 3 and
- * the rest of the 16x16 block the pooling reads).
+ * Moves a whole tile to source A, or its first 16 rows to source B.
  *
  * @tparam binary_reuse_dest Direction: DEST_TO_SRCA or DEST_TO_SRCB
  * @param idst Destination tile index (0-7)
@@ -155,13 +154,9 @@ inline void _llk_math_mul_reduce_scalar_move_dest_to_src_([[maybe_unused]] std::
         TTI_MOVD2B(0, p_movd2b::SRC_ZERO_OFFSET + 4, ADDR_MOD_1, p_movd2b::MOV_4_ROWS, 4);
         TTI_MOVD2B(0, p_movd2b::SRC_ZERO_OFFSET + 8, ADDR_MOD_1, p_movd2b::MOV_4_ROWS, 8);
         TTI_MOVD2B(0, p_movd2b::SRC_ZERO_OFFSET + 12, ADDR_MOD_1, p_movd2b::MOV_4_ROWS, 12);
-        // The pooling passes read SrcB rows 0 to 15 only.
     }
 }
 
-/**
- * @brief Move the faces of dest[idst] that the tile has into SrcA; the column pass reads 16 SrcA rows per face.
- */
 inline void _llk_math_mul_reduce_scalar_move_faces_to_srca_(const std::uint32_t idst, const ckernel::TensorShape tensor_shape)
 {
     if (idst == 0)
@@ -204,21 +199,16 @@ inline void _llk_math_mul_reduce_scalar_move_faces_to_srca_(const std::uint32_t 
     }
 }
 
-/**
- * @brief Whether two products of this shape share a DEST slot: a 16x32 product takes 32 rows and its column pass moves
- *        the SrcA counter 32 rows, so two fit one 64-row slot.
- */
+// A 16x32 product takes 32 rows, so two fit one 64-row DEST slot.
 inline bool _llk_math_mul_reduce_scalar_shares_slot_(const ckernel::TensorShape tensor_shape)
 {
     return tensor_shape.face_r_dim == ckernel::MAX_FACE_R_DIM && tensor_shape.num_faces_r_dim == 1 && tensor_shape.num_faces_c_dim == 2;
 }
 
 /**
- * @brief Multiply product product_index of a row of 16x32 tiles into rows 32 * (product_index % 2) of DEST slot
- *        product_index / 2: _llk_math_eltwise_binary_'s ELWMUL path at a 32-row DEST stride.
+ * @brief Multiply one 16x32 product into rows 32 * (product_index % 2) of DEST slot product_index / 2.
  *
- * @note Call @ref _llk_math_eltwise_binary_init_ (ELWMUL) first, and move the products with
- *       @ref _llk_math_mul_reduce_scalar_move_product_ with share_slots true.
+ * @note Call @ref _llk_math_eltwise_binary_init_ (ELWMUL) first.
  */
 template <MathFidelity math_fidelity>
 inline void _llk_math_mul_reduce_scalar_mul_half_slot_(const ckernel::TensorShape tensor_shape, const std::uint32_t product_index)
@@ -239,11 +229,9 @@ inline void _llk_math_mul_reduce_scalar_mul_half_slot_(const ckernel::TensorShap
 }
 
 /**
- * @brief The move into SrcA before product i's column pass: with shared slots the first of a pair moves the whole slot,
- *        the second none.
+ * @brief The move into SrcA before product i's column pass.
  *
- * @tparam share_slots: The products were written with @ref _llk_math_mul_reduce_scalar_mul_half_slot_ where the shape
- *         shares slots; it must match the multiply.
+ * @tparam share_slots: Must match how the products were written.
  */
 template <bool share_slots>
 inline void _llk_math_mul_reduce_scalar_move_product_(const std::uint32_t i, const std::uint32_t num_products, const ckernel::TensorShape tensor_shape)
@@ -362,10 +350,9 @@ inline void _llk_math_mul_reduce_column_(const std::uint32_t dst_index, const ck
 }
 
 /**
- * @brief Zero face 0 of dest[dst_index], the face the column passes pool into; the scalar reduce reads only its row 0.
+ * @brief Zero face 0 of dest[dst_index], the face the column passes pool into.
  *
- * @note Call after @ref _llk_math_mul_reduce_scalar_init_, whose ADDR_MOD_0 leaves the counters in place for the
- *       ZEROACC, and once the SFPU has drained, as the DEST_TO_SRCB move leaves it.
+ * @note Call after @ref _llk_math_mul_reduce_scalar_init_ and once the SFPU has drained.
  */
 template <bool is_fp32_dest_acc_en>
 inline void _llk_math_mul_reduce_scalar_clear_pool_face_(const std::uint32_t dst_index)

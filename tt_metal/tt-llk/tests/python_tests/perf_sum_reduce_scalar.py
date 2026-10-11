@@ -1,8 +1,7 @@
 # SPDX-FileCopyrightText: © 2026 Tenstorrent AI ULC
 # SPDX-License-Identifier: Apache-2.0
 
-"""Perf of the Blackhole sum_reduce_scalar row (sum_reduce_scalar_tile, sources/sum_reduce_scalar_perf.cpp); unit: one
-input tile of the row."""
+"""Perf of the sum_reduce_scalar row; unit: one input tile of the row."""
 
 import pytest
 from conftest import skip_for_quasar, skip_for_wormhole
@@ -23,7 +22,6 @@ pytestmark = [skip_for_wormhole, skip_for_quasar]
 
 BF16 = DataFormat.Float16_b
 
-# (fidelity, tiles per row)
 VARIANTS = [
     (MathFidelity.LoFi, 1),
     (MathFidelity.LoFi, 2),
