@@ -1,9 +1,7 @@
 # SPDX-FileCopyrightText: © 2026 Tenstorrent AI ULC
 # SPDX-License-Identifier: Apache-2.0
 
-"""Perf of the SFPU sinkhorn_4x4 in its documented flow (sources/sinkhorn_perf.cpp): PERF_STAGE 0 copies and packs
-alone, 1 adds the exponential stage, 2 the sinkhorn body with SINKHORN_ITERS passes; unit: one 32x32 tile.
-"""
+"""Perf of the SFPU sinkhorn_4x4 per 32x32 tile; PERF_STAGE 0 is the copy and pack frame, 1 adds the exponential, 2 the sinkhorn body."""
 
 import pytest
 from conftest import skip_for_quasar, skip_for_wormhole
@@ -26,7 +24,7 @@ TILES = 2
 
 
 @pytest.mark.perf
-# (stage, iterations); the iteration count only applies at stage 2.
+# (stage, iterations); iterations only matter at stage 2.
 @parametrize(variant=[(0, 20), (1, 20), (2, 1), (2, 5), (2, 20)])
 def test_perf_sinkhorn(perf_report, variant):
     # parametrize hands a single axis as a one-element tuple
