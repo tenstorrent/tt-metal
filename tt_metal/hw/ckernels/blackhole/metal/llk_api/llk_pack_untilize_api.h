@@ -220,9 +220,8 @@ inline void llk_pack_untilize(
 }
 
 /**
- * llk_pack_untilize for one block that starts at tile column first_col of the output row instead of at
- * block_c_index * block_ct_dim, for a row split into blocks of different widths. The pack untilize init must be for
- * the same block_ct_dim and full_ct_dim.
+ * llk_pack_untilize for one block starting at tile column first_col of the output row, for a row split into blocks of different widths.
+ * The pack untilize init must be for the same block_ct_dim and full_ct_dim.
  *
  * @tparam block_ct_dim Width of the block in tiles.
  * @tparam full_ct_dim  Width of the output row in tiles.

@@ -48,8 +48,7 @@ inline void _llk_pack_untilize_configure_addrmod_()
 }
 
 /**
- * @brief ADDR_MOD slots of the first-tile-stream row form: ADDR_MOD_3 (the row's first PACR) also steps the channel 1
- * Z counter, which moves the rest of the row one tile row into L1; the row-closing ADDR_MOD_1 clears it again.
+ * @brief ADDR_MOD slots of the first-tile-stream row form; ADDR_MOD_3 also steps channel 1 Z by one tile row into L1, ADDR_MOD_1 clears it.
  */
 inline void _llk_pack_untilize_configure_first_tile_stream_addrmod_()
 {
@@ -186,7 +185,6 @@ inline void _llk_pack_untilize_mop_config_(
                 replay_buf_len,
                 []
                 {
-                    // THCON_SEC0_REG1_L1_Dest_addr += SCRATCH_SEC[CurrentThread].val, the L1 row stride.
                     TTI_CFGSHIFTMASK(1, 0b011, 32 - 1, 0, 0b11, THCON_SEC0_REG1_L1_Dest_addr_ADDR32);
                     TTI_NOP;
                 });
@@ -234,10 +232,8 @@ inline void _llk_pack_untilize_mop_config_(
 /**
  * @brief Build and program the untilize MOP of a narrow row wider than a face (FACE_C_DIM < row_num_datums < TILE_C_DIM).
  *
- * A packer interface reads x_end + 1 consecutive Dest datums, so one interface cannot reach past the left face's row.
- * Each tile row is the left face's 16 datums on interface 0, then the rest of the row from the right face on interface 1
- * with x_end lowered for that PACR, in the same L1 stream. The sequences of a tile, of a row's last tile and of a pass's
- * last tile are replays.
+ * A packer interface reads x_end + 1 consecutive datums, so each tile row is the left face's 16 datums on interface 0, then the
+ * rest from the right face on interface 1 with x_end lowered, in the same L1 stream.
  *
  * @tparam block_ct_dim: Number of input tiles per block.
  * @tparam row_num_datums: Datums per output row of a tile.
@@ -416,7 +412,6 @@ inline void _llk_pack_untilize_init_(
         if (first_tile_stream)
         {
             _llk_pack_untilize_configure_first_tile_stream_addrmod_();
-            // Channel 1 Z offset of the rest of the row: one tile row of the output
             cfg_reg_rmw_tensix<PCK0_ADDR_CTRL_ZW_REG_1_Zstride_RMW>(SCALE_DATUM_SIZE(pack_dst_format, TILE_C_DIM));
         }
     }
@@ -496,19 +491,19 @@ inline void _llk_pack_untilize_(const std::uint32_t address, const std::uint32_t
     const std::uint32_t num_faces_per_rdim_tile = (num_faces > 2) ? 2 : 1;
 
     const std::uint32_t tile_dst_offset = tile_dst_ct_offset + tile_dst_rt_offset;
-    TTI_SETADCZW(p_setadc::PAC, 0, 0, 0, 0, 0b0101);                            // reset ch0 and ch1 z counters
-    TT_SETADC(p_setadc::PAC, p_setadc::CH_0, p_setadc::SET_W, tile_dst_offset); // first tile of the block
-    TTI_SETADCXY(p_setadc::PAC, 0, 0, 0, 0, 0b1011);                            // reset ch0 xy and ch1 y counters
+    TTI_SETADCZW(p_setadc::PAC, 0, 0, 0, 0, 0b0101);
+    TT_SETADC(p_setadc::PAC, p_setadc::CH_0, p_setadc::SET_W, tile_dst_offset);
+    TTI_SETADCXY(p_setadc::PAC, 0, 0, 0, 0, 0b1011);
 
     ckernel::ckernel_template::run();
     if (num_faces_per_rdim_tile > 1)
     {
-        TTI_SETADC(p_setadc::PAC, p_setadc::CH_0, p_setadc::SET_Y, 2 * FACE_R_DIM); // bottom faces
-        TTI_SETADC(p_setadc::PAC, p_setadc::CH_1, p_setadc::SET_Y, FACE_R_DIM);     // their first L1 row
+        TTI_SETADC(p_setadc::PAC, p_setadc::CH_0, p_setadc::SET_Y, 2 * FACE_R_DIM);
+        TTI_SETADC(p_setadc::PAC, p_setadc::CH_1, p_setadc::SET_Y, FACE_R_DIM);
         ckernel::ckernel_template::run();
     }
 
-    TTI_SETADCXY(p_setadc::PAC, 0, 0, 0, 0, 0b1010); // reset ch0 and ch1 y counters
+    TTI_SETADCXY(p_setadc::PAC, 0, 0, 0, 0, 0b1010);
     TTI_WRCFG(p_gpr::ZERO, p_cfg::WRCFG_32b, PCK0_ADDR_CTRL_XY_REG_1_Xstride_ADDR32);
 }
 

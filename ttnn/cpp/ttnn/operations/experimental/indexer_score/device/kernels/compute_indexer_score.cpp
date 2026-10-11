@@ -716,7 +716,6 @@ void kernel_main() {
                                 /*batches = q-rows */ q_tiles_per_unit));
                     }
                 } else {
-                    // A Bfp8_b query is faster in four-tile fast untilize chunks than in eight.
                     constexpr auto fast_chunk =
                         compute_kernel_lib::dfb_l1_format<cb_q>() == static_cast<uint32_t>(DataFormat::Bfp8_b)
                             ? compute_kernel_lib::untilize_config::FastChunk::FourTiles

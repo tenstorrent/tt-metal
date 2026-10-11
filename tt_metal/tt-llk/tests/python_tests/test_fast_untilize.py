@@ -215,8 +215,7 @@ def test_fast_untilize(formats, dest_acc, dimensions, dest_sync, stimulus_kind):
     )
 
 
-# With a 16-bit DEST, rows over four tiles use chunks of up to eight: tails of 2 to 8 tiles after a chunk of eight,
-# and the 4 + 5 split of a 17-tile row's last nine.
+# With a 16-bit DEST, rows over four tiles use chunks of up to eight, including the 4 + 5 tail split.
 @parametrize(
     formats=[
         InputOutputFormat(DataFormat.Float16_b, DataFormat.Float16_b),

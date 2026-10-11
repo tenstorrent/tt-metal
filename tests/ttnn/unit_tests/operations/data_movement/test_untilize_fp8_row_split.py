@@ -2,14 +2,7 @@
 #
 # SPDX-License-Identifier: Apache-2.0
 
-"""Pack untilize to Fp8_e4m3 of rows that the even block split leaves in one-tile blocks (tt-metal#59140).
-
-Each row of a one-tile block is its own 32-datum L1 stream, and an Fp8_e4m3 stream reaches L1 in 64-byte units, so a
-one-tile block writes 32 bytes of zeros over the next block. The untilize helper and the DeepSeek prefill dispatch and
-combine compute kernels split such rows into blocks of two or more tiles; the compute API refuses one-tile blocks of a
-wider row at kernel build. The widths are the ones each path used to split into one-tile blocks: no divisor between 2
-and 8 for the dispatch and combine kernels, none between 2 and the DEST limit for the helper.
-"""
+"""Pack untilize to Fp8_e4m3 of rows that the even block split would leave in one-tile blocks."""
 
 import pytest
 import torch
@@ -28,8 +21,7 @@ ROWS = 32
 SENTINEL = 0xFFFFFFFF
 DEEPSEEK_KERNELS = "ttnn/cpp/ttnn/operations/experimental/deepseek_prefill"
 
-# Reads the input tiles one at a time; around them, optionally pushes a page of a small uint32 CB carrying a value (the
-# dispatch kernel's route signal or the combine kernel's token count) and a final page (the dispatch sentinel).
+# Reads the input tiles one at a time, optionally pushing a value page (route signal or token count) and a final page (sentinel).
 READER = """
 #include <cstdint>
 #include "api/dataflow/dataflow_api.h"
@@ -66,7 +58,6 @@ void kernel_main() {
 }
 """
 
-# Waits for the untilized rows and writes them to the row-major output, one row per page.
 WRITER = """
 #include <cstdint>
 #include "api/dataflow/dataflow_api.h"
@@ -102,7 +93,7 @@ void kernel_main() {
 }
 """
 
-# The init sequence of the DeepSeek prefill dispatch and combine compute kernels, with the block width given directly.
+# The init sequence of the DeepSeek prefill dispatch and combine compute kernels.
 API_INIT_COMPUTE = """
 #include "api/compute/compute_kernel_hw_startup.h"
 #include "api/compute/pack_untilize.h"
@@ -145,7 +136,6 @@ def _fp8_values(full_ct_dim, seed):
 
 
 def _launch(device, compute, values, out_dtype, out_page_size, out_pages, in_pages, pre_cb=None):
-    # Untilizes values ([rows, width], bf16) and returns the output rows; Fp8_e4m3 output comes back as its bytes.
     num_rows, row_datums = values.shape
     num_tiles = (num_rows // TILE) * (row_datums // TILE)
     tt_in = ttnn.from_torch(values, dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT, device=device)
@@ -245,7 +235,6 @@ def _deepseek_compute(kernel, compile_time_args, runtime_args=None):
         core_ranges=_core(),
         compile_time_args=compile_time_args,
         runtime_args=rt,
-        # The factories' configuration for an Fp8_e4m3 output.
         config=ttnn.ComputeConfigDescriptor(
             math_fidelity=ttnn.MathFidelity.HiFi4, fp32_dest_acc_en=True, dst_full_sync_en=True
         ),
@@ -297,8 +286,7 @@ def test_helper_fp8_row_split(device, width, full_sync):
 
 @pytest.mark.parametrize("width, full_sync", [(11, False), (13, False), (11, True), (17, True)])
 def test_helper_fp8_row_split_all_bf16(device, width, full_sync):
-    # Every bf16 bit pattern, special values included, untilized to Fp8_e4m3 through the split row and through
-    # one-tile rows (full-width blocks, which the packer writes without a pad); the bytes must match.
+    # Every bf16 bit pattern untilized through the split row and through one-tile rows (full-width blocks, no pad); the bytes must match.
     tile_rows = -(-65536 // (width * TILE * TILE))
     bits = torch.arange(tile_rows * width * TILE * TILE, dtype=torch.int32) % 65536
     values = bits.to(torch.int16).view(torch.bfloat16).reshape(tile_rows * TILE, width * TILE)
@@ -307,7 +295,6 @@ def test_helper_fp8_row_split_all_bf16(device, width, full_sync):
     split = _launch(
         device, _helper_compute(width, tile_rows, full_sync), values, ttnn.fp8_e4m3, fp8_tile, num_tiles, num_tiles
     )
-    # The same tiles, each its own row.
     tiles = values.reshape(tile_rows, TILE, width, TILE).permute(0, 2, 1, 3).reshape(num_tiles * TILE, TILE)
     one_tile_rows = _launch(
         device, _helper_compute(1, num_tiles, full_sync), tiles, ttnn.fp8_e4m3, fp8_tile, num_tiles, num_tiles
@@ -330,7 +317,6 @@ def test_helper_even_split_unchanged(device, out_dtype, width):
 
 @pytest.mark.parametrize("full_ct_dim", [11, 13, 17, 12, 224])
 def test_dispatch_untilize_fp8(device, full_ct_dim):
-    # The dispatch compute kernel for one batch of 32 tokens: a route signal, the row's tiles, then the sentinel.
     block = _block_ct_dim(full_ct_dim)
     compute = _deepseek_compute(
         "dispatch/device/kernels/compute/untilize_dispatch.cpp",
@@ -351,7 +337,6 @@ def test_dispatch_untilize_fp8(device, full_ct_dim):
 
 @pytest.mark.parametrize("full_ct_dim", [11, 13, 17, 12, 224])
 def test_combine_untilize_fp8(device, full_ct_dim):
-    # The combine compute kernel for one expert of 32 tokens on one untilizer core: the token count, then the tiles.
     block = _block_ct_dim(full_ct_dim)
     counter_pages = 1
     compute = _deepseek_compute(

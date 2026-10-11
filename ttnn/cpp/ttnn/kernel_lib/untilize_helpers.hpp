@@ -90,7 +90,6 @@ struct Fp8UntilizeRowSplit {
     static constexpr uint32_t num_full_blocks = full_ct_dim / max_block_ct_dim - (remainder == 1 ? 1 : 0);
     static constexpr uint32_t tail_0 = remainder == 1 ? (max_block_ct_dim + 2) / 2 : remainder;
     static constexpr uint32_t tail_1 = remainder == 1 ? (max_block_ct_dim + 1) / 2 : 0;
-    // The pack untilize init the row starts and ends with.
     static constexpr uint32_t first_block_ct_dim = num_full_blocks > 0 ? max_block_ct_dim : tail_0;
 };
 

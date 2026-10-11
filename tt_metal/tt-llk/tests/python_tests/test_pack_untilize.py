@@ -78,14 +78,12 @@ _ALL_FORMATS = input_output_formats(
         DataFormat.Fp8_e4m3,
     ]
 )
-# Presubmit: 16-bit and 32-bit DEST reads and an 8-bit output; the nightly sweeps take every format pair.
 _SMOKE_FORMATS = [
     InputOutputFormat(DataFormat.Float16_b, DataFormat.Float16_b),
     InputOutputFormat(DataFormat.Float32, DataFormat.Float32),
     InputOutputFormat(DataFormat.Float16_b, DataFormat.Fp8_e4m3),
 ]
-# Full rows and rows split into blocks whose output rows are not contiguous in L1; the 68-tile row exceeds the packer's
-# output offset window for 32-bit data. block_ct_dim 0 takes the block size the other test derives.
+# Full and split rows, output rows not contiguous in L1; the 68-tile row exceeds the packer's output offset window for 32-bit data.
 _ROW_DIMENSIONS = [
     [32, 32],
     [64, 32],
@@ -108,8 +106,7 @@ def _row_block_ct_dim(input_dimensions):
     ]
 
 
-# narrow_row: every tile row keeps its first row_datums datums, as in the sharded row-major transpose whose output
-# width is not a multiple of 32. Widths 5 and 21 give rows whose byte size is mostly not a multiple of 16.
+# narrow_row: every tile row keeps its first row_datums datums; widths 5 and 21 give byte sizes mostly not a multiple of 16.
 _NARROW_DIMENSIONS = [[32, 32], [64, 32], [32, 64], [32, 128]]
 _NARROW_ROW_DATUMS = [5, 8, 16, 21, 24]
 

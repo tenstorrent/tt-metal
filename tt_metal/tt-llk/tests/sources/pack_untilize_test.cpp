@@ -135,7 +135,6 @@ void run_kernel(RUNTIME_PARAMETERS params)
         L1_ACCESS_ADDRESS_GRANULARITY;
     if constexpr (NARROW_ROW)
     {
-        // A narrow row keeps ROW_NUM_DATUMS datums of every tile row
         const std::uint32_t rows_per_tile = FACE_R_DIM * ((params.num_faces > 2) ? 2 : 1);
         row_stride_16B   = (FULL_CT_DIM * rows_per_tile * ROW_NUM_DATUMS * format_size_in_bytes(formats.pack_dst)) / L1_ACCESS_ADDRESS_GRANULARITY;
         block_stride_16B = (BLOCK_CT_DIM * ROW_NUM_DATUMS * format_size_in_bytes(formats.pack_dst)) / L1_ACCESS_ADDRESS_GRANULARITY;

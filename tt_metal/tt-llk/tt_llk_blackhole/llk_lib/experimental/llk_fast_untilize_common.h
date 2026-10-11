@@ -38,14 +38,12 @@ constexpr std::uint32_t FAST_UNTILIZE_PACK_BOTTOM_STRIP_DEST_TARGET_OFFSET = 0;
 // double-buffer independently of the ambient kernel sync mode.
 constexpr DstSync FAST_UNTILIZE_INTERNAL_DST_SYNC_MODE = DstSync::SyncHalf;
 
-// The chunk width a row uses: eight tiles with a 16-bit DEST when the row is wider than four tiles, else four.
 template <std::uint32_t full_ct_dim, bool is_fp32_dest_acc_en>
 constexpr std::uint32_t fast_untilize_max_unit_dim()
 {
     return (is_fp32_dest_acc_en || full_ct_dim <= FAST_UNTILIZE_MAX_UNIT_DIM) ? FAST_UNTILIZE_MAX_UNIT_DIM : FAST_UNTILIZE_MAX_UNIT_DIM_16BIT_DEST;
 }
 
-// Rows of one face-pair strip in the layout of a chunk of up to max_unit_dim tiles (128 for four tiles).
 constexpr std::uint32_t fast_untilize_strip_rows(const std::uint32_t max_unit_dim)
 {
     return (max_unit_dim > FAST_UNTILIZE_MAX_UNIT_DIM ? FAST_UNTILIZE_MAX_UNIT_DIM_16BIT_DEST : FAST_UNTILIZE_MAX_UNIT_DIM) * FAST_UNTILIZE_TILE_STRIDE_ROWS;
