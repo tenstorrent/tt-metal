@@ -2024,7 +2024,8 @@ class TestConfig:
                 *(
                     [flag for flag in compile_flags if flag != "-g"]
                     if init_only
-                    else compile_flags
+                    # line tables and frames only (callstacks), no locals: loaded bytes identical, a tenth less compile
+                    else [("-g1" if flag == "-g" else flag) for flag in compile_flags]
                 ),
                 "-S",
                 "-x",
