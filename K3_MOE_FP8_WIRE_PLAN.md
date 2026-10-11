@@ -75,7 +75,10 @@ fp8 dispatch wire (`MOE_SPLIT_SHARED=1/0` forces it).
 
 **Status of the goals that remain open.**
 - G1: met on the LB (above).
-- G2 (standalone Q2 ≤ 60 µs): not met, ~103 µs. The writer now issues its row writes before staging the scales
+- G2 (standalone Q2 ≤ 60 µs): not met, ~100 µs (phases now run across a whole 28-tile unit: one LLK init per
+  phase per unit, 103 → 100 µs). Per core: compute 47–89 µs (median 61), writer 59–100 µs (median 73); the spread
+  is the NoC gradient (top grid rows ~40% slower) plus the 3-vs-2 unit split. Perfectly balanced compute alone
+  would be ~45 µs, so ≤ 60 µs needs both balancing for the gradient and cheaper per-tile work. Earlier: The writer now issues its row writes before staging the scales
   and converts each 1/scale straight into the staging rows (106 → 103 µs). Compute is ~1000 cycles per tile over
   three phases (|x|, FPU row-max + SFPU pow2 1/scale, column-broadcast multiply + pack_untilize); the |x| pass
   can't be folded into the reduce (GMPOOL takes the max of SrcA only, the scaler is not applied for MAX).

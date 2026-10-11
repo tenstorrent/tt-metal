@@ -174,7 +174,7 @@ KernelIds build_kernels_and_cbs(
         CreateCircularBuffer(program, all_cores, cfg);
     };
     if (fast_1x32 && defines.contains("DIRECT_SRC")) {
-        make_scale_tile_cb(cb_abs_idx, 2 * block_wt);  // |x| of bf16 / bf8_b input is exact in bf16
+        make_scale_tile_cb(cb_abs_idx, std::max(2u, q_unit) * block_wt);  // |x| (exact in bf16); one unit at a time
     } else {
         make_fp32_tile_cb(cb_abs_idx, 2 * block_wt);  // abs tiles for one block row
     }
@@ -189,7 +189,7 @@ KernelIds build_kernels_and_cbs(
             make_fp32_tile_cb(CBIndex::c_19, 3 * (segments - 1));  // partners' partials, ring of three rows
         }
     }
-    make_scale_tile_cb(cb_inv_scale_tiles_idx, 2 * block_ht * chunk_scale_blocks);  // col0 = 1/scale
+    make_scale_tile_cb(cb_inv_scale_tiles_idx, std::max(2u, q_unit) * block_ht * chunk_scale_blocks);  // col0 = 1/scale
 
     // cb_output_e4m3: e4m3 output, always row-major, one tile per page, double-buffered.
     // Identical for both input layouts (ROW_MAJOR and TILE).
