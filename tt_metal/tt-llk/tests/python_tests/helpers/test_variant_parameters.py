@@ -2215,9 +2215,6 @@ class CLAMPED_SILU_PARAMS(TemplateParameter):
 
 @dataclass
 class GENERALIZED_MOE_GATE_PERF_PATH(TemplateParameter):
-    """The gate path the generalized MoE gate perf kernel runs, ``ungrouped`` (the ttnn op) or ``grouped`` (the
-    DeepSeek gate); the token geometry is fixed and emitted here."""
-
     gmg_path: str = "ungrouped"
 
     def convert_to_cpp(self) -> str:
