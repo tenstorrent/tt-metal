@@ -29,6 +29,7 @@ import torch
 
 import ttnn
 from models.common.lightweightmodule import LightweightModule
+from models.demos.deepseek_v3_d_p.tt.kda.state_adapter import slot_index
 
 
 def validate_kda_bounds(actual_start: int | None, actual_end: int | None) -> None:
@@ -56,18 +57,20 @@ def _device_bound(value: int, device) -> ttnn.Tensor:
 
 
 class K3KdaChunk:
-    """What every KDA layer of one eager chunk shares: the device bounds and the selection table.
+    """What every KDA layer of one eager chunk shares: the device bounds and slot, and the selection table.
 
-    Both depend only on the chunk's bounds and the SP geometry, which all of a rank's KDA layers have in common,
-    so building them per layer repeated two host-to-device writes and the whole selection graph on every layer.
-    They are built by the first KDA layer that asks, so a rank with no KDA layer uploads nothing, and the
-    transformer releases them after its last layer. Traced calls bring their bounds in `metadata` and do not use
-    this.
+    They depend only on the chunk's bounds, its user slot and the SP geometry, which all of a rank's KDA layers
+    have in common, so building them per layer repeated host-to-device writes and the whole selection graph on
+    every layer. They are built by the first KDA layer that asks, so a rank with no KDA layer uploads nothing,
+    and the transformer releases them after its last layer. Traced calls bring their bounds and slot in
+    `metadata` and do not use this.
     """
 
-    def __init__(self, actual_start: int | None, actual_end: int | None):
+    def __init__(self, actual_start: int | None, actual_end: int | None, slot: int = 0):
         self._host_bounds = (0 if actual_start is None else actual_start, actual_end)
+        self._host_slot = slot
         self._bounds = None
+        self._slot = None
         self._selections = {}
 
     def bounds(self, device) -> tuple:
@@ -75,6 +78,11 @@ class K3KdaChunk:
             start, end = self._host_bounds
             self._bounds = (_device_bound(start, device), None if end is None else _device_bound(end, device))
         return self._bounds
+
+    def slot(self, device) -> ttnn.Tensor:
+        if self._slot is None:
+            self._slot = slot_index(device, self._host_slot)
+        return self._slot
 
     def selections(self, kda):
         key = (
@@ -95,6 +103,9 @@ class K3KdaChunk:
                 if bound is not None:
                     ttnn.deallocate(bound)
             self._bounds = None
+        if self._slot is not None:
+            ttnn.deallocate(self._slot)
+            self._slot = None
 
 
 @dataclass(frozen=True)
@@ -239,34 +250,37 @@ class TtK3KdaAttention(LightweightModule):
                 f"KDA layer {self.layer_idx} has no state cache; call bind_state_cache() before the first forward"
             )
 
-        # Reuse both caller-owned scalars during capture: replay changes the
-        # interval without rebuilding the graph or reading bounds on the host.
+        # Reuse the caller-owned scalars during capture: replay changes the interval and the user slot
+        # without rebuilding the graph or reading either on the host. The slot is a device tensor on every
+        # path, so the carry a capture touches is chosen when it replays, not when it is recorded.
         selections = None
-        owns_bounds = False
+        owns_scalars = False
         if ctx.metadata is not None:
-            actual_start, actual_end = ctx.metadata[1:3]
+            slot, actual_start, actual_end = ctx.metadata[0:3]
         elif ctx.kda_chunk is not None:
             actual_start, actual_end = ctx.kda_chunk.bounds(self.kda.device)
+            slot = ctx.kda_chunk.slot(self.kda.device)
             selections = ctx.kda_chunk.selections(self.kda)
         else:
             actual_start = _device_bound(0 if ctx.actual_start is None else ctx.actual_start, self.kda.device)
             actual_end = None if ctx.actual_end is None else _device_bound(ctx.actual_end, self.kda.device)
-            owns_bounds = True
+            slot = slot_index(self.kda.device, ctx.cache_user_id)
+            owns_scalars = True
         try:
             output, new_state = self.kda.forward(
                 hidden,
-                self._states.read(self.layer_idx, ctx.cache_user_id),
+                self._states.load(self.layer_idx, slot),
                 actual_start=actual_start,
                 actual_end=actual_end,
                 selections=selections,
             )
+            ttnn.deallocate(hidden)
+            self._states.commit(self.layer_idx, new_state, slot)
         finally:
-            if owns_bounds:
-                ttnn.deallocate(actual_start)
-                if actual_end is not None:
-                    ttnn.deallocate(actual_end)
-        ttnn.deallocate(hidden)
-        self._states.commit(self.layer_idx, new_state, ctx.cache_user_id)
+            if owns_scalars:
+                for scalar in (slot, actual_start, actual_end):
+                    if scalar is not None:
+                        ttnn.deallocate(scalar)
 
         # `_project_output` reduce-scatters on the TP axis and returns `[B, T, d/tp]`, so the only
         # thing left is the leading axis the block's residual expects.

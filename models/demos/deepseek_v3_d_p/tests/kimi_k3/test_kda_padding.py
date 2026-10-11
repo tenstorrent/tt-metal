@@ -18,6 +18,7 @@ from models.demos.deepseek_v3_d_p.tests.kda.utils import (
     reconstruct_state_at_sp_rank,
     to_sp_input,
 )
+from models.demos.deepseek_v3_d_p.tt.kda.state_adapter import deallocate_state, slot_index
 from models.demos.deepseek_v3_d_p.tt.kimi_k3.attention import K3AttnContext, TtK3KdaAttention
 from models.demos.deepseek_v3_d_p.tt.kimi_k3.kda_state import KdaStateCache
 from tests.ttnn.unit_tests.operations.experimental.kda.kda_test_utils import assert_bit_identical, make_actual_start
@@ -52,10 +53,12 @@ def test_k3_padding_eager_and_trace_continue_exact_carries(mesh_device, sp_axis,
         )
 
     input_tt = upload(hidden)
-    start_tt, end_tt = make_actual_start(mesh_device, 0), make_actual_start(mesh_device, capacity)
-    ctx = K3AttnContext(actual_start=999, actual_end=999, metadata=(None, start_tt, end_tt))
-    state = cache.read(1)
-    addresses = state.recurrent.buffer_address(), state.convolution.buffer_address()
+    slot_tt, start_tt, end_tt = (
+        slot_index(mesh_device, 0),
+        make_actual_start(mesh_device, 0),
+        make_actual_start(mesh_device, capacity),
+    )
+    ctx = K3AttnContext(actual_start=999, actual_end=999, metadata=(slot_tt, start_tt, end_tt))
     # Nonzero carried state before the short intervals, including ends just past
     # the head or a device boundary and a one-tile separated tail on SP ranks.
     cases = [(0, capacity), (32, 32), (96, 64), (32, 96), (32, 224), (0, min(capacity, 288))]
@@ -69,14 +72,18 @@ def test_k3_padding_eager_and_trace_continue_exact_carries(mesh_device, sp_axis,
     cases += [(0, capacity)]
 
     def snapshots(output, permutation, length, state=None):
-        state = cache.read(1) if state is None else state
+        owned = state is None
+        state = cache.read(1) if owned else state
         physical = reconstruct_sp_tp_tensor(output, mesh_device, sp_axis, tp_axis, tp_dim=2, sp_dim=1)
         valid_output = physical[:, torch.argsort(permutation)][:, :length].clone()
-        return [valid_output] + [
+        result = [valid_output] + [
             ttnn.to_torch(shard).clone()
             for tensor in (state.recurrent, state.convolution)
             for shard in ttnn.get_device_tensors(tensor)
         ]
+        if owned:
+            deallocate_state(state)
+        return result
 
     eager_results = []
     trace = None
@@ -132,6 +139,7 @@ def test_k3_padding_eager_and_trace_continue_exact_carries(mesh_device, sp_axis,
                         native_state.convolution,
                     ):
                         ttnn.deallocate(tensor)
+                deallocate_state(incoming)
                 if traced:
                     for destination, value in ((start_tt, start), (end_tt, start + length)):
                         source = make_actual_start(mesh_device, value)
@@ -141,9 +149,10 @@ def test_k3_padding_eager_and_trace_continue_exact_carries(mesh_device, sp_axis,
                     output = traced_output
                 else:
                     output = attention.forward(input_tt, K3AttnContext(actual_start=start, actual_end=start + length))
+                committed = cache.read(1)
                 assert_matches_reference(
                     output_tt=output,
-                    state=cache.read(1),
+                    state=committed,
                     permutation=permutation,
                     expected_output=expected.bfloat16(),
                     expected_state=reference_state,
@@ -157,8 +166,7 @@ def test_k3_padding_eager_and_trace_continue_exact_carries(mesh_device, sp_axis,
                     state_linf_threshold=None if sp == 4 and start == 96 and length == capacity - 64 else 0.6,
                     label=f"K3 {'trace' if traced else 'eager'} SP{sp} start={start} length={length}",
                 )
-                current = cache.read(1)
-                assert (current.recurrent.buffer_address(), current.convolution.buffer_address()) == addresses
+                deallocate_state(committed)
                 observed = snapshots(output, permutation, length)
                 if traced:
                     for eager, replayed in zip(eager_results[case_index], observed, strict=True):
@@ -173,5 +181,5 @@ def test_k3_padding_eager_and_trace_continue_exact_carries(mesh_device, sp_axis,
             ttnn.release_trace(mesh_device, trace)
             ttnn.deallocate(traced_output)
         cache.deallocate()
-        for tensor in (input_tt, start_tt, end_tt):
+        for tensor in (input_tt, slot_tt, start_tt, end_tt):
             ttnn.deallocate(tensor)

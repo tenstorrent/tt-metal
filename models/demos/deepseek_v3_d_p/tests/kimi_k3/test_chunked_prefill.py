@@ -51,7 +51,12 @@ from models.demos.deepseek_v3_d_p.tests.kimi_k3.test_transformer_depth import (
 from models.demos.deepseek_v3_d_p.tt.attn_res.attn_res import TtAttnRes
 from models.demos.deepseek_v3_d_p.tt.attn_res.attn_res_stream import TtAttnResWalk
 from models.demos.deepseek_v3_d_p.tt.attn_res.weights import load_attn_res_weights
-from models.demos.deepseek_v3_d_p.tt.kda.state_adapter import KdaContractGeometry, KdaStates, allocate_native_state
+from models.demos.deepseek_v3_d_p.tt.kda.state_adapter import (
+    KdaContractGeometry,
+    KdaStates,
+    allocate_native_state,
+    deallocate_state,
+)
 from models.demos.deepseek_v3_d_p.tt.kimi_k3.residual import TtAttnResResidual
 from models.demos.deepseek_v3_d_p.tt.kimi_k3.transformer import TtKimiK3Transformer
 from models.demos.deepseek_v3_d_p.tt.kimi_k3.weights import cache_root
@@ -271,7 +276,9 @@ def test_chunked_prefill_carries_kda_state(mesh_device, device_params, num_layer
             # produces q0k0v0q1k1v1... against q0q1q2q3k0k1..., which is a permutation of the right
             # values and reads as PCC ~0.05-0.10 — bouncing, not zero, which is how a layout error
             # tells itself apart from lost state.
-            shards = [ttnn.to_torch(sh) for sh in ttnn.get_device_tensors(model.kda_states.read(0, 0).convolution)]
+            carry = model.kda_states.read(0, 0)
+            shards = [ttnn.to_torch(sh) for sh in ttnn.get_device_tensors(carry.convolution)]
+            deallocate_state(carry)
             columns = tuple(mesh_device.shape)[1]
             tp_size = tuple(mesh_device.shape)[TP_AXIS]
             history = KimiK3Config.KDA_SHORT_CONV_KERNEL_SIZE - 1
@@ -294,7 +301,9 @@ def test_chunked_prefill_carries_kda_state(mesh_device, device_params, num_layer
         if golden_carry is not None:
             row = (start + CHUNK) // SNAPSHOT_STRIDE - 1
             want_carry = golden_carry[row].transpose(-1, -2)
-            got_carry = _compose_carry(mesh_device, model.kda_states.read(0, 0).recurrent)
+            carry = model.kda_states.read(0, 0)
+            got_carry = _compose_carry(mesh_device, carry.recurrent)
+            deallocate_state(carry)
             carry_pcc = float(str(comp_pcc(want_carry, got_carry, CARRY_PCC)[1]).split()[-1])
 
         # The slab copy of every KDA layer must be the carry, bit for bit, on every chip.
@@ -312,6 +321,7 @@ def test_chunked_prefill_carries_kda_state(mesh_device, device_params, num_layer
                         ):
                             failures.append(f"chunk {chunk} layer {layer_idx} {name} slab != carry on device {dev}")
                             break
+                deallocate_state(carry)
 
         footprints.append(_dram_bytes(mesh_device))
         logger.info(

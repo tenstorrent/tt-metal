@@ -329,26 +329,11 @@ class TtKimiK3Transformer(LightweightModule):
         PREFILL_USE_TRACE=1; without it the runner dies with AttributeError during compile().
 
         Kimi-K3 is trace-eligible for the reason `TtPrefillTransformer.set_trace_controller` gives:
-        its attention is KDA or dense MLA, never a sparse/DSA indexer. The KDA carries are
-        address-stable (`KdaStateCache` commits with `ttnn.copy` into persistent buffers), which a
-        capture requires -- but address-stable is necessary, not sufficient: it is ONE address per
-        layer, and the capture bakes in whichever slot it was recorded with. See the guard below.
+        its attention is KDA or dense MLA, never a sparse/DSA indexer. Its KDA carries are
+        capture-safe for every user slot: `KdaStateCache` keeps them at fixed addresses and selects
+        the slot on device from `metadata[0]`, the way MLA selects its KV slot, so one capture serves
+        any slot the request is on (#59977).
         """
-        # The KDA arm selects its carry with the HOST scalar `ctx.cache_user_id`
-        # (`attention.py`), so the slot is resolved at capture time, not at replay time. The
-        # captured forward is built with cache_user_id=0 (`tt_prefill_runtime.py::_forward_traced`)
-        # while the eager path passes the real slot, so every replay would read and overwrite
-        # slot 0's recurrent carry whatever slot the request is on -- silently, since a chunk's own
-        # output still looks right and only the NEXT chunk inherits the wrong state. MLA is
-        # unaffected: it takes its slot from device-resident metadata. Refuse rather than corrupt;
-        # fixing it properly needs the carry indexed on-device from that metadata.
-        if controller is not None and self.kda_states is not None and self.kda_states.num_slots > 1:
-            raise NotImplementedError(
-                f"traced prefill supports one KDA slot, but this model has "
-                f"{self.kda_states.num_slots}. A capture resolves the KDA slot at capture time, so "
-                f"every replay would advance slot 0's carry. Run multi-user Kimi-K3 with "
-                f"PREFILL_USE_TRACE=0."
-            )
         for layer in self.layers:
             layer.set_trace_controller(controller)
 
@@ -482,8 +467,8 @@ class TtKimiK3Transformer(LightweightModule):
             f"snapshots, expected {self.inbound_planes - 1}"
         )
 
-        # Eager chunks build the KDA bounds and selection table once and share them across the KDA layers.
-        kda_chunk = K3KdaChunk(actual_start, actual_end) if metadata is None else None
+        # Eager chunks build the KDA bounds, slot and selection table once and share them across the KDA layers.
+        kda_chunk = K3KdaChunk(actual_start, actual_end, cache_user_id) if metadata is None else None
         try:
             for local_idx, layer in enumerate(self.layers):
                 ctx = K3AttnContext(
