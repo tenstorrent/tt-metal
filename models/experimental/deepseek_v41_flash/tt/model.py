@@ -45,7 +45,7 @@ from models.experimental.deepseek_v41_flash.tt.engram_lookup import (
     engram_table_nbytes,
     load_engram_table,
 )
-from models.experimental.deepseek_v4_flash.tt.common import _MASK_NEG, _profile, _traced_decode_enabled
+from models.experimental.deepseek_v4_flash.tt.common import _MASK_NEG, _profile, _region, _traced_decode_enabled
 from models.experimental.deepseek_v4_flash.tt.decode.attention import (
     CSA_INDEX_BLOCK_SIZE,
     _index_key_pool,
@@ -823,7 +823,8 @@ class DeepSeekV41Model(DeepSeekV4Model):
             if ctx is None:
                 ctx = self._step_context(sm, pkt, causal, r2_pool, r2_select)
             if is_first:
-                embedded = self.embed_tokens(ctx["token"])
+                with _region("EMBED"):
+                    embedded = self.embed_tokens(ctx["token"])
                 hidden = embedded.shape[-1]
                 streams = ttnn.repeat(
                     ttnn.reshape(embedded, [self._decode_batch, 1, 1, hidden]),

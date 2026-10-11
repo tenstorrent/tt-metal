@@ -571,13 +571,13 @@ def _apply_rope(
     rows are contiguous because ``H`` is tile-aligned: the op counts rows the same way
     off the shard, so nothing has to be folded onto dim -2.
     """
-    _signpost("apply_rope start")
+    _signpost("ROPE_START")
     d = x.shape[-1]
     hd = d if head_dim is None else head_dim
     assert d % hd == 0, f"last dim {d} is not a multiple of head_dim={hd}"
 
     out_sh = ttnn.experimental.fused_partial_rope(x, cos, sin, _trans_mat_for(rot), rope_dim, head_dim=hd)
-    _signpost("apply_rope end")
+    _signpost("ROPE_END")
     return out_sh
 
 
