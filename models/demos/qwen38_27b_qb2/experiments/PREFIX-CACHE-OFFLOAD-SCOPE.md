@@ -4,6 +4,19 @@ October 10, 2026. This is an implementation scope, not a supported feature or
 an enabled serving change. Compact GPQA and kernel qualification stay ahead
 of this work. Preserve BFP8 KV, FP32 recurrent state and existing trace safety.
 
+## October 11: prepared batched native and HTTP qualification
+
+The [qualification bundle recipe](PREFIX-QUALIFICATION-BUNDLE.md) freezes the
+published model implementation `d1019c0d`, local plugin `13b9777`, pinned
+checkpoint `1d4bf0f2`, native runtime `a08819dd` and exact BFP8/FP32 policy.
+Separate persistent scripts require fresh matching-mode physical, 4-layer and
+full64 evidence before HTTP tests. They do not auto-run during preparation.
+HTTP gates cover exact cold/warm outputs, suffix boundaries, concurrent client
+submissions, cancellation, corrupt/missing checkpoint recomputation, quota
+failure and reuse after server restart. They explicitly leave physical slot
+remap/preemption proof and true TTFT/system throughput for subsequent gates.
+No native or serving result for the new integration is claimed by preparation.
+
 ## October 11, 04:30 UTC: opt-in serving scheduler and worker integration
 
 The paired plugin implementation now uses vLLM 0.26's actual KVConnector

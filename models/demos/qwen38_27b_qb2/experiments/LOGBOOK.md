@@ -2302,3 +2302,24 @@ No session connection is needed for that queue to continue.
   eviction of a failed reconstructable checkpoint key, so cold recomputation
   can repair it instead of repeatedly encountering an immutable corrupt file.
   Both cases have real-file CPU regressions; final prefix count is 45.
+
+## 2026-10-11 — freeze complete-prefix hardware qualification, unlaunched
+
+- Prepared explicit freeze/seal/native/http controllers for model d1019c0d and
+  plugin13b9777. Freeze/seal copy committed task source and bind pinned weights,
+  native library bytes, precision and generated prompts without opening devices.
+- Fresh batched physical transfer +4/full64 continuation gate actual serving.
+  Reject stale serial receipts, wrong devices, changed or incomplete source maps,
+  precision drift, missing gates and modified evidence. No reset/recovery wrapper.
+- HTTP recipe checks exact cold/warm greedy token IDs, suffix boundaries,
+  concurrent submissions, cancellation, corrupt/missing recomputation and exact
+  checkpoint repair, quota admission failure, persisted restart and post-serving
+  device cleanup. Concurrency does not itself prove physical remaps/preemption;
+  those remain explicit promotion blockers. Total response latency is not TTFT.
+- Time/memory/log/disk bounds and exclusive device lock apply to explicit launch;
+  recipes survive disconnect and stop owned process groups. They never launch
+  AgentX or GPQA and do not change serving defaults. Only selected runtime
+  environment is logged, avoiding inherited credentials.
+- Local CPU prefix suite: 57 tests, 56 passed and one Linux process-group test
+  deferred to the device host's disposable CPU environment. No device/service
+  launch was performed; main counter profiling retains device priority.
