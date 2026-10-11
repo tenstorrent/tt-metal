@@ -1095,7 +1095,7 @@
   model_family: Qwen
   skus:
     wh_llmbox_perf:
-      timeout: 25
+      timeout: 30
       tier: 2
   owner_id: U03PUAKE719 # Miguel Tairum Cruz
   team: models
