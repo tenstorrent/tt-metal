@@ -197,12 +197,7 @@ inline void _llk_unpack_AB_reduce_(const std::uint32_t address_a, const std::uin
     switch_config_context(unp_cfg_context);
 }
 
-/**
- * @brief Unpack a block of consecutive data tiles against one scaler tile, one context acquire per chunk of
- *        @ref REDUCE_BLOCK_MAX_TILES tiles.
- *
- * Pair with @ref _llk_math_reduce_block_ on the math thread with the same tile count.
- */
+// One context acquire per chunk of REDUCE_BLOCK_MAX_TILES tiles; pair with _llk_math_reduce_block_ on the same tile count.
 template <PoolType pool_type, ReduceDim reduce_dim>
 inline void _llk_unpack_AB_reduce_block_(
     std::uint32_t address_a,

@@ -17,7 +17,6 @@
 #include "profiler.h"
 #include "tensor_shape.h"
 
-// Globals
 std::uint32_t unp_cfg_context          = 0;
 std::uint32_t pack_sync_tile_dst_ptr   = 0;
 std::uint32_t math_sync_tile_dst_index = 0;
@@ -179,7 +178,7 @@ void run_kernel(RUNTIME_PARAMETERS params)
     {
         START_PERF_MEASURE("INIT")
         _llk_pack_hw_configure_<is_fp32_dest_acc_en, ckernel::PackMode::Default>(formats.pack_src, formats.pack_dst, TILE_WIDTH * TILE_HEIGHT);
-        _llk_pack_init_wrapper_<PackMode::Default, false /* zero_output */>(formats.pack_dst);
+        _llk_pack_init_wrapper_<PackMode::Default, false>(formats.pack_dst);
         _llk_pack_reduce_mask_config_<ReduceDim::REDUCE_ROW>(FACE_R_DIM);
         _llk_pack_dest_init_<DST_SYNC, is_fp32_dest_acc_en>();
         PROFILER_SYNC();

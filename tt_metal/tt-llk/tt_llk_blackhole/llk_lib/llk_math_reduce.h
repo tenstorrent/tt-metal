@@ -117,9 +117,6 @@ inline void reduce_row_pool_all_faces(const std::uint32_t num_faces_c_dim)
     reduce_pool_op<type, high_fidelity, p_setrwc::CLR_NONE, 0>();
 }
 
-/**
- * @brief Pool one row of faces and release the source banks of every face.
- */
 template <PoolType type, bool high_fidelity>
 inline void reduce_row_pool_all_faces_release(const std::uint32_t num_faces_c_dim)
 {
@@ -375,11 +372,7 @@ inline void _llk_math_reduce_(const std::uint32_t dst_index, const ckernel::Tens
     }
 }
 
-/**
- * @brief Reduce a block of tiles on the math thread, the counterpart of @ref _llk_unpack_AB_reduce_block_.
- *
- * A stride of 0 accumulates the block into one tile.
- */
+// A dst_stride of 0 accumulates the block into one tile.
 template <PoolType type, ReduceDim dim, bool is_fp32_dest_acc_en, MathFidelity math_fidelity, bool is_int_fpu_en = false>
 inline void _llk_math_reduce_block_(
     const std::uint32_t dst_index, std::uint32_t num_tiles, const std::uint32_t dst_stride, const ckernel::TensorShape tensor_shape)

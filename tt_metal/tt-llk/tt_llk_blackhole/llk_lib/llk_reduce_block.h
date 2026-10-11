@@ -23,4 +23,4 @@ constexpr bool reduce_block_holds_scaler(const TensorShape& tensor_shape)
            (tensor_shape.face_r_dim == FACE_R_DIM);
 }
 
-} // namespace ckernel
+}
