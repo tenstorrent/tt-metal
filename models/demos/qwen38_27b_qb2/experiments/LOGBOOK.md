@@ -2234,3 +2234,34 @@ No session connection is needed for that queue to continue.
 - Publication recheck:25 CPU tests and pre-commit passed locally. Verified
   adapter/test hashes against the full64 frozen manifest. Supervisor differs
   only by formatting; retained exact frozen source/diff and verified AST identity.
+
+## October 11, 03:35 UTC: serving leases and bounded copy batching candidate
+
+- Continued only in the isolated prefix/offload worktree. Main profiling and
+  multimodal worktrees, shared environments and live device services were not
+  modified. The user's conditional merge authorization requires consistently
+  passing actual serving integration; that condition is not satisfied yet.
+- Added a model-side serving coordinator for exact consumed frontiers under a
+  shared execution lease: request generations, exclusive private pages/slots,
+  history/page growth, complete slot remaps, asynchronous cancellation and
+  cancellation-safe publication. Corrupt disk payloads reset/fence before cold
+  fallback; device errors quarantine instead of masquerading as cache misses.
+- Added opt-in batched transfer submission with at most 1 MiB of retained host
+  DMA windows. This removes per-window completion waits within each group,
+  retaining opaque BFP8/FP32/BF16 bytes, neighbour preservation and host-buffer
+  lifetime through the final fence. It does not remove per-window enqueue calls
+  or the read-before-write restore; no hardware speedup is claimed yet.
+- CPU prefix suite: 38 passing tests. New coverage includes delayed asynchronous
+  transfers, all-rank shuffled-page restore, arbitrary chunk boundaries, failed
+  completion buffer retention, cancellation during restore, stale handles after
+  slot reuse, ownership aliases, namespace isolation and device quarantine.
+  The fake runtime reduces one 32-window download from 32 fences to one.
+- Added explicit batched-mode receipts and matching-mode validation to the
+  existing physical transfer and bounded full-model continuation tests. No
+  hardware test was launched; main profiling retains its hardware priority.
+- Actual plugin scheduler/worker admission and storage connector are remaining
+  work. The pinned runner does not execute KVConnector hooks. Enabling its
+  attention-only APC flag would not restore GDN/conv state. Multimodal reuse is
+  explicitly rejected pending media/processor and M-RoPE checkpoint identity.
+- Keep AgentX gated on both features through serving and full GPQA gated on
+  measured B16/32K/TP4 reaching 25 TSU. No default capability was enabled.

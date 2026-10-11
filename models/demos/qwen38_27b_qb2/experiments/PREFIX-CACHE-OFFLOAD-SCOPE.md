@@ -4,6 +4,50 @@ October 10, 2026. This is an implementation scope, not a supported feature or
 an enabled serving change. Compact GPQA and kernel qualification stay ahead
 of this work. Preserve BFP8 KV, FP32 recurrent state and existing trace safety.
 
+## October 11, 03:35 UTC: lifecycle coordinator and batched-transfer candidate
+
+The isolated branch now contains [`tt/prefix_serving.py`](../tt/prefix_serving.py),
+an execution-lease coordinator around the existing checkpoint codec and local
+store. It accepts scheduler-owned private pages and slots, checks request
+generations and tenant/cache-salt identity, follows complete slot permutations,
+and publishes an exact consumed frontier only after all-rank completion.
+Cancellation can mark a request during a transfer. A corrupt-storage restore
+resets and fences its private recurrent slot before cold fallback; a device
+failure instead quarantines the cache and retains outstanding host buffers.
+Multimodal prefix reuse is explicitly rejected until media/processor identity
+and M-RoPE state are represented in the checkpoint.
+
+An opt-in `PackedCacheTransfer(..., batched=True)` candidate submits shuffled
+page windows in groups with at most 1 MiB of host transfer buffers before each
+fence. It retains the existing exact packed-byte path and convolution neighbour
+preservation. The qualified serial default is unchanged. This candidate still
+issues individual page copies and reads before restoring writes; it does not
+yet implement a device gather/scatter mover or prove PCIe/SSD bandwidth.
+
+**38 CPU tests pass.** The asynchronous fake runtime verifies a 32-window read
+with one fence instead of 32, exact all-rank restore through arbitrary codec
+chunks, and buffer retention after failed completion. This is a mechanism
+test, not measured TT transfer performance. No new hardware run has started.
+The existing physical transfer test accepts `QWEN_PREFIX_BATCHED_TRANSFER=1`;
+the bounded continuation controller accepts `--batched-transfer` and requires
+the physical receipt to prove the same mode and source before continuation.
+
+The coordinator is **not wired into the serving runner yet**. The pinned TT
+runner has slot-move/release hooks but no KVConnector execution path. Its
+attention-only prefix capability cannot represent this hybrid checkpoint.
+Long-prefix hits under chunked prefill still need scheduler matched-token
+admission and complete private allocations before the worker restores KV/GDN.
+Copying a longer prefix into only the first chunk's allocated pages would be
+incorrect. Reuse vLLM block allocation and an existing storage connector where
+possible; keep scheduler policy separate from the TT transfer lease.
+
+Merge/default enablement remains conditional on repeated serving correctness,
+including cancellation, eviction/reload, independent suffixes and slot reuse.
+AgentX still waits for both prefix caching and SSD offload through serving.
+The user now gates another full GPQA on measured B16/32K/TP4 decode reaching
+25 TSU. Prefix reuse targets repeated-prompt TTFT and idle-session capacity;
+it does not increase native steady-state decode TSU.
+
 ## October 11 update: physical transfer and full-model continuation passed
 
 The isolated branch now includes the opaque-byte TT adapter in

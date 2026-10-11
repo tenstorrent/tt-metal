@@ -105,7 +105,16 @@ class ExclusiveTestTarget:
 def stats(transport):
     return {
         name: getattr(transport, name)
-        for name in ("bytes_read", "bytes_written", "windows_read", "windows_written", "max_host_window_bytes")
+        for name in (
+            "bytes_read",
+            "bytes_written",
+            "windows_read",
+            "windows_written",
+            "max_host_window_bytes",
+            "max_host_staging_bytes",
+            "synchronizations",
+            "batched",
+        )
     }
 
 
@@ -115,12 +124,14 @@ def test_prefix_transfer():
     receipt = Path(os.environ["QWEN_PREFIX_TRANSFER_RECEIPT"])
     assert not receipt.exists(), "Preserve each independent attempt"
     torch.set_num_threads(4)
+    batched = os.getenv("QWEN_PREFIX_BATCHED_TRANSFER") == "1"
     report = dict(
         state="opening",
         passed=False,
         cleanup_completed=False,
         serving_enabled=False,
         numerical_continuation_tested=False,
+        batched_transfer=batched,
         started_at=time.time(),
     )
     save(receipt, report)
@@ -155,8 +166,10 @@ def test_prefix_transfer():
         )
         pages = (7, 8, 2, 4)
         destination_pages = (10, 0, 11, 5)
-        source = PackedCacheTransfer(mesh, cache, checkpoint, slot=1, pages=pages)
-        target = ExclusiveTestTarget(PackedCacheTransfer(mesh, cache, checkpoint, slot=3, pages=destination_pages))
+        source = PackedCacheTransfer(mesh, cache, checkpoint, slot=1, pages=pages, batched=batched)
+        target = ExclusiveTestTarget(
+            PackedCacheTransfer(mesh, cache, checkpoint, slot=3, pages=destination_pages, batched=batched)
+        )
         root = receipt.parent / "checkpoint-store"
         store = AtomicDirectoryStore(root, max_bytes=2 * checkpoint.encoded_bytes, create=True)
         report.update(state="capture", payload_bytes=checkpoint.payload_bytes, encoded_bytes=checkpoint.encoded_bytes)
@@ -193,7 +206,9 @@ def test_prefix_transfer():
             value = stream.read(1)
             stream.seek(offset)
             stream.write(bytes([value[0] ^ 1]))
-        aborted = ExclusiveTestTarget(PackedCacheTransfer(mesh, cache, checkpoint, slot=2, pages=(12, 13, 14, 15)))
+        aborted = ExclusiveTestTarget(
+            PackedCacheTransfer(mesh, cache, checkpoint, slot=2, pages=(12, 13, 14, 15), batched=batched)
+        )
         try:
             restore(store, checkpoint, aborted, chunk_bytes=65537)
         except ValueError as error:

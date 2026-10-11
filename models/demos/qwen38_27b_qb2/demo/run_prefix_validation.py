@@ -15,11 +15,12 @@ from models.demos.qwen38_27b_qb2.demo.run_long_context_capacity import environme
 PREFIX = "models/demos/qwen38_27b_qb2/"
 
 
-def validate_stage(measured, layers):
+def validate_stage(measured, layers, *, batched=False):
     if (
         measured.get("passed") is not True
         or measured.get("cleanup_completed") is not True
         or measured.get("layers") != layers
+        or measured.get("batched_transfer", False) != batched
         or {row["name"] for row in measured["cases"]} != {"suffix_prefill", "traced_decode", "post_decode_checkpoint"}
     ):
         raise ValueError("Continuation gate lacks complete clean physical evidence")
@@ -33,6 +34,7 @@ def run(args):
         passed=False,
         serving_enabled=False,
         agentx_launched=False,
+        batched_transfer=args.batched_transfer,
         survives_disconnect=True,
         resumes_after_reboot=False,
         started_at=time.time(),
@@ -62,6 +64,8 @@ def run(args):
         ):
             raise ValueError("Packed transfer has not passed its physical TP4 gate")
         report["transfer_receipt_sha256"] = hashlib.sha256(args.transfer_receipt.read_bytes()).hexdigest()
+        if prior.get("batched_transfer", False) != args.batched_transfer:
+            raise ValueError("Continuation must use the transfer mode that passed physical validation")
         # The new numerical test must use the very adapter that passed DMA.
         old_manifest = json.loads((args.transfer_receipt.parent / "source-manifest.json").read_text())
         for name in ("tt/prefix_transfer.py", "tt/prefix_checkpoint.py", "tt/prefix_storage.py"):
@@ -75,7 +79,11 @@ def run(args):
             "TT_METAL_DISABLE_SFPLOADMACRO",
         ):
             env.pop(name, None)
-        env.update(QWEN_DECODE_BUCKETS="1", QWEN_PREFIX_CONTINUATION="1")
+        env.update(
+            QWEN_DECODE_BUCKETS="1",
+            QWEN_PREFIX_CONTINUATION="1",
+            QWEN_PREFIX_BATCHED_TRANSFER="1" if args.batched_transfer else "0",
+        )
         stages = ((4, 1200), (64, 3600))
         if bool(args.reuse_hybrid_receipt) != bool(args.reuse_manifest):
             raise ValueError("Reusing the hybrid gate requires its frozen source manifest")
@@ -88,7 +96,7 @@ def run(args):
             }
             if without_supervisor(prior_manifest) != without_supervisor(manifest):
                 raise ValueError("Cannot reuse a hybrid test from different source")
-            validate_stage(json.loads(args.reuse_hybrid_receipt.read_text()), 4)
+            validate_stage(json.loads(args.reuse_hybrid_receipt.read_text()), 4, batched=args.batched_transfer)
             report["stages"].append(
                 dict(
                     layers=4,
@@ -118,7 +126,7 @@ def run(args):
             save(receipt, report)
             run_capture(command, cwd=args.source, env=env, root=stage, timeout=timeout)
             measured = json.loads((stage / "continuation.json").read_text())
-            validate_stage(measured, layers)
+            validate_stage(measured, layers, batched=args.batched_transfer)
             report["stages"].append(dict(layers=layers, receipt=str(stage / "continuation.json"), passed=True))
             save(receipt, report)
         report.update(state="completed", passed=True)
@@ -136,4 +144,5 @@ if __name__ == "__main__":
         parser.add_argument("--" + name, type=Path, required=True)
     parser.add_argument("--reuse-hybrid-receipt", type=Path)
     parser.add_argument("--reuse-manifest", type=Path)
+    parser.add_argument("--batched-transfer", action="store_true")
     run(parser.parse_args())

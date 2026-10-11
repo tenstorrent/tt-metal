@@ -64,6 +64,7 @@ def test_prefix_continuation():
     receipt = Path(os.environ["QWEN_PREFIX_CONTINUATION_RECEIPT"])
     assert not receipt.exists()
     torch.set_num_threads(8)
+    batched = os.getenv("QWEN_PREFIX_BATCHED_TRANSFER") == "1"
     report = dict(
         state="opening",
         passed=False,
@@ -71,6 +72,7 @@ def test_prefix_continuation():
         layers=layers,
         serving_enabled=False,
         independent_eval=False,
+        batched_transfer=batched,
         started_at=time.time(),
         cases=[],
     )
@@ -128,7 +130,9 @@ def test_prefix_continuation():
         )
 
         def transfer(cp, slot):
-            return PackedCacheTransfer(mesh, cache, cp, slot=slot, pages=table[slot, : cp.consumed // 32].tolist())
+            return PackedCacheTransfer(
+                mesh, cache, cp, slot=slot, pages=table[slot, : cp.consumed // 32].tolist(), batched=batched
+            )
 
         started = time.monotonic()
         result = gen.prefill_forward(

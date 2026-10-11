@@ -54,18 +54,21 @@ def overlapping(windows, offset, size):
 class PackedCacheTransfer:
     """Bounded synchronous transport under an already-held external exclusive lease.
 
-    One host window is retained at a time. No tensor address changes or BFP8
-    conversions occur. Full convolution rank buffers use read/modify/write;
-    neighbouring slots retain their exact bytes. This serial first adapter is
-    deliberately conservative about host-buffer lifetimes and CQ completion.
+    The qualified default retains one host window at a time. The opt-in
+    batched path retains at most 1 MiB of windows until each completion fence.
+    No tensor address changes or BFP8 conversions occur. Full convolution rank
+    buffers use read/modify/write; neighbouring slots retain their exact bytes.
     """
 
-    def __init__(self, mesh, cache, checkpoint, *, slot, pages):
+    def __init__(self, mesh, cache, checkpoint, *, slot, pages, batched=False):
         import ttnn
 
         self.ttnn = ttnn
         self.mesh, self.cache, self.checkpoint = mesh, cache, checkpoint
         self.slot, self.pages = slot, tuple(pages)
+        if type(batched) is not bool:
+            raise ValueError("Batched transport must be explicitly enabled or disabled")
+        self.batched = batched
         if tuple(mesh.shape) != (1, checkpoint.layout.tp_size) or checkpoint.layout.tp_size != 4:
             raise ValueError("Packed cache transport requires the complete physical TP4 mesh")
         if type(slot) is not int or not 0 <= slot < cache.batch_size or not 1 <= cache.batch_size <= 32:
@@ -112,6 +115,10 @@ class PackedCacheTransfer:
         self.max_host_window_bytes = 0
         self.bytes_read = self.bytes_written = 0
         self.windows_read = self.windows_written = 0
+        self.max_host_staging_bytes = self.synchronizations = 0
+        # Retain asynchronous buffers even when a fence raises. The exclusive
+        # lease must quarantine the device before disposing of this transport.
+        self.pending = []
 
     def _windows(self, segment):
         expected = next((s for s in self.checkpoint.segments() if s == segment), None)
@@ -125,33 +132,118 @@ class PackedCacheTransfer:
         if self.dirty:
             self.ttnn.copy_host_to_device_tensor(self.host, self.view)
             # Retain every host reference until the asynchronous write is done.
-            self.ttnn.synchronize_device(self.mesh)
+            self._sync()
             self.bytes_written += self.raw.numel()
             self.windows_written += 1
             self.dirty = False
 
-    def _window(self, segment, window):
+    def _view(self, segment, window):
+        tensor = self.tensors[segment.rank, segment.layer, segment.kind]
+        return tensor if segment.kind == "conv" else self.ttnn.narrow(tensor, 0, window.start, window.length)
+
+    def _raw(self, segment, window, host):
         import torch
 
+        buffer = host.host_buffer().get_shard(self.ttnn.MeshCoordinate(0, segment.rank))
+        if buffer is None:
+            raise ValueError(f"Downloaded rank {segment.rank} is missing its parent mesh coordinate")
+        raw = torch.from_dlpack(buffer)
+        expected = self._physical_bytes(segment, window)
+        if raw.dtype != torch.uint8 or raw.numel() != expected or expected > MAX_CHUNK_BYTES:
+            raise ValueError("Downloaded packed buffer has unexpected physical size or dtype")
+        return raw
+
+    def _physical_bytes(self, segment, window):
+        return self.cache.batch_size * segment.size if segment.kind == "conv" else window.size
+
+    def _batches(self, segment, offset, size):
+        batch, total = [], 0
+        for overlap in overlapping(self._windows(segment), offset, size):
+            count = self._physical_bytes(segment, overlap[0])
+            if count > MAX_CHUNK_BYTES:
+                raise ValueError("A physical transfer exceeds the bounded host staging budget")
+            if total + count > MAX_CHUNK_BYTES:
+                yield batch
+                batch, total = [], 0
+            batch.append(overlap)
+            total += count
+        if batch:
+            yield batch
+
+    def _sync(self):
+        self.ttnn.synchronize_device(self.mesh)
+        self.synchronizations += 1
+
+    def _batched_transfer(self, segment, offset, size, data=None):
+        """Submit a bounded group of windows before waiting for completion.
+
+        Preserve physical bytes, including neighbours in convolution buffers.
+        Both directions retain host/view references through their final fence.
+        Reads still precede writes; eliminating those requires a separately
+        qualified rank-local host allocation API. No device gather allocation
+        or tensor address change is introduced here.
+        """
+        import torch
+
+        if self.pending:
+            raise RuntimeError("A previous asynchronous transfer did not finish; quarantine the destination")
+        output = bytearray(size) if data is None else None
+        for overlaps in self._batches(segment, offset, size):
+            submitted = False
+            try:
+                for window, within, codec_offset, length in overlaps:
+                    view = self._view(segment, window)
+                    submitted = True
+                    host = view.cpu(blocking=False)
+                    self.pending.append((window, within, codec_offset, length, view, host))
+                self.max_host_staging_bytes = max(
+                    self.max_host_staging_bytes,
+                    sum(self._physical_bytes(segment, value[0]) for value in self.pending),
+                )
+                self._sync()
+                submitted = False
+                for window, within, codec_offset, length, view, host in self.pending:
+                    raw = self._raw(segment, window, host)
+                    self.max_host_window_bytes = max(self.max_host_window_bytes, raw.numel())
+                    self.bytes_read += raw.numel()
+                    self.windows_read += 1
+                    skip = self.slot * segment.size if segment.kind == "conv" else 0
+                    target = raw[skip + within : skip + within + length]
+                    if data is None:
+                        output[codec_offset : codec_offset + length] = target.numpy().tobytes()
+                    else:
+                        value = torch.frombuffer(
+                            bytearray(data[codec_offset : codec_offset + length]), dtype=torch.uint8
+                        )
+                        target.copy_(value)
+                        # Mark before submission: an enqueue failure can still
+                        # have put earlier work on the device command queue.
+                        submitted = True
+                        self.ttnn.copy_host_to_device_tensor(host, view)
+                        self.bytes_written += raw.numel()
+                        self.windows_written += 1
+            finally:
+                if submitted:
+                    self._sync()
+                # If the fence above fails, keep buffers pinned by self.pending.
+                self.pending.clear()
+        return bytes(output) if output is not None else None
+
+    def _window(self, segment, window):
         key = (segment, window)
         if self.current != key:
             self._flush()
             self.raw = self.host = self.view = None
-            tensor = self.tensors[segment.rank, segment.layer, segment.kind]
-            view = tensor if segment.kind == "conv" else self.ttnn.narrow(tensor, 0, window.start, window.length)
+            view = self._view(segment, window)
             # Rank views retain their parent mesh coordinates. cpu() uses the
             # view's active-coordinate subset and allocates only that shard;
             # allocating with view.device() would stage the entire TP4 mesh.
             host = view.cpu(blocking=True)
-            buffer = host.host_buffer().get_shard(self.ttnn.MeshCoordinate(0, segment.rank))
-            if buffer is None:
-                raise ValueError(f"Downloaded rank {segment.rank} is missing its parent mesh coordinate")
-            raw = torch.from_dlpack(buffer)
-            expected = self.cache.batch_size * segment.size if segment.kind == "conv" else window.size
-            if raw.dtype != torch.uint8 or raw.numel() != expected or expected > MAX_CHUNK_BYTES:
-                raise ValueError("Downloaded packed buffer has unexpected physical size or dtype")
+            self.synchronizations += 1
+            raw = self._raw(segment, window, host)
             self.view, self.host, self.raw, self.current = view, host, raw, key
             self.max_host_window_bytes = max(self.max_host_window_bytes, raw.numel())
+            self.max_host_staging_bytes = max(self.max_host_staging_bytes, raw.numel())
             self.bytes_read += raw.numel()
             self.windows_read += 1
         skip = self.slot * segment.size if segment.kind == "conv" else 0
@@ -160,6 +252,8 @@ class PackedCacheTransfer:
     def read(self, segment: Segment, offset: int, size: int) -> bytes:
         if size > MAX_CHUNK_BYTES:
             raise ValueError("Codec read exceeds bounded staging")
+        if self.batched:
+            return self._batched_transfer(segment, offset, size)
         output = bytearray(size)
         for window, source, destination, length in overlapping(self._windows(segment), offset, size):
             raw = self._window(segment, window)
@@ -171,6 +265,9 @@ class PackedCacheTransfer:
 
         if not isinstance(data, bytes) or len(data) > MAX_CHUNK_BYTES:
             raise ValueError("Codec write requires bounded opaque bytes")
+        if self.batched:
+            self._batched_transfer(segment, offset, len(data), data)
+            return
         for window, destination, source, length in overlapping(self._windows(segment), offset, len(data)):
             raw = self._window(segment, window)
             # bytearray supplies writable owned storage; no numerical conversion.
@@ -180,7 +277,8 @@ class PackedCacheTransfer:
 
     def fence(self):
         self._flush()
-        self.ttnn.synchronize_device(self.mesh)
+        self._sync()
+        self.pending.clear()
         for key, tensor in self.tensors.items():
             if tensor.buffer_address() != self.addresses[key]:
                 raise ValueError("Cache destination address changed during transfer")
