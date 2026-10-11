@@ -40,7 +40,6 @@ def _bits(value: float) -> int:
     return struct.unpack("<I", struct.pack("<f", value))[0]
 
 
-# (approx, vector mode, iterations per call, stage)
 VARIANTS = [
     (approx, mode, iterations, 1)
     for approx in (ApproximationMode.No, ApproximationMode.Yes)
