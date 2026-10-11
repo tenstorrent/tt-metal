@@ -58,12 +58,11 @@ static std::uint32_t src_zero_flag_srcb_fmt = 0xff;
 // Keep the STALLWAIT on Wormhole: an FPU instruction reads the live flag while it waits to enter the FPU
 // (e.g. for its Src operands), so a write must not land until MATH has drained. (Blackhole latches the
 // flag per instruction at issue and needs no stall.)
-#if defined(LLK_PERF_INIT_ONLY) // Wormhole INIT measurement build: INIT calls this, so it sits in a fixed slot (sections.ld);
-// noclone: the loop calls it too, and a constant-propagated copy would be a second function in that section
-#define LLK_INIT_CALLEE_SECTION __attribute__((noclone, section(".text.llk_init_callee")))
-#else
+// Not pinned to the Wormhole INIT measurement build's callee slot: the op inits write the flag inline, so in most kernels
+// only the loop calls this, and in that slot it moved INIT by its size whenever the loop kept a copy; an INIT that does call
+// it gets it moved into the slot by the INIT build (test_config.py _init_callees_in_slot)
 #define LLK_INIT_CALLEE_SECTION
-#endif
+
 inline __attribute__((always_inline)) void _apply_src_zero_flag_(const std::uint32_t value)
 {
     src_zero_flag_hw = value;
