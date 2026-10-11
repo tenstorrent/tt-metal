@@ -344,6 +344,7 @@ def _mmc(m, k, n, sh, sw, gx=7, gy=10):
 # An FF1/FF3 N block that is not a multiple of 5 changes the bits; M block and subblock do not. WO m16k8n8 does not
 # fit under the model's L1 buffer (job165).
 QKV_CFG = _mmc(16, 8, 4, 1, 4)
+QKV_FP16_CFG = _mmc(16, 8, 4, 2, 4)  # LoFi 16-bit dest (attn_mm_fp16_dest)
 FF13_CFG = _mmc(16, 8, 10, 4, 2)
 FF13_FP32_CFG = _mmc(8, 8, 8, 1, 4)  # HiFi2 fp32 acc fallback, 3.725 ms
 FF2_CFG = _mmc(16, 10, 4, 1, 4)
@@ -368,7 +369,13 @@ def ff2_bf8_rs(layer_num=None, n_layers=None) -> bool:
     return layer_num is None or n_layers is None or layer_num < n_layers - last
 
 
-def lofi_fp32_config(hifi2, env):
+def attn_mm_fp16_dest() -> bool:
+    """QKV / WO at LoFi with 16-bit dest accumulation (QWEN_CP_ATTN_MM_FP16, default 1; needs QWEN_CP_ATTN_MM_LOFI=1).
+    cpb_sweep job266: QKV LoFi fp32 dest 1.058 -> 16-bit dest m16k8n4 s2x4 0.960 ms; WO 0.992 -> 0.929 ms (WO_CFG)."""
+    return os.environ.get("QWEN_CP_ATTN_MM_LOFI", "1") == "1" and os.environ.get("QWEN_CP_ATTN_MM_FP16", "1") == "1"
+
+
+def lofi_fp32_config(hifi2, env, fp16=False):
     """hifi2 (an fp32-dest HiFi2 config) at LoFi fidelity when env (default 1) is set, else hifi2 unchanged.
     Used for the QKV and WO matmuls (QWEN_CP_ATTN_MM_LOFI); cpb_sweep job266: QKV 1.353 -> 1.058, WO 1.194 -> 0.992 ms.
     """
@@ -377,7 +384,7 @@ def lofi_fp32_config(hifi2, env):
     return ttnn.WormholeComputeKernelConfig(
         math_fidelity=ttnn.MathFidelity.LoFi,
         math_approx_mode=hifi2.math_approx_mode,
-        fp32_dest_acc_en=hifi2.fp32_dest_acc_en,
+        fp32_dest_acc_en=hifi2.fp32_dest_acc_en and not fp16,
         packer_l1_acc=hifi2.packer_l1_acc,
         dst_full_sync_en=hifi2.dst_full_sync_en,
     )
@@ -509,9 +516,11 @@ def attention_prefill(ctx: CPContext, tt_ccl, attn, x_local, rot_mats, w, user_i
     xqkv = ttnn.experimental.minimal_matmul(
         input_tensor=xa,
         weight_tensor=w["wqkv"],
-        config=QKV_CFG,
+        config=QKV_FP16_CFG if attn_mm_fp16_dest() else QKV_CFG,
         dtype=attn.ccl_dtype,
-        compute_kernel_config=lofi_fp32_config(attn.compute_kernel_config_hifi2, "QWEN_CP_ATTN_MM_LOFI"),
+        compute_kernel_config=lofi_fp32_config(
+            attn.compute_kernel_config_hifi2, "QWEN_CP_ATTN_MM_LOFI", fp16=attn_mm_fp16_dest()
+        ),
         memory_config=ttnn.DRAM_MEMORY_CONFIG,
     )  # [1, 1, S/4, (H + 2) * D]
     ttnn.deallocate(xa)
@@ -620,7 +629,9 @@ def attention_prefill(ctx: CPContext, tt_ccl, attn, x_local, rot_mats, w, user_i
         weight_tensor=w["wo"],
         config=WO_CFG,
         dtype=ttnn.bfloat8_b,
-        compute_kernel_config=lofi_fp32_config(attn.compute_kernel_config_hifi2, "QWEN_CP_ATTN_MM_LOFI"),  # fp32 dest
+        compute_kernel_config=lofi_fp32_config(
+            attn.compute_kernel_config_hifi2, "QWEN_CP_ATTN_MM_LOFI", fp16=attn_mm_fp16_dest()
+        ),
         memory_config=ttnn.DRAM_MEMORY_CONFIG,
     )  # [1, 1, S/4, 5120]
     ttnn.deallocate(cat)
