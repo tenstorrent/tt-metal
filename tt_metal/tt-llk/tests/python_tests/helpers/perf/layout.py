@@ -9,6 +9,7 @@ import functools
 import hashlib
 import json
 import os
+import re
 import struct
 import tempfile
 import time
@@ -1079,21 +1080,112 @@ def code_key(assembly):
     ).hexdigest()[:24]
 
 
+_NUM = r"[-+]?(?:0[xX][0-9a-fA-F]+|[0-9]+)"
+_LOCAL_LABEL = re.compile(r"\.L[A-Za-z_]*[0-9]+\b")
+_IMMEDIATE = re.compile(_NUM)
+_MEMORY_OPERAND = re.compile(r"(" + _NUM + r")(\([A-Za-z0-9_]+\))")
+# data and instruction directives whose size does not depend on their values
+_FIXED_SIZE_DATA = {
+    ".word",
+    ".half",
+    ".hword",
+    ".short",
+    ".2byte",
+    ".long",
+    ".int",
+    ".4byte",
+    ".byte",
+    ".ttinsn",
+}
+
+
+def _li_words(imm):
+    """the RV32 expansion of li: addi (12 bit), lui alone (low 12 bits zero), or lui + addi"""
+    v = int(imm, 0) & M32
+    if -2048 <= _s32(v) <= 2047:
+        return "li1"
+    return "li2" if v & 0xFFF else "lui"
+
+
+def _normalised_operands(operands):
+    """an instruction's operands with each numeric immediate (a whole operand, or the offset of imm(reg)) as '#'; every
+    operand that names a symbol (sym+N, %hi(sym), %lo(sym)(reg)...) stays verbatim: the linker relaxes by its address
+    """
+    out = []
+    for o in operands.split(","):
+        t = o.strip()
+        if _IMMEDIATE.fullmatch(t):
+            t = "#"
+        elif m := _MEMORY_OPERAND.fullmatch(t):
+            t = "#" + m.group(2)
+        out.append(t)
+    return ",".join(out)
+
+
+def structure_key(assembly):
+    """Identifies what places a thread's code: its assembly as the probe links assemble it (no debug sections) with only
+    the values that cannot move an address normalised: the numeric immediates of instructions (li keeps its expansion,
+    1 or 2 words), the values of fixed-size data, and the names of local labels (renamed by first appearance).
+    Directives, macros, section names, symbols, registers and every operand that names a symbol stay verbatim, so two assemblies
+    with the same key assemble and link to the same address of every instruction and data byte for any pads: they share
+    one address map (Maps), whatever their immediates.
+    """
+    end = assembly.find("\t.section\t.debug_info")
+    if end >= 0:
+        ident = assembly.find("\t.ident", end)
+        assembly = assembly[:end] + (assembly[ident:] if ident >= 0 else "")
+    macros = set(re.findall(r"^\s*\.macro\s+(\w+)", assembly, re.M))
+    labels = {}
+    out, in_macro = [], False
+    for line in assembly.splitlines():
+        s = _LOCAL_LABEL.sub(
+            lambda m: labels.setdefault(m.group(0), f".L#{len(labels)}"), line.strip()
+        )
+        if not s:
+            continue
+        if s.startswith(".macro"):
+            in_macro = True
+        if in_macro or s.startswith("#") or (s.endswith(":") and " " not in s):
+            in_macro = in_macro and not s.startswith(".endm")
+            out.append(s)
+            continue
+        op, operands = (s.split(None, 1) + [""])[:2]
+        if op in _FIXED_SIZE_DATA:
+            operands = _normalised_operands(operands)
+        elif op.startswith(".") or op in macros:
+            pass
+        elif op == "li":
+            reg, _, imm = operands.partition(",")
+            if _IMMEDIATE.fullmatch(imm.strip()):
+                operands = f"{reg},{_li_words(imm.strip())}"
+        else:
+            operands = _normalised_operands(operands)
+        out.append(f"{op} {operands}")
+    return hashlib.sha256("\n".join(out).encode()).hexdigest()[:24]
+
+
 def choose(elf_path, thread, runtime_bytes, cache_dir, relink, log=None, shared=None):
     """(P, Z) in bytes for one thread's unpadded ELF and runtime configuration, (0, 0) when it has no measured loop;
-    relink(P, Z, out_dir) links the thread with pads, shared = (directory, code_key) shares the work between variants.
+    relink(P, Z, out_dir) links the thread with pads, shared = (directory, code_key[, structure_key]) shares the work
+    between variants: the choices between variants with the same code, the address map between variants with the same
+    structure.
     """
+    map_dir = None
     if shared:
         cache_dir = Path(shared[0]) / f"{thread}-{shared[1]}"
-    return tuple(_choose(elf_path, thread, runtime_bytes, cache_dir, relink, log))
+        if len(shared) > 2 and shared[2]:
+            map_dir = Path(shared[0]) / f"{thread}-s{shared[2]}"
+    return tuple(
+        _choose(elf_path, thread, runtime_bytes, cache_dir, relink, log, map_dir)
+    )
 
 
-def _choose(elf_path, thread, runtime_bytes, cache_dir, relink, log):
+def _choose(elf_path, thread, runtime_bytes, cache_dir, relink, log, map_dir=None):
     t_start = time.perf_counter()
     kernel = _kernel(str(elf_path))
     if not kernel.starts:
         return 0, 0
-    maps = Maps(elf_path, thread, relink, cache_dir)
+    maps = Maps(elf_path, thread, relink, map_dir or cache_dir)
     amap = maps.get()
     restarts = {
         int(amap.addr[i])
@@ -1110,12 +1202,27 @@ def _choose(elf_path, thread, runtime_bytes, cache_dir, relink, log):
     records, start, warm, lo, hi, complete = tr
     if hi - lo < MIN_WINDOW_INSTR or not records:
         return 0, 0
-    cached = Path(cache_dir) / f"{thread}-{flow_key(records, lo)}.json"
+    flow = flow_key(records, lo)
+    cached = Path(cache_dir) / f"{thread}-{flow}.json"
     try:
         return tuple(json.loads(cached.read_text())["pads"])
     except (OSError, ValueError, KeyError, TypeError):
         pass
     win = Window(kernel, amap, records, start, warm, lo)
+    # the choice depends on the code only through the address map, the modelled path and the words executed on it, so
+    # variants with the same structure (one map) share it when they run the same words along the same path
+    shared_choice = None
+    if map_dir is not None:
+        window_key = hashlib.sha1(
+            repr((start, warm - lo, flow, sorted(win.words.items()))).encode()
+        ).hexdigest()[:16]
+        shared_choice = Path(map_dir) / f"{thread}-w{window_key}.json"
+        try:
+            got = json.loads(shared_choice.read_text())
+            write_json(cached, got)
+            return tuple(got["pads"])
+        except (OSError, ValueError, KeyError, TypeError):
+            pass
     nsets = 16 if thread == "math" else 64
     PP, ZZ = maps.grid()
     # the cost depends on the pads only through the shifts of the segments the window runs in, modulo the predictor
@@ -1218,6 +1325,8 @@ def _choose(elf_path, thread, runtime_bytes, cache_dir, relink, log):
         "t_trace": round(t_trace, 4),
     }
     write_json(cached, result)
+    if shared_choice is not None:
+        write_json(shared_choice, result)
     if log:
         try:
             with open(log, "a") as f:
