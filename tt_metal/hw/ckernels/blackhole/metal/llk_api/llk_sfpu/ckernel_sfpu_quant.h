@@ -152,7 +152,7 @@ inline void _int8_pack_fixup_() {
 // [-128, 127] held in an int32 container - UInt8 rounds via FP32_TO_UINT8 into
 // [0, 255], and Int8 packs a true int8 byte via the offset-128 path above.
 template <
-    bool APPROXIMATION_MODE /*unused*/,
+    bool APPROXIMATION_MODE,
     bool SIGN_MAGNITUDE_FORMAT = false,
     DataFormat OUTPUT_FORMAT = DataFormat::Int32>
 void quant_init(const uint zero_point) {
@@ -234,7 +234,7 @@ void quant_init(const uint zero_point) {
 }
 
 template <
-    bool APPROXIMATION_MODE /*unused*/,
+    bool APPROXIMATION_MODE,
     bool SIGN_MAGNITUDE_FORMAT = false,
     DataFormat OUTPUT_FORMAT = DataFormat::Int32,
     bool INT8_INPUT = false>
@@ -338,7 +338,7 @@ void requant_init(const uint zero_point) {
     }
 }
 
-template <bool APPROXIMATION_MODE /*unused*/, bool SIGN_MAGNITUDE_FORMAT = false, bool INT8_INPUT = false>
+template <bool APPROXIMATION_MODE, bool SIGN_MAGNITUDE_FORMAT = false, bool INT8_INPUT = false>
 void dequant_init(const uint zero_point) {
     // One-time setup for calculate_dequant_int32; see quant_init for the
     // record/replay rationale. The caller passes -zero_point (so the
@@ -376,10 +376,9 @@ void dequant_init(const uint zero_point) {
     }
 }
 
-// Per-tensor (scalar scale) forms: the init leaves the scale in LREG1 next to the zero point in LREG2 and the
-// SCALAR_SCALE bodies skip the per-row scale load, so no other SFPU op may write LREG1 before their tile calls.
+// SCALAR_SCALE bodies skip the per-row scale load: the init leaves the scale in LREG1, so no other SFPU op may write it.
 template <
-    bool APPROXIMATION_MODE /*unused*/,
+    bool APPROXIMATION_MODE,
     bool SIGN_MAGNITUDE_FORMAT = false,
     DataFormat OUTPUT_FORMAT = DataFormat::Int32>
 void quant_init_scalar_scale(const uint zero_point, const uint scale) {
@@ -388,7 +387,7 @@ void quant_init_scalar_scale(const uint zero_point, const uint scale) {
 }
 
 template <
-    bool APPROXIMATION_MODE /*unused*/,
+    bool APPROXIMATION_MODE,
     bool SIGN_MAGNITUDE_FORMAT = false,
     DataFormat OUTPUT_FORMAT = DataFormat::Int32,
     bool INT8_INPUT = false>
@@ -397,7 +396,7 @@ void requant_init_scalar_scale(const uint zero_point, const uint scale) {
     _sfpu_load_imm32_(p_sfpu::LREG1, scale);
 }
 
-template <bool APPROXIMATION_MODE /*unused*/, bool SIGN_MAGNITUDE_FORMAT = false, bool INT8_INPUT = false>
+template <bool APPROXIMATION_MODE, bool SIGN_MAGNITUDE_FORMAT = false, bool INT8_INPUT = false>
 void dequant_init_scalar_scale(const uint zero_point, const uint scale) {
     dequant_init<APPROXIMATION_MODE, SIGN_MAGNITUDE_FORMAT, INT8_INPUT>(zero_point);
     _sfpu_load_imm32_(p_sfpu::LREG1, scale);

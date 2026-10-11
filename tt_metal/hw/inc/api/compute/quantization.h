@@ -416,7 +416,7 @@ ALWI void dequant_int8_tile_init(const uint32_t zero_point) {
 #if defined(ARCH_BLACKHOLE)
 // clang-format off
 /**
- * Blackhole only. Per-tensor form of quant_tile; the scale comes from its scalar init. Dest must be in 32 bit mode.
+ * Blackhole only. Per-tensor form with the scale from its scalar init. Dest must be in 32 bit mode.
  *
  * Return value: None
  *
@@ -433,14 +433,14 @@ ALWI void quant_scalar_tile(uint32_t idst, uint32_t odst) {
         calculate_quant_int32,
         (APPROX, detail::quant_iterations, false, true),
         idst,
-        idst /*dst_index_in1, unused*/,
+        idst,
         odst,
         detail::quant_vector_mode)));
 }
 
 // clang-format off
 /**
- * Blackhole only. Per-tensor form of quant_int8_tile; the scale comes from its scalar init. Dest must be in 32 bit mode.
+ * Blackhole only. Per-tensor form with the scale from its scalar init. Dest must be in 32 bit mode.
  *
  * Return value: None
  *
@@ -457,14 +457,14 @@ ALWI void quant_int8_scalar_tile(uint32_t idst, uint32_t odst) {
         calculate_quant_int32_int8_pack,
         (APPROX, detail::quant_iterations, true),
         idst,
-        idst /*dst_index_in1, unused*/,
+        idst,
         odst,
         detail::quant_vector_mode)));
 }
 
 // clang-format off
 /**
- * Blackhole only. Per-tensor form of requant_tile; the scale comes from its scalar init. Dest must be in 32 bit mode.
+ * Blackhole only. Per-tensor form with the scale from its scalar init. Dest must be in 32 bit mode.
  *
  * Return value: None
  *
@@ -481,14 +481,14 @@ ALWI void requant_scalar_tile(uint32_t idst, uint32_t odst) {
         calculate_requant_int32,
         (APPROX, detail::quant_iterations, false, false, true),
         idst,
-        idst /*dst_index_in1, unused*/,
+        idst,
         odst,
         detail::quant_vector_mode)));
 }
 
 // clang-format off
 /**
- * Blackhole only. Per-tensor form of requant_int8_tile; the scale comes from its scalar init. Dest must be in 32 bit mode.
+ * Blackhole only. Per-tensor form with the scale from its scalar init. Dest must be in 32 bit mode.
  *
  * Return value: None
  *
@@ -505,14 +505,14 @@ ALWI void requant_int8_scalar_tile(uint32_t idst, uint32_t odst) {
         calculate_requant_int32_int8_pack,
         (APPROX, detail::quant_iterations, false, true),
         idst,
-        idst /*dst_index_in1, unused*/,
+        idst,
         odst,
         detail::quant_vector_mode)));
 }
 
 // clang-format off
 /**
- * Blackhole only. Per-tensor form of requant_int8_in_tile; the scale comes from its scalar init. Dest must be in 32 bit mode.
+ * Blackhole only. Per-tensor form with the scale from its scalar init. Dest must be in 32 bit mode.
  *
  * Return value: None
  *
@@ -529,14 +529,14 @@ ALWI void requant_int8_in_scalar_tile(uint32_t idst, uint32_t odst) {
         calculate_requant_int32,
         (APPROX, detail::quant_iterations, false, true, true),
         idst,
-        idst /*dst_index_in1, unused*/,
+        idst,
         odst,
         detail::quant_vector_mode)));
 }
 
 // clang-format off
 /**
- * Blackhole only. Per-tensor form of requant_int8_in_int8_out_tile; the scale comes from its scalar init. Dest must be in 32 bit mode.
+ * Blackhole only. Per-tensor form with the scale from its scalar init. Dest must be in 32 bit mode.
  *
  * Return value: None
  *
@@ -553,14 +553,14 @@ ALWI void requant_int8_in_int8_out_scalar_tile(uint32_t idst, uint32_t odst) {
         calculate_requant_int32_int8_pack,
         (APPROX, detail::quant_iterations, true, true),
         idst,
-        idst /*dst_index_in1, unused*/,
+        idst,
         odst,
         detail::quant_vector_mode)));
 }
 
 // clang-format off
 /**
- * Blackhole only. Per-tensor form of dequant_tile; the scale comes from its scalar init. Dest must be in 32 bit mode.
+ * Blackhole only. Per-tensor form with the scale from its scalar init. Dest must be in 32 bit mode.
  *
  * Return value: None
  *
@@ -577,14 +577,14 @@ ALWI void dequant_scalar_tile(uint32_t idst, uint32_t odst) {
         calculate_dequant_int32,
         (APPROX, detail::quant_iterations, false, false, true),
         idst,
-        idst /*dst_index_in1, unused*/,
+        idst,
         odst,
         detail::quant_vector_mode)));
 }
 
 // clang-format off
 /**
- * Blackhole only. Per-tensor form of dequant_int8_tile; the scale comes from its scalar init. Dest must be in 32 bit mode.
+ * Blackhole only. Per-tensor form with the scale from its scalar init. Dest must be in 32 bit mode.
  *
  * Return value: None
  *
@@ -601,14 +601,14 @@ ALWI void dequant_int8_scalar_tile(uint32_t idst, uint32_t odst) {
         calculate_dequant_int32,
         (APPROX, detail::quant_iterations, false, true, true),
         idst,
-        idst /*dst_index_in1, unused*/,
+        idst,
         odst,
         detail::quant_vector_mode)));
 }
 
 // clang-format off
 /**
- * Blackhole only. Init for quant_scalar_tile; the scale stays in an SFPU register, so no other SFPU op may run before the tile calls.
+ * Blackhole only. The scale stays in an SFPU register, so no other SFPU op may run before the tile calls.
  *
  * Return value: None
  *
@@ -624,7 +624,7 @@ ALWI void quant_scalar_tile_init(const uint32_t zero_point, const uint32_t scale
 
 // clang-format off
 /**
- * Blackhole only. Init for quant_scalar_tile; the scale stays in an SFPU register, so no other SFPU op may run before the tile calls.
+ * Blackhole only. The scale stays in an SFPU register, so no other SFPU op may run before the tile calls.
  *
  * Return value: None
  *
@@ -641,7 +641,7 @@ ALWI void quant_uint8_scalar_tile_init(const uint32_t zero_point, const uint32_t
 
 // clang-format off
 /**
- * Blackhole only. Init for quant_int8_scalar_tile; the scale stays in an SFPU register, so no other SFPU op may run before the tile calls.
+ * Blackhole only. The scale stays in an SFPU register, so no other SFPU op may run before the tile calls.
  *
  * Return value: None
  *
@@ -658,7 +658,7 @@ ALWI void quant_int8_scalar_tile_init(const uint32_t zero_point, const uint32_t 
 
 // clang-format off
 /**
- * Blackhole only. Init for requant_scalar_tile; the scale stays in an SFPU register, so no other SFPU op may run before the tile calls.
+ * Blackhole only. The scale stays in an SFPU register, so no other SFPU op may run before the tile calls.
  *
  * Return value: None
  *
@@ -674,7 +674,7 @@ ALWI void requant_scalar_tile_init(const uint32_t zero_point, const uint32_t sca
 
 // clang-format off
 /**
- * Blackhole only. Init for requant_scalar_tile; the scale stays in an SFPU register, so no other SFPU op may run before the tile calls.
+ * Blackhole only. The scale stays in an SFPU register, so no other SFPU op may run before the tile calls.
  *
  * Return value: None
  *
@@ -691,7 +691,7 @@ ALWI void requant_uint8_scalar_tile_init(const uint32_t zero_point, const uint32
 
 // clang-format off
 /**
- * Blackhole only. Init for requant_int8_scalar_tile; the scale stays in an SFPU register, so no other SFPU op may run before the tile calls.
+ * Blackhole only. The scale stays in an SFPU register, so no other SFPU op may run before the tile calls.
  *
  * Return value: None
  *
@@ -708,7 +708,7 @@ ALWI void requant_int8_scalar_tile_init(const uint32_t zero_point, const uint32_
 
 // clang-format off
 /**
- * Blackhole only. Init for requant_int8_in_scalar_tile; the scale stays in an SFPU register, so no other SFPU op may run before the tile calls.
+ * Blackhole only. The scale stays in an SFPU register, so no other SFPU op may run before the tile calls.
  *
  * Return value: None
  *
@@ -725,7 +725,7 @@ ALWI void requant_int8_in_scalar_tile_init(const uint32_t zero_point, const uint
 
 // clang-format off
 /**
- * Blackhole only. Init for requant_int8_in_scalar_tile; the scale stays in an SFPU register, so no other SFPU op may run before the tile calls.
+ * Blackhole only. The scale stays in an SFPU register, so no other SFPU op may run before the tile calls.
  *
  * Return value: None
  *
@@ -742,7 +742,7 @@ ALWI void requant_int8_in_uint8_out_scalar_tile_init(const uint32_t zero_point, 
 
 // clang-format off
 /**
- * Blackhole only. Init for requant_int8_in_int8_out_scalar_tile; the scale stays in an SFPU register, so no other SFPU op may run before the tile calls.
+ * Blackhole only. The scale stays in an SFPU register, so no other SFPU op may run before the tile calls.
  *
  * Return value: None
  *
@@ -759,7 +759,7 @@ ALWI void requant_int8_in_int8_out_scalar_tile_init(const uint32_t zero_point, c
 
 // clang-format off
 /**
- * Blackhole only. Init for dequant_scalar_tile; the scale stays in an SFPU register, so no other SFPU op may run before the tile calls.
+ * Blackhole only. The scale stays in an SFPU register, so no other SFPU op may run before the tile calls.
  *
  * Return value: None
  *
@@ -775,7 +775,7 @@ ALWI void dequant_scalar_tile_init(const uint32_t zero_point, const uint32_t sca
 
 // clang-format off
 /**
- * Blackhole only. Init for dequant_int8_scalar_tile; the scale stays in an SFPU register, so no other SFPU op may run before the tile calls.
+ * Blackhole only. The scale stays in an SFPU register, so no other SFPU op may run before the tile calls.
  *
  * Return value: None
  *
