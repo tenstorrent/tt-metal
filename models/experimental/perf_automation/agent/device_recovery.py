@@ -620,22 +620,34 @@ def reap_device_holders() -> list:
 DEVICES_ENV = "PERF_MCP_DEVICES"
 
 
-def requested_chip_count(devices: str):
-    """How many chips --devices asks for, or None when it does not narrow the host.
+def requested_chip_ids(devices: str):
+    """WHICH chips --devices asks for, in the order given and without repeats, or None when it does
+    not narrow the host.
 
     "all" (and anything unparseable) means the whole host and must NOT pin visibility. "single" is
-    one chip. An explicit list is its own length, so "0,1" is two. Pure string work: nothing here
-    opens a device, so it is safe to ask at the moment a device just died.
+    chip 0. An explicit list is those chips, so "2" is chip 2 -- not "one chip", which visibility
+    used to turn into chip 0 whatever id was asked for. Pure string work: nothing here opens a
+    device, so it is safe to ask at the moment a device just died.
     """
     text = str(devices or "").strip().lower()
     if not text or text == "all":
         return None
     if text == "single":
-        return 1
+        return [0]
     ids = [part for part in re.split(r"[,\s]+", text) if part]
     if ids and all(part.isdigit() for part in ids):
-        return len(ids)
+        return list(dict.fromkeys(int(part) for part in ids))
     return None
+
+
+def requested_chip_count(devices: str):
+    """How many chips --devices asks for, or None when it does not narrow the host.
+
+    The length of requested_chip_ids, so "0,1" is two and "single" is one; one parser, so the count
+    and the ids can never disagree.
+    """
+    ids = requested_chip_ids(devices)
+    return len(ids) if ids else None
 
 
 def reset_is_mandatory_after_kill(devices=None, env=None, chip_count=None) -> bool:

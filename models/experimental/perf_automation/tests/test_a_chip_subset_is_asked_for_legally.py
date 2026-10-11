@@ -16,7 +16,7 @@ from __future__ import annotations
 
 from pathlib import Path
 
-from models.experimental.perf_automation.agent.before_loop import _requested_chip_count
+from models.experimental.perf_automation.agent.before_loop import _requested_chip_count, _requested_chip_ids
 from models.experimental.perf_automation.agent.mesh_descriptor import find_descriptor
 
 _TT_ROOT = Path(__file__).resolve().parents[4]
@@ -27,6 +27,17 @@ def test_what_devices_asks_for():
     assert _requested_chip_count("single") == 1
     assert _requested_chip_count("0,1") == 2
     assert _requested_chip_count("0,1,2,3") == 4
+
+
+def test_which_chips_devices_asks_for():
+    """The ids themselves, so visibility pins the chips asked for rather than the first N."""
+    assert _requested_chip_ids("single") == [0]
+    assert _requested_chip_ids("2") == [2]
+    assert _requested_chip_ids("2,3") == [2, 3]
+    assert _requested_chip_ids("3, 1") == [3, 1]
+    assert _requested_chip_ids("2,2") == [2]
+    for text in ("all", "", None, "garbage"):
+        assert _requested_chip_ids(text) is None
 
 
 def test_a_request_for_the_whole_host_never_narrows_visibility():

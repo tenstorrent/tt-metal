@@ -409,3 +409,58 @@ def test_the_escape_hatch_lets_an_unmarked_run_continue(tmp_path, model_root, mo
     events = [json.loads(l) for l in (run_dir / "events.jsonl").read_text().splitlines()]
     marks = next(e for e in events if e["stage"] == "stage_marks" and e["event"] == "done")
     assert "no bare call" in marks["detail"]
+
+
+def _four_chip_probe():
+    snap = json.loads(mock_env_probe())
+    snap["device_count"] = 4
+    return json.dumps(snap)
+
+
+def _run_on_four_chips(tmp_path, model_root, monkeypatch, devices):
+    """A 4-chip host with a descriptor for every subset, so visibility is pinned to whatever is asked."""
+    from agent import mesh_descriptor
+
+    descriptor = tmp_path / "subset_descriptor.textproto"
+    descriptor.write_text("")
+    monkeypatch.setattr(mesh_descriptor, "find_descriptor", lambda root, arch, chips: descriptor)
+    # before_loop pins os.environ itself; setenv first so teardown restores the real environment.
+    for name in ("TT_VISIBLE_DEVICES", "TT_METAL_VISIBLE_DEVICES", "TT_MESH_GRAPH_DESC_PATH"):
+        monkeypatch.setenv(name, "")
+    config = {
+        "model_root": str(model_root),
+        "metric": "wall_ms",
+        "runs": 1,
+        "pcc_test": _pcc_gate(model_root),
+        "devices": devices,
+    }
+    return before_loop(
+        config,
+        env_probe=_four_chip_probe,
+        model_runner=make_mock_model_runner(model_root),
+        run_profiled_factory=FACTORY,
+        preflight=mock_preflight,
+        review=mock_review,
+        collect=mock_collect_cases,
+        runs_root=tmp_path / "runs",
+        playbook_dir=PKG / "GUIDELINES",
+        cache_path=tmp_path / "cache" / "playbook_index.json",
+        tt_metal_root=tmp_path,
+    )
+
+
+@pytest.mark.parametrize("devices, pinned", [("0", "0"), ("2", "2"), ("2,3", "2,3"), ("single", "0")])
+def test_explicit_device_ids_pin_those_chips_not_the_first_n(tmp_path, model_root, monkeypatch, devices, pinned):
+    """`--devices 2` must run on chip 2. It used to pin "0" -- the first N chips -- so a run moved off a
+    bad chip landed back on it."""
+    import os
+
+    result = _run_on_four_chips(tmp_path, model_root, monkeypatch, devices)
+    manifest = json.loads((Path(result["run_dir"]) / "manifest.json").read_text())
+    assert manifest["config"]["visible_devices"] == pinned
+    assert os.environ["TT_VISIBLE_DEVICES"] == pinned
+
+
+def test_a_chip_the_host_does_not_have_is_refused(tmp_path, model_root, monkeypatch):
+    with pytest.raises(ValueError, match="this host has 4"):  # allow-pytest.raises: no expect_error fixture
+        _run_on_four_chips(tmp_path, model_root, monkeypatch, "7")

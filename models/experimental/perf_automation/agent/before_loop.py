@@ -280,6 +280,7 @@ def make_mock_model_runner(model_root: str | Path) -> Callable[[str], str]:
 # ONE parser for "how many chips does --devices ask for": device_recovery owns it, because the reset
 # layer needs the same answer at the moment a device dies (and must not open one to get it).
 from .device_recovery import requested_chip_count as _requested_chip_count  # noqa: E402
+from .device_recovery import requested_chip_ids as _requested_chip_ids  # noqa: E402
 
 
 def mock_run_profiled(pcc_path, batch_size, seq_len, profiles_dir, i):
@@ -517,10 +518,21 @@ def before_loop(
     # an upstream table that is re-merged from upstream regularly and is not ours to patch.
     #
     # No descriptor for the requested count means the old behaviour exactly: full fabric, no pinning.
+    #
+    # The pinned chips are the ones ASKED FOR, not the first N: `--devices 2` used to pin "0", so a
+    # run steered off a bad chip landed back on it while the reset path (which does read the ids)
+    # reset the other board.
     visible = None
     descriptor = None
-    want_chips = _requested_chip_count(devices)
+    want_ids = _requested_chip_ids(devices)
+    want_chips = len(want_ids) if want_ids else None
     if want_chips and physical_chips and 0 < want_chips < physical_chips:
+        missing = [i for i in want_ids if i >= physical_chips]
+        if missing:
+            raise ValueError(
+                "--devices %s names chip(s) %s, but this host has %d (ids 0-%d)"
+                % (devices, ",".join(str(i) for i in missing), physical_chips, physical_chips - 1)
+            )
         try:
             from .mesh_descriptor import find_descriptor
 
@@ -528,7 +540,7 @@ def before_loop(
         except Exception:  # noqa: BLE001 -- no descriptor is a normal answer, never a failure
             descriptor = None
         if descriptor is not None:
-            visible = ",".join(str(i) for i in range(want_chips))
+            visible = ",".join(str(i) for i in want_ids)
     config["visible_devices"] = visible
     config["mesh_graph_desc_path"] = str(descriptor) if descriptor is not None else None
     from .mesh_descriptor import apply_scope
