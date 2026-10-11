@@ -53,6 +53,7 @@
 #include "ttnn/operations/experimental/matmul_decode/matmul_decode_nanobind.hpp"
 #include "ttnn/operations/experimental/ccl/ccl_experimental_nanobind.hpp"
 #include "ttnn/operations/experimental/ccl/fabric_mux/fabric_mux_nanobind.hpp"
+#include "ttnn/operations/experimental/indexed_entry_copy/indexed_entry_copy_nanobind.hpp"
 #include "ttnn/operations/experimental/plusone/plusone_nanobind.hpp"
 #include "ttnn/operations/experimental/fft/fft_nanobind.hpp"
 #include "ttnn/operations/experimental/quasar/quasar_nanobind.hpp"
@@ -190,6 +191,7 @@ void py_module(nb::module_& mod) {
     deepseek_prefill::per_token_cast_back::detail::bind_experimental_per_token_cast_back_operation(mod);
 
     plusone::detail::bind_experimental_plusone_operation(mod);
+    indexed_entry_copy::detail::bind_experimental_indexed_entry_copy_operation(mod);
     fft_binding::detail::bind_experimental_fft_operation(mod);
 
     // Quasar (metal 2.0) ops — creates the ttnn.experimental.quasar submodule.
