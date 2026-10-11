@@ -205,11 +205,7 @@ inline bool _llk_math_mul_reduce_scalar_shares_slot_(const ckernel::TensorShape 
     return tensor_shape.face_r_dim == ckernel::MAX_FACE_R_DIM && tensor_shape.num_faces_r_dim == 1 && tensor_shape.num_faces_c_dim == 2;
 }
 
-/**
- * @brief Multiply one 16x32 product into rows 32 * (product_index % 2) of DEST slot product_index / 2.
- *
- * @note Call @ref _llk_math_eltwise_binary_init_ (ELWMUL) first.
- */
+// Multiplies one 16x32 product into rows 32 * (product_index % 2) of DEST slot product_index / 2.
 template <MathFidelity math_fidelity>
 inline void _llk_math_mul_reduce_scalar_mul_half_slot_(const ckernel::TensorShape tensor_shape, const std::uint32_t product_index)
 {
@@ -228,11 +224,7 @@ inline void _llk_math_mul_reduce_scalar_mul_half_slot_(const ckernel::TensorShap
     math::clear_dst_reg_addr();
 }
 
-/**
- * @brief The move into SrcA before product i's column pass.
- *
- * @tparam share_slots: Must match how the products were written.
- */
+// share_slots must match how the products were written.
 template <bool share_slots>
 inline void _llk_math_mul_reduce_scalar_move_product_(const std::uint32_t i, const std::uint32_t num_products, const ckernel::TensorShape tensor_shape)
 {
@@ -300,12 +292,8 @@ inline void _llk_math_mul_reduce_scalar_init_()
  * destination tile. Used in a loop to accumulate multiple input tiles.
  *
  * @tparam MATH_FIDELITY_DESC Math fidelity descriptor (0 = default, higher = more precision)
- * @param dst_index Destination tile index to accumulate into (0-7); used only with tile_setup
- * @tparam tile_setup Drain the SFPU and point the DEST address and counter at dst_index first
  * @param tensor_shape Shape of the operand tile (4 faces for 32x32, 2 faces for a 16x32 tiny tile)
- * @note Without tile_setup, call this only where the SFPU has drained and the DEST address and counter are those of the
- *       accumulation tile: after the DEST_TO_SRCB move and @ref _llk_math_mul_reduce_scalar_clear_pool_face_, or after
- *       an earlier pass of the same row.
+ * @note Without tile_setup, the SFPU must have drained and the DEST address must already be at the accumulation tile.
  */
 template <MathFidelity math_fidelity, bool tile_setup = true>
 inline void _llk_math_mul_reduce_column_(const std::uint32_t dst_index, const ckernel::TensorShape tensor_shape = ckernel::DEFAULT_TENSOR_SHAPE)
@@ -349,11 +337,7 @@ inline void _llk_math_mul_reduce_column_(const std::uint32_t dst_index, const ck
     }
 }
 
-/**
- * @brief Zero face 0 of dest[dst_index], the face the column passes pool into.
- *
- * @note Call after @ref _llk_math_mul_reduce_scalar_init_ and once the SFPU has drained.
- */
+// Zeroes the face the column passes pool into; call once the SFPU has drained.
 template <bool is_fp32_dest_acc_en>
 inline void _llk_math_mul_reduce_scalar_clear_pool_face_(const std::uint32_t dst_index)
 {

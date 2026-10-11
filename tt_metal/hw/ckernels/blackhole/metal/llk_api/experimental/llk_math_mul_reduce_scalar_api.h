@@ -27,7 +27,7 @@ inline void llk_math_eltwise_mul_reduce_scalar_init(
         EltwiseBinaryReuseDestType::NONE>(tensor_shape, acc_to_dest);
 }
 
-// share_slots: two 16x32 products share a DEST slot (dst_index counts products); move them with move_product's share_slots too.
+// share_slots: two 16x32 products share a DEST slot; move_product must use the same value.
 template <bool is_fp32_dest_acc_en, MathFidelity math_fidelity, bool share_slots = false>
 inline void llk_math_eltwise_mul_reduce_scalar(
     std::uint32_t dst_index, const std::uint32_t icb0, const bool clear_fp32_dst_acc = true) {
