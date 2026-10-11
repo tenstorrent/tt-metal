@@ -1,0 +1,50 @@
+{
+  "host": "10.228.203.98",
+  "files": [
+    {
+      "path": "receipts/batched-qualification-cpu-v1/unit.log.gz",
+      "bytes": 1552,
+      "sha256": "95224234c8f262c50cafa67e037cbbe0dc9cd122d03126810665275757f82b37"
+    },
+    {
+      "path": "receipts/batched-qualification-cpu-v1/unit.xml",
+      "bytes": 7330,
+      "sha256": "1740979ef16c66e5f5fa74c40a4aba9284d6e2c8d16d17b921befeb87bb4964b"
+    },
+    {
+      "path": "receipts/batched-qualification-cpu-v1/measured-policy-check.log.gz",
+      "bytes": 71,
+      "sha256": "d14295c032064131bad1885751394f340f58e863aef0fa7da51da675709c7912"
+    },
+    {
+      "path": "receipts/gdn-epilogue-padding-control-v3/launch.json",
+      "bytes": 2250,
+      "sha256": "9ff73487e546b0d09d189f3b1d59491cae2fbd066ba110c5870eab436e94ec84"
+    },
+    {
+      "path": "receipts/gdn-epilogue-padding-control-v3/run.log.gz",
+      "bytes": 7096,
+      "sha256": "6f82894ed70958ab9cdb6419be3fd9546c5a4e4811c2d362e04ee095a566c60a"
+    },
+    {
+      "path": "receipts/gdn-epilogue-padding-control-v3/source-manifest.json",
+      "bytes": 37901,
+      "sha256": "2e4fb4d69ee221e0ca09205e582b46a4314f9ce8af97135e24070db47a7f8353"
+    },
+    {
+      "path": "receipts/gdn-epilogue-padding-v3/queue.json",
+      "bytes": 9944,
+      "sha256": "b39e66e3f3de9e504e568df3d8decb8d33dc1666ed13eb024f7bc36ebdec1050"
+    },
+    {
+      "path": "receipts/gdn-epilogue-padding-v3/padding.json",
+      "bytes": 233611,
+      "sha256": "049f73f0c7864835086332d480cbca33c4c26a03f6ed901c9a28794c107a4c4f"
+    },
+    {
+      "path": "receipts/gdn-epilogue-padding-v3/hardware.xml",
+      "bytes": 543,
+      "sha256": "c08f4eaaa948cc7bc418ba23e0f0e70d0cda52b52211b279332539f2bae6efdd"
+    }
+  ]
+}

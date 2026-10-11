@@ -1,0 +1,329 @@
+{
+  "state": "completed",
+  "cleanup_completed": true,
+  "hardware_started": true,
+  "survives_disconnect": true,
+  "resumes_after_reboot": false,
+  "promoted_to_serving": false,
+  "predecessor_unit": "qwen38-prefix-continuation-v2-20261010.service",
+  "predecessor_invocation": "6968bb64325a4e3a8475fffc66104d46",
+  "hardware_lock": "/tmp/tt-device.lock",
+  "started_at": 1791683712.540141,
+  "updated_at": "2026-10-11T01:56:22Z",
+  "predecessor": {
+    "MainPID": "0",
+    "Result": "success",
+    "LoadState": "not-found",
+    "ActiveState": "inactive",
+    "InvocationID": ""
+  },
+  "command": [
+    "/bin/bash",
+    "/home/ttuser/qwen38-artifacts-20261007/gdn-epilogue-padding-source-v3/scripts/run_safe_pytest.sh",
+    "/home/ttuser/qwen38-artifacts-20261007/gdn-epilogue-padding-source-v3/models/demos/qwen38_27b_qb2/tests/test_gdn_epilogue_padding.py",
+    "--rootdir=/home/ttuser/qwen38-artifacts-20261007/gdn-epilogue-padding-source-v3",
+    "-c",
+    "/home/ttuser/qwen38-artifacts-20261007/gdn-epilogue-padding-source-v3/pytest.ini",
+    "-vv",
+    "-s",
+    "--tb=short",
+    "--timeout=1620",
+    "--junitxml=/home/ttuser/qwen38-artifacts-20261007/gdn-epilogue-padding-v3/hardware.xml"
+  ],
+  "validation": {
+    "correctness_passed": true,
+    "timings": [
+      {
+        "batch": 16,
+        "placement": "l1",
+        "mode": [
+          false,
+          true,
+          0
+        ],
+        "native_us": 65.49783051013947,
+        "fused_us": 38.644359447062016,
+        "control_drift_fraction": 0.0003421599561546085,
+        "timing_comparison_qualified": true,
+        "qualified_speedup": 1.6948872085682616,
+        "projected_48_layer_saving_ms": 1.2889666110277176,
+        "full_model_speedup_measured": false
+      },
+      {
+        "batch": 16,
+        "placement": "l1",
+        "mode": [
+          true,
+          true,
+          0
+        ],
+        "native_us": 66.20425032451749,
+        "fused_us": 39.30327016860247,
+        "control_drift_fraction": 0.00018760754723978756,
+        "timing_comparison_qualified": true,
+        "qualified_speedup": 1.6844463588020966,
+        "projected_48_layer_saving_ms": 1.291247047483921,
+        "full_model_speedup_measured": false
+      },
+      {
+        "batch": 16,
+        "placement": "l1",
+        "mode": [
+          true,
+          true,
+          2560
+        ],
+        "native_us": 66.25366630032659,
+        "fused_us": 39.33602012693882,
+        "control_drift_fraction": 0.0005670836715192529,
+        "timing_comparison_qualified": true,
+        "qualified_speedup": 1.6843001932204504,
+        "projected_48_layer_saving_ms": 1.2920470163226128,
+        "full_model_speedup_measured": false
+      },
+      {
+        "batch": 16,
+        "placement": "dram",
+        "mode": [
+          false,
+          true,
+          0
+        ],
+        "native_us": 66.61552004516125,
+        "fused_us": 40.07954150438309,
+        "control_drift_fraction": 0.003499154154546158,
+        "timing_comparison_qualified": true,
+        "qualified_speedup": 1.6620828867983979,
+        "projected_48_layer_saving_ms": 1.2737269699573517,
+        "full_model_speedup_measured": false
+      },
+      {
+        "batch": 16,
+        "placement": "dram",
+        "mode": [
+          true,
+          true,
+          0
+        ],
+        "native_us": 67.21221609041095,
+        "fused_us": 40.701478719711304,
+        "control_drift_fraction": 0.005632939063889397,
+        "timing_comparison_qualified": true,
+        "qualified_speedup": 1.6513458037548097,
+        "projected_48_layer_saving_ms": 1.272515393793583,
+        "full_model_speedup_measured": false
+      },
+      {
+        "batch": 16,
+        "placement": "dram",
+        "mode": [
+          true,
+          true,
+          2560
+        ],
+        "native_us": 67.23715923726559,
+        "fused_us": 42.04050172120333,
+        "control_drift_fraction": 7.590561773596072e-05,
+        "timing_comparison_qualified": true,
+        "qualified_speedup": 1.5993424551199922,
+        "projected_48_layer_saving_ms": 1.2094395607709885,
+        "full_model_speedup_measured": false
+      },
+      {
+        "batch": 32,
+        "placement": "l1",
+        "mode": [
+          false,
+          true,
+          0
+        ],
+        "native_us": 83.13287049531937,
+        "fused_us": 55.91885652393103,
+        "control_drift_fraction": 0.0007160019571654797,
+        "timing_comparison_qualified": true,
+        "qualified_speedup": 1.486669715067257,
+        "projected_48_layer_saving_ms": 1.3062726706266403,
+        "full_model_speedup_measured": false
+      },
+      {
+        "batch": 32,
+        "placement": "l1",
+        "mode": [
+          true,
+          true,
+          0
+        ],
+        "native_us": 83.79466366022825,
+        "fused_us": 56.59358110278845,
+        "control_drift_fraction": 0.0009219943102258821,
+        "timing_comparison_qualified": true,
+        "qualified_speedup": 1.4806390058271037,
+        "projected_48_layer_saving_ms": 1.3056519627571106,
+        "full_model_speedup_measured": false
+      },
+      {
+        "batch": 32,
+        "placement": "l1",
+        "mode": [
+          true,
+          true,
+          2560
+        ],
+        "native_us": 83.8574138469994,
+        "fused_us": 56.53338972479105,
+        "control_drift_fraction": 3.481707569330528e-05,
+        "timing_comparison_qualified": true,
+        "qualified_speedup": 1.483325416275653,
+        "projected_48_layer_saving_ms": 1.3115531578660011,
+        "full_model_speedup_measured": false
+      },
+      {
+        "batch": 32,
+        "placement": "dram",
+        "mode": [
+          false,
+          true,
+          0
+        ],
+        "native_us": 85.3069475851953,
+        "fused_us": 59.09636151045561,
+        "control_drift_fraction": 0.00045456690106382425,
+        "timing_comparison_qualified": true,
+        "qualified_speedup": 1.4435228397285067,
+        "projected_48_layer_saving_ms": 1.2581081315875053,
+        "full_model_speedup_measured": false
+      },
+      {
+        "batch": 32,
+        "placement": "dram",
+        "mode": [
+          true,
+          true,
+          0
+        ],
+        "native_us": 86.14947088062763,
+        "fused_us": 59.488750994205475,
+        "control_drift_fraction": 0.006478919280224815,
+        "timing_comparison_qualified": true,
+        "qualified_speedup": 1.4481640552348973,
+        "projected_48_layer_saving_ms": 1.2797145545482635,
+        "full_model_speedup_measured": false
+      },
+      {
+        "batch": 32,
+        "placement": "dram",
+        "mode": [
+          true,
+          true,
+          2560
+        ],
+        "native_us": 85.95998398959637,
+        "fused_us": 59.45551209151745,
+        "control_drift_fraction": 0.006269732490763236,
+        "timing_comparison_qualified": true,
+        "qualified_speedup": 1.4457866220592241,
+        "projected_48_layer_saving_ms": 1.272214651107788,
+        "full_model_speedup_measured": false
+      },
+      {
+        "batch": 1,
+        "placement": "l1",
+        "mode": [
+          true,
+          true,
+          2560
+        ],
+        "native_us": 52.65448009595275,
+        "fused_us": 26.028407737612724,
+        "control_drift_fraction": 0.0009076177965634535,
+        "timing_comparison_qualified": true,
+        "qualified_speedup": 2.022962012380943,
+        "projected_48_layer_saving_ms": 1.2780514732003212,
+        "full_model_speedup_measured": false
+      },
+      {
+        "batch": 1,
+        "placement": "dram",
+        "mode": [
+          true,
+          true,
+          2560
+        ],
+        "native_us": 52.96109477058053,
+        "fused_us": 25.61778761446476,
+        "control_drift_fraction": 0.0012849256103573126,
+        "timing_comparison_qualified": true,
+        "qualified_speedup": 2.0673563060018783,
+        "projected_48_layer_saving_ms": 1.312478743493557,
+        "full_model_speedup_measured": false
+      },
+      {
+        "batch": 17,
+        "placement": "l1",
+        "mode": [
+          true,
+          true,
+          2560
+        ],
+        "native_us": 65.82286907359958,
+        "fused_us": 38.66890911012888,
+        "control_drift_fraction": 1.0682378299264883e-05,
+        "timing_comparison_qualified": true,
+        "qualified_speedup": 1.7022168607378176,
+        "projected_48_layer_saving_ms": 1.3033900782465935,
+        "full_model_speedup_measured": false
+      },
+      {
+        "batch": 17,
+        "placement": "dram",
+        "mode": [
+          true,
+          true,
+          2560
+        ],
+        "native_us": 66.19207561016083,
+        "fused_us": 40.06250761449337,
+        "control_drift_fraction": 0.0013032994985484603,
+        "timing_comparison_qualified": true,
+        "qualified_speedup": 1.652219982011675,
+        "projected_48_layer_saving_ms": 1.254219263792038,
+        "full_model_speedup_measured": false
+      },
+      {
+        "batch": 31,
+        "placement": "l1",
+        "mode": [
+          true,
+          true,
+          2560
+        ],
+        "native_us": 84.05521046370268,
+        "fused_us": 56.78336601704359,
+        "control_drift_fraction": 0.0010588839867406996,
+        "timing_comparison_qualified": true,
+        "qualified_speedup": 1.4802787569598008,
+        "projected_48_layer_saving_ms": 1.3090485334396362,
+        "full_model_speedup_measured": false
+      },
+      {
+        "batch": 31,
+        "placement": "dram",
+        "mode": [
+          true,
+          true,
+          2560
+        ],
+        "native_us": 85.84502153098583,
+        "fused_us": 59.39130671322346,
+        "control_drift_fraction": 0.0010634471156250047,
+        "timing_comparison_qualified": true,
+        "qualified_speedup": 1.4454139213588386,
+        "projected_48_layer_saving_ms": 1.269778311252594,
+        "full_model_speedup_measured": false
+      }
+    ],
+    "full_model_qualified": false,
+    "promoted_to_serving": false
+  },
+  "finished_at": 1791683782.6421943
+}

@@ -85,7 +85,7 @@ def evidence(tmp_path, gain=1.2, *, combined=False):
     )
 
 
-@pytest.mark.parametrize("gain,winning", [(1.0, False), (1.2, True)])
+@pytest.mark.parametrize("gain,winning", [(1.0, False), (1.02, False), (1.07, False), (1.1, True), (1.2, True)])
 def test_requires_measured_primary_workload_gain(tmp_path, gain, winning):
     args, receipt, manifest = evidence(tmp_path, gain)
     assert queue.measured_win(args.compact_results, receipt, manifest)[0] is winning
@@ -140,7 +140,7 @@ def test_model_identity_includes_added_and_deleted_files(tmp_path, change, expec
         queue.verify_model_source(args.source, manifest)
 
 
-@pytest.mark.parametrize("gain,score_passes", [(1.0, False), (1.2, False), (1.2, True)])
+@pytest.mark.parametrize("gain,score_passes", [(1.0, False), (1.02, False), (1.2, False), (1.2, True)])
 def test_controller_orders_qualification_and_matching_profiles(tmp_path, monkeypatch, gain, score_passes):
     args, _, _ = evidence(tmp_path, gain)
     calls = []
@@ -200,8 +200,9 @@ def test_controller_orders_qualification_and_matching_profiles(tmp_path, monkeyp
     result = json.loads((args.output / "queue.json").read_text())
     assert result["state"] == "completed" and result["cleanup_completed"]
     assert result["promoted_to_serving"] is False
-    if gain == 1:
+    if gain <= 1.02:
         assert calls == [] and result["hardware_started"] is False
+        assert result["qualification_deferred_for_batch"] is True
     else:
         assert calls == ["qualify", "unprofiled", "profiled"]
         assert result["accuracy_passed"] is score_passes

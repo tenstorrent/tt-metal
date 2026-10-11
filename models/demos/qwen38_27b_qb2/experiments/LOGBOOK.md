@@ -2335,3 +2335,41 @@ still needed. [Final receipts](../galaxy-evidence/gdn-followup-results-v1/README
   Full manifest/sample prints were overly broad; subsequent checks use narrow
   summaries. No reset/reboot, firmware/NFS change or active-source mutation.
 - Evidence: [prefill-numerics-v1](../galaxy-evidence/prefill-numerics-v1/README.md).
+
+## October 10-11: batch small gains, complete epilogue test, plan GDN fusion
+
+- User requested batching sub-1-TSU changes before expensive qualification.
+  Updated the follower to recompute absolute B16/32K gain from matched raw
+  controls and require at least 1 TSU; 22 focused CPU tests passed. The prior
+  resident-state/compact-gate result is +0.3240 TSU, so no new standalone GPQA
+  was launched. Its failed follower stopped on a missing CPU fixture before
+  hardware; dependent epilogue/prefill jobs were failed, not still waiting.
+- Reused the frozen epilogue source and passing CPU gate, checked original
+  manifest hashes, and fixed the task-local wrapper's reset spelling to
+  tt-smi -glx_reset. Launched fresh v3 after the exact completed full64-prefix
+  receipt. Device lock, 1800-second hardware bound and disconnect persistence
+  remained. No active source or native install was changed.
+- Epilogue v3 completed at October11 01:56:22UTC, clean teardown. All18
+  shape/layout/memory cases and4096-update real-weight B16/B32 comparisons
+  passed. Packed-L1 B16 zero/skip timing was66.254/39.336us,1.6843x,
+  control drift0.0567%. The48-layer saving is a1.292-ms projection, roughly
+  +0.53TSU against qualified baseline, not a measured model or GPQA improvement.
+- Live user systemd queue checked at01:59UTC: no running/waiting experiment.
+  No hardware work was silently queued while reporting the completed results.
+  AgentX remains blocked on both prefix caching and SSD offload through serving.
+- Wrote GDN-FUSION-PLAN.md from actual decoder/kernel source and matched
+  generated-kernel attribution. First boundary is recurrence-to-epilogue L1
+  delivery, then frontend/preparation; native matmuls/CCL remain initially.
+  Documented four-way head gather, credits/ownership, incompatible approximation
+  modes, FP32 DEST/L1 budgets, state ABI, sampled phase markers and component
+  acceptance. Working1-3ms target is unmeasured and excludes double-counting
+  padding savings. GDN fusion alone cannot explain the16.58ms gap to30TSU.
+- Collected exact receipts, compressed logs and frozen manifests. Issues: first
+  SSH read was sandbox-denied and succeeded through prescribed escalation; a
+  guessed diagnostic-controller filename did not exist. Neither changed the
+  hardware queue. Prefix transfer results remain on their separate worktree.
+- Evidence: galaxy-evidence/gdn-epilogue-padding-results-v3/README.md.
+- Publication recheck:22 focused CPU tests passed locally. An initial isolated
+  pytest invocation omitted the root expect_error fixture (13 setup errors);
+  reran with the exact root fixture AST loaded without TT device imports.
+  Pre-commit reformatted the controller, then passed. No hardware result changed.

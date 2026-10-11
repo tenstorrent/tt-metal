@@ -66,9 +66,11 @@ def measured_win(directory, receipt, manifest, *, baseline=BASELINE, candidate=C
         raise ValueError("Compact comparison differs from its raw full-model sweeps")
     if any(not row["comparison_qualified"] for row in comparisons):
         raise ValueError("Compact controls drifted or generated tokens changed")
-    # Require a meaningful primary-workload gain. Retain/report the 16K
-    # tradeoff, rather than silently redefining the target around an easier cell.
-    return comparisons[0]["speedup"] >= 1.01, comparisons
+    # User policy: batch sub-1-TSU changes before expensive G0/API/GPQA.
+    # Retain/report the 16K tradeoff; primary admission stays B16/32K.
+    before, candidate_arm, after = comparisons[0]["arms"]
+    gain_tsu = candidate_arm["decode_tsu"] - (before["decode_tsu"] + after["decode_tsu"]) / 2
+    return gain_tsu >= 1.0, comparisons
 
 
 def verify_model_source(source, compact_manifest):
@@ -170,7 +172,12 @@ def run(args):
         )
         status["compact_comparisons"] = comparisons
         if not winning:
-            status.update(state="completed", cleanup_completed=True, skipped_reason="No >=1% B16/32K measured win")
+            status.update(
+                state="completed",
+                cleanup_completed=True,
+                qualification_deferred_for_batch=True,
+                skipped_reason="Less than 1 TSU B16/32K gain; batch before full qualification",
+            )
             return
         verify()
         status.update(state="qualifying", hardware_started=True)

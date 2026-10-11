@@ -6,6 +6,23 @@ BFP8 weights/KV, BF16 activations and FP32 recurrent state. Eight replicas
 require a separate physical Galaxy measurement; TP4 results are not multiplied
 and labeled measured Galaxy throughput. This continues the Metal path.
 
+October 10 validation policy: do not run a separate G0/API/full-GPQA cycle for
+each performance change worth less than 1 TSU at B16/32K. Keep bounded component
+correctness/timing checks, combine compatible small gains, then validate the
+combined candidate. The automatic compact qualification follower now requires
+at least 1 TSU measured gain, replacing its former 1% threshold. Prefix/SSD
+restore correctness remains a functional gate independent of decode TSU.
+
+October 11, 02:00 UTC queue update: no running or waiting experiment remains
+in the checked user systemd queue. Full-64-layer prefix restore passed on the
+isolated branch; serving integration remains open. Epilogue padding skip passed
+with a B16 packed-L1 change from 66.254 to 39.336 us (1.292-ms/48-layer projection,
+not measured full-model gain). The old epilogue/prefill dependency followers
+are failed historical jobs, not pending work. Next is the
+[GDN fusion design](GDN-FUSION-PLAN.md), followed by component experiments once
+implemented. AgentX remains gated on prefix caching plus SSD offload through
+serving; small kernel gains are batched before full qualification.
+
 ## Evidence and boundaries
 
 - Compact GDN: completed B16/32K measurements give **49.913 ms / 20.035 TSU**,
