@@ -469,8 +469,7 @@ inline void _llk_unpack_tilizeA_B_mop_config_(const std::uint32_t num_faces = 4)
  * @param num_faces: Number of faces in the tile, valid values = <1, 2, 4>.
  * @param unpB_face_r_dim: Rows per face for operand B.
  * @note Call @ref _llk_unpack_tilizeA_B_uninit_ to revert the config it writes, including the SrcA Y stride.
- * @ref _llk_unpack_tilizeA_B_ is the matching execute call. Kernels outside tt-metal run their own row loop on this
- * init's MOP and SCRATCH_SEC0 stride; the compute API uses the faster @ref _llk_unpack_tilizeA_B_block_init_.
+ * @ref _llk_unpack_tilizeA_B_ is the matching execute call. Kernels outside tt-metal run their own row loop on this init's MOP and SCRATCH_SEC0 stride.
  */
 template <bool neginf_srcA = false, std::uint32_t reload_srcB = false, bool zero_srcA = false, bool zero_srcA_reduce = false>
 inline void _llk_unpack_tilizeA_B_init_(
@@ -673,11 +672,8 @@ inline void _llk_unpack_tilizeA_B_block_mop_config_(const std::uint32_t num_face
 /**
  * @brief Initialize the unpacker to tilize blocks of operand A while unpacking operand B (the block form).
  *
- * Programs the operand A addressing (rows are selected with the unpacker 0 channel 0 counters: X dim one
- * 1x16 face row, Y dim the block row pitch in face rows, Z dim the rows of a face), the one-tile column
- * stride used to advance SrcA's L1 address between the tiles of a block (CFGSHIFTMASK scratch register),
- * per-unpacker datum counts (one row for SrcA, full face for SrcB) and SrcA's Y stride, disables face
- * transpose, and programs the tilize-A-B MOP.
+ * Programs operand A addressing (X dim one 1x16 face row, Y dim the block row pitch in face rows, Z dim the rows of a face), the one-tile column
+ * stride for advancing SrcA's L1 address between tiles (CFGSHIFTMASK scratch register), per-unpacker datum counts, SrcA's Y stride and the MOP.
  *
  * @tparam neginf_srcA: Clear SrcA to negative infinity before unpacking (e.g. for max-reduce).
  * @tparam reload_srcB: Reload SrcB once rather than incrementing its face each step.
@@ -690,8 +686,7 @@ inline void _llk_unpack_tilizeA_B_block_mop_config_(const std::uint32_t num_face
  * @param unpB_face_r_dim: Rows per face for operand B.
  * @param unpA_face_r_dim: Rows per face for operand A, valid values = 1 to 16.
  * @note Call @ref _llk_unpack_tilizeA_B_block_uninit_ to revert the config it writes.
- * @ref _llk_unpack_tilizeA_B_block_ is the matching execute call. The MOP and SCRATCH_SEC0 differ from
- * @ref _llk_unpack_tilizeA_B_init_'s, so the two forms do not mix.
+ * @ref _llk_unpack_tilizeA_B_block_ is the matching execute call; its MOP and SCRATCH_SEC0 differ from @ref _llk_unpack_tilizeA_B_init_'s, so the two forms do not mix.
  */
 template <bool neginf_srcA = false, std::uint32_t reload_srcB = false, bool zero_srcA = false, bool zero_srcA_reduce = false>
 inline void _llk_unpack_tilizeA_B_block_init_(
@@ -826,7 +821,6 @@ inline void _llk_unpack_tilizeA_B_block_(
             TTI_NOP;
         }
 
-        // Clear z/w start counters for SrcB
         TTI_SETADCZW(p_setadc::UNP_B, 0, 0, 0, 0, 0b1111);
 
         _llk_unpack_tilizeA_B_face_<0, neginf_srcA, reload_srcB, zero_srcA_reduce>(face_r_dim);
@@ -851,13 +845,10 @@ inline void _llk_unpack_tilizeA_B_block_(
 /**
  * @brief Restore unpacker state after the block form of tilize-A-with-unpack-B.
  *
- * Reverts what @ref _llk_unpack_tilizeA_B_block_init_ wrote to the operand A addressing: the SrcA Ch1 Y stride,
- * Tile_x_dim_cntx0 and the tile descriptor Y and Z dims (to the operand baseline of tensor_shape), and
- * zeroes the Ch0/Ch1 Y, Z and W counters on both unpackers, which belong to the execute path rather than
- * to init. The unpack config word-0 write is wider than init's: init only clears haloize_mode, while this
- * is a full-word write that also forces out_data_format and throttle_mode and zeroes context_count,
- * tileize_mode, unpack_src_reg_set_update and shift_amount. x-start/x-end and the MOP are reprogrammed by
- * the next operation's init, so they are not restored here.
+ * Reverts what @ref _llk_unpack_tilizeA_B_block_init_ wrote to the operand A addressing (SrcA Ch1 Y stride, Tile_x_dim_cntx0, tile descriptor Y and Z dims) and
+ * zeroes the Ch0/Ch1 Y, Z and W counters on both unpackers. The unpack config word-0 write is a full-word write, wider than init's: it forces
+ * out_data_format and throttle_mode and zeroes context_count, tileize_mode, unpack_src_reg_set_update and shift_amount.
+ * x-start/x-end and the MOP are reprogrammed by the next operation's init.
  *
  * @param unpack_dst_format: Destination data format to restore in the unpack config.
  * @param tensor_shape: Operand A tile geometry; face_r_dim restores Tile_x_dim_cntx0 and total_num_faces() the

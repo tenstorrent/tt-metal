@@ -2,8 +2,8 @@
 //
 // SPDX-License-Identifier: Apache-2.0
 
-// Perf test of the pool's reduce with a tilized operand A: TILE_CNT row-major tiles unpacked by NUM_BLOCKS calls of the
-// tilizeA_B block unpack against one-row scaler faces, the column reduce, and the default pack with the reduce masks.
+// Perf test of the pool's reduce with a tilized operand A: NUM_BLOCKS block unpacks of TILE_CNT row-major tiles
+// against one-row scaler faces, the column reduce and the default pack.
 
 #include <algorithm>
 #include <cstdint>
@@ -51,7 +51,7 @@ void run_kernel(RUNTIME_PARAMETERS params)
 #endif
 #ifndef SPEED_OF_LIGHT
     const std::uint32_t LOOP_FACTOR    = params.LOOP_FACTOR;
-    const std::uint32_t TILE_CNT       = params.TILE_CNT; // the tiles of one block row
+    const std::uint32_t TILE_CNT       = params.TILE_CNT;
     const std::uint32_t num_faces      = params.num_faces;
     const std::uint32_t in0_tile_r_dim = params.in0_tile_r_dim;
     const int NUM_BLOCKS               = params.NUM_BLOCKS;

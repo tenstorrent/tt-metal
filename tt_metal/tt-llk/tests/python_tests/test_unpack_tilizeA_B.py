@@ -1,13 +1,7 @@
 # SPDX-FileCopyrightText: © 2026 Tenstorrent AI ULC
 # SPDX-License-Identifier: Apache-2.0
 
-"""Functional test of the reduce with a tilized operand A (tilizeA_B_reduce_init and unpack_tilizeA_B_block, the pool2d
-configuration): a row-major block of tiles with face_r_dim rows per face, dense in L1 as the pool's input CB, is
-tilized by the unpacker against a one-row scaler operand, reduced over its rows and packed one row per face. Row 0 of
-faces 0 and 1 of every output tile is checked against the column max (MAX) or the scaled column sum (AVG) of the input
-rows. The block is unpacked by num_blocks calls of the block unpack (num_blocks equal to the tile count is one tile per
-call).
-"""
+"""Functional test of the reduce with a tilized operand A (pool2d configuration): row 0 of faces 0 and 1 of every output tile against the column max or scaled column sum."""
 
 import pytest
 import torch

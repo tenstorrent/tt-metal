@@ -1,11 +1,7 @@
 # SPDX-FileCopyrightText: © 2026 Tenstorrent AI ULC
 # SPDX-License-Identifier: Apache-2.0
 
-"""Perf test of the reduce with a tilized operand A (tilizeA_B_reduce_init, unpack_tilizeA_B_block and the column reduce:
-the pool2d and bilinear upsample configuration). Axes: pool MAX (negative infinity source fill) or AVG (zero fill), the
-input face geometry the pool program factory programs (face_r_dim = min(window, 16); 2 faces up to a 16-row window, 4
-above), the block width in tiles and the number of block calls per row (equal to the width: one tile per call), the
-formats, HiFi4 as the pool. All five run types."""
+"""Perf test of the reduce with a tilized operand A (pool2d and bilinear upsample configuration)."""
 
 from collections import OrderedDict
 

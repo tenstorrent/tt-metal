@@ -225,7 +225,6 @@ TT_ALWAYS_INLINE void _llk_pack_fast_tilize_configure_(
     TTI_WRCFG(p_gpr_pack::TMP1, p_cfg::WRCFG_32b, PCK0_ADDR_CTRL_ZW_REG_0_Zstride_ADDR32);
     if constexpr (l1_step)
     {
-        // Scratch index 0b11 of the CFGSHIFTMASK selects SCRATCH_SEC2 on the pack thread.
         TTI_WRCFG(p_gpr_pack::OUTPUT_ADDR_OFFSET, 0, SCRATCH_SEC2_val_ADDR32);
     }
 }
@@ -343,7 +342,6 @@ inline void _llk_pack_fast_tilize_reinit_unit_dim_([[maybe_unused]] const std::u
     _llk_pack_fast_tilize_mop_config_(new_unit_dim);
 }
 
-// Pairs with the init that takes input_32b.
 template <bool is_fp32_dest_acc_en>
 inline void _llk_pack_fast_tilize_reinit_unit_dim_(const std::uint32_t pack_dst_format, const std::uint32_t new_unit_dim, const bool input_32b)
 {

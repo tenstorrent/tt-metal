@@ -2,8 +2,8 @@
 //
 // SPDX-License-Identifier: Apache-2.0
 
-// Functional test of the pool's reduce with a tilized operand A: TILE_CNT row-major tiles unpacked by NUM_BLOCKS calls of
-// the tilizeA_B block unpack against a one-row scaler, reduced over rows (REDUCE_COL), one result row per face packed.
+// Functional test of the pool's reduce with a tilized operand A: NUM_BLOCKS block unpacks of TILE_CNT row-major tiles
+// against a one-row scaler, reduced over rows (REDUCE_COL).
 
 #include <algorithm>
 #include <cstdint>
