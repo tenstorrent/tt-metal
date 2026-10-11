@@ -274,8 +274,7 @@ void run_sdpa_tail(
 // Run the chunk API through its partial-output path, including online softmax
 // across chunks. Layout 0 preserves the original shared K/V defaults; layout 1
 // preserves separate V; layout 2 stores [K, padding, V, padding] in each row.
-// pipelined runs compute_sdpa_chunks_pipelined, one call per round. Raw output
-// and stats words go to outputs when given.
+// pipelined runs compute_sdpa_chunks_pipelined, one call per round.
 template <
     bool test_correction_fidelity = false,
     std::uint32_t chunks = test_correction_fidelity ? 3 : 2,
@@ -319,8 +318,7 @@ void run_sdpa_merged_kv(
                 .set_page_size(cb, short_tile_bytes)
                 .set_tile_dims(cb, Tile({sdpa_tail_rows, sdpa_tail_cols})));
     }
-    // The pipelined entry keeps a chunk at the front of cb_k while it reads the
-    // next one, so cb_k holds two chunks and later chunks wrap to its start.
+    // The pipelined entry reads the next chunk while one stays at the front, so cb_k holds two.
     const std::uint32_t k_cb_chunks = pipelined ? 2 : 1;
     for (const auto cb : {tt::CBIndex::c_1, tt::CBIndex::c_2}) {
         const auto tiles = chunk_tiles * (cb == tt::CBIndex::c_1 ? k_cb_chunks * row_tiles : v_tiles);
@@ -385,8 +383,7 @@ void run_sdpa_merged_kv(
         }
         // This exactly representable chunk bias changes the running maximum
         // for some query rows, exercising the previous-output correction too.
-        // It alternates so BF16 DEST accumulation of Q K^T stays within the
-        // tolerances below at three chunks.
+        // Alternates so BF16 DEST accumulation of Q K^T stays within the tolerances below.
         const auto chunk_index = token / (chunk_tiles * 32);
         return static_cast<float>((round * 5 + token * 7 + dim * 3) % 17) / 16.0f +
                static_cast<float>(chunk_index % 2);
@@ -577,8 +574,7 @@ TEST_F(LLKBlackholeSingleCardFixture, SdpaChunkMergedKvAndDefaultLayouts) {
 }
 
 TEST_F(LLKBlackholeSingleCardFixture, SdpaChunksPipelinedWrapsKAndMatchesSerial) {
-    // cb_k holds two chunks and each call runs three, so the third chunk's K
-    // tiles wrap to the CB start; the three calls start in alternating halves.
+    // Three chunks in a two-chunk cb_k wrap the third chunk's K tiles to the CB start.
     for (const auto layout : {0u, 1u}) {
         for (const bool full_sync : {false, true}) {
             SCOPED_TRACE(::testing::Message() << "layout=" << layout << ", full_sync=" << full_sync);
@@ -652,8 +648,7 @@ TEST_F(LLKBlackholeSingleCardFixture, SdpaChunkMergedKvCompileLimits) {
 
 TEST_F(LLKBlackholeSingleCardFixture, SdpaChunksPipelinedCompileLimits) {
     // chunk, QK and exp granularity, row_tiles, V width, separate-V, accepted.
-    // A chunk's exp posts and token stay outstanding with the next chunk's QK
-    // posts, and shared-CB V must fit inside the K row.
+    // A chunk's exp posts stay outstanding with the next chunk's QK posts; shared-CB V must fit inside the K row.
     const std::array<std::array<std::uint32_t, 7>, 6> cases{{
         {6, 1, 1, 2, 2, 0, 1},
         {8, 1, 1, 2, 2, 0, 0},

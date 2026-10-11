@@ -77,7 +77,6 @@ void kernel_main() {
                 true /*signal_last_chunk*/);
         } else {
             for (std::uint32_t chunk = 0; chunk < chunks; ++chunk) {
-                // The original shared/separate layouts keep the API defaults.
                 if constexpr (layout == 2) {
                     compute_sdpa_chunk<
                         chunk_tiles,

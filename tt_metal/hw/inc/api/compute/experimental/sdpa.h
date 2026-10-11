@@ -464,7 +464,7 @@ void compute_sdpa_chunk(
     MATH(LLK_ASSERT(
         ov_kt_dim == chunk_size || exp_signal_granularity == chunk_size,
         "OV-trim (ov_kt_dim != chunk_size) requires exp_signal_granularity == chunk_size"));
-    // The Q K^T init above recorded the unpack replay program this one runs.
+    // The Q K^T init above recorded the replay program this one runs.
     sdpa_custom_mm_reuse_dest_srcb_block_init_short<false /*load_replay*/>(
         cb_q, ov_cb, cb_out, transpose_v, chunk_size, num_tiles_v);
     sdpa_custom_mm_reuse_dest_srcb_block<output_granularity, exp_signal_granularity>(
@@ -492,9 +492,8 @@ void compute_sdpa_chunk(
     }
 }
 
-// Tile index of the chunk after the one at cb's read pointer. The CB holds a whole number of chunks, so that chunk
-// starts one chunk past the read pointer or, from the CB's last chunk, at the CB start; the unpack adds index * page
-// size in 32 bits, so the wrapped index counts back from the read pointer.
+// The unpack adds index * page size in 32 bits, so a chunk that wraps to the CB start is a negative index from the read
+// pointer.
 ALWI std::uint32_t sdpa_next_chunk_tile_index(std::uint32_t cb, std::uint32_t chunk_tiles) {
     std::uint32_t index = chunk_tiles;
 #ifdef TRISC_UNPACK
@@ -510,19 +509,10 @@ ALWI std::uint32_t sdpa_next_chunk_tile_index(std::uint32_t cb, std::uint32_t ch
     return index;
 }
 
-// compute_sdpa_chunk over the num_chunks chunks of one head, chunk c + 1's Q K^T issued before chunk c's P V so it
-// overlaps chunk c's exponentials. Chunk 0 starts the head: the running max and sum restart, nothing carries over
-// between calls.
-// - mm1_dst_offset, mm1_dst_offset_alt: the scores of even and odd chunks, two buffers that must not overlap.
-// - num_chunks: 0 returns at once.
-// - mask_last_chunk: add cb_mask to the last chunk's scores; the mask spans one SrcB face, so that chunk is at most 4
-//   tiles. signal_last_chunk: the last chunk's P V posts its output tiles to the pack thread, as compute_sdpa_chunk's
-//   last_chunk does.
-// - cb_k holds a whole number of chunks, two or more when num_chunks > 1: a chunk stays at the front until its P V is
-//   done, and the next chunk's K tiles wrap to the CB start. With separate_v, cb_v holds at least one chunk of V.
-// The granularities and separate_v are compute_sdpa_chunk's; its configure_mask_extent, v_tile_offset,
-// qk_contract_tiles and corr_fidelity_sel stay at their defaults (the K row as stride and contraction, V at offset 0,
-// the correction at MATH_FIDELITY).
+// compute_sdpa_chunk over num_chunks chunks of one head, with chunk c + 1's Q K^T issued before chunk c's P V.
+// mm1_dst_offset and mm1_dst_offset_alt are the score buffers of even and odd chunks and must not overlap; the mask
+// spans one SrcB face, so mask_last_chunk needs a last chunk of at most 4 tiles. cb_k holds a whole number of chunks,
+// two or more when num_chunks > 1, because a chunk stays at the front until its P V is done.
 template <
     std::uint32_t chunk_size,
     std::uint32_t num_tiles_k,
@@ -563,7 +553,7 @@ void compute_sdpa_chunks_pipelined(
     static_assert(chunk_size >= 2 && chunk_size % 2 == 0, "chunk_size (the OV matmul's kt_dim) must be even and >= 2");
     static_assert(
         num_tiles_k >= 2 && num_tiles_k % 2 == 0, "num_tiles_k (the QK matmul's kt_dim) must be even and >= 2");
-    // A chunk's subtraction posts and token are outstanding with the next chunk's Q K^T posts.
+    // A chunk's posts and token stay outstanding with the next chunk's Q K^T posts.
     static_assert(
         chunk_size / exp_signal_granularity + 1 + chunk_size / qk_signal_granularity <= semaphore::SEMAPHORE_MAX_VALUE,
         "compute_sdpa_chunks_pipelined: outstanding FPU->SFPU posts must fit the 4-bit semaphore");
@@ -583,7 +573,7 @@ void compute_sdpa_chunks_pipelined(
     auto scores = [&](std::uint32_t chunk) { return (chunk & 1) ? mm1_dst_offset_alt : mm1_dst_offset; };
     auto qk = [&](std::uint32_t chunk) {
         sdpa_custom_mm_block_init_short<transpose_k, mm_pack_init>(cb_q, cb_k, cb_out, chunk_size);
-        // From chunk 1 on, the previous chunk stays at the front of cb_k until its P V is done.
+        // The previous chunk stays at the front of cb_k until its P V is done.
         const std::uint32_t k_index = chunk == 0 ? 0 : sdpa_next_chunk_tile_index(cb_k, k_chunk_tiles);
         cb_wait_front(cb_k, (chunk == 0 ? 1 : 2) * k_chunk_tiles);
         sdpa_custom_mm_block<transpose_k, qk_signal_granularity>(
