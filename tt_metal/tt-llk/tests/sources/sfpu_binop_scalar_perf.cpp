@@ -61,8 +61,8 @@ void run_kernel(RUNTIME_PARAMETERS params)
             {
                 _perf_unpack_loop_set_valid<
                     /* src A */ true,
-                    /* src B */ is_fp32_dest_acc_en>(
-                    /* iterations*/ num_faces * TILE_CNT * LOOP_FACTOR);
+                    /* src B */ is_fp32_dest_acc_en,
+                    PERF_RUN_TYPE>(/* iterations*/ num_faces * TILE_CNT * LOOP_FACTOR);
             }
         }
         else if constexpr (PERF_RUN_TYPE != PerfRunType::PACK_ISOLATE) // UNPACK_ISOLATE, L1_TO_L1, L1_CONGESTION
@@ -122,8 +122,8 @@ void run_kernel(RUNTIME_PARAMETERS params)
                     {
                         _perf_math_loop_clear_valid<
                             /* src A */ true,
-                            /* src B */ true>(
-                            /* iterations*/ num_faces);
+                            /* src B */ true,
+                            PERF_RUN_TYPE>(/* iterations*/ num_faces);
                     }
                 }
             }
