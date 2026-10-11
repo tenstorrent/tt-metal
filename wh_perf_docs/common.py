@@ -214,3 +214,23 @@ EXTRA_CSS += """
 header>*,section>p,section>ul,section>ol,section>h2,section>h3,section>details,.sketch p{max-width:80ch}
 .figwrap,.tw{max-width:100%;overflow-x:auto}
 """
+
+
+# Bare short commit SHAs in text become links to the commit on GitHub (only SHAs listed in shas.json, all checked to exist).
+SHAS = json.load(open(f"{D}/shas.json")) if os.path.exists(f"{D}/shas.json") else {}
+
+
+def link_shas(html):
+    out, depth = [], 0  # depth > 0 inside <a>, <svg>, <style>, <title>
+    for part in re.split(r"(<[^>]+>)", html):
+        if part.startswith("<"):
+            m = re.match(r"<(/?)(a|svg|style|title)\b", part)
+            if m:
+                depth += -1 if m.group(1) else 1
+            out.append(part)
+        elif depth == 0:
+            out.append(re.sub(r"(?<![0-9A-Za-z/#=_.-])([0-9a-f]{11})(?![0-9A-Za-z])",
+                              lambda x: f'<a href="https://github.com/tenstorrent/tt-metal/commit/{SHAS[x.group(1)]}"><code>{x.group(1)}</code></a>' if x.group(1) in SHAS else x.group(1), part))
+        else:
+            out.append(part)
+    return "".join(out)

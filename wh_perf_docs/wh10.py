@@ -139,5 +139,5 @@ def body():
 
 if __name__ == "__main__":
     noinit = open(sys.argv[1]).read() if len(sys.argv) > 1 else ""
-    open(f"{OUT}/WH-10.html", "w").write(body().replace("{NOINIT}", noinit))
+    open(f"{OUT}/WH-10.html", "w").write(link_shas(body().replace("{NOINIT}", noinit)))
     print("ok")
