@@ -114,6 +114,14 @@ using PartialsRingPos = uint32_t;
 #define RESTORE_PARTIALS_RD(var, dfb) (dfb).evil_set_read_ptr(var)
 #endif
 
+// QUASAR: the tilize loop is written out here against the kernel-scope DataflowBuffer objects
+// (cb_in0 / cb_in0_second_reader -> cb_tilized_in0) instead of going through
+// compute_kernel_lib::tilize(). On Quasar ~DataflowBuffer() drains the buffer (spins until its
+// tile counter is empty) and the helper constructs/destroys its own in/out DataflowBuffer objects
+// on every call. Called once per K block, that drain deadlocks the core: the packer's drain of
+// act_tilized waits for the unpacker to consume the tilized block, the unpacker's drain of the
+// activation CB waits for the NEXT block the reader has already pushed to be consumed, and the
+// readers sit in reserve_back on a full CB (watcher: DM RBW / TRISC0+2 AAW / TRISC1 K).
 #ifdef SPLIT_READER
 template <
     uint32_t in_block_w,
@@ -133,25 +141,81 @@ template <
     compute_kernel_lib::tilize_config::RemapMode remap_mode = compute_kernel_lib::tilize_config::RemapMode::Configure>
 void tilize_in(
 #endif
-    uint32_t in_num_subblocks) {
-    constexpr compute_kernel_lib::tilize_config::InitUninitMode init_uninit_mode =
-        init_tilize ? (uninit_tilize ? compute_kernel_lib::tilize_config::InitUninitMode::InitAndUninit
-                                     : compute_kernel_lib::tilize_config::InitUninitMode::InitOnly)
-                    : (uninit_tilize ? compute_kernel_lib::tilize_config::InitUninitMode::UninitOnly
-                                     : compute_kernel_lib::tilize_config::InitUninitMode::Neither);
-    constexpr auto reconfig_mode =
-        init_tilize ? compute_kernel_lib::tilize_config::ReconfigureRegisterDatatypeMode::UnpackReconfigure
-                    : compute_kernel_lib::tilize_config::ReconfigureRegisterDatatypeMode::NoReconfigure;
-    compute_kernel_lib::tilize<
-        in_block_w,
-        in_cb_id,
-        out_cb_id,
-        init_uninit_mode,
-        compute_kernel_lib::tilize_config::WaitMode::WaitBlock,
-        reconfig_mode,
-        compute_kernel_lib::tilize_config::Fp32Mode::Fast,
-        remap_mode>(in_num_subblocks);
+    DataflowBuffer& in_cb, DataflowBuffer& out_cb, uint32_t in_num_subblocks) {
+    static_assert(in_block_w > 0, "in_block_w must be greater than 0");
+    static_assert(in_cb_id != out_cb_id, "tilize cannot be done in-place");
+    // Same dispatch as compute_kernel_lib::tilize<..., Fp32Mode::Fast, ...>.
+    constexpr bool use_fast = compute_kernel_lib::can_use_fast_tilize<in_block_w, in_cb_id, out_cb_id>();
+
+    if constexpr (init_tilize) {
+        // ReconfigureRegisterDatatypeMode::UnpackReconfigure (srcA only: srcB keeps the matmul weights).
+        reconfig_data_format_srca(in_cb_id);
+        if constexpr (use_fast) {
+#ifdef ARCH_BLACKHOLE
+            if constexpr (remap_mode == compute_kernel_lib::tilize_config::RemapMode::AssumeConfigured) {
+                fast_tilize_init_skip_remap(in_cb_id, in_block_w, out_cb_id);
+            } else
+#endif
+            {
+                fast_tilize_init(in_cb_id, in_block_w, out_cb_id);
+            }
+        } else {
+            tilize_init(in_cb_id, in_block_w, out_cb_id);
+        }
+    }
+
+    for (uint32_t block = 0; block < in_num_subblocks; ++block) {
+        in_cb.wait_front(in_block_w);  // WaitMode::WaitBlock
+        out_cb.reserve_back(in_block_w);
+        if constexpr (use_fast) {
+            fast_tilize_block(in_cb_id, in_block_w, out_cb_id);
+        } else {
+            tilize_block(in_cb_id, in_block_w, out_cb_id);
+        }
+        out_cb.push_back(in_block_w);
+        in_cb.pop_front(in_block_w);
+    }
+
+    if constexpr (uninit_tilize) {
+        if constexpr (use_fast) {
+            fast_tilize_uninit(in_cb_id, out_cb_id, in_block_w);
+        } else {
+            tilize_uninit(in_cb_id, out_cb_id);
+        }
+    }
 }  // tilize_in()
+
+// Explicit (non-draining) version of compute_kernel_lib::untilize<InitAndUninit, WaitBlock, NoReconfigure>.
+template <uint32_t block_w, uint32_t in_cb_id, uint32_t out_cb_id>
+void untilize_mm_out(DataflowBuffer& in_cb, DataflowBuffer& out_cb, uint32_t num_blocks) {
+    using dispatch = compute_kernel_lib::UntilizeDispatchConfig<block_w, in_cb_id, out_cb_id>;
+    compute_kernel_lib::
+        untilize_init<block_w, in_cb_id, out_cb_id, compute_kernel_lib::untilize_config::RemapMode::Configure>();
+    for (uint32_t r = 0; r < num_blocks; ++r) {
+        if constexpr (dispatch::use_fast) {
+            in_cb.wait_front(block_w);
+            out_cb.reserve_back(block_w);
+            fast_untilize_block<block_w>(in_cb_id, out_cb_id);
+            in_cb.pop_front(block_w);
+            out_cb.push_back(block_w);
+        } else if constexpr (dispatch::use_block_based_pack_path) {
+            out_cb.reserve_back(block_w);
+            for (uint32_t b = 0; b < dispatch::num_sub_blocks; ++b) {
+                in_cb.wait_front(dispatch::sub_block_width);
+                pack_untilize_block<dispatch::sub_block_width, block_w>(in_cb_id, 1, out_cb_id, b);
+                in_cb.pop_front(dispatch::sub_block_width);
+            }
+            out_cb.push_back(block_w);
+        } else {
+            in_cb.wait_front(block_w);
+            out_cb.reserve_back(block_w);
+            pack_untilize_block<block_w, block_w>(in_cb_id, 1, out_cb_id, 0);
+            in_cb.pop_front(block_w);
+            out_cb.push_back(block_w);
+        }
+    }
+    compute_kernel_lib::untilize_uninit<block_w, in_cb_id, out_cb_id>();
+}
 
 template <uint32_t in_cb_id, uint32_t in_block_w, uint32_t out_cb_id>
 inline void tilize_single_block(DataflowBuffer& in_cb) {
@@ -372,6 +436,11 @@ void kernel_main() {
     DataflowBuffer cb_in0_second_reader(in0_cb_second_reader_id);
 #endif
     DataflowBuffer cb_tilized_in0(tilized_in0_cb_id);
+#ifdef HAS_ACT_ROW_MAJOR
+    DataflowBuffer cb_in0_pretilize(in0_pretilize_cb_id);
+#else
+    DataflowBuffer& cb_in0_pretilize = cb_in0;  // alias: in0_pretilize_cb_id == in0_cb_id here
+#endif
     DataflowBuffer cb_mm_in0(mm_in0_cb_id);
     DataflowBuffer cb_in1(in1_cb_id);
     DataflowBuffer cb_matmul_partials(matmul_partials_cb);
@@ -427,6 +496,11 @@ void kernel_main() {
 #endif
     UNPACK(SAVE_PARTIALS_RD(partials_cb_read_ptr, cb_matmul_partials);)
     PACK(SAVE_PARTIALS_WR(partials_cb_write_ptr, cb_matmul_partials);)
+    // QUASAR: number of tiles pushed into dfb::out (the borrowed output shard). Compute is the degenerate
+    // CONSUMER of OUT as well as its producer; the tiles stay in the output L1 but the credits have to be
+    // popped before the end-of-kernel ~DataflowBuffer() drains (pack: TC posted == 0) can complete.
+    // Plain counter so all three TRISC threads track it identically.
+    uint32_t out_tiles_pushed = 0;
     for (uint32_t in1_block_w_i = 0; in1_block_w_i < in1_num_blocks_w; ++in1_block_w_i) {
         for (uint32_t in0_block_h_i = 0; in0_block_h_i < in0_num_blocks_h; ++in0_block_h_i) {
             bool enable_reload = false;
@@ -461,12 +535,13 @@ void kernel_main() {
                             tilized_in0_cb_id,
                             true,
                             !split_reader || split_reader_cb_shared,
-                            compute_kernel_lib::tilize_config::RemapMode::Configure>(in0_num_subblocks_read);
+                            compute_kernel_lib::tilize_config::RemapMode::Configure>(
+                            cb_in0_pretilize, cb_tilized_in0, in0_num_subblocks_read);
 
 #ifdef SPLIT_READER
                         if constexpr (split_reader && !split_reader_cb_shared) {
                             tilize_in<in0_block_w, in0_cb_second_reader_id, tilized_in0_cb_id, false, true>(
-                                in0_num_subblocks_read_last);
+                                cb_in0_second_reader, cb_tilized_in0, in0_num_subblocks_read_last);
                         }
 #endif
                         reconfig_data_format(in0_pretilize_cb_id, in1_cb_id, in0_pretilize_cb_id, in0_cb_id);
@@ -487,14 +562,14 @@ void kernel_main() {
 #endif
                     if constexpr (!activation_reuse) {
                         tilize_in<in0_block_w, in0_cb_id, tilized_in0_cb_id, true, !split_reader>(
-                            in0_num_subblocks_read);
+                            cb_in0, cb_tilized_in0, in0_num_subblocks_read);
                     }
 
 #ifdef SPLIT_READER
                     if constexpr (split_reader) {
                         if constexpr (!activation_reuse) {
                             tilize_in<in0_block_w, in0_cb_second_reader_id, tilized_in0_cb_id, false, true>(
-                                in0_num_subblocks_read_last);
+                                cb_in0_second_reader, cb_tilized_in0, in0_num_subblocks_read_last);
                         } else {
 #ifndef ARCH_QUASAR  // activation_reuse path is off for resnet; dead on Quasar (no evil_set_*)
                             PACK((cb_tilized_in0.evil_set_write_ptr(tilized_cb_start_address)));
@@ -782,16 +857,16 @@ void kernel_main() {
                     }
                     pack_untilize_uninit(matmul_partials_cb);
                 } else {
-                    compute_kernel_lib::untilize<
-                        out_block_w,
-                        matmul_partials_cb,
-                        out_cb_id,
-                        compute_kernel_lib::untilize_config::InitUninitMode::InitAndUninit,
-                        compute_kernel_lib::untilize_config::WaitMode::WaitBlock,
-                        compute_kernel_lib::untilize_config::ReconfigureRegisterDatatypeMode::NoReconfigure>(
-                        in0_num_subblocks * out_subblock_h);
+                    // QUASAR: explicit untilize loop on the kernel-scope DFBs for the same reason as
+                    // tilize_in() above (the compute_kernel_lib::untilize() helper drains its temporary
+                    // DataflowBuffer objects on return).
+                    untilize_mm_out<out_block_w, matmul_partials_cb, out_cb_id>(
+                        cb_matmul_partials, cb_out, in0_num_subblocks * out_subblock_h);
                 }
             }
+            // Every path above (plain matmul -> mm_out, bias add -> untilize_mode_out, untilize -> out) ends
+            // with exactly out_block_num_tiles tiles pushed into dfb::out for this block.
+            out_tiles_pushed += out_block_num_tiles;
             if constexpr ((in1_num_blocks_w > 1 || in0_num_blocks_h > 1)) {
 #ifdef FUSE_BIAS
                 if constexpr (fuse_bias) {
@@ -809,4 +884,31 @@ void kernel_main() {
         }
 #endif
     }  // for in1_num_blocks_w
+
+    // QUASAR end-of-kernel credit pops (no data movement). Without them the unpack / pack ~DataflowBuffer()
+    // drains spin forever (watcher: TRISC0/2 AAW with TRISC1 done) and the weights writer's bias drain never
+    // sees read_acked == read_posted (DM AAW).
+    //  - OUT: pop in the granularity the packer pushed (subblocks, or untilized rows of out_block_w tiles) so
+    //    no single wait exceeds the ring; popping is credit-only, the data stays in the output shard.
+    //  - BIAS: pushed once by the writer, waited on by every block, never popped by the WH/BH kernel.
+    {
+        constexpr uint32_t out_drain_chunk = untilize_out ? out_block_w : out_subblock_num_tiles;
+        while (out_tiles_pushed > 0) {
+            const uint32_t n = out_tiles_pushed < out_drain_chunk ? out_tiles_pushed : out_drain_chunk;
+            cb_out.wait_front(n);
+            cb_out.pop_front(n);
+            out_tiles_pushed -= n;
+        }
+    }
+#ifdef FUSE_BIAS
+    if constexpr (fuse_bias) {
+#ifdef CHECK_SKIP_COMPUTE
+        // skip cores never received (or waited on) the bias: nothing to pop
+        if (!skip_compute)
+#endif
+        {
+            cb_bias.pop_front(bias_ntiles_w);
+        }
+    }
+#endif
 }  // void kernel_main()

@@ -295,9 +295,15 @@ void kernel_main() {
     // reader0 fake-pushes the borrowed SRC DFB: the input shard is already resident
     // (borrowed_from = IN), so we only need to advance the FIFO front pointer so the
     // compute's wait_front(src) succeeds.  No data is moved.
+    //
+    // QUASAR: src_cb must live until kernel exit. ~DataflowBuffer() drains the DFB (spins until
+    // posted == acked, i.e. until the compute has consumed every page). Destroying it right after the
+    // fake-push (block scope) blocks this reader before the pad handshake / gather; the compute can
+    // only drain SRC if its untilized blocks are popped by reader0 + reader1, and reader1 waits for
+    // reader0's pad entry -> circular wait on every core (SDXL conv_in halo hang).
+    DataflowBuffer src_cb(dfb::src);
     {
         constexpr uint32_t input_npages = get_arg(args::input_npages);
-        DataflowBuffer src_cb(dfb::src);
         src_cb.reserve_back(static_cast<uint16_t>(input_npages));
         src_cb.push_back(static_cast<uint16_t>(input_npages));
     }

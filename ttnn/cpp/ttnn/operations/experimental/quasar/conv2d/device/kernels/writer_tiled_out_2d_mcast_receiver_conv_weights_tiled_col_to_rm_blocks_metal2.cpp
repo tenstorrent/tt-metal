@@ -28,6 +28,12 @@
 // DEBUG: weights-mcast-receiver deadlock localization. Marker 0xBP_00CC, P=phase, CC=load counter.
 
 void kernel_main() {
+    // QUASAR: skip cores (input grid beyond the output grid) host this kernel only so the WEIGHTS/BIAS
+    // DFBs there have a producer; nothing is multicast to them and compute never waits on them, so
+    // return before touching any DFB or semaphore.
+    if (get_arg(args::noop) != 0) {
+        return;
+    }
     uint32_t rb_wcnt = 0;  // DEBUG: weight-load counter for ring buffer markers
     constexpr uint32_t num_blocks_weight_h = get_arg(args::num_blocks_weight_h);
     constexpr uint32_t weight_block_num_tiles = get_arg(args::weight_block_num_tiles);

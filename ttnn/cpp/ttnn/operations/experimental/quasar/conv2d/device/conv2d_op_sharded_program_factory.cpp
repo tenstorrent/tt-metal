@@ -517,6 +517,7 @@ static void populate_writer_receiver_runtime_args(
     m2::KernelRunArgs& writer_receiver_run_args,
     const CoreRangeSet& mcast_receiver_cores,
     const CoreRangeSet& input_cores,
+    const CoreRangeSet& writer_noop_cores,
     bool block_sharded,
     bool transpose_mcast,
     uint32_t num_cores_x,
@@ -539,10 +540,15 @@ static void populate_writer_receiver_runtime_args(
                     sender_noc_y = top_left_core_physical.y;
                 }
                 const bool is_sender_core = input_cores.contains(core);
+                // Skip cores (input grid beyond the output grid) run the receiver in noop mode: the
+                // kernel returns at once so the WEIGHTS/BIAS DFBs there have a producer that pushes
+                // nothing (compute skips the matmul and never waits on them).
+                const bool is_noop_core = writer_noop_cores.contains(core);
                 m2::AddRuntimeArgsForNode(
                     writer_receiver_rtas,
                     core,
                     {
+                        {"noop", (uint32_t)is_noop_core},
                         {"weights_mcast_sender_noc_x", sender_noc_x},
                         {"weights_mcast_sender_noc_y", sender_noc_y},
                         {"is_sender_core", (uint32_t)is_sender_core},
@@ -1338,6 +1344,7 @@ ttnn::device_operation::ProgramArtifacts Conv2dShardedProgramFactory::create_pro
     CoreRangeSet mcast_sender_cores =
         CoreRangeSet(CoreRange(top_left_core, top_left_core));  // If single core, this kernel doesn't do mcasting
     CoreRangeSet mcast_receiver_cores;
+    CoreRangeSet writer_noop_cores;  // block-sharded skip cores that run the receiver writer in noop mode
 
     if (block_sharded) {
         const CoreCoord out_bottom_right_core = {(std::size_t)num_cores_x - 1, (std::size_t)num_cores_y - 1};
@@ -1355,6 +1362,19 @@ ttnn::device_operation::ProgramArtifacts Conv2dShardedProgramFactory::create_pro
         if (populate_skipped_work_cores) {
             mcast_sender_cores = input_cores.subtract(mcast_receiver_cores);
         }
+        // QUASAR / Metal 2.0: when the input shard grid is wider (or taller, transpose_mcast) than the
+        // output grid (e.g. SDXL 320-channel inputs sharded 8-wide as [.., 40] while the tiled output
+        // uses 5 columns), the extra cores are "skip" cores: reader + compute run there (the reader is
+        // an act-mcast source for its row/column; compute pops act and skips the matmul via the
+        // skip_compute RTA) but no weights writer did, and the Metal 2.0 validator rejects a node that
+        // instantiates the WEIGHTS/BIAS DFB with a consumer (compute) but no producer. Place the
+        // receiver writer on those cores in noop mode (it returns immediately, see the kernel). This also
+        // covers single-row / single-column grids (num_cores_nhw == 1 -> skip_weights_mcast, no receiver
+        // otherwise): the receiver kernel is then instantiated for the noop cores only.
+        writer_noop_cores = all_cores.subtract(mcast_sender_cores).subtract(mcast_receiver_cores);
+        if (writer_noop_cores.num_cores() > 0) {
+            mcast_receiver_cores = mcast_receiver_cores.merge(writer_noop_cores);
+        }
     } else {
         if (!skip_weights_mcast) {
             // Height-sharded / depthwise: place the receiver only on the ACTIVE (compute) cores minus the
@@ -1367,7 +1387,28 @@ ttnn::device_operation::ProgramArtifacts Conv2dShardedProgramFactory::create_pro
         }
     }
 
-    const bool create_writer_mcast_receiver = !skip_weights_mcast;
+    const bool create_writer_mcast_receiver = !skip_weights_mcast || writer_noop_cores.num_cores() > 0;
+    log_debug(
+        tt::LogOp,
+        "conv2d Metal 2.0 sharded factory placement: block_sharded={} height_sharded={} transpose_mcast={} "
+        "skip_weights_mcast={} check_skip_compute={} grid={}x{} nhw={} c_in={} c_out={} input_cores={} "
+        "output_cores={} all_cores={} sender={} receiver={} writer_noop={}",
+        block_sharded,
+        height_sharded,
+        transpose_mcast,
+        skip_weights_mcast,
+        check_skip_compute,
+        num_cores_x,
+        num_cores_y,
+        parallelization_config.num_cores_nhw,
+        parallelization_config.num_cores_c_in,
+        parallelization_config.num_cores_c_out,
+        input_cores.str(),
+        output_cores.str(),
+        all_cores.str(),
+        mcast_sender_cores.str(),
+        mcast_receiver_cores.str(),
+        writer_noop_cores.str());
 
     uint32_t reader_arg_act_block_h_datums = (enable_split_reader ? act_block_h_datums_split : act_block_h_datums);
     TT_FATAL(reader_arg_act_block_h_datums % 2 == 0, "2 Indices are packed in one uint32_t word.");
@@ -2081,7 +2122,7 @@ ttnn::device_operation::ProgramArtifacts Conv2dShardedProgramFactory::create_pro
     }
     if (block_sharded) {
         writer_receiver_spec.runtime_arg_schema = {
-            .runtime_arg_names = {"weights_mcast_sender_noc_x", "weights_mcast_sender_noc_y", "is_sender_core"},
+            .runtime_arg_names = {"noop", "weights_mcast_sender_noc_x", "weights_mcast_sender_noc_y", "is_sender_core"},
         };
     } else {
         // 1D receiver: remaining_tiles_to_push is always referenced (constexpr-false ternary).
@@ -2498,6 +2539,7 @@ ttnn::device_operation::ProgramArtifacts Conv2dShardedProgramFactory::create_pro
             writer_receiver_run_args,
             mcast_receiver_cores,
             input_cores,
+            writer_noop_cores,
             block_sharded,
             transpose_mcast,
             num_cores_x,
