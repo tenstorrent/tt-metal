@@ -319,6 +319,8 @@ def test_shared_generator_routes_slot_remap_to_exactly_one_sampling_owner():
             if fail_readback
             else events.append("process") or output,
             _apply_sampling_slot_remap=lambda remap: events.append(("host-remap", remap)),
+            _deferred_decode_sampling_failed=False,
+            _pending_deferred_decode_sampling=None,
         )
 
         try:

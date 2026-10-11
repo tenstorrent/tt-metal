@@ -470,6 +470,8 @@ class TtMoEGatePrefill(LightweightModule):
         cache_path: Path | None,
         cache_name_prefix: str | None,
         device: ttnn.MeshDevice | None = None,  # None=cache, mesh_device=load
+        *,
+        cache_dump_mode: ttnn.DumpTensorMode = ttnn.DumpTensorMode.DISTRIBUTED_GATHER,
     ) -> dict | None:
         """
         Shared logic for converting gate weights to TTNN with caching.
@@ -514,6 +516,7 @@ class TtMoEGatePrefill(LightweightModule):
                 mesh_shape=mesh_device.shape,
             ),
             cache_file_name=_cache_name("weight"),
+            cache_dump_mode=cache_dump_mode,
         )
 
         # Cache bias unbroadcasted (required by moe_grouped_topk)
@@ -523,6 +526,7 @@ class TtMoEGatePrefill(LightweightModule):
             dtype=ttnn.bfloat16,
             layout=ttnn.TILE_LAYOUT,
             cache_file_name=_cache_name("e_score_correction_bias"),
+            cache_dump_mode=cache_dump_mode,
         )
 
         if device is None:
@@ -566,10 +570,18 @@ class TtMoEGatePrefill(LightweightModule):
         mesh_device: ttnn.MeshDevice,
         cache_path: Path,
         cache_name_prefix: str,
+        cache_dump_mode: ttnn.DumpTensorMode = ttnn.DumpTensorMode.DISTRIBUTED_GATHER,
     ):
         """Build TTNN cache for gate weights without device copy."""
         TtMoEGatePrefill._convert_and_cache_gate_weights(
-            torch_weight, torch_bias, config, mesh_device, cache_path, cache_name_prefix, device=None
+            torch_weight,
+            torch_bias,
+            config,
+            mesh_device,
+            cache_path,
+            cache_name_prefix,
+            device=None,
+            cache_dump_mode=cache_dump_mode,
         )
 
     def __init__(
@@ -583,11 +595,14 @@ class TtMoEGatePrefill(LightweightModule):
         cache_name_prefix: Optional[str] = None,
         is_balanced: bool = False,
         hash_table: torch.Tensor = None,
+        cache_dump_mode: ttnn.DumpTensorMode = ttnn.DumpTensorMode.DISTRIBUTED_GATHER,
     ):
         """
         Args:
             weight: Gate weight in HF convention: (n_routed_experts, dim).
                     Transposed internally to (dim, n_routed_experts) for the TTNN matmul path.
+            cache_dump_mode: How a weight-cache miss is written (see ttnn.as_tensor). Pass
+                ttnn.DumpTensorMode.LOCAL when each rank builds different layers (pipeline parallel).
             is_balanced: If True, uses zigzag (balanced) sequence placement across SP devices.
                 Affects per-device real token count computation for padding awareness.
             hash_table: DeepSeek-V4 hash routing tid2eid table, shape (vocab_size, n_activated_experts).
@@ -610,14 +625,30 @@ class TtMoEGatePrefill(LightweightModule):
         # on-device instead and refreshes THIS buffer in place — a stable address the capture can keep
         # writing across replays. Allocated lazily on first use (warm-up, before any capture).
         self._padding_config_device: Optional[ttnn.Tensor] = None
+        # Row-index / sentinel masks for _sentinel_padded_rows, keyed on the indices shape.
+        self._row_masks: dict = {}
 
         if weight is not None and bias is not None:
             weights = self._convert_and_cache_gate_weights(
-                weight, bias, config, mesh_device, weight_cache_path, cache_name_prefix, device=mesh_device
+                weight,
+                bias,
+                config,
+                mesh_device,
+                weight_cache_path,
+                cache_name_prefix,
+                device=mesh_device,
+                cache_dump_mode=cache_dump_mode,
             )
         elif weight_cache_path is not None:
             weights = self._convert_and_cache_gate_weights(
-                None, None, config, mesh_device, weight_cache_path, cache_name_prefix, device=mesh_device
+                None,
+                None,
+                config,
+                mesh_device,
+                weight_cache_path,
+                cache_name_prefix,
+                device=mesh_device,
+                cache_dump_mode=cache_dump_mode,
             )
         else:
             weights = self._convert_and_cache_gate_weights(
@@ -1160,6 +1191,38 @@ class TtMoEGatePrefill(LightweightModule):
         ttnn.deallocate(logits_tiled)
         return scores, indices
 
+    def _sentinel_padded_rows(self, indices: ttnn.Tensor, padding_config: ttnn.Tensor) -> ttnn.Tensor:
+        """Set right-padded rows' expert ids to the n_routed_experts sentinel, as DEVICE_FP32's topk does.
+
+        Right padding only: the caller must reject padding_side != "right" (the config's pad_side is
+        not read here). The masks are built lazily on first use of each shape, so that must be
+        warm-up, before any trace capture (from_torch is illegal inside a capture).
+        """
+        key = tuple(indices.shape)
+        if key not in self._row_masks:
+            rows, k = indices.shape[-2], indices.shape[-1]
+            assert rows <= torch.iinfo(torch.int16).max, f"{rows} rows overflow the int16 row index"
+            row_index = torch.arange(rows, dtype=torch.int16).reshape(rows, 1).expand(rows, k).reshape(key)
+            self._row_masks[key] = tuple(
+                ttnn.from_torch(
+                    t,
+                    device=self.mesh_device,
+                    dtype=indices.dtype,
+                    layout=ttnn.TILE_LAYOUT,
+                    memory_config=ttnn.DRAM_MEMORY_CONFIG,
+                    mesh_mapper=ttnn.ReplicateTensorToMesh(self.mesh_device),
+                )
+                for t in (row_index, torch.full_like(row_index, self.config.n_routed_experts))
+            )
+        row_index, sentinel = self._row_masks[key]
+        real = ttnn.slice(padding_config, [0, 0], [1, 1])
+        real = ttnn.typecast(ttnn.to_layout(real, ttnn.TILE_LAYOUT), indices.dtype)
+        is_real = ttnn.lt(row_index, real)
+        out = ttnn.where(is_real, indices, sentinel)
+        for t in (real, is_real, indices):
+            ttnn.deallocate(t)
+        return out
+
     def _host_gpt_gate(self, host_logits: torch.Tensor) -> tuple[torch.Tensor, torch.Tensor]:
         """GPT-OSS routing on host. Returns (indices, scores).
 
@@ -1241,6 +1304,10 @@ class TtMoEGatePrefill(LightweightModule):
 
         elif mode == GateComputeMode.GPT_DEVICE:
             ttnn_scores, ttnn_top_k_experts_indices = self._device_gpt_gate(logits)
+            if padding_config is not None:
+                if padding_side != "right":
+                    raise ValueError(f"GPT_DEVICE padding awareness is right-padding only, got {padding_side!r}")
+                ttnn_top_k_experts_indices = self._sentinel_padded_rows(ttnn_top_k_experts_indices, padding_config)
 
         elif mode == GateComputeMode.GPT_HOST:
             host_logits = self._compose_logits_to_host(logits)

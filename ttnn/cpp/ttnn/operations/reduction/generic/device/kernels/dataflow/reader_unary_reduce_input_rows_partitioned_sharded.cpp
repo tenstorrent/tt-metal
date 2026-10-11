@@ -56,4 +56,7 @@ void kernel_main() {
         noc.async_read_barrier();
         dfb_in0.push_back(onetile);
     }
+    // dfb_in1 is reserved above only to take its base address, so push the reserved tiles here
+    // to leave the buffer balanced.
+    dfb_in1.push_back(static_cast<uint16_t>(num_tiles));
 }

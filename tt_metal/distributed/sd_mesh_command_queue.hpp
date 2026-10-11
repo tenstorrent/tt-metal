@@ -4,6 +4,8 @@
 
 #pragma once
 
+#include <atomic>
+
 #include "mesh_command_queue_base.hpp"
 
 namespace tt::tt_metal::distributed {
@@ -68,7 +70,6 @@ public:
     void reset_worker_state(
         bool reset_launch_msg_state,
         uint32_t num_sub_devices,
-        const vector_aligned<uint32_t>& go_signal_noc_data,
         const std::vector<std::pair<CoreRangeSet, uint32_t>>& core_go_message_mapping,
         ttsl::Span<const uint32_t> workers_per_sub_device) override;
     void record_begin(const MeshTraceId& trace_id, const std::shared_ptr<MeshTraceDescriptor>& ctx) override;
@@ -92,6 +93,8 @@ private:
 
     bool asynchronous_slow_dispatch_enabled_ = false;
     bool configure_only_ = false;
+    // Stamped into each recorded event, so a wait can tell whether this queue has moved past it
+    std::atomic<uint32_t> num_workloads_enqueued_{0};
 
     std::shared_ptr<ThreadPool> launch_thread_pool_;
     void dispatch_program(const MeshCoordinateRange& coord_range, Program& program, bool blocking);

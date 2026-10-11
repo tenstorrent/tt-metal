@@ -37,6 +37,7 @@
 #include "api/dataflow/endpoints.h"
 #include "api/dataflow/noc_semaphore.h"
 #include "hostdevcommon/common_values.hpp"
+#include "chunk_gdn_handoff_dm.hpp"
 
 // CB indices (prep compute's output slots == the scan side's hand-off slots;
 // must match chunk_gdn_prep.cpp, chunk_gdn_scan.cpp and the fused program factory).
@@ -94,10 +95,11 @@ void kernel_main() {
     }
     // Send chunk c's VALID to the head's receivers: their word for slot (c % NBUF).
     auto set_valid = [&](uint32_t slot) {
-        if constexpr (POSTED) {
-            // Ordered behind this item's posted data writes: same NIU, same write command buffer, same
-            // VC (NOC_UNICAST_WRITE_VC), same destination => delivered in issue order. Non-posted, so
-            // the teardown barrier drains it.
+        if constexpr (POSTED || UNICAST) {
+            // One non-posted 4-byte write of this core's word into the same-id word of each receiver (the same
+            // L1 offset on every core), so the teardown barrier drains it. POSTED: ordered behind this item's
+            // posted data writes: same NIU, same write command buffer, same VC (NOC_UNICAST_WRITE_VC), same
+            // destination => delivered in issue order. UNICAST: issued after the data barrier.
             const uint32_t word = get_semaphore(SEM_VALID + slot);
             for (uint32_t v = 0; v < NV; v++) {
                 noc.async_write(
@@ -107,12 +109,6 @@ void kernel_main() {
                     {},
                     {.noc_x = rcv_x(v), .noc_y = rcv_y(v), .addr = word});
             }
-        } else if constexpr (UNICAST) {
-            const uint32_t word = get_semaphore(SEM_VALID + slot);  // same L1 offset on every core
-            for (uint32_t v = 0; v < NV; v++) {
-                noc_semaphore_set_remote(
-                    word, get_noc_addr(rcv_x(v), rcv_y(v), word, noc.get_noc_id()), noc.get_noc_id());
-            }
         } else {
             Semaphore<>(SEM_VALID + slot).set_multicast(noc, mx0, my0, mx1, my1, NV);  // unlinked: ends the chain
         }
@@ -120,10 +116,9 @@ void kernel_main() {
 
     // Credit words credit[h][slot] (BH x NBUF): zero them, then tell every receiver of this head
     // (init barrier).
-    volatile tt_l1_ptr uint32_t* credit =
-        reinterpret_cast<volatile tt_l1_ptr uint32_t*>(CircularBuffer(CB_CREDIT).get_read_ptr() + CREDIT_OFF);
+    CoreLocalMem<volatile uint32_t> credit(CircularBuffer(CB_CREDIT).get_read_ptr() + CREDIT_OFF);
     for (uint32_t i = 0; i < BH * NBUF; i++) {
-        noc_semaphore_set(credit + i, 0);
+        credit[i] = 0;
     }
     for (uint32_t v = 0; v < NV; v++) {
         init.up(noc, rcv_x(v), rcv_y(v), 1);
@@ -214,12 +209,12 @@ void kernel_main() {
         // would be a protocol bug and shows up as a hang here rather than as corrupt output. The
         // word is per (head, slot): its next credit (chunk c + NBUF) can only follow this chunk's
         // VALID -> pop -> reserve, so the reset below never races an increment.
-        volatile tt_l1_ptr uint32_t* credit_word = credit + h * NBUF + slot;
+        const CoreLocalMem<volatile uint32_t> credit_word = credit + (h * NBUF + slot);
         {
             DeviceZoneScopedN("tx_wait_credit");
-            noc_semaphore_wait(credit_word, NV);
+            gdn_handoff::wait_word(credit_word, NV);
         }
-        noc_semaphore_set(credit_word, 0);
+        *credit_word = 0;
 
         {
             DeviceZoneScopedN("tx_issue");

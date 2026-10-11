@@ -79,7 +79,16 @@ std::uint32_t math_sync_tile_dst_index = 0;
 #ifndef SDPA_MASK_REENTRY
 #define SDPA_MASK_REENTRY false
 #endif
+#ifndef SDPA_INPUT_TILE_OFFSET
+#define SDPA_INPUT_TILE_OFFSET 0
+#endif
 constexpr std::uint32_t SDPA_PASSES = SDPA_MASK_REENTRY ? 2 : 1;
+#ifdef SDPA_ROW_STRIDE
+constexpr std::uint32_t SDPA_INPUT_ROW_STRIDE = READ_TRANSPOSED && SDPA_ROW_STRIDE != 0 ? SDPA_ROW_STRIDE : KT_DIM;
+#else
+constexpr std::uint32_t SDPA_INPUT_ROW_STRIDE = KT_DIM;
+#endif
+constexpr std::uint32_t SDPA_MASK_TILE_INDEX = SDPA_INPUT_TILE_OFFSET + SDPA_INPUT_ROW_STRIDE * CT_DIM;
 
 #ifdef LLK_TRISC_UNPACK
 
@@ -118,17 +127,22 @@ void run_kernel(RUNTIME_PARAMETERS params)
     for (std::uint32_t pass = 0; pass < SDPA_PASSES; ++pass)
     {
         _llk_unpack_AB_sdpa_custom_mm_<READ_TRANSPOSED, SDPA_MASK_REENTRY>(
-            L1_ADDRESS(params.buffer_A[0]),                                       // base_address_a : in1 (SrcA, rhs)
-            L1_ADDRESS(params.buffer_B[0]),                                       // base_address_b : in0 (SrcB, lhs)
-            SDPA_MASK_REENTRY ? L1_ADDRESS(params.buffer_A[KT_DIM * CT_DIM]) : 0, // base_address_mask
-            0,                                                                    // tile_index_a
-            0,                                                                    // tile_index_b
-            params.TILE_SIZE_UNPACK_A,                                            // tile_size_a (in1 [32,32])
-            params.TILE_SIZE_UNPACK_B,                                            // tile_size_b (in0 [M,32])
+            L1_ADDRESS(params.buffer_A[0]),                                            // base_address_a : in1 (SrcA, rhs)
+            L1_ADDRESS(params.buffer_B[0]),                                            // base_address_b : in0 (SrcB, lhs)
+            SDPA_MASK_REENTRY ? L1_ADDRESS(params.buffer_A[SDPA_MASK_TILE_INDEX]) : 0, // base_address_mask
+            SDPA_INPUT_TILE_OFFSET,                                                    // tile_index_a
+            0,                                                                         // tile_index_b
+            params.TILE_SIZE_UNPACK_A,                                                 // tile_size_a (in1 [32,32])
+            params.TILE_SIZE_UNPACK_B,                                                 // tile_size_b (in0 [M,32])
             KT_DIM,
             CT_DIM,
             SDPA_MASK_REENTRY && pass == 0, // mask_chunk: first pass only
-            params.in0_face_r_dim);         // operandB_face_r_dim : in0 row count (M)
+            params.in0_face_r_dim           // operandB_face_r_dim : in0 row count (M)
+#ifdef SDPA_ROW_STRIDE
+            ,
+            SDPA_ROW_STRIDE
+#endif
+        );
     }
 }
 

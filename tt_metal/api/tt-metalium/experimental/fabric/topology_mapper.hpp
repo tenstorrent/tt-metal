@@ -4,9 +4,15 @@
 
 #pragma once
 
+#include <chrono>
+#include <cstddef>
 #include <functional>
 #include <map>
+#include <optional>
+#include <string>
+#include <unordered_map>
 #include <unordered_set>
+#include <utility>
 #include <vector>
 
 #include <tt-metalium/experimental/fabric/mesh_graph.hpp>
@@ -15,6 +21,7 @@
 #include <tt-metalium/experimental/fabric/topology_solver.hpp>
 #include <tt-metalium/distributed_context.hpp>
 #include <tt-metalium/experimental/fabric/topology_mapper_utils.hpp>
+#include <tt-metalium/device_types.hpp>
 
 namespace tt {
 class Cluster;
