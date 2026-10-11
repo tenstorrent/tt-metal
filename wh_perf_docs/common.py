@@ -3,6 +3,10 @@ import json, os, re
 D = os.path.dirname(os.path.abspath(__file__))
 A = json.load(open(f"{D}/assets.json"))
 F = A["figs"]
+import tiles as _tiles
+F = list(F)
+for _i in (8, 9):  # WH-01 waveforms: tile bars above each packer
+    F[_i] = _tiles.add_tiles(F[_i])
 URLS = json.load(open(f"{D}/urls.json")) if os.path.exists(f"{D}/urls.json") else {}
 
 PR = "3ff45cbd1c75094e1846fcd61f87252140a6f40c"
@@ -202,7 +206,7 @@ LP_CSS = """
 .lp .l1b{fill:var(--bk1);stroke:var(--fg);stroke-width:1.4}
 .lp .arh{stroke:var(--accent);stroke-width:2.2;fill:none}
 """
-EXTRA_CSS += LP_CSS + ".steps li{margin-bottom:8px}"
+EXTRA_CSS += LP_CSS + _tiles.TILE_CSS + ".steps li{margin-bottom:8px}"
 
 # Layout: a centred page no wider than 1200 px; text in a ~80-character reading column, figures and tables use the full page width.
 EXTRA_CSS += """
