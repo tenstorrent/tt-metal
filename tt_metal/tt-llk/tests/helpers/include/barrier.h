@@ -402,3 +402,11 @@ __attribute__((always_inline)) inline void rendezvous(bool is_action_thread)
 #endif // LLK_BARRIER_ON_TRISC
 
 } // namespace llk_barrier
+
+// experiment hook (nikola): LLK_NK_HOLD_ALL holds the idle peers of every isolate run type (not only PACK_ISOLATE) at
+// their TILE_LOOP end until the measured thread is done (counters.h holds_quiet, trisc.cpp)
+#if defined(LLK_NK_HOLD_ALL)
+#define LLK_NK_HOLD_ALL_ true
+#else
+#define LLK_NK_HOLD_ALL_ false
+#endif
