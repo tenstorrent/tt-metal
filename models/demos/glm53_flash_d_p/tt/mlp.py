@@ -89,7 +89,7 @@ class TtDenseMLP:
         # halves the 5120 x 4096 output write that bounds this K=256 matmul)
         odt = (
             ttnn.bfloat16
-            if split and os.environ.get("GLM_SCATTER_OP", "fabric_bf16") == "fabric_bf16"
+            if split and os.environ.get("GLM_SCATTER_OP", "fabric_ring") in ("fabric_bf16", "fabric_ring")
             else ttnn.float32
         )
         o = ttnn.linear(
