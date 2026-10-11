@@ -2197,7 +2197,6 @@ class CLAMPED_SILU_PARAMS(TemplateParameter):
         )
 
 
-# SFPU_MISC_OPERATION values of sources/sfpu_misc_perf.cpp; keep the two in step.
 SFPU_MISC_OPERATIONS = {
     "rand": 0,
     "dropout": 1,
@@ -2211,10 +2210,7 @@ SFPU_MISC_OPERATIONS = {
 
 @dataclass
 class SFPU_MISC_OP(TemplateParameter):
-    """Select the body of sources/sfpu_misc_perf.cpp; ``misc_param`` is the rand scale form, the
-    reshuffle_rows index pattern, or the one-call form of the bodies the Blackhole compute API issues
-    in one call per tile; ``misc_init_per_tile`` re-runs the op's init before every tile.
-    """
+    """Select the body of sources/sfpu_misc_perf.cpp and its per-op ``misc_param`` form."""
 
     misc_mathop: str = "rand"
     misc_param: int = 0
