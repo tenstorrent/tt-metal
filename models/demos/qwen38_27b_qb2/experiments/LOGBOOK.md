@@ -2731,3 +2731,10 @@ tests remain necessary before integration, should a later variant win. Full
 logs, commands, source hashes, before/after timing samples and the original
 smoke source are retained in
 [gdn-fused-results-v1](../galaxy-evidence/gdn-fused-results-v1/README.md).
+
+Publication correction: formatting hooks normalized the two collected controller
+scripts, so their raw hashes no longer matched the sealed manifest. Restored
+the unchanged host originals and compressed raw Python receipts before indexing.
+All 21 original artifact hashes and the five native-tested implementation hashes
+then verified. Hardware results and model source were unaffected. The follow-up
+publication also includes the regenerated evidence index.

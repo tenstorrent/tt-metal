@@ -1,0 +1,156 @@
+{
+  "generated_at": "2026-10-11T11:17:23.856661+00:00",
+  "scope": "Opt-in fused GDN prototype: native correctness and trace timing passed, measured performance regressed, not selected for model integration.",
+  "entries": [
+    {
+      "path": "galaxy-evidence/gdn-fused-results-v1/README.md",
+      "bytes": 5617,
+      "sha256": "d3bc762a85150627f5b69677c2ad2c6ca0d7b30c6f82923c7aab46cff7d6a679"
+    },
+    {
+      "path": "galaxy-evidence/gdn-fused-results-v1/raw/gdn-fused-control-v1/launch-unit.json",
+      "bytes": 156,
+      "sha256": "528d29d8d4648026fc6f9f1d04f521b2615916d335e0371925b099c20f681bf0"
+    },
+    {
+      "path": "galaxy-evidence/gdn-fused-results-v1/raw/gdn-fused-control-v1/launch.json",
+      "bytes": 1883,
+      "sha256": "f60b1fdae64597d46e7ef7ffe6679b2dcb4b33c0d304c0949f831e3b6330d946"
+    },
+    {
+      "path": "galaxy-evidence/gdn-fused-results-v1/raw/gdn-fused-control-v1/run.log.gz",
+      "bytes": 5244,
+      "sha256": "d7d2a804384ffe577e3f248dc33ff92b7c84a50682df191484af621906d59d69"
+    },
+    {
+      "path": "galaxy-evidence/gdn-fused-results-v1/raw/gdn-fused-control-v1/run.py.gz",
+      "bytes": 1281,
+      "sha256": "d5a8a6c5080dbddfb8c45d85bd6f360ddba5edf159506e07e6bb896efb9f0cb7"
+    },
+    {
+      "path": "galaxy-evidence/gdn-fused-results-v1/raw/gdn-fused-control-v1/source-manifest.json",
+      "bytes": 37995,
+      "sha256": "6ec1a625c506b1265a8d5cf43a413e836ed1c9ac51b49d64058aa76d877990c4"
+    },
+    {
+      "path": "galaxy-evidence/gdn-fused-results-v1/raw/gdn-fused-control-v1/unit.log.gz",
+      "bytes": 1348,
+      "sha256": "04bb31d5b59c90378ee49b4205bdfc6a709eb9c3a819745c0b528f08c2231146"
+    },
+    {
+      "path": "galaxy-evidence/gdn-fused-results-v1/raw/gdn-fused-control-v1/unit.xml.gz",
+      "bytes": 532,
+      "sha256": "f2753c7c107d0025e7a3dbaf6434baaa5a8d92771228db1ee10bd1941ba872d1"
+    },
+    {
+      "path": "galaxy-evidence/gdn-fused-results-v1/raw/gdn-fused-control-v2/launch-unit.json",
+      "bytes": 156,
+      "sha256": "aee20e1395d439f487d24594a301e3219b446f510445539bbfd50561ea1b2c32"
+    },
+    {
+      "path": "galaxy-evidence/gdn-fused-results-v1/raw/gdn-fused-control-v2/launch.json",
+      "bytes": 2031,
+      "sha256": "d2c079749c809f7d6b61e03323ddc92d110a9008a4514600979d04d88e687f42"
+    },
+    {
+      "path": "galaxy-evidence/gdn-fused-results-v1/raw/gdn-fused-control-v2/run.log.gz",
+      "bytes": 3270,
+      "sha256": "b0ed341a489687ec64e087f618d6c219a5c4a6a78284f2d6ef02376f89216d7a"
+    },
+    {
+      "path": "galaxy-evidence/gdn-fused-results-v1/raw/gdn-fused-control-v2/run.py.gz",
+      "bytes": 1337,
+      "sha256": "3c92f7dd0b4f72975622f400664b0afb28adc6aea8c186ed9ae7bdbf20aa03d7"
+    },
+    {
+      "path": "galaxy-evidence/gdn-fused-results-v1/raw/gdn-fused-control-v2/source-manifest.json",
+      "bytes": 37995,
+      "sha256": "f2e8729137f8e5037600d475f4d4119cb18ca2deaea2b5c8b5f4e2050a6eb346"
+    },
+    {
+      "path": "galaxy-evidence/gdn-fused-results-v1/raw/gdn-fused-control-v2/unit.log.gz",
+      "bytes": 1348,
+      "sha256": "04bb31d5b59c90378ee49b4205bdfc6a709eb9c3a819745c0b528f08c2231146"
+    },
+    {
+      "path": "galaxy-evidence/gdn-fused-results-v1/raw/gdn-fused-control-v2/unit.xml.gz",
+      "bytes": 532,
+      "sha256": "f2753c7c107d0025e7a3dbaf6434baaa5a8d92771228db1ee10bd1941ba872d1"
+    },
+    {
+      "path": "galaxy-evidence/gdn-fused-results-v1/raw/gdn-fused-publication-v1/manifest.json",
+      "bytes": 3034,
+      "sha256": "7f4064d611b12db2b3cbc265111fa39b974861b264f2e6ac91d9c4b12cd87b41"
+    },
+    {
+      "path": "galaxy-evidence/gdn-fused-results-v1/raw/gdn-fused-publication-v1/terminal.json",
+      "bytes": 325,
+      "sha256": "41677990115146392939b977060b2e5a7a18620f5b9d4ccf547363ba2d2a241a"
+    },
+    {
+      "path": "galaxy-evidence/gdn-fused-results-v1/raw/gdn-fused-source-v1/models/demos/qwen38_27b_qb2/tests/test_gdn_fused.py.gz",
+      "bytes": 2228,
+      "sha256": "b97154139c8301d98dcca2f3e96841411cc39ac2b17acad6ebe27dd8a0d490df"
+    },
+    {
+      "path": "galaxy-evidence/gdn-fused-results-v1/raw/gdn-fused-v1/hardware.xml.gz",
+      "bytes": 296,
+      "sha256": "d61cc190b05443b287ace4e4de273e13cf386b4b3e738f5a52983d0c8925ea77"
+    },
+    {
+      "path": "galaxy-evidence/gdn-fused-results-v1/raw/gdn-fused-v1/queue.json",
+      "bytes": 853,
+      "sha256": "b0200b241b9bf3acdc638c9492a8972db9d153c336daef13af7f4033c40ffe7f"
+    },
+    {
+      "path": "galaxy-evidence/gdn-fused-results-v1/raw/gdn-fused-v1/smoke.json",
+      "bytes": 3781,
+      "sha256": "a4fe693a5751930450ba9ebbdb2954d34c73d5897ff39e6927e973e97d01af58"
+    },
+    {
+      "path": "galaxy-evidence/gdn-fused-results-v1/raw/gdn-fused-v2/hardware.xml.gz",
+      "bytes": 296,
+      "sha256": "f5eeef94e7df5452f2f0d71343f4e121347b7951bcde0af41d258ed40980992a"
+    },
+    {
+      "path": "galaxy-evidence/gdn-fused-results-v1/raw/gdn-fused-v2/queue.json",
+      "bytes": 892,
+      "sha256": "2ef1d77f65befbc9e2e80832eab7828561d636185e90cab6bb94fe6d508a9099"
+    },
+    {
+      "path": "galaxy-evidence/gdn-fused-results-v1/raw/gdn-fused-v2/smoke.json",
+      "bytes": 15399,
+      "sha256": "77db188e254de5769065ccb27855caee3fdbbd2e45c711152d2ed2bd6b791060"
+    },
+    {
+      "path": "galaxy-evidence/gdn-fused-results-v1/summary.json",
+      "bytes": 2530,
+      "sha256": "10bb11fe26043d4c06b60a04d5d2565596ad7156cc3ba9c7a5546cc95294129e"
+    },
+    {
+      "path": "tests/test_gdn_fused.py",
+      "bytes": 10177,
+      "sha256": "676f715ff6f41488ef6aa8effac16699a14481381ecd03d91eddf9db8a341d8d"
+    },
+    {
+      "path": "tests/unit/test_gdn_fused.py",
+      "bytes": 2905,
+      "sha256": "4e2248874e34091219d8d1f245c589fed5feca5e23b3545d33a5a1fdee9f8efd"
+    },
+    {
+      "path": "tt/gdn_fused/__init__.py",
+      "bytes": 94,
+      "sha256": "501d5b563ca412fa21db82bf39117b5480ecf99bcaf11996b9c3d5f1093bb9a8"
+    },
+    {
+      "path": "tt/gdn_fused/op.py",
+      "bytes": 10654,
+      "sha256": "018edc9f39ba60051c8f84d368844af0a4b3fb6464b57615ec7a3383d2ca5030"
+    },
+    {
+      "path": "tt/gdn_fused/producer_writer.cpp",
+      "bytes": 2403,
+      "sha256": "dfe17e20acb45c7685deef145e1ac3039b56f4e7d3b751bc8f0a47f53c4f6b2b"
+    }
+  ]
+}
