@@ -2358,3 +2358,34 @@ def test_slice_nd_sharded_tensor_args_inherited_vs_explicit(device):
     explicit = ttnn.slice(tt_input, start, end, slice_dim=2, num_devices=2, memory_config=mem_config)
     assert list(explicit.memory_config().nd_shard_spec.shard_shape) == [1, 1, 64, 64]
     assert torch.equal(ttnn.to_torch(explicit), torch_expected)
+
+@pytest.mark.parametrize("dtype", [ttnn.float32, ttnn.bfloat16])
+@pytest.mark.parametrize(
+    "shape, begins, ends",
+    [
+        ((5, 65, 1025), (0, 0, 1), (5, 64, 1025)),  # trigger: row bytes exactly 2x align -> zero slack pre-fix
+        ((5, 65, 1029), (0, 0, 1), (5, 64, 1029)),  # control: row bytes not a multiple of 2x align
+        ((5, 65, 1025), (0, 0, 0), (5, 64, 1025)),  # control: aligned begin
+    ],
+)
+def test_slice_rm_misaligned_begin_with_truncated_batch_dim(device, shape, begins, ends, dtype):
+    """Regression test for issue #57382: RM slice returned the discarded input row at batch
+    boundaries when a non-innermost dim was truncated and the innermost begin was misaligned.
+    compute_dfb_size reserved zero slack for the misalignment bytes when the unpadded row size
+    was already a multiple of the (possibly doubled) alignment, so the NOC read overflowed past
+    the DFB entry on every stick."""
+    torch_dtype = torch.float32 if dtype == ttnn.float32 else torch.bfloat16
+    torch_input = torch.arange(shape[0] * shape[1] * shape[2], dtype=torch.float32).reshape(shape).to(torch_dtype)
+    step = [1, 1, 1]
+    torch_output = torch_input[begins[0] : ends[0], begins[1] : ends[1], begins[2] : ends[2]]
+
+    ttnn_input = ttnn.from_torch(
+        torch_input,
+        device=device,
+        layout=ttnn.ROW_MAJOR_LAYOUT,
+        dtype=dtype,
+        memory_config=ttnn.DRAM_MEMORY_CONFIG,
+    )
+    ttnn_output = ttnn.slice(ttnn_input, list(begins), list(ends), step, memory_config=ttnn.DRAM_MEMORY_CONFIG)
+
+    assert torch.equal(torch_output, ttnn.to_torch(ttnn_output).to(torch_dtype))
