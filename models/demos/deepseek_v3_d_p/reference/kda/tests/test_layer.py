@@ -4,8 +4,10 @@
 
 import pytest
 import torch
+import torch.nn.functional as F
 
-from models.demos.deepseek_v3_d_p.reference.kda import kda_forward_reference
+from models.demos.deepseek_v3_d_p.reference.kda import kda_forward_reference, kda_forward_stages
+from models.demos.deepseek_v3_d_p.reference.kda.ops import sigmoid_gated_rms_norm_reference
 from models.demos.deepseek_v3_d_p.reference.kda.tests.helpers import make_config, random_weights
 from tests.ttnn.unit_tests.operations.experimental.kda.kda_test_utils import (
     assert_accurate,
@@ -73,6 +75,39 @@ def test_reference_layer_computes_in_requested_dtype(use_full_rank_gate: bool) -
     # FP32 and FP64 compute the same function; they differ only by FP32 rounding.
     relative_error = (default_output.double() - golden_output).norm() / golden_output.norm()
     assert relative_error < 1e-5, relative_error
+
+
+@pytest.mark.parametrize("dtype", [torch.float32, torch.float64])
+def test_stages_expose_the_forward_intermediates(dtype: torch.dtype) -> None:
+    config = make_config()
+    weights = random_weights(config)
+    hidden_states = torch.randn(1, 6, config.hidden_size, generator=torch.Generator().manual_seed(53)).bfloat16()
+
+    output, state = kda_forward_reference(hidden_states, weights, config, dtype=dtype)
+    stages = kda_forward_stages(hidden_states, weights, config, dtype=dtype)
+
+    assert_bit_identical(output, stages.output, name="forward output")
+    assert_bit_identical(state.recurrent, stages.state.recurrent, name="forward state")
+    heads, k_dim, v_dim = config.num_heads, config.head_k_dim, config.head_v_dim
+    expected_shapes = {
+        "q": (1, 6, heads, k_dim),
+        "k": (1, 6, heads, k_dim),
+        "v": (1, 6, heads, v_dim),
+        "gate": (1, 6, heads, k_dim),
+        "beta": (1, 6, heads),
+        "recurrence": (1, 6, heads, v_dim),
+        "output_gate": (1, 6, heads, v_dim),
+        "normalized": (1, 6, heads * v_dim),
+    }
+    for name, shape in expected_shapes.items():
+        tensor = getattr(stages, name)
+        assert tuple(tensor.shape) == shape and tensor.dtype == dtype, (name, tuple(tensor.shape), tensor.dtype)
+    # The last two stages recompose the output exactly.
+    normalized = sigmoid_gated_rms_norm_reference(
+        stages.recurrence, stages.output_gate, weights["o_norm.weight"], config.norm_eps, dtype=dtype
+    ).reshape(1, 6, heads * v_dim)
+    assert_bit_identical(normalized, stages.normalized, name="normalized")
+    assert_bit_identical(F.linear(normalized, weights["o_proj.weight"].to(dtype)), output, name="o_proj")
 
 
 def test_reference_layer_validates_weights(expect_error) -> None:

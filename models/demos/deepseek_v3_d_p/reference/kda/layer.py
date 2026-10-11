@@ -41,6 +41,27 @@ def _initial_state(inputs: torch.Tensor, config: KDAConfig) -> KDAReferenceState
     )
 
 
+@dataclass(frozen=True)
+class KDAReferenceStages:
+    """Every stage of one reference layer transition, for stage-by-stage comparison.
+
+    ``q``, ``k``, ``v`` follow the causal convolution and SiLU (before the recurrence's q/k L2 normalization);
+    ``recurrence`` is the delta-rule output before the gated RMS norm; ``normalized`` is the gated RMS norm
+    output before ``o_proj``.
+    """
+
+    q: torch.Tensor  # [B, T, H, K]
+    k: torch.Tensor  # [B, T, H, K]
+    v: torch.Tensor  # [B, T, H, V]
+    gate: torch.Tensor  # [B, T, H, K], negative log decay
+    beta: torch.Tensor  # [B, T, H]
+    recurrence: torch.Tensor  # [B, T, H, V]
+    output_gate: torch.Tensor  # [B, T, H, V], sigmoid gate logits of the output norm
+    normalized: torch.Tensor  # [B, T, H * V]
+    output: torch.Tensor  # [B, T, hidden]
+    state: KDAReferenceState
+
+
 def kda_forward_reference(
     hidden_states: torch.Tensor,
     weights: Mapping[str, torch.Tensor],
@@ -53,6 +74,19 @@ def kda_forward_reference(
 
     ``torch.float32`` is the default reference; ``torch.float64`` is the accuracy golden.
     """
+    stages = kda_forward_stages(hidden_states, weights, config, state, dtype=dtype)
+    return stages.output, stages.state
+
+
+def kda_forward_stages(
+    hidden_states: torch.Tensor,
+    weights: Mapping[str, torch.Tensor],
+    config: KDAConfig,
+    state: KDAReferenceState | None = None,
+    *,
+    dtype: torch.dtype = torch.float32,
+) -> KDAReferenceStages:
+    """``kda_forward_reference`` with every intermediate stage kept, all in ``dtype``."""
     if hidden_states.ndim != 3 or hidden_states.shape[-1] != config.hidden_size:
         raise ValueError(f"hidden_states shape {tuple(hidden_states.shape)} must be [B,T,{config.hidden_size}]")
     validate_kda_weights(weights, config)
@@ -87,7 +121,7 @@ def kda_forward_reference(
     ).reshape(batch, sequence, config.num_heads, config.head_k_dim)
     gate = kda_gate_reference(raw_gate, weights["A_log"], weights["dt_bias"], config.gate_lower_bound, dtype=dtype)
     beta = torch.sigmoid(F.linear(hidden, weights["b_proj.weight"].to(dtype)))
-    output, recurrent = kda_recurrent_reference(q, k, v, gate, beta, state.recurrent, dtype=dtype)
+    recurrence, recurrent = kda_recurrent_reference(q, k, v, gate, beta, state.recurrent, dtype=dtype)
 
     if config.use_full_rank_gate:
         output_gate = F.linear(hidden, weights["g_proj.weight"].to(dtype))
@@ -96,9 +130,20 @@ def kda_forward_reference(
             F.linear(hidden, weights["g_a_proj.weight"].to(dtype)), weights["g_b_proj.weight"].to(dtype)
         )
     output_gate = output_gate.reshape(batch, sequence, config.num_heads, config.head_v_dim)
-    output = sigmoid_gated_rms_norm_reference(
-        output, output_gate, weights["o_norm.weight"], config.norm_eps, dtype=dtype
+    normalized = sigmoid_gated_rms_norm_reference(
+        recurrence, output_gate, weights["o_norm.weight"], config.norm_eps, dtype=dtype
     ).reshape(batch, sequence, config.v_dim)
-    output = F.linear(output, weights["o_proj.weight"].to(dtype))
+    output = F.linear(normalized, weights["o_proj.weight"].to(dtype))
 
-    return output, KDAReferenceState(recurrent, q_state, k_state, v_state)
+    return KDAReferenceStages(
+        q=q,
+        k=k,
+        v=v,
+        gate=gate,
+        beta=beta,
+        recurrence=recurrence,
+        output_gate=output_gate,
+        normalized=normalized,
+        output=output,
+        state=KDAReferenceState(recurrent, q_state, k_state, v_state),
+    )

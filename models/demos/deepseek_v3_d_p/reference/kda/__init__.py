@@ -3,6 +3,11 @@
 """Supported pure-Torch reference API for Kimi Delta Attention."""
 
 from models.demos.deepseek_v3_d_p.reference.kda.config import KDAConfig
-from models.demos.deepseek_v3_d_p.reference.kda.layer import KDAReferenceState, kda_forward_reference
+from models.demos.deepseek_v3_d_p.reference.kda.layer import (
+    KDAReferenceStages,
+    KDAReferenceState,
+    kda_forward_reference,
+    kda_forward_stages,
+)
 
-__all__ = ["KDAConfig", "KDAReferenceState", "kda_forward_reference"]
+__all__ = ["KDAConfig", "KDAReferenceStages", "KDAReferenceState", "kda_forward_reference", "kda_forward_stages"]

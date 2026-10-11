@@ -19,6 +19,7 @@ captured by tt-metal PR #51910 at prototype source revision
 | `kda_recurrent_reference` | Token-ordered normalized delta-rule recurrence and replacement final state |
 | `sigmoid_gated_rms_norm_reference` | RMS normalization followed by sigmoid output gating |
 | `kda_forward_reference` | Stateless full-layer composition and replacement logical state |
+| `kda_forward_stages` | The same composition keeping every intermediate stage (`KDAReferenceStages`) for stage-by-stage comparison |
 
 Supported configurations require a four-tap convolution, positive dimensions
 and RMS epsilon, equal per-head query/key dimensions, and an optional gate
