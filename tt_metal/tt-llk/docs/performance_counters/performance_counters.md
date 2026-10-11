@@ -238,6 +238,10 @@ into contention orbits picked by the start phase, so its value is not reproducib
   load the two would put on port 1 and on the 16 banks at their isolate pace (above 1: they cannot both run at full
   speed, the case `L1_CONGESTION` measured).
 
+`L1_CONGESTION` itself is opt-in: a run measures it only when `LLK_PERF_RUN_TYPES` names it
+(`LLK_PERF_RUN_TYPES=ALL_MODES_AND_CONGESTION` adds it to the four default ones). Read it as the worst case of two
+uncoupled streams, and average several start phases before comparing two builds.
+
 Wormhole exposes 8 of its L1 client ports per run (`LLK_PERF_L1_MUX_GROUP`), so a full capture is two counter passes
 of the same tests, then one merge:
 

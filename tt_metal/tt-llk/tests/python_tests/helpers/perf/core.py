@@ -790,7 +790,18 @@ def assert_zones_dont_overlap(profiler_data: ProfilerData) -> None:
 RUN_TYPE_PRESETS = {
     "ALL_ISOLATION_MODES": ("UNPACK_ISOLATE", "MATH_ISOLATE", "PACK_ISOLATE"),
     "ALL_MODES": ("L1_TO_L1", "UNPACK_ISOLATE", "MATH_ISOLATE", "PACK_ISOLATE"),
+    "ALL_MODES_AND_CONGESTION": (
+        "L1_TO_L1",
+        "UNPACK_ISOLATE",
+        "MATH_ISOLATE",
+        "PACK_ISOLATE",
+        "L1_CONGESTION",
+    ),
 }
+
+# Measured only when LLK_PERF_RUN_TYPES names them. L1_CONGESTION's uncoupled streams are a case production never runs;
+# mean(COUPLING) and the L1 counter metrics (helpers/perf/l1_contention.py) carry what it showed.
+OPT_IN_RUN_TYPES = frozenset({PerfRunType.L1_CONGESTION})
 
 
 def _expand_run_types(text):
@@ -819,10 +830,10 @@ _ISOLATE_RUN_TYPES = (
 
 
 def _selected_run_types(run_types):
-    """LLK_PERF_RUN_TYPES narrows what a run measures. Empty means all of them."""
+    """LLK_PERF_RUN_TYPES narrows what a run measures. Empty means all of them except the opt-in ones."""
     wanted = os.environ.get("LLK_PERF_RUN_TYPES", "").strip()
     if not wanted:
-        return list(run_types)
+        return [rt for rt in run_types if rt not in OPT_IN_RUN_TYPES]
     names = _expand_run_types(wanted)
     return [rt for rt in run_types if rt.name in names]
 
