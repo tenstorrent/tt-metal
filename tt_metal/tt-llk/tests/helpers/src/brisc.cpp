@@ -49,6 +49,9 @@ enum class BriscCommandState : std::uint32_t
     // Wormhole perf launches: as 1 and 3, then serve the TRISC barrier (see dbg_barrier)
     START_TRISCS_DBG_BARRIER                      = 4,
     UPDATE_START_ADDR_CACHE_AND_START_DBG_BARRIER = 5,
+    // Wormhole L1_CONGESTION launches: as 4 and 5, served by serve_phases
+    START_TRISCS_DBG_BARRIER_PHASES                      = 6,
+    UPDATE_START_ADDR_CACHE_AND_START_DBG_BARRIER_PHASES = 7,
 };
 
 // Written to `brisc_counter` as the LAST step of firmware init. The host polls
@@ -88,6 +91,27 @@ constexpr std::uint32_t RELEASE_ALL     = (1U << 0) | (1U << 10) | (1U << 20);
 static_assert(REQ == 1U << 31 && READ_VALID == 1U << 30 && REG_STATUS == 0, "serve() tests REQ and READ_VALID by sign");
 static_assert(DBG_CNTL_1 == DBG_CNTL_0 + 4 && DBG_STATUS_0 == DBG_CNTL_0 + 8 && DBG_STATUS_1 == DBG_CNTL_0 + 12 && PC_BUF_OVERRIDE == DBG_CNTL_0 + 16);
 
+// L1_CONGESTION's release phases (serve_phases), {thread order, spins}: order is 2 bits per release store, TRISC first;
+// spins (about 3.5 cycles each) go before the first store and between the stores, 10 bits each.
+constexpr std::uint32_t UMP = 0 | (1 << 2) | (2 << 4); // unpack, math, pack
+constexpr std::uint32_t PUM = 2 | (0 << 2) | (1 << 4); // pack, unpack, math
+
+constexpr std::uint32_t spins(std::uint32_t before, std::uint32_t between_1_2, std::uint32_t between_2_3)
+{
+    return before | (between_1_2 << 10) | (between_2_3 << 20);
+}
+
+// Even phases release all three 0..15 spins later (the TRISC branch table LFSR phase), odd ones pack or unpack later
+// (the relative start of the two streams). The free-running streams lock into an orbit that both pick.
+constexpr std::uint32_t RELEASE_PHASES[llk_barrier::L1_CONGESTION_PHASES][2] = {
+    {UMP, spins(0, 0, 0)},  {UMP, spins(0, 0, 1)},  {UMP, spins(1, 0, 0)},  {PUM, spins(0, 1, 0)},  {UMP, spins(2, 0, 0)},  {UMP, spins(0, 0, 2)},
+    {UMP, spins(3, 0, 0)},  {PUM, spins(0, 2, 0)},  {UMP, spins(4, 0, 0)},  {UMP, spins(0, 0, 3)},  {UMP, spins(5, 0, 0)},  {PUM, spins(0, 4, 0)},
+    {UMP, spins(6, 0, 0)},  {UMP, spins(0, 0, 4)},  {UMP, spins(7, 0, 0)},  {PUM, spins(0, 8, 0)},  {UMP, spins(8, 0, 0)},  {UMP, spins(0, 0, 6)},
+    {UMP, spins(9, 0, 0)},  {PUM, spins(0, 16, 0)}, {UMP, spins(10, 0, 0)}, {UMP, spins(0, 0, 8)},  {UMP, spins(11, 0, 0)}, {PUM, spins(0, 32, 0)},
+    {UMP, spins(12, 0, 0)}, {UMP, spins(0, 0, 12)}, {UMP, spins(13, 0, 0)}, {UMP, spins(0, 0, 16)}, {UMP, spins(14, 0, 0)}, {UMP, spins(0, 0, 24)},
+    {UMP, spins(15, 0, 0)}, {UMP, spins(0, 0, 32)},
+};
+
 // This launch's two release gaps in cycles, set by serve() before the first release (local data memory)
 extern "C"
 {
@@ -96,7 +120,9 @@ extern "C"
 
 // Serve loop, one rendezvous per pass: wait until all TRISCs park, let them halt, flush them and release them together.
 // Pinned in assembly (GCC's code for the C version) in its own 1 KiB section, so no other BRISC change moves its timing.
-__attribute__((noinline, noipa, section(".text.llk_dbg_serve"), aligned(1024))) void serve()
+// PHASES (serve_phases) adds the .if blocks, which assemble to nothing in serve().
+template <bool PHASES>
+__attribute__((always_inline)) inline void serve_loop()
 {
     asm volatile(
         "li    t0, 0x00ffffff\n\t"
@@ -174,8 +200,31 @@ __attribute__((noinline, noipa, section(".text.llk_dbg_serve"), aligned(1024))) 
         "li    a4, 512\n"
         "15:\n\t"
         "nop\n\taddi  a4, a4, -1\n\tbnez  a4, 15b\n\t"
+        ".if %[phases]\n\t" // round k's TILE_LOOP entry is park 4 + 4k (trisc.cpp runs the kernel once per phase)
+        "andi  a4, s5, 3\n\tbnez  a4, 79f\n\t"
+        "srli  a4, s5, 2\n\tli    a3, %[nphases]\n\tbleu  a4, a3, 80f\n"
+        "79:\n\t"
+        ".endif\n\t"
         "sw    zero, 0(t1)\n\tsw    zero, 0(a7)\n\tsw    zero, 0(a6)\n\t" // release: unpack, math, pack back to back
         "j     1b\n"
+        ".if %[phases]\n"
+        "80:\n\t" // a4 = k + 1: the three release stores in phase k's order with its spins (s3, s4 are free here)
+        "slli  a4, a4, 3\n\tlui   a3, %%hi(%[table] - 8)\n\taddi  a3, a3, %%lo(%[table] - 8)\n\tadd   a4, a4, a3\n\t"
+        "lw    s3, 0(a4)\n\tlw    s4, 4(a4)\n\t"
+        "andi  a2, s3, 3\n\tslli  a2, a2, 16\n\tadd   a2, a2, t1\n\t"
+        "srli  a3, s3, 2\n\tandi  a3, a3, 3\n\tslli  a3, a3, 16\n\tadd   a3, a3, t1\n\t"
+        "srli  a4, s3, 4\n\tandi  a4, a4, 3\n\tslli  a4, a4, 16\n\tadd   a4, a4, t1\n\t"
+        "andi  s3, s4, 1023\n\tbeqz  s3, 82f\n"
+        "81:\n\taddi  s3, s3, -1\n\tbnez  s3, 81b\n"
+        "82:\n\tsw    zero, 0(a2)\n\t"
+        "srli  s3, s4, 10\n\tandi  s3, s3, 1023\n\tbeqz  s3, 84f\n"
+        "83:\n\taddi  s3, s3, -1\n\tbnez  s3, 83b\n"
+        "84:\n\tsw    zero, 0(a3)\n\t"
+        "srli  s3, s4, 20\n\tandi  s3, s3, 1023\n\tbeqz  s3, 86f\n"
+        "85:\n\taddi  s3, s3, -1\n\tbnez  s3, 85b\n"
+        "86:\n\tsw    zero, 0(a4)\n\t"
+        "j     1b\n"
+        ".endif\n"
         "40:\n\t" // INIT entry park: as above, then unpack, math and pack released %[stagger] spins apart
         "lui   a4, %%hi(%[icinv])\n\tli    a3, 14\n\tsw    a3, %%lo(%[icinv])(a4)\n"
         "41:\n\t"
@@ -316,8 +365,23 @@ __attribute__((noinline, noipa, section(".text.llk_dbg_serve"), aligned(1024))) 
           [stagger] "i"(1500),
           [sched] "i"(llk_barrier::SCHEDULE_REG),
           [sched_end] "i"(llk_barrier::SCHEDULE_VALID >> 6),
-          [wall] "i"(RISCV_DEBUG_REG_WALL_CLOCK_L - DBG_REGS)
+          [wall] "i"(RISCV_DEBUG_REG_WALL_CLOCK_L - DBG_REGS),
+          [phases] "i"(PHASES ? 1 : 0),
+          [nphases] "i"(llk_barrier::L1_CONGESTION_PHASES),
+          [table] "i"(&RELEASE_PHASES[0][0])
         : "t0", "t1", "t2", "t3", "t4", "t5", "t6", "a0", "a1", "a2", "a3", "a4", "a5", "a6", "a7", "s0", "s1", "s2", "s3", "s4", "s5", "memory");
+}
+
+__attribute__((noinline, noipa, section(".text.llk_dbg_serve"), aligned(1024))) void serve()
+{
+    serve_loop<false>();
+}
+
+// L1_CONGESTION: as serve(), but round k's TILE_LOOP is released from RELEASE_PHASES[k], so the report is the mean over
+// the hidden phases that pick the free-running streams' orbit, not one draw.
+__attribute__((noinline, noipa, section(".text.llk_dbg_serve_phases"), aligned(1024))) void serve_phases()
+{
+    serve_loop<true>();
 }
 } // namespace dbg_barrier
 #endif
@@ -366,12 +430,15 @@ int main()
 #if defined(ARCH_WORMHOLE)
         [[maybe_unused]] const bool perf_barrier =
             command == BriscCommandState::START_TRISCS_DBG_BARRIER || command == BriscCommandState::UPDATE_START_ADDR_CACHE_AND_START_DBG_BARRIER;
+        [[maybe_unused]] const bool perf_phases =
+            command == BriscCommandState::START_TRISCS_DBG_BARRIER_PHASES || command == BriscCommandState::UPDATE_START_ADDR_CACHE_AND_START_DBG_BARRIER_PHASES;
 #endif
         switch (command)
         {
             // Wormhole specific, on Blackhole this command has same behaviour as BriscCommandState::START_TRISCS
 #if defined(ARCH_WORMHOLE)
             case BriscCommandState::UPDATE_START_ADDR_CACHE_AND_START_DBG_BARRIER:
+            case BriscCommandState::UPDATE_START_ADDR_CACHE_AND_START_DBG_BARRIER_PHASES:
 #endif
             case BriscCommandState::UPDATE_START_ADDR_CACHE_AND_START:
 #ifdef ARCH_WORMHOLE
@@ -387,6 +454,7 @@ int main()
                 [[fallthrough]];
 #if defined(ARCH_WORMHOLE)
             case BriscCommandState::START_TRISCS_DBG_BARRIER:
+            case BriscCommandState::START_TRISCS_DBG_BARRIER_PHASES:
 #endif
             case BriscCommandState::START_TRISCS:
 
@@ -425,6 +493,12 @@ int main()
                 if (perf_barrier)
                 {
                     dbg_barrier::serve();
+                }
+                else if (perf_phases)
+                {
+                    // BRISC's own icache emptied first: serve_phases()'s release phases are BRISC spin loops
+                    *reinterpret_cast<volatile std::uint32_t*>(TENSIX_CFG_BASE + 4 * RISCV_IC_INVALIDATE_InvalidateAll_ADDR32) = 1;
+                    dbg_barrier::serve_phases();
                 }
 #endif
                 break;
