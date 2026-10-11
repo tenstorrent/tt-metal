@@ -361,6 +361,15 @@ a coverage reference. Select once before sealing; the perf tester executes
 that leaf. If no performance test covers the change, record why. Do not add waivers to the plan after observing
 a failure.
 
+Perf test cases are budgeted. Every `pytest.mark.perf` test under
+`tests/python_tests` runs in tt-metal's LLK perf merge gate, whose legs have a
+hard 15-minute limit and already run close to it. Measure with existing perf
+tests: do not add a `perf_*.py` module, a perf test function, or parameter
+values to an existing perf test. Only when the issue explicitly asks for a new
+perf test may you add one, with at most 8 collected cases per architecture;
+quote that request in the plan. The dashboard refuses to push a branch that
+adds more than 8.
+
 For each comparison perf leaf, declare its metric in `Performance Metric` before sealing
 or measuring. Use `mean(L1_TO_L1)` whenever the selected test supplies it.
 For an isolate-only test, choose only a declared isolate that measures the

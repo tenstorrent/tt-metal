@@ -110,7 +110,12 @@ Guidance:
 This is the one place you must edit an artifact. If a reviewer asks for a test
 that does not exist, add the test **and** update
 `codegen/artifacts/issue_<ISSUE_NUMBER>_analysis.md` so verification actually runs
-it:
+it. Never add perf test cases for a review: no `perf_*.py` module, perf test
+function or perf parameter values. Every `pytest.mark.perf` test runs in
+tt-metal's LLK perf merge gate, whose 15-minute legs are already full, and the
+dashboard refuses to push a branch that adds more than 8. Reply with the
+existing perf test that measures the change, or say why none is added. For
+any other test:
 
 - `metal_verification.gtest_filter` — widen or replace it to select the new test.
 - `metal_verification.coverage` — `added` when you added the test.
