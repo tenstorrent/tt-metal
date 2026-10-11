@@ -3,40 +3,78 @@
 
 import glob
 import os
-import shutil
 import signal
 import subprocess
+import sys
 import time
 from pathlib import Path
 from typing import Optional
 
 import pytest
+import tt_umd
 from helpers.logger import logger
+from helpers.sim_host import READY_MARKER
 
 
-class ExalensServer:
-    """Manages the tt-exalens server lifecycle for simulator-based test runs.
+def _proc_stat_alive(stat: bytes) -> bool:
+    """True unless /proc/<pid>/stat shows a zombie or dead task.
 
-    Starts tt-exalens as a subprocess, waits for it to become ready by polling
-    its output for the readiness pattern, and provides graceful shutdown.
+    comm is the second field and may itself contain spaces or ')'.
     """
+    close = stat.rfind(b")")
+    if close < 0 or close + 2 >= len(stat):
+        return False
+    # "X" and "x" are both Dead in proc(5).
+    return stat[close + 2 : close + 3] not in (b"Z", b"X", b"x")
 
-    READY_PATTERN = "device:0 loc:"
+
+def pid_alive(pid: int) -> bool:
+    """True when pid is a live process.
+
+    os.kill(pid, 0) succeeds for a zombie. Under xdist the controller does not
+    reap the simulation host, so a host that dies mid-run stays in state Z and
+    a kill-0 check would otherwise keep returning True.
+    """
+    try:
+        stat = Path(f"/proc/{pid}/stat").read_bytes()
+    except FileNotFoundError:
+        return False
+    except OSError:
+        stat = None
+    if stat is not None:
+        return _proc_stat_alive(stat)
+    try:
+        os.kill(pid, 0)
+    except ProcessLookupError:
+        return False
+    except PermissionError:
+        return True
+    return True
+
+
+class SimulationServer:
+    """Runs sim_host.py, the UMD simulation host that test processes attach to."""
+
+    HOST_SCRIPT = Path(__file__).with_name("sim_host.py")
     READY_TIMEOUT_S = 600
     POLL_INTERVAL_S = 2
+    EXIT_TIMEOUT_S = 30
+    NNG_SOCKET_ADDR = "NNG_SOCKET_ADDR"
+    STALE_HOST_POLL_S = 0.5
 
-    def __init__(self, simulator_path: str, port: int):
+    def __init__(self, simulator_path: str):
         self._simulator_path = simulator_path
-        self._port = port
         self._process: Optional[subprocess.Popen] = None
         self._pgid: Optional[int] = None
         self._log_path: Optional[str] = None
         self._emu_logs_baseline: set = set()
         self._log_read_offset = 0
         self._started_before = False
+        self._server_directory: Optional[str] = None
 
     def start(self) -> None:
-        self._kill_stale_servers()
+        self._kill_stale_hosts()
+        tt_umd.SimulationConnector.prune_dead_servers()
         self._emu_logs_baseline = set(glob.glob(self.EMU_LOG_PATTERN))
         if not os.path.isdir(self._simulator_path):
             logger.error(
@@ -44,13 +82,9 @@ class ExalensServer:
             )
             pytest.exit(returncode=1)
 
-        if not shutil.which("tt-exalens"):
-            logger.error("tt-exalens not found in PATH")
-            pytest.exit(returncode=1)
-
         missing_vars = [
             v
-            for v in ("NNG_SOCKET_ADDR", "NNG_SOCKET_LOCAL_PORT")
+            for v in (self.NNG_SOCKET_ADDR, "NNG_SOCKET_LOCAL_PORT")
             if v not in os.environ
         ]
         if missing_vars:
@@ -60,7 +94,7 @@ class ExalensServer:
             )
             pytest.exit(returncode=1)
 
-        self._log_path = os.path.join(os.getcwd(), "tt-exalens.log")
+        self._log_path = os.path.join(os.getcwd(), "sim-host.log")
         if self._started_before and os.path.exists(self._log_path):
             self._log_read_offset = os.path.getsize(self._log_path)
             log_mode = "a"
@@ -70,24 +104,19 @@ class ExalensServer:
             self._started_before = True
 
         logger.info(
-            "Starting tt-exalens server (port={}, simulator={}, "
-            "NNG_SOCKET_ADDR={}, NNG_SOCKET_LOCAL_PORT={})...",
-            self._port,
+            "Starting UMD simulation host (simulator={}, "
+            "{}={}, NNG_SOCKET_LOCAL_PORT={})...",
             self._simulator_path,
-            os.environ.get("NNG_SOCKET_ADDR", "<not set>"),
+            self.NNG_SOCKET_ADDR,
+            os.environ.get(self.NNG_SOCKET_ADDR, "<not set>"),
             os.environ.get("NNG_SOCKET_LOCAL_PORT", "<not set>"),
         )
-        logger.info("tt-exalens output: {}", self._log_path)
+        logger.info("Simulation host output: {}", self._log_path)
 
+        self._server_directory = None
         with open(self._log_path, log_mode) as log_file:
             self._process = subprocess.Popen(
-                [
-                    "tt-exalens",
-                    f"--port={self._port}",
-                    "--server",
-                    "-s",
-                    self._simulator_path,
-                ],
+                [sys.executable, str(self.HOST_SCRIPT), self._simulator_path],
                 stdin=subprocess.PIPE,
                 stdout=log_file,
                 stderr=subprocess.STDOUT,
@@ -104,7 +133,7 @@ class ExalensServer:
 
     def _wait_until_ready(self) -> None:
         logger.info(
-            "Waiting for tt-exalens to become ready (timeout: {}s)...",
+            "Waiting for the simulation host to become ready (timeout: {}s)...",
             self.READY_TIMEOUT_S,
         )
         shutdown_requested = False
@@ -114,25 +143,27 @@ class ExalensServer:
                 if self._process.poll() is not None:
                     log_tail = self._read_log_tail(50)
                     logger.error(
-                        "tt-exalens exited prematurely (code {}).\nLog output:\n{}",
+                        "Simulation host exited prematurely (code {}).\nLog output:\n{}",
                         self._process.returncode,
                         log_tail,
                     )
                     pytest.exit(returncode=1)
 
-                if self._log_contains_ready_pattern():
+                self._server_directory = self._read_server_directory()
+                if self._server_directory is not None:
                     logger.info(
-                        "tt-exalens ready (PID {}, took ~{}s)",
+                        "Simulation host ready (PID {}, took ~{}s), serving {}",
                         self._process.pid,
                         elapsed,
+                        self._server_directory,
                     )
                     if shutdown_requested:
                         logger.info(
-                            "Gracefully stopping tt-exalens to release emulator..."
+                            "Gracefully stopping the simulation host to release emulator..."
                         )
                         self.stop()
                         pytest.exit(
-                            "Interrupted by user during tt-exalens startup.",
+                            "Interrupted by user during simulation host startup.",
                             returncode=1,
                         )
                     return
@@ -140,7 +171,7 @@ class ExalensServer:
                 emu_errors = self._check_emulator_log()
                 if emu_errors:
                     logger.error(
-                        "Emulator reported errors during tt-exalens startup:\n{}",
+                        "Emulator reported errors during simulation host startup:\n{}",
                         emu_errors,
                     )
                     self.stop()
@@ -151,7 +182,7 @@ class ExalensServer:
                 if not shutdown_requested:
                     shutdown_requested = True
                     logger.warning(
-                        "Ctrl+C received — waiting for tt-exalens to become ready "
+                        "Ctrl+C received, waiting for the simulation host to become ready "
                         "before shutting down (to release emulator resources)..."
                     )
 
@@ -162,14 +193,14 @@ class ExalensServer:
         log_tail = self._read_log_tail(50)
         if shutdown_requested:
             logger.error(
-                "tt-exalens did not become ready after Ctrl+C; "
+                "Simulation host did not become ready after Ctrl+C; "
                 "giving up after {}s.\nLog output:\n{}",
                 self.READY_TIMEOUT_S,
                 log_tail,
             )
         else:
             logger.error(
-                "tt-exalens did not become ready within {}s.\nLog output:\n{}",
+                "Simulation host did not become ready within {}s.\nLog output:\n{}",
                 self.READY_TIMEOUT_S,
                 log_tail,
             )
@@ -201,17 +232,23 @@ class ExalensServer:
             return f"(from {latest})\n" + "\n".join(error_lines)
         return None
 
-    def _log_contains_ready_pattern(self) -> bool:
+    def _read_server_directory(self) -> Optional[str]:
         if not self._log_path or not os.path.exists(self._log_path):
-            return False
+            return None
         try:
-            with open(self._log_path, "r") as f:
+            with open(self._log_path, "rb") as f:
                 f.seek(self._log_read_offset)
                 new_data = f.read()
-                self._log_read_offset = f.tell()
-                return self.READY_PATTERN in new_data
         except OSError:
-            return False
+            return None
+        # Consume only whole lines.
+        complete = new_data[: new_data.rfind(b"\n") + 1]
+        self._log_read_offset += len(complete)
+        for line in complete.decode(errors="replace").splitlines():
+            marker, _, directory = line.partition(" ")
+            if marker == READY_MARKER and directory.strip():
+                return directory.strip()
+        return None
 
     def _read_log_tail(self, lines: int = 30) -> str:
         if not self._log_path or not os.path.exists(self._log_path):
@@ -228,7 +265,7 @@ class ExalensServer:
             return
 
         if self._process.poll() is None:
-            logger.info("Stopping tt-exalens (PID {})...", self._process.pid)
+            logger.info("Stopping simulation host (PID {})...", self._process.pid)
             try:
                 self._process.stdin.write(b"exit\n")
                 self._process.stdin.flush()
@@ -237,16 +274,16 @@ class ExalensServer:
                 pass
 
             try:
-                self._process.wait(timeout=5)
+                self._process.wait(timeout=self.EXIT_TIMEOUT_S)
             except subprocess.TimeoutExpired:
                 logger.warning(
-                    "tt-exalens did not exit gracefully, "
+                    "Simulation host did not exit gracefully, "
                     "sending SIGTERM to process group {}...",
                     self._pgid,
                 )
                 self._kill_process_group(self._pgid, signal.SIGTERM)
                 try:
-                    self._process.wait(timeout=5)
+                    self._process.wait(timeout=self.EXIT_TIMEOUT_S)
                 except subprocess.TimeoutExpired:
                     logger.warning(
                         "Process group {} did not terminate, sending SIGKILL...",
@@ -254,10 +291,11 @@ class ExalensServer:
                     )
                     self._kill_process_group(self._pgid, signal.SIGKILL)
                     self._process.wait()
-            logger.info("tt-exalens stopped.")
+            logger.info("Simulation host stopped.")
 
         self._process = None
         self._pgid = None
+        self._server_directory = None
 
     @staticmethod
     def _kill_process_group(pgid: int, sig: int) -> None:
@@ -267,7 +305,7 @@ class ExalensServer:
             pass
 
     def restart(self) -> None:
-        logger.info("Restarting tt-exalens server...")
+        logger.info("Restarting simulation host...")
         self.stop()
         self.start()
 
@@ -279,14 +317,19 @@ class ExalensServer:
     def ever_started(self) -> bool:
         return self._started_before
 
-    def _kill_stale_servers(self) -> None:
-        """Kill any orphaned tt-exalens processes left over from previous runs on the same port.
-        These can be missed by a simple ps command because the tt-exalens process is in a new session.
-        In the normal case (no orphans) this is just a quick pgrep that returns empty.
-        """
+    @property
+    def server_directory(self) -> Optional[str]:
+        return self._server_directory
+
+    @property
+    def pid(self) -> Optional[int]:
+        return self._process.pid if self._process is not None else None
+
+    def _kill_stale_hosts(self) -> None:
+        """Kill leftover hosts on the same simulator and NNG_SOCKET_ADDR (emulator slot)."""
         try:
             result = subprocess.run(
-                ["pgrep", "-f", "tt-exalens"],
+                ["pgrep", "-u", str(os.getuid()), "-f", self.HOST_SCRIPT.name],
                 capture_output=True,
                 text=True,
             )
@@ -297,7 +340,8 @@ class ExalensServer:
             return
 
         my_pid = os.getpid()
-        port_arg = f"--port={self._port}"
+        nng_addr = os.environ.get(self.NNG_SOCKET_ADDR)
+        nng_prefix = f"{self.NNG_SOCKET_ADDR}=".encode()
         stale_pids = []
         for line in result.stdout.strip().splitlines():
             try:
@@ -308,9 +352,24 @@ class ExalensServer:
                 continue
             try:
                 cmdline_args = Path(f"/proc/{pid}/cmdline").read_bytes().split(b"\x00")
-                if port_arg.encode() not in cmdline_args:
-                    continue
+                environ = Path(f"/proc/{pid}/environ").read_bytes().split(b"\x00")
             except OSError:
+                continue
+            if not any(
+                arg.endswith(self.HOST_SCRIPT.name.encode()) for arg in cmdline_args
+            ):
+                continue
+            if self._simulator_path.encode() not in cmdline_args:
+                continue
+            host_nng_addr = next(
+                (
+                    entry.split(b"=", 1)[1].decode(errors="replace")
+                    for entry in environ
+                    if entry.startswith(nng_prefix)
+                ),
+                None,
+            )
+            if host_nng_addr != nng_addr:
                 continue
             stale_pids.append(pid)
 
@@ -318,9 +377,11 @@ class ExalensServer:
             return
 
         logger.warning(
-            "Found {} stale tt-exalens process(es) on port {}: {}. Killing...",
+            "Found {} stale simulation host(s) for {} ({}={}): {}. Killing...",
             len(stale_pids),
-            self._port,
+            self._simulator_path,
+            self.NNG_SOCKET_ADDR,
+            nng_addr,
             stale_pids,
         )
 
@@ -330,7 +391,11 @@ class ExalensServer:
             except (OSError, ProcessLookupError):
                 pass
 
-        time.sleep(0.5)
+        deadline = time.monotonic() + self.EXIT_TIMEOUT_S
+        while time.monotonic() < deadline and any(
+            Path(f"/proc/{pid}").exists() for pid in stale_pids
+        ):
+            time.sleep(self.STALE_HOST_POLL_S)
 
         for pid in stale_pids:
             try:

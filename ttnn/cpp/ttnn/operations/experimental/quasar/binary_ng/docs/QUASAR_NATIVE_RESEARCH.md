@@ -406,7 +406,7 @@ often cited is the C=4 *target*, not phase 1.
 | **Canonical multi-thread STRIDED producer loop** (copy this, incl. `break` guard + `finish()`) | `tests/tt_metal/tt_metal/test_kernels/dataflow/dfb_producer_2_0.cpp:27-32,47` |
 | **Device-side cycle bracketing prior art** (`TT_METAL_MEASURE_DFB_INIT_TIME=1`) | `tests/tt_metal/tt_metal/api/dataflow_buffer/dfb_init_timing_bench.cpp` |
 | **Bound-kernel-identity readout** (routing proof, no env var, written every run) | `generated/inspector/kernels.yaml` |
-| Profiler's device-side wall-clock read (works on DM cores) | `tt_metal/tools/profiler/kernel_profiler.hpp:218-225` |
+| Profiler's device-side wall-clock read (works on DM cores) | `tt_metal/hw/inc/api/debug/kernel_profiler.hpp:218-225` |
 
 Confluence: NEO HLS `TA/84508873`; Errata `TA/1802436609`; Overlay Tile Counter Interrupt Protocol
 `TA/408289306`; Tile Counter Remapping Block `TA/1401028761`; Quasar Programming Quirks `LLK/2316533761`;
@@ -990,7 +990,7 @@ harness becomes the regression gate for phase-2 broadcast work.
 - **Primary metric: simulated cycles on craq-sim.** craq-sim applies every store synchronously and has
   produced *bit-identical simulated clocks across 13 repeat runs*, so cycle deltas are deterministic and
   comparable A/B. Quasar is pre-silicon; there are no real-HW numbers.
-- **Secondary: the device profiler**, which has Quasar support (`tt_metal/tools/profiler/kernel_profiler.hpp`
+- **Secondary: the device profiler**, which has Quasar support (`tt_metal/hw/inc/api/debug/kernel_profiler.hpp`
   has `ARCH_QUASAR` paths at `:22,48,114,212,234,717,881`), for per-engine timestamps; and the per-role
   cycle harness pattern in `dfb_init_timing_bench.cpp` if finer instrumentation is needed.
 - **A/B protocol**: identical shapes/dtypes/memory configs, `ProgramFactoryMetalV2` (baseline) vs the new
@@ -2421,7 +2421,7 @@ inside that model's calibrated envelope. Coverage and model quality are **uneval
 | **Global cycle count** | free, printed at exit | `[<cycles>] <wall>s (<rate>)` from `g_clock` (`src/sim.cpp:502-513`) |
 | **Device profiler** | `TT_METAL_DEVICE_PROFILER=1` (no rebuild — profiler is on by default) | per-RISC kernel spans in `generated/profiler/.logs/profile_log_device.csv`; RiscTypes `QUASAR_DM0-7`, `QUASAR_NEO0-3_TRISC0-3`; cycles-since-reset stamps. **The only cycle source, and the only per-core one** — §5.0.2 has the measured role map (readers/writers/pipes by RISC name) and the occupancy method |
 | **craq-sim perf trace** | `TTSIM_PERF_TRACE=1 TTSIM_PERF_TRACE_PER_DISPATCH=1 TTSIM_PERF_TRACE_OUT=<dir>` | `ttsim_perf_trace.tsv`: per-engine instruction counts, DFB op counts (`cb_waits/reserves/pushes/pops`), `kernel_launches`, per-pipe **stall** cycles (`src/sim.cpp:143-150`) |
-| **Profiler zones inside a kernel** (DM cores included) | wrap a region in a device-profiler zone | exact cycles for a **sub-kernel region on any core**. The profiler's device-side stamp is a direct read of `NEO_REGS_0__LOCAL_REGS_DEBUG_REGS_WALL_CLOCK_0` (`tt_metal/tools/profiler/kernel_profiler.hpp:218-225`), which craq-sim answers with `g_clock` verbatim (`src/tile.cpp:1768`) and — unlike Gen1 — with **no read delay** (`src/riscv_impl.h:612` gates it on `TT_VERSION <= 1`). In-tree prior art: `tests/tt_metal/tt_metal/api/dataflow_buffer/dfb_init_timing_bench.cpp` (`TT_METAL_MEASURE_DFB_INIT_TIME=1`). |
+| **Profiler zones inside a kernel** (DM cores included) | wrap a region in a device-profiler zone | exact cycles for a **sub-kernel region on any core**. The profiler's device-side stamp is a direct read of `NEO_REGS_0__LOCAL_REGS_DEBUG_REGS_WALL_CLOCK_0` (`tt_metal/hw/inc/api/debug/kernel_profiler.hpp:218-225`), which craq-sim answers with `g_clock` verbatim (`src/tile.cpp:1768`) and — unlike Gen1 — with **no read delay** (`src/riscv_impl.h:612` gates it on `TT_VERSION <= 1`). In-tree prior art: `tests/tt_metal/tt_metal/api/dataflow_buffer/dfb_init_timing_bench.cpp` (`TT_METAL_MEASURE_DFB_INIT_TIME=1`). |
 | **DFB credit event log** | `TTSIM_QSR_DFB_TRACE=1`, `TTSIM_QSR_DFB_COUNTER_TRACE=1` | every credit post/ack with `posted→M acked=K` per `(tensix, counter)`, plus a distinct *blocked* event carrying capacity (`src/riscv_impl.h:1941-1948`, `:2235-2252`, `:2521-2530`). Post-process for the **ring-occupancy trajectory** — max occupancy, whether the ring ever fills, at what depth. Event-ordered, not clock-stamped; pair with a profiler zone for time. |
 
 Both profiler and perf trace can run in the **same** process — do that, so numbers never get mixed across
