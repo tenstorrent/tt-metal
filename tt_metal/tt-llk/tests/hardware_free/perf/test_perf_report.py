@@ -37,6 +37,7 @@ from helpers.perf.core import (
     combine_perf_reports,
     postprocess_tile_loop,
 )
+from helpers.perf.l1_contention import summarize
 from helpers.perf.schema import (
     MARKER,
     MEAN,
@@ -1260,3 +1261,31 @@ def test_nested_zones_keep_their_row_order():
 def test_unpaired_zone_records_are_rejected(entries):
     with pytest.raises(ValueError, match="buffer corruption"):
         Profiler._parse_thread("unpack", _zone_words(entries), _ZONE_META)
+
+
+def test_l1_contention_splits_pipeline_waits_from_stream_demand():
+    frame = pd.DataFrame(
+        {
+            "tiles": [4.0],
+            "L1_TO_L1:wait0": [2.0],
+            "L1_TO_L1:wait1": [3.0],
+            "UNPACK_ISOLATE:wait0": [1.0],
+            "PACK_ISOLATE:wait1": [0.5],
+            "UNPACK_ISOLATE:words0": [48.0],
+            "UNPACK_ISOLATE:words1": [16.0],
+            "PACK_ISOLATE:words1": [32.0],
+            "PACK_ISOLATE:words8": [32.0],
+            "UNPACK_ISOLATE": [100.0],
+            "PACK_ISOLATE": [200.0],
+        }
+    )
+    out = summarize(frame).iloc[0]
+    assert out["l2l_wait_per_tile"] == 5.0
+    # what the isolates do not wait on their own
+    assert out["l2l_cross_wait_per_tile"] == 3.5
+    assert out["unpack_words_per_tile"] == 64.0 and out["pack_words_per_tile"] == 64.0
+    # port 1 at the isolate pace: 16 words x 4 tiles in 100 cycles plus 32 x 4 in 200
+    assert out["saturation_port1_load"] == pytest.approx(1.28)
+    assert out["saturation_bank_load"] == pytest.approx(
+        (64 * 4 / 100 + 64 * 4 / 200) / 16
+    )
