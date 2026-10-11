@@ -1,5 +1,55 @@
 # F1/F2 LLK corpus seed
 
+## Source-bound sweep admission report
+
+For a completed `sweep_llks.py` run, the separate claim filter joins an
+explicit admission ledger without changing any raw result or baseline:
+
+```bash
+python3 tt_metal/tt-llk/tests/corpus/tools/sweep_admission_report.py \
+  --current /path/to/completed-run --ledger /path/to/admission.tsv \
+  --out /path/to/new-admission-report.json
+```
+
+The ledger pins the clean tt-metal revision and driver/cc1plus hashes. Its
+TSV fields are `row`, `raw_disposition`, `comparison_admission`,
+`replacement_scope`, `validation_status`, `actual_counts`,
+`unfulfilled_requirements`, `reason`, and `evidence_ref`; metadata uses
+`# key<TAB>value` lines. Required metadata is `campaign_source`,
+`compiler_driver_sha256`, `compiler_cc1plus_sha256`, `campaign_manifest_sha256`,
+`terminal_results_sha256`, `terminal_summary_sha256`, and
+`campaign_fully_admitted` (which must be `FALSE` for this exception ledger).
+`raw_disposition` must be `RETAIN`.
+The manifest hash binds the reviewed flags, seed, device, corpus population,
+runner and recorded source/compiler identities, not merely the branch tip.
+The campaign owner must record terminal results and summary hashes in a new
+ledger after the producer exits and completion is verified. Live/deployment
+hashes are not accepted as substitutes. These pins bind the reviewed measurement
+artifact bundle and prevent mixing another execution's timings into its manifest.
+
+Only `BOUNDED_PARTIAL_ADMITTED` permits a paired timing comparison, labeled
+with its partial scope and remaining requirements. `CAUSAL_OFF_ON_ONLY`
+permits raw OFF/ON timing, not numerical admission or a versus-hand claim.
+`CONDITIONAL_UNFULFILLED`, `DOMAIN_SCOPED_UNFULFILLED`, and the three
+`REFUSED_*` decisions defined in the tool exclude comparisons. Missing ledger
+rows are `UNREVIEWED`, never implicitly admitted. Failed raw rows remain
+visible with effective admission `RAW_NOT_PASS` and cannot contribute comparisons.
+Bounded admission requires `ACTUAL_PARTIAL_PASS` or
+`ACTUAL_NINE_STRATA_PARTIAL_PASS`, positive OFF/ON passing counts, zero
+failures and out-of-tolerance counts, and non-regressing maximum ULP;
+the nine-strata status requires nine passing rows per profile.
+For example, its `actual_counts` grammar is
+`OFF:9_PASS/0_FAIL;ON:9_PASS/0_FAIL;sem_n_out=0;hand_n_out=0;sem_max_bf16_ulp=0;hand_max_bf16_ulp=0`.
+This tool checks ledger binding
+and campaign accounting; it does not independently validate evidence links,
+prove numerical correctness, or certify a full win.
+
+Incomplete campaigns, mismatched source/compiler, dirty recorded source,
+duplicate/unknown rows, incoherent terminal counts, and missing four-arm
+metrics fail closed. The report hashes the terminal raw artifacts and ledger.
+Its output must be a new file outside the raw run directory. The host suite
+includes adversarial tests for these gates.
+
 ## Complete SFPU corpus
 
 `sfpu_corpus_v2.tsv` inventories both active SFPU implementation surfaces:

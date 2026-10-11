@@ -57,6 +57,7 @@ CHECKS = (
     python_check("campaign fail-closed gates", "selftest_campaign_fail_closed.py"),
     python_check("exhaustive campaign plan", "selftest_exhaustive_campaign_plan.py"),
     python_check("galaxy numeric admission", "selftest_galaxy_numeric_admission.py"),
+    python_check("sweep admission claim filter", "selftest_sweep_admission_report.py"),
     python_check("galaxy shard/combiner", "selftest_galaxy_shard.py"),
     python_check("leg-store tools", "selftest_leg_store_tools.py"),
     python_check("tri-campaign manifest", "selftest_tri_campaign_manifest.py"),
