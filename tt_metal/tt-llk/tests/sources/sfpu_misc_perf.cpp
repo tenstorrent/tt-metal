@@ -2,8 +2,7 @@
 //
 // SPDX-License-Identifier: Apache-2.0
 
-// Perf kernel for the SFPU ops outside the unary and binary registry sweeps (SFPU_MISC_OPERATION, numbered as
-// SFPU_MISC_OPERATIONS in python_tests/helpers/test_variant_parameters.py): the datacopy carrier and one body per tile.
+// Perf kernel for the SFPU ops outside the unary and binary registry sweeps: the datacopy carrier and one body per tile.
 
 #include <algorithm>
 #include <cstdint>
@@ -19,7 +18,6 @@
 #include "perf.h"
 #include "profiler.h"
 
-// Globals
 std::uint32_t unp_cfg_context                          = 0;
 std::uint32_t pack_sync_tile_dst_ptr                   = 0;
 std::uint32_t math_sync_tile_dst_index                 = 0;
@@ -78,7 +76,7 @@ void run_kernel(RUNTIME_PARAMETERS params)
                     /* iterations*/ num_faces * TILE_CNT * LOOP_FACTOR);
             }
         }
-        else if constexpr (PERF_RUN_TYPE != PerfRunType::PACK_ISOLATE) // UNPACK_ISOLATE, L1_TO_L1, L1_CONGESTION
+        else if constexpr (PERF_RUN_TYPE != PerfRunType::PACK_ISOLATE)
         {
             for (std::uint32_t loop = 0; loop < LOOP_FACTOR; ++loop)
             {
@@ -113,20 +111,18 @@ void run_kernel(RUNTIME_PARAMETERS params)
 
 // The bodies that use DEST tiles 0 and 1 run on that pair for every tile; reshuffle_rows writes the tile after its input.
 static constexpr bool MISC_BINARY = (SFPU_MISC_OPERATION == 2 || SFPU_MISC_OPERATION == 3 || SFPU_MISC_OPERATION == 4 || SFPU_MISC_OPERATION == 6 || SFPU_MISC_OPERATION == 7 || SFPU_MISC_OPERATION == 8);
-// SFPU_MISC_PARAM 1 of dropout, the Int32 mask, copy_dest_values and the GLU ops (2: the deprecated copy_dest_value overload)
-// issues one 32-row call per tile with VectorMode::None, the form their Blackhole compute API issues; otherwise four 8-row calls.
+// SFPU_MISC_PARAM 1 (2 for the deprecated copy_dest_value) issues one 32-row call per tile, as their compute API does.
 static constexpr bool MISC_ONE_CALL = SFPU_MISC_PARAM != 0 && (SFPU_MISC_OPERATION == 1 || SFPU_MISC_OPERATION == 3 || SFPU_MISC_OPERATION == 6 || SFPU_MISC_OPERATION == 7 || SFPU_MISC_OPERATION == 8);
 static constexpr int MISC_ITERATIONS          = MISC_ONE_CALL ? 32 : 8;
 static constexpr VectorMode MISC_VECTOR_MODE  = MISC_ONE_CALL ? VectorMode::None : VectorMode::RC;
 static constexpr std::uint32_t PRNG_SEED      = 0x12345678u;
-// rand: from 0.0f; scale 1.0f or, with SFPU_MISC_PARAM 1, 2^-100 (the per-row normalise form)
 static constexpr std::uint32_t RAND_FROM    = 0x00000000u;
 static constexpr std::uint32_t RAND_SCALE   = (SFPU_MISC_PARAM == 1) ? 0x0D800000u : 0x3F800000u;
-static constexpr std::uint32_t DROPOUT_PROBABILITY    = 0x3FFFFFFFu; // 0.5 of INT_MAX
-static constexpr std::uint32_t DROPOUT_SCALE   = 0x40000000u; // 2.0f
-static constexpr std::uint32_t SOFTCAP_BETA = 0x40800000u; // 4.0f
-static constexpr std::uint32_t SOFTCAP_BETA_RECIP  = 0x3E800000u; // 0.25f
-static constexpr std::uint32_t RESHUFFLE_INDEX_L1     = PERF_INPUT_C; // the reshuffle index array in the unused input ring C
+static constexpr std::uint32_t DROPOUT_PROBABILITY    = 0x3FFFFFFFu;
+static constexpr std::uint32_t DROPOUT_SCALE   = 0x40000000u;
+static constexpr std::uint32_t SOFTCAP_BETA = 0x40800000u;
+static constexpr std::uint32_t SOFTCAP_BETA_RECIP  = 0x3E800000u;
+static constexpr std::uint32_t RESHUFFLE_INDEX_L1     = PERF_INPUT_C;
 static constexpr std::uint32_t RESHUFFLE_HEADER_BYTES = 16;           // the body reads the indices at idx_addr + 16
 static constexpr std::uint32_t RESHUFFLE_TILE_ROWS    = 32;
 static constexpr std::uint8_t RESHUFFLE_SKIP_ROW      = 255;
@@ -138,9 +134,9 @@ inline void write_reshuffle_index()
     volatile std::uint8_t* p = reinterpret_cast<volatile std::uint8_t*>(RESHUFFLE_INDEX_L1 + RESHUFFLE_HEADER_BYTES);
     for (std::uint32_t r = 0; r < RESHUFFLE_TILE_ROWS; ++r)
     {
-        std::uint8_t v = static_cast<std::uint8_t>(r); // SFPU_MISC_PARAM 0: the identity permutation
-        if constexpr (SFPU_MISC_PARAM == 1) { v = static_cast<std::uint8_t>(RESHUFFLE_TILE_ROWS - 1 - r); } // reversed
-        if constexpr (SFPU_MISC_PARAM == 2) { v = (r & 1) ? RESHUFFLE_SKIP_ROW : static_cast<std::uint8_t>(r); } // every second row skipped
+        std::uint8_t v = static_cast<std::uint8_t>(r);
+        if constexpr (SFPU_MISC_PARAM == 1) { v = static_cast<std::uint8_t>(RESHUFFLE_TILE_ROWS - 1 - r); }
+        if constexpr (SFPU_MISC_PARAM == 2) { v = (r & 1) ? RESHUFFLE_SKIP_ROW : static_cast<std::uint8_t>(r); }
         p[r] = v;
     }
 }
