@@ -1930,18 +1930,16 @@ inline void calculate_reduce(
     if constexpr (pool_type == PoolType::MAX || pool_type == PoolType::MIN) {
         if constexpr (int32_max_min) {
             // Int32 (and bit-31-flipped UInt32) MAX/MIN: two's-complement compare-and-swap path (handles INT32_MIN).
-            // The column kernel is single-tile (32x32) and ignores block_ct_dim/block_rt_dim, so guard the
-            // single-tile contract loudly rather than silently dropping tiles if a caller passes >1.
-            if constexpr (reduce_dim == ReduceDim::REDUCE_COL) {
-                LLK_ASSERT(
-                    block_ct_dim == 1 && block_rt_dim == 1,
-                    "Int32/UInt32 column MAX/MIN reduce is single-tile (block_ct_dim == block_rt_dim == 1)");
-            }
             [[maybe_unused]] const std::uint32_t num_tiles = block_ct_dim * block_rt_dim;
             if constexpr (uint32_max_min) {
                 flip_sign_bits(num_tiles);
             }
             if constexpr (reduce_dim == ReduceDim::REDUCE_COL) {
+                // The column kernel is single-tile (32x32) and ignores block_ct_dim/block_rt_dim, so guard the
+                // single-tile contract loudly rather than silently dropping tiles if a caller passes >1.
+                LLK_ASSERT(
+                    block_ct_dim == 1 && block_rt_dim == 1,
+                    "Int32/UInt32 column MAX/MIN reduce is single-tile (block_ct_dim == block_rt_dim == 1)");
                 calculate_reduce_max_min_int32_col<pool_type, reduce_dim>();
             } else {
                 static_assert(
