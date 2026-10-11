@@ -270,4 +270,4 @@ inline void split_indices(const std::uint32_t seg_base)
 
 #endif // LLK_TRISC_PACK
 
-} // namespace topk_xl_split
+}

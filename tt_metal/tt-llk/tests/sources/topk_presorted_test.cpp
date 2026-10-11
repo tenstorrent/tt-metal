@@ -17,7 +17,7 @@ std::uint32_t math_sync_tile_dst_index = 0;
 static_assert(TOPK_NUM_ITERATIONS == 1, "topk_presorted_test sorts one 2-tile slab (a matrix of 2 value and 2 index tiles)");
 static_assert(!TOPK_FUSED_STABLE, "the fused mode is not part of the insertion step this test covers");
 
-constexpr int NUM_STAGES = 2; // values, indices
+constexpr int NUM_STAGES = 2;
 
 // ============================================================================
 #ifdef LLK_TRISC_UNPACK

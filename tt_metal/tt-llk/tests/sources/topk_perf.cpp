@@ -148,7 +148,7 @@ inline std::uint32_t rebuild_direction()
 {
     if constexpr (TOPK_PERF_RUNTIME_DIR)
     {
-        volatile std::uint32_t dir = TOPK_SORT_DIRECTION; // opaque to the compiler, as a runtime argument is
+        volatile std::uint32_t dir = TOPK_SORT_DIRECTION;
         return dir;
     }
     return TOPK_SORT_DIRECTION;

@@ -258,7 +258,7 @@ ttnn::device_operation::ProgramArtifacts TopKDeviceOperation::TopKSingleCoreProg
                 // Index width must match the index tensor dtype: fp32 requires 32-bit iota.
                 // 16-bit iota packs two indices per word, producing incorrect INT32 reads.
                 {"uint16_output",
-                 static_cast<uint32_t>(sort_ind_cb_data_format == tt::DataFormat::UInt16)},  // Index format flag
+                 static_cast<uint32_t>(sort_ind_cb_data_format == tt::DataFormat::UInt16)},
             },
         .runtime_arg_schema = {.runtime_arg_names = {"id", "work_per_core"}},
         .hw_config = ttnn::create_reader_datamovement_config(),

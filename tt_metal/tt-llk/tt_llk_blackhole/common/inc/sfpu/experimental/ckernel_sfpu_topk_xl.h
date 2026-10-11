@@ -173,7 +173,7 @@ inline void topk_mop_config()
 #if TOPK_XL_UNFUSED_MACRO
     if constexpr (!fused)
     {
-        topk_xl_unfused_macro::configure_sequences(); // fused phases reprogram the Sequence registers
+        topk_xl_unfused_macro::configure_sequences();
     }
 #endif
     // Unfused: the SFPLOADMACRO body is 16 instructions (the two SFPSWAPs and
@@ -635,7 +635,7 @@ inline void record_step_group(const bool ascending)
     }
 }
 
-} // namespace topk_xl_fused_macro
+}
 
 #endif // TOPK_XL_FUSED_MACRO
 
@@ -1350,7 +1350,7 @@ inline NOINLINE void replay_len32_group(const bool dir)
     lltt::replay(len32_loads_len, len32_stores_len);
 }
 
-} // namespace topk_xl_fused_macro
+}
 #endif // TOPK_XL_FUSED_MACRO
 
 // Smallest-stride merge step (Step 6 — stride 32). Pairs the lower 4 LREGs

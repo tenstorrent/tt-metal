@@ -122,5 +122,5 @@ inline void defuse_raw16(const int num_tiles) {
     TTI_SETRWC(p_setrwc::CLR_NONE, 0, 0, 0, 0, p_setrwc::SET_D);
     topk_replay_init = 0;
 }
-}  // namespace topk_fused_raw16
+}
 #endif

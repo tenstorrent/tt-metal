@@ -285,4 +285,4 @@ inline void release_accumulator() {
 
 #endif  // TRISC_MATH
 
-}  // namespace topk_large_indices_split
+}

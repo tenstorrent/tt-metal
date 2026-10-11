@@ -954,7 +954,7 @@ inline void bitonic_topk_step_group_macro(const std::uint32_t a, const std::uint
     TT_SFPLOADMACRO((2 << 2) | 3, mode_value, ADDR_MOD_7, b + 4);
     if constexpr (FUSED)
     {
-        TTI_SFPNOP; // a register is stored back one instruction before the next group reloads it
+        TTI_SFPNOP;
     }
 }
 
@@ -1023,7 +1023,7 @@ inline void bitonic_topk_load16_first_swaps()
     constexpr std::uint32_t idx            = 128;
     constexpr InstrModLoadStore mode_index = is_fp32_dest_acc_en ? InstrModLoadStore::INT32 : InstrModLoadStore::LO16;
     constexpr InstrModLoadStore mode_value = (TOPK_UINT16_IN_FP32_DEST || FUSED || RANK_STAMPED) ? InstrModLoadStore::INT32 : InstrModLoadStore::DEFAULT;
-    constexpr std::uint32_t second         = PHASE2 ? 1 : 2; // pairs (0, 1) and (2, 3) in phase 2, (0, 2) and (1, 3) after
+    constexpr std::uint32_t second         = PHASE2 ? 1 : 2;
     constexpr std::uint32_t third          = PHASE2 ? 2 : 1;
 
     TTI_SFPLOAD(p_sfpu::LREG0, mode_value, ADDR_MOD_7, 0);
@@ -1040,7 +1040,7 @@ inline void bitonic_topk_load16_first_swaps()
         TTI_SFPLOAD(p_sfpu::LREG7, mode_index, ADDR_MOD_7, idx + 12);
     }
     TTI_SFPLOADMACRO(((PHASE2 ? 3 : 2) << 2) | 3, mode_value, ADDR_MOD_7, 12);
-    TTI_SFPNOP; // the last swap runs on the two cycles after its load
+    TTI_SFPNOP;
     TTI_SFPNOP;
 }
 
@@ -1234,7 +1234,7 @@ inline void _bitonic_topk_phases_steps(const int idir, const int i_end_phase, co
                     tile1_only = (ph <= 4);
                     if (ph == 5)
                     {
-                        set_dst_write_addr(dst_addr_offset); // phase 5 covers both tiles again
+                        set_dst_write_addr(dst_addr_offset);
                     }
                 }
                 init_phase = true; // init each new phase of local sort in replay buffer
@@ -1744,7 +1744,7 @@ inline void bitonic_topk_rebuild_step(const std::uint32_t sorted_seq_length)
             if (ii == (inner_d - 1))
             {
                 dst_offset = 2 * DIST;
-                if (blk < (num_blocks - 1)) // the step's last increment would be reset by the next SETRWC
+                if (blk < (num_blocks - 1))
                 {
                     bitonic_topk_inc_x8_dest(4 * DIST, true);
                 }

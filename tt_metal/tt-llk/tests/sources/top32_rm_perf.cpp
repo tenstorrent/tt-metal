@@ -27,7 +27,7 @@ static constexpr std::uint32_t STAGE_VALUE_TILE = 1;
 static constexpr std::uint32_t STAGE_INDEX_TILE = 3;
 
 static constexpr std::uint32_t ELEMENTS_PER_CHUNK = 4 * 16;
-static constexpr std::uint32_t CHUNK_ADDR_STRIDE  = (ELEMENTS_PER_CHUNK * TOP32_DATUM_BYTES) / 16; // unpacker addresses count 16-byte words
+static constexpr std::uint32_t CHUNK_ADDR_STRIDE  = (ELEMENTS_PER_CHUNK * TOP32_DATUM_BYTES) / 16;
 
 static_assert(TOP32_ROW_ELEMENTS % ELEMENTS_PER_CHUNK == 0, "the perf rows walk whole 64-element chunks");
 
