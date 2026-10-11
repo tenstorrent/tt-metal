@@ -468,8 +468,7 @@ def sfpu_binary(
     # variant near its tolerance fail unreproducibly.
     torch.manual_seed(0)
 
-    # On Blackhole the harness runs the Int32 add and sub in two's complement, as
-    # add_int_tile and sub_int_tile do, so their operands are encoded that way too.
+    # Blackhole runs the Int32 add and sub in two's complement, so their operands are encoded that way.
     if (
         TestConfig.CHIP_ARCH == ChipArchitecture.BLACKHOLE
         and formats.input_format == DataFormat.Int32
@@ -1073,12 +1072,6 @@ def test_eltwise_binary_sfpu_int_comparison_across_zero(formats, dest_acc, matho
 def _int_arith_negative_spec():
     """Paired Int32 stimuli where both operands independently take either sign.
 
-    On Wormhole the Int32 add/sub kernels convert each operand out of sign-magnitude before the
-    integer add and the result back into it, so three sign folds run per element; on Blackhole
-    they run in two's complement with no fold. The positive-only default never sets an operand's
-    sign bit, which leaves negative operands, and on Wormhole the two input-side folds, unreached
-    by every other Int32 test here.
-
     The two operands vary at different rates so the face walks the full 8x8 product of
     operand values rather than a single diagonal. A mirrored pair would collapse `a + b` to a
     constant zero and test nothing. Values stay small so neither sum nor difference can
@@ -1104,18 +1097,7 @@ def _int_arith_negative_spec():
     dest_acc=[DestAccumulation.Yes],
 )
 def test_eltwise_binary_sfpu_int_arith_across_zero(formats, dest_acc, mathop):
-    """Negative and mixed-sign operands for the Int32 add/sub kernels.
-
-    Covers negative operands of _add_int_ / _sub_int_ (on Wormhole, the input-side sign folds),
-    which no other Int32 test in this file reaches.
-
-    Unlike test_eltwise_binary_sfpu_int_comparison_across_zero above, this one keeps the
-    sign-magnitude default rather than passing twos_complement=True. On Wormhole these kernels
-    are sign-magnitude end to end -- operands in, result out -- so two's-complement stimuli are
-    read back with the sign bit as a magnitude bit and every negative lane diverges. On
-    Blackhole the harness runs them in two's complement and sfpu_binary switches the stimuli.
-    The comparison ops can take either encoding on the way out only because they emit 0 or 1.
-    """
+    """Negative and mixed-sign operands for the Int32 add/sub kernels."""
     spec_A, spec_B = _int_arith_negative_spec()
     sfpu_binary(formats, dest_acc, mathop, spec_A=spec_A, spec_B=spec_B)
 
@@ -1134,10 +1116,9 @@ def test_eltwise_binary_sfpu_int_arith_wide_signed(formats, dest_acc, mathop):
     defect usually takes -- goes unseen.
 
     Bounds are +-2**29 so neither the sum nor the difference can leave the +-(2**31 - 1) that
-    sign-magnitude Dst represents (Wormhole; Blackhole runs them in two's complement). A and B
-    draw distinct values because the paired face walk advances one shared RNG stream across
-    faces, not because of the per-spec seed, which generate_face ignores whenever an external
-    generator is supplied.
+    sign-magnitude Dst represents. A and B draw distinct values because the paired face walk
+    advances one shared RNG stream across faces, not because of the per-spec seed, which
+    generate_face ignores whenever an external generator is supplied.
     """
     bound = float(2**29)
     spec_A = StimuliSpec(

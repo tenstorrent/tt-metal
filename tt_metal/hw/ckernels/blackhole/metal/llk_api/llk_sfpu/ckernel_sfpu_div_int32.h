@@ -12,7 +12,6 @@
 namespace ckernel::sfpu {
 #ifndef DISABLE_SFPLOADMACRO
 sfpi_inline void div_int32_lm_row(const uint in0, const uint in1, const uint out) {
-    // macro 0: in1 to sign-magnitude in place
     TT_SFPLOADMACRO((0 << 2) | (p_sfpu::LREG4 & 3), InstrModLoadStore::INT32, ADDR_MOD_7, in1 | (p_sfpu::LREG4 >> 2));
     TT_SFPLOAD(p_sfpu::LREG0, InstrModLoadStore::INT32, ADDR_MOD_7, in0);
     TTI_SFPCAST(p_sfpu::LREG0, p_sfpu::LREG0, sfpi::SFPCAST_MOD1_INT32_TO_SM32);
@@ -78,7 +77,7 @@ inline void calculate_div_int32(const uint dst_index_in0, const uint dst_index_i
     // SFPLOADMACRO schedule of the sfpi body above; SFPPUSHC and SFPPOPC sit in MAD latency slots and float(in1)
     // stays in L7.
     constexpr uint dst_tile_size = 64;
-    constexpr uint row_len = 25;  // the instructions of div_int32_lm_row
+    constexpr uint row_len = 25;
     const uint in0 = dst_index_in0 * dst_tile_size, in1 = dst_index_in1 * dst_tile_size,
                out = dst_index_out * dst_tile_size;
     load_replay_buf<Exec>(0, row_len, [in0, in1, out] { div_int32_lm_row(in0, in1, out); });
@@ -95,14 +94,12 @@ inline void div_init() {
 #ifndef DISABLE_SFPLOADMACRO
     // A disabled unit uses delay 7 so it cancels no pending instruction.
     constexpr std::uint32_t disabled = 7 << 3;
-    // InstructionTemplate[0]: int32 to sign-magnitude in place.
     {
         constexpr std::uint32_t insn = TT_OP_SFPCAST(p_sfpu::LREG0, p_sfpu::LREG0, sfpi::SFPCAST_MOD1_INT32_TO_SM32);
         TTI_SFPLOADI(0, sfpi::SFPLOADI_MOD0_LOWER, insn & 0xffff);
         TTI_SFPLOADI(0, sfpi::SFPLOADI_MOD0_UPPER, insn >> 16);
         TTI_SFPCONFIG(0, 0, 0);
     }
-    // Macro 0: in1 to sign-magnitude in place, next cycle.
     {
         constexpr std::uint32_t simple_bits = (0 << 3) | (4 + 0);
         constexpr std::uint32_t mad_bits = disabled;
@@ -112,7 +109,6 @@ inline void div_init() {
         TTI_SFPLOADI(0, sfpi::SFPLOADI_MOD0_UPPER, (store_bits << 8) | round_bits);
         TTI_SFPCONFIG(0, 4 + 0, 0);
     }
-    // Misc: every unit counts issued instructions; no scheduled store.
     TTI_SFPCONFIG(0xf00, 8, 1);
     TTI_SFPNOP;
     TTI_SFPNOP;
