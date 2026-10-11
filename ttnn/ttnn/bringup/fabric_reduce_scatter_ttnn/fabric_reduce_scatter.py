@@ -81,25 +81,37 @@ void kernel_main() {
     const auto scr = TensorAccessor(scr_args, scr_addr, page_bytes);
     volatile tt_l1_ptr uint32_t* arrived = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(arrival_addr);
 
+    // A batch is written contiguously from the CB's write pointer, so it must not cross the CB's end: the CBs hold
+    // cap = 2 group chunks, and with two phases (or c_0 and c_1 starting at different offsets) the batches are not
+    // group-aligned. o0 / o1: the chunk offset of the next write in the own-partial CB (c_0, or c_16) and in c_1.
+    constexpr uint32_t cap = 2 * group;
+    uint32_t o0 = 0, o1 = 0;
+    auto room = [&](uint32_t o) { return cap - o < group ? cap - o : group; };
+
     // leading blocks: my partial only
     const uint32_t cb_lead = lead == nblocks ? 16 : 0;
     uint32_t chunks_left = lead * full;
-    uint32_t batch = 0, wown = 0, win = 0;
+    uint32_t batch = 0, limit = 0, wown = 0, win = 0;
     for (uint32_t k = 0; k < lead; ++k) {
         const uint32_t base = get_arg_val<uint32_t>(blocks_idx + k) * blk_pages;
         for_each_chunk(blk_pages, first_bank, bank_stride, num_banks, run_pages, 0, 0, [&](uint32_t page, uint32_t n, uint32_t) {
             if (batch == 0) {
-                cb_reserve_back(cb_lead, run_pages * group);
+                limit = room(o0);
+                cb_reserve_back(cb_lead, run_pages * limit);
                 wown = get_write_ptr(cb_lead);
             }
             noc_async_read(in.get_noc_addr(base + page), wown + batch * chunk_bytes, n * page_bytes);
             --chunks_left;
-            if (++batch == group || chunks_left == 0) {
+            if (++batch == limit || chunks_left == 0) {
                 noc_async_read_barrier();
                 cb_push_back(cb_lead, run_pages * batch);
+                o0 = (o0 + batch) % cap;
                 batch = 0;
             }
         });
+    }
+    if (cb_lead != 0) {
+        o0 = 0;  // the relay phase's c_0 is untouched
     }
     // relayed blocks: my partial (c_0) and upstream's running sum (c_1); upstream's relay stream starts at my block lead
     chunks_left = (nblocks - lead) * full;
@@ -107,19 +119,22 @@ void kernel_main() {
         const uint32_t base = get_arg_val<uint32_t>(blocks_idx + k) * blk_pages;
         for_each_chunk(blk_pages, first_bank, bank_stride, num_banks, run_pages, 0, 0, [&](uint32_t page, uint32_t n, uint32_t idx) {
             if (batch == 0) {
-                cb_reserve_back(0, run_pages * group);
+                limit = room(o0) < room(o1) ? room(o0) : room(o1);
+                cb_reserve_back(0, run_pages * limit);
                 wown = get_write_ptr(0);
-                cb_reserve_back(1, run_pages * group);
+                cb_reserve_back(1, run_pages * limit);
                 win = get_write_ptr(1);
             }
             noc_async_read(in.get_noc_addr(base + page), wown + batch * chunk_bytes, n * page_bytes);
             noc_semaphore_wait_min(arrived, ((k - lead) * full + idx) / inc_every + 1);
             noc_async_read(scr.get_noc_addr(base + page), win + batch * chunk_bytes, n * page_bytes);
             --chunks_left;
-            if (++batch == group || chunks_left == 0) {
+            if (++batch == limit || chunks_left == 0) {
                 noc_async_read_barrier();
                 cb_push_back(0, run_pages * batch);
                 cb_push_back(1, run_pages * batch);
+                o0 = (o0 + batch) % cap;
+                o1 = (o1 + batch) % cap;
                 batch = 0;
             }
         });
