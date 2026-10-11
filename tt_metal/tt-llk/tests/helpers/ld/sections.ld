@@ -63,9 +63,10 @@ SECTIONS
     . = ALIGN(128);
     *(.text.llk_zone.record)
     . = ALIGN(128);
-    /* INIT measurement build (LLK_PERF_INIT_ONLY): the helpers INIT calls, INIT's body, the zone around it; ahead of main
-       and the kernel, so no code outside INIT moves them (empty in every other build) */
-    *(.text.llk_init_callee)
+    /* INIT measurement build (LLK_PERF_INIT_ONLY): the helpers INIT calls (.text.llk_init_callee.<n>: the functions GCC
+       left out of line, test_config.py), INIT's body, the zone around it; ahead of main and the kernel, so no code
+       outside INIT moves them (empty in every other build) */
+    *(.text.llk_init_callee .text.llk_init_callee.*)
     *(.llk_init_body)
     PROVIDE (__llk_init_body_end = .); /* counters.h: math's TRISC_END_PC */
     *(.llk_init_tramp)
