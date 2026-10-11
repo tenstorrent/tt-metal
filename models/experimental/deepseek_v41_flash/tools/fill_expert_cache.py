@@ -22,6 +22,7 @@ files ``test_moe.py`` and the TP1 decoder-layer test read.
 
     python models/experimental/deepseek_v41_flash/tools/fill_expert_cache.py --layers 20 21 24
     python models/experimental/deepseek_v41_flash/tools/fill_expert_cache.py --layers 1 2 --tp-size 1
+    python models/experimental/deepseek_v41_flash/tools/fill_expert_cache.py --all-layers
 """
 
 import argparse
@@ -124,7 +125,9 @@ def _fill(layer: int, e: int) -> None:
 
 def main():
     parser = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
-    parser.add_argument("--layers", type=int, nargs="+", required=True, help="decoder layer ids")
+    layers = parser.add_mutually_exclusive_group(required=True)
+    layers.add_argument("--layers", type=int, nargs="+", help="decoder layer ids")
+    layers.add_argument("--all-layers", action="store_true", help="every decoder layer of the checkpoint")
     parser.add_argument("--workers", type=int, default=min(32, os.cpu_count()), help="worker processes")
     parser.add_argument("--dtype", default="bfloat4_b", help="ttnn dtype of the experts, as the test builds them")
     parser.add_argument("--cache-dir", default=CACHE_DIR)
@@ -135,6 +138,8 @@ def main():
 
     snapshot = resolve_snapshot_dir(args.model_dir)
     config = load_config(snapshot)
+    if args.all_layers:
+        args.layers = list(range(config.num_hidden_layers))
     bad = [i for i in args.layers if not 0 <= i < config.num_hidden_layers]
     if bad:
         parser.error(f"layers {bad} outside [0, {config.num_hidden_layers})")

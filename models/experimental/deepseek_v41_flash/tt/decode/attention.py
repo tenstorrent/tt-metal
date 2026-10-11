@@ -18,6 +18,10 @@ compressed path:
 A compressed layer attends ``[its ring | the selected rows]``. The selected rows are
 gathered by ``fused_lightning_select_kv`` into a buffer every layer of the group shares,
 so in each step the layers have to run in order. Compressed layers decode one user.
+
+SDPA reads a tiled ``[ring | selected]`` buffer the group shares (``sel_tile``). Its selected
+rows are refreshed only by a select; every compressed layer then copies its own tiled ring
+over rows ``[0, window)``.
 """
 
 import torch
@@ -96,6 +100,34 @@ class DeepSeekV41Indexer(DeepSeekV4Indexer):
             rectangle_b_grid=True,
             use_rm_hs=True,
         )
+
+
+class DeepSeekV41LayerCache(_StaticLayerCache):
+    """V4's layer cache plus V4.1's group buffers.
+
+    ``sel_tile`` is the TILE DRAM ``[1, 1, window + index_topk, Dh]`` SDPA reads. ``new_kv_row`` /
+    ``new_key_row`` are ROW_MAJOR DRAM ``[1, 1, 1, Dh]`` / ``[1, 1, 1, index_head_dim]``: the
+    compressed-KV row and index key the kv source wrote this step, carried to stages that select
+    from the group without holding its source. They are ``None`` where no such stage exists.
+    """
+
+    __slots__ = ("sel_tile", "new_kv_row", "new_key_row")
+
+    def __init__(self, sel_tile=None, new_kv_row=None, new_key_row=None, **kwargs):
+        super().__init__(**kwargs)
+        self.sel_tile = sel_tile
+        self.new_kv_row = new_kv_row
+        self.new_key_row = new_key_row
+
+
+def _stash_row(row: ttnn.Tensor, buffer: ttnn.Tensor) -> None:
+    """Copy the one-row ``row`` (any layout / memory) into the persistent ROW_MAJOR DRAM ``buffer``."""
+    dram = ttnn.to_memory_config(row, ttnn.DRAM_MEMORY_CONFIG)
+    rm = ttnn.to_layout(dram, ttnn.ROW_MAJOR_LAYOUT)
+    ttnn.copy(ttnn.reshape(rm, list(buffer.shape)), buffer)
+    if dram.buffer_address() != row.buffer_address():
+        ttnn.deallocate(dram)
+    ttnn.deallocate(rm)
 
 
 class DeepSeekV41Attention(DeepSeekV4Attention):
@@ -205,10 +237,23 @@ class DeepSeekV41Attention(DeepSeekV4Attention):
     def _write_index_key(self, latent, cos_win, sin_win, scache, entry) -> None:
         """``k_norm(wk(latent))``, RoPE'd at the group's position, into index-key row ``entry``."""
         k = self.index_k_norm(self.index_wk(ttnn.to_memory_config(latent, ttnn.DRAM_MEMORY_CONFIG)))
-        k = _one_row_per_user(_apply_rope(k, cos_win, sin_win, self.rot, self.rope_dim))
+        k = _apply_rope(k, cos_win, sin_win, self.rot, self.rope_dim)
+        if scache.new_key_row is not None:
+            _stash_row(k, scache.new_key_row)
+        k = _one_row_per_user(k)
         ttnn.experimental.paged_update_cache(
             scache.idx_key_cache, k, update_idxs_tensor=entry, page_table=scache.idx_page_table
         )
+        ttnn.deallocate(k)
+
+    def _write_received_key(self, scache, entry) -> None:
+        """Write the index key another stage's kv source sent (``scache.new_key_row``) into row ``entry``."""
+        k = _one_row_per_user(scache.new_key_row)
+        ttnn.experimental.paged_update_cache(
+            scache.idx_key_cache, k, update_idxs_tensor=entry, page_table=scache.idx_page_table
+        )
+        if k.buffer_address() != scache.new_key_row.buffer_address():
+            ttnn.deallocate(k)
 
     def decode(
         self,
@@ -227,13 +272,16 @@ class DeepSeekV41Attention(DeepSeekV4Attention):
         index_pos: ttnn.Tensor | None = None,
         pool: bool = False,
         select: bool = False,
+        received_entry: ttnn.Tensor | None = None,
     ) -> ttnn.Tensor:
         """One decode step: ``hidden`` ``[B, 1, 1, D]`` -> the block's output, same shape.
 
         The arguments are what :meth:`decode_inputs` builds for a position. ``pool`` closes a
         compressor group (``cos_win`` / ``sin_win`` its RoPE row, ``entry`` its index);
         ``select`` re-selects the top-k rows. Exactly one of ``sdpa_cur_pos`` / ``mask``
-        bounds the KV axis.
+        bounds the KV axis. ``received_entry`` (an index source on a stage without its kv
+        source, on a step the source pooled) writes the rows in ``scache.new_kv_row`` /
+        ``new_key_row`` at that index before selecting.
         """
         if self.compress_ratio == 0:
             return self.decode_static(
@@ -244,6 +292,7 @@ class DeepSeekV41Attention(DeepSeekV4Attention):
         tokens = ttnn.experimental.deepseek.all_gather_for_matmul(_pack_tokens(hidden), self._decode_activation_grid())
         latent = self._latent(tokens, scache, win_slot, pool) if self.is_kv_source else None
         assert latent is None or select, "a closed group is written by the select that follows it"
+        assert received_entry is None or (select and latent is None), "received rows are written by a non-source select"
         q, kv, q_a = self._qkv(tokens, cos, sin)
         _update_kv_at(scache.kv, kv, sliding_pos)
         ttnn.deallocate(kv)
@@ -255,13 +304,22 @@ class DeepSeekV41Attention(DeepSeekV4Attention):
             if latent is not None:
                 self._write_index_key(latent, cos_win, sin_win, scache, entry)
                 row = _apply_rope(latent, cos_win, sin_win, self.rot, self.rope_dim)
+                if scache.new_kv_row is not None:
+                    _stash_row(row, scache.new_kv_row)
+            elif received_entry is not None:
+                self._write_received_key(scache, received_entry)
+                row, entry = scache.new_kv_row, received_entry
             self.indexer.select_kv(tokens, q_a, cos, sin, scache, index_pos, new_row=row, new_row_index=entry)
+            if latent is not None:
+                ttnn.deallocate(row)
+            selected = ttnn.to_layout(scache.sel_kv, ttnn.TILE_LAYOUT, memory_config=ttnn.DRAM_MEMORY_CONFIG)
+            ttnn.copy(selected, scache.sel_tile)
+            ttnn.deallocate(selected)
             q = ttnn.to_memory_config(q, q_l1)
         ttnn.deallocate(q_a)
         ttnn.deallocate(tokens)
-        kv = self._selected_kv(scache, self.window)
-        out = self._attend(q, kv, mask, cos, neg_sin, sdpa_cur_pos=sdpa_cur_pos)
-        ttnn.deallocate(kv)
+        ttnn.fill_cache(scache.sel_tile, scache.kv, 0)
+        out = self._attend(q, scache.sel_tile, mask, cos, neg_sin, sdpa_cur_pos=sdpa_cur_pos)
         return ttnn.reshape(out, [b, s, 1, d])
 
     def decode_inputs(self, pos: int, cos_half: torch.Tensor, sin_half: torch.Tensor) -> dict:
@@ -344,6 +402,7 @@ def build_decode_caches(device, config, layers, max_seq: int) -> dict:
                         memory_config=ttnn.DRAM_MEMORY_CONFIG,
                     ),
                     sel_kv=zeros((1, 1, window + config.index_topk, dh), ttnn.ROW_MAJOR_LAYOUT),
+                    sel_tile=zeros((1, 1, window + config.index_topk, dh), ttnn.TILE_LAYOUT),
                 )
-        caches[i] = _StaticLayerCache(kv=zeros((1, 1, window, dh), ttnn.TILE_LAYOUT), **(shared[src] if r else {}))
+        caches[i] = DeepSeekV41LayerCache(kv=zeros((1, 1, window, dh), ttnn.TILE_LAYOUT), **(shared[src] if r else {}))
     return caches
