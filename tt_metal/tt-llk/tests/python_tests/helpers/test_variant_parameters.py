@@ -856,7 +856,7 @@ class UNPACKER_ENGINE_SEL(TemplateParameter):
 
 @dataclass
 class PACK_BLOCK_CONTIGUOUS(TemplateParameter):
-    """True packs a block with one _llk_pack_block_contiguous_ call, False with one standard _llk_pack_ per tile."""
+    """True packs a block with one block pack call, False with one standard pack per tile."""
 
     pack_block_contiguous: bool = True
 
