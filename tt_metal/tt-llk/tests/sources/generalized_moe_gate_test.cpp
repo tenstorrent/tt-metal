@@ -186,18 +186,14 @@ constexpr GeneralizedMoeGateEltwiseBinaryMode BINARY_MODE =
 #define GMG_SFPU_CALL(FN, TEMPLATES, ...) \
     SFPU_UNARY_CALL(dest_sync, is_fp32_dest_acc_en, FN, TEMPLATES, 0 /* dst_index */, VectorMode::RC_custom, ##__VA_ARGS__)
 
-// The gate's own passes, issued as generalized_moe_gate.h issues them.
 #ifndef GMG_SFPU_UNARY_CALL
 #define GMG_SFPU_UNARY_CALL SFPU_UNARY_CALL
 #endif
 #define GMG_SFPU_PASS(FN, TEMPLATES, ...) \
     GMG_SFPU_UNARY_CALL(dest_sync, is_fp32_dest_acc_en, FN, TEMPLATES, 0 /* dst_index */, VectorMode::RC_custom, ##__VA_ARGS__)
 
-// The FPU steps take no dst_index, they address whatever tile DEST_TARGET_REG_CFG_MATH_Offset holds.
-// In the op that is tile 0, because the eltwise binary ahead of them runs at dst_index 0 and leaves
-// it there, which is why run_gate does not call this. MOVE and RUN skip the binary and reach the steps
-// straight out of datacopies that walk all four tiles, so the offset would sit at tile 3. Put it back
-// so those modes exercise the steps under the offset the op actually gives them.
+// The steps address whatever tile the DEST offset holds; MOVE and RUN skip the binary that leaves it at tile 0, so
+// it is put back there as in the op.
 static inline void mop_dest_reset()
 {
     TTI_STALLWAIT(p_stall::STALL_CFG, p_stall::MATH | p_stall::SFPU1);
@@ -253,8 +249,6 @@ static inline void gmg_sanitize_scratch()
     }
 }
 
-// The gate's FPU steps as generalized_moe_gate.h issues them: directly on Blackhole, recorded and replayed elsewhere.
-// dest_reset puts the DEST offset back to tile 0 (MOVE and RUN modes) before the step issues its words.
 template <bool dest_reset = false>
 static inline void gmg_step0()
 {
@@ -421,8 +415,7 @@ static inline void run_placement()
 {
     if constexpr (GMG_PRE_COPY4ROWS)
     {
-        // An FPU step leaves the Dst RWC advanced by +64 per tile. The SFPU ops below each reset it
-        // on entry; without a step in front of them that reset is never needed and never tested.
+        // An FPU step leaves the Dst RWC advanced, so the SFPU ops' entry reset is exercised.
         gmg_copy4rows<GMG_ROW_SRC, GMG_ROW_DST, GMG_SRCB, true>();
     }
 

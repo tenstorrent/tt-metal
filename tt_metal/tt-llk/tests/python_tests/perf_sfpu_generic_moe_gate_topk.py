@@ -23,7 +23,6 @@ pytestmark = [skip_for_wormhole, skip_for_quasar]
 
 BF16 = DataFormat.Float16_b
 
-# (selected experts, normalise, stage)
 VARIANTS = [
     (8, False, 1),
     (8, True, 1),

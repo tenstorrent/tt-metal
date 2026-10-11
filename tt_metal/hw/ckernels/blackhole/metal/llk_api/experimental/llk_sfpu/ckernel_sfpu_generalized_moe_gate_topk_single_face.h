@@ -90,7 +90,6 @@ inline void generalized_moe_gate_topk_init() {
 }  // namespace sfpu
 }  // namespace ckernel
 
-// SFPU_UNARY_CALL for the gate's own passes; where this is not defined, generalized_moe_gate.h uses SFPU_UNARY_CALL.
 #define GMG_SFPU_UNARY_CALL(DST_SYNC, DST_ACCUM, FN, TEMPLATES, DST_IDX, VECTOR_MODE, ...) \
     (::ckernel::_sfpu_check_<DST_SYNC>(DST_IDX, VECTOR_MODE),                              \
      ::ckernel::sfpu::_generalized_moe_gate_sfpu_params_(                                  \

@@ -34,7 +34,6 @@ pytestmark = [skip_for_wormhole, skip_for_quasar]
 
 FORMATS = InputOutputFormat(DataFormat.Float16_b, DataFormat.UInt16)
 
-# (grouped, stage, approximate reciprocal)
 VARIANTS = [
     (grouped, stage, ApproximationMode.No)
     for grouped in (False, True)
