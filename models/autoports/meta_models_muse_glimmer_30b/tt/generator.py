@@ -13,7 +13,11 @@ from collections import Counter
 from contextlib import contextmanager
 
 import torch
-from readiness_check.contract import Generator
+
+try:
+    from readiness_check.contract import Generator
+except ImportError:  # Serving images (TTI/CI) do not ship the bring-up runtime.
+    from models.autoports.meta_models_muse_glimmer_30b.tt.readiness_contract import Generator
 from transformers import TokenizersBackend
 
 import ttnn
