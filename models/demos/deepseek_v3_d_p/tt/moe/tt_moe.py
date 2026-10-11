@@ -44,6 +44,11 @@ _MOE_MEM_PROBE = os.environ.get("MOE_MEM_PROBE") == "1"
 # to 32-bit DEST, scaled by weight * row scale on the SFPU; 1x32 scales: 32 tokens' local slots tilized and scaled
 # with column-broadcast multiplies. MOE_FUSED_DQ2=0 or 64/128-wide scales use the standalone per_token_cast_back.
 _MOE_FUSED_DQ2 = os.environ.get("MOE_FUSED_DQ2", "1") == "1"
+# Split shared expert (with the dispatch / shared-expert overlap): gate/up/GLU run beside dispatch and the down
+# projection + reduce-scatter run beside combine, in a second sub-device window. Default on for the fp8 dispatch
+# wire, whose dispatch (~325 us) is shorter than the whole shared expert (~520 us); the bf16 dispatch (~580 us) is
+# longer, so there the split only adds a window. MOE_SPLIT_SHARED=1 / 0 forces it.
+_MOE_SPLIT_SHARED = os.environ.get("MOE_SPLIT_SHARED")
 # 1x32 fp8 dispatch under LatentMoE: Q1 on each chip's to_latent slice before the all-gather (MOE_Q1_PRE_GATHER=0:
 # gather bf16, then quantize the full latent).
 _MOE_Q1_PRE_GATHER = os.environ.get("MOE_Q1_PRE_GATHER", "1") == "1"
@@ -1007,8 +1012,16 @@ class TtMoe(LightweightModule):
         # ========================================
         # Shared expert expects replicated input (full emb_dim)
         # Convert x to TILE_LAYOUT for shared expert
-        shared_output = self.shared_expert(x)
-        if DEBUG_LOGGING_ENABLED:
+        split_shared = self.overlap_shared_expert_with_dispatch and (
+            _MOE_SPLIT_SHARED == "1" if _MOE_SPLIT_SHARED is not None else self.dispatch_fp8
+        )
+        if split_shared:
+            # Down projection + reduce-scatter run later, beside combine (second sub-device window).
+            shared_activated = self.shared_expert.forward_front(x)
+            shared_output = None
+        else:
+            shared_output = self.shared_expert(x)
+        if DEBUG_LOGGING_ENABLED and shared_output is not None:
             logger.debug(f"[TtMoe.forward] Shared expert output shape: {shared_output.shape}")
 
         if self.overlap_shared_expert_with_dispatch:
@@ -1155,12 +1168,34 @@ class TtMoe(LightweightModule):
                 # Combine reads the packed copy; the bf8 expert buffer is dead.
                 ttnn.deallocate(expert_outputs)
             mem_mark("after_q2")
-        combined_output = self.combine_module(
-            combine_input,
-            metadata,
-            tt_expert_token_counts,
-            tt_expert_region_offsets,
-        )
+        if split_shared:
+            # Second overlap window: combine (fabric-bound, dispatch strip) beside the shared expert's down
+            # projection + reduce-scatter (shared strip). Combine is enqueued first so buffers the shared half
+            # frees can only be reused by work enqueued after this window.
+            if self._trace_controller is not None:
+                self._trace_controller.sub_device_load(self.sd_manager_id)
+            else:
+                self.mesh_device.load_sub_device_manager(self.sd_manager_id)
+            combined_output = self.combine_module(
+                combine_input,
+                metadata,
+                tt_expert_token_counts,
+                tt_expert_region_offsets,
+                subdevice_id=self.dispatch_sd_id,
+            )
+            shared_output = self.shared_expert.forward_back(shared_activated)
+            shared_activated = None
+            if self._trace_controller is not None:
+                self._trace_controller.sub_device_clear()
+            else:
+                self.mesh_device.clear_loaded_sub_device_manager()
+        else:
+            combined_output = self.combine_module(
+                combine_input,
+                metadata,
+                tt_expert_token_counts,
+                tt_expert_region_offsets,
+            )
         mem_mark("after_combine")
         if self.combine_fp8:
             ttnn.deallocate(combine_input)

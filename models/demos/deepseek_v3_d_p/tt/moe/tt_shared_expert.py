@@ -496,15 +496,15 @@ class TtSharedExpert(LightweightModule):
         torch_weight = torch.randn(*shape, dtype=torch.float32)
         return self._to_sharded_ttnn(torch_weight, dims, name, dtype)
 
-    def forward(self, x: ttnn.Tensor) -> ttnn.Tensor:
+    def forward_front(self, x: ttnn.Tensor) -> ttnn.Tensor:
         """
-        Forward pass with multi-chip sharding and CCL.
+        Gate and up projections and the GLU activation (the first half of the shared expert).
 
         Args:
             x: Input tensor [batch, seq_len, emb_dim] (replicated across mesh columns)
 
         Returns:
-            Output tensor [batch, seq_len, emb_dim / num_devices]
+            The activated tensor that forward_back consumes.
         """
         batch_size = x.shape[0]
         if DEBUG_LOGGING_ENABLED:
@@ -555,6 +555,8 @@ class TtSharedExpert(LightweightModule):
             fuse_silu=self.activation == ACTIVATION_SILU,
         )
 
+        self._down_program_config = down_program_config
+
         # 1) Compute gate and up projections
         gate_out = ttnn.matmul(
             x,
@@ -592,6 +594,17 @@ class TtSharedExpert(LightweightModule):
             ttnn.multiply_(gate_out, up_out, sub_core_grids=self.subdevice_cores)
             ttnn.deallocate(up_out)
             activated = gate_out
+
+        return activated
+
+    def forward(self, x: ttnn.Tensor) -> ttnn.Tensor:
+        """Full shared expert: forward_front (gate, up, GLU) then forward_back (down, reduce-scatter)."""
+        return self.forward_back(self.forward_front(x))
+
+    def forward_back(self, activated: ttnn.Tensor) -> ttnn.Tensor:
+        """Down projection and TP reduce-scatter of forward_front's output. The MoE can run this half beside
+        combine (a second sub-device window) while forward_front runs beside dispatch."""
+        down_program_config = self._down_program_config
 
         # 3) Compute down projection
         output_full = ttnn.matmul(

@@ -106,9 +106,12 @@ class TtCombineModule(LightweightModule):
         expert_token_counts: ttnn.Tensor,
         expert_region_offsets: ttnn.Tensor,
         seq_len_per_chip=None,
+        subdevice_id=None,
     ):
         """
         Route expert-processed tokens back to origin devices and accumulate weighted contributions.
+        subdevice_id: run on that sub-device's cores (the MoE overlaps combine with the shared expert's
+        down projection when its 2-sub-device manager is loaded); None = the whole grid.
 
         For each expert slot in dispatched_buffer, the kernel reads the corresponding metadata
         entry to determine the origin device, original token index, top-k slot, and router weight.
@@ -163,6 +166,7 @@ class TtCombineModule(LightweightModule):
             init_zeros=self.init_zeros,
             use_fp8_combine=self.fp8_output,
             fp8_scaled_combine=self.fp8_scaled,
+            subdevice_id=subdevice_id,
         )
 
         return output

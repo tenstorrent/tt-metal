@@ -25,7 +25,7 @@ kernel time (`scripts/run_safe_pytest.sh --profile`, `K3_PERF_ITERS=1`), median 
 
 | | bf16 wire | fp8 1×32 now | Δ |
 |---|---|---|---|
-| **T_moe (traced)** | **4.93 ms** | **4.98–5.00 ms** | **+0.05 ms** |
+| **T_moe (traced)** | **4.93 ms** | **4.80 ms** (split shared expert) | **−0.14 ms** |
 | dispatch | 582 µs | 325 µs (one packet per token-expert) | −257 |
 | combine | 417 µs | 375 µs | −42 |
 | post_combine_reduce (DQ2 fused) | 196 µs | 141 µs | −55 |
@@ -40,7 +40,7 @@ The wire now saves ~160 µs and the three standalone passes cost ~211 µs.
 
 | Goal | Target | Status |
 |---|---|---|
-| **G1 (headline)** fp8 traced T_moe beats bf16 at Galaxy load | ≤ 4.80 ms, final_output PCC ≥ 0.994 | 4.98–5.00 ms vs bf16 4.93 ms (same-day rerun) |
+| **G1 (headline)** fp8 traced T_moe beats bf16 at Galaxy load | ≤ 4.80 ms, final_output PCC ≥ 0.994 | met: 4.795 ms p50 (min 4.773), PCC 0.99404; bf16 4.93 ms |
 | **G2** Q2 | was: fused in the expert epilogue. Measured: expert +~300 µs vs ~106 µs standalone (see below), so Q2 stays standalone; target ≤ 60 µs | standalone ~106 µs; epilogue parked |
 | **G3** Q1 before the latent all-gather | Q1 on each chip's slice; fp8 gather | done: Q1 27 → 14 µs, gather 87 → 67 µs |
 | **G4** DQ1 | ≤ 90 µs; full fusion only with a shared-tilize expert | 91 µs, reads the segmented rows |
@@ -65,10 +65,16 @@ the measured gap. Running DQ1 on the dispatch sub-device inside that window woul
 compute-bound, ~22 µs per 28-tile unit), which slows the shared expert by about what it saves. DQ1 at LoFi is exact
 but unchanged (bound by unpack/pack, not math).
 
+**Split shared expert (2026-10-11): G1 met.** The shared expert (~517 µs: gate 84, up 84, GLU ~64, down 105,
+reduce-scatter 180) set the dispatch window while combine (~375 µs, fabric-bound) ran with the compute grid idle.
+Now its gate/up/GLU run beside dispatch and its down + reduce-scatter beside combine, in a second sub-device
+window (combine on the dispatch strip, enqueued first so the shared half's frees are only reused after the window).
+fp8 traced 4.98 → **4.795 ms** (p50 of 20, min 4.773), PCC unchanged (final 0.99404). bf16 is better unsplit
+(4.934 vs 4.994 ms: its 580 µs dispatch outlasts the whole shared expert), so the split defaults on only for the
+fp8 dispatch wire (`MOE_SPLIT_SHARED=1/0` forces it).
+
 **Status of the goals that remain open.**
-- G1 (≤ 4.80 ms on the LB): blocked by the structure above. On the LB the remaining fp8 costs can only be cut by
-  making the casts cheaper; each is now bound by data movement or unpack/pack per tile. The Galaxy (more dispatch
-  hops, where dispatch is not hidden) is where the fp8 wire is expected to pay.
+- G1: met on the LB (above).
 - G2 (standalone Q2 ≤ 60 µs): not met, ~106 µs; compute (~1000 cycles per tile) and the writer's scale
   extraction are balanced at ~70–80 µs per core.
 - G6 (Galaxy run): needs the 8×4 hardware.
