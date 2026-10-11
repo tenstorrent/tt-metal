@@ -122,8 +122,7 @@ inline void _llk_math_sdpa_custom_mm_reuse_dest_srcb_(
     static_assert(input_granularity >= 1, "input_granularity must be >= 1");
     constexpr std::uint32_t SFPU_FPU = ckernel::semaphore::UNPACK_MATH_DONE;
     std::uint32_t dest_buffer_base   = get_dest_buffer_base();
-    // MOVD2B reads DEST row (row field + DEST target + RWC) modulo the 1024 rows, so with the target on the accumulator
-    // the per-k-tile source row rides in the moves wherever the source sits.
+    // MOVD2B reads DEST row (row field + DEST target + RWC) modulo the 1024 rows, so the source row rides in the moves.
     const std::uint32_t src_offset = src_index - dst_index;
     TTI_STALLWAIT(p_stall::STALL_MATH, p_stall::WAIT_SFPU | p_stall::MATH | p_stall::SRCB_VLD);
     TT_SETC16(DEST_TARGET_REG_CFG_MATH_Offset_ADDR32, dst_index + dest_buffer_base);

@@ -70,7 +70,6 @@ from ttexalens.tt_exalens_lib import write_to_device
 
 pytestmark = [skip_for_wormhole, skip_for_quasar]
 
-# Depth of a Tensix semaphore (ckernel_structs.h: SEMAPHORE_BIT_COUNT 4).
 SEMAPHORE_MAX_VALUE = 15
 
 # ttsim functional gap (NOT a golden/driver defect).
@@ -173,8 +172,8 @@ def _pack_in1(
     (llk_unpack_AB_sdpa_custom_mm.h ``_llk_unpack_AB_sdpa_custom_mm_``):
       * read_transposed=False: contiguous read (block_increment == inner_increment ==
         tile_size), i.e. the walk reads tile linear-index ``k*ct + c`` -> pack K-MAJOR.
-      * read_transposed=True: block_increment = row_stride*tile_size for ct_dim > 1 (tile_size
-        for ct_dim == 1, as inner_increment), inner_increment =
+      * read_transposed=True: block_increment = row_stride*tile_size (tile_size for ct_dim == 1),
+        inner_increment =
         -(((ct-1)*row_stride)-1)*tile_size, so the walk reads ``c*row_stride + k``
         -> pack C-MAJOR (outer c, inner k) so the transposed read reconstructs the exact
         same [K,N] matrix and the golden stays A@B. (The buffer, not the golden, absorbs
@@ -355,8 +354,8 @@ def test_sdpa_custom_mm(request, shape):
     shape=SHAPES,
 )
 def test_sdpa_custom_mm_read_transposed(request, shape):
-    """read_transposed=True changes the SrcA L1 read order (block_increment = kt*tile for
-    ct_dim > 1, one tile for ct_dim == 1, inner_increment jumps back one tile), so the walk reads tile linear-index ``c*kt + k``
+    """read_transposed=True changes the SrcA L1 read order (block_increment = kt*tile,
+    inner_increment jumps back one tile), so the walk reads tile linear-index ``c*kt + k``
     instead of ``k*ct + c``. ``_pack_in1`` packs the buffer C-MAJOR to match, so the
     transposed read reconstructs the same [K,N] matrix and the golden stays A@B -- the
     buffer, not the golden, absorbs the transpose. Exercises the read_transposed unpack
@@ -374,8 +373,8 @@ def test_sdpa_custom_mm_read_transposed(request, shape):
         ((2, 64, 64), 2),  # sg == ct : fast path
         ((8, 256, 128), 2),  # sg = 2, ct = 4 : per-2-c-tile cadence
         ((8, 256, 128), 4),  # sg == ct : fast path
-        ((8, 256, 480), 1),  # ct = 15 posts per call, the semaphore limit
-        ((8, 256, 512), 2),  # ct = 16, 8 posts per call
+        ((8, 256, 480), 1),  # ct = 15, the semaphore limit
+        ((8, 256, 512), 2),  # ct = 16
     ],
 )
 def test_sdpa_custom_mm_signal_granularity(request, shape_sg):
@@ -393,7 +392,6 @@ def test_sdpa_custom_mm_signal_granularity(request, shape_sg):
 
 
 def test_sdpa_custom_mm_rejects_semaphore_overflow():
-    """The driver refuses more FPU_SFPU posts per call than the 4-bit semaphore holds; no hardware needed."""
     with pytest.raises(  # allow-pytest.raises: no expect_error fixture in LLK suite
         ValueError, match="posts per call exceed"
     ):

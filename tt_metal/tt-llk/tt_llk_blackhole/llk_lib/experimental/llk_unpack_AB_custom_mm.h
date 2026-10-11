@@ -74,8 +74,7 @@ inline void _llk_unpack_AB_custom_mm_iter_insns(const bool post1)
     }
 }
 
-// The reuse blocks sit at replay entries 5 to 31 of the custom_mm program; the sdpa_custom_mm reuse_dest_srcb unpack
-// runs the same blocks there, so it can share a program a custom_mm init recorded.
+// The sdpa_custom_mm reuse_dest_srcb unpack runs these blocks at the same replay entries, so it can share a recorded program.
 constexpr std::uint32_t CUSTOM_MM_REUSE_BLOCKS_OFFSET = 5;
 constexpr std::uint32_t CUSTOM_MM_REUSE_BLOCKS_LEN    = 27;
 

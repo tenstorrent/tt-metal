@@ -61,8 +61,8 @@ ALWI void sdpa_custom_mm_reuse_dest_srcb_block_init(
     PACK((llk_pack_dest_init<DST_ACCUM_MODE, ckernel::PackMode::Default>(out_cb_id)));
 }
 
-// load_replay = false reuses the unpack replay program of a sdpa_custom_mm_block_init_short with no other unpack init
-// since, whose reuse blocks this op runs.
+// load_replay = false reuses the replay program a sdpa_custom_mm_block_init_short recorded, with no other unpack init
+// since.
 template <bool load_replay = true>
 ALWI void sdpa_custom_mm_reuse_dest_srcb_block_init_short(
     std::uint32_t in0_cb_id,
@@ -89,8 +89,6 @@ ALWI void sdpa_custom_mm_reuse_dest_srcb_block_init_short(
  * Runtime parameter signal_output:
  *   false (default): Normal operation without signaling
  *   true: Signal SFPU semaphore for pipelining with subsequent operations
- *
- * With signal_output, nt_dim / output_granularity FPU->SFPU posts per call must fit the 4-bit Tensix semaphore (15).
  *
  * Usage pattern for partial K:
  *   for (k = 0; k < num_k_subblocks - 1; k++) {

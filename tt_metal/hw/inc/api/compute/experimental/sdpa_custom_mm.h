@@ -58,7 +58,7 @@ ALWI void sdpa_custom_mm_block_init_short(
 // the Q operand's face height before the subsequent matmul unpack.
 // row_stride is the number of in1 tiles per stored row when read_transposed;
 // zero uses kt_dim, keeping the contraction width and stored row width equal.
-// ct_dim / signal_granularity FPU->SFPU posts per call must fit the 4-bit Tensix semaphore (at most 15).
+// ct_dim / signal_granularity posts per call must fit the 4-bit semaphore (15).
 template <
     bool read_transposed = false,
     std::uint32_t signal_granularity = 1,

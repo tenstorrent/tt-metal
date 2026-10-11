@@ -17,9 +17,9 @@
 using namespace ckernel;
 using namespace ckernel::unpacker;
 
-// load_replay = false runs the reuse blocks where the custom_mm init records them, at the end of its 32-entry program.
+// load_replay = false runs the reuse blocks where the custom_mm init records them, at the end of its program.
 static_assert(CUSTOM_MM_REUSE_BLOCKS_OFFSET + CUSTOM_MM_REUSE_BLOCKS_LEN == 32, "reuse blocks must end the custom_mm replay program");
-// Each half of a k-row runs at most the 8 block_increment reuse blocks.
+// Each half of a k-row runs at most the 8 block_increment blocks.
 constexpr std::uint32_t SDPA_CUSTOM_MM_REUSE_MAX_NT_DIM = 16;
 
 // SDPA_CUSTOM_MM_REUSE_DEST_SRCB
@@ -104,8 +104,7 @@ inline void _llk_unpack_AB_sdpa_custom_mm_reuse_dest_srcb_mop_config_(const std:
     TTI_MOP_CFG(0);
 }
 
-// load_replay = false: the replay buffer still holds a custom_mm unpack program (the Q K^T init of the same SDPA chunk
-// recorded it), whose reuse blocks this MOP runs.
+// load_replay = false: the replay buffer still holds a custom_mm unpack program whose reuse blocks this MOP runs.
 template <bool load_replay = true>
 __attribute__((always_inline)) inline void _llk_unpack_AB_sdpa_custom_mm_reuse_dest_srcb_init_(
     const std::uint32_t nt_dim = 1, const std::uint32_t unpA_face_r_dim = FACE_R_DIM, const std::uint32_t unpA_num_faces = 4)

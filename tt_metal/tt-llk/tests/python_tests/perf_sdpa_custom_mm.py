@@ -1,8 +1,7 @@
 # SPDX-FileCopyrightText: © 2026 Tenstorrent AI ULC
 # SPDX-License-Identifier: Apache-2.0
 
-"""Perf sweep of the Blackhole sdpa_custom_mm LLK (sources/sdpa_custom_mm_perf.cpp, the perf twin of
-test_sdpa_custom_mm.py); the per-tile figures are per K (in1) tile."""
+"""sdpa_custom_mm perf sweep; the per-tile figures are per K (in1) tile."""
 
 import pytest
 from conftest import skip_for_quasar, skip_for_wormhole
@@ -23,11 +22,9 @@ from helpers.test_variant_parameters import (
 pytestmark = [skip_for_wormhole, skip_for_quasar]
 
 BF16 = DataFormat.Float16_b
-# Depth of a Tensix semaphore (ckernel_structs.h: SEMAPHORE_BIT_COUNT 4).
 SEMAPHORE_MAX_VALUE = 15
 
-# (ct, kt, signal_granularity, transposed K): granularity 1 (the DeepSeek decode cadence) against one post per call, at
-# ct 1 to 16, and FlashMLA decode's Q K^T call (k chunk 4 tiles, head_dim 576, K read transposed).
+# (ct, kt, signal_granularity, transposed K)
 CALL_SHAPES = [
     (ct, kt, sg, False)
     for ct in (1, 4, 8, 16)
@@ -39,7 +36,6 @@ CALL_SHAPES = [
 
 @pytest.mark.perf
 @parametrize(
-    # FlashMLA reads K from its Bfp8_b KV cache.
     in1_format=[DataFormat.Float16_b, DataFormat.Bfp8_b],
     call_shape=CALL_SHAPES,
 )
@@ -62,7 +58,7 @@ def test_perf_sdpa_custom_mm(perf_report, in1_format, call_shape):
             ),
         ],
         runtimes=[
-            # in1 (SrcA) has 4 full faces; in0 (SrcB) and the result have 2 faces of M rows.
+            # in1 (SrcA) has 4 full faces; in0 (SrcB) and the result have 2.
             NUM_FACES(num_faces=2, num_faces_A=4, num_faces_B=2),
             IN_FACE_DIMS(in0_face_r_dim=8),
             TILE_COUNT(kt * ct),
