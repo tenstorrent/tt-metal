@@ -157,7 +157,7 @@ inline void llk_unpack_A_block(
 
     // Three or more tiles: one context acquire per block; one or two are cheaper per tile after a copy_init.
     if constexpr ((BType == BroadcastType::NONE) && !acc_to_dest && (binary_reuse_dest == EltwiseBinaryReuseDestType::NONE)) {
-        // Unpack to dest into a 32-bit DEST: two or more four-face tiles take one handshake, as the math thread decides it.
+        // Two or more four-face tiles take one handshake, as the math thread decides.
         if constexpr (DST_ACCUM_MODE && unpack_to_dest) {
             if (ntiles >= 2 &&
                 should_unpack_to_dest(unpack_to_dest, unpack_src_format[operand_id], unpack_dst_format[operand_id]) &&
@@ -218,8 +218,7 @@ inline void llk_unpack_A_block(
     }
 }
 
-// ntiles tiles of each operand, from its tile index on, into consecutive DEST slots with one unpack-to-dest handshake
-// (four-face 32-bit tiles of one format, a 32-bit DEST), operand by operand. The math thread takes them as one block.
+// Four-face 32-bit tiles of one format take one unpack-to-dest handshake for all operands; the math thread takes them as one block.
 template <std::uint32_t num_operands, bool is_fp32_dest_acc_en = DST_ACCUM_MODE>
 inline void llk_unpack_A_operands_to_dest(
     const std::uint32_t (&operands)[num_operands],

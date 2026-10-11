@@ -202,8 +202,8 @@ inline void switch_config_context_from(const std::uint32_t context_used)
     }
 }
 
-// Which block body the replay buffer holds: the inits clear it (the tilize init records its body and sets it), the unpack A block
-// call records the half of its context. An unpack A value is the face count, with a half bit while only that half is held.
+// Which block body the replay buffer holds: the inits clear it, the tilize init and the unpack A block call record theirs.
+// An unpack A value is the face count, with a half bit while only that half is held.
 enum class BlockReplayBody : std::uint8_t
 {
     None      = 0,
@@ -998,8 +998,7 @@ inline void config_unpacker_x_end(const std::uint32_t face_r_dim)
     }
 }
 
-// Wait for the math thread's MATH_DONE post for this tile (math_unpack_to_dest_math_ready) and consume it: the unpack stall holds the
-// MOP's UNPACRs until then and the sync stall keeps the SEMGET behind the wait. The count alternates between 0 and 1.
+// Wait for the math thread's post for this tile and consume it: the unpack stall holds the MOP's UNPACRs, the sync stall the SEMGET.
 inline void wait_for_dest_available()
 {
     TTI_SEMWAIT(p_stall::STALL_SYNC | p_stall::STALL_UNPACK, semaphore::t6_sem(semaphore::MATH_DONE), p_stall::STALL_ON_ZERO);

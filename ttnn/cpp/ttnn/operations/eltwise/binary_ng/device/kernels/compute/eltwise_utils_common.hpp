@@ -94,7 +94,6 @@ static_assert(
 
 #if defined(ARCH_BLACKHOLE)
 #include "api/compute/tile_move_copy.h"
-// copy_tile whose unpack call polls the context semaphore first (the opt-in form of _llk_unpack_A_)
 ALWI void copy_tile_early_poll(uint32_t in_cb_id, uint32_t in_tile_index, uint32_t dst_tile_index) {
     LLK_SAN_FUNCTION();
     UNPACK((llk_unpack_A<BroadcastType::NONE, false, EltwiseBinaryReuseDestType::NONE, UnpackToDestEn, true>(
@@ -115,8 +114,7 @@ constexpr bool l1_format_is_32bit() {
            format == static_cast<uint32_t>(DataFormat::UInt32);
 }
 
-// The operands' copies can share one unpack-to-dest handshake: four-face 32-bit tiles of one format that the per tile
-// copy unpacks into a 32-bit DEST (unpack and math only).
+// Four-face 32-bit tiles of one format share one unpack-to-dest handshake (unpack and math only).
 template <uint32_t cb_first, uint32_t... cbs>
 constexpr bool operands_to_dest() {
 #if defined(UCK_CHLKC_PACK)
@@ -130,8 +128,7 @@ constexpr bool operands_to_dest() {
 #endif
 }
 
-// ntiles tiles of each operand, from its tile index on, into consecutive DEST slots from dst_tile_index on, operand by
-// operand, under one unpack-to-dest handshake (operands_to_dest, after copy_init of the first operand)
+// Copies ntiles tiles of each operand into consecutive DEST slots under one unpack-to-dest handshake (after copy_init of the first operand).
 template <uint32_t num_operands>
 ALWI void copy_operands_to_dest(
     const uint32_t (&in_cb_ids)[num_operands],

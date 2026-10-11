@@ -30,11 +30,11 @@ constexpr std::uint32_t dest_reuse_dummy_unpack()
     return TT_OP_UNPACR_NOP(source, 0, 0, p_unpacr_nop::SET_DVALID, 0, p_unpacr_nop::WAIT_LIKE_UNPACR, 0, 0, p_unpacr_nop::UNP_ZEROSRC);
 }
 
-// Block unpack of the plain SrcA datacopy path: _llk_unpack_A_block_ replays a recorded per tile body once per tile from one context
-// acquire. The body first adds the tile stride (SCRATCH_SEC0) to the base address register of its context; half 0 is context 0, half 1 context 1.
+// _llk_unpack_A_block_ replays this per tile body from one context acquire; it adds the tile stride (SCRATCH_SEC0) to the
+// base address register of its context (half 0 is context 0, half 1 context 1).
 constexpr std::uint32_t block_replay_half_len(const std::uint32_t num_faces)
 {
-    return 2 + 2 * num_faces; // CFGSHIFTMASK, SETADCZW, then UNPACR + SrcB dvalid NOP per face
+    return 2 + 2 * num_faces;
 }
 
 // The replay record takes start and length as immediates: one instantiation per legal face count.
@@ -47,9 +47,8 @@ inline void load_block_replay_half()
         block_replay_half_len(num_faces),
         []
         {
-            // base address += SCRATCH_SEC0 (the tile stride)
             TTI_CFGSHIFTMASK(1, 0b011, 32 - 1, 0, 0b11, base_address_reg);
-            // ch0 Z = 0; also the one instruction between the config write and the UNPACR that consumes it
+            // Also the one instruction between the config write and the UNPACR that consumes it
             TTI_SETADCZW(p_setadc::UNP_A, 0, 0, 0, 0, 0b0001);
             for (std::uint32_t face = 0; face < num_faces; ++face)
             {
@@ -535,14 +534,12 @@ inline void _llk_unpack_A_(const std::uint32_t address, const std::uint32_t unpa
 }
 
 /**
- * @brief Unpack a block of consecutive tiles (operand A) from L1 into SrcA with one context acquire: a per tile body, recorded in the
- *        replay buffer at the first call of each context after an init, is replayed once per tile, the base address advanced by the stride in the stream.
+ * @brief Unpack consecutive tiles (operand A) into SrcA with one context acquire, replaying a recorded per tile body.
  *
  * @tparam BType: Broadcast type, must be NONE.
  * @tparam acc_to_dest: Must be false.
  * @tparam binary_reuse_dest: Must be NONE.
- * @tparam unpack_to_dest: Unpack directly into the dest register (32-bit datums): with a 32-bit DEST, four-face tiles take one DEST
- *         slot handshake per block; otherwise the per tile calls.
+ * @tparam unpack_to_dest: Unpack directly into DEST (32-bit datums); with a 32-bit DEST, four-face tiles take one slot handshake per block.
  * @tparam is_fp32_dest_acc_en: DEST holds 32-bit datums; the math thread's block call must receive the same value.
  * @param address: L1 address of the first tile of the block (16 B units).
  * @param num_tiles: Number of consecutive tiles, at least 1.
@@ -551,8 +548,7 @@ inline void _llk_unpack_A_(const std::uint32_t address, const std::uint32_t unpa
  * @param unpack_dst_format: Destination data format the operand is converted to.
  * @param num_faces: Faces per tile, the value the init received through its tensor shape.
  * @param face_r_dim: Rows per face.
- * @note Call @ref _llk_unpack_A_init_ with matching template args and transpose_of_faces 0 before this function. On the unpack to
- *       dest path the math thread takes the same block through @ref _llk_math_eltwise_unary_datacopy_block_.
+ * @note Call @ref _llk_unpack_A_init_ with matching template args and transpose_of_faces 0 first; on unpack to dest the math thread takes the block through @ref _llk_math_eltwise_unary_datacopy_block_.
  */
 template <
     BroadcastType BType                          = BroadcastType::NONE,
@@ -579,8 +575,7 @@ inline void _llk_unpack_A_block_(
 
     if (should_unpack_to_dest(unpack_to_dest, unpack_src_format, unpack_dst_format))
     {
-        // Four-face tiles lie back to back in L1 and in DEST: one DEST slot handshake for the block, the MOP once per tile, its Z
-        // counters walking from tile to tile. A 16-bit DEST and other face counts take the per tile calls.
+        // Four-face tiles lie back to back in L1 and DEST: one slot handshake per block, the MOP once per tile with its Z counters walking on.
         if (!is_fp32_dest_acc_en || num_faces != 4)
         {
             for (std::uint32_t tile = 0; tile < num_tiles; ++tile)
@@ -616,14 +611,13 @@ inline void _llk_unpack_A_block_(
     TTI_STALLWAIT(p_stall::STALL_CFG, p_stall::THCON);
     TTI_WRCFG(p_gpr_unpack::TMP0, p_cfg::WRCFG_32b, SCRATCH_SEC0_val_ADDR32);
 
-    // Context acquire as in _llk_unpack_A_
     std::uint32_t contexts_in_use = semaphore_read(semaphore::UNPACK_SYNC);
     TTI_SETADCZW(0b011, 0, 0, 0, 0, 0b1111); // Clear z/w start counters
     volatile std::uint32_t tt_reg_ptr *cfg = get_cfg_pointer();
     std::uint32_t context                  = unp_cfg_context;
     const std::uint32_t upk0_reg           = (context == 0) ? THCON_SEC0_REG3_Base_address_ADDR32 : THCON_SEC0_REG3_Base_cntx1_address_ADDR32;
 
-    // Each context replays its own half: record it at the first block call of that context after an init (every init clears the record).
+    // Each context replays its own half: record it at the first block call per context after an init.
     const std::uint8_t record = static_cast<std::uint8_t>(block_replay_body());
     if (__builtin_expect(record != num_faces, 0))
     {
@@ -676,11 +670,9 @@ inline void _llk_unpack_A_block_(
 }
 
 /**
- * @brief Unpack num_tiles four-face 32-bit tiles of each operand, operand by operand, into consecutive DEST slots with one DEST
- *        slot handshake; every operand has the same formats and its tiles back to back in L1.
+ * @brief Unpack num_tiles four-face 32-bit tiles of each operand into consecutive DEST slots with one slot handshake, operand by operand.
  *
- * @tparam is_fp32_dest_acc_en: DEST holds 32-bit datums; the math thread takes the num_operands * num_tiles tiles as one
- *         block through @ref _llk_math_eltwise_unary_datacopy_block_.
+ * @tparam is_fp32_dest_acc_en: DEST holds 32-bit datums; the math thread takes all tiles as one block via @ref _llk_math_eltwise_unary_datacopy_block_.
  * @tparam num_operands: Operands, at least 2.
  * @param addresses: L1 address of each operand's first tile (16 B units).
  * @param num_tiles: Tiles per operand, at least 1.

@@ -130,7 +130,7 @@ DATACOPY_SUB_BYTE_SWEEP = dict(
     input_dimensions=[[32, 32], [64, 64], [32, 256], [128, 256]],
 )
 
-# The shape whose DEST blocks are full (8 tiles at 16 bit, 4 at 32 bit). Shared with perf_eltwise_unary_datacopy.py.
+# The shape whose DEST blocks are full (8 tiles at 16 bit, 4 at 32 bit).
 DATACOPY_BLOCK_SWEEP = dict(
     formats=DATACOPY_FORMATS,
     dest_acc=get_valid_dest_accumulation_modes,

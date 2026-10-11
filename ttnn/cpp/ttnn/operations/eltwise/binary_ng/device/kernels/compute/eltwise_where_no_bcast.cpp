@@ -23,8 +23,7 @@ constexpr bool kIsFloat = !kIsInt;
 constexpr DataFormat kWhereDF = DataFormat::WHERE_DATA_FORMAT;
 
 #if defined(ARCH_BLACKHOLE)
-// Condition and tensor of a tile under one unpack-to-dest handshake: the tensor to reg 1 and the scalar to reg 2 in
-// both variants
+// Condition and tensor of a tile share one unpack-to-dest handshake: tensor to reg 1 and scalar to reg 2 in both variants
 template <uint32_t cb_cond, uint32_t cb_tensor, uint32_t cb_out, uint32_t block>
 ALWI void where_operand_pairs(uint32_t num_tiles, uint32_t scalar_value) {
     constexpr uint32_t true_slot = WHERE_TTS ? 1 : 2;

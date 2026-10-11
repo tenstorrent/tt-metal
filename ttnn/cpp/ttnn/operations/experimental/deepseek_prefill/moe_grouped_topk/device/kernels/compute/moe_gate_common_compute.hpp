@@ -48,8 +48,7 @@ constexpr ckernel::TopkTieOrder GATE_TOPK_TIE_ORDER =
 // the plain network order ties. It is lossless only while those bits are zero, which holds for keys
 // unpacked through SrcA as TF32 (mantissa bits 12..0 zero) and is certified by the factory as
 // sort_keys_tf32. It sorts stable-by-index only where candidates arrive in index order: the
-// single-group expert top-k, the group-score sort (column == group id) and, on Blackhole, the grouped
-// path's final top-k, whose winning groups the writer gathers in group id order. Everything else keeps
+// single-group expert top-k, the group-score sort and, on Blackhole, the grouped path's final top-k. Everything else keeps
 // the comparator.
 constexpr uint32_t GATE_TAG_BITS = 6;
 constexpr uint32_t TF32_ZERO_LOW_MANTISSA_BITS = 13;  // fp32 mantissa (23) - TF32 mantissa (10)
@@ -272,7 +271,6 @@ void process_and_sort_tiles(
     }
     cb_biased_scores.wait_front(Wt);
     if constexpr (!sort_index_lanes) {
-        // nothing else in the loop changes these, so one setup serves every pair
         reconfig_data_format_srca(cb_biased_scores_id);
         transpose_init(cb_biased_scores_id);
         pack_reconfig_data_format(cb_sorted_group_scores_id);

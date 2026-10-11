@@ -109,8 +109,7 @@ inline void _llk_math_eltwise_unary_datacopy_(
         math::set_dst_write_addr<DstTileShape::Tile32x32, UnpackDestination::DestReg>(dst_index);
         math::math_unpack_to_dest_tile_ready();
 
-        // The broadcast moves take intra-tile rows, so the offset points at the tile, and the zero flag clear below takes
-        // its bank from it; a plain copy has no moves and keeps the offset.
+        // The moves take intra-tile rows and the zero flag clear takes its bank from the offset; a plain copy keeps it.
         if constexpr (src_b_bcast_type != BroadcastType::NONE)
         {
             math::set_dst_write_addr<DstTileShape::Tile32x32, UnpackDestination::SrcRegs>(dst_index);
@@ -171,7 +170,7 @@ inline void _llk_math_eltwise_unary_datacopy_(
             //   5. Fp32_enabled=1: restore FP32 dest mode
             TTI_SETDVALID(0b10);
 
-            // Both source rows go to SrcB first (rows 16/0 and 20/4), so each 16-bit half takes one switch set
+            // Both rows go to SrcB first, so each 16-bit half takes one switch set
             TTI_MOVD2B(p_mov::DEST_NORM, p_movd2b::SRC_ROW16_OFFSET, ADDR_MOD_3, p_movd2b::MOV_1_ROW, 0);
             TTI_MOVD2B(p_mov::DEST_32B_LOW, p_movd2b::SRC_ZERO_OFFSET, ADDR_MOD_3, p_movd2b::MOV_1_ROW, 0);
             TTI_MOVD2B(p_mov::DEST_NORM, p_movd2b::SRC_ROW16_OFFSET + 4, ADDR_MOD_3, p_movd2b::MOV_1_ROW, FACE_R_DIM);
@@ -263,7 +262,7 @@ inline void _llk_math_eltwise_unary_datacopy_(
         {
             TTI_SETC16(DISABLE_IMPLIED_SRCA_FMT_Base_ADDR32, 0);
 
-            // Restore the bank base for a following 32-bit plain copy, whose ZEROACC runs without programming the offset.
+            // Restore the bank base: a following 32-bit plain copy's ZEROACC runs without programming the offset.
             // This does not cover a plain copy into SyncFull tiles 4-7: its ZEROACC still clears tiles 0-3.
             TT_SETC16(DEST_TARGET_REG_CFG_MATH_Offset_ADDR32, ckernel::get_dest_buffer_base());
 
@@ -324,8 +323,7 @@ inline void _llk_math_eltwise_unary_datacopy_(
 }
 
 /**
- * @brief Copy a block of tiles into consecutive DEST slots; on the unpack-to-dest path with a 32-bit DEST a block of four-face 32-bit
- *        tiles is one DEST slot handshake with the unpack thread instead of one per tile.
+ * @brief Copy a block of tiles into consecutive DEST slots; four-face 32-bit unpack to dest takes one slot handshake per block.
  *
  * @tparam type: Datacopy direction, values = <A2D/B2D>
  * @tparam Dst: Destination sync mode, values = <SyncHalf/SyncFull>
@@ -337,8 +335,7 @@ inline void _llk_math_eltwise_unary_datacopy_(
  * @param src_format: Source data format (DataFormat enum underlying value).
  * @param dst_format: Destination data format (DataFormat enum underlying value).
  * @param num_faces: Number of faces in the tile (must be 1, 2, or 4).
- * @note The unpack thread must feed the same block with @ref _llk_unpack_A_block_ (same tile count, face count and
- *       is_fp32_dest_acc_en).
+ * @note The unpack thread must feed the same block with @ref _llk_unpack_A_block_ (same tile count, face count and is_fp32_dest_acc_en).
  */
 template <DataCopyType type, DstSync Dst, bool is_fp32_dest_acc_en, BroadcastType src_b_bcast_type = BroadcastType::NONE, bool unpack_to_dest = false>
 inline void _llk_math_eltwise_unary_datacopy_block_(
@@ -360,7 +357,6 @@ inline void _llk_math_eltwise_unary_datacopy_block_(
             math::set_dst_write_addr<DstTileShape::Tile32x32, UnpackDestination::DestReg>(start_dst_index);
             math::math_unpack_to_dest_tile_ready();
 
-            // The zero flag clear of every face, as _llk_math_eltwise_unary_datacopy_ issues after an unpack to dest
             const std::uint32_t dst_format_masked = masked_data_format(dst_format);
             const int clear_fp32                  = static_cast<int>(
                 dst_format_masked == (std::uint32_t)DataFormat::Float32 || dst_format_masked == (std::uint32_t)DataFormat::Int32 ||

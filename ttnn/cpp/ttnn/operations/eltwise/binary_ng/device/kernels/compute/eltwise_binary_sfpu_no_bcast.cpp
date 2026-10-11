@@ -60,8 +60,7 @@ FORCE_INLINE void process_sfpu_tiles(
     copy_init(cb_post_lhs.get_cb_id());
 #if defined(ARCH_BLACKHOLE)
     if constexpr (operand_blocks) {
-        // Each operand's tiles go to consecutive slots, one copy_block per operand (one unpack-to-dest handshake),
-        // or both operands' tiles under one handshake when they share a format.
+        // One copy_block per operand, or one for both operands' tiles when they share a format: one unpack-to-dest handshake each.
         if constexpr (operand_pair) {
             copy_operands_to_dest<2>({cb_post_lhs.get_cb_id(), cb_post_rhs.get_cb_id()}, {0, 0}, 0, n);
         } else {

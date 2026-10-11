@@ -14,7 +14,6 @@ from test_eltwise_unary_datacopy import (
     get_valid_dest_accumulation_modes,
 )
 
-# The same-format pairs plus the converting pairs the pack side prices differently.
 DATACOPY_BLOCK_PERF_FORMATS = input_output_formats(
     [
         DataFormat.Float32,

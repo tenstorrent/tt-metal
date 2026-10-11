@@ -138,7 +138,6 @@ inline void llk_unpack_tilize_block(std::uint32_t operand, std::uint32_t block_c
     const auto block = input_tile_index / block_c_tiles;
     const auto offset = input_tile_index % block_c_tiles;
     input_tile_index = block * (block_c_tiles * tile_r_dim) + offset;
-    // One tile takes the per tile call: a block of one has nothing to spread its setup over.
     if (block_c_tiles < 2) {
         if (block_c_tiles == 1) {
             llk_unpack_tilize(operand, input_tile_index);

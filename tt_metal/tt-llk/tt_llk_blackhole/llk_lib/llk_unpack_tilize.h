@@ -21,8 +21,8 @@ using namespace ckernel::unpacker;
 
 namespace llk_unpack_tilize_detail
 {
-// Block tilize of the whole-tile SrcA path: _llk_unpack_tilize_block_ replays this body once per tile of a block row from one context
-// acquire. The body adds one tile width (SCRATCH_SEC0) to the base address register of its context; half 0 is context 0, half 1 context 1.
+// _llk_unpack_tilize_block_ replays this per tile body from one context acquire; it adds one tile width (SCRATCH_SEC0) to the
+// base address register of its context (half 0 is context 0, half 1 context 1).
 constexpr std::uint32_t BLOCK_REPLAY_HALF_LEN = 4;
 
 // The replay record takes start and length as immediates: both are template parameters.
@@ -34,9 +34,8 @@ inline void load_block_replay_half()
         BLOCK_REPLAY_HALF_LEN,
         []
         {
-            // base address += SCRATCH_SEC0 (one tile width)
             TTI_CFGSHIFTMASK(1, 0b011, 32 - 1, 0, 0b11, base_address_reg);
-            // unpacker 0 counters to 0; also the one instruction between the config write and the UNPACR that consumes it
+            // Also the one instruction between the config write and the UNPACR that consumes it
             TTI_SETADCZW(0b001, 0, 0, 0, 0, 0b1111);
             TTI_UNPACR(SrcA, 0b1 /*Z inc*/, 0, 0, 0, 1 /* Set OvrdThreadId*/, 1 /*Set Dvalid*/, p_unpacr::RAREFYB_DISABLE, 0, 0, 0, 0, 1);
             TTI_UNPACR_NOP(SrcB, 0, 0, p_unpacr_nop::SET_DVALID, 0, 0, 0, 0, p_unpacr_nop::UNP_ZEROSRC);
@@ -405,8 +404,7 @@ inline void _llk_unpack_tilize_(
 }
 
 /**
- * @brief Unpack and tilize a row of consecutive tiles from L1 into SrcA with one context acquire: the per tile body recorded by
- *        @ref _llk_unpack_tilize_init_ is replayed once per tile; 8-bit formats and unpack to dest fall back to one @ref _llk_unpack_tilize_ per tile.
+ * @brief Unpack and tilize a row of consecutive tiles with one context acquire; 8-bit formats and unpack to dest take one @ref _llk_unpack_tilize_ per tile.
  *
  * @param base_address: L1 base address of the source block row (16 B units).
  * @param first_tile_index: Column tile index of the first tile to unpack.
@@ -438,7 +436,6 @@ inline void _llk_unpack_tilize_block_(
     const bool unpack_to_dest =
         (unpack_source_format == DataFormat::UInt32) || (unpack_source_format == DataFormat::Int32) || (unpack_dest_format == DataFormat::Float32);
 
-    // 8-bit formats, unpack to dest and a block whose body the init did not record take the per tile calls.
     const bool body_recorded = block_replay_body() == BlockReplayBody::Tilize;
     LLK_ASSERT(IS_8BIT_FORMAT(unpack_src_format) || unpack_to_dest || body_recorded, "_llk_unpack_tilize_block_ needs the body recorded by _llk_unpack_tilize_init_");
     if (IS_8BIT_FORMAT(unpack_src_format) || unpack_to_dest || !body_recorded)
@@ -450,7 +447,6 @@ inline void _llk_unpack_tilize_block_(
         return;
     }
 
-    // one tile width of the row-major block in 16 B words
     const std::uint32_t tile_offset_16B = SCALE_DATUM_SIZE(unpack_src_format, 1) << (narrow_tile ? 0 : 1);
     const std::uint32_t address         = base_address + first_tile_index * tile_offset_16B;
     LLK_ASSERT(is_valid_L1_address(address), "L1 base_address must be in valid L1 memory region");
@@ -464,7 +460,6 @@ inline void _llk_unpack_tilize_block_(
     TTI_STALLWAIT(p_stall::STALL_CFG, p_stall::THCON);
     TTI_WRCFG(p_gpr_unpack::TMP0, p_cfg::WRCFG_32b, SCRATCH_SEC0_val_ADDR32);
 
-    // Context acquire as in _llk_unpack_tilize_
     std::uint32_t contexts_in_use = semaphore_read(semaphore::UNPACK_SYNC);
     TTI_SETADCZW(0b001, 0, 0, 0, 0, 0b1111);
     std::uint32_t context = unp_cfg_context;

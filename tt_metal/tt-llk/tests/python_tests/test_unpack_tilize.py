@@ -110,7 +110,6 @@ def test_unpack_tilize_int8(
     )
 
 
-# The whole-tile SrcA path, the 8-bit path and the unpack-to-dest path (the latter two fall back to one call per tile).
 @parametrize(
     formats=input_output_formats(
         [DataFormat.Float16_b, DataFormat.Float16, DataFormat.Float32], same=True

@@ -278,7 +278,7 @@ void reduce_block_fp32_sfpu(uint32_t local_cb, uint32_t remote_cb, uint32_t acc_
             src_obj.wait_front(num_tiles);
         }
 #if defined(ARCH_BLACKHOLE)
-        // Two tiles per DEST section: the inits run once per pair and each operand's pair takes one DEST slot handshake.
+        // Two tiles per DEST section: the inits and each operand's DEST slot handshake run once per pair.
         for (uint32_t i = 0; i < num_tiles; i += 2) {
             const uint32_t n = (num_tiles - i) < 2 ? 1 : 2;
             tile_regs_acquire();
@@ -338,7 +338,7 @@ void add_bias_inplace_sfpu(uint32_t inout_cb, uint32_t bias_cb) {
     inout_cb_obj.wait_front(rows * cols);
     bias_cb_obj.wait_front(cols);
 #if defined(ARCH_BLACKHOLE)
-    // Two output tiles per DEST section: the three inits and the output pair's DEST slot handshake run once per pair.
+    // Two output tiles per DEST section: the inits and the output pair's handshake run once per pair.
     for (uint32_t t = 0; t < rows * cols; t += 2) {
         const uint32_t n = (rows * cols - t) < 2 ? 1 : 2;
         tile_regs_acquire();
