@@ -77,6 +77,7 @@ SECTIONS
     *(.text .stub .text.* .gnu.linkonce.t.*)
     *(.gnu.warning)
     *(.llk_init_text) /* out of line INIT blocks (perf.h), last so they move nothing */
+    . = ALIGN(DEFINED(llk_quiet_align) ? llk_quiet_align : 1); /* quiet_wait sets it: the hold on a fixed line */
     *(.llk_quiet_text) /* the PACK_ISOLATE peers' hold (profiler.h quiet_wait), after them for the same reason */
   } > REGION_CODE
   .fini :

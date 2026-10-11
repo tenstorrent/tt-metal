@@ -161,6 +161,9 @@ __attribute__((section(".llk_quiet_data"))) inline std::uint32_t quiet_seen = 0;
 
 __attribute__((noipa, section(".llk_quiet_text"))) inline void quiet_wait()
 {
+    // the hold starts on a 512 B boundary (sections.ld), so a size change of the code before it cannot move it; only builds
+    // that have the hold define the symbol, every other build stays byte identical
+    asm volatile(".weak llk_quiet_align\n\t.set llk_quiet_align, 512");
     while (llk_barrier::detail::settled(ckernel::semaphore_read(llk_barrier::RELEASE_SEM)) == quiet_seen)
     {
         for (std::uint32_t i = 0; i < 32; ++i)
@@ -168,6 +171,53 @@ __attribute__((noipa, section(".llk_quiet_text"))) inline void quiet_wait()
             asm volatile("nop");
         }
     }
+}
+#endif
+
+#if defined(LLK_DBG_BARRIER) && !defined(LLK_PERF_INIT_ONLY)
+// The TILE_LOOP zone reserves its records before its park, so the code between the release and the start read is the
+// park's own epilogue only, whatever the bookkeeping costs.
+inline bool tile_loop_opened = false;
+
+template <bool LOOP_PAD>
+struct zone_prereserve
+{
+    inline __attribute__((always_inline)) zone_prereserve()
+    {
+        if constexpr (LOOP_PAD)
+        {
+            ckernel::fence_compiler();
+            tile_loop_opened = !is_buffer_full();
+            if (tile_loop_opened)
+            {
+                zone_reserve();
+            }
+            ckernel::fence_compiler();
+        }
+    }
+};
+
+#define LLK_ZONE_PRERESERVE_(loop_pad) const llk_profiler::zone_prereserve<loop_pad> _zone_prereserve_;
+#else
+#define LLK_ZONE_PRERESERVE_(loop_pad)
+#endif
+
+#if defined(LLK_DBG_BARRIER)
+// quiet_wait inline: in the TILE_LOOP build the held peers' wait sits in their pinned TILE_LOOP code. One opaque block
+// that saves its own scratch registers, so the kernel around it compiles as if it were not there (C++ here changed the
+// register allocation of math_matmul's loop: +35 % in L1_TO_L1).
+__attribute__((always_inline)) inline void quiet_wait_here()
+{
+    asm volatile(
+        "addi  sp, sp, -16\n\tsw    t0, 0(sp)\n\tsw    t1, 4(sp)\n\tsw    t2, 8(sp)\n\t"
+        "lw    t2, %[seen]\n\tlui   t0, %%hi(%[sem])\n"
+        "1:\n\tlw    t1, %%lo(%[sem])(t0)\n\tandi  t1, t1, 0xff\n\tbne   t1, t2, 3f\n\t" // RELEASE_SEM moved
+        "li    t1, 32\n"
+        "2:\n\tnop\n\taddi  t1, t1, -1\n\tbnez  t1, 2b\n\tj     1b\n"
+        "3:\n\tlw    t2, 8(sp)\n\tlw    t1, 4(sp)\n\tlw    t0, 0(sp)\n\taddi  sp, sp, 16"
+        :
+        : [seen] "m"(quiet_seen), [sem] "i"(PC_BUF_BASE + 4 * (ckernel::PC_BUF_SEMAPHORE_BASE + llk_barrier::RELEASE_SEM))
+        : "memory");
 }
 #endif
 
@@ -189,6 +239,15 @@ public:
     inline __attribute__((always_inline)) zone_scoped()
     {
         ckernel::fence_compiler();
+#if defined(LLK_DBG_BARRIER) && !defined(LLK_PERF_INIT_ONLY)
+        if constexpr (LOOP_PAD) // reserved before the TILE_LOOP park (zone_prereserve): only the clock read follows the release
+        {
+            start_timestamp = ckernel::read_wall_clock();
+            is_opened       = tile_loop_opened;
+            ckernel::fence_compiler();
+            return;
+        }
+#endif
         if (LOOP_PAD ? !is_buffer_full() : __builtin_expect(!is_buffer_full(), 1))
         {
             is_opened = true;
@@ -204,7 +263,11 @@ public:
 #if defined(LLK_DBG_BARRIER)
         if constexpr (QUIET_WAIT)
         {
+#if !defined(LLK_PERF_INIT_ONLY)
+            quiet_wait_here(); // inline, so its code sits with the pinned loop and no other code change moves it
+#else
             quiet_wait();
+#endif
         }
 #endif
         if (LOOP_PAD ? is_opened : __builtin_expect(is_opened, 1))
