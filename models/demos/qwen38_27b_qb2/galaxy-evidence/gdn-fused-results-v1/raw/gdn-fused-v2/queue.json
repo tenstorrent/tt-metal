@@ -1,0 +1,25 @@
+{
+  "state": "completed",
+  "cleanup_completed": true,
+  "survives_disconnect": true,
+  "resumes_after_reboot": false,
+  "full_model_qualified": false,
+  "promoted_to_serving": false,
+  "hardware_lock": "/tmp/tt-device.lock",
+  "updated_at": "2026-10-11T09:32:27Z",
+  "command": [
+    "/bin/bash",
+    "/home/ttuser/qwen38-artifacts-20261007/gdn-fused-source-v2/scripts/run_safe_pytest.sh",
+    "/home/ttuser/qwen38-artifacts-20261007/gdn-fused-source-v2/models/demos/qwen38_27b_qb2/tests/test_gdn_fused.py",
+    "--rootdir=/home/ttuser/qwen38-artifacts-20261007/gdn-fused-source-v2",
+    "-c",
+    "/home/ttuser/qwen38-artifacts-20261007/gdn-fused-source-v2/pytest.ini",
+    "-vv",
+    "-s",
+    "--tb=short",
+    "--timeout=900",
+    "--junitxml=/home/ttuser/qwen38-artifacts-20261007/gdn-fused-v2/hardware.xml"
+  ],
+  "exact_component_match": true,
+  "traced_comparison_completed": true
+}

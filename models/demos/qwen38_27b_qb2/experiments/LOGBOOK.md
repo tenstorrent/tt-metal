@@ -2697,3 +2697,37 @@ uses this durable worktree. Remote branch was still a0240cf9761 before this push
 
 Evidence and reproducible calculations:
 [operator-counters-20261011](../galaxy-evidence/operator-counters-20261011/README.md).
+
+## October 11, 09:11-09:32 UTC: first direct-L1 fused GDN experiment
+
+Implemented an opt-in recurrence/epilogue program with disjoint producer and
+consumer cores, two head mailboxes, four independent cumulative ready counters
+and consumed credits. Reused both arithmetic kernels with their distinct
+approximation modes, FP32 canonical state and existing BF16 rounding. CPU
+ownership tests passed 16 cases, including skew, wrap, partial waves and the
+aggregate-ready-counter pitfall. The task-local safe wrapper was corrected to
+the Galaxy reset spelling before freezing; no reset was needed.
+
+Persistent smoke v1 compiled the C++ kernels and passed exact state/raw/output
+comparisons across six B16/B32 cases and all four physical ranks, then closed
+cleanly. Its sequential allocations did not prove different rebind addresses.
+The v2 follow-up retained simultaneous instances and asserted every operand
+address differed. It also compared unfused before/after with 24/20/16-group fused
+variants through 16-call traces and 2592 repeated-input updates per timing arm.
+Exact final states/outputs, read-only inputs and cleanup all passed.
+
+Performance result is negative. B16 unfused before/after 112.673/112.462 us;
+fused 24/20/16 groups 118.769/136.953/155.026 us. B32 unfused 194.263/194.847 us;
+fused 198.529/236.800/275.975 us. The best fused split is 5.51%/2.04% slower at
+B16/B32. No model-policy change, full-model qualification or GPQA was launched.
+Measured model performance remains 20.884562 TSU. Core loss plus handoff cost is
+the leading interpretation, not separately quantified causality. Next effort
+should remove preparation work or preserve more recurrence parallelism.
+
+Both services are terminal success with MainPID 0. The v2 log has a native
+trace-allocation warning; matching output is not proof that all allocation
+hazards are closed. Trace allocation tracking and changing-input long-horizon
+tests remain necessary before integration, should a later variant win. Full
+logs, commands, source hashes, before/after timing samples and the original
+smoke source are retained in
+[gdn-fused-results-v1](../galaxy-evidence/gdn-fused-results-v1/README.md).

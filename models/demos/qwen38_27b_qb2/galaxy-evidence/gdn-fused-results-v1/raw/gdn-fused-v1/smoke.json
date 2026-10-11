@@ -1,0 +1,207 @@
+{
+  "state": "completed",
+  "passed": true,
+  "cleanup_completed": true,
+  "cases": [
+    {
+      "batch": 16,
+      "instance": 0,
+      "capture_raw": true,
+      "steps": [
+        {
+          "repeat": 0,
+          "state": true,
+          "output": true,
+          "raw": true
+        },
+        {
+          "repeat": 1,
+          "state": true,
+          "output": true,
+          "raw": true
+        },
+        {
+          "repeat": 2,
+          "state": true,
+          "output": true,
+          "raw": true
+        },
+        {
+          "repeat": 3,
+          "state": true,
+          "output": true,
+          "raw": true
+        }
+      ],
+      "passed": true
+    },
+    {
+      "batch": 16,
+      "instance": 1,
+      "capture_raw": true,
+      "steps": [
+        {
+          "repeat": 0,
+          "state": true,
+          "output": true,
+          "raw": true
+        },
+        {
+          "repeat": 1,
+          "state": true,
+          "output": true,
+          "raw": true
+        },
+        {
+          "repeat": 2,
+          "state": true,
+          "output": true,
+          "raw": true
+        },
+        {
+          "repeat": 3,
+          "state": true,
+          "output": true,
+          "raw": true
+        }
+      ],
+      "passed": true
+    },
+    {
+      "batch": 16,
+      "instance": 2,
+      "capture_raw": false,
+      "steps": [
+        {
+          "repeat": 0,
+          "state": true,
+          "output": true,
+          "raw": true
+        },
+        {
+          "repeat": 1,
+          "state": true,
+          "output": true,
+          "raw": true
+        },
+        {
+          "repeat": 2,
+          "state": true,
+          "output": true,
+          "raw": true
+        },
+        {
+          "repeat": 3,
+          "state": true,
+          "output": true,
+          "raw": true
+        }
+      ],
+      "passed": true
+    },
+    {
+      "batch": 32,
+      "instance": 0,
+      "capture_raw": true,
+      "steps": [
+        {
+          "repeat": 0,
+          "state": true,
+          "output": true,
+          "raw": true
+        },
+        {
+          "repeat": 1,
+          "state": true,
+          "output": true,
+          "raw": true
+        },
+        {
+          "repeat": 2,
+          "state": true,
+          "output": true,
+          "raw": true
+        },
+        {
+          "repeat": 3,
+          "state": true,
+          "output": true,
+          "raw": true
+        }
+      ],
+      "passed": true
+    },
+    {
+      "batch": 32,
+      "instance": 1,
+      "capture_raw": true,
+      "steps": [
+        {
+          "repeat": 0,
+          "state": true,
+          "output": true,
+          "raw": true
+        },
+        {
+          "repeat": 1,
+          "state": true,
+          "output": true,
+          "raw": true
+        },
+        {
+          "repeat": 2,
+          "state": true,
+          "output": true,
+          "raw": true
+        },
+        {
+          "repeat": 3,
+          "state": true,
+          "output": true,
+          "raw": true
+        }
+      ],
+      "passed": true
+    },
+    {
+      "batch": 32,
+      "instance": 2,
+      "capture_raw": false,
+      "steps": [
+        {
+          "repeat": 0,
+          "state": true,
+          "output": true,
+          "raw": true
+        },
+        {
+          "repeat": 1,
+          "state": true,
+          "output": true,
+          "raw": true
+        },
+        {
+          "repeat": 2,
+          "state": true,
+          "output": true,
+          "raw": true
+        },
+        {
+          "repeat": 3,
+          "state": true,
+          "output": true,
+          "raw": true
+        }
+      ],
+      "passed": true
+    }
+  ],
+  "full_model_qualified": false,
+  "updated_at": "2026-10-11T09:11:51Z",
+  "device_ids": [
+    0,
+    4,
+    12,
+    8
+  ]
+}

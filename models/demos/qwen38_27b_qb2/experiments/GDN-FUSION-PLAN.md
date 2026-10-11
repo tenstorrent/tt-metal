@@ -1,6 +1,16 @@
 # GDN fusion implementation plan
 
-October 11 counter update: this remains a design, not a fused hardware result.
+October 11, 09:32 UTC result: the first four-producer/one-consumer prototype is
+implemented and passed native build, exact B16/B32 output/state checks, distinct
+live-buffer rebinding and repeated trace replay. It loses: B16 complete boundary
+118.769 us versus 112.567 us mean unfused control (+5.51% latency); B32 +2.04%.
+Fewer groups regress further. It is not selected or integrated into the model.
+[Measured results and limitations](../galaxy-evidence/gdn-fused-results-v1/README.md).
+The next useful direction is reducing operand preparation or preserving more
+recurrence parallelism; the earlier 1-3-ms target is not realized by this design.
+
+Earlier October 11 counter update, before implementing the prototype above:
+at this point fusion remained a design without a fused hardware result.
 The latest combined model is 47.882258 ms / 20.884562 TSU, leaving 14.548925 ms
 to 30 TSU. The existing 1-3-ms fusion target would yield about 21.33-22.28 TSU
 if realized at that baseline. Completed counters show 31.8% recurrence math

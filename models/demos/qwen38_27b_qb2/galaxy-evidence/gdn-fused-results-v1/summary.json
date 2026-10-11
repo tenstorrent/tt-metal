@@ -1,0 +1,85 @@
+{
+  "verified_raw_files": 21,
+  "native_build_passed": true,
+  "cpu_tests": 16,
+  "exact_smoke_cases": 6,
+  "trace_and_rebind_passed": true,
+  "steps_per_timing_arm": 2592,
+  "changing_input_4k_qualified": false,
+  "full_model_qualified": false,
+  "promoted_to_serving": false,
+  "rows": [
+    {
+      "batch": 16,
+      "variant": "fused24",
+      "groups": 24,
+      "before_us": 112.67255740676774,
+      "after_us": 112.46210124227218,
+      "control_mean_us": 112.56732932451996,
+      "candidate_us": 118.76894495799206,
+      "latency_change_pct": 5.509250037898195,
+      "projected_48_layer_saved_ms": -0.2976775504066609,
+      "selected": false
+    },
+    {
+      "batch": 16,
+      "variant": "fused20",
+      "groups": 20,
+      "before_us": 112.67255740676774,
+      "after_us": 112.46210124227218,
+      "control_mean_us": 112.56732932451996,
+      "candidate_us": 136.95250618184218,
+      "latency_change_pct": 21.662747978165385,
+      "projected_48_layer_saved_ms": -1.1704884891514666,
+      "selected": false
+    },
+    {
+      "batch": 16,
+      "variant": "fused16",
+      "groups": 16,
+      "before_us": 112.67255740676774,
+      "after_us": 112.46210124227218,
+      "control_mean_us": 112.56732932451996,
+      "candidate_us": 155.02584210480563,
+      "latency_change_pct": 37.71832647631017,
+      "projected_48_layer_saved_ms": -2.0380086134537123,
+      "selected": false
+    },
+    {
+      "batch": 32,
+      "variant": "fused24",
+      "groups": 24,
+      "before_us": 194.26266771915834,
+      "after_us": 194.84727909002686,
+      "control_mean_us": 194.5549734045926,
+      "candidate_us": 198.52936111419694,
+      "latency_change_pct": 2.042809618307362,
+      "projected_48_layer_saved_ms": -0.19077061006100848,
+      "selected": false
+    },
+    {
+      "batch": 32,
+      "variant": "fused20",
+      "groups": 20,
+      "before_us": 194.26266771915834,
+      "after_us": 194.84727909002686,
+      "control_mean_us": 194.5549734045926,
+      "candidate_us": 236.80041249463102,
+      "latency_change_pct": 21.71388289426335,
+      "projected_48_layer_saved_ms": -2.027781076321844,
+      "selected": false
+    },
+    {
+      "batch": 32,
+      "variant": "fused16",
+      "groups": 16,
+      "before_us": 194.26266771915834,
+      "after_us": 194.84727909002686,
+      "control_mean_us": 194.5549734045926,
+      "candidate_us": 275.9747794698342,
+      "latency_change_pct": 41.84925455281095,
+      "projected_48_layer_saved_ms": -3.9081506911315955,
+      "selected": false
+    }
+  ]
+}

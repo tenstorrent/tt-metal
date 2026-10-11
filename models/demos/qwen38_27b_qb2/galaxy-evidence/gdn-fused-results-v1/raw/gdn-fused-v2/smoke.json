@@ -1,0 +1,527 @@
+{
+  "state": "completed",
+  "passed": true,
+  "cleanup_completed": true,
+  "cases": [
+    {
+      "batch": 16,
+      "instance": 0,
+      "capture_raw": true,
+      "steps": [
+        {
+          "repeat": 0,
+          "state": true,
+          "output": true,
+          "raw": true
+        },
+        {
+          "repeat": 1,
+          "state": true,
+          "output": true,
+          "raw": true
+        },
+        {
+          "repeat": 2,
+          "state": true,
+          "output": true,
+          "raw": true
+        },
+        {
+          "repeat": 3,
+          "state": true,
+          "output": true,
+          "raw": true
+        }
+      ],
+      "passed": true,
+      "addresses": [
+        5848704,
+        5852800,
+        5856896,
+        5869184,
+        9016448,
+        5883008,
+        1560448,
+        1570560,
+        1556352
+      ]
+    },
+    {
+      "batch": 16,
+      "instance": 1,
+      "capture_raw": true,
+      "steps": [
+        {
+          "repeat": 0,
+          "state": true,
+          "output": true,
+          "raw": true
+        },
+        {
+          "repeat": 1,
+          "state": true,
+          "output": true,
+          "raw": true
+        },
+        {
+          "repeat": 2,
+          "state": true,
+          "output": true,
+          "raw": true
+        },
+        {
+          "repeat": 3,
+          "state": true,
+          "output": true,
+          "raw": true
+        }
+      ],
+      "passed": true,
+      "addresses": [
+        5895296,
+        5899392,
+        5903488,
+        5915776,
+        13735040,
+        5929600,
+        1566464,
+        1554304,
+        1550208
+      ]
+    },
+    {
+      "batch": 16,
+      "instance": 2,
+      "capture_raw": false,
+      "steps": [
+        {
+          "repeat": 0,
+          "state": true,
+          "output": true,
+          "raw": true
+        },
+        {
+          "repeat": 1,
+          "state": true,
+          "output": true,
+          "raw": true
+        },
+        {
+          "repeat": 2,
+          "state": true,
+          "output": true,
+          "raw": true
+        },
+        {
+          "repeat": 3,
+          "state": true,
+          "output": true,
+          "raw": true
+        }
+      ],
+      "passed": true,
+      "addresses": [
+        5941888,
+        5945984,
+        5950080,
+        5962368,
+        16880768,
+        5976192,
+        1537792,
+        1548160,
+        1535744
+      ],
+      "traced_comparison": [
+        {
+          "variant": "before",
+          "groups": null,
+          "call_us": [
+            112.66158253420144,
+            112.67255740676774,
+            112.6574552472448,
+            112.80457238171948,
+            112.80377111688722
+          ],
+          "median_us": 112.67255740676774,
+          "steps": 2592,
+          "state": [
+            "5a119ad9083045da03ed286759346acb2abca3fc6c374819a5729fd7ed9ef182",
+            "9cda5688addec37e76693be9878c7e01b8a6bbdad5fd44e7beb3e65a81fcd289",
+            "bf3c7d6111bcec27342cb64881d247d5d7344d134fef3a104bbca969811efd13",
+            "cf42297154745a3cd523525bd6ffb2b9408336fa232444020fe9e449e944c738"
+          ],
+          "output": [
+            "cf3c14f70d3bbc06d3c8f537a721b2c4467bb00abbba5210b49364149ae51361",
+            "40f0a852850e27a2cb9df7b61c177ed5bcd20dbc6aebfaa637c9183bad4064d5",
+            "bba7b4642eb68c0f01afa8ea04d358e9d166deed63b96648b22f439a8cadc172",
+            "42bdc6c45a8618ad93a5623de961ba40f570a1f04afbbcef55b50c7e4cd863db"
+          ]
+        },
+        {
+          "variant": "fused24",
+          "groups": 24,
+          "call_us": [
+            118.68882666021818,
+            118.71820515807485,
+            118.76894495799206,
+            118.80871534231119,
+            118.78123041242361
+          ],
+          "median_us": 118.76894495799206,
+          "steps": 2592,
+          "state": [
+            "5a119ad9083045da03ed286759346acb2abca3fc6c374819a5729fd7ed9ef182",
+            "9cda5688addec37e76693be9878c7e01b8a6bbdad5fd44e7beb3e65a81fcd289",
+            "bf3c7d6111bcec27342cb64881d247d5d7344d134fef3a104bbca969811efd13",
+            "cf42297154745a3cd523525bd6ffb2b9408336fa232444020fe9e449e944c738"
+          ],
+          "output": [
+            "cf3c14f70d3bbc06d3c8f537a721b2c4467bb00abbba5210b49364149ae51361",
+            "40f0a852850e27a2cb9df7b61c177ed5bcd20dbc6aebfaa637c9183bad4064d5",
+            "bba7b4642eb68c0f01afa8ea04d358e9d166deed63b96648b22f439a8cadc172",
+            "42bdc6c45a8618ad93a5623de961ba40f570a1f04afbbcef55b50c7e4cd863db"
+          ]
+        },
+        {
+          "variant": "fused20",
+          "groups": 20,
+          "call_us": [
+            136.8582225040882,
+            136.97736721951514,
+            136.93165692529874,
+            136.95880534214666,
+            136.95250618184218
+          ],
+          "median_us": 136.95250618184218,
+          "steps": 2592,
+          "state": [
+            "5a119ad9083045da03ed286759346acb2abca3fc6c374819a5729fd7ed9ef182",
+            "9cda5688addec37e76693be9878c7e01b8a6bbdad5fd44e7beb3e65a81fcd289",
+            "bf3c7d6111bcec27342cb64881d247d5d7344d134fef3a104bbca969811efd13",
+            "cf42297154745a3cd523525bd6ffb2b9408336fa232444020fe9e449e944c738"
+          ],
+          "output": [
+            "cf3c14f70d3bbc06d3c8f537a721b2c4467bb00abbba5210b49364149ae51361",
+            "40f0a852850e27a2cb9df7b61c177ed5bcd20dbc6aebfaa637c9183bad4064d5",
+            "bba7b4642eb68c0f01afa8ea04d358e9d166deed63b96648b22f439a8cadc172",
+            "42bdc6c45a8618ad93a5623de961ba40f570a1f04afbbcef55b50c7e4cd863db"
+          ]
+        },
+        {
+          "variant": "fused16",
+          "groups": 16,
+          "call_us": [
+            154.98118591494858,
+            154.9894996060175,
+            155.02584210480563,
+            155.048338456254,
+            155.07654461544007
+          ],
+          "median_us": 155.02584210480563,
+          "steps": 2592,
+          "state": [
+            "5a119ad9083045da03ed286759346acb2abca3fc6c374819a5729fd7ed9ef182",
+            "9cda5688addec37e76693be9878c7e01b8a6bbdad5fd44e7beb3e65a81fcd289",
+            "bf3c7d6111bcec27342cb64881d247d5d7344d134fef3a104bbca969811efd13",
+            "cf42297154745a3cd523525bd6ffb2b9408336fa232444020fe9e449e944c738"
+          ],
+          "output": [
+            "cf3c14f70d3bbc06d3c8f537a721b2c4467bb00abbba5210b49364149ae51361",
+            "40f0a852850e27a2cb9df7b61c177ed5bcd20dbc6aebfaa637c9183bad4064d5",
+            "bba7b4642eb68c0f01afa8ea04d358e9d166deed63b96648b22f439a8cadc172",
+            "42bdc6c45a8618ad93a5623de961ba40f570a1f04afbbcef55b50c7e4cd863db"
+          ]
+        },
+        {
+          "variant": "after",
+          "groups": null,
+          "call_us": [
+            112.41100946790539,
+            112.46210124227218,
+            112.50495936110383,
+            112.5628587033134,
+            112.4259924836224
+          ],
+          "median_us": 112.46210124227218,
+          "steps": 2592,
+          "state": [
+            "5a119ad9083045da03ed286759346acb2abca3fc6c374819a5729fd7ed9ef182",
+            "9cda5688addec37e76693be9878c7e01b8a6bbdad5fd44e7beb3e65a81fcd289",
+            "bf3c7d6111bcec27342cb64881d247d5d7344d134fef3a104bbca969811efd13",
+            "cf42297154745a3cd523525bd6ffb2b9408336fa232444020fe9e449e944c738"
+          ],
+          "output": [
+            "cf3c14f70d3bbc06d3c8f537a721b2c4467bb00abbba5210b49364149ae51361",
+            "40f0a852850e27a2cb9df7b61c177ed5bcd20dbc6aebfaa637c9183bad4064d5",
+            "bba7b4642eb68c0f01afa8ea04d358e9d166deed63b96648b22f439a8cadc172",
+            "42bdc6c45a8618ad93a5623de961ba40f570a1f04afbbcef55b50c7e4cd863db"
+          ]
+        }
+      ]
+    },
+    {
+      "batch": 32,
+      "instance": 0,
+      "capture_raw": true,
+      "steps": [
+        {
+          "repeat": 0,
+          "state": true,
+          "output": true,
+          "raw": true
+        },
+        {
+          "repeat": 1,
+          "state": true,
+          "output": true,
+          "raw": true
+        },
+        {
+          "repeat": 2,
+          "state": true,
+          "output": true,
+          "raw": true
+        },
+        {
+          "repeat": 3,
+          "state": true,
+          "output": true,
+          "raw": true
+        }
+      ],
+      "passed": true,
+      "addresses": [
+        5848704,
+        5856896,
+        5865088,
+        5889664,
+        12184192,
+        5917312,
+        1560448,
+        1570560,
+        1556352
+      ]
+    },
+    {
+      "batch": 32,
+      "instance": 1,
+      "capture_raw": true,
+      "steps": [
+        {
+          "repeat": 0,
+          "state": true,
+          "output": true,
+          "raw": true
+        },
+        {
+          "repeat": 1,
+          "state": true,
+          "output": true,
+          "raw": true
+        },
+        {
+          "repeat": 2,
+          "state": true,
+          "output": true,
+          "raw": true
+        },
+        {
+          "repeat": 3,
+          "state": true,
+          "output": true,
+          "raw": true
+        }
+      ],
+      "passed": true,
+      "addresses": [
+        5941888,
+        5950080,
+        5958272,
+        5982848,
+        21621376,
+        6010496,
+        1566464,
+        1554304,
+        1550208
+      ]
+    },
+    {
+      "batch": 32,
+      "instance": 2,
+      "capture_raw": false,
+      "steps": [
+        {
+          "repeat": 0,
+          "state": true,
+          "output": true,
+          "raw": true
+        },
+        {
+          "repeat": 1,
+          "state": true,
+          "output": true,
+          "raw": true
+        },
+        {
+          "repeat": 2,
+          "state": true,
+          "output": true,
+          "raw": true
+        },
+        {
+          "repeat": 3,
+          "state": true,
+          "output": true,
+          "raw": true
+        }
+      ],
+      "passed": true,
+      "addresses": [
+        6035072,
+        6043264,
+        6051456,
+        6076032,
+        27912832,
+        6103680,
+        1537792,
+        1548160,
+        1535744
+      ],
+      "traced_comparison": [
+        {
+          "variant": "before",
+          "groups": null,
+          "call_us": [
+            194.12846086197533,
+            194.08425123401685,
+            194.39857442193897,
+            194.26266771915834,
+            194.29384792601923
+          ],
+          "median_us": 194.26266771915834,
+          "steps": 2592,
+          "state": [
+            "268f35e6e8d362548af8f3f0493deba2ae3f074ab529196757fa1285359b6078",
+            "7e19d5d960aea421efc9b0f6cd09f1c13835df40f6c0cd8ce5118c918bd97e24",
+            "1baca61d5f1941d621693b833660286b3c0f428d2edc6ed1a04a0127d7f8b2c4",
+            "c05a8f3b17af64d6352368f4adc1ab26195b6dc58b2995125949f3cf97e17d79"
+          ],
+          "output": [
+            "a151efcf9d5d9618d75142bde4ba168bf8c0876b467da8ab6a64e322fbc4c98e",
+            "eed20e22c39112a22205c31ed579bf000519694cffcbe33e3abff9f3c8e9f2a4",
+            "99edca544f3bc0157c7d3713d6e347fba9f0f3578b6a8fb2f0c8557357eb5561",
+            "9b304332eff4a21f3b31c47c0a1db8eabec82cf3255716c0128dc953327ef8c0"
+          ]
+        },
+        {
+          "variant": "fused24",
+          "groups": 24,
+          "call_us": [
+            198.544423255953,
+            198.55834943882655,
+            198.4912159969099,
+            198.52936111419694,
+            198.4822383747087
+          ],
+          "median_us": 198.52936111419694,
+          "steps": 2592,
+          "state": [
+            "268f35e6e8d362548af8f3f0493deba2ae3f074ab529196757fa1285359b6078",
+            "7e19d5d960aea421efc9b0f6cd09f1c13835df40f6c0cd8ce5118c918bd97e24",
+            "1baca61d5f1941d621693b833660286b3c0f428d2edc6ed1a04a0127d7f8b2c4",
+            "c05a8f3b17af64d6352368f4adc1ab26195b6dc58b2995125949f3cf97e17d79"
+          ],
+          "output": [
+            "a151efcf9d5d9618d75142bde4ba168bf8c0876b467da8ab6a64e322fbc4c98e",
+            "eed20e22c39112a22205c31ed579bf000519694cffcbe33e3abff9f3c8e9f2a4",
+            "99edca544f3bc0157c7d3713d6e347fba9f0f3578b6a8fb2f0c8557357eb5561",
+            "9b304332eff4a21f3b31c47c0a1db8eabec82cf3255716c0128dc953327ef8c0"
+          ]
+        },
+        {
+          "variant": "fused20",
+          "groups": 20,
+          "call_us": [
+            236.8076875427505,
+            236.80041249463102,
+            236.85215001023607,
+            236.76011460338486,
+            236.78722845943412
+          ],
+          "median_us": 236.80041249463102,
+          "steps": 2592,
+          "state": [
+            "268f35e6e8d362548af8f3f0493deba2ae3f074ab529196757fa1285359b6078",
+            "7e19d5d960aea421efc9b0f6cd09f1c13835df40f6c0cd8ce5118c918bd97e24",
+            "1baca61d5f1941d621693b833660286b3c0f428d2edc6ed1a04a0127d7f8b2c4",
+            "c05a8f3b17af64d6352368f4adc1ab26195b6dc58b2995125949f3cf97e17d79"
+          ],
+          "output": [
+            "a151efcf9d5d9618d75142bde4ba168bf8c0876b467da8ab6a64e322fbc4c98e",
+            "eed20e22c39112a22205c31ed579bf000519694cffcbe33e3abff9f3c8e9f2a4",
+            "99edca544f3bc0157c7d3713d6e347fba9f0f3578b6a8fb2f0c8557357eb5561",
+            "9b304332eff4a21f3b31c47c0a1db8eabec82cf3255716c0128dc953327ef8c0"
+          ]
+        },
+        {
+          "variant": "fused16",
+          "groups": 16,
+          "call_us": [
+            275.94320727075683,
+            275.9747794698342,
+            275.98717952059815,
+            275.96456857281737,
+            275.99553322943393
+          ],
+          "median_us": 275.9747794698342,
+          "steps": 2592,
+          "state": [
+            "268f35e6e8d362548af8f3f0493deba2ae3f074ab529196757fa1285359b6078",
+            "7e19d5d960aea421efc9b0f6cd09f1c13835df40f6c0cd8ce5118c918bd97e24",
+            "1baca61d5f1941d621693b833660286b3c0f428d2edc6ed1a04a0127d7f8b2c4",
+            "c05a8f3b17af64d6352368f4adc1ab26195b6dc58b2995125949f3cf97e17d79"
+          ],
+          "output": [
+            "a151efcf9d5d9618d75142bde4ba168bf8c0876b467da8ab6a64e322fbc4c98e",
+            "eed20e22c39112a22205c31ed579bf000519694cffcbe33e3abff9f3c8e9f2a4",
+            "99edca544f3bc0157c7d3713d6e347fba9f0f3578b6a8fb2f0c8557357eb5561",
+            "9b304332eff4a21f3b31c47c0a1db8eabec82cf3255716c0128dc953327ef8c0"
+          ]
+        },
+        {
+          "variant": "after",
+          "groups": null,
+          "call_us": [
+            195.1912563527003,
+            194.81181880109943,
+            194.88073030515807,
+            194.84727909002686,
+            194.80925402604043
+          ],
+          "median_us": 194.84727909002686,
+          "steps": 2592,
+          "state": [
+            "268f35e6e8d362548af8f3f0493deba2ae3f074ab529196757fa1285359b6078",
+            "7e19d5d960aea421efc9b0f6cd09f1c13835df40f6c0cd8ce5118c918bd97e24",
+            "1baca61d5f1941d621693b833660286b3c0f428d2edc6ed1a04a0127d7f8b2c4",
+            "c05a8f3b17af64d6352368f4adc1ab26195b6dc58b2995125949f3cf97e17d79"
+          ],
+          "output": [
+            "a151efcf9d5d9618d75142bde4ba168bf8c0876b467da8ab6a64e322fbc4c98e",
+            "eed20e22c39112a22205c31ed579bf000519694cffcbe33e3abff9f3c8e9f2a4",
+            "99edca544f3bc0157c7d3713d6e347fba9f0f3578b6a8fb2f0c8557357eb5561",
+            "9b304332eff4a21f3b31c47c0a1db8eabec82cf3255716c0128dc953327ef8c0"
+          ]
+        }
+      ]
+    }
+  ],
+  "full_model_qualified": false,
+  "updated_at": "2026-10-11T09:32:22Z",
+  "device_ids": [
+    0,
+    4,
+    12,
+    8
+  ]
+}

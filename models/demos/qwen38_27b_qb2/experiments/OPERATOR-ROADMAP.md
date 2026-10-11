@@ -1,5 +1,12 @@
 # Operator optimization scope and priorities
 
+October 11, 09:32 UTC: the first direct-L1 recurrence/epilogue fusion prototype
+passed native correctness and trace checks but regressed complete-boundary
+latency by 5.51% at B16 and 2.04% at B32. It remains opt-in and unselected.
+[Measured experiment](../galaxy-evidence/gdn-fused-results-v1/README.md).
+Next GDN work must reduce preparation cost or preserve recurrence parallelism;
+the fixed four-producer/one-consumer split is not a qualified speedup.
+
 Latest update, October 11: the combined candidate completed at **20.884562 TSU
 (47.882258 ms), B16/32K/TP4**, with unchanged output tokens and matched controls.
 Full GPQA is now gated on measured 25 TSU; the earlier automatic >=1-TSU
