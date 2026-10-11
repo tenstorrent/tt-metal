@@ -39,6 +39,17 @@ MEAN = "mean"
 STD = "std"
 TEXT_SIZE_PREFIX = "TEXT_SIZE("
 
+# What the pipeline loses over its slowest stage measured alone (L1 contention, hand-offs, fill), written as a timing
+# column, so post-processing divides it per tile and the gate can read it (run_types=...,COUPLING).
+COUPLING_BASE = "COUPLING"
+COUPLING_PIPELINE_RUN_TYPE = "L1_TO_L1"
+COUPLING_STAGE_RUN_TYPES = (
+    "UNPACK_ISOLATE",
+    "MATH_ISOLATE",
+    "PACK_ISOLATE",
+    "SFPU_ISOLATE",
+)
+
 
 def stat_prefix(kind: str) -> str:
     """Prefix of a stat column, e.g. stat_prefix("mean") -> "mean(" (for startswith)."""
