@@ -1,8 +1,7 @@
 // SPDX-FileCopyrightText: © 2026 Tenstorrent AI ULC
 // SPDX-License-Identifier: Apache-2.0
 
-// Perf kernel of the Blackhole block pack: per iteration one block, packed with one _llk_pack_block_contiguous_ call
-// (PACK_BLOCK_CONTIGUOUS) or one standard _llk_pack_ per tile. PACK_ISOLATE runs the pack thread alone, no math hand-off.
+// Perf kernel of the Blackhole block pack: one block per iteration, packed by one call (PACK_BLOCK_CONTIGUOUS) or per tile.
 
 #include <cstdint>
 
@@ -14,7 +13,6 @@
 #include "perf.h"
 #include "profiler.h"
 
-// Globals
 std::uint32_t unp_cfg_context          = 0;
 std::uint32_t pack_sync_tile_dst_ptr   = 0;
 std::uint32_t math_sync_tile_dst_index = 0;

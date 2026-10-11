@@ -1,8 +1,7 @@
 # SPDX-FileCopyrightText: © 2026 Tenstorrent AI ULC
 # SPDX-License-Identifier: Apache-2.0
 
-"""Perf of the Blackhole block pack _llk_pack_block_contiguous_ (sources/pack_block_contiguous_perf.cpp) against the
-per-tile standard _llk_pack_; unit: one tile of the given dimensions."""
+"""Perf of the Blackhole block pack against the per-tile standard pack; unit: one tile."""
 
 import pytest
 from conftest import skip_for_quasar, skip_for_wormhole
