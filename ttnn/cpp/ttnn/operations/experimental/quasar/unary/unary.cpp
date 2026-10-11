@@ -56,4 +56,22 @@ Tensor reciprocal(
         input_tensor, {UnaryWithParam{UnaryOpType::RECIP}}, memory_config, optional_output_tensor);
 }
 
+Tensor sin(
+    const Tensor& input_tensor,
+    const std::optional<MemoryConfig>& memory_config,
+    const std::optional<Tensor>& optional_output_tensor) {
+    using ttnn::operations::unary::UnaryOpType;
+    using ttnn::operations::unary::UnaryWithParam;
+    return detail::unary_impl(input_tensor, {UnaryWithParam{UnaryOpType::SIN}}, memory_config, optional_output_tensor);
+}
+
+Tensor silu(
+    const Tensor& input_tensor,
+    const std::optional<MemoryConfig>& memory_config,
+    const std::optional<Tensor>& optional_output_tensor) {
+    using ttnn::operations::unary::UnaryOpType;
+    using ttnn::operations::unary::UnaryWithParam;
+    return detail::unary_impl(input_tensor, {UnaryWithParam{UnaryOpType::SILU}}, memory_config, optional_output_tensor);
+}
+
 }  // namespace ttnn::operations::experimental::quasar

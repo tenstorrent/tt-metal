@@ -38,4 +38,18 @@ Tensor reciprocal(
     const std::optional<MemoryConfig>& memory_config = std::nullopt,
     const std::optional<Tensor>& optional_output_tensor = std::nullopt);
 
+// ttnn.experimental.quasar.sin: element-wise sine (SFPU), same signature as ttnn.sin minus sub_core_grids.
+Tensor sin(
+    const Tensor& input_tensor,
+    const std::optional<MemoryConfig>& memory_config = std::nullopt,
+    const std::optional<Tensor>& optional_output_tensor = std::nullopt);
+
+// ttnn.experimental.quasar.silu: element-wise x * sigmoid(x) (SFPU), same signature as ttnn.silu minus
+// sub_core_grids. Also takes a ROW_MAJOR sharded input (the SDXL resnet blocks run it in place,
+// output_tensor = input_tensor, on a row-major block-sharded tensor).
+Tensor silu(
+    const Tensor& input_tensor,
+    const std::optional<MemoryConfig>& memory_config = std::nullopt,
+    const std::optional<Tensor>& optional_output_tensor = std::nullopt);
+
 }  // namespace ttnn::operations::experimental::quasar

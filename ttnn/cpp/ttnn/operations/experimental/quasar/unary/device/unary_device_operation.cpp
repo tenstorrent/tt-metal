@@ -39,14 +39,18 @@ void UnaryDeviceOperation::validate_on_program_cache_miss(
         static_cast<int>(input.storage_type()));
     TT_FATAL(input.buffer() != nullptr, "Quasar unary: input must be allocated in a device buffer");
 
-    // The upstream ROW_MAJOR path (rows chunked into tile-sized DFB pages) is not ported yet.
-    TT_FATAL(input.layout() == Layout::TILE, "Quasar unary: only TILE layout is supported, got {}", input.layout());
-    const auto& tile = input.tensor_spec().tile();
     TT_FATAL(
-        tile.get_height() == tt::constants::TILE_HEIGHT && tile.get_width() == tt::constants::TILE_WIDTH,
-        "Quasar unary: only 32x32 tiles are supported, got {}x{}",
-        tile.get_height(),
-        tile.get_width());
+        input.layout() == Layout::TILE || input.layout() == Layout::ROW_MAJOR,
+        "Quasar unary: only TILE and ROW_MAJOR layouts are supported, got {}",
+        input.layout());
+    if (input.layout() == Layout::TILE) {
+        const auto& tile = input.tensor_spec().tile();
+        TT_FATAL(
+            tile.get_height() == tt::constants::TILE_HEIGHT && tile.get_width() == tt::constants::TILE_WIDTH,
+            "Quasar unary: only 32x32 tiles are supported, got {}x{}",
+            tile.get_height(),
+            tile.get_width());
+    }
 
     TT_FATAL(
         CMAKE_UNIQUE_NAMESPACE::is_supported_float_dtype(input.dtype()),
@@ -71,6 +75,35 @@ void UnaryDeviceOperation::validate_on_program_cache_miss(
             out_memory_config.memory_layout() == TensorMemoryLayout::INTERLEAVED,
             "Quasar unary: a non-sharded output must be interleaved, got {}",
             out_memory_config.memory_layout());
+    }
+
+    // ROW_MAJOR: only the sharded in-place-shaped case (the factory streams each shard's bytes through tile-sized
+    // DFB entries, so the output shards must have the input's shape and layout). The upstream ROW_MAJOR
+    // interleaved path (rows chunked into tile-sized pages) is not ported.
+    if (input.layout() == Layout::ROW_MAJOR) {
+        TT_FATAL(
+            input.is_sharded() && out_memory_config.is_sharded(),
+            "Quasar unary: a ROW_MAJOR input must be sharded with a sharded output (input {}, output {})",
+            input.memory_config().memory_layout(),
+            out_memory_config.memory_layout());
+        TT_FATAL(
+            input.shard_spec().has_value(),
+            "Quasar unary: a ROW_MAJOR input needs a 2D shard spec (ND sharding is not supported)");
+        TT_FATAL(
+            input.dtype() == output_dtype,
+            "Quasar unary: a ROW_MAJOR input needs the output dtype to match ({} vs {})",
+            input.dtype(),
+            output_dtype);
+        const auto output_spec = compute_output_specs(args, tensor_args);
+        const auto& out_shard_spec = output_spec.memory_config().shard_spec();
+        TT_FATAL(
+            output_spec.memory_config().memory_layout() == input.memory_config().memory_layout() &&
+                out_shard_spec.has_value() && out_shard_spec->shape == input.shard_spec()->shape &&
+                out_shard_spec->grid == input.shard_spec()->grid &&
+                out_shard_spec->orientation == input.shard_spec()->orientation,
+            "Quasar unary: a ROW_MAJOR sharded input needs the output sharded the same way (input {}, output {})",
+            input.memory_config(),
+            output_spec.memory_config());
     }
 
     if (preallocated_output.has_value()) {

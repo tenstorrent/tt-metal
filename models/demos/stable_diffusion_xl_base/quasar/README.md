@@ -82,6 +82,7 @@ python models/demos/stable_diffusion_xl_base/quasar/tests/ops/generate_cases.py 
 | `test_linear.py -k 00_1x320` | with bfp8_b weights: `TT_FATAL ... Bfp8_b ... not supported on architecture quasar`; with bf16 weights: `TT_FATAL: DataMovementKernel is not supported on Quasar` (this `[1,320] x [320,1280] + bias + silu` shape with no program config lands in a legacy matmul factory) |
 | `test_move.py` (2), `test_unsqueeze.py` (4), `test_upsample.py` (2) | pass |
 | `test_scaled_dot_product_attention.py`, all 4 cases at full size on the 8x4 grid | pass (sim time: case 00 q=k=4096 386 s, 01 13 s, 02 52 s, 03 9 s) |
+| `test_sin.py` (2), `test_slice.py` (4), `test_mul_.py` (3), `test_silu.py` (13, ROW_MAJOR block sharded, in place) | pass (craq-sim `quasar` 98a32966 with `soc_descriptors/quasar_32_arch_ttsim.yaml`; silu 60 s for all 13) |
 
 ## Quasar-native sync notes (learned while porting)
 
