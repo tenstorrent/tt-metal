@@ -33,8 +33,9 @@ for r in $(seq "$ROUNDS"); do
     rc=$?
     echo "== round $r $v rc=$rc $(( $(date +%s) - t0 )) s: $(grep -E '[0-9]+ (passed|failed|skipped|error)' "$out.log" | tail -1)"
     if [[ $rc -ne 0 ]] || ! grep -qE '[0-9]+ passed' "$out.log"; then
-      fail=1; grep -E '^(SKIPPED|FAILED|ERROR)' "$out.log" | head -5; tail -40 "$out.log"
-      [[ $r -eq 1 ]] && { echo "first round did not pass, stopping"; exit 1; }
+      fail=1; grep -E '^(SKIPPED|FAILED|ERROR) ' "$out.log" | sort -u | head -5
+      # A failed arm still ran its kernels, so its device times count; an arm that ran nothing ends the job.
+      grep -qE '[0-9]+ (passed|failed)' "$out.log" || { tail -40 "$out.log"; echo "no test ran, stopping"; exit 1; }
     fi
     python3 ci_ab/devtime.py "$out" "$v" "$r"
   done
