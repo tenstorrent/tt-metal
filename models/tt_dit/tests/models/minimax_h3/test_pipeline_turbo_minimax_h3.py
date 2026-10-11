@@ -41,6 +41,7 @@ from PIL import Image
 import ttnn
 from models.perf.benchmarking_utils import BenchmarkProfiler
 
+from ....pipelines.events import profiler_event_callback
 from ....pipelines.minimax_h3.packing import MINIMAX_H3_FPS, resolve_canvas_size
 from ....pipelines.minimax_h3.pipeline_minimax_h3_turbo import TURBO_NUM_FORWARDS, MiniMaxH3TurboPipeline
 from ....pipelines.minimax_h3.policy import align_num_frames
@@ -70,7 +71,7 @@ VIDEO_SHIFT = WORKING_POINTS[WORKING_POINT]["video_shift"]
 AUDIO_SHIFT = WORKING_POINTS[WORKING_POINT]["audio_shift"]
 
 DURATIONS_S = (5, 10, 15)
-SEED = 0
+SEED = int(os.environ.get("MINIMAX_H3_TURBO_SEED", 0))
 PROMPT = CALIBRATED_FOX_PROMPT
 
 # NFE from the model card, plus the terminal sigma: `num_inference_steps` counts grid points.
@@ -93,6 +94,9 @@ TASK = os.environ.get("MINIMAX_H3_TURBO_TASK", "fl2va")
 WARM_RUNGS = [int(rung) for rung in os.environ.get("MINIMAX_H3_TURBO_WARM_RUNGS", "").split(",") if rung.strip()]
 WARM_USED_LAYOUTS = os.environ.get("MINIMAX_H3_TURBO_WARM_USED_LAYOUTS") == "1"
 CACHE_ONLY = os.environ.get("MINIMAX_H3_TURBO_CACHE_ONLY") == "1"
+# Timed generations after warmup, one perf table each: a single replay cannot separate an A/B delta of a few
+# percent from run-to-run noise.
+REPLAYS = int(os.environ.get("MINIMAX_H3_TURBO_REPLAYS", 1))
 
 # 50 transformer blocks and 2 refiner blocks, each with fused to_qkv, to_out, ff1 and ff2.
 DEVICE_BOUND_TARGETS = 52 * 4
@@ -212,6 +216,19 @@ def test_turbo_end_to_end(mesh_device, reset_seeds, duration_s):
         seed=SEED,
         profiler=benchmark_profiler,
     )
+    for iteration in range(1, REPLAYS):
+        with benchmark_profiler("run", iteration=iteration):
+            output = pipeline(
+                PROMPT,
+                image=keyframe,
+                num_frames=num_frames,
+                height=HEIGHT,
+                width=WIDTH,
+                num_inference_steps=NUM_INFERENCE_STEPS,
+                seed=SEED,
+                on_event=profiler_event_callback(benchmark_profiler, iteration),
+            )
+            ttnn.synchronize_device(mesh_device)
 
     # The adapter reached the device: `load_h3_adapter_into` raises on a target it cannot place, so
     # what is left to confirm is that it bound anything at all and bound the whole of it.
@@ -227,18 +244,20 @@ def test_turbo_end_to_end(mesh_device, reset_seeds, duration_s):
         if not pipeline._precomputed_adaln():
             _assert_two_time_temb_matches_host(pipeline, mesh_device)
 
-    log_pipeline_perf(
-        benchmark_profiler,
-        label=f"{TASK}-turbo",
-        pipeline=pipeline,
-        num_forwards=NUM_FORWARDS,
-        width=WIDTH,
-        height=HEIGHT,
-        num_frames=num_frames,
-        fps=MINIMAX_H3_FPS,
-        num_inference_steps=NUM_INFERENCE_STEPS,
-        extra_lines=(f"adapter {Path(lora_path).name}", f"video shift {VIDEO_SHIFT}, audio shift {AUDIO_SHIFT}"),
-    )
+    for iteration in range(REPLAYS):
+        log_pipeline_perf(
+            benchmark_profiler,
+            label=f"{TASK}-turbo",
+            pipeline=pipeline,
+            num_forwards=NUM_FORWARDS,
+            width=WIDTH,
+            height=HEIGHT,
+            num_frames=num_frames,
+            fps=MINIMAX_H3_FPS,
+            num_inference_steps=NUM_INFERENCE_STEPS,
+            extra_lines=(f"adapter {Path(lora_path).name}", f"video shift {VIDEO_SHIFT}, audio shift {AUDIO_SHIFT}"),
+            iteration=iteration,
+        )
 
     check_audio_sanity(
         output.audio,
