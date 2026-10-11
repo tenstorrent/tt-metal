@@ -42,7 +42,6 @@
 #include "api/compute/experimental/add_rsqrt.h"
 #include "api/dataflow/circular_buffer.h"
 #include "ttnn/cpp/ttnn/kernel_lib/reduce_helpers_compute.hpp"
-#include "api/debug/kernel_profiler.hpp"
 
 void kernel_main() {
     // === Compile-time args ===
@@ -493,7 +492,6 @@ void kernel_main() {
                                     // round-trip — then *1/H + eps + rsqrt on col 0. One transpose
                                     // total (deferred past the sum) vs one per gathered tile.
                                     cb_stats_transposed_gathered.wait_front(gathered_wait_pages);
-                                    DeviceZoneScopedN("C_COMB");
                                     reconfig_data_format(stats_transposed_gathered_cb, stats_transposed_gathered_cb);
                                     pack_reconfig_data_format(reduce_result_cb);
                                     tile_regs_acquire();
@@ -603,7 +601,6 @@ void kernel_main() {
                             pack_reconfig_data_format(output_cb);
                             mul_bcast_cols_init(intermediate_cb, reduce_result_cb);
                             cb_reduce_result.wait_front(1);
-                            DeviceZoneScopedN("C_POST");
                             for (uint32_t col_tile = 0; col_tile < num_tile_cols; col_tile += block_size) {
                                 const uint32_t tiles_in_block =
                                     (col_tile + block_size <= num_tile_cols) ? block_size : (num_tile_cols - col_tile);

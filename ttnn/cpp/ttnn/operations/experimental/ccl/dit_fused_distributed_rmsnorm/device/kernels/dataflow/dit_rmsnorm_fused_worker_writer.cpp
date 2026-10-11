@@ -339,10 +339,11 @@ void kernel_main() {
         // only NoC-write the valid tiles. Matches the drain-only writer's drain loop.
         {
             DeviceZoneScopedN("W_DRAIN");
-            // Banks 0-3 sit in the x=0 DRAM column and banks 4-7 in the x=9 column (BH channel == bank).
-            // The short eastward (NoC0) column is x=9 for cores left of it and x=0 (via the 16->0 wrap)
-            // for cores right of it.
-            const bool left_of_dram_col = my_x[0] < 9u;
+            // Blackhole DRAM sits in two NoC columns: banks 0-3 at x=0 and banks 4-7 at
+            // x=kBhEastDramColumnX (channel == bank). The short eastward (NoC0) column is the east one
+            // for cores left of it and x=0 (via the wrap) for cores right of it.
+            constexpr uint32_t kBhEastDramColumnX = 9u;
+            const bool left_of_dram_col = my_x[0] < kBhEastDramColumnX;
             for (uint32_t col_tile = 0; col_tile < num_tile_cols; col_tile += block_size) {
                 const uint32_t tiles_in_block =
                     ((num_tile_cols - col_tile) >= block_size) ? block_size : (num_tile_cols - col_tile);
