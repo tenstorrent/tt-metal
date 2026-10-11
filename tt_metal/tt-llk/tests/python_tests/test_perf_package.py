@@ -27,7 +27,7 @@ class _View:
     def count(self, bank, name):
         return float(self._values.get(name, 0.0))
 
-    def cycles(self, bank):
+    def cycles(self, bank, counter_name=None):
         return self._cycles if self._values else 0.0
 
     def has(self, name):
@@ -213,6 +213,40 @@ def test_a_missed_select_reads_missing_not_zero():
     assert metrics.bounded(float("nan")) is None
     assert metrics.bounded(1.5) == 1.0
     assert metrics.bounded(-0.5) == 0.0
+
+
+def test_l1_wait_metrics_pair_requests_with_their_grants():
+    # Wormhole mux group 0: unpacker 0, port 1 (unpacker 1 + packer 1), TDMA bundles 0 / 1 (packers 2 / 3).
+    out = metrics.compute_metrics(
+        _View(
+            {
+                "L1_0_UNPACKER_0": 120.0,
+                "L1_0_UNPACKER_0_GRANT": 100.0,
+                "L1_0_UNPACKER_1_ECC_PACK1": 60.0,
+                "L1_0_PORT1_GRANT": 50.0,
+                "L1_0_TDMA_BUNDLE_0_RISC": 40.0,
+                "L1_0_TDMA_BUNDLE_0_GRANT": 30.0,
+                "L1_0_TDMA_BUNDLE_1_TRISC": 40.0,
+                "L1_0_TDMA_BUNDLE_1_GRANT": 30.0,
+            }
+        )
+    )
+    assert out["l1_wait_per_word_ratio"] == pytest.approx(50.0 / 210.0)
+    assert out["l1_packer_ports_backpressure_pct"] == pytest.approx(25.0)
+    # Mux group 1 alone: packer 0 (port 8) and the extended unpacker interfaces.
+    out = metrics.compute_metrics(
+        _View(
+            {
+                "L1_1_TDMA_PACKER_2": 40.0,
+                "L1_1_PORT8_GRANT": 32.0,
+                "L1_1_EXT_UNPACKER_1": 100.0,
+                "L1_1_EXT_UNPACKER_1_GRANT": 100.0,
+            }
+        )
+    )
+    assert out["l1_wait_per_word_ratio"] == pytest.approx(8.0 / 132.0)
+    assert out["l1_packer_ports_backpressure_pct"] == pytest.approx(20.0)
+    assert metrics.compute_metrics(_View({}))["l1_wait_per_word_ratio"] is None
 
 
 def test_srcb_write_metrics_mirror_srca():

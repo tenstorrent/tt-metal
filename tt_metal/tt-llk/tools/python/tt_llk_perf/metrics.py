@@ -132,6 +132,32 @@ L1_EXT_PACK = (
     + ("L1_4_PACKER_IF_1_TAG_SEARCH",)
 )
 L1_TDMA_BUNDLE = ("L1_0_TDMA_BUNDLE_0_RISC", "L1_0_TDMA_BUNDLE_1_TRISC")
+# Wormhole ports whose grant counter is not named <request>_GRANT.
+L1_GRANT_OF = {
+    "L1_0_UNPACKER_1_ECC_PACK1": "L1_0_PORT1_GRANT",
+    "L1_0_TDMA_BUNDLE_0_RISC": "L1_0_TDMA_BUNDLE_0_GRANT",
+    "L1_0_TDMA_BUNDLE_1_TRISC": "L1_0_TDMA_BUNDLE_1_GRANT",
+    "L1_1_TDMA_PACKER_2": "L1_1_PORT8_GRANT",
+}
+# Wormhole packer write ports: packer 0 (port 8) and packers 2 and 3 (TDMA bundles 0 and 1, ports 2 and 3, shared
+# with the RISC cores). Packer 1 shares port 1 with unpacker 1, see l1_port1_backpressure_pct.
+L1_WH_PACKER_PORTS = ("L1_1_TDMA_PACKER_2",) + L1_TDMA_BUNDLE
+# Every TDMA (unpacker / packer) L1 client port, both arches; NoC ports are left out.
+L1_TDMA_CLIENTS = (
+    L1_UNPACKER
+    + L1_PORT1_NAMES
+    + L1_PORT8_NAMES
+    + L1_UNPACKER1_EXT
+    + L1_UNPACKER0_EXT
+    + L1_EXT_PACK
+    + L1_TDMA_BUNDLE
+)
+
+
+def l1_grant_of(request_name: str) -> str:
+    return L1_GRANT_OF.get(request_name, request_name + "_GRANT")
+
+
 L1_ALL = (
     L1_RING0
     + L1_RING1
@@ -546,6 +572,30 @@ def compute_metrics(v: CounterView) -> dict:
 
     any_thread_stall = _instrn_rate("ANY_THREAD_STALL")
 
+    # L1 contention in the window: a refused request cycle is a cycle the client waited for its bank. Per word moved,
+    # summed over the TDMA client ports captured (one L1 mux group per run, so a mean over whatever is present).
+    _wait_pairs = [n for n in L1_TDMA_CLIENTS if strict(v, n, l1_grant_of(n))]
+    _wait_req = sum(v.count("L1", n) for n in _wait_pairs)
+    _wait_grant = sum(v.count("L1", l1_grant_of(n)) for n in _wait_pairs)
+    l1_wait_per_word = (
+        safe_div(max(0.0, _wait_req - _wait_grant), _wait_grant)
+        if _wait_pairs
+        else None
+    )
+    _wh_pk = [n for n in L1_WH_PACKER_PORTS if strict(v, n, l1_grant_of(n))]
+    l1_wh_packer_backpressure = (
+        bounded(
+            one_minus(
+                safe_div(
+                    sum(v.count("L1", l1_grant_of(n)) for n in _wh_pk),
+                    sum(v.count("L1", n) for n in _wh_pk),
+                )
+            )
+        )
+        if _wh_pk and not v.is_blackhole()
+        else None
+    )
+
     l1_unpacker1_ext_backpressure = _bp(L1_UNPACKER1_EXT)
     l1_unpacker0_ext_backpressure = _bp(L1_UNPACKER0_EXT)
     l1_ext_pack_backpressure = _bp(L1_EXT_PACK)
@@ -752,6 +802,8 @@ def compute_metrics(v: CounterView) -> dict:
         "l1_unpacker1_ext_backpressure_pct": pct(l1_unpacker1_ext_backpressure),
         "l1_unpacker0_ext_backpressure_pct": pct(l1_unpacker0_ext_backpressure),
         "l1_ext_pack_backpressure_pct": pct(l1_ext_pack_backpressure),
+        "l1_packer_ports_backpressure_pct": pct(l1_wh_packer_backpressure),
+        "l1_wait_per_word_ratio": l1_wait_per_word,
         "unpack0_thread1_share_pct": pct(unpack0_thread1_share),
         "unpack1_thread1_share_pct": pct(unpack1_thread1_share),
         "srca_write_even_tid_share_pct": pct(srca_write_even_share),
@@ -930,6 +982,8 @@ METRIC_LABELS = {
     "l1_unpacker1_ext_backpressure_pct": "L1 Unpacker1 Ext Backpressure",
     "l1_unpacker0_ext_backpressure_pct": "L1 Unpacker0 Ext Backpressure",
     "l1_ext_pack_backpressure_pct": "L1 Packer Interfaces Backpressure",
+    "l1_packer_ports_backpressure_pct": "L1 Packer Ports Backpressure",
+    "l1_wait_per_word_ratio": "L1 Wait Cycles per Word",
     "unpack0_thread1_share_pct": "Unpacker0 T1 Share",
     "unpack1_thread1_share_pct": "Unpacker1 T1 Share",
     "srca_write_even_tid_share_pct": "SrcA Write Even-TID Share",
