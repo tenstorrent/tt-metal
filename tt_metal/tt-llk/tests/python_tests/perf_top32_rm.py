@@ -1,9 +1,6 @@
 # SPDX-FileCopyrightText: © 2026 Tenstorrent AI ULC
 # SPDX-License-Identifier: Apache-2.0
-"""
-The top32_rm chunk walk of the DeepSeek sampling kernel (sources/top32_rm_perf.cpp, the perf twin of top32_rm_test.cpp)
-on one row and its index row. TILE_LOOP is cycles per 64-element chunk of the row.
-"""
+"""Perf of the top32_rm chunk walk of the sampling kernel, in cycles per 64-element chunk."""
 
 import pytest
 import torch

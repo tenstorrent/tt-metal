@@ -64,10 +64,10 @@ void run_kernel(RUNTIME_PARAMETERS params)
         for (std::uint32_t c = 0; c < TOPK_XL_NUM_CHUNKS; c++)
         {
             unpack_copy_tile(params, r, c, src_format, dst_format);
-            _llk_unpack_set_srcb_dummy_valid_(); // local sort
+            _llk_unpack_set_srcb_dummy_valid_();
             if (c > 0)
             {
-                _llk_unpack_set_srcb_dummy_valid_(); // rebuild
+                _llk_unpack_set_srcb_dummy_valid_();
             }
         }
     }

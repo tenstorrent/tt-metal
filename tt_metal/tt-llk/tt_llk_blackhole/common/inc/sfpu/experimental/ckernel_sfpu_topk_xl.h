@@ -1251,13 +1251,12 @@ inline void bitonic_sort_len_32_steps_4_3(bool ascending)
     }
 }
 
-// Sort length-32: Step 5 + Steps 4 & 3 + transpose + Steps 4 & 3 again.
-// Used to build len=32 bitonic runs from sorted len=16 sub-runs.
+// Step 5 at stride 16, then steps 4 and 3, transpose, steps 4 and 3 again.
 inline void bitonic_sort_len_32(bool ascending)
 {
     if (ascending)
     {
-        // Step 5 — stride 16.
+        // Step 5, stride 16.
         TTI_SFPSWAP(0, p_sfpu::LREG4, p_sfpu::LREG0, p_sfpswap::ALL_ROWS_MAX);
         TTI_SFPSWAP(0, p_sfpu::LREG5, p_sfpu::LREG1, p_sfpswap::ALL_ROWS_MAX);
         TTI_SFPSWAP(0, p_sfpu::LREG6, p_sfpu::LREG2, p_sfpswap::ALL_ROWS_MAX);
@@ -1265,7 +1264,7 @@ inline void bitonic_sort_len_32(bool ascending)
     }
     else
     {
-        // Step 5 — stride 16.
+        // Step 5, stride 16.
         TTI_SFPSWAP(0, p_sfpu::LREG0, p_sfpu::LREG4, p_sfpswap::ALL_ROWS_MAX);
         TTI_SFPSWAP(0, p_sfpu::LREG1, p_sfpu::LREG5, p_sfpswap::ALL_ROWS_MAX);
         TTI_SFPSWAP(0, p_sfpu::LREG2, p_sfpu::LREG6, p_sfpswap::ALL_ROWS_MAX);

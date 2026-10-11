@@ -1132,9 +1132,7 @@ class ROPE(TemplateParameter):
 
 @dataclass
 class TOPK_PERF(TemplateParameter):
-    """Knobs of the TopK pipeline perf kernel (sources/topk_perf.cpp): the network calls a step issues, whether
-    MATH_ISOLATE drops the datacopies, whether the local sort gets tile0_sorted, whether the rebuild gets its direction
-    at run time as the multi-core kernels pass it."""
+    """Knobs of the TopK pipeline perf kernel: the network calls a step issues and which run-time arguments it passes."""
 
     topk_phase: str = "full"
     topk_drop_copy: bool = False
@@ -1155,9 +1153,7 @@ class TOPK_PERF(TemplateParameter):
 
 @dataclass
 class TOPK_XL_PERF(TemplateParameter):
-    """Knobs of the topk_xl chunk pipeline perf kernel (sources/topk_xl_perf.cpp): K, the chunks of the row, and whether
-    the chunks stay fused end to end (topk_large_indices' wide-row path) or take the unfused row-major op path.
-    """
+    """Knobs of the topk_xl chunk pipeline perf kernel: K, the chunks of the row, and the fused or unfused path."""
 
     topk_xl_k: int = 512
     topk_xl_chunks: int = 2
@@ -1220,8 +1216,7 @@ class TOPK_XL(TemplateParameter):
 
 @dataclass
 class TOP32_RM_PERF(TemplateParameter):
-    """Knobs of the top32_rm chunk walk perf kernel (sources/top32_rm_perf.cpp): the row length, a multiple of the
-    64-element chunk, and the L1 datum size of the value and index rows."""
+    """Knobs of the top32_rm chunk walk perf kernel: the row length and the L1 datum size of the value and index rows."""
 
     top32_perf_row_elements: int = 256
     top32_perf_datum_bytes: int = 2

@@ -136,7 +136,6 @@ inline void math_row(const std::uint32_t num_chunks, CopyChunk&& copy_chunk) {
     for (; taken < posted; taken++) {
         take_pack_token();
     }
-    // The epilogue's token.
     take_pack_token();
 }
 

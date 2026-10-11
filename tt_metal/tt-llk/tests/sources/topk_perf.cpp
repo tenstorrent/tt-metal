@@ -85,7 +85,7 @@ void run_kernel(RUNTIME_PARAMETERS params)
                 _perf_unpack_loop_set_valid<true, is_fp32_dest_acc_en>(4 * 4 * steps);
             }
         }
-        else if constexpr (PERF_RUN_TYPE != PerfRunType::PACK_ISOLATE) // L1_TO_L1, UNPACK_ISOLATE
+        else if constexpr (PERF_RUN_TYPE != PerfRunType::PACK_ISOLATE)
         {
             for (std::uint32_t loop = 0; loop < LOOP_FACTOR; ++loop)
             {
@@ -232,7 +232,6 @@ void run_kernel(RUNTIME_PARAMETERS params)
         START_PERF_MEASURE("TILE_LOOP")
         if constexpr (PERF_RUN_TYPE == PerfRunType::PACK_ISOLATE)
         {
-            // idle
         }
         else if constexpr (PERF_RUN_TYPE == PerfRunType::UNPACK_ISOLATE)
         {
@@ -245,7 +244,7 @@ void run_kernel(RUNTIME_PARAMETERS params)
                 }
             }
         }
-        else // MATH_ISOLATE, L1_TO_L1
+        else
         {
             for (std::uint32_t loop = 0; loop < LOOP_FACTOR; ++loop)
             {

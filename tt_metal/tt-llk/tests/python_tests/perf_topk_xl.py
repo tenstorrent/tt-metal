@@ -1,10 +1,6 @@
 # SPDX-FileCopyrightText: © 2026 Tenstorrent AI ULC
 # SPDX-License-Identifier: Apache-2.0
-"""
-The topk_xl chunk pipeline of topk_large_indices (sources/topk_xl_perf.cpp, the perf twin of topk_xl_test.cpp) on one
-row: K' 512, 1024 and 2048 with 2, 8 and 32 chunks fused end to end, and the unfused row-major op path. TILE_LOOP is
-cycles per input tile of the row (a chunk is K' / 1024 tiles, at least one).
-"""
+"""Perf of the topk_xl chunk pipeline in cycles per input tile of the row, fused end to end and unfused."""
 
 import pytest
 import torch

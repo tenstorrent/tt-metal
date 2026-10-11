@@ -1,9 +1,6 @@
 # SPDX-FileCopyrightText: © 2026 Tenstorrent AI ULC
 # SPDX-License-Identifier: Apache-2.0
-"""
-The tile0_sorted argument of topk_local_sort on the insertion step (sources/topk_presorted_test.cpp): the full and
-the skipping build sort the same slab and are compared bit for bit, the full one also against a golden.
-"""
+"""topk_local_sort with tile0_sorted on the insertion step matches the full sort bit for bit and the golden."""
 
 from dataclasses import dataclass
 
@@ -102,8 +99,7 @@ def _stable_order(values, tie_keys, descending):
 
 
 def _golden_second_sort(row_values, descending, tie_by_position):
-    """Values and indices of the slab after the insertion step: the first sort's top 32 plus tile 1 again.
-    Stable ties by the index tile, rank-stamped ties by slab position."""
+    """Values and indices of the slab after the insertion step; ties by the index tile, or by slab position when rank-stamped."""
     values = _canonical(row_values)
     indices = torch.arange(W_VALUES)
     order = _stable_order(

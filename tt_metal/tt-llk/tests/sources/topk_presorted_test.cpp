@@ -126,7 +126,6 @@ void run_kernel(RUNTIME_PARAMETERS params)
     {
         if (sort == 1)
         {
-            // The incoming tile of the insertion step: tile 1 again, values then indices.
             copy_tile_to_dest(1, math_format[0], false);
             copy_tile_to_dest(3, math_format[1], false);
         }

@@ -1,9 +1,6 @@
 # SPDX-FileCopyrightText: © 2026 Tenstorrent AI ULC
 # SPDX-License-Identifier: Apache-2.0
-"""
-The phases of the generic TopK network on the pipeline perf kernel (sources/topk_perf.cpp) in MATH_ISOLATE, one
-phase per build: per call = (cycles per row of the phase build - the skeleton) / calls per row.
-"""
+"""Perf of each phase of the generic TopK network in MATH_ISOLATE, per call of the phase."""
 
 import pytest
 from conftest import skip_for_quasar, skip_for_wormhole

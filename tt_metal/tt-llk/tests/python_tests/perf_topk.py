@@ -1,9 +1,6 @@
 # SPDX-FileCopyrightText: © 2026 Tenstorrent AI ULC
 # SPDX-License-Identifier: Apache-2.0
-"""
-The generic TopK pipeline (sources/topk_perf.cpp, the perf twin of topk_test.cpp) in the four run types.
-TILE_LOOP is cycles per value tile of the row; the per-phase split of the same kernel is perf_topk_phase.py.
-"""
+"""Perf of the generic TopK pipeline in the four run types, in cycles per value tile of the row."""
 
 import pytest
 from conftest import skip_for_quasar, skip_for_wormhole

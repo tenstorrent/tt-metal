@@ -93,8 +93,7 @@ constexpr bool multi_chunk_rows = get_compile_time_arg_val(6) != 0;
 
 using ttnn::operations::experimental::topk_large_indices::program::ComputeBodyMode;
 
-// FirstOfRow: a row's first chunk configures the unpacker and the math unit for the input; the later chunks of the
-// row find that configuration intact and set up only the copy.
+// FirstOfRow: a row's first chunk configures the unpacker and math unit; later chunks find that intact and set up only the copy.
 template <uint32_t K, bool FirstOfRow = true>
 FORCE_INLINE void copy_chunk(CircularBuffer& input, uint32_t dst, uint32_t active_elements) {
     constexpr uint32_t tiles_per_sequence = (K + elements_per_tile - 1) / elements_per_tile;
@@ -279,9 +278,9 @@ FORCE_INLINE void reduce_split_row(
         }
         topk_xl_copy_tile<K>(input_cb, 0, 0, chunk + 1 == num_chunks ? tail_elements : K);
         input.pop_front(tiles_per_sequence);
-        llk_unpack_set_srcb_dummy_valid();  // the local sort's transposes
+        llk_unpack_set_srcb_dummy_valid();
         if (chunk > 0) {
-            llk_unpack_set_srcb_dummy_valid();  // the rebuild's
+            llk_unpack_set_srcb_dummy_valid();
         }
     }
 #endif
@@ -385,9 +384,9 @@ FORCE_INLINE void reduce_split_segmented_row(
                 }
                 topk_xl_copy_tile<K>(input_cb, 0, 0, chunk + 1 == seg_chunks ? seg_tail : K);
                 input.pop_front(tiles_per_sequence);
-                llk_unpack_set_srcb_dummy_valid();  // the local sort's transposes
+                llk_unpack_set_srcb_dummy_valid();
                 if (chunk > 0) {
-                    llk_unpack_set_srcb_dummy_valid();  // the rebuild's
+                    llk_unpack_set_srcb_dummy_valid();
                 }
             }
 #endif
@@ -460,7 +459,6 @@ void kernel_main() {
     constexpr auto body_mode = static_cast<ComputeBodyMode>(get_compile_time_arg_val(3));
     constexpr bool valid_length_from_metadata = get_compile_time_arg_val(4) != 0;
     constexpr uint32_t meta_cb = get_compile_time_arg_val(5);
-    // The segmented body's accumulator buffer, or 0 where the body has none.
     constexpr uint32_t acc_cb = get_compile_time_arg_val(7);
 
     static_assert(K == 512 || K == 1024 || K == 2048, "K must be 512, 1024, or 2048");

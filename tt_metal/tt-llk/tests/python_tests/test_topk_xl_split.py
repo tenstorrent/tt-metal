@@ -1,10 +1,6 @@
 # SPDX-FileCopyrightText: © 2026 Tenstorrent AI ULC
 # SPDX-License-Identifier: Apache-2.0
-"""
-The split-thread topk_xl chunk (sources/topk_xl_split_test.cpp: SFPU on PACK, copy and transposes on MATH, two
-chunks in flight) against the single-thread fused end-to-end kernel (sources/topk_xl_test.cpp) on the same
-stimuli: the packed results must match bit for bit, and both must pass test_topk_xl's golden check.
-"""
+"""The split-thread topk_xl chunk against the single-thread fused kernel: packed results match bit for bit."""
 
 import pytest
 import torch

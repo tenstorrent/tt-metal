@@ -1,10 +1,6 @@
 # SPDX-FileCopyrightText: © 2026 Tenstorrent AI ULC
 # SPDX-License-Identifier: Apache-2.0
-"""
-perf_topk_xl.py's fused K' 512 and 2048 rows (2, 8 and 32 chunks) with the chunk split across threads
-(sources/topk_xl_split_perf.cpp): the SFPU work on PACK, the copy and the face transposes on MATH, two chunks in
-flight. TILE_LOOP is cycles per input tile of the row, comparable row for row with perf_topk_xl.py.
-"""
+"""Perf of the fused topk_xl rows with each chunk split across MATH and PACK, comparable with perf_topk_xl.py."""
 
 import pytest
 import torch

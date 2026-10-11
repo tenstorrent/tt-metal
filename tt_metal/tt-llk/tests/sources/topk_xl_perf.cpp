@@ -71,10 +71,10 @@ void run_kernel(RUNTIME_PARAMETERS params)
             for (std::uint32_t c = 0; c < TOPK_XL_NUM_CHUNKS; c++)
             {
                 unpack_copy_tile(params, c, src_format, dst_format);
-                _llk_unpack_set_srcb_dummy_valid_(); // local sort
+                _llk_unpack_set_srcb_dummy_valid_();
                 if (c > 0)
                 {
-                    _llk_unpack_set_srcb_dummy_valid_(); // rebuild
+                    _llk_unpack_set_srcb_dummy_valid_();
                 }
             }
         }
@@ -237,7 +237,6 @@ void run_kernel(RUNTIME_PARAMETERS params)
         for (std::uint32_t loop = 0; loop < LOOP_FACTOR; loop++)
         {
             _llk_packer_wait_for_math_done_();
-            // The value region of slot 0, then its index region.
             for (std::uint32_t t = 0; t < 2 * TILES_PER_SEQ; t++)
             {
                 _llk_pack_<dest_sync, is_fp32_dest_acc_en, ckernel::PackMode::Default>(SLOT0 + t, L1_ADDRESS(params.buffer_Res[t]));

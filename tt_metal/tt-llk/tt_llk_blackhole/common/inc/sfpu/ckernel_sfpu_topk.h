@@ -620,8 +620,8 @@ TT_ALWAYS_INLINE void topk_cmp_swap_stable_directional()
     // is an entry invariant established once per LLK entry point (see the STABLE_SORT branch
     // of _bitonic_topk_{phases_steps,merge,rebuild}) and re-established by the trailing
     // SFPENCC of every comparator body.
-    TTI_SFPLE(0, VC, VD, 1); // flags = VC >= VD
-    TTI_SFPLE(0, VD, VC, 1); // and VD >= VC, in the lanes still enabled
+    TTI_SFPLE(0, VC, VD, 1);
+    TTI_SFPLE(0, VD, VC, 1);
 
     // Secondary key: index compare-exchange under the tie mask.
     if constexpr (INDEX_MIN_TO_VD)
@@ -1507,17 +1507,12 @@ inline void bitonic_topk_merge_group(const std::uint32_t offset, const std::uint
     bitonic_topk_load8<is_fp32_dest_acc_en, FUSED, RANK_STAMPED>(offset, ld_dist);
     if constexpr (RANK_STAMPED)
     {
-        // Re-key both runs' value lo16 with fresh sign-conditioned local
-        // ranks so this merge AND the rebuild that follows it compare
-        // distinct keys whose tie order is the true index order. The
-        // true indices are live in LREG4/5 from the load above: from
-        // here to the swap, ALU-only writes to LREG0..3 (TEN-2932).
+        // Re-key both runs' value lo16 with fresh sign-conditioned local ranks so the merge and the rebuild after it compare
+        // distinct keys; the true indices stay live in LREG4/5, so only ALU writes to LREG0..3 until the swap.
         if (first_in_block)
         {
-            // Fresh per-pair rank iota: rank = 4*ii + (j>>3) (each load
-            // covers 4 consecutive run positions per lane group;
-            // LTILEID = 2*j). Left-run base is 0 for every in-tree
-            // caller -- one merge call per tile pair.
+            // Per-pair rank iota: rank = 4*ii + (j>>3), each load covering 4 consecutive run positions per lane group;
+            // the left run starts at 0.
             TTI_SFPMOV(0, p_sfpu::LTILEID, p_sfpu::LREG2, 0);
             TTI_SFPSHFT((-4) & 0xFFF, 0, p_sfpu::LREG2, 1);
         }
@@ -1544,20 +1539,8 @@ inline void bitonic_topk_merge_group(const std::uint32_t offset, const std::uint
     }
     if constexpr (STABLE_SORT)
     {
-        // top_min selects the value operand order (which run receives the
-        // minima), exactly as in the unstable arm below. The tie-break polarity
-        // comes from TIE_ORDER -- the GLOBAL sort
-        // order. Anchoring the tie routing to
-        // the operand order (the index minimum rides with the value minimum or
-        // maximum per the global mode) makes every merge a comparator on ONE
-        // fixed total order [value, then index], so callers may issue merges
-        // with per-block alternating directions (ttnn.sort's bitonic merge
-        // network, which always binds top_min=false and routes the outputs
-        // afterwards) or in the global direction (the ttnn topk kernels, which
-        // bind top_min = !largest; the LLK/quasar test kernels, which bind
-        // TOPK_SORT_DIRECTION). For every global-direction caller this compiles
-        // to the pre-existing selection, since they program the runtime mode
-        // from the same flag they derive top_min from.
+        // top_min selects which run receives the minima; the tie-break polarity follows the global TIE_ORDER, so every
+        // merge is a comparator on one fixed total order [value, then index] and callers may alternate directions per block.
         if constexpr (top_min)
         {
             topk_cmp_swap_stable_min_to_vd<p_sfpu::LREG1, p_sfpu::LREG0, p_sfpswap::ALL_ROWS_MAX, TIE_ORDER>();
@@ -1666,8 +1649,7 @@ inline void _bitonic_topk_merge(const int m_iter, const int k)
             // With 16 group words or fewer per quadrant (a group per 8 datums), the counter walk's increments cost more than they save.
             if (((dist & 7) == 0) && (total_datums_to_compare * group_words > 128))
             {
-                // Blocks start on a face row: a block's group words are fixed and the dest counter walks its groups, 4 rows on
-                // (20 into the next face).
+                // Blocks start on a face row: the dest counter walks a block's fixed group words, 4 rows on (20 into the next face).
                 std::uint32_t blk_offset = 0;
                 while (datums_compared < total_datums_to_compare)
                 {
