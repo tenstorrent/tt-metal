@@ -35,6 +35,40 @@ inline uint64_t qkv_causal_conv1d_silu_l1_bytes(uint64_t block_ct, uint64_t tile
     return (dfb_blocks * block_ct * tile_bytes) + qkv_causal_conv1d_silu_window_bytes(block_ct, element_bytes);
 }
 
+// Tiled input: the reader keeps two parities of [left, right] 35-row strips per channel tile, one staging tile per
+// channel tile and three rows of the channel block, plus alignment slack.
+inline uint64_t qkv_causal_conv1d_silu_tiled_scratch_bytes(uint64_t block_ct, uint64_t tile_bytes) {
+    constexpr uint64_t strip_stride = 1152;
+    return (2 * block_ct * 2 * strip_stride) + 64 + (block_ct * tile_bytes) +
+           ((qkv_causal_conv1d_silu_tap_count - 1) * block_ct * 2 * tt::constants::TILE_WIDTH) + 64;
+}
+
+// Channel tiles per compute group: the destination registers hold one group's outputs.
+inline uint32_t qkv_causal_conv1d_silu_tiled_group(uint32_t block_ct) {
+    for (uint32_t group = 8; group > 1; --group) {
+        if (block_ct % group == 0) {
+            return group;
+        }
+    }
+    return 1;
+}
+
+inline uint64_t qkv_causal_conv1d_silu_tiled_l1_bytes(uint64_t block_ct, uint64_t tile_bytes) {
+    const uint64_t group = qkv_causal_conv1d_silu_tiled_group(block_ct);
+    // Diagonal weights, double-buffered shifted taps and double-buffered output groups.
+    const uint64_t dfb_tiles =
+        (qkv_causal_conv1d_silu_tap_count * block_ct) + (2 * qkv_causal_conv1d_silu_tap_count * group) + (2 * group);
+    return (dfb_tiles * tile_bytes) + qkv_causal_conv1d_silu_tiled_scratch_bytes(block_ct, tile_bytes);
+}
+
+struct QkvCausalConv1dSiluTiledProgramFactory {
+    static ttnn::device_operation::MeshWorkloadArtifacts create_mesh_workload_artifacts(
+        const QkvCausalConv1dSiluParams&,
+        const QkvCausalConv1dSiluInputs&,
+        std::vector<Tensor>&,
+        const ttnn::MeshCoordinateRangeSet&);
+};
+
 struct QkvCausalConv1dSiluProgramFactory {
     static ttnn::device_operation::MeshWorkloadArtifacts create_mesh_workload_artifacts(
         const QkvCausalConv1dSiluParams&,

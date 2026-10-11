@@ -17,7 +17,10 @@ using namespace tt::tt_metal;
 namespace ttnn::experimental::prim {
 
 QkvCausalConv1dSiluOperation::program_factory_t QkvCausalConv1dSiluOperation::select_program_factory(
-    const operation_attributes_t&, const tensor_args_t&) {
+    const operation_attributes_t&, const tensor_args_t& in) {
+    if (in.input.layout() == Layout::TILE) {
+        return QkvCausalConv1dSiluTiledProgramFactory{};
+    }
     return QkvCausalConv1dSiluProgramFactory{};
 }
 
@@ -26,12 +29,27 @@ void QkvCausalConv1dSiluOperation::validate_on_program_cache_miss(
     using namespace kda_factory_detail;
     constexpr std::string_view operation_name = "qkv_causal_conv1d_silu";
     kda_factory_detail::check_actual_start(in.input, in.actual_start, operation_name);
-    kda_factory_detail::check_allocated_device_tensor(in.predecessor_carry, operation_name, "predecessor_carry");
-    kda_factory_detail::check_same_device(in.input, in.predecessor_carry, operation_name, "predecessor_carry");
-    TT_FATAL(in.predecessor_carry.tensor_spec() == in.history.tensor_spec(), "qkv convolution: carries must match");
+    const bool tiled = in.input.layout() == Layout::TILE;
+    TT_FATAL(
+        in.predecessor_carry.has_value() != in.history_table.has_value(),
+        "qkv_causal_conv1d_silu: pass exactly one of predecessor_carry and history_table");
+    TT_FATAL(
+        tiled || !in.history_table.has_value(), "qkv_causal_conv1d_silu: history_table requires a TILE-layout input");
+    TT_FATAL(
+        tiled || attrs.input_column_offset == 0, "qkv_causal_conv1d_silu: input_column_offset requires a TILE input");
+    TT_FATAL(tiled || !in.actual_end.has_value(), "qkv_causal_conv1d_silu: actual_end requires a TILE-layout input");
+    if (in.predecessor_carry.has_value()) {
+        kda_factory_detail::check_allocated_device_tensor(*in.predecessor_carry, operation_name, "predecessor_carry");
+        kda_factory_detail::check_same_device(in.input, *in.predecessor_carry, operation_name, "predecessor_carry");
+        TT_FATAL(
+            in.predecessor_carry->tensor_spec() == in.history.tensor_spec(), "qkv convolution: carries must match");
+    }
+    if (in.actual_end.has_value()) {
+        kda_factory_detail::check_actual_start(in.input, *in.actual_end, operation_name);
+    }
 
     check_allocated_device_tensor(in.input, operation_name, "input");
-    check_layout(in.input, Layout::ROW_MAJOR, operation_name, "input");
+    check_layout(in.input, tiled ? Layout::TILE : Layout::ROW_MAJOR, operation_name, "input");
     check_dtype(in.input, DataType::BFLOAT16, operation_name, "input");
     check_interleaved(in.input, operation_name, "input");
     check_allocated_device_tensor(in.history, operation_name, "history");
@@ -79,10 +97,11 @@ void QkvCausalConv1dSiluOperation::validate_on_program_cache_miss(
         channels % attrs.channel_chunk_size == 0,
         "qkv_causal_conv1d_silu: channel_chunk_size must divide Q+K+V width exactly");
     const auto* mesh = in.input.device();
-    const uint64_t required_l1_bytes = qkv_causal_conv1d_silu_l1_bytes(
-        attrs.channel_chunk_size / tt::constants::TILE_WIDTH,
-        tt::tile_size(tt::tt_metal::datatype_to_dataformat_converter(in.input.dtype())),
-        in.input.element_size());
+    const uint64_t tile_bytes = tt::tile_size(tt::tt_metal::datatype_to_dataformat_converter(in.input.dtype()));
+    const uint64_t block_ct = attrs.channel_chunk_size / tt::constants::TILE_WIDTH;
+    const uint64_t required_l1_bytes =
+        tiled ? qkv_causal_conv1d_silu_tiled_l1_bytes(block_ct, tile_bytes)
+              : qkv_causal_conv1d_silu_l1_bytes(block_ct, tile_bytes, in.input.element_size());
     const uint64_t available_l1_bytes =
         mesh->l1_size_per_core() - mesh->allocator()->get_base_allocator_addr(tt::tt_metal::HalMemType::L1);
     TT_FATAL(
@@ -96,8 +115,28 @@ void QkvCausalConv1dSiluOperation::validate_on_program_cache_miss(
     const auto& history_shape = in.history.logical_shape();
     TT_FATAL(
         input_shape.rank() == 3 && input_shape[0] == 1 && input_shape[1] == attrs.sequence &&
-            input_shape[2] == channels,
-        "qkv_causal_conv1d_silu: input must be [1,T,Q+K+V]");
+            input_shape[2] >= attrs.input_column_offset + channels && (tiled || input_shape[2] == channels),
+        "qkv_causal_conv1d_silu: input must be [1,T,Q+K+V], or for a TILE input [1,T,W] holding the convolution "
+        "channels from input_column_offset");
+    TT_FATAL(
+        attrs.input_column_offset % tt::constants::TILE_WIDTH == 0,
+        "qkv_causal_conv1d_silu: input_column_offset must be tile aligned");
+    if (in.history_table.has_value()) {
+        const auto& table = *in.history_table;
+        check_allocated_device_tensor(table, operation_name, "history_table");
+        check_layout(table, Layout::ROW_MAJOR, operation_name, "history_table");
+        check_dtype(table, DataType::BFLOAT16, operation_name, "history_table");
+        check_interleaved(table, operation_name, "history_table");
+        check_same_device(in.input, table, operation_name, "history_table");
+        const auto& table_shape = table.logical_shape();
+        const auto* mesh_device = in.input.device();
+        const uint32_t sp_size = mesh_device->shape()[attrs.sequence_parallel_axis];
+        TT_FATAL(
+            table_shape.rank() == 3 && table_shape[0] == 1 && table_shape[1] == 6 * sp_size &&
+                table_shape[2] == channels,
+            "qkv_causal_conv1d_silu: history_table must be [1,6*SP,Q+K+V], got {}",
+            table_shape);
+    }
     TT_FATAL(
         history_shape.rank() == 3 && history_shape[0] == 1 && history_shape[1] == 3 && history_shape[2] == channels,
         "qkv_causal_conv1d_silu: history must be [1,3,Q+K+V]");
@@ -124,21 +163,27 @@ void QkvCausalConv1dSiluOperation::validate_on_program_cache_miss(
 }
 
 QkvCausalConv1dSiluOperation::spec_return_value_t QkvCausalConv1dSiluOperation::compute_output_specs(
-    const operation_attributes_t& attrs, const tensor_args_t&) {
+    const operation_attributes_t& attrs, const tensor_args_t& in) {
     const auto layout = TensorLayout(DataType::BFLOAT16, PageConfig(Layout::TILE), attrs.output_mem_config);
-    return {
+    spec_return_value_t specs = {
         TensorSpec(Shape({1, attrs.sequence, attrs.q_width}), layout),
         TensorSpec(Shape({1, attrs.sequence, attrs.k_width}), layout),
         TensorSpec(Shape({1, attrs.sequence, attrs.v_width}), layout)};
+    if (in.history_table.has_value()) {
+        specs.push_back(TensorSpec(
+            in.history.logical_shape(),
+            TensorLayout(DataType::BFLOAT16, PageConfig(Layout::ROW_MAJOR), ttnn::DRAM_MEMORY_CONFIG)));
+    }
+    return specs;
 }
 
 QkvCausalConv1dSiluOperation::tensor_return_value_t QkvCausalConv1dSiluOperation::create_output_tensors(
     const operation_attributes_t& attrs, const tensor_args_t& in) {
-    auto specs = compute_output_specs(attrs, in);
-    return {
-        create_device_tensor(specs[0], in.input.device()),
-        create_device_tensor(specs[1], in.input.device()),
-        create_device_tensor(specs[2], in.input.device())};
+    tensor_return_value_t outputs;
+    for (const auto& spec : compute_output_specs(attrs, in)) {
+        outputs.push_back(create_device_tensor(spec, in.input.device()));
+    }
+    return outputs;
 }
 
 tt::tt_metal::operation::OpPerformanceModelGeneral<QkvCausalConv1dSiluOperation::tensor_return_value_t>
@@ -172,7 +217,10 @@ std::vector<Tensor> qkv_causal_conv1d_silu(
     const DeviceComputeKernelConfig& compute_kernel_config,
     const Tensor& actual_start,
     uint32_t sequence_parallel_axis,
-    const Tensor& predecessor_carry) {
+    const std::optional<Tensor>& predecessor_carry,
+    const std::optional<Tensor>& history_table,
+    const std::optional<Tensor>& actual_end,
+    uint32_t input_column_offset) {
     const auto& input_shape = input.logical_shape();
     TT_FATAL(input_shape.rank() == 3, "qkv_causal_conv1d_silu: input must be [1,T,Q+K+V]");
     return ttnn::device_operation::launch<QkvCausalConv1dSiluOperation>(
@@ -183,6 +231,7 @@ std::vector<Tensor> qkv_causal_conv1d_silu(
             .v_width = v_width,
             .channel_chunk_size = channel_chunk_size,
             .sequence_parallel_axis = sequence_parallel_axis,
+            .input_column_offset = input_column_offset,
             .output_mem_config = output_mem_config,
             .compute_kernel_config = compute_kernel_config},
         QkvCausalConv1dSiluInputs{
@@ -193,7 +242,9 @@ std::vector<Tensor> qkv_causal_conv1d_silu(
             .tap2 = tap2,
             .tap3 = tap3,
             .actual_start = actual_start,
-            .predecessor_carry = predecessor_carry});
+            .predecessor_carry = predecessor_carry,
+            .history_table = history_table,
+            .actual_end = actual_end});
 }
 
 }  // namespace ttnn::experimental::prim

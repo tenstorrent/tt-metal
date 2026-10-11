@@ -143,7 +143,8 @@ ttnn::device_operation::MeshWorkloadArtifacts QkvCausalConv1dSiluProgramFactory:
                 tt::tt_metal::experimental::TensorBinding{k_tensor_name, "k"},
                 tt::tt_metal::experimental::TensorBinding{v_tensor_name, "v"},
             },
-        .compile_time_args = {{"Qt", Qt}, {"Kt", Kt}, {"Vt", Vt}, {"block_ct", block_ct}, {"Mt", Mt}},
+        .compile_time_args =
+            {{"Qt", Qt}, {"Kt", Kt}, {"Vt", Vt}, {"block_ct", block_ct}, {"Mt", Mt}, {"group", block_ct}},
         .runtime_arg_schema = {.runtime_arg_names = {"wi_start", "wi_count"}},
         .hw_config = ttnn::create_writer_datamovement_config(),
     };
@@ -205,7 +206,7 @@ ttnn::device_operation::MeshWorkloadArtifacts QkvCausalConv1dSiluProgramFactory:
 
     tensor_parameters.push_back({.unique_id = actual_start_name, .spec = in.actual_start.mesh_tensor().tensor_spec()});
     tensor_parameters.push_back(
-        {.unique_id = predecessor_name, .spec = in.predecessor_carry.mesh_tensor().tensor_spec()});
+        {.unique_id = predecessor_name, .spec = in.predecessor_carry->mesh_tensor().tensor_spec()});
 
     tt::tt_metal::experimental::ProgramSpec spec{
         .name = "qkv_causal_conv1d_silu",
@@ -241,7 +242,7 @@ ttnn::device_operation::MeshWorkloadArtifacts QkvCausalConv1dSiluProgramFactory:
     };
 
     run_args.tensor_args.emplace(actual_start_name, in.actual_start.mesh_tensor());
-    run_args.tensor_args.emplace(predecessor_name, in.predecessor_carry.mesh_tensor());
+    run_args.tensor_args.emplace(predecessor_name, in.predecessor_carry->mesh_tensor());
 
     return kda_factory_detail::chronology_workload(
         ttnn::device_operation::ProgramArtifacts{

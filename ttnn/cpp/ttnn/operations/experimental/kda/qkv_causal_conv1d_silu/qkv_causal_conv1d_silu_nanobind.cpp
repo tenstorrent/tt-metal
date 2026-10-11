@@ -33,8 +33,10 @@ void bind_qkv_causal_conv1d_silu(nb::module_& mod) {
         mesh coordinate.
 
         Args:
-            input (ttnn.Tensor): Current tokens ``[1, T, Q+K+V]``. Must be an
-                interleaved ROW_MAJOR BFLOAT16 device tensor.
+            input (ttnn.Tensor): Current tokens ``[1, T, Q+K+V]``, an interleaved
+                ROW_MAJOR BFLOAT16 device tensor; or an interleaved TILE BFLOAT16
+                ``[1, T, W]`` whose channels from ``input_column_offset`` are the
+                convolution input, read in place (such as a fused projection).
             history (ttnn.Tensor): Interleaved ROW_MAJOR BFLOAT16 history.
                 Shape ``[1,3,Q+K+V]``. SP calls supply the predecessor's three-row
                 history separately. The kernel derives when each history is needed
@@ -62,6 +64,8 @@ void bind_qkv_causal_conv1d_silu(nb::module_& mod) {
                 configuration. Defaults to DRAM.
             compute_kernel_config (ttnn.DeviceComputeKernelConfig, optional):
                 Compute-kernel configuration.
+            input_column_offset (int, optional): First convolution channel of a
+                TILE ``input``; tile aligned. Defaults to 0.
 
         Returns:
             tuple[ttnn.Tensor, ttnn.Tensor, ttnn.Tensor]: New TILE-layout BFLOAT16
@@ -89,6 +93,67 @@ void bind_qkv_causal_conv1d_silu(nb::module_& mod) {
 
         nb::arg("memory_config") = nb::none(),
         nb::arg("compute_kernel_config") = nb::none(),
+        nb::arg("sequence_parallel_axis") = 0,
+        nb::arg("input_column_offset") = 0);
+
+    ttnn::bind_function<"qkv_causal_conv1d_silu_with_carry", "ttnn.experimental.kda.">(
+        mod,
+        R"doc(
+        ``qkv_causal_conv1d_silu`` on a TILE ``input`` whose predecessor histories
+        come from an exchanged history table, also returning the replacement carry.
+
+        ``history_table`` is ``convolution_history_rows`` of the same input,
+        all-gathered on dim 1 across the sequence-parallel axis (the local table
+        without sequence parallelism): ``[1, 6*SP, Q+K+V]`` ROW_MAJOR BFLOAT16.
+        Each segment that does not start the logical sequence reads the preceding
+        rank's outgoing rows from it; the fourth output is the three-token history
+        ending at the logical end of the interval (``actual_end``, default full
+        capacity), for the next call.
+
+        Returns:
+            tuple[ttnn.Tensor, ttnn.Tensor, ttnn.Tensor, ttnn.Tensor]: ``q``, ``k``,
+                ``v`` as ``qkv_causal_conv1d_silu``, and the ROW_MAJOR BFLOAT16
+                ``[1, 3, Q+K+V]`` replacement carry, replicated across SP.
+        )doc",
+        &ttnn::experimental::kda::qkv_causal_conv1d_silu_with_carry,
+        nb::arg("input").noconvert(),
+        nb::arg("history").noconvert(),
+        nb::arg("tap0").noconvert(),
+        nb::arg("tap1").noconvert(),
+        nb::arg("tap2").noconvert(),
+        nb::arg("tap3").noconvert(),
+        nb::arg("q_width"),
+        nb::arg("k_width"),
+        nb::arg("v_width"),
+        nb::kw_only(),
+        nb::arg("program_config").noconvert(),
+        nb::arg("actual_start").noconvert(),
+        nb::arg("history_table").noconvert(),
+        nb::arg("actual_end") = nb::none(),
+        nb::arg("input_column_offset") = 0,
+        nb::arg("memory_config") = nb::none(),
+        nb::arg("compute_kernel_config") = nb::none(),
+        nb::arg("sequence_parallel_axis") = 0);
+
+    ttnn::bind_function<"convolution_history_rows", "ttnn.experimental.kda.">(
+        mod,
+        R"doc(
+        Copy the rows a sequence-parallel causal convolution exchanges out of a
+        TILE-layout ``[1, T, W]`` BFLOAT16 input into a ROW_MAJOR ``[1, 6, width]``
+        DRAM table: the three rows preceding the next physical rank's segment,
+        then the three rows ending at this rank's valid end (rows past an end
+        segment shorter than three are unspecified). Columns start at
+        ``column_offset``. Segment geometry is derived on device from
+        ``actual_start``/``actual_end`` and the mesh coordinate on
+        ``sequence_parallel_axis``.
+        )doc",
+        &ttnn::experimental::kda::convolution_history_rows,
+        nb::arg("input").noconvert(),
+        nb::arg("actual_start").noconvert(),
+        nb::kw_only(),
+        nb::arg("width"),
+        nb::arg("column_offset") = 0,
+        nb::arg("actual_end") = nb::none(),
         nb::arg("sequence_parallel_axis") = 0);
 }
 }  // namespace ttnn::operations::experimental::kda::qkv_causal_conv1d_silu::detail
