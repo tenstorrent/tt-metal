@@ -25,6 +25,7 @@ import pandas as pd
 import pytest
 from helpers.counters import LLK_COUNTERS_HEADER, _parse_perf_cfg
 from helpers.llk_params import ApproximationMode, DestAccumulation, PerfRunType
+from helpers.metrics import _DfCounterView, export_counters
 from helpers.perf import phases
 from helpers.perf.core import (
     PerfConfig,
@@ -1257,3 +1258,72 @@ def test_quasar_schema_drops_every_l1_client_metric_column():
         for base in (key, stat_column(key, MEAN), stat_column(key, STD)):
             assert metric_column("SFPU_ISOLATE", base) in QSR_DROPPED
     assert metric_column("L1_TO_L1", "l1_client_invalid_0_pct") not in QSR_DROPPED
+
+
+def _long_counter_frame(runs: int) -> pd.DataFrame:
+    """A read_counters()-shaped frame: two zones, three banks, a missed select (NaN), `runs` runs."""
+    rows = []
+    for zone, base in (("ZONE_0", 100), ("ZONE_1", 7000)):
+        for run in range(runs):
+            for k, (bank, name) in enumerate(
+                [
+                    ("L1", "L1_0_UNPACKER_0"),
+                    ("L1", "L1_0_UNPACKER_0_GRANT"),
+                    ("FPU", "FPU_COUNTER"),
+                    ("TDMA_PACK", "PACKER_BUSY"),
+                ]
+            ):
+                count = (
+                    float("nan")
+                    if (zone, run, k) == ("ZONE_1", 0, 2)
+                    else float(base + 37 * run + 11 * k)
+                )
+                rows.append(
+                    dict(
+                        zone=zone,
+                        bank=bank,
+                        counter_name=name,
+                        counter_id=k,
+                        cycles=base * 3 + run,
+                        count=count,
+                        l1_mux=0,
+                        run_index=run,
+                    )
+                )
+    return pd.DataFrame(rows)
+
+
+@pytest.mark.parametrize("runs", [1, 3])
+def test_counter_export_matches_a_per_counter_mask(runs):
+    """The grouped export and view give what one boolean mask per counter gives (the definition)."""
+    frame = _long_counter_frame(runs)
+    out = export_counters(frame, "L1_TO_L1", ["INIT", "TILE_LOOP"])
+    for zone, marker in (("ZONE_0", "INIT"), ("ZONE_1", "TILE_LOOP")):
+        z = frame[frame["zone"] == zone]
+        row = out[out["marker"] == marker].iloc[0]
+        view = _DfCounterView(z)
+        for (bank, name), g in z.groupby(["bank", "counter_name"], sort=False):
+            for field, col in (
+                ("count", f"{bank}.{name}"),
+                ("cycles", f"{bank}.{name}.cycles"),
+            ):
+                per_run = g.groupby("run_index")[field].mean()
+                if runs == 1:
+                    assert row[f"L1_TO_L1_{col}"] == pytest.approx(
+                        per_run.iloc[0], nan_ok=True
+                    )
+                else:
+                    assert row[f"L1_TO_L1_mean({col})"] == pytest.approx(
+                        per_run.mean(), nan_ok=True
+                    )
+                    assert row[f"L1_TO_L1_std({col})"] == pytest.approx(
+                        per_run.std(), nan_ok=True
+                    )
+            assert view.count(bank, name) == pytest.approx(
+                g["count"].mean(), nan_ok=True
+            )
+            assert view.cycles(bank, name) == pytest.approx(g["cycles"].mean())
+        assert view.cycles("FPU") == pytest.approx(
+            z.loc[z["bank"] == "FPU", "cycles"].mean()
+        )
+        assert view.count("L1", "ABSENT") == 0.0 and view.cycles("ABSENT") == 0.0
