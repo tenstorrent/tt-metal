@@ -42,9 +42,14 @@ Tensor rms_norm(
 
     // For 0D tensors
     if (rank == 0) [[unlikely]] {
-        auto result = ttnn::divide(
+        // RMSNorm of a single element is x / sqrt(x^2 + eps). The previous code
+        // computed x / |x| and never used epsilon, so x = 0 produced NaN and any
+        // eps comparable to x^2 was ignored.
+        auto squared = ttnn::multiply(input_tensor, input_tensor, /*output_dtype=*/std::nullopt, output_memory_config);
+        auto denom = ttnn::add(squared, epsilon, /*output_dtype=*/std::nullopt, output_memory_config);
+        auto result = ttnn::multiply(
             input_tensor,
-            ttnn::abs(input_tensor, output_memory_config),
+            ttnn::rsqrt(denom, /*fast_and_approximate_mode=*/false, output_memory_config),
             /*output_dtype=*/std::nullopt,
             output_memory_config);
 

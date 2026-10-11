@@ -144,3 +144,30 @@ def test_rms_norm_with_weight_and_residual(device, batch_size, h, w, dtype):
         atol=atol,
         frobenius_threshold=frobenius_threshold,
     )
+
+
+@pytest.mark.parametrize("dtype", [torch.bfloat16, torch.float32])
+def test_rms_norm_zero_dim_uses_epsilon(device, dtype):
+    """Regression: the 0-D branch computed x / |x| and never used epsilon.
+
+    RMSNorm of a single element is x / sqrt(x^2 + eps), so every input where eps is
+    not negligible next to x^2 came out wrong, and x = 0 returned 0 / 0 = NaN
+    instead of 0.
+    """
+    cases = [
+        (0.001, 0.25),  # eps dominates x^2 by far, old code returned 1.0
+        (0.0, 1e-5),  # old code returned NaN
+        (3.0, 1e-5),  # eps negligible, must still match the reference
+        (-2.0, 4.0),  # x^2 and eps comparable
+    ]
+    for x, eps in cases:
+        torch_input = torch.tensor(x, dtype=dtype)
+        reference = torch.nn.functional.rms_norm(
+            torch_input.reshape(1).double(), (1,), weight=None, eps=eps
+        )
+
+        input_tensor = ttnn.from_torch(torch_input, dtype=ttnn.float32, layout=ttnn.TILE_LAYOUT, device=device)
+        result = ttnn.rms_norm(input_tensor, epsilon=eps)
+        actual = ttnn.to_torch(ttnn.from_device(result)).item()
+
+        assert actual == pytest.approx(reference.item(), rel=1e-3, abs=1e-6), (x, eps, actual, reference.item())
