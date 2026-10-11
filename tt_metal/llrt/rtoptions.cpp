@@ -136,6 +136,7 @@ enum class EnvVarID {
     TT_METAL_STREAMING_PROFILER,                   // Enable the streaming device profiler (excludes the DRAM one)
     TT_METAL_STREAMING_PROFILER_TRACY,             // Enable Tracy output for the streaming profiler
     TT_METAL_STREAMING_PROFILER_SYNC_EVENTS,       // Enable sync events profiling
+    TT_METAL_STREAMING_PROFILER_SYNC_CHECK,        // Measure the clock sync's chip-to-chip accuracy
     TT_METAL_STREAMING_PROFILER_INLINE_ENABLED,    // Enable zone markers inlining
     TT_METAL_STREAMING_PROFILER_DRAM_MB,           // Streaming profiler per-relay GDDR spool ring, MiB
     TT_METAL_STREAMING_PROFILER_FIFO_MB,           // Streaming profiler host FIFO per D2H socket, MiB
@@ -1062,6 +1063,16 @@ void RunTimeOptions::HandleEnvVar(EnvVarID id, const char* value) {
         // Usage: export TT_METAL_STREAMING_PROFILER_SYNC_EVENTS=1
         case EnvVarID::TT_METAL_STREAMING_PROFILER_SYNC_EVENTS:
             this->streaming_profiler_sync_events_enabled = is_env_enabled(value);
+            break;
+
+        // TT_METAL_STREAMING_PROFILER_SYNC_CHECK
+        // Measures the chip-to-chip accuracy of the clock sync, logs it each time a profiled mesh device closes and
+        // plots it in Tracy. Uses one more idle Ethernet core per chip on top of the two the streaming profiler always
+        // uses, and costs fabric bandwidth. Requires TT_METAL_STREAMING_PROFILER.
+        // Default: false
+        // Usage: export TT_METAL_STREAMING_PROFILER_SYNC_CHECK=1
+        case EnvVarID::TT_METAL_STREAMING_PROFILER_SYNC_CHECK:
+            this->streaming_profiler_sync_check_enabled = is_env_enabled(value);
             break;
 
         // TT_METAL_STREAMING_PROFILER_INLINE_ENABLED

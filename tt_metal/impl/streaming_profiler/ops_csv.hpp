@@ -1,58 +1,52 @@
 // SPDX-FileCopyrightText: © 2026 Tenstorrent USA, Inc.
 //
 // SPDX-License-Identifier: Apache-2.0
-//
-// Op-perf CSV consumer: one row per program launch (keyed by runtime host-id) with the classic report's
-// kernel columns (first-start to last-end unions over the "<RISC>-KERNEL" wrapper zones, per-core and
-// per-RISC splits), joinable against a classic ops_perf_results CSV on GLOBAL CALL COUNT. The classic FW
-// columns have no counterpart: this producer's FW wrapper emits no markers. Trace replays reuse a host-id,
-// so an op's executions are split by ordinal: per (lane, prog) the k-th wrapper pair is execution k.
-// Enabled by TT_METAL_STREAMING_PROFILER_OPS_CSV=<path>; the file is opened on construction and written when the last
-// capture detaches.
+
 #pragma once
 
 #include <array>
+#include <chrono>
 #include <cstdint>
 #include <cstdio>
 #include <map>
+#include <memory>
 #include <string>
 #include <tuple>
-#include <unordered_map>
-#include <vector>
 
 #include "impl/streaming_profiler/capture_context.hpp"
 
 namespace tt::tt_metal::streaming_profiler {
 
+// Writes one CSV row of device kernel durations per op execution, built from the "-KERNEL" zones. Trace replays run an
+// op again under the same runtime id, so each execution is numbered by its order on each RISC.
 class OpsCsvConsumer {
 public:
-    using Batch = experimental::streaming_profiler::Batch<experimental::streaming_profiler::RecordType::Zones>;
+    using Batch = experimental::streaming_profiler::Batch<experimental::streaming_profiler::Zone>;
     explicit OpsCsvConsumer(const std::string& path);
     void operator()(const Batch& batch);
-    // Call only after the consumer can no longer receive batches.
+    // Writes the CSV file. It must not run at the same time as operator(), which adds the rows.
     void write_csv();
 
 private:
-    static constexpr uint32_t kNumRisc = 5;
-
+    using Time = std::chrono::steady_clock::time_point;
+    struct Span {
+        Time start = Time::max(), end = Time::min();
+    };
+    // Kernel start and end, in device cycles for the CYCLE columns and on the host timeline for every [ns] column. Only
+    // the Tensix zones' cycles are used, because an eth tile's counter can be seconds away from the Tensix tiles'.
     struct OpAgg {
-        uint64_t k_start = UINT64_MAX, k_start_last = 0, k_end = 0;
-        uint64_t dm_start = UINT64_MAX;  // earliest BRISC/NCRISC kernel start
-        std::array<uint64_t, kNumRisc> risc_start{};
-        std::array<uint64_t, kNumRisc> risc_end{};
-        std::map<uint32_t, std::pair<uint64_t, uint64_t>> cores;  // core -> (kernel start, end)
-        OpAgg() { risc_start.fill(UINT64_MAX); }
+        uint64_t start_cycles = UINT64_MAX, end_cycles = 0;
+        Time last_kernel_start = Time::min();
+        std::array<Span, kProcessorCount> processors{};
+        std::map<uint32_t, Span> cores;  // by physical (y << 16) | x
     };
 
-    struct DeviceMeta {
-        uint32_t chip_id = 0;
-        double frequency_ghz = 0.0;
-    };
-
-    FILE* f_ = nullptr;
+    std::unique_ptr<FILE, FileClose> file_;
+    bool header_written_ = false;
     std::map<std::tuple<uint32_t, uint32_t, uint32_t>, OpAgg> ops_;  // (chip, runtime host-id, execution)
-    std::map<std::tuple<uint32_t, uint32_t, uint32_t, uint32_t>, uint32_t> pair_count_;  // (chip, core, risc, prog)
-    std::unordered_map<uint32_t, DeviceMeta> devices_;  // from the records: one frequency per chip
+    // How many executions of each op each RISC has completed, keyed by (chip, core, processor, runtime host-id). It is
+    // kept across captures, because every capture's rows go to the same file.
+    std::map<std::tuple<uint32_t, uint32_t, uint32_t, uint32_t>, uint32_t> executions_seen_;
 };
 
 }  // namespace tt::tt_metal::streaming_profiler

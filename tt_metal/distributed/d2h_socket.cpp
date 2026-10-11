@@ -104,6 +104,7 @@ D2HSocket::PinnedBufferInfo D2HSocket::init_host_buffer(
         // Before pinning, which fixes the pages in place: a FIFO on another NUMA node reads at half the bandwidth.
         // Worker senders keep the default placement.
         if (sender_core_type_ != HalProgrammableCoreType::TENSIX) {
+            madvise(p, alloc_size, MADV_HUGEPAGE);
             bind_memory_to_numa_node(
                 p,
                 alloc_size,

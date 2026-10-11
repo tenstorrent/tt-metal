@@ -22,6 +22,7 @@
 #include "firmware/profiler_initializer.hpp"
 #include "firmware/fabric_firmware_initializer.hpp"
 #include "firmware/dispatch_kernel_initializer.hpp"
+#include "impl/streaming_profiler/sync/tile_sync.hpp"
 
 #include <experimental/fabric/control_plane.hpp>
 #include <experimental/fabric/fabric_types.hpp>
@@ -454,6 +455,12 @@ void DeviceManager::initialize_fabric_and_dispatch_fw() {
     }
 
     auto active_devices = this->get_all_active_devices_impl();
+
+    // This runs before the fabric and dispatch firmware start, because measuring the tile clocks needs the Tensix, eth
+    // and DRAM cores to itself.
+    if (env_impl_.get_rtoptions().get_streaming_profiler_enabled()) {
+        streaming_profiler::prepare_clock_sync(active_devices, ctx_.get_context_id());
+    }
 
     initializers_[FabricFirmwareInitializer::key] =
         std::make_unique<FabricFirmwareInitializer>(descriptor_, env_impl_.get_control_plane());
