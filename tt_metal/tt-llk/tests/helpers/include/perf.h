@@ -324,3 +324,31 @@ inline void _perf_math_matmul_mock(std::uint32_t loop_factor, std::uint32_t rt_d
         }
     }
 }
+
+// experiment hooks (final): nikola's loop shift (B) and congpr's per-call NOPs; each expands to nothing without its flag
+#define LLK_EXPH_XSTR_(x) #x
+#define LLK_EXPH_XSTR(x)  LLK_EXPH_XSTR_(x)
+#if defined(LLK_NK_LOOPSHIFT)
+#define LLK_NK_LOOPSHIFT_HOOK() asm volatile(".rept " LLK_EXPH_XSTR(LLK_NK_LOOPSHIFT) "\n\tnop\n\t.endr")
+#else
+#define LLK_NK_LOOPSHIFT_HOOK() \
+    do                          \
+    {                           \
+    } while (0)
+#endif
+#if defined(LLK_EXP_UNOP)
+#define LLK_EXP_UNOP_HOOK() asm volatile(".rept " LLK_EXPH_XSTR(LLK_EXP_UNOP) "\n\tnop\n\t.endr")
+#else
+#define LLK_EXP_UNOP_HOOK() \
+    do                      \
+    {                       \
+    } while (0)
+#endif
+#if defined(LLK_EXP_PNOP)
+#define LLK_EXP_PNOP_HOOK() asm volatile(".rept " LLK_EXPH_XSTR(LLK_EXP_PNOP) "\n\tnop\n\t.endr")
+#else
+#define LLK_EXP_PNOP_HOOK() \
+    do                      \
+    {                       \
+    } while (0)
+#endif

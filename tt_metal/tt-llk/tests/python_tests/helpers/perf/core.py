@@ -1129,6 +1129,8 @@ class PerfConfig(TestConfig):
                     self.test_name, self.variant_id, TestConfig.TENSIX_LOCATION
                 )
                 assert_zones_dont_overlap(profiler_data)
+                if os.environ.get("LLK_EXP_ZONE_DUMP") or os.environ.get("LLK_ZONE_DUMP"):  # experiment hook
+                    _exp_zone_dump(profiler_data, self, run_type, run_index)
                 if self._l1_congestion_phases():
                     assert_one_zone_per_phase(profiler_data)
 
@@ -1215,6 +1217,9 @@ class PerfConfig(TestConfig):
                     TestConfig.TENSIX_LOCATION,
                 )
                 init_data.df["run_index"] = 0
+                if os.environ.get("LLK_EXP_INIT_DUMP"):  # experiment hook (init-opt2): every thread's INIT
+                    for _, _, run_type in self.run_configs:
+                        _exp_init_dump(self, run_type, init_data)
                 for templates, runtimes, run_type in self.run_configs:
                     init_stats = Profiler.STATS_FUNCTION[run_type](
                         ProfilerData.concat([init_data])
@@ -1487,3 +1492,45 @@ def merge_main(argv=None):
 
 if __name__ == "__main__":
     raise SystemExit(merge_main())
+
+
+def _exp_init_dump(cfg, run_type, init_data):
+    """experiment hook (init-opt2), only with LLK_EXP_INIT_DUMP=<jsonl>: every thread's INIT zone of this INIT launch,
+    the node id and the INIT ELF dir"""
+    import json as _json
+
+    raw = init_data.zones().raw()
+    raw = raw[raw[MARKER] == "INIT"]
+    zones = {}
+    for thread in ("unpack", "math", "pack"):
+        t = raw[raw["thread"] == thread]
+        zones[thread] = [
+            [int(x) for x in t[t["type"] == "ZONE_START"]["timestamp"].to_numpy()],
+            [int(x) for x in t[t["type"] == "ZONE_END"]["timestamp"].to_numpy()],
+        ]
+    rec = {
+        "node": os.environ.get("PYTEST_CURRENT_TEST", "").rsplit(" (", 1)[0],
+        "run_type": run_type.name,
+        "test": str(cfg.test_name),
+        "variant": cfg.variant_id,
+        "init_dir": str(cfg._init_build_dir() / "init_elf"),
+        "bytes": bytes(cfg.runtime_arguments_bytes()).hex(),
+        "zones": zones,
+    }
+    with open(os.environ["LLK_EXP_INIT_DUMP"], "a") as f:
+        f.write(_json.dumps(rec) + "\n")
+
+
+def _exp_zone_dump(profiler_data, cfg, run_type, run_index):
+    """experiment hook (holdall, congpr): every zone record of this kernel to <LLK_EXP_ZONE_DUMP or LLK_ZONE_DUMP>/zones_<worker>.jsonl"""
+    import json as _json
+
+    d = os.environ.get("LLK_EXP_ZONE_DUMP") or os.environ["LLK_ZONE_DUMP"]
+    os.makedirs(d, exist_ok=True)
+    z = profiler_data.zones().raw()
+    rows = [[str(t), str(m), str(ty), int(ts)] for t, m, ty, ts in zip(z["thread"], z[MARKER], z["type"], z["timestamp"])]
+    node = os.environ.get("PYTEST_CURRENT_TEST", "").rsplit(" (", 1)[0]
+    rec = {"node": node, "nodeid": node, "test": str(cfg.test_name), "variant": cfg.variant_id, "run_type": run_type.name,
+           "run_index": run_index, "bytes": bytes(cfg.runtime_arguments_bytes()).hex(), "zones": rows}
+    with open(os.path.join(d, f"zones_{os.environ.get('PYTEST_XDIST_WORKER', 'master')}.jsonl"), "a") as f:
+        f.write(_json.dumps(rec) + "\n")
