@@ -140,15 +140,45 @@ def gather_rows(t: ttnn.Tensor) -> ttnn.Tensor:
     return out
 
 
+_RING_OK = {}
+
+
+def _ring_scatter_ok(mesh) -> bool:
+    """Whether the whole mesh closes into a snake ring of direct links (fabric_reduce_scatter plans it, or refuses)."""
+    hit = _RING_OK.get(id(mesh))
+    if hit is None or hit[0] is not mesh:
+        from ttnn.bringup.fabric_all_gather_ttnn.fabric_all_gather_py import plan
+
+        try:
+            links = int(__import__("os").environ.get("GLM_MOE_LINKS", "2"))
+            plan(mesh, cluster_axis=None, topology=ttnn.Topology.Ring, num_links=links)
+            ok = True
+        except ValueError:
+            ok = False
+        hit = _RING_OK[id(mesh)] = (mesh, ok)
+    return hit[1]
+
+
 def scatter_rows(t: ttnn.Tensor) -> ttnn.Tensor:
     """Per-chip partial sums over all S rows -> the split quarter of the 4-chip sum (reduce_scatter on axis 0, then
     axis 1): half the bytes of an all_reduce, and no slice afterwards.
-    GLM_SCATTER_OP=fabric_bf16 (default): the partials typecast to bf16, then ttnn.bringup.fabric_reduce_scatter
-    (MiMo's, bf16 only) on axis 0 and 1 (GLM_MOE_LINKS links); returns bf16. "ttnn": fp32 ttnn.reduce_scatter.
+    GLM_SCATTER_OP=fabric_ring (default): the partials typecast to bf16, then one ttnn.bringup.fabric_reduce_scatter
+    over the whole mesh as a snake ring (GLM_MOE_LINKS links; meshes whose snake does not close fall back to
+    fabric_bf16); fabric_bf16: the same op on axis 0 and then axis 1; "ttnn": fp32 ttnn.reduce_scatter.
     56k prefill 9.34 -> 8.95 s; KV PCC unchanged (s4096 kv_latent 0.96653 / 0.98409), 56k top1 0.8767 -> 0.8804."""
     import os
 
-    if os.environ.get("GLM_SCATTER_OP", "fabric_bf16") == "fabric_bf16":
+    op = os.environ.get("GLM_SCATTER_OP", "fabric_ring")
+    if op == "fabric_ring" and _ring_scatter_ok(t.device()):
+        # one reduce-scatter over the whole mesh, a ring along the snake (row-major blocks: the same rows as axis 0
+        # then axis 1); LoudBox 2x4, [5120, 4096] bf16 per chip, 2 links: 427.7 vs 548.6 us for the two calls
+        links = int(os.environ.get("GLM_MOE_LINKS", "2"))
+        tb = t if t.dtype == ttnn.bfloat16 else ttnn.typecast(t, ttnn.bfloat16, memory_config=MC)
+        out = ttnn.bringup.fabric_reduce_scatter(tb, cluster_axis=None, topology=ttnn.Topology.Ring, num_links=links)
+        if tb is not t:
+            ttnn.deallocate(tb)
+        return out
+    if op in ("fabric_bf16", "fabric_ring"):
         links = int(os.environ.get("GLM_MOE_LINKS", "2"))
         tb = t if t.dtype == ttnn.bfloat16 else ttnn.typecast(t, ttnn.bfloat16, memory_config=MC)
         a = ttnn.bringup.fabric_reduce_scatter(tb, cluster_axis=0, num_links=links)
