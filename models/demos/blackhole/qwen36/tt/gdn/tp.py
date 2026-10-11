@@ -2149,28 +2149,20 @@ class TPGatedDeltaNet:
         self._conv_win_stale = True
 
     def _gather_indices(self, buf, idx, dim):
-        """Rebuild `buf` so slice i along `dim` becomes old slice idx[i], then copy back in place.
-        idx is a permutation; it is decomposed into maximal runs (dst_lo, src_lo, n) with idx[dst_lo+k] == src_lo+k,
-        so one slice per run is taken instead of one per row. Identity => no-op.
-        `new` is fully materialized before the copy, so gathering from `buf` into itself is safe."""
-        runs = []
-        for d, s in enumerate(idx):
-            if runs and runs[-1][1] + runs[-1][2] == s and runs[-1][0] + runs[-1][2] == d:
-                runs[-1][2] += 1
-            else:
-                runs.append([d, s, 1])
-        if len(runs) == 1 and runs[0][0] == runs[0][1]:
+        """In place: slice i along `dim` becomes old slice idx[i] (idx is a permutation; identity rows untouched,
+        identity overall => no-op). Reads every changed source row from the old buffer first, then writes each into
+        its destination, so gathering from `buf` into itself is safe."""
+        changed = [(d, s) for d, s in enumerate(idx) if d != s]
+        if not changed:
             return
-        pieces = [self._slice_along(buf, dim, s, s + n) for (_d, s, n) in runs]
-        new = ttnn.concat(pieces, dim=dim)
-        ttnn.copy(new, buf)
-        # ttnn may return views/aliases (e.g. a single full-length run): compare addresses BEFORE any deallocate.
-        keep = {new.buffer_address(), buf.buffer_address()}
-        addrs = [pc.buffer_address() for pc in pieces]
-        pieces_free = [pc for pc, a in zip(pieces, addrs) if pc is not new and a not in keep]
-        ttnn.deallocate(new)
-        for pc in pieces_free:
-            ttnn.deallocate(pc)
+        # SHAPE-STABLE: only ever 1-row slices and the single-row _write_index (whose [0,i) / (i,n) slice shapes are
+        # all compiled by warmup_gdn_slot_ops via the per-slot writes). The previous maximal-run decomposition sliced
+        # runs of arbitrary length, so a real condense compiled NEW slice/concat programs after the traces were
+        # captured (a captured trace replay can then clobber their binaries / buffers -> non-deterministic output).
+        # Every source row is read from the OLD buffer before any row is overwritten (a remap is a permutation).
+        rows = [(d, self._slice_along(buf, dim, s, s + 1)) for d, s in changed]
+        for d, row in rows:
+            self._write_index(buf, row, d, dim, consume_src=True)
 
     def forward_prefill_batched(self, x, chunk_size=128, valid_lens=None, carry=False):
         """Batched prefill: all B users in one pass (no per-user Python loop).

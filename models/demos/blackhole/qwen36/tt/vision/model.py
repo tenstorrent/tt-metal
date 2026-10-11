@@ -345,14 +345,16 @@ class DropInVisionTransformer(torch.nn.Module):
         if host_trim:
             rows = torch.cat(final_outputs, dim=0)
             mesh = self.model_args.mesh_device
-            return ttnn.from_torch(
+            # Tilize on the HOST (no device= here): the row count depends on the request's image size, and a device
+            # tilize (Tilize / TilizeWithValPadding) is a program keyed by that shape, i.e. one NEW program compiled
+            # after the prefill/decode traces are captured per distinct image size.
+            host_rows = ttnn.from_torch(
                 rows,
                 dtype=ttnn.bfloat16,
                 layout=ttnn.TILE_LAYOUT,
-                device=mesh,
-                memory_config=ttnn.DRAM_MEMORY_CONFIG,
                 mesh_mapper=ttnn.ShardTensorToMesh(mesh, dim=1),
             )
+            return ttnn.to_device(host_rows, mesh, memory_config=ttnn.DRAM_MEMORY_CONFIG)
 
         # concatenate all the outputs. With a single image, ttnn.concat aliases
         # its lone input, so deallocating the sources would free the return.
