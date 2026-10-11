@@ -27,6 +27,7 @@ namespace {
 // (Pattern: Unity-build hygiene for anonymous-namespace symbols).
 const DFBSpecName S2I_INPUT_DFB{"s2i_input"};
 const DFBSpecName S2I_OUTPUT_DFB{"s2i_output"};
+const DFBSpecName S2I_STAGE_DFB{"s2i_stage"};
 
 const TensorParamName S2I_INPUT{"s2i_input"};
 const TensorParamName S2I_OUTPUT{"s2i_output"};
@@ -127,6 +128,18 @@ ttnn::device_operation::ProgramArtifacts ShardedToInterleavedProgramFactory::cre
     bool is_blackhole = (input.device()->arch() == tt::ARCH::BLACKHOLE);
 
     bool is_tile = (output.layout() == Layout::TILE);
+    // The 4 reader threads copy the shard's tiles into a staging ring with implicit-sync reads and the
+    // 2 writer threads drain it to the output with implicit-sync writes, so the shard's size and
+    // padding do not constrain the ring. A data-format conversion puts 4 compute threads between the
+    // rings, each converting the tiles of one reader thread. Every DM thread must move at least one
+    // tile, since the DFB's final-credit barrier waits for all of a kernel's threads.
+    const bool staged = is_tile && num_units_per_shard_height_last * num_units_per_shard_width_last >= 4;
+    // Otherwise the writer drains the borrowed shard DFB with explicit sync. That DFB is strided over
+    // the threads, so its entry count must split evenly over the 4 readers.
+    const bool multi_thread = staged || (is_tile && !convert_df && num_units_per_shard % 4 == 0);
+    const uint32_t num_reader_threads = multi_thread ? 4 : 1;
+    const uint32_t num_writer_threads = multi_thread ? 2 : 1;
+    const uint32_t num_compute_threads = staged ? 4 : 1;
 
     // ---- Build the ProgramSpec ----
     ProgramSpec spec;
@@ -139,7 +152,7 @@ ttnn::device_operation::ProgramArtifacts ShardedToInterleavedProgramFactory::cre
     };
 
     // Dataflow buffers.
-    // INPUT DFB: always present. Borrowed onto the (sharded-L1) input buffer so the resident
+    // INPUT DFB: present unless staged. Borrowed onto the (sharded-L1) input buffer so the resident
     // shard is the DFB's backing memory (legacy dynamic-CB rebinding via cb.buffer = src_buffer).
     DataflowBufferSpec input_dfb{
         .unique_id = S2I_INPUT_DFB,
@@ -148,33 +161,58 @@ ttnn::device_operation::ProgramArtifacts ShardedToInterleavedProgramFactory::cre
         .data_format_metadata = input_cb_data_format,
         .borrowed_from = S2I_INPUT,
     };
-    spec.dataflow_buffers.push_back(input_dfb);
+    if (staged) {
+        // STAGE DFB replaces the borrowed one: two tiles per reader thread, which implicit sync needs
+        // as a multiple of 2 txn IDs x 4 tile counters.
+        spec.dataflow_buffers.push_back(DataflowBufferSpec{
+            .unique_id = S2I_STAGE_DFB,
+            .entry_size = input_page_size,
+            .num_entries = 2 * num_reader_threads,
+            .data_format_metadata = input_cb_data_format,
+        });
+    } else {
+        spec.dataflow_buffers.push_back(input_dfb);
+    }
 
     // OUTPUT DFB: only when a data-format conversion compute kernel is inserted. Plain L1
-    // staging buffer the compute kernel produces and the writer consumes.
+    // staging buffer the compute kernel produces and the writer consumes; staged, a ring of two
+    // tiles per compute thread.
     if (convert_df) {
         spec.dataflow_buffers.push_back(DataflowBufferSpec{
             .unique_id = S2I_OUTPUT_DFB,
             .entry_size = output_page_size,
-            .num_entries = num_input_units,
+            .num_entries = staged ? 2 * num_compute_threads : num_input_units,
             .data_format_metadata = output_cb_data_format,
         });
     }
 
-    // The writer consumes the converted OUTPUT DFB when converting, else the INPUT DFB directly
-    // (legacy out_cb_index == src0_cb_index when no conversion).
-    const DFBSpecName writer_in_dfb = convert_df ? S2I_OUTPUT_DFB : S2I_INPUT_DFB;
+    // The DFB the reader fills, and the one the writer drains: the converted OUTPUT DFB when
+    // converting, else the reader's DFB directly.
+    const DFBSpecName reader_out_dfb = staged ? S2I_STAGE_DFB : S2I_INPUT_DFB;
+    const DFBSpecName writer_in_dfb = convert_df ? S2I_OUTPUT_DFB : reader_out_dfb;
 
-    // Reader kernel: produces the resident input shard into the borrowed INPUT DFB (fake-push).
+    // Reader kernel: copies the resident input shard into the STAGE DFB, or fake-pushes it into the
+    // borrowed INPUT DFB.
     KernelSpec reader{
         .unique_id = S2I_READER,
         .hw_config = ttnn::create_reader_datamovement_config(/*disable_dfb_implicit_sync_for_all=*/true),
     };
-    reader.source =
-        "ttnn/cpp/ttnn/operations/experimental/quasar/sharded_to_interleaved/device/kernels/dataflow/"
-        "reader_unary_sharded.cpp";
-    reader.dfb_bindings = {ProducerOf(S2I_INPUT_DFB, "in0")};
-    reader.runtime_arg_schema = {.runtime_arg_names = {"num_units"}};
+    reader.num_threads = num_reader_threads;
+    if (staged) {
+        reader.source =
+            "ttnn/cpp/ttnn/operations/experimental/quasar/sharded_to_interleaved/device/kernels/dataflow/"
+            "reader_unary_shard_to_staged.cpp";
+        reader.hw_config = ttnn::create_reader_datamovement_config();
+        reader.tensor_bindings = {TensorBinding{.tensor_parameter_name = S2I_INPUT, .accessor_name = "src"}};
+        reader.dfb_bindings = {ProducerOf(S2I_STAGE_DFB, "stage")};
+        reader.runtime_arg_schema = {.runtime_arg_names = {"num_entries", "block_width", "shard_width", "entry_bytes"}};
+    } else {
+        reader.source =
+            "ttnn/cpp/ttnn/operations/experimental/quasar/sharded_to_interleaved/device/kernels/dataflow/"
+            "reader_unary_sharded.cpp";
+        reader.dfb_bindings = {ProducerOf(S2I_INPUT_DFB, "in0")};
+        reader.runtime_arg_schema = {.runtime_arg_names = {"num_units"}};
+    }
 
     // Writer kernel: consumes the writer-input DFB and writes interleaved output.
     KernelSpec writer{
@@ -182,11 +220,16 @@ ttnn::device_operation::ProgramArtifacts ShardedToInterleavedProgramFactory::cre
         .tensor_bindings = {TensorBinding{.tensor_parameter_name = S2I_OUTPUT, .accessor_name = "dst"}},
         .hw_config = ttnn::create_writer_datamovement_config(/*disable_dfb_implicit_sync_for_all=*/true),
     };
+    writer.num_threads = num_writer_threads;
     writer.dfb_bindings = {ConsumerOf(writer_in_dfb, "out")};
     if (is_tile) {
         writer.source =
             "ttnn/cpp/ttnn/operations/experimental/quasar/sharded_to_interleaved/device/kernels/dataflow/"
             "writer_unary_sharded_blocks_interleaved_start_id.cpp";
+        if (staged) {
+            writer.hw_config = ttnn::create_writer_datamovement_config();
+            writer.compiler_options.defines.emplace("IMPLICIT_SYNC", "1");
+        }
         writer.runtime_arg_schema = {
             .runtime_arg_names = {
                 "block_height_tiles",
@@ -213,17 +256,23 @@ ttnn::device_operation::ProgramArtifacts ShardedToInterleavedProgramFactory::cre
     spec.kernels.push_back(reader);
     spec.kernels.push_back(writer);
 
-    // Optional compute kernel for data-format conversion: consumes INPUT DFB, produces OUTPUT DFB.
+    // Optional compute kernel for data-format conversion: consumes the reader's DFB, produces OUTPUT DFB.
     if (convert_df) {
-        spec.kernels.push_back(KernelSpec{
+        KernelSpec compute{
             .unique_id = S2I_COMPUTE,
-            .source = "ttnn/cpp/ttnn/operations/experimental/quasar/sharded_to_interleaved/device/kernels/compute/"
-                      "eltwise_copy.cpp",
-            .dfb_bindings = {ConsumerOf(S2I_INPUT_DFB, "in0"), ProducerOf(S2I_OUTPUT_DFB, "out")},
+            .source =
+                "ttnn/cpp/ttnn/operations/experimental/quasar/sharded_to_interleaved/device/kernels/compute/"
+                "eltwise_copy.cpp",
+            .dfb_bindings = {ConsumerOf(reader_out_dfb, "in0"), ProducerOf(S2I_OUTPUT_DFB, "out")},
             .runtime_arg_schema = {.runtime_arg_names = {"num_units"}},
-            .hw_config = ttnn::to_compute_hardware_config(
-                ttnn::ComputeKernelConfig{.math_fidelity = MathFidelity::HiFi4, .math_approx_mode = false}),
-        });
+            .hw_config = ttnn::to_compute_hardware_config(ttnn::ComputeKernelConfig{
+                .math_fidelity = MathFidelity::HiFi4,
+                .math_approx_mode = false,
+                // Quasar's packer has no 16-bit dest to Float32 conversion.
+                .fp32_dest_acc_en = output_cb_data_format == tt::DataFormat::Float32}),
+        };
+        compute.num_threads = num_compute_threads;
+        spec.kernels.push_back(compute);
     }
 
     // Single work unit: every used core runs the same kernel set; per-core variation is via RTAs.
@@ -239,10 +288,12 @@ ttnn::device_operation::ProgramArtifacts ShardedToInterleavedProgramFactory::cre
     KernelRunArgs writer_run{.kernel = S2I_WRITER};
     KernelRunArgs compute_run{.kernel = S2I_COMPUTE};
 
-    // Reader run-time args: identical on every used core.
-    for (const auto& core_range : used_cores.ranges()) {
-        for (const auto& core : core_range) {
-            reader_run.runtime_arg_values["num_units"][core] = num_units_per_shard;
+    // Reader run-time args: identical on every used core unless staged (set per core below).
+    if (!staged) {
+        for (const auto& core_range : used_cores.ranges()) {
+            for (const auto& core : core_range) {
+                reader_run.runtime_arg_values["num_units"][core] = num_units_per_shard;
+            }
         }
     }
 
@@ -296,6 +347,17 @@ ttnn::device_operation::ProgramArtifacts ShardedToInterleavedProgramFactory::cre
                     {"start_id_offset", curr_idx_h + curr_idx_w},
                     {"start_id_base", starting_idx_h},
                 });
+            if (staged) {
+                AddRuntimeArgsForNode(
+                    reader_run.runtime_arg_values,
+                    core,
+                    {
+                        {"num_entries", shard_height * shard_width},
+                        {"block_width", shard_width},
+                        {"shard_width", num_units_per_shard_width},
+                        {"entry_bytes", input_page_size},
+                    });
+            }
 
             curr_idx_w += num_units_per_shard_width;
             if (curr_idx_w >= num_units_per_row) {
@@ -357,7 +419,9 @@ ttnn::device_operation::ProgramArtifacts ShardedToInterleavedProgramFactory::cre
         }
 
         if (convert_df) {
-            compute_run.runtime_arg_values["num_units"][core] = num_units_per_shard;
+            // Staged, the ring holds only the block's unpadded tiles.
+            compute_run.runtime_arg_values["num_units"][core] =
+                staged ? shard_height * shard_width : num_units_per_shard;
         }
     }
 
