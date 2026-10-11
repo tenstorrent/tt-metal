@@ -1,9 +1,7 @@
 # SPDX-FileCopyrightText: © 2026 Tenstorrent AI ULC
 # SPDX-License-Identifier: Apache-2.0
 
-"""Welford SFPU kernel: mean and population variance against float64, with and without a reciprocal
-table, over whole tiles and over a row range of every tile, and the no-table reciprocal against the
-host's fp32 division bit for bit."""
+"""Welford SFPU kernel mean and variance against float64, and the no-table reciprocal bit for bit."""
 
 import numpy as np
 import pytest
@@ -24,11 +22,9 @@ from helpers.test_variant_parameters import (
 from helpers.tilize_untilize import tilize_block, untilize_block
 from helpers.utils import passed_test
 
-# 256 entries cover the 4 x 32 samples of the largest case; 0 is the no-table form.
 RECIPROCAL_TABLE_SIZES = [256, 0]
 
-# An fp32 Welford over at most 128 samples is good to about 1e-6; the default tolerance would let a
-# reciprocal of the wrong count through.
+# Tight enough to reject a reciprocal of the wrong count.
 FLOAT32_TOLERANCE = {"custom_atol": 1e-4, "custom_rtol": 1e-4}
 
 
@@ -38,7 +34,6 @@ def _run_welford(
     torch.manual_seed(0)
     torch_format = format_dict[formats.input_format]
 
-    # [rows, cols] = [num_tiles * 32 samples, 32 parallel columns].
     input_dimensions = [num_tiles * TILE_DIM, TILE_DIM]
     src_A = torch.empty((num_tiles * ELEMENTS_PER_TILE,), dtype=torch_format).uniform_(
         -4.0, 4.0
@@ -84,7 +79,6 @@ def _run_welford(
     var_tile = untilize_block(
         res[ELEMENTS_PER_TILE:], formats.output_format, [TILE_DIM, TILE_DIM]
     )
-    # The kernel writes the statistics into row 0 of each tile.
     mean_dev = mean_tile.reshape(TILE_DIM, TILE_DIM)[0].to(torch.float32)
     var_dev = var_tile.reshape(TILE_DIM, TILE_DIM)[0].to(torch.float32)
 
@@ -120,7 +114,6 @@ def test_sfpu_welford(formats, dest_acc, num_tiles, recip_size):
     _run_welford(formats, dest_acc, num_tiles, recip_size)
 
 
-# Row ranges from row 0, from inside a four-row block, and across the face boundary at row 16.
 @parametrize(
     formats=[
         InputOutputFormat(DataFormat.Float16_b, DataFormat.Float16_b),
@@ -140,11 +133,9 @@ def test_sfpu_welford_partial_rows(formats, rows, recip_size):
 
 
 _RECIPS_PER_TILE = 32
-# 128 tiles of Float32 (512 KiB of L1) per run.
 _RECIP_TILES = 128
 _RECIP_PER_RUN = _RECIPS_PER_TILE * _RECIP_TILES
 
-# Slab column starts in store order: even and odd columns of the left face, then of the right face.
 _SLAB_COLUMN_START = (0, 1, 16, 17)
 
 
@@ -153,9 +144,7 @@ def _window_around(count):
 
 
 @parametrize(
-    # 1..65536 exhaustively; windows across 2^20, 2^22 (where Blackhole's two SFPU forms meet), 2^24
-    # and 2^31 and the top of the uint32 range; and windows at significands 1.25, 1.5 and 1.75 from
-    # 2^23 up, where the midpoint test multiplies full significands. Every window runs the same ELF.
+    # Windows cover where the two SFPU forms meet and where the midpoint test needs full significands.
     base=runtime(
         list(range(0, 2**16, _RECIP_PER_RUN))
         + [_window_around(2**e) for e in (20, 22, 24, 31)]

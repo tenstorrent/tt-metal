@@ -3,7 +3,6 @@
 // SPDX-License-Identifier: Apache-2.0
 
 // Perf driver for the Welford SFPU kernel: one full-tile update per input tile, the running mean and M2 kept in LREG4
-// and LREG5, the count wrapping every 8 tiles. WELFORD_RECIP_SIZE 0 selects the no-table form.
 
 #include <array>
 #include <cstdint>
@@ -51,7 +50,6 @@ void run_kernel(RUNTIME_PARAMETERS params)
 
         if constexpr (PERF_RUN_TYPE == PerfRunType::MATH_ISOLATE)
         {
-            // One valid per face for the math datacopy; none when the unpacker writes DEST itself.
             if constexpr (!unpack_to_dest)
             {
                 _perf_unpack_loop_set_valid</* src A */ true, /* src B */ is_fp32_dest_acc_en>(num_faces * TILE_CNT * LOOP_FACTOR);
@@ -196,7 +194,6 @@ void run_kernel(RUNTIME_PARAMETERS params)
     {
         START_PERF_MEASURE("TILE_LOOP")
 
-        // The update has no output tile; the input tile is packed so L1_TO_L1 has one pack per section.
         if constexpr (PERF_RUN_TYPE == PerfRunType::PACK_ISOLATE || PERF_RUN_TYPE == PerfRunType::L1_CONGESTION)
         {
             for (std::uint32_t loop = 0; loop < LOOP_FACTOR; ++loop)

@@ -1,8 +1,7 @@
 # SPDX-FileCopyrightText: © 2026 Tenstorrent AI ULC
 # SPDX-License-Identifier: Apache-2.0
 
-"""Perf for the Welford SFPU kernel: one full-tile update per input tile, the running mean and M2
-kept in the SFPU registers, with and without the reciprocal table."""
+"""Perf for the Welford SFPU kernel, with and without the reciprocal table."""
 
 import pytest
 from helpers.format_config import DataFormat, InputOutputFormat
@@ -54,7 +53,6 @@ def test_perf_sfpu_welford(perf_report, formats, dest_acc, recip_size):
             PerfRunType.UNPACK_ISOLATE,
             PerfRunType.PACK_ISOLATE,
         ],
-        # Everything compile-time so the measured kernel does no runtime-parameter reads.
         templates=[
             APPROX_MODE(ApproximationMode.No),
             WELFORD_RECIP_SIZE(recip_size),

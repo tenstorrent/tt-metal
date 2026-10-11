@@ -46,8 +46,7 @@ sfpi_inline void _welford_sfpu_load_u32_(const std::uint32_t lreg, const std::ui
     }
 }
 
-// LREG7 = the bits of 1.0f / static_cast<float>(count) for every count >= 1: two Newton steps from SFPARECIP, y minus
-// the sign of 1 - c * y (1/c toward zero), then an exact integer test of the midpoint above it. Overwrites LREG0, LREG6.
+// LREG7 = 1.0f / static_cast<float>(count) bit for bit, for every count >= 1. Overwrites LREG0, LREG6.
 sfpi_inline void _welford_sfpu_recip_(const std::uint32_t count)
 {
     constexpr std::uint32_t shift_right_31 = (-31) & 0xFFF;
@@ -58,60 +57,53 @@ sfpi_inline void _welford_sfpu_recip_(const std::uint32_t count)
     }
     else
     {
-        // SFPCAST reads sign-magnitude: the RISC rounds the count to 24 bits, nearest even, as static_cast<float> does, and
-        // adds 158, the biased exponent of [2^31, 2^32), less the 1 that the mantissa's leading bit carries into it.
+        // SFPCAST reads sign-magnitude, so a count of 2^31 or more is rounded to float on the RISC.
         const std::uint32_t low      = count & 0xFF;
         const std::uint32_t mantissa = (count >> 8) + ((low > 0x80) || ((low == 0x80) && ((count >> 8) & 1)));
         _welford_sfpu_load_u32_(ckernel::p_sfpu::LREG0, ((158u - 1) << 23) + mantissa);
     }
     TTI_SFPARECIP(0, ckernel::p_sfpu::LREG0, ckernel::p_sfpu::LREG6, sfpi::SFPARECIP_MOD1_RECIP);
-    // Two Newton steps, e = 1 - c * y (mod1 1 negates c) and y += e * y; then e once more for its sign.
     TTI_SFPMAD(ckernel::p_sfpu::LREG0, ckernel::p_sfpu::LREG6, ckernel::p_sfpu::LCONST_1, ckernel::p_sfpu::LREG7, 1);
     TTI_SFPMAD(ckernel::p_sfpu::LREG7, ckernel::p_sfpu::LREG6, ckernel::p_sfpu::LREG6, ckernel::p_sfpu::LREG6, 0);
     TTI_SFPMAD(ckernel::p_sfpu::LREG0, ckernel::p_sfpu::LREG6, ckernel::p_sfpu::LCONST_1, ckernel::p_sfpu::LREG7, 1);
     TTI_SFPMAD(ckernel::p_sfpu::LREG7, ckernel::p_sfpu::LREG6, ckernel::p_sfpu::LREG6, ckernel::p_sfpu::LREG6, 0);
     TTI_SFPMAD(ckernel::p_sfpu::LREG0, ckernel::p_sfpu::LREG6, ckernel::p_sfpu::LCONST_1, ckernel::p_sfpu::LREG7, 1);
-    // With M the significand of the candidate y - sign(e), count * (2M + 1) lies within count of a power of two, so below
-    // 2^22 its bit 22 mod 2^23 gives the side of the midpoint.
+    // Below 2^22, bit 22 of count * (2M + 1) mod 2^23, M the significand of y - sign(e), gives the side of the midpoint.
     if (count < (1u << 22))
     {
         _welford_sfpu_load_u32_(ckernel::p_sfpu::LREG0, count);
-        // LREG7 = y - sign(e); LREG6 = 2 * LREG7 + 1, the midpoint above it; LREG0 = count * LREG6 mod 2^23.
-        TTI_SFPSHFT(shift_right_31, 0, ckernel::p_sfpu::LREG7, 1); // SFPSHFT_MOD1_ARG_IMM
+        TTI_SFPSHFT(shift_right_31, 0, ckernel::p_sfpu::LREG7, 1);
         TTI_SFPIADD(0, ckernel::p_sfpu::LREG6, ckernel::p_sfpu::LREG7, sfpi::SFPIADD_MOD1_ARG_2SCOMP_LREG_DST | sfpi::SFPIADD_MOD1_CC_NONE);
-        TTI_SFPSHFT(1, ckernel::p_sfpu::LREG7, ckernel::p_sfpu::LREG6, 1 | 4); // SFPSHFT_MOD1_ARG_IMM | SFPSHFT_MOD1_ARG_IMM_USE_VC
+        TTI_SFPSHFT(1, ckernel::p_sfpu::LREG7, ckernel::p_sfpu::LREG6, 1 | 4);
         TTI_SFPIADD(1, ckernel::p_sfpu::LREG6, ckernel::p_sfpu::LREG6, sfpi::SFPIADD_MOD1_ARG_IMM | sfpi::SFPIADD_MOD1_CC_NONE);
         TTI_SFPMUL24(ckernel::p_sfpu::LREG0, ckernel::p_sfpu::LREG6, ckernel::p_sfpu::LCONST_0, ckernel::p_sfpu::LREG0, sfpi::SFPMUL24_MOD1_LOWER);
         TTI_SFPNOP;
-        // Bit 22 set: 1/c is above the midpoint.
-        TTI_SFPSHFT((-22) & 0xFFF, ckernel::p_sfpu::LREG0, ckernel::p_sfpu::LREG0, 1 | 4); // SFPSHFT_MOD1_ARG_IMM | SFPSHFT_MOD1_ARG_IMM_USE_VC
+        TTI_SFPSHFT((-22) & 0xFFF, ckernel::p_sfpu::LREG0, ckernel::p_sfpu::LREG0, 1 | 4);
         TTI_SFPIADD(0, ckernel::p_sfpu::LREG0, ckernel::p_sfpu::LREG7, sfpi::SFPIADD_MOD1_CC_NONE);
     }
     else
     {
         TTI_SFPEXMAN(0, ckernel::p_sfpu::LREG0, ckernel::p_sfpu::LREG0, sfpi::SFPEXMAN_MOD1_PAD8);
-        TTI_SFPSHFT(shift_right_31, 0, ckernel::p_sfpu::LREG7, 1); // SFPSHFT_MOD1_ARG_IMM
+        TTI_SFPSHFT(shift_right_31, 0, ckernel::p_sfpu::LREG7, 1);
         TTI_SFPIADD(0, ckernel::p_sfpu::LREG6, ckernel::p_sfpu::LREG7, sfpi::SFPIADD_MOD1_ARG_2SCOMP_LREG_DST | sfpi::SFPIADD_MOD1_CC_NONE);
-        // Mc = the 24-bit significand of c, y = LREG7 and M its significand, H:L = the product of their 23-bit fractions
-        // split at 2^23: LREG6 = Mc * (2M + 1) mod 2^32 = ((H + Mc + y) << 24) + Mc + 2L.
+        // Above 2^22 the midpoint test needs full significands: LREG6 = Mc * (2M + 1) mod 2^32 from partial products.
         TTI_SFPMUL24(ckernel::p_sfpu::LREG0, ckernel::p_sfpu::LREG7, ckernel::p_sfpu::LCONST_0, ckernel::p_sfpu::LREG6, sfpi::SFPMUL24_MOD1_UPPER);
         TTI_SFPNOP;
         TTI_SFPIADD(0, ckernel::p_sfpu::LREG0, ckernel::p_sfpu::LREG6, sfpi::SFPIADD_MOD1_CC_NONE);
         TTI_SFPIADD(0, ckernel::p_sfpu::LREG7, ckernel::p_sfpu::LREG6, sfpi::SFPIADD_MOD1_CC_NONE);
-        TTI_SFPSHFT(24, 0, ckernel::p_sfpu::LREG6, 1); // SFPSHFT_MOD1_ARG_IMM
+        TTI_SFPSHFT(24, 0, ckernel::p_sfpu::LREG6, 1);
         TTI_SFPIADD(0, ckernel::p_sfpu::LREG0, ckernel::p_sfpu::LREG6, sfpi::SFPIADD_MOD1_CC_NONE);
         TTI_SFPMUL24(ckernel::p_sfpu::LREG0, ckernel::p_sfpu::LREG7, ckernel::p_sfpu::LCONST_0, ckernel::p_sfpu::LREG0, sfpi::SFPMUL24_MOD1_LOWER);
         TTI_SFPNOP;
         TTI_SFPIADD(0, ckernel::p_sfpu::LREG0, ckernel::p_sfpu::LREG6, sfpi::SFPIADD_MOD1_CC_NONE);
         TTI_SFPIADD(0, ckernel::p_sfpu::LREG0, ckernel::p_sfpu::LREG6, sfpi::SFPIADD_MOD1_CC_NONE);
-        // Sign bit set: 1/c is above the midpoint.
-        TTI_SFPSHFT(shift_right_31, 0, ckernel::p_sfpu::LREG6, 1); // SFPSHFT_MOD1_ARG_IMM
+        TTI_SFPSHFT(shift_right_31, 0, ckernel::p_sfpu::LREG6, 1);
         TTI_SFPIADD(0, ckernel::p_sfpu::LREG6, ckernel::p_sfpu::LREG7, sfpi::SFPIADD_MOD1_CC_NONE);
     }
 }
 #endif
 
-// Row 0's SFPU reciprocal overwrites LREG0, so it runs before the block load, whose two transposes give LREG7 back.
+// Row 0's SFPU reciprocal overwrites LREG0, so it runs before the block load, whose transposes restore LREG7.
 template <std::size_t reciprocal_size>
 constexpr bool _welford_recip_before_load_()
 {
@@ -134,8 +126,7 @@ constexpr bool _welford_recip_before_load_()
  * @param idx The (zero-based) index (in the reciprocal lookup table) of the value to load.
  * @param reciprocal_lut Lookup table containing precomputed reciprocals packed as uint32_t.
  *
- * @note The reciprocal is written to ckernel::p_sfpu::LREG7. Without a table on Blackhole it is computed on the SFPU,
- * which also overwrites LREG0 and LREG6.
+ * @note The reciprocal is written to ckernel::p_sfpu::LREG7; without a table it also overwrites LREG0 and LREG6.
  */
 template <std::size_t reciprocal_size>
 sfpi_inline void _load_recip_of_idx_(const std::uint32_t idx, const std::array<std::uint32_t, reciprocal_size>& reciprocal_lut)
@@ -198,7 +189,7 @@ sfpi_inline void _welfords_load_block_()
  * - input_lreg: Input value (new sample x_{N+1}) (Either LREG0, LREG1, LREG2, or LREG3)
  * - LREG4: Mean of previous samples (mean_{N})
  * - LREG5: Running sum of squared differences from the current mean (M2_{N})
- * - LREG6: Placeholder for the new mean (mean_{N+1}); with WELFORD_SFPU_IN_PLACE_MEAN_ROW it holds x_{N+1} - mean_{N}
+ * - LREG6: Placeholder for the new mean (mean_{N+1}), or x_{N+1} - mean_{N} in the in-place row
  * - LREG7: Reciprocal of sample count (1/(N+1))
  *
  * The computation proceeds as:
@@ -214,14 +205,9 @@ template <std::uint32_t input_lreg>
 sfpi_inline void _compute_welfords_row_()
 {
 #ifdef WELFORD_SFPU_IN_PLACE_MEAN_ROW
-    // Each multiply-add takes the operands of its counterpart in the six-instruction form below, so the bits are the same.
-    // LREG6 = α = x_{N+1} - mean_{N}
     TTI_SFPMAD(ckernel::p_sfpu::LREG11 /*-1*/, ckernel::p_sfpu::LREG4, input_lreg, ckernel::p_sfpu::LREG6, 0);
-    // LREG4 = mean_{N+1} = α * (1/(N+1)) + mean_{N}
     TTI_SFPMAD(ckernel::p_sfpu::LREG6, ckernel::p_sfpu::LREG7, ckernel::p_sfpu::LREG4, ckernel::p_sfpu::LREG4, 0);
-    // input_lreg = β = x_{N+1} - mean_{N+1}
     TTI_SFPMAD(ckernel::p_sfpu::LREG11 /*-1*/, ckernel::p_sfpu::LREG4, input_lreg, input_lreg, 0);
-    // LREG5 = M2_{N+1} = α * β + M2_{N}
     TTI_SFPMAD(ckernel::p_sfpu::LREG6, input_lreg, ckernel::p_sfpu::LREG5, ckernel::p_sfpu::LREG5, 0);
 #else
     // mean calculation

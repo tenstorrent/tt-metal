@@ -7,7 +7,6 @@
 #include <array>
 #include <cstdint>
 
-// Entry i is the fp32 bits of 1 / (i + 1), the reciprocal table the Welford kernels index by sample count.
 template <std::size_t N>
 inline void fill_welford_reciprocal_table(std::array<std::uint32_t, N>& table)
 {
