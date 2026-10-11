@@ -11,6 +11,7 @@
 #include "ttnn/tensor/tensor_utils.hpp"
 #include <tt-metalium/constants.hpp>
 #include <tt-metalium/work_split.hpp>
+#include <tt-metalium/hal.hpp>
 #include <tt-metalium/host_api.hpp>
 #include <tt-metalium/allocator.hpp>
 #include <tt-metalium/buffer_distribution_spec.hpp>
@@ -25,6 +26,167 @@ using namespace tt::tt_metal::experimental;
 
 namespace ttnn::prim::qsr {
 
+std::optional<ttnn::device_operation::ProgramArtifacts> create_untilize_split_rows_program(
+    const Tensor& input, const Tensor& output, bool fp32_dest_acc_en) {
+    constexpr uint32_t num_lanes = kUntilizeNumLanes;
+    const auto& a = input;
+    if (a.is_sharded() || output.is_sharded() || output.layout() != Layout::ROW_MAJOR) {
+        return std::nullopt;
+    }
+    const auto& tile_shape = a.tensor_spec().tile().get_tile_shape();
+    const uint32_t tile_height = tile_shape[0];
+    const uint32_t tile_width = tile_shape[1];
+    const uint32_t tensor_width = a.padded_shape()[-1];
+    const uint32_t tensor_height = a.physical_volume() / tensor_width;
+    const uint32_t num_tiles_per_row = tensor_width / tile_width;
+    const uint32_t num_tiles_per_col = tensor_height / tile_height;
+    if (output.padded_shape()[-1] != tensor_width) {
+        return std::nullopt;
+    }
+    // Output row r is input row r: padding rows exist only past the last output row, which needs
+    // either no padding or a single leading-dim slice.
+    const uint32_t out_rows = output.physical_volume() / tensor_width;
+    const uint32_t num_slices = a.physical_volume() / (a.padded_shape()[-2] * tensor_width);
+    const bool rows_line_up = out_rows == tensor_height || (num_slices == 1 && out_rows + tile_height > tensor_height);
+    const uint32_t row_bytes = tensor_width * output.element_size();
+    if (!rows_line_up || out_rows > tensor_height || output.buffer()->aligned_page_size() != row_bytes) {
+        return std::nullopt;
+    }
+    // Column lanes split every block's tiles four ways, so any block count works. Otherwise each lane
+    // takes whole blocks, which needs a multiple of 4 blocks per core and no partial last block.
+    const bool column_lanes = num_tiles_per_row % num_lanes == 0;
+    const uint32_t lane_tiles = column_lanes ? num_tiles_per_row / num_lanes : num_tiles_per_row;
+    const uint32_t lane_bytes = lane_tiles * tile_width * output.element_size();
+    if (lane_bytes % hal::get_l1_alignment() != 0 ||
+        (!column_lanes && (num_tiles_per_col % num_lanes != 0 || out_rows != tensor_height))) {
+        return std::nullopt;
+    }
+    const uint32_t blocks_per_unit = column_lanes ? 1 : num_lanes;
+
+    MeshDevice* device = a.device();
+    auto [num_cores, all_cores, full_core_range, cliff_core_range, units_per_full_core, units_per_cliff_core] =
+        ttnn::split_blocks_for_tilize(device->compute_with_storage_grid_size(), num_tiles_per_col / blocks_per_unit);
+
+    tt::DataFormat input_cb_data_format = datatype_to_dataformat_converter(a.dtype());
+    tt::DataFormat output_cb_data_format = datatype_to_dataformat_converter(output.dtype());
+
+    const DFBSpecName IN_DFB{"in"};
+    const DFBSpecName OUT_DFB{"out"};
+    const TensorParamName INPUT{"input"};
+    const TensorParamName OUTPUT{"output"};
+    const KernelSpecName READER{"reader"};
+    const KernelSpecName WRITER{"writer"};
+    const KernelSpecName COMPUTE{"compute"};
+
+    // One tile per entry in, two per lane. Out, one lane-wide row per entry: the strided DFB places each
+    // lane's rows num_lanes slots apart, which is the row stride compute's pack_untilize writes with, and
+    // holds one block of rows per lane.
+    DataflowBufferSpec in_dfb{
+        .unique_id = IN_DFB,
+        .entry_size = tt::tile_size(input_cb_data_format),
+        .num_entries = 2 * num_lanes,
+        .data_format_metadata = input_cb_data_format,
+    };
+    DataflowBufferSpec out_dfb{
+        .unique_id = OUT_DFB,
+        .entry_size = lane_bytes,
+        .num_entries = num_lanes * tile_height,
+        .data_format_metadata = output_cb_data_format,
+    };
+
+    const std::filesystem::path kdir("ttnn/cpp/ttnn/operations/experimental/quasar/untilize/device/kernels/");
+    KernelSpec::CompilerOptions::Defines dm_defines;
+    dm_defines.emplace("COLUMN_LANES", column_lanes ? "1" : "0");
+    dm_defines.emplace("LOCAL_SHARD", "0");
+    KernelSpec reader{
+        .unique_id = READER,
+        .source = kdir / "dataflow/reader_unary_lanes_metal2.cpp",
+        .num_threads = num_lanes,
+        .compiler_options = {.defines = dm_defines},
+        .dfb_bindings = {ProducerOf(IN_DFB, "in")},
+        .tensor_bindings = {TensorBinding{.tensor_parameter_name = INPUT, .accessor_name = "input"}},
+        .compile_time_args = {{"tiles_per_row", num_tiles_per_row}, {"lane_tiles", lane_tiles}},
+        .runtime_arg_schema = {.runtime_arg_names = {"first_block", "num_lane_blocks"}},
+        .hw_config = ttnn::create_reader_datamovement_config(),
+    };
+    KernelSpec writer{
+        .unique_id = WRITER,
+        .source = kdir / "dataflow/writer_unary_lanes_rows_metal2.cpp",
+        .num_threads = kUntilizeNumWriterThreads,
+        .compiler_options = {.defines = dm_defines},
+        .dfb_bindings = {ConsumerOf(OUT_DFB, "out")},
+        .tensor_bindings = {TensorBinding{.tensor_parameter_name = OUTPUT, .accessor_name = "output"}},
+        .compile_time_args = {{"tile_height", tile_height}, {"num_lanes", num_lanes}, {"lane_bytes", lane_bytes}},
+        .runtime_arg_schema = {.runtime_arg_names = {"first_block", "lane_rows"}},
+        .hw_config = ttnn::create_writer_datamovement_config(),
+    };
+
+    KernelSpec::CompilerOptions::Defines compute_defines;
+    if (a.dtype() == DataType::INT32 || a.dtype() == DataType::UINT32 || a.dtype() == DataType::FLOAT32) {
+        compute_defines.emplace("DST_ACCUM_MODE", "1");
+    }
+    ComputeHardwareConfig compute_hw = ttnn::to_compute_hardware_config(ttnn::ComputeKernelConfig{
+        .math_fidelity = MathFidelity::HiFi4, .math_approx_mode = false, .fp32_dest_acc_en = fp32_dest_acc_en});
+    if (fp32_dest_acc_en) {
+        compute_hw.unpack_modes.emplace(IN_DFB, tt::tt_metal::UnpackMode::UnpackToDest);
+    }
+    KernelSpec compute{
+        .unique_id = COMPUTE,
+        .source = kdir / "compute/untilize_lanes_metal2.cpp",
+        .num_threads = num_lanes,
+        .compiler_options = {.defines = compute_defines},
+        .dfb_bindings = {ConsumerOf(IN_DFB, "in"), ProducerOf(OUT_DFB, "out")},
+        .compile_time_args =
+            {{"lane_tiles", lane_tiles},
+             {"full_ct_dim", column_lanes ? num_tiles_per_row : num_lanes * num_tiles_per_row},
+             {"block_rows", tile_height}},
+        .runtime_arg_schema = {.runtime_arg_names = {"num_lane_blocks", "last_block_rows"}},
+        .hw_config = compute_hw,
+    };
+
+    KernelRunArgs::RuntimeArgValues reader_args;
+    KernelRunArgs::RuntimeArgValues writer_args;
+    KernelRunArgs::RuntimeArgValues compute_args;
+    uint32_t first_block = 0;
+    auto add_core = [&](const CoreCoord& core, uint32_t num_units) {
+        const uint32_t num_blocks = num_units * blocks_per_unit;
+        const uint32_t num_lane_blocks = column_lanes ? num_blocks : num_units;
+        const uint32_t last_block_rows = std::min(tile_height, out_rows - (first_block + num_blocks - 1) * tile_height);
+        AddRuntimeArgsForNode(reader_args, core, {{"first_block", first_block}, {"num_lane_blocks", num_lane_blocks}});
+        AddRuntimeArgsForNode(
+            writer_args,
+            core,
+            {{"first_block", first_block}, {"lane_rows", (num_lane_blocks - 1) * tile_height + last_block_rows}});
+        AddRuntimeArgsForNode(
+            compute_args, core, {{"num_lane_blocks", num_lane_blocks}, {"last_block_rows", last_block_rows}});
+        first_block += num_blocks;
+    };
+    for (const auto& core : corerange_to_cores(full_core_range, std::nullopt, true)) {
+        add_core(core, units_per_full_core);
+    }
+    for (const auto& core : corerange_to_cores(cliff_core_range, std::nullopt, true)) {
+        add_core(core, units_per_cliff_core);
+    }
+
+    ProgramSpec spec{
+        .name = "untilize_multi_core_lanes",
+        .kernels = {reader, writer, compute},
+        .dataflow_buffers = {in_dfb, out_dfb},
+        .tensor_parameters =
+            {TensorParameter{.unique_id = INPUT, .spec = a.tensor_spec()},
+             TensorParameter{.unique_id = OUTPUT, .spec = output.tensor_spec()}},
+        .work_units = {WorkUnitSpec{
+            .name = "untilize_lanes", .kernels = {READER, WRITER, COMPUTE}, .target_nodes = all_cores}},
+    };
+    ProgramRunArgs run_args;
+    run_args.kernel_run_args = {
+        KernelRunArgs{.kernel = READER, .runtime_arg_values = std::move(reader_args)},
+        KernelRunArgs{.kernel = WRITER, .runtime_arg_values = std::move(writer_args)},
+        KernelRunArgs{.kernel = COMPUTE, .runtime_arg_values = std::move(compute_args)}};
+    run_args.tensor_args = {{INPUT, a.mesh_tensor()}, {OUTPUT, output.mesh_tensor()}};
+    return ttnn::device_operation::ProgramArtifacts{.spec = std::move(spec), .run_params = std::move(run_args)};
+}
+
 // Metal 2.0 port of the multi-core untilize factory. Three input modes (selected on the host):
 //   (C) interleaved      -> reader_unary_start_id_metal2 (TensorAccessor read)
 //   (A) block-reader     -> reader_unary_sharded_blocks_metal2 (sharded L1/DRAM, used for uneven/DRAM)
@@ -38,6 +200,9 @@ ttnn::device_operation::ProgramArtifacts UntilizeMultiCoreProgramFactory::create
     const auto& input_mesh_tensor = a.mesh_tensor();
     const auto& output_mesh_tensor = output.mesh_tensor();
     const auto& fp32_dest_acc_en = operation_attributes.fp32_dest_acc_en;
+    if (auto split = create_untilize_split_rows_program(a, output, fp32_dest_acc_en)) {
+        return std::move(*split);
+    }
 
     tt::DataFormat input_cb_data_format = datatype_to_dataformat_converter(a.dtype());
     uint32_t input_single_tile_size = tt::tile_size(input_cb_data_format);
@@ -181,8 +346,9 @@ ttnn::device_operation::ProgramArtifacts UntilizeMultiCoreProgramFactory::create
         reader.source = kdir / "reader_unary_sharded_metal2.cpp";
         reader.runtime_arg_schema = {.runtime_arg_names = {"num_tiles_per_core"}};
     } else {
-        // Interleaved input.
+        // Interleaved input. Implicit sync: the kernel issues TXN_ID reads instead of reserve_back / push_back.
         reader.source = kdir / "reader_unary_start_id_metal2.cpp";
+        reader.hw_config = ttnn::create_reader_datamovement_config();
         reader.tensor_bindings = {TensorBinding{.tensor_parameter_name = INPUT, .accessor_name = "input"}};
         reader.runtime_arg_schema = {.runtime_arg_names = {"num_tiles", "start_page_id"}};
     }
