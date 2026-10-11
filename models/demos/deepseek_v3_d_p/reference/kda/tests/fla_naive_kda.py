@@ -3,8 +3,10 @@
 """Flash Linear Attention's naive KDA references, vendored as an independent test oracle.
 
 Source: https://github.com/fla-org/flash-linear-attention/blob/954438d1fcb5e1bb05c22f9908de9c5c2df74ae5/fla/ops/kda/naive.py
-(MIT license). The only change is a ``compute_dtype`` argument where upstream hardcodes
-``torch.float``, so the forms can run in FP64. Upstream expects already-L2-normalized q and k.
+(MIT license). Two changes: a ``compute_dtype`` argument where upstream hardcodes ``torch.float``, so the
+forms can run in FP64, and a ``state_dtype`` argument of the chunked form that rounds the carried state after
+every chunk (FlashKDA stores its state in BF16 after every 16-token chunk). Upstream expects already
+L2-normalized q and k.
 """
 
 import torch
@@ -80,6 +82,7 @@ def naive_chunk_kda(
     output_final_state: bool = False,
     chunk_size: int = 64,
     compute_dtype: torch.dtype = torch.float,
+    state_dtype: torch.dtype | None = None,
 ):
     r"""
     Args:
@@ -165,6 +168,8 @@ def naive_chunk_kda(
         o[:, :, i] = (q_i * g_i.exp()) @ S + Aqk @ v_i
         S = S * rearrange(g_i[:, :, -1].exp(), "b h k -> b h k 1")
         S += rearrange((g_i[:, :, -1:] - g_i).exp() * k_i, "b h c k -> b h k c") @ v_i
+        if state_dtype is not None:
+            S = S.to(state_dtype).to(compute_dtype)
     if not output_final_state:
         S = None
     return rearrange(o, "b h n c d -> b (n c) h d").to(dtype), S
