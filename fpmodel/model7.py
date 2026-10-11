@@ -57,6 +57,7 @@ EXPERIMENTAL = {
     "wfam": "each factory's output writer reaches its own share of the DRAM write bandwidth (relative to 2D; Kt=1 sweeps: Reuse ~1.3x, 1D in1 ~0.7x, 1D in0 ~0.45x)",
     "wfamw": "as wfam, but the factory penalty ramps in with the core's output block width (narrow blocks write at the 2D rate; write-rate sweep)",
     "reusewov": "Reuse writes each output subblock as soon as it is packed: the block's compute hides its write, only the last subblock's write is exposed",
+    "pack32": "fp32 partials (fp32 dest accumulation) pack at their own rate: with fp32 dest the packer moves 4-byte data without a format conversion",
     "reusetail": "Reuse blocks that don't divide evenly over the cores leave a last round on fewer cores: its K steps share DRAM and links among fewer readers",
     "unpack": "the unpacker loads sbh in0 + sbw in1 tiles per matmul_block inner step; at low fidelity it, not math, bounds a subblock",
 }
@@ -127,6 +128,7 @@ CONSTANTS = {
     ),
     "batch_fixed": (2000.0, "cycles per unfused batch iteration on each core", "batchfix"),
     "wf_reuse": (1.0, "Reuse output write rate relative to 2D", "wfam"),
+    "pack_Bpc32": (40.0, "packer bytes per cycle for fp32 partials (fp32 dest accumulation)", "pack32"),
     "wf_in0": (1.0, "1D in0-mcast output write rate relative to 2D", "wfam"),
     "wf_in1": (1.0, "1D in1-mcast output write rate relative to 2D", "wfam"),
     "wf_w0": (8.0, "output block width (tiles) at which a factory's write penalty is complete", "wfamw"),
@@ -379,6 +381,8 @@ def predict(g, p, parts=False):
     # ---- compute per K block: per subblock max(math, pack) across the TRISCs, plus fixed costs ----
     math = kb * sbh * sbw * 16.0 * g["ph"]
     pack = sbh * sbw * g["tb_p"] / p["pack_Bpc"] if on("pack") else 0.0
+    if on("pack") and on("pack32"):
+        pack = np.where(g["tb_p"] >= 4096, sbh * sbw * g["tb_p"] / p["pack_Bpc32"], pack)
     fixed = kb * p["call"] if on("call") else 0.0
     tiles = obh * obw
     reload = 0.0
