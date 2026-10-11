@@ -1,0 +1,73 @@
+{
+  "captured_at": "2026-10-11T03:08:20.775013+00:00",
+  "units": {
+    "qwen38-gdn-pipeline-phase-v1-20261011.service": {
+      "MainPID": "807101",
+      "Result": "success",
+      "LoadState": "loaded",
+      "ActiveState": "active",
+      "InvocationID": "592686881e474eddb69f6282a8849ec7"
+    },
+    "qwen38-gdn-combined-padding-v1-20261011.service": {
+      "MainPID": "759228",
+      "Result": "success",
+      "LoadState": "loaded",
+      "ActiveState": "active",
+      "InvocationID": "28043374fa9447778241fb4f4828de90"
+    },
+    "qwen38-gdn-combined-padding-followup-v1-20261011.service": {
+      "MainPID": "759231",
+      "Result": "success",
+      "LoadState": "loaded",
+      "ActiveState": "active",
+      "InvocationID": "3b91a375acef4a09b5cc4a9835bcc9ff"
+    }
+  },
+  "files": {
+    "gdn-pipeline-phase-control-v1/launch.json": {
+      "bytes": 2733,
+      "sha256": "bbf04159bf5adf7b1ebabb732691022d1073924a3949f40e740a97f5921ebda6",
+      "published_path": "control/launch.json"
+    },
+    "gdn-pipeline-phase-control-v1/launch-unit.json": {
+      "bytes": 278,
+      "sha256": "1a2e4dc83c7d1d2fa0daa394890551698bf56f83197f9da35fc1cb197fc3acc7",
+      "published_path": "control/launch-unit.json"
+    },
+    "gdn-pipeline-phase-control-v1/source-manifest.json": {
+      "bytes": 38935,
+      "sha256": "93cba3fa91118c64e023225a6959dbe7f31d7da4334f4d00829e17ace77ae8d8",
+      "published_path": "control/source-manifest.json"
+    },
+    "gdn-pipeline-phase-control-v1/unit.xml": {
+      "bytes": 248745,
+      "sha256": "bea5aacc1bc5e64532bfefc7b444abce1d14d64b21f034af1a2c2766f733ebb3",
+      "published_path": "control/unit.xml.gz"
+    },
+    "gdn-pipeline-phase-control-v1/unit.log": {
+      "bytes": 1421,
+      "sha256": "531d4de755b9fe4d0fc6cae07873d3d75edca0360543883448173270be53cea3",
+      "published_path": "control/unit.log.gz"
+    },
+    "gdn-pipeline-phase-control-v1/collect.log": {
+      "bytes": 642,
+      "sha256": "cdd558c2e2a4ebdeb46d1c52c1614804d7e0b9f8a37e0450742cc821ad7cae5d",
+      "published_path": "control/collect.log.gz"
+    },
+    "gdn-pipeline-phase-v1/queue.json": {
+      "bytes": 756,
+      "sha256": "97d7a073ed83026af7b1a448d9e1a07cacc26508f1b4ee92bf7a257b4a4511fa",
+      "published_path": "queue-at-capture.json"
+    },
+    "gdn-combined-padding-v1/queue.json": {
+      "bytes": 4451,
+      "sha256": "beb6124c05f644a78d2ce2ed06baa1a96cf995782053a4e6150e3db6db59face",
+      "published_path": "predecessors/comparison-at-capture.json"
+    },
+    "gdn-combined-padding-followup-v1/queue.json": {
+      "bytes": 721,
+      "sha256": "6c0dc7815afe32c1d826816fa771aea4e70de58b39ee5e3a6921361e98a0c958",
+      "published_path": "predecessors/qualification-at-capture.json"
+    }
+  }
+}

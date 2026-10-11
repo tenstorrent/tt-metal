@@ -1,0 +1,8 @@
+{
+  "MainPID": "807101",
+  "Result": "success",
+  "ControlGroup": "/user.slice/user-1000.slice/user@1000.service/app.slice/qwen38-gdn-pipeline-phase-v1-20261011.service",
+  "LoadState": "loaded",
+  "ActiveState": "active",
+  "InvocationID": "592686881e474eddb69f6282a8849ec7"
+}

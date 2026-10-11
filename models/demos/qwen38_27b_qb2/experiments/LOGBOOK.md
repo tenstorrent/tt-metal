@@ -2403,3 +2403,77 @@ still needed. [Final receipts](../galaxy-evidence/gdn-followup-results-v1/README
   it. A documentation patch failed its final context check atomically and was
   reapplied with the exact context. SSH collection used approved escalation.
 - Evidence: galaxy-evidence/gdn-combined-padding-launch-v1/README.md.
+
+## October 11, 03:02 UTC - Parallel image/video scope only
+
+- User reported input-image-url/base64 and input-video-url/base64 failures,
+  then explicitly restricted this work to parallel scoping. No multimodal
+  implementation, deployment change or hardware test was made. The screenshot
+  has no expanded response or endpoint, so its exact failure is unproven.
+- Source inspection confirms our generator_vllm.py adapter currently uses
+  text-only prefill, ignores multimodal kwargs and returns zero RoPE deltas.
+  vllm-tt-plugin model_runner.py rejects all modalities except image; inspected
+  plugin main also retains this restriction. A plugin rebase alone is insufficient.
+- Reuse candidate: native blackhole/qwen36/tt/vision encoder and its Qwen3.5
+  processor/M-RoPE support. The pinned checkpoint includes the vision config,
+  processor configs and333 vision tensors (460,730,096 parameters, about0.92GB
+  raw BF16). Selectively load visual tensors; the existing reference helper
+  instantiates the entire conditional-generation model before selecting visual.
+- Required model work: processor registration, visual embedding insertion,
+  request-specific interleaved M-RoPE separate from logical KV-write positions,
+  and positional-state propagation across chunks, slot reuse and async decode.
+  Do not adopt the existing Qwen36 serving wrapper wholesale: it disables async
+  decode and restricts TP visual serving to one request. Preserve our B16 adapter
+  and eight independent TP4 processes.
+- Required plugin work: video validation and collection of video pixels/grids,
+  preserving media/request ordering. TTIS needs decoder dependencies, bounded
+  media settings and pinned model/plugin artifacts. URL/base64 are transport
+  variants of image/video, not four independent model features.
+- Reuse risk: the vision tower computes frame cu_seqlens but does not pass them
+  into its TT blocks. Validate frame isolation and padded-token exclusion before
+  trusting multi-frame results; this is not a proven cause of the reported errors.
+- Qualification scope: URL/base64 equivalence, HF vision/position checks, video
+  ordering/timestamps, media placeholders at chunk boundaries, B16 mixed requests,
+  cancellation/slot reuse, async decode, eight replicas, text-only regression.
+  Future prefix/SSD cache identity must include media/processor/grid metadata and
+  restore the request's RoPE delta alongside recurrent/KV state.
+- Planning range only: a few engineer-days for a single-request proof if encoder
+  checks pass; roughly1-2 engineer-weeks for concurrent serving and packaging.
+  Main performance/profiling work remains the priority. No feature launch queued.
+
+## October 11, 03:07 UTC - Current-kernel phase diagnostic queued
+
+- Extended diagnostic-only timing zones to resident recurrence and packed-L1
+  epilogue. Added B16/B32, zero/skip padding and plain/annotated comparisons,
+  three steps each, four independent ranks:48 targeted kernel calls. Inputs,
+  final state and output hashes must match; dense recurrence checks and finite
+  epilogue/public-padding checks remain separate from prior numerical coverage.
+- Initial resident anchor matching collided with an inlined helper. Changed
+  anchors to unique line-start matches; all seven source variants preserve
+  original tokens apart from timing scopes. No production kernel math changed.
+- Nine focused CPU tests passed. Host frozen preflight passed753 tests, one
+  skipped and104 subtests; hardware test collected. Pre-commit formatted files,
+  then passed. Local isolated pytest initially warned about /dev cache writes;
+  this did not affect assertions. Host preflight used normal task-local paths.
+- Queued qwen38-gdn-pipeline-phase-v1-20261011, PID807101, invocation
+  592686881e474eddb69f6282a8849ec7. It waits for the exact combined-padding
+  qualification follower before acquiring the existing device lock. Separate
+  source snapshot and128GiB/8CPU caps;1200-second pytest bound,5400-second
+  lock/capture/export bound,4GiB artifact budget. Disconnect-persistent.
+- At03:07:42UTC the full-model candidate and first control were complete;
+  final control was running, qualification follower and diagnostic waiting.
+  No final throughput claim, counter result, model promotion or AgentX launch.
+- Evidence: galaxy-evidence/gdn-pipeline-phase-launch-v1/README.md.
+
+## October 11 - Image/video implementation authorized separately
+
+- User subsequently requested image/video implementation in parallel on a
+  separate worktree, superseding the scope-only restriction above. Created
+  separate assignments for Metal and plugin; performance branch stays separate.
+- Metal feature branch anatarajan/qwen38-multimodal-20261010 is based on exact
+  published performance revision4d4c6db8d30527d74a0fbbf42e1106422e546ba4.
+  Plugin feature branch with the same name starts at
+  e5b02d58bda26ee326fe0e7cbed9e4828adb9426 in its separate repository/worktree.
+- Implementation and CPU tests may proceed independently. Device tests and
+  serving changes are not launched by these assignments; coordinate hardware
+  access after the performance diagnostic. No deployed multimodal pass claimed.

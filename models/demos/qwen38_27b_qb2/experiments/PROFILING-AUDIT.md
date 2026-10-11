@@ -4,6 +4,11 @@ October 11, 2026, 02:32 UTC. Target: B16/32K, TP4, BFP8 weights/KV,
 BF16 activations, FP32 recurrent state. This is an evidence audit and diagnostic
 plan, not a new capture or a claim of measured DRAM utilization.
 
+Update at03:07UTC: the current resident/epilogue phase diagnostic is implemented,
+CPU-checked and persistently queued after the exact qualification follower.
+See [launch evidence](../galaxy-evidence/gdn-pipeline-phase-launch-v1/README.md).
+No physical result or hardware-counter capture is claimed by this update.
+
 ## Existing evidence
 
 | Evidence | Established | Limit |
@@ -22,10 +27,9 @@ preparation would save 66 us. Do not repeat this diagnostic unchanged.
 
 ## Remaining attribution gaps
 
-1. Current resident recurrence and epilogue lack internal phase coverage.
-   `tests/gdn_phase_profile.py` annotates only recurrence reader, writer and
-   nonresident `compute.cpp`. Extend diagnostic-only sources, retaining math,
-   barrier ordering, variable scope and precision.
+1. Current resident recurrence and epilogue lack completed internal phase
+   measurements. Diagnostic-only annotations now cover both, retaining math,
+   barrier ordering and precision; physical compilation/capture remains pending.
 2. Existing reports have no populated physical DRAM utilization or NoC
    congestion data. Useful bytes divided by elapsed time and assumed peak is
    a model, not bus activity. Hardware counters are needed to distinguish
@@ -84,7 +88,8 @@ attribution works; do not start with another broad full-model trace.
 5. Reconcile winners with unprofiled full-model step time and critical path.
    Batch sub-1-TSU improvements before expensive G0/API/full GPQA.
 
-This diagnostic is **planned, not launched**. At the audit timestamp, the
+At the original02:32UTC audit timestamp, this diagnostic was planned. It is
+now persistently queued as recorded above. At the original timestamp, the
 combined-padding model comparison is running and its conditional qualification
 follower is waiting. The follower requires at least 1 TSU measured gain and
 does not automatically run another full profile. Do not instrument or replace

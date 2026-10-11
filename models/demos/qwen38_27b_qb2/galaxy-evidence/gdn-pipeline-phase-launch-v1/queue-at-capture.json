@@ -1,0 +1,21 @@
+{
+  "state": "waiting",
+  "cleanup_completed": false,
+  "hardware_lock": "/tmp/tt-device.lock",
+  "survives_disconnect": true,
+  "resumes_after_reboot": false,
+  "promoted_to_serving": false,
+  "pipeline": true,
+  "predecessor_unit": "qwen38-gdn-combined-padding-followup-v1-20261011.service",
+  "predecessor_invocation": "3b91a375acef4a09b5cc4a9835bcc9ff",
+  "started_at": 1791688033.2974696,
+  "updated_at": "2026-10-11T03:08:13Z",
+  "predecessor": {
+    "MainPID": "759231",
+    "Result": "success",
+    "ControlGroup": "/user.slice/user-1000.slice/user@1000.service/app.slice/qwen38-gdn-combined-padding-followup-v1-20261011.service",
+    "LoadState": "loaded",
+    "ActiveState": "active",
+    "InvocationID": "3b91a375acef4a09b5cc4a9835bcc9ff"
+  }
+}
