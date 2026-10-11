@@ -294,6 +294,19 @@ class V41PrefillBlock(LightweightModule):
         """Capture A and B with ``streams`` / ``pre_row`` as shape templates (their contents do not matter) ->
         (out_streams, ffn_pre): B's persistent outputs, which serve as the next block's templates."""
         assert self._islands is None, "islands already enabled"
+        # Ragged chunks (DS41F-0037 10-11): inside the islands only the MoE depends on the real length -- its padding config
+        # (per SP shard [real tokens, pad side]) sentinel-marks the pad rows in the gate's top-k and bounds the dispatch.
+        # Island B captures the gate's memoized FULL-chunk config tensor (cached by the warm-up, before any capture); a
+        # ragged replay rewrites that tensor's CONTENT in place and the next full replay restores it, so the captured
+        # program is exactly the full-chunk one. (TtMoe's device-built metadata config inside the islands broke the export
+        # even on full chunks, 02:40 -- not used.)
+        g = self.moe.gate
+        assert not g.is_balanced, "ragged islands assume the sequential SP layout"
+        self._moe_pc = g.build_padding_config(int(chunk_tokens), "right", 0)
+        assert (
+            g._padding_config_cache.get((int(chunk_tokens), "right", 0)) is self._moe_pc
+        ), "full-chunk config not cached"
+        self._moe_pc_len = int(chunk_tokens)
         S_in = [ttnn.clone(t) for t in streams]
         pre_in = ttnn.clone(pre_row)
         S_l, D_l = int(streams[0].shape[2]), int(streams[0].shape[3])
@@ -333,7 +346,12 @@ class V41PrefillBlock(LightweightModule):
         previous island's persistent outputs (an Engram layer gets eager streams but the previous block's persistent pre
         row: freeing that one freed block L-1's island-B output, 19:23)."""
         A, B, S_in, pre_in, y_buf = self._islands
-        assert real_len == self._island_chunk, f"islands run full chunks only ({real_len} of {self._island_chunk})"
+        assert 0 < real_len <= self._island_chunk, (real_len, self._island_chunk)
+        if (
+            real_len != self._moe_pc_len
+        ):  # a ragged chunk, or the full one after it: the MoE's per-shard real-token counts
+            ttnn.copy_host_to_device_tensor(self._padding_rows_host(real_len), self._moe_pc)
+            self._moe_pc_len = int(real_len)
         for dst, src in zip(S_in, streams):
             copy_into(dst, src)
         copy_into(pre_in, pre_row)
@@ -352,6 +370,17 @@ class V41PrefillBlock(LightweightModule):
         ttnn.deallocate(y)
         outs = B.replay()
         return list(outs[:HC]), outs[HC]
+
+    def _padding_rows_host(self, real_len: int):
+        """The host twin of TtMoEGatePrefill.build_padding_config (sequential layout, right padding), same tensor spec."""
+        sp, s_l = int(self.mesh_device.shape[0]), int(self.moe.gate.config.sp_dim)
+        rows = [[min(s_l, max(0, int(real_len) - c * s_l)), 0] for c in range(sp)]
+        return ttnn.from_torch(
+            torch.tensor(rows, dtype=torch.int32),
+            dtype=ttnn.uint32,
+            layout=ttnn.ROW_MAJOR_LAYOUT,
+            mesh_mapper=ttnn.ShardTensor2dMesh(self.mesh_device, dims=(0, None), mesh_shape=self.mesh_device.shape),
+        )
 
     def release_islands(self) -> None:
         if self._islands is not None:

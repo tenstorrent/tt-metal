@@ -81,7 +81,8 @@ def test_v41_kv_export_through_the_table(mesh_device, device_params, tmp_path):
     meta = json.load(open(os.path.join(TRACE, "meta.json")))
     S = int(meta["S"])
     ids = [int(v) for v in open(meta["prompt_ids_file"]).read().replace("\n", ",").split(",") if v.strip()][:S]
-    assert S % CHUNK == 0, (S, CHUNK)
+    # S need not be a multiple of CHUNK: the last chunk is then ragged (DS41F-0037 10-11, e.g. CHUNK=1024 on the 1536 trace)
+    assert S >= CHUNK, (S, CHUNK)
     rt = V41PrefillRuntime(
         mesh_device,
         cfg,
@@ -108,11 +109,9 @@ def _run_and_check(rt, exp, cfg, ids, S, mesh_device, tmp_path):
         rt.prefill_chunk(ids[:CHUNK], exp, slot_id=0, actual_start=0, actual_end=CHUNK, warmup=True)
     requests = [(0, S)] + ([(1, S), (1, PREFIX)] if USERS > 1 else [])
     for slot, n in requests:
-        assert n % CHUNK == 0, (n, CHUNK)
         for start in range(0, n, CHUNK):
-            rt.prefill_chunk(
-                ids[start : start + CHUNK], exp, slot_id=slot, actual_start=start, actual_end=start + CHUNK
-            )
+            end = min(start + CHUNK, n)  # the last chunk may be ragged
+            rt.prefill_chunk(ids[start:end], exp, slot_id=slot, actual_start=start, actual_end=end)
     ttnn.synchronize_device(mesh_device)
 
     table_path = rt.build_kv_chunk_table(exp, str(tmp_path / "kv_table.pb"))
