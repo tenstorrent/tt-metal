@@ -135,8 +135,12 @@ TT_KERNEL void reader(uint32_t wi_start, uint32_t wi_count) {
 
         if (block != loaded_block) {
             // Diagonal weight tiles, laid out [tap][channel tile]: diag(tap)[c][c] = tap[c].
+            // The weight buffer holds exactly one block, so every block lands at the same address: zero it once,
+            // after which each block only rewrites the diagonals.
             weights.reserve_back(tap_count * block_ct);
-            noc.async_write_zeros(weights, tap_count * block_ct * tile_bytes);
+            if (loaded_block == no_block) {
+                noc.async_write_zeros(weights, tap_count * block_ct * tile_bytes);
+            }
             // Each (channel tile, tap) gets a 128-byte slot: the face 0 row at +0 and the face 1 row at +64, so every
             // 32-byte DRAM read lands 64-byte aligned.
             constexpr uint32_t slot_bytes = 128;
