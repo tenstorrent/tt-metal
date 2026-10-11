@@ -8,15 +8,18 @@ assumed:
 
 **Scale lives in the file's metadata, not in its tensors.** The diffusers publish carries no
 per-target ``.alpha``, only ``__metadata__["alpha"]``; the real scale is ``alpha / rank`` (0.0625 for
-every published Turbo adapter, corroborated by the publisher's own ComfyUI conversion, which states
-``training_scale: 0.0625``). Loading at 1 applies every delta 16x too strong -- and because nothing
-about that is structurally invalid, it produces a video rather than an error.
+v1.2, whose ComfyUI conversion states ``training_scale: 0.0625``; 1 for v1.0, alpha 128). Loading v1.2
+at 1 applies every delta 16x too strong -- and because nothing about that is structurally invalid, it
+produces a video rather than an error.
 ``h3_adapter_loader`` derives it, so this test only records what the loader resolved.
 
 **The 768p variants were distilled against video shift 6**, not the checkpoint's 12 (audio stays 3);
 the 544p variants keep 12/3. A wrong shift is a valid schedule over the wrong sigma grid: it
 completes, and it costs quality rather than correctness. The canvas and its shifts therefore travel
 together in ``WORKING_POINTS`` rather than being independently settable.
+
+The 768p working point defaults to the v1.0 4-step adapter (``TURBO_DEFAULT_ADAPTER``) from the
+HuggingFace cache when ``MINIMAX_H3_TURBO_LORA_PATH`` is unset.
 
 The ``hyperflow`` working point runs the HyperFlow 8-step file the same way, at the checkpoint's own
 shifts; its sigma grid and interval conditioning come from the file's header.
@@ -41,6 +44,7 @@ from models.perf.benchmarking_utils import BenchmarkProfiler
 from ....pipelines.minimax_h3.packing import MINIMAX_H3_FPS, resolve_canvas_size
 from ....pipelines.minimax_h3.pipeline_minimax_h3_turbo import TURBO_NUM_FORWARDS, MiniMaxH3TurboPipeline
 from ....pipelines.minimax_h3.policy import align_num_frames
+from ....pipelines.minimax_h3.weights_minimax_h3 import WeightsNotFoundError, resolve_turbo_adapter
 from ....utils import tensor as tt_tensor
 from ....utils.video import Audio, export_video_audio_yuv
 from .common import GALAXY_MESHES
@@ -146,6 +150,11 @@ def test_turbo_end_to_end(mesh_device, reset_seeds, duration_s):
     if TASK not in ("fl2va", "t2va"):
         raise ValueError(f"MINIMAX_H3_TURBO_TASK must be fl2va or t2va, got {TASK!r}")
     lora_path = os.environ.get("MINIMAX_H3_TURBO_LORA_PATH")
+    if not lora_path and WORKING_POINT == "768p":
+        try:
+            lora_path = str(resolve_turbo_adapter())
+        except WeightsNotFoundError as error:
+            pytest.skip(f"set MINIMAX_H3_TURBO_LORA_PATH, or cache the default adapter: {error}")
     if not lora_path:
         pytest.skip("set MINIMAX_H3_TURBO_LORA_PATH to a lightx2v Minimax-h3-Turbo adapter")
     keyframe_path = os.environ.get("MINIMAX_H3_TURBO_KEYFRAME")

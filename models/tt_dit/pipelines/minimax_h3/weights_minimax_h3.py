@@ -150,6 +150,39 @@ def resolve_weights_dir(
     return snapshot
 
 
+TURBO_REPO_ID = "lightx2v/Minimax-h3-Turbo"
+# The file LightX2V's 4-step 768p config runs (alpha 128, scale 1). v1.2's alpha-8 delta sits below the
+# bf16 resolution of the weights it is fused into, so most of it is lost and subjects come out doubled.
+TURBO_DEFAULT_ADAPTER = "minimax_h3_fl2v_turbo_4step_v1.0_768p_bf16.safetensors"
+
+
+def resolve_turbo_adapter(
+    filename: str = TURBO_DEFAULT_ADAPTER,
+    allow_download: bool | None = None,
+) -> Path:
+    """`filename` from the HuggingFace cache of the lightx2v Turbo repo, fetched only under
+    `$TT_DIT_ALLOW_HF_DOWNLOAD=1`. Raises `WeightsNotFoundError` when it is not cached and downloads are off.
+    """
+    from huggingface_hub import hf_hub_download
+    from huggingface_hub.utils import LocalEntryNotFoundError
+
+    if allow_download is None:
+        allow_download = os.environ.get(ALLOW_DOWNLOAD_ENV) == "1"
+    try:
+        path = hf_hub_download(
+            repo_id=TURBO_REPO_ID,
+            filename=filename,
+            cache_dir=_hf_cache_root() / "hub",
+            local_files_only=not allow_download,
+        )
+        return Path(path)
+    except LocalEntryNotFoundError as error:
+        raise WeightsNotFoundError(
+            f"Turbo adapter {filename} is not in {_hf_cache_root()}. Pass its path, or re-run with "
+            f"{ALLOW_DOWNLOAD_ENV}=1 to fetch it from {TURBO_REPO_ID}."
+        ) from error
+
+
 # Fallbacks for the Turbo factory's adapter arguments when the caller passes nothing.
 LORA_PATH_ENV = "MINIMAX_H3_LORA_PATH"
 LORA_STRENGTH_ENV = "MINIMAX_H3_LORA_STRENGTH"
@@ -163,7 +196,7 @@ class AdapterSettings:
 
     `lora_strength` multiplies the adapter's own `alpha / rank`; the loader applies that published
     scale itself, so 1.0 means "as trained". A deployment that used to pass the published scale
-    here (0.0625 for the lightx2v Turbo files) would now apply it twice, which produces a video
+    here (0.0625 for the lightx2v Turbo v1.2 file) would now apply it twice, which produces a video
     rather than an error -- hence the dedicated variable name instead of inheriting the old one.
     """
 

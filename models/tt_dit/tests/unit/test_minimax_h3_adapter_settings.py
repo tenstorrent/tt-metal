@@ -67,3 +67,21 @@ def test_empty_path_variable_means_no_adapter(clean_env):
 def test_non_positive_values_are_rejected(clean_env, field, expect_error):
     with expect_error(ValueError, field):
         weights.resolve_adapter_settings(**{field: 0.0}, **DEFAULTS)
+
+
+def test_default_turbo_adapter_not_cached_and_downloads_off_raises(clean_env, tmp_path, expect_error):
+    clean_env.setenv("HF_HOME", str(tmp_path))
+    with expect_error(weights.WeightsNotFoundError, weights.TURBO_DEFAULT_ADAPTER):
+        weights.resolve_turbo_adapter(allow_download=False)
+
+
+def test_default_turbo_adapter_resolves_from_the_cache(clean_env, tmp_path):
+    clean_env.setenv("HF_HOME", str(tmp_path))
+    repo = tmp_path / "hub" / f"models--{weights.TURBO_REPO_ID.replace('/', '--')}"
+    revision = "0" * 40
+    (repo / "refs").mkdir(parents=True)
+    (repo / "refs" / "main").write_text(revision)
+    cached = repo / "snapshots" / revision / weights.TURBO_DEFAULT_ADAPTER
+    cached.parent.mkdir(parents=True)
+    cached.write_bytes(b"")
+    assert weights.resolve_turbo_adapter(allow_download=False) == cached
