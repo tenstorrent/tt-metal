@@ -240,7 +240,11 @@ into contention orbits picked by the start phase, so its value is not reproducib
 
 `L1_CONGESTION` itself is opt-in: a run measures it only when `LLK_PERF_RUN_TYPES` names it
 (`LLK_PERF_RUN_TYPES=ALL_MODES_AND_CONGESTION` adds it to the four default ones). Read it as the worst case of two
-uncoupled streams, and average several start phases before comparing two builds.
+uncoupled streams. On Wormhole one launch runs the kernel once per BRISC release phase (32 of them, `brisc.cpp`
+`RELEASE_PHASES`: all three threads released 0 to 15 spins later, or pack or unpack released later than the other), and
+`mean(L1_CONGESTION[...])` is the mean over the phases and `std(...)` their spread. One phase alone is not reproducible:
+the TRISC branch table LFSR and the relative start of the two streams pick which stream wins the shared L1 ports, and
+any code or firmware change moves both. With counters, the counter columns are those of the last phase.
 
 Wormhole exposes 8 of its L1 client ports per run (`LLK_PERF_L1_MUX_GROUP`), so a full capture is two counter passes
 of the same tests, then one merge:
