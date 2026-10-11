@@ -24,11 +24,29 @@ from models.common.modules.lm_head.lm_head_1d import LMHead1D, LMHead1DConfig
 
 MODEL_ID = "meta-models/Muse-Glimmer-30B"
 REVISION = "a4e59da52a7bc87ae7251dd5545c0dd437c44b68"
-SNAPSHOT = (
+HF_SNAPSHOT = (
     Path(os.environ.get("HF_HOME", "/mnt/models/huggingface"))
     / "hub/models--meta-models--Muse-Glimmer-30B/snapshots"
     / REVISION
 )
+
+
+def _mounted_snapshot():
+    """Serving harnesses (TTI) mount the checkpoint and export HF_MODEL /
+    MODEL_WEIGHTS_DIR as a local snapshot directory. Prefer it when it holds
+    the safetensors index and config, so the container needs no hub access."""
+    for name in ("MODEL_WEIGHTS_DIR", "HF_MODEL"):
+        value = os.environ.get(name)
+        if (
+            value
+            and (Path(value) / "model.safetensors.index.json").is_file()
+            and (Path(value) / "config.json").is_file()
+        ):
+            return Path(value)
+    return None
+
+
+SNAPSHOT = _mounted_snapshot() or HF_SNAPSHOT
 
 
 class Checkpoint:
