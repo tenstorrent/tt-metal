@@ -45,11 +45,18 @@ from models.experimental.deepseek_v41_flash.tt.engram_lookup import (
     engram_table_nbytes,
     load_engram_table,
 )
-from models.experimental.deepseek_v4_flash.tt.common import _MASK_NEG, _profile, _region, _traced_decode_enabled
+from models.experimental.deepseek_v4_flash.tt.common import (
+    _MASK_NEG,
+    _profile,
+    _region,
+    _traced_decode_enabled,
+    width_sharded_l1_config,
+)
 from models.experimental.deepseek_v4_flash.tt.decode.attention import (
     CSA_INDEX_BLOCK_SIZE,
     _index_key_pool,
 )
+from models.experimental.deepseek_v4_flash.tt.decode.hyperconnection import _HC_COLLAPSE_CORES
 from models.experimental.deepseek_v4_flash.tt.embedding import DeepSeekV4Embedding
 from models.experimental.deepseek_v4_flash.tt.layers import DeepSeekV4RMSNorm
 from models.experimental.deepseek_v4_flash.tt.model import (
@@ -398,6 +405,11 @@ class DeepSeekV41Model(DeepSeekV4Model):
                 "device": device,
                 "index": stage,
                 "layers": layers_here,
+                # The decode streams [B, 1, hc, D]: ROW_MAJOR, width-sharded over the hyperconnection's
+                # collapse cores, the layout engram and every hyperconnection consume in place.
+                "streams_memory_config": width_sharded_l1_config(
+                    batch * hc, hidden, device, num_cores=_HC_COLLAPSE_CORES, tile_height=1
+                ),
                 "rope_invfreq": {},
                 "scaches": {},
                 "ratios": stage_ratios,
@@ -757,10 +769,11 @@ class DeepSeekV41Model(DeepSeekV4Model):
     def _collapse_streams(self, streams: ttnn.Tensor, pre_mix: ttnn.Tensor) -> ttnn.Tensor:
         """``sum_j pre_mix[j] * streams[j]`` in fp32, one stream at a time.
 
-        A ``ttnn.sum`` over ``hc`` (4) in a tile would add the tile's padding. The result is
-        ``[B, 1, 1, D]`` bf16, the final norm's input.
+        A ``ttnn.sum`` over ``hc`` (4) in a tile would add the tile's padding. The ROW_MAJOR sharded
+        streams are tiled in DRAM first. The result is ``[B, 1, 1, D]`` bf16, the final norm's input.
         """
         batch, hidden, hc = self._decode_batch, self.config.hidden_size, self.config.hc_mult
+        streams = ttnn.to_layout(ttnn.to_memory_config(streams, ttnn.DRAM_MEMORY_CONFIG), ttnn.TILE_LAYOUT)
         streams_f = ttnn.typecast(streams, ttnn.float32)
         weights = ttnn.typecast(pre_mix, ttnn.float32)
         total = None
@@ -818,17 +831,20 @@ class DeepSeekV41Model(DeepSeekV4Model):
                 for cache in recv_caches:
                     ttnn.experimental.recv_direct_async(cache, receiver)
                 pkt = sm["pkt_in"]
-                streams = ttnn.to_layout(sm["streams_in"], ttnn.TILE_LAYOUT)
+                streams = ttnn.to_memory_config(sm["streams_in"], sm["streams_memory_config"])
                 pre_mix = sm["pre_mix_in"]
             if ctx is None:
                 ctx = self._step_context(sm, pkt, causal, r2_pool, r2_select)
             if is_first:
                 with _region("EMBED"):
-                    embedded = self.embed_tokens(ctx["token"])
+                    embedded = ttnn.embedding(
+                        ctx["token"], self.embed_tokens.embedding_weight, layout=ttnn.ROW_MAJOR_LAYOUT
+                    )
                 hidden = embedded.shape[-1]
                 streams = ttnn.repeat(
                     ttnn.reshape(embedded, [self._decode_batch, 1, 1, hidden]),
                     ttnn.Shape([1, 1, self.config.hc_mult, 1]),
+                    memory_config=sm["streams_memory_config"],
                 )
                 pre_mix = sm["pre_mix_init"]
             streams, pre_mix = layer.decode(
@@ -845,7 +861,7 @@ class DeepSeekV41Model(DeepSeekV4Model):
                 self._send_output(out)
             elif ids[li + 1] != stage:
                 sender, _ = self.submesh_socket_pairs[(stage, ids[li + 1])]
-                streams_rm = ttnn.to_layout(streams, ttnn.ROW_MAJOR_LAYOUT)
+                streams_rm = ttnn.to_memory_config(streams, ttnn.DRAM_MEMORY_CONFIG)
                 pre_send = ttnn.to_memory_config(pre_mix, ttnn.DRAM_MEMORY_CONFIG)
                 ttnn.experimental.send_direct_async(streams_rm, sender)
                 ttnn.experimental.send_direct_async(pkt, sender)

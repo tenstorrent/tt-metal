@@ -52,8 +52,10 @@ class DeepSeekV41TopKRouter(DeepSeekV4TopKRouter):
     The op ranks on ``scores + bias`` in bf16, whose step at V4.1's bias (up to ~57) is as large
     as the gaps between the scores, so it would mostly pick different experts than the fp32
     reference. A constant shift does not change the ranking, and after it the bias is in
-    ``[-0.5, 0]``, where bf16 steps are ~100x finer. The gate stays bf16, the checkpoint's own
-    dtype, whatever ``weight_dtype`` the block uses for the shared expert.
+    ``[-0.5, 0]``, where bf16 steps are ~100x finer. The gate weight is bfloat8_b, whatever
+    ``weight_dtype`` the block uses for the shared expert: it has no prefetcher ring (12 cores do not
+    split over 8 DRAM banks), so each call copies it DRAM -> L1, and the bf16 copy (320 KB a core) does
+    not fit beside an Engram stage's resident L1.
     """
 
     decode_layouts = DECODE_LAYOUTS
@@ -67,7 +69,7 @@ class DeepSeekV41TopKRouter(DeepSeekV4TopKRouter):
             "gate.weight": lambda: gate() / temp,
             "gate.e_score_correction_bias": lambda: bias() - bias().max(),
         }
-        super().__init__(config, weights, device, cache=cache, weight_dtype=ttnn.bfloat16, **kwargs)
+        super().__init__(config, weights, device, cache=cache, weight_dtype=ttnn.bfloat8_b, **kwargs)
 
 
 class DeepSeekV41MLP(DeepSeekV4MLP):

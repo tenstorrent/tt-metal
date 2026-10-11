@@ -59,8 +59,10 @@ void kernel_main() {
     constexpr uint32_t fused_w_read_bytes = get_compile_time_arg_val(26);
     constexpr uint32_t cb_pre = get_compile_time_arg_val(27);
     constexpr bool use_pre_mix = get_compile_time_arg_val(28) != 0;
+    constexpr bool hidden_row_major = get_compile_time_arg_val(29) != 0;
+    constexpr uint32_t hidden_row_bytes = get_compile_time_arg_val(30);
 
-    constexpr auto fused_w_args = TensorAccessorArgs<29>();
+    constexpr auto fused_w_args = TensorAccessorArgs<31>();
     constexpr auto pre_bias_args = TensorAccessorArgs<fused_w_args.next_compile_time_args_offset()>();
     constexpr auto post_bias_args = TensorAccessorArgs<pre_bias_args.next_compile_time_args_offset()>();
     constexpr auto hidden_args = TensorAccessorArgs<post_bias_args.next_compile_time_args_offset()>();
@@ -94,6 +96,27 @@ void kernel_main() {
     if constexpr (role == 0) {
         CircularBuffer cb_h(cb_hidden);
         cb_h.reserve_back(hidden_tiles_per_core);
+        if constexpr (hidden_row_major) {
+            // The local ROW_MAJOR [H, D/8] shard: copy each tile's 32 columns of rows 0..H-1 into a
+            // zeroed tile (face 0 holds columns 0..15, face 1 columns 16..31).
+            noc.async_write_zeros(cb_h, hidden_tiles_per_core * cb_h.get_tile_size(), {.offset_bytes = 0});
+            noc.write_zeros_l1_barrier();
+            constexpr uint32_t half_row_words = 16 * sizeof(uint16_t) / sizeof(uint32_t);
+            constexpr uint32_t face1_words = 256 * sizeof(uint16_t) / sizeof(uint32_t);
+            constexpr uint32_t tile_words = 1024 * sizeof(uint16_t) / sizeof(uint32_t);
+            const auto* src = reinterpret_cast<const volatile tt_l1_ptr uint32_t*>(hidden_addr);
+            auto* dst = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(cb_h.get_write_ptr());
+            for (uint32_t n = 0; n < hidden_tiles_per_core; ++n) {
+                for (uint32_t r = 0; r < num_streams; ++r) {
+                    const auto* row = src + (r * hidden_row_bytes) / sizeof(uint32_t) + n * 2 * half_row_words;
+                    auto* tile_row = dst + n * tile_words + r * half_row_words;
+                    for (uint32_t w = 0; w < half_row_words; ++w) {
+                        tile_row[w] = row[w];
+                        tile_row[face1_words + w] = row[half_row_words + w];
+                    }
+                }
+            }
+        }
         cb_h.push_back(hidden_tiles_per_core);
 
         if constexpr (use_pre_mix) {

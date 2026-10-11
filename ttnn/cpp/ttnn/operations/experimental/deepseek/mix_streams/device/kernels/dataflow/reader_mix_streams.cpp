@@ -20,9 +20,11 @@ FORCE_INLINE uint32_t tile_face_index(uint32_t r, uint32_t c) {
 
 }  // namespace
 
-// TILE post / comb / streams (32x32 pages). ROW_MAJOR sublayer_out is read as 1x32
+// TILE post / comb (32x32 pages). ROW_MAJOR sublayer_out is read as 1x32
 // faces (32 bf16 cols) and scattered into row 0 of a 32x32 tile so the placement
-// matmul still sees a single-tile B.
+// matmul still sees a single-tile B. ROW_MAJOR streams are gathered the same way: a
+// token's hc rows, 32 columns at a time, land in rows 0..hc-1 of a tile whose other
+// rows stay zero, so the comb matmul never multiplies into stale data.
 void kernel_main() {
     const uint32_t post_addr = get_arg_val<uint32_t>(0);
     const uint32_t comb_addr = get_arg_val<uint32_t>(1);
@@ -42,8 +44,10 @@ void kernel_main() {
     constexpr uint32_t comb_post_cb_pages = get_compile_time_arg_val(8);
     constexpr uint32_t sub_elems_per_page = get_compile_time_arg_val(9);
     constexpr uint32_t sub_is_rm = get_compile_time_arg_val(10);
+    constexpr bool streams_is_rm = get_compile_time_arg_val(11) != 0;
+    constexpr uint32_t streams_elems_per_page = get_compile_time_arg_val(12);
 
-    constexpr auto post_args = TensorAccessorArgs<11>();
+    constexpr auto post_args = TensorAccessorArgs<13>();
     constexpr auto comb_args = TensorAccessorArgs<post_args.next_compile_time_args_offset()>();
     constexpr auto sub_args = TensorAccessorArgs<comb_args.next_compile_time_args_offset()>();
     constexpr auto streams_args = TensorAccessorArgs<sub_args.next_compile_time_args_offset()>();
@@ -78,7 +82,15 @@ void kernel_main() {
     post_cb.reserve_back(comb_post_cb_pages);
     noc.async_write_zeros(comb_cb, comb_post_cb_pages * tile_size_bytes, {.offset_bytes = 0});
     noc.async_write_zeros(post_cb, comb_post_cb_pages * tile_size_bytes, {.offset_bytes = 0});
+    if constexpr (streams_is_rm) {
+        streams_cb.reserve_back(comb_post_cb_pages);
+        noc.async_write_zeros(streams_cb, comb_post_cb_pages * tile_size_bytes, {.offset_bytes = 0});
+    }
     noc.write_zeros_l1_barrier();
+    // Bytes of one 16-column face row, and the offset of face 1 (columns 16..31) in a tile.
+    constexpr uint32_t half_row_bytes = 16 * sizeof(uint16_t);
+    constexpr uint32_t face1_bytes = 256 * sizeof(uint16_t);
+    constexpr uint32_t streams_pages_per_row = (n_tiles * tile_w) / streams_elems_per_page;
 
     const uint32_t end_tile = start_tile + num_tiles;
     uint32_t tile = start_tile;
@@ -109,10 +121,30 @@ void kernel_main() {
         for (uint32_t page = tile; page < group_end; ++page) {
             streams_cb.reserve_back(one_tile);
             sub_cb.reserve_back(one_tile);
-            noc.async_read(streams, streams_cb, tile_size_bytes, {.page_id = page}, {.offset_bytes = 0});
+            const uint32_t n_idx = page % n_tiles;
+            const uint32_t col = n_idx * tile_w;
+            if constexpr (streams_is_rm) {
+                const uint32_t col_page = col / streams_elems_per_page;
+                const uint32_t col_offset = (col % streams_elems_per_page) * sizeof(uint16_t);
+                for (uint32_t r = 0; r < hc; ++r) {
+                    const uint32_t page_id = (t * hc + r) * streams_pages_per_row + col_page;
+                    noc.async_read(
+                        streams,
+                        streams_cb,
+                        half_row_bytes,
+                        {.page_id = page_id, .offset_bytes = col_offset},
+                        {.offset_bytes = r * half_row_bytes});
+                    noc.async_read(
+                        streams,
+                        streams_cb,
+                        half_row_bytes,
+                        {.page_id = page_id, .offset_bytes = col_offset + half_row_bytes},
+                        {.offset_bytes = face1_bytes + r * half_row_bytes});
+                }
+            } else {
+                noc.async_read(streams, streams_cb, tile_size_bytes, {.page_id = page}, {.offset_bytes = 0});
+            }
             if constexpr (sub_is_rm) {
-                const uint32_t n_idx = page % n_tiles;
-                const uint32_t col = n_idx * tile_w;
                 const uint32_t sub_page_id = t * pages_per_token + col / sub_elems_per_page;
                 const uint32_t sub_offset = (col % sub_elems_per_page) * sizeof(uint16_t);
                 noc.async_read(

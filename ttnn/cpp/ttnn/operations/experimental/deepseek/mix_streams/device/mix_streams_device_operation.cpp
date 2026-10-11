@@ -31,7 +31,10 @@ std::optional<Dims> fusable_dims(
             return std::nullopt;
         }
     }
-    if (post.layout() != Layout::TILE || comb.layout() != Layout::TILE || streams.layout() != Layout::TILE) {
+    if (post.layout() != Layout::TILE || comb.layout() != Layout::TILE) {
+        return std::nullopt;
+    }
+    if (streams.layout() != Layout::TILE && streams.layout() != Layout::ROW_MAJOR) {
         return std::nullopt;
     }
     if (sublayer_out.layout() != Layout::ROW_MAJOR && sublayer_out.layout() != Layout::TILE) {
@@ -55,8 +58,23 @@ std::optional<Dims> fusable_dims(
         return std::nullopt;
     }
     for (const Tensor* t : {&post, &comb, &streams}) {
+        if (t->layout() != Layout::TILE) {
+            continue;
+        }
         const auto& tile = t->tensor_spec().tile();
         if (tile.get_height() != tt::constants::TILE_HEIGHT || tile.get_width() != tt::constants::TILE_WIDTH) {
+            return std::nullopt;
+        }
+    }
+    // ROW_MAJOR streams are read 32 columns at a time out of their row pages, in 32 B halves -- an
+    // alignment L1 honours and DRAM (64 B) does not.
+    if (streams.layout() == Layout::ROW_MAJOR) {
+        if (streams.memory_config().buffer_type() != BufferType::L1) {
+            return std::nullopt;
+        }
+        const uint32_t page_elems =
+            streams.shard_spec().has_value() ? static_cast<uint32_t>(streams.shard_spec()->shape[1]) : dims.d;
+        if (page_elems % tt::constants::TILE_WIDTH != 0 || dims.d % page_elems != 0) {
             return std::nullopt;
         }
     }
@@ -74,7 +92,8 @@ void validate_tensors(const MixStreamsParams& attributes, const MixStreamsInputs
     TT_FATAL(
         dims.has_value(),
         "mix_streams: inputs are not supported by the fused kernel -- expected device-resident BFLOAT16 tensors "
-        "post/comb/streams TILE 32x32 and sublayer_out ROW_MAJOR or TILE, shaped post [B,S,hc,1], comb [B,S,hc,hc], "
+        "post/comb TILE 32x32, streams TILE 32x32 or ROW_MAJOR (row pages a multiple of 32 wide) and "
+        "sublayer_out ROW_MAJOR or TILE, shaped post [B,S,hc,1], comb [B,S,hc,hc], "
         "sublayer_out [B,S,1,D], streams [B,S,hc,D] with hc <= {} and D a multiple of {}; "
         "got post {}, comb {}, sublayer_out {}, streams {}",
         tt::constants::TILE_HEIGHT,
@@ -109,12 +128,13 @@ void MixStreamsDeviceOperation::validate_on_program_cache_hit(
 MixStreamsDeviceOperation::spec_return_value_t MixStreamsDeviceOperation::compute_output_specs(
     const operation_attributes_t& operation_attributes, const tensor_args_t& tensor_args) {
     const auto& streams = tensor_args.streams;
+    // The output takes the streams' layout, so a step's streams keep one format throughout.
+    const auto page_config = streams.layout() == Layout::ROW_MAJOR
+                                 ? tt::tt_metal::PageConfig(Layout::ROW_MAJOR)
+                                 : tt::tt_metal::PageConfig(Layout::TILE, streams.tensor_spec().tile());
     return tt::tt_metal::TensorSpec(
         streams.logical_shape(),
-        tt::tt_metal::TensorLayout(
-            streams.dtype(),
-            tt::tt_metal::PageConfig(Layout::TILE, streams.tensor_spec().tile()),
-            operation_attributes.output_mem_config));
+        tt::tt_metal::TensorLayout(streams.dtype(), page_config, operation_attributes.output_mem_config));
 }
 
 MixStreamsDeviceOperation::tensor_return_value_t MixStreamsDeviceOperation::create_output_tensors(

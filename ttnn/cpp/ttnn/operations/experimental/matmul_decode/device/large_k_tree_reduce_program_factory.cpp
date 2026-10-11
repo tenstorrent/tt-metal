@@ -9,6 +9,7 @@
 #include <tt-metalium/work_split.hpp>
 
 #include <algorithm>
+#include <bit>
 #include <string>
 #include <string_view>
 #include <vector>
@@ -90,9 +91,14 @@ ProgramDescriptor MatmulDecodeLargeKDeviceOperation::TreeReduce::create_descript
     const CoreCoord root = cores.front();
 
     const uint32_t M_tiles = operation_attributes.M;
-    const uint32_t Kc_tiles = a_shard.shape[1] / tt::constants::TILE_WIDTH;
+    // A folded shard [M * fold_rows, Kc / fold_rows] is the same bytes as [M, Kc].
+    const uint32_t Kc_tiles = a_shard.shape[1] * operation_attributes.fold_rows / tt::constants::TILE_WIDTH;
     const uint32_t N_tiles = operation_attributes.N / tt::constants::TILE_WIDTH;
-    const uint32_t block_num_tiles = M_tiles * N_tiles;
+    const bool rms_norm = operation_attributes.rms_norm;
+    const uint32_t out_num_tiles = M_tiles * N_tiles;
+    // With rms_norm every partial carries one extra 1x32 tile per row after the [M, N] block,
+    // holding that row's sum(A^2) in element 0, so the tree sums it with the partial.
+    const uint32_t block_num_tiles = out_num_tiles + (rms_norm ? M_tiles : 0);
     const uint32_t block_bytes = block_num_tiles * out_tile_size;
 
     const uint32_t fan_in = operation_attributes.reduce_fan_in;
@@ -147,9 +153,13 @@ ProgramDescriptor MatmulDecodeLargeKDeviceOperation::TreeReduce::create_descript
     const uint32_t partial_cb_index = CBIndex::c_2;  // local partial, on cores that reduce
     const uint32_t recv_cb_index = CBIndex::c_3;     // children's partials, filled by the children
     const uint32_t out_cb_index = CBIndex::c_4;      // root only: the output shard
-    const uint32_t send_cb_index = CBIndex::c_5;     // non-root: the running sum sent to the parent
+    // Non-root: the running sum sent to the parent. With rms_norm the root also sums into it,
+    // then normalizes into the output shard.
+    const uint32_t send_cb_index = CBIndex::c_5;
+    const uint32_t rms_scale_cb_index = CBIndex::c_6;  // root only, rms_norm: one 1x32 scale per row
 
     std::vector<CoreCoord> non_root_cores(cores.begin() + 1, cores.end());
+    const CoreRangeSet root_core(CoreRange(root, root));
 
     desc.cbs.push_back(CBDescriptor{
         .total_size = M_tiles * Kc_tiles * in0_tile_size,
@@ -174,8 +184,8 @@ ProgramDescriptor MatmulDecodeLargeKDeviceOperation::TreeReduce::create_descript
         .buffer = input_tensor_b.buffer(),
     });
     desc.cbs.push_back(CBDescriptor{
-        .total_size = block_bytes,
-        .core_ranges = CoreRangeSet(CoreRange(root, root)),
+        .total_size = out_num_tiles * out_tile_size,
+        .core_ranges = root_core,
         .format_descriptors = {{CBFormatDescriptor{
             .buffer_index = out_cb_index,
             .data_format = out_data_format,
@@ -207,11 +217,25 @@ ProgramDescriptor MatmulDecodeLargeKDeviceOperation::TreeReduce::create_descript
                 .tile = TileDescriptor{row_tile},
             }}},
         });
+    }
+    if (rms_norm || !non_root_cores.empty()) {
         desc.cbs.push_back(CBDescriptor{
             .total_size = block_bytes,
-            .core_ranges = CoreRangeSet(non_root_cores),
+            .core_ranges = rms_norm ? grid : CoreRangeSet(non_root_cores),
             .format_descriptors = {{CBFormatDescriptor{
                 .buffer_index = send_cb_index,
+                .data_format = out_data_format,
+                .page_size = out_tile_size,
+                .tile = TileDescriptor{row_tile},
+            }}},
+        });
+    }
+    if (rms_norm) {
+        desc.cbs.push_back(CBDescriptor{
+            .total_size = M_tiles * out_tile_size,
+            .core_ranges = root_core,
+            .format_descriptors = {{CBFormatDescriptor{
+                .buffer_index = rms_scale_cb_index,
                 .data_format = out_data_format,
                 .page_size = out_tile_size,
                 .tile = TileDescriptor{row_tile},
@@ -262,7 +286,15 @@ ProgramDescriptor MatmulDecodeLargeKDeviceOperation::TreeReduce::create_descript
     compute.kernel_source = kernel_dir + "compute/compute_large_k_tree_reduce.cpp";
     compute.source_type = KernelDescriptor::SourceType::FILE_PATH;
     compute.core_ranges = grid;
-    compute.compile_time_args = {M_tiles, Kc_tiles, N_tiles, out_subblock_h, out_subblock_w, dst_num_tiles};
+    compute.compile_time_args = {
+        M_tiles,
+        Kc_tiles,
+        N_tiles,
+        out_subblock_h,
+        out_subblock_w,
+        dst_num_tiles,
+        std::bit_cast<uint32_t>(1.0F / static_cast<float>(operation_attributes.K)),
+        std::bit_cast<uint32_t>(operation_attributes.rms_norm_epsilon)};
     compute.named_compile_time_args = {
         {"cb_in0", in0_cb_index},
         {"cb_in1", in1_cb_index},
@@ -270,9 +302,13 @@ ProgramDescriptor MatmulDecodeLargeKDeviceOperation::TreeReduce::create_descript
         {"cb_recv", recv_cb_index},
         {"cb_out", out_cb_index},
         {"cb_send", send_cb_index},
+        {"cb_rms_scale", rms_scale_cb_index},
     };
     if (use_custom_mm) {
         compute.defines.emplace_back("USE_CUSTOM_MM", "1");
+    }
+    if (rms_norm) {
+        compute.defines.emplace_back("FUSE_RMS_NORM", "1");
     }
     compute.config = ComputeConfigDescriptor{
         .math_fidelity = use_custom_mm ? MathFidelity::LoFi : MathFidelity::HiFi4,
@@ -309,14 +345,16 @@ ProgramDescriptor MatmulDecodeLargeKDeviceOperation::TreeReduce::create_descript
 
     log_debug(
         tt::LogOp,
-        "matmul_decode_large_k: cores={}, M_tiles={}, Kc_tiles={}, N_tiles={}, fan_in={}, levels={}, custom_mm={}",
+        "matmul_decode_large_k: cores={}, M_tiles={}, Kc_tiles={}, N_tiles={}, fan_in={}, levels={}, custom_mm={}, "
+        "rms_norm={}",
         num_cores,
         M_tiles,
         Kc_tiles,
         N_tiles,
         fan_in,
         num_levels,
-        use_custom_mm);
+        use_custom_mm,
+        rms_norm);
     return desc;
 }
 

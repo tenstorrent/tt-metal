@@ -61,8 +61,14 @@ class DeepSeekV4HyperConnection(DeepSeekV4Module):
         use_prefetcher: bool = False,
         prefetch_buffers: Optional[dict] = None,
         weight_dtype: ttnn.DataType = ttnn.bfloat16,
+        row_major_streams: bool = False,
     ):
         """Build the fused ``fn`` projection and split the ``base`` / ``scale`` parameters.
+
+        ``row_major_streams`` builds for single-user (``T == 1``) streams that arrive ROW_MAJOR,
+        width-sharded as ``[hc, D / 8]`` over the 8 collapse cores: ``fn`` then runs on those
+        same cores and reads each core's shard in place as its ``hc * D / 8`` slice of the
+        flattened row, so its weight's K is stored in that core-major order.
 
         ``weights`` holds the checkpoint's packed ``fn`` ``[(2+hc)*hc, hc*D]`` and ``base``
         ``[(2+hc)*hc]`` tensors plus ``scale``, three host scalars. ``fn`` becomes one
@@ -78,6 +84,7 @@ class DeepSeekV4HyperConnection(DeepSeekV4Module):
         self.iters = config.hc_sinkhorn_iters
         self.eps = config.hc_eps
         self.norm_eps = config.rms_norm_eps
+        self.row_major_streams = row_major_streams
         cache = _as_cache(cache)
 
         hc = self.hc
@@ -113,15 +120,40 @@ class DeepSeekV4HyperConnection(DeepSeekV4Module):
                 w = torch.nn.functional.pad(w, (0, 0, 0, n - w.shape[0]))
             return w
 
-        self.fn = LinearDecodeLargeK(
-            fn_weight,
-            device,
-            _prefetch_cache_file(cache.file("fn.decode")),
-            dtype=weight_dtype,
-            K=k,
-            N=n,
-            num_cores=_HC_FN_CORES,
-        )
+        if row_major_streams:
+
+            def fn_weight_core_major():
+                """``fn_weight`` with K reordered from stream-major ``(stream, core, column)`` to
+                the ``(core, stream, column)`` order the collapse cores' shards lay K out in."""
+                w = fn_weight()
+                return (
+                    w.reshape(n, hc, _HC_COLLAPSE_CORES, self.hidden // _HC_COLLAPSE_CORES)
+                    .permute(0, 2, 1, 3)
+                    .reshape(n, k)
+                )
+
+            self.fn = LinearDecodeLargeK(
+                fn_weight_core_major,
+                device,
+                cache.file("fn.decode_rm"),
+                dtype=weight_dtype,
+                K=k,
+                N=n,
+                num_cores=_HC_COLLAPSE_CORES,
+                rms_norm_epsilon=self.norm_eps,
+                fold_rows=hc,
+            )
+        else:
+            self.fn = LinearDecodeLargeK(
+                fn_weight,
+                device,
+                _prefetch_cache_file(cache.file("fn.decode")),
+                dtype=weight_dtype,
+                K=k,
+                N=n,
+                num_cores=_HC_FN_CORES,
+                rms_norm_epsilon=self.norm_eps,
+            )
         self.pre_b = _load_weight(
             _materialize(lambda: base()[:hc].reshape(1, 1, 1, hc), cache.file("pre_b"), ttnn.bfloat16),
             device,
@@ -146,8 +178,8 @@ class DeepSeekV4HyperConnection(DeepSeekV4Module):
     def forward(self, hidden_streams: ttnn.Tensor, pre_mix: ttnn.Tensor | None = None):
         """``hidden_streams`` ``[B,S,hc,D]`` -> ``(post [B,S,hc,1], comb [B,S,hc,hc], collapsed [B,S,1,D])``.
 
-        The streams are flattened to ``[1,1,T,hc*D]`` (``T = B*S``) and unweighted-RMSNormed
-        before ``fn``, whose ``[1,1,T,(2+hc)*hc]`` output (padded to a tile's width) still carries
+        The streams are flattened to ``[1,1,T,hc*D]`` (``T = B*S``) and fed to ``fn``, which
+        unweighted-RMSNorms each row inside the matmul and whose ``[1,1,T,(2+hc)*hc]`` output (padded to a tile's width) still carries
         the three parts concatenated. ``collapsed`` comes back in the input's layout -- the
         width-sharded L1 the single-token branch below builds -- while ``post`` / ``comb`` are
         DRAM (and all three are DRAM on the ``T > 1`` branch).
@@ -159,11 +191,32 @@ class DeepSeekV4HyperConnection(DeepSeekV4Module):
         b, s, hc, d = hidden_streams.shape
         t = b * s
 
-        # Flatten streams to [1,1,T,hc*D] and unweighted-RMSNorm over hc*D.
+        if self.row_major_streams:
+            assert t == 1, f"row_major_streams supports single-user decode only, got T = {t}"
+            assert hidden_streams.layout == ttnn.ROW_MAJOR_LAYOUT, hidden_streams.layout
+            # fn reads each collapse core's [hc, D/8] shard as its slice of the [1, hc*D] row, and the
+            # fused program gathers the same shards into its collapse tiles.
+            fused_w = self.fn(hidden_streams)
+            _profile(self.device)
+            return ttnn.experimental.deepseek.fused_hyperconnection(
+                hidden_streams,
+                fused_w=fused_w,
+                pre_bias=self.pre_b,
+                post_bias=self.post_b,
+                comb_bias=self.comb_b,
+                num_streams=hc,
+                sinkhorn_iters=self.iters,
+                pre_scale=self.pre_scale,
+                post_scale=self.post_scale,
+                comb_scale=self.comb_scale,
+                eps=self.eps,
+                pre_mix=pre_mix,
+            )
+
+        # Flatten streams to [1,1,T,hc*D]; fn applies the unweighted RMSNorm over hc*D itself.
         tile_height = hidden_streams.get_tile().tile_shape[0]
         flat_mem_config = self.fn.get_input_memory_config(t, tile_height)
         flat = ttnn.reshape(hidden_streams, [1, 1, t, hc * d], memory_config=flat_mem_config)
-        flat = _rms_norm_unweighted(flat, self.norm_eps)
         # fn wants ROW_MAJOR rows. A sharded ROW_MAJOR tensor cannot carry height padding, so the
         # tile padding is dropped here: same cores and shard width, shard height T.
         flat = ttnn.untilize_with_unpadding(flat, [0, 0, t - 1, hc * d - 1], memory_config=flat.memory_config())
