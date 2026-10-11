@@ -554,7 +554,7 @@ def create_mesh_program_descriptor(
     *,
     num_links,
     chips_ring=False,
-    cb_bytes=112 * 1024,
+    cb_bytes=128 * 1024,  # 8 chunks of 8 KiB per CB batch: a port reads two streams per chunk, so it needs the depth
     inc_every=8,
 ):
     sem_a, sem_b, ready_addr = sems
