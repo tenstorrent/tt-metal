@@ -50,7 +50,7 @@ constexpr std::uint32_t load_store_mod()
     return static_cast<std::uint32_t>(is_fp32_dest_acc_en ? InstrModLoadStore::FP32 : InstrModLoadStore::FP16B);
 }
 
-// Calls f(std::integral_constant<std::uint32_t, i>{}) for i in [0, N), so i stays a constant expression in f.
+// Passes i to f as a std::integral_constant so it stays a constant expression.
 template <typename F, std::uint32_t... I>
 inline void unroll(F&& f, std::integer_sequence<std::uint32_t, I...>)
 {
@@ -80,7 +80,6 @@ inline void sfpu_rope_configure_addrmod()
  */
 inline void sfpu_rope_dest_setup()
 {
-    // SFPLOAD.md: the SETC16 and the SETRWC are two of the three slots; the rope bodies fill the third.
     TT_SETC16(DEST_TARGET_REG_CFG_MATH_Offset_ADDR32, get_dest_buffer_base());
     TTI_SETRWC(p_setrwc::CLR_NONE, 0, 0, 0, 0, p_setrwc::SET_D);
 }
@@ -114,17 +113,12 @@ inline void sfpu_rope_mul_cos_sin()
     TTI_SFPMAD(p_sfpu::LREG1, p_sfpu::LREG2, p_sfpu::LCONST_0, p_sfpu::LREG1, 0);
 }
 
-/**
- * LREG6/LREG7 = the pair in LREG4/LREG5 (x_even, x_odd) rotated by the cos/sin in LREG0/LREG1.
- */
 inline void sfpu_rope_rotate()
 {
     // No SFPNOPs: hardware auto-stalls a dependent SFPMAD read, and both products
     // are computed before either is consumed, so each pair is already a cycle apart.
-    // LREG2 = cos*x_even ; LREG3 = sin*x_even
     TTI_SFPMAD(p_sfpu::LREG0, p_sfpu::LREG4, p_sfpu::LCONST_0, p_sfpu::LREG2, 0);
     TTI_SFPMAD(p_sfpu::LREG1, p_sfpu::LREG4, p_sfpu::LCONST_0, p_sfpu::LREG3, 0);
-    // LREG6 = LREG2 - sin*x_odd ; LREG7 = LREG3 + cos*x_odd
     TTI_SFPMAD(p_sfpu::LREG1, p_sfpu::LREG5, p_sfpu::LREG2, p_sfpu::LREG6, rope::NEGATE_VA);
     TTI_SFPMAD(p_sfpu::LREG0, p_sfpu::LREG5, p_sfpu::LREG3, p_sfpu::LREG7, 0);
 }
@@ -153,10 +147,6 @@ inline void sfpu_rope_face(const std::uint32_t x_addr)
     TT_SFPSTORE(p_sfpu::LREG7, FMT, AM, x_addr + 2);
 }
 
-/**
- * sfpu_rope_load_cos_sin and sfpu_rope_face with compile-time DEST rows: every load and store is an
- * immediate instruction word, like the multiplies.
- */
 template <std::uint32_t cos_addr, std::uint32_t sin_addr, bool is_fp32_dest_acc_en>
 inline void sfpu_rope_load_cos_sin_imm()
 {
@@ -223,7 +213,6 @@ inline void sfpu_rope_all_rows(const std::uint32_t scale_fp32)
             const std::uint32_t cs_off = w * cs_stride + f * F;
             if constexpr (has_scale)
             {
-                // The scale's SFPLOADIs read no DEST: ahead of the cos/sin loads they fill the SFPLOAD.md slots.
                 sfpu_rope_load_scale(scale_fp32);
             }
             sfpu_rope_load_cos_sin(cos_base + cs_off, sin_base + cs_off);
@@ -288,10 +277,8 @@ inline void sfpu_rope_fused_all_rows(const std::uint32_t scale_fp32)
 
     if constexpr (!has_scale)
     {
-        // The third slot after sfpu_rope_dest_setup; with a scale, its SFPLOADIs take it.
         TTI_NOP;
     }
-    // Fully unrolled: every load and store address is an immediate.
     rope::unroll<Wt>(
         [&](auto w_index)
         {
@@ -302,8 +289,6 @@ inline void sfpu_rope_fused_all_rows(const std::uint32_t scale_fp32)
                     constexpr std::uint32_t f = decltype(f_index)::value;
                     if constexpr (!cos_sin_per_row)
                     {
-                        // One shared phase per column-face; reused for every row-group
-                        // and (for tile_h==32) the matching bottom face.
                         constexpr std::uint32_t cs_addr = cs_base + w * cs_stride + f * F;
                         if constexpr (has_scale)
                         {
