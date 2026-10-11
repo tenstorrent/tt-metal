@@ -106,3 +106,30 @@ def test_tt_cache_requires_configured_root(monkeypatch, tmp_path, expect_error):
         resolve_cache_dir_from_tt_cache_path(None, dtype=ttnn.bfloat16, mesh_shape=(8, 4))
     with expect_error(ValueError, "tt_cache_path must be provided"):
         Gemma4PrefillAdapter().weight_cache_path((8, 4))
+
+
+def batched_params(**overrides):
+    return replace(service_params(), **{"chunk_size": 2048, "num_users": 4, "max_lanes": 4, **overrides})
+
+
+def test_batched_service_shapes(expect_error):
+    validate_params(batched_params())
+    validate_params(batched_params(max_lanes=2))
+    for override in ({"chunk_size": 8192}, {"max_lanes": 5}, {"max_lanes": 0}):
+        with expect_error(ValueError, "Gemma4"):
+            validate_params(replace(batched_params(), **override))
+
+
+def test_batched_steps_continue_each_slot(expect_error):
+    from models.demos.common.prefill.step_message import Lane
+    from models.demos.gemma4_d_p.tt.runners.batched_runtime import Gemma4BatchedPrefillRuntime
+
+    runtime = Gemma4BatchedPrefillRuntime.__new__(Gemma4BatchedPrefillRuntime)
+    runtime.config = batched_params()
+    runtime.max_lanes = 4
+    runtime.slot_ends = [4096, 0, 2048, 0]
+    runtime.validate_step([Lane(0, 4096, 6144), Lane(0, 6144, 8192), Lane(1, 0, 2048), Lane(2, 2048, 2100)])
+    runtime.validate_step([Lane(0, 0, 2048), Lane(3, 0, 1)])
+    for lanes in ([Lane(0, 6144, 8192)], [Lane(2, 0, 2048), Lane(2, 4096, 6144)], [Lane(4, 0, 2048)]):
+        with expect_error(ValueError, "Slot|slot|lane"):
+            runtime.validate_step(lanes)
