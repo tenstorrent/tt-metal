@@ -561,8 +561,7 @@ class SamplingOp:
                 )
             ],
         )
-        # max_cb holds the probabilities and the cumsum for the two-tile rescale, in the L1 of softmax_in_cb, whose
-        # tile is consumed before the probabilities are packed.
+        # max_cb reuses the L1 of softmax_in_cb, which is consumed before max_cb is packed.
         max_cb_descriptor = ttnn.CBDescriptor(
             total_size=2 * bf16_tile_size,
             core_ranges=final_core_crs,
@@ -1176,8 +1175,6 @@ class SamplingOp:
 
                 if is_final_mesh_device:
                     final_core_crs = ttnn.CoreRangeSet([ttnn.CoreRange(final_core_coord, final_core_coord)])
-                    # max_cb holds the probabilities and the cumsum for the two-tile rescale, in the L1 of
-                    # softmax_in_cb, whose tile is consumed before the probabilities are packed.
                     for cb_idxs in [
                         (softmax_out_cb,),
                         (max_cb, softmax_in_cb),

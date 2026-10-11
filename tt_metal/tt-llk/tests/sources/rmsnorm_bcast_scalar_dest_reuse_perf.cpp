@@ -1,8 +1,7 @@
 // SPDX-FileCopyrightText: © 2026 Tenstorrent AI ULC
 // SPDX-License-Identifier: Apache-2.0
 
-// Perf kernel of the Blackhole rmsnorm bcast-scalar dest-reuse multiply. L1_TO_L1 runs the functional kernel's whole
-// call per iteration (seed datacopy, inits, op, pack); the isolates seed and init once in INIT and run the op alone.
+// L1_TO_L1 runs the whole call per iteration; the isolates seed and init once in INIT and run the op alone.
 
 #include <cstdint>
 

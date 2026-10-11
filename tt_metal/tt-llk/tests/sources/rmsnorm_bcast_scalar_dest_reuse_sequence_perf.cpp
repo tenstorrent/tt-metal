@@ -1,8 +1,7 @@
 // SPDX-FileCopyrightText: © 2026 Tenstorrent AI ULC
 // SPDX-License-Identifier: Apache-2.0
 
-// The dest-reuse op in its callers' order: a LoFi ELWSUB on tile 0, a MATH_FIDELITY ELWMUL on each further tile, each
-// with its own init. RMSNORM_SHADOW_SFPU adds the callers' SFPU steps (the exponential and the scalar's reciprocal).
+// The dest-reuse op in its callers' order, each call with its own init; RMSNORM_SHADOW_SFPU adds their SFPU steps.
 
 #include <cstdint>
 

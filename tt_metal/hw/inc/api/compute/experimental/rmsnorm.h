@@ -55,8 +55,7 @@ template <
     MathFidelity math_fidelity,
     bool unpack_full_transpose = false>
 ALWI void rmsnorm_bcast_scalar_reuse_tiles_init_fidelity(uint32_t icb0) {
-    // Above LoFi the multiply sweeps whole tiles of 16-row faces per fidelity phase, without the full transpose and
-    // with more than one face. A one-tile HiFi2 call keeps the per-face form, which overlaps the unpack better.
+    // A one-tile HiFi2 call stays per-face: it overlaps the unpack better than the whole-tile sweep.
     constexpr bool whole_tile = eltwise_binary_type == EltwiseBinaryType::ELWMUL && !unpack_full_transpose &&
                                 (math_fidelity == MathFidelity::HiFi3 || math_fidelity == MathFidelity::HiFi4 ||
                                  (math_fidelity == MathFidelity::HiFi2 && num_tiles > 1));

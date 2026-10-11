@@ -1,8 +1,7 @@
 # SPDX-FileCopyrightText: © 2026 Tenstorrent AI ULC
 # SPDX-License-Identifier: Apache-2.0
 
-"""Perf of the Blackhole rmsnorm bcast-scalar dest-reuse multiply (rmsnorm_bcast_scalar_reuse_tiles,
-sources/rmsnorm_bcast_scalar_dest_reuse_perf.cpp); unit: one 32x32 tile."""
+"""Perf of the rmsnorm bcast-scalar dest-reuse multiply; unit: one 32x32 tile."""
 
 import pytest
 from conftest import skip_for_quasar, skip_for_wormhole
@@ -28,7 +27,6 @@ pytestmark = [skip_for_wormhole, skip_for_quasar]
 
 BF16 = DataFormat.Float16_b
 
-# (op, fidelity, tiles per row, clear_dest, whole_tile)
 VARIANTS = []
 for num_tiles in (1, 2, 4, 8):
     for fidelity in (MathFidelity.LoFi, MathFidelity.HiFi2, MathFidelity.HiFi4):
