@@ -36,9 +36,10 @@ TT_KERNEL void reader(uint32_t ct_start, uint32_t ct_count) {
     const auto output = TensorAccessor(tensor::output);
     const uint32_t scratch_base = scratch.get_base_address();
     const uint32_t base = (scratch_base + 63) / 64 * 64;
-    const uint32_t faces = base;                              // ct_count x two faces
-    const uint32_t row = faces + max_tiles * row_pair_bytes;  // one packed row segment
-    const uint32_t words = row + max_tiles * 2 * face_row_bytes;
+    constexpr uint32_t table_rows = 2 * history_rows;
+    const uint32_t faces = base;                                                   // [row][ct] two faces each
+    const uint32_t packed_rows = faces + table_rows * max_tiles * row_pair_bytes;  // [row] packed segment
+    const uint32_t words = packed_rows + table_rows * max_tiles * 2 * face_row_bytes;
     auto* scalar = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(words);
 
     const auto actual_start = TensorAccessor(tensor::actual_start);
@@ -68,27 +69,28 @@ TT_KERNEL void reader(uint32_t ct_start, uint32_t ct_count) {
         source_rows[history_rows + i] = end_row < local_rows ? end_row : local_rows - 1;
     }
 
+    // One round trip: read every row's faces, pack all rows, write all rows.
     const uint32_t row_offset = ct_start * 2 * face_row_bytes;
-    for (uint32_t r = 0; r < 2 * history_rows; ++r) {
+    for (uint32_t r = 0; r < table_rows; ++r) {
         const uint32_t source = source_rows[r];
-        const uint32_t tile_row = source / 32;
-        const uint32_t in_tile = source % 32;
-        // Rows 0-15 live in faces 0 and 1, rows 16-31 in faces 2 and 3.
-        const uint32_t pair_offset = (in_tile / 16) * row_pair_bytes;
-        const uint32_t face_row = in_tile % 16;
+        // Rows 0-15 of a tile live in faces 0 and 1, rows 16-31 in faces 2 and 3.
+        const uint32_t pair_offset = ((source % 32) / 16) * row_pair_bytes;
         for (uint32_t ct = 0; ct < ct_count; ++ct) {
             noc.async_read(
                 input,
                 scratch,
                 row_pair_bytes,
-                {.page_id = tile_row * input_wt + input_ct_offset + ct_start + ct, .offset_bytes = pair_offset},
-                {.offset_bytes = faces - scratch_base + ct * row_pair_bytes});
+                {.page_id = (source / 32) * input_wt + input_ct_offset + ct_start + ct, .offset_bytes = pair_offset},
+                {.offset_bytes = faces - scratch_base + (r * max_tiles + ct) * row_pair_bytes});
         }
-        noc.async_read_barrier();
-        auto* packed = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(row);
+    }
+    noc.async_read_barrier();
+    for (uint32_t r = 0; r < table_rows; ++r) {
+        const uint32_t face_row = source_rows[r] % 16;
+        auto* packed = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(packed_rows + r * max_tiles * 2 * face_row_bytes);
         for (uint32_t ct = 0; ct < ct_count; ++ct) {
-            const auto* left =
-                reinterpret_cast<volatile tt_l1_ptr uint32_t*>(faces + ct * row_pair_bytes + face_row * face_row_bytes);
+            const auto* left = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(
+                faces + (r * max_tiles + ct) * row_pair_bytes + face_row * face_row_bytes);
             const auto* right = left + face_bytes / sizeof(uint32_t);
             for (uint32_t w = 0; w < face_row_bytes / sizeof(uint32_t); ++w) {
                 packed[ct * 16 + w] = left[w];
@@ -99,8 +101,8 @@ TT_KERNEL void reader(uint32_t ct_start, uint32_t ct_count) {
             scratch,
             output,
             ct_count * 2 * face_row_bytes,
-            {.offset_bytes = row - scratch_base},
+            {.offset_bytes = packed_rows - scratch_base + r * max_tiles * 2 * face_row_bytes},
             {.page_id = r, .offset_bytes = row_offset});
-        noc.async_write_barrier();
     }
+    noc.async_write_barrier();
 }

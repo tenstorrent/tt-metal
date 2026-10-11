@@ -17,7 +17,9 @@ TT_KERNEL void compute(uint32_t wi_start, uint32_t wi_count) {
     DataflowBuffer weights(dfb::weights);
     DataflowBuffer output(dfb::output);
     compute_kernel_hw_startup<SrcOrder::Reverse>(dfb::act_tile, dfb::weights, dfb::output);
+    // The SFPU init only claims its own address modifier, so both inits hold for the whole kernel.
     matmul_init(dfb::act_tile, dfb::weights);
+    silu_tile_init();
 
     for (uint32_t item = 0; item < wi_count; ++item) {
         const uint32_t work = wi_start + item;
@@ -29,13 +31,11 @@ TT_KERNEL void compute(uint32_t wi_start, uint32_t wi_count) {
             activation.wait_front(group * tap_count);
             output.reserve_back(group);
             tile_regs_acquire();
-            matmul_init(dfb::act_tile, dfb::weights);
             for (uint32_t i = 0; i < group; ++i) {
                 for (uint32_t tap = 0; tap < tap_count; ++tap) {
                     matmul_tiles(dfb::act_tile, dfb::weights, i * tap_count + tap, tap * block_ct + ct0 + i, i);
                 }
             }
-            silu_tile_init();
             for (uint32_t i = 0; i < group; ++i) {
                 silu_tile(i);
             }

@@ -161,7 +161,9 @@ def kimi_k3_program_config(*, active_seq_len_local: int, tp_ccl_topology: ttnn.T
         recurrence=KDARecurrenceProgramConfig(
             local_scan_strategy="grouped", summary_group_chunks=group_chunks[active_seq_len_local]
         ),
-        qkv_channel_chunk_size=512,
+        # The convolution builds diagonal tap tiles per channel block; two-tile blocks keep that setup small and
+        # spread each core's work over one or two blocks.
+        qkv_channel_chunk_size=64,
         tp_ccl_topology=tp_ccl_topology,
         gated_rms_output_dtype=ttnn.bfloat16,
         input_projection_math_fidelity=ttnn.MathFidelity.HiFi2,

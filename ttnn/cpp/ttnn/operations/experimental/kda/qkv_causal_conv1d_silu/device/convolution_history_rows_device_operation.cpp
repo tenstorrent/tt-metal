@@ -24,8 +24,8 @@ namespace ttnn::experimental::prim {
 
 namespace {
 constexpr uint32_t history_table_rows = 6;
-// Channel tiles per worker: enough cores that the 1 KiB face reads overlap, few enough to stay latency-bound.
-constexpr uint32_t tiles_per_worker = 8;
+// Channel tiles per worker: each worker reads its six rows' faces in one round trip.
+constexpr uint32_t tiles_per_worker = 4;
 }  // namespace
 
 ConvolutionHistoryRowsOperation::program_factory_t ConvolutionHistoryRowsOperation::select_program_factory(
@@ -130,7 +130,9 @@ ttnn::device_operation::MeshWorkloadArtifacts ConvolutionHistoryRowsProgramFacto
     ProgramSpec spec{
         .name = "convolution_history_rows",
         .kernels = {},
-        .scratchpads = {{.unique_id = scratch_name, .size_per_node = per_worker * (tile_bytes / 2 + 64) + 128}},
+        .scratchpads =
+            {{.unique_id = scratch_name,
+              .size_per_node = history_table_rows * per_worker * (tile_bytes / 2 + 64) + 128}},
         .tensor_parameters =
             {
                 TensorParameter{.unique_id = input_tensor, .spec = input.tensor_spec()},
