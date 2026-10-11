@@ -1,8 +1,7 @@
 # SPDX-FileCopyrightText: © 2026 Tenstorrent AI ULC
 # SPDX-License-Identifier: Apache-2.0
 
-"""Perf rows for the SFPU kernels outside the unary and binary registry sweeps, one body per tile
-after the datacopy carrier (sources/sfpu_misc_perf.cpp)."""
+"""Perf rows for the SFPU kernels outside the unary and binary registry sweeps."""
 
 import pytest
 from conftest import skip_for_wormhole
@@ -27,7 +26,6 @@ pytestmark = [skip_for_wormhole]
 _BF16 = InputOutputFormat(DataFormat.Float16_b, DataFormat.Float16_b)
 _INT32 = InputOutputFormat(DataFormat.Int32, DataFormat.Int32)
 
-# (op, formats, dest_acc, misc_param, misc_init_per_tile); misc_param as SFPU_MISC_OP describes it
 _ROWS = [
     ("rand", _BF16, DestAccumulation.No, 0, False),
     ("rand", _BF16, DestAccumulation.No, 1, False),
@@ -97,7 +95,6 @@ def test_perf_sfpu_misc(perf_report, row, loop_factor, input_dimensions):
             tile_count_B=tile_count,
             tile_count_res=tile_count,
         ),
-        # 32-bit inputs unpack straight into the 32-bit DEST, as in the unary sweep.
         unpack_to_dest=formats.input_format.is_32_bit(),
         dest_acc=dest_acc,
         compile_time_formats=True,

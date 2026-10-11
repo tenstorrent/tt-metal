@@ -824,8 +824,8 @@ inline constexpr std::uint32_t PRNG_SEED_WRITE_SPACING_CYCLES = 2000;
 inline constexpr std::uint32_t PRNG_SEED_SETTLE_CYCLES        = 1000;
 inline std::uint32_t prng_seed_write_time                     = 0;
 
-// Seeds the PRNG for SFPU draws: no write within the spacing of this launch's previous one (the settle wait and the
-// launch gap cover the previous launch's), the first draw after the settle time. Low counter word: exact across a wrap.
+// No seed write within the spacing of the previous one, and no draw before the settle time; the low counter word is
+// exact across a wrap.
 inline void init_prng_seed_sfpu(const std::uint32_t seed)
 {
     while (reg_read(RISCV_DEBUG_REG_WALL_CLOCK_L) - prng_seed_write_time < PRNG_SEED_WRITE_SPACING_CYCLES)
