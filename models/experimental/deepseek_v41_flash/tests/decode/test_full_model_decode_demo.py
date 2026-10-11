@@ -37,6 +37,9 @@ Run it (ttnn venv)::
 Set ``DEEPSEEK_V4_START_POS`` to begin prefill at a non-zero absolute position,
 for example ``DEEPSEEK_V4_START_POS=1024``. Engram hashes then have no earlier
 tokens, so a non-zero start only matches a run that never built an Engram layer.
+
+Set ``DEEPSEEK_V4_MEMORY_REPORTS=1`` to write each program's L1 / DRAM block map as it compiles
+(``ttnn.device.EnableMemoryReports``), for tracking down circular-buffer / L1 clashes.
 """
 
 from __future__ import annotations
@@ -422,6 +425,11 @@ class _InterruptFlag:
 @pytest.mark.parametrize("text", (_DEFAULT_TEXT,))
 def test_full_model_decode_demo(mesh_device, reset_seeds, text: str, tp_size: int, num_stages: int) -> None:
     import time
+
+    # Per-program L1 / DRAM block maps, written as each program compiles (before its circular-buffer
+    # check), under generated/reports/tt_metal/.
+    if os.environ.get("DEEPSEEK_V4_MEMORY_REPORTS"):
+        ttnn.device.EnableMemoryReports()
 
     # The prefetcher session spans prefill and generation both, so it is opened inside
     # ``_build_and_prefill`` (once the model exists) against this stack.

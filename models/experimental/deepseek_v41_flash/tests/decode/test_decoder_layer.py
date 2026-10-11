@@ -32,6 +32,7 @@ host and across processes: by default the TP4 test's, and with ``--tp-size 1`` t
     pytest models/experimental/deepseek_v41_flash/tests/decode/test_decoder_layer.py
 """
 
+import contextlib
 import math
 
 import pytest
@@ -58,8 +59,11 @@ from models.experimental.deepseek_v41_flash.tt.decode.attention import build_dec
 from models.experimental.deepseek_v41_flash.tt.decode.decoder_layer import DeepSeekV41DecoderLayer
 from models.experimental.deepseek_v41_flash.tt.decode.moe import DeepSeekV41PreloadedExperts
 from models.experimental.deepseek_v41_flash.tt.engram_lookup import EngramHostLookup, load_engram_table, tensor_region
+from models.experimental.deepseek_v4_flash.tt.common import width_sharded_l1_config
+from models.experimental.deepseek_v4_flash.tt.decode.hyperconnection import _HC_COLLAPSE_CORES
 from models.experimental.deepseek_v4_flash.tt.weight_cache import WeightCache
 from models.experimental.deepseek_v4_flash.tt.weight_loader import DeepseekV4WeightLoader, resolve_snapshot_dir
+from tests.ttnn.unit_tests.operations.prefetcher_common import tensor_prefetcher_session
 
 PCC = 0.95
 # The carried pre is ~sigmoid(bias), moving a few hundredths between tokens; bf16 alone costs ~1e-3.
@@ -252,6 +256,13 @@ def _check_decode(device, layers, seq_len, tp_size: int) -> None:
         block.ffn.register_forward_hook(_keep_output(expected_parts[i], "ffn"))
 
     cache = WeightCache(CACHE_DIR)
+    # Only Engram's wkv is prefetched (the rest of the layer copies its weights per call); its ring
+    # is private, so the device's mapping starts empty and the first Engram layer builds it.
+    prefetch_buffers = None
+    if engram_layers:
+        if not ttnn.experimental.is_tensor_prefetcher_supported(device):
+            pytest.skip("Engram's wkv needs the tensor prefetcher (programmable DRAM cores)")
+        prefetch_buffers = {}
     decoder_layers, parts = {}, {i: {} for i in layers}
     for i in layers:
         layer_cache = cache.sub(f"layers.{i}")
@@ -272,6 +283,7 @@ def _check_decode(device, layers, seq_len, tp_size: int) -> None:
             cache=layer_cache,
             weight_dtype=ttnn.bfloat4_b,
             tp_size=tp_size,
+            prefetch_buffers=prefetch_buffers,
         )
         _spy(layer.self_attn, "decode", parts[i], "attn")
         _spy(layer.mlp, "decode_static", parts[i], "ffn")
@@ -298,106 +310,121 @@ def _check_decode(device, layers, seq_len, tp_size: int) -> None:
     window = config.sliding_window
     checked = {0, 1, window - 2, window - 1, window} | set(range(seq_len - 4, seq_len))
     moe_outs = {i: ([], []) for i in layers}  # (expected, actual) per checked step
-    for pos in range(seq_len):
-        if engram_layers:
-            token = input_ids[:, pos : pos + 1]
-            rows = lookup(token, pos)  # {layer: [1, 1, n_hash_cols * head_dim]}
-            hashes = reference_hash(token, pos)  # [1, 1, n_engram_layers, n_hash_cols]
-        for j, i in enumerate(layers):
-            x, pre_mix = streams[j, pos], pre_mixes[j, pos]
-            h = x
-            if i in engram_layers:
-                h = reference_engrams[i](x, hashes[:, :, reference_hash.layout.layer_ids.index(i)])
-            expected, expected_pre = reference[i](h, pos, pre_mix, None)
+    with contextlib.ExitStack() as session:
+        if prefetch_buffers is not None:
+            session.enter_context(tensor_prefetcher_session(device))
+            ttnn.experimental.wait_for_cq_on_tensor_prefetcher(device, cq_id=0)
+        for pos in range(seq_len):
+            if engram_layers:
+                token = input_ids[:, pos : pos + 1]
+                rows = lookup(token, pos)  # {layer: [1, 1, n_hash_cols * head_dim]}
+                hashes = reference_hash(token, pos)  # [1, 1, n_engram_layers, n_hash_cols]
+            for j, i in enumerate(layers):
+                x, pre_mix = streams[j, pos], pre_mixes[j, pos]
+                h = x
+                if i in engram_layers:
+                    h = reference_engrams[i](x, hashes[:, :, reference_hash.layout.layer_ids.index(i)])
+                expected, expected_pre = reference[i](h, pos, pre_mix, None)
 
-            layer = decoder_layers[i]
-            # Rows go in before the step: the step can sync the host (a CCL's first call allocates a
-            # global semaphore with a blocking write), which would wait forever on rows not yet sent.
-            if layer.engram is not None:
-                layer.engram.write_rows(rows[i])
-            out, out_pre = layer.decode(
-                ttnn.from_torch(x, dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT, device=device),
-                ttnn.from_torch(
-                    pre_mix.reshape(1, 1, 1, hc), dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT, device=device
-                ),
-                caches[i],
-                **layer.self_attn.decode_inputs(pos, *rope[i]),
-            )
+                layer = decoder_layers[i]
+                # Rows go in before the step: the step can sync the host (a CCL's first call allocates a
+                # global semaphore with a blocking write), which would wait forever on rows not yet sent.
+                if layer.engram is not None:
+                    layer.engram.write_rows(rows[i])
+                    layer.engram.wkv.fetch_weights()
+                out, out_pre = layer.decode(
+                    ttnn.from_torch(
+                        x,
+                        dtype=ttnn.bfloat16,
+                        layout=ttnn.ROW_MAJOR_LAYOUT,
+                        device=device,
+                        memory_config=width_sharded_l1_config(
+                            hc, config.hidden_size, device, num_cores=_HC_COLLAPSE_CORES, tile_height=1
+                        ),
+                    ),
+                    ttnn.from_torch(
+                        pre_mix.reshape(1, 1, 1, hc), dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT, device=device
+                    ),
+                    caches[i],
+                    **layer.self_attn.decode_inputs(pos, *rope[i]),
+                )
 
-            # Every step is logged in full, then only the checked ones are asserted.
-            check = pos in checked
-            what = f"layer {i} (ratio {config.compress_ratios[i]}) pos {pos}"
-            failures = [
-                _log_pcc(expected - x, _to_torch(out) - x, f"{what} streams (out - x)"),
-                _log_pcc(expected_parts[i]["attn"], _to_torch(parts[i]["attn"]), f"{what} attention"),
-            ]
-            if tp_size > 1:
-                logger.info(
-                    f"{what} max abs spread over the ranks: streams {_rank_spread(out)}, attention "
-                    f"{_rank_spread(parts[i]['attn'])}, MoE {_rank_spread(parts[i]['ffn'])}, attention comb "
-                    f"{_rank_spread(parts[i]['attn_hc'][1])}, FFN input {_rank_spread(parts[i]['ffn_hc_in'])}, "
-                    f"FFN comb {_rank_spread(parts[i]['ffn_hc'][1])}"
+                # Every step is logged in full, then only the checked ones are asserted.
+                check = pos in checked
+                what = f"layer {i} (ratio {config.compress_ratios[i]}) pos {pos}"
+                failures = [
+                    _log_pcc(expected - x, _to_torch(out) - x, f"{what} streams (out - x)"),
+                    _log_pcc(expected_parts[i]["attn"], _to_torch(parts[i]["attn"]), f"{what} attention"),
+                ]
+                if tp_size > 1:
+                    logger.info(
+                        f"{what} max abs spread over the ranks: streams {_rank_spread(out)}, attention "
+                        f"{_rank_spread(parts[i]['attn'])}, MoE {_rank_spread(parts[i]['ffn'])}, attention comb "
+                        f"{_rank_spread(parts[i]['attn_hc'][1])}, FFN input {_rank_spread(parts[i]['ffn_hc_in'])}, "
+                        f"FFN comb {_rank_spread(parts[i]['ffn_hc'][1])}"
+                    )
+                if layer.engram is not None:
+                    engram_delta = _to_torch(parts[i]["engram"]) - x
+                    logger.info(
+                        f"{what} Engram (out - x): PCC {comp_pcc((h - x).reshape(-1), engram_delta.reshape(-1))[1]}"
+                    )
+                # The reference's FFN pre, from the streams the device's FFN hyper-connection was given: the
+                # device's pre against it is that op's own error, it against expected_pre what came in with them.
+                block = reference[i]
+                ffn_hc_in = _to_torch(parts[i]["ffn_hc_in"])
+                pre_given_input = block.hc_mixes(ffn_hc_in, block.hc_ffn_fn, block.hc_ffn_scale, block.hc_ffn_base)[0]
+                actual_pre, expected_pre, pre_given_input = (
+                    t.reshape(-1) for t in (_to_torch(out_pre), expected_pre, pre_given_input)
                 )
-            if layer.engram is not None:
-                engram_delta = _to_torch(parts[i]["engram"]) - x
+                pre_error = (actual_pre - expected_pre).abs().max().item()
                 logger.info(
-                    f"{what} Engram (out - x): PCC {comp_pcc((h - x).reshape(-1), engram_delta.reshape(-1))[1]}"
+                    f"{what} pre_mix: max abs error {pre_error} (hyper-connection op "
+                    f"{(actual_pre - pre_given_input).abs().max().item()}, from its input "
+                    f"{(pre_given_input - expected_pre).abs().max().item()}); "
+                    f"expected {expected_pre.tolist()}, actual {actual_pre.tolist()}"
                 )
-            # The reference's FFN pre, from the streams the device's FFN hyper-connection was given: the
-            # device's pre against it is that op's own error, it against expected_pre what came in with them.
-            block = reference[i]
-            ffn_hc_in = _to_torch(parts[i]["ffn_hc_in"])
-            pre_given_input = block.hc_mixes(ffn_hc_in, block.hc_ffn_fn, block.hc_ffn_scale, block.hc_ffn_base)[0]
-            actual_pre, expected_pre, pre_given_input = (
-                t.reshape(-1) for t in (_to_torch(out_pre), expected_pre, pre_given_input)
-            )
-            pre_error = (actual_pre - expected_pre).abs().max().item()
-            logger.info(
-                f"{what} pre_mix: max abs error {pre_error} (hyper-connection op "
-                f"{(actual_pre - pre_given_input).abs().max().item()}, from its input "
-                f"{(pre_given_input - expected_pre).abs().max().item()}); "
-                f"expected {expected_pre.tolist()}, actual {actual_pre.tolist()}"
-            )
-            post_dev, comb_dev = (_to_torch(t) for t in parts[i]["attn_hc"][:2])
-            attribution = _ffn_pre_attribution(
-                block,
-                h,
-                expected_parts[i]["attn"],
-                _to_torch(parts[i]["engram"]) if layer.engram is not None else x,
-                _to_torch(parts[i]["attn"]),
-                post_dev,
-                comb_dev,
-                ffn_hc_in,
-            )
-            logger.info(
-                f"{what} FFN pre error by device input: " + ", ".join(f"{k} {v:.4f}" for k, v in attribution.items())
-            )
-            if pre_error > PRE_MIX_ATOL:
-                failures.append(f"{what} pre_mix: max abs error {pre_error} > {PRE_MIX_ATOL}")
-            moe_expected, moe_actual = expected_parts[i]["ffn"].reshape(-1), _to_torch(parts[i]["ffn"]).reshape(-1)
-            _, pcc = comp_pcc(moe_expected, moe_actual, PCC)
-            logger.info(f"{what} MoE: PCC {pcc}")
-            out_dev = _to_torch(out)
-            streams_report, out_given_inputs = _streams_attribution(
-                block,
-                h,
-                x,
-                expected,
-                expected_parts[i]["attn"],
-                expected_parts[i]["ffn"],
-                ffn_hc_in,
-                moe_actual,
-                *(_to_torch(t) for t in parts[i]["ffn_hc"][:2]),
-            )
-            streams_report["mix op"] = (out_dev - out_given_inputs.reshape(out_dev.shape)).abs().max().item()
-            logger.info(
-                f"{what} streams PCC by device input: " + ", ".join(f"{k} {v:.4f}" for k, v in streams_report.items())
-            )
-            if check:
-                moe_outs[i][0].append(moe_expected)
-                moe_outs[i][1].append(moe_actual)
-                failures = [f for f in failures if f is not None]
-                assert not failures, "; ".join(failures)
+                post_dev, comb_dev = (_to_torch(t) for t in parts[i]["attn_hc"][:2])
+                attribution = _ffn_pre_attribution(
+                    block,
+                    h,
+                    expected_parts[i]["attn"],
+                    _to_torch(parts[i]["engram"]) if layer.engram is not None else x,
+                    _to_torch(parts[i]["attn"]),
+                    post_dev,
+                    comb_dev,
+                    ffn_hc_in,
+                )
+                logger.info(
+                    f"{what} FFN pre error by device input: "
+                    + ", ".join(f"{k} {v:.4f}" for k, v in attribution.items())
+                )
+                if pre_error > PRE_MIX_ATOL:
+                    failures.append(f"{what} pre_mix: max abs error {pre_error} > {PRE_MIX_ATOL}")
+                moe_expected, moe_actual = expected_parts[i]["ffn"].reshape(-1), _to_torch(parts[i]["ffn"]).reshape(-1)
+                _, pcc = comp_pcc(moe_expected, moe_actual, PCC)
+                logger.info(f"{what} MoE: PCC {pcc}")
+                out_dev = _to_torch(out)
+                streams_report, out_given_inputs = _streams_attribution(
+                    block,
+                    h,
+                    x,
+                    expected,
+                    expected_parts[i]["attn"],
+                    expected_parts[i]["ffn"],
+                    ffn_hc_in,
+                    moe_actual,
+                    *(_to_torch(t) for t in parts[i]["ffn_hc"][:2]),
+                )
+                streams_report["mix op"] = (out_dev - out_given_inputs.reshape(out_dev.shape)).abs().max().item()
+                logger.info(
+                    f"{what} streams PCC by device input: "
+                    + ", ".join(f"{k} {v:.4f}" for k, v in streams_report.items())
+                )
+                if check:
+                    moe_outs[i][0].append(moe_expected)
+                    moe_outs[i][1].append(moe_actual)
+                    failures = [f for f in failures if f is not None]
+                    assert not failures, "; ".join(failures)
 
     for i, (moe_expected, moe_actual) in moe_outs.items():
         failure = _log_pcc(torch.stack(moe_expected), torch.stack(moe_actual), f"layer {i} MoE, checked steps")

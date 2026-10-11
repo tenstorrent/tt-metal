@@ -189,7 +189,7 @@ void bind_matmul_decode_operation(nb::module_& mod) {
 
     ttnn::bind_function<"matmul_decode_large_k", "ttnn.experimental.">(
         mod,
-        R"doc(matmul_decode_large_k(input_tensor_a: ttnn.Tensor, input_tensor_b: ttnn.Tensor, *, dtype: Optional[ttnn.DataType] = None, reduce_fan_in: int = 2) -> ttnn.Tensor
+        R"doc(matmul_decode_large_k(input_tensor_a: ttnn.Tensor, input_tensor_b: ttnn.Tensor, *, dtype: Optional[ttnn.DataType] = None, reduce_fan_in: int = 2, rms_norm: bool = False, rms_norm_epsilon: float = 1e-6, fold_rows: int = 1) -> ttnn.Tensor
 
         Decode matmul ``A @ B`` for a large K and a small N. K is split across cores and the
         per-core partials are summed up a reduction tree, with no gather of A and no global
@@ -215,6 +215,20 @@ void bind_matmul_decode_operation(nb::module_& mod) {
             reduce_fan_in (int, optional): partials summed per tree node, at least 2. A larger
                 fan-in makes the tree shallower, so fewer serial hops, at the cost of more adds
                 per node. Defaults to 2.
+            rms_norm (bool, optional): fuse an unweighted RMSNorm of each row of
+                ``input_tensor_a`` over the full K ahead of the multiply, so the result is
+                ``(A / sqrt(mean(A^2, dim=-1) + rms_norm_epsilon)) @ B``. A weighted norm folds
+                its gamma into ``input_tensor_b``. Each core's share of ``sum(A^2)`` rides the
+                reduction tree with its partial and the root applies the scale. Blackhole only.
+                Defaults to False.
+            rms_norm_epsilon (float, optional): non-negative RMSNorm epsilon. Defaults to 1e-6.
+            fold_rows (int, optional): consume ``input_tensor_a`` ``[..., R, W]`` as
+                ``[R / fold_rows, W * fold_rows]`` (leading dims folded into the rows): each group
+                of ``fold_rows`` consecutive rows is one row, and core ``i``'s K-slice is its whole
+                ``[fold_rows * M, Kc / fold_rows]`` shard read row by row, so ``input_tensor_b``'s
+                K must be ordered core-major the same way. The shard height must be
+                ``fold_rows * M``. Lets a ``[hc, D]``-per-token tensor feed the matmul as its
+                ``[1, hc * D]`` row without a reshard. Defaults to 1.
 
         Returns:
             ttnn.Tensor: ``[M, N]`` ROW_MAJOR, WIDTH_SHARDED in L1 on the first core of
@@ -225,7 +239,10 @@ void bind_matmul_decode_operation(nb::module_& mod) {
         nb::arg("input_tensor_b"),
         nb::kw_only(),
         nb::arg("dtype") = nb::none(),
-        nb::arg("reduce_fan_in") = 2);
+        nb::arg("reduce_fan_in") = 2,
+        nb::arg("rms_norm") = false,
+        nb::arg("rms_norm_epsilon") = 1.0e-6F,
+        nb::arg("fold_rows") = 1);
 }
 
 // Descriptor-level bindings for models/experimental/ops/descriptors/matmul_decode.py, mirroring
