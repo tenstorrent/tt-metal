@@ -81,6 +81,7 @@ class TtReduceModule(LightweightModule):
         weights: Optional[ttnn.Tensor] = None,
         indices: Optional[ttnn.Tensor] = None,
         expert_dispatch_table: Optional[ttnn.Tensor] = None,
+        fp8_scale_block_w: int = 0,
     ) -> ttnn.Tensor:
         """
         Reduce combine output by summing topk and reduce-scattering.
@@ -121,6 +122,7 @@ class TtReduceModule(LightweightModule):
                 expert_dispatch_table,
                 expert_dim=self.topk_dim,
                 output_memory_config=ttnn.DRAM_MEMORY_CONFIG,
+                fp8_scale_block_w=fp8_scale_block_w,
             )
         else:
             logger.warning("TtReduceModule: weights not provided, using unweighted sum")

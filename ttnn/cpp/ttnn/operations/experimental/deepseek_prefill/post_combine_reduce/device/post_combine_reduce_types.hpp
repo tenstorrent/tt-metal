@@ -14,6 +14,9 @@ namespace ttnn::operations::experimental::deepseek_prefill::post_combine_reduce 
 struct PostCombineReduceParams {
     uint32_t expert_dim;
     tt::tt_metal::MemoryConfig output_memory_config;
+    // FP8_E4M3 combine rows: 0 = per-token row scale in a 64-B tail; 32 = one fp32 scale per 1x32 block, packed
+    // after the H e4m3 values.
+    uint32_t fp8_scale_block_w = 0;
 };
 
 struct PostCombineReduceInputs {

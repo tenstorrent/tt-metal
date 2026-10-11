@@ -36,6 +36,8 @@ constexpr auto indices_accessor_args =
     TensorAccessorArgs<dispatch_table_accessor_args.next_compile_time_args_offset()>();
 constexpr bool use_dispatch_table_skip =
     get_compile_time_arg_val(indices_accessor_args.next_compile_time_args_offset()) != 0;
+// 1x32 scaled fp8: the reader handles routing and weights; this kernel only writes the part's output tiles.
+constexpr bool fp8_block = get_compile_time_arg_val(indices_accessor_args.next_compile_time_args_offset() + 1) != 0;
 
 constexpr uint32_t TOKENS_PER_CHUNK = 32;
 
@@ -78,6 +80,25 @@ void kernel_main() {
     // Element 0 of each weight tile is all compute reads: fetch just the aligned DRAM page that holds it.
     const uint32_t weight_read_bytes = weight_addrg.get_aligned_page_size();
     const auto output_addrg = TensorAccessor(output_accessor_args, output_addr);
+
+    if constexpr (fp8_block) {
+        for (uint32_t chunk = 0; chunk < num_chunks; ++chunk) {
+            cb_output.wait_front(part_out_tiles);
+            const uint32_t start_tile_idx = (token_start_idx / TOKENS_PER_CHUNK) * emb_dim_out_tiles + part_tile_start;
+            for (uint32_t tile_idx = 0; tile_idx < part_out_tiles; ++tile_idx) {
+                noc.async_write(
+                    cb_output,
+                    output_addrg,
+                    output_tile_size,
+                    {.offset_bytes = tile_idx * output_tile_size},
+                    {.page_id = start_tile_idx + tile_idx});
+            }
+            noc.async_write_barrier();
+            cb_output.pop_front(part_out_tiles);
+            token_start_idx += TOKENS_PER_CHUNK;
+        }
+        return;
+    }
 
     uint32_t dispatch_table_write_addr = 0;
 

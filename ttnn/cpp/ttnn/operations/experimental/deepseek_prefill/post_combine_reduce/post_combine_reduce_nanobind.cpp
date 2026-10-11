@@ -60,6 +60,9 @@ void bind_post_combine_reduce(nb::module_& mod) {
                 output_memory_config (ttnn.MemoryConfig, optional): Output memory configuration.
                     Defaults to L1_MEMORY_CONFIG.
 
+                fp8_scale_block_w (int, keyword-only): FP8_E4M3 combine rows only. 0 (default): per-token
+                    row scale in a 64-B tail. 32: one fp32 scale per 1x32 block packed after the H values.
+
             Returns:
                 ttnn.Tensor: Reduced output in TILE_LAYOUT ready for reduce_scatter.
                     Shape: [batch, dispatch_group_size, seq_len, emb_dim]
@@ -72,7 +75,8 @@ void bind_post_combine_reduce(nb::module_& mod) {
         nb::arg("expert_dispatch_table") = nb::none(),
         nb::kw_only(),
         nb::arg("expert_dim") = 3,
-        nb::arg("output_memory_config") = nb::none());
+        nb::arg("output_memory_config") = nb::none(),
+        nb::arg("fp8_scale_block_w") = 0);
 }
 
 }  // namespace ttnn::operations::experimental::deepseek_prefill::post_combine_reduce::detail

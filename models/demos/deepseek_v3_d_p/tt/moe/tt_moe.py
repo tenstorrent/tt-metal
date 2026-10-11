@@ -40,9 +40,9 @@ from models.demos.deepseek_v3_d_p.tt.tt_ccl import get_tt_ccl
 # boundary (host-side allocator state, so it is exact at op-dispatch time). Used for the fp8-wire
 # temp-buffer footprint targets.
 _MOE_MEM_PROBE = os.environ.get("MOE_MEM_PROBE") == "1"
-# Scaled fp8 combine with per-token scales: post_combine_reduce dequantizes in compute (fused DQ2: fp8 rows
-# unpacked to 32-bit DEST, scaled by weight * row scale on the SFPU). MOE_FUSED_DQ2=0 or per-block scales
-# use the standalone per_token_cast_back pass instead.
+# Scaled fp8 combine: post_combine_reduce dequantizes in compute (fused DQ2). Per-token scales: fp8 rows unpacked
+# to 32-bit DEST, scaled by weight * row scale on the SFPU; 1x32 scales: 32 tokens' local slots tilized and scaled
+# with column-broadcast multiplies. MOE_FUSED_DQ2=0 or 64/128-wide scales use the standalone per_token_cast_back.
 _MOE_FUSED_DQ2 = os.environ.get("MOE_FUSED_DQ2", "1") == "1"
 # Per-token fp8 dispatch: the routed expert consumes the e4m3 rows and applies the scale to its gate/up
 # accumulators (fused DQ1, default); MOE_FUSED_DQ1=0 dequantizes with per_token_cast_back first.
@@ -1151,7 +1151,10 @@ class TtMoe(LightweightModule):
             if not self.combine_fp8:
                 ttnn.deallocate(expert_outputs)
             ttnn.deallocate(metadata)
-        if self.combine_fp8 and not (_MOE_FUSED_DQ2 and self.fp8_per_row):
+        # Fused DQ2 in post_combine_reduce: per-row scales (SFPU scalar multiplies) or 1x32 block scales
+        # (tilize 32 tokens' compacted local slots, column-broadcast multiplies on the FPU).
+        fused_dq2 = self.combine_fp8 and _MOE_FUSED_DQ2 and (self.fp8_per_row or self.fp8_scale_block == 32)
+        if self.combine_fp8 and not fused_dq2:
             # DQ2 (v1, standalone): unpack [e4m3 | fp32 scales] rows back to bf16 for the weighted reduce. Slots of
             # non-local experts are never written by combine; post_combine_reduce never reads them.
             combined_fp8 = combined_output
@@ -1183,6 +1186,7 @@ class TtMoe(LightweightModule):
             weights=scores,
             indices=indices,
             expert_dispatch_table=self.tt_expert_dispatch_table,
+            fp8_scale_block_w=self.fp8_scale_block if fused_dq2 and not self.fp8_per_row else 0,
         )
         if DEBUG_LOGGING_ENABLED:
             logger.debug(f"[TtMoe.forward] routed_output (after reduce) shape: {routed_output.shape}")
