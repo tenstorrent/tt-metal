@@ -4,6 +4,7 @@
 
 #pragma once
 
+#include <algorithm>
 #include <array>
 #include <cstdint>
 #include <string>
@@ -17,22 +18,39 @@
 
 namespace tt::tt_fabric {
 
+// Why a VC carries its credits in L1 counters rather than stream registers.
+enum class L1CreditCounterReason : uint8_t {
+    // The router's sender and receiver TX queues differ.
+    MULTI_TXQ,
+    // Express routing is enabled on the mesh.
+    EXPRESS,
+    // VC2 is a carrier VC in its own right (one sender at flat position 9, one receiver), so it
+    // needs its own transport decision rather than inheriting a neighbour's. Its sender sits past
+    // the completed table's declared extent (positions 0..8), so counters are the only transport
+    // that can carry its credits today; stream_requirements enforces that.
+    NO_COMPLETION_REGISTER,
+};
+
 // Which VCs carry receiver-to-sender ack and completion credits in L1 counters rather than stream
 // registers.
 //
 // One of the two axes this file separates. The plan says which transport each VC uses; the assignment
 // below says which register serves which role once that is decided. Keeping them apart means changing
 // a VC's transport is a single decision rather than an edit threaded through the map.
-struct CreditTransportPlan {
-    bool vc0_uses_counters = false;
-    bool vc1_uses_counters = false;
-    // VC2 is a carrier VC in its own right (one sender at flat position 9, one receiver), so it
-    // needs its own transport decision rather than inheriting a neighbour's. Its sender sits past
-    // the completed table's declared extent (positions 0..8), so counters are the only transport
-    // that can carry its credits today; stream_requirements enforces that.
-    bool vc2_uses_counters = false;
+class CreditTransportPlan {
+public:
+    // Each accessor fatals on a VC outside the fabric's VCs.
+    const std::vector<L1CreditCounterReason>& reasons(uint32_t vc) const;
+    void add_counter_reason(uint32_t vc, L1CreditCounterReason reason);
 
-    bool any_vc_uses_counters() const { return vc0_uses_counters || vc1_uses_counters || vc2_uses_counters; }
+    bool vc_uses_counters(uint32_t vc) const { return !reasons(vc).empty(); }
+    bool any_vc_uses_counters() const {
+        return std::ranges::any_of(reasons_, [](const auto& reasons) { return !reasons.empty(); });
+    }
+
+private:
+    // Why each VC is on L1 counters. A VC with no reasons stays on stream registers.
+    std::array<std::vector<L1CreditCounterReason>, builder_config::MAX_NUM_VCS> reasons_{};
 };
 
 struct StreamRegAssignments {

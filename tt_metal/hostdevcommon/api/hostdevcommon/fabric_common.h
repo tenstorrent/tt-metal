@@ -23,6 +23,14 @@ using routing_plane_id_t = std::uint8_t;
 static constexpr std::uint32_t CLIENT_INTERFACE_SIZE = 3280;
 static constexpr std::uint32_t PACKET_WORD_SIZE_BYTES = 16;
 
+// Every FABRIC_KERNEL_HEARTBEAT_PERIOD_ITERS main-loop iterations, the fabric router writes
+// FABRIC_KERNEL_HEARTBEAT_MAGIC | (16-bit iteration count) to a word owned by the base ethernet firmware.
+static constexpr std::uint32_t FABRIC_KERNEL_HEARTBEAT_ADDR_WORMHOLE = 0x1F80;
+static constexpr std::uint32_t FABRIC_KERNEL_HEARTBEAT_ADDR_BLACKHOLE = 0x7CC70;
+static constexpr std::uint32_t FABRIC_KERNEL_HEARTBEAT_MAGIC = 0xDCBA0000;
+static constexpr std::uint32_t FABRIC_KERNEL_HEARTBEAT_MAGIC_MASK = 0xFFFF0000;
+static constexpr std::uint32_t FABRIC_KERNEL_HEARTBEAT_PERIOD_ITERS = 64;
+
 // Constants for fabric mesh configuration
 static constexpr std::uint32_t MAX_MESH_SIZE = 256;
 static constexpr std::uint32_t MAX_NUM_MESHES = 1024;
@@ -30,6 +38,23 @@ static constexpr std::uint32_t MAX_NUM_MESHES = 1024;
 constexpr std::uint8_t USE_DYNAMIC_CREDIT_ADDR = 255;
 
 static constexpr std::size_t MAX_CHANNEL_BUFFER_SLOTS = UINT8_MAX / 2;
+
+// Read and write stream scratch register store values as uint32_t.
+enum class CoordinatedEriscContextSwitchState : std::uint32_t {
+    // Initially set by the master (erisc0) in entrance of kernel_main() and is the default state. erisc1 polls for this
+    // state at the end of the handshake
+    NORMAL_EXECUTION = 0,
+    // Set by master to signal intent on beginning handshake. Checked by erisc1 before it begins handshake
+    RETRAIN_INTENT = 1,
+    // Set by erisc1 to indicate it's cooperation. Polled by master before it runs the retrain to ensure that it has
+    // erisc1's cooperation
+    INTENT_ACK = 2,
+    // Set by erisc0 to indicate completion of retrain. Polled by erisc1
+    RETRAIN_COMPLETE = 3,
+    // Set by erisc1 to indicate it has seen the completion of retrain. Polled by erisc0 before it sets register back to
+    // NORMAL_EXECUTION
+    COMPLETE_ACK = 4,
+};
 
 // Magic values for ethernet channel directions
 enum eth_chan_magic_values : std::uint8_t {
