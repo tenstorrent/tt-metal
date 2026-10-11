@@ -42,7 +42,7 @@
 #include "api/compute/experimental/add_rsqrt.h"
 #include "api/dataflow/circular_buffer.h"
 #include "ttnn/cpp/ttnn/kernel_lib/reduce_helpers_compute.hpp"
-#include "tools/profiler/kernel_profiler.hpp"
+#include "api/debug/kernel_profiler.hpp"
 
 void kernel_main() {
     // === Compile-time args ===
