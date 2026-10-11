@@ -894,8 +894,7 @@ class REDUCE_ORDER(TemplateParameter):
 
 @dataclass
 class WELFORD_RECIP_SIZE(TemplateParameter):
-    """Size of the Welford reciprocal table (N entries of 1 / (i + 1) built on the math RISC);
-    0 selects the no-table form, which computes the reciprocal per row."""
+    """Size of the Welford reciprocal table; 0 selects the no-table form."""
 
     welford_recip_size: int = 256
 
@@ -907,8 +906,7 @@ class WELFORD_RECIP_SIZE(TemplateParameter):
 
 @dataclass
 class WELFORD_RECIP_BASE(RuntimeParameter):
-    """First index whose reciprocal sfpu_welford_recip_test.cpp computes: the run covers
-    1 / (idx + 1) for idx in [base, base + 32 * TILE_CNT)."""
+    """First index whose reciprocal sfpu_welford_recip_test.cpp computes."""
 
     welford_recip_base: int = 0
 
@@ -923,9 +921,7 @@ class WELFORD_RECIP_BASE(RuntimeParameter):
 
 @dataclass
 class WELFORD_ROWS(TemplateParameter):
-    """Rows [start_row, start_row + num_rows) of every tile that sfpu_welford_test.cpp folds
-    into the statistics; the whole tile takes the full-tile update, any other range the
-    partial-tile one."""
+    """Rows [start_row, start_row + num_rows) of every tile that sfpu_welford_test.cpp folds."""
 
     welford_start_row: int = 0
     welford_num_rows: int = 32

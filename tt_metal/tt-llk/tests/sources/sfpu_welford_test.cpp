@@ -3,8 +3,7 @@
 // SPDX-License-Identifier: Apache-2.0
 
 // Folds rows [WELFORD_START_ROW, WELFORD_START_ROW + WELFORD_NUM_ROWS) of TILE_CNT tiles of 32 samples per column into the
-// running mean and M2, then packs the mean and the population variance from row 0 of DEST tiles 2 and 3.
-// WELFORD_RECIP_SIZE 0 selects the no-table form.
+// running mean and M2, then packs the mean and the population variance.
 
 #include <array>
 #include <cstdint>
@@ -83,11 +82,9 @@ void run_kernel(RUNTIME_PARAMETERS params)
     {
         _llk_math_wait_for_dest_available_<DST_SYNC>();
 
-        // Input into dst tile 0 (the unpacker writes it when unpack_to_dest is set).
         _llk_math_eltwise_unary_datacopy_<DataCopyType::A2D, DST_SYNC, is_fp32_dest_acc_en, BroadcastType::NONE, unpack_to_dest>(
             WELFORD_INPUT_DST_INDEX, formats.math, formats.math);
 
-        // Fold the selected rows of the tile into the running statistics; the sample count so far is tile * WELFORD_NUM_ROWS.
         if constexpr (WELFORD_NUM_ROWS == TILE_R_DIM)
         {
             _llk_math_welfords_sfpu_params_(
@@ -129,7 +126,6 @@ void run_kernel(RUNTIME_PARAMETERS params)
     _llk_pack_init_wrapper_<PackMode::Default, false /* zero_output */>(formats.pack_dst, FACE_R_DIM, TILE_C_DIM, TILE_NUM_FACES);
     _llk_pack_dest_init_<DST_SYNC, is_fp32_dest_acc_en>();
 
-    // The input sections produce nothing to pack; release each one as the math thread finishes it.
     for (std::uint32_t tile = 0; tile < params.TILE_CNT; ++tile)
     {
         _llk_packer_wait_for_math_done_();

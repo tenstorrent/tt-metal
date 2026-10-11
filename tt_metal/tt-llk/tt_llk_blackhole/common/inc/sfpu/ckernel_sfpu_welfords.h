@@ -10,7 +10,7 @@
 // presenting another SFPU instruction triggers a stall and takes three.
 #define WELFORD_SFPU_INDEPENDENT_SHFT2_NOP() TTI_SFPNOP
 #define WELFORD_SFPU_ONLINE_HAZARD_NOP()
-// The scoreboard spaces the row's three dependent multiply-adds, so the four-instruction row costs no NOP.
+// The scoreboard spaces the three dependent multiply-adds, so the row needs no NOP.
 #define WELFORD_SFPU_IN_PLACE_MEAN_ROW
 #define WELFORD_SFPU_INSTR_PER_ROW 4
 #define WELFORD_SFPU_EXACT_RECIP

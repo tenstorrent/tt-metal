@@ -2,8 +2,7 @@
 //
 // SPDX-License-Identifier: Apache-2.0
 
-// Exactness check of the no-table Welford reciprocal (_load_recip_of_idx_<0>): slab s of result tile t holds
-// 1 / (WELFORD_RECIP_BASE + 32 t + s + 1) in all 32 elements, packed as Float32 for the host to compare bit for bit.
+// Exactness check of the no-table Welford reciprocal: slab s of result tile t holds 1 / (WELFORD_RECIP_BASE + 32 t + s + 1).
 
 #include <array>
 #include <cstdint>
@@ -30,7 +29,6 @@ void run_kernel(RUNTIME_PARAMETERS params)
 #if defined(RUNTIME_FORMATS) && !defined(SPEED_OF_LIGHT)
     const FormatConfig& formats = params.formats;
 #endif
-    // Nothing is unpacked; the configuration keeps the thread consistent with the other two.
     _llk_unpack_hw_configure_<is_fp32_dest_acc_en>(
         formats.unpack_A_src, formats.unpack_B_src, formats.unpack_A_dst, formats.unpack_B_dst, FACE_R_DIM, FACE_R_DIM, TILE_NUM_FACES, TILE_NUM_FACES);
 }
@@ -47,9 +45,7 @@ void run_kernel(RUNTIME_PARAMETERS params)
 
 using namespace ckernel;
 
-// Slab offsets of a 4-row group: even and odd columns of the left face, then of the right face.
 static constexpr std::uint32_t SLAB_OFFSET[4] = {0, 2, 16, 18};
-// Four rows by eight columns each, so 32 slabs fill a tile.
 static constexpr std::uint32_t SLABS_PER_TILE = 32;
 
 static const std::array<std::uint32_t, 0> no_lut {};
@@ -69,7 +65,6 @@ void run_kernel(RUNTIME_PARAMETERS params)
     _llk_math_hw_configure_<is_fp32_dest_acc_en>(formats.math, formats.math);
     _llk_math_pack_sync_init_<DST_SYNC, is_fp32_dest_acc_en>();
 
-    // Welford init: the SFPU configuration and ADDR_MOD_7.
     _llk_math_welfords_sfpu_init_();
 
     std::uint32_t idx = params.WELFORD_RECIP_BASE;
@@ -79,7 +74,6 @@ void run_kernel(RUNTIME_PARAMETERS params)
         _llk_math_eltwise_sfpu_start_(RECIP_DST_INDEX);
         for (std::uint32_t slab = 0; slab < SLABS_PER_TILE; ++slab)
         {
-            // Slab s: face pair s / 16, 4-row group (s / 4) % 4, column half and face s % 4.
             const std::uint32_t offset = 2 * FACE_R_DIM * (slab >> 4) + 4 * ((slab >> 2) & 3) + SLAB_OFFSET[slab & 3];
             _load_recip_of_idx_<0>(idx, no_lut);
             TT_SFPSTORE(ckernel::p_sfpu::LREG7, sfpi::SFPSTORE_MOD0_FMT_SRCB, RECIP_STORE_ADDR_MOD, offset);
