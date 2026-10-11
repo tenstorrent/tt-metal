@@ -335,8 +335,7 @@ def test_eltwise_unary_typecast_fp32_to_uint8_wide_exponent():
     )
 
 
-# Edge-value pins: the 32-bit Dest SFPLOADMACRO programs of the uint16 inputs and of float32 to uint16, the 16-bit
-# Dest pair that shares the float to uint16 macro, and float32 to bfloat16, whose plain loop rounds on the low half.
+# Edge-value pins for the SFPLOADMACRO programs and the plain-loop float32 to bfloat16 rounding.
 _EDGE_PAIRS = [
     (DataFormat.UInt16, DataFormat.Float32),
     (DataFormat.UInt16, DataFormat.UInt32),
@@ -348,8 +347,8 @@ _EDGE_PAIRS = [
 
 
 def _spread_over_face(fixed: torch.Tensor, values: torch.Tensor) -> torch.Tensor:
-    # An odd period of at most 31 puts every fixed class in each 4-row block on both column parities, so each class
-    # reaches every SFPU row of the face and every register of a rotation; the other slots keep their random values.
+    # An odd period of at most 31 puts each fixed class on both column parities, every SFPU row and every
+    # register of the rotation.
     period = 31
     assert len(fixed) < period
     pos = torch.arange(values.numel()) % period
@@ -359,7 +358,6 @@ def _spread_over_face(fixed: torch.Tensor, values: torch.Tensor) -> torch.Tensor
 
 
 def _edge_spec_uint16() -> StimuliSpec:
-    # Every uint16 value class, random values in between; the outputs are 32-bit words.
     def dist(size, dtype, generator):
         values = torch.randint(0, 65536, (size,), generator=generator)
         fixed = torch.tensor([0, 1, 2, 255, 256, 0x7FFF, 0x8000, 0xFFFE, 0xFFFF])
@@ -369,8 +367,7 @@ def _edge_spec_uint16() -> StimuliSpec:
 
 
 def _edge_spec_float_to_uint16() -> StimuliSpec:
-    # Negatives, fractions with ties, the top of the range and past it, random in-range values in between. A
-    # saturating input never shares its output word with another: an all-ones word reads back as a timeout.
+    # A saturating input never shares its output word with another: an all-ones word reads back as a timeout.
     def dist(size, dtype, generator):
         values = torch.rand(size, generator=generator) * 65400.0 - 100.0
         fixed = torch.tensor(
@@ -407,7 +404,6 @@ def _edge_spec_float_to_uint16() -> StimuliSpec:
 
 
 def _edge_spec_float_to_bf16() -> StimuliSpec:
-    # Low 16 bits on and around the rounding tie, plus lanes with a random low half.
     def dist(size, dtype, generator):
         exponent = torch.randint(
             100, 150, (size,), generator=generator, dtype=torch.int32
@@ -432,8 +428,7 @@ def _edge_spec_float_to_bf16() -> StimuliSpec:
 
 
 def _golden_float_to_uint16(src):
-    # Clamp at zero, round to nearest with ties away from zero (SFPSTOCHRND float to integer),
-    # saturate at 65535; floor(x + 0.5) in float64 is exact for every float32 x.
+    # Rounds to nearest, ties away from zero; floor(x + 0.5) in float64 is exact for every float32 x.
     values = torch.clamp(src.float().to(torch.float64), min=0.0)
     return torch.clamp(torch.floor(values + 0.5), 0, 65535).to(torch.int32).flatten()
 
@@ -480,7 +475,6 @@ _INT32_MIN = -(2**31)
 
 
 def _golden_float_to_int32(src):
-    # Truncation toward zero, saturation by the sign (NaN by its sign bit), zero and denormals to 0.
     values = src.float()
     negative = values.view(torch.int32) < 0
     magnitude = values.abs()
@@ -495,7 +489,6 @@ def _golden_float_to_int32(src):
 
 
 def _edge_spec_float_to_int32(input_format: DataFormat) -> StimuliSpec:
-    # Both signs of zero, denormals, ties, the 2^24 and 2^31 boundaries, inf and NaN, then random.
     def dist(size, dtype, generator):
         fixed_bits = [
             0x00000000,

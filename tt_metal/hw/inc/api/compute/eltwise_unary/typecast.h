@@ -522,7 +522,6 @@ ALWI void typecast_tile_init() {
          in_format == DataFormat::Bfp4_b) &&
         out_format == DataFormat::UInt16) {
 #if defined(ARCH_BLACKHOLE)
-        // The Blackhole init programs the macro's store for the Dest mode.
         MATH(SFPU_UNARY_INIT_FN(typecast, sfpu::init_typecast_fp32_to_uint16, (APPROX, is_fp32_dest_acc_en)));
 #else
         MATH(SFPU_UNARY_INIT_FN(typecast, sfpu::init_typecast_fp32_to_uint16, (APPROX)));
