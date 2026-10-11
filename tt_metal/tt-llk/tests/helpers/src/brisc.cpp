@@ -108,8 +108,9 @@ __attribute__((noinline, noipa, section(".text.llk_dbg_serve"), aligned(1024))) 
         "li    a0, %[tstep]\n\t"
         "li    a1, %[tend]\n\t"
         "li    t5, %[flush_cmd]\n\t"
-        "li    s4, %[release]\n"
-        "1:\n\t" // arrive
+        "li    s4, %[release]\n" // unused; s4 holds the release schedule from 60: on
+        "li    s5, 0\n"          // park count: park 2 is the INIT entry park
+        "1:\n\t"                 // arrive
         "lw    a4, 0(t1)\n\tand   a4, a4, a4\n\t"
         "lw    a4, 0(a7)\n\tand   a4, a4, a4\n\t"
         "lw    a4, 0(a6)\n\tand   a4, a4, a4\n\t"
@@ -138,7 +139,12 @@ __attribute__((noinline, noipa, section(".text.llk_dbg_serve"), aligned(1024))) 
         "li    a3, 1024\n" // 64 L1 reads from address 0 (a4 = 0): every bank arbiter last granted BRISC
         "10:\n\t"
         "lw    a2, 0(a4)\n\tandi  a2, a2, 0\n\taddi  a4, a4, 16\n\tbne   a4, a3, 10b\n\t"
-        "lui   a4, %%hi(%[icinv])\n\tli    a3, 14\n\tsw    a3, %%lo(%[icinv])(a4)\n\t" // TRISC 0-2 icaches
+        // the INIT entry park takes its own copy of the rest (40:), which releases the three INITs one after another so
+        // each INIT zone runs alone; every other park keeps this path unchanged (TILE_LOOP sees the same release)
+        "addi  s5, s5, 1\n\tli    a4, 2\n\tbeq   s5, a4, 40f\n\t"
+        // the other parks continue at 60:, placed after the INIT path, so that path keeps its code and addresses
+        "j     60f\n\tnop\n\tnop\n"
+        "61:\n\t"
         "li    a4, 64\n"
         "11:\n\t"
         "nop\n\taddi  a4, a4, -1\n\tbnez  a4, 11b\n\t"
@@ -167,6 +173,34 @@ __attribute__((noinline, noipa, section(".text.llk_dbg_serve"), aligned(1024))) 
         "lw    a4, %[scratch](s2)\n\tand   a4, a4, t0\n\tbne   a4, t2, 2b\n\t"
         "lw    a4, %[scratch](s1)\n\tand   a4, a4, t0\n\tbne   a4, t2, 2b\n\t"
         "sw    zero, 0(t1)\n\tsw    zero, 0(a7)\n\tsw    zero, 0(a6)\n\t" // out of the kernel
+        "j     99f\n"
+        "60:\n\t" // every park but the INIT entry: TRISC 0-2 icaches, then the park's release schedule (barrier.h)
+        "lui   a4, %%hi(%[icinv])\n\tli    a3, 14\n\tsw    a3, %%lo(%[icinv])(a4)\n\t"
+        "lui   a3, %%hi(%[sched])\n\tlw    s4, %%lo(%[sched])(a3)\n\tbeqz  s4, 61b\n\t" // 0: a plain park
+        "sw    zero, %%lo(%[sched])(a3)\n\t"                                            // cleared, so the next park is a plain one
+        "li    a4, 64\n"
+        "62:\n\t"
+        "nop\n\taddi  a4, a4, -1\n\tbnez  a4, 62b\n\t"
+        // at a fixed 256 B boundary, so a change elsewhere in serve() (or before it) cannot move the code that spaces the
+        // releases: the gaps between the threads' starts stay the same cycle counts
+        "j     50f\n\t.balign 256\n"
+        "50:\n\t" // release schedule: thread s4[1:0], then s4[3:2], then s4[5:4], each by its own flush, %[gap] spins apart
+        "addi  s3, a5, %[cntl1]\n"
+        "51:\n\t"
+        "andi  a2, s4, 3\n\tslli  a3, a2, 16\n\tadd   a3, a3, t1\n\tsw    zero, 0(a3)\n\t" // its release token
+        "addi  a3, a2, 1\n\tslli  a3, a3, 17\n\t"                                          // debug target: TRISC t is t + 1
+        "sw    t5, 0(s3)\n\tor    a4, a3, t3\n\tsw    a4, %[cntl0](a5)\n\tor    a2, a3, t4\n"
+        "52:\n\t"
+        "lw    a4, %[status0](a5)\n\tbgez  a4, 52b\n\t"
+        "sw    a2, %[cntl0](a5)\n"
+        "53:\n\t"
+        "lw    a4, %[status0](a5)\n\tbltz  a4, 53b\n\t"
+        "srli  s4, s4, 2\n\tli    a4, %[sched_end]\n\tbeq   s4, a4, 1b\n\t"
+        "li    a4, %[gap]\n"
+        "54:\n\t"
+        "nop\n\taddi  a4, a4, -1\n\tbnez  a4, 54b\n\t"
+        "j     51b\n"
+        "99:\n"
         :
         : [pcb0] "i"(PC_BUF[0]),
           [pcb1] "i"(PC_BUF[1]),
@@ -190,8 +224,12 @@ __attribute__((noinline, noipa, section(".text.llk_dbg_serve"), aligned(1024))) 
           [req_wr_cmd] "i"(REQ | WR | REG_COMMAND),
           [flush_cmd] "i"(COMMAND_FLUSH | COMMAND_CONTINUE),
           [icinv] "i"(TENSIX_CFG_BASE + 4 * RISCV_IC_INVALIDATE_InvalidateAll_ADDR32),
-          [release] "i"(RELEASE_ALL)
-        : "t0", "t1", "t2", "t3", "t4", "t5", "t6", "a0", "a1", "a2", "a3", "a4", "a5", "a6", "a7", "s0", "s1", "s2", "s3", "s4", "memory");
+          [release] "i"(RELEASE_ALL),
+          [stagger] "i"(1500),
+          [sched] "i"(llk_barrier::SCHEDULE_REG),
+          [sched_end] "i"(llk_barrier::SCHEDULE_VALID >> 6),
+          [gap] "i"(1024) // about 5000 cycles: the earlier threads have reached their wait or their final park
+        : "t0", "t1", "t2", "t3", "t4", "t5", "t6", "a0", "a1", "a2", "a3", "a4", "a5", "a6", "a7", "s0", "s1", "s2", "s3", "s4", "s5", "memory");
 }
 } // namespace dbg_barrier
 #endif
