@@ -12,12 +12,16 @@ placeholder rows for those tokens, which the resumed prefill never reads).
 
 Needs the real checkpoint: HF_MODEL (and TT_CACHE_PATH for the weight cache), as the CI unit job sets.
 """
+import json
 import os
 
 import pytest
 import torch
+from accelerate import init_empty_weights
+from huggingface_hub import snapshot_download
 from loguru import logger
 from PIL import Image, ImageDraw
+from safetensors.torch import load_file
 from transformers import AutoProcessor
 from transformers.models.qwen2_5_vl.modeling_qwen2_5_vl import Qwen2_5_VLForConditionalGeneration
 
@@ -49,6 +53,45 @@ def _assert_same_next_token(name, full, resumed, min_pcc=0.99):
     logger.info(f"{name}: argmax full={full.argmax().item()} resumed={resumed.argmax().item()} pcc={pcc:.5f}")
     assert full.argmax().item() == resumed.argmax().item(), f"{name}: resumed prefill changed the next token"
     assert pcc > min_pcc, f"{name}: logits PCC {pcc:.4f} < {min_pcc}"
+
+
+def _load_reference_subset(ref_model_name):
+    """The HF model with only the pieces this test uses on the CPU loaded: the token embedding and the
+    vision tower. The decoder layers stay on the meta device, so a 72B checkpoint costs one shard
+    instead of all of them (the full load alone exceeds the CI per-test timeout)."""
+    config = Qwen2_5_VLForConditionalGeneration.config_class.from_pretrained(ref_model_name)
+    with init_empty_weights(include_buffers=False):
+        model = Qwen2_5_VLForConditionalGeneration(config)
+    model = model.to(dtype=config.torch_dtype or torch.bfloat16)
+    if os.path.isdir(ref_model_name):
+        snapshot = ref_model_name
+    else:
+        snapshot = snapshot_download(ref_model_name, allow_patterns=["*.json", "*.safetensors"], local_files_only=True)
+    index_path = os.path.join(snapshot, "model.safetensors.index.json")
+    if os.path.exists(index_path):
+        weight_map = json.load(open(index_path))["weight_map"]
+    else:
+        weight_map = {k: "model.safetensors" for k in load_file(os.path.join(snapshot, "model.safetensors")).keys()}
+    wanted = lambda k: k.startswith("visual.") or k.endswith("embed_tokens.weight")
+    module_keys = set(model.state_dict().keys())
+    state = {}
+    for shard in sorted({f for k, f in weight_map.items() if wanted(k)}):
+        for k, v in load_file(os.path.join(snapshot, shard)).items():
+            if not wanted(k):
+                continue
+            # transformers >= 4.52 nests the checkpoint's `visual.` / `model.` modules under `model.`
+            for cand in (k, f"model.{k}", k.replace("model.", "model.language_model.", 1)):
+                if cand in module_keys:
+                    state[cand] = v
+                    break
+            else:
+                raise KeyError(f"no module parameter for checkpoint tensor {k}")
+    missing = [
+        k for k in module_keys if ("embed_tokens" in k or ".visual." in k or k.startswith("visual.")) and k not in state
+    ]
+    assert not missing, f"reference subset incomplete: {missing[:5]}"
+    model.load_state_dict(state, strict=False, assign=True)
+    return model.eval()
 
 
 class _Harness:
@@ -85,10 +128,7 @@ class _Harness:
             tokenizer=self.model_args.tokenizer,
         )
         ref_model_name = self.model_args.CKPT_DIR
-        config = Qwen2_5_VLForConditionalGeneration.config_class.from_pretrained(ref_model_name)
-        self.reference_model = Qwen2_5_VLForConditionalGeneration.from_pretrained(
-            ref_model_name, config=config, torch_dtype="auto", device_map="cpu"
-        )
+        self.reference_model = _load_reference_subset(ref_model_name)
         self.visual = getattr(self.reference_model, "visual", None) or self.reference_model.model.visual
         self.processor = AutoProcessor.from_pretrained(ref_model_name)
         self.pad_token_id = self.model_args.tokenizer.pad_token_id
@@ -140,6 +180,7 @@ def _shared_prefix_len(ids_a, ids_b):
 
 
 @torch.no_grad()
+@pytest.mark.timeout(1500)  # 72B on the CI weight mount: weights + four prefills take longer than the default budget
 @pytest.mark.parametrize("mesh_device", [qwen25_vl_mesh_shape()], indirect=True)
 @pytest.mark.parametrize("device_params", [{"fabric_config": True}], indirect=True)
 def test_resumed_prefill_matches_full_prefill(mesh_device, qwen25_vl_mesh_device, device_params, monkeypatch):
