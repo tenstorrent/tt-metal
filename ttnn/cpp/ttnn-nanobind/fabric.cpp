@@ -378,6 +378,23 @@ void bind_fabric_api(nb::module_& mod) {
         )");
 
     mod.def(
+        "get_neighbor_eth_directions",
+        [](const tt::tt_fabric::FabricNodeId& src_fabric_node_id,
+           const tt::tt_fabric::FabricNodeId& dst_fabric_node_id) -> std::vector<int> {
+            std::vector<int> out;
+            for (auto dir : tt::tt_fabric::get_neighbor_eth_directions(src_fabric_node_id, dst_fabric_node_id)) {
+                out.push_back(static_cast<int>(dir));
+            }
+            return out;
+        },
+        nb::arg("src_fabric_node_id"),
+        nb::arg("dst_fabric_node_id"),
+        R"(
+            The ethernet directions of the direct links from src to dst (EAST=0, WEST=1, NORTH=2, SOUTH=3, Z=4);
+            empty when the two chips are not direct neighbours (a packet would need more than one hop).
+        )");
+
+    mod.def(
         "get_forwarding_link_indices",
         &tt::tt_fabric::get_forwarding_link_indices,
         nb::arg("src_fabric_node_id"),

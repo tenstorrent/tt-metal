@@ -165,6 +165,7 @@ from ttnn._ttnn.fabric import (
     get_physical_mesh_shapes,
     get_eth_forwarding_direction,
     get_forwarding_link_indices,
+    get_neighbor_eth_directions,
     get_all_fabric_mesh_ids,
     get_all_mgd_fabric_types,
     MeshId,
