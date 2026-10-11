@@ -275,6 +275,9 @@ def _resolve_denoise_path(
 
 
 _DIT_FSDP_ENV = "MINIMAX_H3_DIT_FSDP"
+# A denoise re-capture releases only the denoise traces (default); =0 also releases the audio decoder's,
+# as before, which drops the vocoder's tpad masks so the next audio capture writes them inside the trace.
+_RECAPTURE_KEEPS_AUDIO_ENV = "MINIMAX_H3_RECAPTURE_KEEPS_AUDIO"
 
 
 def _resolve_dit_fsdp(preset: Mapping, *, dit_fsdp: bool | None, task: str, dynamic_length: bool) -> tuple[bool, str]:
@@ -3070,6 +3073,12 @@ class MiniMaxH3Pipeline:
         decoder = self._audio_decoder
         if decoder is not None:
             decoder.release_trace()
+        self._release_denoise_traces()
+
+    def _release_denoise_traces(self) -> None:
+        """Release only the denoise traces. The audio decoder's release also drops the vocoder's
+        tpad masks, which only an eager decode rebuilds; an audio capture after that would write
+        them inside the trace."""
         transformer = self._transformer
         if transformer is None:
             return
@@ -3152,7 +3161,10 @@ class MiniMaxH3Pipeline:
         state = self._buckets.setdefault(rung, _BucketState()) if self.bucket_denoise else self._request_state
         traced = self.trace_denoise and state.warm
         if self.trace_denoise and not state.warm:
-            self.release_traces()
+            if os.environ.get(_RECAPTURE_KEEPS_AUDIO_ENV, "1") == "0":
+                self.release_traces()
+            else:
+                self._release_denoise_traces()
 
         t_rope = time.time()
         rope_cos, rope_sin = self._device_metadata(layout, rung)
