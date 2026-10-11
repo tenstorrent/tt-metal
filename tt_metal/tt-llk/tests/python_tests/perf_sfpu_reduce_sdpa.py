@@ -40,10 +40,7 @@ def test_perf_sfpu_reduce_sdpa(
     reduce_pool,
     loop_factor,
 ):
-    """
-    Performance test for the SFPU column MAX reduce over a block of four tiles, the shape SDPA softmax uses.
-    MATH_ISOLATE reads as cycles per four-tile call (divide by four for cycles per tile), L1_TO_L1 as cycles per tile.
-    """
+    """SFPU column MAX over the four-tile block SDPA softmax runs: MATH_ISOLATE per call, L1_TO_L1 per tile."""
 
     input_dimensions = [4 * TILE_DIM, TILE_DIM]
     tile_count = (input_dimensions[0] // TILE_DIM) * (input_dimensions[1] // TILE_DIM)
