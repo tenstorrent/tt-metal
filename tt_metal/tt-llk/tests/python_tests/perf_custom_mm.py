@@ -1,8 +1,7 @@
 # SPDX-FileCopyrightText: © 2026 Tenstorrent AI ULC
 # SPDX-License-Identifier: Apache-2.0
 
-"""Perf sweep of the Blackhole custom_mm LLK pair (sources/custom_mm_perf.cpp, the perf twin of test_custom_mm.py);
-the per-tile figures are per weight (in1) tile."""
+"""custom_mm perf sweep; the per-tile figures are per weight (in1) tile."""
 
 from dataclasses import dataclass
 

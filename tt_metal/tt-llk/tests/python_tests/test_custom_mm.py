@@ -127,8 +127,6 @@ class CUSTOM_MM_PRESERVE_SRC_ZERO_FLAG(TemplateParameter):
 
 @dataclass
 class CUSTOM_MM_READ_TRANSPOSED(TemplateParameter):
-    """The unpacker walks the weight tiles column by column."""
-
     custom_mm_read_transposed: bool = False
 
     def convert_to_cpp(self) -> str:
@@ -390,8 +388,7 @@ def test_custom_mm_finalize_tile_stride(formats, M, ct, split_acc):
 @blackhole_only
 @parametrize(formats=CUSTOM_MM_FORMATS, M=[1, 8], kt=[1, 2], ct=[2, 4, 5, 16])
 def test_custom_mm_split_acc_reuse_replay(formats, M, kt, ct):
-    """The split_acc finalize with the reuse replay program loaded between the init and the call, the order of a
-    custom_mm chained into custom_mm_reuse_dest_srcb."""
+    """The split_acc finalize with the reuse replay program loaded between the init and the call."""
     _run_custom_mm(
         M, kt, ct, formats, _dest_acc_for(formats), split_acc=True, reuse_replay=True
     )
@@ -478,9 +475,7 @@ MULTI_CALL_CASES = [
     [pytest.param(*case[1:], id=case[0]) for case in MULTI_CALL_CASES],
 )
 def test_custom_mm_multi_call(M, kt, ct, num_calls, in1_format, banked):
-    """Back-to-back calls into one DEST, checked against the full-K golden; banked calls alternate the
-    configuration banks, so each call's configuration is written while the previous call runs.
-    """
+    """Back-to-back calls into one DEST against the full-K golden, on one bank or banked."""
     formats = InputOutputFormat(DataFormat.Float16_b, DataFormat.Float16_b, in1_format)
     _run_custom_mm(
         M,
@@ -516,9 +511,7 @@ BANKED_SEQUENCE_CASES = [
 def test_custom_mm_banked_sequence(
     M, kt, ct, num_calls, in1_format, banked, bank_split
 ):
-    """split_acc calls into one DEST section, the finalize on the last, checked against the full-K golden.
-    The split cases end the banked sequence and start another after one call (second bank) or two (first bank).
-    """
+    """split_acc calls into one DEST section, the finalize on the last; the split cases start a second sequence."""
     formats = InputOutputFormat(DataFormat.Float16_b, DataFormat.Float16_b, in1_format)
     _run_custom_mm(
         M,

@@ -58,8 +58,7 @@ inline void llk_unpack_AB_custom_mm_init(
  * @param tile_index_1: First weight tile, relative to operand1's read pointer.
  * @param kt_dim: Inner dimension in tiles, 1 to 256.
  * @param ct_dim: Output width in tiles, 1 to 16.
- * @tparam banked: Alternate the two configuration banks (@ref llk_unpack_AB_custom_mm_bank_init); the calls of a
- *                 sequence use weight CBs with one page size.
+ * @tparam banked: Alternate the configuration banks; the calls of a sequence use weight CBs of one page size.
  * @note Call @ref llk_unpack_AB_custom_mm_init first.
  * @note On the math thread, pair with @ref llk_math_custom_mm.
  */
@@ -85,10 +84,7 @@ inline void llk_unpack_AB_custom_mm(
         base_address_A, base_address_B, tile_index_A, tile_index_B, tile_size_A, tile_size_B, kt_dim, ct_dim);
 }
 
-/**
- * @brief Prepare the second configuration bank for banked custom_mm calls on operands with these formats and geometry
- *        (A the weights, B the activations). Call after the init and the format configuration, outside a sequence.
- */
+// A is the weights, B the activations; call after the init and the format configuration, outside a banked sequence
 template <bool transpose = false>
 inline void llk_unpack_AB_custom_mm_bank_init(
     const std::uint32_t unpA_src_format,
@@ -107,10 +103,7 @@ inline void llk_unpack_AB_custom_mm_bank_init(
     _llk_unpack_AB_custom_mm_bank_init_((static_cast<std::uint64_t>(geometry) << 32) | formats);
 }
 
-/**
- * @brief Prepare the second configuration bank for banked custom_mm calls on the init's operands and transpose.
- *        Call after @ref llk_unpack_AB_custom_mm_init, outside a banked sequence.
- */
+// Call after llk_unpack_AB_custom_mm_init with its operands and transpose, outside a banked sequence
 template <bool transpose = false>
 inline void llk_unpack_AB_custom_mm_bank_init(const std::uint32_t operand0, const std::uint32_t operand1) {
     const std::uint32_t operandA_id = get_operand_id(operand1);
@@ -126,7 +119,4 @@ inline void llk_unpack_AB_custom_mm_bank_init(const std::uint32_t operand0, cons
         get_operand_num_faces(operandB_id));
 }
 
-/**
- * @brief Return the unpack thread to the first configuration bank after a sequence of banked custom_mm calls.
- */
 inline void llk_unpack_AB_custom_mm_bank_end() { _llk_unpack_AB_custom_mm_bank_end_(); }

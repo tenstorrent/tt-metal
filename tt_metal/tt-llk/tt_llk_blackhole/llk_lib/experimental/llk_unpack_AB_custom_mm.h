@@ -358,11 +358,8 @@ inline void _llk_unpack_AB_custom_mm_(
     _llk_unpack_AB_custom_mm_run_(cfg, address_a, address_b, block_increment, inner_increment, kt_dim, ct_dim);
 }
 
-/**
- * @brief Copy the unpacker configuration into the second bank for banked calls, unless it already holds the one keyed by
- *        key (the operands' formats, face geometry and transpose; never CUSTOM_MM_NO_BANK_KEY). Call after the init,
- *        outside a sequence.
- */
+// key names the operands' formats, face geometry and transpose; a second bank that already holds it is not copied again.
+// Call after the init, outside a sequence.
 inline void _llk_unpack_AB_custom_mm_bank_init_(const std::uint64_t key)
 {
     LLK_ASSERT(ckernel::cfg_state_id == 0, "custom_mm bank init: call outside a banked sequence");
@@ -387,10 +384,7 @@ inline void _llk_unpack_AB_custom_mm_bank_init_(const std::uint64_t key)
     }
 }
 
-/**
- * @brief Return the unpack thread to the first configuration bank after a sequence of banked calls.
- * @note Call before any other unpack LLK or init.
- */
+// Call before any other unpack LLK or init.
 inline void _llk_unpack_AB_custom_mm_bank_end_()
 {
     if (ckernel::cfg_state_id != 0)
