@@ -4,13 +4,15 @@
 This is a device-free planner.  It joins the current sweep corpus, search
 selection and (optionally) an existing validation ledger, then emits explicit
 run rosters.  It does not compile, submit jobs, or reinterpret a sampled run as
-exhaustive coverage.
+exhaustive coverage.  ``COMPLETE`` is only a count/space planning status; it is
+not source-bound correctness admission.
 
 The current unary nodes omit their format from several pytest ids.  The
 32-bit set below mirrors the format choices in test_sfpu_unary.py; every other
-paired node in that file is Float16_b.  The census assertions make a newly
-added/renamed row fail visibly instead of silently falling into the wrong
-space.
+single-variant paired node in that file is Float16_b.  Rewired exact-format
+and composite admission nodes are bound to their exact sem/hand selectors
+below so a future selector change fails visibly instead of silently claiming
+the wrong exhaustive space.
 """
 
 from __future__ import annotations
@@ -21,7 +23,6 @@ import json
 from collections import Counter
 from pathlib import Path
 
-
 TWO16 = 1 << 16
 TWO32 = 1 << 32
 
@@ -29,12 +30,51 @@ TWO32 = 1 << 32
 UNARY_32 = frozenset(
     """absint32 add1 bitwisenot castfp32tofp16a cbrt-fresh clamp-fresh comp
     digamma-fresh eqz-fresh erf-fresh erfc-fresh erfinv-fresh expm1-fresh
-    expm1cw-fresh fmod-fresh geluappx-fresh hardmish-fresh hardshrink-fresh
-    hardtanh-fresh heaviside-fresh i1-fresh rdiv remainder-fresh rpow selu
+    fmod-fresh geluappx-fresh hardmish-fresh hardtanh-fresh heaviside-fresh
+    rdiv remainder-fresh rpow selu
     sigmoid-fresh sigmoidlut-fresh sign signbit softplus-fresh softshrink-fresh
     softsign-fresh tanhderivlut-fresh unarycomp-fresh unarypower-fresh
     unaryshift-fresh xielu-fresh""".split()
 )
+
+# These selectors each compile exactly one Float16_b -> Float16_b variant.
+# Keep both arms here: exhaustive A/B/C planning is invalid if only one arm is
+# rebound while the other still exercises a different format or body.
+EXACT_BF16_UNARY_PAIRS = {
+    "expm1cw-fresh": (
+        "test_sfpu_unary.py::test_causal_lift_fresh_cpp_bf16_exact_path[Expm1Cw-fresh_cpp]",
+        "test_sfpu_unary.py::test_causal_lift_fresh_cpp_bf16_exact_path[Expm1Cw-production]",
+    ),
+    "i1-fresh": (
+        "test_sfpu_unary.py::test_causal_lift_fresh_cpp_bf16_exact_path[I1-fresh_cpp]",
+        "test_sfpu_unary.py::test_causal_lift_fresh_cpp_bf16_exact_path[I1-production]",
+    ),
+}
+
+# One pytest selector here expands to multiple format/configuration variants,
+# or the sem and hand selectors do not expand to the same variants.  A raw
+# streamer needs an explicit single-variant node before it can claim a whole
+# input space; ordinary device correctness remains useful but is not that
+# proof.
+COMPOSITE_UNARY_PAIRS = {
+    "hardshrink-fresh": (
+        "test_sfpu_unary.py::test_hardshrink_fresh_cpp_admission[fresh_cpp]",
+        "test_sfpu_unary.py::test_causal_lift_fresh_cpp[Hardshrink-production]",
+    ),
+    "relu": (
+        "test_sfpu_unary.py::test_relu_fresh_cpp_admission",
+        "test_sfpu_unary.py::test_causal_lift_fresh_cpp[ReluMax-production]",
+    ),
+}
+
+
+def require_exact_pair(op: str, row: dict[str, str], expected: tuple[str, str]) -> None:
+    actual = (row["sem_corr"], row["hand_corr"])
+    if actual != expected:
+        raise ValueError(
+            f"{op}: exhaustive format binding is stale: expected sem/hand "
+            f"{expected!r}, got {actual!r}"
+        )
 
 
 def read_corpus(path: Path) -> dict[str, dict[str, str]]:
@@ -81,6 +121,24 @@ def classify(op: str, row: dict[str, str]) -> tuple[str, str, int, int | None, s
     node = row["sem_corr"]
     test_file = node.split("::", 1)[0]
     if test_file == "test_sfpu_unary.py":
+        if op in EXACT_BF16_UNARY_PAIRS:
+            require_exact_pair(op, row, EXACT_BF16_UNARY_PAIRS[op])
+            return (
+                "unary_bf16_exhaustive",
+                "Float16_b",
+                1,
+                TWO16,
+                "explicit single-variant bf16 streamer",
+            )
+        if op in COMPOSITE_UNARY_PAIRS:
+            require_exact_pair(op, row, COMPOSITE_UNARY_PAIRS[op])
+            return (
+                "structural_unhooked",
+                "composite unary selector",
+                1,
+                None,
+                "needs matched explicit single-variant stream nodes",
+            )
         if op in UNARY_32:
             return "unary_32_exhaustive", "32-bit", 1, TWO32, "fp32 streamer"
         return "unary_bf16_exhaustive", "Float16_b", 1, TWO16, "fp32 streamer"
@@ -135,7 +193,9 @@ def plan(
         # NO_CANDIDATES rows are present in search.json for census completeness,
         # but they are not selected configurations and carry no flag profile.
         proposal = search[op].get("proposal")
-        if not isinstance(proposal, dict) or not isinstance(proposal.get("selection"), dict):
+        if not isinstance(proposal, dict) or not isinstance(
+            proposal.get("selection"), dict
+        ):
             continue
         proposal_baseline = proposal.get("frozen_baseline_flags")
         if proposal_baseline != baseline_flags:
@@ -147,7 +207,11 @@ def plan(
         prior = validation.get(op, {})
         covered = prior.get("covered")
         prior_space = prior.get("full_space")
-        complete = full_space is not None and covered == full_space and prior_space == full_space
+        complete = (
+            full_space is not None
+            and covered == full_space
+            and prior_space == full_space
+        )
         rows.append(
             {
                 "op": op,
@@ -156,7 +220,11 @@ def plan(
                 "arity": arity,
                 "full_space": full_space,
                 "covered": covered,
-                "state": "COMPLETE" if complete else ("GAP" if full_space else "NONEXHAUSTIVE"),
+                "state": (
+                    "COMPLETE"
+                    if complete
+                    else ("GAP" if full_space else "NONEXHAUSTIVE")
+                ),
                 "reason": reason,
                 "sem_node": source["sem_corr"],
                 "hand_node": source["hand_corr"],
@@ -175,15 +243,25 @@ def plan(
     unary = [row for row in rows if row["category"].startswith("unary_")]
     unknown_32 = UNARY_32 - {row["op"] for row in unary}
     if unknown_32:
-        raise ValueError(f"UNARY_32 names are not selected paired unary rows: {sorted(unknown_32)}")
+        raise ValueError(
+            f"UNARY_32 names are not selected paired unary rows: {sorted(unknown_32)}"
+        )
     return rows
 
 
 def write_outputs(out: Path, rows: list[dict]) -> None:
     out.mkdir(parents=True, exist_ok=True)
     fields = [
-        "op", "category", "input_format", "arity", "full_space", "covered",
-        "state", "reason", "sem_node", "hand_node",
+        "op",
+        "category",
+        "input_format",
+        "arity",
+        "full_space",
+        "covered",
+        "state",
+        "reason",
+        "sem_node",
+        "hand_node",
     ]
     with (out / "plan.tsv").open("w", newline="") as stream:
         writer = csv.DictWriter(
@@ -195,8 +273,16 @@ def write_outputs(out: Path, rows: list[dict]) -> None:
     counts = Counter(row["category"] for row in rows)
     states = Counter(row["state"] for row in rows)
     (out / "plan.json").write_text(
-        json.dumps({"schema_version": 1, "counts": dict(sorted(counts.items())),
-                    "states": dict(sorted(states.items())), "rows": rows}, indent=2) + "\n"
+        json.dumps(
+            {
+                "schema_version": 1,
+                "counts": dict(sorted(counts.items())),
+                "states": dict(sorted(states.items())),
+                "rows": rows,
+            },
+            indent=2,
+        )
+        + "\n"
     )
 
     run_categories = (
@@ -205,9 +291,13 @@ def write_outputs(out: Path, rows: list[dict]) -> None:
         "binary_bf16_pair_exhaustive",
     )
     for category in run_categories:
-        selected = [row for row in rows if row["category"] == category and row["state"] == "GAP"]
+        selected = [
+            row for row in rows if row["category"] == category and row["state"] == "GAP"
+        ]
         stem = category.replace("_exhaustive", "").replace("_", "-")
-        (out / f"roster-{stem}.txt").write_text("".join(f"{row['op']}\n" for row in selected))
+        (out / f"roster-{stem}.txt").write_text(
+            "".join(f"{row['op']}\n" for row in selected)
+        )
         # This is deliberately not the legacy op/sem/hand two-arm schema.  A
         # consumer must acknowledge all three profiles instead of accidentally
         # running selected-sem against selected-hand and calling that a compiler
@@ -215,17 +305,26 @@ def write_outputs(out: Path, rows: list[dict]) -> None:
         with (out / f"tri-ops-{stem}.tsv").open("w", newline="") as stream:
             writer = csv.writer(stream, delimiter="\t", lineterminator="\n")
             writer.writerow(
-                ["op", "a_selected_sem_node", "b_baseline_sem_node", "c_baseline_hand_node"]
+                [
+                    "op",
+                    "a_selected_sem_node",
+                    "b_baseline_sem_node",
+                    "c_baseline_hand_node",
+                ]
             )
             writer.writerows(
                 [
-                    row["op"], row["a_selected_sem_node"],
-                    row["b_baseline_sem_node"], row["c_baseline_hand_node"],
+                    row["op"],
+                    row["a_selected_sem_node"],
+                    row["b_baseline_sem_node"],
+                    row["c_baseline_hand_node"],
                 ]
                 for row in selected
             )
 
-    feasible = [row for row in rows if row["full_space"] is not None and row["state"] == "GAP"]
+    feasible = [
+        row for row in rows if row["full_space"] is not None and row["state"] == "GAP"
+    ]
     (out / "selected-flags.tsv").write_text(
         "".join(f"{row['op']}\t{row['selected_flags']}\n" for row in feasible)
     )
@@ -233,10 +332,16 @@ def write_outputs(out: Path, rows: list[dict]) -> None:
         "".join(f"{row['op']}\t{row['baseline_flags']}\n" for row in feasible)
     )
     tri_fields = [
-        "op", "category", "full_space", "state",
-        "a_selected_sem_node", "selected_flags",
-        "b_baseline_sem_node", "baseline_flags",
-        "c_baseline_hand_node", "c_baseline_flags",
+        "op",
+        "category",
+        "full_space",
+        "state",
+        "a_selected_sem_node",
+        "selected_flags",
+        "b_baseline_sem_node",
+        "baseline_flags",
+        "c_baseline_hand_node",
+        "c_baseline_flags",
     ]
     with (out / "tri-profiles.tsv").open("w", newline="") as stream:
         writer = csv.DictWriter(
@@ -248,10 +353,18 @@ def write_outputs(out: Path, rows: list[dict]) -> None:
         )
         writer.writeheader()
         writer.writerows(feasible)
-    class_rows = [row for row in rows if row["category"] in {"binary_nonexhaustive", "ternary_bf16_nonexhaustive"}]
-    (out / "roster-class-stratified.txt").write_text("".join(f"{row['op']}\n" for row in class_rows))
+    class_rows = [
+        row
+        for row in rows
+        if row["category"] in {"binary_nonexhaustive", "ternary_bf16_nonexhaustive"}
+    ]
+    (out / "roster-class-stratified.txt").write_text(
+        "".join(f"{row['op']}\n" for row in class_rows)
+    )
     structural = [row for row in rows if row["category"] == "structural_unhooked"]
-    (out / "roster-structural.txt").write_text("".join(f"{row['op']}\n" for row in structural))
+    (out / "roster-structural.txt").write_text(
+        "".join(f"{row['op']}\n" for row in structural)
+    )
 
 
 def main() -> int:
@@ -265,10 +378,18 @@ def main() -> int:
         parser.error(f"output directory is not empty: {args.out}")
     search, baseline_flags = read_search(args.search)
     rows = plan(
-        read_corpus(args.corpus), search, read_validation(args.validation), baseline_flags
+        read_corpus(args.corpus),
+        search,
+        read_validation(args.validation),
+        baseline_flags,
     )
     write_outputs(args.out, rows)
-    print(f"planned={len(rows)} " + " ".join(f"{k}={v}" for k, v in sorted(Counter(r['state'] for r in rows).items())))
+    print(
+        f"planned={len(rows)} "
+        + " ".join(
+            f"{k}={v}" for k, v in sorted(Counter(r["state"] for r in rows).items())
+        )
+    )
     return 0
 
 

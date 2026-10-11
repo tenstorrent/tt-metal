@@ -2,13 +2,13 @@ name: SFPI verification host selftests
 on:
   pull_request:
     paths:
-      - 'tt_metal/tt-llk/tests/corpus/tools/**'
+      - 'tt_metal/tt-llk/tests/corpus/**'
       - 'tt_metal/tt-llk/tests/helpers/include/fresh_cpp/**'
       - 'tt_metal/tt-llk/tests/python_tests/**'
       - '.github/workflows/sfpi-verification-host.yml'
   push:
     paths:
-      - 'tt_metal/tt-llk/tests/corpus/tools/**'
+      - 'tt_metal/tt-llk/tests/corpus/**'
       - 'tt_metal/tt-llk/tests/helpers/include/fresh_cpp/**'
       - 'tt_metal/tt-llk/tests/python_tests/**'
       - '.github/workflows/sfpi-verification-host.yml'
