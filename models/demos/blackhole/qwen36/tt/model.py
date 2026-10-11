@@ -4189,6 +4189,16 @@ class Qwen36Model:
             self._write_gdn_slot(slot, rec, conv)
         # A full permutation touches every row, so one remap compiles every gather program.
         self._remap_gdn_slots(list(range(self.args.max_batch_size))[::-1])
+        # The same under the PACKED conv format (what decode runs with once a decode op is active): the direct packed
+        # slot write and the packed remap use different programs (embedding -> TILE, 5D slice_write, ...) that must be
+        # compiled / allocated before any trace is captured, else their device buffers land behind a captured trace.
+        prevs = [dn.warmup_enter_packed() for dn in dn_states]
+        if any(p is not None for p in prevs):
+            for slot in range(self.args.max_batch_size):
+                self._write_gdn_slot(slot, rec, conv)
+            self._remap_gdn_slots(list(range(self.args.max_batch_size))[::-1])
+            for dn, p in zip(dn_states, prevs):
+                dn.warmup_exit_packed(p)
         ttnn.synchronize_device(self.mesh_device)
         self._gdn_slot_ops_warmed = True
 

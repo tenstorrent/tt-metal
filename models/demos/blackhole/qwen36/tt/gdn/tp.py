@@ -1009,8 +1009,9 @@ class TPGatedDeltaNet:
         key = tuple(idx)
         holder = self.tt_ccl if self.tt_ccl is not None else self
         cache = holder.__dict__.setdefault("_qwen36_gdn_remap_cache", {})
-        if key not in cache:
-            cache.clear()  # only the current remap's table is live (every layer reuses it)
+        # ONE persistent device table (allocated at warmup, before any trace capture), refreshed IN PLACE per distinct
+        # remap: a table allocated lazily after the traces were captured can land on memory a trace replay overwrites.
+        if cache.get("key") != key:
             nck = 2 * (self.Dk // 32) + self.Dv // 32
             zero = Bm * Nv * 4 * 32
             r = torch.arange(32)
@@ -1026,24 +1027,52 @@ class TPGatedDeltaNet:
             ]
             m = ok[:, None, None, :] & (sl[None, None, :, None] >= 1)
             tbl = torch.where(m, src, torch.full_like(src, zero))
-            cache[key] = ttnn.from_torch(
+            host = ttnn.from_torch(
                 tbl.reshape(1, -1).to(torch.int32),
                 dtype=ttnn.uint32,
                 layout=ttnn.ROW_MAJOR_LAYOUT,
-                device=self.mesh,
                 mesh_mapper=ttnn.ReplicateTensorToMesh(self.mesh),
-                memory_config=ttnn.DRAM_MEMORY_CONFIG,
             )
+            if "dev" not in cache:
+                cache["dev"] = ttnn.from_torch(
+                    tbl.reshape(1, -1).to(torch.int32),
+                    dtype=ttnn.uint32,
+                    layout=ttnn.ROW_MAJOR_LAYOUT,
+                    device=self.mesh,
+                    mesh_mapper=ttnn.ReplicateTensorToMesh(self.mesh),
+                    memory_config=ttnn.DRAM_MEMORY_CONFIG,
+                )
+            else:
+                ttnn.copy_host_to_device_tensor(host, cache["dev"])
+            cache["key"] = key
         packed = self._ensure_conv_hist_packed()
         rm = ttnn.to_layout(packed, ttnn.ROW_MAJOR_LAYOUT, memory_config=ttnn.DRAM_MEMORY_CONFIG)
         w = ttnn.reshape(rm, (Bm * Nv * 4 * 32, 32))
         w = ttnn.concat([w, tab["zero_row"]], dim=0, memory_config=ttnn.DRAM_MEMORY_CONFIG)
-        out = ttnn.embedding(cache[key], w, layout=ttnn.TILE_LAYOUT)
+        out = ttnn.embedding(cache["dev"], w, layout=ttnn.TILE_LAYOUT)
         ttnn.deallocate(w)
         out = ttnn.reshape(out, (Bm, Nv, 4, 32, 32))
         ttnn.copy(out, packed)
         ttnn.deallocate(out)
         ttnn.deallocate(rm)
+
+    def warmup_enter_packed(self):
+        """Warmup only (before any trace capture): make the packed history the authoritative format so the packed slot
+        write / packed remap programs (embedding -> TILE, 5D slice_write, ...) get compiled and their device-side
+        program/kernel buffers allocated NOW instead of lazily after the traces were captured. Returns the previous
+        conv format tag for warmup_exit_packed, or None when this layer has no packed path."""
+        if not (self._hist_hook_active() and self._decode_B > 1 and self._needed_conv_fmt(self._decode_B) == "packed"):
+            return None
+        prev = self._conv_fmt
+        self._pack_conv_hist()
+        self._conv_fmt = "packed"
+        return prev
+
+    def warmup_exit_packed(self, prev):
+        if prev is None:
+            return
+        self._unpack_conv_hist()
+        self._conv_fmt = "both" if prev == "both" else "hist"
 
     def _ensure_rm_hist_valid(self):
         """Before any non-decode reader/writer of the RM history / conv_states: when the packed history is the
