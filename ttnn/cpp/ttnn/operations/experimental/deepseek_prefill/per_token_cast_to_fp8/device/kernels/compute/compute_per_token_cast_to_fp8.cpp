@@ -17,6 +17,11 @@
 
 #include <cstdint>
 
+// Chunks (128 columns each) per work unit on the count-aware TILE FAST_1X32 path; 1 everywhere else.
+#ifndef Q_UNIT
+#define Q_UNIT 1
+#endif
+
 #include "api/compute/common.h"
 #include "api/compute/reduce.h"
 #include "api/compute/reconfig_data_format.h"
@@ -32,6 +37,7 @@
 #include "api/compute/eltwise_unary/identity.h"
 #include "api/dataflow/circular_buffer.h"
 #include "ttnn/cpp/ttnn/kernel_lib/tilize_helpers.hpp"
+#include "ttnn/cpp/ttnn/operations/experimental/deepseek_prefill/per_token_cast_to_fp8/device/kernels/compute/pow2_inv_scale_sfpu.hpp"
 
 #ifdef TRISC_MATH
 namespace ckernel::sfpu {
@@ -114,42 +120,6 @@ inline void abs_max4_tile(uint32_t idst) {
     SFPU_UNARY_CALL(DST_SYNC_MODE, DST_ACCUM_MODE, calculate_abs_max4, (8 /* ITERATIONS */), idst, VectorMode::RC);
 }
 
-namespace ckernel::sfpu {
-
-// 1x32 pow2 scale from a row-max tile, in one pass on column 0: with
-// scale = 2^e = 2^ceil(log2(max(amax, clamp_min) / 448)), write the exact 1/scale = 2^-e in place. The column-
-// broadcast multiply takes it as is; the writer recovers the scale bits as (254 << 23) - (1/scale bits).
-template <int ITERATIONS = 8>
-inline void calculate_pow2_inv_scale(uint32_t clamp_min_bits, uint32_t inv_448_bits) {
-    const sfpi::vFloat clamp_min = Converter::as_float(clamp_min_bits);
-    const sfpi::vFloat inv_448 = Converter::as_float(inv_448_bits);
-    for (int d = 0; d < ITERATIONS; ++d) {
-        sfpi::vFloat v = sfpi::dst_reg[0];
-        v_if(v < clamp_min) { v = clamp_min; }
-        v_endif;
-        v = v * inv_448;
-        sfpi::vInt e = sfpi::exexp(v, sfpi::ExponentMode::Biased);
-        v_if(sfpi::setexp(v, 127) != 1.0f) { e = e + 1; }
-        v_endif;
-        sfpi::dst_reg[0] = sfpi::setexp(sfpi::vFloat(1.0f), 254 - e);
-        sfpi::dst_reg++;
-    }
-}
-
-}  // namespace ckernel::sfpu
-
-// Column 0 lives in faces 0 and 2, so VectorMode::C (the left faces) covers it at half the work.
-inline void pow2_inv_scale_tile(uint32_t idst, uint32_t clamp_min_bits, uint32_t inv_448_bits) {
-    SFPU_UNARY_CALL(
-        DST_SYNC_MODE,
-        DST_ACCUM_MODE,
-        calculate_pow2_inv_scale,
-        (8 /* ITERATIONS */),
-        idst,
-        VectorMode::C,
-        clamp_min_bits,
-        inv_448_bits);
-}
 #endif
 
 void kernel_main() {
@@ -435,7 +405,12 @@ void kernel_main() {
     constexpr uint32_t cb_src_id = cb_tile_id;
 #endif
     CircularBuffer cb_src(cb_src_id);
-    for (uint32_t blk = 0; blk < num_blocks; ++blk) {
+    // num_blocks counts units of Q_UNIT chunks; each chunk's e4m3 rows land at its column of a Q_UNIT * 4 tile wide
+    // output row, so the writer moves one Q_UNIT * 128 B run per row.
+    constexpr uint32_t unit_tiles = Q_UNIT * tiles_per_block;
+    for (uint32_t unit = 0; unit < num_blocks; ++unit) {
+        cb_output_e4m3.reserve_back(unit_tiles);
+        for (uint32_t chunk = 0; chunk < Q_UNIT; ++chunk) {
 #if defined(INPUT_TILE_LAYOUT) && !defined(DIRECT_SRC)
         reconfig_data_format_srca(cb_in_id);
         pack_reconfig_data_format(cb_tile_id);
@@ -515,8 +490,7 @@ void kernel_main() {
         cb_inv_scale_tiles.wait_front(tiles_per_block);
         reconfig_data_format(cb_src_id, cb_inv_scale_tiles_id);
         mul_bcast_cols_init(cb_src_id, cb_inv_scale_tiles_id);
-        pack_untilize_dest_init<tiles_per_block, tiles_per_block>(cb_output_e4m3_id);
-        cb_output_e4m3.reserve_back(tiles_per_block);
+        pack_untilize_dest_init<tiles_per_block, unit_tiles>(cb_output_e4m3_id);
         tile_regs_acquire();
         for (uint32_t k = 0; k < tiles_per_block; ++k) {
             mul_tiles_bcast_cols(cb_src_id, cb_inv_scale_tiles_id, k, k, k);
@@ -529,12 +503,13 @@ void kernel_main() {
         }
         tile_regs_commit();
         tile_regs_wait();
-        pack_untilize_dest<tiles_per_block>(cb_output_e4m3_id);
+        pack_untilize_dest<tiles_per_block, unit_tiles>(cb_output_e4m3_id, 1, chunk);
         tile_regs_release();
         pack_untilize_uninit(cb_output_e4m3_id);
-        cb_output_e4m3.push_back(tiles_per_block);
         cb_src.pop_front(tiles_per_block);
         cb_inv_scale_tiles.pop_front(tiles_per_block);
+        }
+        cb_output_e4m3.push_back(unit_tiles);
     }
 #else
     for (uint32_t blk = 0; blk < num_blocks; ++blk) {

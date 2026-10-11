@@ -18,6 +18,11 @@
 
 #include <cstdint>
 
+// Chunks (128 columns each) per work unit on the count-aware TILE FAST_1X32 path; 1 everywhere else.
+#ifndef Q_UNIT
+#define Q_UNIT 1
+#endif
+
 #include "api/dataflow/dataflow_api.h"
 #include "api/core_local_mem.h"
 #include "api/dataflow/circular_buffer.h"
@@ -163,7 +168,7 @@ void kernel_main() {
         ca_experts_per_chip,
         ca_max_rows,
         tile_h,
-        chunks_per_row,
+        chunks_per_row / Q_UNIT,  // units per row
         core_id,
         ca_num_cores);
     const uint32_t block_offset = range.first_block;
@@ -322,9 +327,13 @@ void kernel_main() {
     uint32_t current_row_tile = NO_ROW_TILE_OPEN;
     uint32_t output_row_base = 0, real_rows = 0, owned_first_col = 0, owned_last_col = 0;
 
+    // A unit is Q_UNIT consecutive chunks of one tile-row: one write of Q_UNIT * 128 bytes per row.
+    constexpr uint32_t units_per_row = chunks_per_row / Q_UNIT;
+    constexpr uint32_t unit_scale_tiles = Q_UNIT * chunk_scale_blocks;
+    constexpr uint32_t unit_row_bytes = Q_UNIT * output_e4m3_block_bytes;
     for (uint32_t global_block = block_offset; global_block < global_block_end; ++global_block) {
-        const uint32_t row_tile = global_block / chunks_per_row;
-        const uint32_t col_block = global_block % chunks_per_row;
+        const uint32_t row_tile = global_block / units_per_row;
+        const uint32_t col_block = (global_block % units_per_row) * Q_UNIT;  // first chunk of the unit
 
         if (row_tile != current_row_tile) {
             if (current_row_tile != NO_ROW_TILE_OPEN) {
@@ -339,15 +348,19 @@ void kernel_main() {
             current_row_tile = row_tile;
             owned_first_col = col_block;
         }
-        owned_last_col = col_block;
+        owned_last_col = col_block + Q_UNIT - 1;
 
-        cb_output_e4m3_obj.wait_front(tiles_per_block);
-        cb_scale_tiles_obj.wait_front(chunk_scale_blocks);
-        for (uint32_t sb = 0; sb < chunk_scale_blocks; ++sb) {
+        cb_output_e4m3_obj.wait_front(Q_UNIT * tiles_per_block);
+        cb_scale_tiles_obj.wait_front(unit_scale_tiles);
+        for (uint32_t st = 0; st < unit_scale_tiles; ++st) {
             extract_first_column<face_h, face_w, FACE_ROWS, FACE_ROW_STRIDE>(
                 reinterpret_cast<volatile tt_l1_ptr uint32_t*>(
-                    cb_scale_tiles_obj.get_read_ptr() + sb * get_tile_size(cb_scale_tiles)),
-                block_scales[sb]);
+                    cb_scale_tiles_obj.get_read_ptr() + st * get_tile_size(cb_scale_tiles)),
+                block_scales[0]);
+            for (uint32_t row_in_tile = 0; row_in_tile < real_rows; ++row_in_tile) {
+                tok[row_in_tile * scale_page_words + col_block * chunk_scale_blocks + st] =
+                    block_scales[0][row_in_tile];
+            }
         }
 
         const uint32_t col_byte_offset = col_block * block_w;
@@ -355,17 +368,13 @@ void kernel_main() {
             noc.async_write(
                 cb_output_e4m3_obj,
                 output_e4m3,
-                output_e4m3_block_bytes,
-                {.offset_bytes = row_in_tile * output_e4m3_block_bytes},
+                unit_row_bytes,
+                {.offset_bytes = row_in_tile * unit_row_bytes},
                 {.page_id = output_row_base + row_in_tile, .offset_bytes = col_byte_offset});
-            for (uint32_t sb = 0; sb < chunk_scale_blocks; ++sb) {
-                tok[row_in_tile * scale_page_words + col_block * chunk_scale_blocks + sb] =
-                    block_scales[sb][row_in_tile];
-            }
         }
         noc.async_write_barrier();  // drain e4m3 writes before the CB page is reused
-        cb_output_e4m3_obj.pop_front(tiles_per_block);
-        cb_scale_tiles_obj.pop_front(chunk_scale_blocks);
+        cb_output_e4m3_obj.pop_front(Q_UNIT * tiles_per_block);
+        cb_scale_tiles_obj.pop_front(unit_scale_tiles);
     }
 
     if (current_row_tile != NO_ROW_TILE_OPEN) {

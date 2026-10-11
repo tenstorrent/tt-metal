@@ -24,7 +24,8 @@ ttnn::Tensor per_token_cast_back(
     uint32_t scale_block_w,
     bool scales_in_row_tail,
     bool per_row_scale,
-    bool tile_output) {
+    bool tile_output,
+    uint32_t row_segments) {
     const auto dtype = output_dtype.value_or(tt::tt_metal::DataType::BFLOAT16);
     const auto mem_config = memory_config.value_or(input_e4m3.memory_config());
 
@@ -54,7 +55,8 @@ ttnn::Tensor per_token_cast_back(
             scale_block_w,
             /*scales_in_row_tail=*/true,
             per_row_scale,
-            tile_output);
+            tile_output,
+            row_segments);
     }
     if (!token_count_aware) {
         TT_FATAL(

@@ -20,7 +20,8 @@ std::tuple<ttnn::Tensor, ttnn::Tensor> per_token_cast_to_fp8(
     const std::optional<ttnn::Tensor>& global_expert_idx_table,
     uint32_t experts_per_chip,
     bool pack_scales_in_row,
-    bool per_row_scale) {
+    bool per_row_scale,
+    uint32_t packed_row_align) {
     return ttnn::prim::per_token_cast_to_fp8(
         input_tensor,
         memory_config.value_or(input_tensor.memory_config()),
@@ -33,7 +34,8 @@ std::tuple<ttnn::Tensor, ttnn::Tensor> per_token_cast_to_fp8(
         global_expert_idx_table,
         experts_per_chip,
         pack_scales_in_row,
-        per_row_scale);
+        per_row_scale,
+        packed_row_align);
 }
 
 }  // namespace ttnn::operations::experimental::deepseek_prefill::per_token_cast_to_fp8

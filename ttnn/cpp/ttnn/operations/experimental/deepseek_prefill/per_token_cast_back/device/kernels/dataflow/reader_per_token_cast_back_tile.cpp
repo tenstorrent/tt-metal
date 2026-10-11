@@ -30,12 +30,16 @@ void kernel_main() {
     constexpr uint32_t cb_scale_scratch = get_compile_time_arg_val(6);
     constexpr uint32_t G = get_compile_time_arg_val(7);  // tiles per unit
     constexpr uint32_t Wt = get_compile_time_arg_val(8);
-    constexpr uint32_t H = get_compile_time_arg_val(9);  // e4m3 bytes per row; the scales start here
+    constexpr uint32_t H = get_compile_time_arg_val(9);  // e4m3 bytes per row (all segments)
     constexpr uint32_t experts_per_chip = get_compile_time_arg_val(10);
     constexpr uint32_t max_rows = get_compile_time_arg_val(11);
     constexpr uint32_t num_cores = get_compile_time_arg_val(12);
     constexpr uint32_t scale_slot_bytes = get_compile_time_arg_val(13);
-    constexpr auto input_args = TensorAccessorArgs<14>();
+    // Row = segments of [seg_tiles * 32 e4m3 | seg_tiles fp32 scales (| pad)], seg_bytes each (one segment: the
+    // plain [H e4m3 | H/32 scales] row). A unit never straddles a segment.
+    constexpr uint32_t seg_bytes = get_compile_time_arg_val(14);
+    constexpr uint32_t seg_tiles = get_compile_time_arg_val(15);
+    constexpr auto input_args = TensorAccessorArgs<16>();
     constexpr auto region_args = TensorAccessorArgs<input_args.next_compile_time_args_offset()>();
     constexpr auto counts_args = TensorAccessorArgs<region_args.next_compile_time_args_offset()>();
     constexpr auto table_args = TensorAccessorArgs<counts_args.next_compile_time_args_offset()>();
@@ -91,9 +95,12 @@ void kernel_main() {
     uint32_t unit_col = range.first_block % units_per_row;
     for (uint32_t u = 0; u < range.num_blocks; ++u) {
         const uint32_t row0 = tile_row * TILE_H;
-        const uint32_t col_bytes = unit_col * unit_row_bytes;
-        // The unit's G scales sit at byte H + 4 * G * unit_col: read the 64-B aligned window holding them.
-        const uint32_t scale_first = H + unit_col * G * 4;
+        const uint32_t tile0 = unit_col * G;
+        const uint32_t seg = tile0 / seg_tiles;
+        const uint32_t in_seg = tile0 - seg * seg_tiles;
+        const uint32_t col_bytes = seg * seg_bytes + in_seg * 32;
+        // The unit's G scales follow its segment's e4m3 bytes: read the 64-B aligned window holding them.
+        const uint32_t scale_first = seg * seg_bytes + seg_tiles * 32 + in_seg * 4;
         const uint32_t scale_window = scale_first & ~(DRAM_ALIGN - 1);
         const uint32_t scale_skip_words = (scale_first - scale_window) / 4;
         const uint32_t scale_read_bytes = (scale_first - scale_window + G * 4 + DRAM_ALIGN - 1) & ~(DRAM_ALIGN - 1);

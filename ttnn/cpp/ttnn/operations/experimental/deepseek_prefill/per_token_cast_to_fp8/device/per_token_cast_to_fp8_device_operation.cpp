@@ -8,6 +8,7 @@
 #include <limits>
 
 #include <tt-metalium/constants.hpp>
+#include <tt-metalium/math.hpp>
 #include <tt_stl/small_vector.hpp>
 
 #include "ttnn/device_operation.hpp"
@@ -167,6 +168,9 @@ PerTokenCastToFp8DeviceOperation::spec_return_value_t PerTokenCastToFp8DeviceOpe
     auto e4m3_shape = input_shape;
     if (attrs.pack_scales_in_row) {
         e4m3_shape[-1] = input_shape[-1] + (attrs.per_row_scale ? 64u : 4 * (input_shape[-1] / attrs.scale_block_w));
+        if (attrs.packed_row_align > 1) {
+            e4m3_shape[-1] = tt::round_up(static_cast<uint32_t>(e4m3_shape[-1]), attrs.packed_row_align);
+        }
     }
     tt::tt_metal::TensorSpec output_e4m3_spec(
         e4m3_shape,
@@ -232,7 +236,8 @@ std::tuple<ttnn::Tensor, ttnn::Tensor> per_token_cast_to_fp8(
     const std::optional<Tensor>& global_expert_idx_table,
     uint32_t experts_per_chip,
     bool pack_scales_in_row,
-    bool per_row_scale) {
+    bool per_row_scale,
+    uint32_t packed_row_align) {
     using OperationType = ttnn::experimental::prim::per_token_cast_to_fp8::PerTokenCastToFp8DeviceOperation;
     auto operation_attributes = OperationType::operation_attributes_t{
         .output_memory_config = output_memory_config,
@@ -242,7 +247,8 @@ std::tuple<ttnn::Tensor, ttnn::Tensor> per_token_cast_to_fp8(
         .token_count_aware = token_count_aware,
         .experts_per_chip = experts_per_chip,
         .pack_scales_in_row = pack_scales_in_row,
-        .per_row_scale = per_row_scale};
+        .per_row_scale = per_row_scale,
+        .packed_row_align = packed_row_align};
     auto tensor_args = OperationType::tensor_args_t{
         .input_tensor = input_tensor,
         .expert_region_offsets = expert_region_offsets,

@@ -43,5 +43,6 @@ std::tuple<ttnn::Tensor, ttnn::Tensor> per_token_cast_to_fp8(
     const std::optional<Tensor>& global_expert_idx_table = std::nullopt,
     uint32_t experts_per_chip = 0,
     bool pack_scales_in_row = false,
-    bool per_row_scale = false);
+    bool per_row_scale = false,
+    uint32_t packed_row_align = 0);
 }  // namespace ttnn::prim

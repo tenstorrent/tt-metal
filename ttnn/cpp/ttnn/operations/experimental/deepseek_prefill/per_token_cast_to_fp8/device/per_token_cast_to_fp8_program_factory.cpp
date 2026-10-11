@@ -144,9 +144,10 @@ KernelIds build_kernels_and_cbs(
     // TILE input: the reader reads the tiles_per_block tiles individually into these pages.
     // Per-row scale: the reader keeps whole column segments resident (both passes read them); even rows go to
     // cb_in and odd rows to c_21 (the compute holds rows k and k+1 at once), two segments each.
+    const uint32_t q_unit = defines.contains("Q_UNIT") ? std::stoul(defines.at("Q_UNIT")) : 1u;
     const uint32_t in_block_tiles = attrs.per_row_scale
                                         ? (chunks_per_row / std::stoul(defines.at("PR_SEGMENTS"))) * tiles_per_block
-                                        : tiles_per_block;
+                                        : q_unit * tiles_per_block;
     CircularBufferConfig cb_in_cfg = CircularBufferConfig(2 * in_block_tiles * in_tile_bytes, {{cb_in_idx, input_df}})
                                          .set_page_size(cb_in_idx, in_tile_bytes);
     CreateCircularBuffer(program, all_cores, cb_in_cfg);
@@ -172,8 +173,12 @@ KernelIds build_kernels_and_cbs(
             CircularBufferConfig(num_tiles * bytes, {{cb_idx, DataFormat::Float16_b}}).set_page_size(cb_idx, bytes);
         CreateCircularBuffer(program, all_cores, cfg);
     };
-    make_fp32_tile_cb(cb_abs_idx, 2 * block_wt);                                // abs tiles for one block row
-    make_scale_tile_cb(cb_scale_tiles_idx, 2 * block_ht * chunk_scale_blocks);  // col0 = scale (FAST: 1/scale)
+    if (fast_1x32 && defines.contains("DIRECT_SRC")) {
+        make_scale_tile_cb(cb_abs_idx, 2 * block_wt);  // |x| of bf16 / bf8_b input is exact in bf16
+    } else {
+        make_fp32_tile_cb(cb_abs_idx, 2 * block_wt);  // abs tiles for one block row
+    }
+    make_scale_tile_cb(cb_scale_tiles_idx, 2 * q_unit * block_ht * chunk_scale_blocks);  // col0 = scale (FAST: 1/scale)
     if (attrs.per_row_scale) {
         const uint32_t segments = std::stoul(defines.at("PR_SEGMENTS"));
         make_fp32_tile_cb(CBIndex::c_2, 2);                           // folded max|x| tile of one segment
@@ -189,7 +194,7 @@ KernelIds build_kernels_and_cbs(
     // cb_output_e4m3: e4m3 output, always row-major, one tile per page, double-buffered.
     // Identical for both input layouts (ROW_MAJOR and TILE).
     CircularBufferConfig cb_output_e4m3_cfg =
-        CircularBufferConfig(2 * tiles_per_block * output_e4m3_page_bytes, {{cb_output_e4m3_idx, fp8_df}})
+        CircularBufferConfig(2 * q_unit * tiles_per_block * output_e4m3_page_bytes, {{cb_output_e4m3_idx, fp8_df}})
             .set_page_size(cb_output_e4m3_idx, output_e4m3_page_bytes);
     CreateCircularBuffer(program, all_cores, cb_output_e4m3_cfg);
 
@@ -215,7 +220,7 @@ KernelIds build_kernels_and_cbs(
              num_cores_total,
              attrs.experts_per_chip,
              M,
-             attrs.per_row_scale ? 1u : chunks_per_row});  // per-row: the work unit is a whole tile-row
+             attrs.per_row_scale ? 1u : chunks_per_row / q_unit});  // units per row; per-row: a whole tile-row
         TensorAccessorArgs(tensor_args.expert_region_offsets->buffer()).append_to(reader_ct_args);
         TensorAccessorArgs(tensor_args.expert_token_counts->buffer()).append_to(reader_ct_args);
         TensorAccessorArgs(tensor_args.global_expert_idx_table->buffer()).append_to(reader_ct_args);
@@ -394,6 +399,15 @@ ttnn::device_operation::CachedProgram<PerTokenCastToFp8SharedVariables> create_p
         defines["FAST_1X32"] = "1";  // one-pass pow2 scale + 1/scale on column 0, one acquire per phase
         if (tile_layout && input.dtype() != DataType::FLOAT32) {
             defines["DIRECT_SRC"] = "1";  // bf16 / bf8_b tiles are exact in SrcA: no fp32 copy
+        }
+        if (tile_layout && attrs.token_count_aware) {
+            // Wide units: up to 7 chunks (896 columns) of one tile-row per unit, so the writer moves one long run
+            // per row instead of a 128-B write per chunk (the standalone quantize was bound by those writes).
+            uint32_t q_unit = 7;
+            while (chunks_per_row % q_unit != 0) {
+                --q_unit;
+            }
+            defines["Q_UNIT"] = std::to_string(q_unit);
         }
     }
 

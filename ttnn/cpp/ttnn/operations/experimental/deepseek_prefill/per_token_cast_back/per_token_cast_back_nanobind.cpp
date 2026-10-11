@@ -73,7 +73,8 @@ void bind_experimental_per_token_cast_back_operation(nb::module_& mod) {
         nb::arg("scale_block_w") = 128,
         nb::arg("scales_in_row_tail") = false,
         nb::arg("per_row_scale") = false,
-        nb::arg("tile_output") = false);
+        nb::arg("tile_output") = false,
+        nb::arg("row_segments") = 1);
 }
 
 }  // namespace ttnn::operations::experimental::deepseek_prefill::per_token_cast_back::detail

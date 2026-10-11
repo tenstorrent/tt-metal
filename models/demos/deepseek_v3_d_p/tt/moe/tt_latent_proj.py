@@ -303,6 +303,8 @@ class TtLatentMoeProjections(LightweightModule):
         self.tp_factor = mesh_device.shape[1]
         self.tt_ccl = get_tt_ccl(mesh_device)
         self.compute_kernel_config = compute_kernel_config
+        # Persistent output of the fp8 latent all-gather (high_bw_all_gather writes into a caller-owned buffer).
+        self._fp8_gathered = None
 
         weights = self._convert_and_cache_weights(
             torch_weights,
@@ -342,7 +344,11 @@ class TtLatentMoeProjections(LightweightModule):
 
     # The tp_factor == 1 branches here and in from_latent are exercised by local runs only; every CI
     # row pins fabric2d-mesh-8x4.
-    def to_latent(self, x: ttnn.Tensor) -> ttnn.Tensor:
+    def fp8_gather_buffer(self) -> Optional[ttnn.Tensor]:
+        """The persistent buffer to_latent(fp8_block=32) returns; callers must not deallocate it."""
+        return self._fp8_gathered
+
+    def to_latent(self, x: ttnn.Tensor, fp8_block: int = 0) -> ttnn.Tensor:
         """emb_dim (replicated) -> routed_emb_dim (replicated). Runs before dispatch.
 
         ``x`` is the tensor TtMoe has already all-gathered to full ``emb_dim`` for the shared expert,
@@ -369,6 +375,48 @@ class TtLatentMoeProjections(LightweightModule):
         )
         if DEBUG_LOGGING_ENABLED:
             logger.debug(f"[LatentMoe.to_latent] after down_proj: {latent.shape}")
+
+        if fp8_block:
+            # Q1 on this chip's routed_emb_dim/tp slice, before the gather: 1/tp of the work, and the gather moves
+            # fp8. Rows are [slice e4m3 | slice/32 fp32 scales | pad to 64 B], so every chip's segment of the
+            # gathered row stays DRAM-read aligned for DQ1 (per_token_cast_back row_segments=tp).
+            assert fp8_block == 32, "the pre-gather fp8 latent is 1x32 only"
+            quantized, _ = ttnn.experimental.deepseek_prefill.per_token_cast_to_fp8(
+                latent,
+                memory_config=ttnn.DRAM_MEMORY_CONFIG,
+                round_scale_to_power_of_two=True,
+                round_to_nearest_even=False,
+                scale_block_w=fp8_block,
+                pack_scales_in_row=True,
+                packed_row_align=64,
+            )
+            ttnn.deallocate(latent)
+            latent = quantized
+            if self.tp_factor > 1:
+                gathered_shape = list(latent.shape)
+                gathered_shape[-1] *= self.tp_factor
+                if (
+                    self._fp8_gathered is None
+                    or list(self._fp8_gathered.shape) != gathered_shape
+                    or self._fp8_gathered.device() != latent.device()
+                ):
+                    self._fp8_gathered = ttnn.empty(
+                        gathered_shape,
+                        dtype=latent.dtype,
+                        layout=latent.layout,
+                        device=latent.device(),
+                        memory_config=ttnn.DRAM_MEMORY_CONFIG,
+                    )
+                gathered = ttnn.experimental.high_bw_all_gather(
+                    latent,
+                    dim=len(gathered_shape) - 1,
+                    output_tensor=self._fp8_gathered,
+                    cluster_axis=1,
+                    num_links=self.num_links,
+                )
+                ttnn.deallocate(latent)
+                latent = gathered
+            return latent
 
         if self.tp_factor > 1:
             latent = ttnn.experimental.all_gather_async(

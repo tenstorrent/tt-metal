@@ -44,6 +44,9 @@ _MOE_MEM_PROBE = os.environ.get("MOE_MEM_PROBE") == "1"
 # to 32-bit DEST, scaled by weight * row scale on the SFPU; 1x32 scales: 32 tokens' local slots tilized and scaled
 # with column-broadcast multiplies. MOE_FUSED_DQ2=0 or 64/128-wide scales use the standalone per_token_cast_back.
 _MOE_FUSED_DQ2 = os.environ.get("MOE_FUSED_DQ2", "1") == "1"
+# 1x32 fp8 dispatch under LatentMoE: Q1 on each chip's to_latent slice before the all-gather (MOE_Q1_PRE_GATHER=0:
+# gather bf16, then quantize the full latent).
+_MOE_Q1_PRE_GATHER = os.environ.get("MOE_Q1_PRE_GATHER", "1") == "1"
 # 1x32 DQ1 writes bf8_b tiles for the routed expert's tiled-x path (MOE_DQ1_TILE=0: bf16 rows).
 _MOE_DQ1_TILE = os.environ.get("MOE_DQ1_TILE", "1") == "1"
 # Per-token fp8 dispatch: the routed expert consumes the e4m3 rows and applies the scale to its gate/up
@@ -925,7 +928,18 @@ class TtMoe(LightweightModule):
         # ========================================
         # Outside the sub-device window below: the down-projection feeds dispatch, so it cannot
         # overlap it. x stays full-width for the shared expert, which reads the pre-projection hidden.
-        routed_x = self.latent_projections.to_latent(x) if self.use_latent_moe else x
+        # 1x32 fp8 dispatch under LatentMoE: Q1 runs inside to_latent on each chip's slice, before the all-gather
+        # (rows become tp segments [slice e4m3 | scales | pad]; DQ1 reads them with row_segments=tp).
+        q1_pre_gather = (
+            self.dispatch_fp8
+            and self.use_latent_moe
+            and self.fp8_scale_block == 32
+            and _MOE_Q1_PRE_GATHER
+            and self.latent_projections.tp_factor > 1
+        )
+        routed_x = (
+            self.latent_projections.to_latent(x, fp8_block=32 if q1_pre_gather else 0) if self.use_latent_moe else x
+        )
         if self.use_latent_moe and DEBUG_LOGGING_ENABLED:
             logger.debug(f"[TtMoe.forward] routed_x (latent) shape: {routed_x.shape}")
 
@@ -939,7 +953,7 @@ class TtMoe(LightweightModule):
                 mem_marks.append((tag, _dram_allocated_bytes(self.mesh_device) - mem_base))
 
         dispatch_input, dispatch_scales = routed_x, None
-        if self.dispatch_fp8:
+        if self.dispatch_fp8 and not q1_pre_gather:
             dispatch_input, dispatch_scales = ttnn.experimental.deepseek_prefill.per_token_cast_to_fp8(
                 routed_x,
                 memory_config=ttnn.DRAM_MEMORY_CONFIG,
@@ -1012,6 +1026,9 @@ class TtMoe(LightweightModule):
         latent_input = None
         if not self.use_latent_moe:
             routed_x = None
+        elif q1_pre_gather:
+            # routed_x is to_latent's persistent fp8 gather buffer, reused next forward: never free it.
+            routed_x = None
         elif return_intermediates:
             # to_memory_config short-circuits when the config already matches, handing back a tensor
             # that SHARES routed_x's buffer instead of copying it -- and routed_x is interleaved-DRAM
@@ -1056,6 +1073,7 @@ class TtMoe(LightweightModule):
                 None,
                 output_dtype=ttnn.bfloat8_b if dq1_tile else ttnn.bfloat16,
                 tile_output=dq1_tile,
+                row_segments=self.latent_projections.tp_factor if q1_pre_gather else 1,
                 memory_config=ttnn.DRAM_MEMORY_CONFIG,
                 scales_in_row_tail=True,
                 token_count_aware=True,

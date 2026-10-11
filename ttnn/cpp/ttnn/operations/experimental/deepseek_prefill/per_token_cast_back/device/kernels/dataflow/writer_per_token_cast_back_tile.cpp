@@ -32,9 +32,10 @@ void kernel_main() {
     // other NoC, so the reader only issues the e4m3 row reads.
     constexpr uint32_t cb_scale = get_compile_time_arg_val(table_args.next_compile_time_args_offset());
     constexpr uint32_t cb_scale_scratch = get_compile_time_arg_val(table_args.next_compile_time_args_offset() + 1);
-    constexpr uint32_t H = get_compile_time_arg_val(table_args.next_compile_time_args_offset() + 2);
-    constexpr uint32_t scale_slot_bytes = get_compile_time_arg_val(table_args.next_compile_time_args_offset() + 3);
-    constexpr auto input_args = TensorAccessorArgs<table_args.next_compile_time_args_offset() + 4>();
+    constexpr uint32_t seg_bytes = get_compile_time_arg_val(table_args.next_compile_time_args_offset() + 2);
+    constexpr uint32_t seg_tiles = get_compile_time_arg_val(table_args.next_compile_time_args_offset() + 3);
+    constexpr uint32_t scale_slot_bytes = get_compile_time_arg_val(table_args.next_compile_time_args_offset() + 4);
+    constexpr auto input_args = TensorAccessorArgs<table_args.next_compile_time_args_offset() + 5>();
     constexpr uint32_t DRAM_ALIGN = 64;
 
     const uint32_t output_addr = get_arg_val<uint32_t>(0);
@@ -76,7 +77,9 @@ void kernel_main() {
     const uint32_t scratch = scale_scratch_obj.get_write_ptr();
     auto produce_scales = [&](uint32_t unit) {
         const uint32_t row0 = (unit / units_per_row) * 32;
-        const uint32_t scale_first = H + (unit % units_per_row) * G * 4;
+        const uint32_t tile0 = (unit % units_per_row) * G;
+        const uint32_t seg = tile0 / seg_tiles;
+        const uint32_t scale_first = seg * seg_bytes + seg_tiles * 32 + (tile0 - seg * seg_tiles) * 4;
         const uint32_t scale_window = scale_first & ~(DRAM_ALIGN - 1);
         const uint32_t skip_words = (scale_first - scale_window) / 4;
         const uint32_t read_bytes = (scale_first - scale_window + G * 4 + DRAM_ALIGN - 1) & ~(DRAM_ALIGN - 1);

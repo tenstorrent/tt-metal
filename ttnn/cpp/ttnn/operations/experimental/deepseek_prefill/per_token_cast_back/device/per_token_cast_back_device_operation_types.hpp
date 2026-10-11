@@ -34,6 +34,9 @@ struct PerTokenCastBackParams {
     // Token-count-aware, 1x32 row-tail scales only: write TILE output (output_dtype BFLOAT8_B / BFLOAT16) so the
     // consumer skips its tilize; nothing is untilized here.
     bool tile_output = false;
+    // tile_output only: each row is row_segments equal segments [seg e4m3 | seg/32 fp32 scales | pad to 64 B] (a
+    // width-concat of per-chip packed slices, e.g. the all-gathered latent); 1 = one [H e4m3 | H/32 scales] row.
+    uint32_t row_segments = 1;
 };
 
 struct PerTokenCastBackInputs {

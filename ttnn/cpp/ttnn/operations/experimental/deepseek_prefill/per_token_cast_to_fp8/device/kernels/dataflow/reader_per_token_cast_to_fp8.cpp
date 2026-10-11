@@ -15,6 +15,11 @@
 
 #include <cstdint>
 
+// Chunks (128 columns each) per work unit on the count-aware TILE FAST_1X32 path; 1 everywhere else.
+#ifndef Q_UNIT
+#define Q_UNIT 1
+#endif
+
 #include "api/dataflow/dataflow_api.h"
 #include "api/core_local_mem.h"
 #include "api/dataflow/circular_buffer.h"
@@ -121,7 +126,7 @@ void kernel_main() {
         ca_experts_per_chip,
         ca_max_rows,
         tile_h,
-        ca_chunks_per_row,
+        ca_chunks_per_row,  // units per row (Q_UNIT chunks each)
         core_id,
         ca_num_cores);
     const uint32_t block_offset = range.first_block;
@@ -178,12 +183,14 @@ void kernel_main() {
     }
 #else
     const uint32_t global_block_end = block_offset + num_blocks;
+    // A unit is Q_UNIT consecutive 128-wide chunks of one tile-row (contiguous tile ids in a TILE buffer).
+    constexpr uint32_t unit_tiles = Q_UNIT * tiles_per_block;
     for (uint32_t global_block = block_offset; global_block < global_block_end; ++global_block) {
         {
             {
-                const uint32_t first_tile_id = global_block * tiles_per_block;
-                cb_in_obj.reserve_back(tiles_per_block);
-                for (uint32_t tile_idx = 0; tile_idx < tiles_per_block; ++tile_idx) {
+                const uint32_t first_tile_id = global_block * unit_tiles;
+                cb_in_obj.reserve_back(unit_tiles);
+                for (uint32_t tile_idx = 0; tile_idx < unit_tiles; ++tile_idx) {
                     noc.async_read(
                         src,
                         cb_in_obj,
@@ -192,7 +199,7 @@ void kernel_main() {
                         {.offset_bytes = tile_idx * in_tile_bytes});
                 }
                 noc.async_read_barrier();
-                cb_in_obj.push_back(tiles_per_block);
+                cb_in_obj.push_back(unit_tiles);
             }
         }
     }

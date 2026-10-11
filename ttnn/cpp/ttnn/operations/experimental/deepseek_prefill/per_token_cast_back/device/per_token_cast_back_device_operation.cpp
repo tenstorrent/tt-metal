@@ -184,10 +184,23 @@ void PerTokenCastBackDeviceOperation::validate_on_program_cache_miss(
 
     const uint32_t H_in = static_cast<uint32_t>(e4m3_shape[-1]);
     const uint32_t H_scale = static_cast<uint32_t>(scale_shape[-1]);
-    const uint32_t H = attrs.scales_in_row_tail ? (attrs.per_row_scale ? H_in - 64 : H_in * sbw / (sbw + 4)) : H_in;
+    const uint32_t H = attrs.row_segments > 1     ? attrs.row_segments * ((H_in / attrs.row_segments) / 36 * 32)
+                       : attrs.scales_in_row_tail ? (attrs.per_row_scale ? H_in - 64 : H_in * sbw / (sbw + 4))
+                                                  : H_in;
+    if (attrs.row_segments > 1) {
+        const uint32_t seg_bytes = H_in / attrs.row_segments;
+        const uint32_t seg_tiles = seg_bytes / 36;
+        TT_FATAL(
+            attrs.tile_output && seg_bytes * attrs.row_segments == H_in && seg_bytes % 64 == 0 &&
+                seg_tiles * 36 + 64 > seg_bytes,
+            "per_token_cast_back: row_segments needs tile_output and {} equal 64-B aligned packed segments, row {}",
+            attrs.row_segments,
+            H_in);
+    }
     if (attrs.scales_in_row_tail) {
         TT_FATAL(
-            (attrs.per_row_scale ? H + 64 == H_in : H * (sbw + 4) == H_in * sbw) && H % fp8::BLOCK_W == 0,
+            attrs.row_segments > 1 ||
+                ((attrs.per_row_scale ? H + 64 == H_in : H * (sbw + 4) == H_in * sbw) && H % fp8::BLOCK_W == 0),
             "per_token_cast_back: packed row width {} must be H + 4*H/{} with H % {} == 0",
             H_in,
             sbw,
@@ -245,7 +258,10 @@ void PerTokenCastBackDeviceOperation::validate_on_program_cache_hit(
 PerTokenCastBackDeviceOperation::spec_return_value_t PerTokenCastBackDeviceOperation::compute_output_specs(
     const operation_attributes_t& attrs, const tensor_args_t& tensor_args) {
     auto out_shape = tensor_args.input_e4m3.logical_shape();
-    if (attrs.scales_in_row_tail) {
+    if (attrs.row_segments > 1) {
+        const uint32_t W = static_cast<uint32_t>(out_shape[-1]);
+        out_shape[-1] = attrs.row_segments * ((W / attrs.row_segments) / 36 * 32);
+    } else if (attrs.scales_in_row_tail) {
         const uint32_t W = static_cast<uint32_t>(out_shape[-1]);
         out_shape[-1] = attrs.per_row_scale ? W - 64 : W * attrs.scale_block_w / (attrs.scale_block_w + 4);
     }
@@ -298,7 +314,8 @@ ttnn::Tensor per_token_cast_back(
     uint32_t scale_block_w,
     bool scales_in_row_tail,
     bool per_row_scale,
-    bool tile_output) {
+    bool tile_output,
+    uint32_t row_segments) {
     using OperationType = ttnn::experimental::prim::per_token_cast_back::PerTokenCastBackDeviceOperation;
     auto operation_attributes = OperationType::operation_attributes_t{
         .output_dtype = output_dtype,
@@ -310,7 +327,8 @@ ttnn::Tensor per_token_cast_back(
         .scale_block_w = scale_block_w,
         .scales_in_row_tail = scales_in_row_tail,
         .per_row_scale = per_row_scale,
-        .tile_output = tile_output};
+        .tile_output = tile_output,
+        .row_segments = row_segments};
     auto tensor_args = OperationType::tensor_args_t{
         .input_e4m3 = input_e4m3,
         .input_scale = input_scale,

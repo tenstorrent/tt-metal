@@ -67,11 +67,16 @@ PerTokenCastBackProgramFactory::cached_program_t create_tile_output_program(
 
     const auto& input_e4m3 = tensor_args.input_e4m3;
     const auto [M, row_bytes] = fold_M_H(input_e4m3.logical_shape());
-    const uint32_t H = row_bytes * 32 / 36;  // [H e4m3 | H/32 fp32]
-    const uint32_t Wt = H / 32;
-    // Wide units (28 tiles = 896 B per row read) keep the per-read overhead down; measured flat from 16 to 28.
+    // A row is row_segments segments [seg e4m3 | seg/32 fp32 scales (| pad)]; one segment = [H e4m3 | H/32 fp32].
+    const uint32_t segs = operation_attributes.row_segments;
+    const uint32_t seg_bytes = row_bytes / segs;
+    const uint32_t seg_tiles = segs > 1 ? seg_bytes / 36 : row_bytes * 32 / 36 / 32;
+    const uint32_t Wt = segs * seg_tiles;
+    const uint32_t H = Wt * 32;
+    // Wide units (28 tiles = 896 B per row read) keep the per-read overhead down; measured flat from 16 to 28. A unit
+    // never straddles a segment.
     uint32_t G = 28;
-    while (Wt % G != 0) {
+    while (seg_tiles % G != 0) {
         G -= 4;
     }
     TT_FATAL(G >= 4, "per_token_cast_back tile_output: {} tiles per row need a multiple of 4", Wt);
@@ -140,7 +145,9 @@ PerTokenCastBackProgramFactory::cached_program_t create_tile_output_program(
         operation_attributes.experts_per_chip,
         max_rows,
         num_cores,
-        scale_slot_bytes};
+        scale_slot_bytes,
+        seg_bytes,
+        seg_tiles};
     TensorAccessorArgs(src_buffer).append_to(reader_ct);
     TensorAccessorArgs(region_buffer).append_to(reader_ct);
     TensorAccessorArgs(counts_buffer).append_to(reader_ct);
@@ -173,7 +180,7 @@ PerTokenCastBackProgramFactory::cached_program_t create_tile_output_program(
     TensorAccessorArgs(region_buffer).append_to(writer_ct);
     TensorAccessorArgs(counts_buffer).append_to(writer_ct);
     TensorAccessorArgs(table_buffer).append_to(writer_ct);
-    writer_ct.insert(writer_ct.end(), {cb_scale, cb_scale_scratch_w, H, scale_slot_bytes});
+    writer_ct.insert(writer_ct.end(), {cb_scale, cb_scale_scratch_w, seg_bytes, seg_tiles, scale_slot_bytes});
     TensorAccessorArgs(src_buffer).append_to(writer_ct);
     KernelHandle writer_kernel_id = CreateKernel(
         program,

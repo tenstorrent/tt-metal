@@ -750,6 +750,65 @@ def test_count_aware_packed_tile_output(device, out_dtype):
         assert rel < 0.02
 
 
+def test_count_aware_packed_tile_output_row_segments(device):
+    """Rows that are a width-concat of per-slice packed rows (the all-gathered latent: each chip quantizes its
+    896-column slice, rows padded to 64 B): tile-output dequant with row_segments must match the reference."""
+    torch.manual_seed(8)
+    H, capacity, segs = K3_LATENT, 2048, 4
+    counts = [23 + (7 * i) % 40 for i in range(20)]
+    epc = len(counts)
+    table = [2 * s + 1 for s in range(epc)]
+    region, tok = [0] * (2 * epc), [0] * (2 * epc)
+    off = 0
+    for slot, c in enumerate(counts):
+        region[table[slot]], tok[table[slot]] = off, c
+        off += _ceil_tile(c)
+    x = torch.randn(capacity, H) * torch.pow(2.0, torch.randint(-4, 4, (capacity, H // 32)).float()).repeat_interleave(
+        32, dim=1
+    )
+    seg_w = H // segs
+    # Per-slice packed rows [seg_w e4m3 | seg_w/32 fp32 pow2 scales | pad to 1024 B], built on the host.
+    parts = []
+    for s_ in range(segs):
+        xb = x[:, s_ * seg_w : (s_ + 1) * seg_w].reshape(capacity, seg_w // 32, 32)
+        sc = torch.pow(2.0, torch.ceil(torch.log2(xb.abs().amax(-1, keepdim=True).clamp(min=1e-4) / 448.0)))
+        q = (xb / sc).to(torch.float8_e4m3fn).view(torch.uint8).reshape(capacity, seg_w)
+        pad = torch.zeros(capacity, 1024 - seg_w - 4 * (seg_w // 32), dtype=torch.uint8)
+        parts.append(torch.cat([q, sc.squeeze(-1).contiguous().view(torch.uint8), pad], dim=-1))
+    raw = torch.cat(parts, dim=-1)
+    packed_tt = ttnn.from_torch(
+        raw.view(torch.float8_e4m3fn).float(), dtype=ttnn.fp8_e4m3, layout=ttnn.ROW_MAJOR_LAYOUT, device=device
+    )
+    ca = dict(
+        token_count_aware=True,
+        expert_region_offsets=create_u32_tensor(device, region),
+        expert_token_counts=create_u32_tensor(device, tok),
+        global_expert_idx_table=create_u32_tensor(device, table),
+        experts_per_chip=epc,
+        scales_in_row_tail=True,
+        scale_block_w=32,
+    )
+    out = ttnn.to_torch(
+        ttnn.experimental.deepseek_prefill.per_token_cast_back(
+            packed_tt, None, output_dtype=ttnn.bfloat16, tile_output=True, row_segments=segs, **ca
+        )
+    ).float()
+    assert tuple(out.shape) == (capacity, H)
+    # Reference: the same per-slice quantization dequantized on the host.
+    ref = torch.zeros(capacity, H)
+    for s_ in range(segs):
+        seg = raw[:, s_ * 1024 : (s_ + 1) * 1024]
+        qb = seg[:, :seg_w].contiguous()
+        q = qb.view(torch.float8_e4m3fn).float()
+        q[(qb & 0x78) == 0] = 0.0  # the unpacker flushes e4m3 subnormals to zero
+        sc = seg[:, seg_w : seg_w + 4 * (seg_w // 32)].contiguous().view(torch.float32)
+        ref[:, s_ * seg_w : (s_ + 1) * seg_w] = q * sc.repeat_interleave(32, dim=1)
+    bad = out[:off] != ref[:off].to(torch.bfloat16).float()
+    assert not bad.any(), "segmented tile dequant mismatch"
+    rel = ((out[:off] - x[:off]).norm() / x[:off].norm()).item()
+    assert rel < 0.08, rel
+
+
 def _ref_pow2_row_scale(x_fp32):
     amax = x_fp32.abs().amax(dim=-1, keepdim=True).clamp(min=1e-4)
     return torch.pow(2.0, torch.ceil(torch.log2(amax / E4M3_MAX)))

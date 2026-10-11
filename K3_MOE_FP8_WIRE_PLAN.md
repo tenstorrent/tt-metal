@@ -21,35 +21,49 @@ Decisions already taken:
 kernel time (`scripts/run_safe_pytest.sh --profile`, `K3_PERF_ITERS=1`), median per chip. PCC from
 `test_ttnn_moe.py::test_kimi_k3_moe[...-2x4-kimi_k3-5k-pcc]`.
 
-**Status (branch `pjosipovic/k3-moe-fp8-wire`, head `0bccf554797`):**
+**Status (branch `pjosipovic/k3-moe-fp8-wire`, 2026-10-11 afternoon):**
 
 | | bf16 wire | fp8 1×32 now | Δ |
 |---|---|---|---|
-| **T_moe (traced)** | **4.97 ms** | **5.03 ms** | **+0.06 ms** |
-| dispatch | 582 µs | 544 µs | −38 |
-| combine | 417 µs | 372 µs | −45 |
+| **T_moe (traced)** | **4.97 ms** | **4.98 ms** | **+0.01 ms (level)** |
+| dispatch | 582 µs | 543 µs | −39 |
+| combine | 417 µs | 375 µs | −42 |
 | post_combine_reduce (DQ2 fused) | 196 µs | 141 µs | −55 |
-| routed expert | 2551 µs | 2544 µs | −7 (bf8_b tiles in) |
-| Q1 / Q2 / DQ1 (standalone) | — | 32 / ~125 / 90 µs | +247 |
+| routed expert | 2551 µs | 2545 µs | −6 (bf8_b tiles in) |
+| latent all-gather | 87 µs (bf16) | 67 µs (fp8, high_bw_all_gather) | −20 |
+| Q1 / Q2 / DQ1 (standalone) | — | 14 / ~106 / 91 µs | +211 |
 | final_output PCC | 0.99424 | 0.99404 | −0.0002 |
 
-The wire saves ~140 µs; the three standalone passes cost ~247 µs. Removing them is the work left.
+The wire now saves ~160 µs and the three standalone passes cost ~211 µs.
 
 **Goals, in order:**
 
 | Goal | Target | Status |
 |---|---|---|
-| **G1 (headline)** fp8 traced T_moe beats bf16 at Galaxy load | ≤ 4.80 ms, final_output PCC ≥ 0.994 | 5.03 ms, PCC met |
-| **G2** Q2 fused into the routed expert's down-proj epilogue | standalone Q2 = 0; expert ≤ +50 µs (net ≈ −75 µs) | next |
-| **G3** Q1 fused into a K3 latent matmul (quantize each chip's slice before the all-gather) | standalone Q1 = 0; the gather moves fp8 (~½ the bytes) | after G2 |
-| **G4** DQ1 | ≤ 90 µs (met); decide after G2/G3 whether to fuse it fully | standalone, emits bf8_b tiles |
-| **G5** quick wins | NoC reassignment wherever the top grid rows congest (Q2 next) | DQ1 done (110 → 90 µs) |
+| **G1 (headline)** fp8 traced T_moe beats bf16 at Galaxy load | ≤ 4.80 ms, final_output PCC ≥ 0.994 | 4.98 ms (level with bf16) |
+| **G2** Q2 | was: fused in the expert epilogue. Measured: expert +~300 µs vs ~106 µs standalone (see below), so Q2 stays standalone; target ≤ 60 µs | standalone ~106 µs; epilogue parked |
+| **G3** Q1 before the latent all-gather | Q1 on each chip's slice; fp8 gather | done: Q1 27 → 14 µs, gather 87 → 67 µs |
+| **G4** DQ1 | ≤ 90 µs; full fusion only with a shared-tilize expert | 91 µs, reads the segmented rows |
+| **G5** quick wins | NoC reassignment where the top grid rows congest | DQ1 110 → 90, Q2 125 → 104 µs |
 | **G6** docs and Galaxy | this doc current; then the 8×4 Galaxy run (§5 P5) | LB only so far |
 
 Out of scope until G1 is decided: e8m0 (1-byte) scales, 1×128 comparisons, the 1D-fabric sparse-mcast
 dispatch (measured in §1.3a, not the shipped topology).
 
-**G2 design (Q2 in the expert epilogue).** With 1×32 scales a block is one row of one output tile, so each
+**G2 finding (2026-10-11): the epilogue loses.** It was built (`out_packed_fp8` expert mode, parked as
+`k3_scratch/g2_q2_epilogue.patch`) and runs, but the expert grows by ~300 µs. 32-bit DEST alone costs ~20 µs. The
+rest is grid shape: an expert gets 60–120 tokens (3–4 tile-rows), so only expert core-rows 0–2 hold real rows;
+they quantize one 11-tile row for each of the 28 experts (~7 µs each, ~200 µs per core), and the column weight
+multicast waits for them. Standalone Q2 spreads the same tiles over all 130 cores. The epilogue would need to
+cost < ~250 cycles per tile (it is ~880) or overlap the next expert's matmul.
+
+**G3 as built.** `to_latent(x, fp8_block=32)` quantizes its 896-column slice with `per_token_cast_to_fp8(...,
+pack_scales_in_row=True, packed_row_align=64)` (rows `[896 e4m3 | 112 B scales | 16 B pad]` = 1024 B) and gathers
+them with `high_bw_all_gather` into a persistent buffer. Dispatch rows are 4096 B (+1.6%). DQ1 reads them with
+`per_token_cast_back(..., tile_output=True, row_segments=tp)`. The pad keeps each segment 64-B aligned for
+Blackhole DRAM reads. `MOE_Q1_PRE_GATHER=0` restores the bf16 gather + full-latent Q1.
+
+**G2 design (Q2 in the expert epilogue, as originally planned).** With 1×32 scales a block is one row of one output tile, so each
 expert core quantizes its own down-proj output tiles with no cross-core exchange: |x| → FPU row-max reduce →
 one SFPU pass on column 0 for the exact pow2 1/scale → column-broadcast multiply → pack_untilize to e4m3 rows.
 The writer writes the core's 11-tile slice of each row (352 B) and its 11 scales (44 B). Blackhole DRAM writes
