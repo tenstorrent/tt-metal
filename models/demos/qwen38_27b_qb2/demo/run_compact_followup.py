@@ -6,6 +6,7 @@ import argparse
 import copy
 import hashlib
 import json
+import math
 import signal
 import subprocess
 import time
@@ -23,6 +24,18 @@ from models.demos.qwen38_27b_qb2.tests.sweep_recovery import normalized_configur
 
 POLICY = "precision_single_step_compact_gdn_bfp8_all.json"
 MODEL_PREFIX = "models/demos/qwen38_27b_qb2/"
+GPQA_MINIMUM_TSU = 25.0
+
+
+def gpqa_admission(comparisons):
+    """Require measured B16/32K performance, never a shorter-context projection."""
+    primary = [row for row in comparisons if row.get("batch") == 16 and row.get("context") == 32768]
+    if len(primary) != 1 or primary[0].get("comparison_qualified") is not True:
+        raise ValueError("GPQA admission requires one qualified B16/32K comparison")
+    tsu = primary[0]["arms"][1]["decode_tsu"]
+    if not math.isfinite(tsu) or tsu <= 0:
+        raise ValueError("Invalid measured GPQA admission throughput")
+    return tsu >= GPQA_MINIMUM_TSU, tsu
 
 
 def measured_win(directory, receipt, manifest, *, baseline=BASELINE, candidate=CANDIDATE):
@@ -171,12 +184,25 @@ def run(args):
             args.compact_results, receipt, original_manifest, baseline=baseline, candidate=candidate
         )
         status["compact_comparisons"] = comparisons
-        if not winning:
+        gpqa_ready, measured_tsu = gpqa_admission(comparisons)
+        status["gpqa_performance_gate"] = dict(
+            minimum_tsu=GPQA_MINIMUM_TSU,
+            measured_tsu=measured_tsu,
+            batch=16,
+            context=32768,
+            passed=gpqa_ready,
+        )
+        if not winning or not gpqa_ready:
             status.update(
                 state="completed",
                 cleanup_completed=True,
-                qualification_deferred_for_batch=True,
-                skipped_reason="Less than 1 TSU B16/32K gain; batch before full qualification",
+                qualification_deferred_for_batch=not winning,
+                gpqa_deferred_until_25_tsu=not gpqa_ready,
+                skipped_reason=(
+                    "Below measured 25 TSU at B16/32K; full GPQA deferred by user policy"
+                    if not gpqa_ready
+                    else "Less than 1 TSU B16/32K gain; batch before full qualification"
+                ),
             )
             return
         verify()

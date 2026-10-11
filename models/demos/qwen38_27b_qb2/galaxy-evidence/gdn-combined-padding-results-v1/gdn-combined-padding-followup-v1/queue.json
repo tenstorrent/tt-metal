@@ -1,0 +1,139 @@
+{
+  "state": "completed",
+  "steps": [],
+  "cleanup_completed": true,
+  "hardware_started": false,
+  "survives_disconnect": true,
+  "resumes_after_reboot": false,
+  "promoted_to_serving": false,
+  "predecessor_unit": "qwen38-gdn-combined-padding-v1-20261011.service",
+  "predecessor_invocation": "28043374fa9447778241fb4f4828de90",
+  "policy": "precision_single_step_compact_gdn_resident_gates_padding_bfp8_all.json",
+  "hardware_lock": "/tmp/tt-device.lock",
+  "started_at": 1791685356.6333272,
+  "updated_at": "2026-10-11T03:12:40Z",
+  "predecessor": {
+    "MainPID": "0",
+    "Result": "success",
+    "LoadState": "not-found",
+    "ActiveState": "inactive",
+    "InvocationID": ""
+  },
+  "compact_comparisons": [
+    {
+      "context": 32768,
+      "batch": 16,
+      "arms": [
+        {
+          "input_tokens": 32768,
+          "batch": 16,
+          "output_tokens": 128,
+          "prefill_input_tps": 5324.233217339009,
+          "ttft_s": 98.62765472801402,
+          "decode_tsu": 19.99545796219494,
+          "output_tps_including_prefill": 19.508645077021637,
+          "request_elapsed_s": 104.97909987671301,
+          "repeatable_tokens": true,
+          "output_sha256": [
+            "e4e6c79ebddeabad0c92c826571bf9f586ea18b23a85800442880708c596a2be"
+          ]
+        },
+        {
+          "input_tokens": 32768,
+          "batch": 16,
+          "output_tokens": 128,
+          "prefill_input_tps": 5324.208926855084,
+          "ttft_s": 98.61865082522854,
+          "decode_tsu": 20.884562159647746,
+          "output_tps_including_prefill": 19.560732561438662,
+          "request_elapsed_s": 104.69955527316779,
+          "repeatable_tokens": true,
+          "output_sha256": [
+            "e4e6c79ebddeabad0c92c826571bf9f586ea18b23a85800442880708c596a2be"
+          ]
+        },
+        {
+          "input_tokens": 32768,
+          "batch": 16,
+          "output_tokens": 128,
+          "prefill_input_tps": 5324.6874206643715,
+          "ttft_s": 98.6180567862466,
+          "decode_tsu": 19.9948726663012,
+          "output_tps_including_prefill": 19.51039430548884,
+          "request_elapsed_s": 104.96968784602359,
+          "repeatable_tokens": true,
+          "output_sha256": [
+            "e4e6c79ebddeabad0c92c826571bf9f586ea18b23a85800442880708c596a2be"
+          ]
+        }
+      ],
+      "control_drift_fraction": 2.9271442286815663e-05,
+      "tokens_bit_identical": true,
+      "comparison_qualified": true,
+      "speedup": 1.0444805947548688,
+      "target_tsu": 30,
+      "target_reached": false,
+      "gpqa_qualified": false,
+      "promoted_to_serving": false
+    },
+    {
+      "context": 16384,
+      "batch": 16,
+      "arms": [
+        {
+          "input_tokens": 16384,
+          "batch": 16,
+          "output_tokens": 128,
+          "prefill_input_tps": 5747.82751311037,
+          "ttft_s": 45.762918869033456,
+          "decode_tsu": 22.721176174124345,
+          "output_tps_including_prefill": 39.88116663559785,
+          "request_elapsed_s": 51.352559936698526,
+          "repeatable_tokens": true,
+          "output_sha256": [
+            "cc7af7e8c0e1ce0e8d5be02534f583ac10cecc3de3bfbe3651e700071341fb58"
+          ]
+        },
+        {
+          "input_tokens": 16384,
+          "batch": 16,
+          "output_tokens": 128,
+          "prefill_input_tps": 5748.387731057633,
+          "ttft_s": 45.74781491002068,
+          "decode_tsu": 23.87623809528123,
+          "output_tps_including_prefill": 40.104022488155636,
+          "request_elapsed_s": 51.06719657871872,
+          "repeatable_tokens": true,
+          "output_sha256": [
+            "cc7af7e8c0e1ce0e8d5be02534f583ac10cecc3de3bfbe3651e700071341fb58"
+          ]
+        },
+        {
+          "input_tokens": 16384,
+          "batch": 16,
+          "output_tokens": 128,
+          "prefill_input_tps": 5748.056396529815,
+          "ttft_s": 45.751086143776774,
+          "decode_tsu": 22.721568081546636,
+          "output_tps_including_prefill": 39.89054100716433,
+          "request_elapsed_s": 51.34049196355045,
+          "repeatable_tokens": true,
+          "output_sha256": [
+            "cc7af7e8c0e1ce0e8d5be02534f583ac10cecc3de3bfbe3651e700071341fb58"
+          ]
+        }
+      ],
+      "control_drift_fraction": 1.724855347662313e-05,
+      "tokens_bit_identical": true,
+      "comparison_qualified": true,
+      "speedup": 1.0508272986749307,
+      "target_tsu": 30,
+      "target_reached": false,
+      "gpqa_qualified": false,
+      "promoted_to_serving": false
+    }
+  ],
+  "qualification_deferred_for_batch": true,
+  "skipped_reason": "Less than 1 TSU B16/32K gain; batch before full qualification",
+  "finished_at": 1791688360.4347944
+}

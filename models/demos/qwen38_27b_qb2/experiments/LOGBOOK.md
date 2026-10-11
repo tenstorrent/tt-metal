@@ -2477,3 +2477,27 @@ still needed. [Final receipts](../galaxy-evidence/gdn-followup-results-v1/README
 - Implementation and CPU tests may proceed independently. Device tests and
   serving changes are not launched by these assignments; coordinate hardware
   access after the performance diagnostic. No deployed multimodal pass claimed.
+
+## October 11, 03:12-03:13 UTC - Combined measurement and phase capture complete
+
+- Matched full-model comparison completed cleanly: B16/32K20.884562TSU versus
+  19.995165 mean control (+0.889397TSU,+4.448%); B16/16K23.876238TSU versus
+  22.721372 (+5.083%). Tokens were identical, control drift below0.003%.
+  These are TP4 decode measurements, not a new GPQA or Galaxy saturation result.
+- Conditional follower completed without starting qualification because the
+  primary gain was below1TSU. New phase diagnostic then passed all eight cases,
+  48 targeted kernel calls and24 required labels on four ranks, clean teardown.
+  The hardware queue is empty following these jobs; image/video work is CPU-only.
+- Captured final queues, raw sweep receipts, ops CSV, phase receipt and XML.
+  Full445MB raw device CSV remains on host with path/hash recorded. Native Tracy
+  produced the CSV despite the wrapper's discovery warning; raw-marker/JUnit
+  validation passed. Internal phase analysis and hardware counters remain open.
+- User changed full GPQA scheduling: wait for measured25TSU at B16/32K/TP4.
+  Updated the future followup gate;33 focused CPU tests pass, including boundary
+  cases and rejection of16K-only performance. Existing frozen receipts unchanged.
+  The final decode target remains30TSU; normal correctness/timing work continues.
+- User authorized merging prefix caching/SSD once consistent through serving,
+  then enabling it for future evals. Current prefix branch remains6b63a319d9e:
+  standalone restore passes but serving integration and transfer tuning are open.
+  Future evals must identify cold/warm conditions; full GPQA still waits for25TSU.
+- Evidence: galaxy-evidence/gdn-combined-padding-results-v1/README.md.

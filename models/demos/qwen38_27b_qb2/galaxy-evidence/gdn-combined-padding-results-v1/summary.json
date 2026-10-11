@@ -1,0 +1,35 @@
+{
+  "rows": [
+    {
+      "context": 32768,
+      "batch": 16,
+      "control_tsu": 19.99516531424807,
+      "candidate_tsu": 20.884562159647746,
+      "candidate_step_ms": 47.88225830906606,
+      "gain_tsu": 0.889396845399677,
+      "speedup": 1.0444805947548688,
+      "tokens_bit_identical": true,
+      "comparison_qualified": true,
+      "control_drift_fraction": 2.9271442286815663e-05
+    },
+    {
+      "context": 16384,
+      "batch": 16,
+      "control_tsu": 22.72137212783549,
+      "candidate_tsu": 23.87623809528123,
+      "candidate_step_ms": 41.88264482911295,
+      "gain_tsu": 1.1548659674457404,
+      "speedup": 1.0508272986749307,
+      "tokens_bit_identical": true,
+      "comparison_qualified": true,
+      "control_drift_fraction": 1.724855347662313e-05
+    }
+  ],
+  "full_model_measured": true,
+  "gpqa_qualified": false,
+  "promoted_to_serving": false,
+  "gpqa_next_minimum_tsu": 25.0,
+  "gpqa_primary_context": 32768,
+  "gpqa_primary_batch": 16,
+  "decode_goal_tsu": 30.0
+}

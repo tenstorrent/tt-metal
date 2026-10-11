@@ -1,0 +1,234 @@
+{
+  "state": "completed",
+  "steps": [
+    {
+      "name": "combined-4k",
+      "state": "completed",
+      "command": [
+        "/bin/bash",
+        "/home/ttuser/qwen38-artifacts-20261007/gdn-combined-padding-source-v1/scripts/run_safe_pytest.sh",
+        "/home/ttuser/qwen38-artifacts-20261007/gdn-combined-padding-source-v1/models/demos/qwen38_27b_qb2/tests/test_compact_gdn_long_horizon.py",
+        "--rootdir=/home/ttuser/qwen38-artifacts-20261007/gdn-combined-padding-source-v1",
+        "-c",
+        "/home/ttuser/qwen38-artifacts-20261007/gdn-combined-padding-source-v1/pytest.ini",
+        "-vv",
+        "-s",
+        "--tb=short",
+        "--timeout=1620",
+        "--junitxml=/home/ttuser/qwen38-artifacts-20261007/gdn-combined-padding-v1/combined-4k/hardware.xml"
+      ],
+      "timeout_seconds": 1800,
+      "started_at": 1791685356.608094,
+      "finished_at": 1791685390.649797
+    },
+    {
+      "name": "before",
+      "state": "completed",
+      "command": [
+        "/bin/bash",
+        "/home/ttuser/qwen38-artifacts-20261007/gdn-combined-padding-source-v1/scripts/run_safe_pytest.sh",
+        "/home/ttuser/qwen38-artifacts-20261007/gdn-combined-padding-source-v1/models/demos/qwen38_27b_qb2/tests/test_galaxy_perf_sweep.py",
+        "--rootdir=/home/ttuser/qwen38-artifacts-20261007/gdn-combined-padding-source-v1",
+        "-c",
+        "/home/ttuser/qwen38-artifacts-20261007/gdn-combined-padding-source-v1/pytest.ini",
+        "-vv",
+        "-s",
+        "--tb=short",
+        "--timeout=5220",
+        "--junitxml=/home/ttuser/qwen38-artifacts-20261007/gdn-combined-padding-v1/before/hardware.xml"
+      ],
+      "timeout_seconds": 5400,
+      "started_at": 1791685390.6662385,
+      "finished_at": 1791686373.8529031
+    },
+    {
+      "name": "compact",
+      "state": "completed",
+      "command": [
+        "/bin/bash",
+        "/home/ttuser/qwen38-artifacts-20261007/gdn-combined-padding-source-v1/scripts/run_safe_pytest.sh",
+        "/home/ttuser/qwen38-artifacts-20261007/gdn-combined-padding-source-v1/models/demos/qwen38_27b_qb2/tests/test_galaxy_perf_sweep.py",
+        "--rootdir=/home/ttuser/qwen38-artifacts-20261007/gdn-combined-padding-source-v1",
+        "-c",
+        "/home/ttuser/qwen38-artifacts-20261007/gdn-combined-padding-source-v1/pytest.ini",
+        "-vv",
+        "-s",
+        "--tb=short",
+        "--timeout=5220",
+        "--junitxml=/home/ttuser/qwen38-artifacts-20261007/gdn-combined-padding-v1/compact/hardware.xml"
+      ],
+      "timeout_seconds": 5400,
+      "started_at": 1791686373.8674324,
+      "finished_at": 1791687365.059335
+    },
+    {
+      "name": "after",
+      "state": "completed",
+      "command": [
+        "/bin/bash",
+        "/home/ttuser/qwen38-artifacts-20261007/gdn-combined-padding-source-v1/scripts/run_safe_pytest.sh",
+        "/home/ttuser/qwen38-artifacts-20261007/gdn-combined-padding-source-v1/models/demos/qwen38_27b_qb2/tests/test_galaxy_perf_sweep.py",
+        "--rootdir=/home/ttuser/qwen38-artifacts-20261007/gdn-combined-padding-source-v1",
+        "-c",
+        "/home/ttuser/qwen38-artifacts-20261007/gdn-combined-padding-source-v1/pytest.ini",
+        "-vv",
+        "-s",
+        "--tb=short",
+        "--timeout=5220",
+        "--junitxml=/home/ttuser/qwen38-artifacts-20261007/gdn-combined-padding-v1/after/hardware.xml"
+      ],
+      "timeout_seconds": 5400,
+      "started_at": 1791687365.0741239,
+      "finished_at": 1791688358.301027
+    }
+  ],
+  "cleanup_completed": true,
+  "hardware_started": true,
+  "survives_disconnect": true,
+  "resumes_after_reboot": false,
+  "promoted_to_serving": false,
+  "predecessor_unit": "qwen38-gdn-epilogue-padding-v3-20261010.service",
+  "predecessor_invocation": "0d1d3c7e58be42c4addf2a54f3df5a1a",
+  "hardware_lock": "/tmp/tt-device.lock",
+  "started_at": 1791685356.58676,
+  "target_tsu": 30,
+  "speculative_decoding": false,
+  "baseline_recurrence": "single_step_compact_gdn",
+  "candidate_recurrence": "single_step_compact_gdn_resident_gates_padding",
+  "updated_at": "2026-10-11T03:12:38Z",
+  "predecessor": {
+    "MainPID": "0",
+    "Result": "success",
+    "LoadState": "not-found",
+    "ActiveState": "inactive",
+    "InvocationID": ""
+  },
+  "active_stage": "after",
+  "combined_validation": {
+    "updates_per_batch": 4096,
+    "batches": [
+      16,
+      32
+    ],
+    "exact_boundary_comparison_passed": true,
+    "independent_dense_reference": false,
+    "full_model_qualified": false,
+    "promoted_to_serving": false
+  },
+  "comparisons": [
+    {
+      "context": 32768,
+      "batch": 16,
+      "arms": [
+        {
+          "input_tokens": 32768,
+          "batch": 16,
+          "output_tokens": 128,
+          "prefill_input_tps": 5324.233217339009,
+          "ttft_s": 98.62765472801402,
+          "decode_tsu": 19.99545796219494,
+          "output_tps_including_prefill": 19.508645077021637,
+          "request_elapsed_s": 104.97909987671301,
+          "repeatable_tokens": true,
+          "output_sha256": [
+            "e4e6c79ebddeabad0c92c826571bf9f586ea18b23a85800442880708c596a2be"
+          ]
+        },
+        {
+          "input_tokens": 32768,
+          "batch": 16,
+          "output_tokens": 128,
+          "prefill_input_tps": 5324.208926855084,
+          "ttft_s": 98.61865082522854,
+          "decode_tsu": 20.884562159647746,
+          "output_tps_including_prefill": 19.560732561438662,
+          "request_elapsed_s": 104.69955527316779,
+          "repeatable_tokens": true,
+          "output_sha256": [
+            "e4e6c79ebddeabad0c92c826571bf9f586ea18b23a85800442880708c596a2be"
+          ]
+        },
+        {
+          "input_tokens": 32768,
+          "batch": 16,
+          "output_tokens": 128,
+          "prefill_input_tps": 5324.6874206643715,
+          "ttft_s": 98.6180567862466,
+          "decode_tsu": 19.9948726663012,
+          "output_tps_including_prefill": 19.51039430548884,
+          "request_elapsed_s": 104.96968784602359,
+          "repeatable_tokens": true,
+          "output_sha256": [
+            "e4e6c79ebddeabad0c92c826571bf9f586ea18b23a85800442880708c596a2be"
+          ]
+        }
+      ],
+      "control_drift_fraction": 2.9271442286815663e-05,
+      "tokens_bit_identical": true,
+      "comparison_qualified": true,
+      "speedup": 1.0444805947548688,
+      "target_tsu": 30,
+      "target_reached": false,
+      "gpqa_qualified": false,
+      "promoted_to_serving": false
+    },
+    {
+      "context": 16384,
+      "batch": 16,
+      "arms": [
+        {
+          "input_tokens": 16384,
+          "batch": 16,
+          "output_tokens": 128,
+          "prefill_input_tps": 5747.82751311037,
+          "ttft_s": 45.762918869033456,
+          "decode_tsu": 22.721176174124345,
+          "output_tps_including_prefill": 39.88116663559785,
+          "request_elapsed_s": 51.352559936698526,
+          "repeatable_tokens": true,
+          "output_sha256": [
+            "cc7af7e8c0e1ce0e8d5be02534f583ac10cecc3de3bfbe3651e700071341fb58"
+          ]
+        },
+        {
+          "input_tokens": 16384,
+          "batch": 16,
+          "output_tokens": 128,
+          "prefill_input_tps": 5748.387731057633,
+          "ttft_s": 45.74781491002068,
+          "decode_tsu": 23.87623809528123,
+          "output_tps_including_prefill": 40.104022488155636,
+          "request_elapsed_s": 51.06719657871872,
+          "repeatable_tokens": true,
+          "output_sha256": [
+            "cc7af7e8c0e1ce0e8d5be02534f583ac10cecc3de3bfbe3651e700071341fb58"
+          ]
+        },
+        {
+          "input_tokens": 16384,
+          "batch": 16,
+          "output_tokens": 128,
+          "prefill_input_tps": 5748.056396529815,
+          "ttft_s": 45.751086143776774,
+          "decode_tsu": 22.721568081546636,
+          "output_tps_including_prefill": 39.89054100716433,
+          "request_elapsed_s": 51.34049196355045,
+          "repeatable_tokens": true,
+          "output_sha256": [
+            "cc7af7e8c0e1ce0e8d5be02534f583ac10cecc3de3bfbe3651e700071341fb58"
+          ]
+        }
+      ],
+      "control_drift_fraction": 1.724855347662313e-05,
+      "tokens_bit_identical": true,
+      "comparison_qualified": true,
+      "speedup": 1.0508272986749307,
+      "target_tsu": 30,
+      "target_reached": false,
+      "gpqa_qualified": false,
+      "promoted_to_serving": false
+    }
+  ],
+  "measured_win": false,
+  "finished_at": 1791688358.317738
+}

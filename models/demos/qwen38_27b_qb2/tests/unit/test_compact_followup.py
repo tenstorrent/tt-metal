@@ -141,7 +141,7 @@ def test_model_identity_includes_added_and_deleted_files(tmp_path, change, expec
         queue.verify_model_source(args.source, manifest)
 
 
-@pytest.mark.parametrize("gain,score_passes", [(1.0, False), (1.02, False), (1.2, False), (1.2, True)])
+@pytest.mark.parametrize("gain,score_passes", [(1.0, False), (1.02, False), (1.2, False), (2.0, False), (2.0, True)])
 @pytest.mark.parametrize("padding", [False, True])
 def test_controller_orders_qualification_and_matching_profiles(tmp_path, monkeypatch, gain, score_passes, padding):
     args, _, _ = evidence(tmp_path, gain, padding=padding)
@@ -204,12 +204,32 @@ def test_controller_orders_qualification_and_matching_profiles(tmp_path, monkeyp
     result = json.loads((args.output / "queue.json").read_text())
     assert result["state"] == "completed" and result["cleanup_completed"]
     assert result["promoted_to_serving"] is False
-    if gain <= 1.02:
+    if gain < 2:
         assert calls == [] and result["hardware_started"] is False
-        assert result["qualification_deferred_for_batch"] is True
+        assert result["qualification_deferred_for_batch"] is (gain <= 1.02)
+        assert result["gpqa_deferred_until_25_tsu"] is True
+        assert result["gpqa_performance_gate"]["passed"] is False
     else:
         assert calls == ["qualify", "unprofiled", "profiled"]
         assert result["accuracy_passed"] is score_passes
+
+
+@pytest.mark.parametrize("tsu,ready", [(24.999, False), (25.0, True), (25.001, True)])
+def test_gpqa_threshold_is_measured_at_primary_context(tsu, ready):
+    comparisons = [
+        dict(batch=16, context=32768, comparison_qualified=True, arms=[{}, dict(decode_tsu=tsu), {}]),
+        dict(batch=16, context=16384, comparison_qualified=True, arms=[{}, dict(decode_tsu=100), {}]),
+    ]
+    assert queue.gpqa_admission(comparisons) == (ready, tsu)
+
+
+def test_gpqa_rejects_short_context_only_or_unqualified_timing(expect_error):
+    row = dict(batch=16, context=16384, comparison_qualified=True, arms=[{}, dict(decode_tsu=30), {}])
+    with expect_error(ValueError, "B16/32K"):
+        queue.gpqa_admission([row])
+    row.update(context=32768, comparison_qualified=False)
+    with expect_error(ValueError, "B16/32K"):
+        queue.gpqa_admission([row])
 
 
 @pytest.mark.parametrize("candidate", [COMBINED_GDN_POLICY, PADDING_GDN_POLICY])

@@ -4,10 +4,11 @@ October 11, 2026, 02:32 UTC. Target: B16/32K, TP4, BFP8 weights/KV,
 BF16 activations, FP32 recurrent state. This is an evidence audit and diagnostic
 plan, not a new capture or a claim of measured DRAM utilization.
 
-Update at03:07UTC: the current resident/epilogue phase diagnostic is implemented,
-CPU-checked and persistently queued after the exact qualification follower.
-See [launch evidence](../galaxy-evidence/gdn-pipeline-phase-launch-v1/README.md).
-No physical result or hardware-counter capture is claimed by this update.
+Update at03:13UTC: the current resident/epilogue phase diagnostic completed
+all eight cases with all24 required labels and clean teardown. See
+[results](../galaxy-evidence/gdn-combined-padding-results-v1/README.md) and
+[launch evidence](../galaxy-evidence/gdn-pipeline-phase-launch-v1/README.md).
+Phase analysis and hardware-counter capture remain outstanding.
 
 ## Existing evidence
 
@@ -27,9 +28,10 @@ preparation would save 66 us. Do not repeat this diagnostic unchanged.
 
 ## Remaining attribution gaps
 
-1. Current resident recurrence and epilogue lack completed internal phase
-   measurements. Diagnostic-only annotations now cover both, retaining math,
-   barrier ordering and precision; physical compilation/capture remains pending.
+1. Current resident recurrence and epilogue now have a completed phase capture.
+   Internal timings still need analysis and reconciliation; diagnostic-only
+   annotations retain math, barrier ordering and precision, with exact output
+   comparisons between plain and annotated variants on physical hardware.
 2. Existing reports have no populated physical DRAM utilization or NoC
    congestion data. Useful bytes divided by elapsed time and assumed peak is
    a model, not bus activity. Hardware counters are needed to distinguish
@@ -89,7 +91,7 @@ attribution works; do not start with another broad full-model trace.
    Batch sub-1-TSU improvements before expensive G0/API/full GPQA.
 
 At the original02:32UTC audit timestamp, this diagnostic was planned. It is
-now persistently queued as recorded above. At the original timestamp, the
+subsequently queued and completed as recorded above. At the original timestamp, the
 combined-padding model comparison is running and its conditional qualification
 follower is waiting. The follower requires at least 1 TSU measured gain and
 does not automatically run another full profile. Do not instrument or replace
