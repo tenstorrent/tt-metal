@@ -120,3 +120,86 @@ def page(d):
 <p class="small">Status 8 October 2026. #58068 head {PR[:11]}. Code links point to that commit. RTL paths are relative to <code>{RTL_ROOT}</code> (Wormhole, internal). Every Versim run uses the same ELF as the card.</p>
 </div>
 """
+
+
+def l1_ports_svg():
+    """Which Wormhole L1 port each packer, unpacker and RISC-V core uses (tt_tensix.sv, tt_tdma.sv)."""
+    W, H = 900, 625
+    s = [f'<svg viewBox="0 0 {W} {H}" class="wave dg lp" role="img" xmlns="http://www.w3.org/2000/svg">'
+         '<defs><marker id="lpa" markerUnits="userSpaceOnUse" markerWidth="10" markerHeight="10" refX="9" refY="5" orient="auto"><path d="M0,0 L10,5 L0,10 Z" class="ah"/></marker></defs>']
+
+    def box(x, y, w, h, t, sub="", cls="box"):
+        s.append(f'<rect x="{x}" y="{y}" width="{w}" height="{h}" rx="4" class="{cls}"/>')
+        ty = y + h / 2 + (-3 if sub else 5)
+        s.append(f'<text x="{x+w/2}" y="{ty}" class="t">{t}</text>')
+        if sub:
+            s.append(f'<text x="{x+w/2}" y="{ty+15}" class="s">{sub}</text>')
+
+    def wire(x1, y1, x2, y2, hot=False):
+        mx = (x1 + x2) / 2
+        s.append(f'<path d="M{x1},{y1} C{mx},{y1} {mx},{y2} {x2-2},{y2}" class="{"arh" if hot else "ar"}" marker-end="url(#lpa)"/>')
+
+    CX, CW, BH = 10, 210, 34            # clients
+    AX, AW = 300, 170                    # TDMA arbiters
+    PX, PW = 545, 140                    # ports
+    LX = 760                             # L1
+    s.append(f'<text x="{CX}" y="16" class="s" style="text-anchor:start">who asks</text>')
+    s.append(f'<text x="{AX}" y="16" class="s" style="text-anchor:start">TDMA round-robin</text>')
+    s.append(f'<text x="{PX}" y="16" class="s" style="text-anchor:start">L1 port (arbitrated)</text>')
+
+    def client(y, t, sub="", kind="box"):
+        box(CX, y, CW, BH, t, sub, kind)
+        return (CX + CW, y + BH / 2)
+
+    def port(y, h, t, sub):
+        box(PX, y, PW, h, t, sub, "portb")
+        return (PX, y + h / 2)
+
+    # port 8: packer 0 alone
+    p8 = port(28, 40, "Port 8", "packer 0 only")
+    a = client(31, "Packer 0", "write", "core")
+    wire(*a, *p8, True)
+    # port 1: packer 1, unpacker 1, scrubber
+    p1 = port(100, 100, "Port 1", "3 clients")
+    for y, t, sub, k in [(88, "Packer 1", "read / write", "core"), (133, "Unpacker 1", "read", "box"), (178, "Scrubber", "write", "box")]:
+        c = client(y, t, sub, k)
+        wire(*c, *p1, k == "core")
+    # port 2: TDMA arbiter 0 + BRISC, NCRISC, TRISC0
+    a0 = (AX, 262)
+    box(AX, 237, AW, 50, "TDMA arbiter 0", "tt_tdma.sv:3848", "arb")
+    p2 = port(268, 150, "Port 2", "4 clients")
+    c = client(232, "Packer 2", "write", "core"); wire(*c, *a0, True)
+    c = client(272, "Mover rd, THCON,", "unpacker exp. rd", "box"); wire(*c, *a0)
+    wire(AX + AW, 262, PX, 300, True)
+    for y, t, sub in [(320, "TRISC0 (unpack)", "code + data", ), (360, "BRISC", "code + data"), (400, "NCRISC", "code + data")]:
+        c = client(y, t, sub, "risc")
+        wire(*c, PX, min(max(y + BH / 2, 300), 410))
+    # port 3: TDMA arbiter 1 + TRISC1, TRISC2
+    a1 = (AX, 480)
+    box(AX, 455, AW, 50, "TDMA arbiter 1", "tt_tdma.sv:3855", "arb")
+    p3 = port(466, 146, "Port 3", "3 clients")
+    c = client(450, "Packer 3", "write", "core"); wire(*c, *a1, True)
+    c = client(490, "Mover wr,", "RISC via TDMA", "box"); wire(*c, *a1)
+    wire(AX + AW, 480, PX, 490, True)
+    for y, t, sub in [(532, "TRISC1 (math)", "code + data"), (574, "TRISC2 (pack)", "code + data")]:
+        c = client(y, t, sub, "risc")
+        wire(*c, PX, min(y + BH / 2, 600))
+    # L1 and port wires
+    s.append(f'<rect x="{LX}" y="28" width="130" height="584" rx="6" class="l1b"/><text x="{LX+65}" y="320" class="t">L1</text>')
+    for py in (48, 150, 343, 539):
+        wire(PX + PW, py, LX, py)
+    s.append("</svg>")
+    legend = ('<div class="legend2"><span><span class="sw" style="background:var(--accent)"></span>packer</span>'
+              '<span><span class="sw" style="background:var(--refc)"></span>TRISC / RISC-V core: code-line fetches and data</span>'
+              '<span><span class="sw" style="background:var(--muted)"></span>other client</span></div>')
+    return legend + '<div class="figwrap">' + "".join(s) + "</div>"
+
+
+LP_CSS = """
+.lp .portb{fill:var(--accent-soft);stroke:var(--fg);stroke-width:1.4}
+.lp .arb{fill:var(--bk2);stroke:var(--fg);stroke-width:1.2}
+.lp .risc{fill:var(--panel);stroke:var(--refc);stroke-width:1.6;stroke-dasharray:5 3}
+.lp .l1b{fill:var(--bk1);stroke:var(--fg);stroke-width:1.4}
+.lp .arh{stroke:var(--accent);stroke-width:2.2;fill:none}
+"""
+EXTRA_CSS += LP_CSS

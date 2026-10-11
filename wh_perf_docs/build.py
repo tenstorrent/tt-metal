@@ -79,6 +79,13 @@ for i in range(1, 10):
     d = m.D
     for k in SECTIONS:
         d[k[0]] = d[k[0]].replace("{{FX}}", FX)
+    # the L1 port map figure right after the port-map item (WH-01, WH-02, WH-04)
+    i = d["hw"].find("<li><b>Which L1 port each packer writes through</b>")
+    if i >= 0:
+        j = d["hw"].index("</li>", i) + len("</li>")
+        cap = ('<p class="small">Who shares which L1 port. The thick lines are the packers. Port numbers as in <code>tt_tensix.sv</code>; '
+               'the NoC ports and the other unpacker read ports are not drawn. The RTL comment above port 8 says "packer 2", but the signal is packer index 0.</p>')
+        d["hw"] = d["hw"][:j] + "</ul>" + l1_ports_svg() + cap + "<ul>" + d["hw"][j:]
     open(f"{OUT}/{d['id']}.html", "w").write(page(d))
 open(f"{OUT}/WH-00.html", "w").write(index())
 print(sorted(os.listdir(OUT)))

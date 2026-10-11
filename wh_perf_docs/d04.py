@@ -48,7 +48,7 @@ D = dict(
 <tr><td>Unpack and math code +4 B: values that move &gt; 0.5%</td><td class="n">0 (largest 1 cycle)</td><td class="n">54, ±22–28%</td></tr>
 <tr><td>config12601, 0 / +4 B, card</td><td class="n">73,850 / 73,849</td><td class="n">92,260 / 92,260</td></tr>
 <tr><td>config12601, 0 / +4 B, Versim</td><td class="n">73,850 / 73,849</td><td class="n">– / 92,260</td></tr></table></div>
-<p>Details: WH-10. Our earlier fix is below for reference; it is not needed now.</p>
+<p>Details: <a href="https://claude.ai/artifact/KYJFXTkqTP2GcCNyghRaTb">WH-10</a>. Our earlier fix is below for reference; it is not needed now.</p>
 <p><b>Our earlier tested fix.</b> Tested fix, switch <code>LLK_ISO_SETTLE=N</code> (commits c403b67d07f, 58b9837efcc on <code>nstojictt/p58-versim</code>): in an isolate run type, after the TILE_LOOP release and before its zone opens, the measured thread runs N nops ({code("tt_metal/tt-llk/tests/helpers/include/counters.h", 628, "counters.h perf_counter_scoped")} is where it goes). The idle threads finish their exit code in that time. The wait is outside the measured window.</p>
 <p>Better version, not built yet: the measured thread waits until the idle threads have parked, in place of a fixed count.</p>""",
     ba="""<div class="tw"><table><tr><th>Card, #58068 head</th><th class="n">Before</th><th class="n">After (settle 2,000)</th></tr>
