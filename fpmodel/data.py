@@ -63,6 +63,8 @@ SETS = {  # name -> (path, arch); read-only inputs
     "bh_fin1": (f"{WORK}/frozen/bh_fin1.csv", "bh"),
     "wh_fin2": (f"{WORK}/frozen/wh_fin2.csv", "wh"),
     "bh_fin2": (f"{WORK}/frozen/bh_fin2.csv", "bh"),
+    "wh_fin3": (f"{WORK}/frozen/wh_fin3.csv", "wh"),
+    "bh_fin3": (f"{WORK}/frozen/bh_fin3.csv", "bh"),
 }
 # MultiCore probes: the MultiCore config timed on a set's own problems (origin "multicore"), joined unless MC_PROBES=0 (v18r4 on)
 MC_PROBES = {"wh_designed": f"{WORK}/device/multicore_wh.csv", "bh_designed": f"{WORK}/bh/bh_designed_mc.csv"}
