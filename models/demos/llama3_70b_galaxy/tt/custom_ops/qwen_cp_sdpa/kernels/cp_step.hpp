@@ -10,8 +10,10 @@
 // (tests/test_qwen_cp_sdpa_op.py):
 // - the row-sum packs of a sub_exp block are grouped so the block needs one L1-acc switch instead of 3-5;
 // - the causal mask stamp (two L1-acc switches + a copy init per row group) is skipped for row groups that lie
-//   wholly below the diagonal, where the stock stamp writes only columns past active_Sk that nothing reads.
-// 40k unit (scripts/cp_sdpa_split.py, pipelined): 12.490 -> 12.230 ms per call.
+//   wholly below the diagonal, where the stock stamp writes only columns past active_Sk that nothing reads;
+// - the unpack side of the drain -> main-loop pack->unpack barrier is taken right before the only P@V that reads
+//   the drain's in-place writes (the last row group's), not before the first one.
+// 40k unit (scripts/cp_sdpa_split.py, pipelined): 12.490 -> 12.230 ms per call (stall cuts), -> 12.176 (barrier).
 //
 // Compile-time knobs (op.py QWEN_CP_SDPA_DEFINES, measurement only unless stated):
 //   CP_PROF          per-TRISC cycle accumulators per stage, emitted once per kernel as DeviceTimestampedData
@@ -564,9 +566,16 @@ static void cp_inner_loop_step(
         }
 
         // Pack→unpack barrier between Phase 2's q_sub=0 drain and the main V-matmul loop.
+        // Late form: the drain wrote only the last row group in place, and with whole row groups only the last
+        // main-loop P@V reads it, so the unpack side takes the token right before that matmul instead of
+        // stalling the first one until the drain's packs land (stock form otherwise).
+        constexpr uint32_t total_v_row_groups = qktv_q_num_subblocks + (has_qktv_remainder ? 1 : 0);
+        constexpr bool late_barrier = !has_qktv_remainder && qktv_h == qkt_subblock_h && total_v_row_groups >= 2;
         PACK((t6_semaphore_post<p_stall::STALL_PACK>(semaphore::PACK_DONE)));
-        UNPACK((t6_semaphore_wait_on_zero<p_stall::STALL_SYNC>(semaphore::PACK_DONE)));
-        UNPACK((t6_semaphore_get<>(semaphore::PACK_DONE)));
+        if constexpr (!late_barrier) {
+            UNPACK((t6_semaphore_wait_on_zero<p_stall::STALL_SYNC>(semaphore::PACK_DONE)));
+            UNPACK((t6_semaphore_get<>(semaphore::PACK_DONE)));
+        }
 
         auto normalize_row = [&](uint32_t& pushed, uint32_t sbh) {
             CP_PROF_SCOPE(CP_ST_NORM);
@@ -618,7 +627,6 @@ static void cp_inner_loop_step(
             CircularBuffer(cb_exp_max_diff).push_back(h);
         };
 
-        constexpr uint32_t total_v_row_groups = qktv_q_num_subblocks + (has_qktv_remainder ? 1 : 0);
         exp_packthread_tile_init<EXP_APPROX_MODE>();
         for (uint32_t q_subblock = 1; q_subblock < total_v_row_groups; ++q_subblock) {
             const bool is_remainder_iter = has_qktv_remainder && (q_subblock == qktv_q_num_subblocks);
@@ -638,6 +646,12 @@ static void cp_inner_loop_step(
                     CircularBuffer(cb_qkt_im).wait_front(Sq_chunk_t * KT_stride);
                 } else {
                     CircularBuffer(cb_qkt_im).wait_front(qktv_in0_wait_tiles);
+                }
+                if constexpr (late_barrier) {
+                    if (q_subblock == total_v_row_groups - 1) {
+                        UNPACK((t6_semaphore_wait_on_zero<p_stall::STALL_SYNC>(semaphore::PACK_DONE)));
+                        UNPACK((t6_semaphore_get<>(semaphore::PACK_DONE)));
+                    }
                 }
                 uint32_t v_index_offset = 0;
                 sdpa_maybe_reconfig_data_format<cb_normalized_out, cb_v_in, cb_normalized_out, cb_qkt_im>(
