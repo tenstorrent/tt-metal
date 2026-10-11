@@ -26,7 +26,7 @@ kernel time (`scripts/run_safe_pytest.sh --profile`, `K3_PERF_ITERS=1`), median 
 | | bf16 wire | fp8 1×32 now | Δ |
 |---|---|---|---|
 | **T_moe (traced)** | **4.93 ms** | **4.98–5.00 ms** | **+0.05 ms** |
-| dispatch | 582 µs | 543 µs | −39 |
+| dispatch | 582 µs | 325 µs (one packet per token-expert) | −257 |
 | combine | 417 µs | 375 µs | −42 |
 | post_combine_reduce (DQ2 fused) | 196 µs | 141 µs | −55 |
 | routed expert | 2551 µs | 2545 µs | −6 (bf8_b tiles in) |
@@ -49,6 +49,18 @@ The wire now saves ~160 µs and the three standalone passes cost ~211 µs.
 
 Out of scope until G1 is decided: e8m0 (1-byte) scales, 1×128 comparisons, the 1D-fabric sparse-mcast
 dispatch (measured in §1.3a, not the shipped topology).
+
+**F6 step 1, dispatch (2026-10-11): one packet per (token, expert).** The per-expert 2D path sent the payload and the
+metadata page as two fabric packets. With `DISPATCH_FUSED_META` the sender ring slot is `[payload | metadata]` and
+one 2-chunk NoC scatter-write packet lands both: dispatch 543 → 325 µs (`ffd7aef03d1`), PCC unchanged. Traced
+T_moe does not move on the LB because dispatch runs on its own sub-device alongside the shared expert (~450 µs
+of matmuls), which is now the longer branch; on the Galaxy dispatch spans more hops and should show it. bf16 rows
+(7168 B) don't fit with the metadata, so the bf16 wire keeps two packets.
+
+**Combine (2026-10-11): no packet lever found.** Combine already sends one packet per row. A deeper reader→writer
+CB (2 → 8 rows) changed nothing (369 vs 365 µs); batching the per-packet flush over 4 rows with rotating headers
+made it 2× slower (749 µs) and was reverted. Remote rows are roughly 5 MB per chip over 2 links, so combine is
+near link bandwidth; pairing rows (8704 payload) would not help a bandwidth-bound op.
 
 **Fabric payload sweep (2026-10-11).** fp8 at 4160 / 4352 / 7168 / 8704 B and bf16 at 7168 / 7232 B: dispatch,
 combine and traced T_moe all within run-to-run noise. Packets stay one per token per destination at every size
