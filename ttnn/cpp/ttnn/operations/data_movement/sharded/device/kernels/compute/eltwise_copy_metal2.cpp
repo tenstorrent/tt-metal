@@ -16,6 +16,7 @@
 #include "api/compute/tile_move_copy.h"
 #include "api/compute/eltwise_unary/eltwise_unary.h"
 #include "api/dataflow/dataflow_buffer.h"
+#include "api/kernel_thread_globals.h"
 #include "experimental/kernel_args.h"
 
 void kernel_main() {
@@ -26,7 +27,8 @@ void kernel_main() {
 
     compute_kernel_hw_startup(dfb::in, dfb::out);
     copy_init(dfb::in);
-    for (std::uint32_t b = 0; b < per_core_tile_cnt; ++b) {
+    // Thread t of N copies tiles t, t + N, ...: the strided DFBs hand it exactly those, in order.
+    for (std::uint32_t b = get_my_thread_id(); b < per_core_tile_cnt; b += get_num_threads()) {
         // Pop tile after tile, copy to DST and pack
         dfb_in.wait_front(1);
 

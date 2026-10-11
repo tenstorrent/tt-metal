@@ -80,14 +80,16 @@ ttnn::device_operation::ProgramArtifacts CopyDeviceOperation::DefaultTilized::cr
     const auto output_data_format = tt::tt_metal::datatype_to_dataformat_converter(output.dtype());
     const bool convert_df = input_data_format != output_data_format;
 
-    // Quasar runs the reader as 4 threads and the writer as 2, with implicit sync. Every thread must
-    // issue at least one transfer, since the DFB's final-credit barrier waits for all of a kernel's
-    // threads, so each core needs at least 4 pages.
+    // Quasar runs the reader as 4 threads and the writer as 2, with implicit sync, and the data-format
+    // conversion as 4 compute threads, each converting the pages of one reader thread. Every DM thread
+    // must issue at least one transfer, since the DFB's final-credit barrier waits for all of a
+    // kernel's threads, so each core needs at least 4 pages.
     const std::uint32_t min_pages_per_core = core_group_2.num_cores() > 0
                                                  ? std::min(num_tiles_per_core_group_1, num_tiles_per_core_group_2)
                                                  : num_tiles_per_core_group_1;
-    const bool multi_thread = device->arch() == tt::ARCH::QUASAR && !convert_df && min_pages_per_core >= 4;
+    const bool multi_thread = device->arch() == tt::ARCH::QUASAR && min_pages_per_core >= 4;
     constexpr std::uint32_t num_reader_threads = 4;
+    constexpr std::uint32_t num_compute_threads = 4;
     constexpr std::uint32_t num_writer_threads = 2;
 
     // Dataflow buffer identities and tensor parameters.
@@ -122,6 +124,9 @@ ttnn::device_operation::ProgramArtifacts CopyDeviceOperation::DefaultTilized::cr
         .num_entries = 2,
         .data_format_metadata = output_data_format,
     };
+    if (multi_thread) {
+        out_dfb.num_entries = 2 * num_compute_threads;
+    }
 
     // The writer drains the output-format DFB: the compute-produced OUT when converting, otherwise the
     // reader-produced IN directly.
@@ -202,8 +207,16 @@ ttnn::device_operation::ProgramArtifacts CopyDeviceOperation::DefaultTilized::cr
             {
                 .runtime_arg_names = {"per_core_tile_cnt"},
             },
-        .hw_config = m2::ComputeHardwareConfig{},
+        // Quasar's packer has no 16-bit dest to Float32 conversion.
+        .hw_config =
+            m2::ComputeHardwareConfig{
+                .enable_32_bit_dest =
+                    device->arch() == tt::ARCH::QUASAR && output_data_format == tt::DataFormat::Float32,
+            },
     };
+    if (multi_thread) {
+        compute.num_threads = num_compute_threads;
+    }
 
     // Runtime args: each core owns a contiguous span of tiles.
     m2::KernelRunArgs reader_run_args{.kernel = READER};
