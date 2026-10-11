@@ -1976,6 +1976,64 @@ def test_causal_lift_fresh_cpp(mathop, fresh_cpp_impl):
     )
 
 
+def test_relu_fresh_cpp_admission():
+    """Gate the fresh ReLU body on its broad domain and packed BF16 specials.
+
+    Keep the ordinary causal-lift coverage, then add the values whose stored
+    representation matters to this body: signed zero/subnormals, threshold
+    neighbours, infinities, and both NaN signs. The UnarySFPUGolden path applies
+    the same input FTZ and sign-preserving NaN-to-infinity pack policy as the
+    existing raw admission oracle. Exhaustive raw-bit evidence remains the gate
+    for distinct NaN payloads and signed-zero bits, which Python float stimuli
+    cannot preserve independently.
+    """
+    formats = InputOutputFormat(DataFormat.Float16_b, DataFormat.Float16_b)
+
+    # Preserve the existing ReluMax fresh arm's broad ordinary coverage.
+    eltwise_unary_sfpu(
+        "sources/eltwise_unary_sfpu_test.cpp",
+        formats,
+        DestAccumulation.No,
+        ApproximationMode.No,
+        MathOperation.ReluMax,
+        FastMode.No,
+        [64, 64],
+        fresh_cpp_impl=1,
+    )
+
+    eltwise_unary_sfpu(
+        "sources/eltwise_unary_sfpu_test.cpp",
+        formats,
+        DestAccumulation.No,
+        ApproximationMode.No,
+        MathOperation.ReluMax,
+        FastMode.No,
+        [32, 32],
+        spec_A=StimuliSpec.custom(
+            values=[
+                0.0,
+                -0.0,
+                2.0**-133,
+                127 * 2.0**-133,
+                -(2.0**-133),
+                -(127 * 2.0**-133),
+                -5.0,
+                -1.0,
+                4.96875,
+                5.0,
+                5.03125,
+                float("inf"),
+                -float("inf"),
+                float("nan"),
+                -float("nan"),
+            ]
+        ),
+        custom_atol=0.0,
+        custom_rtol=0.0,
+        fresh_cpp_impl=1,
+    )
+
+
 @pytest.mark.parametrize(
     "mathop,dest_acc,fresh_cpp_impl",
     [

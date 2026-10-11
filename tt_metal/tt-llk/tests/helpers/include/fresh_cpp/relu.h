@@ -8,9 +8,11 @@
 // _relu_max_impl_ — an un-unrolled runtime-count loop behind a VectorType/T
 // dispatch wrapper.  Semantic statement of the golden
 // (torch.relu(torch.min(x, threshold))): clamp above at the threshold, zero
-// below 0.  SFPU comparisons total-order NaNs, so an explicit final predicate
-// restores the mathematical NaN pass-through.  Outputs are the input value,
-// the threshold, or 0 — all exactly representable — so no store rounding.
+// below 0. SFPU comparisons total-order NaNs, so a sign-cleared magnitude
+// guard keeps NaNs on the input-initialized path and applies the min/max clamp
+// only to non-NaNs. Finite outputs are the input value, the threshold, or 0,
+// all exactly representable. NaNs stay on the input path; the existing BF16
+// destination packer then canonicalizes them to signed infinities.
 #include <cstdint>
 #include <limits>
 
@@ -29,23 +31,14 @@ __attribute__((noinline)) void calculate_relu_max_fresh_cpp(const float threshol
     {
         const sfpi::vFloat input = sfpi::dst_reg[0];
         sfpi::vFloat v           = input;
-        v_if (v > threshold)
-        {
-            v = threshold;
-        }
-        v_endif;
-        v_if (v < 0.0f)
-        {
-            v = 0.0f;
-        }
-        v_endif;
         // Clear the sign explicitly: SFPABS float mode deliberately preserves
-        // the sign of negative NaNs.  After SFPSETSGN, every NaN encoding is
-        // bitwise above +inf while finite values and infinity are not.
+        // the sign of negative NaNs. After SFPSETSGN, every NaN encoding is
+        // bitwise above +inf while finite values and infinity are not. Keep
+        // NaNs on the input-initialized path; SFPSWAP min/max total-order them.
         const sfpi::vFloat magnitude = sfpi::setsgn(input, 0);
-        v_if (magnitude > std::numeric_limits<float>::infinity())
+        v_if (magnitude <= std::numeric_limits<float>::infinity())
         {
-            v = input;
+            v = sfpi::max(sfpi::min(input, threshold), 0.0f);
         }
         v_endif;
         sfpi::dst_reg[0] = v;
