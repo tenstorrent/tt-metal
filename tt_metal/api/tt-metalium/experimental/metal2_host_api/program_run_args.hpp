@@ -110,7 +110,7 @@ struct ProgramRunArgs {
     //          TensorArguments. A stale binding to a destroyed MeshTensor will produce undefined behavior.
     //
     // The argument's TensorSpec MUST match the TensorParameter's TensorSpec (shape, layout, data type).
-    // (Any declared TensorParameter relaxations will modify the matching rules; see advanced_options.hpp.)
+    // (Any declared TensorParameter relaxations will modify the matching rules; see tensor_spec_relaxations.hpp.)
     Table<TensorParamName, TensorArgument> tensor_args;
 
     ////////////////////////////////////////////////////////////////////////
