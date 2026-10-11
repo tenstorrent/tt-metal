@@ -211,24 +211,28 @@ python models/demos/pplx_decider_v1_27b/tests/vision/vision_pcc_report.py       
 
 These are the accuracy figures on three model-card benchmarks. Each benchmark is a frozen, seeded
 subset of 200 examples, run as `choice` decisions through `TTDecider.predict` (C0, batch 1).
+Measured on the stage-3 code (`da43bdb9eff`).
 
-| benchmark | TT accuracy (95% CI) | card pplx-decider-v1-27b | card Qwen3.8-27B base |
-|---|---:|---:|---:|
-| WinoGrande (xl, validation) | 87.0% (81.6-91.0) | 83.30% | 73.10% |
-| FinancialPhraseBank (50agree) | 82.5% (76.6-87.1) | 84.18% | 75.68% |
-| Belebele (eng_Latn, test) | 96.5% (93.0-98.3) | 94.00% | 93.20% |
+| benchmark | TT accuracy (95% CI) | before stage 3 | card pplx-decider-v1-27b | card Qwen3.8-27B base |
+|---|---:|---:|---:|---:|
+| WinoGrande (xl, validation) | 87.0% (81.6-91.0) | 87.0% | 83.30% | 73.10% |
+| FinancialPhraseBank (50agree) | 84.0% (78.3-88.4) | 82.5% | 84.18% | 75.68% |
+| Belebele (eng_Latn, test) | 96.5% (93.0-98.3) | 96.5% | 94.00% | 93.20% |
 
 The card's numbers come from the Perplexity API, with an unknown prompt protocol and on full test
 sets. Read the deltas as indicative, not as a pass or fail result. Every card figure falls inside
-the TT 95% confidence interval.
+the TT 95% confidence interval. Against the run before stage 3, 5 of 600 predictions changed. All 5
+were near-ties (top-two gap of at most 0.08), so the FPB +1.5 pp is numeric noise.
 
 Mixed throughput: the 600 benchmark prompts (buckets 128 and 1024) run back to back at
-2.72 decisions/s, with p50 / p90 / p99 latency of 449 / 473 / 479 ms. Tables, roofline and
-protocol are in `doc/benchmark/` (`results.json`, `predictions.csv`, `subsets_manifest.json`,
+3.10 decisions/s (2.72 before stage 3), with p50 / p90 / p99 latency of 400 / 425 / 432 ms (before:
+449 / 473 / 479). Isolated-request latency per bucket in the same refresh: 115 / 315 / 564 / 1227 /
+2882 ms (before: 149 / 366 / 665 / 1481 / 3536). Tables, roofline and protocol are in
+`doc/benchmark/` (`REPORT.md`, `results.json`, `predictions.csv`, `subsets_manifest.json`,
 `identity.json`).
 
 ```bash
-S11=/local/ttuser/gtobar/artifacts/pplx_decider/stage11
+S11=/local/ttuser/gtobar/artifacts/pplx_decider/stage11_refresh   # first run (before stage 3): .../stage11
 python -m models.demos.pplx_decider_v1_27b.benchmark.datasets --out $S11/subsets            # CPU
 PPLX_DECIDER_STAGE6_DIR=$S11/perf_buckets pytest models/demos/pplx_decider_v1_27b/tests/perf/test_model_perf.py::test_model_perf -s -q
 python -m models.demos.pplx_decider_v1_27b.benchmark.run_benchmark --subsets $S11/subsets --out $S11/run

@@ -1,6 +1,6 @@
 {
   "stage": "11 benchmark (adapted: decision benchmarks via TTDecider, no vLLM)",
-  "date": "2026-10-09",
+  "date": "2026-10-11 (refresh on stage-3 code; first run 2026-10-09 on b98508eac2c)",
   "model": {
     "repo": "perplexity-ai/pplx-decider-v1-27b",
     "revision": "b01a5cbaca5391f73bd55103d4f27e8982cd5e60",
@@ -11,7 +11,8 @@
     "path": "models/demos/pplx_decider_v1_27b",
     "entry_point": "demo/decider.py TTDecider.from_pretrained(device, vision=True).predict(state, question[, images])",
     "branch": "gtobarTT/pplx-decider-bringup",
-    "measured_at_commit": "b98508eac2cea97f804d7a28c46ccad2c3715743",
+    "measured_at_commit": "da43bdb9eff6710f1df630a90b6357f3607de593",
+    "previous_measurement": "b98508eac2cea97f804d7a28c46ccad2c3715743 (stage 12B model code, stage-11 commit 78e35968f19); raw outputs /local/ttuser/gtobar/artifacts/pplx_decider/stage11/",
     "model_code_changed_in_stage_11": false,
     "tt_metal_upstream_base": "2c1e1ebdd638886821f35113a5fd0d6335d71608 (merge-base with origin/main, 2026-10-09)"
   },
@@ -19,7 +20,7 @@
     "config_id": "C0",
     "source": "doc/datatype_sweep/selected_precision_config.json (PrecisionPolicy.default())",
     "policy_name_logged_at_load": "act_bf16__w_bfp8_all__hifi2",
-    "summary": "BFP8_B weights for every projection and the readout, HiFi2 matmuls with fp32 accumulation, BF16 activations / embedding / norms, fp32 DeltaNet recurrent state, fp32 head (mask, / T, softmax); vision tower BF16"
+    "summary": "BFP8_B weights for every projection and the readout, HiFi2 matmuls with fp32 accumulation, BF16 activations / embedding / norms, fp32 DeltaNet recurrent state, fp32 head (mask, / T, softmax); vision tower BF16. Stage 3B: RMSNorm compute config HiFi4 without fp32 dest accumulation, SDPA exp approximation (no weight or matmul dtype change)"
   },
   "device": {
     "board": "1x Blackhole p150a",
@@ -41,5 +42,5 @@
     "subset_size": 200,
     "manifest": "doc/benchmark/subsets_manifest.json (copy of /local/ttuser/gtobar/artifacts/pplx_decider/stage11/subsets/manifest.json: ids, ids sha256, subset file sha256, seq_len, buckets)"
   },
-  "raw_outputs": "/local/ttuser/gtobar/artifacts/pplx_decider/stage11/{subsets,run,perf_buckets,logs}"
+  "raw_outputs": "/local/ttuser/gtobar/artifacts/pplx_decider/stage11_refresh/{subsets,run,perf_buckets,logs,report_tables.md,compare_vs_stage11.json} (subsets byte-identical to stage11/subsets)"
 }

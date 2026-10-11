@@ -21,7 +21,7 @@ marked. Full log, audit and every rejected candidate: [`work_log.md`](work_log.m
 | 5 | GDN `chunk_gated_delta_rule` with `ChunkGdnFusedProgramConfig()` (the op's cost model picks the phased path on this grid) | `optimizations.py`, `gated_deltanet.py` | linear 8192 40.36 -> 37.41, 2048 9.94 -> 9.20, 128 2.03 -> 1.96; output bit-identical |
 | 6 | causal conv `channel_chunk_size` 256 -> 512 | `optimizations.py` | linear 8192 37.45 -> 36.97, 2048 9.21 -> 9.09 |
 | 7 | RMSNorm at <= 128 rows block-sharded in L1 on 8 cores (82 -> 23 us + 2 x 5 us reshards) | `norm.py`, `optimizations.py` | 8 L0 layers back to back at S=128: 15.42 -> 14.77 (-81 us per layer); flat for a single synced layer (host dispatch gaps) |
-| 8 | RMSNorm compute config without fp32 dest accumulation (HiFi4 kept) | `optimizations.py` | linear 8192 37.00 -> 36.62, full 8192 34.56 -> 34.10; norm op 8192 rows 737 -> 482 us; layer PCC >= 0.99993 |
+| 8 | RMSNorm compute config without fp32 dest accumulation (HiFi4 kept) | `optimizations.py` | linear 8192 37.00 -> 36.62, full 8192 34.56 -> 34.10; norm op 8192 rows 737 -> 482 us; layer PCC >= 0.99993 for the benched L0 / L3, but the PCC suite's decoder-layer minimum is 0.999742 (L63 S4096, up to -2.3e-4 vs 3A; see Gates) |
 
 Also: `tests/e2e/test_image_model.py` reads `$PPLX_DECIDER_IMAGE_E2E_DIR` (default unchanged) so
 reruns do not overwrite stage-12B evidence; `tests/pcc/test_prefill_contract.py` gains a test of the
