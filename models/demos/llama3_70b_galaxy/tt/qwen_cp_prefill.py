@@ -367,6 +367,21 @@ def ff2_bf8_rs(layer_num=None, n_layers=None) -> bool:
     return layer_num is None or n_layers is None or layer_num < n_layers - last
 
 
+def ff2_compute_config(args):
+    """FF2 matmul compute config: LoFi with fp32 dest accumulation (QWEN_CP_FF2_LOFI=1, default) or the model's HiFi2
+    fp32-dest config (keep 17). cpb_sweep job266 (S=40960, FF2_CFG): HiFi2 3.28 -> LoFi 2.51 ms per call."""
+    if os.environ.get("QWEN_CP_FF2_LOFI", "1") != "1":
+        return args.compute_kernel_config_hifi2
+    base = args.compute_kernel_config_hifi2
+    return ttnn.WormholeComputeKernelConfig(
+        math_fidelity=ttnn.MathFidelity.LoFi,
+        math_approx_mode=base.math_approx_mode,
+        fp32_dest_acc_en=True,
+        packer_l1_acc=base.packer_l1_acc,
+        dst_full_sync_en=base.dst_full_sync_en,
+    )
+
+
 def sdpa_fp16_acc() -> bool:
     """Ring SDPA with 16-bit dest accumulation (HiFi2 kept): sdpa_sweep e1-fid q320/k640 17.08 -> 16.16 ms,
     PCC vs HiFi4 fp32acc 0.99994 -> 0.99983. QWEN_CP_SDPA_FP16ACC=0 keeps the fp32 dest of keep 09."""
@@ -622,7 +637,7 @@ def mlp_prefill(ctx: CPContext, tt_ccl, mlp, x_local, w):
         weight_tensor=w["w2"],
         config=FF2_CFG,
         dtype=ttnn.bfloat8_b if ff2_bf8_rs(mlp.layer_num, args.full_model_n_layers) else mlp.prefill_output_dtype,
-        compute_kernel_config=args.compute_kernel_config_hifi2,  # fp32 dest acc (keep 17)
+        compute_kernel_config=ff2_compute_config(args),  # fp32 dest acc (keep 17)
         memory_config=ttnn.DRAM_MEMORY_CONFIG,
     )  # [1, 1, S/4, 5120]
     ttnn.deallocate(w2_in)
