@@ -43,7 +43,7 @@ from helpers.sfpu_domains import (
     specials_safe,
 )
 from helpers.stimuli_config import StimuliConfig
-from helpers.stimuli_generator import StimuliSpec, generate_stimuli
+from helpers.stimuli_generator import DistributionKind, StimuliSpec, generate_stimuli
 from helpers.test_config import TestConfig
 from helpers.test_variant_parameters import (
     APPROX_MODE,
@@ -1140,6 +1140,11 @@ def eltwise_unary_sfpu(
         spec_A=spec_A,
     )
 
+    if spec_A.distribution == DistributionKind.ULP_SWEEP:
+        # The generator auto-sizes ULP sweeps to one tile row. Use that same
+        # shape for the golden reshape, block sizing and compiled dimensions.
+        input_dimensions = [TILE_DIMENSIONS[0], TILE_DIMENSIONS[1] * tile_cnt_A]
+
     # laneJO formal-equivalence witness-check hook (see test_sfpu_binary.py):
     # SFPU_SRC_OVERRIDE holds a tensor replayed verbatim as src_A.
     import os as _lanejo_os
@@ -1971,17 +1976,34 @@ def test_causal_lift_fresh_cpp(mathop, fresh_cpp_impl):
     )
 
 
-@pytest.mark.parametrize("fresh_cpp_impl", [0, 1], ids=["production", "fresh_cpp"])
 @pytest.mark.parametrize(
-    "dest_acc",
-    [DestAccumulation.No, DestAccumulation.Yes],
-    ids=["dest_acc:No", "dest_acc:Yes"],
+    "mathop,dest_acc,fresh_cpp_impl",
+    [
+        pytest.param(
+            mathop,
+            dest_acc,
+            impl,
+            id=f"{mathop.name}-dest_acc:{dest_acc.name}-{'fresh_cpp' if impl else 'production'}",
+        )
+        for mathop in (MathOperation.Expm1Cw, MathOperation.Softplus)
+        for dest_acc in (DestAccumulation.No, DestAccumulation.Yes)
+        for impl in (0, 1)
+        # The fresh Softplus selector statically supports only 16-bit Dest.
+        if not (
+            mathop == MathOperation.Softplus
+            and impl == 1
+            and dest_acc == DestAccumulation.Yes
+        )
+    ],
 )
-@pytest.mark.parametrize("mathop", [MathOperation.Expm1Cw], ids=lambda m: m.name)
 def test_causal_lift_fresh_cpp_bf16_in(mathop, dest_acc, fresh_cpp_impl):
-    """The causal-lift A/B on a Float16_b input with a Float32 output, at both
-    Dest widths. A 2-byte input makes one 65536-pattern stream band the whole bf16
-    input space, so the stream sweep is exhaustive for each (impl, dest_acc)."""
+    """The causal-lift A/B on Float16_b input and Float32 output.
+
+    Both Dest widths are covered where the selector supports them; fresh
+    Softplus supports only 16-bit Dest. The ordinary invocation samples the
+    registered finite domain. Whole-bf16 coverage requires a separate raw-input
+    streamer invocation over all 65536 patterns for each supported pair.
+    """
     custom_atol, custom_rtol = CUSTOM_TOLERANCES.get(mathop, (None, None))
     eltwise_unary_sfpu(
         "sources/eltwise_unary_sfpu_test.cpp",
@@ -2045,26 +2067,46 @@ _SOFTPLUS_BOUNDARY_VALUES = [
 ]
 
 
+@pytest.mark.parametrize("tail_only", [False, True], ids=["boundary", "nonzero-tail"])
 @pytest.mark.parametrize(
-    "formats,dest_acc",
+    "formats,dest_acc,fresh_cpp_impl",
     [
-        (
+        pytest.param(
             InputOutputFormat(DataFormat.Float16_b, DataFormat.Float16_b),
             DestAccumulation.No,
+            0,
+            id="bf16-dest16-production",
         ),
-        (
+        pytest.param(
+            InputOutputFormat(DataFormat.Float16_b, DataFormat.Float16_b),
+            DestAccumulation.No,
+            1,
+            id="bf16-dest16-fresh_cpp",
+        ),
+        pytest.param(
             InputOutputFormat(DataFormat.Float16_b, DataFormat.Float32),
             DestAccumulation.Yes,
+            0,
+            id="bf16-dest32-production",
         ),
-        (
+        pytest.param(
             InputOutputFormat(DataFormat.Float32, DataFormat.Float32),
             DestAccumulation.Yes,
+            0,
+            id="fp32-dest32-production",
         ),
     ],
-    ids=["bf16-dest16", "bf16-dest32", "fp32-dest32"],
 )
-def test_softplus_boundary_and_negative_tail(formats, dest_acc):
-    """Cover the negative tail and both sides of the default linear threshold."""
+def test_softplus_boundary_and_negative_tail(
+    formats, dest_acc, fresh_cpp_impl, tail_only
+):
+    """Gate both implementations at the linear threshold and in the negative tail.
+
+    The tail-only inputs have normal, nonzero outputs in all three formats.
+    Zero absolute tolerance prevents a zero-clamped tail from passing solely
+    because its correct value is small; the existing relative tolerance stays.
+    Fresh Softplus is selected only at its supported 16-bit Dest width.
+    """
     eltwise_unary_sfpu(
         "sources/eltwise_unary_sfpu_test.cpp",
         formats,
@@ -2073,7 +2115,37 @@ def test_softplus_boundary_and_negative_tail(formats, dest_acc):
         MathOperation.Softplus,
         FastMode.No,
         [32, 32],
-        spec_A=StimuliSpec.custom(values=_SOFTPLUS_BOUNDARY_VALUES),
+        spec_A=StimuliSpec.custom(
+            values=(
+                [-6.0, -10.0, -20.0, -40.0] if tail_only else _SOFTPLUS_BOUNDARY_VALUES
+            )
+        ),
+        custom_atol=0.0 if tail_only else None,
+        fresh_cpp_impl=fresh_cpp_impl,
+    )
+
+
+@pytest.mark.parametrize("fresh_cpp_impl", [0, 1], ids=["production", "fresh_cpp"])
+def test_softplus_fresh_cpp_admission(fresh_cpp_impl):
+    """Check every bf16 value in [-40, 30] on the measured 16-bit Dest path.
+
+    This includes the ordinary [-5, 30] domain, the nonzero negative tail and
+    the linear threshold. All expected outputs are normal and nonzero, so
+    zero absolute tolerance rejects a zero-clamped tail without changing the
+    existing relative tolerance. Each node executes one configuration and
+    remains usable by the raw-input streamer.
+    """
+    eltwise_unary_sfpu(
+        "sources/eltwise_unary_sfpu_test.cpp",
+        InputOutputFormat(DataFormat.Float16_b, DataFormat.Float16_b),
+        DestAccumulation.No,
+        ApproximationMode.No,
+        MathOperation.Softplus,
+        FastMode.No,
+        [64, 64],
+        spec_A=StimuliSpec.ulp_sweep(low=-40.0, high=30.0),
+        custom_atol=0.0,
+        fresh_cpp_impl=fresh_cpp_impl,
     )
 
 
