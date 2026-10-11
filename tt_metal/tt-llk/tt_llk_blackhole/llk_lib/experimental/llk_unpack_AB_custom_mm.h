@@ -74,29 +74,6 @@ inline void _llk_unpack_AB_custom_mm_iter_insns(const bool post1)
     }
 }
 
-// The reuse blocks sit at replay entries 5 to 31 of the custom_mm program; the reuse_dest_srcb unpack runs the same blocks
-// there, so it can share a program a custom_mm init recorded.
-constexpr std::uint32_t CUSTOM_MM_REUSE_BLOCKS_OFFSET = 5;
-constexpr std::uint32_t CUSTOM_MM_REUSE_BLOCKS_LEN    = 27;
-
-inline void _llk_unpack_AB_custom_mm_reuse_blocks_insns()
-{
-    // Loop 8 times to fill up the replay buffer
-    for (std::uint32_t i = 0; i < 8; i++)
-    {
-        // Reuse unpack (unpacks only SrcA, SrcB is reused across width dim)
-        TTI_UNPACR_COMMON(SrcA, 0b00000000, 1); // Also set dvalid
-        TTI_CFGSHIFTMASK(1, 3, 32 - 1, 0, 0, THCON_SEC0_REG3_Base_address_ADDR32);
-        TTI_NOP;
-    }
-
-    // Reuse unpack (unpacks only SrcA, SrcB is reused across width dim)
-    TTI_UNPACR_COMMON(SrcA, 0b00000000, 1); // Also set dvalid
-    // This last iteration uses inner_increment instead of block_increment
-    TTI_CFGSHIFTMASK(1, 3, 32 - 1, 0, 1, THCON_SEC0_REG3_Base_address_ADDR32);
-    TTI_NOP;
-}
-
 inline void _llk_unpack_AB_custom_mm_mop_config_(const std::uint32_t ct_dim, const bool post1)
 {
     load_replay_buf(
@@ -107,7 +84,20 @@ inline void _llk_unpack_AB_custom_mm_mop_config_(const std::uint32_t ct_dim, con
             // Full unpack (both SrcA and SrcB)
             _llk_unpack_AB_custom_mm_iter_insns(post1);
 
-            _llk_unpack_AB_custom_mm_reuse_blocks_insns();
+            // Loop 8 times to fill up the replay buffer
+            for (std::uint32_t i = 0; i < 8; i++)
+            {
+                // Reuse unpack (unpacks only SrcA, SrcB is reused across width dim)
+                TTI_UNPACR_COMMON(SrcA, 0b00000000, 1); // Also set dvalid
+                TTI_CFGSHIFTMASK(1, 3, 32 - 1, 0, 0, THCON_SEC0_REG3_Base_address_ADDR32);
+                TTI_NOP;
+            }
+
+            // Reuse unpack (unpacks only SrcA, SrcB is reused across width dim)
+            TTI_UNPACR_COMMON(SrcA, 0b00000000, 1); // Also set dvalid
+            // This last iteration uses inner_increment instead of block_increment
+            TTI_CFGSHIFTMASK(1, 3, 32 - 1, 0, 1, THCON_SEC0_REG3_Base_address_ADDR32);
+            TTI_NOP;
         });
 
     // Mop is configured to cover pairs of inner (kt) iterations. An odd tail
@@ -300,8 +290,11 @@ inline void _llk_unpack_AB_custom_mm_run_(
 
 // Key of the configuration the second bank holds, and whether the next banked call starts a sequence; kernel data, so
 // each kernel starts with no configuration in the second bank
-inline std::uint64_t custom_mm_bank_key   = ~std::uint64_t {0};
-inline bool custom_mm_bank_sequence_start = true;
+constexpr std::uint64_t CUSTOM_MM_NO_BANK_KEY = ~std::uint64_t {0};
+inline std::uint64_t custom_mm_bank_key       = CUSTOM_MM_NO_BANK_KEY;
+inline bool custom_mm_bank_sequence_start     = true;
+// The weight tile size of the sequence's first banked call; written and read only under LLK asserts
+inline std::uint32_t custom_mm_bank_tile_size_a = 0;
 
 /**
  * @brief Unpack a kt_dim x ct_dim block of weight tiles into SrcA and the matching activation tiles into SrcB.
@@ -344,7 +337,10 @@ inline void _llk_unpack_AB_custom_mm_(
     {
         // SCRATCH_SEC0/1 are global, not banked: the calls of a sequence must write the same increments
         static_assert(!read_transposed, "banked custom_mm calls do not support read_transposed");
-        LLK_ASSERT(custom_mm_bank_key != ~std::uint64_t {0}, "banked custom_mm call before the bank init");
+        LLK_ASSERT(custom_mm_bank_key != CUSTOM_MM_NO_BANK_KEY, "banked custom_mm call before the bank init");
+        LLK_ASSERT(
+            custom_mm_bank_sequence_start || tile_size_a == custom_mm_bank_tile_size_a, "banked custom_mm calls of one sequence need one weight tile size");
+        LLK_ASSERT_BLOCK(custom_mm_bank_tile_size_a = tile_size_a);
         // The first call of a sequence waits for every earlier call, which may read bank 1 or SCRATCH; a later call
         // writes the bank the call before the one in flight used, while that call runs
         wait_for_next_context(custom_mm_bank_sequence_start ? 1 : 2);
@@ -362,10 +358,8 @@ inline void _llk_unpack_AB_custom_mm_(
     _llk_unpack_AB_custom_mm_run_(cfg, address_a, address_b, block_increment, inner_increment, kt_dim, ct_dim);
 }
 
-/**
- * @brief Copy the unpacker configuration into the second bank for banked calls, unless it already holds the one keyed by
- *        key (the operands' formats, face geometry and transpose; not ~0). Call after the init, outside a sequence.
- */
+// key names the operands' formats, face geometry and transpose; a second bank that already holds it is not copied again.
+// Call after the init, outside a sequence.
 inline void _llk_unpack_AB_custom_mm_bank_init_(const std::uint64_t key)
 {
     LLK_ASSERT(ckernel::cfg_state_id == 0, "custom_mm bank init: call outside a banked sequence");
@@ -390,10 +384,7 @@ inline void _llk_unpack_AB_custom_mm_bank_init_(const std::uint64_t key)
     }
 }
 
-/**
- * @brief Return the unpack thread to the first configuration bank after a sequence of banked calls.
- * @note Call before any other unpack LLK or init.
- */
+// Call before any other unpack LLK or init.
 inline void _llk_unpack_AB_custom_mm_bank_end_()
 {
     if (ckernel::cfg_state_id != 0)

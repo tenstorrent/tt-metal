@@ -2135,8 +2135,7 @@ def test_hybrid_expert_single_device_sparse_accum_experts(device):
     ids=["kt8_ct2", "kt28_ct1"],
 )
 def test_hybrid_expert_single_device_accum_experts_plain(device, K, N, sram_n_parallel, num_loop_iters):
-    """Uniform bfp4 SRAM weights on the plain custom_mm path, as the MoE runs them without BSPM: 4 SRAM experts of 6
-    active, summed in one DEST section by calls that alternate the configuration banks."""
+    """The plain custom_mm SRAM path with uniform bfp4 weights: 4 SRAM experts of 6, banked calls into one DEST."""
     _run_hybrid_expert_multi_device(
         device,
         M=1,
@@ -2177,7 +2176,7 @@ class _UniformShardWeights:
     ids=["bfp4", "bfp4_two_experts", "bfp8", "bfp2", "bfp0_tile_in_second_expert"],
 )
 def test_plain_sram_path_rejects_non_bfp4_weights(assignments, accepted, expect_error):
-    """Host only: sram_use_compression=False reads one bfp4_b page per SRAM tile, so it rejects any other format."""
+    """Host only: the plain SRAM path rejects SRAM weights that are not uniform bfp4_b."""
     cts = [_UniformShardWeights(assignment) for assignment in assignments]
     cores = [ttnn.CoreCoord(0, 0), ttnn.CoreCoord(1, 0)]
     coords = [ttnn.MeshCoordinate(0, 0), ttnn.MeshCoordinate(0, 1)]
