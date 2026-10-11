@@ -654,6 +654,34 @@ Two-stage runner, `2d`, 5120-token chunks, traced, 56320-token golden, sync on, 
 
 **G3 revisited: two stages per galaxy now beat the like-for-like one-stage baseline by about 15% and
 match or beat production, without any ring links.** The SDPA fallback was the largest handicap (it grows
-with context). Not yet measured: two-stage with `TORUS_X`/`TORUS_Y` after the fixes (needs the tray
-1<->3 / 2<->4 port 5/6 cables, which are down), and larger chunks (expert weight reads amortize; blocked
-by the runner's fixed 5120-token KV period).
+with context). Not yet measured: two-stage with `TORUS_X`/`TORUS_Y` after the fixes, and larger
+chunks (expert weight reads amortize).
+
+**Caveat on the baseline.** The one-stage baselines run 640 tokens per chip; the two-stage runs 1280. The
+fair baseline (B2: 8x4 at 10240-token chunks, also 1280 per chip) is now runnable with
+`PREFILL_KV_PERIOD_TOKENS=10240` but was not measured, so part of the gain may be chunk size rather than
+the split.
+
+### Chunk size on one traced 4x4 stage
+
+`PREFILL_KV_PERIOD_TOKENS` (`utils/chunk_config.py`, default 5120) sets the runner's block-cyclic KV period,
+so the runner can run other chunk sizes. One 4x4 stage, 12 layers, top half, `2d`, traced, full 56320-token
+golden (`scripts/k3_4x4/chunk_sweep.sh`):
+
+| Chunk | Tokens/chip | Compute per chunk | Stage tok/s | KV PCC |
+|---|---|---|---|---|
+| 5120 | 1280 | 207.2 ms (11 chunks) | 24,730 | 0.9944 |
+| 2560 | 640 | 141.3 ms (22 chunks) | 17,953 | 0.9937 |
+
+Twice the tokens per chip cost 1.47x the time: 1.36x more throughput per stage (the eager profile
+predicted 1.30x). The per-op profiles are the first chunk of a request (empty KV cache), so they
+understate SDPA, which in the runner attends over every earlier chunk.
+
+### Link check: reference cabling vs this galaxy
+
+`run_cluster_validation` against `tools/tests/scaleout/cabling_descriptors/bh_galaxy_xy_torus.textproto`
+reports the tray 1<->3 and 2<->4 ASIC 3/4 links as missing on channels 0/1, and as extra on channels 8/9:
+this galaxy carries those wrap links on different QSFP ports than the reference spec. They are present;
+an earlier note here that they were down was wrong. `scripts/k3_4x4/link_check.sh` nets missing against
+extra channels per ASIC pair and reports only pairs that are actually degraded. Its exit code is the gate
+to use before multi-stage runs (`run_cluster_validation` itself exits 0 with links missing).

@@ -1,0 +1,13 @@
+# One 4x4 stage (top half) as a single rank, FABRIC_2D (line/line); needs only links inside the half.
+rank_bindings:
+  - {rank: 0, mesh_id: 0, mesh_host_rank: 0, env_overrides: {TT_VISIBLE_DEVICES: "0,4,28,24,1,5,29,25,2,6,30,26,3,7,31,27"}}
+
+mesh_graph_desc_path: models/demos/deepseek_v3_d_p/experimental_descriptors/single_bh_galaxy_subtorus_x4_graph_descriptor.textproto
+
+global_env:
+  PREFILL_FABRIC_MODE: "2d"
+  PREFILL_SP: "4"
+  PREFILL_TP: "4"
+  PREFILL_H2D_SERVICE_ID: "ds_prefill"
+  PREFILL_PP_D2D_FIFO_BYTES: "32768"
+  LOGURU_LEVEL: "INFO"
