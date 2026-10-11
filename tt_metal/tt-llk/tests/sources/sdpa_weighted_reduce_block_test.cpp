@@ -2,9 +2,8 @@
 //
 // SPDX-License-Identifier: Apache-2.0
 
-// weighted_reduce_block and weighted_reduce_pack_block of api/compute/experimental/sdpa_weighted_reduce.h: NUM_CHUNKS qk
-// tiles of QK_NUM_FACES faces and one weights tile, chunk c into DEST slot FIRST_SLOT + c. ROW_PACK packs chunk c into
-// output row FIRST_CHUNK + c through the API's block pack; otherwise DEST tile 0 is packed whole.
+// weighted_reduce_block and weighted_reduce_pack_block: chunk c goes to DEST slot FIRST_SLOT + c; ROW_PACK packs it to
+// output row FIRST_CHUNK + c, otherwise DEST tile 0 is packed whole.
 
 #include <cstdint>
 
@@ -28,7 +27,6 @@ void run_kernel(RUNTIME_PARAMETERS params)
 #if defined(RUNTIME_FORMATS) && !defined(SPEED_OF_LIGHT)
     const FormatConfig& formats = params.formats;
 #endif
-    // SrcA <- qk (buffer_B), SrcB <- weights (buffer_A).
     _llk_unpack_hw_configure_<is_fp32_dest_acc_en>(
         formats.unpack_B_src,
         formats.unpack_A_src,
@@ -40,7 +38,7 @@ void run_kernel(RUNTIME_PARAMETERS params)
         TILE_NUM_FACES /*unpB_num_faces*/,
         params.TILE_SIZE_UNPACK_B,
         params.TILE_SIZE_UNPACK_A);
-    // weighted_reduce_init_short: no haloize, one 16x16 face per UNPACR on both unpackers.
+    // As weighted_reduce_init_short: no haloize, one 16x16 face per UNPACR.
     cfg_reg_rmw_tensix<THCON_SEC0_REG2_Haloize_mode_RMW>(0);
     TTI_SETADCXX(p_setadc::UNP_A, FACE_R_DIM * FACE_C_DIM - 1, 0x0);
     TTI_SETADCXX(p_setadc::UNP_B, FACE_R_DIM * FACE_C_DIM - 1, 0x0);
@@ -55,8 +53,7 @@ void run_kernel(RUNTIME_PARAMETERS params)
 #include "experimental/llk_math_matmul_custom_no_mop.h"
 #include "llk_math_common.h"
 
-// weighted_reduce_addrmod_init and weighted_reduce_math_impl of the api header (ADDR_MOD_3 stands in for
-// sdpa_custom_mm_init's).
+// Mirrors the api header's math; ADDR_MOD_3 stands in for sdpa_custom_mm_init's.
 inline void weighted_reduce_addrmod_init_math()
 {
     addr_mod_t {
@@ -97,7 +94,7 @@ void run_kernel(RUNTIME_PARAMETERS params)
     weighted_reduce_addrmod_init_math();
 
     _llk_math_wait_for_dest_available_<DstSync::SyncHalf>();
-    // The MVMULs accumulate; the API relies on the packer's clear of each half it releases, this test on a clear here.
+    // The MVMULs accumulate, so DEST must start cleared.
     TTI_ZEROACC(p_zeroacc::CLR_ALL, is_fp32_dest_acc_en, 0, ADDR_MOD_3, 0);
     for (std::uint32_t c = 0; c < NUM_CHUNKS; c++)
     {
@@ -125,8 +122,7 @@ void run_kernel(RUNTIME_PARAMETERS params)
     _llk_pack_dest_init_<DstSync::SyncHalf, is_fp32_dest_acc_en>();
     if constexpr (ROW_PACK)
     {
-        // weighted_reduce_addrmod_init's pack ADDR_MOD_3, and sdpa_custom_mm's pack-init DEST strides: faces 8 rows
-        // apart, slots 16.
+        // DEST strides as sdpa_custom_mm's pack init leaves them: faces 8 rows apart, slots 16.
         addr_mod_pack_t {
             .y_src = {.incr = 0, .clr = 0, .cr = 0},
             .z_src = {.incr = 1, .clr = 0},

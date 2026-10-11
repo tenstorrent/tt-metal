@@ -2,9 +2,9 @@
 //
 // SPDX-License-Identifier: Apache-2.0
 
-// Perf twin of api/compute/experimental/sdpa_weighted_reduce.h as the DSA indexer runs it; the unit is one chunk.
-// BLOCK unpacks all chunks in one context transaction (weighted_reduce_block), else one per chunk (weighted_reduce).
-// BLOCK_PACK packs them with weighted_reduce_pack_block's LLK, else one row pack per chunk (weighted_reduce_pack).
+// Perf twin of api/compute/experimental/sdpa_weighted_reduce.h; the unit is one chunk.
+// BLOCK unpacks all chunks in one context (weighted_reduce_block), else one per chunk; BLOCK_PACK packs them with the
+// block pack LLK, else one row pack per chunk.
 
 #include <cstdint>
 
@@ -33,7 +33,7 @@ constexpr std::uint32_t QK_TILE_WORDS      = QK_NUM_FACES * QK_FACE_R_DIM * FACE
 #include "experimental/llk_unpack_AB_sdpa_weighted_reduce.h"
 #include "llk_unpack_common.h"
 
-// weighted_reduce_unpack_impl of the api header, with L1 addresses in place of CB reads.
+// Mirrors the api header's unpack, with L1 addresses in place of CB reads.
 inline void chunk_unpack(const std::uint32_t address_qk, const std::uint32_t address_weights)
 {
     volatile std::uint32_t tt_reg_ptr* cfg = get_cfg_pointer();
@@ -75,8 +75,7 @@ void run_kernel(RUNTIME_PARAMETERS params)
             2 /*unpB_num_faces*/,
             TILE_SIZE_UNPACK_B,
             TILE_SIZE_UNPACK_A);
-        // weighted_reduce_init_short: no haloize, unpacker 0 reads one 16x16 face per UNPACR; unpacker 1 keeps the
-        // indexer's 8-row Q faces.
+        // As weighted_reduce_init_short; unpacker 1 keeps the indexer's 8-row Q faces.
         cfg_reg_rmw_tensix<THCON_SEC0_REG2_Haloize_mode_RMW>(0);
         TTI_SETADCXX(p_setadc::UNP_A, QK_FACE_R_DIM * FACE_C_DIM - 1, 0x0);
         TTI_SETADCXX(p_setadc::UNP_B, WEIGHTS_FACE_R_DIM * FACE_C_DIM - 1, 0x0);
@@ -128,8 +127,7 @@ void run_kernel(RUNTIME_PARAMETERS params)
 #include "experimental/llk_math_matmul_custom_no_mop.h"
 #include "llk_math_common.h"
 
-// weighted_reduce_addrmod_init and weighted_reduce_math_impl of the api header (ADDR_MOD_3 stands in for
-// sdpa_custom_mm_init's).
+// Mirrors the api header's math; ADDR_MOD_3 stands in for sdpa_custom_mm_init's.
 inline void weighted_reduce_addrmod_init_math()
 {
     addr_mod_t {
@@ -221,8 +219,7 @@ void run_kernel(RUNTIME_PARAMETERS params)
 
 using namespace ckernel::packer;
 
-// weighted_reduce_pack_impl of the api header: DEST slot row 0 (one row of each of two faces) as two raw PACRs into one
-// 1x32 row of the output tile.
+// Mirrors the api header's pack: two raw PACRs into one 1x32 output row.
 inline void row_pack(const std::uint32_t dst_slot, const std::uint32_t row_address)
 {
     set_dst_write_addr(dst_slot);
@@ -283,19 +280,18 @@ void run_kernel(RUNTIME_PARAMETERS params)
     const std::uint32_t tile0_address = L1_ADDRESS(buffer_Res[0]);
     {
         START_PERF_MEASURE("INIT")
-        // The indexer's [8, 32] output layout: two 8-row faces, so DEST slots sit 16 rows apart.
+        // The indexer's [8, 32] output layout: DEST slots sit 16 rows apart.
         _llk_pack_hw_configure_wrapper_<is_fp32_dest_acc_en, PackMode::Default>(
             formats.pack_src, formats.pack_dst, TILE_SIZE_PACK, WEIGHTS_FACE_R_DIM, TILE_C_DIM, 2 /*num_faces*/, true /*partial_face*/);
         _llk_pack_init_<PackMode::Default, false /*zero_output*/, false /*skip_addrmod_config*/, false /*skip_packer_strides*/>(
             formats.pack_src, WEIGHTS_FACE_R_DIM, TILE_C_DIM, 2 /*num_faces*/, 1 /*num_tiles*/, false /*skip_bh_tilize_workaround*/);
         _llk_pack_dest_init_<DstSync::SyncHalf, is_fp32_dest_acc_en>();
-        // weighted_reduce_addrmod_init's pack ADDR_MOD_3.
         addr_mod_pack_t {
             .y_src = {.incr = 0, .clr = 0, .cr = 0},
             .z_src = {.incr = 1, .clr = 0},
         }
             .set(ADDR_MOD_3);
-        // The DEST-read strides sdpa_custom_mm's pack init leaves for the row packs: faces 8 rows apart, slots 16
+        // DEST read strides as sdpa_custom_mm's pack init leaves them: faces 8 rows apart, slots 16
         cfg_reg_rmw_tensix<PCK0_ADDR_CTRL_ZW_REG_0_Zstride_RMW>(FACE_C_DIM * 8 * 2);
         cfg_reg_rmw_tensix<PCK0_ADDR_CTRL_ZW_REG_0_Wstride_RMW>((TILE_NUM_FACES / 2) * FACE_C_DIM * 8 * 2);
         PROFILER_SYNC();

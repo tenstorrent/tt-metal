@@ -1,9 +1,7 @@
 # SPDX-FileCopyrightText: © 2026 Tenstorrent AI ULC
 # SPDX-License-Identifier: Apache-2.0
 
-"""Perf sweep of the Blackhole SDPA weighted reduce (sources/sdpa_weighted_reduce_perf.cpp) as the DSA indexer runs it;
-unpack and pack each run per chunk or once per DEST section, and the figures are per chunk.
-"""
+"""Perf sweep of the Blackhole SDPA weighted reduce as the DSA indexer runs it; figures are per chunk."""
 
 from dataclasses import dataclass
 

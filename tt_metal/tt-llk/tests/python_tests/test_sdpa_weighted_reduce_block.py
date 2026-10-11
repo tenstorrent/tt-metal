@@ -1,10 +1,8 @@
 # SPDX-FileCopyrightText: © 2026 Tenstorrent AI ULC
 # SPDX-License-Identifier: Apache-2.0
 
-"""weighted_reduce_block and weighted_reduce_pack_block (api/compute/experimental/sdpa_weighted_reduce.h) through
-sdpa_weighted_reduce_block_test.cpp. Every head weight, qk face and qk row is distinct, so a face, row or chunk read from
-the wrong place changes the sums; the sums are small integers, exact in bf16.
-"""
+"""weighted_reduce_block and weighted_reduce_pack_block. Every weight, qk face and row is distinct, so a misread changes
+the sums, which are small integers exact in bf16."""
 
 from dataclasses import dataclass
 
@@ -49,8 +47,7 @@ class WEIGHTED_REDUCE_BLOCK(TemplateParameter):
 
 
 class WeightedReduceBlockStimuli(StimuliConfig):
-    """weights (one 32x32 tile) in buffer_A, the qk tiles back to back in buffer_B, raw bytes; the result region holds a
-    sentinel so rows the kernel does not write can be told apart."""
+    """Weights in buffer_A, qk tiles back to back in buffer_B; the result holds a sentinel to detect unwritten rows."""
 
     def __init__(self, packed_weights, packed_qk, num_chunks, res_tiles):
         super().__init__(
@@ -75,8 +72,7 @@ class WeightedReduceBlockStimuli(StimuliConfig):
 
 
 def _qk_faces(c, qk_faces):
-    """Chunk c's qk tile as qk_faces 16x16 faces: face 0 holds 0 to 3, face 1 holds 4 to 7, faces 2 and 3 (never read)
-    hold 64 and up."""
+    """Chunk c's qk tile as qk_faces 16x16 faces; faces 2 and 3 are never read and hold 64 and up."""
     k = torch.arange(FACE).view(FACE, 1)
     j = torch.arange(FACE).view(1, FACE)
     faces = [(c + k + 3 * j) % 4, 4 + (2 * c + k + j) % 4]
@@ -97,7 +93,7 @@ def _run(num_chunks, row_pack, qk_faces=2, first_chunk=0, first_slot=0):
         pack_bfp16(torch.cat([f.flatten() for f in chunk]).to(torch_format))
         for chunk in faces
     )
-    # out[p] = sum over the eight heads of weight[h] * qk[h, p]; qk rows 8 to 15 meet zero weights.
+    # qk rows 8 to 15 meet zero weights.
     golden = [
         torch.cat([weights @ f[:NUM_HEADS].float() for f in chunk[:2]]).to(torch_format)
         for chunk in faces
@@ -129,7 +125,7 @@ def _run(num_chunks, row_pack, qk_faces=2, first_chunk=0, first_slot=0):
 @skip_for_coverage
 @pytest.mark.parametrize("num_chunks, qk_faces", [(1, 2), (2, 2), (4, 2), (4, 4)])
 def test_sdpa_weighted_reduce_block(num_chunks, qk_faces):
-    """Chunk c's DEST slot is face c of DEST tile 0: the first MVMUL's 16 outputs in its row 0, the second's in its row 8."""
+    """Chunk c's DEST slot is face c of DEST tile 0."""
     golden, res = _run(num_chunks, row_pack=False, qk_faces=qk_faces)
     out = untilize_block(res, BF16, [TILE, TILE])
     for c, want in enumerate(golden):
@@ -157,8 +153,7 @@ def test_sdpa_weighted_reduce_block(num_chunks, qk_faces):
 def test_sdpa_weighted_reduce_block_row_pack(
     num_chunks, qk_faces, first_chunk, first_slot
 ):
-    """weighted_reduce_pack_block: chunk c's 32 outputs land in row first_chunk + c, counted across tiles, and no other
-    row of the result is written."""
+    """Chunk c's outputs land in row first_chunk + c, and no other row is written."""
     golden, res = _run(num_chunks, True, qk_faces, first_chunk, first_slot)
     rows = res.view(-1, TILE)
     sentinel = torch.tensor([SENTINEL * 0x101], dtype=torch.int32).to(torch.int16)
