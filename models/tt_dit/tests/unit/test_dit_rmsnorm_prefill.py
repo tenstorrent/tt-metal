@@ -27,7 +27,9 @@ FABRIC = {"fabric_config": ttnn.FabricConfig.FABRIC_1D, "trace_region_size": 400
 
 
 def _pcc(a: torch.Tensor, b: torch.Tensor) -> float:
-    return float(torch.corrcoef(torch.stack([a.flatten().float(), b.flatten().float()]))[0, 1])
+    # float64: in float32 the correlation of two 8M-element tensors loses about 1e-4, which is the
+    # size of the margin being tested (a perfectly rounded bf16 output scores 0.99987 in float32).
+    return float(torch.corrcoef(torch.stack([a.flatten().double(), b.flatten().double()]))[0, 1])
 
 
 def _reference(x: torch.Tensor, weight) -> torch.Tensor:
