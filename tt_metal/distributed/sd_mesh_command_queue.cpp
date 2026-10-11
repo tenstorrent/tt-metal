@@ -465,11 +465,7 @@ void SDMeshCommandQueue::finish(ttsl::Span<const SubDeviceId>) {
 void SDMeshCommandQueue::finish_nolock(ttsl::Span<const SubDeviceId>) {}
 
 void SDMeshCommandQueue::reset_worker_state(
-    bool,
-    uint32_t,
-    const vector_aligned<uint32_t>&,
-    const std::vector<std::pair<CoreRangeSet, uint32_t>>&,
-    ttsl::Span<const uint32_t>) {}
+    bool, uint32_t, const std::vector<std::pair<CoreRangeSet, uint32_t>>&, ttsl::Span<const uint32_t>) {}
 
 void SDMeshCommandQueue::record_begin(const MeshTraceId&, const std::shared_ptr<MeshTraceDescriptor>&) {
     TT_THROW("Not supported for slow dispatch");
