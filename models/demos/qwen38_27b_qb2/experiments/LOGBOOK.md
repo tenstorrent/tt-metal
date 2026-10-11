@@ -2642,3 +2642,58 @@ At 05:13 UTC, offline instruction recovery passed all requested counters on
 device rerun. The persistent service advanced to the six L1-bank captures and
 final control. `space-recovery-verified` retains this later observation; earlier
 failed and in-progress snapshots remain unchanged.
+
+## October 11: completed counter series, profiler fix and durable publication
+
+Resumed after the user's explicit Continue and inspected the existing service,
+without restarting the hardware. The persistent v4 large-operator run had
+completed at07:28:39UTC: all17 captures passed accuracy, exact output matching,
+counter coverage and cleanup. Terminal systemd state is inactive, MainPID0,
+Resultsuccess, ExecMainStatus0. GDN's ten groups and final control also completed.
+No full GPQA, AgentX or prefix HTTP job was launched during this collection.
+
+The projection/SDPA v2 instruction test had passed hardware and clean teardown,
+but analysis rejected missing counter records. Native logs report full profiler
+DRAM buffers and dropped markers. v3 split by operator boundary; its complete
+output projection still overflowed. v4 drains device profiler buffers before
+warmup, after warmup and after each measured END marker, preserving final
+counter metadata enrichment. It does not enable automatic MID_RUN_DUMP or
+weaken coverage. All17 v4 captures then passed without resetting hardware or
+changing installed libraries. FPU/pack/unpack come from the passing v2 captures;
+model hashes, precision, geometry and output hashes match v4 exactly.
+
+Collected105 sealed files with verified SHA256 and byte counts, including
+failed attempts, all successful summaries, frozen manifests, CPU/hardware XML,
+control timelines and terminal receipts. Native overflow excerpts additionally
+retain original log hashes and line numbers. Large instruction JSON and two
+CSV files were losslessly compressed locally after byte comparison; originals
+remain on the allocated host. The new reproduction script regenerates the
+weighted report using the sealed files. Four profiler source files match the
+successful v4 frozen source;41 focused CPU tests and pre-commit passed.
+
+Findings: B16 GDN recurrence has31.8% math activity,84.1% ANY_THREAD_STALL and
+98.4-99.5% sampled NoC/L1 grants. Output/down matmuls have39.7/50.6% math activity;
+their pack-interface grants are79/82%, while packer busy is only11.6/5.2%.
+SDPA's sampled NoC/L1 grants are98.5-100%. Counters favor investigating operand
+formatting and handoffs, but do not prove a universal NoC bottleneck, physical
+DRAM utilization, or a recoverable fraction of model latency. Wait fractions
+overlap. Eager complete-boundary spans include host gaps and cannot be projected
+onto traced model steps. No kernel performance improvement was made here.
+
+Best measured model remains20.884562TSU atB16/32K/TP4,47.882258ms. ThirtyTSU
+requires14.548925ms removed. Updated the roadmap/audit/fusion plan with current
+status and explicit next priorities;1-3ms GDN fusion remains an engineering
+target, not a measured result. Full GPQA stays gated on25TSU and AgentX on
+both prefix caching and SSD offload through serving. Native prefix restore
+passed separately; its branch has the qualification report.
+
+Workspace recovery: the earlier /private/tmp Qwen worktree directories were
+absent, although Git registrations, published refs and frozen host sources
+survived. The cause is unknown. Restored the published branch into the durable
+workspace at local-notes/worktrees/qwen38-long-context-recovery-20261011 and
+recovered the new profiler from frozen host sources. Unrecovered local-only
+experimental edits are not counted as tested, pushed or deployed. Future work
+uses this durable worktree. Remote branch was still a0240cf9761 before this push.
+
+Evidence and reproducible calculations:
+[operator-counters-20261011](../galaxy-evidence/operator-counters-20261011/README.md).

@@ -1,0 +1,518 @@
+{
+  "kernel_calls": 192,
+  "kernels": [
+    {
+      "batch": 16,
+      "padding": "skip",
+      "profiled": 0,
+      "kind": "epilogue",
+      "device": 0,
+      "median_us": 31.627
+    },
+    {
+      "batch": 16,
+      "padding": "skip",
+      "profiled": 0,
+      "kind": "epilogue",
+      "device": 4,
+      "median_us": 31.546
+    },
+    {
+      "batch": 16,
+      "padding": "skip",
+      "profiled": 0,
+      "kind": "epilogue",
+      "device": 8,
+      "median_us": 31.472
+    },
+    {
+      "batch": 16,
+      "padding": "skip",
+      "profiled": 0,
+      "kind": "epilogue",
+      "device": 12,
+      "median_us": 31.564
+    },
+    {
+      "batch": 16,
+      "padding": "skip",
+      "profiled": 0,
+      "kind": "recurrence",
+      "device": 0,
+      "median_us": 79.027
+    },
+    {
+      "batch": 16,
+      "padding": "skip",
+      "profiled": 0,
+      "kind": "recurrence",
+      "device": 4,
+      "median_us": 79.316
+    },
+    {
+      "batch": 16,
+      "padding": "skip",
+      "profiled": 0,
+      "kind": "recurrence",
+      "device": 8,
+      "median_us": 79.648
+    },
+    {
+      "batch": 16,
+      "padding": "skip",
+      "profiled": 0,
+      "kind": "recurrence",
+      "device": 12,
+      "median_us": 78.859
+    },
+    {
+      "batch": 16,
+      "padding": "skip",
+      "profiled": 1,
+      "kind": "epilogue",
+      "device": 0,
+      "median_us": 32.039
+    },
+    {
+      "batch": 16,
+      "padding": "skip",
+      "profiled": 1,
+      "kind": "epilogue",
+      "device": 4,
+      "median_us": 32.03
+    },
+    {
+      "batch": 16,
+      "padding": "skip",
+      "profiled": 1,
+      "kind": "epilogue",
+      "device": 8,
+      "median_us": 32.113
+    },
+    {
+      "batch": 16,
+      "padding": "skip",
+      "profiled": 1,
+      "kind": "epilogue",
+      "device": 12,
+      "median_us": 31.979
+    },
+    {
+      "batch": 16,
+      "padding": "skip",
+      "profiled": 1,
+      "kind": "recurrence",
+      "device": 0,
+      "median_us": 79.596
+    },
+    {
+      "batch": 16,
+      "padding": "skip",
+      "profiled": 1,
+      "kind": "recurrence",
+      "device": 4,
+      "median_us": 80.001
+    },
+    {
+      "batch": 16,
+      "padding": "skip",
+      "profiled": 1,
+      "kind": "recurrence",
+      "device": 8,
+      "median_us": 79.92
+    },
+    {
+      "batch": 16,
+      "padding": "skip",
+      "profiled": 1,
+      "kind": "recurrence",
+      "device": 12,
+      "median_us": 80.261
+    },
+    {
+      "batch": 16,
+      "padding": "zero",
+      "profiled": 0,
+      "kind": "epilogue",
+      "device": 0,
+      "median_us": 58.582
+    },
+    {
+      "batch": 16,
+      "padding": "zero",
+      "profiled": 0,
+      "kind": "epilogue",
+      "device": 4,
+      "median_us": 58.552
+    },
+    {
+      "batch": 16,
+      "padding": "zero",
+      "profiled": 0,
+      "kind": "epilogue",
+      "device": 8,
+      "median_us": 58.596
+    },
+    {
+      "batch": 16,
+      "padding": "zero",
+      "profiled": 0,
+      "kind": "epilogue",
+      "device": 12,
+      "median_us": 58.533
+    },
+    {
+      "batch": 16,
+      "padding": "zero",
+      "profiled": 0,
+      "kind": "recurrence",
+      "device": 0,
+      "median_us": 79.952
+    },
+    {
+      "batch": 16,
+      "padding": "zero",
+      "profiled": 0,
+      "kind": "recurrence",
+      "device": 4,
+      "median_us": 80.078
+    },
+    {
+      "batch": 16,
+      "padding": "zero",
+      "profiled": 0,
+      "kind": "recurrence",
+      "device": 8,
+      "median_us": 79.956
+    },
+    {
+      "batch": 16,
+      "padding": "zero",
+      "profiled": 0,
+      "kind": "recurrence",
+      "device": 12,
+      "median_us": 78.544
+    },
+    {
+      "batch": 16,
+      "padding": "zero",
+      "profiled": 1,
+      "kind": "epilogue",
+      "device": 0,
+      "median_us": 59.357
+    },
+    {
+      "batch": 16,
+      "padding": "zero",
+      "profiled": 1,
+      "kind": "epilogue",
+      "device": 4,
+      "median_us": 59.256
+    },
+    {
+      "batch": 16,
+      "padding": "zero",
+      "profiled": 1,
+      "kind": "epilogue",
+      "device": 8,
+      "median_us": 59.387
+    },
+    {
+      "batch": 16,
+      "padding": "zero",
+      "profiled": 1,
+      "kind": "epilogue",
+      "device": 12,
+      "median_us": 59.339
+    },
+    {
+      "batch": 16,
+      "padding": "zero",
+      "profiled": 1,
+      "kind": "recurrence",
+      "device": 0,
+      "median_us": 81.693
+    },
+    {
+      "batch": 16,
+      "padding": "zero",
+      "profiled": 1,
+      "kind": "recurrence",
+      "device": 4,
+      "median_us": 80.234
+    },
+    {
+      "batch": 16,
+      "padding": "zero",
+      "profiled": 1,
+      "kind": "recurrence",
+      "device": 8,
+      "median_us": 80.593
+    },
+    {
+      "batch": 16,
+      "padding": "zero",
+      "profiled": 1,
+      "kind": "recurrence",
+      "device": 12,
+      "median_us": 79.474
+    },
+    {
+      "batch": 32,
+      "padding": "skip",
+      "profiled": 0,
+      "kind": "epilogue",
+      "device": 0,
+      "median_us": 49.217
+    },
+    {
+      "batch": 32,
+      "padding": "skip",
+      "profiled": 0,
+      "kind": "epilogue",
+      "device": 4,
+      "median_us": 49.136
+    },
+    {
+      "batch": 32,
+      "padding": "skip",
+      "profiled": 0,
+      "kind": "epilogue",
+      "device": 8,
+      "median_us": 49.2
+    },
+    {
+      "batch": 32,
+      "padding": "skip",
+      "profiled": 0,
+      "kind": "epilogue",
+      "device": 12,
+      "median_us": 49.178
+    },
+    {
+      "batch": 32,
+      "padding": "skip",
+      "profiled": 0,
+      "kind": "recurrence",
+      "device": 0,
+      "median_us": 148.673
+    },
+    {
+      "batch": 32,
+      "padding": "skip",
+      "profiled": 0,
+      "kind": "recurrence",
+      "device": 4,
+      "median_us": 142.975
+    },
+    {
+      "batch": 32,
+      "padding": "skip",
+      "profiled": 0,
+      "kind": "recurrence",
+      "device": 8,
+      "median_us": 140.919
+    },
+    {
+      "batch": 32,
+      "padding": "skip",
+      "profiled": 0,
+      "kind": "recurrence",
+      "device": 12,
+      "median_us": 140.019
+    },
+    {
+      "batch": 32,
+      "padding": "skip",
+      "profiled": 1,
+      "kind": "epilogue",
+      "device": 0,
+      "median_us": 50.29
+    },
+    {
+      "batch": 32,
+      "padding": "skip",
+      "profiled": 1,
+      "kind": "epilogue",
+      "device": 4,
+      "median_us": 50.289
+    },
+    {
+      "batch": 32,
+      "padding": "skip",
+      "profiled": 1,
+      "kind": "epilogue",
+      "device": 8,
+      "median_us": 50.17
+    },
+    {
+      "batch": 32,
+      "padding": "skip",
+      "profiled": 1,
+      "kind": "epilogue",
+      "device": 12,
+      "median_us": 50.304
+    },
+    {
+      "batch": 32,
+      "padding": "skip",
+      "profiled": 1,
+      "kind": "recurrence",
+      "device": 0,
+      "median_us": 138.744
+    },
+    {
+      "batch": 32,
+      "padding": "skip",
+      "profiled": 1,
+      "kind": "recurrence",
+      "device": 4,
+      "median_us": 138.619
+    },
+    {
+      "batch": 32,
+      "padding": "skip",
+      "profiled": 1,
+      "kind": "recurrence",
+      "device": 8,
+      "median_us": 138.409
+    },
+    {
+      "batch": 32,
+      "padding": "skip",
+      "profiled": 1,
+      "kind": "recurrence",
+      "device": 12,
+      "median_us": 140.081
+    },
+    {
+      "batch": 32,
+      "padding": "zero",
+      "profiled": 0,
+      "kind": "epilogue",
+      "device": 0,
+      "median_us": 76.421
+    },
+    {
+      "batch": 32,
+      "padding": "zero",
+      "profiled": 0,
+      "kind": "epilogue",
+      "device": 4,
+      "median_us": 76.374
+    },
+    {
+      "batch": 32,
+      "padding": "zero",
+      "profiled": 0,
+      "kind": "epilogue",
+      "device": 8,
+      "median_us": 76.439
+    },
+    {
+      "batch": 32,
+      "padding": "zero",
+      "profiled": 0,
+      "kind": "epilogue",
+      "device": 12,
+      "median_us": 76.462
+    },
+    {
+      "batch": 32,
+      "padding": "zero",
+      "profiled": 0,
+      "kind": "recurrence",
+      "device": 0,
+      "median_us": 140.759
+    },
+    {
+      "batch": 32,
+      "padding": "zero",
+      "profiled": 0,
+      "kind": "recurrence",
+      "device": 4,
+      "median_us": 139.707
+    },
+    {
+      "batch": 32,
+      "padding": "zero",
+      "profiled": 0,
+      "kind": "recurrence",
+      "device": 8,
+      "median_us": 140.239
+    },
+    {
+      "batch": 32,
+      "padding": "zero",
+      "profiled": 0,
+      "kind": "recurrence",
+      "device": 12,
+      "median_us": 146.323
+    },
+    {
+      "batch": 32,
+      "padding": "zero",
+      "profiled": 1,
+      "kind": "epilogue",
+      "device": 0,
+      "median_us": 77.513
+    },
+    {
+      "batch": 32,
+      "padding": "zero",
+      "profiled": 1,
+      "kind": "epilogue",
+      "device": 4,
+      "median_us": 77.541
+    },
+    {
+      "batch": 32,
+      "padding": "zero",
+      "profiled": 1,
+      "kind": "epilogue",
+      "device": 8,
+      "median_us": 77.512
+    },
+    {
+      "batch": 32,
+      "padding": "zero",
+      "profiled": 1,
+      "kind": "epilogue",
+      "device": 12,
+      "median_us": 77.566
+    },
+    {
+      "batch": 32,
+      "padding": "zero",
+      "profiled": 1,
+      "kind": "recurrence",
+      "device": 0,
+      "median_us": 138.447
+    },
+    {
+      "batch": 32,
+      "padding": "zero",
+      "profiled": 1,
+      "kind": "recurrence",
+      "device": 4,
+      "median_us": 137.327
+    },
+    {
+      "batch": 32,
+      "padding": "zero",
+      "profiled": 1,
+      "kind": "recurrence",
+      "device": 8,
+      "median_us": 138.243
+    },
+    {
+      "batch": 32,
+      "padding": "zero",
+      "profiled": 1,
+      "kind": "recurrence",
+      "device": 12,
+      "median_us": 140.525
+    }
+  ],
+  "updated_at": "2026-10-11T05:12:35Z"
+}

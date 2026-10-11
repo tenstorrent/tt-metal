@@ -1,5 +1,15 @@
 # Operator optimization scope and priorities
 
+Latest update, October 11: the combined candidate completed at **20.884562 TSU
+(47.882258 ms), B16/32K/TP4**, with unchanged output tokens and matched controls.
+Full GPQA is now gated on measured 25 TSU; the earlier automatic >=1-TSU
+qualification plan below is historical. GDN and projection/SDPA counter series
+are complete, with exact outputs and complete requested coverage. No capture
+from that series is still queued. [Findings and next experiments](../galaxy-evidence/operator-counters-20261011/README.md)
+prioritize GDN preparation/handoffs and complete projection dataflow. The
+native prefix restore passed separately; HTTP restore and AgentX remain open.
+The last fully GPQA-qualified compact result is still 177/198 (89.39%).
+
 October 10, 2026 UTC. Primary workload: B16/32K on one TP4 replica; 16K is
 secondary, with 128K/256K regression checks at feasible concurrency. Retain
 BFP8 weights/KV, BF16 activations and FP32 recurrent state. Eight replicas

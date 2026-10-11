@@ -1,0 +1,1968 @@
+[
+  {
+    "source": "/home/ttuser/qwen38-artifacts-20261007/large-operator-control-v2/run.log",
+    "bytes": 2694507,
+    "sha256": "daec95b20f5f2b9e6f06532dfe1d8ccdbc9e9d7db9078887faea65c3ea9cd251",
+    "matches": [
+      {
+        "line": 11528,
+        "text": "2026-10-11 06:38:23.480 | warning  |           Metal | Profiler DRAM buffers were full, markers were dropped! device 4, worker core 1, 2, Risc BRISC,  bufferEndIndex = 11992. Please either decrease the number of ops being profiled or run read device profiler more often (profiler.cpp:1716)"
+      },
+      {
+        "line": 11529,
+        "text": "2026-10-11 06:38:23.480 | warning  |           Metal | Profiler DRAM buffers were full, markers were dropped! device 0, worker core 1, 2, Risc BRISC,  bufferEndIndex = 11992. Please either decrease the number of ops being profiled or run read device profiler more often (profiler.cpp:1716)"
+      },
+      {
+        "line": 11530,
+        "text": "2026-10-11 06:38:23.480 | warning  |           Metal | Profiler DRAM buffers were full, markers were dropped! device 12, worker core 1, 2, Risc BRISC,  bufferEndIndex = 11992. Please either decrease the number of ops being profiled or run read device profiler more often (profiler.cpp:1716)"
+      },
+      {
+        "line": 11531,
+        "text": "2026-10-11 06:38:23.480 | warning  |           Metal | Profiler DRAM buffers were full, markers were dropped! device 8, worker core 1, 2, Risc BRISC,  bufferEndIndex = 11992. Please either decrease the number of ops being profiled or run read device profiler more often (profiler.cpp:1716)"
+      },
+      {
+        "line": 11532,
+        "text": "2026-10-11 06:38:23.483 | warning  |           Metal | Profiler DRAM buffers were full, markers were dropped! device 8, worker core 1, 3, Risc BRISC,  bufferEndIndex = 11992. Please either decrease the number of ops being profiled or run read device profiler more often (profiler.cpp:1716)"
+      },
+      {
+        "line": 11533,
+        "text": "2026-10-11 06:38:23.483 | warning  |           Metal | Profiler DRAM buffers were full, markers were dropped! device 4, worker core 1, 3, Risc BRISC,  bufferEndIndex = 11992. Please either decrease the number of ops being profiled or run read device profiler more often (profiler.cpp:1716)"
+      },
+      {
+        "line": 11534,
+        "text": "2026-10-11 06:38:23.483 | warning  |           Metal | Profiler DRAM buffers were full, markers were dropped! device 0, worker core 1, 3, Risc BRISC,  bufferEndIndex = 11992. Please either decrease the number of ops being profiled or run read device profiler more often (profiler.cpp:1716)"
+      },
+      {
+        "line": 11535,
+        "text": "2026-10-11 06:38:23.483 | warning  |           Metal | Profiler DRAM buffers were full, markers were dropped! device 12, worker core 1, 3, Risc BRISC,  bufferEndIndex = 11992. Please either decrease the number of ops being profiled or run read device profiler more often (profiler.cpp:1716)"
+      },
+      {
+        "line": 11536,
+        "text": "2026-10-11 06:38:23.487 | warning  |           Metal | Profiler DRAM buffers were full, markers were dropped! device 8, worker core 1, 4, Risc BRISC,  bufferEndIndex = 11992. Please either decrease the number of ops being profiled or run read device profiler more often (profiler.cpp:1716)"
+      },
+      {
+        "line": 11537,
+        "text": "2026-10-11 06:38:23.487 | warning  |           Metal | Profiler DRAM buffers were full, markers were dropped! device 4, worker core 1, 4, Risc BRISC,  bufferEndIndex = 11992. Please either decrease the number of ops being profiled or run read device profiler more often (profiler.cpp:1716)"
+      },
+      {
+        "line": 11538,
+        "text": "2026-10-11 06:38:23.487 | warning  |           Metal | Profiler DRAM buffers were full, markers were dropped! device 12, worker core 1, 4, Risc BRISC,  bufferEndIndex = 11992. Please either decrease the number of ops being profiled or run read device profiler more often (profiler.cpp:1716)"
+      },
+      {
+        "line": 11539,
+        "text": "2026-10-11 06:38:23.487 | warning  |           Metal | Profiler DRAM buffers were full, markers were dropped! device 0, worker core 1, 4, Risc BRISC,  bufferEndIndex = 11992. Please either decrease the number of ops being profiled or run read device profiler more often (profiler.cpp:1716)"
+      },
+      {
+        "line": 11540,
+        "text": "2026-10-11 06:38:23.491 | warning  |           Metal | Profiler DRAM buffers were full, markers were dropped! device 8, worker core 1, 5, Risc BRISC,  bufferEndIndex = 11992. Please either decrease the number of ops being profiled or run read device profiler more often (profiler.cpp:1716)"
+      },
+      {
+        "line": 11541,
+        "text": "2026-10-11 06:38:23.491 | warning  |           Metal | Profiler DRAM buffers were full, markers were dropped! device 4, worker core 1, 5, Risc BRISC,  bufferEndIndex = 11992. Please either decrease the number of ops being profiled or run read device profiler more often (profiler.cpp:1716)"
+      },
+      {
+        "line": 11542,
+        "text": "2026-10-11 06:38:23.491 | warning  |           Metal | Profiler DRAM buffers were full, markers were dropped! device 12, worker core 1, 5, Risc BRISC,  bufferEndIndex = 11992. Please either decrease the number of ops being profiled or run read device profiler more often (profiler.cpp:1716)"
+      },
+      {
+        "line": 11543,
+        "text": "2026-10-11 06:38:23.491 | warning  |           Metal | Profiler DRAM buffers were full, markers were dropped! device 0, worker core 1, 5, Risc BRISC,  bufferEndIndex = 11992. Please either decrease the number of ops being profiled or run read device profiler more often (profiler.cpp:1716)"
+      },
+      {
+        "line": 11544,
+        "text": "2026-10-11 06:38:23.494 | warning  |           Metal | Profiler DRAM buffers were full, markers were dropped! device 4, worker core 1, 6, Risc BRISC,  bufferEndIndex = 11896. Please either decrease the number of ops being profiled or run read device profiler more often (profiler.cpp:1716)"
+      },
+      {
+        "line": 11545,
+        "text": "2026-10-11 06:38:23.495 | warning  |           Metal | Profiler DRAM buffers were full, markers were dropped! device 8, worker core 1, 6, Risc BRISC,  bufferEndIndex = 11896. Please either decrease the number of ops being profiled or run read device profiler more often (profiler.cpp:1716)"
+      },
+      {
+        "line": 11546,
+        "text": "2026-10-11 06:38:23.495 | warning  |           Metal | Profiler DRAM buffers were full, markers were dropped! device 12, worker core 1, 6, Risc BRISC,  bufferEndIndex = 11896. Please either decrease the number of ops being profiled or run read device profiler more often (profiler.cpp:1716)"
+      },
+      {
+        "line": 11547,
+        "text": "2026-10-11 06:38:23.496 | warning  |           Metal | Profiler DRAM buffers were full, markers were dropped! device 0, worker core 1, 6, Risc BRISC,  bufferEndIndex = 11896. Please either decrease the number of ops being profiled or run read device profiler more often (profiler.cpp:1716)"
+      },
+      {
+        "line": 11548,
+        "text": "2026-10-11 06:38:23.498 | warning  |           Metal | Profiler DRAM buffers were full, markers were dropped! device 4, worker core 1, 7, Risc BRISC,  bufferEndIndex = 11896. Please either decrease the number of ops being profiled or run read device profiler more often (profiler.cpp:1716)"
+      },
+      {
+        "line": 11549,
+        "text": "2026-10-11 06:38:23.498 | warning  |           Metal | Profiler DRAM buffers were full, markers were dropped! device 8, worker core 1, 7, Risc BRISC,  bufferEndIndex = 11896. Please either decrease the number of ops being profiled or run read device profiler more often (profiler.cpp:1716)"
+      },
+      {
+        "line": 11550,
+        "text": "2026-10-11 06:38:23.500 | warning  |           Metal | Profiler DRAM buffers were full, markers were dropped! device 12, worker core 1, 7, Risc BRISC,  bufferEndIndex = 11896. Please either decrease the number of ops being profiled or run read device profiler more often (profiler.cpp:1716)"
+      },
+      {
+        "line": 11551,
+        "text": "2026-10-11 06:38:23.501 | warning  |           Metal | Profiler DRAM buffers were full, markers were dropped! device 0, worker core 1, 7, Risc BRISC,  bufferEndIndex = 11896. Please either decrease the number of ops being profiled or run read device profiler more often (profiler.cpp:1716)"
+      },
+      {
+        "line": 11552,
+        "text": "2026-10-11 06:38:23.501 | warning  |           Metal | Profiler DRAM buffers were full, markers were dropped! device 4, worker core 1, 8, Risc BRISC,  bufferEndIndex = 11896. Please either decrease the number of ops being profiled or run read device profiler more often (profiler.cpp:1716)"
+      },
+      {
+        "line": 11553,
+        "text": "2026-10-11 06:38:23.501 | warning  |           Metal | Profiler DRAM buffers were full, markers were dropped! device 8, worker core 1, 8, Risc BRISC,  bufferEndIndex = 11896. Please either decrease the number of ops being profiled or run read device profiler more often (profiler.cpp:1716)"
+      },
+      {
+        "line": 11554,
+        "text": "2026-10-11 06:38:23.504 | warning  |           Metal | Profiler DRAM buffers were full, markers were dropped! device 12, worker core 1, 8, Risc BRISC,  bufferEndIndex = 11896. Please either decrease the number of ops being profiled or run read device profiler more often (profiler.cpp:1716)"
+      },
+      {
+        "line": 11555,
+        "text": "2026-10-11 06:38:23.504 | warning  |           Metal | Profiler DRAM buffers were full, markers were dropped! device 0, worker core 1, 8, Risc BRISC,  bufferEndIndex = 11896. Please either decrease the number of ops being profiled or run read device profiler more often (profiler.cpp:1716)"
+      },
+      {
+        "line": 11556,
+        "text": "2026-10-11 06:38:23.504 | warning  |           Metal | Profiler DRAM buffers were full, markers were dropped! device 4, worker core 1, 9, Risc BRISC,  bufferEndIndex = 11908. Please either decrease the number of ops being profiled or run read device profiler more often (profiler.cpp:1716)"
+      },
+      {
+        "line": 11557,
+        "text": "2026-10-11 06:38:23.505 | warning  |           Metal | Profiler DRAM buffers were full, markers were dropped! device 8, worker core 1, 9, Risc BRISC,  bufferEndIndex = 11908. Please either decrease the number of ops being profiled or run read device profiler more often (profiler.cpp:1716)"
+      },
+      {
+        "line": 11558,
+        "text": "2026-10-11 06:38:23.507 | warning  |           Metal | Profiler DRAM buffers were full, markers were dropped! device 12, worker core 1, 9, Risc BRISC,  bufferEndIndex = 11908. Please either decrease the number of ops being profiled or run read device profiler more often (profiler.cpp:1716)"
+      },
+      {
+        "line": 11559,
+        "text": "2026-10-11 06:38:23.507 | warning  |           Metal | Profiler DRAM buffers were full, markers were dropped! device 0, worker core 1, 9, Risc BRISC,  bufferEndIndex = 11908. Please either decrease the number of ops being profiled or run read device profiler more often (profiler.cpp:1716)"
+      },
+      {
+        "line": 11560,
+        "text": "2026-10-11 06:38:23.508 | warning  |           Metal | Profiler DRAM buffers were full, markers were dropped! device 4, worker core 1, 10, Risc BRISC,  bufferEndIndex = 11896. Please either decrease the number of ops being profiled or run read device profiler more often (profiler.cpp:1716)"
+      },
+      {
+        "line": 11561,
+        "text": "2026-10-11 06:38:23.508 | warning  |           Metal | Profiler DRAM buffers were full, markers were dropped! device 8, worker core 1, 10, Risc BRISC,  bufferEndIndex = 11896. Please either decrease the number of ops being profiled or run read device profiler more often (profiler.cpp:1716)"
+      },
+      {
+        "line": 11562,
+        "text": "2026-10-11 06:38:23.510 | warning  |           Metal | Profiler DRAM buffers were full, markers were dropped! device 12, worker core 1, 10, Risc BRISC,  bufferEndIndex = 11896. Please either decrease the number of ops being profiled or run read device profiler more often (profiler.cpp:1716)"
+      },
+      {
+        "line": 11563,
+        "text": "2026-10-11 06:38:23.511 | warning  |           Metal | Profiler DRAM buffers were full, markers were dropped! device 4, worker core 1, 11, Risc BRISC,  bufferEndIndex = 11908. Please either decrease the number of ops being profiled or run read device profiler more often (profiler.cpp:1716)"
+      },
+      {
+        "line": 11564,
+        "text": "2026-10-11 06:38:23.511 | warning  |           Metal | Profiler DRAM buffers were full, markers were dropped! device 0, worker core 1, 10, Risc BRISC,  bufferEndIndex = 11896. Please either decrease the number of ops being profiled or run read device profiler more often (profiler.cpp:1716)"
+      },
+      {
+        "line": 11565,
+        "text": "2026-10-11 06:38:23.511 | warning  |           Metal | Profiler DRAM buffers were full, markers were dropped! device 8, worker core 1, 11, Risc BRISC,  bufferEndIndex = 11908. Please either decrease the number of ops being profiled or run read device profiler more often (profiler.cpp:1716)"
+      },
+      {
+        "line": 11566,
+        "text": "2026-10-11 06:38:23.514 | warning  |           Metal | Profiler DRAM buffers were full, markers were dropped! device 12, worker core 1, 11, Risc BRISC,  bufferEndIndex = 11908. Please either decrease the number of ops being profiled or run read device profiler more often (profiler.cpp:1716)"
+      },
+      {
+        "line": 11567,
+        "text": "2026-10-11 06:38:23.514 | warning  |           Metal | Profiler DRAM buffers were full, markers were dropped! device 4, worker core 2, 2, Risc BRISC,  bufferEndIndex = 11992. Please either decrease the number of ops being profiled or run read device profiler more often (profiler.cpp:1716)"
+      },
+      {
+        "line": 11568,
+        "text": "2026-10-11 06:38:23.515 | warning  |           Metal | Profiler DRAM buffers were full, markers were dropped! device 8, worker core 2, 2, Risc BRISC,  bufferEndIndex = 11992. Please either decrease the number of ops being profiled or run read device profiler more often (profiler.cpp:1716)"
+      },
+      {
+        "line": 11569,
+        "text": "2026-10-11 06:38:23.516 | warning  |           Metal | Profiler DRAM buffers were full, markers were dropped! device 0, worker core 1, 11, Risc BRISC,  bufferEndIndex = 11908. Please either decrease the number of ops being profiled or run read device profiler more often (profiler.cpp:1716)"
+      },
+      {
+        "line": 11570,
+        "text": "2026-10-11 06:38:23.518 | warning  |           Metal | Profiler DRAM buffers were full, markers were dropped! device 4, worker core 2, 3, Risc BRISC,  bufferEndIndex = 11992. Please either decrease the number of ops being profiled or run read device profiler more often (profiler.cpp:1716)"
+      },
+      {
+        "line": 11571,
+        "text": "2026-10-11 06:38:23.518 | warning  |           Metal | Profiler DRAM buffers were full, markers were dropped! device 12, worker core 2, 2, Risc BRISC,  bufferEndIndex = 11992. Please either decrease the number of ops being profiled or run read device profiler more often (profiler.cpp:1716)"
+      },
+      {
+        "line": 11572,
+        "text": "2026-10-11 06:38:23.519 | warning  |           Metal | Profiler DRAM buffers were full, markers were dropped! device 8, worker core 2, 3, Risc BRISC,  bufferEndIndex = 11992. Please either decrease the number of ops being profiled or run read device profiler more often (profiler.cpp:1716)"
+      },
+      {
+        "line": 11573,
+        "text": "2026-10-11 06:38:23.519 | warning  |           Metal | Profiler DRAM buffers were full, markers were dropped! device 0, worker core 2, 2, Risc BRISC,  bufferEndIndex = 11992. Please either decrease the number of ops being profiled or run read device profiler more often (profiler.cpp:1716)"
+      },
+      {
+        "line": 11574,
+        "text": "2026-10-11 06:38:23.521 | warning  |           Metal | Profiler DRAM buffers were full, markers were dropped! device 8, worker core 2, 4, Risc BRISC,  bufferEndIndex = 11992. Please either decrease the number of ops being profiled or run read device profiler more often (profiler.cpp:1716)"
+      },
+      {
+        "line": 11575,
+        "text": "2026-10-11 06:38:23.522 | warning  |           Metal | Profiler DRAM buffers were full, markers were dropped! device 0, worker core 2, 3, Risc BRISC,  bufferEndIndex = 11992. Please either decrease the number of ops being profiled or run read device profiler more often (profiler.cpp:1716)"
+      },
+      {
+        "line": 11576,
+        "text": "2026-10-11 06:38:23.522 | warning  |           Metal | Profiler DRAM buffers were full, markers were dropped! device 12, worker core 2, 3, Risc BRISC,  bufferEndIndex = 11992. Please either decrease the number of ops being profiled or run read device profiler more often (profiler.cpp:1716)"
+      },
+      {
+        "line": 11577,
+        "text": "2026-10-11 06:38:23.522 | warning  |           Metal | Profiler DRAM buffers were full, markers were dropped! device 4, worker core 2, 4, Risc BRISC,  bufferEndIndex = 11992. Please either decrease the number of ops being profiled or run read device profiler more often (profiler.cpp:1716)"
+      },
+      {
+        "line": 11578,
+        "text": "2026-10-11 06:38:23.524 | warning  |           Metal | Profiler DRAM buffers were full, markers were dropped! device 8, worker core 2, 5, Risc BRISC,  bufferEndIndex = 11992. Please either decrease the number of ops being profiled or run read device profiler more often (profiler.cpp:1716)"
+      },
+      {
+        "line": 11579,
+        "text": "2026-10-11 06:38:23.524 | warning  |           Metal | Profiler DRAM buffers were full, markers were dropped! device 0, worker core 2, 4, Risc BRISC,  bufferEndIndex = 11992. Please either decrease the number of ops being profiled or run read device profiler more often (profiler.cpp:1716)"
+      },
+      {
+        "line": 11580,
+        "text": "2026-10-11 06:38:23.524 | warning  |           Metal | Profiler DRAM buffers were full, markers were dropped! device 12, worker core 2, 4, Risc BRISC,  bufferEndIndex = 11992. Please either decrease the number of ops being profiled or run read device profiler more often (profiler.cpp:1716)"
+      },
+      {
+        "line": 11581,
+        "text": "2026-10-11 06:38:23.525 | warning  |           Metal | Profiler DRAM buffers were full, markers were dropped! device 4, worker core 2, 5, Risc BRISC,  bufferEndIndex = 11992. Please either decrease the number of ops being profiled or run read device profiler more often (profiler.cpp:1716)"
+      },
+      {
+        "line": 11582,
+        "text": "2026-10-11 06:38:23.526 | warning  |           Metal | Profiler DRAM buffers were full, markers were dropped! device 8, worker core 2, 6, Risc BRISC,  bufferEndIndex = 11896. Please either decrease the number of ops being profiled or run read device profiler more often (profiler.cpp:1716)"
+      },
+      {
+        "line": 11583,
+        "text": "2026-10-11 06:38:23.527 | warning  |           Metal | Profiler DRAM buffers were full, markers were dropped! device 0, worker core 2, 5, Risc BRISC,  bufferEndIndex = 11992. Please either decrease the number of ops being profiled or run read device profiler more often (profiler.cpp:1716)"
+      },
+      {
+        "line": 11584,
+        "text": "2026-10-11 06:38:23.527 | warning  |           Metal | Profiler DRAM buffers were full, markers were dropped! device 12, worker core 2, 5, Risc BRISC,  bufferEndIndex = 11992. Please either decrease the number of ops being profiled or run read device profiler more often (profiler.cpp:1716)"
+      },
+      {
+        "line": 11585,
+        "text": "2026-10-11 06:38:23.527 | warning  |           Metal | Profiler DRAM buffers were full, markers were dropped! device 4, worker core 2, 6, Risc BRISC,  bufferEndIndex = 11896. Please either decrease the number of ops being profiled or run read device profiler more often (profiler.cpp:1716)"
+      },
+      {
+        "line": 11586,
+        "text": "2026-10-11 06:38:23.528 | warning  |           Metal | Profiler DRAM buffers were full, markers were dropped! device 8, worker core 2, 7, Risc BRISC,  bufferEndIndex = 11896. Please either decrease the number of ops being profiled or run read device profiler more often (profiler.cpp:1716)"
+      },
+      {
+        "line": 11587,
+        "text": "2026-10-11 06:38:23.529 | warning  |           Metal | Profiler DRAM buffers were full, markers were dropped! device 4, worker core 2, 7, Risc BRISC,  bufferEndIndex = 11896. Please either decrease the number of ops being profiled or run read device profiler more often (profiler.cpp:1716)"
+      },
+      {
+        "line": 11588,
+        "text": "2026-10-11 06:38:23.530 | warning  |           Metal | Profiler DRAM buffers were full, markers were dropped! device 12, worker core 2, 6, Risc BRISC,  bufferEndIndex = 11896. Please either decrease the number of ops being profiled or run read device profiler more often (profiler.cpp:1716)"
+      },
+      {
+        "line": 11589,
+        "text": "2026-10-11 06:38:23.530 | warning  |           Metal | Profiler DRAM buffers were full, markers were dropped! device 0, worker core 2, 6, Risc BRISC,  bufferEndIndex = 11896. Please either decrease the number of ops being profiled or run read device profiler more often (profiler.cpp:1716)"
+      },
+      {
+        "line": 11590,
+        "text": "2026-10-11 06:38:23.530 | warning  |           Metal | Profiler DRAM buffers were full, markers were dropped! device 8, worker core 2, 8, Risc BRISC,  bufferEndIndex = 11884. Please either decrease the number of ops being profiled or run read device profiler more often (profiler.cpp:1716)"
+      },
+      {
+        "line": 11591,
+        "text": "2026-10-11 06:38:23.531 | warning  |           Metal | Profiler DRAM buffers were full, markers were dropped! device 4, worker core 2, 8, Risc BRISC,  bufferEndIndex = 11884. Please either decrease the number of ops being profiled or run read device profiler more often (profiler.cpp:1716)"
+      },
+      {
+        "line": 11592,
+        "text": "2026-10-11 06:38:23.532 | warning  |           Metal | Profiler DRAM buffers were full, markers were dropped! device 0, worker core 2, 7, Risc BRISC,  bufferEndIndex = 11896. Please either decrease the number of ops being profiled or run read device profiler more often (profiler.cpp:1716)"
+      },
+      {
+        "line": 11593,
+        "text": "2026-10-11 06:38:23.532 | warning  |           Metal | Profiler DRAM buffers were full, markers were dropped! device 12, worker core 2, 7, Risc BRISC,  bufferEndIndex = 11896. Please either decrease the number of ops being profiled or run read device profiler more often (profiler.cpp:1716)"
+      },
+      {
+        "line": 11594,
+        "text": "2026-10-11 06:38:23.533 | warning  |           Metal | Profiler DRAM buffers were full, markers were dropped! device 8, worker core 2, 9, Risc BRISC,  bufferEndIndex = 11884. Please either decrease the number of ops being profiled or run read device profiler more often (profiler.cpp:1716)"
+      },
+      {
+        "line": 11595,
+        "text": "2026-10-11 06:38:23.534 | warning  |           Metal | Profiler DRAM buffers were full, markers were dropped! device 4, worker core 2, 9, Risc BRISC,  bufferEndIndex = 11884. Please either decrease the number of ops being profiled or run read device profiler more often (profiler.cpp:1716)"
+      },
+      {
+        "line": 11596,
+        "text": "2026-10-11 06:38:23.534 | warning  |           Metal | Profiler DRAM buffers were full, markers were dropped! device 0, worker core 2, 8, Risc BRISC,  bufferEndIndex = 11884. Please either decrease the number of ops being profiled or run read device profiler more often (profiler.cpp:1716)"
+      },
+      {
+        "line": 11597,
+        "text": "2026-10-11 06:38:23.535 | warning  |           Metal | Profiler DRAM buffers were full, markers were dropped! device 8, worker core 2, 10, Risc BRISC,  bufferEndIndex = 11884. Please either decrease the number of ops being profiled or run read device profiler more often (profiler.cpp:1716)"
+      },
+      {
+        "line": 11598,
+        "text": "2026-10-11 06:38:23.535 | warning  |           Metal | Profiler DRAM buffers were full, markers were dropped! device 12, worker core 2, 8, Risc BRISC,  bufferEndIndex = 11884. Please either decrease the number of ops being profiled or run read device profiler more often (profiler.cpp:1716)"
+      },
+      {
+        "line": 11599,
+        "text": "2026-10-11 06:38:23.536 | warning  |           Metal | Profiler DRAM buffers were full, markers were dropped! device 4, worker core 2, 10, Risc BRISC,  bufferEndIndex = 11884. Please either decrease the number of ops being profiled or run read device profiler more often (profiler.cpp:1716)"
+      },
+      {
+        "line": 11600,
+        "text": "2026-10-11 06:38:23.536 | warning  |           Metal | Profiler DRAM buffers were full, markers were dropped! device 0, worker core 2, 9, Risc BRISC,  bufferEndIndex = 11884. Please either decrease the number of ops being profiled or run read device profiler more often (profiler.cpp:1716)"
+      },
+      {
+        "line": 11601,
+        "text": "2026-10-11 06:38:23.537 | warning  |           Metal | Profiler DRAM buffers were full, markers were dropped! device 8, worker core 2, 11, Risc BRISC,  bufferEndIndex = 11884. Please either decrease the number of ops being profiled or run read device profiler more often (profiler.cpp:1716)"
+      },
+      {
+        "line": 11602,
+        "text": "2026-10-11 06:38:23.537 | warning  |           Metal | Profiler DRAM buffers were full, markers were dropped! device 12, worker core 2, 9, Risc BRISC,  bufferEndIndex = 11884. Please either decrease the number of ops being profiled or run read device profiler more often (profiler.cpp:1716)"
+      },
+      {
+        "line": 11603,
+        "text": "2026-10-11 06:38:23.538 | warning  |           Metal | Profiler DRAM buffers were full, markers were dropped! device 4, worker core 2, 11, Risc BRISC,  bufferEndIndex = 11884. Please either decrease the number of ops being profiled or run read device profiler more often (profiler.cpp:1716)"
+      },
+      {
+        "line": 11604,
+        "text": "2026-10-11 06:38:23.539 | warning  |           Metal | Profiler DRAM buffers were full, markers were dropped! device 0, worker core 2, 10, Risc BRISC,  bufferEndIndex = 11884. Please either decrease the number of ops being profiled or run read device profiler more often (profiler.cpp:1716)"
+      },
+      {
+        "line": 11605,
+        "text": "2026-10-11 06:38:23.539 | warning  |           Metal | Profiler DRAM buffers were full, markers were dropped! device 8, worker core 3, 2, Risc BRISC,  bufferEndIndex = 11992. Please either decrease the number of ops being profiled or run read device profiler more often (profiler.cpp:1716)"
+      },
+      {
+        "line": 11606,
+        "text": "2026-10-11 06:38:23.539 | warning  |           Metal | Profiler DRAM buffers were full, markers were dropped! device 12, worker core 2, 10, Risc BRISC,  bufferEndIndex = 11884. Please either decrease the number of ops being profiled or run read device profiler more often (profiler.cpp:1716)"
+      },
+      {
+        "line": 11607,
+        "text": "2026-10-11 06:38:23.540 | warning  |           Metal | Profiler DRAM buffers were full, markers were dropped! device 0, worker core 2, 11, Risc BRISC,  bufferEndIndex = 11884. Please either decrease the number of ops being profiled or run read device profiler more often (profiler.cpp:1716)"
+      },
+      {
+        "line": 11608,
+        "text": "2026-10-11 06:38:23.540 | warning  |           Metal | Profiler DRAM buffers were full, markers were dropped! device 4, worker core 3, 2, Risc BRISC,  bufferEndIndex = 11992. Please either decrease the number of ops being profiled or run read device profiler more often (profiler.cpp:1716)"
+      },
+      {
+        "line": 11609,
+        "text": "2026-10-11 06:38:23.541 | warning  |           Metal | Profiler DRAM buffers were full, markers were dropped! device 8, worker core 3, 3, Risc BRISC,  bufferEndIndex = 11992. Please either decrease the number of ops being profiled or run read device profiler more often (profiler.cpp:1716)"
+      },
+      {
+        "line": 11610,
+        "text": "2026-10-11 06:38:23.542 | warning  |           Metal | Profiler DRAM buffers were full, markers were dropped! device 12, worker core 2, 11, Risc BRISC,  bufferEndIndex = 11884. Please either decrease the number of ops being profiled or run read device profiler more often (profiler.cpp:1716)"
+      },
+      {
+        "line": 11611,
+        "text": "2026-10-11 06:38:23.542 | warning  |           Metal | Profiler DRAM buffers were full, markers were dropped! device 0, worker core 3, 2, Risc BRISC,  bufferEndIndex = 11992. Please either decrease the number of ops being profiled or run read device profiler more often (profiler.cpp:1716)"
+      },
+      {
+        "line": 11612,
+        "text": "2026-10-11 06:38:23.542 | warning  |           Metal | Profiler DRAM buffers were full, markers were dropped! device 8, worker core 3, 4, Risc BRISC,  bufferEndIndex = 11992. Please either decrease the number of ops being profiled or run read device profiler more often (profiler.cpp:1716)"
+      },
+      {
+        "line": 11613,
+        "text": "2026-10-11 06:38:23.543 | warning  |           Metal | Profiler DRAM buffers were full, markers were dropped! device 4, worker core 3, 3, Risc BRISC,  bufferEndIndex = 11992. Please either decrease the number of ops being profiled or run read device profiler more often (profiler.cpp:1716)"
+      },
+      {
+        "line": 11614,
+        "text": "2026-10-11 06:38:23.543 | warning  |           Metal | Profiler DRAM buffers were full, markers were dropped! device 0, worker core 3, 3, Risc BRISC,  bufferEndIndex = 11992. Please either decrease the number of ops being profiled or run read device profiler more often (profiler.cpp:1716)"
+      },
+      {
+        "line": 11615,
+        "text": "2026-10-11 06:38:23.544 | warning  |           Metal | Profiler DRAM buffers were full, markers were dropped! device 8, worker core 3, 5, Risc BRISC,  bufferEndIndex = 11992. Please either decrease the number of ops being profiled or run read device profiler more often (profiler.cpp:1716)"
+      },
+      {
+        "line": 11616,
+        "text": "2026-10-11 06:38:23.545 | warning  |           Metal | Profiler DRAM buffers were full, markers were dropped! device 12, worker core 3, 2, Risc BRISC,  bufferEndIndex = 11992. Please either decrease the number of ops being profiled or run read device profiler more often (profiler.cpp:1716)"
+      },
+      {
+        "line": 11617,
+        "text": "2026-10-11 06:38:23.545 | warning  |           Metal | Profiler DRAM buffers were full, markers were dropped! device 0, worker core 3, 4, Risc BRISC,  bufferEndIndex = 11992. Please either decrease the number of ops being profiled or run read device profiler more often (profiler.cpp:1716)"
+      },
+      {
+        "line": 11618,
+        "text": "2026-10-11 06:38:23.546 | warning  |           Metal | Profiler DRAM buffers were full, markers were dropped! device 4, worker core 3, 4, Risc BRISC,  bufferEndIndex = 11992. Please either decrease the number of ops being profiled or run read device profiler more often (profiler.cpp:1716)"
+      },
+      {
+        "line": 11619,
+        "text": "2026-10-11 06:38:23.546 | warning  |           Metal | Profiler DRAM buffers were full, markers were dropped! device 8, worker core 3, 6, Risc BRISC,  bufferEndIndex = 11884. Please either decrease the number of ops being profiled or run read device profiler more often (profiler.cpp:1716)"
+      },
+      {
+        "line": 11620,
+        "text": "2026-10-11 06:38:23.547 | warning  |           Metal | Profiler DRAM buffers were full, markers were dropped! device 0, worker core 3, 5, Risc BRISC,  bufferEndIndex = 11992. Please either decrease the number of ops being profiled or run read device profiler more often (profiler.cpp:1716)"
+      },
+      {
+        "line": 11621,
+        "text": "2026-10-11 06:38:23.547 | warning  |           Metal | Profiler DRAM buffers were full, markers were dropped! device 8, worker core 3, 7, Risc BRISC,  bufferEndIndex = 11884. Please either decrease the number of ops being profiled or run read device profiler more often (profiler.cpp:1716)"
+      },
+      {
+        "line": 11622,
+        "text": "2026-10-11 06:38:23.548 | warning  |           Metal | Profiler DRAM buffers were full, markers were dropped! device 4, worker core 3, 5, Risc BRISC,  bufferEndIndex = 11992. Please either decrease the number of ops being profiled or run read device profiler more often (profiler.cpp:1716)"
+      },
+      {
+        "line": 11623,
+        "text": "2026-10-11 06:38:23.548 | warning  |           Metal | Profiler DRAM buffers were full, markers were dropped! device 12, worker core 3, 3, Risc BRISC,  bufferEndIndex = 11992. Please either decrease the number of ops being profiled or run read device profiler more often (profiler.cpp:1716)"
+      },
+      {
+        "line": 11624,
+        "text": "2026-10-11 06:38:23.548 | warning  |           Metal | Profiler DRAM buffers were full, markers were dropped! device 0, worker core 3, 6, Risc BRISC,  bufferEndIndex = 11884. Please either decrease the number of ops being profiled or run read device profiler more often (profiler.cpp:1716)"
+      },
+      {
+        "line": 11625,
+        "text": "2026-10-11 06:38:23.548 | warning  |           Metal | Profiler DRAM buffers were full, markers were dropped! device 8, worker core 3, 8, Risc BRISC,  bufferEndIndex = 11884. Please either decrease the number of ops being profiled or run read device profiler more often (profiler.cpp:1716)"
+      },
+      {
+        "line": 11626,
+        "text": "2026-10-11 06:38:23.550 | warning  |           Metal | Profiler DRAM buffers were full, markers were dropped! device 0, worker core 3, 7, Risc BRISC,  bufferEndIndex = 11884. Please either decrease the number of ops being profiled or run read device profiler more often (profiler.cpp:1716)"
+      },
+      {
+        "line": 11627,
+        "text": "2026-10-11 06:38:23.550 | warning  |           Metal | Profiler DRAM buffers were full, markers were dropped! device 8, worker core 3, 9, Risc BRISC,  bufferEndIndex = 11884. Please either decrease the number of ops being profiled or run read device profiler more often (profiler.cpp:1716)"
+      },
+      {
+        "line": 11628,
+        "text": "2026-10-11 06:38:23.550 | warning  |           Metal | Profiler DRAM buffers were full, markers were dropped! device 4, worker core 3, 6, Risc BRISC,  bufferEndIndex = 11884. Please either decrease the number of ops being profiled or run read device profiler more often (profiler.cpp:1716)"
+      },
+      {
+        "line": 11629,
+        "text": "2026-10-11 06:38:23.551 | warning  |           Metal | Profiler DRAM buffers were full, markers were dropped! device 12, worker core 3, 4, Risc BRISC,  bufferEndIndex = 11992. Please either decrease the number of ops being profiled or run read device profiler more often (profiler.cpp:1716)"
+      },
+      {
+        "line": 11630,
+        "text": "2026-10-11 06:38:23.551 | warning  |           Metal | Profiler DRAM buffers were full, markers were dropped! device 8, worker core 3, 10, Risc BRISC,  bufferEndIndex = 11884. Please either decrease the number of ops being profiled or run read device profiler more often (profiler.cpp:1716)"
+      },
+      {
+        "line": 11631,
+        "text": "2026-10-11 06:38:23.551 | warning  |           Metal | Profiler DRAM buffers were full, markers were dropped! device 0, worker core 3, 8, Risc BRISC,  bufferEndIndex = 11884. Please either decrease the number of ops being profiled or run read device profiler more often (profiler.cpp:1716)"
+      },
+      {
+        "line": 11632,
+        "text": "2026-10-11 06:38:23.552 | warning  |           Metal | Profiler DRAM buffers were full, markers were dropped! device 12, worker core 3, 5, Risc BRISC,  bufferEndIndex = 11992. Please either decrease the number of ops being profiled or run read device profiler more often (profiler.cpp:1716)"
+      },
+      {
+        "line": 11633,
+        "text": "2026-10-11 06:38:23.552 | warning  |           Metal | Profiler DRAM buffers were full, markers were dropped! device 8, worker core 3, 11, Risc BRISC,  bufferEndIndex = 11884. Please either decrease the number of ops being profiled or run read device profiler more often (profiler.cpp:1716)"
+      },
+      {
+        "line": 11634,
+        "text": "2026-10-11 06:38:23.552 | warning  |           Metal | Profiler DRAM buffers were full, markers were dropped! device 0, worker core 3, 9, Risc BRISC,  bufferEndIndex = 11884. Please either decrease the number of ops being profiled or run read device profiler more often (profiler.cpp:1716)"
+      },
+      {
+        "line": 11635,
+        "text": "2026-10-11 06:38:23.553 | warning  |           Metal | Profiler DRAM buffers were full, markers were dropped! device 4, worker core 3, 7, Risc BRISC,  bufferEndIndex = 11884. Please either decrease the number of ops being profiled or run read device profiler more often (profiler.cpp:1716)"
+      },
+      {
+        "line": 11636,
+        "text": "2026-10-11 06:38:23.554 | warning  |           Metal | Profiler DRAM buffers were full, markers were dropped! device 8, worker core 4, 2, Risc BRISC,  bufferEndIndex = 11992. Please either decrease the number of ops being profiled or run read device profiler more often (profiler.cpp:1716)"
+      },
+      {
+        "line": 11637,
+        "text": "2026-10-11 06:38:23.554 | warning  |           Metal | Profiler DRAM buffers were full, markers were dropped! device 12, worker core 3, 6, Risc BRISC,  bufferEndIndex = 11884. Please either decrease the number of ops being profiled or run read device profiler more often (profiler.cpp:1716)"
+      },
+      {
+        "line": 11638,
+        "text": "2026-10-11 06:38:23.554 | warning  |           Metal | Profiler DRAM buffers were full, markers were dropped! device 0, worker core 3, 10, Risc BRISC,  bufferEndIndex = 11884. Please either decrease the number of ops being profiled or run read device profiler more often (profiler.cpp:1716)"
+      },
+      {
+        "line": 11639,
+        "text": "2026-10-11 06:38:23.554 | warning  |           Metal | Profiler DRAM buffers were full, markers were dropped! device 4, worker core 3, 8, Risc BRISC,  bufferEndIndex = 11884. Please either decrease the number of ops being profiled or run read device profiler more often (profiler.cpp:1716)"
+      },
+      {
+        "line": 11640,
+        "text": "2026-10-11 06:38:23.555 | warning  |           Metal | Profiler DRAM buffers were full, markers were dropped! device 8, worker core 4, 3, Risc BRISC,  bufferEndIndex = 11992. Please either decrease the number of ops being profiled or run read device profiler more often (profiler.cpp:1716)"
+      },
+      {
+        "line": 11641,
+        "text": "2026-10-11 06:38:23.555 | warning  |           Metal | Profiler DRAM buffers were full, markers were dropped! device 0, worker core 3, 11, Risc BRISC,  bufferEndIndex = 11884. Please either decrease the number of ops being profiled or run read device profiler more often (profiler.cpp:1716)"
+      },
+      {
+        "line": 11642,
+        "text": "2026-10-11 06:38:23.556 | warning  |           Metal | Profiler DRAM buffers were full, markers were dropped! device 12, worker core 3, 7, Risc BRISC,  bufferEndIndex = 11884. Please either decrease the number of ops being profiled or run read device profiler more often (profiler.cpp:1716)"
+      },
+      {
+        "line": 11643,
+        "text": "2026-10-11 06:38:23.556 | warning  |           Metal | Profiler DRAM buffers were full, markers were dropped! device 4, worker core 3, 9, Risc BRISC,  bufferEndIndex = 11884. Please either decrease the number of ops being profiled or run read device profiler more often (profiler.cpp:1716)"
+      },
+      {
+        "line": 11644,
+        "text": "2026-10-11 06:38:23.557 | warning  |           Metal | Profiler DRAM buffers were full, markers were dropped! device 8, worker core 4, 4, Risc BRISC,  bufferEndIndex = 11992. Please either decrease the number of ops being profiled or run read device profiler more often (profiler.cpp:1716)"
+      },
+      {
+        "line": 11645,
+        "text": "2026-10-11 06:38:23.557 | warning  |           Metal | Profiler DRAM buffers were full, markers were dropped! device 0, worker core 4, 2, Risc BRISC,  bufferEndIndex = 11992. Please either decrease the number of ops being profiled or run read device profiler more often (profiler.cpp:1716)"
+      },
+      {
+        "line": 11646,
+        "text": "2026-10-11 06:38:23.557 | warning  |           Metal | Profiler DRAM buffers were full, markers were dropped! device 4, worker core 3, 10, Risc BRISC,  bufferEndIndex = 11884. Please either decrease the number of ops being profiled or run read device profiler more often (profiler.cpp:1716)"
+      },
+      {
+        "line": 11647,
+        "text": "2026-10-11 06:38:23.557 | warning  |           Metal | Profiler DRAM buffers were full, markers were dropped! device 12, worker core 3, 8, Risc BRISC,  bufferEndIndex = 11884. Please either decrease the number of ops being profiled or run read device profiler more often (profiler.cpp:1716)"
+      },
+      {
+        "line": 11648,
+        "text": "2026-10-11 06:38:23.558 | warning  |           Metal | Profiler DRAM buffers were full, markers were dropped! device 8, worker core 4, 5, Risc BRISC,  bufferEndIndex = 11992. Please either decrease the number of ops being profiled or run read device profiler more often (profiler.cpp:1716)"
+      },
+      {
+        "line": 11649,
+        "text": "2026-10-11 06:38:23.558 | warning  |           Metal | Profiler DRAM buffers were full, markers were dropped! device 0, worker core 4, 3, Risc BRISC,  bufferEndIndex = 11992. Please either decrease the number of ops being profiled or run read device profiler more often (profiler.cpp:1716)"
+      },
+      {
+        "line": 11650,
+        "text": "2026-10-11 06:38:23.558 | warning  |           Metal | Profiler DRAM buffers were full, markers were dropped! device 4, worker core 3, 11, Risc BRISC,  bufferEndIndex = 11884. Please either decrease the number of ops being profiled or run read device profiler more often (profiler.cpp:1716)"
+      },
+      {
+        "line": 11651,
+        "text": "2026-10-11 06:38:23.559 | warning  |           Metal | Profiler DRAM buffers were full, markers were dropped! device 12, worker core 3, 9, Risc BRISC,  bufferEndIndex = 11884. Please either decrease the number of ops being profiled or run read device profiler more often (profiler.cpp:1716)"
+      },
+      {
+        "line": 11652,
+        "text": "2026-10-11 06:38:23.559 | warning  |           Metal | Profiler DRAM buffers were full, markers were dropped! device 8, worker core 4, 6, Risc BRISC,  bufferEndIndex = 11884. Please either decrease the number of ops being profiled or run read device profiler more often (profiler.cpp:1716)"
+      },
+      {
+        "line": 11653,
+        "text": "2026-10-11 06:38:23.559 | warning  |           Metal | Profiler DRAM buffers were full, markers were dropped! device 4, worker core 4, 2, Risc BRISC,  bufferEndIndex = 11992. Please either decrease the number of ops being profiled or run read device profiler more often (profiler.cpp:1716)"
+      },
+      {
+        "line": 11654,
+        "text": "2026-10-11 06:38:23.559 | warning  |           Metal | Profiler DRAM buffers were full, markers were dropped! device 0, worker core 4, 4, Risc BRISC,  bufferEndIndex = 11992. Please either decrease the number of ops being profiled or run read device profiler more often (profiler.cpp:1716)"
+      },
+      {
+        "line": 11655,
+        "text": "2026-10-11 06:38:23.560 | warning  |           Metal | Profiler DRAM buffers were full, markers were dropped! device 12, worker core 3, 10, Risc BRISC,  bufferEndIndex = 11884. Please either decrease the number of ops being profiled or run read device profiler more often (profiler.cpp:1716)"
+      },
+      {
+        "line": 11656,
+        "text": "2026-10-11 06:38:23.560 | warning  |           Metal | Profiler DRAM buffers were full, markers were dropped! device 8, worker core 4, 7, Risc BRISC,  bufferEndIndex = 11884. Please either decrease the number of ops being profiled or run read device profiler more often (profiler.cpp:1716)"
+      },
+      {
+        "line": 11657,
+        "text": "2026-10-11 06:38:23.561 | warning  |           Metal | Profiler DRAM buffers were full, markers were dropped! device 4, worker core 4, 3, Risc BRISC,  bufferEndIndex = 11992. Please either decrease the number of ops being profiled or run read device profiler more often (profiler.cpp:1716)"
+      },
+      {
+        "line": 11658,
+        "text": "2026-10-11 06:38:23.561 | warning  |           Metal | Profiler DRAM buffers were full, markers were dropped! device 0, worker core 4, 5, Risc BRISC,  bufferEndIndex = 11992. Please either decrease the number of ops being profiled or run read device profiler more often (profiler.cpp:1716)"
+      },
+      {
+        "line": 11659,
+        "text": "2026-10-11 06:38:23.561 | warning  |           Metal | Profiler DRAM buffers were full, markers were dropped! device 12, worker core 3, 11, Risc BRISC,  bufferEndIndex = 11884. Please either decrease the number of ops being profiled or run read device profiler more often (profiler.cpp:1716)"
+      },
+      {
+        "line": 11660,
+        "text": "2026-10-11 06:38:23.562 | warning  |           Metal | Profiler DRAM buffers were full, markers were dropped! device 8, worker core 4, 8, Risc BRISC,  bufferEndIndex = 11884. Please either decrease the number of ops being profiled or run read device profiler more often (profiler.cpp:1716)"
+      },
+      {
+        "line": 11661,
+        "text": "2026-10-11 06:38:23.562 | warning  |           Metal | Profiler DRAM buffers were full, markers were dropped! device 4, worker core 4, 4, Risc BRISC,  bufferEndIndex = 11992. Please either decrease the number of ops being profiled or run read device profiler more often (profiler.cpp:1716)"
+      },
+      {
+        "line": 11662,
+        "text": "2026-10-11 06:38:23.562 | warning  |           Metal | Profiler DRAM buffers were full, markers were dropped! device 12, worker core 4, 2, Risc BRISC,  bufferEndIndex = 11992. Please either decrease the number of ops being profiled or run read device profiler more often (profiler.cpp:1716)"
+      },
+      {
+        "line": 11663,
+        "text": "2026-10-11 06:38:23.562 | warning  |           Metal | Profiler DRAM buffers were full, markers were dropped! device 0, worker core 4, 6, Risc BRISC,  bufferEndIndex = 11884. Please either decrease the number of ops being profiled or run read device profiler more often (profiler.cpp:1716)"
+      },
+      {
+        "line": 11664,
+        "text": "2026-10-11 06:38:23.563 | warning  |           Metal | Profiler DRAM buffers were full, markers were dropped! device 8, worker core 4, 9, Risc BRISC,  bufferEndIndex = 11884. Please either decrease the number of ops being profiled or run read device profiler more often (profiler.cpp:1716)"
+      },
+      {
+        "line": 11665,
+        "text": "2026-10-11 06:38:23.563 | warning  |           Metal | Profiler DRAM buffers were full, markers were dropped! device 4, worker core 4, 5, Risc BRISC,  bufferEndIndex = 11992. Please either decrease the number of ops being profiled or run read device profiler more often (profiler.cpp:1716)"
+      },
+      {
+        "line": 11666,
+        "text": "2026-10-11 06:38:23.563 | warning  |           Metal | Profiler DRAM buffers were full, markers were dropped! device 0, worker core 4, 7, Risc BRISC,  bufferEndIndex = 11884. Please either decrease the number of ops being profiled or run read device profiler more often (profiler.cpp:1716)"
+      },
+      {
+        "line": 11667,
+        "text": "2026-10-11 06:38:23.563 | warning  |           Metal | Profiler DRAM buffers were full, markers were dropped! device 12, worker core 4, 3, Risc BRISC,  bufferEndIndex = 11992. Please either decrease the number of ops being profiled or run read device profiler more often (profiler.cpp:1716)"
+      },
+      {
+        "line": 11668,
+        "text": "2026-10-11 06:38:23.564 | warning  |           Metal | Profiler DRAM buffers were full, markers were dropped! device 8, worker core 4, 10, Risc BRISC,  bufferEndIndex = 11884. Please either decrease the number of ops being profiled or run read device profiler more often (profiler.cpp:1716)"
+      },
+      {
+        "line": 11669,
+        "text": "2026-10-11 06:38:23.565 | warning  |           Metal | Profiler DRAM buffers were full, markers were dropped! device 0, worker core 4, 8, Risc BRISC,  bufferEndIndex = 11884. Please either decrease the number of ops being profiled or run read device profiler more often (profiler.cpp:1716)"
+      },
+      {
+        "line": 11670,
+        "text": "2026-10-11 06:38:23.565 | warning  |           Metal | Profiler DRAM buffers were full, markers were dropped! device 4, worker core 4, 6, Risc BRISC,  bufferEndIndex = 11884. Please either decrease the number of ops being profiled or run read device profiler more often (profiler.cpp:1716)"
+      },
+      {
+        "line": 11671,
+        "text": "2026-10-11 06:38:23.565 | warning  |           Metal | Profiler DRAM buffers were full, markers were dropped! device 12, worker core 4, 4, Risc BRISC,  bufferEndIndex = 11992. Please either decrease the number of ops being profiled or run read device profiler more often (profiler.cpp:1716)"
+      },
+      {
+        "line": 11672,
+        "text": "2026-10-11 06:38:23.565 | warning  |           Metal | Profiler DRAM buffers were full, markers were dropped! device 8, worker core 4, 11, Risc BRISC,  bufferEndIndex = 11884. Please either decrease the number of ops being profiled or run read device profiler more often (profiler.cpp:1716)"
+      },
+      {
+        "line": 11673,
+        "text": "2026-10-11 06:38:23.566 | warning  |           Metal | Profiler DRAM buffers were full, markers were dropped! device 4, worker core 4, 7, Risc BRISC,  bufferEndIndex = 11884. Please either decrease the number of ops being profiled or run read device profiler more often (profiler.cpp:1716)"
+      },
+      {
+        "line": 11674,
+        "text": "2026-10-11 06:38:23.566 | warning  |           Metal | Profiler DRAM buffers were full, markers were dropped! device 0, worker core 4, 9, Risc BRISC,  bufferEndIndex = 11884. Please either decrease the number of ops being profiled or run read device profiler more often (profiler.cpp:1716)"
+      },
+      {
+        "line": 11675,
+        "text": "2026-10-11 06:38:23.566 | warning  |           Metal | Profiler DRAM buffers were full, markers were dropped! device 12, worker core 4, 5, Risc BRISC,  bufferEndIndex = 11992. Please either decrease the number of ops being profiled or run read device profiler more often (profiler.cpp:1716)"
+      },
+      {
+        "line": 11676,
+        "text": "2026-10-11 06:38:23.566 | warning  |           Metal | Profiler DRAM buffers were full, markers were dropped! device 8, worker core 5, 2, Risc BRISC,  bufferEndIndex = 11992. Please either decrease the number of ops being profiled or run read device profiler more often (profiler.cpp:1716)"
+      },
+      {
+        "line": 11677,
+        "text": "2026-10-11 06:38:23.567 | warning  |           Metal | Profiler DRAM buffers were full, markers were dropped! device 4, worker core 4, 8, Risc BRISC,  bufferEndIndex = 11884. Please either decrease the number of ops being profiled or run read device profiler more often (profiler.cpp:1716)"
+      },
+      {
+        "line": 11678,
+        "text": "2026-10-11 06:38:23.568 | warning  |           Metal | Profiler DRAM buffers were full, markers were dropped! device 0, worker core 4, 10, Risc BRISC,  bufferEndIndex = 11884. Please either decrease the number of ops being profiled or run read device profiler more often (profiler.cpp:1716)"
+      },
+      {
+        "line": 11679,
+        "text": "2026-10-11 06:38:23.568 | warning  |           Metal | Profiler DRAM buffers were full, markers were dropped! device 8, worker core 5, 3, Risc BRISC,  bufferEndIndex = 11992. Please either decrease the number of ops being profiled or run read device profiler more often (profiler.cpp:1716)"
+      },
+      {
+        "line": 11680,
+        "text": "2026-10-11 06:38:23.568 | warning  |           Metal | Profiler DRAM buffers were full, markers were dropped! device 12, worker core 4, 6, Risc BRISC,  bufferEndIndex = 11884. Please either decrease the number of ops being profiled or run read device profiler more often (profiler.cpp:1716)"
+      },
+      {
+        "line": 11681,
+        "text": "2026-10-11 06:38:23.569 | warning  |           Metal | Profiler DRAM buffers were full, markers were dropped! device 4, worker core 4, 9, Risc BRISC,  bufferEndIndex = 11884. Please either decrease the number of ops being profiled or run read device profiler more often (profiler.cpp:1716)"
+      },
+      {
+        "line": 11682,
+        "text": "2026-10-11 06:38:23.569 | warning  |           Metal | Profiler DRAM buffers were full, markers were dropped! device 8, worker core 5, 4, Risc BRISC,  bufferEndIndex = 11992. Please either decrease the number of ops being profiled or run read device profiler more often (profiler.cpp:1716)"
+      },
+      {
+        "line": 11683,
+        "text": "2026-10-11 06:38:23.569 | warning  |           Metal | Profiler DRAM buffers were full, markers were dropped! device 0, worker core 4, 11, Risc BRISC,  bufferEndIndex = 11884. Please either decrease the number of ops being profiled or run read device profiler more often (profiler.cpp:1716)"
+      },
+      {
+        "line": 11684,
+        "text": "2026-10-11 06:38:23.570 | warning  |           Metal | Profiler DRAM buffers were full, markers were dropped! device 12, worker core 4, 7, Risc BRISC,  bufferEndIndex = 11884. Please either decrease the number of ops being profiled or run read device profiler more often (profiler.cpp:1716)"
+      },
+      {
+        "line": 11685,
+        "text": "2026-10-11 06:38:23.570 | warning  |           Metal | Profiler DRAM buffers were full, markers were dropped! device 4, worker core 4, 10, Risc BRISC,  bufferEndIndex = 11884. Please either decrease the number of ops being profiled or run read device profiler more often (profiler.cpp:1716)"
+      },
+      {
+        "line": 11686,
+        "text": "2026-10-11 06:38:23.571 | warning  |           Metal | Profiler DRAM buffers were full, markers were dropped! device 8, worker core 5, 5, Risc BRISC,  bufferEndIndex = 11992. Please either decrease the number of ops being profiled or run read device profiler more often (profiler.cpp:1716)"
+      },
+      {
+        "line": 11687,
+        "text": "2026-10-11 06:38:23.571 | warning  |           Metal | Profiler DRAM buffers were full, markers were dropped! device 0, worker core 5, 2, Risc BRISC,  bufferEndIndex = 11992. Please either decrease the number of ops being profiled or run read device profiler more often (profiler.cpp:1716)"
+      },
+      {
+        "line": 11688,
+        "text": "2026-10-11 06:38:23.571 | warning  |           Metal | Profiler DRAM buffers were full, markers were dropped! device 4, worker core 4, 11, Risc BRISC,  bufferEndIndex = 11884. Please either decrease the number of ops being profiled or run read device profiler more often (profiler.cpp:1716)"
+      },
+      {
+        "line": 11689,
+        "text": "2026-10-11 06:38:23.572 | warning  |           Metal | Profiler DRAM buffers were full, markers were dropped! device 12, worker core 4, 8, Risc BRISC,  bufferEndIndex = 11884. Please either decrease the number of ops being profiled or run read device profiler more often (profiler.cpp:1716)"
+      },
+      {
+        "line": 11690,
+        "text": "2026-10-11 06:38:23.572 | warning  |           Metal | Profiler DRAM buffers were full, markers were dropped! device 8, worker core 5, 6, Risc BRISC,  bufferEndIndex = 11884. Please either decrease the number of ops being profiled or run read device profiler more often (profiler.cpp:1716)"
+      },
+      {
+        "line": 11691,
+        "text": "2026-10-11 06:38:23.572 | warning  |           Metal | Profiler DRAM buffers were full, markers were dropped! device 4, worker core 5, 2, Risc BRISC,  bufferEndIndex = 11992. Please either decrease the number of ops being profiled or run read device profiler more often (profiler.cpp:1716)"
+      },
+      {
+        "line": 11692,
+        "text": "2026-10-11 06:38:23.572 | warning  |           Metal | Profiler DRAM buffers were full, markers were dropped! device 0, worker core 5, 3, Risc BRISC,  bufferEndIndex = 11992. Please either decrease the number of ops being profiled or run read device profiler more often (profiler.cpp:1716)"
+      },
+      {
+        "line": 11693,
+        "text": "2026-10-11 06:38:23.573 | warning  |           Metal | Profiler DRAM buffers were full, markers were dropped! device 12, worker core 4, 9, Risc BRISC,  bufferEndIndex = 11884. Please either decrease the number of ops being profiled or run read device profiler more often (profiler.cpp:1716)"
+      },
+      {
+        "line": 11694,
+        "text": "2026-10-11 06:38:23.574 | warning  |           Metal | Profiler DRAM buffers were full, markers were dropped! device 8, worker core 5, 7, Risc BRISC,  bufferEndIndex = 11884. Please either decrease the number of ops being profiled or run read device profiler more often (profiler.cpp:1716)"
+      },
+      {
+        "line": 11695,
+        "text": "2026-10-11 06:38:23.574 | warning  |           Metal | Profiler DRAM buffers were full, markers were dropped! device 4, worker core 5, 3, Risc BRISC,  bufferEndIndex = 11992. Please either decrease the number of ops being profiled or run read device profiler more often (profiler.cpp:1716)"
+      },
+      {
+        "line": 11696,
+        "text": "2026-10-11 06:38:23.574 | warning  |           Metal | Profiler DRAM buffers were full, markers were dropped! device 0, worker core 5, 4, Risc BRISC,  bufferEndIndex = 11992. Please either decrease the number of ops being profiled or run read device profiler more often (profiler.cpp:1716)"
+      },
+      {
+        "line": 11697,
+        "text": "2026-10-11 06:38:23.575 | warning  |           Metal | Profiler DRAM buffers were full, markers were dropped! device 12, worker core 4, 10, Risc BRISC,  bufferEndIndex = 11884. Please either decrease the number of ops being profiled or run read device profiler more often (profiler.cpp:1716)"
+      },
+      {
+        "line": 11698,
+        "text": "2026-10-11 06:38:23.575 | warning  |           Metal | Profiler DRAM buffers were full, markers were dropped! device 8, worker core 5, 8, Risc BRISC,  bufferEndIndex = 11884. Please either decrease the number of ops being profiled or run read device profiler more often (profiler.cpp:1716)"
+      },
+      {
+        "line": 11699,
+        "text": "2026-10-11 06:38:23.575 | warning  |           Metal | Profiler DRAM buffers were full, markers were dropped! device 4, worker core 5, 4, Risc BRISC,  bufferEndIndex = 11992. Please either decrease the number of ops being profiled or run read device profiler more often (profiler.cpp:1716)"
+      },
+      {
+        "line": 11700,
+        "text": "2026-10-11 06:38:23.575 | warning  |           Metal | Profiler DRAM buffers were full, markers were dropped! device 0, worker core 5, 5, Risc BRISC,  bufferEndIndex = 11992. Please either decrease the number of ops being profiled or run read device profiler more often (profiler.cpp:1716)"
+      },
+      {
+        "line": 11701,
+        "text": "2026-10-11 06:38:23.576 | warning  |           Metal | Profiler DRAM buffers were full, markers were dropped! device 12, worker core 4, 11, Risc BRISC,  bufferEndIndex = 11884. Please either decrease the number of ops being profiled or run read device profiler more often (profiler.cpp:1716)"
+      },
+      {
+        "line": 11702,
+        "text": "2026-10-11 06:38:23.576 | warning  |           Metal | Profiler DRAM buffers were full, markers were dropped! device 8, worker core 5, 9, Risc BRISC,  bufferEndIndex = 11884. Please either decrease the number of ops being profiled or run read device profiler more often (profiler.cpp:1716)"
+      },
+      {
+        "line": 11703,
+        "text": "2026-10-11 06:38:23.576 | warning  |           Metal | Profiler DRAM buffers were full, markers were dropped! device 4, worker core 5, 5, Risc BRISC,  bufferEndIndex = 11992. Please either decrease the number of ops being profiled or run read device profiler more often (profiler.cpp:1716)"
+      },
+      {
+        "line": 11704,
+        "text": "2026-10-11 06:38:23.577 | warning  |           Metal | Profiler DRAM buffers were full, markers were dropped! device 0, worker core 5, 6, Risc BRISC,  bufferEndIndex = 11884. Please either decrease the number of ops being profiled or run read device profiler more often (profiler.cpp:1716)"
+      },
+      {
+        "line": 11705,
+        "text": "2026-10-11 06:38:23.577 | warning  |           Metal | Profiler DRAM buffers were full, markers were dropped! device 12, worker core 5, 2, Risc BRISC,  bufferEndIndex = 11992. Please either decrease the number of ops being profiled or run read device profiler more often (profiler.cpp:1716)"
+      },
+      {
+        "line": 11706,
+        "text": "2026-10-11 06:38:23.577 | warning  |           Metal | Profiler DRAM buffers were full, markers were dropped! device 8, worker core 5, 10, Risc BRISC,  bufferEndIndex = 11872. Please either decrease the number of ops being profiled or run read device profiler more often (profiler.cpp:1716)"
+      },
+      {
+        "line": 11707,
+        "text": "2026-10-11 06:38:23.578 | warning  |           Metal | Profiler DRAM buffers were full, markers were dropped! device 0, worker core 5, 7, Risc BRISC,  bufferEndIndex = 11884. Please either decrease the number of ops being profiled or run read device profiler more often (profiler.cpp:1716)"
+      },
+      {
+        "line": 11708,
+        "text": "2026-10-11 06:38:23.578 | warning  |           Metal | Profiler DRAM buffers were full, markers were dropped! device 4, worker core 5, 6, Risc BRISC,  bufferEndIndex = 11884. Please either decrease the number of ops being profiled or run read device profiler more often (profiler.cpp:1716)"
+      },
+      {
+        "line": 11709,
+        "text": "2026-10-11 06:38:23.578 | warning  |           Metal | Profiler DRAM buffers were full, markers were dropped! device 8, worker core 5, 11, Risc BRISC,  bufferEndIndex = 11872. Please either decrease the number of ops being profiled or run read device profiler more often (profiler.cpp:1716)"
+      },
+      {
+        "line": 11710,
+        "text": "2026-10-11 06:38:23.578 | warning  |           Metal | Profiler DRAM buffers were full, markers were dropped! device 12, worker core 5, 3, Risc BRISC,  bufferEndIndex = 11992. Please either decrease the number of ops being profiled or run read device profiler more often (profiler.cpp:1716)"
+      },
+      {
+        "line": 11711,
+        "text": "2026-10-11 06:38:23.579 | warning  |           Metal | Profiler DRAM buffers were full, markers were dropped! device 0, worker core 5, 8, Risc BRISC,  bufferEndIndex = 11884. Please either decrease the number of ops being profiled or run read device profiler more often (profiler.cpp:1716)"
+      },
+      {
+        "line": 11712,
+        "text": "2026-10-11 06:38:23.579 | warning  |           Metal | Profiler DRAM buffers were full, markers were dropped! device 4, worker core 5, 7, Risc BRISC,  bufferEndIndex = 11884. Please either decrease the number of ops being profiled or run read device profiler more often (profiler.cpp:1716)"
+      },
+      {
+        "line": 11713,
+        "text": "2026-10-11 06:38:23.579 | warning  |           Metal | Profiler DRAM buffers were full, markers were dropped! device 8, worker core 6, 2, Risc BRISC,  bufferEndIndex = 11992. Please either decrease the number of ops being profiled or run read device profiler more often (profiler.cpp:1716)"
+      },
+      {
+        "line": 11714,
+        "text": "2026-10-11 06:38:23.580 | warning  |           Metal | Profiler DRAM buffers were full, markers were dropped! device 12, worker core 5, 4, Risc BRISC,  bufferEndIndex = 11992. Please either decrease the number of ops being profiled or run read device profiler more often (profiler.cpp:1716)"
+      },
+      {
+        "line": 11715,
+        "text": "2026-10-11 06:38:23.580 | warning  |           Metal | Profiler DRAM buffers were full, markers were dropped! device 0, worker core 5, 9, Risc BRISC,  bufferEndIndex = 11884. Please either decrease the number of ops being profiled or run read device profiler more often (profiler.cpp:1716)"
+      },
+      {
+        "line": 11716,
+        "text": "2026-10-11 06:38:23.580 | warning  |           Metal | Profiler DRAM buffers were full, markers were dropped! device 4, worker core 5, 8, Risc BRISC,  bufferEndIndex = 11884. Please either decrease the number of ops being profiled or run read device profiler more often (profiler.cpp:1716)"
+      },
+      {
+        "line": 11717,
+        "text": "2026-10-11 06:38:23.581 | warning  |           Metal | Profiler DRAM buffers were full, markers were dropped! device 8, worker core 6, 3, Risc BRISC,  bufferEndIndex = 11992. Please either decrease the number of ops being profiled or run read device profiler more often (profiler.cpp:1716)"
+      },
+      {
+        "line": 11718,
+        "text": "2026-10-11 06:38:23.581 | warning  |           Metal | Profiler DRAM buffers were full, markers were dropped! device 12, worker core 5, 5, Risc BRISC,  bufferEndIndex = 11992. Please either decrease the number of ops being profiled or run read device profiler more often (profiler.cpp:1716)"
+      },
+      {
+        "line": 11719,
+        "text": "2026-10-11 06:38:23.582 | warning  |           Metal | Profiler DRAM buffers were full, markers were dropped! device 4, worker core 5, 9, Risc BRISC,  bufferEndIndex = 11884. Please either decrease the number of ops being profiled or run read device profiler more often (profiler.cpp:1716)"
+      },
+      {
+        "line": 11720,
+        "text": "2026-10-11 06:38:23.582 | warning  |           Metal | Profiler DRAM buffers were full, markers were dropped! device 0, worker core 5, 10, Risc BRISC,  bufferEndIndex = 11872. Please either decrease the number of ops being profiled or run read device profiler more often (profiler.cpp:1716)"
+      },
+      {
+        "line": 11721,
+        "text": "2026-10-11 06:38:23.582 | warning  |           Metal | Profiler DRAM buffers were full, markers were dropped! device 8, worker core 6, 4, Risc BRISC,  bufferEndIndex = 11992. Please either decrease the number of ops being profiled or run read device profiler more often (profiler.cpp:1716)"
+      },
+      {
+        "line": 11722,
+        "text": "2026-10-11 06:38:23.583 | warning  |           Metal | Profiler DRAM buffers were full, markers were dropped! device 12, worker core 5, 6, Risc BRISC,  bufferEndIndex = 11884. Please either decrease the number of ops being profiled or run read device profiler more often (profiler.cpp:1716)"
+      },
+      {
+        "line": 11723,
+        "text": "2026-10-11 06:38:23.583 | warning  |           Metal | Profiler DRAM buffers were full, markers were dropped! device 4, worker core 5, 10, Risc BRISC,  bufferEndIndex = 11872. Please either decrease the number of ops being profiled or run read device profiler more often (profiler.cpp:1716)"
+      },
+      {
+        "line": 11724,
+        "text": "2026-10-11 06:38:23.583 | warning  |           Metal | Profiler DRAM buffers were full, markers were dropped! device 0, worker core 5, 11, Risc BRISC,  bufferEndIndex = 11872. Please either decrease the number of ops being profiled or run read device profiler more often (profiler.cpp:1716)"
+      },
+      {
+        "line": 11725,
+        "text": "2026-10-11 06:38:23.584 | warning  |           Metal | Profiler DRAM buffers were full, markers were dropped! device 8, worker core 6, 5, Risc BRISC,  bufferEndIndex = 11992. Please either decrease the number of ops being profiled or run read device profiler more often (profiler.cpp:1716)"
+      },
+      {
+        "line": 11726,
+        "text": "2026-10-11 06:38:23.584 | warning  |           Metal | Profiler DRAM buffers were full, markers were dropped! device 4, worker core 5, 11, Risc BRISC,  bufferEndIndex = 11872. Please either decrease the number of ops being profiled or run read device profiler more often (profiler.cpp:1716)"
+      },
+      {
+        "line": 11727,
+        "text": "2026-10-11 06:38:23.584 | warning  |           Metal | Profiler DRAM buffers were full, markers were dropped! device 12, worker core 5, 7, Risc BRISC,  bufferEndIndex = 11884. Please either decrease the number of ops being profiled or run read device profiler more often (profiler.cpp:1716)"
+      },
+      {
+        "line": 11728,
+        "text": "2026-10-11 06:38:23.585 | warning  |           Metal | Profiler DRAM buffers were full, markers were dropped! device 0, worker core 6, 2, Risc BRISC,  bufferEndIndex = 11992. Please either decrease the number of ops being profiled or run read device profiler more often (profiler.cpp:1716)"
+      },
+      {
+        "line": 11729,
+        "text": "2026-10-11 06:38:23.585 | warning  |           Metal | Profiler DRAM buffers were full, markers were dropped! device 8, worker core 6, 6, Risc BRISC,  bufferEndIndex = 11872. Please either decrease the number of ops being profiled or run read device profiler more often (profiler.cpp:1716)"
+      },
+      {
+        "line": 11730,
+        "text": "2026-10-11 06:38:23.585 | warning  |           Metal | Profiler DRAM buffers were full, markers were dropped! device 4, worker core 6, 2, Risc BRISC,  bufferEndIndex = 11992. Please either decrease the number of ops being profiled or run read device profiler more often (profiler.cpp:1716)"
+      },
+      {
+        "line": 11731,
+        "text": "2026-10-11 06:38:23.586 | warning  |           Metal | Profiler DRAM buffers were full, markers were dropped! device 12, worker core 5, 8, Risc BRISC,  bufferEndIndex = 11884. Please either decrease the number of ops being profiled or run read device profiler more often (profiler.cpp:1716)"
+      },
+      {
+        "line": 11732,
+        "text": "2026-10-11 06:38:23.587 | warning  |           Metal | Profiler DRAM buffers were full, markers were dropped! device 8, worker core 6, 7, Risc BRISC,  bufferEndIndex = 11872. Please either decrease the number of ops being profiled or run read device profiler more often (profiler.cpp:1716)"
+      },
+      {
+        "line": 11733,
+        "text": "2026-10-11 06:38:23.587 | warning  |           Metal | Profiler DRAM buffers were full, markers were dropped! device 0, worker core 6, 3, Risc BRISC,  bufferEndIndex = 11992. Please either decrease the number of ops being profiled or run read device profiler more often (profiler.cpp:1716)"
+      },
+      {
+        "line": 11734,
+        "text": "2026-10-11 06:38:23.587 | warning  |           Metal | Profiler DRAM buffers were full, markers were dropped! device 4, worker core 6, 3, Risc BRISC,  bufferEndIndex = 11992. Please either decrease the number of ops being profiled or run read device profiler more often (profiler.cpp:1716)"
+      },
+      {
+        "line": 11735,
+        "text": "2026-10-11 06:38:23.588 | warning  |           Metal | Profiler DRAM buffers were full, markers were dropped! device 12, worker core 5, 9, Risc BRISC,  bufferEndIndex = 11884. Please either decrease the number of ops being profiled or run read device profiler more often (profiler.cpp:1716)"
+      },
+      {
+        "line": 11736,
+        "text": "2026-10-11 06:38:23.588 | warning  |           Metal | Profiler DRAM buffers were full, markers were dropped! device 8, worker core 6, 8, Risc BRISC,  bufferEndIndex = 11872. Please either decrease the number of ops being profiled or run read device profiler more often (profiler.cpp:1716)"
+      },
+      {
+        "line": 11737,
+        "text": "2026-10-11 06:38:23.588 | warning  |           Metal | Profiler DRAM buffers were full, markers were dropped! device 0, worker core 6, 4, Risc BRISC,  bufferEndIndex = 11992. Please either decrease the number of ops being profiled or run read device profiler more often (profiler.cpp:1716)"
+      },
+      {
+        "line": 11738,
+        "text": "2026-10-11 06:38:23.588 | warning  |           Metal | Profiler DRAM buffers were full, markers were dropped! device 4, worker core 6, 4, Risc BRISC,  bufferEndIndex = 11992. Please either decrease the number of ops being profiled or run read device profiler more often (profiler.cpp:1716)"
+      },
+      {
+        "line": 11739,
+        "text": "2026-10-11 06:38:23.589 | warning  |           Metal | Profiler DRAM buffers were full, markers were dropped! device 8, worker core 6, 9, Risc BRISC,  bufferEndIndex = 11872. Please either decrease the number of ops being profiled or run read device profiler more often (profiler.cpp:1716)"
+      },
+      {
+        "line": 11740,
+        "text": "2026-10-11 06:38:23.589 | warning  |           Metal | Profiler DRAM buffers were full, markers were dropped! device 12, worker core 5, 10, Risc BRISC,  bufferEndIndex = 11872. Please either decrease the number of ops being profiled or run read device profiler more often (profiler.cpp:1716)"
+      },
+      {
+        "line": 11741,
+        "text": "2026-10-11 06:38:23.589 | warning  |           Metal | Profiler DRAM buffers were full, markers were dropped! device 0, worker core 6, 5, Risc BRISC,  bufferEndIndex = 11992. Please either decrease the number of ops being profiled or run read device profiler more often (profiler.cpp:1716)"
+      },
+      {
+        "line": 11742,
+        "text": "2026-10-11 06:38:23.590 | warning  |           Metal | Profiler DRAM buffers were full, markers were dropped! device 4, worker core 6, 5, Risc BRISC,  bufferEndIndex = 11992. Please either decrease the number of ops being profiled or run read device profiler more often (profiler.cpp:1716)"
+      },
+      {
+        "line": 11743,
+        "text": "2026-10-11 06:38:23.590 | warning  |           Metal | Profiler DRAM buffers were full, markers were dropped! device 8, worker core 6, 10, Risc BRISC,  bufferEndIndex = 11872. Please either decrease the number of ops being profiled or run read device profiler more often (profiler.cpp:1716)"
+      },
+      {
+        "line": 11744,
+        "text": "2026-10-11 06:38:23.591 | warning  |           Metal | Profiler DRAM buffers were full, markers were dropped! device 12, worker core 5, 11, Risc BRISC,  bufferEndIndex = 11872. Please either decrease the number of ops being profiled or run read device profiler more often (profiler.cpp:1716)"
+      },
+      {
+        "line": 11745,
+        "text": "2026-10-11 06:38:23.591 | warning  |           Metal | Profiler DRAM buffers were full, markers were dropped! device 4, worker core 6, 6, Risc BRISC,  bufferEndIndex = 11872. Please either decrease the number of ops being profiled or run read device profiler more often (profiler.cpp:1716)"
+      },
+      {
+        "line": 11746,
+        "text": "2026-10-11 06:38:23.591 | warning  |           Metal | Profiler DRAM buffers were full, markers were dropped! device 0, worker core 6, 6, Risc BRISC,  bufferEndIndex = 11872. Please either decrease the number of ops being profiled or run read device profiler more often (profiler.cpp:1716)"
+      },
+      {
+        "line": 11747,
+        "text": "2026-10-11 06:38:23.591 | warning  |           Metal | Profiler DRAM buffers were full, markers were dropped! device 8, worker core 6, 11, Risc BRISC,  bufferEndIndex = 11872. Please either decrease the number of ops being profiled or run read device profiler more often (profiler.cpp:1716)"
+      },
+      {
+        "line": 11748,
+        "text": "2026-10-11 06:38:23.592 | warning  |           Metal | Profiler DRAM buffers were full, markers were dropped! device 12, worker core 6, 2, Risc BRISC,  bufferEndIndex = 11992. Please either decrease the number of ops being profiled or run read device profiler more often (profiler.cpp:1716)"
+      },
+      {
+        "line": 11749,
+        "text": "2026-10-11 06:38:23.592 | warning  |           Metal | Profiler DRAM buffers were full, markers were dropped! device 4, worker core 6, 7, Risc BRISC,  bufferEndIndex = 11872. Please either decrease the number of ops being profiled or run read device profiler more often (profiler.cpp:1716)"
+      },
+      {
+        "line": 11750,
+        "text": "2026-10-11 06:38:23.592 | warning  |           Metal | Profiler DRAM buffers were full, markers were dropped! device 0, worker core 6, 7, Risc BRISC,  bufferEndIndex = 11872. Please either decrease the number of ops being profiled or run read device profiler more often (profiler.cpp:1716)"
+      },
+      {
+        "line": 11751,
+        "text": "2026-10-11 06:38:23.593 | warning  |           Metal | Profiler DRAM buffers were full, markers were dropped! device 8, worker core 7, 2, Risc BRISC,  bufferEndIndex = 11992. Please either decrease the number of ops being profiled or run read device profiler more often (profiler.cpp:1716)"
+      },
+      {
+        "line": 11752,
+        "text": "2026-10-11 06:38:23.593 | warning  |           Metal | Profiler DRAM buffers were full, markers were dropped! device 12, worker core 6, 3, Risc BRISC,  bufferEndIndex = 11992. Please either decrease the number of ops being profiled or run read device profiler more often (profiler.cpp:1716)"
+      },
+      {
+        "line": 11753,
+        "text": "2026-10-11 06:38:23.593 | warning  |           Metal | Profiler DRAM buffers were full, markers were dropped! device 0, worker core 6, 8, Risc BRISC,  bufferEndIndex = 11872. Please either decrease the number of ops being profiled or run read device profiler more often (profiler.cpp:1716)"
+      },
+      {
+        "line": 11754,
+        "text": "2026-10-11 06:38:23.593 | warning  |           Metal | Profiler DRAM buffers were full, markers were dropped! device 4, worker core 6, 8, Risc BRISC,  bufferEndIndex = 11872. Please either decrease the number of ops being profiled or run read device profiler more often (profiler.cpp:1716)"
+      },
+      {
+        "line": 11755,
+        "text": "2026-10-11 06:38:23.594 | warning  |           Metal | Profiler DRAM buffers were full, markers were dropped! device 8, worker core 7, 3, Risc BRISC,  bufferEndIndex = 11992. Please either decrease the number of ops being profiled or run read device profiler more often (profiler.cpp:1716)"
+      },
+      {
+        "line": 11756,
+        "text": "2026-10-11 06:38:23.594 | warning  |           Metal | Profiler DRAM buffers were full, markers were dropped! device 0, worker core 6, 9, Risc BRISC,  bufferEndIndex = 11872. Please either decrease the number of ops being profiled or run read device profiler more often (profiler.cpp:1716)"
+      },
+      {
+        "line": 11757,
+        "text": "2026-10-11 06:38:23.594 | warning  |           Metal | Profiler DRAM buffers were full, markers were dropped! device 4, worker core 6, 9, Risc BRISC,  bufferEndIndex = 11872. Please either decrease the number of ops being profiled or run read device profiler more often (profiler.cpp:1716)"
+      },
+      {
+        "line": 11758,
+        "text": "2026-10-11 06:38:23.594 | warning  |           Metal | Profiler DRAM buffers were full, markers were dropped! device 12, worker core 6, 4, Risc BRISC,  bufferEndIndex = 11992. Please either decrease the number of ops being profiled or run read device profiler more often (profiler.cpp:1716)"
+      },
+      {
+        "line": 11759,
+        "text": "2026-10-11 06:38:23.595 | warning  |           Metal | Profiler DRAM buffers were full, markers were dropped! device 8, worker core 7, 4, Risc BRISC,  bufferEndIndex = 11992. Please either decrease the number of ops being profiled or run read device profiler more often (profiler.cpp:1716)"
+      },
+      {
+        "line": 11760,
+        "text": "2026-10-11 06:38:23.595 | warning  |           Metal | Profiler DRAM buffers were full, markers were dropped! device 0, worker core 6, 10, Risc BRISC,  bufferEndIndex = 11872. Please either decrease the number of ops being profiled or run read device profiler more often (profiler.cpp:1716)"
+      },
+      {
+        "line": 11761,
+        "text": "2026-10-11 06:38:23.596 | warning  |           Metal | Profiler DRAM buffers were full, markers were dropped! device 4, worker core 6, 10, Risc BRISC,  bufferEndIndex = 11872. Please either decrease the number of ops being profiled or run read device profiler more often (profiler.cpp:1716)"
+      },
+      {
+        "line": 11762,
+        "text": "2026-10-11 06:38:23.596 | warning  |           Metal | Profiler DRAM buffers were full, markers were dropped! device 12, worker core 6, 5, Risc BRISC,  bufferEndIndex = 11992. Please either decrease the number of ops being profiled or run read device profiler more often (profiler.cpp:1716)"
+      },
+      {
+        "line": 11763,
+        "text": "2026-10-11 06:38:23.597 | warning  |           Metal | Profiler DRAM buffers were full, markers were dropped! device 8, worker core 7, 5, Risc BRISC,  bufferEndIndex = 11992. Please either decrease the number of ops being profiled or run read device profiler more often (profiler.cpp:1716)"
+      },
+      {
+        "line": 11764,
+        "text": "2026-10-11 06:38:23.597 | warning  |           Metal | Profiler DRAM buffers were full, markers were dropped! device 0, worker core 6, 11, Risc BRISC,  bufferEndIndex = 11872. Please either decrease the number of ops being profiled or run read device profiler more often (profiler.cpp:1716)"
+      },
+      {
+        "line": 11765,
+        "text": "2026-10-11 06:38:23.597 | warning  |           Metal | Profiler DRAM buffers were full, markers were dropped! device 4, worker core 6, 11, Risc BRISC,  bufferEndIndex = 11872. Please either decrease the number of ops being profiled or run read device profiler more often (profiler.cpp:1716)"
+      },
+      {
+        "line": 11766,
+        "text": "2026-10-11 06:38:23.597 | warning  |           Metal | Profiler DRAM buffers were full, markers were dropped! device 12, worker core 6, 6, Risc BRISC,  bufferEndIndex = 11872. Please either decrease the number of ops being profiled or run read device profiler more often (profiler.cpp:1716)"
+      },
+      {
+        "line": 11767,
+        "text": "2026-10-11 06:38:23.598 | warning  |           Metal | Profiler DRAM buffers were full, markers were dropped! device 4, worker core 7, 2, Risc BRISC,  bufferEndIndex = 11992. Please either decrease the number of ops being profiled or run read device profiler more often (profiler.cpp:1716)"
+      },
+      {
+        "line": 11768,
+        "text": "2026-10-11 06:38:23.598 | warning  |           Metal | Profiler DRAM buffers were full, markers were dropped! device 8, worker core 7, 6, Risc BRISC,  bufferEndIndex = 11872. Please either decrease the number of ops being profiled or run read device profiler more often (profiler.cpp:1716)"
+      },
+      {
+        "line": 11769,
+        "text": "2026-10-11 06:38:23.598 | warning  |           Metal | Profiler DRAM buffers were full, markers were dropped! device 0, worker core 7, 2, Risc BRISC,  bufferEndIndex = 11992. Please either decrease the number of ops being profiled or run read device profiler more often (profiler.cpp:1716)"
+      },
+      {
+        "line": 11770,
+        "text": "2026-10-11 06:38:23.599 | warning  |           Metal | Profiler DRAM buffers were full, markers were dropped! device 12, worker core 6, 7, Risc BRISC,  bufferEndIndex = 11872. Please either decrease the number of ops being profiled or run read device profiler more often (profiler.cpp:1716)"
+      },
+      {
+        "line": 11771,
+        "text": "2026-10-11 06:38:23.599 | warning  |           Metal | Profiler DRAM buffers were full, markers were dropped! device 8, worker core 7, 7, Risc BRISC,  bufferEndIndex = 11872. Please either decrease the number of ops being profiled or run read device profiler more often (profiler.cpp:1716)"
+      },
+      {
+        "line": 11772,
+        "text": "2026-10-11 06:38:23.599 | warning  |           Metal | Profiler DRAM buffers were full, markers were dropped! device 4, worker core 7, 3, Risc BRISC,  bufferEndIndex = 11992. Please either decrease the number of ops being profiled or run read device profiler more often (profiler.cpp:1716)"
+      },
+      {
+        "line": 11773,
+        "text": "2026-10-11 06:38:23.600 | warning  |           Metal | Profiler DRAM buffers were full, markers were dropped! device 0, worker core 7, 3, Risc BRISC,  bufferEndIndex = 11992. Please either decrease the number of ops being profiled or run read device profiler more often (profiler.cpp:1716)"
+      },
+      {
+        "line": 11774,
+        "text": "2026-10-11 06:38:23.600 | warning  |           Metal | Profiler DRAM buffers were full, markers were dropped! device 12, worker core 6, 8, Risc BRISC,  bufferEndIndex = 11872. Please either decrease the number of ops being profiled or run read device profiler more often (profiler.cpp:1716)"
+      },
+      {
+        "line": 11775,
+        "text": "2026-10-11 06:38:23.600 | warning  |           Metal | Profiler DRAM buffers were full, markers were dropped! device 8, worker core 7, 8, Risc BRISC,  bufferEndIndex = 11872. Please either decrease the number of ops being profiled or run read device profiler more often (profiler.cpp:1716)"
+      },
+      {
+        "line": 11776,
+        "text": "2026-10-11 06:38:23.601 | warning  |           Metal | Profiler DRAM buffers were full, markers were dropped! device 4, worker core 7, 4, Risc BRISC,  bufferEndIndex = 11992. Please either decrease the number of ops being profiled or run read device profiler more often (profiler.cpp:1716)"
+      },
+      {
+        "line": 11777,
+        "text": "2026-10-11 06:38:23.602 | warning  |           Metal | Profiler DRAM buffers were full, markers were dropped! device 12, worker core 6, 9, Risc BRISC,  bufferEndIndex = 11872. Please either decrease the number of ops being profiled or run read device profiler more often (profiler.cpp:1716)"
+      },
+      {
+        "line": 11778,
+        "text": "2026-10-11 06:38:23.602 | warning  |           Metal | Profiler DRAM buffers were full, markers were dropped! device 8, worker core 7, 9, Risc BRISC,  bufferEndIndex = 11872. Please either decrease the number of ops being profiled or run read device profiler more often (profiler.cpp:1716)"
+      },
+      {
+        "line": 11779,
+        "text": "2026-10-11 06:38:23.602 | warning  |           Metal | Profiler DRAM buffers were full, markers were dropped! device 0, worker core 7, 4, Risc BRISC,  bufferEndIndex = 11992. Please either decrease the number of ops being profiled or run read device profiler more often (profiler.cpp:1716)"
+      },
+      {
+        "line": 11780,
+        "text": "2026-10-11 06:38:23.602 | warning  |           Metal | Profiler DRAM buffers were full, markers were dropped! device 4, worker core 7, 5, Risc BRISC,  bufferEndIndex = 11992. Please either decrease the number of ops being profiled or run read device profiler more often (profiler.cpp:1716)"
+      },
+      {
+        "line": 11781,
+        "text": "2026-10-11 06:38:23.603 | warning  |           Metal | Profiler DRAM buffers were full, markers were dropped! device 8, worker core 7, 10, Risc BRISC,  bufferEndIndex = 11860. Please either decrease the number of ops being profiled or run read device profiler more often (profiler.cpp:1716)"
+      },
+      {
+        "line": 11782,
+        "text": "2026-10-11 06:38:23.603 | warning  |           Metal | Profiler DRAM buffers were full, markers were dropped! device 4, worker core 7, 6, Risc BRISC,  bufferEndIndex = 11872. Please either decrease the number of ops being profiled or run read device profiler more often (profiler.cpp:1716)"
+      },
+      {
+        "line": 11783,
+        "text": "2026-10-11 06:38:23.603 | warning  |           Metal | Profiler DRAM buffers were full, markers were dropped! device 12, worker core 6, 10, Risc BRISC,  bufferEndIndex = 11872. Please either decrease the number of ops being profiled or run read device profiler more often (profiler.cpp:1716)"
+      },
+      {
+        "line": 11784,
+        "text": "2026-10-11 06:38:23.604 | warning  |           Metal | Profiler DRAM buffers were full, markers were dropped! device 0, worker core 7, 5, Risc BRISC,  bufferEndIndex = 11992. Please either decrease the number of ops being profiled or run read device profiler more often (profiler.cpp:1716)"
+      },
+      {
+        "line": 11785,
+        "text": "2026-10-11 06:38:23.604 | warning  |           Metal | Profiler DRAM buffers were full, markers were dropped! device 8, worker core 7, 11, Risc BRISC,  bufferEndIndex = 11860. Please either decrease the number of ops being profiled or run read device profiler more often (profiler.cpp:1716)"
+      },
+      {
+        "line": 11786,
+        "text": "2026-10-11 06:38:23.605 | warning  |           Metal | Profiler DRAM buffers were full, markers were dropped! device 4, worker core 7, 7, Risc BRISC,  bufferEndIndex = 11872. Please either decrease the number of ops being profiled or run read device profiler more often (profiler.cpp:1716)"
+      },
+      {
+        "line": 11787,
+        "text": "2026-10-11 06:38:23.605 | warning  |           Metal | Profiler DRAM buffers were full, markers were dropped! device 0, worker core 7, 6, Risc BRISC,  bufferEndIndex = 11872. Please either decrease the number of ops being profiled or run read device profiler more often (profiler.cpp:1716)"
+      },
+      {
+        "line": 11788,
+        "text": "2026-10-11 06:38:23.605 | warning  |           Metal | Profiler DRAM buffers were full, markers were dropped! device 12, worker core 6, 11, Risc BRISC,  bufferEndIndex = 11872. Please either decrease the number of ops being profiled or run read device profiler more often (profiler.cpp:1716)"
+      },
+      {
+        "line": 11789,
+        "text": "2026-10-11 06:38:23.606 | warning  |           Metal | Profiler DRAM buffers were full, markers were dropped! device 8, worker core 10, 2, Risc BRISC,  bufferEndIndex = 11992. Please either decrease the number of ops being profiled or run read device profiler more often (profiler.cpp:1716)"
+      },
+      {
+        "line": 11790,
+        "text": "2026-10-11 06:38:23.606 | warning  |           Metal | Profiler DRAM buffers were full, markers were dropped! device 4, worker core 7, 8, Risc BRISC,  bufferEndIndex = 11872. Please either decrease the number of ops being profiled or run read device profiler more often (profiler.cpp:1716)"
+      },
+      {
+        "line": 11791,
+        "text": "2026-10-11 06:38:23.606 | warning  |           Metal | Profiler DRAM buffers were full, markers were dropped! device 0, worker core 7, 7, Risc BRISC,  bufferEndIndex = 11872. Please either decrease the number of ops being profiled or run read device profiler more often (profiler.cpp:1716)"
+      },
+      {
+        "line": 11792,
+        "text": "2026-10-11 06:38:23.606 | warning  |           Metal | Profiler DRAM buffers were full, markers were dropped! device 12, worker core 7, 2, Risc BRISC,  bufferEndIndex = 11992. Please either decrease the number of ops being profiled or run read device profiler more often (profiler.cpp:1716)"
+      },
+      {
+        "line": 11793,
+        "text": "2026-10-11 06:38:23.607 | warning  |           Metal | Profiler DRAM buffers were full, markers were dropped! device 8, worker core 10, 3, Risc BRISC,  bufferEndIndex = 11992. Please either decrease the number of ops being profiled or run read device profiler more often (profiler.cpp:1716)"
+      },
+      {
+        "line": 11794,
+        "text": "2026-10-11 06:38:23.607 | warning  |           Metal | Profiler DRAM buffers were full, markers were dropped! device 4, worker core 7, 9, Risc BRISC,  bufferEndIndex = 11872. Please either decrease the number of ops being profiled or run read device profiler more often (profiler.cpp:1716)"
+      },
+      {
+        "line": 11795,
+        "text": "2026-10-11 06:38:23.607 | warning  |           Metal | Profiler DRAM buffers were full, markers were dropped! device 0, worker core 7, 8, Risc BRISC,  bufferEndIndex = 11872. Please either decrease the number of ops being profiled or run read device profiler more often (profiler.cpp:1716)"
+      },
+      {
+        "line": 11796,
+        "text": "2026-10-11 06:38:23.608 | warning  |           Metal | Profiler DRAM buffers were full, markers were dropped! device 12, worker core 7, 3, Risc BRISC,  bufferEndIndex = 11992. Please either decrease the number of ops being profiled or run read device profiler more often (profiler.cpp:1716)"
+      },
+      {
+        "line": 11797,
+        "text": "2026-10-11 06:38:23.608 | warning  |           Metal | Profiler DRAM buffers were full, markers were dropped! device 8, worker core 10, 4, Risc BRISC,  bufferEndIndex = 11992. Please either decrease the number of ops being profiled or run read device profiler more often (profiler.cpp:1716)"
+      },
+      {
+        "line": 11798,
+        "text": "2026-10-11 06:38:23.608 | warning  |           Metal | Profiler DRAM buffers were full, markers were dropped! device 4, worker core 7, 10, Risc BRISC,  bufferEndIndex = 11860. Please either decrease the number of ops being profiled or run read device profiler more often (profiler.cpp:1716)"
+      },
+      {
+        "line": 11799,
+        "text": "2026-10-11 06:38:23.608 | warning  |           Metal | Profiler DRAM buffers were full, markers were dropped! device 0, worker core 7, 9, Risc BRISC,  bufferEndIndex = 11872. Please either decrease the number of ops being profiled or run read device profiler more often (profiler.cpp:1716)"
+      },
+      {
+        "line": 11800,
+        "text": "2026-10-11 06:38:23.609 | warning  |           Metal | Profiler DRAM buffers were full, markers were dropped! device 12, worker core 7, 4, Risc BRISC,  bufferEndIndex = 11992. Please either decrease the number of ops being profiled or run read device profiler more often (profiler.cpp:1716)"
+      },
+      {
+        "line": 11801,
+        "text": "2026-10-11 06:38:23.609 | warning  |           Metal | Profiler DRAM buffers were full, markers were dropped! device 4, worker core 7, 11, Risc BRISC,  bufferEndIndex = 11860. Please either decrease the number of ops being profiled or run read device profiler more often (profiler.cpp:1716)"
+      },
+      {
+        "line": 11802,
+        "text": "2026-10-11 06:38:23.609 | warning  |           Metal | Profiler DRAM buffers were full, markers were dropped! device 8, worker core 10, 5, Risc BRISC,  bufferEndIndex = 11992. Please either decrease the number of ops being profiled or run read device profiler more often (profiler.cpp:1716)"
+      },
+      {
+        "line": 11803,
+        "text": "2026-10-11 06:38:23.610 | warning  |           Metal | Profiler DRAM buffers were full, markers were dropped! device 0, worker core 7, 10, Risc BRISC,  bufferEndIndex = 11860. Please either decrease the number of ops being profiled or run read device profiler more often (profiler.cpp:1716)"
+      },
+      {
+        "line": 11804,
+        "text": "2026-10-11 06:38:23.610 | warning  |           Metal | Profiler DRAM buffers were full, markers were dropped! device 12, worker core 7, 5, Risc BRISC,  bufferEndIndex = 11992. Please either decrease the number of ops being profiled or run read device profiler more often (profiler.cpp:1716)"
+      },
+      {
+        "line": 11805,
+        "text": "2026-10-11 06:38:23.611 | warning  |           Metal | Profiler DRAM buffers were full, markers were dropped! device 4, worker core 10, 2, Risc BRISC,  bufferEndIndex = 11992. Please either decrease the number of ops being profiled or run read device profiler more often (profiler.cpp:1716)"
+      },
+      {
+        "line": 11806,
+        "text": "2026-10-11 06:38:23.611 | warning  |           Metal | Profiler DRAM buffers were full, markers were dropped! device 0, worker core 7, 11, Risc BRISC,  bufferEndIndex = 11860. Please either decrease the number of ops being profiled or run read device profiler more often (profiler.cpp:1716)"
+      },
+      {
+        "line": 11807,
+        "text": "2026-10-11 06:38:23.611 | warning  |           Metal | Profiler DRAM buffers were full, markers were dropped! device 8, worker core 10, 6, Risc BRISC,  bufferEndIndex = 11872. Please either decrease the number of ops being profiled or run read device profiler more often (profiler.cpp:1716)"
+      },
+      {
+        "line": 11808,
+        "text": "2026-10-11 06:38:23.611 | warning  |           Metal | Profiler DRAM buffers were full, markers were dropped! device 12, worker core 7, 6, Risc BRISC,  bufferEndIndex = 11872. Please either decrease the number of ops being profiled or run read device profiler more often (profiler.cpp:1716)"
+      },
+      {
+        "line": 11809,
+        "text": "2026-10-11 06:38:23.612 | warning  |           Metal | Profiler DRAM buffers were full, markers were dropped! device 0, worker core 10, 2, Risc BRISC,  bufferEndIndex = 11992. Please either decrease the number of ops being profiled or run read device profiler more often (profiler.cpp:1716)"
+      },
+      {
+        "line": 11810,
+        "text": "2026-10-11 06:38:23.612 | warning  |           Metal | Profiler DRAM buffers were full, markers were dropped! device 4, worker core 10, 3, Risc BRISC,  bufferEndIndex = 11992. Please either decrease the number of ops being profiled or run read device profiler more often (profiler.cpp:1716)"
+      },
+      {
+        "line": 11811,
+        "text": "2026-10-11 06:38:23.612 | warning  |           Metal | Profiler DRAM buffers were full, markers were dropped! device 8, worker core 10, 7, Risc BRISC,  bufferEndIndex = 11860. Please either decrease the number of ops being profiled or run read device profiler more often (profiler.cpp:1716)"
+      },
+      {
+        "line": 11812,
+        "text": "2026-10-11 06:38:23.613 | warning  |           Metal | Profiler DRAM buffers were full, markers were dropped! device 12, worker core 7, 7, Risc BRISC,  bufferEndIndex = 11872. Please either decrease the number of ops being profiled or run read device profiler more often (profiler.cpp:1716)"
+      },
+      {
+        "line": 11813,
+        "text": "2026-10-11 06:38:23.613 | warning  |           Metal | Profiler DRAM buffers were full, markers were dropped! device 8, worker core 10, 8, Risc BRISC,  bufferEndIndex = 11872. Please either decrease the number of ops being profiled or run read device profiler more often (profiler.cpp:1716)"
+      },
+      {
+        "line": 11814,
+        "text": "2026-10-11 06:38:23.613 | warning  |           Metal | Profiler DRAM buffers were full, markers were dropped! device 4, worker core 10, 4, Risc BRISC,  bufferEndIndex = 11992. Please either decrease the number of ops being profiled or run read device profiler more often (profiler.cpp:1716)"
+      },
+      {
+        "line": 11815,
+        "text": "2026-10-11 06:38:23.613 | warning  |           Metal | Profiler DRAM buffers were full, markers were dropped! device 0, worker core 10, 3, Risc BRISC,  bufferEndIndex = 11992. Please either decrease the number of ops being profiled or run read device profiler more often (profiler.cpp:1716)"
+      },
+      {
+        "line": 11816,
+        "text": "2026-10-11 06:38:23.614 | warning  |           Metal | Profiler DRAM buffers were full, markers were dropped! device 12, worker core 7, 8, Risc BRISC,  bufferEndIndex = 11872. Please either decrease the number of ops being profiled or run read device profiler more often (profiler.cpp:1716)"
+      },
+      {
+        "line": 11817,
+        "text": "2026-10-11 06:38:23.614 | warning  |           Metal | Profiler DRAM buffers were full, markers were dropped! device 8, worker core 10, 9, Risc BRISC,  bufferEndIndex = 11860. Please either decrease the number of ops being profiled or run read device profiler more often (profiler.cpp:1716)"
+      },
+      {
+        "line": 11818,
+        "text": "2026-10-11 06:38:23.615 | warning  |           Metal | Profiler DRAM buffers were full, markers were dropped! device 4, worker core 10, 5, Risc BRISC,  bufferEndIndex = 11992. Please either decrease the number of ops being profiled or run read device profiler more often (profiler.cpp:1716)"
+      },
+      {
+        "line": 11819,
+        "text": "2026-10-11 06:38:23.615 | warning  |           Metal | Profiler DRAM buffers were full, markers were dropped! device 0, worker core 10, 4, Risc BRISC,  bufferEndIndex = 11992. Please either decrease the number of ops being profiled or run read device profiler more often (profiler.cpp:1716)"
+      },
+      {
+        "line": 11820,
+        "text": "2026-10-11 06:38:23.616 | warning  |           Metal | Profiler DRAM buffers were full, markers were dropped! device 12, worker core 7, 9, Risc BRISC,  bufferEndIndex = 11872. Please either decrease the number of ops being profiled or run read device profiler more often (profiler.cpp:1716)"
+      },
+      {
+        "line": 11821,
+        "text": "2026-10-11 06:38:23.616 | warning  |           Metal | Profiler DRAM buffers were full, markers were dropped! device 8, worker core 10, 10, Risc BRISC,  bufferEndIndex = 11860. Please either decrease the number of ops being profiled or run read device profiler more often (profiler.cpp:1716)"
+      },
+      {
+        "line": 11822,
+        "text": "2026-10-11 06:38:23.616 | warning  |           Metal | Profiler DRAM buffers were full, markers were dropped! device 4, worker core 10, 6, Risc BRISC,  bufferEndIndex = 11872. Please either decrease the number of ops being profiled or run read device profiler more often (profiler.cpp:1716)"
+      },
+      {
+        "line": 11823,
+        "text": "2026-10-11 06:38:23.617 | warning  |           Metal | Profiler DRAM buffers were full, markers were dropped! device 0, worker core 10, 5, Risc BRISC,  bufferEndIndex = 11992. Please either decrease the number of ops being profiled or run read device profiler more often (profiler.cpp:1716)"
+      },
+      {
+        "line": 11824,
+        "text": "2026-10-11 06:38:23.617 | warning  |           Metal | Profiler DRAM buffers were full, markers were dropped! device 8, worker core 10, 11, Risc BRISC,  bufferEndIndex = 11872. Please either decrease the number of ops being profiled or run read device profiler more often (profiler.cpp:1716)"
+      },
+      {
+        "line": 11825,
+        "text": "2026-10-11 06:38:23.617 | warning  |           Metal | Profiler DRAM buffers were full, markers were dropped! device 4, worker core 10, 7, Risc BRISC,  bufferEndIndex = 11860. Please either decrease the number of ops being profiled or run read device profiler more often (profiler.cpp:1716)"
+      },
+      {
+        "line": 11826,
+        "text": "2026-10-11 06:38:23.617 | warning  |           Metal | Profiler DRAM buffers were full, markers were dropped! device 12, worker core 7, 10, Risc BRISC,  bufferEndIndex = 11860. Please either decrease the number of ops being profiled or run read device profiler more often (profiler.cpp:1716)"
+      },
+      {
+        "line": 11827,
+        "text": "2026-10-11 06:38:23.618 | warning  |           Metal | Profiler DRAM buffers were full, markers were dropped! device 8, worker core 11, 2, Risc BRISC,  bufferEndIndex = 11992. Please either decrease the number of ops being profiled or run read device profiler more often (profiler.cpp:1716)"
+      },
+      {
+        "line": 11828,
+        "text": "2026-10-11 06:38:23.618 | warning  |           Metal | Profiler DRAM buffers were full, markers were dropped! device 0, worker core 10, 6, Risc BRISC,  bufferEndIndex = 11872. Please either decrease the number of ops being profiled or run read device profiler more often (profiler.cpp:1716)"
+      },
+      {
+        "line": 11829,
+        "text": "2026-10-11 06:38:23.618 | warning  |           Metal | Profiler DRAM buffers were full, markers were dropped! device 4, worker core 10, 8, Risc BRISC,  bufferEndIndex = 11872. Please either decrease the number of ops being profiled or run read device profiler more often (profiler.cpp:1716)"
+      },
+      {
+        "line": 11830,
+        "text": "2026-10-11 06:38:23.619 | warning  |           Metal | Profiler DRAM buffers were full, markers were dropped! device 12, worker core 7, 11, Risc BRISC,  bufferEndIndex = 11860. Please either decrease the number of ops being profiled or run read device profiler more often (profiler.cpp:1716)"
+      },
+      {
+        "line": 11831,
+        "text": "2026-10-11 06:38:23.620 | warning  |           Metal | Profiler DRAM buffers were full, markers were dropped! device 0, worker core 10, 7, Risc BRISC,  bufferEndIndex = 11860. Please either decrease the number of ops being profiled or run read device profiler more often (profiler.cpp:1716)"
+      },
+      {
+        "line": 11832,
+        "text": "2026-10-11 06:38:23.620 | warning  |           Metal | Profiler DRAM buffers were full, markers were dropped! device 8, worker core 11, 3, Risc BRISC,  bufferEndIndex = 11992. Please either decrease the number of ops being profiled or run read device profiler more often (profiler.cpp:1716)"
+      },
+      {
+        "line": 11833,
+        "text": "2026-10-11 06:38:23.620 | warning  |           Metal | Profiler DRAM buffers were full, markers were dropped! device 4, worker core 10, 9, Risc BRISC,  bufferEndIndex = 11860. Please either decrease the number of ops being profiled or run read device profiler more often (profiler.cpp:1716)"
+      },
+      {
+        "line": 11834,
+        "text": "2026-10-11 06:38:23.620 | warning  |           Metal | Profiler DRAM buffers were full, markers were dropped! device 12, worker core 10, 2, Risc BRISC,  bufferEndIndex = 11992. Please either decrease the number of ops being profiled or run read device profiler more often (profiler.cpp:1716)"
+      },
+      {
+        "line": 11835,
+        "text": "2026-10-11 06:38:23.621 | warning  |           Metal | Profiler DRAM buffers were full, markers were dropped! device 0, worker core 10, 8, Risc BRISC,  bufferEndIndex = 11872. Please either decrease the number of ops being profiled or run read device profiler more often (profiler.cpp:1716)"
+      },
+      {
+        "line": 11836,
+        "text": "2026-10-11 06:38:23.621 | warning  |           Metal | Profiler DRAM buffers were full, markers were dropped! device 8, worker core 11, 4, Risc BRISC,  bufferEndIndex = 11992. Please either decrease the number of ops being profiled or run read device profiler more often (profiler.cpp:1716)"
+      },
+      {
+        "line": 11837,
+        "text": "2026-10-11 06:38:23.621 | warning  |           Metal | Profiler DRAM buffers were full, markers were dropped! device 4, worker core 10, 10, Risc BRISC,  bufferEndIndex = 11860. Please either decrease the number of ops being profiled or run read device profiler more often (profiler.cpp:1716)"
+      },
+      {
+        "line": 11838,
+        "text": "2026-10-11 06:38:23.622 | warning  |           Metal | Profiler DRAM buffers were full, markers were dropped! device 0, worker core 10, 9, Risc BRISC,  bufferEndIndex = 11860. Please either decrease the number of ops being profiled or run read device profiler more often (profiler.cpp:1716)"
+      },
+      {
+        "line": 11839,
+        "text": "2026-10-11 06:38:23.622 | warning  |           Metal | Profiler DRAM buffers were full, markers were dropped! device 4, worker core 10, 11, Risc BRISC,  bufferEndIndex = 11872. Please either decrease the number of ops being profiled or run read device profiler more often (profiler.cpp:1716)"
+      },
+      {
+        "line": 11840,
+        "text": "2026-10-11 06:38:23.622 | warning  |           Metal | Profiler DRAM buffers were full, markers were dropped! device 8, worker core 11, 5, Risc BRISC,  bufferEndIndex = 11992. Please either decrease the number of ops being profiled or run read device profiler more often (profiler.cpp:1716)"
+      },
+      {
+        "line": 11841,
+        "text": "2026-10-11 06:38:23.622 | warning  |           Metal | Profiler DRAM buffers were full, markers were dropped! device 12, worker core 10, 3, Risc BRISC,  bufferEndIndex = 11992. Please either decrease the number of ops being profiled or run read device profiler more often (profiler.cpp:1716)"
+      },
+      {
+        "line": 11842,
+        "text": "2026-10-11 06:38:23.623 | warning  |           Metal | Profiler DRAM buffers were full, markers were dropped! device 0, worker core 10, 10, Risc BRISC,  bufferEndIndex = 11860. Please either decrease the number of ops being profiled or run read device profiler more often (profiler.cpp:1716)"
+      },
+      {
+        "line": 11843,
+        "text": "2026-10-11 06:38:23.623 | warning  |           Metal | Profiler DRAM buffers were full, markers were dropped! device 4, worker core 11, 2, Risc BRISC,  bufferEndIndex = 11992. Please either decrease the number of ops being profiled or run read device profiler more often (profiler.cpp:1716)"
+      },
+      {
+        "line": 11844,
+        "text": "2026-10-11 06:38:23.624 | warning  |           Metal | Profiler DRAM buffers were full, markers were dropped! device 8, worker core 11, 6, Risc BRISC,  bufferEndIndex = 11788. Please either decrease the number of ops being profiled or run read device profiler more often (profiler.cpp:1716)"
+      },
+      {
+        "line": 11845,
+        "text": "2026-10-11 06:38:23.624 | warning  |           Metal | Profiler DRAM buffers were full, markers were dropped! device 12, worker core 10, 4, Risc BRISC,  bufferEndIndex = 11992. Please either decrease the number of ops being profiled or run read device profiler more often (profiler.cpp:1716)"
+      },
+      {
+        "line": 11846,
+        "text": "2026-10-11 06:38:23.624 | warning  |           Metal | Profiler DRAM buffers were full, markers were dropped! device 0, worker core 10, 11, Risc BRISC,  bufferEndIndex = 11872. Please either decrease the number of ops being profiled or run read device profiler more often (profiler.cpp:1716)"
+      },
+      {
+        "line": 11847,
+        "text": "2026-10-11 06:38:23.625 | warning  |           Metal | Profiler DRAM buffers were full, markers were dropped! device 4, worker core 11, 3, Risc BRISC,  bufferEndIndex = 11992. Please either decrease the number of ops being profiled or run read device profiler more often (profiler.cpp:1716)"
+      },
+      {
+        "line": 11848,
+        "text": "2026-10-11 06:38:23.625 | warning  |           Metal | Profiler DRAM buffers were full, markers were dropped! device 8, worker core 11, 7, Risc BRISC,  bufferEndIndex = 11788. Please either decrease the number of ops being profiled or run read device profiler more often (profiler.cpp:1716)"
+      },
+      {
+        "line": 11849,
+        "text": "2026-10-11 06:38:23.625 | warning  |           Metal | Profiler DRAM buffers were full, markers were dropped! device 12, worker core 10, 5, Risc BRISC,  bufferEndIndex = 11992. Please either decrease the number of ops being profiled or run read device profiler more often (profiler.cpp:1716)"
+      },
+      {
+        "line": 11850,
+        "text": "2026-10-11 06:38:23.625 | warning  |           Metal | Profiler DRAM buffers were full, markers were dropped! device 0, worker core 11, 2, Risc BRISC,  bufferEndIndex = 11992. Please either decrease the number of ops being profiled or run read device profiler more often (profiler.cpp:1716)"
+      },
+      {
+        "line": 11851,
+        "text": "2026-10-11 06:38:23.626 | warning  |           Metal | Profiler DRAM buffers were full, markers were dropped! device 8, worker core 11, 8, Risc BRISC,  bufferEndIndex = 11788. Please either decrease the number of ops being profiled or run read device profiler more often (profiler.cpp:1716)"
+      },
+      {
+        "line": 11852,
+        "text": "2026-10-11 06:38:23.626 | warning  |           Metal | Profiler DRAM buffers were full, markers were dropped! device 4, worker core 11, 4, Risc BRISC,  bufferEndIndex = 11992. Please either decrease the number of ops being profiled or run read device profiler more often (profiler.cpp:1716)"
+      },
+      {
+        "line": 11853,
+        "text": "2026-10-11 06:38:23.626 | warning  |           Metal | Profiler DRAM buffers were full, markers were dropped! device 12, worker core 10, 6, Risc BRISC,  bufferEndIndex = 11872. Please either decrease the number of ops being profiled or run read device profiler more often (profiler.cpp:1716)"
+      },
+      {
+        "line": 11854,
+        "text": "2026-10-11 06:38:23.627 | warning  |           Metal | Profiler DRAM buffers were full, markers were dropped! device 0, worker core 11, 3, Risc BRISC,  bufferEndIndex = 11992. Please either decrease the number of ops being profiled or run read device profiler more often (profiler.cpp:1716)"
+      },
+      {
+        "line": 11855,
+        "text": "2026-10-11 06:38:23.627 | warning  |           Metal | Profiler DRAM buffers were full, markers were dropped! device 8, worker core 11, 9, Risc BRISC,  bufferEndIndex = 11788. Please either decrease the number of ops being profiled or run read device profiler more often (profiler.cpp:1716)"
+      },
+      {
+        "line": 11856,
+        "text": "2026-10-11 06:38:23.627 | warning  |           Metal | Profiler DRAM buffers were full, markers were dropped! device 4, worker core 11, 5, Risc BRISC,  bufferEndIndex = 11992. Please either decrease the number of ops being profiled or run read device profiler more often (profiler.cpp:1716)"
+      },
+      {
+        "line": 11857,
+        "text": "2026-10-11 06:38:23.628 | warning  |           Metal | Profiler DRAM buffers were full, markers were dropped! device 12, worker core 10, 7, Risc BRISC,  bufferEndIndex = 11860. Please either decrease the number of ops being profiled or run read device profiler more often (profiler.cpp:1716)"
+      },
+      {
+        "line": 11858,
+        "text": "2026-10-11 06:38:23.628 | warning  |           Metal | Profiler DRAM buffers were full, markers were dropped! device 8, worker core 11, 10, Risc BRISC,  bufferEndIndex = 11788. Please either decrease the number of ops being profiled or run read device profiler more often (profiler.cpp:1716)"
+      },
+      {
+        "line": 11859,
+        "text": "2026-10-11 06:38:23.628 | warning  |           Metal | Profiler DRAM buffers were full, markers were dropped! device 4, worker core 11, 6, Risc BRISC,  bufferEndIndex = 11788. Please either decrease the number of ops being profiled or run read device profiler more often (profiler.cpp:1716)"
+      },
+      {
+        "line": 11860,
+        "text": "2026-10-11 06:38:23.628 | warning  |           Metal | Profiler DRAM buffers were full, markers were dropped! device 0, worker core 11, 4, Risc BRISC,  bufferEndIndex = 11992. Please either decrease the number of ops being profiled or run read device profiler more often (profiler.cpp:1716)"
+      },
+      {
+        "line": 11861,
+        "text": "2026-10-11 06:38:23.629 | warning  |           Metal | Profiler DRAM buffers were full, markers were dropped! device 8, worker core 11, 11, Risc BRISC,  bufferEndIndex = 11788. Please either decrease the number of ops being profiled or run read device profiler more often (profiler.cpp:1716)"
+      },
+      {
+        "line": 11862,
+        "text": "2026-10-11 06:38:23.629 | warning  |           Metal | Profiler DRAM buffers were full, markers were dropped! device 12, worker core 10, 8, Risc BRISC,  bufferEndIndex = 11872. Please either decrease the number of ops being profiled or run read device profiler more often (profiler.cpp:1716)"
+      },
+      {
+        "line": 11863,
+        "text": "2026-10-11 06:38:23.630 | warning  |           Metal | Profiler DRAM buffers were full, markers were dropped! device 4, worker core 11, 7, Risc BRISC,  bufferEndIndex = 11788. Please either decrease the number of ops being profiled or run read device profiler more often (profiler.cpp:1716)"
+      },
+      {
+        "line": 11864,
+        "text": "2026-10-11 06:38:23.630 | warning  |           Metal | Profiler DRAM buffers were full, markers were dropped! device 0, worker core 11, 5, Risc BRISC,  bufferEndIndex = 11992. Please either decrease the number of ops being profiled or run read device profiler more often (profiler.cpp:1716)"
+      },
+      {
+        "line": 11865,
+        "text": "2026-10-11 06:38:23.630 | warning  |           Metal | Profiler DRAM buffers were full, markers were dropped! device 8, worker core 12, 2, Risc BRISC,  bufferEndIndex = 11992. Please either decrease the number of ops being profiled or run read device profiler more often (profiler.cpp:1716)"
+      },
+      {
+        "line": 11866,
+        "text": "2026-10-11 06:38:23.631 | warning  |           Metal | Profiler DRAM buffers were full, markers were dropped! device 4, worker core 11, 8, Risc BRISC,  bufferEndIndex = 11788. Please either decrease the number of ops being profiled or run read device profiler more often (profiler.cpp:1716)"
+      },
+      {
+        "line": 11867,
+        "text": "2026-10-11 06:38:23.631 | warning  |           Metal | Profiler DRAM buffers were full, markers were dropped! device 12, worker core 10, 9, Risc BRISC,  bufferEndIndex = 11860. Please either decrease the number of ops being profiled or run read device profiler more often (profiler.cpp:1716)"
+      },
+      {
+        "line": 11868,
+        "text": "2026-10-11 06:38:23.631 | warning  |           Metal | Profiler DRAM buffers were full, markers were dropped! device 0, worker core 11, 6, Risc BRISC,  bufferEndIndex = 11788. Please either decrease the number of ops being profiled or run read device profiler more often (profiler.cpp:1716)"
+      },
+      {
+        "line": 11869,
+        "text": "2026-10-11 06:38:23.632 | warning  |           Metal | Profiler DRAM buffers were full, markers were dropped! device 8, worker core 12, 3, Risc BRISC,  bufferEndIndex = 11992. Please either decrease the number of ops being profiled or run read device profiler more often (profiler.cpp:1716)"
+      },
+      {
+        "line": 11870,
+        "text": "2026-10-11 06:38:23.632 | warning  |           Metal | Profiler DRAM buffers were full, markers were dropped! device 4, worker core 11, 9, Risc BRISC,  bufferEndIndex = 11788. Please either decrease the number of ops being profiled or run read device profiler more often (profiler.cpp:1716)"
+      },
+      {
+        "line": 11871,
+        "text": "2026-10-11 06:38:23.633 | warning  |           Metal | Profiler DRAM buffers were full, markers were dropped! device 0, worker core 11, 7, Risc BRISC,  bufferEndIndex = 11788. Please either decrease the number of ops being profiled or run read device profiler more often (profiler.cpp:1716)"
+      },
+      {
+        "line": 11872,
+        "text": "2026-10-11 06:38:23.633 | warning  |           Metal | Profiler DRAM buffers were full, markers were dropped! device 12, worker core 10, 10, Risc BRISC,  bufferEndIndex = 11860. Please either decrease the number of ops being profiled or run read device profiler more often (profiler.cpp:1716)"
+      },
+      {
+        "line": 11873,
+        "text": "2026-10-11 06:38:23.633 | warning  |           Metal | Profiler DRAM buffers were full, markers were dropped! device 4, worker core 11, 10, Risc BRISC,  bufferEndIndex = 11788. Please either decrease the number of ops being profiled or run read device profiler more often (profiler.cpp:1716)"
+      },
+      {
+        "line": 11874,
+        "text": "2026-10-11 06:38:23.633 | warning  |           Metal | Profiler DRAM buffers were full, markers were dropped! device 8, worker core 12, 4, Risc BRISC,  bufferEndIndex = 11992. Please either decrease the number of ops being profiled or run read device profiler more often (profiler.cpp:1716)"
+      },
+      {
+        "line": 11875,
+        "text": "2026-10-11 06:38:23.634 | warning  |           Metal | Profiler DRAM buffers were full, markers were dropped! device 0, worker core 11, 8, Risc BRISC,  bufferEndIndex = 11788. Please either decrease the number of ops being profiled or run read device profiler more often (profiler.cpp:1716)"
+      },
+      {
+        "line": 11876,
+        "text": "2026-10-11 06:38:23.634 | warning  |           Metal | Profiler DRAM buffers were full, markers were dropped! device 4, worker core 11, 11, Risc BRISC,  bufferEndIndex = 11788. Please either decrease the number of ops being profiled or run read device profiler more often (profiler.cpp:1716)"
+      },
+      {
+        "line": 11877,
+        "text": "2026-10-11 06:38:23.634 | warning  |           Metal | Profiler DRAM buffers were full, markers were dropped! device 12, worker core 10, 11, Risc BRISC,  bufferEndIndex = 11872. Please either decrease the number of ops being profiled or run read device profiler more often (profiler.cpp:1716)"
+      },
+      {
+        "line": 11878,
+        "text": "2026-10-11 06:38:23.634 | warning  |           Metal | Profiler DRAM buffers were full, markers were dropped! device 8, worker core 12, 5, Risc BRISC,  bufferEndIndex = 11992. Please either decrease the number of ops being profiled or run read device profiler more often (profiler.cpp:1716)"
+      },
+      {
+        "line": 11879,
+        "text": "2026-10-11 06:38:23.635 | warning  |           Metal | Profiler DRAM buffers were full, markers were dropped! device 0, worker core 11, 9, Risc BRISC,  bufferEndIndex = 11788. Please either decrease the number of ops being profiled or run read device profiler more often (profiler.cpp:1716)"
+      },
+      {
+        "line": 11880,
+        "text": "2026-10-11 06:38:23.635 | warning  |           Metal | Profiler DRAM buffers were full, markers were dropped! device 4, worker core 12, 2, Risc BRISC,  bufferEndIndex = 11992. Please either decrease the number of ops being profiled or run read device profiler more often (profiler.cpp:1716)"
+      },
+      {
+        "line": 11881,
+        "text": "2026-10-11 06:38:23.636 | warning  |           Metal | Profiler DRAM buffers were full, markers were dropped! device 12, worker core 11, 2, Risc BRISC,  bufferEndIndex = 11992. Please either decrease the number of ops being profiled or run read device profiler more often (profiler.cpp:1716)"
+      },
+      {
+        "line": 11882,
+        "text": "2026-10-11 06:38:23.636 | warning  |           Metal | Profiler DRAM buffers were full, markers were dropped! device 8, worker core 12, 6, Risc BRISC,  bufferEndIndex = 11788. Please either decrease the number of ops being profiled or run read device profiler more often (profiler.cpp:1716)"
+      },
+      {
+        "line": 11883,
+        "text": "2026-10-11 06:38:23.636 | warning  |           Metal | Profiler DRAM buffers were full, markers were dropped! device 0, worker core 11, 10, Risc BRISC,  bufferEndIndex = 11788. Please either decrease the number of ops being profiled or run read device profiler more often (profiler.cpp:1716)"
+      },
+      {
+        "line": 11884,
+        "text": "2026-10-11 06:38:23.637 | warning  |           Metal | Profiler DRAM buffers were full, markers were dropped! device 4, worker core 12, 3, Risc BRISC,  bufferEndIndex = 11992. Please either decrease the number of ops being profiled or run read device profiler more often (profiler.cpp:1716)"
+      },
+      {
+        "line": 11885,
+        "text": "2026-10-11 06:38:23.637 | warning  |           Metal | Profiler DRAM buffers were full, markers were dropped! device 12, worker core 11, 3, Risc BRISC,  bufferEndIndex = 11992. Please either decrease the number of ops being profiled or run read device profiler more often (profiler.cpp:1716)"
+      },
+      {
+        "line": 11886,
+        "text": "2026-10-11 06:38:23.637 | warning  |           Metal | Profiler DRAM buffers were full, markers were dropped! device 8, worker core 12, 7, Risc BRISC,  bufferEndIndex = 11788. Please either decrease the number of ops being profiled or run read device profiler more often (profiler.cpp:1716)"
+      },
+      {
+        "line": 11887,
+        "text": "2026-10-11 06:38:23.637 | warning  |           Metal | Profiler DRAM buffers were full, markers were dropped! device 0, worker core 11, 11, Risc BRISC,  bufferEndIndex = 11788. Please either decrease the number of ops being profiled or run read device profiler more often (profiler.cpp:1716)"
+      },
+      {
+        "line": 11888,
+        "text": "2026-10-11 06:38:23.638 | warning  |           Metal | Profiler DRAM buffers were full, markers were dropped! device 4, worker core 12, 4, Risc BRISC,  bufferEndIndex = 11992. Please either decrease the number of ops being profiled or run read device profiler more often (profiler.cpp:1716)"
+      },
+      {
+        "line": 11889,
+        "text": "2026-10-11 06:38:23.638 | warning  |           Metal | Profiler DRAM buffers were full, markers were dropped! device 8, worker core 12, 8, Risc BRISC,  bufferEndIndex = 11788. Please either decrease the number of ops being profiled or run read device profiler more often (profiler.cpp:1716)"
+      },
+      {
+        "line": 11890,
+        "text": "2026-10-11 06:38:23.638 | warning  |           Metal | Profiler DRAM buffers were full, markers were dropped! device 12, worker core 11, 4, Risc BRISC,  bufferEndIndex = 11992. Please either decrease the number of ops being profiled or run read device profiler more often (profiler.cpp:1716)"
+      },
+      {
+        "line": 11891,
+        "text": "2026-10-11 06:38:23.638 | warning  |           Metal | Profiler DRAM buffers were full, markers were dropped! device 0, worker core 12, 2, Risc BRISC,  bufferEndIndex = 11992. Please either decrease the number of ops being profiled or run read device profiler more often (profiler.cpp:1716)"
+      },
+      {
+        "line": 11892,
+        "text": "2026-10-11 06:38:23.639 | warning  |           Metal | Profiler DRAM buffers were full, markers were dropped! device 8, worker core 12, 9, Risc BRISC,  bufferEndIndex = 11788. Please either decrease the number of ops being profiled or run read device profiler more often (profiler.cpp:1716)"
+      },
+      {
+        "line": 11893,
+        "text": "2026-10-11 06:38:23.639 | warning  |           Metal | Profiler DRAM buffers were full, markers were dropped! device 4, worker core 12, 5, Risc BRISC,  bufferEndIndex = 11992. Please either decrease the number of ops being profiled or run read device profiler more often (profiler.cpp:1716)"
+      },
+      {
+        "line": 11894,
+        "text": "2026-10-11 06:38:23.639 | warning  |           Metal | Profiler DRAM buffers were full, markers were dropped! device 12, worker core 11, 5, Risc BRISC,  bufferEndIndex = 11992. Please either decrease the number of ops being profiled or run read device profiler more often (profiler.cpp:1716)"
+      },
+      {
+        "line": 11895,
+        "text": "2026-10-11 06:38:23.639 | warning  |           Metal | Profiler DRAM buffers were full, markers were dropped! device 0, worker core 12, 3, Risc BRISC,  bufferEndIndex = 11992. Please either decrease the number of ops being profiled or run read device profiler more often (profiler.cpp:1716)"
+      },
+      {
+        "line": 11896,
+        "text": "2026-10-11 06:38:23.640 | warning  |           Metal | Profiler DRAM buffers were full, markers were dropped! device 8, worker core 12, 10, Risc BRISC,  bufferEndIndex = 11788. Please either decrease the number of ops being profiled or run read device profiler more often (profiler.cpp:1716)"
+      },
+      {
+        "line": 11897,
+        "text": "2026-10-11 06:38:23.640 | warning  |           Metal | Profiler DRAM buffers were full, markers were dropped! device 4, worker core 12, 6, Risc BRISC,  bufferEndIndex = 11788. Please either decrease the number of ops being profiled or run read device profiler more often (profiler.cpp:1716)"
+      },
+      {
+        "line": 11898,
+        "text": "2026-10-11 06:38:23.640 | warning  |           Metal | Profiler DRAM buffers were full, markers were dropped! device 12, worker core 11, 6, Risc BRISC,  bufferEndIndex = 11788. Please either decrease the number of ops being profiled or run read device profiler more often (profiler.cpp:1716)"
+      },
+      {
+        "line": 11899,
+        "text": "2026-10-11 06:38:23.641 | warning  |           Metal | Profiler DRAM buffers were full, markers were dropped! device 0, worker core 12, 4, Risc BRISC,  bufferEndIndex = 11992. Please either decrease the number of ops being profiled or run read device profiler more often (profiler.cpp:1716)"
+      },
+      {
+        "line": 11900,
+        "text": "2026-10-11 06:38:23.641 | warning  |           Metal | Profiler DRAM buffers were full, markers were dropped! device 8, worker core 12, 11, Risc BRISC,  bufferEndIndex = 11788. Please either decrease the number of ops being profiled or run read device profiler more often (profiler.cpp:1716)"
+      },
+      {
+        "line": 11901,
+        "text": "2026-10-11 06:38:23.641 | warning  |           Metal | Profiler DRAM buffers were full, markers were dropped! device 4, worker core 12, 7, Risc BRISC,  bufferEndIndex = 11788. Please either decrease the number of ops being profiled or run read device profiler more often (profiler.cpp:1716)"
+      },
+      {
+        "line": 11902,
+        "text": "2026-10-11 06:38:23.642 | warning  |           Metal | Profiler DRAM buffers were full, markers were dropped! device 12, worker core 11, 7, Risc BRISC,  bufferEndIndex = 11788. Please either decrease the number of ops being profiled or run read device profiler more often (profiler.cpp:1716)"
+      },
+      {
+        "line": 11903,
+        "text": "2026-10-11 06:38:23.642 | warning  |           Metal | Profiler DRAM buffers were full, markers were dropped! device 8, worker core 13, 2, Risc BRISC,  bufferEndIndex = 11884. Please either decrease the number of ops being profiled or run read device profiler more often (profiler.cpp:1716)"
+      },
+      {
+        "line": 11904,
+        "text": "2026-10-11 06:38:23.643 | warning  |           Metal | Profiler DRAM buffers were full, markers were dropped! device 4, worker core 12, 8, Risc BRISC,  bufferEndIndex = 11788. Please either decrease the number of ops being profiled or run read device profiler more often (profiler.cpp:1716)"
+      },
+      {
+        "line": 11905,
+        "text": "2026-10-11 06:38:23.643 | warning  |           Metal | Profiler DRAM buffers were full, markers were dropped! device 0, worker core 12, 5, Risc BRISC,  bufferEndIndex = 11992. Please either decrease the number of ops being profiled or run read device profiler more often (profiler.cpp:1716)"
+      },
+      {
+        "line": 11906,
+        "text": "2026-10-11 06:38:23.644 | warning  |           Metal | Profiler DRAM buffers were full, markers were dropped! device 12, worker core 11, 8, Risc BRISC,  bufferEndIndex = 11788. Please either decrease the number of ops being profiled or run read device profiler more often (profiler.cpp:1716)"
+      },
+      {
+        "line": 11907,
+        "text": "2026-10-11 06:38:23.644 | warning  |           Metal | Profiler DRAM buffers were full, markers were dropped! device 8, worker core 13, 3, Risc BRISC,  bufferEndIndex = 11788. Please either decrease the number of ops being profiled or run read device profiler more often (profiler.cpp:1716)"
+      },
+      {
+        "line": 11908,
+        "text": "2026-10-11 06:38:23.644 | warning  |           Metal | Profiler DRAM buffers were full, markers were dropped! device 4, worker core 12, 9, Risc BRISC,  bufferEndIndex = 11788. Please either decrease the number of ops being profiled or run read device profiler more often (profiler.cpp:1716)"
+      },
+      {
+        "line": 11909,
+        "text": "2026-10-11 06:38:23.644 | warning  |           Metal | Profiler DRAM buffers were full, markers were dropped! device 0, worker core 12, 6, Risc BRISC,  bufferEndIndex = 11788. Please either decrease the number of ops being profiled or run read device profiler more often (profiler.cpp:1716)"
+      },
+      {
+        "line": 11910,
+        "text": "2026-10-11 06:38:23.645 | warning  |           Metal | Profiler DRAM buffers were full, markers were dropped! device 8, worker core 13, 4, Risc BRISC,  bufferEndIndex = 11788. Please either decrease the number of ops being profiled or run read device profiler more often (profiler.cpp:1716)"
+      },
+      {
+        "line": 11911,
+        "text": "2026-10-11 06:38:23.645 | warning  |           Metal | Profiler DRAM buffers were full, markers were dropped! device 4, worker core 12, 10, Risc BRISC,  bufferEndIndex = 11788. Please either decrease the number of ops being profiled or run read device profiler more often (profiler.cpp:1716)"
+      },
+      {
+        "line": 11912,
+        "text": "2026-10-11 06:38:23.645 | warning  |           Metal | Profiler DRAM buffers were full, markers were dropped! device 12, worker core 11, 9, Risc BRISC,  bufferEndIndex = 11788. Please either decrease the number of ops being profiled or run read device profiler more often (profiler.cpp:1716)"
+      },
+      {
+        "line": 11913,
+        "text": "2026-10-11 06:38:23.645 | warning  |           Metal | Profiler DRAM buffers were full, markers were dropped! device 0, worker core 12, 7, Risc BRISC,  bufferEndIndex = 11788. Please either decrease the number of ops being profiled or run read device profiler more often (profiler.cpp:1716)"
+      },
+      {
+        "line": 11914,
+        "text": "2026-10-11 06:38:23.646 | warning  |           Metal | Profiler DRAM buffers were full, markers were dropped! device 8, worker core 13, 5, Risc BRISC,  bufferEndIndex = 11788. Please either decrease the number of ops being profiled or run read device profiler more often (profiler.cpp:1716)"
+      },
+      {
+        "line": 11915,
+        "text": "2026-10-11 06:38:23.646 | warning  |           Metal | Profiler DRAM buffers were full, markers were dropped! device 4, worker core 12, 11, Risc BRISC,  bufferEndIndex = 11788. Please either decrease the number of ops being profiled or run read device profiler more often (profiler.cpp:1716)"
+      },
+      {
+        "line": 11916,
+        "text": "2026-10-11 06:38:23.646 | warning  |           Metal | Profiler DRAM buffers were full, markers were dropped! device 0, worker core 12, 8, Risc BRISC,  bufferEndIndex = 11788. Please either decrease the number of ops being profiled or run read device profiler more often (profiler.cpp:1716)"
+      },
+      {
+        "line": 11917,
+        "text": "2026-10-11 06:38:23.647 | warning  |           Metal | Profiler DRAM buffers were full, markers were dropped! device 12, worker core 11, 10, Risc BRISC,  bufferEndIndex = 11788. Please either decrease the number of ops being profiled or run read device profiler more often (profiler.cpp:1716)"
+      },
+      {
+        "line": 11918,
+        "text": "2026-10-11 06:38:23.647 | warning  |           Metal | Profiler DRAM buffers were full, markers were dropped! device 4, worker core 13, 2, Risc BRISC,  bufferEndIndex = 11884. Please either decrease the number of ops being profiled or run read device profiler more often (profiler.cpp:1716)"
+      },
+      {
+        "line": 11919,
+        "text": "2026-10-11 06:38:23.647 | warning  |           Metal | Profiler DRAM buffers were full, markers were dropped! device 8, worker core 13, 6, Risc BRISC,  bufferEndIndex = 11788. Please either decrease the number of ops being profiled or run read device profiler more often (profiler.cpp:1716)"
+      },
+      {
+        "line": 11920,
+        "text": "2026-10-11 06:38:23.647 | warning  |           Metal | Profiler DRAM buffers were full, markers were dropped! device 0, worker core 12, 9, Risc BRISC,  bufferEndIndex = 11788. Please either decrease the number of ops being profiled or run read device profiler more often (profiler.cpp:1716)"
+      },
+      {
+        "line": 11921,
+        "text": "2026-10-11 06:38:23.648 | warning  |           Metal | Profiler DRAM buffers were full, markers were dropped! device 12, worker core 11, 11, Risc BRISC,  bufferEndIndex = 11788. Please either decrease the number of ops being profiled or run read device profiler more often (profiler.cpp:1716)"
+      },
+      {
+        "line": 11922,
+        "text": "2026-10-11 06:38:23.648 | warning  |           Metal | Profiler DRAM buffers were full, markers were dropped! device 8, worker core 13, 7, Risc BRISC,  bufferEndIndex = 11788. Please either decrease the number of ops being profiled or run read device profiler more often (profiler.cpp:1716)"
+      },
+      {
+        "line": 11923,
+        "text": "2026-10-11 06:38:23.648 | warning  |           Metal | Profiler DRAM buffers were full, markers were dropped! device 4, worker core 13, 3, Risc BRISC,  bufferEndIndex = 11788. Please either decrease the number of ops being profiled or run read device profiler more often (profiler.cpp:1716)"
+      },
+      {
+        "line": 11924,
+        "text": "2026-10-11 06:38:23.649 | warning  |           Metal | Profiler DRAM buffers were full, markers were dropped! device 0, worker core 12, 10, Risc BRISC,  bufferEndIndex = 11788. Please either decrease the number of ops being profiled or run read device profiler more often (profiler.cpp:1716)"
+      },
+      {
+        "line": 11925,
+        "text": "2026-10-11 06:38:23.649 | warning  |           Metal | Profiler DRAM buffers were full, markers were dropped! device 12, worker core 12, 2, Risc BRISC,  bufferEndIndex = 11992. Please either decrease the number of ops being profiled or run read device profiler more often (profiler.cpp:1716)"
+      },
+      {
+        "line": 11926,
+        "text": "2026-10-11 06:38:23.649 | warning  |           Metal | Profiler DRAM buffers were full, markers were dropped! device 8, worker core 13, 8, Risc BRISC,  bufferEndIndex = 11788. Please either decrease the number of ops being profiled or run read device profiler more often (profiler.cpp:1716)"
+      },
+      {
+        "line": 11927,
+        "text": "2026-10-11 06:38:23.649 | warning  |           Metal | Profiler DRAM buffers were full, markers were dropped! device 4, worker core 13, 4, Risc BRISC,  bufferEndIndex = 11788. Please either decrease the number of ops being profiled or run read device profiler more often (profiler.cpp:1716)"
+      },
+      {
+        "line": 11928,
+        "text": "2026-10-11 06:38:23.650 | warning  |           Metal | Profiler DRAM buffers were full, markers were dropped! device 0, worker core 12, 11, Risc BRISC,  bufferEndIndex = 11788. Please either decrease the number of ops being profiled or run read device profiler more often (profiler.cpp:1716)"
+      },
+      {
+        "line": 11929,
+        "text": "2026-10-11 06:38:23.650 | warning  |           Metal | Profiler DRAM buffers were full, markers were dropped! device 12, worker core 12, 3, Risc BRISC,  bufferEndIndex = 11992. Please either decrease the number of ops being profiled or run read device profiler more often (profiler.cpp:1716)"
+      },
+      {
+        "line": 11930,
+        "text": "2026-10-11 06:38:23.650 | warning  |           Metal | Profiler DRAM buffers were full, markers were dropped! device 8, worker core 13, 9, Risc BRISC,  bufferEndIndex = 11788. Please either decrease the number of ops being profiled or run read device profiler more often (profiler.cpp:1716)"
+      },
+      {
+        "line": 11931,
+        "text": "2026-10-11 06:38:23.650 | warning  |           Metal | Profiler DRAM buffers were full, markers were dropped! device 4, worker core 13, 5, Risc BRISC,  bufferEndIndex = 11788. Please either decrease the number of ops being profiled or run read device profiler more often (profiler.cpp:1716)"
+      },
+      {
+        "line": 11932,
+        "text": "2026-10-11 06:38:23.651 | warning  |           Metal | Profiler DRAM buffers were full, markers were dropped! device 0, worker core 13, 2, Risc BRISC,  bufferEndIndex = 11884. Please either decrease the number of ops being profiled or run read device profiler more often (profiler.cpp:1716)"
+      },
+      {
+        "line": 11933,
+        "text": "2026-10-11 06:38:23.651 | warning  |           Metal | Profiler DRAM buffers were full, markers were dropped! device 12, worker core 12, 4, Risc BRISC,  bufferEndIndex = 11992. Please either decrease the number of ops being profiled or run read device profiler more often (profiler.cpp:1716)"
+      },
+      {
+        "line": 11934,
+        "text": "2026-10-11 06:38:23.651 | warning  |           Metal | Profiler DRAM buffers were full, markers were dropped! device 4, worker core 13, 6, Risc BRISC,  bufferEndIndex = 11788. Please either decrease the number of ops being profiled or run read device profiler more often (profiler.cpp:1716)"
+      },
+      {
+        "line": 11935,
+        "text": "2026-10-11 06:38:23.651 | warning  |           Metal | Profiler DRAM buffers were full, markers were dropped! device 8, worker core 13, 10, Risc BRISC,  bufferEndIndex = 11788. Please either decrease the number of ops being profiled or run read device profiler more often (profiler.cpp:1716)"
+      },
+      {
+        "line": 11936,
+        "text": "2026-10-11 06:38:23.652 | warning  |           Metal | Profiler DRAM buffers were full, markers were dropped! device 0, worker core 13, 3, Risc BRISC,  bufferEndIndex = 11788. Please either decrease the number of ops being profiled or run read device profiler more often (profiler.cpp:1716)"
+      },
+      {
+        "line": 11937,
+        "text": "2026-10-11 06:38:23.652 | warning  |           Metal | Profiler DRAM buffers were full, markers were dropped! device 12, worker core 12, 5, Risc BRISC,  bufferEndIndex = 11992. Please either decrease the number of ops being profiled or run read device profiler more often (profiler.cpp:1716)"
+      },
+      {
+        "line": 11938,
+        "text": "2026-10-11 06:38:23.653 | warning  |           Metal | Profiler DRAM buffers were full, markers were dropped! device 4, worker core 13, 7, Risc BRISC,  bufferEndIndex = 11788. Please either decrease the number of ops being profiled or run read device profiler more often (profiler.cpp:1716)"
+      },
+      {
+        "line": 11939,
+        "text": "2026-10-11 06:38:23.653 | warning  |           Metal | Profiler DRAM buffers were full, markers were dropped! device 8, worker core 13, 11, Risc BRISC,  bufferEndIndex = 11788. Please either decrease the number of ops being profiled or run read device profiler more often (profiler.cpp:1716)"
+      },
+      {
+        "line": 11940,
+        "text": "2026-10-11 06:38:23.653 | warning  |           Metal | Profiler DRAM buffers were full, markers were dropped! device 0, worker core 13, 4, Risc BRISC,  bufferEndIndex = 11788. Please either decrease the number of ops being profiled or run read device profiler more often (profiler.cpp:1716)"
+      },
+      {
+        "line": 11941,
+        "text": "2026-10-11 06:38:23.654 | warning  |           Metal | Profiler DRAM buffers were full, markers were dropped! device 12, worker core 12, 6, Risc BRISC,  bufferEndIndex = 11788. Please either decrease the number of ops being profiled or run read device profiler more often (profiler.cpp:1716)"
+      },
+      {
+        "line": 11942,
+        "text": "2026-10-11 06:38:23.654 | warning  |           Metal | Profiler DRAM buffers were full, markers were dropped! device 4, worker core 13, 8, Risc BRISC,  bufferEndIndex = 11788. Please either decrease the number of ops being profiled or run read device profiler more often (profiler.cpp:1716)"
+      },
+      {
+        "line": 11943,
+        "text": "2026-10-11 06:38:23.654 | warning  |           Metal | Profiler DRAM buffers were full, markers were dropped! device 8, worker core 14, 2, Risc BRISC,  bufferEndIndex = 11884. Please either decrease the number of ops being profiled or run read device profiler more often (profiler.cpp:1716)"
+      },
+      {
+        "line": 11944,
+        "text": "2026-10-11 06:38:23.654 | warning  |           Metal | Profiler DRAM buffers were full, markers were dropped! device 0, worker core 13, 5, Risc BRISC,  bufferEndIndex = 11788. Please either decrease the number of ops being profiled or run read device profiler more often (profiler.cpp:1716)"
+      },
+      {
+        "line": 11945,
+        "text": "2026-10-11 06:38:23.655 | warning  |           Metal | Profiler DRAM buffers were full, markers were dropped! device 4, worker core 13, 9, Risc BRISC,  bufferEndIndex = 11788. Please either decrease the number of ops being profiled or run read device profiler more often (profiler.cpp:1716)"
+      },
+      {
+        "line": 11946,
+        "text": "2026-10-11 06:38:23.655 | warning  |           Metal | Profiler DRAM buffers were full, markers were dropped! device 12, worker core 12, 7, Risc BRISC,  bufferEndIndex = 11788. Please either decrease the number of ops being profiled or run read device profiler more often (profiler.cpp:1716)"
+      },
+      {
+        "line": 11947,
+        "text": "2026-10-11 06:38:23.655 | warning  |           Metal | Profiler DRAM buffers were full, markers were dropped! device 8, worker core 14, 3, Risc BRISC,  bufferEndIndex = 11788. Please either decrease the number of ops being profiled or run read device profiler more often (profiler.cpp:1716)"
+      },
+      {
+        "line": 11948,
+        "text": "2026-10-11 06:38:23.656 | warning  |           Metal | Profiler DRAM buffers were full, markers were dropped! device 0, worker core 13, 6, Risc BRISC,  bufferEndIndex = 11788. Please either decrease the number of ops being profiled or run read device profiler more often (profiler.cpp:1716)"
+      },
+      {
+        "line": 11949,
+        "text": "2026-10-11 06:38:23.656 | warning  |           Metal | Profiler DRAM buffers were full, markers were dropped! device 4, worker core 13, 10, Risc BRISC,  bufferEndIndex = 11788. Please either decrease the number of ops being profiled or run read device profiler more often (profiler.cpp:1716)"
+      },
+      {
+        "line": 11950,
+        "text": "2026-10-11 06:38:23.656 | warning  |           Metal | Profiler DRAM buffers were full, markers were dropped! device 8, worker core 14, 4, Risc BRISC,  bufferEndIndex = 11788. Please either decrease the number of ops being profiled or run read device profiler more often (profiler.cpp:1716)"
+      },
+      {
+        "line": 11951,
+        "text": "2026-10-11 06:38:23.657 | warning  |           Metal | Profiler DRAM buffers were full, markers were dropped! device 12, worker core 12, 8, Risc BRISC,  bufferEndIndex = 11788. Please either decrease the number of ops being profiled or run read device profiler more often (profiler.cpp:1716)"
+      },
+      {
+        "line": 11952,
+        "text": "2026-10-11 06:38:23.657 | warning  |           Metal | Profiler DRAM buffers were full, markers were dropped! device 4, worker core 13, 11, Risc BRISC,  bufferEndIndex = 11788. Please either decrease the number of ops being profiled or run read device profiler more often (profiler.cpp:1716)"
+      },
+      {
+        "line": 11953,
+        "text": "2026-10-11 06:38:23.657 | warning  |           Metal | Profiler DRAM buffers were full, markers were dropped! device 0, worker core 13, 7, Risc BRISC,  bufferEndIndex = 11788. Please either decrease the number of ops being profiled or run read device profiler more often (profiler.cpp:1716)"
+      },
+      {
+        "line": 11954,
+        "text": "2026-10-11 06:38:23.657 | warning  |           Metal | Profiler DRAM buffers were full, markers were dropped! device 8, worker core 14, 5, Risc BRISC,  bufferEndIndex = 11788. Please either decrease the number of ops being profiled or run read device profiler more often (profiler.cpp:1716)"
+      },
+      {
+        "line": 11955,
+        "text": "2026-10-11 06:38:23.658 | warning  |           Metal | Profiler DRAM buffers were full, markers were dropped! device 12, worker core 12, 9, Risc BRISC,  bufferEndIndex = 11788. Please either decrease the number of ops being profiled or run read device profiler more often (profiler.cpp:1716)"
+      },
+      {
+        "line": 11956,
+        "text": "2026-10-11 06:38:23.658 | warning  |           Metal | Profiler DRAM buffers were full, markers were dropped! device 4, worker core 14, 2, Risc BRISC,  bufferEndIndex = 11884. Please either decrease the number of ops being profiled or run read device profiler more often (profiler.cpp:1716)"
+      },
+      {
+        "line": 11957,
+        "text": "2026-10-11 06:38:23.658 | warning  |           Metal | Profiler DRAM buffers were full, markers were dropped! device 0, worker core 13, 8, Risc BRISC,  bufferEndIndex = 11788. Please either decrease the number of ops being profiled or run read device profiler more often (profiler.cpp:1716)"
+      },
+      {
+        "line": 11958,
+        "text": "2026-10-11 06:38:23.659 | warning  |           Metal | Profiler DRAM buffers were full, markers were dropped! device 8, worker core 14, 6, Risc BRISC,  bufferEndIndex = 11788. Please either decrease the number of ops being profiled or run read device profiler more often (profiler.cpp:1716)"
+      },
+      {
+        "line": 11959,
+        "text": "2026-10-11 06:38:23.660 | warning  |           Metal | Profiler DRAM buffers were full, markers were dropped! device 4, worker core 14, 3, Risc BRISC,  bufferEndIndex = 11788. Please either decrease the number of ops being profiled or run read device profiler more often (profiler.cpp:1716)"
+      },
+      {
+        "line": 11960,
+        "text": "2026-10-11 06:38:23.660 | warning  |           Metal | Profiler DRAM buffers were full, markers were dropped! device 0, worker core 13, 9, Risc BRISC,  bufferEndIndex = 11788. Please either decrease the number of ops being profiled or run read device profiler more often (profiler.cpp:1716)"
+      },
+      {
+        "line": 11961,
+        "text": "2026-10-11 06:38:23.660 | warning  |           Metal | Profiler DRAM buffers were full, markers were dropped! device 12, worker core 12, 10, Risc BRISC,  bufferEndIndex = 11788. Please either decrease the number of ops being profiled or run read device profiler more often (profiler.cpp:1716)"
+      },
+      {
+        "line": 11962,
+        "text": "2026-10-11 06:38:23.660 | warning  |           Metal | Profiler DRAM buffers were full, markers were dropped! device 8, worker core 14, 7, Risc BRISC,  bufferEndIndex = 11788. Please either decrease the number of ops being profiled or run read device profiler more often (profiler.cpp:1716)"
+      },
+      {
+        "line": 11963,
+        "text": "2026-10-11 06:38:23.661 | warning  |           Metal | Profiler DRAM buffers were full, markers were dropped! device 4, worker core 14, 4, Risc BRISC,  bufferEndIndex = 11788. Please either decrease the number of ops being profiled or run read device profiler more often (profiler.cpp:1716)"
+      },
+      {
+        "line": 11964,
+        "text": "2026-10-11 06:38:23.661 | warning  |           Metal | Profiler DRAM buffers were full, markers were dropped! device 0, worker core 13, 10, Risc BRISC,  bufferEndIndex = 11788. Please either decrease the number of ops being profiled or run read device profiler more often (profiler.cpp:1716)"
+      },
+      {
+        "line": 11965,
+        "text": "2026-10-11 06:38:23.661 | warning  |           Metal | Profiler DRAM buffers were full, markers were dropped! device 12, worker core 12, 11, Risc BRISC,  bufferEndIndex = 11788. Please either decrease the number of ops being profiled or run read device profiler more often (profiler.cpp:1716)"
+      },
+      {
+        "line": 11966,
+        "text": "2026-10-11 06:38:23.661 | warning  |           Metal | Profiler DRAM buffers were full, markers were dropped! device 8, worker core 14, 8, Risc BRISC,  bufferEndIndex = 11788. Please either decrease the number of ops being profiled or run read device profiler more often (profiler.cpp:1716)"
+      },
+      {
+        "line": 11967,
+        "text": "2026-10-11 06:38:23.662 | warning  |           Metal | Profiler DRAM buffers were full, markers were dropped! device 4, worker core 14, 5, Risc BRISC,  bufferEndIndex = 11788. Please either decrease the number of ops being profiled or run read device profiler more often (profiler.cpp:1716)"
+      },
+      {
+        "line": 11968,
+        "text": "2026-10-11 06:38:23.662 | warning  |           Metal | Profiler DRAM buffers were full, markers were dropped! device 0, worker core 13, 11, Risc BRISC,  bufferEndIndex = 11788. Please either decrease the number of ops being profiled or run read device profiler more often (profiler.cpp:1716)"
+      },
+      {
+        "line": 11969,
+        "text": "2026-10-11 06:38:23.662 | warning  |           Metal | Profiler DRAM buffers were full, markers were dropped! device 12, worker core 13, 2, Risc BRISC,  bufferEndIndex = 11884. Please either decrease the number of ops being profiled or run read device profiler more often (profiler.cpp:1716)"
+      },
+      {
+        "line": 11970,
+        "text": "2026-10-11 06:38:23.662 | warning  |           Metal | Profiler DRAM buffers were full, markers were dropped! device 8, worker core 14, 9, Risc BRISC,  bufferEndIndex = 11788. Please either decrease the number of ops being profiled or run read device profiler more often (profiler.cpp:1716)"
+      },
+      {
+        "line": 11971,
+        "text": "2026-10-11 06:38:23.663 | warning  |           Metal | Profiler DRAM buffers were full, markers were dropped! device 4, worker core 14, 6, Risc BRISC,  bufferEndIndex = 11788. Please either decrease the number of ops being profiled or run read device profiler more often (profiler.cpp:1716)"
+      },
+      {
+        "line": 11972,
+        "text": "2026-10-11 06:38:23.663 | warning  |           Metal | Profiler DRAM buffers were full, markers were dropped! device 0, worker core 14, 2, Risc BRISC,  bufferEndIndex = 11884. Please either decrease the number of ops being profiled or run read device profiler more often (profiler.cpp:1716)"
+      },
+      {
+        "line": 11973,
+        "text": "2026-10-11 06:38:23.663 | warning  |           Metal | Profiler DRAM buffers were full, markers were dropped! device 12, worker core 13, 3, Risc BRISC,  bufferEndIndex = 11788. Please either decrease the number of ops being profiled or run read device profiler more often (profiler.cpp:1716)"
+      },
+      {
+        "line": 11974,
+        "text": "2026-10-11 06:38:23.663 | warning  |           Metal | Profiler DRAM buffers were full, markers were dropped! device 8, worker core 14, 10, Risc BRISC,  bufferEndIndex = 11788. Please either decrease the number of ops being profiled or run read device profiler more often (profiler.cpp:1716)"
+      },
+      {
+        "line": 11975,
+        "text": "2026-10-11 06:38:23.664 | warning  |           Metal | Profiler DRAM buffers were full, markers were dropped! device 4, worker core 14, 7, Risc BRISC,  bufferEndIndex = 11788. Please either decrease the number of ops being profiled or run read device profiler more often (profiler.cpp:1716)"
+      },
+      {
+        "line": 11976,
+        "text": "2026-10-11 06:38:23.664 | warning  |           Metal | Profiler DRAM buffers were full, markers were dropped! device 0, worker core 14, 3, Risc BRISC,  bufferEndIndex = 11788. Please either decrease the number of ops being profiled or run read device profiler more often (profiler.cpp:1716)"
+      },
+      {
+        "line": 11977,
+        "text": "2026-10-11 06:38:23.664 | warning  |           Metal | Profiler DRAM buffers were full, markers were dropped! device 12, worker core 13, 4, Risc BRISC,  bufferEndIndex = 11788. Please either decrease the number of ops being profiled or run read device profiler more often (profiler.cpp:1716)"
+      },
+      {
+        "line": 11978,
+        "text": "2026-10-11 06:38:23.664 | warning  |           Metal | Profiler DRAM buffers were full, markers were dropped! device 8, worker core 14, 11, Risc BRISC,  bufferEndIndex = 11788. Please either decrease the number of ops being profiled or run read device profiler more often (profiler.cpp:1716)"
+      },
+      {
+        "line": 11979,
+        "text": "2026-10-11 06:38:23.665 | warning  |           Metal | Profiler DRAM buffers were full, markers were dropped! device 4, worker core 14, 8, Risc BRISC,  bufferEndIndex = 11788. Please either decrease the number of ops being profiled or run read device profiler more often (profiler.cpp:1716)"
+      },
+      {
+        "line": 11980,
+        "text": "2026-10-11 06:38:23.665 | warning  |           Metal | Profiler DRAM buffers were full, markers were dropped! device 0, worker core 14, 4, Risc BRISC,  bufferEndIndex = 11788. Please either decrease the number of ops being profiled or run read device profiler more often (profiler.cpp:1716)"
+      },
+      {
+        "line": 11981,
+        "text": "2026-10-11 06:38:23.665 | warning  |           Metal | Profiler DRAM buffers were full, markers were dropped! device 12, worker core 13, 5, Risc BRISC,  bufferEndIndex = 11788. Please either decrease the number of ops being profiled or run read device profiler more often (profiler.cpp:1716)"
+      },
+      {
+        "line": 11982,
+        "text": "2026-10-11 06:38:23.666 | warning  |           Metal | Profiler DRAM buffers were full, markers were dropped! device 4, worker core 14, 9, Risc BRISC,  bufferEndIndex = 11788. Please either decrease the number of ops being profiled or run read device profiler more often (profiler.cpp:1716)"
+      },
+      {
+        "line": 11983,
+        "text": "2026-10-11 06:38:23.666 | warning  |           Metal | Profiler DRAM buffers were full, markers were dropped! device 0, worker core 14, 5, Risc BRISC,  bufferEndIndex = 11788. Please either decrease the number of ops being profiled or run read device profiler more often (profiler.cpp:1716)"
+      },
+      {
+        "line": 11984,
+        "text": "2026-10-11 06:38:23.666 | warning  |           Metal | Profiler DRAM buffers were full, markers were dropped! device 12, worker core 13, 6, Risc BRISC,  bufferEndIndex = 11788. Please either decrease the number of ops being profiled or run read device profiler more often (profiler.cpp:1716)"
+      },
+      {
+        "line": 11985,
+        "text": "2026-10-11 06:38:23.667 | warning  |           Metal | Profiler DRAM buffers were full, markers were dropped! device 4, worker core 14, 10, Risc BRISC,  bufferEndIndex = 11788. Please either decrease the number of ops being profiled or run read device profiler more often (profiler.cpp:1716)"
+      },
+      {
+        "line": 11986,
+        "text": "2026-10-11 06:38:23.667 | warning  |           Metal | Profiler DRAM buffers were full, markers were dropped! device 12, worker core 13, 7, Risc BRISC,  bufferEndIndex = 11788. Please either decrease the number of ops being profiled or run read device profiler more often (profiler.cpp:1716)"
+      },
+      {
+        "line": 11987,
+        "text": "2026-10-11 06:38:23.668 | warning  |           Metal | Profiler DRAM buffers were full, markers were dropped! device 0, worker core 14, 6, Risc BRISC,  bufferEndIndex = 11788. Please either decrease the number of ops being profiled or run read device profiler more often (profiler.cpp:1716)"
+      },
+      {
+        "line": 11988,
+        "text": "2026-10-11 06:38:23.668 | warning  |           Metal | Profiler DRAM buffers were full, markers were dropped! device 4, worker core 14, 11, Risc BRISC,  bufferEndIndex = 11788. Please either decrease the number of ops being profiled or run read device profiler more often (profiler.cpp:1716)"
+      },
+      {
+        "line": 11989,
+        "text": "2026-10-11 06:38:23.669 | warning  |           Metal | Profiler DRAM buffers were full, markers were dropped! device 12, worker core 13, 8, Risc BRISC,  bufferEndIndex = 11788. Please either decrease the number of ops being profiled or run read device profiler more often (profiler.cpp:1716)"
+      },
+      {
+        "line": 11990,
+        "text": "2026-10-11 06:38:23.669 | warning  |           Metal | Profiler DRAM buffers were full, markers were dropped! device 0, worker core 14, 7, Risc BRISC,  bufferEndIndex = 11788. Please either decrease the number of ops being profiled or run read device profiler more often (profiler.cpp:1716)"
+      },
+      {
+        "line": 11991,
+        "text": "2026-10-11 06:38:23.670 | warning  |           Metal | Profiler DRAM buffers were full, markers were dropped! device 0, worker core 14, 8, Risc BRISC,  bufferEndIndex = 11788. Please either decrease the number of ops being profiled or run read device profiler more often (profiler.cpp:1716)"
+      },
+      {
+        "line": 11992,
+        "text": "2026-10-11 06:38:23.670 | warning  |           Metal | Profiler DRAM buffers were full, markers were dropped! device 12, worker core 13, 9, Risc BRISC,  bufferEndIndex = 11788. Please either decrease the number of ops being profiled or run read device profiler more often (profiler.cpp:1716)"
+      },
+      {
+        "line": 11993,
+        "text": "2026-10-11 06:38:23.671 | warning  |           Metal | Profiler DRAM buffers were full, markers were dropped! device 0, worker core 14, 9, Risc BRISC,  bufferEndIndex = 11788. Please either decrease the number of ops being profiled or run read device profiler more often (profiler.cpp:1716)"
+      },
+      {
+        "line": 11994,
+        "text": "2026-10-11 06:38:23.672 | warning  |           Metal | Profiler DRAM buffers were full, markers were dropped! device 12, worker core 13, 10, Risc BRISC,  bufferEndIndex = 11788. Please either decrease the number of ops being profiled or run read device profiler more often (profiler.cpp:1716)"
+      },
+      {
+        "line": 11995,
+        "text": "2026-10-11 06:38:23.672 | warning  |           Metal | Profiler DRAM buffers were full, markers were dropped! device 0, worker core 14, 10, Risc BRISC,  bufferEndIndex = 11788. Please either decrease the number of ops being profiled or run read device profiler more often (profiler.cpp:1716)"
+      },
+      {
+        "line": 11996,
+        "text": "2026-10-11 06:38:23.673 | warning  |           Metal | Profiler DRAM buffers were full, markers were dropped! device 12, worker core 13, 11, Risc BRISC,  bufferEndIndex = 11788. Please either decrease the number of ops being profiled or run read device profiler more often (profiler.cpp:1716)"
+      },
+      {
+        "line": 11997,
+        "text": "2026-10-11 06:38:23.674 | warning  |           Metal | Profiler DRAM buffers were full, markers were dropped! device 0, worker core 14, 11, Risc BRISC,  bufferEndIndex = 11788. Please either decrease the number of ops being profiled or run read device profiler more often (profiler.cpp:1716)"
+      },
+      {
+        "line": 11998,
+        "text": "2026-10-11 06:38:23.674 | warning  |           Metal | Profiler DRAM buffers were full, markers were dropped! device 12, worker core 14, 2, Risc BRISC,  bufferEndIndex = 11884. Please either decrease the number of ops being profiled or run read device profiler more often (profiler.cpp:1716)"
+      },
+      {
+        "line": 11999,
+        "text": "2026-10-11 06:38:23.675 | warning  |           Metal | Profiler DRAM buffers were full, markers were dropped! device 12, worker core 14, 3, Risc BRISC,  bufferEndIndex = 11788. Please either decrease the number of ops being profiled or run read device profiler more often (profiler.cpp:1716)"
+      },
+      {
+        "line": 12000,
+        "text": "2026-10-11 06:38:23.676 | warning  |           Metal | Profiler DRAM buffers were full, markers were dropped! device 12, worker core 14, 4, Risc BRISC,  bufferEndIndex = 11788. Please either decrease the number of ops being profiled or run read device profiler more often (profiler.cpp:1716)"
+      },
+      {
+        "line": 12001,
+        "text": "2026-10-11 06:38:23.677 | warning  |           Metal | Profiler DRAM buffers were full, markers were dropped! device 12, worker core 14, 5, Risc BRISC,  bufferEndIndex = 11788. Please either decrease the number of ops being profiled or run read device profiler more often (profiler.cpp:1716)"
+      },
+      {
+        "line": 12002,
+        "text": "2026-10-11 06:38:23.678 | warning  |           Metal | Profiler DRAM buffers were full, markers were dropped! device 12, worker core 14, 6, Risc BRISC,  bufferEndIndex = 11788. Please either decrease the number of ops being profiled or run read device profiler more often (profiler.cpp:1716)"
+      },
+      {
+        "line": 12003,
+        "text": "2026-10-11 06:38:23.679 | warning  |           Metal | Profiler DRAM buffers were full, markers were dropped! device 12, worker core 14, 7, Risc BRISC,  bufferEndIndex = 11788. Please either decrease the number of ops being profiled or run read device profiler more often (profiler.cpp:1716)"
+      },
+      {
+        "line": 12004,
+        "text": "2026-10-11 06:38:23.681 | warning  |           Metal | Profiler DRAM buffers were full, markers were dropped! device 12, worker core 14, 8, Risc BRISC,  bufferEndIndex = 11788. Please either decrease the number of ops being profiled or run read device profiler more often (profiler.cpp:1716)"
+      },
+      {
+        "line": 12005,
+        "text": "2026-10-11 06:38:23.682 | warning  |           Metal | Profiler DRAM buffers were full, markers were dropped! device 12, worker core 14, 9, Risc BRISC,  bufferEndIndex = 11788. Please either decrease the number of ops being profiled or run read device profiler more often (profiler.cpp:1716)"
+      },
+      {
+        "line": 12006,
+        "text": "2026-10-11 06:38:23.683 | warning  |           Metal | Profiler DRAM buffers were full, markers were dropped! device 12, worker core 14, 10, Risc BRISC,  bufferEndIndex = 11788. Please either decrease the number of ops being profiled or run read device profiler more often (profiler.cpp:1716)"
+      },
+      {
+        "line": 12007,
+        "text": "2026-10-11 06:38:23.684 | warning  |           Metal | Profiler DRAM buffers were full, markers were dropped! device 12, worker core 14, 11, Risc BRISC,  bufferEndIndex = 11788. Please either decrease the number of ops being profiled or run read device profiler more often (profiler.cpp:1716)"
+      },
+      {
+        "line": 12131,
+        "text": "    raise ValueError(\"Incomplete compute-core counter coverage\")"
+      },
+      {
+        "line": 12132,
+        "text": "ValueError: Incomplete compute-core counter coverage"
+      }
+    ]
+  },
+  {
+    "source": "/home/ttuser/qwen38-artifacts-20261007/large-operator-control-v3/run.log",
+    "bytes": 127887,
+    "sha256": "3c97f287207c76573d0549901940768fac83be0a3da5ca40ab3ef11146f788ad",
+    "matches": [
+      {
+        "line": 904,
+        "text": "2026-10-11 07:10:35.499 | warning  |           Metal | Profiler DRAM buffers were full, markers were dropped! device 4, worker core 1, 2, Risc BRISC,  bufferEndIndex = 11860. Please either decrease the number of ops being profiled or run read device profiler more often (profiler.cpp:1716)"
+      },
+      {
+        "line": 905,
+        "text": "2026-10-11 07:10:35.499 | warning  |           Metal | Profiler DRAM buffers were full, markers were dropped! device 0, worker core 1, 2, Risc BRISC,  bufferEndIndex = 11860. Please either decrease the number of ops being profiled or run read device profiler more often (profiler.cpp:1716)"
+      },
+      {
+        "line": 906,
+        "text": "2026-10-11 07:10:35.499 | warning  |           Metal | Profiler DRAM buffers were full, markers were dropped! device 8, worker core 1, 2, Risc BRISC,  bufferEndIndex = 11860. Please either decrease the number of ops being profiled or run read device profiler more often (profiler.cpp:1716)"
+      },
+      {
+        "line": 907,
+        "text": "2026-10-11 07:10:35.499 | warning  |           Metal | Profiler DRAM buffers were full, markers were dropped! device 12, worker core 1, 2, Risc BRISC,  bufferEndIndex = 11860. Please either decrease the number of ops being profiled or run read device profiler more often (profiler.cpp:1716)"
+      },
+      {
+        "line": 1031,
+        "text": "    raise ValueError(\"Incomplete compute-core counter coverage\")"
+      },
+      {
+        "line": 1032,
+        "text": "ValueError: Incomplete compute-core counter coverage"
+      }
+    ]
+  }
+]

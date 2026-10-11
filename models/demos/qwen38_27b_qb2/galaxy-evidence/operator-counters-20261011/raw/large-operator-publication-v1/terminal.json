@@ -1,0 +1,4 @@
+{
+  "collected_at": "2026-10-11T08:24:38.180516+00:00",
+  "systemd": "MainPID=0\nResult=success\nExecMainStatus=0\nActiveState=inactive\nSubState=dead\n"
+}

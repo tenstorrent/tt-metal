@@ -1,5 +1,15 @@
 # GDN fusion implementation plan
 
+October 11 counter update: this remains a design, not a fused hardware result.
+The latest combined model is 47.882258 ms / 20.884562 TSU, leaving 14.548925 ms
+to 30 TSU. The existing 1-3-ms fusion target would yield about 21.33-22.28 TSU
+if realized at that baseline. Completed counters show 31.8% recurrence math
+activity, substantial inter-thread waits and 98.4-99.5% sampled L1/NoC grants.
+This supports testing operand preparation and handoffs, not claiming the wait
+fraction is removable or the entire memory fabric is uncongested. See the
+[counter evidence](../galaxy-evidence/operator-counters-20261011/README.md).
+The original estimates and source analysis below remain explicitly historical.
+
 October 11, 2026, 02:00 UTC. This is a design, not an implemented fused kernel
 or a queued hardware experiment. Primary target: B16, 32K context, TP4; preserve
 BFP8 weights/KV, BF16 activations and FP32 recurrent state. No speculative decode.

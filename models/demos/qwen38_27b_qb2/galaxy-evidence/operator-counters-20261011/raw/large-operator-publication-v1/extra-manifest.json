@@ -1,0 +1,18 @@
+{
+  "large-operator-v4/before/tracy/reports/2026_10_11_07_20_47/ops_perf_results_2026_10_11_07_20_47.csv": {
+    "bytes": 555196,
+    "sha256": "d5610264255473076777280d2d21370341c8775d152b98e8a002513d16dd793a"
+  },
+  "large-operator-v4/after/tracy/reports/2026_10_11_07_28_36/ops_perf_results_2026_10_11_07_28_36.csv": {
+    "bytes": 555179,
+    "sha256": "566989fd2d11ec0ac340b128c5d174aa00497f5c900ea0ca811b4383e1127d2e"
+  },
+  "large-operator-control-v3/run.log": {
+    "bytes": 127887,
+    "sha256": "3c97f287207c76573d0549901940768fac83be0a3da5ca40ab3ef11146f788ad"
+  },
+  "large-operator-control-v3/unit.log": {
+    "bytes": 19828,
+    "sha256": "3051d9046833ef82fe569e7463079db7b43a6333cb84f8c612a21e8d86c75fdd"
+  }
+}

@@ -1,5 +1,13 @@
 # Profiling coverage and the next diagnostic
 
+Latest update, October 11: GDN's ten counter groups and all 17 projection/SDPA
+v4 captures completed with exact outputs, full requested coverage and cleanup.
+The buffer-drain fix preserves final metadata; earlier overflow failures remain
+recorded. [Completed results and remaining limits](../galaxy-evidence/operator-counters-20261011/README.md).
+No hardware capture is still waiting in this series. Physical DRAM utilization
+and a current full-model critical path are not established by these counters.
+The timestamped entries below preserve the investigation history.
+
 October 11, 2026, 02:32 UTC. Target: B16/32K, TP4, BFP8 weights/KV,
 BF16 activations, FP32 recurrent state. This is an evidence audit and diagnostic
 plan, not a new capture or a claim of measured DRAM utilization.

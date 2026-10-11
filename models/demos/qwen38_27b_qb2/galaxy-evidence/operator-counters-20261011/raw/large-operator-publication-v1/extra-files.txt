@@ -1,0 +1,4 @@
+large-operator-v4/before/tracy/reports/2026_10_11_07_20_47/ops_perf_results_2026_10_11_07_20_47.csv
+large-operator-v4/after/tracy/reports/2026_10_11_07_28_36/ops_perf_results_2026_10_11_07_28_36.csv
+large-operator-control-v3/run.log
+large-operator-control-v3/unit.log
