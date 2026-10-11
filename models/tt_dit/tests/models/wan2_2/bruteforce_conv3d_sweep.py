@@ -26,6 +26,7 @@ import json
 import math
 import os
 import pathlib
+import threading
 import time
 
 import pytest
@@ -147,6 +148,18 @@ def estimate_l1_bytes(cin_block, cout_block, t_blk, h_blk, w_blk, kernel_size, C
 BH_L1_UNRESERVED = 1_461_248
 L1_PREFETCH_HARD_CAP = 500 * 1024
 DRAM_READ_ALIGNMENT = 64
+
+
+def vol2col_ring_safe(t_blk, h_blk, w_blk):
+    """Whether conv3d's vol2col_rm CB ring wraps cleanly for this block.
+
+    The reader pushes min(left, 32)-row chunks into a min(n, 64)-page ring (n = t*h*w, 32 pages when
+    n is tile aligned). For an unaligned n > 64 the per-block pushes do not divide the ring, a chunk
+    reservation straddles its end, and the CB write pointer (which only wraps on an exact fifo_limit
+    match) runs off it: the device hangs.
+    """
+    n = t_blk * h_blk * w_blk
+    return n % 32 == 0 or n <= 64
 
 
 def prefetch_shard_fits(
@@ -294,6 +307,8 @@ def build_all_blockings(C_in, C_out, kernel_size, H, W, T, num_cores=120, max_t_
             for t_blk in t_blocks:
                 for h, w in hw:
                     if hw_products is not None and h * w not in hw_products:
+                        continue
+                    if not vol2col_ring_safe(t_blk, h, w):
                         continue
                     if estimate_l1_bytes(cin, cout, t_blk, h, w, kernel_size, C_in) > L1_BUDGET:
                         skipped_l1 += 1
@@ -509,6 +524,7 @@ def run_sweep(
     max_seconds=None,
     near_table=False,
     only_blockings=None,
+    combo_watchdog_s=None,
 ):
     """Sweep conv3d blockings for one shape; T/H/W are the per-device padded input dims.
 
@@ -520,6 +536,8 @@ def run_sweep(
     max_seconds: stop starting new combos after this long.
     near_table:  try the blockings closest to the table blocking (fewest differing fields) first.
     only_blockings: time exactly these blockings, in order, logging each one before its launch (hang bisects).
+    combo_watchdog_s: end the process if no combo finishes for this long, so a device hang frees the device
+                 instead of holding it until the job timeout.
     """
     padded_cin = aligned_channels(C_in)
     _num_cores = grid_size.x * grid_size.y if grid_size else 120
@@ -539,6 +557,10 @@ def run_sweep(
         combos.sort(key=lambda c: sum(a != b for a, b in zip(c, table_blk)))
     if only_blockings is not None:
         combos = [tuple(b) for b in only_blockings]
+    unsafe = [c for c in combos if not vol2col_ring_safe(*c[2:])]
+    if unsafe:
+        print(f"Dropping {len(unsafe)} blockings that hang the vol2col CB ring: {unsafe}")
+        combos = [c for c in combos if c not in unsafe]
     if halo is not None:
         no_shard = [c for c in combos if not prefetch_shard_fits(*c, kernel_size, C_in)]
         if no_shard:
@@ -691,7 +713,20 @@ def run_sweep(
     fail_count = 0
     PROBE_THRESHOLD = 1.5
 
+    last_progress = [time.monotonic()]
+    if combo_watchdog_s:
+
+        def watchdog():
+            while True:
+                time.sleep(5)
+                if time.monotonic() - last_progress[0] > combo_watchdog_s:
+                    print(f"WATCHDOG: no combo finished in {combo_watchdog_s}s, exiting", flush=True)
+                    os._exit(3)
+
+        threading.Thread(target=watchdog, daemon=True).start()
+
     for i, (cin, cout, t_blk, h_blk, w_blk) in enumerate(combos):
+        last_progress[0] = time.monotonic()
         if only_blockings is not None:
             print(f"  launching ({cin},{cout},{t_blk},{h_blk},{w_blk})", flush=True)
         if max_seconds is not None and time.time() - t_start > max_seconds:
@@ -744,6 +779,7 @@ def run_sweep(
             print(f"  FAIL ({cin},{cout},{t_blk},{h_blk},{w_blk}): {e}", flush=True)
             results.append({"blocking": [cin, cout, t_blk, h_blk, w_blk], "us": None, "status": "fail"})
 
+    last_progress[0] = time.monotonic()
     output_check = None
     if halo is not None and best_blk is not None and tbl_args is not None:
         cin, cout, t_blk, h_blk, w_blk = best_blk
@@ -762,6 +798,7 @@ def run_sweep(
         )
         output_check = _compare_outputs(_edge_outputs(tbl_args), _edge_outputs(best_args))
         print(f"Output check best vs table: {output_check}")
+    last_progress[0] = float("inf")
 
     # -- Report --
     elapsed = time.time() - t_start
