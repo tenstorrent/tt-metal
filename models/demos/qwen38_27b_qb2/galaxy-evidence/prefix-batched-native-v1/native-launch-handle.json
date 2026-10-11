@@ -1,0 +1,12 @@
+{
+  "observed_at": 1791696276.8051221,
+  "properties": {
+    "ActiveState": "active",
+    "ControlGroup": "/user.slice/user-1000.slice/user@1000.service/app.slice/qwen38-prefix-native-prefix-qualification-20261011-v1.service",
+    "InvocationID": "94fd4d00f8f54c998d39c5d416a93244",
+    "MainPID": "998629",
+    "Result": "success",
+    "SubState": "running"
+  },
+  "unit": "qwen38-prefix-native-prefix-qualification-20261011-v1.service"
+}

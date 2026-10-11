@@ -2331,3 +2331,30 @@ No session connection is needed for that queue to continue.
   Copied manifests and unexecuted scripts into galaxy-evidence/
   prefix-serving-preparation-v1. Native/HTTP launch remains explicitly withheld
   while the parent's counter-space-recovery unit owns the hardware lock.
+
+## 2026-10-11 05:24–05:31 UTC — batched prefix hardware gates passed
+
+- Verified the parent's counter-space-recovery service MainPID 0 / Result success,
+  gdn-counter-v5 queue completed/cleanup_completed=true and no dirty marker.
+  Started only the sealed native recipe in persistent unit
+  qwen38-prefix-native-prefix-qualification-20261011-v1.service, PID 998629,
+  InvocationID 94fd4d00f8f54c998d39c5d416a93244, under the exclusive device lock.
+- Packed transfer passed exact bytes across all four ranks, untouched neighbours
+  and unpublished corrupt restore. Four-layer and full64 continuation passed
+  exact suffix logits, 32 teacher-forced traced steps and consumed-frontier 4160
+  restore preserving the live trace, tensor addresses and neighbour state.
+- Full64: 282.8125 MiB checkpoint; capture 1.25948 s, restore 1.84508 s,
+  prefill 1.18886 s. Capture/restore are 42.9%/47.9% shorter than serial, but restore
+  is still 55.2% slower than recomputing 4K in this randomized-page test.
+  16,896 windows remain; 770 capture / 1538 restore fences, 1,044,480 B max staging.
+  Physical page fragmentation is intentional; actual HTTP page coalescing and
+  end-to-end performance remain unmeasured, not inferred from the 4-layer ratio.
+- Native unit finished MainPID 0 / Result success / ExecMainStatus 0; queue completed,
+  passed and cleanup_completed; no dirty marker, reset or recovery needed.
+  Fresh source/seal/receipt hash checks passed after teardown. Collected all
+  native receipts, invocation metadata and losslessly compressed logs under
+  galaxy-evidence/prefix-batched-native-v1; original host artifacts preserved.
+- New user priority requested continued profiling for bigger gains. Held HTTP
+  unlaunched and returned the hardware lane to parent matmul/SDPA profiling.
+  No serving/default merge, AgentX or GPQA was enabled. HTTP lifecycle and
+  preemption/physical-remap/TTFT gates remain open; the frozen recipe is ready.

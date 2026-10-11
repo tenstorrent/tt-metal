@@ -1,0 +1,12 @@
+{
+  "admitted_at": 1791696276.765346,
+  "prior_queue": "/home/ttuser/qwen38-artifacts-20261007/gdn-counter-v5/queue.json",
+  "prior_queue_sha256": "bc7164f08f41599c41b5774b44db6991d6a51c27fd671abc0fb9dd5a2bfa836c",
+  "prior_unit": "qwen38-gdn-counter-space-recovery-v1-20261011.service",
+  "properties": {
+    "ActiveState": "inactive",
+    "MainPID": "0",
+    "Result": "success",
+    "SubState": "dead"
+  }
+}

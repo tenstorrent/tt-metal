@@ -4,6 +4,22 @@ October 10, 2026. This is an implementation scope, not a supported feature or
 an enabled serving change. Compact GPQA and kernel qualification stay ahead
 of this work. Preserve BFP8 KV, FP32 recurrent state and existing trace safety.
 
+## October 11, 05:31 UTC: batched full64 native gate passed; HTTP held
+
+[Published native evidence](../galaxy-evidence/prefix-batched-native-v1/README.md)
+now proves batched physical bytes and four/full64 continuation on TP4
+`[0,4,12,8]`, including exact logits for 32 traced steps and active-frontier
+restore preserving trace addresses and neighbour state. Full64 4K-prefix capture
+is 1.25948 s and restore 1.84508 s, respectively 42.9%/47.9% shorter than the
+previous serial transfer. Recomputing that prefix is 1.18886 s, so restore is
+still 55.2% slower in this deliberately fragmented-page stress test. Typical
+serving page coalescing and HTTP performance remain unmeasured.
+
+The persistent native unit ended successfully with clean teardown and no reset.
+HTTP was not launched: latest user steering returned hardware priority to
+profiling larger matmul/SDPA costs. Prepared HTTP gates remain unstarted;
+serving/default merge and AgentX remain blocked on actual lifecycle qualification.
+
 ## October 11: prepared batched native and HTTP qualification
 
 The [qualification bundle recipe](PREFIX-QUALIFICATION-BUNDLE.md) freezes the

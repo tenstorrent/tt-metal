@@ -1,0 +1,17 @@
+{
+  "device_dirty_marker_present": false,
+  "http_held_for_larger_op_profiling": true,
+  "http_launched": false,
+  "native_passed": true,
+  "observed_at": 1791696886.530889,
+  "properties": {
+    "ActiveState": "inactive",
+    "ExecMainStatus": "0",
+    "MainPID": "0",
+    "Result": "success",
+    "SubState": "dead"
+  },
+  "queue_sha256": "0c48594c0f76dd494a5b14f34eb1da6c672a648ad36183701ae1f89eb5a84f6d",
+  "source_and_receipts_verified": true,
+  "unit": "qwen38-prefix-native-prefix-qualification-20261011-v1.service"
+}

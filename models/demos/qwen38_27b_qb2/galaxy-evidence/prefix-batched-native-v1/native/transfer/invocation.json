@@ -1,0 +1,43 @@
+{
+  "bundle_sha256": "30c67c050b982e7e9751d44f2b67cc3e860f519391fdf05c729ce1312e406e59",
+  "command": [
+    "/home/ttuser/kimi-prefill.Ubx2wY/runtime/qwen38-27b-20261006/python_env/bin/python",
+    "-m",
+    "pytest",
+    "models/demos/qwen38_27b_qb2/tests/test_prefix_transfer.py",
+    "-q",
+    "-s",
+    "--timeout=780",
+    "--junitxml=/home/ttuser/qwen38-artifacts-20261007/prefix-qualification-20261011-v1/native/transfer/hardware.xml"
+  ],
+  "environment": {
+    "ARCH_NAME": "blackhole",
+    "LD_LIBRARY_PATH": "/home/ttuser/kimi-prefill.Ubx2wY/runtime/qwen38-27b-20261006/metal-install/lib:/home/ttuser/kimi-prefill.Ubx2wY/runtime/qwen38-27b-20261006/metal-build/lib",
+    "MODEL_WEIGHTS_DIR": "/home/ttuser/qwen38-artifacts-20261007/checkpoint-pinned-1d4bf0f2",
+    "MPLCONFIGDIR": "/home/ttuser/kimi-prefill.Ubx2wY/runtime/qwen38-27b-20261006/matplotlib-cache",
+    "OMP_NUM_THREADS": "8",
+    "PATH": "/home/ttuser/kimi-prefill.Ubx2wY/runtime/qwen38-27b-20261006/python_env/bin:/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin:/usr/games:/usr/local/games:/snap/bin:/snap/bin:/usr/local/bin",
+    "PYTHONDONTWRITEBYTECODE": "1",
+    "PYTHONPATH": "/home/ttuser/qwen38-artifacts-20261007/prefix-qualification-20261011-v1/source:/home/ttuser/kimi-prefill.Ubx2wY/runtime/qwen38-27b-20261006/metal:/home/ttuser/kimi-prefill.Ubx2wY/runtime/qwen38-27b-20261006/metal/tools",
+    "PYTHONUNBUFFERED": "1",
+    "QWEN_BATCHED_DECODE_ROPE": "1",
+    "QWEN_BATCHED_PREFILL": "1",
+    "QWEN_COMPACT_DECODE_ATTENTION": "1",
+    "QWEN_COMPACT_DECODE_MLP": "1",
+    "QWEN_COMPACT_DECODE_RESIDUAL": "1",
+    "QWEN_DECODE_BUCKETS": "1",
+    "QWEN_GALAXY_SWEEP": "1",
+    "QWEN_PRECISION_CONFIG": "/home/ttuser/qwen38-artifacts-20261007/prefix-qualification-20261011-v1/source/models/demos/qwen38_27b_qb2/config/precision_single_step_compact_gdn_bfp8_all.json",
+    "QWEN_PREFILL_BATCHED_HEAD": "1",
+    "QWEN_PREFILL_MAX_BATCH_TOKENS": "32768",
+    "QWEN_PREFILL_RESIDUAL_LAYOUT": "sharded_replicated_norm",
+    "QWEN_PREFILL_SKIP_INTERMEDIATE_HEAD": "1",
+    "QWEN_PREFILL_STARTUP_WARMUP": "1",
+    "QWEN_PREFIX_BATCHED_TRANSFER": "1",
+    "QWEN_PREFIX_TRANSFER": "1",
+    "QWEN_PREFIX_TRANSFER_RECEIPT": "/home/ttuser/qwen38-artifacts-20261007/prefix-qualification-20261011-v1/native/transfer/result.json",
+    "TT_METAL_CACHE": "/home/ttuser/kimi-prefill.Ubx2wY/runtime/qwen38-27b-20261006/jit-cache-metal-galaxy",
+    "TT_METAL_HOME": "/home/ttuser/kimi-prefill.Ubx2wY/runtime/qwen38-27b-20261006/metal",
+    "TT_METAL_OPERATION_TIMEOUT_SECONDS": "15"
+  }
+}

@@ -1,0 +1,113 @@
+{
+  "capture_latency_reduction_vs_serial": 0.42924091782076246,
+  "capture_s": 1.2594768228009343,
+  "default_enabled": false,
+  "files": {
+    "native-admission.json": {
+      "source_bytes": 411,
+      "source_sha256": "117e720c5e5103c579f29874e15ee069b97cc13398ef5bb371dba75688ddd799",
+      "stored_path": "native-admission.json",
+      "stored_sha256": "117e720c5e5103c579f29874e15ee069b97cc13398ef5bb371dba75688ddd799"
+    },
+    "native-launch-handle.json": {
+      "source_bytes": 440,
+      "source_sha256": "2fddae580be71703c5ab14fb8aa16305c0a09c5bfa9d121aca8cd71cbdaf235d",
+      "stored_path": "native-launch-handle.json",
+      "stored_sha256": "2fddae580be71703c5ab14fb8aa16305c0a09c5bfa9d121aca8cd71cbdaf235d"
+    },
+    "native-terminal.json": {
+      "source_bytes": 525,
+      "source_sha256": "34badea9a088296ba7e1edceda8ab288cd56458c1d12a8954990aa5dce7077ef",
+      "stored_path": "native-terminal.json",
+      "stored_sha256": "34badea9a088296ba7e1edceda8ab288cd56458c1d12a8954990aa5dce7077ef"
+    },
+    "native/layers-4/hardware.xml": {
+      "source_bytes": 541,
+      "source_sha256": "c6b92186481f9d8681b255b415e53dfdcf99faa9754f99ada820fbd95cefca49",
+      "stored_path": "native/layers-4/hardware.xml.gz",
+      "stored_sha256": "fcda2688164372cb845aaa68402c986593faaac642256c96fc6b9e2299ab51e9"
+    },
+    "native/layers-4/invocation.json": {
+      "source_bytes": 2611,
+      "source_sha256": "c14f6ade0c5d486651ffe0a74568d7cef61afac6f28e71c57bdd8fa53ce402e1",
+      "stored_path": "native/layers-4/invocation.json",
+      "stored_sha256": "c14f6ade0c5d486651ffe0a74568d7cef61afac6f28e71c57bdd8fa53ce402e1"
+    },
+    "native/layers-4/result.json": {
+      "source_bytes": 7352,
+      "source_sha256": "397ba367bb7e7a26dced4f59c6443ba42229006e04017f05582a1ffe1c199f65",
+      "stored_path": "native/layers-4/result.json",
+      "stored_sha256": "397ba367bb7e7a26dced4f59c6443ba42229006e04017f05582a1ffe1c199f65"
+    },
+    "native/layers-4/run.log": {
+      "source_bytes": 9992,
+      "source_sha256": "e2187c2633a3cac471d141a6af9b637c51ce65a3a15e7818d56d376ba48d6c00",
+      "stored_path": "native/layers-4/run.log.gz",
+      "stored_sha256": "105cf092efda62779a30b2bec299e1d991343171505fc2bd5d39d96eb9dbc9de"
+    },
+    "native/layers-64/hardware.xml": {
+      "source_bytes": 543,
+      "source_sha256": "79746d71a458ca72fff940d0ec8239199e8d944d4f600fe455d11c6628657c6b",
+      "stored_path": "native/layers-64/hardware.xml.gz",
+      "stored_sha256": "0dce5dd883ae63d2ceb7b3ebfb794a1b2787d02db986cfb394d45f33a00dcd25"
+    },
+    "native/layers-64/invocation.json": {
+      "source_bytes": 2614,
+      "source_sha256": "e88b71c2f7d8fafaabfb070260c05786ae64adab70ea6a0cad92e4011776536f",
+      "stored_path": "native/layers-64/invocation.json",
+      "stored_sha256": "e88b71c2f7d8fafaabfb070260c05786ae64adab70ea6a0cad92e4011776536f"
+    },
+    "native/layers-64/result.json": {
+      "source_bytes": 7361,
+      "source_sha256": "c7bd698601946085b57dea239ae764f793444c6e08ef1fdcabbfb1bf1f3ecad7",
+      "stored_path": "native/layers-64/result.json",
+      "stored_sha256": "c7bd698601946085b57dea239ae764f793444c6e08ef1fdcabbfb1bf1f3ecad7"
+    },
+    "native/layers-64/run.log": {
+      "source_bytes": 17208,
+      "source_sha256": "507f83329c4e54c326aa51c218bafe38acc22f7b452145bd5498f57e4660e7a8",
+      "stored_path": "native/layers-64/run.log.gz",
+      "stored_sha256": "6649f87e5a3ca40c7c6e7e08a85aa965a4d4ac8b34a9f94e36f54df84f7d9990"
+    },
+    "native/queue.json": {
+      "source_bytes": 664,
+      "source_sha256": "0c48594c0f76dd494a5b14f34eb1da6c672a648ad36183701ae1f89eb5a84f6d",
+      "stored_path": "native/queue.json",
+      "stored_sha256": "0c48594c0f76dd494a5b14f34eb1da6c672a648ad36183701ae1f89eb5a84f6d"
+    },
+    "native/transfer/hardware.xml": {
+      "source_bytes": 531,
+      "source_sha256": "e62ea5170e9f73255533d8bd305a94cf40e18f30a7bccb5c3202c68b7e9afbe5",
+      "stored_path": "native/transfer/hardware.xml.gz",
+      "stored_sha256": "4bf30f2b651949733814117ab9b40bfa9f53e382a8c6600196fe75561a5bde94"
+    },
+    "native/transfer/invocation.json": {
+      "source_bytes": 2567,
+      "source_sha256": "738e0e1f1d4b46517414fe1a2eaf4984b95961906c45d3328a944233714e1b40",
+      "stored_path": "native/transfer/invocation.json",
+      "stored_sha256": "738e0e1f1d4b46517414fe1a2eaf4984b95961906c45d3328a944233714e1b40"
+    },
+    "native/transfer/result.json": {
+      "source_bytes": 2417,
+      "source_sha256": "782eb85e1d97d7c6b11fbb7224e1761b2444e2a3376414dd1be9dad8dbdc2595",
+      "stored_path": "native/transfer/result.json",
+      "stored_sha256": "782eb85e1d97d7c6b11fbb7224e1761b2444e2a3376414dd1be9dad8dbdc2595"
+    },
+    "native/transfer/run.log": {
+      "source_bytes": 8847,
+      "source_sha256": "9559ff3b65c0dace27000166f19a50346b9fd0cf17c17b88b7b7f7fd88d303b5",
+      "stored_path": "native/transfer/run.log.gz",
+      "stored_sha256": "4d61b61fa5ee5f71ac3dc1478952188335a817e663b4a27851b5410cb5b53daa"
+    }
+  },
+  "fragmented_physical_pages": true,
+  "full64_test_elapsed_s": 333.5742914676666,
+  "http_launched": false,
+  "native_passed": true,
+  "payload_mib": 282.8125,
+  "precision_matches_serial": true,
+  "prefill_s": 1.1888634799979627,
+  "restore_latency_reduction_vs_serial": 0.47907451637624465,
+  "restore_overhead_vs_recompute": 0.55197163236372,
+  "restore_s": 1.845082395710051
+}

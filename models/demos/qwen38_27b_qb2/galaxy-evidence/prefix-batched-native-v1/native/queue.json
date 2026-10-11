@@ -1,0 +1,23 @@
+{
+  "bundle_sha256": "30c67c050b982e7e9751d44f2b67cc3e860f519391fdf05c729ce1312e406e59",
+  "cleanup_completed": true,
+  "passed": true,
+  "stages": [
+    {
+      "layers": null,
+      "path": "native/transfer/result.json",
+      "sha256": "782eb85e1d97d7c6b11fbb7224e1761b2444e2a3376414dd1be9dad8dbdc2595"
+    },
+    {
+      "layers": 4,
+      "path": "native/layers-4/result.json",
+      "sha256": "397ba367bb7e7a26dced4f59c6443ba42229006e04017f05582a1ffe1c199f65"
+    },
+    {
+      "layers": 64,
+      "path": "native/layers-64/result.json",
+      "sha256": "c7bd698601946085b57dea239ae764f793444c6e08ef1fdcabbfb1bf1f3ecad7"
+    }
+  ],
+  "state": "completed"
+}
