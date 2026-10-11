@@ -286,7 +286,7 @@ def main():
             generate_logs_folder(os.path.abspath(outputFolder))
         )
 
-    # The mask comes only from --profiler-capture-perf-counters, which also picks the post-processor that reports it
+    # Only --profiler-capture-perf-counters sets the mask, since it also selects the post-processor that reports it.
     if not options.perf_counter_groups and "TT_METAL_PROFILE_PERF_COUNTERS" in os.environ:
         logger.warning(
             "Ignoring TT_METAL_PROFILE_PERF_COUNTERS from the environment; pass --profiler-capture-perf-counters to capture counters."
