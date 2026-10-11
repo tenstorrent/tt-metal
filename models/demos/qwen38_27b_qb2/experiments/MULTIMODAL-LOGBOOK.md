@@ -19,7 +19,8 @@ errors' cause remains unproven.
   prefill-state-slot contract. Its local implementation commit is
   `f06225fbb4dfece4a6494517a9850c23db880615`; both SSH and HTTPS publication
   were denied for that repository. It is not a verified remote artifact.
-  Resolve and pin a published plugin SHA before deployment.
+  The subsequent local `f61e56b` adds only a replay regression; runtime code is
+  unchanged. Resolve and pin a published plugin SHA before deployment.
 - Checkpoint: host-local `checkpoint-pinned-1d4bf0f2`, with
   `Qwen3_5ForConditionalGeneration`. Its 333 vision tensors contain 460,730,096
   BF16 parameters (921,460,192 bytes), all in the first safetensors shard.
@@ -83,7 +84,11 @@ For each scheduled prefill row the plugin supplies:
   The pinned reference derives rotary positions from the already-expanded
   prompt and frame grids; this adapter does not regenerate timestamps.
 
-`input_tokens` still contains the prefix through the scheduled chunk end.
+`input_tokens` contains the full request history through the scheduled chunk
+end, including generated tokens during replay or mixed prefill/decode scheduling.
+Those appended tokens extend the original prompt's rotary timeline as ordinary
+text, even if a generated token ID equals an image/video placeholder ID. They do
+not change the immutable original media identity or trigger another encoding.
 `empty_slots` identifies physical recurrent-state owners. The adapter returns a
 rotary delta for each submitted row. The plugin associates those deltas with its
 submitted request snapshot and later passes decode-order deltas only when needed.
@@ -93,16 +98,24 @@ request ID, prompt and item identities. A fresh or preempted-from-zero request
 without pixels fails explicitly. No cross-request feature or prefix reuse is
 implemented. Prefix/SSD integration must first include media content identity,
 processor settings, grids/timestamps and rotary state in its checkpoint contract.
+When integrating the separate prefix branch, explicitly clear its new
+`complete_prefix_backend` capability on this architecture and retain its worker
+bypass for requests containing media. Slot lifecycle hooks need cooperative
+delegation before the two branches can be combined.
 
 ## Current limits and performance tradeoffs
 
 - Limits are four images and one video per request, at most 32,768 raw patches
   per modality encoding. Native cumulative boundaries are bounded to 1,024
-  entries. Frontend processor limits must bound decoded media before execution;
-  arbitrary input sizes are not qualified. A conservative processor override is
-  `--mm-processor-kwargs '{"max_pixels":2097152}'`: at patch size 16, four
-  images fit the aggregate raw-patch budget, and video is bounded more tightly.
-  This operator setting is not yet a validated request-enforced hard cap.
+  entries. The registered processing-info and processor hooks clamp
+  `max_pixels` to 2,097,152 while preserving a complete HF `size` configuration
+  and honoring smaller operator limits. The processor validates actual returned
+  grids, including `do_resize=False`, before returning worker inputs. A second
+  check counts actual visual embeddings after cache lookup, rejecting excessive
+  cached requests even when their pixels are absent. Video timestamp text does
+  not count as visual embeddings. These are encoded-patch admission bounds;
+  the upstream media-fetch/decompression policy remains responsible for source
+  file sizes and transport security.
 - Media prefill is sequential across scheduled physical slots; mixed batches use
   this same conservative path. Text-only batches retain the existing fast paths.
 - Vision uploads and transient visual prefill inputs release parked decode
@@ -141,24 +154,54 @@ AST to avoid importing root device fixtures, with `--confcutdir` pointing at the
 unit-test directory. The raw CPU report and source hashes are recorded in
 `multimodal-evidence/`. Repository pre-commit checks also run before publication.
 
-Before enabling this architecture in a deployment:
+The October 11 UTC follow-up used the actual pinned host packages and native
+library with device-open and full-language-model constructors guarded:
 
-1. Import the real adapter and registry using the exact pinned native library,
-   Transformers, plugin and vLLM environment. Confirm processor/dummy limits and
-   start-up memory accounting; the macOS suite cannot check those imports.
-2. On one allocated TP4 mesh, compare encoder output and prefill logits against
+- **107 CPU tests passed**: 57 multimodal/probe cases and existing serving
+  prefill, batch, decode-bucket, sampling and precision regressions. Native TTNN
+  import and resolution of the new architecture through the real vLLM registry
+  passed. No device was opened and no full language model was constructed.
+- Real vLLM chat parsing, HF processing and plugin gathering passed for **image
+  URL, image base64, video URL and video base64**. URL/data-URL token IDs, grids
+  and pixel tensors matched exactly. The image used 280 raw patches; the video
+  used 96. A B16 mixed text/image/video payload passed through the same ABI.
+  Fixtures were served only from localhost; this was CPU request processing,
+  not an inference endpoint or semantic-answer test.
+- Actual admission hooks rejected resize-bypass and cached over-budget inputs;
+  accepted the exact four-image aggregate boundary; and counted video embedding
+  masks correctly. These negative tests injected parent processor results to
+  avoid allocating excessive tensors. The four-format positive tests used real
+  decoding and processing.
+- The tiny BF16 loader oracle now uses HF `from_pretrained(..., dtype=BF16)`.
+  Calling `.to(BF16)` on a freshly constructed reference rounds its nonpersistent
+  rotary buffer, unlike real checkpoint loading. The selective loader already
+  matched the latter; its implementation and tolerances were not relaxed.
+
+Receipts, exact compressed CPU harnesses and source hashes are in
+`multimodal-evidence/{native-cpu-v4.json,api-cpu-v4.json}`. The API smoke used the
+frozen v3 tree; the native regression gate used v4. SHA256 comparison confirmed
+all 18 runtime files were identical between them and the published candidate.
+
+Remaining gates before enabling this architecture in a deployment:
+
+1. On one allocated TP4 mesh, compare encoder output and prefill logits against
    the pinned HF visual reference for one image, multiple images, and video,
    including ragged frame boundaries and padding. Gate numerical error before
    acceptance. A CPU equality result is not a TT encoder equality result.
-3. Check chunked versus whole prefill and multi-turn continuity with mixed text,
+2. Check chunked versus whole prefill and multi-turn continuity with mixed text,
    image and video requests, partial visual chunks, slot remaps, cancellation,
    and enough decode steps to exercise async reloads. Confirm text regression.
-4. Exercise the actual OpenAI-compatible API for image URL, image data URL,
+3. Exercise the actual OpenAI-compatible API for image URL, image data URL,
    video URL and video data URL. Capture HTTP errors and model revision. Reuse
    existing media-fetch policy; do not add an alternate unaudited URL fetcher.
-5. Measure memory headroom, first/cached media TTFT and text B16 throughput on one
+4. Measure startup/dummy-input memory headroom, first/cached media TTFT and text B16 throughput on one
    TP4 replica before eight-worker deployment. Update immutable release pins only
    after these checks pass. The existing launcher does not select this prototype.
+
+The bounded vision-only probe and a persistent launch recipe are prepared in
+`MULTIMODAL-VISION-PROBE.md`. Its 427-file source manifest was checked without
+importing native libraries or opening a device. **The hardware probe has not
+been launched.** Profiling retains hardware priority.
 
 ## Timeline
 
@@ -171,4 +214,19 @@ Before enabling this architecture in a deployment:
   and the BF16 loader case. Final counts and exact source hashes are in evidence.
 - Repository checks: replaced direct exception assertions with the repository
   `expect_error` fixture after its pre-commit rule identified the convention.
+- Host CPU integration: fixed a real processor configuration error found by the
+  first image smoke: manufacturing `size={longest_edge: ...}` discarded HF's
+  required `shortest_edge`. The current bound preserves a complete existing size
+  or leaves HF defaults intact when size is absent. Four-format processing now
+  passes in the pinned environment.
+- Replay review: scheduled prefill can contain generated tokens beyond the
+  original prompt. Added text-only extension of the media plan and regressions
+  for mixed-batch continuation and preemption replay.
+- Harness corrections: direct plugin import ordering and a missing ModelConfig
+  argument affected the initial import harness; neither was a model runtime
+  defect. A BF16 NumPy conversion was replaced by raw-byte hashing in the media
+  harness. The tiny-reference BF16 rotary discrepancy is explained above.
+- October 11 UTC: native registry/import gate and 107 tests passed; all four
+  real media formats, B16 gathering and processor admission hooks passed with
+  zero device calls. Exact receipts and executed harnesses were saved locally.
 - Hardware and endpoint qualification: pending; no device work was started.

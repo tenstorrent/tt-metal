@@ -1,0 +1,53 @@
+{
+  "state": "prepared_only",
+  "hardware_started": false,
+  "target_host": "10.228.203.98",
+  "source_root": "/home/ttuser/qwen38-artifacts-20261007/multimodal-model-source-v4",
+  "source_base": "125d649dd166214b2c1393c9c84196444d860b26",
+  "source_manifest": "vision-probe-source-manifest-v1.json",
+  "source_manifest_sha256": "e7efa3b257c7ce8b2462cec10335cfe70416645eca56b5d362346904ca65a21f",
+  "verified_source_file_count": 427,
+  "native_revision": "a08819ddbe23077f8037d3802303939064868ff6",
+  "plugin_runtime_revision": "f06225fbb4dfece4a6494517a9850c23db880615",
+  "plugin_runtime_published": false,
+  "cpu_packages": {
+    "torch": "2.11.0+cpu",
+    "transformers": "5.12.1",
+    "vllm": "0.26.0+empty",
+    "pytest": "8.4.2"
+  },
+  "cpu_gates": {
+    "regression_tests_passed": 107,
+    "media_formats_passed": 4,
+    "mixed_payload_batch": 16,
+    "guarded_device_open_calls": 0,
+    "guarded_full_language_model_constructions": 0
+  },
+  "api_runtime_root": "/home/ttuser/qwen38-artifacts-20261007/multimodal-model-source-v3",
+  "api_and_native_runtime_source_sha256_equal": true,
+  "runtime_files_compared": 18,
+  "evidence_sha256": {
+    "api-cpu-v4.json": "49d48bb32fa82b91e6133658674f559421a3c7ca784c02425e685f1c10c712ae",
+    "api-cpu-v4.py.gz": "8bf21ecd7a3f2fef62cbd95eb993ffd4647d14f8ae2966d40576c1edf87a1436",
+    "native-cpu-v4.json": "f735fe1751bd8c9ddaac16ce03e23b17b4618cac8f5089a6cc7aae6c9c1ee1d2",
+    "native-cpu-v4.py.gz": "995bb2cad716704c55aeebdb03808aa9b01c857858ca679c2e2a17c1921caf8e",
+    "native-cpu-v4.xml.gz": "f658f8222fc5db4ce60eaee04e9142be917a7afbe1bbf106603757d5f7692b0e"
+  },
+  "executed_harness_sha256": {
+    "api-cpu-v4.py": "8285018b2d4d994eb8e3ab71d274df0291a5c1268b74abdc478a140e5d67f8e5",
+    "native-cpu-v4.py": "04f85b3a51ca333bd19bbf89a6d4c38e56a548155b2924feadbeb5119ac0faf2"
+  },
+  "prepared_bounds": {
+    "exclusive_nonblocking_lock": "/tmp/tt-device.lock",
+    "mesh": [
+      1,
+      4
+    ],
+    "runtime_max_sec": 900,
+    "stop_timeout_sec": 30,
+    "host_memory_max_gib": 32,
+    "cpu_quota_percent": 400,
+    "reset_or_reboot": false
+  },
+  "instructions": "../MULTIMODAL-VISION-PROBE.md"
+}

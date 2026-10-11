@@ -17,17 +17,49 @@ from vllm.model_executor.models.qwen3_5 import (
 from vllm.multimodal import MULTIMODAL_REGISTRY
 
 from models.demos.qwen38_27b_qb2.tt.generator_vllm import Qwen38ForCausalLM
-from models.demos.qwen38_27b_qb2.tt.multimodal import build_plan, gather_media, item_identity
+from models.demos.qwen38_27b_qb2.tt.multimodal import (
+    MEDIA_LIMITS,
+    bounded_processor_kwargs,
+    build_plan,
+    gather_media,
+    item_identity,
+    validate_placeholder_budget,
+    validate_processed_media,
+)
 from models.demos.qwen38_27b_qb2.tt.vision import Qwen38VisionEncoder
 
 
 class Qwen38ProcessingInfo(Qwen3_5ProcessingInfo):
     def get_supported_mm_limits(self):
-        return {"image": 4, "video": 1}
+        return dict(MEDIA_LIMITS)
+
+    def get_hf_processor(self, **kwargs):
+        return super().get_hf_processor(**bounded_processor_kwargs(self.ctx.get_merged_mm_kwargs(kwargs)))
+
+    def _get_vision_info(self, *, mm_kwargs, **kwargs):
+        bounded = bounded_processor_kwargs(self.ctx.get_merged_mm_kwargs(mm_kwargs))
+        return super()._get_vision_info(mm_kwargs=bounded, **kwargs)
+
+
+class Qwen38MultiModalProcessor(Qwen3VLMultiModalProcessor):
+    def _call_hf_processor(self, prompt, mm_data, mm_kwargs, tok_kwargs):
+        bounded = bounded_processor_kwargs(self.info.ctx.get_merged_mm_kwargs(mm_kwargs))
+        result = super()._call_hf_processor(prompt, mm_data, bounded, tok_kwargs)
+        validate_processed_media(result)
+        return result
+
+    def apply(self, inputs, timing_ctx):
+        result = super().apply(inputs, timing_ctx)
+        # Cached EngineCore payloads can contain None instead of pixels/grids.
+        # Placeholder metadata is present even then, so admission stays bounded.
+        validate_placeholder_budget(
+            result["mm_placeholders"], merge=self.info.get_hf_config().vision_config.spatial_merge_size
+        )
+        return result
 
 
 @MULTIMODAL_REGISTRY.register_processor(
-    Qwen3VLMultiModalProcessor, info=Qwen38ProcessingInfo, dummy_inputs=Qwen3VLDummyInputsBuilder
+    Qwen38MultiModalProcessor, info=Qwen38ProcessingInfo, dummy_inputs=Qwen3VLDummyInputsBuilder
 )
 class Qwen38ForConditionalGeneration(Qwen38ForCausalLM, SupportsMultiModal):
     decode_input_update_contract = 1
@@ -65,9 +97,10 @@ class Qwen38ForConditionalGeneration(Qwen38ForCausalLM, SupportsMultiModal):
             if not isinstance(request_id, str) or not request_id:
                 raise ValueError("Each multimodal row needs a nonempty request ID")
             prompt = torch.as_tensor(kwargs["mm_prompt_token_ids"][row], dtype=torch.int64).reshape(-1)
-            if not 0 <= start < end <= len(prompt) <= self.context:
+            if not 0 <= start < end <= min(tokens.shape[1], self.context) or not 0 < len(prompt) <= self.context:
                 raise ValueError("Scheduled prefill bounds exceed the full multimodal prompt")
-            if not torch.equal(prompt[start:end], tokens[row, start:end].to(dtype=torch.int64)):
+            overlap = min(end, len(prompt))
+            if not torch.equal(prompt[:overlap], tokens[row, :overlap].to(dtype=torch.int64)):
                 raise ValueError("Scheduled token chunk differs from the complete multimodal prompt")
             identity = item_identity(kwargs["mm_item_spans"][row])
             if any(offset + length > len(prompt) for _, _, offset, length in identity):
@@ -94,6 +127,8 @@ class Qwen38ForConditionalGeneration(Qwen38ForCausalLM, SupportsMultiModal):
             if start:
                 if existing is None or not existing.matches(request_id, identity, prompt):
                     raise ValueError("No matching multimodal plan for this request/slot continuation")
+                existing = existing.extend_text(max(len(prompt), end))
+                proposed[slot] = existing
                 plans.append(existing)
                 continue
             # New request or resumed-from-zero request always re-encodes. A
@@ -109,6 +144,7 @@ class Qwen38ForConditionalGeneration(Qwen38ForCausalLM, SupportsMultiModal):
                 raise ValueError("Multimodal request has no pixel payload")
             self.generator._release_traces()
             plan = build_plan(request_id, identity, prompt, image, video, self.vision_encoder, config=self.mm_config)
+            plan = plan.extend_text(max(len(prompt), end))
             proposed[slot] = plan
             plans.append(plan)
         return plans, proposed

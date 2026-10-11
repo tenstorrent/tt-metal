@@ -96,7 +96,7 @@ def adapter():
     return obj
 
 
-def request(obj, *, request_id="a", start=0, end=3, slot=7, full=None, pixels=True, identity="image-a"):
+def request(obj, *, request_id="a", start=0, end=3, slot=7, full=None, pixels=True, identity="image-a", history=None):
     full = [1, IMAGE, IMAGE, IMAGE, IMAGE, 2] if full is None else full
     kwargs = dict(
         mm_request_ids=[request_id],
@@ -106,7 +106,7 @@ def request(obj, *, request_id="a", start=0, end=3, slot=7, full=None, pixels=Tr
         image_grid_thw=[[torch.tensor([1, 4, 4])]] if pixels else [[None]],
     )
     return obj.prefill_forward(
-        torch.tensor([full[:end]]),
+        torch.tensor([(full if history is None else history)[:end]]),
         torch.zeros(1, 32),
         obj.cache,
         [end],
@@ -148,6 +148,24 @@ def test_new_slot_occupant_never_reuses_old_media_encoding(adapter, expect_error
     assert len(adapter.encoding_calls) == 2
     with expect_error(ValueError, "Missing multimodal"):
         request(adapter, request_id="third", pixels=False)
+
+
+def test_visual_decode_row_in_prefill_and_preemption_replay_extend_as_text(adapter):
+    original = [1, IMAGE, IMAGE, IMAGE, IMAGE, 2]
+    history = original + [3, IMAGE, VIDEO, 4]
+    request(adapter, full=original, end=6)
+    request(adapter, full=original, start=6, end=10, history=history, pixels=False)
+    assert len(adapter.encoding_calls) == 1
+    continued = adapter._mm_plans[7]
+    tail = continued.chunk(6, 4)
+    assert tail.vision_mask.sum() == 0
+    torch.testing.assert_close(tail.rope_positions, (torch.arange(6, 10) + continued.rope_delta).expand(3, 1, 4))
+    # Preemption replays from zero, including already sampled text tokens.
+    request(adapter, full=original, end=10, history=history)
+    assert len(adapter.encoding_calls) == 2
+    replay = adapter._mm_plans[7]
+    torch.testing.assert_close(replay.positions, continued.positions)
+    torch.testing.assert_close(replay.features, continued.features)
 
 
 def test_direct_text_warmup_is_allowed_but_visual_payload_is_not_silently_ignored(adapter, expect_error):

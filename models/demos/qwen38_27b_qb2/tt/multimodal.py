@@ -6,10 +6,70 @@ No TTNN or vLLM imports: these invariants can be checked against the pinned HF
 reference without constructing a language model or opening a device.
 """
 
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 from itertools import groupby
+from math import prod
 
 import torch
+
+MAX_VISION_PATCHES = 32768
+MEDIA_LIMITS = {"image": 4, "video": 1}
+MAX_PROCESSOR_PIXELS = MAX_VISION_PATCHES // MEDIA_LIMITS["image"] * 16**2
+
+
+def bounded_processor_kwargs(kwargs):
+    """Bound defaults, operator settings and per-request processor overrides."""
+    result = dict(kwargs)
+    size = dict(result.get("size") or {})
+    maximum = result.get("max_pixels", size.get("longest_edge", MAX_PROCESSOR_PIXELS))
+    if type(maximum) is not int or maximum <= 0:
+        raise ValueError("Visual max_pixels must be a positive integer")
+    maximum = min(maximum, MAX_PROCESSOR_PIXELS)
+    minimum = result.get("min_pixels", size.get("shortest_edge"))
+    if minimum is not None and (type(minimum) is not int or not 0 < minimum <= maximum):
+        raise ValueError("Visual min_pixels must fit the bounded pixel budget")
+    result["max_pixels"] = maximum
+    if minimum is not None:
+        result["min_pixels"] = minimum
+    # Do not introduce a partial size dictionary: Transformers replaces the
+    # processor's complete checkpoint size with it and rejects a missing edge.
+    # Existing explicit dictionaries must remain complete on the HF path.
+    if size:
+        if set(size) != {"shortest_edge", "longest_edge"}:
+            raise ValueError("Visual size requires shortest_edge and longest_edge")
+        size.update(longest_edge=maximum, shortest_edge=minimum)
+        result["size"] = size
+    return result
+
+
+def validate_processed_media(outputs):
+    """Reject oversized actual grids before worker IPC, including resize bypass."""
+    for modality, grid_key, pixel_key in (
+        ("image", "image_grid_thw", "pixel_values"),
+        ("video", "video_grid_thw", "pixel_values_videos"),
+    ):
+        grid = outputs.get(grid_key)
+        if grid is None:
+            if outputs.get(pixel_key) is not None:
+                raise ValueError("Visual pixels require a grid before worker submission")
+            continue
+        rows = validate_grid(grid).tolist()
+        count = sum(prod(row) for row in rows)
+        windows = sum(row[0] for row in rows) + 1 + int(count % 2048 != 0)
+        if len(rows) > MEDIA_LIMITS[modality] or count > MAX_VISION_PATCHES or windows > 1024:
+            raise ValueError(f"{modality} input exceeds the bounded visual processor budget")
+
+
+def validate_placeholder_budget(placeholders, *, merge=2):
+    """Final admission guard also covers processor-cache hits with no pixels."""
+    for modality, items in placeholders.items():
+        if modality not in MEDIA_LIMITS or len(items) > MEDIA_LIMITS[modality]:
+            raise ValueError("Input exceeds supported visual modality/count limits")
+        counts = [item.get_num_embeds() for item in items]
+        if any(type(count) is not int or count <= 0 for count in counts):
+            raise ValueError("Visual placeholders require a positive embedding count")
+        if sum(counts) * merge**2 > MAX_VISION_PATCHES:
+            raise ValueError(f"{modality} input exceeds the bounded visual processor budget")
 
 
 def validate_grid(grid, *, merge=2):
@@ -102,7 +162,7 @@ class MultimodalPlan:
     features: torch.Tensor
 
     def chunk(self, start, length):
-        if not 0 <= start < start + length <= len(self.prompt_ids):
+        if not 0 <= start < start + length <= self.positions.shape[-1]:
             raise ValueError("Multimodal chunk lies outside its complete prompt")
         selected = (self.feature_positions >= start) & (self.feature_positions < start + length)
         rows = self.feature_positions[selected] - start
@@ -111,6 +171,16 @@ class MultimodalPlan:
         values[0, rows] = self.features[selected]
         mask[0, rows] = 1
         return MultimodalChunk(values, mask, self.positions[:, None, start : start + length])
+
+    def extend_text(self, length):
+        """Replay generated tokens as text, even when an output ID is a media token."""
+        if type(length) is not int or length < len(self.prompt_ids):
+            raise ValueError("Text extension cannot shorten the original multimodal prompt")
+        existing = self.positions.shape[-1]
+        if length <= existing:
+            return self
+        extra = (torch.arange(existing, length) + self.rope_delta).expand(3, -1)
+        return replace(self, positions=torch.cat((self.positions, extra), dim=-1))
 
     def matches(self, request_id, item_identity, prompt_ids):
         return (

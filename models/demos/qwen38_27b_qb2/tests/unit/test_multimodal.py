@@ -12,11 +12,15 @@ from transformers.models.qwen3_5.configuration_qwen3_5 import Qwen3_5VisionConfi
 from transformers.models.qwen3_5.modeling_qwen3_5 import Qwen3_5Model, Qwen3_5VisionModel
 
 from models.demos.qwen38_27b_qb2.tt.multimodal import (
+    MAX_PROCESSOR_PIXELS,
+    bounded_processor_kwargs,
     build_plan,
     gather_media,
     item_identity,
     modality_positions,
     validate_grid,
+    validate_placeholder_budget,
+    validate_processed_media,
     vision_boundaries,
 )
 from models.demos.qwen38_27b_qb2.tt.vision_weights import load_reference_vision, vision_state_dict
@@ -155,6 +159,68 @@ def test_request_identity_checks_prevent_slot_reuse_and_cross_media_reuse():
     assert not plan.matches(plan.request_id, plan.item_identity, plan.prompt_ids[:-1])
 
 
+def test_generated_text_extension_preserves_original_media_and_decode_delta(expect_error):
+    original = make_plan()
+    length = len(original.prompt_ids)
+    extended = original.extend_text(length + 4)
+    assert extended.matches(original.request_id, original.item_identity, original.prompt_ids)
+    assert extended.features is original.features
+    torch.testing.assert_close(extended.positions[:, :length], original.positions)
+    tail = extended.chunk(length, 4)
+    assert tail.vision_mask.sum() == 0
+    torch.testing.assert_close(
+        tail.rope_positions, (torch.arange(length, length + 4) + original.rope_delta).expand(3, 1, 4)
+    )
+    assert extended.extend_text(length + 2) is extended
+    assert extended.rope_delta == original.rope_delta
+    with expect_error(ValueError, "cannot shorten"):
+        original.extend_text(length - 1)
+
+
+@pytest.mark.parametrize(
+    "kwargs",
+    [{}, {"max_pixels": 2**30}, {"size": {"shortest_edge": 65536, "longest_edge": 2**30}}, {"do_resize": False}],
+)
+def test_processor_defaults_and_overrides_cannot_raise_pixel_budget(kwargs):
+    bounded = bounded_processor_kwargs(kwargs)
+    assert bounded["max_pixels"] == MAX_PROCESSOR_PIXELS
+    if "size" in bounded:
+        assert bounded["size"]["longest_edge"] == MAX_PROCESSOR_PIXELS
+    assert kwargs.get("size", {}).get("longest_edge") != MAX_PROCESSOR_PIXELS
+
+
+def test_smaller_requested_processor_budget_is_preserved(expect_error):
+    assert bounded_processor_kwargs({"max_pixels": 65536})["max_pixels"] == 65536
+    with expect_error(ValueError, "min_pixels"):
+        bounded_processor_kwargs({"min_pixels": MAX_PROCESSOR_PIXELS + 1})
+
+
+@pytest.mark.parametrize(
+    "outputs",
+    [
+        {"image_grid_thw": torch.tensor([[1, 128, 258]])},
+        {"image_grid_thw": torch.tensor([[1, 64, 256]] * 3)},
+        {"image_grid_thw": torch.tensor([[1, 2, 2]] * 5)},
+        {"video_grid_thw": torch.tensor([[1024, 2, 2]])},
+        {"pixel_values": torch.ones(1, 1)},
+    ],
+)
+def test_actual_processor_outputs_cannot_bypass_budget(outputs, expect_error):
+    with expect_error(ValueError, "budget|require a grid"):
+        validate_processed_media(outputs)
+
+
+def test_final_placeholder_budget_covers_cached_payloads_and_video_timestamp_masks(expect_error):
+    video = SimpleNamespace(get_num_embeds=lambda: 8192)
+    validate_placeholder_budget({"video": [video]})
+    over = SimpleNamespace(get_num_embeds=lambda: 8193)
+    with expect_error(ValueError, "budget"):
+        validate_placeholder_budget({"video": [over]})
+    with expect_error(ValueError, "modality/count"):
+        validate_placeholder_budget({"image": [video] * 5})
+    validate_processed_media({"image_grid_thw": torch.tensor([[1, 64, 128]] * 4)})
+
+
 @pytest.mark.parametrize(
     "pixels,grids", [(None, [[1, 2, 2]]), ([None], [None]), ([], []), ([torch.zeros(3, 24)], [torch.tensor([1, 2, 2])])]
 )
@@ -180,6 +246,12 @@ def test_loader_reads_only_vision_tensors_and_preserves_reference_output(tmp_pat
         num_position_embeddings=16,
     )
     original = Qwen3_5VisionModel(cfg).to(dtype).eval()
+    reference_dir = tmp_path / "reference-vision-only"
+    original.save_pretrained(reference_dir)
+    # A blanket .to(BF16) also rounds the nonpersistent rotary frequencies.
+    # HF from_pretrained recreates that buffer in FP32; compare the loader to
+    # this actual checkpoint-load path, not to a differently cast reference.
+    original = Qwen3_5VisionModel.from_pretrained(reference_dir, dtype=dtype).eval()
     state = {f"model.visual.{name}": tensor.contiguous() for name, tensor in original.state_dict().items()}
     state["model.language_model.fake.weight"] = torch.ones(1)
     save_file(state, tmp_path / "first.safetensors")
@@ -214,6 +286,7 @@ def test_loader_reads_only_vision_tensors_and_preserves_reference_output(tmp_pat
     loaded = load_reference_vision(tmp_path, cfg)
     assert len(reads) == len(original.state_dict())
     assert all(not value.is_meta for value in (*loaded.parameters(), *loaded.buffers()))
+    torch.testing.assert_close(loaded.rotary_pos_emb.inv_freq, original.rotary_pos_emb.inv_freq, rtol=0, atol=0)
     pixels = torch.randn(16, 24)
     grid = torch.tensor([[1, 4, 4]])
     with torch.inference_mode():

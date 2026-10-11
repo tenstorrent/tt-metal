@@ -1,0 +1,106 @@
+{
+  "started_at": 1791692012.25864,
+  "cpu_only": true,
+  "checks": {
+    "registration": "passed",
+    "input-image-url": {
+      "status": "passed",
+      "prompt_tokens": 89,
+      "grids": [
+        [
+          1,
+          14,
+          20
+        ]
+      ],
+      "pixels_shapes": [
+        [
+          280,
+          1536
+        ]
+      ],
+      "raw_patches": 280
+    },
+    "input-image-base64": {
+      "status": "passed",
+      "prompt_tokens": 89,
+      "grids": [
+        [
+          1,
+          14,
+          20
+        ]
+      ],
+      "pixels_shapes": [
+        [
+          280,
+          1536
+        ]
+      ],
+      "raw_patches": 280
+    },
+    "input-video-url": {
+      "status": "passed",
+      "prompt_tokens": 59,
+      "grids": [
+        [
+          2,
+          6,
+          8
+        ]
+      ],
+      "pixels_shapes": [
+        [
+          96,
+          1536
+        ]
+      ],
+      "raw_patches": 96
+    },
+    "input-video-base64": {
+      "status": "passed",
+      "prompt_tokens": 59,
+      "grids": [
+        [
+          2,
+          6,
+          8
+        ]
+      ],
+      "pixels_shapes": [
+        [
+          96,
+          1536
+        ]
+      ],
+      "raw_patches": 96
+    },
+    "image_transport_equivalence": "passed",
+    "video_transport_equivalence": "passed",
+    "b16_mixed_media_gather": "passed",
+    "max_pixels_clamped_preserving_hf_size": {
+      "status": "passed",
+      "injected": "parent HF output"
+    },
+    "resize_bypass_grid_rejected": {
+      "status": "passed",
+      "injected": "oversized parent HF grid, no pixels allocated"
+    },
+    "cached_8193_embeddings_rejected": {
+      "status": "passed",
+      "injected": "parent processor cache output with missing pixels"
+    },
+    "four_image_aggregate_budget": {
+      "status": "passed",
+      "injected": "parent processor cache placeholders"
+    },
+    "video_timestamp_mask_counts_only_embeddings": {
+      "status": "passed",
+      "injected": "parent processor cache output, real PlaceholderRange mask"
+    }
+  },
+  "device_calls": [],
+  "processor_class": "models.demos.qwen38_27b_qb2.tt.generator_vllm_multimodal.Qwen38MultiModalProcessor",
+  "status": "passed",
+  "completed_at": 1791692028.3995752
+}

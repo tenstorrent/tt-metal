@@ -18,7 +18,7 @@ import ttnn
 from models.demos.blackhole.qwen36.tt.vision.functional import qwen3_5_vision_transformer_preprocess
 from models.demos.blackhole.qwen36.tt.vision.model import DropInVisionTransformer
 from models.demos.blackhole.qwen36.tt.vision.vision_model_config import VisionModelArgs
-from models.demos.qwen38_27b_qb2.tt.multimodal import validate_grid, vision_boundaries
+from models.demos.qwen38_27b_qb2.tt.multimodal import MAX_VISION_PATCHES, validate_grid, vision_boundaries
 from models.demos.qwen38_27b_qb2.tt.vision_weights import load_reference_vision
 from models.tt_transformers.tt.load_checkpoints import convert_rope_style_hf_to_meta
 
@@ -43,7 +43,7 @@ def _args_environment(snapshot, cache_root):
 
 
 class Qwen38VisionEncoder:
-    def __init__(self, model, config, *, max_patches=32768):
+    def __init__(self, model, config, *, max_patches=MAX_VISION_PATCHES):
         if tuple(model.mesh.shape) != (1, 4):
             raise ValueError("Vision encoder requires the same TP4 mesh as the text model")
         if config.vision_config.out_hidden_size != model.config.hidden_size:
