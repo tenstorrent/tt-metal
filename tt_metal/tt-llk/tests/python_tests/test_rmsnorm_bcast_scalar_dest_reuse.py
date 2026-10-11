@@ -159,7 +159,6 @@ def _config(
     unpack_full_transpose=False,
     whole_tile=False,
 ):
-    """One variant's configuration and its stimuli."""
     torch.manual_seed(0)
 
     # src_B carries the broadcast scalar at element [0]. Spread over a wide range so a
@@ -208,8 +207,7 @@ def _config(
 def _run(formats, dest_acc, mathop, math_fidelity, num_tiles, siblings=(), **kwargs):
     """Compile+run one variant.
 
-    ``siblings`` are the keyword sets of variants the test runs after this one; they are
-    built first, because a compile-producer pass stops at the first run.
+    ``siblings`` (keyword sets of later variants) are built first: a compile-producer pass stops at the first run.
 
     Returns ``(device, seen_A, seed, scalar)``, all as fp32 tensors/scalars quantised the
     way the device saw them. ``seed`` is the tile the datacopy left in DEST[0] and is what
@@ -529,10 +527,7 @@ def test_rmsnorm_bcast_scalar_dest_reuse_unpack_full_transpose(
 def test_rmsnorm_bcast_scalar_dest_reuse_whole_tile(
     formats, dest_acc, math_fidelity, num_faces, num_tiles
 ):
-    """The HiFi multiply with one SrcA bank per tile, each fidelity phase sweeping the tile.
-
-    Every element sees the same phase products in the same order, so it must give the per-face form's bits exactly.
-    """
+    """The whole-tile form gives the per-face form's bits exactly."""
     _skip_unsupported(formats, dest_acc)
     if num_tiles == 8 and dest_acc == DestAccumulation.Yes:
         pytest.skip("8 tiles exceed the 32-bit DEST half")
@@ -590,7 +585,6 @@ def test_rmsnorm_bcast_scalar_dest_reuse_whole_tile(
 def test_rmsnorm_bcast_scalar_dest_reuse_whole_tile_accumulates_into_dirty_dest(
     formats, dest_acc, math_fidelity
 ):
-    """The whole-tile form keeps the accumulate contract of the test above it."""
     _skip_unsupported(formats, dest_acc)
 
     device, seen_A, seed, scalar = _run(
@@ -677,11 +671,8 @@ def _run_sequence(formats, dest_acc, math_fidelity, whole_tile):
     math_fidelity=[MathFidelity.HiFi2, MathFidelity.HiFi3, MathFidelity.HiFi4],
 )
 def test_rmsnorm_bcast_scalar_dest_reuse_sequence(formats, dest_acc, math_fidelity):
-    """The callers' order: a LoFi subtract and a HiFi multiply, each with its own init, in both orders.
-
-    No other unpack init runs between the multiply and the next subtract, so a whole-tile multiply that left its
-    unpacker x end behind breaks the subtract. Both forms must give the same bits.
-    """
+    """Subtract and multiply inits in both orders give the same bits in both forms; no other unpack init runs between
+    them, so a multiply that left its unpacker x end behind breaks the subtract."""
     _skip_unsupported(formats, dest_acc)
 
     whole, seen_A, seed, scalar = _run_sequence(

@@ -351,8 +351,6 @@ void trisc_fused_softmax_top_p_sampling_block() {
     tile_regs_commit();
     cb_pop_front(exp_cb, 1);
     tile_regs_wait();
-    // Step 8: Pack T(probs) into probs_cb. TRISC re-reads it (cb_wait_front + copy_tile) in Block B below as the
-    // cumsum input, and the rescale at Step 18.5 reads and pops it with the cumsum.
     {
         DeviceZoneScopedN("SP-TOPP-TRISC-7");
         cb_reserve_back(probs_cb, 1);
@@ -397,8 +395,6 @@ void trisc_fused_softmax_top_p_sampling_block() {
     }
     {
         DeviceZoneScopedN("SP-TOPP-TRISC-10");
-        // Step 15: Pack T(cumsum) into out_cb (BRISC's num_kept) and after the probabilities in probs_cb, so
-        // Pass 4 rescales both in one two-tile call.
         cb_reserve_back(out_cb, 1);
         pack_reconfig_data_format(out_cb);
         pack_tile(0, out_cb);
@@ -438,8 +434,7 @@ void trisc_fused_softmax_top_p_sampling_block() {
         // Step 18: Compute DST[0] = 1/cum_kept
         MATH((sampling_recip_tile_scalar(0)));
     }
-    // Step 18.5: DST[2] = probs * 1/cum_kept (the rescaled PMF) and DST[3] = cumsum * 1/cum_kept (the rescaled CDF),
-    // probs_cb pages 0 and 1, in one two-tile call.
+    // Probs and cumsum sit in probs_cb pages 0 and 1, so one two-tile call rescales both.
     {
         DeviceZoneScopedN("SP-TOPP-TRISC-13b");
         cb_wait_front(probs_cb, 2);
@@ -457,7 +452,6 @@ void trisc_fused_softmax_top_p_sampling_block() {
     // Step 20: DST[1] = rand (column-0 broadcast staged by BRISC into rand_bcast_cb).
     copy_init(rand_bcast_cb);
     copy_tile(rand_bcast_cb, 0, 1);
-    // Step 21: DST[3] = (rescaled_cumsum >= rand) ? 1.0 : 0.0.
     {
         DeviceZoneScopedN("SP-TOPP-TRISC-15");
         ge_binary_tile_init();
@@ -476,7 +470,6 @@ void trisc_fused_softmax_top_p_sampling_block() {
     pack_reconfig_data_format(mask_cb);
     pack_tile(3, mask_cb);
     cb_push_back(mask_cb, 1);
-    // Step 21.5: Hand the rescaled PMF (DST[2] from Step 18.5) off to BRISC.
     cb_reserve_back(probs_out_cb, 1);
     pack_reconfig_data_format(probs_out_cb);
     pack_tile(2, probs_out_cb);
@@ -862,7 +855,7 @@ void run_top32_llk_presorted_1024_opt(uint32_t row_elements, uint32_t num_input_
     UNPACK((cfg_reg_rmw_tensix<THCON_SEC0_REG2_Haloize_mode_RMW>(0)));
     UNPACK(TTI_SETADCXY(p_setadc::UNP_A, 0, 0, 0, 0, 0b1111));
     UNPACK(TTI_SETADCZW(p_setadc::UNP_A, 0, 0, 0, 0, 0b1111));
-    // The trailing chunk's top32_rm init changes the face geometry; restore Tile_x_dim and the canonical Ystride.
+    // top32_rm init in the trailing chunk changes the face geometry, so restore it.
     UNPACK((cfg_reg_rmw_tensix<THCON_SEC0_REG5_Tile_x_dim_cntx0_ADDR32, 0, 0xffffffff>(
         FACE_R_DIM * FACE_C_DIM | (FACE_R_DIM * FACE_C_DIM << 16))));
     UNPACK((cfg_reg_rmw_tensix<UNP0_ADDR_CTRL_XY_REG_1_Ystride_RMW>(
@@ -1748,7 +1741,7 @@ struct TopKSampling {
                             generate_bcast_col_scalar(
                                 CircularBuffer(CTArgs::p_bcast_cb), bf16_pack_to_uint32(float_to_bf16_rne(p)));
 
-                            // softmax_in_cb shares L1 with max_cb: write it only after the last call's probs_out wait.
+                            // softmax_in_cb shares L1 with max_cb, so write it only after the last call's probs_out wait.
                             cb_reserve_back(CTArgs::softmax_in_cb, 1);
                             auto tile_u32 =
                                 reinterpret_cast<volatile tt_l1_ptr uint32_t*>(get_write_ptr(CTArgs::softmax_in_cb));

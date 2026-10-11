@@ -630,8 +630,7 @@ class PACK_NUM_TILES(TemplateParameter):
 
 @dataclass
 class RMSNORM_DEST_REUSE(TemplateParameter):
-    """Compile-time knobs for the ``rmsnorm_bcast_scalar_dest_reuse`` test and perf kernels
-    (``_test.cpp``, ``_sequence_test.cpp``, ``_perf.cpp`` and ``_sequence_perf.cpp``).
+    """Compile-time knobs for the ``rmsnorm_bcast_scalar_dest_reuse`` test and perf kernels.
 
     All but ``rmsnorm_shadow_sfpu`` are template arguments (or a template-fixed runtime
     argument) on the LLK pair, so none of them can be a runtime parameter:
@@ -651,12 +650,9 @@ class RMSNORM_DEST_REUSE(TemplateParameter):
         reconciliation, so it is new reachable surface. Its replay-buffer path is
         restricted to one tile and four faces by ``LLK_ASSERT``.
     ``rmsnorm_whole_tile``
-        The HiFi multiply's whole-tile hand-off: one SrcA bank per tile and each fidelity phase
-        sweeping the tile, as ``rmsnorm_bcast_scalar_reuse_tiles_init_fidelity`` selects at HiFi3 and HiFi4, and
-        at HiFi2 for more than one tile.
+        The HiFi multiply's whole-tile form, as ``rmsnorm_bcast_scalar_reuse_tiles_init_fidelity`` selects it.
     ``rmsnorm_shadow_sfpu``
-        A switch of the call-order shadow kernel only: the callers' SFPU steps (the exponential after the
-        subtract and the reciprocal of each multiply's scalar).
+        Call-order perf kernel only: adds the callers' SFPU steps.
 
     The two count fields carry the ``rmsnorm_`` prefix so they match the constants they
     emit and stay globally unique: ``test_perf_header_gate.py`` requires that no two
@@ -2090,6 +2086,8 @@ class SDPA_CUSTOM_MM_FLAGS(TemplateParameter):
     sdpa_row_stride    : physical SrcA row width in tiles for read_transposed. None
                          omits the LLK argument; zero and kt_dim retain tight packing.
     sdpa_input_tile_offset : leading SrcA tiles skipped before the matmul input.
+    preserve_src_zero_flag : math leaves the Src zero flag at keep before the init, as a preceding
+                         copy_tile_init does.
     """
 
     signal_granularity: int = 1
@@ -2097,6 +2095,7 @@ class SDPA_CUSTOM_MM_FLAGS(TemplateParameter):
     mm_transpose: bool = False
     sdpa_row_stride: int | None = None
     sdpa_input_tile_offset: int = 0
+    preserve_src_zero_flag: bool = False
 
     def convert_to_cpp(self) -> str:
         lines = [
@@ -2104,6 +2103,7 @@ class SDPA_CUSTOM_MM_FLAGS(TemplateParameter):
             f"#define READ_TRANSPOSED {str(self.read_transposed).lower()}",
             f"#define MM_TRANSPOSE {str(self.mm_transpose).lower()}",
             f"#define SDPA_INPUT_TILE_OFFSET {self.sdpa_input_tile_offset}",
+            f"#define SDPA_PRESERVE_SRC_ZERO_FLAG {str(self.preserve_src_zero_flag).lower()}",
         ]
         if self.sdpa_row_stride is not None:
             lines.append(f"#define SDPA_ROW_STRIDE {self.sdpa_row_stride}")

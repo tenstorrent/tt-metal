@@ -1,9 +1,7 @@
 # SPDX-FileCopyrightText: © 2026 Tenstorrent AI ULC
 # SPDX-License-Identifier: Apache-2.0
 
-"""Perf of the dest-reuse op in its callers' order (sources/rmsnorm_bcast_scalar_dest_reuse_sequence_perf.cpp): per
-iteration a LoFi ELWSUB and tile_cnt - 1 HiFi ELWMULs of one tile each, every call with its init; unit: one tile.
-"""
+"""Perf of the dest-reuse op in its callers' order: a LoFi ELWSUB and HiFi ELWMULs, each with its init; unit: one tile."""
 
 import pytest
 from conftest import skip_for_quasar, skip_for_wormhole
@@ -23,7 +21,6 @@ pytestmark = [skip_for_wormhole, skip_for_quasar]
 
 BF16 = DataFormat.Float16_b
 
-# (fidelity of the multiplies, tiles per iteration, whole_tile, the callers' SFPU steps)
 VARIANTS = [
     (fidelity, tile_cnt, whole_tile, sfpu)
     for fidelity in (MathFidelity.HiFi2, MathFidelity.HiFi4)

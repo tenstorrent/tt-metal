@@ -2171,10 +2171,7 @@ class LMHeadSampling:
                     )
 
                     # --- Final-core-only softmax / top-P / RNG compute CBs ------------
-                    # One bf16 tile (2 KB) per CB, two for the max_cb and softmax_in_cb pair. Mirrors the
-                    # final-device block in _op_mesh_topk under `is_final_mesh_device`.
-                    # sampling_max_cb holds the probabilities and the cumsum for the two-tile rescale, in the L1 of
-                    # sampling_softmax_in_cb, whose tile is consumed before the probabilities are packed.
+                    # sampling_max_cb reuses the L1 of sampling_softmax_in_cb, which is consumed before max_cb is packed.
                     for _sampling_compute_cb_ids in (
                         (sampling_softmax_out_cb,),
                         (sampling_softmax_exp_cb,),
