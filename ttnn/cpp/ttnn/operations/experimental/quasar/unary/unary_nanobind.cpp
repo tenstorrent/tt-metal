@@ -93,6 +93,45 @@ void bind_unary(nb::module_& mod) {
         nb::kw_only(),
         nb::arg("memory_config") = nb::none(),
         nb::arg("output_tensor") = nb::none());
+
+    const auto* sin_doc =
+        R"doc(
+        Applies sin to :attr:`input_tensor` element-wise (Quasar / Metal 2.0).
+
+        .. math::
+            \mathrm{{output\_tensor}}_i = \verb|sin|(\mathrm{{input\_tensor}}_i)
+
+        Args:
+            input_tensor (ttnn.Tensor): the input tensor.
+
+        Keyword Args:
+            memory_config (ttnn.MemoryConfig, optional): memory configuration for the operation. Defaults to `None`
+                (the input's memory configuration).
+            output_tensor (ttnn.Tensor, optional): preallocated output tensor. Defaults to `None`.
+
+        Returns:
+            ttnn.Tensor: the output tensor.
+
+        Note:
+            Supported dtypes and layouts:
+
+            .. list-table::
+               :header-rows: 1
+
+               * - Dtypes
+                 - Layouts
+               * - BFLOAT16, FLOAT32
+                 - TILE
+        )doc";
+
+    ttnn::bind_function<"sin", "ttnn.experimental.quasar.">(
+        mod,
+        sin_doc,
+        &ttnn::operations::experimental::quasar::sin,
+        nb::arg("input_tensor"),
+        nb::kw_only(),
+        nb::arg("memory_config") = nb::none(),
+        nb::arg("output_tensor") = nb::none());
 }
 
 }  // namespace ttnn::operations::experimental::quasar::detail

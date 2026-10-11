@@ -38,4 +38,10 @@ Tensor reciprocal(
     const std::optional<MemoryConfig>& memory_config = std::nullopt,
     const std::optional<Tensor>& optional_output_tensor = std::nullopt);
 
+// ttnn.experimental.quasar.sin: element-wise sine (SFPU), same signature as ttnn.sin minus sub_core_grids.
+Tensor sin(
+    const Tensor& input_tensor,
+    const std::optional<MemoryConfig>& memory_config = std::nullopt,
+    const std::optional<Tensor>& optional_output_tensor = std::nullopt);
+
 }  // namespace ttnn::operations::experimental::quasar
