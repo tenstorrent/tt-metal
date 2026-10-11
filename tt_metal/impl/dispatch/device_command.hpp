@@ -119,8 +119,6 @@ public:
         uint32_t go_signal,
         uint32_t wait_stream,
         uint8_t multicast_go_offset,
-        uint8_t num_unicast_txns,
-        uint8_t noc_data_start_index,
         DispatcherSelect dispatcher_type);
 
     void add_notify_dispatch_s_go_signal_cmd(uint8_t wait, uint16_t index_bitmask);
@@ -160,9 +158,6 @@ public:
 
     void add_dispatch_set_sub_device_worker_counts(
         ttsl::Span<const uint32_t> workers_per_sub_device, DispatcherSelect dispatcher_type);
-
-    void add_dispatch_set_go_signal_noc_data(
-        const vector_aligned<uint32_t>& noc_mcast_unicast_data, DispatcherSelect dispatcher_type);
 
     void add_dispatch_set_write_offsets(ttsl::Span<const uint32_t> write_offsets);
 
