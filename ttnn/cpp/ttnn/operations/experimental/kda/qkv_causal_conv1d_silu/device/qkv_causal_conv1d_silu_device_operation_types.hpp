@@ -19,6 +19,8 @@ struct QkvCausalConv1dSiluParams {
     uint32_t v_width;
     uint32_t channel_chunk_size;
     uint32_t sequence_parallel_axis;
+    // TILE-layout input only: first channel of the convolution within the input's last dimension.
+    uint32_t input_column_offset;
     tt::tt_metal::MemoryConfig output_mem_config;
     DeviceComputeKernelConfig compute_kernel_config;
 };
@@ -32,7 +34,11 @@ struct QkvCausalConv1dSiluInputs {
     Tensor tap3;
 
     Tensor actual_start;
-    Tensor predecessor_carry;
+    // Exactly one of predecessor_carry and history_table supplies the predecessor's rows. history_table is the
+    // SP all-gather of convolution_history_rows; with it the operation also returns the replacement carry.
+    std::optional<Tensor> predecessor_carry;
+    std::optional<Tensor> history_table;
+    std::optional<Tensor> actual_end;
 };
 
 }  // namespace ttnn::experimental::prim

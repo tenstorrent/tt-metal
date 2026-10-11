@@ -23,18 +23,9 @@ from models.demos.deepseek_v3_d_p.tt.kda.config import (
     l1_when_it_fits,
     tuned_projection_matmul_configs,
 )
-from models.demos.deepseek_v3_d_p.tt.kda.convolution import exchange_convolution_carry
 from models.demos.deepseek_v3_d_p.tt.kda.recurrence import KDARecurrence
 from models.demos.deepseek_v3_d_p.tt.kda.weights import KDAWeights, load_kda_weights
 from models.tt_transformers.tt.ccl import TT_CCL
-
-
-def _slice_width(tensor: ttnn.Tensor, start: int, end: int) -> ttnn.Tensor:
-    stop = list(tensor.shape)
-    begin = [0] * len(stop)
-    begin[-1] = start
-    stop[-1] = end
-    return ttnn.slice(tensor, tuple(begin), tuple(stop), memory_config=ttnn.DRAM_MEMORY_CONFIG)
 
 
 def _largest_divisor_at_most(value: int, limit: int) -> int:
@@ -301,26 +292,34 @@ class ttKDA:
 
     def _convolve_qkv(
         self,
-        qkv: ttnn.Tensor,
+        projected: ttnn.Tensor,
         incoming_layer_carry: ttnn.Tensor,
-        selections: ChronologicalSelections | None,
         actual_start: ttnn.Tensor,
+        actual_end: ttnn.Tensor | None,
     ) -> tuple[ttnn.Tensor, ttnn.Tensor, ttnn.Tensor, ttnn.Tensor]:
+        """Convolve the QKV columns of the fused projection in place.
+
+        Each rank contributes six rows to one exchange: the three before the next physical rank's segment and the
+        three ending its valid interval. The convolution reads its predecessor's rows from the gathered table and
+        returns the replacement carry selected from it.
+        """
         config = self.config
-        if not self._is_sequence_parallel:
-            batch, rows, width = qkv.shape
-            new_state = (
-                selections.select_local_final_history(qkv, incoming_layer_carry)
-                if selections is not None
-                else ttnn.slice(qkv, (0, rows - (config.conv_kernel_size - 1), 0), (batch, rows, width))
+        history_rows = ttnn.experimental.kda.convolution_history_rows(
+            projected,
+            actual_start,
+            width=self._convolution_width,
+            actual_end=actual_end,
+            sequence_parallel_axis=self.sequence_parallel_axis,
+        )
+        if self._is_sequence_parallel:
+            history_table = ttnn.all_gather(
+                history_rows, dim=1, cluster_axis=self.sequence_parallel_axis, memory_config=ttnn.DRAM_MEMORY_CONFIG
             )
-            predecessor = incoming_layer_carry
+            ttnn.deallocate(history_rows)
         else:
-            predecessor, new_state = exchange_convolution_carry(
-                qkv, incoming_layer_carry, sequence_parallel_axis=self.sequence_parallel_axis, selections=selections
-            )
-        q, k, v = ttnn.experimental.kda.qkv_causal_conv1d_silu(
-            qkv,
+            history_table = history_rows
+        q, k, v, new_state = ttnn.experimental.kda.qkv_causal_conv1d_silu_with_carry(
+            projected,
             incoming_layer_carry,
             *self.weights.convolution_taps,
             config.q_dim,
@@ -328,10 +327,12 @@ class ttKDA:
             config.v_dim,
             program_config=self.qkv_convolution_program_config,
             actual_start=actual_start,
+            history_table=history_table,
+            actual_end=actual_end,
             sequence_parallel_axis=self.sequence_parallel_axis,
-            predecessor_carry=predecessor,
             memory_config=ttnn.DRAM_MEMORY_CONFIG,
         )
+        ttnn.deallocate(history_table)
         return q, k, v, new_state
 
     def _project_inputs(
@@ -358,7 +359,8 @@ class ttKDA:
             )
         auxiliary_start = self._convolution_width
         return _ProjectedInputs(
-            qkv=_slice_width(projected, 0, auxiliary_start),
+            # The convolution reads its QKV columns in place.
+            qkv=projected,
             # The decay projection reads its low-rank columns in place.
             decay_rank=projected,
             decay_rank_offset=auxiliary_start,
@@ -501,15 +503,11 @@ class ttKDA:
         self._validate_forward(hidden_states, state, actual_start)
         if actual_end is not None:
             self._validate_runtime_bound(actual_end, "actual_end")
-        # All geometries use the same selection graph for full and padded calls.
-        if selections is None:
-            selections = self.selections(actual_start, actual_end)
+        # The convolution derives its segment geometry on device; ``selections`` is accepted for callers that
+        # share one table across layers but is no longer read.
+        del selections
         projected = self._project_inputs(hidden_states)
-        qkv = ttnn.to_layout(projected.qkv, ttnn.ROW_MAJOR_LAYOUT, memory_config=ttnn.DRAM_MEMORY_CONFIG)
-        convolution_state = ttnn.to_layout(
-            state.convolution, ttnn.ROW_MAJOR_LAYOUT, memory_config=ttnn.DRAM_MEMORY_CONFIG
-        )
-        q, k, v, new_convolution = self._convolve_qkv(qkv, convolution_state, selections, actual_start)
+        q, k, v, new_convolution = self._convolve_qkv(projected.qkv, state.convolution, actual_start, actual_end)
         gate = self._compute_decay(projected.decay_rank, projected.decay_rank_offset)
         result = self.recurrence(
             q=q,
