@@ -69,10 +69,18 @@ Tensor matmul_decode(
 // fan-in `reduce_fan_in` in which every core synchronizes only with its own parent and children.
 // The ROW_MAJOR [M, N] result lands on the first core of A's grid (row-major order), as a
 // single-core WIDTH_SHARDED L1 tensor.
+// `rms_norm`: unweighted RMSNorm of each row of A over the full K before the multiply,
+// C = (A / sqrt(mean(A^2) + `rms_norm_epsilon`)) @ B. Blackhole only.
+// `fold_rows`: A [..., R, W] with R a multiple of `fold_rows` is consumed as [R / fold_rows, W * fold_rows],
+// each group of `fold_rows` consecutive rows forming one row, and core i's K-slice being its whole shard
+// [fold_rows * M, Kc / fold_rows] read row by row. B's K must be ordered to match.
 Tensor matmul_decode_large_k(
     const Tensor& input_tensor_a,
     const Tensor& input_tensor_b,
     std::optional<const DataType> dtype = std::nullopt,
-    uint32_t reduce_fan_in = 2);
+    uint32_t reduce_fan_in = 2,
+    bool rms_norm = false,
+    float rms_norm_epsilon = 1.0e-6F,
+    uint32_t fold_rows = 1);
 
 }  // namespace ttnn::experimental

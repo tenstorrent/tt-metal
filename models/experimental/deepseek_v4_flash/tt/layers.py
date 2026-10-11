@@ -1186,15 +1186,25 @@ class LinearDecodeLargeK(DeepSeekV4Module):
         N: int,
         num_cores: int = 32,
         reduce_fan_in: int = 2,
+        rms_norm_epsilon: Optional[float] = None,
+        fold_rows: int = 1,
     ):
         """``weight`` is the torch ``[N, K]`` tensor or a thunk; ``K`` must split into
-        ``num_cores`` whole tiles and ``N`` must be tile-aligned."""
+        ``num_cores`` whole tiles and ``N`` must be tile-aligned. ``rms_norm_epsilon`` fuses an
+        unweighted RMSNorm of each activation row over K ahead of the multiply.
+
+        ``fold_rows`` > 1 takes the activation as ``[.., fold_rows * M, K / fold_rows]``, each
+        core's ``[fold_rows * M, K / (fold_rows * cores)]`` shard read as its ``[M, K / cores]``
+        slice: core ``i``'s K-slice is then its shard's rows laid end to end, so ``weight``'s K
+        must already be in that core-major order."""
         if K % (num_cores * ttnn.TILE_SIZE) or N % ttnn.TILE_SIZE:
             raise ValueError(f"K={K} must split into {num_cores} tile-aligned slices and N={N} must be tile-aligned")
         self.device = device
         self.K = K
         self.N = N
         self.reduce_fan_in = reduce_fan_in
+        self.rms_norm_epsilon = rms_norm_epsilon
+        self.fold_rows = fold_rows
         self.cache_file_name = cache_file_name
         self.core_grid = ttnn.num_cores_to_corerangeset(
             num_cores, device.compute_with_storage_grid_size(), row_wise=True
@@ -1238,7 +1248,12 @@ class LinearDecodeLargeK(DeepSeekV4Module):
         ROW_MAJOR, WIDTH_SHARDED on the first core of the grid."""
         if self.l1_weights is None or not self.l1_weights.is_allocated():
             self.fetch_weights()
-        result = ttnn.experimental.matmul_decode_large_k(x, self.l1_weights, reduce_fan_in=self.reduce_fan_in)
+        rms_kwargs = {}
+        if self.rms_norm_epsilon is not None:
+            rms_kwargs = {"rms_norm": True, "rms_norm_epsilon": self.rms_norm_epsilon}
+        result = ttnn.experimental.matmul_decode_large_k(
+            x, self.l1_weights, reduce_fan_in=self.reduce_fan_in, fold_rows=self.fold_rows, **rms_kwargs
+        )
         self.l1_weights.deallocate()
         self.l1_weights = None
         return result

@@ -60,8 +60,10 @@ void MatmulDecodeLargeKDeviceOperation::validate_on_program_cache_miss(
     TT_FATAL(
         a_shard.orientation == tt::tt_metal::ShardOrientation::ROW_MAJOR,
         "matmul_decode_large_k requires input A's shards in ROW_MAJOR orientation (shard i is K-slice i)");
+    const uint32_t fold_rows = operation_attributes.fold_rows;
+    TT_FATAL(fold_rows >= 1, "matmul_decode_large_k requires fold_rows >= 1, but got {}", fold_rows);
     TT_FATAL(
-        large_k_leading_volume(a.logical_shape()) == 1,
+        fold_rows > 1 || large_k_leading_volume(a.logical_shape()) == 1,
         "matmul_decode_large_k requires input A's leading dims to be 1, but got shape {}",
         a.logical_shape());
     TT_FATAL(
@@ -70,17 +72,18 @@ void MatmulDecodeLargeKDeviceOperation::validate_on_program_cache_miss(
         tt::constants::TILE_HEIGHT,
         M);
     const uint32_t num_cores = a_shard.grid.num_cores();
-    const uint32_t Kc = a_shard.shape[1];
     TT_FATAL(
-        a_shard.shape[0] == M,
-        "matmul_decode_large_k requires input A's shard height {} to equal M {}",
+        a_shard.shape[0] == M * fold_rows,
+        "matmul_decode_large_k requires input A's shard height {} to equal M * fold_rows = {} * {}",
         a_shard.shape[0],
-        M);
+        M,
+        fold_rows);
     TT_FATAL(
-        Kc % tt::constants::TILE_WIDTH == 0,
+        a_shard.shape[1] % tt::constants::TILE_WIDTH == 0,
         "matmul_decode_large_k requires input A's shard width {} to be a multiple of {}",
-        Kc,
+        a_shard.shape[1],
         tt::constants::TILE_WIDTH);
+    const uint32_t Kc = a_shard.shape[1] * fold_rows;
     TT_FATAL(
         Kc * num_cores == K,
         "matmul_decode_large_k requires A's {} shards of width {} to cover K = {} exactly",
@@ -144,12 +147,31 @@ void MatmulDecodeLargeKDeviceOperation::validate_on_program_cache_miss(
         fan_in,
         num_levels,
         kLargeKSemaphoresPerCore);
+
+    if (operation_attributes.rms_norm) {
+        TT_FATAL(
+            a.device()->arch() == tt::ARCH::BLACKHOLE,
+            "matmul_decode_large_k's fused rms_norm uses Blackhole-only LLKs");
+        TT_FATAL(
+            operation_attributes.rms_norm_epsilon >= 0.0F,
+            "matmul_decode_large_k requires a non-negative rms_norm_epsilon, but got {}",
+            operation_attributes.rms_norm_epsilon);
+        // The root scales a whole output row in DST at once (half-sync: 8 16-bit or 4 fp32 tiles).
+        const uint32_t dst_num_tiles = out_dtype == DataType::FLOAT32 ? 4 : 8;
+        TT_FATAL(
+            N / tt::constants::TILE_WIDTH <= dst_num_tiles,
+            "matmul_decode_large_k's fused rms_norm needs N <= {} for a {} output, but got N = {}",
+            dst_num_tiles * tt::constants::TILE_WIDTH,
+            out_dtype,
+            N);
+    }
 }
 
 MatmulDecodeLargeKDeviceOperation::spec_return_value_t MatmulDecodeLargeKDeviceOperation::compute_output_specs(
     const operation_attributes_t& operation_attributes, const tensor_args_t& tensor_args) {
     const auto& a = tensor_args.input_tensor_a;
     ttnn::Shape output_shape(a.logical_shape());
+    output_shape[-2] = a.logical_shape()[-2] / operation_attributes.fold_rows;
     output_shape[-1] = operation_attributes.N;
 
     const auto shard_spec = tt::tt_metal::ShardSpec(
@@ -179,7 +201,10 @@ matmul_decode_large_k(
     const Tensor& input_tensor_a,
     const Tensor& input_tensor_b,
     std::optional<const DataType> dtype,
-    uint32_t reduce_fan_in) {
+    uint32_t reduce_fan_in,
+    bool rms_norm,
+    float rms_norm_epsilon,
+    uint32_t fold_rows) {
     using OperationType = ttnn::operations::experimental::matmul_decode::MatmulDecodeLargeKDeviceOperation;
 
     // compute_output_specs runs ahead of validation and reads A's shard grid, so that much has to
@@ -196,12 +221,25 @@ matmul_decode_large_k(
         "matmul_decode_large_k requires inputs of rank >= 2, but got {} and {}",
         a_shape,
         b_shape);
+    TT_FATAL(
+        fold_rows >= 1 && a_shape[-2] % fold_rows == 0,
+        "matmul_decode_large_k requires A's height {} to be a multiple of fold_rows {}",
+        a_shape[-2],
+        fold_rows);
+    // Folded, every group of fold_rows rows is one logical row, leading dims included.
+    uint32_t m = a_shape[-2];
+    if (fold_rows > 1) {
+        m = static_cast<uint32_t>(a_shape.volume() / a_shape[-1]) / fold_rows;
+    }
     const auto operation_attributes = OperationType::operation_attributes_t{
-        .M = static_cast<int>(a_shape[-2]),
+        .M = static_cast<int>(m),
         .N = static_cast<int>(b_shape[-1]),
-        .K = static_cast<int>(a_shape[-1]),
+        .K = static_cast<int>(a_shape[-1] * fold_rows),
         .output_dtype = dtype.has_value() ? *dtype : input_tensor_a.dtype(),
         .reduce_fan_in = reduce_fan_in,
+        .rms_norm = rms_norm,
+        .rms_norm_epsilon = rms_norm_epsilon,
+        .fold_rows = fold_rows,
     };
     const auto tensor_args = OperationType::tensor_args_t{input_tensor_a, input_tensor_b};
     return ttnn::device_operation::launch<OperationType>(operation_attributes, tensor_args);

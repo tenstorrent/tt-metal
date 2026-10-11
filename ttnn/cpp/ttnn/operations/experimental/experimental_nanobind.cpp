@@ -114,6 +114,7 @@
 #include "ttnn/operations/experimental/deepseek/hyperconnection/fused_hyperconnection_nanobind.hpp"
 #include "ttnn/operations/experimental/deepseek/mix_streams/mix_streams_nanobind.hpp"
 #include "ttnn/operations/experimental/deepseek/csa_pool/csa_pool_nanobind.hpp"
+#include "ttnn/operations/experimental/deepseek/engram_gate/engram_gate_nanobind.hpp"
 #include "ttnn/operations/experimental/deepseek/fused_lightning_select_kv/fused_lightning_select_kv_nanobind.hpp"
 #include "ttnn/operations/experimental/deepseek/all_gather_for_matmul/all_gather_for_matmul_nanobind.hpp"
 #include "ttnn/operations/experimental/deepseek/width_sharded_all_reduce/width_sharded_all_reduce_nanobind.hpp"
@@ -233,6 +234,7 @@ void py_module(nb::module_& mod) {
     deepseek::detail::bind_fused_hyperconnection(mod);
     deepseek::detail::bind_mix_streams(mod);
     deepseek::detail::bind_csa_pool_window(mod);
+    deepseek::detail::bind_engram_gate(mod);
     deepseek::detail::bind_fused_lightning_select_kv(mod);
     deepseek::detail::bind_all_gather_for_matmul(mod);
     deepseek::detail::bind_width_sharded_all_reduce(mod);

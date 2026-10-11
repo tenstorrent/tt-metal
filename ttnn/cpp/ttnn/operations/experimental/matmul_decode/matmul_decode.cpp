@@ -51,8 +51,12 @@ Tensor matmul_decode_large_k(
     const Tensor& input_tensor_a,
     const Tensor& input_tensor_b,
     std::optional<const DataType> dtype,
-    uint32_t reduce_fan_in) {
-    return ttnn::prim::matmul_decode_large_k(input_tensor_a, input_tensor_b, dtype, reduce_fan_in);
+    uint32_t reduce_fan_in,
+    bool rms_norm,
+    float rms_norm_epsilon,
+    uint32_t fold_rows) {
+    return ttnn::prim::matmul_decode_large_k(
+        input_tensor_a, input_tensor_b, dtype, reduce_fan_in, rms_norm, rms_norm_epsilon, fold_rows);
 }
 
 }  // namespace ttnn::experimental

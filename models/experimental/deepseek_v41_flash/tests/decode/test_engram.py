@@ -17,6 +17,7 @@ The converted ttnn weights are cached under ``CACHE_DIR`` (``$DEEPSEEK_V4_CACHE_
     pytest models/experimental/deepseek_v41_flash/tests/decode/test_engram.py
 """
 
+import contextlib
 import math
 
 import pytest
@@ -36,6 +37,7 @@ from models.experimental.deepseek_v41_flash.tt.decode.engram import DeepSeekV41E
 from models.experimental.deepseek_v41_flash.tt.engram_lookup import EngramHostLookup, load_engram_table, tensor_region
 from models.experimental.deepseek_v4_flash.tt.weight_cache import WeightCache
 from models.experimental.deepseek_v4_flash.tt.weight_loader import DeepseekV4WeightLoader, resolve_snapshot_dir
+from tests.ttnn.unit_tests.operations.prefetcher_common import tensor_prefetcher_session
 
 ENGRAM_LAYERS = (1, 14)  # inference/config.json engram_layer_ids; layer j of the tuple runs on device j
 STEPS = 16
@@ -92,13 +94,17 @@ def test_engram_decode(mesh_device, tables, batch):
     reference = {i: reference_engram(model, snapshot, loader, i, *tables[i]) for i in ENGRAM_LAYERS}
     lookup = EngramHostLookup(config, snapshot, tables, batch, STEPS, tokenizer)
 
+    if not ttnn.experimental.is_tensor_prefetcher_supported(mesh_device):
+        pytest.skip("Engram's wkv needs the tensor prefetcher (programmable DRAM cores)")
     cache = WeightCache(CACHE_DIR)
+    # wkv's ring is private, so each device's mapping starts empty and the layer builds it.
     engrams = {
         i: DeepSeekV41Engram(
             config,
             i,
             engram_weights(loader, i),
             mesh_device.create_submesh(ttnn.MeshShape(1, 1), ttnn.MeshCoordinate(0, j)),
+            {},
             batch=batch,
             cache=cache.sub(f"layers.{i}.engram"),
         )
@@ -112,27 +118,41 @@ def test_engram_decode(mesh_device, tables, batch):
     torch.manual_seed(0)
     streams = torch.randn(len(ENGRAM_LAYERS), STEPS, batch, 1, config.hc_mult, config.hidden_size).bfloat16().float()
 
-    for pos in range(STEPS):
-        token = input_ids[:, pos : pos + 1]
-        rows = lookup(token, pos)  # {layer: [B, 1, n_hash_cols * head_dim]}
-        hashes = reference_hash(token, pos)  # [B, 1, n_engram_layers, n_hash_cols]
+    with contextlib.ExitStack() as sessions:
+        for engram in engrams.values():
+            sessions.enter_context(tensor_prefetcher_session(engram.device))
+            ttnn.experimental.wait_for_cq_on_tensor_prefetcher(engram.device, cq_id=0)
 
-        # Rows first: each layer's recv_async_h2d stalls the device queue until its rows arrive.
-        outs = {}
-        for j, (i, engram) in enumerate(engrams.items()):
-            engram.write_rows(rows[i])
-            x = ttnn.from_torch(streams[j, pos], dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT, device=engram.device)
-            outs[i] = engram(x)
+        for pos in range(STEPS):
+            token = input_ids[:, pos : pos + 1]
+            rows = lookup(token, pos)  # {layer: [B, 1, n_hash_cols * head_dim]}
+            hashes = reference_hash(token, pos)  # [B, 1, n_engram_layers, n_hash_cols]
 
-        for j, i in enumerate(ENGRAM_LAYERS):
-            layer_hashes = hashes[:, :, reference_hash.layout.layer_ids.index(i)]
-            expected_rows = reference[i].embed.module(layer_hashes).flatten(-2)
-            assert torch.equal(rows[i], expected_rows), f"layer {i} pos {pos}: host rows differ from the reference's"
+            # Rows first: each layer's recv_async_h2d stalls the device queue until its rows arrive.
+            outs = {}
+            for j, (i, engram) in enumerate(engrams.items()):
+                engram.write_rows(rows[i])
+                engram.wkv.fetch_weights()
+                x = ttnn.from_torch(
+                    streams[j, pos],
+                    dtype=ttnn.bfloat16,
+                    layout=ttnn.ROW_MAJOR_LAYOUT,
+                    device=engram.device,
+                    memory_config=engram.streams_memory_config,
+                )
+                outs[i] = engram(x)
 
-            x = streams[j, pos]
-            expected = reference[i](x, layer_hashes)
-            actual = ttnn.to_torch(outs[i], mesh_composer=ttnn.ConcatMeshToTensor(engrams[i].device, dim=0)).float()
-            assert actual.shape == expected.shape, (tuple(actual.shape), tuple(expected.shape))
-            what = f"layer {i} pos {pos} batch {batch}"
-            _pcc(expected, actual, PCC, what)
-            _pcc(expected - x, actual - x, DELTA_PCC, f"{what} (out - x)")
+            for j, i in enumerate(ENGRAM_LAYERS):
+                layer_hashes = hashes[:, :, reference_hash.layout.layer_ids.index(i)]
+                expected_rows = reference[i].embed.module(layer_hashes).flatten(-2)
+                assert torch.equal(
+                    rows[i], expected_rows
+                ), f"layer {i} pos {pos}: host rows differ from the reference's"
+
+                x = streams[j, pos]
+                expected = reference[i](x, layer_hashes)
+                actual = ttnn.to_torch(outs[i], mesh_composer=ttnn.ConcatMeshToTensor(engrams[i].device, dim=0)).float()
+                assert actual.shape == expected.shape, (tuple(actual.shape), tuple(expected.shape))
+                what = f"layer {i} pos {pos} batch {batch}"
+                _pcc(expected, actual, PCC, what)
+                _pcc(expected - x, actual - x, DELTA_PCC, f"{what} (out - x)")

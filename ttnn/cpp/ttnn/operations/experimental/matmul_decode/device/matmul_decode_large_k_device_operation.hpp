@@ -38,6 +38,14 @@ struct MatmulDecodeLargeKDeviceOperation {
         // Children per tree node. 2 is a binary tree; a wider fan-in trades fewer serial hops
         // for more partials summed per node.
         uint32_t reduce_fan_in = 2;
+        // Unweighted RMSNorm of each row of A over the full K, applied before the multiply:
+        // C = (A / sqrt(mean(A^2) + eps)) @ B. The per-row scale commutes with the matmul, so
+        // each core folds its share of sum(A^2) into the tree reduction and the root applies it.
+        bool rms_norm = false;
+        float rms_norm_epsilon = 1.0e-6F;
+        // Consecutive rows of A that make up one logical row: A [M * fold_rows, K / fold_rows] is
+        // consumed as [M, K], core i's K-slice being its whole [fold_rows, Kc / fold_rows] shard.
+        uint32_t fold_rows = 1;
     };
 
     struct tensor_args_t {
@@ -74,5 +82,8 @@ matmul_decode_large_k(
     const Tensor& input_tensor_a,
     const Tensor& input_tensor_b,
     std::optional<const DataType> dtype = std::nullopt,
-    uint32_t reduce_fan_in = 2);
+    uint32_t reduce_fan_in = 2,
+    bool rms_norm = false,
+    float rms_norm_epsilon = 1.0e-6F,
+    uint32_t fold_rows = 1);
 }  // namespace ttnn::prim

@@ -75,9 +75,8 @@ class DeepSeekV41DecoderLayer(DeepSeekV4DecoderLayer):
                 layer_idx,
                 _strip_prefix(weights, "engram"),
                 device,
+                prefetch_buffers,
                 cache=cache.sub("engram"),
-                use_prefetcher=use_prefetcher,
-                prefetch_buffers=prefetch_buffers,
             )
             if layer_idx in config.engram_layer_ids
             else None
@@ -110,10 +109,10 @@ class DeepSeekV41DecoderLayer(DeepSeekV4DecoderLayer):
             weights["post_attention_layernorm.weight"], eps, device, cache.file("ffn_norm"), sharded=True
         )
         self.attn_hc = DeepSeekV4HyperConnection(
-            config, _strip_prefix(weights, "attn_hc"), device, cache=cache.sub("hc_attn")
+            config, _strip_prefix(weights, "attn_hc"), device, cache=cache.sub("hc_attn"), row_major_streams=True
         )
         self.ffn_hc = DeepSeekV4HyperConnection(
-            config, _strip_prefix(weights, "ffn_hc"), device, cache=cache.sub("hc_ffn")
+            config, _strip_prefix(weights, "ffn_hc"), device, cache=cache.sub("hc_ffn"), row_major_streams=True
         )
 
     def prefetch_weights(self, *, index_sparse: bool = False):
@@ -124,7 +123,7 @@ class DeepSeekV41DecoderLayer(DeepSeekV4DecoderLayer):
         router gate and the shared gate/up keep their per-call DRAM -> L1 copy, which V4's
         ``prefetch_weights`` would instead run here and hold in L1 until this layer decodes.
         """
-        if self.engram is not None and self.engram.use_prefetcher:
+        if self.engram is not None:
             self.engram.wkv.fetch_weights()
         self.self_attn.prefetch_weights()
         down = self.mlp.shared_experts.down_proj
@@ -136,15 +135,19 @@ class DeepSeekV41DecoderLayer(DeepSeekV4DecoderLayer):
     ) -> tuple[ttnn.Tensor, ttnn.Tensor]:
         """One decode step: ``(streams [B, 1, hc, D], pre_mix [B, 1, 1, hc])`` -> the same pair for the next layer.
 
-        ``hidden_streams`` is TILE and ``pre_mix`` bf16 TILE. ``scache`` is this layer's
-        :func:`~.attention.build_decode_caches` entry and ``attn_inputs`` what
-        :meth:`~.attention.DeepSeekV41Attention.decode_inputs` builds for the position. On an
+        ``hidden_streams`` is ROW_MAJOR, width-sharded in L1, and is consumed: each streams tensor is
+        freed once its successor exists, so a stale one cannot sit in L1 through the rest of the
+        step (the caller's reference would otherwise keep the input alive). ``pre_mix`` is bf16 TILE.
+        ``scache`` is this layer's :func:`~.attention.build_decode_caches` entry and ``attn_inputs``
+        what :meth:`~.attention.DeepSeekV41Attention.decode_inputs` builds for the position. On an
         Engram layer the step's rows go to ``self.engram.write_rows`` before this call: under TP
         its all-reduces can sync the host, which would otherwise wait on rows never sent.
         """
         if self.engram is not None:
             with _region("ENGRAM"):
-                hidden_streams = self.engram(hidden_streams)
+                streams_in = hidden_streams
+                hidden_streams = self.engram(streams_in)
+                ttnn.deallocate(streams_in)
         with _region("ATTN_HC"):
             post, comb, collapsed, attn_pre = self.attn_hc(hidden_streams, pre_mix=pre_mix)
         with _region("INPUT_NORM"):
@@ -152,7 +155,9 @@ class DeepSeekV41DecoderLayer(DeepSeekV4DecoderLayer):
         with _region("ATTENTION"):
             attn_out = self.self_attn.decode(normed, scache=scache, **attn_inputs)
         with _region("ATTN_MIX"):
-            hidden_streams = self._mix(post, comb, attn_out, hidden_streams)
+            streams_in = hidden_streams
+            hidden_streams = self._mix(post, comb, attn_out, streams_in)
+        ttnn.deallocate(streams_in)
         ttnn.deallocate(normed)
         ttnn.deallocate(attn_out)
         with _region("FFN_HC"):
@@ -162,4 +167,6 @@ class DeepSeekV41DecoderLayer(DeepSeekV4DecoderLayer):
         with _region("MOE"):
             mlp_out = self.mlp.decode_static(collapsed)
         with _region("FFN_MIX"):
-            return self._mix(post, comb, mlp_out, hidden_streams), ffn_pre
+            streams_out = self._mix(post, comb, mlp_out, hidden_streams)
+        ttnn.deallocate(hidden_streams)
+        return streams_out, ffn_pre

@@ -88,6 +88,22 @@ MixStreamsProgramFactory::cached_program_t MixStreamsProgramFactory::create(
             sub_elems_per_page,
             d);
     }
+    // ROW_MAJOR streams (and the output, which takes their layout) are paged one shard-width row
+    // segment at a time; each tile's hc rows are gathered from / scattered to those pages.
+    const bool streams_is_rm = streams.layout() == Layout::ROW_MAJOR;
+    const auto row_page_elems = [&](const Tensor& t) {
+        return t.shard_spec().has_value() ? static_cast<uint32_t>(t.shard_spec()->shape[1]) : d;
+    };
+    const uint32_t streams_elems_per_page = streams_is_rm ? row_page_elems(streams) : d;
+    const uint32_t out_elems_per_page = streams_is_rm ? row_page_elems(output) : d;
+    TT_FATAL(
+        !streams_is_rm || output.buffer()->buffer_type() == BufferType::L1,
+        "mix_streams: a ROW_MAJOR output is written in 32 B halves, so it must be in L1");
+    TT_FATAL(
+        out_elems_per_page % constants::TILE_WIDTH == 0 && d % out_elems_per_page == 0,
+        "mix_streams: ROW_MAJOR output row/shard width {} must be a multiple of 32 and divide D={}",
+        out_elems_per_page,
+        d);
 
     auto make_cb = [&](uint32_t index, uint32_t num_pages, uint32_t page_bytes = 0) {
         const uint32_t page = page_bytes == 0 ? tile_size_bytes : page_bytes;
@@ -115,13 +131,16 @@ MixStreamsProgramFactory::cached_program_t MixStreamsProgramFactory::create(
         tile_buffering,
         sub_elems_per_page,
         static_cast<uint32_t>(sub_is_rm),
+        static_cast<uint32_t>(streams_is_rm),
+        streams_elems_per_page,
     };
     TensorAccessorArgs(post.buffer()).append_to(reader_compile_time_args);
     TensorAccessorArgs(comb.buffer()).append_to(reader_compile_time_args);
     TensorAccessorArgs(sublayer_out.buffer()).append_to(reader_compile_time_args);
     TensorAccessorArgs(streams.buffer()).append_to(reader_compile_time_args);
 
-    std::vector<uint32_t> writer_compile_time_args = {kCbOut};
+    std::vector<uint32_t> writer_compile_time_args = {
+        kCbOut, static_cast<uint32_t>(streams_is_rm), hc, n_tiles, out_elems_per_page};
     TensorAccessorArgs(output.buffer()).append_to(writer_compile_time_args);
 
     const std::vector<uint32_t> compute_compile_time_args = {

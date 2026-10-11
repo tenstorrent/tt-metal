@@ -11,7 +11,7 @@ V4.1 adds its own private rings next to it:
 * kv on 16 receivers (``[5120, 32]`` slabs), streamed in 32-tile pages.
 * o_b, and separately the shared expert's down, on 80 receivers each (``N = 5120`` over
   64-column slabs).
-* Engram's wkv (replicated, bf8) on 80 receivers of ``[6144, 320]`` slabs, streamed in 60-tile pages.
+* Engram's wkv (replicated, bf8) on 80 receivers of ``[6144, 320]`` slabs, streamed in 30-tile pages.
 
 The router gate (12 cores) and the shared expert's gate/up (36 cores, 9 per rank at TP4) do not
 divide the 8 DRAM banks a ring spreads over, so they stay on the per-step DRAM -> L1 copy.
@@ -41,9 +41,11 @@ O_B_GCB_PAGES = 2
 SHARED_DOWN_GCB = "shared_down_full"
 SHARED_DOWN_GCB_PAGES = 2
 # Engram's wkv on 80 receivers: a [6144, 320] slab (1920 tiles, ~2 MB at bf8) is streamed in pages of
-# 6 tile-rows (60 tiles, ~65 KB at bf8), pinned by a spec that is not a consumer.
+# 3 tile-rows (30 tiles, ~32 KB at bf8), pinned by a spec that is not a consumer. Two of them keep the
+# ring at ~65 KB a receiver: on an Engram stage L1 is tight enough that the router gate's per-call
+# weight copy needs the room.
 ENGRAM_WKV_GCB = "engram_wkv"
-_ENGRAM_WKV_PAGE_PIN = {"K": 192, "N": 25600, "n_blocks": 80}
+_ENGRAM_WKV_PAGE_PIN = {"K": 96, "N": 25600, "n_blocks": 80}
 ENGRAM_WKV_GCB_PAGES = 2
 
 
