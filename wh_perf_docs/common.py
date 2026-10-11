@@ -202,4 +202,4 @@ LP_CSS = """
 .lp .l1b{fill:var(--bk1);stroke:var(--fg);stroke-width:1.4}
 .lp .arh{stroke:var(--accent);stroke-width:2.2;fill:none}
 """
-EXTRA_CSS += LP_CSS
+EXTRA_CSS += LP_CSS + ".steps li{margin-bottom:8px}"

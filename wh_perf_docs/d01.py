@@ -26,14 +26,34 @@ D = dict(
 <li>If packer 0 loses one cycle (its L1 write is refused once), it falls one cycle behind and lands on packer 1's bank. Packer 0 wins (fixed priority), packer 1 is refused and falls behind, lands on packer 2's bank, and so on to packer 3.</li>
 <li>At each tile end a packer pauses its DEST reads and, a few cycles later, its L1 writes. In the clean rhythm these pauses form a staircase 2 cycles apart. In the slow rhythm the refusals split packer 3's pause, the rest of it lands mid-tile, packer 3's restart meets packer 0's write, and step 3 happens again.</li>
 <li>Both patterns repeat exactly every tile. The loop stays in its rhythm until something shifts one packer by a cycle (WH-02 to WH-05).</li>
-</ol>""",
+</ol>
+<h3>What can make a packer lose one cycle</h3>
+<p>Step 3 uses packer 0 as the example, but a lost cycle on any packer starts the same chain from that packer down (in the K probe of WH-02 it starts at packer 3). A packer loses a cycle in two ways: its L1 write is refused, or its DEST read is refused. Everything we found comes down to one of these:</p>
+<div class="tw"><table><tr><th>Cause</th><th>Why the packer loses a cycle</th><th>Seen</th><th>Doc</th></tr>
+<tr><td>A TRISC reads its code from L1</td><td>Code fetches of TRISC0 go to port 2 (packer 2), of TRISC1 and TRISC2 to port 3 (packer 3). After the barrier the caches are empty, so the first tiles have many fetches.</td><td>Versim + card</td><td>WH-03, WH-04</td></tr>
+<tr><td>The idle threads run their exit code while pack is measured</td><td>Same as above: their code fetches and stores land in the first tiles.</td><td>Versim + card</td><td>WH-04</td></tr>
+<tr><td>A RISC-V core reads or writes L1 data (zone record, host or BRISC polling, math thread L1 read)</td><td>Same ports: BRISC and NCRISC share port 2, TRISC1 and TRISC2 share port 3.</td><td>Versim + card</td><td>WH-02</td></tr>
+<tr><td>The profiler zone helper size</td><td>One more code line to fetch at the start, a few cycles later.</td><td>Versim + card</td><td>WH-05</td></tr>
+<tr><td>Unpacker 1 reads L1 all the time (L1_CONGESTION)</td><td>Packer 1 shares port 1 with unpacker 1 and the scrubber; it waits 35–40 cycles per tile.</td><td>Versim + card</td><td>WH-10 §7</td></tr>
+<tr><td>Another packer writes the same L1 bank</td><td>Packer 0 has its own port, so its lost cycle (step 2) must be a conflict inside L1; the bank is not traced.</td><td>Versim</td><td>this page</td></tr>
+<tr><td>The packers start a tile out of the 2-cycle staircase</td><td>Two packers ask for the same DEST bank, and the lower number wins. Start skew comes from the thread release (BRISC timing), the first tiles of the loop, and the state the previous kernel left.</td><td>Versim + card</td><td>WH-03, WH-09, WH-10 §2</td></tr></table></div>
+<p>The cause that is always there is in the hardware: fixed priority in the DEST read crossbar keeps the lag instead of spreading it out. Any of the events above only chooses which rhythm the loop starts in.</p>""",
     sketch="four packer lanes over one tile (35 cycles) with the bank numbers 0,0,1,1,2,2,3,3 shifted by 2 cycles per lane; then the same with packer 0 one cycle late at cycle ~31, and follow the × down the diagonal.",
     versim=f"""<p>Signals: <code>instruction_issue.dma_rdrow_xbar_rden</code>, <code>…_ready</code>, <code>…_rd_addr</code> (bank = bits 1:0), and the packers' <code>o_l1_wren</code> / <code>i_l1_req_ready</code>. matmul 1×3 PACK_ISOLATE, quiet harness, pack predictor off, 76 cycles from tile 1,500. Colours are banks 0–3, × is a refused read, the grey row under each packer is its L1 write.</p>
 {fig(6, "Fast (0 nops, 107,622 cycles): one refusal per packer at the tile start, then a clean diagonal.")}
 {fig(7, "Slow (+1 nop, 110,705 cycles): packer 0's L1 write is refused once mid-tile; a diagonal of × follows through packers 1, 2, 3.")}
 <h3>Why it repeats every tile</h3>
 {fig(8, "Fast: the four 3-cycle L1 write pauses form a staircase, 2 cycles apart (offsets 10–12, 12–14, 14–16, 16–18).")}
-{fig(9, "Slow: packer 3's pause is split; its leftover lands at offsets 24–25 and its restart meets packer 0's write at offset 31.")}
+{fig(9, "Slow: packer 3's end-of-tile pause comes late (26–28); 2 cycles after packer 3 starts writing again, packer 0's write is refused (31), and the refusals run down the packers.")}
+<p><b>What each number shows</b> (cycles are the offsets on the axis; one tile is 36 cycles here, so cycle 52 is cycle 16 of the next tile):</p>
+<ol class="steps">
+<li><b>Packer 3's pause comes late (cycles 26–28).</b> At the end of each tile a packer has 3 cycles with nothing to write to L1. In the fast rhythm packer 3's pause is at 18–20, right after its one refusal at the tile start (17). Here packer 3 was refused 3 times at the tile start (16, 17, 20: step 5 of the previous tile), so its pause comes at 26–28, in the middle of packer 0's tile.</li>
+<li><b>Packer 0 loses one cycle (cycle 31).</b> Packer 3 starts writing again at 29. At 31 packer 0's L1 write is refused once. This is the lost cycle. Packer 0 has its own L1 port (port 8), so this is a conflict inside L1, most likely on the same L1 bank; we did not trace which bank.</li>
+<li><b>Packer 0 falls one cycle behind (cycles 34–35).</b> With one write not done, packer 0 skips one DEST read (34) and reads bank 2 at 35 instead of 34. Packer 1 also asks for bank 2 at 35.</li>
+<li><b>The refusal runs down the packers (cycles 35–39).</b> Fixed priority: packer 0 wins bank 2 and packer 1 is refused (35). Packer 1 is now one cycle late and meets packer 2 on bank 2 (37, packer 2 refused); packer 2 meets packer 3 (39, packer 3 refused). Each refused read leaves one cycle with nothing to write about 10 cycles later (45, 47, 49).</li>
+<li><b>Packer 3 starts the next tile off its slot (cycles 52–56).</b> After step 4 packer 3 is one cycle off the 2-cycle staircase, so at the next tile start it is refused 3 times (52, 53, 56), not once. So its end-of-tile pause is late again: this is step 1 of the next tile, and the loop of steps 1–5 repeats every tile.</li>
+</ol>
+<p>In the fast rhythm (figure above) none of this happens: each packer is refused once at the tile start, its pause follows at once, and the four pauses form a staircase that never meets another packer's write.</p>
 <h3>A second config, 80 cycles mid-loop</h3>
 <div class="legend2"><span><span class="sw" style="background:var(--good)"></span>DEST read accepted</span><span><span class="sw" style="background:var(--refc)"></span>refused</span></div>
 {fig(17, "math_matmul config12601 at PR head, fast: 35 cycles per tile.")}
