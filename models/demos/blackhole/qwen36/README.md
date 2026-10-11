@@ -221,6 +221,22 @@ single-device paths ignore `start_pos` and recompute from 0.
 | `QWEN36_PREFIX_SNAPSHOT_STRIDE` | `8192` | snapshot every N tokens (chunk boundaries, relative to the resume point) |
 | `QWEN36_PREFIX_CACHE_DEBUG` | `0` | `1` logs one line per prefix-cached prefill (hit position, saves, stats) |
 
+## Multimodal serving: vision buckets and `max_pixels` (vLLM)
+
+The vision tower runs on padded patch buckets (ceil-to-2048 of the patch count + 1 step) that must be compiled
+**before** prefill/decode traces are captured; a program first dispatched after capture can be clobbered by a trace
+replay and hangs the device (seen: `tt_all_reduce`). `warmup_vision` therefore warms `QWEN36_VISION_WARMUP_GRIDS`
+(default `1x32x32;1x48x64;1x64x64;1x80x80`, buckets up to 8192 patches) in the eager warmup phase.
+
+- **Always serve with `--mm-processor-kwargs '{"max_pixels": 1048576}'`** (or your limit). `initialize_vllm_model` reads
+  it from the vLLM config (`model_config.mm_processor_kwargs`) and `warmup_vision` also warms the bucket covering
+  `max_pixels / patch_size^2` patches (1 MP -> 4096 patches -> bucket 6144, already in the defaults; e.g. 3 MP appends
+  bucket 12288), so every input vLLM can accept is pre-compiled. Video is bounded by the same figure (conservatively).
+- If `max_pixels` is unset (vLLM default ~16 MP, ~65k patches) a WARNING is logged at warmup, and any item whose bucket
+  exceeds the largest warmed one is **rejected** with a `ValueError` (patch count, warmed max, advice) instead of being
+  run. This still fails that request's step (the engine reports the error) but avoids the device hang.
+- Test: `tests/test_vllm_vision_guard.py`.
+
 ## Tests
 
 There are two tiers of tests under `tests/`.

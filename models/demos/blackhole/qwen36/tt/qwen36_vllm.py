@@ -208,7 +208,24 @@ class Qwen36ForCausalLM(Generator, SupportsMultiModal):
             inst._vllm_prefix_caching = bool(get_current_vllm_config().cache_config.enable_prefix_caching)
         except Exception:
             inst._vllm_prefix_caching = True
+        inst._vllm_mm_max_pixels = cls._read_vllm_max_pixels()
         return inst
+
+    @staticmethod
+    def _read_vllm_max_pixels():
+        """max_pixels from vLLM's --mm-processor-kwargs (model_config.mm_processor_kwargs, mirrored on
+        model_config.multimodal_config.mm_processor_kwargs), or None when unset / no current vLLM config."""
+        try:
+            from vllm.config import get_current_vllm_config
+
+            mc = get_current_vllm_config().model_config
+            for src in (getattr(mc, "multimodal_config", None), mc):
+                kw = getattr(src, "mm_processor_kwargs", None) if src is not None else None
+                if kw and kw.get("max_pixels") is not None:
+                    return int(kw["max_pixels"])
+        except Exception:
+            pass
+        return None
 
     def allocate_kv_cache(self, kv_cache_shape, dtype, num_layers):
         """Allocate paged KV (8 attn layers) + external GDN state; returns the 8 KV pairs.
@@ -260,13 +277,41 @@ class Qwen36ForCausalLM(Generator, SupportsMultiModal):
         """
         video = self._gather_user_visual(kwargs, u, "pixel_values_videos", "video_grid_thw")
         if video is not None:
+            self._check_vision_bucket(video[1])
             return model.get_video_features(*video)
 
         image = self._gather_user_visual(kwargs, u, "pixel_values", "image_grid_thw")
         if image is not None:
+            self._check_vision_bucket(image[1])
             return model.get_image_features(*image)
 
         return None
+
+    @staticmethod
+    def _vision_bucket(num_patches):
+        """Padded patch bucket the tower runs on (same rule as tt/vision/model.py: ceil-to-2048 of count + 1 step)."""
+        return (int(num_patches) // 2048 + 1) * 2048
+
+    def _check_vision_bucket(self, grid_thw):
+        """Refuse an item whose padded bucket was not compiled before trace capture (warmup_vision).
+
+        Running the unwarmed tower after capture compiles programs that a later trace replay can clobber, which HANGS
+        the device (seen: tt_all_reduce). Raising here still fails this request's step (the engine reports the error)
+        but avoids the device hang. No check when warmup_vision never ran (tests / demos) or was disabled.
+        """
+        warmed = getattr(self, "_vision_warmed_max_bucket", None)
+        if not warmed:
+            return
+        for g in grid_thw.reshape(-1, 3):
+            n = int(g[0]) * int(g[1]) * int(g[2])
+            if self._vision_bucket(n) > warmed:
+                raise ValueError(
+                    f"Vision input of {n} patches (grid {tuple(int(x) for x in g)}, bucket {self._vision_bucket(n)}) "
+                    f"exceeds the largest vision bucket warmed before trace capture ({warmed} patches); running it "
+                    f"would compile the tower after capture and hang the device. Set vLLM "
+                    f"--mm-processor-kwargs '{{\"max_pixels\": N}}' (e.g. 1048576) so every accepted input fits a warmed "
+                    f"bucket, or extend QWEN36_VISION_WARMUP_GRIDS."
+                )
 
     def prefill_forward(self, tokens, page_table, kv_cache, prompt_lens, **kwargs):
         """All prefill is model-owned (Generator drives decode only)."""
@@ -612,15 +657,41 @@ class Qwen36ForCausalLM(Generator, SupportsMultiModal):
         model = self.model[0]
         if getattr(model, "vision_model", None) is None:
             return
+        vc = model.vision_args.hf_config.vision_config
         if grids is None:
             spec = os.environ.get("QWEN36_VISION_WARMUP_GRIDS", self._VISION_WARMUP_GRIDS)
             grids = [tuple(int(x) for x in g.split("x")) for g in spec.split(";") if g.strip()]
-        vc = model.vision_args.hf_config.vision_config
+            max_pixels = getattr(self, "_vllm_mm_max_pixels", None)
+            if max_pixels is None:
+                if grids:
+                    logger.warning(
+                        "vLLM --mm-processor-kwargs max_pixels is not set: image/video inputs needing a vision bucket "
+                        f"above the warmed maximum ({max(self._vision_bucket(t * h * w) for t, h, w in grids)} patches) "
+                        "will be REJECTED (an unwarmed bucket would hang the device). Set "
+                        "--mm-processor-kwargs '{\"max_pixels\": 1048576}' (or your serving limit)."
+                    )
+            else:
+                # Patches of any accepted item: image <= max_pixels/patch^2; a video (frames x H x W <= max_pixels,
+                # t = frames/temporal_patch_size) is <= max_pixels/(patch^2 * temporal_patch_size); the image bound
+                # covers both (conservative).
+                need = -(-int(max_pixels) // vc.patch_size**2)
+                need_bucket = self._vision_bucket(need)
+                if not any(self._vision_bucket(t * h * w) == need_bucket for t, h, w in grids):
+                    h = 2 * math.ceil(math.sqrt(need) / 2)
+                    w = 2 * math.ceil(need / h / 2)
+                    while self._vision_bucket(h * w) > need_bucket and w > 2:  # keep the grid inside the needed bucket
+                        w -= 2
+                    grids.append((1, h, w))
+                    logger.info(
+                        f"max_pixels={max_pixels}: up to {need} patches -> also warming bucket {need_bucket} "
+                        f"with grid 1x{h}x{w}"
+                    )
         patch_dim = vc.in_channels * vc.temporal_patch_size * vc.patch_size**2
         for t, h, w in grids:
             pix = torch.zeros(t * h * w, patch_dim, dtype=torch.float32)
             grid = torch.tensor([[t, h, w]], dtype=torch.int32)
             ttnn.deallocate(model.get_image_features(pix, grid))  # image / video share the device work
+        self._vision_warmed_max_bucket = max((self._vision_bucket(t * h * w) for t, h, w in grids), default=None)
         model._req_image_grid_thw = None
         model._req_video_grid_thw = None
         ttnn.synchronize_device(self.mesh_device)
