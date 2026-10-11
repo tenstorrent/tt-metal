@@ -613,6 +613,9 @@ def call_op(op, tensors, params, specs, device):
             kw["fast_and_approximate_mode"] = p["fast_and_approximate_mode"]
         return (getattr(qsr, op)(tensors["input_a"], b, **kw),)
     if op in ("silu", "sin", "cos", "reciprocal"):
+        # inplace=True is how the tracer records the model's in-place call (output_tensor=input)
+        if p.get("inplace"):
+            return (getattr(qsr, op)(tensors["input"], output_tensor=tensors["input"]),)
         return (getattr(qsr, op)(tensors["input"]),)
     if op == "group_norm":
         cg = p["core_grid"]["CoreGrid"]
