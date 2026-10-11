@@ -59,6 +59,7 @@
 //   7: group_num_dests
 //   8: hub_role   (0 = plain, 1 = hub0, 2 = hub1)
 //   9: hub1_noc_x     10: hub1_noc_y
+//   11: down_local    (this core's down slot in its expert group; see run_reader_loop)
 void kernel_main() {
     constexpr uint32_t sem_id = get_compile_time_arg_val(0);
     constexpr uint32_t sem_input_id = get_compile_time_arg_val(1);
@@ -177,5 +178,6 @@ void kernel_main() {
         num_expert_groups,
         gather,
         sem_reduce_id,
-        cb_reduce_id);
+        cb_reduce_id,
+        get_arg_val<uint32_t>(11));
 }

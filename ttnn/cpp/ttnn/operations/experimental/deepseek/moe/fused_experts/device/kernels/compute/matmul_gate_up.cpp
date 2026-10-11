@@ -68,7 +68,9 @@
 //  17: down_reserve_tiles    (pages a down slice occupies in cb_weights, >= the slice itself)
 //
 // Runtime args:
-//   0: core_index (this core's flat grid index, x*8 + y)
+//   0: core_index (this core's flat grid index, x*GRID_Y + y)
+//   1: down_local (6-expert path: 0xFFFFFFFF on a gate_up-only 9th-row core, which skips the down
+//      matmul and the reduce)
 void kernel_main() {
     constexpr uint32_t num_active = get_compile_time_arg_val(0);
     constexpr uint32_t k_tiles = get_compile_time_arg_val(1);
@@ -98,7 +100,8 @@ void kernel_main() {
     const uint32_t local_idx = core_index % cores_per_expert;
     const bool swiglu_core = local_idx < num_producers;
     const uint32_t expert_group = core_index / cores_per_expert;
-    const bool is_root = expert_group == 0;
+    const bool down_core = get_arg_val<uint32_t>(1) != 0xFFFFFFFFu;
+    const bool is_root = expert_group == 0 && down_core;
     (void)local_idx;
 
     constexpr uint32_t kOutTilesPerCore = 2;
@@ -224,6 +227,14 @@ void kernel_main() {
         // accumulation across shards (they are different H columns); group 0 then reduces
         // the matching H-slices from the other groups.
         act_cb.wait_front(i_tiles);
+        if (!down_core) {
+            // The broadcast still lands here (the group rectangle spans all 9 rows); release it.
+            act_cb.pop_front(i_tiles);
+            if (swiglu_core) {
+                in_cb.pop_front(k_tiles);
+            }
+            return;
+        }
         rscalar_cb.wait_front(1);
 
         const uint32_t mul_dst_id = is_root ? cb_acc_id : cb_down_out_id;

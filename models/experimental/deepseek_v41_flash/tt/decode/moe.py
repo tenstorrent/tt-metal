@@ -20,9 +20,7 @@ import torch
 import ttnn
 
 from models.experimental.deepseek_v4_flash.tt.decode.moe import (
-    _FUSED_GRID_Y,
-    _FUSED_PARALLEL_EXPERTS,
-    _FUSED_PARALLEL_GRID_X,
+    _FUSED_DOWN_CORES_PER_EXPERT,
     _FUSED_TILE,
     DeepSeekV4MLP,
     DeepSeekV4PreloadedExperts,
@@ -43,8 +41,9 @@ DECODE_LAYOUTS = {
     "shared_up_proj": {"K": 5120, "N": 2304, "n_blocks": 36},
     "shared_down_proj": {"K": 2304, "N": 5120},
 }
-# The 6-expert path of ``fused_experts`` splits ``I`` tile-evenly over each expert's 16 cores.
-_I_ALIGN = _FUSED_TILE * _FUSED_PARALLEL_GRID_X * _FUSED_GRID_Y // _FUSED_PARALLEL_EXPERTS
+# The 6-expert path of ``fused_experts`` splits a rank's ``I`` tile-evenly over each expert's 16
+# gate_up cores (12x8 grid) or 18 (12x9).
+_GATE_UP_CORE_COUNTS = (_FUSED_DOWN_CORES_PER_EXPERT, _FUSED_DOWN_CORES_PER_EXPERT + 2)
 
 
 class DeepSeekV41TopKRouter(DeepSeekV4TopKRouter):
@@ -81,10 +80,13 @@ class DeepSeekV41MLP(DeepSeekV4MLP):
 
 def fused_experts_config(config, system_config=None, tp_size: int = 1):
     """``(config, system_config)`` as V4's experts take them at V4.1's shapes: ``I`` zero-padded
-    so each of the ``tp_size`` ranks gets a multiple of ``_I_ALIGN``, and the hidden row cut over
-    ``D / 64`` cores (see :class:`DeepSeekV41PreloadedExperts`)."""
-    align = _I_ALIGN * tp_size
-    padded = -(-config.moe_intermediate_size // align) * align
+    to the smallest size whose per-rank tiles split evenly over 16 or 18 gate_up cores (no padding
+    at V4.1's ``I = 2304`` for TP 1, 2 or 4), and the hidden row cut over ``D / 64`` cores (see
+    :class:`DeepSeekV41PreloadedExperts`)."""
+    step = _FUSED_TILE * tp_size
+    padded = -(-config.moe_intermediate_size // step) * step
+    while all((padded // step) % cores for cores in _GATE_UP_CORE_COUNTS):
+        padded += step
     sys_cfg = system_config or active_system_config()
     sys_cfg = dataclasses.replace(
         sys_cfg, moe=dataclasses.replace(sys_cfg.moe, fused_num_cores=config.hidden_size // _fused_hidden(1))
@@ -109,16 +111,13 @@ def padded_expert_provider(provider, intermediate: int, padded: int):
 class DeepSeekV41PreloadedExperts(DeepSeekV4PreloadedExperts):
     """V4's resident ``fused_experts`` experts at V4.1's shapes.
 
-    The op cuts the hidden row into 64-column DRAM shards, 80 at ``D = 5120`` (V4: 64), and
-    its 6-expert path needs ``I`` to split evenly over 16 cores in whole tiles. ``I = 2304``
-    (72 tiles) does not, so it is zero-padded to 2560: zero gate/up rows give
-    ``silu(0) * 0 = 0`` and zero down columns add nothing, so the padding is exact. It costs
-    ~11% more expert bytes (~8.5 GB per layer at bfloat4_b).
+    The op cuts the hidden row into 64-column DRAM shards, 80 at ``D = 5120`` (V4: 64). Its
+    6-expert path splits a rank's ``I`` over 18 gate_up cores per expert (a 12x9 grid) when 16 do
+    not divide it, and runs down on 16 of them. ``I = 2304`` is 72 tiles, 36 per rank at TP2 and
+    18 at TP4, so it needs no padding; :func:`fused_experts_config` zero-pads any ``I`` that fits
+    neither (zero gate/up rows give ``silu(0) * 0 = 0`` and zero down columns add nothing).
 
-    ``tp_size > 1`` gives each rank of the 1xTP ``device`` an ``I / TP`` slice, as V4 does, which
-    the op needs in whole multiples of 512 too: at TP4 ``I`` is padded to 4096, 1024 per rank
-    (~3.4 GB per rank and layer at bfloat4_b). The pad sits at the end of gate and of up, so the
-    last ranks' slices are mostly zeros.
+    ``tp_size > 1`` gives each rank of the 1xTP ``device`` an ``I / TP`` slice, as V4 does.
 
     ``provider(e) -> (gate_up [2I, D], down [D, I])`` is V4's contract, unpadded (see
     :func:`~...config.expert_provider`).
