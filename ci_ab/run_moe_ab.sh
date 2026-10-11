@@ -9,8 +9,9 @@ T=models/demos/deepseek_v3_b1/tests/unit_tests/test_moe_mlp.py
 SRAM=models/demos/deepseek_v3_b1/unified_kernels/matmul_expert_compressed_sram.hpp
 ROUNDS=${ROUNDS:-3}
 python3 -c "import tracy" 2>/dev/null || export PYTHONPATH=/work:/work/tools
-# The CI bucket that runs test_moe_mlp.py (run_isolated_unit_tests.py, fabric_2d) exports this for every test.
-export TT_METAL_ALLOCATOR_MODE_HYBRID=1
+# As the CI bucket that runs test_moe_mlp.py (run_isolated_unit_tests.py, fabric_2d): slow dispatch leaves the 13x10
+# worker grid the test requires (fast dispatch reads 12x10 on these runners), and the hybrid allocator.
+export TT_METAL_ALLOCATOR_MODE_HYBRID=1 TT_METAL_SLOW_DISPATCH_MODE=1
 echo "== $(date -u +%FT%TZ) $(git log -1 --format='%h %s' 2>/dev/null)"
 # pytest.ini's -vvs makes --collect-only print "<Function name[...]>", so the node ids are rebuilt from the param ids.
 mapfile -t IDS < <(python3 -m pytest --collect-only -q "$T::test_moe_fused_with_reduce" 2>/dev/null |
