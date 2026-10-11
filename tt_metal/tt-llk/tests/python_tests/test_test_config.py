@@ -235,3 +235,38 @@ def test_variants_do_not_share_list_objects():
 
     assert second.templates == ["TEMPLATE_A"]
     assert shared == ["TEMPLATE_A"]
+
+
+# --------------------------------------------------------------------------- #
+# Runs without --speed-of-light share speed-of-light INIT builds by this key.
+# --------------------------------------------------------------------------- #
+
+
+def test_init_share_key_leaves_out_only_the_neutral_names():
+    """Two tests share an INIT build only if their headers differ in the source's neutral names alone."""
+    from helpers.perf.init_share import INIT_NEUTRAL, init_share_key
+
+    assert "CT_DIM" in INIT_NEUTRAL["matmul_test.cpp"]
+    assert "MATH_FIDELITY" not in INIT_NEUTRAL["matmul_test.cpp"]
+    source = "sources/matmul_test.cpp"
+    header = "\n".join(
+        [
+            "#pragma once",
+            "constexpr std::uint32_t CT_DIM = 2;",
+            "constexpr ckernel::MathFidelity MATH_FIDELITY = ckernel::MathFidelity::LoFi;",
+        ]
+    )
+    key = init_share_key(source, ["inputs"], header)
+    assert init_share_key(source, ["inputs"], header.replace("= 2", "= 4")) == key
+    assert init_share_key(source, ["inputs"], header.replace("LoFi", "HiFi4")) != key
+    assert init_share_key(source, ["other inputs"], header) != key
+
+
+def test_init_share_key_of_an_unlisted_source_keeps_every_line():
+    from helpers.perf.init_share import init_share_key
+
+    header = "constexpr std::uint32_t CT_DIM = 2;"
+    source = "sources/not_in_the_table.cpp"
+    assert init_share_key(source, [], header) != init_share_key(
+        source, [], header.replace("= 2", "= 4")
+    )
