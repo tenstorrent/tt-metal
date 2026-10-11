@@ -1,8 +1,7 @@
 # SPDX-FileCopyrightText: © 2026 Tenstorrent AI ULC
 # SPDX-License-Identifier: Apache-2.0
 
-"""Perf of the Blackhole scalar block multiply (mul_tiles_bcast_scalar_block, sources/eltwise_mul_scalar_block_perf.cpp);
-unit: one 32x32 tile, TILE_COUNT is the block size."""
+"""Perf of the Blackhole scalar block multiply; unit: one 32x32 tile."""
 
 import pytest
 from conftest import skip_for_quasar, skip_for_wormhole
@@ -25,7 +24,6 @@ pytestmark = [skip_for_wormhole, skip_for_quasar]
 
 BF16, FP32 = DataFormat.Float16_b, DataFormat.Float32
 
-# (output format, dest_acc, block size, fidelity)
 VARIANTS = [
     (FP32, acc, block, MathFidelity.LoFi)
     for acc in (DestAccumulation.No, DestAccumulation.Yes)
@@ -49,10 +47,10 @@ VARIANTS += [
 @pytest.mark.perf
 @parametrize(variant=VARIANTS)
 def test_perf_eltwise_mul_scalar_block(perf_report, variant):
-    if len(variant) == 1:  # parametrize hands a single axis as a one-element tuple
+    if len(variant) == 1:
         (variant,) = variant
     out_fmt, dest_acc, block, math_fidelity = variant
-    # A 32-bit DEST half holds 4 tiles, so an 8-tile block takes all of DEST.
+    # A 32-bit DEST half holds 4 tiles.
     half_dest_tiles = 4 if dest_acc == DestAccumulation.Yes else 8
     dest_sync = DestSync.Half if block <= half_dest_tiles else DestSync.Full
     configuration = PerfConfig(

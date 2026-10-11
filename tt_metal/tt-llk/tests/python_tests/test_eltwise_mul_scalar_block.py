@@ -28,7 +28,7 @@ pytestmark = [skip_for_wormhole, skip_for_quasar]
 
 @dataclass
 class SCALAR_BLOCK_ALIAS(TemplateParameter):
-    """True runs the aliased standard scalar broadcast multiply instead of the block form."""
+    """True runs the aliased standard scalar multiply instead of the block form."""
 
     alias: bool = False
 
@@ -39,7 +39,7 @@ class SCALAR_BLOCK_ALIAS(TemplateParameter):
 
 
 def _scalar_tiles(scalars):
-    # Other SrcB lanes are poison: only B[0] is a scalar.
+    # Only B[0] is a scalar; the other lanes are poison.
     tiles = torch.full((len(scalars), ELEMENTS_PER_TILE), -17.0, dtype=torch.bfloat16)
     tiles[:, 0] = scalars
     return tiles
@@ -84,8 +84,7 @@ def test_eltwise_mul_scalar_block(block_layout, dest_acc, dest_sync):
     block_size, dst_index = block_layout
     scalars = torch.tensor([1.5, -0.5, 0.0, 2.0], dtype=torch.bfloat16)
     count = len(scalars) * block_size * ELEMENTS_PER_TILE
-    # Exactly representable products allow an elementwise, zero-tolerance check
-    # in both DEST widths.
+    # Exactly representable products allow a zero-tolerance check.
     src = ((torch.arange(count) * 17 % 63 - 31).to(torch.float32) / 8).to(
         torch.bfloat16
     )
@@ -109,7 +108,7 @@ def test_eltwise_mul_scalar_block(block_layout, dest_acc, dest_sync):
 
 
 def _fidelity_golden(src, scalars, math_fidelity):
-    """The sum of the fidelity-masked phase products, as the standard multiply computes at math_fidelity."""
+    """The fidelity-masked phase products summed, as the standard multiply computes."""
     phases = {
         MathFidelity.LoFi: 1,
         MathFidelity.HiFi2: 2,
@@ -133,10 +132,9 @@ def _fidelity_golden(src, scalars, math_fidelity):
     dest_acc=list(DestAccumulation),
 )
 def test_eltwise_mul_scalar_block_fidelity(math_fidelity, dest_acc):
-    """Above LoFi the block form equals the aliased standard multiply lane by lane and follows the fidelity-masked
-    reference rather than the one-phase product."""
+    """Above LoFi the block form equals the aliased standard multiply and the fidelity-masked reference."""
     block_size, dst_index, dest_sync = 4, 0, DestSync.Half
-    # Scalars and operands with full mantissas, so every fidelity phase contributes.
+    # Full mantissas, so every fidelity phase contributes.
     scalars = torch.tensor([1.0 / 3, -0.7, 1.01, 2.9], dtype=torch.bfloat16)
     torch.manual_seed(0)
     count = len(scalars) * block_size * ELEMENTS_PER_TILE
@@ -168,7 +166,7 @@ def test_eltwise_mul_scalar_block_fidelity(math_fidelity, dest_acc):
         math_fidelity,
         alias=True,
     )
-    # Build both before running either: under --compile-producer run() returns after the first build.
+    # Build both before running either: --compile-producer returns after the first build.
     block_cfg.prepare()
     alias_cfg.prepare()
     block = torch.as_tensor(block_cfg.run().result).float().flatten()
@@ -178,7 +176,7 @@ def test_eltwise_mul_scalar_block_fidelity(math_fidelity, dest_acc):
         block, alias
     ), f"the block multiply at {math_fidelity.name} differs from the aliased scalar broadcast multiply"
     if dest_acc == DestAccumulation.Yes:
-        # Every phase product of two bf16 operands is exact in a 32-bit DEST, so the sum is too.
+        # bf16 phase products are exact in a 32-bit DEST.
         assert torch.equal(
             block, golden
         ), f"the block multiply at {math_fidelity.name} is not the fidelity-masked product"

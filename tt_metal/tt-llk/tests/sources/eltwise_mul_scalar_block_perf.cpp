@@ -1,8 +1,7 @@
 // SPDX-FileCopyrightText: © 2026 Tenstorrent AI ULC
 // SPDX-License-Identifier: Apache-2.0
 
-// Perf kernel of the Blackhole scalar block multiply: per iteration NUM_BLOCKS blocks of NUM_TILES_IN_BLOCK tiles, one
-// unpack call and one math call per block. The isolates mock one SrcB valid per block and one SrcA valid per tile.
+// Perf kernel of the Blackhole scalar block multiply: one unpack call and one math call per block.
 
 #include <cstdint>
 
