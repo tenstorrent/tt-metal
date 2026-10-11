@@ -2019,6 +2019,33 @@ def test_causal_lift_fresh_cpp_bf16_in(mathop, dest_acc, fresh_cpp_impl):
     )
 
 
+@pytest.mark.parametrize("fresh_cpp_impl", [0, 1], ids=["production", "fresh_cpp"])
+@pytest.mark.parametrize(
+    "mathop", [MathOperation.Expm1Cw, MathOperation.I1], ids=lambda m: m.name
+)
+def test_causal_lift_fresh_cpp_bf16_exact_path(mathop, fresh_cpp_impl):
+    """Gate the exact BF16 input/output path used by the timed corpus cells.
+
+    Expm1Cw and I1 select different polynomial bodies for Float32 and BF16
+    inputs.  Keep this path separate from the wider BF16-to-Float32 coverage
+    so correctness admission exercises the same body and output conversion as
+    the corresponding performance node.
+    """
+    custom_atol, custom_rtol = CUSTOM_TOLERANCES.get(mathop, (None, None))
+    eltwise_unary_sfpu(
+        "sources/eltwise_unary_sfpu_test.cpp",
+        InputOutputFormat(DataFormat.Float16_b, DataFormat.Float16_b),
+        DestAccumulation.No,
+        ApproximationMode.No,
+        mathop,
+        FastMode.No,
+        [64, 64],
+        custom_atol=custom_atol,
+        custom_rtol=custom_rtol,
+        fresh_cpp_impl=fresh_cpp_impl,
+    )
+
+
 _EXPM1_CW_FP32_OVERFLOW_EDGE = [
     88.5,
     88.5999984741211,  # 0x42b13333: finite, but above the old 88.5 cutoff
