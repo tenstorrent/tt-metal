@@ -52,7 +52,7 @@ enum class RemapMode : uint8_t {
 // Blackhole fast untilize chunk width; init, untilize and uninit must agree on it.
 enum class FastChunk : uint8_t {
     Auto,      // Default: up to eight tiles with a 16-bit DEST
-    FourTiles  // Up to four tiles
+    FourTiles
 };
 
 }  // namespace untilize_config

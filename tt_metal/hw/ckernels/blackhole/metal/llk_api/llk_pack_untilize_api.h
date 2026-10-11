@@ -219,15 +219,8 @@ inline void llk_pack_untilize(
         tile_dst_rt_offset);
 }
 
-/**
- * llk_pack_untilize for one block starting at tile column first_col of the output row, for a row split into blocks of different widths.
- * The pack untilize init must be for the same block_ct_dim and full_ct_dim.
- *
- * @tparam block_ct_dim Width of the block in tiles.
- * @tparam full_ct_dim  Width of the output row in tiles.
- * @param  output       Output circular buffer / operand index.
- * @param  first_col    Tile column of the output row where the block starts.
- */
+// A block that starts at tile column first_col of the output row, for a row split into blocks of different widths.
+// The pack untilize init must be for the same block_ct_dim and full_ct_dim.
 template <std::uint32_t block_ct_dim, std::uint32_t full_ct_dim>
 inline void llk_pack_untilize_at_col(std::uint32_t output, const std::uint32_t first_col) {
     const std::uint32_t output_id = get_output_id(output);

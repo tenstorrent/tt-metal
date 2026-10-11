@@ -47,9 +47,7 @@ inline void _llk_pack_untilize_configure_addrmod_()
         .set(ADDR_MOD_2);
 }
 
-/**
- * @brief ADDR_MOD slots of the first-tile-stream row form; ADDR_MOD_3 also steps channel 1 Z by one tile row into L1, ADDR_MOD_1 clears it.
- */
+// ADDR_MOD_3 also steps channel 1 Z by one tile row into L1, which ADDR_MOD_1 clears again.
 inline void _llk_pack_untilize_configure_first_tile_stream_addrmod_()
 {
     addr_mod_pack_t {
@@ -82,7 +80,6 @@ dense is used with num_faces == 2 and even block_ct_dim, where two 16x32 (or sma
  * @tparam block_ct_dim: Number of input tiles per block.
  * @tparam narrow_row: True when faces occupy only the first column of the tile (single packer interface).
  * @tparam dense: True to pack two tiles into one 32x32 dest region using all interfaces; requires num_faces == 2 and even block_ct_dim.
- * @tparam pace: True to issue a filler before every PACR and around every row.
  * @param face_r_dim: Number of rows per face.
  * @param num_faces: Faces per tile, valid values = <1, 2, 4>
  * @param row_ends_stream: True to close every row with Last (rows not contiguous in L1, or 32-bit Dest reads of rows of whole 16-byte units).
@@ -229,25 +226,14 @@ inline void _llk_pack_untilize_mop_config_(
     }
 }
 
-/**
- * @brief Build and program the untilize MOP of a narrow row wider than a face (FACE_C_DIM < row_num_datums < TILE_C_DIM).
- *
- * A packer interface reads x_end + 1 consecutive datums, so each tile row is the left face's 16 datums on interface 0, then the
- * rest from the right face on interface 1 with x_end lowered, in the same L1 stream.
- *
- * @tparam block_ct_dim: Number of input tiles per block.
- * @tparam row_num_datums: Datums per output row of a tile.
- * @param face_r_dim: Number of rows per face.
- * @param row_ends_stream: True to close every row with Last.
- * @param l1_row_step_by_cfg: True to advance the L1 destination address per row with CFGSHIFTMASK.
- * @note ADDR_MOD_3 must hold no increments, and the packer x_end must be FACE_C_DIM - 1 before the MOP runs.
- */
+// A packer interface reads x_end + 1 consecutive datums, so each tile row is the left face's 16 datums on interface 0, then the rest
+// from the right face on interface 1 with x_end lowered, in one L1 stream. ADDR_MOD_3 must hold no increments, x_end FACE_C_DIM - 1 on entry.
 template <std::uint32_t block_ct_dim, std::uint32_t row_num_datums>
 inline void _llk_pack_untilize_split_row_mop_config_(const std::uint32_t face_r_dim, const bool row_ends_stream, const bool l1_row_step_by_cfg)
 {
     static_assert((row_num_datums > FACE_C_DIM) && (row_num_datums < TILE_C_DIM), "a split row is wider than a face and narrower than a tile");
     constexpr std::uint32_t seq_len   = 4;
-    constexpr std::uint32_t seq_start = ckernel::packer::replay_buf_offset + 2; // after the row step replay
+    constexpr std::uint32_t seq_start = ckernel::packer::replay_buf_offset + 2;
     constexpr std::uint32_t right_intf = 0b0010;
     const std::uint32_t row_close_addr_mod = row_ends_stream ? ADDR_MOD_1 : ADDR_MOD_2;
 
@@ -312,8 +298,7 @@ inline void _llk_pack_untilize_split_row_mop_config_(const std::uint32_t face_r_
 /**
  * @brief Initialize the packer for an untilize pack op.
  *
- * Configures ADDR_MODs and the untilize MOP, programs the Z stride to one tile and keeps the channel 1 Y stride
- * (one L1 output row) in a GPR for the execute calls.
+ * Keeps the channel 1 Y stride (one L1 output row) in a GPR for the execute calls.
  *
  * @tparam block_ct_dim: Number of input tiles per block.
  * @tparam full_ct_dim: Number of tiles in the output row; a row may be split into blocks of different widths.
@@ -450,9 +435,7 @@ inline void _llk_pack_untilize_init_(
 /**
  * @brief Untilize-pack one block of tiles from the destination register to L1.
  *
- * Programs the L1 destination address, the channel 1 Y stride and the packer counters (W selects the block's first
- * tile in Dest), then runs the MOP once per face group, moving Y to the bottom faces and the L1 row to 16 in between,
- * and resets the Y counters and clears the channel 1 Y stride afterward.
+ * W selects the block's first tile in Dest; the MOP runs once per face group, with Y moved to the bottom faces and the L1 row to 16 in between.
  *
  * @tparam block_ct_dim: Number of input tiles per block.
  * @tparam full_ct_dim: Total number of input tiles across all blocks.
@@ -508,10 +491,7 @@ inline void _llk_pack_untilize_(const std::uint32_t address, const std::uint32_t
 }
 
 /**
- * @brief Restore the packer Z strides after an untilize pack op.
- *
- * Stalls on the pack pipe and reprograms the channel 0 Z stride to its default (single face) value and the
- * channel 1 strides to zero, as set_packer_strides leaves them, undoing the strides set in @ref _llk_pack_untilize_init_.
+ * Reprograms the channel 0 Z stride to its single-face default and zeroes the channel 1 strides, as set_packer_strides leaves them.
  *
  * @param pack_src_format: Source (dest register) data format used to size the default Z stride.
  * @note Pairs with @ref _llk_pack_untilize_init_.
