@@ -17,6 +17,7 @@ import torch
 from loguru import logger
 
 import ttnn
+from models.demos.deepseek_v3_b1.compressed_tensor import COMPRESSED_FORMATS
 from models.demos.deepseek_v3_b1.micro_ops.dram_streaming_matmul_compressed.op import _TILE_SIZES
 from models.demos.deepseek_v3_b1.micro_ops.host_io.utils import dtype_size
 from models.demos.deepseek_v3_b1.micro_ops.matmul_custom_compressed.op import _CB_ADDR_SHIFT
@@ -42,6 +43,19 @@ def _assignment_to_llk_fmt(idx: int) -> int:
     """Map CompressedTensor assignment index to new LLK format code."""
     _ASSIGNMENT_TO_LLK_FMT = [3, 2, 1, 0]  # bfp8→3, bfp4→2, bfp2→1, bfp0→0
     return _ASSIGNMENT_TO_LLK_FMT[idx]
+
+
+def _assert_sram_weights_bfp4(sram_cts: list, sram_cores: list, device_coords: list) -> None:
+    """The plain SRAM path reads one bfp4_b page per tile, so it rejects any other SRAM tile format."""
+    bfp4 = COMPRESSED_FORMATS.index("bfp4")
+    for coord in device_coords:
+        for core in sram_cores:
+            for expert, ct in enumerate(sram_cts):
+                assignment = ct.get_assignment_per_shard(core, device_coord=coord)
+                assert (assignment == bfp4).all(), (
+                    f"sram_use_compression=False needs uniform bfp4_b SRAM weights; expert {expert} on core "
+                    f"({core.x}, {core.y}) of device {coord} has formats {sorted(set(int(f) for f in assignment))}"
+                )
 
 
 def _meta_words_for_tiles(num_tiles: int) -> int:
@@ -1357,6 +1371,12 @@ class ExpertKernel:
             assert sram_fmt_l1_addrs is not None, "sram_fmt_l1_addrs must be set when has_sram=True"
             assert sram_base_addrs_l1_addrs is not None, "sram_base_addrs_l1_addrs must be set when has_sram=True"
             assert sram_output_tensor is not None, "sram_output_tensor must be set when has_sram=True"
+            if not sram_use_compression:
+                _assert_sram_weights_bfp4(
+                    sram_cts,
+                    ttnn.corerange_to_cores(sram_core_grid, row_wise=True),
+                    [ttnn.MeshCoordinate(row, col) for row in range(mesh_rows) for col in range(mesh_cols)],
+                )
 
         if not tp_expert:
             assert not has_sram, "Expert parallel (tp_expert=False) only supports DRAM matmul"
