@@ -1,5 +1,15 @@
 # GDN fusion implementation plan
 
+October 11, 11:54 UTC update: isolated resident-reader experiments also passed
+native correctness but did not justify promotion. Skipping unused V rows saves
+only 0.84-1.00 us at B16 and regresses at B32. Overlapping vector formatting with
+state reads gives at best 1.37 us at B16 (0.066 ms over 48 layers, projected
++0.029 TSU), while B32 regresses further. All poison variants match exactly.
+The current reader remains selected. Move priority to projection/collective
+dataflow; the earlier 1-3-ms GDN target remains unrealized. These are 64-changing-
+input component screens, not model qualification; trace-allocation warnings
+remain open. [Full results and raw receipts](../galaxy-evidence/gdn-resident-padding-results-v1/README.md).
+
 October 11, 09:32 UTC result: the first four-producer/one-consumer prototype is
 implemented and passed native build, exact B16/B32 output/state checks, distinct
 live-buffer rebinding and repeated trace replay. It loses: B16 complete boundary

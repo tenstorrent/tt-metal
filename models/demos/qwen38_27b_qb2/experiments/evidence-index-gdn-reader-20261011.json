@@ -1,0 +1,236 @@
+{
+  "generated_at": "2026-10-11T11:59:48.811610+00:00",
+  "scope": "Resident GDN reader padding and state-read overlap: native correctness passed, small B16 gain with B32 regressions, not selected or model-qualified.",
+  "entries": [
+    {
+      "path": "tests/gdn_resident_padding.py",
+      "bytes": 2638,
+      "sha256": "a4c0d0f403950bedd2696900d3aa2aa362af7c197f01344e766acabd89da19c0"
+    },
+    {
+      "path": "tests/test_gdn_resident_padding.py",
+      "bytes": 10957,
+      "sha256": "33bdd0cbb88335bd4d10f57c307afbdf034db0911180cfb192eb9ea1e4498f09"
+    },
+    {
+      "path": "tests/unit/test_gdn_resident_padding.py",
+      "bytes": 2313,
+      "sha256": "429496f6b724795e840e1d23d23d9db4c58f3ce87eb85b164ae4dbaa044491e6"
+    },
+    {
+      "path": "galaxy-evidence/gdn-resident-padding-results-v1/README.md",
+      "bytes": 6738,
+      "sha256": "9f9bdf9ba847b6fed9f182aa523df852caa378772bbbd71a8a437f655171cac2"
+    },
+    {
+      "path": "galaxy-evidence/gdn-resident-padding-results-v1/manifest.json",
+      "bytes": 10403,
+      "sha256": "7d4c75073df4aa7d0d62e3e78d055f262395f18da932db6fb29fb379401c6f1a"
+    },
+    {
+      "path": "galaxy-evidence/gdn-resident-padding-results-v1/raw/gdn-resident-padding-control-v1/collection-unit.json",
+      "bytes": 148,
+      "sha256": "08fe684925071abced4ea0d432ac190e64a4091174bef9ee21a93b85a3e5a2d9"
+    },
+    {
+      "path": "galaxy-evidence/gdn-resident-padding-results-v1/raw/gdn-resident-padding-control-v1/launch-unit.json",
+      "bytes": 131,
+      "sha256": "52f81c161fce6a8967f3f115eec93c6555894e3ac15b9b77d7c4ff9ed1d2408d"
+    },
+    {
+      "path": "galaxy-evidence/gdn-resident-padding-results-v1/raw/gdn-resident-padding-control-v1/launch.json",
+      "bytes": 2009,
+      "sha256": "bd14526010ebc858f53aaf832c7cc9ef60385debef7707a3b383ae81c5e314ca"
+    },
+    {
+      "path": "galaxy-evidence/gdn-resident-padding-results-v1/raw/gdn-resident-padding-control-v1/run.log.gz",
+      "bytes": 6321,
+      "sha256": "b8db8456b3144b494ceea961031a1e09e87189b7ba79587c973a7c9e608e7f58"
+    },
+    {
+      "path": "galaxy-evidence/gdn-resident-padding-results-v1/raw/gdn-resident-padding-control-v1/run.py.gz",
+      "bytes": 1619,
+      "sha256": "099e9619ddde2f626f13cb0404c688867e45354f447582efb14f392e7f961604"
+    },
+    {
+      "path": "galaxy-evidence/gdn-resident-padding-results-v1/raw/gdn-resident-padding-control-v1/source-manifest.json",
+      "bytes": 40786,
+      "sha256": "30aafd5c508f11e431e08f495978bfa35509672fc85bf92de097d9df1653417b"
+    },
+    {
+      "path": "galaxy-evidence/gdn-resident-padding-results-v1/raw/gdn-resident-padding-control-v1/terminal.json",
+      "bytes": 120,
+      "sha256": "9f85791347595514c80d0fdedd97b051adb58ac5fd91f5e44c72e8507194cb0b"
+    },
+    {
+      "path": "galaxy-evidence/gdn-resident-padding-results-v1/raw/gdn-resident-padding-control-v1/unit.log.gz",
+      "bytes": 1435,
+      "sha256": "bf2720028f02df80183a248c16a14c48ff2f8f38e762aa0726cdb53adbfd9d1a"
+    },
+    {
+      "path": "galaxy-evidence/gdn-resident-padding-results-v1/raw/gdn-resident-padding-control-v1/unit.xml.gz",
+      "bytes": 571,
+      "sha256": "bae5767082582ef56a91d57fb9f9f891c41ac9f52301e648c59598a47d09353e"
+    },
+    {
+      "path": "galaxy-evidence/gdn-resident-padding-results-v1/raw/gdn-resident-padding-control-v2/collection-unit.json",
+      "bytes": 148,
+      "sha256": "08fe684925071abced4ea0d432ac190e64a4091174bef9ee21a93b85a3e5a2d9"
+    },
+    {
+      "path": "galaxy-evidence/gdn-resident-padding-results-v1/raw/gdn-resident-padding-control-v2/launch-unit.json",
+      "bytes": 131,
+      "sha256": "973dd3ff3a23a90ef6d3123347d3a2aa337d25a4b0c98f099248e00d8dafe18b"
+    },
+    {
+      "path": "galaxy-evidence/gdn-resident-padding-results-v1/raw/gdn-resident-padding-control-v2/launch.json",
+      "bytes": 2009,
+      "sha256": "62cfe9c26a2277c11546a96097412d85c44faf79de22e2083f9b414fe5d23246"
+    },
+    {
+      "path": "galaxy-evidence/gdn-resident-padding-results-v1/raw/gdn-resident-padding-control-v2/run.log.gz",
+      "bytes": 6841,
+      "sha256": "fac28f0341b6c33fee9acb034b5814740601aa68c142be46e3e82467fead79d7"
+    },
+    {
+      "path": "galaxy-evidence/gdn-resident-padding-results-v1/raw/gdn-resident-padding-control-v2/run.py.gz",
+      "bytes": 1620,
+      "sha256": "39d08b2b268f181c7af97e5977604617400c9622a59b760511b5df8268b5daee"
+    },
+    {
+      "path": "galaxy-evidence/gdn-resident-padding-results-v1/raw/gdn-resident-padding-control-v2/source-manifest.json",
+      "bytes": 40786,
+      "sha256": "1d702556f7de715638f472ee6b159377981273c934949cd7c3798679e11d84ca"
+    },
+    {
+      "path": "galaxy-evidence/gdn-resident-padding-results-v1/raw/gdn-resident-padding-control-v2/terminal.json",
+      "bytes": 120,
+      "sha256": "9f85791347595514c80d0fdedd97b051adb58ac5fd91f5e44c72e8507194cb0b"
+    },
+    {
+      "path": "galaxy-evidence/gdn-resident-padding-results-v1/raw/gdn-resident-padding-control-v2/unit.log.gz",
+      "bytes": 1792,
+      "sha256": "36e7142f7804276cea1619908a344c2d49243d0658be430b381e44479750c54b"
+    },
+    {
+      "path": "galaxy-evidence/gdn-resident-padding-results-v1/raw/gdn-resident-padding-control-v2/unit.xml.gz",
+      "bytes": 782,
+      "sha256": "d22d62e823753f910c37b185ee7b1ab1c64ae6cca21100f644b3d5ade6195b50"
+    },
+    {
+      "path": "galaxy-evidence/gdn-resident-padding-results-v1/raw/gdn-resident-padding-source-v1/models/demos/qwen38_27b_qb2/tests/gdn_resident_padding.py.gz",
+      "bytes": 743,
+      "sha256": "dd13535376ea64e811af55f6e84f1b6321a3cd6a149aff7558a7c269b093a964"
+    },
+    {
+      "path": "galaxy-evidence/gdn-resident-padding-results-v1/raw/gdn-resident-padding-source-v1/models/demos/qwen38_27b_qb2/tests/test_gdn_resident_padding.py.gz",
+      "bytes": 3396,
+      "sha256": "b5d0a4ee38155171aaabf0e6743158ac5a73c295456808ad043e8b23e6fbc1fe"
+    },
+    {
+      "path": "galaxy-evidence/gdn-resident-padding-results-v1/raw/gdn-resident-padding-source-v1/models/demos/qwen38_27b_qb2/tests/unit/test_gdn_resident_padding.py.gz",
+      "bytes": 605,
+      "sha256": "4ae9a375e33bbbae6d38a0a008a7244cd2bf328574b00e4ac9dda61dc095ebdf"
+    },
+    {
+      "path": "galaxy-evidence/gdn-resident-padding-results-v1/raw/gdn-resident-padding-source-v2/models/demos/qwen38_27b_qb2/tests/gdn_resident_padding.py.gz",
+      "bytes": 1156,
+      "sha256": "3c29dda5aa1346b749e820feca63f2d89bf3e3ec94ddb63ddf22c7aa29600abd"
+    },
+    {
+      "path": "galaxy-evidence/gdn-resident-padding-results-v1/raw/gdn-resident-padding-source-v2/models/demos/qwen38_27b_qb2/tests/test_gdn_resident_padding.py.gz",
+      "bytes": 3445,
+      "sha256": "0390b174616fb87f9b2df0b4a23ceea649833d97419c0b2dea7a23b2247432a0"
+    },
+    {
+      "path": "galaxy-evidence/gdn-resident-padding-results-v1/raw/gdn-resident-padding-source-v2/models/demos/qwen38_27b_qb2/tests/unit/test_gdn_resident_padding.py.gz",
+      "bytes": 886,
+      "sha256": "0610983f5173c597484b601e2751524690e04c103c60ff67620f80b530a494b0"
+    },
+    {
+      "path": "galaxy-evidence/gdn-resident-padding-results-v1/raw/gdn-resident-padding-v1/hardware.xml.gz",
+      "bytes": 301,
+      "sha256": "02b52fd82b072ba924e30753ee6fe975eaa4b16419ecc2179d5ef4fe4ed43beb"
+    },
+    {
+      "path": "galaxy-evidence/gdn-resident-padding-results-v1/raw/gdn-resident-padding-v1/padding.json",
+      "bytes": 61005,
+      "sha256": "4d83a9adc1861352915f5a12329fcfde2266de6f6740eefc22ea537966a11d80"
+    },
+    {
+      "path": "galaxy-evidence/gdn-resident-padding-results-v1/raw/gdn-resident-padding-v1/queue.json",
+      "bytes": 1611,
+      "sha256": "0e84e9aa05b3904c6f78ee89766da6fed20312b431a6358f070e96a6c2f8a9d6"
+    },
+    {
+      "path": "galaxy-evidence/gdn-resident-padding-results-v1/raw/gdn-resident-padding-v1/reader-poison.cpp.gz",
+      "bytes": 1321,
+      "sha256": "426c44cef50f11939ea3bc5ae1feed6084014da4b8139939d4f974576ef79198"
+    },
+    {
+      "path": "galaxy-evidence/gdn-resident-padding-results-v1/raw/gdn-resident-padding-v1/reader-skip.cpp.gz",
+      "bytes": 1270,
+      "sha256": "b1e30bbbbde81e2756c53f66bf098632b4b7e76ebe0a99337559ac2e3289fe17"
+    },
+    {
+      "path": "galaxy-evidence/gdn-resident-padding-results-v1/raw/gdn-resident-padding-v1/reader-zero.cpp.gz",
+      "bytes": 1310,
+      "sha256": "a9691641e1004fc2c9be0a5d35df987a5cff36f3fcf514e5b14eaa10d537acdf"
+    },
+    {
+      "path": "galaxy-evidence/gdn-resident-padding-results-v1/raw/gdn-resident-padding-v2/hardware.xml.gz",
+      "bytes": 301,
+      "sha256": "c4dbe417403f1e6cc786e2c4e9d99a58350f77816c497e42ed99a6e9e69b656e"
+    },
+    {
+      "path": "galaxy-evidence/gdn-resident-padding-results-v1/raw/gdn-resident-padding-v2/padding.json",
+      "bytes": 110603,
+      "sha256": "ec04739ccf61f2818bc86676a4724e1f4c839d680e39234ad615c261670676ab"
+    },
+    {
+      "path": "galaxy-evidence/gdn-resident-padding-results-v1/raw/gdn-resident-padding-v2/queue.json",
+      "bytes": 1610,
+      "sha256": "b53e150fde10acc15c56fa32e68152b8b277562bfe19206731faa3f52fe4e08b"
+    },
+    {
+      "path": "galaxy-evidence/gdn-resident-padding-results-v1/raw/gdn-resident-padding-v2/reader-overlap_poison.cpp.gz",
+      "bytes": 1348,
+      "sha256": "a8dcede0e10bb9fa3299178f52b0d5c8098098f48ea12364a3762fe8d806d802"
+    },
+    {
+      "path": "galaxy-evidence/gdn-resident-padding-results-v1/raw/gdn-resident-padding-v2/reader-overlap_skip.cpp.gz",
+      "bytes": 1298,
+      "sha256": "9462debc3bee3968a634a6027bebd1e2b74f358acb905eab25377232add3fc9f"
+    },
+    {
+      "path": "galaxy-evidence/gdn-resident-padding-results-v1/raw/gdn-resident-padding-v2/reader-overlap_zero.cpp.gz",
+      "bytes": 1339,
+      "sha256": "d39c2905bb31dc7f020fa73e6daf142905ababfe64f24dbb4337b62900df6956"
+    },
+    {
+      "path": "galaxy-evidence/gdn-resident-padding-results-v1/raw/gdn-resident-padding-v2/reader-poison.cpp.gz",
+      "bytes": 1321,
+      "sha256": "426c44cef50f11939ea3bc5ae1feed6084014da4b8139939d4f974576ef79198"
+    },
+    {
+      "path": "galaxy-evidence/gdn-resident-padding-results-v1/raw/gdn-resident-padding-v2/reader-skip.cpp.gz",
+      "bytes": 1270,
+      "sha256": "b1e30bbbbde81e2756c53f66bf098632b4b7e76ebe0a99337559ac2e3289fe17"
+    },
+    {
+      "path": "galaxy-evidence/gdn-resident-padding-results-v1/raw/gdn-resident-padding-v2/reader-zero.cpp.gz",
+      "bytes": 1310,
+      "sha256": "a9691641e1004fc2c9be0a5d35df987a5cff36f3fcf514e5b14eaa10d537acdf"
+    },
+    {
+      "path": "galaxy-evidence/gdn-resident-padding-results-v1/summarize.py",
+      "bytes": 6309,
+      "sha256": "0afa8301f832936f65b2daf0697edbd27b971a6378b56097b4f0092d651070b5"
+    },
+    {
+      "path": "galaxy-evidence/gdn-resident-padding-results-v1/summary.json",
+      "bytes": 5467,
+      "sha256": "01d20eb02b91f91f7ff69a7b12d358ce0ffdad3c33cb091c32e2e6f02a01952a"
+    }
+  ]
+}

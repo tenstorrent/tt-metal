@@ -1,0 +1,160 @@
+{
+  "verified_raw_files": 39,
+  "native_build_and_exact_component_checks_passed": true,
+  "changing_input_steps": 64,
+  "timing_steps_per_arm": 2592,
+  "changing_input_4096_qualified": false,
+  "model_measured_tsu": 20.884562,
+  "full_model_qualified": false,
+  "promoted_to_serving": false,
+  "runs": [
+    {
+      "version": "v1",
+      "invocation_id": "a72b009911854d8a8c4bea511b1c0456",
+      "cpu_tests": 10,
+      "controller_seconds": 41.87422466278076,
+      "trace_allocation_warnings": [
+        "2026-10-11 11:34:29.015 | warning  |           Metal | Allocating device buffers is potentially unsafe due to the existence of an active trace. These buffers may be corrupted once a trace is executed if they are not released before then. Use the trace allocation tracker to verify. (allocator.cpp:140)"
+      ],
+      "terminal_observation": {
+        "MainPID": "0",
+        "Result": "success",
+        "ExecMainStatus": "0",
+        "LoadState": "not-found",
+        "ActiveState": "inactive",
+        "InvocationID": ""
+      }
+    },
+    {
+      "version": "v2",
+      "invocation_id": "69ab21eec71144b6a831c1fc76059da9",
+      "cpu_tests": 22,
+      "controller_seconds": 47.96474766731262,
+      "trace_allocation_warnings": [
+        "2026-10-11 11:54:11.555 | warning  |           Metal | Allocating device buffers is potentially unsafe due to the existence of an active trace. These buffers may be corrupted once a trace is executed if they are not released before then. Use the trace allocation tracker to verify. (allocator.cpp:140)"
+      ],
+      "terminal_observation": {
+        "MainPID": "0",
+        "Result": "success",
+        "ExecMainStatus": "0",
+        "LoadState": "not-found",
+        "ActiveState": "inactive",
+        "InvocationID": ""
+      }
+    }
+  ],
+  "rows": [
+    {
+      "version": "v1",
+      "batch": 16,
+      "variant": "skip",
+      "before_us": 81.29086108965566,
+      "after_us": 81.44971525325673,
+      "control_us": 81.3702881714562,
+      "candidate_us": 80.52810699155089,
+      "latency_change_pct": -1.0349983990848632,
+      "control_drift_pct": 0.19522379380830002,
+      "projected_48_layer_saved_ms": 0.04042469663545489,
+      "projected_b16_tsu": 20.90220902821618,
+      "selected": false
+    },
+    {
+      "version": "v1",
+      "batch": 32,
+      "variant": "skip",
+      "before_us": 142.8612831659848,
+      "after_us": 142.6302324034623,
+      "control_us": 142.74575778472354,
+      "candidate_us": 148.02711120864842,
+      "latency_change_pct": 3.699832139242809,
+      "control_drift_pct": 0.1618617366345487,
+      "projected_48_layer_saved_ms": -0.2535049643483944,
+      "projected_b16_tsu": null,
+      "selected": false
+    },
+    {
+      "version": "v2",
+      "batch": 16,
+      "variant": "skip",
+      "before_us": 81.58917808032129,
+      "after_us": 81.42089609464165,
+      "control_us": 81.50503708748147,
+      "candidate_us": 80.50335964071564,
+      "latency_change_pct": -1.228976125353698,
+      "control_drift_pct": 0.2064682033075084,
+      "projected_48_layer_saved_ms": 0.04808051744475961,
+      "projected_b16_tsu": 20.905554409599546,
+      "selected": false
+    },
+    {
+      "version": "v2",
+      "batch": 16,
+      "variant": "overlap_zero",
+      "before_us": 81.58917808032129,
+      "after_us": 81.42089609464165,
+      "control_us": 81.50503708748147,
+      "candidate_us": 82.14624813263072,
+      "latency_change_pct": 0.7867133959598371,
+      "control_drift_pct": 0.2064682033075084,
+      "projected_48_layer_saved_ms": -0.03077813016716391,
+      "projected_b16_tsu": 20.87114657654468,
+      "selected": false
+    },
+    {
+      "version": "v2",
+      "batch": 16,
+      "variant": "overlap_skip",
+      "before_us": 81.58917808032129,
+      "after_us": 81.42089609464165,
+      "control_us": 81.50503708748147,
+      "candidate_us": 80.13035494514043,
+      "latency_change_pct": -1.686622313741859,
+      "control_drift_pct": 0.2064682033075084,
+      "projected_48_layer_saved_ms": 0.0659847428323701,
+      "projected_b16_tsu": 20.913382241684857,
+      "selected": false
+    },
+    {
+      "version": "v2",
+      "batch": 32,
+      "variant": "skip",
+      "before_us": 143.52348807733506,
+      "after_us": 142.7447932655923,
+      "control_us": 143.13414067146368,
+      "candidate_us": 147.36721641384065,
+      "latency_change_pct": 2.9574186301877248,
+      "control_drift_pct": 0.5440314994660106,
+      "projected_48_layer_saved_ms": -0.20318763563409448,
+      "projected_b16_tsu": null,
+      "selected": false
+    },
+    {
+      "version": "v2",
+      "batch": 32,
+      "variant": "overlap_zero",
+      "before_us": 143.52348807733506,
+      "after_us": 142.7447932655923,
+      "control_us": 143.13414067146368,
+      "candidate_us": 157.7131188241765,
+      "latency_change_pct": 10.185535110156563,
+      "control_drift_pct": 0.5440314994660106,
+      "projected_48_layer_saved_ms": -0.6997909513302147,
+      "projected_b16_tsu": null,
+      "selected": false
+    },
+    {
+      "version": "v2",
+      "batch": 32,
+      "variant": "overlap_skip",
+      "before_us": 143.52348807733506,
+      "after_us": 142.7447932655923,
+      "control_us": 143.13414067146368,
+      "candidate_us": 164.4735157242394,
+      "latency_change_pct": 14.908654883223193,
+      "control_drift_pct": 0.5440314994660106,
+      "projected_48_layer_saved_ms": -1.0242900025332347,
+      "projected_b16_tsu": null,
+      "selected": false
+    }
+  ]
+}

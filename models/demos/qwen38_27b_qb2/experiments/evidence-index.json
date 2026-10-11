@@ -1,5 +1,5 @@
 {
-  "generated_at": "2026-10-11T11:17:23.856661+00:00",
+  "generated_at": "2026-10-11T11:59:48.811610+00:00",
   "scope": "Published evidence inventory including this publication. Status fields are copied, not inferred qualification. Git times are separate from execution times.",
   "entries": [
     {"path": "README.md", "bytes": 30203, "sha256": "b85d993bc79a95ad91141b82637ce4cc2c73dd92a8e5684cf398a046ce1da3d5"},
@@ -51,8 +51,8 @@
     {"path": "demo/watch_profile_export.py", "bytes": 9538, "sha256": "53957df9ecd0f8a40842bf0ae4eb5b27b4dd8b5325570760e8bf771f8ca6d78d"},
     {"path": "experiments/ACCURACY-ABLATIONS.md", "bytes": 2764, "sha256": "2c5c9643b8029a7d006e589f63917f0315a3c416f80854bca8e477ddb59fc241"},
     {"path": "experiments/B16_PRIORITIES.md", "bytes": 17244, "sha256": "31b4f7e1df095ea63b7fc9724f83a266a36ff14da57819a4b586af9120c37d62"},
-    {"path": "experiments/GDN-FUSION-PLAN.md", "bytes": 13686, "sha256": "ceacb01e9a69e49895adc4de7dbfa623821cd6d7f366081da8bac880e1d4abad"},
-    {"path": "experiments/LOGBOOK.md", "bytes": 225329, "sha256": "e95576f55b3cd2ce169a6a3317d5b6c2adaf4f344064442e3b73a3e7c07056ee"},
+    {"path": "experiments/GDN-FUSION-PLAN.md", "bytes": 14424, "sha256": "83ca1fe3a8200bfb6b106d55c36215d5f3a7b4655bc5b13f1c7f29eb150c0a64"},
+    {"path": "experiments/LOGBOOK.md", "bytes": 227821, "sha256": "8fce414dcf2623c87d3e1c1cc349450c0646eec9e13c025d11514054cc542dfd"},
     {"path": "experiments/OPERATOR-ROADMAP.md", "bytes": 31616, "sha256": "9ac4c5c951034f3bec2db2840d35d10d677cc2ccfc9b1fbb2f04b03fbaa2ee49"},
     {"path": "experiments/OPTIMIZATION-BACKLOG.md", "bytes": 7528, "sha256": "009bc4991575fd4d8db5919755cff62869812d808b7dc8a0a5f07bac75a4f2ef"},
     {"path": "experiments/PLAN-STATUS.md", "bytes": 38000, "sha256": "3d93b2fb775f683853a574a117aa4be1af4c9c03998dd82b95ef44da7c44d4a5"},
@@ -62,6 +62,7 @@
     {"path": "experiments/SPECULATIVE-DECODE-SCOPE.md", "bytes": 11574, "sha256": "6642a7ae769d648c310b8727033c7ee52fc97203d8288cc4d80357c94644d4a8"},
     {"path": "experiments/TT-LAB-REVIEW.md", "bytes": 5227, "sha256": "f77a67b7c25da23daef2937914e90057930c3f46a1a7c1e5a18ea99306ddc9d5"},
     {"path": "experiments/evidence-index-gdn-fused-20261011.json", "bytes": 6205, "sha256": "008b0f3c6b9bc4d670113f7c4b81e314450806d23f0060dbf2aa4b36e01eb9dc"},
+    {"path": "experiments/evidence-index-gdn-reader-20261011.json", "bytes": 10831, "sha256": "5bf8eb0cf5a80d27952dfb8d1c43714a945493c847fa9606772a9e63fe3595ef"},
     {"path": "experiments/evidence-index-operator-counters-20261011.json", "bytes": 26873, "sha256": "e6a7a528db1916b3a617fc7a28159c0d7d64ae904705cd343ea02d8e3003a394"},
     {"path": "experiments/speculative-decode-scope-v1.json", "bytes": 9472, "sha256": "17901d6126c2288063a803a5b33b6d5fe6336319d3fbe5380dd405a24898c28e", "scope": "Read-only speculative-decoding scoping, no device run or runtime promotion"},
     {"path": "galaxy-evidence/accuracy-head-v1/README.md", "bytes": 2757, "sha256": "76bc1b8c3256ba30ff90912a483a091a823f8a712b485349cd826ba88cd96e66"},

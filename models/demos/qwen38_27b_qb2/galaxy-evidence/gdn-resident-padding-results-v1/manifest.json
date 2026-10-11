@@ -1,0 +1,239 @@
+{
+  "collected_at": "2026-10-11T11:56:03.774190+00:00",
+  "artifacts": [
+    {
+      "original": "gdn-resident-padding-control-v1/collection-unit.json",
+      "stored": "raw/gdn-resident-padding-control-v1/collection-unit.json",
+      "bytes": 148,
+      "sha256": "08fe684925071abced4ea0d432ac190e64a4091174bef9ee21a93b85a3e5a2d9"
+    },
+    {
+      "original": "gdn-resident-padding-control-v1/launch-unit.json",
+      "stored": "raw/gdn-resident-padding-control-v1/launch-unit.json",
+      "bytes": 131,
+      "sha256": "52f81c161fce6a8967f3f115eec93c6555894e3ac15b9b77d7c4ff9ed1d2408d"
+    },
+    {
+      "original": "gdn-resident-padding-control-v1/launch.json",
+      "stored": "raw/gdn-resident-padding-control-v1/launch.json",
+      "bytes": 2009,
+      "sha256": "bd14526010ebc858f53aaf832c7cc9ef60385debef7707a3b383ae81c5e314ca"
+    },
+    {
+      "original": "gdn-resident-padding-control-v1/run.log",
+      "stored": "raw/gdn-resident-padding-control-v1/run.log.gz",
+      "bytes": 41925,
+      "sha256": "d80ce2d8862dfe9625111f0af4c7a2434553e01273633f34130ff6f074b4e5ed"
+    },
+    {
+      "original": "gdn-resident-padding-control-v1/run.py",
+      "stored": "raw/gdn-resident-padding-control-v1/run.py.gz",
+      "bytes": 3516,
+      "sha256": "0c3e000de59863110db4d4a4b235a75dbcea55b174db33d42ab7b3465269090e"
+    },
+    {
+      "original": "gdn-resident-padding-control-v1/source-manifest.json",
+      "stored": "raw/gdn-resident-padding-control-v1/source-manifest.json",
+      "bytes": 40786,
+      "sha256": "30aafd5c508f11e431e08f495978bfa35509672fc85bf92de097d9df1653417b"
+    },
+    {
+      "original": "gdn-resident-padding-control-v1/terminal.json",
+      "stored": "raw/gdn-resident-padding-control-v1/terminal.json",
+      "bytes": 120,
+      "sha256": "9f85791347595514c80d0fdedd97b051adb58ac5fd91f5e44c72e8507194cb0b"
+    },
+    {
+      "original": "gdn-resident-padding-control-v1/unit.log",
+      "stored": "raw/gdn-resident-padding-control-v1/unit.log.gz",
+      "bytes": 9606,
+      "sha256": "637c0c62d1aa73591ea81206e140f096fa66a1ebafd2b2aa5ff56580fd729a99"
+    },
+    {
+      "original": "gdn-resident-padding-control-v1/unit.xml",
+      "stored": "raw/gdn-resident-padding-control-v1/unit.xml.gz",
+      "bytes": 4805,
+      "sha256": "85cc485b668370db095a15598c9a20325257fff4eac3c0b18a3cb7b6b63d737a"
+    },
+    {
+      "original": "gdn-resident-padding-source-v1/models/demos/qwen38_27b_qb2/tests/gdn_resident_padding.py",
+      "stored": "raw/gdn-resident-padding-source-v1/models/demos/qwen38_27b_qb2/tests/gdn_resident_padding.py.gz",
+      "bytes": 1425,
+      "sha256": "95106363e487f6fccefae1c31fcd16a98c0f74677fa5cb2ebddda3bf76df6688"
+    },
+    {
+      "original": "gdn-resident-padding-source-v1/models/demos/qwen38_27b_qb2/tests/test_gdn_resident_padding.py",
+      "stored": "raw/gdn-resident-padding-source-v1/models/demos/qwen38_27b_qb2/tests/test_gdn_resident_padding.py.gz",
+      "bytes": 10707,
+      "sha256": "7f1d7e684e47893c13f31865194e2ed43db348475d1c9b09e2374afb45cf390b"
+    },
+    {
+      "original": "gdn-resident-padding-source-v1/models/demos/qwen38_27b_qb2/tests/unit/test_gdn_resident_padding.py",
+      "stored": "raw/gdn-resident-padding-source-v1/models/demos/qwen38_27b_qb2/tests/unit/test_gdn_resident_padding.py.gz",
+      "bytes": 1331,
+      "sha256": "7a63ca066e8a4eedbfe77fe2fe07ab6644214dc0d4ad6e14bedca2e15f061f54"
+    },
+    {
+      "original": "gdn-resident-padding-v1/hardware.xml",
+      "stored": "raw/gdn-resident-padding-v1/hardware.xml.gz",
+      "bytes": 543,
+      "sha256": "c06206806b7c2f0258105527bc2c7dba8ecae7364b252455bbaf385e0c86226a"
+    },
+    {
+      "original": "gdn-resident-padding-v1/padding.json",
+      "stored": "raw/gdn-resident-padding-v1/padding.json",
+      "bytes": 61005,
+      "sha256": "4d83a9adc1861352915f5a12329fcfde2266de6f6740eefc22ea537966a11d80"
+    },
+    {
+      "original": "gdn-resident-padding-v1/queue.json",
+      "stored": "raw/gdn-resident-padding-v1/queue.json",
+      "bytes": 1611,
+      "sha256": "0e84e9aa05b3904c6f78ee89766da6fed20312b431a6358f070e96a6c2f8a9d6"
+    },
+    {
+      "original": "gdn-resident-padding-v1/reader-poison.cpp",
+      "stored": "raw/gdn-resident-padding-v1/reader-poison.cpp.gz",
+      "bytes": 4445,
+      "sha256": "c0331efe2f5702511c427a9466c741abfbc112449d3cde2a37f64a6efe02fedc"
+    },
+    {
+      "original": "gdn-resident-padding-v1/reader-skip.cpp",
+      "stored": "raw/gdn-resident-padding-v1/reader-skip.cpp.gz",
+      "bytes": 4295,
+      "sha256": "7fc16057874e7747e8227de67b5abe6301c46423b31623949442a7adb78c7274"
+    },
+    {
+      "original": "gdn-resident-padding-v1/reader-zero.cpp",
+      "stored": "raw/gdn-resident-padding-v1/reader-zero.cpp.gz",
+      "bytes": 4471,
+      "sha256": "16d7813672d8fb33bffa1f10aecc38a76769d00809f5dcf75295ba55106ecd90"
+    },
+    {
+      "original": "gdn-resident-padding-control-v2/collection-unit.json",
+      "stored": "raw/gdn-resident-padding-control-v2/collection-unit.json",
+      "bytes": 148,
+      "sha256": "08fe684925071abced4ea0d432ac190e64a4091174bef9ee21a93b85a3e5a2d9"
+    },
+    {
+      "original": "gdn-resident-padding-control-v2/launch-unit.json",
+      "stored": "raw/gdn-resident-padding-control-v2/launch-unit.json",
+      "bytes": 131,
+      "sha256": "973dd3ff3a23a90ef6d3123347d3a2aa337d25a4b0c98f099248e00d8dafe18b"
+    },
+    {
+      "original": "gdn-resident-padding-control-v2/launch.json",
+      "stored": "raw/gdn-resident-padding-control-v2/launch.json",
+      "bytes": 2009,
+      "sha256": "62cfe9c26a2277c11546a96097412d85c44faf79de22e2083f9b414fe5d23246"
+    },
+    {
+      "original": "gdn-resident-padding-control-v2/run.log",
+      "stored": "raw/gdn-resident-padding-control-v2/run.log.gz",
+      "bytes": 50771,
+      "sha256": "d36c65775799fe7b58af7b2b369bf8f8735e38e55b9ea23c8432ab29ab4ff928"
+    },
+    {
+      "original": "gdn-resident-padding-control-v2/run.py",
+      "stored": "raw/gdn-resident-padding-control-v2/run.py.gz",
+      "bytes": 3516,
+      "sha256": "ee74fa8919a1a208d59be2b8d50be90df17b6dbf1d760cc4b8ee26463b959cfc"
+    },
+    {
+      "original": "gdn-resident-padding-control-v2/source-manifest.json",
+      "stored": "raw/gdn-resident-padding-control-v2/source-manifest.json",
+      "bytes": 40786,
+      "sha256": "1d702556f7de715638f472ee6b159377981273c934949cd7c3798679e11d84ca"
+    },
+    {
+      "original": "gdn-resident-padding-control-v2/terminal.json",
+      "stored": "raw/gdn-resident-padding-control-v2/terminal.json",
+      "bytes": 120,
+      "sha256": "9f85791347595514c80d0fdedd97b051adb58ac5fd91f5e44c72e8507194cb0b"
+    },
+    {
+      "original": "gdn-resident-padding-control-v2/unit.log",
+      "stored": "raw/gdn-resident-padding-control-v2/unit.log.gz",
+      "bytes": 18658,
+      "sha256": "2f8b4efd58ed8367b014c60a72632c323946c34710ce54e57c7f520bd72fdd7b"
+    },
+    {
+      "original": "gdn-resident-padding-control-v2/unit.xml",
+      "stored": "raw/gdn-resident-padding-control-v2/unit.xml.gz",
+      "bytes": 10357,
+      "sha256": "b031bc67c1a192f0e7fda8d6178791c89d7c74cd4c4f07863b92d1e86f31fbe2"
+    },
+    {
+      "original": "gdn-resident-padding-source-v2/models/demos/qwen38_27b_qb2/tests/gdn_resident_padding.py",
+      "stored": "raw/gdn-resident-padding-source-v2/models/demos/qwen38_27b_qb2/tests/gdn_resident_padding.py.gz",
+      "bytes": 2638,
+      "sha256": "a4c0d0f403950bedd2696900d3aa2aa362af7c197f01344e766acabd89da19c0"
+    },
+    {
+      "original": "gdn-resident-padding-source-v2/models/demos/qwen38_27b_qb2/tests/test_gdn_resident_padding.py",
+      "stored": "raw/gdn-resident-padding-source-v2/models/demos/qwen38_27b_qb2/tests/test_gdn_resident_padding.py.gz",
+      "bytes": 10957,
+      "sha256": "33bdd0cbb88335bd4d10f57c307afbdf034db0911180cfb192eb9ea1e4498f09"
+    },
+    {
+      "original": "gdn-resident-padding-source-v2/models/demos/qwen38_27b_qb2/tests/unit/test_gdn_resident_padding.py",
+      "stored": "raw/gdn-resident-padding-source-v2/models/demos/qwen38_27b_qb2/tests/unit/test_gdn_resident_padding.py.gz",
+      "bytes": 2313,
+      "sha256": "429496f6b724795e840e1d23d23d9db4c58f3ce87eb85b164ae4dbaa044491e6"
+    },
+    {
+      "original": "gdn-resident-padding-v2/hardware.xml",
+      "stored": "raw/gdn-resident-padding-v2/hardware.xml.gz",
+      "bytes": 543,
+      "sha256": "82cc5d4b9104da0ca04a30c66635a0b054ae631d55ba90a1c0a35f246c97ffc1"
+    },
+    {
+      "original": "gdn-resident-padding-v2/padding.json",
+      "stored": "raw/gdn-resident-padding-v2/padding.json",
+      "bytes": 110603,
+      "sha256": "ec04739ccf61f2818bc86676a4724e1f4c839d680e39234ad615c261670676ab"
+    },
+    {
+      "original": "gdn-resident-padding-v2/queue.json",
+      "stored": "raw/gdn-resident-padding-v2/queue.json",
+      "bytes": 1610,
+      "sha256": "b53e150fde10acc15c56fa32e68152b8b277562bfe19206731faa3f52fe4e08b"
+    },
+    {
+      "original": "gdn-resident-padding-v2/reader-overlap_poison.cpp",
+      "stored": "raw/gdn-resident-padding-v2/reader-overlap_poison.cpp.gz",
+      "bytes": 4534,
+      "sha256": "f87bbfa34a0ff8109395020771010222e0c9e0d730e037ba5d1f97899a74083b"
+    },
+    {
+      "original": "gdn-resident-padding-v2/reader-overlap_skip.cpp",
+      "stored": "raw/gdn-resident-padding-v2/reader-overlap_skip.cpp.gz",
+      "bytes": 4384,
+      "sha256": "3d2ad5337c0f04fe58d6906048cbc1cbdc9883f91bf8fef358edc0bee9bdb231"
+    },
+    {
+      "original": "gdn-resident-padding-v2/reader-overlap_zero.cpp",
+      "stored": "raw/gdn-resident-padding-v2/reader-overlap_zero.cpp.gz",
+      "bytes": 4560,
+      "sha256": "09d5663cb8567cf169650ed9d44b142bcc5fc9c645f4c230158766e06ec1b3bf"
+    },
+    {
+      "original": "gdn-resident-padding-v2/reader-poison.cpp",
+      "stored": "raw/gdn-resident-padding-v2/reader-poison.cpp.gz",
+      "bytes": 4445,
+      "sha256": "c0331efe2f5702511c427a9466c741abfbc112449d3cde2a37f64a6efe02fedc"
+    },
+    {
+      "original": "gdn-resident-padding-v2/reader-skip.cpp",
+      "stored": "raw/gdn-resident-padding-v2/reader-skip.cpp.gz",
+      "bytes": 4295,
+      "sha256": "7fc16057874e7747e8227de67b5abe6301c46423b31623949442a7adb78c7274"
+    },
+    {
+      "original": "gdn-resident-padding-v2/reader-zero.cpp",
+      "stored": "raw/gdn-resident-padding-v2/reader-zero.cpp.gz",
+      "bytes": 4471,
+      "sha256": "16d7813672d8fb33bffa1f10aecc38a76769d00809f5dcf75295ba55106ecd90"
+    }
+  ]
+}

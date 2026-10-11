@@ -2738,3 +2738,41 @@ the unchanged host originals and compressed raw Python receipts before indexing.
 All 21 original artifact hashes and the five native-tested implementation hashes
 then verified. Hardware results and model source were unaffected. The follow-up
 publication also includes the regenerated evidence index.
+
+## October 11, 11:34-11:54 UTC: resident V padding and state-read overlap
+
+Implemented isolated source variants in the existing recovery worktree, leaving
+the shared production reader and descriptor ABI unchanged. v1 compares clearing
+all V rows with skipping unused rows; a quiet-NaN variant tests the row-zero-only
+consumption assumption. v2 additionally completes vector DMA before issuing
+state reads, allowing vector formatting while state DMA can be in flight. It
+retains a state-read barrier before publication, the same 120 recurrence cores,
+two-item lookahead, FP32 arithmetic and writer ownership.
+
+Persistent bounded services ran after the earlier fusion job was terminal and
+the hardware lock was free. v1 completed at 11:34:50 UTC: 10 CPU checks, native
+compile and B16/B32 physical TP4 tests passed. v2 completed at 11:54:37 UTC:
+22 CPU checks and the expanded native test passed. Both check cancellation,
+64 changing inputs, distinct retained buffers, read-only inputs, CB wraps and
+all four independent ranks against exact baseline plus dense FP32 reference.
+Before/candidate/after timing arms have identical final state/output after
+2592 steps each. No reset; both closed cleanly.
+
+v1 B16 recurrence 81.370 -> 80.528 us; B32 142.746 -> 148.027 us. v2 B16 baseline
+81.505 us, skip 80.503, overlap-zero 82.146, overlap-skip 80.130. B32 baseline
+143.134 us, skip 147.367, overlap-zero 157.713, overlap-skip 164.474. Control
+drift spans 0.16-0.54%. Best B16 projection is only 0.066 ms/model-step or
++0.029 TSU; B32 regressions are material. No production change, longer 4K
+qualification, full-model rerun or GPQA for this result. Current model remains
+20.884562 TSU. Extra barriers/read pacing are hypotheses for regression,
+not proven causes. Clearing V padding is not a large standalone opportunity.
+
+Both logs contain the native trace-allocation warning; output agreement is not
+allocation-tracker qualification. At final collection the transient units were
+already garbage-collected; terminal controller/JUnit/native logs establish
+success, not an absent unit's default Result field. All 39 raw receipts and
+both original test versions were sealed, with raw Python/C++ compressed before
+formatting. The reproducible report is
+[resident reader results](../galaxy-evidence/gdn-resident-padding-results-v1/README.md).
+The next implementation priority is projection/collective dataflow, including
+the complete traced boundary, rather than another unchanged 62-case knob sweep.
