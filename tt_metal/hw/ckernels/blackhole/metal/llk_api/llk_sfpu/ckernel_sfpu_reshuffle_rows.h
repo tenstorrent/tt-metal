@@ -35,8 +35,7 @@ namespace sfpu {
  * - Employs transpose operations to work around SFPLOAD/SFPSTORE 4-row granularity constraints
  * - Processes both even/odd columns simultaneously using +2 offset addressing
  *
- * @param idx_addr: L1 address of the mask tile containing destination row mappings (uint8_t[32] at idx_addr + 16, read
- *                  as 32-bit words, so idx_addr is 4-byte aligned)
+ * @param idx_addr: L1 address of the mask tile with the destination rows (uint8_t[32] at idx_addr + 16, 4-byte aligned)
  */
 inline void reshuffle_rows_init() { math::reset_counters(p_setrwc::SET_ABD_F); }
 
@@ -44,10 +43,10 @@ namespace reshuffle_rows_detail {
 
 constexpr std::uint32_t output_tile_offset = 64;
 static_assert(output_tile_offset % 32 == 0, "the +2, +16 and +18 offsets are ORed into the output row address");
-constexpr std::uint32_t rows_per_group = 4;  // the rows of one SFPLOAD
+constexpr std::uint32_t rows_per_group = 4;
 constexpr std::uint32_t num_groups = 32 / rows_per_group;
 
-// The 4-row group of a row; bits 0, 1 and 4 are clear, so the +2, +16 and +18 column and face offsets can be ORed in.
+// Bits 0, 1 and 4 of a group address are clear, so the +2, +16 and +18 column and face offsets can be ORed in.
 constexpr std::uint32_t row_group_addr(const std::uint32_t row) { return (row & ~0x3u) + (row & 0x10u); }
 
 constexpr std::uint32_t word(const int encoding) { return static_cast<std::uint32_t>(encoding); }
@@ -55,42 +54,32 @@ constexpr std::uint32_t word(const int encoding) { return static_cast<std::uint3
 template <std::uint32_t ROW_IN_GROUP>
 inline __attribute__((always_inline)) void reshuffle_row(const std::uint32_t input_row_addr, const std::uint32_t idx_word) {
     const std::uint32_t dst_row = (idx_word >> (8 * ROW_IN_GROUP)) & 0xFFu;
-    // Skip if dst_row is 255, i.e. mask is invalid and we don't want to process the current row
     if (dst_row >= 32) {
         return;
     }
     const std::uint32_t output_row_addr = output_tile_offset + row_group_addr(dst_row);
     constexpr std::uint32_t input_row_lreg = p_sfpu::LREG0 + ROW_IN_GROUP;
-    // The SFPADD's VC and VD fields: the output register that holds the destination row after the transpose
+    // The SFPADD's VC and VD fields: the register holding the destination row after the transpose
     const std::uint32_t output_row_lreg_fields = (dst_row & 0x3u) * ((1u << 8) | (1u << 4));
 
-    // load in the input row and output row
-    TT_INSN(word(TT_OP_SFPLOAD(p_sfpu::LREG0, 0, ADDR_MOD_7, 0)) | input_row_addr);         // Face 0/2, even columns
-    TT_INSN(word(TT_OP_SFPLOAD(p_sfpu::LREG1, 0, ADDR_MOD_7, 2)) | input_row_addr);         // Face 0/2, odd columns
-    TT_INSN(word(TT_OP_SFPLOAD(p_sfpu::LREG2, 0, ADDR_MOD_7, 16)) | input_row_addr);        // Face 1/3, even columns
-    TT_INSN(word(TT_OP_SFPLOAD(p_sfpu::LREG3, 0, ADDR_MOD_7, 18)) | input_row_addr);        // Face 1/3, odd columns
-    TT_INSN(word(TT_OP_SFPLOAD(p_sfpu::LREG4, 0, ADDR_MOD_7, 0)) | output_row_addr);        // Face 0/2, even columns
-    TT_INSN(word(TT_OP_SFPLOAD(p_sfpu::LREG5, 0, ADDR_MOD_7, 2)) | output_row_addr);        // Face 0/2, odd columns
-    TT_INSN(word(TT_OP_SFPLOAD(p_sfpu::LREG6, 0, ADDR_MOD_7, 16)) | output_row_addr);       // Face 1/3, even columns
-    TT_INSN(word(TT_OP_SFPLOAD(p_sfpu::LREG7, 0, ADDR_MOD_7, 18)) | output_row_addr);       // Face 1/3, odd columns
-    // TRANSPOSE #1: Rearrange loaded 4-row blocks to isolate target rows
-    // SFPLOAD loads 4 consecutive rows (e.g., rows 4-7) into LREG0-3, but we only want one specific row (e.g., row
-    // 5) This transpose shuffles the register contents so row 5 data becomes accessible via input_row_lreg[1]
-    TTI_SFPTRANSP(0, 0, 0, 0);  // Puts the input row into input_row_lreg and the output row into LREG4 + dst_row % 4
+    TT_INSN(word(TT_OP_SFPLOAD(p_sfpu::LREG0, 0, ADDR_MOD_7, 0)) | input_row_addr);
+    TT_INSN(word(TT_OP_SFPLOAD(p_sfpu::LREG1, 0, ADDR_MOD_7, 2)) | input_row_addr);
+    TT_INSN(word(TT_OP_SFPLOAD(p_sfpu::LREG2, 0, ADDR_MOD_7, 16)) | input_row_addr);
+    TT_INSN(word(TT_OP_SFPLOAD(p_sfpu::LREG3, 0, ADDR_MOD_7, 18)) | input_row_addr);
+    TT_INSN(word(TT_OP_SFPLOAD(p_sfpu::LREG4, 0, ADDR_MOD_7, 0)) | output_row_addr);
+    TT_INSN(word(TT_OP_SFPLOAD(p_sfpu::LREG5, 0, ADDR_MOD_7, 2)) | output_row_addr);
+    TT_INSN(word(TT_OP_SFPLOAD(p_sfpu::LREG6, 0, ADDR_MOD_7, 16)) | output_row_addr);
+    TT_INSN(word(TT_OP_SFPLOAD(p_sfpu::LREG7, 0, ADDR_MOD_7, 18)) | output_row_addr);
+    // SFPLOAD brings in 4 consecutive rows; the transpose makes the wanted input and output rows addressable.
+    TTI_SFPTRANSP(0, 0, 0, 0);
 
-    // ACCUMULATION: Perform gradient accumulation for embedding backward pass
-    // Implements: output[dst_row] += input[row] (scatter-add operation)
-    // Uses LCONST_1 (value 1.0) as multiplier: dst = 1.0 * src + dst
     TT_INSN(word(TT_OP_SFPADD(input_row_lreg, p_sfpu::LCONST_1, p_sfpu::LREG4, p_sfpu::LREG4, 0)) | output_row_lreg_fields);
 
-    // TRANSPOSE #2: Rearrange accumulated results back to 4-row storage format
-    // Prepares the computed result for SFPSTORE, which expects data in LREG4-7 positions
-    // This undoes the first transpose to match the expected storage layout
-    TTI_SFPTRANSP(0, 0, 0, 0);  // Puts desired output row back into LREG4-7 for storage
-    TT_INSN(word(TT_OP_SFPSTORE(p_sfpu::LREG4, 0, ADDR_MOD_7, 0)) | output_row_addr);       // Face 0/2, even columns
-    TT_INSN(word(TT_OP_SFPSTORE(p_sfpu::LREG5, 0, ADDR_MOD_7, 2)) | output_row_addr);       // Face 0/2, odd columns
-    TT_INSN(word(TT_OP_SFPSTORE(p_sfpu::LREG6, 0, ADDR_MOD_7, 16)) | output_row_addr);      // Face 1/3, even columns
-    TT_INSN(word(TT_OP_SFPSTORE(p_sfpu::LREG7, 0, ADDR_MOD_7, 18)) | output_row_addr);      // Face 1/3, odd columns
+    TTI_SFPTRANSP(0, 0, 0, 0);
+    TT_INSN(word(TT_OP_SFPSTORE(p_sfpu::LREG4, 0, ADDR_MOD_7, 0)) | output_row_addr);
+    TT_INSN(word(TT_OP_SFPSTORE(p_sfpu::LREG5, 0, ADDR_MOD_7, 2)) | output_row_addr);
+    TT_INSN(word(TT_OP_SFPSTORE(p_sfpu::LREG6, 0, ADDR_MOD_7, 16)) | output_row_addr);
+    TT_INSN(word(TT_OP_SFPSTORE(p_sfpu::LREG7, 0, ADDR_MOD_7, 18)) | output_row_addr);
 }
 
 }  // namespace reshuffle_rows_detail
@@ -99,12 +88,6 @@ template <bool APPROXIMATION_MODE>
 inline void calculate_reshuffle_rows(uint idx_addr) {
     // clr DEST tile 1
     // TODO (Radomir): Add optional clear that is more optimal using tile copy
-    // for (uint row=0; row < 32; row+=4) {
-    //     TT_SFPSTORE(p_sfpu::LCONST_0, 0, ADDR_MOD_7, reshuffle_rows_detail::output_tile_offset + row);
-    //     TT_SFPSTORE(p_sfpu::LCONST_0, 0, ADDR_MOD_7, reshuffle_rows_detail::output_tile_offset + row + 2);
-    //     TT_SFPSTORE(p_sfpu::LCONST_0, 0, ADDR_MOD_7, reshuffle_rows_detail::output_tile_offset + row + 32);
-    //     TT_SFPSTORE(p_sfpu::LCONST_0, 0, ADDR_MOD_7, reshuffle_rows_detail::output_tile_offset + row + 34);
-    // }
 
     // Skip tile header, hence + 16:
     const volatile tt_l1_ptr std::uint32_t* idx_words =

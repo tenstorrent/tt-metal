@@ -1,7 +1,6 @@
 # SPDX-FileCopyrightText: © 2026 Tenstorrent AI ULC
 # SPDX-License-Identifier: Apache-2.0
-"""reshuffle_rows scatter-add output[idx[i]] += input[i] over a tile, the indices in the first 32 bytes
-of buffer_B[0] (255 skips a row); small integers keep every sum exact in bf16."""
+"""reshuffle_rows scatter-add output[idx[i]] += input[i] over a tile (255 skips a row)."""
 
 import torch
 from helpers.format_config import DataFormat
@@ -16,8 +15,7 @@ from helpers.tilize_untilize import tilize_block, untilize_block
 FORMATS = input_output_formats([DataFormat.Float16_b], same=True)
 SKIP = 255
 TILE_DIMS = [TILE_DIM, TILE_DIM]
-# Inputs and accumulators are integers in [-MAX_ABS_VALUE, MAX_ABS_VALUE]: 32 accumulations stay
-# below 2^8, so every partial sum is exact in bf16.
+# Small integers keep every partial sum exact in bf16.
 MAX_ABS_VALUE = 4
 
 
@@ -25,7 +23,7 @@ def _index_patterns():
     generator = torch.Generator().manual_seed(7)
     random_permutation = torch.randperm(TILE_DIM, generator=generator).tolist()
     mixed = [SKIP if r % 5 == 0 else (r * 7) % 11 for r in range(TILE_DIM)]
-    # 31, 32, 33 and 47 first, then in-range rows between indices 34 to 47, which skip their rows like 255.
+    # Indices of 32 and above skip their rows like 255.
     out_of_range = [31, 32, 33, 47] + [
         32 + r // 2 if r % 2 else r for r in range(4, TILE_DIM)
     ]
@@ -45,8 +43,7 @@ INDEX_PATTERNS = _index_patterns()
 
 
 def _index_tile(indices, torch_format):
-    """A bf16 tile whose first 32 bytes in L1 are the 32 index bytes: two bytes per 16-bit
-    element, little endian (row 2k in the low half, row 2k + 1 in the high half)."""
+    """A bf16 tile whose first 32 bytes in L1 are the index bytes, two per 16-bit element, little endian."""
     words = torch.zeros(ELEMENTS_PER_TILE, dtype=torch.int16)
     for k in range(TILE_DIM // 2):
         low, high = indices[2 * k], indices[2 * k + 1]

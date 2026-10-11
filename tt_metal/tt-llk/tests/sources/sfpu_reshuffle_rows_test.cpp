@@ -2,8 +2,8 @@
 //
 // SPDX-License-Identifier: Apache-2.0
 
-// Driver for calculate_reshuffle_rows (llk_sfpu/ckernel_sfpu_reshuffle_rows.h): buffer_A[0] is the input (DEST tile 0),
-// buffer_B[1] the output accumulated in place (DEST tile 1, packed), buffer_B[0] the 32 index bytes (255 skips the row).
+// Driver for calculate_reshuffle_rows: buffer_A[0] is the input, buffer_B[1] the output accumulated in place, buffer_B[0]
+// the 32 index bytes.
 
 #include <cstdint>
 
@@ -11,7 +11,6 @@
 #include "llk_defs.h"
 #include "params.h"
 
-// Globals required by the test framework.
 std::uint32_t unp_cfg_context          = 0;
 std::uint32_t pack_sync_tile_dst_ptr   = 0;
 std::uint32_t math_sync_tile_dst_index = 0;
@@ -34,7 +33,6 @@ void run_kernel(RUNTIME_PARAMETERS params)
     _llk_unpack_A_init_<BroadcastType::NONE, false, EltwiseBinaryReuseDestType::NONE, unpack_to_dest>(
         0 /* transpose_of_faces */, 0 /* within_face_16x16_transpose */, ckernel::DEFAULT_TENSOR_SHAPE, formats.unpack_A_src, formats.unpack_A_dst);
 
-    // The input tile, then the output tile to accumulate into; the index tile buffer_B[0] is read by the math RISC.
     _llk_unpack_A_<BroadcastType::NONE, false, EltwiseBinaryReuseDestType::NONE, unpack_to_dest>(
         L1_ADDRESS(params.buffer_A[0]), formats.unpack_A_src, formats.unpack_A_dst);
     _llk_unpack_A_<BroadcastType::NONE, false, EltwiseBinaryReuseDestType::NONE, unpack_to_dest>(
@@ -71,7 +69,6 @@ void run_kernel(RUNTIME_PARAMETERS params)
     _llk_math_eltwise_unary_datacopy_<DataCopyType::A2D, DST_SYNC, is_fp32_dest_acc_en, BroadcastType::NONE, unpack_to_dest>(
         1 /* dst_index */, formats.math, formats.math);
 
-    // reshuffle_rows_tile_init, then the body (RC_custom); the body reads the indices 16 bytes past the address it is given.
     _llk_math_eltwise_unary_sfpu_init_<SfpuType::reshuffle_rows>();
     sfpu::reshuffle_rows_init();
     _llk_math_eltwise_unary_sfpu_params_(
