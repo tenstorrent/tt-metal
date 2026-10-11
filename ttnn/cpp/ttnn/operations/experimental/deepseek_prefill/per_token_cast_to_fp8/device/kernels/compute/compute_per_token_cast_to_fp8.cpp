@@ -414,6 +414,43 @@ void kernel_main() {
     for (uint32_t unit = 0; unit < num_blocks; ++unit) {
         cb_src.wait_front(unit_tiles);
 
+#ifdef Q_SFPU_AMAX
+        // A+B in DEST: copy -> |x| -> SFPU row max (column 0) -> pow2 1/scale; no |x| round trip through L1.
+        cb_scale_tiles.reserve_back(unit_tiles);
+        cb_inv_scale_tiles.reserve_back(unit_tiles);
+        reconfig_full_operand_srca(cb_src_id);
+        pack_reconfig_data_format(cb_inv_scale_tiles_id);
+        for (uint32_t c = 0; c < Q_UNIT; ++c) {
+            copy_init(cb_src_id);
+            tile_regs_acquire();
+            for (uint32_t k = 0; k < tiles_per_block; ++k) {
+                copy_tile(cb_src_id, c * tiles_per_block + k, k);
+            }
+            abs_tile_init();
+            for (uint32_t k = 0; k < tiles_per_block; ++k) {
+                abs_tile(k);
+            }
+            sfpu_reduce_init<PoolType::MAX, DataFormat::Float32>();
+            for (uint32_t k = 0; k < tiles_per_block; ++k) {
+                sfpu_reduce<PoolType::MAX, DataFormat::Float32, ReduceDim::REDUCE_ROW>(k);
+            }
+            MATH((SFPU_UNARY_INIT(unused)));
+            for (uint32_t k = 0; k < tiles_per_block; ++k) {
+                MATH((pow2_inv_scale_tile(k, clamp_min_bits, inv_448_bits)));
+            }
+            tile_regs_commit();
+            tile_regs_wait();
+            for (uint32_t k = 0; k < tiles_per_block; ++k) {
+                pack_tile(k, cb_inv_scale_tiles_id);
+            }
+            for (uint32_t k = 0; k < tiles_per_block; ++k) {
+                pack_tile(k, cb_scale_tiles_id);
+            }
+            tile_regs_release();
+        }
+        cb_scale_tiles.push_back(unit_tiles);
+        cb_inv_scale_tiles.push_back(unit_tiles);
+#else
         // A: |x|
         reconfig_full_operand_srca(cb_src_id);
         pack_reconfig_data_format(cb_abs_id);
@@ -466,6 +503,7 @@ void kernel_main() {
         cb_scale_tiles.push_back(unit_tiles);
         cb_inv_scale_tiles.push_back(unit_tiles);
         cb_abs.pop_front(unit_tiles);
+#endif
 
         // C: x * (1/scale) per row -> e4m3 rows, each chunk at its column of the unit-wide output rows
         cb_inv_scale_tiles.wait_front(unit_tiles);

@@ -406,6 +406,8 @@ ttnn::device_operation::CachedProgram<PerTokenCastToFp8SharedVariables> create_p
             // Units of 2 chunks (256 columns) of one tile-row: 256-B row writes, and enough units per core to even
             // out the work (K3 Q2: 1 chunk 102 us, 2 chunks 91 us, 4 chunks 92 us, 7 chunks 100 us).
             uint32_t q_unit = 2;
+            // |x| and the row max in DEST (SFPU), skipping the |x| tile's round trip through L1 (Q2 88 -> 81 us).
+            defines["Q_SFPU_AMAX"] = "1";
             while (chunks_per_row % q_unit != 0) {
                 --q_unit;
             }
