@@ -369,15 +369,16 @@ DitFusedDistributedRmsnormSizing compute_sizing(const DitFusedDistributedRmsnorm
 }
 
 tt::tt_metal::TensorSpec make_stats_tensor_spec(const DitFusedDistributedRmsnormSizing& sizing) {
-    // Row-major fp32 L1-interleaved scratch: one accessor page per packed stats page.
+    // Row-major fp32 interleaved scratch: one accessor page per packed stats page.
     // Kept in one place so the pre-alloc helper, compute_output_specs, and validate agree.
-    // L1, not DRAM: the gathered sticks are on the post-AG critical path twice -- every landing
-    // write (local + each peer's fused write+atomic, flush=true) is acked before the forwarder can
-    // release go, and each worker then reads its 2*ring_size 64 B face-rows back. An L1 bank round
-    // trip is much shorter than a DRAM one. Still a mesh-coherent MeshBuffer (same address and
-    // bank->core map on every chip), and the kernels address it through a TensorAccessor either way.
+    // DRAM by default: callers cache these buffers for a model's lifetime, and L1-resident ones
+    // would shrink every other op's circular-buffer space. The two-wave column split keeps it in
+    // L1, because there the gathered sticks are on the post-AG critical path twice (landing writes
+    // acked before go, then each worker's pair reads) and an L1 round trip is much shorter. Either
+    // way it is a mesh-coherent MeshBuffer that the kernels address through a TensorAccessor.
     ttnn::Shape stats_shape({1u, 1u, sizing.total_pages, TILE_HEIGHT * sizing.window_size});
-    MemoryConfig stats_mem{TensorMemoryLayout::INTERLEAVED, BufferType::L1};
+    MemoryConfig stats_mem{
+        TensorMemoryLayout::INTERLEAVED, sizing.col_split_capable ? BufferType::L1 : BufferType::DRAM};
     return tt::tt_metal::TensorSpec(
         stats_shape, TensorLayout(DataType::FLOAT32, PageConfig(Layout::ROW_MAJOR), stats_mem));
 }

@@ -275,9 +275,10 @@ void DitFusedDistributedRmsnormDeviceOperation::validate_on_program_cache_miss(
             tensor_args.persistent_output_buffer.has_value(),
             "persistent_output_buffer is required for TP>1 with multiple workers (use_mux). "
             "Allocate it as a regular device tensor with shape "
-            "[1, 1, {}, {}], dtype=FLOAT32, layout=ROW_MAJOR, L1 INTERLEAVED.",
+            "[1, 1, {}, {}], dtype=FLOAT32, layout=ROW_MAJOR, {} INTERLEAVED.",
             e_shape[2],
-            e_shape[3]);
+            e_shape[3],
+            expected.memory_config().buffer_type());
         const auto& buf = tensor_args.persistent_output_buffer.value();
         TT_FATAL(buf.storage_type() == StorageType::DEVICE, "persistent_output_buffer must be on device");
         TT_FATAL(buf.buffer() != nullptr, "persistent_output_buffer must be allocated");
@@ -293,7 +294,9 @@ void DitFusedDistributedRmsnormDeviceOperation::validate_on_program_cache_miss(
             buf.dtype());
         TT_FATAL(
             buf.memory_config().buffer_type() == expected.memory_config().buffer_type(),
-            "persistent_output_buffer must be in L1 (allocate it with the op's create_stats_buffer)");
+            "persistent_output_buffer must be in {} (allocate it with the op's create_stats_buffer), got {}",
+            expected.memory_config().buffer_type(),
+            buf.memory_config().buffer_type());
         TT_FATAL(
             buf.memory_config().memory_layout() == expected.memory_config().memory_layout(),
             "persistent_output_buffer must be INTERLEAVED");

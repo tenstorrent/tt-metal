@@ -92,8 +92,10 @@ void bind_dit_fused_distributed_rmsnorm(nb::module_& mod) {
     ttnn::bind_function<"dit_fused_distributed_rmsnorm_create_stats_buffer", "ttnn.experimental.">(
         mod,
         R"doc(
-            Allocate the persistent stats DRAM scratch buffer required by
+            Allocate the persistent stats scratch buffer required by
             `dit_fused_distributed_rmsnorm`'s all-gather path (TP>1, whole-row norm).
+            The buffer is in DRAM, except for the Blackhole two-wave prefill path
+            (`num_links=1`, an even tile-row count from 4 to 32), where it is in L1.
             Returns None when the op reduces locally and needs no scratch (TP=1,
             `cluster_axis=None`, or per_head_norm). Hold the returned tensor across
             launches and pass it in via the `persistent_output_buffer` kwarg.
