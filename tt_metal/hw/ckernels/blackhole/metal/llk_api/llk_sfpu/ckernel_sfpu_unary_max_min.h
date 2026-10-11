@@ -159,7 +159,7 @@ inline void calculate_unary_max_min_int32(uint value) {
 
         sfpi::l_reg[sfpi::LRegs::LReg0].in_use();
         sfpi::l_reg[sfpi::LRegs::LReg1].in_use();
-        // Two rows per trip so the macro word is a compile-time constant (see calculate_unary_max_min).
+        // Two rows per trip, as in calculate_unary_max_min.
 #pragma GCC unroll 8
         for (int d = 0; d + 1 < ITERATIONS; d += 2) {
             TTI_SFPLOADMACRO(

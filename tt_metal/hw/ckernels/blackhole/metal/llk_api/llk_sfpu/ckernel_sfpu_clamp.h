@@ -29,8 +29,7 @@ inline void calculate_clamp(uint min_val, uint max_val) {
     }
 }
 
-// One pass with the bounds in L12 and L13; a swap runs in the inverted domain when its bound is negative, as in
-// calculate_unary_max_min_int32_body.
+// Bounds in L12 and L13; a swap with a negative bound runs in the inverted domain, as in calculate_unary_max_min_int32_body.
 template <bool MIN_NEG, bool MAX_NEG, int ITERATIONS>
 inline void clamp_int32_rows() {
     sfpi::l_reg[sfpi::LRegs::LReg0].in_use();
