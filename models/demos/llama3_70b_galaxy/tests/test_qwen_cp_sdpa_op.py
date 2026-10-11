@@ -167,7 +167,7 @@ def _stock_pair(ctx, qs, kv, pt, scale, ckc, pc, concat_heads):
 @torch.no_grad()
 @pytest.mark.parametrize("mesh_device", [(ROWS, COLS)], indirect=True)
 @pytest.mark.parametrize("device_params", DEVICE_PARAMS, indirect=True)
-@pytest.mark.parametrize("seq_len", [16384, 32768, 40960])
+@pytest.mark.parametrize("seq_len", [16384, 24576, 32768, 40960])
 def test_qwen_cp_sdpa(mesh_device, seq_len):
     """qwen_cp_sdpa (both slices of a column in one program, 70 cores) against the stock pair it replaces: torch.equal on
     all 32 devices for the concat-heads output (vs pair + nlp_concat_heads) and the [1, H, S/4, D] output (vs the
