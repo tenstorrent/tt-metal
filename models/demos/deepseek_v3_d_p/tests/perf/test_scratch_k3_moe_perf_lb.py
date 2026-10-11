@@ -48,7 +48,10 @@ _FABRIC = {
     [
         pytest.param(
             _MESH,
-            _FABRIC(fabric_payload_size=KimiK3Config.FABRIC_PAYLOAD_SIZE, trace_region_size=200_000_000),
+            _FABRIC(
+                fabric_payload_size=int(os.environ.get("K3_FABRIC_PAYLOAD", KimiK3Config.FABRIC_PAYLOAD_SIZE)),
+                trace_region_size=200_000_000,
+            ),
             2,
             id="lb",
         ),
