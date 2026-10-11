@@ -20,7 +20,7 @@ std::uint32_t math_sync_tile_dst_index = 0;
 
 constexpr int MODE_GATE   = 0; // Full gate, grouped or ungrouped.
 constexpr int MODE_BINARY = 1; // The FPU binary front-end on its own.
-constexpr int MODE_MOVE   = 2; // One transpose-dest / copy4rows FPU step on a known DEST image.
+constexpr int MODE_MOVE   = 2;
 constexpr int MODE_RUN    = 3; // SFPU run merges and placements on a known DEST image.
 
 constexpr int MOVE_STEP0     = 0;
