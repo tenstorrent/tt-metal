@@ -1,13 +1,95 @@
 # Kimi K3 prefill MoE: FP8 on the wire for dispatch and combine
 
-Status: draft v2 (2026-10-10). It folds in reviews from Codex (gpt-6-astra) and from a separate
-Claude Code instance; §10 lists what changed. Scope: Kimi K3 only, Blackhole, prefill `TtMoe` with
+Status: v3 (2026-10-11). §0 holds the current goals and status; §1–§9 keep the v2 plan for reference and are
+marked where v3 supersedes them. v2 folded in reviews from Codex (gpt-6-astra) and from a separate Claude Code
+instance; §10 lists what changed. Scope: Kimi K3 only, Blackhole, prefill `TtMoe` with
 `use_latent_moe=True`. The first validation target is the 2×4 LoudBox; the 8×4 Galaxy follows.
 
 Decisions already taken:
 
 - Scales are fp32, one per 1×32 block, for v1.
 - `fp32_dest_acc_en=true` is acceptable on `unified_routed_expert_moe` and `post_combine_reduce`.
+- (v3) Scales are powers of two and quantize uses packer truncation: no SFPU rounding pass (§4).
+- (v3) Every quantize / dequantize runs in compute on the FPU where it can (column-broadcast multiplies, as
+  sparse SDPA's scaled-fp8 path does); data-movement RISC-Vs only move data and place scale words.
+
+## 0. Current goals and status (v3, 2026-10-11)
+
+**Reference measurement.** LB proxy `tests/perf/test_scratch_k3_moe_perf_lb.py` with `K3_NUM_EXPERTS=224`
+(28 experts and ~2560 dispatched rows per chip, as on the 8×4 Galaxy), FABRIC_2D, fp8 both wires,
+`MOE_FP8_SCALE_BLOCK=32`. T_moe = traced, p50 of 20 (`K3_TRACE=1 K3_TRACE_ITERS=20`); per-op = Tracy device
+kernel time (`scripts/run_safe_pytest.sh --profile`, `K3_PERF_ITERS=1`), median per chip. PCC from
+`test_ttnn_moe.py::test_kimi_k3_moe[...-2x4-kimi_k3-5k-pcc]`.
+
+**Status (branch `pjosipovic/k3-moe-fp8-wire`, head `0bccf554797`):**
+
+| | bf16 wire | fp8 1×32 now | Δ |
+|---|---|---|---|
+| **T_moe (traced)** | **4.97 ms** | **5.03 ms** | **+0.06 ms** |
+| dispatch | 582 µs | 544 µs | −38 |
+| combine | 417 µs | 372 µs | −45 |
+| post_combine_reduce (DQ2 fused) | 196 µs | 141 µs | −55 |
+| routed expert | 2551 µs | 2544 µs | −7 (bf8_b tiles in) |
+| Q1 / Q2 / DQ1 (standalone) | — | 32 / ~125 / 90 µs | +247 |
+| final_output PCC | 0.99424 | 0.99404 | −0.0002 |
+
+The wire saves ~140 µs; the three standalone passes cost ~247 µs. Removing them is the work left.
+
+**Goals, in order:**
+
+| Goal | Target | Status |
+|---|---|---|
+| **G1 (headline)** fp8 traced T_moe beats bf16 at Galaxy load | ≤ 4.80 ms, final_output PCC ≥ 0.994 | 5.03 ms, PCC met |
+| **G2** Q2 fused into the routed expert's down-proj epilogue | standalone Q2 = 0; expert ≤ +50 µs (net ≈ −75 µs) | next |
+| **G3** Q1 fused into a K3 latent matmul (quantize each chip's slice before the all-gather) | standalone Q1 = 0; the gather moves fp8 (~½ the bytes) | after G2 |
+| **G4** DQ1 | ≤ 90 µs (met); decide after G2/G3 whether to fuse it fully | standalone, emits bf8_b tiles |
+| **G5** quick wins | NoC reassignment wherever the top grid rows congest (Q2 next) | DQ1 done (110 → 90 µs) |
+| **G6** docs and Galaxy | this doc current; then the 8×4 Galaxy run (§5 P5) | LB only so far |
+
+Out of scope until G1 is decided: e8m0 (1-byte) scales, 1×128 comparisons, the 1D-fabric sparse-mcast
+dispatch (measured in §1.3a, not the shipped topology).
+
+**G2 design (Q2 in the expert epilogue).** With 1×32 scales a block is one row of one output tile, so each
+expert core quantizes its own down-proj output tiles with no cross-core exchange: |x| → FPU row-max reduce →
+one SFPU pass on column 0 for the exact pow2 1/scale → column-broadcast multiply → pack_untilize to e4m3 rows.
+The writer writes the core's 11-tile slice of each row (352 B) and its 11 scales (44 B). Blackhole DRAM writes
+only need source and destination congruent mod 16 B, at any length, so the 44 B scale writes are legal from an
+L1 copy at the same offset mod 16. The expert's writer has slack (the expert is matmul-bound for ~2.5 ms), so
+the small row writes, which bound the standalone Q2, hide there. Combine stays a byte copy.
+
+**G3 design (Q1 in `to_latent`).** `to_latent` is a column-parallel matmul (each chip computes 896 of the
+3584 latent columns at tp=4) followed by an all-gather. Quantizing each chip's slice in the matmul epilogue
+gives gathered rows `[e4m3₀ | s₀ | e4m3₁ | s₁ | e4m3₂ | s₂ | e4m3₃ | s₃]` instead of `[H e4m3 | H/32 scales]`.
+Dispatch moves rows byte for byte and does not care; only DQ1's reader finds the scales, and with 28-tile
+units one unit's data and scales become one contiguous 1008 B read. This needs a K3-specific latent matmul
+(the stock `ttnn.matmul` has no quantize epilogue) and DQ1's interleaved-layout address math.
+
+**Fusion map (current → planned):**
+
+```
+x ─ to_latent ─ AG ─ [Q1 standalone 32 µs → G3: in to_latent, before AG] ─ dispatch (fp8 rows)
+  ─ [DQ1 standalone 90 µs, bf8_b tiles out] ─ routed expert ─ [Q2 standalone ~125 µs → G2: down epilogue]
+  ─ combine (fp8 rows, byte copy) ─ [DQ2 fused in post_combine_reduce: done] ─ RS ─ from_latent
+```
+
+**Done so far (1×32):**
+- 1×32 scales packed in the row tail on both wires; no RNE pass (`713b56d28c3`).
+- DQ2 fused into `post_combine_reduce`: 32 tokens' compacted local slots stacked as rows, tilized (tile row =
+  token, one 1×32 block per tile row), weight × scale by column broadcast, L1 accumulation over slots; output
+  already tiled. Standalone DQ2 (546 µs) removed, PCR 196 → 141 µs (`1b1a05cbed6`).
+- Quantize compute FAST_1X32: one-acquire phases, exact pow2 1/scale on column 0. Q1 42 → 32 µs, Q2 161 →
+  ~125 µs; standalone Q2 is now bound by its 32 small row writes per block (`e5da63704a2`).
+- DQ1 emits bf8_b tiles for the expert's tiled-x path (written in place); 28-tile units, scale side on the
+  writer RISC, reader/writer NoCs swapped. 161 → 90 µs (`0bccf554797`).
+
+**Findings that changed the plan:**
+- The expert's own x tilize is hidden (tiled x saves only ~10 µs there), so fusing DQ1 into the expert would
+  add its scale multiply on all 11 cores of an expert row for no saving. DQ1 stays a standalone op that does
+  the tilize once.
+- In-combine quantize ran on ≤ 16 untilizer cores (23.5 ms); dispatch's untilize compute has the same limit,
+  so Q1 moves to `to_latent` (full grid) instead of dispatch (v2 F2).
+- The standalone cast ops were bound by small NoC transfers and congestion in the top grid rows, not by
+  their math.
 
 ## 1. Goals and targets
 
@@ -108,7 +190,7 @@ Production accuracy needs real checkpoint weights, which these tests do not use 
 (`test_ttnn_moe.py:1245`). That is a separate sign-off before fp8 becomes the default: a K3 eval on
 the real 4-Galaxy pipeline.
 
-### 1.3 Performance targets (2×4 LB)
+### 1.3 Performance targets (2×4 LB; v2, superseded by §0 goals)
 
 | Stage | After v1 (P2 + P3) | After v2 (F1–F3) |
 |---|---|---|
@@ -127,7 +209,7 @@ spans more hops there, so more of its time is bytes.
 Dispatch-plus-combine totals alone are not accepted as evidence, because the fusions move work into
 the expert op and `post_combine_reduce`. T_moe is the gate.
 
-### 1.3a Status on the 2×4 LB (2026-10-10, branch `pjosipovic/k3-moe-fp8-wire`)
+### 1.3a Status on the 2×4 LB, per-row wire (2026-10-10; superseded by §0)
 
 **Reference load: Galaxy-equivalent.** The proxy must run with `K3_NUM_EXPERTS=224`. That gives 28 experts
 and 2560 dispatched rows per chip, as on the 8×4 Galaxy. The default of 896 experts puts 112 experts per chip
@@ -281,6 +363,10 @@ only (`dispatch_program_factory.cpp:401-437`).
 
 ## 3. Where quantize and dequantize happen
 
+v3: §0 has the current fusion map. The diagram below is the v2 plan: Q1 moves to `to_latent` (G3), DQ1 stays
+standalone with tile output, Q2 moves to the expert epilogue (G2) instead of combine's untilizer, and DQ2 is
+fused in PCR with a different design (tilize 32 tokens' slots, not SFPU face-row scaling).
+
 Legend:
 
 - **Q** quantizes to E4M3 with an fp32 scale per 1×32 block.
@@ -367,7 +453,10 @@ Notes:
 ## 4. Numerical contract
 
 - **Block:** 1×32 along H (3584 = 112 blocks). Scale = `pow2_up(max(amax, 1e-4) / 448)`, stored as fp32.
-- **Rounding: RNE.** The existing packer truncates (RTZ). With 3 mantissa bits, truncation shrinks
+- **Rounding (v3): packer truncation, no RNE pass.** Decided 2026-10-11: no SFPU rounding work. With exact pow2
+  1/scale, representable values stay exact; measured final_output PCC is unchanged (0.99404). The v2 reasoning
+  follows for reference.
+- **Rounding (v2): RNE.** The existing packer truncates (RTZ). With 3 mantissa bits, truncation shrinks
   every value toward zero by about half a ULP on average, around 3% of magnitude. That is a
   **systematic** bias, and PCC cannot see it. Fix it in the quantize kernel: use an SFPU rounding
   step to 3 mantissa bits (RNE) in fp32 before the fp8 pack. N1 measures both modes so the cost of
@@ -493,6 +582,10 @@ New combine mode `combine_wire="fp8_1x32"`, separate from the unscaled `use_fp8_
   then PCR with **fp32 dest** (new; HiFi4 stays).
 
 ### P4: fusions (each one removes an extra DRAM pass)
+
+v3 status: F3 done (different design, §0); F1 dropped (DQ1 stays standalone with tile output, §0 findings);
+F2 replaced by G3 (Q1 in `to_latent`, which also covers F4); F5's Q2-in-down-epilogue part is G2, without the
+in-place buffer reuse for now. F6 is not started.
 
 Order: F2, then F1, then F3, then F4.
 
@@ -688,6 +781,9 @@ Measurement rules:
 
 ## 9. Order and effort
 
+v3 order: G5 quick wins (NoC reassignment on Q2) → G2 (Q2 in the expert epilogue) → G3 (Q1 in a K3 latent
+matmul + DQ1 interleaved reads) → G4 decision → G6 Galaxy run. The v2 table follows for reference.
+
 | Step | Content | Effort |
 |---|---|---|
 | P0 | B0 baseline, perf-script commit + span fix, N1, K1, K2 | 4–5 d |
@@ -707,6 +803,10 @@ Measurement rules:
 P3a is worth landing on its own, because it fixes today's latent NaN risk.
 
 ## 10. Review log
+
+v3 (2026-10-11): goals reset around the 1×32 wire at Galaxy-equivalent load (§0). No RNE pass; DQ2 fused in
+PCR; DQ1 kept standalone with tile output; Q1 retargeted from dispatch to `to_latent`; Q2 retargeted from
+combine's untilizer to the expert's down epilogue. Per-row wire numbers moved under §1.3a as history.
 
 v2.3: added §5b. The fabric payload (7168) was sized for one token per packet, which an fp8 K3 token (4–4.1 KB) no longer fits well. Candidates are 4352 (default, 1 token per packet) and 8704 (ubench optimum, 2 tokens per packet), decided by the F0 sweep. F6 is now mandatory.
 
