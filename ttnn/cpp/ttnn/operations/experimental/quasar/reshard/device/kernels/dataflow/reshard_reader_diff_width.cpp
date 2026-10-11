@@ -7,20 +7,20 @@
 // Gathers strided page ranges from the input tensor (read on remote cores via UnicastEndpoint) into
 // the local output sharded buffer.
 //   - The input tensor base address comes from TensorAccessor(tensor::input).get_bank_base_address().
-//   - The local output buffer base L1 address comes from DataflowBuffer(dfb::shard_cb).get_write_ptr()
-//     (the DFB borrows the output tensor's buffer; it is used here purely as an address source).
+//   - The local output buffer base L1 address comes from TensorAccessor(tensor::output).get_bank_base_address().
 //
 // All per-core runtime data is positional varargs. Layout (the host drops the legacy input-addr slot):
 //   [0 .. num_x_cores + num_y_cores)         physical core-coordinate table (random-indexed)
-//   then: num_output_pages, num_blocks, output_page_offset, followed by compressed stride blocks.
+//   then: one start index per kernel thread, and at each thread's start index its slice:
+//   num_output_pages, num_blocks, output_page_offset, followed by compressed stride blocks.
 
 #include <stdint.h>
 #include "api/tensor/tensor_accessor.h"
 #include "api/dataflow/dataflow_api.h"
 #include "api/dataflow/noc.h"
-#include "api/dataflow/dataflow_buffer.h"
 #include "api/dataflow/endpoints.h"
 #include "api/core_local_mem.h"
+#include "api/kernel_thread_globals.h"
 #include "api/tensor/noc_traits.h"
 #include "experimental/kernel_args.h"
 
@@ -32,7 +32,7 @@ void kernel_main() {
 
     uint32_t y_offset = num_x_cores;
 
-    uint32_t arg_index = num_x_cores + num_y_cores;
+    uint32_t arg_index = get_vararg(num_x_cores + num_y_cores + get_my_thread_id());
     TensorAccessor input(tensor::input);
     const uint32_t input_shard_addr = input.get_bank_base_address();
     const uint32_t num_output_pages = get_vararg(arg_index++);
@@ -40,8 +40,8 @@ void kernel_main() {
     const uint32_t output_page_offset = get_vararg(arg_index++);
 
     Noc noc;
-    DataflowBuffer cb(dfb::shard_cb);
-    uint32_t l1_write_addr = cb.get_write_ptr() + output_page_offset * page_size;
+    TensorAccessor output(tensor::output);
+    uint32_t l1_write_addr = output.get_bank_base_address() + output_page_offset * page_size;
 
     uint32_t mask_byte = 0xff;
     uint32_t mask_short = 0xffff;
