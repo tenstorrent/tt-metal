@@ -1686,7 +1686,7 @@ def test_gelu_licensed_cpp(fresh_cpp_impl):
 
 
 @pytest.mark.parametrize("fresh_cpp_impl", [0, 4], ids=["production", "licensed_cpp"])
-def test_gelu_appx_licensed_cpp(fresh_cpp_impl):
+def test_gelu_appx_licensed_cpp(fresh_cpp_impl, tmp_path, monkeypatch):
     """A/B the byte-untouched production GeluAppx hand kernel against the
     LICENSED semantic arm under one golden/tolerance contract (lane GI,
     owner ratification 2026-08-24 item 2:
@@ -1694,23 +1694,23 @@ def test_gelu_appx_licensed_cpp(fresh_cpp_impl):
 
     The hand arm (impl 0) is calculate_gelu_appx — the 6-segment SFPLUTFP32
     FP16 TABLE1 kernel (lut2_sign over LReg0/1/2/4/5/6) computing the even
-    part gelu(x) - 0.5x, plus 0.5x.  Its measured accuracy contract on the
-    row's golden domain (all finite bf16 — the GeluAppx stimulus Gaussian is
-    untruncated): max |err| vs exact gelu 0.0234 raw / 0.0239 bf16-stored,
-    at x ~ 0.249 (the [0,0.5) segment is a chord through the origin).
+    part gelu(x) - 0.5x, plus 0.5x. On all finite bf16 its stored output has
+    maximum absolute error 0.023887 versus exact-double GELU and 0.023926
+    versus the bf16-rounded golden, at x ~ 0.249 (the [0,0.5) segment is a
+    chord through the origin).
 
-    The licensed arm (impl 4, fresh_cpp/gelu_appx_licensed.h) is an
-    independently fitted 4-region poly-leaf magnitude tree at max |err|
-    0.0097 — equal-or-better than the hand kernel, proven exhaustively over
-    the bf16 grid and the fp32 stimulus sweep (laneGI accuracy oracle).
+    The licensed arm (impl 4, fresh_cpp/gelu_appx_licensed.h) uses the same
+    six-segment geometry with independently fitted coefficients and a zero
+    intercept on its finite-bf16 asymptotic tail. Its all-finite stored-output
+    maximum absolute errors are below the unchanged hand maxima; this is not
+    a pointwise, ULP, or full-special-value dominance claim.
 
-    Stimuli, golden (exact torch gelu) and tolerance (the registered
-    GeluAppx CUSTOM_TOLERANCES) are identical between arms and identical to
-    the test_causal_lift_fresh_cpp[GeluAppx-*] family this row's sem arm
-    previously pointed at (torch.manual_seed(0) + same registry spec =>
-    byte-identical stimuli)."""
+    Each arm keeps the original FP32 coverage, exercises the timed BF16 path,
+    and checks the repaired positive-tail values plus bounded negative-tail
+    values under the same exact GELU golden."""
     mathop = MathOperation.GeluAppx
     custom_atol, custom_rtol = CUSTOM_TOLERANCES.get(mathop, (None, None))
+    prepare_only = TestConfig.BUILD_MODE == BuildMode.PRODUCE
     eltwise_unary_sfpu(
         "sources/eltwise_unary_sfpu_test.cpp",
         InputOutputFormat(DataFormat.Float32, DataFormat.Float32),
@@ -1722,6 +1722,57 @@ def test_gelu_appx_licensed_cpp(fresh_cpp_impl):
         custom_atol=custom_atol,
         custom_rtol=custom_rtol,
         fresh_cpp_impl=fresh_cpp_impl,
+        prepare_only=prepare_only,
+    )
+
+    eltwise_unary_sfpu(
+        "sources/eltwise_unary_sfpu_test.cpp",
+        InputOutputFormat(DataFormat.Float16_b, DataFormat.Float16_b),
+        DestAccumulation.No,
+        ApproximationMode.No,
+        mathop,
+        FastMode.No,
+        [64, 64],
+        custom_atol=custom_atol,
+        custom_rtol=custom_rtol,
+        fresh_cpp_impl=fresh_cpp_impl,
+        prepare_only=prepare_only,
+    )
+
+    source = tmp_path / "gelu_appx_mixed_source.pt"
+    result = tmp_path / "gelu_appx_mixed_result.pt"
+    inputs = torch.tensor(
+        [258.0, 4.03125, -3.0, -5.0, -2.0, -1.0, 1.0, 2.0],
+        dtype=torch.bfloat16,
+    )
+    torch.save(inputs, source)
+    monkeypatch.setenv("SFPU_SRC_OVERRIDE", str(source))
+    monkeypatch.setenv("SFPU_DUMP", str(result))
+    eltwise_unary_sfpu(
+        "sources/eltwise_unary_sfpu_test.cpp",
+        InputOutputFormat(DataFormat.Float16_b, DataFormat.Float16_b),
+        DestAccumulation.No,
+        ApproximationMode.No,
+        mathop,
+        FastMode.No,
+        [64, 64],
+        custom_atol=custom_atol,
+        custom_rtol=custom_rtol,
+        fresh_cpp_impl=fresh_cpp_impl,
+        prepare_only=prepare_only,
+    )
+    if prepare_only:
+        return
+
+    dumped = torch.load(result, weights_only=True)
+    actual = dumped["result"][: inputs.numel()]
+    assert torch.equal(dumped["src_A"][: inputs.numel()], inputs)
+    assert actual[0].item() == 258.0
+    assert actual[1].item() == 4.03125
+    negative_golden = torch.nn.functional.gelu(inputs[2:4].to(torch.float64))
+    assert (
+        torch.max(torch.abs(actual[2:4].to(torch.float64) - negative_golden))
+        <= 0.023886588700354136
     )
 
 

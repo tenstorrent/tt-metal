@@ -97,6 +97,7 @@ def main() -> None:
     assert raw_hook_indices and min(raw_hook_indices) > guard_index
 
     expected_calls = {
+        "test_gelu_appx_licensed_cpp": 3,
         "test_relu_fresh_cpp_admission": 2,
         "test_hardshrink_fresh_cpp_admission": 3,
     }

@@ -30,7 +30,7 @@ TWO32 = 1 << 32
 UNARY_32 = frozenset(
     """absint32 add1 bitwisenot castfp32tofp16a cbrt-fresh clamp-fresh comp
     digamma-fresh eqz-fresh erf-fresh erfc-fresh erfinv-fresh expm1-fresh
-    fmod-fresh geluappx-fresh hardmish-fresh hardtanh-fresh heaviside-fresh
+    fmod-fresh hardmish-fresh hardtanh-fresh heaviside-fresh
     rdiv remainder-fresh rpow selu
     sigmoid-fresh sigmoidlut-fresh sign signbit softplus-fresh softshrink-fresh
     softsign-fresh tanhderivlut-fresh unarycomp-fresh unarypower-fresh
@@ -57,6 +57,10 @@ EXACT_BF16_UNARY_PAIRS = {
 # input space; ordinary device correctness remains useful but is not that
 # proof.
 COMPOSITE_UNARY_PAIRS = {
+    "geluappx-fresh": (
+        "test_sfpu_unary.py::test_gelu_appx_licensed_cpp[licensed_cpp]",
+        "test_sfpu_unary.py::test_gelu_appx_licensed_cpp[production]",
+    ),
     "hardshrink-fresh": (
         "test_sfpu_unary.py::test_hardshrink_fresh_cpp_admission[fresh_cpp]",
         "test_sfpu_unary.py::test_causal_lift_fresh_cpp[Hardshrink-production]",
