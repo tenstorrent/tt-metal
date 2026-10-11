@@ -21,14 +21,16 @@ namespace fp8 = ttnn::operations::experimental::deepseek_prefill::per_token_cast
 namespace {
 
 bool is_dram_interleaved(const tt::tt_metal::MemoryConfig& mem_config) {
-    return mem_config.buffer_type() == tt::tt_metal::BufferType::DRAM &&
+    // DRAM or L1 interleaved: the kernels address pages through TensorAccessor.
+    return (mem_config.buffer_type() == tt::tt_metal::BufferType::DRAM ||
+            mem_config.buffer_type() == tt::tt_metal::BufferType::L1) &&
            mem_config.memory_layout() == tt::tt_metal::TensorMemoryLayout::INTERLEAVED;
 }
 
 void validate_device_tensor(const Tensor& tensor, const std::string& name) {
     TT_FATAL(tensor.storage_type() == ttnn::StorageType::DEVICE, "{} must be on device", name);
     TT_FATAL(tensor.buffer() != nullptr, "{} must have a buffer", name);
-    TT_FATAL(is_dram_interleaved(tensor.memory_config()), "{} must be DRAM interleaved", name);
+    TT_FATAL(is_dram_interleaved(tensor.memory_config()), "{} must be DRAM or L1 interleaved", name);
 }
 
 ttnn::Shape scale_output_shape(const ttnn::Shape& input_shape, uint32_t scale_block_w, bool per_row) {
@@ -59,7 +61,7 @@ void PerTokenCastToFp8DeviceOperation::validate_on_program_cache_miss(
     validate_device_tensor(input, "per_token_cast_to_fp8: input_tensor");
     TT_FATAL(
         is_dram_interleaved(attrs.output_memory_config),
-        "per_token_cast_to_fp8: output memory config must be DRAM interleaved");
+        "per_token_cast_to_fp8: output memory config must be DRAM or L1 interleaved");
     TT_FATAL(
         input.device()->arch() == tt::ARCH::BLACKHOLE,
         "per_token_cast_to_fp8: FP8_E4M3 path requires Blackhole hardware, got arch {}",

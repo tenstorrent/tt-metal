@@ -48,6 +48,7 @@ _MOE_FUSED_DQ2 = os.environ.get("MOE_FUSED_DQ2", "1") == "1"
 # projection + reduce-scatter run beside combine, in a second sub-device window. Default on for the fp8 dispatch
 # wire, whose dispatch (~325 us) is shorter than the whole shared expert (~520 us); the bf16 dispatch (~580 us) is
 # longer, so there the split only adds a window. MOE_SPLIT_SHARED=1 / 0 forces it.
+_MOE_Q2_L1 = os.environ.get("MOE_Q2_L1", "1") == "1"
 _MOE_SPLIT_SHARED = os.environ.get("MOE_SPLIT_SHARED")
 # 1x32 fp8 dispatch under LatentMoE: Q1 on each chip's to_latent slice before the all-gather (MOE_Q1_PRE_GATHER=0:
 # gather bf16, then quantize the full latent).
@@ -1153,7 +1154,8 @@ class TtMoe(LightweightModule):
             # [e4m3 | fp32 scale per 1x32] rows; combine then moves them byte for byte (no untilize math).
             combine_input, _ = ttnn.experimental.deepseek_prefill.per_token_cast_to_fp8(
                 expert_outputs,
-                memory_config=ttnn.DRAM_MEMORY_CONFIG,
+                # L1 interleaved: the 128-1024 B partial-row writes are NoC/DRAM-endpoint bound in DRAM.
+                memory_config=ttnn.L1_MEMORY_CONFIG if _MOE_Q2_L1 else ttnn.DRAM_MEMORY_CONFIG,
                 round_scale_to_power_of_two=True,
                 round_to_nearest_even=False,  # packer truncation, no SFPU rounding pass
                 **self._fp8_block_kw,

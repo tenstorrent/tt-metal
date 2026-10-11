@@ -611,8 +611,9 @@ def test_token_count_aware_cast_back_scale_block_w(device, scale_block_w):
     assert torch.equal(out[:off][normal], golden[:off][normal]), "count-aware metadata-tail dequant mismatch"
 
 
+@pytest.mark.parametrize("out_l1", [False, True], ids=["dram_out", "l1_out"])
 @pytest.mark.parametrize("counts", [[37, 0, 64, 5, 130], [0, 0, 0, 0, 1]], ids=["mixed", "one_token"])
-def test_count_aware_packed_quant_expert_buffer(device, counts):
+def test_count_aware_packed_quant_expert_buffer(device, counts, out_l1):
     """Scaled fp8 combine source: quantize the valid prefix of a bf8_b TILE expert buffer into packed
     [H e4m3 | H/32 fp32] rows, then dequantize them with cast_back(scales_in_row_tail=True)."""
     torch.manual_seed(0)
@@ -640,8 +641,11 @@ def test_count_aware_packed_quant_expert_buffer(device, counts):
         global_expert_idx_table=create_u32_tensor(device, table),
         experts_per_chip=experts_per_chip,
         pack_scales_in_row=True,
+        memory_config=ttnn.L1_MEMORY_CONFIG if out_l1 else ttnn.DRAM_MEMORY_CONFIG,  # L1: the K3 combine source
     )
     assert tuple(packed_tt.shape) == (capacity, H + 4 * H // block)
+    if out_l1:
+        packed_tt = ttnn.to_memory_config(packed_tt, ttnn.DRAM_MEMORY_CONFIG)
     back = ttnn.to_torch(
         ttnn.experimental.deepseek_prefill.per_token_cast_back(
             packed_tt, None, output_dtype=ttnn.float32, scale_block_w=block, scales_in_row_tail=True

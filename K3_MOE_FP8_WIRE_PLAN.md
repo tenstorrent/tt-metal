@@ -21,27 +21,27 @@ Decisions already taken:
 kernel time (`scripts/run_safe_pytest.sh --profile`, `K3_PERF_ITERS=1`), median per chip. PCC from
 `test_ttnn_moe.py::test_kimi_k3_moe[...-2x4-kimi_k3-5k-pcc]`.
 
-**Status (branch `pjosipovic/k3-moe-fp8-wire`, 2026-10-11 afternoon):**
+**Status (branch `pjosipovic/k3-moe-fp8-wire`, 2026-10-11 evening):**
 
 | | bf16 wire | fp8 1×32 now | Δ |
 |---|---|---|---|
-| **T_moe (traced)** | **4.93 ms** | **4.76 ms** (split shared expert, Q2 2-chunk units) | **−0.17 ms** |
+| **T_moe (traced)** | **4.93 ms** | **4.72 ms** (split shared expert, Q2 into L1) | **−0.21 ms** |
 | dispatch | 582 µs | 325 µs (one packet per token-expert) | −257 |
 | combine | 417 µs | 375 µs | −42 |
 | post_combine_reduce (DQ2 fused) | 196 µs | 141 µs | −55 |
 | routed expert | 2551 µs | 2545 µs | −6 (bf8_b tiles in) |
 | latent all-gather | 87 µs (bf16) | 67 µs (fp8, high_bw_all_gather) | −20 |
-| Q1 / Q2 / DQ1 (standalone) | — | 14 / ~106 / 91 µs | +211 |
-| final_output PCC | 0.99424 | 0.99404 | −0.0002 |
+| Q1 / Q2 / DQ1 (standalone) | — | 12 / 49 / 91 µs | +152 |
+| final_output PCC | 0.99424 | 0.99424 | 0 |
 
-The wire now saves ~160 µs and the three standalone passes cost ~211 µs.
+The wire now saves ~160 µs and the three standalone passes cost ~152 µs.
 
 **Goals, in order:**
 
 | Goal | Target | Status |
 |---|---|---|
-| **G1 (headline)** fp8 traced T_moe beats bf16 at Galaxy load | ≤ 4.80 ms, final_output PCC ≥ 0.994 | met: 4.762–4.780 ms p50 over three runs (min 4.749–4.764), PCC 0.99404; bf16 4.93 ms |
-| **G2** Q2 | was: fused in the expert epilogue. Measured: expert +~300 µs vs ~106 µs standalone (see below), so Q2 stays standalone; target ≤ 60 µs | standalone ~106 µs; epilogue parked |
+| **G1 (headline)** fp8 traced T_moe beats bf16 at Galaxy load | ≤ 4.80 ms, final_output PCC ≥ 0.994 | met: 4.721 ms p50 (min 4.709), PCC 0.99424; bf16 4.93 ms |
+| **G2** Q2 | standalone Q2 ≤ 60 µs (the expert epilogue measured +~300 µs, parked) | met: 48.8 µs in the K3 MoE (packed rows to L1) |
 | **G3** Q1 before the latent all-gather | Q1 on each chip's slice; fp8 gather | done: Q1 27 → 14 µs, gather 87 → 67 µs |
 | **G4** DQ1 | ≤ 90 µs; full fusion only with a shared-tilize expert | 91 µs, reads the segmented rows |
 | **G5** quick wins | NoC reassignment where the top grid rows congest | DQ1 110 → 90, Q2 125 → 104 µs |
@@ -75,21 +75,20 @@ fp8 dispatch wire (`MOE_SPLIT_SHARED=1/0` forces it).
 
 **Status of the goals that remain open.**
 - G1: met on the LB (above).
-- G2 (standalone Q2 ≤ 60 µs): not met, 81 µs. Q2 is now balanced (per-core spans 66–80 µs; medians writer 74,
-  compute 68.5, reader 60) and moves ~22 MB per chip (11 MB of bf8_b tiles in, 11.6 MB of packed rows out), about
-  280 GB/s. 60 µs would need ~380 GB/s with all three RISCs fully overlapped, which looks close to sustained DRAM
-  bandwidth (an estimate, not measured). Removing the DRAM round trip means fusing Q2 into the expert, measured at
-  +300 µs. History: |x| and the row max now run in DEST (SFPU REDUCE_ROW), skipping
-  the |x| tile's pack and unpack: two passes per tile instead of three (88 → 81 µs). Units are split by grid row (weight 1 + 0.4·y/(rows−1)) to offset
-  the NoC gradient (91 → 88 µs). Coalescing each core's row writes into one transaction per run was tried and
-  did not help (89.5 µs): with balanced work Q2 is bound by per-tile compute, not by its 256-B writes. Before: Units of 2 chunks (256 columns) balance the work best (1 chunk
-  102, 2 chunks 91, 4 chunks 92, 7 chunks 100 µs); phases run across a whole unit (one LLK init per phase per unit). Per core: compute 47–89 µs (median 61), writer 59–100 µs (median 73); the spread
-  is the NoC gradient (top grid rows ~40% slower) plus the 3-vs-2 unit split. Perfectly balanced compute alone
-  would be ~45 µs, so ≤ 60 µs needs both balancing for the gradient and cheaper per-tile work. Earlier: The writer now issues its row writes before staging the scales
-  and converts each 1/scale straight into the staging rows (106 → 103 µs). Compute is ~1000 cycles per tile over
-  three phases (|x|, FPU row-max + SFPU pow2 1/scale, column-broadcast multiply + pack_untilize); the |x| pass
-  can't be folded into the reduce (GMPOOL takes the max of SrcA only, the scaler is not applied for MAX).
-- G1 margin: traced p50 4.762–4.780 ms with Q2 at 91 µs, ~20–40 µs under the target.
+- G2 (standalone Q2 ≤ 60 µs): met, 48.8 µs in the K3 MoE profile (81 → 70 → 49 µs, `76c1537a786` + L1 output).
+  What it took, measured per core with device zones:
+  - Startup: every reader and writer read the same three routing-table pages (240 kernels on one DRAM bank), so
+    the first unit started at 7.7 µs median, 16 µs worst. Core 0 now reads them and multicasts the valid tile-row
+    count into every core's semaphore: 2 µs everywhere. The grid-row skew only compensated that delay; even shares now.
+  - Compute: the math thread was the limit (phase A 4.8 of 5.3 µs per unit). One fused SFPU pass per tile does
+    |x| → row max → pow2 1/scale in registers (integer exponent trick, bit-exact): unit 5.3 → 3.9 µs.
+  - Writer: scale staging was 2.9 µs per unit (volatile load-convert-store), now 1.3; row NoC addresses cached per
+    tile-row; write groups of 4 units give 1 KB row writes instead of 256 B (standalone 81 → ~70 µs).
+  - Data movement: with compute faster Q2 became NoC/DRAM-endpoint bound (~300 GB/s vs 415 GB/s for a plain
+    clone): top grid rows starve, and no row or per-core weighting, NoC swap or reader read-ahead fixed it. Writing
+    the packed rows to **L1 interleaved** (combine reads them from there) removes the partial-row DRAM writes:
+    standalone 65 → 47 µs (input in L1 too: 45; input only: 67). `MOE_Q2_L1=1` (default).
+- G1 margin: traced p50 4.721 ms with Q2 at 49 µs, ~80 µs under the target.
 - G6 (Galaxy run): needs the 8×4 hardware.
 
 **Combine (2026-10-11): no packet lever found.** Combine already sends one packet per row. A deeper reader→writer
