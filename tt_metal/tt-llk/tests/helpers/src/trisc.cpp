@@ -109,7 +109,16 @@ int main(void)
         // INIT with icache prefetch, as tt-metal's trisck.cc runs a kernel's init; counters.h init_zone ends it before the loop
         ckernel::icache_prefetch_init_begin();
 #endif
+#if defined(LLK_DBG_BARRIER) && defined(LLK_PERF_RUN_TYPE_L1_CONGESTION) && !defined(LLK_PERF_INIT_ONLY)
+        // once per BRISC release phase (brisc.cpp serve_phases), so L1_CONGESTION reports the mean over the phases
+        for (std::uint32_t phase = 0; phase < llk_barrier::L1_CONGESTION_PHASES; ++phase)
+        {
+            run_kernel(temp_args);
+            ckernel::tensix_sync();
+        }
+#else
         run_kernel(temp_args);
+#endif
 #if defined(LLK_PERF_INIT_ONLY) && defined(LLK_DBG_BARRIER)
         ckernel::icache_prefetch_init_end();
 #endif

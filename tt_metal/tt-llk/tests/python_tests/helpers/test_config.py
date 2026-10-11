@@ -1595,6 +1595,14 @@ class TestConfig:
             and not TestConfig.TEST_TARGET.run_simulator
         )
 
+    def _l1_congestion_phases(self) -> bool:
+        """Wormhole L1_CONGESTION kernels run once per BRISC release phase (brisc.cpp serve_phases), INIT launches once."""
+        return (
+            self._wormhole_perf_barrier()
+            and getattr(self, "current_run_type", None) == PerfRunType.L1_CONGESTION
+            and not getattr(self, "init_launch", False)
+        )
+
     def _kernel_placement_include(self) -> str:
         """C++ snippet that pins run_kernel at a fixed address (kernel_placement.h) in profiler builds, the only
         ones that are timed; the alignment would cost the other kernels code space. Fused kernels skip the build
@@ -2845,9 +2853,13 @@ class TestConfig:
                 commit_brisc_command(
                     TestConfig.TENSIX_LOCATION,
                     (
-                        BriscCmd.UPDATE_START_ADDR_CACHE_AND_START_DBG_BARRIER
-                        if self._wormhole_perf_barrier()
-                        else BriscCmd.UPDATE_START_ADDR_CACHE_AND_START
+                        BriscCmd.UPDATE_START_ADDR_CACHE_AND_START_DBG_BARRIER_PHASES
+                        if self._l1_congestion_phases()
+                        else (
+                            BriscCmd.UPDATE_START_ADDR_CACHE_AND_START_DBG_BARRIER
+                            if self._wormhole_perf_barrier()
+                            else BriscCmd.UPDATE_START_ADDR_CACHE_AND_START
+                        )
                     ),
                     timeout=brisc_cmd_timeout,
                 )
@@ -2858,9 +2870,13 @@ class TestConfig:
                 commit_brisc_command(
                     TestConfig.TENSIX_LOCATION,
                     (
-                        BriscCmd.START_TRISCS_DBG_BARRIER
-                        if self._wormhole_perf_barrier()
-                        else BriscCmd.START_TRISCS
+                        BriscCmd.START_TRISCS_DBG_BARRIER_PHASES
+                        if self._l1_congestion_phases()
+                        else (
+                            BriscCmd.START_TRISCS_DBG_BARRIER
+                            if self._wormhole_perf_barrier()
+                            else BriscCmd.START_TRISCS
+                        )
                     ),
                     timeout=brisc_cmd_timeout,
                 )

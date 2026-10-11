@@ -27,6 +27,7 @@ from helpers.counters import LLK_COUNTERS_HEADER, _parse_perf_cfg
 from helpers.llk_params import ApproximationMode, DestAccumulation, PerfRunType
 from helpers.perf import phases
 from helpers.perf.core import (
+    L1_CONGESTION_PHASES,
     PerfConfig,
     PerfReport,
     _assert_matches_catalog,
@@ -36,6 +37,7 @@ from helpers.perf.core import (
     _reject_duplicate_keys,
     _selected_run_types,
     add_pipeline_coupling,
+    assert_one_zone_per_phase,
     assert_zones_dont_overlap,
     combine_perf_reports,
     postprocess_tile_loop,
@@ -1395,3 +1397,38 @@ def test_l1_contention_splits_pipeline_waits_from_stream_demand():
     assert out["saturation_bank_load"] == pytest.approx(
         (64 * 4 / 100 + 64 * 4 / 200) / 16
     )
+
+
+def _phased_events(phases):
+    """KERNEL around one INIT and one TILE_LOOP per phase on every thread; phase k's TILE_LOOP takes 100 + k cycles."""
+    events = [(t, "KERNEL", 9, 0, 1000 * (phases + 1)) for t in _THREADS]
+    for k in range(phases):
+        base = 10 + 1000 * k
+        events += [(t, "INIT", 0, base, base + 50) for t in _THREADS]
+        events += [(t, "TILE_LOOP", 1, base + 100, base + 200 + k) for t in _THREADS]
+    return events
+
+
+def test_phased_l1_congestion_reports_the_mean_over_its_phases():
+    data = ProfilerData(_zones(*_phased_events(L1_CONGESTION_PHASES)))
+    assert_zones_dont_overlap(data)
+    assert_one_zone_per_phase(data)
+    stats = Profiler.STATS_FUNCTION[PerfRunType.L1_CONGESTION](data)
+    tile = stats[stats[MARKER] == "TILE_LOOP"].iloc[0]
+    for side in ("UNPACK", "PACK"):
+        column = f"L1_CONGESTION[{side}]"
+        assert tile[stat_column(column, MEAN)] == pytest.approx(
+            100 + (L1_CONGESTION_PHASES - 1) / 2
+        )
+        assert tile[stat_column(column, STD)] > 0  # the spread over the phases
+    with pytest.raises(  # allow-pytest.raises: no expect_error fixture in LLK suite
+        AssertionError, match=f"expected {L1_CONGESTION_PHASES}"
+    ):
+        assert_one_zone_per_phase(
+            ProfilerData(_zones(*_phased_events(L1_CONGESTION_PHASES - 1)))
+        )
+
+
+def test_l1_congestion_phase_count_matches_the_firmware():
+    barrier_h = Path(__file__).parents[2] / "helpers/include/barrier.h"
+    assert f"L1_CONGESTION_PHASES = {L1_CONGESTION_PHASES};" in barrier_h.read_text()
