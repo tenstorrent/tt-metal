@@ -90,20 +90,20 @@ namespace tt::tt_metal {
 namespace {
 
 uint32_t get_available_worker_core_count_for_program(
+    MetalContext& ctx,
     ChipId chip_id,
     uint64_t encoded_runtime_host_id,
-    MetalEnv& env,
     uint8_t num_hw_cqs,
     const DispatchCoreConfig& dispatch_core_config) {
     const auto decoded = detail::DecodePerDeviceProgramID(encoded_runtime_host_id);
     const std::optional<tt::ProgramSubDeviceInfo> sub_device_info =
-        tt::GetProgramSubDevice(MetalContext::instance().get_context_id(), chip_id, decoded.base_program_id);
+        tt::GetProgramSubDevice(ctx.get_context_id(), chip_id, decoded.base_program_id);
     if (sub_device_info.has_value() && sub_device_info->num_available_worker_cores > 0) {
         return sub_device_info->num_available_worker_cores;
     }
 
     const CoreCoord compute_grid_size =
-        tt::get_compute_grid_size(MetalEnvAccessor(env).impl(), chip_id, num_hw_cqs, dispatch_core_config);
+        tt::get_compute_grid_size(MetalEnvAccessor(ctx.get_env()).impl(), chip_id, num_hw_cqs, dispatch_core_config);
     return compute_grid_size.x * compute_grid_size.y;
 }
 
@@ -303,6 +303,7 @@ std::optional<int> quasar_processor_clock_mhz(tracy::RiscType risc) {
 }
 
 AnalysisResults parse_duration(
+    const Cluster& cluster,
     const AnalysisConfig& analysis_config,
     const std::vector<std::reference_wrapper<const tracy::TTDeviceMarker>>& markers) {
     ZoneScoped;
@@ -349,8 +350,7 @@ AnalysisResults parse_duration(
             TT_ASSERT(result.start_timestamp <= result.end_timestamp);
             // Quasar DM/TRISC use hardcoded clock frequencies for now
             const int chip_frequency_mhz =
-                quasar_processor_clock_mhz(zone_start_risc)
-                    .value_or(tt::tt_metal::MetalContext::instance().get_cluster().get_device_aiclk(device_id));
+                quasar_processor_clock_mhz(zone_start_risc).value_or(cluster.get_device_aiclk(device_id));
             result.duration = static_cast<uint64_t>(
                 std::round((result.end_timestamp - result.start_timestamp) * 1000.0 / chip_frequency_mhz));
         }
@@ -362,14 +362,16 @@ AnalysisResults parse_duration(
 }
 
 std::map<experimental::ProgramExecutionUID, ProgramsPerfResults::SingleProgramPerfResults::ProgramMetaData>
-getMetaDataForPrograms(const std::vector<std::reference_wrapper<const tracy::TTDeviceMarker>>& markers) {
+getMetaDataForPrograms(
+    MetalContext& ctx, const std::vector<std::reference_wrapper<const tracy::TTDeviceMarker>>& markers) {
     ZoneScoped;
 
     std::map<experimental::ProgramExecutionUID, ProgramsPerfResults::SingleProgramPerfResults::ProgramMetaData>
         program_execution_uid_to_meta_data;
 
-    // Use the default MetalEnv
-    MetalEnv& env = MetalContext::instance().get_env();
+    const Cluster& cluster = MetalEnvAccessor(ctx.get_env()).impl().get_cluster();
+    const uint8_t num_hw_cqs = ctx.get_dispatch_core_manager().get_num_hw_cqs();
+    const DispatchCoreConfig& dispatch_core_config = ctx.get_dispatch_core_manager().get_dispatch_core_config();
 
     std::unordered_map<experimental::ProgramExecutionUID, std::unordered_set<CoreCoord>>
         fw_cores_per_program_execution_uid;
@@ -378,16 +380,11 @@ getMetaDataForPrograms(const std::vector<std::reference_wrapper<const tracy::TTD
         const experimental::ProgramExecutionUID program_execution_uid = {
             marker.runtime_host_id, marker.trace_id, marker.trace_id_counter};
         if (!program_execution_uid_to_meta_data.contains(program_execution_uid)) {
-            const Cluster& cluster = tt::tt_metal::MetalContext::instance().get_cluster();
             const umd::ClusterDescriptor* cluster_desc = cluster.get_cluster_desc();
             const ARCH device_arch = cluster_desc->get_arch(marker.chip_id);
 
-            const uint8_t num_hw_cqs =
-                tt::tt_metal::MetalContext::instance().get_dispatch_core_manager().get_num_hw_cqs();
-            const DispatchCoreConfig& dispatch_core_config =
-                tt::tt_metal::MetalContext::instance().get_dispatch_core_manager().get_dispatch_core_config();
             const uint32_t num_available_worker_cores = get_available_worker_core_count_for_program(
-                static_cast<ChipId>(marker.chip_id), marker.runtime_host_id, env, num_hw_cqs, dispatch_core_config);
+                ctx, static_cast<ChipId>(marker.chip_id), marker.runtime_host_id, num_hw_cqs, dispatch_core_config);
 
             program_execution_uid_to_meta_data[program_execution_uid] = {
                 .device_id = static_cast<ChipId>(marker.chip_id),
@@ -420,6 +417,7 @@ getMetaDataForPrograms(const std::vector<std::reference_wrapper<const tracy::TTD
 }
 
 AnalysisResults generateAnalysisForDeviceMarkers(
+    const Cluster& cluster,
     const AnalysisConfig& analysis_config,
     const std::vector<std::reference_wrapper<const tracy::TTDeviceMarker>>& device_markers) {
     TT_ASSERT(std::is_sorted(
@@ -428,16 +426,20 @@ AnalysisResults generateAnalysisForDeviceMarkers(
         analysis_config.dimension == AnalysisDimension::PROGRAM, "Analysis config dimension must be across programs");
 
     switch (analysis_config.type) {
-        case AnalysisType::PROGRAM_FIRST_TO_LAST_MARKER: return parse_duration(analysis_config, device_markers);
+        case AnalysisType::PROGRAM_FIRST_TO_LAST_MARKER:
+            return parse_duration(cluster, analysis_config, device_markers);
         default: TT_THROW("Invalid analysis type");
     }
 }
 
 ProgramsPerfResults generatePerfResultsForPrograms(
+    MetalContext& ctx,
     const std::vector<AnalysisConfig>& analysis_configs,
     const std::vector<std::reference_wrapper<const tracy::TTDeviceMarker>>& device_markers,
     ThreadPool& thread_pool) {
     ZoneScoped;
+
+    const Cluster& cluster = MetalEnvAccessor(ctx.get_env()).impl().get_cluster();
 
     ProgramsPerfResults programs_perf_results;
     std::map<experimental::ProgramExecutionUID, ProgramsPerfResults::SingleProgramPerfResults>&
@@ -448,15 +450,16 @@ ProgramsPerfResults generatePerfResultsForPrograms(
     std::vector<AnalysisResults> analysis_results(analysis_configs.size());
     analysis_results_configs.resize(analysis_configs.size());
     for (const auto& analysis_config : analysis_configs) {
-        thread_pool.enqueue([&analysis_config, &analysis_results_configs, &device_markers, &analysis_results, i]() {
-            analysis_results[i] = generateAnalysisForDeviceMarkers(analysis_config, device_markers);
-            analysis_results_configs[i] = analysis_results[i].results_config;
-        });
+        thread_pool.enqueue(
+            [&cluster, &analysis_config, &analysis_results_configs, &device_markers, &analysis_results, i]() {
+                analysis_results[i] = generateAnalysisForDeviceMarkers(cluster, analysis_config, device_markers);
+                analysis_results_configs[i] = analysis_results[i].results_config;
+            });
         i++;
     }
 
     std::map<experimental::ProgramExecutionUID, ProgramsPerfResults::SingleProgramPerfResults::ProgramMetaData>
-        programs_meta_data = getMetaDataForPrograms(device_markers);
+        programs_meta_data = getMetaDataForPrograms(ctx, device_markers);
 
     thread_pool.wait();
 
@@ -478,11 +481,10 @@ ProgramsPerfResults generatePerfResultsForPrograms(
 }
 
 void writeProgramsPerfResultsToCSV(
-    const ProgramsPerfResults& programs_perf_results, const std::filesystem::path& report_path) {
+    MetalContext& ctx, const ProgramsPerfResults& programs_perf_results, const std::filesystem::path& report_path) {
     ZoneScoped;
 
-    std::scoped_lock lock(
-        tt::tt_metal::MetalContext::instance().profiler_state_manager()->programs_perf_report_write_mutex);
+    std::scoped_lock lock(ctx.profiler_state_manager()->programs_perf_report_write_mutex);
 
     struct CsvRowData {
         std::string base_columns;
@@ -776,7 +778,7 @@ void writeProgramsPerfResultsToCSV(
         }
     };
 
-    const auto& dev_mgr = tt::tt_metal::MetalContext::instance().device_manager();
+    const auto& dev_mgr = ctx.device_manager();
     if (dev_mgr && dev_mgr->get_all_active_device_ids().size() == 1) {
         for (const auto& [device_id, samples] : kernel_durations_ns_by_device) {
             print_summary(device_id, samples);
