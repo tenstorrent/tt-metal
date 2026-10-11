@@ -17,6 +17,11 @@
 using namespace ckernel;
 using namespace ckernel::unpacker;
 
+// load_replay = false runs the reuse blocks where the custom_mm init records them, at the end of its 32-entry program.
+static_assert(CUSTOM_MM_REUSE_BLOCKS_OFFSET + CUSTOM_MM_REUSE_BLOCKS_LEN == 32, "reuse blocks must end the custom_mm replay program");
+// Each half of a k-row runs at most the 8 block_increment reuse blocks.
+constexpr std::uint32_t SDPA_CUSTOM_MM_REUSE_MAX_NT_DIM = 16;
+
 // SDPA_CUSTOM_MM_REUSE_DEST_SRCB
 // Custom matmul that reuses SrcB from dest and only unpacks SrcA.
 // Output height and width should be single tile with tile shape [1, 32].
@@ -49,7 +54,7 @@ inline void _llk_unpack_AB_sdpa_custom_mm_reuse_dest_srcb_mop_config_(const std:
     // inner_increment reuse (final): CFGSHIFTMASK selects SCRATCH_SEC1
     //
     // This supports first_half up to 8 tiles and second_half up to 8 tiles, so nt_dim up to 16.
-    LLK_ASSERT(nt_dim >= 1 && nt_dim <= 16, "sdpa_custom_mm_reuse_dest_srcb (unpack): nt_dim must be in [1, 16]");
+    LLK_ASSERT(nt_dim >= 1 && nt_dim <= SDPA_CUSTOM_MM_REUSE_MAX_NT_DIM, "sdpa_custom_mm_reuse_dest_srcb (unpack): nt_dim must be in [1, 16]");
 
     constexpr std::uint32_t REPLAY_BUF_END = CUSTOM_MM_REUSE_BLOCKS_OFFSET + CUSTOM_MM_REUSE_BLOCKS_LEN;
     if constexpr (load_replay)

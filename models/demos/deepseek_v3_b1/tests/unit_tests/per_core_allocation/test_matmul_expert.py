@@ -8,6 +8,7 @@ Tests for ExpertKernel (unified SRAM, DRAM, and hybrid):
   DRAM (multi-device): each device gets its own N-slice of B in DRAM.
 """
 
+import numpy as np
 import pytest
 import torch
 from loguru import logger
@@ -17,6 +18,7 @@ from models.common.utility_functions import comp_pcc, skip_with_llk_assert
 from models.demos.deepseek_v3_b1.compressed_tensor import CompressedTensor, CompressedTensorAssigner
 from models.demos.deepseek_v3_b1.micro_ops.matmul_expert.op import (
     ExpertKernel,
+    _assert_sram_weights_bfp4,
     _pad_to_face_r_dim,
     create_dram_expert_tensors_multi_device,
     encode_expert_indices,
@@ -2151,6 +2153,39 @@ def test_hybrid_expert_single_device_accum_experts_plain(device, K, N, sram_n_pa
         num_loop_iters=num_loop_iters,
         sram_use_compression=False,
     )
+
+
+class _UniformShardWeights:
+    """Host stand-in for a CompressedTensor whose every SRAM shard has the same format assignment."""
+
+    def __init__(self, assignment):
+        self.assignment = np.array(assignment, dtype=np.int8)
+
+    def get_assignment_per_shard(self, core_coord, device_coord=None):
+        return self.assignment
+
+
+@pytest.mark.parametrize(
+    "assignments, accepted",
+    [
+        ([[1, 1, 1, 1]], True),
+        ([[1, 1, 1, 1], [1, 1, 1, 1]], True),
+        ([[0, 0, 0, 0]], False),
+        ([[2, 2, 2, 2]], False),
+        ([[1, 1, 1, 1], [1, 1, 3, 1]], False),
+    ],
+    ids=["bfp4", "bfp4_two_experts", "bfp8", "bfp2", "bfp0_tile_in_second_expert"],
+)
+def test_plain_sram_path_rejects_non_bfp4_weights(assignments, accepted, expect_error):
+    """Host only: sram_use_compression=False reads one bfp4_b page per SRAM tile, so it rejects any other format."""
+    cts = [_UniformShardWeights(assignment) for assignment in assignments]
+    cores = [ttnn.CoreCoord(0, 0), ttnn.CoreCoord(1, 0)]
+    coords = [ttnn.MeshCoordinate(0, 0), ttnn.MeshCoordinate(0, 1)]
+    if accepted:
+        _assert_sram_weights_bfp4(cts, cores, coords)
+    else:
+        with expect_error(AssertionError, "uniform bfp4_b"):
+            _assert_sram_weights_bfp4(cts, cores, coords)
 
 
 def test_hybrid_expert_multi_device_sparse_accum_experts(bh_2d_mesh_device):
