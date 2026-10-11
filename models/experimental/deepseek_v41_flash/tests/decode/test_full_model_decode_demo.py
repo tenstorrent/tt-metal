@@ -58,7 +58,7 @@ from models.experimental.deepseek_v41_flash.tt.config import (
     dequantized,
     load_config,
 )
-from models.experimental.deepseek_v41_flash.tt.decode.decode_prefetch import O_B_GCB, SHARED_DOWN_GCB
+from models.experimental.deepseek_v41_flash.tt.decode.decode_prefetch import ENGRAM_WKV_GCB, O_B_GCB, SHARED_DOWN_GCB
 from models.experimental.deepseek_v41_flash.tt.engram_lookup import engram_table_nbytes
 from models.experimental.deepseek_v41_flash.tt.model import DeepSeekV41Model
 from models.experimental.deepseek_v4_flash.encoding_dsv4 import encode_messages
@@ -216,17 +216,18 @@ def _assert_decode_parallelism(model: DeepSeekV41Model, tp_size: int, num_stages
 def _assert_prefetch_rings(model: DeepSeekV41Model) -> None:
     """The GCB set the prefetched decode streams through, pinned per stage device.
 
-    Each device holds at most the shared ring plus the q_a, kv and router-gate rings (four
-    of the DRISC senders' ~six state slots). The hyper-connection ``fn`` reads its weight
-    from L1, so it is on no ring.
+    Each device holds at most the shared ring plus the q_a, kv, o_b and shared-down rings, and
+    a device with an Engram layer also its wkv ring -- six, all of the DRISC senders' ~six
+    state slots. The hyper-connection ``fn`` reads its weight from L1, so it is on no ring.
     """
     if not model.use_prefetcher:
         return
-    allowed = set(DECODE_GCB_GROUP) | {Q_A_GCB, KV_GCB, O_B_GCB, SHARED_DOWN_GCB}
+    allowed = set(DECODE_GCB_GROUP) | {Q_A_GCB, KV_GCB, O_B_GCB, SHARED_DOWN_GCB, ENGRAM_WKV_GCB}
     for _, buffers in model._prefetch_buffers_by_device.values():
         assert set(buffers) <= allowed, f"unexpected prefetch rings {sorted(set(buffers) - allowed)}"
         rings = {id(gcb) for gcb in buffers.values()}
-        assert len(rings) <= 5, f"{len(rings)} GCBs on one device, expected at most 5"
+        limit = 6 if ENGRAM_WKV_GCB in buffers else 5
+        assert len(rings) <= limit, f"{len(rings)} GCBs on one device, expected at most {limit}"
     for layer in model.layers:
         q_a_ring = layer.self_attn.q_a_proj.global_cb
         assert q_a_ring is not None, "q_a must stream through the prefetcher"
