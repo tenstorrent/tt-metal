@@ -308,12 +308,12 @@ def test_gelu_nan_payloads_propagate(device, request, variant_name, dtype_name):
     non-finite (+-inf) output is accepted there."""
     if variant_name == "accurate" and dtype_name == "bf16":
         # The BF16 piecewise branch still saturates a negative NaN to 0; a guard there
-        # costs ~7% on this hot path, so it is left to the BF16 kernel rework (#58885).
+        # costs ~7% on this hot path, so it is tracked separately in #60224.
         request.applymarker(
             pytest.mark.xfail(
                 strict=True,
                 reason="accurate BF16 gelu maps negative NaN to 0, "
-                "see https://github.com/tenstorrent/tt-metal/issues/59247",
+                "see https://github.com/tenstorrent/tt-metal/issues/60224",
             )
         )
     variant_enum, _ = _VARIANTS[variant_name]
