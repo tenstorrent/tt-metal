@@ -565,7 +565,6 @@ public:
     // Validates that a semaphore ID is within bounds and not already in use on overlapping cores
     void validate_semaphore_id(const CoreRangeSet& crs, uint32_t semaphore_id, CoreType core_type) const;
 
-    bool runs_on_noc_unicast_only_cores();
     bool runs_on_noc_multicast_only_cores();
 
     std::unordered_map<uint64_t, ProgramCommandSequence>& get_cached_program_command_sequences() noexcept;
