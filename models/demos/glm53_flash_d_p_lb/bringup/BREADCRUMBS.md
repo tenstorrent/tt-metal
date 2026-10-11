@@ -384,3 +384,13 @@ ring path added a 0.28 ms typecast and a slower fp32 linear).
   9.20 ms; block outputs vs the two calls rel 2e-4 .. 1.2e-3 (bf16 summation order).
 - Whole model (test_perf): warm 56k prefill 6.07 s (6.01 before: the eager run is partly host-bound, the device
   saving of ~6 ms per chunk does not show in wall time); last-chunk top1 0.6726 / top5 0.8801 (0.6744 / 0.8804).
+
+## Whole-model determinism + hang stress (2026-10-11), tests/test_model_stress.py
+
+All 45 layers, real weights, LoudBox 2x4, the current defaults (KDA prep fork, full-mesh MoE input, full-mesh ring
+reduce-scatter). Passes of chunked prefill from position 0 (two token streams: the prompt and the prompt reversed;
+random lengths 1 .. 11 chunks of 5120, so restarts at random points); each (stream, position) output compared
+bit-exactly on device with its first output (sticky per-chip markers, read once per pass), a matmul every 7th chunk.
+The comparator's negative control (+1 on one output) is flagged on every chip.
+- 3.50 h: 3920 passes, 23834 chunks (1.89 chunks/s), every (stream, position) visited 175 .. 1967 times:
+  0 mismatches, no hang (safe-pytest dispatch timeout 5 s never fired). PASS.
