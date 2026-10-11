@@ -1421,6 +1421,12 @@ class TestConfig:
         return f"#include  <{source}>\n"
 
     def generate_variant_hash(self):
+        self.variant_id = sha256(
+            str(" | ".join(self._variant_hash_inputs())).encode()
+        ).hexdigest()
+
+    def _variant_hash_inputs(self, exclude=()) -> list:
+        """The compilation inputs generate_variant_hash hashes, without the instance fields named in exclude"""
         NON_COMPILATION_ARGUMENTS = [
             "run_configs",
             "warmup_configs",
@@ -1455,7 +1461,7 @@ class TestConfig:
         temp_str = [
             str(value)
             for field_name, value in self.__dict__.items()
-            if field_name not in NON_COMPILATION_ARGUMENTS
+            if field_name not in NON_COMPILATION_ARGUMENTS and field_name not in exclude
         ]
 
         # Header and source search dirs decide which copy of a given relative
@@ -1514,11 +1520,7 @@ class TestConfig:
             if TestConfig.ENABLE_PERF_COUNTERS
             else []
         )
-        self.variant_id = sha256(
-            str(
-                " | ".join(temp_str + ["<<search-dirs>>"] + search_dirs + counters)
-            ).encode()
-        ).hexdigest()
+        return temp_str + ["<<search-dirs>>"] + search_dirs + counters
 
     def resolve_shared_compile_options(self) -> tuple[str, str, str]:
         """Flags for brisc/coverage. Process-wide ``INCLUDES`` only.
@@ -1776,7 +1778,15 @@ class TestConfig:
 
         return header_content
 
-    def generate_build_header(self) -> str:
+    def generate_build_header(self, speed_of_light: bool | None = None) -> str:
+        """The variant's build.h. speed_of_light (default: this run's mode) writes it as a --speed-of-light run does:
+        every runtime parameter, tile size, operand address and format a constant. A run without --speed-of-light
+        builds the Wormhole INIT measurement ELFs from that header (_init_build_dir).
+        """
+        sol = TestConfig.SPEED_OF_LIGHT if speed_of_light is None else speed_of_light
+        # a speed-of-light run already holds its runtimes in templates (and none in runtimes), in this order
+        templates = self.templates + self.runtimes if sol else self.templates
+        compile_time_formats = self.compile_time_formats or sol
         if TestConfig.ARCH == ChipArchitecture.QUASAR:
             sfpu_types_include = ""
         else:
@@ -1809,7 +1819,7 @@ class TestConfig:
             f"constexpr bool unpack_to_dest = {str(self.unpack_to_dest).lower()};",
         ] + (
             FORMATS_CONFIG_STRUCT_COMPILETIME
-            if self.compile_time_formats
+            if compile_time_formats
             else FORMATS_CONFIG_STRUCT_RUNTIME
         )
 
@@ -1822,7 +1832,7 @@ class TestConfig:
                 f"constexpr bool is_fp32_dest_acc_en = {self.dest_acc.cpp_enum_value};"
             )
 
-        if TestConfig.SPEED_OF_LIGHT:
+        if sol:
             header_content.extend(
                 [
                     f"constexpr std::uint32_t TILE_SIZE_PACK = {self.pack_size};",
@@ -1836,13 +1846,13 @@ class TestConfig:
                     self.variant_stimuli.generate_stimuli_header_addresses()
                 )
 
-        for parameter in self.templates:
+        for parameter in templates:
             header_content.append(parameter.convert_to_cpp())
 
-        if self.compile_time_formats:
+        if compile_time_formats and self.formats_config is not None:
             header_content.extend(self.generate_compile_time_data_formats())
 
-        if TestConfig.SPEED_OF_LIGHT:
+        if sol:
             header_content.append("struct RuntimeParams {};")
         else:
             header_content.extend(self.runtime_arguments_struct)
@@ -1937,7 +1947,11 @@ class TestConfig:
             TestConfig.KERNEL_COMPONENTS.index(name)
         )
 
-        if not self.compile_time_formats:
+        if init_only and self._shares_sol_init():
+            # a run without --speed-of-light builds the INIT measurement ELFs from the speed-of-light header
+            # (_init_build_dir), so they compile as a speed-of-light run does: formats and parameters are constants
+            optional_kernel_flags += " -DSPEED_OF_LIGHT"
+        elif not self.compile_time_formats:
             optional_kernel_flags += " -DRUNTIME_FORMATS"
 
         # Only TRISC0 has the vector unit on Quasar. The flag is after
@@ -2141,9 +2155,7 @@ class TestConfig:
         measured loop threads take the pads perf/layout.py picks for these arguments; build makes it when missing.
         """
         if getattr(self, "init_launch", False):
-            return (
-                TestConfig.ARTEFACTS_DIR / self.test_name / self.variant_id / "init_elf"
-            )
+            return self._init_build_dir() / "init_elf"
         variant_dir = TestConfig.ARTEFACTS_DIR / self.test_name / self.variant_id
         if not self._wormhole_perf_barrier():
             return variant_dir / "elf"
@@ -2236,6 +2248,8 @@ class TestConfig:
         self._build_variant_elfs()
         if not TestConfig.INFRA_TESTING:
             self._layout_elf_dir(build=True)
+            if self._builds_init_elfs() and self._shares_sol_init():
+                self._build_shared_init_elfs()
 
     def _build_variant_elfs(self):
         VARIANT_DIR = TestConfig.ARTEFACTS_DIR / self.test_name / self.variant_id
@@ -2248,7 +2262,7 @@ class TestConfig:
 
         self.build_shared_artefacts()
 
-        init_build = self._builds_init_elfs()
+        init_build = self._builds_init_elfs() and not self._shares_sol_init()
         init_done = VARIANT_DIR / "init_elf" / ".build_complete"
 
         # Fast path: if build is already complete, skip entirely
@@ -2333,8 +2347,9 @@ class TestConfig:
         )
 
     def _build_init_elfs(self, variant_dir: Path, jobs):
-        """The INIT measurement ELFs (unpadded) into <variant>/init_elf and their profiler metadata under
-        <variant>_init, with jobs (other builds of the variant) in the same pool; the caller holds the variant lock.
+        """The INIT measurement ELFs (unpadded) into <variant_dir>/init_elf and their profiler metadata under
+        init_meta_id(), with jobs (other builds of the variant) in the same pool; the caller holds the lock of
+        variant_dir (the variant's, or _init_build_dir()'s for a shared build).
         """
         init_elf_dir = variant_dir / "init_elf"
         create_directories([init_elf_dir])
@@ -2348,7 +2363,7 @@ class TestConfig:
         )
         if self.profiler_build == ProfilerBuild.Yes:
             meta_dir = Path(
-                TestConfig.PROFILER_META / self.test_name / f"{self.variant_id}_init"
+                TestConfig.PROFILER_META / self.test_name / self.init_meta_id()
             )
             meta_dir.mkdir(exist_ok=True, parents=True)
             for component in TestConfig.KERNEL_COMPONENTS:
@@ -2365,6 +2380,64 @@ class TestConfig:
                     TestConfig.TESTS_WORKING_DIR,
                 )
         (init_elf_dir / ".build_complete").touch()
+
+    def _shares_sol_init(self) -> bool:
+        """A run without --speed-of-light takes its INIT measurement ELFs from a speed-of-light build that tests of
+        the same sharing key share (perf/init_share.py); a --speed-of-light run builds the variant's own.
+        """
+        return not TestConfig.SPEED_OF_LIGHT and not self.skip_build_header
+
+    def _init_share_key(self) -> str:
+        from .perf.init_share import init_share_key
+
+        return init_share_key(
+            str(self.test_source_path),
+            # the header holds the templates, formats and parameters; the key leaves out the ones INIT does not need
+            self._variant_hash_inputs(
+                exclude=(
+                    "templates",
+                    "runtimes",
+                    "formats_config",
+                    "variant_stimuli",
+                    "pack_size",
+                    "unpack_size_a",
+                    "unpack_size_b",
+                )
+            ),
+            self.generate_build_header(speed_of_light=True),
+        )
+
+    def _init_build_dir(self) -> Path:
+        """Directory holding this test's INIT measurement build (init_elf/, and its build.h when shared)"""
+        if not self._shares_sol_init():
+            return TestConfig.ARTEFACTS_DIR / self.test_name / self.variant_id
+        return (
+            TestConfig.ARTEFACTS_DIR
+            / self.test_name
+            / "init_sol"
+            / self._init_share_key()[:16]
+        )
+
+    def init_meta_id(self) -> str:
+        """Profiler metadata id of the INIT launch (Profiler.get_data)"""
+        if not self._shares_sol_init():
+            return f"{self.variant_id}_init"
+        return f"init_sol_{self._init_build_dir().name}"
+
+    def _build_shared_init_elfs(self):
+        """The INIT measurement ELFs of this test's sharing key, compiled from the speed-of-light header of the first
+        test of the key to get here (perf/init_share.py)"""
+        init_dir = self._init_build_dir()
+        if (init_dir / "init_elf" / ".build_complete").exists():
+            return
+        with FileLock(TestConfig.SYNC_DIR / f"init-sol-{init_dir.name}.lock"):
+            if (init_dir / "init_elf" / ".build_complete").exists():
+                return
+            create_directories([init_dir])
+            (init_dir / "build.h").write_text(
+                self.generate_build_header(speed_of_light=True)
+            )
+            self._build_init_elfs(init_dir, [])
 
     def read_coverage_data_from_device(self):
         VARIANT_DIR = TestConfig.ARTEFACTS_DIR / self.test_name / self.variant_id
