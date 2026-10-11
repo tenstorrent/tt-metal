@@ -145,6 +145,11 @@ __attribute__((always_inline)) inline void write_data(std::uint64_t data)
 __attribute__((noipa, section(".text.llk_zone.reserve"))) inline void zone_reserve()
 {
     reserved_words_count += ZONE_START_WORDS + ZONE_END_WORDS;
+#if defined(LLK_ZONE_RESERVE_NOPS) // experiment hook (nikola, 334f72387d0): the helper grows by N instructions
+#define LLK_ZR_STR_(x) #x
+#define LLK_ZR_STR(x)  LLK_ZR_STR_(x)
+    asm volatile(".rept " LLK_ZR_STR(LLK_ZONE_RESERVE_NOPS) "\n\tnop\n\t.endr");
+#endif
 }
 
 __attribute__((noipa, section(".text.llk_zone.record"))) inline void zone_record(std::uint16_t id16, std::uint64_t start_timestamp, std::uint64_t end_timestamp)
@@ -160,6 +165,47 @@ __attribute__((noipa, section(".text.llk_zone.record"))) inline void zone_record
 __attribute__((section(".llk_quiet_data"))) inline std::uint32_t quiet_seen = 0;
 
 __attribute__((noipa, section(".llk_quiet_text"))) inline void quiet_wait()
+{
+    while (llk_barrier::detail::settled(ckernel::semaphore_read(llk_barrier::RELEASE_SEM)) == quiet_seen)
+    {
+        for (std::uint32_t i = 0; i < 32; ++i)
+        {
+            asm volatile("nop");
+        }
+    }
+}
+#endif
+
+#if defined(LLK_DBG_BARRIER) && !defined(LLK_PERF_INIT_ONLY)
+// The TILE_LOOP zone reserves its records before its park, so the code between the release and the start read is the
+// park's own epilogue only, whatever the bookkeeping costs.
+inline bool tile_loop_opened = false;
+
+template <bool LOOP_PAD>
+struct zone_prereserve
+{
+    inline __attribute__((always_inline)) zone_prereserve()
+    {
+        if constexpr (LOOP_PAD)
+        {
+            ckernel::fence_compiler();
+            tile_loop_opened = !is_buffer_full();
+            if (tile_loop_opened)
+            {
+                zone_reserve();
+            }
+            ckernel::fence_compiler();
+        }
+    }
+};
+#define LLK_ZONE_PRERESERVE_(loop_pad) const llk_profiler::zone_prereserve<loop_pad> _zone_prereserve_;
+#else
+#define LLK_ZONE_PRERESERVE_(loop_pad)
+#endif
+
+#if defined(LLK_DBG_BARRIER)
+// quiet_wait inline: in the TILE_LOOP build the held peers' wait sits in their pinned TILE_LOOP code.
+__attribute__((always_inline)) inline void quiet_wait_here()
 {
     while (llk_barrier::detail::settled(ckernel::semaphore_read(llk_barrier::RELEASE_SEM)) == quiet_seen)
     {
@@ -189,6 +235,15 @@ public:
     inline __attribute__((always_inline)) zone_scoped()
     {
         ckernel::fence_compiler();
+#if defined(LLK_DBG_BARRIER) && !defined(LLK_PERF_INIT_ONLY)
+        if constexpr (LOOP_PAD) // reserved before the TILE_LOOP park (zone_prereserve): only the clock read follows the release
+        {
+            start_timestamp = ckernel::read_wall_clock();
+            is_opened       = tile_loop_opened;
+            ckernel::fence_compiler();
+            return;
+        }
+#endif
         if (LOOP_PAD ? !is_buffer_full() : __builtin_expect(!is_buffer_full(), 1))
         {
             is_opened = true;
@@ -204,7 +259,11 @@ public:
 #if defined(LLK_DBG_BARRIER)
         if constexpr (QUIET_WAIT)
         {
+#if !defined(LLK_PERF_INIT_ONLY)
+            quiet_wait_here(); // inline, so its code sits with the pinned loop and no other code change moves it
+#else
             quiet_wait();
+#endif
         }
 #endif
         if (LOOP_PAD ? is_opened : __builtin_expect(is_opened, 1))
