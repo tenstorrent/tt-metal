@@ -189,7 +189,8 @@ PerTokenCastBackProgramFactory::cached_program_t create_tile_output_program(
         DataMovementConfig{
             .processor = DataMovementProcessor::RISCV_0, .noc = NOC::RISCV_1_default, .compile_args = writer_ct});
 
-    // Fp8 CBs on Blackhole need 32-bit DEST. bf16 data x pow2 bf16 scale is exact at HiFi2.
+    // Fp8 CBs on Blackhole need 32-bit DEST. The multiply is e4m3 data (4 significant bits) x a power-of-two scale,
+    // so a single LoFi phase already forms the exact product.
     std::vector<UnpackToDestMode> unpack_to_dest_mode(NUM_CIRCULAR_BUFFERS, UnpackToDestMode::Default);
     unpack_to_dest_mode[cb_in] = UnpackToDestMode::UnpackToDestFp32;
     KernelHandle compute_kernel_id = CreateKernel(
@@ -197,7 +198,7 @@ PerTokenCastBackProgramFactory::cached_program_t create_tile_output_program(
         kdir + "compute/compute_per_token_cast_back_tile.cpp",
         all_cores,
         ComputeConfig{
-            .math_fidelity = MathFidelity::HiFi2,
+            .math_fidelity = MathFidelity::LoFi,
             .fp32_dest_acc_en = true,
             .unpack_to_dest_mode = unpack_to_dest_mode,
             .compile_args = {cb_in, cb_tiles, cb_scale, cb_out, cb_loop_count, G}});

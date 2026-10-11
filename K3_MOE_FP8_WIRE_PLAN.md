@@ -57,6 +57,22 @@ T_moe does not move on the LB because dispatch runs on its own sub-device alongs
 of matmuls), which is now the longer branch; on the Galaxy dispatch spans more hops and should show it. bf16 rows
 (7168 B) don't fit with the metadata, so the bf16 wire keeps two packets.
 
+**Why fp8 still trails bf16 on the LB (2026-10-11).** Summed device time is lower on fp8 (5088 vs 5235 µs per
+forward), but dispatch runs on its own sub-device beside the shared expert, and the shared expert (its matmuls plus
+collectives) is the longer branch on both wires, so the dispatch savings (bf16 582 µs, fp8 325 µs) are hidden. What
+stays visible is Q1 + DQ1 + Q2 (~212 µs) against the combine, reduce and gather savings (~160 µs): about +50 µs,
+the measured gap. Running DQ1 on the dispatch sub-device inside that window would need ~3 core rows (it is
+compute-bound, ~22 µs per 28-tile unit), which slows the shared expert by about what it saves. DQ1 at LoFi is exact
+but unchanged (bound by unpack/pack, not math).
+
+**Status of the goals that remain open.**
+- G1 (≤ 4.80 ms on the LB): blocked by the structure above. On the LB the remaining fp8 costs can only be cut by
+  making the casts cheaper; each is now bound by data movement or unpack/pack per tile. The Galaxy (more dispatch
+  hops, where dispatch is not hidden) is where the fp8 wire is expected to pay.
+- G2 (standalone Q2 ≤ 60 µs): not met, ~106 µs; compute (~1000 cycles per tile) and the writer's scale
+  extraction are balanced at ~70–80 µs per core.
+- G6 (Galaxy run): needs the 8×4 hardware.
+
 **Combine (2026-10-11): no packet lever found.** Combine already sends one packet per row. A deeper reader→writer
 CB (2 → 8 rows) changed nothing (369 vs 365 µs); batching the per-packet flush over 4 rows with rotating headers
 made it 2× slower (749 µs) and was reverted. Remote rows are roughly 5 MB per chip over 2 links, so combine is
