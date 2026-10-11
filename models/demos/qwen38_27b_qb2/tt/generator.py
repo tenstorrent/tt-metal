@@ -209,7 +209,9 @@ class Qwen38Generator:
         self.prefill_signatures.add((self.cache.batch_size, tuple(self.page_table.shape), 0, 0, length, False))
         return self.prefill_prepared["output"]
 
-    def serving_prefill_tokens(self, tokens, *, page_table, kv_cache, prompt_lens, start_pos, slots):
+    def serving_prefill_tokens(
+        self, tokens, *, page_table, kv_cache, prompt_lens, start_pos, slots, multimodal_plans=None
+    ):
         """Sample scheduler rows; prompt_lens are absolute exclusive prompt ends."""
         if kv_cache is not self.cache:
             raise ValueError("Serving prefill requires the exact bound cache")
@@ -229,7 +231,9 @@ class Qwen38Generator:
         for start, end, slot in zip(starts, ends, slots):
             if not 0 <= slot < kv_cache.batch_size or not 0 <= start < end <= min(tokens.shape[1], kv_cache.capacity):
                 raise ValueError("Serving prompt positions or slots exceed the bound cache")
-        if len(ends) == 1 and slots == [0] and starts == [0] and ends[0] <= 4096:
+        if multimodal_plans is not None and len(multimodal_plans) != len(ends):
+            raise ValueError("Each prefill row needs one multimodal plan or None")
+        if not multimodal_plans and len(ends) == 1 and slots == [0] and starts == [0] and ends[0] <= 4096:
             self._refresh_table(page_table)
             output = self._prefill_for_generate(tokens[:, : ends[0]], trace_sampling=True)
             if self.prefill_sample_trace is None:
@@ -241,7 +245,13 @@ class Qwen38Generator:
                 self.counters["prefill_sampling_replays"] += 1
             return self.tokens
         signature = self._prepare_serving_prefill_sampling(
-            tokens, page_table=page_table, kv_cache=kv_cache, ends=ends, starts=starts, slots=slots
+            tokens,
+            page_table=page_table,
+            kv_cache=kv_cache,
+            ends=ends,
+            starts=starts,
+            slots=slots,
+            **({"multimodal_plans": multimodal_plans} if multimodal_plans is not None else {}),
         )
         # Preparation owns every public logit and packed temporary. They must
         # die before replay can reuse the sampling trace's scratch addresses.
@@ -254,11 +264,14 @@ class Qwen38Generator:
         self._prefill_sampling_signatures.add(signature)
         return self.tokens
 
-    def _prepare_serving_prefill_sampling(self, tokens, *, page_table, kv_cache, ends, starts, slots):
+    def _prepare_serving_prefill_sampling(
+        self, tokens, *, page_table, kv_cache, ends, starts, slots, multimodal_plans=None
+    ):
         """Copy packed logits into cache-bound storage; return no device temporaries."""
         outputs = []
         grouped = (
             getattr(self, "batched_prefill", False)
+            and multimodal_plans is None
             and len(ends) > 1
             and len(set(starts)) == 1
             and len(set(ends)) == 1
@@ -283,6 +296,7 @@ class Qwen38Generator:
                     prompt_lens=[end - start],
                     start_pos=[start],
                     slots=[slot],
+                    **({"multimodal_plans": [multimodal_plans[row]]} if multimodal_plans is not None else {}),
                 )
             )
         if getattr(self, "_prefill_sampling_cache", None) is not self.cache:
@@ -374,6 +388,7 @@ class Qwen38Generator:
         return_all_logits=False,
         slots=None,
         start_pos=None,
+        multimodal_plans=None,
         **kwargs,
     ):
         if getattr(self.model, "_resident_decode_bucket", None) is not None:
@@ -393,6 +408,12 @@ class Qwen38Generator:
         starts = [0] * len(slots) if start_pos is None else list(start_pos)
         if len(starts) != len(slots) or len(slots) != len(prompt_lens) or len(set(slots)) != len(slots):
             raise ValueError("Each prompt must name one distinct fixed slot")
+        if multimodal_plans is not None:
+            if len(multimodal_plans) != len(slots):
+                raise ValueError("Each prefill row needs one multimodal plan or None")
+            # Visual chunk inputs are transient. Release parked decode scratch
+            # before new uploads/programs; decode is recaptured after prefill.
+            self._release_traces()
         signatures = {
             (kv_cache.batch_size, tuple(page_table.shape), slot, start, length, return_all_logits)
             for slot, start, length in zip(slots, starts, prompt_lens)
@@ -407,6 +428,7 @@ class Qwen38Generator:
         table = self.page_table
         if (
             getattr(self, "batched_prefill", False)
+            and multimodal_plans is None
             and len(slots) > 1
             and not return_all_logits
             and len(set(starts)) == 1
@@ -464,6 +486,11 @@ class Qwen38Generator:
                     start_pos=start + offset,
                     slot=slot,
                     all_logits=return_all_logits,
+                    **(
+                        {"multimodal": multimodal_plans[row].chunk(start + offset, count)}
+                        if multimodal_plans is not None and multimodal_plans[row] is not None
+                        else {}
+                    ),
                 )
                 if return_all_logits:
                     chunks.append(self._host_logits(logits))
@@ -689,6 +716,7 @@ class Qwen38Generator:
         record_history=False,
         host_sampling=None,
         active_slots=None,
+        rope_deltas=None,
         **kwargs,
     ):
         if kv_cache is not self.cache:
@@ -760,8 +788,23 @@ class Qwen38Generator:
             if active and (positions[active] < 0).any():
                 raise ValueError("Active slots require nonnegative positions")
             self.remaining_steps = int((kv_cache.capacity - positions[active]).min()) if active else 0
+            rotary_positions = positions.clamp_min(0)
+            if rope_deltas is not None:
+                deltas = torch.as_tensor(rope_deltas, dtype=torch.int64).reshape(-1)
+                if deltas.numel() != kv_cache.batch_size:
+                    raise ValueError("M-RoPE deltas must follow every fixed decode row")
+                rotary_positions = positions.to(torch.int64) + deltas
+                if active and (
+                    (rotary_positions[active] < 0).any() or (rotary_positions[active] >= self.model.context).any()
+                ):
+                    raise ValueError("M-RoPE positions lie outside the rotary table")
+                rotary_positions[[i for i in range(kv_cache.batch_size) if i not in active]] = 0
+                if active:
+                    self.remaining_steps = min(
+                        self.remaining_steps, int((self.model.context - rotary_positions[active]).min())
+                    )
             self._copy(positions, self.positions, "position_refreshes")
-            self._copy(positions.clamp_min(0), self.rope_indices, "rope_refreshes")
+            self._copy(rotary_positions.int(), self.rope_indices, "rope_refreshes")
         if self.remaining_steps is None or self.remaining_steps <= 0:
             raise ValueError("No decode positions are bound, or cache capacity is exhausted")
         if self.trace is not None and self.trace_records_history != record_history:

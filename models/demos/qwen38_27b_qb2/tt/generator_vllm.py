@@ -205,6 +205,7 @@ class Qwen38ForCausalLM:
         start_pos=None,
         sampling_params=None,
         empty_slots=None,
+        multimodal_plans=None,
         **kwargs,
     ):
         self._cache(kv_cache)
@@ -224,6 +225,7 @@ class Qwen38ForCausalLM:
                 prompt_lens=ends,
                 start_pos=starts,
                 slots=slots,
+                **({"multimodal_plans": multimodal_plans} if multimodal_plans is not None else {}),
             )
             result = self.process_decode_output_host(self.read_decode_output(tokens_out), is_tokens=True)[: len(ends)]
         else:
@@ -237,6 +239,7 @@ class Qwen38ForCausalLM:
                         prompt_lens=[end - start],
                         start_pos=[start],
                         slots=[slot],
+                        **({"multimodal_plans": [multimodal_plans[row]]} if multimodal_plans is not None else {}),
                     )
                 )
             result = torch.cat([self.generator._host_logits(x).reshape(1, 1, -1) for x in outputs], dim=0)

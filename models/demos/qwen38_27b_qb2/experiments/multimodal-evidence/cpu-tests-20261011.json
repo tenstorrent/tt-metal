@@ -1,0 +1,45 @@
+{
+  "captured_at_utc": "2026-10-11T03:39:47.271708+00:00",
+  "worktree_branch": "anatarajan/qwen38-multimodal-20261010",
+  "base": "4d4c6db8d30527d74a0fbbf42e1106422e546ba4",
+  "status": "CPU checks passed; native import, device, API, memory and performance unqualified",
+  "counts": {
+    "tests": 42,
+    "errors": 0,
+    "failures": 0,
+    "skipped": 0
+  },
+  "python": "3.11.15",
+  "platform": "macOS-26.6.2-arm64-arm-64bit",
+  "versions": {
+    "torch": "2.9.0",
+    "transformers": "5.12.1",
+    "safetensors": "0.6.2",
+    "pytest": "8.4.2"
+  },
+  "source_sha256": {
+    "models/demos/qwen38_27b_qb2/tt/multimodal.py": "b02d2fbbe61b0d540568ad5cc66cc329de98e4c7795e12073cefcb4ad35bb2fe",
+    "models/demos/qwen38_27b_qb2/tt/vision_weights.py": "390423b6f532150d11a86ee78b9a90250a279dcc074d39ab50f4e334c4fb93da",
+    "models/demos/qwen38_27b_qb2/tt/vision.py": "044ec0e3e8083836773d245c9e63b4907a724cdb0ca85f2a0155f052befe06b8",
+    "models/demos/qwen38_27b_qb2/tt/generator_vllm_multimodal.py": "5f2194caa2e092bd99f4ea2a9a192e2c7c8c43b163ffc6a6b07b0043155d5558",
+    "models/demos/qwen38_27b_qb2/tt/model.py": "73f27180fda97f5546168177615c15a8f92e69f34512d20e18cecdc07f2dfdd8",
+    "models/demos/qwen38_27b_qb2/tt/generator.py": "27e861521966ad3e81bca2e477f4140620e3da583c5f3b4fd4a13fd151cce308",
+    "models/demos/qwen38_27b_qb2/tt/generator_vllm.py": "4a00f40fddea91f57ff95581d0b2f637ceceadc77b04ebcbcab0386456bdce92",
+    "models/demos/qwen38_27b_qb2/tests/unit/test_multimodal.py": "9c42710fff8f35f4ee16e16524e194239a791621288a62527e594587b90d50c6",
+    "models/demos/qwen38_27b_qb2/tests/unit/test_multimodal_adapter.py": "2503b1db28f3f2aba6406d4e5355939a3e0a90765ac442d736230a64a4df9dbc"
+  },
+  "pytest_arguments": [
+    "models/demos/qwen38_27b_qb2/tests/unit/test_multimodal.py",
+    "models/demos/qwen38_27b_qb2/tests/unit/test_multimodal_adapter.py",
+    "--confcutdir=models/demos/qwen38_27b_qb2/tests/unit",
+    "-c",
+    "/dev/null",
+    "--rootdir=.",
+    "-p",
+    "no:cacheprovider",
+    "--junitxml=/private/tmp/qwen38-multimodal-20261010-cpu.xml",
+    "-q"
+  ],
+  "fixture": "Exact expect_error fixture AST extracted from root conftest.py and supplied to pytest.main as a plugin to avoid importing native device fixtures on macOS. No device/model-import parity is claimed.",
+  "junit_sha256": "6b7008fb6bfcf696cebd614b5087fdb55309485e086690017724d69e48837824"
+}

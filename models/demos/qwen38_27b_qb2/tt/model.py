@@ -168,6 +168,7 @@ class Qwen38Model:
             packer_l1_acc=True,
         )
         rope = Qwen3_5TextRotaryEmbedding(self.config)
+        self._host_rotary = rope
         cc, ss = rope(torch.empty(1, self.context, 1, dtype=torch.bfloat16), torch.arange(self.context)[None])
         self.cos_table, self.sin_table = [self.upload(v.squeeze(0), layout=ttnn.ROW_MAJOR_LAYOUT) for v in (cc, ss)]
         self.rotary_width = cc.shape[-1]
@@ -294,9 +295,33 @@ class Qwen38Model:
             parts.append(ttnn.to_memory_config(out, ttnn.DRAM_MEMORY_CONFIG))
         return ttnn.concat(parts, dim=-1)
 
-    def prefill(self, tokens, *, cache, page_table, length, start_pos=0, slot=0, all_logits=False, positions=None):
+    def prefill(
+        self,
+        tokens,
+        *,
+        cache,
+        page_table,
+        length,
+        start_pos=0,
+        slot=0,
+        all_logits=False,
+        positions=None,
+        multimodal=None,
+    ):
         """Single request, logical length; independent fixed-slot state is updated on device."""
         x = self.embed(tokens, batch=1, length=length)
+        if multimodal is not None:
+            if tuple(multimodal.vision_values.shape) != (1, length, self.config.hidden_size):
+                raise ValueError("Visual prefill chunk has the wrong embedding shape")
+            if tuple(multimodal.vision_mask.shape) != (1, length, 1) or tuple(multimodal.rope_positions.shape) != (
+                3,
+                1,
+                length,
+            ):
+                raise ValueError("Visual prefill chunk has the wrong mask or M-RoPE shape")
+            visual = self.upload(multimodal.vision_values)
+            mask = self.upload(multimodal.vision_mask)
+            x = ttnn.where(mask, visual, x)
         if positions is None:
             positions = self.upload(
                 torch.arange(start_pos, start_pos + length, dtype=torch.int32).reshape(1, length),
@@ -311,7 +336,17 @@ class Qwen38Model:
             or positions.memory_config() != ttnn.DRAM_MEMORY_CONFIG
         ):
             raise ValueError("Prefill positions must be a UINT32 row-major DRAM tensor with shape [1, length]")
-        cc, ss = self.rope(positions, batch=1, length=length)
+        if multimodal is None:
+            cc, ss = self.rope(positions, batch=1, length=length)
+        else:
+            # Three-dimensional rotary positions must never replace logical
+            # token offsets used by paged KV writes and causal attention.
+            cc, ss = [
+                self.upload(value)
+                for value in self._host_rotary(
+                    torch.empty(1, length, 1, dtype=torch.bfloat16), multimodal.rope_positions
+                )
+            ]
         pos_matrix = ttnn.reshape(ttnn.typecast(positions, ttnn.int32), [length, 1])
         table = page_table[slot : slot + 1, :]
         for layer, state in zip(self.layers, cache.layers):
