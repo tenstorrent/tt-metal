@@ -25,7 +25,7 @@ kernel time (`scripts/run_safe_pytest.sh --profile`, `K3_PERF_ITERS=1`), median 
 
 | | bf16 wire | fp8 1×32 now | Δ |
 |---|---|---|---|
-| **T_moe (traced)** | **4.97 ms** | **4.98 ms** | **+0.01 ms (level)** |
+| **T_moe (traced)** | **4.93 ms** | **4.98–5.00 ms** | **+0.05 ms** |
 | dispatch | 582 µs | 543 µs | −39 |
 | combine | 417 µs | 375 µs | −42 |
 | post_combine_reduce (DQ2 fused) | 196 µs | 141 µs | −55 |
@@ -40,7 +40,7 @@ The wire now saves ~160 µs and the three standalone passes cost ~211 µs.
 
 | Goal | Target | Status |
 |---|---|---|
-| **G1 (headline)** fp8 traced T_moe beats bf16 at Galaxy load | ≤ 4.80 ms, final_output PCC ≥ 0.994 | 4.98 ms (level with bf16) |
+| **G1 (headline)** fp8 traced T_moe beats bf16 at Galaxy load | ≤ 4.80 ms, final_output PCC ≥ 0.994 | 4.98–5.00 ms vs bf16 4.93 ms (same-day rerun) |
 | **G2** Q2 | was: fused in the expert epilogue. Measured: expert +~300 µs vs ~106 µs standalone (see below), so Q2 stays standalone; target ≤ 60 µs | standalone ~106 µs; epilogue parked |
 | **G3** Q1 before the latent all-gather | Q1 on each chip's slice; fp8 gather | done: Q1 27 → 14 µs, gather 87 → 67 µs |
 | **G4** DQ1 | ≤ 90 µs; full fusion only with a shared-tilize expert | 91 µs, reads the segmented rows |
@@ -49,6 +49,11 @@ The wire now saves ~160 µs and the three standalone passes cost ~211 µs.
 
 Out of scope until G1 is decided: e8m0 (1-byte) scales, 1×128 comparisons, the 1D-fabric sparse-mcast
 dispatch (measured in §1.3a, not the shipped topology).
+
+**Fabric payload sweep (2026-10-11).** fp8 at 4160 / 4352 / 7168 / 8704 B and bf16 at 7168 / 7232 B: dispatch,
+combine and traced T_moe all within run-to-run noise. Packets stay one per token per destination at every size
+(dispatch / combine split only at the configured limit, no in-payload header), and both ops are bound by per-packet
+work, so packet count (F6: two rows per packet at 8704) is the lever, not packet size. Keep 7168.
 
 **G2 finding (2026-10-11): the epilogue loses.** It was built (`out_packed_fp8` expert mode, parked as
 `k3_scratch/g2_q2_epilogue.patch`) and runs, but the expert grows by ~300 µs. 32-bit DEST alone costs ~20 µs. The
