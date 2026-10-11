@@ -70,8 +70,6 @@ def test_deepseek_v3_moe_perf_loudbox():
     run_moe_perf_with_approximation(
         command_8x1=_CMD_8X1,
         # Re-cut 2026-10-11 to the mean of 5 main runs (3,006,482 to 3,053,820 ns), newest 38097238183.
-        # ND-sharded routed-expert weights are the whole delta: the op reads 817,335 ns against
-        # 979,850 ns on main run 36360866118, and the remainder moves by under 1%.
         expected_ns_8x1=3_023_036,
         model_name_8x1="deepseek_v3_moe_lb_8x1_torus_y_dispatch_combine",
         command_2x4=_CMD_2X4,
