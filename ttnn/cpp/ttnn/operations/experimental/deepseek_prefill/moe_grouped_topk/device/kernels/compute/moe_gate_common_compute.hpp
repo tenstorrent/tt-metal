@@ -48,8 +48,9 @@ constexpr ckernel::TopkTieOrder GATE_TOPK_TIE_ORDER =
 // the plain network order ties. It is lossless only while those bits are zero, which holds for keys
 // unpacked through SrcA as TF32 (mantissa bits 12..0 zero) and is certified by the factory as
 // sort_keys_tf32. It sorts stable-by-index only where candidates arrive in index order: the
-// single-group expert top-k and the group-score sort (column == group id), not the grouped path's
-// final top-k, whose winning-group tiles arrive in group-sum order. Everything else keeps the comparator.
+// single-group expert top-k, the group-score sort (column == group id) and, on Blackhole, the grouped
+// path's final top-k, whose winning groups the writer gathers in group id order. Everything else keeps
+// the comparator.
 constexpr uint32_t GATE_TAG_BITS = 6;
 constexpr uint32_t TF32_ZERO_LOW_MANTISSA_BITS = 13;  // fp32 mantissa (23) - TF32 mantissa (10)
 static_assert((1u << GATE_TAG_BITS) >= 64, "a two-tile chain (ranks 0..63) must fit the tag field");
@@ -137,24 +138,50 @@ template <uint32_t score_func>
 void apply_score_func(uint32_t cb_in_scores_id, uint32_t cb_activated_scores_id, uint32_t width_tiles) {
     CircularBuffer cb_in_scores(cb_in_scores_id);
     CircularBuffer cb_activated_scores(cb_activated_scores_id);
+#if defined(ARCH_BLACKHOLE)
+    // Nothing in the loop changes these, so they are set up once a row.
+    constexpr bool setup_once = true;
+#else
+    constexpr bool setup_once = false;
+#endif
+    if constexpr (setup_once) {
+        // Reconfigure the unpacker for float32 input (a prior top-k iteration may have left it on UInt16).
+        reconfig_data_format_srca(cb_in_scores_id);
+        copy_init(cb_in_scores_id);
+        if constexpr (score_func == SCORE_FUNC_SQRTSOFTPLUS) {
+            softplus_tile_init();
+            sqrt_tile_init();
+        } else {
+            sigmoid_tile_init();
+        }
+        pack_reconfig_data_format(cb_activated_scores_id);
+    }
     for (uint32_t width_tile = 0; width_tile < width_tiles; width_tile++) {
         cb_in_scores.wait_front(1);
         tile_regs_acquire();
-        // Reconfigure the unpacker for float32 input (a prior top-k iteration may have left it on UInt16).
-        reconfig_data_format_srca(cb_in_scores_id);
-        // copy tile from scores cb to destination register 0
-        copy_init(cb_in_scores_id);
+        if constexpr (!setup_once) {
+            // Reconfigure the unpacker for float32 input (a prior top-k iteration may have left it on UInt16).
+            reconfig_data_format_srca(cb_in_scores_id);
+            // copy tile from scores cb to destination register 0
+            copy_init(cb_in_scores_id);
+        }
         copy_tile(cb_in_scores_id, 0, 0);
         if constexpr (score_func == SCORE_FUNC_SQRTSOFTPLUS) {
             // sqrt(softplus(x)) with beta=1, threshold=20 (matches torch.nn.functional.softplus defaults).
             constexpr uint32_t const_1_fp32 = 0x3F800000;   // 1.0f -> beta and beta_reciprocal
             constexpr uint32_t const_20_fp32 = 0x41A00000;  // 20.0f -> threshold
-            softplus_tile_init();
+            if constexpr (!setup_once) {
+                softplus_tile_init();
+            }
             softplus_tile(0, const_1_fp32, const_1_fp32, const_20_fp32);
-            sqrt_tile_init();
+            if constexpr (!setup_once) {
+                sqrt_tile_init();
+            }
             sqrt_tile(0);
         } else {
-            sigmoid_tile_init();
+            if constexpr (!setup_once) {
+                sigmoid_tile_init();
+            }
             sigmoid_tile(0);
         }
         tile_regs_commit();
@@ -162,7 +189,9 @@ void apply_score_func(uint32_t cb_in_scores_id, uint32_t cb_activated_scores_id,
 
         cb_activated_scores.reserve_back(1);
         tile_regs_wait();
-        pack_reconfig_data_format(cb_activated_scores_id);
+        if constexpr (!setup_once) {
+            pack_reconfig_data_format(cb_activated_scores_id);
+        }
         pack_tile(0, cb_activated_scores_id);
         tile_regs_release();
         cb_activated_scores.push_back(1);
@@ -182,6 +211,12 @@ void add_bias(
     CircularBuffer cb_biased_dump(cb_biased_dump_id);
     // Perform add bias on sigmoid scores
     add_init(cb_sigmoid_scores_id, cb_in_bias_id, false);
+#if defined(ARCH_BLACKHOLE)
+    constexpr bool pack_setup_once = true;
+    pack_reconfig_data_format(cb_biased_scores_id);
+#else
+    constexpr bool pack_setup_once = false;
+#endif
     cb_sigmoid_scores.wait_front(width_tiles);
     for (uint32_t width_tile = 0; width_tile < width_tiles; width_tile++) {
         cb_in_bias.wait_front(1);
@@ -195,7 +230,9 @@ void add_bias(
             cb_biased_dump.reserve_back(1);
         }
         tile_regs_wait();
-        pack_reconfig_data_format(cb_biased_scores_id);
+        if constexpr (!pack_setup_once) {
+            pack_reconfig_data_format(cb_biased_scores_id);
+        }
         pack_tile(0, cb_biased_scores_id);
         if constexpr (dump_biased) {
             pack_tile(0, cb_biased_dump_id);
@@ -222,23 +259,41 @@ void process_and_sort_tiles(
     CircularBuffer cb_expert_index_template(cb_expert_index_template_id);
     CircularBuffer cb_sorted_group_scores(cb_sorted_group_scores_id);
     CircularBuffer cb_sorted_expert_indices_temp(cb_sorted_expert_indices_temp_id);
+#if defined(ARCH_BLACKHOLE)
+    // Only the sorted scores go on and they do not depend on the index lanes, so DEST 2 and 3 stay unloaded.
+    constexpr bool sort_index_lanes = false;
+#else
+    constexpr bool sort_index_lanes = true;
+#endif
     topk_tile_init();
     // streaming in input and index tiles to transpose and bitonic local sort them, two tiles at a time
-    cb_expert_index_template.wait_front(Wt);
+    if constexpr (sort_index_lanes) {
+        cb_expert_index_template.wait_front(Wt);
+    }
     cb_biased_scores.wait_front(Wt);
+    if constexpr (!sort_index_lanes) {
+        // nothing else in the loop changes these, so one setup serves every pair
+        reconfig_data_format_srca(cb_biased_scores_id);
+        transpose_init(cb_biased_scores_id);
+        pack_reconfig_data_format(cb_sorted_group_scores_id);
+    }
     for (uint32_t wt = 0; wt < Wt; wt += 2) {
         tile_regs_acquire();
         // transpose and unpack into dest regs
-        reconfig_data_format_srca(cb_biased_scores_id);
-        transpose_init(cb_biased_scores_id);
+        if constexpr (sort_index_lanes) {
+            reconfig_data_format_srca(cb_biased_scores_id);
+            transpose_init(cb_biased_scores_id);
+        }
         transpose_tile(cb_biased_scores_id, wt, 0);
         transpose_tile(cb_biased_scores_id, wt + 1, 1);
 
-        // transpose and unpack into dest regs
-        reconfig_data_format_srca(cb_expert_index_template_id);
-        transpose_init(cb_expert_index_template_id);
-        transpose_tile(cb_expert_index_template_id, wt, 2);
-        transpose_tile(cb_expert_index_template_id, wt + 1, 3);
+        if constexpr (sort_index_lanes) {
+            // transpose and unpack into dest regs
+            reconfig_data_format_srca(cb_expert_index_template_id);
+            transpose_init(cb_expert_index_template_id);
+            transpose_tile(cb_expert_index_template_id, wt, 2);
+            transpose_tile(cb_expert_index_template_id, wt + 1, 3);
+        }
 
         // llk_topk_sort -> inplace
         if constexpr (stable_sort) {
@@ -247,7 +302,9 @@ void process_and_sort_tiles(
         gate_topk_local_sort<stable_sort, /*rank_tag=*/false>(0 /*idst*/, ascending, end_phase);
 
         // pack sorted score tiles
-        pack_reconfig_data_format(cb_sorted_group_scores_id);
+        if constexpr (sort_index_lanes) {
+            pack_reconfig_data_format(cb_sorted_group_scores_id);
+        }
         cb_sorted_group_scores.reserve_back(1);
         tile_regs_commit();
         tile_regs_wait();
@@ -258,18 +315,20 @@ void process_and_sort_tiles(
         pack_tile(1, cb_sorted_group_scores_id);
         cb_sorted_group_scores.push_back(1);
 
-        // pack sorted index tiles
-        pack_reconfig_data_format(cb_sorted_expert_indices_temp_id);
-        cb_sorted_expert_indices_temp.reserve_back(1);
-        pack_tile(2, cb_sorted_expert_indices_temp_id);
-        cb_sorted_expert_indices_temp.push_back(1);
+        if constexpr (sort_index_lanes) {
+            // pack sorted index tiles
+            pack_reconfig_data_format(cb_sorted_expert_indices_temp_id);
+            cb_sorted_expert_indices_temp.reserve_back(1);
+            pack_tile(2, cb_sorted_expert_indices_temp_id);
+            cb_sorted_expert_indices_temp.push_back(1);
 
-        cb_sorted_expert_indices_temp.reserve_back(1);
-        pack_tile(3, cb_sorted_expert_indices_temp_id);
-        cb_sorted_expert_indices_temp.push_back(1);
+            cb_sorted_expert_indices_temp.reserve_back(1);
+            pack_tile(3, cb_sorted_expert_indices_temp_id);
+            cb_sorted_expert_indices_temp.push_back(1);
 
-        cb_sorted_expert_indices_temp.wait_front(2);
-        cb_sorted_expert_indices_temp.pop_front(2);
+            cb_sorted_expert_indices_temp.wait_front(2);
+            cb_sorted_expert_indices_temp.pop_front(2);
+        }
 
         tile_regs_release();
         ascending = switch_dir ? !ascending : ascending;
@@ -375,8 +434,21 @@ void transpose_and_pack(const uint32_t input_cb_index, const uint32_t output_cb_
     }
 }
 
-// rank_tag: the rank-tag stable engine is valid only when tile j holds indices above every index in
-// tiles 0..j-1 (single-group expert top-k: yes; the sum-ordered winning groups of the grouped path: no).
+#if defined(ARCH_BLACKHOLE)
+// The datacopy MOP for cb_id's format, without the address modes, CLR_DVALID write and counter reset of a full init,
+// which nothing in a top-k step changes (its SFPU code uses ADDR_MOD_6 and 7).
+ALWI void datacopy_mop_only(uint32_t cb_id) {
+    state_configure(cb_id, __builtin_LINE());
+    MATH((eltwise_unary_configure_mop<DataCopyType::A2D, DST_ACCUM_MODE, BroadcastType::NONE, false, false>(
+        p_mova2d::MOV_8_ROWS,
+        16,
+        get_operand_num_faces(get_operand_id(cb_id)),
+        get_operand_dst_format(get_operand_id(cb_id)))));
+}
+#endif
+
+// rank_tag: valid only when tile j holds indices above every index in tiles 0..j-1: the single-group top-k,
+// and on Blackhole the grouped path, whose writer gathers winning groups by id.
 template <bool stable_sort = false, bool indices_pretransposed = false, bool rank_tag = false>
 void topk(
     const uint32_t cb_winning_group_scores_id,
@@ -428,14 +500,37 @@ void topk(
 
     // Use insertion sort; discard lower half and keep upper half
     // Compare upper half with the next tile; insert into correct position
+#if defined(ARCH_BLACKHOLE)
+    // The score and template inits share everything but the unpack transpose and the move op, so only those are
+    // switched after the first pair's full inits.
+    constexpr bool switch_mop_only = indices_pretransposed;
+#else
+    constexpr bool switch_mop_only = false;
+#endif
     for (uint32_t j = 2; j < tiles; j++) {
         reconfig_data_format_srca(cb_winning_group_scores_id);
-        transpose_init(cb_winning_group_scores_id);
+        if constexpr (switch_mop_only) {
+            UNPACK((llk_unpack_A_init<BroadcastType::NONE, true, EltwiseBinaryReuseDestType::NONE>(
+                true, true, cb_winning_group_scores_id)));
+#if defined(ARCH_BLACKHOLE)
+            datacopy_mop_only(cb_winning_group_scores_id);
+#endif
+        } else {
+            transpose_init(cb_winning_group_scores_id);
+        }
         transpose_tile(cb_winning_group_scores_id, j, 1);
 
         reconfig_data_format_srca(cb_winning_group_indices_id);
         if constexpr (indices_pretransposed) {
-            copy_init(cb_winning_group_indices_id);
+            if constexpr (switch_mop_only) {
+                UNPACK((llk_unpack_A_init<BroadcastType::NONE, false, EltwiseBinaryReuseDestType::NONE, UnpackToDestEn>(
+                    0, false, cb_winning_group_indices_id)));
+#if defined(ARCH_BLACKHOLE)
+                datacopy_mop_only(cb_winning_group_indices_id);
+#endif
+            } else {
+                copy_init(cb_winning_group_indices_id);
+            }
             copy_tile(cb_winning_group_indices_id, j, 3);
         } else {
             transpose_init(cb_winning_group_indices_id);
