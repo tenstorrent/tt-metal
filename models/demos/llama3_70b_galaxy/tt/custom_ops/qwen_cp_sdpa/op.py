@@ -635,6 +635,10 @@ def qwen_cp_sdpa(
         raise ValueError("only the streaming compute (fp32_dest_acc_en=False) is supported")
     if tuple(q0.shape) != tuple(q1.shape) or q0.dtype != q1.dtype:
         raise ValueError(f"q0 / q1 must match: {tuple(q0.shape)} {q0.dtype} vs {tuple(q1.shape)} {q1.dtype}")
+    # The reader takes q1's address with q0's tensor accessor, so q1 must share q0's layout and memory config.
+    for name, t in (("q0", q0), ("q1", q1)):
+        if t.layout != ttnn.TILE_LAYOUT or t.memory_config() != ttnn.DRAM_MEMORY_CONFIG:
+            raise ValueError(f"{name} must be TILE layout DRAM interleaved, got {t.layout} {t.memory_config()}")
     B, NQH, sl, DH = (int(x) for x in q0.shape)
     if B != 1 or NQH > 255:
         raise ValueError(f"q must be [1, NQH <= 255, sl, DH], got {tuple(q0.shape)}")
@@ -647,6 +651,10 @@ def qwen_cp_sdpa(
     )
     if g.q_num_chunks > 255 or sl % g.q_chunk:
         raise ValueError(f"slice length {sl} must be a multiple of q_chunk {g.q_chunk} with <= 255 chunks")
+    if g.NQH % g.NKH:
+        raise ValueError(f"query heads {g.NQH} must be a multiple of the KV heads {g.NKH}")
+    if sl % g.k_chunk:
+        raise ValueError(f"slice length {sl} must be a multiple of k_chunk {g.k_chunk}")
     if 2 * cols * sl > g.max_blocks * g.block_size:
         raise ValueError("page table shorter than the 2 * cols slices")
     exp_approx = program_config.exp_approx_mode
