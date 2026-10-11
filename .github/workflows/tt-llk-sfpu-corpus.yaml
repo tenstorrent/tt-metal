@@ -5,6 +5,9 @@ on:
     paths:
       - "tt_metal/tt-llk/tt_llk_*/common/inc/sfpu/**"
       - "tt_metal/tt-llk/tests/corpus/**"
+      - "tt_metal/tt-llk/tests/helpers/**"
+      - "tt_metal/tt-llk/tests/python_tests/**"
+      - "tt_metal/tt-llk/tests/sources/**"
       - ".github/workflows/tt-llk-sfpu-corpus.yaml"
       - ".github/workflows/tt-llk-sfpu-corpus-resource-owner.yaml"
       - ".github/workflows/tt-llk-sfpu-corpus-resource-owner.md"
