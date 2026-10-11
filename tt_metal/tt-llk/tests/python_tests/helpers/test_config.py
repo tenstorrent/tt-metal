@@ -1541,6 +1541,9 @@ class TestConfig:
         if self._wormhole_perf_barrier():
             # BRISC restarts the TRISCs at every rendezvous (see barrier.h); per thread INIT placement: PERF_OOL_THREADS
             OPTIONS_COMPILE += "-DLLK_DBG_BARRIER "
+            # experiment hook (pkfast): extra flags, e.g. the INIT NOP hooks -DLLK_EXP_NOP_PACK_INIT=4
+            if os.environ.get("LLK_EXP_CFLAGS"):
+                OPTIONS_COMPILE += os.environ["LLK_EXP_CFLAGS"] + " "
 
         if os.environ.get("TT_METAL_DISABLE_SFPLOADMACRO") == "1":
             OPTIONS_COMPILE += "-DDISABLE_SFPLOADMACRO "
@@ -2026,8 +2029,21 @@ class TestConfig:
                 str(assembly),
             ]
             logger.trace(" ".join(shlex.quote(part) for part in compile_command))
-            run_shell_command(compile_command, TestConfig.TESTS_WORKING_DIR, source)
-            text = assembly.read_text()
+            if os.environ.get("LLK_EXP_COMPILE_CACHE"):
+                # experiment hook (speed agent): content-addressed cache of this compile, see compile_cache.py
+                from .compile_cache import compile_assembly
+
+                text = compile_assembly(
+                    TestConfig.GXX,
+                    compile_command[1 : compile_command.index("-S")],
+                    TestConfig.TESTS_WORKING_DIR,
+                    source,
+                    assembly,
+                    {variant_dir: "VARIANT", TestConfig.TESTS_WORKING_DIR: "TESTS"},
+                )
+            else:
+                run_shell_command(compile_command, TestConfig.TESTS_WORKING_DIR, source)
+                text = assembly.read_text()
             if init_only:
                 text = _init_callees_in_slot(text)
             else:
@@ -2037,7 +2053,7 @@ class TestConfig:
                 ) as f:
                     f.write(text)
                 TestConfig._remember_assembly(assembly.with_suffix(".s.gz"), text)
-            assembly.unlink()
+            assembly.unlink(missing_ok=True)
         else:
             text = TestConfig._kept_assembly(assembly.with_suffix(".s.gz"), probe)
         p, z = pads or (0, 0)
@@ -2334,6 +2350,10 @@ class TestConfig:
         """A run without --speed-of-light takes its INIT measurement ELFs from a speed-of-light build that tests of
         the same sharing key share (perf/init_share.py); a --speed-of-light run builds the variant's own.
         """
+        if (
+            os.environ.get("LLK_EXP_INIT_SHARE") == "off"
+        ):  # experiment hook (nsinit): initcheap's INIT build
+            return False
         return not TestConfig.SPEED_OF_LIGHT and not self.skip_build_header
 
     def _init_share_key(self) -> str:
