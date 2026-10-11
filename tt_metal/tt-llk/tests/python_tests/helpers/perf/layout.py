@@ -504,8 +504,21 @@ class Kernel:
                 and (w >> 15) & 31 == (nxt >> 15) & 31
             ):
                 reads.append(a)
+        # A zone that reserves its records before its park (profiler.h zone_prereserve: the TILE_LOOP zone) starts at the
+        # first clock read after the park's restart, with only straight-line code between them.
+        after_park = set()
+        for e in sorted(a for a, w in self.words.items() if w == EBREAK):
+            a = e + 4
+            while a < self.rk1:
+                w = self.words.get(a)
+                if w is None or w & 0x7F in (0x63, 0x67, 0x6F):  # a branch or a jump: not straight-line
+                    break
+                if a in reads:
+                    after_park.add(a)
+                    break
+                a += 4
         return (
-            {a for a in reads if calls(a, range(-4, 0), reserve)},
+            {a for a in reads if calls(a, range(-4, 0), reserve)} | after_park,
             {a for a in reads if calls(a, range(1, 14), record)},
         )
 
