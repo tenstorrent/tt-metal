@@ -368,6 +368,21 @@ def ff2_bf8_rs(layer_num=None, n_layers=None) -> bool:
     return layer_num is None or n_layers is None or layer_num < n_layers - last
 
 
+def lofi_fp32_config(hifi2, env):
+    """hifi2 (an fp32-dest HiFi2 config) at LoFi fidelity when env (default 1) is set, else hifi2 unchanged.
+    Used for the QKV and WO matmuls (QWEN_CP_ATTN_MM_LOFI); cpb_sweep job266: QKV 1.353 -> 1.058, WO 1.194 -> 0.992 ms.
+    """
+    if os.environ.get(env, "1") != "1":
+        return hifi2
+    return ttnn.WormholeComputeKernelConfig(
+        math_fidelity=ttnn.MathFidelity.LoFi,
+        math_approx_mode=hifi2.math_approx_mode,
+        fp32_dest_acc_en=hifi2.fp32_dest_acc_en,
+        packer_l1_acc=hifi2.packer_l1_acc,
+        dst_full_sync_en=hifi2.dst_full_sync_en,
+    )
+
+
 def ff2_fp16_dest() -> bool:
     """FF2 LoFi with 16-bit dest accumulation and the larger N block / 2x4 subblock that it allows (FF2_FP16_CFG)
     on the bf8-output layers (QWEN_CP_FF2_FP16=1, default). cpb_sweep job266: LoFi fp32 dest FF2_CFG 2.509 -> 16-bit dest m16k10n8 s2x4
@@ -496,7 +511,7 @@ def attention_prefill(ctx: CPContext, tt_ccl, attn, x_local, rot_mats, w, user_i
         weight_tensor=w["wqkv"],
         config=QKV_CFG,
         dtype=attn.ccl_dtype,
-        compute_kernel_config=attn.compute_kernel_config_hifi2,
+        compute_kernel_config=lofi_fp32_config(attn.compute_kernel_config_hifi2, "QWEN_CP_ATTN_MM_LOFI"),
         memory_config=ttnn.DRAM_MEMORY_CONFIG,
     )  # [1, 1, S/4, (H + 2) * D]
     ttnn.deallocate(xa)
@@ -605,7 +620,7 @@ def attention_prefill(ctx: CPContext, tt_ccl, attn, x_local, rot_mats, w, user_i
         weight_tensor=w["wo"],
         config=WO_CFG,
         dtype=ttnn.bfloat8_b,
-        compute_kernel_config=attn.compute_kernel_config_hifi2,  # fp32 dest acc (keep 17)
+        compute_kernel_config=lofi_fp32_config(attn.compute_kernel_config_hifi2, "QWEN_CP_ATTN_MM_LOFI"),  # fp32 dest
         memory_config=ttnn.DRAM_MEMORY_CONFIG,
     )  # [1, 1, S/4, 5120]
     ttnn.deallocate(cat)
