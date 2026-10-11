@@ -95,7 +95,7 @@ sfpi_inline sfpi::vFloat calculate_sfpu_binary_power(sfpi::vFloat base, sfpi::vF
     return result;
 }
 
-// The bit patterns the nextafter arm reads from vConstIntPrgm0 to 2, which sfpu_binary_init programs.
+// nextafter reads these from vConstIntPrgm0 to 2, which sfpu_binary_init programs.
 constexpr std::int32_t nextafter_abs_mask = 0x7FFFFFFF;
 constexpr std::int32_t nextafter_inf_bits = 0x7F800000;
 template <BinaryOp BINOP>
@@ -120,7 +120,7 @@ inline void calculate_sfpu_binary(
         log_c = LogPoly::C;
         log_d = LogPoly::D;
     }
-    // SFPU microcode, one row of a face
+    // SFPU microcode
     auto row = [&]() __attribute__((always_inline)) {
         // size of each tile in Dest is 64/SFP_DESTREG_STRIDE = 32 rows when using sfpi to load/store
         constexpr std::uint32_t dst_tile_size_sfpi = 32;
@@ -179,7 +179,6 @@ inline void calculate_sfpu_binary(
             // the sign first is what brings -0.0 into the guard.
             sfpi::vFloat mag_a = sfpi::setsgn(in0, 0);
             sfpi::vFloat mag_b = sfpi::setsgn(in1, 0);
-            // vConstFloatPrgm2 holds the bit pattern kUlpStep, programmed by sfpu_binary_init.
             v_if(mag_a == 0.0f && in1 > 0.0f) { result = sfpi::vConstFloatPrgm2; }
             v_endif;
             v_if(mag_a == 0.0f && in1 < 0.0f) { result = -sfpi::vFloat(sfpi::vConstFloatPrgm2); }
@@ -197,7 +196,6 @@ inline void calculate_sfpu_binary(
             // reason ckernel_sfpu_isclose.h reads bit patterns for its own Inf/NaN lanes. A
             // widened bfloat16 NaN has that exponent and a non-zero mantissa too, so this serves
             // both entry points unchanged. Last, so it wins over the direction and zero arms.
-            // vConstIntPrgm0 and vConstIntPrgm1 hold nextafter_abs_mask and nextafter_inf_bits.
             v_if((bits & sfpi::vConstIntPrgm0) > sfpi::vConstIntPrgm1) { result = nan; }
             v_endif;
             v_if((sfpi::as<sfpi::vInt>(in1) & sfpi::vConstIntPrgm0) > sfpi::vConstIntPrgm1) { result = nan; }
@@ -239,8 +237,8 @@ inline void calculate_sfpu_binary_mul(
         sfpi::vFloat result = in0 * in1;
 
         if constexpr (!is_fp32_dest_acc_en) {
-            // Software RNE with 0 * x = 0 and x * 0 = 0, to match FPU behaviour for bfloat16 multiplication:
-            // where either input is +0 the sum stays 0x7fff, which the mask turns into +0.
+            // Software RNE; where either input is +0 the sum stays 0x7fff, which the mask turns into +0,
+            // matching the FPU's 0 * x = 0 for bfloat16.
             sfpi::vUInt bits = sfpi::as<sfpi::vUInt>(result);
             sfpi::vUInt rounded = 0x7fffU;
             v_if(in0 != 0 && in1 != 0) { rounded += bits + ((bits >> 16) & 1); }
@@ -253,51 +251,50 @@ inline void calculate_sfpu_binary_mul(
     }
 }
 
-// The 32-bit division row, ordered so that no instruction reads a multiply-add result on the next cycle; load macro 0
-// issues the exceptional-input fix-up's SFPENCC and the store.
+// Ordered so that no instruction reads a multiply-add result on the next cycle.
 template <int ITERATIONS>
 inline void calculate_sfpu_binary_div_fp32_rows(
     const std::uint32_t in0, const std::uint32_t in1, const std::uint32_t out) {
-    // Macro 0: the out row loaded into dead L4, template 0's ENCC on the next cycle, the store of L0 on the one after.
+    // Macro 0 loads the out row into dead L4; template 0's ENCC follows, then the store of L0.
     TTI_SFPENCC(3, 0, 12, 10);
     TTI_SFPLOADI(p_sfpu::LREG0, sfpi::SFPLOADI_MOD0_LOWER, (0 << 3) | 4);
     TTI_SFPLOADI(p_sfpu::LREG0, sfpi::SFPLOADI_MOD0_UPPER, (0x80 | (1 << 3) | 3) << 8);
     TTI_SFPCONFIG(0, 4, 0);
     TTI_SFPCONFIG(0x010, 8, 1);
-    constexpr std::uint32_t row_len = 32;  // the instructions recorded below
+    constexpr std::uint32_t row_len = 32;
     load_replay_buf<Exec>(0, row_len, [in0, in1] {
         TT_SFPLOAD(p_sfpu::LREG0, InstrModLoadStore::DEFAULT, ADDR_MOD_7, in1);
         TT_SFPLOAD(p_sfpu::LREG2, InstrModLoadStore::DEFAULT, ADDR_MOD_7, in0);
-        TTI_SFPSETEXP(127, p_sfpu::LREG0, p_sfpu::LREG1, 1);                           // mb
-        TTI_SFPARECIP(0, p_sfpu::LREG1, p_sfpu::LREG3, 0);                             // r
-        TTI_SFPMAD(p_sfpu::LREG1, p_sfpu::LREG3, p_sfpu::LREG12, p_sfpu::LREG4, 1);    // t = 2 - mb * r
-        TTI_SFPSETEXP(127, p_sfpu::LREG2, p_sfpu::LREG5, 1);                           // ma
-        TTI_SFPMAD(p_sfpu::LREG3, p_sfpu::LREG4, p_sfpu::LCONST_0, p_sfpu::LREG3, 2);  // r = r * t
-        TTI_SFPEXEXP(0, p_sfpu::LREG2, p_sfpu::LREG6, 1);                              // ea
-        TTI_SFPMUL(p_sfpu::LREG5, p_sfpu::LREG3, p_sfpu::LCONST_0, p_sfpu::LREG4, 0);  // q = ma * r
-        TTI_SFPEXEXP(0, p_sfpu::LREG0, p_sfpu::LREG7, 0);                              // eb
-        TTI_SFPMAD(p_sfpu::LREG4, p_sfpu::LREG1, p_sfpu::LREG5, p_sfpu::LREG1, 1);     // residual = ma - q * mb
+        TTI_SFPSETEXP(127, p_sfpu::LREG0, p_sfpu::LREG1, 1);
+        TTI_SFPARECIP(0, p_sfpu::LREG1, p_sfpu::LREG3, 0);
+        TTI_SFPMAD(p_sfpu::LREG1, p_sfpu::LREG3, p_sfpu::LREG12, p_sfpu::LREG4, 1);
+        TTI_SFPSETEXP(127, p_sfpu::LREG2, p_sfpu::LREG5, 1);
+        TTI_SFPMAD(p_sfpu::LREG3, p_sfpu::LREG4, p_sfpu::LCONST_0, p_sfpu::LREG3, 2);
+        TTI_SFPEXEXP(0, p_sfpu::LREG2, p_sfpu::LREG6, 1);
+        TTI_SFPMUL(p_sfpu::LREG5, p_sfpu::LREG3, p_sfpu::LCONST_0, p_sfpu::LREG4, 0);
+        TTI_SFPEXEXP(0, p_sfpu::LREG0, p_sfpu::LREG7, 0);
+        TTI_SFPMAD(p_sfpu::LREG4, p_sfpu::LREG1, p_sfpu::LREG5, p_sfpu::LREG1, 1);
         TTI_SFPMOV(0, p_sfpu::LREG7, p_sfpu::LREG5, 2);
-        TTI_SFPMAD(p_sfpu::LREG1, p_sfpu::LREG3, p_sfpu::LREG4, p_sfpu::LREG3, 0);  // q = q + residual * r
-        TTI_SFPIADD(0, p_sfpu::LREG6, p_sfpu::LREG5, 6);                            // ea - eb
+        TTI_SFPMAD(p_sfpu::LREG1, p_sfpu::LREG3, p_sfpu::LREG4, p_sfpu::LREG3, 0);
+        TTI_SFPIADD(0, p_sfpu::LREG6, p_sfpu::LREG5, 6);
         TTI_SFPEXEXP(0, p_sfpu::LREG3, p_sfpu::LREG1, 1);
-        TTI_SFPIADD(0, p_sfpu::LREG1, p_sfpu::LREG5, 4);      // exponent
-        TTI_SFPSHFT(0xFFF, p_sfpu::LREG5, p_sfpu::LREG1, 5);  // half
+        TTI_SFPIADD(0, p_sfpu::LREG1, p_sfpu::LREG5, 4);
+        TTI_SFPSHFT(0xFFF, p_sfpu::LREG5, p_sfpu::LREG1, 5);
         TTI_SFPMOV(0, p_sfpu::LREG1, p_sfpu::LREG4, 2);
-        TTI_SFPSETEXP(0, p_sfpu::LREG3, p_sfpu::LREG4, 0);  // setexp(q, half)
+        TTI_SFPSETEXP(0, p_sfpu::LREG3, p_sfpu::LREG4, 0);
         TTI_SFPIADD(0, p_sfpu::LREG5, p_sfpu::LREG1, 6);
-        TTI_SFPSETEXP(0, p_sfpu::LCONST_1, p_sfpu::LREG1, 0);  // setexp(1.0f, exponent - half)
+        TTI_SFPSETEXP(0, p_sfpu::LCONST_1, p_sfpu::LREG1, 0);
         TTI_SFPNOT(0, p_sfpu::LREG0, p_sfpu::LREG3, 0);
         TTI_SFPSETSGN(0, p_sfpu::LREG0, p_sfpu::LREG5, 1);
-        TTI_SFPMUL(p_sfpu::LREG4, p_sfpu::LREG1, p_sfpu::LCONST_0, p_sfpu::LREG0, 0);  // result
-        TTI_SFPSETMAN(0, p_sfpu::LREG3, p_sfpu::LREG3, 1);                             // scale
-        TTI_SFPGT(0, p_sfpu::LREG13, p_sfpu::LREG5, 8);                                // nan_divisor
+        TTI_SFPMUL(p_sfpu::LREG4, p_sfpu::LREG1, p_sfpu::LCONST_0, p_sfpu::LREG0, 0);
+        TTI_SFPSETMAN(0, p_sfpu::LREG3, p_sfpu::LREG3, 1);
+        TTI_SFPGT(0, p_sfpu::LREG13, p_sfpu::LREG5, 8);
         TTI_SFPIADD(0xFFF, p_sfpu::LREG6, p_sfpu::LREG4, 9);
         TTI_SFPIADD(0xF01, p_sfpu::LREG6, p_sfpu::LREG6, 1);
         TTI_SFPIADD(0x07E, p_sfpu::LREG7, p_sfpu::LREG4, 9);
         TTI_SFPIADD(0xF80, p_sfpu::LREG7, p_sfpu::LREG7, 1);
         TTI_SFPCOMPC(0, 0, 0, 0);
-        TTI_SFPMAD(p_sfpu::LREG2, p_sfpu::LREG3, p_sfpu::LREG5, p_sfpu::LREG0, 1);  // the exceptional lanes
+        TTI_SFPMAD(p_sfpu::LREG2, p_sfpu::LREG3, p_sfpu::LREG5, p_sfpu::LREG0, 1);
     });
     TT_SFPLOADMACRO((0 << 2) | (p_sfpu::LREG4 & 3), InstrModLoadStore::DEFAULT, ADDR_MOD_7, out | (p_sfpu::LREG4 >> 2));
     TTI_INCRWC(0, 2, 0, 0);
@@ -310,13 +307,12 @@ inline void calculate_sfpu_binary_div_fp32_rows(
     }
 }
 
-// The 16-bit division row, ordered so that no instruction reads a multiply-add result on the next cycle. It rounds to
-// nearest even as bits + 0x7fff + lsb with no mask, since the store to a Float16_b DEST keeps only the high half.
+// Ordered so that no instruction reads a multiply-add result on the next cycle. It rounds to nearest even as
+// bits + 0x7fff + lsb with no mask, since the store to a Float16_b DEST keeps only the high half.
 template <int ITERATIONS>
 inline void calculate_sfpu_binary_div_bf16_rows(
     const std::uint32_t in0, const std::uint32_t in1, const std::uint32_t out) {
-    // Macro 0 loads the out row into dead L3, which the lsb's shifts then overwrite; three instructions later template
-    // 0 writes L3 + L0 (the lsb plus bits + 0x7fff) to L16, and a cycle after that L16 is stored.
+    // Macro 0 loads the out row into dead L3; template 0 then writes the rounded sum to L16, which is stored.
     constexpr std::uint32_t add_l3_l0 = TT_OP_SFPIADD(0, p_sfpu::LREG3, p_sfpu::LREG0, 4);
     TTI_SFPLOADI(p_sfpu::LREG0, sfpi::SFPLOADI_MOD0_LOWER, add_l3_l0 & 0xffff);
     TTI_SFPLOADI(p_sfpu::LREG0, sfpi::SFPLOADI_MOD0_UPPER, add_l3_l0 >> 16);
@@ -325,29 +321,29 @@ inline void calculate_sfpu_binary_div_bf16_rows(
     TTI_SFPLOADI(p_sfpu::LREG0, sfpi::SFPLOADI_MOD0_UPPER, (0x40 | (4 << 3) | 3) << 8);
     TTI_SFPCONFIG(0, 4, 0);
     TTI_SFPCONFIG(0x110, 8, 1);
-    constexpr std::uint32_t row_len = 21;  // the instructions recorded below
+    constexpr std::uint32_t row_len = 21;
     load_replay_buf<Exec>(0, row_len, [in0, in1, out] {
         TT_SFPLOAD(p_sfpu::LREG2, InstrModLoadStore::DEFAULT, ADDR_MOD_7, in1);
-        TTI_SFPARECIP(0, p_sfpu::LREG2, p_sfpu::LREG0, 0);                           // r
-        TTI_SFPMAD(p_sfpu::LREG2, p_sfpu::LREG0, p_sfpu::LREG12, p_sfpu::LREG4, 2);  // t = in1 * r - 2
-        TTI_SFPLOADI(p_sfpu::LREG6, 2, 0x7fff);                                      // the rounding's addend
-        TTI_SFPMAD(p_sfpu::LREG4, p_sfpu::LREG0, p_sfpu::LCONST_0, p_sfpu::LREG3, 3);  // y1 = r * -t
+        TTI_SFPARECIP(0, p_sfpu::LREG2, p_sfpu::LREG0, 0);
+        TTI_SFPMAD(p_sfpu::LREG2, p_sfpu::LREG0, p_sfpu::LREG12, p_sfpu::LREG4, 2);
+        TTI_SFPLOADI(p_sfpu::LREG6, 2, 0x7fff);
+        TTI_SFPMAD(p_sfpu::LREG4, p_sfpu::LREG0, p_sfpu::LCONST_0, p_sfpu::LREG3, 3);
         TT_SFPLOAD(p_sfpu::LREG1, InstrModLoadStore::DEFAULT, ADDR_MOD_7, in0);
-        TTI_SFPMAD(p_sfpu::LREG2, p_sfpu::LREG3, p_sfpu::LREG12, p_sfpu::LREG5, 1);    // 2 - in1 * y1
-        TTI_SFPGT(0, p_sfpu::LREG4, p_sfpu::LCONST_0, 1);                              // lanes t < 0
-        TTI_SFPMAD(p_sfpu::LREG3, p_sfpu::LREG5, p_sfpu::LCONST_0, p_sfpu::LREG0, 2);  // r = y1 * (2 - in1 * y1)
+        TTI_SFPMAD(p_sfpu::LREG2, p_sfpu::LREG3, p_sfpu::LREG12, p_sfpu::LREG5, 1);
+        TTI_SFPGT(0, p_sfpu::LREG4, p_sfpu::LCONST_0, 1);
+        TTI_SFPMAD(p_sfpu::LREG3, p_sfpu::LREG5, p_sfpu::LCONST_0, p_sfpu::LREG0, 2);
         TTI_SFPENCC(3, 0, 0, 10);
-        TTI_SFPMUL(p_sfpu::LREG1, p_sfpu::LREG0, p_sfpu::LCONST_0, p_sfpu::LREG0, 0);  // result = in0 * r
-        TTI_SFPSETCC(0, p_sfpu::LREG2, 0, 6);                                          // lanes in1 == 0
-        TTI_SFPSETCC(0, p_sfpu::LREG1, 0, 2);                                          // and in0 != 0
+        TTI_SFPMUL(p_sfpu::LREG1, p_sfpu::LREG0, p_sfpu::LCONST_0, p_sfpu::LREG0, 0);
+        TTI_SFPSETCC(0, p_sfpu::LREG2, 0, 6);
+        TTI_SFPSETCC(0, p_sfpu::LREG1, 0, 2);
         TTI_SFPMOV(0, p_sfpu::LREG1, p_sfpu::LREG0, 0);
-        TTI_SFPSETSGN(0, p_sfpu::LREG13, p_sfpu::LREG0, 0);  // copysgn(Prgm1 = inf, in0)
+        TTI_SFPSETSGN(0, p_sfpu::LREG13, p_sfpu::LREG0, 0);
         TTI_SFPENCC(3, 0, 0, 10);
         TT_SFPLOADMACRO(
             (0 << 2) | (p_sfpu::LREG3 & 3), InstrModLoadStore::DEFAULT, ADDR_MOD_7, out | (p_sfpu::LREG3 >> 2));
         TTI_SFPSHFT(15, p_sfpu::LREG0, p_sfpu::LREG3, 5);
-        TTI_SFPSHFT(0xFE1, p_sfpu::LREG3, p_sfpu::LREG3, 5);  // lsb = (bits << 15) >> 31
-        TTI_SFPIADD(0, p_sfpu::LREG6, p_sfpu::LREG0, 4);      // bits + 0x7fff; macro 0 adds the lsb
+        TTI_SFPSHFT(0xFE1, p_sfpu::LREG3, p_sfpu::LREG3, 5);
+        TTI_SFPIADD(0, p_sfpu::LREG6, p_sfpu::LREG0, 4);
         TTI_INCRWC(0, 2, 0, 0);
     });
 #pragma GCC unroll 8
