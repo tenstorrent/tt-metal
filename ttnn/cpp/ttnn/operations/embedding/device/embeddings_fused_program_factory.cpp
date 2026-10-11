@@ -119,7 +119,9 @@ ttnn::device_operation::ProgramArtifacts EmbeddingsFusedProgramFactory::create_p
     if (use_chunked_processing) {
         const uint32_t chunk_cap = std::min(max_tiles_per_chunk, max_double_buffer_tiles);
         const uint32_t row_bytes = num_tiles_per_block * weights_single_tile_size;
-        if (row_bytes <= max_l1_budget_bytes) {
+        // The output buffer matches the staging buffer's size, so a full row costs 2 * row_bytes of L1.
+        constexpr uint32_t max_full_row_dfb_bytes = max_l1_budget_bytes + max_l1_budget_bytes / 4;
+        if (2 * row_bytes <= max_full_row_dfb_bytes) {
             // One buffer holds the row, so the short last chunk lands on the end.
             tiles_per_chunk = std::min(chunk_cap, num_tiles_per_block);
             num_chunks = (num_tiles_per_block + tiles_per_chunk - 1) / tiles_per_chunk;
