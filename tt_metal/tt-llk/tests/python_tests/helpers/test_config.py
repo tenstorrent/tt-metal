@@ -110,6 +110,88 @@ def _without_debug_sections(text: str) -> str:
     return text[:start] + text[end:]
 
 
+# INIT measurement build: sections ahead of main that no code outside INIT can move (sections.ld)
+_INIT_FIXED_SECTIONS = (
+    ".init",
+    ".text.llk_zone.",
+    ".text.llk_init_callee",
+    ".llk_init_body",
+    ".llk_init_tramp",
+)
+_FUNCTION_TYPE = re.compile(r"\s*\.type\s+([^,\s]+),\s*@function")
+_FUNCTION_PREAMBLE = re.compile(
+    r"\s*\.(p2align|balign|align|globl|weak|hidden|local)\b"
+)
+_CALL = re.compile(
+    r"\s*(?:call|tail|jal|j)\s+(?:[a-z][a-z0-9]*,\s*)?([A-Za-z_.$][\w.$]*)\s*$"
+)
+
+
+def _init_callees_in_slot(text: str) -> str:
+    """INIT measurement build assembly with every function INIT's body calls (directly or through another) that GCC
+    left out of line in a fixed section (.text.llk_init_callee.<n>, sections.ld) instead of among the kernel's
+    functions, where code outside INIT would move it; the functions and every other byte are unchanged.
+    """
+    lines = text.split("\n")
+    section, stack, previous = ".text", [], ".text"
+    functions = {}  # name -> [preamble start, label, .size line, section]
+    for i, line in enumerate(lines):
+        s = line.strip()
+        word = s.split(None, 1)[0] if s else ""
+        if word in (".section", ".pushsection"):
+            if word == ".pushsection":
+                stack.append(section)
+            previous, section = section, s.split(None, 1)[1].split(",")[0].strip()
+        elif word in (".text", ".data", ".bss"):
+            previous, section = section, word
+        elif word == ".popsection" and stack:
+            previous, section = section, stack.pop()
+        elif word == ".previous":
+            previous, section = section, previous
+        elif m := _FUNCTION_TYPE.match(line):
+            start = i
+            while start > 0 and _FUNCTION_PREAMBLE.match(lines[start - 1]):
+                start -= 1
+            functions[m.group(1)] = [start, None, None, section]
+        elif s.endswith(":") and s[:-1] in functions and functions[s[:-1]][1] is None:
+            functions[s[:-1]][1] = i
+        elif word == ".size":
+            name = s.split(None, 1)[1].split(",")[0].strip()
+            if name in functions and functions[name][1] is not None:
+                functions[name][2] = i
+    fixed = lambda f: f[3].startswith(_INIT_FIXED_SECTIONS)
+    todo = [
+        n for n, f in functions.items() if f[3] == ".llk_init_body" and f[2] is not None
+    ]
+    seen, moved = set(todo), []
+    while todo:
+        name = todo.pop(0)
+        start, label, end, _ = functions[name]
+        for line in lines[label:end]:
+            m = _CALL.match(line)
+            callee = m and functions.get(m.group(1))
+            if callee and callee[2] is not None and m.group(1) not in seen:
+                seen.add(m.group(1))
+                todo.append(m.group(1))
+                if not fixed(callee):
+                    moved.append(m.group(1))
+    if not moved:
+        return text
+    wrap = {}
+    for k, name in enumerate(moved):
+        start, _, end, _ = functions[name]
+        wrap[start] = f'\t.pushsection\t.text.llk_init_callee.{k},"ax",@progbits'
+        wrap[end] = None
+    out = []
+    for i, line in enumerate(lines):
+        if i in wrap and wrap[i] is not None:
+            out.append(wrap[i])
+        out.append(line)
+        if i in wrap and wrap[i] is None:
+            out.append("\t.popsection")
+    return "\n".join(out)
+
+
 class ProfilerBuild(Enum):
     Yes = "true"
     No = "false"
@@ -690,8 +772,14 @@ class TestConfig:
                     str(item) for item in part if item is not None and item != ""
                 )
             else:
-                argv.extend(shlex.split(str(part)))
+                argv.extend(TestConfig._split_flags(str(part)))
         return argv
+
+    @staticmethod
+    @functools.lru_cache(maxsize=256)
+    def _split_flags(flags: str) -> tuple:
+        """shlex.split of a flag string, kept: every compile and layout link of a variant splits the same strings"""
+        return tuple(shlex.split(flags))
 
     @staticmethod
     def _safe_artefact_key(source_path: str) -> str:
@@ -1350,6 +1438,8 @@ class TestConfig:
             "launch_token",
             # Which ELF set a launch runs (the INIT measurement launch); the variant is the same.
             "init_launch",
+            # Which run type's variant also builds the INIT measurement ELFs (perf/core.py); the variant is the same.
+            "init_run_type",
         ]
 
         if not TestConfig.SPEED_OF_LIGHT:
@@ -1958,7 +2048,13 @@ class TestConfig:
         if pads is None:
             compile_command = [
                 TestConfig.GXX,
-                *compile_flags,
+                # the INIT ELF is only launched to time INIT: no debug info, which changes no loaded byte (-g never
+                # changes the code) and makes its compile and link faster
+                *(
+                    [flag for flag in compile_flags if flag != "-g"]
+                    if init_only
+                    else compile_flags
+                ),
                 "-S",
                 "-x",
                 "c++",
@@ -1969,7 +2065,9 @@ class TestConfig:
             logger.trace(" ".join(shlex.quote(part) for part in compile_command))
             run_shell_command(compile_command, TestConfig.TESTS_WORKING_DIR, source)
             text = assembly.read_text()
-            if not init_only:
+            if init_only:
+                text = _init_callees_in_slot(text)
+            else:
                 # level 6: a seventh of the time of the default 9 for 6 % more bytes
                 with gzip.open(
                     assembly.with_suffix(".s.gz"), "wt", compresslevel=6
@@ -2025,12 +2123,12 @@ class TestConfig:
 
     @staticmethod
     @functools.lru_cache(maxsize=64)
-    def _code_key(assembly: Path) -> str:
-        """perf/layout.py code_key of a kept thread assembly"""
+    def _layout_keys(assembly: Path) -> tuple:
+        """perf/layout.py (code_key, structure_key) of a kept thread assembly"""
         from .perf import layout
 
-        with gzip.open(assembly, "rt") as f:
-            return layout.code_key(f.read())
+        text = TestConfig._kept_assembly(assembly, False)
+        return layout.code_key(text), layout.structure_key(text)
 
     # Wormhole perf: INIT is measured in its own launch of the INIT measurement build (counters.h LLK_PERF_INIT_ONLY), so
     # no code outside INIT (the loop, the kernel around it) can change INIT's code, placement or neighbours.
@@ -2080,7 +2178,7 @@ class TestConfig:
                         # variants whose thread compiles to the same code share the layout work
                         shared=(
                             TestConfig.ARTEFACTS_DIR / "layout_shared",
-                            TestConfig._code_key(variant_dir / "obj" / f"{t}.s.gz"),
+                            *TestConfig._layout_keys(variant_dir / "obj" / f"{t}.s.gz"),
                         ),
                     )
                 except (
@@ -2150,8 +2248,11 @@ class TestConfig:
 
         self.build_shared_artefacts()
 
+        init_build = self._builds_init_elfs()
+        init_done = VARIANT_DIR / "init_elf" / ".build_complete"
+
         # Fast path: if build is already complete, skip entirely
-        if done_marker.exists():
+        if done_marker.exists() and (not init_build or init_done.exists()):
             logger.debug("Build already complete for {}", self.variant_id[:12])
             return
 
@@ -2162,6 +2263,9 @@ class TestConfig:
         with lock:
             # Check again inside lock in case another process just finished
             if done_marker.exists():
+                # a variant another test built without the INIT measurement ELFs (it ran another run type's INIT)
+                if init_build and not init_done.exists():
+                    self._build_init_elfs(VARIANT_DIR, [])
                 return
 
             VARIANT_OBJ_DIR = VARIANT_DIR / "obj"
@@ -2173,26 +2277,14 @@ class TestConfig:
                 with open(VARIANT_DIR / "build.h", "w") as f:
                     f.write(header_content)
 
-            # Wormhole perf builds also build the INIT measurement ELFs (LLK_PERF_INIT_ONLY, unpadded), in the same pool
-            init_build = self._wormhole_perf_barrier() and TestConfig.PERF_INIT_LAUNCH
-            if init_build:
-                init_elf_dir = VARIANT_DIR / "init_elf"
-                create_directories([init_elf_dir])
             jobs = [
                 (name, VARIANT_DIR, VARIANT_ELF_DIR)
                 for name in TestConfig.KERNEL_COMPONENTS
             ]
-            if init_build:
-                jobs += [
-                    (name, VARIANT_DIR, init_elf_dir, None, True)
-                    for name in TestConfig.KERNEL_COMPONENTS
-                ]
-            with ThreadPoolExecutor(max_workers=len(jobs)) as executor:
-                futures = [
-                    executor.submit(self._build_kernel_part, *job) for job in jobs
-                ]
-                for fut in futures:
-                    fut.result()
+            if init_build:  # the INIT measurement ELFs compile in the same pool
+                self._build_init_elfs(VARIANT_DIR, jobs)
+            else:
+                TestConfig._run_build_jobs(self._build_kernel_part, jobs)
 
             if self.profiler_build == ProfilerBuild.Yes:
                 # Extract profiler metadata
@@ -2218,31 +2310,61 @@ class TestConfig:
                         TestConfig.TESTS_WORKING_DIR,
                     )
 
-            # the INIT measurement ELFs' profiler metadata under <variant>_init, for the INIT launch of perf/core.py
-            if init_build:
-                if self.profiler_build == ProfilerBuild.Yes:
-                    meta_dir = Path(
-                        TestConfig.PROFILER_META
-                        / self.test_name
-                        / f"{self.variant_id}_init"
-                    )
-                    meta_dir.mkdir(exist_ok=True, parents=True)
-                    for component in TestConfig.KERNEL_COMPONENTS:
-                        run_shell_command(
-                            [
-                                TestConfig.OBJCOPY,
-                                "-O",
-                                "binary",
-                                "-j",
-                                ".profiler_meta",
-                                str(init_elf_dir / f"{component}.elf"),
-                                str(meta_dir / f"{component}.meta.bin"),
-                            ],
-                            TestConfig.TESTS_WORKING_DIR,
-                        )
-
             # Mark build as complete so other processes know they can use the artefacts
             done_marker.touch()
+
+    @staticmethod
+    def _run_build_jobs(build, jobs):
+        with ThreadPoolExecutor(max_workers=len(jobs)) as executor:
+            futures = [executor.submit(build, *job) for job in jobs]
+            for fut in futures:
+                fut.result()
+
+    def _builds_init_elfs(self) -> bool:
+        """Wormhole perf: whether this variant also builds the INIT measurement ELFs (LLK_PERF_INIT_ONLY). INIT's timed
+        window (its body, the callee slot and the trampoline's timed part, in fixed sections ahead of main) does not
+        depend on the run type, so one run type of a test builds them for all of its INIT rows (perf/core.py).
+        """
+        return (
+            self._wormhole_perf_barrier()
+            and TestConfig.PERF_INIT_LAUNCH
+            and getattr(self, "init_run_type", None) is not None
+            and getattr(self, "current_run_type", None) == self.init_run_type
+        )
+
+    def _build_init_elfs(self, variant_dir: Path, jobs):
+        """The INIT measurement ELFs (unpadded) into <variant>/init_elf and their profiler metadata under
+        <variant>_init, with jobs (other builds of the variant) in the same pool; the caller holds the variant lock.
+        """
+        init_elf_dir = variant_dir / "init_elf"
+        create_directories([init_elf_dir])
+        TestConfig._run_build_jobs(
+            self._build_kernel_part,
+            list(jobs)
+            + [
+                (name, variant_dir, init_elf_dir, None, True)
+                for name in TestConfig.KERNEL_COMPONENTS
+            ],
+        )
+        if self.profiler_build == ProfilerBuild.Yes:
+            meta_dir = Path(
+                TestConfig.PROFILER_META / self.test_name / f"{self.variant_id}_init"
+            )
+            meta_dir.mkdir(exist_ok=True, parents=True)
+            for component in TestConfig.KERNEL_COMPONENTS:
+                run_shell_command(
+                    [
+                        TestConfig.OBJCOPY,
+                        "-O",
+                        "binary",
+                        "-j",
+                        ".profiler_meta",
+                        str(init_elf_dir / f"{component}.elf"),
+                        str(meta_dir / f"{component}.meta.bin"),
+                    ],
+                    TestConfig.TESTS_WORKING_DIR,
+                )
+        (init_elf_dir / ".build_complete").touch()
 
     def read_coverage_data_from_device(self):
         VARIANT_DIR = TestConfig.ARTEFACTS_DIR / self.test_name / self.variant_id
