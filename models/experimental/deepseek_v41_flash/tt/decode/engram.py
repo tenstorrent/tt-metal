@@ -16,6 +16,11 @@ the device does the rest of the checkpoint's ``Engram.forward``::
     out   = h + gate * value
 
 ``kv`` is bf16 out of the matmul; everything after it is fp32.
+
+With the prefetcher, ``wkv`` is a ``matmul_decode`` whose weight streams through its own 80-receiver ring
+(see :mod:`.decode_prefetch`) and whose A is a ROW_MAJOR HEIGHT_SHARDED replica of the rows on every
+receiver. Without it, ``wkv`` stays a tiled ``ttnn.linear``: the weight split over 80 cores is ~2 MB a
+core, more L1 than the per-call copy of the non-prefetched ``matmul_decode`` path has.
 """
 
 from typing import Optional
@@ -24,9 +29,18 @@ import torch
 import ttnn
 
 from models.experimental.deepseek_v4_flash.tt.common import _HIFI4, DeepSeekV4Module
-from models.experimental.deepseek_v4_flash.tt.layers import Linear
+from models.experimental.deepseek_v4_flash.tt.decode.attention import _decode_activation
+from models.experimental.deepseek_v4_flash.tt.decode.decode_prefetch import ring_prefetch
+from models.experimental.deepseek_v4_flash.tt.layers import Linear, LinearDecode
 from models.experimental.deepseek_v4_flash.tt.system_config import active_system_config
 from models.experimental.deepseek_v4_flash.tt.weight_cache import WeightCache, _as_cache, _load_weight, _materialize
+
+from .decode_prefetch import prefetch_rings
+
+DECODE_LAYOUTS = {
+    # K = (max_ngram - 1) * n_heads * head_dim, N = (hc + 1) * D: 80 B cores of [6144, 320], 10 per DRAM bank.
+    "wkv": {"K": 6144, "N": 25600, "n_blocks": 80},
+}
 
 # Clear of the cores V4's pipeline sockets use: (0,0) / (0,1) hand-off, (0,2) packet, (0,3) output.
 ROWS_SOCKET_CORE = (0, 4)
@@ -58,12 +72,17 @@ class DeepSeekV41Engram(DeepSeekV4Module):
         weight_dtype: ttnn.DataType = ttnn.bfloat8_b,
         fifo_pages: int = 2,
         socket_core: tuple = ROWS_SOCKET_CORE,
+        use_prefetcher: bool = False,
+        prefetch_buffers: Optional[dict] = None,
     ):
         """``weights`` is :func:`~models.experimental.deepseek_v41_flash.tt.config.engram_weights` (tensors or
         thunks). One socket page is one user's rows, and a socket's L1 FIFO on ``socket_core`` holds
         ``fifo_pages`` of them. A socket feeds a single device, so each device of the ``device`` mesh gets its
         own and the layer runs replicated (a TP stage's streams are). The sockets allocate L1, so build the
         layer before any trace capture on ``device``.
+
+        ``use_prefetcher`` streams ``wkv`` through the ``engram.wkv`` ring of ``prefetch_buffers``, the
+        per-device mapping every other layer on ``device`` shares.
         """
         cache = _as_cache(cache)
         self.layer_idx = layer_idx
@@ -73,7 +92,22 @@ class DeepSeekV41Engram(DeepSeekV4Module):
         self.kin = (config.engram_max_ngram_size - 1) * config.engram_n_heads * config.engram_head_dim
         hc, d = self.hc, self.dim
 
-        self.wkv = Linear(weights["wkv.weight"], device, cache.file("wkv"), dtype=weight_dtype)
+        self.use_prefetcher = use_prefetcher
+        if use_prefetcher:
+            assert prefetch_buffers is not None, "the prefetched wkv needs the device's shared prefetch_buffers"
+            layout = DECODE_LAYOUTS["wkv"]
+            assert (layout["K"], layout["N"]) == (self.kin, (hc + 1) * d), (layout, self.kin, (hc + 1) * d)
+            self.wkv = LinearDecode(
+                weights["wkv.weight"],
+                device,
+                cache.file("wkv"),
+                dtype=weight_dtype,
+                **layout,
+                **ring_prefetch(prefetch_rings(), "engram.wkv", prefetch_buffers, device, weight_dtype),
+                use_rm_hs=True,
+            )
+        else:
+            self.wkv = Linear(weights["wkv.weight"], device, cache.file("wkv"), dtype=weight_dtype)
         gate_file = cache.file("gate_weight")
         gate_weight = _materialize(
             lambda: (_value(weights["q_weight"]).float() * _value(weights["k_weight"]).float() * d**-0.5).reshape(
@@ -129,7 +163,13 @@ class DeepSeekV41Engram(DeepSeekV4Module):
         assert tuple(streams.shape) == (b, 1, hc, d), tuple(streams.shape)
         for socket in self.sockets:
             ttnn.experimental.recv_async_h2d(self.rows, socket)
-        kv = ttnn.to_layout(self.wkv(ttnn.to_layout(self.rows, ttnn.TILE_LAYOUT)), ttnn.ROW_MAJOR_LAYOUT)
+        if self.use_prefetcher:
+            rows = _decode_activation(self.wkv, self.rows)
+            kv = ttnn.to_memory_config(self.wkv(rows), ttnn.DRAM_MEMORY_CONFIG)
+            ttnn.deallocate(rows)
+            kv = ttnn.to_layout(kv, ttnn.ROW_MAJOR_LAYOUT)
+        else:
+            kv = ttnn.to_layout(self.wkv(ttnn.to_layout(self.rows, ttnn.TILE_LAYOUT)), ttnn.ROW_MAJOR_LAYOUT)
         # Split in row-major, where the [1, 1, B, *] -> [B, 1, *, D] reshapes are views.
         key = ttnn.reshape(ttnn.slice(kv, [0, 0, 0, 0], [1, 1, b, hc * d]), [b, 1, hc, d])
         value = ttnn.reshape(ttnn.slice(kv, [0, 0, 0, hc * d], [1, 1, b, (hc + 1) * d]), [b, 1, 1, d])
