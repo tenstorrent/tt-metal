@@ -75,7 +75,11 @@ fp8 dispatch wire (`MOE_SPLIT_SHARED=1/0` forces it).
 
 **Status of the goals that remain open.**
 - G1: met on the LB (above).
-- G2 (standalone Q2 ≤ 60 µs): not met, 81 µs. |x| and the row max now run in DEST (SFPU REDUCE_ROW), skipping
+- G2 (standalone Q2 ≤ 60 µs): not met, 81 µs. Q2 is now balanced (per-core spans 66–80 µs; medians writer 74,
+  compute 68.5, reader 60) and moves ~22 MB per chip (11 MB of bf8_b tiles in, 11.6 MB of packed rows out), about
+  280 GB/s. 60 µs would need ~380 GB/s with all three RISCs fully overlapped, which looks close to sustained DRAM
+  bandwidth (an estimate, not measured). Removing the DRAM round trip means fusing Q2 into the expert, measured at
+  +300 µs. History: |x| and the row max now run in DEST (SFPU REDUCE_ROW), skipping
   the |x| tile's pack and unpack: two passes per tile instead of three (88 → 81 µs). Units are split by grid row (weight 1 + 0.4·y/(rows−1)) to offset
   the NoC gradient (91 → 88 µs). Coalescing each core's row writes into one transaction per run was tried and
   did not help (89.5 µs): with balanced work Q2 is bound by per-tile compute, not by its 256-B writes. Before: Units of 2 chunks (256 columns) balance the work best (1 chunk
