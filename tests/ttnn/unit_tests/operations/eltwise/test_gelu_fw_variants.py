@@ -290,3 +290,48 @@ def test_gelu_inf_nan_handling(device, variant_name, torch_dtype, tt_dtype):
     # want to flag if the kernel silently produced a usable finite-nonzero value.
     for name, val in [("gelu(-inf)", neg_inf), ("gelu(NaN)", nan_out)]:
         assert val == 0.0 or not math.isfinite(val), f"{variant_name}: {name} -> {val!r}, expected 0 or any non-finite"
+
+
+# NaN payloads of both signs. A negative NaN used to fall below the accurate
+# kernel's saturation threshold and come back as 0 (#59247).
+_NAN_BITS = {
+    "fp32": [0x7FC00000, 0xFFC00000, 0x7F800001, 0xFF800001, 0x7FFFFFFF, 0xFFFFFFFF],
+    "bf16": [0x7FC0, 0xFFC0, 0x7F81, 0xFF81, 0x7FFF, 0xFFFF],
+}
+
+
+@pytest.mark.parametrize("variant_name", list(_VARIANTS.keys()))
+@pytest.mark.parametrize("dtype_name", ["bf16", "fp32"])
+def test_gelu_nan_payloads_propagate(device, request, variant_name, dtype_name):
+    """gelu(NaN) must never be finite, whatever the NaN's sign or payload.
+    FP32 must return NaN. BF16 has no NaN on the SFPU convert/pack path, so a
+    non-finite (+-inf) output is accepted there."""
+    if variant_name == "accurate" and dtype_name == "bf16":
+        # The BF16 piecewise branch still saturates a negative NaN to 0; a guard there
+        # costs ~7% on this hot path, so it is left to the BF16 kernel rework (#58885).
+        request.applymarker(
+            pytest.mark.xfail(strict=True, reason="accurate BF16 gelu maps negative NaN to 0 (#59247 follow-up)")
+        )
+    variant_enum, _ = _VARIANTS[variant_name]
+    bits = _NAN_BITS[dtype_name]
+    if dtype_name == "fp32":
+        int_dtype, float_dtype, tt_dtype = torch.int32, torch.float32, ttnn.float32
+        signed = [b - (1 << 32) if b >= 1 << 31 else b for b in bits]
+    else:
+        int_dtype, float_dtype, tt_dtype = torch.int16, torch.bfloat16, ttnn.bfloat16
+        signed = [b - (1 << 16) if b >= 1 << 15 else b for b in bits]
+    input_bits = torch.tensor(signed, dtype=int_dtype).repeat(32 * 32 // len(bits) + 1)[: 32 * 32]
+    inputs = input_bits.view(float_dtype).reshape(32, 32)
+    assert torch.isnan(inputs).all()
+
+    tt_input = ttnn.from_torch(inputs, dtype=tt_dtype, layout=ttnn.TILE_LAYOUT, device=device, preserve_nan_values=True)
+    out = ttnn.to_torch(ttnn.gelu(tt_input, variant=variant_enum)).float()
+
+    if dtype_name == "fp32":
+        bad = ~torch.isnan(out)
+    else:
+        bad = torch.isfinite(out)
+    assert not bad.any(), (
+        f"{variant_name}/{dtype_name}: gelu(NaN) produced {bad.sum().item()} unexpected values, "
+        f"e.g. input bits {hex(bits[bad.view(-1).nonzero()[0].item() % len(bits)])} -> {out.view(-1)[bad.view(-1)][0].item()!r}"
+    )

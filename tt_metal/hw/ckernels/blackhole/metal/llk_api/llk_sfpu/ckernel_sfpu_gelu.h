@@ -323,6 +323,10 @@ inline void calculate_gelu() {
                 v_endif;
             }
             v_endif;
+            // SFPU ordered compares rank a negative NaN below GELU_SAT, so it would keep
+            // the saturated default of 0 above. Pass NaN through instead (#59247).
+            v_if(sfpi::is_nan(x)) { result = x; }
+            v_endif;
             sfpi::dst_reg[0] = result;
             sfpi::dst_reg++;
         }
