@@ -360,32 +360,29 @@ void kernel_main() {
                         const bool east_col_bank = (bank >= NUM_DRAM_BANKS / 2) == left_of_dram_col;
                         use_alt = east_col_bank && (((out_idx / NUM_DRAM_BANKS) & 1u) == 0u);
                     }
-                    // Posted (no write ack): the drain's per-core rate is capped downstream of issue
-                    // (r03-b02-a03 / r03-b03-a03), so drop the ack round trip each 2 KB tile carries.
                     if (use_alt) {
-                        noc_alt.async_write<NocOptions::POSTED>(
+                        noc_alt.async_write(
                             CoreLocalMem<uint32_t>(rd), output_accessor, output_page_bytes, {}, {.page_id = out_idx});
                     } else {
-                        noc.async_write<NocOptions::POSTED>(
+                        noc.async_write(
                             CoreLocalMem<uint32_t>(rd), output_accessor, output_page_bytes, {}, {.page_id = out_idx});
                     }
                     rd += output_tile_bytes;
                 }
                 // Departed from L1 before compute may reuse the slots.
-                noc.async_writes_flushed<NocOptions::POSTED>();
+                noc.async_writes_flushed();
                 if constexpr (dual_noc_drain != 0) {
-                    noc_alt.async_writes_flushed<NocOptions::POSTED>();
+                    noc_alt.async_writes_flushed();
                 }
                 cb_output.pop_front(block_size);
             }
         }
     }
+    // Every output tile has landed before the kernel ends, so the next op reads complete data.
     noc.async_write_barrier();
-    noc.async_writes_flushed<NocOptions::POSTED>();
     noc.async_atomic_barrier();  // the arrival incs (not waited on per push)
     if constexpr (dual_noc_drain != 0) {
         noc_alt.async_write_barrier();
-        noc_alt.async_writes_flushed<NocOptions::POSTED>();
     }
     // Reset the go-sem for the next invocation. Trace replay re-runs this kernel without
     // re-running host-side semaphore init, so leaving a stale non-zero count here would let
