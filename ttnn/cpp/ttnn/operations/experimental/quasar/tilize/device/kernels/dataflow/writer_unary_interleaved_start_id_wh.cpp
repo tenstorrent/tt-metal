@@ -17,14 +17,17 @@ void kernel_main() {
     constexpr auto third_dim = get_arg(args::third_dim);
     constexpr auto total_tiles_per_row = get_arg(args::total_tiles_per_row);
 
+    // On Quasar a DataflowBuffer drains (waits for posted == acked) when destroyed, so the entry
+    // size must come from the long-lived consumer: a temporary would block on tiles the producer
+    // already posted, which only this kernel acks.
+    DataflowBuffer cb(dfb::out);
     // single-tile ublocks
     constexpr uint32_t onetile = 1;
-    const uint32_t tile_bytes = DataflowBuffer(dfb::out).get_entry_size();
+    const uint32_t tile_bytes = cb.get_entry_size();
 
     const auto s = TensorAccessor(tensor::dst);
 
     Noc noc;
-    DataflowBuffer cb(dfb::out);
 
 #ifdef BACKWARDS
     for (uint32_t dim = 0; dim > -third_dim; dim--) {
