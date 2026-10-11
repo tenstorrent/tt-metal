@@ -44,6 +44,7 @@ def attention_forward(
     layer_idx=0,
     cached_len=0,
     indexed_rope=False,
+    on_kv_written=None,
 ):
     """
     Prefill forward pass - optimized for sequence processing (seq_len>1).
@@ -64,6 +65,8 @@ def attention_forward(
         layer_idx: this layer's index, for the per-layer cache write
         cached_len: valid prefix length already in the cache BEFORE this chunk (0 = first/only chunk).
             >0 selects the cache-read attention paths (current chunk attends the accumulated prefix).
+        on_kv_written: optional no-arg callback, called once right after this layer's last cache write
+            (K/V, plus index_k on MSA layers) is enqueued. The runtime enqueues the layer ack here.
 
     Returns:
         Attention output [batch, seq_len, hidden_size]
@@ -161,6 +164,8 @@ def attention_forward(
                 kv_actual=cached_len,
                 sp_axis=mesh_config.sp_axis,
             )
+        if on_kv_written is not None and not config.is_sparse:
+            on_kv_written()
 
     # Attention core — per-layer gate (config.is_sparse from M3 sparse_attention_freq):
     #   MSA layers (3-59): index branch (index_q/k proj -> norm -> RoPE) + block-sparse SP attention
@@ -195,6 +200,8 @@ def attention_forward(
                     kv_actual=cached_len,
                     sp_axis=mesh_config.sp_axis,
                 )
+            if on_kv_written is not None:
+                on_kv_written()
         if cached_len > 0:
             # Cache-read: the current chunk attends the accumulated prefix, gathered across SP straight
             # from this (user, layer) slot of the packed cache (msa_sp_attention_cache_read). cached_len may be

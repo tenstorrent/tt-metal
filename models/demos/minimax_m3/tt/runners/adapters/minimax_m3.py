@@ -198,7 +198,10 @@ class MiniMaxM3PrefillAdapter(PrefillModelAdapter):
             is_first_rank=params.is_first_rank,
             is_last_rank=params.is_last_rank,
             pipeline_activation_emb_tp_sharded=self.pipeline_activation_emb_tp_sharded,
-            use_trace=params.use_trace,
+            # M3 prefill runs eagerly whatever PREFILL_USE_TRACE says. Reporting the request would send the
+            # runner down its trace-only paths (e.g. the D2H ack service handed over for a capture that
+            # never happens, so its reader never starts).
+            use_trace=False,
             overlap_shared_expert=params.overlap_shared_expert_with_dispatch,
         )
         return TtPrefillRuntime(

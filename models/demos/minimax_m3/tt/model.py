@@ -2,6 +2,8 @@
 # SPDX-License-Identifier: Apache-2.0
 
 
+import functools
+
 import torch
 from loguru import logger
 
@@ -361,6 +363,7 @@ class Model:
         cached_len=0,
         indexed_rope=False,
         actual_isl=None,
+        on_kv_written=None,
     ):
         """
         Prefill forward pass through decoder layers and final projection.
@@ -369,6 +372,10 @@ class Model:
             decoder layer finishes. This is the SEAM for per-layer KV migration in
             the prefill/decode-disaggregation pipeline (see PREFILL_PROPOSAL.md §7).
             Default None = no-op (the validated single-process path is unchanged).
+            It runs on the host once the layer is ENQUEUED, not executed.
+        on_kv_written: optional callback ``fn(layer_idx)`` invoked inside each decoder layer right
+            after its last cache write is enqueued. A device-op ack enqueued here reaches the host
+            only after the write has executed.
 
         Args:
             hidden_states: Input tensor
@@ -392,6 +399,7 @@ class Model:
                 cached_len=cached_len,
                 indexed_rope=indexed_rope,
                 actual_isl=actual_isl,
+                on_kv_written=None if on_kv_written is None else functools.partial(on_kv_written, i),
             )
             # Per-layer migration seam (no-op unless a pipeline supplies a callback).
             if on_layer_complete is not None:
@@ -462,6 +470,7 @@ class Model:
         cached_len=0,
         indexed_rope=False,
         actual_isl=None,
+        on_kv_written=None,
     ):
         """Prefill forward pass - processes full sequences.
 
@@ -493,6 +502,7 @@ class Model:
             cached_len=cached_len,
             indexed_rope=indexed_rope,
             actual_isl=actual_isl,
+            on_kv_written=on_kv_written,
         )
 
         return logits
