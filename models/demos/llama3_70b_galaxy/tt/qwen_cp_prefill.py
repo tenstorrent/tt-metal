@@ -432,9 +432,9 @@ def local_sdpa_enabled() -> bool:
     """Chunked-pair attention core as ONE model-local generic_op program per device (custom_ops/qwen_cp_sdpa): both
     owned slices' Q chunks spread over all grid cores by cost, each computed exactly as by its stock chunked call, the
     output written straight in the concat-heads layout WO reads (no concat, no nlp_concat_heads). Bit-identical to the
-    pair. 40k unit (test_qwen_cp_sdpa_op.py, pipelined): 13.364 -> 12.476 ms per layer. QWEN_CP_LOCAL_SDPA=0 keeps the
-    stock pair."""
-    return os.environ.get("QWEN_CP_LOCAL_SDPA", "0") == "1"
+    pair. 40k unit (test_qwen_cp_sdpa_op.py, pipelined): 13.364 -> 12.476 ms per layer; b1 40k 1838.7 -> 1775.1 ms
+    (job295), gate digit-identical (job296). QWEN_CP_LOCAL_SDPA=0 keeps the stock pair."""
+    return os.environ.get("QWEN_CP_LOCAL_SDPA", "1") == "1"
 
 
 def chunked_sdpa_config(ring_pc, sl):
