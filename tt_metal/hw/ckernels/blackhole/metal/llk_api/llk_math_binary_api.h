@@ -17,7 +17,6 @@
 // math is FORMAT-FREE: it consumes only the tile geometry (from operand A) -- the register formats live in
 // the unpacker/dest config set at compute_kernel_hw_startup. The per-source prologue (resolving the shape
 // from a CB id, or from an LLKMemDescriptor) lives in the callers.
-// src_dvalid must match the unpack init of the op (SrcDvalid in llk_defs.h).
 template <
     EltwiseBinaryType eltwise_binary_type,
     BroadcastType src_b_bcast_type,
@@ -76,7 +75,6 @@ inline void llk_math_eltwise_binary_impl(
  * @tparam math_fidelity: 0 = LoFi, 2 = HiFi2, 3 = HiFi3, 4 = HiFi4 - controls precision of multiplication
  *     when input is Tf32 format. Only applicable for ELWMUL operations.
  * @tparam binary_reuse_dest: When not NONE, reuses the destination register as SrcA or SrcB
- * @tparam src_dvalid: Source bank hand-off, PerFace or PerTile; must match the unpack init of the op
  * @param operand_A: Logical dataflow buffer id for input A, used to derive the tensor / tile shape
  * @param operand_B: Logical dataflow buffer id for input B, read for a row or column broadcast with SrcDvalid::PerTile.
  * @param acc_to_dest: Flag to control if the result should be accumulated with the current dest.

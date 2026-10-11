@@ -19,7 +19,6 @@
 // formats are programmed once at compute_kernel_hw_startup, so the op needs only the two L1 addresses (plus
 // the SrcB source format for the ROW-broadcast path).
 
-// src_dvalid must match the math init of the op (SrcDvalid in llk_defs.h).
 template <BroadcastType BType = BroadcastType::NONE, SrcDvalid src_dvalid = SrcDvalid::PerFace>
 inline void llk_unpack_AB_init_impl(const ckernel::TensorShape& tensor_shape, const ckernel::Transpose transpose) {
     _llk_unpack_AB_init_<BType, src_dvalid>(tensor_shape, transpose);
@@ -129,7 +128,7 @@ inline void llk_unpack_AB(
     llk_unpack_AB_impl<BType>(address_a, address_b, bcast_row_idx, unpack_src_format[operandB_id]);
 }
 
-// ntiles consecutive tile pairs from one config context: one context acquire per block instead of per tile.
+// One config context acquire for ntiles consecutive tile pairs.
 inline void llk_unpack_AB_block(
     const std::uint32_t operandA,
     const std::uint32_t operandB,

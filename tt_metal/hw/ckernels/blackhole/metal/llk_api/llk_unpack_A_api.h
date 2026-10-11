@@ -19,7 +19,6 @@
 // Unified core, shared by the CB-id API below and the LLKOperand API (experimental/). It takes
 // already-resolved scalar format/geometry + the runtime address; the per-source prologue (resolving
 // these from a CB id, or from an MemDescriptor) lives in the callers.
-// src_dvalid applies to the dest-reuse form only and must match the math init of the op (SrcDvalid in llk_defs.h).
 template <
     BroadcastType BType = BroadcastType::NONE,
     bool acc_to_dest = false,

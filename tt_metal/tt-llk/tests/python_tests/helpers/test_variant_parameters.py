@@ -822,8 +822,7 @@ class TILIZE(TemplateParameter):
 
 @dataclass(repr=False)
 class PER_FACE_HANDOFF(TemplateParameter):
-    """Blackhole eltwise binary: SrcDvalid::PerFace on both threads. It follows from the swept op, fidelity and
-    transpose, so it is not a report column; repr carries it into the variant hash."""
+    """Blackhole eltwise binary: SrcDvalid::PerFace on both threads. Not a report column; repr carries it into the variant hash."""
 
     _per_face_handoff: InitVar[bool] = False
 
@@ -839,8 +838,7 @@ class PER_FACE_HANDOFF(TemplateParameter):
 
 @dataclass(repr=False)
 class DEST_REUSE_UNPACK_A(TemplateParameter):
-    """Blackhole eltwise binary dest reuse: the folds take the dest-reuse unpack the compute API pairs with the dest-reuse math.
-    Not a report column; repr carries it into the variant hash."""
+    """Blackhole eltwise binary dest reuse: the folds take the dest-reuse unpack. Not a report column; repr carries it into the variant hash."""
 
     def __repr__(self) -> str:
         return "DEST_REUSE_UNPACK_A()"
@@ -851,8 +849,7 @@ class DEST_REUSE_UNPACK_A(TemplateParameter):
 
 @dataclass(repr=False)
 class UNPACK_AB_BLOCK(TemplateParameter):
-    """Blackhole eltwise binary: 1 unpacks each block of tile pairs with one call, 2 the same with a B stride of 0, 0 per tile.
-    Not a report column; repr carries it into the variant hash."""
+    """Blackhole eltwise binary: 1 unpacks each block of tile pairs with one call, 2 the same with a B stride of 0, 0 per tile. Not a report column; repr carries it into the variant hash."""
 
     _unpack_ab_block: InitVar[int] = 0
 

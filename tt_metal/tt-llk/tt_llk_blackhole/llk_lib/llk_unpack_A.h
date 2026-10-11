@@ -272,22 +272,13 @@ inline void _llk_unpack_A_mop_config_(
     }
 }
 
-/**
- * @brief Whether the dest-reuse unpack hands the L1 operand over as one source bank (no broadcast, or a row broadcast with DEST_TO_SRCA).
- *        The init adds the run-time shape check; the math init applies the same rule so both threads agree.
- */
+// The init adds the run-time shape check; the math init applies the same rule so both threads agree.
 template <BroadcastType BType, bool acc_to_dest, EltwiseBinaryReuseDestType binary_reuse_dest, bool unpack_to_dest, SrcDvalid src_dvalid>
 inline constexpr bool unpack_A_tile_dvalid =
     src_dvalid == SrcDvalid::PerTile && acc_to_dest && binary_reuse_dest != EltwiseBinaryReuseDestType::NONE && !unpack_to_dest &&
     (BType == BroadcastType::NONE || (BType == BroadcastType::ROW && binary_reuse_dest == EltwiseBinaryReuseDestType::DEST_TO_SRCA));
 
-/**
- * @brief Configure the dest-reuse MOP that hands the L1 operand over as one source bank: one UNPACR of every face, or faces 0 and 1
- *        twice for a row broadcast, and one dummy publication for the reused source.
- *
- * @tparam BType: Broadcast type of the L1 operand, values = <NONE/ROW>
- * @tparam binary_reuse_dest: Reuse dest as a source operand, values = <DEST_TO_SRCA/DEST_TO_SRCB>
- */
+// One UNPACR of every face, or faces 0 and 1 twice for a row broadcast, and one dummy publication for the reused source.
 template <BroadcastType BType, EltwiseBinaryReuseDestType binary_reuse_dest>
 inline void _llk_unpack_A_mop_config_tile_()
 {
@@ -327,7 +318,6 @@ inline void _llk_unpack_A_mop_config_tile_()
  * @tparam acc_to_dest: Accumulate the operand into the dest register rather than overwriting it.
  * @tparam binary_reuse_dest: Reuse dest as a source operand, values = <NONE/DEST_TO_SRCA/DEST_TO_SRCB>
  * @tparam unpack_to_dest: Unpack directly into the dest register (32-bit datums).
- * @tparam src_dvalid: Source bank hand-off of the dest-reuse form, values = <PerFace/PerTile>; must match the math init (see @ref unpack_A_tile_dvalid)
  * @param transpose_of_faces: Nonzero to reorder (transpose) faces during the unpack.
  * @param within_face_16x16_transpose: Nonzero to enable the 16x16 within-face transpose (haloize mode).
  * @param tensor_shape: Tensor shape describing tile dimensions (face_r_dim, face_c_dim, num_faces_r_dim, num_faces_c_dim).

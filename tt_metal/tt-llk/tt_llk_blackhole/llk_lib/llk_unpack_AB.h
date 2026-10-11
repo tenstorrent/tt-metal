@@ -144,17 +144,11 @@ inline void _llk_unpack_AB_mop_config_(const bool transpose_of_faces, const cker
     }
 }
 
-/**
- * @brief Whether the two-operand unpack hands each operand over as one source bank; the init adds the transpose and shape checks, and the
- *        math init applies the same rule so both threads agree.
- */
+// The init adds the transpose and shape checks; the math init applies the same rule so both threads agree.
 template <BroadcastType BType, SrcDvalid src_dvalid>
 inline constexpr bool unpack_AB_tile_dvalid = src_dvalid == SrcDvalid::PerTile;
 
-/**
- * @brief Whether a tile takes the whole-tile hand-off: full 16-row faces, and 2 x 2 faces for a column or row broadcast. Matches the math
- *        side's eltwise_binary_tile_shape.
- */
+// Matches the math side's eltwise_binary_tile_shape.
 template <BroadcastType BType>
 inline bool unpack_AB_tile_shape(const ckernel::TensorShape tensor_shape)
 {
@@ -162,18 +156,13 @@ inline bool unpack_AB_tile_shape(const ckernel::TensorShape tensor_shape)
     return tensor_shape.face_r_dim == FACE_R_DIM && (!needs_2x2_faces || (tensor_shape.num_faces_r_dim == 2 && tensor_shape.num_faces_c_dim == 2));
 }
 
-/**
- * @brief Configure the MOP that hands each operand over as one source bank: one UNPACR of A's whole tile; B in the layout the math MOP
- *        reads (whole tile, face 0 for a scalar, faces 0 0 2 2 for a column broadcast, faces 0 and 1 twice for a row broadcast).
- *
- * @tparam BType: Broadcast type for source B, values = <NONE/COL/ROW/SCALAR>
- */
+// A is one UNPACR of the whole tile; B takes the layout the math MOP reads: whole tile, face 0 for a scalar,
+// faces 0 0 2 2 for a column broadcast, faces 0 and 1 twice for a row broadcast.
 template <BroadcastType BType>
 inline void _llk_unpack_AB_mop_config_tile_()
 {
     static constexpr std::uint32_t unpack_srca_tile = TT_OP_UNPACR(SrcA, 0, 0, 0, 0, 1, 1, p_unpacr::RAREFYB_DISABLE, 0, 0, 0, 0, 1);
     static constexpr std::uint32_t unpack_srcb_last = TT_OP_UNPACR(SrcB, 0, 0, 0, 0, 1, 1, p_unpacr::RAREFYB_DISABLE, 0, 0, 0, 0, 1);
-    // B counters back to the tile base for the next call
     static constexpr std::uint32_t srcb_reset_zw = TT_OP_SETADCZW(p_setadc::UNP_B, 0, 0, 0, 0, 0b1111);
 
     if constexpr (BType == BroadcastType::COL)
@@ -210,7 +199,6 @@ inline void _llk_unpack_AB_mop_config_tile_()
  * broadcast modes and optional transpose. Sets up number of datums to unpack based on face dimensions.
  *
  * @tparam BType: Broadcast type for source B, values = <NONE/COL/ROW/SCALAR>
- * @tparam src_dvalid: Source bank hand-off, values = <PerFace/PerTile>; must match the math init (see @ref unpack_AB_tile_dvalid)
  * @param tensor_shape: Tensor shape describing tile dimensions (face_r_dim, face_c_dim, num_faces_r_dim, num_faces_c_dim)
  * @param transpose: Transpose mode for SrcA face order and/or within-face transpose, values = <None/IntraFace/InterFace/Both>
  * @note Call @ref _llk_unpack_AB_uninit_ to restore the modified datum-count state.
@@ -260,7 +248,6 @@ inline void _llk_unpack_AB_init_(const ckernel::TensorShape tensor_shape, const 
  * Convenience overload that forwards to the transpose-aware init with @ref ckernel::Transpose::None.
  *
  * @tparam BType: Broadcast type for source B, values = <NONE/COL/ROW/SCALAR>
- * @tparam src_dvalid: Source bank hand-off, values = <PerFace/PerTile> (see the transpose-aware init)
  * @param tensor_shape: Tensor shape describing tile dimensions (face_r_dim, face_c_dim, num_faces_r_dim, num_faces_c_dim)
  * @note Call @ref _llk_unpack_AB_uninit_ to restore the modified datum-count state.
  * @ref _llk_unpack_AB_ is the matching execute call.
@@ -278,7 +265,6 @@ inline void _llk_unpack_AB_init_(const ckernel::TensorShape tensor_shape = ckern
  * zero selects @ref ckernel::Transpose::None.
  *
  * @tparam BType: Broadcast type for source B, values = <NONE/COL/ROW/SCALAR>
- * @tparam src_dvalid: Source bank hand-off, values = <PerFace/PerTile> (see the transpose-aware init)
  * @param tensor_shape: Tensor shape describing tile dimensions (face_r_dim, face_c_dim, num_faces_r_dim, num_faces_c_dim)
  * @param transpose: Nonzero to enable both inter-face and within-face transpose, zero for none.
  * @note Call @ref _llk_unpack_AB_uninit_ to restore the modified datum-count state.
@@ -380,18 +366,8 @@ inline void _llk_unpack_AB_(
     switch_config_context(unp_cfg_context);
 }
 
-/**
- * @brief Unpack a block of consecutive tile pairs from L1 into SrcA and SrcB with one config context acquire: the base addresses are
- *        written once and advanced by the tile strides in the instruction stream, and the MOP programmed by the init runs once per tile.
- *
- * @tparam BType: Broadcast type for source B, must be NONE.
- * @param address_a: L1 address of the first source A tile (16 B units).
- * @param address_b: L1 address of the first source B tile (16 B units).
- * @param num_tiles: Number of consecutive tile pairs, at least 1.
- * @param stride_a: Distance between the starts of consecutive source A tiles (16 B units), the operand's page size.
- * @param stride_b: Distance between the starts of consecutive source B tiles (16 B units), the operand's page size.
- * @note Call @ref _llk_unpack_AB_init_ with BroadcastType::NONE (either hand-off) before this function; it uses SCRATCH_SEC0 and SCRATCH_SEC1.
- */
+// One config context acquire for a block of tile pairs: the base addresses are written once and advanced by the tile strides in the instruction stream.
+// Call _llk_unpack_AB_init_ with BroadcastType::NONE first; it uses SCRATCH_SEC0 and SCRATCH_SEC1.
 template <BroadcastType BType = BroadcastType::NONE>
 inline void _llk_unpack_AB_block_(
     const std::uint32_t address_a, const std::uint32_t address_b, const std::uint32_t num_tiles, const std::uint32_t stride_a, const std::uint32_t stride_b)
@@ -437,7 +413,7 @@ inline void _llk_unpack_AB_block_(
         {
             TTI_CFGSHIFTMASK(1, 0b011, 32 - 1, 0, 0b00, THCON_SEC0_REG3_Base_address_ADDR32);
             TTI_CFGSHIFTMASK(1, 0b011, 32 - 1, 0, 0b01, THCON_SEC1_REG3_Base_address_ADDR32);
-            // reset counters; also the instruction between the config writes and the UNPACRs that consume them
+            // Also the instruction between the config writes and the UNPACRs that consume them
             TTI_SETADCZW(0b011, 0, 0, 0, 0, 0b1111);
             ckernel::ckernel_template::run();
         }

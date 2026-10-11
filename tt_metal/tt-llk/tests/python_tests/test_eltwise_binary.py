@@ -280,10 +280,8 @@ def _get_valid_math_fidelity(formats, math_op=None):
 
 
 def _runs_per_tile(tile_dimensions, broadcast_type, *, dest_reuse):
-    """Blackhole: whether the LLK runs this tile per tile under SrcDvalid::PerTile; other tiles keep the per-face program
-    behind a run-time shape check, so their perf variants take the per-face hand-off."""
+    """Blackhole: whether the LLK runs this tile per tile under SrcDvalid::PerTile; other tiles keep the per-face program."""
     face_r_dim, num_faces_r_dim, num_faces_c_dim = get_tile_params(tile_dimensions)
-    # A one-face tile keeps the per-face dest-reuse program
     if dest_reuse and num_faces_r_dim * num_faces_c_dim == 1:
         return False
     needs_2x2 = (
@@ -318,8 +316,7 @@ def _run_eltwise_binary_test(
     unpack_ab_block=0,
 ):
     if per_face_handoff is None:
-        # Blackhole: functional variants take the per-tile hand-off; perf variants take it where the opted-in kernels do,
-        # a multiply above LoFi, on a tile the LLK runs per tile.
+        # Functional variants take the per-tile hand-off; perf variants where the opted-in kernels do: a multiply above LoFi on a tile the LLK runs per tile.
         per_face_handoff = is_perf and not (
             math_op == MathOperation.Elwmul
             and math_fidelity != MathFidelity.LoFi
@@ -1132,8 +1129,7 @@ def test_eltwise_binary_dest_reuse(
     )
 
 
-# The hand-off sweeps below run nightly; their smoke subsets are at the end of this module, since the smoke splits its tests
-# into groups by count.
+# The hand-off sweeps below run nightly; their smoke subsets are at the end of the module (the smoke splits tests into groups by count).
 # The per-face hand-off (Blackhole's SrcDvalid::PerFace, the compute API default) on the two-operand path, every broadcast form.
 @pytest.mark.nightly
 @parametrize(
@@ -1183,7 +1179,6 @@ def test_eltwise_binary_per_face_handoff(
     )
 
 
-# The per-face hand-off on the dest-reuse path.
 @pytest.mark.nightly
 @parametrize(
     reuse_dest_type=[
@@ -1430,7 +1425,6 @@ def test_eltwise_binary_unpack_ab_block_fixed_b(
     )
 
 
-# Smoke subsets of the nightly hand-off sweeps above.
 SMOKE_FORMATS = {
     DestAccumulation.No: [
         InputOutputFormat(DataFormat.Float16_b, DataFormat.Float16_b)

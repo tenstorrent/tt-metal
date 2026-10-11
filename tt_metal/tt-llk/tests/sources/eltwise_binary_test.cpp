@@ -33,7 +33,6 @@ std::uint32_t math_sync_tile_dst_index = 0;
 #define PER_TILE_MOCK(shape) false
 #endif
 
-// Whether the LLK hands this tile shape over once per tile on both threads.
 template <ckernel::BroadcastType BType>
 inline bool tile_handoff(const bool per_tile, const std::uint32_t face_r_dim, const std::uint32_t num_faces_r, const std::uint32_t num_faces_c)
 {
@@ -115,7 +114,6 @@ inline void perf_binary_source_handshakes(
 }
 
 #if defined(ARCH_BLACKHOLE)
-// Whether the dest-reuse unpack and math hand a folded tile over once per tile: two or more full faces.
 inline bool reuse_tile_handoff(const bool per_tile, const std::uint32_t face_r_dim, const std::uint32_t num_faces)
 {
     return per_tile && face_r_dim == ckernel::FACE_R_DIM && num_faces > 1;

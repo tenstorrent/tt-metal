@@ -949,7 +949,7 @@ tt::tt_metal::ProgramDescriptor BinaryNgDeviceOperation::ProgramFactory::create_
         compute_kernel_defines["ISCLOSE_ATOL_RT_ARG_IDX"] = "4";
     }
 
-    bool has_operand_activations = false;  // Blackhole block sections
+    bool has_operand_activations = false;
     bool has_post_activations = false;
     {
         ttsl::SmallVector<unary::EltwiseUnaryWithParam> lhs_activations = operation_attributes.lhs_activations;
