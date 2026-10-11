@@ -310,7 +310,11 @@ def test_gelu_nan_payloads_propagate(device, request, variant_name, dtype_name):
         # The BF16 piecewise branch still saturates a negative NaN to 0; a guard there
         # costs ~7% on this hot path, so it is left to the BF16 kernel rework (#58885).
         request.applymarker(
-            pytest.mark.xfail(strict=True, reason="accurate BF16 gelu maps negative NaN to 0 (#59247 follow-up)")
+            pytest.mark.xfail(
+                strict=True,
+                reason="accurate BF16 gelu maps negative NaN to 0, "
+                "see https://github.com/tenstorrent/tt-metal/issues/59247",
+            )
         )
     variant_enum, _ = _VARIANTS[variant_name]
     bits = _NAN_BITS[dtype_name]
@@ -331,7 +335,9 @@ def test_gelu_nan_payloads_propagate(device, request, variant_name, dtype_name):
         bad = ~torch.isnan(out)
     else:
         bad = torch.isfinite(out)
-    assert not bad.any(), (
-        f"{variant_name}/{dtype_name}: gelu(NaN) produced {bad.sum().item()} unexpected values, "
-        f"e.g. input bits {hex(bits[bad.view(-1).nonzero()[0].item() % len(bits)])} -> {out.view(-1)[bad.view(-1)][0].item()!r}"
-    )
+    if bad.any():
+        first = bad.view(-1).nonzero()[0].item()
+        pytest.fail(
+            f"{variant_name}/{dtype_name}: gelu(NaN) produced {bad.sum().item()} unexpected values, "
+            f"e.g. input bits {hex(bits[first % len(bits)])} -> {out.view(-1)[first].item()!r}"
+        )
