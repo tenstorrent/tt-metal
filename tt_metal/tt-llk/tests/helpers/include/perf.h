@@ -92,8 +92,23 @@ constexpr bool PERF_PACK_SECTION_RELEASE = false;
 #define LLK_PERF_OPAQUE(v)
 #endif
 
+// experiment hook (holdall): LLK_HA_MOCK_NOPS_U / _M = k RISC nops per handshake of the unpack / math mock (faithfulness probe)
+#define LLK_HA_XSTR_(x) #x
+#define LLK_HA_XSTR(x)  LLK_HA_XSTR_(x)
+#if defined(LLK_HA_MOCK_NOPS_U)
+#define LLK_HA_MOCK_U_() asm volatile(".rept " LLK_HA_XSTR(LLK_HA_MOCK_NOPS_U) "\n\tnop\n\t.endr")
+#else
+#define LLK_HA_MOCK_U_()
+#endif
+#if defined(LLK_HA_MOCK_NOPS_M)
+#define LLK_HA_MOCK_M_() asm volatile(".rept " LLK_HA_XSTR(LLK_HA_MOCK_NOPS_M) "\n\tnop\n\t.endr")
+#else
+#define LLK_HA_MOCK_M_()
+#endif
+
 inline void _perf_unpack_set_valid(std::uint32_t source)
 {
+    LLK_HA_MOCK_U_();
     std::uint32_t set_a = source == ckernel::SrcA ? 1 : 0;
     std::uint32_t set_b = source == ckernel::SrcB ? 1 : 0;
 
@@ -124,6 +139,7 @@ inline void _perf_unpack_set_valid(std::uint32_t source)
 
 inline void _perf_math_clear_valid(std::uint32_t source)
 {
+    LLK_HA_MOCK_M_();
     std::uint32_t clear_a = source == ckernel::SrcA ? 1 : 0;
     std::uint32_t clear_b = source == ckernel::SrcB ? 1 : 0;
 
@@ -146,6 +162,7 @@ inline void _perf_unpack_loop_set_valid(std::uint32_t iterations)
 {
     while (iterations-- > 0)
     {
+        LLK_HA_MOCK_U_();
         constexpr std::uint32_t cond_clear_a = set_a ? ckernel::p_stall::SRCA_CLR : 0;
         constexpr std::uint32_t cond_clear_b = set_b ? ckernel::p_stall::SRCB_CLR : 0;
 
@@ -173,6 +190,7 @@ inline void _perf_math_loop_clear_valid(std::uint32_t iterations)
 {
     while (iterations-- > 0)
     {
+        LLK_HA_MOCK_M_();
         constexpr std::uint32_t cond_valid_a = clear_a ? ckernel::p_stall::SRCA_VLD : 0;
         constexpr std::uint32_t cond_valid_b = clear_b ? ckernel::p_stall::SRCB_VLD : 0;
 #ifdef ARCH_QUASAR
@@ -324,3 +342,15 @@ inline void _perf_math_matmul_mock(std::uint32_t loop_factor, std::uint32_t rt_d
         }
     }
 }
+
+// experiment hook (nikola, 67d5f45f2a1): N NOPs in math_matmul's pack thread after INIT, before the TILE_LOOP zone
+#if defined(LLK_NK_LOOPSHIFT)
+#define LLK_NK_LS_XSTR_(x)      #x
+#define LLK_NK_LS_XSTR(x)       LLK_NK_LS_XSTR_(x)
+#define LLK_NK_LOOPSHIFT_HOOK() asm volatile(".rept " LLK_NK_LS_XSTR(LLK_NK_LOOPSHIFT) "\n\tnop\n\t.endr")
+#else
+#define LLK_NK_LOOPSHIFT_HOOK() \
+    do                          \
+    {                           \
+    } while (0)
+#endif
