@@ -98,8 +98,7 @@ inline void _llk_unpack_A_rmsnorm_mop_config_(
     }
     else if (whole_tile)
     {
-        // One SrcA bank per tile, for a math pass that sweeps the tile once per fidelity phase.
-        // The x end grows to the tile for this MOP only, so the per-face callers keep theirs.
+        // The x end grows to the whole tile for this MOP only, so the per-face callers keep theirs.
         const std::uint32_t tile_x_end         = num_faces * FACE_R_DIM * FACE_C_DIM - 1;
         constexpr std::uint32_t replay_buf_len = 2;
         load_replay_buf(
@@ -128,13 +127,7 @@ inline void _llk_unpack_A_rmsnorm_mop_config_(
     }
 }
 
-/**
- * @brief Configure the unpacker and MOP of the scalar-broadcast dest-reuse op.
- *
- * @param whole_tile: One SrcA bank per tile for the whole-tile HiFi multiply; needs 16-row faces, more than one face and
- *        no transpose.
- * @note Init the math thread with the same whole_tile (@ref _llk_math_rmsnorm_bcast_scalar_dest_reuse_init_).
- */
+// whole_tile needs 16-row faces, more than one face and no transpose, and must match the math init's.
 template <
     std::uint32_t num_tiles,
     BroadcastType BType                          = BroadcastType::NONE,

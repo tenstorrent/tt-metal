@@ -1,8 +1,8 @@
 // SPDX-FileCopyrightText: © 2026 Tenstorrent AI ULC
 // SPDX-License-Identifier: Apache-2.0
 
-// The dest-reuse op in its callers' order: a LoFi ELWSUB and a MATH_FIDELITY multiply, each with its own init, in both
-// orders with no other unpack init between, so a multiply init that left the unpacker state behind breaks the subtract.
+// Subtract and multiply inits in both orders with no other unpack init between, so a multiply init that leaves
+// unpacker state behind breaks the subtract.
 
 #include <cstdint>
 
