@@ -74,6 +74,9 @@ def variants(root):
             hashlib.sha256(b.read_bytes()).hexdigest(),
         ): b.parent
         for b in sources.rglob("build.h")
+        # the measured variants: a run without --speed-of-light keeps its INIT measurement builds apart, each built by
+        # the first test of its sharing key (test_config.py _init_build_dir), and none of them is compared
+        if b.parent.parent.name != "init_sol"
     }
 
 
