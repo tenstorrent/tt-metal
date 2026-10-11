@@ -11,6 +11,19 @@ all eight cases with all24 required labels and clean teardown. See
 Phase analysis is now retained with those results: all 3,460,608 selected
 events pair and expected item counts match. Hardware counters remain outstanding.
 
+Update at04:31UTC: the bounded hardware-counter capture is active after two
+diagnostic failures. The first was duplicate raw-log discovery after a passing
+control; the second was an eight-byte BRISC firmware overflow with L1_0+FPU.
+The stricter native one-group pass plan is now running after locked recovery.
+No populated counter result is claimed yet. See
+[launches and preserved failures](../galaxy-evidence/gdn-counter-launch-v1/README.md).
+
+Update at04:47UTC: the single-FPU hardware pass passed output/state checks and
+closed cleanly. Its CSV lacks counter type metadata: native mid-run export
+skips the enrichment routine. A corrected counter-specific wrapper retains
+final metadata processing; the new persistent capture is active. No populated
+counter result is credited before its coverage check succeeds.
+
 ## Existing evidence
 
 | Evidence | Established | Limit |

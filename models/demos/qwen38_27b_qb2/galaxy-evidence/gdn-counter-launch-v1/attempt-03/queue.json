@@ -1,0 +1,84 @@
+{
+  "state": "failed",
+  "groups": [
+    "fpu",
+    "pack",
+    "unpack",
+    "instrn",
+    "l1_0",
+    "l1_1",
+    "l1_2",
+    "l1_3",
+    "l1_4",
+    "l1_5"
+  ],
+  "native_passes": [
+    [
+      "fpu"
+    ],
+    [
+      "pack"
+    ],
+    [
+      "unpack"
+    ],
+    [
+      "instrn"
+    ],
+    [
+      "l1_0"
+    ],
+    [
+      "l1_1"
+    ],
+    [
+      "l1_2"
+    ],
+    [
+      "l1_3"
+    ],
+    [
+      "l1_4"
+    ],
+    [
+      "l1_5"
+    ]
+  ],
+  "max_groups_per_pass": 1,
+  "runs": [
+    {
+      "label": "before",
+      "groups": [],
+      "state": "completed",
+      "output": "/home/ttuser/qwen38-artifacts-20261007/gdn-counter-v1/before",
+      "reused_completed_control": true,
+      "exact_output_match": true,
+      "counter_mask": 0
+    },
+    {
+      "label": "pass-00",
+      "groups": [
+        "fpu"
+      ],
+      "state": "failed",
+      "output": "/home/ttuser/qwen38-artifacts-20261007/gdn-counter-v3/pass-00",
+      "detail": "Malformed native counter payload"
+    }
+  ],
+  "hardware_lock": "/tmp/tt-device.lock",
+  "survives_disconnect": true,
+  "resumes_after_reboot": false,
+  "cleanup_completed": false,
+  "precision_change": false,
+  "promoted_to_serving": false,
+  "physical_dram_utilization_measured": false,
+  "native_sha256": {
+    "/home/ttuser/kimi-prefill.Ubx2wY/runtime/qwen38-27b-20261006/metal/tt_metal/hw/inc/internal/tt-1xx/blackhole/hw_counters.h": "3d9a479c4f95a209bd5d23cbcd99ce7d9b9dd2402233d36ab05327eeb212cb2c",
+    "/home/ttuser/kimi-prefill.Ubx2wY/runtime/qwen38-27b-20261006/metal/tools/tracy/perf_counter_multipass.py": "004667c53acf30884049e2dad32983a65141df87b7e5f5b586845eb35d9ef5f7",
+    "/home/ttuser/kimi-prefill.Ubx2wY/runtime/qwen38-27b-20261006/metal/tools/tracy/perf_counter_analysis.py": "bb97b57f2a4889981c7e246e304bcf40173165a4d3e9987e4d3a2dfcfdf21f91"
+  },
+  "updated_at": "2026-10-11T04:33:06Z",
+  "locked_reset_completed": true,
+  "error": "ValueError",
+  "detail": "Malformed native counter payload"
+}

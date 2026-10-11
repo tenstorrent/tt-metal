@@ -1,0 +1,31 @@
+{
+  "state": "failed",
+  "passed": false,
+  "cleanup_completed": false,
+  "scope": "Synthetic current resident recurrence plus packed-L1 epilogue; no full-model throughput claim",
+  "source_sha256": {
+    "reader.cpp": "16d7813672d8fb33bffa1f10aecc38a76769d00809f5dcf75295ba55106ecd90",
+    "writer.cpp": "2632705ff4fc977076094b537ff67175f819f78d996f550d78d9955277b7698d",
+    "compute_resident.cpp": "a562193f61f2a1b318672414732089ae79568fbdb25912e967e88e7d0b8a1853",
+    "epilogue/reader.cpp": "61fb3966f65cdd0e869005ced1ebdc99e0bb265253f6d60cfefe1c1e06d4046c",
+    "epilogue/writer.cpp": "cc3f7c63a0d1a68b80460ab53e6ddd63450c8909c41331d08a44724772a6cf85",
+    "epilogue/compute.cpp": "3a39084a98fe666c314dfc38a7fe9b006e1bd1b1146a94360f98f11aa2861112"
+  },
+  "instrumented_sha256": {
+    "reader.cpp": "1323f4e2e0fd39e7b531006c313603bc5a84166be16598ae6b969bd3cc00e7ed",
+    "writer.cpp": "e43ee6a3073b18e90767afcc2648249130092c60dc93f4d2b6d1eb06beba8d51",
+    "compute_resident.cpp": "ec991d0d389aea8f406b2792283ec72b7723bf581f7957eb41e73fc729da84bd",
+    "epilogue/reader.cpp": "dde449dc92d9d88313507ab66c062927399d9b8e089197458662143500e15251",
+    "epilogue/writer.cpp": "7d34fec4132a65888041574d9663656d21f77087d762ba92d93f966ee6c03b90",
+    "epilogue/compute.cpp": "b95b0dba90de3769af96e9d9e36c60875b900e544cab047f301ba308d9b8acdf"
+  },
+  "counter_mask": 9,
+  "cases": [],
+  "max_kernel_calls": 48,
+  "kernel_calls": 0,
+  "updated_at": "2026-10-11T04:22:09Z",
+  "error": {
+    "type": "RuntimeError",
+    "message": "TT_THROW @ /home/ttuser/kimi-prefill.Ubx2wY/runtime/qwen38-27b-20261006/metal/tt_metal/llrt/tt_elffile.cpp:405: tt::exception\ninfo:\n/home/ttuser/kimi-prefill.Ubx2wY/runtime/qwen38-27b-20261006/jit-cache-metal-galaxy/tt-metal-cache17556888410274250084/firmware/brisc/brisc.elf: segment[0] [0x3ae0,+0x2208) overflows region:0 limit of 0x2200 bytes, reduce the size of code\nbacktrace:\n --- /home/ttuser/kimi-prefill.Ubx2wY/runtime/qwen38-27b-20261006/metal-install/lib/libtt_metal.so(+0xd877e8) [0x7541fe7877e8]\n --- /home/ttuser/kimi-prefill.Ubx2wY/runtime/qwen38-27b-20261006/metal-install/lib/libtt_metal.so(+0xd823aa) [0x7541fe7823aa]\n --- ll_api::ElfFile::Impl::Elf<false>::LoadImage()\n --- tt::tt_metal::JitBuildState::weaken(std::__cxx11::basic_string<char, std::char_traits<char>, std::allocator<char> > const&) const\n --- tt::tt_metal::JitBuildState::build(tt::tt_metal::JitBuildSettings const*, std::span<tt::tt_metal::JitBuildState const* const, 18446744073709551615ul>) const\n --- /home/ttuser/kimi-prefill.Ubx2wY/runtime/qwen38-27b-20261006/metal-install/lib/libtt_metal.so(+0xd2c868) [0x7541fe72c868]\n --- /home/ttuser/kimi-prefill.Ubx2wY/runtime/qwen38-27b-20261006/metal-install/lib/libtt_metal.so(+0xd2c7ee) [0x7541fe72c7ee]\n --- /home/ttuser/kimi-prefill.Ubx2wY/runtime/qwen38-27b-20261006/metal-install/lib/libtt_metal.so(+0x8a41bf) [0x7541fe2a41bf]\n --- /lib/x86_64-linux-gnu/libc.so.6(+0x99ea8) [0x754240699ea8]\n --- /home/ttuser/kimi-prefill.Ubx2wY/runtime/qwen38-27b-20261006/metal-install/lib/libtt_metal.so(+0x8a4019) [0x7541fe2a4019]\n --- /home/ttuser/kimi-prefill.Ubx2wY/runtime/qwen38-27b-20261006/metal-install/lib/libtt_metal.so(+0xd2c63e) [0x7541fe72c63e]\n --- /home/ttuser/kimi-prefill.Ubx2wY/runtime/qwen38-27b-20261006/metal-install/lib/libtt_metal.so(+0xa19065) [0x7541fe419065]\n --- /home/ttuser/kimi-prefill.Ubx2wY/runtime/qwen38-27b-20261006/metal-install/lib/libtt_metal.so(+0xa17b70) [0x7541fe417b70]\n --- /home/ttuser/kimi-prefill.Ubx2wY/runtime/qwen38-27b-20261006/metal-install/lib/libtt_metal.so(+0xa17058) [0x7541fe417058]\n --- /lib/x86_64-linux-gnu/libstdc++.so.6(+0xdc253) [0x754225adc253]\n --- /lib/x86_64-linux-gnu/libc.so.6(+0x94a83) [0x754240694a83]\n --- /lib/x86_64-linux-gnu/libc.so.6(+0x1268e0) [0x7542407268e0]\n"
+  }
+}

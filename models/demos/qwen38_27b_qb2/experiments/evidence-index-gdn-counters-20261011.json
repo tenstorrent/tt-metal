@@ -1,0 +1,281 @@
+{
+  "generated_at": "2026-10-11T04:51:29.133560+00:00",
+  "scope": "New counter launch and recovery evidence; recorded status is not release qualification.",
+  "entries": [
+    {
+      "path": "demo/run_gdn_counter_profile.py",
+      "bytes": 6535,
+      "sha256": "d507d113d2446b236648cec579bc2bde2b66634bbc30c0b98856ee5a7aba2179"
+    },
+    {
+      "path": "tests/gdn_counter_profile.py",
+      "bytes": 7908,
+      "sha256": "008769ee17c2234e0edb03d141e3b1ac520fd597ce29d1778fd7333c53a2e118"
+    },
+    {
+      "path": "tests/unit/test_gdn_counter_profile.py",
+      "bytes": 4750,
+      "sha256": "ce44f8048fbf651e4111736730953e9bbca6c01e0633b1c8834913343c11d067"
+    },
+    {
+      "path": "galaxy-evidence/gdn-counter-launch-v1/README.md",
+      "bytes": 6108,
+      "sha256": "0ba09cba550d1a58b8df48507c243390098f9d1c9e2de65020633ecbe26a9cb4"
+    },
+    {
+      "path": "galaxy-evidence/gdn-counter-launch-v1/attempt-01/before-phase.json",
+      "bytes": 28947,
+      "sha256": "1185d67893ed24259bd6646be604aaecba188618539d4fc0dfc1f323f8452f05"
+    },
+    {
+      "path": "galaxy-evidence/gdn-counter-launch-v1/attempt-01/launch-unit.json",
+      "bytes": 271,
+      "sha256": "6b447ec281ed16a6a17a7babd8f5af04b9619a9d241e82960b47ab2efbb1d2b2"
+    },
+    {
+      "path": "galaxy-evidence/gdn-counter-launch-v1/attempt-01/launch.json",
+      "bytes": 2532,
+      "sha256": "f057ebdf2fa8ce9e097fc652e1350ade4543cc4da551445e2c9939cd5be245c1"
+    },
+    {
+      "path": "galaxy-evidence/gdn-counter-launch-v1/attempt-01/queue.json",
+      "bytes": 1575,
+      "sha256": "ed24b42b03699ece17fb2f42377ebf69c6622c2e89eab6e5048b161c6b17c680"
+    },
+    {
+      "path": "galaxy-evidence/gdn-counter-launch-v1/attempt-01/run.log.gz",
+      "bytes": 4235,
+      "sha256": "7bf2d6bd8a1819b5ba414bdfedcc809841f45ae3feea9623243fd2fad8d12f12"
+    },
+    {
+      "path": "galaxy-evidence/gdn-counter-launch-v1/attempt-01/source-manifest.json",
+      "bytes": 39193,
+      "sha256": "97aefc5e00adbe084f76efa6c179096782627e06a93853270d2e0f0f06919316"
+    },
+    {
+      "path": "galaxy-evidence/gdn-counter-launch-v1/attempt-01/unit.xml.gz",
+      "bytes": 14093,
+      "sha256": "c49565db6f8c3684557638289acfb3f3ed737cf55aef5db70ba2bd7b9ed0ac0d"
+    },
+    {
+      "path": "galaxy-evidence/gdn-counter-launch-v1/attempt-02/launch-unit.json",
+      "bytes": 271,
+      "sha256": "f6c9a8badb0619ce039829b13e4259b33c6d81ae273db9c8b8319d8579320a22"
+    },
+    {
+      "path": "galaxy-evidence/gdn-counter-launch-v1/attempt-02/launch.json",
+      "bytes": 2618,
+      "sha256": "51f457b718b8bd3ea798d81a9e6e767fef5c39e89bbc4bdf3fc29331f8c5a9cf"
+    },
+    {
+      "path": "galaxy-evidence/gdn-counter-launch-v1/attempt-02/pass-00-phase.json",
+      "bytes": 3816,
+      "sha256": "1b22ac6c7c9cb6db8c18d730cbd9a459447d06256affd971dc10bd2106e218a4"
+    },
+    {
+      "path": "galaxy-evidence/gdn-counter-launch-v1/attempt-02/queue.json",
+      "bytes": 1872,
+      "sha256": "bc2c688c2d45a164fd89914e9de499e9279d03059292805d3ae16dacd01de716"
+    },
+    {
+      "path": "galaxy-evidence/gdn-counter-launch-v1/attempt-02/run.log.gz",
+      "bytes": 7713,
+      "sha256": "8d52accfe8c090c7a081bd680c4b358ede3d01357b62ef5bf983f6ea7235a45f"
+    },
+    {
+      "path": "galaxy-evidence/gdn-counter-launch-v1/attempt-02/source-manifest.json",
+      "bytes": 39193,
+      "sha256": "8bf728413d20d00bad199162368308f8444ff3508ae20976a8bf083a87ae1964"
+    },
+    {
+      "path": "galaxy-evidence/gdn-counter-launch-v1/attempt-02/unit.xml.gz",
+      "bytes": 14073,
+      "sha256": "11594ac1aaccb6f6de31b3776c71b68c73ea82d639b4d651e75b6f56e2edeb03"
+    },
+    {
+      "path": "galaxy-evidence/gdn-counter-launch-v1/attempt-03/launch-unit.json",
+      "bytes": 271,
+      "sha256": "df8ddb88890383706f8ace93b973b01034f58601a9aa1c0bd10eaf669850f5e0"
+    },
+    {
+      "path": "galaxy-evidence/gdn-counter-launch-v1/attempt-03/launch.json",
+      "bytes": 2664,
+      "sha256": "315493940981538e832d26ecc467ab729493941663399bb1ccf3fd71743f2102"
+    },
+    {
+      "path": "galaxy-evidence/gdn-counter-launch-v1/attempt-03/pass-00-phase.json",
+      "bytes": 28947,
+      "sha256": "5b2bcff7d1cbc20dd40038f3a6244f10aebe97e2523235b02b4f84a87b272e89"
+    },
+    {
+      "path": "galaxy-evidence/gdn-counter-launch-v1/attempt-03/queue.json",
+      "bytes": 1971,
+      "sha256": "c01349bbf44d0b5bfe680a1f2848eff3fce035db96120fa7ce9228bc96ee9c94"
+    },
+    {
+      "path": "galaxy-evidence/gdn-counter-launch-v1/attempt-03/run.log.gz",
+      "bytes": 31757,
+      "sha256": "b1929f90d287b349973755712260f6c8129beeadf23914415f76a42280d00f96"
+    },
+    {
+      "path": "galaxy-evidence/gdn-counter-launch-v1/attempt-03/source-manifest.json",
+      "bytes": 39193,
+      "sha256": "9e4eafb260941e47da49d0c7fbc884bd4e2156676b3401c00d88b3f3b3ea89e3"
+    },
+    {
+      "path": "galaxy-evidence/gdn-counter-launch-v1/attempt-03/unit.xml.gz",
+      "bytes": 14084,
+      "sha256": "327240a0c2b936012a631dbda236d67a41ec3c373f1406bdcb31d6e562473a1b"
+    },
+    {
+      "path": "galaxy-evidence/gdn-counter-launch-v1/attempt-04/launch-unit.json",
+      "bytes": 271,
+      "sha256": "abcd7b8e3dac8f27ac2cfa32609312ec2a10ce433d9fd0443a97540878c20d79"
+    },
+    {
+      "path": "galaxy-evidence/gdn-counter-launch-v1/attempt-04/launch.json",
+      "bytes": 2643,
+      "sha256": "17e670e3aa3e13b27f52078efe5a374d864ad8529c0e91ba40a81b5e39e8e33b"
+    },
+    {
+      "path": "galaxy-evidence/gdn-counter-launch-v1/attempt-04/pass-00-phase.json",
+      "bytes": 28947,
+      "sha256": "35ac9449cd2333e1ac2d9f592c6ef724a95acc082024035fed5af08d8e189cde"
+    },
+    {
+      "path": "galaxy-evidence/gdn-counter-launch-v1/attempt-04/queue.json",
+      "bytes": 1854,
+      "sha256": "8c8cf4b0d8aa52085b5b7431766eb2396c432ff386b177f00600e425965f66ee"
+    },
+    {
+      "path": "galaxy-evidence/gdn-counter-launch-v1/attempt-04/run.log.gz",
+      "bytes": 4026,
+      "sha256": "c7bd3f83b4e1010b23ec204837ba570d0f0fba0b222bf034c4c4bc4a8f92edb2"
+    },
+    {
+      "path": "galaxy-evidence/gdn-counter-launch-v1/attempt-04/source-manifest.json",
+      "bytes": 39193,
+      "sha256": "6eaeabdf324be1a9c3732e4a4c3eca91f8b07d6559c107867bd5df8ecc2c797f"
+    },
+    {
+      "path": "galaxy-evidence/gdn-counter-launch-v1/attempt-04/unit.xml.gz",
+      "bytes": 14089,
+      "sha256": "d4471ffde9e2b89c786f1aceab42f7450a75858e0b1379c62a8e2165e95cc6a7"
+    },
+    {
+      "path": "galaxy-evidence/gdn-counter-launch-v1/capture.json",
+      "bytes": 6788,
+      "sha256": "081a9a1ae199d38315d7bc6f41696bf722f8e8aa1ed87a6f7c9ee5af2e8557df"
+    },
+    {
+      "path": "galaxy-evidence/gdn-counter-launch-v1/first-verified-pass/capture.json",
+      "bytes": 174,
+      "sha256": "3130b9c41e4f86823ad204f053d3b722b2f49dc93cce07b34fec4c7a771b3519"
+    },
+    {
+      "path": "galaxy-evidence/gdn-counter-launch-v1/first-verified-pass/pass-00/counters.json.gz",
+      "bytes": 8644,
+      "sha256": "fb855a0c6bf256c33ad3edce52c62d88f77f6af1b79d7543289a6ba61b2acab9"
+    },
+    {
+      "path": "galaxy-evidence/gdn-counter-launch-v1/first-verified-pass/pass-00/hardware.xml.gz",
+      "bytes": 299,
+      "sha256": "10872054a4e23aeab1a23946ec92407bcaf0d89023189a97f63b99bd75a1cf72"
+    },
+    {
+      "path": "galaxy-evidence/gdn-counter-launch-v1/first-verified-pass/pass-00/phase.json",
+      "bytes": 28947,
+      "sha256": "35ac9449cd2333e1ac2d9f592c6ef724a95acc082024035fed5af08d8e189cde"
+    },
+    {
+      "path": "galaxy-evidence/gdn-counter-launch-v1/first-verified-pass/pass-00/queue.json",
+      "bytes": 2098,
+      "sha256": "1c8be59d2b5a5db03f9b5a1dedd30295bb3200c9f0f6ae204bedb87c44f745be"
+    },
+    {
+      "path": "galaxy-evidence/gdn-counter-launch-v1/first-verified-pass/queue.json",
+      "bytes": 2602,
+      "sha256": "70fb7325108344142344d57cb40e73c8d3600f8868ec1699cc1d0a7538b27d59"
+    },
+    {
+      "path": "galaxy-evidence/gdn-counter-launch-v1/original-capture/capture.json",
+      "bytes": 170,
+      "sha256": "26ce860c7b9d9f25b499651234220e4241e5fe404f44116b951d0216c5669cb0"
+    },
+    {
+      "path": "galaxy-evidence/gdn-counter-launch-v1/original-capture/launch-unit.json",
+      "bytes": 271,
+      "sha256": "6b447ec281ed16a6a17a7babd8f5af04b9619a9d241e82960b47ab2efbb1d2b2"
+    },
+    {
+      "path": "galaxy-evidence/gdn-counter-launch-v1/original-capture/launch.json",
+      "bytes": 2532,
+      "sha256": "f057ebdf2fa8ce9e097fc652e1350ade4543cc4da551445e2c9939cd5be245c1"
+    },
+    {
+      "path": "galaxy-evidence/gdn-counter-launch-v1/original-capture/queue.json",
+      "bytes": 1575,
+      "sha256": "ed24b42b03699ece17fb2f42377ebf69c6622c2e89eab6e5048b161c6b17c680"
+    },
+    {
+      "path": "galaxy-evidence/gdn-counter-launch-v1/original-capture/source-manifest.json",
+      "bytes": 39193,
+      "sha256": "97aefc5e00adbe084f76efa6c179096782627e06a93853270d2e0f0f06919316"
+    },
+    {
+      "path": "galaxy-evidence/gdn-counter-launch-v1/original-capture/unit.xml.gz",
+      "bytes": 14093,
+      "sha256": "c49565db6f8c3684557638289acfb3f3ed737cf55aef5db70ba2bd7b9ed0ac0d"
+    },
+    {
+      "path": "galaxy-evidence/gdn-counter-launch-v1/recovery-capture.json",
+      "bytes": 4898,
+      "sha256": "ae693c79d370419af7c2744ab989a4695228bd796dfcd2d74ed3c2c6d6e7026e"
+    },
+    {
+      "path": "galaxy-evidence/gdn-counter-launch-v1/source/demo/run_gdn_counter_profile.py.gz",
+      "bytes": 2358,
+      "sha256": "927e6f945da74a5298c5e727ab1f13800d0f36f37933cf8d87f57335e6cf1364"
+    },
+    {
+      "path": "galaxy-evidence/gdn-counter-launch-v1/source/demo/run_gdn_phase_profile.py.gz",
+      "bytes": 2775,
+      "sha256": "6d8ca3fe51f725cd685d454a0638fb9b6dea95aeda85d0780387e069b8802d33"
+    },
+    {
+      "path": "galaxy-evidence/gdn-counter-launch-v1/source/tests/gdn_counter_profile.py.gz",
+      "bytes": 2820,
+      "sha256": "4f2160df2f8756eb5360afff5f3d177a6ff71201164c3a6a8320a31ccfb06f9c"
+    },
+    {
+      "path": "galaxy-evidence/gdn-counter-launch-v1/source/tests/unit/test_gdn_counter_profile.py.gz",
+      "bytes": 1677,
+      "sha256": "c8737ec24d40ec50cbf63b49ca5f23f2e993dfa3fc682641fcb9967880d8373a"
+    },
+    {
+      "path": "galaxy-evidence/gdn-counter-launch-v1/source-final/demo/run_gdn_counter_profile.py.gz",
+      "bytes": 2358,
+      "sha256": "927e6f945da74a5298c5e727ab1f13800d0f36f37933cf8d87f57335e6cf1364"
+    },
+    {
+      "path": "galaxy-evidence/gdn-counter-launch-v1/source-final/demo/run_gdn_phase_profile.py.gz",
+      "bytes": 2785,
+      "sha256": "6d1eed364be81d2747f0bdb1a35274548404a96c984d9b8535ca34dda60f2848"
+    },
+    {
+      "path": "galaxy-evidence/gdn-counter-launch-v1/source-final/scripts/run_safe_pytest.sh.gz",
+      "bytes": 5296,
+      "sha256": "a3f76ddb8bd39d83dbdd3126bcfc4d13322d173fee1badbfe71e3760f3d54304"
+    },
+    {
+      "path": "galaxy-evidence/gdn-counter-launch-v1/source-final/tests/gdn_counter_profile.py.gz",
+      "bytes": 2820,
+      "sha256": "4f2160df2f8756eb5360afff5f3d177a6ff71201164c3a6a8320a31ccfb06f9c"
+    },
+    {
+      "path": "galaxy-evidence/gdn-counter-launch-v1/source-final/tests/unit/test_gdn_counter_profile.py.gz",
+      "bytes": 1677,
+      "sha256": "c8737ec24d40ec50cbf63b49ca5f23f2e993dfa3fc682641fcb9967880d8373a"
+    }
+  ]
+}

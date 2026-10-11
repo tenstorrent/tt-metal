@@ -33,6 +33,9 @@
 #   --profile-ops  Like --profile, but omit automatic Python function tracing
 #               and duplicate device events in the Tracy UI. Native op metadata,
 #               signposts and device timing CSVs remain enabled.
+#   --profile-counters  Like --profile-ops, but retain final metadata processing.
+#               Mid-run dumps skip counter-type enrichment in the native profiler.
+#               Set TT_METAL_PROFILE_PERF_COUNTERS to one supported pass mask.
 #
 # Modes:
 #   default  - Dispatch timeout only. Lean, no debug overhead.
@@ -75,6 +78,7 @@ DEV_MODE=false
 FAIL_FAST=true
 PROFILE_MODE=false
 PROFILE_OPS_ONLY=false
+PROFILE_COUNTERS=false
 while [[ $# -gt 0 ]]; do
     case "$1" in
         --dev)
@@ -92,6 +96,12 @@ while [[ $# -gt 0 ]]; do
         --profile-ops)
             PROFILE_MODE=true
             PROFILE_OPS_ONLY=true
+            shift
+            ;;
+        --profile-counters)
+            PROFILE_MODE=true
+            PROFILE_OPS_ONLY=true
+            PROFILE_COUNTERS=true
             shift
             ;;
         *)
@@ -260,7 +270,10 @@ fi
 if [[ "$PROFILE_MODE" == true ]]; then
     PYTEST_CMD=(python -m tracy -r)
     if [[ "$PROFILE_OPS_ONLY" == true ]]; then
-        PYTEST_CMD+=(-p --disable-device-data-push-to-tracy --dump-device-data-mid-run)
+        PYTEST_CMD+=(-p --disable-device-data-push-to-tracy)
+        if [[ "$PROFILE_COUNTERS" == false ]]; then
+            PYTEST_CMD+=(--dump-device-data-mid-run)
+        fi
     fi
     PYTEST_CMD+=(-m pytest "${TEST_PATH}")
 else

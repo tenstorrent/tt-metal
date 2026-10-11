@@ -156,3 +156,21 @@ Immutable source references:
 [fused prefill MLP](https://github.com/tenstorrent/tt-metal/blob/e6b4fe334de4b008ca2cd800f2b26130417b3aa0/models/demos/blackhole/qwen36/tt/tp_common.py#L572),
 [remap implementation](https://github.com/tenstorrent/tt-metal/blob/e6b4fe334de4b008ca2cd800f2b26130417b3aa0/models/demos/blackhole/qwen36/tt/gdn/tp.py#L1634),
 [measured optimization log](https://github.com/tenstorrent/tt-metal/blob/e6b4fe334de4b008ca2cd800f2b26130417b3aa0/models/demos/blackhole/qwen36/QWEN38_OPTIMIZATION_LOG.md#L655).
+
+## October 11 prefill comparison update
+
+The completed combined-padding comparison is newer than the decode candidate
+in the historical table above. At B16/32768 input/128 output on one TP4 it
+measures 20.8846 decode TSU, 5324.21 prefill-only input tokens/s, 98.6187-s TTFT,
+and 104.6996-s complete request time. Its all-in input throughput is
+`16 * 32768 / 104.69955527316779 = 5007.55` tokens/s.
+
+The reference TP8/C15 cell records 6431.26 all-in input tokens/s and 68.8768-s
+mean client TTFT, but does not report isolated prefill throughput. Its all-in
+input rate is 28.43% higher and TTFT 30.16% lower than the newer TP4/B16 cell.
+Twice the devices, different precision/concurrency and HTTP versus native
+timing prevent interpreting these ratios as a matched prefill-kernel speedup.
+Our recent decode changes did not materially alter the 5.32K prefill rate.
+Source: [latest comparison](../gdn-combined-padding-results-v1/gdn-combined-padding-v1/comparison.json)
+and the retained `benchmark-report.json`. Long-prompt tracing and fused prefill
+MLP remain unmeasured transfer candidates in our selected BFP8 path.

@@ -1,5 +1,5 @@
 {
-  "generated_at": "2026-10-11T04:00:15.205974+00:00",
+  "generated_at": "2026-10-11T04:51:29.134602+00:00",
   "scope": "Published evidence inventory including this publication. Status fields are copied, not inferred qualification. Git times are separate from execution times.",
   "entries": [
     {"path": "README.md", "bytes": 30203, "sha256": "b85d993bc79a95ad91141b82637ce4cc2c73dd92a8e5684cf398a046ce1da3d5"},
@@ -38,7 +38,7 @@
     {"path": "demo/run_gdn_epilogue_layer.py", "bytes": 4571, "sha256": "7052f65d601051b685771fb533c81c6e5eb87af3cb9cf00b3dc997b099dd789b"},
     {"path": "demo/run_gdn_epilogue_padding.py", "bytes": 5544, "sha256": "c601d20e310b5f46a39f676eeef42954756aa113a13931eb881502683af1816f"},
     {"path": "demo/run_gdn_flat_prepare.py", "bytes": 4434, "sha256": "5bb683457afe7efa72f9ac43d15abefbb32cf66c92d7591138247f5f6062a2cf"},
-    {"path": "demo/run_gdn_phase_profile.py", "bytes": 6738, "sha256": "960dc3b0e6df4c305b609e6d0d25ba7b13139dbfc4313906dd3c060e5abeca35"},
+    {"path": "demo/run_gdn_phase_profile.py", "bytes": 7824, "sha256": "ba56de2edb42bd3e7fd8f890758a22cd92735a8a1c885bcacbd6ff7978ed62eb"},
     {"path": "demo/run_gdn_resident.py", "bytes": 5504, "sha256": "6681836ce02466bdb7c7afa75be0b442165ad5382102133114932ae7ee077d64"},
     {"path": "demo/run_gpqa_audit_followup.py", "bytes": 5201, "sha256": "c5ee5ad3db72877e0a6c6de7aaa62db67ed286efaa97f6e86a9653641896ab66"},
     {"path": "demo/run_hf_layer_followup.py", "bytes": 7799, "sha256": "b6e429c6333f59be0804092f7dfb05ae8ce7a4307c9950ded85223e160ec4658"},
@@ -52,12 +52,12 @@
     {"path": "experiments/ACCURACY-ABLATIONS.md", "bytes": 2764, "sha256": "2c5c9643b8029a7d006e589f63917f0315a3c416f80854bca8e477ddb59fc241"},
     {"path": "experiments/B16_PRIORITIES.md", "bytes": 17244, "sha256": "31b4f7e1df095ea63b7fc9724f83a266a36ff14da57819a4b586af9120c37d62"},
     {"path": "experiments/GDN-FUSION-PLAN.md", "bytes": 12267, "sha256": "b97963e78387d7e674b2afaed53cc946aefa1a4452a59ea8b0367288d612154d"},
-    {"path": "experiments/LOGBOOK.md", "bytes": 211830, "sha256": "fc56b3b7aaa5d5f89ff2fdfa4cd13e607dbccd858f6c7bbdffe35e9aeaaac7e9"},
+    {"path": "experiments/LOGBOOK.md", "bytes": 216873, "sha256": "5119d9d8aac03aa53391c37d5c4edbd5168d1bac8fb8d8bc06283654f716cfcf"},
     {"path": "experiments/OPERATOR-ROADMAP.md", "bytes": 30422, "sha256": "ffa5c51ff36b915a466c025758c3f177548bde018fca09adfa3ccb3fc4347e72"},
     {"path": "experiments/OPTIMIZATION-BACKLOG.md", "bytes": 7528, "sha256": "009bc4991575fd4d8db5919755cff62869812d808b7dc8a0a5f07bac75a4f2ef"},
     {"path": "experiments/PLAN-STATUS.md", "bytes": 38000, "sha256": "3d93b2fb775f683853a574a117aa4be1af4c9c03998dd82b95ef44da7c44d4a5"},
     {"path": "experiments/PREFIX-CACHE-OFFLOAD-SCOPE.md", "bytes": 7617, "sha256": "f549643ae41b23e0a1f38c3cb7881210fb9d47301643e9222be895fa549ad099"},
-    {"path": "experiments/PROFILING-AUDIT.md", "bytes": 6754, "sha256": "d6ea41cc326718edf7d7d6070a99b4579ea766c00e2c9888b661865e156b9257"},
+    {"path": "experiments/PROFILING-AUDIT.md", "bytes": 7571, "sha256": "529637de02dfb0ab6219f28c85e778107132297913a51bb0701b0853257aae98"},
     {"path": "experiments/RELEASE-PROCESS.md", "bytes": 4285, "sha256": "7cd06c6c5a46e4bdd09110883dc912961d23f318b56a93d2639bfb11b039169b"},
     {"path": "experiments/SPECULATIVE-DECODE-SCOPE.md", "bytes": 11574, "sha256": "6642a7ae769d648c310b8727033c7ee52fc97203d8288cc4d80357c94644d4a8"},
     {"path": "experiments/TT-LAB-REVIEW.md", "bytes": 5227, "sha256": "f77a67b7c25da23daef2937914e90057930c3f46a1a7c1e5a18ea99306ddc9d5"},
@@ -2295,7 +2295,7 @@
     {"path": "galaxy-evidence/shared-qk-gpqa-32k-v1/deployment.json", "bytes": 18343, "sha256": "651448bea15161c72a86773dec71819f6131682abb01fd67dc3f2b60c7a0b1f4", "state": "evaluation_completed", "passed": false},
     {"path": "galaxy-evidence/shared-qk-gpqa-32k-v1/responses.jsonl", "bytes": 78284, "sha256": "d4acdbfbf9714a557ce6b77e1a5cab9ed6c8f786e2ba499db6539dda1d9c4b05"},
     {"path": "galaxy-evidence/shared-qk-gpqa-32k-v1/summary.json", "bytes": 2071, "sha256": "d0f0bce8d2223e80cf4bc5c4d2b8e3a49c53eb039f5323369332e1f9cd8b4d95"},
-    {"path": "galaxy-evidence/shield-reference-38027117236/README.md", "bytes": 9467, "sha256": "a344288aa8480f845f1f152509a3b8b7076d268136554ae18b16a54e9446499a"},
+    {"path": "galaxy-evidence/shield-reference-38027117236/README.md", "bytes": 10583, "sha256": "b027b9c6ee8f104a60014695841525497e7341275a89ea4bac8fe04bc00d39c0"},
     {"path": "galaxy-evidence/shield-reference-38027117236/audit.json", "bytes": 16430, "sha256": "bf251a27e991df2ccf1e58b7d4fe95074ed443257f3f7008ad8846cdc73194b0"},
     {"path": "galaxy-evidence/shield-reference-38027117236/benchmark-report.json", "bytes": 20520, "sha256": "47bb0c71034320ac2349077dbd7fb09f362cc0cc98c18a90af5ac2f7dffeaee8"},
     {"path": "galaxy-evidence/shield-reference-38027117236/reference-config.json", "bytes": 2794, "sha256": "10dc3c2f5d1e566637d95c332021bb2b9055541e73eea85da6430d0c82168495"},
@@ -2412,5 +2412,6 @@
     {"path": "tt/model.py", "bytes": 29359, "sha256": "989a6edf72c922be3eb76c5f07a45a8a51c959447fc8c59d00e9de1de2862e3f"},
     {"path": "tt/precision.py", "bytes": 5264, "sha256": "e0e0b83d544cc4798ea51aab73fdd8aa58cf83b3b7dee23aa82f8d09894b3bab"},
     {"path": "tt/prefill_attention.py", "bytes": 3515, "sha256": "ea426ec6015e43acf0565eaf1c509b6729d1e7f308b55966158052354416702a"}
-  ]
+  ],
+  "shards": [{"path": "experiments/evidence-index-gdn-counters-20261011.json", "bytes": 11221, "sha256": "79ebef58dc52d3dd97e5a8aa67271493f4fd52eb4f0076f8c78f4f0aba7f7e2d"}]
 }

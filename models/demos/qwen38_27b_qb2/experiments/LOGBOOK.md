@@ -2526,3 +2526,83 @@ still needed. [Final receipts](../galaxy-evidence/gdn-followup-results-v1/README
   bounded asynchronous transfer submission. A fake32-window read uses one fence
   instead of32, which is a mechanism result, not a physical speedup. Scheduler
   admission/worker integration continues; no serving enablement or merge yet.
+
+
+## October 11, 04:31 UTC: counter capture and parallel feature integration
+
+The latest model candidate remains 20.8846 TSU at B16/32K and 23.8762 at
+B16/16K. No new model performance or GPQA result was produced in this interval.
+Full GPQA remains gated on at least 25 TSU at the primary geometry; target 30
+TSU is unchanged. Prefill remains 5324 input tokens/s per TP4. The Shield
+comparison now explicitly separates isolated prefill from all-in input rate.
+
+The new counter collector has strict per-operation/per-core coverage and
+cross-pass output checks. A mask-zero control passed; initial analysis failed
+because native Tracy retains two copies of the raw device log. The canonical
+capture selection fixed this without rerunning the control. The native
+L1_0+FPU mask then failed BRISC JIT by eight bytes before kernel execution.
+After verifying the failed service was terminal, an exclusive-lock Galaxy
+reset completed. A persistent one-group-at-a-time capture is active with a
+two-hour bound, unchanged installed binaries and preserved failed receipts.
+CPU preflight: 770 tests, one skip, 104 subtests; local focused suite 26 passes.
+See [counter evidence](../galaxy-evidence/gdn-counter-launch-v1/README.md).
+
+Image/video work is published separately on
+`anatarajan/qwen38-multimodal-20261010` at Metal 57e2943082a312fe33a5243634a94905cb7bc85a.
+Pinned CPU integration passed 107 tests and real image/video URL/base64 paths,
+with equal processor outputs and B16 mixed-media assembly. Size/frame/token
+limits and generated visual-marker replay handling are included. No visual
+hardware inference has passed yet. The plugin reuses vLLM media fetching;
+it carries processed payloads and request-specific position metadata to TT.
+Companion plugin commit 8127bc2753afc21fef6e044a24f7a3598563eaa5 is local because
+GitHub repository write permission was denied; its complete patch is retained.
+
+Prefix/SSD work also stays separate. Its native vLLM connector now implements
+matched-prefix admission, complete hybrid-state restore and failed-load
+recomputation. Real CPU scheduler tests caught a stale output placeholder on
+retry, which otherwise scheduled 258 inputs for a 257-token prompt; the scoped
+recovery correction preserves unaffected requests. Plugin commit
+478756aab95989e31d5b9f927be6fbe497c14469 is local and not deployed. Physical
+batched transfer and serving correctness/performance remain gates. Default
+cache capability remains disabled and AgentX has not been launched. Conditional
+user approval to merge once serving consistently works has not yet been met.
+
+Release still requires the exact combined feature bundle through hardware/API
+qualification, tool-calling/agentic validation and SHA/digest-pinned container,
+Shield CI and Helm checks. CPU preprocessing, standalone state restoration and
+prior text-only GPQA each prove different parts; they are not a combined release.
+
+
+## October 11, 04:47 UTC: native counter metadata path and feature publication
+
+The single-FPU capture passed all eight device cases and exact cross-pass
+state/output checks, then closed cleanly. Analysis found 95,664 records with
+empty counter metadata. Native profiler inspection identified that mid-run
+dumps skip `processDeviceMarkerData`, which adds counter type/value/reference.
+The new `--profile-counters` wrapper keeps final metadata processing without
+adding Python tracing or device UI pushes. A fresh persistent capture is active;
+all earlier attempts are retained, no library installation was changed, and no
+additional reset was performed. Valid utilization numbers are still pending.
+
+The completed prefix serving bridge is now published on its separate Metal
+branch at d1019c0dc125913a99ba82938d06d5d662e17f7d. Its final companion plugin
+commit is 13b9777876dc08b268dfc2f627571496484d0f5a (local, permission-blocked),
+with patch `/private/tmp/qwen38-prefix-plugin-13b9777.patch`. Final validation:
+641 plugin CPU tests and 45 Metal prefix tests pass; pre-commit passes. Native
+batched transfer, actual HTTP restore/cancellation/recompute and performance
+remain unqualified. Defaults are unchanged. The user requested regular updates
+listing actual queued/running work, completed work and verified gates; prepared
+probes must continue to be labeled prepared until an authoritative live handle
+exists. Vision hardware, AgentX and full GPQA are not currently queued.
+
+
+## October 11: first populated native hardware counters verified
+
+The metadata-preserving mode worked. The first FPU pass passed all per-core,
+per-operation and cross-pass state/output checks, covering 23,040 active-core
+operation records and 192 target rank/call records. The live service advanced
+to pack automatically. B16 skip-padding recurrence math activity has per-rank
+medians 31.85-31.94%; epilogue 47.59-47.71%. These are instrumented compute-window
+activity counters, not DRAM utilization or whole-model efficiency. Remaining
+passes and overhead controls are still required. Receipts are in
+`galaxy-evidence/gdn-counter-launch-v1/first-verified-pass`.
