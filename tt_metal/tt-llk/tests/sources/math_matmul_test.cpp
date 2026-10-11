@@ -253,7 +253,7 @@ void run_kernel(RUNTIME_PARAMETERS params)
         _llk_pack_dest_init_<dest_sync, is_fp32_dest_acc_en>();
         PROFILER_SYNC();
     }
-    LLK_INIT_END;
+    LLK_INIT_END; LLK_NK_LOOPSHIFT_HOOK(); // experiment hook (nikola): same line, so no zone id (__LINE__ hash) moves
     {
         START_PERF_MEASURE("TILE_LOOP")
         if constexpr (PERF_RUN_TYPE == PerfRunType::MATH_ISOLATE || PERF_RUN_TYPE == PerfRunType::UNPACK_ISOLATE)
