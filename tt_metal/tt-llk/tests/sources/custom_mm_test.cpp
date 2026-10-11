@@ -162,6 +162,13 @@ void run_kernel(RUNTIME_PARAMETERS params)
     _llk_math_pack_sync_init_<DstSync::SyncHalf, is_fp32_dest_acc_en>();
     _llk_math_hw_configure_<is_fp32_dest_acc_en>(formats.math, formats.math);
 
+    if constexpr (CUSTOM_MM_PRESERVE_SRC_ZERO_FLAG)
+    {
+        // Leave the Src zero flag at keep, as a preceding copy_tile_init does. The init must restore the
+        // operand-driven value, or MVMUL keeps the denormal SrcB operands it should flush.
+        math::_configure_preserve_zero_flag_state_();
+    }
+
     _llk_math_custom_mm_init_<false /* transpose */, CUSTOM_MM_SPLIT_ACC, CUSTOM_MM_DENSE_PACKING>(params.in0_face_r_dim, CT_DIM);
     if constexpr (CUSTOM_MM_REUSE_REPLAY)
     {
