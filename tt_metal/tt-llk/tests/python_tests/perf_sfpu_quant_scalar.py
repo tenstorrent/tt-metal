@@ -1,10 +1,7 @@
 # SPDX-FileCopyrightText: © 2026 Tenstorrent AI ULC
 # SPDX-License-Identifier: Apache-2.0
 
-"""
-Perf of SFPU quant, requant and dequant with a per-tensor scale: ``tile`` (a DEST tile loaded per row)
-and ``scalar`` (loaded once by the init), in the ttnn formats and a 32-bit Dest.
-"""
+"""Perf of SFPU quant, requant and dequant with a per-tensor scale, as a DEST tile or loaded by the init."""
 
 import pytest
 from conftest import skip_for_wormhole
@@ -36,7 +33,7 @@ _QUANT_FORMATS = {
     quant_op=["quant", "requant", "dequant"],
     scale_form=["tile", "scalar"],
     loop_factor=[16],
-    input_dimensions=[[128, 64]],  # tile_cnt: 8
+    input_dimensions=[[128, 64]],
 )
 def test_perf_sfpu_quant_scalar(
     perf_report, quant_op, scale_form, loop_factor, input_dimensions
@@ -76,7 +73,6 @@ def test_perf_sfpu_quant_scalar(
             tile_count_B=tile_count_B,
             tile_count_res=tile_count_A,
         ),
-        # The 32-bit inputs unpack straight into the 32-bit Dest, as in ttnn.
         unpack_to_dest=True,
         dest_acc=DestAccumulation.Yes,
     )

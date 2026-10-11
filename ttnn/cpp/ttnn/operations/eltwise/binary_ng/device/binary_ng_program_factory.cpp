@@ -621,7 +621,6 @@ BinaryNgPerCoreArgs build_per_core_runtime_args(
             // core flips between noop and work across differently-shaped cache hits.
             const size_t reader_len = row_major_inputs ? 26 : 23;
             const size_t writer_len = row_major_inputs ? 14 : (b.has_value() ? 11 : 12);
-            // A per-tensor quantization (scalar b) carries the scale as a fifth compute arg (see below).
             const size_t compute_len =
                 (op_type == BinaryOpType::ISCLOSE || (operation_attributes.is_quant_op && !b.has_value())) ? 5 : 4;
             reader_runtime_args.assign(reader_len, std::variant<uint32_t, Buffer*>{uint32_t{0}});
@@ -762,7 +761,6 @@ BinaryNgPerCoreArgs build_per_core_runtime_args(
 
             compute_runtime_args = {compute_tiles, 0u, 0u, compute_scalar_value};
             if (rt_is_quant_op) {
-                // The per-tensor scale (fp32 bits), read by the compute kernel at QUANT_SCALE_RT_ARGS_IDX.
                 compute_runtime_args.push_back(packed_scalar);
             }
         }
@@ -950,8 +948,7 @@ tt::tt_metal::ProgramDescriptor BinaryNgDeviceOperation::ProgramFactory::create_
         }
     }
 
-    // Per-tensor quantization on Blackhole: the SFPU takes the scale at init, so the kernel copies only the input
-    // tile into DEST. QUANT_SCALAR_INIT / QUANT_SCALAR_OP are the scalar-scale forms of BINARY_SFPU_INIT / _OP.
+    // Blackhole per-tensor quantization takes the scale at init, so the kernel copies only the input tile into DEST.
     if (is_quant_op && !b.has_value() && !operation_attributes.scalar_is_lhs &&
         tt::tt_metal::hal::get_arch() == tt::ARCH::BLACKHOLE) {
         const auto scalar_form = [](std::string name) {

@@ -4,9 +4,7 @@
 
 #pragma once
 
-// Math-thread dispatch of the sfpu_quant_scalar test and perf kernels: quant, requant and dequant (QUANT_OP 0, 1, 2)
-// with the scale as a DEST tile (QUANT_SCALE_FORM 0) or loaded once by the init (QUANT_SCALE_FORM 1), from
-// QUANT_SCALAR_CFG; QUANT_ZP_BITS and QUANT_SCALE_BITS are fp32 bits.
+// Math-thread dispatch shared by the sfpu_quant_scalar test and perf kernels.
 
 #include <cstdint>
 
@@ -15,13 +13,12 @@
 #include "llk_math_eltwise_binary_sfpu_params.h"
 #include "llk_sfpu/ckernel_sfpu_quant.h"
 
-// One 32-row call per tile, as the compute API issues it on Blackhole.
 constexpr int QUANT_ITERATIONS = 32;
 
 inline void quant_scalar_op_init()
 {
     using namespace ckernel;
-    constexpr std::uint32_t neg_zp_bits = QUANT_ZP_BITS ^ 0x80000000u; // dequant takes the negated zero point
+    constexpr std::uint32_t neg_zp_bits = QUANT_ZP_BITS ^ 0x80000000u; // dequant adds the negated zero point
     if constexpr (QUANT_OP == 0)
     {
         _llk_math_eltwise_binary_sfpu_init_<SfpuType::quant_int32>();

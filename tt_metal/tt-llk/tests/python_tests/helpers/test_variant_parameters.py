@@ -2056,8 +2056,7 @@ class TYPECAST_FORMATS(TemplateParameter):
 
 @dataclass
 class QUANT_SCALAR_CFG(TemplateParameter):
-    """Compile-time config for the SFPU quantization test kernels (quant_op, scale_form,
-    the zero point and the scale as fp32 bits)."""
+    """Compile-time config for the SFPU quantization test kernels."""
 
     quant_op: str = "quant"
     scale_form: str = "tile"

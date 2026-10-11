@@ -406,14 +406,14 @@ void dequant_init_scalar_scale(const uint zero_point, const uint scale) {
 template <bool APPROXIMATION_MODE, int ITERATIONS = 8, bool SIGN_MAGNITUDE_FORMAT = false, bool SCALAR_SCALE = false>
 inline void calculate_quant_int32(const uint dst_index_in0, const uint dst_index_in1, const uint dst_index_out) {
     // Operand A is input (fp32).
-    // Operand B is scaling factor (fp32); with SCALAR_SCALE it is the LREG1 constant from the init.
+    // Operand B is scaling factor (fp32).
     // LREG2 holds the zero-point constant (fp32) loaded by _init_quant_int32_.
     // Output is int32 scaled to int8 range (sign-magnitude or 2's-complement).
     //
     // Tile layout in Dest: each tile occupies 64 dest-address units (4 faces
     // x 16 addr/face). Each SFPLOAD/SFPSTORE moves 4 dest rows x 8 SFPU lanes,
     // so advancing dst_reg by +2 between iterations walks the 4-row x 8-col
-    // blocks, eight per face: a call covers ITERATIONS blocks (8 = a face, 32 = a tile).
+    // blocks, eight per face.
     //
     // The replay-buffer body at QUANT_REPLAY_SLOT and ADDR_MOD_6's dest+=2
     // slot are programmed by _init_quant_int32_<APPROXIMATION_MODE,
@@ -449,9 +449,8 @@ template <
     bool SCALAR_SCALE = false>
 inline void calculate_requant_int32(const uint dst_index_in0, const uint dst_index_in1, const uint dst_index_out) {
     // Operand A is input to requant (int32, sign-magnitude or 2's complement bits or UInt8-unpacked int8 byte in [0,
-    // 255]). Operand B is scaling factor (fp32; with SCALAR_SCALE the LREG1 constant from the init). LREG2 holds
-    // the zero-point constant (fp32) loaded by _init_requant_int32_. Output is int32 scaled to int8 range
-    // (sign-magnitude or 2's-complement).
+    // 255]). Operand B is scaling factor (fp32). LREG2 holds the zero-point constant (fp32) loaded by
+    // _init_requant_int32_. Output is int32 scaled to int8 range (sign-magnitude or 2's-complement).
     //
     // The replay-buffer body at REQUANT_REPLAY_SLOT and ADDR_MOD_6's dest+=2
     // slot are programmed by _init_requant_int32_<APPROXIMATION_MODE,
@@ -467,8 +466,8 @@ inline void calculate_requant_int32(const uint dst_index_in0, const uint dst_ind
     [[maybe_unused]] const std::uint32_t in1_off = dst_index_in1 * dst_tile_size;
     const std::uint32_t out_off = dst_index_out * dst_tile_size;
 
-    // Per iteration: hoist the TT_SFPLOADs (no scale load under SCALAR_SCALE)
-    // ahead of the recorded compute (the input cast doesn't touch LREG1), replay the
+    // Per iteration: hoist the TT_SFPLOADs ahead of the recorded compute
+    // (the input cast doesn't touch LREG1 so reordering is safe), replay the
     // recorded body, then SFPSTORE under ADDR_MOD_6 which auto-advances
     // dst_reg by 2 for the next iteration.
 #pragma GCC unroll 8
@@ -489,7 +488,6 @@ template <bool APPROXIMATION_MODE, int ITERATIONS = 8, bool SCALAR_SCALE = false
 inline void calculate_quant_int32_int8_pack(
     const uint dst_index_in0, const uint dst_index_in1, const uint dst_index_out) {
     // Int8 output: MAD + offset-128 pack body is recorded once into QUANT_REPLAY_SLOT and replayed.
-    // With SCALAR_SCALE the scale is the LREG1 constant from the init.
     constexpr std::uint32_t dst_tile_size = 64;
     const std::uint32_t in0_off = dst_index_in0 * dst_tile_size;
     [[maybe_unused]] const std::uint32_t in1_off = dst_index_in1 * dst_tile_size;
@@ -509,7 +507,6 @@ template <bool APPROXIMATION_MODE, int ITERATIONS = 8, bool INT8_INPUT = false, 
 inline void calculate_requant_int32_int8_pack(
     const uint dst_index_in0, const uint dst_index_in1, const uint dst_index_out) {
     // Int8 output: CAST + MAD + offset-128 pack body is recorded once into REQUANT_REPLAY_SLOT and replayed.
-    // With SCALAR_SCALE the scale is the LREG1 constant from the init.
     constexpr std::uint32_t dst_tile_size = 64;
     const std::uint32_t in0_off = dst_index_in0 * dst_tile_size;
     [[maybe_unused]] const std::uint32_t in1_off = dst_index_in1 * dst_tile_size;
@@ -541,7 +538,7 @@ template <
 inline void calculate_dequant_int32(const uint dst_index_in0, const uint dst_index_in1, const uint dst_index_out) {
     // Operand A[LREG0] is input to dequant (int32, sign-magnitude or 2's complement bits;
     // or, when INT8_INPUT, a UInt8-unpacked int8 byte in [0, 255]).
-    // Operand B[LREG1] is scaling factor (fp32); with SCALAR_SCALE it is the constant from the init.
+    // Operand B[LREG1] is scaling factor (fp32).
     // LREG2 holds the (negated) zero-point constant loaded by _init_dequant_int32_;
     // i.e. the formula computed is (A + LREG2) * B, which is (A - zero_point) * B
     // when the caller passes -zero_point through the init.
@@ -559,7 +556,7 @@ inline void calculate_dequant_int32(const uint dst_index_in0, const uint dst_ind
     [[maybe_unused]] const std::uint32_t in1_off = dst_index_in1 * dst_tile_size;
     const std::uint32_t out_off = dst_index_out * dst_tile_size;
 
-    // Per iteration: hoist the TT_SFPLOADs (no scale load under SCALAR_SCALE) ahead of the recorded compute,
+    // Per iteration: hoist the TT_SFPLOADs ahead of the recorded compute,
     // replay the body, then SFPSTORE under ADDR_MOD_6 which auto-advances
     // dst_reg by 2 for the next iteration.
 #pragma GCC unroll 8

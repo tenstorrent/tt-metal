@@ -1,10 +1,7 @@
 # SPDX-FileCopyrightText: © 2026 Tenstorrent AI ULC
 # SPDX-License-Identifier: Apache-2.0
 
-"""
-SFPU quant, requant and dequant with a per-tensor scale in both LLK forms of the scale, bit for bit
-against one host reference over whole-number results, fractions, ties and both saturation ends.
-"""
+"""SFPU quant, requant and dequant with a per-tensor scale in both scale forms, bit for bit against a host reference."""
 
 import torch
 from conftest import skip_for_wormhole
@@ -52,8 +49,7 @@ def _stimuli(quant_op: str, exact: bool, seed: int) -> torch.Tensor:
 def _reference(quant_op: str, x: torch.Tensor) -> torch.Tensor:
     if quant_op == "dequant":
         return (x.to(torch.float32) - _ZERO_POINT) * _SCALE
-    # x * scale + zero_point in float32 as the SFPMAD computes it, then the SFPSTOCHRND float to int8
-    # rounding: nearest, ties away from zero, clamp to plus or minus 127 (exact in float64).
+    # float32 SFPMAD, then SFPSTOCHRND rounding: nearest, ties away from zero, clamp to plus or minus 127.
     y = (x.to(torch.float32) * _SCALE + _ZERO_POINT).to(torch.float64)
     q = torch.sign(y) * torch.floor(y.abs() + 0.5)
     return torch.clamp(q, -127, 127).to(torch.int32)
@@ -63,7 +59,6 @@ def _run(quant_op: str, scale_form: str, src_A: torch.Tensor) -> torch.Tensor:
     in_fmt, out_fmt = _QUANT_FORMATS[quant_op]
     formats = InputOutputFormat(in_fmt, out_fmt)
     dims = [TILE_DIM, TILE_DIM]
-    # Tile B, the scale tile of the tile form, travels as the input format's bits.
     src_B = torch.full((ELEMENTS_PER_TILE,), _SCALE, dtype=torch.float32)
     if in_fmt == DataFormat.Int32:
         src_B = src_B.view(torch.int32)

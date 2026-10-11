@@ -2,8 +2,7 @@
 //
 // SPDX-License-Identifier: Apache-2.0
 
-// Quant, requant and dequant (QUANT_OP 0, 1, 2) with a per-tensor scale as a DEST tile (QUANT_SCALE_FORM 0) or
-// loaded once by the init (QUANT_SCALE_FORM 1); QUANT_ZP_BITS and QUANT_SCALE_BITS are fp32 bits.
+// QUANT_OP selects quant, requant or dequant; QUANT_SCALE_FORM selects a scale DEST tile or a scale loaded by the init.
 
 #include <algorithm>
 #include <cstdint>
@@ -16,7 +15,6 @@
 #include "perf.h"
 #include "profiler.h"
 
-// Globals
 std::uint32_t unp_cfg_context                   = 0;
 std::uint32_t pack_sync_tile_dst_ptr            = 0;
 std::uint32_t math_sync_tile_dst_index          = 0;
@@ -67,7 +65,6 @@ void run_kernel(RUNTIME_PARAMETERS params)
                 {
                     for (std::uint32_t c = 0; c < QUANT_COPIES; ++c)
                     {
-                        // the input tile and, with the tile scale, the same tile again as the scale operand
                         _llk_unpack_A_<BroadcastType::NONE, false, EltwiseBinaryReuseDestType::NONE, unpack_to_dest>(
                             PERF_ADDRESS(PERF_INPUT_A, i), formats.unpack_A_src, formats.unpack_A_dst);
                     }
@@ -151,7 +148,7 @@ void run_kernel(RUNTIME_PARAMETERS params)
                 }
             }
         }
-        else // L1_TO_L1
+        else
         {
             for (std::uint32_t loop = 0; loop < LOOP_FACTOR; ++loop)
             {

@@ -2,8 +2,8 @@
 //
 // SPDX-License-Identifier: Apache-2.0
 
-// LLK SFPU quantization functional test kernel: quant, requant and dequant with a per-tensor scale, in the two forms
-// of sources/sfpu_quant_scalar_perf.cpp (same QUANT_* configuration); tile A is the input, tile B the scale tile.
+// Functional test kernel with the same QUANT_* configuration as sfpu_quant_scalar_perf.cpp; tile A is the input, tile B
+// the scale tile.
 
 #include <cstdint>
 
