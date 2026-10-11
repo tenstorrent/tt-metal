@@ -94,6 +94,7 @@ sfpi_inline sfpi::vFloat fresh_fmod_core(const sfpi::vFloat v_mag, const sfpi::v
 // store rounding — callers own the store).  Same golden-math constants as
 // calculate_exp_fresh_cpp; kept separate so the measured exp row's fresh body
 // stays byte-stable.
+template <bool NONPOSITIVE_FINITE_DOMAIN = false>
 sfpi_inline sfpi::vFloat fresh_exp_21f(const sfpi::vFloat val)
 {
     constexpr float ONE_LN2 = 1.4426950216293334961f;
@@ -101,8 +102,18 @@ sfpi_inline sfpi::vFloat fresh_exp_21f(const sfpi::vFloat val)
     constexpr float C1      = 7.839635491371155e-08f;
     constexpr float C2      = 4.791750143340323e-15f;
 
-    sfpi::vFloat xlog2   = val * ONE_LN2 + 127.0f;
-    xlog2                = sfpi::clamp(xlog2, 0.0f, 255.0f);
+    sfpi::vFloat xlog2 = val * ONE_LN2 + 127.0f;
+    if constexpr (NONPOSITIVE_FINITE_DOMAIN)
+    {
+        // The caller proves finite inputs are <= 0, so the upper clamp is
+        // redundant.  Retain the lower clamp for large negatives and -inf;
+        // special-value behavior remains a caller-specific obligation.
+        xlog2 = sfpi::max(xlog2, 0.0f);
+    }
+    else
+    {
+        xlog2 = sfpi::clamp(xlog2, 0.0f, 255.0f);
+    }
     const sfpi::vInt zi  = sfpi::shft(sfpi::exman(xlog2, sfpi::MantissaMode::ImplicitOne), sfpi::exexp(xlog2), sfpi::ShiftMode::Logical);
     const sfpi::vFloat z = sfpi::as<sfpi::vFloat>(zi);
 

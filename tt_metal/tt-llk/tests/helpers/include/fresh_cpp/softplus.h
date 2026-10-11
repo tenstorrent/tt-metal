@@ -56,7 +56,7 @@ __attribute__((noinline)) void calculate_softplus_fresh_cpp(const float beta, co
             // coefficient k by dividing it by C0^(k+1), avoiding an extra
             // multiply while retaining the correct log(2) value at t = 0.
             // Reproduce with corpus/tools/fit_softplus_residual.py.
-            const sfpi::vFloat e        = fresh_exp_21f(-a);
+            const sfpi::vFloat e        = fresh_exp_21f<true>(-a);
             sfpi::vFloat p              = -0.07473333925008774f;
             p                           = p * e + 0.25558772683143616f;
             p                           = p * e + -0.48683419823646545f;
