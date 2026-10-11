@@ -6,8 +6,9 @@
 // compute (16-bit DEST). Derived from the stock sdpa.cpp (stock_compute.cpp here), causal + chunked path only.
 // sdpa_items_v2 below is the stock sdpa_standard_v2 (compute_streaming.hpp) with one change: the Q loop walks
 // this core's explicit item list (runtime args) instead of a zigzag range, and each item takes its slice's
-// causal chunk offset. The per-Q-chunk work (K-chunk loop, bounds, masking, inner step) is unchanged, so every
-// Q chunk is computed exactly as by the stock call.
+// causal chunk offset. The K-chunk step is cp_inner_loop_step (cp_step.hpp), the stock sdpa_inner_loop_step
+// specialised to this configuration. The per-Q-chunk work (K-chunk loop, bounds, masking, inner step) is unchanged, so
+// every Q chunk is computed exactly as by the stock call.
 //
 // Runtime args: offset_0, offset_1, n_items, item... (item = (p << 16) | (nq << 8) | q_chunk).
 
@@ -20,6 +21,7 @@
 #include "api/compute/compute_kernel_hw_startup.h"
 #include "compute_common.hpp"
 #include "compute_streaming.hpp"
+#include "cp_step.hpp"
 
 template <
     uint32_t Sq_chunk_t,
@@ -159,75 +161,6 @@ void sdpa_items_v2(
             cb_k_range_obj.pop_front(1);
         }
 
-        auto call_step = [&](auto profiling_tag,
-                             bool is_last,
-                             bool is_first,
-                             uint32_t active_Sk,
-                             bool reduce_trigger,
-                             uint32_t sbw,
-                             bool apply_causal,
-                             uint32_t k_start_tile,
-                             bool apply_mask,
-                             uint32_t lw_partial_tile_idx,
-                             bool apply_sliding_window) {
-            sdpa_inner_loop_step<
-                decltype(profiling_tag)::value,
-                Sq_chunk_t,
-                Sk_chunk_t,
-                Skt,
-                DHt,
-                vDHt,
-                scale_fp32,
-                qkt_subblock_h,
-                qkt_subblock_w,
-                qktv_subblock_h,
-                qktv_subblock_w,
-                use_padded_mask,
-                false,  // ring_mode
-                is_causal_sdpa,
-                cb_q_in,
-                cb_kt_in,
-                cb_v_in,
-                cb_qkt_im,
-                cb_identity_scale_in,
-                cb_exp_max_diff,
-                cb_col_identity,
-                cb_recip_scratch,
-                cb_normalized_out,
-                cb_mask_in,
-                Sk_chunk_t,
-                false,
-                0,
-                0,
-                0,
-                vDHt,
-                false,
-                sliding_window_size,
-                use_attention_sink,
-                cb_attention_sink,
-                use_provided_mask>(
-                prev,
-                cur,
-                is_last,
-                is_first,
-                apply_mask,
-                lw_partial_tile_idx,
-                active_Sk,
-                reduce_trigger,
-                sbw,
-                INVALID_CB,  // save_out_cb
-                INVALID_CB,  // save_max_cb
-                apply_causal,
-                q_start_tile,
-                k_start_tile,
-                lw_mask.neginf_tile_idx,
-                lw_mask.primary_diag_tile_idx,
-                lw_mask.sliding_leading_prev_tile_idx,
-                lw_mask.sliding_leading_tile_idx,
-                lw_mask.sliding_trailing_next_tile_idx,
-                apply_sliding_window);
-        };
-
         for (uint32_t k_chunk = k_loop_start; k_chunk < k_loop_end; k_chunk++) {
             bool is_first = (k_chunk == k_loop_start);
             bool is_last = (k_chunk == k_loop_end - 1);
@@ -290,18 +223,40 @@ void sdpa_items_v2(
                 chunk_reduce_trigger = false;
             }
 
-            call_step(
-                std::false_type{},
+            (void)apply_partial_mask;
+            (void)apply_sliding_mask;
+            (void)apply_causal_mask;
+            cp_inner_loop_step<
+                Sq_chunk_t,
+                Sk_chunk_t,
+                DHt,
+                vDHt,
+                scale_fp32,
+                qkt_subblock_h,
+                qkt_subblock_w,
+                qktv_subblock_h,
+                qktv_subblock_w,
+                cb_q_in,
+                cb_kt_in,
+                cb_v_in,
+                cb_qkt_im,
+                cb_identity_scale_in,
+                cb_exp_max_diff,
+                cb_col_identity,
+                cb_recip_scratch,
+                cb_normalized_out,
+                cb_mask_in>(
+                prev,
+                cur,
                 is_last,
                 is_first,
                 chunk_active_Sk,
                 chunk_reduce_trigger,
                 chunk_sbw,
-                apply_causal_mask,
+                q_start_tile,
                 k_chunk * Sk_chunk_t,
-                apply_partial_mask,
-                apply_partial_mask ? lw_mask.global_n_partial_tile_idx : 0u,
-                apply_sliding_mask);
+                lw_mask.neginf_tile_idx,
+                lw_mask.primary_diag_tile_idx);
 
             // Post-iteration cleanup
             // prev.out and cb_exp_max_diff are already popped row-by-row inside salad_correct_row.
@@ -413,4 +368,5 @@ void kernel_main() {
         cb_sum_A,
         cb_sum_B,
         lw_mask);
+    cp_prof_emit();
 }
