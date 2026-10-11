@@ -848,8 +848,6 @@ class ENABLE_DIRECT_INDEXING(TemplateParameter):
 
 @dataclass
 class PERF_STAGE(TemplateParameter):
-    """How much of a perf kernel's iteration runs; 0 is the frame alone, to subtract from the other stages."""
-
     perf_stage: int = 1
 
     def convert_to_cpp(self) -> str:
@@ -858,8 +856,6 @@ class PERF_STAGE(TemplateParameter):
 
 @dataclass
 class SINKHORN_ITERS(TemplateParameter):
-    """Row and column normalisation passes of sinkhorn_4x4."""
-
     sinkhorn_iters: int = 20
 
     def convert_to_cpp(self) -> str:
