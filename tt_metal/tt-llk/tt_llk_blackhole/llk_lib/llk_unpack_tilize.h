@@ -403,20 +403,7 @@ inline void _llk_unpack_tilize_(
     }
 }
 
-/**
- * @brief Unpack and tilize a row of consecutive tiles with one context acquire; 8-bit formats and unpack to dest take one @ref _llk_unpack_tilize_ per tile.
- *
- * @param base_address: L1 base address of the source block row (16 B units).
- * @param first_tile_index: Column tile index of the first tile to unpack.
- * @param num_tiles: Number of consecutive column tiles, at least 1.
- * @param unpack_src_format: Source data format of the operand in L1.
- * @param unpack_dst_format: Destination data format the operand is converted to.
- * @param face_r_dim: Rows per face.
- * @param num_faces: Number of faces in the tile, valid values = <2, 4>.
- * @param narrow_tile: Whether the tile is narrow (single column of faces).
- * @note Call @ref _llk_unpack_tilize_init_ before this function, and @ref _llk_unpack_tilize_uninit_ after the last
- *       unpack of the operation to restore modified state.
- */
+// One context acquire for a row of tiles; 8-bit formats and unpack to dest take one _llk_unpack_tilize_ per tile.
 inline void _llk_unpack_tilize_block_(
     const std::uint32_t base_address,
     const std::uint32_t first_tile_index,

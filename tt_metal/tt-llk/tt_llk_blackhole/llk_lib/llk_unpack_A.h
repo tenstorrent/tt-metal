@@ -533,23 +533,8 @@ inline void _llk_unpack_A_(const std::uint32_t address, const std::uint32_t unpa
     switch_config_context(unp_cfg_context);
 }
 
-/**
- * @brief Unpack consecutive tiles (operand A) into SrcA with one context acquire, replaying a recorded per tile body.
- *
- * @tparam BType: Broadcast type, must be NONE.
- * @tparam acc_to_dest: Must be false.
- * @tparam binary_reuse_dest: Must be NONE.
- * @tparam unpack_to_dest: Unpack directly into DEST (32-bit datums); with a 32-bit DEST, four-face tiles take one slot handshake per block.
- * @tparam is_fp32_dest_acc_en: DEST holds 32-bit datums; the math thread's block call must receive the same value.
- * @param address: L1 address of the first tile of the block (16 B units).
- * @param num_tiles: Number of consecutive tiles, at least 1.
- * @param tile_stride_16B: Distance between the starts of consecutive tiles in L1 (16 B units), the operand's page size.
- * @param unpack_src_format: Source data format of the operand in L1.
- * @param unpack_dst_format: Destination data format the operand is converted to.
- * @param num_faces: Faces per tile, the value the init received through its tensor shape.
- * @param face_r_dim: Rows per face.
- * @note Call @ref _llk_unpack_A_init_ with matching template args and transpose_of_faces 0 first; on unpack to dest the math thread takes the block through @ref _llk_math_eltwise_unary_datacopy_block_.
- */
+// A block of four-face 32-bit tiles on unpack to dest takes one DEST slot handshake, which the math thread's block call must match.
+// The init is _llk_unpack_A_init_ with the same template args and transpose_of_faces 0.
 template <
     BroadcastType BType                          = BroadcastType::NONE,
     bool acc_to_dest                             = false,
@@ -669,17 +654,8 @@ inline void _llk_unpack_A_block_(
     switch_config_context_from(context);
 }
 
-/**
- * @brief Unpack num_tiles four-face 32-bit tiles of each operand into consecutive DEST slots with one slot handshake, operand by operand.
- *
- * @tparam is_fp32_dest_acc_en: DEST holds 32-bit datums; the math thread takes all tiles as one block via @ref _llk_math_eltwise_unary_datacopy_block_.
- * @tparam num_operands: Operands, at least 2.
- * @param addresses: L1 address of each operand's first tile (16 B units).
- * @param num_tiles: Tiles per operand, at least 1.
- * @param unpack_src_format: Source data format of every operand in L1.
- * @param unpack_dst_format: Destination data format of every operand.
- * @note Call @ref _llk_unpack_A_init_ for unpack to dest with transpose_of_faces 0 before this function.
- */
+// All operands' tiles go to consecutive DEST slots under one handshake; the math thread takes them as one block.
+// The init is _llk_unpack_A_init_ for unpack to dest with transpose_of_faces 0.
 template <bool is_fp32_dest_acc_en, std::uint32_t num_operands>
 inline void _llk_unpack_A_operands_to_dest_(
     const std::uint32_t (&addresses)[num_operands], const std::uint32_t num_tiles, const std::uint32_t unpack_src_format, const std::uint32_t unpack_dst_format)
@@ -719,7 +695,7 @@ inline void _llk_unpack_A_operands_to_dest_(
         {
             TTI_WRCFG(p_gpr_unpack::TMP0, p_cfg::WRCFG_32b, THCON_SEC0_REG3_Base_cntx1_address_ADDR32);
         }
-        TTI_NOP;                                           // WRCFG takes 2 cycles
+        TTI_NOP;
         TTI_SETADCZW(p_setadc::UNP_A, 0, 0, 0, 0, 0b0001); // ch0_z = 0
 #pragma GCC unroll 0
         for (std::uint32_t tile = 0; tile < num_tiles; ++tile)

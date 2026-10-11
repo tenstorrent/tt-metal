@@ -19,12 +19,7 @@ using namespace ckernel;
 // local function declarations
 inline void eltwise_unary_configure_addrmod(const std::uint32_t dst_format);
 
-/**
- * @brief Column-broadcast one face pair of a 32-bit tile already unpacked into DEST, hi16 then lo16 since MOVB2D moves 16 bits.
- *
- * @tparam face_base: Intra-tile DEST row of the face pair, values = <0 (faces 0+1)/32 (faces 2+3)>
- * @note The moves take intra-tile rows, so the math dest offset must point at the tile (@ref math::set_dst_write_addr).
- */
+// Hi16 then lo16, since MOVB2D moves 16 bits; the moves take intra-tile rows, so the math dest offset must point at the tile.
 template <std::uint32_t face_base>
 inline void eltwise_unary_bcast_col_32b_face_pair()
 {
@@ -322,21 +317,7 @@ inline void _llk_math_eltwise_unary_datacopy_(
     }
 }
 
-/**
- * @brief Copy a block of tiles into consecutive DEST slots; four-face 32-bit unpack to dest takes one slot handshake per block.
- *
- * @tparam type: Datacopy direction, values = <A2D/B2D>
- * @tparam Dst: Destination sync mode, values = <SyncHalf/SyncFull>
- * @tparam is_fp32_dest_acc_en: Enable FP32 accumulation in the destination register.
- * @tparam src_b_bcast_type: Broadcast type for source B, values = <NONE/COL/ROW/SCALAR>
- * @tparam unpack_to_dest: Unpack writes directly to dest (vs. via source registers).
- * @param start_dst_index: DEST index of the first tile.
- * @param num_tiles: Number of tiles, written to start_dst_index onwards.
- * @param src_format: Source data format (DataFormat enum underlying value).
- * @param dst_format: Destination data format (DataFormat enum underlying value).
- * @param num_faces: Number of faces in the tile (must be 1, 2, or 4).
- * @note The unpack thread must feed the same block with @ref _llk_unpack_A_block_ (same tile count, face count and is_fp32_dest_acc_en).
- */
+// On unpack to dest, four-face 32-bit tiles take one DEST slot handshake per block; the unpack thread must feed the same block.
 template <DataCopyType type, DstSync Dst, bool is_fp32_dest_acc_en, BroadcastType src_b_bcast_type = BroadcastType::NONE, bool unpack_to_dest = false>
 inline void _llk_math_eltwise_unary_datacopy_block_(
     const std::uint32_t start_dst_index,
