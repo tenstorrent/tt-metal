@@ -746,8 +746,7 @@ def test_layernorm_pre_all_gather_welford_residual(device, inp_shape, inp_dtype,
       but still tight enough to catch a fused-add-specific bug that breaks beyond TF32 noise).
 
     bf16 stats: scratch CB and output are bf16, so the floor is bf16 quantization (~8e-3).
-    16-bit DEST: the fused path truncates mean and M2 to bf16 at the end of every block, as the
-    spill buffers do, so with nine blocks (W=288) its variance runs about 2% low.
+    16-bit DEST: the fused path truncates mean and M2 to bf16 at the end of every block.
     """
     torch.manual_seed(0)
 
@@ -838,8 +837,7 @@ def test_layernorm_pre_all_gather_welford_residual(device, inp_shape, inp_dtype,
     #   For W=128 the larger of the two parametrizations sets the bound:
     #   atol_mean ~ 1.8e-4 --> Set to 4e-4, atol_var ~ 2e-3. --> Set to 4e-3.
     # - bf16 stats: scratch CB and output are bf16, floor is bf16 quantization (~8e-3) --> set to 0.01.
-    # - 16-bit DEST: the fused state is truncated to bf16 once per block; measured up to 4.2e-2 absolute on var,
-    #   relative Frobenius 2.0e-2 (mean) and 1.5e-2 (var), PCC 0.9977 --> about twice that.
+    # - 16-bit DEST: the fused state is truncated to bf16 once per block.
     if stats_dtype == ttnn.float32:
         welford_atol = 1e-5
         welford_rtol = 1e-5
