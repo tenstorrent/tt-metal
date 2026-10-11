@@ -8,6 +8,7 @@
 #include "api/compute/common.h"
 #include "api/compute/tile_move_copy.h"
 #include "api/compute/eltwise_unary/eltwise_unary.h"
+#include "api/kernel_thread_globals.h"
 #include "experimental/kernel_args.h"
 
 void kernel_main() {
@@ -21,7 +22,8 @@ void kernel_main() {
     DataflowBuffer cb_in0(dfb::in0);
     DataflowBuffer cb_out(dfb::out);
 
-    for (uint32_t b = 0; b < per_core_tile_cnt; ++b) {
+    // Thread t of N converts tiles t, t + N, ...: the strided DFBs hand it exactly those, in order.
+    for (uint32_t b = get_my_thread_id(); b < per_core_tile_cnt; b += get_num_threads()) {
         tile_regs_acquire();
 
         // Pop tile after tile, copy to DST and pack
