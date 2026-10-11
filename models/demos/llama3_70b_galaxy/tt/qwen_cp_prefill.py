@@ -362,12 +362,13 @@ def ff13_fp32_acc() -> bool:
 def ff2_bf8_rs(layer_num=None, n_layers=None) -> bool:
     """FF2 output (and its row reduce-scatter) in bf8 instead of bf16: half the RS bytes (job163: RS [S/4, 5120]
     bf16 1.756 ms, bf8 0.942 ms). The residual add still writes bf16.
-    The last QWEN_CP_FF2_BF16_LAST layers (default 16) keep bf16: the ring RS re-rounds the partial sum to bf8 at every
-    hop (local error ~2x one bf8 rounding), and on the real 40k prompt that RS is 46% of layer 63's own error
-    (layer_err.py, P0 kC-2l), 11-13% at layers 0 / 32."""
+    QWEN_CP_FF2_BF16_LAST=N keeps bf16 on the last N layers (default 0: every layer bf8). The ring RS re-rounds the
+    partial sum to bf8 at every hop (46% of layer 63's own error on the real 40k prompt, layer_err.py), but keeping
+    bf16 on the last 8 / 16 layers (keeps 29 / 32) cost 7 / 11 ms b1 and did not raise device argmax agreement with
+    the CPU reference on topk40k (990 with 16 layers, 993 with none; job296 / job299)."""
     if os.environ.get("QWEN_CP_FF2_BF8", "1") != "1":
         return False
-    last = int(os.environ.get("QWEN_CP_FF2_BF16_LAST", "16"))
+    last = int(os.environ.get("QWEN_CP_FF2_BF16_LAST", "0"))
     return layer_num is None or n_layers is None or layer_num < n_layers - last
 
 
