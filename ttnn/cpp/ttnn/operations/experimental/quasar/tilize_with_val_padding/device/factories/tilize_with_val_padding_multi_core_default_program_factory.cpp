@@ -6,6 +6,7 @@
 
 #include <cmath>
 #include <filesystem>
+#include <optional>
 
 #include "ttnn/operations/core/work_split/work_split_tilize.hpp"
 #include <tt-metalium/constants.hpp>
@@ -22,10 +23,178 @@ using namespace tt::tt_metal::experimental;
 
 namespace ttnn::prim::qsr {
 
+namespace {
+
+// Tilizes a row-major interleaved input into a tile interleaved output with 4 reader, 4 compute and 2
+// writer threads, the data-movement ones with implicit sync. Each compute thread ("lane") tilizes a
+// slice of the blocks (tile rows): with column lanes a quarter of every block's tiles, otherwise every
+// 4th block whole. Reader thread t feeds lane t one lane-wide row segment per entry; the strided DFB
+// places a lane's rows 4 slots apart, which the unpacker's row stride (full_ct_dim) follows. Rows past
+// the input are read from a scratch row of pad values. Width padding is not supported, and height
+// padding must sit in the last tile row. Returns std::nullopt when the tensors do not fit this path.
+std::optional<ttnn::device_operation::ProgramArtifacts> create_tilize_split_program(
+    const TilizeWithValPaddingParams& operation_attributes, const Tensor& a, const Tensor& output) {
+    constexpr uint32_t num_lanes = 4;
+    constexpr uint32_t num_writer_threads = 2;
+    const bool fp32_llk_acc = a.dtype() == DataType::FLOAT32 || a.dtype() == DataType::FP8_E4M3 ||
+                              output.dtype() == DataType::FP8_E4M3 || output.dtype() == DataType::BFLOAT8_B;
+    if (a.is_sharded() || output.is_sharded() || operation_attributes.sub_core_grids.has_value() || fp32_llk_acc ||
+        a.element_size() != 2) {
+        return std::nullopt;
+    }
+    const uint32_t tile_width = output.tensor_spec().tile().get_width();
+    const uint32_t tile_height = output.tensor_spec().tile().get_height();
+    const uint32_t width = output.padded_shape()[-1];
+    const uint32_t row_bytes = width * a.element_size();
+    if (a.logical_shape()[-1] != width || a.buffer()->page_size() != row_bytes) {
+        return std::nullopt;
+    }
+    const uint32_t num_blocks = output.physical_volume() / width / tile_height;
+    const uint32_t tiles_per_row = width / tile_width;
+    // Padded row r is input row r: padding rows exist only past the last input row, which needs
+    // either no padding or a single leading-dim slice.
+    const uint32_t num_input_rows = a.logical_volume() / width;
+    const uint32_t num_slices = output.physical_volume() / (output.padded_shape()[-2] * width);
+    if (num_input_rows != num_blocks * tile_height &&
+        !(num_slices == 1 && num_input_rows + tile_height > num_blocks * tile_height)) {
+        return std::nullopt;
+    }
+    // Column lanes split every block's tiles four ways; otherwise each lane takes whole blocks, which
+    // needs a multiple of 4 blocks per core. The output ring holds two blocks per lane, and implicit
+    // sync keeps half of it per txn ID in a uint8.
+    const bool column_lanes = tiles_per_row % num_lanes == 0;
+    const uint32_t lane_tiles = column_lanes ? tiles_per_row / num_lanes : tiles_per_row;
+    const uint32_t lane_bytes = lane_tiles * tile_width * a.element_size();
+    if ((!column_lanes && num_blocks % num_lanes != 0) || num_lanes * lane_tiles > 255) {
+        return std::nullopt;
+    }
+    const uint32_t blocks_per_unit = column_lanes ? 1 : num_lanes;
+
+    MeshDevice* device = a.device();
+    auto [ncores, all_cores, full_core_range, cliff_core_range, units_per_core, units_per_core_cliff] =
+        ttnn::split_blocks_for_tilize(device->compute_with_storage_grid_size(), num_blocks / blocks_per_unit);
+
+    tt::DataFormat input_cb_data_format = datatype_to_dataformat_converter(a.dtype());
+    tt::DataFormat output_cb_data_format = datatype_to_dataformat_converter(output.dtype());
+
+    const DFBSpecName IN{"in"};
+    const DFBSpecName OUT{"out"};
+    const ScratchpadSpecName PAD{"pad_row"};
+    const TensorParamName INPUT{"input"};
+    const TensorParamName OUTPUT{"output"};
+    const KernelSpecName READER{"reader"};
+    const KernelSpecName WRITER{"writer"};
+    const KernelSpecName COMPUTE{"compute"};
+
+    // One block of rows per lane in; two blocks of tiles per lane out.
+    DataflowBufferSpec in_dfb{
+        .unique_id = IN,
+        .entry_size = lane_bytes,
+        .num_entries = num_lanes * tile_height,
+        .data_format_metadata = input_cb_data_format,
+    };
+    DataflowBufferSpec out_dfb{
+        .unique_id = OUT,
+        .entry_size = tt::tile_size(output_cb_data_format),
+        .num_entries = 2 * num_lanes * lane_tiles,
+        .data_format_metadata = output_cb_data_format,
+    };
+
+    const std::filesystem::path kdir(
+        "ttnn/cpp/ttnn/operations/experimental/quasar/tilize_with_val_padding/device/kernels/");
+    KernelSpec::CompilerOptions::Defines dm_defines;
+    dm_defines.emplace("COLUMN_LANES", column_lanes ? "1" : "0");
+    KernelSpec reader{
+        .unique_id = READER,
+        .source = kdir / "dataflow/reader_unary_pad_rows_staged.cpp",
+        .num_threads = num_lanes,
+        .compiler_options = {.defines = dm_defines},
+        .dfb_bindings = {ProducerOf(IN, "in")},
+        .tensor_bindings = {TensorBinding{.tensor_parameter_name = INPUT, .accessor_name = "input"}},
+        .compile_time_args = {{"tile_height", tile_height}, {"lane_bytes", lane_bytes}},
+        .runtime_arg_schema = {.runtime_arg_names = {"first_block", "num_lane_blocks", "num_input_rows", "pad_value"}},
+        .hw_config = ttnn::create_reader_datamovement_config(),
+    };
+    reader.scratchpad_bindings = {ScratchpadBinding{.scratchpad_spec_name = PAD, .accessor_name = "pad"}};
+    KernelSpec writer{
+        .unique_id = WRITER,
+        .source = kdir / "dataflow/writer_unary_staged_tiles_metal2.cpp",
+        .num_threads = num_writer_threads,
+        .compiler_options = {.defines = dm_defines},
+        .dfb_bindings = {ConsumerOf(OUT, "out")},
+        .tensor_bindings = {TensorBinding{.tensor_parameter_name = OUTPUT, .accessor_name = "output"}},
+        .compile_time_args = {{"tiles_per_row", tiles_per_row}, {"lane_tiles", lane_tiles}, {"num_lanes", num_lanes}},
+        .runtime_arg_schema = {.runtime_arg_names = {"first_block", "num_lane_blocks"}},
+        .hw_config = ttnn::create_writer_datamovement_config(),
+    };
+    KernelSpec compute{
+        .unique_id = COMPUTE,
+        .source = kdir / "compute/tilize_lanes_metal2.cpp",
+        .num_threads = num_lanes,
+        .dfb_bindings = {ConsumerOf(IN, "in"), ProducerOf(OUT, "out")},
+        .compile_time_args =
+            {{"lane_tiles", lane_tiles},
+             {"full_ct_dim", column_lanes ? tiles_per_row : num_lanes * tiles_per_row},
+             {"block_rows", tile_height}},
+        .runtime_arg_schema = {.runtime_arg_names = {"num_lane_blocks"}},
+        .hw_config = ttnn::to_compute_hardware_config(
+            ttnn::ComputeKernelConfig{.math_fidelity = MathFidelity::HiFi4, .math_approx_mode = false}),
+    };
+
+    const uint32_t packed_pad_value = detail::get_packed_value(a, operation_attributes.pad_value);
+    KernelRunArgs::RuntimeArgValues reader_args;
+    KernelRunArgs::RuntimeArgValues writer_args;
+    KernelRunArgs::RuntimeArgValues compute_args;
+    uint32_t first_block = 0;
+    auto add_core = [&](const CoreCoord& core, uint32_t num_units) {
+        const uint32_t num_lane_blocks = num_units;
+        AddRuntimeArgsForNode(
+            reader_args,
+            core,
+            {{"first_block", first_block},
+             {"num_lane_blocks", num_lane_blocks},
+             {"num_input_rows", num_input_rows},
+             {"pad_value", packed_pad_value}});
+        AddRuntimeArgsForNode(writer_args, core, {{"first_block", first_block}, {"num_lane_blocks", num_lane_blocks}});
+        compute_args["num_lane_blocks"][core] = num_lane_blocks;
+        first_block += num_units * blocks_per_unit;
+    };
+    for (const auto& core : corerange_to_cores(full_core_range, std::nullopt, true)) {
+        add_core(core, units_per_core);
+    }
+    for (const auto& core : corerange_to_cores(cliff_core_range, std::nullopt, true)) {
+        add_core(core, units_per_core_cliff);
+    }
+
+    ProgramSpec spec{
+        .name = "tilize_with_val_padding_lanes",
+        .kernels = {reader, writer, compute},
+        .dataflow_buffers = {in_dfb, out_dfb},
+        .tensor_parameters =
+            {TensorParameter{.unique_id = INPUT, .spec = a.tensor_spec()},
+             TensorParameter{.unique_id = OUTPUT, .spec = output.tensor_spec()}},
+        .work_units = {WorkUnitSpec{
+            .name = "tilize_lanes", .kernels = {READER, WRITER, COMPUTE}, .target_nodes = all_cores}},
+    };
+    spec.scratchpads = {ScratchpadSpec{.unique_id = PAD, .size_per_node = num_lanes * lane_bytes}};
+    ProgramRunArgs run_args;
+    run_args.kernel_run_args = {
+        KernelRunArgs{.kernel = READER, .runtime_arg_values = std::move(reader_args)},
+        KernelRunArgs{.kernel = WRITER, .runtime_arg_values = std::move(writer_args)},
+        KernelRunArgs{.kernel = COMPUTE, .runtime_arg_values = std::move(compute_args)}};
+    run_args.tensor_args = {{INPUT, a.mesh_tensor()}, {OUTPUT, output.mesh_tensor()}};
+    return ttnn::device_operation::ProgramArtifacts{.spec = std::move(spec), .run_params = std::move(run_args)};
+}
+
+}  // namespace
+
 ttnn::device_operation::ProgramArtifacts TilizeWithValPaddingMultiCoreDefaultFactory::create_program_artifacts(
     const TilizeWithValPaddingParams& operation_attributes, const Tensor& input_tensor, Tensor& tensor_return_value) {
     const Tensor& a = input_tensor;
     const Tensor& output = tensor_return_value;
+    if (auto split = create_tilize_split_program(operation_attributes, a, output)) {
+        return std::move(*split);
+    }
     const auto& input_mesh_tensor = a.mesh_tensor();
     const auto& output_mesh_tensor = output.mesh_tensor();
 
@@ -129,7 +298,8 @@ ttnn::device_operation::ProgramArtifacts TilizeWithValPaddingMultiCoreDefaultFac
             .dfb_spec_name = OUT, .accessor_name = "out", .endpoint_type = DFBEndpointType::CONSUMER}},
         .tensor_bindings = {TensorBinding{.tensor_parameter_name = OUTPUT, .accessor_name = "output"}},
         .runtime_arg_schema = {.runtime_arg_names = {"num_pages", "start_id"}},
-        .hw_config = ttnn::create_writer_datamovement_config(/*disable_dfb_implicit_sync_for_all=*/true),
+        // Implicit sync: the kernel issues TXN_ID writes instead of wait_front / pop_front.
+        .hw_config = ttnn::create_writer_datamovement_config(),
     };
 
     // ---- Compute (Metal 2.0 fork; full + cliff) ----
