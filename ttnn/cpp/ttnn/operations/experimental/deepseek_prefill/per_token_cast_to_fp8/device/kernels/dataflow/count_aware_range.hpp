@@ -113,6 +113,15 @@ inline CountAwareRange count_aware_block_range_frac_rows(
     return {start, end - start};
 }
 
+// This core's even share (core_id of num_cores) of valid_tile_rows * chunks_per_row blocks.
+inline CountAwareRange count_aware_block_range_rows(
+    uint32_t valid_tile_rows, uint32_t chunks_per_row, uint32_t core_id, uint32_t num_cores) {
+    const uint32_t total_blocks = valid_tile_rows * chunks_per_row;
+    const uint32_t start = (total_blocks * core_id) / num_cores;
+    const uint32_t end = (total_blocks * (core_id + 1)) / num_cores;
+    return {start, end - start};
+}
+
 // Same, but this core's share is [frac_start, frac_end) of the blocks in 1/65536 units (host-weighted split).
 template <typename RegionT, typename CountsT, typename TableT>
 inline CountAwareRange count_aware_block_range_frac(

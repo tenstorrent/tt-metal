@@ -204,6 +204,10 @@ PerTokenCastBackProgramFactory::cached_program_t create_tile_output_program(
             .compile_args = {cb_in, cb_tiles, cb_scale, cb_out, cb_loop_count, G}});
 
     auto all_cores_vec = corerange_to_cores(all_cores, num_cores, true);
+    // Core 0's reader reads the routing tables once and multicasts the valid tile-row count to every core.
+    const uint32_t rows_sem = CreateSemaphore(program, all_cores, 0);
+    const auto mcast_start = input_e4m3.device()->worker_core_from_logical_core(all_cores.bounding_box().start_coord);
+    const auto mcast_end = input_e4m3.device()->worker_core_from_logical_core(all_cores.bounding_box().end_coord);
     for (uint32_t i = 0; i < num_cores; ++i) {
         const auto& core = all_cores_vec[i];
         // Same argument slots as the row-major count-aware path, so override_runtime_arguments serves both.
@@ -216,7 +220,13 @@ PerTokenCastBackProgramFactory::cached_program_t create_tile_output_program(
              region_buffer->address(),
              counts_buffer->address(),
              table_buffer->address(),
-             i});
+             i,
+             rows_sem,
+             static_cast<uint32_t>(mcast_start.x),
+             static_cast<uint32_t>(mcast_start.y),
+             static_cast<uint32_t>(mcast_end.x),
+             static_cast<uint32_t>(mcast_end.y),
+             num_cores});
         SetRuntimeArgs(
             program,
             writer_kernel_id,
@@ -226,7 +236,8 @@ PerTokenCastBackProgramFactory::cached_program_t create_tile_output_program(
              counts_buffer->address(),
              table_buffer->address(),
              i,
-             src_buffer->address()});
+             src_buffer->address(),
+             rows_sem});
         SetRuntimeArgs(program, compute_kernel_id, core, {});
     }
     return PerTokenCastBackProgramFactory::cached_program_t{

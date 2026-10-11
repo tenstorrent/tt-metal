@@ -55,20 +55,11 @@ void kernel_main() {
     CircularBuffer counts_scratch(cb_counts_scratch);
     CircularBuffer table_scratch(cb_table_scratch);
 
-    const CountAwareRange range = count_aware_block_range(
-        noc,
-        region,
-        counts,
-        table,
-        region_scratch,
-        counts_scratch,
-        table_scratch,
-        experts_per_chip,
-        max_rows,
-        32,
-        units_per_row,
-        core_id,
-        num_cores);
+    // The valid tile-row count arrives in the semaphore the reader of core 0 multicasts (arg 6).
+    volatile tt_l1_ptr uint32_t* rows_sem =
+        reinterpret_cast<volatile tt_l1_ptr uint32_t*>(get_semaphore(get_arg_val<uint32_t>(6)));
+    noc_semaphore_wait_min(rows_sem, 1);
+    const CountAwareRange range = count_aware_block_range_rows(*rows_sem - 1, units_per_row, core_id, num_cores);
 
     const auto input = TensorAccessor(input_args, input_addr);
     CircularBuffer cb_scale_obj(cb_scale);
@@ -93,14 +84,23 @@ void kernel_main() {
         }
         cb_scale_obj.reserve_back(G);
         noc.async_read_barrier();
+        // Plain (cached) loads after one invalidate, a row's G scales gathered before their strided stores: the
+        // volatile load-shift-store per element cost ~10 us per unit (G = 28).
+        invalidate_l1_cache();
         volatile tt_l1_ptr uint16_t* tiles =
             reinterpret_cast<volatile tt_l1_ptr uint16_t*>(cb_scale_obj.get_write_ptr());
         for (uint32_t r = 0; r < 32; ++r) {
             const uint32_t col0 = (r < 16) ? r * 16 : 512 + (r - 16) * 16;
-            const volatile tt_l1_ptr uint32_t* row_scales =
-                reinterpret_cast<volatile tt_l1_ptr uint32_t*>(scratch + r * scale_slot_bytes) + skip_words;
+            const uint32_t* row_scales = reinterpret_cast<const uint32_t*>(scratch + r * scale_slot_bytes) + skip_words;
+            uint32_t v[G];
+#pragma GCC unroll 32
             for (uint32_t j = 0; j < G; ++j) {
-                tiles[j * 1024 + col0] = row_scales[j] >> 16;  // pow2 fp32 -> bf16: the high half, exact
+                v[j] = row_scales[j];
+            }
+            volatile tt_l1_ptr uint16_t* dst = tiles + col0;
+#pragma GCC unroll 32
+            for (uint32_t j = 0; j < G; ++j) {
+                dst[j * 1024] = v[j] >> 16;  // pow2 fp32 -> bf16: the high half, exact
             }
         }
         cb_scale_obj.push_back(G);

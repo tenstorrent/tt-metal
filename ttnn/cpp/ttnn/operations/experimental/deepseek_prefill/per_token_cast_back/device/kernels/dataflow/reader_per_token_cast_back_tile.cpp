@@ -69,7 +69,10 @@ void kernel_main() {
     CircularBuffer table_scratch(cb_table_scratch);
     CircularBuffer scale_scratch_obj(cb_scale_scratch);
 
-    const CountAwareRange range = count_aware_block_range(
+    // Core 0 reads the routing tables and multicasts the valid tile-row count (args 6..11: semaphore id, NoC 0
+    // multicast rectangle, destination count) into every core's semaphore; the writer reads it from there too.
+    const uint32_t rows_sem_addr = get_semaphore(get_arg_val<uint32_t>(6));
+    const uint32_t valid_tile_rows = count_aware_valid_tile_rows_mcast(
         noc,
         region,
         counts,
@@ -80,9 +83,23 @@ void kernel_main() {
         experts_per_chip,
         max_rows,
         TILE_H,
-        units_per_row,
-        core_id,
-        num_cores);
+        core_id == 0,
+        rows_sem_addr,
+        // NoC 1 multicasts take the rectangle corners in reverse order.
+        noc_index == 0 ? get_noc_multicast_addr(
+                             get_arg_val<uint32_t>(7),
+                             get_arg_val<uint32_t>(8),
+                             get_arg_val<uint32_t>(9),
+                             get_arg_val<uint32_t>(10),
+                             rows_sem_addr)
+                       : get_noc_multicast_addr(
+                             get_arg_val<uint32_t>(9),
+                             get_arg_val<uint32_t>(10),
+                             get_arg_val<uint32_t>(7),
+                             get_arg_val<uint32_t>(8),
+                             rows_sem_addr),
+        get_arg_val<uint32_t>(11));
+    const CountAwareRange range = count_aware_block_range_rows(valid_tile_rows, units_per_row, core_id, num_cores);
 
     cb_loop_count_obj.reserve_back(1);
     reinterpret_cast<volatile tt_l1_ptr uint32_t*>(cb_loop_count_obj.get_write_ptr())[0] = range.num_blocks;
@@ -132,10 +149,17 @@ void kernel_main() {
         for (uint32_t r = 0; r < TILE_H; ++r) {
             // column 0 of row r: face 0 for rows 0-15, face 2 for rows 16-31 (16 elements per face row)
             const uint32_t col0 = (r < 16) ? r * 16 : 512 + (r - 16) * 16;
-            const volatile tt_l1_ptr uint32_t* row_scales =
-                reinterpret_cast<volatile tt_l1_ptr uint32_t*>(scratch + r * scale_slot_bytes) + scale_skip_words;
+            const uint32_t* row_scales =
+                reinterpret_cast<const uint32_t*>(scratch + r * scale_slot_bytes) + scale_skip_words;
+            uint32_t v[G];
+#pragma GCC unroll 32
             for (uint32_t j = 0; j < G; ++j) {
-                tiles[j * TILE_HW + col0] = row_scales[j] >> 16;
+                v[j] = row_scales[j];
+            }
+            volatile tt_l1_ptr uint16_t* dst = tiles + col0;
+#pragma GCC unroll 32
+            for (uint32_t j = 0; j < G; ++j) {
+                dst[j * TILE_HW] = v[j] >> 16;  // pow2 fp32 -> bf16: the high half, exact
             }
         }
         cb_scale_obj.push_back(G);

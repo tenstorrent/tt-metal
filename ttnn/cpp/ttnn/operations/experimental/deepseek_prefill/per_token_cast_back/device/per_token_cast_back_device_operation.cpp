@@ -19,7 +19,9 @@ namespace fp8 = ttnn::operations::experimental::deepseek_prefill::per_token_cast
 namespace {
 
 bool is_dram_interleaved(const tt::tt_metal::MemoryConfig& mem_config) {
-    return mem_config.buffer_type() == tt::tt_metal::BufferType::DRAM &&
+    // DRAM or L1 interleaved: the kernels address pages through TensorAccessor.
+    return (mem_config.buffer_type() == tt::tt_metal::BufferType::DRAM ||
+            mem_config.buffer_type() == tt::tt_metal::BufferType::L1) &&
            mem_config.memory_layout() == tt::tt_metal::TensorMemoryLayout::INTERLEAVED;
 }
 
@@ -27,7 +29,7 @@ void validate_tensor_specs(const Tensor& tensor, const std::string& name) {
     TT_FATAL(tensor.storage_type() == ttnn::StorageType::DEVICE, "{} must be on device", name);
     TT_FATAL(tensor.buffer() != nullptr, "{} must have a buffer", name);
     TT_FATAL(tensor.layout() == tt::tt_metal::Layout::ROW_MAJOR, "{} must be ROW_MAJOR", name);
-    TT_FATAL(is_dram_interleaved(tensor.memory_config()), "{} must be DRAM interleaved", name);
+    TT_FATAL(is_dram_interleaved(tensor.memory_config()), "{} must be DRAM or L1 interleaved", name);
 }
 
 void validate_index_tensor(const Tensor& tensor, const std::string& name) {
@@ -58,7 +60,7 @@ void PerTokenCastBackDeviceOperation::validate_on_program_cache_miss(
     validate_tensor_specs(input_scale, "per_token_cast_back: input_scale");
     TT_FATAL(
         is_dram_interleaved(attrs.output_memory_config),
-        "per_token_cast_back: output memory config must be DRAM interleaved");
+        "per_token_cast_back: output memory config must be DRAM or L1 interleaved");
     TT_FATAL(
         input_e4m3.device() == input_scale.device(),
         "per_token_cast_back: input_e4m3 and input_scale must be on the same device");
