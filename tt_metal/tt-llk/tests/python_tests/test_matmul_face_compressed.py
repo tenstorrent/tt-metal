@@ -448,37 +448,49 @@ def test_matmul_face_compressed_deepseek(shape, switch_mult, seed):
 
 
 # K splits over two-K-tile calls into one DEST (see CUSTOM_MM_CALLS). race uses one format, so no SrcA clear inside a
-# call hides a both-bank SrcB clear; rearm adds a -inf SrcA clear per call, which format-switch clears would mask.
+# call hides a both-bank SrcB clear; rearm adds a -inf SrcA clear per call, which format-switch clears would mask;
+# reinit runs the init again between the calls, with ct_dim > 1 or rearm so a call does not end on the clear-to-0 stall.
 MULTI_CALL_CASES = [
-    # (id, M, K, N, per-call face pattern, rearm)
-    ("calls", 1, 1024, 64, ["bfp4", "bfp2"], False),
-    ("calls-m8-ct3", 8, 1024, 96, ["bfp2", "bfp4"], False),
-    ("race-bfp4", 1, 1024, 64, ["bfp4"], False),
-    ("race-bfp2", 1, 1024, 64, ["bfp2"], False),
-    ("race-bfp4-m8", 8, 1024, 64, ["bfp4"], False),
-    ("race-bfp4-ct3", 1, 1024, 96, ["bfp4"], False),
-    ("race-bfp4-ct4", 1, 1024, 128, ["bfp4"], False),
-    ("rearm", 1, 1024, 64, ["bfp4", "bfp2"], True),
-    ("rearm-m8", 8, 1024, 64, ["bfp4", "bfp2"], True),
+    # (id, M, K, N, per-call face pattern, rearm, reinit)
+    ("calls", 1, 1024, 64, ["bfp4", "bfp2"], False, False),
+    ("calls-m8-ct3", 8, 1024, 96, ["bfp2", "bfp4"], False, False),
+    ("race-bfp4", 1, 1024, 64, ["bfp4"], False, False),
+    ("race-bfp2", 1, 1024, 64, ["bfp2"], False, False),
+    ("race-bfp4-m8", 8, 1024, 64, ["bfp4"], False, False),
+    ("race-bfp4-ct3", 1, 1024, 96, ["bfp4"], False, False),
+    ("race-bfp4-ct4", 1, 1024, 128, ["bfp4"], False, False),
+    ("rearm", 1, 1024, 64, ["bfp4", "bfp2"], True, False),
+    ("rearm-m8", 8, 1024, 64, ["bfp4", "bfp2"], True, False),
+    ("reinit-ct3", 1, 1024, 96, ["bfp4"], False, True),
+    ("reinit-rearm", 1, 1024, 64, ["bfp4", "bfp2"], True, True),
 ]
 MULTI_CALL_KT = 2
+# Healthy face runs sit at 0.9999 or above; the default gate would pass a run that drops one face.
+MULTI_CALL_PCC = 0.9995
+# Per-call meta words besides the index words: the kernel's meta_bytes_per_call in matmul_face_compressed_test.cpp.
+META_OVERHEAD_WORDS = 8
+# A call's B slot holds its faces at the bfp4 size, each a face's exponent bytes plus its mantissa bytes, and a pad.
+EXPONENT_BYTES_PER_FACE = 16
+BFP4_MANTISSA_BYTES_PER_FACE = 128
+B_SLOT_PAD_BYTES = 256
 
 
 @blackhole_only
 @pytest.mark.parametrize(
-    "M,K,N,pattern,rearm",
+    "M,K,N,pattern,rearm,reinit",
     [pytest.param(*case[1:], id=case[0]) for case in MULTI_CALL_CASES],
 )
-def test_matmul_face_compressed_multi_call(M, K, N, pattern, rearm):
+def test_matmul_face_compressed_multi_call(M, K, N, pattern, rearm, reinit):
     """Back-to-back calls into one DEST, checked against the full-K golden."""
     kt, ct = K // 32, N // 32
     num_calls = kt // MULTI_CALL_KT
     ku, cu = K // COMPRESSION_GRANULARITY, N // COMPRESSION_GRANULARITY
     faces_per_call = ku * cu // num_calls
-    # Kernel side: meta_bytes_per_call in matmul_face_compressed_test.cpp. A B slot fits bfp4
-    # faces plus each format's exponent padding (pack_b).
-    meta_bytes = (MULTI_CALL_KT * ct + 8) * 4
-    b_slot_bytes = faces_per_call * (16 + 128) + 256
+    meta_bytes = (MULTI_CALL_KT * ct + META_OVERHEAD_WORDS) * 4
+    b_slot_bytes = (
+        faces_per_call * (EXPONENT_BYTES_PER_FACE + BFP4_MANTISSA_BYTES_PER_FACE)
+        + B_SLOT_PAD_BYTES
+    )
     call_pattern = [FMT_CODE[pattern[i % len(pattern)]] for i in range(faces_per_call)]
 
     def pack_b_per_call(faces):
@@ -516,5 +528,6 @@ def test_matmul_face_compressed_multi_call(M, K, N, pattern, rearm):
         promote_assignment,
         pack_b_per_call,
         encode_meta_per_call,
-        calls=CUSTOM_MM_CALLS(num_calls=num_calls, rearm=rearm),
+        calls=CUSTOM_MM_CALLS(num_calls=num_calls, rearm=rearm, reinit=reinit),
+        pcc_threshold=MULTI_CALL_PCC,
     )

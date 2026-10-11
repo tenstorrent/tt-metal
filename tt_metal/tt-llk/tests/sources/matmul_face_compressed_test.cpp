@@ -57,6 +57,14 @@ void run_kernel(RUNTIME_PARAMETERS params)
     // An activation tile is 2 faces x in0_face_r_dim rows x 16 Float16_b datums = 4 * in0_face_r_dim 16-byte words.
     for (std::uint32_t call = 0; call < num_calls; call++)
     {
+        if constexpr (CUSTOM_MM_REINIT)
+        {
+            // Another op's init between the calls, whose SrcB clear meets the previous call's unpacks.
+            if (call > 0)
+            {
+                _llk_unpack_AB_face_compressed_mm_init_<false /* transpose */, true /* clear_src */>(params.in0_face_r_dim);
+            }
+        }
         _llk_unpack_AB_face_compressed_mm_<CT_DIM, true /* finalize */>(
             L1_ADDRESS(params.buffer_A[0]) + call * kt_per_call * 4 * params.in0_face_r_dim, params.buffer_C[0] + call * meta_bytes_per_call, kt_per_call);
         if constexpr (CUSTOM_MM_REARM)
