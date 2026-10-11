@@ -144,8 +144,6 @@ sfpi_inline void _sqrt_accurate_reciprocal_edge_(
     v_endif;
 }
 
-// The second refinement step and edge handling of the accurate square root body for one vector, as in
-// _calculate_sqrt_body_<false, false, FAST_APPROX>.
 template <bool FAST_APPROX>
 sfpi_inline sfpi::vFloat _sqrt_accurate_second_step_(const sfpi::vFloat x, sfpi::vFloat y) {
     // Issue order: the constant load sits between the multiply and its first reader, and the compare between the
@@ -173,7 +171,6 @@ sfpi_inline sfpi::vFloat _sqrt_accurate_second_step_(const sfpi::vFloat x, sfpi:
     return y;
 }
 
-// The seed and the first refinement step of the accurate body for two vectors, interleaved step by step.
 sfpi_inline void _sqrt_accurate_first_step_x2_(
     const sfpi::vFloat x0, const sfpi::vFloat x1, sfpi::vFloat& y0, sfpi::vFloat& y1) {
     sfpi::vInt i0 = sfpi::as<sfpi::vInt>(sfpi::as<sfpi::vUInt>(x0) >> 1);
@@ -196,10 +193,8 @@ sfpi_inline void _sqrt_accurate_first_step_x2_(
     y1 = y1 * t1;
 }
 
-// The accurate body for two vectors at once; per lane the operations and their order are those of
-// _calculate_sqrt_body_<false, RECIPROCAL, FAST_APPROX>. Both forms interleave the two seeds and first steps. The
-// reciprocal form also interleaves the second steps and calls each loader once; the square root form, short of
-// registers to keep both x live, runs the two second steps one after the other and calls each loader again for them.
+// Per lane the same operations, in the same order, as _calculate_sqrt_body_. The sqrt form is short of registers to
+// keep both x live, so it runs the two second steps one after the other and calls each loader again.
 template <bool RECIPROCAL, bool FAST_APPROX, class LoadX0, class LoadX1>
 sfpi_inline void _calculate_sqrt_body_accurate_x2_(LoadX0 load_x0, LoadX1 load_x1, sfpi::vFloat& y0, sfpi::vFloat& y1) {
     if constexpr (RECIPROCAL) {
@@ -251,7 +246,6 @@ inline void _calculate_sqrt_internal_() {
             sfpi::dst_reg++;
         }
     } else {
-        // Two vectors per step so that the refinement chains overlap; per lane the results are the one-vector loop's.
 #pragma GCC unroll 8
         for (int d = 0; d < ITERATIONS; d += 2) {
             sfpi::vFloat y0;
