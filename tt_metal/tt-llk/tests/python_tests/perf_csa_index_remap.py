@@ -22,7 +22,6 @@ from test_csa_index_remap import CSA_REMAP
 
 pytestmark = [skip_for_wormhole, skip_for_quasar]
 
-# (row offset, stage)
 VARIANTS = [(0, 1), (256, 1), (0, 0)]
 
 
