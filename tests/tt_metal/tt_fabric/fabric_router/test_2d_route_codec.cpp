@@ -45,6 +45,38 @@ constexpr uint32_t action_vector_bytes(uint32_t y_size, uint32_t x_size) {
     return Codec::table_bytes(y_size) + Codec::table_bytes(x_size);
 }
 
+// The representative shapes plus axes that aren't a multiple of four, so the widen's tail bytes are covered.
+constexpr std::array<Shape, 6> kWidenShapes = {{
+    {"[8,4]", 8, 4},
+    {"[1,16]", 1, 16},
+    {"[64,4]", 64, 4},
+    {"[4,64]", 4, 64},
+    {"[3,5]", 3, 5},
+    {"[6,7]", 6, 7},
+}};
+
+// Route2DWriter that records the byte count of every append and when flush is called.
+struct RecordingWriter {
+    std::vector<uint32_t> append_sizes;
+    uint32_t flushes = 0;
+    bool appended_after_flush = false;
+    void append(uint32_t /*widened*/, uint32_t num_bytes) {
+        appended_after_flush = appended_after_flush || flushes != 0;
+        append_sizes.push_back(num_bytes);
+    }
+    void flush() { ++flushes; }
+};
+
+// The widen works in constant expressions. A 2x2 mesh, widened toward chip 3 at (1, 1).
+static_assert([] {
+    const std::array<std::uint8_t, 4> table = {
+        Codec::Y2_NORTH << 2, Codec::Y2_SOUTH, Codec::X2_WEST << 2, Codec::X2_EAST};
+    std::array<std::uint8_t, 4> map = {};
+    HostRoute2DWriter writer{map.data()};
+    widen_2d_route(writer, table.data(), 3, 2, 2);
+    return map;
+}() == std::array<std::uint8_t, 4>{Codec::ACTION_SOUTH, 0, Codec::ACTION_EAST, Codec::ACTION_LOCAL_DELIVER});
+
 }  // namespace
 
 // ---------------------------------------------------------------------------------------------
@@ -164,6 +196,73 @@ TEST(Routing2DCodec, WidenMapsEveryTwoBitCode) {
     EXPECT_EQ(Codec::widen_x(Codec::X2_WEST), Codec::ACTION_WEST);
     EXPECT_EQ(Codec::widen_x(Codec::X2_STOP), 0);
     EXPECT_EQ(Codec::widen_x(Codec::X2_INVALID), 0);
+}
+
+TEST(Routing2DCodec, PackedByteWidenMatchesPerFieldWiden) {
+    for (uint32_t b = 0; b < 256; ++b) {
+        const uint32_t widened_y = Codec::widen_y_packed_byte(b);
+        const uint32_t widened_x = Codec::widen_x_packed_byte(b);
+        for (uint32_t k = 0; k < Codec::ACTIONS_PER_BYTE; ++k) {
+            const uint8_t code = (b >> (Codec::BITS_PER_ACTION * k)) & 0b11;
+            EXPECT_EQ((widened_y >> (8 * k)) & 0xFF, Codec::widen_y(code)) << "byte " << b << " field " << k;
+            EXPECT_EQ((widened_x >> (8 * k)) & 0xFF, Codec::widen_x(code)) << "byte " << b << " field " << k;
+        }
+    }
+}
+
+// Every destination's widened map routes by dimension order: Y toward dst_y, then X toward dst_x, delivering at
+// dst_x. Nothing past the Y + X bytes is written.
+TEST(Routing2DCodec, WidenFollowsDimensionOrder) {
+    constexpr std::uint8_t kSentinel = 0xAB;
+    constexpr uint32_t kSlackBytes = 4;
+    for (const auto& s : kWidenShapes) {
+        std::vector<std::uint8_t> table(Codec::ACTION_VECTOR_CAPACITY_BYTES, 0);
+        ASSERT_TRUE(pack_2d_route_vectors(table.data(), table.size(), s.y, s.x, dor_y, dor_x)) << s.name;
+
+        for (uint32_t dst = 0; dst < s.y * s.x; ++dst) {
+            const uint32_t dst_y = dst / s.x;
+            const uint32_t dst_x = dst % s.x;
+            std::vector<std::uint8_t> map(s.y + s.x + kSlackBytes, kSentinel);
+            HostRoute2DWriter writer{map.data()};
+            widen_2d_route(writer, table.data(), dst, s.y, s.x);
+
+            for (uint32_t y = 0; y < s.y; ++y) {
+                const uint8_t want = y < dst_y ? Codec::ACTION_SOUTH : (y > dst_y ? Codec::ACTION_NORTH : 0);
+                EXPECT_EQ(map[y], want) << s.name << " dst " << dst << " y " << y;
+            }
+            for (uint32_t x = 0; x < s.x; ++x) {
+                const uint8_t want =
+                    x < dst_x ? Codec::ACTION_EAST : (x > dst_x ? Codec::ACTION_WEST : Codec::ACTION_LOCAL_DELIVER);
+                EXPECT_EQ(map[s.y + x], want) << s.name << " dst " << dst << " x " << x;
+            }
+            for (uint32_t i = s.y + s.x; i < map.size(); ++i) {
+                EXPECT_EQ(map[i], kSentinel) << s.name << " dst " << dst << " wrote past the map at byte " << i;
+            }
+        }
+    }
+}
+
+// Route2DWordWriter relies on this contract: one to four bytes per append, Y + X bytes in total, then one flush.
+TEST(Routing2DCodec, WidenAppendsAtMostOneWordAtATime) {
+    for (const auto& s : kWidenShapes) {
+        std::vector<std::uint8_t> table(Codec::ACTION_VECTOR_CAPACITY_BYTES, 0);
+        ASSERT_TRUE(pack_2d_route_vectors(table.data(), table.size(), s.y, s.x, dor_y, dor_x)) << s.name;
+
+        for (uint32_t dst = 0; dst < s.y * s.x; ++dst) {
+            RecordingWriter writer;
+            widen_2d_route(writer, table.data(), dst, s.y, s.x);
+
+            uint32_t total = 0;
+            for (uint32_t n : writer.append_sizes) {
+                EXPECT_GE(n, 1u) << s.name << " dst " << dst;
+                EXPECT_LE(n, 4u) << s.name << " dst " << dst;
+                total += n;
+            }
+            EXPECT_EQ(total, s.y + s.x) << s.name << " dst " << dst;
+            EXPECT_EQ(writer.flushes, 1u) << s.name << " dst " << dst;
+            EXPECT_FALSE(writer.appended_after_flush) << s.name << " dst " << dst;
+        }
+    }
 }
 
 // ---------------------------------------------------------------------------------------------

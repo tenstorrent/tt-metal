@@ -76,22 +76,6 @@ FORCE_INLINE void copy_2d_map_to_l1(
     }
 }
 
-// A packed route-table byte holds four 2-bit next-hop codes. Expand it into four one-hot action bytes
-// in one uint32_t so the packet map can be emitted a word at a time.
-FORCE_INLINE std::uint32_t widen_y_packed_byte(std::uint8_t packed) {
-    return static_cast<std::uint32_t>(Routing2DCodec::widen_y(packed & 0x3u)) |
-           (static_cast<std::uint32_t>(Routing2DCodec::widen_y((packed >> 2) & 0x3u)) << 8) |
-           (static_cast<std::uint32_t>(Routing2DCodec::widen_y((packed >> 4) & 0x3u)) << 16) |
-           (static_cast<std::uint32_t>(Routing2DCodec::widen_y((packed >> 6) & 0x3u)) << 24);
-}
-
-FORCE_INLINE std::uint32_t widen_x_packed_byte(std::uint8_t packed) {
-    return static_cast<std::uint32_t>(Routing2DCodec::widen_x(packed & 0x3u)) |
-           (static_cast<std::uint32_t>(Routing2DCodec::widen_x((packed >> 2) & 0x3u)) << 8) |
-           (static_cast<std::uint32_t>(Routing2DCodec::widen_x((packed >> 4) & 0x3u)) << 16) |
-           (static_cast<std::uint32_t>(Routing2DCodec::widen_x((packed >> 6) & 0x3u)) << 24);
-}
-
 // Streams widened action bytes into the packet's contiguous [Y | X] map. Full words start at the
 // naturally aligned route_buffer base; the final 1-3 bytes use narrow stores so they cannot overwrite
 // dst_start_node_id when the action-map size is not word-aligned.
@@ -157,41 +141,8 @@ inline void widen_2d_route_to_chip(
     ASSERT(dst_dev_id < (uint32_t)mesh_y_size * mesh_x_size);
     ASSERT((uint32_t)mesh_y_size + mesh_x_size <= sizeof(packet_header->route_buffer));
 
-    const uint32_t dst_y = dst_dev_id / mesh_x_size;
-    const uint32_t dst_x = dst_dev_id % mesh_x_size;
-
     route_2d_detail::Route2DWordWriter output(packet_header->route_buffer);
-
-    const std::uint8_t* y_vec = Routing2DCodec::y_row(route_table, mesh_y_size, dst_y);
-    const std::uint32_t y_full_bytes = mesh_y_size / Routing2DCodec::ACTIONS_PER_BYTE;
-    for (std::uint32_t i = 0; i < y_full_bytes; ++i) {
-        output.append(route_2d_detail::widen_y_packed_byte(y_vec[i]), Routing2DCodec::ACTIONS_PER_BYTE);
-    }
-    const std::uint32_t y_tail = mesh_y_size % Routing2DCodec::ACTIONS_PER_BYTE;
-    if (y_tail != 0) {
-        output.append(route_2d_detail::widen_y_packed_byte(y_vec[y_full_bytes]), y_tail);
-    }
-
-    const std::uint8_t* x_vec = Routing2DCodec::x_row(route_table, mesh_y_size, mesh_x_size, dst_x);
-    const std::uint32_t dst_x_byte = dst_x / Routing2DCodec::ACTIONS_PER_BYTE;
-    const std::uint32_t dst_x_shift = (dst_x % Routing2DCodec::ACTIONS_PER_BYTE) * 8;
-    const std::uint32_t x_full_bytes = mesh_x_size / Routing2DCodec::ACTIONS_PER_BYTE;
-    for (std::uint32_t i = 0; i < x_full_bytes; ++i) {
-        std::uint32_t widened = route_2d_detail::widen_x_packed_byte(x_vec[i]);
-        if (i == dst_x_byte) {
-            widened |= static_cast<std::uint32_t>(Routing2DCodec::ACTION_LOCAL_DELIVER) << dst_x_shift;
-        }
-        output.append(widened, Routing2DCodec::ACTIONS_PER_BYTE);
-    }
-    const std::uint32_t x_tail = mesh_x_size % Routing2DCodec::ACTIONS_PER_BYTE;
-    if (x_tail != 0) {
-        std::uint32_t widened = route_2d_detail::widen_x_packed_byte(x_vec[x_full_bytes]);
-        if (x_full_bytes == dst_x_byte) {
-            widened |= static_cast<std::uint32_t>(Routing2DCodec::ACTION_LOCAL_DELIVER) << dst_x_shift;
-        }
-        output.append(widened, x_tail);
-    }
-    output.flush();
+    widen_2d_route(output, route_table, dst_dev_id, mesh_y_size, mesh_x_size);
 }
 
 }  // namespace tt::tt_fabric

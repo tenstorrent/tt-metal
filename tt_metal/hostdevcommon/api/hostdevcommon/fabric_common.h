@@ -293,6 +293,22 @@ struct Routing2DCodec {
         }
     }
 
+    // A packed route-table byte holds four 2-bit next-hop codes. Expand it into four one-hot action bytes
+    // in one uint32_t so the packet map can be emitted a word at a time.
+    __attribute__((always_inline)) static constexpr std::uint32_t widen_y_packed_byte(std::uint8_t packed) {
+        return static_cast<std::uint32_t>(widen_y(packed & 0x3u)) |
+               (static_cast<std::uint32_t>(widen_y((packed >> 2) & 0x3u)) << 8) |
+               (static_cast<std::uint32_t>(widen_y((packed >> 4) & 0x3u)) << 16) |
+               (static_cast<std::uint32_t>(widen_y((packed >> 6) & 0x3u)) << 24);
+    }
+
+    __attribute__((always_inline)) static constexpr std::uint32_t widen_x_packed_byte(std::uint8_t packed) {
+        return static_cast<std::uint32_t>(widen_x(packed & 0x3u)) |
+               (static_cast<std::uint32_t>(widen_x((packed >> 2) & 0x3u)) << 8) |
+               (static_cast<std::uint32_t>(widen_x((packed >> 4) & 0x3u)) << 16) |
+               (static_cast<std::uint32_t>(widen_x((packed >> 6) & 0x3u)) << 24);
+    }
+
     // ---- L1 region sizing -------------------------------------------------------
     // Packed reverse-tree descriptors use 6-bit row indices. Fixed regions prevent one representation
     // from consuming another's capacity; both maxima are reached by 64x4 and 4x64 meshes.
@@ -331,10 +347,11 @@ struct Routing2DCodec {
             region[byte_index] | (static_cast<std::uint16_t>(region[byte_index + 1]) << 8));
     }
 
-    static const std::uint8_t* y_row(const std::uint8_t* table, uint32_t y_size, uint32_t dst_y) {
+    static constexpr const std::uint8_t* y_row(const std::uint8_t* table, uint32_t y_size, uint32_t dst_y) {
         return table + dst_y * row_bytes(y_size);
     }
-    static const std::uint8_t* x_row(const std::uint8_t* table, uint32_t y_size, uint32_t x_size, uint32_t dst_x) {
+    static constexpr const std::uint8_t* x_row(
+        const std::uint8_t* table, uint32_t y_size, uint32_t x_size, uint32_t dst_x) {
         return table + table_bytes(y_size) + dst_x * row_bytes(x_size);
     }
 
@@ -666,6 +683,63 @@ inline void encode_2d_mcast_maps(
     encode_2d_mcast_maps<EdgeReader>(
         route_buffer, mcast_trees, y_size, x_size, root_y, root_x, root_x, n_hops, s_hops, e_hops, w_hops);
 }
+
+// Writes destination dst_dev_id's [Y | X] action map from a destination-major route table: the packed Y row
+// widened into Y bytes, then the packed X row into X bytes, with LOCAL_DELIVER at dst_x. dst_dev_id must be
+// below mesh_y_size * mesh_x_size. out receives up to four widened bytes per out.append(widened, num_bytes), low
+// byte first, and must ignore bytes past num_bytes; out.flush() is called once at the end.
+template <typename Route2DWriter>
+__attribute__((always_inline)) constexpr void widen_2d_route(
+    Route2DWriter& out,
+    const std::uint8_t* route_table,
+    std::uint16_t dst_dev_id,
+    std::uint8_t mesh_y_size,
+    std::uint8_t mesh_x_size) {
+    const uint32_t dst_y = dst_dev_id / mesh_x_size;
+    const uint32_t dst_x = dst_dev_id % mesh_x_size;
+
+    const std::uint8_t* y_vec = Routing2DCodec::y_row(route_table, mesh_y_size, dst_y);
+    const std::uint32_t y_full_bytes = mesh_y_size / Routing2DCodec::ACTIONS_PER_BYTE;
+    for (std::uint32_t i = 0; i < y_full_bytes; ++i) {
+        out.append(Routing2DCodec::widen_y_packed_byte(y_vec[i]), Routing2DCodec::ACTIONS_PER_BYTE);
+    }
+    const std::uint32_t y_tail = mesh_y_size % Routing2DCodec::ACTIONS_PER_BYTE;
+    if (y_tail != 0) {
+        out.append(Routing2DCodec::widen_y_packed_byte(y_vec[y_full_bytes]), y_tail);
+    }
+
+    const std::uint8_t* x_vec = Routing2DCodec::x_row(route_table, mesh_y_size, mesh_x_size, dst_x);
+    const std::uint32_t dst_x_byte = dst_x / Routing2DCodec::ACTIONS_PER_BYTE;
+    const std::uint32_t dst_x_shift = (dst_x % Routing2DCodec::ACTIONS_PER_BYTE) * 8;
+    const std::uint32_t x_full_bytes = mesh_x_size / Routing2DCodec::ACTIONS_PER_BYTE;
+    for (std::uint32_t i = 0; i < x_full_bytes; ++i) {
+        std::uint32_t widened = Routing2DCodec::widen_x_packed_byte(x_vec[i]);
+        if (i == dst_x_byte) {
+            widened |= static_cast<std::uint32_t>(Routing2DCodec::ACTION_LOCAL_DELIVER) << dst_x_shift;
+        }
+        out.append(widened, Routing2DCodec::ACTIONS_PER_BYTE);
+    }
+    const std::uint32_t x_tail = mesh_x_size % Routing2DCodec::ACTIONS_PER_BYTE;
+    if (x_tail != 0) {
+        std::uint32_t widened = Routing2DCodec::widen_x_packed_byte(x_vec[x_full_bytes]);
+        if (x_full_bytes == dst_x_byte) {
+            widened |= static_cast<std::uint32_t>(Routing2DCodec::ACTION_LOCAL_DELIVER) << dst_x_shift;
+        }
+        out.append(widened, x_tail);
+    }
+    out.flush();
+}
+
+// Route2DWriter for widen_2d_route that writes plain bytes, for host callers.
+struct HostRoute2DWriter {
+    std::uint8_t* out;
+    constexpr void append(std::uint32_t widened, std::uint32_t num_bytes) {
+        for (std::uint32_t i = 0; i < num_bytes; ++i) {
+            *out++ = static_cast<std::uint8_t>(widened >> (8 * i));
+        }
+    }
+    constexpr void flush() {}
+};
 
 // FWD_DIRS slot order: base {E, W, N, S, Z} with the self direction removed.
 static_assert(
