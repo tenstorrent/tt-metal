@@ -1,8 +1,7 @@
 # SPDX-FileCopyrightText: © 2026 Tenstorrent AI ULC
 # SPDX-License-Identifier: Apache-2.0
 
-"""Perf of the Blackhole copy_tile_custom path (sources/eltwise_unary_datacopy_custom_perf.cpp); unit: one 32x32 tile,
-eight per DEST section."""
+"""Perf of the Blackhole copy_tile_custom path; unit: one 32x32 tile."""
 
 import pytest
 from conftest import skip_for_quasar, skip_for_wormhole
@@ -28,7 +27,6 @@ TILES_PER_SECTION = DEST_SYNC_TILE_LIMITS[DestSync.Half]
 @pytest.mark.perf
 @parametrize(num_tiles=[8, 32])
 def test_perf_eltwise_unary_datacopy_custom(perf_report, num_tiles):
-    # parametrize hands a single axis as a one-element tuple
     if isinstance(num_tiles, tuple):
         (num_tiles,) = num_tiles
     assert num_tiles % TILES_PER_SECTION == 0, "the tiles fill whole DEST sections"

@@ -1,8 +1,7 @@
 // SPDX-FileCopyrightText: © 2026 Tenstorrent AI ULC
 // SPDX-License-Identifier: Apache-2.0
 
-// Perf kernel of the Blackhole copy_tile_custom path: per iteration NUM_BLOCKS DEST sections of NUM_TILES_IN_BLOCK tiles,
-// one custom unpack and one custom datacopy per tile, a standard pack per tile. One SrcA data valid per tile.
+// Perf kernel of the Blackhole copy_tile_custom path: custom unpack and datacopy, standard pack, per tile.
 
 #include <cstdint>
 
