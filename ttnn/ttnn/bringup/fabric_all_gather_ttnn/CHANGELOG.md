@@ -32,3 +32,11 @@ Tests: `tests/unit/` (the source branch's `tests/ttnn/unit_tests/operations/ccl/
 - Needed by: <model> <task>
 - Files: <paths inside this folder>
 -->
+
+### Direct hops only
+- What: plan() rejects a hop between chips that are not direct fabric neighbours (ValueError "not a direct link",
+  via the new binding ttnn.get_neighbor_eth_directions), for every scheme. Supported groups are unchanged.
+- Why: a 2D fabric forwards toward any chip, so get_forwarding_link_indices alone accepted e.g. a ring along a
+  LoudBox row (no wrap cable): its closing hop was routed back through the line and the call deadlocked.
+- Needed by: glm53_flash_d_p_lb (fabric_reduce_scatter ring / full mesh, which plans with this module)
+- Files: fabric_all_gather_py.py; ttnn/cpp/ttnn-nanobind/fabric.cpp + ttnn/ttnn/__init__.py (the binding)

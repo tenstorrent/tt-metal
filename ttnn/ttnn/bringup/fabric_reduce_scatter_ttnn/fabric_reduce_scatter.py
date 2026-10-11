@@ -1,13 +1,14 @@
 # SPDX-FileCopyrightText: © 2026 Tenstorrent Inc.
 # SPDX-License-Identifier: Apache-2.0
 
-"""fabric_reduce_scatter — a line reduce-scatter over fabric, DRAM to DRAM, as one ttnn.generic_op, built on
-fabric_all_gather's plan (groups, port placement under each link's Ethernet core, fabric connections, fence).
+"""fabric_reduce_scatter — a line / ring reduce-scatter over fabric, DRAM to DRAM, as one ttnn.generic_op, built on
+fabric_all_gather's plan (groups: a mesh axis or a snake over the whole mesh, a line or ring, or two Hamiltonian cycles
+on a torus; port placement under each link's Ethernet core, fabric connections, fence).
 
-Input per chip: [1, 1, G * Sb, W] bf16 TILE (block j = rows j Sb ..), DRAM interleaved; output per chip p: block p of
-the sum over the group's G chips, [1, 1, Sb, W]. The group is a line along `cluster_axis` (chip p = position p), or
-with `cluster_axis=None` one snake line over the whole mesh (fabric_all_gather's): block b is then chip b's in row-major
-chip order, whatever its position along the snake (every block index below is the data block of a line position).
+Input per chip: [1, 1, G * Sb, W] TILE (block j = rows j Sb ..), DRAM interleaved; output per chip: its block of the
+sum over the group's G chips, [1, 1, Sb, W]. Blocks are output slots (a chip's row-major rank in its group), whatever
+order the group travels in. Below, "block p" is the block of the chip at position p along the line (the line case;
+a ring is in fabric_reduce_scatter's docstring).
 
 Per chip p, per direction and per link, one *port* core (reader NCRISC / compute / sender BRISC):
   toward p+1 it sends the partial sums of blocks G-1, G-2, ..., p+1 (farthest first); toward p-1 blocks 0, 1, ..., p-1.
@@ -52,8 +53,9 @@ _PORT_READER = (
 """
     + _CHUNK_WALK
     + r"""
-// Port reader: per block it sends, per chunk: my partial (input) and, as a relay, what upstream sent (scratch, once the
-// arrival counter covers it). A line end (no upstream) pushes its partial straight to the sender's CB.
+// Port reader: per block it sends, per chunk: my partial (input) and, for a relayed block, what upstream sent (scratch,
+// once the arrival counter covers it). The first `lead` blocks start their chain here (no upstream): my partial only,
+// into c_0 for the compute's pass-through, or straight to the sender's c_16 when every block leads (a line end).
 void kernel_main() {
     constexpr uint32_t page_bytes = get_compile_time_arg_val(0);
     constexpr uint32_t run_pages = get_compile_time_arg_val(1);
@@ -72,39 +74,52 @@ void kernel_main() {
     const uint32_t bank_stride = get_arg_val<uint32_t>(a++);
     const uint32_t arrival_addr = get_arg_val<uint32_t>(a++);
     const uint32_t full = get_arg_val<uint32_t>(a++);  // chunks of one block for this port
-    const uint32_t relay = get_arg_val<uint32_t>(a++);
+    const uint32_t lead = get_arg_val<uint32_t>(a++);  // leading blocks without upstream
     const uint32_t nblocks = get_arg_val<uint32_t>(a++);
     const uint32_t blocks_idx = a;
     const auto in = TensorAccessor(in_args, in_addr, page_bytes);
     const auto scr = TensorAccessor(scr_args, scr_addr, page_bytes);
     volatile tt_l1_ptr uint32_t* arrived = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(arrival_addr);
-    const uint32_t cb_own = relay ? 0 : 16;  // a line end feeds the sender directly
 
-    uint32_t chunks_left = nblocks * full;
+    // leading blocks: my partial only
+    const uint32_t cb_lead = lead == nblocks ? 16 : 0;
+    uint32_t chunks_left = lead * full;
     uint32_t batch = 0, wown = 0, win = 0;
-    for (uint32_t k = 0; k < nblocks; ++k) {
-        const uint32_t base = (get_arg_val<uint32_t>(blocks_idx + k) & 0xFFFF) * blk_pages;
-        for_each_chunk(blk_pages, first_bank, bank_stride, num_banks, run_pages, 0, 0, [&](uint32_t page, uint32_t n, uint32_t idx) {
+    for (uint32_t k = 0; k < lead; ++k) {
+        const uint32_t base = get_arg_val<uint32_t>(blocks_idx + k) * blk_pages;
+        for_each_chunk(blk_pages, first_bank, bank_stride, num_banks, run_pages, 0, 0, [&](uint32_t page, uint32_t n, uint32_t) {
             if (batch == 0) {
-                cb_reserve_back(cb_own, run_pages * group);
-                wown = get_write_ptr(cb_own);
-                if (relay) {
-                    cb_reserve_back(1, run_pages * group);
-                    win = get_write_ptr(1);
-                }
+                cb_reserve_back(cb_lead, run_pages * group);
+                wown = get_write_ptr(cb_lead);
             }
             noc_async_read(in.get_noc_addr(base + page), wown + batch * chunk_bytes, n * page_bytes);
-            if (relay) {
-                noc_semaphore_wait_min(arrived, (k * full + idx) / inc_every + 1);
-                noc_async_read(scr.get_noc_addr(base + page), win + batch * chunk_bytes, n * page_bytes);
-            }
             --chunks_left;
             if (++batch == group || chunks_left == 0) {
                 noc_async_read_barrier();
-                cb_push_back(cb_own, run_pages * batch);
-                if (relay) {
-                    cb_push_back(1, run_pages * batch);
-                }
+                cb_push_back(cb_lead, run_pages * batch);
+                batch = 0;
+            }
+        });
+    }
+    // relayed blocks: my partial (c_0) and upstream's running sum (c_1); upstream's relay stream starts at my block lead
+    chunks_left = (nblocks - lead) * full;
+    for (uint32_t k = lead; k < nblocks; ++k) {
+        const uint32_t base = get_arg_val<uint32_t>(blocks_idx + k) * blk_pages;
+        for_each_chunk(blk_pages, first_bank, bank_stride, num_banks, run_pages, 0, 0, [&](uint32_t page, uint32_t n, uint32_t idx) {
+            if (batch == 0) {
+                cb_reserve_back(0, run_pages * group);
+                wown = get_write_ptr(0);
+                cb_reserve_back(1, run_pages * group);
+                win = get_write_ptr(1);
+            }
+            noc_async_read(in.get_noc_addr(base + page), wown + batch * chunk_bytes, n * page_bytes);
+            noc_semaphore_wait_min(arrived, ((k - lead) * full + idx) / inc_every + 1);
+            noc_async_read(scr.get_noc_addr(base + page), win + batch * chunk_bytes, n * page_bytes);
+            --chunks_left;
+            if (++batch == group || chunks_left == 0) {
+                noc_async_read_barrier();
+                cb_push_back(0, run_pages * batch);
+                cb_push_back(1, run_pages * batch);
                 batch = 0;
             }
         });
@@ -195,21 +210,46 @@ _ADD_COMPUTE = r"""
 #include <cstdint>
 #include "api/compute/common.h"
 #include "api/compute/eltwise_binary.h"
+#include "api/compute/tile_move_copy.h"
 
-// Sum of 2 or 3 inputs, run_pages tiles per chunk: out(c_16) = c_0 + c_1 [+ c_2]; or c_0 + c_2 (a final core without a
-// forward upstream). n = 0: nothing to do (a line end's port: its reader feeds the sender directly).
+// run_pages tiles per chunk. First n_copy chunks: out(c_16) = c_0 (a ring port's leading block: it starts that block's
+// chain). Then n chunks: out = c_0 + c_1 [+ c_2], or c_0 + c_2 (a final core without a forward upstream).
+// Nothing (n_copy = n = 0): a line end's port, whose reader feeds the sender directly.
 void kernel_main() {
     constexpr uint32_t R = get_compile_time_arg_val(0);
     constexpr uint32_t DST = 4;
     const uint32_t n = get_arg_val<uint32_t>(0);
     const uint32_t has_b = get_arg_val<uint32_t>(1);  // second input c_1
     const uint32_t has_c = get_arg_val<uint32_t>(2);  // third input c_2
-    if (n == 0) {
+    const uint32_t n_copy = get_arg_val<uint32_t>(3);
+    if (n == 0 && n_copy == 0) {
         return;
     }
     const uint32_t cb_b = has_b ? 1 : 2;
     const bool three = has_b && has_c;
     binary_op_init_common(0, cb_b, 16);
+    if (n_copy > 0) {
+        copy_init(0);
+        for (uint32_t i = 0; i < n_copy; ++i) {
+            cb_wait_front(0, R);
+            cb_reserve_back(16, R);
+            for (uint32_t j0 = 0; j0 < R; j0 += DST) {
+                const uint32_t m = R - j0 < DST ? R - j0 : DST;
+                tile_regs_acquire();
+                for (uint32_t j = 0; j < m; ++j) {
+                    copy_tile(0, j0 + j, j);
+                }
+                tile_regs_commit();
+                tile_regs_wait();
+                for (uint32_t j = 0; j < m; ++j) {
+                    pack_tile(j, 16);
+                }
+                tile_regs_release();
+            }
+            cb_push_back(16, R);
+            cb_pop_front(0, R);
+        }
+    }
     add_tiles_init(0, cb_b);
     for (uint32_t i = 0; i < n; ++i) {
         cb_wait_front(0, R);
@@ -453,30 +493,57 @@ def _incs(chunks, inc_every):
     return -(-chunks // inc_every) if chunks else 0
 
 
-def _blocks(p, G, d, blk):
-    """Blocks port d of line position p sends, in order (farthest first): [(block, slot at the receiver)]. blk[j]: the
-    data block of line position j (its chip's row-major rank in the group; j itself along a mesh axis)."""
-    if d == "fwd":
-        return [(blk[j], blk[j]) for j in range(G - 1, p, -1)]
-    return [(blk[j], G if j == p - 1 else blk[j]) for j in range(0, p)]
+def _walk(chips, coord, j, steps):
+    """The chip `steps` hops from `coord` along ring j (forward for steps > 0; a ring wraps)."""
+    for _ in range(abs(steps)):
+        coord = chips[coord]["rings"][j]["next" if steps > 0 else "prev"]
+    return coord
 
 
-def _line_blocks(chips, coord):
-    """The data block of every position of coord's line: walk back to the line start, then forward."""
-    start = coord
-    while chips[start]["rings"][0]["prev"] is not None:
-        start = chips[start]["rings"][0]["prev"]
-    blk, c = [], start
-    while c is not None:
-        blk.append(chips[c]["out"])
-        c = chips[c]["rings"][0]["next"]
-    return blk
+def _schedule(chips, coord, j, d, ring):
+    """(blocks port d of `coord` on ring j sends, farthest first, as [(block, slot at the receiver)], lead).
+
+    Blocks and scratch slots are output slots (row-major rank in the group, plan's "out"), so a snake travels in snake
+    order but each chip owns its row-major block. Line: toward p+1 the blocks of positions G-1 .. p+1, toward p-1 those
+    of 0 .. p-1; a line end starts every chain (lead = all), any other position relays every block (lead = 0).
+    Ring: each block's partials arrive at its owner forward over a = G // 2 chips and backward over G - 1 - a, so a
+    port sends a (or G - 1 - a) blocks; the first, farthest one starts its chain here (lead = 1), the rest are relays.
+    The last block a port sends is the receiver's own: forward it lands in the receiver's own slot, backward in slot G."""
+    rg = chips[coord]["rings"][j]
+    G, p = chips[coord]["G"], rg["p"]
+    peer = rg["next"] if d == "fwd" else rg["prev"]
+    if peer is None:
+        return [], 0
+    out = lambda steps: chips[_walk(chips, coord, j, steps)]["out"]  # noqa: E731
+    if ring:
+        a = G // 2
+        n = a if d == "fwd" else G - 1 - a
+        steps = range(n, 0, -1) if d == "fwd" else range(-n, 0)
+        lead = 1
+    else:
+        steps = range(G - 1 - p, 0, -1) if d == "fwd" else range(-p, 0)
+        n = len(steps)
+        upstream = rg["prev"] if d == "fwd" else rg["next"]
+        lead = n if upstream is None else 0
+    blocks = [(out(k), G if (d == "bwd" and k == -1) else out(k)) for k in steps]
+    return blocks, min(lead, len(blocks))
 
 
 def create_mesh_program_descriptor(
-    mesh_device, input_tensor, scratch, output, sems, chips, *, num_links, cb_bytes=112 * 1024, inc_every=8
+    mesh_device,
+    input_tensor,
+    scratch,
+    output,
+    sems,
+    chips,
+    *,
+    num_links,
+    chips_ring=False,
+    cb_bytes=112 * 1024,
+    inc_every=8,
 ):
     sem_a, sem_b, ready_addr = sems
+    ring = chips_ring
     page_bytes = int(input_tensor.buffer_aligned_page_size())
     num_banks = _num_banks(mesh_device)
     G = next(iter(chips.values()))["G"]
@@ -495,16 +562,14 @@ def create_mesh_program_descriptor(
     dm = lambda risc, noc: ttnn.DataMovementConfigDescriptor(
         processor=getattr(ttnn.DataMovementProcessor, risc), noc=noc
     )
-    stride = num_links
     src = ttnn.KernelDescriptor.SourceType.SOURCE_CODE
     cset = lambda cores: ttnn.CoreRangeSet([ttnn.CoreRange(c, c) for c in cores])
 
     mesh_desc = ttnn.MeshProgramDescriptor()
     for coord, ch in chips.items():
-        rg = ch["rings"][0]
-        p = rg["p"]
-        blk = _line_blocks(chips, coord)
-        assert blk[p] == ch["out"], (coord, p, blk)
+        n_rings = ch["n_rings"]
+        lanes = n_rings * num_links  # lane (ring j, link l) = j L + l owns DRAM banks lane, lane + lanes, ...
+        assert 2 * lanes <= num_banks, f"{n_rings} rings x {num_links} links need at least {2 * lanes} DRAM banks"
         program = ttnn.ProgramDescriptor()
         ports, finals = ch["ports"], ch["finals"]
         cbs = []
@@ -520,28 +585,30 @@ def create_mesh_program_descriptor(
         program.cbs = cbs
         pr_rt, ps_rt, pc_rt = ttnn.RuntimeArgs(), ttnn.RuntimeArgs(), ttnn.RuntimeArgs()
         for (j, d, l), core in ports.items():
+            rg = ch["rings"][j]
+            lane = j * num_links + l
             peer = rg["next"] if d == "fwd" else rg["prev"]
-            blocks = _blocks(p, G, d, blk) if peer is not None else []
-            up = rg["prev"] if d == "fwd" else rg["next"]
-            relay = up is not None and len(blocks) > 0
-            full = _chunks_per_shard(blk_pages, l, stride, num_banks, run_pages)
-            packed = [b | (s << 16) for b, s in blocks]
-            pr_rt[core.x][core.y] = [in_addr, scr_addr, blk_pages, l, stride, sem_a, full, int(relay), len(blocks)] + [
+            blocks, lead = _schedule(chips, coord, j, d, ring)
+            relays = len(blocks) - lead
+            full = _chunks_per_shard(blk_pages, lane, lanes, num_banks, run_pages)
+            packed = [b | (s_ << 16) for b, s_ in blocks]
+            pr_rt[core.x][core.y] = [in_addr, scr_addr, blk_pages, lane, lanes, sem_a, full, lead, len(blocks)] + [
                 b for b, _ in blocks
             ]
-            pc_rt[core.x][core.y] = [len(blocks) * full if relay else 0, 1, 0]
-            # what upstream relays to me: my relay blocks (all but the downstream's own, which I send last)
-            expect_in = _incs(len(blocks) * full, inc_every) if relay else 0
+            direct = lead == len(blocks)  # every block starts here: the reader feeds the sender
+            pc_rt[core.x][core.y] = [0 if direct else relays * full, 1, 0, 0 if direct else lead * full]
+            # what upstream relays to me: my relayed blocks (upstream sends the receiver's own block to its final core)
+            expect_in = _incs(relays * full, inc_every)
             send_ready = _needs_ready(chips, coord, j, d)
             rc = virt(chips[peer]["ports"][(j, _OPP[d], l)]) if send_ready else None
-            args = [scr_addr, blk_pages, l, stride, sem_a, sem_a if d == "fwd" else sem_b, expect_in, full, ready_addr]
+            args = [scr_addr, blk_pages, lane, lanes, sem_a, sem_a if d == "fwd" else sem_b, expect_in, full, ready_addr]
             args += [1, rc.x, rc.y] if send_ready else [0, 0, 0]
             if rg.get(f"{d}_links") and blocks:
                 pc = virt(chips[peer]["ports"][(j, d, l)])
-                fc0 = virt(chips[peer]["finals"][2 * l])
-                fc1 = virt(chips[peer]["finals"][2 * l + 1])
-                nf0 = _chunks_per_shard(blk_pages, l, 2 * stride, num_banks, run_pages)
-                nf1 = _chunks_per_shard(blk_pages, l + stride, 2 * stride, num_banks, run_pages)
+                fc0 = virt(chips[peer]["finals"][2 * lane])
+                fc1 = virt(chips[peer]["finals"][2 * lane + 1])
+                nf0 = _chunks_per_shard(blk_pages, lane, 2 * lanes, num_banks, run_pages)
+                nf1 = _chunks_per_shard(blk_pages, lane + lanes, 2 * lanes, num_banks, run_pages)
                 pn = node(peer)
                 args += [
                     pc.x,
@@ -564,9 +631,14 @@ def create_mesh_program_descriptor(
                 args += [0] * 11
             ps_rt[core.x][core.y] = args
         fr_rt, fc_rt, fw_rt = ttnn.RuntimeArgs(), ttnn.RuntimeArgs(), ttnn.RuntimeArgs()
-        has_f, has_b = int(rg["prev"] is not None), int(rg["next"] is not None)
-        for i, core in enumerate(finals):  # final core 2 l + h: banks l + h L, stride 2 L
-            first, fstride = i // 2 + (i % 2) * stride, 2 * stride
+        own = ch["out"]
+        for i, core in enumerate(finals):  # final core 2 lane + h: banks lane + h lanes, stride 2 lanes
+            lane, h = divmod(i, 2)
+            rg = ch["rings"][lane // num_links]
+            # an arrival per direction where a chain ends here: a ring always (G >= 3), a line from each side it has
+            has_f = int(rg["prev"] is not None and bool(_schedule(chips, rg["prev"], lane // num_links, "fwd", ring)[0]))
+            has_b = int(rg["next"] is not None and bool(_schedule(chips, rg["next"], lane // num_links, "bwd", ring)[0]))
+            first, fstride = lane + h * lanes, 2 * lanes
             n = _chunks_per_shard(blk_pages, first, fstride, num_banks, run_pages)
             fr_rt[core.x][core.y] = [
                 in_addr,
@@ -574,8 +646,8 @@ def create_mesh_program_descriptor(
                 blk_pages,
                 first,
                 fstride,
-                blk[p],
-                blk[p],
+                own,
+                own,
                 G,
                 has_f,
                 has_b,
@@ -583,7 +655,7 @@ def create_mesh_program_descriptor(
                 sem_b,
                 n,
             ]
-            fc_rt[core.x][core.y] = [n, has_f, has_b]
+            fc_rt[core.x][core.y] = [n, has_f, has_b, 0]
             fw_rt[core.x][core.y] = [
                 out_addr,
                 blk_pages,
@@ -648,42 +720,67 @@ _SEM_CACHE, _SCRATCH_CACHE, _PLAN_CACHE = {}, {}, {}
 
 
 def _with_final_cores(mesh_device, chips, num_links):
-    """Each chip's plan plus "finals": two final cores per link, [link 0 half 0, link 0 half 1, link 1 half 0, ...].
-    Half 0 is fabric_all_gather's copy core of the link; half 1 the next free core in its row (else any free core)."""
+    """Each chip's plan plus "finals": two final cores per lane (ring j, link l), [lane 0 half 0, lane 0 half 1, ...].
+    A lane's half 0 is fabric_all_gather's copy core of its link (first ring) or the next free core of that row; half 1
+    the next free core in that row (else any free core)."""
     allowed = sorted(allowed_cores(mesh_device), key=lambda c: (c[1], c[0]))
     out = {}
     for coord, ch in chips.items():
         taken = {(c.x, c.y) for c in list(ch["ports"].values()) + ch["copy"]}
-        finals = []
-        for l in range(num_links):
-            row = ch["copy"][l].y
-            extra = next((c for c in allowed if c[1] == row and c not in taken), None) or next(
+
+        def free(row):
+            got = next((c for c in allowed if c[1] == row and c not in taken), None) or next(
                 (c for c in allowed if c not in taken), None
             )
-            if extra is None:
-                raise ValueError("fabric_reduce_scatter: the core grid has too few cores for two final cores per link")
-            taken.add(extra)
-            finals += [ch["copy"][l], ttnn.CoreCoord(*extra)]
+            if got is None:
+                raise ValueError("fabric_reduce_scatter: the core grid has too few cores for two final cores per lane")
+            taken.add(got)
+            return ttnn.CoreCoord(*got)
+
+        finals = []
+        for j in range(ch["n_rings"]):
+            for l in range(num_links):
+                row = ch["copy"][l].y
+                finals += [ch["copy"][l] if j == 0 else free(row), free(row)]
         out[coord] = {**ch, "finals": finals}
     return out
 
 
-def fabric_reduce_scatter(input_tensor, *, cluster_axis=0, num_links=1, output=None, placement="auto"):
-    """Reduce-scatter `input_tensor` ([1, 1, G * Sb, W] bf16 TILE, DRAM interleaved, a partial per chip) over each line
-    along `cluster_axis`: chip p gets block p of the sum, [1, 1, Sb, W] (the layout ttnn.reduce_scatter(dim=2) gives).
-    cluster_axis=None: one snake line over the whole mesh; chip d (row-major) gets block d.
-    """
+def fabric_reduce_scatter(
+    input_tensor,
+    *,
+    cluster_axis=0,
+    topology=ttnn.Topology.Linear,
+    num_links=1,
+    scheme="ring",
+    output=None,
+    placement="auto",
+):
+    """Reduce-scatter `input_tensor` ([1, 1, G * Sb, W] TILE, DRAM interleaved, a partial per chip; block i = rows
+    i Sb ..) over each group: every chip gets its block of the sum over the group, [1, 1, Sb, W] (the layout
+    ttnn.reduce_scatter(dim=2) gives). The groups and orders are fabric_all_gather's:
+
+    cluster_axis 0 / 1: a line or ring along that mesh axis (the other axis runs independent groups); None: one group
+        over the whole mesh, a snake (line, or ring where the snake closes, e.g. 2 x 4).
+    topology: Linear, or Ring (a group of 2 is a line). A ring sends each block's partials both ways round, so every
+        link direction carries about half the bytes of a line's busiest.
+    scheme "dual_cycles" (cluster_axis=None, Ring, a torus with both sides >= 3): two edge-disjoint Hamiltonian
+        cycles, each reducing half of every block (half the DRAM banks).
+    Whatever order a group travels in, chip (r, c) owns block (its row-major rank in the group), as the all-gather's
+    output slots: block r C + c over the whole mesh, block r (c) along axis 0 (1)."""
     mesh_device = input_tensor.device()
-    key = (id(mesh_device), cluster_axis, num_links, placement)
+    key = (id(mesh_device), cluster_axis, topology, num_links, scheme, placement)
     if key not in _PLAN_CACHE:
-        chips, _ = plan(
+        chips, ring = plan(
             mesh_device,
             cluster_axis=cluster_axis,
-            topology=ttnn.Topology.Linear,
+            topology=topology,
             num_links=num_links,
             placement=placement,
+            scheme=scheme,
         )
-        _PLAN_CACHE[key] = (mesh_device, _with_final_cores(mesh_device, chips, num_links))
+        _PLAN_CACHE[key] = (mesh_device, _with_final_cores(mesh_device, chips, num_links), ring)
+    ring = _PLAN_CACHE[key][2]
     chips = _PLAN_CACHE[key][1]
     G = next(iter(chips.values()))["G"]
     _check_dram_interleaved(input_tensor, "input")
@@ -716,5 +813,7 @@ def fabric_reduce_scatter(input_tensor, *, cluster_axis=0, num_links=1, output=N
         ttnn.synchronize_device(mesh_device)  # every counter zero before any chip's first call increments a neighbour's
         _SEM_CACHE[ckey] = (mesh_device, sems)
     sems = tuple(int(ttnn.get_global_semaphore_address(s)) for s in _SEM_CACHE[ckey][1])
-    desc = create_mesh_program_descriptor(mesh_device, input_tensor, scratch, output, sems, chips, num_links=num_links)
+    desc = create_mesh_program_descriptor(
+        mesh_device, input_tensor, scratch, output, sems, chips, num_links=num_links, chips_ring=ring
+    )
     return ttnn.generic_op([input_tensor, scratch, output], desc)
