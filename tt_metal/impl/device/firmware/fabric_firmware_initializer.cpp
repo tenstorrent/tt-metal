@@ -316,7 +316,7 @@ void FabricFirmwareInitializer::init(
             enchantum::to_string(fabric_config),
             devices_.size());
 
-        log_info(tt::LogMetal, "Initializing Fabric");
+        log_debug(tt::LogMetal, "Initializing Fabric");
 #if defined(TT_UMD_BUILD_SIMULATION)
         if (rtoptions_.get_simulator_enabled()) {
             for (auto* dev : devices_) {
@@ -333,7 +333,7 @@ void FabricFirmwareInitializer::init(
 #endif
         control_plane_.write_routing_tables_to_all_chips();
         compile_and_configure_fabric();
-        log_info(tt::LogMetal, "Fabric Initialized with config {}", fabric_config);
+        log_debug(tt::LogMetal, "Fabric Initialized with config {}", fabric_config);
     } else if (has_flag(descriptor_->fabric_manager(), tt_fabric::FabricManagerMode::TERMINATE_FABRIC)) {
         log_info(tt::LogMetal, "Compiling fabric to setup fabric context for fabric termination");
         for (auto* dev : devices_) {
