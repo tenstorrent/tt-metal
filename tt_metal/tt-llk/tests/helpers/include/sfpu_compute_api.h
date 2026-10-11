@@ -2,8 +2,7 @@
 //
 // SPDX-License-Identifier: Apache-2.0
 
-// The tt-llk tests cannot include api/compute, so each branch repeats one <op>_tile / <op>_tile_init at the llk layer:
-// its body, template arguments, vector mode and init, with the scalar arguments ttnn passes.
+// The tt-llk tests cannot include api/compute, so each branch repeats one <op>_tile / <op>_tile_init at the llk layer.
 
 #pragma once
 
@@ -12,7 +11,7 @@
 #include "ckernel_sfpu.h"
 #include "llk_sfpu_types.h"
 
-// The compute API's name for the kernel's dest mode; the init macros expand it.
+// The init macros expand the compute API's name for the dest mode.
 #define DST_ACCUM_MODE is_fp32_dest_acc_en
 
 // clang-format off
@@ -144,7 +143,7 @@ enum class ApiOp
     mac,
 };
 
-// Scalar arguments as ttnn passes them (bit patterns of floats, plain integers for the integer entry points).
+// Scalar arguments as ttnn passes them: float bit patterns, plain integers for the integer entry points.
 constexpr std::uint32_t F_HALF    = 0x3F000000u; // 0.5f
 constexpr std::uint32_t F_ONE     = 0x3F800000u; // 1.0f
 constexpr std::uint32_t I_FIVE    = 5u;
@@ -400,8 +399,7 @@ inline void api_init()
     }
 }
 
-// t0 is the tile the carrier copied; t1 and t2 are the next tiles of the DEST half (operands of the two- and
-// three-input entry points, as the checked-in binary perf kernel places them).
+// t1 and t2 are the next DEST tiles after t0, the operands of the two- and three-input entry points.
 template <ApiOp OP, bool APPROX, DataFormat FMT>
 inline void api_call(std::uint32_t t0, std::uint32_t t1, std::uint32_t t2)
 {

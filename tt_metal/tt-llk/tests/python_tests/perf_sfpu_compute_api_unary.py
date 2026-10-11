@@ -1,9 +1,7 @@
 # SPDX-FileCopyrightText: © 2026 Tenstorrent AI ULC
 # SPDX-License-Identifier: Apache-2.0
 
-"""The unary SFPU registry bodies as their <op>_tile issues them, four 8-row calls per tile (VectorMode::RC, 8
-iterations), on Float16_b with a 16-bit DEST; perf_eltwise_unary_sfpu.py times them as one 32-row call per tile.
-"""
+"""The unary SFPU registry bodies as their <op>_tile issues them: four 8-row calls per tile."""
 
 import pytest
 from conftest import skip_for_wormhole
@@ -37,8 +35,7 @@ from helpers.test_variant_parameters import (
     UNPACK_TRANS_WITHIN_FACE,
 )
 
-# The TopK entry points make one call per tile, as the registry sweep does, and the registry already issues erfinv
-# as four 8-row calls.
+# The TopK entry points make one call per tile; erfinv already issues four 8-row calls.
 _NOT_IN_API_FORM = {
     MathOperation.TopKDefuse,
     MathOperation.TopKLocalSort,

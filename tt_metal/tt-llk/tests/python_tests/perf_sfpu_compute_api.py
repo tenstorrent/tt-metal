@@ -1,9 +1,7 @@
 # SPDX-FileCopyrightText: © 2026 Tenstorrent AI ULC
 # SPDX-License-Identifier: Apache-2.0
 
-"""Perf rows for the Blackhole compute API SFPU entry points, each run as its <op>_tile runs it (vector mode, init,
-template and scalar arguments) through helpers/include/sfpu_compute_api.h, over the formats it is written for.
-"""
+"""Perf rows for the Blackhole compute API SFPU entry points, each run as its <op>_tile runs it."""
 
 import pytest
 from conftest import skip_for_wormhole
@@ -23,8 +21,7 @@ from helpers.test_variant_parameters import (
     UNPACK_TRANS_WITHIN_FACE,
 )
 
-# Tile format and DEST modes of each data class. Int32 runs with a 16-bit DEST flag and UInt32 with a 32-bit one, as
-# the harness requires; both are unpacked straight into DEST.
+# Int32 runs with a 16-bit DEST flag and UInt32 with a 32-bit one, as the harness requires.
 _CLASSES = {
     "F": (DataFormat.Float16_b, [DestAccumulation.No, DestAccumulation.Yes]),
     "F32": (DataFormat.Float32, [DestAccumulation.Yes]),
