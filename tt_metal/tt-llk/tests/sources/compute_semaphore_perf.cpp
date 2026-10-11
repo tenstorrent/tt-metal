@@ -1,9 +1,8 @@
 // SPDX-FileCopyrightText: © 2026 Tenstorrent AI ULC
 // SPDX-License-Identifier: Apache-2.0
 
-// Perf kernel of the compute semaphore ring (semaphore_compute_impl.h) on a datacopy pipeline; RING_DEPTH 0 runs no
-// semaphore instructions. UNPACK_MATH_DONE stands in for the API's UNPACK_OPERAND_SYNC, which the harness's zone barrier
-// uses. Max is the ring depth as in the API, and Value starts there: unpack runs at most RING_DEPTH tiles ahead of pack.
+// Perf kernel of the compute semaphore ring on a datacopy pipeline; RING_DEPTH 0 runs no semaphore instructions.
+// UNPACK_MATH_DONE stands in for the API's UNPACK_OPERAND_SYNC, which the harness's zone barrier uses.
 
 #include <cstdint>
 
