@@ -25,3 +25,12 @@
 - Old driver t376drv (pgid 693788) killed ~00:10 UTC. No queued jobs of ours were left.
 - drv376b.sh: s4out_x, s4res_x, s0up_x, 16 ring-safe candidates each, no retry, any hang stops everything
   (marker drv376b.done = HUNG ...). s0res_x and s1up_x skipped (coordinator: hung more than twice).
+
+## Run 3 (2026-10-10 17:35 PDT): results, no table change
+- drv376b ran clean, no hangs: s4out_x job 596, s4res_x 599, s0up_x 602, A/B 605 (blx01, 900 MHz clamp, relative only).
+- Per-conv winners (bit-identical md5): s4out_x (6,2,16)->(5,2,16) 4620->4339 us (-6.1%);
+  s4res_x (6,4,8)->(5,4,8) 8398->8001 us (-4.7%). s0up_x: table (5,4,8) stays best (7641 us).
+- Module A/B (job 605, full decoder, 3 warm replays): old median 0.5178 s, new 0.5214 s, new/old 1.0069,
+  identical=True. Expected gain is ~0.7% (about 3.5 ms of 518 ms), inside noise; the A/B shows none. Not landed.
+- s0res_x, s1up_x skipped (coordinator order after hangs). The ring_safe check now covers them; a later task may rerun them.
+- Landing only the sweep tooling (2af2bbe4a06, f141ee96e70) on t48 so later sweeps cannot hang the box.
