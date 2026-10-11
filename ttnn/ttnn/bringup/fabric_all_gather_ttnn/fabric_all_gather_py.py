@@ -724,6 +724,13 @@ def plan(
             for d, peer in (("fwd", rg["next"]), ("bwd", rg["prev"])):
                 if peer is None or not (rg[d] or _needs_ready(chips, coord, j, d)):
                     continue
+                # a 2D fabric forwards toward any chip, so forwarding links alone do not make a hop direct: on a mesh
+                # axis without wrap cables a ring's closing hop would be routed through the line and deadlock
+                if not ttnn.get_neighbor_eth_directions(node(coord), node(peer)):
+                    raise ValueError(
+                        f"fabric_all_gather: {coord} -> {peer} is not a direct link "
+                        f"(topology={topology}, fabric={ttnn.get_fabric_config()})"
+                    )
                 links = ttnn.get_forwarding_link_indices(node(coord), node(peer))
                 if len(links) < num_links:
                     raise ValueError(
