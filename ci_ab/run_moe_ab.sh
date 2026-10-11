@@ -10,18 +10,23 @@ SRAM=models/demos/deepseek_v3_b1/unified_kernels/matmul_expert_compressed_sram.h
 ROUNDS=${ROUNDS:-3}
 python3 -c "import tracy" 2>/dev/null || export PYTHONPATH=/work:/work/tools
 echo "== $(date -u +%FT%TZ) $(git log -1 --format='%h %s' 2>/dev/null)"
+# pytest.ini's -vvs makes --collect-only print "<Function name[...]>", so the node ids are rebuilt from the param ids.
 mapfile -t IDS < <(python3 -m pytest --collect-only -q "$T::test_moe_fused_with_reduce" 2>/dev/null |
-  grep -F "rigged_groups1" | grep -E "t4_all_picked|t8_all_picked")
+  grep -oE 'test_moe_fused_with_reduce\[[^]]*\]' | grep -F "rigged_groups1" | grep -E "t4_all_picked|t8_all_picked" |
+  sort -u | sed "s|^|$T::|")
 printf 'node %s\n' "${IDS[@]}"
 [[ ${#IDS[@]} -gt 0 ]] || { echo "no node ids collected"; python3 -m pytest --collect-only -q "$T::test_moe_fused_with_reduce" 2>&1 | tail -20; exit 1; }
+# tracy joins its argv into a /bin/sh command, so the node ids go to ci_ab/run_nodes.py through a file.
+export AB_NODES_FILE=/work/generated/ab_nodes.txt
+mkdir -p /work/generated
+printf '%s\n' "${IDS[@]}" > "$AB_NODES_FILE"
 fail=0
 for r in $(seq "$ROUNDS"); do
   for v in banked onebank banked2; do
     cp ci_ab/sram_$v.hpp $SRAM
     out=/work/generated/ab/${v}_$r; rm -rf "$out"; mkdir -p "$out"
     t0=$(date +%s)
-    TT_METAL_CACHE=/tmp/ttcache_$v python3 -m tracy -p -r --no-web-server -o "$out" \
-      -m pytest -q -p no:cacheprovider -o timeout_method=thread "${IDS[@]}" > "$out.log" 2>&1
+    TT_METAL_CACHE=/tmp/ttcache_$v python3 -m tracy -p -r --no-web-server -o "$out" ci_ab/run_nodes.py > "$out.log" 2>&1
     rc=$?
     echo "== round $r $v rc=$rc $(( $(date +%s) - t0 )) s: $(grep -E '[0-9]+ (passed|failed)' "$out.log" | tail -1)"
     [[ $rc -eq 0 ]] || { fail=1; tail -40 "$out.log"; }
