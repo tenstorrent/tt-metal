@@ -99,6 +99,7 @@ inline void llk_unpack_AB_custom_mm_bank_init(
     const std::uint32_t unpB_dst_format,
     const std::uint32_t unpB_face_r_dim,
     const std::uint32_t unpB_num_faces) {
+    // One byte per field: the four formats in the low word, face rows and faces in the high word, bit 63 transpose
     const std::uint32_t formats =
         unpA_src_format | (unpA_dst_format << 8) | (unpB_src_format << 16) | (unpB_dst_format << 24);
     const std::uint32_t geometry = unpA_face_r_dim | (unpA_num_faces << 8) | (unpB_face_r_dim << 16) |

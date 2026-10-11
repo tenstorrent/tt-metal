@@ -27,22 +27,10 @@ pytestmark = [skip_for_wormhole, skip_for_quasar]
 
 @dataclass
 class CUSTOM_MM_PERF_FLAGS(TemplateParameter):
-    """Compile-time knobs of sources/custom_mm_perf.cpp (finalize requires split_acc)."""
-
     split_acc: bool = False
-    finalize: bool = False
-    dense_layout: bool = True
-    clear_src: bool = True
 
     def convert_to_cpp(self) -> str:
-        return "\n".join(
-            [
-                f"constexpr bool SPLIT_ACC = {str(self.split_acc).lower()};",
-                f"constexpr bool FINALIZE = {str(self.finalize).lower()};",
-                f"constexpr bool DENSE_PACKING = {str(self.dense_layout).lower()};",
-                f"constexpr bool CLEAR_SRC = {str(self.clear_src).lower()};",
-            ]
-        )
+        return f"constexpr bool SPLIT_ACC = {str(self.split_acc).lower()};"
 
 
 BF16 = DataFormat.Float16_b
@@ -99,12 +87,7 @@ def _run_perf_custom_mm(perf_report, in1_format, in0_face_r_dim, call_shape, spl
         ],
         templates=[
             CRK_TILE_DIMM(c_dimm=ct, r_dimm=1, k_dimm=kt),
-            CUSTOM_MM_PERF_FLAGS(
-                split_acc=split_acc,
-                finalize=split_acc,
-                dense_layout=True,
-                clear_src=True,
-            ),
+            CUSTOM_MM_PERF_FLAGS(split_acc=split_acc),
         ],
         runtimes=[
             # in0 and the result use 2 faces of M rows; in1 uses 4 full faces.
