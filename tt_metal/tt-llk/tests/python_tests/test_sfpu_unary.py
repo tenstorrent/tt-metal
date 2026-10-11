@@ -44,7 +44,7 @@ from helpers.sfpu_domains import (
 )
 from helpers.stimuli_config import StimuliConfig
 from helpers.stimuli_generator import DistributionKind, StimuliSpec, generate_stimuli
-from helpers.test_config import TestConfig
+from helpers.test_config import BuildMode, TestConfig
 from helpers.test_variant_parameters import (
     APPROX_MODE,
     CLAMP_NEGATIVE,
@@ -1093,6 +1093,16 @@ def test_eltwise_unary_sfpu_threshold(
     )
 
 
+def _producer_prepare_only(configuration, prepare_only):
+    """Prepare one variant without running it, only for compile-producer."""
+    if not prepare_only:
+        return False
+    if TestConfig.BUILD_MODE != BuildMode.PRODUCE:
+        raise RuntimeError("prepare_only is valid only in compile-producer mode")
+    configuration.prepare()
+    return True
+
+
 def eltwise_unary_sfpu(
     test_name,
     formats: list[InputOutputFormat],
@@ -1108,6 +1118,7 @@ def eltwise_unary_sfpu(
     reciprocal_impl=0,
     twos_complement=False,
     golden_mathop=None,
+    prepare_only=False,
 ):
     torch.manual_seed(0)
     torch.set_printoptions(precision=10)
@@ -1213,6 +1224,15 @@ def eltwise_unary_sfpu(
             formats.input_format.is_32_bit() and dest_acc == DestAccumulation.Yes
         ),
     )
+
+    # A pytest item that owns several configurations must prepare all of them
+    # before compile-producer exits the item. TestConfig.run() deliberately
+    # skips immediately after its first build in producer mode, which would
+    # otherwise leave later variants absent for compile-consumer. This opt-in
+    # is checked before raw/stream hooks so producer mode cannot enter a device
+    # path. Default and consumer executions still run every assertion below.
+    if _producer_prepare_only(configuration, prepare_only):
+        return
 
     # laneJN bit-exact sweep hook (corpus/tools/bitexact_sweep.py), env-gated
     # and inert otherwise:
@@ -1988,6 +2008,7 @@ def test_relu_fresh_cpp_admission():
     cannot preserve independently.
     """
     formats = InputOutputFormat(DataFormat.Float16_b, DataFormat.Float16_b)
+    prepare_only = TestConfig.BUILD_MODE == BuildMode.PRODUCE
 
     # Preserve the existing ReluMax fresh arm's broad ordinary coverage.
     eltwise_unary_sfpu(
@@ -1999,6 +2020,7 @@ def test_relu_fresh_cpp_admission():
         FastMode.No,
         [64, 64],
         fresh_cpp_impl=1,
+        prepare_only=prepare_only,
     )
 
     eltwise_unary_sfpu(
@@ -2031,6 +2053,7 @@ def test_relu_fresh_cpp_admission():
         custom_atol=0.0,
         custom_rtol=0.0,
         fresh_cpp_impl=1,
+        prepare_only=prepare_only,
     )
 
 
@@ -2050,6 +2073,7 @@ def test_hardshrink_fresh_cpp_admission(fresh_cpp_impl):
     custom_atol, custom_rtol = CUSTOM_TOLERANCES.get(
         MathOperation.Hardshrink, (None, None)
     )
+    prepare_only = TestConfig.BUILD_MODE == BuildMode.PRODUCE
 
     eltwise_unary_sfpu(
         "sources/eltwise_unary_sfpu_test.cpp",
@@ -2062,6 +2086,7 @@ def test_hardshrink_fresh_cpp_admission(fresh_cpp_impl):
         custom_atol=custom_atol,
         custom_rtol=custom_rtol,
         fresh_cpp_impl=fresh_cpp_impl,
+        prepare_only=prepare_only,
     )
 
     eltwise_unary_sfpu(
@@ -2093,6 +2118,7 @@ def test_hardshrink_fresh_cpp_admission(fresh_cpp_impl):
         custom_atol=0.0,
         custom_rtol=0.0,
         fresh_cpp_impl=fresh_cpp_impl,
+        prepare_only=prepare_only,
     )
 
     # Keep this last so SFPU_DUMP captures the sign-sensitive FP32 inputs when
@@ -2130,6 +2156,7 @@ def test_hardshrink_fresh_cpp_admission(fresh_cpp_impl):
         custom_atol=0.0,
         custom_rtol=0.0,
         fresh_cpp_impl=fresh_cpp_impl,
+        prepare_only=prepare_only,
     )
 
 

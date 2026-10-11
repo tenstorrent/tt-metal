@@ -50,6 +50,10 @@ CHECKS = (
         "GELU asymptote host model",
         "selftest_gelu_appx_asymptote.py",
     ),
+    python_check(
+        "unary composite producer contract",
+        "selftest_unary_composite_producer.py",
+    ),
     python_check("staged variant identity", "selftest_staged_variant.py"),
     python_check("binary stream accounting", "selftest_binary_stream.py"),
     python_check("fp32 stream accounting", "selftest_fp32_stream.py"),
