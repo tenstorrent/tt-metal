@@ -102,7 +102,7 @@ def _configuration(
 def test_matmul_narrowed_block(
     formats, blocks, fidelity=MathFidelity.LoFi, row_mop=False
 ):
-    """Blocks narrower than the init's in the same reuse direction, as the DRAM sharded matmul's last sub block."""
+    """Blocks narrower than the init's in the same reuse direction."""
     init_block, block = blocks
     configuration, a, b = _configuration(
         formats, init_block, block, True, fidelity, row_mop

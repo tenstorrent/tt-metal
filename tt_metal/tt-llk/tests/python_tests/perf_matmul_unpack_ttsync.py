@@ -27,8 +27,7 @@ from helpers.test_variant_parameters import (
 )
 from perf_matmul import matmul_combos
 
-# The blocks the bmm kernel unpacks with the ttsync form: one or two streamed tiles per row (rt and ct at most 2);
-# perf_matmul has the same rows with the context poll.
+# The blocks the bmm kernel unpacks with the ttsync form: one or two streamed tiles per row (rt and ct at most 2).
 TTSYNC_MAX_STREAM = 2
 
 

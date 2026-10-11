@@ -27,7 +27,7 @@ from helpers.test_variant_parameters import (
 )
 from perf_matmul import matmul_combos
 
-# Blocks every caller of the row MOP takes; perf_matmul has the same rows on the tile MOP.
+# Blocks every caller of the row MOP takes.
 ROW_MOP_MIN_TILES = 8
 
 

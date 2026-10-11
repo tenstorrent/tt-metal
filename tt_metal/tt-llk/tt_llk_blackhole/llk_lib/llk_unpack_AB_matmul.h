@@ -33,8 +33,7 @@ inline constexpr bool unpack_matmul_ttsync_restored = false;
 #endif
 
 /**
- * @brief Turn Auto TTSync off and restore the MOP and REPLAY resource declarations, if a ttsync matmul init changed
- * them. Called by the TRISC kernel wrapper after a kernel that defines MATMUL_UNPACK_TTSYNC.
+ * @brief Turn Auto TTSync off and restore the MOP and REPLAY declarations if a ttsync matmul init changed them.
  */
 inline void _llk_unpack_AB_matmul_ttsync_restore_()
 {
@@ -101,8 +100,7 @@ inline constexpr bool _llk_unpack_AB_matmul_narrow_format_(const std::uint32_t u
  * @param unpA_src_format: Unpacker input (L1) data format of in1, the operand unpacked into SrcA, as given to
  *                         @ref _llk_unpack_hw_configure_.
  * @param unpB_src_format: Unpacker input (L1) data format of in0, the operand unpacked into SrcB.
- * @param fp32_dest_acc_en: Whether DEST holds 32-bit data; such a kernel keeps the GPR advance for every format (the
- *                          narrow body's THCON wait slows its pack-bound blocks).
+ * @param fp32_dest_acc_en: Whether DEST holds 32-bit data; such a kernel keeps the GPR advance for every format.
  */
 inline constexpr bool _llk_unpack_AB_matmul_stream_narrow_(
     const std::uint32_t ct_dim,
@@ -115,8 +113,7 @@ inline constexpr bool _llk_unpack_AB_matmul_stream_narrow_(
 }
 
 /**
- * @brief Record the replay body for one streamed tile of a matmul row: the UNPACR group, the base address advance of that
- *        unpacker and the NOP that covers the config write.
+ * @brief Record the replay body for one streamed tile of a matmul row: the UNPACR group, the address advance and the NOP.
  *
  * @tparam SRC: SrcA or SrcB, the source register (and unpacker) of the streamed operand.
  * @tparam CFG_REG: Base address register of the streamed operand's unpacker in the config context this copy serves.
@@ -153,9 +150,8 @@ inline void _llk_unpack_AB_matmul_stream_tile_body_(const bool partial_face, con
     }
     else if (narrow)
     {
-        // CFG_REG += SCRATCH_SEC0_val (0b011 = add, 32-bit mask, scratch_sel 0); the stride is copied from the GPR
-        // every tile, so it follows a data format reconfig
-        TTI_STALLWAIT(p_stall::STALL_CFG, p_stall::THCON); // THCON writes the stride GPR, and on Blackhole a WRCFG can pass that write
+        // CFG_REG += SCRATCH_SEC0_val; the stride is copied from the GPR every tile, so it follows a data format reconfig
+        TTI_STALLWAIT(p_stall::STALL_CFG, p_stall::THCON); // a WRCFG can pass the THCON write of the stride GPR
         TTI_WRCFG(STRIDE_GPR, p_cfg::WRCFG_32b, SCRATCH_SEC0_val_ADDR32);
         TTI_CFGSHIFTMASK(1, 0b011, 32 - 1, 0, 0, CFG_REG);
     }
@@ -196,8 +192,7 @@ inline void _llk_unpack_AB_matmul_mop_config_(
     const bool reuse_a             = ct_dim >= rt_dim;
     const bool stream_partial_face = reuse_a ? unpA_partial_face : unpB_partial_face;
     LLK_ASSERT_BLOCK(unpack_matmul_init_reuse_a = reuse_a);
-    // two copies of the streamed tile body, one per config context: the UNPACR group (4 instructions for a partial face,
-    // 1 otherwise), the address advance (3 instructions for a narrow format, 4 otherwise) and the NOP
+    // two copies of the streamed tile body, one per config context: UNPACR group, address advance and NOP
     const std::uint32_t replay_buf_run_len  = (stream_partial_face ? 4 : 1) + (stream_narrow ? 3 : 4) + 1;
     const std::uint32_t replay_buf_prog_len = 2 * replay_buf_run_len;
 
@@ -345,8 +340,7 @@ __attribute__((always_inline)) inline void _llk_unpack_AB_matmul_init_(
             set_ttsync_enables<TRACK_GPR | TRACK_TENSIX_INSTRUCTIONS>();
             unpack_matmul_ttsync_on = 1;
         }
-        // the RISC's config writes land before the first UNPACR, and no TRISC_CFG stall (an earlier op's, or this one
-        // still latched) can wait on a GPR store that Auto TTSync holds; the NOP keeps tensix_sync until the stall clears
+        // The RISC's config writes land before the first UNPACR; the NOP keeps tensix_sync until a latched TRISC_CFG stall clears.
         TTI_STALLWAIT(p_stall::STALL_THREAD, p_stall::TRISC_CFG);
         TTI_NOP;
         tensix_sync();

@@ -201,7 +201,6 @@ def test_matmul(
 
 
 # The math thread's row MOP (one MOP per reuse row, Blackhole only) on every block shape, fidelity and DEST mode.
-# The row MOP, Auto TTSync and transpose sweeps run nightly; the LLK smoke splits its tests in two groups by count.
 ROW_MOP_COMBINATIONS = generate_format_aware_matmul_combinations(
     input_output_formats(
         [DataFormat.Float16_b, DataFormat.Float32, DataFormat.Bfp8_b], same=True

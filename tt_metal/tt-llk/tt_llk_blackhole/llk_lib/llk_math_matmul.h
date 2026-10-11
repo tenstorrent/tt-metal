@@ -465,8 +465,7 @@ constexpr std::uint32_t matmul_row_dest_stride(const std::uint32_t ct_dim, const
 }
 
 /**
- * @brief Program the DEST word of ADDR_MOD_3, which ends a tile of a reuse row in the row MOP: DEST moves to the next
- *        tile through the carriage return register and the fidelity phase is cleared.
+ * @brief Program the DEST word of ADDR_MOD_3: the end of a row tile moves DEST on through the carriage return register.
  *
  * @param dest_tile_stride: DEST rows from one tile of the row to the next, see @ref matmul_row_dest_stride.
  */
@@ -542,7 +541,6 @@ inline void matmul_configure_row_mop(
     load_replay_buf(
         ckernel::math::replay_buf_offset,
         15,
-        // MVMUL 1 to 15 of the full tile, as in matmul_configure_mop
         []
         {
             TTI_MVMUL(p_setrwc::CLR_NONE, 0, ADDR_MOD_0, 0); // B0A0
@@ -822,8 +820,7 @@ inline void matmul_configure_mop_throttled(
  * @param transpose: Non-zero to transpose in1 faces during the multiply.
  * @param ct_dim: Number of column tiles in the output block.
  * @param rt_dim: Number of row tiles in the output block.
- * @tparam row_mop: With THROTTLE_LEVEL 0 and full 32x32 tiles, one MOP per reuse row (@ref matmul_configure_row_mop);
- *                  the matching @ref _llk_math_matmul_ must pass the same value.
+ * @tparam row_mop: One MOP per reuse row with THROTTLE_LEVEL 0 and full 32x32 tiles; _llk_math_matmul_ must pass the same value.
  * @note On the unpack thread, pair with @ref _llk_unpack_AB_matmul_init_ which feeds SrcA/SrcB.
  * @note @ref _llk_math_matmul_ runs the configured matmul with matching template args.
  * @note Establishes the operand-driven DEFAULT Src zero-substitution state; @ref

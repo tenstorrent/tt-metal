@@ -84,7 +84,7 @@ class THROTTLE_LEVEL(TemplateParameter):
 
 @dataclass
 class MATMUL_ROW_MOP(TemplateParameter):
-    """Blackhole matmul math with one MOP per reuse row (_llk_math_matmul_init_ and _llk_math_matmul_ with row_mop)."""
+    """Blackhole matmul math with one MOP per reuse row."""
 
     def convert_to_cpp(self) -> str:
         return "#define MATMUL_ROW_MOP"
@@ -92,8 +92,7 @@ class MATMUL_ROW_MOP(TemplateParameter):
 
 @dataclass
 class MATMUL_UNPACK_TTSYNC(TemplateParameter):
-    """Blackhole matmul unpack with each row's base addresses written through GPRs and WRCFG under Auto TTSync
-    (_llk_unpack_AB_matmul_init_ and _llk_unpack_AB_matmul_ with ttsync)."""
+    """Blackhole matmul unpack with the row base addresses written through GPRs and WRCFG under Auto TTSync."""
 
     def convert_to_cpp(self) -> str:
         return "#define MATMUL_UNPACK_TTSYNC"
