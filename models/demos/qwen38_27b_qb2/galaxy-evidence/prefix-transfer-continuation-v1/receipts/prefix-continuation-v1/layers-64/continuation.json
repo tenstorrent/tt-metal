@@ -1,0 +1,20 @@
+{
+  "state": "failed",
+  "passed": false,
+  "cleanup_completed": true,
+  "layers": 64,
+  "serving_enabled": false,
+  "independent_eval": false,
+  "started_at": 1791674374.3210707,
+  "cases": [],
+  "updated_at": "2026-10-10T23:24:34Z",
+  "device_ids": [
+    0,
+    4,
+    12,
+    8
+  ],
+  "error": "Failed",
+  "detail": "Timeout (>300.0s) from pytest-timeout.",
+  "finished_at": 1791674674.8791742
+}

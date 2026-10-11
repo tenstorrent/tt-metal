@@ -1,0 +1,15 @@
+{
+  "state": "launched",
+  "unit": "qwen38-prefix-transfer-v2-20261010",
+  "properties": "MainPID=554186\nActiveState=active\nInvocationID=28ab6d2b23c34aaf8b550faa9de2d108\n",
+  "source": "/home/ttuser/qwen38-artifacts-20261007/prefix-transfer-source-v2",
+  "output": "/home/ttuser/qwen38-artifacts-20261007/prefix-transfer-v2",
+  "source_parent": "compact-gdn-source-v3",
+  "branch": "anatarajan/qwen38-prefix-offload-20261010",
+  "working_patch": true,
+  "persists_disconnect": true,
+  "persists_reboot": false,
+  "timeout_s": 1200,
+  "agentx_launched": false,
+  "started_at": 1791673667.4900935
+}

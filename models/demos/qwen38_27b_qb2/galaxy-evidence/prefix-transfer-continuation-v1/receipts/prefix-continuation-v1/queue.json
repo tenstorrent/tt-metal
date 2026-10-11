@@ -1,0 +1,23 @@
+{
+  "state": "failed",
+  "passed": false,
+  "serving_enabled": false,
+  "agentx_launched": false,
+  "survives_disconnect": true,
+  "resumes_after_reboot": false,
+  "started_at": 1791674311.7439044,
+  "stages": [
+    {
+      "layers": 4,
+      "receipt": "/home/ttuser/qwen38-artifacts-20261007/prefix-continuation-v1/layers-4/continuation.json",
+      "passed": true
+    }
+  ],
+  "transfer_receipt_sha256": "1bcfb9b8169bc951df7c4533172786eb64e4d511c5466caeeb07010e945f0e18",
+  "layers": 64,
+  "timeout_s": 3600,
+  "updated_at": "2026-10-10T23:24:40Z",
+  "error": "CalledProcessError",
+  "detail": "Command '['/bin/bash', '/home/ttuser/qwen38-artifacts-20261007/prefix-continuation-source-v1/scripts/run_safe_pytest.sh', 'models/demos/qwen38_27b_qb2/tests/test_prefix_continuation.py', '-q', '-s', '--junitxml=/home/ttuser/qwen38-artifacts-20261007/prefix-continuation-v1/layers-64/hardware.xml']' returned non-zero exit status 1.",
+  "finished_at": 1791674680.1776373
+}

@@ -1,0 +1,17 @@
+{
+  "unit": "qwen38-prefix-continuation-v1-20261010",
+  "properties": "MainPID=565582\nActiveState=active\nInvocationID=a4d918ff327e4b9e91e08bfac37b5211\n",
+  "source": "/home/ttuser/qwen38-artifacts-20261007/prefix-continuation-source-v1",
+  "output": "/home/ttuser/qwen38-artifacts-20261007/prefix-continuation-v1",
+  "branch": "anatarajan/qwen38-prefix-offload-20261010",
+  "working_patch": true,
+  "persists_disconnect": true,
+  "persists_reboot": false,
+  "timeout_s": 5400,
+  "agentx_launched": false,
+  "started_at": 1791674311.7209573,
+  "gates": [
+    4,
+    64
+  ]
+}

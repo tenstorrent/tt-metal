@@ -1,0 +1,28 @@
+{
+  "state": "completed",
+  "passed": true,
+  "serving_enabled": false,
+  "agentx_launched": false,
+  "survives_disconnect": true,
+  "resumes_after_reboot": false,
+  "started_at": 1791674817.8733292,
+  "stages": [
+    {
+      "layers": 4,
+      "receipt": "/home/ttuser/qwen38-artifacts-20261007/prefix-continuation-v1/layers-4/continuation.json",
+      "passed": true,
+      "reused": true,
+      "sha256": "41231524684c126e1d0062b2219a1044b358391838c233571727929690afcd61"
+    },
+    {
+      "layers": 64,
+      "receipt": "/home/ttuser/qwen38-artifacts-20261007/prefix-continuation-v2/layers-64/continuation.json",
+      "passed": true
+    }
+  ],
+  "transfer_receipt_sha256": "1bcfb9b8169bc951df7c4533172786eb64e4d511c5466caeeb07010e945f0e18",
+  "layers": 64,
+  "timeout_s": 3600,
+  "updated_at": "2026-10-10T23:32:42Z",
+  "finished_at": 1791675162.2847974
+}

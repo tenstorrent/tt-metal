@@ -4,6 +4,32 @@ October 10, 2026. This is an implementation scope, not a supported feature or
 an enabled serving change. Compact GPQA and kernel qualification stay ahead
 of this work. Preserve BFP8 KV, FP32 recurrent state and existing trace safety.
 
+## October 11 update: physical transfer and full-model continuation passed
+
+The isolated branch now includes the opaque-byte TT adapter in
+[`tt/prefix_transfer.py`](../tt/prefix_transfer.py). Twenty-five CPU tests pass.
+All-rank hardware transfer, shuffled physical pages and neighbour preservation
+passed, followed by four-layer and **full-64-layer TP4 continuation**. The full
+test restored a 4096-token prefix into another slot, appended 32 tokens, and
+matched every logit exactly through 32 teacher-forced decode steps. A second
+restore at the 4160-token frontier preserved the existing trace, resident
+addresses and neighbouring state, again with exact logits.
+
+This proves the tested exclusive-lease boundary, not a serving integration or
+a long-conversation eval. `supports_prefix_caching` remains disabled. There is
+no scheduler admission/eviction/replica-affinity adapter or production storage
+connector yet, and AgentX must wait for both caching and offload through serving.
+
+The 282.8-MiB checkpoint took **2.207 s to capture and 3.542 s to restore**;
+prefilling the same 4K prefix took **1.185 s**. Thus this first conservative
+adapter is slower than recomputation in that case. Randomly shuffled pages
+required 16,768 transfer windows. Coalescing, async transfers and resident
+prefix reuse need measurement before claiming a speedup. File-backed restore
+may hit the host page cache; these are not physical SSD-bandwidth measurements.
+
+[Receipts, failures and reproduction details](../galaxy-evidence/prefix-transfer-continuation-v1/README.md).
+The original scope below is retained with the updated completion boundaries.
+
 ## Parallel implementation, October 10
 
 The isolated branch `anatarajan/qwen38-prefix-offload-20261010` starts from
@@ -37,12 +63,13 @@ not measured by these small CPU tests.
 
 Next implementation gates:
 
-1. Implement the TT capture/restore adapters against these leases. Fence and
+1. Implement the TT capture/restore adapters against these leases (the initial
+   serialized adapter and exclusive-lease hardware boundary now pass). Fence and
    publish resident decode-bucket state before capture, retain the exact
    consumed frontier, gather logical KV pages without BFP8 conversion, and
    restore into private pages and stable recurrent slots. Cancellation must
    abort or quarantine partially written destinations.
-2. Validate all ranks on hardware: long cold/restored continuations, divergent
+2. Extend the passing all-rank hardware test to long cold/restored continuations, divergent
    suffixes, shuffled pages, slot reuse and existing decode traces. Keep the
    capability disabled until these pass.
 3. Extend the pinned plugin's hybrid allocation/lifecycle hooks, reusing vLLM
@@ -70,9 +97,9 @@ traffic off the per-token decode path.
   specs and uniform attention-spec groups; it does not accept a recurrent
   state group there. The old local inference-server submodule is a different
   checkout and must not be mistaken for the deployed pin.
-- No TT KV-to-host/SSD connector or cross-replica prefix placement is
-  implemented in this Qwen adapter. Existing capture backups are transient
-  warmup protection, not a reusable prefix cache.
+- A standalone TT transfer/checkpoint adapter now exists, but no serving
+  connector or cross-replica prefix placement is implemented in this Qwen
+  adapter. Existing capture backups are transient warmup protection.
 
 ## Prefix cache: required work
 
@@ -168,5 +195,5 @@ correctness must include long recurrent continuation, not only the first token.
 
 Benefit is avoided repeated prefill and more retained inactive conversations.
 It does not remove decode's per-token KV reads or turn the measured 20.03 TSU
-into 30 TSU. No measured hit-rate, restore latency or engineering completion
-date is claimed. Measure a host round trip before promising an SSD speedup.
+into 30 TSU. No measured serving hit-rate or engineering completion date is
+claimed. The measured restore latency above does not yet justify an SSD speedup.

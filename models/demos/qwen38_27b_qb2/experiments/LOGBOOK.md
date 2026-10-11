@@ -2200,3 +2200,37 @@ No session connection is needed for that queue to continue.
   ignore rules. Recovered each from the original worktree only after its byte
   count and SHA256 matched the existing index; explicitly staged those exact
   files. This repairs missing evidence, not a model/runtime change.
+
+## October 10-11: opaque TT transfers and full64 continuation pass
+
+- Implemented the standalone exclusive-lease TT adapter with exact physical
+  BFP8 KV bytes, FP32 recurrent state and BF16 convolution history. Coalesces
+  adjacent pages into bounded windows; retains parent mesh coordinates; fences
+  DMA and verifies stable canonical buffer addresses. Conv restore preserves
+  neighbouring rows using read/modify/write. Added four CPU planning tests;
+  total prefix codec/storage/planning suite25passed.
+- Physical all-rank round-trip and neighbouring-state checks passed. First
+  attempt failed before writes because the child view retained parent mesh
+  coordinates; corrected host shard access from(0,0) to(0,rank). Failure kept.
+- Four-layer continuation passed. Initial full64 attempt hit pytest's300-second
+  default during setup, not a numerical mismatch. Passed explicit bounded
+  stage timeout; reused four-layer success only with matching source manifest
+  except supervisor. Full64 retry passed at October10 23:32:37UTC.
+- Full64 TP4:4K prefix -> independent slot/pages ->32 suffix tokens ->32 traced
+  teacher-forced steps, all logits exact. Postdecode checkpoint at4160 tokens
+  restored with original trace/resident addresses and neighbour unchanged; next
+  logits exact. This is not serving concurrency or long-context eval coverage.
+- Payload296550400bytes; capture2.207s,restore3.542s,prefixprefill1.185s.
+  Conservative serialized restore loses to recomputation in this4K case.
+  Random physical pages create16768windows; largest retained host window
+ 786432bytes. No SSD line-rate or production TTFT claim; file I/O may be cached.
+- Serving capability remains disabled. Scheduler leases/admission/eviction,
+  replica affinity, async/coalesced transfer and production backend integration
+  remain. No AgentX run or serving launch without both features integrated.
+- Kept all failures/successes, logs, manifests and launch commands in
+  galaxy-evidence/prefix-transfer-continuation-v1. Checkpoint blobs and weights
+  are excluded. Persistent bounded systemd jobs survive disconnect, not reboot.
+  Host-local disk/RAM only; no NFS, firmware or native-install mutation.
+- Publication recheck:25 CPU tests and pre-commit passed locally. Verified
+  adapter/test hashes against the full64 frozen manifest. Supervisor differs
+  only by formatting; retained exact frozen source/diff and verified AST identity.

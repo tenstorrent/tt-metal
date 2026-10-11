@@ -1,0 +1,20 @@
+{
+  "state": "failed",
+  "passed": false,
+  "cleanup_completed": true,
+  "serving_enabled": false,
+  "numerical_continuation_tested": false,
+  "started_at": 1791673556.511763,
+  "updated_at": "2026-10-10T23:06:01Z",
+  "device_ids": [
+    0,
+    4,
+    12,
+    8
+  ],
+  "payload_bytes": 3485696,
+  "encoded_bytes": 3486689,
+  "error": "RuntimeError",
+  "detail": "from_dlpack received an invalid capsule. Note that DLTensor capsules can be consumed only once, so you might have already constructed a tensor from it once.",
+  "finished_at": 1791673561.709757
+}

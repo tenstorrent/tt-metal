@@ -1,0 +1,55 @@
+{
+  "state": "completed",
+  "passed": true,
+  "cleanup_completed": true,
+  "serving_enabled": false,
+  "numerical_continuation_tested": false,
+  "started_at": 1791673671.9964135,
+  "updated_at": "2026-10-10T23:07:57Z",
+  "device_ids": [
+    0,
+    4,
+    12,
+    8
+  ],
+  "payload_bytes": 3485696,
+  "encoded_bytes": 3486689,
+  "capture_s": 0.017985973972827196,
+  "restore_s": 0.02930672327056527,
+  "capture": {
+    "bytes_read": 3670016,
+    "bytes_written": 0,
+    "windows_read": 32,
+    "windows_written": 0,
+    "max_host_window_bytes": 786432
+  },
+  "restore": {
+    "bytes_read": 3670016,
+    "bytes_written": 3670016,
+    "windows_read": 40,
+    "windows_written": 40,
+    "max_host_window_bytes": 786432
+  },
+  "all_rank_bytes_exact": true,
+  "neighbours_unchanged": true,
+  "corrupt_restore_unpublished": true,
+  "hashes": {
+    "key:0": "ed0fa3357cd404658dbd5a19a8b4d96e3dbb38478295265e4398e002628d8264",
+    "key:1": "5167208504f0ddd56d3f7b66753993051d78bf9d8a30259ee502b85e003c5360",
+    "key:2": "d7827ac1d149c4740e4c6f99782ef00019a64f0de7ebeec29ec1caaefbba3344",
+    "key:3": "43c4e5a5abfeb22e25a0e107d15471fdc5da89ffbfa50773095a9e97abdd8fb5",
+    "value:0": "9bf000eb747f6e5071c4d93f7c2275586daa72e6201d26b1f86903f02aa58eee",
+    "value:1": "fdfd6c8bf15dbe5067376ef2c3ebaaa6067da2d8b039d0fa84e2cfeff1e07b88",
+    "value:2": "0c133cbf39045a40249baa3c0b593bded502994f04e1a4d1d2153def687681dc",
+    "value:3": "bb24cde346d0ca1b00c1ac49ea9edca804fddc7b2033d2678ac2b20e85bb5b9d",
+    "recurrent:0": "e406a731c3abf391f4b322f73edc3c18fa46b079242626afb9517cc9139cff89",
+    "recurrent:1": "b0e69c3bec607c4efb45cb41a416344da655c68855754c6d5038c64d73ad4e8f",
+    "recurrent:2": "b2411eadd2ca581520e3b56262d0a3add37f7377e049425182c5b0d021f5c53b",
+    "recurrent:3": "edd19db0f251c9585602cb60f42905d247d4c6dacb9ac3e7b1a0975cdf4b5b46",
+    "conv:0": "c23db4dae21133cc2ac60ee75c14424d62f24fb635c04020ce60fd0c6cbf2450",
+    "conv:1": "c16f8cd1208a4cf9dddcd5c4f98f705be62bd3145bfb05ff6bd3f406401cc6a7",
+    "conv:2": "789ae093c26c25321ff47791cf2514861aa77a0ae0f8a8773c6750fe86736486",
+    "conv:3": "e7efb469e4350f81a1e7667fdd6ef8a79a53eab4ecb5ec2bd234021c976873bc"
+  },
+  "finished_at": 1791673677.3063774
+}

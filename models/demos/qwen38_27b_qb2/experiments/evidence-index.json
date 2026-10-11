@@ -1,5 +1,5 @@
 {
-  "generated_at": "2026-10-10T19:43:52.568882+00:00",
+  "generated_at": "2026-10-11T02:11:35.575561+00:00",
   "scope": "Published evidence inventory including this publication. Status fields are copied, not inferred qualification. Git times are separate from execution times.",
   "entries": [
     {
@@ -178,6 +178,11 @@
       "sha256": "cace12c7d9be97cb3815db5a3245d6dbbd76b82ecd54f1ad5f8dc45deedebdcf"
     },
     {
+      "path": "demo/run_prefix_validation.py",
+      "bytes": 6052,
+      "sha256": "518e3a67db98b8138771fe462a40caa19d7c104f77437cd28f1c895223f787c4"
+    },
+    {
       "path": "demo/run_projection_sweep.py",
       "bytes": 7092,
       "sha256": "e4f61540eb762dd2c73a2db45d14709c6b1d57a6291a0a921facbf55fb19a3d9"
@@ -194,8 +199,8 @@
     },
     {
       "path": "experiments/LOGBOOK.md",
-      "bytes": 177735,
-      "sha256": "385119848bfdafa5ba1aebe5bcd38d798fa4e21449308a1654be5144d7d7527f"
+      "bytes": 180159,
+      "sha256": "28cdbe5f1fd273c5ccb1d55991b9f4d32cacc15d8a0cc24190d459d9eae42a78"
     },
     {
       "path": "experiments/OPERATOR-ROADMAP.md",
@@ -214,8 +219,8 @@
     },
     {
       "path": "experiments/PREFIX-CACHE-OFFLOAD-SCOPE.md",
-      "bytes": 10791,
-      "sha256": "df28041aaf80498543447b981ed7ea3bbf55bcdc0e5071f3978a22848ebbc036"
+      "bytes": 12547,
+      "sha256": "09ff40e73d9ba8830f7844ae845bb42d7db3fdd2e57f56dc24fed17d5a26716c"
     },
     {
       "path": "experiments/RELEASE-PROCESS.md",
@@ -9576,6 +9581,191 @@
       "sha256": "131e4e4522b0ffa3168b29b99999ee641b45c407ed1223a701bbec599a41c565"
     },
     {
+      "path": "galaxy-evidence/prefix-transfer-continuation-v1/README.md",
+      "bytes": 3783,
+      "sha256": "bbeae9604609b69fea8a8dc34c798d01a2163d031de569ac15fe7f562354427b"
+    },
+    {
+      "path": "galaxy-evidence/prefix-transfer-continuation-v1/collection.json",
+      "bytes": 6389,
+      "sha256": "940dc93acc52c45ed5fba2abb3f09304d581d899dce77355f9e3abb0c52bb97a"
+    },
+    {
+      "path": "galaxy-evidence/prefix-transfer-continuation-v1/frozen-run_prefix_validation.py.snapshot",
+      "bytes": 5952,
+      "sha256": "a5d032fe7c6d45577fcb707406f78731caf9d0088c010a0eaabbca02d944aeba"
+    },
+    {
+      "path": "galaxy-evidence/prefix-transfer-continuation-v1/published-source-check.json",
+      "bytes": 1503,
+      "sha256": "82be4c56b3ed66fb20f9d57ebc638178d63024fe49ff2a02740fe94b4cb14fcb"
+    },
+    {
+      "path": "galaxy-evidence/prefix-transfer-continuation-v1/receipts/prefix-continuation-control-v1/collect.log.gz",
+      "bytes": 1190,
+      "sha256": "40ed64f6342ac7eb48bf4aaaa5b7144b9d4b28a5b6b7265042136176f9fd5015"
+    },
+    {
+      "path": "galaxy-evidence/prefix-transfer-continuation-v1/receipts/prefix-continuation-control-v1/cpu.log.gz",
+      "bytes": 771,
+      "sha256": "b72347ee041fe1f0c460867788b6f5a1ebcbb74073e4fe3a2ee55988b0efbb81"
+    },
+    {
+      "path": "galaxy-evidence/prefix-transfer-continuation-v1/receipts/prefix-continuation-control-v1/launch.json",
+      "bytes": 577,
+      "sha256": "fe4e836ef6ede6743f7bcc6a67243545946c64f1ea42199ae729641ca8eba04a"
+    },
+    {
+      "path": "galaxy-evidence/prefix-transfer-continuation-v1/receipts/prefix-continuation-control-v1/run.log.gz",
+      "bytes": 7635,
+      "sha256": "d71d53b612474ea4665a7f5f4681e9fbb7215ea3516866b90a94a5042f694160"
+    },
+    {
+      "path": "galaxy-evidence/prefix-transfer-continuation-v1/receipts/prefix-continuation-control-v1/source-manifest.json",
+      "bytes": 30714,
+      "sha256": "ed9f0933ac8b4114d6582c77f3adb4619ba547c350cad73013c0c0e67c274a49"
+    },
+    {
+      "path": "galaxy-evidence/prefix-transfer-continuation-v1/receipts/prefix-continuation-control-v2/collect.log.gz",
+      "bytes": 1189,
+      "sha256": "bd00b01ad64ef2df439d5f614597e364b96b76c8501cf43b66674f7c17d24bc3"
+    },
+    {
+      "path": "galaxy-evidence/prefix-transfer-continuation-v1/receipts/prefix-continuation-control-v2/cpu.log.gz",
+      "bytes": 774,
+      "sha256": "b7319408ebb237b857aaa3736aea5d10f62ecf634a743f323ba43f01a4f8a93b"
+    },
+    {
+      "path": "galaxy-evidence/prefix-transfer-continuation-v1/receipts/prefix-continuation-control-v2/launch.json",
+      "bytes": 577,
+      "sha256": "561a995d43fb025a6abc38004ac148241ec5a69ee6fc6aec27e3e6fcccd68d2c"
+    },
+    {
+      "path": "galaxy-evidence/prefix-transfer-continuation-v1/receipts/prefix-continuation-control-v2/run.log.gz",
+      "bytes": 3527,
+      "sha256": "e5f5e132746879b6d4d19f8ebc76a394cbe006d96b6460df4ea8ef24d636fe8f"
+    },
+    {
+      "path": "galaxy-evidence/prefix-transfer-continuation-v1/receipts/prefix-continuation-control-v2/source-manifest.json",
+      "bytes": 30714,
+      "sha256": "1916a447943ea9f7fc3ae2c74a98c12cce26b1fc2a7373beeba2089e1341fac9"
+    },
+    {
+      "path": "galaxy-evidence/prefix-transfer-continuation-v1/receipts/prefix-continuation-v1/layers-4/continuation.json",
+      "bytes": 6637,
+      "sha256": "41231524684c126e1d0062b2219a1044b358391838c233571727929690afcd61"
+    },
+    {
+      "path": "galaxy-evidence/prefix-transfer-continuation-v1/receipts/prefix-continuation-v1/layers-4/hardware.xml.gz",
+      "bytes": 302,
+      "sha256": "5b50b3ae38bda78b8ccf355282e8461da73a8de23468cda3967f57f40427c728"
+    },
+    {
+      "path": "galaxy-evidence/prefix-transfer-continuation-v1/receipts/prefix-continuation-v1/layers-64/continuation.json",
+      "bytes": 399,
+      "sha256": "9b6462b3d813aea4357e1f1468aee3ae4bb2859333a3f4402dd38eb0690333f3"
+    },
+    {
+      "path": "galaxy-evidence/prefix-transfer-continuation-v1/receipts/prefix-continuation-v1/layers-64/hardware.xml.gz",
+      "bytes": 3709,
+      "sha256": "b73f9922072b741b6fa30039a683e445a007bd2cbacf0639384674f746cb7cb9"
+    },
+    {
+      "path": "galaxy-evidence/prefix-transfer-continuation-v1/receipts/prefix-continuation-v1/queue.json",
+      "bytes": 970,
+      "sha256": "6fef6735fd55b39ae692036fcf0b399fff5732c3f165260318c174f8d2854e0e"
+    },
+    {
+      "path": "galaxy-evidence/prefix-transfer-continuation-v1/receipts/prefix-continuation-v2/layers-64/continuation.json",
+      "bytes": 6642,
+      "sha256": "afa1b14e97bfbe4610dc7fa478b4c34dac58895b285c029cd487e1fb38d8b9e3"
+    },
+    {
+      "path": "galaxy-evidence/prefix-transfer-continuation-v1/receipts/prefix-continuation-v2/layers-64/hardware.xml.gz",
+      "bytes": 300,
+      "sha256": "668984541397c2c2ac51a59092eba3d51aa10959381a786d7e57b50ebf682135"
+    },
+    {
+      "path": "galaxy-evidence/prefix-transfer-continuation-v1/receipts/prefix-continuation-v2/queue.json",
+      "bytes": 862,
+      "sha256": "b612c86587c044ded82a1b36d2d15e169e70fba48ad047d00f53917990e580b2"
+    },
+    {
+      "path": "galaxy-evidence/prefix-transfer-continuation-v1/receipts/prefix-transfer-v1/collect.log.gz",
+      "bytes": 1239,
+      "sha256": "e28f6a888d8c7bd3a1e1148372882c628e637b8054befbd7bb8b4201446caf46"
+    },
+    {
+      "path": "galaxy-evidence/prefix-transfer-continuation-v1/receipts/prefix-transfer-v1/cpu.log.gz",
+      "bytes": 774,
+      "sha256": "3e81e34715ce074960df4b7d44a147fc40a5be59905a0a370948fa585d2f0437"
+    },
+    {
+      "path": "galaxy-evidence/prefix-transfer-continuation-v1/receipts/prefix-transfer-v1/hardware.log.gz",
+      "bytes": 6238,
+      "sha256": "b044376e1b992da47581e89cd98e3a3a5dbdcdf0e55447e30dec7968e55925b1"
+    },
+    {
+      "path": "galaxy-evidence/prefix-transfer-continuation-v1/receipts/prefix-transfer-v1/hardware.xml.gz",
+      "bytes": 4146,
+      "sha256": "8058db770e4d11d1575d026e9a9ad21f373f67a5a4a9db4801d4c94f0eea298f"
+    },
+    {
+      "path": "galaxy-evidence/prefix-transfer-continuation-v1/receipts/prefix-transfer-v1/launch.json",
+      "bytes": 600,
+      "sha256": "ad84d5fa9ccaea87a0aac698af49a370f0b502e0479c7456ff779a053c2fe86c"
+    },
+    {
+      "path": "galaxy-evidence/prefix-transfer-continuation-v1/receipts/prefix-transfer-v1/source-manifest.json",
+      "bytes": 30448,
+      "sha256": "5fa94c176b5e199f157f6d10dea398ed70bcb2bfc76f72fcce497cbcef750cea"
+    },
+    {
+      "path": "galaxy-evidence/prefix-transfer-continuation-v1/receipts/prefix-transfer-v1/transfer.json",
+      "bytes": 559,
+      "sha256": "d484d773dde9c3d2672546a2b495ef15ce97da30ef70ddea04dd1685665056cf"
+    },
+    {
+      "path": "galaxy-evidence/prefix-transfer-continuation-v1/receipts/prefix-transfer-v2/collect.log.gz",
+      "bytes": 1238,
+      "sha256": "9d3611dc9db670005d3627b25bad3b51a5d39ab79182564e9f5b69b27b83e788"
+    },
+    {
+      "path": "galaxy-evidence/prefix-transfer-continuation-v1/receipts/prefix-transfer-v2/cpu.log.gz",
+      "bytes": 775,
+      "sha256": "650a4170d7a918fa2f4016c540dbd8060c1362c9ea1b36b4db0efe5a0c920dd3"
+    },
+    {
+      "path": "galaxy-evidence/prefix-transfer-continuation-v1/receipts/prefix-transfer-v2/hardware.log.gz",
+      "bytes": 2395,
+      "sha256": "364ff9c782a2f6d703fbca235ba6615ec2aa1de935e5f4cdf7d21973a9445c72"
+    },
+    {
+      "path": "galaxy-evidence/prefix-transfer-continuation-v1/receipts/prefix-transfer-v2/hardware.xml.gz",
+      "bytes": 295,
+      "sha256": "bc3d18e8fcbedd43eee8bb4e57593838d22c4c47008002eb07af207f6f5a3101"
+    },
+    {
+      "path": "galaxy-evidence/prefix-transfer-continuation-v1/receipts/prefix-transfer-v2/launch.json",
+      "bytes": 600,
+      "sha256": "c7bd3868ea7f4ac0319e46ca5debde251ec25def3fbf7aace546e53854812c3b"
+    },
+    {
+      "path": "galaxy-evidence/prefix-transfer-continuation-v1/receipts/prefix-transfer-v2/source-manifest.json",
+      "bytes": 30448,
+      "sha256": "04597c600c5f32062925fd600db089476a41bca40dd865a86f3c032cae284bd0"
+    },
+    {
+      "path": "galaxy-evidence/prefix-transfer-continuation-v1/receipts/prefix-transfer-v2/transfer.json",
+      "bytes": 2211,
+      "sha256": "1bcfb9b8169bc951df7c4533172786eb64e4d511c5466caeeb07010e945f0e18"
+    },
+    {
+      "path": "galaxy-evidence/prefix-transfer-continuation-v1/supervisor-formatting.diff.gz",
+      "bytes": 575,
+      "sha256": "bb3ca2eb6ff4714e965186aa9e0b842cfdd98f6af98f47c74c39427c7c04c79a"
+    },
+    {
       "path": "galaxy-evidence/profile-harness-host-v4.xml",
       "bytes": 3818,
       "sha256": "dd31e9135bd7f9eb5fa4b1372e80f90a1520ddb2e2b3645d7bd4924e691643ed",
@@ -11496,6 +11686,16 @@
       "sha256": "0b991db022ea512efa17d8968ffd534914e918e9744e280b6a0ccc54c5a66bd0"
     },
     {
+      "path": "tests/test_prefix_continuation.py",
+      "bytes": 10931,
+      "sha256": "c264c1b3259d11f87fac428da96446bbd0de04ad85504b4edd3939cd80c8270d"
+    },
+    {
+      "path": "tests/test_prefix_transfer.py",
+      "bytes": 10097,
+      "sha256": "758fd0de17ce890b9597378b9e517f814a2ed0e7e05c860cd65fdc625cb8e50a"
+    },
+    {
       "path": "tests/test_projection_sweep.py",
       "bytes": 13074,
       "sha256": "e367683fb7761be0c2049006f182ca39f030e1e68d4d087206e29fc09b000734"
@@ -11611,6 +11811,11 @@
       "sha256": "466678b833dbdc951511a61f7b7b6c62d5a6ac1373c02c17c536d4f8dd0aae6c"
     },
     {
+      "path": "tests/unit/test_prefix_transfer.py",
+      "bytes": 2179,
+      "sha256": "ee188d36bb2fa9bddfdeb0d6bbac96aabfa55bffe5353a7c0a66e861682ff3e6"
+    },
+    {
       "path": "tests/unit/test_projection_sweep.py",
       "bytes": 6066,
       "sha256": "9fd51d9ca696be8b6de2b72f7298c9b578828ce4f1796d1ec7044542ed9af8a7"
@@ -11699,6 +11904,11 @@
       "path": "tt/prefix_storage.py",
       "bytes": 5072,
       "sha256": "1b6023d5b19b5f3f1112aebe467a0dc3c6e5ecf076be5207393a4f7a8e38cc42"
+    },
+    {
+      "path": "tt/prefix_transfer.py",
+      "bytes": 10013,
+      "sha256": "75ff31f2105ba4d3b8d17f3e1f635490330cc354513ffcf916842a94a2d32a18"
     }
   ]
 }
