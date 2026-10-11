@@ -634,18 +634,8 @@ inline void _llk_unpack_tilizeA_B_uninit_(const std::uint32_t unpack_dst_format)
     TTI_NOP;
 }
 
-/**
- * @brief Program the unpacker MOP of the block form of tilize-A-with-unpack-B: one UNPACR per row of operand A.
- *
- * Each iteration unpacks one 1x16 row into the next SrcA row and steps the L1 row (channel 0 Z); the
- * iteration selected by the zmask (the last row of a face) also sets SrcA data valid.
- *
- * @tparam neginf_srcA: Clear SrcA to negative infinity before unpacking (e.g. for max-reduce).
- * @tparam reload_srcB: Reload SrcB once rather than incrementing its face each step.
- * @tparam zero_srcA: Clear SrcA to zero before unpacking.
- * @tparam zero_srcA_reduce: Clear SrcA to zero before unpacking for a reduce fused with tilize.
- * @param num_faces: Number of faces in the tile, valid values = <1, 2, 4>.
- */
+// One UNPACR per row of operand A: each iteration unpacks one 1x16 row into the next SrcA row and steps the L1 row (channel 0 Z);
+// the iteration selected by the zmask (the last row of a face) also sets SrcA data valid.
 // TODO: add support for all the template parameters
 template <bool neginf_srcA = false, std::uint32_t reload_srcB = false, bool zero_srcA = false, bool zero_srcA_reduce = false>
 inline void _llk_unpack_tilizeA_B_block_mop_config_(const std::uint32_t num_faces = 4)
@@ -658,36 +648,19 @@ inline void _llk_unpack_tilizeA_B_block_mop_config_(const std::uint32_t num_face
     ckernel_unpack_template tmp = ckernel_unpack_template(
         false,           // src B
         false,           // halo
-        unpack_row,      // zmask bit 0
+        unpack_row,
         0,
         0,
         0,
-        unpack_last_row, // zmask bit 1
+        unpack_last_row,
         0,
         0);
 
     tmp.program();
 }
 
-/**
- * @brief Initialize the unpacker to tilize blocks of operand A while unpacking operand B (the block form).
- *
- * Programs operand A addressing (X dim one 1x16 face row, Y dim the block row pitch in face rows, Z dim the rows of a face), the one-tile column
- * stride for advancing SrcA's L1 address between tiles (CFGSHIFTMASK scratch register), per-unpacker datum counts, SrcA's Y stride and the MOP.
- *
- * @tparam neginf_srcA: Clear SrcA to negative infinity before unpacking (e.g. for max-reduce).
- * @tparam reload_srcB: Reload SrcB once rather than incrementing its face each step.
- * @tparam zero_srcA: Clear SrcA to zero before unpacking.
- * @tparam zero_srcA_reduce: Clear SrcA to zero before unpacking for a reduce fused with tilize.
- * @param unpack_src_format: Source data format of operand A in L1.
- * @param unpack_dst_format: Destination data format operand A is converted to.
- * @param ct_dim: Number of column tiles in the block, used to size the row pitch.
- * @param num_faces: Number of faces in the tile, valid values = <1, 2, 4>.
- * @param unpB_face_r_dim: Rows per face for operand B.
- * @param unpA_face_r_dim: Rows per face for operand A, valid values = 1 to 16.
- * @note Call @ref _llk_unpack_tilizeA_B_block_uninit_ to revert the config it writes.
- * @ref _llk_unpack_tilizeA_B_block_ is the matching execute call; its MOP and SCRATCH_SEC0 differ from @ref _llk_unpack_tilizeA_B_init_'s, so the two forms do not mix.
- */
+// Rows are selected with the unpacker 0 channel 0 counters (X dim one 1x16 face row, Y dim the block row pitch in face rows, Z dim the rows of a face);
+// a one-tile column stride in SCRATCH_SEC0 advances SrcA's L1 address between tiles. The MOP and SCRATCH_SEC0 differ from _llk_unpack_tilizeA_B_init_'s, so the two forms do not mix.
 template <bool neginf_srcA = false, std::uint32_t reload_srcB = false, bool zero_srcA = false, bool zero_srcA_reduce = false>
 inline void _llk_unpack_tilizeA_B_block_init_(
     const std::uint32_t unpack_src_format,
@@ -727,12 +700,7 @@ inline void _llk_unpack_tilizeA_B_block_init_(
     _llk_unpack_tilizeA_B_block_mop_config_<neginf_srcA, reload_srcB, zero_srcA, zero_srcA_reduce>(num_faces);
 }
 
-/**
- * @brief Unpack one face of operand A (one UNPACR per row) and the matching face of operand B.
- *
- * @tparam face: Face index within the tile; selects the column half (Y) and the row half (W) of the tile.
- * @param face_r_dim: Rows per face.
- */
+// face selects the tile's column half (Y) and row half (W).
 template <std::uint32_t face, bool neginf_srcA, std::uint32_t reload_srcB, bool zero_srcA_reduce>
 inline void _llk_unpack_tilizeA_B_face_(const std::uint32_t face_r_dim)
 {
@@ -755,27 +723,8 @@ inline void _llk_unpack_tilizeA_B_face_(const std::uint32_t face_r_dim)
     TT_MOP(0, face_r_dim - 1, 1u << (face_r_dim - 1));
 }
 
-/**
- * @brief Tilize a block of consecutive operand A tiles and unpack operand B, face by face, into SrcA and SrcB.
- *
- * One configuration context acquire covers the block: the RISC programs the first tile's address, the
- * instruction stream advances it one tile column (CFGSHIFTMASK) per further tile, and every face of every
- * tile unpacks its rows from the address counters and sets data valid on SrcA and SrcB.
- *
- * @tparam neginf_srcA: Clear SrcA to negative infinity before unpacking (e.g. for max-reduce).
- * @tparam reload_srcB: Reload SrcB once rather than incrementing its face each step.
- * @tparam zero_srcA: Clear SrcA to zero before unpacking.
- * @tparam zero_srcA_reduce: Clear SrcA to zero before unpacking for a reduce fused with tilize.
- * @param unpA_src_format: Source data format of operand A in L1.
- * @param face_r_dim: Rows per face, the value given to @ref _llk_unpack_tilizeA_B_block_init_.
- * @param base_address_a: L1 base address of operand A's tile buffer.
- * @param address_b: L1 address of operand B's face data.
- * @param tile_index_a: Column tile index into operand A of the first tile.
- * @param num_tiles: Number of consecutive column tiles, at least 1.
- * @param num_faces: Number of faces in the tile, valid values = <1, 2, 4>.
- * @note Call @ref _llk_unpack_tilizeA_B_block_init_ with matching template args before this function, and
- *       @ref _llk_unpack_tilizeA_B_block_uninit_ after it to restore modified state.
- */
+// One configuration context acquire covers the block: the RISC programs the first tile's address, the instruction stream advances it
+// one tile column (CFGSHIFTMASK) per further tile. Call the block init with matching template args first and the block uninit after.
 template <bool neginf_srcA = false, std::uint32_t reload_srcB = false, bool zero_srcA = false, bool zero_srcA_reduce = false>
 inline void _llk_unpack_tilizeA_B_block_(
     const std::uint32_t unpA_src_format,
@@ -842,19 +791,8 @@ inline void _llk_unpack_tilizeA_B_block_(
     switch_config_context(unp_cfg_context);
 }
 
-/**
- * @brief Restore unpacker state after the block form of tilize-A-with-unpack-B.
- *
- * Reverts what @ref _llk_unpack_tilizeA_B_block_init_ wrote to the operand A addressing (SrcA Ch1 Y stride, Tile_x_dim_cntx0, tile descriptor Y and Z dims) and
- * zeroes the Ch0/Ch1 Y, Z and W counters on both unpackers. The unpack config word-0 write is a full-word write, wider than init's: it forces
- * out_data_format and throttle_mode and zeroes context_count, tileize_mode, unpack_src_reg_set_update and shift_amount.
- * x-start/x-end and the MOP are reprogrammed by the next operation's init.
- *
- * @param unpack_dst_format: Destination data format to restore in the unpack config.
- * @param tensor_shape: Operand A tile geometry; face_r_dim restores Tile_x_dim_cntx0 and total_num_faces() the
- *                      descriptor Z dim (valid values = <1, 2, 4>).
- * @note Call @ref _llk_unpack_tilizeA_B_block_init_ before this function.
- */
+// Reverts the block init's operand A addressing and zeroes the Ch0/Ch1 Y, Z and W counters on both unpackers. The unpack config word-0 write is a full-word write,
+// wider than init's: it forces out_data_format and throttle_mode and zeroes context_count, tileize_mode, unpack_src_reg_set_update and shift_amount.
 inline void _llk_unpack_tilizeA_B_block_uninit_(const std::uint32_t unpack_dst_format, const ckernel::TensorShape tensor_shape = ckernel::DEFAULT_TENSOR_SHAPE)
 {
     const std::uint32_t num_faces  = tensor_shape.total_num_faces();
