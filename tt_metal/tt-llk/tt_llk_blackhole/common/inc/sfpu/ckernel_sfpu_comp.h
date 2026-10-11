@@ -428,7 +428,6 @@ sfpi_inline void _calculate_comp_unary_int_(int scalar)
     }
     else if constexpr (COMP_MODE == SfpuType::unary_le)
     {
-        // v <= s is v < s + 1
         if (scalar == std::numeric_limits<std::int32_t>::max())
         {
             _comp_unary_int_all_true_<ITERATIONS>();
@@ -440,7 +439,6 @@ sfpi_inline void _calculate_comp_unary_int_(int scalar)
     }
     else if constexpr (COMP_MODE == SfpuType::unary_ge)
     {
-        // v >= s is v > s - 1
         if (scalar == std::numeric_limits<std::int32_t>::min())
         {
             _comp_unary_int_all_true_<ITERATIONS>();

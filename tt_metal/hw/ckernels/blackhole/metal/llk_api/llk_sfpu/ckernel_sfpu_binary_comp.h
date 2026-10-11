@@ -27,8 +27,8 @@ inline constexpr bool is_fp32_compare_v = is_fp32_equal_compare_v<Op> || is_fp32
 template <SfpuType>
 inline constexpr bool unsupported_fp32_compare_v = false;
 
-// The float bodies canonicalize each operand with one MAD (1.0 * x + 0): -0 and denormals become +0, any NaN becomes
-// the canonical +NaN, which the SFPU total order puts above +inf, so one compare against inf rejects it.
+// The float bodies canonicalize each operand: -0 and denormals become +0 and any NaN the canonical +NaN, which the
+// SFPU total order puts above +inf, so one compare against inf rejects it.
 template <int ITERATIONS, SfpuType RELATIONAL_OP>
 inline void calculate_binary_comp_fp32_equal(const uint dst_index_in0, const uint dst_index_in1, const uint dst_index_out) {
     static_assert(is_fp32_equal_compare_v<RELATIONAL_OP>, "Supported operation types: eq, ne");
@@ -52,8 +52,6 @@ inline void calculate_binary_comp_fp32_equal(const uint dst_index_in0, const uin
         TTI_SFPMAD(p_sfpu::LCONST_1, a, p_sfpu::LCONST_0, ca, 0);
         TTI_SFPMAD(p_sfpu::LCONST_1, b, p_sfpu::LCONST_0, cb, 0);
         TT_SFPSTORE(default_result, InstrModLoadStore::DEFAULT, ADDR_MOD_7, dst_index_out * dst_tile_size);
-
-        // if total-order ca == cb
         TTI_SFPLE(0, ca, cb, 1);  // SFPLE_MOD1_SET_CC
         TTI_SFPLE(0, cb, ca, 1);  // SFPLE_MOD1_SET_CC
         // if inf >= cb; rejects NaN
@@ -90,8 +88,6 @@ inline void calculate_binary_comp_fp32_strict_ordered(
         TTI_SFPMAD(p_sfpu::LCONST_1, a, p_sfpu::LCONST_0, ca, 0);
         TTI_SFPMAD(p_sfpu::LCONST_1, b, p_sfpu::LCONST_0, cb, 0);
         TT_SFPSTORE(p_sfpu::LCONST_0, InstrModLoadStore::DEFAULT, ADDR_MOD_7, dst_index_out * dst_tile_size);
-
-        // if total-order ca < cb
         TTI_SFPGT(0, ca, cb, 1);  // SFPGT_MOD1_SET_CC
         // if inf >= cb; rejects NaN
         TTI_SFPLE(0, inf, cb, 1);  // SFPLE_MOD1_SET_CC
@@ -127,8 +123,6 @@ inline void calculate_binary_comp_fp32_weak_ordered(
         TTI_SFPMAD(p_sfpu::LCONST_1, a, p_sfpu::LCONST_0, ca, 0);
         TTI_SFPMAD(p_sfpu::LCONST_1, b, p_sfpu::LCONST_0, cb, 0);
         TT_SFPSTORE(p_sfpu::LCONST_0, InstrModLoadStore::DEFAULT, ADDR_MOD_7, dst_index_out * dst_tile_size);
-
-        // if total-order ca <= cb
         TTI_SFPLE(0, cb, ca, 1);  // SFPLE_MOD1_SET_CC
         // if inf >= cb; rejects NaN
         TTI_SFPLE(0, inf, cb, 1);  // SFPLE_MOD1_SET_CC

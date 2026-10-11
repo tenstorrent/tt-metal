@@ -153,7 +153,7 @@ ALWI void binary_max_tile(uint32_t idst0, uint32_t idst1, uint32_t odst, VectorM
 #else
 #ifdef ARCH_BLACKHOLE
     if (vector_mode == VectorMode::RC) {
-        // One 32-row call, which replays four recorded rows; four 8-row calls assemble every row's words.
+        // One 32-row call replays the recorded rows, where 8-row calls assemble every row's words.
         MATH((SFPU_BINARY_CALL(
             DST_SYNC_MODE,
             DST_ACCUM_MODE,
@@ -326,7 +326,7 @@ ALWI void binary_min_tile(uint32_t idst0, uint32_t idst1, uint32_t odst, VectorM
 #else
 #ifdef ARCH_BLACKHOLE
     if (vector_mode == VectorMode::RC) {
-        // One 32-row call, which replays four recorded rows; four 8-row calls assemble every row's words.
+        // One 32-row call replays the recorded rows, where 8-row calls assemble every row's words.
         MATH((SFPU_BINARY_CALL(
             DST_SYNC_MODE,
             DST_ACCUM_MODE,

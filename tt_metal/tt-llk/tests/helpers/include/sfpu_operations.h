@@ -1686,7 +1686,6 @@ void call_binary_sfpu_operation_init()
     else if constexpr (BINOP == BinaryOp::POW)
     {
 #if defined(ARCH_BLACKHOLE)
-        // The init of calculate_sfpu_binary_pow, the body power_binary_tile runs.
         SFPU_BINARY_INIT_FN(power, sfpu_binary_pow_init, (APPROXIMATION_MODE));
 #else
         SFPU_BINARY_INIT_FN(power, sfpu_binary_init, (APPROXIMATION_MODE, BINOP));
@@ -1891,13 +1890,8 @@ void call_binary_sfpu_operation(
     const std::uint32_t dst_index_out = 0,
     ckernel::VectorMode vector_mode   = ckernel::VectorMode::RC)
 {
-    // NOTE: The functions invoked via SFPU_BINARY_CALL below run inside
-    // _llk_math_eltwise_binary_sfpu_params_, which loops over the faces of the
-    // vector mode (4 for VectorMode::RC) and emits 2x TTI_SETRWC cr_d 8 between
-    // calls to advance the dst-write counter, so PER_FACE_ITERATIONS is 8 (one
-    // face), as in the production llk_math_eltwise_binary_sfpu_* wrappers. On
-    // Blackhole, a full tile with ITERATIONS 32 of an entry point the compute API
-    // issues as one 32-row call runs that way: 32 rows in VectorMode::None.
+    // NOTE: The functions invoked via SFPU_BINARY_CALL below run inside _llk_math_eltwise_binary_sfpu_params_, which
+    // loops over the faces and advances the dst-write counter between calls, so PER_FACE_ITERATIONS is 8 (one face).
     static_assert(ITERATIONS == 8 || ITERATIONS == 32, "Binary SFPU tests take 8 or 32 iterations; 32 asks for a full tile.");
 #if defined(ARCH_BLACKHOLE)
     constexpr bool is_int32 = MATH_FORMAT == static_cast<std::uint32_t>(DataFormat::Int32);
