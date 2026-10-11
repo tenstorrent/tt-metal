@@ -80,6 +80,18 @@ ttnn::device_operation::ProgramArtifacts CopyDeviceOperation::DefaultTilized::cr
     const auto output_data_format = tt::tt_metal::datatype_to_dataformat_converter(output.dtype());
     const bool convert_df = input_data_format != output_data_format;
 
+    // Quasar runs the reader as 4 threads and the writer as 2, with implicit sync, and the data-format
+    // conversion as 4 compute threads, each converting the pages of one reader thread. Every DM thread
+    // must issue at least one transfer, since the DFB's final-credit barrier waits for all of a
+    // kernel's threads, so each core needs at least 4 pages.
+    const std::uint32_t min_pages_per_core = core_group_2.num_cores() > 0
+                                                 ? std::min(num_tiles_per_core_group_1, num_tiles_per_core_group_2)
+                                                 : num_tiles_per_core_group_1;
+    const bool multi_thread = device->arch() == tt::ARCH::QUASAR && min_pages_per_core >= 4;
+    constexpr std::uint32_t num_reader_threads = 4;
+    constexpr std::uint32_t num_compute_threads = 4;
+    constexpr std::uint32_t num_writer_threads = 2;
+
     // Dataflow buffer identities and tensor parameters.
     const m2::DFBSpecName IN{"in"};    // legacy c_0 — input pages (double buffered)
     const m2::DFBSpecName OUT{"out"};  // legacy c_16 — output pages (only when converting data format)
@@ -96,6 +108,11 @@ ttnn::device_operation::ProgramArtifacts CopyDeviceOperation::DefaultTilized::cr
         .num_entries = 2,
         .data_format_metadata = input_data_format,
     };
+    if (multi_thread) {
+        // Double buffered per reader thread: the strided DFB needs a multiple of the thread count,
+        // and implicit sync a multiple of 2 txn IDs x 4 tile counters.
+        in_dfb.num_entries = 2 * num_reader_threads;
+    }
 
     // When converting data formats through the compute kernel, output pages land in a separate DFB.
     // Double buffered, and the output page_size is aligned so the noc_write reads from an aligned
@@ -107,6 +124,9 @@ ttnn::device_operation::ProgramArtifacts CopyDeviceOperation::DefaultTilized::cr
         .num_entries = 2,
         .data_format_metadata = output_data_format,
     };
+    if (multi_thread) {
+        out_dfb.num_entries = 2 * num_compute_threads;
+    }
 
     // The writer drains the output-format DFB: the compute-produced OUT when converting, otherwise the
     // reader-produced IN directly.
@@ -156,6 +176,13 @@ ttnn::device_operation::ProgramArtifacts CopyDeviceOperation::DefaultTilized::cr
         .hw_config = ttnn::create_writer_datamovement_config(),
     };
 
+    if (multi_thread) {
+        reader.num_threads = num_reader_threads;
+        writer.num_threads = num_writer_threads;
+        reader.compiler_options.defines.emplace("IMPLICIT_SYNC", "1");
+        writer.compiler_options.defines.emplace("IMPLICIT_SYNC", "1");
+    }
+
     // Compute kernel (only present when converting data format): consumes IN, produces OUT.
     // ComputeHardwareConfig's defaults match the legacy ComputeConfigDescriptor{} defaults; opt_level is set
     // to O3 explicitly (legacy compute defaults to O3; Metal 2.0 CompilerOptions defaults to O2).
@@ -180,8 +207,16 @@ ttnn::device_operation::ProgramArtifacts CopyDeviceOperation::DefaultTilized::cr
             {
                 .runtime_arg_names = {"per_core_tile_cnt"},
             },
-        .hw_config = m2::ComputeHardwareConfig{},
+        // Quasar's packer has no 16-bit dest to Float32 conversion.
+        .hw_config =
+            m2::ComputeHardwareConfig{
+                .enable_32_bit_dest =
+                    device->arch() == tt::ARCH::QUASAR && output_data_format == tt::DataFormat::Float32,
+            },
     };
+    if (multi_thread) {
+        compute.num_threads = num_compute_threads;
+    }
 
     // Runtime args: each core owns a contiguous span of tiles.
     m2::KernelRunArgs reader_run_args{.kernel = READER};
