@@ -1167,10 +1167,11 @@ class PerfConfig(TestConfig):
                     if not counter_csv_df.empty:
                         counter_results_list.append(counter_csv_df)
 
-        # Wormhole perf: INIT comes from the INIT measurement build (test_config.py init_elf) of init_run_type, launched
-        # after the measured kernels so they keep their predecessors, after one unrecorded launch of itself. Its INIT
-        # window does not depend on the run type (fixed sections ahead of main) and BRISC releases the three INITs one
-        # after another, so one launch gives every run type's INIT row.
+        # Wormhole perf: INIT comes from the INIT measurement build of init_run_type (test_config.py _init_build_dir: a
+        # speed-of-light build, shared by tests of the same INIT in a run without --speed-of-light), launched after the
+        # measured kernels so they keep their predecessors, after one unrecorded launch of itself. Its INIT window does
+        # not depend on the run type (fixed sections ahead of main) and BRISC releases the three INITs one after
+        # another, so one launch gives every run type's INIT row.
         init_config = next(
             (c for c in self.run_configs if c[2] == self.init_run_type), None
         )
@@ -1189,7 +1190,7 @@ class PerfConfig(TestConfig):
                     self.wait_for_tensix_operations_finished()
                 init_data = Profiler.get_data(
                     self.test_name,
-                    f"{self.variant_id}_init",
+                    self.init_meta_id(),
                     TestConfig.TENSIX_LOCATION,
                 )
                 init_data.df["run_index"] = 0
