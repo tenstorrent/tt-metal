@@ -62,7 +62,7 @@ inline void _llk_pack_rows_mop_config_(const std::uint32_t num_rows)
         0, // Concat
         p_pacr::NO_CTXT_CTRL,
         0,  // Flush
-        0); // Last
+        0);
 
     const std::uint32_t pack_last_rows = TT_OP_PACR(
         p_pacr::CFG_CTXT_0,
@@ -76,7 +76,7 @@ inline void _llk_pack_rows_mop_config_(const std::uint32_t num_rows)
         0, // Concat
         p_pacr::NO_CTXT_CTRL,
         0,  // Flush
-        1); // Last
+        1);
 
     ckernel::ckernel_template tmp(MOP_OUTER_LOOP, (row_groups > 0) ? row_groups : 1, pack_four_rows);
     if (row_groups > 0 && tail_rows > 0)

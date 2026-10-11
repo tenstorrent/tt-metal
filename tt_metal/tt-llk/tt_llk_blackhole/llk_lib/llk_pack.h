@@ -606,15 +606,9 @@ inline void _llk_pack_(const std::uint32_t tile_index, const std::uint32_t addre
 }
 
 /**
- * @brief Pack num_tiles consecutive 32x32 tiles to consecutive L1 tiles with one run of the PackMode::Default program.
- *
- * @tparam Dst: Destination sync mode, values = <SyncHalf/SyncFull>
- * @tparam is_fp32_dest_acc_en: True if the destination register accumulates in FP32.
+ * Pack num_tiles consecutive 32x32 tiles to consecutive L1 tiles with one run of the PackMode::Default program.
  * @tparam pack_mode: Packing layout, must be PackMode::Default.
- * @param start_tile_index: Index of the first source tile in the destination register.
- * @param address: L1 destination address of the first tile.
  * @param num_tiles: Number of consecutive tiles to pack; start_tile_index + num_tiles must fit the dest sync region.
- * @note Block-float outputs must use _llk_pack_block_closed_ or _llk_pack_ per tile.
  */
 template <DstSync Dst, bool is_fp32_dest_acc_en, PackMode pack_mode = PackMode::Default>
 inline void _llk_pack_block_(const std::uint32_t start_tile_index, const std::uint32_t address, const std::uint32_t num_tiles)
@@ -638,15 +632,9 @@ inline void _llk_pack_block_(const std::uint32_t start_tile_index, const std::ui
 }
 
 /**
- * @brief Pack num_tiles consecutive tiles to L1 tiles tile_stride bytes apart, closing every tile so block-float and padded pages stay intact.
- *
- * @tparam Dst: Destination sync mode, values = <SyncHalf/SyncFull>
- * @tparam is_fp32_dest_acc_en: True if the destination register accumulates in FP32.
- * @param start_tile_index: Index of the first source tile in the destination register.
- * @param address: L1 destination address of the first tile.
+ * Pack num_tiles consecutive tiles to L1 tiles tile_stride bytes apart, closing every tile so block-float and padded pages stay intact.
  * @param num_tiles: Number of consecutive tiles to pack; start_tile_index + num_tiles must fit the dest sync region.
  * @param tile_stride: Bytes from one L1 tile to the next, a multiple of 16 below 64 KB.
- * @param num_faces: Faces per tile, values = <1, 2, 4>.
  */
 template <DstSync Dst, bool is_fp32_dest_acc_en>
 inline void _llk_pack_block_closed_(
