@@ -134,7 +134,7 @@ inline void _llk_math_sdpa_custom_mm_reuse_dest_srcb_(
         {
             t6_semaphore_wait_on_zero<p_stall::STALL_MATH>(SFPU_FPU);
         }
-        const std::uint32_t row = (src_offset + i * 8 * 2) & 0x3ff;
+        const std::uint32_t row = (src_offset + i * 8 * 2) & (DEST_REGISTER_FULL_SIZE - 1);
         TT_MOVD2B(0, p_movd2b::SRC_ZERO_OFFSET + 0, ADDR_MOD_2, p_movd2b::MOV_4_ROWS, row + 0);
         TT_MOVD2B(0, p_movd2b::SRC_ZERO_OFFSET + 4, ADDR_MOD_2, p_movd2b::MOV_4_ROWS, row + 4);
         TT_MOVD2B(0, p_movd2b::SRC_ZERO_OFFSET + 8, ADDR_MOD_2, p_movd2b::MOV_4_ROWS, row + 8);
