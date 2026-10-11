@@ -159,9 +159,21 @@ KernelIds build_kernels_and_cbs(
 
     // cb_tile: input tiles in fp32. ROW_MAJOR: tilized input; TILE: copied input (already tiles).
     make_fp32_tile_cb(cb_tile_idx, tiles_per_block);
-    make_fp32_tile_cb(cb_scaler_idx, 1);                      // reduce scaler (1.0), reader-filled
-    make_fp32_tile_cb(cb_abs_idx, 2 * block_wt);              // abs tiles for one block row
-    make_fp32_tile_cb(cb_scale_tiles_idx, 2 * block_ht * chunk_scale_blocks);      // col0 = scale, per scale block
+    make_fp32_tile_cb(cb_scaler_idx, 1);  // reduce scaler (1.0), reader-filled
+    // FAST_1X32: 1/scale tiles are exact powers of two, so bf16 holds them (half the pack / unpack bytes).
+    const bool fast_1x32 = defines.contains("FAST_1X32");
+    auto make_scale_tile_cb = [&](uint32_t cb_idx, uint32_t num_tiles) {
+        if (!fast_1x32) {
+            make_fp32_tile_cb(cb_idx, num_tiles);
+            return;
+        }
+        const uint32_t bytes = tt::tile_size(DataFormat::Float16_b);
+        CircularBufferConfig cfg =
+            CircularBufferConfig(num_tiles * bytes, {{cb_idx, DataFormat::Float16_b}}).set_page_size(cb_idx, bytes);
+        CreateCircularBuffer(program, all_cores, cfg);
+    };
+    make_fp32_tile_cb(cb_abs_idx, 2 * block_wt);                                // abs tiles for one block row
+    make_scale_tile_cb(cb_scale_tiles_idx, 2 * block_ht * chunk_scale_blocks);  // col0 = scale (FAST: 1/scale)
     if (attrs.per_row_scale) {
         const uint32_t segments = std::stoul(defines.at("PR_SEGMENTS"));
         make_fp32_tile_cb(CBIndex::c_2, 2);                           // folded max|x| tile of one segment
@@ -172,7 +184,7 @@ KernelIds build_kernels_and_cbs(
             make_fp32_tile_cb(CBIndex::c_19, 3 * (segments - 1));  // partners' partials, ring of three rows
         }
     }
-    make_fp32_tile_cb(cb_inv_scale_tiles_idx, 2 * block_ht * chunk_scale_blocks);  // col0 = 1/scale
+    make_scale_tile_cb(cb_inv_scale_tiles_idx, 2 * block_ht * chunk_scale_blocks);  // col0 = 1/scale
 
     // cb_output_e4m3: e4m3 output, always row-major, one tile per page, double-buffered.
     // Identical for both input layouts (ROW_MAJOR and TILE).
@@ -374,6 +386,13 @@ ttnn::device_operation::CachedProgram<PerTokenCastToFp8SharedVariables> create_p
         // scale_scratch: writer-private staging for ONE token's full scale row (page-aligned),
         // accumulated across blocks and flushed when the token's last scale block is emitted.
         scale_scratch_bytes = scale_page_bytes;
+    }
+
+    if (!attrs.per_row_scale && attrs.scale_block_w == 32 && attrs.round_scale_to_power_of_two) {
+        defines["FAST_1X32"] = "1";  // one-pass pow2 scale + 1/scale on column 0, one acquire per phase
+        if (tile_layout && input.dtype() != DataType::FLOAT32) {
+            defines["DIRECT_SRC"] = "1";  // bf16 / bf8_b tiles are exact in SrcA: no fp32 copy
+        }
     }
 
     Program program{};

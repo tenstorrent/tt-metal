@@ -113,6 +113,43 @@ inline void calculate_abs_max4() {
 inline void abs_max4_tile(uint32_t idst) {
     SFPU_UNARY_CALL(DST_SYNC_MODE, DST_ACCUM_MODE, calculate_abs_max4, (8 /* ITERATIONS */), idst, VectorMode::RC);
 }
+
+namespace ckernel::sfpu {
+
+// 1x32 pow2 scale from a row-max tile, in one pass on column 0: with
+// scale = 2^e = 2^ceil(log2(max(amax, clamp_min) / 448)), write the exact 1/scale = 2^-e in place. The column-
+// broadcast multiply takes it as is; the writer recovers the scale bits as (254 << 23) - (1/scale bits).
+template <int ITERATIONS = 8>
+inline void calculate_pow2_inv_scale(uint32_t clamp_min_bits, uint32_t inv_448_bits) {
+    const sfpi::vFloat clamp_min = Converter::as_float(clamp_min_bits);
+    const sfpi::vFloat inv_448 = Converter::as_float(inv_448_bits);
+    for (int d = 0; d < ITERATIONS; ++d) {
+        sfpi::vFloat v = sfpi::dst_reg[0];
+        v_if(v < clamp_min) { v = clamp_min; }
+        v_endif;
+        v = v * inv_448;
+        sfpi::vInt e = sfpi::exexp(v, sfpi::ExponentMode::Biased);
+        v_if(sfpi::setexp(v, 127) != 1.0f) { e = e + 1; }
+        v_endif;
+        sfpi::dst_reg[0] = sfpi::setexp(sfpi::vFloat(1.0f), 254 - e);
+        sfpi::dst_reg++;
+    }
+}
+
+}  // namespace ckernel::sfpu
+
+// Column 0 lives in faces 0 and 2, so VectorMode::C (the left faces) covers it at half the work.
+inline void pow2_inv_scale_tile(uint32_t idst, uint32_t clamp_min_bits, uint32_t inv_448_bits) {
+    SFPU_UNARY_CALL(
+        DST_SYNC_MODE,
+        DST_ACCUM_MODE,
+        calculate_pow2_inv_scale,
+        (8 /* ITERATIONS */),
+        idst,
+        VectorMode::C,
+        clamp_min_bits,
+        inv_448_bits);
+}
 #endif
 
 void kernel_main() {
@@ -140,9 +177,9 @@ void kernel_main() {
     constexpr bool round_scale_to_power_of_two = get_compile_time_arg_val(11) != 0;
     constexpr uint32_t scale_block_wt = get_compile_time_arg_val(12);  // tiles per scale block (1, 2 or 4)
     constexpr bool round_to_nearest_even = get_compile_time_arg_val(13) != 0;
-    constexpr uint32_t block_wt = block_w / tile_w;  // BlockWt
+    constexpr uint32_t block_wt = block_w / tile_w;                     // BlockWt
     constexpr uint32_t chunk_scale_blocks = block_wt / scale_block_wt;  // scales per chunk row
-    constexpr uint32_t block_ht = 1;                 // BlockHt
+    constexpr uint32_t block_ht = 1;                                    // BlockHt
     constexpr uint32_t tiles_per_block = block_ht * block_wt;
 
     constexpr uint32_t IDST0 = 0;
@@ -383,6 +420,121 @@ void kernel_main() {
 #endif
         CircularBuffer(in_cb).pop_front(seg_tiles);
         cb_inv_scale_tiles.pop_front(1);
+    }
+#elif defined(FAST_1X32)
+    // 1x32 pow2 scales (one scale per tile row): three passes per 128-wide chunk, each one DEST acquire.
+    //   A: |x| of the 4 tiles -> cb_abs.
+    //   B: row max per tile (FPU reduce) -> one SFPU pass on column 0: scale and its exact 1/scale.
+    //   C: x * bcast_col(1/scale) (FPU) -> pack_untilize to e4m3.
+    // A bf16 / bf8_b TILE input is read straight from cb_in (exact in SrcA); ROW_MAJOR or fp32 input goes
+    // through the fp32 cb_tile first.
+    static_assert(scale_block_wt == 1 && tiles_per_block == 4, "FAST_1X32: one scale per tile row, 4-tile chunks");
+#ifdef DIRECT_SRC
+    constexpr uint32_t cb_src_id = cb_in_id;
+#else
+    constexpr uint32_t cb_src_id = cb_tile_id;
+#endif
+    CircularBuffer cb_src(cb_src_id);
+    for (uint32_t blk = 0; blk < num_blocks; ++blk) {
+#if defined(INPUT_TILE_LAYOUT) && !defined(DIRECT_SRC)
+        reconfig_data_format_srca(cb_in_id);
+        pack_reconfig_data_format(cb_tile_id);
+        copy_init(cb_in_id);
+        cb_in.wait_front(tiles_per_block);
+        cb_tile.reserve_back(tiles_per_block);
+        tile_regs_acquire();
+        for (uint32_t k = 0; k < tiles_per_block; ++k) {
+            copy_tile(cb_in_id, k, k);
+        }
+        tile_regs_commit();
+        tile_regs_wait();
+        for (uint32_t k = 0; k < tiles_per_block; ++k) {
+            pack_tile(k, cb_tile_id);
+        }
+        tile_regs_release();
+        cb_tile.push_back(tiles_per_block);
+        cb_in.pop_front(tiles_per_block);
+#elif !defined(INPUT_TILE_LAYOUT)
+        compute_kernel_lib::tilize<tiles_per_block, cb_in_id, cb_tile_id>(block_ht);
+#endif
+        cb_src.wait_front(tiles_per_block);
+
+        // A: |x|
+        {
+            reconfig_full_operand_srca(cb_src_id);
+            pack_reconfig_data_format(cb_abs_id);
+            copy_init(cb_src_id);
+            abs_tile_init();
+            cb_abs.reserve_back(tiles_per_block);
+            tile_regs_acquire();
+            for (uint32_t k = 0; k < tiles_per_block; ++k) {
+                copy_tile(cb_src_id, k, k);
+                abs_tile(k);
+            }
+            tile_regs_commit();
+            tile_regs_wait();
+            for (uint32_t k = 0; k < tiles_per_block; ++k) {
+                pack_tile(k, cb_abs_id);
+            }
+            tile_regs_release();
+            cb_abs.push_back(tiles_per_block);
+        }
+
+        // B: row max -> 1/scale (one acquire for the 4 tiles), packed for the multiply and for the writer
+        {
+            cb_abs.wait_front(tiles_per_block);
+            cb_scale_tiles.reserve_back(tiles_per_block);
+            cb_inv_scale_tiles.reserve_back(tiles_per_block);
+            reconfig_data_format(cb_abs_id, cb_scaler_id);
+            pack_reconfig_data_format(cb_inv_scale_tiles_id);
+            tile_regs_acquire();
+            reduce_init<PoolType::MAX, ReduceDim::REDUCE_ROW>(cb_abs_id, cb_scaler_id, cb_inv_scale_tiles_id);
+            for (uint32_t k = 0; k < tiles_per_block; ++k) {
+                reduce_tile<PoolType::MAX, ReduceDim::REDUCE_ROW>(cb_abs_id, cb_scaler_id, k, 0, k);
+            }
+            reduce_uninit();
+            MATH((SFPU_UNARY_INIT(unused)));
+            for (uint32_t k = 0; k < tiles_per_block; ++k) {
+                MATH((pow2_inv_scale_tile(k, clamp_min_bits, inv_448_bits)));
+            }
+            tile_regs_commit();
+            tile_regs_wait();
+            for (uint32_t k = 0; k < tiles_per_block; ++k) {
+                pack_tile(k, cb_inv_scale_tiles_id);
+            }
+            for (uint32_t k = 0; k < tiles_per_block; ++k) {
+                pack_tile(k, cb_scale_tiles_id);
+            }
+            tile_regs_release();
+            cb_scale_tiles.push_back(tiles_per_block);
+            cb_inv_scale_tiles.push_back(tiles_per_block);
+            cb_abs.pop_front(tiles_per_block);
+        }
+
+        // C: x * (1/scale) per row -> e4m3 rows
+        cb_inv_scale_tiles.wait_front(tiles_per_block);
+        reconfig_data_format(cb_src_id, cb_inv_scale_tiles_id);
+        mul_bcast_cols_init(cb_src_id, cb_inv_scale_tiles_id);
+        pack_untilize_dest_init<tiles_per_block, tiles_per_block>(cb_output_e4m3_id);
+        cb_output_e4m3.reserve_back(tiles_per_block);
+        tile_regs_acquire();
+        for (uint32_t k = 0; k < tiles_per_block; ++k) {
+            mul_tiles_bcast_cols(cb_src_id, cb_inv_scale_tiles_id, k, k, k);
+        }
+        if constexpr (round_to_nearest_even) {
+            MATH((SFPU_UNARY_INIT(unused)));
+            for (uint32_t k = 0; k < tiles_per_block; ++k) {
+                MATH((round_to_e4m3_rne_tile(k)));
+            }
+        }
+        tile_regs_commit();
+        tile_regs_wait();
+        pack_untilize_dest<tiles_per_block>(cb_output_e4m3_id);
+        tile_regs_release();
+        pack_untilize_uninit(cb_output_e4m3_id);
+        cb_output_e4m3.push_back(tiles_per_block);
+        cb_src.pop_front(tiles_per_block);
+        cb_inv_scale_tiles.pop_front(tiles_per_block);
     }
 #else
     for (uint32_t blk = 0; blk < num_blocks; ++blk) {

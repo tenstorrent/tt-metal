@@ -31,6 +31,25 @@
 #include "ttnn/cpp/ttnn/operations/experimental/deepseek_prefill/per_token_cast_to_fp8/device/kernels/dataflow/per_row_assignment.hpp"
 #endif
 
+#ifdef FAST_1X32
+// FAST_1X32: the compute hands over bf16 tiles of 1/scale (exact powers of two); column 0 -> the fp32 scale
+// bits, (254 << 23) - (1/scale bits), one value per block row.
+template <uint32_t face_h, uint32_t face_w, uint32_t FACE_ROWS, uint32_t FACE_ROW_STRIDE>
+static inline void extract_first_column(volatile tt_l1_ptr uint32_t* tile_words, uint32_t* out) {
+    volatile tt_l1_ptr uint16_t* tile = reinterpret_cast<volatile tt_l1_ptr uint16_t*>(tile_words);
+    uint32_t s = 0;
+    uint32_t face_base = 0;
+    for (uint32_t fr = 0; fr < FACE_ROWS; ++fr) {
+        uint32_t col0_idx = face_base;
+        for (uint32_t r = 0; r < face_h; ++r) {
+            out[s] = (254u << 23) - (static_cast<uint32_t>(tile[col0_idx]) << 16);
+            col0_idx += face_w;
+            ++s;
+        }
+        face_base += FACE_ROW_STRIDE;
+    }
+}
+#else
 // Extract column 0 of one fp32 tile into out[0..tile_h) (one value per block row); face-aware walk.
 template <uint32_t face_h, uint32_t face_w, uint32_t FACE_ROWS, uint32_t FACE_ROW_STRIDE>
 static inline void extract_first_column(volatile tt_l1_ptr uint32_t* tile, uint32_t* out) {
@@ -46,6 +65,7 @@ static inline void extract_first_column(volatile tt_l1_ptr uint32_t* tile, uint3
         face_base += FACE_ROW_STRIDE;
     }
 }
+#endif
 
 void kernel_main() {
 #ifdef INPUT_TILE_LAYOUT
