@@ -19,6 +19,7 @@ from types import SimpleNamespace
 
 import pytest
 import torch
+import ttnn
 
 from models.tt_transformers.tt.model_config import ModelArgs
 
@@ -164,6 +165,46 @@ def test_placeholder_state_dict_is_dataless_and_falsy(tmp_path):
     assert tuple(emb.shape) == (4, 8)
     assert emb.dtype == torch.bfloat16
     assert sd["layers.0.attention.wo.weight"].dtype == torch.float32
+
+
+def _write_ckpt(ckpt_dir, fill):
+    """A one-shard local checkpoint; `fill` picks the weight bytes (same shapes either way)."""
+    ckpt_dir.mkdir(parents=True, exist_ok=True)
+    header = json.dumps({"w": {"dtype": "BF16", "shape": [512], "data_offsets": [0, 1024]}}).encode()
+    (ckpt_dir / "model.safetensors").write_bytes(len(header).to_bytes(8, "little") + header + bytes([fill]) * 1024)
+    (ckpt_dir / "config.json").write_text("{}")
+    return str(ckpt_dir)
+
+
+class _PathArgs:
+    """Binds the real weight_cache_path so the directory naming itself is under test."""
+
+    weight_cache_path = ModelArgs.weight_cache_path
+    checkpoint_cache_key = ModelArgs.checkpoint_cache_key
+
+    def __init__(self, cache_root, ckpt_dir):
+        self.model_cache_path = Path(cache_root)
+        self.CKPT_DIR = ckpt_dir
+        self.instruct = False
+
+
+def test_weight_cache_path_is_checkpoint_content_keyed(tmp_path, monkeypatch):
+    """Repro of the stale-cache bug: checkpoint A converted, then a same-shape checkpoint B written
+    to the SAME HF_MODEL path. as_tensor hits on filename alone, so B must get a different dir."""
+    monkeypatch.setenv("TT_CHECKPOINT_CACHE_KEY", "fast")
+    ckpt = tmp_path / "ckpt"
+    legacy = tmp_path / "cache" / "tensor_cache_bf16"
+    path_a = _PathArgs(tmp_path / "cache", _write_ckpt(ckpt, 0)).weight_cache_path(ttnn.bfloat16)
+    path_b = _PathArgs(tmp_path / "cache", _write_ckpt(ckpt, 1)).weight_cache_path(ttnn.bfloat16)
+    assert path_a != path_b
+    assert path_a.parent == path_b.parent == legacy.parent
+    assert path_a.name.startswith("tensor_cache_bf16_ckpt-")
+    # Hub ids (immutable revisions), the default (unset) and the opt-out keep the legacy layout.
+    assert _PathArgs(tmp_path / "cache", "meta-llama/Llama-3.1-8B").weight_cache_path(ttnn.bfloat16) == legacy
+    monkeypatch.setenv("TT_CHECKPOINT_CACHE_KEY", "off")
+    assert _PathArgs(tmp_path / "cache", str(ckpt)).weight_cache_path(ttnn.bfloat16) == legacy
+    monkeypatch.delenv("TT_CHECKPOINT_CACHE_KEY")
+    assert _PathArgs(tmp_path / "cache", str(ckpt)).weight_cache_path(ttnn.bfloat16) == legacy
 
 
 # ---------------------------------------------------------------------------
