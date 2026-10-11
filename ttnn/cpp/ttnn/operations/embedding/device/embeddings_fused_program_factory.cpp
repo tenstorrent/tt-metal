@@ -8,6 +8,7 @@
 #include <tt-metalium/experimental/metal2_host_api/program_run_args.hpp>
 #include <tt-metalium/experimental/metal2_host_api/program_spec.hpp>
 #include <tt-metalium/host_api.hpp>
+#include <tt-metalium/math.hpp>
 
 #include "ttnn/operations/core/data_movement_kernel/datamovement_kernel_config.hpp"
 #include "ttnn/operations/core/compute_kernel/compute_kernel_config.hpp"
@@ -106,6 +107,12 @@ ttnn::device_operation::ProgramArtifacts EmbeddingsFusedProgramFactory::create_p
     uint32_t required_memory_bytes = 2 * num_tiles_per_block * weights_single_tile_size;
     bool use_chunked_processing = required_memory_bytes > max_l1_budget_bytes;
 
+    // PADDED and BINARY serve some weight rows out of a locally cached copy instead of fetching them
+    // per token; the other embeddings types have no such rows, so the cache is absent for them.
+    const bool use_local_cache = embeddings_type == EmbeddingsType::PADDED || embeddings_type == EmbeddingsType::BINARY;
+    // PADDED caches the single pad row; BINARY caches rows 0 and 1.
+    const uint32_t cache_entries = embeddings_type == EmbeddingsType::PADDED ? 1u : 2u;
+
     // For very large embeddings, use chunked processing
     uint32_t tiles_per_chunk;
     uint32_t num_chunks;
@@ -117,9 +124,17 @@ ttnn::device_operation::ProgramArtifacts EmbeddingsFusedProgramFactory::create_p
     if (use_chunked_processing) {
         const uint32_t chunk_cap = std::min(max_tiles_per_chunk, max_double_buffer_tiles);
         const uint32_t row_bytes = num_tiles_per_block * weights_single_tile_size;
-        // The output buffer matches the staging buffer's size, so a full row costs 2 * row_bytes of L1.
-        constexpr uint32_t max_full_row_dfb_bytes = max_l1_budget_bytes + max_l1_budget_bytes / 4;
-        if (2 * row_bytes <= max_full_row_dfb_bytes) {
+        // A full row costs one staging buffer plus, for an interleaved output, an output buffer of the
+        // same size. Both have to fit in the L1 left after the buffers that are always present.
+        const uint32_t l1_alignment = device->allocator()->get_alignment(BufferType::L1);
+        const uint64_t other_dfb_bytes =
+            round_up(TILE_HEIGHT * input_element_size_bytes, l1_alignment) +
+            (use_local_cache ? round_up(cache_entries * round_up_to_mul32(weight_page_size), l1_alignment) : 0);
+        const uint64_t l1_capacity =
+            device->l1_size_per_core() - device->allocator()->get_base_allocator_addr(HalMemType::L1);
+        const uint64_t full_row_dfb_bytes =
+            round_up(row_bytes, l1_alignment) + (output_sharded ? 0 : round_up(row_bytes, l1_alignment));
+        if (full_row_dfb_bytes + other_dfb_bytes <= l1_capacity) {
             // One buffer holds the row, so the short last chunk lands on the end.
             tiles_per_chunk = std::min(chunk_cap, num_tiles_per_block);
             num_chunks = (num_tiles_per_block + tiles_per_chunk - 1) / tiles_per_chunk;
@@ -148,10 +163,6 @@ ttnn::device_operation::ProgramArtifacts EmbeddingsFusedProgramFactory::create_p
         buffering = num_tiles_per_block > max_double_buffer_tiles ? 1 : 2;
         dfb_num_entries = buffering * tiles_per_chunk;
     }
-
-    // PADDED and BINARY serve some weight rows out of a locally cached copy instead of fetching them
-    // per token; the other embeddings types have no such rows, so the cache is absent for them.
-    const bool use_local_cache = embeddings_type == EmbeddingsType::PADDED || embeddings_type == EmbeddingsType::BINARY;
 
     // -----------------------------------------------------------------------
     // Resource names
@@ -222,8 +233,6 @@ ttnn::device_operation::ProgramArtifacts EmbeddingsFusedProgramFactory::create_p
 
     if (use_local_cache) {
         uint32_t cache_page_size = round_up_to_mul32(weight_page_size);
-        // PADDED caches the single pad row; BINARY caches rows 0 and 1.
-        const uint32_t cache_entries = (embeddings_type == EmbeddingsType::PADDED) ? 1u : 2u;
         scratchpads.push_back(
             ScratchpadSpec{.unique_id = WEIGHT_CACHE_SP, .size_per_node = cache_entries * cache_page_size});
     }
