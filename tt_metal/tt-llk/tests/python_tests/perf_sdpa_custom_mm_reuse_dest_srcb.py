@@ -48,7 +48,6 @@ CALL_SHAPES = (
 
 @pytest.mark.perf
 @parametrize(
-    math_fidelity=[MathFidelity.LoFi],
     # FlashMLA reads V from its Bfp8_b KV cache.
     in1_format=[DataFormat.Float16_b, DataFormat.Bfp8_b],
     call_shape=CALL_SHAPES,
@@ -56,7 +55,7 @@ CALL_SHAPES = (
     dst_first=[True, False],
 )
 def test_perf_sdpa_custom_mm_reuse_dest_srcb(
-    perf_report, math_fidelity, in1_format, call_shape, dst_first
+    perf_report, in1_format, call_shape, dst_first
 ):
     kt, nt, in1_k_stride = call_shape
     configuration = PerfConfig(
@@ -68,7 +67,7 @@ def test_perf_sdpa_custom_mm_reuse_dest_srcb(
             PerfRunType.MATH_ISOLATE,
         ],
         templates=[
-            MATH_FIDELITY(math_fidelity),
+            MATH_FIDELITY(MathFidelity.LoFi),
             SDPA_CUSTOM_MM_REUSE_DEST(kt_dim=kt, nt_dim=nt),
             SDPA_REUSE_DEST_LAYOUT(dst_first=dst_first),
             SDPA_REUSE_V_STRIDE(in1_k_stride=in1_k_stride),
@@ -84,7 +83,7 @@ def test_perf_sdpa_custom_mm_reuse_dest_srcb(
             in1_format,
             BF16,
             tile_count_A=(kt - 1) * in1_k_stride + nt,
-            tile_count_B=(kt + 1) // 2,
+            tile_count_B=(kt + 3) // 4,
             tile_count_res=nt,
         ),
         dest_acc=DestAccumulation.No,

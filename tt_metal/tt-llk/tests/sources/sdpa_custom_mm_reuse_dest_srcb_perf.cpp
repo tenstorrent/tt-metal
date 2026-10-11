@@ -27,17 +27,23 @@ static constexpr ckernel::DstSync DST_SYNC = ckernel::DstSync::SyncHalf;
 #define DST_FIRST false
 #endif
 // DST_FIRST: O at tile 0 and P above it (the placement of compute_sdpa_chunk); otherwise P at tile 0 and O above it.
-constexpr std::uint32_t P_TILES    = (KT_DIM + 1) / 2;                                      // datacopy tiles holding the KT 16-row P chunks
+constexpr std::uint32_t DEST_TILE_ROWS  = 64;                                                    // DEST rows of a 32x32 tile
+constexpr std::uint32_t DEST_HALF_TILES = 8;                                                     // 32x32 tiles in a DEST half
+constexpr std::uint32_t P_TILES         = (KT_DIM + 3) / 4;                                      // datacopy tiles holding the KT 16-row P chunks
 constexpr std::uint32_t O_TILES    = (NT_DIM + 3) / 4;                                      // 32x32 tiles covered by the NT 16-row O tiles
 constexpr std::uint32_t SRC_TILE   = DST_FIRST ? (O_TILES > 2 ? O_TILES : 2) : 0;           // P tile base for the datacopy preload
-constexpr std::uint32_t SRC_INDEX  = 64 * SRC_TILE;                                         // P DEST_TARGET offset (SrcB source)
+constexpr std::uint32_t SRC_INDEX       = DEST_TILE_ROWS * SRC_TILE;                             // P DEST row base (SrcB source)
 constexpr std::uint32_t DST_TILE   = DST_FIRST ? 0 : (P_TILES > 2 ? P_TILES : 2);           // O tile base
-constexpr std::uint32_t DST_INDEX  = 64 * DST_TILE;                                         // O DEST_TARGET offset (64-datum units)
+constexpr std::uint32_t DST_INDEX       = DEST_TILE_ROWS * DST_TILE;                             // O DEST row base
 constexpr std::uint32_t PACK_TILES = O_TILES;                                               // only the tiles the outputs occupy
-static_assert(DST_TILE + O_TILES <= 8, "O tiles must stay inside the DEST half");
-static_assert(SRC_TILE + P_TILES <= 8, "P tiles must stay inside the DEST half");
-constexpr std::uint32_t SEM_MAX    = (2 * KT_DIM < 15) ? 2 * KT_DIM : 15;                // UNPACK_MATH_DONE depth: one call ahead where it fits
-constexpr bool PRELOAD_IN_LOOP     = (PERF_RUN_TYPE == PerfRunType::L1_TO_L1) || (PERF_RUN_TYPE == PerfRunType::L1_CONGESTION);
+static_assert(DST_TILE + O_TILES <= DEST_HALF_TILES, "O tiles must stay inside the DEST half");
+static_assert(SRC_TILE + P_TILES <= DEST_HALF_TILES, "P tiles must stay inside the DEST half");
+constexpr std::uint32_t SEM_MAX = (2 * KT_DIM < ckernel::semaphore::SEMAPHORE_MAX_VALUE)
+                                      ? 2 * KT_DIM
+                                      : ckernel::semaphore::SEMAPHORE_MAX_VALUE; // UNPACK_MATH_DONE depth: one call ahead where it fits
+constexpr bool PRELOAD_IN_LOOP  = PERF_RUN_TYPE == PerfRunType::L1_TO_L1;
+// Math is mocked only for UNPACK_ISOLATE, so L1_CONGESTION would run the real reuse path against a pack that posts no tokens.
+static_assert(PERF_RUN_TYPE != PerfRunType::L1_CONGESTION, "L1 congestion mode is not supported for the reuse twin");
 
 #ifdef LLK_TRISC_UNPACK
 
@@ -51,11 +57,11 @@ inline void preload_p(RUNTIME_PARAMETERS params)
 #if defined(RUNTIME_FORMATS) && !defined(SPEED_OF_LIGHT)
     const FormatConfig& formats = params.formats;
 #endif
-    _llk_unpack_A_init_<BroadcastType::NONE, false, EltwiseBinaryReuseDestType::NONE, false>(
+    _llk_unpack_A_init_<BroadcastType::NONE, false /* acc_to_dest */, EltwiseBinaryReuseDestType::NONE, false /* unpack_to_dest */>(
         0 /* transpose_of_faces */, 0 /* within_face_16x16_transpose */, ckernel::DEFAULT_TENSOR_SHAPE, formats.unpack_A_src, formats.unpack_A_dst);
     for (std::uint32_t k = 0; k < P_TILES; ++k)
     {
-        _llk_unpack_A_<BroadcastType::NONE, false, EltwiseBinaryReuseDestType::NONE, false>(
+        _llk_unpack_A_<BroadcastType::NONE, false /* acc_to_dest */, EltwiseBinaryReuseDestType::NONE, false /* unpack_to_dest */>(
             L1_ADDRESS(params.buffer_B[k]), formats.unpack_A_src, formats.unpack_A_dst);
     }
 }
@@ -145,7 +151,7 @@ inline void preload_p_math(RUNTIME_PARAMETERS params)
         TILE_NUM_FACES, formats.math);
     for (std::uint32_t k = 0; k < P_TILES; ++k)
     {
-        _llk_math_eltwise_unary_datacopy_<DataCopyType::A2D, DST_SYNC, is_fp32_dest_acc_en, BroadcastType::NONE, false>(
+        _llk_math_eltwise_unary_datacopy_<DataCopyType::A2D, DST_SYNC, is_fp32_dest_acc_en, BroadcastType::NONE, false /* unpack_to_dest */>(
             SRC_TILE + k, formats.math, formats.math);
     }
 }
@@ -242,7 +248,7 @@ void run_kernel(RUNTIME_PARAMETERS params)
         _llk_pack_hw_configure_wrapper_<is_fp32_dest_acc_en, PackMode::Default>(formats.pack_src, formats.pack_dst, params.TILE_SIZE_PACK);
         _llk_pack_init_wrapper_<PackMode::Default, false /* zero_output */>(formats.pack_dst);
         _llk_pack_dest_init_<DST_SYNC, is_fp32_dest_acc_en>();
-        t6_semaphore_init(semaphore::UNPACK_MATH_DONE, 0, SEM_MAX);
+        t6_semaphore_init(semaphore::UNPACK_MATH_DONE, 0 /* min_value */, SEM_MAX);
         PROFILER_SYNC();
     }
     {
@@ -257,7 +263,7 @@ void run_kernel(RUNTIME_PARAMETERS params)
                 post_tokens();
             }
         }
-        else if constexpr (PERF_RUN_TYPE == PerfRunType::PACK_ISOLATE || PERF_RUN_TYPE == PerfRunType::L1_CONGESTION)
+        else if constexpr (PERF_RUN_TYPE == PerfRunType::PACK_ISOLATE)
         {
             for (std::uint32_t loop = 0; loop < LOOP_FACTOR; ++loop)
             {

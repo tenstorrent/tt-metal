@@ -39,18 +39,12 @@ CALL_SHAPES = [
 
 @pytest.mark.perf
 @parametrize(
-    in0_face_r_dim=[8],
     # FlashMLA reads K from its Bfp8_b KV cache.
     in1_format=[DataFormat.Float16_b, DataFormat.Bfp8_b],
     call_shape=CALL_SHAPES,
 )
-def test_perf_sdpa_custom_mm(perf_report, in0_face_r_dim, in1_format, call_shape):
+def test_perf_sdpa_custom_mm(perf_report, in1_format, call_shape):
     ct, kt, signal_granularity, transposed = call_shape
-    if ct // signal_granularity > SEMAPHORE_MAX_VALUE:
-        raise ValueError(
-            f"ct_dim / signal_granularity = {ct // signal_granularity} FPU->SFPU posts per call exceed the "
-            f"4-bit Tensix semaphore ({SEMAPHORE_MAX_VALUE}); the core would hang"
-        )
     configuration = PerfConfig(
         "sources/sdpa_custom_mm_perf.cpp",
         InputOutputFormat(in1_format, BF16, BF16),
@@ -70,7 +64,7 @@ def test_perf_sdpa_custom_mm(perf_report, in0_face_r_dim, in1_format, call_shape
         runtimes=[
             # in1 (SrcA) has 4 full faces; in0 (SrcB) and the result have 2 faces of M rows.
             NUM_FACES(num_faces=2, num_faces_A=4, num_faces_B=2),
-            IN_FACE_DIMS(in0_face_r_dim=in0_face_r_dim),
+            IN_FACE_DIMS(in0_face_r_dim=8),
             TILE_COUNT(kt * ct),
             LOOP_FACTOR(256 if kt * ct < 8 else 64),
         ],
