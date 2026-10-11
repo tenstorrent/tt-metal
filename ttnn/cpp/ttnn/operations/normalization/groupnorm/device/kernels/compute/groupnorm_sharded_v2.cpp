@@ -2,6 +2,9 @@
 //
 // SPDX-License-Identifier: Apache-2.0
 
+#define CKL_ELTWISE_CHAIN_PACK_BLOCK
+#define CKL_ELTWISE_CHAIN_PACK_BLOCK_IF (get_compile_time_arg_val(13) >= 4)  // CT arg 13: per_core_N
+
 #include <cstdint>
 
 #define BCAST_LLKOP EltwiseBinaryType::ELWMUL
@@ -306,8 +309,15 @@ void kernel_main() {
                     }
                     tile_regs_commit();
                     tile_regs_wait();
-                    for (uint32_t w = 0; w < subblock_w; ++w) {
-                        pack_tile(w, dfb_mask_last_id);
+#ifdef ARCH_BLACKHOLE
+                    if constexpr (subblock_w > 2) {
+                        pack_block_mop(0, dfb_mask_last_id, subblock_w);
+                    } else
+#endif
+                    {
+                        for (uint32_t w = 0; w < subblock_w; ++w) {
+                            pack_tile(w, dfb_mask_last_id);
+                        }
                     }
                     tile_regs_release();
                     index_subblock_w_offset += subblock_w;
@@ -338,8 +348,15 @@ void kernel_main() {
                     }
                     tile_regs_commit();
                     tile_regs_wait();
-                    for (uint32_t dst_i = 0; dst_i < subblock_w; ++dst_i) {
-                        pack_tile(dst_i, dfb_x_id);
+#ifdef ARCH_BLACKHOLE
+                    if constexpr (subblock_w > 2) {
+                        pack_block_mop(0, dfb_x_id, subblock_w);
+                    } else
+#endif
+                    {
+                        for (uint32_t dst_i = 0; dst_i < subblock_w; ++dst_i) {
+                            pack_tile(dst_i, dfb_x_id);
+                        }
                     }
                     tile_regs_release();
                     index_subblock_w_offset += subblock_w;
@@ -363,8 +380,15 @@ void kernel_main() {
                     }
                     tile_regs_commit();
                     tile_regs_wait();
-                    for (uint32_t i = 0; i < subblock_w; ++i) {
-                        pack_tile(i, dfb_x_id);
+#ifdef ARCH_BLACKHOLE
+                    if constexpr (subblock_w > 2) {
+                        pack_block_mop(0, dfb_x_id, subblock_w);
+                    } else
+#endif
+                    {
+                        for (uint32_t i = 0; i < subblock_w; ++i) {
+                            pack_tile(i, dfb_x_id);
+                        }
                     }
                     tile_regs_release();
                     index_subblock_w_offset += subblock_w;

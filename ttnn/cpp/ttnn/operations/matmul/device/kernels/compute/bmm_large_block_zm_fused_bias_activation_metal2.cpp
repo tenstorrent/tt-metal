@@ -673,9 +673,13 @@ void kernel_main() {
 #else
                         tile_regs_wait();
 #endif
+#ifdef ARCH_BLACKHOLE
+                        pack_block_mop(0, untilize_mode_out_dfb_id, out_subblock_num_tiles);
+#else
                         for (uint32_t i = 0; i < out_subblock_num_tiles; i++) {
                             pack_tile(i, untilize_mode_out_dfb_id);
                         }
+#endif
                         tile_regs_release();
                         untilize_mode_out_dfb.push_back(out_subblock_num_tiles);
 

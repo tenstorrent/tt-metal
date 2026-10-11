@@ -117,9 +117,8 @@ ALWI void pack_tile(std::uint32_t ifrom_dst, std::uint32_t icb, std::uint32_t ou
  * synchronized in the kernels. To ensure this synchronization, tile packing is implemented as a separate
  * API call.
  *
- * NOTE: In the future the block pack must be folded further into a hardware MOP / REPLAY buffer (as
- * is being done for Quasar) inside llk-lib, without changing this signature. Tracked under the Compute
- * API Split effort (tt-metal#35739); the per-op push-down lands in tt-metal#47480.
+ * NOTE: On Blackhole the block is one packer program run where the layout allows, which needs the default pack
+ * program installed (the tilize and untilize uninits restore it); Quasar packs the block in its LLK, Wormhole per tile.
  *
  * Return value: None
  *
@@ -133,10 +132,37 @@ ALWI void pack_tile(std::uint32_t ifrom_dst, std::uint32_t icb, std::uint32_t ou
 template <bool is_fp32_dest_acc_en = DST_ACCUM_MODE>
 ALWI void pack_block(std::uint32_t ifrom_dst, std::uint32_t icb, std::uint32_t ntiles) {
     LLK_SAN_FUNCTION();
-#ifndef ARCH_QUASAR
-    PACK((llk_matmul_pack<is_fp32_dest_acc_en, false, PackMode::Default>(ifrom_dst, icb, ntiles)));
-#else
+#if defined(ARCH_BLACKHOLE)
+    PACK((llk_pack_block<is_fp32_dest_acc_en>(ifrom_dst, icb, ntiles)));
+#elif defined(ARCH_QUASAR)
     PACK((llk_pack_block(ifrom_dst, icb, ntiles)));
+#else
+    PACK((llk_matmul_pack<is_fp32_dest_acc_en, false, PackMode::Default>(ifrom_dst, icb, ntiles)));
+#endif
+}
+
+// clang-format off
+/**
+ * Same arguments, effect and preconditions as `pack_block` on every architecture.
+ *
+ * Return value: None
+ *
+ * | Param Type | Name      | Description                                       | Type     | Valid Range                                                | Required |
+ * |------------|-----------|---------------------------------------------------|----------|------------------------------------------------------------|----------|
+ * | Function   | ifrom_dst | The index of the first tile in the DEST register  | uint32_t | Must be less than the size of the DEST register (16)       | True     |
+ * | Function   | icb       | The identifier of the output circular buffer (CB) | uint32_t | 0 to 31                                                    | True     |
+ * | Function   | ntiles    | The number of tiles to copy from DEST to CB       | uint32_t | ifrom_dst + ntiles within the acquired DEST tiles (8 or 16) | True     |
+ */
+// clang-format on
+template <bool is_fp32_dest_acc_en = DST_ACCUM_MODE>
+ALWI void pack_block_mop(std::uint32_t ifrom_dst, std::uint32_t icb, std::uint32_t ntiles) {
+    LLK_SAN_FUNCTION();
+#if defined(ARCH_BLACKHOLE)
+    PACK((llk_pack_block<is_fp32_dest_acc_en>(ifrom_dst, icb, ntiles)));
+#elif defined(ARCH_QUASAR)
+    PACK((llk_pack_block(ifrom_dst, icb, ntiles)));
+#else
+    PACK((llk_matmul_pack<is_fp32_dest_acc_en, false, PackMode::Default>(ifrom_dst, icb, ntiles)));
 #endif
 }
 

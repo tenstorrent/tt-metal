@@ -783,9 +783,13 @@ struct MatmulExpertCompressedDRAM {
 
                         tile_regs_commit();
                         tile_regs_wait();
+#ifdef ARCH_BLACKHOLE
+                        pack_block_mop(0, CTArgs::cb_out, CTArgs::subblock_n);
+#else
                         for (uint32_t sn = 0; sn < CTArgs::subblock_n; sn++) {
                             pack_tile(sn, CTArgs::cb_out);
                         }
+#endif
                         tile_regs_release();
                     }
 
@@ -946,9 +950,13 @@ struct MatmulExpertCompressedDRAM {
                         PACK((llk_pack_reconfig_l1_acc(1)));
                     }
 
+#ifdef ARCH_BLACKHOLE
+                    pack_block_mop(0, CTArgs::cb_out, total_tiles);
+#else
                     for (uint32_t t = 0; t < total_tiles; t++) {
                         pack_tile(t, CTArgs::cb_out);
                     }
+#endif
                     tile_regs_release();
                     cb_push_back(CTArgs::cb_out, max_tiles);
 

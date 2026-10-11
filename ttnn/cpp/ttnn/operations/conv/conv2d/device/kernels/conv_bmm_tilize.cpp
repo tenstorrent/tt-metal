@@ -200,6 +200,15 @@ inline void reblock_and_untilize(
     interm_dfb.pop_front(num_tiles_in_row_of_subblocks);
 }
 
+#ifdef ARCH_BLACKHOLE
+// Main's pack_block: the subblocks the gate below leaves out build main's pack thread byte for byte.
+template <bool is_fp32_dest_acc_en = DST_ACCUM_MODE>
+ALWI void pack_block_per_tile(std::uint32_t ifrom_dst, std::uint32_t icb, std::uint32_t ntiles) {
+    LLK_SAN_FUNCTION();
+    PACK((llk_matmul_pack<is_fp32_dest_acc_en, false, PackMode::Default>(ifrom_dst, icb, ntiles)));
+}
+#endif
+
 void kernel_main() {
     constexpr uint32_t in0_block_w = get_compile_time_arg_val(0);        // inner block size in tiles
     constexpr uint32_t in0_num_subblocks = get_compile_time_arg_val(1);  // outer row block size (in inner row blocks)
@@ -247,6 +256,20 @@ void kernel_main() {
     constexpr uint32_t out_block_w = in1_block_w;
 
     constexpr uint32_t untilize_mode_out_cb_id = untilize_out ? matmul_partials_cb : out_cb_id;
+#ifdef ARCH_BLACKHOLE
+    // The block run is kept only at the models' shapes where it measured faster, none with relu: block-sharded 2 x 4
+    // with L1 accumulate, a 2 x 2 downsampler, height-sharded 4 x 1 and multi-subblock 1 x 4 over 12+, two conv_ins.
+    constexpr bool block_pack_subblocks =
+        !pack_relu && ((!height_sharded && packer_l1_acc && out_subblock_h == 2 && out_subblock_w == 4) ||
+                       (!height_sharded && !packer_l1_acc && out_subblock_h == 2 && out_subblock_w == 2 &&
+                        in0_block_w == 6 && in0_num_blocks_w == 30) ||
+                       (height_sharded && !packer_l1_acc && in0_block_w >= 12 &&
+                        ((out_subblock_h == 1 && out_subblock_w == 4 && in0_num_blocks_h > 1 &&
+                          in0_num_subblocks * in1_num_subblocks > 1) ||
+                         (out_subblock_h == 4 && out_subblock_w == 1))) ||
+                       (height_sharded && !packer_l1_acc && in0_block_w == 3 && in0_num_blocks_w == 3 &&
+                        in0_num_blocks_h == 1 && out_subblock_h == 1 && (out_subblock_w == 4 || out_subblock_w == 5)));
+#endif
 
     uint32_t bias_block_offset = 0;
     constexpr uint32_t bias_ntiles_w = get_compile_time_arg_val(16);
@@ -486,7 +509,15 @@ void kernel_main() {
                         }
 
                         uint32_t start_dst_index = 0;
+#ifdef ARCH_BLACKHOLE
+                        if constexpr (block_pack_subblocks) {
+                            pack_block(start_dst_index, curr_matmul_out_cb, out_subblock_num_tiles);
+                        } else {
+                            pack_block_per_tile(start_dst_index, curr_matmul_out_cb, out_subblock_num_tiles);
+                        }
+#else
                         pack_block(start_dst_index, curr_matmul_out_cb, out_subblock_num_tiles);
+#endif
 
                         tile_regs_release();
                         curr_out_dfb.push_back(out_subblock_num_tiles);
@@ -553,9 +584,19 @@ void kernel_main() {
 
                         dfb_untilize_mode_out.reserve_back(out_subblock_num_tiles);
                         tile_regs_wait();
+#ifdef ARCH_BLACKHOLE
+                        if constexpr (block_pack_subblocks) {
+                            pack_block_mop(0, untilize_mode_out_cb_id, out_subblock_num_tiles);
+                        } else {
+                            for (uint32_t i = 0; i < out_subblock_num_tiles; i++) {
+                                pack_tile(i, untilize_mode_out_cb_id);
+                            }
+                        }
+#else
                         for (uint32_t i = 0; i < out_subblock_num_tiles; i++) {
                             pack_tile(i, untilize_mode_out_cb_id);
                         }
+#endif
                         tile_regs_release();
                         dfb_untilize_mode_out.push_back(out_subblock_num_tiles);
 

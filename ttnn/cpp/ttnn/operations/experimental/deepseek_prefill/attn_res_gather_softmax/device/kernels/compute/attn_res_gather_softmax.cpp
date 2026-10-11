@@ -41,6 +41,7 @@
 #include "api/compute/reduce.h"
 #include "api/compute/tile_move_copy.h"
 #include "api/dataflow/circular_buffer.h"
+#include "ttnn/cpp/ttnn/kernel_lib/dest_helpers.hpp"
 #include "ttnn/cpp/ttnn/kernel_lib/reduce_helpers_compute.hpp"
 
 using namespace ckernel;
@@ -94,13 +95,17 @@ template <typename Init, typename TransformOne>
 ALWI void reduce_transformed_row(DataflowBuffer& tmp_buf, Init init, TransformOne transform_one) {
     init();
     tmp_buf.reserve_back(Wt);
-    for (uint32_t wt = 0; wt < Wt; ++wt) {
+    constexpr uint32_t transform_block = compute_kernel_lib::DEST_AUTO_LIMIT;
+    for (uint32_t wt = 0; wt < Wt; wt += transform_block) {
+        const uint32_t n = Wt - wt < transform_block ? Wt - wt : transform_block;
         tile_regs_acquire();
-        transform_one(wt);
+        for (uint32_t i = 0; i < n; ++i) {
+            transform_one(wt + i, i);
+        }
         tile_regs_commit();
 
         tile_regs_wait();
-        pack_tile(0, cb_tmp, wt);
+        pack_block(0, cb_tmp, n);
         tile_regs_release();
     }
     tmp_buf.push_back(Wt);
@@ -129,14 +134,18 @@ ALWI void settle_row(
     pack_reconfig_data_format(cb_total);
     add_init(cb_prefix, cb_pending);
 
-    for (uint32_t wt = 0; wt < Wt; ++wt) {
+    constexpr uint32_t settle_block = compute_kernel_lib::DEST_AUTO_LIMIT;
+    for (uint32_t wt = 0; wt < Wt; wt += settle_block) {
+        const uint32_t n = Wt - wt < settle_block ? Wt - wt : settle_block;
         tile_regs_acquire();
-        add_tiles(cb_prefix, cb_pending, wt, wt, 0);
+        for (uint32_t i = 0; i < n; ++i) {
+            add_tiles(cb_prefix, cb_pending, wt + i, wt + i, i);
+        }
         tile_regs_commit();
 
         tile_regs_wait();
-        pack_tile(0, cb_total, wt);
-        pack_tile(0, cb_total_out, wt);
+        pack_block(0, cb_total, n);
+        pack_block(0, cb_total_out, n);
         tile_regs_release();
     }
 
@@ -282,7 +291,7 @@ void kernel_main() {
                     pack_reconfig_data_format(cb_tmp);
                     mul_tiles_init(cb_stream, cb_stream);
                 },
-                [](uint32_t wt) { mul_tiles(cb_stream, cb_stream, wt, wt, 0); });
+                [](uint32_t wt, uint32_t dst) { mul_tiles(cb_stream, cb_stream, wt, wt, dst); });
 
             reduce_transformed_row(
                 tmp_buf,
@@ -291,7 +300,7 @@ void kernel_main() {
                     pack_reconfig_data_format(cb_tmp);
                     mul_bcast_rows_init(cb_stream, cb_q);
                 },
-                [](uint32_t wt) { mul_tiles_bcast_rows(cb_stream, cb_q, wt, wt, 0); });
+                [](uint32_t wt, uint32_t dst) { mul_tiles_bcast_rows(cb_stream, cb_q, wt, wt, dst); });
 
             if constexpr (fuse_add) {
                 total_buf.pop_front(Wt);
