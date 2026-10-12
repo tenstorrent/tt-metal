@@ -78,6 +78,9 @@ class MiniMaxH3VSAConfig:
     v2: bool = False
     heads_per_group: int = 1
     mcast_log: bool = False  # the leader publishes its arrival log by multicast strips
+    # build the `to_gate_compress` linear (O_c branch). The base checkpoint has none, so the default
+    # leaves it out and the model keeps the dense weight-cache layout.
+    gate_compress: bool = False
 
 
 def compute_topk(sparsity: float, num_candidates: int) -> int:

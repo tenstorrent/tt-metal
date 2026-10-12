@@ -224,6 +224,7 @@ def test_vsa_attention_vs_torch_oracle(
             k_chunk_blocks=2,
             padded_pooling=os.environ.get("VSA_PADDED_POOLING", "1") == "1",
             streaming=os.environ.get("VSA_STREAMING", "1") == "1",
+            gate_compress=gate == "random",
         ),
         state,
     )  # fmt: skip
@@ -298,7 +299,7 @@ def test_vsa_attention_production_shape(
 
     vsa_model, _ = _setup_tt_model(
         mesh_device, sp_axis, tp_axis, num_links, topology, is_fsdp, geometry,
-        MiniMaxH3VSAConfig(sparsity=SPARSITY, k_chunk_blocks=2), state,
+        MiniMaxH3VSAConfig(sparsity=SPARSITY, k_chunk_blocks=2, gate_compress=gate == "random"), state,
     )  # fmt: skip
     tt_out = _run_tt(vsa_model, mesh_device, sp_axis, tp_axis, geometry, x, rope_cos, rope_sin)
     tt_rows = geometry.unpack_rows(tt_out.reshape(geometry.padded_len, HIDDEN_SIZE), dim=0)

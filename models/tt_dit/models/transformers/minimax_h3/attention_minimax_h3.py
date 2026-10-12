@@ -198,8 +198,9 @@ class MiniMaxH3Attention(Module):
         # program selection are untouched when vsa_config is None (the default).
         self.vsa_config = vsa_config
         self.vsa_stage = None  # bound per generation shape via set_vsa_stage()
-        self.gate_compress_is_zero = True  # decided at weight load; a zero gate skips the O_c branch
-        if vsa_config is not None:
+        # refined at torch-state load; a cache hit keeps this, so a built gate is assumed nonzero
+        self.gate_compress_is_zero = vsa_config is None or not vsa_config.gate_compress
+        if vsa_config is not None and vsa_config.gate_compress:
             # ColParallel fracture of the 7168-wide output hands device d heads [d*n_local, (d+1)*n_local),
             # the same heads its V shard carries, so the gate reshapes to heads with plain create_heads.
             self.to_gate_compress = ColParallelLinear(
@@ -300,12 +301,18 @@ class MiniMaxH3Attention(Module):
     def _prepare_torch_state(self, state: dict[str, torch.Tensor]) -> None:
         rename_substate(state, "to_out.0", "to_out")
 
-        if self.vsa_config is not None:
-            # The base H3 checkpoint carries no gate: zero-init it, which makes the compressed
-            # branch contribute nothing (and lets forward skip it entirely, identically).
+        if self.vsa_config is not None and self.vsa_config.gate_compress:
+            # A missing gate is zero-init: the compressed branch then contributes nothing and
+            # forward skips it entirely.
             if "to_gate_compress.weight" not in state:
                 state["to_gate_compress.weight"] = torch.zeros(self.inner_dim, self.hidden_size)
             self.gate_compress_is_zero = not bool(state["to_gate_compress.weight"].any())
+        elif "to_gate_compress.weight" in state:
+            gate = state.pop("to_gate_compress.weight")
+            if gate.any():
+                raise ValueError(
+                    "checkpoint has a nonzero to_gate_compress; build with MiniMaxH3VSAConfig(gate_compress=True)"
+                )
 
         def _interleave_heads(tensors: list[torch.Tensor]) -> torch.Tensor:
             """Reorder [out, in] weights so TP column-fracturing gives each device matching heads.
