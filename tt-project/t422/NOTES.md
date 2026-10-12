@@ -75,3 +75,8 @@ deadline 400 s):
   (rc file state/runs/1616/t422on6.rc; log tt-project/t422/state/on.log). At launch another smarton job held blx01's
   queue, so the submitter waits in 2 min steps.
 - Next: read state/on.log; compare per-step times and md5 with the off arm (job 860).
+
+## 2026-10-12 run 1622 (result)
+- On arm blx01 job 886 passed (08:29 UTC, exit 0, no drop). Per-step 1.4042 / 1.3866 s vs off (job 860) 1.4935 / 1.5264 s:
+  -6.0% / -9.2%, mean -7.6% (900 MHz clamp, relative only). mp4 md5 on = off = c79b7d37ba9c0f5034b3392af1f1a841: bit-identical.
+- Code 12aff07c462 on ttp/t422-port-upstream-58676-tile-row-adaln-gathe. Done.

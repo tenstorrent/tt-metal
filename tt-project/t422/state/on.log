@@ -130,3 +130,62 @@ ttp-heal-key: blx01-broker-gate
 lint: ERROR /var/tmp/fasth3 on g15blx01 is 455 GB, over its 450 GB cap: delete our outputs and caches first
 lint: refused; fix the problems above before launching
 2026-10-12T07:51:43Z T422ON_DONE 2
+blx01: broker up, device not held
+a smarton job is already running or queued on blx01
+blx01: broker up, device not held
+a smarton job is already running or queued on blx01
+blx01: broker up, device not held
+a smarton job is already running or queued on blx01
+blx01 busy: broker gate/recovery in progress:   --          🔧 broker  16s      health-gate/post-job: health check: fabric traffic pass across all links (~45s)
+ttp-heal-key: blx01-broker-gate
+Job 886 queued (position: 1)
+Log: /var/log/tt-device-broker/2026-10-12_081908_886.log
+job=886
+retry_when: ssh -o BatchMode=yes -o ConnectTimeout=20 g15blx01 'tt-device-mcp status -j 886 | grep -q ^Status: && ! tt-device-mcp status -j 886 | grep -qiE "^Status: +(running|queued|pending)"'
+2026-10-12T08:19:08Z on: try 1 job 886 submitted
+Job:     886
+Owner:   smarton
+Status:  completed
+Command: env T286_WARM_DEADLINE_S=500 T286_WARM_LATE_S=430 T408_REPLAYS=2 T408_SAVE=0 T408_PY_TIMEOUT=560 bash /var/tmp/fasth3/t422/run422.sh on on
+Exit:    0
+Runtime: 259.0s
+Log:     /var/log/tt-device-broker/2026-10-12_081908_886.log
+==================================== PASSES ====================================
+- generated xml file: /var/tmp/fasth3/t422/b/generated/test_reports/most_recent_tests.xml -
+============================= slowest 25 durations =============================
+227.87s call     models/tt_dit/tests/models/minimax_h3/test_pipeline_turbo_minimax_h3.py::test_turbo_end_to_end[blackhole-4x8-5s]
+8.10s setup    models/tt_dit/tests/models/minimax_h3/test_pipeline_turbo_minimax_h3.py::test_turbo_end_to_end[blackhole-4x8-5s]
+0.60s teardown models/tt_dit/tests/models/minimax_h3/test_pipeline_turbo_minimax_h3.py::test_turbo_end_to_end[blackhole-4x8-5s]
+=========================== short test summary info ============================
+PASSED models/tt_dit/tests/models/minimax_h3/test_pipeline_turbo_minimax_h3.py::test_turbo_end_to_end[blackhole-4x8-5s]
+=========== 1 passed, 11 deselected, 2 warnings in 236.61s (0:03:56) ===========
+sys:1: DeprecationWarning: builtin type swigvarlink has no __module__ attribute
+2026-10-12 08:28:41.617 | info     |    BuildKernels | JIT cache stats: 6156/6374 hits (96.6%) [6156 cached, 108883 build-once dedup, 0 merged artifacts, 0 merged genfiles] (build_cache_telemetry.cpp:268)
+2026-10-12 08:28:41.618 | info     |    BuildKernels | JIT telemetry: 43 registered TelemetryTokens (build_cache_telemetry.cpp:325)
+2026-10-12 08:28:42.020 | info     |          Device | Closing user mode device drivers (tt_cluster.cpp:519)
+2026-10-12 08:28:42.020 | info     |             UMD | Closing devices in cluster (cluster.cpp:1319)
+2026-10-12 08:28:44.712 | info     |             UMD | Closing devices in cluster completed. (cluster.cpp:1329)
+2026-10-12 08:28:44.713 | info     |             UMD | Cluster destructor started. (cluster.cpp:1050)
+2026-10-12 08:28:44.713 | info     |             UMD | Cluster destructor completed. (cluster.cpp:1063)
+[t422] process wall 256 s
+c79b7d37ba9c0f5034b3392af1f1a841  /var/tmp/fasth3/t422/out_on/fl2va_turbo_1344x768_5s_4fwd.mp4
+T408_EXIT=0
+Denoising (per step)      |   1.4935s
+Total Pipeline            |   8.0932s
+Denoising (per step)      |   1.5264s
+Total Pipeline            |   8.8756s
+2026-10-12 06:41:23.304 | INFO     | models.tt_dit.utils.video:export_video_audio_yuv:205 - Saved: /var/tmp/fasth3/home/h3_turbo_artifacts/fl2va_turbo_1344x768_5s_4fwd.mp4 (124f @ 24fps, yuv420p fast path)
+2026-10-12 06:41:23.322 | INFO     | models.tt_dit.tests.models.minimax_h3.test_pipeline_turbo_minimax_h3:test_turbo_end_to_end:310 - wrote /var/tmp/fasth3/home/h3_turbo_artifacts/fl2va_turbo_1344x768_5s_4fwd.mp4
+[t422] process wall 255 s
+c79b7d37ba9c0f5034b3392af1f1a841  /var/tmp/fasth3/t422/out_off/fl2va_turbo_1344x768_5s_4fwd.mp4
+T408_EXIT=0
+Denoising (per step)      |   1.4042s
+Total Pipeline            |   7.6449s
+Denoising (per step)      |   1.3866s
+Total Pipeline            |   8.4863s
+2026-10-12 08:28:36.294 | INFO     | models.tt_dit.utils.video:export_video_audio_yuv:205 - Saved: /var/tmp/fasth3/home/h3_turbo_artifacts/fl2va_turbo_1344x768_5s_4fwd.mp4 (124f @ 24fps, yuv420p fast path)
+2026-10-12 08:28:36.312 | INFO     | models.tt_dit.tests.models.minimax_h3.test_pipeline_turbo_minimax_h3:test_turbo_end_to_end:310 - wrote /var/tmp/fasth3/home/h3_turbo_artifacts/fl2va_turbo_1344x768_5s_4fwd.mp4
+[t422] process wall 256 s
+c79b7d37ba9c0f5034b3392af1f1a841  /var/tmp/fasth3/t422/out_on/fl2va_turbo_1344x768_5s_4fwd.mp4
+T408_EXIT=0
+2026-10-12T08:29:17Z T422ON_DONE 0
