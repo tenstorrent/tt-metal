@@ -178,3 +178,21 @@ Next (tunnel up): `ssh exabox-login 'df -h /data; curl -sI https://huggingface.c
   (fails cleanly if warmup ends too late to generate). Submitted directly: blx01 job 979 (15:20Z).
 - Next: read /var/tmp/fasth3/t409/out_ab10-vsa0.9/run.log on blx01. PASS file there = arm done (compare denoise
   ms/step with #408 out_t10: 3110 ms/step dense). Warm-deadline/late failure again = resubmit the same spec with a new ID.
+
+## t449 run 1690 (2026-10-12 08:40 PDT)
+- blx01 job 979 (VSA-0.9 10 s arm, 15:20Z) FAILED, exit 124: killed by its 560 s pytest timeout, process wall 571 s.
+  Not a drop. All 12 audio lengths compiled this time (+2180 programs, lengths 7-12 ~60 s each cold). Then it was
+  killed inside the first of 3 prompt-encoder layouts (started 15:27:40Z). The t286 deadline is only checked between
+  warm items, and a single cold item outlasted the time left.
+- Box event: blx01 fabric-check 980 (15:30Z, right after 979) FAILED: `Device 0: Timed out while waiting for
+  active ethernet core 27-25 to become active again`. Broker hold 981 then "device HELD (degraded): eth/fabric fault",
+  and the broker is recovering on its own. Likely cause: our python was killed by TERM with the mesh open (977's clean
+  failure was followed by a passing fabric check, 978). We did not reset anything.
+- Fix: tt-project/t409/plug/t409_alarm.py (-p t409_alarm, T409_ALARM_S = T409_PY_TIMEOUT-35 = 525 s by default)
+  raises RuntimeError in the main thread, so pytest teardown closes the mesh before timeout's TERM. CPU check: a
+  sleeping test fails with the alarm and its finally/teardown runs. run409b.sh adds $T/plug to PYTHONPATH. Both
+  copied to blx01 via tmp+mv (md5 match).
+- Spec ab10vsa.txt ID -> t449-ab10-vsa0.9-r3 (same CMD). Lint ok. chain449a (detached, run 1690) waits for blx01 to
+  leave HELD and for its queue to have no smarton job (job 982 `true`, not ours, was queued), then submits.
+- Next: read the T449A_DONE line in state/runs/1690/chain449a.out. Warm-deadline/alarm failure = resubmit (new ID);
+  each job compiles more. PASS = compare denoise ms/step with #408 out_t10 (3110 ms/step dense, seed 0, 900 MHz).
