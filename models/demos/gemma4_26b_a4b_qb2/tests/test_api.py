@@ -1,6 +1,6 @@
 # SPDX-License-Identifier: Apache-2.0
 # SPDX-FileCopyrightText: 2026 Tenstorrent USA, Inc.
-"""Live serving contracts for Gemma4 on unmodified vLLM TT plugin main."""
+"""Live serving contracts for Gemma4 on the validated vLLM TT plugin revision."""
 
 import asyncio
 
