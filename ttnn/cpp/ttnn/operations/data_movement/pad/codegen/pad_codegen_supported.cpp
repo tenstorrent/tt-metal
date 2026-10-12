@@ -11,6 +11,7 @@
 #include <limits>
 
 #include <tt-metalium/allocator.hpp>
+#include <tt-metalium/bfloat16.hpp>
 #include <tt-metalium/constants.hpp>
 #include <tt-metalium/device.hpp>
 #include <tt-metalium/hal.hpp>
@@ -32,15 +33,6 @@ using tt::tt_metal::DataType;
 // Batching the CB plan starts from; plan_batches halves it until the plan fits the L1 it is given.
 constexpr uint32_t kReadBatch = 8;
 constexpr uint32_t kWriteBatch = 4;
-
-uint32_t bf16_bits(float v) {
-    if (std::isnan(v)) {
-        return 0x7FC0;
-    }
-    uint32_t b = std::bit_cast<uint32_t>(v);
-    b += 0x7FFF + ((b >> 16) & 1);
-    return b >> 16;
-}
 
 bool same_tile(const tt::tt_metal::Tile& a, const tt::tt_metal::Tile& b) {
     return a.get_height() == b.get_height() && a.get_width() == b.get_width() &&
@@ -260,10 +252,7 @@ uint32_t pack_pad_value(DataType dtype, float value) {
             const double clamped = std::clamp(std::trunc(static_cast<double>(value)), -kLimit, kLimit);
             return static_cast<uint32_t>(static_cast<uint64_t>(static_cast<int64_t>(clamped)) & 0xFFFFFFFFull);
         }
-        default: {
-            const uint32_t half = bf16_bits(value);
-            return (half << 16) | half;
-        }
+        default: return pack_two_bfloat16_into_uint32({bfloat16(value), bfloat16(value)});
     }
 }
 
