@@ -11,6 +11,7 @@
 namespace ttml::metal {
 
 // Returns (grad_input [1,T,Q+K+V] TILE, grad_tap0..3 shaped like the taps). History gets no gradient.
+// sequence_splits = 0 picks enough sequence splits to fill the core grid.
 std::tuple<ttnn::Tensor, ttnn::Tensor, ttnn::Tensor, ttnn::Tensor, ttnn::Tensor> qkv_causal_conv1d_silu_bw(
     const ttnn::Tensor& grad_q,
     const ttnn::Tensor& grad_k,
@@ -24,6 +25,7 @@ std::tuple<ttnn::Tensor, ttnn::Tensor, ttnn::Tensor, ttnn::Tensor, ttnn::Tensor>
     uint32_t q_width,
     uint32_t k_width,
     uint32_t v_width,
-    uint32_t channel_chunk_size);
+    uint32_t channel_chunk_size,
+    uint32_t sequence_splits = 0);
 
 }  // namespace ttml::metal
