@@ -154,7 +154,7 @@ Numbers come from 188-step greedy runs of `e2b_bringup.py::test_e2b_decode_timin
   - **`2238a4b`:** the enhancer opts out of gemma4's sliding-tail stash, whose slice compiled once per prompt length.
   - **Still flagged:** Tracer I/O, VAE/vocoder/BWE `Clone`/`_update_input` copies, encoder copies, and the enhancer's lm_head and `PagedFillCache` per-length programs. The complete fix (a traced LTX pass before the E2B capture) would invert the hazard onto E2B's capture-time buffers, so it needs its own tracker run.
 - **(b) Rewrite latency: resolved, it was the tracker.** Job 130196 (b07u02, late capture, tracker off, 2026-10-12) PASSED: prompt enhance took 3.7 / 2.8 / 3.2 s and total compute was 50.0 / 11.8 / 10.0 s for gens 0/1/2 (gen 0 includes the LTX trace captures). Warmup took 876 s; the late E2B capture took 29.8 s.
-- **(c) No same-node control yet.** The knob-off config hasn't been rerun on b03u02; the hangs were all on d07u02.
+- **(c) Control: the hang reproduces with the knob off.** Job 130193 (bh-glx-120-b04u08, 2026-10-12) ran the same config as 130120 with `LTX_ENHANCER_LATE_CAPTURE` unset, on code at `2238a4b`. The tracker flagged 3550 buffers alive at the gen-0 E2B replay (130120 had 1). Stage 1 finished (34.2 s), and then the device timed out at the same point as 128486, on a third node. Only the knob differs between the two runs, so the late capture is what fixes the hang.
 - **(d) Teardown noise: fixed in `2238a4b`.** The E2B Generator's `__del__` released the decode trace after the submesh had closed. `release_traces()` now unloads the enhancer while the mesh is open. 130196 logged no TT_THROW.
 - **(e) Make the knob the default** once (a)–(c) are settled.
 
