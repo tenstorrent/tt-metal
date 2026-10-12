@@ -31,6 +31,11 @@ void run_kernel(RUNTIME_PARAMETERS params)
 #if defined(RUNTIME_FORMATS) && !defined(SPEED_OF_LIGHT)
     const FormatConfig& formats = params.formats;
 #endif
+#ifndef SPEED_OF_LIGHT
+    const std::uint32_t TEST_FACE_R_DIM = params.TEST_FACE_R_DIM;
+    const std::uint32_t num_faces       = params.num_faces;
+    const Operand& buffer_A             = params.buffer_A;
+#endif
 
     if (unpack_to_dest)
     {
@@ -42,7 +47,7 @@ void run_kernel(RUNTIME_PARAMETERS params)
     }
 
     const auto bfd_unpack = ckernel::trisc::bfd_alloc_and_program<ckernel::trisc::BfdResource::Unp0>(
-        ckernel::tensor_shape_from_num_faces(params.TEST_FACE_R_DIM, params.num_faces), L1_ADDRESS(params.buffer_A[0]), formats.unpack_A_src);
+        ckernel::tensor_shape_from_num_faces(TEST_FACE_R_DIM, num_faces), L1_ADDRESS(buffer_A[0]), formats.unpack_A_src);
 
     if (is_fp32_dest_acc_en && !unpack_to_dest)
     {
@@ -86,6 +91,11 @@ void run_kernel(RUNTIME_PARAMETERS params)
 #if defined(RUNTIME_FORMATS) && !defined(SPEED_OF_LIGHT)
     const FormatConfig& formats = params.formats;
 #endif
+#ifndef SPEED_OF_LIGHT
+    const std::uint32_t TEST_FACE_R_DIM = params.TEST_FACE_R_DIM;
+    const std::uint32_t num_faces       = params.num_faces;
+    const std::uint32_t DST_INDEX       = params.DST_INDEX;
+#endif
     // Binary SFPU: there are 2 input tiles (gate, up) and 1 output tile.
     // gate lives at Dest tile index 0, up at Dest tile index 1,
     // output written to Dest tile index 2. One SFPU "section" covers all
@@ -108,11 +118,11 @@ void run_kernel(RUNTIME_PARAMETERS params)
         // FPU path: datacopy BOTH input tiles from SrcA to Dest before the
         // SFPU section reads them. Tile 0 = gate at Dest[0], tile 1 = up at
         // Dest[1].
-        _llk_math_eltwise_unary_datacopy_init_<DATA_COPY_TYPE, is_fp32_dest_acc_en>(params.num_faces * params.TEST_FACE_R_DIM, 1 /*num_matrices*/);
+        _llk_math_eltwise_unary_datacopy_init_<DATA_COPY_TYPE, is_fp32_dest_acc_en>(num_faces * TEST_FACE_R_DIM, 1 /*num_matrices*/);
 
         for (std::uint32_t i = 0; i < 2 /*gate + up*/; ++i)
         {
-            _llk_math_eltwise_unary_datacopy_(params.DST_INDEX + i);
+            _llk_math_eltwise_unary_datacopy_(DST_INDEX + i);
         }
 
         _llk_math_set_dvalid_<p_cleardvalid::FPU, dest_sync>();
@@ -131,14 +141,14 @@ void run_kernel(RUNTIME_PARAMETERS params)
     // _llk_math_eltwise_sfpu_inc_dst_face_addr_() advances the base by
     // TEST_FACE_R_DIM rows (one face) between face iterations, so the same
     // relative offsets work for every face.
-    _llk_math_eltwise_sfpu_start_(params.DST_INDEX);
+    _llk_math_eltwise_sfpu_start_(DST_INDEX);
 
     // Load the 3 hoisted constants (+L, +2L, alpha) into LREG4/5/6 once for
     // the whole SFPU section. They persist across every per-face call below.
     ckernel::sfpu::_init_swiglu_();
 
-    const std::uint32_t DEST_ROWS_PER_TILE = params.num_faces * params.TEST_FACE_R_DIM;
-    for (std::uint32_t face = 0; face < params.num_faces; ++face)
+    const std::uint32_t DEST_ROWS_PER_TILE = num_faces * TEST_FACE_R_DIM;
+    for (std::uint32_t face = 0; face < num_faces; ++face)
     {
         ckernel::sfpu::_calculate_swiglu_<SFPU_ITERATIONS>(
             /*gate_offset_idx=*/0,
@@ -172,6 +182,12 @@ void run_kernel(RUNTIME_PARAMETERS params)
 #if defined(RUNTIME_FORMATS) && !defined(SPEED_OF_LIGHT)
     const FormatConfig& formats = params.formats;
 #endif
+#ifndef SPEED_OF_LIGHT
+    const std::uint32_t TEST_FACE_R_DIM = params.TEST_FACE_R_DIM;
+    const std::uint32_t num_faces       = params.num_faces;
+    const std::uint32_t DST_INDEX       = params.DST_INDEX;
+    const Operand& buffer_Res           = params.buffer_Res;
+#endif
     // Declare the same dvalid client chain that UNPACK/MATH used, seen from
     // PACK's side. The chain must match on all three threads.
     if (unpack_to_dest)
@@ -184,7 +200,7 @@ void run_kernel(RUNTIME_PARAMETERS params)
     }
 
     const auto bfd_pack = ckernel::trisc::bfd_alloc_and_program<ckernel::trisc::BfdResource::Pack0>(
-        ckernel::tensor_shape_from_num_faces(params.TEST_FACE_R_DIM, params.num_faces), L1_ADDRESS(params.buffer_Res[0]), formats.pack_dst);
+        ckernel::tensor_shape_from_num_faces(TEST_FACE_R_DIM, num_faces), L1_ADDRESS(buffer_Res[0]), formats.pack_dst);
 
     _llk_pack_hw_configure_<p_pacr::PACK0, is_fp32_dest_acc_en>(static_cast<DataFormat>(formats.pack_src), ckernel::ReluConfig::none());
     _llk_pack_init_(bfd_pack, ckernel::DEFAULT_TENSOR_SHAPE, 1 /*num_tiles*/);
@@ -194,7 +210,7 @@ void run_kernel(RUNTIME_PARAMETERS params)
     // up=1, out=2 relative to DST_INDEX. The kernel itself is layout-agnostic
     // and accepts arbitrary (gate, up, out) Dest offsets via
     // `_calculate_swiglu_`'s parameters; +2 is not a property of swiglu.
-    _llk_pack_(params.DST_INDEX + 2 /*start_math_dest_tile_idx*/, 0 /*start_l1_tile_idx*/, ckernel::DEFAULT_TENSOR_SHAPE);
+    _llk_pack_(DST_INDEX + 2 /*start_math_dest_tile_idx*/, 0 /*start_l1_tile_idx*/, ckernel::DEFAULT_TENSOR_SHAPE);
     _llk_pack_dest_dvalid_section_done_<dest_sync, is_fp32_dest_acc_en>();
 }
 #endif
