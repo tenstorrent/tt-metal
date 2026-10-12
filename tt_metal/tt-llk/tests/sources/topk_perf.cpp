@@ -16,6 +16,13 @@
 #include "perf.h"
 #include "profiler.h"
 
+// Under SPEED_OF_LIGHT the run-time parameters are compile-time constants of the same names.
+#ifdef SPEED_OF_LIGHT
+#define TOPK_PERF_PARAM(name) name
+#else
+#define TOPK_PERF_PARAM(name) params.name
+#endif
+
 std::uint32_t unp_cfg_context          = 0;
 std::uint32_t pack_sync_tile_dst_ptr   = 0;
 std::uint32_t math_sync_tile_dst_index = 0;
@@ -59,9 +66,11 @@ void run_kernel(RUNTIME_PARAMETERS params)
 #if defined(RUNTIME_FORMATS) && !defined(SPEED_OF_LIGHT)
     const FormatConfig& formats = params.formats;
 #endif
+#ifndef SPEED_OF_LIGHT
     const std::uint32_t LOOP_FACTOR   = params.LOOP_FACTOR;
-    const int NUM_ROWS                = params.FULL_RT_DIM;
-    const int NUM_VALUE_TILES_PER_ROW = params.FULL_CT_DIM / NUM_STAGES;
+#endif
+    const int NUM_ROWS                = TOPK_PERF_PARAM(FULL_RT_DIM);
+    const int NUM_VALUE_TILES_PER_ROW = TOPK_PERF_PARAM(FULL_CT_DIM) / NUM_STAGES;
 
     const std::uint32_t unpack_src_data_types[NUM_STAGES] = {formats.unpack_A_src, ckernel::to_underlying(DataFormat::UInt16)};
     const std::uint32_t unpack_dst_data_types[NUM_STAGES] = {formats.unpack_A_dst, ckernel::to_underlying(DataFormat::UInt16)};
@@ -106,7 +115,8 @@ void run_kernel(RUNTIME_PARAMETERS params)
                                     src_fmt, dst_fmt, 16 * 16 * 4);
                                 _llk_unpack_A_init_<BroadcastType::NONE, false, EltwiseBinaryReuseDestType::NONE, unpack_to_dest>(
                                     (it == 0) ? 1 : 0, (it == 0) ? 1 : 0, ckernel::DEFAULT_TENSOR_SHAPE, src_fmt, dst_fmt);
-                                const int first_tile  = row * params.FULL_CT_DIM + si * NUM_VALUE_TILES_PER_ROW + pair * (distance * NUM_TILES_PER_STAGE);
+                                const int first_tile =
+                                    row * TOPK_PERF_PARAM(FULL_CT_DIM) + si * NUM_VALUE_TILES_PER_ROW + pair * (distance * NUM_TILES_PER_STAGE);
                                 const int second_tile = first_tile + distance;
                                 _llk_unpack_A_<BroadcastType::NONE, false, EltwiseBinaryReuseDestType::NONE, unpack_to_dest>(
                                     PERF_ADDRESS(PERF_INPUT_A, first_tile), src_fmt, dst_fmt);
@@ -195,9 +205,11 @@ void run_kernel(RUNTIME_PARAMETERS params)
 #if defined(RUNTIME_FORMATS) && !defined(SPEED_OF_LIGHT)
     const FormatConfig& formats = params.formats;
 #endif
+#ifndef SPEED_OF_LIGHT
     const std::uint32_t LOOP_FACTOR   = params.LOOP_FACTOR;
-    const int NUM_ROWS                = params.FULL_RT_DIM;
-    const int NUM_VALUE_TILES_PER_ROW = params.FULL_CT_DIM / NUM_STAGES;
+#endif
+    const int NUM_ROWS                = TOPK_PERF_PARAM(FULL_RT_DIM);
+    const int NUM_VALUE_TILES_PER_ROW = TOPK_PERF_PARAM(FULL_CT_DIM) / NUM_STAGES;
 
     static_assert(!(TOPK_FUSED_STABLE && TOPK_STABLE_SORT), "fused and comparator stable modes are mutually exclusive");
     static_assert(!TOPK_FUSED_STABLE || is_fp32_dest_acc_en, "fused stable topk requires 32-bit DEST (dest_acc)");
@@ -396,9 +408,11 @@ void run_kernel(RUNTIME_PARAMETERS params)
 #if defined(RUNTIME_FORMATS) && !defined(SPEED_OF_LIGHT)
     const FormatConfig& formats = params.formats;
 #endif
+#ifndef SPEED_OF_LIGHT
     const std::uint32_t LOOP_FACTOR              = params.LOOP_FACTOR;
-    const int NUM_ROWS                           = params.FULL_RT_DIM;
-    const int NUM_VALUE_TILES_PER_ROW            = params.FULL_CT_DIM / NUM_STAGES;
+#endif
+    const int NUM_ROWS                           = TOPK_PERF_PARAM(FULL_RT_DIM);
+    const int NUM_VALUE_TILES_PER_ROW            = TOPK_PERF_PARAM(FULL_CT_DIM) / NUM_STAGES;
     const int NUM_TILES_IN_RESULT_BUFFER_PER_ROW = (TOPK_K / ckernel::TILE_C_DIM) * NUM_STAGES;
 
     const std::uint32_t pack_src_data_types[NUM_STAGES] = {formats.pack_src, ckernel::to_underlying(DataFormat::UInt16)};
@@ -446,7 +460,8 @@ void run_kernel(RUNTIME_PARAMETERS params)
                                 }
                                 else
                                 {
-                                    const int tile_L1 = row * params.FULL_CT_DIM + si * NUM_VALUE_TILES_PER_ROW + pair * (distance * NUM_TILES_PER_STAGE);
+                                    const int tile_L1 =
+                                        row * TOPK_PERF_PARAM(FULL_CT_DIM) + si * NUM_VALUE_TILES_PER_ROW + pair * (distance * NUM_TILES_PER_STAGE);
                                     _llk_pack_<dest_sync, is_fp32_dest_acc_en, ckernel::PackMode::Default>(tile_dest_offset, PERF_ADDRESS(PERF_INPUT_A, tile_L1));
                                 }
                             }
