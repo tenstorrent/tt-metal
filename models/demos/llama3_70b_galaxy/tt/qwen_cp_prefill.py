@@ -517,12 +517,20 @@ def fused_ag_enabled(seq_len) -> bool:
     return os.environ.get("QWEN_CP_FUSED_AG", "1") == "1" and seq_len >= 32768
 
 
-def release_fused_ag(mesh_device):
-    """End of a prefill: free the fused op's L1 semaphore words (see qwen_ag_matmul.release_semaphores)."""
-    if os.environ.get("QWEN_CP_FUSED_AG", "1") == "1":
-        from models.demos.llama3_70b_galaxy.tt.custom_ops.qwen_ag_matmul import release_semaphores
+def fused_ag_ff1_enabled(seq_len) -> bool:
+    """FF-norm row all-gather + FF1 matmul as qwen_ag_matmul_v2 (the matmul on the full 7x10 grid, the fabric senders
+    folded into eight in0 receiver cores; copy_local fills the own slot of the gathered buffer for FF3).
+    Bit-identical. Used for S >= 32768 (job384, ms per pair, stock -> fused: 32k 2.451 -> 2.268, 40k 2.894 -> 2.678;
+    b1 40k 1727.0 -> 1713.1 ms, job385; gate digit-identical, job386). QWEN_CP_FUSED_AG_FF1=0 keeps the stock pair."""
+    return os.environ.get("QWEN_CP_FUSED_AG_FF1", "1") == "1" and seq_len >= 32768
 
-        release_semaphores(mesh_device)
+
+def release_fused_ag(mesh_device):
+    """End of a prefill: free the fused ops' L1 semaphore words (see qwen_ag_matmul.release_semaphores)."""
+    from models.demos.llama3_70b_galaxy.tt.custom_ops.qwen_ag_matmul import release_semaphores, release_semaphores_v2
+
+    release_semaphores(mesh_device)
+    release_semaphores_v2(mesh_device)
 
 
 def _row_ag(tt_ccl, model_config, t, seq_len):
@@ -699,16 +707,23 @@ def mlp_prefill(ctx: CPContext, tt_ccl, mlp, x_local, w):
     Returns FF2 reduce-scattered over the rows, [1, 1, S/32, 5120] in the model's prefill output dtype (bf16)."""
     S = ctx.lay.S
     args, mc = mlp.args, mlp.model_config
-    xa = _row_ag(tt_ccl, mc, x_local, S)  # [1, 1, S/4, 5120]
-    ttnn.deallocate(x_local)
     fp32 = ff13_fp32_acc()
     ff13_kw = dict(
         config=FF13_FP32_CFG if fp32 else FF13_CFG,
         compute_kernel_config=args.compute_kernel_config_hifi2 if fp32 else args.compute_kernel_config_lofi,
         dtype=ttnn.bfloat8_b,
-        memory_config=ttnn.DRAM_MEMORY_CONFIG,
     )
-    w1o = ttnn.experimental.minimal_matmul(input_tensor=xa, weight_tensor=w["w1"], **ff13_kw)  # [1, 1, S/4, 3200]
+    if fused_ag_ff1_enabled(S) and not fp32:
+        from models.demos.llama3_70b_galaxy.tt.custom_ops.qwen_ag_matmul import qwen_ag_matmul_v2
+
+        w1o, xa = qwen_ag_matmul_v2(x_local, w["w1"], copy_local=True, **ff13_kw)  # [1, 1, S/4, 3200]
+    else:
+        xa = _row_ag(tt_ccl, mc, x_local, S)  # [1, 1, S/4, 5120]
+        w1o = ttnn.experimental.minimal_matmul(
+            input_tensor=xa, weight_tensor=w["w1"], memory_config=ttnn.DRAM_MEMORY_CONFIG, **ff13_kw
+        )  # [1, 1, S/4, 3200]
+    ttnn.deallocate(x_local)
+    ff13_kw["memory_config"] = ttnn.DRAM_MEMORY_CONFIG
     w3o = ttnn.experimental.minimal_matmul(input_tensor=xa, weight_tensor=w["w3"], **ff13_kw)
     ttnn.deallocate(xa)
     w2_in = ttnn.mul(

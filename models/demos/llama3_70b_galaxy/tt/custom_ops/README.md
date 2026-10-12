@@ -24,7 +24,8 @@ to a descriptor or a kernel needs no `_ttnn.so` rebuild. Conventions follow
         qwen_ag_matmul/          Qwen context-parallel row all-gather along M (fabric, from the op) + QKV matmul
             __init__.py, op.py
             kernels/             mm_{in0,in1_out,compute}.cpp (minimal_matmul kernels with block lists),
-                                 ag_sender.cpp (fabric multicast sender), ag_hub.cpp (barrier + block release)
+                                 ag_sender.cpp (fabric multicast sender), ag_hub.cpp (barrier + block release),
+                                 v2_in0.cpp (7x10 form: in0 relay with the fabric sender folded in)
 
 ## Conventions
 
@@ -303,4 +304,18 @@ fabric) and the fused op are `torch.equal` to the stock pair on all 32 devices a
 Pipelined ms per pair, stock -> fused (job367): 16k 0.895 -> 1.026, 24k 1.123 -> 1.381, 32k 1.507 ->
 1.431, 40k 1.783 -> 1.603 (hence S >= 32768). At 40k the all-gather alone takes 1.13-1.15 ms and the
 unwaited concurrent bound is 1.48 ms. The FF1 shape (W1 1.74 MB per core, not resident) runs in lockstep
-and is slower than its stock pair (2.96-3.51 vs 2.84-2.89 ms, job366), so the MLP keeps the stock pair.
+and is slower than its stock pair (2.96-3.51 vs 2.84-2.89 ms, job366), so the MLP uses the 7x10 form below.
+
+### qwen_ag_matmul_v2 (FF1)
+
+Same contract and bits, no sender column: the matmul runs on the full 7x10 grid and the eight fabric
+streams (links 0-3 fwd at (0..3, 9), bwd at (4, 9), (5, 9), (6, 9), (6, 8)) run inside those in0 receiver
+cores (`kernels/v2_in0.cpp`): every wait of the in0 relay loop calls a non-blocking sender pump that sends
+at most one packet or one inc. Column x takes one piece of the own slot (the slot split over the 7
+columns), then every wave of remote slot (r + 1 + x) % 8, so each wave is one lockstep step; the in0
+injectors wait on per-wave words (each sender increments wave word j on all 7 injectors of every receiver:
+56 incs = wave j of every remote slot). Barrier word on the sender cores, both in one L1 buffer created and
+freed per prefill like v1's. Waves (`v2_waves`): 12,16,12 at 40k. FF1 40k pair 2.894 -> 2.678 ms, 32k
+2.451 -> 2.268 (job384); QKV in this form 1.57-1.59 ms, same as v1 (AG-bound), so QKV keeps v1.
+Making the pump non-blocking (job381: 2.98 -> 2.86 at 8-row waves) mattered: a blocking flush per packet
+batch or per inc stalls the in0 relay of the whole column.

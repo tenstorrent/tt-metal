@@ -14,7 +14,9 @@ test_qwen_ag_matmul: on the 8x4 Galaxy (FABRIC_1D_RING), per kind (QKV: N=1280, 
        copy_local, else the remote ones) torch.equal to the stock gather.
     3. Pipelined wall time per call (2 warm-ups, REPS x BATCH back-to-back calls, one sync per batch, median) of the
        stock pair and of the fused op. Printed as QAGMM_TIME lines.
-    QAGMM_SEQS / QAGMM_KINDS (comma lists) narrow the sweep; QAGMM_WAVES (e.g. 8,8,8,8,8) forces the wave sizes.
+    QAGMM_SEQS / QAGMM_KINDS (comma lists) narrow the sweep; QAGMM_WAVES (e.g. 8,8,8,8,8; ';' separates sets)
+    forces the wave sizes; QAGMM_V2=1 tests qwen_ag_matmul_v2 (7x10 grid, senders in the in0 receivers) instead;
+    QAGMM_PROBES=1 adds timing probes (port, nowait, and for v1 nomm / agonly).
 
 Run on the Wormhole Galaxy (8x4 mesh):
     pytest models/demos/llama3_70b_galaxy/tests/test_qwen_ag_matmul_op.py -s
@@ -34,8 +36,11 @@ from models.demos.llama3_70b_galaxy.tt.custom_ops.qwen_ag_matmul import (
     check_plan,
     matmul_port,
     plan,
+    plan_v2,
     qwen_ag_matmul,
+    qwen_ag_matmul_v2,
     resident_fits,
+    v2_waves,
 )
 
 ROWS, COLS = 8, 4
@@ -62,6 +67,18 @@ def test_qwen_ag_matmul_plan():
             p = plan(S // 32 // 32, 16, N, resident=resident)
             check_plan(p)
             logger.info(f"S={S} N={N} resident={resident} waves {p.waves} blocks/column {[len(c) for c in p.cols[0]]}")
+        # v2 (7x10): column x = a piece of the own slot, then every wave of remote slot (r + 1 + x) % 8
+        T = S // 32 // 32
+        for resident in (False, True):
+            for r in range(ROWS):
+                waves, _, cols = plan_v2(T, r, waves=v2_waves(T, resident))
+                cover = [0] * (ROWS * T)
+                for x, col in enumerate(cols):
+                    assert col[0][2] == 0xFFFF and all(m0 // T == (r + 1 + x) % ROWS for m0, _, _ in col[1:])
+                    for m0, rows, _ in col:
+                        for m in range(m0, m0 + rows):
+                            cover[m] += 1
+                assert all(v == 1 for v in cover), (S, r, resident)
 
 
 def _host(t):
@@ -138,6 +155,34 @@ def test_qwen_ag_matmul(mesh_device):
             mesh_mapper=ttnn.ShardTensor2dMesh(mesh, dims=(0, None), mesh_shape=(ROWS, COLS)),
         )
         mm_kw = dict(config=kd["config"], compute_kernel_config=kd["ckc"], dtype=ttnn.bfloat8_b)
+        v2 = os.environ.get("QAGMM_V2") == "1"
+
+        def fused(x, w, copy_local, waves=None, probe=None, gathered=None, out=None, resident=None, split=0, **kw):
+            if v2:
+                return qwen_ag_matmul_v2(
+                    x,
+                    w,
+                    copy_local=copy_local,
+                    gathered=gathered,
+                    out=out,
+                    resident=resident,
+                    probe=probe,
+                    waves=waves,
+                    **kw,
+                )
+            return qwen_ag_matmul(
+                x,
+                w,
+                copy_local=copy_local,
+                waves=waves,
+                probe=probe,
+                gathered=gathered,
+                out=out,
+                resident=resident,
+                split=split,
+                **kw,
+            )
+
         rk = dict(resident=None if res_env is None else res_env == "1", split=split)
         if rk["resident"] is None:
             rk["resident"] = resident_fits(K, N, kd["config"])
@@ -153,7 +198,8 @@ def test_qwen_ag_matmul(mesh_device):
             T = S // 32 // 32
             p = plan(T, kd["config"].M_block_size, N, waves, **rk)
             check_plan(p)
-            tag = f"{kind} S={S} waves {p.waves} {rk}"
+            vw = waves or v2_waves(T, rk["resident"])
+            tag = f"{kind} S={S} waves {vw if v2 else p.waves} {rk} v2={int(v2)}"
             xs = []
             for rep in range(2):
                 xh = torch.randn(ROWS, COLS, S // 32, K, generator=g).to(torch.bfloat16)
@@ -179,9 +225,7 @@ def test_qwen_ag_matmul(mesh_device):
                 gath = _zeros(mesh, (1, 1, S // 4, K))
                 out = _zeros(mesh, (1, 1, S // 4, N))
                 t0 = time.perf_counter()
-                o, gg = qwen_ag_matmul(
-                    x, w, copy_local=kd["copy_local"], waves=waves, gathered=gath, out=out, **mm_kw, **rk
-                )
+                o, gg = fused(x, w, copy_local=kd["copy_local"], waves=waves, gathered=gath, out=out, **mm_kw, **rk)
                 ttnn.synchronize_device(mesh)
                 dt = time.perf_counter() - t0
                 o_h, g_h = _host(o), _host(gg)
@@ -212,13 +256,13 @@ def test_qwen_ag_matmul(mesh_device):
             x = xs[0]
             m_s, r_s = _timeit(mesh, lambda: stock(x, S), reps, batch)
             m_f, r_f = _timeit(
-                mesh, lambda: qwen_ag_matmul(x, w, copy_local=kd["copy_local"], waves=waves, **mm_kw, **rk), reps, batch
+                mesh, lambda: fused(x, w, copy_local=kd["copy_local"], waves=waves, **mm_kw, **rk), reps, batch
             )
             ttnn.synchronize_device(mesh)
             held = []
             t0 = time.perf_counter()
             for _ in range(batch):
-                held.append(qwen_ag_matmul(x, w, copy_local=kd["copy_local"], waves=waves, **mm_kw, **rk))
+                held.append(fused(x, w, copy_local=kd["copy_local"], waves=waves, **mm_kw, **rk))
             t_host = (time.perf_counter() - t0) * 1e3 / batch
             ttnn.synchronize_device(mesh)
             for ts in held:
@@ -227,15 +271,14 @@ def test_qwen_ag_matmul(mesh_device):
             logger.info(f"QAGMM_HOST {tag}: fused host enqueue {t_host:.3f} ms/call")
             if os.environ.get("QAGMM_PROBES") == "1":
                 xa0 = cp._row_ag(ccl, mc, x, S)
-                m_p, _ = _timeit(mesh, lambda: [matmul_port(xa0, w, waves=waves, **mm_kw, **rk)], reps, batch)
+                gx = 7 if v2 else 6
+                m_p, _ = _timeit(mesh, lambda: [matmul_port(xa0, w, waves=waves, gx=gx, **mm_kw, **rk)], reps, batch)
                 ttnn.deallocate(xa0)
-                res = {"port 6x10": m_p}
-                for probe in ("nowait", "nomm", "agonly"):
+                res = {f"port {gx}x10": m_p}
+                for probe in ("nowait",) if v2 else ("nowait", "nomm", "agonly"):
                     res[probe], _ = _timeit(
                         mesh,
-                        lambda: qwen_ag_matmul(
-                            x, w, copy_local=kd["copy_local"], waves=waves, probe=probe, **mm_kw, **rk
-                        ),
+                        lambda: fused(x, w, copy_local=kd["copy_local"], waves=waves, probe=probe, **mm_kw, **rk),
                         reps,
                         batch,
                     )
