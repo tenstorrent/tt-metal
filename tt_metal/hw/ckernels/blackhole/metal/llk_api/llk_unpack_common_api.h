@@ -362,3 +362,13 @@ inline void llk_unpack_set_srcb_dummy_valid() {
     SAN_HOOK(unsupported());
     _llk_unpack_set_srcb_dummy_valid_();
 }
+
+/**
+ * Unpack-thread halves of tile_regs_acquire / tile_regs_commit. No-ops on this architecture: the unpacker never
+ * writes DEST directly, so the DEST section handshake is entirely between math and pack. Quasar's unpack-to-dest
+ * path gives these a body.
+ */
+inline void llk_unpack_wait_for_dest_available() {}
+
+template <bool EN_32BIT_DEST>
+inline void llk_unpack_dest_section_done() {}
