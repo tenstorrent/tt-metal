@@ -149,6 +149,12 @@ _PARK = re.compile(r"\bllk_park\s+\d|0x00100073")
 _LOOP_PARK = re.compile(r"\bllk_park\s+1\s*,|\(llk_loop_pad / 4\) \* 1\b")
 # patchable function entry NOPs (-fpatchable-function-entry=N,M) ahead of an entry
 _ENTRY_NOPS = re.compile(r"\.LPFE\d+:$")
+# the harness's own sections: _start (and code a test adds to .init) and main
+_HARNESS_SECTION = re.compile(
+    r"^(\s*\.(?:section|pushsection)\s+)(?:\.init|\.text\.startup)(?=[\s,]|$)"
+)
+# an out of line park's restart alignment (barrier.h)
+_PARK_ALIGN = re.compile(r"^\.balign\s+\d+\s*$")
 
 
 def _asm_functions(lines) -> tuple:
@@ -363,6 +369,21 @@ def _text_after_libraries(text: str, rest: bool = True) -> str:
         if i in closing:
             out.append("\t.popsection")
     return "\n".join(out)
+
+
+def _harness_last(text: str) -> str:
+    """Wormhole perf TILE_LOOP build assembly with _start, main and any other .init code in .llk_harness, which
+    sections.ld places after the kernel's code: only the entry jump and the zone helpers precede run_kernel, so a
+    harness size change moves no code a window runs. The parks main runs after run_kernel lose their restart alignment
+    (barrier.h's out of line parks), which no window needs, so the harness fits its reserve wherever it starts.
+    """
+    lines = [_HARNESS_SECTION.sub(r"\1.llk_harness", line) for line in text.split("\n")]
+    _, sections = _asm_functions(lines)
+    return "\n".join(
+        line
+        for line, section in zip(lines, sections)
+        if not (section == ".llk_harness" and _PARK_ALIGN.match(line))
+    )
 
 
 class ProfilerBuild(Enum):
@@ -2262,7 +2283,7 @@ class TestConfig:
             text = (
                 _text_after_libraries(_init_callees_in_slot(text), rest=False)
                 if init_only
-                else _text_after_libraries(_loop_callees_in_slot(text))
+                else _harness_last(_text_after_libraries(_loop_callees_in_slot(text)))
             )
             if not init_only:
                 # level 6: a seventh of the time of the default 9 for 6 % more bytes
@@ -2281,6 +2302,8 @@ class TestConfig:
             *[flag for flag in compile_flags if flag != "-g"],
             f"-Wa,--defsym,llk_loop_pad={p}",
             f"-Wa,--defsym,llk_loop_end_pad={z}",
+            # no NOPs after a section's last byte to its alignment: run_kernel's would fill up to a period of code space
+            *([] if init_only else ["-Wa,--no-pad-sections"]),
             *link_flags,
             "-x",
             "assembler",
