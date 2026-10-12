@@ -26,20 +26,20 @@ extern "C" __attribute__((noinline, used)) void write_constant_group()
 // Word 0 merges both fields into one read-modify-write (clear mask 0x1ef, data
 // 229) before word 5, which only needs its bit set.
 // CHECK-LABEL: {{^}}write_constant_group:
-// CHECK-NEXT: lui [[STATE:a[0-7]]],%hi(_ZN7ckernel12cfg_state_idE)
-// CHECK-NEXT: lw [[ID:a[0-7]]],%lo(_ZN7ckernel12cfg_state_idE)([[STATE]])
-// CHECK-NEXT: li [[BASE:a[0-7]]],-1114112
-// CHECK-NEXT: addi [[BANK:a[0-7]]],[[BASE]],896
-// CHECK-NEXT: bne [[ID]],zero,[[SELECTED:\.L[0-9]+]]
-// CHECK-NEXT: mv [[BANK]],[[BASE]]
+// CHECK-NEXT: lui [[STATE:a[0-7]]],%hi(_ZN7ckernel12cfg_state_idE){{$}}
+// CHECK-NEXT: lw [[ID:a[0-7]]],%lo(_ZN7ckernel12cfg_state_idE)([[STATE]]){{$}}
+// CHECK-NEXT: li [[BASE:a[0-7]]],-1114112{{$}}
+// CHECK-NEXT: addi [[BANK:a[0-7]]],[[BASE]],896{{$}}
+// CHECK-NEXT: bne [[ID]],zero,[[SELECTED:\.L[0-9]+]]{{$}}
+// CHECK-NEXT: mv [[BANK]],[[BASE]]{{$}}
 // CHECK-NEXT: [[SELECTED]]:
-// CHECK-NEXT: lw [[W0:a[0-7]]],0([[BANK]])
-// CHECK-NEXT: andi [[W0]],[[W0]],-496
-// CHECK-NEXT: ori [[W0]],[[W0]],229
-// CHECK-NEXT: sw [[W0]],0([[BANK]])
-// CHECK-NEXT: lw [[W5:a[0-7]]],20([[BANK]])
-// CHECK-NEXT: ori [[W5]],[[W5]],1
-// CHECK-NEXT: sw [[W5]],20([[BANK]])
+// CHECK-NEXT: lw [[W0:a[0-7]]],0([[BANK]]){{$}}
+// CHECK-NEXT: andi [[W0]],[[W0]],-496{{$}}
+// CHECK-NEXT: ori [[W0]],[[W0]],229{{$}}
+// CHECK-NEXT: sw [[W0]],0([[BANK]]){{$}}
+// CHECK-NEXT: lw [[W5:a[0-7]]],20([[BANK]]){{$}}
+// CHECK-NEXT: ori [[W5]],[[W5]],1{{$}}
+// CHECK-NEXT: sw [[W5]],20([[BANK]]){{$}}
 // CHECK-NEXT: ret
 
 extern "C" __attribute__((noinline, used)) void write_constant_full_word()
@@ -51,9 +51,9 @@ extern "C" __attribute__((noinline, used)) void write_constant_full_word()
 // CHECK-LABEL: {{^}}write_constant_full_word:
 // CHECK: %lo(_ZN7ckernel12cfg_state_idE)
 // CHECK: [[SELECTED:\.L[0-9]+]]:
-// CHECK-NEXT: li [[VALUE:a[0-7]]],305418240
-// CHECK-NEXT: addi [[VALUE]],[[VALUE]],1656
-// CHECK-NEXT: sw [[VALUE]],744({{a[0-7]}})
+// CHECK-NEXT: li [[VALUE:a[0-7]]],305418240{{$}}
+// CHECK-NEXT: addi [[VALUE]],[[VALUE]],1656{{$}}
+// CHECK-NEXT: sw [[VALUE]],744({{a[0-7]}}){{$}}
 // CHECK-NEXT: ret
 
 // The three complete-word stores from configure_pack() on Blackhole (one packer).
@@ -71,18 +71,18 @@ extern "C" __attribute__((noinline, used)) void write_pack_words_constant()
 }
 
 // CHECK-LABEL: {{^}}write_pack_words_constant:
-// CHECK-NEXT: lui [[STATE:a[0-7]]],%hi(_ZN7ckernel12cfg_state_idE)
-// CHECK-NEXT: lw [[ID:a[0-7]]],%lo(_ZN7ckernel12cfg_state_idE)([[STATE]])
-// CHECK-NEXT: li [[BASE:a[0-7]]],-1114112
-// CHECK-NEXT: addi [[BANK:a[0-7]]],[[BASE]],896
-// CHECK-NEXT: bne [[ID]],zero,[[SELECTED:\.L[0-9]+]]
-// CHECK-NEXT: mv [[BANK]],[[BASE]]
+// CHECK-NEXT: lui [[STATE:a[0-7]]],%hi(_ZN7ckernel12cfg_state_idE){{$}}
+// CHECK-NEXT: lw [[ID:a[0-7]]],%lo(_ZN7ckernel12cfg_state_idE)([[STATE]]){{$}}
+// CHECK-NEXT: li [[BASE:a[0-7]]],-1114112{{$}}
+// CHECK-NEXT: addi [[BANK:a[0-7]]],[[BASE]],896{{$}}
+// CHECK-NEXT: bne [[ID]],zero,[[SELECTED:\.L[0-9]+]]{{$}}
+// CHECK-NEXT: mv [[BANK]],[[BASE]]{{$}}
 // CHECK-NEXT: [[SELECTED]]:
-// CHECK-NEXT: li [[COUNTERS:a[0-7]]],256
-// CHECK-NEXT: li [[EDGES:a[0-7]]],65536
-// CHECK-NEXT: sw [[COUNTERS]],112([[BANK]])
-// CHECK-NEXT: addi [[EDGES]],[[EDGES]],-1
-// CHECK-NEXT: sw [[EDGES]],96([[BANK]])
-// CHECK-NEXT: sw zero,80([[BANK]])
+// CHECK-NEXT: li [[COUNTERS:a[0-7]]],256{{$}}
+// CHECK-NEXT: li [[EDGES:a[0-7]]],65536{{$}}
+// CHECK-NEXT: sw [[COUNTERS]],112([[BANK]]){{$}}
+// CHECK-NEXT: addi [[EDGES]],[[EDGES]],-1{{$}}
+// CHECK-NEXT: sw [[EDGES]],96([[BANK]]){{$}}
+// CHECK-NEXT: sw zero,80([[BANK]]){{$}}
 // CHECK-NEXT: ret
 // CHECK-NEXT: .size write_pack_words_constant,

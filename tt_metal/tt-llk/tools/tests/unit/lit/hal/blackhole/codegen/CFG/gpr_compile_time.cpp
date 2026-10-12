@@ -22,7 +22,7 @@ extern "C" __attribute__((noinline, used)) void write_gpr_default_completion()
 
 // Completion defaults to Deferred: no NOP unless Wait is requested.
 // CHECK-LABEL: <write_gpr_default_completion>:
-// CHECK-NEXT: ttwrcfg 5,0,77
+// CHECK-NEXT: ttwrcfg 5,0,77{{$}}
 // CHECK-NEXT: ret
 
 extern "C" __attribute__((noinline, used)) void write_gpr_wait()
@@ -32,7 +32,7 @@ extern "C" __attribute__((noinline, used)) void write_gpr_wait()
 }
 
 // CHECK-LABEL: <write_gpr_wait>:
-// CHECK-NEXT: ttwrcfg 4,0,76
+// CHECK-NEXT: ttwrcfg 4,0,76{{$}}
 // CHECK-NEXT: ttnop
 // CHECK-NEXT: ret
 
@@ -42,7 +42,7 @@ extern "C" __attribute__((noinline, used)) void write_gpr_128_default_completion
 }
 
 // CHECK-LABEL: <write_gpr_128_default_completion>:
-// CHECK-NEXT: ttwrcfg 16,1,112
+// CHECK-NEXT: ttwrcfg 16,1,112{{$}}
 // CHECK-NEXT: ret
 
 extern "C" __attribute__((noinline, used)) void write_state_reset_via_gpr()
@@ -53,7 +53,7 @@ extern "C" __attribute__((noinline, used)) void write_state_reset_via_gpr()
 // A field-granular Tensix write to the state-reset register lowers to
 // RMWCIB, which hardware ignores; a whole-word GPR transfer reaches it.
 // CHECK-LABEL: <write_state_reset_via_gpr>:
-// CHECK-NEXT: ttwrcfg 4,0,4
+// CHECK-NEXT: ttwrcfg 4,0,4{{$}}
 // CHECK-NEXT: ret
 
 // A field group stands in for its Raw anchor in whole-word GPR transfers.
@@ -63,7 +63,7 @@ extern "C" __attribute__((noinline, used)) void write_field_group_gpr()
 }
 
 // CHECK-LABEL: <write_field_group_gpr>:
-// CHECK-NEXT: ttwrcfg 4,1,112
+// CHECK-NEXT: ttwrcfg 4,1,112{{$}}
 // CHECK-NEXT: ret
 
 // GPR transfers grouped with field assignments.
@@ -81,12 +81,12 @@ extern "C" __attribute__((noinline, used)) void write_ordered_constant_operation
 // The two word-0 fields merge across both GPR transfers at their first occurrence.
 // Only the Wait transfer is followed by a NOP.
 // CHECK-LABEL: <write_ordered_constant_operations>:
-// CHECK-NEXT: ttrmwcib0 239,65,0
-// CHECK-NEXT: ttrmwcib1 1,0,0
-// CHECK-NEXT: ttwrcfg 4,0,76
-// CHECK-NEXT: ttwrcfg 5,0,80
+// CHECK-NEXT: ttrmwcib0 239,65,0{{$}}
+// CHECK-NEXT: ttrmwcib1 1,0,0{{$}}
+// CHECK-NEXT: ttwrcfg 4,0,76{{$}}
+// CHECK-NEXT: ttwrcfg 5,0,80{{$}}
 // CHECK-NEXT: ttnop
-// CHECK-NEXT: ttrmwcib0 1,1,5
+// CHECK-NEXT: ttrmwcib0 1,1,5{{$}}
 // CHECK-NEXT: ret
 
 extern "C" __attribute__((noinline, used)) void write_thread_constants_across_gpr()
@@ -98,8 +98,8 @@ extern "C" __attribute__((noinline, used)) void write_thread_constants_across_gp
 }
 
 // CHECK-LABEL: <write_thread_constants_across_gpr>:
-// CHECK-NEXT: ttsetc16 5,6
-// CHECK-NEXT: ttwrcfg 4,0,76
+// CHECK-NEXT: ttsetc16 5,6{{$}}
+// CHECK-NEXT: ttwrcfg 4,0,76{{$}}
 // CHECK-NEXT: ret
 
 extern "C" __attribute__((noinline, used)) void write_word_after_gpr_transfer()
@@ -111,11 +111,11 @@ extern "C" __attribute__((noinline, used)) void write_word_after_gpr_transfer()
 
 // Word 80 immediately follows the four-word transfer to 76-79 and is disjoint.
 // CHECK-LABEL: <write_word_after_gpr_transfer>:
-// CHECK-NEXT: ttwrcfg 4,1,76
-// CHECK-NEXT: ttrmwcib0 255,3,80
-// CHECK-NEXT: ttrmwcib1 255,0,80
-// CHECK-NEXT: ttrmwcib2 255,0,80
-// CHECK-NEXT: ttrmwcib3 255,0,80
+// CHECK-NEXT: ttwrcfg 4,1,76{{$}}
+// CHECK-NEXT: ttrmwcib0 255,3,80{{$}}
+// CHECK-NEXT: ttrmwcib1 255,0,80{{$}}
+// CHECK-NEXT: ttrmwcib2 255,0,80{{$}}
+// CHECK-NEXT: ttrmwcib3 255,0,80{{$}}
 // CHECK-NEXT: ret
 
 // RDCFG copies the complete word that contains the field.
@@ -126,7 +126,7 @@ extern "C" __attribute__((noinline, used)) void read_cfg_to_gpr()
 }
 
 // CHECK-LABEL: <read_cfg_to_gpr>:
-// CHECK-NEXT: ttrdcfg 5,186
+// CHECK-NEXT: ttrdcfg 5,186{{$}}
 // CHECK-NEXT: ret
 
 extern "C" __attribute__((noinline, used)) void read_cfg_field_word_to_gpr()
@@ -135,7 +135,7 @@ extern "C" __attribute__((noinline, used)) void read_cfg_field_word_to_gpr()
 }
 
 // CHECK-LABEL: <read_cfg_field_word_to_gpr>:
-// CHECK-NEXT: ttrdcfg 6,112
+// CHECK-NEXT: ttrdcfg 6,112{{$}}
 // CHECK-NEXT: ret
 
 // Bank-end boundaries and last valid GPR indices.
@@ -146,7 +146,7 @@ extern "C" __attribute__((noinline, used)) void write_gpr_last_word()
 }
 
 // CHECK-LABEL: <write_gpr_last_word>:
-// CHECK-NEXT: ttwrcfg 63,0,223
+// CHECK-NEXT: ttwrcfg 63,0,223{{$}}
 // CHECK-NEXT: ret
 
 extern "C" __attribute__((noinline, used)) void write_grouped_gpr_last_word()
@@ -155,7 +155,7 @@ extern "C" __attribute__((noinline, used)) void write_grouped_gpr_last_word()
 }
 
 // CHECK-LABEL: <write_grouped_gpr_last_word>:
-// CHECK-NEXT: ttwrcfg 63,0,223
+// CHECK-NEXT: ttwrcfg 63,0,223{{$}}
 // CHECK-NEXT: ret
 
 extern "C" __attribute__((noinline, used)) void write_gpr_last_block()
@@ -164,7 +164,7 @@ extern "C" __attribute__((noinline, used)) void write_gpr_last_block()
 }
 
 // CHECK-LABEL: <write_gpr_last_block>:
-// CHECK-NEXT: ttwrcfg 60,1,220
+// CHECK-NEXT: ttwrcfg 60,1,220{{$}}
 // CHECK-NEXT: ret
 
 extern "C" __attribute__((noinline, used)) void write_grouped_gpr_last_block()
@@ -173,7 +173,7 @@ extern "C" __attribute__((noinline, used)) void write_grouped_gpr_last_block()
 }
 
 // CHECK-LABEL: <write_grouped_gpr_last_block>:
-// CHECK-NEXT: ttwrcfg 60,1,220
+// CHECK-NEXT: ttwrcfg 60,1,220{{$}}
 // CHECK-NEXT: ret
 
 extern "C" __attribute__((noinline, used)) void read_gpr_last_word()
@@ -182,5 +182,5 @@ extern "C" __attribute__((noinline, used)) void read_gpr_last_word()
 }
 
 // CHECK-LABEL: <read_gpr_last_word>:
-// CHECK-NEXT: ttrdcfg 63,223
+// CHECK-NEXT: ttrdcfg 63,223{{$}}
 // CHECK-NEXT: ret

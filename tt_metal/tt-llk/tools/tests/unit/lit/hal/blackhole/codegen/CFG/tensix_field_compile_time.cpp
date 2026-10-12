@@ -15,7 +15,7 @@ extern "C" __attribute__((noinline, used)) void write_state_byte_0()
 }
 
 // CHECK-LABEL: <write_state_byte_0>:
-// CHECK-NEXT: ttrmwcib0 15,10,0
+// CHECK-NEXT: ttrmwcib0 15,10,0{{$}}
 // CHECK-NEXT: ret
 
 extern "C" __attribute__((noinline, used)) void write_state_byte_1()
@@ -24,7 +24,7 @@ extern "C" __attribute__((noinline, used)) void write_state_byte_1()
 }
 
 // CHECK-LABEL: <write_state_byte_1>:
-// CHECK-NEXT: ttrmwcib1 60,40,0
+// CHECK-NEXT: ttrmwcib1 60,40,0{{$}}
 // CHECK-NEXT: ret
 
 extern "C" __attribute__((noinline, used)) void write_state_byte_2()
@@ -33,7 +33,7 @@ extern "C" __attribute__((noinline, used)) void write_state_byte_2()
 }
 
 // CHECK-LABEL: <write_state_byte_2>:
-// CHECK-NEXT: ttrmwcib2 1,1,1
+// CHECK-NEXT: ttrmwcib2 1,1,1{{$}}
 // CHECK-NEXT: ret
 
 extern "C" __attribute__((noinline, used)) void write_state_byte_3()
@@ -42,7 +42,7 @@ extern "C" __attribute__((noinline, used)) void write_state_byte_3()
 }
 
 // CHECK-LABEL: <write_state_byte_3>:
-// CHECK-NEXT: ttrmwcib3 32,32,1
+// CHECK-NEXT: ttrmwcib3 32,32,1{{$}}
 // CHECK-NEXT: ret
 
 extern "C" __attribute__((noinline, used)) void write_state_byte_straddle()
@@ -52,8 +52,8 @@ extern "C" __attribute__((noinline, used)) void write_state_byte_straddle()
 
 // SrcB_val occupies bits 8:5, so it touches byte lanes 0 and 1.
 // CHECK-LABEL: <write_state_byte_straddle>:
-// CHECK-NEXT: ttrmwcib0 224,96,0
-// CHECK-NEXT: ttrmwcib1 1,1,0
+// CHECK-NEXT: ttrmwcib0 224,96,0{{$}}
+// CHECK-NEXT: ttrmwcib1 1,1,0{{$}}
 // CHECK-NEXT: ret
 
 extern "C" __attribute__((noinline, used)) void write_state_full_word()
@@ -62,10 +62,10 @@ extern "C" __attribute__((noinline, used)) void write_state_full_word()
 }
 
 // CHECK-LABEL: <write_state_full_word>:
-// CHECK-NEXT: ttrmwcib0 255,120,186
-// CHECK-NEXT: ttrmwcib1 255,86,186
-// CHECK-NEXT: ttrmwcib2 255,52,186
-// CHECK-NEXT: ttrmwcib3 255,18,186
+// CHECK-NEXT: ttrmwcib0 255,120,186{{$}}
+// CHECK-NEXT: ttrmwcib1 255,86,186{{$}}
+// CHECK-NEXT: ttrmwcib2 255,52,186{{$}}
+// CHECK-NEXT: ttrmwcib3 255,18,186{{$}}
 // CHECK-NEXT: ret
 
 extern "C" __attribute__((noinline, used)) void write_state_section()
@@ -74,7 +74,7 @@ extern "C" __attribute__((noinline, used)) void write_state_section()
 }
 
 // CHECK-LABEL: <write_state_section>:
-// CHECK-NEXT: ttrmwcib0 15,2,112
+// CHECK-NEXT: ttrmwcib0 15,2,112{{$}}
 // CHECK-NEXT: ret
 
 extern "C" __attribute__((noinline, used)) void write_thread_section()
@@ -83,7 +83,7 @@ extern "C" __attribute__((noinline, used)) void write_thread_section()
 }
 
 // CHECK-LABEL: <write_thread_section>:
-// CHECK-NEXT: ttsetc16 19,10752
+// CHECK-NEXT: ttsetc16 19,10752{{$}}
 // CHECK-NEXT: ret
 
 extern "C" __attribute__((noinline, used)) void write_prepacked_thread_word()
@@ -93,7 +93,7 @@ extern "C" __attribute__((noinline, used)) void write_prepacked_thread_word()
 
 // The section selects thread word 12 + 2; the value is stored unshifted.
 // CHECK-LABEL: <write_prepacked_thread_word>:
-// CHECK-NEXT: ttsetc16 14,67
+// CHECK-NEXT: ttsetc16 14,67{{$}}
 // CHECK-NEXT: ret
 
 extern "C" __attribute__((noinline, used)) void write_prepacked_thread_word_max()
@@ -102,7 +102,7 @@ extern "C" __attribute__((noinline, used)) void write_prepacked_thread_word_max(
 }
 
 // CHECK-LABEL: <write_prepacked_thread_word_max>:
-// CHECK-NEXT: ttsetc16 19,65535
+// CHECK-NEXT: ttsetc16 19,65535{{$}}
 // CHECK-NEXT: ret
 
 extern "C" __attribute__((noinline, used)) void write_straddling_constant_group()
@@ -113,8 +113,8 @@ extern "C" __attribute__((noinline, used)) void write_straddling_constant_group(
 
 // The merged mask 0x1ef spans two byte lanes.
 // CHECK-LABEL: <write_straddling_constant_group>:
-// CHECK-NEXT: ttrmwcib0 239,229,0
-// CHECK-NEXT: ttrmwcib1 1,0,0
+// CHECK-NEXT: ttrmwcib0 239,229,0{{$}}
+// CHECK-NEXT: ttrmwcib1 1,0,0{{$}}
 // CHECK-NEXT: ret
 
 extern "C" __attribute__((noinline, used)) void write_interleaved_constant_groups()
@@ -127,8 +127,8 @@ extern "C" __attribute__((noinline, used)) void write_interleaved_constant_group
 
 // Word 1 is emitted once at its first occurrence, before word 5.
 // CHECK-LABEL: <write_interleaved_constant_groups>:
-// CHECK-NEXT: ttrmwcib3 96,96,1
-// CHECK-NEXT: ttrmwcib0 1,1,5
+// CHECK-NEXT: ttrmwcib3 96,96,1{{$}}
+// CHECK-NEXT: ttrmwcib0 1,1,5{{$}}
 // CHECK-NEXT: ret
 
 extern "C" __attribute__((noinline, used)) void write_thread_constant_group()
@@ -137,7 +137,7 @@ extern "C" __attribute__((noinline, used)) void write_thread_constant_group()
 }
 
 // CHECK-LABEL: <write_thread_constant_group>:
-// CHECK-NEXT: ttsetc16 14,67
+// CHECK-NEXT: ttsetc16 14,67{{$}}
 // CHECK-NEXT: ret
 
 extern "C" __attribute__((noinline, used)) void write_same_field_two_sections()
@@ -150,6 +150,6 @@ extern "C" __attribute__((noinline, used)) void write_same_field_two_sections()
 
 // Sections resolve to different words, so they never share a group.
 // CHECK-LABEL: <write_same_field_two_sections>:
-// CHECK-NEXT: ttrmwcib0 31,18,112
-// CHECK-NEXT: ttrmwcib0 15,3,64
+// CHECK-NEXT: ttrmwcib0 31,18,112{{$}}
+// CHECK-NEXT: ttrmwcib0 15,3,64{{$}}
 // CHECK-NEXT: ret
