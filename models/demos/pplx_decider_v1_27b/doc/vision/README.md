@@ -95,8 +95,9 @@ pytest models/demos/pplx_decider_v1_27b/tests/perf/test_image_perf.py -q -s    #
 python models/demos/pplx_decider_v1_27b/demo/demo.py --image photo.png
 ```
 
-The image golden is `$PPLX_DECIDER_IMAGE_GOLDEN` (default `artifacts/pplx_decider/goldens/vision/e2e`);
-results go to `$PPLX_DECIDER_STAGE12B_DIR` (default `artifacts/pplx_decider/stage12b/image_e2e`).
+The image golden is `$PPLX_DECIDER_IMAGE_GOLDEN` (default `$PPLX_DECIDER_ARTIFACTS/goldens/vision/e2e`);
+results go to `$PPLX_DECIDER_IMAGE_E2E_DIR` (default `$PPLX_DECIDER_ARTIFACTS/image_e2e`; the older
+`$PPLX_DECIDER_STAGE12B_DIR` is still honoured).
 
 ### API
 
