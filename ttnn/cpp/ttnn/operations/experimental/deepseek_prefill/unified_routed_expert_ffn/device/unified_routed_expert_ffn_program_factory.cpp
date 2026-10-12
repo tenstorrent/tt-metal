@@ -169,7 +169,15 @@ tt::tt_metal::ProgramDescriptor UnifiedRoutedExpertFfnProgramFactory::create_des
     const uint32_t K_gate_tiles = x_shape[-1] / TILE;          // = N_gate K = emb / TILE
     const uint32_t N_gate_tiles_full = gate_shape[-1] / TILE;  // = hidden / TILE
     const uint32_t K_down_tiles = down_shape[-2] / TILE;       // = hidden / TILE
-    const uint32_t N_down_tiles_full = down_shape[-1] / TILE;  // = emb / TILE
+    // = emb / TILE, or the down_slice_tiles-wide output slice when only part of it is computed.
+    const uint32_t down_w_tiles = down_shape[-1] / TILE;
+    const uint32_t N_down_tiles_full = op.down_slice_tiles != 0 ? op.down_slice_tiles : down_w_tiles;
+    TT_FATAL(
+        op.down_slice_start_tiles + N_down_tiles_full <= down_w_tiles,
+        "unified_routed_expert_ffn: down slice [{}, {}) tiles exceeds the down projection's {} tiles",
+        op.down_slice_start_tiles,
+        op.down_slice_start_tiles + N_down_tiles_full,
+        down_w_tiles);
 
     // Blackhole compute grid is 13x10 worker cores; we use the bottom-left
     // 11x8 = 88 to leave headroom for dispatch and to give per_core_M /
@@ -974,6 +982,14 @@ tt::tt_metal::ProgramDescriptor UnifiedRoutedExpertFfnProgramFactory::create_des
     if (dense) {
         reader_defines.emplace_back("DENSE_TOKENS", std::to_string(op.dense_tokens));
         writer_defines.emplace_back("DENSE_TOKENS", std::to_string(op.dense_tokens));
+    }
+    if (op.down_slice_tiles != 0) {
+        // Both RISCs read down weight rows; index them at the full width and the slice's offset.
+        TT_FATAL(d_shard_w == 0, "unified_routed_expert_ffn: a down slice needs a DRAM-interleaved down_proj");
+        for (auto* defines : {&reader_defines, &writer_defines}) {
+            defines->emplace_back("DOWN_W_TILES", std::to_string(down_w_tiles));
+            defines->emplace_back("DOWN_COL_BASE", std::to_string(op.down_slice_start_tiles));
+        }
     }
     tt::tt_metal::KernelDescriptor reader_kernel_desc;
     reader_kernel_desc.kernel_source =

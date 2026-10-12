@@ -177,6 +177,15 @@ void kernel_main() {
     constexpr uint32_t D_SHARD_W = get_compile_time_arg_val(35);
     using GuRuns = unified_routed_expert_ffn::WeightRuns<GU_SHARD_W>;
     using DRuns = unified_routed_expert_ffn::WeightRuns<D_SHARD_W>;
+#ifdef DOWN_W_TILES
+    // Down slice: down_proj is full width (DOWN_W_TILES) and this program computes only output
+    // columns [DOWN_COL_BASE, DOWN_COL_BASE + N_down_tiles_full) of it.
+    constexpr uint32_t down_w_tiles = DOWN_W_TILES;
+    constexpr uint32_t down_col_base = DOWN_COL_BASE;
+#else
+    constexpr uint32_t down_w_tiles = N_down_tiles_full;
+    constexpr uint32_t down_col_base = 0;
+#endif
 
     constexpr uint32_t x_accessor_offset = 36;
     constexpr auto x_args = TensorAccessorArgs<x_accessor_offset>();
@@ -960,7 +969,14 @@ void kernel_main() {
                     const uint32_t row = kb * in0_block_w_d + k;
                     if (row < K_down_tiles) {
                         DRuns::read(
-                            noc_read, down_acc, row, N_down_tiles_full, down_col0, down_col_end, l1_w, down_tile_bytes);
+                            noc_read,
+                            down_acc,
+                            row,
+                            down_w_tiles,
+                            down_col_base + down_col0,
+                            down_col_base + down_col_end,
+                            l1_w,
+                            down_tile_bytes);
                     }
                     l1_w += per_core_N_d * down_tile_bytes;
                 }

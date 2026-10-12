@@ -15,7 +15,8 @@ ttnn::Tensor shared_expert_ffn(
     const ttnn::Tensor& down_proj,
     RoutedExpertActivation activation,
     const std::optional<const ttnn::DeviceComputeKernelConfig>& compute_kernel_config,
-    const CoreCoord& core_grid_origin) {
+    const CoreCoord& core_grid_origin,
+    std::optional<uint32_t> cluster_axis) {
     return ttnn::prim::shared_expert_ffn(
         x,
         gate_proj,
@@ -24,7 +25,8 @@ ttnn::Tensor shared_expert_ffn(
         activation,
         compute_kernel_config.has_value() ? std::optional<ttnn::DeviceComputeKernelConfig>(*compute_kernel_config)
                                           : std::nullopt,
-        core_grid_origin);
+        core_grid_origin,
+        cluster_axis);
 }
 
 }  // namespace ttnn::operations::experimental::deepseek_prefill::shared_expert_ffn

@@ -22,13 +22,16 @@ struct SharedExpertFfnParams {
     std::optional<ttnn::DeviceComputeKernelConfig> compute_kernel_config;
     // Top-left logical core of the fixed unified_routed_expert_ffn worker rectangle.
     CoreCoord core_grid_origin{0, 0};
+    // Mesh axis to partition the output's emb over, as mesh_partition(dim=-1, cluster_axis) would:
+    // the device at index i along it computes only emb slice i. nullopt => full-width output.
+    std::optional<uint32_t> cluster_axis;
 
-    static constexpr auto attribute_names = std::forward_as_tuple("activation", "core_grid_origin");
-    auto attribute_values() const { return std::forward_as_tuple(activation, core_grid_origin); }
+    static constexpr auto attribute_names = std::forward_as_tuple("activation", "core_grid_origin", "cluster_axis");
+    auto attribute_values() const { return std::forward_as_tuple(activation, core_grid_origin, cluster_axis); }
 };
 
-// x: (1, .., 1, M, emb), every token one row. gate_proj / up_proj: (emb, hidden). down_proj:
-// (hidden, N) with N emb or one TP column's slice of it -- the output is then that slice.
+// x: (1, .., 1, M, emb), every token one row. gate_proj / up_proj: (emb, hidden), down_proj:
+// (hidden, emb), all replicated on every device.
 struct SharedExpertFfnInputs {
     Tensor x;
     Tensor gate_proj;

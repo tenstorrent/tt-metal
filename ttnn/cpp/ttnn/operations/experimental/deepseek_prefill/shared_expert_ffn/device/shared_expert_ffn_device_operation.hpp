@@ -20,10 +20,12 @@ namespace ttnn::operations::experimental::deepseek_prefill::shared_expert_ffn {
 // The unified routed-expert program in its dense mode: one expert owning every row of x, so no
 // counts / index / region-offset vectors exist on device.
 struct SharedExpertFfnProgramFactory {
+    // Built per mesh coordinate: the coordinate picks this device's emb slice of the output.
     static tt::tt_metal::ProgramDescriptor create_descriptor(
         const SharedExpertFfnParams& operation_attributes,
         const SharedExpertFfnInputs& tensor_args,
-        Tensor& tensor_return_value);
+        Tensor& tensor_return_value,
+        const std::optional<ttnn::MeshCoordinate>& coord);
 
     // The unified program binds x again in place of the dense mode's unread aux buffers, so x
     // appears more than once and resolve_bindings bails. Patch the common args directly.
@@ -59,6 +61,7 @@ ttnn::Tensor shared_expert_ffn(
     const ttnn::Tensor& down_proj,
     ttnn::operations::experimental::deepseek_prefill::shared_expert_ffn::RoutedExpertActivation activation,
     const std::optional<ttnn::DeviceComputeKernelConfig>& compute_kernel_config,
-    const CoreCoord& core_grid_origin);
+    const CoreCoord& core_grid_origin,
+    std::optional<uint32_t> cluster_axis);
 
 }  // namespace ttnn::prim

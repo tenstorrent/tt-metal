@@ -5,8 +5,8 @@
 """
 TTNN implementation of the Shared Expert module.
 
-- One shared_expert_ffn op: gate/up replicated, down split on emb across mesh columns, so each
-  mesh column computes only its own emb slice of the output; no typecast, no CCL
+- One shared_expert_ffn op = typecast + unified routed expert + mesh_partition: weights replicated,
+  each mesh column computes only its own emb slice of the output; no CCL
 - Composed GLU helpers (``situ_glu``, ``clamped_silu_glu``) for TtFfn's TP-sharded forward
 """
 
@@ -151,11 +151,11 @@ class TtSharedExpert(LightweightModule):
     Forward (one op):
         Input: x [1, seq_len, emb_dim] TILE bf16 (replicated across mesh columns)
         output = shared_expert_ffn(x) → [1, seq_len, emb_dim / num_cols] bf8
-        (gate / up / GLU activation / down as one expert; the op reads bf16 x directly and its
-        down matmul computes only this column's emb slice)
+        (typecast + gate / up / GLU activation / down + mesh_partition over mesh columns, fused:
+        the op reads bf16 x directly and computes only this column's emb slice of the output)
 
-    Weights: gate_proj [emb_dim, hidden_dim] and up_proj [emb_dim, hidden_dim] whole on every chip;
-    down_proj [hidden_dim, emb_dim / num_cols], split on emb across mesh columns.
+    Weights: gate_proj [emb_dim, hidden_dim], up_proj [emb_dim, hidden_dim] and down_proj
+    [hidden_dim, emb_dim], whole on every chip.
     """
 
     # TtFfn reuses the weight code below and keeps its TP-sharded layout.
@@ -165,15 +165,10 @@ class TtSharedExpert(LightweightModule):
     def _weight_layout(cls, proj: str) -> tuple[tuple, str]:
         """Mesh-mapper dims and cache basename for one projection.
 
-        The fused layout gets its own basenames: as_tensor's cache key ignores the mapper, so a
-        file of another layout under the same name would load with the wrong shape. Its down_proj
-        is split on emb (its N) rather than on hidden (its K): each mesh column then computes its
-        own output slice -- what mesh_partition of the full output gave -- at a quarter of the
-        down FLOPs and weight bytes.
+        Replicated weights get their own basename: as_tensor's cache key ignores the mapper, so a
+        TP-sharded file under the same name would load with the wrong shape.
         """
         if cls.REPLICATED_WEIGHTS:
-            if proj == "down_proj":
-                return (None, -1), "down_proj_emb_sharded"
             return (None, None), f"{proj}_replicated"
         return ((None, -2) if proj == "down_proj" else (None, -1)), proj
 
@@ -517,6 +512,7 @@ class TtSharedExpert(LightweightModule):
             compute_kernel_config=self.compute_kernel_config,
             activation=self.fused_activation,
             core_grid_origin=self.core_grid_origin,
+            cluster_axis=1 if self.mesh_device.shape[1] > 1 else None,
         )
         if DEBUG_LOGGING_ENABLED:
             logger.debug(f"After shared_expert_ffn: {output.shape}")

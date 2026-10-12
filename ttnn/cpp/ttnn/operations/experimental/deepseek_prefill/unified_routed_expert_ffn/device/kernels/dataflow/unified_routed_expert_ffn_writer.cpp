@@ -143,6 +143,15 @@ void kernel_main() {
     constexpr uint32_t d_out_subblock_w_tail = get_compile_time_arg_val(32);
     using GuRuns = unified_routed_expert_ffn::WeightRuns<GU_SHARD_W>;
     using DRuns = unified_routed_expert_ffn::WeightRuns<D_SHARD_W>;
+#ifdef DOWN_W_TILES
+    // Down slice: down_proj is full width (DOWN_W_TILES) and this program computes only output
+    // columns [DOWN_COL_BASE, DOWN_COL_BASE + N_down_tiles_full) of it.
+    constexpr uint32_t down_w_tiles = DOWN_W_TILES;
+    constexpr uint32_t down_col_base = DOWN_COL_BASE;
+#else
+    constexpr uint32_t down_w_tiles = N_down_tiles_full;
+    constexpr uint32_t down_col_base = 0;
+#endif
 
     // This core's weight tile-column window, clipped to the tensor's real N. Both weight reads
     // below walk the same window on every K-row, so it is computed once.
@@ -404,9 +413,9 @@ void kernel_main() {
                                     noc_up,
                                     down_acc,
                                     row,
-                                    N_down_tiles_full,
-                                    down_col0,
-                                    down_col_end,
+                                    down_w_tiles,
+                                    down_col_base + down_col0,
+                                    down_col_base + down_col_end,
                                     l1_w,
                                     down_tile_bytes);
                             }
