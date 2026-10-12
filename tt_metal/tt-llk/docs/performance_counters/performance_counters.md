@@ -33,16 +33,16 @@ Tensix cores contain five hardware performance counter banks (four on Quasar, wh
 
 ## How It Works
 
-### Two builds, one test source
+### Two builds, one program
 
-Every test source under `tests/sources/*_perf.cpp` is compiled twice from the same C++ file. The build is selected by two preprocessor flags:
+Every test source under `tests/sources/*_perf.cpp` compiles to the same ELFs for both builds. The host selects the build per launch by writing the zones the launch counts to `COUNTED_ZONES_REG` (`counters.h`, a bit per zone id; 0 = counters off) before it starts the cores:
 
-| Build | `LLK_PROFILER` | `PERF_COUNTERS_COMPILED` | Active half(s) of `START_PERF_MEASURE` | What it measures |
-|-------|----------------|--------------------------|--------------------------------------|------------------|
-| NC (no counters) | defined | undefined | `ZONE_SCOPED` (timing) + `MEASURE_PERF_COUNTERS` (barrier only) | Per-zone wall-clock cycles (`RISCV_DEBUG_REG_WALL_CLOCK_L`), reported differently per run type: `L1_TO_L1` is the unpack-start to pack-end cross-thread span, the isolates are the measured thread's own zone, and `L1_CONGESTION` yields two columns, `[UNPACK]` and `[PACK]` |
-| WC (with counters) | defined | defined | `MEASURE_PERF_COUNTERS` **and** `ZONE_SCOPED` | Per-zone HW counter snapshot **and** wall-clock cycles |
+| Build | Counted zones | Active part(s) of `START_PERF_MEASURE` | What it measures |
+|-------|---------------|--------------------------------------|------------------|
+| NC (no counters) | none | `ZONE_SCOPED` (timing) + `MEASURE_PERF_COUNTERS` (rendezvous; the arm writes no command, the freeze stops counters that never started) | Per-zone wall-clock cycles (`RISCV_DEBUG_REG_WALL_CLOCK_L`), reported differently per run type: `L1_TO_L1` is the unpack-start to pack-end cross-thread span, the isolates are the measured thread's own zone, and `L1_CONGESTION` yields two columns, `[UNPACK]` and `[PACK]` |
+| WC (with counters) | `INIT` and `TILE_LOOP` (Wormhole); `TILE_LOOP`, then `INIT` in one extra launch per run type (Blackhole, Quasar) | `MEASURE_PERF_COUNTERS` **and** `ZONE_SCOPED` | Per-zone HW counter snapshot **and** wall-clock cycles |
 
-`START_PERF_MEASURE(name)` expands to `MEASURE_PERF_COUNTERS(name)` + `ZONE_SCOPED(name)`. In the NC build, `MEASURE_PERF_COUNTERS` performs the same real rendezvous with an empty action (so it is not free, and it moves the NC baseline). The rendezvous has three threads on Wormhole and Blackhole and four on Quasar, where the SFPU TRISC takes part too: `sfpu_stub.h` opens the same `INIT` and `TILE_LOOP` zones, so a kernel with no SFPU half still completes it. In the WC build **both** are live: the counter scope performs the rendezvous *and* arms/freezes the HW counters, while `ZONE_SCOPED` records the per-zone wall-clock timestamps without adding another rendezvous. A single WC run therefore yields both counter and wall-clock data per zone under the same name; the host driver keys everything by `(test_variant, zone)` and can merge NC and WC results (or use the WC wall-clock directly).
+`START_PERF_MEASURE(name)` expands to `MEASURE_PERF_COUNTERS(name)` + `ZONE_SCOPED(name)`. In the NC build, `MEASURE_PERF_COUNTERS` performs the same real rendezvous, arm and freeze, and skips the configure and every readout (so it is not free, and it moves the NC baseline). The rendezvous has three threads on Wormhole and Blackhole and four on Quasar, where the SFPU TRISC takes part too: `sfpu_stub.h` opens the same `INIT` and `TILE_LOOP` zones, so a kernel with no SFPU half still completes it. In the WC build **both** are live: the counter scope performs the rendezvous *and* arms/freezes the HW counters, while `ZONE_SCOPED` records the per-zone wall-clock timestamps without adding another rendezvous. A single WC run therefore yields both counter and wall-clock data per zone under the same name; the host driver keys everything by `(test_variant, zone)` and can merge NC and WC results (or use the WC wall-clock directly).
 
 Source-side, this is the pattern:
 
@@ -114,7 +114,7 @@ Quasar reached that through an L1 generation barrier first, and the measurements
 
 ### Configure-once from BRISC
 
-Before any TRISC kernel runs, BRISC executes `configure_and_arm_from_brisc()` once (called from `brisc.cpp` when the WC build flag is set). Quasar has no BRISC in this harness, so the unpack TRISC calls the same `configure_and_arm()` from `trisc.cpp`, after `device_setup()` and before it clears the other TRISCs out of soft reset; the registers are reached through the NEO local window (`bank_regs(Bank)` defaults to `LOCAL_REGS_WINDOW` there) instead of the RISC-V debug block. This:
+Before any TRISC kernel runs, BRISC executes `configure_and_arm_from_brisc()` once (called from `brisc.cpp`; it returns after the `DBG_FEATURE_DISABLE` scrub when the launch counts no zone). Quasar has no BRISC in this harness, so the unpack TRISC calls the same `configure_and_arm()` from `trisc.cpp`, after `device_setup()` and before it clears the other TRISCs out of soft reset; the registers are reached through the NEO local window (`bank_regs(Bank)` defaults to `LOCAL_REGS_WINDOW` there) instead of the RISC-V debug block. This:
 
 - Writes the per-architecture `BUILTIN_COUNTER_CONFIG` (110 slots on WH, 101 on BH, since only one L1 mux group is emitted; 77 on Quasar, 78 with an l1_client selection) into the shared L1 config buffer at `0x169000`. That array is built at compile time from the shared select tables, see [Shared counter definitions](hardware_reference.md#where-the-definitions-live).
 - Clears every per-zone data area and sync word.
@@ -153,7 +153,7 @@ pytest --compile-producer --enable-perf-counters -n 8 -x ./python_tests/perf_elt
 pytest --compile-consumer --enable-perf-counters -x ./python_tests/perf_eltwise_binary.py
 ```
 
-Wipe the artefact root (`/tmp/tt-llk-build`, or `$RUNNER_TEMP/tt-llk-build`) when switching between the two builds: the variant hash and the build markers ignore the counter flags, so the ELFs are otherwise reused.
+The two builds share their ELFs (the counted zones are written at run time, not compiled), so switching between them needs no rebuild.
 
 To capture a different L1 mux group, `export LLK_PERF_L1_MUX_GROUP=<0-5>` before **both** phases. It is an environment variable rather than a CLI flag and is compiled into `brisc.elf`, so each group needs its own producer run; the readout checks the group found in L1 against the one requested and fails the run if they disagree, so a stale `brisc.elf` cannot return a self-consistently mislabelled dataset.
 
@@ -161,16 +161,16 @@ Quasar has no L1 counter bank. Its bank slot 3 can carry one event of the L1 cli
 
 The `--enable-perf-counters` flag triggers two things:
 
-1. Test sources are compiled with `-DPERF_COUNTERS_COMPILED` (the WC build). BRISC is compiled with the same flag so it runs `configure_and_arm_from_brisc()` once at startup.
+1. The driver writes the counted zones before every launch, so BRISC (the unpack TRISC on Quasar) configures and arms the counters and the TRISCs read each counted zone out; Blackhole and Quasar count `INIT` in one extra launch per run type, so that no readout sits between `INIT` and `TILE_LOOP`.
 2. The Python driver calls `read_counters()` after every run, writes the derived percentage metrics into the main CSV, and writes raw counts only to `*.counters.csv` under `--dump-perf-counters`.
 
-Without the flag the suite still runs the same sources but builds the NC variant, and only `ZONE_SCOPED` wall-clock data is collected.
+Without the flag the suite runs the same ELFs with no zone counted, and only `ZONE_SCOPED` wall-clock data is collected.
 
 ### CLI flags
 
 | Flag | Implies `--enable-perf-counters` | Effect |
 |------|----------------------------------|--------|
-| `--enable-perf-counters` | no | Build the WC variant and collect raw counters per zone |
+| `--enable-perf-counters` | no | Count every zone and collect raw counters per zone |
 | `--dump-perf-counters` | yes | Export raw counter values to a separate `<test>.counters.csv` alongside the main results CSV |
 
 `--dump-perf-counters` implicitly enables counter collection; you don't need to specify `--enable-perf-counters` separately.
@@ -245,11 +245,11 @@ A metric whose counters this architecture does not expose, or whose counter grou
 - **Instrumenting a kernel moves its no-counter baseline.** The rendezvous is real in both builds, so converting a kernel from `ZONE_SCOPED` to `START_PERF_MEASURE` shifts its timings; numbers from before and after are not comparable.
 - **`PROFILER_SYNC()` is per-kernel and not universal.** `fast_tilize_bh_test.cpp` omits it entirely and no `UNINIT` zone has one, so those windows close without draining the backend.
 
-- **A pytest invocation compiles one build.** `--enable-perf-counters` selects WC, otherwise NC, so a single invocation cannot produce both. The WC build records wall-clock (`ZONE_SCOPED`) *alongside* the counters, so it is self-contained; the NC build is run separately only when a counter-overhead-free timing baseline is wanted. Results merge off-line by `(test_variant, zone)`.
+- **A pytest invocation runs one build.** `--enable-perf-counters` selects WC, otherwise NC, so a single invocation cannot produce both. The WC build records wall-clock (`ZONE_SCOPED`) *alongside* the counters, so it is self-contained; the NC build is run separately only when a counter-overhead-free timing baseline is wanted. Results merge off-line by `(test_variant, zone)`.
 - **The window is `[all threads armed … all threads finished]`.** The rendezvous arms after every thread has entered, and freezes after every thread has finished for the run types that keep the exit barrier. Each thread stamps the release with its own wall-clock read, and those reads serialize on the single shared clock, so the per-thread zone starts differ by ~12–40 cyc (irreducible; not a bug).
 - **`PERF_COUNTERS_MAX_ZONES = 8` per kernel.** Adding a 9th distinct `MEASURE_PERF_COUNTERS("...")` name silently reuses zone 0. Reuse the same name across multiple call sites if you want them in the same bucket.
 - **One L1 mux group per run.** `PERF_CNT_MUX_CTRL` selects the group while the counters count, not when they are read, so the freeze path cannot re-aim it and a run observes exactly one group. Select it with `LLK_PERF_L1_MUX_GROUP` and sweep it across runs.
-- **BRISC compile flag.** When `--enable-perf-counters` is set, BRISC is rebuilt with `-DPERF_COUNTERS_COMPILED` (plus `-DLLK_PERF_L1_MUX_GROUP=<n>`; on Quasar the four TRISCs get `-DPERF_COUNTERS_COMPILED -DLLK_PERF_L1_CLIENT_SEL=<n>` instead and the unpack TRISC does the setup). Otherwise BRISC does not touch the counter HW at all, which keeps the NC build free of any counter-armed monitoring overhead.
+- **Same compile flags in both builds.** BRISC gets `-DLLK_PERF_L1_MUX_GROUP=<n>` and the TRISCs the same (`-DLLK_PERF_L1_CLIENT_SEL=<n>` on Quasar) whether or not counters are on; `single_code_path.py` (the PR gate) requires the two builds' loaded sections to be identical. With no zone counted BRISC skips the configure, so counters off touches the counter HW only with the arm writes of 0 and the freezes.
 - **Test isolation.** As with every LLK test, counter state at kernel entry is whatever the previous test left behind. The BRISC reset path clears the shared config and zone buffers, so each test starts from a known L1 state, but HW counter registers themselves may carry residual values until the first `MEASURE_PERF_COUNTERS` rising-edge clear.
 - **NC/WC bit-identity is fragile.** The goal is that the WC counter code doesn't perturb the measured timing, which requires WC codegen to match NC outside the counter parts. `get_bank_regs` uses a `volatile` index cast specifically to stop GCC from emitting a `CSWTCH` jump table (it would shift GP-relative offsets and break that bit-identity), and `freeze_and_read_all_counters` uses `#pragma GCC unroll 0`. Measured counters are sensitive to BRISC boot *timing* at the ~0.1 % level, so avoid reshaping the BRISC boot path (e.g. the config scan) even when it looks logically equivalent.
 - **The BRISC boot arm is redundant but retained.** The RTL (see [hardware_reference.md](hardware_reference.md#hardware-register-reference)) confirms a rising-edge start both *clears* and starts the counters, so the per-zone `arm_all_counters` fully resets them from any prior state, so the boot-time `arm_hardware()` measures a window nobody reads. It is kept only because removing it changes boot timing (see previous point). The essential BRISC work is `configure_hardware` (period/mode) + the `DBG_FEATURE_DISABLE` scrub.
