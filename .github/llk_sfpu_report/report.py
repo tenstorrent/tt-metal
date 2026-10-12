@@ -577,15 +577,20 @@ def header(summaries):
         COMMENT_MARKER,
         "## LLK SFPU report",
         "",
-        f"Tested `{s['head_sha'][:10]}` (PR head) against `{s['base_sha'][:10]}` (merge-base) on {archs}. "
-        "Silicon, speed of light.",
+        (
+            f"Tested this PR's kernel changes on top of main (`{s['tool_sha'][:10]}`) against main itself "
+            f"on {archs}. Silicon, speed of light."
+            if s["mode"] == "rebase"
+            else f"Tested `{s['head_sha'][:10]}` (PR head) against `{s['base_sha'][:10]}` (merge-base) on {archs}. "
+            "Silicon, speed of light."
+        ),
     ]
     if s.get("head_moved_to"):
         lines.append(
             f"> [!NOTE]\n> The PR has moved to `{s['head_moved_to'][:10]}` since; comment `/llk-sfpu-test` to re-run."
         )
     age = s.get("merge_base_age_days")
-    if age is not None and age > STALE_DAYS:
+    if s["mode"] != "rebase" and age is not None and age > STALE_DAYS:
         lines.append(
             f"> [!WARNING]\n> The merge-base is {age} days old. Main may have changed these kernels since: "
             "rebase, or re-run with `/llk-sfpu-test --base main`."

@@ -152,17 +152,28 @@ def _family_of(op):
     return "binary" if op.startswith("Sfpu") else "unary"
 
 
-class _Incompatible(Exception):
-    """The side's C++ harness does not build with the tool's Python harness."""
-
-
 def _harness_compiles(side, arch, log, jobs):
     """Compile one ordinary op on ``side``: a failure means harness skew, not the PR."""
-    try:
-        detect.compile_all(side, arch, "unary", log, jobs, only_ops=("neg",))
-        return True
-    except RuntimeError:
-        return False
+    return detect.compile_all(side, arch, "unary", log, jobs, only_ops=("neg",)) in (0, 5)
+
+
+def _choose_sides(plan, work, mode, arch, log, jobs, notes):
+    """The two sides to compare, and the mode they were built in.
+
+    In merge-base mode the sides are old trees built with today's harness. When the
+    merge-base's device code no longer builds with it (a toolchain or harness change
+    on main since), every variant would fail on both sides and nothing would be
+    measured, so the run falls back to rebase mode and says so.
+    """
+    base, head = _sides(plan, work, mode)
+    if mode == "merge-base" and not _harness_compiles(base, arch, log, jobs):
+        notes.append(
+            "The merge-base does not build with today's test harness, so this report "
+            "compares current main with main plus this PR's kernel changes."
+        )
+        mode = "rebase"
+        base, head = _sides(plan, work, mode)
+    return mode, base, head
 
 
 def cmd_run(args):
@@ -179,9 +190,8 @@ def cmd_run(args):
     log.write_text("")
     plan = overlay.make_plan(args.repo, args.head, args.base, args.main_ref)
     print(f"tool {plan.tool_sha[:12]}  base {plan.base_sha[:12]}  head {plan.head_sha[:12]}  mode {args.mode}")
-    base, head = _sides(plan, work, args.mode)
-
     notes = []
+    args.mode, base, head = _choose_sides(plan, work, args.mode, args.arch, log, args.jobs, notes)
     if args.ops:
         ops, unknown = _requested_ops(args.ops)
         if unknown:

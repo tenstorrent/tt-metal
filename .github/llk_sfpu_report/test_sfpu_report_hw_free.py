@@ -229,6 +229,35 @@ def test_the_binary_accuracy_driver_hooks_names_that_exist():
     assert hooked <= module_names(runner.PYTHON_TESTS / "test_eltwise_binary_sfpu.py")
 
 
+@pytest.mark.parametrize("exit_code, builds", [(0, True), (5, True), (1, False)])
+def test_the_skew_probe_reads_the_compile_exit_code(monkeypatch, exit_code, builds):
+    monkeypatch.setattr(detect, "compile_all", lambda *args, **kwargs: exit_code)
+    assert cli._harness_compiles(None, "wormhole", None, 1) is builds
+
+
+@pytest.mark.parametrize(
+    "builds, mode, built", [(True, "merge-base", ["merge-base"]), (False, "rebase", ["merge-base", "rebase"])]
+)
+def test_an_old_merge_base_falls_back_to_rebase_mode(monkeypatch, builds, mode, built):
+    seen = []
+    monkeypatch.setattr(cli, "_sides", lambda plan, work, m: (seen.append(m), ("base", "head"))[1])
+    monkeypatch.setattr(cli, "_harness_compiles", lambda *args: builds)
+    notes = []
+    assert cli._choose_sides(None, None, "merge-base", "wormhole", None, 1, notes) == (mode, "base", "head")
+    assert seen == built
+    assert bool(notes) is not builds
+
+
+def test_rebase_mode_says_what_it_compared():
+    summary = _summary()
+    summary["mode"] = "rebase"
+    text = report.render([summary])
+    assert "on top of main (`aaaaaaaaaa`) against main itself" in text
+    assert "(merge-base)" not in text
+    assert "days old" not in text  # the stale merge-base warning is about merge-base mode
+    assert "--mode rebase" in text
+
+
 def test_requested_ops_take_any_case_and_skip_unknown_names():
     ops, unknown = cli._requested_ops("tanh,SFPULOGSIGMOID,typecast,tanhh,Tanh")
     assert ops == ["Tanh", "SfpuLogsigmoid", "Typecast"]
