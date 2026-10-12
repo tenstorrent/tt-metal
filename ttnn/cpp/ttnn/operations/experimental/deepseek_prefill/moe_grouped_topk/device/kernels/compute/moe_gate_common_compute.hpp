@@ -29,6 +29,8 @@
 #include "api/compute/eltwise_unary/sqrt.h"
 #include "api/compute/bcast.h"
 #include "api/compute/eltwise_binary_sfpu.h"
+#include "api/compute/eltwise_unary/binop_with_scalar.h"
+#include "api/compute/sfpu_binary_bcast.h"
 #include "api/dataflow/circular_buffer.h"
 
 namespace blocks {
@@ -580,6 +582,40 @@ void normalize_scores(
     pack_tile(0, cb_normalized_scores_id);
     cb_normalized_scores.push_back(1);
     tile_regs_release();
+}
+
+// fp32_selection: weights = gathered * route_scale / (row sum + epsilon), all in the fp32 DEST on the SFPU (the FPU
+// reduce / broadcast multiplies above read their operands through the TF32 source registers, which truncates and so
+// biases every weight low). The gathered tile is unpacked straight to DEST and its columns past k are zero.
+template <uint32_t epsilon_bits, uint32_t route_scale_bits>
+void normalize_and_scale_fp32(const uint32_t cb_gathered_sigmoid_id, const uint32_t cb_out_weights_id) {
+    CircularBuffer cb_gathered_sigmoid(cb_gathered_sigmoid_id);
+    CircularBuffer cb_out_weights(cb_out_weights_id);
+    cb_gathered_sigmoid.wait_front(1);
+    tile_regs_acquire();
+    reconfig_data_format_srca(cb_gathered_sigmoid_id);
+    copy_init(cb_gathered_sigmoid_id);
+    copy_tile(cb_gathered_sigmoid_id, 0, 0);
+    copy_tile(cb_gathered_sigmoid_id, 0, 1);
+    sfpu_reduce_init<PoolType::SUM, DataFormat::Float32>();
+    sfpu_reduce<PoolType::SUM, DataFormat::Float32, ReduceDim::REDUCE_ROW>(1);  // row sums -> column 0
+    binop_with_scalar_tile_init();
+    add_unary_tile(1, epsilon_bits);
+    recip_tile_init<ReciprocalDestAcc::FP32, ReciprocalApproxMode::Precise>();
+    recip_tile<ReciprocalDestAcc::FP32, ReciprocalApproxMode::Precise>(1);
+    sfpu_mul_bcast_col_init();
+    sfpu_mul_bcast_col(0, 1);
+    binop_with_scalar_tile_init();
+    mul_unary_tile(0, route_scale_bits);
+    tile_regs_commit();
+    cb_gathered_sigmoid.pop_front(1);
+
+    cb_out_weights.reserve_back(1);
+    tile_regs_wait();
+    pack_reconfig_data_format(cb_out_weights_id);
+    pack_tile(0, cb_out_weights_id);
+    tile_regs_release();
+    cb_out_weights.push_back(1);
 }
 
 void scale(

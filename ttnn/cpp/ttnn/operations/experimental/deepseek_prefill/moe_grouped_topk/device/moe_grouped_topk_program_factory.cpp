@@ -295,11 +295,13 @@ MoeGroupedTopkDeviceOperation::ProgramFactory::cached_program_t MoeGroupedTopkDe
     const bool precise = operation_attributes.fp32_selection;
     if (precise) {
         for (auto cb : {cb_in_scores, cb_in_bias, cb_scores_fp32, cb_bias_fp32, cb_sigmoid_scores, cb_biased_scores,
-                        cb_group_summed_scores}) {
+                        cb_group_summed_scores, cb_gathered_sigmoid}) {
             unpack_to_dest_mode[static_cast<uint32_t>(cb)] = tt::tt_metal::UnpackToDestMode::UnpackToDestFp32;
         }
     }
     compute_named_compile_time_args["precise"] = static_cast<uint32_t>(precise);
+    compute_named_compile_time_args["packed_epsilon"] = std::bit_cast<uint32_t>(operation_attributes.epsilon);
+    compute_named_compile_time_args["packed_route_scale"] = std::bit_cast<uint32_t>(operation_attributes.route_scale);
     const auto default_unpack = [&](tt::CBIndex cb) {
         return unpack_to_dest_mode[static_cast<uint32_t>(cb)] == tt::tt_metal::UnpackToDestMode::Default;
     };
@@ -353,6 +355,7 @@ MoeGroupedTopkDeviceOperation::ProgramFactory::cached_program_t MoeGroupedTopkDe
         {"packed_one_scalar", std::bit_cast<uint32_t>(1.0f)},
         {"packed_epsilon", std::bit_cast<uint32_t>(operation_attributes.epsilon)},
         {"packed_route_scale", std::bit_cast<uint32_t>(operation_attributes.route_scale)},
+        {"precise", static_cast<uint32_t>(operation_attributes.fp32_selection)},
         {"cb_epsilon_scalar", cb_epsilon_scalar},
         {"cb_route_scale_scalar", cb_route_scale_scalar},
         {"seq_len_tiles", tt::div_up(seq_len, tile_height)},
