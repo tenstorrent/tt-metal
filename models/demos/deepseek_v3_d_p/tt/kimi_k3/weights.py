@@ -32,6 +32,7 @@ from safetensors import safe_open
 
 from models.demos.deepseek_v3_d_p.reference.kimi_k3_config import KimiK3Config, kimi_k3_kda_config
 from models.demos.deepseek_v3_d_p.tests.kda.checkpoint_utils import load_kda_layer_state_dict, resolve_model_root
+from models.demos.deepseek_v3_d_p.tt.kda.config import KIMI_K3_PROJECTION_DTYPE
 
 # What each TT module reads out of a layer's state dict. Kept here rather than inline so the map
 # from checkpoint name to TT name is in one place and can be read against the modules.
@@ -278,6 +279,13 @@ def load_layer_state_dict_cached(
     `weight_cache_path` is set. Nothing in the stack needed changing for this.
     """
     if layer_is_cached(root, layer_idx):
+        if layer_idx not in model_cfg.mla_layer_ids() and not any(
+            root.glob(f"layer_{layer_idx}.kda.*_dtype_{KIMI_K3_PROJECTION_DTYPE.name}_*.tensorbin")
+        ):
+            # Cached before the KDA projections left bfloat16: rebuild only them, from this layer's
+            # attention weights; every other component still loads from its tensorbins.
+            logger.info(f"layer {layer_idx}: cache hit, rebuilding its KDA projections")
+            return {"kda_weights": load_kda_layer_state_dict(Path(checkpoint_dir), layer_idx, kimi_k3_kda_config())}
         logger.info(f"layer {layer_idx}: cache hit, not opening the checkpoint")
         return {}
     state_dict = load_layer_state_dict(checkpoint_dir, layer_idx, model_cfg=model_cfg)
