@@ -264,3 +264,18 @@ Next: read the breakdown; if a fix is clear, commit it and rerun one VSA arm vs 
 - Next: grep T453; if interleaved vsa_sdpa is still far above 0.17x of dense, the fine kernel's per-pair cost at this
   shape (k=119 + 46 exempt per row, 10 dealer-dense rows/shard) is the cause; plus 12 ms/layer fixed overhead
   (2 K/V all-gathers + coarse) that dense ring SDPA hides inside its ring.
+- blx01 job 995 PASSED (16:18Z, wall 37 s, 900 MHz clamp, no drops). Interleaved placement (pipeline's), one layer,
+  best of 3: dense 47.0 ms (ring_joint_sdpa 39.0); VSA-0.9 two-op 42.7 ms (-9%: vsa_sdpa 19.2, K/V all-gathers
+  2x4.7, coarse 3.7, AG 0.8); VSA-0.9 vsa_ring 37.2 ms (-21%: vsa_ring_sdpa 23.6, coarse 3.5, AG 0.7).
+- Root cause of no speedup (speed): (a) fine kernel is only 2.0x faster than dense ring SDPA for 0.167x of the tile
+  pairs (per-pair cost ~3x dense: per-row gathered KV, 46 exempt ids + k=119 per row, dense rows); (b) the two-op path
+  (pipeline default, ring=False; job 990) adds ~14 ms/layer of non-overlapped work (two blocking K/V all-gathers 9.4,
+  coarse 3.7, AG 0.8), eating 2/3 of the 19.8 ms saving. Predicted two-op e2e: 50 x 4.3 = ~215 ms/step (~7%); job 990
+  saw 11 ms, so ~200 ms/step more is lost elsewhere in the e2e (padded_len 79360 vs dense bucket 76800 = +3.3% rows
+  for all non-attention ops is only ~25 ms of it; unexplained rest).
+- Quality: not a kernel bug (unit tests and oracle pass); dense-trained Turbo checkpoint/LoRA run sparse without the
+  SLA LoRA. Not fixable by placement or ring (same selection).
+- e2e check: blx01 job 996 = 10 s VSA-0.9 with VSA_RING=1, seed 0 (spec tt-project/t453/ab10ring.txt, -t 480).
+  Output /var/tmp/fasth3/t409/out_ab10ring-vsa0.9/run.log. Dense ref: /var/tmp/fasth3/t408/out_t10 (3110 ms/step).
+- Next: grep 'denoise breakdown' and 'Denoising (per step)' in job 996's log; ring e2e should be ~-490 ms/step if the
+  per-layer gain carries over. PSNR/PCC of latents and video vs t408/out_t10 (same as cmp449). Then ttp push --own --detach.
