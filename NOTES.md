@@ -96,3 +96,17 @@ First error (log /var/log/tt-device-broker/2026-10-12_145010_971.log on blx01, l
   could not convert 'false' from 'bool' to 'ckernel::ReciprocalDestAcc'
 Cause: the t400 base changed recip_tile_init's template param from bool to enum ckernel::ReciprocalDestAcc. The host build (step 1) cannot see device kernels; they compile at JIT time.
 Next: fix line 891 (and any other recip_tile_init<bool>/recip_tile<bool> uses in vsa_* kernels) to match how sdpa_flash/compute_common.hpp on the base calls it; sync the kernel file to /var/tmp/fasth3/t409 (no rebuild needed for kernel sources if build tree reads them from the src tree; check b/ttnn path is a copy), resubmit attn.txt.
+
+## t449 run 1680 (2026-10-12 08:00 PDT)
+- Fix 22d7d4a6299 (pushed to ttp/t409-...): vsa_sdpa_stream_compute.cpp:891-892 `recip_tile_init<false>()` /
+  `recip_tile<false>(0, VectorMode::C)` -> no template args. The base (846c8f5ba23, #56292) dropped the legacy_compat
+  bool; old `<false>` = modern math at default DEST precision = the new default. Same as the base's
+  compute_streaming.hpp:764. No other recip/rsqrt bool uses in vsa_* kernels. Other drift checked by diffing the shared
+  sdpa headers fasth3-opt..HEAD: fused_op_receiver (vsa reader fills the struct fields itself; fields unchanged),
+  calculate_binop_with_scalar template unchanged. The JIT compile on device is the real check.
+- blx01: only that file copied into /var/tmp/fasth3/t409/b (tmp+mv, ionice/nice); md5 matches. Tree = 53f7b6b707 +
+  the fix (git HEAD there still prints 53f7b6b707). TT_METAL_HOME=b, so kernels JIT from it; no rebuild.
+- device-lint passed. blx01 was running #421's job 973, so chain449a (tt-project/t409/chain449a.sh, copy in
+  state/runs/1680) waits for the broker to clear of smarton jobs, submits attn.txt via blx01-submit.sh, waits for the
+  job to end. Log state/runs/1680/chain449a.out (ends "T449A_DONE <rc> <job> <status>").
+- #408 is done, so step 6 (10 s dense vs VSA-0.9 A/B, run409b.sh, one job) runs after the PCC job passes.
