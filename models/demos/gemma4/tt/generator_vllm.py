@@ -4076,6 +4076,9 @@ class Gemma4DFlashContractForCausalLM(Gemma4DFlashBase):
         # A step this class does not speculate on runs the plain decode; the
         # device sampler keeps that step from pulling [B, vocab] logits to host.
         "supports_sample_on_device": True,
+        # The TT sampler represents at most 32 candidates. Use host sampling
+        # for sampled contract requests that ask for a wider top_k.
+        "max_device_top_k": 32,
         # TTAsyncDecodeController.plan_decode_reload requires reload_inputs=True
         # when supports_async_decode is False, including after fused output.
         # Keep async decode disabled until the runner tracks fused input residency.
