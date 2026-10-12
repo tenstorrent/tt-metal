@@ -447,15 +447,6 @@ class LogProbsCalculator:
         # TODO: Raise an issue on this since for UINT_32 ttnn.div produces incorrect output (all zeros)
         global_idx_tilized_tensor = ttnn.typecast(global_idx_tilized_tensor, ttnn.float32, **self.common_args)
 
-        # Get chip_id for each user based on global_idx values in global_idx_tensor
-        chip_ids_tensor = ttnn.div(
-            global_idx_tilized_tensor,
-            size_per_device,
-            rounding_mode="floor",
-            memory_config=ttnn.DRAM_MEMORY_CONFIG,
-            **self.common_args,
-        )
-
         # Get local index for each user based on global_idx values in global_idx_tensor
         remainder_tensor = ttnn.remainder(
             global_idx_tilized_tensor,
@@ -486,6 +477,16 @@ class LogProbsCalculator:
         # _calculate_log_probs, so no chip mask or collective is necessary.
         if self.num_devices_for_sharding == 1:
             return selected_logits_tensor
+
+        # Multi-device only: compute per-user chip id to mask-out logits from the wrong chip.
+        # ttnn.div is deferred until here so single-device skips the floor-div entirely.
+        chip_ids_tensor = ttnn.div(
+            global_idx_tilized_tensor,
+            size_per_device,
+            rounding_mode="floor",
+            memory_config=ttnn.DRAM_MEMORY_CONFIG,
+            **self.common_args,
+        )
 
         # Compare mask to chip_ids tensor and select correct positions for each user on all chips inplace
         ttnn.eq_(chip_ids_tensor, self.mask, **self.common_args)

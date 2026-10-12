@@ -669,14 +669,32 @@ def test_log_probs_calculation(shape, mesh_device):
     assert passing, f"Assertion failed, PCC={pcc}"
 
 
+@pytest.mark.parametrize(
+    "vocab_size,valid_vocab_size",
+    [
+        (4096, 4096),  # unpadded baseline
+        (4096, 4000),  # 96-column tile-aligned padded tail
+    ],
+    ids=["unpadded", "padded-96-tail"],
+)
 @pytest.mark.parametrize("mesh_device", [(1, 1)], indirect=True)
-def test_log_probs_calculation_single_device(mesh_device):
-    """The rollout worker uses one independent model on each 1x1 submesh."""
+def test_log_probs_calculation_single_device(mesh_device, vocab_size, valid_vocab_size):
+    """The rollout worker uses one independent model on each 1x1 submesh.
+
+    The padded-tail case is the Copilot/Codex/mtairum regression guard: valid logits are
+    strongly negative so an unmasked padded 0 would dominate sum(exp) and shift every
+    returned logprob. Callers must mask the padded tail BEFORE passing logits to the
+    calculator; this test holds that contract at the calculator layer.
+    """
+    from models.common.sampling.vocab_padding import build_invalid_vocab_mask
+
     batch_size = 32
-    vocab_size = 4096
     torch.manual_seed(1234)
-    logits_host = torch.randn(1, 1, batch_size, vocab_size, dtype=torch.bfloat16)
-    sampled_indices = torch.argmax(logits_host.float(), dim=-1, keepdim=True)
+    # Valid prefix lives at ~ -10; padded tail is 0 before masking. Without masking the
+    # padded zeros dominate sum(exp) and the returned logprob is wrong by ~log(ratio) >> 1e-2.
+    logits_host = torch.full((1, 1, batch_size, vocab_size), 0.0, dtype=torch.bfloat16)
+    logits_host[..., :valid_vocab_size] = torch.randn(1, 1, batch_size, valid_vocab_size, dtype=torch.bfloat16) - 10.0
+    sampled_indices = torch.argmax(logits_host[..., :valid_vocab_size].float(), dim=-1, keepdim=True)
     indices_host = sampled_indices.reshape(1, 1, 1, batch_size)
 
     logits = ttnn.from_torch(
@@ -687,6 +705,21 @@ def test_log_probs_calculation_single_device(mesh_device):
         mesh_mapper=ttnn.ReplicateTensorToMesh(mesh_device),
         memory_config=ttnn.DRAM_MEMORY_CONFIG,
     )
+
+    # Mirror the sampler-callsite contract: the caller passes an already-masked logits tensor.
+    mask_host = build_invalid_vocab_mask(valid_vocab_size, vocab_size, batch_size)
+    if mask_host is not None:
+        mask_tt = ttnn.from_torch(
+            mask_host,
+            device=mesh_device,
+            dtype=ttnn.bfloat16,
+            layout=ttnn.TILE_LAYOUT,
+            mesh_mapper=ttnn.ReplicateTensorToMesh(mesh_device),
+            memory_config=ttnn.DRAM_MEMORY_CONFIG,
+        )
+        logits = ttnn.add(logits, mask_tt, memory_config=ttnn.DRAM_MEMORY_CONFIG)
+        ttnn.deallocate(mask_tt)
+
     indices = ttnn.from_torch(
         indices_host,
         device=mesh_device,
@@ -702,11 +735,16 @@ def test_log_probs_calculation_single_device(mesh_device):
 
     assert result is not None
     actual = ttnn.to_torch(ttnn.get_device_tensors(result)[0])[:, :, :1, :batch_size]
-    expected = torch.gather(F.log_softmax(logits_host.float(), dim=-1), -1, sampled_indices).reshape(
-        1, 1, 1, batch_size
-    )
+    # Reference log_softmax restricted to the VALID prefix (padded tail is not a real token).
+    valid_logits = logits_host[..., :valid_vocab_size].float()
+    expected = torch.gather(F.log_softmax(valid_logits, dim=-1), -1, sampled_indices).reshape(1, 1, 1, batch_size)
     passing, pcc = comp_pcc(expected, actual, pcc=0.99)
     assert passing, f"single-device logprobs PCC below threshold: {pcc}"
+    max_abs = (expected - actual).abs().max().item()
+    assert max_abs <= 5e-2, (
+        f"single-device logprobs max abs error {max_abs:.4f} exceeds bf16 tolerance; "
+        f"a value much larger than ~log(normalizer-ratio) suggests the padded tail leaked into sum(exp)."
+    )
 
 
 def _shard_logits_2d_mesh(logits_host, mesh_device):

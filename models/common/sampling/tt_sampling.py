@@ -121,7 +121,7 @@ class TTSampling(LightweightModule):
         per_chunk = (width + num_chunks - 1) // num_chunks  # ceil(width / num_chunks)
         return (per_chunk + ttnn.TILE_SIZE - 1) // ttnn.TILE_SIZE * ttnn.TILE_SIZE  # round up to a tile
 
-    def _is_force_argmax_sampling(self, k, p, temp):
+    def _is_force_argmax_sampling(self, k, p, temp, enable_log_probs=False):
         """Detect whether all users request deterministic greedy decoding.
 
         When every user in the batch has k=1 (top-1), p=0.0 or p=1.0 (no top-p filter),
@@ -137,9 +137,16 @@ class TTSampling(LightweightModule):
 
         Changing this state between decode steps invalidates captured traces, so
         SamplingGenerator maintains separate trace slots keyed by force_argmax.
+
+        ``enable_log_probs`` disables force-argmax even for greedy requests: the argmax
+        fast-path has no log-softmax step, so any user needing logprobs must route through
+        the top-k path. Without this, greedy + logprobs on a 1x1 mesh (model_config.py
+        defaults allow_force_argmax=True there) silently returns None and
+        Generator.process_decode_output_host fills the slot with torch.ones(logits.shape).
         """
         return (
             self._allow_force_argmax_sampling
+            and not bool(enable_log_probs)
             and is_default_value(k, 1)
             and (is_default_value(p, 1.0) or is_default_value(p, 0.0))
             and is_default_value(temp, 1.0)
@@ -308,7 +315,9 @@ class TTSampling(LightweightModule):
             temp = torch.ones(total_param_size)
 
         k, temp = self._normalize_device_params(k, temp)
-        self._force_argmax_sampling = self._is_force_argmax_sampling(k, p, temp)
+        # LogProbsCalculator starts with all users disabled; reset_params will re-derive
+        # force-argmax once per-user logprobs flags are set.
+        self._force_argmax_sampling = self._is_force_argmax_sampling(k, p, temp, enable_log_probs=False)
 
         # Create sampling parameter tensors on device
         # When _sampling_dp > 1, dims=(0, None) shards the [128] tensor across 4 rows → [32] per row
@@ -634,7 +643,15 @@ class TTSampling(LightweightModule):
     ):
         """Update sampling parameters (k, p, temperature, logprobs) dynamically."""
         k, temp = self._normalize_device_params(k, temp)
-        self._force_argmax_sampling = self._is_force_argmax_sampling(k, p, temp)
+        # Update the calculator state FIRST so an empty_slots partial update is reflected in
+        # self.log_probs_calculator.enable_log_probs below. If any user asks for logprobs, force-
+        # argmax is disabled so the top-k path runs for every row (greedy or stochastic).
+        self.log_probs_calculator.set_log_probs_mode(
+            enable_log_probs, num_logprobs=num_logprobs, empty_slots=empty_slots
+        )
+        self._force_argmax_sampling = self._is_force_argmax_sampling(
+            k, p, temp, enable_log_probs=self.log_probs_calculator.enable_log_probs
+        )
         if not self._force_argmax_sampling:
             # When _sampling_dp > 1, create multi-device host tensors so
             # copy_host_to_device_tensor writes per-row shards correctly.
@@ -684,10 +701,6 @@ class TTSampling(LightweightModule):
                 ),
             )
             ttnn.copy_host_to_device_tensor(self._greedy_col_new, self._greedy_col)
-
-        self.log_probs_calculator.set_log_probs_mode(
-            enable_log_probs, num_logprobs=num_logprobs, empty_slots=empty_slots
-        )
 
     def _greedy_col_dims(self):
         """Map the 1-D k_tensor shard dims (self._param_dims, batch on dim0) to the [1,1,N,1] greedy
@@ -1150,14 +1163,14 @@ class TTSampling(LightweightModule):
         if self.log_probs_calculator.enable_log_probs and self.log_probs_calculator._use_topk_logprobs:
             # New path: top-K logprobs for gpt-oss-120b
             self.tt_log_probs = self.log_probs_calculator.calculate_topk_log_probs(
-                logits_tensor=x,
+                logits_tensor=x_bf16,
                 topk_values=topk_values_gathered_bf16_interleaved,
                 topk_global_indices=topk_global_indices_interleaved,
                 sub_core_grid_topk=self.sub_core_grid_topk,
             )
         elif self.log_probs_calculator.enable_log_probs:
             # Old path: single sampled-token logprob
-            self.tt_log_probs = self.log_probs_calculator.calculate_log_probs(x, tt_out_tok)
+            self.tt_log_probs = self.log_probs_calculator.calculate_log_probs(x_bf16, tt_out_tok)
         else:
             self.tt_log_probs = None
 

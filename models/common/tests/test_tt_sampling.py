@@ -19,6 +19,7 @@ import torch
 
 import ttnn
 from models.common.sampling.generator import SamplingGenerator, SamplingParams, format_sampling_params
+from models.common.sampling.tt_log_probs import LogProbsResult
 from models.common.sampling.tt_sampling import TTSampling
 
 # TEST NOTES:
@@ -66,6 +67,7 @@ class _SamplingArgs:
     sub_core_grid_topk: ttnn.CoreRangeSet | None
     start_core: ttnn.CoreCoord
     model_config: dict
+    use_topk_logprobs: bool = False
 
 
 def compute_per_device_vocab(vocab_size: int, num_tp: int) -> int:
@@ -123,8 +125,19 @@ def default_sub_core_grids(mesh_device) -> ttnn.CoreRangeSet:
     return ttnn.CoreRangeSet([ttnn.CoreRange(ttnn.CoreCoord(0, 0), ttnn.CoreCoord(grid.x - 1, grid.y - 1))])
 
 
-def make_sampling_args(mesh_device, sampling_dp: int = 1) -> _SamplingArgs:
-    """Build sampling args for synthetic tests on the current mesh shape."""
+def make_sampling_args(
+    mesh_device,
+    sampling_dp: int = 1,
+    *,
+    vocab_size: int = VOCAB_SIZE,
+    padded_vocab_size: int | None = None,
+    use_topk_logprobs: bool = False,
+) -> _SamplingArgs:
+    """Build sampling args for synthetic tests on the current mesh shape.
+
+    ``vocab_size`` / ``padded_vocab_size`` default to ``VOCAB_SIZE`` matched to the mesh TP axis;
+    override them when the test wants a specific valid<padded layout (e.g. padded-tail logprobs).
+    """
     cluster_shape = tuple(mesh_device.shape)
     # For 1D meshes, gather across the non-singleton axis.
     if cluster_shape[0] == 1 and cluster_shape[1] > 1:
@@ -134,11 +147,12 @@ def make_sampling_args(mesh_device, sampling_dp: int = 1) -> _SamplingArgs:
     else:
         sampling_all_gather_axis = 1 if cluster_shape[0] > 1 and cluster_shape[1] > 1 else 0
     num_tp = cluster_shape[sampling_all_gather_axis] if cluster_shape[sampling_all_gather_axis] > 0 else 1
-    per_device_vocab = compute_per_device_vocab(VOCAB_SIZE, num_tp)
-    padded_vocab_size = per_device_vocab * num_tp
+    if padded_vocab_size is None:
+        per_device_vocab = compute_per_device_vocab(vocab_size, num_tp)
+        padded_vocab_size = per_device_vocab * num_tp
     sub_core_grids = default_sub_core_grids(mesh_device)
     return _SamplingArgs(
-        vocab_size=VOCAB_SIZE,
+        vocab_size=vocab_size,
         padded_vocab_size=padded_vocab_size,
         max_batch_size=BATCH_SIZE,
         max_top_k=MAX_TOP_K,
@@ -149,6 +163,7 @@ def make_sampling_args(mesh_device, sampling_dp: int = 1) -> _SamplingArgs:
         sub_core_grid_topk=sub_core_grids,
         start_core=ttnn.CoreCoord(0, 0),
         model_config={},
+        use_topk_logprobs=use_topk_logprobs,
     )
 
 
@@ -1569,6 +1584,213 @@ class TestMixedParameterBatches:
         assert out1 == out2, "Mixed parameter batch should replay deterministically with fixed seeds"
         assert_tokens_in_vocab(out1, args.vocab_size)
         assert len(set(out1)) >= 2, "Mixed parameter batch should produce non-trivial diversity"
+
+
+# --- Test: logprobs on 1x1 greedy and padded-vocab callsite regression ---
+
+
+@pytest.mark.parametrize("mesh_device", [1], indirect=True)
+class TestSingleDeviceGreedyLogprobs:
+    """Pins the PR #57765 contract: greedy + enable_log_probs on a 1x1 mesh produces
+    real logprobs instead of the Generator.process_decode_output_host torch.ones placeholder.
+
+    The bug prerequisite: model_config.py enables allow_force_argmax=True whenever num_devices==1,
+    so format_sampling_params(temperature=0.0) -> (temp=1, k=1, p=0) would take the force-argmax
+    fast-path and return None for logprobs. Fix 5 extends _is_force_argmax_sampling to also check
+    enable_log_probs, so greedy+logprobs now routes through the top-k path and emits real values.
+    """
+
+    @staticmethod
+    def _enable_force_argmax(args: _SamplingArgs) -> None:
+        args.model_config = {
+            "SAMPLING_AG_CONFIG": {
+                "allow_force_argmax": True,
+                "num_links": 1,
+                "topology": ttnn.Topology.Linear,
+            }
+        }
+
+    @staticmethod
+    def _run_once(sg, logits_host, args, enable_log_probs):
+        """Run one eager sample() and return (tokens, tt_log_probs). Caller is responsible for sync."""
+        padded = pad_logits_to_max_batch(logits_host, max_batch_size=BATCH_SIZE)
+        tt_input = make_sharded_logits(padded, sg.mesh_device, args)
+        try:
+            formatted = format_sampling_params(
+                SamplingParams(temperature=0.0, enable_log_probs=enable_log_probs), BATCH_SIZE
+            )
+            sg.reset_sampling_params(formatted)
+            sg.seed_manager.reset_seed(None, list(range(BATCH_SIZE)))
+            sg.seed_manager.get_new_values()
+            tt_tokens, tt_log_probs = sg.sample(tt_input, enable_trace=False)
+            ttnn.synchronize_device(sg.mesh_device)
+            return tt_tokens, tt_log_probs
+        finally:
+            ttnn.deallocate(tt_input)
+
+    def test_greedy_with_logprobs_disables_force_argmax_and_returns_tensor(self, mesh_device):
+        args = make_sampling_args(mesh_device)
+        self._enable_force_argmax(args)
+
+        torch.manual_seed(2024)
+        logits_host = torch.randn(1, 1, BATCH_SIZE, args.vocab_size, dtype=torch.bfloat16)
+
+        sg = SamplingGenerator(args=args, mesh_device=mesh_device, tt_ccl=None)
+        try:
+            tt_tokens, tt_log_probs = self._run_once(sg, logits_host, args, enable_log_probs=True)
+            assert sg.tt_sampling.force_argmax_sampling is False, (
+                "greedy + enable_log_probs must leave force_argmax_sampling=False; otherwise the "
+                "argmax fast-path returns None and Generator.process_decode_output_host falls back "
+                "to torch.ones(logits.shape)."
+            )
+            assert tt_log_probs is not None, "greedy + enable_log_probs must emit a logprobs tensor"
+
+            lp_host = ttnn.to_torch(ttnn.get_device_tensors(tt_log_probs)[0])[:, :, 0, :BATCH_SIZE].reshape(-1).float()
+            # All logprobs are log(p) with p in (0, 1] -> non-positive and finite.
+            assert torch.all(lp_host <= 1e-3), f"logprobs must be <= 0; got max {lp_host.max().item():.4f}"
+            assert torch.all(torch.isfinite(lp_host)), "logprobs must be finite"
+            # And they must not be the Generator's constant-1.0 placeholder.
+            assert not torch.allclose(
+                lp_host, torch.ones_like(lp_host)
+            ), "returned logprobs match the torch.ones placeholder -- Fix 5 regression"
+
+            tokens = extract_tokens(tt_tokens, BATCH_SIZE)
+            expected = torch.argmax(logits_host.float().squeeze(), dim=-1).tolist()
+            # Greedy routed through top-k must still land on argmax (within tie-break tolerance).
+            assert tokens == expected, f"greedy tokens mismatch: {tokens[:4]} vs {expected[:4]}"
+        finally:
+            try:
+                sg.reset_trace()
+            except Exception:
+                pass
+            del sg
+            safe_sync(mesh_device)
+
+    def test_greedy_without_logprobs_still_force_argmax(self, mesh_device):
+        """Complementary pin: force-argmax fast-path still fires when logprobs are off."""
+        args = make_sampling_args(mesh_device)
+        self._enable_force_argmax(args)
+
+        torch.manual_seed(2024)
+        logits_host = torch.randn(1, 1, BATCH_SIZE, args.vocab_size, dtype=torch.bfloat16)
+
+        sg = SamplingGenerator(args=args, mesh_device=mesh_device, tt_ccl=None)
+        try:
+            _tt_tokens, tt_log_probs = self._run_once(sg, logits_host, args, enable_log_probs=False)
+            assert (
+                sg.tt_sampling.force_argmax_sampling is True
+            ), "greedy without logprobs should still take the argmax fast-path"
+            assert tt_log_probs is None, "argmax fast-path must return None for logprobs"
+        finally:
+            try:
+                sg.reset_trace()
+            except Exception:
+                pass
+            del sg
+            safe_sync(mesh_device)
+
+
+# --- Test: padded-vocab logprobs across both TTSampling callsites ---
+
+
+@pytest.mark.parametrize("mesh_device", [1], indirect=True)
+@pytest.mark.parametrize(
+    "use_topk_logprobs",
+    [False, True],
+    ids=["single_token_path", "topk_path"],
+)
+class TestSingleDevicePaddedVocabLogprobs:
+    """Padded-vocab regression for both tt_sampling.py:1160 and tt_sampling.py:1153.
+
+    valid_vocab_size < padded_vocab_size with the valid prefix held strongly negative and a 0
+    padded tail: without passing the already-masked x_bf16 into the calculator the padded zeros
+    dominate sum(exp) and the returned logprob is off by ~log(normalizer-ratio) >> bf16 tolerance.
+
+    Parameterised over ``use_topk_logprobs`` because the two Fix 1 edits are mutually exclusive
+    on self.log_probs_calculator._use_topk_logprobs (tt_sampling.py:1150). A single-flag test
+    would silently leave the top-K callsite uncovered.
+    """
+
+    def test_padded_vocab_logprobs(self, mesh_device, use_topk_logprobs):
+        valid_vocab_size = 32000
+        padded_vocab_size = 32768  # 768-column tile-aligned padded tail
+        args = make_sampling_args(
+            mesh_device,
+            vocab_size=valid_vocab_size,
+            padded_vocab_size=padded_vocab_size,
+            use_topk_logprobs=use_topk_logprobs,
+        )
+
+        torch.manual_seed(2025)
+        # Valid prefix ~ -10, padded tail = 0. Without the x -> x_bf16 fix the padded zeros set
+        # global_max=0 and sum(exp) is dominated by exp(0)*tail_width, which shifts every logprob.
+        logits_host = torch.full((1, 1, BATCH_SIZE, padded_vocab_size), 0.0, dtype=torch.bfloat16)
+        logits_host[..., :valid_vocab_size] = (
+            torch.randn(1, 1, BATCH_SIZE, valid_vocab_size, dtype=torch.bfloat16) - 10.0
+        )
+
+        sg = SamplingGenerator(args=args, mesh_device=mesh_device, tt_ccl=None)
+        tt_input = None
+        try:
+            tt_input = make_sharded_logits(logits_host, mesh_device, args)
+            formatted = format_sampling_params(
+                SamplingParams(temperature=1.0, top_k=32, top_p=1.0, enable_log_probs=True), BATCH_SIZE
+            )
+            sg.reset_sampling_params(formatted)
+            sg.seed_manager.reset_seed(None, list(range(BATCH_SIZE)))
+            sg.seed_manager.get_new_values()
+            tt_tokens, tt_log_probs = sg.sample(tt_input, enable_trace=False)
+            ttnn.synchronize_device(mesh_device)
+
+            assert tt_log_probs is not None, "logprobs must be emitted when enable_log_probs=True"
+
+            tokens = extract_tokens(tt_tokens, BATCH_SIZE)
+            assert all(
+                t < valid_vocab_size for t in tokens
+            ), f"sampled tokens must stay in the valid prefix; got max={max(tokens)}"
+
+            ref_log_softmax = torch.log_softmax(
+                logits_host[..., :valid_vocab_size].float().squeeze(), dim=-1
+            )  # [B, V_valid]
+
+            if use_topk_logprobs:
+                # Top-K path (tt_sampling.py:1153): returned object is a LogProbsResult.
+                assert isinstance(tt_log_probs, LogProbsResult), f"expected LogProbsResult, got {type(tt_log_probs)}"
+                lp_dev = ttnn.get_device_tensors(tt_log_probs.topk_logprobs)[0]
+                idx_dev = ttnn.get_device_tensors(tt_log_probs.topk_indices)[0]
+                topk_lp = ttnn.to_torch(lp_dev)[:, :, :BATCH_SIZE, :].reshape(BATCH_SIZE, -1).float()
+                topk_idx = ttnn.to_torch(idx_dev)[:, :, :BATCH_SIZE, :].reshape(BATCH_SIZE, -1).to(torch.int64)
+
+                assert torch.all(topk_idx < valid_vocab_size), (
+                    "top-K indices must stay in the valid vocab; padded ids leaking in means the "
+                    "Fix 1 x_bf16 swap did not take effect for the top-K path"
+                )
+                ref_lp = ref_log_softmax.gather(dim=-1, index=topk_idx)
+                max_abs = (ref_lp - topk_lp).abs().max().item()
+                assert max_abs <= 5e-2, (
+                    f"top-K padded-tail logprob error {max_abs:.4f} exceeds bf16 tolerance; "
+                    "a value near log(normalizer-ratio) ~6-13 indicates the padded tail leaked into sum(exp)."
+                )
+            else:
+                # Single-token path (tt_sampling.py:1160): returned object is a replicated tensor.
+                lp_host = ttnn.to_torch(ttnn.get_device_tensors(tt_log_probs)[0])[:, :, 0, :BATCH_SIZE]
+                lp_host = lp_host.reshape(-1).float()
+                tokens_t = torch.tensor(tokens, dtype=torch.int64)
+                ref_lp = ref_log_softmax[torch.arange(BATCH_SIZE), tokens_t]
+                max_abs = (ref_lp - lp_host).abs().max().item()
+                assert max_abs <= 5e-2, (
+                    f"single-token padded-tail logprob error {max_abs:.4f} exceeds bf16 tolerance; "
+                    "a value near log(normalizer-ratio) ~6-13 indicates the padded tail leaked into sum(exp)."
+                )
+        finally:
+            try:
+                sg.reset_trace()
+            except Exception:
+                pass
+            if tt_input is not None:
+                ttnn.deallocate(tt_input)
+            del sg
+            safe_sync(mesh_device)
 
 
 # --- Test: a single odd lane out (1 greedy vs 31 stochastic, and the mirror) ---

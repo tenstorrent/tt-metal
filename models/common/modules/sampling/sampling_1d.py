@@ -322,8 +322,11 @@ class Sampling1D(LightweightModule):
             output_tensor=tt_out_tok,
             keepdim=False,
         )
-        # Argmax path never emits logprobs (main's contract: force-argmax is disabled whenever
-        # logprobs are requested). Return None unconditionally — do not call the calculator.
+        # Argmax fast-path never emits logprobs: this helper is only reached when the caller
+        # explicitly chose argmax by passing k=p=temp=None. Callers that need logprobs for a
+        # greedy row must send explicit (k=1, p=0, temp=1) so they route through _sample_topk.
+        # TTTv2's prepare_sampling_params already does this (row_paths="topk" when greedy and
+        # enable_log_probs=True); the TTTv1 equivalent lives in TTSampling._is_force_argmax_sampling.
         return tt_out_tok, None
 
     def _get_argmax_all_gather_config(self, cluster_axis):
@@ -457,7 +460,7 @@ class Sampling1D(LightweightModule):
         # disabled case incurs zero extra ops. The calculator supports a complete
         # vocabulary on one device and established tensor-parallel vocab layouts.
         if self._log_probs_calculator.enable_log_probs:
-            log_probs = self._log_probs_calculator.calculate_log_probs(logits, tt_out_tok)
+            log_probs = self._log_probs_calculator.calculate_log_probs(x_bf16, tt_out_tok)
         else:
             log_probs = None
         return tt_out_tok, log_probs
