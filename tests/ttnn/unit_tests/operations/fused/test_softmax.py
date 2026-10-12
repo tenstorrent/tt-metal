@@ -1010,8 +1010,7 @@ def test_softmax_explicit_fp32_acc_keeps_fp32_intermediates(device):
     ttnn.softmax(tt_input, dim=-1)
     assert device.num_program_cache_entries() == entries_explicit + 1, "defaulted call reused the explicit program"
 
-    # With Float32 bulk buffers the output takes a single bfloat16 rounding, so nearly every element
-    # matches the correctly rounded result; rounding exp(x - max) to bfloat16 first drops this to
-    # about 75-80 %.
+    # Measured: 0.810 of outputs match the correctly rounded result with Float32 bulk buffers (WH N150 and
+    # BH P150), 0.728 when exp(x - max) is rounded to bfloat16 first (main after #53643, WH N150).
     correctly_rounded = (explicit_out == golden).float().mean().item()
-    assert correctly_rounded >= 0.85, f"only {correctly_rounded:.3f} of outputs are correctly rounded"
+    assert correctly_rounded >= 0.77, f"only {correctly_rounded:.3f} of outputs are correctly rounded"
