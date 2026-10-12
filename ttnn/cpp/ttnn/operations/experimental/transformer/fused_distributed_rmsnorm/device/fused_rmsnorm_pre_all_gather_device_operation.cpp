@@ -27,6 +27,14 @@ void FusedRMSNormPreAllGatherDeviceOperation::validate_on_program_cache_miss(
         tensor.storage_type() == StorageType::DEVICE, "Input tensor must be on device, got: {}", tensor.storage_type());
     TT_FATAL(tensor.buffer() != nullptr, "Input tensor must be allocated in device buffers (buffer is null)");
     TT_FATAL(
+        tensor.tensor_spec().tile() == tt::tt_metal::Tile(),
+        "Input tensor must use the default {}x{} tile, got {}x{} (transposed: {})",
+        TILE_HEIGHT,
+        TILE_WIDTH,
+        tensor.tensor_spec().tile().get_height(),
+        tensor.tensor_spec().tile().get_width(),
+        tensor.tensor_spec().tile().get_transpose_of_faces());
+    TT_FATAL(
         tensor.logical_shape()[-1] == tensor.padded_shape()[-1],
         "Input last dimension must be the same as padded last dimension, got logical_dim: {} vs padded_dim: {}",
         tensor.logical_shape()[-1],

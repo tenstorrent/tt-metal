@@ -171,3 +171,18 @@ def test_rotary_embedding_hf_decode_rejects_width_sharded_cos_sin(device, expect
         ttnn.experimental.rotary_embedding_hf(
             input_tensor, cos_tt, sin_tt, is_decode_mode=True, compute_kernel_config=_hf_rope_compute_kernel_config()
         )
+
+
+def test_rotary_embedding_hf_decode_rejects_cos_sin_orientation_mismatch(device, expect_error):
+    batch_grid = ttnn.num_cores_to_corerangeset(8, device.compute_with_storage_grid_size(), row_wise=True)
+    trig_mem = ttnn.MemoryConfig(
+        ttnn.TensorMemoryLayout.HEIGHT_SHARDED,
+        ttnn.BufferType.L1,
+        ttnn.ShardSpec(batch_grid, [ttnn.TILE_SIZE, 64], ttnn.ShardOrientation.COL_MAJOR),
+    )
+    input_tensor, cos_tt, sin_tt = _decode_hf_inputs(device, trig_mem)
+
+    with expect_error(RuntimeError, "Cos/sin shard orientation .* must match input shard orientation"):
+        ttnn.experimental.rotary_embedding_hf(
+            input_tensor, cos_tt, sin_tt, is_decode_mode=True, compute_kernel_config=_hf_rope_compute_kernel_config()
+        )
