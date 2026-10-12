@@ -21,11 +21,11 @@
 //   h16_cb : single [16, 16] bfloat16 tile. H_16 fills the entire face.
 //            Routed to srcB face (0, 0).
 //
-//   in_cb  : single [16, 16] bfloat16 tile. The 128 real input values
-//            live in rows [0..8), cols [0..16). The unpack path zeroes
-//            rows [8..16) itself (ZEROSRC over the full srcA span, see
+//   in_cb  : bfloat16. 128 real input values contiguous at the tile
+//            address, read as rows [0..8), cols [0..16) of srcA face (0, 0).
+//            Tile shape is ignored. The unpack path zeroes rows
+//            [8..16) itself (ZEROSRC over the full srcA span, see
 //            llk_unpack_hadamard.h), so callers need not pad them.
-//            Routed to srcA face (0, 0).
 //
 //   out_cb : single [16, 16] bfp8 (bfloat8_b) tile. The 1x128 result
 //            lives in face 0 rows [0..8), cols [0..16). The caller
@@ -82,7 +82,7 @@ ALWI void hadamard_h128_init(const uint32_t in_cb_id, const uint32_t h16_cb_id, 
     // unpacker config is INDEPENDENT of the input CB's tile shape: srcA reads
     // the input data with h16's [16,16] config (a 4x[1,32] feed is read as 8
     // rows of 16), srcB reads h16. Both operands are bf16. in_cb_id is passed
-    // to the init only for its single-face assertion.
+    // to the init only to check its format matches h16's.
     UNPACK((llk_unpack_hw_configure<fp32_dest_acc_en>(h16_cb_id, h16_cb_id)));
     UNPACK((llk_unpack_hadamard_h128_init(h16_cb_id, in_cb_id, /*h16_tile_index=*/0)));
 
