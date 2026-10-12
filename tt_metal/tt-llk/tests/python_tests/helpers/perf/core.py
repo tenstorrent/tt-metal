@@ -1094,7 +1094,7 @@ class PerfConfig(TestConfig):
 
         # A kernel inherits state from the kernel before it: run each kernel once
         # unrecorded, so no measured kernel follows a kernel of another test.
-        if not TestConfig.TEST_TARGET.run_simulator:
+        if not TestConfig.TEST_TARGET.run_simulator or os.environ.get("LLK_SIM_WARMUP") == "1":  # experiment
             for templates, runtimes, run_type in self.warmup_configs:
                 self._select_run_type(templates, runtimes, run_type)
                 self.write_runtimes_to_L1()
@@ -1204,7 +1204,7 @@ class PerfConfig(TestConfig):
         while (
             self._wormhole_perf_barrier()
             and TestConfig.PERF_INIT_LAUNCH
-            and not TestConfig.TEST_TARGET.run_simulator
+            and (not TestConfig.TEST_TARGET.run_simulator or os.environ.get("LLK_SIM_INIT") == "1")  # experiment
             and init_configs
         ):
             init_config = init_configs.pop(0)
