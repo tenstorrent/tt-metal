@@ -11,13 +11,8 @@
 // START_PERF_MEASURE expands to ZONE_SCOPED, so the zone layer must be in scope here; self-guarded on LLK_PROFILER.
 #include "profiler.h"
 
-// One program for both builds: every piece of counter work branches on detail::arm_cmd, which is 0 with counters off,
-// so that build runs none of it and differs from the counters on build in that one data word.
-#ifdef PERF_COUNTERS_COMPILED
-constexpr bool COUNTERS_ON = true;
-#else
-constexpr bool COUNTERS_ON = false;
-#endif
+// One program for both builds: the host names the zones a launch counts (counted_zones), so counters off runs no
+// counter work and both builds compile to the same ELFs.
 
 // BRISC builds the config only; the per-zone measurement layer below also needs LLK_PROFILER.
 
@@ -185,23 +180,52 @@ constexpr std::uint32_t BUILTIN_COUNTER_COUNT = BUILTIN_COUNTER_CONFIG.size();
 
 static_assert(BUILTIN_COUNTER_COUNT <= COUNTER_SLOT_COUNT, "Counter inventory overflows the shared config region into zone 0 data");
 
-// START with counters on, 0 (no command) off. Loaded from memory, not an immediate: the compiler folded the immediate
-// into an unrelated store in one build only.
+// The zones a launch counts, a bit per zone id, written by the host before every launch (test_config.py counted_zones):
+// 0 with counters off. A register outside L1, so neither side's access touches the memory the kernel uses.
+#if defined(ARCH_QUASAR)
+constexpr std::uint32_t COUNTED_ZONES_REG = 0x030000AC; // TT_CLUSTER_CTRL_SCRATCH_27, unused elsewhere
+#elif defined(ARCH_WORMHOLE)
+constexpr std::uint32_t COUNTED_ZONES_REG = 0xFFB40000 + 249 * 4; // STREAM_SCRATCH_1 of overlay stream 0
+#else
+constexpr std::uint32_t COUNTED_ZONES_REG = 0xFFB40000 + 37 * 4; // STREAM_SCRATCH_1 of overlay stream 0
+#endif
+
+inline __attribute__((always_inline)) std::uint32_t counted_zones()
+{
+#if defined(TT_METAL_TTSIM) // ttsim models neither register
+    return 0;
+#else
+    return *reinterpret_cast<volatile std::uint32_t*>(COUNTED_ZONES_REG) & 0xFFu;
+#endif
+}
+
+inline __attribute__((always_inline)) bool counts(std::uint32_t zone_id)
+{
+    return (counted_zones() >> zone_id) & 1u;
+}
+
 namespace detail
 {
-inline const volatile std::uint32_t arm_cmd = COUNTERS_ON ? llk::perf::START : 0;
+// The arm command of the zone being entered: START when the launch counts it, 0 (no command) when not, so the arm is the
+// same instructions in every launch. Set before the zone's rendezvous.
+inline volatile std::uint32_t arm_cmd = 0;
 #if defined(ARCH_QUASAR)
-// Both builds route the selection; only the counters on build sets the enable bit.
-inline const volatile std::uint32_t l1_client_cmd =
-    COUNTERS_ON ? llk::perf::l1_client_ctrl_word(static_cast<std::uint32_t>(L1_CLIENT_SEL))
-                : (llk::perf::l1_client_ctrl_word(static_cast<std::uint32_t>(L1_CLIENT_SEL)) & ~llk::perf::L1_CLIENT_ENABLE);
+// The l1_client selection, with the enable bit only when the zone is counted. Set with arm_cmd.
+inline volatile std::uint32_t l1_client_cmd = 0;
 #endif
 } // namespace detail
 
-// Whether this build counts: the counter work below runs only when it does, so counters off runs only the line-up.
-inline __attribute__((always_inline)) bool counting()
+static_assert(llk::perf::START == 1, "set_arm_cmd computes the arm command as the zone's bit");
+
+// Branch free, so it is the same instructions whichever zones the launch counts.
+inline __attribute__((always_inline)) void set_arm_cmd(std::uint32_t zone_id)
 {
-    return detail::arm_cmd != 0;
+    const std::uint32_t bit = (counted_zones() >> zone_id) & 1u;
+    detail::arm_cmd         = bit;
+#if defined(ARCH_QUASAR)
+    const std::uint32_t word = llk::perf::l1_client_ctrl_word(static_cast<std::uint32_t>(L1_CLIENT_SEL));
+    detail::l1_client_cmd    = (word & ~llk::perf::L1_CLIENT_ENABLE) | ((0u - bit) & llk::perf::L1_CLIENT_ENABLE);
+#endif
 }
 
 #if defined(ARCH_QUASAR)
@@ -268,7 +292,7 @@ inline void arm_hardware()
 #if defined(TT_METAL_TTSIM)
     return;
 #endif
-    const std::uint32_t arm_cmd = detail::arm_cmd;
+    const std::uint32_t arm_cmd = llk::perf::START; // configure_and_arm runs only when the launch counts
     for (std::uint32_t b = 0; b < COUNTER_BANK_COUNT; ++b)
     {
         if (!(get_active_bank_mask() & (1u << b)))
@@ -331,10 +355,13 @@ inline void configure_and_arm()
 #if !defined(TT_METAL_TTSIM)
     llk::perf::clear_debug_feature_disable();
 #endif
-    if (!counting())
+    if (counted_zones() == 0)
     {
         return;
     }
+#if defined(ARCH_QUASAR)
+    detail::l1_client_cmd = llk::perf::l1_client_ctrl_word(static_cast<std::uint32_t>(L1_CLIENT_SEL));
+#endif
     volatile std::uint32_t* shared_config = reinterpret_cast<volatile std::uint32_t*>(PERF_COUNTERS_SHARED_CONFIG_ADDR);
     for (std::uint32_t i = 0; i < BUILTIN_COUNTER_COUNT; i++)
     {
@@ -674,7 +701,7 @@ static bool reader_here;
 // After run_kernel on the reader thread: wait for the measured thread to freeze its last zone, then read it back.
 inline void read_last_zone()
 {
-    if (detail::reader_here && counting())
+    if (detail::reader_here && (counted_zones() >> ZONE_ID_TILE_LOOP) != 0)
     {
         volatile std::uint32_t* pending = reinterpret_cast<volatile std::uint32_t*>(PERF_COUNTERS_PENDING_ZONE_ADDR);
         for (std::uint32_t polls = 0; *pending == 0 && polls < READER_POLL_LIMIT; ++polls)
@@ -704,6 +731,7 @@ struct perf_counter_scoped
         {
             detail::reader_here = true;
         }
+        set_arm_cmd(zid);
 #if defined(LLK_DBG_BARRIER)
         if constexpr (LOOP_PAD && releases_last(RUN_TYPE))
         {
@@ -716,30 +744,26 @@ struct perf_counter_scoped
         llk_barrier::rendezvous<LOOP_PAD>(
 #endif
             llk_barrier::is_action_thread(),
-            []
+            [zid]
             {
                 // Span run types read at their exit rendezvous, so this read would be dead for them, and not
                 // harmless: an L1 read here hung every Wormhole L1_CONGESTION kernel in the math thread.
-                constexpr bool reads = is_single_thread_runtype(RUN_TYPE);
-                constexpr bool arms  = !(LOOP_PAD && release_schedule(RUN_TYPE) != 0);
-                // every thread is held here, so the work cannot reach a window (Wormhole: it precedes the restart's flush)
-                if constexpr (reads || arms)
+                if constexpr (is_single_thread_runtype(RUN_TYPE))
                 {
-                    if (counting())
+                    // the readout of an earlier counted zone: counters off and a launch that counts this zone alone
+                    // branch alike, so they reach the zone's start the same way
+                    if (counted_zones() & ((1u << zid) - 1u))
                     {
-                        if constexpr (reads)
-                        {
-                            read_pending_zone();
-                        }
-                        if constexpr (arms)
-                        {
-                            arm_all_counters();
-                        }
+                        read_pending_zone();
                     }
                 }
+                if constexpr (!(LOOP_PAD && release_schedule(RUN_TYPE) != 0))
+                {
+                    arm_all_counters(); // START or 0: the same instructions either way
+                }
             });
-        // Released last, by its own flush: the window starts here. Not skipped with counters off: its stores (of 0, no
-        // command) keep the window's start the same cycles after the flush in both builds.
+        // Released last, by its own flush: the window starts here. Its arm writes 0 (no command) when the zone is not
+        // counted, so the window starts the same cycles after the flush in every launch.
         if constexpr (LOOP_PAD && releases_last(RUN_TYPE))
         {
             arm_all_counters();
@@ -775,7 +799,7 @@ struct perf_counter_scoped
         {
             if constexpr (is_measured_thread(RUN_TYPE))
             {
-                if (counting()) // after the window's end read
+                if (counts(zid)) // after the window's end read
                 {
                     freeze_zone(zid);
                 }
@@ -793,7 +817,7 @@ struct perf_counter_scoped
                 llk_barrier::is_action_thread(),
                 [zid]
                 {
-                    if (counting())
+                    if (counts(zid))
                     {
                         freeze_all_counters();
                         read_all_counters(zid);

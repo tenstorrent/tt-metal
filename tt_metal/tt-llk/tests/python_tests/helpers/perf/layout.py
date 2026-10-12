@@ -46,7 +46,9 @@ PARK_FIXED = 64  # NOP words between a park's ebreak and its alignment (barrier.
 ZONE_RESERVE = "_ZN12llk_profiler12zone_reserveEv"
 ZONE_RECORD = "_ZN12llk_profiler11zone_recordEtyy"
 RUN_KERNEL = "_Z10run_kernelRK13RuntimeParams"
-ARM_CMD = "_ZN8llk_perf6detail7arm_cmdE"
+# counters.h COUNTED_ZONES_REG: a trace that runs past the window reaches the counter work, which branches on it; reading
+# it as every zone counted models one path in both builds, so they choose the same pads
+COUNTED_ZONES_REG = 0xFFB40000 + 249 * 4
 PARAMS, STACK, RETURN = 0x70000000, 0x7FFF0000, 0x7EEE0000
 M32 = 0xFFFFFFFF
 MAP_VERSION = 12
@@ -543,11 +545,6 @@ def trace(
             ldm[a - 0xFFB00000 : a - 0xFFB00000 + len(d)] = d
     for i, b in enumerate(runtime_bytes):
         other[PARAMS + i] = b
-    # a trace that runs past the window reaches the counter work, which branches on this word (counters.h counting()):
-    # read it as START (1) in both builds, so they model the same path and choose the same pads
-    arm = elf.symbols.get(ARM_CMD)
-    if arm and 0xFFB00000 <= arm[0] < 0xFFB10000:
-        ldm[arm[0] - 0xFFB00000 : arm[0] - 0xFFB00000 + 4] = (1).to_bytes(4, "little")
 
     def ld(a, n):
         if a < 0x200000:
@@ -557,6 +554,8 @@ def trace(
             return int.from_bytes(ldm[o : o + n], "little")
         if 0x70000000 <= a < 0x80000000:
             return sum(other.get(a + i, 0) << (8 * i) for i in range(n))
+        if a == COUNTED_ZONES_REG:
+            return 0xFF
         return 0  # memory mapped register
 
     stores = 0

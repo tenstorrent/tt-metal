@@ -2523,6 +2523,15 @@ class TestConfig:
             for trisc_name in TestConfig.KERNEL_COMPONENTS
         ]
 
+        # every launch names the zones it counts (counters.h counted_zones), 0 unless a perf run counts them
+        counted_zones_reg = device_module.counted_zones_address()
+        if counted_zones_reg is not None:
+            write_words_to_device(
+                TestConfig.TENSIX_LOCATION,
+                counted_zones_reg,
+                [getattr(self, "counted_zones", 0)],
+            )
+
         if TestConfig.LAST_LOADED_ELFS != VARIANT_ELF_DIR:
             TestConfig.LAST_LOADED_ELFS = VARIANT_ELF_DIR
 

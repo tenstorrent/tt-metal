@@ -4,9 +4,9 @@
 # SPDX-License-Identifier: Apache-2.0
 """Checks that perf builds with counters off and on are the same program, so a code change moves both alike.
 
-Pairs the variants of two --compile-producer outputs (RUNNER_TEMP dirs) by build.h and requires identical code in
-every TRISC ELF (with its Wormhole layout copies) and the BRISC ELF, and loaded data that differs only in the counter
-command words. The counters off build must hold 0 in arm_cmd: every piece of counter work branches on it (counters.h).
+Pairs the variants of two --compile-producer outputs (RUNNER_TEMP dirs) by build.h and requires identical loaded sections
+in every TRISC ELF (with its Wormhole layout copies) and the BRISC ELF: the host names the zones a launch counts
+(counters.h counted_zones), so nothing in the ELFs may depend on the counters option.
 usage: single_code_path.py <counters off RUNNER_TEMP> <counters on RUNNER_TEMP>
 """
 import hashlib
@@ -15,12 +15,7 @@ import struct
 import sys
 from pathlib import Path
 
-ARM_CMD = b"_ZN8llk_perf6detail7arm_cmdE"
-ALLOWED_SYMBOLS = {
-    ARM_CMD,
-    b"_ZN8llk_perf6detail13l1_client_cmdE",
-}
-ARM_CMD_VALUES = (0, 1)  # counters off: no command, so no counter work runs; on: START
+ALLOWED_SYMBOLS = set()
 ELFS = ("unpack", "math", "pack", "sfpu")
 SHF_ALLOC, SHT_NOBITS, SHT_SYMTAB = 2, 8, 2
 
@@ -35,7 +30,7 @@ def read_elf(path):
         for i in range(shnum)
     ]
     name = lambda off, tab: data[tab[4] + off : data.index(b"\0", tab[4] + off)]
-    sections, allowed, arm_cmd = {}, [], None
+    sections, allowed = {}, []
     for h in heads:
         n = name(h[0], heads[shstrndx])
         if h[2] & SHF_ALLOC and h[1] != SHT_NOBITS and n != b".profiler_meta":
@@ -45,23 +40,13 @@ def read_elf(path):
                 st_name, st_value, st_size = struct.unpack_from("<III", data, off)
                 if name(st_name, heads[h[6]]) in ALLOWED_SYMBOLS:
                     allowed.append((st_value, max(st_size, 4)))
-                if name(st_name, heads[h[6]]) == ARM_CMD:
-                    arm_cmd = st_value
-    for addr, body in sections.values():
-        if arm_cmd is not None and addr <= arm_cmd < addr + len(body):
-            arm_cmd = struct.unpack_from("<I", body, arm_cmd - addr)[0]
-            break
-    else:
-        arm_cmd = None
-    return sections, allowed, arm_cmd
+    return sections, allowed
 
 
 def compare(fa, fb):
     if not (os.path.isfile(fa) and os.path.isfile(fb)):
         return "missing in one build"
-    (sa, allowed, arm_a), (sb, _, arm_b) = read_elf(fa), read_elf(fb)
-    if (arm_a, arm_b) not in ((None, None), ARM_CMD_VALUES):
-        return f"arm_cmd is {arm_a} off / {arm_b} on, not {ARM_CMD_VALUES[0]} / {ARM_CMD_VALUES[1]}"
+    (sa, allowed), (sb, _) = read_elf(fa), read_elf(fb)
     for n in sorted(set(sa) | set(sb)):
         (xa, da), (xb, db) = sa.get(n, (None, b"")), sb.get(n, (None, b""))
         if xa != xb or len(da) != len(db):
@@ -119,9 +104,7 @@ def main(off, on):
             bad.append(f"brisc: {problem}")
     for line in bad:
         print(line)
-    print(
-        f"{len(common)} variants paired, {len(bad)} ELFs differ beyond the counter command words"
-    )
+    print(f"{len(common)} variants paired, {len(bad)} ELFs differ")
     if len(common) < max(len(a), len(b)):
         print(
             f"unpaired variants: {len(a) - len(common)} counters off, {len(b) - len(common)} counters on"
