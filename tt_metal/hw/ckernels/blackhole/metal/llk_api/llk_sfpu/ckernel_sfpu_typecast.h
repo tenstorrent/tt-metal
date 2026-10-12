@@ -639,7 +639,7 @@ inline void init_typecast_fp32_to_int32() {
     sfpi::vConstIntPrgm0 = std::numeric_limits<std::int32_t>::max();
 }
 
-template <bool APPROXIMATION_MODE>
+template <bool APPROXIMATION_MODE, bool is_fp32_dest_acc_en>
 inline void init_typecast_uint16_to_uint32() {
     addr_mod_t{.srca = {.incr = 0}, .srcb = {.incr = 0}, .dest = {.incr = 2}}.set(ADDR_MOD_6);
     math::reset_counters(p_setrwc::SET_ABD_F);
@@ -649,11 +649,9 @@ inline void init_typecast_uint16_to_uint32() {
     // LREG1 holds the mask of the 32-bit Dest macro; the macro programming only targets LREG0, so it survives.
     TTI_SFPLOADI(p_sfpu::LREG1, sfpi::SFPLOADI_MOD0_USHORT, UINT16_LOW_MASK);
 
-    // InstructionTemplate[0]: the mask of macro 1 (32-bit Dest)
-    TTI_SFPAND(0, p_sfpu::LREG1, 12, 0);
-
-    // Macro 0 (16-bit Dest): store only, the LO16 load already zero-extends
-    {
+    // Only the Dest mode's macro is programmed, so the init issues no more than with one macro.
+    if constexpr (!is_fp32_dest_acc_en) {
+        // Macro 0 (16-bit Dest): store only, the LO16 load already zero-extends
         constexpr std::uint32_t simple_bits = 0;
         constexpr std::uint32_t mad_bits = 0;
         constexpr std::uint32_t round_bits = 0;
@@ -662,10 +660,11 @@ inline void init_typecast_uint16_to_uint32() {
         TTI_SFPLOADI(0, sfpi::SFPLOADI_MOD0_LOWER, (mad_bits << 8) | simple_bits);
         TTI_SFPLOADI(0, sfpi::SFPLOADI_MOD0_UPPER, (store_bits << 8) | round_bits);
         TTI_SFPCONFIG(0, 4 + 0, 0);
-    }
+    } else {
+        // InstructionTemplate[0]: the mask
+        TTI_SFPAND(0, p_sfpu::LREG1, 12, 0);
 
-    // Macro 1 (32-bit Dest)
-    {
+        // Macro 1 (32-bit Dest)
         constexpr std::uint32_t simple_bits = 0x80 | 0x40 | (0 << 3) | (4 + 0);
         constexpr std::uint32_t mad_bits = 0;
         constexpr std::uint32_t round_bits = 0;
@@ -809,7 +808,7 @@ inline void init_typecast_int32_to_fp16b() {
 #endif
 }
 
-template <bool APPROXIMATION_MODE>
+template <bool APPROXIMATION_MODE, bool is_fp32_dest_acc_en>
 inline void init_typecast_uint16_to_fp32() {
     addr_mod_t{.srca = {.incr = 0}, .srcb = {.incr = 0}, .dest = {.incr = 2}}.set(ADDR_MOD_6);
     math::reset_counters(p_setrwc::SET_ABD_F);
@@ -819,14 +818,12 @@ inline void init_typecast_uint16_to_fp32() {
     // LREG1 holds the mask of the 32-bit Dest macro; the macro programming only targets LREG0, so it survives.
     TTI_SFPLOADI(p_sfpu::LREG1, sfpi::SFPLOADI_MOD0_USHORT, UINT16_LOW_MASK);
 
-    // InstructionTemplate[0]: the cast (16-bit Dest, macro 0)
-    TTI_SFPCAST(0, 12, 0);
+    // Only the Dest mode's macro is programmed, so the init issues no more than with one macro.
+    if constexpr (!is_fp32_dest_acc_en) {
+        // InstructionTemplate[0]: the cast
+        TTI_SFPCAST(0, 12, 0);
 
-    // InstructionTemplate[1]: the mask of macro 1 (32-bit Dest)
-    TTI_SFPAND(0, p_sfpu::LREG1, 13, 0);
-
-    // Macro 0 (16-bit Dest)
-    {
+        // Macro 0 (16-bit Dest)
         constexpr std::uint32_t simple_bits = 0x00 | 0x40 | (0 << 3) | (4 + 0);
         constexpr std::uint32_t mad_bits = 0;
         constexpr std::uint32_t round_bits = 0;
@@ -835,10 +832,18 @@ inline void init_typecast_uint16_to_fp32() {
         TTI_SFPLOADI(0, sfpi::SFPLOADI_MOD0_LOWER, (mad_bits << 8) | simple_bits);
         TTI_SFPLOADI(0, sfpi::SFPLOADI_MOD0_UPPER, (store_bits << 8) | round_bits);
         TTI_SFPCONFIG(0, 4 + 0, 0);
-    }
 
-    // Macro 1 (32-bit Dest); the body casts between its mask and store
-    {
+        // Misc: {
+        //   StoreMod0: FP32,
+        //   UsesLoadMod0ForStore: {0},
+        //   UnitDelayKind: {1}, (WaitForElapsedInstructions=1)
+        // }
+        TTI_SFPCONFIG(0x100 | InstrModLoadStore::FP32, 8, 1);
+    } else {
+        // InstructionTemplate[1]: the mask
+        TTI_SFPAND(0, p_sfpu::LREG1, 13, 0);
+
+        // Macro 1 (32-bit Dest); the body casts between its mask and store
         constexpr std::uint32_t simple_bits = 0x80 | 0x00 | (1 << 3) | (4 + 1);
         constexpr std::uint32_t mad_bits = 0;
         constexpr std::uint32_t round_bits = 0;
@@ -847,14 +852,14 @@ inline void init_typecast_uint16_to_fp32() {
         TTI_SFPLOADI(0, sfpi::SFPLOADI_MOD0_LOWER, (mad_bits << 8) | simple_bits);
         TTI_SFPLOADI(0, sfpi::SFPLOADI_MOD0_UPPER, (store_bits << 8) | round_bits);
         TTI_SFPCONFIG(0, 4 + 1, 0);
-    }
 
-    // Misc: {
-    //   StoreMod0: FP32,
-    //   UsesLoadMod0ForStore: {0,0},
-    //   UnitDelayKind: {1,0,0,1}, (WaitForElapsedInstructions=1 for the Simple and Store sub-units)
-    // }
-    TTI_SFPCONFIG(0x900 | InstrModLoadStore::FP32, 8, 1);
+        // Misc: {
+        //   StoreMod0: FP32,
+        //   UsesLoadMod0ForStore: {0,0},
+        //   UnitDelayKind: {1,0,0,1}, (WaitForElapsedInstructions=1 for the Simple and Store sub-units)
+        // }
+        TTI_SFPCONFIG(0x900 | InstrModLoadStore::FP32, 8, 1);
+    }
 #endif
 }
 

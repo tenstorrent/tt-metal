@@ -494,7 +494,11 @@ ALWI void typecast_tile_init() {
         MATH(SFPU_UNARY_INIT_FN(typecast, sfpu::init_typecast_fp32_to_fp16b, (APPROX)));
     } else if constexpr (
         in_format == DataFormat::UInt16 && (out_format == DataFormat::UInt32 || out_format == DataFormat::Int32)) {
+#if defined(ARCH_BLACKHOLE)
+        MATH(SFPU_UNARY_INIT_FN(typecast, sfpu::init_typecast_uint16_to_uint32, (APPROX, is_fp32_dest_acc_en)));
+#else
         MATH(SFPU_UNARY_INIT_FN(typecast, sfpu::init_typecast_uint16_to_uint32, (APPROX)));
+#endif
     } else if constexpr (in_format == DataFormat::UInt32 && out_format == DataFormat::UInt16) {
         MATH(SFPU_UNARY_INIT_FN(typecast, sfpu::init_typecast_uint32_to_uint16, (APPROX)));
     } else if constexpr (in_format == DataFormat::Int32 && out_format == DataFormat::UInt16) {
@@ -504,7 +508,11 @@ ALWI void typecast_tile_init() {
     } else if constexpr (in_format == DataFormat::Int32 && out_format == DataFormat::Float32) {
         MATH(SFPU_UNARY_INIT_FN(typecast, sfpu::init_typecast_int32_to_fp32, (APPROX)));
     } else if constexpr (in_format == DataFormat::UInt16 && out_format == DataFormat::Float32) {
+#if defined(ARCH_BLACKHOLE)
+        MATH(SFPU_UNARY_INIT_FN(typecast, sfpu::init_typecast_uint16_to_fp32, (APPROX, is_fp32_dest_acc_en)));
+#else
         MATH(SFPU_UNARY_INIT_FN(typecast, sfpu::init_typecast_uint16_to_fp32, (APPROX)));
+#endif
     } else if constexpr (
         in_format == DataFormat::UInt16 &&
         (out_format == DataFormat::Float16_b || out_format == DataFormat::Bfp8_b || out_format == DataFormat::Bfp4_b)) {
