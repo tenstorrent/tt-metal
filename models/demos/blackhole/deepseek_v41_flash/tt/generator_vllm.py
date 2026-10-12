@@ -524,7 +524,7 @@ class DeepseekV41ForCausalLM(SupportsMultiModal):
 
     def init_vision(self, hf_config):
         """Image input (DSV41_VISION=1): the device vision tower on the model's mesh / CCL (built BEFORE the warm-up captures any trace: its weights are persistent tensors) and the per-request
-        image state. A first encode of a dummy image compiles the tower's programs."""
+        image state. ``DSV41Vision.warmup`` compiles the tower's programs for every padded image length."""
         from models.demos.blackhole.deepseek_v41_flash.tt.vision import DSV41Vision
         from models.demos.blackhole.deepseek_v41_flash.tt.vision_state import VisionBook
         from models.demos.blackhole.deepseek_v41_flash.tt.vision_vllm import vision_args_of
@@ -541,9 +541,7 @@ class DeepseekV41ForCausalLM(SupportsMultiModal):
         )  # the tower's own semaphores: the model's are baked into its captured traces
         self.vision = DSV41Vision(self.m.md, self.m.mc, ccl, args=va, log=lambda m: logger.info(m))
         self.vbook = VisionBook(self.vision, va.image_token_id)
-        side = 14 * va.ratio * 8
-        warm = torch.zeros(side // 14 * (side // 14), 3, 14, 14, dtype=torch.bfloat16)
-        self.vision.encode(warm, side // 14, side // 14)
+        self.vision.warmup()  # every program of the tower, so that no request pays a compile
         logger.info(f"DSV4.1 vLLM: image input ON (vision tower built + warmed in {time.perf_counter() - t0:.1f} s)")
 
     # vLLM inspects this protocol (``is_text_generation_model``: __init__(vllm_config), embed_input_ids, forward(input_ids, positions), compute_logits) to resolve

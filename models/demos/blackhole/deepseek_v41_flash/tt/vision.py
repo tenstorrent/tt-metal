@@ -26,6 +26,17 @@ from models.demos.blackhole.deepseek_v41_flash.tt.vision_args import VisionArgs 
 WEIGHT_CACHE = os.environ.get("DSV41_WEIGHT_CACHE", "/mnt/tt-data/ssinghal/dsv4-weight-cache")
 TILE = 32
 SDPA_CHUNK = 128  # q / k chunk of the flash attention; image lengths are padded to a multiple of it
+# padded lengths of the tower (patches) and of the aligner (tokens): a few buckets instead of every multiple of the chunk, so that ``warmup`` can compile every program at startup (a
+# new shape compiles for ~10 s); the padded tail is fenced off by cu_window_seqlens. Above the last bucket: multiples of the chunk.
+VIT_BUCKETS = [int(x) for x in os.environ.get("DSV41_VIT_BUCKETS", "256,512,1024,2048,3072,4096,6144,9216").split(",")]
+AL_BUCKETS = [int(x) for x in os.environ.get("DSV41_ALIGN_BUCKETS", "128,256,512,768,1024").split(",")]
+
+
+def _bucket(n, buckets, mult):
+    for b in buckets:
+        if n <= b:
+            return b
+    return -(-n // mult) * mult
 
 
 def _cache(name):
@@ -265,7 +276,7 @@ class DSV41Vision:
         a = self.a
         n = n_h * n_w
         assert patches.shape[0] == n
-        n_pad = -(-n // SDPA_CHUNK) * SDPA_CHUNK
+        n_pad = _bucket(n, VIT_BUCKETS, SDPA_CHUNK)
         xin = torch.zeros(1, 1, n_pad, self.k_patch)
         xin[0, 0, :n, : patches[0].numel()] = patches.reshape(n, -1).float()
         cos, sin = rope_tables(n_h, n_w, a.head_dim, a.theta)
@@ -292,13 +303,18 @@ class DSV41Vision:
         feats = self._host(x)[0, 0, :n].to(torch.bfloat16)  # [n, vdim]
         for t in (x, cos_d, sin_d, cu):
             ttnn.deallocate(t)
+        return self._aligner(feats, n_h, n_w)
+
+    def _aligner(self, feats, n_h, n_w):
+        """ViT features [n_h*n_w, vdim] bf16 (host) -> aligner rows [n_llm_h*n_llm_w, dim] bf16 (host)."""
+        a = self.a
         # 3x3 unfold (host, exactly the checkpoint's ``Aligner``), then the aligner MLP on the device
         r = a.ratio
         xx = feats.view(n_h, n_w, -1).permute(2, 0, 1)
         xx = F.pad(xx, (0, -n_w % r, 0, -n_h % r))
         un = F.unfold(xx.unsqueeze(0), r, stride=r).squeeze(0).transpose(0, 1)  # [n_tok, vdim*r*r]
         nt = un.shape[0]
-        nt_pad = -(-nt // TILE) * TILE
+        nt_pad = _bucket(nt, AL_BUCKETS, TILE)
         u = torch.zeros(1, 1, nt_pad, un.shape[1], dtype=torch.bfloat16)
         u[0, 0, :nt] = un
         ud = self._up(u)
@@ -330,3 +346,15 @@ class DSV41Vision:
         out[types == IMAGE_NEW_LINE] = self.delim["image_newline"]
         out[types == IMAGE] = self.encode(patches, n_h, n_w)
         return out
+
+    def warmup(self):
+        """Compile every program of the tower: one image per padded patch length (grid with a padded tail) and one aligner input per padded token count."""
+        r = self.a.ratio
+        for b in VIT_BUCKETS:
+            h, w = 16, b // 16 - 2  # n = b - 32 patches: the bucket b with a padded tail
+            self.encode(torch.zeros(h * w, 3, self.a.patch, self.a.patch, dtype=torch.bfloat16), h, w)
+        for b in AL_BUCKETS:
+            nt = b - 32 if b > 32 else b  # tokens: ceil(h / r) * ceil(w / r)
+            h = r * 8
+            w = r * (-(-nt // 8))
+            self._aligner(torch.zeros(h * w, self.a.vdim, dtype=torch.bfloat16), h, w)
