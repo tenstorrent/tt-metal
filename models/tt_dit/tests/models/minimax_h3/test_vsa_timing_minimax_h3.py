@@ -175,12 +175,13 @@ def test_vsa_vs_dense_attention_timing_10s(
         pytest.skip("timed at the production 4x8 sharding")
     monkeypatch.setenv("VSA_RING", "1" if vsa_ring else "0")
 
-    geometry = build_vsa_geometry(PREFIX_10S, GRID_10S, sp_factor=sp_factor)
     vsa_config = MiniMaxH3VSAConfig(sparsity=sparsity)
+    # the pipeline's placement: build_vsa_geometry's own default (identity) parks every exempt row on shard 0
+    geometry = build_vsa_geometry(PREFIX_10S, GRID_10S, sp_factor=sp_factor, placement=vsa_config.placement)
     seq_len = geometry.seq_len
     logger.info(
         f"T453 geometry: seq_len={seq_len} padded_len={geometry.padded_len} tiles={geometry.n_tiles} "
-        f"({geometry.n_pad_tiles} pad)"
+        f"({geometry.n_pad_tiles} pad) placement={vsa_config.placement}"
     )
     state = _attention_state()
     x = torch.randn(1, seq_len, HIDDEN_SIZE)
