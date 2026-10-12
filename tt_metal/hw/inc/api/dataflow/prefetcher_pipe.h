@@ -123,6 +123,9 @@ namespace experimental {
 //    write_strided(src, num_rows, pages_per_row, page_size);
 //    flush_writes();
 //    push_back(n);
+//  or, crediting each receiver right behind its rows (returns with the writes flushed):
+//    reserve_back(n);
+//    write_strided_and_push_back(src, n, num_rows, pages_per_row, page_size);
 //
 //  Mid-flight resize (sender):
 //    set_entry_size(E2);           // snap forward + publish pad credits; no drain
@@ -505,6 +508,63 @@ public:
             recv_src_offset += row_bytes_per_recv;
         }
         destination_offset_bytes_ = 0;
+    }
+
+    // write_strided, flush_writes and push_back(num_entries) in one pass: each receiver is credited right
+    // behind its rows. Returns with the writes flushed, so src may be reused.
+    //
+    // WH/BH need no flush between a receiver's rows and its credit: both are requests on the static
+    // NOC_UNICAST_WRITE_VC, which leave this core's NIU in the order their NOC_CMD_CTRL writes were issued
+    // and never reorder along their shared route (tt-isa-documentation, WormholeB0/NoC/Ordering.md; the
+    // GlobalCircularBuffer's remote_cb_push_back_and_write_pages relies on the same on both). Each credit
+    // atomic then finds its command buffer idle instead of queueing behind the previous receiver's.
+    template <typename Src>
+    FORCE_INLINE void write_strided_and_push_back(
+        const Noc& noc,
+        const Src& src,
+        uint32_t num_entries,
+        uint32_t num_rows,
+        uint32_t coalesced_num_pages_per_row,
+        uint32_t coalesced_page_size,
+        const typename noc_traits_t<Src>::src_args_type& src_args = {}) {
+#ifdef ARCH_QUASAR
+        write_strided(noc, src, num_rows, coalesced_num_pages_per_row, coalesced_page_size, src_args);
+        flush_writes(noc);
+        push_back(num_entries, noc);
+#else
+        CrossNodeSenderDFBInterface& iface = interface_.sender;
+        const uint32_t num_recv = cross_node_dfb_num_receivers(iface.num_receivers_and_remote_pages_sent_ptr);
+        const uint32_t row_bytes_per_recv = coalesced_num_pages_per_row * coalesced_page_size;
+        const uint32_t row_stride_in_stage = row_bytes_per_recv * num_recv;
+        const uint8_t noc_id = noc.get_noc_id();
+
+        tt_buf_rw::note_if_bound<tt_buf_rw::kRead, Src>();  // op-to-op R/W inference (api/dataflow/buf_rw_note.h)
+        uint32_t src_addr = noc_traits_t<Src>::template src_addr<Noc::AddressType::LOCAL_L1>(src, noc, src_args);
+        uint32_t max_units = 0;
+        for (uint32_t i = 0; i < num_recv; ++i, src_addr += row_bytes_per_recv) {
+            if (!owns_receiver(i)) {
+                continue;
+            }
+            const uint32_t wr_offset = sender_wr_offset(iface, i);
+            assert_contiguous_bytes(iface, wr_offset, num_rows * row_bytes_per_recv);
+            assert_contiguous_write(iface, wr_offset, num_entries);
+            const uint64_t noc_base = receiver_noc_base(iface, i, noc_id);
+            write_rows_to_receiver(
+                noc_id,
+                noc_base,
+                wr_offset,
+                src_addr,
+                num_rows,
+                coalesced_num_pages_per_row,
+                coalesced_page_size,
+                row_stride_in_stage);
+            const uint32_t units = increment_sender_credits_for_receiver<detail::default_noc_mode>(
+                iface, i, num_entries, wr_offset, noc_base, noc_id, true, write_at_cmd_buf);
+            max_units = units > max_units ? units : max_units;
+        }
+        lower_free_units_floor(max_units);
+        flush_writes(noc);
+#endif
     }
 
     // Broadcast: write n entries of identical data from src to owned receivers
