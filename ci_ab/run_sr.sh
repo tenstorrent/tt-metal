@@ -32,6 +32,8 @@ mkslot() {  # mkslot <name> [overlay dir]
 env_for() { if [[ ${ASSERTS:-0} == 1 ]]; then echo "-u TT_LLK_DISABLE_ASSERTS"; else echo "TT_LLK_DISABLE_ASSERTS=1"; fi; }
 build() {  # build <slot> <hdr> <build> <ids> [pytest args]; ASSERTS=1 in the environment for asserts on
   local slot=$1 h=$2 b=$3 ids=$4; shift 4; local D=$SL/$slot
+  # tempfile ignores a TMPDIR that does not exist (every build would land in /tmp/tt-llk-build)
+  mkdir -p $SL/builds/$b
   cp $S/hdr/$h.h $D/$HDR || { echo "== no header $h"; return 1; }
   ( cd $D/tt_metal/tt-llk/tests/python_tests; mapfile -t N < $S/ids/$ids.txt
     env -u RUNNER_TEMP $(env_for) CHIP_ARCH=blackhole LLK_HOME=$D/tt_metal/tt-llk TMPDIR=$SL/builds/$b LLK_PERF_L1_MUX_GROUP=0 ${RTS:+LLK_PERF_RUN_TYPES=$RTS} \
@@ -42,6 +44,7 @@ build() {  # build <slot> <hdr> <build> <ids> [pytest args]; ASSERTS=1 in the en
 }
 run() {  # run <slot> <build> <ids> <tag> [pytest args]; RTS, ASSERTS and EXTRA (K=V ...) from the environment
   local slot=$1 b=$2 ids=$3 tag=$4; shift 4; local D=$SL/$slot log=$SL/out/run_$tag.log
+  [[ -d $SL/builds/$b/tt-llk-build ]] || { echo "== no build dir for $b, stopping"; STOP=1; return 1; }
   ( cd $D/tt_metal/tt-llk/tests/python_tests; mapfile -t N < $S/ids/$ids.txt
     env -u RUNNER_TEMP $(env_for) ${EXTRA:-} CHIP_ARCH=blackhole LLK_HOME=$D/tt_metal/tt-llk TMPDIR=$SL/builds/$b LLK_PERF_L1_MUX_GROUP=0 ${RTS:+LLK_PERF_RUN_TYPES=$RTS} \
       PERF_RUN_TAG=$tag PERF_KEEP_RUNS=4000 timeout -s INT -k 60 900 $PY -m pytest --compile-consumer -p no:cacheprovider \
