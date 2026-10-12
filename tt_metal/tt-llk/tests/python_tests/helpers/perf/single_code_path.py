@@ -4,9 +4,9 @@
 # SPDX-License-Identifier: Apache-2.0
 """Checks that perf builds with counters off and on are the same program, so a code change moves both alike.
 
-Pairs the variants of two --compile-producer outputs (RUNNER_TEMP dirs) by build.h and requires identical code in
-every TRISC ELF (with its Wormhole layout copies) and the BRISC ELF, and loaded data that differs only in the counter
-command words.
+Pairs the variants of two --compile-producer outputs (RUNNER_TEMP dirs) by build.h and requires identical loaded sections
+in every TRISC ELF (with its Wormhole layout copies) and the BRISC ELF: the host names the zones a launch counts
+(counters.h counted_zones), so nothing in the ELFs may depend on the counters option.
 usage: single_code_path.py <counters off RUNNER_TEMP> <counters on RUNNER_TEMP>
 """
 import hashlib
@@ -15,10 +15,7 @@ import struct
 import sys
 from pathlib import Path
 
-ALLOWED_SYMBOLS = {
-    b"_ZN8llk_perf6detail7arm_cmdE",
-    b"_ZN8llk_perf6detail13l1_client_cmdE",
-}
+ALLOWED_SYMBOLS = set()
 ELFS = ("unpack", "math", "pack", "sfpu")
 SHF_ALLOC, SHT_NOBITS, SHT_SYMTAB = 2, 8, 2
 
@@ -107,9 +104,7 @@ def main(off, on):
             bad.append(f"brisc: {problem}")
     for line in bad:
         print(line)
-    print(
-        f"{len(common)} variants paired, {len(bad)} ELFs differ beyond the counter command words"
-    )
+    print(f"{len(common)} variants paired, {len(bad)} ELFs differ")
     if len(common) < max(len(a), len(b)):
         print(
             f"unpaired variants: {len(a) - len(common)} counters off, {len(b) - len(common)} counters on"

@@ -97,6 +97,7 @@ int main(void)
 #endif
 
 #if defined(LLK_PROFILER)
+    llk_perf::load_counted_zones();
     llk_profiler::reset();
     llk_profiler::sync_threads();
 #endif

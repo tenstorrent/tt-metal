@@ -48,6 +48,8 @@ from .test_schemas import PERF_TEST_SCHEMAS, PERF_TEST_SCHEMAS_QSR
 # TILE_LOOP mask in postprocess_tile_loop (no KeyError raised).
 INIT_MARKER = "INIT"
 TILE_LOOP_MARKER = "TILE_LOOP"
+# counters.h counted_zones: a bit per fixed zone id (ZONE_ID_INIT 0, ZONE_ID_TILE_LOOP 1)
+COUNT_INIT, COUNT_TILE_LOOP = 1 << 0, 1 << 1
 
 
 def read_perf_zone_names_from_elf(elf_dir: Path) -> list[str] | None:
@@ -1006,6 +1008,18 @@ class PerfConfig(TestConfig):
                 f"zone handshakes."
             )
 
+    def _main_counted_zones(self) -> int:
+        """The zones a measured launch counts (counters.h counted_zones): none with counters off, both on Wormhole, whose
+        barrier keeps the readouts out of every window, TILE_LOOP alone on the others (INIT counts in its own launch).
+        """
+        if not TestConfig.ENABLE_PERF_COUNTERS:
+            return 0
+        return (
+            COUNT_INIT | COUNT_TILE_LOOP
+            if self._wormhole_perf_barrier()
+            else COUNT_TILE_LOOP
+        )
+
     def _select_run_type(self, templates, runtimes, run_type):
         self.current_run_type = run_type
         # We need to manually assign different modified templates here if the speed of light is set,
@@ -1042,6 +1056,7 @@ class PerfConfig(TestConfig):
         if not TestConfig.TEST_TARGET.run_simulator:
             for templates, runtimes, run_type in self.warmup_configs:
                 self._select_run_type(templates, runtimes, run_type)
+                self.counted_zones = self._main_counted_zones()
                 self.write_runtimes_to_L1()
                 self.run_elf_files()
                 self.wait_for_tensix_operations_finished()
@@ -1068,6 +1083,7 @@ class PerfConfig(TestConfig):
             variant_raw_data = []
             variant_counter_results = []
             for run_index in range(run_count):
+                self.counted_zones = self._main_counted_zones()
                 self.write_runtimes_to_L1()
                 self.run_elf_files()
                 self.wait_for_tensix_operations_finished()
@@ -1094,6 +1110,21 @@ class PerfConfig(TestConfig):
                 # Tag profiler data with run index for proper L1-to-L1 pairing
                 profiler_data.df["run_index"] = run_index
                 variant_raw_data.append(profiler_data)
+
+            if self._main_counted_zones() == COUNT_TILE_LOOP:
+                # Without the Wormhole barrier INIT's readout would sit between the measured INIT and TILE_LOOP, so
+                # INIT counts in a launch of its own: the same code up to INIT's end, so the same INIT window.
+                self.counted_zones = COUNT_INIT
+                self.write_runtimes_to_L1()
+                self.run_elf_files()
+                self.wait_for_tensix_operations_finished()
+                try:
+                    counter_results = read_counters(location=TestConfig.TENSIX_LOCATION)
+                    if counter_results is not None and not counter_results.empty:
+                        counter_results["run_index"] = 0
+                        variant_counter_results.append(counter_results)
+                except Exception as e:
+                    logger.warning("Error reading INIT counters: {}", e)
 
             get_stats = Profiler.STATS_FUNCTION[run_type]
             stats_df = get_stats(ProfilerData.concat(variant_raw_data))
@@ -1157,6 +1188,7 @@ class PerfConfig(TestConfig):
             self.init_launch = True
             try:
                 self._select_run_type(*init_config)
+                self.counted_zones = 0
                 for _ in range(2):
                     self.write_runtimes_to_L1()
                     self.run_elf_files()

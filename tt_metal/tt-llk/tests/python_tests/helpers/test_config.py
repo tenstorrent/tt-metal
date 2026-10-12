@@ -1394,6 +1394,8 @@ class TestConfig:
             "init_launch",
             # Which run types' variants also build the INIT measurement ELFs (perf/core.py); the variant is the same.
             "init_run_types",
+            # Which zones a launch counts, a register the host writes before it (counters.h counted_zones).
+            "counted_zones",
         ]
 
         if not TestConfig.SPEED_OF_LIGHT:
@@ -1585,13 +1587,10 @@ class TestConfig:
                 run_shell_command(compile_command, TestConfig.TESTS_WORKING_DIR)
 
             if TestConfig.CHIP_ARCH != ChipArchitecture.QUASAR:
-                # Both builds get the mux group: BRISC writes the counter config and runs the startup
-                # sequence either way (see counters.h); only PERF_COUNTERS_COMPILED tells them apart.
+                # Both builds compile the same BRISC: the launch's counted zones decide at run time (counters.h).
                 perf_cnt_flag = (
                     f"-DLLK_PERF_L1_MUX_GROUP={TestConfig.PERF_L1_MUX_GROUP} "
                 )
-                if TestConfig.ENABLE_PERF_COUNTERS:
-                    perf_cnt_flag += "-DPERF_COUNTERS_COMPILED "
                 compile_command = (  # brisc.elf : brisc.cpp
                     f"{TestConfig.GXX} {TestConfig.ARCH_NON_COMPUTE} {TestConfig.OPTIONS_ALL} {TestConfig.OPTIONS_LINK} {local_non_coverage} "
                     f'{"-DCOVERAGE " if TestConfig.WITH_COVERAGE else ""}'
@@ -1919,8 +1918,6 @@ class TestConfig:
             optional_kernel_flags += (
                 f" -DLLK_PERF_L1_MUX_GROUP={TestConfig.PERF_L1_MUX_GROUP}"
             )
-        if TestConfig.ENABLE_PERF_COUNTERS:
-            optional_kernel_flags += " -DPERF_COUNTERS_COMPILED"
         if init_only:  # the INIT measurement build of the driver (counters.h, perf.h)
             optional_kernel_flags += " -DLLK_PERF_INIT_ONLY"
         if (
@@ -2522,6 +2519,16 @@ class TestConfig:
             str((VARIANT_ELF_DIR / f"{trisc_name}.elf").absolute())
             for trisc_name in TestConfig.KERNEL_COMPONENTS
         ]
+
+        # every launch names the zones it counts (counters.h counted_zones), 0 unless a perf run counts them
+        counted_zones_reg = device_module.counted_zones_address()
+        if counted_zones_reg is not None:
+            write_words_to_device(
+                TestConfig.TENSIX_LOCATION,
+                counted_zones_reg,
+                [getattr(self, "counted_zones", 0)],
+                safe_mode=False,  # a register, as host_signal's (device.py reset_mailboxes)
+            )
 
         if TestConfig.LAST_LOADED_ELFS != VARIANT_ELF_DIR:
             TestConfig.LAST_LOADED_ELFS = VARIANT_ELF_DIR
