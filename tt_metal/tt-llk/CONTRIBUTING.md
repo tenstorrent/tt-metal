@@ -158,7 +158,7 @@ cd tests
 
 This script will install pre-commit and configure the git hooks for you.
 
-tt-llk has no pre-commit config of its own. The hooks come from the tt-metal repository root's `.pre-commit-config.yaml`, whose LLK section runs the LLK formatters and checks on `tt_metal/tt-llk/` only. The setup script installs the git hook from the repository root, so commits anywhere in the repository use that config.
+tt-llk has no pre-commit config of its own. The hooks come from the tt-metal repository root's `.pre-commit-config.yaml`: tt-metal's general hooks, including clang-format on changed lines, apply to tt-llk files too, and its LLK section adds the LLK-specific formatters and checks. The setup script installs the git hook from the repository root, so commits anywhere in the repository use that config.
 
 If your clone was set up before tt-llk dropped its own config, the installed hook still points at the removed `tt_metal/tt-llk/.pre-commit-config.yaml`, and every commit fails with "No tt_metal/tt-llk/.pre-commit-config.yaml file was found". Re-run `./setup_testing_env.sh`, or run `pre-commit install` from the repository root, to replace it.
 
