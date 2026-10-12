@@ -859,9 +859,14 @@ def _stringify_params(params):
     return f"[{' | '.join(parts)}]"
 
 
-# Match the ttsim error preamble printed by ttsim_error() before _Exit(1):
-#   [<clk>] ERROR: <Category>: <function>: <details>
-_TTSIM_ERR_RE = re.compile(r"^\[\d+\] ERROR: (\w+): (\w+): (.*)$", re.MULTILINE)
+# Match the ttsim error preamble printed by ttsim_error() before _Exit(1).
+# Details are optional: some opcodes abort as "<Category>: <function>" only.
+#   [<val>] ERROR: <Category>: <function>
+#   [<val>] ERROR: <Category>: <function>: <details>
+_TTSIM_ERR_RE = re.compile(
+    r"^\[\d+\] ERROR: (\w+): (\w+)(?:: (.*))?$",
+    re.MULTILINE,
+)
 
 
 @pytest.hookimpl(tryfirst=True)
@@ -907,8 +912,11 @@ def pytest_runtest_logreport(report):
         report.when = "call"
         m = _TTSIM_ERR_RE.search(report.capstdout or "")
         if m:
-            cat, func, msg = m.group(1), m.group(2), m.group(3).strip()
-            report.longrepr = f"[ttsim:{cat}] {func}: {msg}"
+            cat, func = m.group(1), m.group(2)
+            msg = (m.group(3) or "").strip()
+            report.longrepr = (
+                f"[ttsim:{cat}] {func}: {msg}" if msg else f"[ttsim:{cat}] {func}"
+            )
             props = list(getattr(report, "user_properties", []))
             props.append(("ttsim_category", cat))
             props.append(("ttsim_func", func))

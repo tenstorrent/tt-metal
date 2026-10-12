@@ -34,7 +34,11 @@ except ImportError:
     sys.exit(2)
 
 
-_TTSIM_ERR_RE = re.compile(r"^\[\d+\] ERROR: (\w+): (\w+): (.*)$", re.MULTILINE)
+# Details are optional: some opcodes abort as "<Category>: <function>" only.
+_TTSIM_ERR_RE = re.compile(
+    r"^\[\d+\] ERROR: (\w+): (\w+)(?:: (.*))?$",
+    re.MULTILINE,
+)
 
 
 @dataclass
@@ -146,7 +150,7 @@ def parse(xml_path: Path) -> tuple[list[FileStats], list[Case], RunMeta]:
                 ttsim_cat, ttsim_func, ttsim_detail = (
                     m.group(1),
                     m.group(2),
-                    m.group(3).strip(),
+                    (m.group(3) or "").strip() or None,
                 )
 
             c = Case(
@@ -319,7 +323,9 @@ def render(
     sig_meta: dict[str, dict] = {}
     for c in failed_for_sig:
         if c.ttsim_category:
-            sig = f"[{c.ttsim_category}] {c.ttsim_func or '?'}: {c.ttsim_detail or ''}"
+            sig = f"[{c.ttsim_category}] {c.ttsim_func or '?'}"
+            if c.ttsim_detail:
+                sig = f"{sig}: {c.ttsim_detail}"
             cat = c.ttsim_category
         else:
             sig = c.short.strip().splitlines()[0] if c.short.strip() else "<no message>"
@@ -455,7 +461,9 @@ def render(
             chip = f"<span class='pill bad'>{html.escape(c.ttsim_category)}</span> "
         headline = html.escape(c.short)
         if c.ttsim_category:
-            headline = f"{chip}<code>{html.escape(c.ttsim_func or '')}</code>: {html.escape(c.ttsim_detail or '')}"
+            headline = f"{chip}<code>{html.escape(c.ttsim_func or '')}</code>"
+            if c.ttsim_detail:
+                headline += f": {html.escape(c.ttsim_detail)}"
         rows_fail.append(
             f"<details class='case'>"
             f"<summary>"
