@@ -212,3 +212,16 @@ Next (tunnel up): `ssh exabox-login 'df -h /data; curl -sI https://huggingface.c
   passes spec t409/ab10vsa.txt r4 (out_ab10-vsa0.9/run.log).
 - Next: read chain449c.out. ab10 PASS = compare denoise ms/step with #408 out_t10 (3110 ms/step dense, seed 0,
   900 MHz), then PSNR of VSA latents/video vs out_t10, look at a frame.
+
+## t449 run 1694 (2026-10-12 09:10 PDT)
+- chain449c done, no drops. Unit job blx01 989 (15:52Z): test_vsa_ring_sdpa_many_exempt and _odd_blocks PASSED
+  (4x8sp1tp0nl2). 10 s VSA-0.9 arm r4: blx01 job 990 (15:55Z) PASSED, process wall 316 s, JIT 89.7 % hits.
+  Tree on blx01 = commit 53f7b6b707b (before t417's SLA commits).
+- Speed: `denoise breakdown: ... steady 9.3s over 3 steps (3099 ms/step)`, Denoising (per step) 3.1837 s.
+  Dense #408 out_t10 (same box, seed 0, 900 MHz clamp): 3110 ms/step, 3.1481 s. VSA-0.9 is NOT faster (-0.4 % steady).
+- Quality vs dense out_t10: latents PCC 0.8116, PSNR 25.67 dB; decoded video (yuv420, 243x1152x1344) PCC 0.685,
+  PSNR 19.06 dB. Frames 120/240 (tt-project/t449/vsa09_vs_dense_f120_f240.jpg; full PNG on blx01 /var/tmp/fasth3/t409/cmp449/grid.png, left dense, right VSA): heavy blur,
+  ghosting, colour smear. Clearly degraded. Expected in part: v1.0 Turbo adapter was trained dense; LightX2V runs
+  sparse only with the SLA LoRA (t417 notes). The missing speedup is a separate problem: attention share of the
+  10 s step and the VSA kernel's per-block cost need a profile.
+- Push of run 1692 was refused (exit 2): #417 had pushed 1d8e15320e3 to the t409 branch. Rebased (NOTES.md union).
