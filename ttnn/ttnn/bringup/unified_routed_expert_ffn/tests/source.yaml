@@ -35,16 +35,16 @@ tests:
     why: "gate/up/down expert biases, 1 chip: gpt-oss SwiGluOai and Kimi K3 SituGlu at 128 and 1k tokens, 4 experts with different counts (per-expert bias wiring, count bounding), program-cache hits that must patch bias, activation, routing and weight addresses, ClampedSiluGlu + bias rejected by TtRoutedExpert, the host-only reference smoke test"
   - path: tests/ttnn/nightly/unit_tests/operations/experimental/deepseek_prefill/test_single_routed_expert.py
     k: "test_single_routed_expert_functional and (isl-251 or isl-3001)"
-    why: "Silu, 1 chip 1 expert, 5120-row buffer with ragged active counts 251 and 3001: 7 model shapes (dsv3, minimax_m27, glm_51, dsv4_pro, dsv4_flash, gptoss_120b, kimi_k2_7), ROW_MAJOR bf16 and TILE bf8 x"
+    why: "Silu, 1 chip 1 expert, 5120-row buffer with ragged active counts 251 and 3001: 7 model shapes (dsv3, minimax_m27, glm_53, dsv4_pro, dsv4_flash, gptoss_120b, kimi_k2_7), ROW_MAJOR bf16 x (upstream #59498 dropped the TILE x cases)"
   - path: tests/ttnn/nightly/unit_tests/operations/experimental/deepseek_prefill/test_single_routed_expert.py
     k: "test_single_routed_expert_isl_sweep and kimi_k2_7 and (isl-0 or isl-128 or isl-5120)"
-    why: "count-aware sparsity at the ends of the range (0, 128 and all 5120 active), kimi_k2_7 shape, ROW_MAJOR and TILE x, interleaved and DRAM ND-sharded weights"
+    why: "count-aware sparsity at the ends of the range (0, 128 and all 5120 active), kimi_k2_7 shape, ROW_MAJOR x, interleaved and DRAM ND-sharded weights"
   - path: tests/ttnn/nightly/unit_tests/operations/experimental/deepseek_prefill/test_single_routed_expert.py
     k: "test_single_routed_expert_k3_saturated or test_single_routed_expert_dsv4_clamped or (test_single_routed_expert_k3_sweep and (t32 or t5120))"
-    why: "the capped activations: Kimi K3 SituGlu at 32 and 5120 tokens and saturated (bf8 and bf4 weights, cap fractions checked), DeepSeek-V4 pro/flash ClampedSiluGlu partial and deep saturation, ROW_MAJOR and TILE x"
+    why: "the capped activations: Kimi K3 SituGlu at 32 and 5120 tokens and saturated (bf8 and bf4 weights, cap fractions checked), DeepSeek-V4 pro/flash ClampedSiluGlu partial and deep saturation, ROW_MAJOR x"
   - path: tests/ttnn/nightly/unit_tests/operations/experimental/deepseek_prefill/test_routed_expert_hybrid.py
     k: "test_tt_routed_expert_hybrid_functional or (test_tt_routed_expert_hybrid_isl_sweep and w_ndshard and (t0- or t1024 or t2048))"
-    why: "the hybrid split (counts <= the model's threshold, 320 for glm_51 and kimi_k2_7, to moe_fused_swiglu, which stays the original; the rest to this op via min_active_tokens): 251 fused, 768/1024/2048/3001 on this op, 0 on neither; ROW_MAJOR and TILE x (the TILE composite input is a clone), interleaved and ND-sharded weights"
+    why: "the hybrid split (counts <= the model's threshold, 320 for glm_53 and kimi_k2_7, to moe_fused_swiglu, which stays the original; the rest to this op via min_active_tokens): 251 fused, 768/1024/2048/3001 on this op, 0 on neither; ROW_MAJOR and TILE x (the TILE composite input is a clone), interleaved and ND-sharded weights"
   - path: models/demos/deepseek_v3_d_p/tests/cache/test_routed_expert_cache.py
     mesh: [2, 2]
     why: "the op on a 4-chip EP mesh (fabric2d 2x2, 64 experts, 16 per chip, dispatched buffer): weights vs cold vs warm weight cache give the same output; plus the host-only dtype-aware cache check"

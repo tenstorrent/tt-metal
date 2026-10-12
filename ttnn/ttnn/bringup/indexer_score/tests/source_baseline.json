@@ -97,6 +97,10 @@
    "original": "passed",
    "fork": "passed"
   },
+  "tests.ttnn.nightly.unit_tests.operations.experimental.indexer_score.test_indexer_score::test_indexer_score_compressed_key_ratio4_block_cyclic[silicon_arch_name=blackhole-sp4]": {
+   "original": "skipped",
+   "fork": "skipped"
+  },
   "tests.ttnn.nightly.unit_tests.operations.experimental.indexer_score.test_indexer_score::test_indexer_score_compute_kernel_config[math_fidelity=MathFidelity.HiFi2]": {
    "original": "passed",
    "fork": "passed"
@@ -110,6 +114,10 @@
    "fork": "passed"
   },
   "tests.ttnn.nightly.unit_tests.operations.experimental.indexer_score.test_indexer_score::test_indexer_score_determinism[glm5]": {
+   "original": "passed",
+   "fork": "passed"
+  },
+  "tests.ttnn.nightly.unit_tests.operations.experimental.indexer_score.test_indexer_score::test_indexer_score_dsa_compressed_key_ratio4": {
    "original": "passed",
    "fork": "passed"
   },
@@ -234,6 +242,18 @@
    "fork": "passed"
   },
   "tests.ttnn.nightly.unit_tests.operations.experimental.indexer_score.test_indexer_score::test_indexer_score_msa_block_pool_kv_len": {
+   "original": "passed",
+   "fork": "passed"
+  },
+  "tests.ttnn.nightly.unit_tests.operations.experimental.indexer_score.test_indexer_score::test_indexer_score_msa_block_pool_partial_last_band[kc1024_3blk]": {
+   "original": "passed",
+   "fork": "passed"
+  },
+  "tests.ttnn.nightly.unit_tests.operations.experimental.indexer_score.test_indexer_score::test_indexer_score_msa_block_pool_partial_last_band[kc1024_5blk]": {
+   "original": "passed",
+   "fork": "passed"
+  },
+  "tests.ttnn.nightly.unit_tests.operations.experimental.indexer_score.test_indexer_score::test_indexer_score_msa_block_pool_partial_last_band[kc1024_7blk]": {
    "original": "passed",
    "fork": "passed"
   },

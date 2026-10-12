@@ -1,6 +1,226 @@
 {
  "upstream_sha": "36d18a5c8526e7e212fb2e2076974c1aef31ba53",
  "tests": {
+  "tests.ttnn.nightly.unit_tests.operations.fused.test_layer_norm_ulp::test_norm_ulp_sharded_non_tile_aligned_residual[num_cores_w=1-norm=rmsnorm-dtype=torch.bfloat16-w=200-distribution=normal]": {
+   "original": "passed",
+   "fork": "passed"
+  },
+  "tests.ttnn.nightly.unit_tests.operations.fused.test_layer_norm_ulp::test_norm_ulp_sharded_non_tile_aligned_residual[num_cores_w=1-norm=rmsnorm-dtype=torch.bfloat16-w=40-distribution=normal]": {
+   "original": "passed",
+   "fork": "passed"
+  },
+  "tests.ttnn.nightly.unit_tests.operations.fused.test_layer_norm_ulp::test_norm_ulp_sharded_non_tile_aligned_residual[num_cores_w=1-norm=rmsnorm-dtype=torch.bfloat16-w=72-distribution=centered_uniform]": {
+   "original": "passed",
+   "fork": "passed"
+  },
+  "tests.ttnn.nightly.unit_tests.operations.fused.test_layer_norm_ulp::test_norm_ulp_sharded_non_tile_aligned_residual[num_cores_w=1-norm=rmsnorm-dtype=torch.float32-w=200-distribution=normal]": {
+   "original": "passed",
+   "fork": "passed"
+  },
+  "tests.ttnn.nightly.unit_tests.operations.fused.test_layer_norm_ulp::test_norm_ulp_sharded_non_tile_aligned_residual[num_cores_w=1-norm=rmsnorm-dtype=torch.float32-w=40-distribution=normal]": {
+   "original": "passed",
+   "fork": "passed"
+  },
+  "tests.ttnn.nightly.unit_tests.operations.fused.test_layer_norm_ulp::test_norm_ulp_sharded_non_tile_aligned_residual[num_cores_w=1-norm=rmsnorm-dtype=torch.float32-w=72-distribution=centered_uniform]": {
+   "original": "passed",
+   "fork": "passed"
+  },
+  "tests.ttnn.nightly.unit_tests.operations.fused.test_layer_norm_ulp::test_norm_ulp_sharded_non_tile_aligned_residual[num_cores_w=2-norm=rmsnorm-dtype=torch.bfloat16-w=200-distribution=normal]": {
+   "original": "passed",
+   "fork": "passed"
+  },
+  "tests.ttnn.nightly.unit_tests.operations.fused.test_layer_norm_ulp::test_norm_ulp_sharded_non_tile_aligned_residual[num_cores_w=2-norm=rmsnorm-dtype=torch.bfloat16-w=40-distribution=normal]": {
+   "original": "passed",
+   "fork": "passed"
+  },
+  "tests.ttnn.nightly.unit_tests.operations.fused.test_layer_norm_ulp::test_norm_ulp_sharded_non_tile_aligned_residual[num_cores_w=2-norm=rmsnorm-dtype=torch.bfloat16-w=72-distribution=centered_uniform]": {
+   "original": "passed",
+   "fork": "passed"
+  },
+  "tests.ttnn.nightly.unit_tests.operations.fused.test_layer_norm_ulp::test_norm_ulp_sharded_non_tile_aligned_residual[num_cores_w=2-norm=rmsnorm-dtype=torch.float32-w=200-distribution=normal]": {
+   "original": "passed",
+   "fork": "passed"
+  },
+  "tests.ttnn.nightly.unit_tests.operations.fused.test_layer_norm_ulp::test_norm_ulp_sharded_non_tile_aligned_residual[num_cores_w=2-norm=rmsnorm-dtype=torch.float32-w=40-distribution=normal]": {
+   "original": "passed",
+   "fork": "passed"
+  },
+  "tests.ttnn.nightly.unit_tests.operations.fused.test_layer_norm_ulp::test_norm_ulp_sharded_non_tile_aligned_residual[num_cores_w=2-norm=rmsnorm-dtype=torch.float32-w=72-distribution=centered_uniform]": {
+   "original": "passed",
+   "fork": "passed"
+  },
+  "tests.ttnn.nightly.unit_tests.operations.fused.test_layer_norm_ulp::test_rms_norm_ulp_sharded_non_tile_aligned_width[dtype=torch.bfloat16-w=200-distribution=normal]": {
+   "original": "passed",
+   "fork": "passed"
+  },
+  "tests.ttnn.nightly.unit_tests.operations.fused.test_layer_norm_ulp::test_rms_norm_ulp_sharded_non_tile_aligned_width[dtype=torch.bfloat16-w=40-distribution=normal]": {
+   "original": "passed",
+   "fork": "passed"
+  },
+  "tests.ttnn.nightly.unit_tests.operations.fused.test_layer_norm_ulp::test_rms_norm_ulp_sharded_non_tile_aligned_width[dtype=torch.bfloat16-w=72-distribution=centered_uniform]": {
+   "original": "passed",
+   "fork": "passed"
+  },
+  "tests.ttnn.nightly.unit_tests.operations.fused.test_layer_norm_ulp::test_rms_norm_ulp_sharded_non_tile_aligned_width[dtype=torch.float32-w=200-distribution=normal]": {
+   "original": "passed",
+   "fork": "passed"
+  },
+  "tests.ttnn.nightly.unit_tests.operations.fused.test_layer_norm_ulp::test_rms_norm_ulp_sharded_non_tile_aligned_width[dtype=torch.float32-w=40-distribution=normal]": {
+   "original": "passed",
+   "fork": "passed"
+  },
+  "tests.ttnn.nightly.unit_tests.operations.fused.test_layer_norm_ulp::test_rms_norm_ulp_sharded_non_tile_aligned_width[dtype=torch.float32-w=72-distribution=centered_uniform]": {
+   "original": "passed",
+   "fork": "passed"
+  },
+  "tests.ttnn.nightly.unit_tests.operations.fused.test_layer_norm_ulp::test_rms_norm_ulp_sharded_unevenly_split_width_across_cores[dtype=torch.bfloat16-w=200-distribution=centered_uniform]": {
+   "original": "passed",
+   "fork": "passed"
+  },
+  "tests.ttnn.nightly.unit_tests.operations.fused.test_layer_norm_ulp::test_rms_norm_ulp_sharded_unevenly_split_width_across_cores[dtype=torch.bfloat16-w=40-distribution=normal]": {
+   "original": "passed",
+   "fork": "passed"
+  },
+  "tests.ttnn.nightly.unit_tests.operations.fused.test_layer_norm_ulp::test_rms_norm_ulp_sharded_unevenly_split_width_across_cores[dtype=torch.bfloat16-w=72-distribution=centered_uniform]": {
+   "original": "passed",
+   "fork": "passed"
+  },
+  "tests.ttnn.nightly.unit_tests.operations.fused.test_layer_norm_ulp::test_rms_norm_ulp_sharded_unevenly_split_width_across_cores[dtype=torch.bfloat16-w=96-distribution=normal]": {
+   "original": "passed",
+   "fork": "passed"
+  },
+  "tests.ttnn.nightly.unit_tests.operations.fused.test_layer_norm_ulp::test_rms_norm_ulp_sharded_unevenly_split_width_across_cores[dtype=torch.float32-w=200-distribution=centered_uniform]": {
+   "original": "passed",
+   "fork": "passed"
+  },
+  "tests.ttnn.nightly.unit_tests.operations.fused.test_layer_norm_ulp::test_rms_norm_ulp_sharded_unevenly_split_width_across_cores[dtype=torch.float32-w=40-distribution=normal]": {
+   "original": "passed",
+   "fork": "passed"
+  },
+  "tests.ttnn.nightly.unit_tests.operations.fused.test_layer_norm_ulp::test_rms_norm_ulp_sharded_unevenly_split_width_across_cores[dtype=torch.float32-w=72-distribution=centered_uniform]": {
+   "original": "passed",
+   "fork": "passed"
+  },
+  "tests.ttnn.nightly.unit_tests.operations.fused.test_layer_norm_ulp::test_rms_norm_ulp_sharded_unevenly_split_width_across_cores[dtype=torch.float32-w=96-distribution=normal]": {
+   "original": "passed",
+   "fork": "passed"
+  },
+  "tests.ttnn.nightly.unit_tests.operations.fused.test_rmsnorm::test_large_tensor_rms_norm[batch_size=1-w=48]": {
+   "original": "passed",
+   "fork": "passed"
+  },
+  "tests.ttnn.nightly.unit_tests.operations.fused.test_rmsnorm::test_large_tensor_rms_norm[batch_size=1-w=5120]": {
+   "original": "passed",
+   "fork": "passed"
+  },
+  "tests.ttnn.nightly.unit_tests.operations.fused.test_rmsnorm::test_llama_4D_rms_norm[w=2048-h=1024]": {
+   "original": "passed",
+   "fork": "passed"
+  },
+  "tests.ttnn.nightly.unit_tests.operations.fused.test_rmsnorm::test_llama_4D_rms_norm[w=2048-h=128]": {
+   "original": "passed",
+   "fork": "passed"
+  },
+  "tests.ttnn.nightly.unit_tests.operations.fused.test_rmsnorm::test_llama_4D_rms_norm[w=2048-h=24]": {
+   "original": "passed",
+   "fork": "passed"
+  },
+  "tests.ttnn.nightly.unit_tests.operations.fused.test_rmsnorm::test_llama_4D_rms_norm[w=2048-h=65536]": {
+   "original": "passed",
+   "fork": "passed"
+  },
+  "tests.ttnn.nightly.unit_tests.operations.fused.test_rmsnorm::test_llama_4D_rms_norm[w=2048-h=8192]": {
+   "original": "passed",
+   "fork": "passed"
+  },
+  "tests.ttnn.nightly.unit_tests.operations.fused.test_rmsnorm::test_llama_4D_rms_norm[w=3072-h=1024]": {
+   "original": "passed",
+   "fork": "passed"
+  },
+  "tests.ttnn.nightly.unit_tests.operations.fused.test_rmsnorm::test_llama_4D_rms_norm[w=3072-h=128]": {
+   "original": "passed",
+   "fork": "passed"
+  },
+  "tests.ttnn.nightly.unit_tests.operations.fused.test_rmsnorm::test_llama_4D_rms_norm[w=3072-h=24]": {
+   "original": "passed",
+   "fork": "passed"
+  },
+  "tests.ttnn.nightly.unit_tests.operations.fused.test_rmsnorm::test_llama_4D_rms_norm[w=3072-h=65536]": {
+   "original": "passed",
+   "fork": "passed"
+  },
+  "tests.ttnn.nightly.unit_tests.operations.fused.test_rmsnorm::test_llama_4D_rms_norm[w=3072-h=8192]": {
+   "original": "passed",
+   "fork": "passed"
+  },
+  "tests.ttnn.nightly.unit_tests.operations.fused.test_rmsnorm::test_llama_4D_rms_norm[w=4096-h=1024]": {
+   "original": "passed",
+   "fork": "passed"
+  },
+  "tests.ttnn.nightly.unit_tests.operations.fused.test_rmsnorm::test_llama_4D_rms_norm[w=4096-h=128]": {
+   "original": "passed",
+   "fork": "passed"
+  },
+  "tests.ttnn.nightly.unit_tests.operations.fused.test_rmsnorm::test_llama_4D_rms_norm[w=4096-h=24]": {
+   "original": "passed",
+   "fork": "passed"
+  },
+  "tests.ttnn.nightly.unit_tests.operations.fused.test_rmsnorm::test_llama_4D_rms_norm[w=4096-h=65536]": {
+   "original": "passed",
+   "fork": "passed"
+  },
+  "tests.ttnn.nightly.unit_tests.operations.fused.test_rmsnorm::test_llama_4D_rms_norm[w=4096-h=8192]": {
+   "original": "passed",
+   "fork": "passed"
+  },
+  "tests.ttnn.nightly.unit_tests.operations.fused.test_rmsnorm::test_rmsnorm_test[RMSN-BFLOAT16-in0_DRAM-out_DRAM]": {
+   "original": "passed",
+   "fork": "passed"
+  },
+  "tests.ttnn.nightly.unit_tests.operations.fused.test_rmsnorm::test_rmsnorm_test[RMSN-BFLOAT16-in0_DRAM-out_L1]": {
+   "original": "passed",
+   "fork": "passed"
+  },
+  "tests.ttnn.nightly.unit_tests.operations.fused.test_rmsnorm::test_rmsnorm_test[RMSN-BFLOAT16-in0_L1-out_DRAM]": {
+   "original": "passed",
+   "fork": "passed"
+  },
+  "tests.ttnn.nightly.unit_tests.operations.fused.test_rmsnorm::test_rmsnorm_test[RMSN-BFLOAT16-in0_L1-out_L1]": {
+   "original": "passed",
+   "fork": "passed"
+  },
+  "tests.ttnn.nightly.unit_tests.operations.fused.test_rmsnorm::test_rmsnorm_test[RMSN_G-BFLOAT16-in0_DRAM-out_DRAM]": {
+   "original": "passed",
+   "fork": "passed"
+  },
+  "tests.ttnn.nightly.unit_tests.operations.fused.test_rmsnorm::test_rmsnorm_test[RMSN_G-BFLOAT16-in0_DRAM-out_L1]": {
+   "original": "passed",
+   "fork": "passed"
+  },
+  "tests.ttnn.nightly.unit_tests.operations.fused.test_rmsnorm::test_rmsnorm_test[RMSN_G-BFLOAT16-in0_L1-out_DRAM]": {
+   "original": "passed",
+   "fork": "passed"
+  },
+  "tests.ttnn.nightly.unit_tests.operations.fused.test_rmsnorm::test_rmsnorm_test[RMSN_G-BFLOAT16-in0_L1-out_L1]": {
+   "original": "passed",
+   "fork": "passed"
+  },
+  "tests.ttnn.nightly.unit_tests.operations.fused.test_rmsnorm::test_rmsnorm_test[RMSN_GB-BFLOAT16-in0_DRAM-out_DRAM]": {
+   "original": "passed",
+   "fork": "passed"
+  },
+  "tests.ttnn.nightly.unit_tests.operations.fused.test_rmsnorm::test_rmsnorm_test[RMSN_GB-BFLOAT16-in0_DRAM-out_L1]": {
+   "original": "passed",
+   "fork": "passed"
+  },
+  "tests.ttnn.nightly.unit_tests.operations.fused.test_rmsnorm::test_rmsnorm_test[RMSN_GB-BFLOAT16-in0_L1-out_DRAM]": {
+   "original": "passed",
+   "fork": "passed"
+  },
+  "tests.ttnn.nightly.unit_tests.operations.fused.test_rmsnorm::test_rmsnorm_test[RMSN_GB-BFLOAT16-in0_L1-out_L1]": {
+   "original": "passed",
+   "fork": "passed"
+  },
   "tests.ttnn.unit_tests.operations.fused.test_rms_norm::test_rms_norm[w=1024-h=24-batch_size=1]": {
    "original": "passed",
    "fork": "passed"
@@ -830,226 +1050,6 @@
    "fork": "passed"
   },
   "tests.ttnn.unit_tests.operations.fused.test_rms_norm_sharded::test_rms_norm_sharded_with_weight_and_bias_row_major[dtype=torch.float32-tensor_type=random_normal-two_stage=False]": {
-   "original": "passed",
-   "fork": "passed"
-  },
-  "tests.ttnn.nightly.unit_tests.operations.fused.test_rmsnorm::test_large_tensor_rms_norm[batch_size=1-w=48]": {
-   "original": "passed",
-   "fork": "passed"
-  },
-  "tests.ttnn.nightly.unit_tests.operations.fused.test_rmsnorm::test_large_tensor_rms_norm[batch_size=1-w=5120]": {
-   "original": "passed",
-   "fork": "passed"
-  },
-  "tests.ttnn.nightly.unit_tests.operations.fused.test_rmsnorm::test_llama_4D_rms_norm[w=2048-h=1024]": {
-   "original": "passed",
-   "fork": "passed"
-  },
-  "tests.ttnn.nightly.unit_tests.operations.fused.test_rmsnorm::test_llama_4D_rms_norm[w=2048-h=128]": {
-   "original": "passed",
-   "fork": "passed"
-  },
-  "tests.ttnn.nightly.unit_tests.operations.fused.test_rmsnorm::test_llama_4D_rms_norm[w=2048-h=24]": {
-   "original": "passed",
-   "fork": "passed"
-  },
-  "tests.ttnn.nightly.unit_tests.operations.fused.test_rmsnorm::test_llama_4D_rms_norm[w=2048-h=65536]": {
-   "original": "passed",
-   "fork": "passed"
-  },
-  "tests.ttnn.nightly.unit_tests.operations.fused.test_rmsnorm::test_llama_4D_rms_norm[w=2048-h=8192]": {
-   "original": "passed",
-   "fork": "passed"
-  },
-  "tests.ttnn.nightly.unit_tests.operations.fused.test_rmsnorm::test_llama_4D_rms_norm[w=3072-h=1024]": {
-   "original": "passed",
-   "fork": "passed"
-  },
-  "tests.ttnn.nightly.unit_tests.operations.fused.test_rmsnorm::test_llama_4D_rms_norm[w=3072-h=128]": {
-   "original": "passed",
-   "fork": "passed"
-  },
-  "tests.ttnn.nightly.unit_tests.operations.fused.test_rmsnorm::test_llama_4D_rms_norm[w=3072-h=24]": {
-   "original": "passed",
-   "fork": "passed"
-  },
-  "tests.ttnn.nightly.unit_tests.operations.fused.test_rmsnorm::test_llama_4D_rms_norm[w=3072-h=65536]": {
-   "original": "passed",
-   "fork": "passed"
-  },
-  "tests.ttnn.nightly.unit_tests.operations.fused.test_rmsnorm::test_llama_4D_rms_norm[w=3072-h=8192]": {
-   "original": "passed",
-   "fork": "passed"
-  },
-  "tests.ttnn.nightly.unit_tests.operations.fused.test_rmsnorm::test_llama_4D_rms_norm[w=4096-h=1024]": {
-   "original": "passed",
-   "fork": "passed"
-  },
-  "tests.ttnn.nightly.unit_tests.operations.fused.test_rmsnorm::test_llama_4D_rms_norm[w=4096-h=128]": {
-   "original": "passed",
-   "fork": "passed"
-  },
-  "tests.ttnn.nightly.unit_tests.operations.fused.test_rmsnorm::test_llama_4D_rms_norm[w=4096-h=24]": {
-   "original": "passed",
-   "fork": "passed"
-  },
-  "tests.ttnn.nightly.unit_tests.operations.fused.test_rmsnorm::test_llama_4D_rms_norm[w=4096-h=65536]": {
-   "original": "passed",
-   "fork": "passed"
-  },
-  "tests.ttnn.nightly.unit_tests.operations.fused.test_rmsnorm::test_llama_4D_rms_norm[w=4096-h=8192]": {
-   "original": "passed",
-   "fork": "passed"
-  },
-  "tests.ttnn.nightly.unit_tests.operations.fused.test_rmsnorm::test_rmsnorm_test[RMSN-BFLOAT16-in0_DRAM-out_DRAM]": {
-   "original": "passed",
-   "fork": "passed"
-  },
-  "tests.ttnn.nightly.unit_tests.operations.fused.test_rmsnorm::test_rmsnorm_test[RMSN-BFLOAT16-in0_DRAM-out_L1]": {
-   "original": "passed",
-   "fork": "passed"
-  },
-  "tests.ttnn.nightly.unit_tests.operations.fused.test_rmsnorm::test_rmsnorm_test[RMSN-BFLOAT16-in0_L1-out_DRAM]": {
-   "original": "passed",
-   "fork": "passed"
-  },
-  "tests.ttnn.nightly.unit_tests.operations.fused.test_rmsnorm::test_rmsnorm_test[RMSN-BFLOAT16-in0_L1-out_L1]": {
-   "original": "passed",
-   "fork": "passed"
-  },
-  "tests.ttnn.nightly.unit_tests.operations.fused.test_rmsnorm::test_rmsnorm_test[RMSN_G-BFLOAT16-in0_DRAM-out_DRAM]": {
-   "original": "passed",
-   "fork": "passed"
-  },
-  "tests.ttnn.nightly.unit_tests.operations.fused.test_rmsnorm::test_rmsnorm_test[RMSN_G-BFLOAT16-in0_DRAM-out_L1]": {
-   "original": "passed",
-   "fork": "passed"
-  },
-  "tests.ttnn.nightly.unit_tests.operations.fused.test_rmsnorm::test_rmsnorm_test[RMSN_G-BFLOAT16-in0_L1-out_DRAM]": {
-   "original": "passed",
-   "fork": "passed"
-  },
-  "tests.ttnn.nightly.unit_tests.operations.fused.test_rmsnorm::test_rmsnorm_test[RMSN_G-BFLOAT16-in0_L1-out_L1]": {
-   "original": "passed",
-   "fork": "passed"
-  },
-  "tests.ttnn.nightly.unit_tests.operations.fused.test_rmsnorm::test_rmsnorm_test[RMSN_GB-BFLOAT16-in0_DRAM-out_DRAM]": {
-   "original": "passed",
-   "fork": "passed"
-  },
-  "tests.ttnn.nightly.unit_tests.operations.fused.test_rmsnorm::test_rmsnorm_test[RMSN_GB-BFLOAT16-in0_DRAM-out_L1]": {
-   "original": "passed",
-   "fork": "passed"
-  },
-  "tests.ttnn.nightly.unit_tests.operations.fused.test_rmsnorm::test_rmsnorm_test[RMSN_GB-BFLOAT16-in0_L1-out_DRAM]": {
-   "original": "passed",
-   "fork": "passed"
-  },
-  "tests.ttnn.nightly.unit_tests.operations.fused.test_rmsnorm::test_rmsnorm_test[RMSN_GB-BFLOAT16-in0_L1-out_L1]": {
-   "original": "passed",
-   "fork": "passed"
-  },
-  "tests.ttnn.nightly.unit_tests.operations.fused.test_layer_norm_ulp::test_norm_ulp_sharded_non_tile_aligned_residual[num_cores_w=1-norm=rmsnorm-dtype=torch.bfloat16-w=200-distribution=normal]": {
-   "original": "passed",
-   "fork": "passed"
-  },
-  "tests.ttnn.nightly.unit_tests.operations.fused.test_layer_norm_ulp::test_norm_ulp_sharded_non_tile_aligned_residual[num_cores_w=1-norm=rmsnorm-dtype=torch.bfloat16-w=40-distribution=normal]": {
-   "original": "passed",
-   "fork": "passed"
-  },
-  "tests.ttnn.nightly.unit_tests.operations.fused.test_layer_norm_ulp::test_norm_ulp_sharded_non_tile_aligned_residual[num_cores_w=1-norm=rmsnorm-dtype=torch.bfloat16-w=72-distribution=centered_uniform]": {
-   "original": "passed",
-   "fork": "passed"
-  },
-  "tests.ttnn.nightly.unit_tests.operations.fused.test_layer_norm_ulp::test_norm_ulp_sharded_non_tile_aligned_residual[num_cores_w=1-norm=rmsnorm-dtype=torch.float32-w=200-distribution=normal]": {
-   "original": "passed",
-   "fork": "passed"
-  },
-  "tests.ttnn.nightly.unit_tests.operations.fused.test_layer_norm_ulp::test_norm_ulp_sharded_non_tile_aligned_residual[num_cores_w=1-norm=rmsnorm-dtype=torch.float32-w=40-distribution=normal]": {
-   "original": "passed",
-   "fork": "passed"
-  },
-  "tests.ttnn.nightly.unit_tests.operations.fused.test_layer_norm_ulp::test_norm_ulp_sharded_non_tile_aligned_residual[num_cores_w=1-norm=rmsnorm-dtype=torch.float32-w=72-distribution=centered_uniform]": {
-   "original": "passed",
-   "fork": "passed"
-  },
-  "tests.ttnn.nightly.unit_tests.operations.fused.test_layer_norm_ulp::test_norm_ulp_sharded_non_tile_aligned_residual[num_cores_w=2-norm=rmsnorm-dtype=torch.bfloat16-w=200-distribution=normal]": {
-   "original": "passed",
-   "fork": "passed"
-  },
-  "tests.ttnn.nightly.unit_tests.operations.fused.test_layer_norm_ulp::test_norm_ulp_sharded_non_tile_aligned_residual[num_cores_w=2-norm=rmsnorm-dtype=torch.bfloat16-w=40-distribution=normal]": {
-   "original": "passed",
-   "fork": "passed"
-  },
-  "tests.ttnn.nightly.unit_tests.operations.fused.test_layer_norm_ulp::test_norm_ulp_sharded_non_tile_aligned_residual[num_cores_w=2-norm=rmsnorm-dtype=torch.bfloat16-w=72-distribution=centered_uniform]": {
-   "original": "passed",
-   "fork": "passed"
-  },
-  "tests.ttnn.nightly.unit_tests.operations.fused.test_layer_norm_ulp::test_norm_ulp_sharded_non_tile_aligned_residual[num_cores_w=2-norm=rmsnorm-dtype=torch.float32-w=200-distribution=normal]": {
-   "original": "passed",
-   "fork": "passed"
-  },
-  "tests.ttnn.nightly.unit_tests.operations.fused.test_layer_norm_ulp::test_norm_ulp_sharded_non_tile_aligned_residual[num_cores_w=2-norm=rmsnorm-dtype=torch.float32-w=40-distribution=normal]": {
-   "original": "passed",
-   "fork": "passed"
-  },
-  "tests.ttnn.nightly.unit_tests.operations.fused.test_layer_norm_ulp::test_norm_ulp_sharded_non_tile_aligned_residual[num_cores_w=2-norm=rmsnorm-dtype=torch.float32-w=72-distribution=centered_uniform]": {
-   "original": "passed",
-   "fork": "passed"
-  },
-  "tests.ttnn.nightly.unit_tests.operations.fused.test_layer_norm_ulp::test_rms_norm_ulp_sharded_non_tile_aligned_width[dtype=torch.bfloat16-w=200-distribution=normal]": {
-   "original": "passed",
-   "fork": "passed"
-  },
-  "tests.ttnn.nightly.unit_tests.operations.fused.test_layer_norm_ulp::test_rms_norm_ulp_sharded_non_tile_aligned_width[dtype=torch.bfloat16-w=40-distribution=normal]": {
-   "original": "passed",
-   "fork": "passed"
-  },
-  "tests.ttnn.nightly.unit_tests.operations.fused.test_layer_norm_ulp::test_rms_norm_ulp_sharded_non_tile_aligned_width[dtype=torch.bfloat16-w=72-distribution=centered_uniform]": {
-   "original": "passed",
-   "fork": "passed"
-  },
-  "tests.ttnn.nightly.unit_tests.operations.fused.test_layer_norm_ulp::test_rms_norm_ulp_sharded_non_tile_aligned_width[dtype=torch.float32-w=200-distribution=normal]": {
-   "original": "passed",
-   "fork": "passed"
-  },
-  "tests.ttnn.nightly.unit_tests.operations.fused.test_layer_norm_ulp::test_rms_norm_ulp_sharded_non_tile_aligned_width[dtype=torch.float32-w=40-distribution=normal]": {
-   "original": "passed",
-   "fork": "passed"
-  },
-  "tests.ttnn.nightly.unit_tests.operations.fused.test_layer_norm_ulp::test_rms_norm_ulp_sharded_non_tile_aligned_width[dtype=torch.float32-w=72-distribution=centered_uniform]": {
-   "original": "passed",
-   "fork": "passed"
-  },
-  "tests.ttnn.nightly.unit_tests.operations.fused.test_layer_norm_ulp::test_rms_norm_ulp_sharded_unevenly_split_width_across_cores[dtype=torch.bfloat16-w=200-distribution=centered_uniform]": {
-   "original": "passed",
-   "fork": "passed"
-  },
-  "tests.ttnn.nightly.unit_tests.operations.fused.test_layer_norm_ulp::test_rms_norm_ulp_sharded_unevenly_split_width_across_cores[dtype=torch.bfloat16-w=40-distribution=normal]": {
-   "original": "passed",
-   "fork": "passed"
-  },
-  "tests.ttnn.nightly.unit_tests.operations.fused.test_layer_norm_ulp::test_rms_norm_ulp_sharded_unevenly_split_width_across_cores[dtype=torch.bfloat16-w=72-distribution=centered_uniform]": {
-   "original": "passed",
-   "fork": "passed"
-  },
-  "tests.ttnn.nightly.unit_tests.operations.fused.test_layer_norm_ulp::test_rms_norm_ulp_sharded_unevenly_split_width_across_cores[dtype=torch.bfloat16-w=96-distribution=normal]": {
-   "original": "passed",
-   "fork": "passed"
-  },
-  "tests.ttnn.nightly.unit_tests.operations.fused.test_layer_norm_ulp::test_rms_norm_ulp_sharded_unevenly_split_width_across_cores[dtype=torch.float32-w=200-distribution=centered_uniform]": {
-   "original": "passed",
-   "fork": "passed"
-  },
-  "tests.ttnn.nightly.unit_tests.operations.fused.test_layer_norm_ulp::test_rms_norm_ulp_sharded_unevenly_split_width_across_cores[dtype=torch.float32-w=40-distribution=normal]": {
-   "original": "passed",
-   "fork": "passed"
-  },
-  "tests.ttnn.nightly.unit_tests.operations.fused.test_layer_norm_ulp::test_rms_norm_ulp_sharded_unevenly_split_width_across_cores[dtype=torch.float32-w=72-distribution=centered_uniform]": {
-   "original": "passed",
-   "fork": "passed"
-  },
-  "tests.ttnn.nightly.unit_tests.operations.fused.test_layer_norm_ulp::test_rms_norm_ulp_sharded_unevenly_split_width_across_cores[dtype=torch.float32-w=96-distribution=normal]": {
    "original": "passed",
    "fork": "passed"
   }
