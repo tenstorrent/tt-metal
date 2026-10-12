@@ -49,9 +49,9 @@ _PERF_SKU = "bh_loudbox"
 _PERF_MARGIN = 0.03
 # LoudBox targets.
 _PERF_REFERENCE_MS = {
-    "SP1xTP8": 8.651,
-    "SP2xTP4": 8.701,
-    "SP4xTP2": 8.823,
+    "SP1xTP8": 8.201,
+    "SP2xTP4": 8.268,
+    "SP4xTP2": 8.416,
 }
 _GALAXY_PERF_REFERENCE_MS = 2.289
 # Like the model's prefill tests, give CCL semaphores their own L1_SMALL region: allocated in L1 on the first call,
