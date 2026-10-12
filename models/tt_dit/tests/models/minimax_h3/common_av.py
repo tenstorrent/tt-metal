@@ -490,8 +490,9 @@ def artifact_dir(name: str) -> Path:
 def run_warm_generation(pipeline, prompt: str, *, seed: int, profiler=None, profiler_iteration: int = 0, **gen_kwargs):
     """The timed generation; `profiler` (a `BenchmarkProfiler`), when given, wraps only this call in `"run"`."""
     warmup_kwargs = dict(gen_kwargs)
-    # A fixed-grid adapter refuses any other step count, and its grid fixes the compiled programs anyway.
-    if getattr(pipeline, "hyperflow", None) is None:
+    # A fixed-grid adapter or a precomputed AdaLN table refuses any other step count, and the fixed
+    # schedule fixes the compiled programs anyway.
+    if getattr(pipeline, "hyperflow", None) is None and getattr(pipeline, "adaln_num_inference_steps", None) is None:
         warmup_kwargs["num_inference_steps"] = 3
 
     # # The pipeline warms its whole bucket ladder at construction, so `last_seq_len` does not yet

@@ -600,3 +600,28 @@ def test_a_fixed_turbo_schedule_refuses_another_step_count(turbo_adapter, monkey
     assert pipeline._dit_weight_mode() == "resident_adaln"
     assert pipeline._adapter_host_prefixes() == ()
     assert pipeline._build_schedulers(9)[0].sigmas.numel() == 9
+
+
+@pytest.mark.parametrize("fixed_steps", [None, TURBO_STEPS])
+def test_warm_generation_keeps_a_fixed_step_count(fixed_steps):
+    import contextlib
+
+    from models.tt_dit.tests.models.minimax_h3.common_av import run_warm_generation
+
+    class _Pipeline:
+        hyperflow = None
+        adaln_num_inference_steps = fixed_steps
+        last_program_cache_misses = {}
+
+        def __init__(self):
+            self.steps = []
+
+        def quiet(self):
+            return contextlib.nullcontext()
+
+        def __call__(self, prompt, *, seed, num_inference_steps, on_event=None):
+            self.steps.append(num_inference_steps)
+
+    pipeline = _Pipeline()
+    run_warm_generation(pipeline, "p", seed=0, num_inference_steps=TURBO_STEPS)
+    assert pipeline.steps == [3 if fixed_steps is None else TURBO_STEPS, TURBO_STEPS]
