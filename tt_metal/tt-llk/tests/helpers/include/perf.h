@@ -165,9 +165,9 @@ inline std::uint32_t mop_loops(const std::uint32_t n)
 // periods x (a burst of `burst` handshakes of kind `once` and a run of `run` handshakes of kind `each`), the producer giving
 // the burst first and the consumer taking it back last, in at most 32 MOPs of template 1, pushed back to back: the mock's
 // RISC-V is done pushing long before the stream ends. A period of up to 16 handshakes is replayed whole from the replay
-// buffer by the inner loop (up to 127 x 127 periods per MOP); a longer one replays the burst as StartOp / EndOp0 around the
-// run as the inner loop (up to 127 periods per MOP). Issues nothing and returns false when the stream does not fit.
-template <bool PRODUCE>
+// buffer by the inner loop (up to 127 x 127 periods per MOP), with SPLIT also one of up to 32 - burst as two replays of a 16
+// handshake buffer; a longer one replays the burst around the run (up to 127 periods per MOP). Returns false if it does not fit.
+template <bool PRODUCE, bool SPLIT = false>
 inline bool segments(const std::uint32_t once, const std::uint32_t burst, const std::uint32_t each, const std::uint32_t run, const std::uint32_t periods)
 {
     const std::uint32_t period = burst + run;
@@ -175,7 +175,7 @@ inline bool segments(const std::uint32_t once, const std::uint32_t burst, const 
     {
         return false;
     }
-    const bool whole          = period <= 16;
+    const bool split = SPLIT && period > 16 && period + burst <= 32, whole = period <= 16 || split; // split: 16 + period - 16
     const std::uint32_t inner = whole ? mop_loops(periods) : run;
     const std::uint32_t outer = whole ? mop_loops(periods / inner) : mop_loops(periods);
     const std::uint32_t mops  = whole ? periods / inner / outer : periods / outer;
@@ -183,26 +183,26 @@ inline bool segments(const std::uint32_t once, const std::uint32_t burst, const 
     {
         return false;
     }
-    // the replay buffer, slots 0 ..: the whole period, or the burst
-    TT_REPLAY(0, 2 * (whole ? period : burst), 0, 1);
-    for (std::uint32_t i = 0; i < (whole ? period : burst); i++)
+    // the replay buffer, slots 0 ..: the whole period (split: 16 handshakes, the run's first period - 16 dropped), or the burst
+    TT_REPLAY(0, 2 * (whole ? (split ? 16 : period) : burst), 0, 1);
+    for (std::uint32_t i = 0; i < (whole ? (split ? 16 : period) : burst); i++)
     {
-        const std::uint32_t kind  = !whole ? once : (PRODUCE ? (i < burst ? once : each) : (i < run ? each : once));
+        const std::uint32_t kind  = !whole ? once : (PRODUCE ? (i < burst ? once : each) : (i < (split ? 16 - burst : run) ? each : once));
         ckernel::instrn_buffer[0] = wait_op<PRODUCE>(kind);
         ckernel::instrn_buffer[0] = flip_op<PRODUCE>(kind);
     }
-    const std::uint32_t replay      = TT_OP_REPLAY(0, 2 * (whole ? period : burst), 0, 0);
+    const std::uint32_t replay      = TT_OP_REPLAY(0, 2 * (whole ? (split ? 16 : period) : burst), 0, 0);
     volatile std::uint32_t* mop_cfg = reinterpret_cast<volatile std::uint32_t*>(TENSIX_MOP_CFG_BASE);
     ckernel::mop_sync(); // no expansion in flight while the template changes
     mop_cfg[0] = outer;
     mop_cfg[1] = inner;
     mop_cfg[4] = TT_OP_NOP;
-    if (whole) // inner loop: the period, replayed; no start or end instructions
+    if (whole) // inner loop: the period, replayed (split: the run's first period - 16, then the buffer); no start or end instructions
     {
         mop_cfg[2] = TT_OP_NOP;
         mop_cfg[3] = TT_OP_NOP;
-        mop_cfg[5] = replay;
-        mop_cfg[6] = TT_OP_NOP;
+        mop_cfg[5] = split ? TT_OP_REPLAY(0, 2 * (period - 16), 0, 0) : replay;
+        mop_cfg[6] = split ? replay : TT_OP_NOP;
         mop_cfg[7] = replay;
         mop_cfg[8] = replay;
     }
@@ -283,7 +283,7 @@ inline void matmul(
     }
     const std::uint32_t steps = loop_factor * num_blocks * kt_dim;
     if ((reuse_loop == 1 || reuse_loop % 2 == 0) &&
-        segments<PRODUCE>(reuse, std::min(static_cast<std::uint32_t>(2), reuse_loop), reload, reload_loop, steps * ((reuse_loop + 1) / 2)))
+        segments<PRODUCE, !PRODUCE>(reuse, std::min(static_cast<std::uint32_t>(2), reuse_loop), reload, reload_loop, steps * ((reuse_loop + 1) / 2)))
     {
         return;
     }
