@@ -153,10 +153,21 @@ Numbers come from 188-step greedy runs of `e2b_bringup.py::test_e2b_decode_timin
   - **Fix A (`393bc9a`):** seed the DiT held inputs and compile their traced `Copy` programs in warmup.
   - **`2238a4b`:** the enhancer opts out of gemma4's sliding-tail stash, whose slice compiled once per prompt length.
   - **Still flagged:** Tracer I/O, VAE/vocoder/BWE `Clone`/`_update_input` copies, encoder copies, and the enhancer's lm_head and `PagedFillCache` per-length programs. The complete fix (a traced LTX pass before the E2B capture) would invert the hazard onto E2B's capture-time buffers, so it needs its own tracker run.
+- **(a) Validation run: job 130195** (b04u08, code at `630eb95`: late capture + Fix A + stash opt-out, tracker on) **PASSED** 3/3 generations. Unit tests: 39 passed. Buffers flagged alive at each E2B replay, vs 130120:
+
+  | | 130120 | 130195 | What's left |
+  |---|---|---|---|
+  | Gen 0 | 1 | **0** | the stash slice is gone |
+  | Gen 1 | 23 | **13** | LTX Tracer I/O (DiT outputs, VAE/vocoder/BWE in and out), all rewritten before read, plus 3 Tracer prep-run `Clone` binaries, used only during capture |
+  | Gen 2 | 4 | **3** | the enhancer's `PagedFillCache` ×2 and lm_head `Slice`, which are per-prompt-length programs |
+
+  - Unique unsafe buffers: 94 (was 107).
+  - The only remaining flagged buffers that get re-read are the enhancer's per-length programs. The read-only analysis gives fixes for them: fill the full padded tensor behind an enhancer flag, and a compile-only lm_head slice sweep in warmup. Both are medium risk and need an output-equality check.
+  - Warmup took 1778 s on b04u08 because that node compiles kernels about 6× slower: the same ~4350 kernels took about 15,200–15,700 s in total in both its runs (130193 and 130195), against about 2,540 s on b03u02 and b07u02. It is not a code regression.
 - **(b) Rewrite latency: resolved, it was the tracker.** Job 130196 (b07u02, late capture, tracker off, 2026-10-12) PASSED: prompt enhance took 3.7 / 2.8 / 3.2 s and total compute was 50.0 / 11.8 / 10.0 s for gens 0/1/2 (gen 0 includes the LTX trace captures). Warmup took 876 s; the late E2B capture took 29.8 s.
 - **(c) Control: the hang reproduces with the knob off.** Job 130193 (bh-glx-120-b04u08, 2026-10-12) ran the same config as 130120 with `LTX_ENHANCER_LATE_CAPTURE` unset, on code at `2238a4b`. The tracker flagged 3550 buffers alive at the gen-0 E2B replay (130120 had 1). Stage 1 finished (34.2 s), and then the device timed out at the same point as 128486, on a third node. Only the knob differs between the two runs, so the late capture is what fixes the hang.
 - **(d) Teardown noise: fixed in `2238a4b`.** The E2B Generator's `__del__` released the decode trace after the submesh had closed. `release_traces()` now unloads the enhancer while the mesh is open. 130196 logged no TT_THROW.
-- **(e) Make the knob the default** once (a)–(c) are settled.
+- **(e) Done in `7818a12`:** late capture is now the default. `LTX_ENHANCER_LATE_CAPTURE=0` restores the old order; the control cmd `metal-galaxy-ltx-serving-check.sh` pins it to 0.
 
 **Hardware.** In bh_wan_machines, b02u08, b03u08, b04u02 and b05u02 all show only 24/32 chips *before* reset (`Issuing USER_RESET on 24 devices`), so the failures are not caused by our jobs (130110, 130111, 130153, 130154, 130157). They need infra. b03u02 and b04u08 are healthy (32/32), and so is b07u02 in `bh_sc5_B2B9_D12`.
 
