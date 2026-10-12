@@ -14,6 +14,13 @@
 #include "perf.h"
 #include "profiler.h"
 
+// Under SPEED_OF_LIGHT the run-time parameters are compile-time constants of the same names.
+#ifdef SPEED_OF_LIGHT
+#define TOPK_PERF_PARAM(name) name
+#else
+#define TOPK_PERF_PARAM(name) params.name
+#endif
+
 std::uint32_t unp_cfg_context          = 0;
 std::uint32_t pack_sync_tile_dst_ptr   = 0;
 std::uint32_t math_sync_tile_dst_index = 0;
@@ -45,7 +52,7 @@ __attribute__((noinline)) void unpack_copy_tile(RUNTIME_PARAMETERS params, std::
     {
         const std::uint32_t elements = tile_active_elements(t);
         TT_SETADCXX(p_setadc::UNP_A, (elements == 0) ? (ELEMENTS_PER_TILE - 1) : (elements - 1), 0x0);
-        ckernel::_llk_unpack_topk_xl_copy_(L1_ADDRESS(params.buffer_A[c * TILES_PER_SEQ + t]), src_format, dst_format, elements);
+        ckernel::_llk_unpack_topk_xl_copy_(L1_ADDRESS(TOPK_PERF_PARAM(buffer_A)[c * TILES_PER_SEQ + t]), src_format, dst_format, elements);
     }
     TTI_SETADCXX(p_setadc::UNP_A, FACE_R_DIM * FACE_C_DIM - 1, 0x0);
 }
@@ -55,7 +62,9 @@ void run_kernel(RUNTIME_PARAMETERS params)
 #if defined(RUNTIME_FORMATS) && !defined(SPEED_OF_LIGHT)
     const FormatConfig& formats = params.formats;
 #endif
+#ifndef SPEED_OF_LIGHT
     const std::uint32_t LOOP_FACTOR = params.LOOP_FACTOR;
+#endif
     const std::uint32_t src_format  = formats.unpack_A_src;
     const std::uint32_t dst_format  = formats.unpack_A_dst;
     {
@@ -169,7 +178,9 @@ void run_kernel(RUNTIME_PARAMETERS params)
 #if defined(RUNTIME_FORMATS) && !defined(SPEED_OF_LIGHT)
     const FormatConfig& formats = params.formats;
 #endif
+#ifndef SPEED_OF_LIGHT
     const std::uint32_t LOOP_FACTOR = params.LOOP_FACTOR;
+#endif
     const std::uint32_t math_format = formats.math;
     {
         START_PERF_MEASURE("INIT")
@@ -224,7 +235,9 @@ void run_kernel(RUNTIME_PARAMETERS params)
 #if defined(RUNTIME_FORMATS) && !defined(SPEED_OF_LIGHT)
     const FormatConfig& formats = params.formats;
 #endif
+#ifndef SPEED_OF_LIGHT
     const std::uint32_t LOOP_FACTOR = params.LOOP_FACTOR;
+#endif
     {
         START_PERF_MEASURE("INIT")
         _llk_pack_hw_configure_wrapper_<is_fp32_dest_acc_en, PackMode::Default>(formats.pack_src, formats.pack_dst, 16 * 16 * 4, FACE_R_DIM, TILE_C_DIM, 4);
@@ -239,7 +252,7 @@ void run_kernel(RUNTIME_PARAMETERS params)
             _llk_packer_wait_for_math_done_();
             for (std::uint32_t t = 0; t < 2 * TILES_PER_SEQ; t++)
             {
-                _llk_pack_<dest_sync, is_fp32_dest_acc_en, ckernel::PackMode::Default>(SLOT0 + t, L1_ADDRESS(params.buffer_Res[t]));
+                _llk_pack_<dest_sync, is_fp32_dest_acc_en, ckernel::PackMode::Default>(SLOT0 + t, L1_ADDRESS(TOPK_PERF_PARAM(buffer_Res)[t]));
             }
             _llk_pack_dest_section_done_<dest_sync, is_fp32_dest_acc_en>();
         }
