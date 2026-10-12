@@ -4,6 +4,7 @@ Saves q, gathered k/v (first T456_HEADS heads), raw ids, block counts, output an
 $T456_DUMP/layer0.pt and raises so pytest tears the mesh down. Calls whose local q rows are not
 T456_ROWS (the 76800 warm rung) are passed through.
 """
+import math
 import os
 
 import torch
@@ -23,6 +24,9 @@ def _wrapped(q, k, v, ids, counts, *args, **kwargs):
     if q.shape[2] != rows:
         _state["n"] += 1
         return out
+    if os.environ.get("T456_CHECK"):
+        _check_all(q, k, v, out)
+        raise RuntimeError("T456_DUMP_DONE")
     heads = int(os.environ.get("T456_HEADS", "4"))
     d = {
         "q": _dev0(q)[:, :heads].to(torch.bfloat16),
@@ -41,6 +45,31 @@ def _wrapped(q, k, v, ids, counts, *args, **kwargs):
     os.replace(path + ".tmp", path)
     print(f"[t456] dumped {path}: {d['shapes']} kwargs {d['kwargs']} skipped {_state['n']}", flush=True)
     raise RuntimeError("T456_DUMP_DONE")
+
+
+def _check_all(q, k, v, out):
+    """Sparsity-0 check on every device: head 0, first/middle/last q tile vs dense attention over the
+    T456_SEQ real keys and over all gathered keys (pad leak). Prints one line per device."""
+    seq = int(os.environ.get("T456_SEQ", "75449"))
+    qs, ks, vs, os_ = (ttnn.get_device_tensors(x) for x in (q, k, v, out))
+    pcc = lambda a, b: torch.corrcoef(torch.stack([a.flatten(), b.flatten()]))[0, 1].item()
+    for i in range(len(qs)):
+        qd, kd, vd, od = (ttnn.to_torch(x)[0, 0].float() for x in (qs[i], ks[i], vs[i], os_[i]))
+        res = []
+        for t in (0, qd.shape[0] // 256, qd.shape[0] // 128 - 1):
+            r = slice(t * 128, (t + 1) * 128)
+            if float(qd[r].abs().max()) == 0:
+                res.append(f"t{t}:zero-q")
+                continue
+            s = qd[r] @ kd.T / math.sqrt(qd.shape[-1])
+            real = torch.softmax(s[:, :seq], -1) @ vd[:seq]
+            full = torch.softmax(s, -1) @ vd
+            res.append(f"t{t}:real {pcc(od[r], real):.4f} all {pcc(od[r], full):.4f}")
+        print(
+            f"[t456] dev {i} q{list(qd.shape)} k{list(kd.shape)} kpad|max| {float(kd[seq:].abs().max()):.2f} "
+            + " ".join(res),
+            flush=True,
+        )
 
 
 ttnn.transformer.vsa_sdpa = _wrapped

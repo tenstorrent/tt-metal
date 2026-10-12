@@ -1,0 +1,8 @@
+ID=t456-check0
+TASK=t456
+WORKDIR=/var/tmp/fasth3/t456
+ENV=/var/tmp/fasth3/t452/env452.yaml
+CONFIG=t456-sla0-check
+TIMEOUT=400
+CMD=env T409_SEED=0 T409_SAVE=0 T456_CHECK=1 T409_PY_TIMEOUT=340 bash /var/tmp/fasth3/t456/run456.sh c0 v10sla0.0
+NEEDS=/var/tmp/fasth3/t409/b/ttnn/ttnn/_ttnn.so,/var/tmp/fasth3/t452/w/OVERLAY

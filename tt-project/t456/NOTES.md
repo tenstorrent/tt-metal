@@ -34,3 +34,18 @@ noise is the sparse approximation; ~12 dB => plumbing bug (75776 rung, row_sourc
   `/var/tmp/fasth3/t48/python_env/bin/python -I /var/tmp/fasth3/t452/psnr452.py` (check its args) dense vs v10sla0.0.
   If ~12 dB: bisect the SLA plumbing (try VSA_RING / BLKQ 64 / dump a later call on device 7).
   If high: noise is the sparse approximation; compare sla0.5 and report.
+
+## Step 2b result: job 035 PASS (274 s, no drops, 900 MHz clamp)
+- v10sla0.0 vs out_s0-dense: Y PSNR 18.98 dB (per-frame min 16.69, median 19.26), latent PCC 0.9222.
+  4706 ms/step vs dense 3107 (relative only). With every block selected SLA must equal dense to bf16 noise,
+  so a plumbing bug exists independent of selection (0.85 gave 12.0 dB / PCC 0.295; the sparse part adds on top).
+- Layer 0 device 0 (first 9472 q rows) matched CPU, so suspects: other devices' q shards (tail shard holds the
+  327 pad keys/rows: 75776-75449), pad keys inside the last real block (75449 = 1178*64+57), later layers/steps.
+
+## Step 2c: all-device sparsity-0 check, blx01 job 036 (submitted 12:42 PDT)
+- plug/t456_dump.py with T456_CHECK=1: first 9472-row call, every device, head 0, q tiles first/mid/last:
+  PCC of device out vs dense over the 75449 real keys and vs dense over all 75776 gathered keys; |k pad| max.
+  Spec s-check0.txt (tag c0, so job 035's out_s0-v10sla0.0 stays). Job is expected to end with T456_DUMP_DONE.
+- Log /var/log/tt-device-broker/2026-10-12_194205_036.log; read the `[t456] dev` lines.
+- Reading: a device with real PCC << 0.999 is the bug site; `all` > `real` means pad keys leak into softmax.
+  All devices ~0.999 => layer 0 fine everywhere; next dump a later layer/step (T456_CALL skip count).
