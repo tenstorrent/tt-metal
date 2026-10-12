@@ -384,3 +384,26 @@ def test_init_build_keeps_the_kernel_text_order():
     where, _ = _placement(_text_after_libraries(_KERNEL_ASM, rest=False))
     assert where["_Z3bari"] == where[".LPFE0"] == ".text"
     assert where[".LPFE1"] == ".llk_text_rest"
+
+
+def test_tile_loop_build_puts_the_harness_after_the_kernel():
+    from helpers.test_config import _harness_last
+
+    harness = (
+        '\t.section\t.text.startup,"ax",@progbits\n\t.globl\tmain\n\t.type\tmain, @function\nmain:\n\tret\n'
+        '\t.size\tmain, .-main\n\t.section\t.init,"ax",@progbits\n\t.globl\t_start\n\t.type\t_start, @function\n'
+        "_start:\n\tcall\tmain\n #APP\n\t.word 0x00100073\n.balign 512\n #NO_APP\n\t.size\t_start, .-_start\n"
+        '\t.pushsection .init, "ax"\n\tnop\n\t.popsection\n'
+        '\t.section\t.init_array,"aw"\n'
+    )
+    where, _ = _placement(_harness_last(_KERNEL_ASM + harness))
+    assert where["main"] == where["_start"] == ".llk_harness"
+    assert where["_Z10run_kernelRK13RuntimeParams"] == ".text.run_kernel"
+    text = _harness_last(harness)
+    assert '.pushsection .llk_harness, "ax"' in text and ".init_array" in text
+    assert ".balign 512" not in text  # the parks in main need no restart alignment
+    assert ".balign 512" in _harness_last(
+        _KERNEL_ASM.replace(
+            "\tret\n\t.size\t_Z10run", ".balign 512\n\tret\n\t.size\t_Z10run"
+        )
+    )
