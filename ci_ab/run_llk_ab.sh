@@ -5,6 +5,8 @@
 # runs ABBA twice (A1 B2 B3 A4 A5 B6 B7 A8), the same job and machine for both sides; the A and B repeats are the A/A.
 # The perf CSVs, node hash logs and ELF image hashes are printed at the end as one base64 tarball.
 set +e +o pipefail
+# the harness puts its artefacts under $RUNNER_TEMP when set (GHA), which would put every label in one build dir
+unset RUNNER_TEMP
 R=$(git rev-parse --show-toplevel); S=$R/ci_ab; SL=${RA_SL:-/tmp/ra_slots}; cd $R
 rm -rf $SL; mkdir -p $SL/perf_data $SL/out
 echo "== runner $(hostname) $(nproc) cores $(date -u +%FT%TZ)"; ls /dev/tenstorrent 2>&1 | head -3
