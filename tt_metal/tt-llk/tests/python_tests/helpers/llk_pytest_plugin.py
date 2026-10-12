@@ -730,20 +730,49 @@ def _select_tests_by_op(config, items):
 
 
 def _split_by_cost(config, items):
-    splits, group = config.getoption("--perf-splits"), config.getoption("--perf-group")
-    if not splits:
+    """Cut the tests, in collection order, into --perf-splits chunks of equal estimated time.
+
+    A test weighs its module's cost from perf_split_costs.json divided by the module's test
+    count. The chunks are contiguous, so a module's tests, and the ELFs they share, stay in one
+    shard except at a cut point. This runs before _collapse_runtime_only_variants, so the
+    compile and run passes cut the same list.
+    """
+    splits = config.getoption("--perf-splits")
+    group = config.getoption("--perf-group")
+    if splits is None and group is None:
         return
-    costs_path = Path(__file__).resolve().parents[2] / "perf_split_costs.json"
-    costs = json.loads(costs_path.read_text())[os.environ["CHIP_ARCH"].lower()]
+    if not splits or not group or not 1 <= group <= splits:
+        raise pytest.UsageError(
+            "--perf-splits N and --perf-group G go together, with 1 <= G <= N"
+        )
+
+    arch = TestConfig.CHIP_ARCH.value
+    table = json.loads(
+        (Path(__file__).resolve().parents[2] / "perf_split_costs.json").read_text()
+    )
+    module_cost = table.get(arch)
+    if module_cost is None:
+        raise pytest.UsageError(f"perf_split_costs.json has no costs for {arch}")
+
     modules = [item.path.stem for item in items]
-    count = collections.Counter(modules)
-    weights = [costs.get(m, 1.0) / count[m] for m in modules]
-    share = sum(weights) / splits
-    selected, deselected, done = [], [], 0.0
+    unknown = sorted(set(modules) - module_cost.keys())
+    if unknown:
+        logger.warning(
+            f"--perf-splits: no cost for {', '.join(unknown)}; each counts as 1 s"
+        )
+    tests_in = collections.Counter(modules)
+    weights = [module_cost.get(m, 1.0) / tests_in[m] for m in modules]
+    total = sum(weights)
+    if total == 0:
+        weights, total = [1.0] * len(items), float(len(items))
+
+    # A test goes to the chunk that holds the midpoint of its weight.
+    chunk = total / splits
+    selected, deselected, before = [], [], 0.0
     for item, weight in zip(items, weights):
-        shard = min(int((done + weight / 2) / share), splits - 1) + 1
+        shard = min(int((before + weight / 2) / chunk), splits - 1) + 1
         (selected if shard == group else deselected).append(item)
-        done += weight
+        before += weight
     config.hook.pytest_deselected(items=deselected)
     items[:] = selected
 
