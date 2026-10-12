@@ -212,11 +212,8 @@ config's `max_completion_length`, `temperature` and `num_generations`, plus its
 |--------|-----------|-------------|
 | `generate` | `(prompts: List[List[int]]) -> RolloutBatch` | Generate `num_generations` completions per prompt and their per-token `log pi_old`, under the weights that sampled them. Never returns placeholder log-probs. |
 | `weight_version` | property `-> int` | Version of the weights the sampler holds. Starts at 0. |
-| `update_weights` | `(weights, version: int) -> None` | Install `weights` as `version`, which must be greater than `weight_version` (`ValueError` otherwise, before anything is installed). `weights` is `None` for `TTMLRolloutSampler` (it shares the trainer's model) and one HF-keyed dict per submesh for `TTTRolloutSampler`. |
+| `update_weights` | `(weights, version: int) -> None` | Install `weights` and set `weight_version` to `version`. `weights` is `None` for `TTMLRolloutSampler` (it shares the trainer's model) and one HF-keyed dict per submesh for `TTTRolloutSampler`. |
 | `close` | `() -> None` | Release generation resources. Optional; the default does nothing. |
-
-`check_new_weight_version(current, version)` implements the version check for
-custom samplers.
 
 ### TTMLRolloutSampler
 
