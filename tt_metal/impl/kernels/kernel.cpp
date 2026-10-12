@@ -896,7 +896,7 @@ void Kernel::validate_runtime_args_size(
     }
 }
 
-void Kernel::set_runtime_args(const CoreCoord& logical_core, stl::Span<const uint32_t> runtime_args) {
+void Kernel::set_runtime_args(const CoreCoord& logical_core, ttsl::Span<const uint32_t> runtime_args) {
     // TODO (abhullar): If we don't include this check then user can write runtime args to a core that the kernel is not
     // placed on.
     //                  Should this check only be enabled in debug mode?
@@ -956,7 +956,7 @@ void Kernel::set_runtime_args(const CoreCoord& logical_core, stl::Span<const uin
     }
 }
 
-void Kernel::set_common_runtime_args(stl::Span<const uint32_t> common_runtime_args) {
+void Kernel::set_common_runtime_args(ttsl::Span<const uint32_t> common_runtime_args) {
     auto& set_rt_args = this->common_runtime_args_;
     TT_FATAL(
         set_rt_args.empty(),
