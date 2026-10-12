@@ -55,6 +55,7 @@ TITLES = {
     "WH-08": "Instruction cache set conflicts",
     "WH-09": "State left by the previous kernel",
     "WH-10": "Check of the new #58068 fixes",
+    "WH-11": "The seven open cases, checked in Versim",
 }
 
 EXTRA_CSS = """

@@ -45,6 +45,7 @@ def index():
     rows = "".join(f'<tr><td>{chip(k)}</td><td>{v[0]}</td><td>{v[1]}</td><td>{v[2]}</td><td>{v[3]}</td><td>{v[4]}</td></tr>' for k, v in ROWS.items())
     flow = "".join(f"<li>{t}</li>" for _, t in SECTIONS)
     WH10 = URLS.get("WH-10", "#")
+    WH11 = URLS.get("WH-11", "#")
     return f"""<title>WH-00 Perf Mechanisms Index</title>
 <link rel="preconnect" href="https://fonts.googleapis.com">
 <link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=IBM+Plex+Sans+Condensed:wght@500;600&family=Source+Sans+3:wght@400;600&family=JetBrains+Mono:wght@400;600&display=swap">
@@ -55,6 +56,7 @@ def index():
 <section><h2>How they connect</h2><div class="figwrap">{diagram()}</div></section>
 <section><h2>The documents</h2><div class="tw"><table><tr><th>Doc</th><th>Mechanism</th><th>Problem it causes</th><th>Versim</th><th>Card</th><th>Status at #58068 head</th></tr>{rows}</table></div>
 <p class="small">Problems: "re-measure" = the same build gives a different value when measured again; "no-work change" = a change that does no work moves values.</p></section>
+<section><h2>Open cases, checked in Versim (12 October)</h2><p>Seven cases that still move on the full suite, each located on a card and compared cycle by cycle in Versim: <a href="{WH11}">WH-11 The seven open cases, checked in Versim</a>. Three are explained (LFSR phase, branch predictor aliasing and INIT overlap, cold fetch), two do not reproduce on the lab card, two were not run.</p></section>
 <section><h2>New fixes in #58068 (9 October)</h2><p>Five new commits, each checked on the card and in Versim: <a href="{WH10}">WH-10 Check of the new #58068 fixes</a>. All five hold up. Open: L1_CONGESTION and L1_TO_L1 still jump between packer-rhythm states with any change of a few cycles.</p></section>
 <section><h2>Full-suite check of the fixes (8 October, old head)</h2><p>CI, Wormhole, 842,256 points per arm, two runs each. "Final" = #58068 head + the WH-04 settle + no fixed kernel address + no warm-up on Wormhole (branch <code>nstojictt/p58-final</code>). Values that move by more than 2% (TILE_LOOP) when one never-executed nop is put in front of every function:</p>
 <div class="tw"><table><tr><th>Run type</th><th class="n">#58068 head</th><th class="n">Final</th></tr>
