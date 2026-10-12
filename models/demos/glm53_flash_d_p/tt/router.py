@@ -11,6 +11,12 @@ replicated: every chip routes all S tokens of the replicated ffn_norm output, no
     tw     = gather(scores, ti) / sum(...) x 2.5   unbiased sigmoid of the chosen 8, renormalized, routed_scaling_factor
     dense  = scatter(zeros bf16, ti, tw bf16) [S, E] (component boundary / dense-routing consumers)
 
+Without the dense matrix (the model's all-gather experts) everything after the matmul is one
+ttnn.experimental.deepseek_prefill.moe_grouped_topk (n_groups 1) with fp32_selection: the selection is exact fp32
+(0 expert-set mismatches vs a float64 reference on the real layer-4 gate, 5120 rows; without fp32_selection its TF32
+source reads swap near-tied experts on 19% of rows), weights bf16 (within ~1 bf16 ulp), idx uint16 - what the experts
+take. Router 162 -> 116 us per MoE layer at 640 rows per chip.
+
 The layer-3 bias is 7.42..7.79, so the raw choice score reaches 8.8 (fp32 step 1e-6, fine; bf16 / TF32 are not, see
 known issues); recentring moves it near 1 for extra margin. Constants (weight, bias, the scatter's zeros for max_rows)
 are built once at load and sliced on the device per chunk.
@@ -51,6 +57,7 @@ class TtRouter:
         if recentre:
             b = b - b.mean()
         self.bias = replicate(mesh, b, dtype=ttnn.float32)
+        self._bias_rows = {}  # rows -> the bias repeated over them (the fused gate takes a full-shape bias)
         self.zeros = replicate(mesh, torch.zeros(1, 1, self.max_rows, E), dtype=ttnn.bfloat16)
         self.cfg = hifi4_config()
 
@@ -75,6 +82,24 @@ class TtRouter:
             compute_kernel_config=mm_config(self.cfg),
             memory_config=mc,
         )
+        if not dense:  # one fused gate, its selection in exact fp32: idx uint16, weights bf16 (TILE)
+            if s not in self._bias_rows:
+                self._bias_rows[s] = ttnn.repeat(self.bias, (1, 1, s, 1))
+            wts, idx = ttnn.experimental.deepseek_prefill.moe_grouped_topk(
+                logits,
+                self._bias_rows[s],
+                n_groups=1,
+                summed_experts_per_group=1,
+                topk_groups=1,
+                n_activated_experts=self.top_k,
+                route_scale=self.route_scale,
+                epsilon=1e-20,
+                stable_sort=True,
+                fp32_selection=True,
+                memory_config=mc,
+            )
+            ttnn.deallocate(logits)
+            return None, idx, wts
         scores = ttnn.sigmoid(logits, memory_config=mc)
         ttnn.deallocate(logits)
         choice = ttnn.add(scores, self.bias, memory_config=mc)
