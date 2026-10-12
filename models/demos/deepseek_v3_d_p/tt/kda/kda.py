@@ -165,6 +165,7 @@ class ttKDA:
                 weight_cache_path,
                 cache_name_prefix=f"layer_{layer_idx}.kda",
                 tensor_parallel_axis=tp_axis,
+                projection_dtype=program_config.projection_dtype,
             )
         expected_tp_size = tuple(mesh_device.shape)[tp_axis] if isinstance(mesh_device, ttnn.MeshDevice) else 1
         if weights.tensor_parallel_size != expected_tp_size or weights.tensor_parallel_axis != tp_axis:
