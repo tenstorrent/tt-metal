@@ -907,11 +907,11 @@ void kernel_main() {
                 // 3. multicast the finalized stat back to the whole group.
                 //
                 // The root places its OWN copy first, then broadcasts in place
-                // (src == dst => EXCLUDE-source).  Doing it this way makes the two
-                // host emitters behave identically: Mcast1D's per-row sender rect
-                // EXCLUDES the sender (mcast_host.hpp sender_rect_), while Mcast2D's
-                // rect contains it -- an in-place send takes the same EXCLUDE path
-                // in both, so the root is never served twice and never skipped.
+                // (src == dst => EXCLUDE-source).  Doing it this way makes line and
+                // box groups behave identically: a line's sender rect may EXCLUDE the
+                // sender while a box's rect contains it -- an in-place send takes the
+                // same EXCLUDE path in both, so the root is never served twice and
+                // never skipped.
                 {
                     MaybeDeviceZoneScope("writer_mcast_send");
                     // D27: ONE compact tile carries the whole round's stats, so the

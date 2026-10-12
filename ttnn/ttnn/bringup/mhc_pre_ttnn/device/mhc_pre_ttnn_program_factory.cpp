@@ -20,7 +20,7 @@
 #include <tt-metalium/host_api.hpp>
 #include <tt-metalium/tensor_accessor_args.hpp>
 
-#include "ttnn/cpp/ttnn/kernel_lib/mcast/host/mcast_host.hpp"
+#include "ttnn/kernel_lib/mcast/host/mcast.hpp"
 #include "mcast_wire.hpp"
 #include "ttnn/tensor/tensor_utils.hpp"
 
@@ -91,14 +91,14 @@ constexpr uint32_t X_STREAM_INFLIGHT = 2;
 constexpr int64_t Y_DEPTH = 2;
 constexpr int64_t Y_CHUNK_TILES_CAP = 8;
 constexpr uint32_t W_CHUNK_TILES = 8;
-constexpr MathFidelity W_LO_FIDELITY = MathFidelity::LoFi;
+constexpr tt::tt_metal::MathFidelity W_LO_FIDELITY = tt::tt_metal::MathFidelity::LoFi;
 constexpr uint32_t X_CHUNK_K_TILES = 8;
 constexpr int64_t X_PIECE_DEPTH = 2;
 constexpr uint32_t X_GRID_BITS = 4;
 constexpr uint32_t W_GRID_BITS = 6;
 constexpr uint32_t PRODUCT_ORDER_MAX = 2;
 constexpr uint32_t PRODUCT_LO_ORDER = 2;
-constexpr MathFidelity X_LO_FIDELITY = MathFidelity::HiFi3;
+constexpr tt::tt_metal::MathFidelity X_LO_FIDELITY = tt::tt_metal::MathFidelity::HiFi3;
 constexpr int64_t DEST_TILES_FP32 = 4;
 constexpr int64_t L1_SAFETY_MARGIN = 96 * 1024;
 constexpr int64_t BLOCK_TOKEN_TILES_CAP = 1;
@@ -552,7 +552,7 @@ ProgramDescriptor create_program_descriptor(
             .id = sem, .core_type = tt::CoreType::WORKER, .core_ranges = all_cores, .initial_value = 0});
     }
 
-    // ---- W column broadcast (R2): one Mcast1D(PerColumn) over the active rectangle per reader-NoC set ----
+    // ---- W column broadcast (R2): one multicast group per column of the active rectangle, per reader-NoC set ----
     std::map<uint32_t, mcast_wire::McastWire> w_mcast;
     if (L.w_bcast) {
         const CoreRangeSet w_rect(
@@ -562,19 +562,27 @@ ProgramDescriptor create_program_descriptor(
             w_cfg.noc = other_noc(rnoc);
             w_cfg.handshake = false;
             w_cfg.data_ready = dataflow_kernel_lib::DataReadySignal::Counter;
-            w_cfg.sem_ids = std::vector<uint32_t>{SEM_W_READY};
+            // One group per column, rotating over its cores; the data-ready semaphore is the program's SEM_W_READY.
             w_mcast.emplace(
                 static_cast<uint32_t>(rnoc),
                 mcast_wire::extract(
-                    kh::Mcast1D(device, w_rect, kh::Mcast1DShape::PerColumn, kh::Mcast1DRotatingSenderConfig{}, w_cfg),
+                    kh::Mcast(
+                        *device,
+                        w_cfg,
+                        w_rect,
+                        static_cast<uint32_t>(L.active_rows),
+                        kh::McastRotatingSenderConfig{},
+                        kh::McastCoreOrder::ColumnMajor),
                     w_rect,
                     w_cfg.noc,
+                    SEM_W_READY,
+                    true,
                     desc.semaphores));
         }
     }
     const bool w_presplit = !w_mcast.empty() && w_pieces(w.dtype()) > 1 && x_pieces(x.dtype()) == 1;
 
-    // ---- group combine mcast (one Mcast2D per group; identical CT wire within a reader-NoC set) ----
+    // ---- group combine mcast (one box multicast per group; identical CT wire within a reader-NoC set) ----
     std::map<int64_t, mcast_wire::McastWire> helpers;
     std::map<uint32_t, std::vector<uint32_t>> mcast_ct;
     if (G > 1) {
@@ -583,20 +591,26 @@ ProgramDescriptor create_program_descriptor(
             kh::McastConfig mcast_cfg;
             mcast_cfg.noc = other_noc(rnoc);
             mcast_cfg.handshake = false;
-            mcast_cfg.sem_ids = std::vector<uint32_t>{SEM_MCAST_READY};
             const CoreRangeSet rect(
                 CoreRange(CoreCoord(gr.gx0, gr.gy0), CoreCoord(gr.gx0 + plan.group_w - 1, gr.gy0 + plan.group_h - 1)));
             auto it = helpers
                           .emplace(
                               gr.g,
+                              // One group over the box, sent by its first core; the data-ready semaphore is the
+                              // program's SEM_MCAST_READY.
                               mcast_wire::extract(
-                                  kh::Mcast2D(
-                                      device,
+                                  kh::Mcast(
+                                      *device,
+                                      mcast_cfg,
                                       rect,
-                                      kh::Mcast2DFixedSenderConfig{.sender = CoreCoord(gr.gx0, gr.gy0)},
-                                      mcast_cfg),
+                                      static_cast<uint32_t>(rect.num_cores()),
+                                      kh::McastFixedSenderConfig{
+                                          .sender_index = mcast_wire::row_major_index(
+                                              rect.bounding_box(), CoreCoord(gr.gx0, gr.gy0))}),
                                   rect,
                                   mcast_cfg.noc,
+                                  SEM_MCAST_READY,
+                                  true,
                                   desc.semaphores))
                           .first;
             const auto ct = it->second.compile_time_args();
@@ -840,7 +854,7 @@ ProgramDescriptor create_program_descriptor(
     compute_cfg.math_fidelity = params.compute_config.math_fidelity;
     compute_cfg.fp32_dest_acc_en = true;
     compute_cfg.math_approx_mode = params.compute_config.math_approx_mode;
-    compute_cfg.unpack_to_dest_mode.assign(NUM_CB_SLOTS, UnpackToDestMode::Default);
+    compute_cfg.unpack_to_dest_mode.assign(NUM_CB_SLOTS, tt::tt_metal::UnpackToDestMode::Default);
     std::vector<uint8_t> fp32_cbs(std::begin(UNPACK_TO_DEST_FP32_CBS), std::end(UNPACK_TO_DEST_FP32_CBS));
     if (w_pieces(w.dtype()) > 1) {
         fp32_cbs.push_back(CB_WEIGHT);
@@ -850,7 +864,7 @@ ProgramDescriptor create_program_descriptor(
     }
     fp32_cbs.push_back(CB_MIX_RUN);
     for (uint8_t idx : fp32_cbs) {
-        compute_cfg.unpack_to_dest_mode[idx] = UnpackToDestMode::UnpackToDestFp32;
+        compute_cfg.unpack_to_dest_mode[idx] = tt::tt_metal::UnpackToDestMode::UnpackToDestFp32;
     }
     KernelDescriptor compute;
     compute.kernel_source = std::string(KERNEL_DIR) + "mhc_pre_compute.cpp";

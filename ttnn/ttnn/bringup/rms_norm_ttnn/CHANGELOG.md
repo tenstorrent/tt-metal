@@ -156,3 +156,21 @@
 - Files: `device/mcast_wire.hpp` (new), `device/rms_norm_ttnn_program_factory.cpp`, `rms_norm_ttnn_program_descriptor.py`,
   `kernels/rms_norm_ttnn_reader.cpp`, `kernels/rms_norm_ttnn_writer.cpp`, `tests/unit/test_rms_norm_ttnn_combine_knobs.py`,
   `tests/unit/test_rms_norm_ttnn_perf.py`
+
+### Port to the unified multicast helper (`kernel_lib/mcast/host/mcast.hpp`)
+- What: llk_helper_library replaced the Mcast1D / Mcast2D / McastFamily host helpers and their wire format with one
+  `Mcast` (receivers + group size + sender config; attach(descriptor, prefix, kernels, first_semaphore_id)). Every
+  multicast site moved to it, in the C++ factory and the Python builder alike: line groups (old Mcast1D PerRow /
+  PerColumn) are `line_mcast` (one group per row or column), one box (old Mcast2D) is `box_mcast` (one group, the
+  root's row-major index as the fixed sender); the old `ack_count_override` (idle cores in a group's bounding box) is
+  `handshake_cores` = the cores doing work; Diagonal sender placement is `Staggered`. The combine's per-kernel
+  pre-handshake override has no equivalent, so `CombineMcast` builds the channel twice, with and without the
+  handshake, and the handshake build owns the semaphores either way (ids and the gather id unchanged).
+  `device/mcast_wire.hpp` still reads the wire back from a scratch attach and decodes the role word with the new
+  `RuntimeLayout`; the Python builder computes the per-channel senders from the topology. Kernels unchanged (the
+  device `McastArgs` API is the same).
+- Why: the old helper no longer exists, so the fork did not build.
+- Default behaviour: same topology, roles and semaphore ids; the wire format is the new helper's.
+- Needed by: rebase onto origin/llk_helper_library @ `bdc576fa652` (2026-10-12)
+- Files: `device/mcast_wire.hpp`, `device/rms_norm_ttnn_program_factory.cpp`, `rms_norm_ttnn_program_descriptor.py`,
+  `kernels/rms_norm_ttnn_writer.cpp` (comment only)
