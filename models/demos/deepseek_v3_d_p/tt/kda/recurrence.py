@@ -203,10 +203,16 @@ def _scan_chunks(
     sequence_parallel_axis: int,
     compute_config: ttnn.DeviceComputeKernelConfig,
     groups_per_head: int = 1,
+    output_in_l1: bool = False,
 ) -> RecurrenceResult:
-    # The output feeds only the gated norm; keep it in L1 when it fits.
-    output_memory = l1_when_it_fits(
-        prepared.v_beta.device(), math.prod(prepared.v_beta.shape) * 2, KDA_ACTIVATION_L1_BYTES_PER_CORE
+    # The memory config places both outputs, so only a caller that re-selects the final state (the SP path's
+    # select_final_carry) may move them to L1; the output then feeds only the gated norm.
+    output_memory = (
+        l1_when_it_fits(
+            prepared.v_beta.device(), math.prod(prepared.v_beta.shape) * 2, KDA_ACTIVATION_L1_BYTES_PER_CORE
+        )
+        if output_in_l1
+        else KDA_OUTPUT_MEMORY_CONFIG
     )
     output, final_states = ttnn.experimental.kda.recurrent_chunk_scan(
         *prepared.as_kernel_args(),
@@ -484,6 +490,7 @@ def _scan_sp_grouped_chunks(
         grouped,
         group_entry_states,
         prefix_final_state,
+        output_in_l1=True,
         groups_per_head=groups,
         actual_start=actual_start,
         actual_end=actual_end,
