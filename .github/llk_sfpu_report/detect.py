@@ -79,9 +79,12 @@ def compiled_variants(side, family):
 
 
 def compile_all(side, arch, family, log, jobs=8, only_ops=()):
-    """Compile (never run) every variant of the family's perf module, math only."""
+    """Compile (never run) every variant of the family's perf module, math only.
+
+    Returns pytest's exit code: 0 when everything built, 1 when some variant did not.
+    """
     op_args = [a for op in only_ops for a in ("--op", op)]
-    runner.pytest(
+    return runner.pytest(
         side,
         arch,
         [
