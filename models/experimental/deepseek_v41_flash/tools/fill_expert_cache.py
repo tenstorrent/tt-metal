@@ -23,6 +23,7 @@ files ``test_moe.py`` and the TP1 decoder-layer test read.
     python models/experimental/deepseek_v41_flash/tools/fill_expert_cache.py --layers 20 21 24
     python models/experimental/deepseek_v41_flash/tools/fill_expert_cache.py --layers 1 2 --tp-size 1
     python models/experimental/deepseek_v41_flash/tools/fill_expert_cache.py --all-layers
+    python models/experimental/deepseek_v41_flash/tools/fill_expert_cache.py --dspark
 """
 
 import argparse
@@ -38,7 +39,13 @@ import torch
 from loguru import logger
 
 import ttnn
-from models.experimental.deepseek_v41_flash.tt.config import CACHE_DIR, DEFAULT_MODEL_DIR, expert_provider, load_config
+from models.experimental.deepseek_v41_flash.tt.config import (
+    CACHE_DIR,
+    DEFAULT_MODEL_DIR,
+    dspark_expert_provider,
+    expert_provider,
+    load_config,
+)
 from models.experimental.deepseek_v41_flash.tt.decode.moe import fused_experts_config, padded_expert_provider
 from models.experimental.deepseek_v4_flash.tt.decode.moe import (
     _fused_nd_dram_config,
@@ -90,24 +97,25 @@ class _ExpertWriter:
                 for dim in (1, 0)
             )
 
-    def __call__(self, layer: int, e: int) -> None:
-        provider = padded_expert_provider(
-            expert_provider(self.loader, layer), self.config.moe_intermediate_size, self.padded
-        )
+    def __call__(self, group: str, e: int) -> None:
+        """Convert expert ``e`` of ``group``: ``layers.N`` (decoder layer N) or ``mtp.S`` (DSpark stage S)."""
+        kind, index = group.split(".")
+        source = (expert_provider if kind == "layers" else dspark_expert_provider)(self.loader, int(index))
+        provider = padded_expert_provider(source, self.config.moe_intermediate_size, self.padded)
         gate_up, down = provider(e)
         if self.tp_size > 1:
             gate_up = _interleave_gate_up_tp(gate_up, self.tp_size, self.swiglu_cols)
         else:
             gate_up = _interleave_gate_up(gate_up.t().contiguous(), self.swiglu_cols)
         tag = _tp_tag(self.tp_size)
-        self._write(layer, f"experts.{e}.gate_up_fused{tag}", gate_up, self.gate_up_nd, self.gate_up_mapper)
-        self._write(layer, f"experts.{e}.down_fused{tag}", down.t().contiguous(), self.down_nd, self.down_mapper)
+        self._write(group, f"experts.{e}.gate_up_fused{tag}", gate_up, self.gate_up_nd, self.gate_up_mapper)
+        self._write(group, f"experts.{e}.down_fused{tag}", down.t().contiguous(), self.down_nd, self.down_mapper)
 
-    def _write(self, layer: int, name: str, weight: torch.Tensor, nd_config: ttnn.MemoryConfig, mapper) -> None:
-        scratch_file = os.path.join(self.scratch, f"layers.{layer}.ffn.{name}")
+    def _write(self, group: str, name: str, weight: torch.Tensor, nd_config: ttnn.MemoryConfig, mapper) -> None:
+        scratch_file = os.path.join(self.scratch, f"{group}.ffn.{name}")
         _load_fused_weight(weight, None, nd_config, cache_file_name=scratch_file, dtype=self.dtype, mesh_mapper=mapper)
         suffix = f"_dtype_{self.dtype.name}_layout_{ttnn.TILE_LAYOUT.name}.tensorbin"
-        os.replace(scratch_file + suffix, self.cache.sub(f"layers.{layer}.ffn").file(name) + suffix)
+        os.replace(scratch_file + suffix, self.cache.sub(f"{group}.ffn").file(name) + suffix)
 
 
 _writer = None
@@ -119,8 +127,8 @@ def _init_worker(snapshot: Path, dtype_name: str, cache_dir: str, scratch: str, 
     _writer = _ExpertWriter(snapshot, getattr(ttnn, dtype_name), cache_dir, scratch, tp_size)
 
 
-def _fill(layer: int, e: int) -> None:
-    _writer(layer, e)
+def _fill(group: str, e: int) -> None:
+    _writer(group, e)
 
 
 def main():
@@ -128,6 +136,7 @@ def main():
     layers = parser.add_mutually_exclusive_group(required=True)
     layers.add_argument("--layers", type=int, nargs="+", help="decoder layer ids")
     layers.add_argument("--all-layers", action="store_true", help="every decoder layer of the checkpoint")
+    layers.add_argument("--dspark", action="store_true", help="the DSpark drafter's stages (mtp.*)")
     parser.add_argument("--workers", type=int, default=min(32, os.cpu_count()), help="worker processes")
     parser.add_argument("--dtype", default="bfloat4_b", help="ttnn dtype of the experts, as the test builds them")
     parser.add_argument("--cache-dir", default=CACHE_DIR)
@@ -138,21 +147,25 @@ def main():
 
     snapshot = resolve_snapshot_dir(args.model_dir)
     config = load_config(snapshot)
-    if args.all_layers:
-        args.layers = list(range(config.num_hidden_layers))
-    bad = [i for i in args.layers if not 0 <= i < config.num_hidden_layers]
-    if bad:
-        parser.error(f"layers {bad} outside [0, {config.num_hidden_layers})")
+    if args.dspark:
+        groups = {f"mtp.{s}": config.dspark_n_routed_experts for s in range(config.num_nextn_predict_layers)}
+    else:
+        if args.all_layers:
+            args.layers = list(range(config.num_hidden_layers))
+        bad = [i for i in args.layers if not 0 <= i < config.num_hidden_layers]
+        if bad:
+            parser.error(f"layers {bad} outside [0, {config.num_hidden_layers})")
+        groups = {f"layers.{i}": config.num_local_experts for i in args.layers}
     dtype = getattr(ttnn, args.dtype)
     cache = WeightCache(args.cache_dir)
     tag = _tp_tag(args.tp_size)
     todo = [
-        (i, e)
-        for i in args.layers
-        for e in range(config.num_local_experts)
-        if args.force or not all(cache.sub(f"layers.{i}.ffn").hit(f"experts.{e}.{p}{tag}", dtype) for p in _PARTS)
+        (group, e)
+        for group, count in groups.items()
+        for e in range(count)
+        if args.force or not all(cache.sub(f"{group}.ffn").hit(f"experts.{e}.{p}{tag}", dtype) for p in _PARTS)
     ]
-    total = len(args.layers) * config.num_local_experts
+    total = sum(groups.values())
     logger.info(f"{len(todo)} of {total} experts to convert into {args.cache_dir}, {args.workers} workers")
     if not todo:
         return
@@ -176,7 +189,7 @@ def main():
                 args.tp_size,
             ),
         ) as pool:
-            futures = [pool.submit(_fill, i, e) for i, e in todo]
+            futures = [pool.submit(_fill, group, e) for group, e in todo]
             try:
                 for n, future in enumerate(as_completed(futures), 1):
                     future.result()
