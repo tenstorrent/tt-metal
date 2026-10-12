@@ -1446,7 +1446,6 @@ class ModelArgs:
                         self.dim,
                         self.hidden_dim // self.cluster_shape[1],  # Use padded N
                         prefetcher.ring_size,
-                        num_global_cb_receivers=prefetcher.num_receiver_cores,
                     )
                 else:
                     return self.dram_matmul_config(
@@ -1516,7 +1515,6 @@ class ModelArgs:
                         self.hidden_dim // self.cluster_shape[1],
                         self.dim,  # Use padded N
                         prefetcher.ring_size,
-                        num_global_cb_receivers=prefetcher.num_receiver_cores,
                     )
                 else:
                     return self.dram_matmul_config(
@@ -1864,7 +1862,6 @@ class ModelArgs:
                     self.dim // self.cluster_shape[0],
                     self.qkv_size // self.cluster_shape[1],  # Use padded N
                     prefetcher.ring_size,
-                    num_global_cb_receivers=prefetcher.num_receiver_cores,
                     untilize_out=True,
                 )
             else:
@@ -2132,7 +2129,6 @@ class ModelArgs:
                     k_wo,
                     n_wo,
                     prefetcher.ring_size,
-                    num_global_cb_receivers=prefetcher.num_receiver_cores,
                 )
             else:
                 if self.use_fused_all_gather_matmul:
@@ -2194,7 +2190,6 @@ class ModelArgs:
                     k_wo,
                     n_wo,
                     prefetcher.ring_size,
-                    num_global_cb_receivers=prefetcher.num_receiver_cores,
                 )
             elif self.is_galaxy:
                 return None  # TG uses core_grid parameter instead
@@ -2541,8 +2536,6 @@ class ModelArgs:
                 self.dim,
                 self.max_columns_per_device_lm_head,
                 prefetcher.ring_size,
-                prefetch=False,
-                num_global_cb_receivers=1,
                 untilize_out=True,
             )
         else:
@@ -4018,8 +4011,6 @@ class ModelArgs:
         K,
         N,
         num_cores,
-        num_global_cb_receivers,
-        prefetch=True,
         untilize_out=False,
     ):
         M *= B  # Fuse batch always enabled
@@ -4068,7 +4059,6 @@ class ModelArgs:
             mcast_in0=False,
             gather_in0=True,
             hop_cores=hop_core_range_set,
-            num_global_cb_receivers=num_global_cb_receivers if prefetch else 1,
             untilize_out=untilize_out,
         )
 

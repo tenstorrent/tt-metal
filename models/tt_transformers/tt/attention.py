@@ -890,7 +890,7 @@ class Attention(LightweightModule):
                 program_config=self.args.get_attn_qkv_program_config(Mode.DECODE, 1, self.prefetcher),
                 compute_kernel_config=self.li_qkv_decode_compute_kernel_cfg,
                 dtype=self.ccl_dtype if self.TG else self.activation_dtype or ttnn.bfloat16,
-                global_cb=self.prefetcher.global_cb if self.prefetcher is not None else None,
+                prefetcher_pipes=self.prefetcher.pipes if self.prefetcher is not None else [],
                 sub_device_id=self.prefetcher.worker_sub_device_id if self.prefetcher is not None else None,
             )
         # FIXME: File bug against dram-sharded matmuls with bias
@@ -1092,7 +1092,7 @@ class Attention(LightweightModule):
                     memory_config=self.args.get_attn_dense_output_mem_config(Mode.DECODE, self.prefetcher),
                     program_config=self.args.get_attn_all_gather_matmul_program_config(Mode.DECODE, self.prefetcher),
                     compute_kernel_config=self.li_o_decode_compute_kernel_cfg,
-                    global_cb=self.prefetcher.global_cb if self.prefetcher is not None else None,
+                    prefetcher_pipes=self.prefetcher.pipes if self.prefetcher is not None else [],
                     sub_device_id=self.prefetcher.worker_sub_device_id if self.prefetcher is not None else None,
                 )
                 ttnn.deallocate(all_gather_output)
@@ -1138,7 +1138,7 @@ class Attention(LightweightModule):
                 memory_config=self.args.get_attn_wo_output_mem_config(Mode.DECODE, self.prefetcher),
                 dtype=ttnn.bfloat8_b if self.TG else None,
                 compute_kernel_config=self.li_o_decode_compute_kernel_cfg,
-                global_cb=self.prefetcher.global_cb if self.prefetcher is not None else None,
+                prefetcher_pipes=self.prefetcher.pipes if self.prefetcher is not None else [],
                 sub_device_id=self.prefetcher.worker_sub_device_id if self.prefetcher is not None else None,
             )
 

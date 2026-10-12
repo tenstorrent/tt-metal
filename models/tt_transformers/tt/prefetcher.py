@@ -188,8 +188,8 @@ class PrefetcherCoreConfig:
     ) -> List[ttnn.CoreRangeSet]:
         """Get receiver ranges per sender. Returns CoreRangeSet of receiver cores for each sender.
 
-        Always creates individual CoreRange for each receiver to ensure consistent
-        CoreRangeSet size across all senders (required by global circular buffer).
+        Always creates individual CoreRange for each receiver, so a sender's receivers are listed in
+        receiver order: the r-th gets column slice r of every block the sender prefetches.
         """
         result = []
         for sender in self.sender_cores(active=sender_active):
@@ -236,22 +236,28 @@ class Prefetcher(LightweightModule):
         """
         Prefetcher class that prefetches tensors from DRAM to L1.
 
+        Each sender core reads one DRAM bank and delivers into its own worker-sender PrefetcherPipe,
+        whose receivers are the matmul ring cores that consume that bank's columns.
+
         Args:
             receiver_mapping_override: If provided, keys become sender cores and values become
                 their receiver cores. This overrides the default column 0/7 sender placement.
         """
-        ### Device, Global CB, Parameters
+        ### Device, PrefetcherPipes, Parameters
         self.pf_config: dict = ARCH_CONFIG["blackhole"]
         self.legal_receiver_cores: List[int] = self.pf_config["legal_receiver_cores"]
         self.mesh_device: ttnn.MeshDevice = mesh_device
         self.enable_performance_mode: bool = True
-        self.global_cb: Optional[ttnn.GlobalCircularBuffer] = None
+        # The pipes' persistent L1 on the sender and receiver cores, and one pipe per sender, in DRAM bank order
+        self.pipe_space: Optional[ttnn.experimental.PrefetcherPipeSpace] = None
+        self.pipes: List[ttnn.experimental.PrefetcherPipe] = []
         self.worker_sub_device_id: Optional[ttnn.SubDeviceId] = None
         self.num_tensors: int = num_tensors
         self.num_layers: int = num_layers
         self.num_senders: int = len(self.pf_config["dram_banks"])
-        self.global_cb_size: int = 0  # Size of the global circular buffer in bytes storing prefetched matmul weights
-        self.max_tensor_block_size: int = 0  # Max tensor block size is the largest block size of a tensor in bytes
+        # The largest per-receiver share of any inserted tensor in bytes: what a pipe ring holds, since a
+        # receiver keeps a whole tensor's blocks until its matmul is done with them
+        self.max_tensor_block_size: int = 0
         self.receiver_mapping_override: Optional[dict] = None
         self.model_name = os.getenv("HF_MODEL", "")
         assert self.model_name != "", "HF_MODEL is not set. DRAM Prefetcher must be run with a model."
@@ -368,12 +374,6 @@ class Prefetcher(LightweightModule):
         self.mode = mode
         self.sender_cores = self.core_config.sender_cores
         self.receiver_cores = self.core_config.receiver_cores
-        self.sender_receiver_mapping = list(
-            zip(
-                self.sender_cores(),
-                self.to_core_range_set(self.receiver_cores(sender_active=None, receiver_active=True), return_list=True),
-            )
-        )
         match mode:
             case Mode.DECODE:
                 self.prefetcher_sub_device = PrefetcherSubDevice(self.mesh_device)
@@ -436,7 +436,7 @@ class Prefetcher(LightweightModule):
         Args:
             tensor: The tensor to insert into the prefetcher queue
         """
-        assert self.init_decode_done, "Prefetcher has not been initialized for decode mode. Cannot insert tensors"
+        assert not self.pipes, "Insert every tensor before create_pipes(): the pipe rings are sized for them"
         bytes_in_tile = {ttnn.bfloat4_b: 576, ttnn.bfloat8_b: 1088, ttnn.bfloat16: 2048}
         if tensor.volume() % self.ring_size != 0:
             raise ValueError(
@@ -459,6 +459,16 @@ class Prefetcher(LightweightModule):
             f"[DRAM Prefetcher] Inserted tensor of shape {tensor.shape} into prefetcher, total number of tensors in prefetcher queue: {len(self.prefetched_tensor_addr)}"
         )
 
+    def _insert_registered_tensors(self):
+        """Runs the registered callbacks once, inserting their tensors in registration order."""
+        assert (
+            len(self.callbacks) > 0
+        ), "No tensors insertion callbacks have been inserted into the prefetcher queue. Cannot prefetch an empty queue"
+        if not self.prefetch_done:
+            for callback in self.callbacks:
+                callback()
+            self.prefetch_done = True
+
     def prefetch(self):
         """
         Inserts the tensors to be prefetched in a queue
@@ -468,30 +478,40 @@ class Prefetcher(LightweightModule):
         """
         if self.mode == Mode.DECODE:
             assert self.init_decode_done, "Prefetcher has not been initialized for decode mode. Cannot prefetch tensors"
-            assert (
-                len(self.callbacks) > 0
-            ), "No tensors insertion callbacks have been inserted into the prefetcher queue. Cannot prefetch an empty queue"
-            if not self.prefetch_done:
-                for callback in self.callbacks:
-                    callback()
-                self.prefetch_done = True
+            self._insert_registered_tensors()
         # NO-OP for prefill mode
         return
 
+    def create_pipes(self):
+        """
+        Reserves the PrefetcherPipes' L1 and creates one pipe per sender, its receivers the sender's ring cores
+        Inserts the registered tensors first, since each pipe ring holds the largest tensor's per-receiver share
+        NOTE: Must run before any program places circular buffers on the sender or receiver cores: the rings are
+        persistent L1 at the bottom of those cores, which a program's L1 seals. The model calls it once its weights
+        exist, before its first prefill; run() calls it otherwise
+        NOTE: Calling create_pipes() again is a no-op
+        """
+        if self.pipes:
+            return
+        self._insert_registered_tensors()
+        senders = self.core_config.sender_cores(active=True)
+        receivers = self.core_config.receiver_cores(sender_active=True, receiver_active=True)
+        logger.info(f"[DRAM Prefetcher] Creating PrefetcherPipes with ring size: {self.max_tensor_block_size}")
+        self.pipe_space = ttnn.experimental.create_prefetcher_pipe_space(
+            self.mesh_device,
+            sender_cores=self.to_core_range_set(senders),
+            receiver_domain=self.to_core_range_set(receivers),
+            ring_size=self.max_tensor_block_size,
+            max_receivers_per_pipe=self.num_receiver_cores,
+        )
+        self.pipes = self.pipe_space.create_pipes(list(zip(senders, receivers)))
+
     def run(self):
         """
-        Start prefetching weights into global CB with dram_prefetcher op
+        Start prefetching weights into the PrefetcherPipes with dram_prefetcher op
         """
         assert self.init_decode_done, "Prefetcher has not been initialized for decode mode. Cannot run prefetcher"
-        # Create global cb buffer if it was not yet created.
-        if self.global_cb is None:
-            self.global_cb_size = self.max_tensor_block_size
-            logger.info(f"[DRAM Prefetcher] Creating global CB with size: {self.global_cb_size}")
-            self.global_cb = ttnn.create_global_circular_buffer(
-                self.mesh_device,
-                self.sender_receiver_mapping,
-                self.global_cb_size,
-            )
+        self.create_pipes()
 
         # Create address tensor if it was not created yet
         if self.prefetched_tt_addr_tensor is None:
@@ -501,8 +521,8 @@ class Prefetcher(LightweightModule):
         self.garbage = ttnn.dram_prefetcher(
             self.prefetched_tensors[: self.num_tensors] + [self.prefetched_tt_addr_tensor],
             num_layers=self.num_layers,
-            global_cb=self.global_cb,
             enable_performance_mode=self.enable_performance_mode,
+            prefetcher_pipes=self.pipes,
         )
         # Set worker sub device stall group
         self.mesh_device.set_sub_device_stall_group([self.prefetcher_sub_device.sub_devices_id[-1]])
