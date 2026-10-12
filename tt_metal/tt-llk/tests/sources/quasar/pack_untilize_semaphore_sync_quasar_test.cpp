@@ -87,7 +87,7 @@ void run_kernel(RUNTIME_PARAMETERS params)
         {
             for (std::uint32_t block_ct = 0; block_ct < BLOCK_CT_DIM; block_ct++)
             {
-                _llk_math_eltwise_unary_datacopy_(block_rt * BLOCK_CT_DIM + block_ct);
+                _llk_math_eltwise_unary_datacopy_(block_rt * BLOCK_CT_DIM + block_ct /*tile_idx*/);
             }
         }
         _llk_math_dest_section_done_<dest_sync, is_fp32_dest_acc_en>();
@@ -117,9 +117,9 @@ void run_kernel(RUNTIME_PARAMETERS params)
     set_up_zero_dest_dvalid_handshake_for_pack();
 
     std::uint8_t bfd_pack;
-    if (tensor_shape.face_r_dim < ckernel::pack::PACR_STRIDE_OFFSET_ROWS)
+    if (tensor_shape.total_num_faces() != NUM_FACES)
     {
-        // PACR_STRIDE quirk: tiny-tiles index L1 rows as tiles, so the BD is built with y_dim = 1.
+        // PACR_STRIDE indexes L1 rows as tiles, so every strided pack builds the BD with y_dim = 1, as llk_pack_untilize_init does.
         bfd_pack = ckernel::trisc::bfd_alloc_and_program<ckernel::trisc::BfdResource::Pack0, ckernel::trisc::L1AccessMode::Strided>(
             tensor_shape, L1_ADDRESS(buffer_Res[0]), formats.pack_dst);
     }

@@ -30,7 +30,6 @@ from helpers.utils import passed_test
 
 # Even section count: DestSync.Half packs banks 0 -> 1 -> 0 -> 1 and leaves SRC_ADDR_OFFSET on bank 0 for later tests.
 NUM_SECTIONS = 4
-BLOCK_CT_DIM = 1
 
 SEMAPHORE_SYNC_FORMATS = input_output_formats(
     [DataFormat.Float16_b, DataFormat.Float16], same=True
@@ -38,12 +37,12 @@ SEMAPHORE_SYNC_FORMATS = input_output_formats(
 
 
 def run_pack_untilize_semaphore_sync(
-    formats, dest_acc, dest_sync, tile_dimensions, rows_per_section=1
+    formats, dest_acc, dest_sync, tile_dimensions, rows_per_section=1, block_ct_dim=1
 ):
     tile_shape = construct_tile_shape(tile_dimensions)
     input_dimensions = [
         NUM_SECTIONS * rows_per_section * tile_shape.total_row_dim(),
-        BLOCK_CT_DIM * tile_shape.total_col_dim(),
+        block_ct_dim * tile_shape.total_col_dim(),
     ]
 
     sequential_spec = StimuliSpec.sequential()
@@ -75,7 +74,7 @@ def run_pack_untilize_semaphore_sync(
             generate_input_dim(
                 input_dimensions,
                 input_dimensions,
-                block_ct_dim=BLOCK_CT_DIM,
+                block_ct_dim=block_ct_dim,
                 block_rt_dim=rows_per_section,
                 tile_dimensions=tile_dimensions,
             ),
@@ -127,7 +126,7 @@ def run_pack_untilize_semaphore_sync(
     formats=SEMAPHORE_SYNC_FORMATS,
     dest_acc=[DestAccumulation.No, DestAccumulation.Yes],
     dest_sync=[DestSync.Half, DestSync.Full],
-    tile_dimensions=[(1, 32), (2, 32)],
+    tile_dimensions=[(1, 32), (2, 32), (8, 32)],
     rows_per_section=[1, 2],
 )
 def test_pack_untilize_semaphore_sync_strided_quasar(
@@ -135,6 +134,24 @@ def test_pack_untilize_semaphore_sync_strided_quasar(
 ):
     run_pack_untilize_semaphore_sync(
         formats, dest_acc, dest_sync, tile_dimensions, rows_per_section
+    )
+
+
+# The face_r_dim >= 8 strided branch packs one tile per call, so only 1x32 and 2x32 tiles take multi-tile rows.
+@pytest.mark.quasar
+@parametrize(
+    formats=SEMAPHORE_SYNC_FORMATS,
+    dest_acc=[DestAccumulation.No, DestAccumulation.Yes],
+    dest_sync=[DestSync.Half],
+    tile_dimensions=[(1, 32), (2, 32)],
+    rows_per_section=[2],
+    block_ct_dim=[2],
+)
+def test_pack_untilize_semaphore_sync_strided_multi_tile_row_quasar(
+    formats, dest_acc, dest_sync, tile_dimensions, rows_per_section, block_ct_dim
+):
+    run_pack_untilize_semaphore_sync(
+        formats, dest_acc, dest_sync, tile_dimensions, rows_per_section, block_ct_dim
     )
 
 
@@ -150,4 +167,20 @@ def test_pack_untilize_semaphore_sync_contiguous_quasar(
 ):
     run_pack_untilize_semaphore_sync(
         formats, dest_acc, dest_sync, (32, 32), rows_per_section
+    )
+
+
+@pytest.mark.quasar
+@parametrize(
+    formats=SEMAPHORE_SYNC_FORMATS,
+    dest_acc=[DestAccumulation.No, DestAccumulation.Yes],
+    dest_sync=[DestSync.Half],
+    rows_per_section=[2],
+    block_ct_dim=[2],
+)
+def test_pack_untilize_semaphore_sync_contiguous_multi_tile_row_quasar(
+    formats, dest_acc, dest_sync, rows_per_section, block_ct_dim
+):
+    run_pack_untilize_semaphore_sync(
+        formats, dest_acc, dest_sync, (32, 32), rows_per_section, block_ct_dim
     )
