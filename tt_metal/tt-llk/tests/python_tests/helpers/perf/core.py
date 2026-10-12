@@ -1095,6 +1095,8 @@ class PerfConfig(TestConfig):
                     self.test_name, self.variant_id, TestConfig.TENSIX_LOCATION
                 )
                 assert_zones_dont_overlap(profiler_data)
+                if os.environ.get("LLK_EXP_ZONE_DUMP"):  # experiment hook (ncwork): every zone record of this kernel
+                    _exp_zone_dump(profiler_data, self, run_type, run_index)
 
                 if TestConfig.ENABLE_PERF_COUNTERS:
                     try:
@@ -1118,6 +1120,8 @@ class PerfConfig(TestConfig):
                 self.write_runtimes_to_L1()
                 self.run_elf_files()
                 self.wait_for_tensix_operations_finished()
+                if os.environ.get("LLK_EXP_ZONE_DUMP"):  # experiment hook (ncwork): the INIT counter launch's zones
+                    _exp_zone_dump(Profiler.get_data(self.test_name, self.variant_id, TestConfig.TENSIX_LOCATION), self, run_type, -1)
                 try:
                     counter_results = read_counters(location=TestConfig.TENSIX_LOCATION)
                     if counter_results is not None and not counter_results.empty:
@@ -1465,3 +1469,19 @@ def merge_main(argv=None):
 
 if __name__ == "__main__":
     raise SystemExit(merge_main())
+
+
+def _exp_zone_dump(profiler_data, cfg, run_type, run_index):
+    """experiment hook (ncwork): every zone record of this kernel to <LLK_EXP_ZONE_DUMP>/zones_<worker>.jsonl"""
+    import json as _json
+
+    d = os.environ["LLK_EXP_ZONE_DUMP"]
+    os.makedirs(d, exist_ok=True)
+    z = profiler_data.zones().raw()
+    rows = [[str(t), str(m), str(ty), int(ts)] for t, m, ty, ts in zip(z["thread"], z[MARKER], z["type"], z["timestamp"])]
+    node = os.environ.get("PYTEST_CURRENT_TEST", "").rsplit(" (", 1)[0]
+    rec = {"node": node, "test": str(cfg.test_name), "variant": cfg.variant_id, "run_type": run_type.name,
+           "run_index": run_index, "zones": rows,
+           "bytes": bytes(cfg.runtime_arguments_bytes()).hex() if hasattr(cfg, "runtime_arguments_bytes") else ""}
+    with open(os.path.join(d, f"zones_{os.environ.get('PYTEST_XDIST_WORKER', 'master')}.jsonl"), "a") as f:
+        f.write(_json.dumps(rec) + "\n")
