@@ -1613,6 +1613,19 @@ class TILE_COUNT(RuntimeParameter):
 
 
 @dataclass
+class WORK_TILES(RuntimeParameter):
+    """Tiles the kernel actually walks: loop_factor * num_blocks * tiles per block."""
+
+    work_tiles: int = 0
+
+    def convert_to_cpp(self) -> str:
+        return f"constexpr std::uint32_t WORK_TILES = {self.work_tiles};"
+
+    def convert_to_struct_fields(self) -> tuple[str, str]:
+        return f"std::uint32_t WORK_TILES;", "I"
+
+
+@dataclass
 class NUM_GUARD_TILES(RuntimeParameter):
     count: int = 0
 
