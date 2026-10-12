@@ -25,7 +25,7 @@ from models.tt_transformers.tt.generator import Generator, create_submeshes
 from models.tt_transformers.tt.model import Transformer
 from models.tt_transformers.tt.model_config import ModelArgs
 
-from ..grpo_trainer import RolloutBatch, RolloutSampler, check_new_weight_version
+from ..grpo_trainer import RolloutBatch, RolloutSampler
 from ..rollout_batch_source import pad_logprobs, validate_rollout_batch
 
 OptimizationsFn = Callable[[int, str], Any]
@@ -449,7 +449,6 @@ class TTTRolloutSampler(RolloutSampler):
     def update_weights(self, weights: List[dict], version: int) -> None:
         """Apply one HF-keyed weight dict per submesh (order matches ``self.submeshes`` /
         the bridge's replication targets) and set ``weight_version`` to ``version``."""
-        version = check_new_weight_version(self._weight_version, version)
         if len(weights) != len(self.models):
             raise RuntimeError(f"update_weights got {len(weights)} dicts but sampler has {len(self.models)} submeshes")
         for model, hf_dict in zip(self.models, weights):
