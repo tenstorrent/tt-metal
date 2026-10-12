@@ -21,20 +21,82 @@ from loguru import logger
 
 import ttnn
 
-from ....models.transformers.minimax_h3.attention_minimax_h3 import prepare_rope_tables
+from ....models.transformers.minimax_h3.attention_minimax_h3 import MiniMaxH3Attention, prepare_rope_tables
 from ....models.transformers.minimax_h3.vsa_stages_minimax_h3 import MiniMaxH3VSACoarseStage, MiniMaxH3VSAConfig
+from ....parallel.config import DiTParallelConfig, ParallelFactor
+from ....parallel.manager import CCLManager
 from ....pipelines.minimax_h3.vsa_geometry import build_vsa_geometry
-from ....utils.tensor import bf16_tensor_2dshard
+from ....utils.tensor import bf16_tensor_2dshard, from_torch
 from ....utils.test import skip_if_unsupported_num_links
 from .common import GALAXY_RING, upload_rope
-from .test_transformer_minimax_h3 import logical_length_tensor
-from .test_vsa_attention_minimax_h3 import HEAD_DIM, HIDDEN_SIZE, ROPE_FREQ_DIM, _setup_tt_model, _torch_attention_model
+
+# Self-contained (no diffusers MiniMax H3 reference): the device boxes' venvs ship stock diffusers.
+HIDDEN_SIZE = 5376
+NUM_HEADS = 56
+HEAD_DIM = 128
+QK_NORM_EPS = 1e-5
+ROPE_FREQ_DIM = 16
 
 # fl2va 10 s at 768p as the pipeline packs it: text, conditioning image, audio rows, then the video grid.
 PREFIX_10S = (1460, 1008, 405)
 GRID_10S = (72, 24, 42)
 DENSE_BUCKET_10S = 76800  # the dense arm's padded length in job 990's reference (#408 out_t10)
 TIMED_ITERS = int(os.environ.get("T453_ITERS", "3"))
+
+
+def _attention_state() -> dict[str, torch.Tensor]:
+    inner = NUM_HEADS * HEAD_DIM
+    std = HIDDEN_SIZE**-0.5
+    state = {f"to_{p}.weight": std * torch.randn(inner, HIDDEN_SIZE) for p in "qkv"}
+    state["to_out.0.weight"] = inner**-0.5 * torch.randn(HIDDEN_SIZE, inner)
+    for name in ("norm_q", "norm_k"):
+        state[f"{name}.weight"] = 1.0 + 0.5 * torch.randn(HEAD_DIM)
+    return state
+
+
+def _logical_length(mesh_device, value):
+    return from_torch(
+        torch.tensor([value], dtype=torch.int64).reshape(1, 1, 1, 1),
+        device=mesh_device,
+        dtype=ttnn.uint32,
+        layout=ttnn.Layout.ROW_MAJOR,
+        mesh_axes=[..., None, None],
+    )
+
+
+def _setup_tt_model(mesh_device, sp_axis, tp_axis, num_links, topology, is_fsdp, geometry, vsa_config, state_dict):
+    ccl_manager = CCLManager(mesh_device=mesh_device, num_links=num_links, topology=topology)
+    parallel_config = DiTParallelConfig(
+        tensor_parallel=ParallelFactor(mesh_axis=tp_axis, factor=tuple(mesh_device.shape)[tp_axis]),
+        sequence_parallel=ParallelFactor(mesh_axis=sp_axis, factor=tuple(mesh_device.shape)[sp_axis]),
+        cfg_parallel=None,
+    )
+    tt_model = MiniMaxH3Attention(
+        hidden_size=HIDDEN_SIZE,
+        num_heads=NUM_HEADS,
+        head_dim=HEAD_DIM,
+        rotary_dim=2 * 3 * ROPE_FREQ_DIM,
+        qk_norm_eps=QK_NORM_EPS,
+        mesh_device=mesh_device,
+        ccl_manager=ccl_manager,
+        parallel_config=parallel_config,
+        is_fsdp=is_fsdp,
+        vsa_config=vsa_config,
+    )
+    tt_model.load_torch_state_dict(dict(state_dict))
+    if vsa_config is not None:
+        tt_model.set_vsa_stage(
+            MiniMaxH3VSACoarseStage(
+                geometry,
+                sparsity=vsa_config.sparsity,
+                padded_pooling=vsa_config.padded_pooling,
+                head_dim=HEAD_DIM,
+                mesh_device=mesh_device,
+                sp_axis=sp_axis,
+                ccl_manager=ccl_manager,
+            )
+        )
+    return tt_model, ccl_manager
 
 
 def _timed(fn, mesh_device, acc, label):
@@ -120,10 +182,10 @@ def test_vsa_vs_dense_attention_timing_10s(
         f"T453 geometry: seq_len={seq_len} padded_len={geometry.padded_len} tiles={geometry.n_tiles} "
         f"({geometry.n_pad_tiles} pad)"
     )
-    state = _torch_attention_model().state_dict()
+    state = _attention_state()
     x = torch.randn(1, seq_len, HIDDEN_SIZE)
     cos, sin = _rope(seq_len)
-    logical_n = logical_length_tensor(mesh_device, seq_len)
+    logical_n = _logical_length(mesh_device, seq_len)
     shard = {sp_axis: 2, tp_axis: 3}
 
     results = {}
