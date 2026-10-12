@@ -33,8 +33,6 @@ void run_kernel(RUNTIME_PARAMETERS params)
     const std::uint32_t LOOP_FACTOR        = params.LOOP_FACTOR;
     const std::uint32_t NUM_TILES_IN_BLOCK = params.NUM_TILES_IN_BLOCK;
     const int NUM_BLOCKS                   = params.NUM_BLOCKS;
-    const auto& TEST_FACE_R_DIM            = params.TEST_FACE_R_DIM;
-    const auto& num_faces                  = params.num_faces;
     const auto& buffer_A                   = params.buffer_A;
 #endif
     const int num_tiles_in_block = NUM_TILES_IN_BLOCK;
@@ -85,7 +83,6 @@ void run_kernel(RUNTIME_PARAMETERS params)
     const std::uint32_t LOOP_FACTOR        = params.LOOP_FACTOR;
     const std::uint32_t NUM_TILES_IN_BLOCK = params.NUM_TILES_IN_BLOCK;
     const int NUM_BLOCKS                   = params.NUM_BLOCKS;
-    const auto& num_faces                  = params.num_faces;
 #endif
     const int num_tiles_in_block = NUM_TILES_IN_BLOCK;
     const int num_blocks         = NUM_BLOCKS;
@@ -162,9 +159,6 @@ void run_kernel(RUNTIME_PARAMETERS params)
     const std::uint32_t LOOP_FACTOR        = params.LOOP_FACTOR;
     const std::uint32_t NUM_TILES_IN_BLOCK = params.NUM_TILES_IN_BLOCK;
     const int NUM_BLOCKS                   = params.NUM_BLOCKS;
-    const auto& TEST_FACE_R_DIM            = params.TEST_FACE_R_DIM;
-    const auto& in0_tile_c_dim             = params.in0_tile_c_dim;
-    const auto& num_faces                  = params.num_faces;
     const auto& L1_ACC                     = params.L1_ACC;
     const auto& buffer_Res                 = params.buffer_Res;
 #endif
