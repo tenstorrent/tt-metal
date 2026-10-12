@@ -385,3 +385,53 @@ def build_vsa_geometry(
         untile_index=untile_index,
         row_source=row_source,
     )
+
+
+def build_sla_geometry(seq_len: int, video_grid: tuple[int, int, int], *, sp_factor: int) -> MiniMaxH3VSAGeometry:
+    """Tile geometry for LightX2V's SLA block selection (Minimax-h3-Turbo-SLA LoRA).
+
+    LightX2V's ``get_block_map`` mean-pools the whole packed ``[text | cond | audio | video]`` sequence
+    in raster 64-token blocks (the tail block holds the remainder) and selects top-k over every block
+    for every query block: no exempt rows or columns, no 3D cubes. So every real tile here is a 1D
+    raster chunk and a candidate, placement is identity and pad tiles are appended. ``video_grid``
+    only labels the geometry.
+    """
+    if sp_factor < 1:
+        raise ValueError(f"sp_factor must be positive, got {sp_factor}")
+    if seq_len < 1:
+        raise ValueError(f"seq_len must be positive, got {seq_len}")
+
+    n_real_tiles = math.ceil(seq_len / VSA_TILE_TOKENS)
+    n_tiles = math.ceil(n_real_tiles / sp_factor) * sp_factor
+    n_pad_tiles = n_tiles - n_real_tiles
+
+    valid_counts = torch.zeros(n_tiles, dtype=torch.long)
+    valid_counts[:n_real_tiles] = VSA_TILE_TOKENS
+    valid_counts[n_real_tiles - 1] = seq_len - (n_real_tiles - 1) * VSA_TILE_TOKENS
+    order = torch.arange(n_tiles, dtype=torch.long)
+    tile_ids = torch.where(order < n_real_tiles, order, torch.full_like(order, -1))
+
+    gather_index = torch.full((n_tiles * VSA_TILE_TOKENS,), -1, dtype=torch.long)
+    gather_index[:seq_len] = torch.arange(seq_len, dtype=torch.long)
+    # pad slots of the tail tile repeat its first row, like build_vsa_geometry; pad tiles read row 0
+    row_source = torch.zeros(n_tiles * VSA_TILE_TOKENS, dtype=torch.long)
+    row_source[: n_real_tiles * VSA_TILE_TOKENS] = (n_real_tiles - 1) * VSA_TILE_TOKENS
+    row_source[:seq_len] = torch.arange(seq_len, dtype=torch.long)
+
+    return MiniMaxH3VSAGeometry(
+        sp_factor=sp_factor,
+        placement="identity",
+        video_grid=tuple(video_grid),
+        seq_len=seq_len,
+        n_prefix_tiles=n_real_tiles,
+        n_video_tiles=0,
+        n_pad_tiles=n_pad_tiles,
+        valid_counts=valid_counts,
+        tile_ids=tile_ids,
+        is_3d=torch.zeros(n_tiles, dtype=torch.bool),
+        is_exempt=torch.zeros(n_tiles, dtype=torch.bool),
+        is_candidate=valid_counts > 0,
+        gather_index=gather_index,
+        untile_index=torch.arange(seq_len, dtype=torch.long),
+        row_source=row_source,
+    )
