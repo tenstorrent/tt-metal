@@ -2107,6 +2107,8 @@ class TestConfig:
                 signal_addrs = addrs
 
         completed = set()
+        if os.environ.get("LLK_SIM_LOG"):  # experiment
+            logger.info(f"SIMLOG wait for kernel completion t={time.time():.0f}")
         end_time = time.time() + timeout
         while time.time() < end_time:
             if signal_addrs is not None:
