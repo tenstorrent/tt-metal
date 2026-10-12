@@ -4,7 +4,7 @@
 """GLM-5.3 MoE router (HF Glm5NextTextTopkRouter: noaux_tc, sigmoid, one group, top-8 of 288) on a 2x2 mesh,
 replicated: every chip routes all S tokens of the replicated ffn_norm output, no CCL.
 
-    logits = x @ W^T                          fp32 weight [H, E], HiFi4 + fp32 acc, fp32 output
+    logits = x @ W^T                          x as given (bf16), fp32 weight [H, E], HiFi4 + fp32 acc, fp32 output
     scores = sigmoid(logits)                  fp32 (SFPU)
     choice = scores + (bias - mean(bias))     fp32 [1, E] broadcast; recentred at load (top-k is shift invariant)
     ti     = topk(choice, 8)                  fp32 keys, width 288 (9 tiles)
@@ -18,6 +18,8 @@ From models/demos/mimo_v2_6_d_p/tt/router.py:TtRouter (fp32 mode).
 """
 
 from __future__ import annotations
+
+import os
 
 import torch
 
@@ -66,7 +68,13 @@ class TtRouter:
         mc = ttnn.DRAM_MEMORY_CONFIG
         s = x.shape[-2]
         assert s <= self.max_rows and s % TILE == 0, f"router rows {s} (max {self.max_rows}, tile aligned)"
-        xf = x if x.dtype == ttnn.float32 else ttnn.typecast(x, ttnn.float32, memory_config=mc)
+        # a bf16 x goes straight into the fp32-weight matmul: bf16 -> fp32 is exact, so a typecast first changes
+        # nothing (bit-identical layer output) but costs 46 us and doubles the matmul's x read (router 230 -> 162 us
+        # at 640 rows per chip). GLM_ROUTER_FP32_X=1 restores the typecast.
+        if x.dtype == ttnn.float32 or os.environ.get("GLM_ROUTER_FP32_X") != "1":
+            xf = x
+        else:
+            xf = ttnn.typecast(x, ttnn.float32, memory_config=mc)
         logits = ttnn.linear(
             xf,
             self.w,
