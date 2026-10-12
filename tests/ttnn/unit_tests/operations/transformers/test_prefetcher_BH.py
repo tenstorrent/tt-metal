@@ -166,13 +166,12 @@ def create_matmul_program_configs(model_dims, prefetcher, mesh_device, weight_me
     Uses original K dimension and padded N dimension.
     """
     ring_size = prefetcher.ring_size
-    num_receiver_cores = prefetcher.num_receiver_cores
     num_dram_banks = len(prefetcher.dram_banks())
     assert (
         ring_size % num_dram_banks == 0
     ), f"ring_size {ring_size} must be divisible by num_dram_banks {num_dram_banks}"
 
-    def create_ring_config(M, K, N_padded, num_cores, num_global_cb_receivers, num_dram_banks, untilize_out=False):
+    def create_ring_config(M, K, N_padded, num_cores, num_dram_banks, untilize_out=False):
         """Create ring matmul config
         K: original weight K dimension
         N_padded: padded output N dimension
@@ -213,7 +212,6 @@ def create_matmul_program_configs(model_dims, prefetcher, mesh_device, weight_me
             mcast_in0=False,
             gather_in0=True,
             hop_cores=hop_core_range_set,
-            num_global_cb_receivers=num_global_cb_receivers,
             untilize_out=untilize_out,
         )
 
@@ -226,9 +224,7 @@ def create_matmul_program_configs(model_dims, prefetcher, mesh_device, weight_me
         k_original = meta["k_per_device"]  # Original K per device
         n_padded = meta["n_per_device"]  # Already padded N per device
         untilize = name == "qkv"
-        configs[name] = create_ring_config(
-            M, k_original, n_padded, ring_size, num_receiver_cores, num_dram_banks, untilize_out=untilize
-        )
+        configs[name] = create_ring_config(M, k_original, n_padded, ring_size, num_dram_banks, untilize_out=untilize)
         logger.info(f"Config {name}: K={k_original}, N_pad={n_padded}, ring_size={ring_size}")
 
     return configs
@@ -449,7 +445,7 @@ def run_prefetcher_all_matmuls(
                 memory_config=output_mem_configs["qkv"],
                 compute_kernel_config=compute_kernel_config,
                 dtype=ttnn.bfloat16,
-                global_cb=prefetcher.global_cb,
+                prefetcher_pipes=prefetcher.pipes,
                 sub_device_id=worker_sub_device_id,
             )
             layer_outputs["qkv"] = ttnn.to_memory_config(qkv_out, ttnn.DRAM_MEMORY_CONFIG)
@@ -463,7 +459,7 @@ def run_prefetcher_all_matmuls(
                 memory_config=output_mem_configs["wo"],
                 compute_kernel_config=compute_kernel_config,
                 dtype=ttnn.bfloat16,
-                global_cb=prefetcher.global_cb,
+                prefetcher_pipes=prefetcher.pipes,
                 sub_device_id=worker_sub_device_id,
             )
             layer_outputs["wo"] = ttnn.to_memory_config(wo_out, ttnn.DRAM_MEMORY_CONFIG)
@@ -477,7 +473,7 @@ def run_prefetcher_all_matmuls(
                 memory_config=output_mem_configs["ff1"],
                 compute_kernel_config=compute_kernel_config,
                 dtype=ttnn.bfloat16,
-                global_cb=prefetcher.global_cb,
+                prefetcher_pipes=prefetcher.pipes,
                 sub_device_id=worker_sub_device_id,
             )
             layer_outputs["ff1"] = ttnn.to_memory_config(ff1_out, ttnn.DRAM_MEMORY_CONFIG)
@@ -491,7 +487,7 @@ def run_prefetcher_all_matmuls(
                 memory_config=output_mem_configs["ff3"],
                 compute_kernel_config=compute_kernel_config,
                 dtype=ttnn.bfloat16,
-                global_cb=prefetcher.global_cb,
+                prefetcher_pipes=prefetcher.pipes,
                 sub_device_id=worker_sub_device_id,
             )
             layer_outputs["ff3"] = ttnn.to_memory_config(ff3_out, ttnn.DRAM_MEMORY_CONFIG)
@@ -505,7 +501,7 @@ def run_prefetcher_all_matmuls(
                 memory_config=output_mem_configs["ff2"],
                 compute_kernel_config=compute_kernel_config,
                 dtype=ttnn.bfloat16,
-                global_cb=prefetcher.global_cb,
+                prefetcher_pipes=prefetcher.pipes,
                 sub_device_id=worker_sub_device_id,
             )
             layer_outputs["ff2"] = ttnn.to_memory_config(ff2_out, ttnn.DRAM_MEMORY_CONFIG)
