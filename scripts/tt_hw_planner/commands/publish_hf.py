@@ -572,6 +572,84 @@ def _tt_run_section(repo_id: str | None, base_weights: str | None = None) -> str
     )
 
 
+def _tt_accuracy_section(tt_results: dict) -> str:
+    """Render the on-TT inference accuracy table from tt_eval.json. Shows a GPU reference column when
+    the eval recorded one (key 'gpu'), else the TT-measured numbers only. Empty when no eval ran."""
+    if not tt_results:
+        return ""
+    has_gpu = any(isinstance(v, dict) and v.get("gpu") is not None for v in tt_results.values())
+    out = [
+        "## Inference accuracy -- measured on Tenstorrent",
+        "",
+        "Bounded inference benchmarks run through the live `tt serve` endpoint on Tenstorrent (greedy "
+        "decoding; zero-shot / direct answer, step-by-step reasoning for GSM8K). A confirmation sample "
+        "over small N -- not the base-model authors' full eval-framework (few-shot / chain-of-thought) "
+        "-- so treat these as a sanity check that the model's inference quality holds on device, not a "
+        "leaderboard reproduction.",
+        "",
+    ]
+    if has_gpu:
+        out += ["| Benchmark | GPU (reference) | Tenstorrent (measured) | Sample |", "| --- | --- | --- | --- |"]
+        for k, v in tt_results.items():
+            if isinstance(v, dict):
+                out.append(f"| {k} | {v.get('gpu', '-')} | {v.get('tt', '-')} | n={v.get('n', '?')} |")
+    else:
+        out += ["| Benchmark | Tenstorrent (measured) | Sample |", "| --- | --- | --- |"]
+        for k, v in tt_results.items():
+            if isinstance(v, dict):
+                out.append(f"| {k} | {v.get('tt', '-')} | n={v.get('n', '?')} |")
+    out.append("")
+    return "\n".join(out) + "\n"
+
+
+def _maybe_run_container_eval(args, slug, demo_dir) -> None:
+    """After a container publish, serve the model and run a bounded on-TT inference eval, writing
+    tt_eval.json into the demo dir so the mirrored card shows the GPU-vs-TT comparison automatically.
+    Default on; --no-eval to skip. Fully best-effort: any serving/eval failure is caught so it can
+    never break publishing."""
+    import subprocess as _sp
+    import time as _t
+
+    if getattr(args, "dry_run", False) or not demo_dir:
+        return
+    try:
+        from .tt_infer_eval import run_inference_eval
+    except Exception:  # noqa: BLE001
+        return
+    repo = args.repo
+    ttm = getattr(args, "tt_model_bin", None) or "tt-model"
+    cname = "tt-model-%s-default" % slug
+    model_id = getattr(args, "weights", None) or slug
+    try:
+        print("  [publish-hf] on-TT eval: serving %s to measure inference accuracy (bounded)..." % repo)
+        _sp.run([ttm, "serve", repo, "--refresh", "--detach"], check=False, timeout=2400)
+        ready = False
+        for _ in range(70):
+            lg = _sp.run(["docker", "logs", cname], capture_output=True, text=True)
+            if "Application startup complete" in (lg.stdout + lg.stderr):
+                ready = True
+                break
+            st = _sp.run(["docker", "ps", "-a", "--filter", "name=" + cname, "--format", "{{.Status}}"],
+                         capture_output=True, text=True).stdout
+            if "Exited" in st:
+                break
+            _t.sleep(30)
+        if not ready:
+            print("  [publish-hf] on-TT eval: server did not become ready; skipping")
+            return
+        out_path = Path(demo_dir) / "tt_eval.json"
+        res = run_inference_eval("http://localhost:20000/v1/chat/completions", model_id, out_path)
+        if res:
+            print("  [publish-hf] on-TT eval done: " + ", ".join(f"{k}={v['tt']}(n={v['n']})" for k, v in res.items()))
+    except Exception as exc:  # noqa: BLE001
+        print("  [publish-hf] on-TT eval skipped: %s" % exc)
+    finally:
+        try:
+            _sp.run(["docker", "rm", "-f", cname], capture_output=True)
+        except Exception:  # noqa: BLE001
+            pass
+
+
 def _compose_mirrored_card(
     state: dict, slug: str, base_weights: str | None, commit: str | None, token: str | None, demo_dir=None,
     repo_id: str | None = None,
@@ -606,6 +684,7 @@ def _compose_mirrored_card(
         + f"\n\n# {base_weights} — on Tenstorrent\n\n{intro}\n\n"
         + _tt_validated_block(state, hw, commit)
         + "\n" + _tt_run_section(repo_id, base_weights)
+        + _tt_accuracy_section(_load_tt_eval(demo_dir) if demo_dir else {})
         + "\n## Base model (upstream) — reference\n\n"
         + body
         + "\n"
@@ -2293,6 +2372,7 @@ def cmd_publish_hf(args) -> int:
     if getattr(args, "container", False):
         rc = _run_container(args, state, slug, demo_dir, commit)
         if rc == 0:
+            _maybe_run_container_eval(args, slug, demo_dir)
             _maybe_mirror_container_card(args, slug, state, base_weights, commit, demo_dir)
             _maybe_autocommit(args, demo_dir)
         return rc
