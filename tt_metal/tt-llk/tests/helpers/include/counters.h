@@ -782,7 +782,17 @@ __attribute__((always_inline)) inline void read_init_end(std::uint32_t (&ts)[2])
     ts[1] = hi;
 }
 
-template <PerfRunType RUN_TYPE, typename F>
+// LLK_INIT_ZONE_END (perf.h): INIT's end in a block that goes on to prepare the loop's data
+inline std::uint32_t init_zone_end_ts[2] = {0, 0};
+
+__attribute__((always_inline)) inline void init_zone_end()
+{
+    ckernel::tensix_sync(); // the thread's own init done, as PROFILER_SYNC ends every other INIT
+    read_init_end(init_zone_end_ts);
+}
+
+// ZONE_END: the body ended INIT's zone at LLK_INIT_ZONE_END (LLK_INIT_PREP_END)
+template <PerfRunType RUN_TYPE, typename F, bool ZONE_END = false>
 __attribute__((noipa, section(".llk_init_tramp"))) void init_zone(const F& body)
 {
 #if defined(LLK_TRISC_MATH)
@@ -806,8 +816,8 @@ __attribute__((noipa, section(".llk_init_tramp"))) void init_zone(const F& body)
             : [l] "=&r"(end_lo), [h] "=&r"(end_hi)
             : [c] "i"(RISCV_DEBUG_REG_WALL_CLOCK_L)
             : "t0", "memory");
-        end_lo = init_end_ts[0];
-        end_hi = init_end_ts[1];
+        end_lo = ZONE_END ? init_zone_end_ts[0] : init_end_ts[0];
+        end_hi = ZONE_END ? init_zone_end_ts[1] : init_end_ts[1];
         if (opened)
         {
             std::uint32_t id; // fixed size lui + addi, after the end read, whatever the id's value
