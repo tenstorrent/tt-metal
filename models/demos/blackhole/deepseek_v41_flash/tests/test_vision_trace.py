@@ -59,7 +59,13 @@ def _body(md):
     )
     vision.warmup()
     rep = int(os.environ.get("VIS_REPEAT", "5"))
-    sizes = {"1610 patches": (640, 480), "3364 patches": (800, 800), "7200 patches": (1400, 1000)}
+    sizes = {
+        "900 patches": (440, 440),
+        "1610 patches": (640, 480),
+        "2500 patches": (700, 700),
+        "3364 patches": (800, 800),
+        "7200 patches": (1400, 1000),
+    }
     pool = {}
     for name, (w, h) in sizes.items():
         patches, n_h, n_w, _, _ = VP.patchify_pil(_image(w, h, 1), va)
