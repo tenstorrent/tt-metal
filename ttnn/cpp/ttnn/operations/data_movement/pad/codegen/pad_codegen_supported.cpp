@@ -300,10 +300,8 @@ bool tile_pad_adds_no_tiles(const Tensor& input, const ttnn::prim::PadCodegenPar
         return false;
     }
     const auto& s = input.logical_shape();
-    const auto tile = input.tensor_spec().tile();
-    return attrs.N_out == s[0] && attrs.C_out == s[1] &&
-           tt::div_up(attrs.H_out, tile.get_height()) == tt::div_up(s[2], tile.get_height()) &&
-           tt::div_up(attrs.W_out, tile.get_width()) == tt::div_up(s[3], tile.get_width());
+    const auto& padded = input.padded_shape();
+    return attrs.N_out == s[0] && attrs.C_out == s[1] && attrs.H_out <= padded[2] && attrs.W_out <= padded[3];
 }
 
 bool is_demoted(const Tensor& input, const ttnn::prim::PadCodegenParams& attrs) {
