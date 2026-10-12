@@ -5,6 +5,7 @@
 #include "narrow.hpp"
 #include "ttnn/operations/data_movement/common/common.hpp"
 #include <tt-metalium/experimental/distributed_tensor/distributed_tensor_apis.hpp>
+#include <tt_stl/fmt.hpp>
 
 namespace ttnn {
 

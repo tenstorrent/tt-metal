@@ -379,7 +379,7 @@ D2HStreamService::D2HStreamService(const std::shared_ptr<distributed::MeshDevice
         }
     }
 
-    auto& svc = tt::tt_metal::internal::service_core_manager();
+    auto& svc = tt::tt_metal::internal::service_core_manager(*mesh_device_);
     for (const auto& coord : coords) {
         auto* d = mesh_device_->get_device(coord);
         auto claimable = svc.get_claimable_cores(d);
@@ -639,15 +639,13 @@ D2HStreamService::~D2HStreamService() {
             distributed::Finish(mesh_device_->mesh_command_queue());
         }
 
-        auto& svc = tt::tt_metal::internal::service_core_manager();
         if (device_live) {
+            auto& svc = tt::tt_metal::internal::service_core_manager(*mesh_device_);
             for (const auto& [coord, core] : service_cores_) {
                 auto* d = mesh_device_->get_device(coord);
                 svc.wait_done(d, core);
             }
-        }
 
-        if (device_live) {
             for (const auto& [coord, addr] : termination_addrs_) {
                 auto* d = mesh_device_->get_device(coord);
                 svc.deallocate_l1(d, service_cores_.at(coord), addr);
