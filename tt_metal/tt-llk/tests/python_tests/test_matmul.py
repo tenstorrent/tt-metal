@@ -393,3 +393,24 @@ def test_matmul_full_sync(math_fidelity, formats, dims):
     assert passed_test(
         golden_tensor, res_tensor, formats.output_format
     ), "Assert against golden failed"
+
+
+# The 8-bit stream (Blackhole, full sync with a 16-bit DEST) on every block shape.
+STREAM_NARROW_COMBINATIONS = generate_format_aware_matmul_combinations(
+    [
+        fmt
+        for fmt in MATMUL_FORMATS
+        if fmt.input_format == DataFormat.Bfp8_b and not is_dest_acc_needed(fmt)
+    ],
+    [DestAccumulation.No],
+)
+
+
+@skip_for_wormhole
+@pytest.mark.nightly
+@parametrize(
+    math_fidelity=[MathFidelity.LoFi, MathFidelity.HiFi2],
+    format_dest_acc_and_dims=STREAM_NARROW_COMBINATIONS,
+)
+def test_matmul_stream_narrow(math_fidelity, format_dest_acc_and_dims):
+    test_matmul(math_fidelity, format_dest_acc_and_dims, dest_sync=DestSync.Full)
