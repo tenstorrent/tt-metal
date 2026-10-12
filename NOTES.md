@@ -167,3 +167,14 @@ Next (tunnel up): `ssh exabox-login 'df -h /data; curl -sI https://huggingface.c
 - Spec tt-project/t409/ab10vsa.txt (run409b.sh ab10 vsa0.9, T409_PY_TIMEOUT=560, -t 600 unmeasured). Lint ok.
   chain449a (T449_OUT=out_ab10-vsa0.9) detached from run 1681 waits for #421's job 975, then submits.
   Result: /var/tmp/fasth3/t409/out_ab10-vsa0.9/run.log on blx01 (denoise breakdown, timing table, latents, mp4).
+
+## t449 run 1682 (2026-10-12 08:20 PDT)
+- chain449b submitted blx01 job 977 (15:11Z): FAILED, not a drop. Last lines: `RuntimeError: [t286] warm deadline 400 s
+  passed in Warming audio decode lengths`, process wall 420 s, T409_EXIT=1. Cause: cold JIT cache for the t409/b tree
+  (JIT cache stats 96/1889 hits, 5.1%; #408's out_t10 had 78.6%). Audio decode warm took ~60 s/length vs 4 s in #408;
+  only 6 of 12 lengths done. Prompt-encoder and denoise warm (incl. VSA kernels) never started. Kernels compiled so far
+  stay in TT_METAL_CACHE, so reruns get further (the t286 plugin is built for this).
+- ab10vsa.txt now ID t449-ab10-vsa0.9-r2 with T286_WARM_DEADLINE_S=530 (compiles more per job) and T286_WARM_LATE_S=400
+  (fails cleanly if warmup ends too late to generate). Submitted directly: blx01 job 979 (15:20Z).
+- Next: read /var/tmp/fasth3/t409/out_ab10-vsa0.9/run.log on blx01. PASS file there = arm done (compare denoise
+  ms/step with #408 out_t10: 3110 ms/step dense). Warm-deadline/late failure again = resubmit the same spec with a new ID.
