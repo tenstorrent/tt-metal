@@ -21,7 +21,6 @@ namespace ckernel::sfpu::bf16 {
 
 constexpr float signed_abs_fp32_from_bits(std::uint32_t bits) { return __builtin_bit_cast(float, bits); }
 
-// A zero stays +0, which the constant register holds: the BF16 narrowing drops a zero's sign.
 constexpr float signed_abs_negated(std::uint32_t bits) {
     return (bits & 0x7fffffffu) == 0u ? 0.0f : -signed_abs_fp32_from_bits(bits);
 }
@@ -61,6 +60,9 @@ sfpi_inline void signed_abs_horner_pair(sfpi::vFloat& r0, sfpi::vFloat& r1, sfpi
 // result for every other input.
 template <typename Config>
 inline void init_signed_abs_nan() {
+    // The paired store walks dest through ADDR_MOD_6, which advances by the two rows
+    // the loop just wrote, so the loop body needs no separate increment.
+    addr_mod_t{.srca = {.incr = 0}, .srcb = {.incr = 0}, .dest = {.incr = 4}}.set(ADDR_MOD_6);
     // Horner runs on -P. BH SFPMAD returns +NaN for a NaN operand, which survives
     // the max that bounds -P below; the min that bounds P would drop it.
     sfpi::vConstFloatPrgm0 = signed_abs_negated(Config::kCoefficientBits[Config::kDegree]);
@@ -72,9 +74,11 @@ template <typename Config>
 sfpi_inline sfpi::vFloat signed_abs_nan_finish(sfpi::vFloat x, sfpi::vFloat negated) {
     sfpi::vFloat bound = -signed_abs_fp32_from_bits(Config::kClampMaxBits);
     sfpi::vFloat bounded = sfpi::min_max(bound, negated).second;
-    // bounded <= -0 except for the NaN, so the AND keeps x's sign or clears it.
-    sfpi::vFloat sign = sfpi::as<sfpi::vFloat>(sfpi::as<sfpi::vInt>(x) & sfpi::as<sfpi::vInt>(bounded));
-    return sfpi::convert<sfpi::vFloat16b>(sfpi::copysgn(bounded, sign), sfpi::RoundMode::Nearest);
+    sfpi::vFloat result = sfpi::convert<sfpi::vFloat16b>(bounded, sfpi::RoundMode::Nearest);
+    // Saturation has already turned infinities into a finite bound, so this
+    // MAD is an identity on finite values and produces NaN only for NaN.
+    result = result * 0.0f + result;
+    return sfpi::copysgn(result, x);
 }
 
 template <typename Config, int Iterations = 8>
@@ -90,8 +94,7 @@ inline void calculate_signed_abs_nan() {
         r0 = signed_abs_nan_finish<Config>(x0, r0);
         r1 = signed_abs_nan_finish<Config>(x1, r1);
         sfpi::dst_reg[0] = r0;
-        sfpi::dst_reg[1] = r1;
-        sfpi::dst_reg += 2;
+        sfpi::dst_reg[1].mode(ADDR_MOD_6) = r1;
     }
 }
 
