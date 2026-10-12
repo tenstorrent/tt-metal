@@ -48,13 +48,16 @@ def test_perf_pack_block_contiguous(perf_report, tile_dims, num_tiles, block):
         "sources/pack_block_contiguous_perf.cpp",
         formats,
         run_types=[PerfRunType.L1_TO_L1, PerfRunType.PACK_ISOLATE],
-        templates=[PACK_BLOCK_CONTIGUOUS(block)],
-        runtimes=[
-            DEST_INDEX(0),
-            TILE_COUNT(num_tiles),
+        # Compile-time tile shape, as the JIT gives production kernels.
+        templates=[
+            PACK_BLOCK_CONTIGUOUS(block),
             NUM_FACES(num_faces),
             TEST_FACE_DIMS(face_r_dim),
             IN_TILE_DIMS(tile_dims[0], tile_dims[1]),
+        ],
+        runtimes=[
+            DEST_INDEX(0),
+            TILE_COUNT(num_tiles),
             L1_ACC(L1Accumulation.No),
             NUM_BLOCKS(1),
             NUM_TILES_IN_BLOCK(num_tiles),
