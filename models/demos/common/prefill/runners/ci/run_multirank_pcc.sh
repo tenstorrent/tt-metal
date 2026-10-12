@@ -163,31 +163,12 @@ MPIRUN=$(command -v mpirun-ulfm || command -v mpirun)
 
 RESOLVED_HOSTS=$(awk 'NF && $1 !~ /^#/ {printf "%s,", $1}' "${TTRUN_DIR}/hostfile" | sed 's/,$//')
 
-# Throughput tracks the galaxies' power budget, so the baseline is picked per power class. A host
-# missing from the table counts as the lowest class: a pipeline runs at its slowest galaxy's pace.
+# Throughput tracks the galaxies' power budget, so the baseline is picked per power class.
 BASELINE_MARGIN=""
 if [ -z "${EXPECTED_TPS}" ] && [ -f "${PERF_BASELINES}" ]; then
   read -r EXPECTED_TPS EXPECTED_PROBE BASELINE_MARGIN < <(
-    python3 - "${PERF_BASELINES}" "${MODEL}" "${CONFIG}" "${RESOLVED_HOSTS}" <<'BASEPY'
-import json, sys
-
-path, model, config, hosts = sys.argv[1:]
-table = json.load(open(path))
-entry = table["baselines"].get(model, {}).get(config)
-if entry is None:
-    sys.exit(0)
-power = {host: cls for cls, members in table["power"].items() for host in members}
-names = [host.split(".")[0] for host in hosts.split(",") if host]
-unknown = [host for host in names if host not in power]
-if unknown:
-    print(f"TPS baseline WARN: {unknown} not in {path}; treating them as 8kw", file=sys.stderr)
-cls = "14kw" if names and all(power.get(host) == "14kw" for host in names) else "8kw"
-if cls not in entry:
-    print(f"TPS baseline: none for {model} {config} on {cls}", file=sys.stderr)
-    sys.exit(0)
-print(f"TPS baseline: {model} {config} on {cls}: {entry[cls]} tok/s {entry['probe']}", file=sys.stderr)
-print(entry[cls], entry["probe"], table["margin"])
-BASEPY
+    python3 "${TT_METAL_HOME}/models/demos/common/prefill/runners/ci/perf_baseline.py" \
+      "${PERF_BASELINES}" "${MODEL}" "${CONFIG}" "${RESOLVED_HOSTS}"
   ) || true
 fi
 PERF_MARGIN="${PREFILL_PERF_MARGIN:-${BASELINE_MARGIN:-0.15}}"

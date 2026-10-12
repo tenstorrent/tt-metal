@@ -173,10 +173,11 @@ class MultirankPccHarnessTests(unittest.TestCase):
             (golden / "kv_cache" / f"layer_{layer}.safetensors").touch()
         harness = metal / "run_multirank_pcc.sh"
         shutil.copyfile(HARNESS, harness)
+        ci_dir = metal / "models/demos/common/prefill/runners/ci"
+        ci_dir.mkdir(parents=True)
+        shutil.copyfile(HARNESS.with_name("perf_baseline.py"), ci_dir / "perf_baseline.py")
         if baselines:
-            table = metal / "models/demos/common/prefill/runners/ci/perf_baselines.json"
-            table.parent.mkdir(parents=True)
-            shutil.copyfile(BASELINES, table)
+            shutil.copyfile(BASELINES, ci_dir / "perf_baselines.json")
         ttrun_dir = root / "ttop"
         ttrun_dir.mkdir()
         if hosts is None:
