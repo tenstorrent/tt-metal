@@ -1,0 +1,8 @@
+tt_metal/hw/inc/api/compute/eltwise_unary/addcdiv.h
+tt_metal/hw/inc/api/compute/eltwise_unary/addcmul.h
+tt_metal/hw/inc/api/compute/eltwise_unary/lerp.h
+tt_metal/hw/inc/api/compute/eltwise_unary/mac.h
+tt_metal/hw/inc/api/compute/eltwise_unary/where.h
+tt_metal/tt-llk/tests/helpers/include/sfpu_operations.h
+tt_metal/tt-llk/tests/python_tests/perf_sfpu_ternary.py
+tt_metal/tt-llk/tests/sources/sfpu_ternary_test.cpp
