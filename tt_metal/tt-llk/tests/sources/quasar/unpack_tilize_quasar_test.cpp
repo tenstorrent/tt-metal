@@ -23,6 +23,10 @@
 #include "llk_unpack_tilize.h"
 #include "params.h"
 
+// The SrcA tilize family takes UNP_A/UNP_B only; the unpack_to_dest variants (UNPACKER_ENGINE_SEL == UNP_DEST) run the
+// to-dest family, and their SrcA branches below are discarded but still checked, so give them a legal engine.
+constexpr std::uint32_t SRC_SEL = (UNPACKER_ENGINE_SEL == p_unpacr::UNP_DEST) ? p_unpacr::UNP_A : UNPACKER_ENGINE_SEL;
+
 void run_kernel(RUNTIME_PARAMETERS params)
 {
 #if defined(RUNTIME_FORMATS) && !defined(SPEED_OF_LIGHT)
@@ -96,11 +100,11 @@ void run_kernel(RUNTIME_PARAMETERS params)
         }
         else if (tensor_shape.face_r_dim < FACE_R_DIM)
         {
-            _llk_unpack_tilize_strided_init_small_faces_<UNPACKER_ENGINE_SEL, is_fp32_dest_acc_en>(bfd_unpack, tensor_shape, FULL_CT_DIM, BLOCK_CT_DIM);
+            _llk_unpack_tilize_strided_init_small_faces_<SRC_SEL, is_fp32_dest_acc_en>(bfd_unpack, tensor_shape, FULL_CT_DIM, BLOCK_CT_DIM);
         }
         else
         {
-            _llk_unpack_tilize_init_<UNPACKER_ENGINE_SEL, is_fp32_dest_acc_en>(bfd_unpack, FULL_CT_DIM, BLOCK_CT_DIM, tensor_shape);
+            _llk_unpack_tilize_init_<SRC_SEL, is_fp32_dest_acc_en>(bfd_unpack, FULL_CT_DIM, BLOCK_CT_DIM, tensor_shape);
         }
         PROFILER_SYNC();
     }
@@ -155,15 +159,15 @@ void run_kernel(RUNTIME_PARAMETERS params)
                 {
                     for (std::uint32_t y = 0; y < BLOCK_RT_DIM; y++)
                     {
-                        _llk_unpack_tilize_strided_small_faces_<UNPACKER_ENGINE_SEL>(tensor_shape, y * y_stride_external /*l1_tile_idx*/);
+                        _llk_unpack_tilize_strided_small_faces_<SRC_SEL>(tensor_shape, y * y_stride_external /*l1_tile_idx*/);
                     }
                 }
                 else
                 {
                     for (std::uint32_t y = 0; y < BLOCK_RT_DIM; y++)
                     {
-                        _llk_unpack_tilize_set_src_offset_<UNPACKER_ENGINE_SEL>(tensor_shape, y * y_stride_external);
-                        _llk_unpack_tilize_<UNPACKER_ENGINE_SEL>(0 /*l1_tile_idx*/);
+                        _llk_unpack_tilize_set_src_offset_<SRC_SEL>(tensor_shape, y * y_stride_external);
+                        _llk_unpack_tilize_<SRC_SEL>(0 /*l1_tile_idx*/);
                     }
                 }
             }

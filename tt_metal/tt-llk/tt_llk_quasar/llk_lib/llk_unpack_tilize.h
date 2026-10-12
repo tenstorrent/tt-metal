@@ -44,9 +44,10 @@ inline void _llk_unpack_tilize_set_src_offset_(const TensorShape& tensor_shape, 
 /**
  * @brief Builds the MOP for unpack tilize of full 32x32 tiles using the fused HW instruction.
  *
- * Unpacks and tilizes block_ct_dim tiles per invocation; works for SrcA/B and DEST.
+ * Unpacks and tilizes block_ct_dim tiles per invocation into SrcA or SrcB. For DEST see
+ * @ref _llk_unpack_tilize_to_dest_mop_config_.
  *
- * @tparam UNP_SEL: Selects which unpacker resource to use, values = <p_unpacr::UNP_A/UNP_B/UNP_DEST>
+ * @tparam UNP_SEL: Selects which unpacker resource to use, values = <p_unpacr::UNP_A/UNP_B>
  * @tparam EN_32BIT_DEST: Enables using the math destination register in 32-bit mode, values = <true/false>
  * @param buf_desc_id: The buffer descriptor ID where the buffer information is
  *        stored in the buffer descriptor table, values = 0 - 16
@@ -55,24 +56,18 @@ inline void _llk_unpack_tilize_set_src_offset_(const TensorShape& tensor_shape, 
 template <std::uint32_t UNP_SEL, bool EN_32BIT_DEST>
 inline void _llk_unpack_tilize_mop_config_(const std::uint32_t buf_desc_id, const std::uint32_t block_ct_dim)
 {
-    static_assert(
-        (UNP_SEL == p_unpacr::UNP_A) || (UNP_SEL == p_unpacr::UNP_B) || (UNP_SEL == p_unpacr::UNP_DEST),
-        "UNP_SEL can only be set to p_unpacr::UNP_A/UNP_B/UNP_DEST");
+    static_assert((UNP_SEL == p_unpacr::UNP_A) || (UNP_SEL == p_unpacr::UNP_B), "UNP_SEL can only be set to p_unpacr::UNP_A/UNP_B");
 
     constexpr std::uint32_t MOP_OUTER_LOOP = 1;
     const std::uint32_t MOP_INNER_LOOP     = block_ct_dim;
 
-    // For UNP_DEST, don't set dvalid on individual tiles, the section_done signal handles it.
-    // Setting dvalid per tile would cause the packer to start (and ZEROACC) before all tiles are in DEST.
-    constexpr std::uint32_t SET_DVALID = (UNP_SEL == p_unpacr::UNP_DEST) ? 0 : 1;
-    std::uint32_t unpack_tile_instrn   = TT_OP_UNPACR_TILIZE(0, 0, 0 /*dst Z increment*/, 1 /*src Z increment*/, UNP_SEL, buf_desc_id, SET_DVALID);
+    const std::uint32_t unpack_tile_instrn = TT_OP_UNPACR_TILIZE(0, 0, 0 /*dst Z increment*/, 1 /*src Z increment*/, UNP_SEL, buf_desc_id, 1 /*SetDatValid*/);
 
-    std::uint32_t reset_src_reg_instrn =
-        TT_OP_UNPACR_TILIZE(0, 1 /*Cntr_Reset_Mask*/, 0 /*dst Z increment*/, 0 /*src Z increment*/, UNP_SEL, buf_desc_id, SET_DVALID);
+    const std::uint32_t reset_src_reg_instrn =
+        TT_OP_UNPACR_TILIZE(0, 1 /*Cntr_Reset_Mask*/, 0 /*dst Z increment*/, 0 /*src Z increment*/, UNP_SEL, buf_desc_id, 1 /*SetDatValid*/);
 
-    // This path is exclusively for FP32 datacopy via math thread (ELWADD on SrcA+SrcB),
-    // not for UNP_DEST where data goes directly to DEST without involving the math thread.
-    if constexpr (EN_32BIT_DEST && (UNP_SEL == p_unpacr::UNP_A || UNP_SEL == p_unpacr::UNP_B))
+    // FP32 datacopy goes through the math thread as ELWADD on SrcA+SrcB, which needs dvalid from both.
+    if constexpr (EN_32BIT_DEST)
     {
         // FP32 datacopy uses ELWADD, which requires dvalid from both SrcA and SrcB
         // Set dvalid for the opposite unpacker (if using UNP_A, set dvalid for UNP_B and vice versa)
@@ -97,7 +92,8 @@ inline void _llk_unpack_tilize_mop_config_(const std::uint32_t buf_desc_id, cons
  * Packs the UNPACK_TILIZE stride fields into a single struct for a direct 32-bit cfg write, then
  * programs the MOP.
  *
- * @tparam UNP_SEL: Selects which unpacker resource to use, values = <p_unpacr::UNP_A/UNP_B/UNP_DEST>
+ * @tparam UNP_SEL: Selects which unpacker resource to use, values = <p_unpacr::UNP_A/UNP_B>. For DEST see
+ *         @ref _llk_unpack_tilize_to_dest_init_.
  * @tparam EN_32BIT_DEST: Enables using the math destination register in 32-bit mode, values = <true/false>
  * @param buf_desc_id: The buffer descriptor ID where the buffer information is
  *        stored in the buffer descriptor table, values = 0 - 16
@@ -120,7 +116,7 @@ inline void _llk_unpack_tilize_init_(
     unpk_cfg.f.stride_val_source = 0;
     unpk_cfg.f.stride_offset_0   = full_ct_dim * tensor_shape.num_faces_c_dim; // how much to stride to go to next row within the same tile
 
-    if constexpr (UNP_SEL == p_unpacr::UNP_A || UNP_SEL == p_unpacr::UNP_DEST)
+    if constexpr (UNP_SEL == p_unpacr::UNP_A)
     {
         cfg_rmw(THCON_UNPACKER0_REG0_TRANSPOSE_RMW, 0); // Disable transpose
         cfg_rmw(THCON_UNPACKER1_REG0_TRANSPOSE_RMW, 0);
@@ -138,9 +134,9 @@ inline void _llk_unpack_tilize_init_(
 }
 
 /**
- * @brief Unpacks and tilizes a single full 32x32 tile; works for UNP_A, UNP_B, UNP_DEST.
+ * @brief Unpacks and tilizes a single full 32x32 tile into SrcA or SrcB. For DEST see @ref _llk_unpack_tilize_to_dest_block_.
  *
- * @tparam UNP_SEL: Selects which unpacker resource to use, values = <p_unpacr::UNP_A/UNP_B/UNP_DEST>
+ * @tparam UNP_SEL: Selects which unpacker resource to use, values = <p_unpacr::UNP_A/UNP_B>
  * @param l1_tile_idx: Within-row column index into the L1 buffer. The L1 base is carried by
  *        @ref _llk_unpack_tilize_set_src_offset_, which the caller must set for the tile row.
  * @note Call @ref _llk_unpack_tilize_init_ with matching template args before this function.
@@ -154,16 +150,14 @@ inline void _llk_unpack_tilize_(const std::uint32_t l1_tile_idx)
 
     // Reset Dest counters for Unpacker to 0
     // Set Source counter to L1 base + offset
-    // UNP_DEST shares UNP_A's hardware path, so use UNP_A for counter instructions
-    constexpr std::uint32_t CNT_SEL = (UNP_SEL == p_unpacr::UNP_DEST) ? p_unpacr::UNP_A : UNP_SEL;
 
     // The value field of the TT_SET_SRC_TILE_FACE_ROW_IDX instruction is 18 bits wide, but only values up to 11 bits are actually
     // passed on when using FACE_SEL; anything larger is truncated and aliases back to an earlier tile.
     LLK_ASSERT(l1_tile_idx < (1u << 11), "l1_tile_idx exceeds the 11 bits the src face index can carry");
 
-    TT_SET_SRC_TILE_FACE_ROW_IDX(p_set_inc_sel::FACE_SEL, CNT_SEL, l1_tile_idx);
-    TTI_SET_DST_TILE_FACE_ROW_IDX(p_set_inc_sel::TILE_SEL, CNT_SEL, 0);
-    TTI_SET_DST_TILE_FACE_ROW_IDX(p_set_inc_sel::FACE_SEL, CNT_SEL, 0); // Clear face counter (block path leaves it non-zero)
+    TT_SET_SRC_TILE_FACE_ROW_IDX(p_set_inc_sel::FACE_SEL, UNP_SEL, l1_tile_idx);
+    TTI_SET_DST_TILE_FACE_ROW_IDX(p_set_inc_sel::TILE_SEL, UNP_SEL, 0);
+    TTI_SET_DST_TILE_FACE_ROW_IDX(p_set_inc_sel::FACE_SEL, UNP_SEL, 0); // Clear face counter (the to-dest path leaves it non-zero)
 
     // Runs MOP
     ckernel::ckernel_template::run_bank0_sw_cntl(instrn_buffer);
