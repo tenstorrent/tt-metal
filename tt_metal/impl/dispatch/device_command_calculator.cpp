@@ -7,6 +7,7 @@
 #include <algorithm>
 
 #include "dispatch/kernels/cq_commands.hpp"
+#include "dispatch_settings.hpp"
 #include "hal.hpp"
 #include "impl/context/metal_context.hpp"
 
@@ -33,6 +34,19 @@ uint32_t DeviceCommandCalculator::get_max_write_packed_sub_cmds(
     uint32_t max_prefetch_num_packed_cmds =
         no_stride ? (max_prefetch_size - tt::align(data_size * sizeof(uint32_t), l1_alignment)) / sub_cmd_sizeB
                   : max_prefetch_size / (tt::align(data_size * sizeof(uint32_t), l1_alignment) + sub_cmd_sizeB);
+    if (no_stride) {
+        // The single data copy is read in place for every sub cmd, so the command up to the end of it must fit in
+        // one dispatch page (see get_write_packed_first_data_end).
+        constexpr uint32_t dispatch_page_size = 1u << DispatchSettings::DISPATCH_BUFFER_LOG_PAGE_SIZE;
+        const uint32_t data_sizeB = data_size * sizeof(uint32_t);
+        const uint32_t header_and_sub_cmds_limit =
+            data_sizeB <= dispatch_page_size ? (dispatch_page_size - data_sizeB) & ~(l1_alignment - 1) : 0;
+        const uint32_t max_page_num_packed_cmds =
+            header_and_sub_cmds_limit >= sizeof(CQDispatchCmd)
+                ? (header_and_sub_cmds_limit - sizeof(CQDispatchCmd)) / sub_cmd_sizeB
+                : 0;
+        max_prefetch_num_packed_cmds = std::min(max_prefetch_num_packed_cmds, max_page_num_packed_cmds);
+    }
 
     uint32_t packed_write_max_multicast_sub_cmds =
         get_packed_write_max_multicast_sub_cmds(packed_write_max_unicast_sub_cmds);

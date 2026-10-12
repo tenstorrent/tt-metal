@@ -1133,6 +1133,11 @@ BatchedTransfers assemble_runtime_args_commands(
                     constants.max_prefetch_command_size,
                     constants.packed_write_max_unicast_sub_cmds,
                     true);
+                TT_FATAL(
+                    max_packed_cmds != 0,
+                    "Common runtime args of {} B for kernel {} do not fit in one dispatch page",
+                    common_size,
+                    kernel->name());
                 command_count += div_up(num_sub_cmds, max_packed_cmds);
             }
         }
