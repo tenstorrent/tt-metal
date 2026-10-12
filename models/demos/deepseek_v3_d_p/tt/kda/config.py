@@ -30,6 +30,16 @@ KDA_PREPARATION_L1_BYTES_PER_CORE = 320 * 1024
 # The decay gate stays in interleaved L1 from its projection until chunk preparation has read it when its share of
 # each worker core fits this budget (32 KiB for Kimi-K3 on Galaxy SP8xTP4); larger geometries keep it in DRAM.
 KDA_DECAY_L1_BYTES_PER_CORE = 48 * 1024
+# The fused input projection stays in interleaved L1 until the convolution has read it when each core's share fits
+# this budget (133 KiB for Kimi-K3 on Galaxy SP8xTP4); larger geometries keep it in DRAM.
+KDA_PROJECTION_L1_BYTES_PER_CORE = 144 * 1024
+# The convolution's Q, K and V stay in interleaved L1 until chunk preparation reads them when each core's share fits
+# this budget (98 KiB for Kimi-K3 on Galaxy SP8xTP4); larger geometries keep them in DRAM.
+KDA_QKV_L1_BYTES_PER_CORE = 112 * 1024
+# The QKV convolution's fabric history exchange (qkv_causal_conv1d_silu_layout.hpp): a persistent buffer of
+# predecessor, carry, outgoing and end rows, three rows each, and its entry, predecessor and carry semaphores.
+KDA_HISTORY_EXCHANGE_ROWS = 12
+KDA_HISTORY_EXCHANGE_SEMAPHORES = 3
 KDA_LOCAL_PREFIX_MEMORY_CONFIG = ttnn.L1_MEMORY_CONFIG
 KDA_DISTRIBUTED_PREFIX_MEMORY_CONFIG = ttnn.DRAM_MEMORY_CONFIG
 KDA_DISTRIBUTED_WORKING_MEMORY_CONFIG = ttnn.L1_MEMORY_CONFIG
@@ -175,7 +185,7 @@ def kimi_k3_program_config(*, active_seq_len_local: int, tp_ccl_topology: ttnn.T
         recurrence=KDARecurrenceProgramConfig(
             local_scan_strategy="grouped", summary_group_chunks=group_chunks[active_seq_len_local]
         ),
-        qkv_channel_chunk_size=512,
+        qkv_channel_chunk_size=64,
         tp_ccl_topology=tp_ccl_topology,
         gated_rms_output_dtype=ttnn.bfloat16,
         input_projection_math_fidelity=ttnn.MathFidelity.HiFi2,
