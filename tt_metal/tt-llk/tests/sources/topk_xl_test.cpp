@@ -509,6 +509,7 @@ void run_kernel(RUNTIME_PARAMETERS params)
 
     _llk_math_pack_sync_init_<dest_sync, is_fp32_dest_acc_en>();
     _llk_math_hw_configure_<is_fp32_dest_acc_en>(math_format, math_format);
+    topk_xl_scrub_dest();
 
     for (std::uint32_t r = 0; r < TOPK_XL_NUM_ROWS; r++)
     {

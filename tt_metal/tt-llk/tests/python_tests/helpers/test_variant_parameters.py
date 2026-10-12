@@ -1152,6 +1152,23 @@ class TOPK_PERF(TemplateParameter):
 
 
 @dataclass
+class TOPK_XL_PERF(TemplateParameter):
+    """Knobs of the topk_xl chunk pipeline perf kernel: K, the chunks of the row, and the fused or unfused path."""
+
+    topk_xl_k: int = 512
+    topk_xl_chunks: int = 2
+    topk_xl_fused_e2e: bool = True
+
+    def convert_to_cpp(self) -> str:
+        lines: list[str] = [
+            f"constexpr std::uint32_t TOPK_XL_K = {self.topk_xl_k};",
+            f"constexpr std::uint32_t TOPK_XL_NUM_CHUNKS = {self.topk_xl_chunks};",
+            f"constexpr bool TOPK_XL_FUSED_E2E = {str(self.topk_xl_fused_e2e).lower()};",
+        ]
+        return "\n".join(lines)
+
+
+@dataclass
 class TOPK_XL(TemplateParameter):
     k: int = 512
     num_chunks: int = 1
