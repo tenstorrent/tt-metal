@@ -110,3 +110,27 @@ Next: fix line 891 (and any other recip_tile_init<bool>/recip_tile<bool> uses in
   state/runs/1680) waits for the broker to clear of smarton jobs, submits attn.txt via blx01-submit.sh, waits for the
   job to end. Log state/runs/1680/chain449a.out (ends "T449A_DONE <rc> <job> <status>").
 - #408 is done, so step 6 (10 s dense vs VSA-0.9 A/B, run409b.sh, one job) runs after the PCC job passes.
+
+## t417 run 1678 (2026-10-12, PDT) — Turbo-SLA LoRA + SLA selection mode
+Step 1 (LightX2V exemption check): LightX2V exempts NOTHING. minimax_h3 runs the sparse op over the full packed
+sequence `[text | keyframes | audio | video]` (packing.py build_packed_sequence); the Ulysses path concatenates the
+aux text prefix with the main part before attention (ulysses_attn.py _apply_bulk). get_block_map (sla_util.py):
+smooth-K, mean-pool q and k per raster 64-token block (tail block averaged over its valid rows), score = pq @ pk^T
+(no scale), topk = max(1, min(K, int((1-0.85)*K))), per head and q block. Smooth-K shifts each row's scores by a
+constant -> same selected set; dropped.
+Step 2 (code 04cbd225529, on top of 22d7d4a6299's kernel fix): `MINIMAX_H3_VSA_MODE=sla` (+ MINIMAX_H3_VSA_SPARSITY=0.85)
+-> build_sla_geometry (raster 64-row tiles over the whole sequence, identity order, pads appended, no exempt tiles,
+all real tiles candidates) and MiniMaxH3VSACoarseStage(selection="sla") with floor k (compute_topk_sla). Host tests
+test_sla_selection_minimax_h3.py: geometry + block sets equal a torch port of get_block_map (768p 10 s and a tiny
+case, sp 1 and 32, sparsity 0.85/0.9). 37 passed with the old VSA host tests; `ttp checks` passed.
+Open risks for the device run:
+- vsa_sdpa / vsa_ring_sdpa have never run with exempt_ids=[] (n_exempt=0); the first device job checks this.
+- Block size: LightX2V's triton op uses 64/64; its sage2 op (5090 sla config) uses 64/128 on sm90, 128/64 otherwise.
+  Training block size is unconfirmed; ours is fixed at 64 (VSA_TILE_TOKENS, baked into the kernels).
+- Text length: our packed text rows (n_text) may differ from LightX2V's (padding), which shifts raster block
+  boundaries. Selection is still the same algorithm; check n_text against LightX2V's prompt length if quality is off.
+Step 3 (device): NOT RUN. exabox-login unreachable at run 1678 (ssh banner timeout via 127.0.0.1:22788 = Mac tunnel
+down). Also the VSA path has not yet passed its device PCC test (#449, blx01).
+Next (when exabox is up): exabox setup under ~/fasth3 (build t409 head, DiT weights, Turbo v1.0 + SLA LoRA, text
+encoder), then per seed 0-4 one sbatch job per A/B pair: (v1.0 dense, v1.0 + VSA 0.9) and (v1.0 dense, Turbo-SLA + sla
+0.85); 768p 10 s, per-step time, PSNR vs v1.0 dense, VBench subset, one still per seed. Template: run409b.sh.
