@@ -1,11 +1,5 @@
 <div align="center">
 
-<h1>
-
-[Hardware](https://tenstorrent.com/cards/) | [Documentation](https://docs.tenstorrent.com/) | [Discord](https://discord.gg/tenstorrent) | [Join Us](https://job-boards.greenhouse.io/tenstorrent?gh_src=22e462047us)
-
-</h1>
-
 <picture>
   <img alt="tt-ember logo" src="docs/images/tt_ember_logo.png" height="220">
 </picture>
@@ -18,13 +12,13 @@
 tt-ember collects and analyzes power metrics (voltage, current, power) from Tenstorrent hardware during workload execution, built on [TT-Metalium](https://github.com/tenstorrent/tt-metal). It produces per-interval statistics, charge and energy calculations, and matplotlib visualizations — all aligned to the execution windows of the measured application. An optional device-side layer correlates per-kernel activity (reader / compute / writer) with the same power telemetry for a wait-vs-active-vs-overhead breakdown.
 
 -----
-**Contents:** [Overview](#overview) · [Repository Structure](#repository-structure) · [Prerequisites](#prerequisites) · [Quick Start](#quick-start) · [Scripts](#scripts) · [Output](#output-structure) · [Benchmark App](#the-benchmark-application) · [Power Metrics](#power-metrics) · [Contributing](#contributing) · [License](#license)
+**Contents:** [Overview](#overview) · [Repository Structure](#repository-structure) · [Prerequisites](#prerequisites) · [Quick Start](#quick-start) · [Scripts](#scripts) · [Output](#output-structure) · [Benchmark App](#the-benchmark-application) · [Power Metrics](#power-metrics)
 
 -----
 
 ## Overview
 
-tt-ember runs a measured application (by default the `long_matmul` programming example) while a telemetry binary samples the device's power sensors, then joins the two by wall-clock time to attribute power and energy to each phase of execution. Everything is driven by six Python scripts and a set of diagnostic utilities — no build step for the tooling itself; only the `tt-metal` binaries it drives need to be compiled.
+tt-ember runs a measured application (by default the `long_matmul` programming example) while a telemetry binary samples the device's power sensors, then joins the two by wall-clock time to attribute power and energy to each phase of execution. Everything is driven by a handful of Python scripts — no build step for the tooling itself; only the `tt-metal` binaries it drives need to be compiled.
 
 ## Repository Structure
 
@@ -36,11 +30,6 @@ tt-ember/
   compare_runs.py      Cross-run comparison — overlays metrics across runs
   compare_runs2.py     Named use-case comparison — grouped bar charts per grid
   run_power_cases.py   POWER_CASE sweep runner — reset + auto.py per case + compare
-  diagnostics/
-    test.py            Inspect tt_umd API structure
-    test2.py           Direct device polling via tt_umd
-    test3.py           Live real-time power visualization
-    tt_telem_diag.py   Periodic polling via tt-smi JSON snapshots
   docs/
     device-side-instrumentation.md   Per-kernel (reader/compute/writer) analysis
 ```
@@ -81,16 +70,16 @@ python3 auto.py \
   --tt-venv-activate /path/to/tt-metal-venv/bin/activate \
   --tt-metal-root "$TT_METAL_HOME" \
   --output-root ./out \
-  --subdir prefill_4096_8192_8192_160 \
+  --subdir prefill_1024_2048_2048_160 \
   --slot-ms 1 \
   --device-id 0 \
-  --trim-ms 6.0 \
-  --app-args 4096 8192 8192 160
+  --trim-ms 1.0 \
+  --app-args 1024 2048 2048 160
 ```
 
 > `--app-args` must always be placed **last** — it uses `argparse.REMAINDER` and will consume every argument that follows it.
 
-Results land in `./out/prefill_4096_8192_8192_160/` (see [Output Structure](#output-structure)).
+Results land in `./out/prefill_1024_2048_2048_160/` (see [Output Structure](#output-structure)).
 
 ## Scripts
 
@@ -100,17 +89,17 @@ Manages the full measurement lifecycle: starts the telemetry binary as a backgro
 
 ### `parser.py` — Analysis Engine
 
-Can be run standalone against a previously captured telemetry log. Parses raw voltage, current, and power samples, bins them into time slots, computes per-interval metrics, writes a 29-column CSV, and produces 14+ matplotlib figures.
+Can be run standalone against a previously captured telemetry log. Parses raw voltage, current, and power samples, bins them into time slots, computes per-interval metrics, writes a 30-column CSV, and produces 15 matplotlib figures.
 
 ```bash
 python3 parser.py \
-  -i ./out/prefill_4096_8192_8192_160/telemetry.txt \
-  --program-log ./out/prefill_4096_8192_8192_160/summary.txt \
+  -i ./out/prefill_1024_2048_2048_160/telemetry.txt \
+  --program-log ./out/prefill_1024_2048_2048_160/summary.txt \
   -o ./out \
-  --subdir prefill_4096_8192_8192_160 \
+  --subdir prefill_1024_2048_2048_160 \
   --slot-ms 1 \
   --device-id 0 \
-  --trim-ms 6.0
+  --trim-ms 1.0
 ```
 
 ### `run_all.py` — Sweep Orchestrator
@@ -142,7 +131,7 @@ python3 compare_runs.py --out-root ./out --filter prefill_2048 fixed_power_sweep
 ### `compare_runs2.py` — Named Use-Case Comparison
 
 Compares a small, explicitly-named set of runs (e.g. the `POWER_CASE` power-experiment
-scenarios — see [§9 of the device-side instrumentation doc](docs/device-side-instrumentation.md#9-power-experiment-flags-on-long_matmul-itself))
+scenarios — see [`long_matmul`'s README](../../tt_metal/programming_examples/long_matmul/README.md#power-experiment-knobs))
 against each other, grouped by grid (core combination), as grouped bar charts. Unlike
 `compare_runs.py` — which auto-discovers and overlays *all* runs under a root as line plots —
 `compare_runs2.py` takes an explicit, ordered list of run subdirectories from a small text
@@ -157,7 +146,7 @@ third field for a custom legend label (defaults to `subdir_name` if omitted):
 ```
 Case 1: compute_idle : Compute disabled
 Case 2: reader_idle2 : Reader Idle
-Case 3: regular : Writer idle
+Case 3: writer_idle : Writer idle
 Case 4: writer_amp : W+R+C active
 ```
 
@@ -203,9 +192,11 @@ python3 run_power_cases.py \
 
 Notes:
 - `--app-args` must be last (same `argparse.REMAINDER` caveat as `auto.py`/`run_all.py`).
-- Defaults to `POWER_CASE` values `0 1 2 4` — the four single-variable comparisons against
-  baseline. Pass `--power-cases 0 1 2 3 4` to include case 3 (reader **and** compute both idle)
-  as well.
+- Defaults to `POWER_CASE` values `5 1 2 4`: case 1 (everything active) and the three cases
+  that each idle one kernel against it. Pass `--power-cases 0 1 2 3 4 5` to also include case 0
+  (write amplification off) and case 3 (reader **and** compute idle).
+- `--ops` repeats the sweep for every `LONG_MATMUL_OP` value, into `<output-root>/<op>/`, and
+  adds cross-op charts when more than one op is given.
 - A case is skipped if `<output-root>/<subdir-for-that-case>` already exists; pass `--force` to
   re-run it anyway.
 - Pass `--dry-run` to print every `tt-smi -r` / `auto.py` / `compare_runs2.py` command that
@@ -214,24 +205,8 @@ Notes:
 - Writes `<output-root>/power_cases.txt` (overridable with `--cases-file-name`), then calls
   `compare_runs2.py -i <output-root> -c <output-root>/power_cases.txt`.
 
-See [§9 of the device-side instrumentation doc](docs/device-side-instrumentation.md#9-power-experiment-flags-on-long_matmul-itself)
+See [`long_matmul`'s README](../../tt_metal/programming_examples/long_matmul/README.md#power_case--the-six-canonical-scenarios)
 for what each `POWER_CASE` actually disables or amplifies in the kernels.
-
-### Diagnostic Utilities (`diagnostics/`)
-
-These scripts interact directly with the hardware outside of the main pipeline. They are useful for verifying device connectivity, inspecting live power behavior, or capturing a quick log without the full `auto.py` workflow.
-
-- **`test2.py`** polls the device in real time via the `tt_umd` Python library and prints a timestamped current/voltage/power log to stdout. It handles both Wormhole B0 and Blackhole architectures automatically.
-- **`test3.py`** does the same polling but renders the data as a live scrolling matplotlib plot.
-- **`tt_telem_diag.py`** queries `tt-smi -s` JSON snapshots on a fixed interval and writes per-device power readings to a CSV file.
-- **`test.py`** is a one-shot inspection tool that probes the `tt_umd` API structure and prints available device information.
-
-```bash
-python3 diagnostics/test2.py --interval 0.1
-python3 diagnostics/test3.py --interval 0.5
-python3 diagnostics/tt_telem_diag.py --interval 1.0 --output power_log.csv
-python3 diagnostics/test.py
-```
 
 ## Output Structure
 
@@ -242,7 +217,7 @@ output_root/subdir/
   telemetry.txt                    raw telemetry log (input copy)
   summary.txt                      application stdout (input copy)
   launcher.log                     auto.py orchestration log
-  program_intervals.csv            per-interval metrics (29 columns)
+  program_intervals.csv            per-interval metrics (30 columns)
   Figures/
     telemetry_overview.png         3-panel time series: VCORE / TDC / TDP
     duration_vs_avg_current.png
@@ -263,9 +238,9 @@ output_root/subdir/
 
 ## The Benchmark Application
 
-Matrix multiplication is the fundamental building block of every modern AI workload. Transformer attention mechanisms, feed-forward layers, convolutional networks, and embedding lookups all reduce, at their core, to the operation **C = A × B**. This makes a sustained, configurable matrix multiply kernel the ideal synthetic benchmark for power analysis — it exercises exactly the same hardware paths (tensor cores, DRAM bandwidth, on-chip SRAM, NoC interconnect) that a production LLM inference or training workload would.
+Matrix multiplication is the fundamental building block of every modern AI workload. Transformer attention mechanisms, feed-forward layers, convolutional networks, and embedding lookups all reduce, at their core, to the operation **C = A × B**. This makes a sustained, configurable matrix multiply a good synthetic workload for power analysis — it exercises the same hardware paths (the matrix and vector engines, DRAM bandwidth, on-chip SRAM, the NoC) that a production LLM inference or training workload would. The workload is `tt_metal/programming_examples/long_matmul/`; its README documents every knob.
 
-The application runs a sequence of matrix multiplications across a predefined sweep of compute grid configurations, from a minimal 3×2 grid up to the full device grid. For each grid size it allocates the input matrices A (M×K) and B (K×N) in DRAM once, then repeatedly executes the matmul for `num_iterations` iterations, measuring wall-clock time and reporting throughput in TFLOPS. Between grid configurations the application inserts a 5-second idle pause, which is precisely the quiet window that `parser.py` uses to estimate the idle power baseline.
+The application runs a sequence of matrix multiplications across a sweep of compute grid configurations generated from the device's compute grid, from 3×2 up to the full grid. For each grid size it allocates the input matrices A (M×K) and B (K×N) in DRAM once, then repeatedly executes the matmul for `num_iterations` iterations, measuring wall-clock time and reporting throughput in TFLOPS. Between grid configurations the application inserts a 5-second idle pause, which is precisely the quiet window that `parser.py` uses to estimate the idle power baseline.
 
 ### Arguments
 
@@ -285,7 +260,7 @@ The correlation between power measurements and program intervals relies entirely
 
 ### Metric Definitions
 
-**Base current** (`base_current_a`) is the mean TDC measured during the 5-second idle pause between consecutive program intervals. It represents the irreducible power floor of the system — memory retention, voltage regulator overhead, clocking infrastructure, and thermal management — and is used to isolate the compute contribution from all other metrics.
+**Base current** (`base_current_a`) is the mean TDC measured during the 5-second idle pause after the first program interval, used as one fixed reference for every interval of the run. It represents the irreducible power floor of the system — memory retention, voltage regulator overhead, clocking infrastructure, and thermal management — and is used to isolate the compute contribution from all other metrics.
 
 **Duration** (`window_s`) is the wall-clock length of the trimmed measurement window. `sample_count` records how many telemetry samples fall within it and serves as a quality indicator.
 
@@ -300,11 +275,3 @@ The correlation between power measurements and program intervals relies entirely
 ### Device-Side Kernel Instrumentation
 
 An optional layer correlates per-kernel (reader / compute / writer) device-side timestamps with the same power telemetry, producing a per-core wait-vs-active-vs-overhead breakdown. See [`docs/device-side-instrumentation.md`](docs/device-side-instrumentation.md).
-
-## Contributing
-
-Contributions are welcome. Please read [CONTRIBUTING.md](../../CONTRIBUTING.md) and our [Code of Conduct](../../CODE_OF_CONDUCT.md) before opening a pull request.
-
-## License
-
-This project is licensed under the Apache License 2.0 — see [LICENSE](../../LICENSE). See also [LICENSE_understanding.txt](../../LICENSE_understanding.txt).
