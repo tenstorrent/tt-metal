@@ -26,6 +26,17 @@ STREAM_AB_QUALITY (identical expected on every seed) and the affinity line.
 Judgment: all 5 seeds in one job (one A/B pair, one config); separate jobs would each make the live
 LTX worker yield and reload (~87 s).
 
-## Next step
+## Result (job 858, blx01, 900 MHz clamp, exit 0, 189 s, 2 passed; relative numbers only)
+Affinity seen by the test: 64 cpus (not pinned in this job).
+Within-job A/B (streaming off vs on, both with the new cross-fade), min of 2 repeats:
+- 5 s, seeds 0-4: off 0.987-0.989 s, on 0.984-0.986 s, saved 2-5 ms (~0.3%). blend after waves 0.017 -> 0.001 s.
+- 15 s, seeds 0-3 logged: off 2.673-2.685 s, on 2.672-2.673 s, saved 0-12 ms.
+- Quality: identical=True, PSNR inf, PCC 1.000000, max_abs 0 on every seed.
+Cross-job, old code (job 852, test_decode_stage) vs new (job 858), same box and clock:
+- 5 s total 1.484 -> 0.987 s (-33%); 15 s total 4.711 -> 2.673 s (-43%). blend 0.428 -> 0.017 s (5 s).
+So the gain is the frame-at-a-time cross-fade (bit-identical by the exhaustive CPU test); streaming adds
+only a few ms, never slower, kept on. The critical path is now device waves + readback_join (~0.48 s at 5 s).
+
+## Next step (done after job 858)
 Check `ssh g15blx01 tt-device-mcp status -j 858`, read the log. If the gate passes: write results here,
 `ttp checks`, `ttp push --own --detach` onto ttp/t423-trace-the-fasth3-video-vae-decode-waves-.
