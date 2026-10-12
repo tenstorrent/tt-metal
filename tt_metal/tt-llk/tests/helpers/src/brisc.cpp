@@ -361,7 +361,7 @@ int main()
 
                 // Configure + arm counters before releasing TRISCs (only when the launch counts a zone).
                 llk_perf::configure_and_arm_from_brisc();
-#if defined(ARCH_BLACKHOLE)
+#if defined(ARCH_BLACKHOLE) && !defined(NCW_NO_BH_NORM)
                 // Every L1 bank's round robin pointer last granted BRISC, whatever L1 traffic the configure did
                 for (std::uint32_t addr = 16; addr <= 1024; addr += 16) // not 0: -Wnull-dereference
                 {
