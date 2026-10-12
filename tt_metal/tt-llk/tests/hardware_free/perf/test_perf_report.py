@@ -17,6 +17,7 @@ the optional-None and dynamic-param cases static reading can't. Needs the LLK en
 """
 
 import os
+import struct
 from pathlib import Path
 from types import SimpleNamespace
 
@@ -24,6 +25,7 @@ import pandas as pd
 import pytest
 from helpers.counters import LLK_COUNTERS_HEADER, _parse_perf_cfg
 from helpers.llk_params import ApproximationMode, DestAccumulation, PerfRunType
+from helpers.perf import phases
 from helpers.perf.core import (
     PerfConfig,
     PerfReport,
@@ -307,7 +309,7 @@ def _one_run_events(seed: int) -> pd.DataFrame:
     return pd.DataFrame(rows)
 
 
-def _run_hw_free(monkeypatch, run_types, run_count):
+def _run_hw_free(monkeypatch, run_types, run_count, write_runtimes=None):
     """Run PerfConfig.run() end-to-end with no chip; return the produced frame."""
     # Class-level execution config: execute-only (skip build, don't pytest.skip),
     # counters off, artefacts dir unused (get_elf_text_size is stubbed).
@@ -351,6 +353,8 @@ def _run_hw_free(monkeypatch, run_types, run_count):
         "wait_for_tensix_operations_finished",
     ):
         monkeypatch.setattr(cfg, seam, lambda *a, **k: None)
+    if write_runtimes is not None:
+        monkeypatch.setattr(cfg, "write_runtimes_to_L1", write_runtimes)
 
     report = PerfReport()
     cfg.run(report, run_count=run_count)
@@ -392,6 +396,72 @@ def test_run_single_run_drops_empty_std(monkeypatch):
     frame = _run_hw_free(monkeypatch, [PerfRunType.MATH_ISOLATE], run_count=1)
     assert stat_column("MATH_ISOLATE", MEAN) in frame.columns
     assert stat_column("MATH_ISOLATE", STD) not in frame.columns
+
+
+def test_averaged_rows_run_once_per_start_phase(monkeypatch):
+    # a Wormhole perf row in AVERAGED runs its mode's design (latin: _run_hw_free builds without --speed-of-light) instead
+    # of run_count launches; the others keep run_count
+    monkeypatch.setattr(PerfConfig, "_wormhole_perf_barrier", lambda self: True)
+    monkeypatch.setattr(TestConfig, "PERF_INIT_LAUNCH", False)
+    monkeypatch.setattr(
+        phases,
+        "AVERAGED",
+        {("perf_hwfree", PerfRunType.MATH_ISOLATE.name): ("latin", "grid")},
+    )
+    written = []
+    frame = _run_hw_free(
+        monkeypatch,
+        [PerfRunType.MATH_ISOLATE, PerfRunType.UNPACK_ISOLATE],
+        run_count=2,
+        write_runtimes=lambda release_phase=None: written.append(release_phase),
+    )
+    warmups = [None, None]  # one unrecorded launch per run type, at the canonical phase
+    assert written == warmups + list(phases.PHASE_DESIGNS["latin"]) + [(0, 0)] * 2
+    # fake_get_data's TILE_LOOP takes 15 + k cycles at launch k: the mean over the 31 phases, and their spread in std
+    tile = frame[frame[MARKER] == "TILE_LOOP"].iloc[0]
+    assert tile[stat_column("MATH_ISOLATE", MEAN)] == pytest.approx(15 + 15)
+    assert tile[stat_column("MATH_ISOLATE", STD)] > 0
+
+
+def test_release_phase_follows_the_runtime_arguments():
+    block = phases.with_release_phase(b"\x01" * 8, (3, -2))
+    assert len(block) == 0x400 and block[:8] == b"\x01" * 8
+    assert block[8 : phases.RELEASE_PHASE_OFFSET] == bytes(
+        phases.RELEASE_PHASE_OFFSET - 8
+    )
+    assert block[phases.RELEASE_PHASE_OFFSET :] == struct.pack(
+        "<Iiii", phases.RELEASE_PHASE_VALID, 3, -2, 0
+    )
+    with pytest.raises(  # allow-pytest.raises: no expect_error fixture in LLK suite
+        ValueError, match="overlap the release phase"
+    ):
+        phases.with_release_phase(bytes(phases.RELEASE_PHASE_OFFSET + 1), (0, 0))
+
+
+def test_release_phase_matches_the_firmware():
+    helpers = Path(__file__).parents[2] / "helpers"
+    brisc = (helpers / "src/brisc.cpp").read_text()
+    assert ".set  .Lrel_phase, __runtime_args_end - 16" in brisc
+    assert f".set  .Lrel_phase_valid, 0x{phases.RELEASE_PHASE_VALID:08X}" in brisc
+    memory = (helpers / "ld/memory.wormhole.ld").read_text()
+    assert "ORIGIN = RUNTIME_ARGS_START, LENGTH = 1K" in memory
+    assert phases.RELEASE_PHASE_OFFSET == 1024 - 16
+
+
+def test_phase_designs_cover_every_lfsr_phase():
+    period = phases.LFSR_PERIOD
+    grid = phases.PHASE_DESIGNS["grid"]
+    assert len(set(grid)) == period * period and grid[0] == phases.CANONICAL_PHASE
+    # (a, b) moves the first released thread's phase by a + b and the second's by b: latin gives each once
+    latin = phases.PHASE_DESIGNS["latin"]
+    assert len(latin) == period
+    assert {(a + b) % period for a, b in latin} == set(range(period))
+    assert {b % period for a, b in latin} == set(range(period))
+    sources = Path(__file__).parents[2] / "sources"
+    for (source, run_type), designs in phases.AVERAGED.items():
+        assert (sources / source).is_file() and any(designs)
+        assert all(d is None or d in phases.PHASE_DESIGNS for d in designs)
+        assert PerfRunType[run_type] != PerfRunType.L1_CONGESTION
 
 
 def test_run_rejects_empty_stats_for_requested_run_type(monkeypatch):
