@@ -199,7 +199,8 @@ ALWI void matmul_tiles(
  * It sets the math ADDR_MOD_3, 6 and 7: redo this init after a math-thread SFPU init, and that init after the matmul.
  *
  * Template parameter unpack_ttsync (ignored outside Blackhole): row base addresses under Auto TTSync instead of polling
- * for a free context, the same value in matmul_block; the kernel must define MATMUL_UNPACK_TTSYNC.
+ * for a free context, the same value in matmul_block; the kernel must define MATMUL_UNPACK_TTSYNC to a constant that
+ * is true when any of its calls passes true.
  *
  * Return value: None
  *

@@ -80,6 +80,17 @@ inline void llk_unpack_AB_matmul_set_in1_column_stride(
     _llk_unpack_AB_matmul_set_in1_column_stride_(tile_size, stride_tiles);
 }
 
+// False when no unpack format of the kernel has 8 bits per datum or less: the 8-bit stream then folds away even in a
+// kernel whose operand ids are run-time values.
+constexpr bool llk_unpack_AB_matmul_kernel_has_narrow_format() {
+    for (const std::uint8_t format : unpack_src_format) {
+        if (_llk_unpack_AB_matmul_narrow_format_(format)) {
+            return true;
+        }
+    }
+    return false;
+}
+
 template <bool ttsync = false>
 __attribute__((always_inline)) inline void llk_unpack_AB_matmul_init(
     const std::uint32_t operandA,
@@ -97,6 +108,7 @@ __attribute__((always_inline)) inline void llk_unpack_AB_matmul_init(
     const std::uint32_t unpB_face_r_dim = get_operand_face_r_dim(operandB_id);
 
     const bool reuse_a = ct_dim >= rt_dim;
+    constexpr bool has_narrow_format = llk_unpack_AB_matmul_kernel_has_narrow_format();
     const bool partial_face_a = get_operand_partial_face(operandA_id);
     const bool partial_face_b = get_operand_partial_face(operandB_id);
 
@@ -140,8 +152,8 @@ __attribute__((always_inline)) inline void llk_unpack_AB_matmul_init(
         unpB_num_faces,
         partial_face_a,
         partial_face_b,
-        _llk_unpack_AB_matmul_stream_narrow_(
-            ct_dim, rt_dim, unpack_src_format[operandA_id], unpack_src_format[operandB_id], DST_ACCUM_MODE));
+        has_narrow_format && _llk_unpack_AB_matmul_stream_narrow_(
+                                 ct_dim, rt_dim, unpack_src_format[operandA_id], unpack_src_format[operandB_id], DST_ACCUM_MODE));
 }
 
 template <bool ttsync = false>

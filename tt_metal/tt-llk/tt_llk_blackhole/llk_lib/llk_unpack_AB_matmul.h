@@ -25,7 +25,7 @@ inline bool unpack_matmul_init_reuse_a = true;
 inline std::uint32_t unpack_matmul_ttsync_on = 0;
 
 // A kernel that runs the ttsync form defines MATMUL_UNPACK_TTSYNC before its includes, so that its TRISC wrapper calls
-// _llk_unpack_AB_matmul_ttsync_restore_ after the kernel.
+// _llk_unpack_AB_matmul_ttsync_restore_ after the kernel (tt-metal's wrapper only when the macro's value is true).
 #if defined(MATMUL_UNPACK_TTSYNC)
 inline constexpr bool unpack_matmul_ttsync_restored = true;
 #else
