@@ -165,8 +165,8 @@ class MPIRolloutClient:
         (matching the server-side barrier in serve_forever).
         """
         version = int(version)
-        if not 0 < version < 2**32:
-            raise ValueError(f"weight version {version} must be in (0, 2**32) to fit the u32 header field")
+        if not 0 <= version < 2**32:
+            raise ValueError(f"weight version {version} must be in [0, 2**32) to fit the u32 header field")
         hdr = struct.pack(_HEADER_FMT, OP_REQUEST_TRANSFER, 0, version)
         _mpi_send_bytes(hdr, self.peer_rank, _INFER_REQ_HDR_TAG)
         self._bridge.send_weights(hf_dict)
