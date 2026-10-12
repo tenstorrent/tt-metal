@@ -375,22 +375,35 @@ void kernel_main() {
     // The first active iter starts with fresh accumulators; restoring would read stale staging.
     bool seen_active_iter = false;
     auto arrival_preview = fused_op_indexer.seq;
-    const ring_joint::PackedKVSchedule packed_schedule = ring_joint::packed_kv_schedule(
-        GROUPED_KV_SOURCE_COUNT,
-        ring_size,
-        kv_local_padded_Nt,
-        logical_nt,
-        active_ring_iter_mask,
-        kv_region_Nt,
-        Sk_chunk_t,
-        has_sliding_window,
-        [&] {
-            return ttnn::ring_attention_all_gather::tensor_rank_from_transport_rank<full_mesh_rank_mapping>(
-                arrival_preview.get_next_ring_id([](uint32_t, uint32_t) {}), mesh_rows, mesh_cols, snake_orientation);
-        });
-    const uint32_t source_group_size = packed_schedule.source_group_size;
-    const bool packed_sources = packed_schedule.packed();
-    const uint32_t sdpa_ring_iterations = packed_schedule.ring_iterations;
+    // The packed-source schedule exists only when the host grouped KV sources. Deriving it at run time
+    // would keep every packed path below in the classic ring's binary as well.
+    constexpr bool packed_kv_enabled = GROUPED_KV_SOURCE_COUNT > 1;
+    const ring_joint::PackedKVSchedule packed_schedule = [&] {
+        if constexpr (packed_kv_enabled) {
+            return ring_joint::packed_kv_schedule(
+                GROUPED_KV_SOURCE_COUNT,
+                ring_size,
+                kv_local_padded_Nt,
+                logical_nt,
+                active_ring_iter_mask,
+                kv_region_Nt,
+                Sk_chunk_t,
+                has_sliding_window,
+                [&] {
+                    return ttnn::ring_attention_all_gather::tensor_rank_from_transport_rank<full_mesh_rank_mapping>(
+                        arrival_preview.get_next_ring_id([](uint32_t, uint32_t) {}),
+                        mesh_rows,
+                        mesh_cols,
+                        snake_orientation);
+                });
+        } else {
+            return ring_joint::PackedKVSchedule{1, {0, 1, 0, 0}, has_sliding_window ? 1u : ring_size, {}};
+        }
+    }();
+    const uint32_t source_group_size = packed_kv_enabled ? packed_schedule.source_group_size : 1;
+    const bool packed_sources = packed_kv_enabled && packed_schedule.packed();
+    const uint32_t sdpa_ring_iterations =
+        packed_kv_enabled ? packed_schedule.ring_iterations : (has_sliding_window ? 1u : ring_size);
     for (uint32_t ring_iter = 0; ring_iter < sdpa_ring_iterations; ++ring_iter) {
         const ring_joint::PackedKVGroupPlan packed_kv = packed_schedule.pass_plan(ring_iter);
         // Read this iteration's remainder ID and derive its count from the fixed base range.
