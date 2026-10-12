@@ -33,17 +33,21 @@ def _mesh_concat(mesh_device, x, sp_axis, tp_axis):
 
 @GALAXY_RING
 @pytest.mark.parametrize("seq_len", [75449], ids=["10s_768p"])
-def test_sla_stage_and_vsa_sdpa_on_device(mesh_device, sp_axis, tp_axis, num_links, topology, is_fsdp, seq_len):
+@pytest.mark.parametrize("heads_per_device", [2, 14], ids=["h2", "h14"])  # 14: the real 56 heads at TP=4
+def test_sla_stage_and_vsa_sdpa_on_device(
+    mesh_device, sp_axis, tp_axis, num_links, topology, is_fsdp, seq_len, heads_per_device
+):
     """The device SLA path (coarse stage + vsa_sdpa, raw selection) on random Q/K/V at the 10 s 768p geometry.
 
-    Three checks tell the ops apart: topk_large_indices alone at the stage's k_pad against torch.topk, the
+    Three checks tell the ops apart: topk_large_indices alone at the stage's k_pad against torch.topk (by the
+    selected values, since bf16 ties make the id set ambiguous), the
     device selection against LightX2V's (set overlap per row; bf16 near-ties keep it below 1), and vsa_sdpa's
     output against block-sparse attention over the ids the device itself selected.
     """
     sp, tp = tuple(mesh_device.shape)[sp_axis], tuple(mesh_device.shape)[tp_axis]
     if sp != 8:
         pytest.skip("4x8 only")
-    heads, d, sparsity, q_block_tiles = 2 * tp, 128, 0.85, 2
+    heads, d, sparsity, q_block_tiles = heads_per_device * tp, 128, 0.85, 2
     g = build_sla_geometry(seq_len, (1, 1, 1), sp_factor=sp, q_block_tiles=q_block_tiles)
     ccl = CCLManager(mesh_device=mesh_device, num_links=num_links, topology=topology)
     cfg = vsa_stages_minimax_h3.MiniMaxH3VSAConfig(sparsity=sparsity, selection="sla")
@@ -72,10 +76,11 @@ def test_sla_stage_and_vsa_sdpa_on_device(mesh_device, sp_axis, tp_axis, num_lin
     topk_ok = {}
     for kk in sorted({16, 64, 128, 160, k_pad, 192, 256}):
         got = ttnn.to_torch(ttnn.get_device_tensors(ttnn.experimental.topk_large_indices(tt_rows, k=kk))[0])
-        ref = torch.topk(rows.float(), kk, dim=-1).indices
-        same = torch.sort(got.to(torch.int64), -1).values.eq(torch.sort(ref, -1).values).all(-1)
+        ref = torch.topk(rows.float(), kk, dim=-1).values
+        got_values = rows.float().gather(-1, got.to(torch.int64))
+        same = torch.sort(got_values, -1).values.eq(torch.sort(ref, -1).values).all(-1)
         topk_ok[kk] = same.float().mean().item()
-    logger.info(f"T455 topk_large_indices rows with the exact top-k set, by k: {topk_ok}")
+    logger.info(f"T455 topk_large_indices rows with the top-k values, by k: {topk_ok}")
 
     # (2) + (3) the stage and vsa_sdpa on random Q/K/V
     q, kt, v = (torch.randn(heads, seq_len, d, generator=gen).bfloat16().float() for _ in range(3))
