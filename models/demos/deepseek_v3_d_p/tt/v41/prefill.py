@@ -175,6 +175,11 @@ class V41Prefill:
             }
         self._embed = None
         self.kv_actuals = {s: 0 for s in range(self.num_users)}
+        # ViT V2 (tt-blaze vit_plan.md E1 / G1): the current prompt's image-span rows (virtual id vocab + k -> row k) and
+        # each gate's (text, bias_vl) bias rows; ``_vl_live`` = some gate holds bias_vl rows from the previous chunk
+        self._image_rows = None
+        self._gate_bias_rows: dict = {}
+        self._vl_live = False
 
     # the CURRENT slot's layer-20 state and token count (use_slot): the chunk / export / snapshot code reads these
     @property
@@ -212,17 +217,73 @@ class V41Prefill:
 
     def _streams(self, ids: list[int]) -> list:
         h = torch.zeros(1, 1, self.chunk, self.cfg.dim, dtype=torch.bfloat16)
-        h[0, 0, : len(ids)] = self._embedding()[torch.tensor(ids, dtype=torch.long)].to(torch.bfloat16)
+        emb = self._embedding()
+        t = torch.tensor(ids, dtype=torch.long)
+        vl = t >= emb.shape[0]  # ViT V2 E1: image-span VIRTUAL ids (vocab + k) embed as the request's span row k
+        rows = emb[t.clamp(max=emb.shape[0] - 1)].to(torch.bfloat16)
+        if bool(vl.any()):
+            assert self._image_rows is not None, "image-span (virtual) ids need prefill(..., image_rows=...)"
+            k = t[vl] - emb.shape[0]
+            assert int(k.max()) < self._image_rows.shape[0], (int(k.max()), tuple(self._image_rows.shape))
+            rows[vl] = self._image_rows[k].to(torch.bfloat16)
+        h[0, 0, : len(ids)] = rows
         mapper = ttnn.ShardTensor2dMesh(self.mesh, mesh_shape=tuple(self.mesh.shape), dims=(2, 3))
         t = ttnn.from_torch(h, device=self.mesh, dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT, mesh_mapper=mapper)
         return [t] + [ttnn.clone(t) for _ in range(HC - 1)]  # model.py: h.unsqueeze(2).repeat(1, 1, hc, 1)
 
     # ---- the prefill --------------------------------------------------------------------------------------------
-    def prefill(self, ids: list[int], engram_host=None, *, on_hidden=None) -> None:
-        """All of ``ids`` from position 0 (chunks of ``chunk_tokens``; every chunk but the last full)."""
+    def set_image_rows(self, rows) -> None:
+        """ViT V2: the CURRENT prompt's image-span rows ``[n_span, dim]`` (tt-blaze ``prof/vit_prompt.py``'s span rows:
+        START, the aligner rows with a NEWLINE after each grid row, END); virtual id ``vocab + k`` embeds as row ``k`` and
+        routes with ``bias_vl``. None = a text-only prompt."""
+        self._image_rows = None if rows is None else torch.as_tensor(rows).to(torch.bfloat16).reshape(-1, self.cfg.dim)
+
+    def _gate_rows(self, blk):
+        """(text, bias_vl) bias rows of ``blk``'s gate, bf16 [n_experts]: the text row read back from the gate's own device
+        bias (bit-identical to what it routes text with), bias_vl centred on its own midrange before the bf16 cast (DS41F-0040's
+        rule: top-k is shift-invariant per token, so each vector may carry its own constant)."""
+        L = blk.layer
+        if L not in self._gate_bias_rows:
+            g = blk.moe.gate
+            text = ttnn.to_torch(ttnn.get_device_tensors(g.bias)[0])[0].to(torch.bfloat16)
+            vl = self.ck.raw(f"layers.{L}.ffn.gate.bias_vl").float()
+            vl = (vl - (vl.min() + vl.max()) / 2).to(torch.bfloat16)
+            self._gate_bias_rows[L] = (text, vl)
+        return self._gate_bias_rows[L]
+
+    def _route_bias(self, part: list[int]) -> None:
+        """ViT V2 G1: model.py routes image-span tokens with ``bias_vl`` (``Gate.forward``'s image_mask). Rewrite each gate's
+        per-row bias [sp_dim, n_experts] (the islands captured its buffer; the CONTENT changes, as the ragged padding
+        config does) with bias_vl rows at this chunk's span positions; the next text-only chunk restores the text rows.
+        """
+        if (
+            os.environ.get("V41_PREFILL_VL_BIAS", "1") == "0"
+        ):  # the causal control: span tokens route with the text bias
+            return
+        vocab = self._embedding().shape[0]
+        vl = [i for i, t in enumerate(part) if int(t) >= vocab]
+        if not vl and not self._vl_live:
+            return
+        mapper = ttnn.ShardTensor2dMesh(self.mesh, dims=(0, None), mesh_shape=tuple(self.mesh.shape))
+        for blk in self.blocks:
+            g = blk.moe.gate
+            assert int(g.bias.shape[0]) * self.sp == self.chunk, (tuple(g.bias.shape), self.chunk, self.sp)
+            text, vlb = self._gate_rows(blk)
+            rows = text.unsqueeze(0).repeat(self.chunk, 1)
+            if vl:
+                rows[torch.tensor(vl, dtype=torch.long)] = vlb
+            host = ttnn.from_torch(rows, dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT, mesh_mapper=mapper)
+            ttnn.copy_host_to_device_tensor(host, g.bias)
+        self._vl_live = bool(vl)
+
+    def prefill(self, ids: list[int], engram_host=None, *, on_hidden=None, image_rows=None) -> None:
+        """All of ``ids`` from position 0 (chunks of ``chunk_tokens``; every chunk but the last full). ``image_rows``: the
+        prompt's image-span rows (``set_image_rows``) when ``ids`` carry virtual image ids."""
         assert self.kv_actual == 0, "one prompt per V41Prefill (states are not reset)"
         S = len(ids)
         assert S <= self.max_seq_len
+        if image_rows is not None:
+            self.set_image_rows(image_rows)
         for c0 in range(0, S, self.chunk):
             part = ids[c0 : c0 + self.chunk]
             t0 = time.time()
@@ -254,6 +315,7 @@ class V41Prefill:
         prof = PhaseProfile(self.mesh) if PROFILE else None
         mark = prof if prof is not None else (lambda name: None)
         streams = self._streams(part)
+        self._route_bias(part)
         pre = identity_pre_row(self.mesh, self.chunk // self.sp, self.sp_axis)
         mark("embed")
         rows = engram_host.rows_for(self.slot, part, start) if (self.engrams and engram_host is not None) else {}
@@ -263,9 +325,14 @@ class V41Prefill:
             if L in self.engrams:
                 assert L in rows, f"layer {L} needs Engram rows (pass an EngramHost)"
                 rd = self.engrams[L].upload_rows(rows[L], self.chunk)
+                s_in = streams
                 streams = self.engrams[L](streams, rd)
                 ttnn.deallocate(rd)
                 mark("engram.dev")
+                if (
+                    on_hidden is not None
+                ):  # the Engram output (block L's input) and its input (ViT V2: identity on the span)
+                    on_hidden(f"{L}:engram", streams, s_in)
             streams, pre = blk(streams, pre, real_len=real_len, on_hidden=on_hidden, prof=prof)
             if on_hidden is not None:
                 on_hidden(f"{L}:out", streams, pre)
@@ -285,6 +352,7 @@ class V41Prefill:
         prof = PhaseProfile(self.mesh) if PROFILE else None
         mark = prof if prof is not None else (lambda name: None)
         streams = self._streams(part)
+        self._route_bias(part)
         pre = identity_pre_row(self.mesh, self.chunk // self.sp, self.sp_axis)
         mark("embed")
         rows = {}

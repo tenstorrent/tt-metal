@@ -76,6 +76,14 @@ class V41PrefillRuntime:
             table_dir=os.environ.get("DSV41_ENGRAM_TABLE_DIR") or None,
             **kw,
         )
+        # ViT V2 (tt-blaze vit_plan.md): V41_PREFILL_IMAGE_ROWS=<prof/vit_prompt.py rows .pt> = the image-span rows of the
+        # prompt this runner serves (its ids carry the span on virtual ids vocab + k). One image prompt per runner launch,
+        # like the ring's build-time table (V3); per-request rows are the next step.
+        _img = os.environ.get("V41_PREFILL_IMAGE_ROWS")
+        if _img:
+            _rows = torch.load(_img, map_location="cpu")
+            self.pf.set_image_rows(_rows["rows"] if isinstance(_rows, dict) else _rows)
+            logger.info(f"[v41 runtime] image-span rows from {_img}: {tuple(self.pf._image_rows.shape)}")
         # the CONTRACT's layer count (40), not the 21 layers this rank computes: the driver migrates layers [0, num_layers) and
         # drains num_layers acks per chunk (PREFILL_NUM_LAYERS on both sides), and the export holds rows for EVERY layer (the
         # decoder 21..39's entries / keys alias layer 20's) -- with 21, layers 21..39 were never migrated (DS41F-0037 attempt 4)

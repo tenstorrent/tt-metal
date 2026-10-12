@@ -54,7 +54,9 @@ def _pcc(a, b) -> float:
 
 def _prompt_ids() -> list[int]:
     meta = json.load(open(os.path.join(TRACE, "meta.json")))
-    f = meta["prompt_ids_file"]
+    # ViT V2: an image trace (tt-blaze golden/prefill_trace.py --image) names the device prompt (prof/vit_prompt.py): the same
+    # ids with the image span on VIRTUAL ids (vocab + k) plus the span rows
+    f = meta["device_prompt"] + ".ids" if meta.get("device_prompt") else meta["prompt_ids_file"]
     ids = [int(v) for v in open(f).read().replace("\n", ",").split(",") if v.strip()]
     return ids[: int(meta["S"])]
 
@@ -66,24 +68,68 @@ def test_v41_prefill_vs_model_py(mesh_device, device_params):
     cfg = V41Config.load()
     ids = _prompt_ids()
     S = len(ids)
+    meta = json.load(open(os.path.join(TRACE, "meta.json")))
+    image_rows = torch.load(meta["device_prompt"] + ".rows.pt")["rows"] if meta.get("device_prompt") else None
+    span_idx = torch.tensor(
+        [p for a, b in meta.get("spans", []) for p in range(a, min(b, S))], dtype=torch.long
+    )  # image-span positions (ViT V2): graded on their own as well
     sp = mesh_device.shape[0]
     comp2d = ttnn.ConcatMesh2dToTensor(mesh_device, mesh_shape=tuple(mesh_device.shape), dims=(2, 3))
     results = {}
 
+    engram_res = {}
+    collected: dict = {}  # (layer, "out" | "engram") -> per-chunk (rows, extra) in prompt order
+
     def on_hidden(name, t, pre=None):
-        if not name.endswith(":out"):
+        """Collect each chunk's rows (``pf.kv_actual`` = the chunk's start while its blocks run); graded after the prefill."""
+        L, kind = name.split(":")
+        if kind not in ("out", "engram"):
             return
-        L = int(name.split(":")[0])
-        got = torch.stack([ttnn.to_torch(s, mesh_composer=comp2d)[0, 0, :S].float() for s in t], dim=1)  # [S, hc, d]
-        pre_got = ttnn.to_torch(pre, mesh_composer=comp2d)[0, 0, :S, :4].float()
-        gold = torch.load(os.path.join(TRACE, f"layer_{L}.pt"))
-        x_pcc = _pcc(got, gold["x_out"][:S])
-        upd_pcc = _pcc(got - gold["x_in"][:S].float(), gold["x_out"][:S].float() - gold["x_in"][:S].float())
-        pre_err = float((pre_got - gold["pre_out"][:S]).abs().max())
-        results[L] = (x_pcc, upd_pcc, pre_err)
-        logger.info(
-            f"[v41 prefill L{L}] x_out PCC {x_pcc:.6f}, update PCC {upd_pcc:.6f}, pre_out max|err| {pre_err:.4g}"
-        )
+        n = min(pf.chunk, S - pf.kv_actual)
+        got = torch.stack([ttnn.to_torch(s, mesh_composer=comp2d)[0, 0, :n] for s in t], dim=1).to(torch.bfloat16)
+        if kind == "out":
+            extra = ttnn.to_torch(pre, mesh_composer=comp2d)[0, 0, :n, :4].float()
+        else:  # the device's own Engram input (ViT V2: the output must equal it on the image span)
+            extra = torch.stack([ttnn.to_torch(s, mesh_composer=comp2d)[0, 0, :n] for s in pre], dim=1).to(
+                torch.bfloat16
+            )
+        collected.setdefault((int(L), kind), []).append((got, extra))
+
+    def grade() -> None:
+        for (L, kind), parts in sorted(collected.items()):
+            got = torch.cat([g for g, _ in parts]).float()  # [S, hc, d]
+            extra = torch.cat([e for _, e in parts]).float()
+            gold = torch.load(os.path.join(TRACE, f"layer_{L}.pt"))
+            if kind == "engram":  # the device Engram output vs model.py's block input (= its Engram output)
+                pcc = _pcc(got, gold["x_in"][:S])
+                txt = ""
+                if span_idx.numel():
+                    pre_eng = torch.load(os.path.join(TRACE, f"engram_{L}.pt"))["engram_in"][:S].float()
+                    d_span = float((got[span_idx] - extra[span_idx]).abs().max())
+                    d_gold = float((gold["x_in"][:S].float()[span_idx] - pre_eng[span_idx]).abs().max())
+                    n_chg = int((got - extra).abs().amax(dim=(1, 2)).gt(0).sum())
+                    txt = (
+                        f"; image span |out - in| max: device {d_span:.4g}, model.py {d_gold:.4g}; positions changed "
+                        f"{n_chg} of {S}"
+                    )
+                    engram_res[L] = d_span
+                logger.info(f"[v41 prefill L{L} engram] output PCC {pcc:.6f} vs model.py{txt}")
+                continue
+            x_pcc = _pcc(got, gold["x_out"][:S])
+            upd_pcc = _pcc(got - gold["x_in"][:S].float(), gold["x_out"][:S].float() - gold["x_in"][:S].float())
+            pre_err = float((extra - gold["pre_out"][:S]).abs().max())
+            results[L] = (x_pcc, upd_pcc, pre_err)
+            span_txt = ""
+            if span_idx.numel():
+                d_upd = (got - gold["x_in"][:S].float())[span_idx]
+                g_upd = (gold["x_out"][:S].float() - gold["x_in"][:S].float())[span_idx]
+                span_txt = (
+                    f", image span ({span_idx.numel()} rows) x_out PCC {_pcc(got[span_idx], gold['x_out'][:S][span_idx]):.6f}"
+                    f" update PCC {_pcc(d_upd, g_upd):.6f}"
+                )
+            logger.info(
+                f"[v41 prefill L{L}] x_out PCC {x_pcc:.6f}, update PCC {upd_pcc:.6f}, pre_out max|err| {pre_err:.4g}{span_txt}"
+            )
 
     pf = V41Prefill(
         mesh_device,
@@ -96,7 +142,8 @@ def test_v41_prefill_vs_model_py(mesh_device, device_params):
         weight_cache_path=CACHE,
     )
     host = EngramHost(max_seq_len=S + 64, table_dir=os.environ.get("DSV41_ENGRAM_TABLE_DIR") or None)
-    pf.prefill(ids, host, on_hidden=on_hidden)
+    pf.prefill(ids, host, on_hidden=on_hidden, image_rows=image_rows)
+    grade()
     snap = pf.cache_snapshot()
     if OUT:
         torch.save(snap, OUT)
@@ -110,6 +157,8 @@ def test_v41_prefill_vs_model_py(mesh_device, device_params):
             p = _pcc(v[:, :n], g[k][:, :n])
             logger.info(f"[v41 prefill cache L{L}] {k} {tuple(v.shape)} vs golden {tuple(g[k].shape)}: PCC {p:.6f}")
             worst = min(worst, p)
+    for L, d in engram_res.items():  # model.py's Engram is an exact identity on image-span positions (DEAD, gate 0)
+        assert d == 0.0, f"layer {L} Engram changed image-span positions by up to {d}"
     last = max(results)
     assert results[last][0] >= MIN_PCC, f"layer {last} output PCC {results[last][0]:.6f} < {MIN_PCC}"
     assert worst >= MIN_PCC, f"cache PCC {worst:.6f} < {MIN_PCC}"
