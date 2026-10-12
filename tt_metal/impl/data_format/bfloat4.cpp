@@ -4,6 +4,7 @@
 
 #include <cmath>
 #include <tt-metalium/bfloat4.hpp>
+#include <tt-metalium/bfloat16.hpp>
 #include <tt_stl/span.hpp>
 #include <array>
 #include <functional>
