@@ -18,6 +18,7 @@ from models.demos.deepseek_v3_d_p.tt.kda.config import (
     KDA_CHUNK_SIZE,
     KDA_DECAY_L1_BYTES_PER_CORE,
     KDA_OUTPUT_MEMORY_CONFIG,
+    KDA_PROJECTION_L1_BYTES_PER_CORE,
     KDA_QKV_L1_BYTES_PER_CORE,
     KDA_RECURRENT_STATE_DTYPE,
     KDAProgramConfig,
@@ -194,6 +195,13 @@ class ttKDA:
         self.decay_memory_config = l1_when_it_fits(
             mesh_device, self.active_seq_len_local * decay_width * 2, KDA_DECAY_L1_BYTES_PER_CORE
         )
+        # Every consumer of the fused input projection (history rows, convolution, decay, chunk preparation's beta,
+        # the gated norm's gate) reads it in place; keep it in L1 when it fits.
+        self.projection_memory_config = l1_when_it_fits(
+            mesh_device,
+            self.active_seq_len_local * tuple(self.weights.input_projection.padded_shape)[-1] * 2,
+            KDA_PROJECTION_L1_BYTES_PER_CORE,
+        )
         # Only chunk preparation reads the convolution's Q, K and V; keep them in L1 when they fit.
         self.qkv_memory_config = l1_when_it_fits(
             mesh_device, self.active_seq_len_local * self._convolution_width * 2, KDA_QKV_L1_BYTES_PER_CORE
@@ -357,14 +365,14 @@ class ttKDA:
                 hidden_states,
                 weights.input_projection,
                 config=self.input_projection_minimal_matmul_config,
-                memory_config=ttnn.DRAM_MEMORY_CONFIG,
+                memory_config=self.projection_memory_config,
                 compute_kernel_config=self.input_projection_compute_config,
             )
         else:
             projected = ttnn.linear(
                 hidden_states,
                 weights.input_projection,
-                memory_config=ttnn.DRAM_MEMORY_CONFIG,
+                memory_config=self.projection_memory_config,
                 compute_kernel_config=self.input_projection_compute_config,
             )
         auxiliary_start = self._convolution_width
