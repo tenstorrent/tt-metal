@@ -84,6 +84,13 @@ constexpr bool PERF_PACK_SECTION_RELEASE = false;
 #define LLK_INIT_ZONE_END()
 #define LLK_INIT_PREP_END LLK_INIT_END
 #endif
+// A constant INIT and the loop share: INIT's noipa body would read a const local from its closure at run time, where
+// production folds it, so the INIT measurement build makes it static constexpr; every other build keeps the plain const
+#if defined(LLK_DBG_BARRIER) && defined(LLK_PERF_INIT_ONLY)
+#define LLK_INIT_CONST static constexpr
+#else
+#define LLK_INIT_CONST const
+#endif
 // The code after the measured loop (uninit): placed like INIT, but never timed as INIT in the INIT measurement build.
 #if defined(LLK_DBG_BARRIER) && defined(LLK_PERF_OOL)
 #define LLK_UNINIT_BEGIN [=]() __attribute__((noipa, section(".llk_init_text"), aligned(512)))
