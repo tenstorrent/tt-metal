@@ -74,3 +74,11 @@ Branch ttp/t409-port-vsa-sparse-attention-into-the-fasth, base a15eb37ec6a (t400
 - Fix: pinned diffusers installed with uv --no-deps --target /var/tmp/fasth3/t409/pydeps on blx01 (30 MB; shared
   t48 env untouched); env409.yaml PYTHONPATH gets it. `pytest --collect-only` on blx01: 4 tests collected.
 - chain416a restarted detached from run 1655 (state/runs/1655/chain416a.out). Same next step as before.
+
+## t416 run 1664 (2026-10-12 05:50 PDT)
+- chain416a (run 1655) submitted blx01 job 958 at ~12:45Z: same collection error (`No module named
+  'diffusers.models.transformers.transformer_minimax_h3'`). Cause: run409a.sh line 11 re-exports PYTHONPATH and
+  dropped env409.yaml's pydeps entry. No device compute, no drop.
+- Fix: run409a.sh PYTHONPATH adds $T/pydeps (only run409a; run409b keeps diffusers 0.38 so the dense arm matches #408).
+  Copied to blx01 via tmp+mv; import check with that PYTHONPATH resolves pydeps/.../transformer_minimax_h3.py.
+- chain416a restarted detached from run 1664 (state/runs/1664/chain416a.out).
