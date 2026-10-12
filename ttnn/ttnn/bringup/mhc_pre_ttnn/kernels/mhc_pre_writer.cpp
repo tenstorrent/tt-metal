@@ -74,38 +74,6 @@ constexpr uint32_t MCAST_RT_BASE = 18;
 constexpr uint32_t W_ROLE_DRAM = 0;
 constexpr uint32_t W_ROLE_SPREAD = 1;
 
-// The W all-gather's send. #57547's rotating Counter SenderPipe also counts its own send on its own counter, with a
-// local non-atomic += (LOCAL_NONATOMIC scope on BH DM) that races the other rows' NoC atomic increments landing on the
-// same word: an update is lost and the receive hangs. So the share goes out through a NON-rotating pipe built from
-// this core's own sender record of the same wire (bounds, counts, mode): the transfers the old pipe made (payload +
-// inc_multicast to the rest of the column, no self-count). A template so it compiles for an absent block.
-template <uint32_t W_RT, typename M>
-FORCE_INLINE void send_w_share(const M& w_mc, const Noc& noc, uint32_t addr, uint32_t size) {
-    if constexpr (M::active) {
-        using namespace dataflow_kernel_lib::mcast_wire;
-        constexpr uint32_t W_RECT = W_RT + rectangles_offset(M::rotating_span);
-        static_assert(M::rectangle_capacity == 1, "mhc_pre: a W column is one rectangle");
-        const dataflow_kernel_lib::SenderRuntimeArguments args(
-            {get_arg_val<uint32_t>(W_RECT + SX),
-             get_arg_val<uint32_t>(W_RECT + SY),
-             get_arg_val<uint32_t>(W_RECT + EX),
-             get_arg_val<uint32_t>(W_RECT + EY)},
-            get_arg_val<uint32_t>(W_RECT + REMOTE),
-            get_arg_val<uint32_t>(W_RECT + LOOPBACK),
-            0,
-            static_cast<dataflow_kernel_lib::SenderMcastMode>(get_arg_val<uint32_t>(W_RECT + RECT_SENDER_MCAST_MODE)));
-        dataflow_kernel_lib::SenderPipe<
-            noc_index,
-            M::data_ready,
-            /*PRE_HANDSHAKE=*/false,
-            dataflow_kernel_lib::UNUSED_SEM_ID,
-            dataflow_kernel_lib::DataReadySignal::Counter,
-            /*ROTATING_SENDER=*/false>
-            sender(noc, args);
-        sender.send(addr, addr, size);
-    }
-}
-
 void kernel_main() {
     constexpr uint32_t cb_partial = get_compile_time_arg_val(0);
     constexpr uint32_t cb_gathered = get_compile_time_arg_val(1);
@@ -242,17 +210,20 @@ void kernel_main() {
                 cb_wait_front(cb_w_own_split, 1);
                 cb_pop_front(cb_w_own_split, 1);
             }
-            if (own_p1 > own_p0) {
+            const bool w_sends = own_p1 > own_p0;
+            if (w_sends) {
                 MaybeDeviceZoneScope("w_w_send");
-                // See send_w_share: not the family's rotating sender (its self-count races).
-                send_w_share<mc.next_runtime_args_offset()>(
-                    w_mc, noc, w_base + own_p0 * w_tile_bytes, (own_p1 - own_p0) * w_tile_bytes);
+                auto w_sender = w_mc.optional_sender(noc);
+                w_sender->send(
+                    w_base + own_p0 * w_tile_bytes, w_base + own_p0 * w_tile_bytes, (own_p1 - own_p0) * w_tile_bytes);
             }
             MaybeDeviceZoneScope("w_w_recv");
-            // Counter: one event per other row's share, landed in place; receive(round) waits for round + 1.
-            if (w_events != 0) {
+            // Counter: one event per other row's share, landed in place, plus one for the own send (the rotating
+            // sender counts its own round); receive(round) waits for round + 1.
+            const uint32_t w_landed = w_events + (w_sends ? 1u : 0u);
+            if (w_landed != 0) {
                 auto w_receiver = w_mc.optional_receiver(noc);
-                w_receiver->receive(w_events - 1);
+                w_receiver->receive(w_landed - 1);
             }
         }
         cb_push_back(cb_weight, core_k_tiles);

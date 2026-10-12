@@ -258,8 +258,8 @@ def test_transport_words_reach_the_writer(device, shape, memory_layout, shard, c
         return
     assert (word >> 8) & 0xFF == (0 if compact else COMBINE_MCAST_FACES)
     if single_round is not None:
-        # McastArgs<18, ...> (#57547's wire): [tag, has_receivers, data_ready, consumer_ready, ack_count, flags, ...]
-        flags = writer_ct[18 + 5]
+        # McastArgs<18, ...>: CT word 18 is the control word, its low 5 bits the flags (bit 0 = PRE_HANDSHAKE)
+        flags = writer_ct[18] & 0x1F
         assert bool(flags & 0x1) is (
             not single_round
         ), "the pre-handshake bit must be OFF exactly on a single-round combine"
