@@ -5,7 +5,6 @@
 #include "ttnn/operations/data_movement/pad/codegen/pad_codegen_program_factory.hpp"
 
 #include <algorithm>
-#include <array>
 #include <utility>
 #include <variant>
 #include <vector>
@@ -229,25 +228,13 @@ ProgramDescriptor build_fill_partial_tile(
     const uint32_t w_mod = attrs.W_out % tile_w;
     const uint32_t planes = attrs.N_out * attrs.C_out;
 
-    // One task per border tile: {tile id, first invalid row, first invalid col}.
-    std::vector<std::array<uint32_t, 3>> tasks;
-    for (uint32_t plane = 0; plane < planes; ++plane) {
-        const uint32_t base = plane * Ht * Wt;
-        if (h_mod != 0) {
-            for (uint32_t wt = 0; wt < Wt; ++wt) {
-                const uint32_t col_from = (wt == Wt - 1 && w_mod != 0) ? w_mod : tile_w;
-                tasks.push_back({base + (Ht - 1) * Wt + wt, h_mod, col_from});
-            }
-        }
-        if (w_mod != 0) {
-            const uint32_t rows = (h_mod != 0) ? Ht - 1 : Ht;
-            for (uint32_t ht = 0; ht < rows; ++ht) {
-                tasks.push_back({base + ht * Wt + Wt - 1, tile_h, w_mod});
-            }
-        }
-    }
+    // Border tiles of one plane: the bottom tile row when H is partial, then the right tile column when W is
+    // partial, the corner counted once in the row. The kernel walks the same order from each core's range.
+    const uint32_t bottom = (h_mod != 0) ? Wt : 0;
+    const uint32_t right = (w_mod != 0) ? ((h_mod != 0) ? Ht - 1 : Ht) : 0;
+    const uint32_t total = planes * (bottom + right);
 
-    const CoreSplit split = split_work(input, static_cast<uint32_t>(tasks.size()));
+    const CoreSplit split = split_work(input, total);
 
     ProgramDescriptor desc;
     desc.cbs.push_back(make_cb(split.all_cores, kCbOut, format, tile_bytes, 2));
@@ -266,13 +253,7 @@ ProgramDescriptor build_fill_partial_tile(
     uint32_t start = 0;
     for (const auto& core : split.cores_in_order) {
         const uint32_t n = work_for_core(split, core);
-        RtArgs args = {buffer, n};
-        for (uint32_t i = start; i < start + n; ++i) {
-            args.emplace_back(tasks[i][0]);
-            args.emplace_back(tasks[i][1]);
-            args.emplace_back(tasks[i][2]);
-        }
-        kernel_desc.emplace_runtime_args(core, args);
+        kernel_desc.emplace_runtime_args(core, RtArgs{buffer, start, n, Ht, Wt, h_mod, w_mod});
         start += n;
     }
 

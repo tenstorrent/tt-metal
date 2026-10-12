@@ -24,6 +24,9 @@
 #include "api/dataflow/endpoints.h"
 #include "api/core_local_mem.h"
 #include "api/tensor/noc_traits.h"
+#if !defined(ARCH_QUASAR)
+#include "ckernel.h"
+#endif
 #include "sequencers.h"
 
 // A caller may supply an authoritative source-pitch override via the named CT
@@ -238,6 +241,14 @@ void kernel_main() {
             for (uint32_t i = 0; i < fill_words; ++i) {
                 ptr[i] = fill_value;
             }
+#if !defined(ARCH_QUASAR)
+            // The NoC self-reads below source this tile, but the RISC and the
+            // NoC are separate L1 clients and a store can retire before it
+            // lands. A blocking load of the last store drains every earlier
+            // one; Wormhole matches by start address only, so it names that
+            // store exactly.
+            (void)ckernel::load_blocking(&ptr[fill_words - 1]);
+#endif
         }
         const uint32_t pad_l1 = cb_pad.get_read_ptr();
         UnicastEndpoint self_ep;
