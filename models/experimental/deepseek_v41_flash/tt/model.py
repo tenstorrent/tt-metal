@@ -39,6 +39,7 @@ from models.experimental.deepseek_v41_flash.tt.config import (
 )
 from models.experimental.deepseek_v41_flash.tt.decode.attention import _SELECT_KV_RATE, DeepSeekV41LayerCache
 from models.experimental.deepseek_v41_flash.tt.decode.decoder_layer import DeepSeekV41DecoderLayer
+from models.experimental.deepseek_v41_flash.tt.decode.dspark import DeepSeekV41DSpark, host_to_device
 from models.experimental.deepseek_v41_flash.tt.decode.moe import DeepSeekV41PreloadedExperts
 from models.experimental.deepseek_v41_flash.tt.engram_lookup import (
     EngramHostLookup,
@@ -46,15 +47,19 @@ from models.experimental.deepseek_v41_flash.tt.engram_lookup import (
     load_engram_table,
 )
 from models.experimental.deepseek_v4_flash.tt.common import (
+    _HIFI4,
     _MASK_NEG,
     _profile,
     _region,
+    _trace_capture_guard,
     _traced_decode_enabled,
     width_sharded_l1_config,
 )
 from models.experimental.deepseek_v4_flash.tt.decode.attention import (
     CSA_INDEX_BLOCK_SIZE,
     _index_key_pool,
+    _one_row_per_user,
+    _update_cache_at,
 )
 from models.experimental.deepseek_v4_flash.tt.decode.hyperconnection import _HC_COLLAPSE_CORES
 from models.experimental.deepseek_v4_flash.tt.embedding import DeepSeekV4Embedding
@@ -286,6 +291,8 @@ class DeepSeekV41Model(DeepSeekV4Model):
         self._session_pos: dict[int, int] = {}
         self._decode_batch = 1
         self._cache_handoff: dict[tuple[int, int], tuple[list, list]] = {}
+        self._spec_hist = None
+        self.dspark: Optional[DeepSeekV41DSpark] = None
 
     def _engram_ids(self) -> list[int]:
         return [i for i in self.config.engram_layer_ids if i < self.num_layers]
@@ -710,6 +717,10 @@ class DeepSeekV41Model(DeepSeekV4Model):
         for ratio in sm["index_ratios"]:
             if ratio == 1 or (ratio == 2 and r2_select):
                 ctx["index_pos"][ratio] = self._index_position(pos_f, ratio)
+        if sm.get("hist_layers"):
+            ctx["hist_slot"] = self._win_slot(pos_f, self._spec_hist)
+        if sm.get("taps"):
+            ctx["stash_slot"] = self._win_slot(pos_f, self.dspark.stash_rows)
         return ctx
 
     def _compressed_mask(self, idx: ttnn.Tensor, pos_f: ttnn.Tensor, ratio: int) -> ttnn.Tensor:
@@ -752,6 +763,7 @@ class DeepSeekV41Model(DeepSeekV4Model):
             inputs["pool"] = pool
             if ratio > 1:
                 inputs["win_slot"] = ctx["win_slot"][ratio]
+                inputs["hist_slot"] = ctx.get("hist_slot")
             if pool:
                 inputs["cos_win"], inputs["sin_win"] = ctx["win_rope"][ratio]
                 inputs["entry"] = ctx["entry"][ratio]
@@ -847,6 +859,14 @@ class DeepSeekV41Model(DeepSeekV4Model):
                     memory_config=sm["streams_memory_config"],
                 )
                 pre_mix = sm["pre_mix_init"]
+            if li in sm.get("taps", {}):
+                row = self._collapse_streams(streams, sm["tap_weights"])
+                b, hidden = row.shape[0], row.shape[-1]
+                row = ttnn.reshape(ttnn.to_layout(row, ttnn.ROW_MAJOR_LAYOUT), [1, 1, b, hidden])
+                for j, piece in enumerate(sm["taps"][li]):
+                    w = piece.shape[-1]
+                    part = ttnn.slice(row, [0, 0, 0, j * w], [1, 1, b, (j + 1) * w])
+                    _update_cache_at(piece, _one_row_per_user(part), ctx["stash_slot"])
             streams, pre_mix = layer.decode(
                 streams,
                 pre_mix,
@@ -876,3 +896,176 @@ class DeepSeekV41Model(DeepSeekV4Model):
                 if pre_send not in persistent:
                     pre_send.deallocate()
         return out if out is not None else streams
+
+    # -- DSpark speculative decode -- #
+    def prepare_spec_decode(self, rope_main, drafter: bool = True, hist: int = 32, **drafter_kwargs) -> None:
+        """Allocate what speculative decode adds to :meth:`prepare_static_decode`. Call it after that and
+        before anything is compiled.
+
+        A verify round decodes ``[bonus, draft_1 .. draft_k]`` at consecutive positions, and the rows the
+        rejected drafts wrote must leave no trace. Every stage keeps a shadow of each sliding ring, whose
+        rows :meth:`_spec_fixup` puts back over the rejected slots. A ratio > 1 kv source also keeps a
+        ``hist``-deep history of its compressor-window rows, from which the window slot of the last
+        verified position is restored. Everything else a step writes is keyed by position, so the
+        accepted token at that position rewrites it before anything reads it.
+
+        ``drafter`` builds :class:`DeepSeekV41DSpark` on the output stage around the ``lm_head`` given to
+        :meth:`prepare_static_decode` (``rope_main`` is the sliding RoPE table, ``drafter_kwargs`` go to the
+        constructor) and taps the stream mean at its target layers into its stash every step.
+        """
+        if self._traces_compiled or self._traced_captured:
+            raise RuntimeError("call prepare_spec_decode() before the decode traces are compiled")
+        cfg = self.config
+        window, head_dim = self.sliding_window, cfg.head_dim
+        self._spec_hist = hist
+        for sm in self.submeshes_io:
+            device = sm["device"]
+            sm["ring_shadow"] = {li: _device_zeros((1, 1, window, head_dim), device) for li in sm["layers"]}
+            sm["fix_mask"] = _device_zeros((1, 1, window, 1), device)
+            sm["fix_keep"] = _device_zeros((1, 1, window, 1), device)
+            sm["hist_layers"] = [
+                li for li in sm["layers"] if li in cfg.kv_source_layer_ids and int(cfg.compress_ratios[li]) > 1
+            ]
+            for li in sm["hist_layers"]:
+                scache = sm["scaches"][li]
+                scache.win_hist_kv = _device_zeros((1, 1, hist, head_dim), device)
+                scache.win_hist_gate = _device_zeros((1, 1, hist, head_dim), device)
+            hist_ratios = sorted({int(cfg.compress_ratios[li]) for li in sm["hist_layers"]})
+            if hist_ratios:
+                sm["fix_hist"] = _device_zeros((1, 1, 1, hist), device)
+                sm["fix_slot"] = {r: _device_zeros((1, 1, r, 1), device) for r in hist_ratios}
+                sm["fix_slot_keep"] = {r: _device_zeros((1, 1, r, 1), device) for r in hist_ratios}
+        self._spec_tids = {}
+        self._spec_draft_out = None
+        if not drafter:
+            return
+        if self._lm_head_traced is None:
+            raise ValueError("the drafter shares the decode lm_head: pass lm_head to prepare_static_decode()")
+        out_sm = self.submeshes_io[self._output_sm_index]
+        self.dspark = DeepSeekV41DSpark(
+            cfg,
+            self.loader,
+            out_sm["device"],
+            self._lm_head_traced,
+            rope_main,
+            cache=self.cache,
+            tp_size=self.tp_size,
+            **drafter_kwargs,
+        )
+        taps = dict(zip(self.dspark.targets, self.dspark.stash))
+        elsewhere = [li for li in taps if li not in out_sm["layers"]]
+        if elsewhere:
+            raise ValueError(f"DSpark target layers {elsewhere} are not on the output stage {out_sm['index']}")
+        out_sm["taps"] = taps
+        out_sm["tap_weights"] = ttnn.from_torch(
+            torch.full((1, 1, 1, cfg.hc_mult), 1.0 / cfg.hc_mult),
+            dtype=ttnn.bfloat16,
+            layout=ttnn.TILE_LAYOUT,
+            device=out_sm["device"],
+        )
+
+    def _spec_fixup(self, sm: dict) -> None:
+        """Undo the previous round's rejected rows on ``sm``, then snapshot its rings for this round.
+
+        ``fix_mask`` marks the rejected positions' ring slots (``fix_keep`` is its complement); they get
+        their shadow rows back. ``fix_hist`` picks the last verified position's row out of each window
+        history and ``fix_slot`` is the window slot it goes back to. Every product is with 0 or 1, so the
+        restore is exact.
+        """
+        for li in sm["layers"]:
+            ring, shadow = sm["scaches"][li].kv, sm["ring_shadow"][li]
+            ttnn.copy(ttnn.add(ttnn.multiply(ring, sm["fix_keep"]), ttnn.multiply(shadow, sm["fix_mask"])), ring)
+            ttnn.copy(ring, shadow)
+        for li in sm["hist_layers"]:
+            scache = sm["scaches"][li]
+            ratio = int(self.config.compress_ratios[li])
+            slot, keep = sm["fix_slot"][ratio], sm["fix_slot_keep"][ratio]
+            for win, hist in ((scache.win_kv, scache.win_hist_kv), (scache.win_gate, scache.win_hist_gate)):
+                row = ttnn.matmul(sm["fix_hist"], hist, compute_kernel_config=_HIFI4)
+                ttnn.copy(ttnn.add(ttnn.multiply(win, keep), ttnn.multiply(slot, row)), win)
+
+    def capture_spec_traces(self, token_id, pos: int) -> None:
+        """Compile and then capture the decode variants, every stage's fixup and the drafter's
+        ``write_main`` / ``draft``.
+
+        All compile runs come before the first capture on any chip (see :meth:`_capture_traces`). They
+        write zeros or the rows of ``pos``, which prefill overwrites.
+        """
+        if self._spec_hist is None:
+            raise RuntimeError("call prepare_spec_decode() first")
+        self.compile_traces(token_id, pos)
+        for sm in self.submeshes_io:
+            self._spec_fixup(sm)
+        if self.dspark is not None:
+            self.dspark.write_main()
+            for out in self.dspark.draft():
+                out.deallocate(True)
+        for sm in self.submeshes_io:
+            ttnn.synchronize_device(sm["device"])
+        self._capture_traces(token_id, pos)
+        for sm in self.submeshes_io:
+            tid = ttnn.begin_trace_capture(sm["device"], cq_id=0)
+            with _trace_capture_guard():
+                self._spec_fixup(sm)
+            ttnn.end_trace_capture(sm["device"], tid, cq_id=0)
+            sm["fix_tid"] = tid
+        if self.dspark is not None:
+            device = self.dspark.device
+            tid = ttnn.begin_trace_capture(device, cq_id=0)
+            with _trace_capture_guard():
+                self.dspark.write_main()
+            ttnn.end_trace_capture(device, tid, cq_id=0)
+            self._spec_tids["write_main"] = tid
+            tid = ttnn.begin_trace_capture(device, cq_id=0)
+            with _trace_capture_guard():
+                self._spec_draft_out = self.dspark.draft()
+            ttnn.end_trace_capture(device, tid, cq_id=0)
+            self._spec_tids["draft"] = tid
+
+    def spec_fixup(self, rejected, frontier: int) -> None:
+        """Queue every stage's fixup ahead of a verify round: restore the ring slots of the previous round's
+        ``rejected`` positions and the window rows of the last verified position ``frontier``."""
+        self._wait_replays_dispatched()
+        window, hist = self.sliding_window, self._spec_hist
+        mask = torch.zeros(1, 1, window, 1)
+        for p in rejected:
+            mask[0, 0, p % window, 0] = 1
+        pick = torch.zeros(1, 1, 1, hist)
+        pick[0, 0, 0, frontier % hist] = 1
+        for sm in self.submeshes_io:
+            host_to_device(mask, sm["fix_mask"])
+            host_to_device(1 - mask, sm["fix_keep"])
+            if sm["hist_layers"]:
+                host_to_device(pick, sm["fix_hist"])
+                for ratio, slot in sm["fix_slot"].items():
+                    one_hot = torch.zeros(1, 1, ratio, 1)
+                    one_hot[0, 0, frontier % ratio, 0] = 1
+                    host_to_device(one_hot, slot)
+                    host_to_device(1 - one_hot, sm["fix_slot_keep"][ratio])
+            ttnn.execute_trace(sm["device"], sm["fix_tid"], cq_id=0, blocking=False)
+
+    def spec_write_main(self, positions, written) -> None:
+        """Queue the drafter's ``write_main`` for verified ``positions`` (``written[j]`` False keeps row
+        ``j`` out of the rings). Their stash rows must still be in the stash."""
+        self._wait_replays_dispatched()
+        self.dspark.set_main_rows(positions, written)
+        ttnn.execute_trace(self.dspark.device, self._spec_tids["write_main"], cq_id=0, blocking=False)
+
+    def spec_seed(self, positions) -> None:
+        """Write every one of ``positions`` into the drafter rings, ``main_rows`` at a time."""
+        positions = list(positions)
+        rows = self.dspark.main_rows
+        for i in range(0, len(positions), rows):
+            chunk = positions[i : i + rows]
+            self.spec_write_main(chunk, [True] * len(chunk))
+
+    def spec_draft(self, token: int, frontier: int) -> tuple[list[int], list[float]]:
+        """Draft from ``token``, the next input after the last verified position ``frontier``: ``block_size``
+        proposals for positions ``frontier + 2 ..`` and their confidence logits. The drafter rings must
+        hold every verified position up to ``frontier``."""
+        self._wait_replays_dispatched()
+        d = self.dspark
+        d.set_block(token, frontier)
+        ttnn.execute_trace(d.device, self._spec_tids["draft"], cq_id=0, blocking=False)
+        ids, conf = (ttnn.to_torch(ttnn.get_device_tensors(t)[0]) for t in self._spec_draft_out)
+        return [int(i) for i in ids.flatten()], [float(c) for c in conf.flatten()]

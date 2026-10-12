@@ -122,6 +122,30 @@ def engram_weights(loader: DeepseekV4WeightLoader, layer_idx: int) -> dict:
     return {k: dequantized(loader, prefix + k) for k in ("wkv.weight", "q_weight", "k_weight")}
 
 
+def dspark_weights(loader: DeepseekV4WeightLoader, stage: int) -> dict:
+    """Lazy fp32 weights of DSpark stage ``stage`` (``mtp.{stage}.*``), as thunks under their checkpoint
+    names with the prefix stripped (``attn.wq_a.weight``, ``hc_attn_fn``, ``ffn.gate.bias``, ...). The routed
+    experts come from :func:`dspark_expert_provider`."""
+    prefix = f"mtp.{stage}."
+    return {
+        name[len(prefix) :]: dequantized(loader, name)
+        for name in loader.keys()
+        if name.startswith(prefix) and not name.endswith(".scale") and ".ffn.experts." not in name
+    }
+
+
+def dspark_expert_provider(loader: DeepseekV4WeightLoader, stage: int):
+    """:func:`expert_provider` for DSpark stage ``stage``, whose experts keep the checkpoint's
+    ``w1`` / ``w3`` / ``w2`` (gate / up / down) names."""
+    prefix = f"mtp.{stage}.ffn.experts"
+
+    def provider(e: int):
+        gate, up, down = (dequantized(loader, f"{prefix}.{e}.{p}.weight")() for p in ("w1", "w3", "w2"))
+        return torch.cat([gate, up]), down
+
+    return provider
+
+
 def decoder_layer_weights(loader: DeepseekV4WeightLoader, layer_idx: int, config) -> dict:
     """Lazy fp32 weights of decoder layer ``layer_idx``, as thunks: :func:`attention_weights` under
     ``self_attn.``, :func:`moe_weights` under ``mlp.``, :func:`engram_weights` under ``engram.`` (Engram
