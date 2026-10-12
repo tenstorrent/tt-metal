@@ -255,12 +255,15 @@ def _recover_board(error_text: str = "", fault_is_certain: bool = False) -> tupl
 
 class _StepResult:
     """One attempt of a device-running gate step: passed?, its output, and whether it had to be
-    stopped for making no progress (a hang, as opposed to a run that finished and failed)."""
+    stopped for making no progress (a hang, as opposed to a run that finished and failed). `earned` is
+    what tests that passed in EARLIER attempts of the same step printed (see _passed_segments): kept
+    apart from `output`, which stays this attempt's own, so a check of this attempt reads only it."""
 
-    __slots__ = ("ok", "output", "stalled", "detail")
+    __slots__ = ("ok", "output", "stalled", "detail", "earned")
 
-    def __init__(self, ok: bool, output: str = "", stalled: bool = False, detail=None):
+    def __init__(self, ok: bool, output: str = "", stalled: bool = False, detail=None, earned: str = ""):
         self.ok, self.output, self.stalled, self.detail = bool(ok), output or "", bool(stalled), detail
+        self.earned = earned or ""
 
 
 def _retry_after_wedge(label: str, run_once) -> tuple:
@@ -1625,6 +1628,26 @@ def _import_closure(demo_dir: Path, seeds: Optional[list] = None) -> list:
     return out
 
 
+def _passed_segments(output: str) -> dict:
+    """{node id: the lines it printed, from its start mark to its passed mark} for every test the gate's
+    mark plugin (gate_pytest_plugins) saw PASS in `output`. A mark may share a line with pytest's own
+    progress text, so it is found anywhere in the line; the node id is the rest of that line."""
+    from ..gate_pytest_plugins.tt_hw_planner_gate_marks import PASSED_MARK, START_MARK
+
+    lines = (output or "").splitlines()
+    segs, cur, first = {}, None, None
+    for i, ln in enumerate(lines):
+        j = ln.find(START_MARK)
+        if j >= 0:
+            cur, first = ln[j + len(START_MARK) :].strip(), i
+            continue
+        j = ln.find(PASSED_MARK)
+        if j >= 0 and first is not None and ln[j + len(PASSED_MARK) :].strip() == cur:
+            segs[cur] = "\n".join(lines[first : i + 1])
+            cur, first = None, None
+    return segs
+
+
 def _gate_test_files(demo_dir: Path) -> list:
     """The tests the correctness gate RUNS -- one owner, so the fingerprint follows the gate.
 
@@ -1947,12 +1970,39 @@ def _run_deterministic_gates(demo_dir: Path, pcc: float, timeout_s: int, batch: 
     _gate_argv = [py, "-m", "pytest", *[str(f) for f in gate_tests], "-p", "no:cacheprovider"]
     _gate_argv += [*_pr.PYTEST_NO_TIMEOUT, "-rA", "-s"]
 
+    # A RE-RUN RUNS ONLY WHAT HAS NOT PASSED. Every retry of this step (a wedge, a thermal abort, a
+    # failure discarded as hot) re-ran the whole suite from its first test, and a session ended from
+    # outside leaves no summary to say what had passed. Measured 2026-10-12 on a 4-chip p300c:
+    # Devstral's four tests take ~12 min back to back, the board reached the 95C abort limit at ~11-12
+    # min even from 65C, and twelve retries in a row were ended near the end -- while the same four
+    # passed one at a time. The mark plugin says each pass as it happens; tests that passed in an
+    # earlier attempt of THIS call are left out of the next, and the verdict is the union. Scoped to
+    # this call, so a later call (after the code may have changed) re-earns everything.
+    from ..gate_pytest_plugins import tt_hw_planner_gate_marks as _marks
+
+    _earned = {}  # node id -> what it printed while passing, across this call's attempts
+    _earned_file = _gate_log.with_name("gate_earned_tests.txt")
+    _earned_file.unlink(missing_ok=True)
+    gate_env[_marks.EARNED_ENV] = str(_earned_file)
+    gate_env["PYTHONPATH"] += os.pathsep + str(Path(_marks.__file__).parent)  # holds only plugins
+    _gate_argv += ["-p", _marks.__name__.rsplit(".", 1)[-1]]
+
     def _e2e_once():
         # The run that already passed, on code that has not changed since, is still a pass; what the
         # checks below it read is replayed from the record rather than re-earned on the device.
         if _cached_pass is not None:
             return _StepResult(True, "\n".join(_cached_pass + ["1 passed"]), detail=0)
         _gate_log.unlink(missing_ok=True)  # each attempt is judged on its own output
+        prior = dict(_earned)
+        _earned_file.write_text("".join(n + "\n" for n in prior))
+        if prior:
+            print(
+                "  [gate] re-running only the test(s) not yet passed in this gate run; already passed: %s"
+                % ", ".join(prior),
+                file=sys.stderr,
+                flush=True,
+            )
+        carried = "\n".join(prior.values())
         try:
             rc = _pr._execute(
                 _gate_argv,
@@ -1962,12 +2012,18 @@ def _run_deterministic_gates(demo_dir: Path, pcc: float, timeout_s: int, batch: 
                 _gate_log,
             )
             out = _gate_log.read_text(errors="ignore") if _gate_log.exists() else ""
-            return _StepResult(rc == 0, out, detail=rc)
+            _earned.update(_passed_segments(out))
+            # Nothing left to select is pytest's "no tests ran" -- here, every test already passed.
+            import pytest as _pytest
+
+            ok = rc == 0 or (rc == _pytest.ExitCode.NO_TESTS_COLLECTED and bool(prior))
+            return _StepResult(ok, out, detail=rc, earned=carried)
         except _pr.TracyHangError as _he:
             # NOW this really is a stall: no log growth and no CPU. The run was killed mid-flight, so
             # the board is suspect whatever its telemetry says (_retry_after_wedge resets it for sure).
             out = _gate_log.read_text(errors="ignore") if _gate_log.exists() else ""
-            return _StepResult(False, out + "\n" + str(_he), stalled=True, detail=_he)
+            _earned.update(_passed_segments(out))
+            return _StepResult(False, out + "\n" + str(_he), stalled=True, detail=_he, earned=carried)
 
     # KEEP THE LOG OF A STEP THAT FAILED. This deleted the gate's own output unconditionally, so the
     # only trace of a failure was the 15-line tail quoted into `reasons` -- and for a step killed
@@ -1990,7 +2046,8 @@ def _run_deterministic_gates(demo_dir: Path, pcc: float, timeout_s: int, batch: 
             shutil.rmtree(_gate_log.parent, ignore_errors=True)
     if not _e2e.ok and _gate_log.exists():
         reasons.append(f"G2/G3: the failing run's full output is kept at {_gate_log}")
-    pytest_out = _e2e.output
+    # The verdict covers every test this call saw pass, so the checks below read all of what they printed.
+    pytest_out = "\n".join(x for x in (_e2e.earned, _e2e.output) if x)
     if _e2e.stalled:
         reasons.append(f"G2/G3: tests/e2e made no forward progress ({_e2e.detail})")
     else:
