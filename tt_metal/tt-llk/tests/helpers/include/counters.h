@@ -213,7 +213,7 @@ inline std::uint32_t get_active_bank_mask()
 
 inline void configure_hardware()
 {
-#if defined(TT_METAL_TTSIM) // ttsim models no counter registers
+#if defined(TT_METAL_TTSIM) || defined(NCW_NOWORK) || defined(NCW_ENTRY_ONLY) // ttsim models no counter registers
     return;
 #endif
     const volatile std::uint32_t* config_mem = reinterpret_cast<volatile std::uint32_t*>(PERF_COUNTERS_SHARED_CONFIG_ADDR);
@@ -258,7 +258,7 @@ inline void configure_hardware()
 
 inline void arm_hardware()
 {
-#if defined(TT_METAL_TTSIM)
+#if defined(TT_METAL_TTSIM) || defined(NCW_NOWORK) || defined(NCW_ENTRY_ONLY)
     return;
 #endif
     const std::uint32_t arm_cmd = detail::arm_cmd;
@@ -325,6 +325,9 @@ inline void configure_all_zones()
 // unpack TRISC on Quasar, in both cases before the other TRISCs are released.
 inline void configure_and_arm()
 {
+#if defined(NCW_NOWORK) || defined(NCW_ENTRY_ONLY)
+    return;
+#endif
     volatile std::uint32_t* shared_config = reinterpret_cast<volatile std::uint32_t*>(PERF_COUNTERS_SHARED_CONFIG_ADDR);
     for (std::uint32_t i = 0; i < BUILTIN_COUNTER_COUNT; i++)
     {
@@ -420,7 +423,7 @@ static_assert(PERF_COUNTERS_LAYOUT_END <= llk_profiler::EPOCH_ADDR, "Perf counte
 // PERF_CNT_ALL reaches only INSTRN_THREAD and FPU; the other banks take the pulse on their own control register.
 inline __attribute__((always_inline)) void arm_all_counters()
 {
-#if defined(TT_METAL_TTSIM)
+#if defined(TT_METAL_TTSIM) || defined(NCW_NOWORK) || defined(NCW_ENTRY_ONLY)
     return;
 #endif
     ckernel::fence_compiler();
@@ -441,7 +444,7 @@ inline __attribute__((always_inline)) void arm_all_counters()
 
 inline __attribute__((always_inline)) void freeze_all_counters()
 {
-#if defined(TT_METAL_TTSIM)
+#if defined(TT_METAL_TTSIM) || defined(NCW_NOWORK) || defined(NCW_ENTRY_ONLY)
     return;
 #endif
     ckernel::fence_compiler();
@@ -464,7 +467,7 @@ inline __attribute__((always_inline)) void freeze_all_counters()
 // reload per loop level in math_matmul), so single thread run types only freeze there and a peer reads later.
 inline __attribute__((always_inline)) void read_all_counters([[maybe_unused]] std::uint32_t zone_id)
 {
-#if defined(TT_METAL_TTSIM)
+#if defined(TT_METAL_TTSIM) || defined(NCW_NOWORK) || defined(NCW_ENTRY_ONLY)
     return;
 #endif
     ckernel::fence_compiler();
@@ -521,6 +524,9 @@ inline __attribute__((always_inline)) void read_all_counters([[maybe_unused]] st
 
 inline __attribute__((always_inline)) void freeze_zone(std::uint32_t zone_id)
 {
+#if defined(NCW_NOWORK) || defined(NCW_ENTRY_ONLY)
+    return;
+#endif
     freeze_all_counters();
     volatile std::uint32_t* pending = reinterpret_cast<volatile std::uint32_t*>(PERF_COUNTERS_PENDING_ZONE_ADDR);
     *pending                        = zone_id + 1;
@@ -530,6 +536,9 @@ inline __attribute__((always_inline)) void freeze_zone(std::uint32_t zone_id)
 // Runs only once every thread is past the frozen zone: inside a rendezvous or in read_last_zone after run_kernel.
 inline __attribute__((always_inline)) void read_pending_zone()
 {
+#if defined(NCW_NOWORK) || defined(NCW_ENTRY_ONLY)
+    return;
+#endif
     volatile std::uint32_t* pending = reinterpret_cast<volatile std::uint32_t*>(PERF_COUNTERS_PENDING_ZONE_ADDR);
     const std::uint32_t zone        = *pending;
     if (zone != 0)
@@ -597,6 +606,9 @@ static bool reader_here;
 // After run_kernel on the reader thread: wait for the measured thread to freeze its last zone, then read it back.
 inline void read_last_zone()
 {
+#if defined(NCW_NOWORK) || defined(NCW_ENTRY_ONLY)
+    return;
+#endif
     if (detail::reader_here)
     {
         volatile std::uint32_t* pending = reinterpret_cast<volatile std::uint32_t*>(PERF_COUNTERS_PENDING_ZONE_ADDR);
@@ -659,6 +671,7 @@ struct perf_counter_scoped
         }
         else
         {
+#if !defined(NCW_ENTRY_ONLY)
             llk_barrier::rendezvous(
                 llk_barrier::is_action_thread(),
                 [zid]
@@ -666,6 +679,9 @@ struct perf_counter_scoped
                     freeze_all_counters();
                     read_all_counters(zid);
                 });
+#else
+            (void)zid;
+#endif
         }
         ckernel::fence_compiler();
     }
@@ -691,7 +707,9 @@ inline void read_last_zone()
 #endif
 
 // One measured scope: NC activates timing only, WC both. Without the profiler there is no zone to open.
-#if defined(LLK_PROFILER)
+#if defined(LLK_PROFILER) && defined(NCW_NOTHING)
+#define START_PERF_MEASURE(zone_name) ZONE_SCOPED(zone_name)
+#elif defined(LLK_PROFILER)
 #define START_PERF_MEASURE(zone_name) \
     MEASURE_PERF_COUNTERS(zone_name)  \
     ZONE_SCOPED(zone_name)
