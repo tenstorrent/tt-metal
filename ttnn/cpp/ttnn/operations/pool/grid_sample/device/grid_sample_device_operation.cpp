@@ -3,6 +3,7 @@
 // SPDX-License-Identifier: Apache-2.0
 
 #include "ttnn/operations/pool/grid_sample/device/grid_sample_device_operation.hpp"
+#include "ttnn/operations/pool/grid_sample/device/grid_sample_utils.hpp"
 #include "ttnn/tensor/tensor_ops.hpp"
 #include "ttnn/device_operation.hpp"
 #include <tt-metalium/work_split.hpp>
@@ -37,12 +38,24 @@ void GridSampleOperation::validate_on_program_cache_miss(
         input_tensor.logical_shape(),
         input_tensor.logical_shape().rank());
     TT_FATAL(
-        grid_tensor.logical_shape().rank() == 4,
-        "Grid tensor must be 4D (N, H_out, W_out, coords), but got shape {} with {} dimensions",
+        grid_tensor.logical_shape().rank() == 4 || grid_tensor.logical_shape().rank() == 5,
+        "Grid tensor must be 4D (N, H_out, W_out, coords) or 5D (N, H_out, W_out, K, 2), but got shape {} with {} dimensions",
         grid_tensor.logical_shape(),
         grid_tensor.logical_shape().rank());
+    if (grid_tensor.logical_shape().rank() == 5) {
+        // The batched grid before its last two dims are merged: the nearest kernel gathers it from its 4-byte
+        // pages itself (a row-major reshape on device would be a slow page-by-page copy).
+        TT_FATAL(
+            grid_tensor.logical_shape()[-1] == 2 && !operation_attributes.use_precomputed_grid &&
+                operation_attributes.mode == "nearest" && grid_tensor.dtype() == DataType::BFLOAT16 &&
+                !grid_tensor.is_sharded() && operation_attributes.batch_output_channels &&
+                operation_attributes.output_mem_config.memory_layout() == TensorMemoryLayout::HEIGHT_SHARDED,
+            "A 5D grid must be (N, H_out, W_out, K, 2) BFLOAT16, interleaved, not precomputed, mode nearest, with "
+            "batch_output_channels=True and a HEIGHT_SHARDED output memory config; got shape {}",
+            grid_tensor.logical_shape());
+    }
 
-    uint32_t grid_last_dim = grid_tensor.logical_shape()[-1];
+    uint32_t grid_last_dim = grid_last_dim_equiv(grid_tensor);
     if (operation_attributes.use_precomputed_grid) {
         TT_FATAL(
             grid_last_dim % (operation_attributes.mode == "nearest" ? PRECOMPUTED_GRID_ELEMENTS_PER_POINT_NEAREST
@@ -154,7 +167,7 @@ tt::tt_metal::TensorSpec GridSampleOperation::compute_output_specs(
     uint32_t C = input_shape[-1];
     uint32_t H_out = grid_shape[1];
     uint32_t W_out = grid_shape[2];
-    uint32_t grid_last_dim = grid_shape[-1];
+    uint32_t grid_last_dim = grid_last_dim_equiv(grid_tensor);
 
     // Calculate the number of batched grid points per grid row
 

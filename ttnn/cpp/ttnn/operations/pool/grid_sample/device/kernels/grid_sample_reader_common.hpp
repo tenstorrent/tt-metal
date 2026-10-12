@@ -47,6 +47,8 @@ ALWI int32_t round_half_to_even(float x) {
     return (fi % 2 == 0) ? fi : fi + 1;
 }
 
+#include "grid_sample_nearest_index.hpp"
+
 ALWI void fill_four_val(uint32_t begin_addr, uint16_t val, uint16_t val1, uint16_t val2, uint16_t val3) {
     volatile tt_l1_ptr uint32_t* ptr = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(begin_addr);
     ptr[0] = (val | (val1 << 16));

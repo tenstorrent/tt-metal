@@ -58,6 +58,13 @@ bool should_use_split_reader(
     return false;
 }
 
+bool is_rank5_grid(const Tensor& grid_tensor) { return grid_tensor.logical_shape().rank() == 5; }
+
+uint32_t grid_last_dim_equiv(const Tensor& grid_tensor) {
+    const auto& s = grid_tensor.logical_shape();
+    return is_rank5_grid(grid_tensor) ? s[3] * s[4] : s[-1];
+}
+
 uint32_t get_grid_batching_factor(const Tensor& grid_tensor, bool use_precomputed_grid, const std::string& mode) {
     uint32_t elements_per_point;
     if (use_precomputed_grid) {
@@ -66,7 +73,7 @@ uint32_t get_grid_batching_factor(const Tensor& grid_tensor, bool use_precompute
     } else {
         elements_per_point = STANDARD_GRID_ELEMENTS_PER_POINT;
     }
-    return grid_tensor.logical_shape()[-1] / elements_per_point;
+    return grid_last_dim_equiv(grid_tensor) / elements_per_point;
 }
 
 uint32_t get_aligned_stick_size(const Shape& shape, const Tensor& tensor) {
