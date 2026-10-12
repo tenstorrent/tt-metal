@@ -5,6 +5,8 @@
 # with its own fresh build dir, alternated ABBA in two blocks, plus an A/A pair of the head.
 set +e +o pipefail
 cd /work; unset PYTHONPATH
+# the harness builds under $RUNNER_TEMP when set (GHA), which would put every side in one build dir
+unset RUNNER_TEMP
 LT=tt_metal/tt-llk
 OUT=/work/generated/mk; rm -rf $OUT; mkdir -p $OUT
 echo "== $(date -u +%FT%TZ) $(git log -1 --format='%h %s')"
