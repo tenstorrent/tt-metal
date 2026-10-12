@@ -83,7 +83,7 @@ W_DTYPE = {"bf16": ttnn.bfloat16, "bfp8": ttnn.bfloat8_b}[os.environ.get("GLM_ML
 # striped latent cache (split layout + own-row keys + the ring indexer; the serving path keeps the replicated one):
 # each chip keeps only the latent rows it computes, block-cyclic per chunk (chunk c's rows c S + d S/n .. on chip d
 # at its local rows c S/n ..; GLM-5.3's standard DSA layout), [max_seq / n, 512] per chip instead of a [max_seq, 512]
-# copy on every chip (1M tokens: 1.3 vs 10.7 GiB per chip for the 11 DSA layers). Per DSA layer the populated prefix
+# copy on every chip (1M tokens: 1.4 GiB + a 1.0 GiB gather scratch vs 11 GiB per chip for the 11 DSA layers). Per DSA layer the populated prefix
 # is all-gathered (one full-mesh snake, high_bw_all_gather) into one scratch shared by every layer; sparse_sdpa reads
 # it in place with the natural -> block-cyclic index remap. The chunk size is fixed per sequence.
 STRIPED = os.environ.get("GLM_MLA_STRIPED", "1") == "1"
