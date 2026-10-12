@@ -3,15 +3,13 @@
 # SPDX-License-Identifier: Apache-2.0
 
 """
-TTNN implementation of Shared Expert module with multi-chip sharding and CCL.
+TTNN implementation of the Shared Expert module.
 
-This module demonstrates:
-- Multi-chip tensor parallelism with proper weight sharding
-- Collective communication operations (all-gather, reduce-scatter)
-- SiLU activation fusion, or Kimi-K3's SiTU-GLU (see ``situ_glu``)
+- Whole expert replicated on every chip, run as one unified_routed_expert_moe expert
+- mesh_partition leaves each mesh column its emb slice; no CCL
+- Composed GLU helpers (``situ_glu``, ``clamped_silu_glu``) for TtFfn's TP-sharded forward
 """
 
-import math
 from pathlib import Path
 from typing import Optional
 
@@ -22,7 +20,6 @@ import ttnn
 from models.common.lightweightmodule import LightweightModule
 from models.common.utility_functions import is_blackhole
 from models.demos.deepseek_v3_d_p.tt.moe.debug_logging import DEBUG_LOGGING_ENABLED
-from models.demos.deepseek_v3_d_p.tt.tt_ccl import get_tt_ccl
 
 # GLU activations this module can run over its gate/up pair. Spelled as the HF ``hidden_act``
 # and as the torch reference (reference/tt/moe/expert.py), so a model config's string maps across
@@ -31,6 +28,17 @@ ACTIVATION_SILU = "silu"
 ACTIVATION_SITU = "situ"
 ACTIVATION_CLAMPED_SILU_GLU = "clamped_silu_glu"
 SUPPORTED_ACTIVATIONS = (ACTIVATION_SILU, ACTIVATION_SITU, ACTIVATION_CLAMPED_SILU_GLU)
+
+# The fused routed-expert op's variant per activation. Its kernel bakes the constants in
+# (SituGluConfigKimi, ClampedSiluGluConfigDsV4), so a config that disagrees would silently run a
+# different activation.
+_FUSED_ACTIVATIONS = {
+    ACTIVATION_SILU: ttnn.RoutedExpertActivation.Silu,
+    ACTIVATION_SITU: ttnn.RoutedExpertActivation.SituGlu,
+    ACTIVATION_CLAMPED_SILU_GLU: ttnn.RoutedExpertActivation.ClampedSiluGlu,
+}
+_FUSED_SITU_BETAS = (4.0, 25.0)
+_FUSED_CLAMPED_SILU_GLU_LIMIT = 10.0
 
 
 def situ_glu(
@@ -136,89 +144,50 @@ def _out_subblock(per_core_M: int, per_core_N: int, deep_k: bool) -> tuple[int, 
     return best
 
 
-def get_program_configs(
-    grid: ttnn.CoreCoord,
-    m_tiles: int,
-    k_tiles: int,
-    gate_n_tiles: int,
-    down_k_tiles: int,
-    down_n_tiles: int,
-    fuse_silu: bool = True,
-):
-    """2D program configs for the gate / up / down matmuls.
-
-    ``fuse_silu=False`` leaves the gate matmul's accumulator raw, for a GLU activation that is
-    binary over (gate, up) and so has no ``UnaryOpType`` to fuse -- SiTU-GLU.
-
-    A 1D factory splits one axis only, so its core count caps at ``max(m_tiles, n_tiles)``. At the
-    prefill chunk depth m_tiles is 20 and the shared expert's gate is 48 tiles wide, both far under
-    the 99 cores of an overlapped sub-device. The 2D factory splits M over the grid's rows and N over
-    its columns, so the two multiply.
-
-    Each per-core extent rounds up, which costs cores rather than correctness: the launched grid is
-    ``ceil(m_tiles / per_core_M) x ceil(n_tiles / per_core_N)``, so a per_core_M of 3 over 20 M-tiles
-    lights 7 rows, not 9. Measured still beats every 1D arrangement of these shapes.
-    """
-
-    def cfg(k: int, n: int, activation=None):
-        per_core_M = math.ceil(m_tiles / grid.y)
-        per_core_N = math.ceil(n / grid.x)
-        # Across every model the gate/up projections sit at K/N >= 4.7 and the down projections at
-        # <= 0.21, so the threshold falls in a wide empty gap rather than near either cluster.
-        subblock_h, subblock_w = _out_subblock(per_core_M, per_core_N, deep_k=k >= 2 * n)
-        return ttnn.MatmulMultiCoreReuseMultiCastProgramConfig(
-            compute_with_storage_grid_size=grid,
-            in0_block_w=_in0_block_w(k),
-            out_subblock_h=subblock_h,
-            out_subblock_w=subblock_w,
-            per_core_M=per_core_M,
-            per_core_N=per_core_N,
-            transpose_mcast=False,
-            fuse_batch=False,
-            fused_activation=activation,
-        )
-
-    gate = cfg(k_tiles, gate_n_tiles, ttnn.UnaryWithParam(ttnn.UnaryOpType.SILU) if fuse_silu else None)
-    up = cfg(k_tiles, gate_n_tiles)
-    down = cfg(down_k_tiles, down_n_tiles)
-    return gate, up, down
-
-
 class TtSharedExpert(LightweightModule):
     """
-    TTNN implementation of Shared Expert MLP with multi-chip sharding.
+    TTNN implementation of Shared Expert MLP, replicated on every chip.
 
-    Architecture with multi-chip CCL:
-        Input: x [batch, seq_len, emb_dim] (replicated across mesh columns)
-        1. gate_out = x @ gate_proj → [batch, seq_len, hidden_dim / num_devices]
-        2. up_out = x @ up_proj → [batch, seq_len, hidden_dim / num_devices]
-        3. activated = glu_activation(gate_out, up_out) → [batch, seq_len, hidden_dim / num_devices]
-           (SiLU fused into the gate matmul, or SiTU-GLU over both raw accumulators)
-        4. output_full = activated @ down_proj → [batch, seq_len, emb_dim]
-        5. Reduce-scatter output across mesh columns → [batch, seq_len, emb_dim / num_devices]
+    Forward:
+        Input: x [1, seq_len, emb_dim] (replicated across mesh columns)
+        1. x_bf8 = typecast(x) → the fused op's TILE bf8 input
+        2. output_full = unified_routed_expert_moe(x_bf8) → [1, seq_len, emb_dim]
+           (gate / up / GLU activation / down as one expert, written over x_bf8)
+        3. mesh_partition across mesh columns → [1, seq_len, emb_dim / num_cols]
 
-    Weight Sharding (across mesh columns):
-        - gate_proj, up_proj: Shard on output dimension (-1) across mesh columns
-          Shape: [emb_dim, hidden_dim / num_devices]
-          mesh_mapper dims=(None, -1)
-        - down_proj: Shard on input dimension (-2) across mesh columns
-          Shape: [hidden_dim / num_devices, emb_dim]
-          mesh_mapper dims=(None, -2)
+    Weights: gate_proj [emb_dim, hidden_dim], up_proj [emb_dim, hidden_dim] and down_proj
+    [hidden_dim, emb_dim], whole on every chip.
     """
 
-    @staticmethod
-    def check_cache_complete(cache_path: Path, cache_name_prefix: str) -> bool:
+    # TtFfn reuses the weight code below and keeps its TP-sharded layout.
+    REPLICATED_WEIGHTS = True
+
+    @classmethod
+    def _weight_layout(cls, proj: str) -> tuple[tuple, str]:
+        """Mesh-mapper dims and cache basename for one projection.
+
+        Replicated weights get their own basename: as_tensor's cache key ignores the mapper, so a
+        TP-sharded file under the same name would load with the wrong shape.
+        """
+        if cls.REPLICATED_WEIGHTS:
+            return (None, None), f"{proj}_replicated"
+        return ((None, -2) if proj == "down_proj" else (None, -1)), proj
+
+    @classmethod
+    def check_cache_complete(cls, cache_path: Path, cache_name_prefix: str) -> bool:
         """Check if all shared expert weight cache files exist."""
         from models.demos.deepseek_v3_d_p.utils.fast_cache_checker import pattern_exists
 
         for proj in ["gate_proj", "up_proj", "down_proj"]:
-            if not pattern_exists(f"{cache_name_prefix}.{proj}*.tensorbin", "SharedExpert"):
-                logger.debug(f"TTNN cache missing: {cache_name_prefix}.{proj}")
+            _, name = cls._weight_layout(proj)
+            if not pattern_exists(f"{cache_name_prefix}.{name}*.tensorbin", "SharedExpert"):
+                logger.debug(f"TTNN cache missing: {cache_name_prefix}.{name}")
                 return False
         return True
 
-    @staticmethod
+    @classmethod
     def _convert_and_cache_weights(
+        cls,
         torch_weights: dict,
         emb_dim: int,
         hidden_dim: int,
@@ -276,9 +245,9 @@ class TtSharedExpert(LightweightModule):
                 cache_file_name=_cache_name(name),
             )
 
-        gate_tt = _to_ttnn(gate_w, (None, -1), "gate_proj")
-        up_tt = _to_ttnn(up_w, (None, -1), "up_proj")
-        down_tt = _to_ttnn(down_w, (None, -2), "down_proj")
+        gate_tt = _to_ttnn(gate_w, *cls._weight_layout("gate_proj"))
+        up_tt = _to_ttnn(up_w, *cls._weight_layout("up_proj"))
+        down_tt = _to_ttnn(down_w, *cls._weight_layout("down_proj"))
 
         if device is None:
             # Cache built, free host tensors
@@ -288,8 +257,9 @@ class TtSharedExpert(LightweightModule):
             # Return device tensors for __init__
             return {"gate": gate_tt, "up": up_tt, "down": down_tt}
 
-    @staticmethod
+    @classmethod
     def build_ttnn_cache(
+        cls,
         torch_weights: dict,
         emb_dim: int,
         hidden_dim: int,
@@ -299,7 +269,7 @@ class TtSharedExpert(LightweightModule):
         cache_name_prefix: str,
     ):
         """Build TTNN cache for shared expert without device copy."""
-        TtSharedExpert._convert_and_cache_weights(
+        cls._convert_and_cache_weights(
             torch_weights, emb_dim, hidden_dim, mesh_device, weights_dtype, cache_path, cache_name_prefix, device=None
         )
 
@@ -338,14 +308,16 @@ class TtSharedExpert(LightweightModule):
             compute_kernel_config: Compute kernel configuration
             weight_cache_path: Optional path for caching TTNN weight tensors
             cache_name_prefix: Optional prefix for cache file names
+            subdevice_cores: the shared expert's sub-device when it overlaps the MoE dispatch. The
+                fused op's fixed grid is placed at its top-left core.
             activation: GLU activation over the gate/up pair -- "silu" (default), "situ" for
-                Kimi-K3's SiTU-GLU, or "clamped_silu_glu" for DeepSeek-V4's. Unlike the routed
-                expert this is a plain string: every path here is composed from Python-level ttnn
-                ops, not a fused kernel.
+                Kimi-K3's SiTU-GLU, or "clamped_silu_glu" for DeepSeek-V4's. A plain string, shared
+                with TtFfn, which composes it from ttnn ops.
             situ_beta / situ_linear_beta: SiTU softcap betas (K3: 4.0 / 25.0). Required, and
-                non-zero, when activation == "situ"; ignored otherwise.
+                non-zero, when activation == "situ"; ignored otherwise. The fused op accepts only
+                the K3 pair.
             clamped_silu_glu_limit: the clamp limit (V4: 10.0). Required, and positive, when
-                activation == "clamped_silu_glu"; ignored otherwise.
+                activation == "clamped_silu_glu"; ignored otherwise. The fused op accepts only 10.0.
         """
         super().__init__()
         self.mesh_device = mesh_device
@@ -384,11 +356,8 @@ class TtSharedExpert(LightweightModule):
         self.situ_beta = situ_beta
         self.situ_linear_beta = situ_linear_beta
         self.clamped_silu_glu_limit = clamped_silu_glu_limit
-
-        # Shared per-mesh CCL handle. Drives reduce_scatter_minimal_async and owns the shared,
-        # stable-address reduce_scatter INTERMEDIATE buffer (one per mesh, reused by all layers'
-        # shared experts) — see forward() and TT_CCL.get_shared_rs_intermediate.
-        self.tt_ccl = get_tt_ccl(mesh_device)
+        if self.REPLICATED_WEIGHTS:
+            self._init_fused_expert()
         self.cache_name_prefix = cache_name_prefix
 
         logger.debug(f"Initializing TtSharedExpert with emb_dim={emb_dim}, hidden_dim={hidden_dim}")
@@ -429,14 +398,50 @@ class TtSharedExpert(LightweightModule):
         else:
             logger.debug("Creating random sharded weights")
             self.gate_proj = self._create_random_sharded_weight(
-                shape=(emb_dim, hidden_dim), dims=(None, -1), name="gate_proj", dtype=self.weights_dtype
+                (emb_dim, hidden_dim), *self._weight_layout("gate_proj"), dtype=self.weights_dtype
             )
             self.up_proj = self._create_random_sharded_weight(
-                shape=(emb_dim, hidden_dim), dims=(None, -1), name="up_proj", dtype=self.weights_dtype
+                (emb_dim, hidden_dim), *self._weight_layout("up_proj"), dtype=self.weights_dtype
             )
             self.down_proj = self._create_random_sharded_weight(
-                shape=(hidden_dim, emb_dim), dims=(None, -2), name="down_proj", dtype=self.weights_dtype
+                (hidden_dim, emb_dim), *self._weight_layout("down_proj"), dtype=self.weights_dtype
             )
+
+    def _init_fused_expert(self):
+        """Validate the config against unified_routed_expert_moe and build its index tensors."""
+        if not is_blackhole():
+            raise ValueError("TtSharedExpert runs unified_routed_expert_moe, which is Blackhole-only")
+        if self.activation == ACTIVATION_SITU and (self.situ_beta, self.situ_linear_beta) != _FUSED_SITU_BETAS:
+            raise ValueError(
+                f"the fused op bakes SiTU betas {_FUSED_SITU_BETAS}, got {(self.situ_beta, self.situ_linear_beta)}"
+            )
+        if (
+            self.activation == ACTIVATION_CLAMPED_SILU_GLU
+            and self.clamped_silu_glu_limit != _FUSED_CLAMPED_SILU_GLU_LIMIT
+        ):
+            raise ValueError(
+                f"the fused op bakes clamp limit {_FUSED_CLAMPED_SILU_GLU_LIMIT}, got {self.clamped_silu_glu_limit}"
+            )
+        self.fused_activation = _FUSED_ACTIVATIONS[self.activation]
+        # The op's grid starts at (0, 0) unless moved; the dispatch sub-device owns those cores.
+        self.core_grid_origin = (
+            self.subdevice_cores.bounding_box().start if self.subdevice_cores is not None else ttnn.CoreCoord(0, 0)
+        )
+        # One expert: global id 0, its region at row 0. Serves as both the index table and the offsets.
+        self.zero_index = self._uint32_vector(0)
+        # Token counts keyed by M. Built on first use, which the warm-up forward reaches before any
+        # trace capture.
+        self.token_counts = {}
+
+    def _uint32_vector(self, value: int) -> ttnn.Tensor:
+        return ttnn.from_torch(
+            torch.tensor([value], dtype=torch.int32),
+            dtype=ttnn.uint32,
+            layout=ttnn.ROW_MAJOR_LAYOUT,
+            device=self.mesh_device,
+            memory_config=ttnn.DRAM_MEMORY_CONFIG,
+            mesh_mapper=ttnn.ReplicateTensorToMesh(self.mesh_device),
+        )
 
     def _cache_name(self, name: str) -> Optional[str]:
         if self.weight_cache_path is None or self.cache_name_prefix is None:
@@ -498,149 +503,47 @@ class TtSharedExpert(LightweightModule):
 
     def forward(self, x: ttnn.Tensor) -> ttnn.Tensor:
         """
-        Forward pass with multi-chip sharding and CCL.
+        Forward pass: the whole expert on every chip, then each mesh column keeps its emb slice.
 
         Args:
-            x: Input tensor [batch, seq_len, emb_dim] (replicated across mesh columns)
+            x: Input tensor [1, seq_len, emb_dim] (replicated across mesh columns)
 
         Returns:
-            Output tensor [batch, seq_len, emb_dim / num_devices]
+            Output tensor [1, seq_len, emb_dim / num_cols], bfloat8_b
         """
-        batch_size = x.shape[0]
         if DEBUG_LOGGING_ENABLED:
-            logger.debug(f"Forward pass: input shape={x.shape}, batch_size={batch_size}")
+            logger.debug(f"Forward pass: input shape={x.shape}")
 
-        # Verify input is replicated (full emb_dim) when multiple mesh columns
+        assert (
+            x.shape[-1] == self.emb_dim
+        ), f"Input must be replicated (full emb_dim={self.emb_dim}), got shape[-1]={x.shape[-1]}"
+
+        # The op reads TILE bf8 and writes its output over it. Dispatch reads x concurrently, so the
+        # op gets the cast's fresh copy.
+        x_bf8 = ttnn.typecast(
+            x, ttnn.bfloat8_b, memory_config=ttnn.DRAM_MEMORY_CONFIG, sub_core_grids=self.subdevice_cores
+        )
+        m = x_bf8.padded_shape[-2]
+        if m not in self.token_counts:
+            self.token_counts[m] = self._uint32_vector(m)
+        output = ttnn.experimental.deepseek_prefill.unified_routed_expert_moe(
+            x_bf8,
+            self.zero_index,
+            self.token_counts[m],
+            self.zero_index,
+            [self.gate_proj],
+            [self.up_proj],
+            [self.down_proj],
+            max_dispatched_tokens_per_expert=m,
+            compute_kernel_config=self.compute_kernel_config,
+            activation=self.fused_activation,
+            core_grid_origin=self.core_grid_origin,
+        )
+
         if self.mesh_device.shape[1] > 1:
-            assert x.shape[-1] == self.emb_dim, (
-                f"Input must be replicated (full emb_dim={self.emb_dim}), "
-                f"but got sharded input with shape[-1]={x.shape[-1]}"
-            )
-
-        # Convert input to activations dtype if needed
-        if x.dtype != self.activations_dtype:
-            logger.warning(f"{x.dtype=} typecasting {self.activations_dtype}")
-            x = ttnn.typecast(x, self.activations_dtype)
-
-        assert (
-            x.shape[-1] == self.gate_proj.shape[-2]
-        ), f"Matmul shape mismatch: x[-1]={x.shape[-1]} != gate_proj[-2]={self.gate_proj.shape[-2]}"
-        assert (
-            x.shape[-1] == self.up_proj.shape[-2]
-        ), f"Matmul shape mismatch: x[-1]={x.shape[-1]} != up_proj[-2]={self.up_proj.shape[-2]}"
-        assert (
-            self.gate_proj.shape[-1] == self.down_proj.shape[-2]
-        ), f"Matmul shape mismatch: gate_proj[-1]={self.gate_proj.shape[-1]} != down_proj[-2]={self.down_proj.shape[-2]}"
-
-        # ===== Inlined shared expert FFN — 2D sub-device matmuls =====
-        # The grid these matmuls may use: the sub-device's when the expert is overlapped with the MoE
-        # dispatch, the whole device's otherwise. Deriving it also drops a hardcoded 11x9 that was a
-        # row short of Blackhole's 11x10 whenever there was no sub-device to be confined to.
-        grid = (
-            self.subdevice_cores.bounding_box().grid_size()
-            if self.subdevice_cores is not None
-            else self.mesh_device.compute_with_storage_grid_size()
-        )
-
-        m_tiles = x.padded_shape[-2] // ttnn.TILE_SIZE
-        gate_program_config, up_program_config, down_program_config = get_program_configs(
-            grid,
-            m_tiles,
-            self.gate_proj.padded_shape[-2] // ttnn.TILE_SIZE,
-            self.gate_proj.padded_shape[-1] // ttnn.TILE_SIZE,
-            self.down_proj.padded_shape[-2] // ttnn.TILE_SIZE,
-            self.down_proj.padded_shape[-1] // ttnn.TILE_SIZE,
-            # SiTU-GLU is binary over (gate, up), so it cannot ride along as the gate matmul's fused
-            # unary; the gate accumulator has to come out raw and be combined below.
-            fuse_silu=self.activation == ACTIVATION_SILU,
-        )
-
-        # 1) Compute gate and up projections
-        gate_out = ttnn.matmul(
-            x,
-            self.gate_proj,
-            program_config=gate_program_config,
-            compute_kernel_config=self.compute_kernel_config,
-            sub_device_id=self.subdevice_id,
-        )
-        up_out = ttnn.matmul(
-            x,
-            self.up_proj,
-            program_config=up_program_config,
-            compute_kernel_config=self.compute_kernel_config,
-            sub_device_id=self.subdevice_id,
-        )
-
-        # 2) Combine the gate and up projections through the GLU activation
-        if self.activation == ACTIVATION_SITU:
-            activated = situ_glu(
-                gate_out,
-                up_out,
-                self.situ_beta,
-                self.situ_linear_beta,
-                sub_core_grids=self.subdevice_cores,
-            )
-        elif self.activation == ACTIVATION_CLAMPED_SILU_GLU:
-            activated = clamped_silu_glu(
-                gate_out,
-                up_out,
-                self.clamped_silu_glu_limit,
-                sub_core_grids=self.subdevice_cores,
-            )
-        else:
-            # gate_out already carries the matmul-fused SiLU.
-            ttnn.multiply_(gate_out, up_out, sub_core_grids=self.subdevice_cores)
-            ttnn.deallocate(up_out)
-            activated = gate_out
-
-        # 3) Compute down projection
-        output_full = ttnn.matmul(
-            activated,
-            self.down_proj,
-            program_config=down_program_config,
-            compute_kernel_config=self.compute_kernel_config,
-            sub_device_id=self.subdevice_id,
-        )
-        ttnn.deallocate(activated)
-
-        # 4) Reduce-scatter across mesh columns when TP > 1.
-        if self.mesh_device.shape[1] > 1:
-            # This reduce_scatter runs overlapped with the MoE dispatch op (on a separate
-            # sub-device, overlap_shared_expert_with_dispatch). The op is async: its kernels keep
-            # accessing its DRAM buffers after this Python call returns, while the concurrent
-            # dispatch allocates its own (large) buffers. Any buffer this op frees before its
-            # kernels finish can be re-handed to dispatch and overwritten mid-flight — corrupting
-            # the result non-deterministically. Both the reduce_scatter INPUT and its INTERMEDIATE
-            # accumulator were observed (via DRAM address tracing) re-handed to the dispatch op's
-            # `metadata` / `dispatched_buffer` at the exact same address: the input alias produced
-            # the catastrophic period-2 failure, the intermediate alias the residual non-determinism.
-            #
-            # Own the intermediate (reduce_scatter_minimal_async with an explicit persistent buffer),
-            # reusing one shared, stable-address buffer owned by tt_ccl (shared across all layers,
-            # which run sequentially). This keeps it alive across the overlap (so dispatch can't reuse
-            # its slot) AND fixes its DRAM address every iteration, so the op's fabric reduction order
-            # is identical each iteration — giving bit-exact determinism. The op overwrites the
-            # intermediate before reading it, so no per-iteration re-zeroing is needed.
-            rs_intermediate = self.tt_ccl.get_shared_rs_intermediate(output_full, self.topology)
-            output = ttnn.experimental.reduce_scatter_minimal_async(
-                output_full,
-                persistent_output_buffers=[rs_intermediate],
-                dim=-1,
-                multi_device_global_semaphore=self.tt_ccl.get_and_cycle_rs_semaphore_handles(cluster_axis=1),
-                barrier_semaphore=self.tt_ccl.get_and_cycle_barrier_semaphore_handle(cluster_axis=1),
-                num_links=self.num_links,
-                memory_config=ttnn.DRAM_MEMORY_CONFIG,
-                intermediate_memory_config=ttnn.DRAM_MEMORY_CONFIG,
-                topology=self.topology,
-                cluster_axis=1,
-                subdevice_id=self.subdevice_id,
-            )
-            # Keep the (fresh-per-iter) RS input alive until the next forward so the concurrent
-            # dispatch cannot reuse its slot mid-flight. (The intermediate is kept alive by the cache.)
-            # Stored on the shared tt_ccl (one slot for the whole model) rather than on self.
-            self.tt_ccl.set_shared_rs_input_keepalive(output_full)
-        else:
-            output = output_full
+            output_full = output
+            output = ttnn.mesh_partition(output_full, dim=-1, cluster_axis=1, sub_core_grids=self.subdevice_cores)
+            ttnn.deallocate(output_full)
         if DEBUG_LOGGING_ENABLED:
             logger.debug(f"After shared_expert_ffn: {output.shape}")
 

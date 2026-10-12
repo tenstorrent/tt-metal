@@ -48,6 +48,9 @@ class TtFfn(TtSharedExpert):
         output = reduce_scatter(output_full)         (only when TP > 1)
     """
 
+    # TP-sharded, matching the reduce-scatter forward below.
+    REPLICATED_WEIGHTS = False
+
     def __init__(
         self,
         mesh_device,
@@ -87,8 +90,9 @@ class TtFfn(TtSharedExpert):
             # TtFfn's overridden forward() does not use them.
         )
 
-    @staticmethod
+    @classmethod
     def build_ttnn_cache(
+        cls,
         torch_weights: dict,
         mesh_device: ttnn.MeshDevice,
         cache_path: Path,
@@ -98,7 +102,7 @@ class TtFfn(TtSharedExpert):
         weights_dtype: ttnn.DataType = ttnn.bfloat8_b,
     ):
         """Build TTNN cache for dense FFN (delegates to TtSharedExpert)."""
-        TtSharedExpert.build_ttnn_cache(
+        super().build_ttnn_cache(
             torch_weights=torch_weights,
             emb_dim=emb_dim,
             hidden_dim=hidden_dim,
