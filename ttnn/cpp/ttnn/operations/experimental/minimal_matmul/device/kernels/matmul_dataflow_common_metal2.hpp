@@ -124,8 +124,12 @@ void read_in0_block_sync(
  * Since this is for matmul, no need to read when N >= logical_N
  * Otherwise, if K >= logical_K, fill with zeros.
  */
+/**
+ * Issue the reads (and zero fills) for a block of in1 without waiting for them. Pair with
+ * wait_in1_block before publishing the block.
+ */
 template <uint32_t K_block_tiles, uint32_t N_block_tiles, typename TensorAccessorType>
-void read_in1_block_sync(
+void read_in1_block_async(
     const TensorAccessorType& tensor_accessor,
     const TensorShape2D& shape,
     const DataflowBuffer& dfb_in1,
@@ -157,8 +161,32 @@ void read_in1_block_sync(
         // finish up incrementing write_ptr if (d1_end - d1_start) < K_block_tiles
         write_ptr += (N_block_tiles - (d1_end - d1_start)) * tile_size_bytes;
     }
+}
+
+inline void wait_in1_block() {
+    Noc noc;
     noc.async_read_barrier();
     noc.write_zeros_l1_barrier();
+}
+
+/**
+ * Read a block of in1 from a potentially padded tensor.
+ * Since this is for matmul, no need to read when N >= logical_N
+ * Otherwise, if K >= logical_K, fill with zeros.
+ */
+template <uint32_t K_block_tiles, uint32_t N_block_tiles, typename TensorAccessorType>
+void read_in1_block_sync(
+    const TensorAccessorType& tensor_accessor,
+    const TensorShape2D& shape,
+    const DataflowBuffer& dfb_in1,
+    uint32_t tile_size_bytes,
+    uint32_t d0_start,
+    uint32_t d0_end,
+    uint32_t d1_start,
+    uint32_t d1_end) {
+    read_in1_block_async<K_block_tiles, N_block_tiles>(
+        tensor_accessor, shape, dfb_in1, tile_size_bytes, d0_start, d0_end, d1_start, d1_end);
+    wait_in1_block();
 }
 
 /**

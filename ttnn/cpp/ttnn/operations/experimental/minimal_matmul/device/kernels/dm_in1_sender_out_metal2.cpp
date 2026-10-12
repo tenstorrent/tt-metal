@@ -191,6 +191,16 @@ void kernel_main() {
 
     constexpr uint32_t full_N_tiles_bytes = N_block_tiles * in1_tile_size;
 
+    // The injector reads in1 one block ahead: after publishing a block it reserves the next slot and issues that
+    // block's DRAM reads before forwarding the current block, so the reads overlap the forward. A fused all-gather
+    // picks k blocks as they arrive, so it keeps reading each block when it is needed.
+#ifdef FUSE_AG
+    constexpr bool prefetch_in1 = false;
+#else
+    constexpr bool prefetch_in1 = is_injector_core;
+#endif
+    bool in1_prefetched = false;
+
     bool k_forward = true;
 
     uint32_t defer_write_m_tile = 0;
@@ -302,7 +312,9 @@ void kernel_main() {
                 }
 
                 uint32_t k_block = k_forward ? k_block_iter : (K_num_blocks - 1) - k_block_iter;
-                dfb_in1.reserve_back(in1_block_num_tiles);
+                if (!in1_prefetched) {
+                    dfb_in1.reserve_back(in1_block_num_tiles);
+                }
 
                 uint32_t in1_start_address = dfb_in1.get_write_ptr();
                 if constexpr (is_injector_core) {
@@ -312,15 +324,19 @@ void kernel_main() {
                             fused_op_receiver.compute_actual_k_block_iter(n_block_iter == 0, k_block_iter, k_forward);
                     }
 #endif
-                    read_in1_block_sync<K_block_tiles, N_block_tiles>(
-                        in1_reader,
-                        in1_shape,
-                        dfb_in1,
-                        in1_tile_size,
-                        k_block * K_block_tiles,
-                        (k_block + 1) * K_block_tiles,
-                        n_tile,
-                        n_tile_end);
+                    if (in1_prefetched) {
+                        wait_in1_block();
+                    } else {
+                        read_in1_block_sync<K_block_tiles, N_block_tiles>(
+                            in1_reader,
+                            in1_shape,
+                            dfb_in1,
+                            in1_tile_size,
+                            k_block * K_block_tiles,
+                            (k_block + 1) * K_block_tiles,
+                            n_tile,
+                            n_tile_end);
+                    }
                 } else {
                     in1_receiver_semaphore.set(INVALID);
                     in1_sender_semaphore.up(noc, in1_sender_noc_x, in1_sender_noc_y, 1);
@@ -330,6 +346,39 @@ void kernel_main() {
                 // Critical to performance for sender to push data to compute before mcasting
                 // This frees sender to start next read earlier
                 dfb_in1.push_back(in1_block_num_tiles);
+
+                if constexpr (prefetch_in1) {
+                    // The next block in loop order: k advances, then n (reversing k), then m (k forward again).
+                    // in1 does not depend on m.
+                    uint32_t next_k_iter = k_block_iter + 1;
+                    uint32_t next_n_iter = n_block_iter;
+                    uint32_t next_m_iter = m_block_iter;
+                    bool next_k_forward = k_forward;
+                    if (next_k_iter == K_num_blocks) {
+                        next_k_iter = 0;
+                        next_k_forward = !next_k_forward;
+                        if (++next_n_iter == N_blocks_per_core) {
+                            next_n_iter = 0;
+                            next_k_forward = true;
+                            ++next_m_iter;
+                        }
+                    }
+                    in1_prefetched = next_m_iter < M_blocks_per_core;
+                    if (in1_prefetched) {
+                        const uint32_t next_k_block = next_k_forward ? next_k_iter : (K_num_blocks - 1) - next_k_iter;
+                        const uint32_t next_n_tile = N_start_tile + next_n_iter * N_block_tiles;
+                        dfb_in1.reserve_back(in1_block_num_tiles);
+                        read_in1_block_async<K_block_tiles, N_block_tiles>(
+                            in1_reader,
+                            in1_shape,
+                            dfb_in1,
+                            in1_tile_size,
+                            next_k_block * K_block_tiles,
+                            (next_k_block + 1) * K_block_tiles,
+                            next_n_tile,
+                            std::min(next_n_tile + N_block_tiles, N_end_tile));
+                    }
+                }
 
                 if (!is_sink_core) {
                     in1_sender_semaphore.wait(1);
