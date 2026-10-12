@@ -60,23 +60,25 @@ inline void _add_int_(const std::uint32_t dst_index_in0, const std::uint32_t dst
     else
     {
         // Integer add expressed in sfpi. `a + b` lowers to the same single SFPIADD the raw path used,
-        // but the loads/store and the dst walk are left to the compiler, dropping the per-iteration
-        // bookkeeping. Pick the DataLayout whose load/store format byte matches the original
-        // InstrModLoadStore (LO16->U16, INT32/2S_COMP->I32; on Blackhole INT32_2S_COMP loads the same
-        // raw bits as INT32).
+        // but the loads and the store are left to the compiler. Pick the DataLayout whose load/store
+        // format byte matches the original InstrModLoadStore (LO16->U16, INT32/2S_COMP->I32; on
+        // Blackhole INT32_2S_COMP loads the same raw bits as INT32).
         constexpr sfpi::DataLayout layout = (INSTRUCTION_MODE == InstrModLoadStore::LO16) ? sfpi::DataLayout::U16 : sfpi::DataLayout::I32;
         using vType                       = std::conditional_t<layout == sfpi::DataLayout::U16, sfpi::vUInt, sfpi::vInt>;
 
         // size of each tile in Dest is 64/SFP_DESTREG_STRIDE = 32 rows when using sfpi to load/store
         constexpr std::uint32_t dst_tile_size_sfpi = 32;
 
+        // The store steps Dest through ADDR_MOD_6 instead of a dst_reg++ per row; an op that reads ADDR_MOD_6 after
+        // this one runs its own init first.
+        addr_mod_t {.srca = {.incr = 0}, .srcb = {.incr = 0}, .dest = {.incr = 2}}.set(ADDR_MOD_6);
+
 #pragma GCC unroll 8
         for (int d = 0; d < ITERATIONS; d++)
         {
             vType a                                                          = sfpi::dst_reg[dst_index_in0 * dst_tile_size_sfpi].mode<layout>();
             vType b                                                          = sfpi::dst_reg[dst_index_in1 * dst_tile_size_sfpi].mode<layout>();
-            sfpi::dst_reg[dst_index_out * dst_tile_size_sfpi].mode<layout>() = a + b;
-            sfpi::dst_reg++;
+            sfpi::dst_reg[dst_index_out * dst_tile_size_sfpi].mode<layout>(ADDR_MOD_6) = a + b;
         }
     }
 }
