@@ -4,8 +4,8 @@
 # Args: <tag> <arm>... where arm is dense (MINIMAX_H3_VSA_SPARSITY unset) or vsa<s> (e.g. vsa0.9).
 # T409_SEED (default 0), T409_REPLAYS (default 1), T409_SAVE=1 saves latents and video per arm,
 # T409_PY_TIMEOUT per-arm pytest limit (default 270). Same inputs as t408/run408.sh (#408 baseline).
-# pytest runs in its own session (setsid, no re-exec of this script) under timeout --foreground; the traps kill
-# that whole session, and a 90 s no-progress watchdog (log output or new cache files) ends it early.
+# pytest runs in the broker job's process group (no setsid) under timeout --foreground -k 10; the EXIT trap and
+# a 90 s no-progress watchdog (log output or new cache files) stop timeout and its python child by pid.
 set -o pipefail
 F=/var/tmp/fasth3; T=$F/t409; W=${T409_W:-$T/b}; VENV=$F/t48/python_env
 TAG=${1:?tag}; shift; [ $# -ge 1 ] || { echo "[t409] no arms"; exit 2; }
@@ -37,7 +37,11 @@ export TT_METAL_HOME=$W PYTHONPATH=$W:$W/ttnn:$W/tools:$F/t286
 export T286_WARM_DEADLINE_S=${T286_WARM_DEADLINE_S:-400} T286_WARM_LATE_S=${T286_WARM_LATE_S:-400} T286_SKIP_VAE_WARM=1
 MP4=$HOME/h3_turbo_artifacts/fl2va_turbo_1344x768_10s_4fwd.mp4
 PG=""
-trap '[ -n "$PG" ] && { kill -TERM -- -$PG 2>/dev/null; sleep 5; kill -KILL -- -$PG 2>/dev/null; }' EXIT
+stop_arm() {  # TERM, then KILL, $PG and its direct children
+  local kids; kids=$(ps -o pid= --ppid $PG 2>/dev/null)
+  kill -TERM $PG $kids 2>/dev/null; sleep ${1:-5}; kill -KILL $PG $kids 2>/dev/null
+}
+trap '[ -n "$PG" ] && stop_arm' EXIT
 trap 'exit 143' TERM; trap 'exit 130' INT
 rc=0
 for ARM in "$@"; do
@@ -46,12 +50,12 @@ for ARM in "$@"; do
   if [ $ARM = dense ]; then unset MINIMAX_H3_VSA_SPARSITY; else export MINIMAX_H3_VSA_SPARSITY=${ARM#vsa}; fi
   unset MINIMAX_H3_TURBO_SAVE_DIR; [ "${T409_SAVE:-1}" = 1 ] && export MINIMAX_H3_TURBO_SAVE_DIR=$OUT
   rm -f $MP4
-  CMD="timeout --foreground -k 10 ${T409_PY_TIMEOUT:-270} python -u -m pytest -sv -p no:cacheprovider -p t286_skipvaewarm models/tt_dit/tests/models/minimax_h3/test_pipeline_turbo_minimax_h3.py -k '10s and 4x8 and not 15s and not 4x32 and not WH'"
+  CMD="exec timeout --foreground -k 10 ${T409_PY_TIMEOUT:-270} python -u -m pytest -sv -p no:cacheprovider -p t286_skipvaewarm models/tt_dit/tests/models/minimax_h3/test_pipeline_turbo_minimax_h3.py -k '10s and 4x8 and not 15s and not 4x32 and not WH'"
   echo "[t409] host=$(hostname) commit=$(git -C $W rev-parse HEAD) tag=$TAG arm=$ARM seed=$MINIMAX_H3_TURBO_SEED replays=$MINIMAX_H3_TURBO_REPLAYS job=${TTP_RUNNER_JOB:-} $(date -u '+%F %T') UTC" | tee $L
   echo "[t409] cmd: $CMD" | tee -a $L
   env | grep -E '^(MINIMAX|TT_|T286_)' | sort >> $L
   T0=$(date +%s)
-  setsid bash -c "$CMD" >> $L 2>&1 < /dev/null & PG=$!
+  bash -c "$CMD" >> $L 2>&1 < /dev/null & PG=$!
   tail -n +1 -f --pid=$PG $L & TAILPID=$!
   STAMP=$T/.wd_$TAG; touch $STAMP; last=$(stat -c %s $L); idle=0
   while kill -0 $PG 2>/dev/null; do
@@ -63,7 +67,7 @@ for ARM in "$@"; do
     idle=$((idle + 15))
     if [ $idle -ge 90 ]; then
       echo "[t409] watchdog: no output and no new cache files for $idle s, ending the arm" | tee -a $L
-      kill -TERM -- -$PG 2>/dev/null; sleep 10; kill -KILL -- -$PG 2>/dev/null; break
+      stop_arm 10; break
     fi
   done
   wait $PG; arc=$?; PG=""
