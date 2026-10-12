@@ -96,12 +96,12 @@ def _ring_size(entry_sizes):
     return round_up(5 * max(entry_sizes) // 2, ttnn.get_l1_alignment())
 
 
-def _make_weights(device, layout, tensor_kinds, num_layers):
+def _make_weights(device, layout, tensor_kinds, num_layers, seed=0):
     """Per layer and tensor, a [K, N] weight width-sharded over the DRAM banks, plus the address tensor.
 
     Returns (pt_weights, tt_weights, tt_addrs), the weight lists indexed [layer * num_tensors + t].
     """
-    torch.manual_seed(0)
+    torch.manual_seed(seed)
     K = layout.k_tiles * ttnn.TILE_SIZE
     pt_weights, tt_weights = [], []
     for _ in range(num_layers):
@@ -217,16 +217,17 @@ def _check_matmuls(device, layout, num_layers, enable_performance_mode):
     """Runs dram_prefetcher over the layout's pipes into mcast_in0 matmuls and checks every output.
 
     Two weights of different block sizes per layer; run twice, and the second run must reuse every
-    cached program.
+    cached program. The second run's weights and address tensor are new allocations of the same specs,
+    allocated while the first run's are still alive and holding different values, so a cache hit that kept
+    the first run's address tensor bound would read the first run's weights and fail the check.
     """
     entry_sizes = [layout.entry_size(dtype, per_core_n) for dtype, per_core_n in _TWO_TENSORS]
     _space, pipes = _make_pipes(device, layout, _ring_size(entry_sizes))
-    pt_weights, tt_weights, tt_addrs = _make_weights(device, layout, _TWO_TENSORS, num_layers)
+    runs = [_make_weights(device, layout, _TWO_TENSORS, num_layers, seed=run) for run in range(2)]
 
     M = ttnn.TILE_SIZE
     K = layout.k_tiles * ttnn.TILE_SIZE
     pt_act = torch.randn(1, 1, M, K)
-    expected = [pt_act.float() @ w.float() for w in pt_weights]
     tt_act = ttnn.from_torch(
         pt_act, device=device, dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT, memory_config=ttnn.DRAM_MEMORY_CONFIG
     )
@@ -242,7 +243,7 @@ def _check_matmuls(device, layout, num_layers, enable_performance_mode):
     num_tensors = len(_TWO_TENSORS)
     cache_entries = []
     with _prefetcher_sub_devices(device, layout) as worker_sub_device_id:
-        for run in range(2):
+        for run, (pt_weights, tt_weights, tt_addrs) in enumerate(runs):
             ttnn.dram_prefetcher(
                 tt_weights[:num_tensors] + [tt_addrs],
                 num_layers,
@@ -269,7 +270,8 @@ def _check_matmuls(device, layout, num_layers, enable_performance_mode):
             cache_entries.append(device.num_program_cache_entries())
 
             for idx, tt_out in enumerate(outputs):
-                passing, output_str = comp_pcc(expected[idx], ttnn.to_torch(tt_out), 0.999)
+                expected = pt_act.float() @ pt_weights[idx].float()
+                passing, output_str = comp_pcc(expected, ttnn.to_torch(tt_out), 0.999)
                 logger.info(
                     f"[worker_pipes recv={layout.recv_per_reader} run={run} layer={idx // num_tensors} t={idx % num_tensors}] {output_str}"
                 )

@@ -130,6 +130,8 @@ ttnn::device_operation::ProgramArtifacts DramPrefetcherPipeSpecFactory::create_p
     // set of per-core NoC counters, which the reader re-syncs from the hardware at exit because
     // performance mode skips the per-read counter updates. That re-sync must not race the writer's
     // outstanding traffic, so the writer releases the reader through the sync DFB once its pipe is quiet.
+    // Both kernels manage their DFB credits explicitly, so on Quasar (config_2xx) they opt out of implicit
+    // sync, which would add its own credit accounting on top.
     KernelSpec reader{
         .unique_id = READER,
         .source = "ttnn/cpp/ttnn/operations/prefetcher/prefetcher/device/kernels/reader_dram_metal2.cpp",
@@ -165,6 +167,8 @@ ttnn::device_operation::ProgramArtifacts DramPrefetcherPipeSpecFactory::create_p
                         .noc = tt::tt_metal::NOC::NOC_0,
                         .noc_mode = tt::tt_metal::NOC_MODE::DM_DYNAMIC_NOC,
                     },
+                .config_2xx =
+                    DataMovementHardwareConfig::DataMovement2XXConfig{.disable_dfb_implicit_sync_for_all = true},
             },
         .advanced_options = {.num_common_runtime_varargs = static_cast<uint32_t>(reader_varargs.size())},
     };
@@ -196,6 +200,8 @@ ttnn::device_operation::ProgramArtifacts DramPrefetcherPipeSpecFactory::create_p
                         .noc = tt::tt_metal::NOC::NOC_0,
                         .noc_mode = tt::tt_metal::NOC_MODE::DM_DYNAMIC_NOC,
                     },
+                .config_2xx =
+                    DataMovementHardwareConfig::DataMovement2XXConfig{.disable_dfb_implicit_sync_for_all = true},
             },
         .advanced_options =
             {
