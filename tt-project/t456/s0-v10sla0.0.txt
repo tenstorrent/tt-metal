@@ -1,0 +1,8 @@
+ID=t456-s0-v10sla0.0
+TASK=t456
+WORKDIR=/var/tmp/fasth3/t456
+ENV=/var/tmp/fasth3/t452/env452.yaml
+CONFIG=t456-turbo10s-v10sla0.0
+TIMEOUT=540
+CMD=env T409_SEED=0 T409_PY_TIMEOUT=470 T456_ROWS=-1 bash /var/tmp/fasth3/t456/run456.sh s0 v10sla0.0
+NEEDS=/var/tmp/fasth3/t409/b/ttnn/ttnn/_ttnn.so,/var/tmp/fasth3/t452/w/OVERLAY
