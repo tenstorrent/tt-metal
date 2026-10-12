@@ -5,6 +5,7 @@
 # module, H the head (364aa763f57), H2 the head again in its own build (identical-code A/A), MN1 to MN8 M with 1 to 8
 # NOPs in the pack thread before its INIT zone and HN4, HN8 the head with 4 and 8 (layout controls: the same code moved).
 # Each variant builds once in a fresh build dir; runs go forward then backward through the list, twice (L1_TO_L1 only).
+# The harness builds under $RUNNER_TEMP in GitHub Actions, so each variant sets it to its own dir.
 # Per run: the module's CSV and the split of each device run's KERNEL span from the raw zone entries (tools/raw_reduce.py).
 set +e +o pipefail
 R=$(git rev-parse --show-toplevel); S=$R/ci_ab; cd $R
@@ -21,7 +22,7 @@ VS="M H H2 MN1 MN2 MN4 MN8 HN4 HN8"
 EC=""
 for v in $VS; do
   place $(src $v); rm -rf $HOME/pbc_$v
-  TMPDIR=$HOME/pbc_$v timeout -s INT -k 60 900 python -m pytest --compile-producer -n 8 -p no:cacheprovider -q $N > /tmp/b_$v.txt 2>&1
+  RUNNER_TEMP=$HOME/pbc_$v TMPDIR=$HOME/pbc_$v timeout -s INT -k 60 900 python -m pytest --compile-producer -n 8 -p no:cacheprovider -q $N > /tmp/b_$v.txt 2>&1
   echo "== build $v rc=$? $(date -u +%T) $(grep -aE '[0-9]+ (passed|failed|error)' /tmp/b_$v.txt | tail -1)"
   EC="$EC $v=$HOME/pbc_$v"
 done
@@ -31,7 +32,7 @@ j=0
 for blk in 1 2; do
   for v in $VS $RV; do
     j=$((j + 1)); place $(src $v); tag=pbc_${j}_$v
-    RAW_ZONE_DIR=$HOME/raw/$tag TMPDIR=$HOME/pbc_$v PERF_RUN_TAG=$tag timeout -s INT -k 60 600 \
+    RAW_ZONE_DIR=$HOME/raw/$tag RUNNER_TEMP=$HOME/pbc_$v TMPDIR=$HOME/pbc_$v PERF_RUN_TAG=$tag timeout -s INT -k 60 600 \
       python -m pytest --compile-consumer -p no:cacheprovider -q -rfE $N > /tmp/r_$tag.txt 2>&1
     echo "== run $v ($j) rc=$? $(date -u +%T) $(grep -aE '[0-9]+ (passed|failed)' /tmp/r_$tag.txt | tail -1)"
     [[ $j == 1 ]] && grep -a -m5 -E "FAILED|Error|error" /tmp/r_$tag.txt | cut -c1-200

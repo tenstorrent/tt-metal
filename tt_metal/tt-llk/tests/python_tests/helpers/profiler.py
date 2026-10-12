@@ -27,7 +27,7 @@ def _raw_dump(df):
     os.makedirs(d, exist_ok=True)
     _RAW_SEQ[0] += 1
     z = df[df["type"].isin(["ZONE_START", "ZONE_END"])][["thread", "type", MARKER, "timestamp"]].copy()
-    z["node"] = os.environ.get("PYTEST_CURRENT_TEST", "?").split(" ")[0]
+    z["node"] = os.environ.get("PYTEST_CURRENT_TEST", "?").rsplit(" ", 1)[0]
     z["seq"] = _RAW_SEQ[0]
     path = os.path.join(d, f"raw_{os.getpid()}.csv")
     z.to_csv(path, mode="a", header=not os.path.exists(path), index=False)
