@@ -1,0 +1,10 @@
+tt_metal/hw/ckernels/blackhole/metal/llk_api/llk_sfpu/ckernel_sfpu_rand.h
+tt_metal/tt-llk/tests/python_tests/helpers/perf/test_schemas.py
+tt_metal/tt-llk/tests/python_tests/helpers/perf/wide_schema.py
+tt_metal/tt-llk/tests/python_tests/helpers/test_variant_parameters.py
+tt_metal/tt-llk/tests/python_tests/perf_sfpu_misc.py
+tt_metal/tt-llk/tests/python_tests/test_eltwise_binary_sfpu.py
+tt_metal/tt-llk/tests/python_tests/test_sfpu_mask.py
+tt_metal/tt-llk/tests/sources/sfpu_mask_test.cpp
+tt_metal/tt-llk/tests/sources/sfpu_misc_perf.cpp
+tt_metal/tt-llk/tt_llk_blackhole/common/inc/ckernel.h
