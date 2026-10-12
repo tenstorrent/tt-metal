@@ -26,6 +26,11 @@ void FusedRMSNormPreAllGatherDeviceOperation::validate_on_program_cache_miss(
     TT_FATAL(
         tensor.storage_type() == StorageType::DEVICE, "Input tensor must be on device, got: {}", tensor.storage_type());
     TT_FATAL(tensor.buffer() != nullptr, "Input tensor must be allocated in device buffers (buffer is null)");
+    TT_FATAL(
+        tensor.logical_shape()[-1] == tensor.padded_shape()[-1],
+        "Input last dimension must be the same as padded last dimension, got logical_dim: {} vs padded_dim: {}",
+        tensor.logical_shape()[-1],
+        tensor.padded_shape()[-1]);
 }
 
 tt::tt_metal::TensorSpec FusedRMSNormPreAllGatherDeviceOperation::compute_output_specs(
