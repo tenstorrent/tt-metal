@@ -16,6 +16,7 @@ was called to explain.
 from __future__ import annotations
 
 import os
+import weakref
 from collections import defaultdict
 from typing import Any
 
@@ -25,7 +26,8 @@ import ttnn
 
 ENABLED = os.environ.get("MINIMAX_H3_DRAM_PROBE", "0") == "1"
 
-_pipeline: Any = None
+# A weak reference: the probe must never keep a dropped pipeline's weights and buffers reachable.
+_pipeline: weakref.ReferenceType | None = None
 _SKIP_ATTRS = {
     "coresident_exclusions",
     "_coresident_peers",
@@ -41,13 +43,18 @@ _SKIP_ATTRS = {
 
 def register(pipeline: Any) -> None:
     global _pipeline
-    _pipeline = pipeline
+    _pipeline = weakref.ref(pipeline)
     if ENABLED:
         logger.info("DRAM probe armed (MINIMAX_H3_DRAM_PROBE=1)")
 
 
+def _current() -> Any:
+    """The registered pipeline, or None once it has been dropped."""
+    return _pipeline() if _pipeline is not None else None
+
+
 def enabled() -> bool:
-    return ENABLED and _pipeline is not None
+    return ENABLED and _current() is not None
 
 
 def _gb(n: int) -> str:
@@ -160,7 +167,9 @@ def report(label: str) -> None:
 
 
 def _report(label: str) -> None:
-    p = _pipeline
+    p = _current()
+    if p is None:
+        return
     mesh = p.mesh_device
     view = ttnn.get_memory_view(mesh, ttnn.BufferType.DRAM)
     banks = view.num_banks
