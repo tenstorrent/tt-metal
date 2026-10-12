@@ -505,6 +505,21 @@ def _mirror_body_tt(body: str, base_weights: str, demo_dir, state: dict) -> str:
         return body
 
 
+def _tt_run_section(slug: str) -> str:
+    """How to actually serve this model on Tenstorrent. Mirrors the instructions the non-mirrored
+    card emits so both card paths describe the real tt-metal/vLLM serving flow."""
+    return (
+        "## Run on Tenstorrent\n\n"
+        "```bash\n"
+        "# vLLM, OpenAI-compatible API via tt-inference-server, from an optimized tt-metal checkout:\n"
+        f"python3 run.py --model {slug} --tt-device <device> --workflow server \\\n"
+        "  --local-server --tt-metal-home <your tt-metal checkout>\n"
+        "```\n\n"
+        "_Published with `tt_hw_planner publish-hf`. The optimized model implementation lives under "
+        "`models/`; weights are referenced from the base repo above (not stored here)._\n"
+    )
+
+
 def _compose_mirrored_card(
     state: dict, slug: str, base_weights: str | None, commit: str | None, token: str | None, demo_dir=None
 ) -> str | None:
@@ -536,6 +551,7 @@ def _compose_mirrored_card(
         "\n".join(fm)
         + f"\n\n# {base_weights} — on Tenstorrent\n\n{intro}\n\n"
         + _tt_validated_block(state, hw, commit)
+        + "\n" + _tt_run_section(slug)
         + "\n## Base model (upstream) — reference\n\n"
         + body
         + "\n"
