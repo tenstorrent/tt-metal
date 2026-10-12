@@ -50,8 +50,8 @@ struct ChunkGdnFusedProgramConfig {
     // One producer pool for every head instead of NP producers per head: the receivers and BH*NPH HOME
     // producers take the row-local layout of the largest NPH the pool size allows, and every other core of
     // the pool is an EXTRA producer serving all heads. num_producers is then the pool size P (default: every
-    // core the receivers leave free, at most BH*NC).
-    bool producer_pool = false;
+    // core the receivers leave free, at most BH*NC). nullopt = whichever of the two the model predicts faster.
+    std::optional<bool> producer_pool;
     // Share of every head's chunks the extras take, in [0, 1]; nullopt = the model's choice between the
     // balanced NX / P and 0.
     std::optional<float> pool_extra_share;

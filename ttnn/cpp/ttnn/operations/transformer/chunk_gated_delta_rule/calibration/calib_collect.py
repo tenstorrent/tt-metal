@@ -274,14 +274,19 @@ def main():
                             continue
                         r.update(inf)
                         g.update(inf)
-                    elif (
-                        r["nbuf"] == 0
-                    ):  # pinned geometry, free depth: the label's _d<N> suffix, else the binding's pick
-                        m = re.search(r"_d([1-8])(?:_|$)", label)
+                    else:
+                        # The row pins some of the geometry. Fill in the rest the way the op did: ask the model
+                        # for the free parts (receivers, producers, depth, the extras' share) given the pinned
+                        # ones. A free depth may also be given by the label's _d<N> suffix. Per-head producers
+                        # are row-local when that layout fits, which is the op's rule.
+                        m = re.search(r"_d([1-8])(?:_|$)", label) if r["nbuf"] == 0 else None
                         if m:
                             r["nbuf"] = g["nbuf"] = int(m.group(1))
                             r["geom_src"] = "args+label depth"
-                        else:
+                        free = [k for k, v in (("nv", g["nv"]), ("np", g["np"]), ("nbuf", g["nbuf"])) if not v]
+                        if g["pool"] and g["share"] is None:
+                            free.append("share")
+                        if free:
                             pick = _t.chunk_gdn_fused_geometry(
                                 len(xs),
                                 len(ys),
@@ -290,16 +295,27 @@ def main():
                                 g["vt"],
                                 g["nv"],
                                 g["np"],
-                                0,
+                                g["nbuf"],
                                 POOL if g["pool"] else PER_HEAD,
                                 -1.0 if g["share"] is None else g["share"],
                             )
-                            r["nbuf"] = g["nbuf"] = pick[3]
-                            r["geom_src"] = "args+model depth"
+                            if pick[0] == 0:
+                                r["note"] = "pinned geometry does not fit"
+                                print("pinned geometry does not fit", file=sys.stderr)
+                                rows.append(r)
+                                continue
+                            got = dict(nv=pick[0], np=pick[1], nbuf=pick[3], share=pick[7] / pick[1])
+                            for k in free:
+                                r[k] = g[k] = got[k]
+                            r["geom_src"] = "args+model " + "/".join(free)
                             print(
-                                f"(no --nbuf in the row and no _d<N> in the label: depth {pick[3]} taken from the tree's current model)",
+                                f"({', '.join(free)} not in the row: taken from the tree's current model)",
                                 file=sys.stderr,
                                 end=" ",
+                            )
+                        if not g["pool"] and g["rl"] < 0:
+                            r["PL"] = int(
+                                _t.chunk_gdn_fused_row_local_feasible(len(xs), len(ys), g["BH"], g["nv"], g["np"])
                             )
                     g["PL"] = r["PL"]
                     r.update(metrics(Z, xs, ys, g, g["vt"]))

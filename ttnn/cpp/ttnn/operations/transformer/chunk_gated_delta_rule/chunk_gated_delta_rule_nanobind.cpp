@@ -231,7 +231,8 @@ void bind_chunk_gated_delta_rule(nb::module_& mod) {
         cores run prep and NoC-write the seven intermediates into NV receiver cores' CBs.
         The geometry fields default to the calibrated cost model's pick for
         (grid, BH, NC, Vt) (see chunk_gdn_fused_geometry); pinning some of num_producers /
-        num_receivers / handoff_depth makes the model fill the others so the pair still fits the grid.
+        num_receivers / handoff_depth / producer_pool makes the model fill the others so the pair still
+        fits the grid. A config with every field unset is the fused side of the op's default dispatch.
 
         Keyword Args:
             num_producers (int, optional): NP per head, clamped to the chunk count.
@@ -246,11 +247,12 @@ void bind_chunk_gated_delta_rule(nb::module_& mod) {
                 multicast chain.
             posted (bool): default False. Posted unicast data writes with the VALID flag ordered by
                 in-order delivery; requires unicast.
-            producer_pool (bool): default False. One producer pool for every head: the receivers and
+            producer_pool (bool, optional): True: one producer pool for every head: the receivers and
                 BH*NPH home producers take the row-local layout of the largest NPH the pool size allows,
                 every other core of the pool is an extra producer serving all heads. num_producers is
                 then the pool size P (default: every core the receivers leave free, at most BH*NC);
-                row_local is ignored.
+                row_local is ignored. False: NP producers per head. None: whichever of the two the
+                model predicts faster for (grid, BH, NC, Vt).
             pool_extra_share (float, optional): the share of every head's chunks the pool's extras take,
                 in [0, 1]; None = the model's choice between the balanced NX / P and 0.
             handoff_checks (bool): default False. Debug: compile the hand-off protocol's run-time
@@ -267,7 +269,7 @@ void bind_chunk_gated_delta_rule(nb::module_& mod) {
                 std::optional<uint32_t>,
                 bool,
                 bool,
-                bool,
+                std::optional<bool>,
                 std::optional<float>,
                 bool,
                 uint32_t>(),
@@ -278,7 +280,7 @@ void bind_chunk_gated_delta_rule(nb::module_& mod) {
             nb::arg("handoff_depth") = nb::none(),
             nb::arg("unicast") = true,
             nb::arg("posted") = false,
-            nb::arg("producer_pool") = false,
+            nb::arg("producer_pool") = nb::none(),
             nb::arg("pool_extra_share") = nb::none(),
             nb::arg("handoff_checks") = false,
             nb::arg("handoff_fault") = 0)
@@ -302,7 +304,7 @@ void bind_chunk_gated_delta_rule(nb::module_& mod) {
                 py_opt(c.handoff_depth),
                 py_bool(c.unicast),
                 py_bool(c.posted),
-                py_bool(c.producer_pool),
+                py_opt(c.producer_pool),
                 py_opt(c.pool_extra_share),
                 py_bool(c.handoff_checks),
                 c.handoff_fault);
@@ -354,7 +356,7 @@ void bind_chunk_gated_delta_rule(nb::module_& mod) {
         means no fused geometry fits the grid; pool_extra_num / np is the extras' share of the items of a
         pool with extras (0 otherwise). candidates: 0 = NP producers per head (what producer_pool=False
         resolves to), 1 = the producer pool (placement 2, np = the pool size; what producer_pool=True
-        resolves to), 2 = both (the op's default dispatch).)doc");
+        resolves to), 2 = both (what producer_pool=None and the op's default dispatch resolve to).)doc");
     mod.def(
         "chunk_gdn_fused_row_local_feasible",
         &ttnn::prim::fused_row_local_feasible,
