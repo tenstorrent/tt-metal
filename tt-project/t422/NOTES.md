@@ -69,3 +69,9 @@ deadline 400 s):
   10-08 total only 0.2 GB. Judgment: no deletion of other tasks' data; handed off waiting on disk with a cleanup followup.
 - Next (once du /var/tmp/fasth3 < 448 GB on blx01): relaunch tt-project/t422/submit_on.sh detached (same as run 1606),
   then compare per-step times and md5 with the off arm (job 860: 1.4935 / 1.5264 s/step, md5 c79b7d37ba9c0f5034b3392af1f1a841).
+
+## 2026-10-12 run 1616
+- /var/tmp/fasth3 on blx01 back to 439 GB (others cleaned up). Relaunched submit_on.sh detached as run 1616 t422on6
+  (rc file state/runs/1616/t422on6.rc; log tt-project/t422/state/on.log). At launch another smarton job held blx01's
+  queue, so the submitter waits in 2 min steps.
+- Next: read state/on.log; compare per-step times and md5 with the off arm (job 860).
