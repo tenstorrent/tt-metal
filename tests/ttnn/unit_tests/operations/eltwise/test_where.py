@@ -6,7 +6,7 @@ import torch
 import ttnn
 import pytest
 
-from tests.ttnn.utils_for_testing import assert_equal
+from tests.ttnn.utils_for_testing import assert_equal, assert_with_ulp
 from math import isnan
 
 
@@ -425,6 +425,59 @@ def test_where_scalar_bf16_inputs_fp32_output(device, scalar, scalar_is_true):
         expected = torch.where(C.bool(), T.float(), torch.tensor(scalar))
 
     assert torch.equal(ttnn.to_torch(out), expected)
+
+
+@pytest.mark.parametrize(
+    "c_shape",
+    [(2, 64, 128), (2, 64, 1), (1, 1, 1), (1, 1, 128)],
+    ids=["no_bcast", "col_bcast", "scalar_bcast", "row_bcast"],
+)
+@pytest.mark.parametrize("c_dtype", [ttnn.bfloat16, ttnn.float32], ids=["c_bf16", "c_fp32"])
+@pytest.mark.parametrize("t_dtype", [ttnn.bfloat16, ttnn.float32], ids=["t_bf16", "t_fp32"])
+@pytest.mark.parametrize("f_dtype", [ttnn.bfloat16, ttnn.float32], ids=["f_bf16", "f_fp32"])
+def test_where_ttt_mixed_dtypes(device, c_shape, c_dtype, t_dtype, f_dtype):
+    # Regression for #60223: mixed bf16/fp32 operands must be unpacked with their own format into
+    # an fp32 DEST and selected with the matching where_tile variant.
+    torch.manual_seed(0)
+    shape = (2, 64, 128)
+    to_torch_dtype = {ttnn.bfloat16: torch.bfloat16, ttnn.float32: torch.float32}
+    C = (torch.rand(c_shape) > 0.5).to(to_torch_dtype[c_dtype])
+    T = torch.randn(shape, dtype=to_torch_dtype[t_dtype])
+    F = torch.randn(shape, dtype=to_torch_dtype[f_dtype])
+    ttnn_C = ttnn.from_torch(C, dtype=c_dtype, layout=ttnn.TILE_LAYOUT, device=device)
+    ttnn_T = ttnn.from_torch(T, dtype=t_dtype, layout=ttnn.TILE_LAYOUT, device=device)
+    ttnn_F = ttnn.from_torch(F, dtype=f_dtype, layout=ttnn.TILE_LAYOUT, device=device)
+
+    result = ttnn.to_torch(ttnn.where(ttnn_C, ttnn_T, ttnn_F))
+    expected = torch.where(C.bool(), T.float(), F.float()).to(to_torch_dtype[t_dtype])
+
+    assert result.dtype == expected.dtype
+    if t_dtype == ttnn.float32:
+        assert torch.equal(result, expected)
+    else:
+        # fp32 -> bf16 packing rounds ties away from zero, torch rounds them to even.
+        assert_with_ulp(expected_result=expected, actual_result=result, ulp_threshold=1)
+
+
+@pytest.mark.parametrize(
+    "c_shape",
+    [(2, 64, 128), (2, 64, 1), (1, 1, 1), (1, 1, 128)],
+    ids=["no_bcast", "col_bcast", "scalar_bcast", "row_bcast"],
+)
+def test_where_ttt_bf16_inputs_fp32_output(device, c_shape):
+    torch.manual_seed(0)
+    shape = (2, 64, 128)
+    C = (torch.rand(c_shape) > 0.5).to(torch.bfloat16)
+    T = torch.randn(shape, dtype=torch.bfloat16)
+    F = torch.randn(shape, dtype=torch.bfloat16)
+    ttnn_C, ttnn_T, ttnn_F = (
+        ttnn.from_torch(x, dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT, device=device) for x in (C, T, F)
+    )
+    out = ttnn.from_torch(torch.zeros(shape), dtype=ttnn.float32, layout=ttnn.TILE_LAYOUT, device=device)
+
+    ttnn.where(ttnn_C, ttnn_T, ttnn_F, output_tensor=out)
+
+    assert torch.equal(ttnn.to_torch(out), torch.where(C.bool(), T.float(), F.float()))
 
 
 @pytest.mark.parametrize("dtype", [torch.bfloat16, torch.float32])

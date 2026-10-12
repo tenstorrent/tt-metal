@@ -74,6 +74,7 @@ void kernel_main() {
             pack_tile(0, dfb_bcast_a.get_id());
             dfb_bcast_a.push_back(num_tiles_per_cycle);
             tile_regs_release();
+            pack_reconfig_data_format(dfb_bcast_a.get_id(), dfb_out.get_id());
 
             dfb_pre_a.pop_front(num_tiles_per_cycle);
         }
@@ -95,6 +96,7 @@ void kernel_main() {
             pack_tile(0, dfb_bcast_b.get_id());
             dfb_bcast_b.push_back(num_tiles_per_cycle);
             tile_regs_release();
+            pack_reconfig_data_format(dfb_bcast_b.get_id(), dfb_out.get_id());
 
             dfb_pre_b.pop_front(num_tiles_per_cycle);
         }
@@ -116,6 +118,7 @@ void kernel_main() {
             pack_tile(0, dfb_bcast_c.get_id());
             dfb_bcast_c.push_back(num_tiles_per_cycle);
             tile_regs_release();
+            pack_reconfig_data_format(dfb_bcast_c.get_id(), dfb_out.get_id());
 
             dfb_pre_c.pop_front(num_tiles_per_cycle);
         }

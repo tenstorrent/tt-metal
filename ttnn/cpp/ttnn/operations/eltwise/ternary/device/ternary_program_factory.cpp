@@ -1342,9 +1342,12 @@ tt::tt_metal::ProgramDescriptor TernaryDeviceOperation::TernaryProgramFactory::c
     writer_desc.common_runtime_args = writer_common_runtime_args;
 
     // ---- Compute Kernel ----
-    bool fp32_dest_acc_en = output_data_format == tt::DataFormat::UInt32 ||
-                            output_data_format == tt::DataFormat::Int32 ||
-                            output_data_format == tt::DataFormat::Float32;
+    // fp32 DEST is needed whenever any input or the output is fp32: fp32 tiles unpacked into a
+    // 16-bit DEST are corrupted (issue 60223).
+    bool fp32_dest_acc_en =
+        output_data_format == tt::DataFormat::UInt32 || output_data_format == tt::DataFormat::Int32 ||
+        output_data_format == tt::DataFormat::Float32 || predicate_data_format == tt::DataFormat::Float32 ||
+        value_true_data_format == tt::DataFormat::Float32 || value_false_data_format == tt::DataFormat::Float32;
 
     std::vector<tt::tt_metal::UnpackToDestMode> unpack_to_dest_mode(NUM_CIRCULAR_BUFFERS, tt::tt_metal::UnpackToDestMode::Default);
 
@@ -1417,9 +1420,12 @@ tt::tt_metal::ProgramDescriptor TernaryDeviceOperation::TernaryProgramFactory::c
             kernel_defines["BCAST_C"] = (broadcast_type == TernaryBroadcastType::SCALAR_B_BCAST) ? "1" : "0";
         }
     }
-    // Get operation-specific compute kernel defines
-    auto op_defines =
-        CMAKE_UNIQUE_NAMESPACE::get_ternary_compute_defines(operation_attributes, predicate_tensor.dtype());
+    // The SFPU variant must match the DEST layout: Float16_b variants access only the low 16 bits of each
+    // DEST word, so with fp32 DEST floating-point inputs are processed with the Float32 variant.
+    const DataType sfpu_dtype = (fp32_dest_acc_en && is_floating_point(predicate_tensor.dtype()))
+                                    ? DataType::FLOAT32
+                                    : predicate_tensor.dtype();
+    auto op_defines = CMAKE_UNIQUE_NAMESPACE::get_ternary_compute_defines(operation_attributes, sfpu_dtype);
     for (const auto& [key, value] : op_defines) {
         kernel_defines[key] = value;
     }

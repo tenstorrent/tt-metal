@@ -333,6 +333,50 @@ def test_addcdiv(device, torch_dtype, ttnn_dtype, value, in_data1_shape, in_data
     assert_with_ulp(expected_result=golden_tensor, actual_result=output_tensor, ulp_threshold=1, allow_nonfinite=True)
 
 
+@pytest.mark.parametrize("op", ["lerp", "addcdiv", "mac"])
+@pytest.mark.parametrize(
+    "a_dtype, bc_dtype, out_dtype",
+    [
+        (ttnn.bfloat16, ttnn.float32, None),
+        (ttnn.float32, ttnn.bfloat16, None),
+        (ttnn.float32, ttnn.float32, ttnn.bfloat16),
+        (ttnn.bfloat16, ttnn.bfloat16, ttnn.float32),
+    ],
+    ids=["bf16_fp32_fp32", "fp32_bf16_bf16", "fp32_in_bf16_out", "bf16_in_fp32_out"],
+)
+@pytest.mark.parametrize("bc_shape", [(1, 1, 64, 128), (1, 1, 1, 128)], ids=["no_bcast", "row_bcast"])
+def test_ternary_mixed_dtypes(device, op, a_dtype, bc_dtype, out_dtype, bc_shape):
+    # Regression for #60223: fp32 operands or output require an fp32 DEST and per-CB unpack formats.
+    torch.manual_seed(0)
+    to_torch_dtype = {ttnn.bfloat16: torch.bfloat16, ttnn.float32: torch.float32}
+    a = torch.randn((1, 1, 64, 128), dtype=to_torch_dtype[a_dtype])
+    b = torch.randn(bc_shape, dtype=to_torch_dtype[bc_dtype])
+    c = (torch.rand(bc_shape) + 0.5).to(to_torch_dtype[bc_dtype])
+    tt_a, tt_b, tt_c = (
+        ttnn.from_torch(x, dtype=d, layout=ttnn.TILE_LAYOUT, device=device)
+        for x, d in ((a, a_dtype), (b, bc_dtype), (c, bc_dtype))
+    )
+    kwargs = {}
+    if out_dtype is not None:
+        kwargs["output_tensor"] = ttnn.from_torch(
+            torch.zeros(a.shape), dtype=out_dtype, layout=ttnn.TILE_LAYOUT, device=device
+        )
+
+    A, B, C = a.float(), b.float(), c.float()
+    if op == "lerp":
+        output = ttnn.lerp(tt_a, tt_b, tt_c, **kwargs)
+        expected = A + C * (B - A)
+    elif op == "addcdiv":
+        output = ttnn.addcdiv(tt_a, tt_b, tt_c, value=0.5, **kwargs)
+        expected = A + 0.5 * B / C
+    else:
+        output = ttnn.mac(tt_a, tt_b, tt_c, **kwargs)
+        expected = A * B + C
+
+    assert output.dtype == (out_dtype or a_dtype)
+    assert_with_pcc(expected, ttnn.to_torch(output).float(), 0.9999)
+
+
 def test_ternary_scalar_distinguishes_cache_entries(device):
     """Regression guard for the ternary scalar static/dynamic contract.
 

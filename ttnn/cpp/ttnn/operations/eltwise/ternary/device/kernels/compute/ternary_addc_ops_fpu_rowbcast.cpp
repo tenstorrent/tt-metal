@@ -9,6 +9,7 @@
 #include "api/compute/tile_move_copy.h"
 #include "api/compute/eltwise_binary.h"
 #include "api/compute/bcast.h"
+#include "api/compute/reconfig_data_format.h"
 #include "api/compute/eltwise_unary/addcmul.h"
 #include "api/compute/eltwise_unary/addcdiv.h"
 #include "api/dataflow/dataflow_buffer.h"
@@ -66,6 +67,7 @@ void kernel_main() {
         pack_tile(0, dfb_llk_b.get_id());
         dfb_llk_b.push_back(num_tiles_per_cycle);
         tile_regs_release();
+        pack_reconfig_data_format(dfb_llk_b.get_id(), dfb_out.get_id());
         dfb_in1.pop_front(num_tiles_per_cycle);
 #endif
 
@@ -83,6 +85,7 @@ void kernel_main() {
         pack_tile(0, dfb_llk_c.get_id());
         dfb_llk_c.push_back(num_tiles_per_cycle);
         tile_regs_release();
+        pack_reconfig_data_format(dfb_llk_c.get_id(), dfb_out.get_id());
         dfb_in2.pop_front(num_tiles_per_cycle);
 #endif
 
@@ -100,6 +103,7 @@ void kernel_main() {
         pack_tile(0, dfb_llk_a.get_id());
         dfb_llk_a.push_back(num_tiles_per_cycle);
         tile_regs_release();
+        pack_reconfig_data_format(dfb_llk_a.get_id(), dfb_out.get_id());
         dfb_in0.pop_front(num_tiles_per_cycle);
 #endif
 
