@@ -370,6 +370,12 @@ enum class BinaryOp : std::uint8_t
     // tt-llk test helpers (sfpu_operations.h), `unused` in the tt-metal Compute API.
     LOGADDEXP  = 45,
     LOGADDEXP2 = 46,
+    // Quant family and Dest-to-Dest copy. Appended so the values above stay put.
+    // The kernels are calculate_quant_int32 / requant / dequant and copy_dest_value.
+    QUANT     = 47,
+    REQUANT   = 48,
+    DEQUANT   = 49,
+    COPY_DEST = 50,
 };
 
 enum class PackMode : std::uint8_t

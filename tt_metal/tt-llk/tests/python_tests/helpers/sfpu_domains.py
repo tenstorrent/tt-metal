@@ -2274,6 +2274,8 @@ _BINARY_SPECIALS_NOT_READY: FrozenSet[MathOperation] = frozenset(
         # Effectively unary: the kernel reads operand B only on its x > 4 branch and the golden
         # ignores it, so a cat-B probe in B asserts nothing.
         MathOperation.SfpuLogsigmoid,
+        # Bit copy of operand A. A non-finite probe checks the pipeline, not this kernel.
+        MathOperation.SfpuCopyDest,
     }
 )
 

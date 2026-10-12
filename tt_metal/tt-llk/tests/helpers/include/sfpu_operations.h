@@ -34,6 +34,8 @@
 #include "llk_sfpu/ckernel_sfpu_cast_fp32_to_fp16a.h"
 #include "llk_sfpu/ckernel_sfpu_cbrt.h"
 #include "llk_sfpu/ckernel_sfpu_clamp.h"
+#include "llk_sfpu/ckernel_sfpu_copy_dest_values.h"
+#include "llk_sfpu/ckernel_sfpu_quant.h"
 // Metal comparison-to-zero / unary-int-compare kernels (calculate_comp,
 // calculate_comp_int, calculate_comp_uint16, calculate_eqz_uint32,
 // calculate_nez_uint32, calculate_comp_unary_int + their *_init). Distinct from
@@ -1671,8 +1673,8 @@ void call_unary_sfpu_operation(std::uint32_t dst_index, std::uint32_t math_forma
  * call_binary_sfpu_operation(): ops such as atan2 load an fp32- vs bf16-specific
  * reciprocal polynomial at init time that the calculate step then relies on.
  */
-template <bool APPROXIMATION_MODE, bool DST_ACCUM_MODE, BinaryOp BINOP, int ITERATIONS = 32, std::uint32_t MATH_FORMAT = 0>
-void call_binary_sfpu_operation_init()
+template <bool APPROXIMATION_MODE, bool DST_ACCUM_MODE, BinaryOp BINOP, int ITERATIONS = 32, std::uint32_t MATH_FORMAT = 0, bool SIGN_MAGNITUDE_FORMAT = false>
+void call_binary_sfpu_operation_init([[maybe_unused]] std::uint32_t zero_point = 0)
 {
     if constexpr (
         BINOP == BinaryOp::ADD || BINOP == BinaryOp::SUB || BINOP == BinaryOp::MUL || BINOP == BinaryOp::DIV || BINOP == BinaryOp::RSUB ||
@@ -1820,6 +1822,25 @@ void call_binary_sfpu_operation_init()
     {
         SFPU_BINARY_INIT_FN(fmod_int32, fmod_int32_init, (APPROXIMATION_MODE));
     }
+    else if constexpr (BINOP == BinaryOp::QUANT)
+    {
+        // quant_tile_init. SIGN_MAGNITUDE_FORMAT selects the SMAG32 replay body.
+        SFPU_BINARY_INIT_FN_ARGS(quant_int32, sfpu::quant_init, (APPROXIMATION_MODE, SIGN_MAGNITUDE_FORMAT), zero_point);
+    }
+    else if constexpr (BINOP == BinaryOp::REQUANT)
+    {
+        SFPU_BINARY_INIT_FN_ARGS(requant_int32, sfpu::requant_init, (APPROXIMATION_MODE, SIGN_MAGNITUDE_FORMAT), zero_point);
+    }
+    else if constexpr (BINOP == BinaryOp::DEQUANT)
+    {
+        // dequant_tile_init. The caller passes the bits of -zero_point.
+        SFPU_BINARY_INIT_FN_ARGS(dequant_int32, sfpu::dequant_init, (APPROXIMATION_MODE, SIGN_MAGNITUDE_FORMAT), zero_point);
+    }
+    else if constexpr (BINOP == BinaryOp::COPY_DEST)
+    {
+        // copy_dest_value_init is empty. The baseline addrmod setup is enough.
+        SFPU_BINARY_INIT(add1);
+    }
     else
     {
         // BinaryOps without a dedicated SfpuType use the baseline binary addrmod setup.
@@ -1878,7 +1899,9 @@ constexpr SfpuType get_binary_comp_sfpu_type()
  * with a 16-bit Dest. DIV, MUL, the integer arms, and fp32 Dest drop it.
  * MUL uses calculate_sfpu_binary_mul, which applies its own RNE and then
  * stores +0 when either input is 0 on a 16-bit Dest.
- * @tparam SIGN_MAGNITUDE_FORMAT Int32 Dest holds SMAG32 (ADD/SUB only).
+ * SIGN_MAGNITUDE_FORMAT selects SMAG32. Int32 ADD/SUB default to true, the path
+ * those kernels had before this was a parameter. The quant family passes it
+ * explicitly and it must match the paired init. zero_point goes to init.
  */
 template <
     DstSync DST_SYNC_MODE,
@@ -2339,6 +2362,96 @@ void call_binary_sfpu_operation(
             dst_index_in1,
             dst_index_out,
             vector_mode);
+    }
+    else if constexpr (BINOP == BinaryOp::QUANT)
+    {
+        SFPU_BINARY_CALL(
+            DST_SYNC_MODE,
+            DST_ACCUM_MODE,
+            calculate_quant_int32,
+            (APPROXIMATION_MODE, PER_FACE_ITERATIONS, SIGN_MAGNITUDE_FORMAT),
+            dst_index_in0,
+            dst_index_in1,
+            dst_index_out,
+            vector_mode);
+    }
+    else if constexpr (BINOP == BinaryOp::REQUANT)
+    {
+        SFPU_BINARY_CALL(
+            DST_SYNC_MODE,
+            DST_ACCUM_MODE,
+            calculate_requant_int32,
+            (APPROXIMATION_MODE, PER_FACE_ITERATIONS, SIGN_MAGNITUDE_FORMAT),
+            dst_index_in0,
+            dst_index_in1,
+            dst_index_out,
+            vector_mode);
+    }
+    else if constexpr (BINOP == BinaryOp::DEQUANT)
+    {
+        SFPU_BINARY_CALL(
+            DST_SYNC_MODE,
+            DST_ACCUM_MODE,
+            calculate_dequant_int32,
+            (APPROXIMATION_MODE, PER_FACE_ITERATIONS, SIGN_MAGNITUDE_FORMAT),
+            dst_index_in0,
+            dst_index_in1,
+            dst_index_out,
+            vector_mode);
+    }
+    else if constexpr (BINOP == BinaryOp::COPY_DEST)
+    {
+        // copy_dest_value(in, out, unused). Block-float dest holds bf16.
+        if constexpr (MATH_FORMAT == static_cast<std::uint32_t>(DataFormat::Float16))
+        {
+            SFPU_BINARY_CALL(
+                DST_SYNC_MODE,
+                DST_ACCUM_MODE,
+                copy_dest_value,
+                (DataFormat::Float16, APPROXIMATION_MODE, PER_FACE_ITERATIONS),
+                dst_index_in0,
+                dst_index_out,
+                0,
+                vector_mode);
+        }
+        else if constexpr (
+            MATH_FORMAT == static_cast<std::uint32_t>(DataFormat::Float16_b) || MATH_FORMAT == static_cast<std::uint32_t>(DataFormat::Bfp8_b) ||
+            MATH_FORMAT == static_cast<std::uint32_t>(DataFormat::Bfp4_b))
+        {
+            SFPU_BINARY_CALL(
+                DST_SYNC_MODE,
+                DST_ACCUM_MODE,
+                copy_dest_value,
+                (DataFormat::Float16_b, APPROXIMATION_MODE, PER_FACE_ITERATIONS),
+                dst_index_in0,
+                dst_index_out,
+                0,
+                vector_mode);
+        }
+        else if constexpr (MATH_FORMAT == static_cast<std::uint32_t>(DataFormat::Int32))
+        {
+            SFPU_BINARY_CALL(
+                DST_SYNC_MODE,
+                DST_ACCUM_MODE,
+                copy_dest_value,
+                (DataFormat::Int32, APPROXIMATION_MODE, PER_FACE_ITERATIONS),
+                dst_index_in0,
+                dst_index_out,
+                0,
+                vector_mode);
+        }
+        else
+        {
+            SFPU_BINARY_CALL(
+                DST_SYNC_MODE,
+                DST_ACCUM_MODE,
+                copy_dest_value,
+                (DataFormat::Float32, APPROXIMATION_MODE, PER_FACE_ITERATIONS),
+                dst_index_in0,
+                dst_index_out,
+                0,
+                vector_mode);
+        }
     }
     else
     {

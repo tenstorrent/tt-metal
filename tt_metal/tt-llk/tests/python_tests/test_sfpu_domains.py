@@ -446,12 +446,16 @@ def test_int_comparison_ops_are_the_ordered_elw_compares():
 
 
 @pytest.mark.parametrize("arch_dir", ["tt_llk_wormhole_b0", "tt_llk_blackhole"])
-def test_copy_dest_is_absent_from_wh_bh_binary_op(arch_dir):
+def test_copy_dest_and_quant_are_declared_on_wh_bh(arch_dir):
     declared = _binary_op_enumerators(arch_dir)
-    assert MathOperation.SfpuCopyDest.value.cpp_enum_value not in declared, (
-        f"BinaryOp::{MathOperation.SfpuCopyDest.value.cpp_enum_value} is Quasar-only and "
-        f"appeared in {arch_dir}"
-    )
+    expected = {
+        MathOperation.SfpuCopyDest.value.cpp_enum_value,
+        MathOperation.SfpuQuant.value.cpp_enum_value,
+        MathOperation.SfpuRequant.value.cpp_enum_value,
+        MathOperation.SfpuDequant.value.cpp_enum_value,
+    }
+    missing = sorted(expected - declared)
+    assert not missing, f"{arch_dir} BinaryOp is missing {missing}"
 
 
 def test_every_float_binary_op_is_classified_for_cat_b():

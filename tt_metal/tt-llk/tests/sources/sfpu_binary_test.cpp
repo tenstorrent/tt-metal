@@ -133,7 +133,8 @@ void run_kernel(RUNTIME_PARAMETERS params)
         _llk_math_hw_configure_<is_fp32_dest_acc_en>(formats.math, formats.math);
         _llk_math_eltwise_unary_datacopy_init_wrapper_<copy_type, is_fp32_dest_acc_en, BROADCAST_TYPE, is_int_fpu_en, PackMode::Default>(
             num_faces, formats.math);
-        test_utils::call_binary_sfpu_operation_init<APPROX_MODE, is_fp32_dest_acc_en, SFPU_BINARY_OPERATION, ITERATIONS, formats.math>();
+        test_utils::call_binary_sfpu_operation_init<APPROX_MODE, is_fp32_dest_acc_en, SFPU_BINARY_OPERATION, ITERATIONS, formats.math, SFPU_SIGN_MAGNITUDE>(
+            params.ZERO_POINT);
         PROFILER_SYNC();
     }
     {
@@ -205,7 +206,7 @@ void run_kernel(RUNTIME_PARAMETERS params)
                             SFPU_BINARY_OPERATION,
                             ITERATIONS,
                             formats.math,
-                            true /* SIGN_MAGNITUDE_FORMAT */,
+                            SFPU_SIGN_MAGNITUDE,
                             SFPU_DST_ROUNDING_MODE>(tile, tile + 1, tile);
                     }
                 }
@@ -233,7 +234,7 @@ void run_kernel(RUNTIME_PARAMETERS params)
                             SFPU_BINARY_OPERATION,
                             ITERATIONS,
                             formats.math,
-                            true /* SIGN_MAGNITUDE_FORMAT */,
+                            SFPU_SIGN_MAGNITUDE,
                             SFPU_DST_ROUNDING_MODE>(tile, tile + 1, tile);
                     }
                     _llk_math_dest_section_done_<DstSync::SyncHalf, is_fp32_dest_acc_en>();
