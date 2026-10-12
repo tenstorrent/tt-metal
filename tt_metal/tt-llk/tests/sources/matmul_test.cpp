@@ -223,10 +223,6 @@ void run_kernel(RUNTIME_PARAMETERS params)
     const std::uint32_t RT_DIM         = params.RT_DIM;
     const Operand& buffer_Res          = params.buffer_Res;
 #endif
-#if defined(ARCH_BLACKHOLE)
-    // Block-float and one-tile blocks keep the per-tile pack.
-    const bool block_pack = (CT_DIM * RT_DIM > 1) && !IS_BFP_FORMAT(formats.pack_dst);
-#endif
 
     {
         START_PERF_MEASURE("INIT")
@@ -245,16 +241,16 @@ void run_kernel(RUNTIME_PARAMETERS params)
         {
             for (std::uint32_t loop = 0; loop < LOOP_FACTOR; loop++)
             {
-#if defined(ARCH_BLACKHOLE)
-                if (block_pack)
-                {
-                    _llk_pack_block_<dest_sync, is_fp32_dest_acc_en, ckernel::PackMode::Default>(0, PERF_ADDRESS(PERF_OUTPUT, 0), CT_DIM * RT_DIM);
-                    continue;
-                }
-#endif
                 for (std::uint32_t tile = 0; tile < CT_DIM * RT_DIM; tile++)
                 {
                     const std::uint32_t tile_index = tile % MAX_TILES_DEST;
+#if defined(ARCH_BLACKHOLE)
+                    if constexpr (pack_block_en)
+                    {
+                        _llk_pack_block_<dest_sync, is_fp32_dest_acc_en, ckernel::PackMode::Default>(tile_index, PERF_ADDRESS(PERF_OUTPUT, tile_index), CT_DIM * RT_DIM);
+                        break;
+                    }
+#endif
                     LLK_ASSERT(
                         (tile_index < get_dest_max_tiles<dest_sync, is_fp32_dest_acc_en, DstTileShape::Tile32x32>()),
                         "Block tile index exceeds maximum destination tiles for matmul");
@@ -267,19 +263,6 @@ void run_kernel(RUNTIME_PARAMETERS params)
             for (std::uint32_t loop = 0; loop < LOOP_FACTOR; loop++)
             {
                 _llk_packer_wait_for_math_done_();
-#if defined(ARCH_BLACKHOLE)
-                if (block_pack)
-                {
-                    const std::uint32_t addr = LOOP_FACTOR > 1 ? PERF_ADDRESS(PERF_OUTPUT, 0) : L1_ADDRESS(buffer_Res[0]);
-                    if (LOOP_FACTOR == 1)
-                    {
-                        LLK_ASSERT(is_valid_L1_address(L1_ADDRESS(buffer_Res[CT_DIM * RT_DIM - 1])), "pack result real-buffer address is outside L1");
-                    }
-                    _llk_pack_block_<dest_sync, is_fp32_dest_acc_en, ckernel::PackMode::Default>(0, addr, CT_DIM * RT_DIM);
-                    _llk_pack_dest_section_done_<dest_sync, is_fp32_dest_acc_en>();
-                    continue;
-                }
-#endif
                 // Pack dest occupancy (RT×CT).
                 for (std::uint32_t i = 0; i < CT_DIM * RT_DIM; i++)
                 {
@@ -291,6 +274,17 @@ void run_kernel(RUNTIME_PARAMETERS params)
                     {
                         LLK_ASSERT(is_valid_L1_address(L1_ADDRESS(buffer_Res[i])), "pack result real-buffer address is outside L1");
                     }
+#if defined(ARCH_BLACKHOLE)
+                    if constexpr (pack_block_en)
+                    {
+                        if (LOOP_FACTOR == 1)
+                        {
+                            LLK_ASSERT(is_valid_L1_address(L1_ADDRESS(buffer_Res[CT_DIM * RT_DIM - 1])), "pack result real-buffer address is outside L1");
+                        }
+                        _llk_pack_block_<dest_sync, is_fp32_dest_acc_en, ckernel::PackMode::Default>(i, addr, CT_DIM * RT_DIM);
+                        break;
+                    }
+#endif
                     _llk_pack_<dest_sync, is_fp32_dest_acc_en, ckernel::PackMode::Default>(i, addr);
                 }
                 _llk_pack_dest_section_done_<dest_sync, is_fp32_dest_acc_en>();

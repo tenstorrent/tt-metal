@@ -830,6 +830,28 @@ class PACK_BLOCK(TemplateParameter):
         return f"constexpr bool pack_block_en = {str(self.pack_block).lower()};"
 
 
+class MATMUL_PACK_BLOCK(TemplateParameter):
+    """PACK_BLOCK for matmul_test.cpp, picked from columns the test already reports, so it adds no column."""
+
+    def __init__(self, pack_block: bool = False):
+        self.matmul_pack_block = pack_block
+
+    def __repr__(self) -> str:
+        return f"MATMUL_PACK_BLOCK({self.matmul_pack_block})"
+
+    def __eq__(self, other) -> bool:
+        return (
+            isinstance(other, MATMUL_PACK_BLOCK)
+            and other.matmul_pack_block == self.matmul_pack_block
+        )
+
+    def __hash__(self) -> int:
+        return hash(self.matmul_pack_block)
+
+    def convert_to_cpp(self) -> str:
+        return f"constexpr bool pack_block_en = {str(self.matmul_pack_block).lower()};"
+
+
 @dataclass
 class TINY_PACK_MODE(TemplateParameter):
     """Tiny-tile block pack (Blackhole): 0 block-contiguous run, 1 closed run per tile, 2 _llk_pack_ per tile."""
