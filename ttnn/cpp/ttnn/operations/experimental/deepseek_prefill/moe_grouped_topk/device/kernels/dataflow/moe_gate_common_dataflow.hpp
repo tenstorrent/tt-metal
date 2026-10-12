@@ -90,7 +90,8 @@ template <
     uint32_t cb_gathered_sigmoid,
     uint32_t width_tiles,
     uint32_t n_activated_experts,
-    uint32_t n_activated_expert_tiles>
+    uint32_t n_activated_expert_tiles,
+    bool zero_unused_columns = false>
 FORCE_INLINE void gather(uint32_t tokens_per_tile) {
     CircularBuffer sigmoid_cb(cb_sigmoid_scores);
     CircularBuffer out_indices_cb(cb_out_indices);
@@ -138,6 +139,14 @@ FORCE_INLINE void gather(uint32_t tokens_per_tile) {
                                        token_face_row * columns_per_face + gathered_face_col;
 
             gathered_ptr[gathered_offset] = sigmoid_val;
+        }
+        if constexpr (zero_unused_columns) {  // a row-sum over the whole tile (SFPU) must see only the k scores
+            for (uint32_t col = n_activated_experts; col < n_activated_expert_tiles * columns_per_tile; col++) {
+                const uint32_t tile = col / columns_per_tile, c = col % columns_per_tile;
+                const uint32_t face = token_face_base + (c < columns_per_face ? 0 : 1);
+                gathered_ptr[tile * (score_tile::tile_size_bytes / 4) + face * (score_tile::face_size_bytes / 4) +
+                             token_face_row * columns_per_face + c % columns_per_face] = 0;
+            }
         }
     }
 
