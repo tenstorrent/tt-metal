@@ -146,13 +146,19 @@ Numbers come from 188-step greedy runs of `e2b_bringup.py::test_e2b_decode_timin
 - Total: 107 unique buffers over the run (enhancer 6, LTX 101).
 
 **Still open.**
-- **(a) Gen-1 leftovers.** The 23 buffers allocated during LTX's own trace captures are still alive at E2B replays. They didn't hang this run, but they are the same class of hazard. Options: preallocate them before the E2B capture, or capture E2B after the LTX traces.
-- **(b) Rewrite latency in this run was 60–92 s** (~0.3–0.5 s/step), against 17 ms/step standalone. The suspected cause is the tracker's per-allocation tracebacks and per-replay checks (128486 was 144 s). Needs a run with the tracker off.
+- **(a) Gen-1 leftovers.** The 23 buffers allocated during LTX's own trace captures are still alive at E2B replays. They didn't hang this run, but they are the same class of hazard. Analysis (read-only workflow, 2026-10-12):
+  - 22 of the 23 are LTX and 1 is the enhancer. The tracker flags anything allocated while a trace exists; it does no address check.
+  - The LTX tensors (prompts, timesteps, Tracer I/O) are rewritten before every read, so they are not at risk.
+  - The real residual risk is **program-cache kernel binaries** compiled after the E2B capture (`Copy` for held inputs; the enhancer's per-prompt-length `Slice` / `PagedFillCache` / lm_head slice). They are written once and re-read on every launch. They are allocated top-down in DRAM, so overlap with E2B's bottom-up scratch is unlikely but unproven.
+  - **Fix A (`393bc9a`):** seed the DiT held inputs and compile their traced `Copy` programs in warmup.
+  - **`2238a4b`:** the enhancer opts out of gemma4's sliding-tail stash, whose slice compiled once per prompt length.
+  - **Still flagged:** Tracer I/O, VAE/vocoder/BWE `Clone`/`_update_input` copies, encoder copies, and the enhancer's lm_head and `PagedFillCache` per-length programs. The complete fix (a traced LTX pass before the E2B capture) would invert the hazard onto E2B's capture-time buffers, so it needs its own tracker run.
+- **(b) Rewrite latency: resolved, it was the tracker.** Job 130196 (b07u02, late capture, tracker off, 2026-10-12) PASSED: prompt enhance took 3.7 / 2.8 / 3.2 s and total compute was 50.0 / 11.8 / 10.0 s for gens 0/1/2 (gen 0 includes the LTX trace captures). Warmup took 876 s; the late E2B capture took 29.8 s.
 - **(c) No same-node control yet.** The knob-off config hasn't been rerun on b03u02; the hangs were all on d07u02.
-- **(d) Teardown noise.** After PASSED, teardown logs a `SubDeviceManagerTracker is not initialized on MeshDevice 1` TT_THROW. It happens after the test and doesn't affect the result.
+- **(d) Teardown noise: fixed in `2238a4b`.** The E2B Generator's `__del__` released the decode trace after the submesh had closed. `release_traces()` now unloads the enhancer while the mesh is open. 130196 logged no TT_THROW.
 - **(e) Make the knob the default** once (a)–(c) are settled.
 
-**Hardware.** bh-glx-120-b02u08 shows only 24/32 chips at reset (jobs 130110 and 130111 failed before the test). It needs infra.
+**Hardware.** In bh_wan_machines, b02u08, b03u08, b04u02 and b05u02 all show only 24/32 chips *before* reset (`Issuing USER_RESET on 24 devices`), so the failures are not caused by our jobs (130110, 130111, 130153, 130154, 130157). They need infra. b03u02 and b04u08 are healthy (32/32), and so is b07u02 in `bh_sc5_B2B9_D12`.
 
 ## Open bug (history; root cause above)
 
