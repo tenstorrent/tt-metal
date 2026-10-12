@@ -12,11 +12,15 @@ from loguru import logger
 from PIL import Image, ImageFilter
 
 import ttnn
-from models.tt_dit.parallel.config import DiTParallelConfig, EncoderParallelConfig
-from models.tt_dit.pipelines.qwenimage.pipeline_qwenimage import QwenImagePipeline, QwenImagePipelineConfig
+from models.common.utility_functions import is_blackhole
+from models.tt_dit.pipelines.qwenimage.pipeline_qwenimage import QwenImagePipeline
 from models.tt_dit.utils.test import line_params_req_exact_devices
 
 DOG_IMAGE_PATH = Path(__file__).resolve().parents[4] / "demos" / "multimodal" / "gemma3" / "dog.jpg"
+
+# The warm-up traces every resolution of the preset: all of them on BH (~760 MB per chip on 2x2),
+# only 1024² on 2x4 WH (~110 MB per chip).
+TRACE_REGION_SIZE = 800_000_000 if is_blackhole() else 150_000_000
 
 
 @pytest.mark.parametrize(
@@ -25,32 +29,11 @@ DOG_IMAGE_PATH = Path(__file__).resolve().parents[4] / "demos" / "multimodal" / 
 )
 @pytest.mark.parametrize(
     "device_params",
-    [{**line_params_req_exact_devices, "l1_small_size": 32768, "trace_region_size": 150000000}],
+    [{**line_params_req_exact_devices, "trace_region_size": TRACE_REGION_SIZE}],
     ids=["line"],
     indirect=True,
 )
-@pytest.mark.parametrize(("width", "height", "num_inference_steps"), [(1024, 1024, 50)])
-@pytest.mark.parametrize(
-    ("mesh_device", "cfg", "sp", "tp", "encoder_tp", "encoder_fsdp", "topology", "num_links"),
-    [
-        ((2, 2), (2, 0), (1, 0), (2, 1), (2, 1), None, ttnn.Topology.Linear, 1),
-        ((2, 4), (1, 0), (2, 0), (4, 1), (4, 1), (2, 0), ttnn.Topology.Linear, 1),
-        ((4, 8), (2, 1), (4, 0), (4, 1), (4, 1), None, ttnn.Topology.Linear, 4),
-    ],
-    ids=[
-        "2x2sp1tp2",
-        "2x4sp2tp4",
-        "4x8sp4tp4",
-    ],
-    indirect=["mesh_device"],
-)
-@pytest.mark.parametrize(
-    "use_torch_text_encoder",
-    [
-        # pytest.param(True, id="encoder_cpu"),
-        pytest.param(False, id="encoder_device"),
-    ],
-)
+@pytest.mark.parametrize("mesh_device", [(2, 2), (2, 4), (4, 8)], ids=["2x2", "2x4", "4x8"], indirect=True)
 @pytest.mark.parametrize(
     "traced",
     [
@@ -61,18 +44,7 @@ DOG_IMAGE_PATH = Path(__file__).resolve().parents[4] / "demos" / "multimodal" / 
 def test_qwenimage_pipeline(
     *,
     mesh_device: ttnn.MeshDevice,
-    width: int,
-    height: int,
-    num_inference_steps: int,
-    cfg: tuple[int, int],
-    sp: tuple[int, int],
-    tp: tuple[int, int],
-    encoder_tp: tuple[int, int],
-    encoder_fsdp: tuple[int, int] | None,
-    topology: ttnn.Topology,
-    num_links: int,
     no_prompt: bool,
-    use_torch_text_encoder: bool,
     traced: bool,
     is_ci_env: bool,
     monkeypatch: pytest.MonkeyPatch,
@@ -81,26 +53,15 @@ def test_qwenimage_pipeline(
     if is_ci_env:
         monkeypatch.setenv("TT_DIT_CACHE_DIR", "/tmp/TT_DIT_CACHE")
 
-    pipeline = QwenImagePipeline(
-        device=mesh_device,
-        config=QwenImagePipelineConfig.default(
-            mesh_shape=mesh_device.shape,
-            dit_parallel_config=DiTParallelConfig.from_tuples(cfg=cfg, sp=sp, tp=tp),
-            encoder_parallel_config=EncoderParallelConfig.from_tuples(tp=encoder_tp, sp=None, fsdp=encoder_fsdp),
-            use_torch_text_encoder=use_torch_text_encoder,
-            use_torch_vae_decoder=False,
-            num_links=num_links,
-            topology=topology,
-            width=width,
-            height=height,
-        ),
-    )
+    width, height = 1024, 1024
+
+    pipeline = QwenImagePipeline.create_pipeline(mesh_device=mesh_device)
 
     prompts = [
         'A coffee shop entrance features a chalkboard sign reading "Qwen Coffee 😊 $2 per cup," with a neon light '
         'beside it displaying "通义千问". Next to it hangs a poster showing a beautiful Chinese woman, and beneath the '
         'poster is written "π≈3.1415926-53589793-23846264-33832795-02384197". Ultra HD, 4K, cinematic composition'
-        ", Ultra HD, 4K, cinematic composition."
+        ", Ultra HD, 4K, cinematic composition.",
         'Tokyo neon alley at night, rain-slick pavement, cinematic cyberpunk lighting; include glowing sign text "深夜営業" in bold neon above a doorway; moody reflections, shallow depth of field.',
         'Steamy ramen shop entrance at dusk; fabric noren curtain gently swaying; print "しょうゆラーメン" across the curtain in thick brush-style kana; warm lantern light, photorealistic.',
         'Minimalist tea poster, cream background, elegant layout; vertical calligraphy "抹茶" centered in sumi ink; small red hanko-style seal "本格" in the corner; high-resolution graphic design.',
@@ -123,21 +84,17 @@ def test_qwenimage_pipeline(
         'Travel postcard collage, Kyoto landmarks; stamped welcome text "ようこそ京都"; handwritten note "また来ます" in pen; vintage grain, off-white paper.',
     ]
 
-    _, cfg_axis = cfg
-    _, sp_axis = sp
-    _, tp_axis = tp
-    mesh_test_id = f"{mesh_device.shape[0]}x{mesh_device.shape[1]}cfg{cfg_axis}sp{sp_axis}tp{tp_axis}"
-    filename_prefix = f"qwenimage_{width}_{height}_{mesh_test_id}"
-    if use_torch_text_encoder:
-        filename_prefix += "_encodercpu"
+    filename_prefix = f"qwenimage_{width}_{height}_{mesh_device.shape[0]}x{mesh_device.shape[1]}"
     if not traced:
         filename_prefix += "_untraced"
 
     def run(*, prompt: str, number: int, seed: int) -> None:
         images = pipeline(
             prompts=[prompt],
-            num_inference_steps=num_inference_steps,
+            num_inference_steps=50,
             seed=seed,
+            width=width,
+            height=height,
             traced=traced,
         )
 
@@ -161,7 +118,7 @@ def test_qwenimage_pipeline(
 
 @pytest.mark.parametrize(
     "device_params",
-    [{**line_params_req_exact_devices, "l1_small_size": 32768, "trace_region_size": 150000000}],
+    [{**line_params_req_exact_devices, "trace_region_size": TRACE_REGION_SIZE}],
     ids=["line"],
     indirect=True,
 )

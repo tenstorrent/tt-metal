@@ -18,7 +18,7 @@ from models.tt_dit.layers.normalization import DistributedLayerNorm, RMSNorm
 from models.tt_dit.parallel.config import DiTParallelConfig
 from models.tt_dit.parallel.manager import CCLManager
 from models.tt_dit.utils import cache, tensor
-from models.tt_dit.utils.padding import PaddingConfig
+from models.tt_dit.utils.padding import PaddingConfig, torch_pad
 from models.tt_dit.utils.substate import rename_substate
 
 
@@ -139,7 +139,7 @@ class QwenImageTransformer(Module):
         timestep: ttnn.Tensor,
         spatial_rope: tuple[ttnn.Tensor, ttnn.Tensor],
         prompt_rope: tuple[ttnn.Tensor, ttnn.Tensor],
-        spatial_sequence_length: int,
+        spatial_sequence_length: int | ttnn.Tensor,
     ) -> ttnn.Tensor:
         """Run the model forward.
 
@@ -149,7 +149,7 @@ class QwenImageTransformer(Module):
             timestep: Tensor with shape [batch_size, 1].
             spatial_rope: Tuple of two tensors with shape [spatial_sequence_length / sp_factor, head_dim].
             prompt_rope: Tuple of two tensors with shape [prompt_sequence_length, head_dim] (sequence is not sharded!).
-            spatial_sequence_length: Length of the spatial sequence, before sharding.
+            spatial_sequence_length: Length of the spatial sequence without padding, before sharding.
         """
         time_embed = self.time_text_embed(timestep=timestep)
         ttnn.silu(time_embed, output_tensor=time_embed)
@@ -237,14 +237,16 @@ class QwenImageCheckpoint:
         latents_height: int,
         latents_width: int,
         prompt_sequence_length: int,
+        padded_spatial_sequence_length: int,
         device: ttnn.MeshDevice,
         sp_axis: int,
     ) -> tuple[tuple[ttnn.Tensor, ttnn.Tensor], tuple[ttnn.Tensor, ttnn.Tensor]]:
         """Compute the RoPE inputs of ``QwenImageTransformer.forward`` and upload them to ``device``.
 
         Returns:
-            The ``spatial_rope`` and ``prompt_rope`` cos/sin pairs. The spatial ones are sharded
-            along ``sp_axis`` and the prompt ones are replicated.
+            The ``spatial_rope`` and ``prompt_rope`` cos/sin pairs. The spatial ones are padded with
+            zeros to ``padded_spatial_sequence_length`` and sharded along ``sp_axis``, and the prompt
+            ones are replicated.
         """
         p = self.patch_size
         spatial_freqs, prompt_freqs = self.pos_embed(
@@ -252,14 +254,12 @@ class QwenImageCheckpoint:
             device="cpu",
             max_txt_seq_len=prompt_sequence_length,
         )
+        padding = padded_spatial_sequence_length - spatial_freqs.shape[0]
+        spatial_freqs = torch_pad(spatial_freqs, padding, dim=0)
 
-        spatial_rope = (
-            tensor.from_torch(
-                spatial_freqs.real.repeat_interleave(2, dim=-1), device=device, mesh_axes=[sp_axis, None]
-            ),
-            tensor.from_torch(
-                spatial_freqs.imag.repeat_interleave(2, dim=-1), device=device, mesh_axes=[sp_axis, None]
-            ),
+        spatial_rope = tuple(
+            tensor.from_torch(x.repeat_interleave(2, dim=-1), device=device, mesh_axes=[sp_axis, None])
+            for x in (spatial_freqs.real, spatial_freqs.imag)
         )
         prompt_rope = (
             tensor.from_torch(prompt_freqs.real.repeat_interleave(2, dim=-1), device=device),

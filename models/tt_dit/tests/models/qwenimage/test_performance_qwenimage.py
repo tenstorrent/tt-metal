@@ -10,10 +10,13 @@ from loguru import logger
 import ttnn
 from models.common.utility_functions import is_blackhole
 from models.perf.benchmarking_utils import BenchmarkData, BenchmarkProfiler
-from models.tt_dit.parallel.config import DiTParallelConfig, EncoderParallelConfig
 from models.tt_dit.pipelines.events import profiler_event_callback
 from models.tt_dit.pipelines.qwenimage.pipeline_qwenimage import QwenImagePipeline, QwenImagePipelineConfig
 from models.tt_dit.utils.test import line_params_req_exact_devices
+
+# The warm-up traces every resolution of the preset: all of them on BH (~760 MB per chip on 2x2),
+# only 1024² on 2x4 WH (~110 MB per chip).
+TRACE_REGION_SIZE = 800_000_000 if is_blackhole() else 150_000_000
 
 
 @pytest.mark.parametrize(
@@ -22,23 +25,10 @@ from models.tt_dit.utils.test import line_params_req_exact_devices
         (1024, 1024, 50),
     ],
 )
-@pytest.mark.parametrize(
-    ("mesh_device", "cfg", "sp", "tp", "encoder_tp", "encoder_fsdp", "topology", "num_links"),
-    [
-        ((2, 2), (2, 0), (1, 0), (2, 1), (2, 1), None, ttnn.Topology.Linear, 1),
-        ((2, 4), (1, 0), (2, 0), (4, 1), (4, 1), (2, 0), ttnn.Topology.Linear, 1),
-        ((4, 8), (2, 1), (4, 0), (4, 1), (4, 1), None, ttnn.Topology.Linear, 4),
-    ],
-    ids=[
-        "2x2cfg2sp1tp2",
-        "2x4cfg1sp2tp4",
-        "4x8cfg2sp4tp4",
-    ],
-    indirect=["mesh_device"],
-)
+@pytest.mark.parametrize("mesh_device", [(2, 2), (2, 4), (4, 8)], ids=["2x2", "2x4", "4x8"], indirect=True)
 @pytest.mark.parametrize(
     "device_params",
-    [{**line_params_req_exact_devices, "l1_small_size": 32768, "trace_region_size": 150000000}],
+    [{**line_params_req_exact_devices, "trace_region_size": TRACE_REGION_SIZE}],
     ids=["line"],
     indirect=True,
 )
@@ -48,13 +38,6 @@ def test_qwenimage_pipeline_performance(
     image_w: int,
     image_h: int,
     num_inference_steps: int,
-    cfg: tuple[int, int],
-    sp: tuple[int, int],
-    tp: tuple[int, int],
-    encoder_tp: tuple[int, int],
-    encoder_fsdp: tuple[int, int] | None,
-    topology: ttnn.Topology,
-    num_links: int,
     is_ci_env: bool,
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
@@ -68,20 +51,13 @@ def test_qwenimage_pipeline_performance(
     logger.info(f"  Image size: {image_w}x{image_h}")
     logger.info(f"  Inference steps: {num_inference_steps}")
 
-    pipeline = QwenImagePipeline(
-        device=mesh_device,
-        config=QwenImagePipelineConfig.default(
-            mesh_shape=mesh_device.shape,
-            dit_parallel_config=DiTParallelConfig.from_tuples(cfg=cfg, sp=sp, tp=tp),
-            encoder_parallel_config=EncoderParallelConfig.from_tuples(tp=encoder_tp, sp=None, fsdp=encoder_fsdp),
-            use_torch_text_encoder=False,
-            use_torch_vae_decoder=False,
-            num_links=num_links,
-            topology=topology,
-            width=image_w,
-            height=image_h,
-        ),
-    )
+    pipeline = QwenImagePipeline.create_pipeline(mesh_device=mesh_device)
+    # The configuration create_pipeline uses, for the report.
+    config = QwenImagePipelineConfig.default(mesh_shape=mesh_device.shape)
+    cfg = config.dit_parallel_config.cfg_parallel.factor
+    sp = config.dit_parallel_config.sequence_parallel.factor
+    tp = config.dit_parallel_config.tensor_parallel.factor
+    encoder_tp = config.encoder_parallel_config.tensor_parallel.factor
 
     prompts = [
         'A coffee shop entrance features a chalkboard sign reading "Qwen Coffee $2 per cup," with a neon light '
@@ -98,6 +74,8 @@ def test_qwenimage_pipeline_performance(
         images = pipeline(
             prompts=[prompts[0]],
             num_inference_steps=num_inference_steps,
+            width=image_w,
+            height=image_h,
             traced=True,
         )
     images[0].save(f"qwenimage_{image_w}_{image_h}_warmup.png")
@@ -117,6 +95,8 @@ def test_qwenimage_pipeline_performance(
             images = pipeline(
                 prompts=[prompts[prompt_idx]],
                 num_inference_steps=num_inference_steps,
+                width=image_w,
+                height=image_h,
                 traced=True,
                 on_event=profiler_event_callback(benchmark_profiler, i),
             )
@@ -144,9 +124,9 @@ def test_qwenimage_pipeline_performance(
     print("Model: QwenImage")
     print(f"Image Size: {image_w}x{image_h}")
     print(f"Inference Steps: {num_inference_steps}")
-    print(f"Configuration: cfg={cfg[0]}, sp={sp[0]}, tp={tp[0]}, encoder_tp={encoder_tp[0]}")
+    print(f"Configuration: cfg={cfg}, sp={sp}, tp={tp}, encoder_tp={encoder_tp}")
     print(f"Mesh Shape: {mesh_device.shape}")
-    print(f"Topology: {topology}")
+    print(f"Topology: {config.topology}")
     print("-" * 100)
 
     def print_stats(name: str, times: list[float]) -> None:
@@ -198,20 +178,21 @@ def test_qwenimage_pipeline_performance(
         "total_time": statistics.mean(total_times),
     }
     if tuple(mesh_device.shape) == (2, 2):
-        # BH QuietBox 2, calibrated from run 31845507029:
-        # encoding 0.1189s, denoising 47.1481s, vae 1.1045s, total 57.4226s.
+        # BH QuietBox 2, measured on a local QB2:
+        # encoding 0.097s, denoising 27.2s, vae 0.111s, total 27.5s.
         expected_metrics = {
-            "total_encoding_time": 0.2,
-            "denoising_steps_time": 55.0,
-            "vae_decoding_time": 1.5,
-            "total_time": 68,
+            "total_encoding_time": 0.12,
+            "denoising_steps_time": 30.0,
+            "vae_decoding_time": 0.15,
+            "total_time": 31,
         }
     elif tuple(mesh_device.shape) == (2, 4):
+        # WH T3K: encoding 0.552s, denoising 67.2s, vae 0.138s, total 68.0s.
         expected_metrics = {
-            "total_encoding_time": 0.35,
-            "denoising_steps_time": 80.0,
-            "vae_decoding_time": 3.0,
-            "total_time": 88,
+            "total_encoding_time": 0.6,
+            "denoising_steps_time": 74.0,
+            "vae_decoding_time": 0.2,
+            "total_time": 75,
         }
     elif tuple(mesh_device.shape) == (4, 8):
         expected_metrics = {
@@ -259,13 +240,13 @@ def test_qwenimage_pipeline_performance(
                 "width": image_w,
                 "height": image_h,
                 "num_steps": num_inference_steps,
-                "cfg_factor": cfg[0],
-                "sp_factor": sp[0],
-                "tp_factor": tp[0],
+                "cfg_factor": cfg,
+                "sp_factor": sp,
+                "tp_factor": tp,
                 "num_frames": 1,
-                "encoder_tp_factor": encoder_tp[0],
-                "topology": str(topology),
-                "num_links": num_links,
+                "encoder_tp_factor": encoder_tp,
+                "topology": str(config.topology),
+                "num_links": config.num_links,
             },
         )
 
