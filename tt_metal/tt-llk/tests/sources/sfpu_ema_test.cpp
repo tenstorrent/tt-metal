@@ -73,7 +73,7 @@ void run_kernel(RUNTIME_PARAMETERS params)
             // must match math retirements exactly or either side hangs.
             if constexpr (!unpack_to_dest)
             {
-                _perf_unpack_loop_set_valid</* src A */ true, /* src B */ is_fp32_dest_acc_en>(num_faces * TILE_CNT * LOOP_FACTOR /* iterations */);
+                _perf_unpack_loop_set_valid</* src A */ true, /* src B */ is_fp32_dest_acc_en, PERF_RUN_TYPE>(num_faces * TILE_CNT * LOOP_FACTOR /* iterations */);
             }
         }
         else if constexpr (PERF_RUN_TYPE != PerfRunType::PACK_ISOLATE)

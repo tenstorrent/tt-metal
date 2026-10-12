@@ -104,7 +104,7 @@ void run_kernel(RUNTIME_PARAMETERS params)
         if constexpr (PERF_RUN_TYPE == PerfRunType::UNPACK_ISOLATE)
         {
             // _llk_unpack_A     sets both A and B valid
-            _perf_math_loop_clear_valid<true, true>(LOOP_FACTOR * TILE_CNT * TILE_NUM_FACES);
+            _perf_math_loop_clear_valid<true, true, PERF_RUN_TYPE>(LOOP_FACTOR * TILE_CNT * TILE_NUM_FACES);
             return;
         }
 
