@@ -176,12 +176,12 @@ class ttKDA:
             fp32_dest_acc_en=True,
             packer_l1_acc=True,
         )
-        self.input_projection_minimal_matmul_config, self.output_projection_program_config = (
+        self.input_projection_program_config, self.output_projection_program_config = (
             tuned_projection_matmul_configs(
                 mesh_device.compute_with_storage_grid_size(),
                 self.active_seq_len_local,
+                self.weights.input_projection.shape[-1],
                 *tuple(self.weights.output_projection.shape)[-2:],
-                program_config.input_projection_math_fidelity,
             )
             if program_config.tuned_projection_matmuls
             else (None, None)
@@ -339,21 +339,18 @@ class ttKDA:
         """Run the fused input projection and split its semantic outputs."""
         config = self.config
         weights = self.weights
-        if self.input_projection_minimal_matmul_config is not None:
-            projected = ttnn.experimental.minimal_matmul(
-                hidden_states,
-                weights.input_projection,
-                config=self.input_projection_minimal_matmul_config,
-                memory_config=ttnn.DRAM_MEMORY_CONFIG,
-                compute_kernel_config=self.input_projection_compute_config,
-            )
-        else:
-            projected = ttnn.linear(
-                hidden_states,
-                weights.input_projection,
-                memory_config=ttnn.DRAM_MEMORY_CONFIG,
-                compute_kernel_config=self.input_projection_compute_config,
-            )
+        # The tuned schedule writes the projection to L1: it is only read back by this layer (the QKV slice,
+        # and the decay, beta and output-gate columns in place), and its DRAM write would otherwise sit after
+        # the last K block, outside the compute.
+        projected = ttnn.linear(
+            hidden_states,
+            weights.input_projection,
+            program_config=self.input_projection_program_config,
+            memory_config=(
+                ttnn.DRAM_MEMORY_CONFIG if self.input_projection_program_config is None else ttnn.L1_MEMORY_CONFIG
+            ),
+            compute_kernel_config=self.input_projection_compute_config,
+        )
         auxiliary_start = self._convolution_width
         return _ProjectedInputs(
             projected=projected,
