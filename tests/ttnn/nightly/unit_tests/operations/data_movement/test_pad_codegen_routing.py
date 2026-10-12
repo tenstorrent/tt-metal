@@ -1431,14 +1431,14 @@ def test_pad_codegen_demotion(device, shape, kwargs, dtype, layout, placement):
 _CACHE_HIT = [
     (
         [1, 1, 8, 8],
-        {"padding": [[0, 0], [0, 0], [0, 0], [0, 56]], "value": -inf},
+        {"padding": [[0, 0], [0, 0], [0, 0], [0, 56]], "value": float("-inf")},
         ttnn.bfloat16,
         ttnn.TILE_LAYOUT,
         ttnn.L1_MEMORY_CONFIG,
     ),
     (
         [1, 1, 8, 8],
-        {"padding": [[0, 0], [0, 0], [0, 0], [0, 56]], "value": -inf},
+        {"padding": [[0, 0], [0, 0], [0, 0], [0, 56]], "value": float("-inf")},
         ttnn.bfloat16,
         ttnn.TILE_LAYOUT,
         ttnn.DRAM_MEMORY_CONFIG,
