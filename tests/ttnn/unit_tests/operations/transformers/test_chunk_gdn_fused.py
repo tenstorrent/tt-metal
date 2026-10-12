@@ -211,7 +211,7 @@ def test_program_config_defaults():
     f = ttnn.ChunkGdnFusedProgramConfig()
     assert (f.num_producers, f.num_receivers, f.row_local) == (None, None, None)
     assert (f.handoff_depth, f.unicast, f.posted) == (None, True, False)
-    assert (f.producer_pool, f.pool_extra_share) == (False, None)
+    assert (f.producer_pool, f.pool_extra_share) == (None, None)
     f = ttnn.ChunkGdnFusedProgramConfig(num_receivers=4, num_producers=5, row_local=False, handoff_depth=3)
     assert (f.num_receivers, f.num_producers, f.row_local, f.handoff_depth) == (4, 5, False, 3)
     assert "num_receivers=4" in repr(f) and "row_local=False" in repr(f)
@@ -334,6 +334,12 @@ def test_fused_default_dispatch(device, num_k_heads, num_v_heads, nc):
     )
     assert torch.equal(o_def, o_exp), f"default dispatch o differs from explicit '{expected_path}' run"
     assert torch.equal(fs_def, fs_exp), f"default dispatch final_state differs from explicit '{expected_path}' run"
+    if expected_path == "fused":
+        # A fused config with every field unset is the fused side of that dispatch: the same program again.
+        _run_op(device, tensors, const_tiles, s0, _fused())
+        assert (
+            device.num_program_cache_entries() - n_default == 0
+        ), "ChunkGdnFusedProgramConfig() compiled a new program: it did not resolve to the default dispatch's geometry"
 
 
 # ---------------------------------------------------------------------------

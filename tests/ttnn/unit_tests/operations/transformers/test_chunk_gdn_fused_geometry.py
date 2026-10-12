@@ -115,7 +115,7 @@ def _t_fused(bh, nc, nv, np_, depth, placement, nph=None, num=0, den=1):
     pace = _t_step(vtl, pooled) + _CHAIN_SLOPE_US * bh
     if pooled and vtl <= 2 and depth <= 2:
         pace += _POOL_CREDIT_D2_US * bh
-    H = (n_home - 1) * _W_P_US
+    H = (n_home - 1) * _W_P_US if n_home else 0.0
     X = (n_extra - 1) * _W_P_US if n_extra else 0.0
     if placement == 0 and max(H, X) < 2.0 * (nc - 1) * pace:  # row-major: link-bound unless well production-bound
         pace = max(pace, _ROW_MAJOR_PACE_US)
@@ -871,3 +871,9 @@ def test_pool_share_choice():
     assert t_at[30] > t_at[27] * 1.08 and t_at[0] > t_at[27] * 1.25, t_at
     free = _t.chunk_gdn_fused_geometry(11, 10, 16, 64, VT, 2, 78, 2, POOL)
     assert free[7] == 27 and free[4] == t_at[27]
+    # Every chunk to the extras: the idle home producers contribute no span (not an unsigned wrap), and the
+    # oracle still agrees.
+    got = _t.chunk_gdn_fused_geometry(11, 10, 16, 64, VT, 2, 78, 2, POOL, 1.0)
+    o = _choose_geometry((11, 10), 16, 64, fixed_nv=2, fixed_np=78, fixed_nbuf=2, candidates=POOL, fixed_share=1.0)
+    assert got[7] == 78 == o["num"] and abs(got[4] - o["T_fused"]) < 0.5, (got, o)
+    assert t_at[27] < got[4] < 10 * t_at[27], got[4]

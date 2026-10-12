@@ -288,7 +288,7 @@ float t_fused_us(
     if (pooled && Vtl <= 2 && depth <= 2) {
         pace += kPoolCreditD2Us * BH;
     }
-    const float H = (load.n_home - 1) * kWpUs;
+    const float H = load.n_home ? (load.n_home - 1) * kWpUs : 0.0f;
     const float X = load.n_extra ? (load.n_extra - 1) * kWpUs : 0.0f;
     // Row-major: the receiver rows' shared links bound the chain unless it is well production-bound.
     if (placement == 0 && std::max(H, X) < 2.0f * (NC - 1) * pace) {
@@ -715,7 +715,7 @@ std::vector<Tensor> chunk_gdn(
             share.value_or(0.0f));
         // The model fills whatever the config leaves free (geometry, hand-off depth, the extras' share, or all)
         // so the pair fits the grid.
-        const bool pool = fused_cfg->producer_pool;
+        const auto& pool_pin = fused_cfg->producer_pool;
         const auto choice = choose_fused_geometry(
             grid0.x,
             grid0.y,
@@ -725,19 +725,22 @@ std::vector<Tensor> chunk_gdn(
             nv_pin,
             np_pin,
             nbuf_pin,
-            pool ? FusedCandidates::Pool : FusedCandidates::PerHead,
+            !pool_pin.has_value() ? FusedCandidates::Both
+            : *pool_pin           ? FusedCandidates::Pool
+                                  : FusedCandidates::PerHead,
             share.value_or(-1.0f));
         TT_FATAL(
             choice.nv >= 1,
             "chunk_gdn_fused: no fused geometry fits BH={} on a {}x{} grid with num_receivers={} num_producers={} "
-            "producer_pool={} (0 = free); the dispatch must choose phased",
+            "producer_pool={} (0 / free = unset); the dispatch must choose phased",
             BH,
             grid0.x,
             grid0.y,
             nv_pin,
             np_pin,
-            pool);
+            pool_pin.has_value() ? (*pool_pin ? "true" : "false") : "free");
         attrs.nv = nv_pin ? nv_pin : choice.nv;
+        const bool pool = choice.placement == 2;
         if (pool) {
             // The pool size, at most one producer per item; its home producers per head come from the
             // layout (validated), the extras' share from the config or the model's choice.

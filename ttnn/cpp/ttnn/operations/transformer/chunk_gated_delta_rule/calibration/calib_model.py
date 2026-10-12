@@ -108,7 +108,7 @@ def t_fused(r, K=K):
     pace = step + K["slope"] * bh
     if pooled and vtl <= 2 and depth <= 2:
         pace += K["pool_credit_d2"] * bh
-    H = (n_home - 1) * K["W"]
+    H = (n_home - 1) * K["W"] if n_home else 0.0
     X = (n_extra - 1) * K["W"] if n_extra else 0.0
     if pl == 0 and max(H, X) < 2.0 * (nc - 1) * pace:
         pace = max(pace, K["rowmajor"])
