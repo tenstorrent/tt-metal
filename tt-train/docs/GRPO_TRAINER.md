@@ -162,10 +162,10 @@ Rules and limitations of `remote_sync`:
 
 - **Llama only, no FSDP**, and `model_source` must be a HuggingFace Hub id
   (both ranks load HF-named weights from it; a local path raises `ValueError`).
-- **Both ranks boot with the Hub weights at version 0**, so there is no
-  initial weight push. A batch generated before a push carries the older
-  version and that version's log-probs, so the PPO ratio stays correct with
-  `weight_sync_every > 1`.
+- **Rank 1 boots with dummy weights**, and rank 0 pushes its weights as
+  version 0 before training starts. A batch generated before a push carries
+  the older version and that version's log-probs, so the PPO ratio stays
+  correct with `weight_sync_every > 1`.
 - **Log-probs come from tt-transformers.** `TTTRolloutSampler` enables
   on-device log-probs (`enable_log_probs`, `num_logprobs=0`) and only packs
   them; tt-train recomputes nothing. tt-transformers emits no log-probs on its
