@@ -1674,6 +1674,100 @@ def _ensure_tt_model_serving_fixes(tt_model_bin) -> None:
         )
 
 
+_TT_PLUGIN_NOVEL_ARCH_SNIPPET = '''
+
+# ---- Tenstorrent novel-architecture serving support (added by tt_hw_planner publish-hf) -----------
+def _tt_register_novel_configs() -> None:
+    """Register a permissive Transformers config for any EXTRA_MODELS_DIR bundle whose base weights
+    declare a model_type this Transformers build does not know (brand-new archs ship no remote code),
+    so vLLM can build its ModelConfig. The TT generator, not Transformers, builds the real model."""
+    import os, json, glob
+    try:
+        from transformers import AutoConfig, PretrainedConfig
+        from transformers.models.auto.configuration_auto import CONFIG_MAPPING
+    except Exception:
+        return
+    emd = os.getenv("EXTRA_MODELS_DIR")
+    hf_home = os.getenv("HF_HOME") or os.path.expanduser("~/.cache/huggingface")
+    if not emd:
+        return
+    for meta in glob.glob(os.path.join(emd, "*", "vllm_metadata.json")):
+        try:
+            w = (json.load(open(meta)) or {}).get("weights")
+            if not w or "/" not in w:
+                continue
+            folder = "models--" + w.replace("/", "--")
+            cfgs = glob.glob(os.path.join(hf_home, "hub", folder, "snapshots", "*", "config.json"))
+            if not cfgs:
+                continue
+            mt = (json.load(open(cfgs[0])) or {}).get("model_type")
+            if not mt or mt in CONFIG_MAPPING:
+                continue
+            cls = type("TTAutoConfig_" + mt, (PretrainedConfig,), {"model_type": mt})
+            AutoConfig.register(mt, cls, exist_ok=True)
+        except Exception:
+            continue
+
+
+def _tt_force_generate_capability() -> None:
+    """A TT-prefixed arch is a custom adapter driven through the TT generator contract, not vLLM's
+    native model __init__, so it never satisfies vLLM's structural is_vllm_model check (stock models
+    ride a built-in arch; a novel arch has none). Declare TT archs generative so ModelConfig accepts
+    them; the TT runner drives prefill/decode."""
+    try:
+        from vllm.model_executor.models.registry import ModelRegistry
+        RegClass = type(ModelRegistry)
+    except Exception:
+        return
+    if getattr(RegClass, "_tt_gen_patched", False):
+        return
+    _orig = RegClass.is_text_generation_model
+
+    def _wrap(self, architectures, *a, **k):
+        try:
+            archs = architectures if isinstance(architectures, (list, tuple)) else [architectures]
+            if any(isinstance(x, str) and x.startswith("TT") for x in archs):
+                return True
+        except Exception:
+            pass
+        return _orig(self, architectures, *a, **k)
+
+    RegClass.is_text_generation_model = _wrap
+    RegClass._tt_gen_patched = True
+# ---- end Tenstorrent novel-architecture serving support -------------------------------------------
+'''
+
+
+def _ensure_plugin_novel_arch_support(plugin_path) -> bool:
+    """Make the in-tree vLLM TT plugin serve a brand-new architecture out of the box, by adding two
+    small hooks to its platform.py and calling them during EXTRA_MODELS_DIR registration. Idempotent,
+    additive, and a no-op for stock archs (the hooks only fire on a novel EXTRA_MODELS_DIR bundle), so
+    the image built from this plugin needs no hand-fixing. Returns True when support is present."""
+    from pathlib import Path as _P
+
+    pf = _P(plugin_path) / "src" / "vllm_tt_plugin" / "platform.py"
+    try:
+        src = pf.read_text()
+    except Exception:
+        return False
+    if "_tt_register_novel_configs" in src:
+        return True
+    anchor = "def _register_models_from_extra_dir(ModelRegistry) -> int:\n"
+    if anchor not in src:
+        return False
+    calls = (
+        anchor
+        + "    try:\n        _tt_register_novel_configs()\n    except Exception:\n        pass\n"
+        + "    try:\n        _tt_force_generate_capability()\n    except Exception:\n        pass\n"
+    )
+    src = src.replace(anchor, _TT_PLUGIN_NOVEL_ARCH_SNIPPET + "\n\n" + calls, 1)
+    try:
+        pf.write_text(src)
+        return True
+    except Exception:
+        return False
+
+
 def _run_container(args, state: dict, slug: str, demo_dir, commit: str | None) -> int:
     """Build + push a real v5.1 container bundle via tt-model (exactly like the published TT repos):
     generate tt-model.yaml, then `tt-model package --container` (2.5-4h OCI build) and `tt-model push`."""
@@ -1789,6 +1883,26 @@ def _run_container(args, state: dict, slug: str, demo_dir, commit: str | None) -
             else "stock generator — servable as-is"
         )
         print(f"  [publish-hf] vLLM bundle {'created' if created else 'exists'}: {bpath}  ({state_note})")
+
+    # A novel-arch pipeline adapter must serve out of the box: build the image from the MATCHED
+    # local vLLM+plugin (no version skew) and give that plugin novel-arch support. Stock arches are
+    # unaffected (they ride a vLLM built-in; the hooks only fire on a novel EXTRA_MODELS_DIR bundle).
+    _is_pipeline_adapter = (not adapter_ready) and bool(_demo_pipeline_module(checkout, slug))
+    if getattr(args, "container", False) and _is_pipeline_adapter:
+        if not getattr(args, "vllm_path", None):
+            disc = _discover_serving_stack()
+            if disc:
+                vpath, ppath, vcommit, vremote = disc
+                args.vllm_path, args.plugin_path = vpath, ppath
+                args._discovered_vllm = (vcommit, vremote)
+                print(f"  [publish-hf] auto serving stack (novel arch): {vremote} @ {vcommit[:9]} -- {vpath}")
+                if not getattr(args, "lock", None):
+                    cf = _auto_constraint_file(checkout)
+                    if cf:
+                        args.lock = cf
+        if getattr(args, "plugin_path", None):
+            _ok = _ensure_plugin_novel_arch_support(args.plugin_path)
+            print(f"  [publish-hf] plugin novel-arch serving support: {'present' if _ok else 'could not inject'}")
 
     # Serve on the mesh the model was actually built/validated on (from the run), not a box guess.
     mesh_rc = _detect_mesh(Path(demo_dir))
