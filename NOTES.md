@@ -14,3 +14,23 @@ Branch ttp/t409-port-vsa-sparse-attention-into-the-fasth, base a15eb37ec6a (t400
 2. blx01 setup under /var/tmp/fasth3/t409: worktree + incremental C++ build (ionice -c3, nice).
 3. Device: test_vsa_attention_minimax_h3.py::test_vsa_sparsity0_matches_ring_path (4x8 full mesh, PCC>=0.9995 vs dense ring).
 4. After #408: JIT-fill job, then dense vs VSA-0.9 A/B at 10 s seed 0 in one job (both arms), via device-lint.sh. Template: tt-project/t400/run400.sh (drop its setsid re-exec; use timeout --foreground -k 10).
+
+## t416 run 1565 (2026-10-11 22:36 PDT)
+- Steps 1+2 merged: fresh Release build of the VSA code (d39d16e5c9b) on blx01 at /var/tmp/fasth3/t409/b
+  (worktree of /var/tmp/fasth3/t48's repo, submodules from t284), driver tt-project/t409/build409.sh, run as
+  `ttp detach --remote g15blx01 --dir /var/tmp/fasth3/t409 build409` (ionice -c3, nice 10, 24 jobs).
+  Log /var/tmp/fasth3/t409/build409.log, marker build409.marker (rc=0 step=done = compile check passed and
+  ttnn.transformer.vsa_sdpa / vsa_ring_sdpa import). An incremental build was not possible: ninja paths are absolute.
+- Cherry-picked #408's test change (bff7d82040c -> 65689931ab0: 6 s duration + MINIMAX_H3_TURBO_SAVE_DIR) so the
+  A/B uses exactly the #408 test. Python only: blx01 tree can be moved to it with `git checkout` (no rebuild).
+  blx01 needs a bundle with 65689931ab0 first (t409.bundle has only up to a2dee6756f1).
+- Step 3: tt-project/t409/chain416a.sh detached on g15blx02 (run dir state/runs/1565/chain416a.{log,rc}): waits
+  for build409.rc, submits spec attn.txt (run409a.sh, -t 600 unmeasured) via tt-project/t288/blx01-submit.sh,
+  retries once if not completed and not a test failure. Ends with "T416A_DONE <rc> <status>".
+  Result: /var/tmp/fasth3/t409/out_attn/run.log on blx01 (PCC line from assert_quality).
+- Step 4 script ready: tt-project/t409/run409b.sh <tag> dense vsa0.9 (one pytest per arm, 90 s watchdog, warm
+  deadline 400, per-arm pytest timeout T409_PY_TIMEOUT). Size it from #408's 10 s job wall time. If the two arms
+  do not fit in 600 s (+50% rule), run one arm per job. Before the VSA arm: one cold fill job (new `_vsa` DiT weight
+  cache + VSA kernels).
+- Note: I moved ttp/t409-... to d39d16e5c9b by mistake with `git branch -f` and restored it to a2dee6756f1 at once
+  (update-ref); the t409 worktree was clean.
