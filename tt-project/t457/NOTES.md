@@ -60,3 +60,20 @@ Branch ttp/t457-..., based on t456 head da96dd1c143 (ff-merged).
 - Reading: vsa scale clearly < 1 (e.g. <0.995) while sdpa ~1.000 => O attenuation in vsa's accumulation (kernel fix
   target: accumulate O in fp32/L1 or rescale). Both ~1 and similar rel => no per-call bias; the 4 dB is the
   different kernel's (equal-size) rounding noise, and no kernel fix is warranted.
+
+## Step 1d result: job 043 PASS (13:19-13:26 PDT, ended T457_SWEEP_DONE, no drops, 900 MHz clamp)
+- Per-head scale <o,ref>/<ref,ref> vs fp32 over the real keys, 28 heads (devs 0, 24) per call:
+  - call 0: vsa mean 0.9883 (min 0.9665), rel mean 0.0433 | dense bf16 sdpa mean 1.0104 (min 0.9838), rel mean 0.0399
+  - call 49: vsa mean 0.9928 (min 0.9523), rel mean 0.0679 | sdpa mean 0.9984 (min 0.9609), rel mean 0.0704
+- Both kernels scatter +-2-4% per head with equal rel error; vsa leans ~1% low, sdpa ~1% high at layer 0, and both
+  are ~1 at layer 49. No vsa-specific O attenuation stands out from the dense kernel's own bf16 noise.
+- Stills at 5 s (tt-project/t457/still_dense_k256_vsa0.jpg: dense | k256 reorder | vsa sparsity 0): all sharp, same
+  fox and scene; vsa0 shows only pose/position drift, with no blur or ghosting.
+
+## Conclusion (13:30 PDT)
+- The ~19 dB "floor" is trajectory sensitivity, not a vsa_sdpa bug: per call, vsa matches the dense bf16 SDPA floor
+  (PCC, worst tiles, scale), and a plain equal-precision reorder of the dense kernel already drifts to 23 dB.
+  A different kernel with its own tiling and pad handling drifting 4 dB further is in the same class.
+- No kernel fix, so the spec's step 2 (config fix plus CPU test) and step 4 (fix off/on A/B) do not apply.
+- #453: PSNR vs dense cannot separate "sparsity hurts" from this floor, since VSA-0.9 (19.1 dB) equals sparsity 0
+  (18.98 dB). Its blur/ghosting claim needs a visual and VBench check against a sparsity-0 vsa arm on 5 seeds.
