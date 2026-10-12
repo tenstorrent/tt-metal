@@ -143,7 +143,8 @@ class PrefillRuntime:  # structural contract — not a base class you must inher
     def capture_trace(self, kv_cache) -> None:
         """OPTIONAL — implement only if your model supports segmented trace capture/replay. The
         engine calls this via `getattr(runtime, "capture_trace", None)`, once, after `compile()`
-        and only when `config.use_trace` is set; a model that never traces can omit it entirely.
+        and only when `config.use_trace` is set; a model that never traces can omit it entirely, and
+        the runner then refuses PREFILL_USE_TRACE=1 instead of running eagerly.
         Must be idempotent (no-op if already captured) since the engine does not track capture
         state itself."""
 
@@ -167,9 +168,19 @@ class PrefillRuntime:  # structural contract — not a base class you must inher
         numbering (a cache only some layers write), and map it back to model layers in your
         `build_kv_chunk_table` (see DeepSeek's `kv_table_layer_rows`)."""
 
+    # If your merged table's second config is NOT a DSA index cache, override `cache_kind(config_id)`
+    # on the ADAPTER (default: 0 = "kvpe", 1 = "index", else "other") so the producer and the
+    # migration driver do not infer an index cache from the config count. Kimi-K3 publishes its KDA
+    # state as configs 1 and 2 this way (models/demos/deepseek_v3_d_p/tt/kda/KDA_STATE_MIGRATION.md).
+    # If a layer's cache is not on the token axis, also override `layer_position_range(layer_idx,
+    # real_len)` (default `(0, real_len)`): the driver issues one /migrate per run of consecutive layers
+    # with equal ranges and byte-verifies that range. Kimi-K3 returns the KDA version window there.
+
     def set_layer_completion_sink(self, sink) -> None:
         """Register the per-layer completion sink. Required at any rank count, unless the runner runs
-        with PREFILL_LAYER_ACK_D2H=1 and takes completions off the device instead.
+        with PREFILL_LAYER_ACK_D2H=1 and takes completions off the device instead. That mode needs
+        `set_d2h_ack_service(service)` on the runtime; without it the runner refuses
+        PREFILL_LAYER_ACK_D2H=1 right after building the runtime.
 
         Call `sink(layer_idx, request_id)` once per layer, where `request_id` is the one
         `prefill_chunk` was given -- bind it per call rather than reading mutable state, since the

@@ -19,6 +19,8 @@
 #include <tt-metalium/program_descriptors.hpp>
 #include "ttnn/tensor/tensor.hpp"
 #include "ttnn/operations/core/compute_kernel/compute_kernel_config.hpp"
+#include "ttnn/operations/transformer/chunk_gated_delta_rule/chunk_gated_delta_rule_config.hpp"
+#include "chunk_gdn_compute_config.hpp"
 
 namespace ttnn::prim {
 
@@ -49,6 +51,8 @@ struct ChunkGdnPrepParams {
     // ChunkGdnPhasedProgramConfig::prep_serial: BH cores (one per head) instead of fanning the BH*NC
     // work-items over the whole grid. Measurement only. Hashed, like every field here.
     bool prep_serial = false;
+    // WY-inverse method (GdnTinv, chunk_gdn_compute_config.hpp).
+    GdnTinv tinv = GdnTinv::HORNER;
     tt::tt_metal::MemoryConfig output_mem_config;
     DeviceComputeKernelConfig compute_kernel_config;
 };
@@ -105,7 +109,8 @@ std::vector<Tensor> chunk_gdn_prep(
     float scale = 1.0f,
     bool qk_flat = false,
     uint32_t Hk = 0,
-    bool prep_serial = false);
+    bool prep_serial = false,
+    ttnn::transformer::ChunkGdnWyInverse wy_inverse = ttnn::transformer::ChunkGdnWyInverse::AUTO);
 
 // ---------------------------------------------------------------------------
 // SCAN

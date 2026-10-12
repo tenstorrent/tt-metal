@@ -598,6 +598,29 @@ TEST(MeshCoordinateRangeSetTest, Subtract2DNonAdjacentIntersection) {
             Eq(MeshCoordinateRange(MeshCoordinate(2, 1), MeshCoordinate(2, 1)))));
 }
 
+TEST(MeshCoordinateRangeTest, PartitionRangesPreservesComplementAndIntersectionOrder) {
+    std::vector<MeshCoordinateRange> partitions{MeshCoordinateRange(MeshCoordinate(0, 0), MeshCoordinate(0, 3))};
+
+    partition_mesh_coordinate_ranges(partitions, MeshCoordinateRange(MeshCoordinate(0, 1), MeshCoordinate(0, 2)));
+
+    EXPECT_THAT(
+        partitions,
+        ElementsAre(
+            Eq(MeshCoordinateRange(MeshCoordinate(0, 0), MeshCoordinate(0, 0))),
+            Eq(MeshCoordinateRange(MeshCoordinate(0, 3), MeshCoordinate(0, 3))),
+            Eq(MeshCoordinateRange(MeshCoordinate(0, 1), MeshCoordinate(0, 2)))));
+}
+
+TEST(MeshCoordinateRangeTest, PartitionRangesAppendsDisjointRange) {
+    const MeshCoordinateRange existing(MeshCoordinate(0, 0), MeshCoordinate(0, 1));
+    const MeshCoordinateRange disjoint(MeshCoordinate(1, 0), MeshCoordinate(1, 1));
+    std::vector<MeshCoordinateRange> partitions{existing};
+
+    partition_mesh_coordinate_ranges(partitions, disjoint);
+
+    EXPECT_THAT(partitions, ElementsAre(Eq(existing), Eq(disjoint)));
+}
+
 TEST(MeshCoordinateRangeSetTest, Equality) {
     MeshCoordinateRangeSet set1;
     set1.merge(MeshCoordinateRange(MeshCoordinate(0, 0), MeshCoordinate(1, 1)));

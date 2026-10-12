@@ -207,6 +207,9 @@ static bool run_test_integrity_dram_bidir(
 }
 
 TEST_F(MeshDispatchFixture, TensixDeploymentEthernet04DataIntegrityDramBidir) {
+    if (not this->slow_dispatch_) {
+        GTEST_SKIP() << "fast dispatch to active ethernet has been removed";
+    }
     vector<LinkError> errors;
     int n = 0;
 
