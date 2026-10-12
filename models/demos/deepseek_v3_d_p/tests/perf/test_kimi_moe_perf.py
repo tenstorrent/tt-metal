@@ -103,12 +103,17 @@ class _MoEPerfCase:
 # 5,331,206 / 5,438,128 / 5,344,249 ns (jobs 108833542648, 108591989836, 108483307703), so this is a
 # 5.0% speedup against their median, not a short record window.
 #
+# Re-centred 2026-10-08 to 4,782,881 ns (run 37730295536 / job 113160290526, main 36dc937428d), one
+# sample: 5.8% below the previous midpoint over the same 24 programs, so a real speedup rather than a
+# record window closing early. The previous scheduled run (f8c634a4085) still passed inside the old
+# band; the only fabric/CCL-wide change in between is Fabric express link routing (#57785).
+#
 # K2.7-Code is architecturally identical to K2.6 (61 layers, 384 routed experts, same dims), so the
 # MoE shapes are unchanged; only the label moved.
 _K2_7 = _MoEPerfCase(
     label="kimi-k2.7",
     config=KimiK27Config,
-    expected_ns=5_077_713,
+    expected_ns=4_782_881,
     # 4%, not 3%: K2.7 runs FIRST in the merged job, so it absorbs the warm-up variability that K3,
     # running second on an already-warm device, does not -- five samples on the previous shape spanned
     # 7.12% peak to peak against K3's 0.44%. Do NOT tighten this to match K3; the asymmetry is a

@@ -384,7 +384,10 @@ ProgramDescriptor UnaryBackwardProgramFactory::create_descriptor(
                                                 : "ckernel::DstRoundingMode::Default";
 
     KernelDescriptor compute_desc;
-    compute_desc.kernel_source = std::string(spec.compute_kernel_path);
+    const std::string_view compute_kernel_path = (fp32_dest_acc_en && !spec.compute_kernel_path_fp32_dest.empty())
+                                                     ? spec.compute_kernel_path_fp32_dest
+                                                     : spec.compute_kernel_path;
+    compute_desc.kernel_source = std::string(compute_kernel_path);
     compute_desc.source_type = KernelDescriptor::SourceType::FILE_PATH;
     compute_desc.core_ranges = all_cores;
     compute_desc.config = ComputeConfigDescriptor{

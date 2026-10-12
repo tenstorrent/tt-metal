@@ -485,6 +485,9 @@ TEST_F(N300MeshDeviceFixture, ActiveEthRandomDirectSendTests) {
 }
 
 TEST_F(N300MeshDeviceFixture, ActiveEthKernelsDirectSendChip0ToChip1) {
+    if (not this->slow_dispatch_) {
+        GTEST_SKIP() << "fast dispatch to active ethernet has been removed";
+    }
     using namespace CMAKE_UNIQUE_NAMESPACE;
     const auto& mesh_device_0 = devices_.at(0);
     const auto& mesh_device_1 = devices_.at(1);
@@ -543,6 +546,9 @@ TEST_F(N300MeshDeviceFixture, ActiveEthKernelsDirectSendChip0ToChip1) {
 }
 
 TEST_F(N300MeshDeviceFixture, ActiveEthKernelsDirectSendChip1ToChip0) {
+    if (not this->slow_dispatch_) {
+        GTEST_SKIP() << "fast dispatch to active ethernet has been removed";
+    }
     using namespace CMAKE_UNIQUE_NAMESPACE;
     const auto& mesh_device_0 = devices_.at(0);
     const auto& mesh_device_1 = devices_.at(1);
@@ -663,6 +669,9 @@ TEST_F(MeshDeviceFixture, ActiveEthKernelsDirectSendAllConnectedChips) {
 }
 
 TEST_F(TwoMeshDeviceFixture, ActiveEthKernelsBidirectionalDirectSend) {
+    if (not this->slow_dispatch_) {
+        GTEST_SKIP() << "fast dispatch to active ethernet has been removed";
+    }
     using namespace CMAKE_UNIQUE_NAMESPACE;
     const auto& mesh_device_0 = devices_.at(0);
     const auto& mesh_device_1 = devices_.at(1);
@@ -776,6 +785,9 @@ TEST_F(TwoMeshDeviceFixture, ActiveEthKernelsBidirectionalDirectSend) {
 }
 
 TEST_F(TwoMeshDeviceFixture, ActiveEthKernelsRepeatedDirectSends) {
+    if (not this->slow_dispatch_) {
+        GTEST_SKIP() << "fast dispatch to active ethernet has been removed";
+    }
     using namespace CMAKE_UNIQUE_NAMESPACE;
     const auto& mesh_device_0 = devices_.at(0);
     const auto& mesh_device_1 = devices_.at(1);
@@ -817,6 +829,9 @@ TEST_F(TwoMeshDeviceFixture, ActiveEthKernelsRepeatedDirectSends) {
 }
 
 TEST_F(TwoMeshDeviceFixture, ActiveEthKernelsRandomDirectSendTests) {
+    if (not this->slow_dispatch_) {
+        GTEST_SKIP() << "fast dispatch to active ethernet has been removed";
+    }
     using namespace CMAKE_UNIQUE_NAMESPACE;
     srand(0);
     const auto& mesh_device_0 = devices_.at(0);
@@ -882,6 +897,9 @@ TEST_F(TwoMeshDeviceFixture, ActiveEthKernelsRandomDirectSendTests) {
     }
 }
 TEST_F(TwoMeshDeviceFixture, ActiveEthKernelsRandomEthPacketSizeDirectSendTests) {
+    if (not this->slow_dispatch_) {
+        GTEST_SKIP() << "fast dispatch to active ethernet has been removed";
+    }
     srand(0);
     const auto& mesh_device_0 = devices_.at(0);
     const auto& mesh_device_1 = devices_.at(1);
@@ -949,6 +967,9 @@ TEST_F(TwoMeshDeviceFixture, ActiveEthKernelsRandomEthPacketSizeDirectSendTests)
 }
 
 TEST_F(UnitMeshCQMultiDeviceProgramFixture, ActiveEthKernelsDirectSendAllConnectedChips) {
+    if (not this->slow_dispatch_) {
+        GTEST_SKIP() << "fast dispatch to active ethernet has been removed";
+    }
     using namespace CMAKE_UNIQUE_NAMESPACE;
     const size_t src_eth_l1_byte_address =
         MetalContext::instance().hal().get_dev_addr(HalProgrammableCoreType::ACTIVE_ETH, HalL1MemAddrType::UNRESERVED);
