@@ -39,6 +39,7 @@ from models.experimental.bevformer.model_config import (
     FEEDFORWARD_CHANNELS,
     FPN_KWARGS,
     IMAGE_HEIGHT,
+    IMAGE_SIZE_DIVISOR,
     IMAGE_WIDTH,
     NUM_CAMS,
     NUM_HEADS,
@@ -226,9 +227,13 @@ def lidar2img_for_dataset(dataset_config, dtype: torch.dtype = torch.float32) ->
 def img_metas_for_dataset(dataset_config, batch_size: int, dtype: torch.dtype = torch.float32) -> List[dict]:
     """Build the ``img_metas`` list the encoder expects, with a deterministic rig.
 
-    Every batch entry shares the rig, matching a single vehicle's calibration.
+    Every batch entry shares the rig, matching a single vehicle's calibration. ``img_shape`` is the
+    padded shape, as upstream's ``PadMultiViewImage`` sets it: the images are padded at the bottom
+    and right to a multiple of ``IMAGE_SIZE_DIVISOR``, and the encoder normalizes the projected
+    points by that shape. ``lidar2img`` stays in the unpadded images' pixels, which the padding
+    does not move.
     """
-    width, height = dataset_config.input_size
+    width, height = (math.ceil(size / IMAGE_SIZE_DIVISOR) * IMAGE_SIZE_DIVISOR for size in dataset_config.input_size)
     lidar2img = lidar2img_for_dataset(dataset_config, dtype).tolist()
     return [
         {
