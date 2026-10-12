@@ -122,9 +122,8 @@ uint64_t l1_output_reservation(const Tensor& input, const ttnn::prim::PadCodegen
         input, attrs.output_logical_shape, attrs.output_mem_config, input.dtype(), input.layout());
 }
 
-uint64_t gate_l1_budget(const Tensor& input, const ttnn::prim::PadCodegenParams& attrs) {
+uint64_t gate_l1_budget(const Tensor& input, uint64_t reserved) {
     const uint64_t ceiling = static_l1_ceiling(input);
-    const uint64_t reserved = l1_output_reservation(input, attrs);
     return ceiling > reserved ? ceiling - reserved : 0;
 }
 
@@ -133,10 +132,10 @@ uint32_t tile_page_bytes_as(const Tensor& input, DataType dtype) {
     return tt::round_up(input.tensor_spec().tile().get_tile_size(format), tt::tt_metal::hal::get_dram_alignment());
 }
 
-bool tile_fits_l1(const Tensor& input, const ttnn::prim::PadCodegenParams& attrs) {
+bool tile_fits_l1(const Tensor& input, const ttnn::prim::PadCodegenParams& attrs, uint64_t reserved) {
     const uint64_t tile_bytes =
         tile_page_bytes_as(input, composes_via_bf16(input, attrs) ? DataType::BFLOAT16 : input.dtype());
-    const uint64_t budget = gate_l1_budget(input, attrs);
+    const uint64_t budget = gate_l1_budget(input, reserved);
     if (attrs.fill_partial_tile) {
         const uint64_t face_bytes = 16ull * 16ull * input.element_size();
         return 2 * tile_bytes + face_bytes <= budget;
@@ -145,9 +144,90 @@ bool tile_fits_l1(const Tensor& input, const ttnn::prim::PadCodegenParams& attrs
 }
 
 // Smallest possible footprint (batch 1, depth 2) must fit; the factory scales batches down to it.
-bool rm_fits_l1(const Tensor& input, const ttnn::prim::PadCodegenParams& attrs) {
+bool rm_fits_l1(const Tensor& input, const ttnn::prim::PadCodegenParams& attrs, uint64_t reserved) {
     const auto sizes = rm_page_sizes(input, attrs);
-    return rm_footprint(sizes, 1, 1) <= gate_l1_budget(input, attrs);
+    return rm_footprint(sizes, 1, 1) <= gate_l1_budget(input, reserved);
+}
+
+// Conditions that depend on neither the padding nor L1, so routing can decline before building params.
+bool structurally_supported(const Tensor& input, const tt::tt_metal::MemoryConfig& output_mem_config) {
+    if (input.storage_type() != ttnn::StorageType::DEVICE || input.buffer() == nullptr) {
+        return false;
+    }
+    if (input.logical_shape().rank() != 4) {
+        return false;
+    }
+    if (input.layout() != ttnn::TILE_LAYOUT && input.layout() != ttnn::ROW_MAJOR_LAYOUT) {
+        return false;
+    }
+    if (input.memory_config().is_sharded() || output_mem_config.is_sharded()) {
+        return false;
+    }
+    return tile_geometry_ok(input) && dtype_ok(input);
+}
+
+bool layout_supported_and_fits(const Tensor& input, const ttnn::prim::PadCodegenParams& attrs, uint64_t reserved) {
+    if (attrs.fill_partial_tile) {
+        return fill_supported(input) && tile_fits_l1(input, attrs, reserved);
+    }
+
+    if (input.layout() == ttnn::TILE_LAYOUT) {
+        const bool front_padded = attrs.front_n != 0 || attrs.front_c != 0 || attrs.front_h != 0 || attrs.front_w != 0;
+        if (front_padded) {
+            return false;
+        }
+        if (input.dtype() == DataType::BFLOAT8_B && has_partial_tile(input)) {
+            return false;
+        }
+        if (has_partial_tile(input) && !fill_supported(input)) {
+            return false;
+        }
+        return tile_fits_l1(input, attrs, reserved);
+    }
+    return rm_fits_l1(input, attrs, reserved);
+}
+
+ttnn::prim::PadCodegenParams base_params(
+    const Tensor& input,
+    std::span<const uint32_t> front,
+    std::span<const uint32_t> after,
+    float value,
+    const tt::tt_metal::MemoryConfig& output_mem_config) {
+    const auto& shape = input.logical_shape();
+    TT_FATAL(
+        shape.rank() == 4 && front.size() == 4 && after.size() == 4,
+        "ttnn.pad: codegen path expects a rank-4 input and rank-4 padding");
+
+    std::array<uint32_t, 4> out{};
+    for (size_t i = 0; i < 4; ++i) {
+        out[i] = front[i] + shape[i] + after[i];
+    }
+
+    ttnn::prim::PadCodegenParams p;
+    p.output_logical_shape = ttnn::Shape(out);
+    p.N_out = out[0];
+    p.C_out = out[1];
+    p.H_out = out[2];
+    p.W_out = out[3];
+    p.front_n = front[0];
+    p.front_c = front[1];
+    p.front_h = front[2];
+    p.front_w = front[3];
+    p.packed_pad_value = pack_pad_value(input.dtype(), value);
+    p.read_batch = kReadBatch;
+    p.write_batch = kWriteBatch;
+    p.output_mem_config = output_mem_config;
+    return p;
+}
+
+// ROW_MAJOR batching is sized against live L1 headroom; this is the one place the path reads live L1.
+void plan_rm_batches(const Tensor& input, ttnn::prim::PadCodegenParams& p, uint64_t reserved) {
+    if (input.layout() != ttnn::ROW_MAJOR_LAYOUT || input.storage_type() != ttnn::StorageType::DEVICE) {
+        return;
+    }
+    const uint64_t live = get_max_l1_space(input);
+    const uint32_t budget = static_cast<uint32_t>(live > reserved ? live - reserved : 0);
+    shrink_rm_batches(rm_page_sizes(input, p), budget, p.read_batch, p.write_batch);
 }
 
 }  // namespace
@@ -202,35 +282,27 @@ ttnn::prim::PadCodegenParams make_codegen_params(
     std::span<const uint32_t> after,
     float value,
     const tt::tt_metal::MemoryConfig& output_mem_config) {
-    const auto& shape = input.logical_shape();
-    TT_FATAL(
-        shape.rank() == 4 && front.size() == 4 && after.size() == 4,
-        "ttnn.pad: codegen path expects a rank-4 input and rank-4 padding");
-
-    std::array<uint32_t, 4> out{};
-    for (size_t i = 0; i < 4; ++i) {
-        out[i] = front[i] + shape[i] + after[i];
-    }
-
-    ttnn::prim::PadCodegenParams p;
-    p.output_logical_shape = ttnn::Shape(out);
-    p.N_out = out[0];
-    p.C_out = out[1];
-    p.H_out = out[2];
-    p.W_out = out[3];
-    p.front_n = front[0];
-    p.front_c = front[1];
-    p.front_h = front[2];
-    p.front_w = front[3];
-    p.packed_pad_value = pack_pad_value(input.dtype(), value);
-    p.read_batch = kReadBatch;
-    p.write_batch = kWriteBatch;
-    p.output_mem_config = output_mem_config;
+    auto p = base_params(input, front, after, value, output_mem_config);
     if (input.layout() == ttnn::ROW_MAJOR_LAYOUT && input.storage_type() == ttnn::StorageType::DEVICE) {
-        const uint64_t live = get_max_l1_space(input);
-        const uint64_t reserved = l1_output_reservation(input, p);
-        const uint32_t budget = static_cast<uint32_t>(live > reserved ? live - reserved : 0);
-        shrink_rm_batches(rm_page_sizes(input, p), budget, p.read_batch, p.write_batch);
+        plan_rm_batches(input, p, l1_output_reservation(input, p));
+    }
+    return p;
+}
+
+std::optional<ttnn::prim::PadCodegenParams> plan_codegen(
+    const Tensor& input,
+    std::span<const uint32_t> front,
+    std::span<const uint32_t> after,
+    float value,
+    const tt::tt_metal::MemoryConfig& output_mem_config) {
+    if (!structurally_supported(input, output_mem_config)) {
+        return std::nullopt;
+    }
+    auto p = base_params(input, front, after, value, output_mem_config);
+    const uint64_t reserved = l1_output_reservation(input, p);
+    plan_rm_batches(input, p, reserved);
+    if (!layout_supported_and_fits(input, p, reserved)) {
+        return std::nullopt;
     }
     return p;
 }
@@ -263,19 +335,7 @@ tt::tt_metal::TensorSpec codegen_output_spec(const Tensor& input, const ttnn::pr
 
 bool supported_by_codegen(
     const Tensor& input, const ttnn::prim::PadCodegenParams& attrs, const std::optional<Tensor>& optional_output) {
-    if (input.storage_type() != ttnn::StorageType::DEVICE || input.buffer() == nullptr) {
-        return false;
-    }
-    if (input.logical_shape().rank() != 4 || attrs.output_logical_shape.rank() != 4) {
-        return false;
-    }
-    if (input.layout() != ttnn::TILE_LAYOUT && input.layout() != ttnn::ROW_MAJOR_LAYOUT) {
-        return false;
-    }
-    if (input.memory_config().is_sharded() || attrs.output_mem_config.is_sharded()) {
-        return false;
-    }
-    if (!tile_geometry_ok(input) || !dtype_ok(input)) {
+    if (!structurally_supported(input, attrs.output_mem_config) || attrs.output_logical_shape.rank() != 4) {
         return false;
     }
     if (optional_output.has_value() &&
@@ -283,25 +343,7 @@ bool supported_by_codegen(
          !output_matches(input, attrs, *optional_output))) {
         return false;
     }
-
-    if (attrs.fill_partial_tile) {
-        return fill_supported(input) && tile_fits_l1(input, attrs);
-    }
-
-    if (input.layout() == ttnn::TILE_LAYOUT) {
-        const bool front_padded = attrs.front_n != 0 || attrs.front_c != 0 || attrs.front_h != 0 || attrs.front_w != 0;
-        if (front_padded) {
-            return false;
-        }
-        if (input.dtype() == DataType::BFLOAT8_B && has_partial_tile(input)) {
-            return false;
-        }
-        if (has_partial_tile(input) && !fill_supported(input)) {
-            return false;
-        }
-        return tile_fits_l1(input, attrs);
-    }
-    return rm_fits_l1(input, attrs);
+    return layout_supported_and_fits(input, attrs, l1_output_reservation(input, attrs));
 }
 
 // Padding that stays inside the input's existing tiles: native copies without staging, codegen only adds launch cost.

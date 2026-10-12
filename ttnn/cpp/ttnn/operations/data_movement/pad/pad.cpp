@@ -213,15 +213,16 @@ ttnn::Tensor pad_impl(
             front[i] = input_tensor_start[i];
             after[i] = output_padded_shape[i] - input_logical_shape[i] - input_tensor_start[i];
         }
-        const auto params = pc::make_codegen_params(input_tensor, front, after, value, output_memory_config);
         if (route == PadRoute::Codegen) {
-            TT_FATAL(
-                pc::supported_by_codegen(input_tensor, params), "ttnn.pad: input is not supported by the codegen path");
-            return ttnn::prim::pad_codegen(input_tensor, params);
+            const auto params = pc::plan_codegen(input_tensor, front, after, value, output_memory_config);
+            TT_FATAL(params.has_value(), "ttnn.pad: input is not supported by the codegen path");
+            return ttnn::prim::pad_codegen(input_tensor, *params);
         }
-        if (pc::supported_execution_controls(use_multicore, sub_core_grids) && !pc::is_demoted(input_tensor, params) &&
-            pc::supported_by_codegen(input_tensor, params)) {
-            return ttnn::prim::pad_codegen(input_tensor, params);
+        if (pc::supported_execution_controls(use_multicore, sub_core_grids)) {
+            const auto params = pc::plan_codegen(input_tensor, front, after, value, output_memory_config);
+            if (params.has_value() && !pc::is_demoted(input_tensor, *params)) {
+                return ttnn::prim::pad_codegen(input_tensor, *params);
+            }
         }
     }
 
@@ -518,15 +519,17 @@ std::optional<ttnn::Tensor> pad_tile_codegen(
         after[d + 4 - rank] = padding_vec[d].after_elements;
     }
 
-    const auto params = pc::make_codegen_params(
-        input_4d, front, after, value, memory_config_arg.value_or(input_tensor.memory_config()));
-    if (route == PadRoute::Codegen) {
-        TT_FATAL(pc::supported_by_codegen(input_4d, params), "ttnn.pad: input is not supported by the codegen path");
-    } else if (
-        !pc::supported_execution_controls(use_multicore, sub_core_grids) || pc::is_demoted(input_4d, params) ||
-        !pc::supported_by_codegen(input_4d, params)) {
+    if (route != PadRoute::Codegen && !pc::supported_execution_controls(use_multicore, sub_core_grids)) {
         return std::nullopt;
     }
+    const auto planned =
+        pc::plan_codegen(input_4d, front, after, value, memory_config_arg.value_or(input_tensor.memory_config()));
+    if (route == PadRoute::Codegen) {
+        TT_FATAL(planned.has_value(), "ttnn.pad: input is not supported by the codegen path");
+    } else if (!planned.has_value() || pc::is_demoted(input_4d, *planned)) {
+        return std::nullopt;
+    }
+    const auto& params = *planned;
 
     if (pc::composes_via_bf16(input_4d, params)) {
         const ttnn::Tensor decoded = ttnn::typecast(input_4d, DataType::BFLOAT16);
@@ -673,7 +676,7 @@ ttnn::Tensor pad_with_route(
         working_padding.insert(working_padding.begin(), diff, {0, 0});
     }
 
-    if (route == PadRoute::Native && std::all_of(working_padding.begin(), working_padding.end(), [](auto& p) {
+    if (std::all_of(working_padding.begin(), working_padding.end(), [](auto& p) {
             return p.before_elements == 0 && p.after_elements == 0;
         })) {
         return input_tensor;
@@ -732,7 +735,8 @@ ttsl::SmallVector<PadSpecDim> to_pad_spec(const ttsl::SmallVector<std::array<uin
     return spec;
 }
 
-// Fails before any dispatch when the forced codegen entry would be outside the support scope.
+// A rank > 4 input has its leading dims padded by dispatched ops before the 4D call that reaches the gate, so the
+// forced codegen entry checks scope up front; lower ranks reach the gate before any dispatch.
 void require_codegen_supported(
     const ttnn::Tensor& input_tensor,
     const ttsl::SmallVector<std::array<uint32_t, 2>>& padding,
@@ -742,6 +746,9 @@ void require_codegen_supported(
     TT_FATAL(input_tensor.storage_type() == StorageType::DEVICE, "ttnn.pad: codegen path needs a device tensor");
     const auto rank = static_cast<int>(input_tensor.logical_shape().rank());
     TT_FATAL(static_cast<int>(padding.size()) <= rank, "ttnn.pad: padding len can't be larger than input tensor rank");
+    if (rank <= 4) {
+        return;
+    }
     const int skipped = rank - static_cast<int>(padding.size());
     std::array<uint32_t, 4> front{};
     std::array<uint32_t, 4> after{};
@@ -752,9 +759,10 @@ void require_codegen_supported(
         }
     }
     const ttnn::Tensor input_4d = to_4d(input_tensor);
-    const auto params = pc::make_codegen_params(
-        input_4d, front, after, value, memory_config_arg.value_or(input_tensor.memory_config()));
-    TT_FATAL(pc::supported_by_codegen(input_4d, params), "ttnn.pad: input is not supported by the codegen path");
+    TT_FATAL(
+        pc::plan_codegen(input_4d, front, after, value, memory_config_arg.value_or(input_tensor.memory_config()))
+            .has_value(),
+        "ttnn.pad: input is not supported by the codegen path");
 }
 
 }  // namespace

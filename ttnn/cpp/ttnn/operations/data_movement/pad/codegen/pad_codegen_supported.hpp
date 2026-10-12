@@ -48,6 +48,16 @@ ttnn::prim::PadCodegenParams make_codegen_params(
     float value,
     const tt::tt_metal::MemoryConfig& output_mem_config);
 
+// Routing entry: the attributes when the codegen gate accepts the call, nullopt when it declines. Same decision as
+// make_codegen_params followed by supported_by_codegen, but declines before the L1 queries when it can and computes
+// the output reservation once.
+std::optional<ttnn::prim::PadCodegenParams> plan_codegen(
+    const Tensor& input,
+    std::span<const uint32_t> front,
+    std::span<const uint32_t> after,
+    float value,
+    const tt::tt_metal::MemoryConfig& output_mem_config);
+
 // Attributes for the in-place pass that fills the unused lanes of a TILE input's partial border tiles.
 ttnn::prim::PadCodegenParams make_fill_partial_tile_params(const Tensor& input, float value);
 

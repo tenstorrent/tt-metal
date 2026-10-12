@@ -18,8 +18,9 @@ PadCodegenDeviceOperation::program_factory_t PadCodegenDeviceOperation::select_p
     return PadCodegenProgramFactory{};
 }
 
-void PadCodegenDeviceOperation::validate_on_program_cache_miss(
-    const operation_attributes_t& operation_attributes, const tensor_args_t& tensor_args) {
+namespace {
+
+void validate_tensors(const PadCodegenParams& operation_attributes, const PadCodegenInputs& tensor_args) {
     const Tensor& input = tensor_args.input;
     TT_FATAL(input.storage_type() == ttnn::StorageType::DEVICE, "Operands to pad need to be on device!");
     TT_FATAL(input.buffer() != nullptr, "Operands need to be allocated in buffers on device!");
@@ -35,6 +36,15 @@ void PadCodegenDeviceOperation::validate_on_program_cache_miss(
                 "Output tensor spec does not match the spec pad builds for this input");
         }
     }
+}
+
+}  // namespace
+
+void PadCodegenDeviceOperation::validate_on_program_cache_miss(
+    const operation_attributes_t& operation_attributes, const tensor_args_t& tensor_args) {
+    validate_tensors(operation_attributes, tensor_args);
+    const Tensor& input = tensor_args.input;
+    const auto& optional_output = tensor_args.optional_output_tensor;
     TT_FATAL(
         !ttnn::operations::data_movement::pad_codegen::composes_via_bf16(input, operation_attributes),
         "Nonzero pad of a block-float tensor must be padded through a bfloat16 copy");
@@ -42,6 +52,12 @@ void PadCodegenDeviceOperation::validate_on_program_cache_miss(
         ttnn::operations::data_movement::pad_codegen::supported_by_codegen(
             input, operation_attributes, optional_output),
         "Input is not supported by PadCodegen");
+}
+
+// Everything the support gate reads is part of the program cache key, so a hit only re-checks the tensors.
+void PadCodegenDeviceOperation::validate_on_program_cache_hit(
+    const operation_attributes_t& operation_attributes, const tensor_args_t& tensor_args) {
+    validate_tensors(operation_attributes, tensor_args);
 }
 
 PadCodegenDeviceOperation::spec_return_value_t PadCodegenDeviceOperation::compute_output_specs(
