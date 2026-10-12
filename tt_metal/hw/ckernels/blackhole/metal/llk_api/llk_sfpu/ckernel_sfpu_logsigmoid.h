@@ -7,57 +7,58 @@
 #include "ckernel.h"
 #include "ckernel_defs.h"
 #include "sfpu/ckernel_sfpu_converter.h"
-#include "sfpu/ckernel_sfpu_polyval.h"
 #include "ckernel_sfpu_exp.h"
+#include "ckernel_sfpu_log1p.h"
 
 namespace ckernel {
 namespace sfpu {
 
-template <bool APPROXIMATION_MODE, int ITERATIONS = 8>
+// logsigmoid(x) = min(x, 0) - log1p(exp(-|x|)).
+//
+// The exponential argument -|x| is never positive, so the exponential stays in (0, 1], cannot
+// overflow, and feeds calculate_log1p_fp32 on its accurate range. This replaces the previous
+// +/-4 piecewise split, which returned the raw input for x <= -4 (dropping the log1p(exp(x))
+// residual), truncated the positive tail to -exp(-x), and carried a mid-range polynomial that
+// is 7.12e-4 off at x = 0.
+//
+// dst_index_in1 is accepted but ignored: the exponential is computed internally from the input.
+// The parameter is kept because SFPU_BINARY_CALL structurally passes three DST indices.
+template <bool APPROXIMATION_MODE, int ITERATIONS = 8, bool is_fp32_dest_acc_en = false>
 inline void calculate_logsigmoid(
     const uint dst_index_in0,  // Index for input (x)
-    const uint dst_index_in1,  // Index for exp(-x)
+    const uint dst_index_in1,  // Unused (kept for SFPU_BINARY_CALL arity)
     const uint dst_index_out)  // Index for output
 {
-    // logsigmoid(x) = -softplus(-x)
     for (int d = 0; d < ITERATIONS; d++) {
         constexpr uint dst_tile_size_sfpi = 32;
 
-        // Read inputs from destination registers
         sfpi::vFloat x = sfpi::dst_reg[dst_index_in0 * dst_tile_size_sfpi];
-        sfpi::vFloat exp_neg_x = sfpi::dst_reg[dst_index_in1 * dst_tile_size_sfpi];
 
-        // Save original x as result; negate x since we compute softplus(-x)
+        // Seed with x so NaN payloads propagate through the final subtraction unchanged (the
+        // min() predicate below is false for NaN); for non-NaN inputs this is min(x, 0).
         sfpi::vFloat result = x;
-        x = -x;
-
-        v_if(x < -4.0f) {
-            // For very negative: use exp
-            result = -exp_neg_x;
-        }
-        v_elseif(x >= -4.0f && x < 4.0f) {
-            // Polynomial approximation for softplus(-x) in the mid-range
-            result = PolynomialEvaluator::eval(
-                x,
-                0.6924354434013367f,
-                0.49275708198547363f,
-                0.12142381817102432f,
-                0.0031102809589356184f,
-                -0.00330807245336473f,
-                -0.00028794066747650504f,
-                5.3185409342404455e-05f,
-                7.1853546614875086e-06f,
-                7.4961114648886e-08f);
-            result = -result;
-        }
+        v_if(x >= 0.0f) { result = 0.0f; }
         v_endif;
+
+        sfpi::vFloat exp_neg_abs_x = _sfpu_exp_accurate_<is_fp32_dest_acc_en>(-sfpi::abs(x));
+        result = result - calculate_log1p_fp32<is_fp32_dest_acc_en>(exp_neg_abs_x);
+
+        // Round-to-nearest into bf16 explicitly; a bare store would truncate the fp32 result.
+        if constexpr (!is_fp32_dest_acc_en) {
+            result = sfpi::convert<sfpi::vFloat16b>(result, sfpi::RoundMode::Nearest);
+        }
         sfpi::dst_reg[dst_index_out * dst_tile_size_sfpi] = result;
         sfpi::dst_reg++;
     }
 }
 
-template <bool APPROXIMATION_MODE>
-void logsigmoid_init() {}
+// calculate_log1p_fp32 reads the programmable SFPU constants configured by log1p_init, so those
+// registers must be set up before calculate_logsigmoid runs. Delegating to log1p_init keeps the
+// register values in sync with the log1p op by construction.
+template <bool APPROXIMATION_MODE, bool is_fp32_dest_acc_en = false>
+void logsigmoid_init() {
+    log1p_init<APPROXIMATION_MODE, false, is_fp32_dest_acc_en>();
+}
 
 }  // namespace sfpu
 }  // namespace ckernel
