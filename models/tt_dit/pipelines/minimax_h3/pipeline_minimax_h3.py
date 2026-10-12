@@ -473,7 +473,7 @@ def _vsa_config_from_env():
     """MiniMaxH3VSAConfig from MINIMAX_H3_VSA_SPARSITY, or None (dense) when unset or empty.
 
     MINIMAX_H3_VSA_MODE picks the block selection: "vsa" (default) or "sla" (LightX2V SLA, for the
-    Minimax-h3-Turbo-SLA LoRA).
+    Minimax-h3-Turbo-SLA LoRA). MINIMAX_H3_SLA_BLKQ sets SLA's query block rows: 128 (default) or 64.
     """
     raw = os.environ.get("MINIMAX_H3_VSA_SPARSITY", "").strip()
     if not raw:
@@ -486,7 +486,10 @@ def _vsa_config_from_env():
     selection = os.environ.get("MINIMAX_H3_VSA_MODE", "").strip() or "vsa"
     if selection not in VSA_SELECTIONS:
         raise ValueError(f"MINIMAX_H3_VSA_MODE must be one of {VSA_SELECTIONS}, got {selection!r}")
-    return MiniMaxH3VSAConfig(sparsity=sparsity, selection=selection)
+    blkq = int(os.environ.get("MINIMAX_H3_SLA_BLKQ", "").strip() or 128)
+    if blkq not in (64, 128):
+        raise ValueError(f"MINIMAX_H3_SLA_BLKQ must be 64 or 128, got {blkq}")
+    return MiniMaxH3VSAConfig(sparsity=sparsity, selection=selection, sla_q_block_tiles=blkq // 64)
 
 
 def _is_host_rank() -> bool:
@@ -1486,7 +1489,12 @@ class MiniMaxH3Pipeline:
         stage = self._vsa_stages.get(signature)
         if stage is None:
             if self.vsa_config.selection == "sla":
-                geometry = build_sla_geometry(layout.sequence_length, grid, sp_factor=self.sp_factor)
+                geometry = build_sla_geometry(
+                    layout.sequence_length,
+                    grid,
+                    sp_factor=self.sp_factor,
+                    q_block_tiles=self.vsa_config.sla_q_block_tiles,
+                )
             else:
                 geometry = build_vsa_geometry(
                     (n_text, n_cond, a_target), grid, sp_factor=self.sp_factor, placement=self.vsa_config.placement
@@ -1495,6 +1503,7 @@ class MiniMaxH3Pipeline:
                 geometry,
                 sparsity=self.vsa_config.sparsity,
                 selection=self.vsa_config.selection,
+                sla_q_block_tiles=self.vsa_config.sla_q_block_tiles,
                 padded_pooling=self.vsa_config.padded_pooling,
                 head_dim=self.transformer_config["attention_head_dim"],
                 mesh_device=self.mesh_device,

@@ -31,7 +31,7 @@ import torch
 
 import ttnn
 
-from ....pipelines.minimax_h3.vsa_geometry import VSA_TILE_TOKENS, MiniMaxH3VSAGeometry
+from ....pipelines.minimax_h3.vsa_geometry import VSA_TILE_TOKENS, MiniMaxH3VSAGeometry, sla_query_averaging_matrix
 from ....utils.tensor import from_torch
 
 VSA_INDEX_SENTINEL = 0xFFFFFFFF
@@ -85,6 +85,9 @@ class MiniMaxH3VSAConfig:
     # the Minimax-h3-Turbo-SLA LoRA: raster 64-token blocks over the whole packed sequence, nothing exempt,
     # floor top-k; build the geometry with build_sla_geometry)
     selection: str = "vsa"
+    # SLA query block in 64-token tiles: 2 = LightX2V sage2's 128-row Q blocks (non-sm90 GPUs, the
+    # published RTX 5090 setup for the Turbo-SLA LoRA); 1 = its triton operator's 64-row blocks
+    sla_q_block_tiles: int = 2
 
 
 VSA_SELECTIONS = ("vsa", "sla")
@@ -113,6 +116,7 @@ class MiniMaxH3VSACoarseStage:
         *,
         sparsity: float,
         selection: str = "vsa",
+        sla_q_block_tiles: int = 1,
         padded_pooling: bool = False,
         head_dim: int,
         mesh_device: ttnn.MeshDevice,
@@ -146,13 +150,21 @@ class MiniMaxH3VSACoarseStage:
         self.index_width = _round_up(max(n_tiles, self.n_exempt + self.k), _TOPK_K_MULTIPLE)
 
         # --- averaging matrices, sharded: shard s owns the diagonal block of A^T ---
-        matrix = geometry.averaging_matrix()  # [n_tiles, padded_len] fp64->fp32
         rows_local = geometry.padded_len // geometry.sp_factor
-        blocks = [
-            matrix[s * tiles_per_shard : (s + 1) * tiles_per_shard, s * rows_local : (s + 1) * rows_local].T
-            for s in range(geometry.sp_factor)
-        ]
-        a_t = torch.cat(blocks, dim=0)  # [padded_len, tiles_per_shard]
+
+        def shard_diagonal_t(matrix: torch.Tensor) -> torch.Tensor:  # -> [padded_len, tiles_per_shard]
+            blocks = [
+                matrix[s * tiles_per_shard : (s + 1) * tiles_per_shard, s * rows_local : (s + 1) * rows_local].T
+                for s in range(geometry.sp_factor)
+            ]
+            return torch.cat(blocks, dim=0)
+
+        a_t = shard_diagonal_t(geometry.averaging_matrix())
+        a_t_q = a_t
+        if selection == "sla" and sla_q_block_tiles > 1:
+            if tiles_per_shard % sla_q_block_tiles:
+                raise ValueError("SLA query blocks straddle shards: build_sla_geometry(q_block_tiles=...)")
+            a_t_q = shard_diagonal_t(sla_query_averaging_matrix(geometry, sla_q_block_tiles))
         # Padded pooling: pad each shard's tile axis to a power of two >= 32 (zero columns) so the
         # pooled K^T / V gathers are tile-aligned (the CCL otherwise falls back to a broadcast+concat
         # composite, ~1.6 ms per block at 15 s). Scores/top-k then run in the padded per-shard
@@ -164,6 +176,7 @@ class MiniMaxH3VSACoarseStage:
             while self.slots_per_shard < tiles_per_shard:
                 self.slots_per_shard *= 2
             a_t = torch.nn.functional.pad(a_t, (0, self.slots_per_shard - tiles_per_shard))
+            a_t_q = torch.nn.functional.pad(a_t_q, (0, self.slots_per_shard - tiles_per_shard))
         self.coarse_slots_shift = self.slots_per_shard.bit_length() - 1 if padded_pooling else 0
         mesh_axes = [..., sp_axis, None]
         self.a_t_kv = from_torch(
@@ -173,7 +186,7 @@ class MiniMaxH3VSACoarseStage:
             mesh_axes=mesh_axes,
         )
         self.a_t_q = from_torch(
-            (a_t / math.sqrt(head_dim)).reshape(1, 1, geometry.padded_len, self.slots_per_shard),
+            (a_t_q / math.sqrt(head_dim)).reshape(1, 1, geometry.padded_len, self.slots_per_shard),
             device=mesh_device,
             dtype=ttnn.bfloat16,
             mesh_axes=mesh_axes,
