@@ -45,6 +45,12 @@ class GptOss120BConfig:
     NUM_LIMITED_GROUPS = 1
     # Weights are a softmax over the selected top-k logits; no extra route scaling.
     ROUTE_SCALE = 1.0
+    # Routed-expert FFN activation and per-expert bias (gate/up/down bias vectors, not a router
+    # bias). ROUTED_EXPERT_ACTIVATION_BY_NAME maps the name onto the fused kernel's enum (which
+    # bakes the alpha=1.702 / SWIGLU_LIMIT below); the torch reference takes it as-is. gpt-oss is
+    # the one model here whose experts carry biases -- see tt/moe/weights.py.
+    ROUTED_EXPERT_ACTIVATION = "swiglu_oai"
+    ROUTED_EXPERT_BIAS = True
 
     # Gate-test device-mode scores bar. pcc_scores sorts both sides, so this measures the
     # selected-weight distribution rather than slot alignment; 128 experts, top-4 floors at

@@ -81,6 +81,9 @@ class DeepSeekV4FlashConfig:
     ROPE_THETA = 10000
     ROUTED_EXPERT_ACTIVATION = "clamped_silu_glu"
     SHARED_EXPERT_ACTIVATION = "clamped_silu_glu"
+    # Per-expert gate/up/down bias vectors; not the router's correction bias. V4's experts are
+    # bias-free, which is also why the kernel rejects biases on ClampedSiluGlu.
+    ROUTED_EXPERT_BIAS = False
     # Read at runtime by the shared expert only; the routed kernel bakes the same value at compile
     # time (ClampedSiluGluConfigDsV4), so the two must stay equal.
     SWIGLU_LIMIT = 10.0

@@ -61,6 +61,11 @@ class MiniMaxM3Config:
     SCORING_FUNC = "sigmoid"
     USE_ROUTING_BIAS = True
     ROUTE_SCALE = 2.0
+    # Routed-expert FFN activation and per-expert bias (gate/up/down bias vectors, not the
+    # router's correction bias above). ROUTED_EXPERT_ACTIVATION_BY_NAME maps the name onto the
+    # fused kernel's enum; the torch reference takes it as-is. M3's experts are bias-free.
+    ROUTED_EXPERT_ACTIVATION = "swiglu_oai"
+    ROUTED_EXPERT_BIAS = False
 
     # Layer schedules: 0 = dense/full-attention, 1 = MoE/sparse-attention
     MOE_LAYER_FREQ = (0, 0, 0) + (1,) * 57

@@ -134,6 +134,8 @@ class KimiK3Config:
     ROUTED_EXPERT_ACTIVATION = "situ"
     SHARED_EXPERT_ACTIVATION = "situ"
     DENSE_FFN_ACTIVATION = "situ"
+    # Per-expert gate/up/down bias vectors; not the router's correction bias.
+    ROUTED_EXPERT_BIAS = False
     # Must match SituGluConfigKimi, which the fused routed-expert kernel bakes in; the two composed
     # sites read these directly, so all three activations stay on one pair of betas.
     ACTIVATION_SITU_BETA = 4.0

@@ -46,6 +46,11 @@ class MistralSmall4Config:
     NUM_EXPERT_GROUPS = 1  # n_group
     NUM_LIMITED_GROUPS = 1  # topk_group
     ROUTE_SCALE = 1.0  # routed_scaling_factor
+    # Routed-expert FFN activation and per-expert bias (gate/up/down bias vectors, not the
+    # router's correction bias). ROUTED_EXPERT_ACTIVATION_BY_NAME maps the name onto the fused
+    # kernel's enum; the torch reference takes it as-is.
+    ROUTED_EXPERT_ACTIVATION = "silu"
+    ROUTED_EXPERT_BIAS = False
     NORM_TOPK_PROB = True  # norm_topk_prob
     # Mistral4TopkRouter carries only `weight`; there is no auxiliary-loss-free correction bias.
     ROUTER_HAS_CORRECTION_BIAS = False

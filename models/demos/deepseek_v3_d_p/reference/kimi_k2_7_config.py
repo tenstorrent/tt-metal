@@ -37,6 +37,11 @@ class KimiK27Config:
     NUM_EXPERT_GROUPS = 1
     NUM_LIMITED_GROUPS = 1
     ROUTE_SCALE = 2.827
+    # Routed-expert FFN activation and per-expert bias (gate/up/down bias vectors, not the
+    # router's correction bias). ROUTED_EXPERT_ACTIVATION_BY_NAME maps the name onto the fused
+    # kernel's enum; the torch reference takes it as-is.
+    ROUTED_EXPERT_ACTIVATION = "silu"
+    ROUTED_EXPERT_BIAS = False
 
     # Gate-test device-mode scores bar. pcc_scores sorts both sides, so this measures the
     # selected-weight distribution rather than slot alignment; 384 experts, top-8 floors at
