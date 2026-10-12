@@ -1,5 +1,5 @@
 #!/bin/bash
-# t457 (copy of t456/run456.sh with -p t457_sweep, outputs under t457): per-tile vsa_sdpa numerics sweep, then stops.
+# t457 (copy of t456/run456.sh with -p $T457_PLUG (default t457_sweep), outputs under t457): sweep or k256 control.
 # t452 (from t409/run409b.sh): one blx01 broker job running the Turbo e2e test (test_pipeline_turbo_minimax_h3.py),
 # 768p, fl2va, 10 s, 4 steps, 4x8, for each arm given, one pytest process per arm, in order. Tree: the t452/w overlay
 # (t409/b build + SLA selection code, see mk452.sh). One arm takes ~316 s warm, so a job runs one arm.
@@ -62,7 +62,7 @@ for ARM in "$@"; do
   esac
   unset MINIMAX_H3_TURBO_SAVE_DIR; [ "${T409_SAVE:-1}" = 1 ] && export MINIMAX_H3_TURBO_SAVE_DIR=$OUT
   rm -f $MP4; export T456_DUMP=$OUT/dump
-  CMD="exec timeout --foreground -k 10 ${T409_PY_TIMEOUT:-270} python -u -m pytest -sv -p no:cacheprovider -p t286_skipvaewarm -p t409_alarm -p t452_audiowarn -p t457_sweep models/tt_dit/tests/models/minimax_h3/test_pipeline_turbo_minimax_h3.py -k '10s and 4x8 and not 15s and not 4x32 and not WH'"
+  CMD="exec timeout --foreground -k 10 ${T409_PY_TIMEOUT:-270} python -u -m pytest -sv -p no:cacheprovider -p t286_skipvaewarm -p t409_alarm -p t452_audiowarn -p ${T457_PLUG:-t457_sweep} models/tt_dit/tests/models/minimax_h3/test_pipeline_turbo_minimax_h3.py -k '10s and 4x8 and not 15s and not 4x32 and not WH'"
   echo "[t409] host=$(hostname) commit=$(git -C $W rev-parse HEAD) $(cat $W/OVERLAY) tag=$TAG arm=$ARM seed=$MINIMAX_H3_TURBO_SEED replays=$MINIMAX_H3_TURBO_REPLAYS job=${TTP_RUNNER_JOB:-} $(date -u '+%F %T') UTC" | tee $L
   echo "[t409] cmd: $CMD" | tee -a $L
   env | grep -E '^(MINIMAX|TT_|T286_)' | sort >> $L
