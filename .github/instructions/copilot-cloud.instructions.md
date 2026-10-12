@@ -103,15 +103,21 @@ feedback or CI fixes), so what to do depends on the state of the description:
 
 - **Description is still the initial placeholder** — it starts with "Thanks for
   asking me to work on this" and/or quotes the issue text. Replace it. Fill in
-  **Summary** (what changed and why, plus `Fixes #<issue>`), **Notes for
-  reviewers** (behaviour changes, trade-offs, anything non-obvious), and
-  **Verification** (see above). Do not keep the placeholder or the quoted issue.
+  **PR Category** (one of the template's options; it must match the category
+  in the PR title), **Summary** (what changed and why, plus `Fixes #<issue>`),
+  **Notes for reviewers** (behaviour changes, trade-offs, anything
+  non-obvious), and **Verification** (see above). Do not keep the placeholder
+  or the quoted issue.
 - **Description already follows the template** (a later session, e.g. addressing
   review feedback) — do not rewrite it. Change only what your work made out of
   date:
   - Summary or Notes, if the behaviour or approach changed.
-  - Verification, if you rebuilt or reran tests: replace the earlier result with
-    the latest command and result rather than stacking old results below it.
+  - Verification, if you rebuilt or reran tests: refresh the entry for each
+    check you reran (same command, latest result) instead of stacking
+    duplicates, and keep every other entry that still applies to the current
+    revision (for example, a focused test rerun must not remove the build
+    result). If your changes could affect a check you did not rerun, rerun it,
+    or mark that entry as stale.
   - Otherwise leave the description untouched.
 - Keep content a human added or edited. Leave the `### Code owners` checkbox as
   it is, and leave the `### CI Status` section alone: it is regenerated
