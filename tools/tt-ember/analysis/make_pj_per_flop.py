@@ -1,4 +1,8 @@
 #!/usr/bin/env python3
+# SPDX-FileCopyrightText: (c) 2026 Tenstorrent AI ULC
+#
+# SPDX-License-Identifier: Apache-2.0
+
 """Energy per FLOP from an existing tt-ember run. No new measurement required.
 
 pJ/FLOP is derived, not measured: `energy_j_vi` is already in program_intervals.csv and the

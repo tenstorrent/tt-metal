@@ -1,3 +1,7 @@
+# SPDX-FileCopyrightText: (c) 2026 Tenstorrent AI ULC
+#
+# SPDX-License-Identifier: Apache-2.0
+
 # The original run_all.py prefill sweep: three matmul shapes, POWER_CASE=0, split mode. One
 # config per shape keeps the <op>/<case> layout; run this file three times with a different
 # --output-root, or edit app_args. Kept for parity with the earlier Wormhole runs.

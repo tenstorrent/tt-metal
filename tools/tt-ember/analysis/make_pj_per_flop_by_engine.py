@@ -1,4 +1,8 @@
 #!/usr/bin/env python3
+# SPDX-FileCopyrightText: (c) 2026 Tenstorrent AI ULC
+#
+# SPDX-License-Identifier: Apache-2.0
+
 """Per-engine energy per FLOP (reader / writer / compute), from an existing POWER_CASE sweep.
 
 Isolates each engine's own contribution to dynamic peak charge by single-variable ablation

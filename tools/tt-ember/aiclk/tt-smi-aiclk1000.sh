@@ -1,4 +1,8 @@
 #!/bin/bash
+# SPDX-FileCopyrightText: (c) 2026 Tenstorrent AI ULC
+#
+# SPDX-License-Identifier: Apache-2.0
+
 # tt-smi drop-in that re-pins AICLK after a reset.
 #
 # run_power_cases.py resets the board before every case via its --tt-smi executable, and a reset

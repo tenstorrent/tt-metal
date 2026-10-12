@@ -1,4 +1,8 @@
 #!/usr/bin/env python3
+# SPDX-FileCopyrightText: (c) 2026 Tenstorrent AI ULC
+#
+# SPDX-License-Identifier: Apache-2.0
+
 """Force Blackhole's AICLK to a fixed frequency, and read back what the chip reports.
 
 Blackhole idles at 800 MHz and ramps to 1350 MHz under load, while Wormhole runs at 1000 MHz.

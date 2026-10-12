@@ -1,6 +1,7 @@
 # SPDX-FileCopyrightText: (c) 2026 Tenstorrent AI ULC
 #
 # SPDX-License-Identifier: Apache-2.0
+
 """Analysis steps for a POWER_CASE sweep, shared by run_sweep.py.
 
 Everything here reads the <output-root>/<op>/<case>/program_intervals.csv tree that auto.py and

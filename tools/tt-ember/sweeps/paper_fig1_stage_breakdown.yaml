@@ -1,3 +1,7 @@
+# SPDX-FileCopyrightText: (c) 2026 Tenstorrent AI ULC
+#
+# SPDX-License-Identifier: Apache-2.0
+
 # Paper Table 2, Table 3 and Fig. 1: pJ/FLOP per kernel stage (reader / writer / compute).
 # Case 1 (all active, 100% write amplification) is the reference; cases 2, 4 and 5 each idle
 # exactly one engine against it. The published Fig. 1 (pj_per_flop_by_engine) used case 0 as the

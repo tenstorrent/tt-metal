@@ -1,4 +1,8 @@
 #!/usr/bin/env python3
+# SPDX-FileCopyrightText: (c) 2026 Tenstorrent AI ULC
+#
+# SPDX-License-Identifier: Apache-2.0
+
 """Energy per FLOP: naive vs blocked access pattern (paper Fig. 2).
 
 Same chart format as compare_runs2.py. Both series are POWER_CASE=0 on the same

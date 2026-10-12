@@ -1,4 +1,8 @@
 #!/usr/bin/env python3
+# SPDX-FileCopyrightText: (c) 2026 Tenstorrent AI ULC
+#
+# SPDX-License-Identifier: Apache-2.0
+
 """Cross-op energy chart with a per-op FLOP denominator, as an addendum to run_power_cases.py.
 
 run_power_cases.py divides every op's energy by 2*M*N*K*iters -- the matmul's FLOP count -- for

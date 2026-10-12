@@ -1,3 +1,7 @@
+# SPDX-FileCopyrightText: (c) 2026 Tenstorrent AI ULC
+#
+# SPDX-License-Identifier: Apache-2.0
+
 # Paper Fig. 2: naive (1x1, 2.00 DRAM tile reads per multiply) against 2x4 output blocking
 # (0.75 reads per multiply), both POWER_CASE=0 on the same board and shape. Produces
 # matmul/regular and matmul/regular_b2x4.

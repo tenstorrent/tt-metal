@@ -1,3 +1,7 @@
+# SPDX-FileCopyrightText: (c) 2026 Tenstorrent AI ULC
+#
+# SPDX-License-Identifier: Apache-2.0
+
 # Paper Table 4, Figs. 3-4: per-op power and energy of a Llama-style decoder block, every op run
 # separately through ttnn (op_power_breakdown/ttnn_ops_workload.py). Needs a venv with ttnn and
 # torch as --tt-venv-activate; --app-exe defaults to the workload script.
