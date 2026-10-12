@@ -39,8 +39,7 @@ gated_attention_gated_deltanet/
 ## Environment Setup
 
 All TTNN tests require a Tenstorrent device. The Gated DeltaNet chunked-mode validation (`--mode chunk` below)
-runs on Blackhole only: its scan kernel's circular buffers fill a Wormhole core's L1 and leave no room for the
-validation's L1-resident inputs, so that test skips on Wormhole. Set up the environment from the `tt-metal` root:
+runs on Blackhole only. Set up the environment from the `tt-metal` root:
 
 ```bash
 cd /path/to/tt-metal
