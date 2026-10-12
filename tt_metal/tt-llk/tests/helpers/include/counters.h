@@ -631,21 +631,11 @@ constexpr bool releases_holds(PerfRunType run_type)
 #endif
 }
 
-// The idle peer that reads the last zone of a single thread run type after run_kernel: pack, or unpack when pack is
-// the measured thread. Math and sfpu never read, and span run types read inside their exit rendezvous.
+// The thread that reads the last zone of a single thread run type after run_kernel: the measured thread itself, so no
+// peer polls for it while the window runs (only a counting launch would). Span run types read in their exit rendezvous.
 constexpr bool is_reader_thread(PerfRunType run_type)
 {
-    if (!is_single_thread_runtype(run_type))
-    {
-        return false;
-    }
-#if defined(LLK_TRISC_PACK)
-    return run_type != PerfRunType::PACK_ISOLATE;
-#elif defined(LLK_TRISC_UNPACK)
-    return run_type == PerfRunType::PACK_ISOLATE;
-#else
-    return false;
-#endif
+    return is_single_thread_runtype(run_type) && is_measured_thread(run_type);
 }
 
 #if defined(LLK_DBG_BARRIER) && defined(LLK_BARRIER_ON_TRISC) && !defined(LLK_PERF_INIT_ONLY)
@@ -688,28 +678,17 @@ constexpr bool releases_last(PerfRunType)
 }
 #endif
 
-// The backoff keeps the reader off L1 during the measured loop; the limit bounds a kernel that never freezes a zone.
-constexpr std::uint32_t READER_POLL_LIMIT   = 1u << 15;
-constexpr std::uint32_t READER_POLL_BACKOFF = 2048;
-
 namespace detail
 {
 // A run time flag because trisc.cpp has no PERF_RUN_TYPE of its own; the first zone object of the kernel sets it.
 static bool reader_here;
 } // namespace detail
 
-// After run_kernel on the reader thread: wait for the measured thread to freeze its last zone, then read it back.
+// After run_kernel on the measured thread, whose window has ended: read back the zone it froze.
 inline void read_last_zone()
 {
     if (detail::reader_here && (counted_zones() >> ZONE_ID_TILE_LOOP) != 0)
     {
-        volatile std::uint32_t* pending = reinterpret_cast<volatile std::uint32_t*>(PERF_COUNTERS_PENDING_ZONE_ADDR);
-        for (std::uint32_t polls = 0; *pending == 0 && polls < READER_POLL_LIMIT; ++polls)
-        {
-            for (volatile std::uint32_t i = 0; i < READER_POLL_BACKOFF; ++i)
-            {
-            }
-        }
         read_pending_zone();
     }
 }
@@ -791,7 +770,6 @@ struct perf_counter_scoped
     {
         ckernel::fence_compiler();
         const std::uint32_t zid = zone_id;
-        static_assert(!(is_reader_thread(RUN_TYPE) && is_measured_thread(RUN_TYPE)), "the measured thread must not read its own zone");
         static_assert(
             exit_barrier_for(RUN_TYPE) || is_single_thread_runtype(RUN_TYPE),
             "a run type that skips the exit barrier needs a measured thread in is_measured_thread() to freeze the counters");

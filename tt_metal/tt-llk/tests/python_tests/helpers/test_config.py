@@ -669,6 +669,8 @@ class TestConfig:
             f"{no_wh_ebreak_fixup}"
             f"-DTENSIX_FIRMWARE -DENV_LLK_INFRA -DKERNEL_BUILD {llk_assert_define}{TestConfig.ARCH_DEFINE} "
             f"{'-DSPEED_OF_LIGHT' if TestConfig.SPEED_OF_LIGHT else ''}"
+            # experiment hook (ncwork): extra flags for every TRISC and the BRISC build, e.g. -DNCW_NOWORK
+            f" {os.environ.get('LLK_EXP_CFLAGS', '')} "
         )
         TestConfig.INCLUDES = (
             [
@@ -1394,6 +1396,8 @@ class TestConfig:
             "init_launch",
             # Which run types' variants also build the INIT measurement ELFs (perf/core.py); the variant is the same.
             "init_run_types",
+            # Which zones a launch counts, a register the host writes before it (counters.h counted_zones).
+            "counted_zones",
         ]
 
         if not TestConfig.SPEED_OF_LIGHT:
@@ -2027,8 +2031,21 @@ class TestConfig:
                 str(assembly),
             ]
             logger.trace(" ".join(shlex.quote(part) for part in compile_command))
-            run_shell_command(compile_command, TestConfig.TESTS_WORKING_DIR, source)
-            text = assembly.read_text()
+            if os.environ.get("LLK_EXP_COMPILE_CACHE"):
+                # experiment hook (speed agent): content-addressed cache of this compile, see compile_cache.py
+                from .compile_cache import compile_assembly
+
+                text = compile_assembly(
+                    TestConfig.GXX,
+                    compile_command[1 : compile_command.index("-S")],
+                    TestConfig.TESTS_WORKING_DIR,
+                    source,
+                    assembly,
+                    {variant_dir: "VARIANT", TestConfig.TESTS_WORKING_DIR: "TESTS"},
+                )
+            else:
+                run_shell_command(compile_command, TestConfig.TESTS_WORKING_DIR, source)
+                text = assembly.read_text()
             if init_only:
                 text = _init_callees_in_slot(text)
             else:
@@ -2038,7 +2055,7 @@ class TestConfig:
                 ) as f:
                     f.write(text)
                 TestConfig._remember_assembly(assembly.with_suffix(".s.gz"), text)
-            assembly.unlink()
+            assembly.unlink(missing_ok=True)
         else:
             text = TestConfig._kept_assembly(assembly.with_suffix(".s.gz"), probe)
         p, z = pads or (0, 0)
@@ -2530,6 +2547,7 @@ class TestConfig:
                 TestConfig.TENSIX_LOCATION,
                 counted_zones_reg,
                 [getattr(self, "counted_zones", 0)],
+                safe_mode=False,  # a register, as host_signal's (device.py reset_mailboxes)
             )
 
         if TestConfig.LAST_LOADED_ELFS != VARIANT_ELF_DIR:
