@@ -8,6 +8,7 @@
 #include <cstdint>
 #include <cstdlib>
 #include <initializer_list>
+#include <string>
 #include <tuple>
 #include <utility>
 #include <vector>
@@ -825,14 +826,21 @@ tt::tt_metal::ProgramDescriptor UnifiedRoutedExpertFfnProgramFactory::create_des
     // real per-call requirement reclaims it (~6 KB/core across both scratches)
     // — far more than the 192 B overlap — and still scales correctly up to the
     // host-side-validated MAX_GLOBAL_EXPERTS limit.
-    const uint32_t counts_num_entries = static_cast<uint32_t>(t.counts.logical_shape()[-1]);
-    const uint32_t idx_num_entries = static_cast<uint32_t>(t.global_expert_idx_table.logical_shape()[-1]);
-    const uint32_t counts_scratch_bytes = std::max<uint32_t>(
-        static_cast<uint32_t>(counts_buffer->aligned_page_size()),
-        counts_num_entries * static_cast<uint32_t>(sizeof(uint32_t)));
-    const uint32_t idx_scratch_bytes = std::max<uint32_t>(
-        static_cast<uint32_t>(idx_buffer->aligned_page_size()),
-        idx_num_entries * static_cast<uint32_t>(sizeof(uint32_t)));
+    //
+    // Dense mode builds a one-entry vector in L1 and never reads the placeholder buffers, so
+    // each scratch is one aligned word rather than a page of whatever the placeholder is.
+    const bool dense = op.dense_tokens != 0;
+    constexpr uint32_t kDenseScratchBytes = 64;
+    const uint32_t counts_num_entries = dense ? 1u : static_cast<uint32_t>(t.counts.logical_shape()[-1]);
+    const uint32_t idx_num_entries = dense ? 1u : static_cast<uint32_t>(t.global_expert_idx_table.logical_shape()[-1]);
+    const uint32_t counts_scratch_bytes = dense ? kDenseScratchBytes
+                                                : std::max<uint32_t>(
+                                                      static_cast<uint32_t>(counts_buffer->aligned_page_size()),
+                                                      counts_num_entries * static_cast<uint32_t>(sizeof(uint32_t)));
+    const uint32_t idx_scratch_bytes = dense ? kDenseScratchBytes
+                                             : std::max<uint32_t>(
+                                                   static_cast<uint32_t>(idx_buffer->aligned_page_size()),
+                                                   idx_num_entries * static_cast<uint32_t>(sizeof(uint32_t)));
     make_cb(CB_COUNTS_SCRATCH, tt::DataFormat::UInt32, /*tiles=*/1, counts_scratch_bytes);
     // CB_IDX_SCRATCH holds the device-side global_expert_idx_table page so
     // reader/compute/writer can resolve `global_expert_id =
@@ -847,9 +855,10 @@ tt::tt_metal::ProgramDescriptor UnifiedRoutedExpertFfnProgramFactory::create_des
     // length as counts, so size it to the real per-call requirement (lands the
     // tensor's page and holds every region-offset entry) rather than the old
     // fixed MAX_GLOBAL_EXPERTS floor.
-    const uint32_t start_scratch_bytes = std::max<uint32_t>(
-        static_cast<uint32_t>(start_buffer->aligned_page_size()),
-        counts_num_entries * static_cast<uint32_t>(sizeof(uint32_t)));
+    const uint32_t start_scratch_bytes = dense ? kDenseScratchBytes
+                                               : std::max<uint32_t>(
+                                                     static_cast<uint32_t>(start_buffer->aligned_page_size()),
+                                                     counts_num_entries * static_cast<uint32_t>(sizeof(uint32_t)));
     make_cb(CB_START_SCRATCH, tt::DataFormat::UInt32, /*tiles=*/1, start_scratch_bytes);
     // Reader's `start` scratch. Same sizing; separate CB so
     // reader (NCRISC) and writer (BRISC) never share one scratch page.
@@ -961,6 +970,11 @@ tt::tt_metal::ProgramDescriptor UnifiedRoutedExpertFfnProgramFactory::create_des
         tt::tt_metal::TensorAccessorArgs(t.down_biases[0].buffer()).append_to(reader_ct_args);
         reader_defines.emplace_back("FUSE_BIAS", "1");
     }
+    tt::tt_metal::KernelDescriptor::Defines writer_defines;
+    if (dense) {
+        reader_defines.emplace_back("DENSE_TOKENS", std::to_string(op.dense_tokens));
+        writer_defines.emplace_back("DENSE_TOKENS", std::to_string(op.dense_tokens));
+    }
     tt::tt_metal::KernelDescriptor reader_kernel_desc;
     reader_kernel_desc.kernel_source =
         "ttnn/cpp/ttnn/operations/experimental/deepseek_prefill/unified_routed_expert_ffn/device/kernels/dataflow/"
@@ -1042,6 +1056,7 @@ tt::tt_metal::ProgramDescriptor UnifiedRoutedExpertFfnProgramFactory::create_des
     writer_kernel_desc.source_type = tt::tt_metal::KernelDescriptor::SourceType::FILE_PATH;
     writer_kernel_desc.core_ranges = core_range_set;
     writer_kernel_desc.compile_time_args = std::move(writer_ct_args);
+    writer_kernel_desc.defines = std::move(writer_defines);
     writer_kernel_desc.config = tt::tt_metal::WriterConfigDescriptor{};
 
     // Compute kernel compile-time args: positional + named CB ids.

@@ -5,8 +5,8 @@
 """
 TTNN implementation of the Shared Expert module.
 
-- Whole expert replicated on every chip, run as one unified_routed_expert_moe expert
-- mesh_partition leaves each mesh column its emb slice; no CCL
+- One shared_expert_ffn op: gate/up replicated, down split on emb across mesh columns, so each
+  mesh column computes only its own emb slice of the output; no typecast, no CCL
 - Composed GLU helpers (``situ_glu``, ``clamped_silu_glu``) for TtFfn's TP-sharded forward
 """
 
@@ -148,15 +148,14 @@ class TtSharedExpert(LightweightModule):
     """
     TTNN implementation of Shared Expert MLP, replicated on every chip.
 
-    Forward:
-        Input: x [1, seq_len, emb_dim] (replicated across mesh columns)
-        1. x_bf8 = typecast(x) → the fused op's TILE bf8 input
-        2. output_full = unified_routed_expert_moe(x_bf8) → [1, seq_len, emb_dim]
-           (gate / up / GLU activation / down as one expert, written over x_bf8)
-        3. mesh_partition across mesh columns → [1, seq_len, emb_dim / num_cols]
+    Forward (one op):
+        Input: x [1, seq_len, emb_dim] TILE bf16 (replicated across mesh columns)
+        output = shared_expert_ffn(x) → [1, seq_len, emb_dim / num_cols] bf8
+        (gate / up / GLU activation / down as one expert; the op reads bf16 x directly and its
+        down matmul computes only this column's emb slice)
 
-    Weights: gate_proj [emb_dim, hidden_dim], up_proj [emb_dim, hidden_dim] and down_proj
-    [hidden_dim, emb_dim], whole on every chip.
+    Weights: gate_proj [emb_dim, hidden_dim] and up_proj [emb_dim, hidden_dim] whole on every chip;
+    down_proj [hidden_dim, emb_dim / num_cols], split on emb across mesh columns.
     """
 
     # TtFfn reuses the weight code below and keeps its TP-sharded layout.
@@ -166,10 +165,15 @@ class TtSharedExpert(LightweightModule):
     def _weight_layout(cls, proj: str) -> tuple[tuple, str]:
         """Mesh-mapper dims and cache basename for one projection.
 
-        Replicated weights get their own basename: as_tensor's cache key ignores the mapper, so a
-        TP-sharded file under the same name would load with the wrong shape.
+        The fused layout gets its own basenames: as_tensor's cache key ignores the mapper, so a
+        file of another layout under the same name would load with the wrong shape. Its down_proj
+        is split on emb (its N) rather than on hidden (its K): each mesh column then computes its
+        own output slice -- what mesh_partition of the full output gave -- at a quarter of the
+        down FLOPs and weight bytes.
         """
         if cls.REPLICATED_WEIGHTS:
+            if proj == "down_proj":
+                return (None, -1), "down_proj_emb_sharded"
             return (None, None), f"{proj}_replicated"
         return ((None, -2) if proj == "down_proj" else (None, -1)), proj
 
@@ -410,7 +414,7 @@ class TtSharedExpert(LightweightModule):
     def _init_fused_expert(self):
         """Validate the config against unified_routed_expert_moe and build its index tensors."""
         if not is_blackhole():
-            raise ValueError("TtSharedExpert runs unified_routed_expert_moe, which is Blackhole-only")
+            raise ValueError("TtSharedExpert runs shared_expert_ffn, which is Blackhole-only")
         if self.activation == ACTIVATION_SITU and (self.situ_beta, self.situ_linear_beta) != _FUSED_SITU_BETAS:
             raise ValueError(
                 f"the fused op bakes SiTU betas {_FUSED_SITU_BETAS}, got {(self.situ_beta, self.situ_linear_beta)}"
@@ -426,21 +430,6 @@ class TtSharedExpert(LightweightModule):
         # The op's grid starts at (0, 0) unless moved; the dispatch sub-device owns those cores.
         self.core_grid_origin = (
             self.subdevice_cores.bounding_box().start if self.subdevice_cores is not None else ttnn.CoreCoord(0, 0)
-        )
-        # One expert: global id 0, its region at row 0. Serves as both the index table and the offsets.
-        self.zero_index = self._uint32_vector(0)
-        # Token counts keyed by M. Built on first use, which the warm-up forward reaches before any
-        # trace capture.
-        self.token_counts = {}
-
-    def _uint32_vector(self, value: int) -> ttnn.Tensor:
-        return ttnn.from_torch(
-            torch.tensor([value], dtype=torch.int32),
-            dtype=ttnn.uint32,
-            layout=ttnn.ROW_MAJOR_LAYOUT,
-            device=self.mesh_device,
-            memory_config=ttnn.DRAM_MEMORY_CONFIG,
-            mesh_mapper=ttnn.ReplicateTensorToMesh(self.mesh_device),
         )
 
     def _cache_name(self, name: str) -> Optional[str]:
@@ -503,7 +492,7 @@ class TtSharedExpert(LightweightModule):
 
     def forward(self, x: ttnn.Tensor) -> ttnn.Tensor:
         """
-        Forward pass: the whole expert on every chip, then each mesh column keeps its emb slice.
+        Forward pass: one fused op computing, on every chip, its mesh column's emb slice of the expert.
 
         Args:
             x: Input tensor [1, seq_len, emb_dim] (replicated across mesh columns)
@@ -518,32 +507,17 @@ class TtSharedExpert(LightweightModule):
             x.shape[-1] == self.emb_dim
         ), f"Input must be replicated (full emb_dim={self.emb_dim}), got shape[-1]={x.shape[-1]}"
 
-        # The op reads TILE bf8 and writes its output over it. Dispatch reads x concurrently, so the
-        # op gets the cast's fresh copy.
-        x_bf8 = ttnn.typecast(
-            x, ttnn.bfloat8_b, memory_config=ttnn.DRAM_MEMORY_CONFIG, sub_core_grids=self.subdevice_cores
-        )
-        m = x_bf8.padded_shape[-2]
-        if m not in self.token_counts:
-            self.token_counts[m] = self._uint32_vector(m)
-        output = ttnn.experimental.deepseek_prefill.unified_routed_expert_moe(
-            x_bf8,
-            self.zero_index,
-            self.token_counts[m],
-            self.zero_index,
-            [self.gate_proj],
-            [self.up_proj],
-            [self.down_proj],
-            max_dispatched_tokens_per_expert=m,
+        # Reads x as given (no typecast) and writes a fresh bf8 output, never over x, which the MoE
+        # dispatch reads concurrently.
+        output = ttnn.experimental.deepseek_prefill.shared_expert_ffn(
+            x,
+            self.gate_proj,
+            self.up_proj,
+            self.down_proj,
             compute_kernel_config=self.compute_kernel_config,
             activation=self.fused_activation,
             core_grid_origin=self.core_grid_origin,
         )
-
-        if self.mesh_device.shape[1] > 1:
-            output_full = output
-            output = ttnn.mesh_partition(output_full, dim=-1, cluster_axis=1, sub_core_grids=self.subdevice_cores)
-            ttnn.deallocate(output_full)
         if DEBUG_LOGGING_ENABLED:
             logger.debug(f"After shared_expert_ffn: {output.shape}")
 

@@ -297,6 +297,14 @@ void kernel_main() {
     const uint32_t idx_l1 = cb_idx_scratch_obj.get_write_ptr();
     const uint32_t counts_page_size = counts_acc.get_aligned_page_size();
     const uint32_t idx_page_size = idx_acc.get_aligned_page_size();
+#ifdef DENSE_TOKENS
+    // Dense (shared-expert) mode: one expert, global id 0, owning all DENSE_TOKENS rows from
+    // row 0. Every core writes that into its own scratch; there are no device vectors to read.
+    reinterpret_cast<volatile tt_l1_ptr uint32_t*>(counts_l1)[0] = DENSE_TOKENS;
+    reinterpret_cast<volatile tt_l1_ptr uint32_t*>(idx_l1)[0] = 0;
+    (void)counts_page_size;
+    (void)idx_page_size;
+#else
     {
         // COUNTS_BCAST: one core reads the two pages and multicasts them to the grid.
         // Every core needs counts/idx to derive its chunking, but all of them hitting the
@@ -354,6 +362,7 @@ void kernel_main() {
             counts_valid_sem.set(0);
         }
     }
+#endif
     cb_counts_scratch_obj.push_back(1);
     cb_idx_scratch_obj.push_back(1);
 
@@ -367,9 +376,13 @@ void kernel_main() {
     // region).
     cb_start_scratch_obj.reserve_back(1);
     const uint32_t start_l1 = cb_start_scratch_obj.get_write_ptr();
+#ifdef DENSE_TOKENS
+    reinterpret_cast<volatile tt_l1_ptr uint32_t*>(start_l1)[0] = 0;
+#else
     noc_read.async_read(
         start_acc, CoreLocalMem<uint32_t>(start_l1), start_acc.get_aligned_page_size(), {.page_id = 0}, {});
     noc_read.async_read_barrier();
+#endif
     cb_start_scratch_obj.push_back(1);
     const volatile tt_l1_ptr uint32_t* start_ptr = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(start_l1);
 
