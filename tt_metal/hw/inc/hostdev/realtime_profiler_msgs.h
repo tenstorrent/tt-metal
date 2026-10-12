@@ -63,4 +63,5 @@ struct realtime_profiler_msg_t {
     volatile uint32_t program_id_fifo[32];
     volatile uint32_t program_id_fifo_start;
     volatile uint32_t program_id_fifo_end;
+    uint32_t ab_pad[4];  // PROBE ONLY: T3K dump-speed alignment A/B
 };
