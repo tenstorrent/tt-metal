@@ -3,7 +3,7 @@
 """The measurement matrix of one calibration, as a rows file for calib_batch.sh.
 
   python calib_rows.py --prefix c1 --bh 4,8,12,16,24,32,48 [--sets phased,auto,perhead,pool,share,rowmajor]
-                       [--grid 11x10] [--T 2048] [--method FORWARD_SUBSTITUTION] [--iters 5] [--repeats 3] > c1_rows.txt
+                       [--grid 11x10] [--T 2048] [--vt 4] [--method FORWARD_SUBSTITUTION] [--iters 5] [--repeats 3] > c1_rows.txt
 
 One line per capture: "label script args". The geometries come from the tree's own model (the ttnn binding of the
 worktree in TT_METAL_HOME), so the matrix follows the current picks:
@@ -43,7 +43,7 @@ def main():
     NC = a.T // 32
     sets = set(a.sets.split(","))
     bhs = [int(v) for v in a.bh.split(",")]
-    base = f"--method {a.method} --T {a.T} --iters {a.iters}"
+    base = f"--method {a.method} --T {a.T} --d {a.vt * 32} --iters {a.iters}"
     rows = []
 
     def row(label, args, script="calib_capture.py"):
@@ -52,7 +52,7 @@ def main():
     for bh in bhs:
         hk = HK.get(bh, max(4, bh // 4))
         if "phased" in sets:
-            row(f"ph_bh{bh}", f"--phased --hk {max(1, bh // 4)} --hv {bh} --T {a.T} --iters {a.iters}")
+            row(f"ph_bh{bh}", f"{base} --phased --hk {hk} --hv {bh}")
         if "auto" in sets:
             for i in range(1, a.repeats + 1):
                 row(f"auto_bh{bh}_A{i}", f"{base} --hk {hk} --hv {bh}")

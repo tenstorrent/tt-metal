@@ -92,11 +92,15 @@ def test_handoff_fault_trips_check(fault, geom):
     )
     env.pop("GDN_HANDOFF_FAULT_TESTS", None)
     cmd = [sys.executable, "-m", "pytest", "-q", "-p", "no:cacheprovider", __file__, "-k", "test_handoff_fault_child"]
-    child = subprocess.run(cmd, env=env, capture_output=True, text=True, timeout=900)
+    reset = shlex.split(os.environ.get("GDN_HANDOFF_FAULT_RESET_CMD", "tt-smi -r"))
+    try:
+        child = subprocess.run(cmd, env=env, capture_output=True, text=True, timeout=900)
+    except subprocess.TimeoutExpired as e:
+        subprocess.run(reset, check=True, timeout=600, capture_output=True)
+        out = "".join(s.decode(errors="replace") if isinstance(s, bytes) else s or "" for s in (e.stdout, e.stderr))
+        pytest.fail(f"{name}: the child did not finish in {e.timeout:.0f} s\n{out[-2000:]}")
     out = child.stdout + child.stderr
     if child.returncode != 0:
-        # The watcher stopped the device: reset the board before anything else opens it.
-        reset = shlex.split(os.environ.get("GDN_HANDOFF_FAULT_RESET_CMD", "tt-smi -r"))
         subprocess.run(reset, check=True, timeout=600, capture_output=True)
     # The watcher's report lines, for the failure messages (the raw tail is the abort's backtrace).
     tail = "\n".join(l for l in out.splitlines() if re.search(r"tripped an assert|Last waypoint|RISC\]0x", l))

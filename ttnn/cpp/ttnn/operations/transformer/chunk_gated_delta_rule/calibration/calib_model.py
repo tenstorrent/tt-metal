@@ -95,10 +95,10 @@ def balance(a, b, width, peak):
     return peak * max(0.0, 1.0 - abs(a - b) / (width * m))
 
 
-def t_fused(r, K=K, vt=4):
+def t_fused(r, K=K):
     """t_fused_us of chunk_gdn_device_operation.cpp for one collected row; returns (T, terms)."""
     bh, nc, nv, pl, depth = r["BH"], r.get("NC", 64), r["nv"], r["PL"], r["nbuf"]
-    vtl = vt // nv
+    vtl = r.get("vt", 4) // nv
     nph, nx, num, den = r["nph"], r["nx"], r["num"], r["den"]
     producers = r["np"] if pl == 2 else bh * r["np"]
     pooled = nx > 0
@@ -199,7 +199,7 @@ def main():
             cand = 1 if r["PL"] == 2 else 0
             share = (r["num"] / r["den"]) if r["PL"] == 2 else -1.0
             got = _t.chunk_gdn_fused_geometry(
-                gx, gy, r["BH"], r.get("NC", 64), 4, r["nv"], r["np"], r["nbuf"], cand, share
+                gx, gy, r["BH"], r.get("NC", 64), r.get("vt", 4), r["nv"], r["np"], r["nbuf"], cand, share
             )
             t, _ = t_fused(r)
             d = abs(got[4] - t)
@@ -233,7 +233,9 @@ def main():
                 f"prep_item zone median over all rows {np.median([r['item'] for r in fused]):.2f}"
             )
         for vtl in (1, 2, 4):
-            rs = sorted((r for r in chain if 4 // r["nv"] == vtl and r["nbuf"] >= 3), key=lambda r: r["BH"])
+            rs = sorted(
+                (r for r in chain if r.get("vt", 4) // r["nv"] == vtl and r["nbuf"] >= 3), key=lambda r: r["BH"]
+            )
             if not rs:
                 continue
             pairs = ", ".join(f"BH{r['BH']}:{r['pace']:.2f}" for r in rs)

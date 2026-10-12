@@ -608,6 +608,20 @@ def test_item_map_per_head_form(bh, nc, np_):
         assert [owner[h][c] for c in range(nc)] == [h * np_ + c % np_ for c in range(nc)]
 
 
+@pytest.mark.parametrize(
+    "args, message",
+    [
+        ((4, 8, 0, 0, 0, 1), "NPH must be >= 1"),  # no home producer: the formulas divide by NPH
+        ((4, 8, 1, 2, 1, 0), "den >= 1"),  # extras with den = 0
+        ((4, 8, 1, 2, 3, 2), "num <= den"),  # a share above 1
+    ],
+)
+def test_item_map_rejects_invalid_map(expect_error, args, message):
+    """Parameters outside the map's contract raise instead of dividing by zero in the shared formulas."""
+    with expect_error(RuntimeError, message):
+        _t.chunk_gdn_fused_item_map(*args)
+
+
 @pytest.mark.parametrize("bh", BHS)
 @pytest.mark.parametrize("grid", GRIDS, ids=GRID_IDS)
 def test_chosen_layout_shares_no_links(grid, bh):

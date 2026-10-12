@@ -87,8 +87,8 @@ Semaphore ids are 16-byte-strided L1 words (`sem_l1_base + id · L1_ALIGNMENT`);
 
 | symbol | source | default | constraint |
 |---|---|---|---|
-| NBUF | `ChunkGdnFusedProgramConfig::handoff_depth` | 2 | 1 ≤ NBUF ≤ 8; BH · NBUF ≤ 1024 |
-| D | NBUF − 1 (1 if NBUF = 1) | 1 | credits issued ahead of the chunk being waited for |
+| NBUF | `ChunkGdnFusedProgramConfig::handoff_depth` | cost model (2 or 3) | 1 ≤ NBUF ≤ 8; BH · NBUF ≤ 1024 |
+| D | NBUF − 1 (1 if NBUF = 1) | 1 or 2 | credits issued ahead of the chunk being waited for |
 | NP | producers per head; with `producer_pool`, the pool size P | cost model | 1 ≤ NP ≤ NC; P ≤ BH · NC |
 | NPH, NX | home producers per head and extras of a pool (`fused_pool_home_producers`, P − BH · NPH) | the layout | NPH ≥ 1 |
 | num / den | the extras' share of every head's chunks (`pool_extra_share`, den = P) | cost model | 0 ≤ num ≤ den |

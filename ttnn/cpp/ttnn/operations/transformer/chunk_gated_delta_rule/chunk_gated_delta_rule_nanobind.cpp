@@ -384,6 +384,18 @@ void bind_chunk_gated_delta_rule(nb::module_& mod) {
     mod.def(
         "chunk_gdn_fused_item_map",
         [](uint32_t BH, uint32_t NC, uint32_t NPH, uint32_t NX, uint32_t num, uint32_t den) {
+            TT_FATAL(
+                BH >= 1 && NC >= 1 && NPH >= 1,
+                "chunk_gdn_fused_item_map: BH, NC and NPH must be >= 1 (got {}, {}, {})",
+                BH,
+                NC,
+                NPH);
+            TT_FATAL(
+                NX == 0 || (den >= 1 && num <= den),
+                "chunk_gdn_fused_item_map: the extras' share needs den >= 1 and num <= den (got {}/{} with NX = {})",
+                num,
+                den,
+                NX);
             const GdnFusedMap m{BH, NC, NPH, NX, num, den};
             std::vector<std::vector<std::tuple<uint32_t, uint32_t>>> items(BH * NPH + NX);
             for (uint32_t p = 0; p < items.size(); p++) {
@@ -411,7 +423,8 @@ void bind_chunk_gated_delta_rule(nb::module_& mod) {
         R"doc(The fused program's producer map (chunk_gdn_fused_map.hpp) for BH heads, NC chunks, NPH home
         producers per head, NX extras taking the share num/den of every head's chunks: (items, owner) —
         items[p] = the (head, chunk) list of producer p in its order, owner[h][c] = the producer of chunk c
-        of head h, as the kernels compute them.)doc");
+        of head h, as the kernels compute them. Raises outside the map's contract (NPH = 0; with extras,
+        den = 0 or num > den).)doc");
     mod.def(
         "chunk_gdn_fused_placement",
         [](uint32_t grid_x, uint32_t grid_y, uint32_t BH, uint32_t NV, uint32_t NP, uint32_t placement) {
