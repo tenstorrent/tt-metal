@@ -511,8 +511,7 @@ TEST(FreeListOptTest, CPU_AddressesAPIWithNonzeroOffset) {
     ASSERT_EQ(available_addresses[0].second, alloc_size - 2_KiB + offset);
 }
 
-// #60243: allocate() checks address_limit only after allocate_in_block() has marked the block
-// allocated. A caught "below address limit" OOM must leave the allocator unchanged.
+// #60243: a caught address-limit OOM must leave the allocator unchanged.
 TEST(FreeListOptTest, CPU_AddressLimitOutOfMemoryDoesNotAllocate) {
     auto allocator =
         tt::tt_metal::allocator::FreeListOpt(64 * 1_KiB, /*offset_bytes=*/0, /*min_allocation_size=*/32, /*alignment=*/32);
@@ -583,9 +582,9 @@ TEST(FreeListOptTest, CPU_AddressLimitWithOffsetDoesNotAllocate) {
     EXPECT_GE(top.value(), address_limit);
 }
 
-// #60243: clear() -> init() leaves lowest_occupied_address_ stale. deallocate() only refreshes it
-// when the freed address is <= the cached value, so a later alloc/free at a higher address keeps
-// the pre-clear address forever.
+// #60243: clear() must reset lowest_occupied_address_. A later alloc/free above that old address
+// must not resurrect it, because deallocate() refreshes the cache only when the freed address is
+// at or below the cached value.
 TEST(FreeListOptTest, CPU_ClearResetsLowestOccupiedAddress) {
     auto allocator =
         tt::tt_metal::allocator::FreeListOpt(64 * 1_KiB, /*offset_bytes=*/0, /*min_allocation_size=*/32, /*alignment=*/32);
