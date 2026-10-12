@@ -5,8 +5,6 @@
 #pragma once
 
 #include <optional>
-#include <utility>
-#include <vector>
 
 #include <tt-metalium/experimental/metal2_host_api/dataflow_buffer_spec.hpp>
 #include <tt-metalium/experimental/metal2_host_api/utility/table.hpp>
@@ -104,7 +102,7 @@ struct ComputeHardwareConfig {
     //  - You want to preserve the full precision
     //  - The data will be consumed by the SFPU (not the FPU)
     //
-    // On 2nd-gen architecture (2xx), there is NO performance penalty for unpacking directly to
+    // On 2nd-gen architectures (2xx), there is NO performance penalty for unpacking directly to
     // Dest, so UnpackMode=UnpackToDest is the preferred mode for any SFPU-consumed data.
     //
     // If no mode is specified for a (consumed-from) DFB, UnpackToSrc is assumed.

@@ -853,3 +853,49 @@ def test_layer_norm_sharded_subblock_w_zero(device, expect_error, norm, use_welf
             )
         else:
             ttnn_rms_norm_sharded(device, tt_input, block_ht=h // 32, block_wt=shard_w // 32, subblock_w=0)
+
+
+# The residual of a sharded layer_norm / rms_norm may have a different dtype than the input. Its DFB used to be
+# declared with the input's data format and tile size, so the residual was misread (or, when the input tile is
+# larger than the residual tile, the program failed to build). Reference: fp64 on the values stored on device.
+@pytest.mark.parametrize(
+    "input_dtype, residual_dtype",
+    [
+        (ttnn.bfloat16, ttnn.float32),
+        (ttnn.bfloat16, ttnn.bfloat8_b),
+        (ttnn.float32, ttnn.bfloat16),
+        (ttnn.float32, ttnn.bfloat8_b),
+        (ttnn.bfloat8_b, ttnn.bfloat16),
+        (ttnn.bfloat8_b, ttnn.float32),
+    ],
+)
+@pytest.mark.parametrize("two_stage", [False, True])
+@pytest.mark.parametrize("op, use_welford", [("layer_norm", False), ("layer_norm", True), ("rms_norm", False)])
+def test_sharded_norm_residual_dtype_differs_from_input(
+    device, input_dtype, residual_dtype, two_stage, op, use_welford
+):
+    torch.manual_seed(0)
+    h, w, num_cores_h, num_cores_w, block_ht, block_wt, subblock_wt = simple_size_params(two_stage)
+    mem_config = create_sharded_mem_config(h, w, num_cores_h, num_cores_w, two_stage)
+    tt_input = ttnn.from_torch(
+        torch.randn((h, w)), dtype=input_dtype, layout=ttnn.TILE_LAYOUT, device=device, memory_config=mem_config
+    )
+    tt_residual = ttnn.from_torch(
+        torch.randn((h, w)), dtype=residual_dtype, layout=ttnn.TILE_LAYOUT, device=device, memory_config=mem_config
+    )
+    x = ttnn.to_torch(tt_input).double() + ttnn.to_torch(tt_residual).double()
+
+    if op == "layer_norm":
+        output = ttnn_layer_norm_sharded(
+            device, tt_input, use_welford, block_ht, block_wt, subblock_wt, residual=tt_residual
+        )
+        expected = torch.nn.functional.layer_norm(x, [w], eps=1e-12)
+    else:
+        output = ttnn_rms_norm_sharded(device, tt_input, block_ht, block_wt, subblock_wt, residual=tt_residual)
+        expected = x * torch.rsqrt(x.pow(2).mean(-1, keepdim=True) + 1e-12)
+
+    output = output.double().reshape(expected.shape)
+    pcc = torch.corrcoef(torch.stack([output.flatten(), expected.flatten()]))[0, 1].item()
+    max_abs = (output - expected).abs().max().item()
+    # The interleaved path with the same dtypes reaches PCC >= 0.99995 and max abs error <= 0.06 here.
+    assert pcc > 0.9999 and max_abs < 0.1, f"pcc={pcc:.6f} max_abs={max_abs:.4g}"
