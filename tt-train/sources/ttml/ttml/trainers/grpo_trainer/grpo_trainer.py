@@ -145,6 +145,7 @@ def build_rollout_sampler(
             top_k=remote_rollout.top_k,
             top_p=remote_rollout.top_p,
             seed=remote_rollout.seed,
+            dummy_weights=True,
         )
     raise ValueError(f"unknown rollout_source {source!r}; expected one of {list(ROLLOUT_SOURCES)}")
 
@@ -1700,6 +1701,9 @@ class GRPOTrainer:
             cb.on_train_begin(self)
 
         try:
+            # The ttt rollout sampler boots with dummy weights; push the real ones as version 0.
+            if self.config.rollout_source == "ttt":
+                self.rollout_batch_source.update_weights(self.model, 0)
             for scored in self._iter_scored_batches():
                 advantages_np = self._compute_advantages(scored.rewards)
                 batch_metrics = dict(self.metrics)

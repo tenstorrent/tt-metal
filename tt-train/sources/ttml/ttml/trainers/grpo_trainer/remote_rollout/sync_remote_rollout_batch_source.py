@@ -23,8 +23,8 @@ from .weight_bridge import TTT_RANK, HostWeightBridge
 class SyncRemoteRolloutBatchSource(RolloutBatchSource):
     """Generates each prompt batch on the rollout rank and scores it here.
 
-    The rollout rank boots with the same weights at version 0; update_weights pushes the
-    policy every ``weight_sync_every`` steps, as version ``step``.
+    The rollout rank boots with dummy weights; the trainer pushes the policy as version 0
+    before training, then update_weights pushes it every ``weight_sync_every`` steps, as version ``step``.
     """
 
     def __init__(
