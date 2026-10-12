@@ -11,8 +11,8 @@
 // START_PERF_MEASURE expands to ZONE_SCOPED, so the zone layer must be in scope here; self-guarded on LLK_PROFILER.
 #include "profiler.h"
 
-// One code path for both builds: the counters off build runs the same startup, entry, exit and readout and writes
-// STOP where the counters on build writes START. Any divergence shows up as a fake on minus off delta.
+// One program for both builds: every piece of counter work branches on detail::arm_cmd, which is 0 with counters off,
+// so that build runs none of it and differs from the counters on build in that one data word.
 #ifdef PERF_COUNTERS_COMPILED
 constexpr bool COUNTERS_ON = true;
 #else
@@ -185,11 +185,11 @@ constexpr std::uint32_t BUILTIN_COUNTER_COUNT = BUILTIN_COUNTER_CONFIG.size();
 
 static_assert(BUILTIN_COUNTER_COUNT <= COUNTER_SLOT_COUNT, "Counter inventory overflows the shared config region into zone 0 data");
 
-// The counters off build writes STOP wherever the counters on build writes START, from the same code.
-// Loaded from memory, not an immediate: the compiler folded the immediate into an unrelated store in one build only.
+// START with counters on, 0 (no command) off. Loaded from memory, not an immediate: the compiler folded the immediate
+// into an unrelated store in one build only.
 namespace detail
 {
-inline const volatile std::uint32_t arm_cmd = COUNTERS_ON ? llk::perf::START : llk::perf::STOP;
+inline const volatile std::uint32_t arm_cmd = COUNTERS_ON ? llk::perf::START : 0;
 #if defined(ARCH_QUASAR)
 // Both builds route the selection; only the counters on build sets the enable bit.
 inline const volatile std::uint32_t l1_client_cmd =
@@ -197,6 +197,12 @@ inline const volatile std::uint32_t l1_client_cmd =
                 : (llk::perf::l1_client_ctrl_word(static_cast<std::uint32_t>(L1_CLIENT_SEL)) & ~llk::perf::L1_CLIENT_ENABLE);
 #endif
 } // namespace detail
+
+// Whether this build counts: the counter work below runs only when it does, so counters off runs only the line-up.
+inline __attribute__((always_inline)) bool counting()
+{
+    return detail::arm_cmd != 0;
+}
 
 #if defined(ARCH_QUASAR)
 // Route the selection and clear the counter: the l1_client CSR is clear-on-read.
@@ -312,8 +318,6 @@ inline void configure_all_zones()
 
     if (found_valid)
     {
-        // Both builds run all three: neither the scrub nor configure starts anything and the arm writes STOP in the
-        // counters off build. Skipping any of it moves the release of the other threads.
 #if !defined(TT_METAL_TTSIM)
         llk::perf::clear_debug_feature_disable();
 #endif
@@ -326,6 +330,10 @@ inline void configure_all_zones()
 // unpack TRISC on Quasar, in both cases before the other TRISCs are released.
 inline void configure_and_arm()
 {
+    if (!counting())
+    {
+        return;
+    }
     volatile std::uint32_t* shared_config = reinterpret_cast<volatile std::uint32_t*>(PERF_COUNTERS_SHARED_CONFIG_ADDR);
     for (std::uint32_t i = 0; i < BUILTIN_COUNTER_COUNT; i++)
     {
@@ -665,7 +673,7 @@ static bool reader_here;
 // After run_kernel on the reader thread: wait for the measured thread to freeze its last zone, then read it back.
 inline void read_last_zone()
 {
-    if (detail::reader_here)
+    if (detail::reader_here && counting())
     {
         volatile std::uint32_t* pending = reinterpret_cast<volatile std::uint32_t*>(PERF_COUNTERS_PENDING_ZONE_ADDR);
         for (std::uint32_t polls = 0; *pending == 0 && polls < READER_POLL_LIMIT; ++polls)
@@ -711,16 +719,27 @@ struct perf_counter_scoped
             {
                 // Span run types read at their exit rendezvous, so this read would be dead for them, and not
                 // harmless: an L1 read here hung every Wormhole L1_CONGESTION kernel in the math thread.
-                if constexpr (is_single_thread_runtype(RUN_TYPE))
+                constexpr bool reads = is_single_thread_runtype(RUN_TYPE);
+                constexpr bool arms  = !(LOOP_PAD && release_schedule(RUN_TYPE) != 0);
+                // every thread is held here, so the work cannot reach a window (Wormhole: it precedes the restart's flush)
+                if constexpr (reads || arms)
                 {
-                    read_pending_zone();
-                }
-                if constexpr (!(LOOP_PAD && release_schedule(RUN_TYPE) != 0))
-                {
-                    arm_all_counters();
+                    if (counting())
+                    {
+                        if constexpr (reads)
+                        {
+                            read_pending_zone();
+                        }
+                        if constexpr (arms)
+                        {
+                            arm_all_counters();
+                        }
+                    }
                 }
             });
-        if constexpr (LOOP_PAD && releases_last(RUN_TYPE)) // released last, by its own flush: the window starts here
+        // Released last, by its own flush: the window starts here. Not skipped with counters off: its stores (of 0, no
+        // command) keep the window's start the same cycles after the flush in both builds.
+        if constexpr (LOOP_PAD && releases_last(RUN_TYPE))
         {
             arm_all_counters();
         }
@@ -755,7 +774,10 @@ struct perf_counter_scoped
         {
             if constexpr (is_measured_thread(RUN_TYPE))
             {
-                freeze_zone(zid);
+                if (counting()) // after the window's end read
+                {
+                    freeze_zone(zid);
+                }
             }
         }
         else
@@ -770,8 +792,11 @@ struct perf_counter_scoped
                 llk_barrier::is_action_thread(),
                 [zid]
                 {
-                    freeze_all_counters();
-                    read_all_counters(zid);
+                    if (counting())
+                    {
+                        freeze_all_counters();
+                        read_all_counters(zid);
+                    }
                 });
         }
         ckernel::fence_compiler();
