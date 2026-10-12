@@ -341,7 +341,7 @@ void bind_sdpa(nb::module_& mod) {
             program_config (SDPAProgramConfig, optional): Defaults to `None`.
             compute_kernel_config (ttnn.DeviceComputeKernelConfig, optional): Defaults to `None`.
             attention_sink (ttnn.Tensor, optional): Defaults to `None`. [1 x nqh x 1 x 1]. Single attention sink value per head. The kernel will efficiently replicate this value across all query positions.
-            cu_window_seqlens (ttnn.Tensor, optional): Defaults to `None`. 1D int32/uint32 ROW_MAJOR tensor of cumulative window boundaries [0, w1, w1+w2, ..., s]. When provided, computes block-diagonal (windowed) attention where each token attends only within its window; the mask is built on-device. Non-causal; mutually exclusive with attn_mask/is_causal/sliding_window_size.
+            cu_window_seqlens (ttnn.Tensor, optional): Defaults to `None`. 1D int32/uint32 ROW_MAJOR tensor of cumulative window boundaries [0, w1, w1+w2, ..., s]. When provided, computes block-diagonal (windowed) attention where each token attends only within its window; the mask is built on-device. With `is_causal=False` a token attends to its whole window; with `is_causal=True` token t in window [cu[i], cu[i+1]) attends to cu[i]..t (packed variable-length causal sequences). Mutually exclusive with attn_mask/sliding_window_size.
             windowed_q_token_offset (int): Defaults to `0`. Windowed mode only. Global row index of Q row 0, for a Q holding a contiguous slice of a longer sequence: Q and the output are indexed locally while `cu_window_seqlens` and K/V stay global, so this locates the slice among the windows. Must be a multiple of TILE_HEIGHT, and `offset + Sq` must not exceed `Sk`. Use it to split the Q dimension across devices under sequence parallelism.
             windowed_q_token_offset_tensor (ttnn.Tensor, optional): Defaults to `None`. Windowed mode only. The per-device form of `windowed_q_token_offset`: a 1-element int32/uint32 ROW_MAJOR on-device tensor holding the same global row index; when provided it overrides the scalar. Every device runs the same cached program, so a scalar cannot differ across a mesh -- shard this tensor on the sequence-parallel mesh axis (e.g. `arange(sp) * local_seq_len`) so each device reads its own shard's origin. The scalar's constraints apply to each device's value (a multiple of TILE_HEIGHT; `offset + Sq <= Sk`) but cannot be validated host-side -- they are the caller's responsibility.
             output_concat_heads (bool): Defaults to `False`. Write the heads side by side as [b x 1 x s x nqh*dh] (what `nlp_concat_heads` produces from the default layout) without that op. Plain SDPA only.
@@ -788,7 +788,7 @@ void bind_sdpa(nb::module_& mod) {
         than K and tile aligned. The KV tensor must have one shared KV head.
 
         Args:
-            input_tensor_q (ttnn.Tensor): Queries [b x nqh x N/num_devices x dh].
+            input_tensor_q (ttnn.Tensor): Queries [b x nqh x N/num_devices x dh] (N/S under split KV).
             input_tensor_kv (ttnn.Tensor): Shared KV tensor [b x nkv x N/num_devices x dh].
 
         Keyword args:
@@ -827,10 +827,23 @@ void bind_sdpa(nb::module_& mod) {
 
         Metadata path and cache fold: as ring_joint_scaled_dot_product_attention (see its docstring).
 
+        Split KV (cluster_axis=None only): Q is sequence-sharded over the S devices of mesh axis 0
+        only (heads may be split over axis 1) while KV is sequence-sharded over all R devices;
+        R/S must equal the size of mesh axis 1. Q and the output then hold N/S rows per device.
+        A Q slab of s tiles spans R/S KV regions of s*S/R tiles per global chunk of s*S tiles,
+        laid out block-cyclically: global region g lives on row-major device g % R at local
+        offset (g // R) * region. Attention covers the full causal prefix across all sources.
+        Supported for dense causal chunked prefill only (no balancing, joint tokens, sliding
+        window or circular cache) with fp32_dest_acc_en=False. The gathered KV buffer must hold
+        at least R times the local KV extent, and logical_n must not exceed R times the local
+        KV extent (not the gathered buffer size). Without
+        kv_actual_isl or kv_actual_isl_tensor, logical_n must be a nonzero whole number of
+        global chunks.
+
         Returns:
             (ttnn.Tensor, ttnn.Tensor):
-              - Attention output [b x nqh x N/num_devices x head_dim_v].
-              - Streaming statistics scratch [b x nqh x 2*N/num_devices x 1].
+              - Attention output [b x nqh x N/num_devices x head_dim_v] (N/S rows under split KV).
+              - Streaming statistics scratch [b x nqh x 2*N/num_devices x 1] (2*N/S rows under split KV).
         )doc";
 
     ttnn::bind_function<"ring_mla", "ttnn.transformer.">(

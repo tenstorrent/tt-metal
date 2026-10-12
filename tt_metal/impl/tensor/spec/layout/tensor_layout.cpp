@@ -3,6 +3,7 @@
 // SPDX-License-Identifier: Apache-2.0
 
 #include <tt_stl/fmt.hpp>
+#include <tt_stl/assert.hpp>
 #include <tt-metalium/tensor/spec/layout/tensor_layout.hpp>
 
 #include <tt-metalium/math.hpp>

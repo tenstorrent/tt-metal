@@ -854,8 +854,8 @@ def main() -> None:
         producer._push(
             service,
             payload_bytes,
-            producer._h2d_rows(producer._chunk_slice(pool, actual_start, actual_isl)),
-            producer._mtp_rows(pool, actual_start, actual_isl),
+            producer._h2d_rows(producer._chunk_slice(pool, actual_start, actual_isl), actual_start),
+            producer._mtp_rows(pool, actual_start, actual_isl, actual_end=actual_end),
             producer._pack_metadata(slot_id, actual_start, actual_end),
         )
         return (time.perf_counter() - push_start) * 1000.0

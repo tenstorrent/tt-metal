@@ -1351,6 +1351,20 @@ tests:
       full TL1 latency per access; cached+flush amortizes writes but pays
       ceil(N/64) line flushes.
 
+  918:
+    name: "Quasar Narrow-Row Pack Untilize via IDMA"
+    directory: "quasar_narrow_row"
+    comment: |
+      End-to-end narrow-row pack-untilize on Quasar, which the HW packer cannot do on
+      its own (its untilize output stride is face-granular, and the compute API exposes
+      it only in whole tiles). Stage 1 is the stock whole-tile HW pack_untilize, leaving
+      32 rows padded out to a tile boundary; stage 2 is an iDMA gather that compacts each
+      row to matrix_w = (ct_dim-1)*32 + last_tile_w datums, fanned out over all 8 VCs.
+      EngineParity runs the same shapes through the current workaround (one NOC read per
+      row) so the comparison in the directory README is like-for-like. Correctness only;
+      every shape is checked datum for datum.
+
+
   1012:
     name: "1D Matmul Test 1012 - 2x2 K=2 Subblock K Sweep"
     directory: "matmul"

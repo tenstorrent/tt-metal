@@ -89,8 +89,9 @@ struct MatmulMultiCoreProgramConfig {
 
 // Placement-first config for the Quasar-native matmul (GH#41910): the caller names the clusters and
 // the C slice (in 32x32 tiles) each produces in one go; the factory assigns one batch's C slices to
-// `cores` as contiguous runs. Edge C slices are clipped on read/write, so any M / N works.
-// Limits: one NEO/reader/writer per cluster, no bias/activation/untilize, 32x32 tiles only;
+// `cores` as contiguous runs. Edge C slices are clipped on read/write, so any M / N works. Within a
+// cluster the C slice's subblocks are assigned round-robin to the compute threads (NEOs).
+// Limits: one reader/writer per cluster, no bias/activation/untilize, 32x32 tiles only;
 // sharded output needs batch 1 and one C slice per core.
 struct MatmulUnifiedProgramConfig {
     tt::tt_metal::CoreRangeSet cores;
@@ -105,12 +106,16 @@ struct MatmulUnifiedProgramConfig {
     std::size_t K_chunk_tiles = 0;
     // Subblock: the C slice's tiles accumulated in DST at once; holds <= 8 tiles (4 with fp32
     // accumulation). Need not divide the C slice: it is padded up to subblock multiples and the
-    // overshoot is clipped on write. 0 for both = auto (max-volume subblock).
+    // overshoot is clipped on write. 0 for both = auto: max volume, least padding on ties; with several
+    // compute threads, least work on the busiest thread first.
     std::size_t subblock_M_tiles = 0;
     std::size_t subblock_N_tiles = 0;
     // Order `cores` are walked when handing out C slices: ROW_MAJOR x fastest, COL_MAJOR y fastest. A
     // sharded C gets this shard orientation.
     tt::tt_metal::ShardOrientation orientation = tt::tt_metal::ShardOrientation::ROW_MAJOR;
+    // Compute threads per core (Quasar NEOs running the compute kernel); 1, 2 or 4. 0 = auto: 4 on Quasar,
+    // 1 elsewhere (Wormhole / Blackhole have one compute engine per core).
+    std::size_t num_compute_threads = 0;
 };
 
 using MatmulProgramConfig = std::variant<
