@@ -28,11 +28,13 @@ pytestmark = [skip_for_wormhole, skip_for_quasar]
 class CUSTOM_MM_PERF_FLAGS(TemplateParameter):
     split_acc: bool = False
     group_finalize: bool = True
+    in0_tile_rows: int = 1
 
     def convert_to_cpp(self) -> str:
         return (
             f"constexpr bool SPLIT_ACC = {str(self.split_acc).lower()};\n"
-            f"constexpr bool GROUP_FINALIZE = {str(self.group_finalize).lower()};"
+            f"constexpr bool GROUP_FINALIZE = {str(self.group_finalize).lower()};\n"
+            f"constexpr std::uint32_t IN0_FACE_R_DIM = {self.in0_tile_rows};"
         )
 
 
@@ -97,6 +99,7 @@ def _run_perf_custom_mm(perf_report, in1_format, in0_face_r_dim, call_shape, spl
             CUSTOM_MM_PERF_FLAGS(
                 split_acc=split_acc,
                 group_finalize=in1_format in GROUP_FINALIZE_WEIGHTS,
+                in0_tile_rows=in0_face_r_dim,
             ),
         ],
         runtimes=[

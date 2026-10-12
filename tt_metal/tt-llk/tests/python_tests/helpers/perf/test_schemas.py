@@ -30,6 +30,7 @@ PERF_TEST_SCHEMAS = {
             "group_finalize",
             "in0_face_c_dim",
             "in0_face_r_dim",
+            "in0_tile_rows",
             "in1_face_c_dim",
             "in1_face_r_dim",
             "k_dimm",
