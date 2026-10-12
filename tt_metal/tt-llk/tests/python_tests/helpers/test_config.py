@@ -3095,6 +3095,8 @@ class TestConfig:
             signal_addrs = addrs
 
         completed = set()
+        if os.environ.get("LLK_SIM_LOG"):  # experiment
+            logger.info(f"SIMLOG wait for kernel completion t={time.time():.0f}")
         end_time = time.time() + timeout
         while True:
             # The clock is read before the poll, so a host stall past the deadline still gets one last poll
