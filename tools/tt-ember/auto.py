@@ -86,22 +86,31 @@ def wait_for_file_to_appear(path: Path, timeout_s: float = 5.0) -> bool:
     return path.exists()
 
 
+# Fixed bash script; every path and the command itself arrive as positional arguments, so nothing
+# from the command line is ever parsed as shell code. The app resolves programming-example kernel
+# paths through TT_METAL_HOME, which the venv activation script does not set. exec keeps the
+# process group the one auto.py stops.
+BASH_WRAPPER = (
+    'source "$1" && ' 'export TT_METAL_RUNTIME_ROOT="$2" TT_METAL_HOME="$2" && ' 'cd "$3" && ' "shift 3 && " 'exec "$@"'
+)
+
+
 def build_bash_command(
     command: List[str],
     activate_script: Path,
     runtime_root: Path,
     workdir: Path,
-) -> str:
-    cmd_str = shell_join(command)
-    return (
-        f"source {shlex.quote(str(activate_script))} && "
-        f"export TT_METAL_RUNTIME_ROOT={shlex.quote(str(runtime_root))} && "
-        # The app resolves programming-example kernel paths through TT_METAL_HOME; the venv
-        # activation script does not set it.
-        f"export TT_METAL_HOME={shlex.quote(str(runtime_root))} && "
-        f"cd {shlex.quote(str(workdir))} && "
-        f"{cmd_str}"
-    )
+) -> List[str]:
+    return [
+        "bash",
+        "-lc",
+        BASH_WRAPPER,
+        "bash",
+        str(activate_script),
+        str(runtime_root),
+        str(workdir),
+        *command,
+    ]
 
 
 def start_bash_wrapped_process(
@@ -120,7 +129,7 @@ def start_bash_wrapped_process(
     )
 
     return subprocess.Popen(
-        ["bash", "-lc", bash_cmd],
+        bash_cmd,
         stdout=stdout,
         stderr=stderr,
         text=True,
