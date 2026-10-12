@@ -158,6 +158,10 @@ void run_kernel(RUNTIME_PARAMETERS)
                 }
             }
         }
+        else if constexpr (PERF_RUN_TYPE == PerfRunType::L1_CONGESTION && perf_mock_mop<PERF_RUN_TYPE>() && !unpack_to_dest) // Wormhole: one MOP stream
+        {
+            _perf_math_loop_clear_valid<true, true, PERF_RUN_TYPE>(num_faces * TILE_CNT * LOOP_FACTOR);
+        }
         else if constexpr (PERF_RUN_TYPE == PerfRunType::L1_CONGESTION)
         {
             for (std::uint32_t loop = 0; loop < LOOP_FACTOR; ++loop)
