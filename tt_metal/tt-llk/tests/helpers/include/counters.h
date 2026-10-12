@@ -827,9 +827,16 @@ __attribute__((always_inline)) inline void read_init_end(std::uint32_t (&ts)[2])
 // LLK_INIT_ZONE_END (perf.h): INIT's end in a block that goes on to prepare the loop's data
 inline std::uint32_t init_zone_end_ts[2] = {0, 0};
 
+#if defined(LLK_EXP_SIG_LOOP) // experiment (initpad agent): known INIT work right before the end read, LLK_EXP_SIG_LOOP x (thread + 1) iterations
+#define LLK_EXP_SIG_LOOP_AT_() asm volatile("addi sp, sp, -16\n\tsw t0, 0(sp)\n\tli t0, %0\n1:\n\taddi t0, t0, -1\n\tbnez t0, 1b\n\tlw t0, 0(sp)\n\taddi sp, sp, 16" ::"i"(LLK_EXP_SIG_LOOP * (COMPILE_FOR_TRISC + 1)) : "memory")
+#else
+#define LLK_EXP_SIG_LOOP_AT_() do {} while (0)
+#endif
+
 __attribute__((always_inline)) inline void init_zone_end()
 {
     ckernel::tensix_sync(); // the thread's own init done, as PROFILER_SYNC ends every other INIT
+    LLK_EXP_SIG_LOOP_AT_();
     read_init_end(init_zone_end_ts);
 }
 
@@ -860,6 +867,13 @@ __attribute__((noipa, section(".llk_init_tramp"))) void init_zone(const F& body)
             : "t0", "memory");
         end_lo = ZONE_END ? init_zone_end_ts[0] : init_end_ts[0];
         end_hi = ZONE_END ? init_zone_end_ts[1] : init_end_ts[1];
+#if (defined(LLK_EXP_PROBE_MOP) || defined(LLK_EXP_PROBE_SYNC)) && defined(LLK_TRISC_MATH) // experiment hook (initx): math INIT ends at the probe
+        if (ckernel::llk_exp_probe_ts[0] != 0)
+        {
+            end_lo = ckernel::llk_exp_probe_ts[0];
+            end_hi = ckernel::llk_exp_probe_ts[1];
+        }
+#endif
         if (opened)
         {
             std::uint32_t id; // fixed size lui + addi, after the end read, whatever the id's value
@@ -897,7 +911,9 @@ struct init_measurement_no_zone // START_PERF_MEASURE("INIT") in the INIT measur
 #if defined(LLK_TRISC_MATH)
         ckernel::icache_prefetch_head_start();
 #endif
+        LLK_EXP_MATH_NOP_AT(2); // experiment hook (mathinit): top of INIT's body, after the head start
     }
+
 
     init_measurement_no_zone()
     {
@@ -905,6 +921,8 @@ struct init_measurement_no_zone // START_PERF_MEASURE("INIT") in the INIT measur
 
     ~init_measurement_no_zone() // the end of INIT's body: INIT's end
     {
+        LLK_EXP_MATH_NOP_AT(8); // experiment hook (mathinit): end of INIT's body
+        LLK_EXP_SIG_LOOP_AT_(); // experiment hook (initx): the loop signal right before INIT's end read
         read_init_end(init_end_ts);
     }
 };
