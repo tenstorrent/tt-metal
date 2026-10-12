@@ -98,7 +98,7 @@ void run_kernel(RUNTIME_PARAMETERS params)
         }
         else if constexpr (PERF_RUN_TYPE == PerfRunType::MATH_ISOLATE)
         {
-            _perf_unpack_loop_set_valid<true /*set_a*/, true /*set_b*/>(LOOP_FACTOR * TILE_CNT * reduce_src_dvalids_per_tile(tensor_shape));
+            _perf_unpack_loop_set_valid<true /*set_a*/, true /*set_b*/, PERF_RUN_TYPE>(LOOP_FACTOR * TILE_CNT * reduce_src_dvalids_per_tile(tensor_shape));
         }
         else
         {
@@ -155,7 +155,7 @@ void run_kernel(RUNTIME_PARAMETERS params)
         }
         else if constexpr (PERF_RUN_TYPE == PerfRunType::UNPACK_ISOLATE)
         {
-            _perf_math_loop_clear_valid<true /*clear_a*/, true /*clear_b*/>(LOOP_FACTOR * TILE_CNT * reduce_src_dvalids_per_tile(tensor_shape));
+            _perf_math_loop_clear_valid<true /*clear_a*/, true /*clear_b*/, PERF_RUN_TYPE>(LOOP_FACTOR * TILE_CNT * reduce_src_dvalids_per_tile(tensor_shape));
         }
         else
         {

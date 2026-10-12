@@ -141,7 +141,7 @@ void run_kernel(RUNTIME_PARAMETERS params)
             const std::uint32_t NUM_DVALIDS = _llk_unpack_tilize_num_dvalids_wrapper_(TILE_CNT, TILE_NUM_FACES);
             if constexpr (!unpack_to_dest)
             {
-                _perf_math_loop_clear_valid<true, true>(LOOP_FACTOR * NUM_DVALIDS);
+                _perf_math_loop_clear_valid<true, true, PERF_RUN_TYPE>(LOOP_FACTOR * NUM_DVALIDS);
                 return;
             }
 
