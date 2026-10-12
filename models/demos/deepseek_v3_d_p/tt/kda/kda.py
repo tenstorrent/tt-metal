@@ -18,6 +18,7 @@ from models.demos.deepseek_v3_d_p.tt.kda.config import (
     KDA_CHUNK_SIZE,
     KDA_DECAY_L1_BYTES_PER_CORE,
     KDA_OUTPUT_MEMORY_CONFIG,
+    KDA_PARTIAL_OUTPUT_L1_BYTES_PER_CORE,
     KDA_PROJECTION_L1_BYTES_PER_CORE,
     KDA_QKV_L1_BYTES_PER_CORE,
     KDA_RECURRENT_STATE_DTYPE,
@@ -201,6 +202,16 @@ class ttKDA:
             mesh_device,
             self.active_seq_len_local * tuple(self.weights.input_projection.padded_shape)[-1] * 2,
             KDA_PROJECTION_L1_BYTES_PER_CORE,
+        )
+        # With TP the output projection's partial sums feed only the reduce-scatter; keep them in L1 when they fit.
+        self.partial_output_memory_config = (
+            l1_when_it_fits(
+                mesh_device,
+                self.active_seq_len_local * self.config.hidden_size * 2,
+                KDA_PARTIAL_OUTPUT_L1_BYTES_PER_CORE,
+            )
+            if self.tensor_parallel_size > 1
+            else ttnn.DRAM_MEMORY_CONFIG
         )
         # Only chunk preparation reads the convolution's Q, K and V; keep them in L1 when they fit.
         self.qkv_memory_config = l1_when_it_fits(
@@ -448,7 +459,7 @@ class ttKDA:
         output = ttnn.linear(
             output,
             weights.output_projection,
-            memory_config=ttnn.DRAM_MEMORY_CONFIG,
+            memory_config=self.partial_output_memory_config,
             program_config=self.output_projection_program_config,
             compute_kernel_config=self.output_projection_compute_config,
         )

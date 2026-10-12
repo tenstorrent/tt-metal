@@ -38,6 +38,9 @@ KDA_QKV_L1_BYTES_PER_CORE = 112 * 1024
 # The fused input projection is read in place by five ops through the gated norm; it stays in L1 when it fits
 # (133 KiB per core for Kimi-K3 on Galaxy SP8xTP4).
 KDA_PROJECTION_L1_BYTES_PER_CORE = 144 * 1024
+# The output projection's TP partial sums stay in L1 for the reduce-scatter when they fit (77 KiB per core for
+# Kimi-K3 on Galaxy SP8xTP4).
+KDA_PARTIAL_OUTPUT_L1_BYTES_PER_CORE = 96 * 1024
 KDA_LOCAL_PREFIX_MEMORY_CONFIG = ttnn.L1_MEMORY_CONFIG
 KDA_DISTRIBUTED_PREFIX_MEMORY_CONFIG = ttnn.DRAM_MEMORY_CONFIG
 KDA_DISTRIBUTED_WORKING_MEMORY_CONFIG = ttnn.L1_MEMORY_CONFIG
