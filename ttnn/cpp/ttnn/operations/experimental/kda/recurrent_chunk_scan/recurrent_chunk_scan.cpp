@@ -44,7 +44,7 @@ std::pair<ttnn::MemoryConfig, ttnn::DeviceComputeKernelConfig> resolve_configs(
     auto kernel_config = init_device_compute_kernel_config(
         anchor.device()->arch(),
         compute_kernel_config,
-        MathFidelity::HiFi4,
+        tt::tt_metal::MathFidelity::HiFi4,
         /*default_approx_mode=*/false,
         /*default_fp32_acc=*/true,
         /*default_l1_acc=*/false);

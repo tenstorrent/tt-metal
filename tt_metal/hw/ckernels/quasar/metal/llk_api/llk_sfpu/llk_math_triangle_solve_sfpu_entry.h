@@ -17,7 +17,7 @@ inline constexpr bool triangle_solve_supported_v = false;
 
 inline void llk_math_triangle_solve_sfpu_init() {}
 
-template <DataFormat L_FORMAT, bool L_NEGATED>
+template <DataFormat L_FORMAT, bool L_NEGATED, bool L_CACHED = true>
 inline void llk_math_triangle_solve_sfpu_tile(
     [[maybe_unused]] const std::uint32_t l1_base,
     [[maybe_unused]] const std::uint32_t idst_in,

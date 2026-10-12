@@ -95,14 +95,4 @@ inline void _llk_math_fast_tilize_uninit_([[maybe_unused]] const std::uint32_t u
         TTI_STALLWAIT(p_stall::STALL_CFG, p_stall::MATH | p_stall::WAIT_SFPU);
         cfg_reg_rmw_tensix<ALU_ACC_CTRL_Fp32_enabled_RMW>(1);
     }
-
-    // DEST remap is cleared by pack uninit.
-
-    // Restore standard addr_mod for A2D
-    addr_mod_t {
-        .srca = {.incr = 8},
-        .srcb = {.incr = 0},
-        .dest = {.incr = 8},
-    }
-        .set(ADDR_MOD_2);
 }

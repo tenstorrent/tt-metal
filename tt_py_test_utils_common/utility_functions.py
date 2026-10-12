@@ -487,6 +487,22 @@ def comp_pcc(golden, calculated, pcc=0.99, rtol=1e-05, atol=1e-04):
     golden = torch.Tensor(golden)
     calculated = torch.Tensor(calculated)
 
+    # PCC is undefined for a constant tensor -- every single-element tensor included -- so the
+    # two checks below fall back to allclose. The default rtol is float32-grade; a 16-bit float
+    # carries eps = 2^-7 (bfloat16) or 2^-10 (float16), so a result one ULP from the golden fails
+    # it and is reported as PCC 0.0. Widen only the RELATIVE tolerance to a few ULP of the coarser
+    # 16-bit float on EITHER side -- most callers pass a float32 torch golden against a bfloat16
+    # device result, and the cast below would otherwise hide the 16-bit side -- never below what
+    # the caller asked for. atol stays the caller's: an epsilon is a relative precision, and an
+    # absolute floor of that size would accept wrong small-magnitude results. FP8 and integer
+    # dtypes keep the caller's tolerances unchanged.
+    fallback_rtol = rtol
+    sixteen_bit_eps = [
+        torch.finfo(dtype).eps for dtype in (golden.dtype, calculated.dtype) if dtype in (torch.bfloat16, torch.float16)
+    ]
+    if sixteen_bit_eps:
+        fallback_rtol = max(rtol, 4 * max(sixteen_bit_eps))
+
     if golden.dtype != calculated.dtype:
         calculated = calculated.type(golden.dtype)
 
@@ -503,7 +519,7 @@ def comp_pcc(golden, calculated, pcc=0.99, rtol=1e-05, atol=1e-04):
     # within the caller's tolerances.
     if torch.any(golden.bool()) != torch.any(calculated.bool()):
         logger.warning("One tensor is all zero. PCC undefined; falling back to allclose.")
-        result = torch.allclose(golden, calculated, rtol=rtol, atol=atol)
+        result = torch.allclose(golden, calculated, rtol=fallback_rtol, atol=atol)
         return result, float(result)
 
     golden = torch.squeeze(golden).flatten()
@@ -559,7 +575,7 @@ def comp_pcc(golden, calculated, pcc=0.99, rtol=1e-05, atol=1e-04):
     # Fall back to allclose rather than returning a misleading 1.0.
     if math.isnan(cal_pcc):
         logger.warning("PCC is NaN (zero variance / constant tensor). Falling back to allclose check.")
-        result = torch.allclose(golden, calculated, rtol=rtol, atol=atol)
+        result = torch.allclose(golden, calculated, rtol=fallback_rtol, atol=atol)
         return result, float(result)
 
     return cal_pcc >= pcc, cal_pcc
