@@ -2317,3 +2317,17 @@
   owner_id: U03PUAKE719 # Miguel Tairum Cruz (external bring-up by ign-rahultp)
   team: models
   budget_type: unit
+
+# CI only for #57833 (ESM-2 650M), not for merge: the PR's pytest suite (CPU + device + real-checkpoint e2e).
+- name: "ESM-2 650M tests (CI mirror of #57833)"
+  cmd: >-
+    pytest --timeout 900 -v models/experimental/esm2/tests
+  model: esm2-650m
+  model_family: ESM-2
+  skus:
+    bh_p150:
+      timeout: 15
+      tier: 3
+  owner_id: U03PUAKE719 # Miguel Tairum Cruz (CI mirror of #57833)
+  team: models
+  budget_type: unit
