@@ -151,8 +151,9 @@ inline void _llk_math_eltwise_unary_datacopy_(
         // relative to the 4-tile 32-bit bank (local_tile wraps tiles 4-7 onto 0-3) and selects the bank from this
         // offset, so SyncFull tiles 4-7 clear their own faces. The broadcast sequences add it to their
         // MOVD2B/MOVB2D immediates, which carry only the intra-tile row and issue as compile-time TTI_ instructions.
-        // A plain copy (NONE) skips the write, as on Wormhole, and keeps its per-tile cost unchanged.
-        if constexpr (src_b_bcast_type != BroadcastType::NONE)
+        // A SyncHalf plain copy (NONE) skips the write, as on Wormhole: its tiles all sit in the bank of the current
+        // DEST half, which its inherited offset already selects.
+        if constexpr (src_b_bcast_type != BroadcastType::NONE || Dst == DstSync::SyncFull)
         {
             math::set_dst_write_addr<DstTileShape::Tile32x32, UnpackDestination::SrcRegs>(dst_index);
         }
@@ -271,8 +272,7 @@ inline void _llk_math_eltwise_unary_datacopy_(
         {
             TTI_SETC16(DISABLE_IMPLIED_SRCA_FMT_Base_ADDR32, 0);
 
-            // Restore the bank base for a following 32-bit plain copy, whose ZEROACC runs without programming the offset.
-            // This does not cover a plain copy into SyncFull tiles 4-7: its ZEROACC still clears tiles 0-3.
+            // Restore the bank base for a following SyncHalf 32-bit plain copy, whose ZEROACC runs without programming the offset.
             TT_SETC16(DEST_TARGET_REG_CFG_MATH_Offset_ADDR32, ckernel::get_dest_buffer_base());
 
             // The 32b path manipulated the flag directly above (tt-llk#449 Fp32_enabled dance); invalidate the

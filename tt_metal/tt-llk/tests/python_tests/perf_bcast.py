@@ -20,6 +20,7 @@ from helpers.perf.core import PerfConfig
 from helpers.stimuli_config import StimuliConfig
 from helpers.test_variant_parameters import (
     BROADCAST_TYPE,
+    DEST_SYNC,
     LOOP_FACTOR,
     NUM_BLOCKS,
     NUM_FACES,
@@ -38,7 +39,7 @@ LOOP_FACTOR_VALUE = 32
 
 DEST_ACC = DestAccumulation.Yes
 
-# DEST sync mode for the block split; must match PERF_DEST_SYNC in sources/unpack_bcast_perf.cpp.
+# DEST sync mode of the kernel's math and pack threads and of the block split.
 DEST_SYNC_MODE = DestSync.Half
 
 
@@ -66,7 +67,7 @@ def test_perf_unpack_bcast(perf_report, formats, broadcast_type):
         "sources/unpack_bcast_perf.cpp",
         formats,
         run_types=[PerfRunType.L1_TO_L1],
-        templates=[BROADCAST_TYPE(broadcast_type)],
+        templates=[BROADCAST_TYPE(broadcast_type), DEST_SYNC(DEST_SYNC_MODE)],
         runtimes=[
             NUM_FACES(FACES_PER_TILE),
             TILE_COUNT(NUM_TILES),

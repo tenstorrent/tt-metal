@@ -19,9 +19,6 @@ std::uint32_t unp_cfg_context          = 0;
 std::uint32_t pack_sync_tile_dst_ptr   = 0;
 std::uint32_t math_sync_tile_dst_index = 0;
 
-// DEST sync mode of the math and pack threads; must match DEST_SYNC_MODE in perf_bcast.py, which sizes the blocks.
-constexpr ckernel::DstSync PERF_DEST_SYNC = ckernel::DstSync::SyncHalf;
-
 #ifdef LLK_TRISC_UNPACK
 
 #include "llk_unpack_A.h"
@@ -98,16 +95,16 @@ void run_kernel(RUNTIME_PARAMETERS params)
     const std::uint32_t NUM_TILES_IN_BLOCK = params.NUM_TILES_IN_BLOCK;
 #endif
 
-    constexpr DstSync sync_mode = PERF_DEST_SYNC;
+    constexpr DstSync sync_mode = dest_sync;
     // Unpack-to-dest leaves the tile in DEST, so math broadcasts it in place on the A2D path.
     constexpr DataCopyType copy_type = (BROADCAST_TYPE == BroadcastType::NONE || unpack_to_dest) ? DataCopyType::A2D : DataCopyType::B2D;
 
     {
         START_PERF_MEASURE("INIT")
+        _llk_math_hw_configure_<is_fp32_dest_acc_en>(formats.math, formats.math);
         _llk_math_eltwise_unary_datacopy_init_wrapper_<copy_type, is_fp32_dest_acc_en, BROADCAST_TYPE, is_int_fpu_en, PackMode::Default>(
             num_faces, formats.math);
         _llk_math_pack_sync_init_<sync_mode, is_fp32_dest_acc_en>();
-        _llk_math_hw_configure_<is_fp32_dest_acc_en>(formats.math, formats.math);
         PROFILER_SYNC();
     }
     {
@@ -154,7 +151,7 @@ void run_kernel(RUNTIME_PARAMETERS params)
     const Operand& buffer_Res              = params.buffer_Res;
 #endif
 
-    constexpr DstSync sync_mode = PERF_DEST_SYNC;
+    constexpr DstSync sync_mode = dest_sync;
 
     {
         START_PERF_MEASURE("INIT")
