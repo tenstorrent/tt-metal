@@ -79,7 +79,7 @@ static_assert(sizeof(PerfCounter) == sizeof(std::uint64_t) * 2, "PerfCounter mus
 #include <utility>
 
 #include "core_config.h"
-#include "kernel_profiler.hpp"
+#include "api/debug/kernel_profiler.hpp"
 
 // The Quasar DM firmware has a 2 KB RW data region and its linker script folds .rodata into it; the constant
 // tables go to the 12 KB text region instead (the shared headers honour LLK_PERF_TABLES_IN_TEXT).

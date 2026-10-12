@@ -47,7 +47,7 @@ void validate_packet_size(tt::ARCH arch, size_t packet_size, uint32_t page_size)
     // tt_metal/fabric/erisc_datamover_builder.hpp
     constexpr size_t max_packet_payload_wormhole = 7616;
     constexpr size_t max_packet_payload_blackhole = 15232;
-    // NOC_SCATTER_WRITE_MAX_CHUNKS in tt_metal/fabric/fabric_edm_packet_header.hpp
+    // NOC_SCATTER_WRITE_MAX_CHUNKS in tt_metal/hw/inc/hostdev/fabric_edm_packet_header.hpp
     constexpr size_t max_scatter_write_chunks = 4;
 
     if (page_size == 0) {
