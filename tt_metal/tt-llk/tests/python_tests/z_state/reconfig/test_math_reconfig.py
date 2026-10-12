@@ -9,9 +9,8 @@ from helpers.llk_params import (
 )
 from helpers.param_config import parametrize
 from helpers.reconfig_formats import (
-    configured_key,
-    kernel_visible_key,
-    kernel_visible_variants,
+    assert_kernel_visible,
+    kernel_visible_parameters,
 )
 from helpers.tensix import TensixState
 from helpers.test_config import TestConfig
@@ -47,29 +46,25 @@ def get_valid_dest_acc(
     )
 
 
-_VARIANTS = kernel_visible_variants(
-    generate_valid_formats(
-        [
-            DataFormat.Float16,
-            DataFormat.Float16_b,
-            DataFormat.Bfp8,
-            DataFormat.Bfp8_b,
-            DataFormat.Float32,
-            DataFormat.Int32,
-            DataFormat.Tf32,
-            DataFormat.UInt32,
-            DataFormat.UInt16,
-            DataFormat.Int8,
-            DataFormat.UInt8,
-        ]
-    ),
-    get_valid_dest_acc,
-)
-
-
 @parametrize(
-    formats=list(_VARIANTS),
-    dest_acc=lambda formats: _VARIANTS[formats],
+    **kernel_visible_parameters(
+        generate_valid_formats(
+            [
+                DataFormat.Float16,
+                DataFormat.Float16_b,
+                DataFormat.Bfp8,
+                DataFormat.Bfp8_b,
+                DataFormat.Float32,
+                DataFormat.Int32,
+                DataFormat.Tf32,
+                DataFormat.UInt32,
+                DataFormat.UInt16,
+                DataFormat.Int8,
+                DataFormat.UInt8,
+            ]
+        ),
+        get_valid_dest_acc,
+    )
 )
 def test_math_reconfig(
     formats,
@@ -90,7 +85,7 @@ def test_math_reconfig(
         ],
         dest_acc=dest_acc,
     )
-    assert configured_key(configuration) == kernel_visible_key(formats, dest_acc)
+    assert_kernel_visible(configuration, formats, dest_acc)
 
     configuration.run()
     expected = TensixState.fetch(TestConfig.TENSIX_LOCATION)

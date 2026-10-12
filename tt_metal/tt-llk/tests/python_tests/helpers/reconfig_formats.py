@@ -9,7 +9,7 @@ variants build the same kernel with the same runtime formats. Keeping one varian
 per kernel-visible key drops only exact duplicates.
 """
 
-from typing import Callable, Hashable
+from typing import Any, Callable, Hashable
 
 from helpers.chip_architecture import ChipArchitecture, get_chip_architecture
 from helpers.data_format_inference import data_formats, effective_dest_acc
@@ -77,3 +77,22 @@ def kernel_visible_variants(
             seen.add(key)
             variants.setdefault(formats, []).append(dest_acc)
     return variants
+
+
+def kernel_visible_parameters(
+    formats_list: list[ReconfigFormats],
+    get_dest_acc: Callable[[ReconfigFormats], list[DestAccumulation]],
+) -> dict[str, Any]:
+    """``parametrize`` arguments for the ``kernel_visible_variants`` of ``formats_list``."""
+    variants = kernel_visible_variants(formats_list, get_dest_acc)
+    return {
+        "formats": list(variants),
+        "dest_acc": lambda formats: variants[formats],
+    }
+
+
+def assert_kernel_visible(
+    configuration: TestConfig, formats: ReconfigFormats, dest_acc: DestAccumulation
+):
+    """Fail if ``TestConfig`` inference drifted from ``kernel_visible_key``."""
+    assert configured_key(configuration) == kernel_visible_key(formats, dest_acc)

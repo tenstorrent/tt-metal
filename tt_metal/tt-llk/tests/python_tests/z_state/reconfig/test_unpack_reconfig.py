@@ -118,7 +118,7 @@ def test_unpack_reconfig(
 
     configuration.run()
     expected = TensixState.fetch(TestConfig.TENSIX_LOCATION)
-    if TensixState.has_gprs(expected):
+    if not TestConfig.TEST_TARGET.run_simulator:
         # Both reconfig paths store the tile size in the unpack thread's tile-size GPRs.
         assert expected["gpr"][TensixThread.UNPACK]["tile_size_a"] == NEXT_TILE_SIZE
         assert expected["gpr"][TensixThread.UNPACK]["tile_size_b"] == NEXT_TILE_SIZE

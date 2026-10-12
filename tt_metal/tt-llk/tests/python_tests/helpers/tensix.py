@@ -108,11 +108,18 @@ class TensixState:
     def _dump_gprs(cls, location: str) -> dict[tuple[int, int], int]:
         # ttexalens reads GPRs by halting BRISC, which hangs it; BRISC copies them to L1 instead.
         # Only reached on silicon: fetch returns before this on the simulator.
+        dump_address = device_module.Mailboxes.Unpacker.value - GPR_DUMP_BYTES
+        device_print_end = (
+            TestConfig.DEVICE_PRINT_BUFFER_BASE + TestConfig.DEVICE_PRINT_BUFFER_SIZE
+        )
+        if dump_address < device_print_end:
+            raise RuntimeError(
+                f"BRISC GPR dump at {dump_address:#x} overlaps the device print buffer "
+                f"(ends at {device_print_end:#x})"
+            )
         commit_brisc_command(location, BriscCmd.DUMP_GPRS)
         words = read_words_from_device(
-            location,
-            device_module.Mailboxes.Unpacker.value - GPR_DUMP_BYTES,
-            word_count=GPR_DUMP_WORDS,
+            location, dump_address, word_count=GPR_DUMP_WORDS
         )
         return {
             (thread, index): words[thread * GPRS_PER_THREAD + index]

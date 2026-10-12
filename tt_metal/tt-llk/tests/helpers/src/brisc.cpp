@@ -38,8 +38,11 @@ static const mailbox_t brisc_counter        = mailboxes_arr + 5;
 static const mailbox_t brisc_bread0 = mailboxes_arr + 6;
 static const mailbox_t brisc_bread1 = mailboxes_arr + 7;
 
-// Tensix GPR snapshot: 3 threads x 64 GPRs, laid out as REGFILE_BASE + (thread * 64 + index) * 4,
-// placed directly below the mailboxes. The host reads it over NoC, so BRISC never has to be halted.
+// Tensix GPR snapshot: 3 threads x 64 GPRs, laid out as REGFILE_BASE + (thread * 64 + index) * 4.
+// It takes the 768 B directly below the mailboxes (0x1FCB8, or 0x6DCB8 under COVERAGE), above the device
+// print buffer (TestConfig.DEVICE_PRINT_BUFFER_BASE + DEVICE_PRINT_BUFFER_SIZE = 0x19000) and below
+// RUNTIME_ARGS_START; no region in tests/helpers/ld/memory.{wormhole,blackhole}.ld covers it.
+// The host reads it over NoC, so BRISC never has to be halted.
 // Must match GPR_DUMP_WORDS and its read address in tests/python_tests/helpers/tensix.py.
 constexpr std::uint32_t GPRS_PER_THREAD = 64;
 constexpr std::uint32_t TENSIX_THREADS  = 3;
