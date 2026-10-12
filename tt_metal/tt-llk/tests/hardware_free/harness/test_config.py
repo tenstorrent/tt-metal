@@ -270,3 +270,117 @@ def test_init_share_key_of_an_unlisted_source_keeps_every_line():
     assert init_share_key(source, [], header) != init_share_key(
         source, [], header.replace("= 2", "= 4")
     )
+
+
+# --------------------------------------------------------------------------- #
+# Wormhole perf builds place the functions a TILE_LOOP window runs (test_config.py assembly passes, sections.ld).
+# --------------------------------------------------------------------------- #
+
+# GCC's shape: bar before the TILE_LOOP park, foo (calling baz) in the window, patchable entry NOPs ahead of two entries
+_KERNEL_ASM = """\t.text
+\t.align\t2
+\t.globl\t_Z3bari
+\t.section\t__patchable_function_entries,"awo",@progbits,.LPFE0
+\t.align\t2
+\t.4byte\t.LPFE0
+\t.text
+.LPFE0:
+\tnop
+\t.type\t_Z3bari, @function
+_Z3bari:
+\tret
+\t.size\t_Z3bari, .-_Z3bari
+\t.align\t2
+\t.globl\t_Z3bazi
+\t.type\t_Z3bazi, @function
+_Z3bazi:
+\tret
+\t.size\t_Z3bazi, .-_Z3bazi
+\t.align\t2
+\t.globl\t_Z3fooi
+\t.type\t_Z3fooi, @function
+_Z3fooi:
+\tcall\t_Z3bazi
+\tret
+\t.size\t_Z3fooi, .-_Z3fooi
+\t.section\t.text.run_kernel,"ax",@progbits
+\t.align\t11
+\t.globl\t_Z10run_kernelRK13RuntimeParams
+\t.section\t__patchable_function_entries,"awo",@progbits,.LPFE1
+\t.align\t2
+\t.4byte\t.LPFE1
+\t.section\t.text.run_kernel
+.LPFE1:
+\tnop
+\t.type\t_Z10run_kernelRK13RuntimeParams, @function
+_Z10run_kernelRK13RuntimeParams:
+\tcall\t_Z3bari
+ #APP
+\tllk_park 1, 0, 0, 1024, 0
+ #NO_APP
+.L2:
+\tcall\t_Z3fooi
+\tbnez\ta0,.L2
+ #APP
+\tllk_park 0, 0, 0, 1024, 0
+ #NO_APP
+\tcall\t_Z3bari
+\tret
+\t.size\t_Z10run_kernelRK13RuntimeParams, .-_Z10run_kernelRK13RuntimeParams
+"""
+
+
+def _placement(text):
+    """({function or NOP label: section}, whether each slot opens right before its function's label)"""
+    from helpers.test_config import _asm_functions
+
+    lines = text.split("\n")
+    functions, sections = _asm_functions(lines)
+    where = {name: f[3] for name, f in functions.items()}
+    where.update(
+        {l[:-1]: sections[i] for i, l in enumerate(lines) if l.startswith(".LPFE")}
+    )
+    slots = [
+        f[1] for f in functions.values() if f[3].startswith(".text.llk_loop_callee")
+    ]
+    starts = all(
+        lines[label - 2].startswith("\t.pushsection\t.text.llk_loop_callee")
+        for label in slots
+    )
+    return where, starts
+
+
+# the out of line INIT threads' parks (barrier.h): the TILE_LOOP one pads by llk_loop_pad, the others do not
+_OOL_PARKS = {
+    "\tllk_park 1, 0, 0, 1024, 0": "\t.word 0x00100073\n.rept (llk_loop_pad / 4) * 1",
+    "\tllk_park 0, 0, 0, 1024, 0": "\t.word 0x00100073\n.rept (llk_loop_pad / 4) * 0",
+}
+
+
+@pytest.mark.parametrize("ool", [False, True], ids=["inline-init", "ool-init"])
+def test_tile_loop_window_callees_get_slots_and_the_rest_follows_the_libraries(ool):
+    from helpers.test_config import _loop_callees_in_slot, _text_after_libraries
+
+    text = _KERNEL_ASM
+    for park, ool_park in _OOL_PARKS.items() if ool else ():
+        text = text.replace(park, ool_park)
+    where, starts = _placement(_text_after_libraries(_loop_callees_in_slot(text)))
+    assert where["_Z3fooi"] == ".text.llk_loop_callee._Z3fooi"
+    assert (
+        where["_Z3bazi"] == ".text.llk_loop_callee._Z3bazi"
+    )  # called by a window callee
+    assert (
+        where["_Z3bari"] == ".llk_text_rest"
+    )  # run only before the park and after the next one
+    assert where["_Z10run_kernelRK13RuntimeParams"] == ".text.run_kernel"
+    # entry NOPs: the unplaced function keeps its NOP ahead of it, a placed one's leaves its section
+    assert where[".LPFE0"] == where[".LPFE1"] == ".llk_text_rest"
+    assert starts
+
+
+def test_init_build_keeps_the_kernel_text_order():
+    from helpers.test_config import _text_after_libraries
+
+    where, _ = _placement(_text_after_libraries(_KERNEL_ASM, rest=False))
+    assert where["_Z3bari"] == where[".LPFE0"] == ".text"
+    assert where[".LPFE1"] == ".llk_text_rest"
