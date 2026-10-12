@@ -1,0 +1,2 @@
+perf_sfpu_reduce.py::test_perf_sfpu_reduce[formats:Int32->Int32-dest_acc:Yes-mathop:ReduceColumn-reduce_pool:Sum-tile_count:1-loop_factor:16]
+perf_sfpu_reduce.py::test_perf_sfpu_reduce[formats:Int32->Int32-dest_acc:Yes-mathop:ReduceColumn-reduce_pool:Sum-tile_count:1-loop_factor:128]
