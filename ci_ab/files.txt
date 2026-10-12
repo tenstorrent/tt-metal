@@ -1,0 +1,10 @@
+tt_metal/tt-llk/tests/python_tests/helpers/test_variant_parameters.py
+tt_metal/tt-llk/tests/python_tests/test_eltwise_binary.py
+tt_metal/tt-llk/tests/sources/eltwise_binary_test.cpp
+tt_metal/tt-llk/tt_llk_blackhole/common/inc/cpack_common.h
+tt_metal/tt-llk/tt_llk_blackhole/llk_lib/llk_defs.h
+tt_metal/tt-llk/tt_llk_blackhole/llk_lib/llk_math_common.h
+tt_metal/tt-llk/tt_llk_blackhole/llk_lib/llk_math_eltwise_binary.h
+tt_metal/tt-llk/tt_llk_blackhole/llk_lib/llk_pack_common.h
+tt_metal/tt-llk/tt_llk_blackhole/llk_lib/llk_unpack_A.h
+tt_metal/tt-llk/tt_llk_blackhole/llk_lib/llk_unpack_AB.h
