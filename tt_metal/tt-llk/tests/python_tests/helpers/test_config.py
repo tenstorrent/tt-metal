@@ -1351,8 +1351,15 @@ class TestConfig:
 
         return struct.pack(self.runtime_format, *argument_data)
 
-    def write_runtimes_to_L1(self):
+    def write_runtimes_to_L1(self, release_phase=None):
         serialised_data = self.runtime_arguments_bytes()
+        if self._wormhole_perf_barrier() and not TestConfig.WITH_COVERAGE:
+            # BRISC reads the TILE_LOOP start phase from the runtime arguments' last 16 bytes (perf/phases.py)
+            from .perf.phases import CANONICAL_PHASE, with_release_phase
+
+            serialised_data = with_release_phase(
+                serialised_data, release_phase or CANONICAL_PHASE
+            )
         if len(serialised_data) != 0:
             if TestConfig.WITH_COVERAGE:
                 write_to_device(
