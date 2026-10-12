@@ -39,7 +39,9 @@ Done:
 - P4 fused DQ2 for 1×64 / 1×128 in post_combine_reduce (removes a 406 µs standalone dequant; PCR 174 → 71 µs).
 - P1 `FAST_BLOCK4`: 1×128 on the fast quantize path (per-tile SFPU row max of |x|, fold of the 4 tiles' maxima + pow2
   in DEST, one 1/scale tile per chunk); Q2 88 → 70 µs; Q1 unchanged at 39 µs (near its byte floor).
-- P5 / G5: fp8 1×128 with the 320-token hybrid threshold passes PCC (0.986425 trunc).
+- P5 / G5: fp8 1×128 with the 320-token hybrid threshold passes PCC (0.986425 trunc, 0.987759 RNE).
+- G2: Q1 39 µs vs 35 µs for a bf16→bf8 typecast of the same tensor (same bytes, 1.1×); Q2 70 µs ≈ 33 MB moved
+  (~470 GB/s, at the LB's copy rates). G3 (DQ1 bf8 tiles, 71 µs) and G4 (PCR fp8 71 < bf16 97 µs) met.
 - P6: 1×32 and 1×128 give identical PCC on this test (same pow2 buckets); the gap to bf16 was truncation — RNE closes
   it to 0.0004 for ~3 µs per Q (`MOE_FP8_RNE=auto` → on for 1×128).
 - Combine fix found on the way: the pipelined sender sent a row into one EDM slot, which overruns a slot when the row is
