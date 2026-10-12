@@ -14,7 +14,7 @@
   skus:
     wh_n150_civ2:
       timeout: 60
-  owner_id: TODO # Nikola Stamatovic
+  owner_id: U092BPMFUJU # Nikola Stamatovic
 
 - name: llk_sfpu_report_blackhole
   split_group: 1
@@ -26,4 +26,4 @@
   skus:
     bh_p150b_civ2:
       timeout: 60
-  owner_id: TODO # Nikola Stamatovic
+  owner_id: U092BPMFUJU # Nikola Stamatovic
