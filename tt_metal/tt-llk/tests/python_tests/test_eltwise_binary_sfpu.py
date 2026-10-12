@@ -26,8 +26,10 @@ from helpers.llk_params import BroadcastType as LlkBroadcastType
 from helpers.llk_params import (
     DestAccumulation,
     DestSync,
+    DstRoundingMode,
     MathOperation,
     PerfRunType,
+    SfpuMulImpl,
     format_dict,
 )
 from helpers.param_config import (
@@ -64,6 +66,8 @@ from helpers.test_variant_parameters import (
     NUM_FACES,
     NUM_TILES_IN_BLOCK,
     SFPU_BCAST_DIM,
+    SFPU_DST_ROUNDING_MODE,
+    SFPU_MUL_IMPL,
     TILE_COUNT,
     generate_input_dim,
 )
@@ -455,6 +459,8 @@ def sfpu_binary(
     loop_factor=1,
     iterations=32,
     approx_mode=ApproximationMode.No,
+    dst_rounding_mode=DstRoundingMode.Default,
+    mul_kernel=SfpuMulImpl.Generic,
 ):
     """*unspecified_nonfinite_sign* compares a non-finite result by magnitude only.
 
@@ -594,6 +600,8 @@ def sfpu_binary(
             ITERATIONS(iterations),
             BROADCAST_TYPE(bcast),
             SFPU_BCAST_DIM(LlkBroadcastType.None_),
+            SFPU_DST_ROUNDING_MODE(dst_rounding_mode),
+            SFPU_MUL_IMPL(mul_kernel),
         ],
         "runtimes": [
             TILE_COUNT(tile_cnt_A),
@@ -1674,6 +1682,8 @@ def _run_sfpu_add_top_row(
             ITERATIONS(iterations),
             BROADCAST_TYPE(LlkBroadcastType.None_),
             SFPU_BCAST_DIM(LlkBroadcastType.None_),
+            SFPU_DST_ROUNDING_MODE(),
+            SFPU_MUL_IMPL(),
         ],
         "runtimes": [
             TILE_COUNT(tile_cnt_A),

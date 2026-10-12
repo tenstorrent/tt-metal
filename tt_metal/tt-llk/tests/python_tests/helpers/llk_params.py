@@ -535,6 +535,18 @@ class DstRoundingMode(Enum):
         return f"ckernel::DstRoundingMode::{self.value}"
 
 
+class SfpuMulImpl(Enum):
+    """Which WH/BH multiply kernel a binary SFPU perf row measures.
+
+    Generic is calculate_sfpu_binary, the kernel Quasar production runs and the
+    cross-arch join uses. Production is calculate_sfpu_binary_mul, the kernel
+    mul_binary_tile dispatches on Wormhole and Blackhole.
+    """
+
+    Generic = "Generic"
+    Production = "Production"
+
+
 class Transpose(Enum):
     Yes = True
     No = False

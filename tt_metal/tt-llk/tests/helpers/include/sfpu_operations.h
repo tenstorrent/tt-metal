@@ -1105,13 +1105,7 @@ void call_unary_sfpu_operation(std::uint32_t dst_index, std::uint32_t math_forma
     }
     else if constexpr (OPERATION == SfpuType::square)
     {
-        SFPU_UNARY_CALL(
-            DST_SYNC_MODE,
-            DST_ACCUM_MODE,
-            calculate_square,
-            (APPROX_MODE, is_fp32_dest_acc_en, ITERATIONS),
-            dst_index,
-            vector_mode);
+        SFPU_UNARY_CALL(DST_SYNC_MODE, DST_ACCUM_MODE, calculate_square, (APPROX_MODE, is_fp32_dest_acc_en, ITERATIONS), dst_index, vector_mode);
     }
     else if constexpr (OPERATION == SfpuType::signbit)
     {
@@ -1222,13 +1216,7 @@ void call_unary_sfpu_operation(std::uint32_t dst_index, std::uint32_t math_forma
         constexpr std::uint32_t RELU_MAX_THRESHOLD_BITS = 0x40A00000u; // 5.0f
 #endif
         SFPU_UNARY_CALL(
-            DST_SYNC_MODE,
-            DST_ACCUM_MODE,
-            _relu_max_,
-            (sfpi::vFloat, APPROX_MODE, ITERATIONS, std::uint32_t),
-            dst_index,
-            vector_mode,
-            RELU_MAX_THRESHOLD_BITS);
+            DST_SYNC_MODE, DST_ACCUM_MODE, _relu_max_, (sfpi::vFloat, APPROX_MODE, ITERATIONS, std::uint32_t), dst_index, vector_mode, RELU_MAX_THRESHOLD_BITS);
     }
     else if constexpr (OPERATION == SfpuType::relu_min)
     {
@@ -1885,7 +1873,15 @@ constexpr SfpuType get_binary_comp_sfpu_type()
  * the SFPU_BINARY_CALL / _sfpu_binary_check_ convention) so the dst-bound
  * LLK_ASSERTs run against the kernel's actual sync/accumulation mode.
  */
-template <DstSync DST_SYNC_MODE, bool DST_ACCUM_MODE, bool APPROXIMATION_MODE, BinaryOp BINOP, int ITERATIONS = 32, std::uint32_t MATH_FORMAT = 0>
+template <
+    DstSync DST_SYNC_MODE,
+    bool DST_ACCUM_MODE,
+    bool APPROXIMATION_MODE,
+    BinaryOp BINOP,
+    int ITERATIONS                        = 32,
+    std::uint32_t MATH_FORMAT             = 0,
+    ckernel::DstRoundingMode DST_ROUNDING = ckernel::DstRoundingMode::Default,
+    bool PRODUCTION_MUL                   = false>
 void call_binary_sfpu_operation(
     const std::uint32_t dst_index_in0 = 0,
     const std::uint32_t dst_index_in1 = 1,
@@ -1950,6 +1946,21 @@ void call_binary_sfpu_operation(
             dst_index_out,
             vector_mode);
     }
+    else if constexpr (BINOP == BinaryOp::MUL && PRODUCTION_MUL)
+    {
+        // mul_binary_tile on WH/BH. The generic calculate_sfpu_binary MUL arm
+        // stays available when PRODUCTION_MUL is false so the Quasar join does
+        // not change kernel.
+        SFPU_BINARY_CALL(
+            DST_SYNC_MODE,
+            DST_ACCUM_MODE,
+            calculate_sfpu_binary_mul,
+            (APPROXIMATION_MODE, BINOP, PER_FACE_ITERATIONS, DST_ACCUM_MODE),
+            dst_index_in0,
+            dst_index_in1,
+            dst_index_out,
+            vector_mode);
+    }
     else if constexpr (
         BINOP == BinaryOp::ADD || BINOP == BinaryOp::SUB || BINOP == BinaryOp::MUL || BINOP == BinaryOp::RSUB || BINOP == BinaryOp::XLOGY ||
         BINOP == BinaryOp::POW)
@@ -1987,7 +1998,7 @@ void call_binary_sfpu_operation(
                 DST_SYNC_MODE,
                 DST_ACCUM_MODE,
                 calculate_sfpu_binary,
-                (APPROXIMATION_MODE, BINOP, PER_FACE_ITERATIONS, DST_ACCUM_MODE),
+                (APPROXIMATION_MODE, BINOP, PER_FACE_ITERATIONS, DST_ACCUM_MODE, DST_ROUNDING),
                 dst_index_in0,
                 dst_index_in1,
                 dst_index_out,
