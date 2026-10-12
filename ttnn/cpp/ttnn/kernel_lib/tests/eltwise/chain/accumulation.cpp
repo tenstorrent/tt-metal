@@ -73,20 +73,21 @@ void kernel_main() {
             TileAddressing::Direct,
             DestAccumulation::WholeShape)>;
 
-        DataflowBuffer output_buffer(cb_out);
+        CircularBuffer output_buffer(cb_out);
+        DataflowBuffer output_buffer_dfb(cb_out);  // chain-side handle for the same buffer
         if constexpr (whole_shape) {
             if constexpr (caller_managed) {
                 output_buffer.reserve_back(1);
                 eltwise_chain(
                     IterationShape::grid(num_outputs, n).block_size(block_size),
                     WholeShapeAccumulate{cb_a_obj, cb_b_obj},
-                    WholeShapeCallerPack{output_buffer});
+                    WholeShapeCallerPack{output_buffer_dfb});
                 output_buffer.push_back(1);
             } else {
                 eltwise_chain(
                     IterationShape::grid(num_outputs, n).block_size(block_size),
                     WholeShapeAccumulate{cb_a_obj, cb_b_obj},
-                    WholeShapeManagedPack{output_buffer});
+                    WholeShapeManagedPack{output_buffer_dfb});
             }
         } else {
             if constexpr (caller_managed) {
@@ -94,13 +95,13 @@ void kernel_main() {
                 eltwise_chain(
                     IterationShape::grid(num_outputs, n).block_size(block_size),
                     PerRowAccumulate{cb_a_obj, cb_b_obj},
-                    PerRowCallerPack{output_buffer});
+                    PerRowCallerPack{output_buffer_dfb});
                 output_buffer.push_back(num_outputs);
             } else {
                 eltwise_chain(
                     IterationShape::grid(num_outputs, n).block_size(block_size),
                     PerRowAccumulate{cb_a_obj, cb_b_obj},
-                    PerRowManagedPack{output_buffer});
+                    PerRowManagedPack{output_buffer_dfb});
             }
         }
     } else {
@@ -111,7 +112,8 @@ void kernel_main() {
         compute_kernel_hw_startup(cb_in, cb_acc);
 
         DataflowBuffer cb_in_obj(cb_in);
-        DataflowBuffer accumulator(cb_acc);
+        CircularBuffer accumulator(cb_acc);
+        DataflowBuffer accumulator_dfb(cb_acc);  // chain-side handle for the same buffer
         DataflowBuffer cb_out_obj(cb_out);
         using ManagedPack = PackTile<output(
             cb_acc,
@@ -136,16 +138,16 @@ void kernel_main() {
                 IterationShape::tiles(n),
                 CopyTile<input(cb_in, WaitPolicy::PerTile, PopPolicy::PerTile, DataFormatReconfig::Disabled)>{
                     cb_in_obj},
-                CallerPack{accumulator});
+                CallerPack{accumulator_dfb});
             accumulator.push_back(1);
         } else {
             eltwise_chain(
                 IterationShape::tiles(n),
                 CopyTile<input(cb_in, WaitPolicy::PerTile, PopPolicy::PerTile, DataFormatReconfig::Disabled)>{
                     cb_in_obj},
-                ManagedPack{accumulator});
+                ManagedPack{accumulator_dfb});
         }
         eltwise_chain(
-            IterationShape::one_tile(), CopyTile<input(cb_acc)>{accumulator}, PackTile<output(cb_out)>{cb_out_obj});
+            IterationShape::one_tile(), CopyTile<input(cb_acc)>{accumulator_dfb}, PackTile<output(cb_out)>{cb_out_obj});
     }
 }

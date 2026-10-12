@@ -59,9 +59,11 @@ void kernel_main() {
     constexpr uint32_t out_cb = get_compile_time_arg_val(7);
     constexpr uint32_t num_rows = get_compile_time_arg_val(8);
 
-    DataflowBuffer cb_in(in_cb);
+    CircularBuffer cb_in(in_cb);
+    DataflowBuffer cb_in_dfb(in_cb);  // chain-side handle for the same buffer
     CircularBuffer cb_trans_mat(trans_mat_cb);
-    DataflowBuffer cb_rotated_in_interm(rotated_in_interm_cb);
+    CircularBuffer cb_rotated_in_interm(rotated_in_interm_cb);
+    DataflowBuffer cb_rotated_in_interm_dfb(rotated_in_interm_cb);  // chain-side handle for the same buffer
     DataflowBuffer cb_cos_interm(cos_interm_cb);
     DataflowBuffer cb_sin_interm(sin_interm_cb);
     DataflowBuffer cb_out(out_cb);
@@ -118,12 +120,13 @@ void kernel_main() {
         // sin_interim = rotated * sin  (chain waits+pops rotated_in_interm_cb; sin held/streamed per mode)
         mul<input(rotated_in_interm_cb),
             input(updated_sin_cb, trig_bcast, WaitPolicy::PerTile, trig_pop),
-            output(sin_interm_cb)>(IterationShape::tiles(onetile), cb_rotated_in_interm, cb_updated_sin, cb_sin_interm);
+            output(sin_interm_cb)>(
+            IterationShape::tiles(onetile), cb_rotated_in_interm_dfb, cb_updated_sin, cb_sin_interm);
 
         // cos_interim = in * cos
         mul<input(in_cb, WaitPolicy::None, PopPolicy::PerTile),
             input(updated_cos_cb, trig_bcast, WaitPolicy::PerTile, trig_pop),
-            output(cos_interm_cb)>(IterationShape::tiles(onetile), cb_in, cb_updated_cos, cb_cos_interm);
+            output(cos_interm_cb)>(IterationShape::tiles(onetile), cb_in_dfb, cb_updated_cos, cb_cos_interm);
 
         // out = cos_interim + sin_interim
         add<input(cos_interm_cb), input(sin_interm_cb), output(out_cb)>(

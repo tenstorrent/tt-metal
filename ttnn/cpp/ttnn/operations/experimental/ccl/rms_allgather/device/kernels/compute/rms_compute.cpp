@@ -73,11 +73,13 @@ void kernel_main() {
     constexpr uint32_t cb_x2 = cb_x;  // x^2
 
 #ifdef FUSE_PRE_ADD
+    CircularBuffer cb_in_obj(cb_in);
     DataflowBuffer cb_in0_obj(cb_in0);
     DataflowBuffer cb_in1_obj(cb_in1);
 #endif
-    DataflowBuffer cb_in_obj(cb_in);
-    DataflowBuffer cb_x2_obj(cb_x2);
+    DataflowBuffer cb_in_dfb(cb_in);  // chain-side handle for the same buffer
+    CircularBuffer cb_x2_obj(cb_x2);
+    DataflowBuffer cb_x2_dfb(cb_x2);  // chain-side handle for the same buffer
     CircularBuffer cb_scaler_obj(cb_scaler);
     CircularBuffer cb_ex_partial2_obj(cb_ex_partial2);
     CircularBuffer cb_signaling(signaling_cb);
@@ -95,7 +97,7 @@ void kernel_main() {
         ckl::input(cb_in0, ckl::WaitPolicy::None, ckl::PopPolicy::None, ckl::InputTileMapping::Block),
         ckl::input(cb_in1, ckl::WaitPolicy::None, ckl::PopPolicy::None, ckl::InputTileMapping::Block),
         ckl::output(cb_in, ckl::ReservePolicy::Upfront, ckl::PushPolicy::AtEnd)>(
-        ckl::IterationShape::tiles(num_tiles_per_block).block_size(subblock_w), cb_in0_obj, cb_in1_obj, cb_in_obj);
+        ckl::IterationShape::tiles(num_tiles_per_block).block_size(subblock_w), cb_in0_obj, cb_in1_obj, cb_in_dfb);
     index_h_offset += block_w;
     cb_in_obj.wait_front(num_tiles_per_block);
     pack_reconfig_data_format(cb_in, cb_x2);
@@ -109,7 +111,7 @@ void kernel_main() {
     ckl::square<
         ckl::input(cb_in, ckl::WaitPolicy::None, ckl::PopPolicy::None, ckl::InputTileMapping::Block),
         ckl::output(cb_x2, ckl::ReservePolicy::Upfront, ckl::PushPolicy::AtEnd, ckl::DataFormatReconfig::Disabled)>(
-        ckl::IterationShape::tiles(num_tiles_per_block).block_size(subblock_w), cb_in_obj, cb_x2_obj);
+        ckl::IterationShape::tiles(num_tiles_per_block).block_size(subblock_w), cb_in_dfb, cb_x2_dfb);
 
     // E(x^2)
     reconfig_data_format(cb_scaler, cb_x2);

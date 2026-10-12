@@ -85,7 +85,8 @@ void kernel_main() {
     constexpr uint32_t half_Wt = get_compile_time_arg_val(11);
     constexpr bool kDecodeMode = get_compile_time_arg_val(12) != 0;
 
-    DataflowBuffer cb_scalar(scalar_cb);
+    CircularBuffer cb_scalar(scalar_cb);
+    DataflowBuffer cb_scalar_dfb(scalar_cb);  // chain-side handle for the same buffer
     DataflowBuffer cb_in(in_cb);
     DataflowBuffer cb_rotated_in(rotated_in_cb);
     DataflowBuffer cb_rotated_in_interm(rotated_in_interm_cb);
@@ -130,7 +131,10 @@ void kernel_main() {
                         compute_kernel_lib::WaitPolicy::None,
                         compute_kernel_lib::PopPolicy::None),
                     compute_kernel_lib::output(rotated_in_interm_cb)>(
-                    compute_kernel_lib::IterationShape::tiles(onetile), cb_rotated_in, cb_scalar, cb_rotated_in_interm);
+                    compute_kernel_lib::IterationShape::tiles(onetile),
+                    cb_rotated_in,
+                    cb_scalar_dfb,
+                    cb_rotated_in_interm);
                 reconfig_data_format_srcb(scalar_cb, updated_sin_cb);
                 pack_reconfig_data_format(rotated_in_interm_cb, sin_interm_cb);
                 // Multiply rotated input by sin

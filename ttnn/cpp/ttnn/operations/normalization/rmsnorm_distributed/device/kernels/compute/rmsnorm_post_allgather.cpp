@@ -62,9 +62,12 @@ void kernel_main() {
     constexpr uint32_t cb_times_gamma_out_idx = (do_gamma && do_beta) ? cb_gamma_out_tmp_idx : cb_out_idx;
 
     CircularBuffer cb_reduce(cb_reduce_idx);
-    DataflowBuffer cb_eps(cb_eps_idx);
-    DataflowBuffer cb_gamma(cb_gamma_idx);
-    DataflowBuffer cb_beta(cb_beta_idx);
+    CircularBuffer cb_eps(cb_eps_idx);
+    DataflowBuffer cb_eps_dfb(cb_eps_idx);  // chain-side handle for the same buffer
+    CircularBuffer cb_gamma(cb_gamma_idx);
+    DataflowBuffer cb_gamma_dfb(cb_gamma_idx);  // chain-side handle for the same buffer
+    CircularBuffer cb_beta(cb_beta_idx);
+    DataflowBuffer cb_beta_dfb(cb_beta_idx);  // chain-side handle for the same buffer
     DataflowBuffer cb_var(cb_var_idx);
     DataflowBuffer cb_recip_sqrt_var(cb_recip_sqrt_var_idx);
     DataflowBuffer cb_norm_x_input(cb_norm_x_input_idx);
@@ -94,7 +97,7 @@ void kernel_main() {
             ckl::BinaryFpu<
                 ckl::BinaryFpuOp::Add,
                 ckl::input(cb_var_idx),
-                ckl::input(cb_eps_idx, ckl::WaitPolicy::None, ckl::PopPolicy::None)>{cb_var, cb_eps},
+                ckl::input(cb_eps_idx, ckl::WaitPolicy::None, ckl::PopPolicy::None)>{cb_var, cb_eps_dfb},
             ckl::Rsqrt<ckl::Approx::Exact, ckl::Dst::D0>{},
             ckl::PackTile<ckl::output(cb_recip_sqrt_var_idx)>{cb_recip_sqrt_var});
 
@@ -127,7 +130,7 @@ void kernel_main() {
                     ckl::PopPolicy::None,
                     ckl::InputTileMapping::Block),
                 ckl::output(cb_times_gamma_out_idx, ckl::ReservePolicy::PerBlockSize, ckl::PushPolicy::PerBlockSize)>(
-                ckl::IterationShape::tiles(Wt).block_size(blk), cb_x_normed, cb_gamma, cb_times_gamma_out);
+                ckl::IterationShape::tiles(Wt).block_size(blk), cb_x_normed, cb_gamma_dfb, cb_times_gamma_out);
 
             if constexpr (do_beta) {
                 // x_normed * gamma + beta
@@ -144,7 +147,7 @@ void kernel_main() {
                         ckl::PopPolicy::None,
                         ckl::InputTileMapping::Block),
                     ckl::output(cb_out_idx, ckl::ReservePolicy::PerBlockSize, ckl::PushPolicy::PerBlockSize)>(
-                    ckl::IterationShape::tiles(Wt).block_size(blk), cb_times_gamma_out, cb_beta, cb_out);
+                    ckl::IterationShape::tiles(Wt).block_size(blk), cb_times_gamma_out, cb_beta_dfb, cb_out);
             }
         }
     }

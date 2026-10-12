@@ -41,7 +41,8 @@ void kernel_main() {
     constexpr uint32_t Wt = get_compile_time_arg_val(10);
     constexpr uint32_t half_Wt = get_compile_time_arg_val(11);
 
-    DataflowBuffer scalar_cb(scalar_cb_id);
+    CircularBuffer scalar_cb(scalar_cb_id);
+    DataflowBuffer scalar_cb_dfb(scalar_cb_id);  // chain-side handle for the same buffer
     DataflowBuffer in_cb(in_cb_id);
     DataflowBuffer rotated_in_cb(rotated_in_cb_id);
     DataflowBuffer cos_cb(cos_cb_id);
@@ -62,7 +63,7 @@ void kernel_main() {
                     ckl::input(rotated_in_cb_id),
                     ckl::input(scalar_cb_id, ckl::BroadcastDim::Scalar, ckl::WaitPolicy::None, ckl::PopPolicy::None),
                     ckl::output(rotated_in_interm_cb_id)>(
-                    ckl::IterationShape::tiles(onetile), rotated_in_cb, scalar_cb, rotated_in_interm_cb);
+                    ckl::IterationShape::tiles(onetile), rotated_in_cb, scalar_cb_dfb, rotated_in_interm_cb);
                 reconfig_data_format_srcb(scalar_cb_id, sin_cb_id);
                 pack_reconfig_data_format(rotated_in_interm_cb_id, sin_interm_cb_id);
                 // Multiply rotated input by sin

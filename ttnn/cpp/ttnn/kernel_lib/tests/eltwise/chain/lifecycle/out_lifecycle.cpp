@@ -31,7 +31,8 @@ void kernel_main() {
 
     using namespace compute_kernel_lib;
     DataflowBuffer cb_in_obj(cb_in);
-    DataflowBuffer cb_out_obj(cb_out);
+    CircularBuffer cb_out_obj(cb_out);
+    DataflowBuffer cb_out_dfb(cb_out);  // chain-side handle for the same buffer
     auto in = CopyTile<input(cb_in, WaitPolicy::PerTile, PopPolicy::PerTile, DataFormatReconfig::Disabled), Dst::D0>{
         cb_in_obj};
 
@@ -40,38 +41,38 @@ void kernel_main() {
             IterationShape::tiles(n),
             in,
             PackTile<output(cb_out, ReservePolicy::PerTile, PushPolicy::PerTile, DataFormatReconfig::Disabled)>{
-                cb_out_obj});
+                cb_out_dfb});
     } else if constexpr (life == 1) {
         eltwise_chain(
             IterationShape::tiles(n),
             in,
             PackTile<output(cb_out, ReservePolicy::Upfront, PushPolicy::AtEnd, DataFormatReconfig::Disabled)>{
-                cb_out_obj});
+                cb_out_dfb});
     } else if constexpr (life == 2) {
         eltwise_chain(
             IterationShape::tiles(n),
             in,
             PackTile<output(cb_out, ReservePolicy::Upfront, PushPolicy::PerTile, DataFormatReconfig::Disabled)>{
-                cb_out_obj});
+                cb_out_dfb});
     } else if constexpr (life == 3) {
         cb_out_obj.reserve_back(n);
         eltwise_chain(
             IterationShape::tiles(n),
             in,
-            PackTile<output(cb_out, ReservePolicy::None, PushPolicy::None, DataFormatReconfig::Disabled)>{cb_out_obj});
+            PackTile<output(cb_out, ReservePolicy::None, PushPolicy::None, DataFormatReconfig::Disabled)>{cb_out_dfb});
         cb_out_obj.push_back(n);
     } else if constexpr (life == 4) {
         cb_out_obj.reserve_back(n);
         eltwise_chain(
             IterationShape::tiles(n),
             in,
-            PackTile<output(cb_out, ReservePolicy::None, PushPolicy::AtEnd, DataFormatReconfig::Disabled)>{cb_out_obj});
+            PackTile<output(cb_out, ReservePolicy::None, PushPolicy::AtEnd, DataFormatReconfig::Disabled)>{cb_out_dfb});
     } else {
         static_assert(n % 2 == 0);
         eltwise_chain(
             IterationShape::grid(2, n / 2),
             in,
             PackTile<output(cb_out, ReservePolicy::PerOuter, PushPolicy::PerOuter, DataFormatReconfig::Disabled)>{
-                cb_out_obj});
+                cb_out_dfb});
     }
 }
