@@ -8,7 +8,7 @@ Scripts for validating Blackhole Galaxy Exabox clusters before running workloads
 
 **Last Known-Good Docker Image:**
 ```
-ghcr.io/tenstorrent/tt-metal/upstream-tests-bh-glx:v0.80.0-dev20260930
+ghcr.io/tenstorrent/tt-metal/upstream-tests-bh-glx:v0.80.0-dev20261006-45-g1d758e27faf
 ```
 
 ## Full Hardware Qualification

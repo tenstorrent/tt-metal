@@ -632,6 +632,7 @@ ReduceScatterProgramArtifacts build_ring_reduce_scatter_minimal_async_program_ar
     // The mux stays below the floor of the L1_SMALL region, where carried semaphores live (#56769).
     const size_t mux_l1_small_floor_address = ttnn::ccl::l1_small_floor_address(*mesh_device);
     tt::tt_fabric::FabricMuxV2Config mux_config(
+        *mesh_device,
         static_cast<uint8_t>(num_workers_per_direction),
         static_cast<uint8_t>(num_buffers_full_size_channels),
         buffer_size_bytes_full_size_channel,

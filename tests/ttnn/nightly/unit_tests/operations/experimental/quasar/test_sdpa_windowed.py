@@ -9,6 +9,11 @@ Runs the same windowed (block-diagonal) SDPA cases against
 ttnn.experimental.quasar.transformer.scaled_dot_product_attention by swapping the op entry point
 for each test in this module (see _quasar_sdpa). Those reused tests upload tensors with a device-side tilize, which
 Quasar does not run; test_windowed_sdpa_full_chunk_masked below runs on Quasar as well as WH/BH.
+
+The Quasar op's windowed mode is non-causal (is_causal is mutually exclusive with cu_window_seqlens),
+so the causal parametrizations the mainline tests gained in #59055 are skipped by the
+_quasar_non_causal_windowed fixture below, and the causal-only test_windowed_causal_sdpa_gqa and
+the output_concat_heads test (the Quasar op has no such kwarg) are not collected in this module.
 """
 
 import pytest
@@ -26,6 +31,14 @@ from tests.ttnn.nightly.unit_tests.operations.experimental.quasar.test_sdpa_atte
     _to_device,
 )
 
+# Two of the mainline windowed tests cannot run against the Quasar op at all: the causal-only
+# test_windowed_causal_sdpa_gqa (the Quasar op's windowed mode is non-causal) and
+# test_windowed_sdpa_output_concat_heads (the Quasar op does not expose output_concat_heads, so its
+# bidirectional half would TypeError too). Remove both from this module's collection. pop() with a
+# default keeps this module importable if the mainline tests are ever renamed or dropped.
+for _unsupported in ("test_windowed_causal_sdpa_gqa", "test_windowed_sdpa_output_concat_heads"):
+    globals().pop(_unsupported, None)
+
 
 @pytest.fixture(autouse=True)
 def _quasar_sdpa(monkeypatch):
@@ -34,15 +47,25 @@ def _quasar_sdpa(monkeypatch):
     monkeypatch.setattr(ttnn.transformer, "scaled_dot_product_attention", scaled_dot_product_attention)
 
 
+@pytest.fixture(autouse=True)
+def _quasar_non_causal_windowed(request):
+    # Skip the causal variants the mainline windowed tests gained in #59055: the Quasar op rejects
+    # is_causal=True together with cu_window_seqlens (mutually exclusive per its contract, enforced
+    # by a TT_FATAL), so only their bidirectional halves run here.
+    callspec = getattr(request.node, "callspec", None)
+    if callspec is not None and callspec.params.get("is_causal", False):
+        pytest.skip("Quasar windowed SDPA is non-causal (is_causal must be false when cu_window_seqlens is set)")
+
+
 # Quasar does not support bfloat8_b, so the reused smoke test's bf8 parametrizations run in bfloat16
 # (same ids and shapes, bf16 PCC threshold), as the quasar sdpa_decode fork does for its bfp8 cases.
 def test_windowed_sdpa_smoke(
-    device, dtype, pcc_threshold, num_heads, seq_len, chunk, cu_window_seqlens, fp32_dest_acc_en
+    device, dtype, pcc_threshold, num_heads, seq_len, chunk, cu_window_seqlens, fp32_dest_acc_en, is_causal
 ):
     if dtype == ttnn.bfloat8_b:
         dtype, pcc_threshold = ttnn.bfloat16, 0.99
     _mainline.test_windowed_sdpa_smoke(
-        device, dtype, pcc_threshold, num_heads, seq_len, chunk, cu_window_seqlens, fp32_dest_acc_en
+        device, dtype, pcc_threshold, num_heads, seq_len, chunk, cu_window_seqlens, fp32_dest_acc_en, is_causal
     )
 
 

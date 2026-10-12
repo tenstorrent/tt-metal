@@ -16,6 +16,16 @@ on:
         required: false
         type: string
         default: ./tests/pipeline_reorg/runtime_perf_tests.yaml
+      summary-scope:
+        required: false
+        type: string
+        default: ""
+        description: "Discriminator for the AI summaries when the calling workflow is invoked more than once per run"
+    outputs:
+      matrix:
+        description: "Filtered matrix of legs that ran (consumed by ai_summary/run for INFRA_FAILURE reconciliation)"
+        value: ${{ jobs.load-test-matrix.outputs.matrix }}
+
 jobs:
   load-test-matrix:
     runs-on: ubuntu-slim
@@ -82,10 +92,13 @@ jobs:
           build-artifact-name: ${{ inputs.build-artifact-name }}
       - name: ${{ matrix.test-group.name }}
         timeout-minutes: ${{ matrix.test-group.timeout }}
-        run: |
-          mkdir -p generated/test_reports
-          echo "${{ matrix.test-group.cmd }}"
-          ${{ matrix.test-group.cmd }}
+        uses: ./docker-job/.github/actions/run-with-log
+        with:
+          log-file: generated/test_logs/${{ matrix.test-group.name }}.log
+          run: |
+            mkdir -p generated/test_reports
+            echo "${{ matrix.test-group.cmd }}"
+            ${{ matrix.test-group.cmd }}
       - uses: tenstorrent/tt-metal/.github/actions/upload-artifact-with-job-uuid@main
         timeout-minutes: 10
         if: ${{ !cancelled() }}
@@ -107,6 +120,23 @@ jobs:
         with:
           path: ${{ matrix.test-group.profiler_logs_path }}
           prefix: "profiler-logs-${{ join(matrix.test-group.name) }}-"
+      - name: 🤖 AI job summary
+        if: ${{ !cancelled() }}
+        continue-on-error: true
+        uses: tenstorrent/tt-github-actions/.github/actions/ai_summary/job@main
+        with:
+          config: |
+            {
+              "model": "${{ vars.AI_SUMMARY_MODEL }}",
+              "workspace": "/work",
+              "input_dirs": ["generated/test_logs"],
+              "output_dir": "generated/ai_summaries",
+              "scope": "${{ inputs.summary-scope }}",
+              "authoritative_job_status": true
+            }
+          api-key: ${{ secrets.TT_CHAT_API_KEY }}
+          api-url: ${{ secrets.TT_CHAT_URL }}
+          job-name: ${{ matrix.test-group.name }}
       - uses: tenstorrent/tt-metal/.github/actions/slack-report@main
         if: ${{ failure() }}
         with:
