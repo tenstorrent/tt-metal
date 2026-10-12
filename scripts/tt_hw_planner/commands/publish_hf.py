@@ -1010,10 +1010,21 @@ class @TTARCH@:
     def decode_forward(self, tokens, start_pos=None, page_table=None, **_compat):
         if not self._active:
             raise RuntimeError("decode_forward before prefill_forward")
-        # TODO(author): vLLM sampled `tokens` on the host. The demo pipeline commits its OWN
-        #   device-sampled token, so to honor vLLM's token exactly (non-greedy sampling, penalties)
-        #   write that id into the pipeline resident next-token buffer before stepping. Greedy decode
-        #   matches without this; wire it for full sampler fidelity.
+        # Honor vLLM's host-sampled token: the demo pipeline commits its OWN device-sampled token, so
+        # overwrite its resident input-token buffer when it exposes one (the generated-pipeline
+        # convention: a uint32 ``tok_u32`` [1, batch] written in place via ``_write``). Greedy decode
+        # matches even without this; the writeback gives full host-sampler fidelity.
+        try:
+            _tok = int(torch.as_tensor(tokens).reshape(-1)[0])
+            if hasattr(self.pipe, "tok_u32") and hasattr(self.pipe, "_write"):
+                self.pipe._write(
+                    "tok_u32",
+                    torch.full((1, int(self.pipe.batch)), _tok, dtype=torch.int32),
+                    ttnn.uint32,
+                    ttnn.ROW_MAJOR_LAYOUT,
+                )
+        except Exception:  # noqa: BLE001
+            pass
         self._state = self.pipe.decode_step(self._state)
         return self._host_logits_row0(self._state["logits"])
 
