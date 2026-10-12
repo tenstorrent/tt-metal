@@ -107,7 +107,7 @@ void run_kernel(RUNTIME_PARAMETERS params)
 
     constexpr bool IS_INT_FPU = false;
 
-    const ckernel::TensorShape DEFAULT_TENSOR_SHAPE = {FACE_R_DIM, FACE_C_DIM, MAX_NUM_FACES_R_DIM, MAX_NUM_FACES_C_DIM};
+    LLK_INIT_CONST ckernel::TensorShape DEFAULT_TENSOR_SHAPE = {FACE_R_DIM, FACE_C_DIM, MAX_NUM_FACES_R_DIM, MAX_NUM_FACES_C_DIM};
 
     LLK_INIT_BEGIN
     {
