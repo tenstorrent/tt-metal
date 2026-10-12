@@ -29,7 +29,9 @@ if TYPE_CHECKING:
 # --- Cameras and images -------------------------------------------------------------------------
 
 NUM_CAMS = 6
-# The cameras' 1600x900 images, padded to 1600x928 so the height is a multiple of 32.
+# The cameras' 1600x900 images, padded at the bottom to 1600x928, a multiple of IMAGE_SIZE_DIVISOR
+# (upstream's PadMultiViewImage, size_divisor=32), which the images' img_shape then reports.
+IMAGE_SIZE_DIVISOR = 32
 IMAGE_HEIGHT = 928
 IMAGE_WIDTH = 1600
 
