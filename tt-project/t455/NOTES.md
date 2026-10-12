@@ -32,3 +32,12 @@ Q/K/V/ids (VSA_DUMP_INDICES) from one e2e step and replay them through the test.
 2. One blx01 A/B job: v1.0 dense vs SLA LoRA v0.1 + sla 0.85, seed 0 (templates t452/run452.sh, chain452.sh, psnr452.py;
    one arm is about 316 s warm, so one arm per job with -t <= 540).
 3. ttp push --own --detach onto ttp/t454-fix-fasth3-turbo-sla-attention-mode-agai.
+
+## Job 030 result (passed, exit 0, 94 s, no drops, 900 MHz clamp)
+At 14 heads/device (seq 75449, SP=8, k=176): topk_large_indices selects the top-k values at every k (1.0);
+stage ids in range, no duplicates, overlap with LightX2V mean 0.9940 min 0.9716; vsa_sdpa vs its own ids PCC 0.99960,
+vs LightX2V ids 0.97367 (selection differs slightly). Head count is not the bug: the SLA ops are correct on random data.
+Remaining suspects: the pipeline (rung 75776 vs warmed 76800 geometry, rope/AdaLN tables, permute_metadata,
+which shard/slot layout the model passes vs the test), or real Q/K/V statistics (e.g. near-uniform pooled scores).
+Next: dump one real SLA layer's Q/K/V and ids from one e2e step (VSA_DUMP_INDICES) and replay them through the test,
+plus compare the stage's call args in the model path against the test's.
