@@ -80,6 +80,7 @@ class CUSTOM_MM_SPLIT(TemplateParameter):
     custom_mm_finalize: bool = False
     custom_mm_dense_packing: bool = True
     custom_mm_reuse_replay: bool = False
+    custom_mm_group_finalize: bool = True
 
     def convert_to_cpp(self) -> str:
         return "\n".join(
@@ -89,6 +90,7 @@ class CUSTOM_MM_SPLIT(TemplateParameter):
                 ("CUSTOM_MM_FINALIZE", self.custom_mm_finalize),
                 ("CUSTOM_MM_DENSE_PACKING", self.custom_mm_dense_packing),
                 ("CUSTOM_MM_REUSE_REPLAY", self.custom_mm_reuse_replay),
+                ("CUSTOM_MM_GROUP_FINALIZE", self.custom_mm_group_finalize),
             )
         )
 
@@ -177,6 +179,7 @@ def _run_custom_mm(
     preserve_zero_flag=False,
     operands=None,
     read_transposed=False,
+    group_finalize=True,
 ):
     """Run custom_mm and check it against the golden; return the (M, N) result.
 
@@ -264,6 +267,7 @@ def _run_custom_mm(
                 custom_mm_finalize=finalize,
                 custom_mm_dense_packing=dense_packing,
                 custom_mm_reuse_replay=reuse_replay,
+                custom_mm_group_finalize=group_finalize,
             ),
             CUSTOM_MM_PRESERVE_SRC_ZERO_FLAG(preserve_zero_flag),
             CUSTOM_MM_READ_TRANSPOSED(read_transposed),
@@ -382,6 +386,15 @@ def test_custom_mm_finalize_tile_stride(formats, M, ct, split_acc):
         split_acc=split_acc,
         finalize=True,
         dense_packing=False,
+    )
+
+
+@blackhole_only
+@parametrize(formats=CUSTOM_MM_FORMATS, M=[1, 8], kt=[1, 2], ct=[2, 3, 4])
+def test_custom_mm_split_acc_per_tile_finalize(formats, M, kt, ct):
+    """split_acc with group_finalize off, which 16-bit and 32-bit weights take."""
+    _run_custom_mm(
+        M, kt, ct, formats, _dest_acc_for(formats), split_acc=True, group_finalize=False
     )
 
 

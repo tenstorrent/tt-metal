@@ -134,7 +134,7 @@ void run_kernel(RUNTIME_PARAMETERS params)
     // The whole kt walk is issued by a single call (internal MOP covers kt_dim/2 iterations).
     for (std::uint32_t pass = 0; pass < SDPA_PASSES; ++pass)
     {
-        _llk_unpack_AB_sdpa_custom_mm_<READ_TRANSPOSED, SDPA_MASK_REENTRY>(
+        _llk_unpack_AB_sdpa_custom_mm_<READ_TRANSPOSED, SDPA_MASK_REENTRY, sdpa_custom_mm_unpack_waits_at_end(SIGNAL_GRANULARITY)>(
             L1_ADDRESS(params.buffer_A[0]),                                            // base_address_a : in1 (SrcA, rhs)
             L1_ADDRESS(params.buffer_B[0]),                                            // base_address_b : in0 (SrcB, lhs)
             SDPA_MASK_REENTRY ? L1_ADDRESS(params.buffer_A[SDPA_MASK_TILE_INDEX]) : 0, // base_address_mask

@@ -27,9 +27,17 @@ pytestmark = [skip_for_wormhole, skip_for_quasar]
 @dataclass
 class CUSTOM_MM_PERF_FLAGS(TemplateParameter):
     split_acc: bool = False
+    group_finalize: bool = True
 
     def convert_to_cpp(self) -> str:
-        return f"constexpr bool SPLIT_ACC = {str(self.split_acc).lower()};"
+        return (
+            f"constexpr bool SPLIT_ACC = {str(self.split_acc).lower()};\n"
+            f"constexpr bool GROUP_FINALIZE = {str(self.group_finalize).lower()};"
+        )
+
+
+# The weight formats that take the one-group finalize (custom_mm_group_finalize_weights)
+GROUP_FINALIZE_WEIGHTS = (DataFormat.Bfp8_b, DataFormat.Bfp4_b, DataFormat.Bfp2_b)
 
 
 BF16 = DataFormat.Float16_b
@@ -86,7 +94,10 @@ def _run_perf_custom_mm(perf_report, in1_format, in0_face_r_dim, call_shape, spl
         ],
         templates=[
             CRK_TILE_DIMM(c_dimm=ct, r_dimm=1, k_dimm=kt),
-            CUSTOM_MM_PERF_FLAGS(split_acc=split_acc),
+            CUSTOM_MM_PERF_FLAGS(
+                split_acc=split_acc,
+                group_finalize=in1_format in GROUP_FINALIZE_WEIGHTS,
+            ),
         ],
         runtimes=[
             # in0 and the result use 2 faces of M rows; in1 uses 4 full faces.

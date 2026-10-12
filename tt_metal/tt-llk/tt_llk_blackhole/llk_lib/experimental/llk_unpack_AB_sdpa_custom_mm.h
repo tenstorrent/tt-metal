@@ -18,7 +18,13 @@
 using namespace ckernel;
 using namespace ckernel::unpacker;
 
-template <bool read_transposed = false, bool configure_mask_extent = false>
+// Posts of 8 or more tiles reach the consumer in bursts that the next call's early start slows, so those calls drain first
+constexpr bool sdpa_custom_mm_unpack_waits_at_end(const std::uint32_t signal_granularity)
+{
+    return signal_granularity >= 8;
+}
+
+template <bool read_transposed = false, bool configure_mask_extent = false, bool wait_at_end = false>
 inline void _llk_unpack_AB_sdpa_custom_mm_(
     const std::uint32_t base_address_a,
     const std::uint32_t base_address_b,
@@ -65,7 +71,7 @@ inline void _llk_unpack_AB_sdpa_custom_mm_(
         }
     }
 
-    _llk_unpack_AB_custom_mm_run_(cfg, address_a, address_b, block_increment, inner_increment, kt_dim, ct_dim);
+    _llk_unpack_AB_custom_mm_run_(cfg, address_a, address_b, block_increment, inner_increment, kt_dim, ct_dim, wait_at_end);
 
     if (mask_chunk)
     {
