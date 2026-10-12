@@ -306,12 +306,6 @@ def build_d2d_pipeline_endpoints(
 
 
 def build_d2d_index_endpoints(mesh_device, rank: int, per_chip_shape, *, inbound: bool, outbound: bool):
-    """Second D2D socket pair carrying GLM-5.3 top-k indices across a pipeline boundary that lands on a
-    ``shared`` indexer layer: the receiving rank's leading ``shared`` layers reuse the upstream rank's
-    last ``full`` layer selection. Built only on such boundaries, after the activation endpoints and in
-    the same receiver-then-sender order, so both ends of each edge pair up. Shares the activation
-    socket's worker cores, FIFO and fabric-link lease discipline."""
-
     def _common():
         return dict(
             global_spec=indexer_indices_global_spec(per_chip_shape, GLOBAL_MESH_SHAPE),
@@ -344,8 +338,6 @@ def build_d2d_index_endpoints(mesh_device, rank: int, per_chip_shape, *, inbound
 
 
 def _d2d_recv_indices(d2d_in, idx_in) -> ttnn.Tensor:
-    """Both inbound services on an edge open the same fabric router channel, so the activation
-    receiver is reclaimed before the index receiver is granted."""
     if d2d_in is not None:
         d2d_in.wait_for_fabric_links()
     idx_in.release_fabric_links()
@@ -361,8 +353,6 @@ def _d2d_recv_indices(d2d_in, idx_in) -> ttnn.Tensor:
 def _d2d_send_indices(
     d2d_out, idx_out, indices: ttnn.Tensor, rank: int, meta: Optional[dict], metadata_msg=None
 ) -> None:
-    """Both outbound services on an edge open the same fabric router channel, so the activation
-    transfer is drained before the index sender is granted."""
     d2d_out.wait_for_fabric_links()
     backing_cfg = idx_out.get_backing_tensor().memory_config()
     staged = indices if indices.memory_config() == backing_cfg else ttnn.to_memory_config(indices, backing_cfg)
@@ -458,8 +448,7 @@ def _forward_shutdown(
 
 
 def _forward_send_warmup(runtime, d2d_out, rank: int, idx_out=None) -> None:
-    """Compile the traced sends before this rank's capture; the next rank drops the records. The index
-    record carries the warm pass's top-k, so it compiles the exact staging the chunk sends use."""
+    """Compile the traced send before this rank's capture; the next rank drops the record."""
     get_inputs = getattr(runtime, "send_warmup_inputs", None)
     inputs = get_inputs((WARMUP_METADATA_WORD,) * 3) if get_inputs is not None and not MTP_LEVELS else None
     if inputs is None:

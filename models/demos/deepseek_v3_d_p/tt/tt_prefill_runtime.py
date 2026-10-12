@@ -565,24 +565,16 @@ class TtPrefillRuntime:
 
     @property
     def receives_indexer_indices(self) -> bool:
-        """True when this rank's first layer is a GLM-5.3 ``shared`` layer, so each chunk also needs the
-        upstream rank's top-k indices (passed to prefill_chunk as indexer_indices)."""
         return getattr(self.model, "receives_indexer_indices", False)
 
     @property
     def forwards_indexer_indices(self) -> bool:
-        """True when the next rank starts on a GLM-5.3 ``shared`` layer, so each chunk's
-        outbound_indexer_indices must be sent downstream with the activation."""
         return getattr(self.model, "forwards_indexer_indices", False)
 
     def indexer_indices_shape(self) -> tuple:
-        """Per-chip shape of the top-k indices carried across a pipeline boundary."""
         return self.model.indexer_indices_shape()
 
     def make_placeholder_indices(self) -> ttnn.Tensor:
-        """Allocate zero top-k indices matching what the index D2D socket delivers: uint32 ROW_MAJOR,
-        DRAM, replicated, shape indexer_indices_shape(). Position 0 is always a valid key, so a warm
-        pass seeded with it reads in-bounds."""
         return ttnn.from_torch(
             torch.zeros(self.indexer_indices_shape(), dtype=torch.int64),
             device=self.mesh_device,
@@ -594,16 +586,10 @@ class TtPrefillRuntime:
 
     @staticmethod
     def _seed_kwargs(indices: Optional[ttnn.Tensor]) -> dict:
-        """Forward kwargs carrying upstream top-k indices; empty when there are none, so a model whose
-        forward has no seed_indexer_indices parameter is called exactly as before."""
         return {} if indices is None else {"seed_indexer_indices": indices}
 
     @property
     def outbound_indexer_indices(self) -> Optional[ttnn.Tensor]:
-        """The last chunk's last ``full`` layer top-k indices to send downstream, or None when the next
-        rank does not start on a ``shared`` layer. Once a trace is captured this is the captured buffer
-        the replay refreshes; before that it is the last eager or warm pass's. Never deallocated by the
-        caller."""
         if not self.forwards_indexer_indices:
             return None
         return self._trace_indices_out if self._trace_captured else self.model.last_indexer_indices

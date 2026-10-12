@@ -438,14 +438,10 @@ class TtPrefillTransformer(LightweightModule):
 
     @property
     def receives_indexer_indices(self) -> bool:
-        """True when this stack starts on a GLM-5.3 ``shared`` layer, so its leading layers reuse top-k
-        indices computed by the upstream pipeline rank."""
         return self.indexer_types is not None and self.indexer_types[self.first_layer_idx] == "shared"
 
     @property
     def forwards_indexer_indices(self) -> bool:
-        """True when the layer after this stack is a GLM-5.3 ``shared`` layer on the next pipeline rank,
-        so this stack's last ``full`` layer indices must be sent downstream with the activation."""
         next_idx = self.first_layer_idx + self.num_layers
         return (
             not self.is_last_rank
@@ -455,7 +451,6 @@ class TtPrefillTransformer(LightweightModule):
         )
 
     def indexer_indices_shape(self) -> tuple:
-        """Per-chip shape of the top-k indices carried across a pipeline boundary (see ttMLA)."""
         return self.layers[0].mla.indexer_indices_shape()
 
     def forward(
