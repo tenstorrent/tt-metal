@@ -55,7 +55,7 @@ done
 
 ## Test-Locked Mode (`LOCK_TESTS=true`)
 
-This mode applies only when `REMOVE_TESTS` is unset; when `REMOVE_TESTS=true`, ignore this section and author the test fresh (Step 1). When `LOCK_TESTS` is `true` (from Inputs), the existing test is the immutable source of truth. Skip all test authoring: do **not** run Step 1 §1A.2–§1A.4 or §1B, and do **not** author, extend, register, or modify any test, golden, `SfpuType`/`BinaryOp`/`MathOperation` enum, dispatcher branch, or input-prep. Replace Step 1 with: locate the existing test (SFPU → the unified category test per §1A.1; math/pack/unpack → the per-op file `test_{op}_{arch}.py`), then run the §1D collection smoke to confirm it selects the op's variants. If the test is absent, the `count` is `0`, or the op is unregistered, report `STUCK` (category `TEST_MISSING`) with that as the signature — do not create it. Steps 2–5 are unchanged: run the existing test, diagnose, and fix the **kernel** only. Treat a `HARNESS_INCOMPATIBILITY` as a terminal `STUCK` — do not author a native test source. An `#include "llk_sfpu/ckernel_sfpu_{op}.h"` that the hide step (orchestrator Step 2b) repointed at the generated kernel is part of the locked test — never restore the old lib-layer path; make the kernel provide what the test calls.
+This mode applies only when `REMOVE_TESTS` is unset; when `REMOVE_TESTS=true`, ignore this section and author the test fresh (Step 1). When `LOCK_TESTS` is `true` (from Inputs), the existing test is the immutable source of truth. Skip all test authoring: do **not** run Step 1 §1A.2–§1A.4, §1B or §1E, and do **not** author, extend, register, or modify any test, golden, `SfpuType`/`BinaryOp`/`MathOperation` enum, dispatcher branch, or input-prep. Replace Step 1 with: locate the existing test (SFPU → the unified category test per §1A.1; math/pack/unpack → the per-op file `test_{op}_{arch}.py`), then run the §1D collection smoke to confirm it selects the op's variants. If the test is absent, the `count` is `0`, or the op is unregistered, report `STUCK` (category `TEST_MISSING`) with that as the signature — do not create it. Steps 2–5 are unchanged: run the existing test, diagnose, and fix the **kernel** only. Treat a `HARNESS_INCOMPATIBILITY` as a terminal `STUCK` — do not author a native test source. An `#include "llk_sfpu/ckernel_sfpu_{op}.h"` that the hide step (orchestrator Step 2b) repointed at the generated kernel is part of the locked test — never restore the old lib-layer path; make the kernel provide what the test calls.
 
 ---
 
@@ -76,7 +76,7 @@ while ATTEMPT < 5:
         apply(diagnose(result)); continue
     COMPILE_FAILS = 0
     ATTEMPT += 1                  # only simulator runs consume budget
-    if result == PASS: return success(ATTEMPT)
+    if result == PASS: return post_pass_checks(ATTEMPT)   # Step 4b, own budget
     apply(diagnose(result))      # Step 3 + 4
 return stuck(last_result)
 ```
@@ -94,7 +94,7 @@ return stuck(last_result)
 
 ### 1A — SFPU kernels
 
-**SFPU ops are appended to the unified test for their category — never given their own files.** Each op registers into the consolidated unary/binary/ternary test, which already owns the format generator, invalid-combo filter, input-prep, and three-thread C++ harness.
+**SFPU ops join the unified test for their category by default** — it already owns the format generator, invalid-combo filter, input-prep, and three-thread C++ harness. An op that needs a new test parameter, a non-golden (statistical) oracle, or state across tiles gets its own pair instead (1A.3b).
 
 #### 1A.1 — Resolve the unified target
 
@@ -110,13 +110,13 @@ If the analysis has no `## SFPU Category`, classify from the parent wrapper (`_l
 
 #### 1A.2 — Infrastructure prerequisites
 
-The **writer** registers the op so the kernel compiles: the `SfpuType::{Op}`/`BinaryOp::{OP}` enum (`llk_defs.h`), `MathOperation.{Op}` (`llk_params.py`), and the dispatcher `#include`+branch (`sfpu_operations_{arch}.h`). Verify each is present; add only what the writer left missing. You own the **test content**:
+The **writer** registers the op so the kernel compiles: the `SfpuType::{Op}`/`BinaryOp::{OP}` enum (`llk_defs.h`), `MathOperation.{Op}` (`llk_params.py`), and the dispatcher `#include`+branch (`sfpu_operations_{arch}.h`). Verify each is present; add only what the writer left missing — except for a stateful / multi-pass op, which has no unified-dispatcher branch (writer Step 2). You own the **test content**:
 
 - **Golden**: `tests/python_tests/helpers/golden_generators.py` — unary: method on `UnarySFPUGolden`; binary: entry in `BinarySFPUGolden` dispatch dict + method; ternary: `WhereGolden`. Add following the class's pattern.
 
 #### 1A.3 — Verify registration; add the test cases
 
-**C++ — the dispatcher header `sfpu_operations_{arch}.h`** should already carry the op (writer's job); if a branch is missing, add it (use `Edit`; the unified `.cpp` is not edited except as 1A.3b allows):
+**C++ — the dispatcher header `sfpu_operations_{arch}.h`** should already carry the op (writer's job); if a branch is missing, add it (use `Edit`; the unified `.cpp` is never edited):
 - **unary**: add `#include "llk_sfpu/ckernel_sfpu_{op}.h"`; add an `else if constexpr (OPERATION == SfpuType::{op})` branch to `call_unary_sfpu_operation_quasar()` calling `_llk_math_eltwise_unary_sfpu_params_(_calculate_{op}_<ITERATIONS>, dst_index)`; add an `init_unary_sfpu_operation_quasar()` branch only if the op has `_init_{op}_`.
 - **binary**: add the ckernel `#include`; add an `else if constexpr (OP == BinaryOp::{OP})` branch to `call_binary_sfpu_operation_quasar()` (and `init_binary_sfpu_operation_quasar()` if it needs init).
 - **ternary**: `sfpu_where_{arch}_test.cpp` has no shared dispatcher. A second ternary op requires generalizing that harness — do the minimum needed and call it out in your log; do not fabricate a dispatcher.
@@ -133,13 +133,23 @@ The unified test's format list, invalid-combo filter, and `TestConfig` already e
 
 Coverage has two axes: formats **and** code paths. Open the analysis's `## Code-Path Coverage Matrix` and make every **REQUIRED** row run in at least one variant — e.g. each layout, each row-count network, and each runtime mode (`chunk == 0` seeding and `chunk > 0` folding) the production callers use. Check every tile/output the kernel writes, not only the first.
 
-If the unified harness cannot select a REQUIRED path (the dispatcher binds it to a literal, or the `.cpp` has no parameter for it), extend it: add a `TemplateParameter` / `RuntimeParameter` in `helpers/test_variant_parameters.py` and thread it through — or, when that would touch every other op in the unified harness, move the op to a dedicated test pair (`tests/sources/{arch}/sfpu_{op}_{arch}_test.cpp` + `tests/python_tests/{arch}/test_sfpu_{op}_{arch}.py`, modelled on the unified harness and on an existing dedicated one such as `sfpu_topk_{arch}`). Path coverage outranks "append to the unified test" (Key Rule 5) and "the unified `.cpp` is not edited". Mark per-variant runtime values with `runtime()` so each kernel build compiles once.
+If a REQUIRED path needs a test parameter the unified harness lacks (the dispatcher binds it to a literal, or the `.cpp` has no parameter for it), or the op needs a statistical oracle or cross-tile state, give the op a dedicated pair (`tests/sources/{arch}/sfpu_{op}_{arch}_test.cpp` + `tests/python_tests/{arch}/test_{op}_{arch}.py`, modelled on the unified harness and on `sfpu_topk_{arch}`). Never add the parameter to the unified test: its `templates=[...]` feed the `perf_eltwise_*_quasar` header schema. Prefix every new `TemplateParameter`/`RuntimeParameter` field with the op name (`dropout_probability`, never `scale` or `num_rows`), never edit `helpers/perf/test_schemas.py` or bump the QSR schema, and put `MathOperation.{Op}` in each parametrize tuple so `--op` selects it. Mark per-variant runtime values with `runtime()` so each kernel build compiles once.
+
+Design the sweep:
+- **Sweep only the axes the kernel reads.** DestSync and shape axes only when the kernel reads sync state or the shape overflows one Dest section; otherwise pin `DestSync.Half` and one shape. A one-value axis is a named `constexpr` in the test source, not parametrized. Every parameter emitted into `build.h` takes ≥2 values across variants or is a named `constexpr`.
+- **Int32 Dest encoding is a REQUIRED axis** — two's complement by default, sign-magnitude only for the opt-in; never pick the stimulus encoding to match the kernel.
+- **Fixed-count loops and replays:** plant the worst-case input the analysis derived, so a count one short fails (for Stein's gcd that is not the Fibonacci pair).
+- **Stateful kernels** (LREG/replay state across calls): stream ≥3× a Dest section with Half-sync per-tile release, interleave an FPU op or another replay user between calls (from `## Production Callers`), and test out==in aliasing.
+- **Random / seeded ops:** same seed → bit-identical re-run, different seed → different output, and the all-ones LFSR lock-up seed.
+- **Mutation check** (no elementwise golden, or a multi-stage kernel): list the named stages to stub (finalizer, salt, seed write); Step 4b runs them after PASS.
 
 A REQUIRED row you cannot cover is a terminal `STUCK` with `Last failure category: COVERAGE_GAP` — never a `PASS`. Optional rows you skip go in the PASS block's `Paths not covered`.
 
 #### 1A.4 — Input preparation
 
-Add `prepare_{op}_inputs(...)` picking value ranges that avoid overflow/underflow for the op (`sqrt`/`rsqrt`: non-negative; `reciprocal`/`log`: exclude near-zero; `exp`: clamp e.g. `[-20, 20]`). Use the template's log-uniform pattern. Branch on `input_format.is_integer()` for integer formats. **Be conservative on attempt 1** — widen only after a pass.
+Add `prepare_{op}_inputs(...)` picking value ranges that avoid overflow/underflow for the op (`sqrt`/`rsqrt`: non-negative; `reciprocal`/`log`: exclude near-zero; `exp`: clamp e.g. `[-20, 20]`). Use the template's log-uniform pattern. Branch on `input_format.is_integer()` for integer formats. Start with safe ranges on attempt 1 — widen only after a pass.
+
+**Special values in every face**, written as raw bits so torch cannot canonicalise them, per format: ±0, ±NaN and ±Inf for float formats; INT_MIN for Int32; the top bit set for UInt8 and UInt32 only (UInt16 rides the Int16 Dest container, so keep it in [0, 32767]). Put Inf/NaN in lanes the op ignores; when the op ignores no lane, put them where the golden defines the result, or log a DEFERRED open risk. `isclose` treats -0.0 == +0.0, so check zero and NaN signs bit-exactly (`torch.signbit` or raw bits) in a post-check. Read any shared stimulus builder before claiming what it seeds. A 32-bit runtime immediate split into LOWER/UPPER loads needs a test value with non-zero low 16 bits.
 
 ### 1B — Non-SFPU kernels (math / pack / unpack)
 
@@ -167,7 +177,7 @@ For non-SFPU tests, exercise both datacopy paths via `unpack_to_dest = (formats.
 
 ### 1C — dest_acc / unpack_to_dest matrix (SFPU)
 
-**SFPU tests always use `unpack_to_dest=True`** — they prove the SFPU op, not the FPU/datacopy path. Hard-code `UnpackerEngine.UnpDest` and `unpack_to_dest=True`. `unpack_to_dest` requires the input bit-width to match the Dest mode, so exercise only bit-width-matched combinations:
+**SFPU tests default to `unpack_to_dest=True`** — they prove the SFPU op, not the FPU/datacopy path. Hard-code `UnpackerEngine.UnpDest` and `unpack_to_dest=True`. Exception: a sign- or bit-pattern-sensitive op (result depends on ±0 or NaN sign) also runs the FPU datacopy routes (`full_format_route_sweep=True` plus one MOVA2D 16-bit-Dest variant) and models any datacopy loss in the golden. A golden that models a loss `quasar-hw-facts.md` marks unconfirmed gets a DEFERRED open risk. `unpack_to_dest` requires the input bit-width to match the Dest mode, so exercise only bit-width-matched combinations:
 
 | Input format | `dest_acc` | In SFPU test? | Why |
 |---|---|---|---|
@@ -196,6 +206,22 @@ bash "$WORKTREE_DIR/tt_metal/tt-llk/.claude/scripts/run_test.sh" count \
 
 (`{TEST_FILE}` and `--k "{op}"` per 2.0; omit `--k` for non-SFPU per-op files.) `count` uses `--compile-producer` internally, required so conftest skips hardware init. **The count must be non-zero** — a `0` means the op isn't registered or the `--k` token doesn't match (re-collect with `--co` to see real IDs). This is not a test run and does not count against the cap.
 
+### 1E — Fuser registration (SFPU unary / binary)
+
+- **Unary:** add one `MathOperation.{Op},` line to `UNARY_SFPU_OPS` in `tests/python_tests/fuser/quasar/parser.py`. `fuser/tests/quasar/sfpu_unary_sweep.yaml` (`operation: all`) then sweeps the op; add no yaml. Set `FUSER_K="sfpu_unary_sweep and {Op}"` (the `MathOperation` name) and confirm with `run_test.sh count ... --test test_fused_quasar.py --k "$FUSER_K"` (must be non-zero); Step 4b runs it.
+- **Binary:** add one `MathOperation.{Op},` line to `BINARY_SFPU_OPS`. No yaml sweeps binary SFPU ops; log `R<n> DEFERRED: fuser coverage — PR: fuser has no binary SFPU sweep`.
+- **Ternary, or an op the fuser cannot express** (e.g. no SFPU broadcast operand): register nothing; log `R<n> DEFERRED: fuser N/A — PR: <reason>`.
+
+**Never modify fuser logic** (parser maps, base classes, sweep, schema, existing yamls) — only the registration line.
+
+### 1F — Perf header gate
+
+After any edit to `helpers/test_variant_parameters.py` or a test's `templates=[...]` / `runtimes=[...]`, run the device-free gate (no simulator):
+```bash
+source codegen/scripts/quasar/orchestrator_steps.sh && execute_step_perf_header_gate
+```
+It must print `PERF_HEADER_GATE: PASS`; fix a failure by renaming or moving fields (1A.3b), never by bumping a schema.
+
 ---
 
 ## Step 2: Run the Test
@@ -205,10 +231,10 @@ Every run is a **two-step compile-then-run flow**: compile in parallel (no simul
 ### 2.0 — Which test file (and variants)
 
 `{TEST_FILE}` is:
-- **SFPU op** → the unified category test (1A.1).
+- **SFPU op** → the unified category test (1A.1), or its dedicated `test_{op}_{arch}.py` (1A.3b).
 - **non-SFPU** → the per-op file `test_{op}_{arch}.py`.
 
-A unified SFPU test holds many ops; **you own only the new one — scope every run with `--k "{op}"`.** Within your op, run its full format/dest_acc/sync sub-matrix; do not narrow further. For non-SFPU per-op files the whole file is your op, so omit `--k`.
+A unified SFPU test holds many ops; **you own only the new one — scope every run with `--k "{op}"`.** Within your op, run every variant the test defines; do not narrow the run (which axes it sweeps is 1A.3b's call). For non-SFPU per-op files the whole file is your op, so omit `--k`.
 
 The `--k` token must appear in the parametrize IDs (case-sensitive):
 - **unary**: lowercase op name (embedded via `cpp_enum_value`, e.g. `gelu`); watch substring collisions (`sqrt` also selects `rsqrt`).
@@ -384,6 +410,21 @@ On `impossible constraint in 'asm'` / `asm operand does not match constraints` f
 
 Use `Edit`. **One fix per attempt** (exception: a single conceptual change touching two places, e.g. a template-param rename in decl + use). Fix the kernel, not the test. After editing, re-run Step 2 — running consumes an attempt, editing does not.
 
+### 4b — Post-PASS checks (own budget)
+
+After the first PASS, run these on their own budget of **6 simulator runs** (separate from the 5-run cap):
+1. **Fuser** — if 1E set `FUSER_K`, run `run_test.sh run ... --test test_fused_quasar.py --k "$FUSER_K" --maxfail 0`. A failure is a kernel bug: diagnose (Step 3), fix, and re-run both the op's test and the fuser run.
+2. **Mutation check** — only for the stages 1A.3b listed. Back up the kernel, then for each stage: stub it out, run the op's test, record which check failed, and restore:
+```bash
+mkdir -p "$LOG_DIR/mutation"; cp "$WORKTREE_DIR/$GENERATED_KERNEL" "$LOG_DIR/mutation/kernel.orig"
+# per mutant: edit the stage, run_test.sh run ... --maxfail 0 (a FAIL is the expected outcome), then:
+cp "$LOG_DIR/mutation/kernel.orig" "$WORKTREE_DIR/$GENERATED_KERNEL"
+cmp "$LOG_DIR/mutation/kernel.orig" "$WORKTREE_DIR/$GENERATED_KERNEL"   # must print nothing
+```
+A mutant that still passes means the test misses that stage: strengthen the test and re-run it unmutated (from this budget), or log a DEFERRED open risk. Log the mutant → failing-check table.
+
+Before reporting PASS, the final `cmp` must succeed and the last run of the op's test on the unmutated kernel must be a PASS. Budget exhausted with a fuser failure open → `STUCK`.
+
 ### 4.1 — Breadcrumbs (MANDATORY, after every attempt)
 
 Immediately after reading `TEST_EXIT`, before diagnosing:
@@ -413,10 +454,11 @@ $ST --log-dir "$LOG_DIR" set PHASE_DEBUGS         "{fix iterations = attempts us
 $ST --log-dir "$LOG_DIR" set FORMATS_TESTED_JSON  '{JSON array of the formats you ran, e.g. ["Float16","Float32"]}'
 $ST --log-dir "$LOG_DIR" set FORMATS_EXCLUDED_JSON '{JSON object of format:reason you excluded, e.g. {"UInt16":"broken dest datapath"}}'
 $ST --log-dir "$LOG_DIR" set COVERAGE_JSON        '{JSON object {"covered": [matrix rows run], "not_covered": {"row": "reason"}}, e.g. {"covered":["TILE-9","ROW_MAJOR-32-acc chunk 0/1"],"not_covered":{}}}'
-$ST --log-dir "$LOG_DIR" set TEST_FILE_USED       "{test file path relative to tests/, e.g. python_tests/quasar/test_sfpu_{op}_quasar.py}"
+$ST --log-dir "$LOG_DIR" set TEST_FILE_USED       "{test file path relative to tests/, e.g. python_tests/quasar/test_{op}_quasar.py}"
 $ST --log-dir "$LOG_DIR" set TEST_K               "{the --k token you scoped runs with, or empty for a whole dedicated file}"
+$ST --log-dir "$LOG_DIR" set FUSER_K              "{the 1E fuser --k selector, or empty}"
 ```
-The optimizer and prettifier re-run exactly `TEST_FILE_USED` / `TEST_K`, so they must name what you ran.
+The optimizer and prettifier re-run exactly `TEST_FILE_USED` / `TEST_K` and `FUSER_K`, so they must name what you ran.
 
 Then report:
 ```
@@ -479,11 +521,11 @@ State the kernel and test paths literally so downstream steps / humans can inspe
 2. **Always use `run_test.sh simulate`** (never `pytest --run-simulator`), invoked synchronously via the Bash tool with `timeout: 600000` as a backstop — one blocking call, no resume loop (§2.3.1).
 3. **One fix per attempt.**
 4. **Fix the kernel, not the test.**
-5. **SFPU ops append to the unified test for their category** (1A) — unless the unified harness cannot reach a REQUIRED code path, in which case use a dedicated test pair (1A.3b). Non-SFPU kernels extend a sibling test or create one (1B). Copy patterns exactly.
+5. **SFPU ops join the unified test for their category** (1A) — unless they need a new test parameter, a statistical oracle or cross-tile state, in which case use a dedicated `test_{op}_{arch}.py` (1A.3b). Non-SFPU kernels extend a sibling test or create one (1B). Copy patterns exactly. Fuser registration (1E) and the perf header gate (1F) are part of every SFPU test change.
 6. **Safe value ranges first**; widen only after a pass.
 7. **`TTI_` → `TT_` is a last resort** — change the parameter type instead (3.5).
-8. **SFPU tests always use `unpack_to_dest=True`**; filter the matrix to bit-width-matched combinations only (1C). Non-SFPU: `unpack_to_dest = (input.is_32_bit() == (dest_acc == Yes))`.
-9. **Authority order** when debugging: working target-arch code > Confluence ISA pages > `assembly.yaml` > reference-arch code. Never guess from training data.
+8. **SFPU tests default to `unpack_to_dest=True`** on bit-width-matched combinations; sign-sensitive ops also run the FPU datacopy routes (1C). Non-SFPU: `unpack_to_dest = (input.is_32_bit() == (dest_acc == Yes))`.
+9. **Authority order** when debugging: `codegen/references/quasar-hw-facts.md` and `assembly.yaml` (field encodings) > Confluence ISA pages > working target-arch code > reference-arch code. Never guess from training data.
 10. **If a signature repeats twice, stop targeted fixes** (3.4) — the bug is structural.
 11. **Scale `--maxfail` to matrix size (2.1); never use `-x`.** `--maxfail 0` on the verification attempt.
 12. **Pass no timeout to the consumer** — the watcher bounds the run.
@@ -547,8 +589,9 @@ At minimum: the 1D collection smoke, each `compile` run, each `simulate` run
   infra files edited (`llk_defs.h`, `llk_params.py`, `golden_generators.py`, ...).
 - **Simulator log pointers**: the `emu_*.log` filenames under `tests/python_tests/{arch}/`.
 
-## Open questions / handoffs
-Things the optimizer / refiner / human must verify. Write "none" if none.
+## Open risks
+Per `codegen/references/logging.md` § Open risks (`R<n> CLOSED … evidence: <test id>` / `R<n> DEFERRED … PR:`), or "none".
+A gap a test can close is closed here, not handed off: the run does not finish while one is OPEN.
 
 ## Final outcome
 - Result: PASS | STUCK | ENV_ERROR

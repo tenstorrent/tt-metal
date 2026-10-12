@@ -46,6 +46,7 @@ Two mutually-exclusive modes, selected by `SFPI_MODE`:
 - **unset/false → Replay Mode (default).** Wrap ITERATIONS loops with replay buffers. Follow "## Process (Replay Mode)".
 - **true → SFPI Conversion Mode.** Reimplement the raw-`TTI_` kernel in the `sfpi::` DSL and keep it only if it is no worse. Do NOT apply replay buffers here — the user opted out of replay when requesting SFPI. Follow "## SFPI Conversion Mode" and skip the replay Process.
 - **`PERF_ENABLED=true` → Perf Mode overlay on either mode.** The mode still supplies the *content* of each edit; measured cycles decide keep/reject instead of instruction count. Read "## Perf Mode" before either Process and follow its loop.
+- **`PERF_ENABLED=false` → Unmeasured Perf Check overlay on either mode.** Follow "## Unmeasured Perf Check" around your mode's edits.
 
 ## Output
 
@@ -55,6 +56,27 @@ Two mutually-exclusive modes, selected by `SFPI_MODE`:
 - All modes: compilation and all functional tests must still pass.
 
 ---
+
+## Unmeasured Perf Check (`PERF_ENABLED=false`)
+
+There is no original to compare against, so measure the tester's kernel (`entry`) and every candidate edit yourself and keep an edit only if it is not slower. This section overrides the Perf Mode rule against opening perf CSVs.
+
+Pick the module and `--k` token, and confirm the count is non-zero:
+- For SFPU unary ops: `perf_eltwise_unary_sfpu_quasar.py`, `--k` = the lowercase op name.
+- For SFPU binary ops: `perf_eltwise_binary_sfpu_quasar.py`, `--k` = the UPPERCASE op id.
+```bash
+bash "$WORKTREE_DIR/tt_metal/tt-llk/.claude/scripts/run_test.sh" count \
+    --worktree "$WORKTREE_DIR/tt_metal/tt-llk" --arch quasar --test {PERF_MODULE} --k "{token}"
+```
+Measure one label (`entry`, `attempt_1`, …):
+```bash
+rm -rf "$WORKTREE_DIR/tt_metal/tt-llk/perf_data"
+bash "$WORKTREE_DIR/tt_metal/tt-llk/.claude/scripts/run_test.sh" run \
+    --worktree "$WORKTREE_DIR/tt_metal/tt-llk" --arch quasar --test {PERF_MODULE} --k "{token}" \
+    --maxfail 0 --log-dir "$LOG_DIR/perf_unmeasured/{label}"
+find "$WORKTREE_DIR/tt_metal/tt-llk/perf_data" -name "${PERF_MODULE%.py}.post.csv"
+```
+Compare the `mean(MATH_ISOLATE)` column of each variant against `entry`. If the count is `0` or the op is ternary, compare SFP ops per element (`codegen/scripts/sfpi_instr_count.py`) against the reference arch's count instead and log `R<n> DEFERRED: cycles not measured — PR: …`.
 
 ## Perf Mode (`PERF_ENABLED=true`)
 
@@ -79,7 +101,7 @@ In the `PERF_KEEP` line, `vs_baseline=` is the strict standing (regressed if ANY
 
 Each attempt edits the kernel in the tree — always best-so-far — then gates it functionally, then measures it:
 
-1. **Edit — one lever per attempt.** Attempt 1 = your mode's standard optimization (Replay Steps 2–7, or SFPI S2–S6). Later attempts: one S6.1 idiom lever, fewer per-iteration `SFPLOAD`/`SFPSTORE`, or a fused mul+add. Keep the algorithm and the `_init_{op}_` / `_calculate_{op}_` / dispatcher signatures. "## What NOT to Do" applies to every attempt.
+1. **Edit — one lever per attempt.** Attempt 1 = your mode's standard optimization (Replay Steps 1b–7, or SFPI S2–S6). Later attempts: one Step 1b lever, one S6.1 idiom lever, fewer per-iteration `SFPLOAD`/`SFPSTORE`, or a fused mul+add. Keep the algorithm and the `_init_{op}_` / `_calculate_{op}_` / dispatcher signatures. "## What NOT to Do" applies to every attempt.
 2. **Functional gate** — your mode's compile + `run_test.sh run --k {op} --maxfail 0` (Replay Step 8 / SFPI S7). Not `PASS` (fail, hang, or an unfixable compile error) → `execute_step_perf_revert attempt_{k}`, then step 4. A broken candidate is never measured.
 3. **Perf** — `execute_step_perf_measure attempt_{k}`. Read `action=` and run the matching helper immediately, before touching the kernel again: `keep` → `execute_step_perf_keep attempt_{k}`; `revert` → `execute_step_perf_revert attempt_{k}`; `neutral` (no measured change on this variant) → your call: keep it only if it simplifies the kernel or targets a code path this variant does not execute (the full sweep then judges it), otherwise revert; `retry` (simulator unavailable, `status=env_error`) → re-run the same measure command; it does not consume an attempt.
 4. **Route** on the `next=` field of the keep/revert line: `attempt N` → step 1 with k = N; `final` → P3; `done` → P4. `attempt N` is never optional — use every attempt the line hands out, whether or not any variant is still slower than the original. If you have no lever left for the aimed variant, read how the Blackhole reference handles that exact case (format pair, dest mode) and port that approach.
@@ -111,7 +133,7 @@ Keep/reject rule (strict): **keep SFPI iff `sfpi_instruction_count <= tti_instru
 ```bash
 grep -cE 'sfpi::|vFloat|vInt|dst_reg\[|v_if|v_endif' "$WORKTREE_DIR/$GENERATED_KERNEL"
 ```
-Non-zero → the kernel is **already SFPI** (writer carried the reference over). Nothing to convert or compare. Record it in the self-log, emit a one-row table (`{op} | n/a (reference was SFPI) | kept as-is`), and return — do not edit, recompile, or re-test.
+Non-zero → the kernel is **already SFPI** (writer carried the reference over). Nothing to convert or compare. Apply only Replay Step 1b (b) to hand-inserted `__builtin_rvtt_sfpnop()` calls and re-test if you removed any. Record it in the self-log, emit a one-row table (`{op} | n/a (reference was SFPI) | kept as-is`), and return.
 
 Zero → raw `TTI_`: proceed to S2.
 
@@ -264,6 +286,15 @@ If it printed `SKIP`, record it in the self-log and return — do not edit, reco
 cp "$WORKTREE_DIR/$GENERATED_KERNEL" "$WORKTREE_DIR/$GENERATED_KERNEL.pre_opt"
 ```
 
+### Step 1b: Latency slots, dead NOPs, redundant instructions
+
+Read `.claude/skills/perf-optimization-audit/SKILL.md` and `.claude/skills/instruction-latency-audit/SKILL.md` and apply their checks and verdict rules inline to this kernel. Skip their source preflight, user pauses and agent fan-out. Then:
+- (a) Move independent instructions into the latency slot after each 2-cycle producer (SFPMAD and the other 2-cycle ops). Nothing fits after SFPSWAP: hardware always stalls the next instruction.
+- (b) Delete a NOP only when it sits right after SFPSWAP (TEN-4581), or when it pads a 2-cycle producer whose consumer is interlocked and the comment cites no errata. Keep every NOP the latency audit marks as a static delay (e.g. the cycle after SFPCONFIG).
+- (c) Drop instructions that only work around the reference's register allocation, and fold an `SFPMOV` negate feeding a MAD into the MAD's negate mod bit (check `assembly.yaml`).
+
+After any reorder, re-check every SFPSWAP: if its input now comes from a 2-cycle op issued on the previous cycle, put one NOP before it (TEN-4605). Report SFP-op counts before and after; re-test per Step 8.
+
 ### Step 2: Find replay candidates
 ```bash
 grep -n "ITERATIONS\|for.*int d" "$WORKTREE_DIR/$GENERATED_KERNEL"
@@ -274,7 +305,7 @@ Candidates are:
 - any fixed, all-`TTI_` instruction block the kernel issues two or more times per call (e.g. a sort network run once per row block), on **every** layout / mode path — not only the path the first test exercised;
 - every block the reference records into a replay buffer: the target should replay the same blocks.
 
-**Where to record:** if the reference records in its init and replays from compute, record in the target's init the same way (one `load_replay_buf` per layout/mode, selected by the init's template parameters) and replay from compute. Recording inside the compute function re-records on every call. Add the init's `@note` contract: "call again after any other math-thread op that records into the replay buffer".
+**Where to record:** follow the reference and analysis §6b. If the reference records in its init, record in the target's init (one `load_replay_buf` per layout/mode, selected by the init's template parameters) and replay from compute; if §6b keeps a per-call recording (init has side effects such as a reseed), keep it. **A replay the reference does not have:** add it only when the body is longer than 8 instructions and init has no other side effect (reseed, state reset). Record it once in init at replay slot 0 and add the init `@note` "call again after any other math-thread op that records into the replay buffer", as the metal-layer `ckernel_sfpu_cumsum.h` (`cumsum_init`) does. Otherwise do not add it.
 
 ### Step 3: Study the reference
 ```bash
@@ -294,7 +325,7 @@ grep -n -A 10 "load_replay_buf" tt_llk_quasar/llk_lib/llk_math_eltwise_binary.h
 // (exec_while_loading defaults to false). Every working Quasar kernel uses this overload.
 load_replay_buf<0, REPLAY_LEN>([&]() { /* the instruction sequence to record */ });
 
-TTI_REPLAY(0, REPLAY_LEN, 0, 0, 0, 0);  // start, len, last, set_mutex, exec_while_loading, load_mode=0 → run it
+TTI_REPLAY(0 /*start_idx*/, REPLAY_LEN /*len*/, 0 /*last*/, 0 /*set_mutex*/, 0 /*execute_while_loading*/, 0 /*load_mode*/);  // run it
 ```
 Do not record while executing (`exec_while_loading=true`): no Quasar kernel does, and it hung the emulator in two codegen runs where the record-only form passed. Do not add `disable_gathering()`/`enable_gathering()` around the compile-time overload. Leave `last` and `set_mutex` at 0.
 REPLAY ISA: `tt_llk_quasar/instructions/assembly.yaml` (`REPLAY`), Confluence `1612808713`.
@@ -330,11 +361,12 @@ load_replay_buf<0, REPLAY_LEN>(
         TTI_SFPSTORE(0, mod0, ADDR_MOD_7, offset1);
     });                                    // recorded only — nothing executes yet
 for (int d = 0; d < ITERATIONS; d++) {     // every iteration is a replay
-    TTI_REPLAY(0, REPLAY_LEN, 0, 0, 0, 0);
+    TTI_REPLAY(0 /*start_idx*/, REPLAY_LEN /*len*/, 0 /*last*/, 0 /*set_mutex*/, 0 /*execute_while_loading*/, 0 /*load_mode*/);
 }
 ```
 **Rules:**
 - Record only, then replay all `ITERATIONS` iterations (`d` starts at 0). Issue cost: `REPLAY_LEN` recording slots + `ITERATIONS` replays (4 + 8 = 12) instead of `REPLAY_LEN × ITERATIONS` (32).
+- Compose `REPLAY_LEN` from named per-part counts and `static_assert` it against the bank depth, as cumsum does.
 - Drop `#pragma GCC unroll` from the replay loop.
 - Multiple independent ITERATIONS loops can share replay slot 0 (they run sequentially).
 
@@ -366,6 +398,8 @@ echo "RUN_EXIT=$?"
 ```
 Exit codes: 0=pass, 2=compile fail, 1=test fail, 3=env error, 5=hang. On 1/2/5 the optimization broke something → Step 9.
 
+3. **Fuser re-run.** If `$ST --log-dir "$LOG_DIR" get FUSER_K` is non-empty, run the same `run` command with `--test test_fused_quasar.py --k "$FUSER_K"`; a failure is handled like step 2.
+
 ### Step 9: Handle failures
 
 Likely causes, in order:
@@ -385,9 +419,9 @@ A correct unoptimized kernel beats a broken optimized one.
 ## What NOT to Do
 
 - Do NOT use SFPLOADMACRO — complex and error-prone.
-- Do NOT change the algorithm — only move instruction blocks into replay (Step 2 candidates).
+- Do NOT change the algorithm — only reorder independent instructions, drop dead or redundant ones (Step 1b), and move instruction blocks into replay (Step 2 candidates).
 - Do NOT add functionality — no new template params or code paths.
-- Do NOT modify init/uninit functions beyond recording the replay program there when the reference records it in init (Step 2).
+- Do NOT modify init/uninit functions beyond recording the replay program there (Step 2).
 - Do NOT optimize loops with conditional branches.
 
 ---
@@ -461,11 +495,12 @@ Curated. Full transcript in `$LOG_DIR/transcripts/NN_{slug}_commands.md`. Includ
 - Test result: PASS ({N}/{N}) | FAIL ({failures}) | SKIPPED
 - If reverted: the revert command run and the reason.
 
-## Perf (Perf Mode only — write "not enabled" otherwise)
+## Perf (Perf Mode; for the Unmeasured Perf Check, the `label | edit | mean(MATH_ISOLATE) | kept?` table or the SFP-op counts)
 - Baseline: `PERF_METRIC`, `PERF_REGRESS_PCT`, and the `entry` line's `vs_baseline=` standing.
 - One row per attempt, copied from the printed lines: `label | edit | functional | vs_best | vs_baseline | kept?`
 - Final: the shipped best's label and `vs_baseline=`, and why the loop stopped (`next=done`, cap reached, or not regressed).
 
-## Open questions / handoffs
-Any hardware-doc question or replay-buffer limit the analysis didn't cite, recorded for the next run.
+## Open risks
+Per `codegen/references/logging.md` § Open risks (`R<n> CLOSED … evidence:` / `R<n> DEFERRED … PR:`), or "none".
+A declined optimization a reviewer would ask about (e.g. redundant reloads) is a DEFERRED entry.
 ```

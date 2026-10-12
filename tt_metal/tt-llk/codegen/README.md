@@ -257,7 +257,7 @@ All runs are also indexed in `runs.jsonl` (one JSON line per run) for dashboardi
 2. **Incremental phases** -- Write one sub-kernel, compile, test, repeat. Never write the whole file at once.
 3. **Instruction encoding drives API** -- `TTI_` macros require compile-time constants; function parameter types must preserve constexpr-ness
 4. **Target-first design** -- Use reference for semantics only; derive implementation patterns from existing target code
-5. **Append SFPU ops to the unified test** -- New SFPU ops register into the consolidated test for their category (`test_eltwise_unary_sfpu_quasar.py`, `test_eltwise_binary_sfpu_quasar.py`, or the ternary `test_sfpu_where_quasar.py`) rather than getting their own per-op files; non-SFPU kernels extend a sibling test
+5. **Unified SFPU tests by default** -- New SFPU ops register into the consolidated test for their category (`test_eltwise_unary_sfpu_quasar.py`, `test_eltwise_binary_sfpu_quasar.py`, or the ternary `test_sfpu_where_quasar.py`); an op that needs new test parameters, a statistical oracle or cross-tile state gets its own `test_{op}_quasar.py` so the shared perf schema stays unchanged; non-SFPU kernels extend a sibling test
 
 ### Optional Tenstorrent specialist plugins
 

@@ -9,7 +9,11 @@ pulled from the per-agent self-logs (agent_*.md); the tool histogram and top
 commands come from the extracted transcripts. Writes the report to --out and
 prints it to stdout.
 
-Usage: build_report.py --log-dir <LOG_DIR> --out <path/to/report.md>
+With --pr-body it also writes the PR description (<= 15 lines: what, scope,
+testing, open risks, follow-ups), taking the open risks from the self-logs'
+DEFERRED entries (open_risks.py) and the follow-ups from pre_pr_gates.txt.
+
+Usage: build_report.py --log-dir <LOG_DIR> --out <path/to/report.md> [--pr-body <path>]
 """
 from __future__ import annotations
 
@@ -19,6 +23,7 @@ import json
 import os
 import re
 import sys
+from pathlib import Path
 
 
 def _d(v) -> dict:
@@ -292,11 +297,19 @@ def build(d: dict, log_dir: str) -> str:
     cov = _d(d.get("coverage"))
     A("Code Paths Tested:")
     covered, not_covered = _l(cov.get("covered")), _d(cov.get("not_covered"))
-    A(f"  Covered:     {', '.join(str(x) for x in covered) if covered else '(none recorded)'}")
+    A(
+        f"  Covered:     {', '.join(str(x) for x in covered) if covered else '(none recorded)'}"
+    )
     if not_covered:
         A(f"  Not covered: {', '.join(f'{k} ({v})' for k, v in not_covered.items())}")
     if d.get("test_file"):
         A(f"  Test file:   {d['test_file']}")
+    risks = _deferred(log_dir)
+    if risks:
+        A("----------------------------------------")
+        A("Open risks (deferred):")
+        for r in risks:
+            A(f"  - {r}")
     A("----------------------------------------")
     A("Artifacts:")
     A(f"  Generated File: {d.get('generated_file', '')}")
@@ -309,10 +322,85 @@ def build(d: dict, log_dir: str) -> str:
     return "\n".join(L) + "\n"
 
 
+# Line budget: What, Scope, Testing take 2 lines each, Open risks and Follow-ups 1 header
+# each, leaving MAX_RISKS + 1 overflow line + MAX_DRIFT (orchestrator_steps.sh keeps the
+# same number of DRIFT lines).
+PR_BODY_MAX_LINES = 15
+PR_BODY_MAX_RISKS = 4
+PR_BODY_MAX_DRIFT = 2
+
+
+def _deferred(log_dir: str) -> list[str]:
+    sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
+    from open_risks import deferred_lines
+
+    return deferred_lines(log_dir)
+
+
+def _compute_api_unwired(log_dir: str) -> bool:
+    """True when the analyzer found the compute-API wrapper gated out and the patch leaves it so."""
+    sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
+    import state
+
+    if (
+        str(state._load(Path(log_dir) / "state.json").get("COMPUTE_API_GATED")).lower()
+        != "true"
+    ):
+        return False
+    patch = os.path.join(log_dir, "generated.patch")
+    return not (
+        os.path.isfile(patch)
+        and "tt_metal/hw/inc/api/" in open(patch, errors="replace").read()
+    )
+
+
+def pr_body(d: dict, log_dir: str) -> str:
+    """Short PR description; never a run-log dump (reviewers rewrote every long one)."""
+    cov = _d(d.get("coverage"))
+    covered, not_covered = _l(cov.get("covered")), _d(cov.get("not_covered"))
+    gates = os.path.join(log_dir, "pre_pr_gates.txt")
+    drift = [ln.strip() for ln in open(gates)] if os.path.isfile(gates) else []
+    drift = [ln for ln in drift if ln.startswith("DRIFT") and ln != "DRIFT: none"]
+    risks = _deferred(log_dir)
+    risk_lines = [f"- {r}" for r in risks[:PR_BODY_MAX_RISKS]]
+    if len(risks) > PR_BODY_MAX_RISKS:
+        risk_lines.append(
+            f"- (+{len(risks) - PR_BODY_MAX_RISKS} more: see the run report's Open risks)"
+        )
+    tt, tp = _i(d.get("tests_total")), _i(d.get("tests_passed"))
+    L = [
+        f"### What\nQuasar port of `{d.get('kernel', '')}` from `{d.get('reference_file', '')}` "
+        f"into `{d.get('generated_file', '')}`.",
+        "### Scope\nOut of scope: "
+        + (
+            "compute-API wiring (`tt_metal/hw/inc/api`), follow-up PR"
+            if _compute_api_unwired(log_dir)
+            else "none"
+        )
+        + ".",
+        f"### Testing\n`{d.get('test_file') or '?'}`: {tp}/{tt} variants on the Quasar simulator. "
+        f"Paths: {', '.join(map(str, covered)) or '(none recorded)'}"
+        + (
+            f"; not covered: {', '.join(f'{k} ({v})' for k, v in not_covered.items())}"
+            if not_covered
+            else ""
+        )
+        + ".",
+        "### Open risks\n" + ("\n".join(risk_lines) if risks else "None."),
+        "### Follow-ups\n"
+        + (
+            "\n".join(f"- {x}" for x in drift[:PR_BODY_MAX_DRIFT]) if drift else "None."
+        ),
+    ]
+    body = "\n".join(L).splitlines()[:PR_BODY_MAX_LINES]
+    return "\n".join(body) + "\n"
+
+
 def main() -> int:
     ap = argparse.ArgumentParser(description=__doc__)
     ap.add_argument("--log-dir", required=True)
     ap.add_argument("--out", required=True)
+    ap.add_argument("--pr-body", help="also write the short PR description here")
     args = ap.parse_args()
 
     run_json = os.path.join(args.log_dir, "run.json")
@@ -328,6 +416,9 @@ def main() -> int:
     with open(args.out, "w", encoding="utf-8") as fh:
         fh.write(report)
     print(report)
+    if args.pr_body:
+        with open(args.pr_body, "w", encoding="utf-8") as fh:
+            fh.write(pr_body(data, args.log_dir))
     return 0
 
 
