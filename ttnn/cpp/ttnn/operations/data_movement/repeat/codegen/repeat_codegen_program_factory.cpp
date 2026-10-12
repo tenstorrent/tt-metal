@@ -253,9 +253,8 @@ ProgramDescriptor RepeatCodegenProgramFactory::create_descriptor(
         };
         reader_desc.config = ReaderConfigDescriptor{};
 
-        std::vector<uint32_t> writer_ct_args = {0, page_size};
+        std::vector<uint32_t> writer_ct_args = {0, page_size, kRepeatBatch};
         TensorAccessorArgs(*dst_buffer).append_to(writer_ct_args);
-        writer_ct_args.push_back(kRepeatBatch);
 
         KernelDescriptor writer_desc;
         writer_desc.kernel_source = kWriterInterleaved;
@@ -328,9 +327,8 @@ ProgramDescriptor RepeatCodegenProgramFactory::create_descriptor(
     reader_desc.compile_time_args = std::move(reader_ct_args);
 
     // The writer takes its L1 stride from the CB, so only the output's aligned page is passed.
-    std::vector<uint32_t> writer_ct_args = {0, out_aligned};
+    std::vector<uint32_t> writer_ct_args = {0, out_aligned, cb_batch};
     TensorAccessorArgs(*dst_buffer).append_to(writer_ct_args);
-    writer_ct_args.push_back(cb_batch);
 
     KernelDescriptor writer_desc;
     writer_desc.kernel_source = kWriterInterleaved;
