@@ -15,12 +15,17 @@ cd $W; git checkout --detach "$REV"
 for n in tracy umd tt-cluster-descriptors; do git submodule update --init --depth 1 -- tt_metal/third_party/$n; done
 step "source at $(git rev-parse HEAD)"
 HF=$F/python_env/bin/hf
-dl() { nice -n 10 ionice -c3 timeout 14400 $HF download "$@"; }
+# hf 1.16.1 exits non-zero (click Exit(0) traceback) even after a good download: judge by the files instead.
+dl() { local rc=0; nice -n 10 ionice -c3 timeout 14400 $HF download "$@" || rc=$?; echo "[s417] hf rc=$rc"; [ $rc -ne 124 ]; }
+need() { [ -s "$1" ] || { echo "[s417] missing $1"; exit 3; }; }
 step lora-v1.0
 dl lightx2v/Minimax-h3-Turbo minimax_h3_fl2v_turbo_4step_v1.0_768p_bf16.safetensors --local-dir $M/lightx2v-h3-turbo
+need $M/lightx2v-h3-turbo/minimax_h3_fl2v_turbo_4step_v1.0_768p_bf16.safetensors
 step lora-sla
 dl lightx2v/Minimax-h3-Turbo-SLA minimax_h3_fl2v_turbo_4step_v0.1_768p_sla_bf16.safetensors --local-dir $M/lightx2v-h3-turbo-sla
+need $M/lightx2v-h3-turbo-sla/minimax_h3_fl2v_turbo_4step_v0.1_768p_sla_bf16.safetensors
 step base
 dl MiniMaxAI/MiniMax-H3 --local-dir $M/MiniMax-H3
+find $M/MiniMax-H3 -name "*.safetensors" -not -path "*/.cache/*" | grep -q . || { echo "[s417] no safetensors in MiniMax-H3"; exit 3; }
 touch $M/MiniMax-H3/READ_OK
 step "done; $(du -sh $M | cut -f1)"

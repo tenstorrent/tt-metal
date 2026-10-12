@@ -165,3 +165,14 @@ Next (tunnel up): `ssh exabox-login 'df -h /data; curl -sI https://huggingface.c
 - exabox has no HF token. If MiniMax-H3 turns out to be gated, the marker records the failure.
 - Next: if the rc is 0, submit a build-only sbatch on a dit node that has been idle 2 h+ (t160 qualify.sh/submit.sh pattern), then the cache-fill job, then the A/B pairs per seed:
   (dense, vsa0.9) and (dense, sla0.85 with the SLA LoRA). Use run409b.sh as the template; drop its local-disk check because /data is NFS.
+
+## t417 run 1691 (2026-10-12 08:45 PDT)
+- First staging (stage417.sh) failed with STAGE417_RC=1 after the v1.0 LoRA download: the file was complete (1383677808 B),
+  but hf 1.16.1 exits non-zero via a `click.exceptions.Exit: 0` traceback, and set -e stopped the script.
+- Fix: dl() logs hf's rc and fails only on timeout (124); need() checks each file; the base step checks for *.safetensors.
+- MiniMaxAI/MiniMax-H3 is not gated (api 200, resolve 307 without a token). /data has 25 TB free.
+- Restarted: ttp detach --remote exabox-login --dir /data/smarton/fasth3/t417/detach stage417b (pid 3269117).
+  After 1 min it had both LoRAs and 46 GB of MiniMax-H3 (280 files, layout MiniMax-H3/FL2VA/...). Deleted the old log dir ~/.ttp-detach/1684.
+- Check: `ttp detach --check --host exabox-login /data/smarton/fasth3/t417/detach/stage417b`, then read stage417.done.
+- Next: point the run config's model path at t417/models/MiniMax-H3/FL2VA (check run409b.sh's expected layout), submit a build-only
+  sbatch on a dit node idle 2 h+ (t160 qualify.sh/submit.sh pattern), then the cache-fill job, then the A/B pairs per seed.
