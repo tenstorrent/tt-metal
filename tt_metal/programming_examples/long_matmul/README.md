@@ -169,3 +169,26 @@ they are a placeholder and the meaningful unit is energy per tile, or per byte m
 ```bash
 LONG_MATMUL_OP=exp POWER_CASE=1 ./build/programming_examples/metal_example_long_matmul 1024 2048 2048 160
 ```
+
+## Profiling the kernels
+
+With the device profiler on, each kernel records when it starts and ends and how its time splits
+between waiting on circular buffers and doing real work. `tools/tt-ember/parser.py` turns these
+into a per-core wait / active / overhead breakdown for every grid.
+
+```bash
+TT_METAL_DEVICE_PROFILER=1 ./build/programming_examples/metal_example_long_matmul 1024 2048 2048 160
+```
+
+The markers land in `generated/profiler/.logs/profile_log_device.csv`, read back after every grid:
+
+| Kernel | Markers | Wait = blocked in | Active = time in |
+|---|---|---|---|
+| Reader | `READER_KERNEL_START/END`, `READER_WAIT_CYCLES`, `READER_TRANSFER_CYCLES` | `cb_reserve_back` | `noc_async_read_tile` + barrier |
+| Compute | `COMPUTE_KERNEL_START/END`, `COMPUTE_WAIT_CYCLES`, `COMPUTE_COMPUTE_CYCLES` | `cb_wait_front` | the math loop and `pack_tile` |
+| Writer | `WRITER_KERNEL_START/END`, `WRITER_WAIT_CYCLES`, `WRITER_TRANSFER_CYCLES` | `cb_wait_front` | `noc_async_write_tile` + barrier |
+
+Each kernel records these once per run, not per tile. The compute markers appear three times per
+core, once per TRISC, since all three run the same code. The timestamp reads are compiled in only
+when the profiler is on (see `kernels/profile_markers.h`), so a normal power-measurement run
+executes the same instructions as a build without them.

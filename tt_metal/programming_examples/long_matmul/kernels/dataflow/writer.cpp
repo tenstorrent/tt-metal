@@ -3,6 +3,7 @@
 // SPDX-License-Identifier: Apache-2.0
 
 #include "api/dataflow/dataflow_api.h"
+#include "../profile_markers.h"
 
 // See kernels/compute/compute.cpp. Output arrives one BLOCK_M x BLOCK_N block at a time, in
 // row-major order within the block.
@@ -36,6 +37,11 @@ void kernel_main() {
     constexpr auto c_args = TensorAccessorArgs<0>();
     const auto c = TensorAccessor(c_args, dst_addr, tile_bytes);
 
+    namespace prof = long_matmul_profile;
+    DeviceTimestampedData("WRITER_KERNEL_START", 0);
+    uint64_t wait_cycles = 0;
+    uint64_t transfer_cycles = 0;
+
     for (uint32_t iter = 0; iter < num_iterations; iter++) {
         for (uint32_t blk = 0; blk < num_output_blocks; blk++) {
             // Wrap the same way as the reader, so fixed mode never writes past the end of C.
@@ -46,9 +52,12 @@ void kernel_main() {
             // When LONG_MATMUL_DISABLE_WRITER is set the writer keeps draining the output CB -- so
             // compute never stalls on a full CB -- but issues no DRAM traffic, leaving the output
             // buffer stale. Harmless: the app never verifies its output.
+            uint32_t t = prof::now();
             cb_wait_front(cb_id_out, kBlockTiles);
+            prof::add_since(wait_cycles, t);
             uint32_t l1_read_addr = get_read_ptr(cb_id_out);
 #ifndef LONG_MATMUL_DISABLE_WRITER
+            t = prof::now();
             for (uint32_t m = 0; m < kBlockM; m++) {
                 for (uint32_t n = 0; n < kBlockN; n++) {
                     const uint32_t out_tile = (row0 + m) * Nt + (col0 + n);
@@ -59,8 +68,14 @@ void kernel_main() {
                     l1_read_addr += tile_bytes;
                 }
             }
+            prof::add_since(transfer_cycles, t);
 #endif
             cb_pop_front(cb_id_out, kBlockTiles);
         }
     }
+
+    // The totals go out before KERNEL_END so they fall inside this run's marker window.
+    DeviceTimestampedData("WRITER_WAIT_CYCLES", wait_cycles);
+    DeviceTimestampedData("WRITER_TRANSFER_CYCLES", transfer_cycles);
+    DeviceTimestampedData("WRITER_KERNEL_END", 0);
 }

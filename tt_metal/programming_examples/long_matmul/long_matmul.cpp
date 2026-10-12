@@ -589,6 +589,10 @@ int main(int argc, char* argv[]) {
                 fmt::print("Output checksum: sum={:.6e} absmax={:.6e}\n", sum, absmax);
             }
 
+            // With TT_METAL_DEVICE_PROFILER=1 this drains the kernels' timing markers (see
+            // kernels/profile_markers.h) into generated/profiler/.logs/profile_log_device.csv.
+            // It runs after t_end, so it is not part of the measured interval.
+            ReadMeshDeviceProfilerResults(*mesh_device);
 
             const std::string start_time_str = format_time(sys_start);
             const std::string end_time_str = format_time(sys_end);

@@ -12,6 +12,7 @@
 #include "api/compute/eltwise_unary/gelu.h"
 #include "api/compute/eltwise_unary/recip.h"
 #include "api/compute/compute_kernel_api.h"
+#include "../profile_markers.h"
 
 using std::uint32_t;
 
@@ -87,6 +88,13 @@ void kernel_main() {
 #endif
 #endif
 
+    // All three TRISCs run this code, so every marker below is recorded three times per core, once
+    // per TRISC. Only TRISC1 does the math and only TRISC2 packs.
+    namespace prof = long_matmul_profile;
+    DeviceTimestampedData("COMPUTE_KERNEL_START", 0);
+    uint64_t wait_cycles = 0;
+    uint64_t compute_cycles = 0;
+
     for (uint32_t iter = 0; iter < num_iterations; iter++) {
         if (iter % 10 == 0) {
             // Only print from TRISC0, otherwise we'll get three identical prints
@@ -99,8 +107,10 @@ void kernel_main() {
             for (uint32_t kt = 0; kt < Kt; kt++) {
                 // The reader delivers a column slice of A (kBlockM tiles) and a row slice of B
                 // (kBlockN tiles) for this step of the shared dimension.
+                uint32_t t = prof::now();
                 cb_wait_front(cb_in0, kBlockM);
                 cb_wait_front(cb_in1, kBlockN);
+                prof::add_since(wait_cycles, t);
                 // Every A tile is combined with every B tile in the slice, so the two slices
                 // are reused kBlockN and kBlockM times respectively before being popped. This
                 // is where the DRAM traffic reduction comes from.
@@ -109,6 +119,7 @@ void kernel_main() {
                 // before and neither deadlocks. Output tiles then contain garbage, which is
                 // harmless: the app never verifies its output.
 #ifndef LONG_MATMUL_DISABLE_COMPUTE
+                t = prof::now();
                 for (uint32_t m = 0; m < kBlockM; m++) {
                     for (uint32_t n = 0; n < kBlockN; n++) {
                         const uint32_t idst = m * kBlockN + n;
@@ -134,6 +145,7 @@ void kernel_main() {
 #endif
                     }
                 }
+                prof::add_since(compute_cycles, t);
 #endif
                 cb_pop_front(cb_in0, kBlockM);
                 cb_pop_front(cb_in1, kBlockN);
@@ -145,9 +157,11 @@ void kernel_main() {
             // TRISC2 reserves space in the output circular buffer for the whole block
             cb_reserve_back(cb_out, kBlockTiles);
 #ifndef LONG_MATMUL_DISABLE_COMPUTE
+            const uint32_t t = prof::now();
             for (uint32_t i = 0; i < kBlockTiles; i++) {
                 pack_tile(i, cb_out);
             }
+            prof::add_since(compute_cycles, t);
 #endif
             // TRISC2 marks the result tiles as used by pushing them to the back of the output
             // circular buffer (writer kernel can read them now)
@@ -156,4 +170,9 @@ void kernel_main() {
             tile_regs_release();
         }
     }
+
+    // The totals go out before KERNEL_END so they fall inside this run's marker window.
+    DeviceTimestampedData("COMPUTE_WAIT_CYCLES", wait_cycles);
+    DeviceTimestampedData("COMPUTE_COMPUTE_CYCLES", compute_cycles);
+    DeviceTimestampedData("COMPUTE_KERNEL_END", 0);
 }

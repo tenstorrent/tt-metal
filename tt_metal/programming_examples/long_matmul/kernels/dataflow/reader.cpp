@@ -5,6 +5,7 @@
 #include <stdint.h>
 #include "api/dataflow/dataflow_api.h"
 #include "api/debug/dprint.h"
+#include "../profile_markers.h"
 
 // See kernels/compute/compute.cpp. With a BLOCK_M x BLOCK_N output block, one column slice of
 // A and one row slice of B feed BLOCK_M * BLOCK_N multiplies, so per multiply this reads
@@ -42,6 +43,11 @@ void kernel_main() {
     constexpr auto b_args = TensorAccessorArgs<a_args.next_compile_time_args_offset()>();
     const auto b = TensorAccessor(b_args, src1_addr, in1_tile_bytes);
 
+    namespace prof = long_matmul_profile;
+    DeviceTimestampedData("READER_KERNEL_START", 0);
+    uint64_t wait_cycles = 0;
+    uint64_t transfer_cycles = 0;
+
     for (uint32_t iter = 0; iter < num_iterations; iter++) {
         for (uint32_t blk = 0; blk < num_output_blocks; blk++) {
             // Wrap so that in fixed mode a core whose range runs past the last block starts
@@ -59,31 +65,44 @@ void kernel_main() {
                 // sitting in that L1 buffer, which is harmless: the app never verifies its output.
                 {
                     // Column slice of A: rows row0..row0+kBlockM-1 at inner index k.
+                    uint32_t t = prof::now();
                     cb_reserve_back(cb_id_in0, kBlockM);
+                    prof::add_since(wait_cycles, t);
                     uint32_t l1_addr = get_write_ptr(cb_id_in0);
 #ifndef LONG_MATMUL_DISABLE_READER
+                    t = prof::now();
                     for (uint32_t m = 0; m < kBlockM; m++) {
                         noc_async_read_tile((row0 + m) * Kt + k, a, l1_addr);
                         l1_addr += in0_tile_bytes;
                     }
                     noc_async_read_barrier();
+                    prof::add_since(transfer_cycles, t);
 #endif
                     cb_push_back(cb_id_in0, kBlockM);
                 }
                 {
                     // Row slice of B: inner index k, columns col0..col0+kBlockN-1.
+                    uint32_t t = prof::now();
                     cb_reserve_back(cb_id_in1, kBlockN);
+                    prof::add_since(wait_cycles, t);
                     uint32_t l1_addr = get_write_ptr(cb_id_in1);
 #ifndef LONG_MATMUL_DISABLE_READER
+                    t = prof::now();
                     for (uint32_t n = 0; n < kBlockN; n++) {
                         noc_async_read_tile(k * Nt + (col0 + n), b, l1_addr);
                         l1_addr += in1_tile_bytes;
                     }
                     noc_async_read_barrier();
+                    prof::add_since(transfer_cycles, t);
 #endif
                     cb_push_back(cb_id_in1, kBlockN);
                 }
             }
         }
     }
+
+    // The totals go out before KERNEL_END so they fall inside this run's marker window.
+    DeviceTimestampedData("READER_WAIT_CYCLES", wait_cycles);
+    DeviceTimestampedData("READER_TRANSFER_CYCLES", transfer_cycles);
+    DeviceTimestampedData("READER_KERNEL_END", 0);
 }
