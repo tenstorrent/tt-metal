@@ -498,9 +498,30 @@ for entry in "${PIPELINES[@]}"; do
   # run is in progress, jobs that failed in the baseline and have not finished
   # yet are "carried": the block must not flip to ✅ just because the job that
   # failed last night is still queued.
-  if [[ "$run_id" == "$prev_id" || "$(jq -r '.partial == true' <<<"$prev")" == "true" ]]; then
+  if [[ "$run_id" == "$prev_id" ]]; then
     base_failed=$(jq -c '.base_failed // []' <<<"$prev")
     base_summary=$(jq -r '.base_summary // ""' <<<"$prev")
+  elif [[ "$(jq -r '.partial == true' <<<"$prev")" == "true" ]]; then
+    # A newer run took over while the cached one was last seen in progress.
+    # If that run has since finished, ITS final result is the baseline, not
+    # the baseline it inherited (else a failure it fixed is carried forever).
+    base_failed=$(jq -c '.base_failed // []' <<<"$prev")
+    base_summary=$(jq -r '.base_summary // ""' <<<"$prev")
+    if [[ -n "$prev_id" ]] && prev_jobs=$(inscope_jobs "$prev_id") \
+       && [[ "$(jq '[.[] | select(.status != "completed")] | length' <<<"$prev_jobs")" == "0" ]]; then
+      prev_final=$(jq -c '[.[] | select(.conclusion == "failure") | .name] | unique' <<<"$prev_jobs")
+      prev_analyzed=$(jq -c '.failed_names // [] | unique' <<<"$prev")
+      if [[ "$prev_final" == "[]" ]]; then
+        base_summary=""
+      elif [[ "$prev_final" == "$prev_analyzed" ]]; then
+        base_summary=$(printf '%s' "$cached" | grep -v '^↳ still pending in run #')
+      else
+        log "  run #$prev_num finished with a different failed set than last analyzed — re-analyzing it as the baseline"
+        base_summary=$(analyze_run "$prev_id" "$prev_num" "failure" "$prev_sha" "$(jq -r '.url // ""' <<<"$prev")" "")
+      fi
+      base_failed="$prev_final"
+      log "  baseline = finished run #$prev_num ($(jq length <<<"$prev_final") in-scope failure(s))"
+    fi
   else
     base_failed=$(jq -c '.failed_names // []' <<<"$prev")
     base_summary="$cached"
