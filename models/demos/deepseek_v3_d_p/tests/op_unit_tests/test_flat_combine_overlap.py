@@ -50,6 +50,7 @@ from models.demos.deepseek_v3_d_p.tt.tt_ccl import per_axis_topology
 _MESH = (8, 1)
 _FABRIC = ttnn.FabricConfig.FABRIC_2D_TORUS_Y
 _PERF_ITERS = int(os.environ.get("FLAT_CMB_ITERS", "20"))
+_K3_BASE, _K3_HI = "kimi-k27", (3584, 3072)  # kimi-k3: K2.7 routing at K3's hidden / intermediate
 
 
 def _device_params():
@@ -65,7 +66,8 @@ def _device_params():
 
 def _params():
     out = []
-    for model_id in ("kimi-k27", "glm-53"):
+    # FLAT_CMB_MODELS (comma list) adds e.g. kimi-k3: Kimi K2.7's experts, top-k and captured routing at K3's expert shape
+    for model_id in os.environ.get("FLAT_CMB_MODELS", "kimi-k27,glm-53").split(","):
         for threshold_id in ("balanced", "hot-expert"):
             out.append(
                 pytest.param(
@@ -82,7 +84,9 @@ def _params():
 
 def _build_case(mesh_device, device_params, threshold_id, model_id):
     torch.manual_seed(42)
-    model = hyb._scaled_model(tuple(mesh_device.shape), model_id)
+    model = hyb._scaled_model(tuple(mesh_device.shape), _K3_BASE if model_id == "kimi-k3" else model_id)
+    if model_id == "kimi-k3":
+        model.EMB_SIZE, model.MOE_INTERMEDIATE_SIZE = _K3_HI
     H, I = model.EMB_SIZE, model.MOE_INTERMEDIATE_SIZE
     num_routed_experts, num_experts_per_tok, num_links = model.NUM_ROUTED_EXPERTS, model.NUM_EXPERTS_PER_TOKEN, 2
     seq = hyb._SEQ_LEN_PER_CHIP
@@ -97,7 +101,7 @@ def _build_case(mesh_device, device_params, threshold_id, model_id):
     idx_table = ExpertMapping.create_global_expert_idx_table(
         experts_per_chip=experts_per_chip, dispatch_group_size=dg_size, num_dispatch_groups=n_dg
     )
-    group_counts = hyb._CAPTURED_COUNTS[model_id][threshold_id]
+    group_counts = hyb._CAPTURED_COUNTS[_K3_BASE if model_id == "kimi-k3" else model_id][threshold_id]
     indices = hyb._indices_from_counts(group_counts, dg_size, seq, num_experts_per_tok)
     dispatch_table = ExpertMapping.create_dispatch_table(
         num_routed_experts=num_routed_experts, dispatch_group_size=dg_size, num_dispatch_groups=n_dg

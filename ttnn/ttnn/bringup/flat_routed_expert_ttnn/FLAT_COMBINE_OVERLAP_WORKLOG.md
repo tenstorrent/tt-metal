@@ -631,6 +631,34 @@ alone is faster (Kimi bal 556 -> 490 us) but its overlap is unchanged within ~1%
    sender sends whole rows; no DRAM write of y, no DRAM read, no reader for own tokens. That is idea 3 ("y from L1")
    with the reader removed for own tokens.
 
+## 8b. Kimi K3 expert shape (2026-10-12)
+Why: K3's flat expert (H 3584, I 3072) uses 48 gate/up cores, so 14-16 cells sit idle; the cells combine needs might
+come free instead of out of flat. Test: `FLAT_CMB_MODELS=kimi-k3` (Kimi K2.7's experts, top-k and captured routing at
+H 3584 / I 3072; no K3 routing exists), perf only, same session as the K2.7 rerun below. "Best serial" = the faster flat
+plan (full grid or rows 1-9) + combine.
+
+| case | flat full grid | flat rows 1-9 | combine | best serial | overlap | saved vs best serial | combine hidden |
+|---|---|---|---|---|---|---|---|
+| K2.7 balanced | 900.9 | 978.8 | 441.7 | 1342.7 | 1142.6 | 14.9% | 45% |
+| K2.7 hot | 1055.5 | 1595.5 | 630.5 | 1687.2 | 1654.7 | 1.9% | 5% |
+| K3 balanced | 725.2 | 649.1 | 344.3 | 993.4 | 761.0 | 23.4% | 68% |
+| K3 hot | 836.1 | 800.0 | 490.8 | 1290.8 | 957.0 | 25.9% | 68% |
+
+On K3, freeing row 0 costs flat nothing; it is faster (725 -> 649 here: the rows-capped plan shapes the rectangles to
+the 48-core split and turns the idle cells into down cores; the galaxy branch's planner now does that on the full grid,
+d3b15fdeaa3). On K2.7 every cell is in use, so rows 1-9 cost flat 9% balanced and 51% hot, and most of what the overlap
+saves is that cost paid back. Combine adds ~110-160 us of exposed time on top of K3's flat (NoC/DRAM sharing, y-write
+tracking); that part does not get easier with free cores.
+
+Can GLM / K2.7 get there on the LoudBox? Flat alone on rows 1-9 (galaxy branch planner, 12 experts, us per expert at
+M 128 / 512 / 2048): GLM 43.1 / 114.5 / 436.9 vs full grid 43.2 / 76.8 / 278.6; K2.7 74.9 / 218.3 / 845.3 vs 72.6 /
+124.6 / 443.9 (np 2, 32 gate/up cores); K3 52.1 / 101.6 / 384.5 vs 50.7 / 101.3 / 384.2. Free at small M (Kimi
+balanced, ~107 rows per expert), +57-90% at M 2048 (the hot expert). The only split between 32 and 64 cores for
+It = 64 is np 4 g 3 (48 cores, less gate/up work per core than K3's): rejected on L1 (4 pairs of whole-K weights
+double buffered, ~1.18 MB at GLM; K2.7's 28 K-blocks exceed the 24-slot x ring); it needs K-streamed gate/up
+weights plus tiny tiles or a full-sync DST. A Galaxy chip (12 x 10) is the realistic path: rows 1-9 hold 69 gate/up
+cells, so np 1 stays next to combine (host-side plan in 6.18; not run).
+
 ## 9. How to run (PR tree)
 ```
 cd /localdev/mstaletovic/tt-metal-pr58093
@@ -640,7 +668,7 @@ export TT_MESH_GRAPH_DESC_PATH=models/demos/deepseek_v3_d_p/tests/op_unit_tests/
 ninja -C build_Release install
 scripts/run_safe_pytest.sh --run-all models/demos/deepseek_v3_d_p/tests/op_unit_tests/test_flat_combine_overlap.py
 ```
-Knobs: `FLAT_CMB_YRM` (default 1), `FLAT_CMB_PIN` (default 1), `FLAT_CMB_NO_OVERLAP=1 MIMO_FL_ROWS=0,9` (110-core
+Knobs: `FLAT_CMB_MODELS` (e.g. `kimi-k3`), `FLAT_CMB_YRM` (default 1), `FLAT_CMB_PIN` (default 1), `FLAT_CMB_NO_OVERLAP=1 MIMO_FL_ROWS=0,9` (110-core
 baseline), `FLAT_CMB_ITERS`, `FLAT_CMB_LOG`, `TT_CMBF2D_IDLE`, `CMBF2D_RD_VC` / `CMBF2D_WR_VC`, `MIMO_FL_ROWS`,
 `MIMO_FL_RD_SAMECOL`, `MIMO_FL_XDOWN`, `MIMO_FL_ND`, probes `MIMO_FL_W_NOREAD`, `MIMO_FL_XRD_SKIP`,
 `MIMO_FL_CMB_EARLY` (garbage output, perf only). Profile: `TT_METAL_DEVICE_PROFILER=1
