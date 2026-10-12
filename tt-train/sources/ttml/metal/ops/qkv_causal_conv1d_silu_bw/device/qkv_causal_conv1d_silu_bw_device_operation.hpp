@@ -1,0 +1,65 @@
+// SPDX-FileCopyrightText: © 2026 Tenstorrent USA, Inc.
+//
+// SPDX-License-Identifier: Apache-2.0
+
+#pragma once
+
+#include <variant>
+
+#include "metal/ttnn_all_includes.hpp"
+#include "qkv_causal_conv1d_silu_bw_device_operation_types.hpp"
+#include "qkv_causal_conv1d_silu_bw_program_factory.hpp"
+
+namespace ttml::metal::ops::qkv_causal_conv1d_silu_bw::device {
+
+struct QkvCausalConv1dSiluGradPreactOperation {
+    using operation_attributes_t = QkvCausalConv1dSiluBackwardParams;
+    using tensor_args_t = QkvCausalConv1dSiluGradPreactInputs;
+    using spec_return_value_t = std::vector<tt::tt_metal::TensorSpec>;
+    using tensor_return_value_t = std::vector<Tensor>;
+    using program_factory_t = std::variant<QkvCausalConv1dSiluGradPreactProgramFactory>;
+
+    static program_factory_t select_program_factory(const operation_attributes_t&, const tensor_args_t&);
+    static void validate_on_program_cache_miss(const operation_attributes_t&, const tensor_args_t&);
+    static spec_return_value_t compute_output_specs(const operation_attributes_t&, const tensor_args_t&);
+    static tensor_return_value_t create_output_tensors(const operation_attributes_t&, const tensor_args_t&);
+};
+
+struct QkvCausalConv1dSiluGradInputOperation {
+    using operation_attributes_t = QkvCausalConv1dSiluBackwardParams;
+    using tensor_args_t = QkvCausalConv1dSiluGradInputInputs;
+    using spec_return_value_t = tt::tt_metal::TensorSpec;
+    using tensor_return_value_t = Tensor;
+    using program_factory_t = std::variant<QkvCausalConv1dSiluGradInputProgramFactory>;
+
+    static program_factory_t select_program_factory(const operation_attributes_t&, const tensor_args_t&);
+    static void validate_on_program_cache_miss(const operation_attributes_t&, const tensor_args_t&);
+    static spec_return_value_t compute_output_specs(const operation_attributes_t&, const tensor_args_t&);
+    static tensor_return_value_t create_output_tensors(const operation_attributes_t&, const tensor_args_t&);
+};
+
+}  // namespace ttml::metal::ops::qkv_causal_conv1d_silu_bw::device
+
+namespace ttnn::prim {
+
+std::vector<ttnn::Tensor> ttml_qkv_causal_conv1d_silu_grad_preact(
+    const ttnn::Tensor& grad_q,
+    const ttnn::Tensor& grad_k,
+    const ttnn::Tensor& grad_v,
+    const ttnn::Tensor& input,
+    const ttnn::Tensor& history,
+    const ttnn::Tensor& tap0,
+    const ttnn::Tensor& tap1,
+    const ttnn::Tensor& tap2,
+    const ttnn::Tensor& tap3,
+    const ttml::metal::ops::qkv_causal_conv1d_silu_bw::device::QkvCausalConv1dSiluBackwardParams& params);
+
+ttnn::Tensor ttml_qkv_causal_conv1d_silu_grad_input(
+    const ttnn::Tensor& grad_preact,
+    const ttnn::Tensor& tap0,
+    const ttnn::Tensor& tap1,
+    const ttnn::Tensor& tap2,
+    const ttnn::Tensor& tap3,
+    const ttml::metal::ops::qkv_causal_conv1d_silu_bw::device::QkvCausalConv1dSiluBackwardParams& params);
+
+}  // namespace ttnn::prim
