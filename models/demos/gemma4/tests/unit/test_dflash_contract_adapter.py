@@ -468,19 +468,60 @@ def test_verify_for_a_row_whose_slot_owns_nothing_raises_even_at_the_owners_row(
         _verify(model, [[150, 201, 202, 203, 204, 205]], [list(range(3, 9))], [5], keys=[10], slot_remap=[3])
 
 
-def test_straddle_verify_converts_host_logits_at_the_steps_row_count(model):
+def test_straddle_verify_rejects_host_sampling_before_consuming_a_proposal(model, expect_error):
     _start_solo(model)
-    out = _verify(
-        model,
-        [[150, 201, 202, 203, 204, 205], [40, 0, 0, 0, 0, 0]],
-        [list(range(3, 9)), [9, 10, 11, 12, 13, 14]],
-        [5, 0],
-        keys=[10, 20],
-        result=DeviceResult(_logits(2, 500)),
-        sampling=False,
-    )
-    assert int(out.argmax_ids[1, 0]) == 501
-    assert model.model[0].convert_calls == [(2, False)]
+    ordinary_result = DeviceResult(_logits(2, 500))
+    model.results.append(ordinary_result)
+    retained = model._dflash_retained
+    events = list(model.events)
+    with expect_error(ValueError, "cannot apply host sampling controls"):
+        _verify(
+            model,
+            [[150, 201, 202, 203, 204, 205], [40, 0, 0, 0, 0, 0]],
+            [list(range(3, 9)), [9, 10, 11, 12, 13, 14]],
+            [5, 0],
+            keys=[10, 20],
+            sampling=False,
+        )
+    assert model.events == events
+    assert model.results == [ordinary_result]
+    assert model._dflash_retained is retained and not retained.consumed
+    assert model._spec_active
+
+
+def test_draftless_host_verify_does_not_bootstrap_an_argmax_session(model, expect_error):
+    _prefill(model)
+    pending = model._spec_pending
+    events = list(model.events)
+    with expect_error(ValueError, "cannot apply host sampling controls"):
+        _verify(model, [[3, 0, 0, 0, 0, 0]], [list(range(2, 8))], [0], keys=[10], sampling=False)
+    assert model.events == events
+    assert model._spec_pending is pending and not model._spec_active
+
+
+@pytest.mark.parametrize("retained", [False, True])
+def test_verify_rejects_logprobs_before_mutating_the_session(model, expect_error, retained):
+    if retained:
+        _start_solo(model)
+        tokens, positions, valid = [150, 201, 202, 203, 204, 205], list(range(3, 9)), 5
+    else:
+        _prefill(model)
+        tokens, positions, valid = [3, 0, 0, 0, 0, 0], list(range(2, 8)), 0
+    proposal = model._dflash_retained
+    pending = model._spec_pending
+    events = list(model.events)
+    with expect_error(ValueError, "cannot return requested logprobs"):
+        _verify(
+            model,
+            [tokens],
+            [positions],
+            [valid],
+            keys=[10],
+            sampling_params=_sampling(1, enable_log_probs=True, num_logprobs=0),
+        )
+    assert model.events == events
+    assert model._spec_pending is pending and model._dflash_retained is proposal
+    assert proposal is None or not proposal.consumed
 
 
 def test_batched_draftless_verify_decodes_column_zero_only(model):
@@ -634,7 +675,7 @@ def test_release_logs_committed_tokens_per_step_for_the_session(model, adapter, 
     assert model._dflash_steps == 0 and model._dflash_committed == 0
 
 
-# -- rows that do not sample greedily ---------------------------------------------
+# -- rows that cannot use the fused argmax output --------------------------------
 
 _NOT_GREEDY = [
     {"temperature": 1.0},
@@ -667,6 +708,62 @@ def test_a_sampled_solo_row_is_never_proposed_for(model):
     out = _ordinary(model, [600], [3], [10], result="device", sampling_params=sampled)
     assert out == "device"
     assert model._spec_decoder.replays == 0 and not model._spec_active
+
+
+@pytest.mark.parametrize(
+    "enable_log_probs",
+    [True, [True], torch.tensor(True), torch.tensor([True])],
+    ids=["scalar", "list", "scalar-tensor", "row-tensor"],
+)
+@pytest.mark.parametrize("active", [False, True], ids=["pending-prefill", "active-session"])
+def test_a_row_requesting_logprobs_keeps_the_ordinary_result_and_releases_its_session(model, enable_log_probs, active):
+    if active:
+        _start_solo(model)
+        token, position = 150, 3
+        taps = []
+    else:
+        _prefill(model, prompt_len=2, key=10)
+        token, position = 3, 2
+        taps = list(model._spec_pending[0])
+    replays = model._spec_decoder.replays
+    sampling = dataclasses.replace(_sampling(1, num_logprobs=0), enable_log_probs=enable_log_probs)
+    result = (_tensor([600]), torch.tensor([-0.5]))
+
+    out = _ordinary(model, [token], [position], [10], result=result, sampling_params=sampling)
+
+    assert out is result
+    assert _names(model, "decode") == [("decode", [token], [position])]
+    assert model._spec_decoder.replays == replays
+    assert model._spec_pending is None and not model._spec_active
+    assert model._dflash_retained is None and all(tap.releases == 1 for tap in taps)
+    proposal = _propose(model, [[600, -1, -1, -1, -1, -1]], [[position + 1, -1, -1, -1, -1, -1]])
+    assert proposal.num_valid.tolist() == [0]
+
+
+def test_logprobs_for_another_row_leave_the_session_owners_proposal_alone(model):
+    _start_solo(model)
+    sampling = _sampling(2, enable_log_probs=[False, True], num_logprobs=0)
+    result = (_tensor([0, 600]), torch.tensor([0.0, -0.5]))
+
+    out = _ordinary(model, [0, 40], [-1, 9], [0, 20], result=result, sampling_params=sampling)
+
+    assert out is result
+    assert model._spec_active and not model._dflash_retained.consumed
+    out = _verify(model, [[150, 201, 202, 203, 204, 205]], [list(range(3, 9))], [5], keys=[10])
+    assert out.argmax_ids.tolist() == [[250, 251, 252, 253, 254, 255]]
+
+
+def test_logprobs_on_padding_do_not_disqualify_the_live_row(model):
+    _prefill(model, prompt_len=2, key=10)
+    out = _ordinary(
+        model,
+        [3, 0, 0, 0],
+        [2, -1, -1, -1],
+        [10, 0, 0, 0],
+        sampling_params=_sampling(4, enable_log_probs=[False, True, True, True]),
+    )
+    assert out.tolist() == [150, 0, 0, 0]
+    assert len(_names(model, "bootstrap")) == 1 and _names(model, "decode") == []
 
 
 def test_a_greedy_row_with_top_k_and_top_p_still_speculates(model):
@@ -751,10 +848,9 @@ def test_a_sampled_row_leaves_another_requests_outstanding_proposal_alone(model,
 
 
 def test_a_session_owner_seen_sampling_on_a_later_step_ends_its_session(model):
-    """A host-sampled verify carries no sampling parameters, so it can start a
-    session that the next device-sampled step shows to be for a sampled row."""
+    """A request that changes from greedy to sampled must leave its argmax session."""
     _prefill(model, prompt_len=2, key=10)
-    first = _verify(model, [[3, 0, 0, 0, 0, 0]], [[2, 3, 4, 5, 6, 7]], [0], keys=[10], sampling=False)
+    first = _verify(model, [[3, 0, 0, 0, 0, 0]], [[2, 3, 4, 5, 6, 7]], [0], keys=[10])
     assert first.argmax_ids[0, 0] == 150
     assert model._spec_active
     out = _ordinary(model, [150], [3], [10], result="device", sampling_params=_sampling(1, temperature=1.0))
@@ -830,15 +926,17 @@ def test_sampled_request_after_greedy_completion_uses_the_real_decode_contract(
     assert sample_calls[0]["reset_sampling_state"] is True
 
 
-def test_greedy_check_reads_per_row_values_and_shared_scalars(adapter):
-    is_greedy = adapter.Gemma4DFlashContractForCausalLM._dflash_row_is_greedy
+def test_argmax_eligibility_reads_per_row_values_and_shared_scalars(adapter):
+    can_use_argmax = adapter.Gemma4DFlashContractForCausalLM._dflash_row_can_use_argmax
     lists = _sampling(2, temperature=[0.0, 0.7])
-    assert is_greedy(lists, 0) and not is_greedy(lists, 1)
+    assert can_use_argmax(lists, 0) and not can_use_argmax(lists, 1)
     tensors = dataclasses.replace(lists, temperature=torch.zeros(2), repetition_penalty=torch.tensor([1.0, 1.1]))
-    assert is_greedy(tensors, 0) and not is_greedy(tensors, 1)
+    assert can_use_argmax(tensors, 0) and not can_use_argmax(tensors, 1)
     shared = dataclasses.replace(_sampling(1), presence_penalty=0.0, frequency_penalty=0.2)
-    assert not is_greedy(shared, 0)
-    assert is_greedy(dataclasses.replace(shared, frequency_penalty=0.0), 0)
+    assert not can_use_argmax(shared, 0)
+    assert can_use_argmax(dataclasses.replace(shared, frequency_penalty=0.0), 0)
+    log_probs = dataclasses.replace(_sampling(2), enable_log_probs=torch.tensor([False, True]))
+    assert can_use_argmax(log_probs, 0) and not can_use_argmax(log_probs, 1)
 
 
 # -- identity and release --------------------------------------------------------

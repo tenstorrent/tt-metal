@@ -80,6 +80,26 @@ def _stub_runtime(patch):
     )
     patch.setitem(sys.modules, "ttnn", runtime)
     lower_modules = {
+        "ttnn.tools": {"trace_allocation_tracker": SimpleNamespace()},
+        "models.common.sampling.tt_log_probs": {
+            "LogProbsResult": type("LogProbsResult", (), {}),
+            "reformat_logprobs": _unused,
+        },
+        "models.common.sampling.tt_penalties": {"TTPenalties": _unused},
+        "models.common.sampling.tt_sampling": {"TTSampling": _unused},
+        "models.common.llama_models": {
+            name: _unused
+            for name in (
+                "CompletionMessage",
+                "StopReason",
+                "TokenResult",
+                "create_vision_mask",
+                "encode_content",
+                "extract_images_from_messages",
+                "sample_top_p",
+            )
+        },
+        "models.common.warmup": {"WarmupForwardMixin": type("WarmupForwardMixin", (), {})},
         "models.demos.gemma4.tt.common": {
             "GEMMA4_CP_PREFILL_CHUNK": 24576,
             "create_tt_model": _unused,
@@ -106,10 +126,19 @@ def _stub_runtime(patch):
                 "warmup_gemma4_model_prefill",
             )
         },
-        "models.tt_transformers.tt.common": {"get_padded_prefill_len": _padded_length},
-        "models.tt_transformers.tt.generator": {
-            "SUPPORTED_PREFILL_BATCH_SIZES": (1, 2, 4, 8, 16, 32),
-            "create_submeshes": _unused,
+        "models.tt_transformers.tt.common": {
+            "get_padded_prefill_len": _padded_length,
+            **{
+                name: _unused
+                for name in (
+                    "Mode",
+                    "copy_host_to_device",
+                    "get_all_padded_prefill_lengths",
+                    "get_block_size",
+                    "get_max_prefill_chunk_size",
+                    "num_blocks_in_seq",
+                )
+            },
         },
         "models.tt_transformers.tt.generator_vllm": {
             "HybridAttentionForCausalLM": type(
@@ -135,6 +164,13 @@ def _stub_runtime(patch):
     except ImportError:
         logger = SimpleNamespace(info=lambda *a, **k: None, warning=lambda *a, **k: None, error=lambda *a, **k: None)
         patch.setitem(sys.modules, "loguru", _module("loguru", logger=logger))
+    sampling = _fresh_import(patch, "models.common.sampling.generator")
+    sampling_package = importlib.import_module("models.common.sampling")
+    # Lazy exports must point at the same module as the imported sampler class.
+    for name, (owner, attribute) in sampling_package._EXPORTS.items():
+        if owner == ".generator":
+            patch.setitem(sampling_package.__dict__, name, getattr(sampling, attribute))
+    _fresh_import(patch, "models.tt_transformers.tt.generator")
     try:
         importlib.import_module("vllm_tt_plugin.spec_decode")
     except ImportError:
@@ -191,7 +227,8 @@ def _fresh_import(patch, name):
     parent_name, _, attr = name.rpartition(".")
     parent = importlib.import_module(parent_name)
     patch.setattr(parent, attr, None, raising=False)
-    patch.delitem(sys.modules, name, raising=False)
+    patch.setitem(sys.modules, name, None)
+    del sys.modules[name]
     return importlib.import_module(name)
 
 

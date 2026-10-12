@@ -5,36 +5,19 @@
 
 from __future__ import annotations
 
-import ast
-from dataclasses import fields, replace
-from functools import lru_cache
-from pathlib import Path
 from types import MethodType, SimpleNamespace
-from typing import List
-
-import torch
-
-from models.common.sampling.sampling_params import SamplingParams
 
 
-@lru_cache(maxsize=1)
 def sampling_functions():
-    root = Path(__file__).resolve().parents[5]
-    namespace = {
-        "torch": torch,
-        "List": List,
-        "fields": fields,
-        "replace": replace,
-        "SamplingParams": SamplingParams,
-        "SAMPLING_PARAM_FIELDS": tuple(field.name for field in fields(SamplingParams)),
-    }
-    sources = (
-        ("models/common/sampling/_utils.py", None, {"clamp", "split_list", "is_default_value"}),
-        ("models/common/sampling/generator.py", None, {"format_sampling_params", "chunk_sampling_params"}),
-        (
-            "models/common/sampling/generator.py",
-            "SamplingGenerator",
-            {
+    from models.common.sampling.generator import SamplingGenerator
+    from models.tt_transformers.tt.generator import Generator
+
+    return {
+        "_prepare_decode_sampling_state": Generator._prepare_decode_sampling_state,
+        "_apply_sampling_slot_remap": Generator._apply_sampling_slot_remap,
+        **{
+            name: getattr(SamplingGenerator, name)
+            for name in (
                 "apply_decode_state",
                 "validate_decode_state_commands",
                 "commit_decode_state_commands",
@@ -42,29 +25,9 @@ def sampling_functions():
                 "reset_prompt_tokens",
                 "reset_output_state",
                 "apply_slot_remap",
-            },
-        ),
-        (
-            "models/tt_transformers/tt/generator.py",
-            "Generator",
-            {"_prepare_decode_sampling_state", "_apply_sampling_slot_remap"},
-        ),
-    )
-    for relative, class_name, names in sources:
-        path = root / relative
-        tree = ast.parse(path.read_text())
-        body = tree.body
-        if class_name is not None:
-            body = next(node.body for node in body if isinstance(node, ast.ClassDef) and node.name == class_name)
-        selected = [node for node in body if isinstance(node, ast.FunctionDef) and node.name in names]
-        if {node.name for node in selected} != names:
-            raise ValueError(f"Missing production sampling functions in {path}: {names}")
-        module = ast.Module(
-            body=[ast.ImportFrom(module="__future__", names=[ast.alias(name="annotations")], level=0), *selected],
-            type_ignores=[],
-        )
-        exec(compile(ast.fix_missing_locations(module), str(path), "exec"), namespace)
-    return namespace
+            )
+        },
+    }
 
 
 class RecordingSeeds:

@@ -4030,11 +4030,12 @@ class Gemma4DFlashContractForCausalLM(Gemma4DFlashBase):
     request, when an ordinary step uses host sampling, or when a proposal declines
     (see ``propose_draft_tokens``). The row then continues as plain decode,
     which is what the block rail does at batch size above one. When device
-    sampling parameters are supplied, a row must pass ``_dflash_row_is_greedy``
+    sampling parameters are supplied, a row must pass ``_dflash_row_can_use_argmax``
     before it can start or continue a draftless session. The session answers
     with target argmax ids; plain decode samples from the requested distribution.
-    A draftless solo verify with ``sampling_params=None`` can use the argmax
-    session because the adapter has no request sampling parameters to inspect.
+    Verification requires device sampling parameters and cannot return logprobs.
+    The runner must send host-sampled requests through ordinary decode, because
+    this adapter receives neither their sampling controls nor their logits processors.
     A step the owner is not part of leaves its session alone: the scheduler keeps the
     drafts of a request it did not schedule and sends them on that request's
     next step, which the retained proposal must still answer.
@@ -4075,9 +4076,9 @@ class Gemma4DFlashContractForCausalLM(Gemma4DFlashBase):
         # A step this class does not speculate on runs the plain decode; the
         # device sampler keeps that step from pulling [B, vocab] logits to host.
         "supports_sample_on_device": True,
-        # The plugin cannot see when a drafter-served row leaves the plain
-        # decode inputs stale. Keep async decode disabled until that state
-        # change is part of the scheduler-visible reload plan.
+        # TTAsyncDecodeController.plan_decode_reload requires reload_inputs=True
+        # when supports_async_decode is False, including after fused output.
+        # Keep async decode disabled until the runner tracks fused input residency.
         "supports_async_decode": False,
         "supports_async_spec_decode": False,
         "supports_spec_decode": True,
@@ -4283,15 +4284,27 @@ class Gemma4DFlashContractForCausalLM(Gemma4DFlashBase):
             self._dflash_end_session()
 
     @staticmethod
-    def _dflash_row_is_greedy(sampling_params, row):
-        """Whether device sampling with ``sampling_params`` gives ``row`` the target's argmax.
+    def _dflash_row_requests_logprobs(sampling_params, row):
+        log_probs = getattr(sampling_params, "enable_log_probs", None)
+        if isinstance(log_probs, torch.Tensor) and log_probs.ndim == 0:
+            log_probs = log_probs.item()
+        elif log_probs is not None and not isinstance(log_probs, (bool, int, float)):
+            log_probs = log_probs[int(row)]
+        return bool(log_probs)
+
+    @classmethod
+    def _dflash_row_can_use_argmax(cls, sampling_params, row):
+        """Whether target argmax IDs satisfy ``row``'s sampling and output requirements.
 
         The drafter session answers with the fused replay's argmax ids, so
         only such a row may take it. A penalty changes the logits before the
         argmax; top_k and top_p need no check, because they only narrow a
         distribution that temperature 0 has already collapsed to one token.
+        Requested logprobs need the ordinary sampler's metadata as well as IDs.
         Each field is one value for every row or a per-row sequence.
         """
+        if cls._dflash_row_requests_logprobs(sampling_params, row):
+            return False
         for name, neutral in (
             ("temperature", 0.0),
             ("presence_penalty", 0.0),
@@ -4542,6 +4555,18 @@ class Gemma4DFlashContractForCausalLM(Gemma4DFlashBase):
         live = self._dflash_live_rows(start_pos, rows)
         if spec_mode is None:
             return self._dflash_ordinary_step(args, kwargs, page_tables_per_layer, tokens, start_pos, rows, live)
+        sampling = kwargs.get("sampling_params")
+        if sampling is None:
+            raise ValueError(
+                "Gemma4 dFlash argmax verification cannot apply host sampling controls. "
+                "Route host-sampled requests through ordinary decode with a plugin that "
+                "supports sampled-step fallback, or disable speculative decoding."
+            )
+        if any(self._dflash_row_requests_logprobs(sampling, row) for row in live):
+            raise ValueError(
+                "Gemma4 dFlash argmax verification cannot return requested logprobs. "
+                "Disable speculative decoding for requests that require logprobs."
+            )
         return self._dflash_verify_step(args, kwargs, page_tables_per_layer, tokens, start_pos, rows, live, num_valid)
 
     def _dflash_ordinary_step(self, args, kwargs, page_tables_per_layer, tokens, start_pos, rows, live):
@@ -4566,8 +4591,10 @@ class Gemma4DFlashContractForCausalLM(Gemma4DFlashBase):
             # Host sampling reads logits; the fused replay yields ids only.
             self._dflash_leave_row(self._dflash_slot_of(row, kwargs), "host sampling")
             return plain()
-        if not self._dflash_row_is_greedy(sampling, row):
-            self._dflash_leave_row(self._dflash_slot_of(row, kwargs), "the row does not sample greedily")
+        if not self._dflash_row_can_use_argmax(sampling, row):
+            self._dflash_leave_row(
+                self._dflash_slot_of(row, kwargs), "argmax IDs cannot satisfy the row's sampling output"
+            )
             return plain()
         token = self._dflash_solo_next_token(row, tokens, start_pos, rows, kwargs, page_tables_per_layer)
         if token is None:
@@ -4584,10 +4611,7 @@ class Gemma4DFlashContractForCausalLM(Gemma4DFlashBase):
         then reuses sampler state, so the fused step must apply the caller's
         parameter and history updates without running the device sampler.
         """
-        sampling = kwargs.get("sampling_params")
-        if sampling is None:
-            self._apply_sampling_slot_remap(kwargs.get("slot_remap"))
-            return
+        sampling = kwargs["sampling_params"]
         positions = (
             torch.chunk(start_pos.reshape(int(rows), -1)[:, 0], self.data_parallel, 0)
             if start_pos is not None
@@ -4703,9 +4727,10 @@ class Gemma4DFlashContractForCausalLM(Gemma4DFlashBase):
         drafts is answered from the retained proposal once the block matches
         it; a mismatch raises, because answering would report a posterior for
         tokens the device never evaluated. Rows without drafts take column 0
-        from plain decode. A solo row can use the session when its device
-        sampling parameters are greedy or when ``sampling_params`` is None.
-        The latter case returns argmax ids without checking request sampling.
+        from device sampling in plain decode. A solo row can use the session
+        when ``_dflash_row_can_use_argmax`` accepts its sampling and output
+        requirements. ``decode_forward`` rejects host sampling and logprobs
+        before this function can consume a retained proposal.
         """
         from vllm_tt_plugin.spec_decode import PLACEHOLDER_TOKEN_ID, VerifyOutput
 
@@ -4731,7 +4756,7 @@ class Gemma4DFlashContractForCausalLM(Gemma4DFlashBase):
             # A peer joined after the proposal. The device evaluated the drafts
             # already, so the drafted row is answered and kept out of the
             # peers' plain decode; speculation ends with this step.
-            plain = self._dflash_plain_argmax(args, kwargs, page_tables_per_layer, rows, exclude_row=row)
+            plain = self._dflash_plain_ids(args, kwargs, page_tables_per_layer, rows, exclude_row=row)
             for r in range(int(rows)):
                 if r != row:
                     ids[r, 0] = plain[r]
@@ -4739,9 +4764,11 @@ class Gemma4DFlashContractForCausalLM(Gemma4DFlashBase):
             return VerifyOutput(spec_mode="argmax_ids", argmax_ids=ids, hidden=None)
         if len(live) == 1:
             row = live[0]
-            sampling = kwargs.get("sampling_params")
-            if sampling is not None and not self._dflash_row_is_greedy(sampling, row):
-                self._dflash_leave_row(self._dflash_slot_of(row, kwargs), "the row does not sample greedily")
+            sampling = kwargs["sampling_params"]
+            if not self._dflash_row_can_use_argmax(sampling, row):
+                self._dflash_leave_row(
+                    self._dflash_slot_of(row, kwargs), "argmax IDs cannot satisfy the row's sampling output"
+                )
             else:
                 token = self._dflash_solo_next_token(row, tokens, start_pos, rows, kwargs, page_tables_per_layer)
                 if token is not None:
@@ -4750,7 +4777,7 @@ class Gemma4DFlashContractForCausalLM(Gemma4DFlashBase):
                     return VerifyOutput(spec_mode="argmax_ids", argmax_ids=ids, hidden=None)
         else:
             self._dflash_leave_speculation("several live rows", [self._dflash_slot_of(r, kwargs) for r in live])
-        ids[:, 0] = self._dflash_plain_argmax(args, kwargs, page_tables_per_layer, rows)
+        ids[:, 0] = self._dflash_plain_ids(args, kwargs, page_tables_per_layer, rows)
         return VerifyOutput(spec_mode="argmax_ids", argmax_ids=ids, hidden=None)
 
     def _dflash_take_retained(self, row, slot, tokens, start_pos, rows, valid):
@@ -4851,24 +4878,23 @@ class Gemma4DFlashContractForCausalLM(Gemma4DFlashBase):
             parts.append(model.process_output_decode(tensor, per, S=1, is_tokens=is_tokens))
         return parts[0] if len(parts) == 1 else torch.cat(parts, dim=0)
 
-    def _dflash_plain_argmax(self, args, kwargs, page_tables_per_layer, rows, exclude_row=None):
+    def _dflash_plain_ids(self, args, kwargs, page_tables_per_layer, rows, exclude_row=None):
         """Each row's next-token id from the plain decode, int32 ``[rows]``.
 
         Device-sampled ids are used as they are: each is the row's own draw,
-        which is the argmax for a greedy row. Host logits are converted at
-        this step's row count and argmaxed over the vocabulary.
+        which is the argmax for a greedy row. Verification requires device
+        sampling; ordinary host sampling keeps its logits outside this path.
         """
         args, kwargs = self._dflash_column_zero(args, kwargs, rows, exclude_row)
-        is_tokens = kwargs.get("sampling_params") is not None
         tt_out = Gemma4ForCausalLM.decode_forward(self, *args, page_tables_per_layer=page_tables_per_layer, **kwargs)
         if self._dflash_is_host(tt_out):
             host = tt_out[0] if isinstance(tt_out, tuple) else tt_out
         else:
             host = self._dflash_convert(
-                Gemma4ForCausalLM.read_decode_output(self, tt_out, async_read=False), rows, is_tokens
+                Gemma4ForCausalLM.read_decode_output(self, tt_out, async_read=False), rows, is_tokens=True
             )
         host = host if isinstance(host, torch.Tensor) else torch.as_tensor(host)
-        ids = host.reshape(-1) if is_tokens else host.reshape(-1, int(host.shape[-1])).argmax(dim=-1)
+        ids = host.reshape(-1)
         out = torch.zeros(int(rows), dtype=torch.int32)
         n = min(int(rows), int(ids.numel()))
         out[:n] = ids.reshape(-1)[:n].to(torch.int32)

@@ -133,28 +133,32 @@ def test_retained_fused_output_preserves_false_sampling_commands(model):
     assert not any(event[0] in {"reset", "align", "draw"} for event in sampler.seed_manager.events)
 
 
-def test_host_verify_remaps_seed_state_once_without_sampling(model):
+def test_host_verify_rejection_preserves_seed_state_before_remap(model, expect_error):
     _start_solo(model)
     sampler = model.model[0].sampling
     sampler.seed_manager.seeds[0] = 23
     sampler.seed_manager.events.clear()
     model.sampling_commands.clear()
-    _verify(
-        model,
-        [[-1] * 6, [150, 201, 202, 203, 204, 205]],
-        [[-1] * 6, list(range(3, 9))],
-        [0, 5],
-        [0, 10],
-        sampling=False,
-        slot_remap=[1, 0],
-    )
-    assert sampler.seed_manager.seeds[1] == 23
-    assert [event[0] for event in sampler.seed_manager.events] == ["remap"]
+    with expect_error(ValueError, "cannot apply host sampling controls"):
+        _verify(
+            model,
+            [[-1] * 6, [150, 201, 202, 203, 204, 205]],
+            [[-1] * 6, list(range(3, 9))],
+            [0, 5],
+            [0, 10],
+            sampling=False,
+            slot_remap=[1, 0],
+        )
+    assert sampler.seed_manager.seeds[0] == 23
+    assert sampler.seed_manager.seeds[1] is None
+    assert sampler.seed_manager.events == []
     assert model.sampling_commands == []
 
 
 @pytest.mark.parametrize("data_parallel,sampling_dp", [(1, 1), (2, 1), (1, 2)])
-def test_shared_preparation_keeps_parameters_history_and_seeds_with_their_sampling_groups(data_parallel, sampling_dp):
+def test_shared_preparation_keeps_parameters_history_and_seeds_with_their_sampling_groups(
+    adapter, data_parallel, sampling_dp
+):
     model = SimpleNamespace(model=[SimpleNamespace(sampling_dp=sampling_dp) for _ in range(data_parallel)])
     attach_sampling_state(model)
     rows = 32 * max(data_parallel, sampling_dp)
