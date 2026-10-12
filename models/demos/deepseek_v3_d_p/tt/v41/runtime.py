@@ -76,6 +76,19 @@ class V41PrefillRuntime:
             table_dir=os.environ.get("DSV41_ENGRAM_TABLE_DIR") or None,
             **kw,
         )
+        # ViT in the runner (vit_plan V2 E1 step 1): V41_PREFILL_VIT=1 builds the ttnn ViT + aligner on a (1, 1) submesh of this
+        # mesh NOW, before any trace-island capture (a buffer allocated after a capture can sit in the islands' intermediates,
+        # DS41F-0037 10-10 21:25), so a request's sidecar may name its IMAGE instead of precomputed rows (_request_image_rows).
+        # a previous run's per-request sidecars must not leak into this one (the warm-up chunk at 0 would load them; seen
+        # 2026-10-12 21:08): the producer writes this run's before each request, so clear the dir now
+        _sd = os.environ.get("PREFILL_REQUEST_SIDECAR_DIR")
+        if _sd and os.path.isdir(_sd):
+            for _f in os.listdir(_sd):
+                if _f.startswith("slot_") and _f.endswith(".json"):
+                    os.remove(os.path.join(_sd, _f))
+        self.vit = None
+        if os.environ.get("V41_PREFILL_VIT", "0") == "1":
+            self._init_vit(ck, model_dir)
         # ViT V2 (tt-blaze vit_plan.md): V41_PREFILL_IMAGE_ROWS=<prof/vit_prompt.py rows .pt> = the image-span rows of the
         # prompt this runner serves (its ids carry the span on virtual ids vocab + k). One image prompt per runner launch,
         # like the ring's build-time table (V3); per-request rows are the next step.
@@ -185,6 +198,55 @@ class V41PrefillRuntime:
         )
         return None
 
+    def _init_vit(self, ck, model_dir) -> None:
+        import json as _json
+        import sys as _sys
+        import types as _types
+
+        from .config import DEFAULT_MODEL_DIR
+        from .vision import V41Vision, load_vision_state
+
+        mdir = model_dir or DEFAULT_MODEL_DIR
+        _sys.path.insert(0, os.path.join(mdir, "inference"))
+        import image_processor as _ip  # the checkpoint's own preprocessing / span layout
+
+        self._ip = _ip
+        self._vit_args = _types.SimpleNamespace(**_json.load(open(os.path.join(mdir, "inference", "config.json"))))
+        t0 = time.time()
+        state = load_vision_state(ck)
+        self._vit_delims = {
+            k: state[k].to(torch.bfloat16).reshape(-1) for k in ("image_start", "image_end", "image_newline")
+        }
+        # REPLICATED on the runner's own mesh (each chip computes the same rows; the host reads chip 0's): a (1, 1) submesh
+        # of this FABRIC_2D mesh hung the runner's next prefill chunk (DS41F-0049, 2026-10-12 21:08)
+        self.vit = V41Vision(self.mesh_device, state)
+        logger.info(
+            f"[v41 runtime] ViT + aligner replicated on the {tuple(self.mesh_device.shape)} mesh, built in {time.time() - t0:.1f} s"
+        )
+
+    def _vit_span_rows(self, image_path: str):
+        """The image's span rows in span order (START, the aligner rows with a NEWLINE after each grid row, END) --
+        tt-blaze prof/vit_prompt.py's layout, from the device ViT."""
+        t0 = time.time()
+        patches, n_h, n_w, n_llm_h, n_llm_w = self._ip.load_image({"url": image_path}, self._vit_args)
+        rows = self.vit.aligner(self.vit.vit(patches, n_h, n_w), n_h, n_w)  # [n_llm_h * n_llm_w, dim] bf16
+        d, out, r = self._vit_delims, [], 0
+        for t in self._ip.image_token_types(n_llm_h, n_llm_w).tolist():
+            if t == self._ip.IMAGE_START:
+                out.append(d["image_start"])
+            elif t == self._ip.IMAGE_END:
+                out.append(d["image_end"])
+            elif t == self._ip.IMAGE_NEW_LINE:
+                out.append(d["image_newline"])
+            else:
+                out.append(rows[r])
+                r += 1
+        span = torch.stack(out)
+        logger.info(
+            f"[v41 runtime] ViT {image_path}: grid {n_h} x {n_w} -> {tuple(span.shape)} span rows in {time.time() - t0:.2f} s"
+        )
+        return span
+
     def _request_image_rows(self, slot_id: int) -> None:
         """ViT V2, per request: ``PREFILL_REQUEST_SIDECAR_DIR/slot_<s>.json`` (written by the producer before the slot's chunks)
         names the request's image-span rows (``metadata["image_rows"]``); absent = a text prompt. Without the sidecar dir the
@@ -195,7 +257,21 @@ class V41PrefillRuntime:
         import json
 
         f = os.path.join(d, f"slot_{slot_id}.json")
-        path = json.load(open(f)).get("metadata", {}).get("image_rows") if os.path.exists(f) else None
+        side = json.load(open(f)) if os.path.exists(f) else {}
+        meta = side.get("metadata", {})
+        path = meta.get("image_rows")
+        if meta.get("image") and self.vit is not None:
+            # the request names its IMAGE: the ViT runs here; its rows also go next to the trace's full ids, where the decode
+            # ring's replay looks for them (<full ids prefix>.rows.pt) when the span reaches past the prefill's end
+            span = self._vit_span_rows(meta["image"])
+            self.pf.set_image_rows(span)
+            self._image_rows_path = None
+            if side.get("trace"):
+                out = os.path.join(side["trace"], "full_prompt.rows.pt")
+                tmp = out + ".tmp"
+                torch.save({"rows": span}, tmp)
+                os.replace(tmp, out)
+            return
         if path != getattr(self, "_image_rows_path", None):
             rows = torch.load(path, map_location="cpu") if path else None
             self.pf.set_image_rows(rows["rows"] if isinstance(rows, dict) else rows)

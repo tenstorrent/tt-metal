@@ -86,6 +86,9 @@ class V41Vision:
         mlp_fp32: bool = False,
     ):
         self.device, self.n_layers, self.mlp_fp32 = device, n_layers, mlp_fp32
+        # on a multi-chip mesh (the prefill runner's, DS41F-0049: a (1, 1) submesh of it hung the runner) every tensor is
+        # replicated and the host reads chip 0's copy
+        self.n_dev = int(device.get_num_devices()) if hasattr(device, "get_num_devices") else 1
         self.ck_hifi4 = ttnn.init_device_compute_kernel_config(
             device.arch(),
             math_fidelity=ttnn.MathFidelity.HiFi4,
@@ -313,13 +316,16 @@ class V41Vision:
         cu = self._windows(n, n_pad)
         taps: dict = {}
         out = self.block(x, i, cos, sin, cu, taps=taps)
-        res = {k: ttnn.to_torch(t).reshape(n_pad, DIM)[:n].float() for k, t in taps.items()}
-        res["out"] = ttnn.to_torch(out).reshape(n_pad, DIM)[:n].float()
+        res = {k: self._host(t).reshape(n_pad, DIM)[:n].float() for k, t in taps.items()}
+        res["out"] = self._host(out).reshape(n_pad, DIM)[:n].float()
         for t in list(taps.values()) + [out]:
             ttnn.deallocate(t)
         return res
 
     # ── public ──────────────────────────────────────────────────────────────────────────────────────────────────────
+    def _host(self, t) -> torch.Tensor:
+        return ttnn.to_torch(ttnn.get_device_tensors(t)[0]) if self.n_dev > 1 else ttnn.to_torch(t)
+
     def vit(self, patches: torch.Tensor, n_h: int, n_w: int, *, capture: list | None = None) -> torch.Tensor:
         """model.py ``ViT.forward``: patches [N, 3, 14, 14] (or [N, 588]) -> the final-norm output [N, 1024] bf16 (host).
         ``capture``: a list that receives every block's output [N, 1024] (host, for the per-block PCC)."""
@@ -337,10 +343,10 @@ class V41Vision:
         for i in range(self.n_layers):
             x = self.block(x, i, cos, sin, cu)
             if capture is not None:
-                capture.append(ttnn.to_torch(x).reshape(n_pad, DIM)[:n].clone())
+                capture.append(self._host(x).reshape(n_pad, DIM)[:n].clone())
         y = self._rms(x, self.norm)
         ttnn.deallocate(x)
-        out = ttnn.to_torch(y).reshape(n_pad, DIM)[:n].to(torch.bfloat16)
+        out = self._host(y).reshape(n_pad, DIM)[:n].to(torch.bfloat16)
         ttnn.deallocate(y)
         return out
 
@@ -362,7 +368,7 @@ class V41Vision:
         ttnn.deallocate(h)
         y = self._lin(g, self.al_w2, self.al_b2)
         ttnn.deallocate(g)
-        out = ttnn.to_torch(y).reshape(l_pad, -1)[:L].to(torch.bfloat16)
+        out = self._host(y).reshape(l_pad, -1)[:L].to(torch.bfloat16)
         ttnn.deallocate(y)
         return out
 
