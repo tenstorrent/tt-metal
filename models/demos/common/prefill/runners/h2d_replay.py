@@ -4,9 +4,10 @@
 """Replay a captured tt-d-gen H2D inject log through the prefill producer.
 
 tt-d-gen's PrefillPipeline logs one ``prefill inject slot_id=S start=A end=B`` line per chunk it
-pushes, stamped by its builtin sink with local wall-clock time. The log carries the push order, slot
-ids, chunk bounds and timing, not the tokens: the producer refills every chunk from its trace pool
-by absolute position, exactly as it does for a synthetic schedule.
+pushes, stamped by its builtin sink with local wall-clock time. Collectors such as kubectl may
+prefix each line with their own zoned timestamp; replay times pushes by the sink's. The log carries
+the push order, slot ids, chunk bounds and timing, not the tokens: the producer refills every chunk
+from its trace pool by absolute position, exactly as it does for a synthetic schedule.
 """
 
 import re
@@ -14,7 +15,7 @@ from dataclasses import dataclass
 from datetime import datetime
 
 _INJECT_RE = re.compile(r"prefill inject slot_id=(\d+) start=(\d+) end=(\d+)")
-_TIMESTAMP_RE = re.compile(r"^(\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}(?:\.\d+)?)")
+_TIMESTAMP_RE = re.compile(r"(\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}(?:\.\d+)?)(?=\s)")
 _SHUTDOWN_SLOT = 0xFFFFFFFF
 
 
@@ -29,7 +30,7 @@ class InjectRecord:
 
 
 def _parse_timestamp(line: str) -> float | None:
-    match = _TIMESTAMP_RE.match(line)
+    match = _TIMESTAMP_RE.search(line)
     if match is None:
         return None
     return datetime.fromisoformat(match.group(1)).timestamp()
