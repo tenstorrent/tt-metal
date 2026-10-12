@@ -91,7 +91,8 @@ void run_kernel(RUNTIME_PARAMETERS params)
 
         if constexpr (unpack_to_dest)
         {
-            _llk_unpack_tilize_block_init_<FULL_CT_DIM, BLOCK_CT_DIM>(bfd_unpack, tensor_shape);
+            _llk_unpack_dest_init_();
+            _llk_unpack_tilize_to_dest_init_(bfd_unpack, FULL_CT_DIM, BLOCK_CT_DIM, tensor_shape);
         }
         else if (tensor_shape.face_r_dim < FACE_R_DIM)
         {
@@ -143,7 +144,7 @@ void run_kernel(RUNTIME_PARAMETERS params)
                     for (std::uint32_t y = 0; y < BLOCK_RT_DIM; y++)
                     {
                         _llk_unpack_tilize_set_src_offset_<UNPACKER_ENGINE_SEL>(tensor_shape, y * y_stride_external);
-                        _llk_unpack_tilize_block_(0 /*l1_tile_idx*/, y * BLOCK_CT_DIM /*dest_tile_idx*/);
+                        _llk_unpack_tilize_to_dest_block_(0 /*l1_tile_idx*/, y * BLOCK_CT_DIM /*dst_tile_idx*/);
                     }
                     if constexpr (PERF_RUN_TYPE == PerfRunType::L1_TO_L1 || PERF_RUN_TYPE == PerfRunType::L1_CONGESTION)
                     {
