@@ -7,11 +7,14 @@
 These tests are intentionally non-gating: they log correctness and latency for
 agents/engineers optimizing the op, but they do not assert thresholds.
 
-Each case is the per-chip call one prefill MoE layer makes for a production
-model, run on a single chip: the routed-expert op owns no CCL, so one chip
-sees exactly the production local shapes once the mesh-level constants
-(experts_per_chip, dispatch buffer rows, max tokens per expert) are derived the
-way compute_constants does for the production mesh.
+One case is ONE routed expert of a production model, on ONE chip, fed ``num_tokens`` tokens.
+Those two axes are the only things the op's caller does not choose: the model fixes the expert
+(its K and N, its activation, whether it carries biases, the precision it is served at) and the
+sequence being prefilled fixes how many tokens reach it. Everything else is the
+implementation's own business and is absent here -- there is no expert-count, no dispatch
+buffer larger than the expert's own tokens, and so no region offset, token-count vector or
+local->global expert map, none of which carries information when one expert owns the buffer.
+Weight placement comes from routed_expert_prefill_tensor_setup, which the op implementor owns.
 """
 
 import time
@@ -31,363 +34,215 @@ from models.demos.deepseek_v3_d_p.reference.kimi_k2_7_config import KimiK27Confi
 from models.demos.deepseek_v3_d_p.reference.kimi_k3_config import KimiK3Config
 from models.demos.deepseek_v3_d_p.reference.minimax_m3_config import MiniMaxM3Config
 from models.demos.deepseek_v3_d_p.reference.mistral_small_4_config import MistralSmall4Config
-from models.demos.deepseek_v3_d_p.reference.tt.moe.expert import (
-    ACTIVATION_CLAMPED_SILU_GLU,
-    ACTIVATION_SILU,
-    ACTIVATION_SITU,
-    ACTIVATION_SWIGLUOAI,
-    apply_glu_activation,
-)
+from models.demos.deepseek_v3_d_p.reference.tt.moe.expert import apply_glu_activation
 from models.demos.deepseek_v3_d_p.tt.moe.tt_routed_expert import (
     COMPUTE_KERNEL_CONFIG_LOFI,
-    routed_expert_weight_memory_config,
+    ROUTED_EXPERT_ACTIVATION_BY_NAME,
 )
 from tests.tt_eager.python_api_testing.sweep_tests.comparison_funcs import comp_pcc
+from tests.ttnn.nightly.unit_tests.operations.fused.routed_expert_prefill_tensor_setup import (
+    TensorSetup,
+    routed_expert_prefill_tensor_setup,
+)
 
 _WARMUP_ITERS = 3
 _MEASURE_ITERS = 10
 _WEIGHT_SCALE = 0.02
-_WEIGHTS_DTYPE = ttnn.bfloat4_b
-_BFP4_BYTES_PER_ELEM = 576 / 1024  # 512 B mantissas + 64 B shared exponents per 32x32 tile
 
-_TORCH_ACTIVATION = {
-    ttnn.RoutedExpertActivation.Silu: ACTIVATION_SILU,
-    ttnn.RoutedExpertActivation.SituGlu: ACTIVATION_SITU,
-    ttnn.RoutedExpertActivation.SwiGluOai: ACTIVATION_SWIGLUOAI,
-    ttnn.RoutedExpertActivation.ClampedSiluGlu: ACTIVATION_CLAMPED_SILU_GLU,
+# The model configs are torch-only, so they name their precisions as strings; this is where the
+# names become ttnn dtypes, with the bytes/element each one costs on device for the bandwidth
+# figure in the log line.
+_DTYPE_BY_NAME = {
+    "bfloat4_b": ttnn.bfloat4_b,
+    "bfloat8_b": ttnn.bfloat8_b,
+    "bfloat16": ttnn.bfloat16,
+    "float32": ttnn.float32,
+}
+_BYTES_PER_ELEM = {
+    ttnn.bfloat4_b: 576 / 1024,  # 512 B mantissas + 64 B shared exponents per 32x32 tile
+    ttnn.bfloat8_b: 1088 / 1024,  # 1024 B mantissas + 64 B shared exponents per 32x32 tile
+    ttnn.bfloat16: 2.0,
+    ttnn.float32: 4.0,
 }
 
 
 @dataclass(frozen=True)
 class RoutedExpertCase:
+    """One production model's routed expert. Every field of it is read off the model config."""
+
     model_cfg: type
-    emb_dim: int
-    activation: "ttnn.RoutedExpertActivation"
-    has_bias: bool
-    mesh_shape: tuple
-    chunk_size: int
-    capacity_factor: int
 
     @property
-    def num_devices(self) -> int:
-        return self.mesh_shape[0] * self.mesh_shape[1]
-
-    @property
-    def dispatch_group_size(self) -> int:
-        return self.mesh_shape[0]
+    def emb_dim(self) -> int:
+        # The expert's K/N: LatentMoE (Kimi-K3) projects 7168 -> 3584 before the experts and names
+        # the projected width; every other model feeds them the embedding width. Same rule as
+        # modeling_kimi_moe's moe_hidden_size and tt_prefill_block's routed_emb_dim.
+        return getattr(self.model_cfg, "ROUTED_EXPERT_HIDDEN_SIZE", None) or self.model_cfg.EMB_SIZE
 
     @property
     def hidden_dim(self) -> int:
         return self.model_cfg.MOE_INTERMEDIATE_SIZE
 
     @property
-    def experts_per_chip(self) -> int:
-        return self.model_cfg.NUM_ROUTED_EXPERTS // self.num_devices
+    def torch_activation(self) -> str:
+        return self.model_cfg.ROUTED_EXPERT_ACTIVATION
 
     @property
-    def max_tokens_per_expert(self) -> int:
-        return self.dispatch_group_size * (self.chunk_size // self.dispatch_group_size)
+    def activation(self) -> "ttnn.RoutedExpertActivation":
+        # The config names the activation once; the kernel enum and the torch reference are both
+        # keyed by that one name, so the two cannot drift apart.
+        return ROUTED_EXPERT_ACTIVATION_BY_NAME[self.torch_activation]
 
     @property
-    def dispatch_buffer_rows(self) -> int:
-        raw = self.max_tokens_per_expert * self.capacity_factor
-        return raw + ttnn.TILE_SIZE * (min(raw, self.experts_per_chip) - 1)
+    def has_bias(self) -> bool:
+        return self.model_cfg.ROUTED_EXPERT_BIAS
+
+    @property
+    def weights_dtype(self) -> ttnn.DataType:
+        return _DTYPE_BY_NAME[self.model_cfg.ROUTED_EXPERT_WEIGHTS_DTYPE]
+
+    @property
+    def bias_dtype(self) -> ttnn.DataType:
+        return _DTYPE_BY_NAME[self.model_cfg.ROUTED_EXPERT_BIAS_DTYPE]
 
 
-# The DeepSeek-family prefill runner (models/demos/common/prefill/runners/prefill_runner.py) defaults to an
-# (8, 4) SP x TP mesh, 5120-token chunks and capacity factor 8. MiniMax-M3 and GPT-OSS have their own runtimes.
-_DS_MESH, _DS_CHUNK, _DS_CF = (8, 4), 5120, 8
-_SILU = ttnn.RoutedExpertActivation.Silu
+def _case(model_cfg: type, name: str):
+    case = RoutedExpertCase(model_cfg)
+    return pytest.param(case, id=f"{name}-h{case.emb_dim}-i{case.hidden_dim}")
+
 
 _CASES = [
-    pytest.param(
-        RoutedExpertCase(DeepSeekV3Config, DeepSeekV3Config.EMB_SIZE, _SILU, False, _DS_MESH, _DS_CHUNK, _DS_CF),
-        id="deepseek-v3-h7168-i2048",
-    ),
-    pytest.param(
-        RoutedExpertCase(KimiK27Config, KimiK27Config.EMB_SIZE, _SILU, False, _DS_MESH, _DS_CHUNK, _DS_CF),
-        id="kimi-k2-7-h7168-i2048",
-    ),
-    pytest.param(
-        # LatentMoE: the routed experts run on the 7168 -> 3584 projected hidden.
-        RoutedExpertCase(
-            KimiK3Config,
-            KimiK3Config.ROUTED_EXPERT_HIDDEN_SIZE,
-            ttnn.RoutedExpertActivation.SituGlu,
-            False,
-            _DS_MESH,
-            _DS_CHUNK,
-            _DS_CF,
-        ),
-        id="kimi-k3-latent-h3584-i3072",
-    ),
-    pytest.param(
-        RoutedExpertCase(GLM53Config, GLM53Config.EMB_SIZE, _SILU, False, _DS_MESH, _DS_CHUNK, _DS_CF),
-        id="glm-5-3-h6144-i2048",
-    ),
-    pytest.param(
-        RoutedExpertCase(MistralSmall4Config, MistralSmall4Config.EMB_SIZE, _SILU, False, _DS_MESH, _DS_CHUNK, _DS_CF),
-        id="mistral-small-4-h4096-i2048",
-    ),
-    pytest.param(
-        RoutedExpertCase(
-            DeepSeekV4FlashConfig,
-            DeepSeekV4FlashConfig.EMB_SIZE,
-            ttnn.RoutedExpertActivation.ClampedSiluGlu,
-            False,
-            _DS_MESH,
-            _DS_CHUNK,
-            _DS_CF,
-        ),
-        id="deepseek-v4-flash-h4096-i2048",
-    ),
-    pytest.param(
-        RoutedExpertCase(
-            DeepSeekV4ProConfig,
-            DeepSeekV4ProConfig.EMB_SIZE,
-            ttnn.RoutedExpertActivation.ClampedSiluGlu,
-            False,
-            _DS_MESH,
-            _DS_CHUNK,
-            _DS_CF,
-        ),
-        id="deepseek-v4-pro-h7168-i3072",
-    ),
-    pytest.param(
-        # models/demos/minimax_m3: (8, 4) mesh, 5120-token chunks, capacity factor = top-k (drop-free buffer).
-        RoutedExpertCase(
-            MiniMaxM3Config,
-            MiniMaxM3Config.EMB_SIZE,
-            ttnn.RoutedExpertActivation.SwiGluOai,
-            False,
-            (8, 4),
-            5120,
-            MiniMaxM3Config.NUM_EXPERTS_PER_TOKEN,
-        ),
-        id="minimax-m3-h6144-i3072",
-    ),
-    pytest.param(
-        # models/demos/gpt_oss_d_p: (4, 8) mesh, 8192-token chunks, capacity factor 2, per-expert biases.
-        RoutedExpertCase(
-            GptOss120BConfig,
-            GptOss120BConfig.EMB_SIZE,
-            ttnn.RoutedExpertActivation.SwiGluOai,
-            True,
-            (4, 8),
-            8192,
-            2,
-        ),
-        id="gpt-oss-120b-h2880-i2880",
-    ),
+    _case(DeepSeekV3Config, "deepseek-v3"),
+    _case(KimiK27Config, "kimi-k2-7"),
+    _case(KimiK3Config, "kimi-k3-latent"),
+    _case(GLM53Config, "glm-5-3"),
+    _case(MistralSmall4Config, "mistral-small-4"),
+    _case(DeepSeekV4FlashConfig, "deepseek-v4-flash"),
+    _case(DeepSeekV4ProConfig, "deepseek-v4-pro"),
+    _case(MiniMaxM3Config, "minimax-m3"),
+    _case(GptOss120BConfig, "gpt-oss-120b"),
 ]
 
-
-def _route_tokens(case: RoutedExpertCase, num_chips: int) -> list[list[int]]:
-    """Per-chip, per-local-expert token counts from uniform top-k routing of one dispatch group's chunk.
-
-    Chip d holds global experts [d * experts_per_chip, (d + 1) * experts_per_chip).
-    """
-    num_experts = case.model_cfg.NUM_ROUTED_EXPERTS
-    epc = case.experts_per_chip
-    scores = torch.rand(case.max_tokens_per_expert, num_experts)
-    topk_ids = torch.topk(scores, case.model_cfg.NUM_EXPERTS_PER_TOKEN, dim=-1).indices
-    counts = torch.bincount(topk_ids.flatten(), minlength=num_experts).tolist()
-    return [counts[d * epc : (d + 1) * epc] for d in range(num_chips)]
+# Tokens landing on this one expert. Spans the range a prefill chunk puts on a single expert,
+# from a nearly idle one to a heavily loaded one.
+_NUM_TOKENS = [64, 128, 256, 384, 512, 768, 1024, 1280, 2048]
 
 
-def _region_offsets(counts: list[int]) -> list[int]:
-    """Tile-aligned region starts, as offset_cumsum lays them out."""
-    offsets, cursor = [], 0
-    for count in counts:
-        offsets.append(cursor)
-        cursor += -(-count // ttnn.TILE_SIZE) * ttnn.TILE_SIZE
-    return offsets
+def _place(mesh_device, torch_tensor: torch.Tensor, dtype: ttnn.DataType, setup: TensorSetup) -> ttnn.Tensor:
+    """One weight on the device: the model's precision, the op's placement."""
+    host = ttnn.from_torch(torch_tensor, layout=setup.layout, dtype=dtype)
+    return ttnn.to_device(host, mesh_device, memory_config=setup.memory_config)
 
 
-def _tile_ceil(n: int) -> int:
-    return -(-n // ttnn.TILE_SIZE) * ttnn.TILE_SIZE
-
-
-def _shard_per_device(
-    mesh_device, per_device: torch.Tensor, layout, dtype, memory_config=ttnn.DRAM_MEMORY_CONFIG
-) -> ttnn.Tensor:
-    """Place per_device[d] on chip d with the leading device dim squeezed, so local shapes match production."""
-    host = ttnn.from_torch(
-        per_device,
-        mesh_mapper=ttnn.ShardTensorToMesh(mesh_device, dim=0),
-        layout=layout,
-        dtype=dtype,
-    )
-    return ttnn.to_device(ttnn.squeeze(host, dim=0), mesh_device, memory_config=memory_config)
-
-
-def _make_uint32_vectors(mesh_device, values: torch.Tensor) -> ttnn.Tensor:
-    return _shard_per_device(mesh_device, values.to(torch.int32), ttnn.ROW_MAJOR_LAYOUT, ttnn.uint32)
-
-
-def _make_weights(mesh_device, torch_weights: torch.Tensor) -> ttnn.Tensor:
-    memory_config = routed_expert_weight_memory_config(mesh_device, torch_weights.shape[-1], dram_nd_sharded=True)
-    return _shard_per_device(mesh_device, torch_weights, ttnn.TILE_LAYOUT, _WEIGHTS_DTYPE, memory_config)
-
-
-def _make_biases(mesh_device, torch_biases: torch.Tensor) -> ttnn.Tensor:
-    return _shard_per_device(mesh_device, torch_biases.unsqueeze(1), ttnn.TILE_LAYOUT, ttnn.bfloat16)
-
-
-def _torch_expert(x, w_gate, w_up, w_down, biases, activation) -> torch.Tensor:
+def _torch_expert(x, w_gate, w_up, w_down, biases, case: RoutedExpertCase) -> torch.Tensor:
     gate, up = x @ w_gate, x @ w_up
     if biases is not None:
         gate, up = gate + biases[0], up + biases[1]
     activated = apply_glu_activation(
         gate,
         up,
-        activation=_TORCH_ACTIVATION[activation],
-        situ_beta=KimiK3Config.ACTIVATION_SITU_BETA,
-        situ_linear_beta=KimiK3Config.ACTIVATION_SITU_LINEAR_BETA,
+        activation=case.torch_activation,
+        situ_beta=getattr(case.model_cfg, "ACTIVATION_SITU_BETA", 1.0),
+        situ_linear_beta=getattr(case.model_cfg, "ACTIVATION_SITU_LINEAR_BETA", None),
     )
     out = activated @ w_down
     return out + biases[2] if biases is not None else out
 
 
-def _run_once(x, offsets, counts, idx_table, weights, biases, case: RoutedExpertCase) -> ttnn.Tensor:
-    gate_projs, up_projs, down_projs = weights
-    gate_biases, up_biases, down_biases = biases if biases is not None else (None, None, None)
+def _run_once(x, weights, biases, num_tokens: int, case: RoutedExpertCase) -> ttnn.Tensor:
+    gate_proj, up_proj, down_proj = weights
+    gate_bias, up_bias, down_bias = biases if biases is not None else (None, None, None)
     return ttnn.experimental.deepseek_prefill.unified_routed_expert_moe(
         x,
-        offsets,
-        counts,
-        idx_table,
-        gate_projs,
-        up_projs,
-        down_projs,
-        max_dispatched_tokens_per_expert=case.max_tokens_per_expert,
+        [gate_proj],
+        [up_proj],
+        [down_proj],
+        max_dispatched_tokens_per_expert=num_tokens,
         compute_kernel_config=COMPUTE_KERNEL_CONFIG_LOFI,
         activation=case.activation,
-        gate_biases=gate_biases,
-        up_biases=up_biases,
-        down_biases=down_biases,
+        gate_biases=None if gate_bias is None else [gate_bias],
+        up_biases=None if up_bias is None else [up_bias],
+        down_biases=None if down_bias is None else [down_bias],
     )
 
 
 @pytest.mark.parametrize("mesh_device", [(1, 1)], indirect=True)
 @pytest.mark.parametrize("case", _CASES)
+@pytest.mark.parametrize("num_tokens", _NUM_TOKENS, ids=[f"{n}tok" for n in _NUM_TOKENS])
 @pytest.mark.parametrize("seed", [0], ids=["seed0"])
-def test_routed_expert_prefill(mesh_device, case: RoutedExpertCase, seed):
-    """Run correctness + perf logging for one chip's routed-expert call in a production prefill MoE layer.
+def test_routed_expert_prefill(mesh_device, case: RoutedExpertCase, num_tokens: int, seed):
+    """Correctness + perf logging for one routed expert of ``case.model_cfg`` fed ``num_tokens`` tokens.
 
-    The op has no CCL, so a single chip runs the production-shaped call: its local experts, routing
-    counts and dispatch buffer match one chip of the production mesh in ``case``. A larger mesh_device
-    also works: each chip then gets its own experts, counts and buffer. The dispatch buffer is ROW_MAJOR bf16 (the dispatch output), weights are bf4 DRAM
-    ND-sharded (the Blackhole default) and the compute config is the routed-expert LoFi default, so the
-    op takes the same fused tilize path it takes in production. Token counts come from uniform top-k
-    routing of the dispatch group's chunk; every expert runs on unified_routed_expert_moe (no hybrid split).
+    The buffer is the expert's tokens and nothing else. The token buffer is ROW_MAJOR bf16 -- the
+    format the upstream dispatch produces, which is why it is the test's to prescribe; the weights
+    are placed per routed_expert_prefill_tensor_setup at the precision the model config names.
     """
     torch.manual_seed(seed)
-    num_chips = mesh_device.get_num_devices()
-    emb_dim, hidden_dim, epc = case.emb_dim, case.hidden_dim, case.experts_per_chip
-    num_experts = case.model_cfg.NUM_ROUTED_EXPERTS
-    assert num_chips * epc <= num_experts
+    emb_dim, hidden_dim = case.emb_dim, case.hidden_dim
+    assert num_tokens % ttnn.TILE_SIZE == 0, "the op's buffer M is tile-aligned"
+    setup = routed_expert_prefill_tensor_setup(mesh_device, emb_dim, hidden_dim)
 
-    chip_counts = _route_tokens(case, num_chips)
-    chip_offsets = [_region_offsets(counts) for counts in chip_counts]
-    used_rows = max(offs[-1] + _tile_ceil(counts[-1]) for offs, counts in zip(chip_offsets, chip_counts))
-    assert used_rows <= case.dispatch_buffer_rows
+    torch_input = torch.randn(num_tokens, emb_dim, dtype=torch.bfloat16)
+    w_gate = torch.randn(emb_dim, hidden_dim) * _WEIGHT_SCALE
+    w_up = torch.randn(emb_dim, hidden_dim) * _WEIGHT_SCALE
+    w_down = torch.randn(hidden_dim, emb_dim) * _WEIGHT_SCALE
+    torch_biases = None
+    if case.has_bias:
+        torch_biases = (
+            torch.randn(1, hidden_dim) * _WEIGHT_SCALE,
+            torch.randn(1, hidden_dim) * _WEIGHT_SCALE,
+            torch.randn(1, emb_dim) * _WEIGHT_SCALE,
+        )
+    torch_reference = _torch_expert(torch_input.float(), w_gate, w_up, w_down, torch_biases, case)
 
-    torch_input = torch.zeros(num_chips, case.dispatch_buffer_rows, emb_dim, dtype=torch.bfloat16)
-    for d in range(num_chips):
-        for offset, count in zip(chip_offsets[d], chip_counts[d]):
-            torch_input[d, offset : offset + count] = torch.randn(count, emb_dim, dtype=torch.bfloat16)
-
-    gate_projs, up_projs, down_projs = [], [], []
-    gate_biases, up_biases, down_biases = [], [], []
-    torch_reference = torch.zeros(num_chips, used_rows, emb_dim, dtype=torch.float32)
-    for e in range(epc):
-        w_gate = torch.randn(num_chips, emb_dim, hidden_dim) * _WEIGHT_SCALE
-        w_up = torch.randn(num_chips, emb_dim, hidden_dim) * _WEIGHT_SCALE
-        w_down = torch.randn(num_chips, hidden_dim, emb_dim) * _WEIGHT_SCALE
-        b_gate = b_up = b_down = None
-        if case.has_bias:
-            b_gate = torch.randn(num_chips, hidden_dim) * _WEIGHT_SCALE
-            b_up = torch.randn(num_chips, hidden_dim) * _WEIGHT_SCALE
-            b_down = torch.randn(num_chips, emb_dim) * _WEIGHT_SCALE
-            gate_biases.append(_make_biases(mesh_device, b_gate))
-            up_biases.append(_make_biases(mesh_device, b_up))
-            down_biases.append(_make_biases(mesh_device, b_down))
-        for d in range(num_chips):
-            offset, count = chip_offsets[d][e], chip_counts[d][e]
-            expert_biases = (b_gate[d], b_up[d], b_down[d]) if case.has_bias else None
-            torch_reference[d, offset : offset + count] = _torch_expert(
-                torch_input[d, offset : offset + count].float(),
-                w_gate[d],
-                w_up[d],
-                w_down[d],
-                expert_biases,
-                case.activation,
-            )
-        gate_projs.append(_make_weights(mesh_device, w_gate))
-        up_projs.append(_make_weights(mesh_device, w_up))
-        down_projs.append(_make_weights(mesh_device, w_down))
-    weights = (gate_projs, up_projs, down_projs)
-    biases = (gate_biases, up_biases, down_biases) if case.has_bias else None
-
-    x = _shard_per_device(mesh_device, torch_input, ttnn.ROW_MAJOR_LAYOUT, ttnn.bfloat16)
-    full_counts = torch.zeros(num_chips, 1, num_experts, dtype=torch.int32)
-    full_offsets = torch.zeros(num_chips, 1, num_experts, dtype=torch.int32)
-    idx_table = torch.zeros(num_chips, epc, dtype=torch.int32)
-    for d in range(num_chips):
-        global_ids = slice(d * epc, (d + 1) * epc)
-        full_counts[d, 0, global_ids] = torch.tensor(chip_counts[d])
-        full_offsets[d, 0, global_ids] = torch.tensor(chip_offsets[d])
-        idx_table[d] = torch.arange(d * epc, (d + 1) * epc)
-    counts = _make_uint32_vectors(mesh_device, full_counts)
-    offsets = _make_uint32_vectors(mesh_device, full_offsets)
-    idx_table = _make_uint32_vectors(mesh_device, idx_table)
+    x = ttnn.to_device(
+        ttnn.from_torch(torch_input, layout=ttnn.ROW_MAJOR_LAYOUT, dtype=ttnn.bfloat16),
+        mesh_device,
+        memory_config=ttnn.DRAM_MEMORY_CONFIG,
+    )
+    weights = (
+        _place(mesh_device, w_gate, case.weights_dtype, setup.gate_proj),
+        _place(mesh_device, w_up, case.weights_dtype, setup.up_proj),
+        _place(mesh_device, w_down, case.weights_dtype, setup.down_proj),
+    )
+    biases = (
+        None
+        if torch_biases is None
+        else (
+            _place(mesh_device, torch_biases[0], case.bias_dtype, setup.gate_bias),
+            _place(mesh_device, torch_biases[1], case.bias_dtype, setup.up_bias),
+            _place(mesh_device, torch_biases[2], case.bias_dtype, setup.down_bias),
+        )
+    )
     ttnn.synchronize_device(mesh_device)
 
     output = None
     for _ in range(_WARMUP_ITERS):
-        output = _run_once(x, offsets, counts, idx_table, weights, biases, case)
+        output = _run_once(x, weights, biases, num_tokens, case)
     ttnn.synchronize_device(mesh_device)
 
     start = time.perf_counter()
     for _ in range(_MEASURE_ITERS):
-        output = _run_once(x, offsets, counts, idx_table, weights, biases, case)
+        output = _run_once(x, weights, biases, num_tokens, case)
     ttnn.synchronize_device(mesh_device)
     elapsed_s = time.perf_counter() - start
 
-    tt_output = ttnn.to_torch(
-        ttnn.slice(output, [0, 0], [used_rows, emb_dim]),
-        mesh_composer=ttnn.ConcatMeshToTensor(mesh_device, dim=0),
-    ).float()
-    tt_output = tt_output.reshape(num_chips, used_rows, emb_dim)
-    ref_rows, tt_rows = [], []
-    for d in range(num_chips):
-        active = torch.cat([torch.arange(o, o + c) for o, c in zip(chip_offsets[d], chip_counts[d])])
-        ref_rows.append(torch_reference[d, active])
-        tt_rows.append(tt_output[d, active])
-    ref_active, tt_active = torch.cat(ref_rows), torch.cat(tt_rows)
-    _, pcc_msg = comp_pcc(ref_active, tt_active)
-    max_abs = torch.max(torch.abs(ref_active - tt_active)).item()
-    mean_abs = torch.mean(torch.abs(ref_active - tt_active)).item()
+    tt_output = ttnn.to_torch(output, mesh_composer=ttnn.ConcatMeshToTensor(mesh_device, dim=0)).float()
+    _, pcc_msg = comp_pcc(torch_reference, tt_output)
+    max_abs = torch.max(torch.abs(torch_reference - tt_output)).item()
+    mean_abs = torch.mean(torch.abs(torch_reference - tt_output)).item()
     avg_ms = elapsed_s * 1000.0 / _MEASURE_ITERS
 
-    tokens_per_chip = [sum(counts) for counts in chip_counts]
-    all_counts = [c for counts in chip_counts for c in counts]
-    active_experts_per_chip = sum(1 for c in all_counts if c > 0) / num_chips
-    tflops_per_chip = 2 * 3 * sum(tokens_per_chip) / num_chips * emb_dim * hidden_dim / (avg_ms * 1e-3) / 1e12
-    weight_gbps_per_chip = (
-        active_experts_per_chip * 3 * emb_dim * hidden_dim * _BFP4_BYTES_PER_ELEM / (avg_ms * 1e-3) / 1e9
-    )
+    tflops = 2 * 3 * num_tokens * emb_dim * hidden_dim / (avg_ms * 1e-3) / 1e12
+    weight_bytes = 3 * emb_dim * hidden_dim * _BYTES_PER_ELEM[case.weights_dtype]
+    weight_gbps = weight_bytes / (avg_ms * 1e-3) / 1e9
 
     logger.info(
         "unified_routed_expert_moe prefill probe "
         f"model={case.model_cfg.__name__} activation={case.activation} bias={case.has_bias} "
-        f"prod_mesh={case.mesh_shape} chunk={case.chunk_size} capacity_factor={case.capacity_factor} "
-        f"test_mesh={tuple(mesh_device.shape)} experts_per_chip={epc} "
-        f"local_x_shape={(case.dispatch_buffer_rows, emb_dim)} "
-        f"local_gate_up_shape={(emb_dim, hidden_dim)} local_down_shape={(hidden_dim, emb_dim)} "
-        f"max_tokens_per_expert={case.max_tokens_per_expert} tokens_per_chip={tokens_per_chip} "
-        f"counts_min={min(all_counts)} counts_max={max(all_counts)} "
-        f"avg_ms={avg_ms:.3f} tflops_per_chip={tflops_per_chip:.2f} weight_gbps_per_chip={weight_gbps_per_chip:.1f} "
+        f"num_tokens={num_tokens} x_shape={(num_tokens, emb_dim)} "
+        f"gate_up_shape={(emb_dim, hidden_dim)} down_shape={(hidden_dim, emb_dim)} "
+        f"weights_dtype={case.weights_dtype} "
+        f"avg_ms={avg_ms:.3f} tflops={tflops:.2f} weight_gbps={weight_gbps:.1f} "
         f"max_abs={max_abs:.6f} mean_abs={mean_abs:.6f} {pcc_msg}"
     )

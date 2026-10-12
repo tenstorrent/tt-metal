@@ -30,6 +30,9 @@ class DeepSeekV3Config:
     # kernel's enum; the torch reference takes it as-is.
     ROUTED_EXPERT_ACTIVATION = "silu"
     ROUTED_EXPERT_BIAS = False
+    # Served precision of the routed-expert weights, as a ttnn dtype NAME -- this config stays
+    # torch-only, so the name is mapped onto the ttnn dtype at the device-side call site.
+    ROUTED_EXPERT_WEIGHTS_DTYPE = "bfloat4_b"
 
     # Gate-test device-mode scores bar. pcc_scores sorts both sides, so this measures the
     # selected-weight distribution rather than slot alignment; 256 experts, top-8, group-limited floors at

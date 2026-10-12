@@ -51,6 +51,11 @@ class GptOss120BConfig:
     # the one model here whose experts carry biases -- see tt/moe/weights.py.
     ROUTED_EXPERT_ACTIVATION = "swiglu_oai"
     ROUTED_EXPERT_BIAS = True
+    # Served precision of the routed-expert weights, as a ttnn dtype NAME -- this config stays
+    # torch-only, so the name is mapped onto the ttnn dtype at the device-side call site.
+    ROUTED_EXPERT_WEIGHTS_DTYPE = "bfloat4_b"
+    # Served precision of the per-expert biases. Only a model with ROUTED_EXPERT_BIAS names one.
+    ROUTED_EXPERT_BIAS_DTYPE = "bfloat16"
 
     # Gate-test device-mode scores bar. pcc_scores sorts both sides, so this measures the
     # selected-weight distribution rather than slot alignment; 128 experts, top-4 floors at

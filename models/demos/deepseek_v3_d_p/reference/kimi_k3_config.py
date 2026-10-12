@@ -136,6 +136,9 @@ class KimiK3Config:
     DENSE_FFN_ACTIVATION = "situ"
     # Per-expert gate/up/down bias vectors; not the router's correction bias.
     ROUTED_EXPERT_BIAS = False
+    # Served precision of the routed-expert weights, as a ttnn dtype NAME -- this config stays
+    # torch-only, so the name is mapped onto the ttnn dtype at the device-side call site.
+    ROUTED_EXPERT_WEIGHTS_DTYPE = "bfloat4_b"
     # Must match SituGluConfigKimi, which the fused routed-expert kernel bakes in; the two composed
     # sites read these directly, so all three activations stay on one pair of betas.
     ACTIVATION_SITU_BETA = 4.0

@@ -66,6 +66,9 @@ class MiniMaxM3Config:
     # fused kernel's enum; the torch reference takes it as-is. M3's experts are bias-free.
     ROUTED_EXPERT_ACTIVATION = "swiglu_oai"
     ROUTED_EXPERT_BIAS = False
+    # Served precision of the routed-expert weights, as a ttnn dtype NAME -- this config stays
+    # torch-only, so the name is mapped onto the ttnn dtype at the device-side call site.
+    ROUTED_EXPERT_WEIGHTS_DTYPE = "bfloat4_b"
 
     # Layer schedules: 0 = dense/full-attention, 1 = MoE/sparse-attention
     MOE_LAYER_FREQ = (0, 0, 0) + (1,) * 57

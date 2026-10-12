@@ -51,6 +51,9 @@ class MistralSmall4Config:
     # kernel's enum; the torch reference takes it as-is.
     ROUTED_EXPERT_ACTIVATION = "silu"
     ROUTED_EXPERT_BIAS = False
+    # Served precision of the routed-expert weights, as a ttnn dtype NAME -- this config stays
+    # torch-only, so the name is mapped onto the ttnn dtype at the device-side call site.
+    ROUTED_EXPERT_WEIGHTS_DTYPE = "bfloat4_b"
     NORM_TOPK_PROB = True  # norm_topk_prob
     # Mistral4TopkRouter carries only `weight`; there is no auxiliary-loss-free correction bias.
     ROUTER_HAS_CORRECTION_BIAS = False

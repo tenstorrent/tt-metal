@@ -83,6 +83,9 @@ class DeepSeekV4ProConfig:
     # Per-expert gate/up/down bias vectors; not the router's correction bias. V4's experts are
     # bias-free, which is also why the kernel rejects biases on ClampedSiluGlu.
     ROUTED_EXPERT_BIAS = False
+    # Served precision of the routed-expert weights, as a ttnn dtype NAME -- this config stays
+    # torch-only, so the name is mapped onto the ttnn dtype at the device-side call site.
+    ROUTED_EXPERT_WEIGHTS_DTYPE = "bfloat4_b"
     # Read at runtime by the shared expert only; the routed kernel bakes the same value at compile
     # time (ClampedSiluGluConfigDsV4), so the two must stay equal.
     SWIGLU_LIMIT = 10.0
