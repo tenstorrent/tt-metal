@@ -2,7 +2,7 @@
 //
 // SPDX-License-Identifier: Apache-2.0
 //
-// topk_xl_test.cpp's fused K = 512 and 2048 rows with each chunk split across MATH and PACK (helpers/include/topk_xl_split.h);
+// topk_xl_test.cpp's fused K = 512, 1024 and 2048 rows with each chunk split across MATH and PACK (helpers/include/topk_xl_split.h);
 // it takes the same TOPK_XL parameters and must pack the same result bit for bit. Blackhole only.
 
 #include <cstdint>
@@ -15,7 +15,8 @@ std::uint32_t unp_cfg_context          = 0;
 std::uint32_t pack_sync_tile_dst_ptr   = 0;
 std::uint32_t math_sync_tile_dst_index = 0;
 
-static_assert((TOPK_XL_K == 512 || TOPK_XL_K == 2048) && TOPK_XL_FUSED_E2E, "the split pipeline covers the fused K = 512 and 2048 chunks");
+static_assert(
+    (TOPK_XL_K == 512 || TOPK_XL_K == 1024 || TOPK_XL_K == 2048) && TOPK_XL_FUSED_E2E, "the split pipeline covers the fused K = 512, 1024 and 2048 chunks");
 
 constexpr std::uint32_t ELEMENTS_PER_TILE = ckernel::TILE_R_DIM * ckernel::TILE_C_DIM;
 constexpr std::uint32_t TILES_PER_SEQ     = TOPK_XL_K / ELEMENTS_PER_TILE + (TOPK_XL_K < ELEMENTS_PER_TILE ? 1 : 0);

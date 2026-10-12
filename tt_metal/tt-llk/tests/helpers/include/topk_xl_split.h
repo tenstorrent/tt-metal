@@ -2,7 +2,7 @@
 //
 // SPDX-License-Identifier: Apache-2.0
 //
-// The fused K = 512 or 2048 topk_xl chunk split across threads: copy and face transposes on MATH, SFPU work on PACK.
+// The fused K = 512, 1024 or 2048 topk_xl chunk split across threads: copy and face transposes on MATH, SFPU work on PACK.
 // Chunk c runs stage j at step 9c + 2j, so MATH transposes one chunk while PACK sorts the other.
 
 #pragma once
@@ -185,6 +185,10 @@ inline __attribute__((noinline)) void sfpu_stage(const std::uint32_t chunk, cons
             if constexpr (K == 2048)
             {
                 _topk_xl_split_sort_head_2048_(tile_offset, ascending);
+            }
+            else if constexpr (K == 1024)
+            {
+                _topk_xl_split_sort_head_1024_(tile_offset, ascending);
             }
             else
             {

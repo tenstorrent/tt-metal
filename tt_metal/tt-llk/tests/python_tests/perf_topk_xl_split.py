@@ -19,7 +19,7 @@ from helpers.test_variant_parameters import (
 pytestmark = [skip_for_quasar, skip_for_wormhole]
 
 ELEMENTS_PER_TILE = 1024
-ROWS = [(k, c) for k in (512, 2048) for c in (2, 8, 32)]
+ROWS = [(k, c) for k in (512, 1024, 2048) for c in (2, 8, 32)]
 
 
 @pytest.mark.perf

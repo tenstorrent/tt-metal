@@ -2,7 +2,7 @@
 //
 // SPDX-License-Identifier: Apache-2.0
 //
-// topk_xl_perf.cpp's fused K = 512 and 2048 rows with each chunk split across MATH and PACK (helpers/include/topk_xl_split.h),
+// topk_xl_perf.cpp's fused K = 512, 1024 and 2048 rows with each chunk split across MATH and PACK (helpers/include/topk_xl_split.h),
 // on the same unpack stream and with the same Dst result. Blackhole only.
 
 #include <cstdint>
@@ -26,7 +26,8 @@ std::uint32_t pack_sync_tile_dst_ptr   = 0;
 std::uint32_t math_sync_tile_dst_index = 0;
 
 static_assert(PERF_RUN_TYPE == PerfRunType::L1_TO_L1, "topk_xl_split_perf runs L1_TO_L1 only");
-static_assert((TOPK_XL_K == 512 || TOPK_XL_K == 2048) && TOPK_XL_FUSED_E2E, "the split pipeline covers the fused K = 512 and 2048 chunks");
+static_assert(
+    (TOPK_XL_K == 512 || TOPK_XL_K == 1024 || TOPK_XL_K == 2048) && TOPK_XL_FUSED_E2E, "the split pipeline covers the fused K = 512, 1024 and 2048 chunks");
 static_assert(TOPK_XL_NUM_CHUNKS >= 2 && TOPK_XL_NUM_CHUNKS <= 32, "the perf rows merge 2 to 32 chunks");
 
 constexpr std::uint32_t ELEMENTS_PER_TILE = ckernel::TILE_R_DIM * ckernel::TILE_C_DIM;

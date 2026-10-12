@@ -4,8 +4,8 @@
 
 #pragma once
 
-// A row of two or more K = 512 or 2048 chunks on Blackhole: copies and face transposes on MATH, SFPU work on PACK.
-// Chunk c runs stage j at step 9c + 2j, so MATH transposes one chunk while PACK sorts the other.
+// A row of two or more K = 512, 1024 or 2048 chunks on Blackhole: copies and face transposes on MATH, SFPU work on
+// PACK. Chunk c runs stage j at step 9c + 2j, so MATH transposes one chunk while PACK sorts the other.
 
 #include <cstdint>
 
@@ -41,7 +41,7 @@ template <std::uint32_t K, bool classic>
 constexpr std::uint32_t chunk_tiles = classic ? 2 : (K == 2048 ? 2 : 1);
 
 template <std::uint32_t K, bool classic>
-constexpr bool supported_split = (K == 512 || (K == 2048 && !classic));
+constexpr bool supported_split = (K == 512 || (K >= 1024 && !classic));
 
 template <std::uint32_t K, bool classic>
 constexpr std::uint32_t chunk_tile(const std::uint32_t chunk) {
@@ -68,7 +68,8 @@ inline void release_src() { TTI_SETRWC(ckernel::p_setrwc::CLR_AB, 0, 0, 0, 0, ck
 // copy), and every release and copy runs with the transpose CFG block closed, as in the single-thread kernel.
 template <std::uint32_t K, bool classic, typename CopyChunk>
 inline void math_row(const std::uint32_t num_chunks, CopyChunk&& copy_chunk) {
-    static_assert(supported_split<K, classic>, "the split takes fused K = 512 and 2048 rows and Classic K = 512 rows");
+    static_assert(
+        supported_split<K, classic>, "the split takes fused K = 512, 1024 and 2048 rows and Classic K = 512 rows");
     std::uint32_t posted = 0, taken = 0, half_release_step = 0;
     bool prev_step_busy = false, cfg_open = false, half_release_due = false;
 
@@ -158,7 +159,8 @@ inline void wait_start() {
 template <std::uint32_t K, bool classic>
 inline __attribute__((always_inline)) void sfpu_stage_body(
     const std::uint32_t chunk, const std::uint32_t stage, const bool rebuild_dir) {
-    static_assert(supported_split<K, classic>, "the split takes fused K = 512 and 2048 rows and Classic K = 512 rows");
+    static_assert(
+        supported_split<K, classic>, "the split takes fused K = 512, 1024 and 2048 rows and Classic K = 512 rows");
     using namespace ckernel::sfpu;
     constexpr int chunk_rows = 64 * chunk_tiles<K, classic>;
     const std::uint32_t tile_offset = chunk_tile<K, classic>(chunk) << 6;
@@ -177,6 +179,8 @@ inline __attribute__((always_inline)) void sfpu_stage_body(
             _topk_xl_split_stamp_<K>(tile_offset, classic ? 0 : chunk);
             if constexpr (K == 2048) {
                 _topk_xl_split_sort_head_2048_(tile_offset, ascending);
+            } else if constexpr (K == 1024) {
+                _topk_xl_split_sort_head_1024_(tile_offset, ascending);
             } else {
                 _topk_xl_split_sort_head_512_<!classic>(tile_offset, ascending);
             }

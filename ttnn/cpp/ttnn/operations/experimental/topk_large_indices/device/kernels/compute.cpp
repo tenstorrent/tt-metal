@@ -491,8 +491,9 @@ void kernel_main() {
     CircularBuffer indices(indices_cb);
 
 #ifdef ARCH_BLACKHOLE
-    // K = 512 rows of either body and K = 2048 rows of two or more chunks (longer than 32 with the accumulator buffer).
-    if constexpr (multi_chunk_rows && K != 1024) {
+    // K = 512 rows of either body and K = 1024 or 2048 rows of two or more chunks (K = 2048 rows longer than 32 with
+    // the accumulator buffer).
+    if constexpr (multi_chunk_rows) {
         constexpr bool split_segments = K == 2048 && body_mode == ComputeBodyMode::FusedSegmented && acc_cb != 0;
         if (num_chunks >= 2 && (K == 512 || num_chunks <= 32 || split_segments)) {
             MATH((topk_large_indices_split::start()));
