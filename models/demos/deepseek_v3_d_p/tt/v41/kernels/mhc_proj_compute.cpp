@@ -31,6 +31,7 @@
 
 void kernel_main() {
     const uint32_t row_count = get_arg_val<uint32_t>(0);
+    const uint32_t nb_count = get_arg_val<uint32_t>(1);  // this core's K blocks (a split of K, or all of it)
 
     constexpr uint32_t cb_x = get_compile_time_arg_val(0);
     constexpr uint32_t cb_xsq = get_compile_time_arg_val(1);
@@ -67,7 +68,7 @@ void kernel_main() {
 
     for (uint32_t r = 0; r < row_count; ++r) {
         tile_regs_acquire();
-        for (uint32_t b = 0; b < NB; ++b) {
+        for (uint32_t b = 0; b < nb_count; ++b) {
             x.wait_front(BK);
             w.wait_front(BK);
             matmul_init(cb_x, cb_w, 0);

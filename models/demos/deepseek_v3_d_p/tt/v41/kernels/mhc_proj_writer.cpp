@@ -21,6 +21,9 @@ void kernel_main() {
     const uint32_t out_addr = get_arg_val<uint32_t>(1);
     const uint32_t row_start = get_arg_val<uint32_t>(2);
     const uint32_t row_count = get_arg_val<uint32_t>(3);
+    const uint32_t nb_start = get_arg_val<uint32_t>(4);  // this core's K blocks, as the reader's
+    const uint32_t nb_count = get_arg_val<uint32_t>(5);
+    const uint32_t out_row_base = get_arg_val<uint32_t>(6);  // the split's rows in the output: s * rows
 
     constexpr uint32_t cb_w = get_compile_time_arg_val(0);
     constexpr uint32_t cb_out = get_compile_time_arg_val(1);
@@ -41,9 +44,9 @@ void kernel_main() {
     DataflowBuffer dfb(cb_out);
     const uint32_t page = get_local_cb_interface(cb_out).fifo_page_size;
     for (uint32_t r = row_start; r < row_start + row_count; ++r) {
-        const uint32_t b0 = r % NB;
-        for (uint32_t i = 0; i < NB; ++i) {
-            const uint32_t k0 = ((b0 + i) % NB) * BK;
+        const uint32_t b0 = nb_count == NB ? r % NB : 0;
+        for (uint32_t i = 0; i < nb_count; ++i) {
+            const uint32_t k0 = (nb_start + (b0 + i) % nb_count) * BK;
             w.reserve_back(BK);
             for (uint32_t b = 0; b < BK; ++b) {
                 noc.async_read(ws, w, page, {.page_id = k0 + b}, {.offset_bytes = b * page});
@@ -52,7 +55,7 @@ void kernel_main() {
             w.push_back(BK);
         }
         dfb.wait_front(1);
-        noc.async_write(dfb, out, page, {.offset_bytes = 0}, {.page_id = r});
+        noc.async_write(dfb, out, page, {.offset_bytes = 0}, {.page_id = out_row_base + r});
         noc.async_writes_flushed();
         dfb.pop_front(1);
     }

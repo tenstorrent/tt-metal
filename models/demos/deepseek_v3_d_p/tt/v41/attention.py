@@ -76,6 +76,10 @@ def compact_leading_rows(rows, n: int, window: int):
 # widest that keeps the default's accuracy (tests/v41/test_v41_attention_matmuls.py sweeps and checks them).
 MATMUL_GRID = (11, 10)  # as tt/mla/mla_config.py
 DENSE_IN0_BLOCK_W = {"wq_a": 5, "wkv": 5, "wq_b": 5, "wo_a": 8}
+# One tile row (the decode step): the projections where a 1D multicast config (N over the grid, the row multicast)
+# beats the 2D one's single grid row in the micro-benchmark (wq_b 41 to 35 us, wo_a 48 to 43); the two small ones
+# are below what an eager loop resolves.
+DECODE_1D = {"wq_b", "wo_a"}
 DENSE_L1_BUDGET = 1 << 20  # bytes of output block + double-buffered in0 / in1 blocks per core
 # ttnn.linear without a program config runs bf16 x bfp8 at HiFi2 with packer L1 accumulation; a program config alone
 # would select LoFi. Every projection runs this explicit config (the default's numerics).
@@ -84,15 +88,30 @@ DENSE_COMPUTE_CONFIG = ttnn.types.BlackholeComputeKernelConfig(
 )
 
 
-def dense_program_config(m: int, k: int, n: int, in0_block_w: int):
+def dense_program_config(m: int, k: int, n: int, in0_block_w: int, one_d: bool = False):
     """2D-multicast config of a [m, k] x [k, n] bf16 x bfp8 matmul (per batch) on ``MATMUL_GRID``, or None (ttnn's
-    default) when the blocks do not fit ``DENSE_L1_BUDGET`` or ``in0_block_w`` does not divide K."""
+    default) when the blocks do not fit ``DENSE_L1_BUDGET`` or ``in0_block_w`` does not divide K; ``one_d`` and one
+    tile row: the 1D multicast config."""
     tile = 32
     mt, kt, nt = m // tile, k // tile, n // tile
     gx, gy = MATMUL_GRID
     per_core_m, per_core_n = -(-mt // gy), -(-nt // gx)
     if kt % in0_block_w:
         return None
+    if mt == 1 and one_d:
+        cores = min(gx * gy, nt)
+        per_core_n = -(-nt // cores)
+        return ttnn.MatmulMultiCoreReuseMultiCast1DProgramConfig(
+            compute_with_storage_grid_size=MATMUL_GRID,
+            in0_block_w=in0_block_w,
+            out_subblock_h=1,
+            out_subblock_w=max(w for w in range(1, 9) if per_core_n % w == 0),
+            per_core_M=1,
+            per_core_N=per_core_n,
+            fuse_batch=False,
+            fused_activation=None,
+            mcast_in0=True,
+        )
     l1 = per_core_m * per_core_n * 2048 + 2 * per_core_m * in0_block_w * 2048 + 2 * in0_block_w * per_core_n * 1088
     if l1 > DENSE_L1_BUDGET:
         return None
@@ -191,7 +210,9 @@ class TtV41Attention(LightweightModule):
     def _dense(self, x, name: str):
         """``x @ self.<name>`` on its tuned program config."""
         w = getattr(self, name)
-        config = dense_program_config(x.shape[-2], w.shape[-2], w.shape[-1], DENSE_IN0_BLOCK_W[name])
+        config = dense_program_config(
+            x.shape[-2], w.shape[-2], w.shape[-1], DENSE_IN0_BLOCK_W[name], one_d=name in DECODE_1D
+        )
         return ttnn.linear(x, w, program_config=config, compute_kernel_config=self.compute_kernel_config)
 
     def _rope(self, t, cos, sin, inverse=False):

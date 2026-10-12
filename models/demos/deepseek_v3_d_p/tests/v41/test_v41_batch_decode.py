@@ -36,6 +36,14 @@ from models.demos.deepseek_v3_d_p.tt.v41.engram_checkpoint import build_engram_m
 from models.demos.deepseek_v3_d_p.tt.v41.transformer import TtV41Transformer
 from models.demos.deepseek_v3_d_p.tt.v41.weights import load_layer, load_layer_dense, resolve_checkpoint
 
+try:
+    from tracy import signpost
+except ModuleNotFoundError:  # not under the tracy wrapper
+
+    def signpost(_name: str) -> None:
+        pass
+
+
 DEFAULT_LAYERS = "0,2,3,20,21,24"
 DEFAULT_REF_SLOTS = "0,1,9,14,22,31"
 TRACE_REGION = 512 * 1024 * 1024
@@ -97,6 +105,7 @@ def test_v41_batch_decode(mesh_device, device_params):
     trace = os.environ.get("V41_BATCH_TRACE", "1") == "1"
     warmup = int(os.environ.get("V41_BATCH_WARMUP", 2))
     sample = os.environ.get("V41_BATCH_SAMPLE", "0") == "1"  # argmax on device (DeviceSampler) instead of logits
+    profile = os.environ.get("V41_BATCH_PROFILE", "0") == "1"  # as test_v41_decode: drain the device profiler per block
     ref_slots = (
         [int(s) for s in os.environ.get("V41_BATCH_REF_SLOTS", DEFAULT_REF_SLOTS).split(",") if s] if use_ref else []
     )
@@ -115,6 +124,10 @@ def test_v41_batch_decode(mesh_device, device_params):
     text = orc.text_tokens(n_slots * stride)[0]
     prompts = {s: text[s * stride : s * stride + lengths[s]] for s in range(n_slots)}
     books = {s: text[s * stride + lengths[s] : s * stride + lengths[s] + steps + 1] for s in range(n_slots)}
+    if os.environ.get("V41_BATCH_SAME_PROMPT", "0") == "1":  # every slot the same request: identical expert routing
+        lengths = [lengths[0]] * n_slots
+        prompts = {s: prompts[0] for s in range(n_slots)}
+        books = {s: books[0] for s in range(n_slots)}
     max_seq = -(-(base + steps + 32) // chunk) * chunk
     result = {
         "layers": layers,
@@ -211,6 +224,16 @@ def test_v41_batch_decode(mesh_device, device_params):
     captured = {}
     if reference:
         decoder.on_block = lambda layer, x: captured.__setitem__(layer, x)
+    if profile:
+        ttnn.ReadDeviceProfiler(mesh_device)
+        previous = decoder.on_block
+
+        def drain(layer, x):
+            if previous is not None:
+                previous(layer, x)
+            ttnn.ReadDeviceProfiler(mesh_device)
+
+        decoder.on_block = drain
     per_step = []
     hits = {s: 0 for s in range(n_slots)}
     for i in range(steps):
@@ -219,8 +242,14 @@ def test_v41_batch_decode(mesh_device, device_params):
         t0 = time.time()
         if sample and i == 0 and os.environ.get("V41_BATCH_DEBUG", "0") == "1":
             decoder.sampler.debug = {}
+        if profile and i == steps - 1:
+            signpost("start")
         out = decoder.decode(tokens, {s: (1, 0.0, 0.0) for s in tokens} if sample else None)
         wall = time.time() - t0
+        if profile:
+            ttnn.ReadDeviceProfiler(mesh_device)
+            if i == steps - 1:
+                signpost("stop")
         if sample and decoder.sampler.debug:
             dbg = decoder.sampler.debug
             decoder.sampler.debug = None

@@ -145,10 +145,13 @@ def _stream_mix(streams, n: int, coef_srcs, table, outputs: int, x=None, dtype=t
         device,
         streams.memory_config(),
     )
-    # whole blocks of one tile row per reader barrier: every CB reservation stays contiguous
-    block = max(b for b in range(1, _MAX_BLOCK_UNITS + 1) if ct % b == 0)
-    blocks = tokens // 32 * ct // block
+    # whole blocks of one tile row per reader barrier: every CB reservation stays contiguous; the largest block that
+    # still gives every core of the grid a block (a few tile rows, the decode step: smaller blocks, more cores)
     grid = device.compute_with_storage_grid_size()
+    candidates = [b for b in range(1, _MAX_BLOCK_UNITS + 1) if ct % b == 0]
+    filling = [b for b in candidates if tokens // 32 * ct // b >= grid.x * grid.y]
+    block = max(filling) if filling else min(candidates)
+    blocks = tokens // 32 * ct // block
     num_cores = min(grid.x * grid.y, blocks)
     base, extra = divmod(blocks, num_cores)
     last = ttnn.CoreCoord((num_cores - 1) % grid.x, (num_cores - 1) // grid.x)
@@ -253,6 +256,10 @@ def fused_hc_post(h, residual, post, comb, n: int) -> ttnn.Tensor:
     return _stream_mix(residual, n, [post, comb], table, outputs=n, x=h)
 
 
+# the K splits' partial sums: fp32 accumulation at full fidelity
+_SUM_COMPUTE_CONFIG = ttnn.types.BlackholeComputeKernelConfig(
+    math_fidelity=ttnn.MathFidelity.HiFi4, math_approx_mode=False, fp32_dest_acc_en=True, packer_l1_acc=False
+)
 _PROJ_BK = 8  # stream/weight tiles per read barrier (the largest divisor of the width in tiles up to this)
 _PROJ_X_BLOCKS = 6  # x blocks buffered per core (measured: x reads, not compute, bound the op)
 _CB_X, _CB_XSQ, _CB_W, _CB_CONST, _CB_MIX, _CB_HI, _CB_LO = 0, 1, 2, 3, 4, 5, 6
@@ -274,14 +281,17 @@ def fused_project(x, fn_T, mix_col: int, width: int, eps_part: float) -> ttnn.Te
     assert tuple(fn_T.padded_shape)[-2:] == (k, 32) and mix_col < 32, (tuple(fn_T.padded_shape), k, mix_col)
     kt, rows = k // 32, tokens // 32
     bk = max(b for b in range(1, _PROJ_BK + 1) if kt % b == 0)
+    nb = kt // bk
 
     device = x.device()
-    out = ttnn.allocate_tensor_on_device(
-        ttnn.Shape([1, 1, tokens, 32]), ttnn.float32, ttnn.TILE_LAYOUT, device, x.memory_config()
-    )
     grid = device.compute_with_storage_grid_size()
-    num_cores = min(grid.x * grid.y, rows)
-    base, extra = divmod(rows, num_cores)
+    # a few tile rows (the decode step): K is split over the cores in whole blocks, each core a partial [T, 32]
+    # (its mixes and its share of the sum of squares, eps included once over the splits) that the caller sums
+    splits = 1 if rows >= grid.x * grid.y else max(1, min(nb, grid.x * grid.y // rows))
+    out = ttnn.allocate_tensor_on_device(
+        ttnn.Shape([1, splits, tokens, 32]), ttnn.float32, ttnn.TILE_LAYOUT, device, x.memory_config()
+    )
+    num_cores = min(grid.x * grid.y, rows * splits)
     last = ttnn.CoreCoord((num_cores - 1) % grid.x, (num_cores - 1) // grid.x)
     ranges = []
     if last.y > 0:
@@ -290,14 +300,27 @@ def fused_project(x, fn_T, mix_col: int, width: int, eps_part: float) -> ttnn.Te
     cores = ttnn.CoreRangeSet(ranges)
 
     reader_args, writer_args, compute_args = ttnn.RuntimeArgs(), ttnn.RuntimeArgs(), ttnn.RuntimeArgs()
-    start = 0
+    # core i: rows [row_start, row_start + count) of split s, blocks [nb_start, nb_start + nb_count) of K
+    base, extra = divmod(rows * splits, num_cores)
+    unit = 0
     for i in range(num_cores):
         cx, cy = i % grid.x, i // grid.x
         count = base + (i < extra)
-        reader_args[cx][cy] = [x.buffer_address(), start, count]
-        writer_args[cx][cy] = [fn_T.buffer_address(), out.buffer_address(), start, count]
-        compute_args[cx][cy] = [count]
-        start += count
+        s, row_start = divmod(unit, rows)
+        assert s == (unit + count - 1) // rows, "a core's rows lie in one split"
+        nb_start, nb_count = s * (nb // splits) + min(s, nb % splits), nb // splits + (s < nb % splits)
+        reader_args[cx][cy] = [x.buffer_address(), row_start, count, nb_start, nb_count]
+        writer_args[cx][cy] = [
+            fn_T.buffer_address(),
+            out.buffer_address(),
+            row_start,
+            count,
+            nb_start,
+            nb_count,
+            s * rows,
+        ]
+        compute_args[cx][cy] = [count, nb_count]
+        unit += count
 
     def cb(index: int, tiles: int) -> ttnn.CBDescriptor:
         page = ttnn.CBFormatDescriptor(buffer_index=index, data_format=ttnn.float32, page_size=_FP32_TILE_BYTES)
@@ -324,7 +347,7 @@ def fused_project(x, fn_T, mix_col: int, width: int, eps_part: float) -> ttnn.Te
         kt,
         bk,
         _f32_bits(1.0 / width),
-        _f32_bits(eps_part / 32),
+        _f32_bits(eps_part / 32 / splits),
     ]
     kernels = [
         ttnn.KernelDescriptor(
@@ -366,7 +389,12 @@ def fused_project(x, fn_T, mix_col: int, width: int, eps_part: float) -> ttnn.Te
         cb(_CB_LO, 1),
         cb(_CB_OUT, 2),
     ]
-    return ttnn.generic_op([x, fn_T, out], ttnn.ProgramDescriptor(kernels=kernels, semaphores=[], cbs=cbs))
+    out = ttnn.generic_op([x, fn_T, out], ttnn.ProgramDescriptor(kernels=kernels, semaphores=[], cbs=cbs))
+    if splits > 1:
+        partials = out
+        out = ttnn.sum(partials, dim=1, keepdim=True, compute_kernel_config=_SUM_COMPUTE_CONFIG)
+        ttnn.deallocate(partials)
+    return out
 
 
 def fused_rms_project(x, fn_T, mix_col: int, norm_eps: float, tp_factor: int = 1, tp_sum=None) -> ttnn.Tensor:

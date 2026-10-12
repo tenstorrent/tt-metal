@@ -2,13 +2,17 @@
 
 # SPDX-License-Identifier: Apache-2.0
 
-"""Fused V4.1 mHC split projection (tt/v41/mhc.py ``fused_project``, bead 8y7.9.5) vs fp64 torch and the composite
+"""Fused V4.1 mHC split projection (tt/v41/mhc.py ``fused_project``, bead 8y7.9.5) vs fp64 torch and the
+composite
 ``tt_mhc._project`` (matmul + x*x + sum, two TP all-reduces).
 
-Both paths feed the matmul unit fp32 operands (tf32 multiplies, fp32 accumulate), so the fused op is held to the
+Both paths feed the matmul unit fp32 operands (tf32 multiplies, fp32 accumulate), so the fused op is held to
+the
 composite path's own error against fp64 rather than to bit identity: the sum of squares moves from an SFPU
-square + FPU reduce to the diagonal of the FPU Gram tile x @ x^T. ``test_mhc_split_traced_time`` logs the traced
-per-call split time on the 2x4 mesh at the production per-chip shape (chunk 5120: 2560 tokens, hidden slice 1280)
+square + FPU reduce to the diagonal of the FPU Gram tile x @ x^T. ``test_mhc_split_traced_time`` logs the
+traced
+per-call split time on the 2x4 mesh at the production per-chip shape (chunk 5120: 2560 tokens, hidden slice
+1280)
 as ``V41_MHC_PERF`` JSON lines.
 """
 
@@ -87,8 +91,17 @@ def test_mhc_fused_project(device, shape):
     }
     logger.info(f"{shape}: max |err| vs fp64 (fused, composite): {errs}")
     assert torch.all(raw[0][:, MIX + 1 :] == 0), "mixes columns past the mean of squares must stay zero"
+    # a K-split projection (a few tile rows: the decode step) sums per-core partials; its mean of squares is
+    # off by
+    # up to two tf32 ulps of one lane's partial on a few rows (the
+    # unsplit kernel is exact to 2e-7); the projection it scales is unchanged to 1e-6
+    rows, kt = tokens // 32, k // 32
+    nb = kt // max(b for b in range(1, 9) if kt % b == 0)
+    splits = 1 if rows >= 110 else max(1, min(nb, 110 // rows))
+    lane_ulps = float(ref_ms.max()) / 32 / splits * 2**-9
     for key, (fused_err, comp_err) in errs.items():
-        assert fused_err <= 2 * comp_err + 1e-6, (key, errs)
+        bar = max(2 * comp_err + 1e-6, lane_ulps if key == "mean_sq" and splits > 1 else 0.0)
+        assert fused_err <= bar, (key, errs, bar)
 
 
 def _traced_us(mesh_device, fn):
@@ -141,7 +154,8 @@ def _sites(mesh_device, hc):
 
 
 def _mesh_streams(mesh_device, tokens, hidden, seed=0):
-    """-> (host [1, 1, sp * tokens, tp * N * hidden], device: chip (i, j) holds token block i, hidden slice j)."""
+    """-> (host [1, 1, sp * tokens, tp * N * hidden], device: chip (i, j) holds token block i, hidden slice
+    j)."""
     sp, tp = tuple(mesh_device.shape)
     gen = torch.Generator().manual_seed(seed)
     x = torch.randn(1, 1, sp * tokens, tp * N * hidden, generator=gen)

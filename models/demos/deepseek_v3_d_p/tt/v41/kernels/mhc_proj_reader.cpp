@@ -24,6 +24,8 @@ void kernel_main() {
     const uint32_t x_addr = get_arg_val<uint32_t>(0);
     const uint32_t row_start = get_arg_val<uint32_t>(1);
     const uint32_t row_count = get_arg_val<uint32_t>(2);
+    const uint32_t nb_start = get_arg_val<uint32_t>(3);  // this core's K blocks (a split of K, or all of it)
+    const uint32_t nb_count = get_arg_val<uint32_t>(4);
 
     constexpr uint32_t cb_x = get_compile_time_arg_val(0);
     constexpr uint32_t cb_xsq = get_compile_time_arg_val(1);
@@ -62,9 +64,9 @@ void kernel_main() {
     consts.push_back(1);
 
     for (uint32_t r = row_start; r < row_start + row_count; ++r) {
-        const uint32_t b0 = r % NB;
-        for (uint32_t i = 0; i < NB; ++i) {
-            const uint32_t k0 = ((b0 + i) % NB) * BK;
+        const uint32_t b0 = nb_count == NB ? r % NB : 0;  // rows start at different blocks: spread DRAM reads
+        for (uint32_t i = 0; i < nb_count; ++i) {
+            const uint32_t k0 = (nb_start + (b0 + i) % nb_count) * BK;
             x.reserve_back(BK);
             xsq.reserve_back(BK);
             for (uint32_t b = 0; b < BK; ++b) {
