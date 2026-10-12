@@ -156,3 +156,12 @@ encoder), then per seed 0-4 one sbatch job per A/B pair: (v1.0 dense, v1.0 + VSA
 Next (tunnel up): `ssh exabox-login 'df -h /data; curl -sI https://huggingface.co/api/models/MiniMaxAI/MiniMax-H3 | head -1'`.
   Both OK -> stage under /data/smarton/fasth3/t417 (blob:none clone + bundle of ttp/t409 head, HF download with nice/ionice),
   build job (sbatch, no device), conversion/JIT fill jobs, then the A/B pairs. Otherwise report: run step 3 on blx01.
+
+## t417 run 1684 (cont.): exabox staging started
+- Copied pydeps (diffusers with transformer_minimax_h3) and kf_t2va_f0.png from blx01 /var/tmp/fasth3/t409 to exabox /data/smarton/fasth3/t417.
+- Started tt-project/t417/stage417.sh on exabox-login (ttp detach stage417, pid 3248899, log /home/smarton/.ttp-detach/1684/stage417.log).
+  It adds worktree /data/smarton/fasth3/t417/src at 1d8e15320e3 (from the t48 blob:none repo) with the tracy, umd and tt-cluster-descriptors submodules,
+  then runs hf download for the v1.0 LoRA, the SLA LoRA and MiniMaxAI/MiniMax-H3 (~135 GB) into t417/models. Marker: t417/stage417.done (STAGE417_RC=<rc>).
+- exabox has no HF token. If MiniMax-H3 turns out to be gated, the marker records the failure.
+- Next: if the rc is 0, submit a build-only sbatch on a dit node that has been idle 2 h+ (t160 qualify.sh/submit.sh pattern), then the cache-fill job, then the A/B pairs per seed:
+  (dense, vsa0.9) and (dense, sla0.85 with the SLA LoRA). Use run409b.sh as the template; drop its local-disk check because /data is NFS.
