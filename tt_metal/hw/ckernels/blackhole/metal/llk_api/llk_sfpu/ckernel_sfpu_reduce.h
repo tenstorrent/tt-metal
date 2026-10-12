@@ -2253,6 +2253,13 @@ inline void calculate_reduce(
     } else if constexpr (pool_type == PoolType::SUM || pool_type == PoolType::AVG) {
         calculate_reduce_sum_avg<pool_type, reduce_dim, INSTRUCTION_MODE, clear_high_bits, pack_low16, is_signed_int>(
             block_ct_dim, block_rt_dim);
+        // The issuing RISC runs ahead of this body; six cycles here put its next unpack-to-DEST semaphore poll, a
+        // 5-cycle loop, in phase with the post it waits for.
+        constexpr bool int32_col_sum =
+            format == DataFormat::Int32 && pool_type == PoolType::SUM && reduce_dim == ReduceDim::REDUCE_COL;
+        if constexpr (int32_col_sum) {
+            asm volatile("nop; nop; nop; nop; nop; nop");
+        }
     } else {
         static_assert(
             pool_type == PoolType::SUM || pool_type == PoolType::AVG || pool_type == PoolType::MAX ||
