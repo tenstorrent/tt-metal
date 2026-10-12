@@ -1566,6 +1566,8 @@ def _batch_gate_reason(requested: int, test_output: str) -> Optional[str]:
 _GATE_CACHE_FILE = ".e2e_correctness_pass.json"
 _GATE_CACHE_OFF_ENV = "E2E_GATE_NO_CACHE"
 _GATE_KEY_VERSION = 1
+# Beside the gate log: the node ids already passed in this gate call, for the mark plugin to leave out.
+_GATE_EARNED_FILE = "gate_earned_tests.txt"
 
 
 def _repo_root_of(demo_dir: Path) -> Optional[Path]:
@@ -1981,7 +1983,7 @@ def _run_deterministic_gates(demo_dir: Path, pcc: float, timeout_s: int, batch: 
     from ..gate_pytest_plugins import tt_hw_planner_gate_marks as _marks
 
     _earned = {}  # node id -> what it printed while passing, across this call's attempts
-    _earned_file = _gate_log.with_name("gate_earned_tests.txt")
+    _earned_file = _gate_log.with_name(_GATE_EARNED_FILE)
     _earned_file.unlink(missing_ok=True)
     gate_env[_marks.EARNED_ENV] = str(_earned_file)
     gate_env["PYTHONPATH"] += os.pathsep + str(Path(_marks.__file__).parent)  # holds only plugins
