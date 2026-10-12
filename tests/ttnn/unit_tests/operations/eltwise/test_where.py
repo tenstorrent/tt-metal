@@ -480,6 +480,25 @@ def test_where_ttt_bf16_inputs_fp32_output(device, c_shape):
     assert torch.equal(ttnn.to_torch(out), torch.where(C.bool(), T.float(), F.float()))
 
 
+@pytest.mark.parametrize("c_dtype", [ttnn.bfloat16, ttnn.float32], ids=["c_bf16", "c_fp32"])
+@pytest.mark.parametrize(
+    "c_shape", [(1, 1, 64, 128), (1, 1, 64, 1), (1, 1, 1, 1)], ids=["no_bcast", "col_bcast", "scalar_bcast"]
+)
+def test_where_ttt_float_predicate_int32_values(device, c_dtype, c_shape):
+    torch.manual_seed(0)
+    shape = (1, 1, 64, 128)
+    C = (torch.rand(c_shape) > 0.5).to(torch.bfloat16 if c_dtype == ttnn.bfloat16 else torch.float32)
+    T = torch.randint(-(2**30), 2**30, shape, dtype=torch.int32)
+    F = torch.randint(-(2**30), 2**30, shape, dtype=torch.int32)
+    ttnn_C = ttnn.from_torch(C, dtype=c_dtype, layout=ttnn.TILE_LAYOUT, device=device)
+    ttnn_T = ttnn.from_torch(T, dtype=ttnn.int32, layout=ttnn.TILE_LAYOUT, device=device)
+    ttnn_F = ttnn.from_torch(F, dtype=ttnn.int32, layout=ttnn.TILE_LAYOUT, device=device)
+
+    result = ttnn.to_torch(ttnn.where(ttnn_C, ttnn_T, ttnn_F))
+
+    assert torch.equal(result, torch.where(C.bool(), T, F))
+
+
 @pytest.mark.parametrize("dtype", [torch.bfloat16, torch.float32])
 @pytest.mark.parametrize("h, w", [[64, 128]])
 @pytest.mark.parametrize("scalar", [15.5, float("nan"), float("inf"), -float("inf")])
