@@ -22,8 +22,8 @@
 // alignment constraint. Sim tolerated the old sub-64B DRAM transfers implicitly;
 // silicon requires the aligned transfers above (silicon PCC 0.28 pre-fix).
 //
-// CT args: stick_size, in_read_size, out_l1_stride, TensorAccessorArgs(in_t),
-//          cb_id, NUM_REPEATS, BATCH
+// CT args: stick_size, in_read_size, out_l1_stride, cb_id, NUM_REPEATS, BATCH,
+//          TensorAccessorArgs(in_t)
 // RT args: src_addr, num_pages, start_page
 #include "api/dataflow/dataflow_api.h"
 #include "api/dataflow/noc.h"
@@ -39,10 +39,10 @@ void kernel_main() {
     constexpr uint32_t stick_size = get_compile_time_arg_val(0);
     constexpr uint32_t in_read_size = get_compile_time_arg_val(1);
     constexpr uint32_t out_l1_stride = get_compile_time_arg_val(2);
-    constexpr auto src_args = TensorAccessorArgs<3>();
-    constexpr uint32_t cb_id = get_compile_time_arg_val(src_args.next_compile_time_args_offset());
-    constexpr uint32_t NUM_REPEATS = get_compile_time_arg_val(src_args.next_compile_time_args_offset() + 1);
-    constexpr uint32_t BATCH = get_compile_time_arg_val(src_args.next_compile_time_args_offset() + 2);
+    constexpr uint32_t cb_id = get_compile_time_arg_val(3);
+    constexpr uint32_t NUM_REPEATS = get_compile_time_arg_val(4);
+    constexpr uint32_t BATCH = get_compile_time_arg_val(5);
+    constexpr auto src_args = TensorAccessorArgs<6>();
 
     const auto s = TensorAccessor(src_args, src_addr);
 

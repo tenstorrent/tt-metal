@@ -55,19 +55,15 @@ uint32_t spec_aligned_page_bytes(const Tensor& device_tensor, const tt::tt_metal
 struct RepeatCodegenParams {
     uint32_t rep_dim{};
     uint32_t num_repeats{};
-    uint32_t lower_pages{};
-    uint32_t rep_dim_pages{};
-    uint32_t total_out_pages{};
-    // RM only; unused on the TILE branch (tile size is fixed by dtype).
-    uint32_t stick_size{};
     tt::tt_metal::MemoryConfig output_mem_config;
 };
 
-// The prim checks params against this because the kernels address output pages with no bound of their own.
+// Derived from the input, never passed in: the kernels address output pages with no bound of their own.
 struct RepeatPageMap {
     uint32_t lower_pages = 0;
     uint32_t rep_dim_pages = 0;
     uint32_t total_out_pages = 0;
+    // RM only; unused on the TILE branch (tile size is fixed by dtype).
     uint32_t stick_size = 0;
 };
 

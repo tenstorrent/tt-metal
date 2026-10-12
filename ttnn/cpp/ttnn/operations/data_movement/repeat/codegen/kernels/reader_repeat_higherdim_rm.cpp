@@ -6,8 +6,8 @@
 //
 // Geometry is compile-time so SEQ_REPEAT's per-stick div/mod strength-reduces.
 //
-// CT args: xfer_size, l1_stride, TensorAccessorArgs(in_t),
-//          cb_id, NUM_REPEATS, LOWER_PAGES, REP_DIM_PAGES, BATCH
+// CT args: xfer_size, l1_stride, cb_id, NUM_REPEATS, LOWER_PAGES, REP_DIM_PAGES, BATCH,
+//          TensorAccessorArgs(in_t)
 // RT args: src_addr, num_out_pages, out_start_page
 #include "api/dataflow/dataflow_api.h"
 #include "api/dataflow/noc.h"
@@ -21,12 +21,12 @@ void kernel_main() {
 
     constexpr uint32_t xfer_size = get_compile_time_arg_val(0);
     constexpr uint32_t l1_stride = get_compile_time_arg_val(1);
-    constexpr auto src_args = TensorAccessorArgs<2>();
-    constexpr uint32_t cb_id = get_compile_time_arg_val(src_args.next_compile_time_args_offset());
-    constexpr uint32_t NUM_REPEATS = get_compile_time_arg_val(src_args.next_compile_time_args_offset() + 1);
-    constexpr uint32_t LOWER_PAGES = get_compile_time_arg_val(src_args.next_compile_time_args_offset() + 2);
-    constexpr uint32_t REP_DIM_PAGES = get_compile_time_arg_val(src_args.next_compile_time_args_offset() + 3);
-    constexpr uint32_t BATCH = get_compile_time_arg_val(src_args.next_compile_time_args_offset() + 4);
+    constexpr uint32_t cb_id = get_compile_time_arg_val(2);
+    constexpr uint32_t NUM_REPEATS = get_compile_time_arg_val(3);
+    constexpr uint32_t LOWER_PAGES = get_compile_time_arg_val(4);
+    constexpr uint32_t REP_DIM_PAGES = get_compile_time_arg_val(5);
+    constexpr uint32_t BATCH = get_compile_time_arg_val(6);
+    constexpr auto src_args = TensorAccessorArgs<7>();
 
     const auto s = TensorAccessor(src_args, src_addr);
 

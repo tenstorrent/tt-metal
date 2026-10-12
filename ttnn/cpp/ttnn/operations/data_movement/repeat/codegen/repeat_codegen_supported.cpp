@@ -195,6 +195,7 @@ CodegenLegPlan plan_codegen_legs(
     }
 
     // Row-major legs run innermost first so small multi-dim repeats avoid a wide intermediate in per-stick work.
+    plan.rep_dims.reserve(ndim);
     for (uint32_t i = 0; i < ndim; ++i) {
         const uint32_t d = tile_legs ? i : ndim - 1 - i;
         if (plan.leg_repeats[d] > 1) {
@@ -245,9 +246,6 @@ bool supported_by_codegen(
         const auto out_spec = spec_like(input, out_shape, Layout::ROW_MAJOR, output_mem_config);
         const uint64_t committed = l1_bytes_per_bank(input, in_spec) + l1_bytes_per_bank(input, out_spec);
         return rm_leg_fits_in_l1(input, in_spec, out_spec, committed);
-    }
-    if (input.layout() != ttnn::TILE_LAYOUT) {
-        return false;
     }
     if (rep_dim == 3) {
         return shape[-1] % tt::constants::TILE_WIDTH == 0;

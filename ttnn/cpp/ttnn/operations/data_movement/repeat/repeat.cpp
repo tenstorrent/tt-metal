@@ -222,14 +222,9 @@ ttnn::Tensor repeat_dim_codegen(
     const uint32_t rep_dim_4d = dim + pad;
     const auto& shape4d = working.logical_shape();
 
-    const auto page_map = ttnn::prim::derive_page_map(working, rep_dim_4d, repetitions);
     ttnn::prim::RepeatCodegenParams params{
         .rep_dim = rep_dim_4d,
         .num_repeats = repetitions,
-        .lower_pages = page_map.lower_pages,
-        .rep_dim_pages = page_map.rep_dim_pages,
-        .total_out_pages = page_map.total_out_pages,
-        .stick_size = page_map.stick_size,
         .output_mem_config = output_mem_config,
     };
 

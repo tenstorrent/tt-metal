@@ -62,6 +62,18 @@ void RepeatCodegenDeviceOperation::validate_on_program_cache_miss(
     TT_FATAL(input.storage_type() == ttnn::StorageType::DEVICE, "Operands to repeat need to be on device!");
     TT_FATAL(input.buffer() != nullptr, "Operands need to be allocated in buffers on device!");
     TT_FATAL(
+        input.logical_shape().rank() == 4,
+        "RepeatCodegen expects a 4D input, got rank {}",
+        input.logical_shape().rank());
+    TT_FATAL(
+        operation_attributes.rep_dim < 4,
+        "RepeatCodegen rep_dim must be in [0, 3], got {}",
+        operation_attributes.rep_dim);
+    TT_FATAL(
+        operation_attributes.num_repeats >= 1,
+        "RepeatCodegen num_repeats must be at least 1, got {}",
+        operation_attributes.num_repeats);
+    TT_FATAL(
         repeat_codegen::supported_by_codegen(
             input,
             operation_attributes.rep_dim,
@@ -129,26 +141,6 @@ tt::tt_metal::operation::OpPerformanceModelGeneral<Tensor> RepeatCodegenDeviceOp
 
 RepeatCodegenDeviceOperation::tensor_return_value_t repeat_codegen(
     const Tensor& input, const RepeatCodegenParams& params, std::optional<Tensor> optional_output_tensor) {
-    TT_FATAL(
-        input.logical_shape().rank() == 4,
-        "RepeatCodegen expects a 4D input, got rank {}",
-        input.logical_shape().rank());
-    TT_FATAL(params.rep_dim < 4, "RepeatCodegen rep_dim must be in [0, 3], got {}", params.rep_dim);
-    TT_FATAL(params.num_repeats >= 1, "RepeatCodegen num_repeats must be at least 1, got {}", params.num_repeats);
-    const auto page_map = derive_page_map(input, params.rep_dim, params.num_repeats);
-    TT_FATAL(
-        params.lower_pages == page_map.lower_pages && params.rep_dim_pages == page_map.rep_dim_pages &&
-            params.total_out_pages == page_map.total_out_pages && params.stick_size == page_map.stick_size,
-        "RepeatCodegen page map (lower_pages {}, rep_dim_pages {}, total_out_pages {}, stick_size {}) does not "
-        "match the one derived from the input (lower_pages {}, rep_dim_pages {}, total_out_pages {}, stick_size {})",
-        params.lower_pages,
-        params.rep_dim_pages,
-        params.total_out_pages,
-        params.stick_size,
-        page_map.lower_pages,
-        page_map.rep_dim_pages,
-        page_map.total_out_pages,
-        page_map.stick_size);
     using OperationType = RepeatCodegenDeviceOperation;
     return ttnn::device_operation::launch<OperationType>(
         params,

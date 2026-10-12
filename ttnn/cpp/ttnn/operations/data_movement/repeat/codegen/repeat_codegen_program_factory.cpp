@@ -6,6 +6,8 @@
 
 #include <algorithm>
 #include <array>
+#include <functional>
+#include <numeric>
 #include <optional>
 #include <utility>
 #include <vector>
@@ -36,6 +38,12 @@ constexpr const char* kReaderSequenced =
     "ttnn/cpp/ttnn/operations/data_movement/common/kernels/codegen/reader_tile_interleaved_unified.cpp";
 constexpr const char* kWriterInterleaved =
     "ttnn/cpp/ttnn/operations/data_movement/common/kernels/codegen/writer_interleaved.cpp";
+constexpr const char* kOuterTileDirect =
+    "ttnn/cpp/ttnn/operations/data_movement/repeat/codegen/kernels/repeat_outer_tile_direct.cpp";
+constexpr const char* kReaderLastDimRm =
+    "ttnn/cpp/ttnn/operations/data_movement/repeat/codegen/kernels/reader_repeat_last_dim_rm.cpp";
+constexpr const char* kReaderHigherDimRm =
+    "ttnn/cpp/ttnn/operations/data_movement/repeat/codegen/kernels/reader_repeat_higherdim_rm.cpp";
 
 // SEQ_REPEAT, see common/kernels/codegen/sequencers.h.
 constexpr uint32_t kSeqRepeat = 1;
@@ -49,6 +57,7 @@ constexpr uint32_t kWidthShardedOuterRepeatCores = 64;
 constexpr uint32_t kWidthShardedCapMinOutPages = 1024;
 
 constexpr uint32_t kFirstTileAxis = 2;
+constexpr uint32_t kLastAxis = 3;
 
 struct CoreSplit {
     CoreRangeSet all_cores;
@@ -56,7 +65,8 @@ struct CoreSplit {
     std::vector<uint32_t> work;
 };
 
-std::optional<uint32_t> tuned_core_cap(const Tensor& input, const Tensor& output, const RepeatCodegenParams& params) {
+std::optional<uint32_t> tuned_core_cap(
+    const Tensor& input, const Tensor& output, const RepeatCodegenParams& params, const RepeatPageMap& page_map) {
     if (input.device()->arch() != tt::ARCH::BLACKHOLE || input.layout() != ttnn::TILE_LAYOUT ||
         params.rep_dim >= kFirstTileAxis || params.num_repeats < kCoreCapMinRepeats) {
         return std::nullopt;
@@ -65,7 +75,7 @@ std::optional<uint32_t> tuned_core_cap(const Tensor& input, const Tensor& output
     if (out_layout == TensorMemoryLayout::BLOCK_SHARDED) {
         return kBlockShardedOuterRepeatCores;
     }
-    if (out_layout == TensorMemoryLayout::WIDTH_SHARDED && params.total_out_pages >= kWidthShardedCapMinOutPages) {
+    if (out_layout == TensorMemoryLayout::WIDTH_SHARDED && page_map.total_out_pages >= kWidthShardedCapMinOutPages) {
         return kWidthShardedOuterRepeatCores;
     }
     return std::nullopt;
@@ -126,25 +136,19 @@ RepeatPageMap derive_page_map(const Tensor& input, uint32_t rep_dim, uint32_t nu
             shape[1],
             tt::div_up(shape[2], tt::constants::TILE_HEIGHT),
             tt::div_up(shape[3], tt::constants::TILE_WIDTH)};
-        map.lower_pages = 1;
-        for (uint32_t d = rep_dim + 1; d < 4; ++d) {
-            map.lower_pages *= dim_pages[d];
-        }
+        map.lower_pages = std::accumulate(dim_pages.begin() + rep_dim + 1, dim_pages.end(), 1u, std::multiplies<>());
         map.rep_dim_pages = dim_pages[rep_dim];
         map.total_out_pages = dim_pages[0] * dim_pages[1] * dim_pages[2] * dim_pages[3] * num_repeats;
         return map;
     }
     map.stick_size = shape[3] * input.element_size();
     const uint32_t sticks = shape[0] * shape[1] * shape[2];
-    if (rep_dim == 3) {
+    if (rep_dim == kLastAxis) {
         map.total_out_pages = sticks;
         return map;
     }
     const std::array<uint32_t, 4> dim_pages = {shape[0], shape[1], shape[2], 1};
-    map.lower_pages = 1;
-    for (uint32_t d = rep_dim + 1; d < 4; ++d) {
-        map.lower_pages *= dim_pages[d];
-    }
+    map.lower_pages = std::accumulate(dim_pages.begin() + rep_dim + 1, dim_pages.end(), 1u, std::multiplies<>());
     map.rep_dim_pages = dim_pages[rep_dim];
     map.total_out_pages = sticks * num_repeats;
     return map;
@@ -160,9 +164,11 @@ ProgramDescriptor RepeatCodegenProgramFactory::create_descriptor(
     Buffer* dst_buffer = output.buffer();
     TT_FATAL(src_buffer != nullptr, "RepeatCodegen input must be allocated on device!");
     TT_FATAL(dst_buffer != nullptr, "RepeatCodegen output must be allocated on device!");
+    const RepeatPageMap page_map =
+        derive_page_map(input, operation_attributes.rep_dim, operation_attributes.num_repeats);
 
     const bool is_row_major = input.layout() == ttnn::ROW_MAJOR_LAYOUT;
-    const bool is_last_dim_rm = is_row_major && operation_attributes.rep_dim == 3;
+    const bool is_last_dim_rm = is_row_major && operation_attributes.rep_dim == kLastAxis;
     tt::DataFormat cb_data_format = tt::tt_metal::datatype_to_dataformat_converter(input.dtype());
 
     ProgramDescriptor desc;
@@ -175,8 +181,9 @@ ProgramDescriptor RepeatCodegenProgramFactory::create_descriptor(
          out_layout == TensorMemoryLayout::HEIGHT_SHARDED);
     if (direct_outer_tile) {
         const uint32_t tile_bytes = tt::tile_size(cb_data_format);
-        const uint32_t total_in_pages = operation_attributes.total_out_pages / operation_attributes.num_repeats;
-        const CoreSplit split = split_work(input, total_in_pages, tuned_core_cap(input, output, operation_attributes));
+        const uint32_t total_in_pages = page_map.total_out_pages / operation_attributes.num_repeats;
+        const CoreSplit split =
+            split_work(input, total_in_pages, tuned_core_cap(input, output, operation_attributes, page_map));
 
         desc.cbs.push_back(CBDescriptor{
             .total_size = kDirectCbDepth * tile_bytes,
@@ -188,14 +195,12 @@ ProgramDescriptor RepeatCodegenProgramFactory::create_descriptor(
             }}},
         });
 
-        std::vector<uint32_t> reader_ct_args = {
-            0, tile_bytes, operation_attributes.lower_pages, operation_attributes.rep_dim_pages};
+        std::vector<uint32_t> reader_ct_args = {0, tile_bytes, page_map.lower_pages, page_map.rep_dim_pages};
         TensorAccessorArgs(*src_buffer).append_to(reader_ct_args);
         TensorAccessorArgs(*dst_buffer).append_to(reader_ct_args);
 
         KernelDescriptor reader_desc;
-        reader_desc.kernel_source =
-            "ttnn/cpp/ttnn/operations/data_movement/repeat/codegen/kernels/repeat_outer_tile_direct.cpp";
+        reader_desc.kernel_source = kOuterTileDirect;
         reader_desc.source_type = KernelDescriptor::SourceType::FILE_PATH;
         reader_desc.core_ranges = split.all_cores;
         reader_desc.compile_time_args = std::move(reader_ct_args);
@@ -215,8 +220,8 @@ ProgramDescriptor RepeatCodegenProgramFactory::create_descriptor(
 
     const CoreSplit split = split_work(
         input,
-        operation_attributes.total_out_pages,
-        is_row_major ? std::nullopt : tuned_core_cap(input, output, operation_attributes));
+        page_map.total_out_pages,
+        is_row_major ? std::nullopt : tuned_core_cap(input, output, operation_attributes, page_map));
 
     if (!is_row_major) {
         const uint32_t page_size = static_cast<uint32_t>(dst_buffer->aligned_page_size());
@@ -265,12 +270,7 @@ ProgramDescriptor RepeatCodegenProgramFactory::create_descriptor(
             const uint32_t n = split.work[i];
             reader_desc.emplace_runtime_args(
                 core,
-                {src_buffer,
-                 n,
-                 start,
-                 operation_attributes.num_repeats,
-                 operation_attributes.lower_pages,
-                 operation_attributes.rep_dim_pages});
+                {src_buffer, n, start, operation_attributes.num_repeats, page_map.lower_pages, page_map.rep_dim_pages});
             writer_desc.emplace_runtime_args(core, {dst_buffer, n, start});
             start += n;
         }
@@ -303,30 +303,27 @@ ProgramDescriptor RepeatCodegenProgramFactory::create_descriptor(
         }}},
     });
 
-    // Higher-dim legs bake the repeat geometry in at compile time: runtime divides would dominate a stick copy.
     KernelDescriptor reader_desc;
     reader_desc.source_type = KernelDescriptor::SourceType::FILE_PATH;
     reader_desc.core_ranges = split.all_cores;
     reader_desc.config = ReaderConfigDescriptor{};
     std::vector<uint32_t> reader_ct_args;
     if (is_last_dim_rm) {
-        reader_ct_args = {operation_attributes.stick_size, in_aligned, slot_size};
+        reader_ct_args = {
+            page_map.stick_size, in_aligned, slot_size, /*cb_id=*/0, operation_attributes.num_repeats, cb_batch};
         TensorAccessorArgs(*src_buffer).append_to(reader_ct_args);
-        reader_ct_args.push_back(0);  // cb_id
-        reader_ct_args.push_back(operation_attributes.num_repeats);
-        reader_ct_args.push_back(cb_batch);
-        reader_desc.kernel_source =
-            "ttnn/cpp/ttnn/operations/data_movement/repeat/codegen/kernels/reader_repeat_last_dim_rm.cpp";
+        reader_desc.kernel_source = kReaderLastDimRm;
     } else {
-        reader_ct_args = {in_aligned, slot_size};
+        reader_ct_args = {
+            in_aligned,
+            slot_size,
+            /*cb_id=*/0,
+            operation_attributes.num_repeats,
+            page_map.lower_pages,
+            page_map.rep_dim_pages,
+            cb_batch};
         TensorAccessorArgs(*src_buffer).append_to(reader_ct_args);
-        reader_ct_args.push_back(0);  // cb_id
-        reader_ct_args.push_back(operation_attributes.num_repeats);
-        reader_ct_args.push_back(operation_attributes.lower_pages);
-        reader_ct_args.push_back(operation_attributes.rep_dim_pages);
-        reader_ct_args.push_back(cb_batch);
-        reader_desc.kernel_source =
-            "ttnn/cpp/ttnn/operations/data_movement/repeat/codegen/kernels/reader_repeat_higherdim_rm.cpp";
+        reader_desc.kernel_source = kReaderHigherDimRm;
     }
     reader_desc.compile_time_args = std::move(reader_ct_args);
 
