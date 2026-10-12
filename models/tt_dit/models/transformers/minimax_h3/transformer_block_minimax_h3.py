@@ -72,6 +72,7 @@ class MiniMaxH3TransformerBlock(Module):
         kv_gather_capacity: int | None = None,
         use_persistent_ccl_buffers: bool = True,
         precomputed_adaln: bool = False,
+        vsa_config=None,
     ) -> None:
         super().__init__()
 
@@ -111,6 +112,7 @@ class MiniMaxH3TransformerBlock(Module):
             is_fsdp=is_fsdp,
             kv_gather_capacity=kv_gather_capacity,
             use_persistent_ccl_buffers=use_persistent_ccl_buffers,
+            vsa_config=vsa_config,
         )
         self.norm2 = DistributedRMSNorm(
             embedding_dim=hidden_size,
