@@ -432,12 +432,25 @@ def _augment_benchmark_tables(body: str, base_weights: str, tt_results: dict) ->
             return True
         return any(k in h for k in ("benchmark", "task", "metric", "eval", "accuracy", "score"))
 
+    score_re = re.compile(r"^\**\s*~?\s*\d{1,3}(?:\.\d+)?\s*%?\s*\**$")
+
+    def _rows_mostly_numeric(rows):
+        data = [r for r in rows if "|" in r]
+        if not data:
+            return False
+        hits = 0
+        for r in data:
+            cells = [c.strip() for c in r.strip().strip("|").split("|")]
+            if any(score_re.match(c) for c in cells[1:]):
+                hits += 1
+        return hits >= 2 and hits >= 0.5 * len(data)
+
     def repl(m):
         tbl = m.group(0)
         lines = [ln for ln in tbl.split("\n") if ln.strip()]
         if len(lines) < 2 or not re.match(r"^\s*\|?[\s:|-]+\|?\s*$", lines[1]):
             return tbl
-        if not _is_benchmark_header(lines[0]):
+        if not (_is_benchmark_header(lines[0]) and _rows_mostly_numeric(lines[2:])):
             return tbl
         if "tenstorrent" in lines[0].lower():
             return tbl
