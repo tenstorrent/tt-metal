@@ -18,6 +18,7 @@ from .llk_params import (
     ApproximationMode,
     BroadcastType,
     DataCopyType,
+    DestAccumulation,
     DestSync,
     DstRoundingMode,
     EltwiseBinaryReuseDestType,
@@ -1966,6 +1967,50 @@ class UNTILIZE_ROW_DATUMS(TemplateParameter):
             f"constexpr std::uint32_t ROW_NUM_DATUMS = {self.untilize_row_datums};",
         ]
         return "\n".join(lines)
+
+
+@dataclass(init=False, repr=False)
+class PACK_UNTILIZE_DATUM_SIZES(TemplateParameter):
+    """Bytes per datum of the pack source and output formats, for a pack untilize init built with run-time formats.
+
+    No dataclass fields: the sizes follow from the formats, so they add no report column.
+    """
+
+    def __init__(self, formats, dest_acc: DestAccumulation, unpack_to_dest: bool):
+        # The inference TestConfig runs for the same arguments.
+        from .chip_architecture import get_chip_architecture
+        from .data_format_inference import data_formats
+
+        config = data_formats(
+            input_format=formats.input_format,
+            input_format_B=getattr(formats, "input_format_B", None),
+            output_format=formats.output_format,
+            is_fp32_dest_acc_en=dest_acc,
+            num_iterations=1,
+            unpacking_to_dest=unpack_to_dest,
+            chip_arch=get_chip_architecture(),
+            register_format_hint=getattr(formats, "register_format_hint", None),
+        )[0]
+        self.src = _llk_datum_size(config.pack_src)
+        self.dst = _llk_datum_size(config.pack_dst)
+
+    def __repr__(self) -> str:
+        return f"PACK_UNTILIZE_DATUM_SIZES(src={self.src}, dst={self.dst})"
+
+    def convert_to_cpp(self) -> str:
+        return (
+            f"#define PACK_UNTILIZE_SRC_DATUM_SIZE {self.src}\n"
+            f"#define PACK_UNTILIZE_DST_DATUM_SIZE {self.dst}"
+        )
+
+
+def _llk_datum_size(data_format: DataFormat) -> int:
+    """Bytes per datum as the LLK counts them for strides (datum_size_in_bytes, SCALE_DATUM_SIZE)."""
+    if data_format.is_32_bit() or data_format == DataFormat.Tf32:
+        return 4
+    if data_format in (DataFormat.Float16, DataFormat.Float16_b, DataFormat.UInt16):
+        return 2
+    return 1
 
 
 @dataclass

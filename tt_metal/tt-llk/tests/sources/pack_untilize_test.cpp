@@ -120,6 +120,11 @@ void run_kernel(RUNTIME_PARAMETERS params)
 #include "llk_pack_untilize.h"
 #include "params.h"
 
+#ifndef PACK_UNTILIZE_SRC_DATUM_SIZE
+#define PACK_UNTILIZE_SRC_DATUM_SIZE 0
+#define PACK_UNTILIZE_DST_DATUM_SIZE 0
+#endif
+
 constexpr std::uint32_t L1_ACCESS_ADDRESS_GRANULARITY = 16; // in bytes
 
 void run_kernel(RUNTIME_PARAMETERS params)
@@ -144,8 +149,16 @@ void run_kernel(RUNTIME_PARAMETERS params)
     _llk_pack_hw_configure_wrapper_<is_fp32_dest_acc_en, llk_test_pack_mode_v<UNTILIZE, false>>(
         formats.pack_src, formats.pack_dst, NUM_DATUMS_IN_TILE /* tile_size */);
     _llk_pack_dest_init_wrapper_<dest_sync, is_fp32_dest_acc_en, llk_test_pack_mode_v<UNTILIZE, false>>();
-    _llk_pack_untilize_init_wrapper_<BLOCK_CT_DIM, FULL_CT_DIM, false /* diagonal */, NARROW_ROW, ROW_NUM_DATUMS>(
-        formats.pack_src, formats.pack_dst, FACE_R_DIM, params.num_faces);
+    _llk_pack_untilize_init_wrapper_<
+        BLOCK_CT_DIM,
+        FULL_CT_DIM,
+        false /* diagonal */,
+        NARROW_ROW,
+        ROW_NUM_DATUMS,
+        false /* dense */,
+        unpack_to_dest,
+        PACK_UNTILIZE_SRC_DATUM_SIZE,
+        PACK_UNTILIZE_DST_DATUM_SIZE>(formats.pack_src, formats.pack_dst, FACE_R_DIM, params.num_faces);
     const std::uint32_t num_blocks_per_col = FULL_CT_DIM / BLOCK_CT_DIM;
 
     for (std::uint32_t rt = 0; rt < FULL_RT_DIM; rt++) // Loop over all tiles vertically
@@ -155,8 +168,16 @@ void run_kernel(RUNTIME_PARAMETERS params)
             std::uint32_t pack_addr_16B = base_addr_16B + rt * row_stride_16B + block_num * block_stride_16B;
 
             _llk_packer_wait_for_math_done_();
-            _llk_pack_untilize_wrapper_<BLOCK_CT_DIM, FULL_CT_DIM, false /* diagonal */, NARROW_ROW, ROW_NUM_DATUMS, TILE_DST_CT_OFFSET>(
-                pack_addr_16B, formats.pack_dst, FACE_R_DIM, params.num_faces, 0 /* tile_dst_rt_offset */);
+            _llk_pack_untilize_wrapper_<
+                BLOCK_CT_DIM,
+                FULL_CT_DIM,
+                false /* diagonal */,
+                NARROW_ROW,
+                ROW_NUM_DATUMS,
+                TILE_DST_CT_OFFSET,
+                false /* dense */,
+                PACK_UNTILIZE_SRC_DATUM_SIZE,
+                PACK_UNTILIZE_DST_DATUM_SIZE>(pack_addr_16B, formats.pack_dst, FACE_R_DIM, params.num_faces, 0 /* tile_dst_rt_offset */);
             _llk_pack_dest_section_done_<dest_sync, is_fp32_dest_acc_en>();
         }
     }

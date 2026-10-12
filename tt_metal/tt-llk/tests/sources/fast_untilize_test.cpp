@@ -183,6 +183,32 @@ void run_kernel(RUNTIME_PARAMETERS params)
             }
             PROFILER_SYNC();
         }
+        else if constexpr (FAST_UNTILIZE_UNIT_DIM > ckernel::FAST_UNTILIZE_MAX_UNIT_DIM)
+        {
+            for (std::uint32_t loop = 0; loop < LOOP_FACTOR; loop++)
+            {
+                for (std::uint32_t rt = 0; rt < FULL_RT_DIM; rt++)
+                {
+                    // Eight-tile chunks run production's chunk loop: from a unit_dims array the math thread pays a
+                    // compare chain per chunk.
+                    for (std::uint32_t tiles_done = 0; tiles_done < FULL_CT_DIM;)
+                    {
+                        const std::uint32_t unit_dim = ckernel::fast_untilize_next_unit_dim<FAST_UNTILIZE_UNIT_DIM>(FULL_CT_DIM - tiles_done);
+                        tiles_done += unit_dim;
+                        if constexpr (PERF_RUN_TYPE == PerfRunType::L1_TO_L1)
+                        {
+                            _llk_math_wait_for_dest_available_<FAST_UNTILIZE_INTERNAL_DEST_SYNC>();
+                        }
+                        llk_math_fast_untilize_block<is_fp32_dest_acc_en, FAST_UNTILIZE_UNIT_DIM>(0, unit_dim);
+                        if constexpr (PERF_RUN_TYPE == PerfRunType::L1_TO_L1)
+                        {
+                            _llk_math_dest_section_done_<FAST_UNTILIZE_INTERNAL_DEST_SYNC, is_fp32_dest_acc_en>();
+                        }
+                    }
+                }
+            }
+            PROFILER_SYNC();
+        }
         else
         {
             std::uint32_t unit_dims[MAX_UNITS_PER_ROW];

@@ -30,6 +30,7 @@ from helpers.test_config import TestConfig
 from helpers.test_variant_parameters import (
     DEST_SYNC,
     NUM_FACES,
+    PACK_UNTILIZE_DATUM_SIZES,
     TILE_COUNT,
     TILE_DST_CT_OFFSET,
     UNTILIZE_ROW_DATUMS,
@@ -285,6 +286,7 @@ def _check_pack_untilize(
             DEST_SYNC(dest_sync),
             TILE_DST_CT_OFFSET(tile_dst_ct_offset),
             UNTILIZE_ROW_DATUMS(row_datums),
+            PACK_UNTILIZE_DATUM_SIZES(formats, dest_acc, unpack_to_dest),
         ],
         runtimes=[TILE_COUNT(tile_cnt_A), NUM_FACES(4)],
         variant_stimuli=StimuliConfig(

@@ -232,9 +232,9 @@ template <std::uint32_t block_ct_dim, std::uint32_t row_num_datums>
 inline void _llk_pack_untilize_split_row_mop_config_(const std::uint32_t face_r_dim, const bool row_ends_stream, const bool l1_row_step_by_cfg)
 {
     static_assert((row_num_datums > FACE_C_DIM) && (row_num_datums < TILE_C_DIM), "a split row is wider than a face and narrower than a tile");
-    constexpr std::uint32_t seq_len   = 4;
-    constexpr std::uint32_t seq_start = ckernel::packer::replay_buf_offset + 2;
-    constexpr std::uint32_t right_intf = 0b0010;
+    constexpr std::uint32_t seq_len        = 4;
+    constexpr std::uint32_t seq_start      = ckernel::packer::replay_buf_offset + 2;
+    constexpr std::uint32_t right_intf     = 0b0010;
     const std::uint32_t row_close_addr_mod = row_ends_stream ? ADDR_MOD_1 : ADDR_MOD_2;
 
     load_replay_buf(
@@ -295,6 +295,224 @@ inline void _llk_pack_untilize_split_row_mop_config_(const std::uint32_t face_r_
     tmp.program();
 }
 
+// Rows of a 32-bit read into a 16-bit output in blocks of three keep the counter form: a W step (INCADCZW) before every
+// PACR and a CFGSHIFTMASK row step. The address-mode form pays a start-up cost there that pacing does not remove.
+inline void _llk_pack_untilize_counter_form_addrmod_()
+{
+    addr_mod_pack_t {
+        .y_src = {.incr = 0, .clr = 0},
+    }
+        .set(ADDR_MOD_0);
+
+    addr_mod_pack_t {
+        .y_src = {.incr = 1, .clr = 0},
+    }
+        .set(ADDR_MOD_1);
+}
+
+inline void _llk_pack_untilize_counter_form_mop_config_(const std::uint32_t block_ct_dim, const std::uint32_t face_r_dim)
+{
+    ckernel::ckernel_template tmp(
+        face_r_dim,
+        block_ct_dim,
+        TT_OP_INCADCZW(p_setadc::PAC, 0, 0, 1, 0),
+        TT_OP_PACR(
+            p_pacr::CFG_CTXT_0,
+            p_pacr::NO_ROW_PAD_ZERO,
+            p_pacr::DST_ACCESS_STRIDED_MODE,
+            ADDR_MOD_0,
+            p_pacr::ADDR_CNT_CTXT_0,
+            0,
+            p_pacr::TWO_INTFS_ACTIVE,
+            0,
+            0,
+            p_pacr::NO_CTXT_CTRL,
+            0,
+            0));
+    // W back to the block's first tile (the W_Cr the execute sets) at the start of every row.
+    tmp.set_start_op(TT_OP_ADDRCRZW(p_setadc::PAC, 0, 0, 0, 0, 0b0010));
+
+    const std::uint32_t replay_buf_len = 2;
+    load_replay_buf(
+        ckernel::packer::replay_buf_offset,
+        replay_buf_len,
+        []
+        {
+            TTI_CFGSHIFTMASK(1, 0b011, 32 - 1, 0, 0b11, THCON_SEC0_REG1_L1_Dest_addr_ADDR32);
+            TTI_NOP;
+        });
+    tmp.set_end_op(lltt::replay_insn(ckernel::packer::replay_buf_offset, replay_buf_len));
+
+    const std::uint32_t row_close_op = TT_OP_PACR(
+        p_pacr::CFG_CTXT_0,
+        p_pacr::NO_ROW_PAD_ZERO,
+        p_pacr::DST_ACCESS_STRIDED_MODE,
+        ADDR_MOD_1,
+        p_pacr::ADDR_CNT_CTXT_0,
+        0,
+        p_pacr::TWO_INTFS_ACTIVE,
+        0,
+        0,
+        p_pacr::NO_CTXT_CTRL,
+        0,
+        1);
+    tmp.set_last_inner_loop_instr(row_close_op);
+    tmp.set_last_outer_loop_instr(row_close_op);
+    tmp.program();
+}
+
+// _llk_pack_untilize_init_ for a caller that names datum sizes or whose Dest math fills: known sizes fold the run-time
+// choices as compile-time formats do.
+template <
+    std::uint32_t block_ct_dim,
+    std::uint32_t full_ct_dim,
+    bool narrow_row,
+    std::uint32_t row_num_datums,
+    bool dense,
+    bool dest_from_unpacker,
+    std::uint32_t src_datum_size,
+    std::uint32_t dst_datum_size>
+inline void _llk_pack_untilize_init_sized_(
+    const std::uint32_t pack_src_format, const std::uint32_t pack_dst_format, const std::uint32_t face_r_dim, const std::uint32_t num_faces)
+{
+    static_assert(block_ct_dim <= (dense ? 16 : 8), "block_ct_dim must be <= 8 when not dense, <= 16 when dense");
+    static_assert(!dense || (block_ct_dim % 2 == 0), "block_ct_dim must be even when dense");
+    static_assert(!dense || (!narrow_row), "narrow_row must be false when dense");
+    static_assert(block_ct_dim <= full_ct_dim, "a block cannot be wider than its row");
+    LLK_ASSERT(num_faces == 1 || num_faces == 2 || num_faces == 4, "num_faces must be 1, 2, or 4");
+    LLK_ASSERT(!dense || (num_faces == 2), "num_faces must be 2 when dense");
+    LLK_ASSERT(num_faces < 4 || face_r_dim == FACE_R_DIM, "four faces need full face rows");
+    // Each row of a one-tile block is its own 32-datum stream, and an Fp8_e4m3 stream pads to 64 datums.
+    LLK_ASSERT(
+        !(block_ct_dim == 1 && full_ct_dim > 1 && !narrow_row && static_cast<DataFormat>(pack_dst_format) == DataFormat::Fp8_e4m3),
+        "an Fp8_e4m3 output needs blocks of two or more tiles when a row has several blocks");
+
+    if constexpr (narrow_row)
+    {
+        // Changed to check against TILE_C_DIM instead of FACE_C_DIM until tt-metal#24095 is investigated.
+        static_assert(row_num_datums < TILE_C_DIM, "row_num_datums must be set to less than TILE_C_DIM for narrow_row packing");
+    }
+    LLK_ASSERT(src_datum_size == 0 || src_datum_size == datum_size_in_bytes(pack_src_format), "src_datum_size must match pack_src_format");
+    LLK_ASSERT(
+        dst_datum_size == 0 || (dst_datum_size == SCALE_DATUM_SIZE(pack_dst_format, 1) && (dst_datum_size == 1) == IS_8BIT_FORMAT(pack_dst_format)),
+        "dst_datum_size must match pack_dst_format");
+    const std::uint32_t src_size = (src_datum_size != 0) ? src_datum_size : datum_size_in_bytes(pack_src_format);
+    const bool dst_8bit          = (dst_datum_size != 0) ? (dst_datum_size == 1) : IS_8BIT_FORMAT(pack_dst_format);
+    // Only a caller naming both sizes reaches this: kernels read a 16-bit Dest for 16-bit outputs.
+    constexpr bool src32_dst16 = (src_datum_size == 4) && (dst_datum_size == 2) && !narrow_row && !dense;
+    if constexpr (src32_dst16 && (block_ct_dim == 3) && (full_ct_dim != block_ct_dim))
+    {
+        LLK_ASSERT(num_faces == 4, "the counter form packs four-face tiles");
+        _llk_pack_untilize_counter_form_addrmod_();
+        _llk_pack_untilize_counter_form_mop_config_(block_ct_dim, face_r_dim);
+        cfg_reg_rmw_tensix<PCK0_ADDR_CTRL_ZW_REG_0_Zstride_RMW>(2 * face_r_dim * FACE_C_DIM * src_datum_size);
+        const std::uint32_t row_offset_16B = dst_datum_size * full_ct_dim * 2 * FACE_C_DIM / 16;
+        TT_SETDMAREG(0, LOWER_HALFWORD(row_offset_16B), 0, LO_16(p_gpr_pack::OUTPUT_ADDR_OFFSET));
+        TT_SETDMAREG(0, UPPER_HALFWORD(row_offset_16B), 0, HI_16(p_gpr_pack::OUTPUT_ADDR_OFFSET));
+        TTI_STALLWAIT(p_stall::STALL_CFG, p_stall::THCON);
+        TTI_WRCFG(p_gpr_pack::OUTPUT_ADDR_OFFSET, 0, SCRATCH_SEC2_val_ADDR32);
+        TTI_NOP;
+        TTI_SETADCXX(p_setadc::PAC, FACE_C_DIM - 1, 0x0);
+        return;
+    }
+
+    std::uint32_t output_addr_offset;
+    if constexpr (narrow_row)
+    {
+        output_addr_offset =
+            (dst_datum_size != 0) ? dst_datum_size * full_ct_dim * row_num_datums : SCALE_DATUM_SIZE(pack_dst_format, full_ct_dim * row_num_datums);
+    }
+    else
+    {
+        output_addr_offset = (dst_datum_size != 0) ? dst_datum_size * full_ct_dim * ((num_faces == 1) ? 1 : 2) * FACE_C_DIM
+                                                   : SCALE_DATUM_SIZE(pack_dst_format, full_ct_dim * ((num_faces == 1) ? 1 : 2) * FACE_C_DIM);
+    }
+    // A full-width block is one L1 stream per face pair; 32-bit reads close every row to leave Dest cycles to
+    // an unpacker writing the other half.
+    constexpr bool l1_rows_contiguous = (full_ct_dim == block_ct_dim);
+    // An 8-bit output reaches L1 in 64-datum units: a flush pads a shorter stream with zeros up to the unit.
+    // A stream starts on a 16-byte L1 boundary, so a narrow row of another byte size stays in one stream.
+    const bool src_32b            = src_size == 4;
+    const bool unaligned_narrow   = narrow_row && (output_addr_offset % 16 != 0);
+    const bool row_ends_stream    = !l1_rows_contiguous || (src_32b && !dst_8bit && !src32_dst16 && !unaligned_narrow);
+    constexpr bool odd_block_form = !l1_rows_contiguous && (block_ct_dim % 2 == 1) && (block_ct_dim > 1) && !narrow_row && !dense;
+    const bool first_tile_stream  = odd_block_form && dst_8bit;
+    constexpr bool split_row      = narrow_row && (row_num_datums > FACE_C_DIM);
+    LLK_ASSERT(!split_row || (num_faces > 1), "a narrow row wider than a face needs the right faces");
+    // The channel 1 Y stride field is 16 bits, and the packer keeps the channel 1 offset only within 256 KiB.
+    const std::uint32_t rows_per_call = face_r_dim * ((num_faces > 2) ? 2 : 1);
+    // 32-bit rows of three tiles are paced, and in the block form step L1 by CFGSHIFTMASK: packed back to back they
+    // cost an unpacker writing Dest more L1 cycles than they save.
+    constexpr bool may_pace = ((block_ct_dim == 3) || (src32_dst16 && (block_ct_dim == 4) && !l1_rows_contiguous)) && !split_row;
+    const bool pace         = dest_from_unpacker && may_pace && src_32b && !dst_8bit;
+    const bool l1_row_step_by_cfg =
+        row_ends_stream &&
+        ((pace && !l1_rows_contiguous) || (output_addr_offset > (PCK0_ADDR_CTRL_XY_REG_1_Ystride_MASK >> PCK0_ADDR_CTRL_XY_REG_1_Ystride_SHAMT)) ||
+         (rows_per_call * output_addr_offset > 256 * 1024));
+
+    _llk_pack_untilize_configure_addrmod_();
+
+    if constexpr (split_row)
+    {
+        addr_mod_pack_t {}.set(ADDR_MOD_3);
+        _llk_pack_untilize_split_row_mop_config_<block_ct_dim, row_num_datums>(face_r_dim, row_ends_stream, l1_row_step_by_cfg);
+    }
+    else if constexpr (may_pace)
+    {
+        if (pace)
+        {
+            _llk_pack_untilize_mop_config_<block_ct_dim, narrow_row, dense, true>(face_r_dim, num_faces, row_ends_stream, l1_row_step_by_cfg);
+        }
+        else
+        {
+            _llk_pack_untilize_mop_config_<block_ct_dim, narrow_row, dense>(face_r_dim, num_faces, row_ends_stream, l1_row_step_by_cfg, first_tile_stream);
+        }
+    }
+    else
+    {
+        _llk_pack_untilize_mop_config_<block_ct_dim, narrow_row, dense>(face_r_dim, num_faces, row_ends_stream, l1_row_step_by_cfg, first_tile_stream);
+    }
+    if constexpr (odd_block_form)
+    {
+        if (first_tile_stream)
+        {
+            _llk_pack_untilize_configure_first_tile_stream_addrmod_();
+            cfg_reg_rmw_tensix<PCK0_ADDR_CTRL_ZW_REG_1_Zstride_RMW>(
+                (dst_datum_size != 0) ? dst_datum_size * TILE_C_DIM : SCALE_DATUM_SIZE(pack_dst_format, TILE_C_DIM));
+        }
+    }
+
+    const std::uint32_t z_stride = TILE_NUM_FACES * FACE_R_DIM * FACE_C_DIM * src_size;
+    cfg_reg_rmw_tensix<PCK0_ADDR_CTRL_ZW_REG_0_Zstride_RMW>(z_stride);
+
+    // Each call loads this word into PCK0_ADDR_CTRL_XY_REG_1 and clears the register again, so no later pack sees it.
+    const std::uint32_t ch1_y_stride = l1_row_step_by_cfg ? 0 : (output_addr_offset << PCK0_ADDR_CTRL_XY_REG_1_Ystride_SHAMT);
+    TT_SETDMAREG(0, LOWER_HALFWORD(ch1_y_stride), 0, LO_16(p_gpr_pack::OUTPUT_ADDR_OFFSET));
+    TT_SETDMAREG(0, UPPER_HALFWORD(ch1_y_stride), 0, HI_16(p_gpr_pack::OUTPUT_ADDR_OFFSET));
+    if (l1_row_step_by_cfg)
+    {
+        TT_SETDMAREG(0, LOWER_HALFWORD(output_addr_offset / 16), 0, LO_16(p_gpr_pack::TMP0));
+        TT_SETDMAREG(0, UPPER_HALFWORD(output_addr_offset / 16), 0, HI_16(p_gpr_pack::TMP0));
+    }
+    TTI_STALLWAIT(p_stall::STALL_CFG, p_stall::THCON);
+    if (l1_row_step_by_cfg)
+    {
+        TTI_WRCFG(p_gpr_pack::TMP0, 0, SCRATCH_SEC2_val_ADDR32);
+        TTI_NOP;
+    }
+
+    // Always include setup calls for safety (as recommended by maintainer)
+    // Program packer to pack out the correct number of datums per row
+    if constexpr (narrow_row)
+    {
+        TTI_SETADCXX(p_setadc::PAC, (split_row ? FACE_C_DIM : row_num_datums) - 1, 0x0);
+    }
+    else
+    {
+        TTI_SETADCXX(p_setadc::PAC, FACE_C_DIM - 1, 0x0);
+    }
+}
+
 /**
  * @brief Initialize the packer for an untilize pack op.
  *
@@ -308,6 +526,9 @@ inline void _llk_pack_untilize_split_row_mop_config_(const std::uint32_t face_r_
  * @param pack_src_format: Source (dest register) data format.
  * @param pack_dst_format: Destination (L1) data format.
  * @param face_r_dim: Number of rows per face.
+ * @tparam dest_from_unpacker: False when math, not an unpack to Dest, fills the Dest this packer reads; such rows are not paced.
+ * @tparam src_datum_size, dst_datum_size: Bytes per datum of pack_src_format and pack_dst_format when the caller knows them
+ *         at compile time but passes the formats at run time, 0 otherwise (see _llk_pack_untilize_init_sized_).
  * @param num_faces: Faces per tile, valid values = <1, 2, 4>
  * @note On the math thread, @ref _llk_math_eltwise_unary_datacopy_ (A2D) populates the dest register this packer reads.
  * @note Pair with @ref _llk_pack_untilize_uninit_ after the matching @ref _llk_pack_untilize_ execute calls.
@@ -317,10 +538,20 @@ template <
     std::uint32_t full_ct_dim    = block_ct_dim,
     bool narrow_row              = false,
     std::uint32_t row_num_datums = TILE_C_DIM,
-    bool dense                   = false>
+    bool dense                   = false,
+    bool dest_from_unpacker      = true,
+    std::uint32_t src_datum_size = 0,
+    std::uint32_t dst_datum_size = 0>
 inline void _llk_pack_untilize_init_(
     const std::uint32_t pack_src_format, const std::uint32_t pack_dst_format, const std::uint32_t face_r_dim = FACE_R_DIM, const std::uint32_t num_faces = 4)
 {
+    if constexpr (!dest_from_unpacker || (src_datum_size != 0) || (dst_datum_size != 0))
+    {
+        _llk_pack_untilize_init_sized_<block_ct_dim, full_ct_dim, narrow_row, row_num_datums, dense, dest_from_unpacker, src_datum_size, dst_datum_size>(
+            pack_src_format, pack_dst_format, face_r_dim, num_faces);
+        return;
+    }
+
     static_assert(block_ct_dim <= (dense ? 16 : 8), "block_ct_dim must be <= 8 when not dense, <= 16 when dense");
     static_assert(!dense || (block_ct_dim % 2 == 0), "block_ct_dim must be even when dense");
     static_assert(!dense || (!narrow_row), "narrow_row must be false when dense");
@@ -444,6 +675,7 @@ inline void _llk_pack_untilize_init_(
  * @tparam dense: True to pack two tiles into one dest region; requires num_faces == 2 and even block_ct_dim.
  * @param address: L1 destination base address for the block.
  * @param num_faces: Faces per tile, valid values = <1, 2, 4>
+ * @tparam src_datum_size, dst_datum_size: As for @ref _llk_pack_untilize_init_, and the same values.
  * @param tile_dst_rt_offset: Runtime row-tile offset into the destination register.
  * @note Call @ref _llk_pack_untilize_init_ with matching template/runtime args before this function, and
  *       @ref _llk_pack_untilize_uninit_ once all untilize-pack calls are complete.
@@ -453,7 +685,9 @@ template <
     std::uint32_t full_ct_dim        = block_ct_dim,
     bool narrow_row                  = false,
     std::uint32_t tile_dst_ct_offset = 0,
-    bool dense                       = false>
+    bool dense                       = false,
+    std::uint32_t src_datum_size     = 0,
+    std::uint32_t dst_datum_size     = 0>
 inline void _llk_pack_untilize_(const std::uint32_t address, const std::uint32_t num_faces = 4, const std::uint32_t tile_dst_rt_offset = 0)
 {
     static_assert(block_ct_dim <= (dense ? 16 : 8), "block_ct_dim must be <= 8 when not dense, <= 16 when dense");
@@ -462,6 +696,25 @@ inline void _llk_pack_untilize_(const std::uint32_t address, const std::uint32_t
     static_assert(block_ct_dim <= full_ct_dim, "a block cannot be wider than its row");
     LLK_ASSERT(num_faces == 1 || num_faces == 2 || num_faces == 4, "num_faces must be 1, 2, or 4");
     LLK_ASSERT(!dense || (num_faces == 2), "num_faces must be 2 when dense");
+
+    if constexpr ((src_datum_size == 4) && (dst_datum_size == 2) && (block_ct_dim == 3) && (full_ct_dim != block_ct_dim) && !narrow_row && !dense)
+    {
+        // The counter form of _llk_pack_untilize_init_sized_: W starts one tile early, as its first INCADCZW steps it.
+        program_packer_destination(address);
+        const std::uint32_t tile_dst_offset = tile_dst_ct_offset + tile_dst_rt_offset;
+        TTI_SETADCZW(p_setadc::PAC, 0, 0, 0, 0, 0b0001);
+        TT_SETADC(p_setadc::PAC, p_setadc::CH_0, p_setadc::SET_W, (15 + tile_dst_offset) & 0xF);
+        TTI_SETADCXY(p_setadc::PAC, 0, 0, 0, 0, 0b0011);
+        for (std::uint32_t face = 0; face < 2; face++)
+        {
+            ckernel::ckernel_template::run();
+            TTI_INCADCZW(p_setadc::PAC, 0, 0, 0, 1);
+            TTI_SETADCXY(p_setadc::PAC, 0, 0, 0, 0, 0b0010);
+        }
+        TTI_SETADCZW(p_setadc::PAC, 0, 0, 0, 0, 0b0101);
+        set_dst_write_addr(tile_dst_offset);
+        return;
+    }
 
     /*
     full_ct_dim represents the number of input tiles.
