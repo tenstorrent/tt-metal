@@ -56,7 +56,7 @@ operations:
         in1: "w_reduce"
         operation: "Matmul"
         unpacker: "MatmulUnpacker"
-        math_fidelity: "HiFi2"
+        math_fidelity: "LoFi"
     pack:
       - output: "reduce_out"
         block_size: [64, 64]
@@ -98,7 +98,7 @@ operations:
         in1: "w_mid"
         operation: "Matmul"
         unpacker: "MatmulUnpacker"
-        math_fidelity: "HiFi2"
+        math_fidelity: "LoFi"
     pack:
       - output: "mid_out"
         block_size: [64, 64]
@@ -140,7 +140,7 @@ operations:
         in1: "w_expand"
         operation: "Matmul"
         unpacker: "MatmulUnpacker"
-        math_fidelity: "HiFi2"
+        math_fidelity: "LoFi"
     pack:
       - output: "expand_out"
         block_size: [64, 64]

@@ -34,6 +34,7 @@ void run_kernel(RUNTIME_PARAMETERS params)
 #if defined(RUNTIME_FORMATS) && !defined(SPEED_OF_LIGHT)
     const FormatConfig& formats = params.formats;
 #endif
+#ifndef SPEED_OF_LIGHT
     const std::uint32_t CT_DIM      = params.CT_DIM;
     const std::uint32_t RT_DIM      = params.RT_DIM;
     const std::uint32_t KT_DIM      = params.KT_DIM;
@@ -41,6 +42,7 @@ void run_kernel(RUNTIME_PARAMETERS params)
     const std::uint32_t num_faces_B = params.num_faces_B;
     const Operand& buffer_A         = params.buffer_A;
     const Operand& buffer_B         = params.buffer_B;
+#endif
 
     set_ttsync_enables<TRACK_ALL>(ckernel::TRISC_ID);
 
@@ -77,9 +79,11 @@ void run_kernel(RUNTIME_PARAMETERS params)
 #if defined(RUNTIME_FORMATS) && !defined(SPEED_OF_LIGHT)
     const FormatConfig& formats = params.formats;
 #endif
+#ifndef SPEED_OF_LIGHT
     const std::uint32_t CT_DIM = params.CT_DIM;
     const std::uint32_t RT_DIM = params.RT_DIM;
     const std::uint32_t KT_DIM = params.KT_DIM;
+#endif
 
     set_up_fpu_to_pack_dest_dvalid_chain<dest_dvalid_client::FPU>();
 
@@ -115,10 +119,12 @@ void run_kernel(RUNTIME_PARAMETERS params)
 #if defined(RUNTIME_FORMATS) && !defined(SPEED_OF_LIGHT)
     const FormatConfig& formats = params.formats;
 #endif
+#ifndef SPEED_OF_LIGHT
     const std::uint32_t CT_DIM    = params.CT_DIM;
     const std::uint32_t RT_DIM    = params.RT_DIM;
     const std::uint32_t num_faces = params.num_faces;
     const Operand& buffer_Res     = params.buffer_Res;
+#endif
 
     set_up_fpu_to_pack_dest_dvalid_chain<dest_dvalid_client::PACK>();
 

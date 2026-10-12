@@ -82,11 +82,11 @@ def _quantized(t, dtype):
     return ttnn.to_torch(ttnn.from_torch(t, dtype=dtype, layout=ttnn.TILE_LAYOUT)) if dtype == ttnn.bfloat8_b else t
 
 
-def _check(out, golden, rtol=0.02):
+def _check(out, golden, rtol=0.02, pcc=0.9999):
     out_f = out.to(torch.float32)
     scale = golden.abs().max().item()
     atol = rtol * scale
-    assert_with_pcc(golden, out_f, 0.9999)
+    assert_with_pcc(golden, out_f, pcc)
     assert torch.allclose(
         out_f, golden, rtol=rtol, atol=atol
     ), f"max abs err {(out_f - golden).abs().max().item():.4g} vs atol {atol:.4g} (scale {scale:.4g})"
@@ -838,6 +838,13 @@ def test_compute_threads_rejections(device, expect_error):
             ),
             "exactly one C slice per core",
         ),
+        # Auto-config (no program_config), batched A and batched B: batch cannot be fused, so a block-sharded
+        # output must be rejected with the actionable batch message.
+        (
+            None,
+            ttnn.L1_BLOCK_SHARDED_MEMORY_CONFIG,
+            "Block-sharded output is incompatible with batch > 1",
+        ),
     ],
     ids=[
         "cores_off_grid",
@@ -847,18 +854,41 @@ def test_compute_threads_rejections(device, expect_error):
         "slice_does_not_fit_l1",
         "explicit_K_chunk_does_not_fit",
         "sharded_multi_block",
+        "auto_config_batched_a_and_b_block_sharded_out",
     ],
 )
 def test_rejections(device, expect_error, make_config, out_mem, pattern):
     M = K = N = 4 * TILE
-    a, b = _randn(1, 1, M, K), _randn(1, 1, K, N)
+    batch = 1
+    if make_config is None:  # auto-config case: batched A and B
+        M = K = N = 1024
+        batch = 2
+    a, b = _randn(batch, 1, M, K), _randn(batch, 1, K, N)
     a_t = ttnn.from_torch(a, layout=ttnn.TILE_LAYOUT, dtype=ttnn.bfloat16, device=device)
     b_t = ttnn.from_torch(b, layout=ttnn.TILE_LAYOUT, dtype=ttnn.bfloat16, device=device)
     with expect_error(RuntimeError, pattern):
         ttnn.experimental.quasar.matmul(
             a_t,
             b_t,
-            program_config=make_config(),
+            program_config=make_config() if make_config is not None else None,
             memory_config=out_mem or ttnn.DRAM_MEMORY_CONFIG,
             compute_kernel_config=_hifi4(device),
         )
+
+
+@pytest.mark.parametrize("sharded_out", [True, False], ids=["block_sharded_out", "interleaved_out"])
+def test_auto_config_batched_a_unbatched_b(device, sharded_out):
+    """Default program config, batched A x unbatched B (batch must be fused for a block-sharded output)."""
+    torch.manual_seed(8)
+    a, b = _randn(2, 1, 1024, 1024), _randn(1, 1, 1024, 1024)
+    a_t = ttnn.from_torch(a, layout=ttnn.TILE_LAYOUT, dtype=ttnn.bfloat16, device=device)
+    b_t = ttnn.from_torch(b, layout=ttnn.TILE_LAYOUT, dtype=ttnn.bfloat16, device=device)
+    out_mem = ttnn.L1_BLOCK_SHARDED_MEMORY_CONFIG if sharded_out else ttnn.DRAM_MEMORY_CONFIG
+    out = ttnn.experimental.quasar.matmul(a_t, b_t, memory_config=out_mem, compute_kernel_config=_hifi4(device))
+    if sharded_out:
+        # Guard against a silent fallback to an interleaved output.
+        assert out.memory_config().memory_layout == ttnn.TensorMemoryLayout.BLOCK_SHARDED
+        assert out.memory_config().shard_spec is not None
+
+    # The issue's K=1024 shape reaches PCC ~0.99984 and ~4% max error (bf16 accumulation), looser than _check defaults.
+    _check(ttnn.to_torch(out), _golden(a, b), rtol=0.05, pcc=0.999)

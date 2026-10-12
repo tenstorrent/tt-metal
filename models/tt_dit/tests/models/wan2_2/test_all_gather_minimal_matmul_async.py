@@ -73,6 +73,9 @@ def run_test_linear_impl(
     chunk_sizes=None,
     broadcast_gate=True,
     fuse_swiglu=False,
+    residual_memory_config=ttnn.DRAM_MEMORY_CONFIG,
+    gate_memory_config=ttnn.DRAM_MEMORY_CONFIG,
+    num_buffers_per_channel=48,
 ):
     ccl_cores = ttnn.CoreRangeSet(
         {ttnn.CoreRange(ttnn.CoreCoord(0, 0), ttnn.CoreCoord(core_grid.x - 1, core_grid.y - 1))}
@@ -131,16 +134,24 @@ def run_test_linear_impl(
             dtype=input_dtype,
             layout=ttnn.TILE_LAYOUT,
             device=device,
+            memory_config=residual_memory_config,
             mesh_mapper=ttnn.ShardTensor2dMesh(device, mesh_shape=tuple(device.shape), dims=shard_dims),
         )
         if broadcast_gate:
-            tt_addcmul_b = ttnn.from_torch(torch_addcmul_b, dtype=input_dtype, layout=ttnn.TILE_LAYOUT, device=device)
+            tt_addcmul_b = ttnn.from_torch(
+                torch_addcmul_b,
+                dtype=input_dtype,
+                layout=ttnn.TILE_LAYOUT,
+                device=device,
+                memory_config=gate_memory_config,
+            )
         else:
             tt_addcmul_b = ttnn.from_torch(
                 torch_addcmul_b,
                 dtype=input_dtype,
                 layout=ttnn.TILE_LAYOUT,
                 device=device,
+                memory_config=gate_memory_config,
                 mesh_mapper=ttnn.ShardTensor2dMesh(device, mesh_shape=tuple(device.shape), dims=shard_dims),
             )
     else:
@@ -253,7 +264,7 @@ def run_test_linear_impl(
                 barrier_semaphore=barrier_semaphore_handles[0] if not use_persistent_buffers else None,
                 force_transpose=force_transpose,
                 num_workers_per_link=num_workers_per_link,
-                num_buffers_per_channel=48,
+                num_buffers_per_channel=num_buffers_per_channel,
                 scalar=addcmul_scalar,
                 addcmul_input_tensor1=tt_addcmul_a,
                 addcmul_input_tensor2=tt_addcmul_b,
@@ -394,6 +405,9 @@ def run_test_linear(
     chunk_sizes=None,
     broadcast_gate=True,
     fuse_swiglu=False,
+    residual_memory_config=ttnn.DRAM_MEMORY_CONFIG,
+    gate_memory_config=ttnn.DRAM_MEMORY_CONFIG,
+    num_buffers_per_channel=48,
 ):
     logger.info(f"Running test_linear with M={M}, K={K}, N={N}")
     torch_dtype = torch.float32
@@ -504,6 +518,9 @@ def run_test_linear(
         chunk_sizes=chunk_sizes,
         broadcast_gate=broadcast_gate,
         fuse_swiglu=fuse_swiglu,
+        residual_memory_config=residual_memory_config,
+        gate_memory_config=gate_memory_config,
+        num_buffers_per_channel=num_buffers_per_channel,
     )
 
 
