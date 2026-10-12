@@ -124,7 +124,7 @@ inline void llk_math_dest_section_done() {
     if constexpr (UnpackToDestEn) {
         _llk_sync_get_<p_stall::MATH, p_stall::WAIT_SFPU>(semaphore::UNPACK_MATH);
     }
-    if constexpr (DST_SYNC_MODE == DstSync::SyncHalf && !UnpackToDestEn) {
+    if constexpr (DST_SYNC_MODE == DstSync::SyncHalf) {
         _llk_sync_advance_dest_section_<ckernel::TRISC_ID, EN_32BIT_DEST, p_stall::WAIT_SFPU, p_stall::MATH>();
     }
 }
