@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Fast-forward LLK sources, build Metal, then restart this checkout's JIT server."""
+"""Advance LLK sources; rebuild Metal and restart this checkout's JIT server only when the server needs it."""
 
 import argparse
 import fcntl
@@ -22,6 +22,44 @@ def run(root, *args, capture=False):
 
 def git(root, *args):
     return run(root, "git", *args, capture=True).strip()
+
+
+# Paths whose changes alter the server binary or the build outputs it compiles and links with
+# (SFPI toolchain, generated linker scripts and link objects). Other changes only need the
+# updated sources, which the running server reads from disk per request.
+SERVER_PATHS = (
+    "tt_metal/tools/jit_compile_server/",
+    "tt_metal/impl/jit_server/",
+    "tt_metal/jit_build/",
+    "tt_metal/sfpi-version",
+    "tt_metal/sfpi-info.sh",
+    "tt_metal/hw/toolchain/",
+    "tt_metal/hw/CMakeLists.txt",
+)
+
+
+def server_paths_changed(repo, old, new):
+    return subprocess.run(["git", "diff", "--quiet", old, new, "--", *SERVER_PATHS], cwd=repo).returncode != 0
+
+
+def is_ancestor(repo, commit, ref):
+    return subprocess.run(["git", "merge-base", "--is-ancestor", commit, ref], cwd=repo).returncode == 0
+
+
+def advance_command(repo, branch, had_local_commits):
+    """Return the git command that moves HEAD to the freshly fetched origin/<branch>.
+
+    A fast-forward when possible. If the remote branch was rewritten (e.g. llk_helper_library
+    rebased onto main) and HEAD held no commits missing from origin before the fetch, nothing
+    local can be lost, so HEAD is moved to the new tip. Otherwise the update is refused."""
+    target = f"origin/{branch}"
+    if is_ancestor(repo, "HEAD", target):
+        return ["git", "-c", "submodule.recurse=false", "merge", "--ff-only", target]
+    if had_local_commits:
+        raise RuntimeError(f"{repo} has local commits that are not on {target}; refusing to discard them")
+    print(f"[{repo.name}] {target} was rewritten; moving HEAD to the new tip", flush=True)
+    # checkout (unlike reset --hard) refuses to overwrite untracked files.
+    return ["git", "-c", "submodule.recurse=false", "checkout", "-q", "-B", branch, target]
 
 
 def validate_build_args(build_args):
@@ -123,7 +161,7 @@ def main():
     parser.add_argument(
         "--force",
         action="store_true",
-        help="Update/build/restart even when the remote branch is unchanged (e.g. retry a failed build)",
+        help="Build and restart even when no server-relevant path changed (e.g. retry a failed build)",
     )
     parser.add_argument("build_args", nargs=argparse.REMAINDER)
     options = parser.parse_args()
@@ -140,7 +178,8 @@ def main():
             fcntl.flock(lock, fcntl.LOCK_EX | fcntl.LOCK_NB)
         except BlockingIOError:
             raise RuntimeError("Another update is already running for this checkout") from None
-        sub = root / "tt_metal/third_party/tt_ops_code_gen"
+        # tt_ops_code_gen sets `update = none`; it follows the parent's pin only where already cloned.
+        code_gen_path = "tt_metal/third_party/tt_ops_code_gen"
         if git(root, "branch", "--show-current") != "llk_helper_library":
             raise RuntimeError("Run from a checkout on branch llk_helper_library")
         pending = Path(git(root, "rev-parse", "--path-format=absolute", "--git-path", "llk-server-update-pending"))
@@ -157,29 +196,52 @@ def main():
             print(f"llk_helper_library changed: {local_tip[:12]} -> {remote_tip[:12]}", flush=True)
         elif pending.exists():
             print("Retrying an unfinished update.", flush=True)
-        if not (sub / ".git").exists():
-            raise RuntimeError(f"Submodule is not initialized: {sub}")
-        if git(sub, "branch", "--show-current") not in ("", "main"):
-            raise RuntimeError("tt_ops_code_gen must be on main or a detached HEAD")
-        for repo in (root, sub):
+        # Submodules follow the commits the parent pins.
+        sub_paths = git(root, "config", "-f", ".gitmodules", "--get-regexp", r"^submodule\..*\.path$").split()[1::2]
+        build_sub_paths = [path for path in sub_paths if path != code_gen_path]
+        code_gen_initialized = (root / code_gen_path / ".git").exists()
+        initialized_subs = [root / path for path in sub_paths if (root / path / ".git").exists()]
+        for repo in (root, *initialized_subs):
             if git(repo, "status", "--porcelain", "--untracked-files=no", "--ignore-submodules=all"):
                 raise RuntimeError(f"Tracked local changes in {repo}; commit or stash them first")
-        server = find_server(root)
+        branch = "llk_helper_library"
+        # Checked before the fetch, while the pre-rewrite remote commits are still known.
+        had_local_commits = git(root, "rev-list", "--count", "HEAD", "--not", "--remotes=origin") != "0"
+        # Submodules are fetched by `submodule update` below.
+        run(
+            root,
+            "git",
+            "fetch",
+            "--no-recurse-submodules",
+            "origin",
+            f"+refs/heads/{branch}:refs/remotes/origin/{branch}",
+        )
+        command = advance_command(root, branch, had_local_commits)
+        # A rewritten branch (e.g. llk_helper_library rebased onto main) always rebuilds.
+        rewritten = not is_ancestor(root, local_tip, remote_tip)
+        rebuild = options.force or pending.exists() or rewritten or server_paths_changed(root, local_tip, remote_tip)
+        server = find_server(root) if rebuild else None
         try:
-            for repo, branch in ((root, "llk_helper_library"), (sub, "main")):
-                run(repo, "git", "fetch", "origin", f"+refs/heads/{branch}:refs/remotes/origin/{branch}")
-                run(repo, "git", "merge-base", "--is-ancestor", "HEAD", f"origin/{branch}")
-            # Remember unfinished work before advancing HEAD, so a failed build
-            # is retried on the next timer tick even if the remote is unchanged.
-            pending.write_text(remote_tip + "\n")
-            for repo, branch in ((root, "llk_helper_library"), (sub, "main")):
-                run(repo, "git", "-c", "submodule.recurse=false", "merge", "--ff-only", f"origin/{branch}")
+            if rebuild:
+                # Remember unfinished work before advancing HEAD, so a failed build
+                # is retried on the next timer tick even if the remote is unchanged.
+                pending.write_text(remote_tip + "\n")
+            run(root, *command)
+            if build_sub_paths:
+                run(root, "git", "submodule", "update", "--init", "--recursive", "--", *build_sub_paths)
+            if code_gen_initialized:
+                # --checkout overrides `update = none`.
+                run(root, "git", "submodule", "update", "--checkout", "--", code_gen_path)
+            if not rebuild:
+                print("No server-relevant changes; sources updated without a build or restart.", flush=True)
+                return
             run(root, "./build_metal.sh", *build_args)
             restart(root, server)
             pending.unlink()
         finally:
-            server[4].close()
-            server[5].close()
+            if server is not None:
+                server[4].close()
+                server[5].close()
 
 
 if __name__ == "__main__":

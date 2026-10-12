@@ -21,7 +21,9 @@ import unittest
 from unittest import mock
 
 SCRIPT = Path(__file__).resolve().parents[1] / "update_llk_server.py"
-SUBMODULE = "tt_metal/third_party/tt_ops_code_gen"
+CODE_GEN_SUBMODULE = "tt_metal/third_party/tt_ops_code_gen"
+OTHER_SUBMODULE = "tt_metal/third_party/umd"
+SERVER_FILE = "tt_metal/sfpi-version"
 spec = importlib.util.spec_from_file_location("update_llk_server", SCRIPT)
 updater = importlib.util.module_from_spec(spec)
 spec.loader.exec_module(updater)
@@ -35,6 +37,7 @@ class UpdateServerFixture(unittest.TestCase):
         return self.command(cwd, "git", *args).stdout.strip()
 
     def commit(self, repo, filename, content):
+        (repo / filename).parent.mkdir(parents=True, exist_ok=True)
         (repo / filename).write_text(content)
         self.git(repo, "add", filename)
         self.git(repo, "commit", "-qm", filename)
@@ -55,15 +58,26 @@ class UpdateServerFixture(unittest.TestCase):
             GIT_ALLOW_PROTOCOL="file",
         )
         self.parent_remote = self.base / "parent-remote"
-        self.sub_remote = self.base / "sub-remote"
-        for repo, branch in ((self.parent_remote, "llk_helper_library"), (self.sub_remote, "main")):
+        self.code_gen_remote = self.base / "code-gen-remote"
+        self.other_sub_remote = self.base / "other-sub-remote"
+        for repo, branch in (
+            (self.parent_remote, "llk_helper_library"),
+            (self.code_gen_remote, "main"),
+            (self.other_sub_remote, "main"),
+        ):
             self.git(self.base, "init", "-q", "-b", branch, str(repo))
             self.commit(repo, "version", "initial\n")
-        self.git(self.parent_remote, "submodule", "add", str(self.sub_remote), SUBMODULE)
-        self.git(self.parent_remote, "commit", "-qam", "add submodule")
+        self.git(self.parent_remote, "submodule", "add", str(self.code_gen_remote), CODE_GEN_SUBMODULE)
+        self.git(self.parent_remote, "submodule", "add", str(self.other_sub_remote), OTHER_SUBMODULE)
+        # Mirrors the real .gitmodules entry.
+        self.git(self.parent_remote, "config", "-f", ".gitmodules", f"submodule.{CODE_GEN_SUBMODULE}.update", "none")
+        self.git(self.parent_remote, "commit", "-qam", "add submodules")
         self.root = self.base / "checkout"
         self.git(self.base, "clone", "-q", "--recurse-submodules", str(self.parent_remote), str(self.root))
-        self.sub = self.root / SUBMODULE
+        # `update = none` skips it during the recursive clone; checkouts clone it explicitly.
+        self.git(self.root, "submodule", "update", "-q", "--init", "--checkout", "--", CODE_GEN_SUBMODULE)
+        self.code_gen_sub = self.root / CODE_GEN_SUBMODULE
+        self.other_sub = self.root / OTHER_SUBMODULE
         (self.root / "scripts").mkdir()
         shutil.copy2(SCRIPT, self.root / "scripts/update_llk_server.py")
         (self.root / ".gitignore").write_text("/old/\n/build/\n/state/\n")
@@ -86,6 +100,7 @@ while True:
             """#!/bin/sh
 printf '%s\\n' "$@" > state/build-args
 touch state/build-ran
+git -C tt_metal/third_party/umd rev-parse HEAD > state/other-sub-at-build
 if [ -f state/fail-build ]; then exit 42; fi
 if [ -f state/missing-binary ]; then rm -f build/tools/jit_compile_server; fi
 if [ -f state/bad-binary ]; then printf '#!/bin/sh\\nexit 23\\n' > build/tools/jit_compile_server; fi
@@ -97,8 +112,9 @@ if [ -f state/bad-binary ]; then printf '#!/bin/sh\\nexit 23\\n' > build/tools/j
         # Publish fixture additions so local HEAD is an ancestor of remote HEAD.
         self.git(self.parent_remote, "fetch", str(self.root), "llk_helper_library")
         self.git(self.parent_remote, "merge", "--ff-only", "FETCH_HEAD")
-        self.parent_latest = self.commit(self.parent_remote, "version", "latest parent\n")
-        self.sub_latest = self.commit(self.sub_remote, "version", "latest submodule\n")
+        # The default remote change touches a path that needs a server rebuild.
+        self.parent_latest = self.commit(self.parent_remote, SERVER_FILE, "latest parent\n")
+        self.code_gen_latest = self.commit(self.code_gen_remote, "version", "latest submodule\n")
         for folder in ("old/tools", "build/tools"):
             path = self.root / folder
             path.mkdir(parents=True)
@@ -160,11 +176,10 @@ if [ -f state/bad-binary ]; then printf '#!/bin/sh\\nexit 23\\n' > build/tools/j
 
 
 class UpdateServerTests(UpdateServerFixture):
-    def test_success_updates_both_repositories_and_preserves_server_settings(self):
+    def test_success_updates_parent_and_preserves_server_settings(self):
         result = self.update("--", "--enable-ccache")
         self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
         self.assertEqual(self.git(self.root, "rev-parse", "HEAD"), self.parent_latest)
-        self.assertEqual(self.git(self.sub, "rev-parse", "HEAD"), self.sub_latest)
         self.old.wait(timeout=5)
         records = list((self.root / "state").glob("pid-*"))
         self.assertEqual(len(records), 2)
@@ -196,13 +211,13 @@ class UpdateServerTests(UpdateServerFixture):
 
     def test_unchanged_parent_skips_fetch_build_restart_even_with_new_submodule(self):
         self.bring_parent_up_to_date()
-        before = self.git(self.sub, "rev-parse", "HEAD")
+        before = self.git(self.code_gen_sub, "rev-parse", "HEAD")
         result = self.update()
         self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
         self.assertIn("unchanged; skipping", result.stdout)
         self.assertNotIn("git fetch", result.stdout)
-        self.assertNotEqual(before, self.sub_latest)
-        self.assertEqual(self.git(self.sub, "rev-parse", "HEAD"), before)
+        self.assertNotEqual(before, self.code_gen_latest)
+        self.assertEqual(self.git(self.code_gen_sub, "rev-parse", "HEAD"), before)
         self.assertFalse((self.root / "state/build-ran").exists())
         self.assertIsNone(self.old.poll())
 
@@ -215,6 +230,53 @@ class UpdateServerTests(UpdateServerFixture):
         self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
         self.assertIn("unchanged; skipping", result.stdout)
         self.assertFalse((self.root / "state/build-ran").exists())
+
+    def test_source_only_change_updates_without_build_or_restart(self):
+        self.bring_parent_up_to_date()
+        tip = self.commit(self.parent_remote, "version", "source only\n")
+        pinned = self.move_submodule_pointer(CODE_GEN_SUBMODULE, self.code_gen_remote)
+        result = self.update()
+        self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
+        self.assertIn("No server-relevant changes", result.stdout)
+        self.assertEqual(self.git(self.root, "rev-parse", "HEAD~1"), tip)
+        self.assertEqual(self.git(self.code_gen_sub, "rev-parse", "HEAD"), pinned)
+        self.assertFalse((self.root / "state/build-ran").exists())
+        self.assertIsNone(self.old.poll())
+
+    def test_source_only_change_does_not_need_running_server(self):
+        self.bring_parent_up_to_date()
+        tip = self.commit(self.parent_remote, "version", "source only\n")
+        self.old.terminate()
+        self.old.wait(timeout=5)
+        result = self.update()
+        self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
+        self.assertEqual(self.git(self.root, "rev-parse", "HEAD"), tip)
+
+    def test_each_server_path_triggers_rebuild(self):
+        for path in updater.SERVER_PATHS:
+            with self.subTest(path=path):
+                old = self.git(self.parent_remote, "rev-parse", "HEAD")
+                new = self.commit(self.parent_remote, path.rstrip("/") + ("/file" if path.endswith("/") else ""), path)
+                self.assertTrue(updater.server_paths_changed(self.parent_remote, old, new))
+        old = self.git(self.parent_remote, "rev-parse", "HEAD")
+        new = self.commit(self.parent_remote, "tt_metal/hw/inc/header.h", "kernel header")
+        self.assertFalse(updater.server_paths_changed(self.parent_remote, old, new))
+
+    def test_rewritten_parent_without_server_changes_still_restarts(self):
+        self.bring_parent_up_to_date()
+        self.git(self.root, "fetch", "-q", "origin")
+        top = self.git(self.root, "rev-parse", "HEAD")
+        self.git(self.parent_remote, "reset", "-q", "--hard", top + "~1")
+        self.git(self.parent_remote, "cherry-pick", top)
+        self.git(self.parent_remote, "commit", "-q", "--amend", "-m", "rebased")
+        tip = self.commit(self.parent_remote, "version", "rebased, source only\n")
+        result = self.update()
+        self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
+        self.assertIn("was rewritten", result.stdout)
+        self.assertIn("Server ready", result.stdout)
+        self.assertEqual(self.git(self.root, "rev-parse", "HEAD"), tip)
+        self.assertTrue((self.root / "state/build-ran").exists())
+        self.old.wait(timeout=5)
 
     def test_force_retries_failed_build_after_parent_has_advanced(self):
         (self.root / "state/fail-build").touch()
@@ -252,10 +314,6 @@ class UpdateServerTests(UpdateServerFixture):
         (self.root / "version").write_text("local edits")
         self.assert_not_restarted(self.update())
 
-    def test_dirty_submodule_is_rejected(self):
-        (self.sub / "version").write_text("local edits")
-        self.assert_not_restarted(self.update())
-
     def test_staged_changes_are_rejected(self):
         (self.root / "version").write_text("staged edits")
         self.git(self.root, "add", "version")
@@ -265,33 +323,89 @@ class UpdateServerTests(UpdateServerFixture):
         self.commit(self.root, "local", "local commit")
         self.assert_not_restarted(self.update())
 
-    def test_diverged_submodule_does_not_advance_parent(self):
-        before = self.git(self.root, "rev-parse", "HEAD")
-        self.commit(self.sub, "local", "local commit")
+    def test_other_submodule_fetch_failure_keeps_server_and_retries(self):
+        self.move_other_submodule_pointer()
+        self.git(self.other_sub, "remote", "set-url", "origin", str(self.base / "missing"))
         self.assert_not_restarted(self.update())
+        self.assertTrue((self.root / ".git/llk-server-update-pending").exists())
+
+    def rewrite_parent_remote(self, extra_file=None):
+        """Simulate a rebase of llk_helper_library: the harness commit is replaced by a rewritten copy."""
+        self.git(self.root, "fetch", "-q", "origin")  # as a previous update would have
+        harness = self.git(self.root, "rev-parse", "HEAD")
+        self.git(self.parent_remote, "reset", "-q", "--hard", harness + "~1")
+        self.git(self.parent_remote, "cherry-pick", harness)
+        self.git(self.parent_remote, "commit", "-q", "--amend", "-m", "rebased test harness")
+        if extra_file:
+            self.commit(self.parent_remote, extra_file, "remote content")
+        return self.commit(self.parent_remote, SERVER_FILE, "rebased parent\n")
+
+    def test_rewritten_parent_moves_to_new_tip(self):
+        tip = self.rewrite_parent_remote()
+        result = self.update()
+        self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
+        self.assertIn("was rewritten", result.stdout)
+        self.assertEqual(self.git(self.root, "rev-parse", "HEAD"), tip)
+        self.assertEqual(self.git(self.root, "branch", "--show-current"), "llk_helper_library")
+        self.old.wait(timeout=5)
+
+    def test_rewritten_parent_with_local_commits_is_rejected(self):
+        self.rewrite_parent_remote()
+        before = self.commit(self.root, "local", "local commit")
+        result = self.update()
+        self.assert_not_restarted(result)
+        self.assertIn("local commits", result.stderr)
         self.assertEqual(self.git(self.root, "rev-parse", "HEAD"), before)
 
-    def test_fetch_failure_keeps_server_and_parent_head(self):
-        before = self.git(self.root, "rev-parse", "HEAD")
-        self.git(self.sub, "remote", "set-url", "origin", str(self.base / "missing"))
+    def test_rewritten_parent_keeps_conflicting_untracked_file(self):
+        self.rewrite_parent_remote(extra_file="new-file")
+        (self.root / "new-file").write_text("untracked local content")
         self.assert_not_restarted(self.update())
-        self.assertEqual(self.git(self.root, "rev-parse", "HEAD"), before)
+        self.assertEqual((self.root / "new-file").read_text(), "untracked local content")
+
+    def move_submodule_pointer(self, path, sub_remote):
+        latest = self.commit(sub_remote, "version", f"latest {path}\n")
+        pinned = self.parent_remote / path
+        self.git(pinned, "fetch", "-q", "origin")
+        self.git(pinned, "checkout", "-q", latest)
+        self.git(self.parent_remote, "commit", "-qam", f"bump {path}")
+        return latest
+
+    def move_other_submodule_pointer(self):
+        return self.move_submodule_pointer(OTHER_SUBMODULE, self.other_sub_remote)
+
+    def test_other_submodule_follows_parent_pointer_before_build(self):
+        other_latest = self.move_other_submodule_pointer()
+        result = self.update()
+        self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
+        self.assertEqual(self.git(self.other_sub, "rev-parse", "HEAD"), other_latest)
+        self.assertEqual((self.root / "state/other-sub-at-build").read_text().strip(), other_latest)
+        self.old.wait(timeout=5)
+
+    def test_dirty_other_submodule_is_rejected(self):
+        self.move_other_submodule_pointer()
+        (self.other_sub / "version").write_text("local edits")
+        self.assert_not_restarted(self.update())
 
     def test_wrong_parent_branch_is_rejected(self):
         self.git(self.root, "checkout", "-qb", "wrong")
         self.assert_not_restarted(self.update())
 
-    def test_wrong_submodule_branch_is_rejected(self):
-        self.git(self.sub, "checkout", "-qb", "wrong")
-        self.assert_not_restarted(self.update())
-
-    def test_submodule_main_branch_is_supported(self):
-        self.git(self.sub, "checkout", "main")
+    def test_code_gen_follows_parent_pointer(self):
+        pinned = self.move_submodule_pointer(CODE_GEN_SUBMODULE, self.code_gen_remote)
+        self.commit(self.code_gen_remote, "version", "unpinned main\n")
         result = self.update()
         self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
-        self.assertEqual(self.git(self.sub, "rev-parse", "HEAD"), self.sub_latest)
+        self.assertEqual(self.git(self.code_gen_sub, "rev-parse", "HEAD"), pinned)
+        self.old.wait(timeout=5)
 
-    def test_no_server_is_rejected_before_fetch(self):
+    def test_dirty_code_gen_is_rejected(self):
+        self.move_submodule_pointer(CODE_GEN_SUBMODULE, self.code_gen_remote)
+        (self.code_gen_sub / "version").write_text("local edits")
+        self.assert_not_restarted(self.update())
+        self.assertEqual((self.code_gen_sub / "version").read_text(), "local edits")
+
+    def test_no_server_is_rejected_before_advancing(self):
         before = self.git(self.root, "rev-parse", "HEAD")
         self.old.terminate()
         self.old.wait(timeout=5)
@@ -331,9 +445,11 @@ class UpdateServerTests(UpdateServerFixture):
         self.assert_not_restarted(self.update())
         self.assertEqual((self.root / "new-file").read_text(), "untracked local content")
 
-    def test_missing_submodule_is_rejected(self):
-        (self.sub / ".git").unlink()
-        self.assert_not_restarted(self.update())
+    def test_uninitialized_code_gen_is_ignored(self):
+        (self.code_gen_sub / ".git").unlink()
+        result = self.update()
+        self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
+        self.old.wait(timeout=5)
 
     def test_changed_process_identity_is_not_signalled(self):
         server = list(updater.find_server(self.root))

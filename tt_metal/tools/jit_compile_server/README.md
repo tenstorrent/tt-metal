@@ -124,26 +124,35 @@ To update an existing server running from an `llk_helper_library` checkout:
 
 The script first checks the remote `llk_helper_library` commit using
 `git ls-remote`. If it matches local HEAD, it exits successfully without fetching,
-building, or restarting. Changes to `tt_ops_code_gen/main` alone do not trigger
-an update. A failed remote check is reported as an error.
+building, or restarting. A failed remote check is reported as an error.
 
-When the parent branch changes, the script fetches and fast-forwards `origin/llk_helper_library` and the
-`tt_metal/third_party/tt_ops_code_gen` submodule to `origin/main`, then runs
-`build_metal.sh`. Only after a successful build does it stop the existing server
-and launch `build/tools/jit_compile_server`, preserving its arguments, environment,
+When the parent branch changes, the script fetches and fast-forwards `origin/llk_helper_library`, then
+checks out every submodule at the commit the new parent pins (`git submodule update --init --recursive`),
+so a parent update that moves e.g. `umd` builds against the new pin. `tt_ops_code_gen` (marked
+`update = none`) also follows the parent's pin, but only if it is already cloned; it is never cloned by
+the update.
+
+The server reads the sources from disk on every request, so most changes need nothing more. The script
+rebuilds and restarts only when the update changes the server itself or the build outputs it compiles and
+links with: `tt_metal/tools/jit_compile_server/`, `tt_metal/impl/jit_server/`, `tt_metal/jit_build/`,
+the SFPI pin (`tt_metal/sfpi-version`, `tt_metal/sfpi-info.sh`), or the linker scripts and link objects
+(`tt_metal/hw/toolchain/`, `tt_metal/hw/CMakeLists.txt`), and whenever the branch was rewritten
+upstream (e.g. rebased onto `main`). In those cases it runs
+`build_metal.sh`, and only after a successful build does it stop the existing server and launch `build/tools/jit_compile_server`, preserving its arguments, environment,
 working directory, and log destinations. It checks that the replacement stays
 running and accepts a TCP connection on its configured endpoint.
 
-Run this as the server's user. When an update is needed, exactly one server from
-this checkout must already be running. Commit or stash tracked edits first; an updated submodule pointer is
-allowed. Diverged branches cause an error rather than a reset or merge commit.
-The submodule remains at latest main, so its pointer may appear modified in the
-parent checkout. Build failure leaves the existing process running; source updates
+Run this as the server's user. When a rebuild is needed, exactly one server from
+this checkout must already be running. Commit or stash tracked edits first, in the checkout and in every
+initialized submodule, including `tt_ops_code_gen`.
+If `llk_helper_library` was rewritten upstream, e.g. by a rebase onto `main`, the checkout is moved to the new tip, provided it had no commits of its own that are missing
+from `origin`. Local commits make the update fail instead; they are never reset away or merged.
+Build failure leaves the existing process running; source updates
 are not rolled back. An unfinished-update marker in the checkout's Git directory
 causes subsequent runs to retry even if the remote branch now matches HEAD. The
 marker is removed only after a successful restart. Use
 `./scripts/update_llk_server.py --force` to rebuild after manually pulling the branch. This bypasses
-the unchanged-branch check; build options still go after `--`.
+the unchanged-branch and server-path checks; build options still go after `--`.
 Restart failure is reported in the terminal; startup details
 remain in the existing server log. `--clean`, `--configure-only`,
 `--build-packages`, and forwarded help options (including abbreviations) are
@@ -175,8 +184,8 @@ prints their location. SSH runs in batch mode, so inaccessible remotes or expire
 SSH-agent credentials fail visibly in the log. Failed builds retry at the next
 interval. A failed restart is logged, but automatic crash recovery is not
 implemented: restore a running server before retrying. Updates require clean
-tracked files and fast-forward history, and successful restarts can interrupt
-active compilation requests. Stop lets an in-progress update finish.
+tracked files and no local commits. Restarts, which happen only for server-relevant
+changes, can interrupt active compilation requests. Stop lets an in-progress update finish.
 
 Run the updater and watchdog's Linux integration tests without updating the real checkout or
 restarting its server:
