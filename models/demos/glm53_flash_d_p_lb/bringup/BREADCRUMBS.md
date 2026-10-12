@@ -414,3 +414,7 @@ The comparator's negative control (+1 on one output) is flagged on every chip.
   outputs and state bit-identical to the replicated cache (tests/zz_scratch_striped_latent.py). Cost at the longest
   context (chunk at 51200): attention 8.21 -> 8.72 ms (gather 0.58 ms, ~86 GB/s per chip; the old latent gathers
   0.06 ms gone). Full model 56k top1 unchanged (0.6726 with the old router).
+- Prefix gather on ttnn.bringup.fabric_all_gather instead of high_bw_all_gather (same contract, gathered_dim_size):
+  0.58 -> ~0.31 ms at the longest context, attention 8.72 -> 8.42 ms (replicated cache 8.21); still bit-identical
+  (test_striped_latent.py, chunks 2048 and 5120). Full model 56k: warm prefill 5.70 s (9878 tok/s; 6.07-6.16 s in
+  the runs above), top1 0.6816 / top5 0.8865 (unchanged).
