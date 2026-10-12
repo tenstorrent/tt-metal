@@ -43,11 +43,11 @@ Without the cache every ladder rung reconverts the text encoder and the transfor
   - T3K cloud VM (wh_llmbox): 1 h 10 min with the cache (kernel JIT 56 min of it); 2 h 34 min without
     (weight conversion 1 h 22, kernel JIT 58 min).
   - N150 cloud VM: 2 h 06 min with a local cache; without one a 3 h marker fired at rung 14 of 17.
-The t2va test runs second and shares the job's kernel cache, so it compiles only the programs ref2va does not
-reach. On a galaxy host with the weight cache it takes 34 min when only the vision-tower attention kernels are
-cold: the 26-rung ladder walk at about 12 s a rung, the shared decode warms, and the prompt-encoder warm, which
-is about 18 min with every vision-tower kernel cold. Hence the 85 min pytest marker per test and the 150 min
-job timeout.
+The t2va test runs second and shares the job's kernel cache, but most of its programs are its own (its 26 rungs and
+its vision-tower shapes), so it is not much cheaper for following ref2va:
+  - T3K cloud VM (wh_llmbox): 1 h 20 min after ref2va in the same job (2 h 29 min for both); 1 h 31 min on its own.
+  - galaxy host with the weight cache and only the vision-tower attention kernels cold: 34 min.
+Hence the 120 min pytest marker per test and the 180 min job timeout.
 """
 
 from __future__ import annotations
@@ -141,14 +141,14 @@ def _warm_task_on_mock(mesh_device: ttnn.MeshDevice, task: str) -> None:
 
 # A cold kernel cache compiles every H3 program: ~55 min on a galaxy host, ~56 min of the 1 h 10 min cached run on
 # a T3K cloud VM (2 h 34 min when TT_DIT_CACHE_DIR is unset: the rest is weight conversion); warm: ~10 min on the galaxy.
-@pytest.mark.timeout(5100)
+@pytest.mark.timeout(7200)
 @pytest.mark.parametrize(("mesh_device", "device_params"), MESHES, indirect=["mesh_device", "device_params"])
 def test_ref2va_warmup_fits_on_mock(mesh_device):
     _warm_task_on_mock(mesh_device, "ref2va")
 
 
 # Runs after the ref2va test, so the programs both tasks share come out of the job's kernel cache.
-@pytest.mark.timeout(5100)
+@pytest.mark.timeout(7200)
 @pytest.mark.parametrize(("mesh_device", "device_params"), T2VA_MESHES, indirect=["mesh_device", "device_params"])
 def test_t2va_warmup_fits_on_mock(mesh_device):
     _warm_task_on_mock(mesh_device, "t2va")
