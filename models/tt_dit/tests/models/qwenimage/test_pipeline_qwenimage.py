@@ -12,28 +12,18 @@ from loguru import logger
 from PIL import Image, ImageFilter
 
 import ttnn
-from models.common.utility_functions import is_blackhole
 from models.tt_dit.pipelines.qwenimage.pipeline_qwenimage import QwenImagePipeline
-from models.tt_dit.utils.test import line_params_req_exact_devices
+
+from .device_params import MESH_DEVICE_PARAMS
 
 DOG_IMAGE_PATH = Path(__file__).resolve().parents[4] / "demos" / "multimodal" / "gemma3" / "dog.jpg"
-
-# The warm-up traces every resolution of the preset: all of them on BH (~760 MB per chip on 2x2),
-# only 1024² on 2x4 WH (~110 MB per chip).
-TRACE_REGION_SIZE = 800_000_000 if is_blackhole() else 150_000_000
 
 
 @pytest.mark.parametrize(
     "no_prompt",
     [{"1": True, "0": False}.get(os.environ.get("NO_PROMPT"), False)],
 )
-@pytest.mark.parametrize(
-    "device_params",
-    [{**line_params_req_exact_devices, "trace_region_size": TRACE_REGION_SIZE}],
-    ids=["line"],
-    indirect=True,
-)
-@pytest.mark.parametrize("mesh_device", [(2, 2), (2, 4), (4, 8)], ids=["2x2", "2x4", "4x8"], indirect=True)
+@pytest.mark.parametrize(("mesh_device", "device_params"), MESH_DEVICE_PARAMS, indirect=True)
 @pytest.mark.parametrize(
     "traced",
     [
@@ -116,13 +106,7 @@ def test_qwenimage_pipeline(
             run(prompt=prompt, number=i, seed=i)
 
 
-@pytest.mark.parametrize(
-    "device_params",
-    [{**line_params_req_exact_devices, "trace_region_size": TRACE_REGION_SIZE}],
-    ids=["line"],
-    indirect=True,
-)
-@pytest.mark.parametrize("mesh_device", [(2, 2), (2, 4), (4, 8)], ids=["2x2", "2x4", "4x8"], indirect=True)
+@pytest.mark.parametrize(("mesh_device", "device_params"), MESH_DEVICE_PARAMS, indirect=True)
 def test_qwenimage_inpaint(*, mesh_device: ttnn.MeshDevice, is_ci_env: bool, monkeypatch: pytest.MonkeyPatch) -> None:
     if is_ci_env:
         monkeypatch.setenv("TT_DIT_CACHE_DIR", "/tmp/TT_DIT_CACHE")

@@ -12,11 +12,8 @@ from models.common.utility_functions import is_blackhole
 from models.perf.benchmarking_utils import BenchmarkData, BenchmarkProfiler
 from models.tt_dit.pipelines.events import profiler_event_callback
 from models.tt_dit.pipelines.qwenimage.pipeline_qwenimage import QwenImagePipeline, QwenImagePipelineConfig
-from models.tt_dit.utils.test import line_params_req_exact_devices
 
-# The warm-up traces every resolution of the preset: all of them on BH (~760 MB per chip on 2x2),
-# only 1024² on 2x4 WH (~110 MB per chip).
-TRACE_REGION_SIZE = 800_000_000 if is_blackhole() else 150_000_000
+from .device_params import MESH_DEVICE_PARAMS
 
 
 @pytest.mark.parametrize(
@@ -25,13 +22,7 @@ TRACE_REGION_SIZE = 800_000_000 if is_blackhole() else 150_000_000
         (1024, 1024, 50),
     ],
 )
-@pytest.mark.parametrize("mesh_device", [(2, 2), (2, 4), (4, 8)], ids=["2x2", "2x4", "4x8"], indirect=True)
-@pytest.mark.parametrize(
-    "device_params",
-    [{**line_params_req_exact_devices, "trace_region_size": TRACE_REGION_SIZE}],
-    ids=["line"],
-    indirect=True,
-)
+@pytest.mark.parametrize(("mesh_device", "device_params"), MESH_DEVICE_PARAMS, indirect=True)
 def test_qwenimage_pipeline_performance(
     *,
     mesh_device: ttnn.MeshDevice,
