@@ -19,8 +19,6 @@ From models/demos/mimo_v2_6_d_p/tt/router.py:TtRouter (fp32 mode).
 
 from __future__ import annotations
 
-import os
-
 import torch
 
 import ttnn
@@ -68,23 +66,15 @@ class TtRouter:
         mc = ttnn.DRAM_MEMORY_CONFIG
         s = x.shape[-2]
         assert s <= self.max_rows and s % TILE == 0, f"router rows {s} (max {self.max_rows}, tile aligned)"
-        # a bf16 x goes straight into the fp32-weight matmul: bf16 -> fp32 is exact, so a typecast first changes
-        # nothing (bit-identical layer output) but costs 46 us and doubles the matmul's x read (router 230 -> 162 us
-        # at 640 rows per chip). GLM_ROUTER_FP32_X=1 restores the typecast.
-        if x.dtype == ttnn.float32 or os.environ.get("GLM_ROUTER_FP32_X") != "1":
-            xf = x
-        else:
-            xf = ttnn.typecast(x, ttnn.float32, memory_config=mc)
+        # x (bf16 or fp32) goes straight into the fp32-weight matmul: bf16 -> fp32 is exact, so no typecast
         logits = ttnn.linear(
-            xf,
+            x,
             self.w,
             dtype=ttnn.float32,
-            program_config=linear_config(xf, self.w, ttnn.float32),
+            program_config=linear_config(x, self.w, ttnn.float32),
             compute_kernel_config=mm_config(self.cfg),
             memory_config=mc,
         )
-        if xf is not x:
-            ttnn.deallocate(xf)
         scores = ttnn.sigmoid(logits, memory_config=mc)
         ttnn.deallocate(logits)
         choice = ttnn.add(scores, self.bias, memory_config=mc)
