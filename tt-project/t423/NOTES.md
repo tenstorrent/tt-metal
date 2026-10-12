@@ -10,3 +10,5 @@ next wave while the device works, so dispatch is hidden after wave 1. Step 2's c
 well under dispatch) fails, so the A/B was not run and nothing was landed. The traced_decode code
 (5a8c59583a9, opt-in, default off) stays on this branch only, unvalidated on device.
 Bigger leftover: ~0.4 s of the 1.48 s is outside the device (blend=0.428 in DECODE_SPLIT).
+Correction (#430, job 862): that blend is a profile-mode artifact; with the profile off the old code
+decodes 5 s in 1.01 s with blend 0.04 s, and #427 brings it to 0.98 s (~2.7%).

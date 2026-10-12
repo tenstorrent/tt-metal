@@ -19,6 +19,8 @@ alternated, after the 1-min load drops below 20. Output /var/tmp/fasth3/t430/ben
 tt-metal pins the main thread only with TT_METAL_NUMA_BASED_AFFINITY=1 (device_manager.cpp); by default
 its 32 dispatch threads go round-robin on cores 0-31 and the main thread is unpinned (job 858 saw 64 cpus).
 
-## Next step
-`ttp detach --check --host g15blx01 /var/tmp/fasth3/t430/bench430drv` exits 0 -> read summary.log and
-bench.log, fix the numbers in NOTES.md (t427 section), commit, `ttp push --own --detach`.
+## Result (2026-10-12 00:05 PDT)
+Job 862: exit 0, 154 s, 4/4 passed, no drops, 900 MHz clamp. old 1.008/1.011 s (blend 0.038/0.040),
+new 0.981/0.983 s (blend 0.001). Saved ~27 ms, ~2.7% at 5 s (not -33%). CPU assemble_clip_parts: new is
+~2x faster (5 s 40 -> 20 ms on cores 32-63, 15 s 103 -> 47-50 ms), same crc. Driver bench430drv rc=0.
+Numbers corrected in NOTES.md (t427) and tt-project/t423/NOTES.md. Full table: NOTES.md "Corrected A/B".
