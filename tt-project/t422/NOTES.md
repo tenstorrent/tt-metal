@@ -29,3 +29,10 @@ deadline 400 s):
 - submit_on.sh (detached on g15blx02, run dir 1598, t422on.rc) queues the on arm behind job 864 (another
   smarton job) and logs to state/on.log, ending with "T422ON_DONE <rc>".
 - Next: read state/on.log; compare per-step times (relative, clamp) and md5 against the off arm.
+
+## 2026-10-12 run 1604
+- on arm job 865 failed (440 s, exit 1): "[t286] warm deadline 400 s passed in Warming audio decode lengths"
+  at 6/12, 58 s/it (off arm: 12/12 at 4 s/it). Cause: cold JIT for the new build (1889 kernel compiles vs 199
+  on the off arm), not a code error. No drop (fabric-check 866 passed). Cold log kept as out_on/run.cold.log.
+- Rerun: blx01 job 867 (submit_on.sh, detached as run 1604 t422on2), log state/on.log.
+- Next: read state/on.log; compare per-step times and md5 with the off arm (job 860).
