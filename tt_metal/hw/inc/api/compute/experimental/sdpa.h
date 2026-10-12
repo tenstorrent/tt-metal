@@ -289,6 +289,16 @@ inline void recip_sum(std::uint32_t curr_sum_index, std::uint32_t recip_dst_inde
 }
 #endif
 
+// compute_sdpa_chunk's P V init runs the replay program the Q K^T init recorded only with block-float V: with 16-bit V
+// the unpacker binds the chunk and skipping the load reads slower.
+ALWI bool sdpa_pv_init_reuses_replay([[maybe_unused]] std::uint32_t ov_cb) {
+#ifdef TRISC_UNPACK
+    return IS_BFP_FORMAT(unpack_src_format[get_operand_id(ov_cb)]);
+#else
+    return true;
+#endif
+}
+
 // First chunk controls whether we run the correction path with prev sum, max, out
 // Last chunk controls whether we signal out packer to start packing as output is produced
 //
@@ -464,9 +474,12 @@ void compute_sdpa_chunk(
     MATH(LLK_ASSERT(
         ov_kt_dim == chunk_size || exp_signal_granularity == chunk_size,
         "OV-trim (ov_kt_dim != chunk_size) requires exp_signal_granularity == chunk_size"));
-    // The Q K^T init above recorded the replay program this one runs.
-    sdpa_custom_mm_reuse_dest_srcb_block_init_short<false /*load_replay*/>(
-        cb_q, ov_cb, cb_out, transpose_v, chunk_size, num_tiles_v);
+    if (sdpa_pv_init_reuses_replay(ov_cb)) {
+        sdpa_custom_mm_reuse_dest_srcb_block_init_short<false /*load_replay*/>(
+            cb_q, ov_cb, cb_out, transpose_v, chunk_size, num_tiles_v);
+    } else {
+        sdpa_custom_mm_reuse_dest_srcb_block_init_short(cb_q, ov_cb, cb_out, transpose_v, chunk_size, num_tiles_v);
+    }
     sdpa_custom_mm_reuse_dest_srcb_block<output_granularity, exp_signal_granularity>(
         cb_q,
         ov_cb,
