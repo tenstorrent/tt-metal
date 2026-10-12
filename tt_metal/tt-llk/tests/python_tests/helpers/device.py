@@ -218,10 +218,11 @@ def _rtl_sim_reset(value, location="0,0", device_id=0):
     device = check_context().devices[device_id]
     x, y = OnChipCoordinate.create(location, device=device).to("noc0")
     tt_device = device._umd_device.get_local_tt_device()
+    core = tt_umd.CoreCoord(x, y, tt_umd.CoreType.TENSIX, tt_umd.CoordSystem.NOC0)
     if value:
-        tt_device.assert_risc_reset(tt_umd.tt_xy_pair(x, y), tt_umd.RiscType.ALL)
+        tt_device.assert_risc_reset(core, tt_umd.RiscType.ALL)
     else:
-        tt_device.deassert_risc_reset(tt_umd.tt_xy_pair(x, y), tt_umd.RiscType.ALL, False)
+        tt_device.deassert_risc_reset(core, tt_umd.RiscType.ALL, False)
 
 def get_soft_reset_mask(cores: list[RiscCore]):
     if INVALID_CORE in cores:
