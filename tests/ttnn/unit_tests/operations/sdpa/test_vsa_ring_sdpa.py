@@ -69,7 +69,18 @@ def _assembled_rows(idx, exempt_ids, k_sel, n_blocks, dense_rows):
 
 
 def _run(
-    mesh_device, sp_axis, tp_axis, num_links, *, heads_total, blocks_per_shard, k_sel, dense_local_rows, seed, trace
+    mesh_device,
+    sp_axis,
+    tp_axis,
+    num_links,
+    *,
+    heads_total,
+    blocks_per_shard,
+    k_sel,
+    dense_local_rows,
+    seed,
+    trace,
+    exempt_ids=None,
 ):
     sp = tuple(mesh_device.shape)[sp_axis]
     tp = tuple(mesh_device.shape)[tp_axis]
@@ -80,7 +91,8 @@ def _run(
     t_total = n_blocks * BLOCK
     n_rows_local = blocks_per_shard  # queries are the shard's own tiles
     w = (n_blocks + 15) // 16 * 16
-    exempt_ids = [0, n_blocks // 2]
+    if exempt_ids is None:
+        exempt_ids = [0, n_blocks // 2]
     torch.manual_seed(seed)
     q = torch.randn(1, heads_total, t_total, DIM, dtype=torch.bfloat16)
     k = torch.randn(1, heads_total, t_total, DIM, dtype=torch.bfloat16)
@@ -262,4 +274,24 @@ def test_vsa_ring_sdpa_odd_blocks(mesh_device, sp_axis, tp_axis, num_links, rese
         dense_local_rows=[2, 9],
         seed=3,
         trace=False,
+    )
+
+
+@GALAXY_4X8
+def test_vsa_ring_sdpa_many_exempt(mesh_device, sp_axis, tp_axis, num_links, reset_seeds):
+    """71 exempt ids, as many as the 10 s fl2va prefix (text + condition frames + audio) has, against the torch
+    reference."""
+    skip_if_unsupported_num_links(mesh_device, num_links)
+    _run(
+        mesh_device,
+        sp_axis,
+        tp_axis,
+        num_links,
+        heads_total=56,
+        blocks_per_shard=13,
+        k_sel=8,
+        dense_local_rows=[2, 9],
+        seed=4,
+        trace=False,
+        exempt_ids=list(range(71)),
     )
