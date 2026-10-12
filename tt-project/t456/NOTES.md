@@ -6,7 +6,7 @@ Branch ttp/t456-continue-455-sla-mode-fix-real-layer-rep (from pr_branch ttp/t45
 Model path and t455 device test build the stage with the same args and call vsa_sdpa with the same kwargs;
 SLA geometry permutation is identity; rung = padded_len 75776 (shared with VSA mode, which works).
 
-## Step 2: real-layer dump, blx01 job 032 (submitted 19:23 PDT 2026-10-12, queued behind ltx-host 031)
+## Step 2: real-layer dump, blx01 job 032 (submitted 12:23 PDT 2026-10-12, queued behind ltx-host 031)
 - spec s-dump.txt, run456.sh (= t452/run452.sh + `-p t456_dump`, outputs /var/tmp/fasth3/t456/out_s0-sla0.85/),
   plug/t456_dump.py wraps ttnn.transformer.vsa_sdpa: first call with 9472 local q rows (the 75776 rung, step 1,
   untraced) saves device 0's q, gathered k/v (4 heads), raw ids, block counts, output, kwargs to
@@ -27,7 +27,7 @@ SLA geometry permutation is identity; rung = padded_len 75776 (shared with VSA m
 v1.0 LoRA + MINIMAX_H3_VSA_MODE=sla + sparsity 0.0 (k=1179), T456_ROWS=-1 (no dump), latents saved.
 Compare with /var/tmp/fasth3/t452/out_s0-dense via t452/psnr452.py. ~dense PSNR => SLA plumbing is fine and the
 noise is the sparse approximation; ~12 dB => plumbing bug (75776 rung, row_source pad rows, stage) to bisect.
-- Submitted as blx01 broker job 035 (2026-10-12 ~19:34 PDT, queued behind ltx-host 034), via t288/blx01-submit.sh
+- Submitted as blx01 broker job 035 (2026-10-12 12:34 PDT, queued behind ltx-host 034), via t288/blx01-submit.sh
   (health check + device-lint passed). Log /var/log/tt-device-broker/2026-10-12_193403_035.log,
   output /var/tmp/fasth3/t456/out_s0-v10sla0.0/.
 - Next on wake: read run.log tail (PASS? ms/step), then on blx01
