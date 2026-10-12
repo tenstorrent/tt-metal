@@ -1,6 +1,6 @@
 # row_reduce_accumulate — four ways to accumulate a row of tiles for a mean, and their perf/accuracy tradeoff
 
-**Difficulty:** ⭐⭐ T2  ·  **Concept(s):** cross-tile accumulation strategy for a row-mean reduce · precision (input dtype × accumulation dtype), swept over input distributions
+**Problem type:** compute-bound: reduction  ·  **Concept(s):** cross-tile accumulation strategy for a row-mean reduce · precision (input dtype × accumulation dtype), swept over input distributions
 **First profiled on:** `bgd-lab-t3003-special-mstaletovic-for-reservation-40918` · WH B0 · single core · 2026-07-13 · `54a202a35d5`
 
 > Reading order: [`../master.md`](../master.md) → **this file** → run the CLI, and read the code only if you need to.
@@ -146,3 +146,19 @@ scripts/run_safe_pytest.sh --run-all tests/ttnn/unit_tests/operations/examples/t
 ## Code
 `program_descriptor_with_inline_kernels.py` — one compute kernel (`method` compile-time arg selects the path),
 plus a tiny dataflow kernel that fills the reduce scaler (`1/(W·32)`) and the zero tile.
+
+## When it helps / when it does not
+*Board: **Wormhole B0 n150**, single Tensix core, input sharded in L1, `positive` distribution, HiFi4, 200 in-kernel iters. Numbers come from `test_row_reduce_accumulate_regimes` (11 interleaved trials per variant, median (min-max); baseline = `reduce_fold`, lever = `dest_accum_pairs`; speedup = baseline_ns / lever_ns).*
+
+| condition | row width / precision | `reduce_fold` ns | `dest_accum_pairs` ns | speedup | trials | board |
+|---|---|---:|---:|---:|---:|---|
+| helps: wide row, fp32 input | 32 tiles, `fp32-fp32` | 4478 (4465-4487) | 2850 (2842-2861) | 1.57x | 11 | WH B0 n150 |
+| helps: wide row, bf16 input | 32 tiles, `bf16-fp32` | 2419 (2411-2439) | 1803 (1798-1806) | 1.34x | 11 | WH B0 n150 |
+| does not help: 1-tile row | 1 tile, `bf16-fp32` | 433 (430-442) | 837 (830-844) | 0.52x | 11 | WH B0 n150 |
+| does not help: 2-tile row | 2 tiles, `bf16-fp32` | 497 (495-513) | 834 (828-837) | 0.60x | 11 | WH B0 n150 |
+| does not help: 8-tile row | 8 tiles, `bf16-fp32` | 886 (883-893) | 1014 (1012-1020) | 0.87x | 11 | WH B0 n150 |
+
+- **Helps (wide row):** `reduce_fold` costs about 70 ns (bf16) to 130 ns (fp32) per tile, `dest_accum_pairs` about 30-60 ns per tile plus a fixed cost, so the gap widens with width; the win is larger for fp32 input (more bytes per `reduce_fold` tile).
+- **Does not help (narrow row):** `dest_accum_pairs` has a fixed ~800 ns finalize (pack to L1, FPU reduce) that a 1-2 tile single reduce never pays.
+- **Measured crossover on this build:** `dest_accum_pairs` first wins at **16 tiles for bf16 input** (1.09x `bf16-fp32`, 1.22x `bf16-bf16`) and at **8 tiles for fp32 input** (1.10x); at 8 tiles bf16 it is 0.87x. Single-tile-per-add `dest_accum` never wins here (0.93x even at 32 tiles, fp32).
+- **Correction to the text above (measured 2026-07-13 on WH B0):** the overview table and the "wins for W >= 4 (2.93x bf16 @32t)" claim do not reproduce on this build. `reduce_fold` is now ~2.2x cheaper at 32 tiles bf16 (2419 vs 5312 ns), so the win at 32 tiles is **1.34x (bf16) / 1.57x (fp32)**, not 2.93x / 1.87x, the crossover is 8-16 tiles, not 4, and fp32 input now gives the *larger* win rather than half of it.

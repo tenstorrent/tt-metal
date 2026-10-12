@@ -51,3 +51,37 @@ one-tile-row-tall tensor; `width_split` spreads the tiles over `min(Wt, grid)` c
 **Takeaway:** for a wide-short tensor, splitting along the width to fill the grid is up to **~7.8×**
 faster than the single-core (tile-row-split) baseline on this 64-core WH B0, and the benefit grows
 with width. The only regime where it doesn't help is `Wt ≤ 1` (nothing to split).
+
+## 2026-10-12 — helps / does-not-help calibration (Wormhole B0 n150)
+
+| stamp | value |
+|---|---|
+| board | Wormhole B0 n150 (8×8 = 64 Tensix cores) |
+| branch | `adamjanovic/perf-example-improvements` (base `adce58258c3`) |
+| test | `test_width_split_regimes` (bf16, H=32, interleaved DRAM) |
+| method | 5 warmup launches per variant; then 12 trials per variant, interleaved single_core/width_split; a trial = mean `DEVICE KERNEL DURATION [ns]` over 5 launches (one profiler window); median compared |
+
+Run 1 (min–max over the 12 trials):
+
+| regime | W | Wt (tiles) | width_split Tensix cores | single_core median ns | width_split median ns | speedup |
+|---|--:|--:|--:|---|---|--:|
+| helps_wt64 | 2048 | 64 | 64 | 16831.8 (16766.0–16880.6) | 2719.9 (2635.2–2796.2) | 6.19× |
+| does_not_help_wt2 | 64 | 2 | 2 | 2075.9 (2042.8–2113.2) | 2105.3 (1994.8–2513.6) | 0.99× |
+
+Speedups over four runs: helps_wt64 6.19 / 6.10 / 6.07 / 6.06×; does_not_help_wt2 0.99 / 0.91 / 0.98 / 0.89×.
+The Wt=2 width_split trials are bimodal (≈2.0 µs or ≈2.4 µs), which is why its median moves between runs.
+
+Crossover sweep (`test_width_split_device_perf`, `WS_WIDTHS=32,64,96,128,256,2048`, mean of 20 launches):
+
+| W | Wt | single_core ns | width_split ns | speedup |
+|--:|--:|--:|--:|--:|
+| 32 | 1 | 1823.5 | 1828.2 | 1.00× |
+| 64 | 2 | 2106.2 | 2159.1 | 0.98× |
+| 96 | 3 | 2512.8 | 1933.6 | 1.30× |
+| 128 | 4 | 2872.9 | 1966.0 | 1.46× |
+| 256 | 8 | 4305.4 | 1932.2 | 2.23× |
+| 2048 | 64 | 16800.8 | 2778.7 | 6.05× |
+
+**Correction:** the earlier "only `Wt ≤ 1` does not benefit" is too optimistic — `Wt = 2` is also flat
+or slower (one 8-tile read block on one Tensix core is already at the ~1.8 µs launch floor). The split
+pays from `Wt = 3`.

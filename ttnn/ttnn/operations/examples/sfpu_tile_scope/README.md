@@ -1,6 +1,6 @@
 # SFPU tile scope — apply rsqrt/reciprocal to only the vectors of a tile that matter
 
-**Difficulty:** ⭐⭐ T2 (the `r_iter2` knob) / ⭐⭐⭐ T3 (the `c_skip` sfpi stride)  ·  **Concept:** SFPU work-scoping
+**Problem type:** compute-bound: wasted SFPU work  ·  **Concept:** SFPU work-scoping
 **First profiled on:** `bh-50-special` · BH · 1350 MHz · 2026-07-22 · `59de133afc4`
 
 > Reading order: [`../master.md`](../master.md) → **this file** → run the CLI, and read the code only if you need to.
@@ -113,3 +113,20 @@ scripts/run_safe_pytest.sh ttnn/ttnn/operations/examples/sfpu_tile_scope/test_sf
 math-only `reps`-loop of the scoped op, pack once. `rsqrt_scoped`/`recip_scoped` thread `VectorMode`+`ITERATIONS`
 through the stock call (covers `rc`/`r`/`c`/`r_iter2`/`face`/`face_iter1`); `cskip_*_body` are the raw-sfpi
 even-parity stride loops for `c_skip`. The test reads the zone's TRISC_1 (math) duration from the profiler CSV.
+
+## When it helps / when it does not
+*Board: **Wormhole B0 n150** (1 Tensix core; the existing result above was measured on **Blackhole**, kept as is). Numbers come from `test_sfpu_tile_scope_regimes` (11 interleaved trials per variant, median (min-max)). Metric `math zone` = MATH-thread (TRISC_1) ns per SFPU call from the `DeviceZoneScopedN` loop (`reps=2000`); `whole op` = `DEVICE KERNEL DURATION [ns]` of a launch with `reps=1` (one SFPU call on one tile, with unpack/copy/pack/CB handshake). Speedup = baseline_ns / lever_ns.*
+
+| condition | func, metric | baseline | lever | speedup | trials | board |
+|---|---|---:|---:|---:|---:|---|
+| helps: row-0 result, SFPU time isolated | rsqrt, math zone | `rc` (32 vectors) 1139.1 ns | `r_iter2` (4 vectors) 156.1 ns (156.1-156.2) | 7.30x | 11 | WH B0 n150 |
+| helps: row-0 result, SFPU time isolated | recip, math zone | `rc` 563.1 ns | `r_iter2` 84.2 ns | 6.69x | 11 | WH B0 n150 |
+| helps but diluted: same op, whole kernel, 1 tile, 1 call | rsqrt, whole op | `rc` 1642 ns (1634-1656) | `r_iter2` 739 ns (738-749) | 2.22x | 11 | WH B0 n150 |
+| helps but diluted: same op, whole kernel, 1 tile, 1 call | recip, whole op | `rc` 1106 ns (1089-1124) | `r_iter2` 688 ns (685-708) | 1.61x | 11 | WH B0 n150 |
+| does not help: change of scope with the same vector count | rsqrt, math zone | `c` (16 vectors) 576.1 ns | `r` (16 vectors) 576.1 ns | 1.00x | 11 | WH B0 n150 |
+| does not help: change of scope with the same vector count | recip, math zone | `c` 288.1 ns | `r` 288.1 ns | 1.00x | 11 | WH B0 n150 |
+
+- **Helps:** cost is flat per 32-lane vector op on WH too (rsqrt 35.6 ns, recip 17.6 ns per vector), so a scope that runs 4 vectors instead of 32 is 6.7-7.3x cheaper in the SFPU; a result that lives on row 0 never needs the other 28.
+- **Does not help:** only the vector count matters, not which half of the tile: `VectorMode::R` and `VectorMode::C` both run 16 vectors and cost the same to the nanosecond, so swapping one for the other (or using either when a row-0 / col-0 scope is possible) gains nothing; the gain comes from reducing vectors (`r_iter2` 4, `c_skip` 8, `face_iter1` 1).
+- **Dilution (whole op):** the win shrinks as the non-SFPU part of the op grows: with a single SFPU call per tile it is 2.22x (rsqrt) / 1.61x (recip) instead of 7.3x / 6.7x, because the ~740-690 ns of unpack/copy/pack/handshake and launch floor does not shrink. The example kernel handles only one tile per launch, so a regime where the win vanishes entirely (data-movement-bound op) cannot be expressed with the existing API; per the formula, whole-op speedup = (floor + SFPU_rc) / (floor + SFPU_r_iter2), so it approaches 1.0x as floor >> SFPU time.
+- **WH B0 vs Blackhole:** per-vector cost is ~1.5x (rsqrt 35.6 ns vs 23.4 ns) / ~0.6x (recip 17.6 vs 28) of the Blackhole numbers above, so absolute ns differ; vector-count ratios (r_iter2 7.3x, `r`/`c` 2.0x) reproduce.

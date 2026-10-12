@@ -188,3 +188,73 @@ def test_mcast_topology_device_perf(device):
     Path(REPORT_PATH).parent.mkdir(parents=True, exist_ok=True)
     with open(REPORT_PATH, "a") as f:
         f.write(f"\n## {arch} — {box}\n\n```\n{header}\n" + "\n".join(lines) + "\n```\n")
+
+
+def _measure_interleaved_ns(device, run_fns, trials=10):
+    """Median/min/max ns per op per callable, windows interleaved A,B,A,B,... to limit drift."""
+    for fn in run_fns.values():
+        for _ in range(N_WARMUP):
+            fn()
+    ttnn.synchronize_device(device)
+    _read_kernel_ns(device)
+    samples = {k: [] for k in run_fns}
+    for _ in range(trials):
+        for k, fn in run_fns.items():
+            for _ in range(_INNER):
+                fn()
+            total = _read_kernel_ns(device)
+            assert total is not None, f"profiler produced no data for {k}"
+            samples[k].append(total / _INNER)
+    return {k: (statistics.median(v), min(v), max(v)) for k, v in samples.items()}
+
+
+# (Mt, Nt, Kt, regime, threshold). bf16 tiles. Gr x Gc = largest divisors of Mt / Nt fitting the grid.
+#   helps:          Mt=8, Nt=32, Kt=4 -> 8x8 = 64 Tensix cores, lines of 8 -> measured 1.89x on WH B0
+#   does_not_help:  Mt=4, Nt=4,  Kt=4 -> 4x4 = 16 Tensix cores, lines of 4 -> measured 1.01x
+#                   Mt=2, Nt=2,  Kt=4 -> 2x2 =  4 Tensix cores, lines of 2 -> measured 0.72x
+_REGIME_CASES = [
+    pytest.param(8, 32, 4, "helps", 1.45, id="helps_8x8_64cores"),
+    pytest.param(4, 4, 4, "does_not_help", 1.08, id="does_not_help_4x4_16cores"),
+    pytest.param(2, 2, 4, "does_not_help", 1.0, id="does_not_help_2x2_4cores"),
+]
+
+
+@pytest.mark.parametrize("mt,nt,kt,regime,threshold", _REGIME_CASES)
+def test_mcast_topology_regimes(device, mt, nt, kt, regime, threshold):
+    """When two 1-D multicasts beat per-core DRAM reads, and when they do not.
+
+    The saving is DRAM reads removed (line length x fewer); the cost is the per-line semaphore
+    handshake and the sender's serial read. With short lines (few cores per row/column) the saving is
+    small and the fixed handshake cost is not amortized.
+    """
+    # The regime thresholds below were calibrated on Wormhole B0 (n150). The boundary between
+    # "helps" and "does not help" moves with the arch (grid size, DRAM banks, NoC, clock), so on
+    # another arch re-measure the regimes and add its own thresholds before enabling this test.
+    if not ttnn.device.is_wormhole_b0(device):
+        pytest.skip("regime thresholds are calibrated on Wormhole B0 only; re-measure on this arch first")
+    lay = layout(device, mt, nt)
+    tt_a, tt_b, a, b = _operands(device, mt, nt, kt)
+
+    fns = {}
+    for variant in VARIANTS:
+        got = ttnn.to_torch(mcast_topology(tt_a, tt_b, variant=variant)).to(torch.float32)
+        for slot, tiles in _expected_probes(device, a, b, variant, mt, nt, kt).items():
+            for p, want in enumerate(tiles):
+                have = got[(slot * PROBES + p) * TILE : (slot * PROBES + p + 1) * TILE, :]
+                assert torch.equal(have, want.to(torch.bfloat16).to(torch.float32)), f"{variant}: wrong probe"
+        fns[variant] = lambda v=variant: mcast_topology(tt_a, tt_b, variant=v)
+
+    res = _measure_interleaved_ns(device, fns)
+    base, mc = res["per_core_dram"][0], res["mcast_1d_pair"][0]
+    speedup = base / mc
+    logger.info(
+        f"[mcast_topology regimes] {regime}: Mt={mt} Nt={nt} Kt={kt} split={lay['rows']}x{lay['cols']} "
+        f"({lay['cores']} Tensix cores) | per_core_dram {base:.0f} ns "
+        f"[{res['per_core_dram'][1]:.0f}-{res['per_core_dram'][2]:.0f}]  mcast_1d_pair {mc:.0f} ns "
+        f"[{res['mcast_1d_pair'][1]:.0f}-{res['mcast_1d_pair'][2]:.0f}]  speedup {speedup:.2f}x  "
+        f"trials=10x{_INNER}"
+    )
+    if regime == "helps":
+        assert speedup >= threshold, f"expected speedup >= {threshold:.2f}x, got {speedup:.2f}x"
+    else:
+        assert speedup <= threshold, f"expected speedup <= {threshold:.2f}x (no gain), got {speedup:.2f}x"

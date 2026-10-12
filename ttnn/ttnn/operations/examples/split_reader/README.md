@@ -80,6 +80,34 @@ barriers and CB waits rather than representing instruction-level utilization.
 
 See [`report.md`](report.md) for the measurement stamp.
 
+## When it helps / when it does not
+Board: **Wormhole B0 n150**. 8 source Tensix cores × 8 tiles (64 tiles = 128 KiB bf16), 8-tile
+blocks; only the NoC read size changes. Baseline = `split_reader=False`; lever = `split_reader=True`.
+Numbers from `test_split_reader_regimes` — median of 12 trials per variant (a trial = mean device
+kernel duration of 5 launches), baseline/lever trials interleaved; min–max in parentheses.
+
+| Condition | Shape | off (ns) | on (ns) | Speedup | Trials | Board |
+|---|---|--:|--:|--:|--:|---|
+| **Helps:** NCRISC issue-bound — 32 B per NoC read, 64 reads per tile, 4,096 reads/launch | `[2048, 32]`, 8 sources × 8 tiles | 147274 (147236–147332) | 79968 (79838–81451) | **1.84×** (runs: 1.84 / 1.84 / 1.84 / 1.84) | 12 | WH B0 n150 |
+| **Gain shrinks (no flat regime reachable):** 2,048 B per NoC read, 1 read per tile, 64 reads/launch | `[2048, 32]`, 8 sources × 8 tiles | 25041 (25026–25077) | 18182 (18175–18252) | **1.38×** (runs: 1.38 / 1.38 / 1.38 / 1.38) | 12 | WH B0 n150 |
+
+- **Helps:** at 32 B the baseline NCRISC lifetime (146.3 µs) is ~the whole device time and is 6× its
+  2,048 B value for the same bytes — it is spending its time issuing commands, so giving half the reads
+  to BRISC nearly halves it (on: NCRISC 73.7 µs, BRISC 79.9 µs).
+- **Gain shrinks:** from ≥1 KiB per read the baseline NCRISC lifetime is flat in read size (24.4 µs at
+  1,024 B, 24.1 µs at 2,048 B), so NCRISC is no longer issue-bound; what is left (~1.3–1.4×) comes from
+  the reader's `noc_async_read_barrier()` after every tile — one tile in flight per RISC-V, so a second
+  issuing RISC-V doubles the tiles in flight — and BRISC (half the reads + all DRAM writes) becomes
+  the critical RISC-V (on: BRISC 18.1 µs ≈ device time). Batching reads before the barrier on one
+  RISC-V (see `double_buffer`) addresses that latency case without splitting.
+- **Limitation / correction:** no configuration reachable through `row_gather_copy`'s arguments is
+  flat (≤ 1.05×) on WH B0 n150. Swept: 2–8 source Tensix cores, 1–32 tiles per source, 4/8/32-tile
+  blocks, 16–2,048 B per read — the lowest gain seen was **1.29×** (8 × 8 tiles, 4-tile blocks,
+  2,048 B). The table above (2026-07-16, another WH B0 box) shows 1.20× at 1–2 KiB; on this board and
+  commit the same configuration measures 1.36–1.38×.
+
+Reproduce: `scripts/run_safe_pytest.sh --run-all tests/ttnn/unit_tests/operations/examples/test_split_reader.py::test_split_reader_regimes`
+
 ## Run it
 
 ```bash

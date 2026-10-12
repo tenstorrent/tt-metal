@@ -1,6 +1,6 @@
 # trid_double_issue — keeping DRAM reads in flight ACROSS the barrier (transaction ids)
 
-**Difficulty:** ⭐⭐ T2  ·  **Concept(s):** barrier **granularity** on a DRAM read stream — a drain-everything `noc_async_read_barrier()` vs. a per-transaction-id wait · how that trades off against block size
+**Problem type:** data movement below the ceiling: latency  ·  **Concept(s):** barrier **granularity** on a DRAM read stream — a drain-everything `noc_async_read_barrier()` vs. a per-transaction-id wait · how that trades off against block size
 **First profiled on:** `bh-50-special-dstoiljkovic-for-reservation-88042` · Blackhole · 2026-09-10 · `dfc0dae18e4`
 
 > Reading order: [`../master.md`](../master.md) → **this file** → run the CLI, and read the code only if you need to.
@@ -171,6 +171,34 @@ where you still want the depth. The fully DRAM-saturated grid was not measured h
 **This is also why the two code paths here are the same size** (17 vs 23 lines): the complexity is
 not the ids, it is keeping N blocks in flight in a circular buffer at all, and both pay it. The
 trid-specific part is four lines — so once you are already batching, adding ids is nearly free.
+
+## When it helps / when it does not
+Board: **Blackhole** (`bh-50-…`, see the stamp above), 1 Tensix core unless stated, bf16 identity
+copy of an interleaved-DRAM `[512, 512]` tensor (256 tiles, 2048 B per tile = per NoC read).
+Baseline = the best `full_barrier` reader (`ahead` tuned, optimum `ahead=3` at `cb_blocks=6`);
+lever = the best `trid_double_issue` depth. Numbers are the measurements above, in GB/s (same
+bytes in every cell, so the GB/s ratio is the device-time ratio); each is the mean of 20 profiled
+launches ([`report.md`](report.md)). There is no `test_trid_double_issue_regimes` yet — these are
+Blackhole numbers and have not been re-measured on Wormhole B0.
+
+| Condition | Config | Best baseline (GB/s) | Best trid (GB/s) | Speedup | Launches | Board |
+|---|---|--:|--:|--:|--:|---|
+| **Helps:** small block, CB fixed at `cb_blocks=6` | block=2, `ahead=3` vs `trid ×4` | 39.4 | 64.3 | **1.63×** | 20 | BH |
+| **Helps:** one page per block | block=1, `ahead=3` vs `trid ×4` | 24.2 | 37.3 | **1.54×** | 20 | BH |
+| **Gain shrinks:** larger block | block=16, `ahead=3` vs `trid ×2` | 97.8 | 108.8 | **1.11×** | 20 | BH |
+| **Helps:** L1-capped CB | 96 KB CB | 89.8 | 107.1 | **1.19×** | 20 | BH |
+| **Does not help:** L1 free to widen the block | 768 KB CB | 120.9 | 122.2 | **1.01×** (trivial one-block loop 118.7, within 3%) | 20 | BH |
+| **Does not help:** shallow ring vs tuned baseline | block=4, `ahead=3` vs `trid ×2` | 62.2 | 62.1 | **1.00×** | 20 | BH |
+
+- **Helps** when the block cannot be widened (a shard size, a wide tensor or co-resident buffers
+  cap L1): a ring of depth 3–4 keeps reads on the wire across each wait, and reaches a given GB/s
+  with ~1.5–2× less L1 (trid at 192 KB, 119.5 GB/s, matches the baseline at 384 KB). It is a
+  latency effect (1.54–1.59× at block=1 from bfp8 to fp32) and per core (1.48× at block=1 on 6
+  Tensix cores, 346 GB/s).
+- **Does not help** once L1 is free: every reader converges on the ~122 GB/s single-core ceiling,
+  so widen the block and write the trivial loop. Tune `ahead` before adding ids — batching blocks
+  per barrier is the bigger win (block=8: `ahead=1` 52.1 → `ahead=3` 85.1 GB/s) — and a depth-2
+  ring only ties a tuned baseline. The DRAM-saturated full grid was not measured.
 
 ## Run the predefined sweep
 ```bash

@@ -21,6 +21,7 @@ import socket
 import statistics
 from pathlib import Path
 
+import pytest
 import torch
 import ttnn
 from loguru import logger
@@ -307,3 +308,54 @@ def _format_report(samples, acc, variants, dims, accums, widths, *, perf_accum, 
         "is ~100x more accurate in fp32.",
     ]
     return "\n".join(lines) + "\n"
+
+
+# =============================================================================
+# Regimes: where the accumulate+SFPU-finalize fast path helps vs does not (Wormhole B0 n150)
+# =============================================================================
+# (id, dim, tiles reduced, kind, threshold)
+#   helps:          assert speedup (helper_ns / fast_ns) >= threshold  (= 1 + 0.5*(measured-1), >= 1.05)
+#   does_not_help:  assert speedup <= threshold
+_REGIME_TRIALS = 11
+_REGIMES = [
+    ("helps_row_32t", "row", 32, "helps", 1.45),
+    ("helps_col_32t", "col", 32, "helps", 1.35),
+    ("helps_scalar_32t", "scalar", 32, "helps", 1.9),
+    ("not_row_1t", "row", 1, "does_not_help", 1.0),
+    ("not_row_4t", "row", 4, "does_not_help", 1.0),
+    ("not_col_4t", "col", 4, "does_not_help", 1.0),
+    ("not_scalar_4t", "scalar", 4, "does_not_help", 1.0),
+]
+
+
+@pytest.mark.parametrize("regime", _REGIMES, ids=[r[0] for r in _REGIMES])
+def test_reduce_accumulate_regimes(device, regime):
+    # The regime thresholds below were calibrated on Wormhole B0 (n150). The boundary between
+    # "helps" and "does not help" moves with the arch (grid size, DRAM banks, NoC, clock), so on
+    # another arch re-measure the regimes and add its own thresholds before enabling this test.
+    if not ttnn.device.is_wormhole_b0(device):
+        pytest.skip("regime thresholds are calibrated on Wormhole B0 only; re-measure on this arch first")
+    name, dim, n, kind, threshold = regime
+    x_dev, golden = _make_input(device, dim, n)
+    kernel_iters = 200
+
+    def runner(variant):
+        return lambda: run_op(x_dev, variant=variant, dim=dim, num_tiles=n, accum="fp32", kernel_iters=kernel_iters)
+
+    # correctness of both variants (reuses the file's accuracy gate)
+    for variant in ("helper", "fast"):
+        out = run_op(x_dev, variant=variant, dim=dim, num_tiles=n, accum="fp32", kernel_iters=1)
+        _check(out, golden, dim, "fp32", f"{variant}/{dim} N={n}")
+
+    samples = _measure(device, {"helper": runner("helper"), "fast": runner("fast")}, _REGIME_TRIALS, kernel_iters)
+    base, lever = statistics.median(samples["helper"]), statistics.median(samples["fast"])
+    speedup = base / lever
+    logger.info(
+        f"[WH_B0] {name}: dim={dim} tiles_reduced={n} helper={base:.0f} ns (min {min(samples['helper']):.0f}, "
+        f"max {max(samples['helper']):.0f}) fast={lever:.0f} ns (min {min(samples['fast']):.0f}, "
+        f"max {max(samples['fast']):.0f}) speedup={speedup:.2f}x trials={_REGIME_TRIALS}"
+    )
+    if kind == "helps":
+        assert speedup >= threshold, f"{name}: speedup {speedup:.2f}x < {threshold}"
+    else:
+        assert speedup <= threshold, f"{name}: speedup {speedup:.2f}x > {threshold}"

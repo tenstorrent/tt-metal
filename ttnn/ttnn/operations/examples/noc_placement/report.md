@@ -38,3 +38,48 @@
 
 Mirror symmetry: read·NoC0 ≈ write·NoC1, read·NoC1 ≈ write·NoC0 (same links, reversed).
 See `noc_placement_matrix.html` for the per-cell NoC link-demand heatmaps.
+
+## 2026-10-12 — helps / does-not-help regimes (Wormhole B0 n150, commit `adce58258c3` + uncommitted test)
+
+Source: `test_noc_placement_regimes` — identity copy, `shape=(1024, 2048)` = 2048 bf16 tiles, `kernel_iters=2`,
+baseline/lever interleaved A,B,A,B; one trial = mean of 3 launches; median of 12 trials; metric
+`DEVICE KERNEL DURATION [ns]`. Three independent runs:
+
+```
+regime                           baseline -> lever       run1 base / lever (ns)    run2 base / lever (ns)    run3 base / lever (ns)    speedup r1/r2/r3
+placement_helps_8cores_block16   column -> row (NoC0)    246765 /  84917           246774 /  85072           247115 /  85007           2.91 / 2.90 / 2.91
+placement_flat_2cores_block1     column -> row (NoC0)   1106889 / 1077065         1110298 / 1076975         1108417 / 1077122          1.03 / 1.03 / 1.03
+noc_helps_row_8cores_block16     row: rd NoC1 -> NoC0    278002 /  85066           278070 /  85139           278148 /  84912           3.27 / 3.27 / 3.28
+noc_loses_1core_block16          row: rd NoC1 -> NoC0    404600 / 429238           404699 / 429237           404466 / 429135           0.94 / 0.94 / 0.94
+```
+Run-1 spreads (min–max over 12 trials): placement_helps 246316–247525 / 84155–86778; placement_flat
+1091085–1115261 / 1076902–1077855; noc_helps 276867–279155 / 84521–85694; noc_loses 404361–404747 / 428252–429843.
+
+Probe sweep (tt-probe, `kernel_iters=8` unless noted, 12 trials × 3 launches, medians; baseline -> lever):
+
+```
+op    lever               cores block  payload            base ns    lever ns  speedup
+copy  column -> row         8    16    2048 t            971448     330382    2.94
+copy  column -> row         4    16    2048 t           1027682     466852    2.20
+copy  column -> row         2    16    2048 t           1139232     871032    1.31
+copy  column -> row         8     2    2048 t            980272     698534    1.40
+copy  column -> row         8     1    2048 t           1260383    1160093    1.09
+copy  column -> row         4     1    2048 t           2289500    2194410    1.04
+copy  column -> row         2     1    2048 t           4334477    4304911    1.01
+copy  column -> row         8     1    256 t, iters=1     20733      19106    1.09
+copy  column -> row         8    16    64 t, iters=1       6840       2582    2.65
+copy  column -> row         8    16    16 t, iters=1       2179       1441    1.51
+copy  column -> row         8    16    8 t, iters=1        1604       1254    1.28
+read  row: NoC1 -> NoC0     8    16    2048 t            968546     201563    4.81
+read  row: NoC1 -> NoC0     2    16    2048 t           1202660     726863    1.65
+read  row: NoC1 -> NoC0     1    16    2048 t           1448399    1453198    1.00
+read  row: NoC1 -> NoC0     8     1    2048 t           1037139     969321    1.07
+read  row: NoC1 -> NoC0     2     1    2048 t           3696994    3554184    1.04
+write row: NoC0 -> NoC1     8    16    2048 t           1043928     243406    4.29
+write row: NoC0 -> NoC1     8     1    2048 t           1130006     971170    1.16
+copy  row: rd NoC1 -> NoC0  8    16    2048 t           1091021     327158    3.33
+copy  row: rd NoC1 -> NoC0  8     1    2048 t           1285923    1165302    1.10
+copy  row: rd NoC1 -> NoC0  1    16    2048 t           1613496    1713602    0.94
+```
+The 2026-07-17 matrix above reproduces on this board (copy column/row 2.94× vs 2.91×; read row NoC0/NoC1 4.81× vs 4.8×;
+write row NoC1/NoC0 4.29× vs 4.3×).

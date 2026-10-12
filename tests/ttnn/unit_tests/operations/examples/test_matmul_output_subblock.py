@@ -194,3 +194,87 @@ def test_matmul_output_subblock_device_perf(device):
         logger.info(f"[matmul_output_subblock] wrote {REPORT_PATH}")
     except OSError as e:
         logger.warning(f"[matmul_output_subblock] could not write report: {e}")
+
+
+# =============================================================================
+# Regimes (Wormhole B0 n150): interleaved A,B,A,B... medians of >= 10 trials per variant
+# =============================================================================
+_REGIME_TRIALS = 11
+_REGIME_ITERS = 20
+
+
+def _regime_inputs(device, mt, nt, kt):
+    torch.manual_seed(0)
+    a = torch.randn(mt * TILE, kt * TILE, dtype=torch.float32) * 0.1
+    b = torch.randn(kt * TILE, nt * TILE, dtype=torch.float32) * 0.1
+    mk = lambda t, h, w: ttnn.from_torch(
+        t,
+        dtype=ttnn.bfloat16,
+        layout=ttnn.TILE_LAYOUT,
+        device=device,
+        memory_config=create_sharded_memory_config(h, w),
+    )
+    tt_c = ttnn.allocate_tensor_on_device(
+        ttnn.Shape([mt * TILE, nt * TILE]),
+        ttnn.bfloat16,
+        ttnn.TILE_LAYOUT,
+        device,
+        create_sharded_memory_config(mt, nt),
+    )
+    return mk(a, mt, kt), mk(b, kt, nt), tt_c, a @ b
+
+
+# (Mt, Nt, Kt tiles, baseline, lever, verdict, measured speedup)
+#   helps:          16x16 output tiles, Kt=1: sb_1x1 -> sb_2x4 (8-tile subblock, A reused across 4 B-tiles).
+#   helps (shape):  same problem, tall sb_8x1 -> wide sb_1x8 -- on Wormhole B0 the two 8-tile shapes are NOT
+#                   equivalent (the Blackhole README claimed they are).
+#   does_not_help:  2x2 output tiles, Kt=1: sb_1x1 -> sb_2x2. Only 4 output tiles per pass, so there is no
+#                   operand reload left to amortize (~1.01x). Large Kt does NOT cancel the win (still ~1.7x at Kt=12).
+_REGIMES = [
+    pytest.param(16, 16, 1, "sb_1x1", "sb_2x4", "helps", 1.74, id="helps_16x16t_Kt1_1x1_to_2x4"),
+    pytest.param(16, 16, 1, "sb_8x1", "sb_1x8", "helps", 1.40, id="helps_16x16t_Kt1_tall8x1_to_wide1x8"),
+    pytest.param(2, 2, 1, "sb_1x1", "sb_2x2", "does_not_help", 1.01, id="flat_2x2t_Kt1_1x1_to_2x2"),
+]
+
+
+@pytest.mark.parametrize("mt,nt,kt,base_variant,lever_variant,verdict,measured", _REGIMES)
+def test_matmul_output_subblock_regimes(device, mt, nt, kt, base_variant, lever_variant, verdict, measured):
+    # The regime thresholds below were calibrated on Wormhole B0 (n150). The boundary between
+    # "helps" and "does not help" moves with the arch (grid size, DRAM banks, NoC, clock), so on
+    # another arch re-measure the regimes and add its own thresholds before enabling this test.
+    if not ttnn.device.is_wormhole_b0(device):
+        pytest.skip("regime thresholds are calibrated on Wormhole B0 only; re-measure on this arch first")
+    tt_a, tt_b, tt_c, expected = _regime_inputs(device, mt, nt, kt)
+    for variant in (base_variant, lever_variant):  # correctness gate
+        out = ttnn.to_torch(matmul_output_subblock(tt_a, tt_b, variant=variant, kernel_iters=1)).to(torch.float32)
+        assert_with_pcc(expected, out, PCC)
+
+    runs = {}
+    for name, variant in (("base", base_variant), ("lever", lever_variant)):
+        desc = create_program_descriptor(tt_a, tt_b, tt_c, variant=variant, kernel_iters=_REGIME_ITERS)
+        runs[name] = lambda d=desc: ttnn.generic_op([tt_a, tt_b, tt_c], d)
+    for run in runs.values():
+        run()
+    ttnn.synchronize_device(device)
+    _read_kernel_ns(device)  # discard warmup window
+    samples = {"base": [], "lever": []}
+    for trial in range(_REGIME_TRIALS + 1):
+        for name, run in runs.items():
+            run()
+            ns = _read_kernel_ns(device)
+            assert ns is not None, f"no profiler data for {name}"
+            if trial:  # discard first timed pass
+                samples[name].append(ns / _REGIME_ITERS)
+    base, lever = samples["base"], samples["lever"]
+    b, l = statistics.median(base), statistics.median(lever)
+    speedup = b / l
+    arch = {"WORMHOLE_B0": "WH_B0", "BLACKHOLE": "BH"}.get(str(device.arch()).rsplit(".", 1)[-1], str(device.arch()))
+    logger.info(
+        f"[{arch}] {verdict} M={mt} N={nt} K={kt} tiles: {base_variant} {b:.0f} ns [{min(base):.0f}..{max(base):.0f}] "
+        f"-> {lever_variant} {l:.0f} ns [{min(lever):.0f}..{max(lever):.0f}] = {speedup:.2f}x "
+        f"(trials={len(base)}, ns per matmul)"
+    )
+    if verdict == "helps":
+        assert speedup >= max(1.05, 1 + 0.5 * (measured - 1)), f"expected a clear win, got {speedup:.2f}x"
+    else:
+        assert speedup <= 1.05, f"expected no meaningful gain (<= 1.05x), got {speedup:.2f}x"

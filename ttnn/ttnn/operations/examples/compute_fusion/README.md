@@ -1,6 +1,6 @@
 # compute_fusion — fusing an expression through DEST vs. round-tripping intermediates through L1
 
-**Difficulty:** ⭐⭐ T2  ·  **Concept(s):** compute fusion (keeping intermediates in DEST) vs.
+**Problem type:** compute-bound: L1 round-trips  ·  **Concept(s):** compute fusion (keeping intermediates in DEST) vs.
 per-op L1 round-trips; secondary: DEST-lane block size.
 **First profiled on:** `bgd-lab-t3003-special-mstaletovic-for-reservation-40918` · WH B0 · 1000 MHz · 2026-07-10
 
@@ -191,3 +191,19 @@ per scenario, method selected by a compile-time arg; phases wrapped in `CF_PHASE
 CSV-based per-zone reader live in
 `../../../../../tests/ttnn/unit_tests/operations/examples/test_compute_fusion.py`. Committed reports:
 `report.md` (whole-kernel A/B) and `microbench_report.md` (per-phase zone breakdown).
+
+## When it helps / when it does not
+Board: **Wormhole B0 n150** (1 Tensix core, sharded L1, kernel-iters 100, DEVICE KERNEL DURATION per expression evaluation,
+interleaved trials, median). Numbers come from `test_compute_fusion_regimes`.
+
+| Condition | Scenario, shape | Baseline ns | Lever ns | Speedup | Trials | Board |
+|---|---|---:|---:|---:|---:|---|
+| **Helps:** every intermediate feeds an SFPU op (consumer reads DEST natively); small work per call | `sfpu_chain` n=4 tiles, blk=4 | 9674 (`unfused`) | 8632 (`fused`) | 1.12x | 11 | WH B0 n150 |
+| **Does not help (loses):** the consumer of the intermediate is an FPU op | `fpu_sfpu` n=64 tiles, blk=1 | 77734 (`unfused`) | 84105 (`dstreuse`) | 0.92x | 11 | WH B0 n150 |
+
+Spread: 9671..9679 / 8631..8634 and 77708..77746 / 83856..84816 ns.
+
+- **Helps** because pack -> L1 -> unpack of an intermediate that an SFPU op consumes is pure overhead, and removing it
+  saves a roughly fixed ~1 us per call at 4 tiles. The same fusion gives only ~1.05x at 64 tiles (the saving per tile is small, see the table above).
+- **Does not help** when the next op is an FPU op: the FPU reads source registers, not DEST, so reusing DEST adds a per-tile DEST-to-source transfer
+  that costs more than the pack+unpack it replaces; keep the L1 round-trip and the FPU op reading from L1.

@@ -24,6 +24,8 @@ os.environ.setdefault("TT_METAL_DEVICE_PROFILER", "1")
 os.environ.setdefault("TT_METAL_PROFILER_MID_RUN_DUMP", "1")
 os.environ.setdefault("TT_METAL_PROFILER_CPP_POST_PROCESS", "1")
 
+import statistics
+
 import pytest
 import torch
 
@@ -33,7 +35,6 @@ from ttnn.operations.examples.width_split import width_split, VARIANTS
 from loguru import logger
 
 from tests.ttnn.utils_for_testing import assert_with_pcc
-
 
 TILE = 32
 _DTYPES = {"bfloat8_b": (ttnn.bfloat8_b, 0.99), "bfloat16": (ttnn.bfloat16, 0.9999), "float32": (ttnn.float32, 0.9999)}
@@ -135,3 +136,84 @@ def test_width_split_device_perf(device):
             tag = "  (base)" if variant == "single_core" else (f"  {spd:5.2f}x" if spd else "")
             lines.append(f"    {w:>6}  {w // TILE:>4}  {variant:<12}  {cores:>5}  {v:>11.1f}{tag}")
     logger.info("\n".join(lines))
+
+
+# ---------------------------------------------------------------------------
+# When width-splitting helps / when it does not (Wormhole B0 n150 calibration).
+#
+#   helps          Wt=64 (W=2048): single_core serializes 64 tiles; width_split puts
+#                  1 tile on each of 64 Tensix cores.            measured ~6.0x
+#   does_not_help  Wt=2  (W=64):   the whole tensor is 2 tiles — one 8-tile read block
+#                  on one Tensix core costs ~2.1 us, dominated by the ~1.8 us fixed
+#                  per-launch cost; a 2nd Tensix core only adds its own startup.  ~0.98x
+#
+# A trial = mean device kernel duration over _LAUNCHES_PER_TRIAL launches of one
+# variant (one profiler window). Baseline/lever trials are interleaved A,B,A,B and
+# the median of _N_TRIALS trials per variant is compared.
+# ---------------------------------------------------------------------------
+
+_N_TRIALS = 12
+_LAUNCHES_PER_TRIAL = 5
+
+# (regime id, W, kind, min speedup | max speedup). Thresholds: helps -> 1 + 0.5*(measured-1),
+# floor 1.05; does_not_help -> <= 1.05.
+_REGIMES = [
+    ("helps_wt64", 2048, "helps", 3.5),  # measured ~6.1x -> 1 + 0.5*5.1 = 3.55, rounded down
+    ("does_not_help_wt2", 64, "does_not_help", 1.05),
+]
+
+
+def _trial_ns(device, run_fn):
+    for _ in range(_LAUNCHES_PER_TRIAL):
+        run_fn()
+    total = _read_kernel_ns(device)
+    assert total is not None, "profiler produced no data (profiler-enabled build?)"
+    return total / _LAUNCHES_PER_TRIAL
+
+
+def _interleaved(device, run_base, run_lever):
+    for _ in range(N_WARMUP):
+        run_base()
+        run_lever()
+    ttnn.synchronize_device(device)
+    _read_kernel_ns(device)  # flush warmup window
+    base, lever = [], []
+    for _ in range(_N_TRIALS):
+        base.append(_trial_ns(device, run_base))
+        lever.append(_trial_ns(device, run_lever))
+    return base, lever
+
+
+@pytest.mark.parametrize("regime,w,kind,threshold", _REGIMES, ids=[r[0] for r in _REGIMES])
+def test_width_split_regimes(device, regime, w, kind, threshold):
+    """single_core (baseline) vs width_split (lever) at a width where splitting pays and
+    one where it does not. Checks relu correctness for both, then asserts the speedup band."""
+    # The regime thresholds below were calibrated on Wormhole B0 (n150). The boundary between
+    # "helps" and "does not help" moves with the arch (grid size, DRAM banks, NoC, clock), so on
+    # another arch re-measure the regimes and add its own thresholds before enabling this test.
+    if not ttnn.device.is_wormhole_b0(device):
+        pytest.skip("regime thresholds are calibrated on Wormhole B0 only; re-measure on this arch first")
+    tt_input = _make_input(device, w, dtype=ttnn.bfloat16)
+    expected = torch.relu(ttnn.to_torch(tt_input).to(torch.float32))
+    for variant in VARIANTS:
+        out = ttnn.to_torch(width_split(tt_input, variant=variant)).to(torch.float32)
+        assert_with_pcc(expected, out, 0.9999)
+
+    base, lever = _interleaved(
+        device,
+        lambda: width_split(tt_input, variant="single_core"),
+        lambda: width_split(tt_input, variant="width_split"),
+    )
+    b_med, l_med = statistics.median(base), statistics.median(lever)
+    speedup = b_med / l_med
+    wt = w // TILE
+    logger.info(
+        f"[WH_B0] width_split {regime}: W={w} Wt={wt} cores={_active_cores(device, 'width_split', w)} | "
+        f"single_core median {b_med:.1f} ns (min {min(base):.1f} max {max(base):.1f}) | "
+        f"width_split median {l_med:.1f} ns (min {min(lever):.1f} max {max(lever):.1f}) | "
+        f"speedup {speedup:.2f}x | trials {_N_TRIALS}x{_LAUNCHES_PER_TRIAL} launches"
+    )
+    if kind == "helps":
+        assert speedup >= threshold, f"{regime}: expected >= {threshold}x, got {speedup:.2f}x"
+    else:
+        assert speedup <= threshold, f"{regime}: expected <= {threshold}x, got {speedup:.2f}x"

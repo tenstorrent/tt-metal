@@ -38,3 +38,17 @@ isolation check: max unpack=0.007 ns/call, max pack=0.007 ns/call inside the zon
 isolation check: max unpack=0.007 ns/call, max pack=0.007 ns/call inside the zone (≈0 → the SFPU is alone on the math thread).
 
 Notes: an SFPU vector op = 4 rows x 8 stride-2 columns; a 32x32 tile is 32 vector ops (4 faces x 4 row-groups x 2 column parities). The MATH cost is ~flat per vector op (see ns/vector), so the ladder is just how many vector ops the scope runs: rc=32 -> r/c=16 -> c_skip/face=8 -> r_iter2=4 -> face_iter1=1. Two axis-optimal tricks vs the coarse half-tile modes: for a ROW-0 result the row waste is the OUTER walk axis, so ITERATIONS truncates it — r_iter2 = VectorMode::R + ITERATIONS=2 keeps the top row-group of both top faces = 4 vectors (a pure knob turn). For a COL-0 result the waste is column PARITY, the INNER walk axis (vectors alternate even/odd), so ITERATIONS can't isolate it — c_skip strides the DEST address by 2 (raw sfpi) to keep only the even-parity vectors (which hold column 0) of the two left faces = 8 vectors. That is why r_iter2 (4) beats c_skip (8), and why the row trick is a knob but the column trick needs raw sfpi. This is the SFPU cost in ISOLATION; in a full op the copy/pack/DRAM around it dilute the win, and a data-movement-bound op won't show it. recip costs more per vector than rsqrt (heavier op); its c_skip uses the Newton reciprocal body (the stock recip fast path uses SFPLOADMACRO addressing that can't be strided the same way), so its per-vector cost differs slightly from stock recip.
+
+## 2026-10-12 - regime measurements (Wormhole B0 n150)
+Source: `test_sfpu_tile_scope_regimes`, 1 Tensix core, bf16 tile in sharded L1, 11 interleaved trials per variant; median (min-max). The report above this section was measured on Blackhole.
+
+| func | metric | baseline | lever | speedup |
+|---|---|---:|---:|---:|
+| rsqrt | math zone ns/call, reps=2000 | rc 1139.1 (1139.1-1139.1) | r_iter2 156.1 (156.1-156.2) | 7.30x |
+| recip | math zone ns/call, reps=2000 | rc 563.1 | r_iter2 84.2 | 6.69x |
+| rsqrt | whole op kernel ns, reps=1 | rc 1642 (1634-1656) | r_iter2 739 (738-749) | 2.22x |
+| recip | whole op kernel ns, reps=1 | rc 1106 (1089-1124) | r_iter2 688 (685-708) | 1.61x |
+| rsqrt | math zone ns/call, reps=2000 | c 576.1 (576.1-576.1) | r 576.1 (576.1-576.1) | 1.00x |
+| recip | math zone ns/call, reps=2000 | c 288.1 | r 288.1 | 1.00x |
+
+Three runs: rsqrt zone 7.30x x3, recip zone 6.69x x3, rsqrt whole-op 2.21/2.22/2.22x, recip whole-op 1.59/1.61/1.60x, c-vs-r 1.00x x3 for both.

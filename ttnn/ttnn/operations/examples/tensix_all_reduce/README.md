@@ -1,6 +1,6 @@
 # Tensix rectangular all-reduce - on-chip collective algorithm bake-off
 
-**Difficulty:** ⭐⭐⭐ T3  ·  **Concept(s):** Tensix-to-Tensix transfer topology and reduction work distribution
+**Problem type:** cross-core communication  ·  **Concept(s):** Tensix-to-Tensix transfer topology and reduction work distribution
 **First profiled on:** `bgd-lab-t3003-special-mstaletovic-for-reservation-40918` · Wormhole B0 · 1000 MHz · 2026-07-10 · `5f0ad060667`
 
 > Reading order: [`../master.md`](../master.md) → **this file** → run the CLI, and read the code only if you need to.
@@ -314,3 +314,25 @@ asserted.
 
 The complete host descriptor and inline dataflow/compute kernels are in
 `program_descriptor_with_inline_kernels.py`; `__main__.py` provides the CLI.
+
+## When it helps / when it does not
+
+Board: **Wormhole B0 n150**; numbers from `test_tensix_all_reduce_regimes` (baseline `reduce_root_mcast`,
+lever `reduce_scatter_mcast`; bf16, 10 in-kernel all-reduces per launch, interleaved A/B, median of 11
+retained trials, 2026-10-12). All shapes use 64 Tensix cores in total (one group per row/column slice).
+Earlier tables above that name Blackhole were measured on Blackhole; this section is Wormhole only.
+
+| Condition | Shape(s) | Baseline ns | Lever ns | Speedup | Trials | Board |
+|---|---|---:|---:|---:|---:|---|
+| **Helps:** 8-Tensix-core group, 6 tiles per core (>= 6 workers busy) | `1x8` x 8 groups | 6145 (6133-6153) | 3646 (3600-3708) | **1.68x** | 11 | WH B0 n150 |
+| **Does not help:** 4-Tensix-core group, 6 tiles per core | `1x4` x 16 groups | 3976 (3950-4254) | 4663-5120 (4349-5557) | **0.78-0.85x** (slower) | 11 | WH B0 n150 |
+| **Does not help:** 8-Tensix-core group, 1 tile per core (only 1 worker) | `1x8` x 8 groups | 1614 (1603-1623) | 1994 (1990-2000) | **0.81x** (slower) | 11 | WH B0 n150 |
+
+Reduce-scatter pays for an extra worker-to-root handoff and a second synchronization round, and only
+earns that back when the root's serial reduction (`group_size - 1` blocks times tiles per core) is long
+enough to split across `min(tiles per core, group_size)` workers: at 8 cores and 6 tiles the root does
+7 x 6 tile-adds serially and reduce-scatter wins 1.68x; at 4 cores (3 x 6) or at 1 tile per core (one
+worker, so no parallelism to gain) the handoff is pure overhead and root reduction is 1.2-1.3x faster.
+The 4-core reduce-scatter times are noisy (spread up to ~25%); the root times are stable. This confirms
+the existing claim that root reduction wins 4-core groups on Wormhole B0, and adds the 1-tile boundary
+(the Blackhole 1-tile table above shows the same reduce-scatter loss).
