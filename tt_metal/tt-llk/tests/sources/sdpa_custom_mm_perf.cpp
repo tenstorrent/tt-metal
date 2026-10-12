@@ -43,7 +43,17 @@ void run_kernel(RUNTIME_PARAMETERS params)
 #if defined(RUNTIME_FORMATS) && !defined(SPEED_OF_LIGHT)
     const FormatConfig& formats = params.formats;
 #endif
+#ifndef SPEED_OF_LIGHT
     const std::uint32_t LOOP_FACTOR = params.LOOP_FACTOR;
+    const auto& in1_face_r_dim = params.in1_face_r_dim;
+    const auto& in0_face_r_dim = params.in0_face_r_dim;
+    const auto& num_faces_A = params.num_faces_A;
+    const auto& num_faces_B = params.num_faces_B;
+    const auto& TILE_SIZE_UNPACK_A = params.TILE_SIZE_UNPACK_A;
+    const auto& TILE_SIZE_UNPACK_B = params.TILE_SIZE_UNPACK_B;
+    const auto& buffer_A = params.buffer_A;
+    const auto& buffer_B = params.buffer_B;
+#endif
     {
         START_PERF_MEASURE("INIT")
         _llk_unpack_hw_configure_<is_fp32_dest_acc_en>(
@@ -51,13 +61,13 @@ void run_kernel(RUNTIME_PARAMETERS params)
             formats.unpack_B_src,
             formats.unpack_A_dst,
             formats.unpack_B_dst,
-            params.in1_face_r_dim,
-            params.in0_face_r_dim,
-            params.num_faces_A,
-            params.num_faces_B,
-            params.TILE_SIZE_UNPACK_A,
-            params.TILE_SIZE_UNPACK_B);
-        _llk_unpack_AB_custom_mm_init_<MM_TRANSPOSE, false /* clear_src */>(params.in0_face_r_dim, formats.unpack_A_dst, CT_DIM);
+            in1_face_r_dim,
+            in0_face_r_dim,
+            num_faces_A,
+            num_faces_B,
+            TILE_SIZE_UNPACK_A,
+            TILE_SIZE_UNPACK_B);
+        _llk_unpack_AB_custom_mm_init_<MM_TRANSPOSE, false /* clear_src */>(in0_face_r_dim, formats.unpack_A_dst, CT_DIM);
         PROFILER_SYNC();
     }
     {
@@ -74,17 +84,17 @@ void run_kernel(RUNTIME_PARAMETERS params)
             for (std::uint32_t loop = 0; loop < LOOP_FACTOR; ++loop)
             {
                 _llk_unpack_AB_sdpa_custom_mm_<READ_TRANSPOSED, false /* configure_mask_extent */, sdpa_custom_mm_unpack_waits_at_end(SIGNAL_GRANULARITY)>(
-                    L1_ADDRESS(params.buffer_A[0]),
-                    L1_ADDRESS(params.buffer_B[0]),
+                    L1_ADDRESS(buffer_A[0]),
+                    L1_ADDRESS(buffer_B[0]),
                     /* base_address_mask */ 0,
                     /* tile_index_a */ 0,
                     /* tile_index_b */ 0,
-                    params.TILE_SIZE_UNPACK_A,
-                    params.TILE_SIZE_UNPACK_B,
+                    TILE_SIZE_UNPACK_A,
+                    TILE_SIZE_UNPACK_B,
                     KT_DIM,
                     CT_DIM,
                     /* mask_chunk */ false,
-                    params.in0_face_r_dim);
+                    in0_face_r_dim);
             }
         }
         PROFILER_SYNC();
@@ -106,12 +116,15 @@ void run_kernel(RUNTIME_PARAMETERS params)
 #if defined(RUNTIME_FORMATS) && !defined(SPEED_OF_LIGHT)
     const FormatConfig& formats = params.formats;
 #endif
+#ifndef SPEED_OF_LIGHT
     const std::uint32_t LOOP_FACTOR = params.LOOP_FACTOR;
+    const auto& in0_face_r_dim = params.in0_face_r_dim;
+#endif
     {
         START_PERF_MEASURE("INIT")
         _llk_math_pack_sync_init_<DstSync::SyncHalf, is_fp32_dest_acc_en>();
         _llk_math_hw_configure_<is_fp32_dest_acc_en>(formats.math, formats.math);
-        _llk_math_sdpa_custom_mm_init_<MM_TRANSPOSE>(params.in0_face_r_dim, CT_DIM);
+        _llk_math_sdpa_custom_mm_init_<MM_TRANSPOSE>(in0_face_r_dim, CT_DIM);
         PROFILER_SYNC();
     }
     {
@@ -127,7 +140,7 @@ void run_kernel(RUNTIME_PARAMETERS params)
         {
             for (std::uint32_t loop = 0; loop < LOOP_FACTOR; ++loop)
             {
-                _llk_math_sdpa_custom_mm_<SIGNAL_GRANULARITY>(params.in0_face_r_dim, 0 /* dst_index */, KT_DIM, CT_DIM, false /* mask_chunk */);
+                _llk_math_sdpa_custom_mm_<SIGNAL_GRANULARITY>(in0_face_r_dim, 0 /* dst_index */, KT_DIM, CT_DIM, false /* mask_chunk */);
             }
         }
         else
@@ -135,7 +148,7 @@ void run_kernel(RUNTIME_PARAMETERS params)
             for (std::uint32_t loop = 0; loop < LOOP_FACTOR; ++loop)
             {
                 _llk_math_wait_for_dest_available_<DstSync::SyncHalf>();
-                _llk_math_sdpa_custom_mm_<SIGNAL_GRANULARITY>(params.in0_face_r_dim, 0 /* dst_index */, KT_DIM, CT_DIM, false /* mask_chunk */);
+                _llk_math_sdpa_custom_mm_<SIGNAL_GRANULARITY>(in0_face_r_dim, 0 /* dst_index */, KT_DIM, CT_DIM, false /* mask_chunk */);
                 _llk_math_dest_section_done_<DstSync::SyncHalf, is_fp32_dest_acc_en>();
             }
         }
@@ -167,14 +180,20 @@ void run_kernel(RUNTIME_PARAMETERS params)
 #if defined(RUNTIME_FORMATS) && !defined(SPEED_OF_LIGHT)
     const FormatConfig& formats = params.formats;
 #endif
+#ifndef SPEED_OF_LIGHT
     const std::uint32_t LOOP_FACTOR = params.LOOP_FACTOR;
+    const auto& TILE_SIZE_PACK = params.TILE_SIZE_PACK;
+    const auto& in0_face_r_dim = params.in0_face_r_dim;
+    const auto& num_faces = params.num_faces;
+    const auto& buffer_Res = params.buffer_Res;
+#endif
     {
         START_PERF_MEASURE("INIT")
         _llk_pack_dest_init_<DstSync::SyncHalf, is_fp32_dest_acc_en>();
         _llk_pack_hw_configure_wrapper_<is_fp32_dest_acc_en, PackMode::Default>(
-            formats.pack_src, formats.pack_dst, params.TILE_SIZE_PACK, params.in0_face_r_dim, TILE_C_DIM, params.num_faces, true /*partial_face*/);
+            formats.pack_src, formats.pack_dst, TILE_SIZE_PACK, in0_face_r_dim, TILE_C_DIM, num_faces, true /*partial_face*/);
         _llk_pack_init_<PackMode::Default, false /*zero_output*/, false /*skip_addrmod_config*/, true /*skip_packer_strides*/>(
-            formats.pack_src, params.in0_face_r_dim, TILE_C_DIM, params.num_faces, 1 /*num_tiles*/, false /*skip_bh_tilize_workaround*/);
+            formats.pack_src, in0_face_r_dim, TILE_C_DIM, num_faces, 1 /*num_tiles*/, false /*skip_bh_tilize_workaround*/);
         // Dense 16-row output tile.
         cfg_reg_rmw_tensix<PCK0_ADDR_CTRL_ZW_REG_0_Zstride_RMW>(FACE_C_DIM * 8 * 2);
         cfg_reg_rmw_tensix<PCK0_ADDR_CTRL_ZW_REG_0_Wstride_RMW>((TILE_NUM_FACES / 2) * FACE_C_DIM * 8 * 2);
@@ -198,7 +217,7 @@ void run_kernel(RUNTIME_PARAMETERS params)
             {
                 for (std::uint32_t i = 0; i < CT_DIM; ++i)
                 {
-                    _llk_pack_<DstSync::SyncHalf, is_fp32_dest_acc_en, ckernel::PackMode::Default>(i, L1_ADDRESS(params.buffer_Res[i]));
+                    _llk_pack_<DstSync::SyncHalf, is_fp32_dest_acc_en, ckernel::PackMode::Default>(i, L1_ADDRESS(buffer_Res[i]));
                 }
             }
         }
@@ -210,7 +229,7 @@ void run_kernel(RUNTIME_PARAMETERS params)
                 consume_fpu_sfpu_posts();
                 for (std::uint32_t i = 0; i < CT_DIM; ++i)
                 {
-                    _llk_pack_<DstSync::SyncHalf, is_fp32_dest_acc_en, ckernel::PackMode::Default>(i, L1_ADDRESS(params.buffer_Res[i]));
+                    _llk_pack_<DstSync::SyncHalf, is_fp32_dest_acc_en, ckernel::PackMode::Default>(i, L1_ADDRESS(buffer_Res[i]));
                 }
                 _llk_pack_dest_section_done_<DstSync::SyncHalf, is_fp32_dest_acc_en>();
             }
