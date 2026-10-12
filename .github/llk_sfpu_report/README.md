@@ -88,7 +88,8 @@ python3 .github/llk_sfpu_report/report.py /tmp/llk-sfpu-report/summary-*.json   
 `--base <ref>` sets the baseline (default: the merge-base with `origin/main`), `--work`
 the scratch directory (default `/tmp/llk-sfpu-report`), `--formats Float16_b,Float32`
 narrows perf and accuracy to those input formats, and `--check` makes the run a
-pass/fail test: it exits 1 when the report lists a regression. Every PR comment ends
+pass/fail test: it exits 1 when the report lists a regression, and 2 when nothing could
+be measured (see below). Every PR comment ends
 with these commands, pinned to the SHAs it measured, so anyone can reproduce a row.
 
 ## Reading the report
@@ -114,7 +115,9 @@ device-code diff. Either way, only device C++ comes from the PR: the pytest harn
 its plugins and this tool always run from the tool checkout, with `LLK_HOME` pointing
 the harness at a side's tree. A PR can change what runs on the Tensix, never what runs
 on the runner. If the merge-base is too old for the current harness, the run falls
-back to rebase mode and the report says so.
+back to rebase mode and the report says so. Rebase mode needs the PR's device diff to
+apply to main (`git apply --3way`); when main has changed the same lines since, nothing
+is measured, and the report names the conflicting files and asks for a rebase.
 
 **Which ops.** `detect.py` compiles every variant of `perf_eltwise_unary_sfpu.py`,
 `perf_eltwise_unary_typecast.py` and `perf_eltwise_binary_sfpu.py` on both sides (no

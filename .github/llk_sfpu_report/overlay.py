@@ -124,6 +124,11 @@ def device_diff(plan):
 class PatchConflict(RuntimeError):
     """The PR's kernel diff does not apply to the tool revision."""
 
+    @property
+    def files(self):
+        """The files ``git apply --3way`` left conflicted (its ``U <path>`` lines)."""
+        return [line[2:] for line in str(self).splitlines() if line.startswith("U ")]
+
 
 def build_side(plan, dest, patch=b"", at=None):
     """A sparse worktree of ``at`` (default: the tool revision), ``patch`` applied."""

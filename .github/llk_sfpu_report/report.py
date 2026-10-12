@@ -606,7 +606,7 @@ def header(summaries):
     return lines
 
 
-def notes_section(summaries):
+def notes_section(summaries, not_measured=()):
     s = summaries[0]
     notes = []
     if s.get("not_applied"):
@@ -616,9 +616,37 @@ def notes_section(summaries):
         )
     for n in s.get("notes", []):
         notes.append(n)
+    for x in not_measured:
+        notes.append(f"{_ARCH[x['arch']]} was not measured. {x['not_measured']}")
     if not notes:
         return []
     return ["### Notes for reviewers", "", *[f"- {n}" for n in notes], ""]
+
+
+def not_measured_report(summaries):
+    """The whole comment when no architecture could be measured: why, and what to do."""
+    s = summaries[0]
+    lines = [
+        COMMENT_MARKER,
+        "## LLK SFPU report",
+        "",
+        f"**Not measured** on {', '.join(_ARCH[x['arch']] for x in summaries)}. {s['not_measured']}",
+        "",
+    ]
+    if s.get("head_moved_to"):
+        lines += [
+            f"> [!NOTE]\n> The PR has moved to `{s['head_moved_to'][:10]}` since; comment `/llk-sfpu-test` to re-run.",
+            "",
+        ]
+    conflicts = sorted({f for x in summaries for f in x.get("conflicts", [])})
+    if conflicts:
+        lines += ["Conflicting files:", "", *[f"- `{f}`" for f in conflicts], ""]
+    lines.append(
+        f"PR head `{s['head_sha'][:10]}`, merge-base `{s['base_sha'][:10]}`, main `{s['tool_sha'][:10]}`. Runs: "
+        + ", ".join(x.get("run_url") or x["host"] for x in summaries)
+        + "."
+    )
+    return lines
 
 
 def footer(summaries):
@@ -669,6 +697,10 @@ def footer(summaries):
 
 def render(summaries):
     summaries = sorted(summaries, key=lambda s: s["arch"] != "wormhole")
+    not_measured = [s for s in summaries if s.get("not_measured")]
+    summaries = [s for s in summaries if not s.get("not_measured")]
+    if not summaries:
+        return _fit("\n".join(not_measured_report(not_measured)) + "\n")
     parts = header(summaries)
     parts += glance_section(summaries)
     parts += [AI_SUMMARY_MARKER, ""]
@@ -676,7 +708,7 @@ def render(summaries):
     parts += accuracy_section(summaries)
     parts += edge_section(summaries)
     parts += cross_arch_section(summaries)
-    parts += notes_section(summaries)
+    parts += notes_section(summaries, not_measured)
     parts += footer(summaries)
     return _fit("\n".join(parts) + "\n")
 
