@@ -6,6 +6,9 @@
 #include <cstdint>
 
 #include "ckernel.h"
+#if defined(LLK_DBG_BARRIER)
+#include "perf_counters/registers.h" // PARK_SIZED_ARM's control registers
+#endif
 #if !defined(ARCH_QUASAR)
 #include "ckernel_structs.h" // semaphore indices; Quasar names its own set in ckernel_trisc_common.h
 #endif
@@ -142,6 +145,9 @@ constexpr int PARK_LOOP  = 1;
 constexpr int PARK_PLAIN = 2;
 // INIT entry park of the INIT measurement build (LLK_PERF_INIT_ONLY): reads INIT's start time right after the release.
 constexpr int PARK_INIT_TS = 4;
+// INIT entry park of the thread BRISC releases first (unpack) in the other builds: as PARK_SIZED, then it restarts the
+// counters, so INIT's counter window holds no BRISC park work (counters.h)
+constexpr int PARK_SIZED_ARM = 6;
 
 // The other parks of the INIT measurement build end before any INIT starts or after all have ended: no fill needed.
 constexpr int park_mode(int mode)
@@ -160,8 +166,22 @@ inline std::uint32_t init_start_ts[2] = {0, 0};
 #endif
 
 #if defined(LLK_DBG_BARRIER) // Wormhole perf builds: BRISC restarts every thread from a flushed pipeline
+} // namespace llk_barrier
+
+namespace llk_perf::detail
+{
+extern const volatile std::uint32_t arm_cmd; // counters.h
+} // namespace llk_perf::detail
+namespace llk_barrier
+{
 namespace detail
 {
+// PARK_SIZED_ARM: each control register a 0 then counters.h's arm_cmd, a rising edge whatever the action thread wrote
+constexpr std::uint32_t ARM_REGS[4] = {
+    llk::perf::PERF_CNT_ALL,
+    llk::perf::bank_regs(llk::perf::Bank::TDMA_UNPACK).control,
+    llk::perf::bank_regs(llk::perf::Bank::L1).control,
+    llk::perf::bank_regs(llk::perf::Bank::TDMA_PACK).control};
 #if defined(LLK_PERF_OOL)
 // LLK_PERF_OOL threads (test_config.py) run INIT out of line (perf.h); their parks restart 512 B aligned, the TILE_LOOP
 // one after llk_loop_pad bytes (perf/layout.py).
@@ -222,6 +242,41 @@ __attribute__((always_inline)) inline void park()
         return;
     }
 #endif
+    if constexpr (MODE == PARK_SIZED_ARM)
+    {
+        std::uint32_t reg;
+        asm volatile(
+            "la    %[s], 1f\n\t"
+            "sw    %[s], 0(%[rpc])\n\t"
+            "lw    %[s], 0(%[rpc])\n\t"
+            "andi  %[s], %[s], 0\n\t"
+            "lw    %[s], 0(%[pcb])\n\t"
+            "andi  %[s], %[s], 0\n\t"
+            ".word 0x00100073\n\t"
+            ".rept 16\n\t"
+            ".word 0x00000013\n\t"
+            ".endr\n"
+            ".balign 512\n"
+            "1:\n\t"
+            "lw    %[s], 0(%[pcb])\n\t"
+            "andi  %[s], %[s], 0\n\t"
+            "lui   %[r], %%hi(%[arm])\n\t"
+            "lw    %[s], %%lo(%[arm])(%[r])\n\t"
+            "li    %[r], %[c0]\n\tsw    zero, 0(%[r])\n\tsw    %[s], 0(%[r])\n\t"
+            "li    %[r], %[c1]\n\tsw    zero, 0(%[r])\n\tsw    %[s], 0(%[r])\n\t"
+            "li    %[r], %[c2]\n\tsw    zero, 0(%[r])\n\tsw    %[s], 0(%[r])\n\t"
+            "li    %[r], %[c3]\n\tsw    zero, 0(%[r])\n\tsw    %[s], 0(%[r])\n\t"
+            : [s] "=&r"(scratch), [r] "=&r"(reg)
+            : [rpc] "r"(reset_pc),
+              [pcb] "r"(ckernel::pc_buf_base),
+              [arm] "i"(&llk_perf::detail::arm_cmd),
+              [c0] "i"(ARM_REGS[0]),
+              [c1] "i"(ARM_REGS[1]),
+              [c2] "i"(ARM_REGS[2]),
+              [c3] "i"(ARM_REGS[3])
+            : "memory");
+        return;
+    }
     asm volatile(
         "la    %[s], 1f\n\t"
         "sw    %[s], 0(%[rpc])\n\t"
@@ -251,7 +306,7 @@ __attribute__((always_inline)) inline void park()
 // The park body is an assembler macro, so the compiler sees a one line asm: its size estimate for the branches around
 // the park stays as without the barrier (it decides short or long branches from those estimates).
 asm(R"ASM(
-.macro llk_park mode, pcb, rpc, size, ts
+.macro llk_park mode, pcb, rpc, size, ts, arm=0, c0=0, c1=0, c2=0, c3=0
 .option push
 .option norelax
 2:
@@ -308,6 +363,32 @@ asm(R"ASM(
     lw    t1, 4(sp)
     addi  sp, sp, 16
 .else
+.if \mode == 6
+    .rept (\size - 92 - (. - 2b)) / 4
+    nop
+    .endr
+1:
+    lw    t0, 0(t1)
+    andi  t0, t0, 0
+    lui   t1, %hi(\arm)
+    lw    t0, %lo(\arm)(t1)
+    li    t1, \c0
+    sw    zero, 0(t1)
+    sw    t0, 0(t1)
+    li    t1, \c1
+    sw    zero, 0(t1)
+    sw    t0, 0(t1)
+    li    t1, \c2
+    sw    zero, 0(t1)
+    sw    t0, 0(t1)
+    li    t1, \c3
+    sw    zero, 0(t1)
+    sw    t0, 0(t1)
+    lw    t0, 0(sp)
+    lw    t1, 4(sp)
+    addi  sp, sp, 16
+.option pop
+.else
 .if \mode == 0
     .rept (\size - 20 - (. - 2b)) / 4
     nop
@@ -322,6 +403,7 @@ asm(R"ASM(
 .option pop
 .endif
 .endif
+.endif
 .endm
 )ASM");
 
@@ -330,6 +412,23 @@ asm(R"ASM(
 template <int MODE = PARK_SIZED>
 __attribute__((always_inline)) inline void park()
 {
+    if constexpr (MODE == PARK_SIZED_ARM)
+    {
+        asm volatile("llk_park %[mode], %[pcb], %[rpc], %[size], %[ts], %[arm], %[c0], %[c1], %[c2], %[c3]"
+                     :
+                     : [mode] "i"(park_mode(MODE)),
+                       [ts] "i"(LLK_INIT_TS_SYM_),
+                       [size] "i"(THREAD_ID == 1 ? 512 : 1024),
+                       [pcb] "i"(PC_BUF_BASE),
+                       [rpc] "i"(TENSIX_CFG_BASE + 4 * (TRISC_RESET_PC_SEC0_PC_ADDR32 + THREAD_ID)),
+                       [arm] "i"(&llk_perf::detail::arm_cmd),
+                       [c0] "i"(ARM_REGS[0]),
+                       [c1] "i"(ARM_REGS[1]),
+                       [c2] "i"(ARM_REGS[2]),
+                       [c3] "i"(ARM_REGS[3])
+                     : "memory");
+        return;
+    }
     asm volatile("llk_park %[mode], %[pcb], %[rpc], %[size], %[ts]"
                  :
                  : [mode] "i"(park_mode(MODE)),
