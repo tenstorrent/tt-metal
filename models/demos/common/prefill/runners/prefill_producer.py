@@ -1519,7 +1519,8 @@ def _resolve_slot_prompts(cfg: ProducerConfig):
             chunks = max_chunks
             real_len = min(real_len, max_chunks * CHUNK_SIZE)
         len_by_trace[trace] = real_len
-        pools_by_trace[trace] = _load_token_pool(trace, chunks * CHUNK_SIZE)
+        pool_tokens = MAX_SEQ_LEN if cfg.replay_log else chunks * CHUNK_SIZE
+        pools_by_trace[trace] = _load_token_pool(trace, pool_tokens)
 
     slot_lengths = {s: len_by_trace[t] for s, t in slot_traces.items()}
     logger.info(
