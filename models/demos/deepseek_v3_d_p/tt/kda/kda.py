@@ -16,12 +16,15 @@ from models.demos.deepseek_v3_d_p.tt.kda.chronological_selections import Chronol
 from models.demos.deepseek_v3_d_p.tt.kda.config import (
     KDA_BETA_DTYPE,
     KDA_CHUNK_SIZE,
+    KDA_HISTORY_EXCHANGE_ROWS,
+    KDA_HISTORY_EXCHANGE_SEMAPHORES,
     KDA_OUTPUT_MEMORY_CONFIG,
+    KDA_PROJECTION_L1_BYTES_PER_CORE,
+    KDA_QKV_L1_BYTES_PER_CORE,
     KDA_RECURRENT_STATE_DTYPE,
     KDAProgramConfig,
     tuned_projection_matmul_configs,
 )
-from models.demos.deepseek_v3_d_p.tt.kda.convolution import exchange_convolution_carry
 from models.demos.deepseek_v3_d_p.tt.kda.recurrence import KDARecurrence
 from models.demos.deepseek_v3_d_p.tt.kda.weights import KDAWeights, load_kda_weights
 from models.tt_transformers.tt.ccl import TT_CCL
@@ -55,6 +58,37 @@ class _ProjectedInputs:
     decay_rank: ttnn.Tensor
     output_gate: ttnn.Tensor
     beta: ttnn.Tensor
+
+
+@dataclass(frozen=True)
+class _HistoryExchange:
+    """Persistent state of the convolution's fabric history exchange.
+
+    Peers write this rank's buffer and bump its semaphores, possibly before this rank's call starts, so both outlive
+    every call. The semaphores live on the exchange core, the compute grid's last core.
+    """
+
+    buffer: ttnn.Tensor
+    semaphores: list[ttnn.GlobalSemaphore]
+
+    @classmethod
+    def allocate(cls, mesh_device: ttnn.MeshDevice, width: int) -> _HistoryExchange:
+        grid = mesh_device.compute_with_storage_grid_size()
+        exchange_core = ttnn.CoreCoord(grid.x - 1, grid.y - 1)
+        exchange_cores = ttnn.CoreRangeSet({ttnn.CoreRange(exchange_core, exchange_core)})
+        return cls(
+            buffer=ttnn.zeros(
+                (1, KDA_HISTORY_EXCHANGE_ROWS, width),
+                dtype=ttnn.bfloat16,
+                layout=ttnn.ROW_MAJOR_LAYOUT,
+                device=mesh_device,
+                memory_config=ttnn.DRAM_MEMORY_CONFIG,
+            ),
+            semaphores=[
+                ttnn.create_global_semaphore(mesh_device, exchange_cores, 0)
+                for _ in range(KDA_HISTORY_EXCHANGE_SEMAPHORES)
+            ],
+        )
 
 
 @dataclass(frozen=True)
@@ -148,6 +182,16 @@ class ttKDA:
         self.qkv_convolution_program_config = ttnn.QkvCausalConv1dSiluProgramConfig(
             channel_chunk_size=qkv_channel_chunk_size
         )
+        grid = mesh_device.compute_with_storage_grid_size()
+
+        def l1_when_it_fits(width: int, bytes_per_core: int) -> ttnn.MemoryConfig:
+            fits = self.active_seq_len_local * width * 2 <= bytes_per_core * grid.x * grid.y
+            return ttnn.L1_MEMORY_CONFIG if fits else ttnn.DRAM_MEMORY_CONFIG
+
+        self.projection_memory_config = l1_when_it_fits(
+            self.weights.input_projection.shape[-1], KDA_PROJECTION_L1_BYTES_PER_CORE
+        )
+        self.qkv_memory_config = l1_when_it_fits(self._convolution_width, KDA_QKV_L1_BYTES_PER_CORE)
         if self.tensor_parallel_size > 1 and tt_ccl is None:
             raise ValueError("tt_ccl is required for tensor-parallel KDA")
         self.tt_ccl = tt_ccl
@@ -191,6 +235,7 @@ class ttKDA:
             fp32_dest_acc_en=True,
             packer_l1_acc=True,
         )
+        self._history_exchange = _HistoryExchange.allocate(mesh_device, self._convolution_width)
 
     @property
     def _convolution_width(self) -> int:
@@ -263,41 +308,6 @@ class ttKDA:
         if state.convolution.dtype != ttnn.bfloat16 or state.convolution.layout != ttnn.ROW_MAJOR_LAYOUT:
             raise ValueError("convolution state must be BF16 row-major")
 
-    def _convolve_qkv(
-        self,
-        qkv: ttnn.Tensor,
-        incoming_layer_carry: ttnn.Tensor,
-        selections: ChronologicalSelections | None,
-        actual_start: ttnn.Tensor,
-    ) -> tuple[ttnn.Tensor, ttnn.Tensor, ttnn.Tensor, ttnn.Tensor]:
-        config = self.config
-        if not self._is_sequence_parallel:
-            batch, rows, width = qkv.shape
-            new_state = (
-                selections.select_local_final_history(qkv, incoming_layer_carry)
-                if selections is not None
-                else ttnn.slice(qkv, (0, rows - (config.conv_kernel_size - 1), 0), (batch, rows, width))
-            )
-            predecessor = incoming_layer_carry
-        else:
-            predecessor, new_state = exchange_convolution_carry(
-                qkv, incoming_layer_carry, sequence_parallel_axis=self.sequence_parallel_axis, selections=selections
-            )
-        q, k, v = ttnn.experimental.kda.qkv_causal_conv1d_silu(
-            qkv,
-            incoming_layer_carry,
-            *self.weights.convolution_taps,
-            config.q_dim,
-            config.k_dim,
-            config.v_dim,
-            program_config=self.qkv_convolution_program_config,
-            actual_start=actual_start,
-            sequence_parallel_axis=self.sequence_parallel_axis,
-            predecessor_carry=predecessor,
-            memory_config=ttnn.DRAM_MEMORY_CONFIG,
-        )
-        return q, k, v, new_state
-
     def _project_inputs(
         self,
         hidden_states: ttnn.Tensor,
@@ -310,19 +320,20 @@ class ttKDA:
                 hidden_states,
                 weights.input_projection,
                 config=self.input_projection_minimal_matmul_config,
-                memory_config=ttnn.DRAM_MEMORY_CONFIG,
+                memory_config=self.projection_memory_config,
                 compute_kernel_config=self.compute_config,
             )
         else:
             projected = ttnn.linear(
                 hidden_states,
                 weights.input_projection,
-                memory_config=ttnn.DRAM_MEMORY_CONFIG,
+                memory_config=self.projection_memory_config,
                 compute_kernel_config=self.compute_config,
             )
         auxiliary_start = self._convolution_width
         return _ProjectedInputs(
-            qkv=_slice_width(projected, 0, auxiliary_start),
+            # The convolution reads its QKV columns in place.
+            qkv=projected,
             decay_rank=_slice_width(projected, auxiliary_start, auxiliary_start + config.head_k_dim),
             output_gate=_slice_width(
                 projected,
@@ -484,11 +495,25 @@ class ttKDA:
         if selections is None:
             selections = self.selections(actual_start, actual_end)
         projected = self._project_inputs(hidden_states)
-        qkv = ttnn.to_layout(projected.qkv, ttnn.ROW_MAJOR_LAYOUT, memory_config=ttnn.DRAM_MEMORY_CONFIG)
-        convolution_state = ttnn.to_layout(
-            state.convolution, ttnn.ROW_MAJOR_LAYOUT, memory_config=ttnn.DRAM_MEMORY_CONFIG
+        # The convolution reads its columns of the projection in place, exchanges the three-row histories between
+        # sequence-parallel ranks and returns the replacement carry.
+        q, k, v, new_convolution = ttnn.experimental.kda.qkv_causal_conv1d_silu_with_carry(
+            projected.qkv,
+            state.convolution,
+            *self.weights.convolution_taps,
+            self.config.q_dim,
+            self.config.k_dim,
+            self.config.v_dim,
+            program_config=self.qkv_convolution_program_config,
+            actual_start=actual_start,
+            exchange_buffer=self._history_exchange.buffer,
+            exchange_semaphores=self._history_exchange.semaphores,
+            actual_end=actual_end,
+            sequence_parallel_axis=self.sequence_parallel_axis,
+            memory_config=self.qkv_memory_config,
         )
-        q, k, v, new_convolution = self._convolve_qkv(qkv, convolution_state, selections, actual_start)
+        # The decay rank, gate and beta are slices of their own; the convolution was the projection's last reader.
+        ttnn.deallocate(projected.qkv)
         gate, beta = self._compute_gates(
             beta=projected.beta,
             decay_rank=projected.decay_rank,
