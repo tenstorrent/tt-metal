@@ -52,4 +52,7 @@ struct TopkLargeIndicesProgramFactory {
 
 ComputeBodyMode compute_body_mode(uint32_t k, uint32_t input_last_dim);
 
+// Whether the input's rows span two or more K' chunks, a compile-time argument of the compute kernel.
+bool multi_chunk_rows(uint32_t k, uint32_t input_last_dim);
+
 }  // namespace ttnn::operations::experimental::topk_large_indices::program

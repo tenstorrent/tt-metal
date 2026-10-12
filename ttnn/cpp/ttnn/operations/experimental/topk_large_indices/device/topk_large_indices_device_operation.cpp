@@ -190,7 +190,8 @@ ttsl::hash::hash_t TopkLargeIndicesDeviceOperation::compute_program_hash(
         input.layout(),
         input.memory_config().memory_layout(),
         input.memory_config().buffer_type(),
-        static_cast<uint32_t>(program::compute_body_mode(attrs.k, input.logical_shape()[-1])));
+        static_cast<uint32_t>(program::compute_body_mode(attrs.k, input.logical_shape()[-1])),
+        program::multi_chunk_rows(attrs.k, input.logical_shape()[-1]));
 }
 
 spec_return_value_t TopkLargeIndicesDeviceOperation::compute_output_specs(
