@@ -3,8 +3,8 @@
 """End-to-end: the full 64-layer TT model against the stage-6 bf16 HF decision golden.
 
 Golden (``reference/hf_decision_golden.py``; 25 rows, bf16 HF, layer-streamed on CPU):
-``$PPLX_DECIDER_DECISION_GOLDEN`` (default artifacts/pplx_decider/goldens/decisions/), files
-``golden_bf16.safetensors`` and ``summary_bf16.json``.
+``$PPLX_DECIDER_DECISION_GOLDEN`` (default ``$PPLX_DECIDER_ARTIFACTS/goldens/decisions/``, see
+``tt/paths.py``), files ``golden_bf16.safetensors`` and ``summary_bf16.json``.
 
 Gates (person-approved, decisions.tsv 2026-10-09):
 - decision agreement: TT top-1 == HF top-1 on >= 24/25 rows, and a disagreement is allowed only
@@ -14,7 +14,8 @@ Recorded, not gated: last-token final-hidden PCC, max |prob diff|, PCC over all 
 the last-token residual PCC after every layer (64 values per row).
 
 Also here (one model load per module): the bucket padding check, determinism, and the runtime
-fallback audit of the full forward. Results go to ``$PPLX_DECIDER_STAGE6_DIR`` (JSON).
+fallback audit of the full forward. Results go to ``$PPLX_DECIDER_STAGE6_DIR`` (JSON; default
+``$PPLX_DECIDER_ARTIFACTS/e2e``).
 
 Run::
 
@@ -24,7 +25,6 @@ Run::
 from __future__ import annotations
 
 import json
-import os
 import statistics
 import time
 from pathlib import Path
@@ -37,12 +37,11 @@ from safetensors.torch import save_file
 
 import ttnn
 from models.demos.pplx_decider_v1_27b.tests.runtime_audit import count_host_calls
+from models.demos.pplx_decider_v1_27b.tt import paths
 from models.demos.pplx_decider_v1_27b.tt.model import PplxDeciderModel, bucket_for
 
-GOLDEN_DIR = Path(
-    os.environ.get("PPLX_DECIDER_DECISION_GOLDEN", "/local/ttuser/gtobar/artifacts/pplx_decider/goldens/decisions")
-)
-OUT_DIR = Path(os.environ.get("PPLX_DECIDER_STAGE6_DIR", "/local/ttuser/gtobar/artifacts/pplx_decider/stage6"))
+GOLDEN_DIR = paths.DECISION_GOLDEN_DIR
+OUT_DIR = paths.E2E_DIR  # $PPLX_DECIDER_STAGE6_DIR, default $PPLX_DECIDER_ARTIFACTS/e2e
 MIN_AGREE = 24
 NEAR_TIE_GAP = 0.05
 LOGIT_PCC = 0.99
@@ -60,9 +59,7 @@ def pcc(a: torch.Tensor, b: torch.Tensor) -> float:
 
 class Golden:
     def __init__(self, directory: Path = GOLDEN_DIR):
-        path = directory / "golden_bf16.safetensors"
-        if not path.exists():
-            pytest.fail(f"Missing {path}; run python -m models.demos.pplx_decider_v1_27b.reference.hf_decision_golden")
+        path = paths.require(directory / "golden_bf16.safetensors", "decision")
         self.summary = json.loads((directory / "summary_bf16.json").read_text())
         self.rows = self.summary["rows"]
         self._file = safe_open(str(path), framework="pt")

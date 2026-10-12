@@ -2,9 +2,9 @@
 
 Model `perplexity-ai/pplx-decider-v1-27b`, one Blackhole p150a (13x10 grid, 8 DRAM banks, 31.83 GiB).
 Branch `gtobarTT/pplx-decider-bringup`, base `4e2b3a0f480` (stages 1-2). Policy `act_bf16__w_bfp8_all__hifi2`.
-Artifacts: `/local/ttuser/gtobar/artifacts/pplx_decider/stage6/` (logs in `logs/`, scratch probes in
+Artifacts: `$PPLX_DECIDER_ARTIFACTS/stage6/` (logs in `logs/`, scratch probes in
 `probes/`). Environment for every command: `source python_env/bin/activate`, `PYTHONPATH` and
-`TT_METAL_HOME` set to the checkout, `HF_HOME=/local/ttuser/gtobar/hf`.
+`TT_METAL_HOME` set to the checkout, `HF_HOME` set to the HF cache holding the snapshot.
 
 Labels: **measured** = a command and its output recorded here; **inferred** = from code or arithmetic.
 

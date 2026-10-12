@@ -23,12 +23,12 @@ from __future__ import annotations
 import json
 import os
 from collections import defaultdict
-from pathlib import Path
 
 import pytest
 import torch
 
 import ttnn
+from models.demos.pplx_decider_v1_27b.tt import paths
 from models.demos.pplx_decider_v1_27b.tt.model import PplxDeciderModel
 from models.demos.pplx_decider_v1_27b.tt.optimizations import (
     PRECISION_CONFIG_ENV,
@@ -36,7 +36,7 @@ from models.demos.pplx_decider_v1_27b.tt.optimizations import (
     PrecisionPolicy,
 )
 
-OUT_DIR = Path(os.environ.get("PPLX_DECIDER_STAGE6_DIR", "/local/ttuser/gtobar/artifacts/pplx_decider/stage6"))
+OUT_DIR = paths.E2E_DIR  # $PPLX_DECIDER_STAGE6_DIR, default $PPLX_DECIDER_ARTIFACTS/e2e
 
 pytestmark = pytest.mark.use_module_device({"l1_small_size": 24576})
 

@@ -1,7 +1,7 @@
 # Stage 8 work log: datatype sweep
 
 Host: one Blackhole p150a. Branch `gtobarTT/pplx-decider-bringup`, base `8ad9f5a13dd`.
-Artifacts: `/local/ttuser/gtobar/artifacts/pplx_decider/stage8/<candidate>/` (e2e JSON, `model_perf.json`,
+Artifacts: `$PPLX_DECIDER_ARTIFACTS/stage8/<candidate>/` (e2e JSON, `model_perf.json`,
 logs) and `stage8/sweep.log` (driver log). Labels: **measured** (command + value), **inferred**.
 
 ## Setup changes

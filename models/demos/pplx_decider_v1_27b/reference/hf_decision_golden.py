@@ -38,7 +38,7 @@ from loguru import logger
 from safetensors.torch import save_file
 from transformers.models.qwen3_5.modeling_qwen3_5 import Qwen3_5DecoderLayer, Qwen3_5TextRotaryEmbedding
 
-from models.demos.pplx_decider_v1_27b.reference.decision_prompts import DEFAULT_SNAPSHOT, AppTokenizer, build_prompt_set
+from models.demos.pplx_decider_v1_27b.reference.decision_prompts import AppTokenizer, build_prompt_set
 from models.demos.pplx_decider_v1_27b.reference.hf_reference import (
     NUM_OPTIONS,
     SnapshotReader,
@@ -48,10 +48,10 @@ from models.demos.pplx_decider_v1_27b.reference.hf_reference import (
     layer_forward,
     rotary_cos_sin,
 )
+from models.demos.pplx_decider_v1_27b.tt import paths
 
 DTYPES = {"bf16": torch.bfloat16, "fp32": torch.float32}
-GOLDEN_ROOT = Path("/local/ttuser/gtobar/artifacts/pplx_decider/goldens")
-DEFAULT_OUT = GOLDEN_ROOT / "decisions"
+DEFAULT_OUT = paths.DECISION_GOLDEN_DIR
 # Rows whose last-token hidden after every layer is the designated layer-wise trace
 # (short, ~2k, ~6k tokens). The trace is saved for every row; these three are flagged.
 TRACE_IDS = ("s01_ticket_routing", "m06_server_500", "x01_log_most_errors")
@@ -176,7 +176,7 @@ def _load(path: Path) -> torch.Tensor:
 
 @torch.no_grad()
 def identity_check(reader: SnapshotReader, out_dir: Path) -> dict:
-    d = GOLDEN_ROOT / "S8192"
+    d = paths.LAYER_GOLDEN_DIR / "S8192"
     cfg = reader.text_config
     ids = _load(d / "ids.pt")
     seq = ids.shape[1]
@@ -436,7 +436,7 @@ def run_golden(args) -> None:
 def main() -> None:
     parser = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
     parser.add_argument("--dtype", choices=list(DTYPES), default="bf16")
-    parser.add_argument("--snapshot", type=Path, default=DEFAULT_SNAPSHOT)
+    parser.add_argument("--snapshot", type=Path, default=None, help="default: the HF cache (tt/paths.py)")
     parser.add_argument("--out", type=Path, default=DEFAULT_OUT)
     parser.add_argument("--threads", type=int, default=12)
     parser.add_argument("--max-layers", type=int, default=64, help="< 64: timing estimate only, nothing saved")
@@ -446,6 +446,7 @@ def main() -> None:
     parser.add_argument("--identity", action="store_true", help="sanity (a) vs the stage-1 fp32 goldens")
     parser.add_argument("--tiny-check", action="store_true", help="glue check vs HF Qwen3_5TextModel (tiny)")
     args = parser.parse_args()
+    args.snapshot = args.snapshot or paths.snapshot_path()
     torch.set_num_threads(args.threads)
     if args.tiny_check:
         reader = SnapshotReader(args.snapshot)

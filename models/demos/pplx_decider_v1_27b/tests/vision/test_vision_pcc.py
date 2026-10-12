@@ -11,7 +11,7 @@
   and v01 (256 patches) run in the 512 bucket, to show the padded keys are masked.
 - ``test_gelu_variant``: the fused ``"gelu_tanh"`` activation is the tanh GELU (not erf), and ``"gelu"`` erf.
 
-Every PCC goes to ``$PPLX_DECIDER_VISION_PCC_LOG`` (stage12a/pcc_vision.jsonl).
+Every PCC goes to ``$PPLX_DECIDER_VISION_PCC_LOG`` (default ``$PPLX_DECIDER_ARTIFACTS/vision/pcc_vision.jsonl``).
 """
 
 import pytest

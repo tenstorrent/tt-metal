@@ -40,9 +40,10 @@ from transformers.vision_utils import (
 )
 
 from models.demos.pplx_decider_v1_27b.reference.hf_reference import SnapshotReader
+from models.demos.pplx_decider_v1_27b.tt.paths import VISION_GOLDEN_DIR
 
 VISION_PREFIX = "visual."
-GOLDEN_DIR = Path("/local/ttuser/gtobar/artifacts/pplx_decider/goldens/vision")
+GOLDEN_DIR = VISION_GOLDEN_DIR
 
 
 class VisionSnapshotReader(SnapshotReader):

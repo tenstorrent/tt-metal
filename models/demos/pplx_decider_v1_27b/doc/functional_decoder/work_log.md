@@ -35,8 +35,8 @@ Command (**measured**: exit 0, ~10 min wall, about 7-15 s per layer at S=8192 fp
 ```bash
 python -m models.demos.pplx_decider_v1_27b.reference.hf_reference \
   --seq-len 8192 --layers 0 3 61 63 --through-final \
-  --out /local/ttuser/gtobar/artifacts/pplx_decider/goldens
-# log: /local/ttuser/gtobar/artifacts/pplx_decider/logs/golden_stream_S8192.log
+  --out $PPLX_DECIDER_ARTIFACTS/goldens
+# log: $PPLX_DECIDER_ARTIFACTS/logs/golden_stream_S8192.log
 ```
 
 - Prompt: the chat template (`enable_thinking=False`, generation prompt) around the snapshot's README and
@@ -64,7 +64,7 @@ Source: `pytest models/demos/pplx_decider_v1_27b/tests/pcc -q -p no:cacheprovide
 changes.
 
 - **Result (measured 2026-10-09):** 124 passed in 669.53 s, exit 0.
-- **Log:** `/local/ttuser/gtobar/artifacts/pplx_decider/logs/pytest_pcc_1b.log`.
+- **Log:** `$PPLX_DECIDER_ARTIFACTS/logs/pytest_pcc_1b.log`.
 - **Re-validation:** this run also re-validates 1A after the isort-only change.
 - **Rendering:** the table is rendered by `tests/pcc_report.py`.
 - **Row notes:**
@@ -159,7 +159,7 @@ These items are left for later:
 ## Commands
 
 ```bash
-export PYTHONPATH=$PWD TT_METAL_HOME=$PWD HF_HOME=/local/ttuser/gtobar/hf
+export PYTHONPATH=$PWD TT_METAL_HOME=$PWD HF_HOME=<your HF cache>
 pytest models/demos/pplx_decider_v1_27b/tests/pcc -q          # every PCC case, appends to the PCC log
 python models/demos/pplx_decider_v1_27b/tests/pcc_report.py    # renders the table above
 pytest models/demos/pplx_decider_v1_27b/tests/perf/test_prefill_perf.py -q -s -k "test_layer_and_module_perf or test_embedding_and_head_perf"

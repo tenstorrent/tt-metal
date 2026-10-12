@@ -119,8 +119,8 @@ DeltaNet terms. Peak = 359.4 TFLOP/s at HiFi2 (inferred: 130 Tensix × 1.35 GHz,
 - Commands: `python -m models.demos.pplx_decider_v1_27b.benchmark.run_benchmark` (accuracy and
   throughput), the stage-6 bucket harness `tests/perf/test_model_perf.py`, and
   `python -m models.demos.pplx_decider_v1_27b.benchmark.report` (tables and roofline). Raw outputs:
-  `/local/ttuser/gtobar/artifacts/pplx_decider/stage11_refresh/` (this run, including
-  `compare_vs_stage11.json`), `/local/ttuser/gtobar/artifacts/pplx_decider/stage11/` (before stage 3).
+  `$PPLX_DECIDER_ARTIFACTS/stage11_refresh/` (this run, including
+  `compare_vs_stage11.json`), `$PPLX_DECIDER_ARTIFACTS/stage11/` (before stage 3).
 
 One rendered example (WinoGrande, 105 tokens, bucket 128):
 

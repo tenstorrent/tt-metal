@@ -42,7 +42,6 @@ from __future__ import annotations
 
 import dataclasses
 import json
-import os
 import re
 import time
 from dataclasses import dataclass, field
@@ -55,6 +54,7 @@ from safetensors import safe_open
 import ttnn
 from models.common.lightweightmodule import LightweightModule
 from models.common.modules.lazy_weight import LazyWeight
+from models.demos.pplx_decider_v1_27b.tt import paths
 from models.demos.pplx_decider_v1_27b.tt.decoder import DecoderLayerConfig, PplxDecoderLayer
 from models.demos.pplx_decider_v1_27b.tt.embedding import EmbeddingConfig, PplxEmbedding
 from models.demos.pplx_decider_v1_27b.tt.head import PADDED_OPTIONS, DecisionHeadConfig, PplxDecisionHead
@@ -69,9 +69,7 @@ from models.demos.pplx_decider_v1_27b.tt.weight_adapter import (
 )
 
 BUCKETS = (128, 1024, 2048, 4096, 8192)
-DEFAULT_CACHE_ROOT = Path(
-    os.environ.get("PPLX_DECIDER_WEIGHT_CACHE", "/local/ttuser/gtobar/artifacts/pplx_decider/weight_cache")
-)
+DEFAULT_CACHE_ROOT = paths.WEIGHT_CACHE  # $PPLX_DECIDER_WEIGHT_CACHE, default $PPLX_DECIDER_ARTIFACTS/weight_cache
 TEXT_PREFIX = "language_model."
 IMAGE_TOKEN_ID = 248056  # config.image_token_id (<|image_pad|>), checked against the config at load
 _ST_DTYPES = {"BF16": torch.bfloat16, "F32": torch.float32, "F16": torch.float16}

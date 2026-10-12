@@ -58,7 +58,7 @@ Precision policy for every number in this file is `act_bf16__w_bfp8_all__hifi2`:
 
 ## Commands
 
-Environment: `source python_env/bin/activate; export TT_METAL_HOME=$PWD PYTHONPATH=$PWD HF_HOME=/local/ttuser/gtobar/hf`.
+Environment: `source python_env/bin/activate; export TT_METAL_HOME=$PWD PYTHONPATH=$PWD HF_HOME=<your HF cache>`.
 
 | purpose | command |
 |---|---|

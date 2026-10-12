@@ -31,16 +31,16 @@ from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Callable
 
+from models.demos.pplx_decider_v1_27b.tt.paths import snapshot_path
+
 SEED = 20261009
 MAX_LENGTH = 8192
 BUCKETS = (128, 1024, 2048, 4096, 8192)
 # Inclusive token-length bands (after the chat template) and how many rows each must hold.
 BANDS = {"short": (128, 1024), "medium": (1025, 2048), "long": (2049, 4096), "xl": (4097, 8192)}
 BAND_COUNTS = {"short": 10, "medium": 6, "long": 5, "xl": 4}
-DEFAULT_SNAPSHOT = Path(
-    "/local/ttuser/gtobar/hf/hub/models--perplexity-ai--pplx-decider-v1-27b/snapshots/"
-    "b01a5cbaca5391f73bd55103d4f27e8982cd5e60"
-)
+# ``snapshot=None`` below means ``paths.snapshot_path()`` (the HF cache at the pinned revision, or
+# ``$PPLX_DECIDER_SNAPSHOT``), resolved when it is used, not at import.
 
 
 def bucket_of(seq_len: int) -> int:
@@ -63,14 +63,14 @@ def band_of(seq_len: int) -> str | None:
 # ----------------------------------------------------------------------------------------------
 
 
-def import_autojev(snapshot: Path = DEFAULT_SNAPSHOT):
+def import_autojev(snapshot: Path | None = None):
     """Import the snapshot's ``autojev.model`` without constructing ``DecisionModel``.
 
     ``autojev/types.py`` uses PEP 695 ``type X = ...`` aliases (Python >= 3.12) and only holds
     type annotations. On older interpreters a stub module with the same names (as ``Any``)
     is registered first, so ``model.py`` itself is imported unchanged.
     """
-    src = str(Path(snapshot) / "source" / "src")
+    src = str(Path(snapshot or snapshot_path()) / "source" / "src")
     if src not in sys.path:
         sys.path.insert(0, src)
     if sys.version_info < (3, 12) and "autojev.types" not in sys.modules:
@@ -89,7 +89,7 @@ def import_autojev(snapshot: Path = DEFAULT_SNAPSHOT):
 class AppTokenizer:
     """The reference app's prompt rendering and tokenization, batch 1, no padding."""
 
-    snapshot: Path = DEFAULT_SNAPSHOT
+    snapshot: Path | None = None  # None: paths.snapshot_path()
     processor: object = field(init=False)
     codes: list[str] = field(init=False)
     token_ids: list[int] = field(init=False)
@@ -98,6 +98,8 @@ class AppTokenizer:
     def __post_init__(self):
         from transformers import AutoProcessor
 
+        if self.snapshot is None:
+            self.snapshot = snapshot_path()
         self.autojev = import_autojev(self.snapshot)
         self.processor = AutoProcessor.from_pretrained(str(self.snapshot), local_files_only=True)
         cfg = json.loads((Path(self.snapshot) / "decision_config.json").read_text())

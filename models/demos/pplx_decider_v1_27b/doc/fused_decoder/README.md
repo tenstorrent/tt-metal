@@ -181,7 +181,7 @@ one matmul, and replaces 2 rotate-half ops with 2 llama rotary ops.
 
 ## Commands
 
-The environment is the same as stage 1 (`source python_env/bin/activate; export TT_METAL_HOME=$PWD PYTHONPATH=$PWD HF_HOME=/local/ttuser/gtobar/hf`).
+The environment is the same as stage 1 (`source python_env/bin/activate; export TT_METAL_HOME=$PWD PYTHONPATH=$PWD HF_HOME=<your HF cache>`).
 
 | purpose | command |
 |---|---|
@@ -193,5 +193,5 @@ The environment is the same as stage 1 (`source python_env/bin/activate; export 
 | perf report | `tt-perf-report <ops_perf_results.csv> --start-signpost PREFILL_START --end-signpost PREFILL_END --no-advice [--csv out.csv]` |
 | watcher | `TT_METAL_WATCHER=10 TT_METAL_LOGS_PATH=<dir> pytest models/demos/pplx_decider_v1_27b/tests/pcc/test_decoder_layer.py -q -k "S2048 and (L0 or L3)"` |
 
-Artifacts are under `/local/ttuser/gtobar/artifacts/pplx_decider/stage2/`: `logs/`, `pcc_*.jsonl`,
+Artifacts are under `$PPLX_DECIDER_ARTIFACTS/stage2/`: `logs/`, `pcc_*.jsonl`,
 `perf_*.jsonl`, `tracy/` and `watcher*/`.

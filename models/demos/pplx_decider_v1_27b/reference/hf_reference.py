@@ -13,10 +13,11 @@ Reference forward being reproduced (snapshot ``source/src/autojev/model.py``):
 interleaved mRoPE reduces to plain 1D RoPE on the first 64 dims of each head, which is
 what ``Qwen3_5TextRotaryEmbedding`` computes with 1D positions.
 
-CLI (writes layer inputs of a real prompt to the golden directory)::
+CLI (writes layer inputs of a real prompt to the golden directory, default ``tt/paths.py``
+``LAYER_GOLDEN_DIR`` = ``$PPLX_DECIDER_ARTIFACTS/goldens``)::
 
     python -m models.demos.pplx_decider_v1_27b.reference.hf_reference \
-        --seq-len 8192 --layers 0 3 61 63 --out /local/ttuser/gtobar/artifacts/pplx_decider/goldens
+        --seq-len 8192 --layers 0 3 61 63 --through-final
 """
 
 from __future__ import annotations
@@ -34,24 +35,13 @@ from safetensors import safe_open
 from transformers import AutoConfig, AutoTokenizer
 from transformers.models.qwen3_5.modeling_qwen3_5 import Qwen3_5DecoderLayer, Qwen3_5RMSNorm, Qwen3_5TextRotaryEmbedding
 
-MODEL_ID = "perplexity-ai/pplx-decider-v1-27b"
-REVISION = "b01a5cbaca5391f73bd55103d4f27e8982cd5e60"
+from models.demos.pplx_decider_v1_27b.tt import paths
+from models.demos.pplx_decider_v1_27b.tt.paths import MODEL_ID, REVISION, snapshot_path  # noqa: F401  (re-exported)
+
 TEXT_PREFIX = "language_model."
 LAYER_PREFIX = TEXT_PREFIX + "layers.{}."
 NUM_OPTIONS = 255
-DEFAULT_GOLDEN_DIR = Path(
-    os.environ.get("PPLX_DECIDER_GOLDEN_DIR", "/local/ttuser/gtobar/artifacts/pplx_decider/goldens")
-)
-
-
-def snapshot_path() -> Path:
-    """Resolve the immutable snapshot directory (env override, else the HF cache)."""
-    override = os.environ.get("PPLX_DECIDER_SNAPSHOT")
-    if override:
-        return Path(override)
-    from huggingface_hub import snapshot_download
-
-    return Path(snapshot_download(MODEL_ID, revision=REVISION, local_files_only=True))
+DEFAULT_GOLDEN_DIR = paths.LAYER_GOLDEN_DIR
 
 
 class SnapshotReader:

@@ -10,24 +10,20 @@ patches (v02 = 936 patches in the 1024 bucket, the padded-key-mask case).
 from __future__ import annotations
 
 import json
-import os
 import time
 from functools import lru_cache
-from pathlib import Path
 
-import pytest
 import torch
 from loguru import logger
 from safetensors.torch import load_file
 
 import ttnn
 from models.common.utility_functions import comp_allclose, comp_pcc
+from models.demos.pplx_decider_v1_27b.tt import paths
 
-GOLDEN_DIR = Path(
-    os.environ.get("PPLX_DECIDER_VISION_GOLDEN", "/local/ttuser/gtobar/artifacts/pplx_decider/goldens/vision")
-)
-STAGE_DIR = Path(os.environ.get("PPLX_DECIDER_STAGE12A_DIR", "/local/ttuser/gtobar/artifacts/pplx_decider/stage12a"))
-PCC_LOG = Path(os.environ.get("PPLX_DECIDER_VISION_PCC_LOG", STAGE_DIR / "pcc_vision.jsonl"))
+GOLDEN_DIR = paths.VISION_GOLDEN_DIR
+STAGE_DIR = paths.VISION_DIR  # results of the vision tests ($PPLX_DECIDER_STAGE12A_DIR)
+PCC_LOG = paths.VISION_PCC_LOG
 IMAGES = (
     "v01_dominant_color",
     "v02_count_circles",
@@ -55,17 +51,13 @@ def reader():
 
 
 def golden_inputs(image: str) -> dict[str, torch.Tensor]:
-    path = GOLDEN_DIR / "inputs" / f"{image}.safetensors"
-    if not path.exists():
-        pytest.fail(f"Missing vision golden {path} (reference/hf_vision_reference.py)")
+    path = paths.require(GOLDEN_DIR / "inputs" / f"{image}.safetensors", "vision")
     return load_file(str(path))
 
 
 @lru_cache(maxsize=2)
 def golden_tower(image: str) -> dict[str, torch.Tensor]:
-    path = GOLDEN_DIR / "tower" / f"{image}.bf16.safetensors"
-    if not path.exists():
-        pytest.fail(f"Missing vision golden {path} (reference/hf_vision_reference.py)")
+    path = paths.require(GOLDEN_DIR / "tower" / f"{image}.bf16.safetensors", "vision")
     return load_file(str(path))
 
 

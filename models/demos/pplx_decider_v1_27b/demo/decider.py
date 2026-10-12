@@ -26,8 +26,9 @@ from __future__ import annotations
 from pathlib import Path
 from typing import Sequence
 
-from models.demos.pplx_decider_v1_27b.reference.decision_prompts import DEFAULT_SNAPSHOT, AppTokenizer
+from models.demos.pplx_decider_v1_27b.reference.decision_prompts import AppTokenizer
 from models.demos.pplx_decider_v1_27b.tt.model import PplxDeciderModel
+from models.demos.pplx_decider_v1_27b.tt.paths import snapshot_path
 
 # The text example of the snapshot inference.py (main()).
 DEMO_STATE = "My Stripe integration keeps failing. I'm losing sales. Please help ASAP."
@@ -70,11 +71,15 @@ class TTDecider:
 
     @classmethod
     def from_pretrained(
-        cls, device, snapshot: Path | str = DEFAULT_SNAPSHOT, *, vision: bool = True, **model_kwargs
+        cls, device, snapshot: Path | str | None = None, *, vision: bool = True, **model_kwargs
     ) -> "TTDecider":
-        """``vision=False`` skips the vision tower (text-only use, ~0.96 GiB less DRAM)."""
+        """``vision=False`` skips the vision tower (text-only use, ~0.96 GiB less DRAM).
+
+        ``snapshot=None`` resolves the HF snapshot from the HF cache (``tt/paths.py``).
+        """
         from models.demos.pplx_decider_v1_27b.reference.hf_reference import SnapshotReader
 
+        snapshot = snapshot or snapshot_path()
         model = PplxDeciderModel.from_snapshot(device, SnapshotReader(snapshot), vision=vision, **model_kwargs)
         return cls(model, AppTokenizer(Path(snapshot)))
 

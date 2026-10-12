@@ -1,7 +1,7 @@
 # Stage 3A work log: prefill matmul optimization
 
 Labels: **measured** (command and value recorded here, logs under
-`/local/ttuser/gtobar/artifacts/pplx_decider/stage3a/`), **inferred** (follows from code or
+`$PPLX_DECIDER_ARTIFACTS/stage3a/`), **inferred** (follows from code or
 arithmetic), **guess**. Baseline: `78e35968f19` (stage 2 code; later stages did not touch the
 text-layer matmul path). Precision is fixed: BF16 activations, BFP8 weights, HiFi2 with fp32
 accumulation (`act_bf16__w_bfp8_all__hifi2`). Prefill only; decode, KV-cache and decode-trace items
@@ -264,7 +264,7 @@ same long-pass slowdown stage 6 recorded.
 Baseline: `57f76869913` (stage 3A, reviewer clean-pass). Precision unchanged (C0: BF16 activations,
 BFP8 weights, HiFi2 + fp32 accumulation for every matmul, fp32 DeltaNet state); only SDPA / norm
 compute configs, op program configs, chunking and op choice changed. Artifacts:
-`/local/ttuser/gtobar/artifacts/pplx_decider/stage3b/` (`bench/*.jsonl`, `logs/`, `ab/`, `tracy/`,
+`$PPLX_DECIDER_ARTIFACTS/stage3b/` (`bench/*.jsonl`, `logs/`, `ab/`, `tracy/`,
 `scripts/`).
 
 ## 9. Method
@@ -376,8 +376,8 @@ device saving when nothing else is queued.
 ## 12. Before / after (interleaved A/B, the brief's harness)
 
 `tests/perf/test_prefill_perf.py::test_layer_and_module_perf` (2 warm-ups, median of 7, no idle
-gaps), run A1 B1 A2 B2; A = worktree of `57f76869913` (`/local/ttuser/gtobar/wt_3a`, removed after
-the run), B = this stage. Records `ab/perf_ab_{A,B}{1,2}.jsonl`. Layer medians, ms, (run 1, run 2):
+gaps), run A1 B1 A2 B2; A = worktree of `57f76869913` (a temporary worktree next to the checkout, removed
+after the run), B = this stage. Records `ab/perf_ab_{A,B}{1,2}.jsonl`. Layer medians, ms, (run 1, run 2):
 
 | kind | S | A (3A) | B (3B) | change |
 |---|---:|---|---|---|

@@ -5,18 +5,16 @@
 from __future__ import annotations
 
 import json
-import os
 import time
 from functools import lru_cache
-from pathlib import Path
 
-import pytest
 import torch
 from loguru import logger
 
 import ttnn
 from models.common.utility_functions import comp_allclose, comp_pcc
 from models.demos.pplx_decider_v1_27b.reference import hf_reference as ref
+from models.demos.pplx_decider_v1_27b.tt import paths
 from models.demos.pplx_decider_v1_27b.tt.model_config import PplxDeciderArgs
 from models.demos.pplx_decider_v1_27b.tt.optimizations import Optimizations, PrecisionPolicy
 
@@ -29,9 +27,7 @@ FULL_LAYERS = [3, 63]
 ALL_LAYERS = [0, 3, 61, 63]
 PCC_THRESHOLD = 0.995
 DEVICE_PARAMS = [{"l1_small_size": 24576}]
-PCC_LOG = Path(
-    os.environ.get("PPLX_DECIDER_PCC_LOG", "/local/ttuser/gtobar/artifacts/pplx_decider/logs/pcc_results.jsonl")
-)
+PCC_LOG = paths.PCC_LOG
 
 
 def seq_ids(seq_lens=SEQ_LENS):
@@ -72,12 +68,7 @@ def build_rotary(device):
 
 def golden_tensor(name: str, seq_len: int) -> torch.Tensor:
     """Prefix ``[:, :seq_len]`` of a streamed HF golden (see reference/hf_reference.py CLI)."""
-    path = ref.golden_input_path(ref.DEFAULT_GOLDEN_DIR, name, GOLDEN_SEQ_LEN)
-    if not path.exists():
-        pytest.fail(
-            f"Missing golden {path}. Generate it with: python -m models.demos.pplx_decider_v1_27b.reference.hf_reference "
-            f"--seq-len {GOLDEN_SEQ_LEN} --layers {' '.join(map(str, ALL_LAYERS))} --through-final"
-        )
+    path = paths.require(ref.golden_input_path(ref.DEFAULT_GOLDEN_DIR, name, GOLDEN_SEQ_LEN), "layer")
     return torch.load(path)[:, :seq_len]
 
 

@@ -213,8 +213,9 @@ python models/demos/pplx_decider_v1_27b/tests/vision/vision_pcc_report.py       
 ```
 
 Goldens come from `reference/hf_vision_reference.py`: `$PPLX_DECIDER_VISION_GOLDEN`, by default
-`/local/ttuser/gtobar/artifacts/pplx_decider/goldens/vision`. The PCC log is
-`$PPLX_DECIDER_VISION_PCC_LOG`, by default `.../stage12a/pcc_vision.jsonl`.
+`$PPLX_DECIDER_ARTIFACTS/goldens/vision`. The PCC log is
+`$PPLX_DECIDER_VISION_PCC_LOG`, by default `$PPLX_DECIDER_ARTIFACTS/vision/pcc_vision.jsonl` (the stage-12A
+run wrote `$PPLX_DECIDER_ARTIFACTS/stage12a/pcc_vision.jsonl` via `PPLX_DECIDER_STAGE12A_DIR`).
 
 ## Limits and follow-ups
 

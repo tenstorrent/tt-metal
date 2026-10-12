@@ -10,7 +10,7 @@
   (`PPLX_DECIDER_STAGE6_DIR=$R/perf_buckets pytest .../tests/perf/test_model_perf.py::test_model_perf`,
   1 passed, 696 s), then `run_benchmark --subsets $R/subsets --out $R/run` (exit 0), then
   `report --stage11 $R --doc doc/benchmark` (regenerates `results.json`, `predictions.csv`).
-  `R=/local/ttuser/gtobar/artifacts/pplx_decider/stage11_refresh`. One tmux job, run sequentially
+  `R=$PPLX_DECIDER_ARTIFACTS/stage11_refresh`. One tmux job, run sequentially
   on the one device.
 - Old vs new comparison (predictions, probabilities, latencies): `$R/compare_vs_stage11.json`.
   5 of 600 predictions changed, all near-ties. Accuracy is 174 / 168 / 193 (before: 174 / 165 / 193).
@@ -24,11 +24,11 @@
   `benchmark/`, `doc/benchmark/` and a README section; no model code changed.
 - Precision: C0 from `doc/datatype_sweep/selected_precision_config.json`, logged at load as
   `act_bf16__w_bfp8_all__hifi2`; vision tower BF16.
-- Weight cache: `/local/ttuser/gtobar/artifacts/pplx_decider/weight_cache/b01a5cbaca53/weights` (BFP8, 27 GB).
+- Weight cache: `$PPLX_DECIDER_ARTIFACTS/weight_cache/b01a5cbaca53/weights` (BFP8, 27 GB).
 - Datasets (pinned revisions in `identity.json`): allenai/winogrande winogrande_xl/validation,
   takala/financial_phrasebank Sentences_50Agree, facebook/belebele eng_Latn/test; seed 20260920, 200 each.
 - Order of runs: accuracy pass (file order), throughput pass (seeded shuffle), bucket latency harness,
   image latency, then `benchmark/report.py`.
-- Logs: `/local/ttuser/gtobar/artifacts/pplx_decider/stage11/logs/{run_benchmark,perf_buckets}.log`.
+- Logs: `$PPLX_DECIDER_ARTIFACTS/stage11/logs/{run_benchmark,perf_buckets}.log`.
 - REPORT.md and this file were written from the orchestrating session from the generated
   `report_tables.md` and the run artifacts; the worker's harness blocked report-file creation.

@@ -28,29 +28,23 @@ signposts, for tt-perf-report)::
 from __future__ import annotations
 
 import json
-import os
 import statistics
 import time
-from pathlib import Path
 
 import pytest
 
 import ttnn
 from models.demos.pplx_decider_v1_27b.demo.decider import DEMO_STATE, TTDecider, demo_questions
 from models.demos.pplx_decider_v1_27b.reference.decision_prompts import AppTokenizer
+from models.demos.pplx_decider_v1_27b.tt import paths
 from models.demos.pplx_decider_v1_27b.tt.model import BUCKETS, PplxDeciderModel
 
 WARMUP = 2
 TIMED = 7
 BURST_RUNS = 5
 BURST_PAUSE_S = 10.0
-OUT_DIR = Path(os.environ.get("PPLX_DECIDER_STAGE6_DIR", "/local/ttuser/gtobar/artifacts/pplx_decider/stage6"))
-PROMPTS = (
-    Path(
-        os.environ.get("PPLX_DECIDER_DECISION_GOLDEN", "/local/ttuser/gtobar/artifacts/pplx_decider/goldens/decisions")
-    )
-    / "prompts.jsonl"
-)
+OUT_DIR = paths.E2E_DIR  # $PPLX_DECIDER_STAGE6_DIR, default $PPLX_DECIDER_ARTIFACTS/e2e
+PROMPTS = paths.DECISION_GOLDEN_DIR / "prompts.jsonl"
 BUCKET_ROWS = {
     1024: "s01_ticket_routing",
     2048: "m06_server_500",
@@ -81,7 +75,8 @@ def decider(_device_module_impl):
 
 def bucket_rows(tokenizer: AppTokenizer) -> dict[int, dict]:
     rows = {128: {"state": DEMO_STATE, "question": demo_questions()["urgency"]}}
-    by_id = {json.loads(line)["id"]: json.loads(line)["row"] for line in PROMPTS.read_text().splitlines()}
+    prompts = paths.require(PROMPTS, "decision")
+    by_id = {json.loads(line)["id"]: json.loads(line)["row"] for line in prompts.read_text().splitlines()}
     rows.update({bucket: by_id[rid] for bucket, rid in BUCKET_ROWS.items()})
     for bucket, row in rows.items():
         n = len(tokenizer.input_ids(row))

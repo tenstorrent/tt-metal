@@ -35,8 +35,9 @@ from models.demos.pplx_decider_v1_27b.demo.decider import (
     demo_questions,
     image_question,
 )
+from models.demos.pplx_decider_v1_27b.tt.paths import IMAGE_GOLDEN_DIR, require
 
-IMAGE_GOLDEN = Path("/local/ttuser/gtobar/artifacts/pplx_decider/goldens/vision/e2e")
+IMAGE_GOLDEN = IMAGE_GOLDEN_DIR
 
 
 def same_decision(answer: dict, ref: dict) -> tuple[bool, float]:
@@ -49,7 +50,8 @@ def same_decision(answer: dict, ref: dict) -> tuple[bool, float]:
 
 
 def golden_image_row(row_id: str, golden_dir: Path) -> tuple[dict, dict]:
-    rows = {r["id"]: r for r in map(json.loads, (golden_dir / "prompts.jsonl").read_text().splitlines())}
+    prompts = require(golden_dir / "prompts.jsonl", "image")
+    rows = {r["id"]: r for r in map(json.loads, prompts.read_text().splitlines())}
     if row_id not in rows:
         raise SystemExit(f"--golden-row must be one of {sorted(rows)}")
     summary = json.loads((golden_dir / "summary_bf16.json").read_text())

@@ -27,7 +27,6 @@ Device-profiler capture (one warmed layer between signposts ``PREFILL_START`` / 
 from __future__ import annotations
 
 import json
-import os
 import statistics
 import sys
 import time
@@ -48,15 +47,14 @@ from models.demos.pplx_decider_v1_27b.tests.test_utils import (
     reader,
     to_device,
 )
+from models.demos.pplx_decider_v1_27b.tt import paths
 from models.demos.pplx_decider_v1_27b.tt.optimizations import PrecisionPolicy
 
 PERF_SEQ_LENS = [128, 1024, 2048, 4096, 8192]  # the prefill buckets
 PROFILE_SEQ_LENS = [128, 2048, 8192]
 WARMUP = 2
 TIMED = 7
-PERF_LOG = Path(
-    os.environ.get("PPLX_DECIDER_PERF_LOG", "/local/ttuser/gtobar/artifacts/pplx_decider/perf/prefill_perf.jsonl")
-)
+PERF_LOG = paths.PERF_LOG
 LAYERS = {"L0_linear": 0, "L3_full": 3}
 
 try:

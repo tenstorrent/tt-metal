@@ -10,6 +10,9 @@ Candidates without results are listed with the reason from ``NOT_RUN``.
 Run::
 
     python models/demos/pplx_decider_v1_27b/doc/datatype_sweep/sweep_report.py [artifacts dir]
+
+The default artifacts dir is ``$PPLX_DECIDER_ARTIFACTS/datatype_sweep`` (``tt/paths.py``); the stage-8
+run used ``$PPLX_DECIDER_ARTIFACTS/stage8``.
 """
 
 from __future__ import annotations
@@ -20,8 +23,20 @@ import re
 import sys
 from pathlib import Path
 
+from models.demos.pplx_decider_v1_27b.tt.paths import ARTIFACTS, DATATYPE_SWEEP_DIR
+
 HERE = Path(__file__).resolve().parent
-ART = Path(sys.argv[1] if len(sys.argv) > 1 else "/local/ttuser/gtobar/artifacts/pplx_decider/stage8")
+ART = Path(sys.argv[1] if len(sys.argv) > 1 else DATATYPE_SWEEP_DIR)
+
+
+def shown(path: Path) -> str:
+    """``path`` with the artifacts root written as ``$PPLX_DECIDER_ARTIFACTS`` (portable in the report)."""
+    try:
+        return f"$PPLX_DECIDER_ARTIFACTS/{Path(path).resolve().relative_to(ARTIFACTS.resolve())}"
+    except ValueError:
+        return str(path)
+
+
 BUCKETS = ("128", "1024", "2048", "4096", "8192")
 MIN_AGREE, NEAR_TIE, MIN_LOGIT_PCC = 24, 0.05, 0.99
 HARDWARE = "1x Blackhole p150a (single device), batch 1, eager"
@@ -83,7 +98,7 @@ def candidate(path: Path) -> dict:
         "device_forward_burst_ms": {b: perf[b]["device_forward_burst"]["median_ms"] for b in BUCKETS if b in perf},
         "command": (
             f"PPLX_DECIDER_PRECISION_CONFIG=models/demos/pplx_decider_v1_27b/doc/datatype_sweep/candidates/{cid}.json "
-            f"PPLX_DECIDER_STAGE6_DIR={out} pytest models/demos/pplx_decider_v1_27b/tests/e2e/test_model.py -q -s; "
+            f"PPLX_DECIDER_STAGE6_DIR={shown(out)} pytest models/demos/pplx_decider_v1_27b/tests/e2e/test_model.py -q -s; "
             "same env: pytest models/demos/pplx_decider_v1_27b/tests/perf/test_model_perf.py -k test_model_perf -q -s"
         ),
     }

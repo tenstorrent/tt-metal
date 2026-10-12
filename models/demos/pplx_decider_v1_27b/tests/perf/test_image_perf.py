@@ -19,34 +19,23 @@ Results: ``$PPLX_DECIDER_STAGE12B_DIR/image_perf.json``.
 from __future__ import annotations
 
 import json
-import os
 import statistics
 import time
-from pathlib import Path
 
 import pytest
 
 import ttnn
 from models.demos.pplx_decider_v1_27b.demo.decider import TTDecider
 from models.demos.pplx_decider_v1_27b.reference.decision_prompts import AppTokenizer
+from models.demos.pplx_decider_v1_27b.tt import paths
 from models.demos.pplx_decider_v1_27b.tt.model import PplxDeciderModel
 
 WARMUP = 2
 BURST_RUNS = 5
 BURST_PAUSE_S = 10.0
-OUT_DIR = Path(
-    os.environ.get("PPLX_DECIDER_STAGE12B_DIR", "/local/ttuser/gtobar/artifacts/pplx_decider/stage12b/image_e2e")
-)
-IMAGE_PROMPTS = (
-    Path(os.environ.get("PPLX_DECIDER_IMAGE_GOLDEN", "/local/ttuser/gtobar/artifacts/pplx_decider/goldens/vision/e2e"))
-    / "prompts.jsonl"
-)
-TEXT_PROMPTS = (
-    Path(
-        os.environ.get("PPLX_DECIDER_DECISION_GOLDEN", "/local/ttuser/gtobar/artifacts/pplx_decider/goldens/decisions")
-    )
-    / "prompts.jsonl"
-)
+OUT_DIR = paths.IMAGE_PERF_DIR  # $PPLX_DECIDER_STAGE12B_DIR, default $PPLX_DECIDER_ARTIFACTS/image_e2e
+IMAGE_PROMPTS = paths.IMAGE_GOLDEN_DIR / "prompts.jsonl"
+TEXT_PROMPTS = paths.DECISION_GOLDEN_DIR / "prompts.jsonl"
 TEXT_ROW = "s01_ticket_routing"
 
 pytestmark = pytest.mark.use_module_device({"l1_small_size": 24576})
@@ -139,9 +128,11 @@ def summarize(phase_runs: list[dict]) -> dict:
 
 @pytest.mark.timeout(7200)
 def test_image_request_latency(decider):
-    image_rows = [json.loads(line) for line in IMAGE_PROMPTS.read_text().splitlines()]
+    image_rows = [json.loads(line) for line in paths.require(IMAGE_PROMPTS, "image").read_text().splitlines()]
     text_row = next(
-        json.loads(l)["row"] for l in TEXT_PROMPTS.read_text().splitlines() if json.loads(l)["id"] == TEXT_ROW
+        json.loads(l)["row"]
+        for l in paths.require(TEXT_PROMPTS, "decision").read_text().splitlines()
+        if json.loads(l)["id"] == TEXT_ROW
     )
     results = {}
     for r in image_rows:

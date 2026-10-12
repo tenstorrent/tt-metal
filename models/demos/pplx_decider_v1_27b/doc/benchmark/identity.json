@@ -12,7 +12,7 @@
     "entry_point": "demo/decider.py TTDecider.from_pretrained(device, vision=True).predict(state, question[, images])",
     "branch": "gtobarTT/pplx-decider-bringup",
     "measured_at_commit": "da43bdb9eff6710f1df630a90b6357f3607de593",
-    "previous_measurement": "b98508eac2cea97f804d7a28c46ccad2c3715743 (stage 12B model code, stage-11 commit 78e35968f19); raw outputs /local/ttuser/gtobar/artifacts/pplx_decider/stage11/",
+    "previous_measurement": "b98508eac2cea97f804d7a28c46ccad2c3715743 (stage 12B model code, stage-11 commit 78e35968f19); raw outputs $PPLX_DECIDER_ARTIFACTS/stage11/",
     "model_code_changed_in_stage_11": false,
     "tt_metal_upstream_base": "2c1e1ebdd638886821f35113a5fd0d6335d71608 (merge-base with origin/main, 2026-10-09)"
   },
@@ -31,8 +31,8 @@
     "device_open": "ttnn.open_device(device_id=0, l1_small_size=24576) (runner); pytest use_module_device l1_small_size=24576, trace_region_size=256 MiB (bucket harness)"
   },
   "host": {
-    "python_env": "/local/ttuser/gtobar/tt-metal/python_env (Python 3.10, datasets 2.21.0)",
-    "HF_HOME": "/local/ttuser/gtobar/hf"
+    "python_env": "<tt-metal>/python_env (Python 3.10, datasets 2.21.0)",
+    "HF_HOME": "$HF_HOME (local HF cache holding the snapshot and the datasets)"
   },
   "datasets": {
     "winogrande": "allenai/winogrande@01e74176c63542e6b0bcb004dcdea22d94fb67b5 winogrande_xl/validation",
@@ -40,7 +40,7 @@
     "belebele": "facebook/belebele@7899cdfa4e1e0d733fd77c848e2c273cb1d32be2 eng_Latn/test",
     "seed": 20260920,
     "subset_size": 200,
-    "manifest": "doc/benchmark/subsets_manifest.json (copy of /local/ttuser/gtobar/artifacts/pplx_decider/stage11/subsets/manifest.json: ids, ids sha256, subset file sha256, seq_len, buckets)"
+    "manifest": "doc/benchmark/subsets_manifest.json (copy of $PPLX_DECIDER_ARTIFACTS/stage11/subsets/manifest.json: ids, ids sha256, subset file sha256, seq_len, buckets)"
   },
-  "raw_outputs": "/local/ttuser/gtobar/artifacts/pplx_decider/stage11_refresh/{subsets,run,perf_buckets,logs,report_tables.md,compare_vs_stage11.json} (subsets byte-identical to stage11/subsets)"
+  "raw_outputs": "$PPLX_DECIDER_ARTIFACTS/stage11_refresh/{subsets,run,perf_buckets,logs,report_tables.md,compare_vs_stage11.json} (subsets byte-identical to stage11/subsets)"
 }

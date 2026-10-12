@@ -19,7 +19,7 @@ from pathlib import Path
 import torch
 
 from models.demos.pplx_decider_v1_27b.demo.decider import DEMO_STATE, demo_questions
-from models.demos.pplx_decider_v1_27b.reference.decision_prompts import DEFAULT_SNAPSHOT, AppTokenizer
+from models.demos.pplx_decider_v1_27b.reference.decision_prompts import AppTokenizer
 from models.demos.pplx_decider_v1_27b.reference.hf_decision_golden import (
     decision_head,
     embed_prompts,
@@ -32,6 +32,7 @@ from models.demos.pplx_decider_v1_27b.reference.hf_reference import (
     build_final_norm,
     build_readout,
 )
+from models.demos.pplx_decider_v1_27b.tt.paths import snapshot_path
 
 
 @torch.no_grad()
@@ -42,8 +43,9 @@ def main() -> None:
     args = parser.parse_args()
     torch.set_num_threads(args.threads)
     start = time.time()
-    tok = AppTokenizer(DEFAULT_SNAPSHOT)
-    reader = SnapshotReader(DEFAULT_SNAPSHOT)
+    snapshot = snapshot_path()
+    tok = AppTokenizer(snapshot)
+    reader = SnapshotReader(snapshot)
     questions = demo_questions()
     rows = {name: {"state": DEMO_STATE, "question": q} for name, q in questions.items()}
     ids = {name: tok.input_ids(row) for name, row in rows.items()}

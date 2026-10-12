@@ -22,9 +22,7 @@ Run::
 from __future__ import annotations
 
 import json
-import os
 from functools import lru_cache
-from pathlib import Path
 
 import pytest
 import torch
@@ -41,6 +39,7 @@ from models.demos.pplx_decider_v1_27b.tests.test_utils import (
     to_device,
     to_host,
 )
+from models.demos.pplx_decider_v1_27b.tt import paths
 from models.demos.pplx_decider_v1_27b.tt.rope import (
     PplxRequestRotary,
     get_rope_index,
@@ -50,9 +49,7 @@ from models.demos.pplx_decider_v1_27b.tt.rope import (
     text_inv_freq,
 )
 
-E2E_GOLDEN = Path(
-    os.environ.get("PPLX_DECIDER_IMAGE_GOLDEN", "/local/ttuser/gtobar/artifacts/pplx_decider/goldens/vision/e2e")
-)
+E2E_GOLDEN = paths.IMAGE_GOLDEN_DIR
 ROW_IDS = [
     "v01_dominant_color",
     "v02_count_circles",
@@ -69,11 +66,12 @@ LAYER_ROW = "v02_count_circles"  # 234 image tokens, rope positions jump back by
 
 @lru_cache(maxsize=1)
 def golden_rows() -> dict:
-    return {r["id"]: r for r in map(json.loads, (E2E_GOLDEN / "prompts.jsonl").read_text().splitlines())}
+    prompts = paths.require(E2E_GOLDEN / "prompts.jsonl", "image")
+    return {r["id"]: r for r in map(json.loads, prompts.read_text().splitlines())}
 
 
 def golden_tensor(row_id: str, name: str) -> torch.Tensor:
-    with safe_open(str(E2E_GOLDEN / "golden_bf16.safetensors"), framework="pt") as f:
+    with safe_open(str(paths.require(E2E_GOLDEN / "golden_bf16.safetensors", "image")), framework="pt") as f:
         return f.get_tensor(f"{row_id}.{name}")
 
 

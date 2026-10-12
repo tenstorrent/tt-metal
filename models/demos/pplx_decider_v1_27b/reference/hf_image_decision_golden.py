@@ -49,7 +49,6 @@ from models.demos.pplx_decider_v1_27b.reference.hf_decision_golden import (
 )
 from models.demos.pplx_decider_v1_27b.reference.hf_reference import build_decoder_layer, build_final_norm, build_readout
 from models.demos.pplx_decider_v1_27b.reference.hf_vision_reference import (
-    GOLDEN_DIR,
     VisionSnapshotReader,
     build_vision_tower,
     default_dtype,
@@ -59,9 +58,10 @@ from models.demos.pplx_decider_v1_27b.reference.image_decision_prompts import (
     encode,
     image_tokenizer,
 )
+from models.demos.pplx_decider_v1_27b.tt.paths import IMAGE_GOLDEN_DIR
 
 DTYPE = torch.bfloat16
-DEFAULT_OUT = GOLDEN_DIR / "e2e"
+DEFAULT_OUT = IMAGE_GOLDEN_DIR  # $PPLX_DECIDER_IMAGE_GOLDEN, default <vision golden>/e2e
 HARNESS_ROW = "v02_count_circles"  # 936 patches (not a multiple of 128), 234 image tokens
 TEXT_ROW = "s01_ticket_routing"  # shortest-but-one stage-6 row (178 tokens)
 
@@ -376,9 +376,9 @@ def main() -> None:
     args = parser.parse_args()
     torch.set_num_threads(args.threads)
     if args.snapshot is None:
-        from models.demos.pplx_decider_v1_27b.reference.decision_prompts import DEFAULT_SNAPSHOT
+        from models.demos.pplx_decider_v1_27b.tt.paths import snapshot_path
 
-        args.snapshot = DEFAULT_SNAPSHOT
+        args.snapshot = snapshot_path()
     if args.harness:
         harness(args)
         return

@@ -3,7 +3,7 @@
 (Stage 12B, image decisions end to end, is the second part of this file.)
 
 Host: one Blackhole p150a. Branch `gtobarTT/pplx-decider-bringup`, base `a05268d90b9`.
-Artifacts: `/local/ttuser/gtobar/artifacts/pplx_decider/stage12a/` (`pcc_vision.jsonl`, `pcc_table.md`,
+Artifacts: `$PPLX_DECIDER_ARTIFACTS/stage12a/` (`pcc_vision.jsonl`, `pcc_table.md`,
 `vision_perf.json`, `vision_dram_with_text.json`, `watcher/`, run logs). Labels: **measured** (command +
 value), **inferred**.
 
@@ -128,7 +128,7 @@ text model (C0) and vision both resident, 3.572 GiB is free.
 # Stage 12B work log: image decisions end to end
 
 Host: one Blackhole p150a. Branch `gtobarTT/pplx-decider-bringup`, base `10c63f1535c`.
-Artifacts: `/local/ttuser/gtobar/artifacts/pplx_decider/stage12b/` (`text_baseline/`, `text_after/`,
+Artifacts: `$PPLX_DECIDER_ARTIFACTS/stage12b/` (`text_baseline/`, `text_after/`,
 `text_bit_identity.txt`, `image_e2e/`, `pcc_12b.jsonl`, `pcc_stage1_rerun.jsonl`, `watcher/`, `logs/`).
 Golden: `goldens/vision/e2e/` (8 image rows, BF16, from `reference/hf_image_decision_golden.py`, not
 regenerated). Precision: text C0 (`act_bf16__w_bfp8_all__hifi2`), vision BF16

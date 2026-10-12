@@ -65,7 +65,7 @@
         "4096": 1468.2258600369096,
         "8192": 3489.4173719221726
       },
-      "command": "PPLX_DECIDER_PRECISION_CONFIG=models/demos/pplx_decider_v1_27b/doc/datatype_sweep/candidates/C0_bfp8_all_hifi2.json PPLX_DECIDER_STAGE6_DIR=/local/ttuser/gtobar/artifacts/pplx_decider/stage8/C0_bfp8_all_hifi2 pytest models/demos/pplx_decider_v1_27b/tests/e2e/test_model.py -q -s; same env: pytest models/demos/pplx_decider_v1_27b/tests/perf/test_model_perf.py -k test_model_perf -q -s",
+      "command": "PPLX_DECIDER_PRECISION_CONFIG=models/demos/pplx_decider_v1_27b/doc/datatype_sweep/candidates/C0_bfp8_all_hifi2.json PPLX_DECIDER_STAGE6_DIR=$PPLX_DECIDER_ARTIFACTS/stage8/C0_bfp8_all_hifi2 pytest models/demos/pplx_decider_v1_27b/tests/e2e/test_model.py -q -s; same env: pytest models/demos/pplx_decider_v1_27b/tests/perf/test_model_perf.py -k test_model_perf -q -s",
       "selected": true
     },
     {
@@ -126,7 +126,7 @@
         "4096": 1442.967489012517,
         "8192": 3347.309251083061
       },
-      "command": "PPLX_DECIDER_PRECISION_CONFIG=models/demos/pplx_decider_v1_27b/doc/datatype_sweep/candidates/C1_bfp4_mlp_hifi2.json PPLX_DECIDER_STAGE6_DIR=/local/ttuser/gtobar/artifacts/pplx_decider/stage8/C1_bfp4_mlp_hifi2 pytest models/demos/pplx_decider_v1_27b/tests/e2e/test_model.py -q -s; same env: pytest models/demos/pplx_decider_v1_27b/tests/perf/test_model_perf.py -k test_model_perf -q -s",
+      "command": "PPLX_DECIDER_PRECISION_CONFIG=models/demos/pplx_decider_v1_27b/doc/datatype_sweep/candidates/C1_bfp4_mlp_hifi2.json PPLX_DECIDER_STAGE6_DIR=$PPLX_DECIDER_ARTIFACTS/stage8/C1_bfp4_mlp_hifi2 pytest models/demos/pplx_decider_v1_27b/tests/e2e/test_model.py -q -s; same env: pytest models/demos/pplx_decider_v1_27b/tests/perf/test_model_perf.py -k test_model_perf -q -s",
       "selected": false
     },
     {
@@ -187,7 +187,7 @@
         "4096": 1183.6601439863443,
         "8192": 2761.8596659740433
       },
-      "command": "PPLX_DECIDER_PRECISION_CONFIG=models/demos/pplx_decider_v1_27b/doc/datatype_sweep/candidates/C2_bfp4_mlp_lofi.json PPLX_DECIDER_STAGE6_DIR=/local/ttuser/gtobar/artifacts/pplx_decider/stage8/C2_bfp4_mlp_lofi pytest models/demos/pplx_decider_v1_27b/tests/e2e/test_model.py -q -s; same env: pytest models/demos/pplx_decider_v1_27b/tests/perf/test_model_perf.py -k test_model_perf -q -s",
+      "command": "PPLX_DECIDER_PRECISION_CONFIG=models/demos/pplx_decider_v1_27b/doc/datatype_sweep/candidates/C2_bfp4_mlp_lofi.json PPLX_DECIDER_STAGE6_DIR=$PPLX_DECIDER_ARTIFACTS/stage8/C2_bfp4_mlp_lofi pytest models/demos/pplx_decider_v1_27b/tests/e2e/test_model.py -q -s; same env: pytest models/demos/pplx_decider_v1_27b/tests/perf/test_model_perf.py -k test_model_perf -q -s",
       "selected": false
     },
     {

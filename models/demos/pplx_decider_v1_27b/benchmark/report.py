@@ -44,7 +44,7 @@ import struct
 from pathlib import Path
 
 from models.demos.pplx_decider_v1_27b.benchmark.datasets import CARD
-from models.demos.pplx_decider_v1_27b.reference.decision_prompts import DEFAULT_SNAPSHOT
+from models.demos.pplx_decider_v1_27b.tt.paths import snapshot_path
 
 PEAK_TFLOPS_HIFI2 = 130 * 1.35e9 * 4096 / 2 / 1e12
 DRAM_GBPS = 512.0
@@ -111,8 +111,9 @@ def main() -> None:
     parser = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
     parser.add_argument("--stage11", type=Path, required=True)
     parser.add_argument("--doc", type=Path, required=True)
-    parser.add_argument("--snapshot", type=Path, default=Path(DEFAULT_SNAPSHOT))
+    parser.add_argument("--snapshot", type=Path, default=None, help="default: the HF cache (tt/paths.py)")
     args = parser.parse_args()
+    args.snapshot = args.snapshot or snapshot_path()
     s11 = args.stage11
     manifest = json.loads((s11 / "subsets" / "manifest.json").read_text())
     preds = read_jsonl(s11 / "run" / "predictions_accuracy.jsonl")

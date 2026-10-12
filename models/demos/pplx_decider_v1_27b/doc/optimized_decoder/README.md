@@ -127,7 +127,7 @@ peak). Every matmul row still reads `HiFi2 BF16 x BFP8 => BF16`. 0 host ops.
 - **Watcher** (`TT_METAL_WATCHER=10`, `test_decoder_layer.py` at S128 / S2048 / S8192, one run per
   kind): 3 + 3 passed, no disabled features, 0 error / assert / sanitize / hang lines.
 
-Artifacts: `/local/ttuser/gtobar/artifacts/pplx_decider/stage3b/` (`bench/`, `ab/`, `tracy/`, `logs/`,
+Artifacts: `$PPLX_DECIDER_ARTIFACTS/stage3b/` (`bench/`, `ab/`, `tracy/`, `logs/`,
 `model_perf_{A,B}/`, `e2e/`, `e2e_image/`, `watcher/`, `scripts/`).
 
 ## Stage 3A
@@ -241,7 +241,7 @@ cores), the S=128 gate|up op limit, GDN chunk prep/scan and conv, SDPA at long S
 
 ## Commands
 
-Environment: `source python_env/bin/activate; export TT_METAL_HOME=$PWD PYTHONPATH=$PWD HF_HOME=/local/ttuser/gtobar/hf`.
+Environment: `source python_env/bin/activate; export TT_METAL_HOME=$PWD PYTHONPATH=$PWD HF_HOME=<your HF cache>`.
 
 | purpose | command |
 |---|---|
@@ -251,10 +251,10 @@ Environment: `source python_env/bin/activate; export TT_METAL_HOME=$PWD PYTHONPA
 | device profile | `python -m tracy -r -p -v --no-web-server -o <dir> -m pytest "models/demos/pplx_decider_v1_27b/tests/perf/test_prefill_perf.py::test_profile_layer[L0_linear-S2048-device_params0]"` |
 | perf report | `tt-perf-report <ops_perf_results.csv> --start-signpost PREFILL_START --end-signpost PREFILL_END [--csv out.csv]` (advice on) |
 | full-model latency | `PPLX_DECIDER_STAGE6_DIR=<dir> pytest models/demos/pplx_decider_v1_27b/tests/perf/test_model_perf.py::test_model_perf -q -s` |
-| 3B candidate bench | `BENCH_OUT=<jsonl> python /local/ttuser/gtobar/artifacts/pplx_decider/stage3b/scripts/bench3b.py <layer> <S,S,..> base,<cand>,.. <rounds>` (`BENCH_STACK=8` for back-to-back layers) |
-| 3B A/B | `/local/ttuser/gtobar/artifacts/pplx_decider/stage3b/scripts/ab.sh` (A = `git worktree add --detach <dir> 57f76869913`) |
+| 3B candidate bench | `BENCH_OUT=<jsonl> python $PPLX_DECIDER_ARTIFACTS/stage3b/scripts/bench3b.py <layer> <S,S,..> base,<cand>,.. <rounds>` (`BENCH_STACK=8` for back-to-back layers) |
+| 3B A/B | `$PPLX_DECIDER_ARTIFACTS/stage3b/scripts/ab.sh` (A = `git worktree add --detach <dir> 57f76869913`) |
 | image e2e to its own dir | `PPLX_DECIDER_IMAGE_E2E_DIR=<dir> pytest models/demos/pplx_decider_v1_27b/tests/e2e/test_image_model.py -q -s` |
 | watcher | `TT_METAL_WATCHER=10 TT_METAL_LOGS_PATH=<dir> pytest models/demos/pplx_decider_v1_27b/tests/pcc/test_decoder_layer.py -q -k "S2048 and (L0 or L3)"` |
 
-Artifacts: `/local/ttuser/gtobar/artifacts/pplx_decider/stage3a/` (`micro/`, `ab/`, `tracy/`,
+Artifacts: `$PPLX_DECIDER_ARTIFACTS/stage3a/` (`micro/`, `ab/`, `tracy/`,
 `logs/`, `pcc_suite_final.jsonl`, `model_perf_{A,B}/`, `watcher/`).

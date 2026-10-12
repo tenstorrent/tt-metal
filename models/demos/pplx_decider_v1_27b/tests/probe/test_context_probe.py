@@ -18,9 +18,7 @@ Run::
 """
 
 import json
-import os
 import time
-from pathlib import Path
 
 import pytest
 import torch
@@ -35,14 +33,13 @@ from models.demos.pplx_decider_v1_27b.tests.test_utils import (
     to_device,
     to_host,
 )
+from models.demos.pplx_decider_v1_27b.tt import paths
 from models.demos.pplx_decider_v1_27b.tt.decoder import PplxDecoderLayer
 from models.demos.pplx_decider_v1_27b.tt.model_config import PplxDeciderArgs
 from models.demos.pplx_decider_v1_27b.tt.optimizations import Optimizations, PrecisionPolicy
 from models.demos.pplx_decider_v1_27b.tt.rope import PplxRotary
 
-PROBE_LOG = Path(
-    os.environ.get("PPLX_DECIDER_PROBE_LOG", "/local/ttuser/gtobar/artifacts/pplx_decider/logs/context_probe.jsonl")
-)
+PROBE_LOG = paths.PROBE_LOG
 
 
 def dram_view(device) -> dict:

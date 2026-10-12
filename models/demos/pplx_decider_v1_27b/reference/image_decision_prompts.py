@@ -29,11 +29,12 @@ import torch
 from PIL import Image, ImageDraw, ImageFont
 
 from models.demos.pplx_decider_v1_27b.reference.decision_prompts import MAX_LENGTH, AppTokenizer, bucket_of
+from models.demos.pplx_decider_v1_27b.tt.paths import GOLDEN_IMAGE_DIR
 
 SEED = 20261012
 APP_IMAGE_SIZE = {"shortest_edge": 65536, "longest_edge": 262144}
 IMAGE_TOKEN_ID = 248056
-DEFAULT_IMAGE_DIR = Path("/local/ttuser/gtobar/artifacts/pplx_decider/goldens/vision/images")
+DEFAULT_IMAGE_DIR = GOLDEN_IMAGE_DIR
 STATE = "The user attached one image. Answer from what the image shows."
 
 RGB = {

@@ -3,7 +3,7 @@
 """End-to-end image decisions (stage 12B): vision tower -> splice -> 64 layers (3D mRoPE) -> head.
 
 Golden (``reference/hf_image_decision_golden.py``; 8 image rows, bf16 HF, layer-streamed on CPU):
-``$PPLX_DECIDER_IMAGE_GOLDEN`` (default artifacts/pplx_decider/goldens/vision/e2e/), files
+``$PPLX_DECIDER_IMAGE_GOLDEN`` (default ``$PPLX_DECIDER_ARTIFACTS/goldens/vision/e2e/``), files
 ``golden_bf16.safetensors``, ``summary_bf16.json`` and ``prompts.jsonl`` (rows with the PNG paths).
 Every row is re-encoded with the app's processor here (input ids checked against the golden), so
 the test covers the real input prep.
@@ -21,7 +21,7 @@ Recorded: final-hidden PCC, max |prob diff|, last-token residual PCC after each 
 (rows in ``TRACE_ROWS``). Also: ``TTDecider.predict(..., images=[path])`` on a golden row,
 determinism, and the runtime fallback audit of an image request. Results go to
 ``$PPLX_DECIDER_IMAGE_E2E_DIR`` (else ``$PPLX_DECIDER_STAGE12B_DIR``, else
-artifacts/pplx_decider/stage12b/image_e2e/).
+``$PPLX_DECIDER_ARTIFACTS/image_e2e/``).
 
 Run::
 
@@ -31,7 +31,6 @@ Run::
 from __future__ import annotations
 
 import json
-import os
 import statistics
 import time
 from functools import lru_cache
@@ -45,18 +44,13 @@ from safetensors.torch import save_file
 
 import ttnn
 from models.demos.pplx_decider_v1_27b.tests.runtime_audit import count_host_calls
+from models.demos.pplx_decider_v1_27b.tt import paths
 from models.demos.pplx_decider_v1_27b.tt.model import IMAGE_TOKEN_ID, PplxDeciderModel
 
-GOLDEN_DIR = Path(
-    os.environ.get("PPLX_DECIDER_IMAGE_GOLDEN", "/local/ttuser/gtobar/artifacts/pplx_decider/goldens/vision/e2e")
-)
-# Output directory: $PPLX_DECIDER_IMAGE_E2E_DIR (stage-neutral; set it per run so a rerun never
-# overwrites another stage's evidence), else the older $PPLX_DECIDER_STAGE12B_DIR, else the 12B default.
-OUT_DIR = Path(
-    os.environ.get("PPLX_DECIDER_IMAGE_E2E_DIR")
-    or os.environ.get("PPLX_DECIDER_STAGE12B_DIR")
-    or "/local/ttuser/gtobar/artifacts/pplx_decider/stage12b/image_e2e"
-)
+GOLDEN_DIR = paths.IMAGE_GOLDEN_DIR
+# Output directory: $PPLX_DECIDER_IMAGE_E2E_DIR (set it per run so a rerun never overwrites other
+# evidence), else $PPLX_DECIDER_STAGE12B_DIR, else $PPLX_DECIDER_ARTIFACTS/image_e2e.
+OUT_DIR = paths.IMAGE_E2E_DIR
 MIN_AGREE = 7
 NEAR_TIE_GAP = 0.05
 LOGIT_PCC = 0.99
@@ -75,11 +69,7 @@ def pcc(a: torch.Tensor, b: torch.Tensor) -> float:
 
 class Golden:
     def __init__(self, directory: Path = GOLDEN_DIR):
-        path = directory / "golden_bf16.safetensors"
-        if not path.exists():
-            pytest.fail(
-                f"Missing {path}; run python -m models.demos.pplx_decider_v1_27b.reference.hf_image_decision_golden"
-            )
+        path = paths.require(directory / "golden_bf16.safetensors", "image")
         self.summary = json.loads((directory / "summary_bf16.json").read_text())
         self.rows = self.summary["rows"]
         self.prompts = {r["id"]: r for r in map(json.loads, (directory / "prompts.jsonl").read_text().splitlines())}

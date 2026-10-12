@@ -19,10 +19,12 @@ import matplotlib
 matplotlib.use("Agg")
 import matplotlib.pyplot as plt  # noqa: E402
 
+from models.demos.pplx_decider_v1_27b.tt.paths import E2E_DIR, MODEL_ROOT  # noqa: E402
+
 FLAGGED = ("s01_ticket_routing", "m06_server_500", "x01_log_most_errors")
 COLORS = ("#2a78d6", "#eb6834", "#1baf7a")  # categorical slots 1-3 (dataviz reference palette, light)
-DOC = Path(__file__).resolve().parents[2] / "doc" / "full_model"
-DEFAULT_IN = Path("/local/ttuser/gtobar/artifacts/pplx_decider/stage6/e2e_decisions.json")
+DOC = MODEL_ROOT / "doc" / "full_model"
+DEFAULT_IN = E2E_DIR / "e2e_decisions.json"  # written by tests/e2e/test_model.py
 
 
 def main() -> None:

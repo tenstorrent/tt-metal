@@ -36,12 +36,13 @@ from pathlib import Path
 import ttnn
 from models.demos.pplx_decider_v1_27b.benchmark.datasets import SEED, load_subsets
 from models.demos.pplx_decider_v1_27b.demo.decider import TTDecider
+from models.demos.pplx_decider_v1_27b.tt.paths import IMAGE_GOLDEN_DIR, require
 
 IDLE_S = 10.0
 WARMUP = 2
 BURST_RUNS = 5
 SUSTAINED_RUNS = 7
-IMAGE_GOLDEN = Path("/local/ttuser/gtobar/artifacts/pplx_decider/goldens/vision/e2e/prompts.jsonl")
+IMAGE_GOLDEN = IMAGE_GOLDEN_DIR / "prompts.jsonl"
 IMAGE_ROWS = ("v01_dominant_color", "v04_tallest_bar")  # fewest (256) and most (1024) patches of the golden set
 
 
@@ -94,7 +95,7 @@ def main() -> None:
     args = parser.parse_args()
     args.out.mkdir(parents=True, exist_ok=True)
     examples = load_subsets(args.subsets)
-    golden = [json.loads(line) for line in IMAGE_GOLDEN.read_text().splitlines()]
+    golden = [json.loads(line) for line in require(IMAGE_GOLDEN, "image").read_text().splitlines()]
     image_rows = {r["id"]: r for r in golden if r["id"] in IMAGE_ROWS}
 
     device = ttnn.open_device(device_id=args.device_id, l1_small_size=24576)
