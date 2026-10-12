@@ -610,6 +610,8 @@ class TtCSAIndexer(_TtHCABase):
         rope = ttnn.slice(q, [0, 0, 0, nope_dim], [1, heads_local, S_l, self.head_dim])
         rope = ttnn.experimental.rotary_embedding_llama(rope, cos, sin, self.trans_mat, is_decode_mode=False)
         q = ttnn.concat([nope, rope], dim=-1)  # [1, H_l, S_l, Dh]
+        if getattr(self, "q_act_quant", None) is not None:  # V4.1 (DS41F-0048): model.py fp4-quantises the index q
+            q = self.q_act_quant(q)
         scores = ttnn.relu(
             ttnn.matmul(q, keys, transpose_b=True, memory_config=self.memory_config)
         )  # [1, H_l, S_l, cap]

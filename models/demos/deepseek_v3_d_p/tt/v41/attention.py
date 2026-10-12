@@ -16,6 +16,8 @@ Weights arrive in ``model.py``'s names (``tt/v41/weights.py``) and are mapped on
 
 from __future__ import annotations
 
+import os
+
 import torch
 
 import ttnn
@@ -331,6 +333,41 @@ class V41Compressor(TtHCACompressor):
         return entries, mask_block
 
 
+# DS41F-0048: model.py fp4-quantises the indexer's q and k (``fp4_act_quant(x, 32, inplace=True)``, e8m0 scales) before the
+# score GEMM; V41_PREFILL_INDEX_FP4=1 does the same on device (fake quant: the values are snapped to the fp4 grid and kept in
+# the tensor's dtype). Per 32-wide block: s = 2 ** ceil(log2(amax / 6)); x <- e2m1_rne(clamp(x / s, -6, 6)) * s.
+INDEX_FP4 = os.environ.get("V41_PREFILL_INDEX_FP4", "0") == "1"
+# e2m1 magnitudes 0, .5, 1, 1.5, 2, 3, 4, 6 as a sum of steps at the midpoints; ties go to the even code (0.25 -> 0,
+# 0.75 -> 1, 1.25 -> 1, 1.75 -> 2, 2.5 -> 2, 3.5 -> 4, 5 -> 4): "gt" at a tie that rounds down, "ge" at one that rounds up
+_FP4_STEPS = (
+    (0.25, 0.5, "gt"),
+    (0.75, 0.5, "ge"),
+    (1.25, 0.5, "gt"),
+    (1.75, 0.5, "ge"),
+    (2.5, 1.0, "gt"),
+    (3.5, 1.0, "ge"),
+    (5.0, 2.0, "gt"),
+)
+
+
+def fp4_act_fake_quant(x, block: int = 32):
+    """``model.py``'s ``fp4_act_quant(x, block, inplace=True)`` (e8m0 scales) on a [a, b, c, D] TILE tensor, D % block == 0.
+    The scale's ceil(log2) takes a 3e-3 margin below the integer: an exact power of two (amax = 1.5 * 2^m, bf16) stays put,
+    and the next bf16 amax above it is >= 0.0075 above in log2, so the SFPU log2's error cannot flip it."""
+    a0, a1, a2, D = (int(v) for v in x.shape)
+    xb = ttnn.typecast(ttnn.reshape(x, [a0, a1, a2 * (D // block), block]), ttnn.float32)
+    amax = ttnn.clamp(ttnn.max(ttnn.abs(xb), dim=-1, keepdim=True), min=6.0 * 2.0**-126)
+    t = ttnn.ceil(ttnn.subtract(ttnn.log2(ttnn.multiply(amax, 1.0 / 6.0)), 3e-3))
+    y = ttnn.clamp(ttnn.multiply(xb, ttnn.exp2(ttnn.neg(t))), min=-6.0, max=6.0)
+    mag_in = ttnn.abs(y)
+    mag = None
+    for th, w, op in _FP4_STEPS:
+        step = ttnn.multiply((ttnn.gt if op == "gt" else ttnn.ge)(mag_in, th), w)
+        mag = step if mag is None else ttnn.add(mag, step)
+    q = ttnn.multiply(ttnn.multiply(ttnn.sign(y), mag), ttnn.exp2(t))
+    return ttnn.typecast(ttnn.reshape(q, [a0, a1, a2, D]), x.dtype)
+
+
 class V41IndexKeys:
     """V4.1's lightning-indexer KEYS (``Indexer.forward``, owner layers): ``k = k_norm(wk(latent))``, RoPE on the last 64 at
     the group positions -- from the main compressor's latent of the same chunk (V4-Flash ran a second compressor). Stands in
@@ -372,7 +409,10 @@ class V41IndexKeys:
         rope = ttnn.slice(k, [0, 0, 0, self.head_dim - m.rope_head_dim], [1, 1, n, self.head_dim])
         cos, sin = m.last_rope
         rope = ttnn.experimental.rotary_embedding_llama(rope, cos, sin, m.trans_mat, is_decode_mode=False)
-        keys = m._sp_all_gather(ttnn.concat([nope, rope], dim=-1))
+        k = ttnn.concat([nope, rope], dim=-1)
+        if INDEX_FP4:  # model.py: fp4_act_quant(k) after the RoPE, before the key cache
+            k = fp4_act_fake_quant(k)
+        keys = m._sp_all_gather(k)
         return keys, None, prior
 
 
@@ -435,6 +475,8 @@ class V41CSA(_V41QStem, TtCSA):
             layer=layer,
             name="attn",
         )
+        if INDEX_FP4:
+            indexer.q_act_quant = fp4_act_fake_quant
         return cls(mesh_device, compressor=comp, indexer=indexer, sparse_path=False, **kw)
 
 
