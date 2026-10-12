@@ -2818,3 +2818,28 @@ Services are terminal; successful transient units had been garbage-collected
 by collection, so controller/JUnit/native logs prove success. No job from this
 series remains queued. The small gain narrows the remaining projection budget;
 GDN operand preparation and SDPA scheduling remain larger implementation targets.
+
+## October 12, 01:33 and 08:14 UTC: resident scheduling and bank placement
+
+Implemented isolated scheduling variants that hoist decay broadcast, group four
+state loads, or combine both. Native compilation, 12 CPU checks and exact B16/B32
+state/output passed. B16 recurrence 81.829 -> 80.621 us best; projected model
+saving 0.058 ms / +0.025 TSU. No useful B32 improvement. Not selected.
+
+Implemented read/write/balanced mapping of complete recurrence work items to
+the native first-device bank anchors, retaining all 120 workers and unchanged
+kernels. Seventeen CPU checks and exact native B16/B32 checks passed. All
+placements regressed: B16 81.443 us control versus 113.582/83.295/101.803 us;
+B32 142.570 versus 222.958/164.055/200.557 us. Lower logical Manhattan cost
+did not predict performance. No physical-hop or all-rank optimality claim;
+traffic concentration is an unproven explanation. Not selected.
+
+Each test covered cancellation and 64 changing inputs on four ranks, retained
+distinct buffers, stable addresses and read-only inputs. Traced timing used
+2592 updates per arm with matching final state/output. Allocation tracking
+passed, cleanup completed and neither job reset the Galaxy. Hardware tests
+took 36.29 and 34.38 seconds; the interval between tests was not runtime.
+At 08:21 UTC both units were inactive, the lock free and dirty marker absent.
+No new full-model, GPQA or 4096-step qualification was run. Current model is
+still 20.884562 TSU. All 35 raw artifacts, generated kernel hashes and tested
+source are sealed in [the report](../galaxy-evidence/gdn-schedule-placement-results-v1/README.md).

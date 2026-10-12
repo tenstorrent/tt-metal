@@ -1,0 +1,33 @@
+{
+  "command": [
+    "systemd-run",
+    "--user",
+    "--unit=qwen38-gdn-bank-placement-v1-20261012.service",
+    "--property=WorkingDirectory=/home/ttuser/qwen38-artifacts-20261007/gdn-bank-placement-source-v1",
+    "--property=RuntimeMaxSec=1800",
+    "--property=TimeoutStopSec=240",
+    "--property=KillMode=mixed",
+    "--property=MemoryMax=64G",
+    "--property=CPUQuota=800%",
+    "--property=Nice=10",
+    "--property=StandardOutput=append:/home/ttuser/qwen38-artifacts-20261007/gdn-bank-placement-control-v1/run.log",
+    "--property=StandardError=append:/home/ttuser/qwen38-artifacts-20261007/gdn-bank-placement-control-v1/run.log",
+    "--setenv=PATH=/home/ttuser/kimi-prefill.Ubx2wY/runtime/qwen38-27b-20261006/python_env/bin:/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin",
+    "--setenv=PYTHONPATH=/home/ttuser/qwen38-artifacts-20261007/gdn-bank-placement-source-v1:/home/ttuser/kimi-prefill.Ubx2wY/runtime/qwen38-27b-20261006/metal:/home/ttuser/kimi-prefill.Ubx2wY/runtime/qwen38-27b-20261006/metal/tools",
+    "--setenv=LD_LIBRARY_PATH=/home/ttuser/kimi-prefill.Ubx2wY/runtime/qwen38-27b-20261006/metal-install/lib:/home/ttuser/kimi-prefill.Ubx2wY/runtime/qwen38-27b-20261006/metal-build/lib",
+    "--setenv=TT_METAL_HOME=/home/ttuser/kimi-prefill.Ubx2wY/runtime/qwen38-27b-20261006/metal",
+    "--setenv=TT_METAL_CACHE=/home/ttuser/kimi-prefill.Ubx2wY/runtime/qwen38-27b-20261006/jit-cache-metal-galaxy",
+    "--setenv=ARCH_NAME=blackhole",
+    "--setenv=OMP_NUM_THREADS=8",
+    "--setenv=PYTHONUNBUFFERED=1",
+    "--setenv=TT_METAL_TRACE_ALLOC_TRACKING=1",
+    "--setenv=TT_METAL_TRACE_ALLOC_TRACEBACKS=1",
+    "/home/ttuser/kimi-prefill.Ubx2wY/runtime/qwen38-27b-20261006/python_env/bin/python3.10",
+    "/home/ttuser/qwen38-artifacts-20261007/gdn-bank-placement-control-v1/run.py"
+  ],
+  "returncode": 0,
+  "stdout": "",
+  "stderr": "Running as unit: qwen38-gdn-bank-placement-v1-20261012.service\n",
+  "base_commit": "96ed2c89378d34739b368f62e5d65af89c31c106",
+  "source_manifest_sha256": "a36df455527c333050edccca4303f58a08ae17b27141469158dbbd9ac609f639"
+}

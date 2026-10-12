@@ -1,0 +1,214 @@
+{
+  "artifacts": [
+    {
+      "original": "gdn-bank-placement-control-v1/collection-unit.json",
+      "stored": "raw/gdn-bank-placement-control-v1/collection-unit.json",
+      "bytes": 185,
+      "sha256": "7aa7b4ce5ee9ff7322feb73e58079645b03c0002f22b15438723fcba121ce0a1"
+    },
+    {
+      "original": "gdn-bank-placement-control-v1/launch-unit.json",
+      "stored": "raw/gdn-bank-placement-control-v1/launch-unit.json",
+      "bytes": 156,
+      "sha256": "338e690323012d1ca9c8983c3688d77fcf11a0fab2092fdf9c6ac7c5aa4a3049"
+    },
+    {
+      "original": "gdn-bank-placement-control-v1/launch.json",
+      "stored": "raw/gdn-bank-placement-control-v1/launch.json",
+      "bytes": 2093,
+      "sha256": "2f0f64706ee9d59166d8cc281806713e60f3e3c61988bbeaf7b8d09566f26f59"
+    },
+    {
+      "original": "gdn-bank-placement-control-v1/run.log",
+      "stored": "raw/gdn-bank-placement-control-v1/run.log.gz",
+      "bytes": 34380,
+      "sha256": "8e1cb6d909ea3995e41aceea2b8bf0e00a53266e181ec8f4c934694859725b40"
+    },
+    {
+      "original": "gdn-bank-placement-control-v1/run.py",
+      "stored": "raw/gdn-bank-placement-control-v1/run.py.gz",
+      "bytes": 3811,
+      "sha256": "339a139b70e01dab00e0a6d25731cc3c10d10dabfa4de4f0d974959ae1acb14e"
+    },
+    {
+      "original": "gdn-bank-placement-control-v1/source-manifest.json",
+      "stored": "raw/gdn-bank-placement-control-v1/source-manifest.json",
+      "bytes": 41734,
+      "sha256": "a36df455527c333050edccca4303f58a08ae17b27141469158dbbd9ac609f639"
+    },
+    {
+      "original": "gdn-bank-placement-control-v1/unit.log",
+      "stored": "raw/gdn-bank-placement-control-v1/unit.log.gz",
+      "bytes": 8494,
+      "sha256": "76e8834f97c4603a76625179666907147521105517fb378f6a1a0fc14f579780"
+    },
+    {
+      "original": "gdn-bank-placement-control-v1/unit.xml",
+      "stored": "raw/gdn-bank-placement-control-v1/unit.xml.gz",
+      "bytes": 5761,
+      "sha256": "480fdd36ecbdb46237b10284675a369d7d512631213b043978ac8c4cc0c1866e"
+    },
+    {
+      "original": "gdn-bank-placement-source-v1/models/demos/qwen38_27b_qb2/tests/gdn_bank_placement.py",
+      "stored": "raw/gdn-bank-placement-source-v1/models/demos/qwen38_27b_qb2/tests/gdn_bank_placement.py.gz",
+      "bytes": 3427,
+      "sha256": "627dd1688815baae2622db073fb404e2403754ef8dd23803ab0ebe25f1355e18"
+    },
+    {
+      "original": "gdn-bank-placement-source-v1/models/demos/qwen38_27b_qb2/tests/test_gdn_bank_placement.py",
+      "stored": "raw/gdn-bank-placement-source-v1/models/demos/qwen38_27b_qb2/tests/test_gdn_bank_placement.py.gz",
+      "bytes": 12459,
+      "sha256": "761b52cddade09def00bbd69e7fde24a65fb2f8c7af474c229b0e3f762dfcd3e"
+    },
+    {
+      "original": "gdn-bank-placement-source-v1/models/demos/qwen38_27b_qb2/tests/unit/test_gdn_bank_placement.py",
+      "stored": "raw/gdn-bank-placement-source-v1/models/demos/qwen38_27b_qb2/tests/unit/test_gdn_bank_placement.py.gz",
+      "bytes": 2530,
+      "sha256": "55e77a4c9bfa24eea08fef3efb367c43fdfd7a682a0121179fa2f3c843230fe5"
+    },
+    {
+      "original": "gdn-bank-placement-v1/compute_resident.cpp",
+      "stored": "raw/gdn-bank-placement-v1/compute_resident.cpp.gz",
+      "bytes": 6736,
+      "sha256": "a562193f61f2a1b318672414732089ae79568fbdb25912e967e88e7d0b8a1853"
+    },
+    {
+      "original": "gdn-bank-placement-v1/hardware.xml",
+      "stored": "raw/gdn-bank-placement-v1/hardware.xml.gz",
+      "bytes": 539,
+      "sha256": "659696bdb18cd30a4c9ef5245d4fdfaba0f3d57bf660f0c19f3c79cc52559bc7"
+    },
+    {
+      "original": "gdn-bank-placement-v1/placement.json",
+      "stored": "raw/gdn-bank-placement-v1/placement.json",
+      "bytes": 104899,
+      "sha256": "83083c0a29e26906974191105eeaeac438e993d9d79b6adaccf016c63a9c4d60"
+    },
+    {
+      "original": "gdn-bank-placement-v1/queue.json",
+      "stored": "raw/gdn-bank-placement-v1/queue.json",
+      "bytes": 1615,
+      "sha256": "a0d24bee0578637073b832f98fcacbd9bdf8425afe899ff75b6d0c8adddf3726"
+    },
+    {
+      "original": "gdn-bank-placement-v1/reader.cpp",
+      "stored": "raw/gdn-bank-placement-v1/reader.cpp.gz",
+      "bytes": 4471,
+      "sha256": "16d7813672d8fb33bffa1f10aecc38a76769d00809f5dcf75295ba55106ecd90"
+    },
+    {
+      "original": "gdn-bank-placement-v1/writer.cpp",
+      "stored": "raw/gdn-bank-placement-v1/writer.cpp.gz",
+      "bytes": 2487,
+      "sha256": "2632705ff4fc977076094b537ff67175f819f78d996f550d78d9955277b7698d"
+    },
+    {
+      "original": "gdn-resident-schedule-control-v1/collection-unit.json",
+      "stored": "raw/gdn-resident-schedule-control-v1/collection-unit.json",
+      "bytes": 185,
+      "sha256": "d164fa45102977e610825d4b41913dc5122054674d69098f3c8c00a4826162a7"
+    },
+    {
+      "original": "gdn-resident-schedule-control-v1/launch-unit.json",
+      "stored": "raw/gdn-resident-schedule-control-v1/launch-unit.json",
+      "bytes": 156,
+      "sha256": "7dbf830ad50f3cf2203bc3c7332f2607ddc50e10722ddc250885afa14a7dac79"
+    },
+    {
+      "original": "gdn-resident-schedule-control-v1/launch.json",
+      "stored": "raw/gdn-resident-schedule-control-v1/launch.json",
+      "bytes": 2114,
+      "sha256": "42f73b7723b6ee13f7c24ce0d6721e3a378d16527ad63096c14313fb6d6f3457"
+    },
+    {
+      "original": "gdn-resident-schedule-control-v1/run.log",
+      "stored": "raw/gdn-resident-schedule-control-v1/run.log.gz",
+      "bytes": 34438,
+      "sha256": "628fc7c349b922bdf514f7142c7f1804e8b297cede49e61cb83d332dc7a930c1"
+    },
+    {
+      "original": "gdn-resident-schedule-control-v1/run.py",
+      "stored": "raw/gdn-resident-schedule-control-v1/run.py.gz",
+      "bytes": 3797,
+      "sha256": "3d04a564139590fdca39ba3a44e6140d2a369d18f4e824952e9e3e817ceab9b6"
+    },
+    {
+      "original": "gdn-resident-schedule-control-v1/source-manifest.json",
+      "stored": "raw/gdn-resident-schedule-control-v1/source-manifest.json",
+      "bytes": 41332,
+      "sha256": "aaf377b0c3bbb2725dd16d8cc810bceeb49bae6bff7c998dd4406cd1cfd1c133"
+    },
+    {
+      "original": "gdn-resident-schedule-control-v1/unit.log",
+      "stored": "raw/gdn-resident-schedule-control-v1/unit.log.gz",
+      "bytes": 12282,
+      "sha256": "bd920df9f1c482276230b430bb551571e142cbd933c2ad957d873bbcdbf1e508"
+    },
+    {
+      "original": "gdn-resident-schedule-control-v1/unit.xml",
+      "stored": "raw/gdn-resident-schedule-control-v1/unit.xml.gz",
+      "bytes": 6253,
+      "sha256": "644b88a1e32f8aa7286e50217997fce18fded319687c03a03337671e1d3cf4ea"
+    },
+    {
+      "original": "gdn-resident-schedule-source-v1/models/demos/qwen38_27b_qb2/tests/gdn_resident_schedule.py",
+      "stored": "raw/gdn-resident-schedule-source-v1/models/demos/qwen38_27b_qb2/tests/gdn_resident_schedule.py.gz",
+      "bytes": 1784,
+      "sha256": "463b74e45123c8091e0c1932ce46fe84fa06a1d3537b6d1149931807200f0abf"
+    },
+    {
+      "original": "gdn-resident-schedule-source-v1/models/demos/qwen38_27b_qb2/tests/test_gdn_resident_schedule.py",
+      "stored": "raw/gdn-resident-schedule-source-v1/models/demos/qwen38_27b_qb2/tests/test_gdn_resident_schedule.py.gz",
+      "bytes": 11472,
+      "sha256": "0ce2a44643e3f53856dddd56d624b3e1f4dd7561eea53bd0df6079f42aa7c036"
+    },
+    {
+      "original": "gdn-resident-schedule-source-v1/models/demos/qwen38_27b_qb2/tests/unit/test_gdn_resident_schedule.py",
+      "stored": "raw/gdn-resident-schedule-source-v1/models/demos/qwen38_27b_qb2/tests/unit/test_gdn_resident_schedule.py.gz",
+      "bytes": 1392,
+      "sha256": "b86487593e83fd8869722e4b5d26445e27334901a13c5afdece2df1a734000ee"
+    },
+    {
+      "original": "gdn-resident-schedule-v1/compute-block_state.cpp",
+      "stored": "raw/gdn-resident-schedule-v1/compute-block_state.cpp.gz",
+      "bytes": 6961,
+      "sha256": "c082a30046750d7622983aadd1aac32b5266bbceb1722af374873f14f5794b8a"
+    },
+    {
+      "original": "gdn-resident-schedule-v1/compute-combined.cpp",
+      "stored": "raw/gdn-resident-schedule-v1/compute-combined.cpp.gz",
+      "bytes": 7108,
+      "sha256": "d31783acc1ac01be64cd63a677738cc9a768adbc19eb37a5f5fff397d1d8d5b8"
+    },
+    {
+      "original": "gdn-resident-schedule-v1/compute-hoist_decay.cpp",
+      "stored": "raw/gdn-resident-schedule-v1/compute-hoist_decay.cpp.gz",
+      "bytes": 6883,
+      "sha256": "890f65e037ea5d24f8a7404ec9d76b7fe648632275d18036f827c6e704d2ae38"
+    },
+    {
+      "original": "gdn-resident-schedule-v1/compute-native.cpp",
+      "stored": "raw/gdn-resident-schedule-v1/compute-native.cpp.gz",
+      "bytes": 6736,
+      "sha256": "a562193f61f2a1b318672414732089ae79568fbdb25912e967e88e7d0b8a1853"
+    },
+    {
+      "original": "gdn-resident-schedule-v1/hardware.xml",
+      "stored": "raw/gdn-resident-schedule-v1/hardware.xml.gz",
+      "bytes": 545,
+      "sha256": "13f852f75348eace936d86ba41d3809b792c955b640aa19addbff5c719a2be03"
+    },
+    {
+      "original": "gdn-resident-schedule-v1/queue.json",
+      "stored": "raw/gdn-resident-schedule-v1/queue.json",
+      "bytes": 1648,
+      "sha256": "6e42684055063e7360f062c3a73b02a0ebd049712378a0212951cacd8a2c7b87"
+    },
+    {
+      "original": "gdn-resident-schedule-v1/schedule.json",
+      "stored": "raw/gdn-resident-schedule-v1/schedule.json",
+      "bytes": 81199,
+      "sha256": "7b9ccb06e8db92cedde52a4a072d80f67857e6546f892e1c1226fe93776cff7f"
+    }
+  ]
+}

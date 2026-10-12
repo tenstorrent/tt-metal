@@ -1,0 +1,6 @@
+{
+  "collected_at": "2026-10-12T08:21:52.396594+00:00",
+  "systemctl_returncode": 0,
+  "stdout": "MainPID=0\nResult=success\nExecMainStatus=0\nActiveState=inactive\n",
+  "stderr": ""
+}

@@ -1,5 +1,16 @@
 # Operator optimization scope and priorities
 
+October 12, 08:14 UTC: resident scheduling and native-bank-anchor placement
+experiments completed exact B16/B32 checks. Combined scheduling improves B16
+only 1.48% per recurrence (0.058 ms / +0.025 TSU projected); B32 has no useful
+gain. Read/write/balanced placement regress B16 by 39.46%/2.27%/25.00%, despite
+lower logical-distance cost. Neither is selected. Both jobs closed cleanly;
+29 CPU tests and native trace-allocation checks passed. Current model remains
+20.884562 TSU. Arithmetic/intermediate traffic and larger compatible boundaries
+remain targets; these results rule out the tested simple scheduling and
+placement heuristics as significant gains.
+[Reproducible results](../galaxy-evidence/gdn-schedule-placement-results-v1/README.md).
+
 October 12, 01:16 UTC: direct projection-to-collective delivery passed 24 native
 cases with exact baseline outputs and trace-allocation tracking. At B16 the
 GDN output boundary improves 52.998 -> 49.368 us and MLP down 94.215 -> 90.564 us.

@@ -1,0 +1,39 @@
+{
+  "state": "completed",
+  "started_at": 1791768786.5850022,
+  "cleanup_completed": true,
+  "survives_disconnect": true,
+  "resumes_after_reboot": false,
+  "full_model_qualified": false,
+  "promoted_to_serving": false,
+  "hardware_lock": "/tmp/tt-device.lock",
+  "updated_at": "2026-10-12T01:33:54Z",
+  "unit_command": [
+    "/home/ttuser/kimi-prefill.Ubx2wY/runtime/qwen38-27b-20261006/python_env/bin/python3.10",
+    "-m",
+    "pytest",
+    "/home/ttuser/qwen38-artifacts-20261007/gdn-resident-schedule-source-v1/models/demos/qwen38_27b_qb2/tests/unit/test_gdn_resident_schedule.py",
+    "--rootdir=/home/ttuser/qwen38-artifacts-20261007/gdn-resident-schedule-source-v1",
+    "-c",
+    "/home/ttuser/qwen38-artifacts-20261007/gdn-resident-schedule-source-v1/pytest.ini",
+    "-q",
+    "--junitxml=/home/ttuser/qwen38-artifacts-20261007/gdn-resident-schedule-control-v1/unit.xml"
+  ],
+  "cpu_tests_passed": 12,
+  "command": [
+    "/bin/bash",
+    "/home/ttuser/qwen38-artifacts-20261007/gdn-resident-schedule-source-v1/scripts/run_safe_pytest.sh",
+    "/home/ttuser/qwen38-artifacts-20261007/gdn-resident-schedule-source-v1/models/demos/qwen38_27b_qb2/tests/test_gdn_resident_schedule.py",
+    "--rootdir=/home/ttuser/qwen38-artifacts-20261007/gdn-resident-schedule-source-v1",
+    "-c",
+    "/home/ttuser/qwen38-artifacts-20261007/gdn-resident-schedule-source-v1/pytest.ini",
+    "-vv",
+    "-s",
+    "--tb=short",
+    "--timeout=900",
+    "--junitxml=/home/ttuser/qwen38-artifacts-20261007/gdn-resident-schedule-v1/hardware.xml"
+  ],
+  "exact_component_match": true,
+  "traced_comparison_completed": true,
+  "finished_at": 1791768834.4908693
+}

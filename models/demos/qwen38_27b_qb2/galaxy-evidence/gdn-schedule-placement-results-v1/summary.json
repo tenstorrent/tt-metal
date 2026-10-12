@@ -1,0 +1,170 @@
+{
+  "verified_raw_files": 35,
+  "experiments": [
+    {
+      "experiment": "schedule",
+      "cpu_tests": 12,
+      "invocation_id": "7a37d65cf8854181aa13dbeae868b207",
+      "controller_seconds": 47.90586709976196,
+      "terminal": {
+        "collected_at": "2026-10-12T08:21:52.387725+00:00",
+        "systemctl_returncode": 0,
+        "stdout": "MainPID=0\nResult=success\nExecMainStatus=0\nActiveState=inactive\n",
+        "stderr": ""
+      },
+      "scope": "FP32 resident recurrence only; unchanged 120-worker assignment, math, ownership and two-item lookahead"
+    },
+    {
+      "experiment": "placement",
+      "cpu_tests": 17,
+      "invocation_id": "071f6c18a9ae4c2cac279c2d74e2ee8c",
+      "controller_seconds": 46.0013587474823,
+      "terminal": {
+        "collected_at": "2026-10-12T08:21:52.396594+00:00",
+        "systemctl_returncode": 0,
+        "stdout": "MainPID=0\nResult=success\nExecMainStatus=0\nActiveState=inactive\n",
+        "stderr": ""
+      },
+      "scope": "Remap complete work items across the same 120 workers; unchanged kernels, FP32 state, arithmetic and two-item lookahead"
+    }
+  ],
+  "rows": [
+    {
+      "experiment": "schedule",
+      "batch": 16,
+      "variant": "hoist_decay",
+      "control_us": 81.82899500752683,
+      "candidate_us": 80.82796284725191,
+      "latency_change_pct": -1.2233220757298047,
+      "control_drift_pct": 0.4372863774742904,
+      "projected_48_layer_saving_ms": 0.04804954369319603,
+      "projected_b16_tsu_gain": 0.020978578320097085
+    },
+    {
+      "experiment": "schedule",
+      "batch": 16,
+      "variant": "block_state",
+      "control_us": 81.82899500752683,
+      "candidate_us": 81.46286745613907,
+      "latency_change_pct": -0.4474300965740641,
+      "control_drift_pct": 0.4372863774742904,
+      "projected_48_layer_saving_ms": 0.017574122466612607,
+      "projected_b16_tsu_gain": 0.007668030491196021
+    },
+    {
+      "experiment": "schedule",
+      "batch": 16,
+      "variant": "combined",
+      "control_us": 81.82899500752683,
+      "candidate_us": 80.62095093919197,
+      "latency_change_pct": -1.4763031957361061,
+      "control_drift_pct": 0.4372863774742904,
+      "projected_48_layer_saving_ms": 0.057986115280073136,
+      "projected_b16_tsu_gain": 0.025322176147273723
+    },
+    {
+      "experiment": "schedule",
+      "batch": 32,
+      "variant": "hoist_decay",
+      "control_us": 142.9858652954863,
+      "candidate_us": 143.42355643748306,
+      "latency_change_pct": 0.30610797863988015,
+      "control_drift_pct": 0.19874678132275375,
+      "projected_48_layer_saving_ms": -0.021009174815844744,
+      "projected_b16_tsu_gain": null
+    },
+    {
+      "experiment": "schedule",
+      "batch": 32,
+      "variant": "block_state",
+      "control_us": 142.9858652954863,
+      "candidate_us": 143.44581813929835,
+      "latency_change_pct": 0.32167714120661106,
+      "control_drift_pct": 0.19874678132275375,
+      "projected_48_layer_saving_ms": -0.02207773650297895,
+      "projected_b16_tsu_gain": null
+    },
+    {
+      "experiment": "schedule",
+      "batch": 32,
+      "variant": "combined",
+      "control_us": 142.9858652954863,
+      "candidate_us": 143.07969740912085,
+      "latency_change_pct": 0.06562334916158097,
+      "control_drift_pct": 0.19874678132275375,
+      "projected_48_layer_saving_ms": -0.004503941454458982,
+      "projected_b16_tsu_gain": null
+    },
+    {
+      "experiment": "placement",
+      "batch": 16,
+      "variant": "bank_read",
+      "control_us": 81.44327966874698,
+      "candidate_us": 113.58234223735053,
+      "latency_change_pct": 39.461896302951295,
+      "control_drift_pct": 0.04560914388626244,
+      "projected_48_layer_saving_ms": -1.5426750032929704,
+      "projected_b16_tsu_gain": -0.651859097193288
+    },
+    {
+      "experiment": "placement",
+      "batch": 16,
+      "variant": "bank_write",
+      "control_us": 81.44327966874698,
+      "candidate_us": 83.29509000759572,
+      "latency_change_pct": 2.273742347288299,
+      "control_drift_pct": 0.04560914388626244,
+      "projected_48_layer_saving_ms": -0.08888689626473933,
+      "projected_b16_tsu_gain": -0.03869751131051302
+    },
+    {
+      "experiment": "placement",
+      "batch": 16,
+      "variant": "bank_balanced",
+      "control_us": 81.44327966874698,
+      "candidate_us": 101.80308345297817,
+      "latency_change_pct": 24.998752342784215,
+      "control_drift_pct": 0.04560914388626244,
+      "projected_48_layer_saving_ms": -0.9772705816430971,
+      "projected_b16_tsu_gain": -0.4177254454421444
+    },
+    {
+      "experiment": "placement",
+      "batch": 32,
+      "variant": "bank_read",
+      "control_us": 142.57018301577773,
+      "candidate_us": 222.9584970336873,
+      "latency_change_pct": 56.38508159101774,
+      "control_drift_pct": 0.013498550315661304,
+      "projected_48_layer_saving_ms": -3.85863907285966,
+      "projected_b16_tsu_gain": null
+    },
+    {
+      "experiment": "placement",
+      "batch": 32,
+      "variant": "bank_write",
+      "control_us": 142.57018301577773,
+      "candidate_us": 164.05513633799274,
+      "latency_change_pct": 15.069738193320092,
+      "control_drift_pct": 0.013498550315661304,
+      "projected_48_layer_saving_ms": -1.0312777594663203,
+      "projected_b16_tsu_gain": null
+    },
+    {
+      "experiment": "placement",
+      "batch": 32,
+      "variant": "bank_balanced",
+      "control_us": 142.57018301577773,
+      "candidate_us": 200.5574951908784,
+      "latency_change_pct": 40.67281878194926,
+      "control_drift_pct": 0.013498550315661304,
+      "projected_48_layer_saving_ms": -2.783390984404832,
+      "projected_b16_tsu_gain": null
+    }
+  ],
+  "model_measured_tsu": 20.884562,
+  "selected_variants": [],
+  "full_model_qualified": false,
+  "promoted_to_serving": false,
+  "long_horizon_4096_tested": false
+}

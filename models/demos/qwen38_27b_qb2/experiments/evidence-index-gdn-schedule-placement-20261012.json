@@ -1,0 +1,231 @@
+{
+  "generated_at": "2026-10-12T08:26:11.047205+00:00",
+  "scope": "Completed GDN scheduling and placement experiments; no variants selected or promoted.",
+  "entries": [
+    {
+      "path": "galaxy-evidence/gdn-schedule-placement-results-v1/README.md",
+      "bytes": 5003,
+      "sha256": "823a6bcae9a3916caac279740293e60d923b9d128402e7247761835bbb66a816"
+    },
+    {
+      "path": "galaxy-evidence/gdn-schedule-placement-results-v1/manifest.json",
+      "bytes": 9302,
+      "sha256": "1871930ea45a23aa86eefae7f00d46763f24e678776acd90cf106a6ee954f6c6"
+    },
+    {
+      "path": "galaxy-evidence/gdn-schedule-placement-results-v1/raw/gdn-bank-placement-control-v1/collection-unit.json",
+      "bytes": 185,
+      "sha256": "7aa7b4ce5ee9ff7322feb73e58079645b03c0002f22b15438723fcba121ce0a1"
+    },
+    {
+      "path": "galaxy-evidence/gdn-schedule-placement-results-v1/raw/gdn-bank-placement-control-v1/launch-unit.json",
+      "bytes": 156,
+      "sha256": "338e690323012d1ca9c8983c3688d77fcf11a0fab2092fdf9c6ac7c5aa4a3049"
+    },
+    {
+      "path": "galaxy-evidence/gdn-schedule-placement-results-v1/raw/gdn-bank-placement-control-v1/launch.json",
+      "bytes": 2093,
+      "sha256": "2f0f64706ee9d59166d8cc281806713e60f3e3c61988bbeaf7b8d09566f26f59"
+    },
+    {
+      "path": "galaxy-evidence/gdn-schedule-placement-results-v1/raw/gdn-bank-placement-control-v1/run.log.gz",
+      "bytes": 4938,
+      "sha256": "6ef21cefa61b29933f52d92b0d39a3bab22efb40aff4bfe56658395ff7cd4f46"
+    },
+    {
+      "path": "galaxy-evidence/gdn-schedule-placement-results-v1/raw/gdn-bank-placement-control-v1/run.py.gz",
+      "bytes": 1750,
+      "sha256": "87f9a151c3b8e5ae528a2ca693dc0681466a92bb6b8cbbb12cb14deb61c2f0ed"
+    },
+    {
+      "path": "galaxy-evidence/gdn-schedule-placement-results-v1/raw/gdn-bank-placement-control-v1/source-manifest.json",
+      "bytes": 41734,
+      "sha256": "a36df455527c333050edccca4303f58a08ae17b27141469158dbbd9ac609f639"
+    },
+    {
+      "path": "galaxy-evidence/gdn-schedule-placement-results-v1/raw/gdn-bank-placement-control-v1/unit.log.gz",
+      "bytes": 1426,
+      "sha256": "be12b937ebe73fec4539b241ea2411cf149e6639bf91356b49dc8ca059f4d45d"
+    },
+    {
+      "path": "galaxy-evidence/gdn-schedule-placement-results-v1/raw/gdn-bank-placement-control-v1/unit.xml.gz",
+      "bytes": 532,
+      "sha256": "0a3964561112a38e08fab902b1e040c570509fe0800cebf0bf02c7d231569bcf"
+    },
+    {
+      "path": "galaxy-evidence/gdn-schedule-placement-results-v1/raw/gdn-bank-placement-source-v1/models/demos/qwen38_27b_qb2/tests/gdn_bank_placement.py.gz",
+      "bytes": 1431,
+      "sha256": "b628bd7683f784a707d8358e943592be97bd55e0f06f8637f16a807aff35e9c5"
+    },
+    {
+      "path": "galaxy-evidence/gdn-schedule-placement-results-v1/raw/gdn-bank-placement-source-v1/models/demos/qwen38_27b_qb2/tests/test_gdn_bank_placement.py.gz",
+      "bytes": 3990,
+      "sha256": "e4d9bd5b686f51f4ed9d28558cf303dd898655022d35fc5321f6028c754992e7"
+    },
+    {
+      "path": "galaxy-evidence/gdn-schedule-placement-results-v1/raw/gdn-bank-placement-source-v1/models/demos/qwen38_27b_qb2/tests/unit/test_gdn_bank_placement.py.gz",
+      "bytes": 1068,
+      "sha256": "68805ef3305399c5d010bc0a7f5c8d19c2958706d0398f337880fbaf07d4cf8a"
+    },
+    {
+      "path": "galaxy-evidence/gdn-schedule-placement-results-v1/raw/gdn-bank-placement-v1/compute_resident.cpp.gz",
+      "bytes": 2065,
+      "sha256": "d1c79132324e58cbbe460a98616d13759cfed36499c03cb6893639d8dbfcb86b"
+    },
+    {
+      "path": "galaxy-evidence/gdn-schedule-placement-results-v1/raw/gdn-bank-placement-v1/hardware.xml.gz",
+      "bytes": 299,
+      "sha256": "d8201ee054d2f2788010839e83b1ffa8206fa730cbd5f719ea9cec7c779daece"
+    },
+    {
+      "path": "galaxy-evidence/gdn-schedule-placement-results-v1/raw/gdn-bank-placement-v1/placement.json",
+      "bytes": 104899,
+      "sha256": "83083c0a29e26906974191105eeaeac438e993d9d79b6adaccf016c63a9c4d60"
+    },
+    {
+      "path": "galaxy-evidence/gdn-schedule-placement-results-v1/raw/gdn-bank-placement-v1/queue.json",
+      "bytes": 1615,
+      "sha256": "a0d24bee0578637073b832f98fcacbd9bdf8425afe899ff75b6d0c8adddf3726"
+    },
+    {
+      "path": "galaxy-evidence/gdn-schedule-placement-results-v1/raw/gdn-bank-placement-v1/reader.cpp.gz",
+      "bytes": 1310,
+      "sha256": "a9691641e1004fc2c9be0a5d35df987a5cff36f3fcf514e5b14eaa10d537acdf"
+    },
+    {
+      "path": "galaxy-evidence/gdn-schedule-placement-results-v1/raw/gdn-bank-placement-v1/writer.cpp.gz",
+      "bytes": 990,
+      "sha256": "3c626a00db0a8b221ccc3f461e85d216bf88d756b437628895fcd46f70e0efdc"
+    },
+    {
+      "path": "galaxy-evidence/gdn-schedule-placement-results-v1/raw/gdn-resident-schedule-control-v1/collection-unit.json",
+      "bytes": 185,
+      "sha256": "d164fa45102977e610825d4b41913dc5122054674d69098f3c8c00a4826162a7"
+    },
+    {
+      "path": "galaxy-evidence/gdn-schedule-placement-results-v1/raw/gdn-resident-schedule-control-v1/launch-unit.json",
+      "bytes": 156,
+      "sha256": "7dbf830ad50f3cf2203bc3c7332f2607ddc50e10722ddc250885afa14a7dac79"
+    },
+    {
+      "path": "galaxy-evidence/gdn-schedule-placement-results-v1/raw/gdn-resident-schedule-control-v1/launch.json",
+      "bytes": 2114,
+      "sha256": "42f73b7723b6ee13f7c24ce0d6721e3a378d16527ad63096c14313fb6d6f3457"
+    },
+    {
+      "path": "galaxy-evidence/gdn-schedule-placement-results-v1/raw/gdn-resident-schedule-control-v1/run.log.gz",
+      "bytes": 4922,
+      "sha256": "de040df8bbe2449b6a067950ca7d6236cd4eeb5ea0762845e89d17cd8a2a5158"
+    },
+    {
+      "path": "galaxy-evidence/gdn-schedule-placement-results-v1/raw/gdn-resident-schedule-control-v1/run.py.gz",
+      "bytes": 1744,
+      "sha256": "df3da3a59186158ce95327e1ed5cb116cfa7884457996cc40f5b565fc3f844a2"
+    },
+    {
+      "path": "galaxy-evidence/gdn-schedule-placement-results-v1/raw/gdn-resident-schedule-control-v1/source-manifest.json",
+      "bytes": 41332,
+      "sha256": "aaf377b0c3bbb2725dd16d8cc810bceeb49bae6bff7c998dd4406cd1cfd1c133"
+    },
+    {
+      "path": "galaxy-evidence/gdn-schedule-placement-results-v1/raw/gdn-resident-schedule-control-v1/unit.log.gz",
+      "bytes": 1493,
+      "sha256": "4b144b82fb4fdbbe20ed616c4583bf24ed73df95e1865a55013a5b09d93e9040"
+    },
+    {
+      "path": "galaxy-evidence/gdn-schedule-placement-results-v1/raw/gdn-resident-schedule-control-v1/unit.xml.gz",
+      "bytes": 598,
+      "sha256": "d39e903eae8c3d528d2d633618acc3c757bcce79c33f9ed15f6864b93a037c56"
+    },
+    {
+      "path": "galaxy-evidence/gdn-schedule-placement-results-v1/raw/gdn-resident-schedule-source-v1/models/demos/qwen38_27b_qb2/tests/gdn_resident_schedule.py.gz",
+      "bytes": 788,
+      "sha256": "c915e93f08510382ccf3015b7b39fd83dbc9f5e3ba4795c1221b5386cd04e63b"
+    },
+    {
+      "path": "galaxy-evidence/gdn-schedule-placement-results-v1/raw/gdn-resident-schedule-source-v1/models/demos/qwen38_27b_qb2/tests/test_gdn_resident_schedule.py.gz",
+      "bytes": 3633,
+      "sha256": "66634be9d34d27c13a8fa7346ffb8012aab1740011b12e79fe02651b1b852922"
+    },
+    {
+      "path": "galaxy-evidence/gdn-schedule-placement-results-v1/raw/gdn-resident-schedule-source-v1/models/demos/qwen38_27b_qb2/tests/unit/test_gdn_resident_schedule.py.gz",
+      "bytes": 611,
+      "sha256": "fe063a0d98517ad83db36d71913ba7d30326175fe90e2e1ea04a561633aef66f"
+    },
+    {
+      "path": "galaxy-evidence/gdn-schedule-placement-results-v1/raw/gdn-resident-schedule-v1/compute-block_state.cpp.gz",
+      "bytes": 2147,
+      "sha256": "fdddd928355a6817a6042221b8fc5fe14b91b8ae8891589b1a0c9eb99f748873"
+    },
+    {
+      "path": "galaxy-evidence/gdn-schedule-placement-results-v1/raw/gdn-resident-schedule-v1/compute-combined.cpp.gz",
+      "bytes": 2213,
+      "sha256": "32982669f109482782bfb31714dbeca193d4a97028a63e8e6fa341e776bd8a99"
+    },
+    {
+      "path": "galaxy-evidence/gdn-schedule-placement-results-v1/raw/gdn-resident-schedule-v1/compute-hoist_decay.cpp.gz",
+      "bytes": 2132,
+      "sha256": "d7bb741f0389a17c9821f6404de67745c241f75cdc45757aad4832ce25cb583e"
+    },
+    {
+      "path": "galaxy-evidence/gdn-schedule-placement-results-v1/raw/gdn-resident-schedule-v1/compute-native.cpp.gz",
+      "bytes": 2065,
+      "sha256": "d1c79132324e58cbbe460a98616d13759cfed36499c03cb6893639d8dbfcb86b"
+    },
+    {
+      "path": "galaxy-evidence/gdn-schedule-placement-results-v1/raw/gdn-resident-schedule-v1/hardware.xml.gz",
+      "bytes": 301,
+      "sha256": "aa79e62b342064e8dc9673d471acffc814d89ee1ca9630015442e6604153768e"
+    },
+    {
+      "path": "galaxy-evidence/gdn-schedule-placement-results-v1/raw/gdn-resident-schedule-v1/queue.json",
+      "bytes": 1648,
+      "sha256": "6e42684055063e7360f062c3a73b02a0ebd049712378a0212951cacd8a2c7b87"
+    },
+    {
+      "path": "galaxy-evidence/gdn-schedule-placement-results-v1/raw/gdn-resident-schedule-v1/schedule.json",
+      "bytes": 81199,
+      "sha256": "7b9ccb06e8db92cedde52a4a072d80f67857e6546f892e1c1226fe93776cff7f"
+    },
+    {
+      "path": "galaxy-evidence/gdn-schedule-placement-results-v1/summarize.py",
+      "bytes": 6621,
+      "sha256": "0427a4d7f67c487da916d946ed63ed5a0ec6640488bbfd3fd5a233e726a6953b"
+    },
+    {
+      "path": "galaxy-evidence/gdn-schedule-placement-results-v1/summary.json",
+      "bytes": 5831,
+      "sha256": "11675e6e01fe1592658e5ebb4111a99e33bcc900df435999ea191e73308a530f"
+    },
+    {
+      "path": "tests/gdn_bank_placement.py",
+      "bytes": 3427,
+      "sha256": "627dd1688815baae2622db073fb404e2403754ef8dd23803ab0ebe25f1355e18"
+    },
+    {
+      "path": "tests/gdn_resident_schedule.py",
+      "bytes": 1784,
+      "sha256": "463b74e45123c8091e0c1932ce46fe84fa06a1d3537b6d1149931807200f0abf"
+    },
+    {
+      "path": "tests/test_gdn_bank_placement.py",
+      "bytes": 12459,
+      "sha256": "761b52cddade09def00bbd69e7fde24a65fb2f8c7af474c229b0e3f762dfcd3e"
+    },
+    {
+      "path": "tests/test_gdn_resident_schedule.py",
+      "bytes": 11472,
+      "sha256": "0ce2a44643e3f53856dddd56d624b3e1f4dd7561eea53bd0df6079f42aa7c036"
+    },
+    {
+      "path": "tests/unit/test_gdn_bank_placement.py",
+      "bytes": 2530,
+      "sha256": "55e77a4c9bfa24eea08fef3efb367c43fdfd7a682a0121179fa2f3c843230fe5"
+    },
+    {
+      "path": "tests/unit/test_gdn_resident_schedule.py",
+      "bytes": 1392,
+      "sha256": "b86487593e83fd8869722e4b5d26445e27334901a13c5afdece2df1a734000ee"
+    }
+  ]
+}
