@@ -30,6 +30,7 @@ struct SenderCtArgs {
     uint32_t fwd_sem_noc_y;
     uint32_t fwd_sem_addr;
     uint32_t final_sem_addr;
+    uint32_t first_packet_bytes;
 
 #ifndef KERNEL_BUILD
     // `downstream` is the worker serving this stream on the next chip: the sender bumps its
@@ -56,7 +57,8 @@ struct SenderCtArgs {
         fwd_sem_noc_x(static_cast<uint32_t>(downstream.worker_virtual.x)),
         fwd_sem_noc_y(static_cast<uint32_t>(downstream.worker_virtual.y)),
         fwd_sem_addr(plan.fwd_arrived_addr),
-        final_sem_addr(plan.final_arrived_addr) {}
+        final_sem_addr(plan.final_arrived_addr),
+        first_packet_bytes(cmbf2d::first_packet_bytes(token_size_bytes)) {}
 
     std::vector<uint32_t> to_ct_word_arr() const {
         return {
@@ -75,7 +77,8 @@ struct SenderCtArgs {
             fwd_sem_noc_x,
             fwd_sem_noc_y,
             fwd_sem_addr,
-            final_sem_addr};
+            final_sem_addr,
+            first_packet_bytes};
     }
 #else
     constexpr SenderCtArgs() :
@@ -94,7 +97,8 @@ struct SenderCtArgs {
         fwd_sem_noc_x(get_compile_time_arg_val(12)),
         fwd_sem_noc_y(get_compile_time_arg_val(13)),
         fwd_sem_addr(get_compile_time_arg_val(14)),
-        final_sem_addr(get_compile_time_arg_val(15)) {}
+        final_sem_addr(get_compile_time_arg_val(15)),
+        first_packet_bytes(get_compile_time_arg_val(16)) {}
 
     // What a ring-counter slot names depends on where the counters live. Overlapped, they are program
     // semaphores the framework re-initialises every launch; alone, they are hand-placed L1 this kernel
@@ -123,6 +127,7 @@ struct SenderCtArgs {
 #endif
 
     constexpr uint32_t slot_stride() const { return token_size_bytes + forwarding_metadata_size; }
+    constexpr uint32_t packets_per_token() const { return first_packet_bytes < token_size_bytes ? 2 : 1; }
 };
 
 }  // namespace cmbf2d

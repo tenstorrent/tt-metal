@@ -5,7 +5,7 @@
 // Sender kernel (writer RISC, NOC_1). Owns the ONE fabric sender connection its eth channel allows (the
 // L1 connection table is indexed by eth channel and the EDM stores a single worker_xy per channel, so a
 // second core on the same channel would just hang) and drains the L1 ring the reader on this same core
-// fills, one fabric packet per token. Every send is a single hop to the chip across this cable; tokens
+// fills, one or two fabric packets per token. Every send is a single hop to the chip across this cable; tokens
 // bound further are written into the next chip's forwarding buffer and re-sent from there.
 //
 // Slots are claimed and released in batches, amortising the two counter bumps and the source
@@ -35,10 +35,12 @@ constexpr uint32_t FWD_BUMP_EVERY = 32;
 constexpr uint32_t FINAL_BUMP_EVERY = 32;
 constexpr ::cmbf2d::SenderCtArgs ct{};
 
-// One prebuilt header per ring slot. Every send is a single hop, so the route is constant for the whole
-// run; only the write address varies per token, and a slot's header is untouched until the ring wraps.
-volatile PACKET_HEADER_TYPE* slot_hdr(uint32_t slot) {
-    return reinterpret_cast<volatile PACKET_HEADER_TYPE*>(ct.pkt_hdr_ring_addr + slot * sizeof(PACKET_HEADER_TYPE));
+// One prebuilt header per packet of each ring slot. Every send is a single hop, so the route is constant for
+// the whole run; only the write address varies per token, and a slot's headers are untouched until the ring
+// wraps.
+volatile PACKET_HEADER_TYPE* slot_hdr(uint32_t slot, uint32_t packet) {
+    return reinterpret_cast<volatile PACKET_HEADER_TYPE*>(
+        ct.pkt_hdr_ring_addr + (slot * ct.packets_per_token() + packet) * sizeof(PACKET_HEADER_TYPE));
 }
 
 volatile tt_l1_ptr ::cmbf2d::FwdMetadata* slot_metadata(uint32_t slot) {
@@ -48,8 +50,12 @@ volatile tt_l1_ptr ::cmbf2d::FwdMetadata* slot_metadata(uint32_t slot) {
 
 void prebuild_routes() {
     for (uint32_t slot = 0; slot < ct.num_l1_slots; slot++) {
-        fabric_set_unicast_route(
-            (volatile tt::tt_fabric::HybridMeshPacketHeader*)slot_hdr(slot), ct.peer_chip_id, ct.peer_mesh_id);
+        for (uint32_t packet = 0; packet < ct.packets_per_token(); packet++) {
+            fabric_set_unicast_route(
+                (volatile tt::tt_fabric::HybridMeshPacketHeader*)slot_hdr(slot, packet),
+                ct.peer_chip_id,
+                ct.peer_mesh_id);
+        }
     }
     // Shares the drain's scratch header: the drain only runs once the send loop is done with it.
     fabric_set_unicast_route(
@@ -97,17 +103,27 @@ uint64_t send_slot(
     const bool forwarding = (cmd == ::cmbf2d::CMD_FORWARD || cmd == ::cmbf2d::CMD_FORWARD_END);
     const uint32_t payload_bytes = forwarding ? (ct.token_size_bytes + ::cmbf2d::FWD_EXTRA_BYTES) : ct.token_size_bytes;
 
-    volatile PACKET_HEADER_TYPE* hdr = slot_hdr(slot);
-    // Header first, THEN wait for the slot: building it while the EDM may still be busy is free overlap, and
-    // reversing the two costs ~8% of the bandwidth.
-    hdr->to_noc_unicast_write(tt::tt_fabric::NocUnicastCommandHeader{metadata->this_addr}, payload_bytes);
-    fabric.wait_for_empty_write_slot();
-    fabric.send_payload_without_header_non_blocking_from_address(ct.ring_addr + slot * ct.slot_stride(), payload_bytes);
-    // No flush per token: a slot's header is untouched until the ring wraps and the payload is flushed once
-    // per batch below, which is what lets token N+1 issue while N is still draining. Payload and credit go
-    // out on different cmd bufs but share a source NIU, destination node and VC, so the NoC keeps the credit
-    // behind the payload. This is the same non-blocking send all_gather and reduce_scatter take.
-    fabric.send_payload_flush_non_blocking_from_address((uint32_t)hdr, sizeof(PACKET_HEADER_TYPE));
+    const uint32_t src = ct.ring_addr + slot * ct.slot_stride();
+    const uint64_t dst = metadata->this_addr;
+    // A split token's halves share this hop's channel, so they land in order and ahead of the flushed bump
+    // that tells the downstream reader the page is there.
+    uint32_t offset = 0;
+    for (uint32_t packet = 0; packet < ct.packets_per_token(); packet++) {
+        const uint32_t bytes = packet + 1 < ct.packets_per_token() ? ct.first_packet_bytes : payload_bytes - offset;
+        volatile PACKET_HEADER_TYPE* hdr = slot_hdr(slot, packet);
+        // Header first, THEN wait for the slot: building it while the EDM may still be busy is free overlap,
+        // and reversing the two costs ~8% of the bandwidth.
+        hdr->to_noc_unicast_write(tt::tt_fabric::NocUnicastCommandHeader{dst + offset}, bytes);
+        fabric.wait_for_empty_write_slot();
+        fabric.send_payload_without_header_non_blocking_from_address(src + offset, bytes);
+        // No flush per token: a slot's headers are untouched until the ring wraps and the payload is flushed
+        // once per batch below, which is what lets token N+1 issue while N is still draining. Payload and
+        // credit go out on different cmd bufs but share a source NIU, destination node and VC, so the NoC
+        // keeps the credit behind the payload. This is the same non-blocking send all_gather and
+        // reduce_scatter take.
+        fabric.send_payload_flush_non_blocking_from_address((uint32_t)hdr, sizeof(PACKET_HEADER_TYPE));
+        offset += bytes;
+    }
 
     if (forwarding) {
         fwd_since_bump++;
