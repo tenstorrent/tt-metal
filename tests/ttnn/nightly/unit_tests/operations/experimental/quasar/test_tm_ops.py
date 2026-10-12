@@ -444,3 +444,43 @@ def test_quasar_fold_tile_zero_stride_fatal(device, expect_error):
         assert not _qsr_is_tile_native_fold_supported(t, sh, sw), f"predicate must reject stride ({sh},{sw})"
         with expect_error(RuntimeError, r"stride_[hw] .* must be > 0"):
             _qsr_prim_fold(t, sh, sw)
+
+
+def test_quasar_to_layout_host_tensor_same_layout_with_memory_config():
+    # Host tensors have no memory config; a requested one must not be compared against it.
+    x = torch.rand(1, 1, 4, 8, dtype=torch.bfloat16)
+    host = ttnn.from_torch(x, layout=ttnn.ROW_MAJOR_LAYOUT)
+    result = ttnn.experimental.quasar.to_layout(host, ttnn.ROW_MAJOR_LAYOUT, memory_config=ttnn.DRAM_MEMORY_CONFIG)
+    assert result.storage_type() == ttnn.StorageType.HOST
+    assert torch.equal(ttnn.to_torch(result), x)
+
+
+@pytest.mark.parametrize("pad_value", [3.0, -1.5, 8.0])
+def test_quasar_pad_rm_sharded_width_only_bfloat16_value(device, pad_value):
+    input_shape, pad_to_shape = (1, 1, 12, 8), (1, 1, 12, 64)
+    core_grid = ttnn.CoreGrid(x=2, y=6)
+    if device.core_grid.x < core_grid.x or device.core_grid.y < core_grid.y:
+        pytest.skip("core grid for this test is not compatible with the device")
+
+    torch_input_tensor = torch.rand(input_shape, dtype=torch.bfloat16)
+    mem_config = ttnn.create_sharded_memory_config(input_shape, core_grid=core_grid, strategy=ttnn.ShardStrategy.HEIGHT)
+    tt_input = ttnn.interleaved_to_sharded(
+        ttnn.from_torch(torch_input_tensor, layout=ttnn.ROW_MAJOR_LAYOUT, device=device),
+        mem_config,
+        keep_l1_aligned=True,
+    )
+    tt_output = ttnn.to_torch(
+        ttnn.to_memory_config(
+            ttnn.experimental.quasar.pad(tt_input, pad_to_shape, (0, 0, 0, 0), pad_value), ttnn.L1_MEMORY_CONFIG
+        )
+    )
+
+    expected = torch.nn.functional.pad(torch_input_tensor, (0, pad_to_shape[-1] - input_shape[-1]), value=pad_value)
+    assert torch.equal(tt_output, expected)
+
+
+def test_quasar_pad_tile_rank1(device):
+    torch_input_tensor = torch.rand(40, dtype=torch.bfloat16)
+    tt_input = ttnn.from_torch(torch_input_tensor, layout=ttnn.TILE_LAYOUT, device=device)
+    tt_output = ttnn.to_torch(ttnn.experimental.quasar.pad(tt_input, [(0, 24)], 2.0))
+    assert torch.equal(tt_output, torch.nn.functional.pad(torch_input_tensor, (0, 24), value=2.0))

@@ -404,11 +404,11 @@ ttnn::Tensor invoke_tile(
         return input_tensor.pad(requested_padded_shape, zeros, value);
     }
 
-    const bool pad_upper_dims = !std::equal(
-        requested_logical_shape.view().rbegin() + 2,
-        requested_logical_shape.view().rend(),
-        input_logical_shape.view().rbegin() + 2,
-        input_logical_shape.view().rend());
+    const bool pad_upper_dims = requested_rank > 2 && !std::equal(
+                                                          requested_logical_shape.view().rbegin() + 2,
+                                                          requested_logical_shape.view().rend(),
+                                                          input_logical_shape.view().rbegin() + 2,
+                                                          input_logical_shape.view().rend());
 
     auto pad_current_tile_dim = [&requested_padded_shape, &input_padded_shape](const int i) {
         return requested_padded_shape[i] == input_padded_shape[i];
