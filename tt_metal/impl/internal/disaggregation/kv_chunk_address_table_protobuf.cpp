@@ -274,6 +274,14 @@ void emit_config_payload(
     const KvChunkAddressTableConfig& cfg,
     uint32_t npc,
     bool dual_write) {
+    // A strided config with no populated row would emit zero runs, which the importer rejects as
+    // malformed ("tagged STRIDED_ROWS but has no runs"). Export it as an empty UNROLLED config instead,
+    // as the UnrolledGrid path does for an all-unset grid (config_compressible() is false there).
+    const bool any_row = std::any_of(map.rows.begin(), map.rows.end(), [](const auto& r) { return r.step != 0; });
+    if (!any_row) {
+        pb_cfg.set_compression(to_wire(ChunkCompression::kUnrolled));
+        return;
+    }
     pb_cfg.set_compression(to_wire(ChunkCompression::kStridedRows));
     for (uint32_t slot = 0; slot < cfg.num_slots; slot++) {
         for (uint32_t layer = 0; layer < cfg.num_layers; layer++) {
