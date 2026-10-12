@@ -64,12 +64,23 @@ constexpr bool PERF_PACK_SECTION_RELEASE = false;
     ;                                                    \
     llk_perf::init_zone<PERF_RUN_TYPE>(_llk_init_body_); \
     }
+#define LLK_INIT_ZONE_END() llk_perf::init_zone_end()
+#define LLK_INIT_PREP_END                                                                 \
+    ;                                                                                     \
+    llk_perf::init_zone<PERF_RUN_TYPE, decltype(_llk_init_body_), true>(_llk_init_body_); \
+    }
 #elif defined(LLK_DBG_BARRIER) && defined(LLK_PERF_OOL)
 #define LLK_INIT_BEGIN [=]() __attribute__((noipa, section(".llk_init_text"), aligned(512)))
 #define LLK_INIT_END   ()
 #else
 #define LLK_INIT_BEGIN
 #define LLK_INIT_END
+#endif
+// An INIT block that goes on to prepare the loop's data (pack_dest_bank fills dest): INIT's zone ends at
+// LLK_INIT_ZONE_END(), after the thread's own init, and the block closes with LLK_INIT_PREP_END instead of LLK_INIT_END
+#if !(defined(LLK_DBG_BARRIER) && defined(LLK_PERF_INIT_ONLY))
+#define LLK_INIT_ZONE_END()
+#define LLK_INIT_PREP_END LLK_INIT_END
 #endif
 // The code after the measured loop (uninit): placed like INIT, but never timed as INIT in the INIT measurement build.
 #if defined(LLK_DBG_BARRIER) && defined(LLK_PERF_OOL)
