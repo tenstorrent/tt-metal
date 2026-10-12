@@ -76,10 +76,12 @@ SECTIONS
   } > REGION_CODE
   .text :
   {
-    /* run_kernel on a 2 KiB boundary (kernel_placement.h), then its out of line callees. */
+    /* run_kernel on a 2 KiB boundary (kernel_placement.h), then its out of line callees: first the ones its TILE_LOOP
+       window can run (.text.llk_loop_callee.<name>, test_config.py), by name, so no other function can move them */
     *(.text.run_kernel)
     . = ALIGN(DEFINED(llk_text_tail_align) ? llk_text_tail_align : 1);
     *(.text.run_kernel.tail)
+    *(SORT_BY_NAME(.text.llk_loop_callee.*))
     *(.text.hot .text.hot.*)
     *(.text .stub .text.* .gnu.linkonce.t.*)
     *(.gnu.warning)

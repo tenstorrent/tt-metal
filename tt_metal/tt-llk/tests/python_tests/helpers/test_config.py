@@ -118,23 +118,41 @@ _INIT_FIXED_SECTIONS = (
     ".llk_init_body",
     ".llk_init_tramp",
 )
+# Wormhole perf builds: the sections sections.ld places, each starting at its function's entry (_entries_placed)
+_PLACED_SECTIONS = _INIT_FIXED_SECTIONS[1:] + (
+    ".text.run_kernel",
+    ".text.llk_loop_callee",
+    ".llk_init_text",
+    ".llk_quiet_text",
+)
 _FUNCTION_TYPE = re.compile(r"\s*\.type\s+([^,\s]+),\s*@function")
 _FUNCTION_PREAMBLE = re.compile(
     r"\s*\.(p2align|balign|align|globl|weak|hidden|local)\b"
 )
+_FUNCTION_ALIGN = re.compile(r"\s*\.(?:p2align|align)\s+(\d+)")
 _CALL = re.compile(
     r"\s*(?:call|tail|jal|j)\s+(?:[a-z][a-z0-9]*,\s*)?([A-Za-z_.$][\w.$]*)\s*$"
 )
+_ASM_LABEL = re.compile(r"^([A-Za-z_.$][\w.$]*):")
+_ASM_INSTRUCTION = re.compile(r"^\t([a-z][a-z0-9.]*)(?:\s+(.*?))?\s*$")
+_ASM_SYMBOL = re.compile(r"[A-Za-z_.$][\w.$]*")
+_ASM_BRANCHES = frozenset(
+    "beq bne blt bge bltu bgeu beqz bnez blez bgez bltz bgtz bgt ble bgtu bleu".split()
+)
+# barrier.h parks in inline assembly: the assembler macro, or the out of line threads' ebreak word
+_PARK = re.compile(r"\bllk_park\s+\d|0x00100073")
+# the TILE_LOOP park's restart: the macro's mode 1, or the out of line threads' llk_loop_pad NOPs
+_LOOP_PARK = re.compile(r"\bllk_park\s+1\s*,|\(llk_loop_pad / 4\) \* 1\b")
+# patchable function entry NOPs (-fpatchable-function-entry=N,M) ahead of an entry
+_ENTRY_NOPS = re.compile(r"\.LPFE\d+:$")
 
 
-def _init_callees_in_slot(text: str) -> str:
-    """INIT measurement build assembly with every function INIT's body calls (directly or through another) that GCC
-    left out of line in a fixed section (.text.llk_init_callee.<n>, sections.ld) instead of among the kernel's
-    functions, where code outside INIT would move it; the functions and every other byte are unchanged.
-    """
-    lines = text.split("\n")
+def _asm_functions(lines) -> tuple:
+    """({name: [preamble start, label, .size line, section of the label, alignment (log2 bytes)]}, section of each line)
+    of every function of a GCC assembly"""
     section, stack, previous = ".text", [], ".text"
-    functions = {}  # name -> [preamble start, label, .size line, section]
+    functions, sections = {}, []
+    aligns = {}  # the largest alignment per section since the last .size
     for i, line in enumerate(lines):
         s = line.strip()
         word = s.split(None, 1)[0] if s else ""
@@ -148,46 +166,181 @@ def _init_callees_in_slot(text: str) -> str:
             previous, section = section, stack.pop()
         elif word == ".previous":
             previous, section = section, previous
+        elif m := _FUNCTION_ALIGN.match(line):
+            aligns[section] = max(aligns.get(section, 0), int(m.group(1)))
         elif m := _FUNCTION_TYPE.match(line):
             start = i
             while start > 0 and _FUNCTION_PREAMBLE.match(lines[start - 1]):
                 start -= 1
-            functions[m.group(1)] = [start, None, None, section]
+            functions[m.group(1)] = [start, None, None, section, 2]
         elif s.endswith(":") and s[:-1] in functions and functions[s[:-1]][1] is None:
-            functions[s[:-1]][1] = i
+            functions[s[:-1]][1:] = [i, None, section, aligns.get(section, 2)]
         elif word == ".size":
             name = s.split(None, 1)[1].split(",")[0].strip()
             if name in functions and functions[name][1] is not None:
                 functions[name][2] = i
+            aligns = {}
+        sections.append(section)
+    return {n: f for n, f in functions.items() if f[2] is not None}, sections
+
+
+def _in_slots(lines, functions, names, slot) -> str:
+    """the assembly with each named function's code, from its entry label to its .size, in its own section slot(name);
+    what GCC emits ahead of the label (directives, patchable entry NOPs) stays where it was"""
+    wrap = {}
+    for name in names:
+        _, label, end, _, align = functions[name]
+        wrap[label] = f'\t.pushsection\t{slot(name)},"ax",@progbits\n\t.p2align\t{align}'
+        wrap[end] = None
+    out = []
+    for i, line in enumerate(lines):
+        if wrap.get(i) is not None:
+            out.append(wrap[i])
+        out.append(line)
+        if i in wrap and wrap[i] is None:
+            out.append("\t.popsection")
+    return "\n".join(out)
+
+
+def _init_callees_in_slot(text: str) -> str:
+    """INIT measurement build assembly with every function INIT's body calls (directly or through another) that GCC
+    left out of line in a fixed section (.text.llk_init_callee.<n>, sections.ld) instead of among the kernel's
+    functions, where code outside INIT would move it; the functions and every other byte are unchanged.
+    """
+    lines = text.split("\n")
+    functions, _ = _asm_functions(lines)
     fixed = lambda f: f[3].startswith(_INIT_FIXED_SECTIONS)
-    todo = [
-        n for n, f in functions.items() if f[3] == ".llk_init_body" and f[2] is not None
-    ]
+    todo = [n for n, f in functions.items() if f[3] == ".llk_init_body"]
     seen, moved = set(todo), []
     while todo:
         name = todo.pop(0)
-        start, label, end, _ = functions[name]
+        _, label, end, _, _ = functions[name]
         for line in lines[label:end]:
             m = _CALL.match(line)
             callee = m and functions.get(m.group(1))
-            if callee and callee[2] is not None and m.group(1) not in seen:
+            if callee and m.group(1) not in seen:
                 seen.add(m.group(1))
                 todo.append(m.group(1))
                 if not fixed(callee):
                     moved.append(m.group(1))
     if not moved:
         return text
-    wrap = {}
-    for k, name in enumerate(moved):
-        start, _, end, _ = functions[name]
-        wrap[start] = f'\t.pushsection\t.text.llk_init_callee.{k},"ax",@progbits'
-        wrap[end] = None
+    index = {name: k for k, name in enumerate(moved)}
+    return _in_slots(
+        lines, functions, moved, lambda n: f".text.llk_init_callee.{index[n]}"
+    )
+
+
+def _loop_window_calls(lines, kernel, names) -> list:
+    """the functions run_kernel calls (or takes the address of) on any path from its TILE_LOOP park's restart to the
+    next park (barrier.h): every call its TILE_LOOP window can make"""
+    body, app = [], False  # (line, mnemonic, operands); inline assembly runs straight through
+    for i in range(kernel[1] + 1, kernel[2]):
+        s = lines[i].strip()
+        if s in ("#APP", "#NO_APP"):
+            app = s == "#APP"
+        elif app:
+            body.append((i, "asm", s))
+        elif m := _ASM_LABEL.match(lines[i]):
+            body.append((i, ":", m.group(1)))
+        elif m := _ASM_INSTRUCTION.match(lines[i]):
+            body.append((i, m.group(1), m.group(2) or ""))
+    park = next(
+        (k for k, (_, op, s) in enumerate(body) if op == "asm" and _LOOP_PARK.search(s)),
+        None,
+    )
+    if park is None:
+        return []
+    labels = {s: k for k, (_, op, s) in enumerate(body) if op == ":"}
+    seen, todo, out = {park}, [park], []
+    while todo:
+        k = todo.pop()
+        _, op, operands = body[k]
+        target = operands.split(",")[-1].strip()
+        nxt = [k + 1]
+        if op == "asm":
+            nxt = [] if k != park and _PARK.search(operands) else nxt
+        elif op in _ASM_BRANCHES:
+            nxt.append(labels.get(target))
+        elif op in ("j", "tail"):
+            nxt = [labels[target]] if target in labels else []
+        elif op == "ret" or (op == "jr" and target == "ra"):
+            nxt = []
+        elif op == "jr":  # a jump table: any label of the function
+            nxt = list(labels.values())
+        if op not in (":", "asm"):
+            out += [t for t in _ASM_SYMBOL.findall(operands) if t in names]
+        for n in nxt:
+            if n is not None and n < len(body) and n not in seen:
+                seen.add(n)
+                todo.append(n)
+    return list(dict.fromkeys(out))
+
+
+def _loop_callees_in_slot(text: str) -> str:
+    """TILE_LOOP build assembly with every function its TILE_LOOP window can run (run_kernel's calls from the TILE_LOOP
+    park to the next park, then every call those make, not into the out of line INIT and post-loop code) in its own
+    section, .text.llk_loop_callee.<name>, which sections.ld places by name right after run_kernel and its
+    llk_loop_end_pad: no other function's size or order can move them.
+    """
+    lines = text.split("\n")
+    functions, _ = _asm_functions(lines)
+    kernel = next(
+        (f for n, f in functions.items() if n.startswith("_Z10run_kernel")), None
+    )
+    if kernel is None:
+        return text
+    todo = _loop_window_calls(lines, kernel, functions)
+    seen, moved = set(todo), []
+    while todo:
+        name = todo.pop(0)
+        start, label, end, section, _ = functions[name]
+        if section == ".llk_init_text" or name.startswith("_Z10run_kernel"):
+            continue
+        if not section.startswith(_PLACED_SECTIONS + (".init", ".text.startup")):
+            moved.append(name)
+        for line in lines[label + 1 : end]:
+            m = _CALL.match(line)
+            refs = [m.group(1)] if m else []
+            if not m and (i := _ASM_INSTRUCTION.match(line)):
+                refs = _ASM_SYMBOL.findall(i.group(2) or "")
+            for callee in refs:
+                if callee in functions and callee not in seen:
+                    seen.add(callee)
+                    todo.append(callee)
+    if not moved:
+        return text
+    return _in_slots(
+        lines, functions, moved, lambda n: f".text.llk_loop_callee.{n}"
+    )
+
+
+def _entries_placed(text: str) -> str:
+    """Wormhole perf build assembly in which each function sections.ld places (_PLACED_SECTIONS) starts its section at
+    its entry: patchable entry NOPs GCC emits ahead of the entry in the same section go to .text.llk_entry_nops"""
+    lines = text.split("\n")
+    functions, sections = _asm_functions(lines)
+    push, pop = set(), set()
+    for _, label, _, section, _ in functions.values():
+        if not section.startswith(_PLACED_SECTIONS):
+            continue
+        i = label - 1  # back over the .type and preamble directives to the NOPs' label
+        while i > 0 and (lines[i].strip() == "nop" or _FUNCTION_TYPE.match(lines[i]) or _FUNCTION_PREAMBLE.match(lines[i])):
+            i -= 1
+        if _ENTRY_NOPS.match(lines[i].strip()) and sections[i] == section:
+            j = i + 1
+            while lines[j].strip() == "nop":
+                j += 1
+            push.add(i)
+            pop.add(j - 1)
+    if not push:
+        return text
     out = []
     for i, line in enumerate(lines):
-        if i in wrap and wrap[i] is not None:
-            out.append(wrap[i])
+        if i in push:
+            out.append('\t.pushsection\t.text.llk_entry_nops,"ax",@progbits')
         out.append(line)
-        if i in wrap and wrap[i] is None:
+        if i in pop:
             out.append("\t.popsection")
     return "\n".join(out)
 
@@ -2036,9 +2189,12 @@ class TestConfig:
             logger.trace(" ".join(shlex.quote(part) for part in compile_command))
             run_shell_command(compile_command, TestConfig.TESTS_WORKING_DIR, source)
             text = assembly.read_text()
-            if init_only:
-                text = _init_callees_in_slot(text)
-            else:
+            text = _entries_placed(
+                _init_callees_in_slot(text)
+                if init_only
+                else _loop_callees_in_slot(text)
+            )
+            if not init_only:
                 # level 6: a seventh of the time of the default 9 for 6 % more bytes
                 with gzip.open(
                     assembly.with_suffix(".s.gz"), "wt", compresslevel=6
