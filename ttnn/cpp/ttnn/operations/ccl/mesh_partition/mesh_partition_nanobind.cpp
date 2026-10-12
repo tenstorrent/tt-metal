@@ -27,6 +27,7 @@ void bind_mesh_partition(nb::module_& mod) {
 
         Keyword Args:
             memory_config (ttnn.MemoryConfig, optional): Memory configuration for the operation. Defaults to `None`.
+            sub_core_grids (ttnn.CoreRangeSet, optional): Cores the slice runs on. Defaults to `None`, the whole device grid.
 
         Returns:
             ttnn.Tensor: The partitioned tensor, with output_shape = input_shape for all the unspecified dimensions, and output_shape[dim] = input_shape[dim] / num_devices, where num_devices is the number of devices along the `cluster_axis` if specified, else the total number of devices along the mesh.
@@ -56,7 +57,8 @@ void bind_mesh_partition(nb::module_& mod) {
         nb::arg("dim"),
         nb::arg("cluster_axis") = nb::none(),
         nb::kw_only(),
-        nb::arg("memory_config") = nb::none());
+        nb::arg("memory_config") = nb::none(),
+        nb::arg("sub_core_grids") = nb::none());
 }
 
 }  // namespace ttnn::operations::ccl
