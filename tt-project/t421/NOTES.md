@@ -64,3 +64,13 @@
   Fixed common_av.py copied into blx01 /var/tmp/fasth3/t421/b (md5 b8d07600...).
 - g15blx02 rebooted again 04:44 PDT. Relaunched chain: off-s0 on-s0 on-s1 on-s2 off-s3 on-s3 off-s4
   on-s4, plus post421.sh, detached in run 1658. off-s1/off-s2 outputs stay on blx01 and are reused.
+
+## Status 2026-10-12 07:55 PDT (run 1675)
+- The run-1658 chain completed off-s0 (12:02Z), on-s0 (12:11Z), on-s1 (12:30Z), on-s2 (job 956, 12:38Z)
+  and off-s3 (job 957, 12:45Z), then stalled behind other smarton jobs (t447 961/963, t409 958) and died
+  in a host reboot. No new drops.
+- Left: on-s3, off-s4, on-s4. The chain and post step were relaunched detached in run 1675 on g15blx02
+  (not on blx01: both depend on g15blx02 files, the lint-checked blx01-submit.sh, the local python_env
+  and the VBench evaltree). The chain reuses existing outputs, so a host reboot costs only a relaunch.
+- Next: once run 1675's post421.rc exists, read state/t421/chain.log tail, summary.md and vbench.log,
+  look at the stills and recommend on/off. Then delete the blx01 caches listed above and /var/tmp/fasth3/t421.
