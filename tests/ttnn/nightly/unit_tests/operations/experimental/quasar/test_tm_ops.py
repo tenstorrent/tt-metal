@@ -484,3 +484,30 @@ def test_quasar_pad_tile_rank1(device):
     tt_input = ttnn.from_torch(torch_input_tensor, layout=ttnn.TILE_LAYOUT, device=device)
     tt_output = ttnn.to_torch(ttnn.experimental.quasar.pad(tt_input, [(0, 24)], 2.0))
     assert torch.equal(tt_output, torch.nn.functional.pad(torch_input_tensor, (0, 24), value=2.0))
+
+
+@pytest.mark.parametrize("shard_orient", [ttnn.ShardOrientation.ROW_MAJOR, ttnn.ShardOrientation.COL_MAJOR])
+def test_quasar_pad_rm_sharded_height_value(device, shard_orient):
+    # Pads C and H with a nonzero value, which takes the reader that loops back its own pad-value stores.
+    n, c, h, w = 1, 2, 32, 32
+    padding, torch_padding, value = ((1, 1), (2, 30), (0, 0)), (0, 0, 2, 30, 1, 1), 8.0
+    torch_input_tensor = torch.rand((n, c, h, w), dtype=torch.bfloat16)
+    expected = torch.nn.functional.pad(torch_input_tensor, torch_padding, mode="constant", value=value)
+
+    grid = ttnn.CoreRangeSet({ttnn.CoreRange(ttnn.CoreCoord(0, 0), ttnn.CoreCoord(7, 0))})
+
+    def height_sharded(rows):
+        shard_spec = ttnn.ShardSpec(grid, (rows // grid.num_cores(), w), shard_orient)
+        return ttnn.MemoryConfig(ttnn.TensorMemoryLayout.HEIGHT_SHARDED, ttnn.BufferType.L1, shard_spec)
+
+    tt_input = ttnn.from_torch(
+        torch_input_tensor,
+        dtype=ttnn.bfloat16,
+        layout=ttnn.ROW_MAJOR_LAYOUT,
+        device=device,
+        memory_config=height_sharded(n * c * h),
+    )
+    tt_output = ttnn.experimental.quasar.pad(
+        tt_input, padding=padding, value=value, memory_config=height_sharded(expected.numel() // w)
+    )
+    assert torch.equal(ttnn.to_torch(tt_output), expected)
