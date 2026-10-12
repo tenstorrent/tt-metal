@@ -1,0 +1,39 @@
+{
+  "state": "completed",
+  "started_at": 1791767728.1951592,
+  "cleanup_completed": true,
+  "survives_disconnect": true,
+  "resumes_after_reboot": false,
+  "full_model_qualified": false,
+  "promoted_to_serving": false,
+  "hardware_lock": "/tmp/tt-device.lock",
+  "updated_at": "2026-10-12T01:16:14Z",
+  "unit_command": [
+    "/home/ttuser/kimi-prefill.Ubx2wY/runtime/qwen38-27b-20261006/python_env/bin/python3.10",
+    "-m",
+    "pytest",
+    "/home/ttuser/qwen38-artifacts-20261007/projection-delivery-source-v4/models/demos/qwen38_27b_qb2/tests/unit/test_projection_sweep.py",
+    "--rootdir=/home/ttuser/qwen38-artifacts-20261007/projection-delivery-source-v4",
+    "-c",
+    "/home/ttuser/qwen38-artifacts-20261007/projection-delivery-source-v4/pytest.ini",
+    "-q",
+    "--junitxml=/home/ttuser/qwen38-artifacts-20261007/projection-delivery-control-v4/unit.xml"
+  ],
+  "cpu_tests_passed": 13,
+  "command": [
+    "/bin/bash",
+    "/home/ttuser/qwen38-artifacts-20261007/projection-delivery-source-v4/scripts/run_safe_pytest.sh",
+    "/home/ttuser/qwen38-artifacts-20261007/projection-delivery-source-v4/models/demos/qwen38_27b_qb2/tests/test_projection_delivery.py",
+    "--rootdir=/home/ttuser/qwen38-artifacts-20261007/projection-delivery-source-v4",
+    "-c",
+    "/home/ttuser/qwen38-artifacts-20261007/projection-delivery-source-v4/pytest.ini",
+    "-vv",
+    "-s",
+    "--tb=short",
+    "--timeout=900",
+    "--junitxml=/home/ttuser/qwen38-artifacts-20261007/projection-delivery-v4/hardware.xml"
+  ],
+  "exact_component_match": true,
+  "traced_comparison_completed": true,
+  "finished_at": 1791767774.1122324
+}

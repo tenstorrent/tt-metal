@@ -1,0 +1,360 @@
+{
+  "verified_raw_files": 60,
+  "attempts": [
+    {
+      "version": "v1",
+      "state": "failed",
+      "invocation_id": "bea4f408aee04943b2a9b085309bc3dd",
+      "cpu_tests": 13,
+      "controller_seconds": 23.80292797088623,
+      "cases": 0,
+      "cleanup_completed": true,
+      "terminal_observation": {
+        "MainPID": "0",
+        "Result": "exit-code",
+        "ExecMainStatus": "1",
+        "LoadState": "loaded",
+        "ActiveState": "failed",
+        "SubState": "failed",
+        "InvocationID": "bea4f408aee04943b2a9b085309bc3dd"
+      },
+      "failure": "Found 2 device buffer(s) still alive before trace replay. These will be corrupted on replay.\nBuffer 1154 [op: program_cache: CopyDeviceOperation output_mem_config=MemoryConfig(memory_layout=TensorMemoryLayout::INTERLEAVED,buffer_type=BufferType::L1,shard_spec=std::nullopt,nd_shard_spec=std::nullopt,created_with_nd_shard_spec=0,per_core_allocation=0,range_lockstep_allocation=0) output_dtype=DataType::BFLOAT16 backwards=false]\nBuffer 1183 [op: program_cache: ShardedToInterleavedDeviceOperation output_mem_config=MemoryConfig(memory_layout=TensorMemoryLayout::INTERLEAVED,buffer_type=BufferType::DRAM,shard_spec=std::nullopt,nd_shard_spec=std::nullopt,created_with_nd_shard_spec=0,per_core_allocation=0,range_lockstep_allocation=0) output_dtype=DataType::BFLOAT16 num_slices=1 slice_index=0]\n\nUse ttnn.tools.trace_allocation_tracker.corruptible_allocation_scope() for acknowledged-corruptible tensors, or ensure temporary tensors are freed before replay."
+    },
+    {
+      "version": "v2",
+      "state": "completed",
+      "invocation_id": "0842970ec67a4161b3dfde201981763e",
+      "cpu_tests": 13,
+      "controller_seconds": 39.88494253158569,
+      "cases": 16,
+      "cleanup_completed": true,
+      "terminal_observation": {
+        "MainPID": "0",
+        "Result": "success",
+        "ExecMainStatus": "0",
+        "LoadState": "not-found",
+        "ActiveState": "inactive",
+        "SubState": "dead",
+        "InvocationID": ""
+      }
+    },
+    {
+      "version": "v3",
+      "state": "failed",
+      "invocation_id": "adba48ae9c6a447c88fc97329909124e",
+      "cpu_tests": 13,
+      "controller_seconds": 23.80093216896057,
+      "cases": 0,
+      "cleanup_completed": true,
+      "terminal_observation": {
+        "MainPID": "0",
+        "Result": "exit-code",
+        "ExecMainStatus": "1",
+        "LoadState": "loaded",
+        "ActiveState": "failed",
+        "SubState": "failed",
+        "InvocationID": "adba48ae9c6a447c88fc97329909124e"
+      },
+      "failure": "__getitem__(): incompatible function arguments. The following argument types are supported:\n    1. __getitem__(self, arg: int, /) -> int\n\nInvoked with types: ttnn._ttnn.types.Shape, slice"
+    },
+    {
+      "version": "v4",
+      "state": "completed",
+      "invocation_id": "1a01b4147dbe4217878bac6daa88980a",
+      "cpu_tests": 13,
+      "controller_seconds": 45.917073249816895,
+      "cases": 24,
+      "cleanup_completed": true,
+      "terminal_observation": {
+        "MainPID": "0",
+        "Result": "success",
+        "ExecMainStatus": "0",
+        "LoadState": "not-found",
+        "ActiveState": "inactive",
+        "SubState": "dead",
+        "InvocationID": ""
+      }
+    }
+  ],
+  "rows": [
+    {
+      "version": "v2",
+      "batch": 16,
+      "role": "output",
+      "input_layout": "compact_l1",
+      "delivery": "native_input",
+      "control_us": 53.013790311524644,
+      "candidate_us": 50.47135811764747,
+      "latency_change_pct": -4.795794035735035,
+      "control_drift_pct": 0.06500390699176739,
+      "projected_model_saving_ms": 0.12203674530610442
+    },
+    {
+      "version": "v2",
+      "batch": 16,
+      "role": "output",
+      "input_layout": "compact_l1",
+      "delivery": "matmul_output",
+      "control_us": 53.013790311524644,
+      "candidate_us": 49.37348247040063,
+      "latency_change_pct": -6.866718677786466,
+      "control_drift_pct": 0.06500390699176739,
+      "projected_model_saving_ms": 0.17473477637395263
+    },
+    {
+      "version": "v2",
+      "batch": 16,
+      "role": "down",
+      "input_layout": "compact_l1",
+      "delivery": "native_input",
+      "control_us": 94.25479947822168,
+      "candidate_us": 91.72248013783246,
+      "latency_change_pct": -2.6866741581412334,
+      "control_drift_pct": 0.0057982813848278525,
+      "projected_model_saving_ms": 0.1620684377849102
+    },
+    {
+      "version": "v2",
+      "batch": 16,
+      "role": "down",
+      "input_layout": "compact_l1",
+      "delivery": "matmul_output",
+      "control_us": 94.25479947822168,
+      "candidate_us": 90.6119288993068,
+      "latency_change_pct": -3.8649178599723166,
+      "control_drift_pct": 0.0057982813848278525,
+      "projected_model_saving_ms": 0.23314371705055237
+    },
+    {
+      "version": "v2",
+      "batch": 32,
+      "role": "output",
+      "input_layout": "compact_l1",
+      "delivery": "native_input",
+      "control_us": 53.02028774167411,
+      "candidate_us": 50.527148705441505,
+      "latency_change_pct": -4.702235959902179,
+      "control_drift_pct": 0.04097372531453036,
+      "projected_model_saving_ms": 0.11967067373916507
+    },
+    {
+      "version": "v2",
+      "batch": 32,
+      "role": "output",
+      "input_layout": "compact_l1",
+      "delivery": "matmul_output",
+      "control_us": 53.02028774167411,
+      "candidate_us": 49.387854523956776,
+      "latency_change_pct": -6.851025093291286,
+      "control_drift_pct": 0.04097372531453036,
+      "projected_model_saving_ms": 0.17435679445043206
+    },
+    {
+      "version": "v2",
+      "batch": 32,
+      "role": "down",
+      "input_layout": "compact_l1",
+      "delivery": "native_input",
+      "control_us": 94.25320371519774,
+      "candidate_us": 91.71054378384724,
+      "latency_change_pct": -2.6976907215096713,
+      "control_drift_pct": 0.036757866887193735,
+      "projected_model_saving_ms": 0.16273023560643196
+    },
+    {
+      "version": "v2",
+      "batch": 32,
+      "role": "down",
+      "input_layout": "compact_l1",
+      "delivery": "matmul_output",
+      "control_us": 94.25320371519774,
+      "candidate_us": 90.60280863195658,
+      "latency_change_pct": -3.872966582941262,
+      "control_drift_pct": 0.036757866887193735,
+      "projected_model_saving_ms": 0.23362528532743454
+    },
+    {
+      "version": "v4",
+      "batch": 16,
+      "role": "output",
+      "input_layout": "compact_l1",
+      "delivery": "native_input",
+      "control_us": 52.99816621118225,
+      "candidate_us": 50.51588988862932,
+      "latency_change_pct": -4.683702286342861,
+      "control_drift_pct": 0.07363729564366928,
+      "projected_model_saving_ms": 0.11914926348254085
+    },
+    {
+      "version": "v4",
+      "batch": 16,
+      "role": "output",
+      "input_layout": "compact_l1",
+      "delivery": "matmul_output",
+      "control_us": 52.99816621118225,
+      "candidate_us": 49.36815210385248,
+      "latency_change_pct": -6.849320206410958,
+      "control_drift_pct": 0.07363729564366928,
+      "projected_model_saving_ms": 0.174240677151829
+    },
+    {
+      "version": "v4",
+      "batch": 16,
+      "role": "down",
+      "input_layout": "compact_l1",
+      "delivery": "native_input",
+      "control_us": 94.21498121810146,
+      "candidate_us": 91.69990022201091,
+      "latency_change_pct": -2.6695128137512403,
+      "control_drift_pct": 0.013173667734978078,
+      "projected_model_saving_ms": 0.16096518374979496
+    },
+    {
+      "version": "v4",
+      "batch": 16,
+      "role": "down",
+      "input_layout": "compact_l1",
+      "delivery": "matmul_output",
+      "control_us": 94.21498121810146,
+      "candidate_us": 90.56418552063406,
+      "latency_change_pct": -3.8749630369463772,
+      "control_drift_pct": 0.013173667734978078,
+      "projected_model_saving_ms": 0.2336509246379137
+    },
+    {
+      "version": "v4",
+      "batch": 16,
+      "role": "output",
+      "input_layout": "public_dram",
+      "delivery": "native_input",
+      "control_us": 63.84681226336397,
+      "candidate_us": 63.85318760294467,
+      "latency_change_pct": 0.009985368657727811,
+      "control_drift_pct": 0.04495450015129521,
+      "projected_model_saving_ms": -0.00030601629987359047
+    },
+    {
+      "version": "v4",
+      "batch": 16,
+      "role": "output",
+      "input_layout": "public_dram",
+      "delivery": "matmul_output",
+      "control_us": 63.84681226336397,
+      "candidate_us": 63.838145579211414,
+      "latency_change_pct": -0.01357418459172477,
+      "control_drift_pct": 0.04495450015129521,
+      "projected_model_saving_ms": 0.0004160008393228054
+    },
+    {
+      "version": "v4",
+      "batch": 32,
+      "role": "output",
+      "input_layout": "compact_l1",
+      "delivery": "native_input",
+      "control_us": 53.0188693664968,
+      "candidate_us": 50.51798128988594,
+      "latency_change_pct": -4.716977382756493,
+      "control_drift_pct": 0.03967764108727678,
+      "projected_model_saving_ms": 0.12004262767732143
+    },
+    {
+      "version": "v4",
+      "batch": 32,
+      "role": "output",
+      "input_layout": "compact_l1",
+      "delivery": "matmul_output",
+      "control_us": 53.0188693664968,
+      "candidate_us": 49.345473817083985,
+      "latency_change_pct": -6.928468285546041,
+      "control_drift_pct": 0.03967764108727678,
+      "projected_model_saving_ms": 0.1763229863718152
+    },
+    {
+      "version": "v4",
+      "batch": 32,
+      "role": "down",
+      "input_layout": "compact_l1",
+      "delivery": "native_input",
+      "control_us": 94.22960967640392,
+      "candidate_us": 91.69864177238196,
+      "latency_change_pct": -2.685958174626446,
+      "control_drift_pct": 0.0013883195551844807,
+      "projected_model_saving_ms": 0.16198194585740566
+    },
+    {
+      "version": "v4",
+      "batch": 32,
+      "role": "down",
+      "input_layout": "compact_l1",
+      "delivery": "matmul_output",
+      "control_us": 94.22960967640392,
+      "candidate_us": 90.56133800186217,
+      "latency_change_pct": -3.892907640325638,
+      "control_drift_pct": 0.0013883195551844807,
+      "projected_model_saving_ms": 0.23476938717067242
+    },
+    {
+      "version": "v4",
+      "batch": 32,
+      "role": "output",
+      "input_layout": "public_dram",
+      "delivery": "native_input",
+      "control_us": 72.99977354705334,
+      "candidate_us": 72.99998949747533,
+      "latency_change_pct": 0.0002958234135430615,
+      "control_drift_pct": 0.024495148034897607,
+      "projected_model_saving_ms": -1.0365620255470276e-05
+    },
+    {
+      "version": "v4",
+      "batch": 32,
+      "role": "output",
+      "input_layout": "public_dram",
+      "delivery": "matmul_output",
+      "control_us": 72.99977354705334,
+      "candidate_us": 73.01015517441556,
+      "latency_change_pct": 0.014221451461815526,
+      "control_drift_pct": 0.024495148034897607,
+      "projected_model_saving_ms": -0.000498318113386631
+    }
+  ],
+  "projections": [
+    {
+      "version": "v2",
+      "delivery": "native_input",
+      "b16_projected_saved_ms": 0.2841051830910146,
+      "b16_projected_tsu": 21.00921865280359,
+      "b16_projected_tsu_gain": 0.12465635835206257,
+      "full_model_measured": false
+    },
+    {
+      "version": "v2",
+      "delivery": "matmul_output",
+      "b16_projected_saved_ms": 0.407878493424505,
+      "b16_projected_tsu": 21.063993050430366,
+      "b16_projected_tsu_gain": 0.17943075597883862,
+      "full_model_measured": false
+    },
+    {
+      "version": "v4",
+      "delivery": "native_input",
+      "b16_projected_saved_ms": 0.2801144472323358,
+      "b16_projected_tsu": 21.007457340476392,
+      "b16_projected_tsu_gain": 0.12289504602486545,
+      "full_model_measured": false
+    },
+    {
+      "version": "v4",
+      "delivery": "matmul_output",
+      "b16_projected_saved_ms": 0.4078916017897427,
+      "b16_projected_tsu": 21.063998866506182,
+      "b16_projected_tsu_gain": 0.17943657205465513,
+      "full_model_measured": false
+    }
+  ],
+  "model_measured_tsu": 20.884562,
+  "default_delivery": "reshard",
+  "full_model_qualified": false,
+  "promoted_to_serving": false,
+  "accuracy_scope": "Actual layer-0 BFP8 weights; synthetic rank/user-distinct inputs and native TP4 reductions"
+}

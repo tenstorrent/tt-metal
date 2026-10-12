@@ -1,0 +1,331 @@
+{
+  "generated_at": "2026-10-12T01:19:07.814003+00:00",
+  "scope": "Opt-in projection-to-collective delivery: exact native TP4 comparisons and public-layout fallback; projected small gain, not model-qualified.",
+  "entries": [
+    {
+      "path": "tests/test_projection_delivery.py",
+      "bytes": 7853,
+      "sha256": "6e240d736fb7778c4a12892ddb3ad58fc2349079ba42c5bca61942b7cbc60a6f"
+    },
+    {
+      "path": "galaxy-evidence/projection-delivery-results-v1/README.md",
+      "bytes": 6893,
+      "sha256": "6b1d161c51b2c4d2e1fa9012cc0de137e5703e29adbbfc6ddce6ec1c5e40665a"
+    },
+    {
+      "path": "galaxy-evidence/projection-delivery-results-v1/manifest.json",
+      "bytes": 16240,
+      "sha256": "badc51503b96a810edf51f7fa56966585103f93438e86e1f50a29726c583469b"
+    },
+    {
+      "path": "galaxy-evidence/projection-delivery-results-v1/raw/projection-delivery-control-v1/collection-unit.json",
+      "bytes": 201,
+      "sha256": "3109b2ba26786f9f45fb394d0d7bd7a410271de3fcd79631fcea1cc5ce72065d"
+    },
+    {
+      "path": "galaxy-evidence/projection-delivery-results-v1/raw/projection-delivery-control-v1/launch-unit.json",
+      "bytes": 131,
+      "sha256": "48832029b2a6ce9371358b4a6b2c195bf6e1efe8b865584588bf714dd1c845d4"
+    },
+    {
+      "path": "galaxy-evidence/projection-delivery-results-v1/raw/projection-delivery-control-v1/launch.json",
+      "bytes": 2050,
+      "sha256": "25aadb1dd519ea2ac688b2d40f8caa3b7693e67e3e8628324f62deb0f93b5853"
+    },
+    {
+      "path": "galaxy-evidence/projection-delivery-results-v1/raw/projection-delivery-control-v1/run.log.gz",
+      "bytes": 4047,
+      "sha256": "186145dd679c8d7e8cff648312b2850e64252838db6af55b86a40c322c14bf97"
+    },
+    {
+      "path": "galaxy-evidence/projection-delivery-results-v1/raw/projection-delivery-control-v1/run.py.gz",
+      "bytes": 1627,
+      "sha256": "7a9ab332edfa58a8e4fc0e398abeb0d2209fab6662938b98d4d18e100d9c3e38"
+    },
+    {
+      "path": "galaxy-evidence/projection-delivery-results-v1/raw/projection-delivery-control-v1/source-manifest.json",
+      "bytes": 40921,
+      "sha256": "e288aaca7440a06d41c60caf608c3da459c155f3ee10fda3bbe71a2099919399"
+    },
+    {
+      "path": "galaxy-evidence/projection-delivery-results-v1/raw/projection-delivery-control-v1/unit.log.gz",
+      "bytes": 1303,
+      "sha256": "29ae8e31cd27f9b4be3ca16119d642b3a21a288436e3e384234f3871dd9e6e5d"
+    },
+    {
+      "path": "galaxy-evidence/projection-delivery-results-v1/raw/projection-delivery-control-v1/unit.xml.gz",
+      "bytes": 564,
+      "sha256": "8c529d5ecb9994d5efd8f775c1f8a6306595c574096a423e0a2138127fa693ee"
+    },
+    {
+      "path": "galaxy-evidence/projection-delivery-results-v1/raw/projection-delivery-control-v2/collection-unit.json",
+      "bytes": 170,
+      "sha256": "dee142b2d40021173664dfe002a3d62a299464559f0185e8cc07cb052e2e4731"
+    },
+    {
+      "path": "galaxy-evidence/projection-delivery-results-v1/raw/projection-delivery-control-v2/launch-unit.json",
+      "bytes": 156,
+      "sha256": "f73ebc2d8833a748259d2992a9b3fa902313bd9917874e3c4d18ebc9f63daf8b"
+    },
+    {
+      "path": "galaxy-evidence/projection-delivery-results-v1/raw/projection-delivery-control-v2/launch.json",
+      "bytes": 2100,
+      "sha256": "b5564e1e2976600a2d8ee3fb88e835b6c272482ed0d5ac290220660ff3e24214"
+    },
+    {
+      "path": "galaxy-evidence/projection-delivery-results-v1/raw/projection-delivery-control-v2/run.log.gz",
+      "bytes": 3701,
+      "sha256": "93f98ca7eb928ecc090c0dea60e01388ba8b41df46bac47a7ba9b46dc230f346"
+    },
+    {
+      "path": "galaxy-evidence/projection-delivery-results-v1/raw/projection-delivery-control-v2/run.py.gz",
+      "bytes": 1627,
+      "sha256": "d6ba3520e09d8f72bf2646aa4fe6a5e53734387a01766e04f9923179803bdb4e"
+    },
+    {
+      "path": "galaxy-evidence/projection-delivery-results-v1/raw/projection-delivery-control-v2/source-manifest.json",
+      "bytes": 40921,
+      "sha256": "9f97a42e0afdef6f6f8dd8b1269992e4206716305ea1752ec952bf346152dbd8"
+    },
+    {
+      "path": "galaxy-evidence/projection-delivery-results-v1/raw/projection-delivery-control-v2/unit.log.gz",
+      "bytes": 1301,
+      "sha256": "e5a88ca79751d12ba436c022f30d14464b321bff1de80b1d5c30234a2130b35f"
+    },
+    {
+      "path": "galaxy-evidence/projection-delivery-results-v1/raw/projection-delivery-control-v2/unit.xml.gz",
+      "bytes": 564,
+      "sha256": "c15c631f3337c4fa930403f47555a83ccd8d4f150e5603fb8a2666c249bd7500"
+    },
+    {
+      "path": "galaxy-evidence/projection-delivery-results-v1/raw/projection-delivery-control-v3/collection-unit.json",
+      "bytes": 201,
+      "sha256": "2a515ef883476213a73fbe9f76c4013b6f4bdb07811fef8499e8df3dc20dc0c7"
+    },
+    {
+      "path": "galaxy-evidence/projection-delivery-results-v1/raw/projection-delivery-control-v3/launch-unit.json",
+      "bytes": 156,
+      "sha256": "057caf98b3f6e2e7582658d0753c320d541210d30c6e106da4e60566c67d74bf"
+    },
+    {
+      "path": "galaxy-evidence/projection-delivery-results-v1/raw/projection-delivery-control-v3/launch.json",
+      "bytes": 2100,
+      "sha256": "6b5001def3448ee1aac610ece1eed6346888ba917b6e6744cb779d7cae9f6ef6"
+    },
+    {
+      "path": "galaxy-evidence/projection-delivery-results-v1/raw/projection-delivery-control-v3/run.log.gz",
+      "bytes": 3658,
+      "sha256": "50651cb76f164a16071c5f9c9864d8129cad691cc271cba8bf0353315f59d062"
+    },
+    {
+      "path": "galaxy-evidence/projection-delivery-results-v1/raw/projection-delivery-control-v3/run.py.gz",
+      "bytes": 1630,
+      "sha256": "ba8a1d87208d3e39c30a18e5397050fa1017977223c90564ba2ae9ab1055441f"
+    },
+    {
+      "path": "galaxy-evidence/projection-delivery-results-v1/raw/projection-delivery-control-v3/source-manifest.json",
+      "bytes": 40921,
+      "sha256": "6b3d52df153efa71248a97b797995b0c98cd6ff164a0b2b9ad0b906ef2f583f5"
+    },
+    {
+      "path": "galaxy-evidence/projection-delivery-results-v1/raw/projection-delivery-control-v3/unit.log.gz",
+      "bytes": 1302,
+      "sha256": "40252906c542d8286a45f7eb9ce0bbc519237a72244590929cfdfd3401a1bb39"
+    },
+    {
+      "path": "galaxy-evidence/projection-delivery-results-v1/raw/projection-delivery-control-v3/unit.xml.gz",
+      "bytes": 565,
+      "sha256": "a61d5415538593548cf250a56c0af39ec7b2072549ebebe8dbbfb55e131b4a8a"
+    },
+    {
+      "path": "galaxy-evidence/projection-delivery-results-v1/raw/projection-delivery-control-v4/collection-unit.json",
+      "bytes": 170,
+      "sha256": "dee142b2d40021173664dfe002a3d62a299464559f0185e8cc07cb052e2e4731"
+    },
+    {
+      "path": "galaxy-evidence/projection-delivery-results-v1/raw/projection-delivery-control-v4/launch-unit.json",
+      "bytes": 156,
+      "sha256": "fa18506a1e78b5fde13d0659cd8363c81eb12ae6229420d1cc66b28df407d6c7"
+    },
+    {
+      "path": "galaxy-evidence/projection-delivery-results-v1/raw/projection-delivery-control-v4/launch.json",
+      "bytes": 2100,
+      "sha256": "eac5842bf21ce9bf64fd41d8edf98fceae2bb249501e508c1b21b36326ab8efe"
+    },
+    {
+      "path": "galaxy-evidence/projection-delivery-results-v1/raw/projection-delivery-control-v4/run.log.gz",
+      "bytes": 3999,
+      "sha256": "61a682d07a1fcab72bbccca167d1fbef8a06384638d8e0a14e3794e958e40c19"
+    },
+    {
+      "path": "galaxy-evidence/projection-delivery-results-v1/raw/projection-delivery-control-v4/run.py.gz",
+      "bytes": 1630,
+      "sha256": "18b1f22813ba15b937c730df85b281f2f673173aec4089b9d4f5716c4fabaa3a"
+    },
+    {
+      "path": "galaxy-evidence/projection-delivery-results-v1/raw/projection-delivery-control-v4/source-manifest.json",
+      "bytes": 40921,
+      "sha256": "0b28a471d7cff950d9d10e57fbd34253a7e74ccfa5d83d5327e5c1422d34af34"
+    },
+    {
+      "path": "galaxy-evidence/projection-delivery-results-v1/raw/projection-delivery-control-v4/unit.log.gz",
+      "bytes": 1302,
+      "sha256": "506b259f6ea8963e47d25d0a48e070faa3dbb7cc64ba2db88cf6f4fdf018d209"
+    },
+    {
+      "path": "galaxy-evidence/projection-delivery-results-v1/raw/projection-delivery-control-v4/unit.xml.gz",
+      "bytes": 564,
+      "sha256": "34e4b065ee65b50e41bb8d15918bc5d731d611d9184d55c2513f23602bc6b753"
+    },
+    {
+      "path": "galaxy-evidence/projection-delivery-results-v1/raw/projection-delivery-source-v1/models/demos/qwen38_27b_qb2/tests/test_projection_delivery.py.gz",
+      "bytes": 2662,
+      "sha256": "a54f3c98e5d9ad8061e8c62050075332d9b32032ce38c14f48d6b8458c9b8503"
+    },
+    {
+      "path": "galaxy-evidence/projection-delivery-results-v1/raw/projection-delivery-source-v1/models/demos/qwen38_27b_qb2/tests/test_projection_sweep.py.gz",
+      "bytes": 4313,
+      "sha256": "9fd851361ac7bb19dce76ba0668890d34b615dd6934bc54241408ac924851421"
+    },
+    {
+      "path": "galaxy-evidence/projection-delivery-results-v1/raw/projection-delivery-source-v1/models/demos/qwen38_27b_qb2/tt/decoder.py.gz",
+      "bytes": 12258,
+      "sha256": "36da8d073cc0413491a2e06d2ef191a8ed2f4c2ca0b9e15f38fdb446a405b9b0"
+    },
+    {
+      "path": "galaxy-evidence/projection-delivery-results-v1/raw/projection-delivery-source-v1/models/demos/qwen38_27b_qb2/tt/decoder_tp.py.gz",
+      "bytes": 8373,
+      "sha256": "fbf37607a2572383a88ea97ed97806f7c3a4dcec0cb66de83ce73fe01a9e73bc"
+    },
+    {
+      "path": "galaxy-evidence/projection-delivery-results-v1/raw/projection-delivery-source-v2/models/demos/qwen38_27b_qb2/tests/test_projection_delivery.py.gz",
+      "bytes": 2662,
+      "sha256": "a54f3c98e5d9ad8061e8c62050075332d9b32032ce38c14f48d6b8458c9b8503"
+    },
+    {
+      "path": "galaxy-evidence/projection-delivery-results-v1/raw/projection-delivery-source-v2/models/demos/qwen38_27b_qb2/tests/test_projection_sweep.py.gz",
+      "bytes": 4537,
+      "sha256": "a750b59f1c9bbafa0d451c16fb581890b54681fd64d2ba666afa891fd18c175e"
+    },
+    {
+      "path": "galaxy-evidence/projection-delivery-results-v1/raw/projection-delivery-source-v2/models/demos/qwen38_27b_qb2/tt/decoder.py.gz",
+      "bytes": 12258,
+      "sha256": "36da8d073cc0413491a2e06d2ef191a8ed2f4c2ca0b9e15f38fdb446a405b9b0"
+    },
+    {
+      "path": "galaxy-evidence/projection-delivery-results-v1/raw/projection-delivery-source-v2/models/demos/qwen38_27b_qb2/tt/decoder_tp.py.gz",
+      "bytes": 8373,
+      "sha256": "fbf37607a2572383a88ea97ed97806f7c3a4dcec0cb66de83ce73fe01a9e73bc"
+    },
+    {
+      "path": "galaxy-evidence/projection-delivery-results-v1/raw/projection-delivery-source-v3/models/demos/qwen38_27b_qb2/tests/test_projection_delivery.py.gz",
+      "bytes": 2788,
+      "sha256": "9b2066389e078e18336be6c60a9da048976675cd889338fd36c1d1926699b974"
+    },
+    {
+      "path": "galaxy-evidence/projection-delivery-results-v1/raw/projection-delivery-source-v3/models/demos/qwen38_27b_qb2/tests/test_projection_sweep.py.gz",
+      "bytes": 4537,
+      "sha256": "a750b59f1c9bbafa0d451c16fb581890b54681fd64d2ba666afa891fd18c175e"
+    },
+    {
+      "path": "galaxy-evidence/projection-delivery-results-v1/raw/projection-delivery-source-v3/models/demos/qwen38_27b_qb2/tt/decoder.py.gz",
+      "bytes": 12413,
+      "sha256": "0b548629758341bf6cd995b1ef878221f0ac29e0e9938ed10679c33f21eae92f"
+    },
+    {
+      "path": "galaxy-evidence/projection-delivery-results-v1/raw/projection-delivery-source-v3/models/demos/qwen38_27b_qb2/tt/decoder_tp.py.gz",
+      "bytes": 8379,
+      "sha256": "a523ee2ce5607e8004295dd7876f0876cb5431d71aa38e745af7a355f1484108"
+    },
+    {
+      "path": "galaxy-evidence/projection-delivery-results-v1/raw/projection-delivery-source-v4/models/demos/qwen38_27b_qb2/tests/test_projection_delivery.py.gz",
+      "bytes": 2788,
+      "sha256": "9b2066389e078e18336be6c60a9da048976675cd889338fd36c1d1926699b974"
+    },
+    {
+      "path": "galaxy-evidence/projection-delivery-results-v1/raw/projection-delivery-source-v4/models/demos/qwen38_27b_qb2/tests/test_projection_sweep.py.gz",
+      "bytes": 4537,
+      "sha256": "a750b59f1c9bbafa0d451c16fb581890b54681fd64d2ba666afa891fd18c175e"
+    },
+    {
+      "path": "galaxy-evidence/projection-delivery-results-v1/raw/projection-delivery-source-v4/models/demos/qwen38_27b_qb2/tt/decoder.py.gz",
+      "bytes": 12413,
+      "sha256": "06e8f9918d9a068d5f387e25bd505a7b88414d5ca46cfa0536c39b23f76e6459"
+    },
+    {
+      "path": "galaxy-evidence/projection-delivery-results-v1/raw/projection-delivery-source-v4/models/demos/qwen38_27b_qb2/tt/decoder_tp.py.gz",
+      "bytes": 8379,
+      "sha256": "a523ee2ce5607e8004295dd7876f0876cb5431d71aa38e745af7a355f1484108"
+    },
+    {
+      "path": "galaxy-evidence/projection-delivery-results-v1/raw/projection-delivery-v1/delivery.json",
+      "bytes": 7488,
+      "sha256": "f8ade79ed7c245ad46587f80b4f548a088f64cfdc22ba1e1974e4598ee38c960"
+    },
+    {
+      "path": "galaxy-evidence/projection-delivery-results-v1/raw/projection-delivery-v1/hardware.xml.gz",
+      "bytes": 1005,
+      "sha256": "4785898c592ed6688d5551c6952e9c0ea85267832e4ae073df4b28eeaa7d38fb"
+    },
+    {
+      "path": "galaxy-evidence/projection-delivery-results-v1/raw/projection-delivery-v1/queue.json",
+      "bytes": 2189,
+      "sha256": "525389ab652f6ab41382bd8658a4f22bb5a8cd635d1af63e114c8126c49b82be"
+    },
+    {
+      "path": "galaxy-evidence/projection-delivery-results-v1/raw/projection-delivery-v2/delivery.json",
+      "bytes": 128410,
+      "sha256": "7b20edc8b058ad3fd50acb1a643ce7d27bb87386c1cac6ef9b7da67c189badfa"
+    },
+    {
+      "path": "galaxy-evidence/projection-delivery-results-v1/raw/projection-delivery-v2/hardware.xml.gz",
+      "bytes": 299,
+      "sha256": "190606c3f44a54613a79e3c8f7cda4a94b698d7b1cc5531e86f245904a22c49d"
+    },
+    {
+      "path": "galaxy-evidence/projection-delivery-results-v1/raw/projection-delivery-v2/queue.json",
+      "bytes": 1622,
+      "sha256": "65a0e4553c4b4dd736205135f3693269f4830edffc231f0cbb48179e112e0ae4"
+    },
+    {
+      "path": "galaxy-evidence/projection-delivery-results-v1/raw/projection-delivery-v3/delivery.json",
+      "bytes": 6634,
+      "sha256": "1191658ec6db9b295d52530d0005316e1aef4b9cc1286037910a9ebb58275766"
+    },
+    {
+      "path": "galaxy-evidence/projection-delivery-results-v1/raw/projection-delivery-v3/hardware.xml.gz",
+      "bytes": 669,
+      "sha256": "b9322ae37d156436bd6a350ad073ae7feb67df9375f0f36594c671a4f4426517"
+    },
+    {
+      "path": "galaxy-evidence/projection-delivery-results-v1/raw/projection-delivery-v3/queue.json",
+      "bytes": 2189,
+      "sha256": "6e6835c2d786047f9d71d52bc0a1e29f6c3e41c7b28364b2112f389a2fcb4119"
+    },
+    {
+      "path": "galaxy-evidence/projection-delivery-results-v1/raw/projection-delivery-v4/delivery.json",
+      "bytes": 189503,
+      "sha256": "7b3299bfb3cf4d8dc32d53340e06ce40cda21df15359d1936afa5e1a8c11d27c"
+    },
+    {
+      "path": "galaxy-evidence/projection-delivery-results-v1/raw/projection-delivery-v4/hardware.xml.gz",
+      "bytes": 301,
+      "sha256": "6d0ec79288d649adc940ebe7cc5171f77776f5a68b638eeaedd741b396486756"
+    },
+    {
+      "path": "galaxy-evidence/projection-delivery-results-v1/raw/projection-delivery-v4/queue.json",
+      "bytes": 1623,
+      "sha256": "d8e3aea68949b24d00d3a8ef4df9a957f2594653e128d58f76a1c0b1b79d0529"
+    },
+    {
+      "path": "galaxy-evidence/projection-delivery-results-v1/summarize.py",
+      "bytes": 8214,
+      "sha256": "f57d4861197df759f345dfe228178e449561fdc6fbf54d13abaf5001eb2fc8f2"
+    },
+    {
+      "path": "galaxy-evidence/projection-delivery-results-v1/summary.json",
+      "bytes": 12220,
+      "sha256": "88a35fa87d27c6e2194b2556b16a0d75dd30b354aa5f8e15f14531d42eb4e703"
+    }
+  ]
+}

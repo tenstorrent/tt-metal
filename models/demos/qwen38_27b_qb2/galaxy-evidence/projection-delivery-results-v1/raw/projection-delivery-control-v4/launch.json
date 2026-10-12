@@ -1,0 +1,33 @@
+{
+  "command": [
+    "systemd-run",
+    "--user",
+    "--unit=qwen38-projection-delivery-v4-20261011.service",
+    "--property=WorkingDirectory=/home/ttuser/qwen38-artifacts-20261007/projection-delivery-source-v4",
+    "--property=RuntimeMaxSec=1800",
+    "--property=TimeoutStopSec=240",
+    "--property=KillMode=mixed",
+    "--property=MemoryMax=64G",
+    "--property=CPUQuota=800%",
+    "--property=Nice=10",
+    "--property=StandardOutput=append:/home/ttuser/qwen38-artifacts-20261007/projection-delivery-control-v4/run.log",
+    "--property=StandardError=append:/home/ttuser/qwen38-artifacts-20261007/projection-delivery-control-v4/run.log",
+    "--setenv=PATH=/home/ttuser/kimi-prefill.Ubx2wY/runtime/qwen38-27b-20261006/python_env/bin:/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin",
+    "--setenv=PYTHONPATH=/home/ttuser/qwen38-artifacts-20261007/projection-delivery-source-v4:/home/ttuser/kimi-prefill.Ubx2wY/runtime/qwen38-27b-20261006/metal:/home/ttuser/kimi-prefill.Ubx2wY/runtime/qwen38-27b-20261006/metal/tools",
+    "--setenv=LD_LIBRARY_PATH=/home/ttuser/kimi-prefill.Ubx2wY/runtime/qwen38-27b-20261006/metal-install/lib:/home/ttuser/kimi-prefill.Ubx2wY/runtime/qwen38-27b-20261006/metal-build/lib",
+    "--setenv=TT_METAL_HOME=/home/ttuser/kimi-prefill.Ubx2wY/runtime/qwen38-27b-20261006/metal",
+    "--setenv=TT_METAL_CACHE=/home/ttuser/kimi-prefill.Ubx2wY/runtime/qwen38-27b-20261006/jit-cache-metal-galaxy",
+    "--setenv=ARCH_NAME=blackhole",
+    "--setenv=OMP_NUM_THREADS=8",
+    "--setenv=PYTHONUNBUFFERED=1",
+    "--setenv=TT_METAL_TRACE_ALLOC_TRACKING=1",
+    "--setenv=TT_METAL_TRACE_ALLOC_TRACEBACKS=1",
+    "/home/ttuser/kimi-prefill.Ubx2wY/runtime/qwen38-27b-20261006/python_env/bin/python3.10",
+    "/home/ttuser/qwen38-artifacts-20261007/projection-delivery-control-v4/run.py"
+  ],
+  "returncode": 0,
+  "stdout": "",
+  "stderr": "Running as unit: qwen38-projection-delivery-v4-20261011.service\n",
+  "base_commit": "89f9eff9c16a3eabe15379e2c04aecb2896432b7",
+  "source_manifest_sha256": "0b28a471d7cff950d9d10e57fbd34253a7e74ccfa5d83d5327e5c1422d34af34"
+}

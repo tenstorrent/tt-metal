@@ -1,0 +1,367 @@
+{
+  "collected_at": "2026-10-12T01:17:11.857569+00:00",
+  "host": "10.228.203.98",
+  "host_root": "/home/ttuser/qwen38-artifacts-20261007",
+  "artifacts": [
+    {
+      "original": "projection-delivery-control-v1/launch.json",
+      "stored": "raw/projection-delivery-control-v1/launch.json",
+      "bytes": 2050,
+      "sha256": "25aadb1dd519ea2ac688b2d40f8caa3b7693e67e3e8628324f62deb0f93b5853"
+    },
+    {
+      "original": "projection-delivery-control-v1/run.log",
+      "stored": "raw/projection-delivery-control-v1/run.log.gz",
+      "bytes": 29903,
+      "sha256": "651f3585c8998c3ace4bc48536a9f895decd18e362f805e4f716eaccfa035a03"
+    },
+    {
+      "original": "projection-delivery-control-v1/unit.log",
+      "stored": "raw/projection-delivery-control-v1/unit.log.gz",
+      "bytes": 5365,
+      "sha256": "3cb67f41fe2d3c98efa7e210134e0b730cf3bbedb0cf70292f16eb48a7ec01fd"
+    },
+    {
+      "original": "projection-delivery-control-v1/collection-unit.json",
+      "stored": "raw/projection-delivery-control-v1/collection-unit.json",
+      "bytes": 201,
+      "sha256": "3109b2ba26786f9f45fb394d0d7bd7a410271de3fcd79631fcea1cc5ce72065d"
+    },
+    {
+      "original": "projection-delivery-control-v1/run.py",
+      "stored": "raw/projection-delivery-control-v1/run.py.gz",
+      "bytes": 3455,
+      "sha256": "3754319db5fb4073462090dc1b33196342b39141f7e040cdc1394c076c84c424"
+    },
+    {
+      "original": "projection-delivery-control-v1/unit.xml",
+      "stored": "raw/projection-delivery-control-v1/unit.xml.gz",
+      "bytes": 3249,
+      "sha256": "5711b2d67dbc7e6169453b71c132d22190ef86b94bbcaa4399b3c44a8f3f7f35"
+    },
+    {
+      "original": "projection-delivery-control-v1/source-manifest.json",
+      "stored": "raw/projection-delivery-control-v1/source-manifest.json",
+      "bytes": 40921,
+      "sha256": "e288aaca7440a06d41c60caf608c3da459c155f3ee10fda3bbe71a2099919399"
+    },
+    {
+      "original": "projection-delivery-control-v1/launch-unit.json",
+      "stored": "raw/projection-delivery-control-v1/launch-unit.json",
+      "bytes": 131,
+      "sha256": "48832029b2a6ce9371358b4a6b2c195bf6e1efe8b865584588bf714dd1c845d4"
+    },
+    {
+      "original": "projection-delivery-v1/queue.json",
+      "stored": "raw/projection-delivery-v1/queue.json",
+      "bytes": 2189,
+      "sha256": "525389ab652f6ab41382bd8658a4f22bb5a8cd635d1af63e114c8126c49b82be"
+    },
+    {
+      "original": "projection-delivery-v1/delivery.json",
+      "stored": "raw/projection-delivery-v1/delivery.json",
+      "bytes": 7488,
+      "sha256": "f8ade79ed7c245ad46587f80b4f548a088f64cfdc22ba1e1974e4598ee38c960"
+    },
+    {
+      "original": "projection-delivery-v1/hardware.xml",
+      "stored": "raw/projection-delivery-v1/hardware.xml.gz",
+      "bytes": 3308,
+      "sha256": "d59d2183bf9f58797d7ee3503b81eb3ecef9ac935f0b7e82eb247336824a0c99"
+    },
+    {
+      "original": "projection-delivery-source-v1/models/demos/qwen38_27b_qb2/tests/test_projection_sweep.py",
+      "stored": "raw/projection-delivery-source-v1/models/demos/qwen38_27b_qb2/tests/test_projection_sweep.py.gz",
+      "bytes": 13312,
+      "sha256": "6e696ec1ccd5c26433f4bbd41c3626d60c7178fc154394b2774013ffab10411b"
+    },
+    {
+      "original": "projection-delivery-source-v1/models/demos/qwen38_27b_qb2/tests/test_projection_delivery.py",
+      "stored": "raw/projection-delivery-source-v1/models/demos/qwen38_27b_qb2/tests/test_projection_delivery.py.gz",
+      "bytes": 7195,
+      "sha256": "e8cda1b03e5c434abb7867f0a9c362cfb7506fffbe1d46bd39cdeb152f4a675b"
+    },
+    {
+      "original": "projection-delivery-source-v1/models/demos/qwen38_27b_qb2/tt/decoder.py",
+      "stored": "raw/projection-delivery-source-v1/models/demos/qwen38_27b_qb2/tt/decoder.py.gz",
+      "bytes": 55251,
+      "sha256": "85dece65e65061e6bd9e4bbc1db8b0b2c2c502f8f8619dd167279531e146e076"
+    },
+    {
+      "original": "projection-delivery-source-v1/models/demos/qwen38_27b_qb2/tt/decoder_tp.py",
+      "stored": "raw/projection-delivery-source-v1/models/demos/qwen38_27b_qb2/tt/decoder_tp.py.gz",
+      "bytes": 38512,
+      "sha256": "b293db7f656da2f531d9b08d342673a40fa54973283fdd1cc657b76c976f5468"
+    },
+    {
+      "original": "projection-delivery-control-v2/launch.json",
+      "stored": "raw/projection-delivery-control-v2/launch.json",
+      "bytes": 2100,
+      "sha256": "b5564e1e2976600a2d8ee3fb88e835b6c272482ed0d5ac290220660ff3e24214"
+    },
+    {
+      "original": "projection-delivery-control-v2/run.log",
+      "stored": "raw/projection-delivery-control-v2/run.log.gz",
+      "bytes": 29243,
+      "sha256": "6a3eb888170610269f4402200720dec225702a01ffde60d9236479230490e7eb"
+    },
+    {
+      "original": "projection-delivery-control-v2/unit.log",
+      "stored": "raw/projection-delivery-control-v2/unit.log.gz",
+      "bytes": 5365,
+      "sha256": "5571c2ba3fd20acbaf8753bd6abd5e9855506e7709a21464d74666f5ce979102"
+    },
+    {
+      "original": "projection-delivery-control-v2/collection-unit.json",
+      "stored": "raw/projection-delivery-control-v2/collection-unit.json",
+      "bytes": 170,
+      "sha256": "dee142b2d40021173664dfe002a3d62a299464559f0185e8cc07cb052e2e4731"
+    },
+    {
+      "original": "projection-delivery-control-v2/run.py",
+      "stored": "raw/projection-delivery-control-v2/run.py.gz",
+      "bytes": 3455,
+      "sha256": "6f4fed6e377c156bf42e7a6ac224d55c69b8e62f70baf275e3329b03947db59d"
+    },
+    {
+      "original": "projection-delivery-control-v2/unit.xml",
+      "stored": "raw/projection-delivery-control-v2/unit.xml.gz",
+      "bytes": 3249,
+      "sha256": "3aa5ab392e24d6134239c063f82235e45ac416281c7ef3f0847a7cd6f2a21325"
+    },
+    {
+      "original": "projection-delivery-control-v2/source-manifest.json",
+      "stored": "raw/projection-delivery-control-v2/source-manifest.json",
+      "bytes": 40921,
+      "sha256": "9f97a42e0afdef6f6f8dd8b1269992e4206716305ea1752ec952bf346152dbd8"
+    },
+    {
+      "original": "projection-delivery-control-v2/launch-unit.json",
+      "stored": "raw/projection-delivery-control-v2/launch-unit.json",
+      "bytes": 156,
+      "sha256": "f73ebc2d8833a748259d2992a9b3fa902313bd9917874e3c4d18ebc9f63daf8b"
+    },
+    {
+      "original": "projection-delivery-v2/queue.json",
+      "stored": "raw/projection-delivery-v2/queue.json",
+      "bytes": 1622,
+      "sha256": "65a0e4553c4b4dd736205135f3693269f4830edffc231f0cbb48179e112e0ae4"
+    },
+    {
+      "original": "projection-delivery-v2/delivery.json",
+      "stored": "raw/projection-delivery-v2/delivery.json",
+      "bytes": 128410,
+      "sha256": "7b20edc8b058ad3fd50acb1a643ce7d27bb87386c1cac6ef9b7da67c189badfa"
+    },
+    {
+      "original": "projection-delivery-v2/hardware.xml",
+      "stored": "raw/projection-delivery-v2/hardware.xml.gz",
+      "bytes": 541,
+      "sha256": "5f990fe244c31dd4ad2ccf1a24cbd282a7467e6d691d03b7a381f05a57f74272"
+    },
+    {
+      "original": "projection-delivery-source-v2/models/demos/qwen38_27b_qb2/tests/test_projection_sweep.py",
+      "stored": "raw/projection-delivery-source-v2/models/demos/qwen38_27b_qb2/tests/test_projection_sweep.py.gz",
+      "bytes": 13973,
+      "sha256": "b88f4994a38354583d5f158e83e1e22e7957e74dd4346d171e9e7ceca09eff4b"
+    },
+    {
+      "original": "projection-delivery-source-v2/models/demos/qwen38_27b_qb2/tests/test_projection_delivery.py",
+      "stored": "raw/projection-delivery-source-v2/models/demos/qwen38_27b_qb2/tests/test_projection_delivery.py.gz",
+      "bytes": 7195,
+      "sha256": "e8cda1b03e5c434abb7867f0a9c362cfb7506fffbe1d46bd39cdeb152f4a675b"
+    },
+    {
+      "original": "projection-delivery-source-v2/models/demos/qwen38_27b_qb2/tt/decoder.py",
+      "stored": "raw/projection-delivery-source-v2/models/demos/qwen38_27b_qb2/tt/decoder.py.gz",
+      "bytes": 55251,
+      "sha256": "85dece65e65061e6bd9e4bbc1db8b0b2c2c502f8f8619dd167279531e146e076"
+    },
+    {
+      "original": "projection-delivery-source-v2/models/demos/qwen38_27b_qb2/tt/decoder_tp.py",
+      "stored": "raw/projection-delivery-source-v2/models/demos/qwen38_27b_qb2/tt/decoder_tp.py.gz",
+      "bytes": 38512,
+      "sha256": "b293db7f656da2f531d9b08d342673a40fa54973283fdd1cc657b76c976f5468"
+    },
+    {
+      "original": "projection-delivery-control-v3/launch.json",
+      "stored": "raw/projection-delivery-control-v3/launch.json",
+      "bytes": 2100,
+      "sha256": "6b5001def3448ee1aac610ece1eed6346888ba917b6e6744cb779d7cae9f6ef6"
+    },
+    {
+      "original": "projection-delivery-control-v3/run.log",
+      "stored": "raw/projection-delivery-control-v3/run.log.gz",
+      "bytes": 28090,
+      "sha256": "29fc84596400b622052705c98db42312a345e69d9c342eac2a4867baa8b3ddb5"
+    },
+    {
+      "original": "projection-delivery-control-v3/unit.log",
+      "stored": "raw/projection-delivery-control-v3/unit.log.gz",
+      "bytes": 5365,
+      "sha256": "0c0f9bb203a05e4eb62cd9b70ef203ebc0e8bf71dcb49214eb305834b4a5b8e3"
+    },
+    {
+      "original": "projection-delivery-control-v3/collection-unit.json",
+      "stored": "raw/projection-delivery-control-v3/collection-unit.json",
+      "bytes": 201,
+      "sha256": "2a515ef883476213a73fbe9f76c4013b6f4bdb07811fef8499e8df3dc20dc0c7"
+    },
+    {
+      "original": "projection-delivery-control-v3/run.py",
+      "stored": "raw/projection-delivery-control-v3/run.py.gz",
+      "bytes": 3456,
+      "sha256": "f9082b0cad1aeda05c56611426d578fb1d1152322edcb168cef2ae4a0bd8da44"
+    },
+    {
+      "original": "projection-delivery-control-v3/unit.xml",
+      "stored": "raw/projection-delivery-control-v3/unit.xml.gz",
+      "bytes": 3249,
+      "sha256": "58655766fc3f5cafb2aaa6a83ce2058a1600db7becb534ecac1d1e47550041a7"
+    },
+    {
+      "original": "projection-delivery-control-v3/source-manifest.json",
+      "stored": "raw/projection-delivery-control-v3/source-manifest.json",
+      "bytes": 40921,
+      "sha256": "6b3d52df153efa71248a97b797995b0c98cd6ff164a0b2b9ad0b906ef2f583f5"
+    },
+    {
+      "original": "projection-delivery-control-v3/launch-unit.json",
+      "stored": "raw/projection-delivery-control-v3/launch-unit.json",
+      "bytes": 156,
+      "sha256": "057caf98b3f6e2e7582658d0753c320d541210d30c6e106da4e60566c67d74bf"
+    },
+    {
+      "original": "projection-delivery-v3/queue.json",
+      "stored": "raw/projection-delivery-v3/queue.json",
+      "bytes": 2189,
+      "sha256": "6e6835c2d786047f9d71d52bc0a1e29f6c3e41c7b28364b2112f389a2fcb4119"
+    },
+    {
+      "original": "projection-delivery-v3/delivery.json",
+      "stored": "raw/projection-delivery-v3/delivery.json",
+      "bytes": 6634,
+      "sha256": "1191658ec6db9b295d52530d0005316e1aef4b9cc1286037910a9ebb58275766"
+    },
+    {
+      "original": "projection-delivery-v3/hardware.xml",
+      "stored": "raw/projection-delivery-v3/hardware.xml.gz",
+      "bytes": 1687,
+      "sha256": "cdcb5bf74f84956a4cbf7c3e9fe0437cb9cc4fc03375aca74bc9402701c55edc"
+    },
+    {
+      "original": "projection-delivery-source-v3/models/demos/qwen38_27b_qb2/tests/test_projection_sweep.py",
+      "stored": "raw/projection-delivery-source-v3/models/demos/qwen38_27b_qb2/tests/test_projection_sweep.py.gz",
+      "bytes": 13973,
+      "sha256": "b88f4994a38354583d5f158e83e1e22e7957e74dd4346d171e9e7ceca09eff4b"
+    },
+    {
+      "original": "projection-delivery-source-v3/models/demos/qwen38_27b_qb2/tests/test_projection_delivery.py",
+      "stored": "raw/projection-delivery-source-v3/models/demos/qwen38_27b_qb2/tests/test_projection_delivery.py.gz",
+      "bytes": 7853,
+      "sha256": "6e240d736fb7778c4a12892ddb3ad58fc2349079ba42c5bca61942b7cbc60a6f"
+    },
+    {
+      "original": "projection-delivery-source-v3/models/demos/qwen38_27b_qb2/tt/decoder.py",
+      "stored": "raw/projection-delivery-source-v3/models/demos/qwen38_27b_qb2/tt/decoder.py.gz",
+      "bytes": 55816,
+      "sha256": "9e46ad7275d30715cd5568f8910c652836b72e643f13bb114e738cb4a1481ce4"
+    },
+    {
+      "original": "projection-delivery-source-v3/models/demos/qwen38_27b_qb2/tt/decoder_tp.py",
+      "stored": "raw/projection-delivery-source-v3/models/demos/qwen38_27b_qb2/tt/decoder_tp.py.gz",
+      "bytes": 38511,
+      "sha256": "19541794cd988683880411c6357b2349c06ce38ab7b2e2a6a629e5e0371b7d50"
+    },
+    {
+      "original": "projection-delivery-control-v4/launch.json",
+      "stored": "raw/projection-delivery-control-v4/launch.json",
+      "bytes": 2100,
+      "sha256": "eac5842bf21ce9bf64fd41d8edf98fceae2bb249501e508c1b21b36326ab8efe"
+    },
+    {
+      "original": "projection-delivery-control-v4/run.log",
+      "stored": "raw/projection-delivery-control-v4/run.log.gz",
+      "bytes": 31806,
+      "sha256": "294dc569378c881fa0f1bbb8573fb5cb30cfdb959c703b0b6a427165e5584b27"
+    },
+    {
+      "original": "projection-delivery-control-v4/unit.log",
+      "stored": "raw/projection-delivery-control-v4/unit.log.gz",
+      "bytes": 5365,
+      "sha256": "f871aa84ff7cd105916188d8352253e908491128aa15e7e9bbdeed1ffb325458"
+    },
+    {
+      "original": "projection-delivery-control-v4/collection-unit.json",
+      "stored": "raw/projection-delivery-control-v4/collection-unit.json",
+      "bytes": 170,
+      "sha256": "dee142b2d40021173664dfe002a3d62a299464559f0185e8cc07cb052e2e4731"
+    },
+    {
+      "original": "projection-delivery-control-v4/run.py",
+      "stored": "raw/projection-delivery-control-v4/run.py.gz",
+      "bytes": 3456,
+      "sha256": "f63c7dcaed60097b9be115f244fc372f877880b53800f945c0b6e3bc37cf3267"
+    },
+    {
+      "original": "projection-delivery-control-v4/unit.xml",
+      "stored": "raw/projection-delivery-control-v4/unit.xml.gz",
+      "bytes": 3249,
+      "sha256": "1252ab4be820e44b99b07ca4429bf518440929616c8e494a2739c3123fb920fc"
+    },
+    {
+      "original": "projection-delivery-control-v4/source-manifest.json",
+      "stored": "raw/projection-delivery-control-v4/source-manifest.json",
+      "bytes": 40921,
+      "sha256": "0b28a471d7cff950d9d10e57fbd34253a7e74ccfa5d83d5327e5c1422d34af34"
+    },
+    {
+      "original": "projection-delivery-control-v4/launch-unit.json",
+      "stored": "raw/projection-delivery-control-v4/launch-unit.json",
+      "bytes": 156,
+      "sha256": "fa18506a1e78b5fde13d0659cd8363c81eb12ae6229420d1cc66b28df407d6c7"
+    },
+    {
+      "original": "projection-delivery-v4/queue.json",
+      "stored": "raw/projection-delivery-v4/queue.json",
+      "bytes": 1623,
+      "sha256": "d8e3aea68949b24d00d3a8ef4df9a957f2594653e128d58f76a1c0b1b79d0529"
+    },
+    {
+      "original": "projection-delivery-v4/delivery.json",
+      "stored": "raw/projection-delivery-v4/delivery.json",
+      "bytes": 189503,
+      "sha256": "7b3299bfb3cf4d8dc32d53340e06ce40cda21df15359d1936afa5e1a8c11d27c"
+    },
+    {
+      "original": "projection-delivery-v4/hardware.xml",
+      "stored": "raw/projection-delivery-v4/hardware.xml.gz",
+      "bytes": 541,
+      "sha256": "2f7d524a43f87c4af14e67f2510994074cdb4a53ddb1b79488951a0a48073731"
+    },
+    {
+      "original": "projection-delivery-source-v4/models/demos/qwen38_27b_qb2/tests/test_projection_sweep.py",
+      "stored": "raw/projection-delivery-source-v4/models/demos/qwen38_27b_qb2/tests/test_projection_sweep.py.gz",
+      "bytes": 13973,
+      "sha256": "b88f4994a38354583d5f158e83e1e22e7957e74dd4346d171e9e7ceca09eff4b"
+    },
+    {
+      "original": "projection-delivery-source-v4/models/demos/qwen38_27b_qb2/tests/test_projection_delivery.py",
+      "stored": "raw/projection-delivery-source-v4/models/demos/qwen38_27b_qb2/tests/test_projection_delivery.py.gz",
+      "bytes": 7853,
+      "sha256": "6e240d736fb7778c4a12892ddb3ad58fc2349079ba42c5bca61942b7cbc60a6f"
+    },
+    {
+      "original": "projection-delivery-source-v4/models/demos/qwen38_27b_qb2/tt/decoder.py",
+      "stored": "raw/projection-delivery-source-v4/models/demos/qwen38_27b_qb2/tt/decoder.py.gz",
+      "bytes": 55816,
+      "sha256": "439d1755d2c6a301359d6944bfe9aeb0931b507b688ed874ee3c7b326404a871"
+    },
+    {
+      "original": "projection-delivery-source-v4/models/demos/qwen38_27b_qb2/tt/decoder_tp.py",
+      "stored": "raw/projection-delivery-source-v4/models/demos/qwen38_27b_qb2/tt/decoder_tp.py.gz",
+      "bytes": 38511,
+      "sha256": "19541794cd988683880411c6357b2349c06ce38ab7b2e2a6a629e5e0371b7d50"
+    }
+  ]
+}

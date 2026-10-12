@@ -1,5 +1,14 @@
 # Operator optimization scope and priorities
 
+October 12, 01:16 UTC: direct projection-to-collective delivery passed 24 native
+cases with exact baseline outputs and trace-allocation tracking. At B16 the
+GDN output boundary improves 52.998 -> 49.368 us and MLP down 94.215 -> 90.564 us.
+This projects to 0.408 ms / +0.179 TSU, not a measured model speedup. It remains
+guarded and opt-in for compact B16/B32, with public-layout fallback verified.
+Batch it into a later combined validation; no new GPQA was launched. This
+realizes only a small part of the projection/dataflow target below.
+[Results, failures and reproduction](../galaxy-evidence/projection-delivery-results-v1/README.md).
+
 October 11, 09:32 UTC: the first direct-L1 recurrence/epilogue fusion prototype
 passed native correctness and trace checks but regressed complete-boundary
 latency by 5.51% at B16 and 2.04% at B32. It remains opt-in and unselected.

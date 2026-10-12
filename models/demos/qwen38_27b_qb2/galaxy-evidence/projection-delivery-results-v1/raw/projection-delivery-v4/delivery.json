@@ -1,0 +1,6929 @@
+{
+  "state": "completed",
+  "passed": true,
+  "cleanup_completed": true,
+  "cases": [
+    {
+      "label": "before",
+      "input_layout": "compact_l1",
+      "input_contract": {
+        "shape": [
+          1,
+          1,
+          16,
+          1536
+        ],
+        "padded_shape": [
+          1,
+          1,
+          32,
+          1536
+        ],
+        "memory": "l1",
+        "keep_sharded": true
+      },
+      "config": {
+        "readers": 2,
+        "cores": 8,
+        "block": 6
+      },
+      "geometry": {
+        "padded_n": 5120,
+        "weight_shard_width": 640,
+        "activation_shard_tiles": 6,
+        "encoded_weight_bytes": 8355840,
+        "multicast_blocks": 8
+      },
+      "samples_us": [
+        52.96201416058466,
+        52.99611628288403,
+        53.00021613948047,
+        52.991152624599636,
+        52.9902326525189
+      ],
+      "output_sha256": [
+        "9e9dfcf002b6d33b524a6ac981fd3fe89288bb462568c94644d91fd38db06891",
+        "9e9dfcf002b6d33b524a6ac981fd3fe89288bb462568c94644d91fd38db06891",
+        "9e9dfcf002b6d33b524a6ac981fd3fe89288bb462568c94644d91fd38db06891",
+        "9e9dfcf002b6d33b524a6ac981fd3fe89288bb462568c94644d91fd38db06891"
+      ],
+      "accuracy": [
+        {
+          "input": 0,
+          "local": [
+            {
+              "relative_rms": 0.005018308758735657,
+              "pcc": 0.9999921917915344,
+              "equal": false
+            },
+            {
+              "relative_rms": 0.004863371606916189,
+              "pcc": 0.9999909400939941,
+              "equal": false
+            },
+            {
+              "relative_rms": 0.005226357840001583,
+              "pcc": 0.9999931454658508,
+              "equal": false
+            },
+            {
+              "relative_rms": 0.005338640417903662,
+              "pcc": 0.9999916553497314,
+              "equal": false
+            }
+          ],
+          "reduced": [
+            {
+              "relative_rms": 0.006305677816271782,
+              "pcc": 0.9999801516532898,
+              "equal": false
+            },
+            {
+              "relative_rms": 0.006305677816271782,
+              "pcc": 0.9999801516532898,
+              "equal": false
+            },
+            {
+              "relative_rms": 0.006305677816271782,
+              "pcc": 0.9999801516532898,
+              "equal": false
+            },
+            {
+              "relative_rms": 0.006305677816271782,
+              "pcc": 0.9999801516532898,
+              "equal": false
+            }
+          ],
+          "baseline": [
+            {
+              "relative_rms": 0.0,
+              "pcc": 0.9999996423721313,
+              "equal": true
+            },
+            {
+              "relative_rms": 0.0,
+              "pcc": 0.9999996423721313,
+              "equal": true
+            },
+            {
+              "relative_rms": 0.0,
+              "pcc": 0.9999996423721313,
+              "equal": true
+            },
+            {
+              "relative_rms": 0.0,
+              "pcc": 0.9999996423721313,
+              "equal": true
+            }
+          ],
+          "passed": true
+        },
+        {
+          "input": 1,
+          "local": [
+            {
+              "relative_rms": 0.0052268486469984055,
+              "pcc": 0.999992311000824,
+              "equal": false
+            },
+            {
+              "relative_rms": 0.0048951758071780205,
+              "pcc": 0.9999925494194031,
+              "equal": false
+            },
+            {
+              "relative_rms": 0.004989465232938528,
+              "pcc": 0.9999921321868896,
+              "equal": false
+            },
+            {
+              "relative_rms": 0.005048823077231646,
+              "pcc": 0.9999931454658508,
+              "equal": false
+            }
+          ],
+          "reduced": [
+            {
+              "relative_rms": 0.00545444106683135,
+              "pcc": 0.9999907612800598,
+              "equal": false
+            },
+            {
+              "relative_rms": 0.00545444106683135,
+              "pcc": 0.9999907612800598,
+              "equal": false
+            },
+            {
+              "relative_rms": 0.00545444106683135,
+              "pcc": 0.9999907612800598,
+              "equal": false
+            },
+            {
+              "relative_rms": 0.00545444106683135,
+              "pcc": 0.9999907612800598,
+              "equal": false
+            }
+          ],
+          "baseline": [
+            {
+              "relative_rms": 0.0,
+              "pcc": 0.9999998211860657,
+              "equal": true
+            },
+            {
+              "relative_rms": 0.0,
+              "pcc": 0.9999998211860657,
+              "equal": true
+            },
+            {
+              "relative_rms": 0.0,
+              "pcc": 0.9999998211860657,
+              "equal": true
+            },
+            {
+              "relative_rms": 0.0,
+              "pcc": 0.9999998211860657,
+              "equal": true
+            }
+          ],
+          "passed": true
+        },
+        {
+          "input": 0,
+          "local": [
+            {
+              "relative_rms": 0.005018308758735657,
+              "pcc": 0.9999921917915344,
+              "equal": false
+            },
+            {
+              "relative_rms": 0.004863371606916189,
+              "pcc": 0.9999909400939941,
+              "equal": false
+            },
+            {
+              "relative_rms": 0.005226357840001583,
+              "pcc": 0.9999931454658508,
+              "equal": false
+            },
+            {
+              "relative_rms": 0.005338640417903662,
+              "pcc": 0.9999916553497314,
+              "equal": false
+            }
+          ],
+          "reduced": [
+            {
+              "relative_rms": 0.006305677816271782,
+              "pcc": 0.9999801516532898,
+              "equal": false
+            },
+            {
+              "relative_rms": 0.006305677816271782,
+              "pcc": 0.9999801516532898,
+              "equal": false
+            },
+            {
+              "relative_rms": 0.006305677816271782,
+              "pcc": 0.9999801516532898,
+              "equal": false
+            },
+            {
+              "relative_rms": 0.006305677816271782,
+              "pcc": 0.9999801516532898,
+              "equal": false
+            }
+          ],
+          "baseline": [
+            {
+              "relative_rms": 0.0,
+              "pcc": 0.9999996423721313,
+              "equal": true
+            },
+            {
+              "relative_rms": 0.0,
+              "pcc": 0.9999996423721313,
+              "equal": true
+            },
+            {
+              "relative_rms": 0.0,
+              "pcc": 0.9999996423721313,
+              "equal": true
+            },
+            {
+              "relative_rms": 0.0,
+              "pcc": 0.9999996423721313,
+              "equal": true
+            }
+          ],
+          "passed": true
+        }
+      ],
+      "accuracy_passed": true,
+      "changed_input_trace_passed": true,
+      "full_model_measured": false,
+      "trace_calls": 16,
+      "batch": 16,
+      "role": "output",
+      "delivery": "reshard",
+      "effective_delivery": "reshard",
+      "partial_layout": {
+        "shape": [
+          1,
+          1,
+          16,
+          5120
+        ],
+        "shard_shape": [
+          32,
+          640
+        ],
+        "cores": 8,
+        "grid": "{[0-0 - 7-0]}"
+      },
+      "exact_baseline": true
+    },
+    {
+      "label": "native_input",
+      "input_layout": "compact_l1",
+      "input_contract": {
+        "shape": [
+          1,
+          1,
+          16,
+          1536
+        ],
+        "padded_shape": [
+          1,
+          1,
+          32,
+          1536
+        ],
+        "memory": "l1",
+        "keep_sharded": true
+      },
+      "config": {
+        "readers": 2,
+        "cores": 8,
+        "block": 6
+      },
+      "geometry": {
+        "padded_n": 5120,
+        "weight_shard_width": 640,
+        "activation_shard_tiles": 6,
+        "encoded_weight_bytes": 8355840,
+        "multicast_blocks": 8
+      },
+      "samples_us": [
+        50.468106055632234,
+        50.51784362876788,
+        50.51073239883408,
+        50.53277185652405,
+        50.51588988862932
+      ],
+      "output_sha256": [
+        "9e9dfcf002b6d33b524a6ac981fd3fe89288bb462568c94644d91fd38db06891",
+        "9e9dfcf002b6d33b524a6ac981fd3fe89288bb462568c94644d91fd38db06891",
+        "9e9dfcf002b6d33b524a6ac981fd3fe89288bb462568c94644d91fd38db06891",
+        "9e9dfcf002b6d33b524a6ac981fd3fe89288bb462568c94644d91fd38db06891"
+      ],
+      "accuracy": [
+        {
+          "input": 0,
+          "local": [
+            {
+              "relative_rms": 0.005018308758735657,
+              "pcc": 0.9999921917915344,
+              "equal": false
+            },
+            {
+              "relative_rms": 0.004863371606916189,
+              "pcc": 0.9999909400939941,
+              "equal": false
+            },
+            {
+              "relative_rms": 0.005226357840001583,
+              "pcc": 0.9999931454658508,
+              "equal": false
+            },
+            {
+              "relative_rms": 0.005338640417903662,
+              "pcc": 0.9999916553497314,
+              "equal": false
+            }
+          ],
+          "reduced": [
+            {
+              "relative_rms": 0.006305677816271782,
+              "pcc": 0.9999801516532898,
+              "equal": false
+            },
+            {
+              "relative_rms": 0.006305677816271782,
+              "pcc": 0.9999801516532898,
+              "equal": false
+            },
+            {
+              "relative_rms": 0.006305677816271782,
+              "pcc": 0.9999801516532898,
+              "equal": false
+            },
+            {
+              "relative_rms": 0.006305677816271782,
+              "pcc": 0.9999801516532898,
+              "equal": false
+            }
+          ],
+          "baseline": [
+            {
+              "relative_rms": 0.0,
+              "pcc": 0.9999996423721313,
+              "equal": true
+            },
+            {
+              "relative_rms": 0.0,
+              "pcc": 0.9999996423721313,
+              "equal": true
+            },
+            {
+              "relative_rms": 0.0,
+              "pcc": 0.9999996423721313,
+              "equal": true
+            },
+            {
+              "relative_rms": 0.0,
+              "pcc": 0.9999996423721313,
+              "equal": true
+            }
+          ],
+          "passed": true
+        },
+        {
+          "input": 1,
+          "local": [
+            {
+              "relative_rms": 0.0052268486469984055,
+              "pcc": 0.999992311000824,
+              "equal": false
+            },
+            {
+              "relative_rms": 0.0048951758071780205,
+              "pcc": 0.9999925494194031,
+              "equal": false
+            },
+            {
+              "relative_rms": 0.004989465232938528,
+              "pcc": 0.9999921321868896,
+              "equal": false
+            },
+            {
+              "relative_rms": 0.005048823077231646,
+              "pcc": 0.9999931454658508,
+              "equal": false
+            }
+          ],
+          "reduced": [
+            {
+              "relative_rms": 0.00545444106683135,
+              "pcc": 0.9999907612800598,
+              "equal": false
+            },
+            {
+              "relative_rms": 0.00545444106683135,
+              "pcc": 0.9999907612800598,
+              "equal": false
+            },
+            {
+              "relative_rms": 0.00545444106683135,
+              "pcc": 0.9999907612800598,
+              "equal": false
+            },
+            {
+              "relative_rms": 0.00545444106683135,
+              "pcc": 0.9999907612800598,
+              "equal": false
+            }
+          ],
+          "baseline": [
+            {
+              "relative_rms": 0.0,
+              "pcc": 0.9999998211860657,
+              "equal": true
+            },
+            {
+              "relative_rms": 0.0,
+              "pcc": 0.9999998211860657,
+              "equal": true
+            },
+            {
+              "relative_rms": 0.0,
+              "pcc": 0.9999998211860657,
+              "equal": true
+            },
+            {
+              "relative_rms": 0.0,
+              "pcc": 0.9999998211860657,
+              "equal": true
+            }
+          ],
+          "passed": true
+        },
+        {
+          "input": 0,
+          "local": [
+            {
+              "relative_rms": 0.005018308758735657,
+              "pcc": 0.9999921917915344,
+              "equal": false
+            },
+            {
+              "relative_rms": 0.004863371606916189,
+              "pcc": 0.9999909400939941,
+              "equal": false
+            },
+            {
+              "relative_rms": 0.005226357840001583,
+              "pcc": 0.9999931454658508,
+              "equal": false
+            },
+            {
+              "relative_rms": 0.005338640417903662,
+              "pcc": 0.9999916553497314,
+              "equal": false
+            }
+          ],
+          "reduced": [
+            {
+              "relative_rms": 0.006305677816271782,
+              "pcc": 0.9999801516532898,
+              "equal": false
+            },
+            {
+              "relative_rms": 0.006305677816271782,
+              "pcc": 0.9999801516532898,
+              "equal": false
+            },
+            {
+              "relative_rms": 0.006305677816271782,
+              "pcc": 0.9999801516532898,
+              "equal": false
+            },
+            {
+              "relative_rms": 0.006305677816271782,
+              "pcc": 0.9999801516532898,
+              "equal": false
+            }
+          ],
+          "baseline": [
+            {
+              "relative_rms": 0.0,
+              "pcc": 0.9999996423721313,
+              "equal": true
+            },
+            {
+              "relative_rms": 0.0,
+              "pcc": 0.9999996423721313,
+              "equal": true
+            },
+            {
+              "relative_rms": 0.0,
+              "pcc": 0.9999996423721313,
+              "equal": true
+            },
+            {
+              "relative_rms": 0.0,
+              "pcc": 0.9999996423721313,
+              "equal": true
+            }
+          ],
+          "passed": true
+        }
+      ],
+      "accuracy_passed": true,
+      "changed_input_trace_passed": true,
+      "full_model_measured": false,
+      "trace_calls": 16,
+      "batch": 16,
+      "role": "output",
+      "delivery": "native_input",
+      "effective_delivery": "native_input",
+      "partial_layout": {
+        "shape": [
+          1,
+          1,
+          16,
+          5120
+        ],
+        "shard_shape": [
+          32,
+          640
+        ],
+        "cores": 8,
+        "grid": "{[0-0 - 7-0]}"
+      },
+      "exact_baseline": true
+    },
+    {
+      "label": "matmul_output",
+      "input_layout": "compact_l1",
+      "input_contract": {
+        "shape": [
+          1,
+          1,
+          16,
+          1536
+        ],
+        "padded_shape": [
+          1,
+          1,
+          32,
+          1536
+        ],
+        "memory": "l1",
+        "keep_sharded": true
+      },
+      "config": {
+        "readers": 2,
+        "cores": 8,
+        "block": 6
+      },
+      "geometry": {
+        "padded_n": 5120,
+        "weight_shard_width": 640,
+        "activation_shard_tiles": 6,
+        "encoded_weight_bytes": 8355840,
+        "multicast_blocks": 8
+      },
+      "samples_us": [
+        49.329668981954455,
+        49.36815210385248,
+        49.3988543166779,
+        49.366605817340314,
+        49.37404824886471
+      ],
+      "output_sha256": [
+        "9e9dfcf002b6d33b524a6ac981fd3fe89288bb462568c94644d91fd38db06891",
+        "9e9dfcf002b6d33b524a6ac981fd3fe89288bb462568c94644d91fd38db06891",
+        "9e9dfcf002b6d33b524a6ac981fd3fe89288bb462568c94644d91fd38db06891",
+        "9e9dfcf002b6d33b524a6ac981fd3fe89288bb462568c94644d91fd38db06891"
+      ],
+      "accuracy": [
+        {
+          "input": 0,
+          "local": [
+            {
+              "relative_rms": 0.005018308758735657,
+              "pcc": 0.9999921917915344,
+              "equal": false
+            },
+            {
+              "relative_rms": 0.004863371606916189,
+              "pcc": 0.9999909400939941,
+              "equal": false
+            },
+            {
+              "relative_rms": 0.005226357840001583,
+              "pcc": 0.9999931454658508,
+              "equal": false
+            },
+            {
+              "relative_rms": 0.005338640417903662,
+              "pcc": 0.9999916553497314,
+              "equal": false
+            }
+          ],
+          "reduced": [
+            {
+              "relative_rms": 0.006305677816271782,
+              "pcc": 0.9999801516532898,
+              "equal": false
+            },
+            {
+              "relative_rms": 0.006305677816271782,
+              "pcc": 0.9999801516532898,
+              "equal": false
+            },
+            {
+              "relative_rms": 0.006305677816271782,
+              "pcc": 0.9999801516532898,
+              "equal": false
+            },
+            {
+              "relative_rms": 0.006305677816271782,
+              "pcc": 0.9999801516532898,
+              "equal": false
+            }
+          ],
+          "baseline": [
+            {
+              "relative_rms": 0.0,
+              "pcc": 0.9999996423721313,
+              "equal": true
+            },
+            {
+              "relative_rms": 0.0,
+              "pcc": 0.9999996423721313,
+              "equal": true
+            },
+            {
+              "relative_rms": 0.0,
+              "pcc": 0.9999996423721313,
+              "equal": true
+            },
+            {
+              "relative_rms": 0.0,
+              "pcc": 0.9999996423721313,
+              "equal": true
+            }
+          ],
+          "passed": true
+        },
+        {
+          "input": 1,
+          "local": [
+            {
+              "relative_rms": 0.0052268486469984055,
+              "pcc": 0.999992311000824,
+              "equal": false
+            },
+            {
+              "relative_rms": 0.0048951758071780205,
+              "pcc": 0.9999925494194031,
+              "equal": false
+            },
+            {
+              "relative_rms": 0.004989465232938528,
+              "pcc": 0.9999921321868896,
+              "equal": false
+            },
+            {
+              "relative_rms": 0.005048823077231646,
+              "pcc": 0.9999931454658508,
+              "equal": false
+            }
+          ],
+          "reduced": [
+            {
+              "relative_rms": 0.00545444106683135,
+              "pcc": 0.9999907612800598,
+              "equal": false
+            },
+            {
+              "relative_rms": 0.00545444106683135,
+              "pcc": 0.9999907612800598,
+              "equal": false
+            },
+            {
+              "relative_rms": 0.00545444106683135,
+              "pcc": 0.9999907612800598,
+              "equal": false
+            },
+            {
+              "relative_rms": 0.00545444106683135,
+              "pcc": 0.9999907612800598,
+              "equal": false
+            }
+          ],
+          "baseline": [
+            {
+              "relative_rms": 0.0,
+              "pcc": 0.9999998211860657,
+              "equal": true
+            },
+            {
+              "relative_rms": 0.0,
+              "pcc": 0.9999998211860657,
+              "equal": true
+            },
+            {
+              "relative_rms": 0.0,
+              "pcc": 0.9999998211860657,
+              "equal": true
+            },
+            {
+              "relative_rms": 0.0,
+              "pcc": 0.9999998211860657,
+              "equal": true
+            }
+          ],
+          "passed": true
+        },
+        {
+          "input": 0,
+          "local": [
+            {
+              "relative_rms": 0.005018308758735657,
+              "pcc": 0.9999921917915344,
+              "equal": false
+            },
+            {
+              "relative_rms": 0.004863371606916189,
+              "pcc": 0.9999909400939941,
+              "equal": false
+            },
+            {
+              "relative_rms": 0.005226357840001583,
+              "pcc": 0.9999931454658508,
+              "equal": false
+            },
+            {
+              "relative_rms": 0.005338640417903662,
+              "pcc": 0.9999916553497314,
+              "equal": false
+            }
+          ],
+          "reduced": [
+            {
+              "relative_rms": 0.006305677816271782,
+              "pcc": 0.9999801516532898,
+              "equal": false
+            },
+            {
+              "relative_rms": 0.006305677816271782,
+              "pcc": 0.9999801516532898,
+              "equal": false
+            },
+            {
+              "relative_rms": 0.006305677816271782,
+              "pcc": 0.9999801516532898,
+              "equal": false
+            },
+            {
+              "relative_rms": 0.006305677816271782,
+              "pcc": 0.9999801516532898,
+              "equal": false
+            }
+          ],
+          "baseline": [
+            {
+              "relative_rms": 0.0,
+              "pcc": 0.9999996423721313,
+              "equal": true
+            },
+            {
+              "relative_rms": 0.0,
+              "pcc": 0.9999996423721313,
+              "equal": true
+            },
+            {
+              "relative_rms": 0.0,
+              "pcc": 0.9999996423721313,
+              "equal": true
+            },
+            {
+              "relative_rms": 0.0,
+              "pcc": 0.9999996423721313,
+              "equal": true
+            }
+          ],
+          "passed": true
+        }
+      ],
+      "accuracy_passed": true,
+      "changed_input_trace_passed": true,
+      "full_model_measured": false,
+      "trace_calls": 16,
+      "batch": 16,
+      "role": "output",
+      "delivery": "matmul_output",
+      "effective_delivery": "matmul_output",
+      "partial_layout": {
+        "shape": [
+          1,
+          1,
+          16,
+          5120
+        ],
+        "shard_shape": [
+          32,
+          128
+        ],
+        "cores": 40,
+        "grid": "{[0-0 - 11-2], [0-3 - 3-3]}"
+      },
+      "exact_baseline": true
+    },
+    {
+      "label": "after",
+      "input_layout": "compact_l1",
+      "input_contract": {
+        "shape": [
+          1,
+          1,
+          16,
+          1536
+        ],
+        "padded_shape": [
+          1,
+          1,
+          32,
+          1536
+        ],
+        "memory": "l1",
+        "keep_sharded": true
+      },
+      "config": {
+        "readers": 2,
+        "cores": 8,
+        "block": 6
+      },
+      "geometry": {
+        "padded_n": 5120,
+        "weight_shard_width": 640,
+        "activation_shard_tiles": 6,
+        "encoded_weight_bytes": 8355840,
+        "multicast_blocks": 8
+      },
+      "samples_us": [
+        52.980336477048695,
+        53.030173876322806,
+        53.03215206367895,
+        53.023845539428294,
+        53.03217069013044
+      ],
+      "output_sha256": [
+        "9e9dfcf002b6d33b524a6ac981fd3fe89288bb462568c94644d91fd38db06891",
+        "9e9dfcf002b6d33b524a6ac981fd3fe89288bb462568c94644d91fd38db06891",
+        "9e9dfcf002b6d33b524a6ac981fd3fe89288bb462568c94644d91fd38db06891",
+        "9e9dfcf002b6d33b524a6ac981fd3fe89288bb462568c94644d91fd38db06891"
+      ],
+      "accuracy": [
+        {
+          "input": 0,
+          "local": [
+            {
+              "relative_rms": 0.005018308758735657,
+              "pcc": 0.9999921917915344,
+              "equal": false
+            },
+            {
+              "relative_rms": 0.004863371606916189,
+              "pcc": 0.9999909400939941,
+              "equal": false
+            },
+            {
+              "relative_rms": 0.005226357840001583,
+              "pcc": 0.9999931454658508,
+              "equal": false
+            },
+            {
+              "relative_rms": 0.005338640417903662,
+              "pcc": 0.9999916553497314,
+              "equal": false
+            }
+          ],
+          "reduced": [
+            {
+              "relative_rms": 0.006305677816271782,
+              "pcc": 0.9999801516532898,
+              "equal": false
+            },
+            {
+              "relative_rms": 0.006305677816271782,
+              "pcc": 0.9999801516532898,
+              "equal": false
+            },
+            {
+              "relative_rms": 0.006305677816271782,
+              "pcc": 0.9999801516532898,
+              "equal": false
+            },
+            {
+              "relative_rms": 0.006305677816271782,
+              "pcc": 0.9999801516532898,
+              "equal": false
+            }
+          ],
+          "baseline": [
+            {
+              "relative_rms": 0.0,
+              "pcc": 0.9999996423721313,
+              "equal": true
+            },
+            {
+              "relative_rms": 0.0,
+              "pcc": 0.9999996423721313,
+              "equal": true
+            },
+            {
+              "relative_rms": 0.0,
+              "pcc": 0.9999996423721313,
+              "equal": true
+            },
+            {
+              "relative_rms": 0.0,
+              "pcc": 0.9999996423721313,
+              "equal": true
+            }
+          ],
+          "passed": true
+        },
+        {
+          "input": 1,
+          "local": [
+            {
+              "relative_rms": 0.0052268486469984055,
+              "pcc": 0.999992311000824,
+              "equal": false
+            },
+            {
+              "relative_rms": 0.0048951758071780205,
+              "pcc": 0.9999925494194031,
+              "equal": false
+            },
+            {
+              "relative_rms": 0.004989465232938528,
+              "pcc": 0.9999921321868896,
+              "equal": false
+            },
+            {
+              "relative_rms": 0.005048823077231646,
+              "pcc": 0.9999931454658508,
+              "equal": false
+            }
+          ],
+          "reduced": [
+            {
+              "relative_rms": 0.00545444106683135,
+              "pcc": 0.9999907612800598,
+              "equal": false
+            },
+            {
+              "relative_rms": 0.00545444106683135,
+              "pcc": 0.9999907612800598,
+              "equal": false
+            },
+            {
+              "relative_rms": 0.00545444106683135,
+              "pcc": 0.9999907612800598,
+              "equal": false
+            },
+            {
+              "relative_rms": 0.00545444106683135,
+              "pcc": 0.9999907612800598,
+              "equal": false
+            }
+          ],
+          "baseline": [
+            {
+              "relative_rms": 0.0,
+              "pcc": 0.9999998211860657,
+              "equal": true
+            },
+            {
+              "relative_rms": 0.0,
+              "pcc": 0.9999998211860657,
+              "equal": true
+            },
+            {
+              "relative_rms": 0.0,
+              "pcc": 0.9999998211860657,
+              "equal": true
+            },
+            {
+              "relative_rms": 0.0,
+              "pcc": 0.9999998211860657,
+              "equal": true
+            }
+          ],
+          "passed": true
+        },
+        {
+          "input": 0,
+          "local": [
+            {
+              "relative_rms": 0.005018308758735657,
+              "pcc": 0.9999921917915344,
+              "equal": false
+            },
+            {
+              "relative_rms": 0.004863371606916189,
+              "pcc": 0.9999909400939941,
+              "equal": false
+            },
+            {
+              "relative_rms": 0.005226357840001583,
+              "pcc": 0.9999931454658508,
+              "equal": false
+            },
+            {
+              "relative_rms": 0.005338640417903662,
+              "pcc": 0.9999916553497314,
+              "equal": false
+            }
+          ],
+          "reduced": [
+            {
+              "relative_rms": 0.006305677816271782,
+              "pcc": 0.9999801516532898,
+              "equal": false
+            },
+            {
+              "relative_rms": 0.006305677816271782,
+              "pcc": 0.9999801516532898,
+              "equal": false
+            },
+            {
+              "relative_rms": 0.006305677816271782,
+              "pcc": 0.9999801516532898,
+              "equal": false
+            },
+            {
+              "relative_rms": 0.006305677816271782,
+              "pcc": 0.9999801516532898,
+              "equal": false
+            }
+          ],
+          "baseline": [
+            {
+              "relative_rms": 0.0,
+              "pcc": 0.9999996423721313,
+              "equal": true
+            },
+            {
+              "relative_rms": 0.0,
+              "pcc": 0.9999996423721313,
+              "equal": true
+            },
+            {
+              "relative_rms": 0.0,
+              "pcc": 0.9999996423721313,
+              "equal": true
+            },
+            {
+              "relative_rms": 0.0,
+              "pcc": 0.9999996423721313,
+              "equal": true
+            }
+          ],
+          "passed": true
+        }
+      ],
+      "accuracy_passed": true,
+      "changed_input_trace_passed": true,
+      "full_model_measured": false,
+      "trace_calls": 16,
+      "batch": 16,
+      "role": "output",
+      "delivery": "reshard",
+      "effective_delivery": "reshard",
+      "partial_layout": {
+        "shape": [
+          1,
+          1,
+          16,
+          5120
+        ],
+        "shard_shape": [
+          32,
+          640
+        ],
+        "cores": 8,
+        "grid": "{[0-0 - 7-0]}"
+      },
+      "exact_baseline": true
+    },
+    {
+      "label": "before",
+      "input_layout": "compact_l1",
+      "input_contract": {
+        "shape": [
+          1,
+          1,
+          16,
+          4352
+        ],
+        "padded_shape": [
+          1,
+          1,
+          32,
+          4352
+        ],
+        "memory": "l1",
+        "keep_sharded": true
+      },
+      "config": {
+        "readers": 2,
+        "cores": 8,
+        "block": 17
+      },
+      "geometry": {
+        "padded_n": 5120,
+        "weight_shard_width": 640,
+        "activation_shard_tiles": 17,
+        "encoded_weight_bytes": 23674880,
+        "multicast_blocks": 8
+      },
+      "samples_us": [
+        94.16108427103609,
+        94.23449489986524,
+        94.20928196050227,
+        94.22641422133893,
+        94.23149691428989
+      ],
+      "output_sha256": [
+        "d709c7abc224b5d080bea4f95e9d33253a1f64f41c6cd25a0c7770f1e43e9279",
+        "d709c7abc224b5d080bea4f95e9d33253a1f64f41c6cd25a0c7770f1e43e9279",
+        "d709c7abc224b5d080bea4f95e9d33253a1f64f41c6cd25a0c7770f1e43e9279",
+        "d709c7abc224b5d080bea4f95e9d33253a1f64f41c6cd25a0c7770f1e43e9279"
+      ],
+      "accuracy": [
+        {
+          "input": 0,
+          "local": [
+            {
+              "relative_rms": 0.00481080450117588,
+              "pcc": 0.999993622303009,
+              "equal": false
+            },
+            {
+              "relative_rms": 0.004976858850568533,
+              "pcc": 0.9999927282333374,
+              "equal": false
+            },
+            {
+              "relative_rms": 0.004843739327043295,
+              "pcc": 0.9999936819076538,
+              "equal": false
+            },
+            {
+              "relative_rms": 0.004818870685994625,
+              "pcc": 0.9999939203262329,
+              "equal": false
+            }
+          ],
+          "reduced": [
+            {
+              "relative_rms": 0.004695131443440914,
+              "pcc": 0.9999916553497314,
+              "equal": false
+            },
+            {
+              "relative_rms": 0.004695131443440914,
+              "pcc": 0.9999916553497314,
+              "equal": false
+            },
+            {
+              "relative_rms": 0.004695131443440914,
+              "pcc": 0.9999916553497314,
+              "equal": false
+            },
+            {
+              "relative_rms": 0.004695131443440914,
+              "pcc": 0.9999916553497314,
+              "equal": false
+            }
+          ],
+          "baseline": [
+            {
+              "relative_rms": 0.0,
+              "pcc": 0.9999997019767761,
+              "equal": true
+            },
+            {
+              "relative_rms": 0.0,
+              "pcc": 0.9999997019767761,
+              "equal": true
+            },
+            {
+              "relative_rms": 0.0,
+              "pcc": 0.9999997019767761,
+              "equal": true
+            },
+            {
+              "relative_rms": 0.0,
+              "pcc": 0.9999997019767761,
+              "equal": true
+            }
+          ],
+          "passed": true
+        },
+        {
+          "input": 1,
+          "local": [
+            {
+              "relative_rms": 0.004781260155141354,
+              "pcc": 0.9999932646751404,
+              "equal": false
+            },
+            {
+              "relative_rms": 0.004820384085178375,
+              "pcc": 0.9999935626983643,
+              "equal": false
+            },
+            {
+              "relative_rms": 0.004743573721498251,
+              "pcc": 0.999993622303009,
+              "equal": false
+            },
+            {
+              "relative_rms": 0.004700286779552698,
+              "pcc": 0.9999938607215881,
+              "equal": false
+            }
+          ],
+          "reduced": [
+            {
+              "relative_rms": 0.004742842633277178,
+              "pcc": 0.999990701675415,
+              "equal": false
+            },
+            {
+              "relative_rms": 0.004742842633277178,
+              "pcc": 0.999990701675415,
+              "equal": false
+            },
+            {
+              "relative_rms": 0.004742842633277178,
+              "pcc": 0.999990701675415,
+              "equal": false
+            },
+            {
+              "relative_rms": 0.004742842633277178,
+              "pcc": 0.999990701675415,
+              "equal": false
+            }
+          ],
+          "baseline": [
+            {
+              "relative_rms": 0.0,
+              "pcc": 0.9999997019767761,
+              "equal": true
+            },
+            {
+              "relative_rms": 0.0,
+              "pcc": 0.9999997019767761,
+              "equal": true
+            },
+            {
+              "relative_rms": 0.0,
+              "pcc": 0.9999997019767761,
+              "equal": true
+            },
+            {
+              "relative_rms": 0.0,
+              "pcc": 0.9999997019767761,
+              "equal": true
+            }
+          ],
+          "passed": true
+        },
+        {
+          "input": 0,
+          "local": [
+            {
+              "relative_rms": 0.00481080450117588,
+              "pcc": 0.999993622303009,
+              "equal": false
+            },
+            {
+              "relative_rms": 0.004976858850568533,
+              "pcc": 0.9999927282333374,
+              "equal": false
+            },
+            {
+              "relative_rms": 0.004843739327043295,
+              "pcc": 0.9999936819076538,
+              "equal": false
+            },
+            {
+              "relative_rms": 0.004818870685994625,
+              "pcc": 0.9999939203262329,
+              "equal": false
+            }
+          ],
+          "reduced": [
+            {
+              "relative_rms": 0.004695131443440914,
+              "pcc": 0.9999916553497314,
+              "equal": false
+            },
+            {
+              "relative_rms": 0.004695131443440914,
+              "pcc": 0.9999916553497314,
+              "equal": false
+            },
+            {
+              "relative_rms": 0.004695131443440914,
+              "pcc": 0.9999916553497314,
+              "equal": false
+            },
+            {
+              "relative_rms": 0.004695131443440914,
+              "pcc": 0.9999916553497314,
+              "equal": false
+            }
+          ],
+          "baseline": [
+            {
+              "relative_rms": 0.0,
+              "pcc": 0.9999997019767761,
+              "equal": true
+            },
+            {
+              "relative_rms": 0.0,
+              "pcc": 0.9999997019767761,
+              "equal": true
+            },
+            {
+              "relative_rms": 0.0,
+              "pcc": 0.9999997019767761,
+              "equal": true
+            },
+            {
+              "relative_rms": 0.0,
+              "pcc": 0.9999997019767761,
+              "equal": true
+            }
+          ],
+          "passed": true
+        }
+      ],
+      "accuracy_passed": true,
+      "changed_input_trace_passed": true,
+      "full_model_measured": false,
+      "trace_calls": 16,
+      "batch": 16,
+      "role": "down",
+      "delivery": "reshard",
+      "effective_delivery": "reshard",
+      "partial_layout": {
+        "shape": [
+          1,
+          1,
+          16,
+          5120
+        ],
+        "shard_shape": [
+          32,
+          640
+        ],
+        "cores": 8,
+        "grid": "{[0-0 - 7-0]}"
+      },
+      "exact_baseline": true
+    },
+    {
+      "label": "native_input",
+      "input_layout": "compact_l1",
+      "input_contract": {
+        "shape": [
+          1,
+          1,
+          16,
+          4352
+        ],
+        "padded_shape": [
+          1,
+          1,
+          32,
+          4352
+        ],
+        "memory": "l1",
+        "keep_sharded": true
+      },
+      "config": {
+        "readers": 2,
+        "cores": 8,
+        "block": 17
+      },
+      "geometry": {
+        "padded_n": 5120,
+        "weight_shard_width": 640,
+        "activation_shard_tiles": 17,
+        "encoded_weight_bytes": 23674880,
+        "multicast_blocks": 8
+      },
+      "samples_us": [
+        91.65976458461955,
+        91.70656703645363,
+        91.70469507807866,
+        91.69990022201091,
+        91.69368451694027
+      ],
+      "output_sha256": [
+        "d709c7abc224b5d080bea4f95e9d33253a1f64f41c6cd25a0c7770f1e43e9279",
+        "d709c7abc224b5d080bea4f95e9d33253a1f64f41c6cd25a0c7770f1e43e9279",
+        "d709c7abc224b5d080bea4f95e9d33253a1f64f41c6cd25a0c7770f1e43e9279",
+        "d709c7abc224b5d080bea4f95e9d33253a1f64f41c6cd25a0c7770f1e43e9279"
+      ],
+      "accuracy": [
+        {
+          "input": 0,
+          "local": [
+            {
+              "relative_rms": 0.00481080450117588,
+              "pcc": 0.999993622303009,
+              "equal": false
+            },
+            {
+              "relative_rms": 0.004976858850568533,
+              "pcc": 0.9999927282333374,
+              "equal": false
+            },
+            {
+              "relative_rms": 0.004843739327043295,
+              "pcc": 0.9999936819076538,
+              "equal": false
+            },
+            {
+              "relative_rms": 0.004818870685994625,
+              "pcc": 0.9999939203262329,
+              "equal": false
+            }
+          ],
+          "reduced": [
+            {
+              "relative_rms": 0.004695131443440914,
+              "pcc": 0.9999916553497314,
+              "equal": false
+            },
+            {
+              "relative_rms": 0.004695131443440914,
+              "pcc": 0.9999916553497314,
+              "equal": false
+            },
+            {
+              "relative_rms": 0.004695131443440914,
+              "pcc": 0.9999916553497314,
+              "equal": false
+            },
+            {
+              "relative_rms": 0.004695131443440914,
+              "pcc": 0.9999916553497314,
+              "equal": false
+            }
+          ],
+          "baseline": [
+            {
+              "relative_rms": 0.0,
+              "pcc": 0.9999997019767761,
+              "equal": true
+            },
+            {
+              "relative_rms": 0.0,
+              "pcc": 0.9999997019767761,
+              "equal": true
+            },
+            {
+              "relative_rms": 0.0,
+              "pcc": 0.9999997019767761,
+              "equal": true
+            },
+            {
+              "relative_rms": 0.0,
+              "pcc": 0.9999997019767761,
+              "equal": true
+            }
+          ],
+          "passed": true
+        },
+        {
+          "input": 1,
+          "local": [
+            {
+              "relative_rms": 0.004781260155141354,
+              "pcc": 0.9999932646751404,
+              "equal": false
+            },
+            {
+              "relative_rms": 0.004820384085178375,
+              "pcc": 0.9999935626983643,
+              "equal": false
+            },
+            {
+              "relative_rms": 0.004743573721498251,
+              "pcc": 0.999993622303009,
+              "equal": false
+            },
+            {
+              "relative_rms": 0.004700286779552698,
+              "pcc": 0.9999938607215881,
+              "equal": false
+            }
+          ],
+          "reduced": [
+            {
+              "relative_rms": 0.004742842633277178,
+              "pcc": 0.999990701675415,
+              "equal": false
+            },
+            {
+              "relative_rms": 0.004742842633277178,
+              "pcc": 0.999990701675415,
+              "equal": false
+            },
+            {
+              "relative_rms": 0.004742842633277178,
+              "pcc": 0.999990701675415,
+              "equal": false
+            },
+            {
+              "relative_rms": 0.004742842633277178,
+              "pcc": 0.999990701675415,
+              "equal": false
+            }
+          ],
+          "baseline": [
+            {
+              "relative_rms": 0.0,
+              "pcc": 0.9999997019767761,
+              "equal": true
+            },
+            {
+              "relative_rms": 0.0,
+              "pcc": 0.9999997019767761,
+              "equal": true
+            },
+            {
+              "relative_rms": 0.0,
+              "pcc": 0.9999997019767761,
+              "equal": true
+            },
+            {
+              "relative_rms": 0.0,
+              "pcc": 0.9999997019767761,
+              "equal": true
+            }
+          ],
+          "passed": true
+        },
+        {
+          "input": 0,
+          "local": [
+            {
+              "relative_rms": 0.00481080450117588,
+              "pcc": 0.999993622303009,
+              "equal": false
+            },
+            {
+              "relative_rms": 0.004976858850568533,
+              "pcc": 0.9999927282333374,
+              "equal": false
+            },
+            {
+              "relative_rms": 0.004843739327043295,
+              "pcc": 0.9999936819076538,
+              "equal": false
+            },
+            {
+              "relative_rms": 0.004818870685994625,
+              "pcc": 0.9999939203262329,
+              "equal": false
+            }
+          ],
+          "reduced": [
+            {
+              "relative_rms": 0.004695131443440914,
+              "pcc": 0.9999916553497314,
+              "equal": false
+            },
+            {
+              "relative_rms": 0.004695131443440914,
+              "pcc": 0.9999916553497314,
+              "equal": false
+            },
+            {
+              "relative_rms": 0.004695131443440914,
+              "pcc": 0.9999916553497314,
+              "equal": false
+            },
+            {
+              "relative_rms": 0.004695131443440914,
+              "pcc": 0.9999916553497314,
+              "equal": false
+            }
+          ],
+          "baseline": [
+            {
+              "relative_rms": 0.0,
+              "pcc": 0.9999997019767761,
+              "equal": true
+            },
+            {
+              "relative_rms": 0.0,
+              "pcc": 0.9999997019767761,
+              "equal": true
+            },
+            {
+              "relative_rms": 0.0,
+              "pcc": 0.9999997019767761,
+              "equal": true
+            },
+            {
+              "relative_rms": 0.0,
+              "pcc": 0.9999997019767761,
+              "equal": true
+            }
+          ],
+          "passed": true
+        }
+      ],
+      "accuracy_passed": true,
+      "changed_input_trace_passed": true,
+      "full_model_measured": false,
+      "trace_calls": 16,
+      "batch": 16,
+      "role": "down",
+      "delivery": "native_input",
+      "effective_delivery": "native_input",
+      "partial_layout": {
+        "shape": [
+          1,
+          1,
+          16,
+          5120
+        ],
+        "shard_shape": [
+          32,
+          640
+        ],
+        "cores": 8,
+        "grid": "{[0-0 - 7-0]}"
+      },
+      "exact_baseline": true
+    },
+    {
+      "label": "matmul_output",
+      "input_layout": "compact_l1",
+      "input_contract": {
+        "shape": [
+          1,
+          1,
+          16,
+          4352
+        ],
+        "padded_shape": [
+          1,
+          1,
+          32,
+          4352
+        ],
+        "memory": "l1",
+        "keep_sharded": true
+      },
+      "config": {
+        "readers": 2,
+        "cores": 8,
+        "block": 17
+      },
+      "geometry": {
+        "padded_n": 5120,
+        "weight_shard_width": 640,
+        "activation_shard_tiles": 17,
+        "encoded_weight_bytes": 23674880,
+        "multicast_blocks": 8
+      },
+      "samples_us": [
+        90.5254774261266,
+        90.56418552063406,
+        90.5584020074457,
+        90.57347429916263,
+        90.6064806622453
+      ],
+      "output_sha256": [
+        "d709c7abc224b5d080bea4f95e9d33253a1f64f41c6cd25a0c7770f1e43e9279",
+        "d709c7abc224b5d080bea4f95e9d33253a1f64f41c6cd25a0c7770f1e43e9279",
+        "d709c7abc224b5d080bea4f95e9d33253a1f64f41c6cd25a0c7770f1e43e9279",
+        "d709c7abc224b5d080bea4f95e9d33253a1f64f41c6cd25a0c7770f1e43e9279"
+      ],
+      "accuracy": [
+        {
+          "input": 0,
+          "local": [
+            {
+              "relative_rms": 0.00481080450117588,
+              "pcc": 0.999993622303009,
+              "equal": false
+            },
+            {
+              "relative_rms": 0.004976858850568533,
+              "pcc": 0.9999927282333374,
+              "equal": false
+            },
+            {
+              "relative_rms": 0.004843739327043295,
+              "pcc": 0.9999936819076538,
+              "equal": false
+            },
+            {
+              "relative_rms": 0.004818870685994625,
+              "pcc": 0.9999939203262329,
+              "equal": false
+            }
+          ],
+          "reduced": [
+            {
+              "relative_rms": 0.004695131443440914,
+              "pcc": 0.9999916553497314,
+              "equal": false
+            },
+            {
+              "relative_rms": 0.004695131443440914,
+              "pcc": 0.9999916553497314,
+              "equal": false
+            },
+            {
+              "relative_rms": 0.004695131443440914,
+              "pcc": 0.9999916553497314,
+              "equal": false
+            },
+            {
+              "relative_rms": 0.004695131443440914,
+              "pcc": 0.9999916553497314,
+              "equal": false
+            }
+          ],
+          "baseline": [
+            {
+              "relative_rms": 0.0,
+              "pcc": 0.9999997019767761,
+              "equal": true
+            },
+            {
+              "relative_rms": 0.0,
+              "pcc": 0.9999997019767761,
+              "equal": true
+            },
+            {
+              "relative_rms": 0.0,
+              "pcc": 0.9999997019767761,
+              "equal": true
+            },
+            {
+              "relative_rms": 0.0,
+              "pcc": 0.9999997019767761,
+              "equal": true
+            }
+          ],
+          "passed": true
+        },
+        {
+          "input": 1,
+          "local": [
+            {
+              "relative_rms": 0.004781260155141354,
+              "pcc": 0.9999932646751404,
+              "equal": false
+            },
+            {
+              "relative_rms": 0.004820384085178375,
+              "pcc": 0.9999935626983643,
+              "equal": false
+            },
+            {
+              "relative_rms": 0.004743573721498251,
+              "pcc": 0.999993622303009,
+              "equal": false
+            },
+            {
+              "relative_rms": 0.004700286779552698,
+              "pcc": 0.9999938607215881,
+              "equal": false
+            }
+          ],
+          "reduced": [
+            {
+              "relative_rms": 0.004742842633277178,
+              "pcc": 0.999990701675415,
+              "equal": false
+            },
+            {
+              "relative_rms": 0.004742842633277178,
+              "pcc": 0.999990701675415,
+              "equal": false
+            },
+            {
+              "relative_rms": 0.004742842633277178,
+              "pcc": 0.999990701675415,
+              "equal": false
+            },
+            {
+              "relative_rms": 0.004742842633277178,
+              "pcc": 0.999990701675415,
+              "equal": false
+            }
+          ],
+          "baseline": [
+            {
+              "relative_rms": 0.0,
+              "pcc": 0.9999997019767761,
+              "equal": true
+            },
+            {
+              "relative_rms": 0.0,
+              "pcc": 0.9999997019767761,
+              "equal": true
+            },
+            {
+              "relative_rms": 0.0,
+              "pcc": 0.9999997019767761,
+              "equal": true
+            },
+            {
+              "relative_rms": 0.0,
+              "pcc": 0.9999997019767761,
+              "equal": true
+            }
+          ],
+          "passed": true
+        },
+        {
+          "input": 0,
+          "local": [
+            {
+              "relative_rms": 0.00481080450117588,
+              "pcc": 0.999993622303009,
+              "equal": false
+            },
+            {
+              "relative_rms": 0.004976858850568533,
+              "pcc": 0.9999927282333374,
+              "equal": false
+            },
+            {
+              "relative_rms": 0.004843739327043295,
+              "pcc": 0.9999936819076538,
+              "equal": false
+            },
+            {
+              "relative_rms": 0.004818870685994625,
+              "pcc": 0.9999939203262329,
+              "equal": false
+            }
+          ],
+          "reduced": [
+            {
+              "relative_rms": 0.004695131443440914,
+              "pcc": 0.9999916553497314,
+              "equal": false
+            },
+            {
+              "relative_rms": 0.004695131443440914,
+              "pcc": 0.9999916553497314,
+              "equal": false
+            },
+            {
+              "relative_rms": 0.004695131443440914,
+              "pcc": 0.9999916553497314,
+              "equal": false
+            },
+            {
+              "relative_rms": 0.004695131443440914,
+              "pcc": 0.9999916553497314,
+              "equal": false
+            }
+          ],
+          "baseline": [
+            {
+              "relative_rms": 0.0,
+              "pcc": 0.9999997019767761,
+              "equal": true
+            },
+            {
+              "relative_rms": 0.0,
+              "pcc": 0.9999997019767761,
+              "equal": true
+            },
+            {
+              "relative_rms": 0.0,
+              "pcc": 0.9999997019767761,
+              "equal": true
+            },
+            {
+              "relative_rms": 0.0,
+              "pcc": 0.9999997019767761,
+              "equal": true
+            }
+          ],
+          "passed": true
+        }
+      ],
+      "accuracy_passed": true,
+      "changed_input_trace_passed": true,
+      "full_model_measured": false,
+      "trace_calls": 16,
+      "batch": 16,
+      "role": "down",
+      "delivery": "matmul_output",
+      "effective_delivery": "matmul_output",
+      "partial_layout": {
+        "shape": [
+          1,
+          1,
+          16,
+          5120
+        ],
+        "shard_shape": [
+          32,
+          128
+        ],
+        "cores": 40,
+        "grid": "{[0-0 - 11-2], [0-3 - 3-3]}"
+      },
+      "exact_baseline": true
+    },
+    {
+      "label": "after",
+      "input_layout": "compact_l1",
+      "input_contract": {
+        "shape": [
+          1,
+          1,
+          16,
+          4352
+        ],
+        "padded_shape": [
+          1,
+          1,
+          32,
+          4352
+        ],
+        "memory": "l1",
+        "keep_sharded": true
+      },
+      "config": {
+        "readers": 2,
+        "cores": 8,
+        "block": 17
+      },
+      "geometry": {
+        "padded_n": 5120,
+        "weight_shard_width": 640,
+        "activation_shard_tiles": 17,
+        "encoded_weight_bytes": 23674880,
+        "multicast_blocks": 8
+      },
+      "samples_us": [
+        94.16820830665529,
+        94.21278751688078,
+        94.21596128959209,
+        94.23551586223766,
+        94.21400114661083
+      ],
+      "output_sha256": [
+        "d709c7abc224b5d080bea4f95e9d33253a1f64f41c6cd25a0c7770f1e43e9279",
+        "d709c7abc224b5d080bea4f95e9d33253a1f64f41c6cd25a0c7770f1e43e9279",
+        "d709c7abc224b5d080bea4f95e9d33253a1f64f41c6cd25a0c7770f1e43e9279",
+        "d709c7abc224b5d080bea4f95e9d33253a1f64f41c6cd25a0c7770f1e43e9279"
+      ],
+      "accuracy": [
+        {
+          "input": 0,
+          "local": [
+            {
+              "relative_rms": 0.00481080450117588,
+              "pcc": 0.999993622303009,
+              "equal": false
+            },
+            {
+              "relative_rms": 0.004976858850568533,
+              "pcc": 0.9999927282333374,
+              "equal": false
+            },
+            {
+              "relative_rms": 0.004843739327043295,
+              "pcc": 0.9999936819076538,
+              "equal": false
+            },
+            {
+              "relative_rms": 0.004818870685994625,
+              "pcc": 0.9999939203262329,
+              "equal": false
+            }
+          ],
+          "reduced": [
+            {
+              "relative_rms": 0.004695131443440914,
+              "pcc": 0.9999916553497314,
+              "equal": false
+            },
+            {
+              "relative_rms": 0.004695131443440914,
+              "pcc": 0.9999916553497314,
+              "equal": false
+            },
+            {
+              "relative_rms": 0.004695131443440914,
+              "pcc": 0.9999916553497314,
+              "equal": false
+            },
+            {
+              "relative_rms": 0.004695131443440914,
+              "pcc": 0.9999916553497314,
+              "equal": false
+            }
+          ],
+          "baseline": [
+            {
+              "relative_rms": 0.0,
+              "pcc": 0.9999997019767761,
+              "equal": true
+            },
+            {
+              "relative_rms": 0.0,
+              "pcc": 0.9999997019767761,
+              "equal": true
+            },
+            {
+              "relative_rms": 0.0,
+              "pcc": 0.9999997019767761,
+              "equal": true
+            },
+            {
+              "relative_rms": 0.0,
+              "pcc": 0.9999997019767761,
+              "equal": true
+            }
+          ],
+          "passed": true
+        },
+        {
+          "input": 1,
+          "local": [
+            {
+              "relative_rms": 0.004781260155141354,
+              "pcc": 0.9999932646751404,
+              "equal": false
+            },
+            {
+              "relative_rms": 0.004820384085178375,
+              "pcc": 0.9999935626983643,
+              "equal": false
+            },
+            {
+              "relative_rms": 0.004743573721498251,
+              "pcc": 0.999993622303009,
+              "equal": false
+            },
+            {
+              "relative_rms": 0.004700286779552698,
+              "pcc": 0.9999938607215881,
+              "equal": false
+            }
+          ],
+          "reduced": [
+            {
+              "relative_rms": 0.004742842633277178,
+              "pcc": 0.999990701675415,
+              "equal": false
+            },
+            {
+              "relative_rms": 0.004742842633277178,
+              "pcc": 0.999990701675415,
+              "equal": false
+            },
+            {
+              "relative_rms": 0.004742842633277178,
+              "pcc": 0.999990701675415,
+              "equal": false
+            },
+            {
+              "relative_rms": 0.004742842633277178,
+              "pcc": 0.999990701675415,
+              "equal": false
+            }
+          ],
+          "baseline": [
+            {
+              "relative_rms": 0.0,
+              "pcc": 0.9999997019767761,
+              "equal": true
+            },
+            {
+              "relative_rms": 0.0,
+              "pcc": 0.9999997019767761,
+              "equal": true
+            },
+            {
+              "relative_rms": 0.0,
+              "pcc": 0.9999997019767761,
+              "equal": true
+            },
+            {
+              "relative_rms": 0.0,
+              "pcc": 0.9999997019767761,
+              "equal": true
+            }
+          ],
+          "passed": true
+        },
+        {
+          "input": 0,
+          "local": [
+            {
+              "relative_rms": 0.00481080450117588,
+              "pcc": 0.999993622303009,
+              "equal": false
+            },
+            {
+              "relative_rms": 0.004976858850568533,
+              "pcc": 0.9999927282333374,
+              "equal": false
+            },
+            {
+              "relative_rms": 0.004843739327043295,
+              "pcc": 0.9999936819076538,
+              "equal": false
+            },
+            {
+              "relative_rms": 0.004818870685994625,
+              "pcc": 0.9999939203262329,
+              "equal": false
+            }
+          ],
+          "reduced": [
+            {
+              "relative_rms": 0.004695131443440914,
+              "pcc": 0.9999916553497314,
+              "equal": false
+            },
+            {
+              "relative_rms": 0.004695131443440914,
+              "pcc": 0.9999916553497314,
+              "equal": false
+            },
+            {
+              "relative_rms": 0.004695131443440914,
+              "pcc": 0.9999916553497314,
+              "equal": false
+            },
+            {
+              "relative_rms": 0.004695131443440914,
+              "pcc": 0.9999916553497314,
+              "equal": false
+            }
+          ],
+          "baseline": [
+            {
+              "relative_rms": 0.0,
+              "pcc": 0.9999997019767761,
+              "equal": true
+            },
+            {
+              "relative_rms": 0.0,
+              "pcc": 0.9999997019767761,
+              "equal": true
+            },
+            {
+              "relative_rms": 0.0,
+              "pcc": 0.9999997019767761,
+              "equal": true
+            },
+            {
+              "relative_rms": 0.0,
+              "pcc": 0.9999997019767761,
+              "equal": true
+            }
+          ],
+          "passed": true
+        }
+      ],
+      "accuracy_passed": true,
+      "changed_input_trace_passed": true,
+      "full_model_measured": false,
+      "trace_calls": 16,
+      "batch": 16,
+      "role": "down",
+      "delivery": "reshard",
+      "effective_delivery": "reshard",
+      "partial_layout": {
+        "shape": [
+          1,
+          1,
+          16,
+          5120
+        ],
+        "shard_shape": [
+          32,
+          640
+        ],
+        "cores": 8,
+        "grid": "{[0-0 - 7-0]}"
+      },
+      "exact_baseline": true
+    },
+    {
+      "label": "before",
+      "input_layout": "public_dram",
+      "input_contract": {
+        "shape": [
+          16,
+          1,
+          1536
+        ],
+        "padded_shape": [
+          16,
+          32,
+          1536
+        ],
+        "memory": "dram",
+        "keep_sharded": false
+      },
+      "config": {
+        "readers": 2,
+        "cores": 8,
+        "block": 6
+      },
+      "geometry": {
+        "padded_n": 5120,
+        "weight_shard_width": 640,
+        "activation_shard_tiles": 6,
+        "encoded_weight_bytes": 8355840,
+        "multicast_blocks": 8
+      },
+      "samples_us": [
+        63.80580976838246,
+        63.85088374372572,
+        63.83815809385851,
+        63.84074367815629,
+        63.84274078300223
+      ],
+      "output_sha256": [
+        "9e9dfcf002b6d33b524a6ac981fd3fe89288bb462568c94644d91fd38db06891",
+        "9e9dfcf002b6d33b524a6ac981fd3fe89288bb462568c94644d91fd38db06891",
+        "9e9dfcf002b6d33b524a6ac981fd3fe89288bb462568c94644d91fd38db06891",
+        "9e9dfcf002b6d33b524a6ac981fd3fe89288bb462568c94644d91fd38db06891"
+      ],
+      "accuracy": [
+        {
+          "input": 0,
+          "local": [
+            {
+              "relative_rms": 0.005018308758735657,
+              "pcc": 0.9999921917915344,
+              "equal": false
+            },
+            {
+              "relative_rms": 0.004863371606916189,
+              "pcc": 0.9999909400939941,
+              "equal": false
+            },
+            {
+              "relative_rms": 0.005226357840001583,
+              "pcc": 0.9999931454658508,
+              "equal": false
+            },
+            {
+              "relative_rms": 0.005338640417903662,
+              "pcc": 0.9999916553497314,
+              "equal": false
+            }
+          ],
+          "reduced": [
+            {
+              "relative_rms": 0.006305677816271782,
+              "pcc": 0.9999801516532898,
+              "equal": false
+            },
+            {
+              "relative_rms": 0.006305677816271782,
+              "pcc": 0.9999801516532898,
+              "equal": false
+            },
+            {
+              "relative_rms": 0.006305677816271782,
+              "pcc": 0.9999801516532898,
+              "equal": false
+            },
+            {
+              "relative_rms": 0.006305677816271782,
+              "pcc": 0.9999801516532898,
+              "equal": false
+            }
+          ],
+          "baseline": [
+            {
+              "relative_rms": 0.0,
+              "pcc": 0.9999996423721313,
+              "equal": true
+            },
+            {
+              "relative_rms": 0.0,
+              "pcc": 0.9999996423721313,
+              "equal": true
+            },
+            {
+              "relative_rms": 0.0,
+              "pcc": 0.9999996423721313,
+              "equal": true
+            },
+            {
+              "relative_rms": 0.0,
+              "pcc": 0.9999996423721313,
+              "equal": true
+            }
+          ],
+          "passed": true
+        },
+        {
+          "input": 1,
+          "local": [
+            {
+              "relative_rms": 0.0052268486469984055,
+              "pcc": 0.999992311000824,
+              "equal": false
+            },
+            {
+              "relative_rms": 0.0048951758071780205,
+              "pcc": 0.9999925494194031,
+              "equal": false
+            },
+            {
+              "relative_rms": 0.004989465232938528,
+              "pcc": 0.9999921321868896,
+              "equal": false
+            },
+            {
+              "relative_rms": 0.005048823077231646,
+              "pcc": 0.9999931454658508,
+              "equal": false
+            }
+          ],
+          "reduced": [
+            {
+              "relative_rms": 0.00545444106683135,
+              "pcc": 0.9999907612800598,
+              "equal": false
+            },
+            {
+              "relative_rms": 0.00545444106683135,
+              "pcc": 0.9999907612800598,
+              "equal": false
+            },
+            {
+              "relative_rms": 0.00545444106683135,
+              "pcc": 0.9999907612800598,
+              "equal": false
+            },
+            {
+              "relative_rms": 0.00545444106683135,
+              "pcc": 0.9999907612800598,
+              "equal": false
+            }
+          ],
+          "baseline": [
+            {
+              "relative_rms": 0.0,
+              "pcc": 0.9999998211860657,
+              "equal": true
+            },
+            {
+              "relative_rms": 0.0,
+              "pcc": 0.9999998211860657,
+              "equal": true
+            },
+            {
+              "relative_rms": 0.0,
+              "pcc": 0.9999998211860657,
+              "equal": true
+            },
+            {
+              "relative_rms": 0.0,
+              "pcc": 0.9999998211860657,
+              "equal": true
+            }
+          ],
+          "passed": true
+        },
+        {
+          "input": 0,
+          "local": [
+            {
+              "relative_rms": 0.005018308758735657,
+              "pcc": 0.9999921917915344,
+              "equal": false
+            },
+            {
+              "relative_rms": 0.004863371606916189,
+              "pcc": 0.9999909400939941,
+              "equal": false
+            },
+            {
+              "relative_rms": 0.005226357840001583,
+              "pcc": 0.9999931454658508,
+              "equal": false
+            },
+            {
+              "relative_rms": 0.005338640417903662,
+              "pcc": 0.9999916553497314,
+              "equal": false
+            }
+          ],
+          "reduced": [
+            {
+              "relative_rms": 0.006305677816271782,
+              "pcc": 0.9999801516532898,
+              "equal": false
+            },
+            {
+              "relative_rms": 0.006305677816271782,
+              "pcc": 0.9999801516532898,
+              "equal": false
+            },
+            {
+              "relative_rms": 0.006305677816271782,
+              "pcc": 0.9999801516532898,
+              "equal": false
+            },
+            {
+              "relative_rms": 0.006305677816271782,
+              "pcc": 0.9999801516532898,
+              "equal": false
+            }
+          ],
+          "baseline": [
+            {
+              "relative_rms": 0.0,
+              "pcc": 0.9999996423721313,
+              "equal": true
+            },
+            {
+              "relative_rms": 0.0,
+              "pcc": 0.9999996423721313,
+              "equal": true
+            },
+            {
+              "relative_rms": 0.0,
+              "pcc": 0.9999996423721313,
+              "equal": true
+            },
+            {
+              "relative_rms": 0.0,
+              "pcc": 0.9999996423721313,
+              "equal": true
+            }
+          ],
+          "passed": true
+        }
+      ],
+      "accuracy_passed": true,
+      "changed_input_trace_passed": true,
+      "full_model_measured": false,
+      "trace_calls": 16,
+      "batch": 16,
+      "role": "output",
+      "delivery": "reshard",
+      "effective_delivery": "reshard",
+      "partial_layout": null,
+      "exact_baseline": true
+    },
+    {
+      "label": "native_input",
+      "input_layout": "public_dram",
+      "input_contract": {
+        "shape": [
+          16,
+          1,
+          1536
+        ],
+        "padded_shape": [
+          16,
+          32,
+          1536
+        ],
+        "memory": "dram",
+        "keep_sharded": false
+      },
+      "config": {
+        "readers": 2,
+        "cores": 8,
+        "block": 6
+      },
+      "geometry": {
+        "padded_n": 5120,
+        "weight_shard_width": 640,
+        "activation_shard_tiles": 6,
+        "encoded_weight_bytes": 8355840,
+        "multicast_blocks": 8
+      },
+      "samples_us": [
+        63.81006620358676,
+        63.85318760294467,
+        63.856104388833046,
+        63.843159878160805,
+        63.85534070432186
+      ],
+      "output_sha256": [
+        "9e9dfcf002b6d33b524a6ac981fd3fe89288bb462568c94644d91fd38db06891",
+        "9e9dfcf002b6d33b524a6ac981fd3fe89288bb462568c94644d91fd38db06891",
+        "9e9dfcf002b6d33b524a6ac981fd3fe89288bb462568c94644d91fd38db06891",
+        "9e9dfcf002b6d33b524a6ac981fd3fe89288bb462568c94644d91fd38db06891"
+      ],
+      "accuracy": [
+        {
+          "input": 0,
+          "local": [
+            {
+              "relative_rms": 0.005018308758735657,
+              "pcc": 0.9999921917915344,
+              "equal": false
+            },
+            {
+              "relative_rms": 0.004863371606916189,
+              "pcc": 0.9999909400939941,
+              "equal": false
+            },
+            {
+              "relative_rms": 0.005226357840001583,
+              "pcc": 0.9999931454658508,
+              "equal": false
+            },
+            {
+              "relative_rms": 0.005338640417903662,
+              "pcc": 0.9999916553497314,
+              "equal": false
+            }
+          ],
+          "reduced": [
+            {
+              "relative_rms": 0.006305677816271782,
+              "pcc": 0.9999801516532898,
+              "equal": false
+            },
+            {
+              "relative_rms": 0.006305677816271782,
+              "pcc": 0.9999801516532898,
+              "equal": false
+            },
+            {
+              "relative_rms": 0.006305677816271782,
+              "pcc": 0.9999801516532898,
+              "equal": false
+            },
+            {
+              "relative_rms": 0.006305677816271782,
+              "pcc": 0.9999801516532898,
+              "equal": false
+            }
+          ],
+          "baseline": [
+            {
+              "relative_rms": 0.0,
+              "pcc": 0.9999996423721313,
+              "equal": true
+            },
+            {
+              "relative_rms": 0.0,
+              "pcc": 0.9999996423721313,
+              "equal": true
+            },
+            {
+              "relative_rms": 0.0,
+              "pcc": 0.9999996423721313,
+              "equal": true
+            },
+            {
+              "relative_rms": 0.0,
+              "pcc": 0.9999996423721313,
+              "equal": true
+            }
+          ],
+          "passed": true
+        },
+        {
+          "input": 1,
+          "local": [
+            {
+              "relative_rms": 0.0052268486469984055,
+              "pcc": 0.999992311000824,
+              "equal": false
+            },
+            {
+              "relative_rms": 0.0048951758071780205,
+              "pcc": 0.9999925494194031,
+              "equal": false
+            },
+            {
+              "relative_rms": 0.004989465232938528,
+              "pcc": 0.9999921321868896,
+              "equal": false
+            },
+            {
+              "relative_rms": 0.005048823077231646,
+              "pcc": 0.9999931454658508,
+              "equal": false
+            }
+          ],
+          "reduced": [
+            {
+              "relative_rms": 0.00545444106683135,
+              "pcc": 0.9999907612800598,
+              "equal": false
+            },
+            {
+              "relative_rms": 0.00545444106683135,
+              "pcc": 0.9999907612800598,
+              "equal": false
+            },
+            {
+              "relative_rms": 0.00545444106683135,
+              "pcc": 0.9999907612800598,
+              "equal": false
+            },
+            {
+              "relative_rms": 0.00545444106683135,
+              "pcc": 0.9999907612800598,
+              "equal": false
+            }
+          ],
+          "baseline": [
+            {
+              "relative_rms": 0.0,
+              "pcc": 0.9999998211860657,
+              "equal": true
+            },
+            {
+              "relative_rms": 0.0,
+              "pcc": 0.9999998211860657,
+              "equal": true
+            },
+            {
+              "relative_rms": 0.0,
+              "pcc": 0.9999998211860657,
+              "equal": true
+            },
+            {
+              "relative_rms": 0.0,
+              "pcc": 0.9999998211860657,
+              "equal": true
+            }
+          ],
+          "passed": true
+        },
+        {
+          "input": 0,
+          "local": [
+            {
+              "relative_rms": 0.005018308758735657,
+              "pcc": 0.9999921917915344,
+              "equal": false
+            },
+            {
+              "relative_rms": 0.004863371606916189,
+              "pcc": 0.9999909400939941,
+              "equal": false
+            },
+            {
+              "relative_rms": 0.005226357840001583,
+              "pcc": 0.9999931454658508,
+              "equal": false
+            },
+            {
+              "relative_rms": 0.005338640417903662,
+              "pcc": 0.9999916553497314,
+              "equal": false
+            }
+          ],
+          "reduced": [
+            {
+              "relative_rms": 0.006305677816271782,
+              "pcc": 0.9999801516532898,
+              "equal": false
+            },
+            {
+              "relative_rms": 0.006305677816271782,
+              "pcc": 0.9999801516532898,
+              "equal": false
+            },
+            {
+              "relative_rms": 0.006305677816271782,
+              "pcc": 0.9999801516532898,
+              "equal": false
+            },
+            {
+              "relative_rms": 0.006305677816271782,
+              "pcc": 0.9999801516532898,
+              "equal": false
+            }
+          ],
+          "baseline": [
+            {
+              "relative_rms": 0.0,
+              "pcc": 0.9999996423721313,
+              "equal": true
+            },
+            {
+              "relative_rms": 0.0,
+              "pcc": 0.9999996423721313,
+              "equal": true
+            },
+            {
+              "relative_rms": 0.0,
+              "pcc": 0.9999996423721313,
+              "equal": true
+            },
+            {
+              "relative_rms": 0.0,
+              "pcc": 0.9999996423721313,
+              "equal": true
+            }
+          ],
+          "passed": true
+        }
+      ],
+      "accuracy_passed": true,
+      "changed_input_trace_passed": true,
+      "full_model_measured": false,
+      "trace_calls": 16,
+      "batch": 16,
+      "role": "output",
+      "delivery": "native_input",
+      "effective_delivery": "reshard",
+      "partial_layout": null,
+      "exact_baseline": true
+    },
+    {
+      "label": "matmul_output",
+      "input_layout": "public_dram",
+      "input_contract": {
+        "shape": [
+          16,
+          1,
+          1536
+        ],
+        "padded_shape": [
+          16,
+          32,
+          1536
+        ],
+        "memory": "dram",
+        "keep_sharded": false
+      },
+      "config": {
+        "readers": 2,
+        "cores": 8,
+        "block": 6
+      },
+      "geometry": {
+        "padded_n": 5120,
+        "weight_shard_width": 640,
+        "activation_shard_tiles": 6,
+        "encoded_weight_bytes": 8355840,
+        "multicast_blocks": 8
+      },
+      "samples_us": [
+        63.785034290049225,
+        63.838145579211414,
+        63.849813013803214,
+        63.832524756435305,
+        63.844010583125055
+      ],
+      "output_sha256": [
+        "9e9dfcf002b6d33b524a6ac981fd3fe89288bb462568c94644d91fd38db06891",
+        "9e9dfcf002b6d33b524a6ac981fd3fe89288bb462568c94644d91fd38db06891",
+        "9e9dfcf002b6d33b524a6ac981fd3fe89288bb462568c94644d91fd38db06891",
+        "9e9dfcf002b6d33b524a6ac981fd3fe89288bb462568c94644d91fd38db06891"
+      ],
+      "accuracy": [
+        {
+          "input": 0,
+          "local": [
+            {
+              "relative_rms": 0.005018308758735657,
+              "pcc": 0.9999921917915344,
+              "equal": false
+            },
+            {
+              "relative_rms": 0.004863371606916189,
+              "pcc": 0.9999909400939941,
+              "equal": false
+            },
+            {
+              "relative_rms": 0.005226357840001583,
+              "pcc": 0.9999931454658508,
+              "equal": false
+            },
+            {
+              "relative_rms": 0.005338640417903662,
+              "pcc": 0.9999916553497314,
+              "equal": false
+            }
+          ],
+          "reduced": [
+            {
+              "relative_rms": 0.006305677816271782,
+              "pcc": 0.9999801516532898,
+              "equal": false
+            },
+            {
+              "relative_rms": 0.006305677816271782,
+              "pcc": 0.9999801516532898,
+              "equal": false
+            },
+            {
+              "relative_rms": 0.006305677816271782,
+              "pcc": 0.9999801516532898,
+              "equal": false
+            },
+            {
+              "relative_rms": 0.006305677816271782,
+              "pcc": 0.9999801516532898,
+              "equal": false
+            }
+          ],
+          "baseline": [
+            {
+              "relative_rms": 0.0,
+              "pcc": 0.9999996423721313,
+              "equal": true
+            },
+            {
+              "relative_rms": 0.0,
+              "pcc": 0.9999996423721313,
+              "equal": true
+            },
+            {
+              "relative_rms": 0.0,
+              "pcc": 0.9999996423721313,
+              "equal": true
+            },
+            {
+              "relative_rms": 0.0,
+              "pcc": 0.9999996423721313,
+              "equal": true
+            }
+          ],
+          "passed": true
+        },
+        {
+          "input": 1,
+          "local": [
+            {
+              "relative_rms": 0.0052268486469984055,
+              "pcc": 0.999992311000824,
+              "equal": false
+            },
+            {
+              "relative_rms": 0.0048951758071780205,
+              "pcc": 0.9999925494194031,
+              "equal": false
+            },
+            {
+              "relative_rms": 0.004989465232938528,
+              "pcc": 0.9999921321868896,
+              "equal": false
+            },
+            {
+              "relative_rms": 0.005048823077231646,
+              "pcc": 0.9999931454658508,
+              "equal": false
+            }
+          ],
+          "reduced": [
+            {
+              "relative_rms": 0.00545444106683135,
+              "pcc": 0.9999907612800598,
+              "equal": false
+            },
+            {
+              "relative_rms": 0.00545444106683135,
+              "pcc": 0.9999907612800598,
+              "equal": false
+            },
+            {
+              "relative_rms": 0.00545444106683135,
+              "pcc": 0.9999907612800598,
+              "equal": false
+            },
+            {
+              "relative_rms": 0.00545444106683135,
+              "pcc": 0.9999907612800598,
+              "equal": false
+            }
+          ],
+          "baseline": [
+            {
+              "relative_rms": 0.0,
+              "pcc": 0.9999998211860657,
+              "equal": true
+            },
+            {
+              "relative_rms": 0.0,
+              "pcc": 0.9999998211860657,
+              "equal": true
+            },
+            {
+              "relative_rms": 0.0,
+              "pcc": 0.9999998211860657,
+              "equal": true
+            },
+            {
+              "relative_rms": 0.0,
+              "pcc": 0.9999998211860657,
+              "equal": true
+            }
+          ],
+          "passed": true
+        },
+        {
+          "input": 0,
+          "local": [
+            {
+              "relative_rms": 0.005018308758735657,
+              "pcc": 0.9999921917915344,
+              "equal": false
+            },
+            {
+              "relative_rms": 0.004863371606916189,
+              "pcc": 0.9999909400939941,
+              "equal": false
+            },
+            {
+              "relative_rms": 0.005226357840001583,
+              "pcc": 0.9999931454658508,
+              "equal": false
+            },
+            {
+              "relative_rms": 0.005338640417903662,
+              "pcc": 0.9999916553497314,
+              "equal": false
+            }
+          ],
+          "reduced": [
+            {
+              "relative_rms": 0.006305677816271782,
+              "pcc": 0.9999801516532898,
+              "equal": false
+            },
+            {
+              "relative_rms": 0.006305677816271782,
+              "pcc": 0.9999801516532898,
+              "equal": false
+            },
+            {
+              "relative_rms": 0.006305677816271782,
+              "pcc": 0.9999801516532898,
+              "equal": false
+            },
+            {
+              "relative_rms": 0.006305677816271782,
+              "pcc": 0.9999801516532898,
+              "equal": false
+            }
+          ],
+          "baseline": [
+            {
+              "relative_rms": 0.0,
+              "pcc": 0.9999996423721313,
+              "equal": true
+            },
+            {
+              "relative_rms": 0.0,
+              "pcc": 0.9999996423721313,
+              "equal": true
+            },
+            {
+              "relative_rms": 0.0,
+              "pcc": 0.9999996423721313,
+              "equal": true
+            },
+            {
+              "relative_rms": 0.0,
+              "pcc": 0.9999996423721313,
+              "equal": true
+            }
+          ],
+          "passed": true
+        }
+      ],
+      "accuracy_passed": true,
+      "changed_input_trace_passed": true,
+      "full_model_measured": false,
+      "trace_calls": 16,
+      "batch": 16,
+      "role": "output",
+      "delivery": "matmul_output",
+      "effective_delivery": "reshard",
+      "partial_layout": null,
+      "exact_baseline": true
+    },
+    {
+      "label": "after",
+      "input_layout": "public_dram",
+      "input_contract": {
+        "shape": [
+          16,
+          1,
+          1536
+        ],
+        "padded_shape": [
+          16,
+          32,
+          1536
+        ],
+        "memory": "dram",
+        "keep_sharded": false
+      },
+      "config": {
+        "readers": 2,
+        "cores": 8,
+        "block": 6
+      },
+      "geometry": {
+        "padded_n": 5120,
+        "weight_shard_width": 640,
+        "activation_shard_tiles": 6,
+        "encoded_weight_bytes": 8355840,
+        "multicast_blocks": 8
+      },
+      "samples_us": [
+        63.80241073202342,
+        63.85287386365235,
+        63.876697968225926,
+        63.86944296536967,
+        63.8725544558838
+      ],
+      "output_sha256": [
+        "9e9dfcf002b6d33b524a6ac981fd3fe89288bb462568c94644d91fd38db06891",
+        "9e9dfcf002b6d33b524a6ac981fd3fe89288bb462568c94644d91fd38db06891",
+        "9e9dfcf002b6d33b524a6ac981fd3fe89288bb462568c94644d91fd38db06891",
+        "9e9dfcf002b6d33b524a6ac981fd3fe89288bb462568c94644d91fd38db06891"
+      ],
+      "accuracy": [
+        {
+          "input": 0,
+          "local": [
+            {
+              "relative_rms": 0.005018308758735657,
+              "pcc": 0.9999921917915344,
+              "equal": false
+            },
+            {
+              "relative_rms": 0.004863371606916189,
+              "pcc": 0.9999909400939941,
+              "equal": false
+            },
+            {
+              "relative_rms": 0.005226357840001583,
+              "pcc": 0.9999931454658508,
+              "equal": false
+            },
+            {
+              "relative_rms": 0.005338640417903662,
+              "pcc": 0.9999916553497314,
+              "equal": false
+            }
+          ],
+          "reduced": [
+            {
+              "relative_rms": 0.006305677816271782,
+              "pcc": 0.9999801516532898,
+              "equal": false
+            },
+            {
+              "relative_rms": 0.006305677816271782,
+              "pcc": 0.9999801516532898,
+              "equal": false
+            },
+            {
+              "relative_rms": 0.006305677816271782,
+              "pcc": 0.9999801516532898,
+              "equal": false
+            },
+            {
+              "relative_rms": 0.006305677816271782,
+              "pcc": 0.9999801516532898,
+              "equal": false
+            }
+          ],
+          "baseline": [
+            {
+              "relative_rms": 0.0,
+              "pcc": 0.9999996423721313,
+              "equal": true
+            },
+            {
+              "relative_rms": 0.0,
+              "pcc": 0.9999996423721313,
+              "equal": true
+            },
+            {
+              "relative_rms": 0.0,
+              "pcc": 0.9999996423721313,
+              "equal": true
+            },
+            {
+              "relative_rms": 0.0,
+              "pcc": 0.9999996423721313,
+              "equal": true
+            }
+          ],
+          "passed": true
+        },
+        {
+          "input": 1,
+          "local": [
+            {
+              "relative_rms": 0.0052268486469984055,
+              "pcc": 0.999992311000824,
+              "equal": false
+            },
+            {
+              "relative_rms": 0.0048951758071780205,
+              "pcc": 0.9999925494194031,
+              "equal": false
+            },
+            {
+              "relative_rms": 0.004989465232938528,
+              "pcc": 0.9999921321868896,
+              "equal": false
+            },
+            {
+              "relative_rms": 0.005048823077231646,
+              "pcc": 0.9999931454658508,
+              "equal": false
+            }
+          ],
+          "reduced": [
+            {
+              "relative_rms": 0.00545444106683135,
+              "pcc": 0.9999907612800598,
+              "equal": false
+            },
+            {
+              "relative_rms": 0.00545444106683135,
+              "pcc": 0.9999907612800598,
+              "equal": false
+            },
+            {
+              "relative_rms": 0.00545444106683135,
+              "pcc": 0.9999907612800598,
+              "equal": false
+            },
+            {
+              "relative_rms": 0.00545444106683135,
+              "pcc": 0.9999907612800598,
+              "equal": false
+            }
+          ],
+          "baseline": [
+            {
+              "relative_rms": 0.0,
+              "pcc": 0.9999998211860657,
+              "equal": true
+            },
+            {
+              "relative_rms": 0.0,
+              "pcc": 0.9999998211860657,
+              "equal": true
+            },
+            {
+              "relative_rms": 0.0,
+              "pcc": 0.9999998211860657,
+              "equal": true
+            },
+            {
+              "relative_rms": 0.0,
+              "pcc": 0.9999998211860657,
+              "equal": true
+            }
+          ],
+          "passed": true
+        },
+        {
+          "input": 0,
+          "local": [
+            {
+              "relative_rms": 0.005018308758735657,
+              "pcc": 0.9999921917915344,
+              "equal": false
+            },
+            {
+              "relative_rms": 0.004863371606916189,
+              "pcc": 0.9999909400939941,
+              "equal": false
+            },
+            {
+              "relative_rms": 0.005226357840001583,
+              "pcc": 0.9999931454658508,
+              "equal": false
+            },
+            {
+              "relative_rms": 0.005338640417903662,
+              "pcc": 0.9999916553497314,
+              "equal": false
+            }
+          ],
+          "reduced": [
+            {
+              "relative_rms": 0.006305677816271782,
+              "pcc": 0.9999801516532898,
+              "equal": false
+            },
+            {
+              "relative_rms": 0.006305677816271782,
+              "pcc": 0.9999801516532898,
+              "equal": false
+            },
+            {
+              "relative_rms": 0.006305677816271782,
+              "pcc": 0.9999801516532898,
+              "equal": false
+            },
+            {
+              "relative_rms": 0.006305677816271782,
+              "pcc": 0.9999801516532898,
+              "equal": false
+            }
+          ],
+          "baseline": [
+            {
+              "relative_rms": 0.0,
+              "pcc": 0.9999996423721313,
+              "equal": true
+            },
+            {
+              "relative_rms": 0.0,
+              "pcc": 0.9999996423721313,
+              "equal": true
+            },
+            {
+              "relative_rms": 0.0,
+              "pcc": 0.9999996423721313,
+              "equal": true
+            },
+            {
+              "relative_rms": 0.0,
+              "pcc": 0.9999996423721313,
+              "equal": true
+            }
+          ],
+          "passed": true
+        }
+      ],
+      "accuracy_passed": true,
+      "changed_input_trace_passed": true,
+      "full_model_measured": false,
+      "trace_calls": 16,
+      "batch": 16,
+      "role": "output",
+      "delivery": "reshard",
+      "effective_delivery": "reshard",
+      "partial_layout": null,
+      "exact_baseline": true
+    },
+    {
+      "label": "before",
+      "input_layout": "compact_l1",
+      "input_contract": {
+        "shape": [
+          1,
+          1,
+          32,
+          1536
+        ],
+        "padded_shape": [
+          1,
+          1,
+          32,
+          1536
+        ],
+        "memory": "l1",
+        "keep_sharded": true
+      },
+      "config": {
+        "readers": 2,
+        "cores": 8,
+        "block": 6
+      },
+      "geometry": {
+        "padded_n": 5120,
+        "weight_shard_width": 640,
+        "activation_shard_tiles": 6,
+        "encoded_weight_bytes": 8355840,
+        "multicast_blocks": 8
+      },
+      "samples_us": [
+        52.98171396134421,
+        53.00688877468929,
+        53.022111824247986,
+        52.997368038631976,
+        53.01848141243681
+      ],
+      "output_sha256": [
+        "31e3230ecfacad4f3cc73a6774055fa350f6c26f0352f6e6cce03845ea010735",
+        "31e3230ecfacad4f3cc73a6774055fa350f6c26f0352f6e6cce03845ea010735",
+        "31e3230ecfacad4f3cc73a6774055fa350f6c26f0352f6e6cce03845ea010735",
+        "31e3230ecfacad4f3cc73a6774055fa350f6c26f0352f6e6cce03845ea010735"
+      ],
+      "accuracy": [
+        {
+          "input": 0,
+          "local": [
+            {
+              "relative_rms": 0.00577682675793767,
+              "pcc": 0.9999904036521912,
+              "equal": false
+            },
+            {
+              "relative_rms": 0.005216056946665049,
+              "pcc": 0.9999929666519165,
+              "equal": false
+            },
+            {
+              "relative_rms": 0.005675791762769222,
+              "pcc": 0.9999911785125732,
+              "equal": false
+            },
+            {
+              "relative_rms": 0.005026534665375948,
+              "pcc": 0.999993085861206,
+              "equal": false
+            }
+          ],
+          "reduced": [
+            {
+              "relative_rms": 0.005075037945061922,
+              "pcc": 0.9999903440475464,
+              "equal": false
+            },
+            {
+              "relative_rms": 0.005075037945061922,
+              "pcc": 0.9999903440475464,
+              "equal": false
+            },
+            {
+              "relative_rms": 0.005075037945061922,
+              "pcc": 0.9999903440475464,
+              "equal": false
+            },
+            {
+              "relative_rms": 0.005075037945061922,
+              "pcc": 0.9999903440475464,
+              "equal": false
+            }
+          ],
+          "baseline": [
+            {
+              "relative_rms": 0.0,
+              "pcc": 0.9999996423721313,
+              "equal": true
+            },
+            {
+              "relative_rms": 0.0,
+              "pcc": 0.9999996423721313,
+              "equal": true
+            },
+            {
+              "relative_rms": 0.0,
+              "pcc": 0.9999996423721313,
+              "equal": true
+            },
+            {
+              "relative_rms": 0.0,
+              "pcc": 0.9999996423721313,
+              "equal": true
+            }
+          ],
+          "passed": true
+        },
+        {
+          "input": 1,
+          "local": [
+            {
+              "relative_rms": 0.0050739203579723835,
+              "pcc": 0.9999920725822449,
+              "equal": false
+            },
+            {
+              "relative_rms": 0.005043444689363241,
+              "pcc": 0.9999923706054688,
+              "equal": false
+            },
+            {
+              "relative_rms": 0.004874208476394415,
+              "pcc": 0.9999924898147583,
+              "equal": false
+            },
+            {
+              "relative_rms": 0.005031100474298,
+              "pcc": 0.9999930262565613,
+              "equal": false
+            }
+          ],
+          "reduced": [
+            {
+              "relative_rms": 0.005052035208791494,
+              "pcc": 0.9999898076057434,
+              "equal": false
+            },
+            {
+              "relative_rms": 0.005052035208791494,
+              "pcc": 0.9999898076057434,
+              "equal": false
+            },
+            {
+              "relative_rms": 0.005052035208791494,
+              "pcc": 0.9999898076057434,
+              "equal": false
+            },
+            {
+              "relative_rms": 0.005052035208791494,
+              "pcc": 0.9999898076057434,
+              "equal": false
+            }
+          ],
+          "baseline": [
+            {
+              "relative_rms": 0.0,
+              "pcc": 0.9999996423721313,
+              "equal": true
+            },
+            {
+              "relative_rms": 0.0,
+              "pcc": 0.9999996423721313,
+              "equal": true
+            },
+            {
+              "relative_rms": 0.0,
+              "pcc": 0.9999996423721313,
+              "equal": true
+            },
+            {
+              "relative_rms": 0.0,
+              "pcc": 0.9999996423721313,
+              "equal": true
+            }
+          ],
+          "passed": true
+        },
+        {
+          "input": 0,
+          "local": [
+            {
+              "relative_rms": 0.00577682675793767,
+              "pcc": 0.9999904036521912,
+              "equal": false
+            },
+            {
+              "relative_rms": 0.005216056946665049,
+              "pcc": 0.9999929666519165,
+              "equal": false
+            },
+            {
+              "relative_rms": 0.005675791762769222,
+              "pcc": 0.9999911785125732,
+              "equal": false
+            },
+            {
+              "relative_rms": 0.005026534665375948,
+              "pcc": 0.999993085861206,
+              "equal": false
+            }
+          ],
+          "reduced": [
+            {
+              "relative_rms": 0.005075037945061922,
+              "pcc": 0.9999903440475464,
+              "equal": false
+            },
+            {
+              "relative_rms": 0.005075037945061922,
+              "pcc": 0.9999903440475464,
+              "equal": false
+            },
+            {
+              "relative_rms": 0.005075037945061922,
+              "pcc": 0.9999903440475464,
+              "equal": false
+            },
+            {
+              "relative_rms": 0.005075037945061922,
+              "pcc": 0.9999903440475464,
+              "equal": false
+            }
+          ],
+          "baseline": [
+            {
+              "relative_rms": 0.0,
+              "pcc": 0.9999996423721313,
+              "equal": true
+            },
+            {
+              "relative_rms": 0.0,
+              "pcc": 0.9999996423721313,
+              "equal": true
+            },
+            {
+              "relative_rms": 0.0,
+              "pcc": 0.9999996423721313,
+              "equal": true
+            },
+            {
+              "relative_rms": 0.0,
+              "pcc": 0.9999996423721313,
+              "equal": true
+            }
+          ],
+          "passed": true
+        }
+      ],
+      "accuracy_passed": true,
+      "changed_input_trace_passed": true,
+      "full_model_measured": false,
+      "trace_calls": 16,
+      "batch": 32,
+      "role": "output",
+      "delivery": "reshard",
+      "effective_delivery": "reshard",
+      "partial_layout": {
+        "shape": [
+          1,
+          1,
+          32,
+          5120
+        ],
+        "shard_shape": [
+          32,
+          640
+        ],
+        "cores": 8,
+        "grid": "{[0-0 - 7-0]}"
+      },
+      "exact_baseline": true
+    },
+    {
+      "label": "native_input",
+      "input_layout": "compact_l1",
+      "input_contract": {
+        "shape": [
+          1,
+          1,
+          32,
+          1536
+        ],
+        "padded_shape": [
+          1,
+          1,
+          32,
+          1536
+        ],
+        "memory": "l1",
+        "keep_sharded": true
+      },
+      "config": {
+        "readers": 2,
+        "cores": 8,
+        "block": 6
+      },
+      "geometry": {
+        "padded_n": 5120,
+        "weight_shard_width": 640,
+        "activation_shard_tiles": 6,
+        "encoded_weight_bytes": 8355840,
+        "multicast_blocks": 8
+      },
+      "samples_us": [
+        50.46085192589089,
+        50.51749380072579,
+        50.53022498032078,
+        50.530018052086234,
+        50.51798128988594
+      ],
+      "output_sha256": [
+        "31e3230ecfacad4f3cc73a6774055fa350f6c26f0352f6e6cce03845ea010735",
+        "31e3230ecfacad4f3cc73a6774055fa350f6c26f0352f6e6cce03845ea010735",
+        "31e3230ecfacad4f3cc73a6774055fa350f6c26f0352f6e6cce03845ea010735",
+        "31e3230ecfacad4f3cc73a6774055fa350f6c26f0352f6e6cce03845ea010735"
+      ],
+      "accuracy": [
+        {
+          "input": 0,
+          "local": [
+            {
+              "relative_rms": 0.00577682675793767,
+              "pcc": 0.9999904036521912,
+              "equal": false
+            },
+            {
+              "relative_rms": 0.005216056946665049,
+              "pcc": 0.9999929666519165,
+              "equal": false
+            },
+            {
+              "relative_rms": 0.005675791762769222,
+              "pcc": 0.9999911785125732,
+              "equal": false
+            },
+            {
+              "relative_rms": 0.005026534665375948,
+              "pcc": 0.999993085861206,
+              "equal": false
+            }
+          ],
+          "reduced": [
+            {
+              "relative_rms": 0.005075037945061922,
+              "pcc": 0.9999903440475464,
+              "equal": false
+            },
+            {
+              "relative_rms": 0.005075037945061922,
+              "pcc": 0.9999903440475464,
+              "equal": false
+            },
+            {
+              "relative_rms": 0.005075037945061922,
+              "pcc": 0.9999903440475464,
+              "equal": false
+            },
+            {
+              "relative_rms": 0.005075037945061922,
+              "pcc": 0.9999903440475464,
+              "equal": false
+            }
+          ],
+          "baseline": [
+            {
+              "relative_rms": 0.0,
+              "pcc": 0.9999996423721313,
+              "equal": true
+            },
+            {
+              "relative_rms": 0.0,
+              "pcc": 0.9999996423721313,
+              "equal": true
+            },
+            {
+              "relative_rms": 0.0,
+              "pcc": 0.9999996423721313,
+              "equal": true
+            },
+            {
+              "relative_rms": 0.0,
+              "pcc": 0.9999996423721313,
+              "equal": true
+            }
+          ],
+          "passed": true
+        },
+        {
+          "input": 1,
+          "local": [
+            {
+              "relative_rms": 0.0050739203579723835,
+              "pcc": 0.9999920725822449,
+              "equal": false
+            },
+            {
+              "relative_rms": 0.005043444689363241,
+              "pcc": 0.9999923706054688,
+              "equal": false
+            },
+            {
+              "relative_rms": 0.004874208476394415,
+              "pcc": 0.9999924898147583,
+              "equal": false
+            },
+            {
+              "relative_rms": 0.005031100474298,
+              "pcc": 0.9999930262565613,
+              "equal": false
+            }
+          ],
+          "reduced": [
+            {
+              "relative_rms": 0.005052035208791494,
+              "pcc": 0.9999898076057434,
+              "equal": false
+            },
+            {
+              "relative_rms": 0.005052035208791494,
+              "pcc": 0.9999898076057434,
+              "equal": false
+            },
+            {
+              "relative_rms": 0.005052035208791494,
+              "pcc": 0.9999898076057434,
+              "equal": false
+            },
+            {
+              "relative_rms": 0.005052035208791494,
+              "pcc": 0.9999898076057434,
+              "equal": false
+            }
+          ],
+          "baseline": [
+            {
+              "relative_rms": 0.0,
+              "pcc": 0.9999996423721313,
+              "equal": true
+            },
+            {
+              "relative_rms": 0.0,
+              "pcc": 0.9999996423721313,
+              "equal": true
+            },
+            {
+              "relative_rms": 0.0,
+              "pcc": 0.9999996423721313,
+              "equal": true
+            },
+            {
+              "relative_rms": 0.0,
+              "pcc": 0.9999996423721313,
+              "equal": true
+            }
+          ],
+          "passed": true
+        },
+        {
+          "input": 0,
+          "local": [
+            {
+              "relative_rms": 0.00577682675793767,
+              "pcc": 0.9999904036521912,
+              "equal": false
+            },
+            {
+              "relative_rms": 0.005216056946665049,
+              "pcc": 0.9999929666519165,
+              "equal": false
+            },
+            {
+              "relative_rms": 0.005675791762769222,
+              "pcc": 0.9999911785125732,
+              "equal": false
+            },
+            {
+              "relative_rms": 0.005026534665375948,
+              "pcc": 0.999993085861206,
+              "equal": false
+            }
+          ],
+          "reduced": [
+            {
+              "relative_rms": 0.005075037945061922,
+              "pcc": 0.9999903440475464,
+              "equal": false
+            },
+            {
+              "relative_rms": 0.005075037945061922,
+              "pcc": 0.9999903440475464,
+              "equal": false
+            },
+            {
+              "relative_rms": 0.005075037945061922,
+              "pcc": 0.9999903440475464,
+              "equal": false
+            },
+            {
+              "relative_rms": 0.005075037945061922,
+              "pcc": 0.9999903440475464,
+              "equal": false
+            }
+          ],
+          "baseline": [
+            {
+              "relative_rms": 0.0,
+              "pcc": 0.9999996423721313,
+              "equal": true
+            },
+            {
+              "relative_rms": 0.0,
+              "pcc": 0.9999996423721313,
+              "equal": true
+            },
+            {
+              "relative_rms": 0.0,
+              "pcc": 0.9999996423721313,
+              "equal": true
+            },
+            {
+              "relative_rms": 0.0,
+              "pcc": 0.9999996423721313,
+              "equal": true
+            }
+          ],
+          "passed": true
+        }
+      ],
+      "accuracy_passed": true,
+      "changed_input_trace_passed": true,
+      "full_model_measured": false,
+      "trace_calls": 16,
+      "batch": 32,
+      "role": "output",
+      "delivery": "native_input",
+      "effective_delivery": "native_input",
+      "partial_layout": {
+        "shape": [
+          1,
+          1,
+          32,
+          5120
+        ],
+        "shard_shape": [
+          32,
+          640
+        ],
+        "cores": 8,
+        "grid": "{[0-0 - 7-0]}"
+      },
+      "exact_baseline": true
+    },
+    {
+      "label": "matmul_output",
+      "input_layout": "compact_l1",
+      "input_contract": {
+        "shape": [
+          1,
+          1,
+          32,
+          1536
+        ],
+        "padded_shape": [
+          1,
+          1,
+          32,
+          1536
+        ],
+        "memory": "l1",
+        "keep_sharded": true
+      },
+      "config": {
+        "readers": 2,
+        "cores": 8,
+        "block": 6
+      },
+      "geometry": {
+        "padded_n": 5120,
+        "weight_shard_width": 640,
+        "activation_shard_tiles": 6,
+        "encoded_weight_bytes": 8355840,
+        "multicast_blocks": 8
+      },
+      "samples_us": [
+        49.312617629766464,
+        49.351702036801726,
+        49.36052195262164,
+        49.345473817083985,
+        49.34098571538925
+      ],
+      "output_sha256": [
+        "31e3230ecfacad4f3cc73a6774055fa350f6c26f0352f6e6cce03845ea010735",
+        "31e3230ecfacad4f3cc73a6774055fa350f6c26f0352f6e6cce03845ea010735",
+        "31e3230ecfacad4f3cc73a6774055fa350f6c26f0352f6e6cce03845ea010735",
+        "31e3230ecfacad4f3cc73a6774055fa350f6c26f0352f6e6cce03845ea010735"
+      ],
+      "accuracy": [
+        {
+          "input": 0,
+          "local": [
+            {
+              "relative_rms": 0.00577682675793767,
+              "pcc": 0.9999904036521912,
+              "equal": false
+            },
+            {
+              "relative_rms": 0.005216056946665049,
+              "pcc": 0.9999929666519165,
+              "equal": false
+            },
+            {
+              "relative_rms": 0.005675791762769222,
+              "pcc": 0.9999911785125732,
+              "equal": false
+            },
+            {
+              "relative_rms": 0.005026534665375948,
+              "pcc": 0.999993085861206,
+              "equal": false
+            }
+          ],
+          "reduced": [
+            {
+              "relative_rms": 0.005075037945061922,
+              "pcc": 0.9999903440475464,
+              "equal": false
+            },
+            {
+              "relative_rms": 0.005075037945061922,
+              "pcc": 0.9999903440475464,
+              "equal": false
+            },
+            {
+              "relative_rms": 0.005075037945061922,
+              "pcc": 0.9999903440475464,
+              "equal": false
+            },
+            {
+              "relative_rms": 0.005075037945061922,
+              "pcc": 0.9999903440475464,
+              "equal": false
+            }
+          ],
+          "baseline": [
+            {
+              "relative_rms": 0.0,
+              "pcc": 0.9999996423721313,
+              "equal": true
+            },
+            {
+              "relative_rms": 0.0,
+              "pcc": 0.9999996423721313,
+              "equal": true
+            },
+            {
+              "relative_rms": 0.0,
+              "pcc": 0.9999996423721313,
+              "equal": true
+            },
+            {
+              "relative_rms": 0.0,
+              "pcc": 0.9999996423721313,
+              "equal": true
+            }
+          ],
+          "passed": true
+        },
+        {
+          "input": 1,
+          "local": [
+            {
+              "relative_rms": 0.0050739203579723835,
+              "pcc": 0.9999920725822449,
+              "equal": false
+            },
+            {
+              "relative_rms": 0.005043444689363241,
+              "pcc": 0.9999923706054688,
+              "equal": false
+            },
+            {
+              "relative_rms": 0.004874208476394415,
+              "pcc": 0.9999924898147583,
+              "equal": false
+            },
+            {
+              "relative_rms": 0.005031100474298,
+              "pcc": 0.9999930262565613,
+              "equal": false
+            }
+          ],
+          "reduced": [
+            {
+              "relative_rms": 0.005052035208791494,
+              "pcc": 0.9999898076057434,
+              "equal": false
+            },
+            {
+              "relative_rms": 0.005052035208791494,
+              "pcc": 0.9999898076057434,
+              "equal": false
+            },
+            {
+              "relative_rms": 0.005052035208791494,
+              "pcc": 0.9999898076057434,
+              "equal": false
+            },
+            {
+              "relative_rms": 0.005052035208791494,
+              "pcc": 0.9999898076057434,
+              "equal": false
+            }
+          ],
+          "baseline": [
+            {
+              "relative_rms": 0.0,
+              "pcc": 0.9999996423721313,
+              "equal": true
+            },
+            {
+              "relative_rms": 0.0,
+              "pcc": 0.9999996423721313,
+              "equal": true
+            },
+            {
+              "relative_rms": 0.0,
+              "pcc": 0.9999996423721313,
+              "equal": true
+            },
+            {
+              "relative_rms": 0.0,
+              "pcc": 0.9999996423721313,
+              "equal": true
+            }
+          ],
+          "passed": true
+        },
+        {
+          "input": 0,
+          "local": [
+            {
+              "relative_rms": 0.00577682675793767,
+              "pcc": 0.9999904036521912,
+              "equal": false
+            },
+            {
+              "relative_rms": 0.005216056946665049,
+              "pcc": 0.9999929666519165,
+              "equal": false
+            },
+            {
+              "relative_rms": 0.005675791762769222,
+              "pcc": 0.9999911785125732,
+              "equal": false
+            },
+            {
+              "relative_rms": 0.005026534665375948,
+              "pcc": 0.999993085861206,
+              "equal": false
+            }
+          ],
+          "reduced": [
+            {
+              "relative_rms": 0.005075037945061922,
+              "pcc": 0.9999903440475464,
+              "equal": false
+            },
+            {
+              "relative_rms": 0.005075037945061922,
+              "pcc": 0.9999903440475464,
+              "equal": false
+            },
+            {
+              "relative_rms": 0.005075037945061922,
+              "pcc": 0.9999903440475464,
+              "equal": false
+            },
+            {
+              "relative_rms": 0.005075037945061922,
+              "pcc": 0.9999903440475464,
+              "equal": false
+            }
+          ],
+          "baseline": [
+            {
+              "relative_rms": 0.0,
+              "pcc": 0.9999996423721313,
+              "equal": true
+            },
+            {
+              "relative_rms": 0.0,
+              "pcc": 0.9999996423721313,
+              "equal": true
+            },
+            {
+              "relative_rms": 0.0,
+              "pcc": 0.9999996423721313,
+              "equal": true
+            },
+            {
+              "relative_rms": 0.0,
+              "pcc": 0.9999996423721313,
+              "equal": true
+            }
+          ],
+          "passed": true
+        }
+      ],
+      "accuracy_passed": true,
+      "changed_input_trace_passed": true,
+      "full_model_measured": false,
+      "trace_calls": 16,
+      "batch": 32,
+      "role": "output",
+      "delivery": "matmul_output",
+      "effective_delivery": "matmul_output",
+      "partial_layout": {
+        "shape": [
+          1,
+          1,
+          32,
+          5120
+        ],
+        "shard_shape": [
+          32,
+          128
+        ],
+        "cores": 40,
+        "grid": "{[0-0 - 11-2], [0-3 - 3-3]}"
+      },
+      "exact_baseline": true
+    },
+    {
+      "label": "after",
+      "input_layout": "compact_l1",
+      "input_contract": {
+        "shape": [
+          1,
+          1,
+          32,
+          1536
+        ],
+        "padded_shape": [
+          1,
+          1,
+          32,
+          1536
+        ],
+        "memory": "l1",
+        "keep_sharded": true
+      },
+      "config": {
+        "readers": 2,
+        "cores": 8,
+        "block": 6
+      },
+      "geometry": {
+        "padded_n": 5120,
+        "weight_shard_width": 640,
+        "activation_shard_tiles": 6,
+        "encoded_weight_bytes": 8355840,
+        "multicast_blocks": 8
+      },
+      "samples_us": [
+        52.97243071254343,
+        53.01925732055679,
+        53.041215578559786,
+        53.031150018796325,
+        53.027920657768846
+      ],
+      "output_sha256": [
+        "31e3230ecfacad4f3cc73a6774055fa350f6c26f0352f6e6cce03845ea010735",
+        "31e3230ecfacad4f3cc73a6774055fa350f6c26f0352f6e6cce03845ea010735",
+        "31e3230ecfacad4f3cc73a6774055fa350f6c26f0352f6e6cce03845ea010735",
+        "31e3230ecfacad4f3cc73a6774055fa350f6c26f0352f6e6cce03845ea010735"
+      ],
+      "accuracy": [
+        {
+          "input": 0,
+          "local": [
+            {
+              "relative_rms": 0.00577682675793767,
+              "pcc": 0.9999904036521912,
+              "equal": false
+            },
+            {
+              "relative_rms": 0.005216056946665049,
+              "pcc": 0.9999929666519165,
+              "equal": false
+            },
+            {
+              "relative_rms": 0.005675791762769222,
+              "pcc": 0.9999911785125732,
+              "equal": false
+            },
+            {
+              "relative_rms": 0.005026534665375948,
+              "pcc": 0.999993085861206,
+              "equal": false
+            }
+          ],
+          "reduced": [
+            {
+              "relative_rms": 0.005075037945061922,
+              "pcc": 0.9999903440475464,
+              "equal": false
+            },
+            {
+              "relative_rms": 0.005075037945061922,
+              "pcc": 0.9999903440475464,
+              "equal": false
+            },
+            {
+              "relative_rms": 0.005075037945061922,
+              "pcc": 0.9999903440475464,
+              "equal": false
+            },
+            {
+              "relative_rms": 0.005075037945061922,
+              "pcc": 0.9999903440475464,
+              "equal": false
+            }
+          ],
+          "baseline": [
+            {
+              "relative_rms": 0.0,
+              "pcc": 0.9999996423721313,
+              "equal": true
+            },
+            {
+              "relative_rms": 0.0,
+              "pcc": 0.9999996423721313,
+              "equal": true
+            },
+            {
+              "relative_rms": 0.0,
+              "pcc": 0.9999996423721313,
+              "equal": true
+            },
+            {
+              "relative_rms": 0.0,
+              "pcc": 0.9999996423721313,
+              "equal": true
+            }
+          ],
+          "passed": true
+        },
+        {
+          "input": 1,
+          "local": [
+            {
+              "relative_rms": 0.0050739203579723835,
+              "pcc": 0.9999920725822449,
+              "equal": false
+            },
+            {
+              "relative_rms": 0.005043444689363241,
+              "pcc": 0.9999923706054688,
+              "equal": false
+            },
+            {
+              "relative_rms": 0.004874208476394415,
+              "pcc": 0.9999924898147583,
+              "equal": false
+            },
+            {
+              "relative_rms": 0.005031100474298,
+              "pcc": 0.9999930262565613,
+              "equal": false
+            }
+          ],
+          "reduced": [
+            {
+              "relative_rms": 0.005052035208791494,
+              "pcc": 0.9999898076057434,
+              "equal": false
+            },
+            {
+              "relative_rms": 0.005052035208791494,
+              "pcc": 0.9999898076057434,
+              "equal": false
+            },
+            {
+              "relative_rms": 0.005052035208791494,
+              "pcc": 0.9999898076057434,
+              "equal": false
+            },
+            {
+              "relative_rms": 0.005052035208791494,
+              "pcc": 0.9999898076057434,
+              "equal": false
+            }
+          ],
+          "baseline": [
+            {
+              "relative_rms": 0.0,
+              "pcc": 0.9999996423721313,
+              "equal": true
+            },
+            {
+              "relative_rms": 0.0,
+              "pcc": 0.9999996423721313,
+              "equal": true
+            },
+            {
+              "relative_rms": 0.0,
+              "pcc": 0.9999996423721313,
+              "equal": true
+            },
+            {
+              "relative_rms": 0.0,
+              "pcc": 0.9999996423721313,
+              "equal": true
+            }
+          ],
+          "passed": true
+        },
+        {
+          "input": 0,
+          "local": [
+            {
+              "relative_rms": 0.00577682675793767,
+              "pcc": 0.9999904036521912,
+              "equal": false
+            },
+            {
+              "relative_rms": 0.005216056946665049,
+              "pcc": 0.9999929666519165,
+              "equal": false
+            },
+            {
+              "relative_rms": 0.005675791762769222,
+              "pcc": 0.9999911785125732,
+              "equal": false
+            },
+            {
+              "relative_rms": 0.005026534665375948,
+              "pcc": 0.999993085861206,
+              "equal": false
+            }
+          ],
+          "reduced": [
+            {
+              "relative_rms": 0.005075037945061922,
+              "pcc": 0.9999903440475464,
+              "equal": false
+            },
+            {
+              "relative_rms": 0.005075037945061922,
+              "pcc": 0.9999903440475464,
+              "equal": false
+            },
+            {
+              "relative_rms": 0.005075037945061922,
+              "pcc": 0.9999903440475464,
+              "equal": false
+            },
+            {
+              "relative_rms": 0.005075037945061922,
+              "pcc": 0.9999903440475464,
+              "equal": false
+            }
+          ],
+          "baseline": [
+            {
+              "relative_rms": 0.0,
+              "pcc": 0.9999996423721313,
+              "equal": true
+            },
+            {
+              "relative_rms": 0.0,
+              "pcc": 0.9999996423721313,
+              "equal": true
+            },
+            {
+              "relative_rms": 0.0,
+              "pcc": 0.9999996423721313,
+              "equal": true
+            },
+            {
+              "relative_rms": 0.0,
+              "pcc": 0.9999996423721313,
+              "equal": true
+            }
+          ],
+          "passed": true
+        }
+      ],
+      "accuracy_passed": true,
+      "changed_input_trace_passed": true,
+      "full_model_measured": false,
+      "trace_calls": 16,
+      "batch": 32,
+      "role": "output",
+      "delivery": "reshard",
+      "effective_delivery": "reshard",
+      "partial_layout": {
+        "shape": [
+          1,
+          1,
+          32,
+          5120
+        ],
+        "shard_shape": [
+          32,
+          640
+        ],
+        "cores": 8,
+        "grid": "{[0-0 - 7-0]}"
+      },
+      "exact_baseline": true
+    },
+    {
+      "label": "before",
+      "input_layout": "compact_l1",
+      "input_contract": {
+        "shape": [
+          1,
+          1,
+          32,
+          4352
+        ],
+        "padded_shape": [
+          1,
+          1,
+          32,
+          4352
+        ],
+        "memory": "l1",
+        "keep_sharded": true
+      },
+      "config": {
+        "readers": 2,
+        "cores": 8,
+        "block": 17
+      },
+      "geometry": {
+        "padded_n": 5120,
+        "weight_shard_width": 640,
+        "activation_shard_tiles": 17,
+        "encoded_weight_bytes": 23674880,
+        "multicast_blocks": 8
+      },
+      "samples_us": [
+        94.16796994628385,
+        94.23026378499344,
+        94.23435723874718,
+        94.23390671145171,
+        94.22564442502335
+      ],
+      "output_sha256": [
+        "19552fbd992061d2b75d07f09d7ce085363f4ede8dfc9ce4b21600b989759583",
+        "19552fbd992061d2b75d07f09d7ce085363f4ede8dfc9ce4b21600b989759583",
+        "19552fbd992061d2b75d07f09d7ce085363f4ede8dfc9ce4b21600b989759583",
+        "19552fbd992061d2b75d07f09d7ce085363f4ede8dfc9ce4b21600b989759583"
+      ],
+      "accuracy": [
+        {
+          "input": 0,
+          "local": [
+            {
+              "relative_rms": 0.004999724216759205,
+              "pcc": 0.9999932646751404,
+              "equal": false
+            },
+            {
+              "relative_rms": 0.004930770955979824,
+              "pcc": 0.9999926686286926,
+              "equal": false
+            },
+            {
+              "relative_rms": 0.005057347472757101,
+              "pcc": 0.9999932050704956,
+              "equal": false
+            },
+            {
+              "relative_rms": 0.00477776862680912,
+              "pcc": 0.999993622303009,
+              "equal": false
+            }
+          ],
+          "reduced": [
+            {
+              "relative_rms": 0.004684652201831341,
+              "pcc": 0.9999911189079285,
+              "equal": false
+            },
+            {
+              "relative_rms": 0.004684652201831341,
+              "pcc": 0.9999911189079285,
+              "equal": false
+            },
+            {
+              "relative_rms": 0.004684652201831341,
+              "pcc": 0.9999911189079285,
+              "equal": false
+            },
+            {
+              "relative_rms": 0.004684652201831341,
+              "pcc": 0.9999911189079285,
+              "equal": false
+            }
+          ],
+          "baseline": [
+            {
+              "relative_rms": 0.0,
+              "pcc": 0.999999463558197,
+              "equal": true
+            },
+            {
+              "relative_rms": 0.0,
+              "pcc": 0.999999463558197,
+              "equal": true
+            },
+            {
+              "relative_rms": 0.0,
+              "pcc": 0.999999463558197,
+              "equal": true
+            },
+            {
+              "relative_rms": 0.0,
+              "pcc": 0.999999463558197,
+              "equal": true
+            }
+          ],
+          "passed": true
+        },
+        {
+          "input": 1,
+          "local": [
+            {
+              "relative_rms": 0.004817425739020109,
+              "pcc": 0.9999935030937195,
+              "equal": false
+            },
+            {
+              "relative_rms": 0.004808508325368166,
+              "pcc": 0.9999932646751404,
+              "equal": false
+            },
+            {
+              "relative_rms": 0.004833235405385494,
+              "pcc": 0.999993622303009,
+              "equal": false
+            },
+            {
+              "relative_rms": 0.004755978472530842,
+              "pcc": 0.9999937415122986,
+              "equal": false
+            }
+          ],
+          "reduced": [
+            {
+              "relative_rms": 0.004911073017865419,
+              "pcc": 0.9999909996986389,
+              "equal": false
+            },
+            {
+              "relative_rms": 0.004911073017865419,
+              "pcc": 0.9999909996986389,
+              "equal": false
+            },
+            {
+              "relative_rms": 0.004911073017865419,
+              "pcc": 0.9999909996986389,
+              "equal": false
+            },
+            {
+              "relative_rms": 0.004911073017865419,
+              "pcc": 0.9999909996986389,
+              "equal": false
+            }
+          ],
+          "baseline": [
+            {
+              "relative_rms": 0.0,
+              "pcc": 0.9999998211860657,
+              "equal": true
+            },
+            {
+              "relative_rms": 0.0,
+              "pcc": 0.9999998211860657,
+              "equal": true
+            },
+            {
+              "relative_rms": 0.0,
+              "pcc": 0.9999998211860657,
+              "equal": true
+            },
+            {
+              "relative_rms": 0.0,
+              "pcc": 0.9999998211860657,
+              "equal": true
+            }
+          ],
+          "passed": true
+        },
+        {
+          "input": 0,
+          "local": [
+            {
+              "relative_rms": 0.004999724216759205,
+              "pcc": 0.9999932646751404,
+              "equal": false
+            },
+            {
+              "relative_rms": 0.004930770955979824,
+              "pcc": 0.9999926686286926,
+              "equal": false
+            },
+            {
+              "relative_rms": 0.005057347472757101,
+              "pcc": 0.9999932050704956,
+              "equal": false
+            },
+            {
+              "relative_rms": 0.00477776862680912,
+              "pcc": 0.999993622303009,
+              "equal": false
+            }
+          ],
+          "reduced": [
+            {
+              "relative_rms": 0.004684652201831341,
+              "pcc": 0.9999911189079285,
+              "equal": false
+            },
+            {
+              "relative_rms": 0.004684652201831341,
+              "pcc": 0.9999911189079285,
+              "equal": false
+            },
+            {
+              "relative_rms": 0.004684652201831341,
+              "pcc": 0.9999911189079285,
+              "equal": false
+            },
+            {
+              "relative_rms": 0.004684652201831341,
+              "pcc": 0.9999911189079285,
+              "equal": false
+            }
+          ],
+          "baseline": [
+            {
+              "relative_rms": 0.0,
+              "pcc": 0.999999463558197,
+              "equal": true
+            },
+            {
+              "relative_rms": 0.0,
+              "pcc": 0.999999463558197,
+              "equal": true
+            },
+            {
+              "relative_rms": 0.0,
+              "pcc": 0.999999463558197,
+              "equal": true
+            },
+            {
+              "relative_rms": 0.0,
+              "pcc": 0.999999463558197,
+              "equal": true
+            }
+          ],
+          "passed": true
+        }
+      ],
+      "accuracy_passed": true,
+      "changed_input_trace_passed": true,
+      "full_model_measured": false,
+      "trace_calls": 16,
+      "batch": 32,
+      "role": "down",
+      "delivery": "reshard",
+      "effective_delivery": "reshard",
+      "partial_layout": {
+        "shape": [
+          1,
+          1,
+          32,
+          5120
+        ],
+        "shard_shape": [
+          32,
+          640
+        ],
+        "cores": 8,
+        "grid": "{[0-0 - 7-0]}"
+      },
+      "exact_baseline": true
+    },
+    {
+      "label": "native_input",
+      "input_layout": "compact_l1",
+      "input_contract": {
+        "shape": [
+          1,
+          1,
+          32,
+          4352
+        ],
+        "padded_shape": [
+          1,
+          1,
+          32,
+          4352
+        ],
+        "memory": "l1",
+        "keep_sharded": true
+      },
+      "config": {
+        "readers": 2,
+        "cores": 8,
+        "block": 17
+      },
+      "geometry": {
+        "padded_n": 5120,
+        "weight_shard_width": 640,
+        "activation_shard_tiles": 17,
+        "encoded_weight_bytes": 23674880,
+        "multicast_blocks": 8
+      },
+      "samples_us": [
+        91.6532549308613,
+        91.69864177238196,
+        91.69824188575149,
+        91.70834440737963,
+        91.70333680231124
+      ],
+      "output_sha256": [
+        "19552fbd992061d2b75d07f09d7ce085363f4ede8dfc9ce4b21600b989759583",
+        "19552fbd992061d2b75d07f09d7ce085363f4ede8dfc9ce4b21600b989759583",
+        "19552fbd992061d2b75d07f09d7ce085363f4ede8dfc9ce4b21600b989759583",
+        "19552fbd992061d2b75d07f09d7ce085363f4ede8dfc9ce4b21600b989759583"
+      ],
+      "accuracy": [
+        {
+          "input": 0,
+          "local": [
+            {
+              "relative_rms": 0.004999724216759205,
+              "pcc": 0.9999932646751404,
+              "equal": false
+            },
+            {
+              "relative_rms": 0.004930770955979824,
+              "pcc": 0.9999926686286926,
+              "equal": false
+            },
+            {
+              "relative_rms": 0.005057347472757101,
+              "pcc": 0.9999932050704956,
+              "equal": false
+            },
+            {
+              "relative_rms": 0.00477776862680912,
+              "pcc": 0.999993622303009,
+              "equal": false
+            }
+          ],
+          "reduced": [
+            {
+              "relative_rms": 0.004684652201831341,
+              "pcc": 0.9999911189079285,
+              "equal": false
+            },
+            {
+              "relative_rms": 0.004684652201831341,
+              "pcc": 0.9999911189079285,
+              "equal": false
+            },
+            {
+              "relative_rms": 0.004684652201831341,
+              "pcc": 0.9999911189079285,
+              "equal": false
+            },
+            {
+              "relative_rms": 0.004684652201831341,
+              "pcc": 0.9999911189079285,
+              "equal": false
+            }
+          ],
+          "baseline": [
+            {
+              "relative_rms": 0.0,
+              "pcc": 0.999999463558197,
+              "equal": true
+            },
+            {
+              "relative_rms": 0.0,
+              "pcc": 0.999999463558197,
+              "equal": true
+            },
+            {
+              "relative_rms": 0.0,
+              "pcc": 0.999999463558197,
+              "equal": true
+            },
+            {
+              "relative_rms": 0.0,
+              "pcc": 0.999999463558197,
+              "equal": true
+            }
+          ],
+          "passed": true
+        },
+        {
+          "input": 1,
+          "local": [
+            {
+              "relative_rms": 0.004817425739020109,
+              "pcc": 0.9999935030937195,
+              "equal": false
+            },
+            {
+              "relative_rms": 0.004808508325368166,
+              "pcc": 0.9999932646751404,
+              "equal": false
+            },
+            {
+              "relative_rms": 0.004833235405385494,
+              "pcc": 0.999993622303009,
+              "equal": false
+            },
+            {
+              "relative_rms": 0.004755978472530842,
+              "pcc": 0.9999937415122986,
+              "equal": false
+            }
+          ],
+          "reduced": [
+            {
+              "relative_rms": 0.004911073017865419,
+              "pcc": 0.9999909996986389,
+              "equal": false
+            },
+            {
+              "relative_rms": 0.004911073017865419,
+              "pcc": 0.9999909996986389,
+              "equal": false
+            },
+            {
+              "relative_rms": 0.004911073017865419,
+              "pcc": 0.9999909996986389,
+              "equal": false
+            },
+            {
+              "relative_rms": 0.004911073017865419,
+              "pcc": 0.9999909996986389,
+              "equal": false
+            }
+          ],
+          "baseline": [
+            {
+              "relative_rms": 0.0,
+              "pcc": 0.9999998211860657,
+              "equal": true
+            },
+            {
+              "relative_rms": 0.0,
+              "pcc": 0.9999998211860657,
+              "equal": true
+            },
+            {
+              "relative_rms": 0.0,
+              "pcc": 0.9999998211860657,
+              "equal": true
+            },
+            {
+              "relative_rms": 0.0,
+              "pcc": 0.9999998211860657,
+              "equal": true
+            }
+          ],
+          "passed": true
+        },
+        {
+          "input": 0,
+          "local": [
+            {
+              "relative_rms": 0.004999724216759205,
+              "pcc": 0.9999932646751404,
+              "equal": false
+            },
+            {
+              "relative_rms": 0.004930770955979824,
+              "pcc": 0.9999926686286926,
+              "equal": false
+            },
+            {
+              "relative_rms": 0.005057347472757101,
+              "pcc": 0.9999932050704956,
+              "equal": false
+            },
+            {
+              "relative_rms": 0.00477776862680912,
+              "pcc": 0.999993622303009,
+              "equal": false
+            }
+          ],
+          "reduced": [
+            {
+              "relative_rms": 0.004684652201831341,
+              "pcc": 0.9999911189079285,
+              "equal": false
+            },
+            {
+              "relative_rms": 0.004684652201831341,
+              "pcc": 0.9999911189079285,
+              "equal": false
+            },
+            {
+              "relative_rms": 0.004684652201831341,
+              "pcc": 0.9999911189079285,
+              "equal": false
+            },
+            {
+              "relative_rms": 0.004684652201831341,
+              "pcc": 0.9999911189079285,
+              "equal": false
+            }
+          ],
+          "baseline": [
+            {
+              "relative_rms": 0.0,
+              "pcc": 0.999999463558197,
+              "equal": true
+            },
+            {
+              "relative_rms": 0.0,
+              "pcc": 0.999999463558197,
+              "equal": true
+            },
+            {
+              "relative_rms": 0.0,
+              "pcc": 0.999999463558197,
+              "equal": true
+            },
+            {
+              "relative_rms": 0.0,
+              "pcc": 0.999999463558197,
+              "equal": true
+            }
+          ],
+          "passed": true
+        }
+      ],
+      "accuracy_passed": true,
+      "changed_input_trace_passed": true,
+      "full_model_measured": false,
+      "trace_calls": 16,
+      "batch": 32,
+      "role": "down",
+      "delivery": "native_input",
+      "effective_delivery": "native_input",
+      "partial_layout": {
+        "shape": [
+          1,
+          1,
+          32,
+          5120
+        ],
+        "shard_shape": [
+          32,
+          640
+        ],
+        "cores": 8,
+        "grid": "{[0-0 - 7-0]}"
+      },
+      "exact_baseline": true
+    },
+    {
+      "label": "matmul_output",
+      "input_layout": "compact_l1",
+      "input_contract": {
+        "shape": [
+          1,
+          1,
+          32,
+          4352
+        ],
+        "padded_shape": [
+          1,
+          1,
+          32,
+          4352
+        ],
+        "memory": "l1",
+        "keep_sharded": true
+      },
+      "config": {
+        "readers": 2,
+        "cores": 8,
+        "block": 17
+      },
+      "geometry": {
+        "padded_n": 5120,
+        "weight_shard_width": 640,
+        "activation_shard_tiles": 17,
+        "encoded_weight_bytes": 23674880,
+        "multicast_blocks": 8
+      },
+      "samples_us": [
+        90.53702000528574,
+        90.55335714947432,
+        90.5683112796396,
+        90.56133800186217,
+        90.57803807081655
+      ],
+      "output_sha256": [
+        "19552fbd992061d2b75d07f09d7ce085363f4ede8dfc9ce4b21600b989759583",
+        "19552fbd992061d2b75d07f09d7ce085363f4ede8dfc9ce4b21600b989759583",
+        "19552fbd992061d2b75d07f09d7ce085363f4ede8dfc9ce4b21600b989759583",
+        "19552fbd992061d2b75d07f09d7ce085363f4ede8dfc9ce4b21600b989759583"
+      ],
+      "accuracy": [
+        {
+          "input": 0,
+          "local": [
+            {
+              "relative_rms": 0.004999724216759205,
+              "pcc": 0.9999932646751404,
+              "equal": false
+            },
+            {
+              "relative_rms": 0.004930770955979824,
+              "pcc": 0.9999926686286926,
+              "equal": false
+            },
+            {
+              "relative_rms": 0.005057347472757101,
+              "pcc": 0.9999932050704956,
+              "equal": false
+            },
+            {
+              "relative_rms": 0.00477776862680912,
+              "pcc": 0.999993622303009,
+              "equal": false
+            }
+          ],
+          "reduced": [
+            {
+              "relative_rms": 0.004684652201831341,
+              "pcc": 0.9999911189079285,
+              "equal": false
+            },
+            {
+              "relative_rms": 0.004684652201831341,
+              "pcc": 0.9999911189079285,
+              "equal": false
+            },
+            {
+              "relative_rms": 0.004684652201831341,
+              "pcc": 0.9999911189079285,
+              "equal": false
+            },
+            {
+              "relative_rms": 0.004684652201831341,
+              "pcc": 0.9999911189079285,
+              "equal": false
+            }
+          ],
+          "baseline": [
+            {
+              "relative_rms": 0.0,
+              "pcc": 0.999999463558197,
+              "equal": true
+            },
+            {
+              "relative_rms": 0.0,
+              "pcc": 0.999999463558197,
+              "equal": true
+            },
+            {
+              "relative_rms": 0.0,
+              "pcc": 0.999999463558197,
+              "equal": true
+            },
+            {
+              "relative_rms": 0.0,
+              "pcc": 0.999999463558197,
+              "equal": true
+            }
+          ],
+          "passed": true
+        },
+        {
+          "input": 1,
+          "local": [
+            {
+              "relative_rms": 0.004817425739020109,
+              "pcc": 0.9999935030937195,
+              "equal": false
+            },
+            {
+              "relative_rms": 0.004808508325368166,
+              "pcc": 0.9999932646751404,
+              "equal": false
+            },
+            {
+              "relative_rms": 0.004833235405385494,
+              "pcc": 0.999993622303009,
+              "equal": false
+            },
+            {
+              "relative_rms": 0.004755978472530842,
+              "pcc": 0.9999937415122986,
+              "equal": false
+            }
+          ],
+          "reduced": [
+            {
+              "relative_rms": 0.004911073017865419,
+              "pcc": 0.9999909996986389,
+              "equal": false
+            },
+            {
+              "relative_rms": 0.004911073017865419,
+              "pcc": 0.9999909996986389,
+              "equal": false
+            },
+            {
+              "relative_rms": 0.004911073017865419,
+              "pcc": 0.9999909996986389,
+              "equal": false
+            },
+            {
+              "relative_rms": 0.004911073017865419,
+              "pcc": 0.9999909996986389,
+              "equal": false
+            }
+          ],
+          "baseline": [
+            {
+              "relative_rms": 0.0,
+              "pcc": 0.9999998211860657,
+              "equal": true
+            },
+            {
+              "relative_rms": 0.0,
+              "pcc": 0.9999998211860657,
+              "equal": true
+            },
+            {
+              "relative_rms": 0.0,
+              "pcc": 0.9999998211860657,
+              "equal": true
+            },
+            {
+              "relative_rms": 0.0,
+              "pcc": 0.9999998211860657,
+              "equal": true
+            }
+          ],
+          "passed": true
+        },
+        {
+          "input": 0,
+          "local": [
+            {
+              "relative_rms": 0.004999724216759205,
+              "pcc": 0.9999932646751404,
+              "equal": false
+            },
+            {
+              "relative_rms": 0.004930770955979824,
+              "pcc": 0.9999926686286926,
+              "equal": false
+            },
+            {
+              "relative_rms": 0.005057347472757101,
+              "pcc": 0.9999932050704956,
+              "equal": false
+            },
+            {
+              "relative_rms": 0.00477776862680912,
+              "pcc": 0.999993622303009,
+              "equal": false
+            }
+          ],
+          "reduced": [
+            {
+              "relative_rms": 0.004684652201831341,
+              "pcc": 0.9999911189079285,
+              "equal": false
+            },
+            {
+              "relative_rms": 0.004684652201831341,
+              "pcc": 0.9999911189079285,
+              "equal": false
+            },
+            {
+              "relative_rms": 0.004684652201831341,
+              "pcc": 0.9999911189079285,
+              "equal": false
+            },
+            {
+              "relative_rms": 0.004684652201831341,
+              "pcc": 0.9999911189079285,
+              "equal": false
+            }
+          ],
+          "baseline": [
+            {
+              "relative_rms": 0.0,
+              "pcc": 0.999999463558197,
+              "equal": true
+            },
+            {
+              "relative_rms": 0.0,
+              "pcc": 0.999999463558197,
+              "equal": true
+            },
+            {
+              "relative_rms": 0.0,
+              "pcc": 0.999999463558197,
+              "equal": true
+            },
+            {
+              "relative_rms": 0.0,
+              "pcc": 0.999999463558197,
+              "equal": true
+            }
+          ],
+          "passed": true
+        }
+      ],
+      "accuracy_passed": true,
+      "changed_input_trace_passed": true,
+      "full_model_measured": false,
+      "trace_calls": 16,
+      "batch": 32,
+      "role": "down",
+      "delivery": "matmul_output",
+      "effective_delivery": "matmul_output",
+      "partial_layout": {
+        "shape": [
+          1,
+          1,
+          32,
+          5120
+        ],
+        "shard_shape": [
+          32,
+          128
+        ],
+        "cores": 40,
+        "grid": "{[0-0 - 11-2], [0-3 - 3-3]}"
+      },
+      "exact_baseline": true
+    },
+    {
+      "label": "after",
+      "input_layout": "compact_l1",
+      "input_contract": {
+        "shape": [
+          1,
+          1,
+          32,
+          4352
+        ],
+        "padded_shape": [
+          1,
+          1,
+          32,
+          4352
+        ],
+        "memory": "l1",
+        "keep_sharded": true
+      },
+      "config": {
+        "readers": 2,
+        "cores": 8,
+        "block": 17
+      },
+      "geometry": {
+        "padded_n": 5120,
+        "weight_shard_width": 640,
+        "activation_shard_tiles": 17,
+        "encoded_weight_bytes": 23674880,
+        "multicast_blocks": 8
+      },
+      "samples_us": [
+        94.2038424545899,
+        94.2226275219582,
+        94.22895556781441,
+        94.25462572835386,
+        94.25100142834708
+      ],
+      "output_sha256": [
+        "19552fbd992061d2b75d07f09d7ce085363f4ede8dfc9ce4b21600b989759583",
+        "19552fbd992061d2b75d07f09d7ce085363f4ede8dfc9ce4b21600b989759583",
+        "19552fbd992061d2b75d07f09d7ce085363f4ede8dfc9ce4b21600b989759583",
+        "19552fbd992061d2b75d07f09d7ce085363f4ede8dfc9ce4b21600b989759583"
+      ],
+      "accuracy": [
+        {
+          "input": 0,
+          "local": [
+            {
+              "relative_rms": 0.004999724216759205,
+              "pcc": 0.9999932646751404,
+              "equal": false
+            },
+            {
+              "relative_rms": 0.004930770955979824,
+              "pcc": 0.9999926686286926,
+              "equal": false
+            },
+            {
+              "relative_rms": 0.005057347472757101,
+              "pcc": 0.9999932050704956,
+              "equal": false
+            },
+            {
+              "relative_rms": 0.00477776862680912,
+              "pcc": 0.999993622303009,
+              "equal": false
+            }
+          ],
+          "reduced": [
+            {
+              "relative_rms": 0.004684652201831341,
+              "pcc": 0.9999911189079285,
+              "equal": false
+            },
+            {
+              "relative_rms": 0.004684652201831341,
+              "pcc": 0.9999911189079285,
+              "equal": false
+            },
+            {
+              "relative_rms": 0.004684652201831341,
+              "pcc": 0.9999911189079285,
+              "equal": false
+            },
+            {
+              "relative_rms": 0.004684652201831341,
+              "pcc": 0.9999911189079285,
+              "equal": false
+            }
+          ],
+          "baseline": [
+            {
+              "relative_rms": 0.0,
+              "pcc": 0.999999463558197,
+              "equal": true
+            },
+            {
+              "relative_rms": 0.0,
+              "pcc": 0.999999463558197,
+              "equal": true
+            },
+            {
+              "relative_rms": 0.0,
+              "pcc": 0.999999463558197,
+              "equal": true
+            },
+            {
+              "relative_rms": 0.0,
+              "pcc": 0.999999463558197,
+              "equal": true
+            }
+          ],
+          "passed": true
+        },
+        {
+          "input": 1,
+          "local": [
+            {
+              "relative_rms": 0.004817425739020109,
+              "pcc": 0.9999935030937195,
+              "equal": false
+            },
+            {
+              "relative_rms": 0.004808508325368166,
+              "pcc": 0.9999932646751404,
+              "equal": false
+            },
+            {
+              "relative_rms": 0.004833235405385494,
+              "pcc": 0.999993622303009,
+              "equal": false
+            },
+            {
+              "relative_rms": 0.004755978472530842,
+              "pcc": 0.9999937415122986,
+              "equal": false
+            }
+          ],
+          "reduced": [
+            {
+              "relative_rms": 0.004911073017865419,
+              "pcc": 0.9999909996986389,
+              "equal": false
+            },
+            {
+              "relative_rms": 0.004911073017865419,
+              "pcc": 0.9999909996986389,
+              "equal": false
+            },
+            {
+              "relative_rms": 0.004911073017865419,
+              "pcc": 0.9999909996986389,
+              "equal": false
+            },
+            {
+              "relative_rms": 0.004911073017865419,
+              "pcc": 0.9999909996986389,
+              "equal": false
+            }
+          ],
+          "baseline": [
+            {
+              "relative_rms": 0.0,
+              "pcc": 0.9999998211860657,
+              "equal": true
+            },
+            {
+              "relative_rms": 0.0,
+              "pcc": 0.9999998211860657,
+              "equal": true
+            },
+            {
+              "relative_rms": 0.0,
+              "pcc": 0.9999998211860657,
+              "equal": true
+            },
+            {
+              "relative_rms": 0.0,
+              "pcc": 0.9999998211860657,
+              "equal": true
+            }
+          ],
+          "passed": true
+        },
+        {
+          "input": 0,
+          "local": [
+            {
+              "relative_rms": 0.004999724216759205,
+              "pcc": 0.9999932646751404,
+              "equal": false
+            },
+            {
+              "relative_rms": 0.004930770955979824,
+              "pcc": 0.9999926686286926,
+              "equal": false
+            },
+            {
+              "relative_rms": 0.005057347472757101,
+              "pcc": 0.9999932050704956,
+              "equal": false
+            },
+            {
+              "relative_rms": 0.00477776862680912,
+              "pcc": 0.999993622303009,
+              "equal": false
+            }
+          ],
+          "reduced": [
+            {
+              "relative_rms": 0.004684652201831341,
+              "pcc": 0.9999911189079285,
+              "equal": false
+            },
+            {
+              "relative_rms": 0.004684652201831341,
+              "pcc": 0.9999911189079285,
+              "equal": false
+            },
+            {
+              "relative_rms": 0.004684652201831341,
+              "pcc": 0.9999911189079285,
+              "equal": false
+            },
+            {
+              "relative_rms": 0.004684652201831341,
+              "pcc": 0.9999911189079285,
+              "equal": false
+            }
+          ],
+          "baseline": [
+            {
+              "relative_rms": 0.0,
+              "pcc": 0.999999463558197,
+              "equal": true
+            },
+            {
+              "relative_rms": 0.0,
+              "pcc": 0.999999463558197,
+              "equal": true
+            },
+            {
+              "relative_rms": 0.0,
+              "pcc": 0.999999463558197,
+              "equal": true
+            },
+            {
+              "relative_rms": 0.0,
+              "pcc": 0.999999463558197,
+              "equal": true
+            }
+          ],
+          "passed": true
+        }
+      ],
+      "accuracy_passed": true,
+      "changed_input_trace_passed": true,
+      "full_model_measured": false,
+      "trace_calls": 16,
+      "batch": 32,
+      "role": "down",
+      "delivery": "reshard",
+      "effective_delivery": "reshard",
+      "partial_layout": {
+        "shape": [
+          1,
+          1,
+          32,
+          5120
+        ],
+        "shard_shape": [
+          32,
+          640
+        ],
+        "cores": 8,
+        "grid": "{[0-0 - 7-0]}"
+      },
+      "exact_baseline": true
+    },
+    {
+      "label": "before",
+      "input_layout": "public_dram",
+      "input_contract": {
+        "shape": [
+          32,
+          1,
+          1536
+        ],
+        "padded_shape": [
+          32,
+          32,
+          1536
+        ],
+        "memory": "dram",
+        "keep_sharded": false
+      },
+      "config": {
+        "readers": 2,
+        "cores": 8,
+        "block": 6
+      },
+      "geometry": {
+        "padded_n": 5120,
+        "weight_shard_width": 640,
+        "activation_shard_tiles": 6,
+        "encoded_weight_bytes": 8355840,
+        "multicast_blocks": 8
+      },
+      "samples_us": [
+        72.97006319276989,
+        73.00924131413922,
+        73.0106804985553,
+        73.01798497792333,
+        73.00488447071984
+      ],
+      "output_sha256": [
+        "31e3230ecfacad4f3cc73a6774055fa350f6c26f0352f6e6cce03845ea010735",
+        "31e3230ecfacad4f3cc73a6774055fa350f6c26f0352f6e6cce03845ea010735",
+        "31e3230ecfacad4f3cc73a6774055fa350f6c26f0352f6e6cce03845ea010735",
+        "31e3230ecfacad4f3cc73a6774055fa350f6c26f0352f6e6cce03845ea010735"
+      ],
+      "accuracy": [
+        {
+          "input": 0,
+          "local": [
+            {
+              "relative_rms": 0.00577682675793767,
+              "pcc": 0.9999904036521912,
+              "equal": false
+            },
+            {
+              "relative_rms": 0.005216056946665049,
+              "pcc": 0.9999929666519165,
+              "equal": false
+            },
+            {
+              "relative_rms": 0.005675791762769222,
+              "pcc": 0.9999911785125732,
+              "equal": false
+            },
+            {
+              "relative_rms": 0.005026534665375948,
+              "pcc": 0.999993085861206,
+              "equal": false
+            }
+          ],
+          "reduced": [
+            {
+              "relative_rms": 0.005075037945061922,
+              "pcc": 0.9999903440475464,
+              "equal": false
+            },
+            {
+              "relative_rms": 0.005075037945061922,
+              "pcc": 0.9999903440475464,
+              "equal": false
+            },
+            {
+              "relative_rms": 0.005075037945061922,
+              "pcc": 0.9999903440475464,
+              "equal": false
+            },
+            {
+              "relative_rms": 0.005075037945061922,
+              "pcc": 0.9999903440475464,
+              "equal": false
+            }
+          ],
+          "baseline": [
+            {
+              "relative_rms": 0.0,
+              "pcc": 0.9999996423721313,
+              "equal": true
+            },
+            {
+              "relative_rms": 0.0,
+              "pcc": 0.9999996423721313,
+              "equal": true
+            },
+            {
+              "relative_rms": 0.0,
+              "pcc": 0.9999996423721313,
+              "equal": true
+            },
+            {
+              "relative_rms": 0.0,
+              "pcc": 0.9999996423721313,
+              "equal": true
+            }
+          ],
+          "passed": true
+        },
+        {
+          "input": 1,
+          "local": [
+            {
+              "relative_rms": 0.0050739203579723835,
+              "pcc": 0.9999920725822449,
+              "equal": false
+            },
+            {
+              "relative_rms": 0.005043444689363241,
+              "pcc": 0.9999923706054688,
+              "equal": false
+            },
+            {
+              "relative_rms": 0.004874208476394415,
+              "pcc": 0.9999924898147583,
+              "equal": false
+            },
+            {
+              "relative_rms": 0.005031100474298,
+              "pcc": 0.9999930262565613,
+              "equal": false
+            }
+          ],
+          "reduced": [
+            {
+              "relative_rms": 0.005052035208791494,
+              "pcc": 0.9999898076057434,
+              "equal": false
+            },
+            {
+              "relative_rms": 0.005052035208791494,
+              "pcc": 0.9999898076057434,
+              "equal": false
+            },
+            {
+              "relative_rms": 0.005052035208791494,
+              "pcc": 0.9999898076057434,
+              "equal": false
+            },
+            {
+              "relative_rms": 0.005052035208791494,
+              "pcc": 0.9999898076057434,
+              "equal": false
+            }
+          ],
+          "baseline": [
+            {
+              "relative_rms": 0.0,
+              "pcc": 0.9999996423721313,
+              "equal": true
+            },
+            {
+              "relative_rms": 0.0,
+              "pcc": 0.9999996423721313,
+              "equal": true
+            },
+            {
+              "relative_rms": 0.0,
+              "pcc": 0.9999996423721313,
+              "equal": true
+            },
+            {
+              "relative_rms": 0.0,
+              "pcc": 0.9999996423721313,
+              "equal": true
+            }
+          ],
+          "passed": true
+        },
+        {
+          "input": 0,
+          "local": [
+            {
+              "relative_rms": 0.00577682675793767,
+              "pcc": 0.9999904036521912,
+              "equal": false
+            },
+            {
+              "relative_rms": 0.005216056946665049,
+              "pcc": 0.9999929666519165,
+              "equal": false
+            },
+            {
+              "relative_rms": 0.005675791762769222,
+              "pcc": 0.9999911785125732,
+              "equal": false
+            },
+            {
+              "relative_rms": 0.005026534665375948,
+              "pcc": 0.999993085861206,
+              "equal": false
+            }
+          ],
+          "reduced": [
+            {
+              "relative_rms": 0.005075037945061922,
+              "pcc": 0.9999903440475464,
+              "equal": false
+            },
+            {
+              "relative_rms": 0.005075037945061922,
+              "pcc": 0.9999903440475464,
+              "equal": false
+            },
+            {
+              "relative_rms": 0.005075037945061922,
+              "pcc": 0.9999903440475464,
+              "equal": false
+            },
+            {
+              "relative_rms": 0.005075037945061922,
+              "pcc": 0.9999903440475464,
+              "equal": false
+            }
+          ],
+          "baseline": [
+            {
+              "relative_rms": 0.0,
+              "pcc": 0.9999996423721313,
+              "equal": true
+            },
+            {
+              "relative_rms": 0.0,
+              "pcc": 0.9999996423721313,
+              "equal": true
+            },
+            {
+              "relative_rms": 0.0,
+              "pcc": 0.9999996423721313,
+              "equal": true
+            },
+            {
+              "relative_rms": 0.0,
+              "pcc": 0.9999996423721313,
+              "equal": true
+            }
+          ],
+          "passed": true
+        }
+      ],
+      "accuracy_passed": true,
+      "changed_input_trace_passed": true,
+      "full_model_measured": false,
+      "trace_calls": 16,
+      "batch": 32,
+      "role": "output",
+      "delivery": "reshard",
+      "effective_delivery": "reshard",
+      "partial_layout": null,
+      "exact_baseline": true
+    },
+    {
+      "label": "native_input",
+      "input_layout": "public_dram",
+      "input_contract": {
+        "shape": [
+          32,
+          1,
+          1536
+        ],
+        "padded_shape": [
+          32,
+          32,
+          1536
+        ],
+        "memory": "dram",
+        "keep_sharded": false
+      },
+      "config": {
+        "readers": 2,
+        "cores": 8,
+        "block": 6
+      },
+      "geometry": {
+        "padded_n": 5120,
+        "weight_shard_width": 640,
+        "activation_shard_tiles": 6,
+        "encoded_weight_bytes": 8355840,
+        "multicast_blocks": 8
+      },
+      "samples_us": [
+        72.9427594342269,
+        73.0015043518506,
+        73.01234552869573,
+        72.99998949747533,
+        72.99920078366995
+      ],
+      "output_sha256": [
+        "31e3230ecfacad4f3cc73a6774055fa350f6c26f0352f6e6cce03845ea010735",
+        "31e3230ecfacad4f3cc73a6774055fa350f6c26f0352f6e6cce03845ea010735",
+        "31e3230ecfacad4f3cc73a6774055fa350f6c26f0352f6e6cce03845ea010735",
+        "31e3230ecfacad4f3cc73a6774055fa350f6c26f0352f6e6cce03845ea010735"
+      ],
+      "accuracy": [
+        {
+          "input": 0,
+          "local": [
+            {
+              "relative_rms": 0.00577682675793767,
+              "pcc": 0.9999904036521912,
+              "equal": false
+            },
+            {
+              "relative_rms": 0.005216056946665049,
+              "pcc": 0.9999929666519165,
+              "equal": false
+            },
+            {
+              "relative_rms": 0.005675791762769222,
+              "pcc": 0.9999911785125732,
+              "equal": false
+            },
+            {
+              "relative_rms": 0.005026534665375948,
+              "pcc": 0.999993085861206,
+              "equal": false
+            }
+          ],
+          "reduced": [
+            {
+              "relative_rms": 0.005075037945061922,
+              "pcc": 0.9999903440475464,
+              "equal": false
+            },
+            {
+              "relative_rms": 0.005075037945061922,
+              "pcc": 0.9999903440475464,
+              "equal": false
+            },
+            {
+              "relative_rms": 0.005075037945061922,
+              "pcc": 0.9999903440475464,
+              "equal": false
+            },
+            {
+              "relative_rms": 0.005075037945061922,
+              "pcc": 0.9999903440475464,
+              "equal": false
+            }
+          ],
+          "baseline": [
+            {
+              "relative_rms": 0.0,
+              "pcc": 0.9999996423721313,
+              "equal": true
+            },
+            {
+              "relative_rms": 0.0,
+              "pcc": 0.9999996423721313,
+              "equal": true
+            },
+            {
+              "relative_rms": 0.0,
+              "pcc": 0.9999996423721313,
+              "equal": true
+            },
+            {
+              "relative_rms": 0.0,
+              "pcc": 0.9999996423721313,
+              "equal": true
+            }
+          ],
+          "passed": true
+        },
+        {
+          "input": 1,
+          "local": [
+            {
+              "relative_rms": 0.0050739203579723835,
+              "pcc": 0.9999920725822449,
+              "equal": false
+            },
+            {
+              "relative_rms": 0.005043444689363241,
+              "pcc": 0.9999923706054688,
+              "equal": false
+            },
+            {
+              "relative_rms": 0.004874208476394415,
+              "pcc": 0.9999924898147583,
+              "equal": false
+            },
+            {
+              "relative_rms": 0.005031100474298,
+              "pcc": 0.9999930262565613,
+              "equal": false
+            }
+          ],
+          "reduced": [
+            {
+              "relative_rms": 0.005052035208791494,
+              "pcc": 0.9999898076057434,
+              "equal": false
+            },
+            {
+              "relative_rms": 0.005052035208791494,
+              "pcc": 0.9999898076057434,
+              "equal": false
+            },
+            {
+              "relative_rms": 0.005052035208791494,
+              "pcc": 0.9999898076057434,
+              "equal": false
+            },
+            {
+              "relative_rms": 0.005052035208791494,
+              "pcc": 0.9999898076057434,
+              "equal": false
+            }
+          ],
+          "baseline": [
+            {
+              "relative_rms": 0.0,
+              "pcc": 0.9999996423721313,
+              "equal": true
+            },
+            {
+              "relative_rms": 0.0,
+              "pcc": 0.9999996423721313,
+              "equal": true
+            },
+            {
+              "relative_rms": 0.0,
+              "pcc": 0.9999996423721313,
+              "equal": true
+            },
+            {
+              "relative_rms": 0.0,
+              "pcc": 0.9999996423721313,
+              "equal": true
+            }
+          ],
+          "passed": true
+        },
+        {
+          "input": 0,
+          "local": [
+            {
+              "relative_rms": 0.00577682675793767,
+              "pcc": 0.9999904036521912,
+              "equal": false
+            },
+            {
+              "relative_rms": 0.005216056946665049,
+              "pcc": 0.9999929666519165,
+              "equal": false
+            },
+            {
+              "relative_rms": 0.005675791762769222,
+              "pcc": 0.9999911785125732,
+              "equal": false
+            },
+            {
+              "relative_rms": 0.005026534665375948,
+              "pcc": 0.999993085861206,
+              "equal": false
+            }
+          ],
+          "reduced": [
+            {
+              "relative_rms": 0.005075037945061922,
+              "pcc": 0.9999903440475464,
+              "equal": false
+            },
+            {
+              "relative_rms": 0.005075037945061922,
+              "pcc": 0.9999903440475464,
+              "equal": false
+            },
+            {
+              "relative_rms": 0.005075037945061922,
+              "pcc": 0.9999903440475464,
+              "equal": false
+            },
+            {
+              "relative_rms": 0.005075037945061922,
+              "pcc": 0.9999903440475464,
+              "equal": false
+            }
+          ],
+          "baseline": [
+            {
+              "relative_rms": 0.0,
+              "pcc": 0.9999996423721313,
+              "equal": true
+            },
+            {
+              "relative_rms": 0.0,
+              "pcc": 0.9999996423721313,
+              "equal": true
+            },
+            {
+              "relative_rms": 0.0,
+              "pcc": 0.9999996423721313,
+              "equal": true
+            },
+            {
+              "relative_rms": 0.0,
+              "pcc": 0.9999996423721313,
+              "equal": true
+            }
+          ],
+          "passed": true
+        }
+      ],
+      "accuracy_passed": true,
+      "changed_input_trace_passed": true,
+      "full_model_measured": false,
+      "trace_calls": 16,
+      "batch": 32,
+      "role": "output",
+      "delivery": "native_input",
+      "effective_delivery": "reshard",
+      "partial_layout": null,
+      "exact_baseline": true
+    },
+    {
+      "label": "matmul_output",
+      "input_layout": "public_dram",
+      "input_contract": {
+        "shape": [
+          32,
+          1,
+          1536
+        ],
+        "padded_shape": [
+          32,
+          32,
+          1536
+        ],
+        "memory": "dram",
+        "keep_sharded": false
+      },
+      "config": {
+        "readers": 2,
+        "cores": 8,
+        "block": 6
+      },
+      "geometry": {
+        "padded_n": 5120,
+        "weight_shard_width": 640,
+        "activation_shard_tiles": 6,
+        "encoded_weight_bytes": 8355840,
+        "multicast_blocks": 8
+      },
+      "samples_us": [
+        72.98531738342717,
+        73.0039324844256,
+        73.01015517441556,
+        73.01177567569539,
+        73.01207020645961
+      ],
+      "output_sha256": [
+        "31e3230ecfacad4f3cc73a6774055fa350f6c26f0352f6e6cce03845ea010735",
+        "31e3230ecfacad4f3cc73a6774055fa350f6c26f0352f6e6cce03845ea010735",
+        "31e3230ecfacad4f3cc73a6774055fa350f6c26f0352f6e6cce03845ea010735",
+        "31e3230ecfacad4f3cc73a6774055fa350f6c26f0352f6e6cce03845ea010735"
+      ],
+      "accuracy": [
+        {
+          "input": 0,
+          "local": [
+            {
+              "relative_rms": 0.00577682675793767,
+              "pcc": 0.9999904036521912,
+              "equal": false
+            },
+            {
+              "relative_rms": 0.005216056946665049,
+              "pcc": 0.9999929666519165,
+              "equal": false
+            },
+            {
+              "relative_rms": 0.005675791762769222,
+              "pcc": 0.9999911785125732,
+              "equal": false
+            },
+            {
+              "relative_rms": 0.005026534665375948,
+              "pcc": 0.999993085861206,
+              "equal": false
+            }
+          ],
+          "reduced": [
+            {
+              "relative_rms": 0.005075037945061922,
+              "pcc": 0.9999903440475464,
+              "equal": false
+            },
+            {
+              "relative_rms": 0.005075037945061922,
+              "pcc": 0.9999903440475464,
+              "equal": false
+            },
+            {
+              "relative_rms": 0.005075037945061922,
+              "pcc": 0.9999903440475464,
+              "equal": false
+            },
+            {
+              "relative_rms": 0.005075037945061922,
+              "pcc": 0.9999903440475464,
+              "equal": false
+            }
+          ],
+          "baseline": [
+            {
+              "relative_rms": 0.0,
+              "pcc": 0.9999996423721313,
+              "equal": true
+            },
+            {
+              "relative_rms": 0.0,
+              "pcc": 0.9999996423721313,
+              "equal": true
+            },
+            {
+              "relative_rms": 0.0,
+              "pcc": 0.9999996423721313,
+              "equal": true
+            },
+            {
+              "relative_rms": 0.0,
+              "pcc": 0.9999996423721313,
+              "equal": true
+            }
+          ],
+          "passed": true
+        },
+        {
+          "input": 1,
+          "local": [
+            {
+              "relative_rms": 0.0050739203579723835,
+              "pcc": 0.9999920725822449,
+              "equal": false
+            },
+            {
+              "relative_rms": 0.005043444689363241,
+              "pcc": 0.9999923706054688,
+              "equal": false
+            },
+            {
+              "relative_rms": 0.004874208476394415,
+              "pcc": 0.9999924898147583,
+              "equal": false
+            },
+            {
+              "relative_rms": 0.005031100474298,
+              "pcc": 0.9999930262565613,
+              "equal": false
+            }
+          ],
+          "reduced": [
+            {
+              "relative_rms": 0.005052035208791494,
+              "pcc": 0.9999898076057434,
+              "equal": false
+            },
+            {
+              "relative_rms": 0.005052035208791494,
+              "pcc": 0.9999898076057434,
+              "equal": false
+            },
+            {
+              "relative_rms": 0.005052035208791494,
+              "pcc": 0.9999898076057434,
+              "equal": false
+            },
+            {
+              "relative_rms": 0.005052035208791494,
+              "pcc": 0.9999898076057434,
+              "equal": false
+            }
+          ],
+          "baseline": [
+            {
+              "relative_rms": 0.0,
+              "pcc": 0.9999996423721313,
+              "equal": true
+            },
+            {
+              "relative_rms": 0.0,
+              "pcc": 0.9999996423721313,
+              "equal": true
+            },
+            {
+              "relative_rms": 0.0,
+              "pcc": 0.9999996423721313,
+              "equal": true
+            },
+            {
+              "relative_rms": 0.0,
+              "pcc": 0.9999996423721313,
+              "equal": true
+            }
+          ],
+          "passed": true
+        },
+        {
+          "input": 0,
+          "local": [
+            {
+              "relative_rms": 0.00577682675793767,
+              "pcc": 0.9999904036521912,
+              "equal": false
+            },
+            {
+              "relative_rms": 0.005216056946665049,
+              "pcc": 0.9999929666519165,
+              "equal": false
+            },
+            {
+              "relative_rms": 0.005675791762769222,
+              "pcc": 0.9999911785125732,
+              "equal": false
+            },
+            {
+              "relative_rms": 0.005026534665375948,
+              "pcc": 0.999993085861206,
+              "equal": false
+            }
+          ],
+          "reduced": [
+            {
+              "relative_rms": 0.005075037945061922,
+              "pcc": 0.9999903440475464,
+              "equal": false
+            },
+            {
+              "relative_rms": 0.005075037945061922,
+              "pcc": 0.9999903440475464,
+              "equal": false
+            },
+            {
+              "relative_rms": 0.005075037945061922,
+              "pcc": 0.9999903440475464,
+              "equal": false
+            },
+            {
+              "relative_rms": 0.005075037945061922,
+              "pcc": 0.9999903440475464,
+              "equal": false
+            }
+          ],
+          "baseline": [
+            {
+              "relative_rms": 0.0,
+              "pcc": 0.9999996423721313,
+              "equal": true
+            },
+            {
+              "relative_rms": 0.0,
+              "pcc": 0.9999996423721313,
+              "equal": true
+            },
+            {
+              "relative_rms": 0.0,
+              "pcc": 0.9999996423721313,
+              "equal": true
+            },
+            {
+              "relative_rms": 0.0,
+              "pcc": 0.9999996423721313,
+              "equal": true
+            }
+          ],
+          "passed": true
+        }
+      ],
+      "accuracy_passed": true,
+      "changed_input_trace_passed": true,
+      "full_model_measured": false,
+      "trace_calls": 16,
+      "batch": 32,
+      "role": "output",
+      "delivery": "matmul_output",
+      "effective_delivery": "reshard",
+      "partial_layout": null,
+      "exact_baseline": true
+    },
+    {
+      "label": "after",
+      "input_layout": "public_dram",
+      "input_contract": {
+        "shape": [
+          32,
+          1,
+          1536
+        ],
+        "padded_shape": [
+          32,
+          32,
+          1536
+        ],
+        "memory": "dram",
+        "keep_sharded": false
+      },
+      "config": {
+        "readers": 2,
+        "cores": 8,
+        "block": 6
+      },
+      "geometry": {
+        "padded_n": 5120,
+        "weight_shard_width": 640,
+        "activation_shard_tiles": 6,
+        "encoded_weight_bytes": 8355840,
+        "multicast_blocks": 8
+      },
+      "samples_us": [
+        72.94396142242476,
+        72.98919226741418,
+        73.00048397155479,
+        72.99135759240016,
+        72.99906312255189
+      ],
+      "output_sha256": [
+        "31e3230ecfacad4f3cc73a6774055fa350f6c26f0352f6e6cce03845ea010735",
+        "31e3230ecfacad4f3cc73a6774055fa350f6c26f0352f6e6cce03845ea010735",
+        "31e3230ecfacad4f3cc73a6774055fa350f6c26f0352f6e6cce03845ea010735",
+        "31e3230ecfacad4f3cc73a6774055fa350f6c26f0352f6e6cce03845ea010735"
+      ],
+      "accuracy": [
+        {
+          "input": 0,
+          "local": [
+            {
+              "relative_rms": 0.00577682675793767,
+              "pcc": 0.9999904036521912,
+              "equal": false
+            },
+            {
+              "relative_rms": 0.005216056946665049,
+              "pcc": 0.9999929666519165,
+              "equal": false
+            },
+            {
+              "relative_rms": 0.005675791762769222,
+              "pcc": 0.9999911785125732,
+              "equal": false
+            },
+            {
+              "relative_rms": 0.005026534665375948,
+              "pcc": 0.999993085861206,
+              "equal": false
+            }
+          ],
+          "reduced": [
+            {
+              "relative_rms": 0.005075037945061922,
+              "pcc": 0.9999903440475464,
+              "equal": false
+            },
+            {
+              "relative_rms": 0.005075037945061922,
+              "pcc": 0.9999903440475464,
+              "equal": false
+            },
+            {
+              "relative_rms": 0.005075037945061922,
+              "pcc": 0.9999903440475464,
+              "equal": false
+            },
+            {
+              "relative_rms": 0.005075037945061922,
+              "pcc": 0.9999903440475464,
+              "equal": false
+            }
+          ],
+          "baseline": [
+            {
+              "relative_rms": 0.0,
+              "pcc": 0.9999996423721313,
+              "equal": true
+            },
+            {
+              "relative_rms": 0.0,
+              "pcc": 0.9999996423721313,
+              "equal": true
+            },
+            {
+              "relative_rms": 0.0,
+              "pcc": 0.9999996423721313,
+              "equal": true
+            },
+            {
+              "relative_rms": 0.0,
+              "pcc": 0.9999996423721313,
+              "equal": true
+            }
+          ],
+          "passed": true
+        },
+        {
+          "input": 1,
+          "local": [
+            {
+              "relative_rms": 0.0050739203579723835,
+              "pcc": 0.9999920725822449,
+              "equal": false
+            },
+            {
+              "relative_rms": 0.005043444689363241,
+              "pcc": 0.9999923706054688,
+              "equal": false
+            },
+            {
+              "relative_rms": 0.004874208476394415,
+              "pcc": 0.9999924898147583,
+              "equal": false
+            },
+            {
+              "relative_rms": 0.005031100474298,
+              "pcc": 0.9999930262565613,
+              "equal": false
+            }
+          ],
+          "reduced": [
+            {
+              "relative_rms": 0.005052035208791494,
+              "pcc": 0.9999898076057434,
+              "equal": false
+            },
+            {
+              "relative_rms": 0.005052035208791494,
+              "pcc": 0.9999898076057434,
+              "equal": false
+            },
+            {
+              "relative_rms": 0.005052035208791494,
+              "pcc": 0.9999898076057434,
+              "equal": false
+            },
+            {
+              "relative_rms": 0.005052035208791494,
+              "pcc": 0.9999898076057434,
+              "equal": false
+            }
+          ],
+          "baseline": [
+            {
+              "relative_rms": 0.0,
+              "pcc": 0.9999996423721313,
+              "equal": true
+            },
+            {
+              "relative_rms": 0.0,
+              "pcc": 0.9999996423721313,
+              "equal": true
+            },
+            {
+              "relative_rms": 0.0,
+              "pcc": 0.9999996423721313,
+              "equal": true
+            },
+            {
+              "relative_rms": 0.0,
+              "pcc": 0.9999996423721313,
+              "equal": true
+            }
+          ],
+          "passed": true
+        },
+        {
+          "input": 0,
+          "local": [
+            {
+              "relative_rms": 0.00577682675793767,
+              "pcc": 0.9999904036521912,
+              "equal": false
+            },
+            {
+              "relative_rms": 0.005216056946665049,
+              "pcc": 0.9999929666519165,
+              "equal": false
+            },
+            {
+              "relative_rms": 0.005675791762769222,
+              "pcc": 0.9999911785125732,
+              "equal": false
+            },
+            {
+              "relative_rms": 0.005026534665375948,
+              "pcc": 0.999993085861206,
+              "equal": false
+            }
+          ],
+          "reduced": [
+            {
+              "relative_rms": 0.005075037945061922,
+              "pcc": 0.9999903440475464,
+              "equal": false
+            },
+            {
+              "relative_rms": 0.005075037945061922,
+              "pcc": 0.9999903440475464,
+              "equal": false
+            },
+            {
+              "relative_rms": 0.005075037945061922,
+              "pcc": 0.9999903440475464,
+              "equal": false
+            },
+            {
+              "relative_rms": 0.005075037945061922,
+              "pcc": 0.9999903440475464,
+              "equal": false
+            }
+          ],
+          "baseline": [
+            {
+              "relative_rms": 0.0,
+              "pcc": 0.9999996423721313,
+              "equal": true
+            },
+            {
+              "relative_rms": 0.0,
+              "pcc": 0.9999996423721313,
+              "equal": true
+            },
+            {
+              "relative_rms": 0.0,
+              "pcc": 0.9999996423721313,
+              "equal": true
+            },
+            {
+              "relative_rms": 0.0,
+              "pcc": 0.9999996423721313,
+              "equal": true
+            }
+          ],
+          "passed": true
+        }
+      ],
+      "accuracy_passed": true,
+      "changed_input_trace_passed": true,
+      "full_model_measured": false,
+      "trace_calls": 16,
+      "batch": 32,
+      "role": "output",
+      "delivery": "reshard",
+      "effective_delivery": "reshard",
+      "partial_layout": null,
+      "exact_baseline": true
+    }
+  ],
+  "comparisons": [
+    {
+      "batch": 16,
+      "role": "output",
+      "input_layout": "compact_l1",
+      "delivery": "native_input",
+      "effective_delivery": "native_input",
+      "control_us": 52.99816621118225,
+      "candidate_us": 50.51588988862932,
+      "control_drift_fraction": 0.0007363729564366928,
+      "controls_match": true,
+      "accuracy_passed": true,
+      "comparison_qualified": true,
+      "speedup": 1.0491385250863743,
+      "projected_model_saving_ms": 0.11914926348254085,
+      "multiplicity": 48,
+      "full_model_measured": false,
+      "promoted_to_serving": false
+    },
+    {
+      "batch": 16,
+      "role": "output",
+      "input_layout": "compact_l1",
+      "delivery": "matmul_output",
+      "effective_delivery": "matmul_output",
+      "control_us": 52.99816621118225,
+      "candidate_us": 49.36815210385248,
+      "control_drift_fraction": 0.0007363729564366928,
+      "controls_match": true,
+      "accuracy_passed": true,
+      "comparison_qualified": true,
+      "speedup": 1.0735294709774341,
+      "projected_model_saving_ms": 0.174240677151829,
+      "multiplicity": 48,
+      "full_model_measured": false,
+      "promoted_to_serving": false
+    },
+    {
+      "batch": 16,
+      "role": "down",
+      "input_layout": "compact_l1",
+      "delivery": "native_input",
+      "effective_delivery": "native_input",
+      "control_us": 94.21498121810146,
+      "candidate_us": 91.69990022201091,
+      "control_drift_fraction": 0.00013173667734978078,
+      "controls_match": true,
+      "accuracy_passed": true,
+      "comparison_qualified": true,
+      "speedup": 1.0274273035194301,
+      "projected_model_saving_ms": 0.16096518374979496,
+      "multiplicity": 64,
+      "full_model_measured": false,
+      "promoted_to_serving": false
+    },
+    {
+      "batch": 16,
+      "role": "down",
+      "input_layout": "compact_l1",
+      "delivery": "matmul_output",
+      "effective_delivery": "matmul_output",
+      "control_us": 94.21498121810146,
+      "candidate_us": 90.56418552063406,
+      "control_drift_fraction": 0.00013173667734978078,
+      "controls_match": true,
+      "accuracy_passed": true,
+      "comparison_qualified": true,
+      "speedup": 1.0403116935958707,
+      "projected_model_saving_ms": 0.2336509246379137,
+      "multiplicity": 64,
+      "full_model_measured": false,
+      "promoted_to_serving": false
+    },
+    {
+      "batch": 16,
+      "role": "output",
+      "input_layout": "public_dram",
+      "delivery": "native_input",
+      "effective_delivery": "reshard",
+      "control_us": 63.84681226336397,
+      "candidate_us": 63.85318760294467,
+      "control_drift_fraction": 0.00044954500151295207,
+      "controls_match": true,
+      "accuracy_passed": true,
+      "comparison_qualified": true,
+      "speedup": 0.999900156283186,
+      "projected_model_saving_ms": -0.00030601629987359047,
+      "multiplicity": 48,
+      "full_model_measured": false,
+      "promoted_to_serving": false
+    },
+    {
+      "batch": 16,
+      "role": "output",
+      "input_layout": "public_dram",
+      "delivery": "matmul_output",
+      "effective_delivery": "reshard",
+      "control_us": 63.84681226336397,
+      "candidate_us": 63.838145579211414,
+      "control_drift_fraction": 0.00044954500151295207,
+      "controls_match": true,
+      "accuracy_passed": true,
+      "comparison_qualified": true,
+      "speedup": 1.0001357602742675,
+      "projected_model_saving_ms": 0.0004160008393228054,
+      "multiplicity": 48,
+      "full_model_measured": false,
+      "promoted_to_serving": false
+    },
+    {
+      "batch": 32,
+      "role": "output",
+      "input_layout": "compact_l1",
+      "delivery": "native_input",
+      "effective_delivery": "native_input",
+      "control_us": 53.0188693664968,
+      "candidate_us": 50.51798128988594,
+      "control_drift_fraction": 0.0003967764108727678,
+      "controls_match": true,
+      "accuracy_passed": true,
+      "comparison_qualified": true,
+      "speedup": 1.0495049091977782,
+      "projected_model_saving_ms": 0.12004262767732143,
+      "multiplicity": 48,
+      "full_model_measured": false,
+      "promoted_to_serving": false
+    },
+    {
+      "batch": 32,
+      "role": "output",
+      "input_layout": "compact_l1",
+      "delivery": "matmul_output",
+      "effective_delivery": "matmul_output",
+      "control_us": 53.0188693664968,
+      "candidate_us": 49.345473817083985,
+      "control_drift_fraction": 0.0003967764108727678,
+      "controls_match": true,
+      "accuracy_passed": true,
+      "comparison_qualified": true,
+      "speedup": 1.0744424009997253,
+      "projected_model_saving_ms": 0.1763229863718152,
+      "multiplicity": 48,
+      "full_model_measured": false,
+      "promoted_to_serving": false
+    },
+    {
+      "batch": 32,
+      "role": "down",
+      "input_layout": "compact_l1",
+      "delivery": "native_input",
+      "effective_delivery": "native_input",
+      "control_us": 94.22960967640392,
+      "candidate_us": 91.69864177238196,
+      "control_drift_fraction": 1.3883195551844807e-05,
+      "controls_match": true,
+      "accuracy_passed": true,
+      "comparison_qualified": true,
+      "speedup": 1.0276009312144931,
+      "projected_model_saving_ms": 0.16198194585740566,
+      "multiplicity": 64,
+      "full_model_measured": false,
+      "promoted_to_serving": false
+    },
+    {
+      "batch": 32,
+      "role": "down",
+      "input_layout": "compact_l1",
+      "delivery": "matmul_output",
+      "effective_delivery": "matmul_output",
+      "control_us": 94.22960967640392,
+      "candidate_us": 90.56133800186217,
+      "control_drift_fraction": 1.3883195551844807e-05,
+      "controls_match": true,
+      "accuracy_passed": true,
+      "comparison_qualified": true,
+      "speedup": 1.040505935043344,
+      "projected_model_saving_ms": 0.23476938717067242,
+      "multiplicity": 64,
+      "full_model_measured": false,
+      "promoted_to_serving": false
+    },
+    {
+      "batch": 32,
+      "role": "output",
+      "input_layout": "public_dram",
+      "delivery": "native_input",
+      "effective_delivery": "reshard",
+      "control_us": 72.99977354705334,
+      "candidate_us": 72.99998949747533,
+      "control_drift_fraction": 0.00024495148034897607,
+      "controls_match": true,
+      "accuracy_passed": true,
+      "comparison_qualified": true,
+      "speedup": 0.9999970417746157,
+      "projected_model_saving_ms": -1.0365620255470276e-05,
+      "multiplicity": 48,
+      "full_model_measured": false,
+      "promoted_to_serving": false
+    },
+    {
+      "batch": 32,
+      "role": "output",
+      "input_layout": "public_dram",
+      "delivery": "matmul_output",
+      "effective_delivery": "reshard",
+      "control_us": 72.99977354705334,
+      "candidate_us": 73.01015517441556,
+      "control_drift_fraction": 0.00024495148034897607,
+      "controls_match": true,
+      "accuracy_passed": true,
+      "comparison_qualified": true,
+      "speedup": 0.9998578057074743,
+      "projected_model_saving_ms": -0.000498318113386631,
+      "multiplicity": 48,
+      "full_model_measured": false,
+      "promoted_to_serving": false
+    }
+  ],
+  "source_sha256": {
+    "tt/__init__.py": "501d5b563ca412fa21db82bf39117b5480ecf99bcaf11996b9c3d5f1093bb9a8",
+    "tt/decode_attention.py": "233021a907845fb954d689934cecd57b6879a6b9343b19c5e74888351637a6f8",
+    "tt/decode_conv.py": "7a80916276118500e04798f3de08058f2074552cbafb7d2a07ced16a67292e52",
+    "tt/decoder.py": "439d1755d2c6a301359d6944bfe9aeb0931b507b688ed874ee3c7b326404a871",
+    "tt/decoder_tp.py": "19541794cd988683880411c6357b2349c06ce38ab7b2e2a6a629e5e0371b7d50",
+    "tt/dram_delivery_probe.py": "80f7a5e31662474674d6aa15d025878ca2737f8a2f306e41db24f412bd558059",
+    "tt/dram_delivery_probe_consumer.cpp": "59e253021e26069d80ebe7074293e623b861e5fdff7777d44612f54abc3d2e54",
+    "tt/dram_delivery_probe_sender.cpp": "c40989afe9111927418d3154a1d757fb431dd8159749cb29adf38a078f901cce",
+    "tt/dram_read_probe.py": "0d8e03cbe18b1f70d3de023622263313474e891acf88a01904dfa29b722df645",
+    "tt/dram_read_probe_reader.cpp": "ddd7913289d724a4c45f07980f299a4f403729a1142c4c1acf8258a2595843ab",
+    "tt/dram_read_probe_writer.cpp": "0df5575b2530009e16ae66bb65bffe8e287f0f94d38c9443e11f5903e379edaf",
+    "tt/gdn_epilogue/compute.cpp": "5e380a87e72c8f28afbf44be441a8a2dd9289df4ae8c68137a5af4dc5c914568",
+    "tt/gdn_epilogue/op.py": "8a410ec22fb3311d242f6704c78f49c48b507272ba33fbb68c229b973210eb13",
+    "tt/gdn_epilogue/reader.cpp": "6b1e06754ea951aaae92e2469415ebc02b9d60a9e18668670a7d074f0c35f34a",
+    "tt/gdn_epilogue/writer.cpp": "cc3f7c63a0d1a68b80460ab53e6ddd63450c8909c41331d08a44724772a6cf85",
+    "tt/gdn_frontend/compute.cpp": "dd70841da8058264a5ef179516e4a79123a170797e75fa4a936559c6ad4b1259",
+    "tt/gdn_frontend/op.py": "0ab52f0345bd133ec0b5ef536b63bd7444b14297cb45267fda8b913a8c2a5d75",
+    "tt/gdn_frontend/reader.cpp": "58126174d4232fb8457ce46d9894737339e6d3f35b90e117c84c825e9c06f482",
+    "tt/gdn_frontend/writer.cpp": "6330d7833351d2452467559504ed28e22d008c0fa3c56e7f8687c50a043c3120",
+    "tt/gdn_fused/__init__.py": "501d5b563ca412fa21db82bf39117b5480ecf99bcaf11996b9c3d5f1093bb9a8",
+    "tt/gdn_fused/op.py": "018edc9f39ba60051c8f84d368844af0a4b3fb6464b57615ec7a3383d2ca5030",
+    "tt/gdn_fused/producer_writer.cpp": "dfe17e20acb45c7685deef145e1ac3039b56f4e7d3b751bc8f0a47f53c4f6b2b",
+    "tt/gdn_step/__init__.py": "c94ebc138e25c01aae5a492beeebe5fca1f7bbbb3a0be4c55c8d6198cba2f48f",
+    "tt/gdn_step/compute.cpp": "bda53aae8011aa35e99a8888a638f8fc1581968199f6f374ea2848f388b176d0",
+    "tt/gdn_step/compute_math.hpp": "c3f00d246fa3f99eb216140776b735fecf053613fb40262f7fff557063f5e639",
+    "tt/gdn_step/compute_resident.cpp": "d6b2b29ea780f4fbb8112ea2025be71ebc7c518b76f55e481917ab0cc7af5b7c",
+    "tt/gdn_step/flat_prepare.py": "cd499c6bebbc135e9e91c7440607ff051f31e3e76c923e6e81f9462608954d0b",
+    "tt/gdn_step/flat_prepare_reader.cpp": "be264c13a36103b35465a6ac8810956ba3d6341747b77fb26ce05f47608eafd5",
+    "tt/gdn_step/gates.py": "6983542e80f98bf169672841982aaf53c3e02f3b3cb05049331a094c030a0737",
+    "tt/gdn_step/model_adapter.py": "aea417ebea82b6ed3ebd0775eb730434360c680722a3e41a2701cb2037172c90",
+    "tt/gdn_step/op.py": "97f5abe9cb9edaf89599957e48e7232487d397b9da44e21fcde6a462179d2368",
+    "tt/gdn_step/prepare_compute.cpp": "0e9f16810ef84e0441e43431a425ebe461c41672b99769ff480f7d8549195c8e",
+    "tt/gdn_step/prepare_reader.cpp": "c9f30a86d923b85ec5c1d006e2bf3cd6b79e675267db0a1bb2e11ede384e52ca",
+    "tt/gdn_step/prepare_writer.cpp": "c76787b3bffea7861c043aad2233ddc21075fa577827efb4bd80ca44835c85a2",
+    "tt/gdn_step/reader.cpp": "16d7813672d8fb33bffa1f10aecc38a76769d00809f5dcf75295ba55106ecd90",
+    "tt/gdn_step/shared_qk.py": "a4e71be1421024d8cb59a7a83ab8c549fe1598a7b0e4f1f1ba610567fe9aa713",
+    "tt/gdn_step/workspace.py": "15b9dd9922428d9e196b7dd31a1b67e8ab6692dac7f6f8ab060b32d2e137bef7",
+    "tt/gdn_step/writer.cpp": "2632705ff4fc977076094b537ff67175f819f78d996f550d78d9955277b7698d",
+    "tt/generator.py": "74cde91a050d40f2d5a7e678c929b9854c0d9d7a7e9ef9dcb0e357619c0b557f",
+    "tt/generator_vllm.py": "2761aa20a8f939a42353780deb294d491fa59caff8fe434a936fa985716119b0",
+    "tt/model.py": "989a6edf72c922be3eb76c5f07a45a8a51c959447fc8c59d00e9de1de2862e3f",
+    "tt/precision.py": "e0e0b83d544cc4798ea51aab73fdd8aa58cf83b3b7dee23aa82f8d09894b3bab",
+    "tt/prefill_attention.py": "ea426ec6015e43acf0565eaf1c509b6729d1e7f308b55966158052354416702a",
+    "tt/prefill_schedule.py": "a18a210057682998669c995e86b0ad8c471a20f5161670f2087f0f165af98a59",
+    "tt/topology.py": "915668bdd65c9fb5c7454273840324877b700d088dcca362d7b936cfcebbb37f",
+    "config/precision.json": "33a8fa95c118a85ceb53e6ba707ae4d6eb74631263d5120c1842afa6605628d1",
+    "effective_precision_override": "54b42cd2f95282eecc2125c91e5bc0c35b99883c2b54d5bc23bfcaea0dcae616"
+  },
+  "checkpoint": "/home/ttuser/qwen38-artifacts-20261007/checkpoint-pinned-1d4bf0f2",
+  "precision": {
+    "config_id": "decoder_bfp8_hifi2_compact_gdn_resident_gates_padding",
+    "weight_groups": {
+      "attention": "bfloat8_b",
+      "output": "bfloat8_b",
+      "gate": "bfloat8_b",
+      "up": "bfloat8_b",
+      "down": "bfloat8_b",
+      "head": "bfloat8_b"
+    },
+    "compute_fidelities": {
+      "attention": "HiFi2",
+      "output": "HiFi2",
+      "gate": "HiFi2",
+      "up": "HiFi2",
+      "down": "HiFi2",
+      "head": "HiFi2"
+    },
+    "fp32_dest_acc_en": true,
+    "layer_exceptions": {},
+    "activation_dtype": {
+      "attention": "bfloat16",
+      "mlp": "bfloat16"
+    },
+    "residual_dtype": "bfloat16",
+    "ccl_dtype": "bfloat16",
+    "kv_cache_dtype": "bfloat8_b",
+    "logits_dtype": "bfloat16",
+    "sampling_dtype": "bfloat16",
+    "norm_dtype": "bfloat16",
+    "embedding_dtype": "bfloat16",
+    "recurrent_dtype": "float32",
+    "convolution_dtype": "bfloat16",
+    "sensitive_compute_fidelity": "HiFi4",
+    "token_dtype": "uint32",
+    "max_context": 262144,
+    "final_norm_compute_fidelity": "HiFi2",
+    "decode_attention": "accurate_full_tile",
+    "decode_recurrence": "single_step_compact_gdn_resident_gates_padding"
+  },
+  "trace_allocation_tracking": true,
+  "scope": "Real layer-0 BFP8 weights; B16/B32 projection, layout and all-reduce, exact baseline and changed-input trace checks",
+  "full_model_qualified": false,
+  "promoted_to_serving": false,
+  "updated_at": "2026-10-12T01:16:10Z",
+  "device_ids": [
+    0,
+    4,
+    12,
+    8
+  ],
+  "active_batch": 32,
+  "active_role": "output",
+  "active_delivery": "reshard"
+}

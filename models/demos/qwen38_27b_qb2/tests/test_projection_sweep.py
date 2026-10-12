@@ -91,7 +91,8 @@ def weight_for(layer, role, config, canonical):
     return result
 
 
-def measure(layer, role, config, weight, inputs, golds, baseline, *, label, input_layout):
+def measure(layer, role, config, weight, inputs, golds, baseline, *, label, input_layout, trace_calls=1):
+    assert type(trace_calls) is int and 1 <= trace_calls <= 16
     spec = ROLES[role]
     candidate = copy.copy(layer)
     candidate.policy = dict(layer.policy, **{role + "_" + key: value for key, value in config.items()})
@@ -107,8 +108,32 @@ def measure(layer, role, config, weight, inputs, golds, baseline, *, label, inpu
     # Include the declared compact/public GDN or compact MLP projection boundary,
     # including native TP all-reduce. Setup, weight repacking and readbacks are excluded.
     warmup = invoke(inputs[0])
+    # Warm the input-copy and local-reference programs before capture. Native
+    # program caching can retain allocations made on their first invocation;
+    # allocating them after capture makes them unsafe at the next replay.
+    local_accuracy = []
+    for index in (0, 1):
+        local = Qwen38Decoder._linear(candidate, inputs[index], spec["name"], keep_sharded=True)
+        readback = ttnn.to_memory_config(local, ttnn.DRAM_MEMORY_CONFIG)
+        partials = download(readback)
+        local_accuracy.append([metrics(v[..., : spec["n"]], g) for v, g in zip(partials, golds[index])])
+        ttnn.deallocate(readback)
+        ttnn.deallocate(local)
+        del partials, readback, local
+    copied = ttnn.copy(inputs[2], inputs[0])
+    assert copied.buffer_address() == inputs[0].buffer_address()
+    del copied
+    # Warm output readback too, without retaining any post-capture device
+    # conversion tensors across replay.
+    download(warmup)
     ttnn.synchronize_device(layer.device)
-    trace, output = capture(layer.device, lambda: invoke(inputs[0]))
+
+    def trace_body():
+        for _ in range(trace_calls):
+            result = invoke(inputs[0])
+        return result
+
+    trace, output = capture(layer.device, trace_body)
     checks, hashes, initial_hashes = [], [], None
     try:
         for index in (0, 1, 0):
@@ -116,11 +141,8 @@ def measure(layer, role, config, weight, inputs, golds, baseline, *, label, inpu
                 ttnn.copy(inputs[1], inputs[0])
             else:
                 ttnn.copy(inputs[2], inputs[0])
-            # Independently evaluate each local quantized GEMM before CCL.
-            local = Qwen38Decoder._linear(candidate, inputs[0], spec["name"], keep_sharded=True)
-            partials = download(ttnn.to_memory_config(local, ttnn.DRAM_MEMORY_CONFIG))
-            local_checks = [metrics(v[..., : spec["n"]], g) for v, g in zip(partials, golds[index])]
-            del partials, local
+            local_checks = local_accuracy[index]
+            ttnn.synchronize_device(layer.device)
             ttnn.execute_trace(layer.device, trace, cq_id=0, blocking=True)
             outputs = [v.reshape(-1, spec["n"]) for v in download(output)]
             dense_sum = sum(golds[index])
@@ -149,7 +171,7 @@ def measure(layer, role, config, weight, inputs, golds, baseline, *, label, inpu
             for _ in range(100):
                 ttnn.execute_trace(layer.device, trace, cq_id=0, blocking=False)
             ttnn.synchronize_device(layer.device)
-            samples.append((time.perf_counter() - tick) * 1e6 / 100)
+            samples.append((time.perf_counter() - tick) * 1e6 / (100 * trace_calls))
         assert hashes == [digest(v.reshape(-1, spec["n"])) for v in download(output)]
         row = dict(
             label=label,
@@ -163,6 +185,7 @@ def measure(layer, role, config, weight, inputs, golds, baseline, *, label, inpu
             accuracy_passed=all(c["passed"] for c in checks),
             changed_input_trace_passed=all(c["passed"] for c in checks),
             full_model_measured=False,
+            trace_calls=trace_calls,
         )
     finally:
         ttnn.release_trace(layer.device, trace)

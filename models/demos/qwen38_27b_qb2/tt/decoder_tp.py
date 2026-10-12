@@ -97,6 +97,8 @@ class Qwen38TPDecoder(Qwen38Decoder):
             public_dram_batch=2,
         )
         self.policy.update(policy or {})
+        if self.policy.get("projection_delivery", "reshard") not in ("reshard", "native_input", "matmul_output"):
+            raise ValueError("projection_delivery must be reshard, native_input, or matmul_output")
         self.CHUNK_SIZE = self.policy["chunk_size"]
         self.sharded_residual = self.policy["residual_layout"] == "sharded"
         if self.sharded_residual:
@@ -623,7 +625,23 @@ class Qwen38TPDecoder(Qwen38Decoder):
             packed = ttnn.reshape(output, [1, 1, batch, 5120])
             ar_cores = self.policy.get("allreduce_cores", 80)
             memory = self._width_memory(ar_cores, 32, 5120 // ar_cores)
-            packed = ttnn.to_memory_config(packed, memory)
+            delivery = self._projection_delivery(x, name, keep_sharded)
+            if delivery == "reshard":
+                packed = ttnn.to_memory_config(packed, memory)
+            else:
+                # Native all-reduce accepts separate input/output shard grids.
+                # Preserve its output grid, reduction order and scratch buffer;
+                # only avoid the preceding input redistribution program.
+                if (
+                    packed.memory_config().memory_layout != ttnn.TensorMemoryLayout.WIDTH_SHARDED
+                    or packed.memory_config().buffer_type != ttnn.BufferType.L1
+                ):
+                    raise ValueError("Direct collective delivery requires width-sharded L1 projection output")
+                if delivery == "matmul_output" and (
+                    list(packed.memory_config().shard_spec.shape) != [32, 5120 // ar_cores]
+                    or packed.memory_config().shard_spec.grid.num_cores() != ar_cores
+                ):
+                    raise ValueError("Matmul output does not match the requested collective shard width")
             ccl_dtype = getattr(ttnn, self.policy["ccl_dtype"])
             if packed.dtype != ccl_dtype:
                 packed = ttnn.typecast(packed, ccl_dtype)

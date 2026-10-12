@@ -315,7 +315,24 @@ class Qwen38Decoder(LightweightModule):
     def _weight_dtype(self, name):
         return getattr(ttnn, self.policy.get(self._role(name) + "_dtype", "bfloat8_b"))
 
+    def _projection_delivery(self, x, name, keep_sharded):
+        # Restrict the experimental route to the boundaries measured natively.
+        # Public rows, prefill, lower batch buckets and full-attention output
+        # retain their established layout/collective contract.
+        if (
+            self.policy.get("direct_allreduce", False)
+            and not getattr(self, "sharded_residual", False)
+            and name in ("linear_attn.out_proj", "mlp.down_proj")
+            and keep_sharded
+            and len(x.shape) == 4
+            and tuple(x.shape)[:2] == (1, 1)
+            and x.shape[-2] in (16, 32)
+        ):
+            return self.policy.get("projection_delivery", "reshard")
+        return "reshard"
+
     def _linear(self, x, name, activation=None, keep_sharded=False):
+        projection_delivery = self._projection_delivery(x, name, keep_sharded)
         if self.policy.get("split_attention", False):
             if name == "self_attn.qkvg":
                 qg = self._linear(x, "self_attn.split_qg")
@@ -372,6 +389,12 @@ class Qwen38Decoder(LightweightModule):
             memory = self._width_memory(cores, ((batch + 31) // 32) * 32, shard_tiles * 32)
             x = ttnn.reshape(x, [1, 1, batch, k])
             x = ttnn.to_memory_config(x, memory)
+            # Experimental TP decode delivery: output storage is independent
+            # of activation senders and DRAM readers. Keep their geometry and
+            # arithmetic unchanged while using the collective's shard widths.
+            storage_cores = cores
+            if projection_delivery == "matmul_output" and not dram_prefill:
+                storage_cores = self.policy.get("allreduce_cores", 80)
             program = ttnn.MatmulMultiCoreReuseMultiCastDRAMShardedProgramConfig(
                 in0_block_w=block,
                 per_core_M=(batch + 31) // 32,
@@ -379,10 +402,10 @@ class Qwen38Decoder(LightweightModule):
                     self.dram_weights[name + ".weight"].memory_config().shard_spec.shape[1]
                     // 32
                     * self.device.dram_grid_size().x
-                    + cores
+                    + storage_cores
                     - 1
                 )
-                // cores,
+                // storage_cores,
                 fused_activation=ttnn.UnaryWithParam(ttnn.UnaryOpType.SILU) if activation else None,
                 num_workers_per_dram_bank=self.policy.get(role + "_readers", 1),
             )

@@ -2776,3 +2776,45 @@ formatting. The reproducible report is
 [resident reader results](../galaxy-evidence/gdn-resident-padding-results-v1/README.md).
 The next implementation priority is projection/collective dataflow, including
 the complete traced boundary, rather than another unchanged 62-case knob sweep.
+
+## October 11, 17:24 UTC / October 12, 01:11-01:16 UTC: projection delivery
+
+Implemented two opt-in routes using the existing native matmul and collective:
+feed the eight-shard projection directly to all-reduce, or configure matmul
+output storage as 40 width-128 shards while retaining activation senders,
+readers, K blocking, BFP8 weights and arithmetic. The native producer grid and
+collective destination grid differ; all-reduce performs the supported mapping.
+
+The persistent v1 job stopped on its first baseline replay. Allocation tracking
+found copy and sharded-to-interleaved program-cache buffers still alive after
+capture. No candidate timing was produced. On resumption, v2 warmed auxiliary
+programs before capture, moved local reference evaluation before capture and
+explicitly released readback tensors. It passed 13 CPU tests and 16 native
+cases with allocation tracking, exact four-rank baseline outputs, A/B/A changed
+inputs and clean closure. The prior goal turn made implementation progress;
+the resumed work verified the terminal service before launching another run.
+
+The call-site audit restricted the candidate to measured compact B16/B32 GDN
+output and MLP down boundaries. Public rows, lower batches, full-attention
+output and prefill use the existing route. v3 caught an unsupported native
+Shape slice in that guard before timing. v4 converts the shape to a tuple and
+passed all 24 expanded cases, including public-row fallback at B16/B32. Both
+failures and both successes are retained. No device reset or native install
+change occurred. Each attempt passed the 13 focused CPU checks.
+
+Final B16 complete-boundary baseline/matmul-output times: GDN output
+52.998/49.368 us; down 94.215/90.564 us. B32: 53.019/49.345 and 94.230/90.561 us.
+Controls drifted less than 0.074% on compact cells; public fallback remained
+within 0.015%. Five samples per arm each use 100 replays of 16 calls. v2 and
+v4 independently project 0.407878 and 0.407892 ms across 48 output/64 down
+boundaries. Projection is +0.1794 TSU, approximately 21.064 TSU; current measured
+model remains 20.884562 TSU. This is below the per-feature validation threshold,
+so it is retained for combined model testing, default off. No new full model,
+G0/API, GPQA, lower-batch performance or AgentX result is claimed.
+
+All 60 raw receipts plus final tested source hashes are reproduced by
+[the delivery report](../galaxy-evidence/projection-delivery-results-v1/README.md).
+Services are terminal; successful transient units had been garbage-collected
+by collection, so controller/JUnit/native logs prove success. No job from this
+series remains queued. The small gain narrows the remaining projection budget;
+GDN operand preparation and SDPA scheduling remain larger implementation targets.

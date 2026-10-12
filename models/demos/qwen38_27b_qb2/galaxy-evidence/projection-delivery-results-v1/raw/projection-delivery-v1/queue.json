@@ -1,0 +1,39 @@
+{
+  "state": "failed",
+  "started_at": 1791739419.070071,
+  "cleanup_completed": false,
+  "survives_disconnect": true,
+  "resumes_after_reboot": false,
+  "full_model_qualified": false,
+  "promoted_to_serving": false,
+  "hardware_lock": "/tmp/tt-device.lock",
+  "updated_at": "2026-10-11T17:24:02Z",
+  "unit_command": [
+    "/home/ttuser/kimi-prefill.Ubx2wY/runtime/qwen38-27b-20261006/python_env/bin/python3.10",
+    "-m",
+    "pytest",
+    "/home/ttuser/qwen38-artifacts-20261007/projection-delivery-source-v1/models/demos/qwen38_27b_qb2/tests/unit/test_projection_sweep.py",
+    "--rootdir=/home/ttuser/qwen38-artifacts-20261007/projection-delivery-source-v1",
+    "-c",
+    "/home/ttuser/qwen38-artifacts-20261007/projection-delivery-source-v1/pytest.ini",
+    "-q",
+    "--junitxml=/home/ttuser/qwen38-artifacts-20261007/projection-delivery-control-v1/unit.xml"
+  ],
+  "cpu_tests_passed": 13,
+  "command": [
+    "/bin/bash",
+    "/home/ttuser/qwen38-artifacts-20261007/projection-delivery-source-v1/scripts/run_safe_pytest.sh",
+    "/home/ttuser/qwen38-artifacts-20261007/projection-delivery-source-v1/models/demos/qwen38_27b_qb2/tests/test_projection_delivery.py",
+    "--rootdir=/home/ttuser/qwen38-artifacts-20261007/projection-delivery-source-v1",
+    "-c",
+    "/home/ttuser/qwen38-artifacts-20261007/projection-delivery-source-v1/pytest.ini",
+    "-vv",
+    "-s",
+    "--tb=short",
+    "--timeout=900",
+    "--junitxml=/home/ttuser/qwen38-artifacts-20261007/projection-delivery-v1/hardware.xml"
+  ],
+  "error": "CalledProcessError",
+  "detail": "Command '['/bin/bash', '/home/ttuser/qwen38-artifacts-20261007/projection-delivery-source-v1/scripts/run_safe_pytest.sh', '/home/ttuser/qwen38-artifacts-20261007/projection-delivery-source-v1/models/demos/qwen38_27b_qb2/tests/test_projection_delivery.py', '--rootdir=/home/ttuser/qwen38-artifacts-20261007/projection-delivery-source-v1', '-c', '/home/ttuser/qwen38-artifacts-20261007/projection-delivery-source-v1/pytest.ini', '-vv', '-s', '--tb=short', '--timeout=900', '--junitxml=/home/ttuser/qwen38-artifacts-20261007/projection-delivery-v1/hardware.xml']' returned non-zero exit status 1.",
+  "finished_at": 1791739442.872999
+}
