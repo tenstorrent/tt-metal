@@ -6,6 +6,8 @@
 
 #include <cstdint>
 
+#include "windowed_mode.hpp"
+
 /**
  * Shared windowed (block-diagonal) K-loop bound geometry.
  *
@@ -25,6 +27,10 @@
  * Q positions are GLOBAL (q_tok_offset added — the tensor may be a sequence-parallel shard);
  * K positions and the returned chunk indices are never offset.
  *
+ * WindowedMode::Causal additionally stops the range at the Q chunk's diagonal: its last token (global
+ * q_high_tok - 1) attends to no K position past itself, so chunks wholly above the diagonal are skipped.
+ * The diagonal is at global positions, which is why the Q offset matters here too.
+ *
  * Returns [k_lo, k_hi) clamped to [0, k_num_chunks], never empty: a Q chunk overlapping no
  * window (padded tail rows) gets [0, 1) — one all--inf chunk, preserving the dense path's
  * semantics (every kernel processes >= 1 K chunk per Q chunk; the NaN rows this produces are
@@ -35,6 +41,7 @@ struct WindowedKChunkRange {
     uint32_t k_hi;
 };
 
+template <WindowedMode mode>
 inline WindowedKChunkRange windowed_k_chunk_range(
     uint32_t q_chunk,
     uint32_t Sq_chunk_t,
@@ -78,6 +85,13 @@ inline WindowedKChunkRange windowed_k_chunk_range(
     const uint32_t chunk_toks = tile_height * Sk_chunk_t;
     uint32_t k_lo = cu_ptr[start_window_idx] / chunk_toks;
     uint32_t k_hi = (cu_ptr[last_window_idx + 1] + chunk_toks - 1) / chunk_toks;
+    if constexpr (mode == WindowedMode::Causal) {
+        // The window starts at or before q_low_tok, so k_lo <= q_low_tok / chunk_toks < this bound.
+        const uint32_t k_hi_causal = (q_high_tok + chunk_toks - 1) / chunk_toks;
+        if (k_hi > k_hi_causal) {
+            k_hi = k_hi_causal;
+        }
+    }
     if (k_hi > k_num_chunks) {
         k_hi = k_num_chunks;
     }

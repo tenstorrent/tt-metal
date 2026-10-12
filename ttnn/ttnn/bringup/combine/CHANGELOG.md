@@ -48,3 +48,11 @@ Mechanical fork changes (fork_op.py): namespace `ttnn::operations::bringup`, CMa
 - Why: task O.1, every call a model makes to a fork gets a case.
 - Needed by: hy4_preview_d_p O.1
 - Files: `tests/cases.py`
+
+### Upstream sync to source @ `bdc576fa652` (2026-10-12): cache-hit dispatch overhead, include cleanup
+- What: a 3-way merge (base = fork_op.py's mechanical copy of the source @ `73027b6e6ff`, theirs = the same copy of
+  the source @ `bdc576fa652`, ours = this fork), no conflicts, of #58517 (less host work on a program-cache hit) and
+  #59418 (include cleaner).
+- Default behaviour: unchanged results; a cache hit does less host work.
+- Needed by: rebase onto origin/llk_helper_library @ `bdc576fa652` (2026-10-12)
+- Files: `combine.cpp`, `device/combine_program_factory.cpp`
