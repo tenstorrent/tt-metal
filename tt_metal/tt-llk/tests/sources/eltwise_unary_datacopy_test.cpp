@@ -74,7 +74,7 @@ void run_kernel(RUNTIME_PARAMETERS params)
             // idle here deadlocks math.
             if constexpr (!unpack_to_dest)
             {
-                _perf_unpack_loop_set_valid</* src A */ true, /* src B */ tilize_en || is_fp32_dest_acc_en>(src_handshake_iters);
+                _perf_unpack_loop_set_valid</* src A */ true, /* src B */ tilize_en || is_fp32_dest_acc_en, PERF_RUN_TYPE>(src_handshake_iters);
             }
         }
         else
@@ -188,7 +188,7 @@ void run_kernel(RUNTIME_PARAMETERS params)
             }
             else
             {
-                _perf_math_loop_clear_valid</* src A */ true, /* src B */ true>(src_handshake_iters);
+                _perf_math_loop_clear_valid</* src A */ true, /* src B */ true, PERF_RUN_TYPE>(src_handshake_iters);
             }
         }
         else if constexpr (PERF_RUN_TYPE == PerfRunType::MATH_ISOLATE)
