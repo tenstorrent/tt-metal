@@ -93,12 +93,12 @@ constexpr bool PERF_PACK_SECTION_RELEASE = false;
 #endif
 
 // The run types whose source mock goes through the MOP expander: on Wormhole, MATH_ISOLATE's unpack mock and
-// UNPACK_ISOLATE's math mock. Every other caller (L1_CONGESTION, Blackhole, Quasar) keeps the RISC-V loop mocks below.
+// UNPACK_ISOLATE's math mock, and every L1_CONGESTION mock. Blackhole and Quasar keep the RISC-V loop mocks below.
 template <PerfRunType RUN_TYPE>
 constexpr bool perf_mock_mop()
 {
 #if defined(ARCH_WORMHOLE)
-    return RUN_TYPE == PerfRunType::UNPACK_ISOLATE || RUN_TYPE == PerfRunType::MATH_ISOLATE;
+    return RUN_TYPE == PerfRunType::UNPACK_ISOLATE || RUN_TYPE == PerfRunType::MATH_ISOLATE || RUN_TYPE == PerfRunType::L1_CONGESTION;
 #else
     return false;
 #endif
