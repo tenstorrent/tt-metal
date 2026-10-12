@@ -547,7 +547,8 @@ class TtMoe(LightweightModule):
         )
         overlap_fits = is_blackhole() and ring_axis_wraps and fabric_payload >= overlap_payload
         if overlap_routed_expert_with_combine is None:
-            overlap_routed_expert_with_combine = overlap_fits
+            # Off while the mesh keeps the overlap's fabric payload: times that payload without the overlap.
+            overlap_routed_expert_with_combine = False
         elif overlap_routed_expert_with_combine and not overlap_fits:
             raise ValueError(
                 f"overlap_routed_expert_with_combine needs Blackhole, a 2D fabric that wraps along mesh axis 0 (got "
