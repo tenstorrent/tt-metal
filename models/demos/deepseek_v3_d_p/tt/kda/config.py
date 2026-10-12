@@ -35,6 +35,9 @@ KDA_ACTIVATION_L1_BYTES_PER_CORE = 48 * 1024
 # The convolution's Q, K and V stay in L1 until chunk preparation reads them when they fit (98 KiB per core for
 # Kimi-K3 on Galaxy SP8xTP4).
 KDA_QKV_L1_BYTES_PER_CORE = 112 * 1024
+# The fused input projection is read in place by five ops through the gated norm; it stays in L1 when it fits
+# (133 KiB per core for Kimi-K3 on Galaxy SP8xTP4).
+KDA_PROJECTION_L1_BYTES_PER_CORE = 144 * 1024
 KDA_LOCAL_PREFIX_MEMORY_CONFIG = ttnn.L1_MEMORY_CONFIG
 KDA_DISTRIBUTED_PREFIX_MEMORY_CONFIG = ttnn.DRAM_MEMORY_CONFIG
 KDA_DISTRIBUTED_WORKING_MEMORY_CONFIG = ttnn.L1_MEMORY_CONFIG
