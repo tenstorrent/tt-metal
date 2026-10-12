@@ -461,9 +461,6 @@ class Prefetcher(LightweightModule):
 
     def _insert_registered_tensors(self):
         """Runs the registered callbacks once, inserting their tensors in registration order."""
-        assert (
-            len(self.callbacks) > 0
-        ), "No tensors insertion callbacks have been inserted into the prefetcher queue. Cannot prefetch an empty queue"
         if not self.prefetch_done:
             for callback in self.callbacks:
                 callback()
@@ -478,6 +475,9 @@ class Prefetcher(LightweightModule):
         """
         if self.mode == Mode.DECODE:
             assert self.init_decode_done, "Prefetcher has not been initialized for decode mode. Cannot prefetch tensors"
+            assert (
+                len(self.callbacks) > 0
+            ), "No tensors insertion callbacks have been inserted into the prefetcher queue. Cannot prefetch an empty queue"
             self._insert_registered_tensors()
         # NO-OP for prefill mode
         return
@@ -494,6 +494,7 @@ class Prefetcher(LightweightModule):
         if self.pipes:
             return
         self._insert_registered_tensors()
+        assert self.prefetched_tensors, "No tensors have been inserted into the prefetcher. Cannot size its pipes"
         senders = self.core_config.sender_cores(active=True)
         receivers = self.core_config.receiver_cores(sender_active=True, receiver_active=True)
         logger.info(f"[DRAM Prefetcher] Creating PrefetcherPipes with ring size: {self.max_tensor_block_size}")
