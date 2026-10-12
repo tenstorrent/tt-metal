@@ -153,13 +153,13 @@ range and score filters.
 - The top-k and the decoding run on device. A float32 top-k over all 9000 scores is slow, so the
   logits are ranked in bfloat16 against a pivot, the bfloat16 k-th logit, and the 512 candidates
   are re-ranked exactly in float32.
-- The range test runs on device too, as a validity mask on the 300 boxes; only dropping the
-  invalid ones runs on host (`compact`), as the count left depends on the data and device tensors
-  have fixed shapes.
+- The range test and the optional score threshold run on device too, as a validity mask on the
+  300 boxes; only dropping the invalid ones runs on host (`compact`), as the count left depends on
+  the data and device tensors have fixed shapes. Upstream's fallback when no score passes the
+  threshold, lowering it by 10% at a time, uses thresholds that depend on the threshold only:
+  they are computed once on the host, and the device picks the first one the top score reaches.
 - `decode` keeps cz at the box's gravity center, as upstream's coder does; `finalize` moves it to
   the bottom face on device, as upstream `get_bboxes` does after the coder.
-- Upstream's `score_threshold` is not ported: no BEVFormer config sets it, and its fallback lowers
-  the threshold until some score passes, which depends on the scores.
 
 ## Project Structure
 
