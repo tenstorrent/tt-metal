@@ -14,8 +14,9 @@ section blocks the run. Outside that section, a line that uses a waiver word
 (WAIVER_RE) must cite an entry of the same log as `R<n>`, so a risk an agent
 noticed cannot be waved off in prose.
 
-Only the latest writer / tester cycle and the latest refiner version are read;
-earlier cycles were superseded.
+Only the pipeline self-logs of the run's state are read (state.json `CYCLE`,
+`SKIP_WRITER`): analyzer, writer and tester of cycle CYCLE, the refiner version
+that preceded it, optimizer and prettifier. Each one that is absent is MISSING.
 
 Usage:
     open_risks.py check    --log-dir DIR   # exit 0 = clear, 1 = blocked
@@ -24,35 +25,45 @@ Usage:
 from __future__ import annotations
 
 import argparse
-import glob
 import os
 import re
 import sys
+from pathlib import Path
 
 WAIVER_RE = re.compile(
-    r"\b(untested|unexercised|not exercised|negligible|conservative(?:ly)?|may be wrong|assum(?:e|es|ed|ing))\b",
+    r"\b(untested|unexercised|not exercised|not tested|unverified|not verified|negligible|conservative(?:ly)?"
+    r"|may be wrong|assume|assumes|assumed|assuming)\b",
     re.I,
 )
 ENTRY_RE = re.compile(r"^R(\d+)\s+(CLOSED|DEFERRED|OPEN)\s*:\s*(.*)$", re.I)
 REF_RE = re.compile(r"\bR(\d+)\b")
-BULLET_RE = re.compile(r"^\s*[-*]\s+")
-_CYCLED = re.compile(r"^agent_(writer_cycle|tester_cycle|analysis_refiner_v)(\d+)$")
+BULLET_RE = re.compile(r"^[-*]\s+")
+SUB_BULLET_RE = re.compile(r"^\s+[-*]\s+")
+NONE_WORDS = ("none", "n/a")
 
 
-def latest_logs(log_dir: str) -> list[str]:
-    """agent_*.md paths, keeping only the highest cycle/version per cycled role."""
-    best: dict[str, tuple[int, str]] = {}
-    plain = []
-    for path in sorted(glob.glob(os.path.join(log_dir, "agent_*.md"))):
-        stem = os.path.splitext(os.path.basename(path))[0]
-        m = _CYCLED.match(stem)
-        if not m:
-            plain.append(path)
-            continue
-        n = int(m.group(2))
-        if m.group(1) not in best or n > best[m.group(1)][0]:
-            best[m.group(1)] = (n, path)
-    return sorted(plain + [p for _, p in best.values()])
+def _state(log_dir: str) -> dict:
+    sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
+    import state
+
+    return state._load(Path(log_dir) / "state.json")
+
+
+def expected_logs(log_dir: str) -> list[str]:
+    """Self-log names the run's state says must exist."""
+    st = _state(log_dir)
+    cycle = int(st.get("CYCLE") or 1)
+    names = ["agent_analyzer.md"]
+    if cycle > 1:
+        names.append(f"agent_analysis_refiner_v{cycle - 1}.md")
+    if str(st.get("SKIP_WRITER")).lower() != "true":
+        names.append(f"agent_writer_cycle{cycle}.md")
+    names += [
+        f"agent_tester_cycle{cycle}.md",
+        "agent_optimizer.md",
+        "agent_prettifier.md",
+    ]
+    return names
 
 
 def _clean(s: str) -> str:
@@ -81,12 +92,15 @@ def parse(text: str):
             found = found or in_section
             continue
         if in_section:
-            if BULLET_RE.match(line):
-                raw_entries.append(_clean(BULLET_RE.sub("", line)))
-            elif s and raw_entries:
-                raw_entries[-1] += " " + _clean(s)
-            elif s and _clean(s).lower().rstrip(".") not in ("none", "n/a"):
-                raw_entries.append(_clean(s))
+            if not s:
+                continue
+            if raw_entries and (SUB_BULLET_RE.match(line) or not BULLET_RE.match(line)):
+                # Indented bullets and wrapped lines continue the entry above.
+                raw_entries[-1] += " " + _clean(BULLET_RE.sub("", s))
+                continue
+            text = _clean(BULLET_RE.sub("", s))
+            if text.lower().rstrip(".") not in NONE_WORDS:
+                raw_entries.append(text)
         elif s:
             prose.append((no, s))
     entries, malformed = [], []
@@ -109,12 +123,14 @@ def check(log_dir: str) -> tuple[list[str], int, int]:
     """Return (blocking findings, closed count, deferred count)."""
     findings: list[str] = []
     closed = deferred = 0
-    paths = latest_logs(log_dir)
-    if not paths:
-        return [f"MISSING {log_dir}: no agent_*.md self-logs"], 0, 0
-    for path in paths:
-        name = os.path.basename(path)
-        found, entries, malformed, prose = parse(open(path, encoding="utf-8", errors="replace").read())
+    for name in expected_logs(log_dir):
+        path = os.path.join(log_dir, name)
+        if not os.path.isfile(path):
+            findings.append(f"MISSING {name}: self-log not written")
+            continue
+        found, entries, malformed, prose = parse(
+            open(path, encoding="utf-8", errors="replace").read()
+        )
         if not found:
             findings.append(f"MISSING {name}: no '## Open risks' section")
         ids = {rid for rid, _, _ in entries}
@@ -132,16 +148,23 @@ def check(log_dir: str) -> tuple[list[str], int, int]:
 
 def deferred_lines(log_dir: str) -> list[str]:
     out = []
-    for path in latest_logs(log_dir):
+    for name in expected_logs(log_dir):
+        path = os.path.join(log_dir, name)
+        if not os.path.isfile(path):
+            continue
         _, entries, _, _ = parse(open(path, encoding="utf-8", errors="replace").read())
         for _, status, body in entries:
             if status == "DEFERRED":
-                out.append(re.split(r"\bPR:\s*", body, maxsplit=1)[1].strip())
+                line = re.split(r"\bPR:\s*", body, maxsplit=1)[1].strip()
+                if line not in out:
+                    out.append(line)
     return out
 
 
 def main() -> int:
-    ap = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
+    ap = argparse.ArgumentParser(
+        description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter
+    )
     ap.add_argument("cmd", choices=["check", "deferred"])
     ap.add_argument("--log-dir", required=True)
     args = ap.parse_args()
@@ -152,7 +175,9 @@ def main() -> int:
     for f in findings:
         print(f)
     if findings:
-        print(f"OPEN_RISKS: BLOCKED ({len(findings)} item(s)) — close (evidence) or defer (PR text) each one")
+        print(
+            f"OPEN_RISKS: BLOCKED ({len(findings)} item(s)) — close (evidence) or defer (PR text) each one"
+        )
         return 1
     print(f"OPEN_RISKS: CLEAR ({closed} closed, {deferred} deferred)")
     return 0

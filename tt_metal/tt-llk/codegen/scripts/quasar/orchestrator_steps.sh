@@ -1620,6 +1620,21 @@ execute_step_format_advance() {
         --agent "format"
 }
 
+# The PR Gate's perf-header check (device-free): param field names must be globally
+# unique and the QSR perf schema unchanged. Prints PERF_HEADER_GATE: PASS|FAIL; the
+# tester runs it after any test-parameter edit (llk-tester.md 1F).
+execute_step_perf_header_gate() {
+    local _L; _L="$(_LOG)"
+    local llk; llk="$(_wt)/tt_metal/tt-llk"
+    if ( cd "$llk/tests/python_tests" && PYTHONPATH=.:helpers ../.venv/bin/python -m pytest \
+            --noconftest -q -p no:cacheprovider test_perf_header_gate.py ) > "$_L/perf_header_gate.log" 2>&1; then
+        echo "PERF_HEADER_GATE: PASS"
+        return 0
+    fi
+    echo "PERF_HEADER_GATE: FAIL — $(grep -m1 -E '^FAILED|Error' "$_L/perf_header_gate.log") (full log: $_L/perf_header_gate.log)"
+    return 1
+}
+
 # ===========================================================================
 # Step 7b — pre-PR gates: the PR Gate perf-header check, reference drift since the
 # base commit, and the open-risks gate over the agent self-logs. Writes
@@ -1632,21 +1647,14 @@ execute_step_pre_pr_gates() {
     local _L; _L="$(_LOG)"
     local final="${1:-}" rc=0 out base ref drift
     out="$_L/pre_pr_gates.txt"; : > "$out"
-    # Param field names must be globally unique and the QSR perf schema unchanged
-    # (rand #59437, welfords #59440, dropout #59436 all failed this in CI).
-    if ( cd tests/python_tests && PYTHONPATH=.:helpers ../.venv/bin/python -m pytest \
-            --noconftest -q -p no:cacheprovider test_perf_header_gate.py ) > "$_L/perf_header_gate.log" 2>&1; then
-        echo "PERF_HEADER_GATE: PASS" | tee -a "$out"
-    else
-        echo "PERF_HEADER_GATE: FAIL — $(grep -m1 -E '^FAILED|Error' "$_L/perf_header_gate.log") (full log: $_L/perf_header_gate.log)" | tee -a "$out"
-        rc=1
-    fi
+    execute_step_perf_header_gate | tee -a "$out"
+    [ "${PIPESTATUS[0]}" -eq 0 ] || rc=1
     # Upstream changes to the reference since the run's base (welfords #59440 needed a
     # second port after #54786 landed). Informational: goes into the PR follow-ups.
     base="$(sg GIT_COMMIT)"; ref="$(sg KERNEL_PATH)"
     if [ -n "$base" ] && [ "$base" != "unknown" ] && [ -n "$ref" ]; then
         git fetch -q origin main 2>/dev/null || true
-        drift="$(git log --oneline "$base"..origin/main -- "$ref" 2>/dev/null | head -3)"
+        drift="$(git log --oneline "$base"..origin/main -- "$ref" 2>/dev/null | head -2)"
         if [ -n "$drift" ]; then
             while IFS= read -r c; do echo "DRIFT: reference ${ref} changed on main since the run base: ${c}"; done <<<"$drift" | tee -a "$out"
         else

@@ -23,6 +23,7 @@ import json
 import os
 import re
 import sys
+from pathlib import Path
 
 
 def _d(v) -> dict:
@@ -296,11 +297,19 @@ def build(d: dict, log_dir: str) -> str:
     cov = _d(d.get("coverage"))
     A("Code Paths Tested:")
     covered, not_covered = _l(cov.get("covered")), _d(cov.get("not_covered"))
-    A(f"  Covered:     {', '.join(str(x) for x in covered) if covered else '(none recorded)'}")
+    A(
+        f"  Covered:     {', '.join(str(x) for x in covered) if covered else '(none recorded)'}"
+    )
     if not_covered:
         A(f"  Not covered: {', '.join(f'{k} ({v})' for k, v in not_covered.items())}")
     if d.get("test_file"):
         A(f"  Test file:   {d['test_file']}")
+    risks = _deferred(log_dir)
+    if risks:
+        A("----------------------------------------")
+        A("Open risks (deferred):")
+        for r in risks:
+            A(f"  - {r}")
     A("----------------------------------------")
     A("Artifacts:")
     A(f"  Generated File: {d.get('generated_file', '')}")
@@ -313,34 +322,75 @@ def build(d: dict, log_dir: str) -> str:
     return "\n".join(L) + "\n"
 
 
+# Line budget: What, Scope, Testing take 2 lines each, Open risks and Follow-ups 1 header
+# each, leaving MAX_RISKS + 1 overflow line + MAX_DRIFT (orchestrator_steps.sh keeps the
+# same number of DRIFT lines).
 PR_BODY_MAX_LINES = 15
+PR_BODY_MAX_RISKS = 4
+PR_BODY_MAX_DRIFT = 2
+
+
+def _deferred(log_dir: str) -> list[str]:
+    sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
+    from open_risks import deferred_lines
+
+    return deferred_lines(log_dir)
+
+
+def _compute_api_unwired(log_dir: str) -> bool:
+    """True when the analyzer found the compute-API wrapper gated out and the patch leaves it so."""
+    sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
+    import state
+
+    if (
+        str(state._load(Path(log_dir) / "state.json").get("COMPUTE_API_GATED")).lower()
+        != "true"
+    ):
+        return False
+    patch = os.path.join(log_dir, "generated.patch")
+    return not (
+        os.path.isfile(patch)
+        and "tt_metal/hw/inc/api/" in open(patch, errors="replace").read()
+    )
 
 
 def pr_body(d: dict, log_dir: str) -> str:
     """Short PR description; never a run-log dump (reviewers rewrote every long one)."""
-    sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
-    from open_risks import deferred_lines
-
     cov = _d(d.get("coverage"))
     covered, not_covered = _l(cov.get("covered")), _d(cov.get("not_covered"))
-    patch = os.path.join(log_dir, "generated.patch")
-    wired = os.path.isfile(patch) and "tt_metal/hw/inc/api/" in open(patch, errors="replace").read()
     gates = os.path.join(log_dir, "pre_pr_gates.txt")
     drift = [ln.strip() for ln in open(gates)] if os.path.isfile(gates) else []
-    drift = [ln for ln in drift if ln.startswith("DRIFT")]
-    risks = deferred_lines(log_dir)
+    drift = [ln for ln in drift if ln.startswith("DRIFT") and ln != "DRIFT: none"]
+    risks = _deferred(log_dir)
+    risk_lines = [f"- {r}" for r in risks[:PR_BODY_MAX_RISKS]]
+    if len(risks) > PR_BODY_MAX_RISKS:
+        risk_lines.append(
+            f"- (+{len(risks) - PR_BODY_MAX_RISKS} more: see the run report's Open risks)"
+        )
     tt, tp = _i(d.get("tests_total")), _i(d.get("tests_passed"))
     L = [
         f"### What\nQuasar port of `{d.get('kernel', '')}` from `{d.get('reference_file', '')}` "
         f"into `{d.get('generated_file', '')}`.",
         "### Scope\nOut of scope: "
-        + ("none" if wired else "compute-API wiring (`tt_metal/hw/inc/api`), follow-up PR") + ".",
+        + (
+            "compute-API wiring (`tt_metal/hw/inc/api`), follow-up PR"
+            if _compute_api_unwired(log_dir)
+            else "none"
+        )
+        + ".",
         f"### Testing\n`{d.get('test_file') or '?'}`: {tp}/{tt} variants on the Quasar simulator. "
         f"Paths: {', '.join(map(str, covered)) or '(none recorded)'}"
-        + (f"; not covered: {', '.join(f'{k} ({v})' for k, v in not_covered.items())}" if not_covered else "")
+        + (
+            f"; not covered: {', '.join(f'{k} ({v})' for k, v in not_covered.items())}"
+            if not_covered
+            else ""
+        )
         + ".",
-        "### Open risks\n" + ("\n".join(f"- {r}" for r in risks[:4]) if risks else "None."),
-        "### Follow-ups\n" + ("\n".join(f"- {x}" for x in drift[:2]) if drift else "None."),
+        "### Open risks\n" + ("\n".join(risk_lines) if risks else "None."),
+        "### Follow-ups\n"
+        + (
+            "\n".join(f"- {x}" for x in drift[:PR_BODY_MAX_DRIFT]) if drift else "None."
+        ),
     ]
     body = "\n".join(L).splitlines()[:PR_BODY_MAX_LINES]
     return "\n".join(body) + "\n"

@@ -599,10 +599,10 @@ Every agent self-log ends with `## Open risks`, each entry CLOSED (evidence) or 
 source codegen/scripts/quasar/orchestrator_steps.sh
 execute_step_pre_pr_gates
 ```
-It runs the PR Gate's `test_perf_header_gate.py`, lists upstream commits to the reference since the run's base (`DRIFT:`), and runs `open_risks.py check`, which also flags waiver words (`untested`, `not exercised`, `negligible`, `conservative`, `may be wrong`, `assume`) that no entry covers.
+It runs the PR Gate's `test_perf_header_gate.py`, lists upstream commits to the reference since the run's base (`DRIFT:`), and runs `open_risks.py check`, which also flags waiver words (`untested`, `not tested`, `not exercised`, `unverified`, `not verified`, `negligible`, `conservative`, `may be wrong`, `assume`) that no entry covers.
 
 - `GATES: PASS` → Step 8.
-- `GATES: FAIL` → do **not** finalize yet. Group the `OPEN` / `MISSING` / `MALFORMED` / `WAIVER` lines by self-log and re-spawn each owning agent once (latest cycle; a `PERF_HEADER_GATE: FAIL` goes to the tester), foreground, with: "Read and follow codegen/references/logging.md § Open risks. Resolve only these items in {log}: {lines}. Close each with evidence (run the test that settles it — the tester's `TEST_FILE_USED`/`TEST_K` must still pass with `--maxfail 0` if you change the kernel or a test) or defer it with one PR line. Never reword a line just to pass the scan." Then run `execute_step_pre_pr_gates final`. If it still prints `GATES: FAIL`, the step marks the run `compiled` with the findings as `OBSTACLE`; quote them in your final report and go to Step 8.
+- `GATES: FAIL` → do **not** finalize yet. First record `git status --porcelain | sha1sum`. Group the `OPEN` / `MISSING` / `MALFORMED` / `WAIVER` lines by self-log and re-spawn each owning agent once (latest cycle; a `PERF_HEADER_GATE: FAIL` goes to the tester), foreground, with: "Read codegen/agents/quasar/{owner playbook}.md for your role and follow codegen/references/logging.md § Open risks. Resolve only these items in {log}: {lines}. Close each with evidence (run the test that settles it — the tester's `TEST_FILE_USED`/`TEST_K` must still pass with `--maxfail 0` if you change the kernel or a test) or defer it with one PR line. Never reword a line just to pass the scan." If the `git status --porcelain | sha1sum` value changed, re-run Step 7 (prettifier) before the next command. Then run `execute_step_pre_pr_gates final`. If it still prints `GATES: FAIL`, the step marks the run `compiled` with the findings as `OBSTACLE`; quote them in your final report and go to Step 8.
 
 ---
 
@@ -675,7 +675,7 @@ the run metrics). EXECUTE the following — it writes
 `codegen/artifacts/{KERNEL_NAME}_report.md` and prints it, and writes the PR
 description `$LOG_DIR/{KERNEL_NAME}_pr_body.md` (≤ 15 lines: what, scope, test
 matrix, the DEFERRED open risks, follow-ups; `create_prs.sh --from-run $LOG_DIR`
-uses it and refuses while the open-risks gate is red):
+builds the PR branch from `base_commit` + `generated.patch`, uses this body, and refuses unless the run is `success` with the gates green):
 
 ```bash
 source codegen/scripts/quasar/orchestrator_steps.sh

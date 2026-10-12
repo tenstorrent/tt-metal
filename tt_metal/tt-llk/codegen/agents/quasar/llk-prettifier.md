@@ -33,19 +33,19 @@ replace VCS with emulator or ask the user to choose again.
 
 ## Steps
 
-Make targeted Edits — do not rewrite the file from scratch. Run these in order. First record the comment budget: `grep -c '//' "$WORKTREE_DIR/$GENERATED_KERNEL"` → `PRE_COMMENTS`. After your edits the kernel may hold at most `1.3 × PRE_COMMENTS` `//` comment lines; doxygen blocks are capped separately in step 1 (why: reviewers cut 2–4× comment bloat on every one of the 10 SFPU parity PRs).
+Make targeted Edits — do not rewrite the file from scratch. Run these in order. First record the comment budget: `grep -c '//' "$WORKTREE_DIR/$GENERATED_KERNEL"` → `PRE_COMMENTS`. After your edits the kernel may hold at most `1.3 × PRE_COMMENTS` `//` comment lines; doxygen blocks are capped separately in step 1.
 
 ### 1. Doxygen docstrings
 
-If the kernel has no doxygen docstrings, add them per `.claude/references/doxygen-style.md`: high-signal, low-noise — `@brief` (one line), one line per `@param`/`@tparam`, at most two `@note` lines. Omit redundant or obvious information. If docstrings already exist, leave them unless they violate that style or misstate behavior.
+If the kernel has no doxygen docstrings, add them per `.claude/references/doxygen-style.md`: high-signal, low-noise — `@brief` (one line), one line per `@param`/`@tparam`, and one `@note` per contract: the init/execute contract, plus one per side effect or shared-state owner (e.g. ADDR_MOD_6, a replay slot, LREGs carried across calls). Omit redundant or obvious information. If docstrings already exist, leave them unless they violate that style or misstate behavior.
 
-**No new claims.** Do not write correctness or convergence arguments, test-coverage claims, or cross-arch ABI-parity claims; copy a "why" from the analysis verbatim or leave it out (why: lcm/gcd shipped a false "removes at least one bit" rationale). Say "emulator", never "hardware", unless silicon ran it. Derive each init/finalize `@note` from the registers and Dest tiles the function actually writes.
+**No new claims.** Do not write correctness or convergence arguments, test-coverage claims, or cross-arch ABI-parity claims; copy a "why" from the analysis verbatim or leave it out. Say "emulator", never "hardware", unless silicon ran it. Derive each init/finalize `@note` from the registers and Dest tiles the function actually writes.
 
 **Derive every documented range and contract from the code, not from parameter names.** Read the `static_assert`s and `if constexpr` dispatch for each `@tparam`/`@param`. Where a parameter quantises (e.g. `num_rows <= 9` runs exactly 9 rows, `10..32` runs all 32), document the effective behavior, not the accepted range. Never document as supported a parameter combination the code silently ignores; flag it in your self-log instead. Cross-check against the analysis §6a and the shared compute-API doc table for the op.
 
 ### 2. Annotate magic-number arguments
 
-Iterate the worktree changes with read-only `git diff`, kernel and test `.cpp` alike. For every function call on a changed line, every literal or computed argument carries the callee's formal parameter name as `/*name*/` (no spaces), taken from the macro or function signature: `TTI_SFPLOAD(..., 0 /*done*/, base + off /*dest_reg_addr*/)`. Fix any `/* name */`-style or misnamed comment the same way. A derived literal is written from its base constant (`GCD_REPLAY_DEPTH - 1`, not `31`); one named constant per quantity.
+Iterate the worktree changes with read-only `git diff`, kernel and test `.cpp` alike. For every function call or template instantiation on a changed line, every literal or computed argument carries the callee's formal parameter name as `/*name*/` (no spaces), taken from the macro, function or template signature: `TTI_SFPLOAD(..., 0 /*done*/, base + off /*dest_reg_addr*/)`, `foo<true /*set_a*/>(rows * cols /*num_elements*/)`. Fix any `/* name */`-style or misnamed comment the same way. A derived literal is written from its base constant (`GCD_REPLAY_DEPTH - 1`, not `31`); one named constant per quantity.
 
 ### 3. Reuse existing helpers
 
@@ -80,7 +80,7 @@ bash "$WORKTREE_DIR/tt_metal/tt-llk/.claude/scripts/run_test.sh" simulate \
     --worktree "$WORKTREE_DIR/tt_metal/tt-llk" --arch "$TARGET_ARCH" --test {TEST_FILE} --k "{K}" \
     --maxfail 0 --log-dir "$LOG_DIR/test_logs_prettifier"
 ```
-Run `simulate` synchronously in the foreground (Bash `timeout: 600000` backstop, `dangerouslyDisableSandbox: true`, never backgrounded). It is one blocking call that returns a terminal code — no resume loop. `dangerouslyDisableSandbox: true` is required on every `run_test.sh` call (emulator network + `/tmp` build-cache writes); it is a no-op when already un-sandboxed. Read the `=== RUN_LLK_TESTS_VERDICT === <PASS|FAIL|...>` line. If it is not `PASS`, a cleanup edit changed behavior — revert the offending edit and re-run until it passes.
+Run `simulate` synchronously in the foreground (Bash `timeout: 600000` backstop, `dangerouslyDisableSandbox: true`, never backgrounded). It is one blocking call that returns a terminal code — no resume loop. `dangerouslyDisableSandbox: true` is required on every `run_test.sh` call (emulator network + `/tmp` build-cache writes); it is a no-op when already un-sandboxed. Read the `=== RUN_LLK_TESTS_VERDICT === <PASS|FAIL|...>` line. If it is not `PASS`, a cleanup edit changed behavior — revert the offending edit and re-run until it passes. If `$ST --log-dir "$LOG_DIR" get FUSER_K` is non-empty, also compile and simulate `--test test_fused_quasar.py --k "$FUSER_K"` the same way; it must pass too.
 
 Once it passes, record that this stage ran so run.json reflects it:
 ```bash

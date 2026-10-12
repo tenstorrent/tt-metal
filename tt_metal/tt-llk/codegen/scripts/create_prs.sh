@@ -55,15 +55,32 @@ create_pr() {
   echo ""
 }
 
-# --from-run: one PR from a finished run. Refuses while the open-risks gate is red;
-# the body is the <= 15-line description build_report.py --pr-body wrote.
+# --from-run: one PR from a finished run. Refuses unless the run is `success` with the
+# perf-header and open-risks gates green. Kernel-gen never commits the kernel (it lives
+# only in generated.patch), so the PR branch is built fresh: base_commit + generated.patch.
+# The body is the <= 15-line description build_report.py --pr-body wrote.
 if [[ -n "$FROM_RUN" ]]; then
   SCRIPTS="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
-  python3 "$SCRIPTS/quasar/open_risks.py" check --log-dir "$FROM_RUN" || {
-    echo "open risks are not closed or deferred; refusing to create the PR" >&2; exit 3; }
-  read -r kernel branch < <(python3 -c 'import json,sys; d=json.load(open(sys.argv[1]+"/run.json")); print(d["kernel"], d["git_branch"])' "$FROM_RUN")
+  refuse() { echo "refusing to create the PR: $*" >&2; exit 3; }
+  read -r kernel status base run_id < <(python3 -c 'import json,sys; d=json.load(open(sys.argv[1]+"/run.json")); print(d["kernel"], d["status"], d["base_commit"], d["run_id"])' "$FROM_RUN")
+  [[ "$status" == "success" ]] || refuse "run status is '$status', not success"
+  grep -qx "PERF_HEADER_GATE: PASS" "$FROM_RUN/pre_pr_gates.txt" 2>/dev/null || refuse "no 'PERF_HEADER_GATE: PASS' in $FROM_RUN/pre_pr_gates.txt"
+  python3 "$SCRIPTS/quasar/open_risks.py" check --log-dir "$FROM_RUN" || refuse "open risks are not closed or deferred"
   body_file="$FROM_RUN/${kernel}_pr_body.md"
-  [[ -s "$body_file" ]] || { echo "missing $body_file (run execute_step_write_report)" >&2; exit 3; }
+  [[ -s "$body_file" ]] || refuse "missing $body_file (run execute_step_write_report)"
+  [[ -s "$FROM_RUN/generated.patch" ]] || refuse "missing $FROM_RUN/generated.patch"
+  [[ "$base" != "unknown" ]] || refuse "run.json has no base_commit"
+  branch="llk_code_gen/${kernel}-quasar-${run_id}"
+  if ! $DRY_RUN; then
+    tmp="$(mktemp -d)"
+    git worktree add -q --detach "$tmp" "$base"
+    trap 'git worktree remove --force "$tmp"' EXIT
+    # Run artifacts (analysis, report) stay out of the PR.
+    git -C "$tmp" apply --index --exclude='tt_metal/tt-llk/codegen/artifacts/*' "$(realpath "$FROM_RUN/generated.patch")"
+    git -C "$tmp" -c user.name=llk-code-gen -c user.email=llk-code-gen@tenstorrent.com \
+      commit -q --no-verify -m "[LLK] Implement ${kernel} for Quasar"
+    git -C "$tmp" push -q origin "HEAD:refs/heads/${branch}"
+  fi
   create_pr "$kernel" "$branch" "[LLK][Feature] Implement ${kernel} for Quasar" "$(cat "$body_file")"
   exit 0
 fi

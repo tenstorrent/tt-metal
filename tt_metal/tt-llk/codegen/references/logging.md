@@ -305,7 +305,7 @@ Every self-log ends with an `## Open risks` section: one bullet per risk the sta
 - R2 DEFERRED: <risk> — PR: <one line for the PR body's Open risks>
 ```
 
-or the word `none`. `OPEN` is not a final state. Outside this section, any line using a waiver word (`untested`, `not exercised`, `negligible`, `conservative`, `may be wrong`, `assume`) must cite its entry as `(R<n>)`. `scripts/quasar/open_risks.py check` enforces both; the orchestrator (Step 7b) and `create_prs.sh --from-run` refuse to finish while it is red. Do not reword a risk to dodge the scan — close it with a test, or defer it with text a reviewer can act on. (why: in 12+ cases across the 10 SFPU parity PRs a stage logged the real bug, then passed.)
+or the word `none`. `OPEN` is not a final state. Outside this section, any line using a waiver word (`untested`, `not tested`, `not exercised`, `unverified`, `not verified`, `negligible`, `conservative`, `may be wrong`, `assume`) must cite its entry as `(R<n>)`. `scripts/quasar/open_risks.py check` enforces both on the self-logs the run state expects (analyzer, the last refiner, the final cycle's writer and tester, optimizer, prettifier) and reports each absent one as MISSING; the orchestrator (Step 7b) and `create_prs.sh --from-run` refuse to finish while it is red. Do not reword a risk to dodge the scan — close it with a test, or defer it with text a reviewer can act on.
 
 ---
 
