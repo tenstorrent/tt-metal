@@ -26,6 +26,7 @@ dl lightx2v/Minimax-h3-Turbo-SLA minimax_h3_fl2v_turbo_4step_v0.1_768p_sla_bf16.
 need $M/lightx2v-h3-turbo-sla/minimax_h3_fl2v_turbo_4step_v0.1_768p_sla_bf16.safetensors
 step base
 dl MiniMaxAI/MiniMax-H3 --local-dir $M/MiniMax-H3
-find $M/MiniMax-H3 -name "*.safetensors" -not -path "*/.cache/*" | grep -q . || { echo "[s417] no safetensors in MiniMax-H3"; exit 3; }
+# -print -quit: with pipefail, grep -q closing the pipe early makes find die of SIGPIPE (rc 141).
+[ -n "$(find $M/MiniMax-H3 -name "*.safetensors" -not -path "*/.cache/*" -print -quit)" ] || { echo "[s417] no safetensors in MiniMax-H3"; exit 3; }
 touch $M/MiniMax-H3/READ_OK
 step "done; $(du -sh $M | cut -f1)"
