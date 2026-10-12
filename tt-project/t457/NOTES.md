@@ -25,3 +25,7 @@ Branch ttp/t457-..., based on t456 head da96dd1c143 (ff-merged).
   different accumulation order). Compare: python t452/psnr452.py /var/tmp/fasth3/t452/out_s0-dense
   /var/tmp/fasth3/t457/out_s0k256-dense (on blx01, t48 venv). ~19 dB => floor confirmed; >>19 dB => vsa has a
   systematic difference beyond per-call numerics (next suspect: lazy max / bf16 O L1-acc on heads 0/1).
+- Submitted blx01 job 041 at 13:03 PDT (log /var/log/tt-device-broker/2026-10-12_200329_041.log). Next on wake:
+  check `[t457] exp sdpa` line shows k_chunk 256, PASS in out_s0k256-dense, run psnr452.py, grab a still, then
+  decide: no kernel fix => step-4 A/B not applicable (record), publish notes via ttp push --own --detach? (notes
+  stay off the push branch: push only if a code commit exists), write result.json.
