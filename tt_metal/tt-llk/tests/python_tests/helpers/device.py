@@ -333,6 +333,8 @@ def commit_brisc_command(
         write_words_to_device(location, Mailboxes.BriscCommand0.value, [command.value])
 
     common_counter += 1
+    if os.environ.get("LLK_SIM_LOG"):  # experiment: trace BRISC commands
+        logger.info(f"SIMLOG brisc command {command.name} -> counter {common_counter} t={time.time():.0f}")
     counter_addr = host_signal_address(HOST_SIGNAL_BRISC_COUNTER_SLOT)
     mask = HOST_SIGNAL_MASK if counter_addr is not None else 0xFFFFFFFF
     if counter_addr is None:
@@ -343,6 +345,8 @@ def commit_brisc_command(
         expired = time.time() >= end_time
         temp_value = read_word_from_device(location, counter_addr, 0)
         if temp_value == common_counter & mask:
+            if os.environ.get("LLK_SIM_LOG"):
+                logger.info(f"SIMLOG brisc ack {command.name} t={time.time():.0f}")
             return
         if expired:
             break
