@@ -533,21 +533,36 @@ def _mirror_body_tt(body: str, base_weights: str, demo_dir, state: dict) -> str:
         return body
 
 
-def _tt_run_section(slug: str) -> str:
-    """How to actually serve this model on Tenstorrent. Mirrors the instructions the non-mirrored
-    card emits so both card paths describe the real tt-metal/vLLM serving flow."""
+def _tt_run_section(repo_id: str | None, base_weights: str | None = None) -> str:
+    """How to actually serve this model on Tenstorrent: the `tt` CLI (Tenstorrent's packaged serving
+    flow) pulls the published package and serves it as an OpenAI-compatible API, then any OpenAI
+    client can query it. This is the same path the other Tenstorrent model packages use."""
+    rid = repo_id or "<your-published-repo>"
+    model = base_weights or rid
     return (
         "## Run on Tenstorrent\n\n"
         "```bash\n"
-        "# vLLM, OpenAI-compatible API via tt-inference-server, from an optimized tt-metal checkout:\n"
-        f"python3 run.py --model {slug} --tt-device <device> --workflow server \\\n"
-        "  --local-server --tt-metal-home <your tt-metal checkout>\n"
+        "uv tool install tenstorrent          # once \u2014 the Tenstorrent CLI, `tt`\n"
+        f"tt model pull {rid}\n"
+        f"tt serve {rid}                       # OpenAI-compatible API on http://localhost:20000/v1\n"
+        "```\n\n"
+        "Then query it with any OpenAI client:\n\n"
+        "```python\n"
+        "from openai import OpenAI\n"
+        "client = OpenAI(base_url=\"http://localhost:20000/v1\", api_key=\"EMPTY\")\n"
+        "resp = client.chat.completions.create(\n"
+        f"    model=\"{model}\",\n"
+        "    messages=[{\"role\": \"user\", \"content\": \"What is the capital of Japan?\"}],\n"
+        "    max_tokens=256,\n"
+        ")\n"
+        "print(resp.choices[0].message.content)\n"
         "```\n"
     )
 
 
 def _compose_mirrored_card(
-    state: dict, slug: str, base_weights: str | None, commit: str | None, token: str | None, demo_dir=None
+    state: dict, slug: str, base_weights: str | None, commit: str | None, token: str | None, demo_dir=None,
+    repo_id: str | None = None,
 ) -> str | None:
     """A card that MIRRORS the upstream HF model card, with a TT-validated header whose numbers all
     come from this run and hardware named as the chips actually used. None -> caller falls back."""
@@ -578,15 +593,15 @@ def _compose_mirrored_card(
         "\n".join(fm)
         + f"\n\n# {base_weights} — on Tenstorrent\n\n{intro}\n\n"
         + _tt_validated_block(state, hw, commit)
-        + "\n" + _tt_run_section(slug)
+        + "\n" + _tt_run_section(repo_id, base_weights)
         + "\n## Base model (upstream) — reference\n\n"
         + body
         + "\n"
     )
 
 
-def _build_card(state: dict, slug: str, base_weights: str | None, commit: str | None, token: str | None = None) -> str:
-    mirrored = _compose_mirrored_card(state, slug, base_weights, commit, token)
+def _build_card(state: dict, slug: str, base_weights: str | None, commit: str | None, token: str | None = None, repo_id: str | None = None) -> str:
+    mirrored = _compose_mirrored_card(state, slug, base_weights, commit, token, repo_id=repo_id)
     if mirrored is not None:
         return mirrored
     cfg = state.get("config") or {}
@@ -650,13 +665,7 @@ def _build_card(state: dict, slug: str, base_weights: str | None, commit: str | 
         L.append(f"| {m['name']} | {_fmt(m.get('current'), 1)} {m.get('unit', '')} |")
     L += [
         "",
-        "## Run on Tenstorrent",
-        "",
-        "```bash",
-        "# vLLM, OpenAI-compatible API via tt-inference-server, from an optimized tt-metal checkout:",
-        f"python3 run.py --model {slug} --tt-device <device> --workflow server \\",
-        "  --local-server --tt-metal-home <your tt-metal checkout>",
-        "```",
+        *_tt_run_section(repo_id, base_weights).rstrip("\n").split("\n"),
         "",
     ]
     return "\n".join(L)
@@ -1845,7 +1854,7 @@ def _maybe_mirror_container_card(args, slug, state, base_weights, commit, demo_d
         return
     try:
         tok = _hf_token(args)
-        card = _compose_mirrored_card(state, slug, base_weights, commit, tok, demo_dir)
+        card = _compose_mirrored_card(state, slug, base_weights, commit, tok, demo_dir, args.repo)
         if not card:
             print("  [publish-hf] upstream mirror: upstream card unavailable; kept tt-model card")
             return
@@ -1956,7 +1965,7 @@ def cmd_publish_hf(args) -> int:
             _maybe_autocommit(args, demo_dir)
         return rc
 
-    card = _build_card(state, slug, base_weights, commit, _hf_token(args))
+    card = _build_card(state, slug, base_weights, commit, _hf_token(args), args.repo)
 
     stage = Path(tempfile.mkdtemp(prefix="tt_publish_"))
     (stage / "README.md").write_text(card)
