@@ -28,7 +28,7 @@ inline void perf_binary_mock(const std::uint32_t loop_factor, const std::uint32_
 
     if constexpr (perf_mock_mop<RUN_TYPE>()) // Wormhole isolate mocks: the handshakes below as one MOP stream (perf.h)
     {
-        return _perf_mock_binary_<Produce, static_cast<std::uint32_t>(BType)>(loop_factor * num_tiles, num_faces_r, num_faces_c);
+        return _perf_mock_binary_<Produce, BType>(loop_factor * num_tiles, num_faces_r, num_faces_c);
     }
     for (std::uint32_t loop = 0; loop < loop_factor; ++loop)
     {
