@@ -54,6 +54,25 @@ from models.demos.blackhole.deepseek_v41_flash.tt import vllm_state as VS
 
 _PAD_TOKEN = 0
 
+try:  # image input (tt/vision_vllm.py): the class is a vLLM multimodal model with its own processor (the checkpoint ships no HF processor)
+    from vllm.model_executor.models.interfaces import SupportsMultiModal
+    from vllm.multimodal import MULTIMODAL_REGISTRY
+
+    from models.demos.blackhole.deepseek_v41_flash.tt.vision_vllm import (
+        DSV41DummyInputsBuilder,
+        DSV41MultiModalProcessor,
+        DSV41ProcessingInfo,
+    )
+
+    _register_mm = MULTIMODAL_REGISTRY.register_processor(
+        DSV41MultiModalProcessor, info=DSV41ProcessingInfo, dummy_inputs=DSV41DummyInputsBuilder
+    )
+except ImportError:  # no vLLM in this environment (demo / unit tests)
+    SupportsMultiModal = object
+
+    def _register_mm(cls):
+        return cls
+
 
 def _interleave_on():
     """Interleaved / chunked prefill (INTERLEAVE_NOTES.md) is the DEFAULT of the vLLM interface: a prefill call costs ``DSV41_PREFILL_UP`` users per mesh row instead of the whole padded batch, the decode
@@ -97,8 +116,15 @@ def _sampling_capabilities():
     return {"max_device_top_k": 1}
 
 
-class DeepseekV41ForCausalLM:
+@_register_mm
+class DeepseekV41ForCausalLM(SupportsMultiModal):
     """tt-vllm-plugin model class (see the module docstring)."""
+
+    @classmethod
+    def get_placeholder_str(cls, modality: str, i: int) -> str | None:
+        if modality.startswith("image"):
+            return "<｜deepseek_image｜>"
+        raise ValueError("Only image modality is supported")
 
     model_capabilities = {
         "supports_prefix_caching": False,
@@ -226,6 +252,8 @@ class DeepseekV41ForCausalLM:
                     logger.info(f"DSV4.1 vLLM: spec decode bucket B'={VS.MESH_ROWS * Ub} compiled")
             logger.info(f"DSV4.1 vLLM: speculative decoding ON, {generator.spec_choice.describe()}")
         self = cls(generator, max_batch_size, max_seq_len)
+        if os.environ.get("DSV41_VISION", "0") == "1":
+            self.init_vision(hf_config)
         if (self.bucketing or (self.spec is not None and self.interleave)) and os.environ.get(
             "DSV41_VLLM_WARM", "1"
         ) == "1":
@@ -468,6 +496,7 @@ class DeepseekV41ForCausalLM:
             self.spec_isl_max = int(os.environ.get("DSV41_VLLM_SPEC_ISL_MAX", "32768"))
             self.spec_stats = {"rounds": 0, "accepted": 0, "rows": 0}
         self.sample_stats = {"rows": 0}
+        self.vision = self.vbook = None  # image input (init_vision, DSV41_VISION=1)
         self.gens = {}  # seeded per-request generators by model user
         self.rng = torch.Generator().manual_seed(int(os.environ.get("DSV41_VLLM_SAMPLE_SEED", "9472")))
         self.timing = {}
@@ -492,6 +521,30 @@ class DeepseekV41ForCausalLM:
         self.compact_ctx = int(os.environ.get("DSV41_VLLM_COMPACT_CTX", "4096"))
         self._compact_wait = 0
         self.compact_moves = 0
+
+    def init_vision(self, hf_config):
+        """Image input (DSV41_VISION=1): the device vision tower on the model's mesh / CCL (built BEFORE the warm-up captures any trace: its weights are persistent tensors) and the per-request
+        image state. A first encode of a dummy image compiles the tower's programs."""
+        from models.demos.blackhole.deepseek_v41_flash.tt.vision import DSV41Vision
+        from models.demos.blackhole.deepseek_v41_flash.tt.vision_state import VisionBook
+        from models.demos.blackhole.deepseek_v41_flash.tt.vision_vllm import vision_args_of
+
+        if not self.interleave:
+            raise ValueError("image input needs the interleaved prefill (DSV41_VLLM_INTERLEAVE=1, the default)")
+        va = vision_args_of(hf_config)
+        t0 = time.perf_counter()
+        import ttnn
+        from models.demos.gpt_oss.tt.ccl import CCLManager
+
+        ccl = CCLManager(
+            self.m.md, num_links=2, topology=ttnn.Topology.Ring
+        )  # the tower's own semaphores: the model's are baked into its captured traces
+        self.vision = DSV41Vision(self.m.md, self.m.mc, ccl, args=va, log=lambda m: logger.info(m))
+        self.vbook = VisionBook(self.vision, va.image_token_id)
+        side = 14 * va.ratio * 8
+        warm = torch.zeros(side // 14 * (side // 14), 3, 14, 14, dtype=torch.bfloat16)
+        self.vision.encode(warm, side // 14, side // 14)
+        logger.info(f"DSV4.1 vLLM: image input ON (vision tower built + warmed in {time.perf_counter() - t0:.1f} s)")
 
     # vLLM inspects this protocol (``is_text_generation_model``: __init__(vllm_config), embed_input_ids, forward(input_ids, positions), compute_logits) to resolve
     # ``--runner generate`` while building the ModelConfig, BEFORE the TT plugin loads the model; the architecture is the TT-only ``TTDeepseekV41ForCausalLM`` (no upstream
@@ -577,10 +630,13 @@ class DeepseekV41ForCausalLM:
                 )
         if max(lens) + 1 > self.max_seq_len:
             raise ValueError(f"prompt of {max(lens)} tokens does not fit max_model_len {self.max_seq_len}")
+        mm = {k: kwargs.get(k) for k in ("pixel_values", "image_grid_thw")}
         if self.interleave:
             return self._prefill_interleaved(
-                tokens, lens, empty_slots, start_pos, device_sampling, enable_trace, sampling_params
+                tokens, lens, empty_slots, start_pos, device_sampling, enable_trace, sampling_params, mm=mm
             )
+        if any(self._mm_row(mm, i)[0] is not None for i in range(N)):
+            raise ValueError("image input needs the interleaved prefill (DSV41_VLLM_INTERLEAVE=1)")
         if start_pos is not None and any(
             int(x) != 0 for x in (start_pos.tolist() if hasattr(start_pos, "tolist") else start_pos)
         ):
@@ -656,8 +712,20 @@ class DeepseekV41ForCausalLM:
         """torch generator of model user p: the request's own (seeded) one, else the server-wide one."""
         return self.gens.get(p, self.rng)
 
+    @staticmethod
+    def _mm_row(mm, i):
+        """(patches [n, 588], grids [n_images, 3]) of the images of prefill row ``i`` from the plugin's multimodal kwargs (per row: a list with one tensor per image, or None; vLLM attaches
+        empty placeholders to text requests), (None, None) without images."""
+        pv, gr = (mm or {}).get("pixel_values"), (mm or {}).get("image_grid_thw")
+        if not pv or i >= len(pv) or pv[i] is None or gr is None or gr[i] is None:
+            return None, None
+        pairs = [(a, b) for a, b in zip(pv[i], gr[i]) if a is not None and getattr(a, "numel", lambda: 0)() > 0]
+        if not pairs:
+            return None, None
+        return torch.cat([a for a, _ in pairs]), torch.stack([torch.as_tensor(b).reshape(3) for _, b in pairs])
+
     def _prefill_interleaved(
-        self, tokens, ends, empty_slots, start_pos, device_sampling, enable_trace, sampling_params=None
+        self, tokens, ends, empty_slots, start_pos, device_sampling, enable_trace, sampling_params=None, mm=None
     ):
         """Prefill of the new requests / prompt chunks while other requests keep decoding (``Model.prefill_interleaved``): tokens [N, >= max end] (every prompt from
         position 0), ``ends`` the end position of this chunk of every row (= the prompt length for a whole prompt), ``start_pos`` the start (0 for a new request).
@@ -731,7 +799,23 @@ class DeepseekV41ForCausalLM:
             f"DSV4.1 prefill (interleave): chunks {[(it[2], it[3]) for it in items]} in slots {empty_slots} (users {phys}), chunk {chunk}, "
             f"S_pad {self.s_pad_cur}, {'host sampling' if want_logits else 'device sampling'}"
         )
-        res = self.m.prefill_interleaved(items, chunk, s_pad_max=self.s_pad_cur, want_logits=want_logits)
+        vis = None
+        rows_mm = [self._mm_row(mm, i) for i in range(N)]
+        if any(pv is not None for pv, _ in rows_mm) and self.vbook is None:
+            raise ValueError("a request carries images but the server was started without image input (DSV41_VISION=1)")
+        if self.vbook is not None:
+            vis = {}
+            for i, (p, _, st, e) in enumerate(items):
+                seq = self.vbook.update(p, toks[i], e, rows_mm[i][0], rows_mm[i][1], st)
+                if seq is not None:
+                    vis[p] = seq
+            if vis:
+                logger.info(
+                    f"DSV4.1 prefill (interleave): images in users {sorted(vis)} ({sum(len(v.spans) for v in vis.values())} spans)"
+                )
+        res = self.m.prefill_interleaved(
+            items, chunk, s_pad_max=self.s_pad_cur, want_logits=want_logits, vis=vis or None
+        )
         for i, p in enumerate(phys):
             self.book.set_prompt(p, toks[i, : ends[i]].reshape(-1))
             self.inprog.update(p, ends[i], toks[i])
@@ -1015,6 +1099,8 @@ class DeepseekV41ForCausalLM:
             else:
                 self.m.pool.release(p)
             self.book.clear(p)
+            if self.vbook is not None:
+                self.vbook.drop(p)
             self.gens.pop(p, None)
             if self.spec is not None:
                 self.spec_has[p] = False
@@ -1104,6 +1190,14 @@ class DeepseekV41ForCausalLM:
         )
         return True
 
+    def _replay_hits_images(self, items):
+        """True when the replay of the last 128 tokens of some user of ``items`` [(user, context length, fed token)] would run over image positions."""
+        for p, pos, _ in items:
+            vs = self.vbook.get(p)
+            if vs is not None and bool((vs.types[max(0, pos - 130) : pos] >= 0).any()):
+                return True
+        return False
+
     def _spec_seed_active(self, items, need=None, draft=True):
         """Interleaved prefill + speculative decode: seed the drafter at the FIRST verify round of a request. ``need`` {model user: token fed now}: the rows that need seeding; they are seeded
         from their prefill's taps (``_spec_seed_taps``) when those are valid. Otherwise (a reseed after a draftless step / a mismatch: no taps for the current context) ``items`` [(model user,
@@ -1111,6 +1205,16 @@ class DeepseekV41ForCausalLM:
         forced accepts: idempotent for the users that already decode, which keeps their state; idle rows replay one dummy token), and the proposals of the replay are kept (a few seconds).
         """
         if need and self._spec_seed_taps(need, draft):
+            return
+        if self.vbook is not None and self._replay_hits_images(items):
+            # the replay embeds token ids: a live user whose last 128 positions hold image tokens would get its state overwritten with the image placeholder's embeddings. The rows that
+            # needed seeding decode plain instead (no drafts), everything else is left untouched.
+            logger.warning(
+                f"DSV4.1 spec seeding: a replay would cross image tokens of a live request: users {sorted(need or {})} decode without drafts"
+            )
+            for p in need or {}:
+                self.spec_ok[p] = False
+                self.spec_has[p] = False
             return
         B, K = self.B, self.spec.k
         L = max(pos for _, pos, _ in items)
@@ -1345,6 +1449,9 @@ class DeepseekV41ForCausalLM:
                 offer.append((i, p))
         if need:
             self._spec_seed_active(self._seed_items(need), need)
+            offer = [
+                x for x in offer if bool(self.spec_ok[x[1]])
+            ]  # (rows that could not be seeded safely now decode plain)
         if offer:
             oi, op = torch.tensor([x[0] for x in offer]), torch.tensor([x[1] for x in offer])
             ids[oi, :K] = self.spec_drafts[op]

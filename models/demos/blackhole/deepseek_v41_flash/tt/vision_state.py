@@ -33,3 +33,77 @@ class VisionSeq:
             if lo < hi:
                 emb[lo - s0 : hi - s0] = r[lo - s : hi - s]
         return m, emb
+
+
+def locate_spans(tokens, span_lens, image_token_id, first=0):
+    """Positions of the image spans in the prompt ``tokens`` (1-D): span j starts at the first ``image_token_id`` at or after the end of span j - 1 and has ``span_lens[j]`` tokens.
+    -> list of starts for the spans fully inside ``tokens`` (a span that starts inside but does not fit raises: a scheduler chunk must not split an image).
+    """
+    t = torch.as_tensor(tokens).reshape(-1)
+    starts, pos = [], first
+    for n in span_lens:
+        hit = (t[pos:] == image_token_id).nonzero()
+        if hit.numel() == 0:
+            break
+        s = pos + int(hit[0])
+        if s + n > t.numel() or not bool((t[s : s + n] == image_token_id).all()):
+            raise ValueError(
+                f"image span of {n} tokens at {s} is not contained in the {t.numel()} prompt tokens given (an image must not be split across prefill chunks)"
+            )
+        starts.append(s)
+        pos = s + n
+    return starts
+
+
+class VisionBook:
+    """Images of the live requests, per model user: the encoder rows computed so far and the spans located so far. ``update`` is called at every prefill call of a request (its
+    first chunk and every continuation chunk); ``pixel_values`` / ``grids`` hold ALL images of the request (vLLM's multimodal kwargs), the spans of the images whose tokens are
+    already in the prompt are located, and each image is encoded once."""
+
+    def __init__(self, vision, image_token_id):
+        self.vision, self.image_token_id = vision, image_token_id
+        self.seqs, self._rows = {}, {}
+
+    def drop(self, p):
+        self.seqs.pop(p, None)
+        self._rows.pop(p, None)
+
+    def get(self, p):
+        return self.seqs.get(p)
+
+    def update(self, p, tokens, end, pixel_values, grids, start):
+        """-> the user's ``VisionSeq`` for positions < end (None: no image in the prompt so far)."""
+        from models.demos.blackhole.deepseek_v41_flash.tt import vision_prompt as VP
+
+        if start == 0:
+            self.drop(p)
+        if pixel_values is None or grids is None or len(grids) == 0:
+            return self.seqs.get(p)
+        a = self.vision.a
+        grids = torch.as_tensor(grids).reshape(-1, 3)
+        pv = torch.as_tensor(pixel_values)
+        vit = [(int(g[1]), int(g[2])) for g in grids]
+        llm = [(-(-h // a.ratio), -(-w // a.ratio)) for h, w in vit]
+        span_lens = [h * (w + 1) + 2 for h, w in llm]
+        toks = torch.as_tensor(tokens).reshape(-1)[:end]
+        starts = locate_spans(toks, span_lens, self.image_token_id)
+        rows = self._rows.setdefault(p, {})
+        offs = [0]
+        for h, w in vit:
+            offs.append(offs[-1] + h * w)
+        for j, s in enumerate(starts):
+            if j not in rows:
+                h, w = vit[j]
+                patches = pv[offs[j] : offs[j + 1]].reshape(h * w, 3, a.patch, a.patch)
+                types = VP._ip.image_token_types(*llm[j])
+                rows[j] = self.vision.image_rows(patches, h, w, types)
+        if not starts:
+            return self.seqs.get(p)
+        types = torch.full((end,), TEXT, dtype=torch.int64)
+        spans = []
+        for j, s in enumerate(starts):
+            t = VP._ip.image_token_types(*llm[j])
+            types[s : s + t.numel()] = t
+            spans.append((s, rows[j]))
+        self.seqs[p] = VisionSeq(types, spans)
+        return self.seqs[p]

@@ -21,37 +21,11 @@ import torch.nn.functional as F
 
 import ttnn
 from models.demos.blackhole.deepseek_v41_flash.tt.moe_weights import _Shards
+from models.demos.blackhole.deepseek_v41_flash.tt.vision_args import VisionArgs  # noqa: F401 (re-exported)
 
 WEIGHT_CACHE = os.environ.get("DSV41_WEIGHT_CACHE", "/mnt/tt-data/ssinghal/dsv4-weight-cache")
 TILE = 32
 SDPA_CHUNK = 128  # q / k chunk of the flash attention; image lengths are padded to a multiple of it
-
-
-class VisionArgs:
-    """Vision part of the checkpoint ``config.json`` (names of ``inference/model.py`` ``ModelArgs``)."""
-
-    def __init__(self, cfg=None):
-        if cfg is None:
-            import json
-
-            from models.demos.blackhole.deepseek_v41_flash.tt.model_args import CKPT
-
-            cfg = json.load(open(os.path.join(CKPT, "config.json")))
-        v = cfg["vision_config"]
-        self.dim = cfg.get("hidden_size", 5120)
-        self.n_layers = v["num_hidden_layers"]
-        self.vdim = v["hidden_size"]
-        self.n_heads = v["num_attention_heads"]
-        self.inter = v["intermediate_size"]
-        self.patch = v["patch_size"]
-        self.theta = float(v.get("rope_theta", 10000.0))
-        self.ratio = v["downsample_ratio"]
-        self.max_tokens = v["max_image_tokens"]
-        self.min_pixels = v["min_pixels"]
-        self.max_wh_ratio = v.get("max_wh_ratio")
-        self.image_token_id = cfg["image_token_id"]
-        self.eps = 1e-6
-        self.head_dim = self.vdim // self.n_heads
 
 
 def _cache(name):
