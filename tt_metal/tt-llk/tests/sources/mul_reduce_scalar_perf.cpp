@@ -108,7 +108,7 @@ void run_kernel(RUNTIME_PARAMETERS params)
 static constexpr float REDUCE_SCALER = 1.0f;
 
 template <std::uint32_t row_tiles>
-inline void reduce_later_tiles(const ckernel::TensorShape& tensor_shape)
+__attribute__((always_inline)) inline void reduce_later_tiles(const ckernel::TensorShape& tensor_shape)
 {
 #pragma GCC unroll 8
     for (std::uint32_t i = 1; i < row_tiles; ++i)
@@ -118,7 +118,7 @@ inline void reduce_later_tiles(const ckernel::TensorShape& tensor_shape)
     }
 }
 
-inline void row_math(const std::uint32_t runtime_tile_cnt, const ckernel::TensorShape& tensor_shape)
+__attribute__((always_inline)) inline void row_math(const std::uint32_t runtime_tile_cnt, const ckernel::TensorShape& tensor_shape)
 {
     const std::uint32_t tile_cnt = ROW_TILES > 0 ? ROW_TILES : runtime_tile_cnt;
     _llk_math_eltwise_binary_init_<EltwiseBinaryType::ELWMUL, BroadcastType::NONE, MATH_FIDELITY, EltwiseBinaryReuseDestType::NONE>(
