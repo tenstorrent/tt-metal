@@ -204,7 +204,19 @@ def test_scalarB_prelu(device, h, w, weight):
     assert_with_ulp(expected_result=torch_output_tensor, actual_result=output_tensor, ulp_threshold=2)
 
 
-@pytest.mark.parametrize("ttnn_dtype, torch_dtype", [(ttnn.float32, torch.float32), (ttnn.bfloat16, torch.bfloat16)])
+@pytest.mark.parametrize("h", [64])
+@pytest.mark.parametrize("w", [128])
+def test_log_sigmoid(device, h, w):
+    torch.manual_seed(0)
+    torch_input_tensor = torch.randn((h, w), dtype=torch.bfloat16)
+    golden_function = ttnn.get_golden_function(ttnn.log_sigmoid)
+    torch_output_tensor = golden_function(torch_input_tensor)
+    input_tensor = ttnn.from_torch(torch_input_tensor, layout=ttnn.TILE_LAYOUT, device=device)
+    output_tensor = ttnn.log_sigmoid(input_tensor)
+    output_tensor = ttnn.to_torch(output_tensor)
+    assert_with_ulp(expected_result=torch_output_tensor, actual_result=output_tensor, ulp_threshold=2)
+
+
 def test_mish_golden_verification(ttnn_dtype, torch_dtype, device):
     input_data = torch.tensor(
         [
