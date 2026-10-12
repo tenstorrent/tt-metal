@@ -33,14 +33,14 @@ namespace ckernel::sfpu {
 // emitted: on Blackhole the SFPU implicitly stalls on read-after-write
 // hazards between back-to-back fp32 ops, so SFPMAD->STOCH_RND,
 // SFPADD->SFPMUL and SFPMUL->SFPSTORE don't need explicit pipeline bubbles.
-//   QUANT   ( 2s-comp, 4 ) : SFPMAD, STOCH_RND, SFPCAST, SFPSETSGN
+//   QUANT   ( 2s-comp, 3 ) : SFPMAD, STOCH_RND, SFPCAST
 //   QUANT   (sign-magn, 2) : SFPMAD, STOCH_RND
 //   QUANT   (int8-out, 6 ) : SFPMAD, <5-instr offset-128 pack: SFPSETCC,
 //                             SFPMOV, SFPENCC, STOCH_RND, SFPXOR>
-//   REQUANT ( 2s-comp, 7 ) : SFPCAST+SFPSETSGN(in), SFPCAST(int->fp32), SFPMAD,
-//                             STOCH_RND, SFPCAST+SFPSETSGN(out)
+//   REQUANT ( 2s-comp, 6 ) : SFPCAST+SFPSETSGN(in), SFPCAST(int->fp32), SFPMAD,
+//                             STOCH_RND, SFPCAST(out)
 //   REQUANT (sign-magn, 3) : SFPCAST(int->fp32), SFPMAD, STOCH_RND
-//   REQUANT (int8-in,  5 ) : SFPCAST(int->fp32), SFPMAD, STOCH_RND, SFPCAST+SFPSETSGN(out)
+//   REQUANT (int8-in,  4 ) : SFPCAST(int->fp32), SFPMAD, STOCH_RND, SFPCAST(out)
 //   REQUANT (int8-out, 7 ) : SFPCAST(int->fp32), SFPMAD, <5-instr pack>             (int8 input)
 //   REQUANT (int8-out, 9 ) : SFPCAST+SFPSETSGN(in), SFPCAST, SFPMAD, <5-instr pack> (int32 input)
 //   DEQUANT ( 2s-comp, 5 ) : SFPCAST+SFPSETSGN(in), SFPCAST(int->fp32),
@@ -52,15 +52,15 @@ namespace ckernel::sfpu {
 // body lengths: int8 input unbiases inline (7), while int32 input runs the 2's-complement -> sign-magnitude
 // inside the recorded body (9).
 constexpr std::uint32_t QUANT_REPLAY_SLOT = 0;
-constexpr std::uint32_t QUANT_REPLAY_LEN_2S_COMP = 4;
+constexpr std::uint32_t QUANT_REPLAY_LEN_2S_COMP = 3;
 constexpr std::uint32_t QUANT_REPLAY_LEN_SIGN_MAGN = 2;
 constexpr std::uint32_t QUANT_REPLAY_LEN_INT8_OUT = 6;
 constexpr std::uint32_t QUANT_REPLAY_LEN_MAX = QUANT_REPLAY_LEN_INT8_OUT;
 
 constexpr std::uint32_t REQUANT_REPLAY_SLOT = QUANT_REPLAY_SLOT + QUANT_REPLAY_LEN_MAX;
-constexpr std::uint32_t REQUANT_REPLAY_LEN_2S_COMP = 7;
+constexpr std::uint32_t REQUANT_REPLAY_LEN_2S_COMP = 6;
 constexpr std::uint32_t REQUANT_REPLAY_LEN_SIGN_MAGN = 3;
-constexpr std::uint32_t REQUANT_REPLAY_LEN_INT8_IN = 5;
+constexpr std::uint32_t REQUANT_REPLAY_LEN_INT8_IN = 4;
 constexpr std::uint32_t REQUANT_REPLAY_LEN_INT8_OUT = 7;
 constexpr std::uint32_t REQUANT_REPLAY_LEN_INT8_OUT_INT32_IN = 9;
 constexpr std::uint32_t REQUANT_REPLAY_LEN_MAX = REQUANT_REPLAY_LEN_INT8_OUT_INT32_IN;
@@ -213,22 +213,9 @@ void quant_init(const uint zero_point) {
                 sfpi::SFPSTOCHRND_MOD1_FP32_TO_INT8);
         }
         if constexpr (!SIGN_MAGNITUDE_FORMAT) {
-            // Convert STOCH_RND's sign-magnitude output to 2's-complement so the
-            // trailing INT32_2S_COMP SFPSTORE writes out 2's-complement bits
-            // (on BH the store mode itself is a no-op, so the bits in LREG0 are
-            // what land in memory). LREG4 is the helper's scratch destination;
-            // LREG0 receives the sign-fixed result. See INT_REPR_SWAP_CAST above
-            // for why the cast mode constant is direction-neutral.
-            //
-            // Signed (FP32_TO_INT8) output is sign-magnitude here, so the
-            // conversion is meaningful. Unsigned (UInt8, FP32_TO_UINT8)
-            // output is already in [0, 255] with bit 31 clear, where
-            // sign-magnitude and 2's-complement are bit-identical, so this is a
-            // no-op for uint8. It runs unconditionally so both paths share
-            // QUANT_REPLAY_LEN_2S_COMP; gating it off for unsigned would need a
-            // dedicated REPLAY_LEN. Revisit if apply_sign_magnitude_conversion
-            // stops being a no-op for bit-31-clear inputs.
-            apply_sign_magnitude_conversion(p_sfpu::LREG0, p_sfpu::LREG4, INT_REPR_SWAP_CAST);
+            // Sign-magnitude to 2's complement for the INT32_2S_COMP store (a no-op on the uint8 range). The cast alone
+            // is exact on every value SFP_STOCH_RND returns, so the output side needs no SETSGN fixup.
+            TTI_SFPCAST(p_sfpu::LREG0, p_sfpu::LREG0, INT_REPR_SWAP_CAST);
         }
     }
 }
@@ -321,19 +308,9 @@ void requant_init(const uint zero_point) {
                 sfpi::SFPSTOCHRND_MOD1_FP32_TO_INT8);
         }
         if constexpr (!SIGN_MAGNITUDE_FORMAT) {
-            // Convert STOCH_RND's output to 2's-complement for the trailing
-            // INT32_2S_COMP SFPSTORE. Same cast+SETSGN combo as the input side;
-            // see INT_REPR_SWAP_CAST above.
-            //
-            // Signed (FP32_TO_INT8) output is sign-magnitude here, so the
-            // conversion is meaningful. Unsigned (UInt8, FP32_TO_UINT8)
-            // output is already in [0, 255] with bit 31 clear, where
-            // sign-magnitude and 2's-complement are bit-identical, so this is a
-            // no-op for uint8. It runs unconditionally for the same
-            // replay-length reason documented in quant_init's output-side
-            // conversion above; revisit if apply_sign_magnitude_conversion
-            // stops being a no-op for bit-31-clear inputs.
-            apply_sign_magnitude_conversion(p_sfpu::LREG0, p_sfpu::LREG4, INT_REPR_SWAP_CAST);
+            // Sign-magnitude to 2's complement for the INT32_2S_COMP store (a no-op on the uint8 range). The cast alone
+            // is exact on every value SFP_STOCH_RND returns, so the output side needs no SETSGN fixup.
+            TTI_SFPCAST(p_sfpu::LREG0, p_sfpu::LREG0, INT_REPR_SWAP_CAST);
         }
     }
 }
