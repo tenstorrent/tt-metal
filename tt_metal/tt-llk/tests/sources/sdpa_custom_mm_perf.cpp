@@ -83,7 +83,10 @@ void run_kernel(RUNTIME_PARAMETERS params)
         {
             for (std::uint32_t loop = 0; loop < LOOP_FACTOR; ++loop)
             {
-                _llk_unpack_AB_sdpa_custom_mm_<READ_TRANSPOSED, false /* configure_mask_extent */, sdpa_custom_mm_unpack_waits_at_end(SIGNAL_GRANULARITY)>(
+                _llk_unpack_AB_sdpa_custom_mm_<
+                    READ_TRANSPOSED,
+                    false /* configure_mask_extent */,
+                    sdpa_custom_mm_unpack_waits_at_end(SIGNAL_GRANULARITY, CT_DIM, KT_DIM)>(
                     L1_ADDRESS(buffer_A[0]),
                     L1_ADDRESS(buffer_B[0]),
                     /* base_address_mask */ 0,
