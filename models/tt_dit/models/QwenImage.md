@@ -60,6 +60,24 @@ pytest models/tt_dit/tests/models/qwenimage/test_performance_qwenimage.py -k 4x8
 ```
 
 
+## Image Editing
+
+The same pipeline runs [Qwen-Image-Edit](https://huggingface.co/Qwen/Qwen-Image-Edit),
+[Qwen-Image-Edit-2509](https://huggingface.co/Qwen/Qwen-Image-Edit-2509) and
+[Qwen-Image-Edit-2511](https://huggingface.co/Qwen/Qwen-Image-Edit-2511), chosen by `checkpoint_name`. The text
+encoder sees the input images through the Qwen2.5-VL vision tower, and the transformer sees their latents appended to
+the generated image's. Pass `image=` one image, or up to three for Edit-2509 and 2511; the output takes the
+supported resolution closest in aspect ratio to the last one. With `mask_image=`, Qwen-Image-Edit inpaints a single image.
+
+Only WH QuietBox / T3K (2x4) has been run so far, at 3.4–4.2 s per step.
+
+```bash
+pytest models/tt_dit/tests/models/qwenimage/test_pipeline_qwenimage.py::test_qwenimage_edit -k 2x4
+pytest models/tt_dit/tests/models/qwenimage/test_pipeline_qwenimage.py::test_qwenimage_edit_multiple_images -k 2x4
+pytest models/tt_dit/tests/models/qwenimage/test_pipeline_qwenimage.py::test_qwenimage_edit_inpaint -k 2x4
+```
+
+
 ## Scalability
 
 Qwen-Image has been implemented to support execution on 4-chip (BH QuietBox 2 with 2x2 mesh topology), 8-chip (QuietBox and LoudBox with 2x4 mesh topology) as well as 32-chip (Galaxy with 4x8 mesh topology) systems.

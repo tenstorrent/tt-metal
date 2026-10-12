@@ -27,3 +27,24 @@ MESH_DEVICE_PARAMS = [
     )
     for shape in [(2, 2), (2, 4), (4, 8)]
 ]
+
+# The edit checkpoints trace one spatial bucket per number of input images (up to 3 for Edit-2509 and
+# 2511) instead of one per resolution. Measured on WH 2x4: Edit 95 MB, Edit-2509 187 MB. WH 4x8 is
+# not measured.
+_WH_EDIT_TRACE_REGION_SIZES = {(2, 4): 200_000_000, (4, 8): 600_000_000}
+
+
+def _edit_trace_region_size(shape: tuple[int, int]) -> int:
+    if is_blackhole():
+        return 790_000_000
+    return _WH_EDIT_TRACE_REGION_SIZES.get(shape, 0)
+
+
+EDIT_MESH_DEVICE_PARAMS = [
+    pytest.param(
+        shape,
+        {**line_params_req_exact_devices, "trace_region_size": _edit_trace_region_size(shape)},
+        id=f"{shape[0]}x{shape[1]}",
+    )
+    for shape in [(2, 2), (2, 4), (4, 8)]
+]

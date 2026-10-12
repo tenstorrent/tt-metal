@@ -12,6 +12,7 @@ at the `<|image_pad|>` rows.
 from __future__ import annotations
 
 import diffusers.pipelines.qwenimage.pipeline_qwenimage
+import PIL.Image
 import pytest
 import torch
 import transformers
@@ -22,7 +23,14 @@ from models.tt_dit.encoders.mrope import mrope_position_ids
 from models.tt_dit.encoders.qwen25vl import Qwen25VlCheckpoint
 from models.tt_dit.parallel.config import EncoderParallelConfig, ParallelFactor
 from models.tt_dit.parallel.manager import CCLManager
-from models.tt_dit.pipelines.qwenimage.text_encoder import PROMPT_DROP_IDX, PROMPT_TEMPLATE, TextEncoder
+from models.tt_dit.pipelines.qwenimage.text_encoder import (
+    EDIT_FORMAT,
+    EDIT_PLUS_FORMAT,
+    PROMPT_DROP_IDX,
+    PROMPT_TEMPLATE,
+    PromptFormat,
+    TextEncoder,
+)
 from models.tt_dit.tests.encoders.qwen25vl.test_qwen25vl_vision import EDIT_CHECKPOINT, photo
 from models.tt_dit.utils import tensor
 from models.tt_dit.utils.check import assert_quality
@@ -117,7 +125,8 @@ def test_text_only_forward(
         assert_quality(x, tt_x, pcc=0.996, relative_rmse=0.09)
 
 
-EDIT_PROMPT_TEMPLATE = "<|im_start|>system\nDescribe the key features of the input image (color, shape, size, texture, objects, background), then explain how the user's text instruction should alter or modify the image. Generate a new image that meets the user's requirements while maintaining consistency with the original input where appropriate.<|im_end|>\n<|im_start|>user\n<|vision_start|><|image_pad|><|vision_end|>{}<|im_end|>\n<|im_start|>assistant\n"
+# Qwen-Image-Edit's template, with the image before the prompt.
+EDIT_PROMPT_TEMPLATE = EDIT_FORMAT.template.format(f"{EDIT_FORMAT.image_prompt}{{}}")
 
 
 @pytest.mark.parametrize(
@@ -290,3 +299,104 @@ def test_qwen25vl_encoder_pair(*, mesh_device: ttnn.MeshDevice, submesh_shape: t
 
     assert torch.all(tt_embeds[mask == 0] == 0), "padded positions must be zero"
     assert_quality(embeds, tt_embeds, pcc=0.988, relative_rmse=0.15)
+
+
+@pytest.mark.parametrize(
+    ("mesh_device", "submesh_shape"),
+    [
+        pytest.param((2, 2), (1, 2), id="2x2_1x2"),
+        pytest.param((2, 4), (1, 4), id="2x4_1x4"),
+        pytest.param((4, 8), (1, 4), id="4x8_1x4"),
+    ],
+    indirect=["mesh_device"],
+)
+@pytest.mark.parametrize("device_params", [line_params_req_exact_devices], indirect=True)
+@pytest.mark.parametrize(
+    ("checkpoint", "prompt_format", "image_sizes", "buckets", "pcc"),
+    [
+        # Qwen-Image-Edit shows the image at the size of its latents. The image rows are sensitive
+        # to rounding at 1024² (see `test_image_prompt_forward`).
+        pytest.param(EDIT_CHECKPOINT, EDIT_FORMAT, [(1024, 1024)], (1408, 1536, 1920), 0.88, id="edit"),
+        # Edit-2509 and 2511 show each image at about 384². Torch at bfloat16 reaches 0.945 against
+        # float32 on this input, and 0.90 on the one above.
+        pytest.param(
+            "Qwen/Qwen-Image-Edit-2509", EDIT_PLUS_FORMAT, [(384, 384), (512, 288)], (256, 512, 1024), 0.93, id="plus"
+        ),
+    ],
+)
+def test_edit_text_encoder(
+    *,
+    mesh_device: ttnn.MeshDevice,
+    submesh_shape: tuple[int, int],
+    checkpoint: str,
+    prompt_format: PromptFormat,
+    image_sizes: list[tuple[int, int]],
+    buckets: tuple[int, ...],
+    pcc: float,
+) -> None:
+    """The edit prompt encoding of the QwenImage text encoder wrapper against `transformers`.
+
+    The reference is what the diffusers edit pipelines compute, but with the multimodal rope
+    positions, which they lose with transformers 5 (they don't pass `mm_token_type_ids`).
+    """
+    prompt = "Make the dog wear a red scarf"
+    # The second image is the photo mirrored, so that the two differ.
+    images = [photo(max(size)).resize(size) for size in image_sizes]
+    images[1:] = [im.transpose(PIL.Image.Transpose.FLIP_LEFT_RIGHT) for im in images[1:]]
+
+    reference_pipeline = (
+        diffusers.QwenImageEditPipeline if prompt_format is EDIT_FORMAT else diffusers.QwenImageEditPlusPipeline
+    )(scheduler=None, vae=None, text_encoder=None, tokenizer=None, processor=None, transformer=None)
+    expected_template = EDIT_PROMPT_TEMPLATE if prompt_format is EDIT_FORMAT else prompt_format.template
+    assert reference_pipeline.prompt_template_encode == expected_template
+    assert reference_pipeline.prompt_template_encode_start_idx == prompt_format.drop_idx
+
+    submesh_device = mesh_device.create_submesh(ttnn.MeshShape(*submesh_shape))
+    parallel_config = EncoderParallelConfig(tensor_parallel=ParallelFactor(factor=submesh_shape[1], mesh_axis=1))
+    ccl_manager = CCLManager(mesh_device=submesh_device, num_links=1, topology=ttnn.Topology.Linear)
+    text_encoder = TextEncoder(
+        checkpoint_name=checkpoint,
+        device=submesh_device,
+        ccl_manager=ccl_manager,
+        parallel_config=parallel_config,
+        sequence_length_buckets=buckets,
+        use_torch=False,
+        prompt_format=prompt_format,
+    )
+
+    logger.info("running TT model...")
+    [tt_embeds] = text_encoder.encode_cfg(
+        [prompt],
+        [prompt],
+        num_images_per_prompt=1,
+        cfg_enabled=False,
+        batch_passes=False,
+        traced=False,
+        images=images,
+    )
+    length = text_encoder.prompt_length(prompt, images=images)
+    assert tt_embeds.shape[1] == min(b for b in buckets if b >= length)
+    assert torch.all(tt_embeds[:, length:] == 0), "padded positions must be zero"
+
+    logger.info("running torch model...")
+    processor = transformers.Qwen2VLProcessor.from_pretrained(checkpoint, subfolder="processor")
+    announcement = "".join(prompt_format.image_prompt.format(i + 1) for i in range(len(images)))
+    inputs = processor(text=[prompt_format.template.format(announcement + prompt)], images=images, return_tensors="pt")
+    torch_model = transformers.Qwen2_5_VLForConditionalGeneration.from_pretrained(
+        checkpoint, subfolder=SUBFOLDER, dtype=torch.float32
+    )
+    with torch.no_grad():
+        out = torch_model.forward(
+            input_ids=inputs.input_ids,
+            attention_mask=inputs.attention_mask,
+            pixel_values=inputs.pixel_values,
+            image_grid_thw=inputs.image_grid_thw,
+            mm_token_type_ids=inputs.mm_token_type_ids,
+            output_hidden_states=True,
+        )
+    embeds = out.hidden_states[-1][:, prompt_format.drop_idx :]
+    assert embeds.shape[1] == length
+
+    image_rows = inputs.mm_token_type_ids[0, prompt_format.drop_idx :].bool()
+    assert_quality(embeds[0, ~image_rows], tt_embeds[0, :length][~image_rows], pcc=0.99)
+    assert_quality(embeds, tt_embeds[:, :length], pcc=pcc)

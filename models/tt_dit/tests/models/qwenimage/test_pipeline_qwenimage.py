@@ -14,7 +14,7 @@ from PIL import Image, ImageFilter
 import ttnn
 from models.tt_dit.pipelines.qwenimage.pipeline_qwenimage import QwenImagePipeline
 
-from .device_params import MESH_DEVICE_PARAMS
+from .device_params import EDIT_MESH_DEVICE_PARAMS, MESH_DEVICE_PARAMS
 
 DOG_IMAGE_PATH = Path(__file__).resolve().parents[4] / "demos" / "multimodal" / "gemma3" / "dog.jpg"
 
@@ -138,4 +138,98 @@ def test_qwenimage_inpaint(*, mesh_device: ttnn.MeshDevice, is_ci_env: bool, mon
     logger.info(f"mean absolute change outside the mask {outside_diff:.2f}, inside {inside_diff:.2f}")
     assert outside_diff < 5
     # Some of the box stays background, so only the change relative to the outside is meaningful.
+    assert inside_diff > 3 * outside_diff
+
+
+EDIT_CHECKPOINTS = [
+    pytest.param("Qwen/Qwen-Image-Edit", id="edit"),
+    pytest.param("Qwen/Qwen-Image-Edit-2509", id="2509"),
+    pytest.param("Qwen/Qwen-Image-Edit-2511", id="2511"),
+]
+
+
+@pytest.mark.parametrize(("mesh_device", "device_params"), EDIT_MESH_DEVICE_PARAMS, indirect=True)
+@pytest.mark.parametrize("checkpoint_name", EDIT_CHECKPOINTS)
+def test_qwenimage_edit(
+    *, mesh_device: ttnn.MeshDevice, checkpoint_name: str, is_ci_env: bool, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    if is_ci_env:
+        monkeypatch.setenv("TT_DIT_CACHE_DIR", "/tmp/TT_DIT_CACHE")
+
+    pipeline = QwenImagePipeline.create_pipeline(mesh_device=mesh_device, checkpoint_name=checkpoint_name)
+
+    image = Image.open(DOG_IMAGE_PATH).convert("RGB")
+    (edited,) = pipeline(
+        prompts=["Make the dog wear a red knitted scarf."], num_inference_steps=50, seed=0, image=image
+    )
+
+    tag = checkpoint_name.rsplit("/", 1)[-1].lower()
+    image.save(f"qwenimage_{tag}_input.png")
+    edited.save(f"qwenimage_{tag}_output.png")
+
+    # The dog image is square, so the output is 1024².
+    assert edited.size == (1024, 1024)
+    before = np.asarray(image.resize(edited.size), dtype=np.float32)
+    after = np.asarray(edited, dtype=np.float32)
+    diff = np.abs(after - before).mean()
+    logger.info(f"mean absolute change {diff:.2f}")
+    # An edit keeps the composition and changes some of it.
+    assert 1 < diff < 40
+
+
+@pytest.mark.parametrize(("mesh_device", "device_params"), EDIT_MESH_DEVICE_PARAMS, indirect=True)
+def test_qwenimage_edit_multiple_images(
+    *, mesh_device: ttnn.MeshDevice, is_ci_env: bool, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Edit-2509 combines two input images."""
+    if is_ci_env:
+        monkeypatch.setenv("TT_DIT_CACHE_DIR", "/tmp/TT_DIT_CACHE")
+
+    pipeline = QwenImagePipeline.create_pipeline(mesh_device=mesh_device, checkpoint_name="Qwen/Qwen-Image-Edit-2509")
+
+    dog = Image.open(DOG_IMAGE_PATH).convert("RGB")
+    scarf = Image.new("RGB", (512, 512), (200, 30, 30))
+    (edited,) = pipeline(
+        prompts=["The dog in Picture 1 wears a scarf in the color of Picture 2."],
+        num_inference_steps=50,
+        seed=0,
+        image=[dog, scarf],
+    )
+    edited.save("qwenimage_edit_2509_two_images_output.png")
+    # The output takes the size of the last image.
+    assert edited.size == (1024, 1024)
+
+
+@pytest.mark.parametrize(("mesh_device", "device_params"), EDIT_MESH_DEVICE_PARAMS, indirect=True)
+def test_qwenimage_edit_inpaint(
+    *, mesh_device: ttnn.MeshDevice, is_ci_env: bool, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    if is_ci_env:
+        monkeypatch.setenv("TT_DIT_CACHE_DIR", "/tmp/TT_DIT_CACHE")
+
+    pipeline = QwenImagePipeline.create_pipeline(mesh_device=mesh_device, checkpoint_name="Qwen/Qwen-Image-Edit")
+
+    image = Image.open(DOG_IMAGE_PATH).convert("RGB")
+    mask = Image.new("L", image.size, 0)
+    w, h = image.size
+    mask.paste(255, (int(0.25 * w), int(0.04 * h), int(0.84 * w), int(0.83 * h)))
+    (edited,) = pipeline(
+        prompts=["Turn the dog into a ginger cat."],
+        num_inference_steps=50,
+        seed=0,
+        image=image,
+        mask_image=mask,
+        strength=1.0,
+    )
+    edited.save("qwenimage_edit_inpaint_output.png")
+
+    before = np.asarray(image.resize(edited.size), dtype=np.float32)
+    after = np.asarray(edited, dtype=np.float32)
+    mask = mask.resize(edited.size)
+    inside = np.asarray(mask) > 0
+    edge = np.asarray(mask.filter(ImageFilter.MaxFilter(65))) > 0
+    outside_diff = np.abs(after - before)[~edge].mean()
+    inside_diff = np.abs(after - before)[inside].mean()
+    logger.info(f"mean absolute change outside the mask {outside_diff:.2f}, inside {inside_diff:.2f}")
+    assert outside_diff < 5
     assert inside_diff > 3 * outside_diff

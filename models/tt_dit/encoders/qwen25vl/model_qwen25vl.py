@@ -155,6 +155,17 @@ class Qwen25VlCheckpoint:
             parallel_config=parallel_config,
             ccl_manager=ccl_manager,
         )
+        self.load_vision_weights(model, device=device, parallel_config=parallel_config)
+        return model
+
+    def load_vision_weights(
+        self,
+        model: Qwen25VlVisionModel,
+        *,
+        device: ttnn.MeshDevice,
+        parallel_config: EncoderParallelConfig,
+    ) -> None:
+        """Load the weights of a tower built by ``build_vision``, e.g. again after ``deallocate_weights``."""
         cache.load_model(
             model,
             get_torch_state_dict=self._load_vision_state_dict,
@@ -164,7 +175,6 @@ class Qwen25VlCheckpoint:
             mesh_shape=tuple(device.shape),
             mesh_device=device,
         )
-        return model
 
     def _load_vision_state_dict(self) -> dict[str, torch.Tensor]:
         """Reads only the safetensors shards that hold the tower, not the whole vision-language model."""

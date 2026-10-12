@@ -4,6 +4,8 @@
 
 from __future__ import annotations
 
+from collections.abc import Sequence
+
 import diffusers
 import torch
 from diffusers.configuration_utils import FrozenDict
@@ -23,6 +25,114 @@ from models.tt_dit.utils.substate import rename_substate
 
 
 class QwenImageTransformerBlock(TransformerBlock):
+    def forward(
+        self,
+        spatial: ttnn.Tensor,
+        prompt: ttnn.Tensor,
+        time_embed: ttnn.Tensor,
+        spatial_sequence_length: int | ttnn.Tensor,
+        *,
+        spatial_rope: tuple[ttnn.Tensor, ttnn.Tensor] | None = None,
+        prompt_rope: tuple[ttnn.Tensor, ttnn.Tensor] | None = None,
+        skip_time_embed_activation_fn: bool = False,
+        condition_time_embed: ttnn.Tensor | None = None,
+        condition_mask: ttnn.Tensor | None = None,
+    ) -> tuple[ttnn.Tensor, ttnn.Tensor | None]:
+        """Run the block forward.
+
+        With ``condition_time_embed``, the spatial rows that ``condition_mask`` marks with 1 are
+        modulated by it instead of by ``time_embed``, as Qwen-Image-Edit-2511 does for the input
+        images (``zero_cond_t``). ``condition_mask`` has shape [1, spatial_sequence_length /
+        sp_factor, 1] and is sharded like ``spatial``.
+        """
+        if condition_time_embed is None:
+            return super().forward(
+                spatial,
+                prompt,
+                time_embed,
+                spatial_sequence_length,
+                spatial_rope=spatial_rope,
+                prompt_rope=prompt_rope,
+                skip_time_embed_activation_fn=skip_time_embed_activation_fn,
+            )
+        assert condition_mask is not None
+        assert not self.context_pre_only
+        assert self.add_attention_to_output
+
+        if not skip_time_embed_activation_fn:
+            time_embed = ttnn.silu(time_embed, memory_config=ttnn.DRAM_MEMORY_CONFIG)
+            condition_time_embed = ttnn.silu(condition_time_embed, memory_config=ttnn.DRAM_MEMORY_CONFIG)
+
+        tp_axis = self.parallel_config.tensor_parallel.mesh_axis
+
+        # Per-row modulation: the fused norm only takes one modulation per batch, so the spatial
+        # rows are normalized without it and modulated afterwards. Selecting by multiplying with a
+        # 0/1 mask is exact.
+        keep_mask = 1 - condition_mask
+        spatial_time = [
+            t * keep_mask + c * condition_mask
+            for t, c in zip(
+                _chunk_time3d(self.norm1_linear(time_embed), 6),
+                _chunk_time3d(self.norm1_linear(condition_time_embed), 6),
+                strict=True,
+            )
+        ]
+        shift_attn, scale_attn, gate_attn, shift_ff, scale_ff, gate_ff = spatial_time
+        (
+            prompt_shift_attn,
+            prompt_scale_attn,
+            prompt_gate_attn,
+            prompt_shift_ff,
+            prompt_scale_ff,
+            prompt_gate_ff,
+        ) = _chunk_time3d(self.norm1_context_linear(time_embed), 6)
+
+        spatial_normed = ttnn.squeeze(self.norm1_norm(ttnn.unsqueeze(spatial, 0)), 0)
+        spatial_normed = spatial_normed * (1 + scale_attn) + shift_attn
+        prompt_normed = ttnn.squeeze(
+            self.norm1_context_norm(
+                ttnn.unsqueeze(prompt, 0), dynamic_weight=(1 + prompt_scale_attn), dynamic_bias=prompt_shift_attn
+            ),
+            0,
+        )
+
+        spatial_normed = self.ccl_manager.all_gather_persistent_buffer(
+            spatial_normed, dim=2, mesh_axis=tp_axis, use_hyperparams=True
+        )
+        prompt_normed = self.ccl_manager.all_gather_persistent_buffer(
+            prompt_normed, dim=2, mesh_axis=tp_axis, use_hyperparams=True
+        )
+
+        spatial_attn, prompt_attn = self.attn.forward(
+            spatial=spatial_normed,
+            prompt=prompt_normed,
+            spatial_rope=spatial_rope,
+            prompt_rope=prompt_rope,
+            spatial_sequence_length=spatial_sequence_length,
+        )
+        spatial = spatial + spatial_attn * gate_attn
+        prompt = prompt + prompt_attn * prompt_gate_attn
+
+        spatial_normed = ttnn.squeeze(self.norm2(ttnn.unsqueeze(spatial, 0)), 0)
+        spatial_normed = spatial_normed * (1 + scale_ff) + shift_ff
+        spatial_normed = self.ccl_manager.all_gather_persistent_buffer(
+            spatial_normed, dim=2, mesh_axis=tp_axis, use_hyperparams=True
+        )
+        spatial = spatial + ttnn.squeeze(self.ff(ttnn.unsqueeze(spatial_normed, 0)), 0) * gate_ff
+
+        prompt_normed = ttnn.squeeze(
+            self.norm2_context(
+                ttnn.unsqueeze(prompt, 0), dynamic_weight=(1 + prompt_scale_ff), dynamic_bias=prompt_shift_ff
+            ),
+            0,
+        )
+        prompt_normed = self.ccl_manager.all_gather_persistent_buffer(
+            prompt_normed, dim=2, mesh_axis=tp_axis, use_hyperparams=True
+        )
+        prompt = prompt + ttnn.squeeze(self.ff_context(ttnn.unsqueeze(prompt_normed, 0)), 0) * prompt_gate_ff
+
+        return spatial, prompt
+
     def _prepare_torch_state(self, state: dict[str, torch.Tensor]) -> None:
         rename_substate(state, "img_mod.1", "norm1.linear")
         rename_substate(state, "img_norm1", "norm1.norm")
@@ -140,6 +250,7 @@ class QwenImageTransformer(Module):
         spatial_rope: tuple[ttnn.Tensor, ttnn.Tensor],
         prompt_rope: tuple[ttnn.Tensor, ttnn.Tensor],
         spatial_sequence_length: int | ttnn.Tensor,
+        condition_mask: ttnn.Tensor | None = None,
     ) -> ttnn.Tensor:
         """Run the model forward.
 
@@ -150,10 +261,12 @@ class QwenImageTransformer(Module):
             spatial_rope: Tuple of two tensors with shape [spatial_sequence_length / sp_factor, head_dim].
             prompt_rope: Tuple of two tensors with shape [prompt_sequence_length, head_dim] (sequence is not sharded!).
             spatial_sequence_length: Length of the spatial sequence without padding, before sharding.
+            condition_mask: For ``zero_cond_t`` checkpoints (Qwen-Image-Edit-2511), a tensor with
+                shape [1, spatial_sequence_length / sp_factor, 1], 1 on the rows of the input images,
+                which are modulated as at timestep 0.
         """
-        time_embed = self.time_text_embed(timestep=timestep)
-        ttnn.silu(time_embed, output_tensor=time_embed)
-        time_embed = time_embed.reshape([time_embed.shape[-2], 1, time_embed.shape[-1]])
+        time_embed = self._time_embed(timestep)
+        condition_time_embed = self._time_embed(timestep * 0) if condition_mask is not None else None
 
         spatial = self.img_in(spatial)
 
@@ -169,6 +282,8 @@ class QwenImageTransformer(Module):
                 prompt_rope=prompt_rope,
                 spatial_sequence_length=spatial_sequence_length,
                 skip_time_embed_activation_fn=True,
+                condition_time_embed=condition_time_embed,
+                condition_mask=condition_mask,
             )
 
             if i % 6 == 0:
@@ -187,6 +302,11 @@ class QwenImageTransformer(Module):
         spatial = spatial * (1 + scale) + shift
 
         return self.proj_out(spatial)
+
+    def _time_embed(self, timestep: ttnn.Tensor) -> ttnn.Tensor:
+        time_embed = self.time_text_embed(timestep=timestep)
+        ttnn.silu(time_embed, output_tensor=time_embed)
+        return time_embed.reshape([time_embed.shape[-2], 1, time_embed.shape[-1]])
 
     def patchify(self, latents: torch.Tensor) -> torch.Tensor:
         # N, H, W, C -> N, (H / P) * (W / P), C * P * P
@@ -230,6 +350,8 @@ class QwenImageCheckpoint:
 
         self.pos_embed = QwenEmbedRope(theta=10000, axes_dim=list(self._config["axes_dims_rope"]), scale_rope=True)
         self.patch_size: int = self._config["patch_size"]
+        # Qwen-Image-Edit-2511 modulates the rows of the input images as at timestep 0.
+        self.zero_cond_t: bool = self._config.get("zero_cond_t", False)
 
     def rope_tables(
         self,
@@ -240,8 +362,13 @@ class QwenImageCheckpoint:
         padded_spatial_sequence_length: int,
         device: ttnn.MeshDevice,
         sp_axis: int,
+        image_latents_sizes: Sequence[tuple[int, int]] = (),
     ) -> tuple[tuple[ttnn.Tensor, ttnn.Tensor], tuple[ttnn.Tensor, ttnn.Tensor]]:
         """Compute the RoPE inputs of ``QwenImageTransformer.forward`` and upload them to ``device``.
+
+        For editing, the spatial sequence continues with the patchified latents of the input images,
+        whose ``(height, width)`` ``image_latents_sizes`` lists. Each image is a frame of its own,
+        following the generated one, and the prompt positions start after the largest of them.
 
         Returns:
             The ``spatial_rope`` and ``prompt_rope`` cos/sin pairs. The spatial ones are padded with
@@ -249,8 +376,9 @@ class QwenImageCheckpoint:
             ones are replicated.
         """
         p = self.patch_size
+        sizes = [(latents_height, latents_width), *image_latents_sizes]
         spatial_freqs, prompt_freqs = self.pos_embed(
-            video_fhw=(1, latents_height // p, latents_width // p),
+            video_fhw=[[(1, h // p, w // p) for h, w in sizes]],
             device="cpu",
             max_txt_seq_len=prompt_sequence_length,
         )
