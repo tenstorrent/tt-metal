@@ -115,13 +115,19 @@ void kernel_main() {
                 log_topk_groups,
                 n_activated_experts);
         }
-        blocks::normalize_scores(
-            cb_gathered_sigmoid,
-            cb_reduce_ones_scalar,
-            cb_reduce_intermediate,
-            cb_reciprocal_sums,
-            cb_epsilon_scalar,
-            cb_normalized_scores);
-        blocks::scale(cb_normalized_scores, cb_route_scale_scalar, cb_out_weights);
+        if constexpr (precise) {
+            blocks::normalize_and_scale_fp32<
+                get_named_compile_time_arg_val("packed_epsilon"),
+                get_named_compile_time_arg_val("packed_route_scale")>(cb_gathered_sigmoid, cb_out_weights);
+        } else {
+            blocks::normalize_scores(
+                cb_gathered_sigmoid,
+                cb_reduce_ones_scalar,
+                cb_reduce_intermediate,
+                cb_reciprocal_sums,
+                cb_epsilon_scalar,
+                cb_normalized_scores);
+            blocks::scale(cb_normalized_scores, cb_route_scale_scalar, cb_out_weights);
+        }
     }
 }
