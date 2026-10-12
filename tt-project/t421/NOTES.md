@@ -74,3 +74,11 @@
   and the VBench evaltree). The chain reuses existing outputs, so a host reboot costs only a relaunch.
 - Next: once run 1675's post421.rc exists, read state/t421/chain.log tail, summary.md and vbench.log,
   look at the stills and recommend on/off. Then delete the blx01 caches listed above and /var/tmp/fasth3/t421.
+
+## Result (2026-10-12 08:30 PDT, run 1683)
+All 10 arms done on blx01 (last: on-s4 job 976). Per-seed table: state/t421/chain.log tail.
+On vs off: 1.4237 vs 1.4799 s/step (n=10 each), -3.8% (900 MHz clamp, relative only).
+VBench 5-seed mean on/off: subject 0.9432/0.9511 (on lower in 4/5), background 0.9401/0.9415,
+imaging 0.6738/0.6745, motion 0.9894/0.9893. Off-vs-on PSNR 15.5-19.9 dB, scenes diverge (s1: tall
+grass in foreground with on), both clean. Recommendation: keep opt-in. Own AdaLN table on blx01
+(ef0f6d95...adaln.pt, 107 MB) deleted; 97be3f17... belongs to #400 and is kept.
