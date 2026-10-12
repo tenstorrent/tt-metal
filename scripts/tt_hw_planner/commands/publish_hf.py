@@ -682,6 +682,26 @@ def _detect_mistral_format(demo_dir, model_root, weights) -> tuple:
     return None, None
 
 
+def _arch_from_weights(repo: str, token: str | None) -> tuple:
+    """HF architecture + model_type read from the BASE-WEIGHTS repo's config.json (hub/cache).
+
+    Demos ported from HF often ship no config.json of their own (it lives in the weights repo), so
+    _detect_arch_and_type returns (None, None) and the vLLM bundle never scaffolds -- then the
+    container's EXTRA_MODELS_DIR verify fails with FileNotFoundError. Reading the architecture from
+    the auto-detected base weights fixes that for ANY arch (stock or novel, e.g. kolibri1)."""
+    if not repo:
+        return (None, None)
+    try:
+        from huggingface_hub import hf_hub_download
+
+        p = hf_hub_download(repo_id=repo, filename="config.json", repo_type="model", token=token)
+        d = json.load(open(p))
+        arch = (d.get("architectures") or [None])[0]
+        return (arch, d.get("model_type")) if arch else (None, None)
+    except Exception:  # noqa: BLE001
+        return (None, None)
+
+
 def _pick_base_generator(arch: str, model_type: str | None) -> tuple[str, bool]:
     """(stock_generator_class, is_stub) for an arch. Stock arches map to a supported generator
     (is_stub=False, trivially servable). Novel arches pick the closest base (hybrid vs plain) and
@@ -1288,6 +1308,12 @@ def _run_container(args, state: dict, slug: str, demo_dir, commit: str | None) -
             arch_det, mtype = _detect_arch_and_type(Path(mr))
     if not arch_det and getattr(args, "hf_arch", None):
         arch_det, mtype = args.hf_arch, None
+    if not arch_det and getattr(args, "weights", None):
+        # The demo ships no HF config.json; read the arch from the auto-detected base weights so
+        # novel archs (e.g. kolibri1) still scaffold a bundle and the container verify passes.
+        arch_det, mtype = _arch_from_weights(args.weights, _hf_token(args))
+        if arch_det:
+            print(f"  [publish-hf] arch from base weights {args.weights}: {arch_det}")
     _mistral_fallback = False
     if not arch_det:
         # Mistral-format native checkpoints (no HF config.json) -- e.g. Voxtral -- are Mistral
