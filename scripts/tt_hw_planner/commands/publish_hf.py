@@ -366,8 +366,111 @@ def _tt_validated_block(state: dict, hw_phrase: str, commit: str | None) -> str:
     )
 
 
+_GPU_TITLE_KEYS = (
+    "vllm", "sglang", "tensorrt", "trt-llm", "gpu", "cuda", "nvidia", "deploy", "deployment",
+    "quick start", "quickstart", "serving", "serve", "run with", "run on", "installation", "docker",
+)
+
+
+def _strip_gpu_sections(body: str) -> str:
+    """Drop GPU-specific deployment/usage/hardware sections from the upstream card body (keeps model
+    description, architecture, training, datasets, benchmarks). Conservative + best-effort: a section
+    is dropped only when its ## title is clearly a GPU/deployment one, or its body is dominated by GPU
+    serve commands (vllm serve / sglang / cuda / nvidia docker)."""
+    import re
+
+    parts = re.split(r"(?m)^(?=##\s)", body)
+    kept = []
+    for p in parts:
+        m = re.match(r"##\s+(.*)", p)
+        title = (m.group(1).strip().lower() if m else "")
+        low = p.lower()
+        gpu_title = bool(title) and any(k in title for k in _GPU_TITLE_KEYS)
+        gpu_body = (
+            "vllm serve" in low
+            or "sglang" in low
+            or ("docker run" in low and "nvidia" in low)
+            or ("--tensor-parallel" in low)
+        )
+        if gpu_title or gpu_body:
+            continue
+        kept.append(p)
+    out = "".join(kept).strip()
+    return out or body  # never return empty (fall back to the whole body)
+
+
+def _load_tt_eval(demo_dir) -> dict:
+    """On-device accuracy results written by a bounded TT eval, if any:
+    {"<task>": {"tt": <score>, "n": <sampled>}}. Empty when none have been run yet."""
+    from pathlib import Path
+
+    for name in ("tt_eval.json", "tt_accuracy.json"):
+        p = Path(demo_dir) / name
+        if p.is_file():
+            try:
+                d = json.load(open(p))
+                return d if isinstance(d, dict) else {}
+            except Exception:
+                return {}
+    return {}
+
+
+def _augment_benchmark_tables(body: str, base_weights: str, tt_results: dict) -> str:
+    """Add a Tenstorrent column to the upstream BENCHMARK tables — the ones whose header names the
+    model (base/other models compared). Each row's TT cell is the measured on-device score for that
+    task (from tt_results) or 'pending (TT)'. Dataset / hardware tables (header has no model name) are
+    left untouched. Best-effort: on any parse trouble, the table is returned unchanged."""
+    import re
+
+    model_tokens = [t for t in re.split(r"[^A-Za-z0-9]+", (base_weights or "").split("/")[-1].lower()) if len(t) > 2]
+
+    def _is_benchmark_header(header: str) -> bool:
+        h = header.lower()
+        if any(t in h for t in model_tokens):
+            return True
+        return any(k in h for k in ("benchmark", "task", "metric", "eval", "accuracy", "score"))
+
+    def repl(m):
+        tbl = m.group(0)
+        lines = [ln for ln in tbl.split("\n") if ln.strip()]
+        if len(lines) < 2 or not re.match(r"^\s*\|?[\s:|-]+\|?\s*$", lines[1]):
+            return tbl
+        if not _is_benchmark_header(lines[0]):
+            return tbl
+        if "tenstorrent" in lines[0].lower():
+            return tbl
+        new = [lines[0].rstrip().rstrip("|") + " | Tenstorrent |", lines[1].rstrip().rstrip("|") + " | --- |"]
+        for ln in lines[2:]:
+            if "|" not in ln:
+                new.append(ln)
+                continue
+            task = ln.strip().strip("|").split("|")[0].strip().strip("*").strip()
+            res = (tt_results or {}).get(task)
+            if isinstance(res, dict) and res.get("tt") is not None:
+                cell = f"{res['tt']}" + (f" (n={res['n']})" if res.get("n") else "")
+            else:
+                cell = "pending (TT)"
+            new.append(ln.rstrip().rstrip("|") + f" | {cell} |")
+        return "\n".join(new) + "\n"
+
+    return re.sub(r"(?m)^(\|.*\|[ \t]*\n\|[\s:|-]+\|[ \t]*\n(?:\|.*\|[ \t]*\n?)+)", repl, body)
+
+
+def _mirror_body_tt(body: str, base_weights: str, demo_dir, state: dict) -> str:
+    """Transform the upstream body for a TT card: strip GPU-specific sections and turn benchmark
+    tables into TT-vs-GPU comparisons. Fully best-effort — any error returns the body unchanged so
+    publishing never breaks."""
+    try:
+        tt_results = _load_tt_eval(demo_dir) if demo_dir else {}
+        b = _strip_gpu_sections(body)
+        b = _augment_benchmark_tables(b, base_weights, tt_results)
+        return b
+    except Exception:  # noqa: BLE001
+        return body
+
+
 def _compose_mirrored_card(
-    state: dict, slug: str, base_weights: str | None, commit: str | None, token: str | None
+    state: dict, slug: str, base_weights: str | None, commit: str | None, token: str | None, demo_dir=None
 ) -> str | None:
     """A card that MIRRORS the upstream HF model card, with a TT-validated header whose numbers all
     come from this run and hardware named as the chips actually used. None -> caller falls back."""
@@ -376,6 +479,7 @@ def _compose_mirrored_card(
     body = _fetch_upstream_card(base_weights, token)
     if not body:
         return None
+    body = _mirror_body_tt(body, base_weights, demo_dir, state)  # strip GPU, TT-vs-GPU benchmarks
     _, hw_tag, _ = _serve_target(None, state.get("env"))
     hw = _hardware_phrase(state, hw_tag)
     arch_tag = str((state.get("env") or {}).get("arch") or "").strip().lower()
@@ -388,9 +492,9 @@ def _compose_mirrored_card(
     intro = (
         f"A Tenstorrent deployment of [`{base_weights}`](https://huggingface.co/{base_weights}) — the same "
         f"weights, brought up on {hw} with `tt_hw_planner`. This card mirrors the upstream model card: the "
-        "**Validated on Tenstorrent** section holds figures measured on Tenstorrent hardware, and the rest "
-        "is the upstream base-model card reproduced for reference (its benchmarks were measured by the "
-        "base-model authors on GPU, not re-run here)."
+        "**Validated on Tenstorrent** section holds figures measured on Tenstorrent hardware. GPU-specific "
+        "deployment/usage has been removed; the base-model benchmark tables are shown with a Tenstorrent "
+        "column (the on-device score when a bounded TT eval has been run, else 'pending (TT)')."
     )
     return (
         "\n".join(fm)
