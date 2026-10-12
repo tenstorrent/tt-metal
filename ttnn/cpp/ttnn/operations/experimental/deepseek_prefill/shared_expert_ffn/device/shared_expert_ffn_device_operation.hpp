@@ -17,18 +17,16 @@
 
 namespace ttnn::operations::experimental::deepseek_prefill::shared_expert_ffn {
 
-// The unified routed-expert program in its dense mode: one expert owning every row of x, so no
-// counts / index / region-offset vectors exist on device.
+// The unified routed-expert program, unchanged, run as one expert owning every row of x.
 struct SharedExpertFfnProgramFactory {
-    // Built per mesh coordinate: the coordinate picks this device's emb slice of the output.
     static tt::tt_metal::ProgramDescriptor create_descriptor(
         const SharedExpertFfnParams& operation_attributes,
         const SharedExpertFfnInputs& tensor_args,
-        Tensor& tensor_return_value,
-        const std::optional<ttnn::MeshCoordinate>& coord);
+        Tensor& tensor_return_value);
 
-    // The unified program binds x again in place of the dense mode's unread aux buffers, so x
-    // appears more than once and resolve_bindings bails. Patch the common args directly.
+    // Delegates to the unified factory's patch of the common buffer-address args. Needed because a
+    // caller may pass one zero vector as both the index table and the region offsets; that buffer
+    // then appears twice and resolve_bindings bails.
     static void override_runtime_arguments(
         tt::tt_metal::Program& program,
         const SharedExpertFfnParams& operation_attributes,
@@ -59,9 +57,11 @@ ttnn::Tensor shared_expert_ffn(
     const ttnn::Tensor& gate_proj,
     const ttnn::Tensor& up_proj,
     const ttnn::Tensor& down_proj,
+    const ttnn::Tensor& expert_token_counts,
+    const ttnn::Tensor& global_expert_idx_table,
+    const ttnn::Tensor& expert_region_offsets,
     ttnn::operations::experimental::deepseek_prefill::shared_expert_ffn::RoutedExpertActivation activation,
     const std::optional<ttnn::DeviceComputeKernelConfig>& compute_kernel_config,
-    const CoreCoord& core_grid_origin,
-    std::optional<uint32_t> cluster_axis);
+    const CoreCoord& core_grid_origin);
 
 }  // namespace ttnn::prim

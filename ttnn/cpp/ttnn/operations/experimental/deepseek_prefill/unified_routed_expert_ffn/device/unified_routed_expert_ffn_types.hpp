@@ -105,19 +105,6 @@ struct UnifiedRoutedExpertFfnParams {
     // (0, 0) lets the op run inside a sub-device that does not own the device's first rows.
     CoreCoord core_grid_origin{0, 0};
 
-    // Nonzero => dense (shared-expert) mode: one expert, global id 0, with this many tokens
-    // starting at row 0. The kernels build counts / idx / start in L1 instead of reading them,
-    // so the counts, global_expert_idx_table and expert_region_offsets inputs are placeholders
-    // whose buffers are never read. Compile-time in the kernels, so it is part of the key.
-    uint32_t dense_tokens = 0;
-
-    // Nonzero => compute only output columns [down_slice_start_tiles, + down_slice_tiles) of the
-    // full-width down projection, into an output down_slice_tiles wide. The kernels index the
-    // full down weight at that column offset, which fuses a mesh_partition of the output while
-    // the weight stays replicated. Compile-time in the kernels, so it is part of the key.
-    uint32_t down_slice_tiles = 0;
-    uint32_t down_slice_start_tiles = 0;
-
     static constexpr auto attribute_names = std::forward_as_tuple(
         "m_tiles",
         "experts_per_chip",
@@ -126,10 +113,7 @@ struct UnifiedRoutedExpertFfnParams {
         "fuse_bias",
         "min_active_tokens",
         "max_active_tokens",
-        "core_grid_origin",
-        "dense_tokens",
-        "down_slice_tiles",
-        "down_slice_start_tiles");
+        "core_grid_origin");
     auto attribute_values() const {
         return std::forward_as_tuple(
             m_tiles,
@@ -139,10 +123,7 @@ struct UnifiedRoutedExpertFfnParams {
             fuse_bias,
             min_active_tokens,
             max_active_tokens,
-            core_grid_origin,
-            dense_tokens,
-            down_slice_tiles,
-            down_slice_start_tiles);
+            core_grid_origin);
     }
 };
 

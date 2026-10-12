@@ -221,6 +221,7 @@ def test_shared_expert_pcc(
             subdevice_id=subdevice_id,
             subdevice_cores=subdevice_cores,
             clamped_silu_glu_limit=clamp_limit,
+            seq_len_per_chip=seq_len_per_chip,
             **situ_betas,
         )
 

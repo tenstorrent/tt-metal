@@ -25,40 +25,18 @@ bool is_dram_interleaved(const ttnn::Tensor& t) {
            mem.memory_layout() == tt::tt_metal::TensorMemoryLayout::INTERLEAVED;
 }
 
-// Devices along the partition axis: the output emb is split this many ways.
-uint32_t num_slices(const SharedExpertFfnParams& op, const SharedExpertFfnInputs& t) {
-    if (!op.cluster_axis.has_value()) {
-        return 1;
-    }
-    return t.x.device()->shape()[*op.cluster_axis];
-}
-
-// The unified program in dense mode: one expert (global id 0) owning all of x's rows from row 0.
-// Its counts / index table / region offsets are built in L1 by the kernels, so x stands in for
-// those three inputs; their buffers are bound but never read. With a partition axis, the device's
-// index along it picks the emb slice of the replicated down projection it computes.
+// One expert owning all of x's rows: the program is sized for M rows, and the three layout
+// vectors say the expert holds M tokens from row 0.
 unified::UnifiedRoutedExpertFfnParams to_unified_params(
-    const SharedExpertFfnParams& op, const SharedExpertFfnInputs& t, const std::optional<ttnn::MeshCoordinate>& coord) {
-    const uint32_t m_rows = t.x.padded_shape()[-2];
-    const uint32_t slices = num_slices(op, t);
-    uint32_t slice_tiles = 0;
-    uint32_t slice_start_tiles = 0;
-    if (slices > 1) {
-        TT_FATAL(coord.has_value(), "shared_expert_ffn: a partitioned output needs the mesh coordinate");
-        slice_tiles = t.down_proj.padded_shape()[-1] / TILE / slices;
-        slice_start_tiles = (*coord)[*op.cluster_axis] * slice_tiles;
-    }
+    const SharedExpertFfnParams& op, const SharedExpertFfnInputs& t) {
     return unified::UnifiedRoutedExpertFfnParams{
-        .m_tiles = m_rows / TILE,
+        .m_tiles = static_cast<uint32_t>(t.x.padded_shape()[-2]) / TILE,
         .experts_per_chip = 1,
         .x_is_row_major = t.x.layout() == tt::tt_metal::Layout::ROW_MAJOR,
         .activation = op.activation,
         .fuse_bias = false,
         .compute_kernel_config = op.compute_kernel_config,
         .core_grid_origin = op.core_grid_origin,
-        .dense_tokens = m_rows,
-        .down_slice_tiles = slice_tiles,
-        .down_slice_start_tiles = slice_start_tiles,
     };
 }
 
@@ -68,21 +46,18 @@ unified::UnifiedRoutedExpertFfnInputs to_unified_inputs(const SharedExpertFfnInp
         .gate_projs = {t.gate_proj},
         .up_projs = {t.up_proj},
         .down_projs = {t.down_proj},
-        .counts = t.x,
-        .global_expert_idx_table = t.x,
+        .counts = t.expert_token_counts,
+        .global_expert_idx_table = t.global_expert_idx_table,
         .output = output,
-        .expert_region_offsets = t.x,
+        .expert_region_offsets = t.expert_region_offsets,
     };
 }
 }  // namespace
 
 tt::tt_metal::ProgramDescriptor SharedExpertFfnProgramFactory::create_descriptor(
-    const SharedExpertFfnParams& op,
-    const SharedExpertFfnInputs& t,
-    Tensor& tensor_return_value,
-    const std::optional<ttnn::MeshCoordinate>& coord) {
+    const SharedExpertFfnParams& op, const SharedExpertFfnInputs& t, Tensor& tensor_return_value) {
     return unified::UnifiedRoutedExpertFfnProgramFactory::create_descriptor(
-        to_unified_params(op, t, coord), to_unified_inputs(t, tensor_return_value), tensor_return_value);
+        to_unified_params(op, t), to_unified_inputs(t, tensor_return_value), tensor_return_value);
 }
 
 void SharedExpertFfnProgramFactory::override_runtime_arguments(
@@ -92,15 +67,11 @@ void SharedExpertFfnProgramFactory::override_runtime_arguments(
     Tensor& tensor_return_value,
     const std::optional<ttnn::MeshCoordinate>& coord) {
     unified::UnifiedRoutedExpertFfnProgramFactory::override_runtime_arguments(
-        program,
-        to_unified_params(op, t, coord),
-        to_unified_inputs(t, tensor_return_value),
-        tensor_return_value,
-        coord);
+        program, to_unified_params(op, t), to_unified_inputs(t, tensor_return_value), tensor_return_value, coord);
 }
 
 void SharedExpertFfnDeviceOperation::validate_on_program_cache_miss(
-    const operation_attributes_t& op, const tensor_args_t& t) {
+    const operation_attributes_t&, const tensor_args_t& t) {
     const auto& x = t.x;
     TT_FATAL(x.storage_type() == ttnn::StorageType::DEVICE, "shared_expert_ffn: x must be on device");
     TT_FATAL(
@@ -132,7 +103,6 @@ void SharedExpertFfnDeviceOperation::validate_on_program_cache_miss(
         TT_FATAL(w.storage_type() == ttnn::StorageType::DEVICE, "shared_expert_ffn: {} must be on device", name);
         TT_FATAL(w.layout() == tt::tt_metal::Layout::TILE, "shared_expert_ffn: {} must be TILE layout", name);
         TT_FATAL(is_dram_interleaved(w), "shared_expert_ffn: {} must be DRAM-interleaved", name);
-        TT_FATAL(w.device() == x.device(), "shared_expert_ffn: {} must be on x's device", name);
     }
     const auto& gate_shape = t.gate_proj.padded_shape();
     const auto& up_shape = t.up_proj.padded_shape();
@@ -150,36 +120,43 @@ void SharedExpertFfnDeviceOperation::validate_on_program_cache_miss(
         up_shape[-1],
         down_shape[-2]);
     TT_FATAL(
-        down_shape[-1] == x_shape[-1],
-        "shared_expert_ffn: down N ({}) must equal x's emb ({}); down_proj is replicated, not pre-split",
-        down_shape[-1],
+        t.down_proj.logical_shape()[-1] % TILE == 0 && down_shape[-1] <= x_shape[-1],
+        "shared_expert_ffn: down N ({}) must be tile-aligned and at most x's emb ({})",
+        t.down_proj.logical_shape()[-1],
         x_shape[-1]);
-    if (op.cluster_axis.has_value()) {
-        const auto mesh_shape = x.device()->shape();
+
+    // The unified reader / writer fetch page 0 of each vector and index entry 0 (the one expert).
+    for (const auto& [name, v] : std::initializer_list<std::pair<const char*, const ttnn::Tensor&>>{
+             {"expert_token_counts", t.expert_token_counts},
+             {"global_expert_idx_table", t.global_expert_idx_table},
+             {"expert_region_offsets", t.expert_region_offsets}}) {
+        TT_FATAL(v.storage_type() == ttnn::StorageType::DEVICE, "shared_expert_ffn: {} must be on device", name);
+        TT_FATAL(v.dtype() == tt::tt_metal::DataType::UINT32, "shared_expert_ffn: {} must be UINT32", name);
+        TT_FATAL(v.layout() == tt::tt_metal::Layout::ROW_MAJOR, "shared_expert_ffn: {} must be ROW_MAJOR", name);
+        TT_FATAL(is_dram_interleaved(v), "shared_expert_ffn: {} must be DRAM-interleaved", name);
         TT_FATAL(
-            *op.cluster_axis < mesh_shape.dims(),
-            "shared_expert_ffn: cluster_axis {} is out of range for mesh shape {}",
-            *op.cluster_axis,
-            mesh_shape);
-        const uint32_t slices = num_slices(op, t);
-        TT_FATAL(
-            (x_shape[-1] / TILE) % slices == 0,
-            "shared_expert_ffn: emb ({}) must split into {} whole-tile slices along cluster_axis {}",
-            x_shape[-1],
-            slices,
-            *op.cluster_axis);
+            v.logical_shape()[-1] >= 1 && v.logical_shape()[-1] <= unified::MAX_GLOBAL_EXPERTS,
+            "shared_expert_ffn: {} must hold 1..{} entries, got {}",
+            name,
+            unified::MAX_GLOBAL_EXPERTS,
+            v.logical_shape()[-1]);
     }
+    TT_FATAL(
+        t.expert_region_offsets.logical_shape()[-1] == t.expert_token_counts.logical_shape()[-1],
+        "shared_expert_ffn: expert_region_offsets ({}) and expert_token_counts ({}) must be the same length",
+        t.expert_region_offsets.logical_shape()[-1],
+        t.expert_token_counts.logical_shape()[-1]);
 }
 
 void SharedExpertFfnDeviceOperation::validate_on_program_cache_hit(
     const operation_attributes_t&, const tensor_args_t&) {}
 
 SharedExpertFfnDeviceOperation::spec_return_value_t SharedExpertFfnDeviceOperation::compute_output_specs(
-    const operation_attributes_t& op, const tensor_args_t& t) {
+    const operation_attributes_t&, const tensor_args_t& t) {
     // Always a fresh bf8_b TILE tensor, never x: x is typically read by other ops concurrently
-    // (the MoE dispatch), and with a partition axis it holds only this device's emb slice.
+    // (the MoE dispatch), and down N may be narrower than emb.
     ttnn::Shape shape = t.x.logical_shape();
-    shape[-1] = t.down_proj.logical_shape()[-1] / num_slices(op, t);
+    shape[-1] = t.down_proj.logical_shape()[-1];
     return tt::tt_metal::TensorSpec(
         shape,
         tt::tt_metal::TensorLayout(
@@ -202,19 +179,27 @@ ttnn::Tensor shared_expert_ffn(
     const ttnn::Tensor& gate_proj,
     const ttnn::Tensor& up_proj,
     const ttnn::Tensor& down_proj,
+    const ttnn::Tensor& expert_token_counts,
+    const ttnn::Tensor& global_expert_idx_table,
+    const ttnn::Tensor& expert_region_offsets,
     ttnn::operations::experimental::deepseek_prefill::shared_expert_ffn::RoutedExpertActivation activation,
     const std::optional<ttnn::DeviceComputeKernelConfig>& compute_kernel_config,
-    const CoreCoord& core_grid_origin,
-    std::optional<uint32_t> cluster_axis) {
+    const CoreCoord& core_grid_origin) {
     using OperationType =
         ttnn::operations::experimental::deepseek_prefill::shared_expert_ffn::SharedExpertFfnDeviceOperation;
     return ttnn::device_operation::launch<OperationType>(
         OperationType::operation_attributes_t{
             .activation = activation,
             .compute_kernel_config = compute_kernel_config,
-            .core_grid_origin = core_grid_origin,
-            .cluster_axis = cluster_axis},
-        OperationType::tensor_args_t{.x = x, .gate_proj = gate_proj, .up_proj = up_proj, .down_proj = down_proj});
+            .core_grid_origin = core_grid_origin},
+        OperationType::tensor_args_t{
+            .x = x,
+            .gate_proj = gate_proj,
+            .up_proj = up_proj,
+            .down_proj = down_proj,
+            .expert_token_counts = expert_token_counts,
+            .global_expert_idx_table = global_expert_idx_table,
+            .expert_region_offsets = expert_region_offsets});
 }
 
 }  // namespace ttnn::prim

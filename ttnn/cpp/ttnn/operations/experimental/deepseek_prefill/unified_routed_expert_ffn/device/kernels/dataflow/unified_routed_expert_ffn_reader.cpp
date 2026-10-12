@@ -177,15 +177,6 @@ void kernel_main() {
     constexpr uint32_t D_SHARD_W = get_compile_time_arg_val(35);
     using GuRuns = unified_routed_expert_ffn::WeightRuns<GU_SHARD_W>;
     using DRuns = unified_routed_expert_ffn::WeightRuns<D_SHARD_W>;
-#ifdef DOWN_W_TILES
-    // Down slice: down_proj is full width (DOWN_W_TILES) and this program computes only output
-    // columns [DOWN_COL_BASE, DOWN_COL_BASE + N_down_tiles_full) of it.
-    constexpr uint32_t down_w_tiles = DOWN_W_TILES;
-    constexpr uint32_t down_col_base = DOWN_COL_BASE;
-#else
-    constexpr uint32_t down_w_tiles = N_down_tiles_full;
-    constexpr uint32_t down_col_base = 0;
-#endif
 
     constexpr uint32_t x_accessor_offset = 36;
     constexpr auto x_args = TensorAccessorArgs<x_accessor_offset>();
@@ -306,14 +297,6 @@ void kernel_main() {
     const uint32_t idx_l1 = cb_idx_scratch_obj.get_write_ptr();
     const uint32_t counts_page_size = counts_acc.get_aligned_page_size();
     const uint32_t idx_page_size = idx_acc.get_aligned_page_size();
-#ifdef DENSE_TOKENS
-    // Dense (shared-expert) mode: one expert, global id 0, owning all DENSE_TOKENS rows from
-    // row 0. Every core writes that into its own scratch; there are no device vectors to read.
-    reinterpret_cast<volatile tt_l1_ptr uint32_t*>(counts_l1)[0] = DENSE_TOKENS;
-    reinterpret_cast<volatile tt_l1_ptr uint32_t*>(idx_l1)[0] = 0;
-    (void)counts_page_size;
-    (void)idx_page_size;
-#else
     {
         // COUNTS_BCAST: one core reads the two pages and multicasts them to the grid.
         // Every core needs counts/idx to derive its chunking, but all of them hitting the
@@ -371,7 +354,6 @@ void kernel_main() {
             counts_valid_sem.set(0);
         }
     }
-#endif
     cb_counts_scratch_obj.push_back(1);
     cb_idx_scratch_obj.push_back(1);
 
@@ -385,13 +367,9 @@ void kernel_main() {
     // region).
     cb_start_scratch_obj.reserve_back(1);
     const uint32_t start_l1 = cb_start_scratch_obj.get_write_ptr();
-#ifdef DENSE_TOKENS
-    reinterpret_cast<volatile tt_l1_ptr uint32_t*>(start_l1)[0] = 0;
-#else
     noc_read.async_read(
         start_acc, CoreLocalMem<uint32_t>(start_l1), start_acc.get_aligned_page_size(), {.page_id = 0}, {});
     noc_read.async_read_barrier();
-#endif
     cb_start_scratch_obj.push_back(1);
     const volatile tt_l1_ptr uint32_t* start_ptr = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(start_l1);
 
@@ -969,14 +947,7 @@ void kernel_main() {
                     const uint32_t row = kb * in0_block_w_d + k;
                     if (row < K_down_tiles) {
                         DRuns::read(
-                            noc_read,
-                            down_acc,
-                            row,
-                            down_w_tiles,
-                            down_col_base + down_col0,
-                            down_col_base + down_col_end,
-                            l1_w,
-                            down_tile_bytes);
+                            noc_read, down_acc, row, N_down_tiles_full, down_col0, down_col_end, l1_w, down_tile_bytes);
                     }
                     l1_w += per_core_N_d * down_tile_bytes;
                 }

@@ -143,15 +143,6 @@ void kernel_main() {
     constexpr uint32_t d_out_subblock_w_tail = get_compile_time_arg_val(32);
     using GuRuns = unified_routed_expert_ffn::WeightRuns<GU_SHARD_W>;
     using DRuns = unified_routed_expert_ffn::WeightRuns<D_SHARD_W>;
-#ifdef DOWN_W_TILES
-    // Down slice: down_proj is full width (DOWN_W_TILES) and this program computes only output
-    // columns [DOWN_COL_BASE, DOWN_COL_BASE + N_down_tiles_full) of it.
-    constexpr uint32_t down_w_tiles = DOWN_W_TILES;
-    constexpr uint32_t down_col_base = DOWN_COL_BASE;
-#else
-    constexpr uint32_t down_w_tiles = N_down_tiles_full;
-    constexpr uint32_t down_col_base = 0;
-#endif
 
     // This core's weight tile-column window, clipped to the tensor's real N. Both weight reads
     // below walk the same window on every K-row, so it is computed once.
@@ -201,16 +192,11 @@ void kernel_main() {
     // Read the `start` (= expert_region_offsets) page ONCE into resident L1;
     // each expert's output slice begins at start[global_id] (token row).
     const uint32_t start_l1 = cb_start_scratch_buf.get_write_ptr();
-#ifdef DENSE_TOKENS
-    // Dense (shared-expert) mode: the one expert's output starts at row 0.
-    reinterpret_cast<volatile tt_l1_ptr uint32_t*>(start_l1)[0] = 0;
-#else
     {
         const uint32_t start_page_size = start_acc.get_aligned_page_size();
         noc.async_read(start_acc, CoreLocalMem<uint32_t>(start_l1), start_page_size, {.page_id = 0}, {});
         noc.async_read_barrier();
     }
-#endif
     const volatile tt_l1_ptr uint32_t* start_ptr = reinterpret_cast<const volatile tt_l1_ptr uint32_t*>(start_l1);
 
     // ---- UP_SPLIT up-weight read setup (see header) ----
@@ -413,9 +399,9 @@ void kernel_main() {
                                     noc_up,
                                     down_acc,
                                     row,
-                                    down_w_tiles,
-                                    down_col_base + down_col0,
-                                    down_col_base + down_col_end,
+                                    N_down_tiles_full,
+                                    down_col0,
+                                    down_col_end,
                                     l1_w,
                                     down_tile_bytes);
                             }

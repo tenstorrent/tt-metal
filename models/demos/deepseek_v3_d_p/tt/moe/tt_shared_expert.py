@@ -5,8 +5,8 @@
 """
 TTNN implementation of the Shared Expert module.
 
-- One shared_expert_ffn op = typecast + unified routed expert + mesh_partition: weights replicated,
-  each mesh column computes only its own emb slice of the output; no CCL
+- One shared_expert_ffn op = typecast + unified routed expert + mesh_partition: gate/up replicated,
+  down split on emb across mesh columns, so each column computes only its own output slice; no CCL
 - Composed GLU helpers (``situ_glu``, ``clamped_silu_glu``) for TtFfn's TP-sharded forward
 """
 
@@ -154,8 +154,8 @@ class TtSharedExpert(LightweightModule):
         (typecast + gate / up / GLU activation / down + mesh_partition over mesh columns, fused:
         the op reads bf16 x directly and computes only this column's emb slice of the output)
 
-    Weights: gate_proj [emb_dim, hidden_dim], up_proj [emb_dim, hidden_dim] and down_proj
-    [hidden_dim, emb_dim], whole on every chip.
+    Weights: gate_proj [emb_dim, hidden_dim] and up_proj [emb_dim, hidden_dim] whole on every chip;
+    down_proj [hidden_dim, emb_dim / num_cols], split on emb across mesh columns.
     """
 
     # TtFfn reuses the weight code below and keeps its TP-sharded layout.
@@ -165,10 +165,14 @@ class TtSharedExpert(LightweightModule):
     def _weight_layout(cls, proj: str) -> tuple[tuple, str]:
         """Mesh-mapper dims and cache basename for one projection.
 
-        Replicated weights get their own basename: as_tensor's cache key ignores the mapper, so a
-        TP-sharded file under the same name would load with the wrong shape.
+        The fused layout gets its own basenames: as_tensor's cache key ignores the mapper, so a file
+        of another layout under the same name would load with the wrong shape. Its down_proj is
+        split on emb (its N) across mesh columns, so each column computes only its own output
+        slice -- what mesh_partition of the full output kept.
         """
         if cls.REPLICATED_WEIGHTS:
+            if proj == "down_proj":
+                return (None, -1), "down_proj_emb_sharded"
             return (None, None), f"{proj}_replicated"
         return ((None, -2) if proj == "down_proj" else (None, -1)), proj
 
@@ -291,6 +295,7 @@ class TtSharedExpert(LightweightModule):
         situ_beta: Optional[float] = None,
         situ_linear_beta: Optional[float] = None,
         clamped_silu_glu_limit: Optional[float] = None,
+        seq_len_per_chip: Optional[int] = None,
     ):
         """
         Initialize TtSharedExpert module.
@@ -317,6 +322,9 @@ class TtSharedExpert(LightweightModule):
                 the K3 pair.
             clamped_silu_glu_limit: the clamp limit (V4: 10.0). Required, and positive, when
                 activation == "clamped_silu_glu"; ignored otherwise. The fused op accepts only 10.0.
+            seq_len_per_chip: tokens per chip in every forward. The fused op runs the shared expert
+                as one expert owning all of them, described once here as count [seq_len_per_chip],
+                expert index [0] and region start [0].
         """
         super().__init__()
         self.mesh_device = mesh_device
@@ -331,6 +339,7 @@ class TtSharedExpert(LightweightModule):
         self.subdevice_id = subdevice_id
         self.subdevice_cores = subdevice_cores
         self.weight_cache_path = weight_cache_path
+        self.seq_len_per_chip = seq_len_per_chip
 
         if activation not in SUPPORTED_ACTIVATIONS:
             raise ValueError(f"unknown activation {activation!r}; expected one of {SUPPORTED_ACTIVATIONS}")
@@ -426,6 +435,22 @@ class TtSharedExpert(LightweightModule):
         self.core_grid_origin = (
             self.subdevice_cores.bounding_box().start if self.subdevice_cores is not None else ttnn.CoreCoord(0, 0)
         )
+        # The one expert's layout for the unified routed-expert program: all tokens, expert 0, row 0.
+        if self.seq_len_per_chip is None:
+            raise ValueError("TtSharedExpert needs seq_len_per_chip to describe its single expert")
+        self.expert_token_counts = self._uint32_vector(self.seq_len_per_chip)
+        self.global_expert_idx_table = self._uint32_vector(0)
+        self.expert_region_offsets = self._uint32_vector(0)
+
+    def _uint32_vector(self, value: int) -> ttnn.Tensor:
+        return ttnn.from_torch(
+            torch.tensor([value], dtype=torch.int32),
+            dtype=ttnn.uint32,
+            layout=ttnn.ROW_MAJOR_LAYOUT,
+            device=self.mesh_device,
+            memory_config=ttnn.DRAM_MEMORY_CONFIG,
+            mesh_mapper=ttnn.ReplicateTensorToMesh(self.mesh_device),
+        )
 
     def _cache_name(self, name: str) -> Optional[str]:
         if self.weight_cache_path is None or self.cache_name_prefix is None:
@@ -501,6 +526,9 @@ class TtSharedExpert(LightweightModule):
         assert (
             x.shape[-1] == self.emb_dim
         ), f"Input must be replicated (full emb_dim={self.emb_dim}), got shape[-1]={x.shape[-1]}"
+        assert (
+            x.shape[-2] == self.seq_len_per_chip
+        ), f"Expected seq_len_per_chip={self.seq_len_per_chip} tokens, got {x.shape[-2]}"
 
         # Reads x as given (no typecast) and writes a fresh bf8 output, never over x, which the MoE
         # dispatch reads concurrently.
@@ -509,10 +537,12 @@ class TtSharedExpert(LightweightModule):
             self.gate_proj,
             self.up_proj,
             self.down_proj,
+            self.expert_token_counts,
+            self.global_expert_idx_table,
+            self.expert_region_offsets,
             compute_kernel_config=self.compute_kernel_config,
             activation=self.fused_activation,
             core_grid_origin=self.core_grid_origin,
-            cluster_axis=1 if self.mesh_device.shape[1] > 1 else None,
         )
         if DEBUG_LOGGING_ENABLED:
             logger.debug(f"After shared_expert_ffn: {output.shape}")

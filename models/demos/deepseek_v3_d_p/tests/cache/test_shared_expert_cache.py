@@ -83,6 +83,7 @@ def test_shared_expert_weights_cold_warm_cache(mesh_device, device_params):
         torch_weights=torch_weights,
         weights_dtype=weights_dtype,
         weight_cache_path=None,
+        seq_len_per_chip=seq_len,
     )
     output1_tt = expert_from_weights(x_tt)
     output1 = to_torch_concat(output1_tt)
@@ -115,6 +116,7 @@ def test_shared_expert_weights_cold_warm_cache(mesh_device, device_params):
         torch_weights=None,
         weights_dtype=weights_dtype,
         weight_cache_path=CACHE_DIR,
+        seq_len_per_chip=seq_len,
         cache_name_prefix="shared_expert",
     )
     profiler.end("cold_load")
@@ -130,6 +132,7 @@ def test_shared_expert_weights_cold_warm_cache(mesh_device, device_params):
         torch_weights=None,
         weights_dtype=weights_dtype,
         weight_cache_path=CACHE_DIR,
+        seq_len_per_chip=seq_len,
         cache_name_prefix="shared_expert",
     )
     profiler.end("warm_load")

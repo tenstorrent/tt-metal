@@ -556,6 +556,7 @@ class TtMoe(LightweightModule):
             situ_beta=shared_expert_situ_beta,
             situ_linear_beta=shared_expert_situ_linear_beta,
             clamped_silu_glu_limit=shared_expert_clamped_silu_glu_limit,
+            seq_len_per_chip=seq_len_per_chip,
         )
 
         self.latent_projections = (
