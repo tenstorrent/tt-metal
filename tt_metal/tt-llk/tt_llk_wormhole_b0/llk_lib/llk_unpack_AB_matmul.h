@@ -217,6 +217,7 @@ __attribute__((always_inline)) inline void _llk_unpack_AB_matmul_init_(
     const bool unpA_partial_face        = false,
     const bool unpB_partial_face        = false)
 {
+    LLK_EXP_NOP_UNPACK_INIT_AT(); // experiment hook (init-opt2), ckernel.h
     LLK_ASSERT(unpA_num_faces == 1 || unpA_num_faces == 2 || unpA_num_faces == 4, "unpA_num_faces must be 1, 2, or 4");
     LLK_ASSERT(unpB_num_faces == 1 || unpB_num_faces == 2 || unpB_num_faces == 4, "unpB_num_faces must be 1, 2, or 4");
     // 16x16 inputs not supported - no dedicated math path; falls to 32x32 default which is incorrect for < 4 faces
@@ -311,6 +312,7 @@ inline void _llk_unpack_AB_matmul_(
     const std::uint32_t rt_dim   = 1,
     const std::uint32_t kt_dim   = 1)
 {
+    LLK_FID_POINT(); // fidelity experiment hook (ckernel.h), empty unless LLK_FID_T is defined
     // In0/InA -> srcB (supports partial face)
     // In1/InB -> srcA
 
