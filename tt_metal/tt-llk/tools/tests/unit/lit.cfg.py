@@ -2,7 +2,7 @@
 #
 # SPDX-License-Identifier: Apache-2.0
 
-"""lit configuration for the tt-llk host unit tests.
+"""lit configuration for the tt-llk unit tests.
 
 Run with:
     lit -v tools/tests/unit
@@ -163,16 +163,11 @@ else:
 tt_llk_root = os.path.abspath(os.path.join(config.test_source_root, "..", "..", ".."))
 blackhole_root = os.path.join(tt_llk_root, "tt_llk_blackhole")
 
-_require(
-    tt_llk_root if os.path.isdir(tt_llk_root) else None,
-    f"the tt-llk source root ({tt_llk_root})",
-    "Run LIT against tools/tests/unit inside a tt-llk checkout.",
-)
-
 # ---- substitutions --------------------------------------------------------------------
-# Each test file builds its own command line out of DEFINE'd substitutions on top of
+# Host test files build their command lines out of DEFINE'd substitutions on top of
 # %clangxx, so the flags a case depends on -- -verify in particular -- stay visible in the
-# file being read rather than hidden here.
+# file being read rather than hidden here. HAL tests use architecture-local compiler
+# substitutions instead.
 #
 # The brace form is deliberate for the include path: a bare %sanitizer_include would be
 # eaten by lit's built-in %s substitution before it ever matched.

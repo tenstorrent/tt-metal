@@ -1,11 +1,5 @@
 # Unit tests
 
-Run from the LLK root:
-
-```sh
-CXX=clang++ LLVM_BIN=/usr/lib/llvm-20/bin lit -v tools/tests/unit
-```
-
 No device is required. LLVM supplies `split-file` and `FileCheck`; host diagnostic
 tests require Clang. Tests requiring libfmt skip when it is unavailable.
 
@@ -15,8 +9,7 @@ diagnostic. They need the hardware headers at `../hw/inc/internal/tt-1xx/` and t
 SFPI toolchain in `tests/sfpi/compiler/bin`, and are reported as unsupported when
 the toolchain is absent.
 
-## Additional HAL coverage
-
+## Layout
 
 - `lit/diagnostics/` is for compile-only Clang diagnostics.
 - `lit/functional/` is for tests that compile and execute a host binary.
@@ -28,35 +21,35 @@ the toolchain is absent.
 - `lit.cfg.py` discovers `.cpp` files below `lit/` and provides common tool and
   source-root substitutions.
 
-## Test environment setup
+## Setup and execution
 
-
-Install the test requirements, Clang, and the LLVM tools package containing
-`split-file`. Target HAL tests also use the SFPI compiler installed by the
-normal tt-llk test-environment setup:
+Install Clang and the LLVM tools package containing `split-file` and `FileCheck`.
+Then, from the tt-llk root, create and activate the test environment, install its
+requirements, and set up SFPI:
 
 ```bash
-python3 -m pip install -r tests/requirements.txt
+python3 -m venv tests/.venv
+source tests/.venv/bin/activate
+python -m pip install -r tests/requirements.txt
 ./tests/setup_testing_env.sh
 ```
 
-Then run from the tt-llk root:
+Run the suite from the same directory. Set `CXX` and `LLVM_BIN` to the installed
+Clang and LLVM tools; these overrides can be omitted when the tools are on `PATH`:
 
 ```bash
-tests/.venv/bin/lit -sv tools/tests/unit
-```
-
-Use `CXX` to select Clang and `LLVM_BIN` to locate `split-file` when they are
-not on `PATH`:
-
-```bash
-CXX=/path/to/clang++ LLVM_BIN=/usr/lib/llvm-20/bin \
+CXX=clang++ LLVM_BIN=/usr/lib/llvm-20/bin \
     tests/.venv/bin/lit -sv tools/tests/unit
 ```
 
-The harness defines `%clangxx`, `%split-file`, `%{tt_llk_root}`,
-`%{blackhole_root}`, `%{blackhole_common_include}`, and
-`%{blackhole_llk_include}` for test `RUN:` lines.
+## Test commands
 
-Architecture-local configurations define their own target compiler and binary
-tool substitutions.
+Host tests use `%clangxx`, `%split-file`, and `%{sanitizer_include}`. Blackhole
+HAL tests use `%{blackhole_tensix_compile}`, `%{blackhole_objdump}`, and
+`%{blackhole_compare_codegen}`, with `%{blackhole_unpack_thread}`,
+`%{blackhole_math_thread}`, or `%{blackhole_pack_thread}` selecting the thread.
+Blackhole diagnostics also provide `%{blackhole_tensix_diagnose}` for syntax-only
+compilation. File-local `DEFINE` aliases can combine these substitutions.
+
+The root configuration supplies source paths to the architecture-local
+configurations, which build the target compiler and binary-tool commands.
