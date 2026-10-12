@@ -659,6 +659,23 @@ double buffered, ~1.18 MB at GLM; K2.7's 28 K-blocks exceed the 24-slot x ring);
 weights plus tiny tiles or a full-sync DST. A Galaxy chip (12 x 10) is the realistic path: rows 1-9 hold 69 gate/up
 cells, so np 1 stays next to combine (host-side plan in 6.18; not run).
 
+**12 x 10 on the LoudBox (2026-10-12).** Slow dispatch (`TT_METAL_SLOW_DISPATCH_MODE=1`) is the only way: ETH
+dispatch (`device_params={"dispatch_core_type": ETH}` -> blackhole_140_arch_eth_dispatch.yaml, 12 x 10) fails with
+"No core coordinate found at (0, 12, ETH)": every usable eth core on these p150s is an active link. Flat alone,
+galaxy branch planner, 12 experts, us per expert, device profiler from the last core's start (slow dispatch launches
+cores ~0.9-1.4 ms apart; reliable at M 2048, it under-reads small M where early cores run ahead):
+
+| M 512 / 2048 | 11 cols, full | 12 cols, full | 12 cols, rows 1-9 | rows 1-9 + 5 row-0 cells (XDOWN) |
+|---|---|---|---|---|
+| GLM | 70.8 / 273.0 | 67.5 / 267.0 | 79.6 / 322.4 (24 down, 6 cols) | **67.3 / 270.2** (29 down) |
+| K2.7 | 118.3 / 438.1 | 113.9 / 448.9 | **111.6 / 431.3** (24 down) | 127.1 / 514.7 |
+
+Rows 1-9 keep np 1 (64 gate/up) on 12 columns, so combine's row 0 costs flat nothing: GLM with the row-0 cells
+combine leaves ((1,0) (4,0) (9,0) (10,0) (11,0); same cells as on 11 x 10), K2.7 without (its readers do down work).
+The overlap itself runs under slow dispatch (`FLAT_CMB_EAGER=1`, `--profile`; fabric and combine work), but its
+timing is not usable: chips launch one after another and their cycle counters are not synchronized, so the fabric
+ops' per-chip times include an unknown cross-chip skew. Overlap numbers need a real 12 x 10 (Galaxy) chip.
+
 ## 9. How to run (PR tree)
 ```
 cd /localdev/mstaletovic/tt-metal-pr58093
@@ -668,7 +685,7 @@ export TT_MESH_GRAPH_DESC_PATH=models/demos/deepseek_v3_d_p/tests/op_unit_tests/
 ninja -C build_Release install
 scripts/run_safe_pytest.sh --run-all models/demos/deepseek_v3_d_p/tests/op_unit_tests/test_flat_combine_overlap.py
 ```
-Knobs: `FLAT_CMB_MODELS` (e.g. `kimi-k3`), `FLAT_CMB_YRM` (default 1), `FLAT_CMB_PIN` (default 1), `FLAT_CMB_NO_OVERLAP=1 MIMO_FL_ROWS=0,9` (110-core
+Knobs: `FLAT_CMB_MODELS` (e.g. `kimi-k3`), `FLAT_CMB_EAGER` (untraced, for the device profiler), `FLAT_CMB_YRM` (default 1), `FLAT_CMB_PIN` (default 1), `FLAT_CMB_NO_OVERLAP=1 MIMO_FL_ROWS=0,9` (110-core
 baseline), `FLAT_CMB_ITERS`, `FLAT_CMB_LOG`, `TT_CMBF2D_IDLE`, `CMBF2D_RD_VC` / `CMBF2D_WR_VC`, `MIMO_FL_ROWS`,
 `MIMO_FL_RD_SAMECOL`, `MIMO_FL_XDOWN`, `MIMO_FL_ND`, probes `MIMO_FL_W_NOREAD`, `MIMO_FL_XRD_SKIP`,
 `MIMO_FL_CMB_EARLY` (garbage output, perf only). Profile: `TT_METAL_DEVICE_PROFILER=1

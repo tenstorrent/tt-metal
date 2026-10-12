@@ -338,6 +338,24 @@ def test_flat_combine_overlap(mesh_device, device_params, threshold_id, model_id
 )
 def test_flat_combine_overlap_perf(mesh_device, device_params, threshold_id, model_id):
     c = _build_case(mesh_device, device_params, threshold_id, model_id)
+    if os.environ.get("FLAT_CMB_EAGER"):
+        # no traces (slow dispatch, e.g. the 12 x 10 grid): every program runs eagerly, synchronized, _PERF_ITERS
+        # times; time them from the device profiler (scripts/run_safe_pytest.sh --profile), not here
+        for _ in range(_PERF_ITERS):
+            y = c["flat_solo"]()
+            ttnn.synchronize_device(mesh_device)
+            out = c["combine"](_combine_input(y))
+            ttnn.synchronize_device(mesh_device)
+            del y, out
+        ttnn.ReadDeviceProfiler(mesh_device)
+        if not os.environ.get("FLAT_CMB_NO_OVERLAP"):
+            for _ in range(_PERF_ITERS):
+                out = c["overlapped"]()
+                ttnn.synchronize_device(mesh_device)
+                del out
+            ttnn.ReadDeviceProfiler(mesh_device)
+        logger.info(f"flat+combine {model_id} {threshold_id} eager: {_PERF_ITERS} calls each, see the profiler CSV")
+        return
     c["flat_solo"]()
     tr, y = hyb._capture(mesh_device, c["flat_solo"])
     try:
