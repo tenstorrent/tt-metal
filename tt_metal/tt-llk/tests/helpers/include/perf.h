@@ -113,12 +113,19 @@ constexpr bool PERF_PACK_SECTION_RELEASE = false;
 #endif
 
 // The run types whose source mock goes through the MOP expander: on Wormhole, MATH_ISOLATE's unpack mock and
-// UNPACK_ISOLATE's math mock. Every other caller (L1_CONGESTION, Blackhole, Quasar) keeps the RISC-V loop mocks below.
+// UNPACK_ISOLATE's math mock, and every L1_CONGESTION mock. Blackhole and Quasar keep the RISC-V loop mocks below.
+// A mock call site shared by UNPACK_ISOLATE and L1_CONGESTION whose UNPACK_ISOLATE mock keeps the RISC-V loop: only
+// L1_CONGESTION's goes through the MOP expander
+constexpr PerfRunType perf_cong_mock(const PerfRunType run_type)
+{
+    return run_type == PerfRunType::L1_CONGESTION ? run_type : PerfRunType::L1_TO_L1;
+}
+
 template <PerfRunType RUN_TYPE>
 constexpr bool perf_mock_mop()
 {
 #if defined(ARCH_WORMHOLE)
-    return RUN_TYPE == PerfRunType::UNPACK_ISOLATE || RUN_TYPE == PerfRunType::MATH_ISOLATE;
+    return RUN_TYPE == PerfRunType::UNPACK_ISOLATE || RUN_TYPE == PerfRunType::MATH_ISOLATE || RUN_TYPE == PerfRunType::L1_CONGESTION;
 #else
     return false;
 #endif
@@ -442,8 +449,8 @@ inline void _perf_math_clear_valid(std::uint32_t source)
 #endif
 }
 
-// RUN_TYPE: the run type the mock serves (perf_mock_mop); the default keeps the RISC-V loop
-template <bool set_a, bool set_b, PerfRunType RUN_TYPE = PerfRunType::L1_CONGESTION>
+// RUN_TYPE: the run type the mock serves (perf_mock_mop); the default (L1_TO_L1, which has no mock) keeps the RISC-V loop
+template <bool set_a, bool set_b, PerfRunType RUN_TYPE = PerfRunType::L1_TO_L1>
 inline void _perf_unpack_loop_set_valid(std::uint32_t iterations)
 {
 #if defined(ARCH_WORMHOLE)
@@ -476,7 +483,7 @@ inline void _perf_unpack_loop_set_valid(std::uint32_t iterations)
     }
 }
 
-template <bool clear_a, bool clear_b, PerfRunType RUN_TYPE = PerfRunType::L1_CONGESTION>
+template <bool clear_a, bool clear_b, PerfRunType RUN_TYPE = PerfRunType::L1_TO_L1>
 inline void _perf_math_loop_clear_valid(std::uint32_t iterations)
 {
 #if defined(ARCH_WORMHOLE)
@@ -499,7 +506,7 @@ inline void _perf_math_loop_clear_valid(std::uint32_t iterations)
     }
 }
 
-template <PerfRunType RUN_TYPE = PerfRunType::L1_CONGESTION>
+template <PerfRunType RUN_TYPE = PerfRunType::L1_TO_L1>
 inline void _perf_unpack_matmul_mock(std::uint32_t loop_factor, std::uint32_t rt_dim, std::uint32_t kt_dim, std::uint32_t ct_dim, std::uint32_t num_blocks = 1)
 {
 #if defined(ARCH_WORMHOLE)
@@ -576,7 +583,7 @@ inline void _perf_unpack_matmul_mock(std::uint32_t loop_factor, std::uint32_t rt
     }
 }
 
-template <PerfRunType RUN_TYPE = PerfRunType::L1_CONGESTION>
+template <PerfRunType RUN_TYPE = PerfRunType::L1_TO_L1>
 inline void _perf_math_matmul_mock(std::uint32_t loop_factor, std::uint32_t rt_dim, std::uint32_t kt_dim, std::uint32_t ct_dim, std::uint32_t num_blocks = 1)
 {
 #if defined(ARCH_WORMHOLE)

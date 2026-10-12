@@ -142,6 +142,24 @@ void run_kernel(RUNTIME_PARAMETERS params)
         }
         else if constexpr (PERF_RUN_TYPE == PerfRunType::UNPACK_ISOLATE || PERF_RUN_TYPE == PerfRunType::L1_CONGESTION)
         {
+            _perf_math_loop_clear_valid</* clear A */ true, /* clear B */ false, perf_cong_mock(PERF_RUN_TYPE)>(TILE_CNT * LOOP_FACTOR);
+        }
+        else if constexpr (PERF_RUN_TYPE == PerfRunType::MATH_ISOLATE)
+        {
+            // Isolates the math pipe: no dest handshake with pack, so what is left is
+            // the datacopy plus the EMA kernel.
+            //
+            // Same shape as eltwise_unary_sfpu_perf.cpp's MATH_ISOLATE: the datacopy
+            // stays in. It is what consumes the SrcA valid bits that unpack sets, so
+            // dropping it and trying to retire them with a bare TTI_CLEARDVALID hangs the
+            // math thread. The datacopy is therefore a fixed cost inside this marker, the
+            // same way it is for every other unary SFPU op measured this way -- it is
+            // constant across a before/after comparison of the SFPU block, so it cancels
+            // in the delta.
+            //
+            // EMA always works through dst tile 0 (input) and dst tile 1 (output) via
+            // compile-time offsets, so there is no MAX_TILES_DEST blocking here: every
+            // iteration copies into tile 0 and the kernel writes tile 1.
             for (std::uint32_t loop = 0; loop < LOOP_FACTOR; ++loop)
             {
                 for (std::uint32_t tile = 0; tile < TILE_CNT; ++tile)
