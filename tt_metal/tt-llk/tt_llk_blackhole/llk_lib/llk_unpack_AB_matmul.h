@@ -94,10 +94,10 @@ inline constexpr bool _llk_unpack_AB_matmul_stream_narrow_(
 }
 
 /**
- * Record the replay body for one streamed tile of a matmul row: the UNPACR group, the address advance and the NOP.
+ * Record the 8-bit replay body for one streamed tile of a matmul row: the UNPACR group, the address advance and the NOP.
  */
-template <std::uint32_t SRC, std::uint32_t CFG_REG, std::uint32_t STRIDE_GPR, bool ADVANCE, bool NARROW>
-inline void _llk_unpack_AB_matmul_stream_tile_body_(const bool partial_face)
+template <std::uint32_t SRC, std::uint32_t CFG_REG, std::uint32_t STRIDE_GPR, bool ADVANCE>
+inline void _llk_unpack_AB_matmul_narrow_tile_body_(const bool partial_face)
 {
     if (partial_face)
     {
@@ -111,18 +111,7 @@ inline void _llk_unpack_AB_matmul_stream_tile_body_(const bool partial_face)
         TTI_UNPACR(SRC, 0, 0, 0, 0, 1 /*Set OvrdThreadId*/, 1 /*Set Dvalid*/, p_unpacr::RAREFYB_DISABLE, 0, 0 /* Set ContextIdInc */, 0, 0, 1);
     }
 
-    if constexpr (!ADVANCE)
-    {
-        // keep the length of the address advance
-        TTI_NOP;
-        TTI_NOP;
-        TTI_NOP;
-        if constexpr (!NARROW)
-        {
-            TTI_NOP;
-        }
-    }
-    else if constexpr (NARROW)
+    if constexpr (ADVANCE)
     {
         // CFG_REG += SCRATCH_SEC0_val; the stride is copied from the GPR every tile, so it follows a data format reconfig
         TTI_STALLWAIT(p_stall::STALL_CFG, p_stall::THCON);
@@ -131,13 +120,68 @@ inline void _llk_unpack_AB_matmul_stream_tile_body_(const bool partial_face)
     }
     else
     {
-        TTI_RDCFG(p_gpr_unpack::TMP0, CFG_REG);
-        TTI_ADDDMAREG(0, p_gpr_unpack::TMP0, p_gpr_unpack::TMP0, STRIDE_GPR);
-        TTI_STALLWAIT(p_stall::STALL_CFG, p_stall::THCON);
-        TTI_WRCFG(p_gpr_unpack::TMP0, 0, CFG_REG);
+        // keep the length of the address advance
+        TTI_NOP;
+        TTI_NOP;
+        TTI_NOP;
     }
     // The config write takes two cycles and the next UNPACR must see the new base address.
     TTI_NOP;
+}
+
+/**
+ * The 8-bit form of @ref _llk_unpack_AB_matmul_mop_config_: the streamed operand's address advances with one
+ * CFGSHIFTMASK per tile.
+ */
+template <std::uint32_t kernel_broadcast_a = 0, std::uint32_t kernel_broadcast_b = 0>
+inline void _llk_unpack_AB_matmul_narrow_mop_config_(
+    const std::uint32_t ct_dim, const std::uint32_t rt_dim, const bool unpA_partial_face, const bool unpB_partial_face)
+{
+    const bool reuse_a             = ct_dim >= rt_dim;
+    const bool stream_partial_face = reuse_a ? unpA_partial_face : unpB_partial_face;
+    // two copies of the streamed tile body, one per config context: UNPACR group, address advance and NOP
+    const std::uint32_t replay_buf_run_len  = (stream_partial_face ? 4 : 1) + 3 + 1;
+    const std::uint32_t replay_buf_prog_len = 2 * replay_buf_run_len;
+
+    if (reuse_a)
+    {
+        static_assert(kernel_broadcast_b <= 1, "kernel_broadcast>1 on matmul input 1 is not supported with reuse enabled");
+        constexpr bool advance = (kernel_broadcast_b != 1);
+        load_replay_buf(
+            0,
+            replay_buf_prog_len,
+            [unpA_partial_face]
+            {
+                _llk_unpack_AB_matmul_narrow_tile_body_<SrcA, THCON_SEC0_REG3_Base_address_ADDR32, p_gpr_unpack::TILE_SIZE_A, advance>(unpA_partial_face);
+                _llk_unpack_AB_matmul_narrow_tile_body_<SrcA, THCON_SEC0_REG3_Base_cntx1_address_ADDR32, p_gpr_unpack::TILE_SIZE_A, advance>(unpA_partial_face);
+            });
+    }
+    else
+    {
+        static_assert(kernel_broadcast_a <= 1, "kernel_broadcast>1 on matmul input 0 is not supported with reuse enabled");
+        constexpr bool advance = (kernel_broadcast_a != 1);
+        load_replay_buf(
+            0,
+            replay_buf_prog_len,
+            [unpB_partial_face]
+            {
+                _llk_unpack_AB_matmul_narrow_tile_body_<SrcB, THCON_SEC1_REG3_Base_address_ADDR32, p_gpr_unpack::TMP_LO, advance>(unpB_partial_face);
+                _llk_unpack_AB_matmul_narrow_tile_body_<SrcB, THCON_SEC1_REG3_Base_cntx1_address_ADDR32, p_gpr_unpack::TMP_LO, advance>(unpB_partial_face);
+            });
+    }
+
+    ckernel_unpack_template tmp = ckernel_unpack_template(
+        false,                                    // src B
+        false,                                    // halo - just used for 4 unpacks
+        lltt::replay_insn(0, replay_buf_run_len), // runs when context is 0
+        0,
+        0,
+        0,
+        lltt::replay_insn(replay_buf_run_len, replay_buf_run_len), // runs when context is 1
+        0,
+        0);
+
+    tmp.program();
 }
 
 /**
@@ -155,49 +199,155 @@ inline void _llk_unpack_AB_matmul_stream_tile_body_(const bool partial_face)
  * @param unpA_partial_face: Whether operand A is unpacked face-by-face (partial faces).
  * @param unpB_partial_face: Whether operand B is unpacked face-by-face (partial faces).
  */
-template <std::uint32_t kernel_broadcast_a = 0, std::uint32_t kernel_broadcast_b = 0, bool stream_narrow = false>
-inline void _llk_unpack_AB_matmul_mop_config_(const std::uint32_t ct_dim, const std::uint32_t rt_dim, const bool unpA_partial_face, const bool unpB_partial_face)
+template <std::uint32_t kernel_broadcast_a = 0, std::uint32_t kernel_broadcast_b = 0>
+inline void _llk_unpack_AB_matmul_mop_config_(
+    const std::uint32_t ct_dim, const std::uint32_t rt_dim, const bool unpA_partial_face, const bool unpB_partial_face)
 {
     // in0/inA - loaded to SrcB
     // in1/inB - loaded to SrcA
 
-    const bool reuse_a             = ct_dim >= rt_dim;
-    const bool stream_partial_face = reuse_a ? unpA_partial_face : unpB_partial_face;
-    LLK_ASSERT_BLOCK(unpack_matmul_init_reuse_a = reuse_a);
-    // two copies of the streamed tile body, one per config context: UNPACR group, address advance and NOP
-    const std::uint32_t replay_buf_run_len  = (stream_partial_face ? 4 : 1) + (stream_narrow ? 3 : 4) + 1;
-    const std::uint32_t replay_buf_prog_len = 2 * replay_buf_run_len;
+    const bool reuse_a                      = ct_dim >= rt_dim;
+    const std::uint32_t replay_buf_prog_len = (reuse_a && unpA_partial_face) ? 18 : ((!reuse_a && unpB_partial_face) ? 18 : 12);
+    const std::uint32_t replay_buf_run_len  = replay_buf_prog_len / 2;
 
     if (reuse_a)
     {
         static_assert(kernel_broadcast_b <= 1, "kernel_broadcast>1 on matmul input 1 is not supported with reuse enabled");
-        constexpr bool advance = (kernel_broadcast_b != 1);
         load_replay_buf(
             0,
             replay_buf_prog_len,
             // Lambda function to set up replay buffer
             [unpA_partial_face]
             {
-                _llk_unpack_AB_matmul_stream_tile_body_<SrcA, THCON_SEC0_REG3_Base_address_ADDR32, p_gpr_unpack::TILE_SIZE_A, advance, stream_narrow>(
-                    unpA_partial_face);
-                _llk_unpack_AB_matmul_stream_tile_body_<SrcA, THCON_SEC0_REG3_Base_cntx1_address_ADDR32, p_gpr_unpack::TILE_SIZE_A, advance, stream_narrow>(
-                    unpA_partial_face);
+                if (unpA_partial_face)
+                {
+                    TTI_UNPACR_NOP(SrcA, 0, 0, 0 /*Set Dvalid*/, 0, p_unpacr_nop::WAIT_LIKE_UNPACR, 0, 0, p_unpacr_nop::UNP_ZEROSRC);
+                    TTI_UNPACR(
+                        SrcA, 0b00010001, 0, 0, 0, 1 /*Set OvrdThreadId*/, 0 /*Set Dvalid*/, p_unpacr::RAREFYB_DISABLE, 0, 0 /* Set ContextIdInc */, 0, 0, 1);
+                    TTI_UNPACR(
+                        SrcA, 0b00010001, 0, 0, 0, 1 /*Set OvrdThreadId*/, 1 /*Set Dvalid*/, p_unpacr::RAREFYB_DISABLE, 0, 0 /* Set ContextIdInc */, 0, 0, 1);
+                    TTI_SETADCZW(p_setadc::UNP_A, 0, 0, 0, 0, 0b0101); // Set ch0_z=0, ch1_z=0
+                }
+                else
+                {
+                    TTI_UNPACR(SrcA, 0, 0, 0, 0, 1 /*Set OvrdThreadId*/, 1 /*Set Dvalid*/, p_unpacr::RAREFYB_DISABLE, 0, 0 /* Set ContextIdInc */, 0, 0, 1);
+                }
+                if constexpr (kernel_broadcast_b == 1)
+                {
+                    TTI_NOP;
+                    TTI_NOP;
+                    TTI_NOP;
+                    TTI_NOP;
+                }
+                else
+                {
+                    TTI_RDCFG(p_gpr_unpack::TMP0, THCON_SEC0_REG3_Base_address_ADDR32);
+                    TTI_ADDDMAREG(0, p_gpr_unpack::TMP0, p_gpr_unpack::TMP0, p_gpr_unpack::TILE_SIZE_A);
+                    TTI_STALLWAIT(p_stall::STALL_CFG, p_stall::THCON);
+                    TTI_WRCFG(p_gpr_unpack::TMP0, 0, THCON_SEC0_REG3_Base_address_ADDR32);
+                }
+                // Added to ensure WRCFG instruction has finished, since it takes 2 cycles.
+                TTI_NOP;
+
+                if (unpA_partial_face)
+                {
+                    TTI_UNPACR_NOP(SrcA, 0, 0, 0 /*Set Dvalid*/, 0, p_unpacr_nop::WAIT_LIKE_UNPACR, 0, 0, p_unpacr_nop::UNP_ZEROSRC);
+                    TTI_UNPACR(
+                        SrcA, 0b00010001, 0, 0, 0, 1 /*Set OvrdThreadId*/, 0 /*Set Dvalid*/, p_unpacr::RAREFYB_DISABLE, 0, 0 /* Set ContextIdInc */, 0, 0, 1);
+                    TTI_UNPACR(
+                        SrcA, 0b00010001, 0, 0, 0, 1 /*Set OvrdThreadId*/, 1 /*Set Dvalid*/, p_unpacr::RAREFYB_DISABLE, 0, 0 /* Set ContextIdInc */, 0, 0, 1);
+                    TTI_SETADCZW(p_setadc::UNP_A, 0, 0, 0, 0, 0b0101); // Set ch0_z=0, ch1_z=0
+                }
+                else
+                {
+                    TTI_UNPACR(SrcA, 0, 0, 0, 0, 1 /*Set OvrdThreadId*/, 1 /*Set Dvalid*/, p_unpacr::RAREFYB_DISABLE, 0, 0 /* Set ContextIdInc */, 0, 0, 1);
+                }
+                if constexpr (kernel_broadcast_b == 1)
+                {
+                    TTI_NOP;
+                    TTI_NOP;
+                    TTI_NOP;
+                    TTI_NOP;
+                }
+                else
+                {
+                    TTI_RDCFG(p_gpr_unpack::TMP0, THCON_SEC0_REG3_Base_cntx1_address_ADDR32);
+                    TTI_ADDDMAREG(0, p_gpr_unpack::TMP0, p_gpr_unpack::TMP0, p_gpr_unpack::TILE_SIZE_A);
+                    TTI_STALLWAIT(p_stall::STALL_CFG, p_stall::THCON);
+                    TTI_WRCFG(p_gpr_unpack::TMP0, 0, THCON_SEC0_REG3_Base_cntx1_address_ADDR32);
+                }
+                // Added to ensure WRCFG instruction has finished, since it takes 2 cycles.
+                TTI_NOP;
             });
     }
     else
     {
         static_assert(kernel_broadcast_a <= 1, "kernel_broadcast>1 on matmul input 0 is not supported with reuse enabled");
-        constexpr bool advance = (kernel_broadcast_a != 1);
         load_replay_buf(
             0,
             replay_buf_prog_len,
             // Lambda function to set up replay buffer
             [unpB_partial_face]
             {
-                _llk_unpack_AB_matmul_stream_tile_body_<SrcB, THCON_SEC1_REG3_Base_address_ADDR32, p_gpr_unpack::TMP_LO, advance, stream_narrow>(
-                    unpB_partial_face);
-                _llk_unpack_AB_matmul_stream_tile_body_<SrcB, THCON_SEC1_REG3_Base_cntx1_address_ADDR32, p_gpr_unpack::TMP_LO, advance, stream_narrow>(
-                    unpB_partial_face);
+                if (unpB_partial_face)
+                {
+                    TTI_UNPACR_NOP(SrcB, 0, 0, 0 /*Set Dvalid*/, 0, p_unpacr_nop::WAIT_LIKE_UNPACR, 0, 0, p_unpacr_nop::UNP_ZEROSRC);
+                    TTI_UNPACR(
+                        SrcB, 0b00010001, 0, 0, 0, 1 /*Set OvrdThreadId*/, 0 /*Set Dvalid*/, p_unpacr::RAREFYB_DISABLE, 0, 0 /* Set ContextIdInc */, 0, 0, 1);
+                    TTI_UNPACR(
+                        SrcB, 0b00010001, 0, 0, 0, 1 /*Set OvrdThreadId*/, 1 /*Set Dvalid*/, p_unpacr::RAREFYB_DISABLE, 0, 0 /* Set ContextIdInc */, 0, 0, 1);
+                    TTI_SETADCZW(p_setadc::UNP_B, 0, 0, 0, 0, 0b0101); // Set ch0_z=0, ch1_z=0
+                }
+                else
+                {
+                    TTI_UNPACR(SrcB, 0, 0, 0, 0, 1 /*Set OvrdThreadId*/, 1 /*Set Dvalid*/, p_unpacr::RAREFYB_DISABLE, 0, 0 /* Set ContextIdInc */, 0, 0, 1);
+                }
+                if constexpr (kernel_broadcast_a == 1)
+                {
+                    TTI_NOP;
+                    TTI_NOP;
+                    TTI_NOP;
+                    TTI_NOP;
+                }
+                else
+                {
+                    TTI_RDCFG(p_gpr_unpack::TMP0, THCON_SEC1_REG3_Base_address_ADDR32);
+                    TTI_ADDDMAREG(0, p_gpr_unpack::TMP0, p_gpr_unpack::TMP0, p_gpr_unpack::TMP_LO);
+                    TTI_STALLWAIT(p_stall::STALL_CFG, p_stall::THCON);
+                    TTI_WRCFG(p_gpr_unpack::TMP0, 0, THCON_SEC1_REG3_Base_address_ADDR32);
+                }
+                // Added to ensure WRCFG instruction has finished, since it takes 2 cycles.
+                TTI_NOP;
+
+                if (unpB_partial_face)
+                {
+                    TTI_UNPACR_NOP(SrcB, 0, 0, 0 /*Set Dvalid*/, 0, p_unpacr_nop::WAIT_LIKE_UNPACR, 0, 0, p_unpacr_nop::UNP_ZEROSRC);
+                    TTI_UNPACR(
+                        SrcB, 0b00010001, 0, 0, 0, 1 /*Set OvrdThreadId*/, 0 /*Set Dvalid*/, p_unpacr::RAREFYB_DISABLE, 0, 0 /* Set ContextIdInc */, 0, 0, 1);
+                    TTI_UNPACR(
+                        SrcB, 0b00010001, 0, 0, 0, 1 /*Set OvrdThreadId*/, 1 /*Set Dvalid*/, p_unpacr::RAREFYB_DISABLE, 0, 0 /* Set ContextIdInc */, 0, 0, 1);
+                    TTI_SETADCZW(p_setadc::UNP_B, 0, 0, 0, 0, 0b0101); // Set ch0_z=0, ch1_z=0
+                }
+                else
+                {
+                    TTI_UNPACR(SrcB, 0, 0, 0, 0, 1 /*Set OvrdThreadId*/, 1 /*Set Dvalid*/, p_unpacr::RAREFYB_DISABLE, 0, 0 /* Set ContextIdInc */, 0, 0, 1);
+                }
+                if constexpr (kernel_broadcast_a == 1)
+                {
+                    TTI_NOP;
+                    TTI_NOP;
+                    TTI_NOP;
+                    TTI_NOP;
+                }
+                else
+                {
+                    TTI_RDCFG(p_gpr_unpack::TMP0, THCON_SEC1_REG3_Base_cntx1_address_ADDR32);
+                    TTI_ADDDMAREG(0, p_gpr_unpack::TMP0, p_gpr_unpack::TMP0, p_gpr_unpack::TMP_LO);
+                    TTI_STALLWAIT(p_stall::STALL_CFG, p_stall::THCON);
+                    TTI_WRCFG(p_gpr_unpack::TMP0, 0, THCON_SEC1_REG3_Base_cntx1_address_ADDR32);
+                }
+                // Added to ensure WRCFG instruction has finished, since it takes 2 cycles.
+                TTI_NOP;
             });
     }
 
@@ -298,7 +448,15 @@ __attribute__((always_inline)) inline void _llk_unpack_AB_matmul_init_(
 
     TT_SETDMAREG(0, LOWER_HALFWORD(kt_dim), 0, LO_16(p_gpr_unpack::KT_DIM)); // store kt_dim to gpr for scaling tile size
 
-    _llk_unpack_AB_matmul_mop_config_<kernel_broadcast_a, kernel_broadcast_b, stream_narrow>(ct_dim, rt_dim, unpA_partial_face, unpB_partial_face);
+    LLK_ASSERT_BLOCK(unpack_matmul_init_reuse_a = (ct_dim >= rt_dim));
+    if constexpr (stream_narrow)
+    {
+        _llk_unpack_AB_matmul_narrow_mop_config_<kernel_broadcast_a, kernel_broadcast_b>(ct_dim, rt_dim, unpA_partial_face, unpB_partial_face);
+    }
+    else
+    {
+        _llk_unpack_AB_matmul_mop_config_<kernel_broadcast_a, kernel_broadcast_b>(ct_dim, rt_dim, unpA_partial_face, unpB_partial_face);
+    }
 
     if constexpr (ttsync)
     {
