@@ -26,7 +26,7 @@ for L in $(awk '{print $2; print $3}' $S/lines.txt | sort -u); do
   rts=$(awk -v l=$L '$2==l || $3==l {print $4}' $S/lines.txt | tr ',' '\n' | sort -u | paste -sd,)
   cat $(awk -v l=$L -v s=$S '$2==l || $3==l {print s"/ids/"$1".txt"}' $S/lines.txt) | sort -u > $SL/ids_$L.txt
   ( cd $D/tt_metal/tt-llk/tests/python_tests; mapfile -t N < $SL/ids_$L.txt
-    env CHIP_ARCH=blackhole LLK_HOME=$D/tt_metal/tt-llk TT_LLK_DISABLE_ASSERTS=1 TMPDIR=$SL/builds/$L LLK_PERF_L1_MUX_GROUP=0 LLK_PERF_RUN_TYPES=$rts \
+    env -u RUNNER_TEMP CHIP_ARCH=blackhole LLK_HOME=$D/tt_metal/tt-llk TT_LLK_DISABLE_ASSERTS=1 TMPDIR=$SL/builds/$L LLK_PERF_L1_MUX_GROUP=0 LLK_PERF_RUN_TYPES=$rts \
       RA_HASHLOG=$SL/out/$L.hash PYTHONPATH=$S/tools timeout -s INT -k 60 3600 $PY -m pytest --compile-producer -n $NP -p no:cacheprovider \
       --override-ini=log_cli=false -q -p ra_hashlog "${N[@]}" < /dev/null > $SL/prod_$L.log 2>&1 )
   echo "== built $L ($rts, $(wc -l < $SL/ids_$L.txt) nodes): $(grep -aE '[0-9]+ (passed|failed|error)' $SL/prod_$L.log | tail -1) $(date -u +%T)"
@@ -35,7 +35,7 @@ done
 run() { # run <tag> <side> <k> <label> <rts>
   local tag=$1 s=$2 k=$3 L=$4 rts=$5 D=$SL/$4 log=$SL/out/run_$1_$2$3.log
   ( cd $D/tt_metal/tt-llk/tests/python_tests; mapfile -t N < $S/ids/$tag.txt
-    env CHIP_ARCH=blackhole LLK_HOME=$D/tt_metal/tt-llk TT_LLK_DISABLE_ASSERTS=1 TMPDIR=$SL/builds/$L LLK_PERF_L1_MUX_GROUP=0 LLK_PERF_RUN_TYPES=$rts \
+    env -u RUNNER_TEMP CHIP_ARCH=blackhole LLK_HOME=$D/tt_metal/tt-llk TT_LLK_DISABLE_ASSERTS=1 TMPDIR=$SL/builds/$L LLK_PERF_L1_MUX_GROUP=0 LLK_PERF_RUN_TYPES=$rts \
       PERF_RUN_TAG=${tag}_$s$k PERF_KEEP_RUNS=4000 timeout -s INT -k 60 900 $PY -m pytest --compile-consumer -p no:cacheprovider \
       --override-ini=log_cli=false -q -o timeout_method=thread "${N[@]}" < /dev/null > $log 2>&1 )
   echo "   $tag $s$k rc=$? $(grep -aE '[0-9]+ (passed|failed|error)' $log | tail -1) $(date -u +%T)"
