@@ -15,7 +15,7 @@ cd $W || exit 3
 [ -e models/tt_dit/tests/models/minimax_h3/test_sla_device_minimax_h3.py ] || { echo "[t455] no test in $W"; exit 3; }
 source $VENV/bin/activate || exit 3
 export TT_METAL_HOME=$W PYTHONPATH=$W:$W/ttnn:$W/tools:$F/t409/pydeps
-CMD="exec timeout --foreground -k 10 ${T455_PY_TIMEOUT:-540} python -u -m pytest -sv -p no:cacheprovider models/tt_dit/tests/models/minimax_h3/test_sla_device_minimax_h3.py -k 4x8sp1tp0nl2_ring"
+CMD="exec timeout --foreground -k 10 ${T455_PY_TIMEOUT:-540} python -u -m pytest -sv -p no:cacheprovider models/tt_dit/tests/models/minimax_h3/test_sla_device_minimax_h3.py -k \"4x8sp1tp0nl2_ring and ${T455_K:-h14}\""
 echo "[t455] host=$(hostname) $(cat $W/OVERLAY) job=${TTP_RUNNER_JOB:-} $(date -u '+%F %T') UTC" | tee $L
 echo "[t455] cmd: $CMD" | tee -a $L
 PG=""
