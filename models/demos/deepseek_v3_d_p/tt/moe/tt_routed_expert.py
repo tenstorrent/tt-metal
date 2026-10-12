@@ -850,6 +850,7 @@ class TtRoutedExpert(LightweightModule):
         num_experts_per_tok: int,
         seq_len_per_chip: int,
         combine_semaphores,
+        forwarding_buffer: Optional[ttnn.Tensor] = None,
     ) -> ttnn.Tensor:
         """The routed expert overlapped with combine_fabric2d in one program; returns combine's output.
 
@@ -899,4 +900,5 @@ class TtRoutedExpert(LightweightModule):
             fwd_arrived_semaphore=combine_semaphores[0],
             final_arrived_semaphore=combine_semaphores[1],
             expert_go_semaphore=combine_semaphores[2],
+            forwarding_buffer=forwarding_buffer,
         )
