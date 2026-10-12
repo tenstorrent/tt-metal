@@ -262,7 +262,11 @@ void bind_chunk_gated_delta_rule(nb::module_& mod) {
                 report through the watcher's ASSERT, so run with TT_METAL_WATCHER set.
             handoff_fault (int): default 0. Debug, needs handoff_checks: compile one deliberate protocol
                 breach into the kernels (1 double credit, 2 wrong canary, 3 short push, 4 wrong owner,
-                5 no credit) so the fault test can prove the named check trips.)doc")
+                5 no credit) so the fault test can prove the named check trips.
+            wave_heads (int, optional): heads per program. The BH heads run as ceil(BH / wave_heads)
+                programs of nearly equal size, each with its own geometry, into shared outputs. None:
+                the op's plan (see chunk_gdn_fused_wave_plan): one program up to 32 heads when a
+                geometry fits, else the fewest waves of at most 24 heads.)doc")
         .def(
             nb::init<
                 std::optional<uint32_t>,
@@ -274,7 +278,8 @@ void bind_chunk_gated_delta_rule(nb::module_& mod) {
                 std::optional<bool>,
                 std::optional<float>,
                 bool,
-                uint32_t>(),
+                uint32_t,
+                std::optional<uint32_t>>(),
             nb::kw_only(),
             nb::arg("num_producers") = nb::none(),
             nb::arg("num_receivers") = nb::none(),
@@ -285,7 +290,8 @@ void bind_chunk_gated_delta_rule(nb::module_& mod) {
             nb::arg("producer_pool") = nb::none(),
             nb::arg("pool_extra_share") = nb::none(),
             nb::arg("handoff_checks") = false,
-            nb::arg("handoff_fault") = 0)
+            nb::arg("handoff_fault") = 0,
+            nb::arg("wave_heads") = nb::none())
         .def_rw("num_producers", &ChunkGdnFusedProgramConfig::num_producers)
         .def_rw("num_receivers", &ChunkGdnFusedProgramConfig::num_receivers)
         .def_rw("row_local", &ChunkGdnFusedProgramConfig::row_local)
@@ -296,10 +302,12 @@ void bind_chunk_gated_delta_rule(nb::module_& mod) {
         .def_rw("pool_extra_share", &ChunkGdnFusedProgramConfig::pool_extra_share)
         .def_rw("handoff_checks", &ChunkGdnFusedProgramConfig::handoff_checks)
         .def_rw("handoff_fault", &ChunkGdnFusedProgramConfig::handoff_fault)
+        .def_rw("wave_heads", &ChunkGdnFusedProgramConfig::wave_heads)
         .def("__repr__", [](const ChunkGdnFusedProgramConfig& c) {
             return fmt::format(
                 "ChunkGdnFusedProgramConfig(num_producers={}, num_receivers={}, row_local={}, handoff_depth={}, "
-                "unicast={}, posted={}, producer_pool={}, pool_extra_share={}, handoff_checks={}, handoff_fault={})",
+                "unicast={}, posted={}, producer_pool={}, pool_extra_share={}, handoff_checks={}, handoff_fault={}, "
+                "wave_heads={})",
                 py_opt(c.num_producers),
                 py_opt(c.num_receivers),
                 py_opt(c.row_local),
@@ -309,7 +317,8 @@ void bind_chunk_gated_delta_rule(nb::module_& mod) {
                 py_opt(c.producer_pool),
                 py_opt(c.pool_extra_share),
                 py_bool(c.handoff_checks),
-                c.handoff_fault);
+                c.handoff_fault,
+                py_opt(c.wave_heads));
         });
 
     // Host-side geometry oracle: what the fused op will choose for (grid, BH, NC, Vt) when the program
@@ -368,6 +377,33 @@ void bind_chunk_gated_delta_rule(nb::module_& mod) {
         resolves to), 2 = both (what producer_pool=None and the op's default dispatch resolve to).
         fixed_placement: -1 = free, 0 = row-major, 1 = row-local; a pinned per-head placement excludes
         the pool.)doc");
+    mod.def(
+        "chunk_gdn_fused_wave_plan",
+        [](uint32_t grid_x,
+           uint32_t grid_y,
+           uint32_t BH,
+           uint32_t NC,
+           uint32_t Vt,
+           uint32_t max_wave,
+           uint32_t fixed_nv,
+           uint32_t fixed_np) {
+            const auto p = ttnn::prim::plan_fused_waves(grid_x, grid_y, BH, NC, Vt, max_wave, fixed_nv, fixed_np);
+            return std::make_tuple(p.waves, p.t_fused_us, p.t_phased_us, p.fused_pays);
+        },
+        nb::arg("grid_x"),
+        nb::arg("grid_y"),
+        nb::arg("BH"),
+        nb::arg("NC"),
+        nb::arg("Vt") = 4,
+        nb::arg("max_wave") = 0,
+        nb::arg("fixed_nv") = 0,
+        nb::arg("fixed_np") = 0,
+        R"doc(Heads per fused program the op runs for BH heads on (grid_x, grid_y) when the fused program
+        config leaves wave_heads free: (waves, T_fused_us, T_phased_us, fused_pays). waves lists the head
+        count of each program in launch order (empty: no fused geometry fits): one program up to 32 heads
+        when a geometry fits, else the fewest waves of at most max_wave heads (0 = 24), sizes within one of
+        each other, more waves only if a size does not fit; T_fused_us is the cost model's sum over them;
+        fixed_nv / fixed_np pin num_receivers / num_producers as in chunk_gdn_fused_geometry.)doc");
     mod.def(
         "chunk_gdn_fused_row_local_feasible",
         &ttnn::prim::fused_row_local_feasible,
@@ -509,7 +545,9 @@ void bind_chunk_gated_delta_rule(nb::module_& mod) {
             program_config (ChunkGdnFusedProgramConfig | ChunkGdnPhasedProgramConfig |
                 ChunkGdnMonoProgramConfig, optional): which device implementation runs and how it is
                 laid out on the chip — the alternative you pass selects the path, its fields the
-                geometry (see each class). None: the fused path or the phased path depending on the cost model.
+                geometry (see each class). None: the fused path or the phased path depending on the cost
+                model. The fused path runs any batch size: heads beyond what one program's core map
+                holds run as further programs (waves) into the same outputs.
             wy_inverse (ttnn.ChunkGdnWyInverse): default AUTO. How each chunk's WY inverse is
                 computed: HORNER on the matrix engine (every architecture),
                 FORWARD_SUBSTITUTION (one solve on the SFPU, Blackhole and chunk_size 32 only, refused
