@@ -157,10 +157,9 @@ class VaeRmsNorm(Module):
 
     def forward(self, x: ttnn.Tensor) -> ttnn.Tensor:
         if not self._use_rms_workaround:
-            bs, h, w, c = x.shape
-            x = ttnn.reshape(x, [1, 1, bs * h * w, c])
-            x = self.inner.forward(x)
-            return _apply_activation_fn(ttnn.reshape(x, [bs, h, w, c]), self.activation_fn)
+            # Both norms take the 4D tensor as is. Flattening it would be a costly tiled reshape
+            # whenever w is not a multiple of the tile size.
+            return _apply_activation_fn(self.inner.forward(x), self.activation_fn)
 
         norm = ttnn.mean(ttnn.pow(x, 2), dim=-1, keepdim=True)
 
@@ -565,6 +564,11 @@ class VaeAttention(Module):
         # SDPA over the full spatial extent → AG H+W once (no-op when SP inactive).
         x = _all_gather_hw(self._ctx, x)
 
+        n, h, w, _ = x.shape  # h, w are full-spatial after AG
+
+        # convert to 1d sequence and insert head dimension; there is only one head
+        x = x.reshape([n, 1, h * w, -1])
+
         x = self.norm.forward(x)
 
         # ColParallelLinear expects replicated input on K. AG manually here (rather than
@@ -584,13 +588,6 @@ class VaeAttention(Module):
             v = self._ccl_manager.all_gather(v, dim=-1, mesh_axis=self._tp_axis, use_hyperparams=True)
 
         del x
-
-        n, h, w, c = q.shape  # h, w are full-spatial after AG
-
-        # convert to 1d sequence and insert head dimension; there is only one head
-        q = q.reshape([n, 1, h * w, c])
-        k = k.reshape([n, 1, h * w, c])
-        v = v.reshape([n, 1, h * w, c])
 
         x = ttnn.transformer.scaled_dot_product_attention(
             q,
