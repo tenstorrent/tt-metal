@@ -630,3 +630,38 @@ inline void _perf_math_matmul_mock(std::uint32_t loop_factor, std::uint32_t rt_d
         }
     }
 }
+
+// experiment hook (ncwork): -DNCW_GATE_RELEASE_ARM makes counters off skip the released-last thread's arm too
+#if defined(NCW_GATE_RELEASE_ARM)
+#define NCW_RELEASE_ARM_OK_ llk_perf::counting()
+#else
+#define NCW_RELEASE_ARM_OK_ true
+#endif
+
+// experiment hook (ncwork): -DNCW_OLD = e82f8af0da0's counters off (all the counter work, STOP for START)
+#if defined(NCW_OLD)
+#define NCW_OFF_CMD_ llk::perf::STOP
+#define NCW_ALWAYS_  true
+#else
+#define NCW_OFF_CMD_ 0
+#define NCW_ALWAYS_  false
+#endif
+
+// experiment hook (ncwork): with counters off, still run one class of the counter work (old behaviour), to find which one
+// moves the counters on minus off delta: -DNCW_KEEP_PRE (actions and freezes before or between the windows), -DNCW_KEEP_POST
+// (after the TILE_LOOP window), -DNCW_KEEP_CFG (BRISC / Quasar unpack configure)
+#if defined(NCW_KEEP_PRE)
+#define NCW_KEEP_PRE_ true
+#else
+#define NCW_KEEP_PRE_ false
+#endif
+#if defined(NCW_KEEP_POST)
+#define NCW_KEEP_POST_ true
+#else
+#define NCW_KEEP_POST_ false
+#endif
+#if defined(NCW_KEEP_CFG)
+#define NCW_KEEP_CFG_ true
+#else
+#define NCW_KEEP_CFG_ false
+#endif
