@@ -252,3 +252,15 @@ Next: read the breakdown; if a fix is clear, commit it and rerun one VSA arm vs 
 - Resubmitted as spec ID t453-attn-timing-r2: blx01 broker job 994 (-t 600). Log /var/tmp/fasth3/t409/out_t453/run.log.
 - Next: grep 'T453' in that log; compare dense vs vsa0.9 totals and the per-op split (coarse stage, all-gathers,
   vsa_sdpa / vsa_ring_sdpa vs ring_joint_sdpa). Then push the branch (ttp push --own --detach).
+
+## t453 run 1701 (2026-10-12 09:30 PDT)
+- blx01 job 994 PASSED (16:15Z, wall 49 s, no drops). One attention layer at the 10 s shape (random weights, 900 MHz
+  clamp, relative only), best of 3: dense module 47.2 ms (ring_joint_sdpa 39.7 ms); VSA-0.9 two-op 53.8 ms
+  (vsa_sdpa 30.1, K/V all-gathers 2x4.5, coarse 2.9, AG 0.6); vsa_ring 48.7 ms (vsa_ring_sdpa 35.4, coarse 3.8, AG 0.9).
+- BUT job 994's test built the geometry with build_vsa_geometry's default placement (identity): all 46 exempt rows on
+  shard 0 -> shard 0 does 0.39x dense work (others 0.13x). The pipeline (job 990) uses interleaved (6/6/6/6/6/6/5/5,
+  max shard 0.167x dense). Fix ae7b83c6ff6: the test uses MiniMaxH3VSAConfig().placement.
+- Resubmitted as blx01 broker job 995 (spec t453-attn-timing-r3, -t 75, alarm 62 s). Same log path out_t453/run.log.
+- Next: grep T453; if interleaved vsa_sdpa is still far above 0.17x of dense, the fine kernel's per-pair cost at this
+  shape (k=119 + 46 exempt per row, 10 dealer-dense rows/shard) is the cause; plus 12 ms/layer fixed overhead
+  (2 K/V all-gathers + coarse) that dense ring SDPA hides inside its ring.
