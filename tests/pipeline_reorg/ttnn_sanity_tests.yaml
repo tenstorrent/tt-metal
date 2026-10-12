@@ -10,8 +10,8 @@
 # See .github/actions/setup-ttsim/action.yml.
 
 
-- name: "TEMP moe_grouped_topk deepseek-8g256e vs kimi-1g384e kernel-config check"
-  cmd: 'pytest --timeout 300 tests/ttnn/nightly/unit_tests/operations/experimental/deepseek_prefill/test_moe_grouped_topk.py -k "test_moe_grouped_topk and sigmoid and in_bf16 and realistic and ((deepseek-8g256e and pad50) or kimi-1g384e)" -v'
+- name: "TEMP moe_grouped_topk deepseek-8g256e (smaller worker L1) + kimi check"
+  cmd: 'pytest --timeout 300 tests/ttnn/nightly/unit_tests/operations/experimental/deepseek_prefill/test_moe_grouped_topk.py -k "test_moe_grouped_topk and (deepseek-8g256e or (kimi-1g384e and sigmoid and in_bf16 and realistic))" -v'
   skus:
     bh_p150b_civ2:
       timeout: 15
