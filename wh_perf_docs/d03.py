@@ -17,12 +17,24 @@ D = dict(
 <li>The pack TRISC sends instructions to the packers through a queue; when the queue is full, the TRISC waits (<code>i_trisc_instrn_buf_req_ready</code> low).</li>
 <li>The pack TRISC (TRISC2) and the math TRISC share L1 port 3 with packer 3's writes ({rtl("tensix/rtl/tt_tensix.sv", 1398)}; packer 3 reaches it through a TDMA round-robin arbiter, {rtl("tdma/rtl/tt_tdma.sv", 3855)}). A code-line read in the cycle packer 3 wants to write makes the write wait.</li>
 </ul>""",
-    how="""<ol class="chain">
-<li>The pack loop starts cold: its last code lines are not in the cache yet.</li>
-<li>Case A, code fetch: if the loop ends in one more 16-byte line, that line is read from L1 during the first tile, exactly when a packer writes. The packer's write waits; WH-01 step 3 follows.</li>
-<li>Case B, a long first pass: in eltwise_binary the loop's first pass reads a code line from L1 every 4–5 cycles for the first three tiles. Each read goes through L1 port 3, which packer 3's writes also use, so packer 3's writes wait 6–11 times per tile. A layout change shifts these reads by a cycle or two, and tile 3 ends in a different rhythm.</li>
-<li>Either way the rhythm is set in tile 0–2 and holds for the rest of the loop.</li>
-</ol>""",
+    how="""<p><b>First, three facts.</b></p>
+<ol class="chain">
+<li><b>The pack core keeps its code in a small cache.</b> The pack core (TRISC2) runs the pack loop. It keeps a copy of the code in its 2 KiB instruction cache. Code that is not in the cache is read from L1 in pieces of 16 bytes (4 instructions). One piece is a <i>code line</i>.</li>
+<li><b>At the start of the measured loop the cache is empty.</b> The barrier clears it. So the first time the loop runs, the core reads each of the loop's code lines from L1. After that the whole loop is in the cache, and the core does not touch L1 again.</li>
+<li><b>Those reads use packer 3's port.</b> Code-line reads go through L1 port 3, the port packer 3 writes through. If a code-line read and a packer 3 write ask in the same cycle, the write waits one cycle. One wait in the first tiles is enough to start the slow rhythm (WH-01).</li>
+</ol>
+<p><b>How a change that does no work moves the result.</b> We saw two cases.</p>
+<p><b>Case A: one more code line</b> (matmul 1×3, figures in section 4).</p>
+<ul>
+<li>As built (0 nops), the core reads the loop's last code line 10 cycles before the packers start. Nothing collides: 107,622 cycles.</li>
+<li>Add one nop before the loop. The loop moves by 4 bytes, and its end now crosses into one more code line. The core reads that extra line 33 cycles into the first tile, while packer 3 is writing. Packer 3's write waits, and the loop runs in the slow rhythm: 110,705 cycles.</li>
+</ul>
+<p><b>Case B: many code reads during the first tiles</b> (eltwise_binary).</p>
+<ul>
+<li>Here one pass of the loop packs one tile, and the first pass is long. So during tiles 1 to 3 the core reads a new code line every 4–5 cycles, and packer 3's writes wait 6–11 times per tile.</li>
+<li>A layout change (pad 0 against pad 1) moves these reads by a cycle or two. The waits land at slightly different times, and at tile 3 the packers settle into a different rhythm: 35 cycles per tile (fast) or 36 (slow).</li>
+</ul>
+<p>In both cases the rhythm is fixed by tile 3 and stays the same until the loop ends. That is why moving code by a few bytes can move the whole result.</p>""",
     sketch="the pack core's code lines as boxes on an address line (16 B each), the loop's end crossing one more line with +1 nop, and a time line of tile 0 with the late fetch landing on packer 3's write.",
     versim=f"""<h3>Case A: the pack core's own code fetch (matmul 1×3, PACK_ISOLATE, pack predictor off)</h3>
 <div class="legend2"><span><span class="sw" style="background:var(--accent)"></span>pack core reads a code line from L1</span><span><span class="sw" style="background:var(--muted);opacity:.35"></span>packer L1 write accepted</span><span><span class="sw" style="border-color:var(--refc)"></span>refused</span><span>dashed line = first DEST read</span></div>
