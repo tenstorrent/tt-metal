@@ -1,0 +1,250 @@
+# SPDX-FileCopyrightText: © 2026 Tenstorrent USA, Inc.
+# SPDX-License-Identifier: Apache-2.0
+
+"""custom_ops/qwen_ag_matmul against the stock pair of the context-parallel prefill (qwen_cp_prefill.py):
+_row_ag (all_gather_async along dim 2 over the mesh rows) + ttnn.experimental.minimal_matmul with the model's config.
+
+test_qwen_ag_matmul_plan: host only; every device's block lists cover each gathered row once, equal list lengths.
+test_qwen_ag_matmul: on the 8x4 Galaxy (FABRIC_1D_RING), per kind (QKV: N=1280, FF1: N=3200 with copy_local) and
+    sequence length:
+    1. matmul_port (the 6x10 matmul with the planned block lists, no fabric) on the stock gathered buffer:
+       torch.equal to the stock minimal_matmul on all 32 devices.
+    2. qwen_ag_matmul on zero-filled gathered / output buffers, twice with fresh buffers (descriptor cache hit):
+       the output torch.equal to the stock pair on all 32 devices, every gathered slot the op writes (all slots with
+       copy_local, else the remote ones) torch.equal to the stock gather.
+    3. Pipelined wall time per call (2 warm-ups, REPS x BATCH back-to-back calls, one sync per batch, median) of the
+       stock pair and of the fused op. Printed as QAGMM_TIME lines.
+    QAGMM_SEQS / QAGMM_KINDS (comma lists) narrow the sweep; QAGMM_WAVES (e.g. 8,8,8,8,8) forces the wave sizes.
+
+Run on the Wormhole Galaxy (8x4 mesh):
+    pytest models/demos/llama3_70b_galaxy/tests/test_qwen_ag_matmul_op.py -s
+"""
+
+import os
+import statistics
+import time
+
+import pytest
+import torch
+from loguru import logger
+
+import ttnn
+from models.demos.llama3_70b_galaxy.tt import qwen_cp_prefill as cp
+from models.demos.llama3_70b_galaxy.tt.custom_ops.qwen_ag_matmul import (
+    check_plan,
+    matmul_port,
+    plan,
+    qwen_ag_matmul,
+    resident_fits,
+)
+
+ROWS, COLS = 8, 4
+SEQS = (16384, 24576, 32768, 40960)
+FABRIC_PARAMS = [{"dispatch_core_axis": ttnn.DispatchCoreAxis.COL, "fabric_config": True, "worker_l1_size": 1345000}]
+K = 5120
+
+
+def _kinds(margs):
+    lofi16 = cp.lofi_fp32_config(margs.compute_kernel_config_hifi2, "QWEN_CP_ATTN_MM_LOFI", fp16=True)
+    return {
+        "qkv": dict(N=1280, config=cp.QKV_FP16_CFG, ckc=lofi16, copy_local=False),
+        "ff1": dict(N=3200, config=cp.FF13_CFG, ckc=margs.compute_kernel_config_lofi, copy_local=True),
+    }
+
+
+def test_qwen_ag_matmul_plan():
+    """Slot coverage: on every device, each gathered row (every slot, own and remote) is in exactly one block of one
+    column; resident plans start every column on its own slot; the QKV shape is resident."""
+    assert resident_fits(K, 1280, cp.QKV_FP16_CFG) and resident_fits(K, 1280, cp.QKV_CFG)
+    assert not resident_fits(K, 3200, cp.FF13_CFG)
+    for S in SEQS + (17408, 20480, 28672, 36864):
+        for N, resident in ((1280, True), (1280, False), (3200, False)):
+            p = plan(S // 32 // 32, 16, N, resident=resident)
+            check_plan(p)
+            logger.info(f"S={S} N={N} resident={resident} waves {p.waves} blocks/column {[len(c) for c in p.cols[0]]}")
+
+
+def _host(t):
+    return [ttnn.to_torch(d) for d in ttnn.get_device_tensors(t)]
+
+
+def _zeros(mesh, shape):
+    return ttnn.from_torch(
+        torch.zeros(shape),
+        dtype=ttnn.bfloat8_b,
+        layout=ttnn.TILE_LAYOUT,
+        device=mesh,
+        memory_config=ttnn.DRAM_MEMORY_CONFIG,
+        mesh_mapper=ttnn.ReplicateTensorToMesh(mesh),
+    )
+
+
+def _timeit(mesh, run, reps, batch):
+    for _ in range(2):
+        for t in run():
+            ttnn.deallocate(t)
+    ttnn.synchronize_device(mesh)
+    out = []
+    for _ in range(reps):
+        held = []
+        t0 = time.perf_counter()
+        for _ in range(batch):
+            held.append(run())
+        ttnn.synchronize_device(mesh)
+        out.append((time.perf_counter() - t0) * 1e3 / batch)
+        for ts in held:
+            for t in ts:
+                ttnn.deallocate(t)
+    return statistics.median(out), out
+
+
+@torch.no_grad()
+@pytest.mark.parametrize("mesh_device", [(ROWS, COLS)], indirect=True)
+@pytest.mark.parametrize("device_params", FABRIC_PARAMS, indirect=True)
+def test_qwen_ag_matmul(mesh_device):
+    from models.demos.llama3_70b_galaxy.tt.llama_ccl import TT_CCL
+    from models.demos.llama3_70b_galaxy.tt.model_config import LlamaOptimizations
+    from models.demos.llama3_70b_galaxy.tt.prefetcher_common import TtLlamaPrefetcherSetup
+    from models.demos.llama3_70b_galaxy.tt.qwen_model_config import TtQwenModelArgs
+
+    mesh = mesh_device
+    seqs = [int(s) for s in os.environ.get("QAGMM_SEQS", ",".join(map(str, SEQS))).split(",")]
+    kinds = os.environ.get("QAGMM_KINDS", "qkv,ff1").split(",")
+    wave_sets = [None]
+    if os.environ.get("QAGMM_WAVES"):
+        wave_sets = [tuple(int(w) for w in ws.split(",")) for ws in os.environ["QAGMM_WAVES"].split(";")]
+    res_env = os.environ.get("QAGMM_RESIDENT")  # unset: the op's choice (resident when the K x N block fits)
+    split = int(os.environ.get("QAGMM_SPLIT", "0"))
+    reps, batch = int(os.environ.get("QAGMM_REPS", "3")), int(os.environ.get("QAGMM_BATCH", "8"))
+    S_max = max(seqs)
+    margs = TtQwenModelArgs(mesh, max_batch_size=32, max_seq_len=S_max, optimizations=LlamaOptimizations.performance)
+    mc = margs.get_model_config()
+    pf = TtLlamaPrefetcherSetup(mesh, n_tensors=0, n_layers=1, mode="prefill", save_tensor_addresses=True, is_qwen=True)
+    mesh.set_sub_device_stall_group([pf.worker_sub_device_id])
+    ccl = TT_CCL(mesh, margs, pf.worker_sub_device_id, mode="prefill", is_qwen=True)
+    KINDS = _kinds(margs)
+    g = torch.Generator().manual_seed(int(time.time()))
+    ok = True
+    for kind in kinds:
+        kd = KINDS[kind]
+        N = kd["N"]
+        wh = torch.randn(ROWS, 1, K, N, generator=g).to(torch.bfloat16)
+        w = ttnn.from_torch(
+            wh,
+            dtype=ttnn.bfloat8_b,
+            layout=ttnn.TILE_LAYOUT,
+            device=mesh,
+            memory_config=ttnn.DRAM_MEMORY_CONFIG,
+            mesh_mapper=ttnn.ShardTensor2dMesh(mesh, dims=(0, None), mesh_shape=(ROWS, COLS)),
+        )
+        mm_kw = dict(config=kd["config"], compute_kernel_config=kd["ckc"], dtype=ttnn.bfloat8_b)
+        rk = dict(resident=None if res_env is None else res_env == "1", split=split)
+        if rk["resident"] is None:
+            rk["resident"] = resident_fits(K, N, kd["config"])
+
+        def stock(x, S):
+            xa = cp._row_ag(ccl, mc, x, S)
+            o = ttnn.experimental.minimal_matmul(
+                input_tensor=xa, weight_tensor=w, memory_config=ttnn.DRAM_MEMORY_CONFIG, **mm_kw
+            )
+            return xa, o
+
+        for S, waves in [(S, ws) for S in seqs for ws in wave_sets]:
+            T = S // 32 // 32
+            p = plan(T, kd["config"].M_block_size, N, waves, **rk)
+            check_plan(p)
+            tag = f"{kind} S={S} waves {p.waves} {rk}"
+            xs = []
+            for rep in range(2):
+                xh = torch.randn(ROWS, COLS, S // 32, K, generator=g).to(torch.bfloat16)
+                xs.append(
+                    ttnn.from_torch(
+                        xh,
+                        dtype=ttnn.bfloat8_b,
+                        layout=ttnn.TILE_LAYOUT,
+                        device=mesh,
+                        memory_config=ttnn.DRAM_MEMORY_CONFIG,
+                        mesh_mapper=ttnn.ShardTensor2dMesh(mesh, dims=(0, 1), mesh_shape=(ROWS, COLS)),
+                    )
+                )
+            for rep, x in enumerate(xs):
+                xa, ref = stock(x, S)
+                xa_h, ref_h = _host(xa), _host(ref)
+                if rep == 0:
+                    port = matmul_port(xa, w, waves=waves, out=_zeros(mesh, (1, 1, S // 4, N)), **mm_kw, **rk)
+                    eq = sum(torch.equal(a, b) for a, b in zip(_host(port), ref_h))
+                    logger.info(f"QAGMM port {tag}: torch.equal on {eq}/32 devices")
+                    ok &= eq == 32
+                    ttnn.deallocate(port)
+                gath = _zeros(mesh, (1, 1, S // 4, K))
+                out = _zeros(mesh, (1, 1, S // 4, N))
+                t0 = time.perf_counter()
+                o, gg = qwen_ag_matmul(
+                    x, w, copy_local=kd["copy_local"], waves=waves, gathered=gath, out=out, **mm_kw, **rk
+                )
+                ttnn.synchronize_device(mesh)
+                dt = time.perf_counter() - t0
+                o_h, g_h = _host(o), _host(gg)
+                eq_o = sum(torch.equal(a, b) for a, b in zip(o_h, ref_h))
+                bad_slots = 0
+                for d in range(ROWS * COLS):
+                    r = d // COLS
+                    a = g_h[d].reshape(ROWS, S // 32, K)
+                    b = xa_h[d].reshape(ROWS, S // 32, K)
+                    for s in range(ROWS):
+                        if s == r and not kd["copy_local"]:
+                            continue
+                        bad_slots += not torch.equal(a[s], b[s])
+                logger.info(
+                    f"QAGMM fused {tag} call {rep} ({dt:.2f} s): out torch.equal on {eq_o}/32 devices, "
+                    f"gathered bad slots {bad_slots}"
+                )
+                if eq_o != 32:
+                    for d in range(ROWS * COLS):
+                        if not torch.equal(o_h[d], ref_h[d]):
+                            diff = (o_h[d] != ref_h[d]).reshape(S // 4 // 32, 32, N // 32, 32).any(-1).any(1)
+                            rows_bad = diff.any(-1).nonzero().flatten().tolist()
+                            logger.info(f"QAGMM dev {d}: bad tile rows {rows_bad[:40]} ({len(rows_bad)})")
+                            break
+                ok &= eq_o == 32 and bad_slots == 0
+                for t in (xa, ref, o, gg):
+                    ttnn.deallocate(t)
+            x = xs[0]
+            m_s, r_s = _timeit(mesh, lambda: stock(x, S), reps, batch)
+            m_f, r_f = _timeit(
+                mesh, lambda: qwen_ag_matmul(x, w, copy_local=kd["copy_local"], waves=waves, **mm_kw, **rk), reps, batch
+            )
+            ttnn.synchronize_device(mesh)
+            held = []
+            t0 = time.perf_counter()
+            for _ in range(batch):
+                held.append(qwen_ag_matmul(x, w, copy_local=kd["copy_local"], waves=waves, **mm_kw, **rk))
+            t_host = (time.perf_counter() - t0) * 1e3 / batch
+            ttnn.synchronize_device(mesh)
+            for ts in held:
+                for t in ts:
+                    ttnn.deallocate(t)
+            logger.info(f"QAGMM_HOST {tag}: fused host enqueue {t_host:.3f} ms/call")
+            if os.environ.get("QAGMM_PROBES") == "1":
+                xa0 = cp._row_ag(ccl, mc, x, S)
+                m_p, _ = _timeit(mesh, lambda: [matmul_port(xa0, w, waves=waves, **mm_kw, **rk)], reps, batch)
+                ttnn.deallocate(xa0)
+                res = {"port 6x10": m_p}
+                for probe in ("nowait", "nomm", "agonly"):
+                    res[probe], _ = _timeit(
+                        mesh,
+                        lambda: qwen_ag_matmul(
+                            x, w, copy_local=kd["copy_local"], waves=waves, probe=probe, **mm_kw, **rk
+                        ),
+                        reps,
+                        batch,
+                    )
+                logger.info(f"QAGMM_PROBE {tag}: " + ", ".join(f"{k} {v:.3f} ms" for k, v in res.items()))
+            logger.info(
+                f"QAGMM_TIME {tag}: stock pair {m_s:.3f} ms {['%.3f' % v for v in r_s]}, fused {m_f:.3f} ms "
+                f"{['%.3f' % v for v in r_f]}"
+            )
+            for t in xs:
+                ttnn.deallocate(t)
+        ttnn.deallocate(w)
+    assert ok

@@ -507,6 +507,24 @@ def chunked_sdpa_pair(ctx: CPContext, q_nat, keys, values, page_table, scale, ck
     return out
 
 
+def fused_ag_enabled(seq_len) -> bool:
+    """Attention-norm row all-gather + QKV matmul as one model-local program per device (custom_ops/qwen_ag_matmul):
+    the gather runs on grid column 6 by fabric multicast while the matmul (columns 0-5, W_qkv resident in L1)
+    consumes the slots as they land. Bit-identical to _row_ag + minimal_matmul. Used for S >= 32768 (job367, ms per
+    pair, stock -> fused: 16k 0.895 -> 1.026, 24k 1.123 -> 1.381, 32k 1.507 -> 1.431, 40k 1.783 -> 1.603); b1 40k
+    1739.0 -> 1727.0 ms (job372), gate digit-identical (job373). QWEN_CP_FUSED_AG=0 keeps the stock pair. The FF1
+    form of the op is slower than the stock pair (lockstep grid), so the MLP keeps it."""
+    return os.environ.get("QWEN_CP_FUSED_AG", "1") == "1" and seq_len >= 32768
+
+
+def release_fused_ag(mesh_device):
+    """End of a prefill: free the fused op's L1 semaphore words (see qwen_ag_matmul.release_semaphores)."""
+    if os.environ.get("QWEN_CP_FUSED_AG", "1") == "1":
+        from models.demos.llama3_70b_galaxy.tt.custom_ops.qwen_ag_matmul import release_semaphores
+
+        release_semaphores(mesh_device)
+
+
 def _row_ag(tt_ccl, model_config, t, seq_len):
     kw = dict(model_config["QWEN_PREFILL_RING_AG_PARAMS"](seq_len, "FF2") or {})
     return _ag(tt_ccl, t, 2, 0, **kw)
@@ -523,18 +541,24 @@ def attention_prefill(ctx: CPContext, tt_ccl, attn, x_local, rot_mats, w, user_i
     S = ctx.lay.S
     H, D = attn.n_local_heads, attn.head_dim
     mc = attn.model_config
-    xa = _row_ag(tt_ccl, mc, x_local, S)  # [1, 1, S/4, 5120]
-    ttnn.deallocate(x_local)
-    xqkv = ttnn.experimental.minimal_matmul(
-        input_tensor=xa,
-        weight_tensor=w["wqkv"],
+    qkv_kw = dict(
         config=QKV_FP16_CFG if attn_mm_fp16_dest() else QKV_CFG,
         dtype=attn.ccl_dtype,
         compute_kernel_config=lofi_fp32_config(
             attn.compute_kernel_config_hifi2, "QWEN_CP_ATTN_MM_LOFI", fp16=attn_mm_fp16_dest()
         ),
-        memory_config=ttnn.DRAM_MEMORY_CONFIG,
-    )  # [1, 1, S/4, (H + 2) * D]
+    )
+    if fused_ag_enabled(S):
+        from models.demos.llama3_70b_galaxy.tt.custom_ops.qwen_ag_matmul import qwen_ag_matmul
+
+        xqkv, xa = qwen_ag_matmul(x_local, w["wqkv"], **qkv_kw)  # [1, 1, S/4, (H + 2) * D]
+        ttnn.deallocate(x_local)
+    else:
+        xa = _row_ag(tt_ccl, mc, x_local, S)  # [1, 1, S/4, 5120]
+        ttnn.deallocate(x_local)
+        xqkv = ttnn.experimental.minimal_matmul(
+            input_tensor=xa, weight_tensor=w["wqkv"], memory_config=ttnn.DRAM_MEMORY_CONFIG, **qkv_kw
+        )  # [1, 1, S/4, (H + 2) * D]
     ttnn.deallocate(xa)
 
     # SDPA config (ring op, or the chunked pair on 16-bit dest).
@@ -812,6 +836,7 @@ def model_prefill(model, x, rot_mats, user_id=0, page_table=None, kv_cache=None)
         )
     out = exit_natural(ctx, model.tt_ccl, h)
     ttnn.deallocate(h)
+    release_fused_ag(model.mesh_device)
     return out
 
 
@@ -898,4 +923,5 @@ def layer_major_prefill(model, users, rot_mats, kv_cache):
         windows.append(exit_last_token(ctx, model.tt_ccl, hs[k], int(u["last_idx"])))
         ttnn.deallocate(hs[k])
         u["h"] = None
+    release_fused_ag(model.mesh_device)
     return windows
