@@ -326,7 +326,16 @@ inline void ckernel_template::program()
 {
     volatile std::uint32_t *mop_cfg = reinterpret_cast<volatile std::uint32_t *>(TENSIX_MOP_CFG_BASE);
 
+#if defined(LLK_EXP_PROBE_MOP) && defined(LLK_PERF_INIT_ONLY) && defined(COMPILE_FOR_TRISC) && COMPILE_FOR_TRISC == 1 && LLK_EXP_PROBE_MOP == 1
+    LLK_EXP_PROBE_(); // experiment hook (initx): math's INIT end right before the MOP sync
+#endif
+#if defined(LLK_EXP_NOP_PRE_MOPSYNC) && defined(LLK_PERF_INIT_ONLY) && defined(COMPILE_FOR_TRISC) && COMPILE_FOR_TRISC == 1
+    asm volatile(".rept " LLK_EXP_MSTR_(LLK_EXP_NOP_PRE_MOPSYNC) "\n\tnop\n\t.endr"); // experiment hook (initx)
+#endif
     mop_sync(); // wait until previous mops have completed
+#if defined(LLK_EXP_PROBE_MOP) && defined(LLK_PERF_INIT_ONLY) && defined(COMPILE_FOR_TRISC) && COMPILE_FOR_TRISC == 1 && LLK_EXP_PROBE_MOP == 2
+    LLK_EXP_PROBE_(); // experiment hook (initx): math's INIT end right after the MOP sync
+#endif
 
     mop_cfg[0] = m_outer_loop_len;
     mop_cfg[1] = m_inner_loop_len;
