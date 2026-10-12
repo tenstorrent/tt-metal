@@ -28,7 +28,7 @@ from report_adapters import reason_for, status_for
 from report_backfill import Leftover, discover_leftovers, filter_leftovers, leftover_key, parse_window_date
 from analyze_host_health_results import parse_diag_report
 from summarize_physical_artifact import as_pass_pct, summarize_physical_artifact
-from summarize_recover_artifact import missing_cable_labels
+from summarize_recover_artifact import missing_cable_labels, recover_error_labels
 from resolve_host_ring_order import (
     parse_textproto,
     read_descriptor_text,
@@ -591,7 +591,10 @@ def build_record(args: RecordRequest) -> dict[str, Any]:
 
     labels = parse_labels(args.label)
     if args.test_type == "recover":
-        for key, value in missing_cable_labels(args.artifact_dir).items():
+        for key, value in {
+            **missing_cable_labels(args.artifact_dir),
+            **recover_error_labels(args.artifact_dir),
+        }.items():
             labels.setdefault(key, value)
     if status != "passed" and "failure_reason" not in labels:
         if incomplete:

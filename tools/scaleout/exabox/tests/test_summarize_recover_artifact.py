@@ -3,7 +3,7 @@
 #
 # SPDX-License-Identifier: Apache-2.0
 
-"""Tests for summarize_recover_artifact.py and the recover missing-cable labels."""
+"""Tests for summarize_recover_artifact.py and the recover missing-cable and error labels."""
 
 from __future__ import annotations
 
@@ -24,7 +24,13 @@ for _path in (EXABOX_DIR, TESTS_DIR):
         sys.path.insert(0, str(_path))
 
 from report_cluster_health import main  # noqa: E402
-from summarize_recover_artifact import MAX_LISTED, missing_cable_labels, missing_cables  # noqa: E402
+from summarize_recover_artifact import (  # noqa: E402
+    MAX_LISTED,
+    missing_cable_labels,
+    missing_cables,
+    recover_error_labels,
+    recover_errors,
+)
 
 START = "[bh-glx-110-c10u02] 2026-10-09 17:51:00.000 | info | Distributed | Running Physical Discovery (cluster_validation_utils.cpp:88)\n"
 MISSING_ONE = (
@@ -39,6 +45,17 @@ MISSING_ONE = (
 )
 CLEAN = "[bh-glx-110-c10u02] 2026-10-09 17:55:00.000 | info | Distributed | All Detected Links are healthy.\n"
 CABLE = "bh-glx-110-c10u08 T3 QSFP_DD/9 <-> bh-glx-110-c10u08 T4 QSFP_DD/9"
+P = "[bh-glx-110-d03u02][00:22:44] "
+ATTEMPT_1 = P + "Recovery attempt 1 of 2\n"
+ATTEMPT_2 = P + "Recovery attempt 2 of 2\n"
+PORT_DOWN = P + "WARNING: cross-host port down FAILED (exit code 1); running cleanup reset then retrying port down.\n"
+POST_RESET = P + "Error: POST_RESET failed for device 3.\n"
+RESET_FAILED = P + "Reset failed | Exit code: 1\n"
+UMD = (
+    P + "terminate called after throwing an instance of 'tt::umd::error::UmdException<tt::umd::error::RuntimeError>'\n"
+)
+ABORT = P + "MPI_ABORT was invoked on rank 0 in communicator MPI_COMM_WORLD\n"
+FAILED_1 = P + "Recovery attempt 1 of 2 failed (exit code 1).\n"
 HOSTS = "bh-glx-110-c10u02,bh-glx-110-c10u08,bh-glx-110-c10u14,bh-glx-110-c10u20"
 
 
@@ -106,6 +123,48 @@ class TestMissingCables(unittest.TestCase):
             self.assertEqual(listed[-1], "... 3 more")
 
 
+class TestRecoverErrors(unittest.TestCase):
+    def _errors(self, text: str):
+        with tempfile.TemporaryDirectory() as tmp:
+            _write(tmp, "recover_1.log", text)
+            return recover_errors(tmp), recover_error_labels(tmp)
+
+    def test_run_ends_on_first_error_of_its_last_failing_attempt(self):
+        found, labels = self._errors(ATTEMPT_1 + PORT_DOWN + ATTEMPT_2 + UMD + ABORT + FAILED_1)
+        self.assertEqual(found, (["port_down_failed", "chip_init_failed", "mpi_abort"], "chip_init_failed"))
+        self.assertEqual(
+            labels, {"errors": "port_down_failed,chip_init_failed,mpi_abort", "final_error": "chip_init_failed"}
+        )
+
+    def test_retried_port_down_does_not_hide_the_cause(self):
+        found, _ = self._errors(ATTEMPT_1 + PORT_DOWN + POST_RESET + RESET_FAILED + FAILED_1)
+        self.assertEqual(found[1], "post_reset_failed")
+        found, _ = self._errors(ATTEMPT_1 + PORT_DOWN + FAILED_1)
+        self.assertEqual(found[1], "port_down_failed")
+
+    def test_specific_cause_wins_over_generic_reset_failure(self):
+        found, _ = self._errors(ATTEMPT_1 + POST_RESET + RESET_FAILED + FAILED_1)
+        self.assertEqual(found, (["post_reset_failed", "reset_failed"], "post_reset_failed"))
+
+    def test_recovered_run_keeps_the_error_it_recovered_from(self):
+        found, _ = self._errors(ATTEMPT_1 + UMD + FAILED_1 + ATTEMPT_2 + CLEAN)
+        self.assertEqual(found, (["chip_init_failed"], "chip_init_failed"))
+
+    def test_analyzer_categories_are_reused(self):
+        found, _ = self._errors(ATTEMPT_1 + START + MISSING_ONE + FAILED_1)
+        self.assertEqual(found, (["missing_connections"], "missing_connections"))
+
+    def test_clean_run_has_no_error_labels(self):
+        found, labels = self._errors(ATTEMPT_1 + START + CLEAN)
+        self.assertEqual(found, ([], None))
+        self.assertEqual(labels, {})
+
+    def test_no_log_is_unknown(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            self.assertIsNone(recover_errors(tmp))
+            self.assertEqual(recover_error_labels(tmp), {})
+
+
 class TestRecoverRecordLabels(unittest.TestCase):
     def _record(self, artifact_dir: str, *extra: str) -> dict:
         argv = [
@@ -131,6 +190,8 @@ class TestRecoverRecordLabels(unittest.TestCase):
             labels = self._record(tmp)["labels"]
             self.assertEqual(labels["missing_cables"], "1")
             self.assertEqual(labels["missing_cables_list"], CABLE)
+            self.assertEqual(labels["errors"], "missing_connections")
+            self.assertEqual(labels["final_error"], "missing_connections")
 
     def test_explicit_label_wins(self):
         with tempfile.TemporaryDirectory() as tmp:
