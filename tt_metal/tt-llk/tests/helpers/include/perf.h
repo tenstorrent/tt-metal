@@ -8,6 +8,7 @@
 #include <cstdint>
 
 #include "ckernel.h"
+#include "llk_defs.h"
 #include "tensor_shape.h"
 
 // === L1 layout for perf tests ===
@@ -120,17 +121,18 @@ inline std::uint32_t mop_loops(const std::uint32_t n)
 // periods x (a burst of `burst` handshakes of kind `once` and a run of `run` handshakes of kind `each`), the producer giving
 // the burst first and the consumer taking it back last, in at most 32 MOPs of template 1, pushed back to back: the mock's
 // RISC-V is done pushing long before the stream ends. A period of up to 16 handshakes is replayed whole from the replay
-// buffer by the inner loop (up to 127 x 127 periods per MOP); a longer one replays the burst as StartOp / EndOp0 around the
-// run as the inner loop (up to 127 periods per MOP). Issues nothing and returns false when the stream does not fit.
-template <bool PRODUCE>
+// buffer by the inner loop (up to 127 x 127 periods per MOP), with SPLIT also one of up to 32 - burst as two replays of a 16
+// handshake buffer; a longer one replays the burst around the run (up to 127 periods per MOP). Returns false if it does not fit.
+template <bool PRODUCE, bool SPLIT = false>
 inline bool segments(const std::uint32_t once, const std::uint32_t burst, const std::uint32_t each, const std::uint32_t run, const std::uint32_t periods)
 {
-    const std::uint32_t period = burst + run;
-    if (run == 0 || burst == 0 || burst > 16 || periods == 0 || (period > 16 && run > 127))
+    constexpr std::uint32_t HALF = 16; // handshakes in half the replay buffer (two instructions each)
+    const std::uint32_t period   = burst + run;
+    if (run == 0 || burst == 0 || burst > HALF || periods == 0 || (period > HALF && run > 127))
     {
         return false;
     }
-    const bool whole          = period <= 16;
+    const bool split = SPLIT && period > HALF && period + burst <= 2 * HALF, whole = period <= HALF || split; // split: HALF + period - HALF
     const std::uint32_t inner = whole ? mop_loops(periods) : run;
     const std::uint32_t outer = whole ? mop_loops(periods / inner) : mop_loops(periods);
     const std::uint32_t mops  = whole ? periods / inner / outer : periods / outer;
@@ -138,26 +140,27 @@ inline bool segments(const std::uint32_t once, const std::uint32_t burst, const 
     {
         return false;
     }
-    // the replay buffer, slots 0 ..: the whole period, or the burst
-    TT_REPLAY(0, 2 * (whole ? period : burst), 0, 1);
-    for (std::uint32_t i = 0; i < (whole ? period : burst); i++)
+    // the replay buffer, slots 0 ..: the whole period (split: HALF handshakes, the run's first period - HALF dropped), or the burst
+    const std::uint32_t buffered = whole ? (split ? HALF : period) : burst;
+    TT_REPLAY(0, 2 * buffered, 0, 1);
+    for (std::uint32_t i = 0; i < buffered; i++)
     {
-        const std::uint32_t kind  = !whole ? once : (PRODUCE ? (i < burst ? once : each) : (i < run ? each : once));
+        const std::uint32_t kind  = !whole ? once : (PRODUCE ? (i < burst ? once : each) : (i < (split ? HALF - burst : run) ? each : once));
         ckernel::instrn_buffer[0] = wait_op<PRODUCE>(kind);
         ckernel::instrn_buffer[0] = flip_op<PRODUCE>(kind);
     }
-    const std::uint32_t replay      = TT_OP_REPLAY(0, 2 * (whole ? period : burst), 0, 0);
+    const std::uint32_t replay      = TT_OP_REPLAY(0, 2 * buffered, 0, 0);
     volatile std::uint32_t* mop_cfg = reinterpret_cast<volatile std::uint32_t*>(TENSIX_MOP_CFG_BASE);
     ckernel::mop_sync(); // no expansion in flight while the template changes
     mop_cfg[0] = outer;
     mop_cfg[1] = inner;
     mop_cfg[4] = TT_OP_NOP;
-    if (whole) // inner loop: the period, replayed; no start or end instructions
+    if (whole) // inner loop: the period, replayed (split: the run's first period - 16, then the buffer); no start or end instructions
     {
         mop_cfg[2] = TT_OP_NOP;
         mop_cfg[3] = TT_OP_NOP;
-        mop_cfg[5] = replay;
-        mop_cfg[6] = TT_OP_NOP;
+        mop_cfg[5] = split ? TT_OP_REPLAY(0, 2 * (period - HALF), 0, 0) : replay;
+        mop_cfg[6] = split ? replay : TT_OP_NOP;
         mop_cfg[7] = replay;
         mop_cfg[8] = replay;
     }
@@ -238,7 +241,7 @@ inline void matmul(
     }
     const std::uint32_t steps = loop_factor * num_blocks * kt_dim;
     if ((reuse_loop == 1 || reuse_loop % 2 == 0) &&
-        segments<PRODUCE>(reuse, std::min(static_cast<std::uint32_t>(2), reuse_loop), reload, reload_loop, steps * ((reuse_loop + 1) / 2)))
+        segments<PRODUCE, !PRODUCE>(reuse, std::min(static_cast<std::uint32_t>(2), reuse_loop), reload, reload_loop, steps * ((reuse_loop + 1) / 2)))
     {
         return;
     }
@@ -305,17 +308,17 @@ inline void srcb_reuse(const std::uint32_t a_count, std::uint32_t periods)
 } // namespace llk_perf_mock
 #endif
 
-// eltwise_binary_test.cpp's source mock as one stream, BTYPE = ckernel::BroadcastType's value: COL (1) reuses a SrcB per
-// face row, SCALAR (3) per tile, NONE (0) and ROW (2) hand over both sources per face. Wormhole isolate mocks only.
-template <bool PRODUCE, std::uint32_t BTYPE>
+// eltwise_binary_test.cpp's source mock as one stream: COL reuses a SrcB per face row, SCALAR per tile, NONE and ROW hand
+// over both sources per face. Wormhole isolate mocks only.
+template <bool PRODUCE, ckernel::BroadcastType BTYPE>
 inline void _perf_mock_binary_(const std::uint32_t tiles, const std::uint32_t num_faces_r, const std::uint32_t num_faces_c)
 {
 #if defined(ARCH_WORMHOLE)
-    if constexpr (BTYPE == 1)
+    if constexpr (BTYPE == ckernel::BroadcastType::COL)
     {
         llk_perf_mock::srcb_reuse<PRODUCE>(num_faces_c, tiles * num_faces_r);
     }
-    else if constexpr (BTYPE == 3)
+    else if constexpr (BTYPE == ckernel::BroadcastType::SCALAR)
     {
         llk_perf_mock::srcb_reuse<PRODUCE>(num_faces_r * num_faces_c, tiles);
     }
