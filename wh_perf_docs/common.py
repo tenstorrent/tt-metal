@@ -234,3 +234,9 @@ def link_shas(html):
         else:
             out.append(part)
     return "".join(out)
+
+# Numbered chains: one text block per item (the grid layout split <b>, text and <i> into separate cells).
+EXTRA_CSS += """
+.chain li{display:block;position:relative;padding-left:2.2em}
+.chain li::before{position:absolute;left:0;top:0}
+"""
