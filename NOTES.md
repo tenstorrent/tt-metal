@@ -196,3 +196,19 @@ Next (tunnel up): `ssh exabox-login 'df -h /data; curl -sI https://huggingface.c
   leave HELD and for its queue to have no smarton job (job 982 `true`, not ours, was queued), then submits.
 - Next: read the T449A_DONE line in state/runs/1690/chain449a.out. Warm-deadline/alarm failure = resubmit (new ID);
   each job compiles more. PASS = compare denoise ms/step with #408 out_t10 (3110 ms/step dense, seed 0, 900 MHz).
+
+## t449 run 1692 (2026-10-12 08:46 PDT)
+- blx01 job 986 (VSA-0.9 10 s arm r3, 15:37Z) FAILED, not a drop, not a timeout. Warm-up finished (JIT 71.3% hits,
+  wall 391 s); first denoise step died: `TT_FATAL @ vsa_sdpa_device_operation.cpp:96: attrs.exempt_ids.size() <= 32`,
+  `at most 32 exempt block ids (got 71)`. The 10 s fl2va prefix (text + 2 condition frames + audio) is 71 tiles.
+  The alarm plugin did its job: clean pytest teardown, mesh closed.
+- Fix 6d8503e9b71: cap is now `exempt_ids.size() <= n_kv_blocks` in vsa_sdpa and vsa_ring_sdpa validate. The reader
+  reads the ids from runtime args (no fixed array); tt-metal checks the RT-arg size itself (kernel.cpp, 4096/L1 fit).
+  New test test_vsa_ring_sdpa.py::test_vsa_ring_sdpa_many_exempt (71 exempt ids, 13 blocks/shard, torch reference).
+- blx01: the 2 .cpp + test copied into t409/b (tmp+mv, md5 match); incremental Release build build449
+  (tt-project/t449/build449.sh, detached remote, log /var/tmp/fasth3/t409/build449.log, rc build449.rc).
+- chain449c (detached here, log state/runs/1692/chain449c.out, ends "T449C_DONE <rc> <step>"): waits build449.rc=0,
+  then spec tt-project/t449/u449.txt (run449u.sh: many_exempt + odd_blocks on nl2, out_u449/run.log), then if it
+  passes spec t409/ab10vsa.txt r4 (out_ab10-vsa0.9/run.log).
+- Next: read chain449c.out. ab10 PASS = compare denoise ms/step with #408 out_t10 (3110 ms/step dense, seed 0,
+  900 MHz), then PSNR of VSA latents/video vs out_t10, look at a frame.
