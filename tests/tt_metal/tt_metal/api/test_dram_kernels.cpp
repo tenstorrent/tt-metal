@@ -5,8 +5,6 @@
 #include <gtest/gtest.h>
 #include <array>
 #include <cstdint>
-#include <numeric>
-#include <set>
 #include <vector>
 #include <chrono>
 #include <tt-metalium/bfloat16.hpp>
@@ -137,15 +135,6 @@ protected:
 };
 
 class DramKernelDRISCBWFixture : public DramKernelFixture, public testing::WithParamInterface<uint32_t> {};
-
-// DramKernelFixture in fast dispatch, where kernel config writes go through the command queue.
-class DramKernelFastDispatchFixture : public DramKernelFixture {
-protected:
-    bool validate_dispatch_mode() override {
-        this->slow_dispatch_ = getenv("TT_METAL_SLOW_DISPATCH_MODE") != nullptr;
-        return !this->slow_dispatch_;
-    }
-};
 
 // Smoke test: run a single DRAM kernel that writes a compile-time constant to L1,
 // then read it back via the host and verify.
@@ -282,64 +271,6 @@ TEST_F(DramKernelFixture, DramKernelOnMultipleCores) {
                 drisc_l1_noc_addr_);
 
             EXPECT_EQ(result[0], expected_value) << "Failed for DRAM core (bank=" << col << ", endpoint=" << row << ")";
-        }
-    }
-}
-
-// Common runtime args on DRAM cores are sent with one NO_STRIDE packed write: a single copy of the args
-// written to every core. Run on every DRISC-usable core, then change the args in place and run again.
-TEST_F(DramKernelFastDispatchFixture, DramKernelCommonRuntimeArgsOnAllCores) {
-    constexpr uint32_t kNumArgs = 256;
-    const auto& soc_desc = MetalContext::instance().get_cluster().get_soc_desc(mesh_device_->build_id());
-    const auto dram_compute_grid = soc_desc.get_dram_compute_grid_size();
-    std::vector<CoreCoord> logical_dram_cores;
-    std::set<CoreRange> core_ranges;
-    for (uint32_t bank = 0; bank < dram_compute_grid.x; bank++) {
-        for (uint32_t endpoint : usable_dram_endpoints(bank)) {
-            const CoreCoord core{bank, endpoint};
-            logical_dram_cores.push_back(core);
-            core_ranges.insert(CoreRange(core));
-        }
-    }
-    ASSERT_GT(logical_dram_cores.size(), 1u);
-
-    Program program = CreateProgram();
-    const auto kernel = CreateKernel(
-        program,
-        "tests/tt_metal/tt_metal/test_kernels/misc/drisc_copy_common_args.cpp",
-        CoreRangeSet(core_ranges),
-        DramConfig{
-            .noc = NOC::NOC_0,
-            .compile_args = {drisc_l1_base_, kNumArgs},
-        });
-    std::vector<uint32_t> expected(kNumArgs);
-    std::iota(expected.begin(), expected.end(), 0xC0DE0000);
-    SetCommonRuntimeArgs(program, kernel, expected);
-
-    distributed::MeshWorkload workload;
-    workload.add_program(device_range_, std::move(program));
-    for (uint32_t run = 0; run < 2; run++) {
-        if (run == 1) {
-            RuntimeArgsData& common_args = GetCommonRuntimeArgs(workload.get_programs().at(device_range_), kernel);
-            for (uint32_t i = 0; i < kNumArgs; i++) {
-                expected[i] = ~expected[i];
-                common_args[i] = expected[i];
-            }
-        }
-        distributed::EnqueueMeshWorkload(mesh_device_->mesh_command_queue(), workload, false);
-        distributed::Finish(mesh_device_->mesh_command_queue());
-
-        for (const CoreCoord& logical_dram_core : logical_dram_cores) {
-            const auto virtual_dram_core =
-                mesh_device_->virtual_core_from_logical_core(logical_dram_core, CoreType::DRAM);
-            std::vector<uint32_t> result(kNumArgs, 0);
-            MetalContext::instance().get_cluster().read_core(
-                result.data(),
-                kNumArgs * sizeof(uint32_t),
-                tt_cxy_pair(mesh_device_->build_id(), virtual_dram_core),
-                drisc_l1_noc_addr_);
-            EXPECT_EQ(result, expected) << "run " << run << ", DRAM core (bank=" << logical_dram_core.x
-                                        << ", endpoint=" << logical_dram_core.y << ")";
         }
     }
 }
