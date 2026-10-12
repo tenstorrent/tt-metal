@@ -56,12 +56,13 @@ sfpi_inline void signed_abs_horner_pair(sfpi::vFloat& r0, sfpi::vFloat& r1, sfpi
     }
 }
 
-// The NaN form returns +NaN for a NaN of either sign and the saturating form's
-// result for every other input.
+// The NaN form returns the saturating result for every non-NaN. A NaN input
+// becomes the SFPU's +NaN: narrowing can turn a low-payload NaN into Inf, and
+// the trailing multiply-add regenerates +NaN from that. The payload is not torch's 0xffff.
 template <typename Config>
 inline void init_signed_abs_nan() {
-    // The paired store walks dest through ADDR_MOD_6, which advances by the two rows
-    // the loop just wrote, so the loop body needs no separate increment.
+    // The paired store walks dest through ADDR_MOD_6. One SFPI row is two dest-counter
+    // steps, so the two rows just written advance by 4 and the loop has no separate increment.
     addr_mod_t{.srca = {.incr = 0}, .srcb = {.incr = 0}, .dest = {.incr = 4}}.set(ADDR_MOD_6);
     // Horner runs on -P. BH SFPMAD returns +NaN for a NaN operand, which survives
     // the max that bounds -P below; the min that bounds P would drop it.
@@ -75,10 +76,11 @@ sfpi_inline sfpi::vFloat signed_abs_nan_finish(sfpi::vFloat x, sfpi::vFloat nega
     sfpi::vFloat bound = -signed_abs_fp32_from_bits(Config::kClampMaxBits);
     sfpi::vFloat bounded = sfpi::min_max(bound, negated).second;
     sfpi::vFloat result = sfpi::convert<sfpi::vFloat16b>(bounded, sfpi::RoundMode::Nearest);
-    // Saturation has already turned infinities into a finite bound, so this
-    // MAD is an identity on finite values and produces NaN only for NaN.
+    // Narrowing drops a zero's sign. Restore it before the multiply-add, which is an
+    // identity on finite values, including -0, and regenerates +NaN from a NaN or Inf.
+    result = sfpi::copysgn(result, x);
     result = result * 0.0f + result;
-    return sfpi::copysgn(result, x);
+    return result;
 }
 
 template <typename Config, int Iterations = 8>

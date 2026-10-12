@@ -75,14 +75,16 @@ template <typename Config>
 sfpi_inline sfpi::vFloat signed_abs_nan_finish(sfpi::vFloat x, sfpi::vFloat magnitude, sfpi::vFloat poly) {
     sfpi::vFloat clamp_max = signed_abs_fp32_from_bits(Config::kClampMaxBits);
     sfpi::vFloat bounded = sfpi::min_max(poly, clamp_max).first;
+    // Narrow before restoring the sign. The BF16 convert drops a zero's sign.
+    sfpi::vFloat result = sfpi::convert<sfpi::vFloat16b>(bounded, sfpi::RoundMode::Nearest);
+    result = sfpi::copysgn(result, x);
     // A DEST carrier's low half is zero, so |x| + 0x807f0000 is negative exactly
     // when x is not a NaN. WH SFPMAD keeps a NaN's sign, so the NaN is restored
     // from |x| rather than carried through Horner and the clamp.
     sfpi::vInt not_nan = sfpi::as<sfpi::vInt>(magnitude) + sfpi::vInt(static_cast<std::int32_t>(0x807f0000u));
-    sfpi::vFloat result = sfpi::copysgn(bounded, sfpi::as<sfpi::vFloat>(not_nan & sfpi::as<sfpi::vInt>(x)));
     v_if(not_nan >= 0) { result = magnitude; }
     v_endif;
-    return sfpi::convert<sfpi::vFloat16b>(result, sfpi::RoundMode::Nearest);
+    return result;
 }
 
 template <typename Config, int Iterations = 8>

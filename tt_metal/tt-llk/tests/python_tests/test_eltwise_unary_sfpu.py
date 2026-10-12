@@ -1629,18 +1629,9 @@ _BF16_EXHAUSTIVE_OPS = [
 # Boards where the op keeps its stock kernel, which this sweep does not test.
 _BF16_STOCK_BOARDS = {}
 # Special input classes where the kernel returns its stock kernel's class instead of torch's.
-_BF16_STOCK_SPECIALS = {
-    MathOperation.Erf: {
-        ChipArchitecture.BLACKHOLE: (
-            "neg_subnormal",
-            "neg_zero",
-        ),
-        ChipArchitecture.WORMHOLE: (
-            "neg_subnormal",
-            "neg_zero",
-        ),
-    },
-}
+# Erf's signed zero is checked on the TT-NN DEST path. This sweep's unpack does not deliver
+# -0, and its class names do not include subnormals, so those exceptions matched nothing.
+_BF16_STOCK_SPECIALS = {}
 
 
 # Ops whose BF16 setup runs from an init their stock instances share.
