@@ -189,7 +189,7 @@ static_assert(BUILTIN_COUNTER_COUNT <= COUNTER_SLOT_COUNT, "Counter inventory ov
 // into an unrelated store in one build only.
 namespace detail
 {
-inline const volatile std::uint32_t arm_cmd = COUNTERS_ON ? llk::perf::START : 0;
+inline const volatile std::uint32_t arm_cmd = COUNTERS_ON ? llk::perf::START : NCW_OFF_CMD_;
 #if defined(ARCH_QUASAR)
 // Both builds route the selection; only the counters on build sets the enable bit.
 inline const volatile std::uint32_t l1_client_cmd =
@@ -201,7 +201,7 @@ inline const volatile std::uint32_t l1_client_cmd =
 // Whether this build counts: the counter work below runs only when it does, so counters off runs only the line-up.
 inline __attribute__((always_inline)) bool counting()
 {
-    return detail::arm_cmd != 0;
+    return NCW_ALWAYS_ || detail::arm_cmd != 0;
 }
 
 #if defined(ARCH_QUASAR)
@@ -220,7 +220,7 @@ inline std::uint32_t get_active_bank_mask()
 
 inline void configure_hardware()
 {
-#if defined(TT_METAL_TTSIM) // ttsim models no counter registers
+#if defined(TT_METAL_TTSIM) || defined(NCW_NOWORK) || defined(NCW_ENTRY_ONLY) // ttsim models no counter registers
     return;
 #endif
     const volatile std::uint32_t* config_mem = reinterpret_cast<volatile std::uint32_t*>(PERF_COUNTERS_SHARED_CONFIG_ADDR);
@@ -265,7 +265,7 @@ inline void configure_hardware()
 
 inline void arm_hardware()
 {
-#if defined(TT_METAL_TTSIM)
+#if defined(TT_METAL_TTSIM) || defined(NCW_NOWORK) || defined(NCW_ENTRY_ONLY)
     return;
 #endif
     const std::uint32_t arm_cmd = detail::arm_cmd;
@@ -330,6 +330,9 @@ inline void configure_all_zones()
 // unpack TRISC on Quasar, in both cases before the other TRISCs are released.
 inline void configure_and_arm()
 {
+#if defined(NCW_NOWORK) || defined(NCW_ENTRY_ONLY)
+    return;
+#endif
     if (!counting())
     {
         return;
@@ -429,7 +432,7 @@ static_assert(PERF_COUNTERS_LAYOUT_END <= llk_profiler::EPOCH_ADDR, "Perf counte
 // PERF_CNT_ALL reaches only INSTRN_THREAD and FPU; the other banks take the pulse on their own control register.
 inline __attribute__((always_inline)) void arm_all_counters()
 {
-#if defined(TT_METAL_TTSIM)
+#if defined(TT_METAL_TTSIM) || defined(NCW_NOWORK) || defined(NCW_ENTRY_ONLY)
     return;
 #endif
     ckernel::fence_compiler();
@@ -450,7 +453,7 @@ inline __attribute__((always_inline)) void arm_all_counters()
 
 inline __attribute__((always_inline)) void freeze_all_counters()
 {
-#if defined(TT_METAL_TTSIM)
+#if defined(TT_METAL_TTSIM) || defined(NCW_NOWORK) || defined(NCW_ENTRY_ONLY)
     return;
 #endif
     ckernel::fence_compiler();
@@ -473,7 +476,7 @@ inline __attribute__((always_inline)) void freeze_all_counters()
 // reload per loop level in math_matmul), so single thread run types only freeze there and a peer reads later.
 inline __attribute__((always_inline)) void read_all_counters([[maybe_unused]] std::uint32_t zone_id)
 {
-#if defined(TT_METAL_TTSIM)
+#if defined(TT_METAL_TTSIM) || defined(NCW_NOWORK) || defined(NCW_ENTRY_ONLY)
     return;
 #endif
     ckernel::fence_compiler();
@@ -530,6 +533,9 @@ inline __attribute__((always_inline)) void read_all_counters([[maybe_unused]] st
 
 inline __attribute__((always_inline)) void freeze_zone(std::uint32_t zone_id)
 {
+#if defined(NCW_NOWORK) || defined(NCW_ENTRY_ONLY)
+    return;
+#endif
     freeze_all_counters();
     volatile std::uint32_t* pending = reinterpret_cast<volatile std::uint32_t*>(PERF_COUNTERS_PENDING_ZONE_ADDR);
     *pending                        = zone_id + 1;
@@ -539,6 +545,9 @@ inline __attribute__((always_inline)) void freeze_zone(std::uint32_t zone_id)
 // Runs only once every thread is past the frozen zone: inside a rendezvous or in read_last_zone after run_kernel.
 inline __attribute__((always_inline)) void read_pending_zone()
 {
+#if defined(NCW_NOWORK) || defined(NCW_ENTRY_ONLY)
+    return;
+#endif
     volatile std::uint32_t* pending = reinterpret_cast<volatile std::uint32_t*>(PERF_COUNTERS_PENDING_ZONE_ADDR);
     const std::uint32_t zone        = *pending;
     if (zone != 0)
@@ -673,6 +682,9 @@ static bool reader_here;
 // After run_kernel on the reader thread: wait for the measured thread to freeze its last zone, then read it back.
 inline void read_last_zone()
 {
+#if defined(NCW_NOWORK) || defined(NCW_ENTRY_ONLY)
+    return;
+#endif
     if (detail::reader_here && counting())
     {
         volatile std::uint32_t* pending = reinterpret_cast<volatile std::uint32_t*>(PERF_COUNTERS_PENDING_ZONE_ADDR);
@@ -741,7 +753,7 @@ struct perf_counter_scoped
         // command) keep the window's start the same cycles after the flush in both builds.
         if constexpr (LOOP_PAD && releases_last(RUN_TYPE))
         {
-            arm_all_counters();
+            if (NCW_RELEASE_ARM_OK_) arm_all_counters();
         }
 #if defined(LLK_DBG_BARRIER)
         if constexpr (holds_quiet(RUN_TYPE, LOOP_PAD)) // after the entry release: the level the pack thread flips when done
@@ -788,6 +800,7 @@ struct perf_counter_scoped
                 llk_barrier::detail::flip(llk_barrier::RELEASE_SEM);
             }
 #endif
+#if !defined(NCW_ENTRY_ONLY)
             llk_barrier::rendezvous(
                 llk_barrier::is_action_thread(),
                 [zid]
@@ -798,6 +811,9 @@ struct perf_counter_scoped
                         read_all_counters(zid);
                     }
                 });
+#else
+            (void)zid;
+#endif
         }
         ckernel::fence_compiler();
     }
@@ -913,6 +929,9 @@ struct init_measurement_no_zone // START_PERF_MEASURE("INIT") in the INIT measur
         llk_profiler::zone_scoped<MARKER_ID(zone_name), true, llk_perf::holds_quiet(PERF_RUN_TYPE, LLK_IS_TILE_LOOP_(zone_name))>,                 \
         llk_perf::init_measurement_second_object>                                                                                                  \
         _zone_scoped_;
+#elif defined(LLK_PROFILER) && defined(NCW_NOTHING)
+#define START_PERF_MEASURE(zone_name) \
+    LLK_ZONE_PRERESERVE_(LLK_IS_TILE_LOOP_(zone_name)) ZONE_SCOPED(zone_name)
 #elif defined(LLK_PROFILER)
 #define START_PERF_MEASURE(zone_name)                  \
     LLK_ZONE_PRERESERVE_(LLK_IS_TILE_LOOP_(zone_name)) \
