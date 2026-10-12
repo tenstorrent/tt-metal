@@ -235,3 +235,18 @@ def test_sum_fp32_fast_and_approximate_mode(device, input_shape, dim, fast_and_a
         assert_allclose(torch_output_tensor, output_tensor, rtol=1e-2, atol=1e-2)
     else:
         assert_with_ulp(expected_result=torch_output_tensor, actual_result=output_tensor, ulp_threshold=2)
+
+
+def test_sum_hw_bf16(device):
+    torch_input = torch.full((1, 1, 32, 64), 1024.0, dtype=torch.bfloat16)
+    torch_input[0, 0, 16:] = -1024.0
+    torch_input[0, 0, 16:, 0] = -1020.0
+    torch_output = torch.sum(torch_input.double(), dim=[2, 3], keepdim=True).to(torch.bfloat16)
+
+    compute_kernel_config = ttnn.init_device_compute_kernel_config(
+        device.arch(), math_fidelity=ttnn.MathFidelity.HiFi4, fp32_dest_acc_en=True
+    )
+    input_tensor = ttnn.from_torch(torch_input, layout=ttnn.TILE_LAYOUT, device=device)
+    output_tensor = ttnn.sum(input_tensor, dim=[2, 3], keepdim=True, compute_kernel_config=compute_kernel_config)
+
+    assert torch.equal(ttnn.to_torch(output_tensor), torch_output)
