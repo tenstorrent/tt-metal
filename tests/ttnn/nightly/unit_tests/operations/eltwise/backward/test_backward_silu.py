@@ -209,6 +209,10 @@ def test_silu_bw_exhaustive_bfloat16(grad, device):
     )
 
 
+# The calls the fused program serves.
+SILU_BW_FUSED_CALLS = ("interleaved_tiles", "input_grad", "input_grad_in_l1")
+
+
 def _silu_bw_torch_gradient(grad, x):
     """Torch autograd in float32."""
     with torch.enable_grad():
@@ -233,12 +237,25 @@ def _silu_bw_device_operations(call):
 @run_for_wormhole_b0_or_blackhole("the generated kernel exists for Blackhole and Wormhole only")
 @pytest.mark.parametrize(
     "call",
-    ["interleaved_tiles", "broadcast_grad", "row_major", "mixed_layouts", "grad_in_l1", "height_sharded", "float32"],
+    [
+        "interleaved_tiles",
+        "broadcast_grad",
+        "row_major",
+        "mixed_layouts",
+        "grad_in_l1",
+        "height_sharded",
+        "float32",
+        "input_grad",
+        "input_grad_in_l1",
+        "input_grad_sharded",
+        "input_grad_float32",
+    ],
 )
 def test_silu_bw_runs_the_fused_program_only_where_it_applies(call, device):
     """BF16 operands of one shape in interleaved tiles with one placement run the fused program, and
-    match torch; every other call keeps the composite, which broadcasts and takes any layout, placement
-    and dtype."""
+    match torch, with or without a BF16 interleaved input_grad, which the program writes in place
+    wherever it is placed. Every other call keeps the composite, which broadcasts and takes any
+    layout, placement and dtype; it writes a sharded or FP32 input_grad in place, and matches torch."""
     shape = (1, 2, 32, 64)
     generator = torch.Generator().manual_seed(0)
     x = (4 * torch.randn(shape, generator=generator)).to(torch.bfloat16)
@@ -253,15 +270,27 @@ def test_silu_bw_runs_the_fused_program_only_where_it_applies(call, device):
     grad_memory, input_memory = memory.get(call, (ttnn.DRAM_MEMORY_CONFIG,) * 2)
     tt_g = ttnn.from_torch(g, dtype=dtype, layout=grad_layout, device=device, memory_config=grad_memory)
     tt_x = ttnn.from_torch(x, dtype=dtype, layout=input_layout, device=device, memory_config=input_memory)
+    tt_input_grad = None
+    if call.startswith("input_grad"):
+        placement = {"input_grad_in_l1": ttnn.L1_MEMORY_CONFIG, "input_grad_sharded": shard}.get(
+            call, ttnn.DRAM_MEMORY_CONFIG
+        )
+        output_dtype = ttnn.float32 if call == "input_grad_float32" else ttnn.bfloat16
+        tt_input_grad = ttnn.from_torch(
+            torch.full(shape, 7.0), dtype=output_dtype, layout=ttnn.TILE_LAYOUT, device=device, memory_config=placement
+        )
+    outputs = {} if tt_input_grad is None else {"input_grad": tt_input_grad}
 
-    result, error, trace = _silu_bw_device_operations(lambda: ttnn.silu_bw(tt_g, tt_x)[0])
+    result, error, trace = _silu_bw_device_operations(lambda: ttnn.silu_bw(tt_g, tt_x, **outputs)[0])
 
-    assert ("UnaryBackwardDeviceOperation" in trace) == (call == "interleaved_tiles"), trace
-    if call != "interleaved_tiles":
+    assert ("UnaryBackwardDeviceOperation" in trace) == (call in SILU_BW_FUSED_CALLS), trace
+    if call not in SILU_BW_FUSED_CALLS and tt_input_grad is None:
         # The composite's own results, or its refusal of a call (some refuse row-major operands), are
         # its tests' to judge; here it only has to be the program that ran.
         assert error is not None or list(result.shape) == list(shape)
         return
     assert error is None, error
+    if tt_input_grad is not None:
+        assert result.buffer_address() == tt_input_grad.buffer_address()
     expected = _silu_bw_torch_gradient(g, x)
     assert_with_pcc(expected, ttnn.to_torch(result).float(), 0.999)
