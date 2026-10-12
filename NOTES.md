@@ -225,3 +225,21 @@ Next (tunnel up): `ssh exabox-login 'df -h /data; curl -sI https://huggingface.c
   sparse only with the SLA LoRA (t417 notes). The missing speedup is a separate problem: attention share of the
   10 s step and the VSA kernel's per-block cost need a profile.
 - Push of run 1692 was refused (exit 2): #417 had pushed 1d8e15320e3 to the t409 branch. Rebased (NOTES.md union).
+
+## t453 (2026-10-12): why VSA-0.9 gives no speedup and degrades on Turbo fl2va 10 s
+
+CPU read (no device):
+- 10 s fl2va geometry (prefix 1460/1008/405, grid 72x24x42, sp 8, interleaved): 1240 tiles (6 pad), padded_len 79360,
+  46 exempt tiles (not 71: the 71 came from a warmup layout), 1188 candidates, k=119. Sparse (q,kv) tile pairs are
+  0.166 of dense; exempt (dense) rows are 22.5% of the sparse work. The selection really is sparse.
+- fasth3-opt's 2x was on the 50-step base, 15 s, partly from clock throttling (dense 975 MHz median vs VSA 1268 MHz).
+  Its VSA was never quality-checked vs dense (VSA_SCOPE.md: "v0's bar is numerical parity").
+- Quality: dense-trained checkpoint + dense-trained Turbo LoRA, no gate_compress weights. LightX2V runs sparse only
+  with the SLA LoRA (t417).
+
+Device timing job: test models/tt_dit/tests/models/minimax_h3/test_vsa_timing_minimax_h3.py (commit e0ad5c7d6d2),
+copied to blx01 /var/tmp/fasth3/t409/b; run script tt-project/t453/run453t.sh -> /var/tmp/fasth3/t409/run453t.sh,
+spec tt-project/t453/t453.txt. blx01 broker job 992 (-t 600, py timeout 540, alarm plugin). Output
+/var/tmp/fasth3/t409/out_t453/run.log; grep 'T453' for totals and per-op breakdowns (dense, vsa0.9_two_op,
+vsa0.9_ring).
+Next: read the breakdown; if a fix is clear, commit it and rerun one VSA arm vs dense, seed 0.
