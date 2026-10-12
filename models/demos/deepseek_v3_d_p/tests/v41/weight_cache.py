@@ -2,23 +2,31 @@
 
 # SPDX-License-Identifier: Apache-2.0
 
-"""The on-disk device-weight cache directory of V4.1 tests, keyed by what determines the stored bytes (bead 8y7.18.1).
+"""The on-disk device-weight cache directory of V4.1 tests, keyed by what determines the stored bytes (bead
+8y7.18.1).
 
 Key = SOURCE + CONVERSION + mesh shape, nothing else:
 
-* SOURCE: real weights -> the pinned checkpoint ``CHECKPOINT_REPO@CHECKPOINT_REVISION`` (``resolve_checkpoint``
+* SOURCE: real weights -> the pinned checkpoint ``CHECKPOINT_REPO@CHECKPOINT_REVISION``
+(``resolve_checkpoint``
   verifies the snapshot's index blob; the directory path is not identity); synthetic weights -> the seed, the
   weight-shaping model args and a digest of the synthetic-init source (``testing.py``).
 * CONVERSION: the routed-expert dtype plus a digest of the conversion code only — the functions that turn
-  weights into the stored device tensors (``CONVERSION_CODE``) — and of the conversion data (``CONVERSION_DATA``:
-  the expert load profile, which decides the per-chip expert placement). Layout and mapper are fixed inside that
+  weights into the stored device tensors (``CONVERSION_CODE``) — and of the conversion data
+  (``CONVERSION_DATA``:
+  the expert load profile, which decides the per-chip expert placement). Layout and mapper are fixed inside
+  that
   code.
 * mesh shape: device tensors are per-chip shards.
 
-Excluded: the forward-pass sources (model.py / kernel_cpu.py / engram.py outside the conversion functions), so a
-forward edit keeps the cache; the tt-metal git SHA (every commit would invalidate) and manual version constants
-(a missed bump gives stale hits). Schedule-only args (layer lists, sequence length, top-k counts) are excluded too:
-a layer's stored weights depend only on its id's role, which is asserted, so every schedule of the same weights
+Excluded: the forward-pass sources (model.py / kernel_cpu.py / engram.py outside the conversion functions), so
+a
+forward edit keeps the cache; the tt-metal git SHA (every commit would invalidate) and manual version
+constants
+(a missed bump gives stale hits). Schedule-only args (layer lists, sequence length, top-k counts) are excluded
+too:
+a layer's stored weights depend only on its id's role, which is asserted, so every schedule of the same
+weights
 shares one directory (files are per layer). The oracle result cache (``oracle.cache_path``) is separate and
 unchanged.
 """
@@ -52,8 +60,10 @@ from models.demos.deepseek_v3_d_p.tt.v41.weights import begin_layer, complete_la
 
 WEIGHT_CACHE = Path(os.environ.get("TT_V41_WEIGHT_CACHE", Path.home() / ".cache" / "tt-v41-weights"))
 
-# The conversion boundary: everything between "weights as a torch tensor" (checkpoint shard or reference module)
-# and the bytes written by ttnn.as_tensor / from_torch_and_dump. Function-level so that forward code in the same
+# The conversion boundary: everything between "weights as a torch tensor" (checkpoint shard or reference
+# module)
+# and the bytes written by ttnn.as_tensor / from_torch_and_dump. Function-level so that forward code in the
+# same
 # files (e.g. kernel_cpu's kernels next to unpack_fp4) stays out of the key.
 CONVERSION_CODE = (
     # synthetic path: reference module -> device-layout torch weights
@@ -68,7 +78,8 @@ CONVERSION_CODE = (
     checkpoint_weights.load_routed_experts,
     checkpoint_weights._prepare,
     checkpoint_weights._dense_params,
-    # both: torch weights -> stored device tensors (V4.1 expert placement and bias recentring, shared-expert dtype;
+    # both: torch weights -> stored device tensors (V4.1 expert placement and bias recentring, shared-expert
+    # dtype;
     # TtMoe caches)
     expert_placement.place,
     expert_placement.expert_order,
@@ -83,7 +94,8 @@ CONVERSION_CODE = (
 )
 CONVERSION_DATA = (expert_placement.PROFILE_PATH,)
 SYNTHETIC_INIT_SOURCE = Path(orc.__file__).parent / "testing.py"
-# model args that describe the schedule or the runtime, not the stored weights of a layer (its role comes from its id)
+# model args that describe the schedule or the runtime, not the stored weights of a layer (its role comes from
+# its id)
 SCHEDULE_ARGS = frozenset(
     {
         "max_batch_size",
@@ -133,9 +145,24 @@ def source_key(spec: OracleSpec) -> str:
     return checkpoint
 
 
-def weight_cache_dir(spec: OracleSpec, mesh_shape, routed_expert_weights_dtype=ttnn.bfloat8_b) -> Path:
-    """The device-weight cache directory for the layers of ``spec`` on a mesh of ``mesh_shape`` (sp, tp)."""
+EXPERT_DTYPES = {"bfp8": ttnn.bfloat8_b, "bfp4": ttnn.bfloat4_b}
+
+
+def routed_expert_dtype():
+    """The routed experts' device dtype of the V4.1 tests and the served model: ``TT_V41_EXPERT_DTYPE``
+    (``bfp8``,
+    the default, or ``bfp4``: half the expert weight bytes, the bulk of each chip's DRAM and of the decode
+    step's
+    busiest-chip weight reads)."""
+    return EXPERT_DTYPES[os.environ.get("TT_V41_EXPERT_DTYPE", "bfp8")]
+
+
+def weight_cache_dir(spec: OracleSpec, mesh_shape, routed_expert_weights_dtype=None) -> Path:
+    """The device-weight cache directory for the layers of ``spec`` on a mesh of ``mesh_shape`` (sp, tp); the
+    dtype defaults to ``routed_expert_dtype()``."""
     _check_roles(spec)
+    if routed_expert_weights_dtype is None:
+        routed_expert_weights_dtype = routed_expert_dtype()
     sp, tp = tuple(mesh_shape)
     kind = source_key(spec).split(":", 1)[0].replace("hf", "real")
     key = orc._digest(source_key(spec), routed_expert_weights_dtype.name, conversion_digest(), [sp, tp])
@@ -144,7 +171,8 @@ def weight_cache_dir(spec: OracleSpec, mesh_shape, routed_expert_weights_dtype=t
 
 def host_weights(root: Path, name: str, compute):
     """Host (torch) weights ``name`` stored in the weight-cache directory ``root``: loaded when present, else
-    ``compute()``d and written atomically (an interrupted write leaves no file). Lets warm runs skip building the
+    ``compute()``d and written atomically (an interrupted write leaves no file). Lets warm runs skip building
+    the
     reference for the weights that stay on the host path (dense layer weights, embeddings)."""
     path = root / f"{name}.pt"
     if path.is_file():

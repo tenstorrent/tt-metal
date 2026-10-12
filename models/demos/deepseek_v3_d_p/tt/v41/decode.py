@@ -91,7 +91,7 @@ class TtV41Decoder:
         self,
         model: TtV41Transformer,
         weight_cache_path,
-        routed_expert_weights_dtype=ttnn.bfloat8_b,
+        routed_expert_weights_dtype=None,
         trace: bool = False,
         warmup: int = 4,
     ):
@@ -101,6 +101,8 @@ class TtV41Decoder:
         position parity after ``warmup`` eager steps and replay it (the device needs a trace region)."""
         assert weight_cache_path is not None, "the decode MoE is built from the device weight cache"
         self.model, self.mesh_device, self.config = model, model.mesh_device, model.config
+        if routed_expert_weights_dtype is None:
+            routed_expert_weights_dtype = model.routed_expert_weights_dtype  # the decode MoEs share its experts
         self.sp, self.tp = tuple(self.mesh_device.shape)
         assert model.dspark is None, "DSpark (speculative decoding) is out of scope for decode"
         pre = torch.zeros(1, 1, ROWS, self.config.HC_MULT)

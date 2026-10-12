@@ -44,6 +44,7 @@ from models.demos.deepseek_v3_d_p.reference.deepseek_v41.image_processor import 
     IMAGE_START,
     TEXT,
 )
+from models.demos.deepseek_v3_d_p.tests.v41.weight_cache import routed_expert_dtype
 from models.demos.deepseek_v3_d_p.tt.mhc.tt_mhc import mhc_expand
 from models.demos.deepseek_v3_d_p.tt.v41.block import TtV41Block
 from models.demos.deepseek_v3_d_p.tt.v41.cache import V41PrefillState
@@ -112,7 +113,7 @@ class TtV41Transformer(LightweightModule):
         engram_hash=None,
         image_embeds: dict | None = None,
         weight_cache_path=None,
-        routed_expert_weights_dtype=ttnn.bfloat8_b,
+        routed_expert_weights_dtype=None,
         kv_format: MlaKvCacheFormat | None = None,
     ):
         """``layer_weights(layer, include_moe)`` returns that block's ``TtV41Block`` weights (``weights.load_layer``
@@ -123,6 +124,11 @@ class TtV41Transformer(LightweightModule):
         ``image_start`` / ``image_end`` / ``image_newline`` (``[hidden]`` bf16, checkpoint names) for prompts with
         images; each layer's ``gate_bias_vl`` comes with its ``layer_weights``."""
         self.mesh_device, self.config = mesh_device, config
+        # the routed experts' dtype: the argument, else TT_V41_EXPERT_DTYPE (tests/v41/weight_cache.py; the cache
+        # directory is keyed by it, so pass the same to weight_cache_dir)
+        if routed_expert_weights_dtype is None:
+            routed_expert_weights_dtype = routed_expert_dtype()
+        self.routed_expert_weights_dtype = routed_expert_weights_dtype
         self.layers, self.chunk, self.max_seq_len = list(layers), chunk, max_seq_len
         # the compressed layers' KV row format of every state this model creates (``new_state`` / ``prefill``):
         # the argument, else ``TT_V41_KV_FORMAT`` (``bf16_rm``, the default, or ``scaled_fp8``)

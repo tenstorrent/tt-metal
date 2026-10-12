@@ -142,7 +142,7 @@ class TtV41BatchDecoder(TtV41Decoder):
         model: TtV41Transformer,
         weight_cache_path,
         users_per_rank: int = 4,
-        routed_expert_weights_dtype=ttnn.bfloat8_b,
+        routed_expert_weights_dtype=None,
         trace: bool = False,
         warmup: int = 2,
         max_seq_len: int | None = None,
