@@ -155,9 +155,6 @@ def d2d_activation_width(hidden_size: int, *, dflash: bool = False) -> int:
 
 
 def indexer_indices_global_spec(per_chip_shape, mesh_shape) -> ttnn.TensorSpec:
-    """Global spec of the GLM-5.3 top-k indices carried across a pipeline boundary: uint32 ROW_MAJOR
-    DRAM, laid out so a [Shard(2), Shard(3)] mapper over an (sp, tp) mesh hands every chip exactly its
-    own per-chip [1, 1, rows, k] tensor."""
     _, _, rows, k = per_chip_shape
     sp, tp = mesh_shape
     return ttnn.TensorSpec(

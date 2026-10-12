@@ -210,9 +210,7 @@ class PrefillModelAdapter(ABC):
 
     def layer_split_boundaries(self, num_layers: int) -> Optional[set]:
         """Layer indices at which a pipeline rank may START (its ``first_layer_idx`` must be one of
-        these). ``None`` => unconstrained — any split is fine. That includes GLM-5.3's cross-layer
-        indexer reuse: a rank starting on a ``shared`` layer receives the upstream rank's top-k indices
-        over a second D2D socket (see ``build_d2d_index_endpoints``). The runner
+        these). ``None`` => unconstrained (dense models — any split is fine). The runner
         (``compute_layer_split``) snaps the default even split onto these and rejects any split whose
         rank starts fall off them."""
         return None
