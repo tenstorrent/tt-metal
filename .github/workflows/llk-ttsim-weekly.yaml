@@ -159,8 +159,7 @@ jobs:
               enumerated = read_enumerated(enum_path)
               crashed = max(enumerated - finished, 0) if enumerated is not None else None
               # Include crashed tests in the denominator to match the HTML report's
-              # treatment of crashed tests as non-passing
-              # (render_ttsim_report.count_nonpassing).
+              # treatment of crashed tests as non-passing (render_ttsim_report.py:341-345).
               ran = max(total - skipped, 0)
               if crashed is not None and crashed > 0:
                   ran += crashed
