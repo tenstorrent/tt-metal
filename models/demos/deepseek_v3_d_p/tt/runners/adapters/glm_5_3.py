@@ -120,13 +120,6 @@ class GLM53Adapter(MLAPrefillAdapter):
         )
         return MlaKvCaches(kvpe=kvpe_cache, index=index_cache)
 
-    def layer_split_boundaries(self, num_layers):
-        """GLM-5.3 cross-layer reuse: a pipeline rank must start on a ``full`` layer (it seeds that
-        rank's indexer-reuse chain; a ``shared`` first layer has no prior top-k to reuse). So the valid
-        rank-start boundaries are the ``full`` layer indices. ``None`` absent an ``indexer_types`` map."""
-        types = getattr(self.load_hf_config(), "indexer_types", None)
-        return None if not types else {i for i in range(num_layers) if types[i] == "full"}
-
     # --- test metadata (HF download coordinates + PCC thresholds + golden trace) ---
     # FP8 repo (a bf16 checkout would diverge from an FP8-derived trace). The bare
     # `zai-org/GLM-5.3` repo IS the FP8 one; hf_model_default above is a local copy of it.
