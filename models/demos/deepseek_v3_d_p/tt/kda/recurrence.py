@@ -600,6 +600,7 @@ class KDARecurrence:
         initial_state: ttnn.Tensor,
         beta_logits_column_offset: int | None,
         release_gate: bool,
+        release_qkv: bool = False,
     ) -> tuple[_PreparedChunks, ttnn.Tensor, _RecurrenceGeometry]:
         geometry = self._geometry
         # Activated beta holds exactly one column per head; logits are a column window of a wider projection.
@@ -640,6 +641,10 @@ class KDARecurrence:
         if release_gate:
             # Only chunk preparation reads the gate; freeing it here lowers L1 use during the scans.
             ttnn.deallocate(gate)
+        if release_qkv:
+            # Likewise Q, K and V, which the caller may keep in L1 until preparation.
+            for tensor in (q, k, v):
+                ttnn.deallocate(tensor)
         return prepared, state, geometry
 
     @staticmethod
@@ -663,13 +668,14 @@ class KDARecurrence:
         initial_state: ttnn.Tensor,
         beta_logits_column_offset: int | None = None,
         release_gate: bool = False,
+        release_qkv: bool = False,
     ) -> RecurrenceResult:
         """Execute the constructed graph using caller-owned state and chronology.
 
         ``beta`` is the activated token-major beta, or with ``beta_logits_column_offset`` a wider BF16 tensor whose
         columns from that offset hold beta's pre-sigmoid logits; chunk preparation then applies the sigmoid.
-        With ``release_gate`` the recurrence takes ownership of ``gate`` and frees it once chunk preparation has
-        read it.
+        With ``release_gate`` (``release_qkv``) the recurrence takes ownership of ``gate`` (``q``, ``k`` and ``v``)
+        and frees it once chunk preparation has read it.
         """
         prepared, state, geometry = self._prepare(
             q=q,
@@ -682,6 +688,7 @@ class KDARecurrence:
             actual_end=actual_end,
             beta_logits_column_offset=beta_logits_column_offset,
             release_gate=release_gate,
+            release_qkv=release_qkv,
         )
         result = self._execute(prepared, state, actual_start, actual_end)
         # Release the chunk terms as soon as the scan consumed them, so every call sees the same free memory.
