@@ -34,7 +34,7 @@ build() {  # build <slot> <hdr> <build> <ids> [pytest args]; ASSERTS=1 in the en
   local slot=$1 h=$2 b=$3 ids=$4; shift 4; local D=$SL/$slot
   cp $S/hdr/$h.h $D/$HDR || { echo "== no header $h"; return 1; }
   ( cd $D/tt_metal/tt-llk/tests/python_tests; mapfile -t N < $S/ids/$ids.txt
-    env $(env_for) CHIP_ARCH=blackhole LLK_HOME=$D/tt_metal/tt-llk TMPDIR=$SL/builds/$b LLK_PERF_L1_MUX_GROUP=0 ${RTS:+LLK_PERF_RUN_TYPES=$RTS} \
+    env -u RUNNER_TEMP $(env_for) CHIP_ARCH=blackhole LLK_HOME=$D/tt_metal/tt-llk TMPDIR=$SL/builds/$b LLK_PERF_L1_MUX_GROUP=0 ${RTS:+LLK_PERF_RUN_TYPES=$RTS} \
       timeout -s INT -k 60 2400 $PY -m pytest --compile-producer -n $NP -p no:cacheprovider --override-ini=log_cli=false -q "$@" "${N[@]}" \
       < /dev/null > $SL/out/prod_$b.log 2>&1 )
   echo "== built $b ($slot, $h, $ids): $(grep -aE '[0-9]+ (passed|failed|error)' $SL/out/prod_$b.log | tail -1) $(date -u +%T)"
@@ -43,11 +43,12 @@ build() {  # build <slot> <hdr> <build> <ids> [pytest args]; ASSERTS=1 in the en
 run() {  # run <slot> <build> <ids> <tag> [pytest args]; RTS, ASSERTS and EXTRA (K=V ...) from the environment
   local slot=$1 b=$2 ids=$3 tag=$4; shift 4; local D=$SL/$slot log=$SL/out/run_$tag.log
   ( cd $D/tt_metal/tt-llk/tests/python_tests; mapfile -t N < $S/ids/$ids.txt
-    env $(env_for) ${EXTRA:-} CHIP_ARCH=blackhole LLK_HOME=$D/tt_metal/tt-llk TMPDIR=$SL/builds/$b LLK_PERF_L1_MUX_GROUP=0 ${RTS:+LLK_PERF_RUN_TYPES=$RTS} \
+    env -u RUNNER_TEMP $(env_for) ${EXTRA:-} CHIP_ARCH=blackhole LLK_HOME=$D/tt_metal/tt-llk TMPDIR=$SL/builds/$b LLK_PERF_L1_MUX_GROUP=0 ${RTS:+LLK_PERF_RUN_TYPES=$RTS} \
       PERF_RUN_TAG=$tag PERF_KEEP_RUNS=4000 timeout -s INT -k 60 900 $PY -m pytest --compile-consumer -p no:cacheprovider \
       --override-ini=log_cli=false -q -o timeout_method=thread "$@" "${N[@]}" < /dev/null > $log 2>&1 )
   echo "   $tag rc=$? $(grep -aE '[0-9]+ (passed|failed|error)' $log | tail -1) $(date -u +%T)"
   if grep -q "TIMED OUT" $log; then echo "== TENSIX TIMED OUT in $tag, stopping"; STOP=1; return 1; fi
+  if ! grep -qaE '[0-9]+ passed' $log; then echo "== nothing passed in $tag, stopping"; grep -a -m3 -E "Error|No such file" $log; STOP=1; return 1; fi
 }
 STOP=0
 mkslot slot
