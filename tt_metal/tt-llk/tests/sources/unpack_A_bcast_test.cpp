@@ -17,10 +17,8 @@ std::uint32_t unp_cfg_context          = 0;
 std::uint32_t pack_sync_tile_dst_ptr   = 0;
 std::uint32_t math_sync_tile_dst_index = 0;
 
-// Source-register valids that one _llk_unpack_A_ call publishes and one
-// _llk_math_eltwise_unary_datacopy_ call consumes, outside unpack-to-dest.
-// The isolate modes replace one side of the handshake with these counts, pairing
-// SrcA with SrcB face by face as the unpack MOPs do.
+// SrcA/SrcB valids one tile publishes outside unpack-to-dest; the isolate modes
+// fake them for the absent unpack or math side.
 inline std::uint32_t srca_valids_per_tile(const std::uint32_t num_faces)
 {
     if constexpr (BROADCAST_TYPE == ckernel::BroadcastType::NONE)
@@ -172,13 +170,12 @@ void run_kernel(RUNTIME_PARAMETERS params)
     const int NUM_BLOCKS                   = params.NUM_BLOCKS;
     const std::uint32_t NUM_TILES_IN_BLOCK = params.NUM_TILES_IN_BLOCK;
 #endif
-    constexpr DstSync sync_mode = DstSync::SyncHalf;
     // Broadcasts arrive in SrcB and copy B2D; the NONE datacopy (and unpack-to-dest) copies A2D.
     constexpr DataCopyType copy_type = (BROADCAST_TYPE == BroadcastType::NONE || unpack_to_dest) ? DataCopyType::A2D : DataCopyType::B2D;
 
     {
         START_PERF_MEASURE("INIT")
-        _llk_math_pack_sync_init_<sync_mode, is_fp32_dest_acc_en>();
+        _llk_math_pack_sync_init_<dest_sync, is_fp32_dest_acc_en>();
         _llk_math_hw_configure_<is_fp32_dest_acc_en>(formats.math, formats.math);
         _llk_math_eltwise_unary_datacopy_init_wrapper_<copy_type, is_fp32_dest_acc_en, BROADCAST_TYPE, false /*is_int_fpu_en*/, PackMode::Default>(
             num_faces, formats.math);
@@ -208,19 +205,19 @@ void run_kernel(RUNTIME_PARAMETERS params)
                 {
                     if constexpr (dest_sync_en)
                     {
-                        _llk_math_wait_for_dest_available_<sync_mode>();
+                        _llk_math_wait_for_dest_available_<dest_sync>();
                     }
                     for (std::uint32_t tile_in_block = 0; tile_in_block < NUM_TILES_IN_BLOCK; ++tile_in_block)
                     {
                         LLK_ASSERT(
-                            (tile_in_block < get_dest_max_tiles<sync_mode, is_fp32_dest_acc_en, DstTileShape::Tile32x32>()),
+                            (tile_in_block < get_dest_max_tiles<dest_sync, is_fp32_dest_acc_en, DstTileShape::Tile32x32>()),
                             "Block tile index exceeds maximum destination tiles");
-                        _llk_math_eltwise_unary_datacopy_wrapper_<copy_type, sync_mode, is_fp32_dest_acc_en, BROADCAST_TYPE, unpack_to_dest>(
+                        _llk_math_eltwise_unary_datacopy_wrapper_<copy_type, dest_sync, is_fp32_dest_acc_en, BROADCAST_TYPE, unpack_to_dest>(
                             tile_in_block, formats.math, formats.math, num_faces);
                     }
                     if constexpr (dest_sync_en)
                     {
-                        _llk_math_dest_section_done_<sync_mode, is_fp32_dest_acc_en>();
+                        _llk_math_dest_section_done_<dest_sync, is_fp32_dest_acc_en>();
                     }
                 }
             }
@@ -251,14 +248,12 @@ void run_kernel(RUNTIME_PARAMETERS params)
     const std::uint32_t TEST_FACE_C_DIM    = params.TEST_FACE_C_DIM;
     const Operand& buffer_Res              = params.buffer_Res;
 #endif
-    constexpr DstSync sync_mode = DstSync::SyncHalf;
-
     {
         START_PERF_MEASURE("INIT")
         _llk_pack_hw_configure_wrapper_<is_fp32_dest_acc_en, PackMode::Default>(
             formats.pack_src, formats.pack_dst, TEST_FACE_R_DIM * TEST_FACE_C_DIM * num_faces /*tile_size*/, TEST_FACE_R_DIM, TILE_C_DIM, num_faces);
         _llk_pack_init_wrapper_<PackMode::Default, false /*zero_output*/>(formats.pack_dst, TEST_FACE_R_DIM, TILE_C_DIM, num_faces);
-        _llk_pack_dest_init_wrapper_<sync_mode, is_fp32_dest_acc_en, PackMode::Default>();
+        _llk_pack_dest_init_wrapper_<dest_sync, is_fp32_dest_acc_en, PackMode::Default>();
         PROFILER_SYNC();
     }
     {
@@ -281,14 +276,14 @@ void run_kernel(RUNTIME_PARAMETERS params)
                     for (std::uint32_t tile_in_block = 0; tile_in_block < NUM_TILES_IN_BLOCK; ++tile_in_block)
                     {
                         LLK_ASSERT(
-                            (tile_in_block < get_dest_max_tiles<sync_mode, is_fp32_dest_acc_en, DstTileShape::Tile32x32>()),
+                            (tile_in_block < get_dest_max_tiles<dest_sync, is_fp32_dest_acc_en, DstTileShape::Tile32x32>()),
                             "Block tile index exceeds maximum destination tiles");
-                        _llk_pack_<sync_mode, is_fp32_dest_acc_en, ckernel::PackMode::Default>(
+                        _llk_pack_<dest_sync, is_fp32_dest_acc_en, ckernel::PackMode::Default>(
                             tile_in_block, L1_ADDRESS(buffer_Res[(block * NUM_TILES_IN_BLOCK) + tile_in_block]) /*address*/);
                     }
                     if constexpr (dest_sync_en)
                     {
-                        _llk_pack_dest_section_done_<sync_mode, is_fp32_dest_acc_en>();
+                        _llk_pack_dest_section_done_<dest_sync, is_fp32_dest_acc_en>();
                     }
                 }
             }

@@ -30,6 +30,7 @@ from helpers.stimuli_config import StimuliConfig
 from helpers.stimuli_generator import generate_stimuli
 from helpers.test_variant_parameters import (
     BROADCAST_TYPE,
+    DEST_SYNC,
     LOOP_FACTOR,
     NUM_BLOCKS,
     NUM_FACES,
@@ -68,6 +69,7 @@ BCAST_TYPES = [
     BroadcastType.Row,
     BroadcastType.Scalar,
 ]
+BCAST_DEST_SYNC = DestSync.Half
 
 
 def get_valid_dest_acc_bcast(formats):
@@ -118,15 +120,11 @@ def get_valid_broadcast_types(formats, dest_acc, tile_dimensions):
 
 
 def get_perf_input_dimensions_bcast(dest_acc, tile_dimensions):
-    """One dest-full matrix for the perf tile sizes.
-
-    The kernel walks tiles linearly, so the tall and wide dest-full shapes run
-    identical work; only the tall one is kept.
-    """
+    """The tall dest-full matrix; the wide one runs identical linear work."""
     if tile_dimensions not in BCAST_PERF_TILE_DIMENSIONS:
         return []
     return generate_perf_input_dimensions(
-        dest_acc, DestSync.Half, construct_tile_shape(tuple(tile_dimensions))
+        dest_acc, BCAST_DEST_SYNC, construct_tile_shape(tuple(tile_dimensions))
     )[:1]
 
 
@@ -174,7 +172,7 @@ def _run_unpack_bcast_test(
     )
 
     num_blocks, num_tiles_in_block = get_num_blocks_and_num_tiles_in_block(
-        DestSync.Half,
+        BCAST_DEST_SYNC,
         dest_acc,
         formats,
         input_dimensions,
@@ -188,6 +186,7 @@ def _run_unpack_bcast_test(
         "formats": formats,
         "templates": [
             BROADCAST_TYPE(broadcast_type),
+            DEST_SYNC(BCAST_DEST_SYNC),
         ],
         "runtimes": [
             NUM_FACES(num_faces, num_faces, num_faces),
