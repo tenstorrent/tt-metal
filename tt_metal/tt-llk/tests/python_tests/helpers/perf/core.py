@@ -26,6 +26,7 @@ from ..profiler import Profiler, ProfilerData
 from ..stimuli_config import StimuliConfig
 from ..test_config import BuildMode, ProfilerBuild, TestConfig
 from ..test_variant_parameters import PERF_RUN_TYPE, RuntimeParameter, TemplateParameter
+from .phases import CANONICAL_PHASE, release_phases
 from .schema import (
     COUPLING_BASE,
     COUPLING_PIPELINE_RUN_TYPE,
@@ -742,46 +743,48 @@ def assert_zones_dont_overlap(profiler_data: ProfilerData) -> None:
 
     Within a thread a zone that contains another is a wrapper (trisc.cpp's KERNEL), not a phase.
     """
-    raw = profiler_data.zones().raw()
-    starts = raw[raw["type"] == "ZONE_START"]
-    if starts.empty:
+    # The profiler view pairs every ZONE_START with the ZONE_END that follows it.
+    zones = profiler_data.zones().frame()
+    if zones.empty:
         return
-    begins = starts["timestamp"].to_numpy()
-    ends = raw[raw["type"] == "ZONE_END"]["timestamp"].to_numpy()
-    # Identity is the name: marker_id is a per-callsite hash, different on every thread.
-    span = {}
-    for key, begin, finish in zip(zip(starts[MARKER], starts["thread"]), begins, ends):
-        b, f = span.get(key, (begin, finish))
-        span[key] = (min(b, begin), max(f, finish))
+    # Plain Python over the launch's few zones: a phased row runs this check once per launch (perf/phases.py), and
+    # pandas' groupby made it the costliest step of a launch. Identity is the name: marker_id is a per-callsite hash,
+    # different on every thread.
+    spans = {}  # (thread, name) -> (first begin, last finish)
+    for thread, name, begin, duration in zip(
+        zones["thread"], zones[MARKER], zones["timestamp"], zones["duration"]
+    ):
+        first, last = spans.get((thread, name), (begin, begin + duration))
+        spans[(thread, name)] = (min(first, begin), max(last, begin + duration))
     wrappers = {
-        a
-        for (a, ta), (ba, fa) in span.items()
-        for (b, tb), (bb, fb) in span.items()
-        if ta == tb and a != b and ba <= bb <= fb <= fa
+        a[1]
+        for a, (a_begin, a_finish) in spans.items()
+        for b, (b_begin, b_finish) in spans.items()
+        if a != b and a[0] == b[0] and a_begin <= b_begin <= b_finish <= a_finish
     }
     phases = {}
-    for (marker, _), (begin, finish) in span.items():
-        if marker not in wrappers:
-            b, f = phases.get(marker, (begin, finish))
-            phases[marker] = (min(b, begin), max(f, finish))
+    for (thread, name), (begin, finish) in spans.items():
+        if name not in wrappers:
+            first_open, last_close = phases.get(name, (begin, finish))
+            phases[name] = (min(first_open, begin), max(last_close, finish))
     prev = None
-    for marker, (first_open, last_close) in sorted(
-        phases.items(), key=lambda p: (p[1][0], p[0])
+    for name, (first_open, last_close) in sorted(
+        phases.items(), key=lambda phase: (phase[1][0], phase[0])
     ):
         if (
             prev is not None
-            and marker not in NON_RENDEZVOUS_MARKERS
+            and name not in NON_RENDEZVOUS_MARKERS
             and prev[1] > first_open
         ):
             raise AssertionError(
                 f"Zones overlap across threads: the last {prev[0]} closed at "
-                f"{prev[1]} but the first {marker} opened at {first_open}, "
+                f"{prev[1]} but the first {name} opened at {first_open}, "
                 f"{prev[1] - first_open} cycles earlier. Both windows therefore "
                 f"cover time belonging to the other phase. The usual cause is a kernel opening "
                 f"its zones with ZONE_SCOPED instead of START_PERF_MEASURE, which is what "
                 f"supplies the cross-thread rendezvous at zone entry."
             )
-        prev = (marker, last_close)
+        prev = (name, last_close)
 
 
 RUN_TYPE_PRESETS = {
@@ -1080,6 +1083,7 @@ class PerfConfig(TestConfig):
                 self.wait_for_tensix_operations_finished()
 
         stats_by_run_type = {}  # INIT rows are replaced from the INIT launch below
+        phased_run_types = set()
         for templates, runtimes, run_type in self.run_configs:
             self._select_run_type(templates, runtimes, run_type)
 
@@ -1104,8 +1108,18 @@ class PerfConfig(TestConfig):
             self.counted_zones = (
                 COUNT_TILE_LOOP if TestConfig.ENABLE_PERF_COUNTERS else 0
             )
-            for run_index in range(run_count):
-                self.write_runtimes_to_L1()
+            # rows that depend on the TILE_LOOP start phase run once per phase and report the mean (perf/phases.py)
+            phases = (
+                release_phases(self.test_name, run_type.name, TestConfig.SPEED_OF_LIGHT)
+                if self._wormhole_perf_barrier()
+                else (CANONICAL_PHASE,)
+            )
+            if len(phases) > 1:
+                phased_run_types.add(run_type)
+            else:
+                phases *= run_count
+            for run_index, phase in enumerate(phases):
+                self.write_runtimes_to_L1(release_phase=phase)
                 self.run_elf_files()
                 self.wait_for_tensix_operations_finished()
 
@@ -1237,6 +1251,11 @@ class PerfConfig(TestConfig):
                             target.loc[target[MARKER] == "INIT", column] = row[
                                 column
                             ].values[0]
+                        elif run_type in phased_run_types and column.startswith(
+                            stat_prefix(STD)
+                        ):
+                            # one INIT launch has no spread (the phased launches ran INIT once per phase)
+                            target.loc[target[MARKER] == "INIT", column] = float("nan")
             finally:
                 self.init_launch = False
 
