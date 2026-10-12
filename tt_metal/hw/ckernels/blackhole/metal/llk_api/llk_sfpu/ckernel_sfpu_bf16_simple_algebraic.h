@@ -1,7 +1,6 @@
 // SPDX-FileCopyrightText: © 2026 Tenstorrent AI ULC
 // SPDX-License-Identifier: Apache-2.0
 #pragma once
-#include "ckernel_sfpu_bf16_sfpi_isa.h"
 // Include inside namespace sfpi after sfpi_min_max.h; callers own traversal/init.
 
 template <bool NativeOrderedBranches = false>
