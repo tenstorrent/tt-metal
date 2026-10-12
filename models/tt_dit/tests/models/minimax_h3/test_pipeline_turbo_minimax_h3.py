@@ -42,7 +42,7 @@ import ttnn
 from models.perf.benchmarking_utils import BenchmarkProfiler
 
 from ....pipelines.events import profiler_event_callback
-from ....pipelines.minimax_h3.packing import MINIMAX_H3_FPS, resolve_canvas_size
+from ....pipelines.minimax_h3.packing import MINIMAX_H3_FPS, resolve_canvas_size, unpatchify_video_tokens
 from ....pipelines.minimax_h3.pipeline_minimax_h3_turbo import TURBO_NUM_FORWARDS, MiniMaxH3TurboPipeline
 from ....pipelines.minimax_h3.policy import align_num_frames
 from ....pipelines.minimax_h3.weights_minimax_h3 import WeightsNotFoundError, resolve_turbo_adapter
@@ -70,7 +70,7 @@ HEIGHT, WIDTH = WORKING_POINTS[WORKING_POINT]["size"]
 VIDEO_SHIFT = WORKING_POINTS[WORKING_POINT]["video_shift"]
 AUDIO_SHIFT = WORKING_POINTS[WORKING_POINT]["audio_shift"]
 
-DURATIONS_S = (5, 10, 15)
+DURATIONS_S = (5, 6, 10, 15)
 SEED = int(os.environ.get("MINIMAX_H3_TURBO_SEED", 0))
 PROMPT = CALIBRATED_FOX_PROMPT
 
@@ -97,6 +97,9 @@ CACHE_ONLY = os.environ.get("MINIMAX_H3_TURBO_CACHE_ONLY") == "1"
 # Timed generations after warmup, one perf table each: a single replay cannot separate an A/B delta of a few
 # percent from run-to-run noise.
 REPLAYS = int(os.environ.get("MINIMAX_H3_TURBO_REPLAYS", 1))
+# Directory to save the last generation's VAE input latents and decoded video to, for decode work that
+# needs fixed inputs and a reference output. Saved after the timed calls, so timing is unchanged.
+SAVE_DIR = os.environ.get("MINIMAX_H3_TURBO_SAVE_DIR")
 
 # 50 transformer blocks and 2 refiner blocks, each with fused to_qkv, to_out, ff1 and ff2.
 DEVICE_BOUND_TARGETS = 52 * 4
@@ -204,6 +207,16 @@ def test_turbo_end_to_end(mesh_device, reset_seeds, duration_s):
             seed=SEED,
         )
 
+    decode_inputs = {}
+    if SAVE_DIR:
+        decode_video = pipeline._decode_video
+
+        def keep_decode_inputs(vae, rows, *args):
+            decode_inputs.update(rows=rows, args=args)
+            return decode_video(vae, rows, *args)
+
+        pipeline._decode_video = keep_decode_inputs
+
     benchmark_profiler = BenchmarkProfiler()
     output = run_warm_generation(
         pipeline,
@@ -265,6 +278,25 @@ def test_turbo_end_to_end(mesh_device, reset_seeds, duration_s):
         expected_seconds=num_frames / MINIMAX_H3_FPS,
     )
     assert output.video_format == "yuv420", f"asked for yuv420 but the pipeline returned {output.video_format}"
+
+    if SAVE_DIR and is_host():
+        rows = decode_inputs["rows"]
+        num_latent_frames, latent_height, latent_width, num_condition_video_rows = decode_inputs["args"]
+        latents = unpatchify_video_tokens(
+            rows[num_condition_video_rows:],
+            num_latent_frames,
+            latent_height,
+            latent_width,
+            pipeline.vae_config.latent_channels,
+            pipeline.patch_size,
+        )
+        latents = pipeline._denormalize(latents, pipeline.vae_config.latents_mean, pipeline.vae_config.latents_std)
+        save_dir = Path(SAVE_DIR)
+        save_dir.mkdir(parents=True, exist_ok=True)
+        stem = f"{TASK}_turbo_{WIDTH}x{HEIGHT}_{duration_s}s_seed{SEED}"
+        torch.save(latents, save_dir / f"{stem}_latents.pt")
+        torch.save(output.video, save_dir / f"{stem}_video_{output.video_format}.pt")
+        logger.info(f"saved latents {tuple(latents.shape)} and decoded video to {save_dir}/{stem}_*.pt")
 
     if is_host():
         artifacts = artifact_dir("h3_turbo_artifacts")
