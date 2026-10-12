@@ -766,6 +766,22 @@ namespace llk_perf
 extern "C" char __llk_init_body_end[]; // sections.ld
 #endif
 
+// INIT ends inside its body, read at the end of the body (init_measurement_no_zone), so the trampoline's return is not
+// timed: the prefetch stream's run past the body cannot meet the return line in the icache
+inline std::uint32_t init_end_ts[2] = {0, 0};
+
+// no .balign as at the trampoline's read: inside the body its padding would change with the code before it
+__attribute__((always_inline)) inline void read_init_end(std::uint32_t (&ts)[2])
+{
+    std::uint32_t lo, hi;
+    asm volatile("lui %[h], %%hi(%[c])\n\tlw %[l], %%lo(%[c])(%[h])\n\tlw %[h], %%lo(%[c] + 8)(%[h])"
+                 : [l] "=&r"(lo), [h] "=&r"(hi)
+                 : [c] "i"(RISCV_DEBUG_REG_WALL_CLOCK_L)
+                 : "memory");
+    ts[0] = lo;
+    ts[1] = hi;
+}
+
 template <PerfRunType RUN_TYPE, typename F>
 __attribute__((noipa, section(".llk_init_tramp"))) void init_zone(const F& body)
 {
@@ -784,12 +800,14 @@ __attribute__((noipa, section(".llk_init_tramp"))) void init_zone(const F& body)
     {
         const perf_counter_scoped<RUN_TYPE, false> counters(LLK_PERF_ZONE_ID_("INIT"));
         body();
-        asm volatile(
+        asm volatile( // INIT has ended in the body: this read and spin only hold every thread's epilogue
             ".balign 16\n\tlui %[h], %%hi(%[c])\n\tlw %[l], %%lo(%[c])(%[h])\n\tlw %[h], %%lo(%[c] + 8)(%[h])\n\t"
             "li t0, 2048\n1:\n\taddi t0, t0, -1\n\tbnez t0, 1b"
             : [l] "=&r"(end_lo), [h] "=&r"(end_hi)
             : [c] "i"(RISCV_DEBUG_REG_WALL_CLOCK_L)
             : "t0", "memory");
+        end_lo = init_end_ts[0];
+        end_hi = init_end_ts[1];
         if (opened)
         {
             std::uint32_t id; // fixed size lui + addi, after the end read, whatever the id's value
@@ -831,6 +849,11 @@ struct init_measurement_no_zone // START_PERF_MEASURE("INIT") in the INIT measur
 
     init_measurement_no_zone()
     {
+    }
+
+    ~init_measurement_no_zone() // the end of INIT's body: INIT's end
+    {
+        read_init_end(init_end_ts);
     }
 };
 } // namespace llk_perf
