@@ -12,7 +12,7 @@
 #include <algorithm>
 #include "event_metadata.hpp"
 #include "internal/risc_attribs.h"
-#include "kernel_profiler.hpp"
+#include "api/debug/kernel_profiler.hpp"
 #include "hostdev/profiler_common.h"
 
 namespace noc_event_profiler {
@@ -249,16 +249,15 @@ FORCE_INLINE void recordNocEventWithAddr(
         }                                                                                                     \
     }
 
-#define RECORD_NOC_EVENT_IMPL_(event_type, posted, noc)         \
-    {                                                           \
-        noc_event_profiler::recordNocEvent<event_type, posted>( \
-            /*dst_x=*/-1,                                       \
-            /*dst_y=*/-1,                                       \
-            /*num_bytes=*/0,                                    \
-            /*vc=*/-1,                                          \
-            /*noc=*/noc,                                        \
-            /*local_addr=*/0,                                   \
-            /*dst_local_addr=*/0);                              \
+#define RECORD_NOC_EVENT_IMPL_(event_type, posted, noc)                               \
+    {                                                                                 \
+        noc_event_profiler::recordNocEvent<event_type, posted>(/*dst_x=*/-1,          \
+                                                               /*dst_y=*/-1,          \
+                                                               /*num_bytes=*/0,       \
+                                                               /*vc=*/-1,             \
+                                                               /*noc=*/noc,           \
+                                                               /*local_addr=*/0,      \
+                                                               /*dst_local_addr=*/0); \
     }
 
 #define RECORD_NOC_EVENT(event_type, posted, noc)                          \
