@@ -92,6 +92,8 @@ def test_attention_inference(
     elif model_args.model_name == "Llama-3.3-70B-Instruct" and not use_hf_rope:
         pcc = llama33_70b_mllama_rope_pcc
     model_args.n_layers = 1  # For the unit test, just run a single layer
+    if model_args.model_type == "cohere2" and use_hf_rope:
+        pytest.skip("cohere2 does not support the use_hf_rope rotary path")
 
     state_dict = model_args.load_state_dict()
 

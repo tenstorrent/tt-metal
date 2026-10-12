@@ -24,6 +24,7 @@ on:
           - qwen3-0.6b
           - qwen3-1.7b
           - qwq-32b
+          - c4ai-command-r7b
           - phi-3-mini
           # phi-4-mini: disabled — assert freqs.shape[-1] == ext_factors.shape[-1]
           - mamba-2.8b
