@@ -1084,6 +1084,26 @@ def _load_token_pool(trace_dir, num_tokens: int) -> list:
     return pool[:num_tokens]
 
 
+def _write_request_sidecars(slot_traces) -> None:
+    """``PREFILL_REQUEST_SIDECAR_DIR`` (DeepSeek-V4.1 ViT V2, DS41F-0045): per slot, its trace's ``metadata.json`` minus the
+    token ids, written BEFORE the slot's chunks are pushed, so the model runtime can pick up per-request inputs that do not
+    travel in the ids (V4.1: the image-span rows, ``metadata["image_rows"]``). Off unless the env var is set."""
+    d = os.environ.get("PREFILL_REQUEST_SIDECAR_DIR")
+    if not d:
+        return
+    import json as _json
+    from pathlib import Path
+
+    os.makedirs(d, exist_ok=True)
+    for s, trace in slot_traces.items():
+        p = Path(trace) / "metadata.json"
+        meta = {k: v for k, v in _json.load(open(p)).items() if k != "token_ids"} if p.exists() else {}
+        tmp = os.path.join(d, f".slot_{s}.json.tmp")
+        with open(tmp, "w") as f:
+            _json.dump(dict(trace=str(trace), metadata=meta), f)
+        os.replace(tmp, os.path.join(d, f"slot_{s}.json"))
+
+
 def _resolve_slot_prompts(cfg: ProducerConfig):
     """Resolve each slot's prompt (tokens + golden trace) and load the token pool(s).
 
@@ -1106,6 +1126,7 @@ def _resolve_slot_prompts(cfg: ProducerConfig):
     if not spec:
         trace = resolve_trace_dir(default)
         slot_traces = {s: trace for s in range(cfg.num_users)}
+        _write_request_sidecars(slot_traces)
         return slot_traces, None, {trace: _load_token_pool(trace, cfg.chunks_max * CHUNK_SIZE)}
 
     entries = [e.strip() for e in spec.split(",") if e.strip()]
@@ -1136,6 +1157,7 @@ def _resolve_slot_prompts(cfg: ProducerConfig):
         "[producer] per-slot prompts: "
         + ", ".join(f"slot {s}<-{slot_traces[s].name} ({slot_lengths[s]} tok)" for s in sorted(slot_traces))
     )
+    _write_request_sidecars(slot_traces)
     return slot_traces, slot_lengths, pools_by_trace
 
 

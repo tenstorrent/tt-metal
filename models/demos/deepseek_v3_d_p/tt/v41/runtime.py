@@ -159,6 +159,7 @@ class V41PrefillRuntime:
         if int(actual_start) == 0:
             self.pf.reset()
             kv_caches.zero_slot(int(slot_id))
+            self._request_image_rows(int(slot_id))
         assert self.pf.kv_actual == int(actual_start), (self.pf.kv_actual, actual_start)
         self._request_id = int(request_id)
         t0 = time.time()
@@ -183,6 +184,23 @@ class V41PrefillRuntime:
             + (" (warm-up)" if warmup else "")
         )
         return None
+
+    def _request_image_rows(self, slot_id: int) -> None:
+        """ViT V2, per request: ``PREFILL_REQUEST_SIDECAR_DIR/slot_<s>.json`` (written by the producer before the slot's chunks)
+        names the request's image-span rows (``metadata["image_rows"]``); absent = a text prompt. Without the sidecar dir the
+        launch-wide ``V41_PREFILL_IMAGE_ROWS`` stays in force."""
+        d = os.environ.get("PREFILL_REQUEST_SIDECAR_DIR")
+        if not d:
+            return
+        import json
+
+        f = os.path.join(d, f"slot_{slot_id}.json")
+        path = json.load(open(f)).get("metadata", {}).get("image_rows") if os.path.exists(f) else None
+        if path != getattr(self, "_image_rows_path", None):
+            rows = torch.load(path, map_location="cpu") if path else None
+            self.pf.set_image_rows(rows["rows"] if isinstance(rows, dict) else rows)
+            self._image_rows_path = path
+            logger.info(f"[v41 runtime] slot {slot_id}: image-span rows {path or 'none (text prompt)'}")
 
     def on_services_ready(self, kv_caches) -> None:
         """Called by the runner once every persistent service buffer (H2D / D2H / the KV table) exists, right before its
