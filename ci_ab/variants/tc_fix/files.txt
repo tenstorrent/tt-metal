@@ -1,0 +1,6 @@
+tt_metal/hw/ckernels/blackhole/metal/llk_api/llk_sfpu/ckernel_sfpu_typecast.h
+tt_metal/hw/inc/api/compute/eltwise_unary/typecast.h
+tt_metal/tt-llk/tests/helpers/include/sfpu_operations.h
+tt_metal/tt-llk/tests/python_tests/perf_eltwise_unary_typecast.py
+tt_metal/tt-llk/tests/python_tests/test_eltwise_unary_typecast.py
+tt_metal/tt-llk/tests/sources/eltwise_unary_typecast_perf.cpp
