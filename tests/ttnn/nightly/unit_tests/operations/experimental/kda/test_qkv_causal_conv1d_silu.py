@@ -48,19 +48,10 @@ class _BenchmarkCase:
 
 _PRODUCTION_PERF_MARGIN = 0.05
 
-# Recalibrated 2026-08-19 on Blackhole P150b device 0, firmware 19.5.0.0. The
-# previous references (92_606, 50_123, 55_324) were calibrated before the
-# hoisted unpack/init optimization, which made every shape 3.7-4.6% faster with
-# bit-identical outputs. Against a symmetric band that left each case only
-# 335-672 ns above its lower bound, so a further improvement would have failed
-# the gate for being too fast. Seven real-time-profiler samples of the current
-# implementation produced 88358-88443 ns, 47952-48257 ns, and 53230-53373 ns;
-# the inline references are their medians. The 5% symmetric margin now leaves
-# 2.2-4.4 us on both sides, against an observed spread of 85-305 ns.
 _PRODUCTION_CASES = (
-    _BenchmarkCase("single-block", widths=(512, 512, 512), channel_chunk_size=1536, expected_duration_ns=88_383),
-    _BenchmarkCase("multiple-blocks", widths=(1024, 1024, 1024), channel_chunk_size=768, expected_duration_ns=48_090),
-    _BenchmarkCase("asymmetric-split", widths=(512, 256, 128), channel_chunk_size=896, expected_duration_ns=53_270),
+    _BenchmarkCase("single-block", widths=(512, 512, 512), channel_chunk_size=1536, expected_duration_ns=83_401),
+    _BenchmarkCase("multiple-blocks", widths=(1024, 1024, 1024), channel_chunk_size=768, expected_duration_ns=46_345),
+    _BenchmarkCase("asymmetric-split", widths=(512, 256, 128), channel_chunk_size=896, expected_duration_ns=50_579),
 )
 
 
@@ -217,6 +208,39 @@ def test_qkv_causal_conv1d_silu_contract(
         ):
             assert_bit_identical(before, ttnn.to_torch(tensor), name=f"{name} immutability")
         ttnn.release_trace(device, trace_id)
+
+
+@pytest.mark.parametrize(
+    ("sequence", "channel_chunk_size"),
+    [
+        # 4 channel blocks x 65 row tiles = 260 work items: cores own several items, and on 110-140 core grids
+        # some own items on both sides of a channel-block boundary.
+        pytest.param(2080, 768, id="items-cross-blocks"),
+        # 6- and 3-tile channel blocks: compute groups two tiles and one tile per destination acquire.
+        pytest.param(64, 192, id="two-tile-groups"),
+        pytest.param(64, 96, id="one-tile-groups"),
+    ],
+)
+def test_qkv_causal_conv1d_silu_work_distribution(
+    zero_actual_start, device: ttnn.Device, sequence: int, channel_chunk_size: int
+) -> None:
+    """Weight reuse across a core's work items and every destination grouping match the reference."""
+    widths = (1024, 1024, 1024)
+    host, device_inputs = qkv_device_inputs(device, sequence=sequence, widths=widths)
+    inputs, history, taps = host
+    input_tt, history_tt, taps_tt = device_inputs
+    outputs = _run(
+        input_tt,
+        history_tt,
+        taps_tt,
+        widths=widths,
+        channel_chunk_size=channel_chunk_size,
+        actual_start=zero_actual_start,
+    )
+    for name, golden, output in zip(
+        ("q", "k", "v"), qkv_reference(inputs, history, taps, widths), outputs, strict=True
+    ):
+        assert_accurate(golden, ttnn.to_torch(output), name=name, pcc_threshold=0.999)
 
 
 @pytest.mark.parametrize("case", _PRODUCTION_CASES, ids=lambda case: case.case_id)
@@ -463,6 +487,23 @@ def test_qkv_causal_conv1d_silu_rejects_invalid_channel_chunk_size(
             taps_tt,
             widths=widths,
             channel_chunk_size=channel_chunk_size,
+            actual_start=zero_actual_start,
+        )
+
+
+def test_qkv_causal_conv1d_silu_rejects_channel_chunk_size_over_l1(
+    zero_actual_start, device: ttnn.Device, expect_error: Callable
+) -> None:
+    # One 96-tile channel block needs about 2.4 MB of DFBs and window per core.
+    widths = (1024, 1024, 1024)
+    _, (input_tt, history_tt, taps_tt) = qkv_device_inputs(device, widths=widths, sequence=32)
+    with expect_error(RuntimeError, "channel_chunk_size = 3072 needs .* bytes of L1 per core"):
+        _run(
+            input_tt,
+            history_tt,
+            taps_tt,
+            widths=widths,
+            channel_chunk_size=3072,
             actual_start=zero_actual_start,
         )
 

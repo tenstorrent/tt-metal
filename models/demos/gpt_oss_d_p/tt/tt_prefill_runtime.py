@@ -78,6 +78,8 @@ class TtPrefillRuntimeConfig:
     # When True the runtime allocates + owns its KV cache (self.kv_cache) — the standalone galaxy
     # harness path. The adapter/engine path sets this False and passes the engine-owned KvCaches in.
     owns_kv_cache: bool = True
+    # No trace-replay mode in this runtime; the common prefill runner reads the field.
+    use_trace: bool = False
     # Pipeline-parallel rank flags the common prefill runner reads off runtime.config
     # (single-rank standalone/harness => both True). first_layer_idx is the GLOBAL index of this
     # rank's first layer (0 on single-rank); used by PREFILL_STANDALONE_PCC golden offset.
@@ -313,6 +315,7 @@ class TtPrefillRuntime:
         chunk_size: Optional[int] = None,  # variable chunk length: which supported size this chunk is
         request_id: int = -1,  # accepted for the common-runner contract; single-request prefill ignores it
         d2h_service=None,  # accepted for the common-runner contract; this runtime uses host-callback LayerAcks
+        metadata_msg=None,  # accepted for the common-runner contract; no trace-metadata path in this runtime
         record_dev=None,  # accepted for the common-runner contract; the D1H record path is unused here
     ) -> Optional[ttnn.Tensor]:
         """Prefill ONE chunk into user ``slot_id``'s slice of the KV cache (self-owned or the engine's

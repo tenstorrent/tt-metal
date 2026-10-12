@@ -36,8 +36,6 @@ except ModuleNotFoundError:
 MODEL_DTYPE = ttnn.bfloat16
 PREFILL_CHUNK_SIZES = (2048, 4096, 8192, 16384, 32768)
 LAYER_PERF_CONTEXT_LENGTHS = (262144,)
-# Chunk indices measured per layer type by chunk_idx="ci".
-LAYER_PERF_CI_CELLS = {"global": (0, 1, 15, 31), "local": (0, 1)}
 TRACE_REGION_SIZE = int(os.environ.get("GEMMA4_PREFILL_TRACE_REGION_SIZE", 256_000_000))
 
 
@@ -339,7 +337,7 @@ def test_prefill_long_context_traced(mesh_device, context_len, chunk_size, token
     cp = mesh_config.cp_degree
     if cp <= 1:
         pytest.skip(f"targets CP>1; mesh {tuple(mesh_device.shape)} gives CP={cp}")
-    if geometry_error := prefill_chunk_geometry_error(chunk_size, cp, context_len):
+    if geometry_error := prefill_chunk_geometry_error(chunk_size, cp, context_len, tp_degree=mesh_config.tp_degree):
         pytest.skip(geometry_error)
 
     hf_model_id = _hf_model_id()
@@ -396,7 +394,9 @@ def test_prefill_chunk_sweep_traced(mesh_device, context_len, token_source, rese
 
     with _shared_device_weights():
         for chunk_size in chunk_sizes:
-            if geometry_error := prefill_chunk_geometry_error(chunk_size, mesh_config.cp_degree, context_len):
+            if geometry_error := prefill_chunk_geometry_error(
+                chunk_size, mesh_config.cp_degree, context_len, tp_degree=mesh_config.tp_degree
+            ):
                 logger.warning(f"[sweep] skipping chunk {chunk_size}: {geometry_error}")
                 continue
             logger.info(f"[sweep] ===== chunk_size={chunk_size} context_len={context_len} =====")
@@ -421,9 +421,18 @@ def test_prefill_chunk_sweep_traced(mesh_device, context_len, token_source, rese
 # ── Per-layer prefill timing ────────────────────────────────────────────────
 
 
-def _perf_signposts(layer_type, chunk_idx):
+def layer_perf_ci_cells(n_chunks):
+    """Chunk indices measured by chunk_idx="ci": first, second, middle and last global chunk; first two sliding."""
+    in_range = set(range(n_chunks))
+    return {
+        "global": tuple(sorted({0, 1, n_chunks // 2 - 1, n_chunks - 1} & in_range)),
+        "local": tuple(sorted({0, 1} & in_range)),
+    }
+
+
+def _perf_signposts(layer_type, chunk_size, chunk_idx):
     """Return profiler signposts for one layer and chunk."""
-    base = f"gemma4-layer-{layer_type}-chunk{chunk_idx}"
+    base = f"gemma4-layer-{layer_type}-sz{chunk_size}-chunk{chunk_idx}"
     return f"{base}-start", f"{base}-stop"
 
 
@@ -446,19 +455,19 @@ def test_prefill_layer_perf_chunk_n(mesh_device, chunk_idx, layer_type, chunk_si
     Inputs are token embeddings, so this is an isolated-layer benchmark.
     """
     from models.demos.gemma4_d_p.scripts.layer_perf_report import write_manifest
-    from models.demos.gemma4_d_p.tt.attention.global_kv_cache import pack_global_rope_device, pack_sliding_rope_device
     from models.demos.gemma4_d_p.tt.attention.ring_prefill import GlobalRingKVCache
 
     mesh_config = _mesh_config(mesh_device)
     cp = mesh_config.cp_degree
     if cp <= 1:
         pytest.skip(f"targets CP>1; mesh {tuple(mesh_device.shape)} gives CP={cp}")
-    if geometry_error := prefill_chunk_geometry_error(chunk_size, cp, context_len):
+    if geometry_error := prefill_chunk_geometry_error(chunk_size, cp, context_len, tp_degree=mesh_config.tp_degree):
         pytest.skip(geometry_error)
     n_chunks = context_len // chunk_size
     layer_types = ["global", "local"] if layer_type == "both" else [layer_type]
     if chunk_idx == "ci":
-        cells_by_type = {lt: LAYER_PERF_CI_CELLS[lt] for lt in layer_types}
+        ci_cells = layer_perf_ci_cells(n_chunks)
+        cells_by_type = {lt: ci_cells[lt] for lt in layer_types}
     elif chunk_idx == "all":
         cells_by_type = {lt: tuple(range(n_chunks)) for lt in layer_types}
     else:
@@ -534,32 +543,26 @@ def test_prefill_layer_perf_chunk_n(mesh_device, chunk_idx, layer_type, chunk_si
     def _make_forward(lt):
         """Build (prepare, forward) for one layer type.
 
-        prepare runs the once-per-chunk inputs of the model: the token embedding, the RoPE
-        lookups and their packing. forward runs the layer on them. They are traced separately so the measured trace
+        prepare runs the once-per-chunk inputs of the model: the token embedding and the packed RoPE
+        lookups. forward runs the layer on them. They are traced separately so the measured trace
         holds only the layer; in the model the prepare ops run once per chunk, not once per layer."""
         idx = layer_idxs[lt]
         layer = model.layers[idx]
         assert layer.self_attn.ring_kv_cache is not None, f"layer {idx} has no ring cache"
         model_layer_type = model_layer_types[lt]
-        assert model_layer_type in model.rope_caches_2d, (
-            f"model has no 2D RoPE cache for {lt} (built without _hf_text_config?) — "
+        assert model_layer_type in model.packed_rope_tables, (
+            f"model has no RoPE tables for {lt} (built without _hf_text_config?) — "
             f"per-chunk RoPE would be wrong, refusing to measure"
         )
-        cos_2d, sin_2d = model.rope_caches_2d[model_layer_type]
-        pack_rope = pack_global_rope_device if lt == "global" else pack_sliding_rope_device
 
         def prepare():
             embeds = model.transform_and_embed_prefill_inputs_device(device_input_tokens)
-            cos = ttnn.unsqueeze_to_4D(ttnn.embedding(model._rope_prefill_positions, cos_2d, layout=ttnn.TILE_LAYOUT))
-            sin = ttnn.unsqueeze_to_4D(ttnn.embedding(model._rope_prefill_positions, sin_2d, layout=ttnn.TILE_LAYOUT))
-            packed_rope = (*pack_rope(cos, sin), model._packed_global_rope_trans_mat)
-            return embeds, (cos, sin), packed_rope
+            return embeds, model.lookup_packed_rope(model_layer_type)
 
         def forward(inputs, chunk_start):
-            embeds, rope_mats, packed_rope = inputs
+            embeds, packed_rope = inputs
             return layer(
                 hidden_states=embeds,
-                rope_mats=rope_mats,
                 prefill_metadata=model.prefill_metadata,
                 chunk_start_idx=chunk_start,
                 packed_global_rope=packed_rope if lt == "global" else None,
@@ -619,7 +622,7 @@ def test_prefill_layer_perf_chunk_n(mesh_device, chunk_idx, layer_type, chunk_si
     results = []
     try:
         for lt, idx in cells:
-            sp_start, sp_stop = _perf_signposts(lt, idx)
+            sp_start, sp_stop = _perf_signposts(lt, chunk_size, idx)
 
             chunk_start = _stage(idx)
             ttnn.execute_trace(mesh_device, prep_traces[lt], cq_id=0, blocking=False)

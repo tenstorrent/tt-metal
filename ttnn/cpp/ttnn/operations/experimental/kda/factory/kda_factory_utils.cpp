@@ -9,6 +9,7 @@
 
 #include <tt-metalium/work_split.hpp>
 #include <tt_stl/assert.hpp>
+#include <tt_stl/fmt.hpp>
 
 namespace ttnn::experimental::prim::kda_factory_detail {
 

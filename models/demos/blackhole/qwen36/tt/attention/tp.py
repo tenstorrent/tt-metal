@@ -175,8 +175,17 @@ class TPAttention:
         # Prefill: x is K-sharded (norm skipped its AG) -> fused all-gather + QKV matmul. Output stays
         # DRAM: L1 clashes with a downstream matmul's CBs (verified; full-attn has more L1 pressure here).
         if self._fuse_agmm and x.shape[-2] > tpc.TILE_SIZE:
+            # Persistent gather buffer: the op has no receiver-ready handshake, so a per-call buffer carved out
+            # of memory a lagging peer is still using can be overwritten by an early device's K-slices
+            # (same race as the GDN out-projection; intermittent user-0 PCC drop in test_attention_tp_paged_peruser).
+            # TODO(#57458): switch to the op's barrier_semaphore once it is wired up (see tpc.agmm_gather_buffer).
             qkv = tpc.all_gather_matmul_prefill(
-                x, tw["wqkv_fused"], self.tt_ccl, self.compute_cfg, self.args.ccl_topology()
+                x,
+                tw["wqkv_fused"],
+                self.tt_ccl,
+                self.compute_cfg,
+                self.args.ccl_topology(),
+                persistent_output_buffer=tpc.agmm_gather_buffer(self.tt_ccl, x),
             )
         elif getattr(self.args, "proj_1d_decode", False) and x.shape[-2] <= tpc.TILE_SIZE:
             # Decode: small-grid 1D matmul (interleaved weight). Output DRAM so _make_heads_decode's

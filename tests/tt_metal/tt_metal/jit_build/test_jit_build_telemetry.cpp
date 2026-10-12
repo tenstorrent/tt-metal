@@ -6,6 +6,7 @@
 
 #include <chrono>
 #include <cstdint>
+#include <future>
 #include <stdexcept>
 #include <thread>
 #include <vector>
@@ -35,6 +36,39 @@ TEST(JitBuildCacheTests, DistinctHashesRunSeparately) {
     EXPECT_TRUE(cache.build_once(1, [&] { ++runs; }));
     EXPECT_TRUE(cache.build_once(2, [&] { ++runs; }));
     EXPECT_EQ(runs, 2);
+}
+
+TEST(JitBuildCacheTests, NoWaitReportsInProgress) {
+    auto& cache = JitBuildCache::inst();
+    cache.clear();
+    std::promise<void> started;
+    std::promise<void> release;
+    auto release_future = release.get_future();
+    std::thread owner([&] {
+        cache.build_once(3, [&] {
+            started.set_value();
+            release_future.wait();
+        });
+    });
+    started.get_future().wait();
+
+    EXPECT_EQ(
+        cache.build_once_no_wait(3, [] { FAIL() << "duplicate build ran"; }),
+        JitBuildCache::BuildOnceStatus::InProgress);
+    release.set_value();
+    owner.join();
+    EXPECT_EQ(
+        cache.build_once_no_wait(3, [] { FAIL() << "cached build ran"; }),
+        JitBuildCache::BuildOnceStatus::AlreadyBuilt);
+}
+
+TEST(JitBuildCacheTests, NoWaitFailureCanRetry) {
+    auto& cache = JitBuildCache::inst();
+    cache.clear();
+    EXPECT_THROW(cache.build_once_no_wait(4, [] { throw std::runtime_error("failed"); }), std::runtime_error);
+    int runs = 0;
+    EXPECT_TRUE(cache.build_once(4, [&] { ++runs; }));
+    EXPECT_EQ(runs, 1);
 }
 
 class BuildCacheTelemetryTest : public ::testing::Test {

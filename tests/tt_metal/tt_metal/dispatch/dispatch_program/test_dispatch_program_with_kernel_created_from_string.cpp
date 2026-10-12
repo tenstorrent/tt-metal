@@ -82,6 +82,9 @@ TEST_F(ProgramWithKernelCreatedFromStringFixture, TensixComputeKernel) {
 }
 
 TEST_F(ProgramWithKernelCreatedFromStringFixture, ActiveEthEthernetKernel) {
+    if (not this->slow_dispatch_) {
+        GTEST_SKIP() << "fast dispatch to active ethernet has been removed";
+    }
     const std::string& kernel_src_code = R"(
     #include "api/debug/dprint.h"
     #include "api/dataflow/dataflow_api.h"

@@ -645,7 +645,7 @@ jobs:
         timeout-minutes: 20
       - uses: ./.github/actions/llk-compile-quasar
         with:
-          pytest-markers: "quasar"
+          pytest-markers: "quasar and not perf"
 
   # GitHub has so many design limitations it's not even funny.
   # This job is purely so we can capture the essence of the workflow as a whole in our status checks.

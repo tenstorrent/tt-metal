@@ -7,6 +7,7 @@
 #include <cstdio>
 
 #include "ckernel.h"
+#include "counters.h"
 #include "llk_defs.h"
 #include "llk_memory_checks.h"
 #include "perf.h"
@@ -37,7 +38,7 @@ void run_kernel(RUNTIME_PARAMETERS params)
     const ckernel::TensorShape tensor_shape_A = TENSOR_SHAPE_FROM_PARAMS(params);
 
     {
-        ZONE_SCOPED("INIT")
+        START_PERF_MEASURE("INIT")
         if constexpr (unpack_to_dest)
         {
             // Only the end-to-end path uses the unpack→pack dest-dvalid
@@ -67,7 +68,7 @@ void run_kernel(RUNTIME_PARAMETERS params)
             l1_addr_16B = L1_ADDRESS(buffer_A[0]);
         }
 
-        ckernel::trisc::bfd_alloc_and_program<ckernel::trisc::BfdResource::Unp0>(tensor_shape_A, l1_addr_16B, formats.unpack_A_src);
+        const auto bfd_unpack = ckernel::trisc::bfd_alloc_and_program<ckernel::trisc::BfdResource::Unp0>(tensor_shape_A, l1_addr_16B, formats.unpack_A_src);
 
         if constexpr (unpack_to_dest)
         {
@@ -75,8 +76,7 @@ void run_kernel(RUNTIME_PARAMETERS params)
             // Unpack one tile row at a time for double-buffering with packer (SyncHalf).
             // Writing all tiles at once would cause _llk_pack_dest_dvalid_section_done_'s
             // ZEROACC to wipe subsequent tile rows after packing the first one.
-            _llk_unpack_unary_operand_init_<SELECTED_UNPACKER, false /*transpose*/, is_fp32_dest_acc_en>(
-                ckernel::trisc::bfd_current<ckernel::trisc::BfdResource::Unp0>(), tensor_shape_A, BLOCK_CT_DIM);
+            _llk_unpack_unary_operand_init_<SELECTED_UNPACKER, false /*transpose*/, is_fp32_dest_acc_en>(bfd_unpack, tensor_shape_A, BLOCK_CT_DIM);
         }
         else
         {
@@ -89,13 +89,12 @@ void run_kernel(RUNTIME_PARAMETERS params)
             {
                 _llk_unpack_configure_unary_<SELECTED_UNPACKER>(static_cast<DataFormat>(formats.unpack_A_dst));
             }
-            _llk_unpack_unary_operand_init_<SELECTED_UNPACKER, false /*transpose*/, is_fp32_dest_acc_en>(
-                ckernel::trisc::bfd_current<ckernel::trisc::BfdResource::Unp0>(), tensor_shape_A, TILE_CNT);
+            _llk_unpack_unary_operand_init_<SELECTED_UNPACKER, false /*transpose*/, is_fp32_dest_acc_en>(bfd_unpack, tensor_shape_A, TILE_CNT);
         }
         PROFILER_SYNC();
     }
     {
-        ZONE_SCOPED("TILE_LOOP")
+        START_PERF_MEASURE("TILE_LOOP")
         if constexpr (PERF_RUN_TYPE == PerfRunType::PACK_ISOLATE)
         {
         }
@@ -162,10 +161,11 @@ void run_kernel(RUNTIME_PARAMETERS params)
     const std::uint32_t num_faces       = params.num_faces;
     const std::uint32_t TEST_FACE_R_DIM = params.TEST_FACE_R_DIM;
 #endif
-    if constexpr (!unpack_to_dest)
+    // Every thread opens both zones even when it has no work here: the rendezvous waits for all four.
     {
+        START_PERF_MEASURE("INIT")
+        if constexpr (!unpack_to_dest)
         {
-            ZONE_SCOPED("INIT")
             // PACK_ISOLATE and L1_CONGESTION measure pack without the
             // FPU→PACK dest-dvalid handshake (WH/BH style).
             if constexpr (PERF_RUN_TYPE != PerfRunType::PACK_ISOLATE && PERF_RUN_TYPE != PerfRunType::L1_CONGESTION)
@@ -173,15 +173,18 @@ void run_kernel(RUNTIME_PARAMETERS params)
                 set_up_fpu_to_pack_dest_dvalid_chain<dest_dvalid_client::FPU>();
             }
 
-            configure_math_hardware_for_float32_int32_or_default<IMPLIED_MATH_FORMAT, is_fp32_dest_acc_en>(
-                static_cast<DataFormat>(formats.math), static_cast<DataFormat>(formats.pack_src));
+            _llk_math_srcAB_hw_configure_<IMPLIED_MATH_FORMAT, is_fp32_dest_acc_en>(
+                static_cast<DataFormat>(formats.math), static_cast<DataFormat>(formats.math));
 
             _llk_math_eltwise_unary_datacopy_init_<DataCopyType::A2D, is_fp32_dest_acc_en>(
                 num_faces * TEST_FACE_R_DIM /*num_rows_per_matrix*/, 1 /*num_matrices*/);
-            PROFILER_SYNC();
         }
+        PROFILER_SYNC();
+    }
+    {
+        START_PERF_MEASURE("TILE_LOOP")
+        if constexpr (!unpack_to_dest)
         {
-            ZONE_SCOPED("TILE_LOOP")
             if constexpr (PERF_RUN_TYPE == PerfRunType::PACK_ISOLATE)
             {
             }
@@ -224,8 +227,8 @@ void run_kernel(RUNTIME_PARAMETERS params)
                     }
                 }
             }
-            PROFILER_SYNC();
         }
+        PROFILER_SYNC();
     }
 }
 
@@ -250,7 +253,7 @@ void run_kernel(RUNTIME_PARAMETERS params)
 #endif
     const ckernel::TensorShape tensor_shape = TENSOR_SHAPE_FROM_PARAMS(params);
     {
-        ZONE_SCOPED("INIT")
+        START_PERF_MEASURE("INIT")
         // Match WH/BH PACK_ISOLATE and L1_CONGESTION: no math↔pack handshake;
         // pack from whatever is in dest.
         // Explicitly clear wait_mask — CFG can persist across run-types in the same session.
@@ -270,31 +273,32 @@ void run_kernel(RUNTIME_PARAMETERS params)
             }
         }
 
+        std::uint8_t bfd_pack;
         if (tensor_shape.face_r_dim < ckernel::pack::PACR_STRIDE_OFFSET_ROWS)
         {
             // PACR_STRIDE quirk: tiny-tiles index L1 rows as tiles, so the BD is built with y_dim = 1.
-            ckernel::trisc::bfd_alloc_and_program<ckernel::trisc::BfdResource::Pack0, ckernel::trisc::L1AccessMode::Strided>(
+            bfd_pack = ckernel::trisc::bfd_alloc_and_program<ckernel::trisc::BfdResource::Pack0, ckernel::trisc::L1AccessMode::Strided>(
                 tensor_shape, L1_ADDRESS(buffer_Res[0]), formats.pack_dst);
         }
         else
         {
-            ckernel::trisc::bfd_alloc_and_program<ckernel::trisc::BfdResource::Pack0, ckernel::trisc::L1AccessMode::Continuous>(
+            bfd_pack = ckernel::trisc::bfd_alloc_and_program<ckernel::trisc::BfdResource::Pack0, ckernel::trisc::L1AccessMode::Continuous>(
                 tensor_shape, L1_ADDRESS(buffer_Res[0]), formats.pack_dst);
         }
 
         _llk_pack_hw_configure_<p_pacr::PACK0, is_fp32_dest_acc_en>(static_cast<DataFormat>(formats.pack_src), ckernel::ReluConfig::none());
         if (tensor_shape.total_num_faces() == NUM_FACES)
         {
-            _llk_pack_untilize_init_<FULL_CT_DIM, BLOCK_CT_DIM>(ckernel::trisc::bfd_current<ckernel::trisc::BfdResource::Pack0>(), tensor_shape);
+            _llk_pack_untilize_init_<FULL_CT_DIM, BLOCK_CT_DIM>(bfd_pack, tensor_shape);
         }
         else
         {
-            _llk_pack_untilize_strided_init_<FULL_CT_DIM, BLOCK_CT_DIM>(ckernel::trisc::bfd_current<ckernel::trisc::BfdResource::Pack0>(), tensor_shape);
+            _llk_pack_untilize_strided_init_<FULL_CT_DIM, BLOCK_CT_DIM>(bfd_pack, tensor_shape);
         }
         PROFILER_SYNC();
     }
     {
-        ZONE_SCOPED("TILE_LOOP")
+        START_PERF_MEASURE("TILE_LOOP")
         // _llk_pack_untilize_ packs one block ct_dim of tiles (one tile row) at a time.
         const std::uint32_t y_stride_external = FULL_CT_DIM * tensor_shape.num_faces_r_dim * tensor_shape.face_r_dim;
 

@@ -19,7 +19,6 @@ from helpers.param_config import (
     generate_unary_input_dimensions,
     input_output_formats,
     parametrize,
-    runtime,
     select_perf_tile_sizes,
 )
 from helpers.perf.core import create_test_or_perf_config
@@ -140,7 +139,7 @@ def generate_pack_untilize_combinations(
                                 dest_acc,
                                 dest_sync,
                                 dimensions,
-                                runtime(tile_dims),
+                                tile_dims,
                             )
                         )
 

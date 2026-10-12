@@ -20,6 +20,7 @@
 #include <optional>
 #include <set>
 #include <string>
+#include <string_view>
 #include <unordered_set>
 #include <utility>
 #include <vector>
@@ -304,6 +305,9 @@ class RunTimeOptions {
     // Quasar interim path: dispatch cores from core descriptor YAML (Tensix grid) instead of soc dispatch-engine tiles.
     bool use_quasar_tensix_dispatch_cores = false;
 
+    std::string noc_att_map_;
+    bool noc_att_specified_ = false;
+
     std::filesystem::path simulator_path = "";
 
     bool fast_dispatch = true;
@@ -410,6 +414,9 @@ class RunTimeOptions {
 
     // Bypass FD CQ payload copies for simulator tensor preloads (TT_METAL_SIMULATOR_DIRECT_TENSOR_WRITES=1)
     bool simulator_direct_tensor_writes = false;
+
+    // Serve simulation devices over sockets, you can disable it with TT_METAL_SIMULATOR_SERVE_OVER_SOCKETS=0.
+    bool simulator_serve_over_sockets = true;
 
     // NOC API version for Quasar
     uint32_t quasar_noc_api_version = 2;
@@ -700,6 +707,12 @@ public:
             compile_hash_str += "_blaze_runtime_reload_";
             compile_hash_str += get_brisc_firmware_header();
         }
+        // Each ATT map gets its own JIT build directory so toggling ATT does not rebuild the non-ATT
+        // tree. Appended only when a map is selected so non-ATT cache keys stay unchanged.
+        if (!noc_att_map_.empty()) {
+            compile_hash_str += "_att:";
+            compile_hash_str += noc_att_map_;
+        }
         return compile_hash_str;
     }
 
@@ -815,6 +828,15 @@ public:
         return runtime_target_device_ == TargetDevice::Simulator || runtime_target_device_ == TargetDevice::Emule;
     }
     const std::filesystem::path& get_simulator_path() const { return simulator_path; }
+    // The qsr.s1 (Grendel) emulation model, recognised by its simulator directory name (emu-qsr-s1-*).
+    bool is_qsr_s1_simulator() const {
+        std::string simulator = simulator_path.string();
+        while (simulator.size() > 1 && simulator.back() == '/') {
+            simulator.pop_back();
+        }
+        return get_simulator_enabled() &&
+               std::filesystem::path(simulator).filename().string().starts_with("emu-qsr-s1");
+    }
 
     bool get_erisc_iram_enabled() const {
         // Disabled when debug tools are enabled due to IRAM size
@@ -826,6 +848,17 @@ public:
 
     // If this fallback is removed, should also remove dispatch_cores entry from core descriptor YAML files.
     bool get_use_quasar_tensix_dispatch_cores() const { return use_quasar_tensix_dispatch_cores; }
+
+    // Quasar ATT map selected for device NoC traffic (TT_METAL_NOC_ATT); nullopt = plain XY addressing.
+    std::optional<std::string_view> get_noc_att_map() const {
+        if (noc_att_map_.empty()) {
+            return std::nullopt;
+        }
+        return std::string_view(noc_att_map_);
+    }
+    // True when TT_METAL_NOC_ATT was set explicitly.
+    bool is_noc_att_specified() const { return noc_att_specified_; }
+    void set_noc_att_map(std::string map) { noc_att_map_ = std::move(map); }
 
     bool get_skip_eth_cores_with_retrain() const { return skip_eth_cores_with_retrain; }
 
@@ -988,6 +1021,9 @@ public:
     void set_dram_backed_cq(bool enable) { dram_backed_cq = enable; }
 
     bool get_simulator_direct_tensor_writes() const { return simulator_direct_tensor_writes; }
+
+    bool get_simulator_serve_over_sockets() const { return simulator_serve_over_sockets; }
+    void set_simulator_serve_over_sockets(bool enable) { simulator_serve_over_sockets = enable; }
 
     uint32_t get_quasar_noc_api_version() const { return quasar_noc_api_version; }
     const std::string& get_quasar_arch_variant() const { return quasar_arch_variant; }

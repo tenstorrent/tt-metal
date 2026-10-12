@@ -86,6 +86,7 @@ private:
     bool idx;
 
 public:
+    // Runtime args: [x0, y0, x1, y1, ...] for each of the compute_cores_per_combine_core cores.
     DoubleBuffer(
         const Noc& noc,
         const uint32_t compute_cores_per_combine_core,
@@ -154,8 +155,6 @@ void kernel_main() {
     constexpr uint32_t dense_token_maps_stride_elm = get_named_compile_time_arg_val("dense_token_maps_stride_elm");
     constexpr uint32_t alignment = get_named_compile_time_arg_val("alignment");
     constexpr uint32_t compute_sync_semaphore_id = get_named_compile_time_arg_val("compute_sync_semaphore_id");
-    constexpr uint32_t compute_cores_per_combine_core =
-        get_named_compile_time_arg_val("compute_cores_per_combine_core");
     constexpr bool double_buffer_source = get_named_compile_time_arg_val("double_buffer_source") == 1;
 
 #ifdef LOCAL_COMBINE
@@ -216,6 +215,10 @@ void kernel_main() {
     Semaphore<> compute_sync_sem(compute_sync_semaphore_id);
 
     const auto compute_sync_semaphore_addr = get_semaphore(compute_sync_semaphore_id);
+
+    // Double-buffered source only: number of compute cores feeding this combine core. It varies per
+    // combine core because a compute core's width slice may straddle combine columns.
+    const uint32_t compute_cores_per_combine_core = double_buffer_source ? get_arg_val<uint32_t>(rt_arg_count++) : 0;
 
     // rt_arg_count is incremented
     detail::DoubleBuffer<double_buffer_source> db(

@@ -16,6 +16,7 @@
 #include <sstream>
 #include <stdexcept>
 #include <string>
+#include <string_view>
 #include <unordered_set>
 #include <enchantum/enchantum.hpp>
 #include <tt_stl/assert.hpp>
@@ -89,6 +90,7 @@ enum class EnvVarID {
     TT_METAL_DISPATCH_DATA_COLLECTION,  // Enable dispatch debug data collection
     TT_METAL_GTEST_ETH_DISPATCH,        // Use Ethernet cores for dispatch in tests
     TT_METAL_TENSIX_DISPATCH_CORES,     // Quasar: force interim Tensix dispatch cores from core descriptor YAML
+    TT_METAL_NOC_ATT,                   // Quasar: NoC address-translation-table map for device traffic
     TT_METAL_SKIP_LOADING_FW,           // Skip firmware loading
     TT_METAL_DISABLE_XIP_DUMP,          // Disable XIP dump
 
@@ -120,6 +122,7 @@ enum class EnvVarID {
     TT_METAL_DISABLE_SFPLOADMACRO,                      // Disable use of SFPLOADMACRO instructions
     TT_METAL_DRAM_BACKED_CQ,                            // Store command queues in device DRAM
     TT_METAL_SIMULATOR_DIRECT_TENSOR_WRITES,            // Simulator tensor preload bypasses FD CQ copies
+    TT_METAL_SIMULATOR_SERVE_OVER_SOCKETS,              // Serve simulated chips over sockets (on by default)
     TT_METAL_QUASAR_NOC_API_VERSION,                    // Quasar NOC API version
     TT_METAL_ENABLE_BLACKHOLE_DRAM_PROGRAMMABLE_CORES,  // Override Blackhole DRAM programmable cores
     TT_METAL_MEASURE_DFB_INIT_TIME,  // Temporary DFB init rdcycle instrumentation (deprecate once device profiler
@@ -724,6 +727,23 @@ void RunTimeOptions::HandleEnvVar(EnvVarID id, const char* value) {
                 "TT_METAL_TENSIX_DISPATCH_CORES=1: using interim Tensix dispatch cores from core descriptor YAML");
             break;
 
+        // TT_METAL_NOC_ATT
+        // Quasar: the NoC address-translation-table (ATT) map device traffic is composed against.
+        // "off", "none" or "0" force plain XY addressing. When unset, XY addressing is used except
+        // that MetalEnvImpl defaults the qsr.s1 emulator model to, grendel_qsr1. Unknown map names
+        // are rejected by the Quasar HAL when the JIT defines are generated.
+        // Default: unset
+        // Usage: export TT_METAL_NOC_ATT=grendel_qsr1
+        case EnvVarID::TT_METAL_NOC_ATT: {
+            this->noc_att_specified_ = true;
+            std::string lowered(value);
+            std::transform(
+                lowered.begin(), lowered.end(), lowered.begin(), [](unsigned char ch) { return std::tolower(ch); });
+            this->noc_att_map_ =
+                (lowered == "off" || lowered == "none" || lowered == "0") ? std::string() : std::string(value);
+            break;
+        }
+
         // TT_METAL_SKIP_LOADING_FW
         // Skip loading firmware during device initialization.
         // Default: false (load firmware)
@@ -928,6 +948,18 @@ void RunTimeOptions::HandleEnvVar(EnvVarID id, const char* value) {
         // Usage: export TT_METAL_SIMULATOR_DIRECT_TENSOR_WRITES=1
         case EnvVarID::TT_METAL_SIMULATOR_DIRECT_TENSOR_WRITES:
             this->simulator_direct_tensor_writes = is_env_enabled(value);
+            break;
+
+        // TT_METAL_SIMULATOR_SERVE_OVER_SOCKETS
+        // Expose each simulated chip over a per-chip socket so a separate process (a debug tool) can
+        // attach to this run as a client. Set to '0' to keep the simulator private to this process.
+        // Default: true (enabled)
+        // Usage: export TT_METAL_SIMULATOR_SERVE_OVER_SOCKETS=0
+        case EnvVarID::TT_METAL_SIMULATOR_SERVE_OVER_SOCKETS:
+            this->simulator_serve_over_sockets = true;
+            if (std::strncmp(value, "0", 1) == 0) {
+                this->simulator_serve_over_sockets = false;
+            }
             break;
 
         // TT_METAL_QUASAR_NOC_API_VERSION
@@ -1145,6 +1177,7 @@ void RunTimeOptions::HandleEnvVar(EnvVarID id, const char* value) {
 
         // TT_METAL_PROFILE_PERF_COUNTERS
         // Bitfield selecting perf counter groups. Only one L1 bank bit may be set per run.
+        // Bits 16-24 select the Quasar l1_client event counter, subport*8 + event (0 = off).
         // Default: 0 (disabled)
         // Usage: export TT_METAL_PROFILE_PERF_COUNTERS=47
         case EnvVarID::TT_METAL_PROFILE_PERF_COUNTERS:

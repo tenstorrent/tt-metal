@@ -24,21 +24,25 @@ void run_kernel(RUNTIME_PARAMETERS params)
 #if defined(RUNTIME_FORMATS) && !defined(SPEED_OF_LIGHT)
     const FormatConfig& formats = params.formats;
 #endif
+#ifndef SPEED_OF_LIGHT
+    const std::uint32_t TEST_FACE_R_DIM = params.TEST_FACE_R_DIM;
+    const std::uint32_t num_faces       = params.num_faces;
+    const Operand& buffer_A             = params.buffer_A;
+    const Operand& buffer_B             = params.buffer_B;
+    const std::uint32_t TILE_CNT        = params.TILE_CNT;
+#endif
     // allocate srcA (order matters: A before B)
-    ckernel::trisc::bfd_alloc_and_program<ckernel::trisc::BfdResource::Unp0>(
-        ckernel::tensor_shape_from_num_faces(params.TEST_FACE_R_DIM, params.num_faces), L1_ADDRESS(params.buffer_A[0]), formats.unpack_A_src);
+    const auto bfd_a = ckernel::trisc::bfd_alloc_and_program<ckernel::trisc::BfdResource::Unp0>(
+        ckernel::tensor_shape_from_num_faces(TEST_FACE_R_DIM, num_faces), L1_ADDRESS(buffer_A[0]), formats.unpack_A_src);
     // allocate srcB
-    ckernel::trisc::bfd_alloc_and_program<ckernel::trisc::BfdResource::Unp1>(
-        ckernel::tensor_shape_from_num_faces(params.TEST_FACE_R_DIM, params.num_faces), L1_ADDRESS(params.buffer_B[0]), formats.unpack_B_src);
+    const auto bfd_b = ckernel::trisc::bfd_alloc_and_program<ckernel::trisc::BfdResource::Unp1>(
+        ckernel::tensor_shape_from_num_faces(TEST_FACE_R_DIM, num_faces), L1_ADDRESS(buffer_B[0]), formats.unpack_B_src);
 
     _llk_unpack_configure_binary_<p_unpacr::UNP_A, p_unpacr::UNP_B>(
         static_cast<DataFormat>(formats.unpack_A_dst), static_cast<DataFormat>(formats.unpack_B_dst));
     _llk_unpack_reduce_init_<POOL_TYPE, REDUCE_DIM>(
-        ckernel::trisc::bfd_current<ckernel::trisc::BfdResource::Unp0>(),
-        ckernel::trisc::bfd_current<ckernel::trisc::BfdResource::Unp1>(),
-        ckernel::DEFAULT_TENSOR_SHAPE,
-        1 /*num_tiles_per_unpack*/); // tiny-tiles not yet supported with reduce
-    for (std::uint32_t i = 0; i < params.TILE_CNT; ++i)
+        bfd_a, bfd_b, ckernel::DEFAULT_TENSOR_SHAPE, 1 /*num_tiles_per_unpack*/); // tiny-tiles not yet supported with reduce
+    for (std::uint32_t i = 0; i < TILE_CNT; ++i)
     {
         _llk_unpack_reduce_(i, 0, ckernel::DEFAULT_TENSOR_SHAPE);
     }
@@ -59,14 +63,17 @@ void run_kernel(RUNTIME_PARAMETERS params)
 #if defined(RUNTIME_FORMATS) && !defined(SPEED_OF_LIGHT)
     const FormatConfig& formats = params.formats;
 #endif
+#ifndef SPEED_OF_LIGHT
+    const std::uint32_t TILE_CNT = params.TILE_CNT;
+#endif
 
     DataFormat src_format = static_cast<DataFormat>(formats.math);
 
-    _llk_math_srcAB_hw_configure_<IMPLIED_MATH_FORMAT, is_fp32_dest_acc_en, false /* int32 dest */>(src_format, src_format);
+    _llk_math_srcAB_hw_configure_<IMPLIED_MATH_FORMAT, is_fp32_dest_acc_en>(src_format, src_format);
     _llk_math_pack_sync_init_<dest_sync>();
     _llk_math_reduce_init_<POOL_TYPE, REDUCE_DIM, is_fp32_dest_acc_en, MATH_FIDELITY>(
         ckernel::DEFAULT_TENSOR_SHAPE); // tiny-tiles not yet supported with reduce
-    for (std::uint32_t i = 0; i < params.TILE_CNT; ++i)
+    for (std::uint32_t i = 0; i < TILE_CNT; ++i)
     {
         _llk_math_wait_for_dest_available_();
         _llk_math_reduce_<POOL_TYPE, REDUCE_DIM>(0 /*dest_idx*/, ckernel::DEFAULT_TENSOR_SHAPE);
@@ -88,13 +95,19 @@ void run_kernel(RUNTIME_PARAMETERS params)
 #if defined(RUNTIME_FORMATS) && !defined(SPEED_OF_LIGHT)
     const FormatConfig& formats = params.formats;
 #endif
-    ckernel::trisc::bfd_alloc_and_program<ckernel::trisc::BfdResource::Pack0>(
-        ckernel::tensor_shape_from_num_faces(params.TEST_FACE_R_DIM, params.num_faces), L1_ADDRESS(params.buffer_Res[0]), formats.pack_dst);
+#ifndef SPEED_OF_LIGHT
+    const std::uint32_t TEST_FACE_R_DIM = params.TEST_FACE_R_DIM;
+    const std::uint32_t num_faces       = params.num_faces;
+    const Operand& buffer_Res           = params.buffer_Res;
+    const std::uint32_t TILE_CNT        = params.TILE_CNT;
+#endif
+    const auto bfd_pack = ckernel::trisc::bfd_alloc_and_program<ckernel::trisc::BfdResource::Pack0>(
+        ckernel::tensor_shape_from_num_faces(TEST_FACE_R_DIM, num_faces), L1_ADDRESS(buffer_Res[0]), formats.pack_dst);
 
     _llk_pack_hw_configure_<p_pacr::PACK0, is_fp32_dest_acc_en>(static_cast<DataFormat>(formats.pack_src), ckernel::ReluConfig::none());
-    _llk_pack_init_(ckernel::trisc::bfd_current<ckernel::trisc::BfdResource::Pack0>(), ckernel::DEFAULT_TENSOR_SHAPE, 1 /*num_tiles_per_pack*/);
+    _llk_pack_init_(bfd_pack, ckernel::DEFAULT_TENSOR_SHAPE, 1 /*num_tiles_per_pack*/);
     _llk_pack_reduce_mask_config_<REDUCE_DIM>(ckernel::DEFAULT_TENSOR_SHAPE);
-    for (std::uint32_t i = 0; i < params.TILE_CNT; ++i)
+    for (std::uint32_t i = 0; i < TILE_CNT; ++i)
     {
         _llk_packer_wait_for_math_done_();
         _llk_pack_(0 /*dest_idx*/, i, ckernel::DEFAULT_TENSOR_SHAPE);
