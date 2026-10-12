@@ -27,6 +27,7 @@ PERF_TEST_SCHEMAS = {
             "formats.register_B",
             "formats.sfpu_dst",
             "formats.sfpu_src",
+            "group_finalize",
             "in0_face_c_dim",
             "in0_face_r_dim",
             "in1_face_c_dim",

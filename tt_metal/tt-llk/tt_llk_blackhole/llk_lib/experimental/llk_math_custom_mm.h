@@ -139,9 +139,18 @@ inline void custom_mm_configure_addrmod(const bool m1_group, const bool m8_group
 
 // At M 1 with more than one output tile the finalize moves all partial rows to SrcB rows 0 to 2 ct_dim - 1 first, so the
 // MOVD2B hold comes once per call; DEST rows above the tile height and those SrcB rows keep partials until the next init
+template <bool group_finalize>
 inline bool custom_mm_m1_group(const std::uint32_t operandB_face_r_dim, const std::uint32_t ct_dim)
 {
-    return operandB_face_r_dim == 1 && ct_dim > 1;
+    return group_finalize && operandB_face_r_dim == 1 && ct_dim > 1;
+}
+
+// The grouped finalize's end-of-call hold delays the next call's weight unpack; only block-float weights unpack fast
+// enough to cover it, so 16-bit and 32-bit weights keep the per-tile finalize
+constexpr bool custom_mm_group_finalize_weights(const DataFormat weights)
+{
+    return weights == DataFormat::Bfp8 || weights == DataFormat::Bfp8_b || weights == DataFormat::Bfp4 || weights == DataFormat::Bfp4_b ||
+           weights == DataFormat::Bfp2 || weights == DataFormat::Bfp2_b;
 }
 
 // custom_mm_reuse_dest_srcb keeps its replay program above the first custom_mm_replay_window entries of the window
@@ -177,14 +186,16 @@ inline void custom_mm_record_m1_finalize()
 
 // At M 8 with 2 to 4 output tiles, the finalize moves the partials of all tiles of the call into SrcB and then adds them,
 // so the MOVD2B hold comes once per call; SrcB holds four tiles' partials, so wider calls keep the per-tile finalize
+template <bool group_finalize>
 inline bool custom_mm_m8_group(const std::uint32_t operandB_face_r_dim, const std::uint32_t ct_dim)
 {
-    return operandB_face_r_dim == 8 && ct_dim > 1 && ct_dim <= 4;
+    return group_finalize && operandB_face_r_dim == 8 && ct_dim > 1 && ct_dim <= 4;
 }
 
+template <bool group_finalize>
 inline std::uint32_t custom_mm_finalize_mode(const std::uint32_t operandB_face_r_dim, const std::uint32_t ct_dim)
 {
-    return custom_mm_m1_group(operandB_face_r_dim, ct_dim) ? 1 : (custom_mm_m8_group(operandB_face_r_dim, ct_dim) ? 2 : 0);
+    return custom_mm_m1_group<group_finalize>(operandB_face_r_dim, ct_dim) ? 1 : (custom_mm_m8_group<group_finalize>(operandB_face_r_dim, ct_dim) ? 2 : 0);
 }
 
 // The finalize program and address modes the last init set up; written and read only under LLK asserts
@@ -200,11 +211,11 @@ inline void custom_mm_m8_moves(const std::uint32_t j, const std::uint32_t tile_r
     TT_MOVD2B(0, 16 * j + 12, j == 1 && pair_step ? ADDR_MOD_4 : ADDR_MOD_7, p_movd2a::MOV_4_ROWS, j * tile_rows + 28);
 }
 
-template <bool split_acc, bool dense_packing>
+template <bool split_acc, bool dense_packing, bool group_finalize>
 inline void custom_mm_configure_mop(const std::uint32_t operandB_face_r_dim, const std::uint32_t ct_dim)
 {
-    const bool m1_group                = custom_mm_m1_group(operandB_face_r_dim, ct_dim);
-    const bool m8_group                = custom_mm_m8_group(operandB_face_r_dim, ct_dim);
+    const bool m1_group                = custom_mm_m1_group<group_finalize>(operandB_face_r_dim, ct_dim);
+    const bool m8_group                = custom_mm_m8_group<group_finalize>(operandB_face_r_dim, ct_dim);
     const std::uint32_t replay_buf_len = m1_group ? custom_mm_m1_replay_len : custom_mm_tile_replay_len(operandB_face_r_dim);
     constexpr std::uint32_t tile_rows  = dense_packing ? 32 : 64;
 
@@ -288,21 +299,23 @@ inline void custom_mm_configure_mop(const std::uint32_t operandB_face_r_dim, con
  * @tparam transpose: Transpose in1 faces during the multiply.
  * @tparam split_acc: Accumulate into split DEST halves that the finalize pass merges.
  * @tparam dense_packing: Lay output tiles 32 DEST rows apart instead of 64.
+ * @tparam group_finalize: Finalize all output tiles of a call in one group at M 1 and at M 8 with 2 to 4 tiles; false
+ *         for 16-bit and 32-bit weights (custom_mm_group_finalize_weights). The call takes the same value.
  * @param operandB_face_r_dim: Face row count of in0 (SrcB), one of {1, 2, 4, 8}.
  * @param ct_dim: Number of output column tiles.
  * @note Establishes the operand-driven default Src zero-substitution state, which @ref _llk_math_custom_mm_ asserts
  *       under LLK asserts. Re-run this init after any math op that leaves the flag at keep (a copy init does).
  * @note On the unpack thread, pair with @ref _llk_unpack_AB_custom_mm_init_.
  */
-template <bool transpose = false, bool split_acc = false, bool dense_packing = false>
+template <bool transpose = false, bool split_acc = false, bool dense_packing = false, bool group_finalize = true>
 inline void _llk_math_custom_mm_init_(const std::uint32_t operandB_face_r_dim, const std::uint32_t ct_dim = 1)
 {
     custom_mm_configure_addrmod<transpose, split_acc, dense_packing>(
-        custom_mm_m1_group(operandB_face_r_dim, ct_dim), custom_mm_m8_group(operandB_face_r_dim, ct_dim));
-    custom_mm_configure_mop<split_acc, dense_packing>(operandB_face_r_dim, ct_dim);
+        custom_mm_m1_group<group_finalize>(operandB_face_r_dim, ct_dim), custom_mm_m8_group<group_finalize>(operandB_face_r_dim, ct_dim));
+    custom_mm_configure_mop<split_acc, dense_packing, group_finalize>(operandB_face_r_dim, ct_dim);
 
     math::reset_counters(p_setrwc::SET_ABD_F);
-    LLK_ASSERT_BLOCK(custom_mm_init_finalize_mode = custom_mm_finalize_mode(operandB_face_r_dim, ct_dim));
+    LLK_ASSERT_BLOCK(custom_mm_init_finalize_mode = custom_mm_finalize_mode<group_finalize>(operandB_face_r_dim, ct_dim));
 
     // A preceding datacopy leaves the Src zero flag at keep; MVMUL needs the operand-driven value.
     math::_configure_default_zero_flag_state_();
@@ -364,6 +377,7 @@ inline void custom_mm_finalize_m8_(const std::uint32_t ct_dim)
  * @brief Run the custom_mm MVMUL MOP over kt_dim k-tiles into DEST.
  *
  * @tparam finalize: Merge the split accumulators at the end; must be false unless the init used split_acc.
+ * @tparam group_finalize: The init's group_finalize.
  * @param operandB_face_r_dim: Face row count of in0 (SrcB), one of {1, 2, 4, 8}.
  * @param dst_index: DEST tile index to write.
  * @param kt_dim: Number of k-tiles to accumulate.
@@ -372,7 +386,7 @@ inline void custom_mm_finalize_m8_(const std::uint32_t ct_dim)
  *       zero flag at keep).
  * @note On the unpack thread, pair with @ref _llk_unpack_AB_custom_mm_.
  */
-template <bool finalize = true>
+template <bool finalize = true, bool group_finalize = true>
 inline void _llk_math_custom_mm_(
     const std::uint32_t operandB_face_r_dim, const std::uint32_t dst_index, const std::uint32_t kt_dim, const std::uint32_t ct_dim = 1)
 {
@@ -393,15 +407,15 @@ inline void _llk_math_custom_mm_(
     if constexpr (finalize)
     {
         LLK_ASSERT(
-            custom_mm_finalize_mode(operandB_face_r_dim, ct_dim) == custom_mm_init_finalize_mode,
+            custom_mm_finalize_mode<group_finalize>(operandB_face_r_dim, ct_dim) == custom_mm_init_finalize_mode,
             "custom_mm: the call's ct_dim selects another finalize than its init recorded");
-        if (custom_mm_m1_group(operandB_face_r_dim, ct_dim))
+        if (custom_mm_m1_group<group_finalize>(operandB_face_r_dim, ct_dim))
         {
             custom_mm_group_finalize_start_(ct_dim);
             custom_mm_finalize_m1_(ct_dim);
             return;
         }
-        if (custom_mm_m8_group(operandB_face_r_dim, ct_dim))
+        if (custom_mm_m8_group<group_finalize>(operandB_face_r_dim, ct_dim))
         {
             custom_mm_group_finalize_start_(ct_dim);
             custom_mm_finalize_m8_(ct_dim);
