@@ -279,3 +279,15 @@ Next: read the breakdown; if a fix is clear, commit it and rerun one VSA arm vs 
   Output /var/tmp/fasth3/t409/out_ab10ring-vsa0.9/run.log. Dense ref: /var/tmp/fasth3/t408/out_t10 (3110 ms/step).
 - Next: grep 'denoise breakdown' and 'Denoising (per step)' in job 996's log; ring e2e should be ~-490 ms/step if the
   per-layer gain carries over. PSNR/PCC of latents and video vs t408/out_t10 (same as cmp449). Then ttp push --own --detach.
+
+## t453 run 1704 (2026-10-12 09:40 PDT)
+- blx01 job 996 (VSA_RING=1, VSA-0.9, seed 0, 10 s) FAILED, exit 143 after 322 s: not a drop, our own watchdog.
+  Log tail: 4-step denoise pass finished (1/4 4.87 s, 4/4 at 00:13, ~3.0 s/step for steps 2-4 at tqdm 1 s
+  resolution; job 990 two-op: 3.10 s/it), then the next `Denoising 0/2` pass printed nothing for 90 s ->
+  "[t409] watchdog: no output and no new cache files for 90 s, ending the arm", T409_EXIT=143.
+  In job 990 (ring off) the same 0/2 pass took 6 s. So vsa_ring_sdpa stalls (hang or very slow first compile)
+  in the pipeline's 2-step pass; the one-layer test (job 995) never hit that shape/pass.
+- No video, so no PSNR/PCC for the ring arm. Two-op numbers stand (job 990: 3099 vs 3110 ms/step, PSNR 19.1 dB,
+  latent PCC 0.812).
+- Next (follow-up task): find which shape the 0/2 pass feeds vsa_ring_sdpa (likely the other rung / padded_len)
+  and reproduce in the one-layer test before another e2e.
