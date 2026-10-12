@@ -71,8 +71,15 @@ ALWI void hardsigmoid_tile_init_pack() { PACK(SFPU_UNARY_INIT_FN(hardsigmoid, sf
 // clang-format on
 ALWI void softsign_tile(uint32_t idst) {
 #ifdef ARCH_BLACKHOLE
-    MATH(SFPU_UNARY_CALL(
-        DST_SYNC_MODE, DST_ACCUM_MODE, calculate_softsign, (APPROX, 32 /*ITERATIONS*/), idst, VectorMode::None));
+    // At 8 iterations the approximate row unrolls and the accurate row stays rolled, so only the accurate form gains.
+    MATH(
+        if constexpr (APPROX) {
+            SFPU_UNARY_CALL(
+                DST_SYNC_MODE, DST_ACCUM_MODE, calculate_softsign, (APPROX, 8 /* ITERATIONS */), idst, VectorMode::RC);
+        } else {
+            SFPU_UNARY_CALL(
+                DST_SYNC_MODE, DST_ACCUM_MODE, calculate_softsign, (APPROX, 32 /*ITERATIONS*/), idst, VectorMode::None);
+        });
 #else
     MATH(SFPU_UNARY_CALL(
         DST_SYNC_MODE, DST_ACCUM_MODE, calculate_softsign, (APPROX, 8 /* ITERATIONS */), idst, VectorMode::RC));
