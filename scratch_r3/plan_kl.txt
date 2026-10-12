@@ -1,0 +1,9 @@
+k1 head test_kl_prof.py,test_mm_decode_prof.py
+k1 kl test_kl_prof.py,test_mm_decode_prof.py
+k1 ctl test_kl_prof.py,test_mm_decode_prof.py
+k1 kl test_kl_prof.py,test_mm_decode_prof.py
+k1 ctl test_kl_prof.py,test_mm_decode_prof.py
+k1 head test_kl_prof.py,test_mm_decode_prof.py
+k1 ctl test_kl_prof.py,test_mm_decode_prof.py
+k1 head test_kl_prof.py,test_mm_decode_prof.py
+k1 kl test_kl_prof.py,test_mm_decode_prof.py
