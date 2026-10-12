@@ -371,38 +371,37 @@ std::vector<T> convert_layout_tile_nfaces_to_row_major(
     TT_FATAL((in_nfaces.size() % (H * W)) == 0, "Input size must be divisible by H and W");
     TT_FATAL((H % tile_H == 0) and (W % tile_W == 0), "H and W must be divisible by {} and {}", tile_H, tile_W);
 
-    auto write_face = [&](std::vector<T>& out_data,
-                          ttsl::Span<const T> in_data,
-                          size_t in_face_start,
-                          size_t out_face_start) {
-        if (!transpose_face) {
-            for (size_t row = 0; row < face_H; row++) {
-                size_t src_idx = in_face_start + (row * face_W);
-                size_t dst_idx = out_face_start + (row * tile_W * tile_cols);
-                TT_FATAL(
-                    dst_idx + face_W <= out_data.size(), "dst_idx: {} out_data.size(): {}", dst_idx, out_data.size());
-                TT_FATAL(src_idx + face_W <= in_data.size(), "src_idx: {} in_data.size(): {}", src_idx, in_data.size());
-                std::memcpy(&out_data[dst_idx], &in_data[src_idx], face_W * sizeof(T));
+    auto write_face =
+        [&](std::vector<T>& out_data, ttsl::Span<const T> in_data, size_t in_face_start, size_t out_face_start) {
+            if (face_H == 0 || face_W == 0) {
+                return;
             }
-        } else {
-            // Stored face is transposed: logical (row, col) lives at col * face_H + row.
-            // Write it back to the logical tensor coordinate. For a square face this matches
-            // reading row-major storage and swapping coordinates on the way out.
-            if (face_H > 0 && face_W > 0) {
-                const size_t src_idx = in_face_start + ((face_W - 1) * face_H) + (face_H - 1);
-                const size_t dst_idx = out_face_start + ((face_H - 1) * tile_W * tile_cols) + (face_W - 1);
-                TT_FATAL(src_idx < in_data.size(), "src_idx: {} in_data.size(): {}", src_idx, in_data.size());
-                TT_FATAL(dst_idx < out_data.size(), "dst_idx: {} out_data.size(): {}", dst_idx, out_data.size());
-            }
-            for (size_t row = 0; row < face_H; row++) {
-                for (size_t col = 0; col < face_W; col++) {
-                    size_t src_idx = in_face_start + (col * face_H) + row;
-                    size_t dst_idx = out_face_start + (row * tile_W * tile_cols) + col;
-                    out_data[dst_idx] = in_data[src_idx];
+            // Both branches touch the same face rectangle: face_H rows of face_W elements.
+            const size_t row_stride = tile_W * tile_cols;
+            const size_t src_end = in_face_start + face_H * face_W;
+            const size_t dst_end = out_face_start + (face_H - 1) * row_stride + face_W;
+            TT_FATAL(src_end <= in_data.size(), "src_idx: {} in_data.size(): {}", in_face_start, in_data.size());
+            TT_FATAL(dst_end <= out_data.size(), "dst_idx: {} out_data.size(): {}", out_face_start, out_data.size());
+
+            if (!transpose_face) {
+                for (size_t row = 0; row < face_H; row++) {
+                    size_t src_idx = in_face_start + (row * face_W);
+                    size_t dst_idx = out_face_start + (row * row_stride);
+                    std::memcpy(&out_data[dst_idx], &in_data[src_idx], face_W * sizeof(T));
+                }
+            } else {
+                // Stored face is transposed: logical (row, col) lives at col * face_H + row.
+                // Write it back to the logical tensor coordinate. For a square face this matches
+                // reading row-major storage and swapping coordinates on the way out.
+                for (size_t row = 0; row < face_H; row++) {
+                    for (size_t col = 0; col < face_W; col++) {
+                        size_t src_idx = in_face_start + (col * face_H) + row;
+                        size_t dst_idx = out_face_start + (row * row_stride) + col;
+                        out_data[dst_idx] = in_data[src_idx];
+                    }
                 }
             }
-        }
-    };
+        };
 
     size_t batch_start = 0;
     for (size_t b = 0; b < B; b++) {

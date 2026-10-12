@@ -688,3 +688,44 @@ TEST(TransposedNonSquareFaces, SwizzledAgreesWithNfaces) {
         EXPECT_EQ(swizzled_from_nfaces, swizzled);
     }
 }
+
+// Direct storage index, not only a round trip. Shape 32x64 with a 16x32 tile has two tile columns,
+// which is where the old transposed untilize origin used face_H instead of tile_W.
+TEST(TransposedNonSquareFaces, TransposedFaceStorageIndex) {
+    constexpr PhysicalSize shape{32, 64};
+    constexpr PhysicalSize tile_shape{16, 32};
+    constexpr PhysicalSize face_shape{8, 16};
+    constexpr bool transpose_within_face = true;
+    constexpr bool transpose_of_faces = true;
+    const auto input = IotaTensor(shape);
+    const auto nfaces = convert_layout<uint32_t>(
+        ttsl::make_const_span(input),
+        shape,
+        TensorLayoutType::LIN_ROW_MAJOR,
+        TensorLayoutType::TILED_NFACES,
+        tile_shape,
+        face_shape,
+        transpose_within_face,
+        transpose_of_faces);
+
+    const uint32_t face_h = face_shape[0];
+    const uint32_t face_w = face_shape[1];
+    const uint32_t tile_hw = tile_shape[0] * tile_shape[1];
+    const uint32_t tile_cols = shape[1] / tile_shape[1];
+    ASSERT_GT(tile_cols, 1u);
+
+    for (uint32_t tile_row = 0; tile_row < shape[0] / tile_shape[0]; ++tile_row) {
+        for (uint32_t tile_col = 0; tile_col < tile_cols; ++tile_col) {
+            const size_t face_base = (static_cast<size_t>(tile_row) * tile_cols + tile_col) * tile_hw;
+            const uint32_t origin_row = tile_row * tile_shape[0];
+            const uint32_t origin_col = tile_col * tile_shape[1];
+            for (uint32_t row = 0; row < face_h; ++row) {
+                for (uint32_t col = 0; col < face_w; ++col) {
+                    EXPECT_EQ(
+                        nfaces[face_base + col * face_h + row],
+                        input[(origin_row + row) * shape[1] + origin_col + col]);
+                }
+            }
+        }
+    }
+}
