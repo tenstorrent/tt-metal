@@ -134,6 +134,10 @@ void run_kernel(RUNTIME_PARAMETERS params)
                 }
             }
         }
+        else if constexpr (PERF_RUN_TYPE == PerfRunType::L1_CONGESTION && perf_mock_mop<PERF_RUN_TYPE>() && !unpack_to_dest) // Wormhole: one MOP stream
+        {
+            _perf_math_loop_clear_valid<true, true, PERF_RUN_TYPE>(num_faces * TILE_CNT * LOOP_FACTOR);
+        }
         else if constexpr (PERF_RUN_TYPE == PerfRunType::L1_CONGESTION)
         {
             for (std::uint32_t loop = 0; loop < LOOP_FACTOR; ++loop)
@@ -141,7 +145,6 @@ void run_kernel(RUNTIME_PARAMETERS params)
                 for (std::uint32_t block_start = 0; block_start < TILE_CNT; block_start += MAX_TILES_DEST)
                 {
                     int block_tiles = std::min(TILE_CNT - block_start, MAX_TILES_DEST);
-
                     for (int block_tile = 0; block_tile < block_tiles; ++block_tile)
                     {
                         if constexpr (unpack_to_dest)
@@ -151,10 +154,7 @@ void run_kernel(RUNTIME_PARAMETERS params)
                         }
                         else
                         {
-                            _perf_math_loop_clear_valid<
-                                /* src A */ true,
-                                /* src B */ true>(
-                                /* iterations*/ num_faces);
+                            _perf_math_loop_clear_valid</* src A */ true, /* src B */ true>(/* iterations*/ num_faces);
                         }
                     }
                 }
