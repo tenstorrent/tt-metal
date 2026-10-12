@@ -288,6 +288,15 @@
 #include "api/compute/binary_bitwise_sfpu.h"
 #endif
 
+#ifdef SFPU_OP_BINARY_SHIFT_INCLUDE
+#include "api/compute/binary_shift.h"
+#endif
+
+#ifdef SFPU_OP_BINARY_LOGADDEXP_INCLUDE
+#include "api/compute/logaddexp.h"
+#include "api/compute/logaddexp2.h"
+#endif
+
 #ifdef SFPU_OP_BINARY_SUB_INT_INCLUDE
 #include "api/compute/sub_int_sfpu.h"
 #endif

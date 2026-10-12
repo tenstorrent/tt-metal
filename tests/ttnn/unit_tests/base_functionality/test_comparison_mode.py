@@ -618,7 +618,8 @@ def test_ema_golden_matches_recurrence():
 
 
 def test_var_hw_and_std_hw_goldens_use_biased_correction():
-    input_tensor = torch.tensor([[[[1.0, 2.0], [3.0, 4.0]]]])
+    # A tile-aligned plane: the device divides by the tile-padded H * W, which equals the logical area only here.
+    input_tensor = torch.tensor([[1.0, 2.0], [3.0, 4.0]]).repeat(16, 16).reshape(1, 1, 32, 32)
 
     var_output = ttnn.get_golden_function(ttnn.var_hw)(input_tensor)
     std_output = ttnn.get_golden_function(ttnn.std_hw)(input_tensor)
@@ -643,8 +644,9 @@ def test_quantize_goldens_support_scalar_and_per_channel_args():
     assert quantized.dtype == torch.int32
     assert torch.equal(quantized, torch.tensor([[4, 6], [8, 10]], dtype=torch.int32))
 
+    # Without dtype, dequantize outputs BFLOAT16.
     dequantized = ttnn.get_golden_function(ttnn.dequantize)(quantized.float(), 0.5, 2.0)
-    torch.testing.assert_close(dequantized, (quantized.float() - 2.0) * 0.5)
+    torch.testing.assert_close(dequantized, ((quantized.float() - 2.0) * 0.5).to(torch.bfloat16))
 
     scale = torch.tensor([0.5, 2.0])
     zero_point = torch.tensor([1.0, 0.0])

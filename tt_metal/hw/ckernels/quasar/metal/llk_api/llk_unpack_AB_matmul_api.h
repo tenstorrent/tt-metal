@@ -59,17 +59,10 @@ __attribute__((always_inline)) inline void llk_unpack_AB_matmul_init(
         !TRANSPOSE_EN || static_cast<DataFormat>(get_operand_src_format(operandB_id)) != DataFormat::MxFp4,
         "matmul SrcA transpose is not supported for 2x-format inputs");
 
-    llk_unpack_program_bfd<ckernel::trisc::BfdResource::Unp1>(operandA_id);
-    llk_unpack_program_bfd<ckernel::trisc::BfdResource::Unp0>(operandB_id);
+    const std::uint8_t bfd_a = llk_unpack_program_bfd<ckernel::trisc::BfdResource::Unp1>(operandA_id);
+    const std::uint8_t bfd_b = llk_unpack_program_bfd<ckernel::trisc::BfdResource::Unp0>(operandB_id);
 
-    _llk_unpack_matmul_init_<TRANSPOSE_EN>(
-        ckernel::trisc::bfd_current<ckernel::trisc::BfdResource::Unp1>(),
-        ckernel::trisc::bfd_current<ckernel::trisc::BfdResource::Unp0>(),
-        ct_dim,
-        rt_dim,
-        kt_dim,
-        src_b_shape,
-        src_a_shape);
+    _llk_unpack_matmul_init_<TRANSPOSE_EN>(bfd_a, bfd_b, ct_dim, rt_dim, kt_dim, src_b_shape, src_a_shape);
 
     // MxFp4 operands feeding matmul are ALWAYS unpacked as the 2x-packed src-register format
     // (MxFp4_2x_B) on Quasar. The generated unpack_dst_format[] table keeps the op-agnostic MX

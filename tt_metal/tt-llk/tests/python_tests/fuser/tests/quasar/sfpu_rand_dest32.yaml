@@ -1,0 +1,68 @@
+# rand -> on-device range test (neg, add1, add1, abs, neg, add1, x >= 0 = 1 iff x in [1, 3]). Every
+# input is outside [1, 3], so an unwritten element or out-of-range draw gives 0; the golden gives 1.
+
+dest_acc: true
+
+operands:
+  - name: "input_A"
+    dims: [32, 32]
+    format: [Float16_b, Float16, Float32]
+    stimuli:
+      include:
+        - [-8.0, -0.01]
+        - [0.01, 0.98]
+        - [3.02, 8.0]
+        - -1.0
+        - 0.0
+        - 0.5
+        - 0.98
+        - 3.02
+  - name: "sfpu_out"
+    dims: [32, 32]
+    format: Float32
+
+operations:
+  - math:
+      - {type: "Fpu", in0: "input_A", operation: "Datacopy", unpacker: "UnpackerA", math_fidelity: "LoFi", unpack_to_dest: false, block_size: [32, 32]}
+      - type: "UnarySfpu"
+        operation: [Rand]
+        approximation_mode: false
+        iterations: 32
+        block_size: [32, 32]
+      - type: "UnarySfpu"
+        operation: [Neg]
+        approximation_mode: false
+        iterations: 32
+        block_size: [32, 32]
+      - type: "UnarySfpu"
+        operation: [Add1]
+        approximation_mode: false
+        iterations: 32
+        block_size: [32, 32]
+      - type: "UnarySfpu"
+        operation: [Add1]
+        approximation_mode: false
+        iterations: 32
+        block_size: [32, 32]
+      - type: "UnarySfpu"
+        operation: [Abs]
+        approximation_mode: false
+        iterations: 32
+        block_size: [32, 32]
+      - type: "UnarySfpu"
+        operation: [Neg]
+        approximation_mode: false
+        iterations: 32
+        block_size: [32, 32]
+      - type: "UnarySfpu"
+        operation: [Add1]
+        approximation_mode: false
+        iterations: 32
+        block_size: [32, 32]
+      - type: "UnarySfpu"
+        operation: [GreaterThanEqualZero]
+        approximation_mode: false
+        iterations: 32
+        block_size: [32, 32]
+    pack:
+      - {output: "sfpu_out", packer: "Packer", block_size: [32, 32]}
