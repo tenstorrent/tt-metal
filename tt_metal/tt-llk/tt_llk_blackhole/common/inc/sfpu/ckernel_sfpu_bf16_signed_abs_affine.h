@@ -1,12 +1,11 @@
 // SPDX-FileCopyrightText: © 2026 Tenstorrent AI ULC
 // SPDX-License-Identifier: Apache-2.0
 #pragma once
-#include <cstdint>
-
-#include "ckernel_sfpu_bf16_sfpi_isa.h"
 
 // Included after polynomial_horner.h and the target's existing LLK headers.
 // Config carries the selected coefficient/terminal words. Callers own traversal.
+#include <cstdint>
+
 namespace sfpi
 {
 template <typename Config>
@@ -43,11 +42,29 @@ inline void signed_abs_affine_init()
     vConstFloatPrgm0 = __builtin_bit_cast(float, Config::kCoefficientBits[6]);
     ckernel::addr_mod_t {.srca = {.incr = 0}, .srcb = {.incr = 0}, .dest = {.incr = 2}}.set(ckernel::ADDR_MOD_6);
     TTI_SFP_STOCH_RND(SFPSTOCHRND_RND_EVEN, 0, 0, ckernel::p_sfpu::LREG0, 13, SFPSTOCHRND_MOD1_FP32_TO_FP16B);
-    ::ckernel::sfpu::bf16_sfpi::sfploadi(ckernel::p_sfpu::LREG0, SFPLOADI_MOD0_UPPER, Config::kMacroSequenceBits >> 16);
-    ::ckernel::sfpu::bf16_sfpi::sfploadi(ckernel::p_sfpu::LREG0, SFPLOADI_MOD0_LOWER, Config::kMacroSequenceBits & 0xffffu);
-    ::ckernel::sfpu::bf16_sfpi::sfpconfig(0, 4, 0);
-    ::ckernel::sfpu::bf16_sfpi::sfpconfig(0x110, 8, 1);
-    ::ckernel::sfpu::bf16_sfpi::sfpnop();
+    TTI_SFPLOADI(ckernel::p_sfpu::LREG0, SFPLOADI_MOD0_UPPER, Config::kMacroSequenceBits >> 16);
+    TTI_SFPLOADI(ckernel::p_sfpu::LREG0, SFPLOADI_MOD0_LOWER, Config::kMacroSequenceBits & 0xffffu);
+    TTI_SFPCONFIG(0, 4, 0);
+    TTI_SFPCONFIG(0x110, 8, 1);
+    TTI_SFPNOP;
+}
+
+template <typename Config, std::uint32_t J>
+inline void signed_abs_affine_pin()
+{
+    if constexpr (signed_abs_affine_addend_reg<Config, J>() == 8u - J)
+    {
+        TTI_SFPLOADI(8u - J, SFPLOADI_MOD0_UPPER, Config::kCoefficientBits[6u - J] >> 16);
+        TTI_SFPLOADI(8u - J, SFPLOADI_MOD0_LOWER, Config::kCoefficientBits[6u - J] & 0xffffu);
+    }
+}
+
+template <typename Config>
+inline void signed_abs_affine_pin_coefficients()
+{
+    signed_abs_affine_pin<Config, 1>();
+    signed_abs_affine_pin<Config, 2>();
+    signed_abs_affine_pin<Config, 3>();
 }
 
 template <typename Config, std::uint32_t J>
@@ -55,31 +72,31 @@ inline void signed_abs_affine_rung()
 {
     if constexpr (J == 0u)
     {
-        ::ckernel::sfpu::bf16_sfpi::sfpxor(0, ckernel::p_sfpu::LREG3, ckernel::p_sfpu::LREG4, 0);
+        TTI_SFPXOR(0, ckernel::p_sfpu::LREG3, ckernel::p_sfpu::LREG4, 0);
     }
     else if constexpr (J == 1u)
     {
-        ::ckernel::sfpu::bf16_sfpi::sfpand(ckernel::p_sfpu::LREG3, ckernel::p_sfpu::LREG4, ckernel::p_sfpu::LREG3, 1);
+        TTI_SFPAND(ckernel::p_sfpu::LREG3, ckernel::p_sfpu::LREG4, ckernel::p_sfpu::LREG3, 1);
     }
     else
     {
-        ::ckernel::sfpu::bf16_sfpi::sfpnop();
+        TTI_SFPNOP;
     }
-    ::ckernel::sfpu::bf16_sfpi::sfpmad(ckernel::p_sfpu::LREG2, ckernel::p_sfpu::LREG1, (signed_abs_affine_addend_reg<Config, J>()), ckernel::p_sfpu::LREG2, 0);
+    TTI_SFPMAD(ckernel::p_sfpu::LREG2, ckernel::p_sfpu::LREG1, (signed_abs_affine_addend_reg<Config, J>()), ckernel::p_sfpu::LREG2, 0);
 }
 
 template <typename Config, std::uint32_t Hold, std::uint32_t Advance>
 inline void signed_abs_affine_body()
 {
     static_assert(signed_abs_affine_replay_contract<Config>());
-    ::ckernel::sfpu::bf16_sfpi::sfpload(ckernel::p_sfpu::LREG4, SFPLOAD_MOD0_FMT_UINT16, Hold, 0);
-    ::ckernel::sfpu::bf16_sfpi::sfpload(ckernel::p_sfpu::LREG0, 0, Hold, 0);
-    ::ckernel::sfpu::bf16_sfpi::sfploadi(ckernel::p_sfpu::LREG3, SFPLOADI_MOD0_UPPER, Config::kBoundBits >> 16);
-    ::ckernel::sfpu::bf16_sfpi::sfpsetsgn(0, ckernel::p_sfpu::LREG0, ckernel::p_sfpu::LREG1, 1);
-    ::ckernel::sfpu::bf16_sfpi::sfploadi(ckernel::p_sfpu::LREG3, SFPLOADI_MOD0_LOWER, Config::kBoundBits & 0xffffu);
-    ::ckernel::sfpu::bf16_sfpi::sfpswap(0, ckernel::p_sfpu::LREG3, ckernel::p_sfpu::LREG1, 1);
-    ::ckernel::sfpu::bf16_sfpi::sfploadi(ckernel::p_sfpu::LREG3, SFPLOADI_MOD0_USHORT, Config::kRawEqualValue);
-    ::ckernel::sfpu::bf16_sfpi::sfpmad(ckernel::p_sfpu::LREG13, ckernel::p_sfpu::LREG1, ckernel::p_sfpu::LREG14, ckernel::p_sfpu::LREG2, 0);
+    TTI_SFPLOAD(ckernel::p_sfpu::LREG4, SFPLOAD_MOD0_FMT_UINT16, Hold, 0);
+    TTI_SFPLOAD(ckernel::p_sfpu::LREG0, 0, Hold, 0);
+    TTI_SFPLOADI(ckernel::p_sfpu::LREG3, SFPLOADI_MOD0_UPPER, Config::kBoundBits >> 16);
+    TTI_SFPSETSGN(0, ckernel::p_sfpu::LREG0, ckernel::p_sfpu::LREG1, 1);
+    TTI_SFPLOADI(ckernel::p_sfpu::LREG3, SFPLOADI_MOD0_LOWER, Config::kBoundBits & 0xffffu);
+    TTI_SFPSWAP(0, ckernel::p_sfpu::LREG3, ckernel::p_sfpu::LREG1, 1);
+    TTI_SFPLOADI(ckernel::p_sfpu::LREG3, SFPLOADI_MOD0_USHORT, Config::kRawEqualValue);
+    TTI_SFPMAD(ckernel::p_sfpu::LREG13, ckernel::p_sfpu::LREG1, ckernel::p_sfpu::LREG14, ckernel::p_sfpu::LREG2, 0);
     signed_abs_affine_rung<Config, 0>();
     signed_abs_affine_rung<Config, 1>();
     signed_abs_affine_rung<Config, 2>();
@@ -87,18 +104,25 @@ inline void signed_abs_affine_body()
     signed_abs_affine_rung<Config, 4>();
     signed_abs_affine_rung<Config, 5>();
     signed_abs_affine_rung<Config, 6>();
-    ::ckernel::sfpu::bf16_sfpi::sfpsetsgn(0, ckernel::p_sfpu::LREG0, ckernel::p_sfpu::LREG1, 1);
-    ::ckernel::sfpu::bf16_sfpi::sfpmad(ckernel::p_sfpu::LREG1, ckernel::p_sfpu::LCONST_1, ckernel::p_sfpu::LCONST_neg1, ckernel::p_sfpu::LREG1, 0);
-    ::ckernel::sfpu::bf16_sfpi::sfpnop();
-    ::ckernel::sfpu::bf16_sfpi::sfpswap(0, ckernel::p_sfpu::LREG1, ckernel::p_sfpu::LREG2, 9);
-    ::ckernel::sfpu::bf16_sfpi::sfpsetsgn(0, ckernel::p_sfpu::LREG2, ckernel::p_sfpu::LREG0, 0);
-    {
-        ::ckernel::sfpu::bf16_sfpi::Region cc_region;
-        ::ckernel::sfpu::bf16_sfpi::sfpsetcc(0, ckernel::p_sfpu::LREG3, 0, SFPSETCC_MOD1_LREG_EQ0, cc_region);
-        ::ckernel::sfpu::bf16_sfpi::sfpsetcc(0, ckernel::p_sfpu::LREG4, 0, SFPSETCC_MOD1_LREG_NE0, cc_region);
-        ::ckernel::sfpu::bf16_sfpi::sfpsetsgn(0, ckernel::p_sfpu::LREG0, ckernel::p_sfpu::LREG0, 1, cc_region);
-        cc_region.close();
-    };
+    TTI_SFPSETSGN(0, ckernel::p_sfpu::LREG0, ckernel::p_sfpu::LREG1, 1);
+    TTI_SFPMAD(ckernel::p_sfpu::LREG1, ckernel::p_sfpu::LCONST_1, ckernel::p_sfpu::LCONST_neg1, ckernel::p_sfpu::LREG1, 0);
+    TTI_SFPNOP;
+    TTI_SFPSWAP(0, ckernel::p_sfpu::LREG1, ckernel::p_sfpu::LREG2, 9);
+    TTI_SFPSETSGN(0, ckernel::p_sfpu::LREG2, ckernel::p_sfpu::LREG0, 0);
+    TTI_SFPSETCC(0, ckernel::p_sfpu::LREG3, 0, SFPSETCC_MOD1_LREG_EQ0);
+    TTI_SFPSETCC(0, ckernel::p_sfpu::LREG4, 0, SFPSETCC_MOD1_LREG_NE0);
+    TTI_SFPSETSGN(0, ckernel::p_sfpu::LREG0, ckernel::p_sfpu::LREG0, 1);
+    TTI_SFPENCC(0, 0, 0, 0);
     TTI_SFPLOADMACRO(2, 0, Advance, 0);
+}
+
+inline void signed_abs_affine_drain()
+{
+    // Preserve the canonical five issued slots before counter/commit changes.
+    TTI_SFPNOP;
+    TTI_SFPNOP;
+    TTI_SFPNOP;
+    TTI_SFPNOP;
+    TTI_SFPNOP;
 }
 } // namespace sfpi
