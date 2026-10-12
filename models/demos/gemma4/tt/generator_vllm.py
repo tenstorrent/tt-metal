@@ -4079,6 +4079,9 @@ class Gemma4DFlashContractForCausalLM(Gemma4DFlashBase):
         # The TT sampler represents at most 32 candidates. Use host sampling
         # for sampled contract requests that ask for a wider top_k.
         "max_device_top_k": 32,
+        # Keep penalty processing on vLLM's per-request host sampling path
+        # when contract verification mixes greedy and sampled rows.
+        "supports_device_penalties": False,
         # TTAsyncDecodeController.plan_decode_reload requires reload_inputs=True
         # when supports_async_decode is False, including after fused output.
         # Keep async decode disabled until the runner tracks fused input residency.

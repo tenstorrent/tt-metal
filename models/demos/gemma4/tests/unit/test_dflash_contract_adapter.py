@@ -63,15 +63,17 @@ def test_declares_the_contract_rail(adapter):
     assert caps["spec_hidden_handoff"] == ("on_device",)
     assert caps["supports_sample_on_device"] is True
     assert caps["max_device_top_k"] == 32
+    assert caps["supports_device_penalties"] is False
     assert caps["supports_chunked_prefill"] is True
     assert caps["supports_async_decode"] is False
     assert caps["supports_async_spec_decode"] is False
 
 
-def test_block_output_adapters_do_not_inherit_contract_top_k_limit(adapter):
+def test_block_output_adapters_do_not_inherit_contract_sampling_limits(adapter):
     for cls in (adapter.Gemma4DFlashForCausalLM, adapter.Gemma4MTPForCausalLM):
         assert cls.model_capabilities["output_tokens_per_step"] > 1
         assert "max_device_top_k" not in cls.model_capabilities
+        assert "supports_device_penalties" not in cls.model_capabilities
 
 
 @pytest.mark.parametrize(
@@ -107,6 +109,31 @@ def test_contract_sampled_top_k_uses_host_when_the_device_cannot_honor_it(adapte
     )
 
     assert TTModelRunner.check_perform_device_sampling(runner, True, False) is device_sampling
+
+
+def test_contract_penalty_request_uses_host_sampler(adapter):
+    from vllm_tt_plugin.input_batch import SamplingInputBatch
+    from vllm_tt_plugin.model_runner import TTModelRunner
+
+    sampling = SamplingInputBatch(1)
+    sampling.temperature[0] = 0.7
+    sampling.top_k[0] = 2
+    runner = SimpleNamespace(
+        sample_on_device_mode="decode_only",
+        num_devices=8,
+        tt_data_parallel_size=1,
+        model=SimpleNamespace(model_capabilities=adapter.Gemma4DFlashContractForCausalLM.model_capabilities),
+        model_config=SimpleNamespace(logits_processors=[]),
+        input_batch=SimpleNamespace(
+            sampling=sampling,
+            req_id_to_index={"request": 0},
+            no_penalties=False,
+            no_allowed_token_ids=True,
+            max_num_logprobs=None,
+        ),
+    )
+
+    assert TTModelRunner.check_perform_device_sampling(runner, True, False) is False
 
 
 @pytest.mark.parametrize("value", ["1", "true"])
