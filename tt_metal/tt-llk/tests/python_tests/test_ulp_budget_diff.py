@@ -190,7 +190,7 @@ def test_a_deleted_row_falling_back_to_an_untouched_one_is_not_a_re_measurement(
     head = _head("{in: Float16_b, metric: tolerance}  # max 393 ULP, block-quantized")
     (change,) = _changes(base, head)
     assert change.kind == "ungated" and not change.remeasured
-    report = render_budget_diff([change], "the-label")
+    report = render_budget_diff([change])
     assert "| **no** |" in report
 
 
@@ -390,24 +390,21 @@ def test_the_near_zero_floor_is_part_of_the_gate(base_row, head_row, kind):
 def test_the_report_shows_the_floor_on_both_sides():
     """Or both columns read "2" and a widened-floor row looks inert."""
     base_row, head_row, _ = _FLOOR_CASES[0]
-    text = render_budget_diff(
-        _changes(_head(base_row), _head(head_row)), "ulp-budget-raise-approved"
-    )
+    text = render_budget_diff(_changes(_head(base_row), _head(head_row)))
     assert "1e-07" in text and "5e-05" in text
 
 
 def test_an_unchanged_table_reports_nothing():
     assert _changes(_BASE, _BASE) == []
-    assert "No budget changed" in render_budget_diff([], "the-label")
+    assert "No budget changed" in render_budget_diff([])
 
 
-def test_the_report_names_the_cell_the_change_and_the_label():
+def test_the_report_names_the_cell_and_the_change():
     head = _head("{in: Float16_b, out: Float16_b, max_ulp: 9}  # max 1 ULP")
-    report = render_budget_diff(_changes(_BASE, head), "ulp-budget-raise-approved")
+    report = render_budget_diff(_changes(_BASE, head))
     assert "loosen a gate" in report
     assert "in: Float16_b, out: Float16_b" in report
     assert "budget raised" in report
-    assert "ulp-budget-raise-approved" in report
     assert "**no**" in report  # not re-measured
 
 
@@ -639,7 +636,7 @@ def test_the_workflow_invokes_the_tool_by_path_not_as_a_module():
     `-m helpers.ulp_budget_diff` would fail there however clean this module's own
     imports are."""
     repo = Path(__file__).resolve().parents[4]
-    workflow = repo / ".github/workflows/llk-sfpu-accuracy.yaml"
+    workflow = repo / ".github/workflows/llk-sfpu-ulp-budget-guard.yaml"
     if not workflow.exists():  # pragma: no cover - the guard ships with the workflow
         pytest.skip("workflow not in this checkout")
     # Comments stripped: the workflow explains in prose why it does *not* use `-m`.
@@ -664,8 +661,9 @@ def test_the_key_dimensions_are_the_registrys():
 def test_both_checks_are_part_of_the_required_pr_gate():
     """A red check in a workflow of its own blocked nothing: no branch rule requires it,
     and a path-filtered check cannot be required. Both count because PR Gate calls them
-    and "PR Gate Status" -- a required check -- fails when either fails. The sweep runs
-    only when an SFPU kernel or the SFPI pin changed."""
+    and "PR Gate Status" -- a required check -- fails when either fails (the guard only
+    on a table that cannot load). The sweep runs only when an SFPU kernel, the SFPI pin,
+    or its own workflow or matrix changed."""
     import yaml
 
     repo = Path(__file__).resolve().parents[4]
@@ -681,17 +679,19 @@ def test_both_checks_are_part_of_the_required_pr_gate():
     ]
     listed = check["with"]["required-jobs"] + "," + check["with"]["optional-jobs"]
     listed = {job.strip() for job in listed.split(",")}
-    for name, mode in (
-        ("llk-sfpu-ulp-budget-guard", "guard"),
-        ("llk-sfpu-ulp-sweep", "sweep"),
-    ):
-        job = jobs[name]
-        assert job["uses"] == "./.github/workflows/llk-sfpu-accuracy.yaml"
-        assert job["with"]["check"] == mode
+    for name in ("llk-sfpu-ulp-budget-guard", "llk-sfpu-ulp-sweep"):
+        assert jobs[name]["uses"] == f"./.github/workflows/{name}.yaml"
         assert name in status["needs"] and name in listed
     assert "llk-sfpu-kernels-changed == 'true'" in jobs["llk-sfpu-ulp-sweep"]["if"]
     outputs = jobs["find-changed-files"]["outputs"]
     assert "llk-sfpu-kernels-changed" in outputs
+    # A change to the sweep's own CI runs it: nothing else would exercise it.
+    scan = (repo / ".github/scripts/utils/find-changed-files.sh").read_text(
+        encoding="utf-8"
+    )
+    scan = scan.split("# --- llk-sfpu-kernels-changed", 1)[1].split("# ---", 1)[0]
+    assert ".github/workflows/llk-sfpu-ulp-sweep.yaml" in scan
+    assert "tests/pipeline_reorg/llk_sfpu_accuracy_tests.yaml" in scan
 
 
 def test_the_sweep_runs_the_sweep_and_the_comparison_and_fails_on_either():
@@ -852,7 +852,7 @@ def test_the_headroom_report_fails_an_overflow_the_row_does_not_account_for():
     assert regressions == 0
 
 
-# ── The command line, which is what the guard blocks on ───────────────────────
+# ── The command line, which is what the guard reports ─────────────────────────
 
 
 def _write(tmp_path, name, text):
@@ -879,12 +879,12 @@ _RAISED = _edited(0, "{in: Float16_b, out: Float16_b, max_ulp: 9}  # max 1 ULP")
             "cannot load",
         ),
     ],
-    ids=["unchanged", "raised", "raised-with-label", "ambiguous-even-with-label"],
+    ids=["unchanged", "raised", "raised-advisory", "ambiguous-even-advisory"],
 )
 def test_diff_exit_status(tmp_path, capsys, head, flags, status, says):
-    """The exit status is the whole of what the guard blocks on. A table the registry
-    refuses is refused under the label too: the label admits a loosened gate, not a
-    table no gate can be read from."""
+    """PR Gate runs the guard with --allow-raises, so its exit status blocks only a table
+    the registry refuses: the flag admits a loosened gate, not a table no gate can be
+    read from."""
     out = tmp_path / "report.md"
     argv = [
         "diff",

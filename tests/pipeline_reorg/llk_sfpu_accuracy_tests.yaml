@@ -1,10 +1,10 @@
 # LLK SFPU accuracy — the exhaustive ULP sweep, held against
 # tt_metal/tt-llk/tests/python_tests/helpers/sfpu_accuracy_budget.yaml.
 #
-# Run by the `sweep` check of .github/workflows/llk-sfpu-accuracy.yaml, which PR Gate
-# calls when a PR changes an SFPU kernel or the SFPI pin; a failure fails the required
-# "PR Gate Status". Every finite bfloat16 and float16 value (and a stride of float32)
-# through every enrolled unary op, per format pair, approximation mode and dest
+# Run by .github/workflows/llk-sfpu-ulp-sweep.yaml, which PR Gate calls when a PR
+# changes an SFPU kernel, the SFPI pin, that workflow or this file; a failure fails the
+# required "PR Gate Status". Every finite bfloat16 and float16 value (and a stride of
+# float32) through every enrolled unary op, per format pair, approximation mode and dest
 # accumulator.
 #
 # Two checks, both run whatever the first returns, and the job fails if either does:
@@ -27,8 +27,8 @@
 # wh_n150_civ2, which this entry shares with llk_smoke_wormhole's 15). pr-gate.yaml's
 # header aims every job at under 5 minutes; like the LLK smoke jobs (10-15 minutes),
 # this one does not meet that aim. It took 9-11 minutes on wh_n150_civ2, checkout and
-# SFPI install included (2026-09/10), and runs only on an SFPU kernel or SFPI pin
-# change. To shorten it, split it with --splits/--group as the Blackhole smoke entries
+# SFPI install included (2026-09/10), and runs only on an SFPU kernel, SFPI pin or
+# sweep CI change. To shorten it, split it with --splits/--group as the Blackhole smoke entries
 # in llk_pr_gate_tests.yaml do; each group then holds an N150 for its share.
 #
 # The merge queue runs it on the same regular N150 pool: wh_n150_civ2 has no

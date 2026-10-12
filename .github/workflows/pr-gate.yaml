@@ -650,16 +650,15 @@ jobs:
         with:
           pytest-markers: "quasar and not perf"
 
-  # LLK SFPU accuracy (llk-sfpu-accuracy.yaml), two checks of
+  # LLK SFPU accuracy, two checks of
   # tt_metal/tt-llk/tests/python_tests/helpers/sfpu_accuracy_budget.yaml. Both skip
   # drafts like the rest: a job that ran there would wake workflow-status, which then
-  # fails on the skipped verify-time-budgets. Each caller grants every scope the file's
-  # jobs declare, skipped ones included, or the call is refused.
+  # fails on the skipped verify-time-budgets.
   #
-  # The guard fails a change that loosens a gate in the table without the override
-  # label. Host-only and seconds long; it ends at once when the table is untouched. In
-  # the merge queue it judges each PR on top of the ones queued ahead of it, so two
-  # changes that each pass cannot loosen a cell between them.
+  # The guard (llk-sfpu-ulp-budget-guard.yaml) is advisory: it reports which cells a
+  # change to the table loosens, for the table's code owners to review, and fails only
+  # on a table that cannot load. Host-only and seconds long; it ends at once when the
+  # table is untouched.
   llk-sfpu-ulp-budget-guard:
     if: >-
       ${{
@@ -669,16 +668,12 @@ jobs:
       }}
     permissions:
       contents: read
-      packages: read
       pull-requests: write
-      issues: read
-      checks: read
-    uses: ./.github/workflows/llk-sfpu-accuracy.yaml
-    with:
-      check: guard
+    uses: ./.github/workflows/llk-sfpu-ulp-budget-guard.yaml
 
-  # The exhaustive ULP sweep on a Wormhole card, only when an SFPU kernel or the SFPI
-  # pin changed (find-changed-files: llk-sfpu-kernels-changed). Fails on a cell past its
+  # The exhaustive ULP sweep on a Wormhole card (llk-sfpu-ulp-sweep.yaml), only when an
+  # SFPU kernel, the SFPI pin, or the sweep's own workflow or matrix changed
+  # (find-changed-files: llk-sfpu-kernels-changed). Fails on a cell past its
   # budget or its recorded measurement, and comments the failing combinations on the PR.
   llk-sfpu-ulp-sweep:
     needs: [resolve-docker-pull-refs, build-docker-images, find-changed-files]
@@ -693,12 +688,9 @@ jobs:
       contents: read
       packages: read
       pull-requests: write
-      issues: read
-      checks: read
-    uses: ./.github/workflows/llk-sfpu-accuracy.yaml
+    uses: ./.github/workflows/llk-sfpu-ulp-sweep.yaml
     secrets: inherit
     with:
-      check: sweep
       docker-image: ${{ needs.resolve-docker-pull-refs.outputs.llk-ci-docker-image }}
 
   # GitHub has so many design limitations it's not even funny.

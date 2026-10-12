@@ -1,0 +1,155 @@
+name: "LLK SFPU ULP sweep"
+
+# Called from PR Gate (pr-gate.yaml) whenever a Wormhole SFPU kernel, the SFPI pin, this
+# workflow or its matrix changes (find-changed-files: llk-sfpu-kernels-changed), so a
+# failure fails the required "PR Gate Status" and blocks the merge. On a Wormhole card:
+# every finite bf16/fp16 value (and a stride of fp32) through every enrolled unary op,
+# held against tt_metal/tt-llk/tests/python_tests/helpers/sfpu_accuracy_budget.yaml. On
+# failure it comments on the PR with each failing (op, in, out, approx, dest_acc) and its
+# measured value.
+#
+# A gated cell over its budget fails in pytest; a tolerance cell past the `max N ULP` or
+# the non-finite lane count its row records fails the `headroom` comparison
+# (helpers/ulp_budget_diff.py). The command is the llk_sfpu_ulp_sweep_wormhole entry of
+# tests/pipeline_reorg/llk_sfpu_accuracy_tests.yaml.
+#
+# It compares the hardware with the PR's own table, so a PR that raised a budget passes
+# it; llk-sfpu-ulp-budget-guard.yaml reports such a raise to the table's reviewers.
+
+on:
+  workflow_call:
+    inputs:
+      docker-image:
+        description: "The LLK Docker image the sweep runs in"
+        required: true
+        type: string
+
+env:
+  LLK_PATH: tt_metal/tt-llk
+
+jobs:
+  load-test-matrix:
+    runs-on: ubuntu-slim
+    permissions:
+      contents: read
+    outputs:
+      matrix: ${{ steps.build-matrix.outputs.matrix }}
+    steps:
+      - name: Checkout the repository
+        uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
+        timeout-minutes: 20
+        with:
+          sparse-checkout: |
+            .github
+            tests/pipeline_reorg
+          sparse-checkout-cone-mode: true
+      - name: Install dependencies
+        run: pip3 install PyYAML
+      - name: Build test matrix
+        id: build-matrix
+        # The checkout's own copy, not @main: a required check must run the code its
+        # change was reviewed with, not a ref that can move under it. It is still
+        # current, since a PR checks out its merge with the base branch and a queue
+        # entry the queue's commit. The event would route the merge queue to a
+        # priority SKU, but wh_n150_civ2 has no `merge_queue_sku` (there is no
+        # priority N150 pool), so the queue runs on the regular N150s, as
+        # llk_smoke_wormhole does.
+        uses: ./.github/actions/prepare-test-matrix
+        with:
+          tests-yaml: ./tests/pipeline_reorg/llk_sfpu_accuracy_tests.yaml
+          enabled-skus: "ALL_SKUS_IN_TESTS"
+          sku-config: ./.github/sku_config.yaml
+          event: ${{ github.event_name }}
+
+  ulp-sweep:
+    needs: load-test-matrix
+    if: ${{ needs.load-test-matrix.outputs.matrix != '[]' }}
+    strategy:
+      fail-fast: false
+      matrix:
+        test-group: ${{ fromJSON(needs.load-test-matrix.outputs.matrix) }}
+    name: ${{ matrix.test-group.name }}
+    runs-on: ${{ matrix.test-group.runs_on }}
+    timeout-minutes: ${{ matrix.test-group.timeout }}
+    permissions:
+      contents: read
+      packages: read
+      pull-requests: write
+    container:
+      image: ${{ inputs.docker-image }}
+      options: "--rm --device /dev/tenstorrent --ulimit nofile=4096:4096"
+    env:
+      REPORT: tt_metal/tt-llk/tests/python_tests/ulp_headroom_report.md
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
+        timeout-minutes: 20
+      - name: Install SFPI
+        shell: bash
+        working-directory: ${{ env.LLK_PATH }}/tests
+        run: ./setup_testing_env.sh
+
+      # The sweep, then the headroom comparison over what it measured. The cmd runs both
+      # whatever the first returns, publishes the report to the job summary, and exits
+      # with either one's failure.
+      - name: Run the ULP sweep and compare it with the table
+        id: sweep
+        shell: bash
+        working-directory: ${{ env.LLK_PATH }}
+        env:
+          CHIP_ARCH: wormhole
+        run: |
+          ${{ matrix.test-group.cmd }}
+
+      # Only on a failure, so a passing PR is not commented on at all; a later passing
+      # run edits the failure comment to say so rather than leaving it stale. Best
+      # effort: a fork PR's token is read-only, and the job's result is the gate.
+      - name: Comment the failures on the pull request
+        if: ${{ !cancelled() && github.event_name == 'pull_request' }}
+        continue-on-error: true
+        uses: actions/github-script@60a0d83039c74a4aee543508d2ffcb1c3799cdea # v7.0.1
+        env:
+          OUTCOME: ${{ steps.sweep.outcome }}
+          RUN_URL: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
+        with:
+          script: |
+            const fs = require('fs');
+            const marker = '<!-- llk-sfpu-ulp-sweep -->';
+            const { owner, repo } = context.repo;
+            const issue_number = context.payload.pull_request.number;
+            const sha = context.payload.pull_request.head.sha.slice(0, 10);
+            const comments = await github.paginate(github.rest.issues.listComments, {
+              owner, repo, issue_number, per_page: 100,
+            });
+            const mine = comments.find(
+              (c) => c.user?.type === 'Bot' && c.body?.includes(marker));
+            let body;
+            if (process.env.OUTCOME === 'success') {
+              if (!mine) return;
+              body = `${marker}\n### SFPU ULP sweep: passes as of ${sha}\n\n` +
+                `The failure reported here earlier no longer reproduces. [Run](${process.env.RUN_URL})\n`;
+            } else {
+              const report = fs.existsSync(process.env.REPORT)
+                ? fs.readFileSync(process.env.REPORT, 'utf8')
+                : 'The sweep stopped before it wrote a report; see the job log.\n';
+              body = `${marker}\n### SFPU ULP sweep: failed on Wormhole at ${sha}\n\n` +
+                'Each row names the failing combination (op, input format, output format, ' +
+                'approximation mode, dest accumulation) and the value it measured. ' +
+                `[Run](${process.env.RUN_URL})\n\n${report}`;
+            }
+            if (mine) {
+              await github.rest.issues.updateComment({ owner, repo, comment_id: mine.id, body });
+            } else {
+              await github.rest.issues.createComment({ owner, repo, issue_number, body });
+            }
+
+      - name: Upload the measurements and the report
+        if: ${{ !cancelled() }}
+        uses: actions/upload-artifact@bbbca2ddaa5d8feaa63e36b76fdaad77386f024f # v7.0.0
+        with:
+          name: ulp-sweep-wormhole
+          path: |
+            ${{ env.LLK_PATH }}/tests/python_tests/ulp_measurements.jsonl
+            ${{ env.LLK_PATH }}/tests/python_tests/ulp_headroom_report.md
+            ${{ env.LLK_PATH }}/tests/python_tests/ulp_sweep_junit.xml
+          if-no-files-found: warn

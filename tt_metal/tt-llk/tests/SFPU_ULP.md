@@ -218,9 +218,9 @@ pytest test_sfpu_accuracy_budget.py test_ulp_sweep.py -q
 
 - **No number is a guess.** The trailing comment on a row is the measurement it came
   from. A budget may only be *raised* by re-measuring and updating that comment in the
-  same change. From #57527, `llk-sfpu-ulp-budget-guard` fails a pull request that raises
-  one without it; the `ulp-budget-raise-approved` label is the override, and it still
-  reports which rows it admitted without a fresh measurement.
+  same change. From #57527, `llk-sfpu-ulp-budget-guard` reports, on the pull request,
+  every cell a change loosens and whether its row was re-measured; it is advisory, and
+  approving a raise is the table's code owners' review.
 - **Most specific key wins.** A row's key fields are `in`, `out`, `approx`, `dest` and
   `arch`, all optional. Two rows matching one variant equally specifically are an
   authoring error, not a tie-break, and the loader refuses them.
@@ -277,7 +277,7 @@ does not fail on them, because such a block is hand-maintained by design.
   between, recompile.
 - **The sweep is marked `accuracy`**, which `llk-e2e` and the other marker-selected LLK
   workflows deselect; PR Gate runs it by path when an SFPU kernel or the SFPI pin
-  changes (`llk-sfpu-accuracy.yaml`, matrix `tests/pipeline_reorg/llk_sfpu_accuracy_tests.yaml`),
+  changes (`llk-sfpu-ulp-sweep.yaml`, matrix `tests/pipeline_reorg/llk_sfpu_accuracy_tests.yaml`),
   and comments any failing combination on the PR. Run it by name or by
   `-m accuracy`. `nightly` would *not* have kept it out of `llk-e2e`.
 - **Both runs take the same op set**: every unary op with a key line in the table,
