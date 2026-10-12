@@ -3,44 +3,45 @@
 // SPDX-License-Identifier: Apache-2.0
 
 // clang-format off
+// DEFINE: %{diagnose} = %{blackhole_tensix_diagnose} %{blackhole_unpack_thread}
 // RUN: %split-file %s %t
-// RUN: not %{blackhole_tensix_diagnose} %{blackhole_unpack_thread} %t/gpr-reserved.cpp 2>&1 | FileCheck %s --check-prefix=GPR_RESERVED
-// RUN: not %{blackhole_tensix_diagnose} %{blackhole_unpack_thread} %t/rdcfg-mmio.cpp 2>&1 | FileCheck %s --check-prefix=RDCFG_ACCESS
-// RUN: not %{blackhole_tensix_diagnose} %{blackhole_unpack_thread} %t/rdcfg-runtime-index.cpp 2>&1 | FileCheck %s --check-prefix=RDCFG_INDEX
-// RUN: not %{blackhole_tensix_diagnose} %{blackhole_unpack_thread} %t/rdcfg-index.cpp 2>&1 | FileCheck %s --check-prefix=RDCFG_RANGE
-// RUN: not %{blackhole_tensix_diagnose} %{blackhole_unpack_thread} %t/rdcfg-thread.cpp 2>&1 | FileCheck %s --check-prefix=RDCFG_THREAD
-// RUN: not %{blackhole_tensix_diagnose} %{blackhole_unpack_thread} %t/rdcfg-wide.cpp 2>&1 | FileCheck %s --check-prefix=RDCFG_WIDE
-// RUN: not %{blackhole_tensix_diagnose} %{blackhole_unpack_thread} %t/rdcfg-word-crossing.cpp 2>&1 | FileCheck %s --check-prefix=RDCFG_CROSS
-// RUN: not %{blackhole_tensix_diagnose} %{blackhole_unpack_thread} %t/rdcfg-section.cpp 2>&1 | FileCheck %s --check-prefix=SECTION
-// RUN: not %{blackhole_tensix_diagnose} %{blackhole_unpack_thread} %t/from-gpr-section.cpp 2>&1 | FileCheck %s --check-prefix=SECTION
-// RUN: not %{blackhole_tensix_diagnose} %{blackhole_unpack_thread} %t/rdcfg-outside.cpp 2>&1 | FileCheck %s --check-prefix=GPR_READ
-// RUN: not %{blackhole_tensix_diagnose} %{blackhole_unpack_thread} %t/write-mmio.cpp 2>&1 | FileCheck %s --check-prefix=GPR_ACCESS
-// RUN: not %{blackhole_tensix_diagnose} %{blackhole_unpack_thread} %t/group-mmio.cpp 2>&1 | FileCheck %s --check-prefix=HETEROGENEOUS
-// RUN: not %{blackhole_tensix_diagnose} %{blackhole_unpack_thread} %t/from-gpr-thread.cpp 2>&1 | FileCheck %s --check-prefix=GPR_STATE
-// RUN: not %{blackhole_tensix_diagnose} %{blackhole_unpack_thread} %t/from-gpr-unaligned-field.cpp 2>&1 | FileCheck %s --check-prefix=GPR_START
-// RUN: not %{blackhole_tensix_diagnose} %{blackhole_unpack_thread} %t/operand-outside.cpp 2>&1 | FileCheck %s --check-prefix=GPR_ADDR
-// RUN: not %{blackhole_tensix_diagnose} %{blackhole_unpack_thread} %t/operand-crossing-Bits128.cpp 2>&1 | FileCheck %s --check-prefix=GPR_SPAN
-// RUN: not %{blackhole_tensix_diagnose} %{blackhole_unpack_thread} %t/anchor-direct-span.cpp 2>&1 | FileCheck %s --check-prefix=ANCHOR_GPR
-// RUN: not %{blackhole_tensix_diagnose} %{blackhole_unpack_thread} %t/wrcfg-misaligned.cpp 2>&1 | FileCheck %s --check-prefix=WRCFG_ALIGN
-// RUN: not %{blackhole_tensix_diagnose} %{blackhole_unpack_thread} %t/wrcfg-index.cpp 2>&1 | FileCheck %s --check-prefix=WRCFG_INDEX
-// RUN: not %{blackhole_tensix_diagnose} %{blackhole_unpack_thread} %t/wrcfg-source-misaligned.cpp 2>&1 | FileCheck %s --check-prefix=WRCFG_SOURCE_ALIGN
-// RUN: not %{blackhole_tensix_diagnose} %{blackhole_unpack_thread} %t/scalar-static.cpp -DCFG_TEST_SIZE=Bits32 2>&1 | FileCheck %s --check-prefix=REG2FLOP_DISABLED
-// RUN: not %{blackhole_tensix_diagnose} %{blackhole_unpack_thread} %t/scalar-static.cpp -DCFG_TEST_SIZE=Bits128 2>&1 | FileCheck %s --check-prefix=REG2FLOP_DISABLED
-// RUN: not %{blackhole_tensix_diagnose} %{blackhole_unpack_thread} %t/scalar-runtime.cpp -DCFG_TEST_SIZE=Bits32 2>&1 | FileCheck %s --check-prefix=REG2FLOP_DISABLED
-// RUN: not %{blackhole_tensix_diagnose} %{blackhole_unpack_thread} %t/scalar-runtime.cpp -DCFG_TEST_SIZE=Bits128 2>&1 | FileCheck %s --check-prefix=REG2FLOP_DISABLED
-// RUN: not %{blackhole_tensix_diagnose} %{blackhole_unpack_thread} %t/scalar-wait.cpp 2>&1 | FileCheck %s --check-prefix=REG2FLOP_DISABLED
-// RUN: not %{blackhole_tensix_diagnose} %{blackhole_unpack_thread} %t/group-scalar.cpp 2>&1 | FileCheck %s --check-prefix=HETEROGENEOUS
-// RUN: not %{blackhole_tensix_diagnose} %{blackhole_unpack_thread} %t/field-overlap.cpp 2>&1 | FileCheck %s --check-prefix=OVERLAP
-// RUN: not %{blackhole_tensix_diagnose} %{blackhole_unpack_thread} %t/gpr-field-overlap.cpp -DCFG_TEST_WORD=0 2>&1 | FileCheck %s --check-prefix=OVERLAP
-// RUN: not %{blackhole_tensix_diagnose} %{blackhole_unpack_thread} %t/gpr-field-overlap.cpp -DCFG_TEST_WORD=1 2>&1 | FileCheck %s --check-prefix=OVERLAP
-// RUN: not %{blackhole_tensix_diagnose} %{blackhole_unpack_thread} %t/gpr-field-overlap.cpp -DCFG_TEST_WORD=2 2>&1 | FileCheck %s --check-prefix=OVERLAP
-// RUN: not %{blackhole_tensix_diagnose} %{blackhole_unpack_thread} %t/gpr-field-overlap.cpp -DCFG_TEST_WORD=3 2>&1 | FileCheck %s --check-prefix=OVERLAP
-// RUN: not %{blackhole_tensix_diagnose} %{blackhole_unpack_thread} %t/gpr-field-overlap.cpp -DCFG_TEST_WORD=0 -DCFG_TEST_REVERSE 2>&1 | FileCheck %s --check-prefix=OVERLAP
-// RUN: not %{blackhole_tensix_diagnose} %{blackhole_unpack_thread} %t/gpr-field-overlap.cpp -DCFG_TEST_WORD=1 -DCFG_TEST_REVERSE 2>&1 | FileCheck %s --check-prefix=OVERLAP
-// RUN: not %{blackhole_tensix_diagnose} %{blackhole_unpack_thread} %t/gpr-field-overlap.cpp -DCFG_TEST_WORD=2 -DCFG_TEST_REVERSE 2>&1 | FileCheck %s --check-prefix=OVERLAP
-// RUN: not %{blackhole_tensix_diagnose} %{blackhole_unpack_thread} %t/gpr-field-overlap.cpp -DCFG_TEST_WORD=3 -DCFG_TEST_REVERSE 2>&1 | FileCheck %s --check-prefix=OVERLAP
-// RUN: not %{blackhole_tensix_diagnose} %{blackhole_unpack_thread} %t/gpr-gpr-overlap.cpp 2>&1 | FileCheck %s --check-prefix=OVERLAP
-// RUN: not %{blackhole_tensix_diagnose} %{blackhole_unpack_thread} %t/gpr-gpr-overlap.cpp -DCFG_TEST_REVERSE 2>&1 | FileCheck %s --check-prefix=OVERLAP
+// RUN: not %{diagnose} %t/gpr-reserved.cpp 2>&1 | FileCheck %s --check-prefix=GPR_RESERVED
+// RUN: not %{diagnose} %t/rdcfg-mmio.cpp 2>&1 | FileCheck %s --check-prefix=RDCFG_ACCESS
+// RUN: not %{diagnose} %t/rdcfg-runtime-index.cpp 2>&1 | FileCheck %s --check-prefix=RDCFG_INDEX
+// RUN: not %{diagnose} %t/rdcfg-index.cpp 2>&1 | FileCheck %s --check-prefix=RDCFG_RANGE
+// RUN: not %{diagnose} %t/rdcfg-thread.cpp 2>&1 | FileCheck %s --check-prefix=RDCFG_THREAD
+// RUN: not %{diagnose} %t/rdcfg-wide.cpp 2>&1 | FileCheck %s --check-prefix=RDCFG_WIDE
+// RUN: not %{diagnose} %t/rdcfg-word-crossing.cpp 2>&1 | FileCheck %s --check-prefix=RDCFG_CROSS
+// RUN: not %{diagnose} %t/rdcfg-section.cpp 2>&1 | FileCheck %s --check-prefix=SECTION
+// RUN: not %{diagnose} %t/from-gpr-section.cpp 2>&1 | FileCheck %s --check-prefix=SECTION
+// RUN: not %{diagnose} %t/rdcfg-outside.cpp 2>&1 | FileCheck %s --check-prefix=GPR_READ
+// RUN: not %{diagnose} %t/write-mmio.cpp 2>&1 | FileCheck %s --check-prefix=GPR_ACCESS
+// RUN: not %{diagnose} %t/group-mmio.cpp 2>&1 | FileCheck %s --check-prefix=HETEROGENEOUS
+// RUN: not %{diagnose} %t/from-gpr-thread.cpp 2>&1 | FileCheck %s --check-prefix=GPR_STATE
+// RUN: not %{diagnose} %t/from-gpr-unaligned-field.cpp 2>&1 | FileCheck %s --check-prefix=GPR_START
+// RUN: not %{diagnose} %t/operand-outside.cpp 2>&1 | FileCheck %s --check-prefix=GPR_ADDR
+// RUN: not %{diagnose} %t/operand-crossing-Bits128.cpp 2>&1 | FileCheck %s --check-prefix=GPR_SPAN
+// RUN: not %{diagnose} %t/anchor-direct-span.cpp 2>&1 | FileCheck %s --check-prefix=ANCHOR_GPR
+// RUN: not %{diagnose} %t/wrcfg-misaligned.cpp 2>&1 | FileCheck %s --check-prefix=WRCFG_ALIGN
+// RUN: not %{diagnose} %t/wrcfg-index.cpp 2>&1 | FileCheck %s --check-prefix=WRCFG_INDEX
+// RUN: not %{diagnose} %t/wrcfg-source-misaligned.cpp 2>&1 | FileCheck %s --check-prefix=WRCFG_SOURCE_ALIGN
+// RUN: not %{diagnose} %t/scalar-static.cpp -DCFG_TEST_SIZE=Bits32 2>&1 | FileCheck %s --check-prefix=REG2FLOP_DISABLED
+// RUN: not %{diagnose} %t/scalar-static.cpp -DCFG_TEST_SIZE=Bits128 2>&1 | FileCheck %s --check-prefix=REG2FLOP_DISABLED
+// RUN: not %{diagnose} %t/scalar-runtime.cpp -DCFG_TEST_SIZE=Bits32 2>&1 | FileCheck %s --check-prefix=REG2FLOP_DISABLED
+// RUN: not %{diagnose} %t/scalar-runtime.cpp -DCFG_TEST_SIZE=Bits128 2>&1 | FileCheck %s --check-prefix=REG2FLOP_DISABLED
+// RUN: not %{diagnose} %t/scalar-wait.cpp 2>&1 | FileCheck %s --check-prefix=REG2FLOP_DISABLED
+// RUN: not %{diagnose} %t/group-scalar.cpp 2>&1 | FileCheck %s --check-prefix=HETEROGENEOUS
+// RUN: not %{diagnose} %t/field-overlap.cpp 2>&1 | FileCheck %s --check-prefix=OVERLAP
+// RUN: not %{diagnose} %t/gpr-field-overlap.cpp -DCFG_TEST_WORD=0 2>&1 | FileCheck %s --check-prefix=OVERLAP
+// RUN: not %{diagnose} %t/gpr-field-overlap.cpp -DCFG_TEST_WORD=1 2>&1 | FileCheck %s --check-prefix=OVERLAP
+// RUN: not %{diagnose} %t/gpr-field-overlap.cpp -DCFG_TEST_WORD=2 2>&1 | FileCheck %s --check-prefix=OVERLAP
+// RUN: not %{diagnose} %t/gpr-field-overlap.cpp -DCFG_TEST_WORD=3 2>&1 | FileCheck %s --check-prefix=OVERLAP
+// RUN: not %{diagnose} %t/gpr-field-overlap.cpp -DCFG_TEST_WORD=0 -DCFG_TEST_REVERSE 2>&1 | FileCheck %s --check-prefix=OVERLAP
+// RUN: not %{diagnose} %t/gpr-field-overlap.cpp -DCFG_TEST_WORD=1 -DCFG_TEST_REVERSE 2>&1 | FileCheck %s --check-prefix=OVERLAP
+// RUN: not %{diagnose} %t/gpr-field-overlap.cpp -DCFG_TEST_WORD=2 -DCFG_TEST_REVERSE 2>&1 | FileCheck %s --check-prefix=OVERLAP
+// RUN: not %{diagnose} %t/gpr-field-overlap.cpp -DCFG_TEST_WORD=3 -DCFG_TEST_REVERSE 2>&1 | FileCheck %s --check-prefix=OVERLAP
+// RUN: not %{diagnose} %t/gpr-gpr-overlap.cpp 2>&1 | FileCheck %s --check-prefix=OVERLAP
+// RUN: not %{diagnose} %t/gpr-gpr-overlap.cpp -DCFG_TEST_REVERSE 2>&1 | FileCheck %s --check-prefix=OVERLAP
 
 // GPR_RESERVED: error: static assertion failed: GPR index is reserved by hal::gpr()
 // RDCFG_ACCESS: error: static assertion failed: RDCFG requires Access::TensixCfgUnit
