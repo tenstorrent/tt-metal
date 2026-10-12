@@ -2,6 +2,7 @@
 # SPDX-License-Identifier: Apache-2.0
 from .op import (
     check_plan,
+    check_ring,
     default_waves,
     matmul_port,
     plan,
@@ -16,6 +17,7 @@ from .op import (
 
 __all__ = [
     "check_plan",
+    "check_ring",
     "default_waves",
     "matmul_port",
     "plan",

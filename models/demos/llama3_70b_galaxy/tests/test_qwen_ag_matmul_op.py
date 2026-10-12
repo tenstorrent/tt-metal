@@ -5,6 +5,8 @@
 _row_ag (all_gather_async along dim 2 over the mesh rows) + ttnn.experimental.minimal_matmul with the model's config.
 
 test_qwen_ag_matmul_plan: host only; every device's block lists cover each gathered row once, equal list lengths.
+test_qwen_ag_matmul_check_ring: host only; the 8-row FABRIC_1D_RING check raises ValueError otherwise.
+test_qwen_ag_matmul_release_on_error: host only; a prefill that raises still frees the fused ops' words.
 test_qwen_ag_matmul: on the 8x4 Galaxy (FABRIC_1D_RING), per kind (QKV: N=1280, FF1: N=3200 with copy_local) and
     sequence length:
     1. matmul_port (the 6x10 matmul with the planned block lists, no fabric) on the stock gathered buffer:
@@ -34,6 +36,7 @@ import ttnn
 from models.demos.llama3_70b_galaxy.tt import qwen_cp_prefill as cp
 from models.demos.llama3_70b_galaxy.tt.custom_ops.qwen_ag_matmul import (
     check_plan,
+    check_ring,
     matmul_port,
     plan,
     plan_v2,
@@ -79,6 +82,53 @@ def test_qwen_ag_matmul_plan():
                         for m in range(m0, m0 + rows):
                             cover[m] += 1
                 assert all(v == 1 for v in cover), (S, r, resident)
+
+
+def test_qwen_ag_matmul_check_ring(monkeypatch, expect_error):
+    """Host only: check_ring passes on 8 rows + FABRIC_1D_RING and raises ValueError on 4 rows or on FABRIC_1D."""
+
+    class _Mesh:
+        def __init__(self, shape):
+            self.shape = shape
+
+    monkeypatch.setattr(ttnn, "get_fabric_config", lambda: ttnn.FabricConfig.FABRIC_1D_RING)
+    check_ring(_Mesh((ROWS, COLS)))
+    with expect_error(ValueError, "mesh rows"):
+        check_ring(_Mesh((COLS, ROWS)))
+    monkeypatch.setattr(ttnn, "get_fabric_config", lambda: ttnn.FabricConfig.FABRIC_1D)
+    with expect_error(ValueError, "FABRIC_1D_RING"):
+        check_ring(_Mesh((ROWS, COLS)))
+
+
+def test_qwen_ag_matmul_release_on_error(monkeypatch, expect_error):
+    """Host only: model_prefill and layer_major_prefill free the fused ops' words when a layer raises."""
+    freed = []
+
+    def boom(*a, **k):
+        raise RuntimeError("layer failed")
+
+    class _H:
+        shape = (1, 1, 32768 // (ROWS * COLS), 1280)
+
+        def deallocate(self, *a):
+            pass
+
+    class _Layer:
+        attention = feed_forward = None
+
+    class _Model:
+        tt_ccl, mesh_device, layers = None, "mesh", [_Layer()]
+
+    monkeypatch.setattr(cp, "get_context", lambda *a: None)
+    monkeypatch.setattr(cp, "entry", lambda *a: _H())
+    monkeypatch.setattr(cp, "gather_layer_weights", lambda *a: None)
+    monkeypatch.setattr(cp, "decoder_prefill", boom)
+    monkeypatch.setattr(cp, "release_fused_ag", freed.append)
+    with expect_error(RuntimeError, "layer failed"):
+        cp.model_prefill(_Model(), _H(), None)
+    with expect_error(RuntimeError, "layer failed"):
+        cp.layer_major_prefill(_Model(), [dict(h=_H(), user_id=0, page_table=None, last_idx=0)], None, None)
+    assert freed == ["mesh", "mesh"]
 
 
 def _host(t):
@@ -198,8 +248,10 @@ def test_qwen_ag_matmul(mesh_device):
             T = S // 32 // 32
             p = plan(T, kd["config"].M_block_size, N, waves, **rk)
             check_plan(p)
+            # the waves each op runs: v2 takes v2_waves(T, resident) when waves is None, v1 and matmul_port take plan()'s
             vw = waves or v2_waves(T, rk["resident"])
             tag = f"{kind} S={S} waves {vw if v2 else p.waves} {rk} v2={int(v2)}"
+            port_tag = f"{kind} S={S} waves {p.waves} {rk} (6x10 port)"
             xs = []
             for rep in range(2):
                 xh = torch.randn(ROWS, COLS, S // 32, K, generator=g).to(torch.bfloat16)
@@ -219,7 +271,7 @@ def test_qwen_ag_matmul(mesh_device):
                 if rep == 0:
                     port = matmul_port(xa, w, waves=waves, out=_zeros(mesh, (1, 1, S // 4, N)), **mm_kw, **rk)
                     eq = sum(torch.equal(a, b) for a, b in zip(_host(port), ref_h))
-                    logger.info(f"QAGMM port {tag}: torch.equal on {eq}/32 devices")
+                    logger.info(f"QAGMM port {port_tag}: torch.equal on {eq}/32 devices")
                     ok &= eq == 32
                     ttnn.deallocate(port)
                 gath = _zeros(mesh, (1, 1, S // 4, K))

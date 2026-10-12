@@ -512,8 +512,8 @@ def fused_ag_enabled(seq_len) -> bool:
     the gather runs on grid column 6 by fabric multicast while the matmul (columns 0-5, W_qkv resident in L1)
     consumes the slots as they land. Bit-identical to _row_ag + minimal_matmul. Used for S >= 32768 (job367, ms per
     pair, stock -> fused: 16k 0.895 -> 1.026, 24k 1.123 -> 1.381, 32k 1.507 -> 1.431, 40k 1.783 -> 1.603); b1 40k
-    1739.0 -> 1727.0 ms (job372), gate digit-identical (job373). QWEN_CP_FUSED_AG=0 keeps the stock pair. The FF1
-    form of the op is slower than the stock pair (lockstep grid), so the MLP keeps it."""
+    1739.0 -> 1727.0 ms (job372), gate digit-identical (job373). QWEN_CP_FUSED_AG=0 keeps the stock pair. The MLP
+    uses the 7x10 form of the op instead (fused_ag_ff1_enabled): this 6x10 form is slower than the FF1 stock pair."""
     return os.environ.get("QWEN_CP_FUSED_AG", "1") == "1" and seq_len >= 32768
 
 
@@ -526,11 +526,14 @@ def fused_ag_ff1_enabled(seq_len) -> bool:
 
 
 def release_fused_ag(mesh_device):
-    """End of a prefill: free the fused ops' L1 semaphore words (see qwen_ag_matmul.release_semaphores)."""
+    """End of a prefill (also on an exception, from the callers' finally): free the fused ops' L1 semaphore words
+    (see qwen_ag_matmul.release_semaphores). Both are freed even if the first release raises."""
     from models.demos.llama3_70b_galaxy.tt.custom_ops.qwen_ag_matmul import release_semaphores, release_semaphores_v2
 
-    release_semaphores(mesh_device)
-    release_semaphores_v2(mesh_device)
+    try:
+        release_semaphores(mesh_device)
+    finally:
+        release_semaphores_v2(mesh_device)
 
 
 def _row_ag(tt_ccl, model_config, t, seq_len):
@@ -836,22 +839,24 @@ def model_prefill(model, x, rot_mats, user_id=0, page_table=None, kv_cache=None)
     output [1, 1, S, 1280] (the same tensor today's prefill forward returns)."""
     S = int(x.shape[-2])
     ctx = get_context(model.tt_ccl, model.mesh_device, S)
-    h = entry(ctx, model.tt_ccl, x)
-    x.deallocate(True)
-    for i, layer in enumerate(model.layers):
-        h = decoder_prefill(
-            ctx,
-            model.tt_ccl,
-            layer,
-            h,
-            rot_mats,
-            user_id,
-            page_table,
-            kv_cache[i] if kv_cache is not None else None,
-        )
-    out = exit_natural(ctx, model.tt_ccl, h)
-    ttnn.deallocate(h)
-    release_fused_ag(model.mesh_device)
+    try:
+        h = entry(ctx, model.tt_ccl, x)
+        x.deallocate(True)
+        for i, layer in enumerate(model.layers):
+            h = decoder_prefill(
+                ctx,
+                model.tt_ccl,
+                layer,
+                h,
+                rot_mats,
+                user_id,
+                page_table,
+                kv_cache[i] if kv_cache is not None else None,
+            )
+        out = exit_natural(ctx, model.tt_ccl, h)
+        ttnn.deallocate(h)
+    finally:
+        release_fused_ag(model.mesh_device)
     return out
 
 
@@ -918,25 +923,27 @@ def layer_major_prefill(model, users, rot_mats, kv_cache):
     S = int(users[0]["h"].shape[-2]) * ROWS * COLS
     ctx = get_context(model.tt_ccl, model.mesh_device, S)
     hs = [u["h"] for u in users]
-    for i, layer in enumerate(model.layers):
-        w = gather_layer_weights(model.tt_ccl, layer.attention, layer.feed_forward)
+    try:
+        for i, layer in enumerate(model.layers):
+            w = gather_layer_weights(model.tt_ccl, layer.attention, layer.feed_forward)
+            for k, u in enumerate(users):
+                hs[k] = decoder_prefill(
+                    ctx,
+                    model.tt_ccl,
+                    layer,
+                    hs[k],
+                    rot_mats,
+                    u["user_id"],
+                    u["page_table"],
+                    kv_cache[i] if kv_cache is not None else None,
+                    w=w,
+                )
+            free_weights(w)
+        windows = []
         for k, u in enumerate(users):
-            hs[k] = decoder_prefill(
-                ctx,
-                model.tt_ccl,
-                layer,
-                hs[k],
-                rot_mats,
-                u["user_id"],
-                u["page_table"],
-                kv_cache[i] if kv_cache is not None else None,
-                w=w,
-            )
-        free_weights(w)
-    windows = []
-    for k, u in enumerate(users):
-        windows.append(exit_last_token(ctx, model.tt_ccl, hs[k], int(u["last_idx"])))
-        ttnn.deallocate(hs[k])
-        u["h"] = None
-    release_fused_ag(model.mesh_device)
+            windows.append(exit_last_token(ctx, model.tt_ccl, hs[k], int(u["last_idx"])))
+            ttnn.deallocate(hs[k])
+            u["h"] = None
+    finally:
+        release_fused_ag(model.mesh_device)
     return windows

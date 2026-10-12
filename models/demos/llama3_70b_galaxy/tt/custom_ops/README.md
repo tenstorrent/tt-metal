@@ -278,8 +278,12 @@ extra compile-time defines to the kernels (measurement knobs listed in `cp_step.
 
 Replaces `_row_ag` (all_gather_async along dim 2 over the mesh rows, FABRIC_1D_RING) + the QKV
 `minimal_matmul` of `qwen_cp_prefill.attention_prefill` with one `ttnn.generic_op` program per device
-(`QWEN_CP_FUSED_AG=1`, S >= 32768; default off). The fabric connections come from
-`ttnn.setup_fabric_connection` on the program descriptor, so no C++ op is needed.
+(on by default for S >= 32768; `QWEN_CP_FUSED_AG=0` keeps the stock pair). The FF1 pair of
+`mlp_prefill` uses `qwen_ag_matmul_v2` below (on by default for S >= 32768; `QWEN_CP_FUSED_AG_FF1=0`
+keeps the stock pair). The fabric connections come from `ttnn.setup_fabric_connection` on the program
+descriptor, so no C++ op is needed. Both ops need the 8 mesh rows as one FABRIC_1D_RING (`check_ring`
+raises `ValueError` otherwise). The semaphore words are freed at the end of every prefill, also when
+it raises (`release_fused_ag` in a `finally`).
 
 `qwen_ag_matmul(x_local, w, *, config, compute_kernel_config, dtype, copy_local=False) -> (out, gathered)`:
 `x_local` [1, 1, S/32, 5120] bf8 (this row's slot), `w` [1, 1, 5120, N] (N = 10 * N_block). `gathered`

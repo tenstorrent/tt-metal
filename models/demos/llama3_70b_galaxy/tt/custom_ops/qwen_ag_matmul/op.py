@@ -61,7 +61,10 @@ CB_IN0, CB_IN1, CB_OUT, CB_INTERM = 0, 1, 2, 3
 CB_STAGE_F, CB_STAGE_B, CB_HDR_F, CB_HDR_B = 8, 9, 10, 11
 
 _DESCRIPTOR_CACHE: dict = {}
-_DESCRIPTOR_CACHE_MAX = 256
+# One key per (op, bucket, layer): the key holds the weight address, so every layer is its own entry. 4 prefill
+# buckets (16k / 24k / 32k / 40k) x 64 layers x 2 ops (QKV v1, FF1 v2) = 512, x 2 for a second set of activation
+# addresses (b1 and b32 allocate differently). Hitting the cap clears the cache (host rebuild cost only).
+_DESCRIPTOR_CACHE_MAX = 4 * 64 * 2 * 2
 _SEMS: dict = {}
 
 
@@ -522,6 +525,17 @@ def _fabric_kernels(mesh, xl, g, p: Plan, r, K_tiles, copy_local, gs: _GlobalSem
     return kernels, cbs, sems, snd
 
 
+def check_ring(mesh):
+    """The ops gather over the 8 mesh rows as one ring (neighbours (r +- 1) % 8, wrap 7 -> 0 included) and build
+    1D fabric packet headers (HDR = 64 B stride): they need 8 mesh rows and FABRIC_1D_RING."""
+    rows = int(list(mesh.shape)[0])
+    if rows != ROWS_RING:
+        raise ValueError(f"mesh rows {rows} != {ROWS_RING}")
+    fabric = ttnn.get_fabric_config()
+    if fabric != ttnn.FabricConfig.FABRIC_1D_RING:
+        raise ValueError(f"fabric config {fabric}, need FABRIC_1D_RING")
+
+
 def _check_inputs(name, t, dtypes=(ttnn.bfloat8_b, ttnn.bfloat16)):
     if t.layout != ttnn.TILE_LAYOUT or t.memory_config() != ttnn.DRAM_MEMORY_CONFIG or t.dtype not in dtypes:
         raise ValueError(f"{name} must be TILE DRAM interleaved {dtypes}, got {t.layout} {t.memory_config()} {t.dtype}")
@@ -611,9 +625,8 @@ def qwen_ag_matmul(
     _check_inputs("w", w)
     cfg = MMConfig.of(config)
     mesh = x_local.device()
+    check_ring(mesh)
     rows, cols = list(mesh.shape)
-    if rows != ROWS_RING:
-        raise ValueError(f"mesh rows {rows} != {ROWS_RING}")
     S32, K = int(x_local.shape[-2]), int(x_local.shape[-1])
     if S32 % TILE or K != int(w.shape[-2]):
         raise ValueError(f"x_local {tuple(x_local.shape)} vs w {tuple(w.shape)}")
@@ -887,8 +900,11 @@ def qwen_ag_matmul_v2(
     _check_inputs("w", w)
     cfg = MMConfig.of(config)
     mesh = x_local.device()
+    check_ring(mesh)
     rows, cols = list(mesh.shape)
     S32, K = int(x_local.shape[-2]), int(x_local.shape[-1])
+    if S32 % TILE or K != int(w.shape[-2]):
+        raise ValueError(f"x_local {tuple(x_local.shape)} vs w {tuple(w.shape)}")
     T = S32 // TILE
     N = int(w.shape[-1])
     if resident is None:
