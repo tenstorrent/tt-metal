@@ -134,3 +134,25 @@ down). Also the VSA path has not yet passed its device PCC test (#449, blx01).
 Next (when exabox is up): exabox setup under ~/fasth3 (build t409 head, DiT weights, Turbo v1.0 + SLA LoRA, text
 encoder), then per seed 0-4 one sbatch job per A/B pair: (v1.0 dense, v1.0 + VSA 0.9) and (v1.0 dense, Turbo-SLA + sla
 0.85); 768p 10 s, per-step time, PSNR vs v1.0 dense, VBench subset, one still per seed. Template: run409b.sh.
+
+## t417 run 1684 (2026-10-12 08:40 PDT)
+- Exabox probe passed once, then exabox-login timed out again (banner exchange via 127.0.0.1:22788) on 3 tries:
+  tunnel flapping. No exabox state exists yet (~/fasth3 absent on the login node; t160 used /data/smarton/fasth3).
+- #449's VSA attention PCC test passed on blx01 (job 974, T449A_DONE 0): the VSA path works on device.
+- SLA LoRA header check (HTTP range reads, no download): minimax_h3_fl2v_turbo_4step_v0.1_768p_sla_bf16 has the
+  same 624 keys and shapes as v1.0_768p_bf16, alpha 128, key_format minimax-h3-diffusers -> drop-in for the fuse path.
+  It has no SLA linear-branch (proj_l) weights: inference is block-sparse only, as LightX2V runs it.
+- LightX2V's published SLA config (configs/minimax_h3/dmd/minimax_h3_fp8_4step_5090_vae_fp8_sla.json) equals the
+  v1.0 config except attn_type=dynamic_sparse_attn {sparsity 0.85, operator sage2} and the LoRA path
+  (video_flow_shift 6, audio_flow_shift 3, training_euler, 4 steps, 768x1344, 362 frames in both).
+- dynamic_sparse_attn.py: sage2 uses BLKQ,BLKK = 64,128 on sm90 and 128,64 otherwise (5090 = sm120 -> 128-row Q
+  blocks, 64-row K blocks); triton operator 64/64. Code ff705742990: SLA pools Q over 128-row blocks by default
+  (MINIMAX_H3_SLA_BLKQ=64 for 64/64); build_sla_geometry(q_block_tiles=2) keeps blocks inside one shard.
+  Host tests: test_sla_selection 25 passed (oracle with BLKQ 64 and 128), test_vsa_geometry+oracle 24 passed.
+- Exabox setup cost (from t160/t288 notes): FastH3 needs MiniMax-H3 raw 135 GB + converted DiT cache ~152 GB + JIT
+  ~17 GB + build; /data had ~100 GB free on 10-07; the tunnel moved ~3.4 MB/s (~11 h per 135 GB). Exabox is only
+  practical if /data has >= ~320 GB free AND the login node can pull MiniMaxAI/MiniMax-H3 from HF directly.
+  blx01 already has the build (/var/tmp/fasth3/t409/b), weights and caches.
+Next (tunnel up): `ssh exabox-login 'df -h /data; curl -sI https://huggingface.co/api/models/MiniMaxAI/MiniMax-H3 | head -1'`.
+  Both OK -> stage under /data/smarton/fasth3/t417 (blob:none clone + bundle of ttp/t409 head, HF download with nice/ionice),
+  build job (sbatch, no device), conversion/JIT fill jobs, then the A/B pairs. Otherwise report: run step 3 on blx01.
