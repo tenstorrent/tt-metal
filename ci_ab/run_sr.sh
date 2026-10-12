@@ -32,6 +32,8 @@ mkslot() {  # mkslot <name> [overlay dir]
 env_for() { if [[ ${ASSERTS:-0} == 1 ]]; then echo "-u TT_LLK_DISABLE_ASSERTS"; else echo "TT_LLK_DISABLE_ASSERTS=1"; fi; }
 build() {  # build <slot> <hdr> <build> <ids> [pytest args]; ASSERTS=1 in the environment for asserts on
   local slot=$1 h=$2 b=$3 ids=$4; shift 4; local D=$SL/$slot
+  # tempfile ignores a TMPDIR that does not exist (every build would land in /tmp/tt-llk-build)
+  mkdir -p $SL/builds/$b
   cp $S/hdr/$h.h $D/$HDR || { echo "== no header $h"; return 1; }
   ( cd $D/tt_metal/tt-llk/tests/python_tests; mapfile -t N < $S/ids/$ids.txt
     env -u RUNNER_TEMP $(env_for) CHIP_ARCH=blackhole LLK_HOME=$D/tt_metal/tt-llk TMPDIR=$SL/builds/$b LLK_PERF_L1_MUX_GROUP=0 ${RTS:+LLK_PERF_RUN_TYPES=$RTS} \
@@ -42,6 +44,7 @@ build() {  # build <slot> <hdr> <build> <ids> [pytest args]; ASSERTS=1 in the en
 }
 run() {  # run <slot> <build> <ids> <tag> [pytest args]; RTS, ASSERTS and EXTRA (K=V ...) from the environment
   local slot=$1 b=$2 ids=$3 tag=$4; shift 4; local D=$SL/$slot log=$SL/out/run_$tag.log
+  [[ -d $SL/builds/$b/tt-llk-build ]] || { echo "== no build dir for $b, stopping"; STOP=1; return 1; }
   ( cd $D/tt_metal/tt-llk/tests/python_tests; mapfile -t N < $S/ids/$ids.txt
     env -u RUNNER_TEMP $(env_for) ${EXTRA:-} CHIP_ARCH=blackhole LLK_HOME=$D/tt_metal/tt-llk TMPDIR=$SL/builds/$b LLK_PERF_L1_MUX_GROUP=0 ${RTS:+LLK_PERF_RUN_TYPES=$RTS} \
       PERF_RUN_TAG=$tag PERF_KEEP_RUNS=4000 timeout -s INT -k 60 900 $PY -m pytest --compile-consumer -p no:cacheprovider \
@@ -93,6 +96,41 @@ elif [[ $JOB == j2 ]]; then
     ( export HWLOCK_HELD=ci TT_METAL_CACHE=$SL/ttcache; mkdir -p $TT_METAL_CACHE; cd $R
       timeout -s INT -k 60 1200 python3 $S/tools/ident.py $SL/out/ident_c.pt > $SL/out/ident_c.log 2>&1; echo "   ident rc=$? $(grep -a '^IDENT ' $SL/out/ident_c.log)" )
     grep -a -m5 -E "Error|Traceback" $SL/out/ident_c.log
+  fi
+elif [[ $JOB == j3 ]]; then
+  # The final head f (gate, paired float column groups, six-cycle pacing of the Int32 column SUM): its sweep against
+  # main with an A/A pair, the Int32 pipeline and production shadows against main and the previous head, the combined
+  # slot with #58819, the four reduce modules with LLK asserts on, the float column bits, ttnn ident.py on the checkout.
+  mkslot dc $S/dc
+  build slot main ra_m b_m; build slot main ra_ma b_s; build slot head ra_h b_h; build slot f ra_f b_h
+  build dc main dc_m b_s; build dc main dc_ma b_s; build dc f dc_f b_s
+  ASSERTS=1 RTS=L1_TO_L1,MATH_ISOLATE build slot f fn_f fn
+  ASSERTS=1 RTS=L1_TO_L1,MATH_ISOLATE build slot f fnd_f fnd --disable-sfploadmacro
+  ASSERTS=1 RTS=L1_TO_L1,MATH_ISOLATE build slot main fb_m fbits
+  ASSERTS=1 RTS=L1_TO_L1,MATH_ISOLATE build slot f fb_f fbits
+  for v in m h f; do
+    if [[ $v == m ]]; then cat $S/ids/i32cs.txt $S/ids/prod_mlir.txt $S/ids/prod_m.txt > $S/ids/_q_$v.txt; else cat $S/ids/i32cs.txt $S/ids/prod_mlir.txt $S/ids/prod_h.txt > $S/ids/_q_$v.txt; fi
+  done
+  echo "== Q: Int32 column SUM pipeline and production shadows $(date -u +%T)"; n=0
+  q() { n=$((n+1)); [[ $STOP == 1 ]] && return; RTS=L1_TO_L1,MATH_ISOLATE run slot ra_$1 _q_$1 q3_$1_$n; }
+  for blk in 1 2; do q m; q h; q f; q f; q h; q m; done
+  echo "== C: sweep with SDPA, f against main, A/A pair $(date -u +%T)"; n=0
+  c() { n=$((n+1)); [[ $STOP == 1 ]] && return; run slot ra_$1 b_s c3_$1_$n; }
+  for blk in 1 2; do c m; c ma; c f; c f; c ma; c m; done
+  echo "== D: combined with #58819 $(date -u +%T)"; n=0
+  d() { n=$((n+1)); [[ $STOP == 1 ]] && return; run dc dc_$1 b_s d3_$1_$n; }
+  for blk in 1 2; do d m; d ma; d f; d f; d ma; d m; done
+  echo "== E: functional and bits $(date -u +%T)"
+  [[ $STOP == 0 ]] && ASSERTS=1 RTS=L1_TO_L1,MATH_ISOLATE run slot fn_f fn fn_f_1
+  [[ $STOP == 0 ]] && ASSERTS=1 RTS=L1_TO_L1,MATH_ISOLATE run slot fnd_f fnd fnd_f_1 --disable-sfploadmacro
+  [[ $STOP == 0 ]] && ASSERTS=1 RTS=L1_TO_L1,MATH_ISOLATE EXTRA="FCOL_OUT=$SL/out/fcol_m" run slot fb_m fbits fb_m_1
+  [[ $STOP == 0 ]] && ASSERTS=1 RTS=L1_TO_L1,MATH_ISOLATE EXTRA="FCOL_OUT=$SL/out/fcol_f" run slot fb_f fbits fb_f_1
+  $PY $S/tools/fcol_cmp.py $SL/out/fcol_m $SL/out/fcol_f | tee $SL/out/fcol_cmp.txt
+  if [[ $STOP == 0 ]]; then
+    echo "== F: ttnn ident.py on the checkout (the final head), fresh JIT cache $(date -u +%T)"
+    ( export HWLOCK_HELD=ci TT_METAL_CACHE=$SL/ttcache; mkdir -p $TT_METAL_CACHE; cd $R
+      timeout -s INT -k 60 1500 python3 $S/tools/ident.py $SL/out/ident_f.pt > $SL/out/ident_f.log 2>&1; echo "   ident rc=$? $(grep -a '^IDENT ' $SL/out/ident_f.log)" )
+    grep -a -m5 -E "Error|Traceback" $SL/out/ident_f.log
   fi
 fi
 for b in $(ls $SL/builds); do
