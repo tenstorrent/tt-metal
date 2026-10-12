@@ -2317,3 +2317,19 @@
   owner_id: U03PUAKE719 # Miguel Tairum Cruz (external bring-up by ign-rahultp)
   team: models
   budget_type: unit
+
+# CI only for #59650 (VoxCPM2), not for merge: the PR's host contract tests; the device PCC test skips
+# because the CUDA captures and checkpoint are not available on CI.
+- name: "VoxCPM2 host tests (CI mirror of #59650)"
+  cmd: >-
+    python -m compileall -q models/experimental/voxcpm2 &&
+    python -m unittest discover -s models/experimental/voxcpm2/tests -p 'test_*.py' -v
+  model: voxcpm2
+  model_family: VoxCPM2
+  skus:
+    bh_p150:
+      timeout: 5
+      tier: 3
+  owner_id: U03PUAKE719 # Miguel Tairum Cruz (CI mirror of #59650)
+  team: models
+  budget_type: unit
