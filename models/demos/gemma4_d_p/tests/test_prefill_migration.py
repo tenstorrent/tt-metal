@@ -106,7 +106,6 @@ def migration_environment(request, tmp_path):
         PREFILL_H2D_SERVICE_ID=f"gemma4_migration_{gate}_{os.getpid()}",
         PREFILL_MIGRATION_TABLE_PATH=str(tmp_path / "table.pb"),
         PREFILL_MIGRATION_DEVICE_MAP_PATH=str(output_dir / "device_map.json"),
-        PREFILL_MOCK_MIGRATION="1" if gate == "mock" else "0",
         PREFILL_ENABLE_MIGRATION="1" if gate == "loopback" else "0",
         PREFILL_MIGRATION_EXPORT_TO_FILE="0",
         PREFILL_MIGRATION_ATTACH_WAIT_S="120",
