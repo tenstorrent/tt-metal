@@ -22,6 +22,7 @@ from models.experimental.bevformer.tests.common import (
     BEV_SHAPES,
     assert_channels_close,
     assert_pcc,
+    assert_topk_close,
     build_reference_bevformer,
     center_channels,
     frame_metas,
@@ -69,11 +70,12 @@ def test_bevformer(device, reset_seeds):
     for i, metas in enumerate(frames):
         cls_scores, bbox_preds, torch_prev = torch_model(img, metas, prev_bev=torch_prev)
         frame = tt_model.prepare_frame(metas, frame)
-        tt_cls_scores, tt_bbox_preds, tt_prev = tt_model(tt_img, frame, prev_bev=tt_prev)
+        tt_outputs = tt_model(tt_img, frame, prev_bev=tt_prev)
+        *_, tt_prev = tt_outputs
+        tt_detections = tt_model.detect(*tt_outputs[:2])
 
         tt_bev = ttnn.to_torch(tt_prev).float().reshape(torch_prev.shape)
-        tt_cls_scores = ttnn.to_torch(tt_cls_scores).float()
-        tt_bbox_preds = ttnn.to_torch(tt_bbox_preds).float()
+        tt_cls_scores, tt_bbox_preds = (ttnn.to_torch(t).float() for t in tt_outputs[:2])
         for name, tensor in (("BEV", tt_bev), ("class logits", tt_cls_scores), ("boxes", tt_bbox_preds)):
             # comp_pcc zeroes NaN and Inf before correlating, so they must be ruled out here.
             assert torch.isfinite(tensor).all(), f"frame {i}: non-finite values in the {name}"
@@ -84,3 +86,23 @@ def test_bevformer(device, reset_seeds):
         # The last decoder layer's, which the coder reads.
         assert_pcc(cls_scores[-1], tt_cls_scores[-1], PCC_THRESHOLD)
         assert_channels_close(bbox_preds[-1], tt_bbox_preds[-1], PCC_THRESHOLD)
+
+        # The 3D boxes: the detections on device against the reference's, then the host compaction.
+        scores, labels, query_index, boxes, valid = tt_detections
+        tt_topk_host = tuple(ttnn.to_torch(t) for t in (scores, labels, query_index, boxes))
+        assert_topk_close(
+            cls_scores[-1],
+            bbox_preds[-1],
+            tt_cls_scores[-1],
+            tt_bbox_preds[-1],
+            tt_topk_host,
+            PCC_THRESHOLD,
+            bottom_center=True,
+        )
+        for (tt_boxes, _, _), (ref_boxes, _, _) in zip(
+            tt_model.get_bboxes(scores, labels, boxes, valid),
+            torch_model.get_bboxes(cls_scores, bbox_preds),
+            strict=True,
+        ):
+            assert tt_boxes.shape[-1] == ref_boxes.shape[-1] and torch.isfinite(tt_boxes).all()
+            logger.info(f"3D boxes in range: {len(tt_boxes)} on device, {len(ref_boxes)} in the reference")

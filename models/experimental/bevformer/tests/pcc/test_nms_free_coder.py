@@ -112,7 +112,7 @@ def test_nms_free_coder(device, reset_seeds, logits, batch_size, score_threshold
         assert_boxes_close(boxes, tt_boxes[i].float())
 
     expected = reference.decode(cls_scores, bbox_preds)
-    # The first decode compiles the validity mask; a second one must only hit the program cache.
+    # The first decode compiles the range test; a second one must only hit the program cache.
     tt_coder.decode(tt_cls_scores, tt_bbox_preds)
     num_programs = device.num_program_cache_entries()
     actual = tt_coder.decode(tt_cls_scores, tt_bbox_preds)

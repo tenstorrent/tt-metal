@@ -7,11 +7,9 @@ import torch
 from loguru import logger
 
 import ttnn
-from models.experimental.bevformer.model_config import NUM_CLASSES
-from models.experimental.bevformer.reference.nms_free_coder import NMSFreeCoder, denormalize_bbox
 from models.experimental.bevformer.tests.common import (
     BEV_SHAPES,
-    assert_boxes_close,
+    assert_topk_close,
     assert_channels_close,
     assert_pcc,
     build_reference_head,
@@ -101,40 +99,13 @@ def test_head(device, reset_seeds, name, bev_shape, batch_size, traced):
 @torch.no_grad()
 @pytest.mark.parametrize("device_params", DEVICE_PARAMS, indirect=True)
 def test_head_detections(device, reset_seeds):
-    """The coder on the head's own outputs: the pairs it selects must lie within twice the
-    score error of the reference head's top-k, and the scores and boxes it returns must be the
-    reference head's at the same (query, class) pairs.
-
-    The head's logits differ from the reference's slightly, so near-equal scores may rank in
-    a different order and the two top-k sets differ at their tail; the overlap is logged.
-    """
+    """The coder's top-k on the head's own outputs, against the reference head's (``assert_topk_close``)."""
     bev_shape, batch_size = BEV_SHAPES["tiny"], 2
     torch_model, tt_model = _models(bev_shape, device)
     bev_embed = _bev_embed(bev_shape, batch_size, seed=0)
     cls_scores, bbox_preds = torch_model(bev_embed)
     tt_cls_scores, tt_bbox_preds = tt_model(_to_device(bev_embed, device))
-
-    reference = NMSFreeCoder()
-    tt_scores, tt_labels, tt_query_index, tt_boxes = (
-        ttnn.to_torch(t) for t in TtNMSFreeCoder(device).topk(tt_cls_scores[-1], tt_bbox_preds[-1])
+    tt_topk = tuple(ttnn.to_torch(t) for t in TtNMSFreeCoder().topk(tt_cls_scores[-1], tt_bbox_preds[-1]))
+    assert_topk_close(
+        cls_scores[-1], bbox_preds[-1], ttnn.to_torch(tt_cls_scores[-1]), ttnn.to_torch(tt_bbox_preds[-1]), tt_topk
     )
-    # The largest score error over all num_query * num_classes pairs. topk ranks the head's
-    # logits exactly, which order as their exact sigmoid does.
-    tt_all_scores = ttnn.to_torch(tt_cls_scores[-1]).float().sigmoid()
-    score_error = (cls_scores[-1].sigmoid() - tt_all_scores).abs().amax((1, 2))
-    for i in range(batch_size):
-        labels, query_index = tt_labels[i].long(), tt_query_index[i].long()
-        ref_scores, ref_labels, ref_query_index, _ = reference.topk(cls_scores[-1, i], bbox_preds[-1, i])
-        assert (tt_scores[i][1:] <= tt_scores[i][:-1]).all(), f"sample {i}: top-k scores are not sorted"
-        # With e the score error and s_k the reference's k-th score: every reference top-k pair
-        # scores at least s_k - e on device, so the device's k-th score does too, and every pair
-        # the device selects scores at least s_k - 2e in the reference.
-        selected = cls_scores[-1, i, query_index, labels].sigmoid()
-        bound = ref_scores[-1] - 2 * score_error[i]
-        assert (selected >= bound).all(), f"sample {i}: a selected pair scores below the top-k bound {bound:.5f}"
-        pairs = set((query_index * NUM_CLASSES + labels).tolist())
-        ref_pairs = set((ref_query_index * NUM_CLASSES + ref_labels).tolist())
-        logger.info(f"sample {i}: top-{reference.max_num} overlap {len(pairs & ref_pairs) / len(ref_pairs):.3f}")
-
-        assert_pcc(selected, tt_scores[i].float(), 0.99)
-        assert_boxes_close(denormalize_bbox(bbox_preds[-1, i, query_index]), tt_boxes[i].float())

@@ -42,6 +42,7 @@ from models.experimental.bevformer.model_config import (
     IMAGE_SIZE_DIVISOR,
     IMAGE_WIDTH,
     NUM_CAMS,
+    NUM_CLASSES,
     NUM_HEADS,
     NUM_LEVELS,
     NUM_POINTS_IN_PILLAR,
@@ -56,6 +57,8 @@ from models.experimental.bevformer.reference.encoder import BEVFormerEncoder
 from models.experimental.bevformer.reference.fpn import FPN
 from models.experimental.bevformer.reference.head import BEVFormerHead
 from models.experimental.bevformer.reference.ms_deformable_attention import MSDeformableAttention
+from models.experimental.bevformer.reference.nms_free_coder import NMSFreeCoder, denormalize_bbox
+from models.experimental.bevformer.reference.nms_free_coder import bottom_center as reference_bottom_center
 from models.experimental.bevformer.reference.perception_transformer import PerceptionTransformer
 from models.experimental.bevformer.reference.resnet import ModulatedDeformConv2dPack, ResNet
 from models.experimental.bevformer.reference.spatial_cross_attention import MSDeformableAttention3D
@@ -763,6 +766,60 @@ def assert_boxes_close(expected, actual, pcc=0.99):
         torch.cat([yaw_actual.sin(), yaw_actual.cos()], dim=-1),
         pcc,
     )
+
+
+# The device's selected scores against the reference's at the same pairs, and the share of the
+# reference's top-k the device selects: twice the worst seen end to end with the dummy weights
+# (score error 0.009, overlap 0.967), so a regression in the logits fails here too.
+MAX_SCORE_ERROR = 0.02
+MIN_TOPK_OVERLAP = 0.9
+
+
+def assert_topk_close(cls_scores, bbox_preds, tt_cls_scores, tt_bbox_preds, tt_topk, pcc=0.99, bottom_center=False):
+    """The coder's device top-k against the reference head's outputs, per sample: the pairs it
+    selects lie within twice the score error of the reference's top-k and cover at least
+    ``MIN_TOPK_OVERLAP`` of it, its scores are the reference's at the same (query, class) pairs
+    within ``MAX_SCORE_ERROR``, and its decoded boxes are its own box predictions' at the selected
+    queries, decoded on the host, at PCC ``pcc``. The box predictions themselves are the caller's
+    to check against the reference's, over all queries: the selected ones span narrower ranges,
+    where the error carried from the BEV lowers the PCC further.
+
+    ``cls_scores`` and ``bbox_preds`` are the reference's last-layer ``(bs, num_query, *)``
+    outputs, ``tt_cls_scores`` and ``tt_bbox_preds`` the device's as torch tensors, ``tt_topk``
+    ``TtNMSFreeCoder.topk``'s outputs as torch tensors, or ``TtBEVFormer.detect``'s first four with
+    ``bottom_center``, whose boxes have z at the bottom face. The device's logits differ from the
+    reference's slightly, so near-equal scores may rank in a different order and the two top-k
+    sets differ at their tail. The scores are compared by their error, not PCC: the top-k's span
+    a narrow range, where a small error already lowers the PCC.
+    """
+    reference = NMSFreeCoder()
+    tt_scores, tt_labels, tt_query_index, tt_boxes = tt_topk
+    # The largest score error over all num_query * num_classes pairs. topk ranks the device's
+    # logits exactly, which order as their exact sigmoid does.
+    score_error = (cls_scores.sigmoid() - tt_cls_scores.float().sigmoid()).abs().amax((1, 2))
+    for i in range(cls_scores.shape[0]):
+        labels, query_index = tt_labels[i].long(), tt_query_index[i, :, 0].long()
+        ref_scores, ref_labels, ref_query_index, _ = reference.topk(cls_scores[i], bbox_preds[i])
+        assert (tt_scores[i][1:] <= tt_scores[i][:-1]).all(), f"sample {i}: top-k scores are not sorted"
+        # With e the score error and s_k the reference's k-th score: every reference top-k pair
+        # scores at least s_k - e on device, so the device's k-th score does too, and every pair
+        # the device selects scores at least s_k - 2e in the reference.
+        selected = cls_scores[i, query_index, labels].sigmoid()
+        bound = ref_scores[-1] - 2 * score_error[i]
+        assert (selected >= bound).all(), f"sample {i}: a selected pair scores below the top-k bound {bound:.5f}"
+        pairs = set((query_index * NUM_CLASSES + labels).tolist())
+        ref_pairs = set((ref_query_index * NUM_CLASSES + ref_labels).tolist())
+        overlap = len(pairs & ref_pairs) / len(ref_pairs)
+        selected_error = (selected - tt_scores[i].float()).abs().max().item()
+        logger.info(
+            f"sample {i}: top-{reference.max_num} overlap {overlap:.3f}, selected score error {selected_error:.5f}"
+        )
+        assert overlap >= MIN_TOPK_OVERLAP, f"sample {i}: top-{reference.max_num} overlap {overlap:.3f}"
+        assert selected_error <= MAX_SCORE_ERROR, f"sample {i}: selected score error {selected_error:.5f}"
+        expected_boxes = denormalize_bbox(tt_bbox_preds[i, query_index].float())
+        if bottom_center:
+            expected_boxes = reference_bottom_center(expected_boxes)
+        assert_boxes_close(expected_boxes, tt_boxes[i].float(), pcc)
 
 
 # --- Perception transformer and detector ------------------------------------------------------

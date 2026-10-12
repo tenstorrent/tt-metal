@@ -1,4 +1,5 @@
-"""Tracy harness for the detector end to end: images to class logits, boxes and the frame's BEV.
+"""Tracy harness for the detector end to end: images to class logits, boxes, the frame's BEV and the
+3D detections, all on device; dropping the invalid boxes on the host after it is timed apart.
 
 Dummy weights, ``BEVFORMER_CHECKPOINT`` or not, and ``test_bevformer``'s inputs over three frames.
 The first frame, which has no previous BEV, runs eagerly; the second is the warmup and the PCC
@@ -25,6 +26,7 @@ from models.experimental.bevformer.tests.common import (
     BEV_SHAPES,
     assert_channels_close,
     assert_pcc,
+    assert_topk_close,
     build_reference_bevformer,
     frame_metas,
     random_image_batch,
@@ -39,11 +41,16 @@ PCC_THRESHOLD = 0.99
 
 
 def _check(expected, tt_outputs):
+    """``tt_outputs`` are the detector's outputs followed by its detections."""
     cls_scores, bbox_preds, bev = expected
-    tt_cls_scores, tt_bbox_preds, tt_bev = (ttnn.to_torch(t).float() for t in tt_outputs)
+    tt_cls_scores, tt_bbox_preds, tt_bev = (ttnn.to_torch(t).float() for t in tt_outputs[:3])
     assert_pcc(bev, tt_bev.reshape(bev.shape), PCC_THRESHOLD)
     assert_pcc(cls_scores[-1], tt_cls_scores[-1], PCC_THRESHOLD)
     assert_channels_close(bbox_preds[-1], tt_bbox_preds[-1], PCC_THRESHOLD)
+    tt_topk = tuple(ttnn.to_torch(t) for t in tt_outputs[3][:4])
+    assert_topk_close(
+        cls_scores[-1], bbox_preds[-1], tt_cls_scores[-1], tt_bbox_preds[-1], tt_topk, PCC_THRESHOLD, bottom_center=True
+    )
 
 
 @torch.no_grad()
@@ -75,16 +82,26 @@ def test_bevformer_perf(device, reset_seeds):
     frame = tt_model.prepare_frame(frames[0])
     *_, prev_bev = tt_model(tt_img, frame)
     tt_model.prepare_frame(frames[1], frame)
-    # Doubles as the warmup of the path with a previous BEV, the one the trace records.
-    _check(expected[1], tt_model(tt_img, frame, prev_bev=prev_bev))
 
-    with signposted_trace(device, lambda: tt_model(tt_img, frame, prev_bev=prev_bev)) as (trace_id, tt_outputs):
+    def run():
+        """The detector and its detections: images to 3D boxes, all but the host compaction."""
+        outputs = tt_model(tt_img, frame, prev_bev=prev_bev)
+        return (*outputs, tt_model.detect(*outputs[:2]))
+
+    # Doubles as the warmup of the path with a previous BEV, the one the trace records.
+    _check(expected[1], run())
+
+    with signposted_trace(device, run) as (trace_id, tt_outputs):
         _check(expected[1], tt_outputs)
         start = time.perf_counter()
         tt_model.prepare_frame(frames[2], frame)
         logger.info(f"prepare_frame refill on the host: {(time.perf_counter() - start) * 1e3:.1f} ms")
-        *_, tt_bev = tt_outputs
+        tt_bev = tt_outputs[2]
         # Into the buffer the trace reads as the previous BEV; rebinding the name would not reach it.
         ttnn.copy(tt_bev, prev_bev)
         ttnn.execute_trace(device, trace_id, cq_id=0, blocking=True)
         _check(expected[2], tt_outputs)
+        scores, labels, _, boxes, valid = tt_outputs[3]
+        start = time.perf_counter()
+        tt_model.get_bboxes(scores, labels, boxes, valid)
+        logger.info(f"get_bboxes' readback and compaction on the host: {(time.perf_counter() - start) * 1e3:.1f} ms")
