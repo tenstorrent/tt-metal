@@ -29,7 +29,7 @@ void py_module(nb::module_& mod) {
         .def(
             nb::init<
                 tt::tt_metal::CoreCoord,
-                std::optional<CoreRangeSet>,
+                std::optional<tt::tt_metal::CoreRangeSet>,
                 std::size_t,
                 std::size_t,
                 std::optional<bool>,

@@ -5,7 +5,7 @@
 #include "ttnn/device_operation.hpp"
 
 #include "ttnn/tensor/layout/tensor_layout.hpp"
-#include "ttnn/types.hpp"  // ttnn::Shape, ttnn::SmallVector
+#include "ttnn/types.hpp"  // ttnn::Shape, ttsl::SmallVector
 
 namespace ttnn::experimental::prim {
 
@@ -50,7 +50,7 @@ TransposeRmDeviceOperation::spec_return_value_t TransposeRmDeviceOperation::comp
     const auto& in_shape = in.padded_shape();
 
     // Output shape: same except last two dims swapped.
-    ttnn::SmallVector<uint32_t> out_dims;
+    ttsl::SmallVector<uint32_t> out_dims;
     out_dims.reserve(in_shape.size());
     for (int d = 0; d < static_cast<int>(in_shape.size()) - 2; ++d) {
         out_dims.push_back(static_cast<uint32_t>(in_shape[d]));
@@ -70,7 +70,7 @@ TransposeRmDeviceOperation::tensor_return_value_t TransposeRmDeviceOperation::cr
     return create_device_tensor(compute_output_specs(attrs, args), args.input.device());
 }
 
-tt::stl::hash::hash_t TransposeRmDeviceOperation::compute_program_hash(
+ttsl::hash::hash_t TransposeRmDeviceOperation::compute_program_hash(
     const operation_attributes_t&, const tensor_args_t& args) {
     return tt::tt_metal::operation::hash_operation<TransposeRmDeviceOperation>(
         args.input.dtype(), args.input.memory_config(), args.input.padded_shape());

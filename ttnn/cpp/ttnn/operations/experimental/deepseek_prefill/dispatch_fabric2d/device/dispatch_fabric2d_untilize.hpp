@@ -62,7 +62,7 @@ enum class UntilizerPoolFallback : uint8_t {
 UntilizerPoolFallback add_untilizer_pool(
     tt::tt_metal::ProgramDescriptor& desc,
     const StreamPlacements& streams,
-    const CoreRangeSet& allowed_cores,
+    const tt::tt_metal::CoreRangeSet& allowed_cores,
     const UntilizePlan& plan);
 
 }  // namespace ttnn::operations::experimental::deepseek_prefill::dispatch_fabric2d

@@ -188,6 +188,31 @@ def test_the_value_order_agrees_with_the_sweep_enumerators_key():
     assert ulp_distance(run[:-1], run[1:], flush_subnormals=False).tolist() == [1] * 63
 
 
+def test_a_16bit_walk_skips_its_offset_before_striding():
+    """`offset` counts in-range values, not strided samples, on every format: the
+    float32 walk jumps to it before striding, and the 16-bit enumeration must too.
+    Applied after the stride, offset 1 at stride 2 picked values 2, 4, 6 for 1, 3, 5."""
+    from helpers.stimuli_generator.strategies.structured import (
+        _enumerate_representable,
+    )
+
+    every = _enumerate_representable(DataFormat.Float16_b, 1.0, 2.0)
+    picked = _enumerate_representable(
+        DataFormat.Float16_b, 1.0, 2.0, 3, offset=1, stride=2
+    )
+    assert picked.tolist() == every[1:7:2].tolist()
+
+
+@pytest.mark.parametrize("stride", [0, -1])
+def test_a_sweep_stride_must_be_positive(stride):
+    """Zero divides by zero in the float32 walk and a negative stride gives a negative
+    sample count, so the spec refuses both where they are written."""
+    from helpers.stimuli_generator import StimuliSpec
+
+    with _refuses("stride must be positive"):
+        StimuliSpec.ulp_sweep(low=-1.0, high=1.0, stride=stride)
+
+
 # ─────────────────────────────────────────────────────────────────────────────
 # The zero neighbourhood: signed zeros, subnormals, the flush
 # ─────────────────────────────────────────────────────────────────────────────

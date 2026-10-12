@@ -6,6 +6,7 @@
 #include "ttnn/tensor/tensor_attributes.hpp"
 
 #include <tt-metalium/experimental/distributed_tensor/distributed_tensor_apis.hpp>
+#include <tt_stl/overloaded.hpp>
 
 namespace ttnn {
 

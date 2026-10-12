@@ -8,7 +8,6 @@
 
 #include <cstddef>
 #include <cstdint>
-#include <utility>
 #include <vector>
 
 namespace tt::tt_metal::internal {
