@@ -578,19 +578,6 @@ def test_sigmoid_gated_rms_norm_gate_column_offset_matches_sliced_gate(
 
 
 @pytest.mark.parametrize(
-    ("gate_column_offset", "message"),
-    [(16, "gate_column_offset must be tile aligned"), (64, "columns at gate_column_offset")],
-    ids=["unaligned", "past-gate-end"],
-)
-def test_sigmoid_gated_rms_norm_rejects_invalid_gate_column_offset(
-    device: ttnn.Device, expect_error: Callable, gate_column_offset: int, message: str
-) -> None:
-    _, (input_tt, gate_tt, weight_tt) = _device_inputs(device)
-    with expect_error(RuntimeError, message):
-        _run(input_tt, gate_tt, weight_tt, gate_column_offset=gate_column_offset)
-
-
-@pytest.mark.parametrize(
     ("case", "message"),
     [
         ("host_input", "allocated device tensor"),
@@ -646,13 +633,15 @@ def test_sigmoid_gated_rms_norm_rejects_invalid_tensors(
 
 
 @pytest.mark.parametrize(
-    ("num_heads", "epsilon", "output_dtype", "message"),
+    ("num_heads", "epsilon", "output_dtype", "gate_column_offset", "message"),
     [
-        (0, 1e-5, ttnn.float32, "num_heads must be positive"),
-        (5, 1e-5, ttnn.float32, "leading dimension must be divisible"),
-        (12, 0.0, ttnn.float32, "epsilon must be finite and positive"),
-        (12, float("nan"), ttnn.float32, "epsilon must be finite and positive"),
-        (12, 1e-5, ttnn.uint32, "output_dtype must be FLOAT32 or BFLOAT16"),
+        (0, 1e-5, ttnn.float32, 0, "num_heads must be positive"),
+        (5, 1e-5, ttnn.float32, 0, "leading dimension must be divisible"),
+        (12, 0.0, ttnn.float32, 0, "epsilon must be finite and positive"),
+        (12, float("nan"), ttnn.float32, 0, "epsilon must be finite and positive"),
+        (12, 1e-5, ttnn.uint32, 0, "output_dtype must be FLOAT32 or BFLOAT16"),
+        (12, 1e-5, ttnn.float32, 16, "gate_column_offset must be tile aligned"),
+        (12, 1e-5, ttnn.float32, 64, "columns at gate_column_offset"),
     ],
 )
 def test_sigmoid_gated_rms_norm_rejects_invalid_options(
@@ -661,11 +650,20 @@ def test_sigmoid_gated_rms_norm_rejects_invalid_options(
     num_heads: int,
     epsilon: float,
     output_dtype: ttnn.DataType,
+    gate_column_offset: int,
     message: str,
 ) -> None:
     _, (input_tt, gate_tt, weight_tt) = _device_inputs(device)
     with expect_error(RuntimeError, message):
-        _run(input_tt, gate_tt, weight_tt, num_heads=num_heads, epsilon=epsilon, output_dtype=output_dtype)
+        _run(
+            input_tt,
+            gate_tt,
+            weight_tt,
+            num_heads=num_heads,
+            epsilon=epsilon,
+            output_dtype=output_dtype,
+            gate_column_offset=gate_column_offset,
+        )
 
 
 def test_sigmoid_gated_rms_norm_rejects_sharded_output(device: ttnn.Device, expect_error: Callable) -> None:

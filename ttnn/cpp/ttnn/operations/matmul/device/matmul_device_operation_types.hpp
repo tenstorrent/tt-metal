@@ -37,7 +37,7 @@ struct MatmulParams {
     // them: the Program binds each pipe, and cb_in1 is laid over its ring.
     ttnn::PrefetcherPipeList prefetcher_pipes;
     // Read A's K columns from this tile-aligned column of a wider interleaved A, instead of all of A's columns.
-    // Only the 2D multicast program config supports it.
+    // Set through ttnn::linear; only the 2D multicast program config (its Metal 2.0 spec factory) supports it.
     std::optional<uint32_t> in0_column_offset = std::nullopt;
 };
 
