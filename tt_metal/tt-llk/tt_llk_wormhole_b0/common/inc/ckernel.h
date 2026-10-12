@@ -21,6 +21,78 @@
 
 #define UNROLL_LOOP(factor) GCC unroll factor
 
+// Experiment hook (fidelity agent): known work at the top of each per-tile LLK call of the perf loops, compiled into
+// thread LLK_FID_T only (COMPILE_FOR_TRISC numbering); without LLK_FID_T it expands to nothing.
+//   LLK_FID_KIND 1: LLK_FID_K RISC instructions (nop); 2: LLK_FID_K Tensix NOPs (.ttinsn);
+//   3: STALLWAIT, the thread's next instruction of its own unit waits until that unit is idle.
+#define LLK_FID_STR2(x) #x
+#define LLK_FID_STR(x)  LLK_FID_STR2(x)
+#if defined(LLK_FID_T) && defined(COMPILE_FOR_TRISC) && (LLK_FID_T == COMPILE_FOR_TRISC || LLK_FID_T == 9)
+#if LLK_FID_KIND == 1
+#define LLK_FID_POINT() __asm__ __volatile__(".rept " LLK_FID_STR(LLK_FID_K) "\n\tnop\n\t.endr")
+#elif LLK_FID_KIND == 2
+#define LLK_FID_POINT() __asm__ __volatile__(".rept " LLK_FID_STR(LLK_FID_K) "\n\t.ttinsn %0\n\t.endr" : : "n"(TT_OP_NOP))
+#elif LLK_FID_KIND == 3
+#if COMPILE_FOR_TRISC == 0
+#define LLK_FID_POINT() TTI_STALLWAIT(p_stall::STALL_UNPACK, p_stall::UNPACK)
+#elif COMPILE_FOR_TRISC == 1
+#define LLK_FID_POINT() TTI_STALLWAIT(p_stall::STALL_MATH, p_stall::MATH)
+#else
+#define LLK_FID_POINT() TTI_STALLWAIT(p_stall::STALL_PACK, p_stall::PACK)
+#endif
+#endif
+#endif
+// Experiment hook (init-opt2): LLK_EXP_NOP_UNPACK_INIT NOPs at the top of the unpack init functions (unpack thread only)
+#if defined(LLK_EXP_NOP_UNPACK_INIT) && defined(COMPILE_FOR_TRISC) && COMPILE_FOR_TRISC == 0
+#define LLK_EXP_STR2_(x)            #x
+#define LLK_EXP_STR_(x)             LLK_EXP_STR2_(x)
+#define LLK_EXP_NOP_UNPACK_INIT_AT() __asm__ __volatile__(".rept " LLK_EXP_STR_(LLK_EXP_NOP_UNPACK_INIT) "\n\tnop\n\t.endr")
+#else
+#define LLK_EXP_NOP_UNPACK_INIT_AT() \
+    do                               \
+    {                                \
+    } while (0)
+#endif
+// Experiment hooks (mathinit), math thread of the INIT measurement build only: LLK_EXP_MATH_NOP = k NOPs at position
+// LLK_EXP_MATH_NOP_POS (2: top of INIT's body after the head start, 8: end of INIT's body); LLK_EXP_MATH_SIG = n addi.
+#define LLK_EXP_MSTR2_(x) #x
+#define LLK_EXP_MSTR_(x)  LLK_EXP_MSTR2_(x)
+#if defined(LLK_PERF_INIT_ONLY) && defined(COMPILE_FOR_TRISC) && COMPILE_FOR_TRISC == 1 && defined(LLK_EXP_MATH_NOP)
+#ifndef LLK_EXP_MATH_NOP_POS
+#define LLK_EXP_MATH_NOP_POS 2
+#endif
+#define LLK_EXP_MATH_NOP_AT(pos)                                                               \
+    do                                                                                         \
+    {                                                                                          \
+        if constexpr ((pos) == (LLK_EXP_MATH_NOP_POS))                                         \
+        {                                                                                      \
+            __asm__ __volatile__(".rept " LLK_EXP_MSTR_(LLK_EXP_MATH_NOP) "\n\tnop\n\t.endr"); \
+        }                                                                                      \
+    } while (0)
+#elif defined(LLK_PERF_INIT_ONLY) && defined(COMPILE_FOR_TRISC) && COMPILE_FOR_TRISC == 1 && defined(LLK_EXP_MATH_SIG)
+#ifndef LLK_EXP_MATH_NOP_POS
+#define LLK_EXP_MATH_NOP_POS 2
+#endif
+#define LLK_EXP_MATH_NOP_AT(pos)                                                                                     \
+    do                                                                                                               \
+    {                                                                                                                \
+        if constexpr ((pos) == (LLK_EXP_MATH_NOP_POS))                                                               \
+        {                                                                                                            \
+            __asm__ __volatile__("addi sp, sp, -16\n\tsw t0, 0(sp)\n\t.rept " LLK_EXP_MSTR_(LLK_EXP_MATH_SIG)         \
+                                 "\n\taddi t0, t0, 1\n\t.endr\n\tlw t0, 0(sp)\n\taddi sp, sp, 16" ::: "memory");   \
+        }                                                                                                            \
+    } while (0)
+#else
+#define LLK_EXP_MATH_NOP_AT(pos) \
+    do                           \
+    {                            \
+    } while (0)
+#endif
+
+#ifndef LLK_FID_POINT
+#define LLK_FID_POINT()
+#endif
+
 #ifndef EN_DEST_DOUBLE_BUFFERING
 #define EN_DEST_DOUBLE_BUFFERING 1
 #endif
