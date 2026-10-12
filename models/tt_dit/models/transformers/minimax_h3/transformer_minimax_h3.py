@@ -240,9 +240,14 @@ class MiniMaxH3Transformer3DModel(Module):
         # see `adaln_cache_minimax_h3` -- and the 26 GB of `adaln_proj` weights (6.50 GB/device at
         # TP=4), `time_embedder` and `norm_out.linear` never reach the device.
         precomputed_adaln: bool = False,
+        # VSA (video sparse attention). None (default) leaves the dense path untouched. When set, the
+        # caller binds a geometry-specific coarse stage via `set_vsa_stage` and feeds the packed
+        # sequence in VSA tile order (assembly, output and per-row metadata indices permuted on host).
+        vsa_config=None,
     ) -> None:
         super().__init__()
 
+        self.vsa_config = vsa_config
         self.precomputed_adaln = precomputed_adaln
         self.hidden_size = hidden_size
         self.freq_dim = freq_dim
@@ -344,6 +349,7 @@ class MiniMaxH3Transformer3DModel(Module):
                     is_fsdp=is_fsdp,
                     kv_gather_capacity=kv_gather_capacity,
                     use_persistent_ccl_buffers=use_persistent_ccl_buffers,
+                    vsa_config=vsa_config,
                     precomputed_adaln=precomputed_adaln,
                 )
                 for _ in range(num_layers)
@@ -364,6 +370,12 @@ class MiniMaxH3Transformer3DModel(Module):
         )
         self.proj_out = Linear(hidden_size, video_patch_dim, bias=True, mesh_device=mesh_device)
         self.audio_proj_out = Linear(hidden_size, audio_in_channels, bias=True, mesh_device=mesh_device)
+
+    def set_vsa_stage(self, stage) -> None:
+        """Bind one geometry-specific VSA coarse stage to every block's attention."""
+        assert self.vsa_config is not None, "set_vsa_stage requires the model to be built with vsa_config"
+        for block in self.transformer_blocks:
+            block.attn.set_vsa_stage(stage)
 
     def prepare_static_sources(
         self,

@@ -5,6 +5,7 @@
 from __future__ import annotations
 
 import math
+import os
 
 import torch
 
@@ -105,6 +106,7 @@ class MiniMaxH3Attention(Module):
         is_sequence_parallel: bool = True,
         kv_gather_capacity: int | None = None,
         use_persistent_ccl_buffers: bool = True,
+        vsa_config=None,
     ) -> None:
         super().__init__()
 
@@ -177,6 +179,25 @@ class MiniMaxH3Attention(Module):
         self.norm_k = DistributedRMSNorm(**qk_norm_kwargs)
         self.rope_trans_mat = bf16_tensor(get_rot_transformation_mat(), device=mesh_device)
 
+        # VSA (video sparse attention): the fourth attention path (see VSA_SCOPE.md). Selected only
+        # when both a config and a geometry-bound coarse stage are present; dense paths and their
+        # program selection are untouched when vsa_config is None (the default).
+        self.vsa_config = vsa_config
+        self.vsa_stage = None  # bound per generation shape via set_vsa_stage()
+        self.gate_compress_is_zero = True  # decided at weight load; a zero gate skips the O_c branch
+        if vsa_config is not None:
+            # ColParallel fracture of the 7168-wide output hands device d heads [d*n_local, (d+1)*n_local),
+            # the same heads its V shard carries, so the gate reshapes to heads with plain create_heads.
+            self.to_gate_compress = ColParallelLinear(
+                hidden_size,
+                self.inner_dim,
+                bias=False,
+                mesh_device=mesh_device,
+                mesh_axis=self.tp_mesh_axis,
+                fsdp_mesh_axis=fsdp_mesh_axis,
+                ccl_manager=ccl_manager,
+            )
+
         # all_gather_minimal_matmul_async folds the TP all-gather into the matmul. Ring only: on a
         # line topology WanAttention measured the unfused path faster, so match that condition.
         self.use_fused_agmm = ccl_manager.topology == ttnn.Topology.Ring and tp_factor > 1
@@ -222,8 +243,53 @@ class MiniMaxH3Attention(Module):
 
     # ------------------------------------------------------------------ weights
 
+    _vsa_dump_calls = 0
+
+    def _dump_vsa_indices(self, vsa_indices) -> None:
+        """VSA_DUMP_INDICES=<dir>: save the per-device raw top-k rows of the first 3 attention calls
+        (untraced compile run) plus the geometry, for host-side selection statistics."""
+        import torch as _torch
+
+        if type(self)._vsa_dump_calls >= 3:
+            return
+        d = os.environ["VSA_DUMP_INDICES"]
+        os.makedirs(d, exist_ok=True)
+        n = type(self)._vsa_dump_calls
+        type(self)._vsa_dump_calls += 1
+        per_dev = [ttnn.to_torch(t) for t in ttnn.get_device_tensors(vsa_indices)]
+        stage = self.vsa_stage
+        _torch.save(
+            dict(
+                indices=per_dev,
+                k=stage.k,
+                exempt_ids=stage.exempt_ids,
+                coarse_slots_shift=stage.coarse_slots_shift,
+                tiles_per_shard=stage.geometry.tiles_per_shard,
+                sp_factor=stage.geometry.sp_factor,
+                tile_ids=stage.geometry.tile_ids,
+                is_exempt=stage.geometry.is_exempt,
+                is_3d=stage.geometry.is_3d,
+                n_prefix_tiles=stage.geometry.n_prefix_tiles,
+                n_video_tiles=stage.geometry.n_video_tiles,
+                dense_rows=stage.dense_row_hint,
+            ),
+            os.path.join(d, f"vsa_indices_call{n}.pt"),
+        )
+
+    def set_vsa_stage(self, stage) -> None:
+        """Bind the geometry-specific coarse stage (shared across blocks; see MiniMaxH3VSACoarseStage)."""
+        assert self.vsa_config is not None, "set_vsa_stage requires the attention to be built with vsa_config"
+        self.vsa_stage = stage
+
     def _prepare_torch_state(self, state: dict[str, torch.Tensor]) -> None:
         rename_substate(state, "to_out.0", "to_out")
+
+        if self.vsa_config is not None:
+            # The base H3 checkpoint carries no gate: zero-init it, which makes the compressed
+            # branch contribute nothing (and lets forward skip it entirely, identically).
+            if "to_gate_compress.weight" not in state:
+                state["to_gate_compress.weight"] = torch.zeros(self.inner_dim, self.hidden_size)
+            self.gate_compress_is_zero = not bool(state["to_gate_compress.weight"].any())
 
         def _interleave_heads(tensors: list[torch.Tensor]) -> torch.Tensor:
             """Reorder [out, in] weights so TP column-fracturing gives each device matching heads.
@@ -538,6 +604,158 @@ class MiniMaxH3Attention(Module):
         q_BHNE = self.norm_q(q_1BNF, **norm_kwargs)
         k_BHNE = self.norm_k(k_1BNF, **norm_kwargs)
         v_BHNE = create_heads(v_1BNF)
+
+        # VSA path (R2-R4 of VSA_SCOPE.md): full K/V all-gather on SP, coarse selection + gated
+        # coarse output, and the block-sparse fine stage. The sequence must already be in VSA tile
+        # order (the geometry the bound stage was built from).
+        if self.vsa_stage is not None:
+            use_gate = not self.gate_compress_is_zero
+            # streaming kernel: raw top-k rows + exempt ids + dense-row mask (assembly done on device)
+            raw = (
+                self.vsa_config.streaming and os.environ.get("VSA_RAW", "1") == "1"
+            )  # VSA_RAW=0: host assembly (debug)
+            o_c, vsa_indices = self.vsa_stage(
+                q_BHNE, k_BHNE, v_BHNE, v_1bnf=v_1BNF, compute_o_c=use_gate, raw_selection=raw
+            )  # o_c is [1, 1, S_local, H*d]: gated in after the head concat below
+            if os.environ.get("VSA_DUMP_INDICES"):  # offline selection-statistics dumps (first calls only)
+                self._dump_vsa_indices(vsa_indices)
+
+            # vsa_ring_sdpa (the K/V ring all-gather fused into the fine stage) is selected by
+            # MiniMaxH3VSAConfig.ring; VSA_RING=1 / VSA_RING=0 in the environment overrides it either way (opt in
+            # from an existing pipeline script, or force the two-op path for an A/B). Needs raw selection and SP > 1.
+            ring_env = os.environ.get("VSA_RING")
+            ring_wanted = self.vsa_config.ring if ring_env is None else ring_env == "1"
+            use_ring = ring_wanted and raw and self.parallel_config.sequence_parallel.factor > 1
+            if use_ring:
+                # vsa_ring_sdpa: the K/V all-gather is fused into the fine stage (shards forwarded around the SP
+                # ring while the attention consumes the landed ones); the gathered buffers are the CCL manager's
+                # all-gather ping-pong buffers and the semaphores the all-gather's own pair.
+                assert self.vsa_config.streaming and not self.vsa_config.distributed
+                assert self.vsa_config.stream_order == "identity", "vsa_ring_sdpa streams in ring-arrival order"
+                # K and V go in as the plain head-split tensors; the op's own gather forwards them token-major (per
+                # tile row, every head's K then V), so the fine stage gates per block and overlaps the whole ring.
+                # Two ping-pong buffers, as the two-op path's gathers take (the manager alternates them per call).
+                gathered_k = self.ccl_manager.get_ag_ping_pong_buffer(
+                    k_BHNE.shape, 2, self.sp_mesh_axis, dtype=k_BHNE.dtype
+                )
+                gathered_v = self.ccl_manager.get_ag_ping_pong_buffer(
+                    v_BHNE.shape, 2, self.sp_mesh_axis, dtype=v_BHNE.dtype
+                )
+                spatial_BHNE = ttnn.transformer.vsa_ring_sdpa(
+                    q_BHNE,
+                    k_BHNE,
+                    v_BHNE,
+                    vsa_indices,
+                    self.vsa_stage.block_counts_tensor(),
+                    gathered_k,
+                    gathered_v,
+                    multi_device_global_semaphore=self.ccl_manager.get_ag_ping_pong_semaphore(self.sp_mesh_axis),
+                    num_links=self.ccl_manager.num_links,
+                    cluster_axis=self.sp_mesh_axis,
+                    mesh_device=self.mesh_device,
+                    topology=self.ccl_manager.topology,
+                    gather=self.vsa_config.ring_gather,
+                    num_workers_per_link=self.vsa_config.ring_workers_per_link,
+                    subdevice_id=self.ccl_manager.ccl_sub_device_id,
+                    list_len=self.vsa_stage.k,
+                    exempt_ids=self.vsa_stage.exempt_ids,
+                    dense_row_mask=self.vsa_stage.dense_row_mask_tensor(),
+                    coarse_slots_shift=self.vsa_stage.coarse_slots_shift,
+                    coarse_real_per_shard=self.vsa_stage.geometry.tiles_per_shard,
+                    dense_row_hint=self.vsa_stage.dense_row_hint,
+                    v2=self.vsa_config.v2,
+                    heads_per_group=self.vsa_config.heads_per_group,
+                    mcast_log=self.vsa_config.mcast_log,
+                )
+                ttnn.deallocate(vsa_indices)
+                k_gathered = v_gathered = None
+            else:
+                # R2: gathered K/V equal the concatenation of all shards' local K/V.
+                if self.parallel_config.sequence_parallel.factor > 1:
+                    k_gathered = self.ccl_manager.all_gather_persistent_buffer(
+                        k_BHNE, dim=2, mesh_axis=self.sp_mesh_axis
+                    )
+                    v_gathered = self.ccl_manager.all_gather_persistent_buffer(
+                        v_BHNE, dim=2, mesh_axis=self.sp_mesh_axis
+                    )
+                else:
+                    k_gathered, v_gathered = k_BHNE, v_BHNE
+
+            if not use_ring:
+                spatial_BHNE = ttnn.transformer.vsa_sdpa(
+                    q_BHNE,
+                    k_gathered,
+                    v_gathered,
+                    vsa_indices,
+                    self.vsa_stage.block_counts_tensor(),
+                    k_chunk_blocks=self.vsa_config.k_chunk_blocks,
+                    streaming=self.vsa_config.streaming,
+                    distributed=self.vsa_config.distributed,
+                    v2=self.vsa_config.v2,
+                    heads_per_group=self.vsa_config.heads_per_group,
+                    mcast_log=self.vsa_config.mcast_log,
+                    **(
+                        dict(
+                            list_len=self.vsa_stage.k,
+                            exempt_ids=self.vsa_stage.exempt_ids,
+                            dense_row_mask=self.vsa_stage.dense_row_mask_tensor(),
+                            coarse_slots_shift=self.vsa_stage.coarse_slots_shift,
+                            coarse_real_per_shard=self.vsa_stage.geometry.tiles_per_shard,
+                            dense_row_hint=self.vsa_stage.dense_row_hint,  # cost-aware row dealing (both kernels)
+                            **(
+                                dict(stream_order=self.vsa_stage.stream_order_tensor(self.vsa_config.stream_order))
+                                if self.vsa_config.stream_order != "identity" and not self.vsa_config.distributed
+                                else {}
+                            ),
+                        )
+                        if raw
+                        else {}
+                    ),
+                )
+                ttnn.deallocate(vsa_indices)
+
+            gate_1BNF = None
+            if use_gate:
+                # The gate projection is a fused TP all-gather matmul: issued before vsa_sdpa it queues behind
+                # the SP K/V gathers on the CCL cores and delays the attention by as much as it saves (measured),
+                # so it stays here, overlapping the head concat.
+                gate_1BNF = self.to_gate_compress(
+                    spatial_1BND,  # still the block input here
+                    compute_kernel_config=self.mm_compute_kernel_config,
+                    parallel_config=matmul_parallel_config,
+                    default_block_size=agmm_block_size(
+                        self.hidden_size, self.inner_dim // tp_factor, spatial_1BND.padded_shape[-2]
+                    ),
+                    force_transpose=False,
+                )
+            spatial_1BND = ttnn.transformer.concatenate_heads(spatial_BHNE)
+            spatial_1BND = ttnn.unsqueeze(spatial_1BND, 0)
+            if use_gate:
+                # gate_compress and o_c are both [1, 1, S_local, H*d]: the gated add runs after the head
+                # concat, so neither needs a head split (the gate's create_heads alone was 2.3 ms at 15 s)
+                spatial_1BND = ttnn.addcmul(spatial_1BND, gate_1BNF, o_c)
+                ttnn.deallocate(gate_1BNF)
+                ttnn.deallocate(o_c)
+            if not self.use_fused_agmm and tp_factor > 1:
+                spatial_1BND = self.ccl_manager.all_gather_persistent_buffer(
+                    spatial_1BND, dim=3, mesh_axis=self.tp_mesh_axis
+                )
+            fuse_gate = addcmul_residual is not None and self.use_fused_agmm
+            out = self.to_out(
+                spatial_1BND,
+                compute_kernel_config=self.mm_compute_kernel_config,
+                parallel_config=matmul_parallel_config,
+                default_block_size=agmm_block_size(
+                    self.inner_dim, self.hidden_size // tp_factor, spatial_1BND.padded_shape[-2]
+                ),
+                force_transpose=False,
+                addcmul_a=addcmul_residual if fuse_gate else None,
+                addcmul_b=addcmul_gate if fuse_gate else None,
+                use_persistent_buffer=self.use_persistent_ccl_buffers,
+            )
+            if addcmul_residual is not None and not fuse_gate:
+                out = ttnn.addcmul(addcmul_residual, out, addcmul_gate)
+            return out
 
         # Sequence is fractured across SP, so attention must gather K/V around the ring.
         # The packed sequence is one attention document and logical_n masks the pad tail, so no mask.
