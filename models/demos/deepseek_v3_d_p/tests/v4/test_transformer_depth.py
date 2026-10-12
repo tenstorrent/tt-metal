@@ -48,6 +48,7 @@ from models.demos.deepseek_v3_d_p.tt.v4.weights import (
     v4_model_from_checkpoint,
 )
 from models.demos.deepseek_v3_d_p.utils.chunk_config import PREFILL_CHUNK_TOKENS
+from models.demos.deepseek_v3_d_p.utils.test_utils import cache_half_pccs
 
 CHUNK = PREFILL_CHUNK_TOKENS
 SEQ_CACHE = 55 * 1024  # 56320, the length the golden was captured at
@@ -106,6 +107,38 @@ def _log_layer_breakdown(truth, dev, label, outlier_frac=0.001):
         f"ratio {ratio[top].min():.4f}..{ratio[top].max():.4f}, cosine min {cos[top].min():.4f}, "
         f"first positions {sorted(top.tolist())[:8]}; PCC without them {pcc_rest:.6f}"
     )
+
+
+def _log_compressed_kv(trace, config, model, label):
+    """Log every compressing layer's KV cache after the whole prompt against the golden's.
+
+    The trace keeps ``decoder_output`` for few layers but ``compressed_entries`` for all of them, and
+    each layer's cache is a function of that layer's input, so this tracks drift through the layers the
+    stream grade cannot see. HCA keeps its entries in ``compressed_kv`` and CSA in the first rows of
+    ``joint_kv``; both are replicated and in sequence order, so one chip's copy is the whole cache. SWA
+    layers compress nothing and are skipped.
+    """
+    nope = config.head_dim - config.qk_rope_head_dim
+    for local_idx, block in enumerate(model.layers):
+        i = model.first_layer_idx + local_idx
+        kind = config.layer_types[i]
+        if kind == "heavily_compressed_attention":
+            table = block.attn_state.compressed_kv
+        elif kind == "compressed_sparse_attention":
+            table = block.attn_state.joint_kv
+        else:
+            continue
+        entries = -(-SEQ_CACHE // config.compress_rates[kind])
+        dev = ttnn.to_torch(ttnn.get_device_tensors(table)[0]).float()[0, 0, :entries]
+        truth = trace.compressed_entries(i, entries)
+        if truth.shape != dev.shape:
+            logger.warning(
+                f"[{label}] layer {i} compressed KV: golden {tuple(truth.shape)} vs device {tuple(dev.shape)}"
+            )
+            continue
+        # pe_interleave=False: V4's compressed rope is interleaved on both sides.
+        nope_pcc, pe_pcc = cache_half_pccs(truth, dev, nope, pe_interleave=False)
+        logger.info(f"[{label}] layer {i} {kind} compressed KV PCC: nope {nope_pcc:.6f} pe {pe_pcc:.6f}")
 
 
 def _end_to_end(trace, checkpoint, final, label):
@@ -217,6 +250,7 @@ def run_depth(mesh_device, device_params, num_links, model_config, first, count,
         logger.info(f"  chunk {chunk} done (start={start}) in {time.monotonic() - t0:.0f} s")
 
     label = f"v4 depth {model_config.__name__} [{first}, {last})"
+    _log_compressed_kv(trace, config, model, label)
     failures = []
     for i in graded:
         truth = trace.decoder_output(i).reshape(1, SEQ_CACHE, n, hidden)
