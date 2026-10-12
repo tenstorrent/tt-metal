@@ -122,8 +122,6 @@ inline void llk_math_dest_section_done() {
     // no-real-work unpack-to-dest forwarder.
     _llk_sync_post_<p_stall::MATH, p_stall::WAIT_SFPU>(semaphore::MATH_PACK);
     if constexpr (UnpackToDestEn) {
-        // Release the unpacked tile only now, after MATH_PACK counts it: getting it at acquire left both
-        // semaphores at zero while SFPU still worked on Dest, and unpack overwrote the tile.
         _llk_sync_get_<p_stall::MATH, p_stall::WAIT_SFPU>(semaphore::UNPACK_MATH);
     }
     if constexpr (DST_SYNC_MODE == DstSync::SyncHalf && !UnpackToDestEn) {
