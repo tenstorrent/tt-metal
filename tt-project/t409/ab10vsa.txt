@@ -1,0 +1,8 @@
+ID=t449-ab10-vsa0.9
+TASK=t409
+WORKDIR=/var/tmp/fasth3/t409
+ENV=/var/tmp/fasth3/t409/env409.yaml
+CONFIG=t409-ab10-vsa0.9
+TIMEOUT=600
+CMD=env T409_SEED=0 T409_PY_TIMEOUT=560 bash /var/tmp/fasth3/t409/run409b.sh ab10 vsa0.9
+NEEDS=/var/tmp/fasth3/t409/b/ttnn/ttnn/_ttnn.so

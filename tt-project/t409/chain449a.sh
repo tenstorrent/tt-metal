@@ -31,5 +31,5 @@ for i in $(seq 180); do
   case "$ST" in running|queued|pending|"") sleep 30 ;; *) break ;; esac
 done
 $B1 "tt-device-mcp status -j $id" >> $L 2>&1 || true
-$B1 "tail -30 /var/tmp/fasth3/t409/out_attn/run.log" >> $L 2>&1 || true
+$B1 "tail -40 /var/tmp/fasth3/t409/${T449_OUT:-out_attn}/run.log" >> $L 2>&1 || true
 [ "$ST" = completed ] || exit 6

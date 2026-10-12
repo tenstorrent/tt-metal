@@ -156,3 +156,14 @@ encoder), then per seed 0-4 one sbatch job per A/B pair: (v1.0 dense, v1.0 + VSA
 Next (tunnel up): `ssh exabox-login 'df -h /data; curl -sI https://huggingface.co/api/models/MiniMaxAI/MiniMax-H3 | head -1'`.
   Both OK -> stage under /data/smarton/fasth3/t417 (blob:none clone + bundle of ttp/t409 head, HF download with nice/ionice),
   build job (sbatch, no device), conversion/JIT fill jobs, then the A/B pairs. Otherwise report: run step 3 on blx01.
+## t449 run 1681 (2026-10-12 08:10 PDT)
+- Attention PCC PASSED: blx01 job 974 (chain449a, 14:58Z), test_vsa_sparsity0_matches_ring_path[4x8sp1tp0nl2_ring_is_fsdp0]:
+  `PCC = 99.9654 %, CCC = 99.9648 %, RMSE/σ₁ = 2.7 %` (>= 0.9995 gate). 2 WH-only params skipped. No drop.
+- A/B sizing: #408's warm 10 s dense run (out_t10, seed 0, 900 MHz clamp) took 405 s process wall (344 s construction
+  warm-up, 3110 ms/step steady). Two arms do not fit one 600 s job, so one arm per job. Our tree = #408's commit
+  bff7d82040c + the VSA port (dense path unchanged when MINIMAX_H3_VSA_SPARSITY is unset), so the VSA-0.9 arm is
+  compared with #408's out_t10 (same box, seed, inputs, clock; latents saved there). Dense rerun on t409/b only if needed.
+- Copied kf_t2va_f0.png from t408 to t409 (md5 match; run409b.sh needs it there).
+- Spec tt-project/t409/ab10vsa.txt (run409b.sh ab10 vsa0.9, T409_PY_TIMEOUT=560, -t 600 unmeasured). Lint ok.
+  chain449a (T449_OUT=out_ab10-vsa0.9) detached from run 1681 waits for #421's job 975, then submits.
+  Result: /var/tmp/fasth3/t409/out_ab10-vsa0.9/run.log on blx01 (denoise breakdown, timing table, latents, mp4).
