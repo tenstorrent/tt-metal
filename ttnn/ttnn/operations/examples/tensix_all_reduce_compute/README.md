@@ -1,6 +1,6 @@
 # All-reduce compute accumulation - FPU destination reuse
 
-**Difficulty:** ⭐⭐ T2  ·  **Concept:** reduction accumulation in DST registers
+**Problem type:** compute-bound: reduction  ·  **Concept:** reduction accumulation in DST registers
 **First profiled on:** `bgd-lab-t3003-special-mstaletovic-for-reservation-40918` · Wormhole B0 · 1000 MHz · 2026-07-10 · `5f0ad060667`
 
 > Reading order: [`../master.md`](../master.md) → **this file** → run the CLI, then read the code if needed.
@@ -53,3 +53,26 @@ ARC_COMPUTE_REPORT=ttnn/ttnn/operations/examples/tensix_all_reduce_compute/repor
 scripts/run_safe_pytest.sh --run-all \
 tests/ttnn/unit_tests/operations/examples/test_tensix_all_reduce_compute.py::test_tensix_all_reduce_compute_device_perf
 ```
+
+## When it helps / when it does not
+
+Board: **Wormhole B0 n150**; numbers from `test_tensix_all_reduce_compute_regimes` (one Tensix core,
+bf16 tiles, interleaved A/B, median of 11 retained trials, 2026-10-12). `kernel_iters` is the number
+of reductions per launch; ns are per reduction.
+
+| Condition | Shape(s) | Baseline ns | Lever ns | Speedup | Trials | Board |
+|---|---|---:|---:|---:|---:|---|
+| **Helps:** 8 blocks (reduced tiles per output tile), 6 output tiles, steady state (100 reductions per launch) | 8 blocks x 6 tiles | 11178 (11169-11180) | 1899 (1869-1912) | **5.89x** | 11 | WH B0 n150 |
+| **Helps weakly:** smallest input the API accepts, ONE reduction per launch | 2 blocks x 1 tile, `kernel_iters=1` | 783 (775-803) | 568 (559-583) | **1.38x** | 11 | WH B0 n150 |
+| **Does not help:** DST precision choice, FP32 DST vs BF16 DST (both already FPU `acc_to_dest`) | 16 blocks x 6 tiles | 3611 (3580-3660) | 3492 (3455-3500) | **1.03-1.04x** | 11 | WH B0 n150 |
+
+The FPU win grows with the number of SFPU calls it removes: the baseline pays one
+`add_binary_tile_init()` plus one SFPU add per contributor beyond the first, so its cost scales with
+`(blocks - 1) x tiles` while the FPU variant pays one init per DST batch and handles two contributors
+per instruction. Sweep (WH B0, `fpu_dest_reuse_fp32` vs `sfpu_serial_bf16`, 100 reductions per launch):
+2 blocks x 1 tile 1.90x, 2 x 2 2.15x, 2 x 6 2.66x, 3 x 1 2.37x, 4 x 1 3.01x, 8 x 1 4.30x. The speedup
+never reaches 1.0x on this API (`num_blocks >= 2` is enforced): even the smallest input is 1.9x in
+steady state and 1.38x when the launch's fixed cost (single reduction, ~570 ns of which most is
+kernel start/stop) is not amortized (`kernel_iters` 1 / 2 / 10 at 2x1: 1.38x / 1.78x / 1.98x). Do not
+expect a blocks-vs-1x crossover; the only regime where the lever buys nothing is the sub-choice of
+DST precision, where FP32 DST is only ~3% faster than BF16 DST at 16 blocks (up to ~8% at 2 blocks).

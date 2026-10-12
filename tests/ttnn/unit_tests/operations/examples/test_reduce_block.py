@@ -24,6 +24,7 @@ import socket
 import statistics
 from pathlib import Path
 
+import pytest
 import torch
 import ttnn
 from loguru import logger
@@ -1305,3 +1306,58 @@ def test_reduce_block_within_tile_skip(device):
         out_c = run_op(x, variant="accumulate_via_add", dim=dim, Ht=Ht, Wt=Wt, NC=NC, accum="fp32", kernel_iters=2)
         ma_c = (_readout(out_c, dim) - golden).abs().max().item()
         assert ma_c > 1.0, f"collapse control {dim} ({Ht},{Wt},{NC}) matched to {ma_c:.4f} — skip is a no-op?"
+
+
+# =============================================================================
+# Regimes: where AccumulateViaAdd helps vs does not, vs the library reduce_tile (Wormhole B0 n150)
+# =============================================================================
+# (id, dim, (Ht, Wt, NC), kind, threshold)
+#   helps:          assert speedup (reduce_tile_ns / accumulate_via_add_ns) >= threshold
+#   does_not_help:  assert speedup <= threshold
+_REGIME_TRIALS = 11
+_REGIMES = [
+    ("helps_row_32t", "row", (2, 32, 1), "helps", 1.5),
+    ("helps_col_32t", "col", (32, 2, 1), "helps", 1.4),
+    ("helps_scalar_32t", "scalar", (4, 8, 1), "helps", 2.0),
+    ("not_row_2t", "row", (4, 2, 1), "does_not_help", 1.0),
+    ("not_row_4t", "row", (2, 4, 1), "does_not_help", 1.0),
+    ("not_col_4t", "col", (4, 2, 1), "does_not_help", 1.0),
+    ("not_scalar_4t", "scalar", (2, 2, 1), "does_not_help", 1.05),
+]
+
+
+@pytest.mark.parametrize("regime", _REGIMES, ids=[r[0] for r in _REGIMES])
+def test_reduce_block_regimes(device, regime):
+    # The regime thresholds below were calibrated on Wormhole B0 (n150). The boundary between
+    # "helps" and "does not help" moves with the arch (grid size, DRAM banks, NoC, clock), so on
+    # another arch re-measure the regimes and add its own thresholds before enabling this test.
+    if not ttnn.device.is_wormhole_b0(device):
+        pytest.skip("regime thresholds are calibrated on Wormhole B0 only; re-measure on this arch first")
+    name, dim, shape, kind, threshold = regime
+    Ht, Wt, NC = shape
+    x_dev, golden = _make_input(device, dim, Ht, Wt, NC)
+    kernel_iters = 200
+
+    def runner(variant, iters):
+        return lambda: run_op(x_dev, variant=variant, dim=dim, Ht=Ht, Wt=Wt, NC=NC, accum="fp32", kernel_iters=iters)
+
+    variants = ("reduce_tile", "accumulate_via_add", "accumulate_via_add_inline")
+    for variant in variants:
+        _check(runner(variant, 1)(), golden, dim, "fp32", f"{variant}/{dim} {shape}")
+
+    samples = _measure(device, {v: runner(v, kernel_iters) for v in variants}, _REGIME_TRIALS, kernel_iters)
+    med = {v: statistics.median(samples[v]) for v in variants}
+    speedup = med["reduce_tile"] / med["accumulate_via_add"]
+    logger.info(
+        f"[WH_B0] {name}: dim={dim} shape(Ht,Wt,NC)={shape} reduced_tiles={ {'row': Wt, 'col': Ht, 'scalar': Ht * Wt}[dim] } "
+        f"out_tiles={out_tile_count(dim, Ht, Wt, NC)} reduce_tile={med['reduce_tile']:.0f} ns "
+        f"(min {min(samples['reduce_tile']):.0f}, max {max(samples['reduce_tile']):.0f}) "
+        f"accumulate_via_add={med['accumulate_via_add']:.0f} ns "
+        f"(min {min(samples['accumulate_via_add']):.0f}, max {max(samples['accumulate_via_add']):.0f}) "
+        f"inline={med['accumulate_via_add_inline']:.0f} ns speedup={speedup:.2f}x "
+        f"inline_speedup={med['reduce_tile'] / med['accumulate_via_add_inline']:.2f}x trials={_REGIME_TRIALS}"
+    )
+    if kind == "helps":
+        assert speedup >= threshold, f"{name}: speedup {speedup:.2f}x < {threshold}"
+    else:
+        assert speedup <= threshold, f"{name}: speedup {speedup:.2f}x > {threshold}"

@@ -27,6 +27,7 @@ import socket
 import statistics
 from pathlib import Path
 
+import pytest
 import torch
 import ttnn
 from loguru import logger
@@ -391,3 +392,55 @@ def _format_report(
             lines.append("")
 
     return "\n".join(lines) + "\n"
+
+
+# =============================================================================
+# Regimes: where dest_accum_pairs helps vs does not, vs the single reduce_fold (Wormhole B0 n150)
+# =============================================================================
+# (id, row width in tiles, precision, kind, threshold)
+#   helps:          assert speedup (reduce_fold_ns / dest_accum_pairs_ns) >= threshold
+#   does_not_help:  assert speedup <= threshold
+_REGIME_TRIALS = 11
+_REGIMES = [
+    ("helps_bf16_32t", 32, "bf16-fp32", "helps", 1.17),
+    ("helps_fp32_32t", 32, "fp32-fp32", "helps", 1.25),
+    ("not_bf16_1t", 1, "bf16-fp32", "does_not_help", 1.0),
+    ("not_bf16_2t", 2, "bf16-fp32", "does_not_help", 1.0),
+    ("not_bf16_8t", 8, "bf16-fp32", "does_not_help", 1.0),
+]
+
+
+@pytest.mark.parametrize("regime", _REGIMES, ids=[r[0] for r in _REGIMES])
+def test_row_reduce_accumulate_regimes(device, regime):
+    # The regime thresholds below were calibrated on Wormhole B0 (n150). The boundary between
+    # "helps" and "does not help" moves with the arch (grid size, DRAM banks, NoC, clock), so on
+    # another arch re-measure the regimes and add its own thresholds before enabling this test.
+    if not ttnn.device.is_wormhole_b0(device):
+        pytest.skip("regime thresholds are calibrated on Wormhole B0 only; re-measure on this arch first")
+    name, width_tiles, precision, kind, threshold = regime
+    input_dtype, _ = split_precision(precision)
+    x_dev, golden = _make_input(device, width_tiles, input_dtype, "positive")
+    kernel_iters = 200
+    lever = "dest_accum_pairs"
+
+    def runner(method):
+        return lambda: run_op(
+            x_dev, method=method, precision=precision, width_tiles=width_tiles, kernel_iters=kernel_iters
+        )
+
+    for method in (BASELINE, lever):
+        out = run_op(x_dev, method=method, precision=precision, width_tiles=width_tiles, kernel_iters=1)
+        _check(out, golden, precision, f"{method}/{precision} W={width_tiles}t")
+
+    samples = _measure(device, {BASELINE: runner(BASELINE), lever: runner(lever)}, _REGIME_TRIALS, kernel_iters)
+    base, fast = statistics.median(samples[BASELINE]), statistics.median(samples[lever])
+    speedup = base / fast
+    logger.info(
+        f"[WH_B0] {name}: width={width_tiles} tiles precision={precision} {BASELINE}={base:.0f} ns "
+        f"(min {min(samples[BASELINE]):.0f}, max {max(samples[BASELINE]):.0f}) {lever}={fast:.0f} ns "
+        f"(min {min(samples[lever]):.0f}, max {max(samples[lever]):.0f}) speedup={speedup:.2f}x trials={_REGIME_TRIALS}"
+    )
+    if kind == "helps":
+        assert speedup >= threshold, f"{name}: speedup {speedup:.2f}x < {threshold}"
+    else:
+        assert speedup <= threshold, f"{name}: speedup {speedup:.2f}x > {threshold}"

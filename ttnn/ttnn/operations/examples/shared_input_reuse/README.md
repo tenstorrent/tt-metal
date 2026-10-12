@@ -1,6 +1,6 @@
 # shared_input_reuse — read once, share many (shared-input DRAM-read amortization via multicast)
 
-**Difficulty:** ⭐⭐⭐ T3  ·  **Concept(s):** redundant-DRAM-read elimination via NoC multicast (the `mcast_pipe` helper)
+**Problem type:** redundant reads  ·  **Concept(s):** redundant-DRAM-read elimination via NoC multicast (the `mcast_pipe` helper)
 **First profiled on:** `bh-qb-11-special-dnijemcevic-for-reservation-42432` · BH P150 · 2026-07-13
 
 > Reading order: [`../master.md`](../master.md) → **this file** → run the CLI, and read the code only if you need to.
@@ -93,4 +93,23 @@ with core count and with more concurrent injectors (one per independent stream i
 scripts/run_safe_pytest.sh --run-all tests/ttnn/unit_tests/operations/examples/test_shared_input_reuse.py::test_shared_input_reuse_delivery
 scripts/run_safe_pytest.sh --run-all tests/ttnn/unit_tests/operations/examples/test_shared_input_reuse.py::test_shared_input_reuse_structural
 scripts/run_safe_pytest.sh --run-all tests/ttnn/unit_tests/operations/examples/test_shared_input_reuse.py::test_shared_input_reuse_device_perf
+```
+
+## When it helps / when it does not
+
+Board: **Wormhole B0 n150** (8x8 compute grid, so the worker rectangle is 2 x 8 = 16 Tensix cores, injector at (0,0)); numbers from `test_shared_input_reuse_regimes` (bf16 tiles, 2048 B each; median of 10 interleaved windows of 5 launches; range = min-max of the 10 windows). The Blackhole numbers above (22 Tensix cores) are kept unchanged and are a different board.
+
+| Condition | Shape (chunk_rows x d_cols x chunks) | Chunk size | per_core_dram ns | mcast ns | Speedup | Trials | Board |
+|---|---|---|---|---|---|---|---|
+| **Helps:** few large chunks | 16 x 4 x 19 = 1216 tiles | 64 tiles (131072 B) | 255592 (251866-258115) | 191246 (190730-191830) | 1.34x | 10 | WH B0 n150 |
+| **Does not help:** many small chunks, same stream | 2 x 4 x 152 = 1216 tiles | 8 tiles (16384 B) | 214339 (213654-215695) | 262332 (262167-262390) | 0.82x (slower) | 10 | WH B0 n150 |
+
+Same total stream (1216 tiles), 16 Tensix cores; only the chunk size changes. Further points from the sweep (same stream): chunk 4 tiles 0.72x, 16 tiles 0.93x, 32 tiles 1.04x, 64 tiles 1.34x; 128-tile chunks (1280 tiles) 1.45x. Total stream size matters much less once chunks are large (64-tile chunks: 1 chunk 1.17x, 4 chunks 1.23x, 19 chunks 1.34x, 40 chunks 1.33x).
+
+- **Helps** when each chunk is large (>= ~64 tiles, >= ~128 KB per multicast): the per-chunk handshake (injector waits for all 15 receiver acks, then broadcasts) is amortized, and DRAM sees 1/16 of the reads.
+- **Does not help** when chunks are small (<= ~16 tiles, <= ~32 KB; crossover near 32 tiles / 64 KB on this 16-Tensix-core rectangle): the fixed per-chunk ack-and-broadcast round trip is paid once per chunk and exceeds the DRAM time saved, so `mcast` is slower than every core reading for itself (DRAM has not saturated at 16 readers of small chunks). If you control the chunk size, enlarge it (CB permitting) before choosing between the variants.
+- Wormhole B0 gain at the default shape (1.34x) is smaller than the Blackhole 1.71-1.82x: only 16 Tensix cores share the stream here instead of 22.
+
+```bash
+scripts/run_safe_pytest.sh --run-all tests/ttnn/unit_tests/operations/examples/test_shared_input_reuse.py::test_shared_input_reuse_regimes
 ```

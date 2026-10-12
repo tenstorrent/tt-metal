@@ -6,7 +6,7 @@
 
 # matmul_output_subblock — SRC-register argument reuse via the output-subblock shape
 
-**Difficulty:** ⭐⭐ T2  ·  **Concept(s):** matmul output-subblock shape → SRC-register operand reuse
+**Problem type:** compute-bound: SRC operand reload  ·  **Concept(s):** matmul output-subblock shape → SRC-register operand reuse
 **First profiled on:** `bh-qb-11-special-dnijemcevic-for-reservation-42432` · BH · Blackhole · 2026-07-13
 
 > Reading order: [`../master.md`](../master.md) → **this file** → run the CLI, and read the code only if you need to.
@@ -91,3 +91,23 @@ Correctness (every subblock shape computes the identical C):
 ```bash
 scripts/run_safe_pytest.sh --run-all tests/ttnn/unit_tests/operations/examples/test_matmul_output_subblock.py::test_matmul_output_subblock_correctness
 ```
+
+## When it helps / when it does not
+Board: **Wormhole B0 n150** (1 Tensix core, sharded L1, bf16, kernel-iters 20, DEVICE KERNEL DURATION per matmul, interleaved trials, median).
+The numbers in the tables above were measured on Blackhole and are kept; the Wormhole B0 numbers below come from `test_matmul_output_subblock_regimes`.
+
+| Condition | Output tiles (Mt x Nt), Kt | Baseline ns | Lever ns | Speedup | Trials | Board |
+|---|---|---:|---:|---:|---:|---|
+| **Helps:** many output tiles per pass to share operand loads | 16x16, Kt=1 | 24312 (`sb_1x1`) | 13905 (`sb_2x4`) | 1.75x | 11 | WH B0 n150 |
+| **Helps (shape):** same 8-tile subblock, wide instead of tall | 16x16, Kt=1 | 19167 (`sb_8x1`) | 13662 (`sb_1x8`) | 1.40x | 11 | WH B0 n150 |
+| **Does not help:** only 4 output tiles in the whole matmul | 2x2, Kt=1 | 670 (`sb_1x1`) | 656 (`sb_2x2`) | 1.02x | 11 | WH B0 n150 |
+
+Spread: 24273..24325 / 13886..13915; 19151..19179 / 13647..13676; 666..675 / 654..659 ns.
+
+- **Helps** because a bigger subblock holds one operand in the SRC registers across the subblock (A across `sb_w` B-tiles for wide) instead of reloading both per output tile.
+- **Does not help** when there is almost nothing to share: with 4 output tiles per matmul the per-matmul cost is ~670 ns either way (the operand-load saving is smaller than the fixed start-up cost).
+  At 2x2 output tiles with Kt=8 the same 1x1 -> 2x2 change is 1.34x, so small output only kills the win when K is also short; 4x4 output tiles at Kt=1 is already 1.26x.
+
+Corrections to the Blackhole text above (measured on WH B0, `test_matmul_output_subblock_device_perf`, 16x16 output tiles):
+- **Wide and tall are not symmetric on Wormhole B0.** At Kt=1: `sb_1x8` 1.77x, `sb_2x4` 1.74x, `sb_4x2` 1.58x, `sb_2x2` 1.56x, `sb_8x1` only 1.26x vs `sb_1x1`. At Kt>=2 `sb_2x4` and `sb_4x2` tie at ~1.65-1.69x, `sb_1x8` is ~1.6x and `sb_8x1` is the weakest (1.22-1.42x). Prefer a wide or 2x4/4x2 subblock over a tall 8x1.
+- **A large Kt does not cancel the win.** Kt=1/2/4/8/12: best subblock 1.77x/1.66x/1.69x/1.68x/1.69x. Kt=16 does not fit in L1 at 16x16 output tiles (allocator failure).

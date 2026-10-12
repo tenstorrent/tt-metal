@@ -1,6 +1,6 @@
 # All-reduce ring transport - synchronization and route-cost ablation
 
-**Difficulty:** ⭐⭐⭐ T3  ·  **Concepts:** neighbor synchronization and NoC route contention
+**Problem type:** data movement below the ceiling: contention  ·  **Concepts:** neighbor synchronization and NoC route contention
 **First profiled on:** `bgd-lab-t3003-special-mstaletovic-for-reservation-40918` · Wormhole B0 · 1000 MHz · 2026-07-10 · `5f0ad060667`
 
 > Reading order: [`../master.md`](../master.md) → **this file** → run the CLI, then read the code if needed.
@@ -72,3 +72,22 @@ python -m ttnn.operations.examples.tensix_all_reduce_ring_transport \
 ```
 
 The CLI also accepts `--variant` and `--report`. Correctness is the only test failure condition.
+
+## When it helps / when it does not
+
+Board: **Wormhole B0 n150**; numbers from `test_tensix_all_reduce_ring_transport_regimes`
+(baseline `payload_ring_noc1`, lever `payload_ring` on NoC0; 12 KiB payload = 6 bf16 tiles per Tensix
+core, 64 Tensix cores total, 20 ring rounds per launch, interleaved A/B, median of 11 retained
+trials, 2026-10-12; spread in brackets).
+
+| Condition | Shape(s) | Baseline ns | Lever ns | Speedup | Trials | Board |
+|---|---|---:|---:|---:|---:|---|
+| **Helps:** ring order along a line (all hops same direction) | `1x8` x 8 groups, 12 KiB | 26373 (26324-26481) | 4364 (4362-4380) | **6.04x** | 11 | WH B0 n150 |
+| **Does not help:** 2-row serpentine (equal traffic in both horizontal directions) | `2x8` x 4 groups, 12 KiB | 48920 (48801-49083) | 47490 (47263-47808) | **1.03x** | 11 | WH B0 n150 |
+
+On a line, the logical ring order follows NoC0's `+X` routing, so each forward is one physical hop,
+while on NoC1 (`-X`) the same neighbor write wraps almost the whole row. A `2x8` serpentine has one
+row running each way, so either NoC is wrong for one of the two rows and swapping NoCs just swaps
+which row is slow (<= 3%). Choose the NoC by checking the ring direction against the NoC's routing
+direction, not by group size alone; a serpentine ring needs a different remedy (reorder or split the
+ring), not a NoC switch. These match the Wormhole table above (6.07x / 1.03x at 100 rounds).

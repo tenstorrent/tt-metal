@@ -1,6 +1,6 @@
 # eltwise_l1_vs_dest_accumulate — where the running accumulator lives
 
-**Difficulty:** ⭐⭐ T2  ·  **Concept(s):** the accumulate mechanism in a reduction loop — L1↔DEST round-trip vs. packer L1-accumulation vs. DEST-resident accumulation
+**Problem type:** compute-bound: L1 round-trips  ·  **Concept(s):** the accumulate mechanism in a reduction loop — L1↔DEST round-trip vs. packer L1-accumulation vs. DEST-resident accumulation
 **First profiled on:** `bh-qb-11-special-dnijemcevic-for-reservation-42432` · BH · Blackhole · 2026-07-15
 
 > Reading order: [`../master.md`](../master.md) → **this file** → run the CLI, and read the code only if you need to.
@@ -97,3 +97,42 @@ Correctness (all three variants compute the identical fp32 sum):
 ```bash
 scripts/run_safe_pytest.sh --run-all tests/ttnn/unit_tests/operations/examples/test_eltwise_l1_vs_dest_accumulate.py::test_eltwise_l1_vs_dest_accumulate_correctness
 ```
+
+## When it helps / when it does not
+Board: **Wormhole B0 n150** (1 Tensix core, sharded L1, fp32, one tile per step, kernel-iters 100, DEVICE KERNEL DURATION per accumulation pass,
+interleaved trials, median). The measured Blackhole numbers above (5.09x / 10.59x at 64 steps) are kept and labeled Blackhole;
+the Wormhole B0 numbers below come from `test_eltwise_l1_vs_dest_accumulate_regimes`.
+
+| Condition | Steps B (single-tile) | Baseline ns | Lever ns | Speedup | Trials | Board |
+|---|---:|---:|---:|---:|---:|---|
+| **Helps:** accumulator round-trips L1 every step | 64 | 23784 (`rmw`) | 5769 (`pack_l1_acc`) | 4.12x | 11 | WH B0 n150 |
+| **Does not help:** only one pair to fold, so DEST-resident accumulation has nothing to save over `pack_l1_acc` | 2 | 367 (`pack_l1_acc`) | 370 (`dest_acc`) | 0.99x | 11 | WH B0 n150 |
+
+Spread: 23653..23791 / 5735..5808 and 366..368 / 365..373 ns.
+
+- **Helps** because `rmw` unpacks and packs `acc` every tile (B steps) while `pack_l1_acc` only packs it, once per pair (B/2 steps).
+- **Does not help (for `dest_acc` over `pack_l1_acc`)** at B=2: both are one add plus one pack. Their gap opens only as B grows (B=4: 1.09x, B=8: 1.17x, B=16: 1.25x, B=64: 1.30x on WH B0).
+  Note `pack_l1_acc` over `rmw` was NOT flat at any step count tried on WH B0 (B=2: 2.03x, 4: 2.75x, 8: 3.36x, 16: 3.72x, 64: 4.10x), so there is no small-B regime where `pack_l1_acc` stops paying for this single-tile fold.
+
+## Syntax — summing one stream with `DestAccumulation` (moved here from `master.md`)
+
+`DestAccumulation` lives on `BinaryFpu`, which takes TWO CB
+inputs, so accumulating ONE stream looks impossible and the tempting fix is to pair every tile against a
+zero tile. Don't: that zero tile has to be filled, and the fill is never free. Instead point BOTH operands
+at the SAME CB and offset the second by half the run — the operands are the two **HALVES** of the stream
+(`x[i] + x[i + N/2]`), not adjacent pairs — so N tiles fold in N/2 FPU steps with no identity operand:
+```cpp
+constexpr uint32_t N = B / 2;                       // B tiles to sum; the SECOND operand starts at N
+ckl::eltwise_chain<ckl::SetupOwner::Caller>(
+    ckl::EltwiseShape::tiles(N),
+    ckl::BinaryFpu<cb_in, cb_in, Add, None, ..., D0,
+                   InputTileMapping::Block, InputTileMapping::Block,
+                   ckl::TileAddressing::Direct, ckl::TileAddressing::Offset,
+                   ckl::DestAccumulation::Enabled>{0, N},        // <- {A base, B base} IS the trick
+    ckl::PackTile<cb_out, ckl::OutputLifecycle::DestAccumulation, ..., D0>{});
+```
+`tiles(...)` is one contiguous shape, so the accumulation scope is `WholeShape`/`Enabled` (`PerRow` is
+rejected there); a 2D walk uses `grid(H, W)` with `TileAddressing::Strided` + a `StridedTileRange{base,
+row_stride}` per operand. **Odd N does not tile into halves.** For the specific case of summing tiles that
+are ALREADY reduced (per-core partials from an earlier `REDUCE_ROW`), `reduce_helpers_compute.hpp` does it
+for you — `ReduceAlgorithm::AccumulateViaAdd` + `ReduceWithinTile::Skip`.

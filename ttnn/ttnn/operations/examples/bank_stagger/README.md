@@ -1,6 +1,6 @@
 # bank_stagger — bank-de-clustered issue order
 
-**Difficulty:** ⭐⭐ T2  ·  **Concept(s):** DRAM bank contention — per-core rotation of the issue order
+**Problem type:** data movement below the ceiling: contention  ·  **Concept(s):** DRAM bank contention — per-core rotation of the issue order
 **First profiled on:** `bh-qbge-09-special-dstoiljkovic-for-reservation-117054` · Blackhole p300c · 11×10=110 grid · 8 DRAM banks · 2026-10-05
 
 > Reading order: [`../master.md`](../master.md) → **this file** → run the CLI, and read the code only if you need to.
@@ -79,6 +79,33 @@ the banks and they walk it in the same order:
 
 - **Writes** into a width-sharded DRAM output, or of consecutive tile pages whose count is a multiple
   of the bank count: every core starts writing on the same bank. Rotate the write order.
+
+## When it helps / when it does not
+Board: **Blackhole p300c** (11×10 = 110 Tensix cores, 8 DRAM banks), bf16 tilize (`ROW_MAJOR` DRAM →
+`TILE` interleaved DRAM), all 110 Tensix cores. Baseline = `none` (every core walks its blocks and
+rows in order); lever = `stagger` (`stagger_blocks`, width-sharded source) or `rows`
+(`stagger_rows`, interleaved source). Numbers are the measurements above (median of 7 trials × 10
+launches, variants interleaved per trial; full table in [`report.md`](report.md)). There is no
+`test_bank_stagger_regimes` yet — these are Blackhole numbers and have not been re-measured on
+Wormhole B0.
+
+| Condition | Shape (H×W) | Read size | Blocks per Tensix core | none (ns) | lever (ns) | Speedup | Trials | Board |
+|---|---|--:|--:|--:|--:|--:|--:|---|
+| **Helps:** width-sharded source, few blocks per core (`stagger`) | `3520×1024` | 256 B | 8 | 101361 | 77087 | **1.32×** | 7 | BH p300c |
+| **Helps:** width-sharded source, larger reads (`stagger`) | `3520×4096` | 1024 B | 8 | 184246 | 158186 | **1.16×** | 7 | BH p300c |
+| **Gain shrinks:** width-sharded source, twice the blocks per core (`stagger`) | `7040×1024` / `7040×4096` | 256 B / 1024 B | 16 | 194525 / 357802 | 163880 / 316582 | **1.19× / 1.13×** | 7 | BH p300c |
+| **Small:** interleaved source, one block per core (`rows`) | `32×7040`, `32×56320`, `3520×512` | 128–1024 B | 1 | 7447–19017 | 7157–17749 | **1.04–1.07×** | 7 | BH p300c |
+| **Does not help:** interleaved source, four blocks per core (`rows`) | `128×56320` | 1024 B | 4 | 66462 | 66040 | **1.01×** | 7 | BH p300c |
+
+- **Helps** when the source is width-sharded with one shard per bank and each Tensix core has few
+  blocks: without the rotation the whole grid reads one bank per block step, and starting core k at
+  block `k % n_w` spreads the same requests over all 8 banks.
+- **Gain shrinks** as blocks per core grow: doubling 8 → 16 blocks cuts the speedup from 1.32× to
+  1.19× (256 B) and 1.16× to 1.13× (1024 B); total time saved grows (24 → 31 µs, 26 → 41 µs) but
+  less than the work does. Do not extrapolate the 8-block speedups.
+- **Does not help** on an interleaved source once each Tensix core has several blocks: `rows` saves
+  only ~0.3–1.3 µs whatever the work, so at four blocks per core it is 1.01×. These measurements do
+  not establish why the saving stays flat.
 
 ## Run it
 ```bash

@@ -1,6 +1,6 @@
 # mcast_topology — 1-D multicasts vs. redundant per-core DRAM reads on a 2-D work split
 
-**Difficulty:** ⭐⭐ T2  ·  **Concept(s):** Tensix↔Tensix multicast topology on a 2-D core grid
+**Problem type:** redundant reads  ·  **Concept(s):** Tensix↔Tensix multicast topology on a 2-D core grid
 **First profiled on:** `bh-49-special-mstaletovic-for-reservation-60064` · BH P150b · 2026-08-13 · `45770842250`
 
 > Reading order: [`../master.md`](../master.md) → **this file** → run the CLI, and read the code only if you need to.
@@ -123,3 +123,22 @@ the bytes still have to cross the NoC. Expect the win to grow with the line leng
 column shares one read further) and to shrink toward nothing as the slices get small enough that the
 per-chunk semaphore handshake dominates the transfer. At a 1×1 grid there is no line to share along
 and both variants are the same program.
+
+## When it helps / when it does not
+
+Board: **Wormhole B0 n150** (8x8 compute grid = 64 Tensix cores max); numbers from `test_mcast_topology_regimes` (bf16 tiles; median of 10 interleaved windows of 5 launches; range = min-max of the windows). The Blackhole numbers above (11x10 grid, 64 Tensix cores used) are kept unchanged and are a different board.
+
+| Condition | Shape (Mt x Nt x Kt) | Split / Tensix cores | per_core_dram ns | mcast_1d_pair ns | Speedup | Trials | Board |
+|---|---|---|---|---|---|---|---|
+| **Helps:** full 8x8 grid, lines of 8 Tensix cores | 8 x 32 x 4 | 8x8 / 64 | 16204 (16077-16504) | 8677 (8602-8774) | 1.87x | 10 | WH B0 n150 |
+| **Does not help:** 4x4 grid, lines of 4 | 4 x 4 x 4 | 4x4 / 16 | 4186 (4105-4303) | 4056 (3963-4129) | 1.03x | 10 | WH B0 n150 |
+| **Does not help (slower):** 2x2 grid, lines of 2 | 2 x 2 x 4 | 2x2 / 4 | 2288 (2164-2653) | 3120 (3088-3174) | 0.73x | 10 | WH B0 n150 |
+
+Sweep points (same method): 8x8 / 64 cores scales with bytes per core: Kt=1 1.33x, Kt=4 1.89x, Kt=16 2.67x, Kt=64 3.47x; Mloc x Nloc = 2x8 tiles per core gives 2.37x. A single row or column (1x8, 8x1) is 0.84x / 0.97x, 2x8 and 8x2 are 0.86x / 0.99x.
+
+- **Helps** when lines are long (8 Tensix cores per row and per column) and each core receives more than a handful of tiles: DRAM reads drop line-length-fold, and per_core_dram with 64 readers is DRAM-bound; the gain grows with Kt and per-core tile count.
+- **Does not help** when the grid is small (<= 16 Tensix cores, lines of <= 4): only 4x fewer reads, DRAM is not yet contended, and the two semaphore handshakes plus the sender's serial read cost more than they save (4x4 is break-even, 2x2 is 1.4x slower). Short Kt (<= 1 tile per slice) on a small grid also loses (4x4, Kt=1: 0.92x). No split size on the 4x4-or-smaller grids was found where mcast wins; the win starts around the 4x4 Kt=32 point (1.23x) and the full 8x8 grid.
+
+```bash
+scripts/run_safe_pytest.sh --run-all tests/ttnn/unit_tests/operations/examples/test_mcast_topology.py::test_mcast_topology_regimes
+```

@@ -172,3 +172,20 @@ How to read it:
 | dest_accum_pairs | 2.3e-03 \| 9.6e-04 \| 0.93u | 3.0e-03 \| 1.1e-03 \| 1.53u | 2.8e-03 \| 9.5e-04 \| 0.74u | 3.1e-03 \| 1.1e-03 \| 1.30u | 4.0e-03 \| 1.6e-03 \| 1.87u | 4.5e-03 \| 2.0e-03 \| 2.05u |
 | dest_accum_sfpu | 3.7e-03 \| 1.3e-03 \| 1.01u | 3.0e-03 \| 1.0e-03 \| 0.80u | 3.0e-03 \| 9.3e-04 \| 0.76u | 2.5e-03 \| 6.4e-04 \| 0.65u | 2.2e-03 \| 8.5e-04 \| 0.94u | 4.0e-03 \| 2.1e-03 \| 2.05u |
 | dest_accum_pairs_sfpu | 3.7e-03 \| 1.3e-03 \| 1.01u | 3.0e-03 \| 1.0e-03 \| 0.80u | 3.3e-03 \| 1.1e-03 \| 0.84u | 2.5e-03 \| 6.3e-04 \| 0.65u | 2.6e-03 \| 7.1e-04 \| 0.66u | 2.0e-03 \| 9.4e-04 \| 0.85u |
+
+## 2026-10-12 - regime measurements (Wormhole B0 n150)
+Source: `test_row_reduce_accumulate_regimes` and `test_row_reduce_accumulate_device_perf` (`RRA_METHODS=reduce_fold,dest_accum_pairs,dest_accum`, `RRA_DISTS=positive`, 10 trials, 200 kernel iters). Median ns per row-mean; speedup vs `reduce_fold`.
+
+| precision | method | 1t | 2t | 4t | 8t | 16t | 32t |
+|---|---|---:|---:|---:|---:|---:|---:|
+| fp32-fp32 | reduce_fold | 498 | 630 | 883 | 1402 | 2424 | 4506 |
+| fp32-fp32 | dest_accum | 892 (0.56x) | 1019 (0.62x) | 1272 (0.69x) | 1787 (0.78x) | 2813 (0.86x) | 4851 (0.93x) |
+| fp32-fp32 | dest_accum_pairs | 853 (0.58x) | 887 (0.71x) | 1011 (0.87x) | 1274 (1.10x) | 1800 (1.35x) | 2847 (1.58x) |
+| bf16-fp32 | reduce_fold | 432 | 504 | 633 | 883 | 1390 | 2414 |
+| bf16-fp32 | dest_accum | 837 (0.52x) | 882 (0.57x) | 1016 (0.62x) | 1270 (0.70x) | 1785 (0.78x) | 2811 (0.86x) |
+| bf16-fp32 | dest_accum_pairs | 833 (0.52x) | 832 (0.61x) | 877 (0.72x) | 1011 (0.87x) | 1276 (1.09x) | 1803 (1.34x) |
+| bf16-bf16 | reduce_fold | 413 | 489 | 609 | 863 | 1379 | 2410 |
+| bf16-bf16 | dest_accum | 688 (0.60x) | 748 (0.65x) | 869 (0.70x) | 1127 (0.77x) | 1641 (0.84x) | 2663 (0.91x) |
+| bf16-bf16 | dest_accum_pairs | 685 (0.60x) | 689 (0.71x) | 743 (0.82x) | 870 (0.99x) | 1131 (1.22x) | 1655 (1.46x) |
+
+Three runs of the regime test: bf16-fp32 32t 1.34/1.34/1.34x, fp32-fp32 32t 1.57/1.57/1.57x, 1t 0.52x x3, 2t 0.60x x3, 8t 0.87x x3. The earlier perf table in this file (reduce_fold 5312 ns at 32t bf16) was measured on an older library; on the current build `reduce_fold` is ~2.2x cheaper, which shrinks every win above and moves the crossover from ~4 to 8-16 tiles.

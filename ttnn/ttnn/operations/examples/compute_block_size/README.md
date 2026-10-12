@@ -1,6 +1,6 @@
 # compute_block_size — how big a block each compute helper should chew per call
 
-**Difficulty:** ⭐⭐ T2  ·  **Concept(s):** the fixed per-helper-call overhead of a multi-phase
+**Problem type:** compute-bound: fixed cost per call  ·  **Concept(s):** the fixed per-helper-call overhead of a multi-phase
 compute chain (phase-boundary data-format reconfig + LLK init/uninit + unpack/math/pack pipeline
 fill and drain), attacked two ways — (1) **block granularity**: amortize it over more tiles per
 call; (2) **skip redundant reconfigs**: when the data format never changes, the per-phase reconfig
@@ -172,3 +172,21 @@ every helper between its default reconfig and `NoReconfigure`/`None`. The sharde
 harness, the correctness gate, and both perf tests live in
 `../../../../../tests/ttnn/unit_tests/operations/examples/test_compute_block_size.py`. Committed
 reports: `report.md` (block size) and `report_reconfig_ablation.md` (reconfig on/off).
+
+## When it helps / when it does not
+Board: **Wormhole B0 n150** (1 Tensix core, sharded L1, kernel-iters 20, DEVICE KERNEL DURATION per `(A+B)@C` evaluation,
+interleaved baseline/lever trials, median). Numbers come from `test_compute_block_size_regimes`.
+
+| Condition | Shape (M,K,N tiles) | Baseline ns | Lever ns | Speedup | Trials | Board |
+|---|---|---:|---:|---:|---:|---|
+| **Helps:** 8 passes collapsed into 1, per-pass payload ~3.6 us | 8,4,4 | 29064 (`per_tile_row`, 8 passes) | 17271 (`one_block`, 1 pass) | 1.68x | 11 | WH B0 n150 |
+| **Does not help:** only 2 passes collapsed into 1, per-pass payload ~18.6 us | 2,16,16 | 37202 (`per_tile_row`, 2 passes) | 35634 (`one_block`, 1 pass) | 1.04x | 11 | WH B0 n150 |
+
+Spread (min..max over 11 trials): 29019..29108 / 17231..17284 and 37178..37215 / 35624..35637 ns.
+
+- **Helps** when many passes are removed and each pass carries little payload: each pass removed saves about
+  1.5 us of fixed cost (five helper calls of reconfig + init/uninit + pipeline fill/drain), so 7 removed passes recover ~12 us.
+- **Does not help** when the saving is (passes removed) x ~1.5 us but each pass already holds tens of microseconds of
+  real work (here a 16x16-tile `C` with K=16 tiles: ~37 us total): the same ~1.5 us is ~4 percent. Rule of thumb on
+  WH B0: expect the win to fall under ~5 percent once total time divided by passes removed exceeds ~25-30 us
+  (matmul tiles per pass: M_block x K x N around 500+ MACs-in-tiles). Intermediate points on WH B0: M=8,K=8,N=8 is still 1.25x; M=4,K=4,N=16 is 1.21x.

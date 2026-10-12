@@ -13,6 +13,7 @@ import socket
 import statistics
 from pathlib import Path
 
+import pytest
 import torch
 import ttnn
 from loguru import logger
@@ -186,3 +187,55 @@ def test_tensix_all_reduce_ring_transport_device_perf(device):
     logger.info("\n" + report)
     if report_path := os.environ.get("AR_RING_REPORT"):
         Path(report_path).write_text(report)
+
+
+# (id, group_shape, num_groups, num_tiles, kind, threshold). Baseline = payload_ring_noc1, lever = payload_ring (NoC0).
+# Thresholds: helps -> T_help = max(1.05, 1 + 0.5 * (measured - 1)); does_not_help -> <= 1.05.
+_REGIMES = [
+    ("helps_1x8_line_x8groups_6tiles", (1, 8), 8, 6, "helps", 3.5),
+    ("does_not_help_2x8_serpentine_x4groups_6tiles", (2, 8), 4, 6, "does_not_help", 1.05),
+]
+
+
+@pytest.mark.parametrize(
+    "group_shape, num_groups, num_tiles, kind, threshold",
+    [r[1:] for r in _REGIMES],
+    ids=[r[0] for r in _REGIMES],
+)
+def test_tensix_all_reduce_ring_transport_regimes(device, group_shape, num_groups, num_tiles, kind, threshold):
+    """Interleaved A/B of the ring on NoC1 (baseline) vs NoC0 (lever); median of 11 retained trials."""
+    # The regime thresholds below were calibrated on Wormhole B0 (n150). The boundary between
+    # "helps" and "does not help" moves with the arch (grid size, DRAM banks, NoC, clock), so on
+    # another arch re-measure the regimes and add its own thresholds before enabling this test.
+    if not ttnn.device.is_wormhole_b0(device):
+        pytest.skip("regime thresholds are calibrated on Wormhole B0 only; re-measure on this arch first")
+    baseline, lever = "payload_ring_noc1", "payload_ring"
+    trials, kernel_iters = 11, 20
+    tt_input, expected = _make_input(device, group_shape, num_groups, num_tiles)
+    for variant in (baseline, lever):
+        _run_checked(tt_input, expected, variant, group_shape, num_groups, num_tiles, 1)
+    runners = {
+        variant: lambda variant=variant: ring_transport(
+            tt_input,
+            variant=variant,
+            group_shape=group_shape,
+            num_groups=num_groups,
+            num_tiles=num_tiles,
+            kernel_iters=kernel_iters,
+        )
+        for variant in (baseline, lever)
+    }
+    samples = _measure(device, runners, trials, kernel_iters)
+    base_ns = statistics.median(samples[baseline])
+    lever_ns = statistics.median(samples[lever])
+    speedup = base_ns / lever_ns
+    logger.info(
+        f"REGIME {kind} group={group_shape[0]}x{group_shape[1]} groups={num_groups} tiles/core={num_tiles} "
+        f"{baseline}={base_ns:.1f}ns [{min(samples[baseline]):.1f}-{max(samples[baseline]):.1f}] "
+        f"{lever}={lever_ns:.1f}ns [{min(samples[lever]):.1f}-{max(samples[lever]):.1f}] "
+        f"speedup={speedup:.3f}x trials={trials} arch={device.arch()}"
+    )
+    if kind == "helps":
+        assert speedup >= threshold, f"expected >= {threshold}x, got {speedup:.3f}x"
+    else:
+        assert speedup <= threshold, f"expected <= {threshold}x, got {speedup:.3f}x"

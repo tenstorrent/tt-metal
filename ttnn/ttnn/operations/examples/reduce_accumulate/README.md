@@ -1,6 +1,6 @@
 # reduce_accumulate — a SUM/mean reduce as accumulate + SFPU-finalize vs the standard reduce library
 
-**Difficulty:** ⭐⭐ T2  ·  **Concept(s):** reduce split into cross-tile FPU accumulate + within-tile SFPU finalize, across row/col/scalar, vs the matmul-reduce library — with a width-and-dim dispatch
+**Problem type:** compute-bound: reduction  ·  **Concept(s):** reduce split into cross-tile FPU accumulate + within-tile SFPU finalize, across row/col/scalar, vs the matmul-reduce library — with a width-and-dim dispatch
 **First profiled on:** `bgd-lab-t3003-special-mstaletovic-for-reservation-40918` · WH B0 · single core · 2026-07-13 · `54a202a35d5`
 
 > Reading order: [`../master.md`](../master.md) → **this file** → run the CLI, and read the code only if you need to.
@@ -98,3 +98,20 @@ scripts/run_safe_pytest.sh --run-all tests/ttnn/unit_tests/operations/examples/t
 `program_descriptor_with_inline_kernels.py` — the `fast` kernel (shared accumulate + per-dim SFPU finalize),
 the `helper` kernel (standard reduce), and the AVG scaler dataflow kernel; `dispatch` routes between them
 per (dim, width).
+
+## When it helps / when it does not
+*Board: **Wormhole B0 n150**, single Tensix core, sharded L1, bf16 input, fp32 accumulation, HiFi4, 200 in-kernel iters. Numbers come from `test_reduce_accumulate_regimes` (11 interleaved trials per variant, median; `helper` = baseline, `fast` = lever, speedup = helper_ns / fast_ns).*
+
+| condition | shape (tiles reduced) | helper ns | fast ns | speedup | trials | board |
+|---|---|---:|---:|---:|---:|---|
+| helps: many tiles reduced per output, REDUCE_ROW | `[32, 1024]` (32 tiles) | 3652 (3650-3652) | 1865 (1860-1869) | 1.96x | 11 | WH B0 n150 |
+| helps: many tiles reduced, REDUCE_COL | `[1024, 32]` (32 tiles) | 2978 (2976-2980) | 1736 (1730-1742) | 1.72x | 11 | WH B0 n150 |
+| helps: many tiles reduced, REDUCE_SCALAR | 32 tiles | 5861 (5855-5863) | 2000 (1994-2004) | 2.93x | 11 | WH B0 n150 |
+| does not help: 1 tile, REDUCE_ROW | 1 tile | 467 (463-477) | 940 (929-947) | 0.50x | 11 | WH B0 n150 |
+| does not help: 4 tiles, REDUCE_ROW | 4 tiles | 782 (770-791) | 940 (922-945) | 0.83x | 11 | WH B0 n150 |
+| does not help: 4 tiles, REDUCE_COL | 4 tiles | 650 (648-661) | 807 (797-820) | 0.81x | 11 | WH B0 n150 |
+| does not help: 4 tiles, REDUCE_SCALAR | 4 tiles | 1013 (1008-1019) | 1071 (1064-1083) | 0.95x | 11 | WH B0 n150 |
+
+- **Helps (>= ~8 tiles reduced per output tile):** the library pays its matmul-with-ones datapath once per input tile (about 100 ns per tile for REDUCE_ROW), while the fast path pays about 30 ns per tile for `add_tiles` plus a fixed finalize, so the gap grows with tile count.
+- **Does not help (< ~8 tiles reduced):** the fast path has a fixed cost of roughly 800-900 ns (pack, SFPU finalize, `mul_unary_tile`) that the library's 1-4 tile reduce never pays, so at 4 tiles the fast path is still 0.8-0.95x.
+- **Measured crossover on WH B0 (this build):** row 8 tiles (1.10x), col 8 tiles (1.05x), scalar 8 tiles (1.40x); at 4 tiles all three dims are still slower (0.81-0.95x). The row crossover is ~8 tiles, not 4: the table at the top (row `helper` 968 ns at 4 tiles) was measured on an older library, whose REDUCE_ROW is now ~20-30% cheaper (here 3652 ns at 32 tiles, not 5328 ns). The per-dim `dispatch` thresholds in the code (row=4) are therefore stale on this build: `dispatch` row at 4 tiles measured 0.83x of `helper`.

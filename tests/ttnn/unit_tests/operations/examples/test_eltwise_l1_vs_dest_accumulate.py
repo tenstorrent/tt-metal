@@ -184,3 +184,81 @@ def test_eltwise_l1_vs_dest_accumulate_device_perf(device):
         logger.info(f"[eltwise_l1_vs_dest_accumulate] wrote {REPORT_PATH}")
     except OSError as e:
         logger.warning(f"[eltwise_l1_vs_dest_accumulate] could not write report: {e}")
+
+
+# =============================================================================
+# Regimes (Wormhole B0 n150): interleaved A,B,A,B... medians of >= 10 trials per variant
+# =============================================================================
+_REGIME_TRIALS = 11
+_REGIME_ITERS = 100
+
+
+def _regime_ns(device, tt_x, tt_acc, base_variant, lever_variant, num_blocks):
+    """Interleaved per-evaluation device-kernel ns for two variants -> (base_samples, lever_samples)."""
+    runs = {}
+    for name, variant in (("base", base_variant), ("lever", lever_variant)):
+        desc = create_program_descriptor(
+            tt_x, tt_acc, variant=variant, num_blocks=num_blocks, kernel_iters=_REGIME_ITERS
+        )
+        runs[name] = lambda d=desc: ttnn.generic_op([tt_x, tt_acc], d)
+    for run in runs.values():
+        run()
+    ttnn.synchronize_device(device)
+    _read_kernel_ns(device)  # discard warmup window
+    samples = {"base": [], "lever": []}
+    for trial in range(_REGIME_TRIALS + 1):
+        for name, run in runs.items():
+            run()
+            ns = _read_kernel_ns(device)
+            assert ns is not None, f"no profiler data for {name}"
+            if trial:  # discard first timed pass
+                samples[name].append(ns / _REGIME_ITERS)
+    return samples["base"], samples["lever"]
+
+
+# (steps B, baseline, lever, verdict, measured speedup)
+#   helps:          B=64 single-tile steps, rmw -> pack_l1_acc (rmw unpacks+packs acc every tile; the packer folds
+#                   a pair per step instead). Measured ~4.1x on Wormhole B0 (5.09x was Blackhole).
+#   does_not_help:  B=2 (one pair): pack_l1_acc -> dest_acc. Keeping the sum in DEST instead of folding in L1 saves
+#                   nothing when there is a single pair to fold (~1.00x); dest_acc only pays as B grows (~1.3x at B=64).
+_REGIMES = [
+    pytest.param(64, "rmw", "pack_l1_acc", "helps", 4.10, id="helps_B64_rmw_to_pack_l1_acc"),
+    pytest.param(2, "pack_l1_acc", "dest_acc", "does_not_help", 1.00, id="flat_B2_pack_l1_acc_to_dest_acc"),
+]
+
+
+@pytest.mark.parametrize("num_blocks,base_variant,lever_variant,verdict,measured", _REGIMES)
+def test_eltwise_l1_vs_dest_accumulate_regimes(device, num_blocks, base_variant, lever_variant, verdict, measured):
+    # The regime thresholds below were calibrated on Wormhole B0 (n150). The boundary between
+    # "helps" and "does not help" moves with the arch (grid size, DRAM banks, NoC, clock), so on
+    # another arch re-measure the regimes and add its own thresholds before enabling this test.
+    if not ttnn.device.is_wormhole_b0(device):
+        pytest.skip("regime thresholds are calibrated on Wormhole B0 only; re-measure on this arch first")
+    tt_x, x = _make_input(device, b=num_blocks)
+    expected = _expected(x, b=num_blocks)
+    tt_acc = ttnn.allocate_tensor_on_device(
+        ttnn.Shape([TILE, TILES_PER_BLOCK * TILE]),
+        ttnn.float32,
+        ttnn.TILE_LAYOUT,
+        device,
+        create_sharded_memory_config(1, TILES_PER_BLOCK),
+    )
+    for variant in (base_variant, lever_variant):  # correctness gate
+        out = ttnn.to_torch(
+            eltwise_l1_vs_dest_accumulate(tt_x, variant=variant, num_blocks=num_blocks, kernel_iters=1)
+        ).to(torch.float32)
+        assert_with_pcc(expected, out, PCC)
+
+    base, lever = _regime_ns(device, tt_x, tt_acc, base_variant, lever_variant, num_blocks)
+    b, l = statistics.median(base), statistics.median(lever)
+    speedup = b / l
+    arch = {"WORMHOLE_B0": "WH_B0", "BLACKHOLE": "BH"}.get(str(device.arch()).rsplit(".", 1)[-1], str(device.arch()))
+    logger.info(
+        f"[{arch}] {verdict} B={num_blocks} steps (1 tile each, fp32): {base_variant} {b:.0f} ns "
+        f"[{min(base):.0f}..{max(base):.0f}] -> {lever_variant} {l:.0f} ns [{min(lever):.0f}..{max(lever):.0f}] "
+        f"= {speedup:.2f}x (trials={len(base)}, ns per accumulation pass)"
+    )
+    if verdict == "helps":
+        assert speedup >= max(1.05, 1 + 0.5 * (measured - 1)), f"expected a clear win, got {speedup:.2f}x"
+    else:
+        assert speedup <= 1.05, f"expected no meaningful gain (<= 1.05x), got {speedup:.2f}x"

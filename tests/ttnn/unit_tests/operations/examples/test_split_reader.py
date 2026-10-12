@@ -10,6 +10,8 @@ os.environ.setdefault("TT_METAL_DEVICE_PROFILER", "1")
 os.environ.setdefault("TT_METAL_PROFILER_MID_RUN_DUMP", "1")
 os.environ.setdefault("TT_METAL_PROFILER_CPP_POST_PROCESS", "1")
 
+import statistics
+
 from loguru import logger
 import pytest
 import torch
@@ -146,3 +148,120 @@ def test_split_reader_device_perf(device):
             f"{on['device']:>9.1f}  {speedup:>7.2f}x"
         )
     logger.info("\n".join(lines))
+
+
+# ---------------------------------------------------------------------------
+# When the split reader helps / when its gain shrinks (Wormhole B0 n150).
+#
+# Baseline = split_reader=False (NCRISC issues every read); lever = split_reader=True
+# (BRISC also issues the second half of every block). 8 source Tensix cores x 8 tiles,
+# 8-tile blocks, 128 KiB payload in both regimes; only the NoC read size changes.
+#
+#   helps_issue_bound_32B   32 B reads -> 4096 reads/launch, 64 reads per 2 KiB tile.
+#                           The single NCRISC is issue-bound (its lifetime scales with
+#                           the read count at fixed bytes)                     -> ~1.8x
+#   diminished_2048B        2048 B reads -> 64 reads/launch, 1 read per tile. NCRISC is
+#                           no longer issue-bound (lifetime flat from 1024 B up); the
+#                           remaining gain is only 2 tiles in flight instead of 1 under
+#                           the per-tile read barrier, and BRISC (half the reads + all
+#                           DRAM writes) becomes the critical RISC-V            -> ~1.35x
+#
+# No configuration reachable through row_gather_copy's arguments is flat (<= 1.05x) on
+# WH B0: because the reader barriers after every tile, a second issuing RISC-V always
+# doubles the reads in flight. The diminished case asserts the gain stays well below the
+# issue-bound one instead.
+#
+# A trial = mean per-launch durations over _LAUNCHES_PER_TRIAL launches of one variant
+# (one profiler window). Baseline/lever trials are interleaved A,B,A,B and the median
+# of _N_TRIALS trials per variant is compared.
+# ---------------------------------------------------------------------------
+
+_N_TRIALS = 12
+_LAUNCHES_PER_TRIAL = 5
+_REGIME_CORES, _REGIME_TILES_PER_CORE, _REGIME_BLOCK_TILES = 8, 8, 8
+
+# (regime id, transaction_bytes, kind, threshold). helps -> speedup >= 1 + 0.5*(measured-1);
+# diminished -> speedup <= threshold (well below the issue-bound gain).
+_REGIMES = [
+    ("helps_issue_bound_32B", 32, "helps", 1.4),  # measured ~1.84x
+    ("diminished_2048B", 2048, "diminished", 1.50),
+]
+
+
+def _regime_input(device):
+    torch.manual_seed(0)
+    shape = (_REGIME_CORES * _REGIME_TILES_PER_CORE * TILE, TILE)
+    torch_input = torch.rand(shape, dtype=torch.float32)
+    tt_input = ttnn.from_torch(
+        torch_input,
+        dtype=ttnn.bfloat16,
+        layout=ttnn.TILE_LAYOUT,
+        device=device,
+        memory_config=make_row_sharded_memory_config(shape, _REGIME_CORES),
+    )
+    return torch_input, tt_input
+
+
+def _trial_metrics(device, run_fn):
+    for _ in range(_LAUNCHES_PER_TRIAL):
+        run_fn()
+    totals = _read_kernel_metrics(device)
+    assert all(v is not None for v in totals.values()), "profiler produced incomplete data"
+    return {name: value / _LAUNCHES_PER_TRIAL for name, value in totals.items()}
+
+
+def _median(trials, key):
+    return statistics.median(t[key] for t in trials)
+
+
+@pytest.mark.parametrize("regime,transaction_bytes,kind,threshold", _REGIMES, ids=[r[0] for r in _REGIMES])
+def test_split_reader_regimes(device, regime, transaction_bytes, kind, threshold):
+    """split off (baseline) vs on (lever) where NCRISC is issue-bound and where it is not."""
+    # The regime thresholds below were calibrated on Wormhole B0 (n150). The boundary between
+    # "helps" and "does not help" moves with the arch (grid size, DRAM banks, NoC, clock), so on
+    # another arch re-measure the regimes and add its own thresholds before enabling this test.
+    if not ttnn.device.is_wormhole_b0(device):
+        pytest.skip("regime thresholds are calibrated on Wormhole B0 only; re-measure on this arch first")
+    torch_input, tt_input = _regime_input(device)
+    expected = _expected(torch_input)
+    runs = {
+        enabled: (
+            lambda e=enabled: row_gather_copy(
+                tt_input,
+                split_reader=e,
+                num_cores=_REGIME_CORES,
+                block_tiles=_REGIME_BLOCK_TILES,
+                transaction_bytes=transaction_bytes,
+            )
+        )
+        for enabled in (False, True)
+    }
+    for run_fn in runs.values():
+        assert torch.equal(expected, ttnn.to_torch(run_fn()).to(torch.float32))
+
+    for _ in range(N_WARMUP):
+        runs[False]()
+        runs[True]()
+    ttnn.synchronize_device(device)
+    _read_kernel_metrics(device)  # flush warmup window
+    off, on = [], []
+    for _ in range(_N_TRIALS):
+        off.append(_trial_metrics(device, runs[False]))
+        on.append(_trial_metrics(device, runs[True]))
+
+    b_med, l_med = _median(off, "device"), _median(on, "device")
+    speedup = b_med / l_med
+    reads = _REGIME_CORES * _REGIME_TILES_PER_CORE * (TILE_BYTES // transaction_bytes)
+    b_dev = [t["device"] for t in off]
+    l_dev = [t["device"] for t in on]
+    logger.info(
+        f"[WH_B0] split_reader {regime}: tx={transaction_bytes} B reads/launch={reads} "
+        f"(cores={_REGIME_CORES} tiles/core={_REGIME_TILES_PER_CORE} block={_REGIME_BLOCK_TILES}) | "
+        f"off median {b_med:.1f} ns (min {min(b_dev):.1f} max {max(b_dev):.1f}; NCRISC {_median(off, 'ncrisc'):.1f}) | "
+        f"on median {l_med:.1f} ns (min {min(l_dev):.1f} max {max(l_dev):.1f}; NCRISC {_median(on, 'ncrisc'):.1f} "
+        f"BRISC {_median(on, 'brisc'):.1f}) | speedup {speedup:.2f}x | trials {_N_TRIALS}x{_LAUNCHES_PER_TRIAL} launches"
+    )
+    if kind == "helps":
+        assert speedup >= threshold, f"{regime}: expected >= {threshold}x, got {speedup:.2f}x"
+    else:
+        assert speedup <= threshold, f"{regime}: expected <= {threshold}x, got {speedup:.2f}x"
