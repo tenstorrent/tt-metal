@@ -14,8 +14,13 @@ struct RuntimeParams;
 __attribute__((noinline, section(".text.run_kernel"))) void run_kernel(const struct RuntimeParams& params);
 // INIT's sections start at this offset into the code, ahead of the harness (sections.ld), so harness growth cannot move
 // them; the code starts with a jump to _start, where the loader starts the core
+#if !defined(LLK_EXP_INIT_AT)
+#define LLK_EXP_INIT_AT 512
+#endif
+#define LLK_EXP_IA_S2_(x) #x
+#define LLK_EXP_IA_S_(x)  LLK_EXP_IA_S2_(x)
 asm(".globl llk_init_region_at\n"
-    ".set llk_init_region_at, 512\n"
+    ".set llk_init_region_at, " LLK_EXP_IA_S_(LLK_EXP_INIT_AT) "\n" // experiment hook (initx): LLK_EXP_INIT_AT moves INIT's sections
     ".pushsection .text.llk_init_entry, \"ax\", @progbits\n"
     "j _start\n"
     ".popsection");
