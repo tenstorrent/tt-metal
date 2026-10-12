@@ -13,6 +13,13 @@
 #include "perf.h"
 #include "profiler.h"
 
+// Under SPEED_OF_LIGHT the run-time parameters are compile-time constants of the same names.
+#ifdef SPEED_OF_LIGHT
+#define TOPK_PERF_PARAM(name) name
+#else
+#define TOPK_PERF_PARAM(name) params.name
+#endif
+
 std::uint32_t unp_cfg_context          = 0;
 std::uint32_t pack_sync_tile_dst_ptr   = 0;
 std::uint32_t math_sync_tile_dst_index = 0;
@@ -56,11 +63,13 @@ void run_kernel(RUNTIME_PARAMETERS params)
 #if defined(RUNTIME_FORMATS) && !defined(SPEED_OF_LIGHT)
     const FormatConfig& formats = params.formats;
 #endif
+#ifndef SPEED_OF_LIGHT
     const std::uint32_t LOOP_FACTOR  = params.LOOP_FACTOR;
+#endif
     const std::uint32_t src_format   = formats.unpack_A_src;
     const std::uint32_t dst_format   = formats.unpack_A_dst;
-    const std::uint32_t values_base  = L1_ADDRESS(params.buffer_A[0]);
-    const std::uint32_t indices_base = L1_ADDRESS(params.buffer_B[0]);
+    const std::uint32_t values_base  = L1_ADDRESS(TOPK_PERF_PARAM(buffer_A)[0]);
+    const std::uint32_t indices_base = L1_ADDRESS(TOPK_PERF_PARAM(buffer_B)[0]);
     {
         START_PERF_MEASURE("INIT")
         _llk_unpack_hw_configure_<is_fp32_dest_acc_en>(
@@ -139,7 +148,9 @@ void run_kernel(RUNTIME_PARAMETERS params)
 #if defined(RUNTIME_FORMATS) && !defined(SPEED_OF_LIGHT)
     const FormatConfig& formats = params.formats;
 #endif
+#ifndef SPEED_OF_LIGHT
     const std::uint32_t LOOP_FACTOR = params.LOOP_FACTOR;
+#endif
     const std::uint32_t math_format = formats.math;
     {
         START_PERF_MEASURE("INIT")
@@ -191,7 +202,9 @@ void run_kernel(RUNTIME_PARAMETERS params)
 #if defined(RUNTIME_FORMATS) && !defined(SPEED_OF_LIGHT)
     const FormatConfig& formats = params.formats;
 #endif
+#ifndef SPEED_OF_LIGHT
     const std::uint32_t LOOP_FACTOR = params.LOOP_FACTOR;
+#endif
     {
         START_PERF_MEASURE("INIT")
         _llk_pack_hw_configure_wrapper_<is_fp32_dest_acc_en, PackMode::Default>(formats.pack_src, formats.pack_dst, FACE_R_DIM * FACE_C_DIM * TILE_NUM_FACES);
@@ -206,8 +219,8 @@ void run_kernel(RUNTIME_PARAMETERS params)
             _llk_packer_wait_for_math_done_();
             // One datum per row: the survivors sit in the first column of Dest rows 0 to 31.
             TTI_SETADCXX(p_setadc::PAC, 1 - 1, 0x0);
-            _llk_pack_<DST_SYNC, is_fp32_dest_acc_en, ckernel::PackMode::Default>(VALUE_TILE, L1_ADDRESS(params.buffer_Res[0]));
-            _llk_pack_<DST_SYNC, is_fp32_dest_acc_en, ckernel::PackMode::Default>(INDEX_TILE, L1_ADDRESS(params.buffer_Res[1]));
+            _llk_pack_<DST_SYNC, is_fp32_dest_acc_en, ckernel::PackMode::Default>(VALUE_TILE, L1_ADDRESS(TOPK_PERF_PARAM(buffer_Res)[0]));
+            _llk_pack_<DST_SYNC, is_fp32_dest_acc_en, ckernel::PackMode::Default>(INDEX_TILE, L1_ADDRESS(TOPK_PERF_PARAM(buffer_Res)[1]));
             _llk_pack_dest_section_done_<DST_SYNC, is_fp32_dest_acc_en>();
         }
         PROFILER_SYNC();
