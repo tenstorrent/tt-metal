@@ -3,9 +3,9 @@
 #
 # SPDX-License-Identifier: Apache-2.0
 
-"""Cross-op energy chart with a per-op FLOP denominator, as an addendum to run_power_cases.py.
+"""Cross-op energy chart with a per-op FLOP denominator, as an addendum to the cross_op step.
 
-run_power_cases.py divides every op's energy by 2*M*N*K*iters -- the matmul's FLOP count -- for
+The cross_op step (analysis/power_cases.py) divides every op's energy by 2*M*N*K*iters -- the matmul's FLOP count -- for
 all seven ops. Since the denominator is one global constant, its cross-op chart is a faithful
 *energy* comparison at fixed data movement, which is the controlled quantity the sweep varies.
 It is not energy per FLOP for the six non-matmul ops, and the two rank the ops in opposite
@@ -37,7 +37,7 @@ import matplotlib
 matplotlib.use("Agg")
 import matplotlib.pyplot as plt
 
-# Engine -> the ablation case whose absence isolates it, matching run_power_cases.py's
+# Engine -> the ablation case whose absence isolates it, matching analysis/power_cases.py's
 # ENGINE_ABLATIONS so the two charts decompose energy the same way.
 ALL_ACTIVE = "writer_amp"
 ENGINES = [("reader", "reader_idle2"), ("writer", "writer_idle"), ("compute", "compute_idle")]

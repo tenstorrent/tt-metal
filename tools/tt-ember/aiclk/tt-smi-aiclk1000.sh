@@ -5,7 +5,7 @@
 
 # tt-smi drop-in that re-pins AICLK after a reset.
 #
-# run_power_cases.py resets the board before every case via its --tt-smi executable, and a reset
+# run_sweep.py resets the board before every run via its --tt-smi executable, and a reset
 # clears the ARC FORCE_AICLK override (the chip returns to firmware clocking: 800 MHz idle,
 # 1350 MHz busy). Passing this script as --tt-smi keeps the whole sweep at a fixed clock without
 # modifying tt-ember: it forwards every argument to the real tt-smi, then re-applies the force

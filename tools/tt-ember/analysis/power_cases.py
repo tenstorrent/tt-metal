@@ -5,8 +5,8 @@
 """Analysis steps for a POWER_CASE sweep, shared by run_sweep.py.
 
 Everything here reads the <output-root>/<op>/<case>/program_intervals.csv tree that auto.py and
-parser.py write, and produces the per-engine energy ablations and cross-op charts. Moved verbatim
-out of run_power_cases.py, which mixed these with the sweep orchestration.
+parser.py write, and produces the per-engine energy ablations and cross-op charts. This is the
+analysis half of the former run_power_cases.py, moved here unchanged.
 """
 
 from __future__ import annotations
