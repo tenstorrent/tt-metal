@@ -33,22 +33,22 @@ inline void _llk_unpack_reduce_mop_config_(
     const std::uint32_t MOP_INNER_LOOP = tensor_shape.total_num_faces();
 
     std::uint32_t unpack_srcA_face;
+    std::uint32_t unpack_srcA_face_last; // last face of a non-final tile: also advances the SrcA tile index
     std::uint32_t unpack_srcB_face;
-    std::uint32_t advance_srcA_tile;
 
     if (tensor_shape.total_num_faces() == NUM_FACES)
     {
         unpack_srcA_face = TT_OP_UNPACR0_FACE_INC(0, 1 /*Src face Idx*/, 0, 0, buf_desc_id_0, 1 /*Set Dvalid*/);
-        unpack_srcB_face = TT_OP_UNPACR1_FACE_INC(0, 0, 0, 0, buf_desc_id_1, 1 /*Set Dvalid*/);
         // The SrcA face counter wraps at the buffer descriptor's z_dim without carrying into the tile index
-        advance_srcA_tile = TT_OP_INC_SRC_TILE_FACE_ROW_IDX(p_set_inc_sel::TILE_SEL, p_unpacr::UNP_A, 1 /*Value*/);
+        unpack_srcA_face_last = TT_OP_UNPACR0_FACE_INC(0, 1 /*Src face Idx*/, 0, 1 /*Src tile offset Idx*/, buf_desc_id_0, 1 /*Set Dvalid*/);
+        unpack_srcB_face      = TT_OP_UNPACR1_FACE_INC(0, 0, 0, 0, buf_desc_id_1, 1 /*Set Dvalid*/);
     }
     else
     {
         unpack_srcA_face = TT_OP_UNPACR0_TILE_INC(0, 1 /*Src tile Idx*/, buf_desc_id_0, 1 /*Set Dvalid*/);
-        unpack_srcB_face = TT_OP_UNPACR1_TILE_INC(0, 0, buf_desc_id_1, 1 /*Set Dvalid*/);
-        // UNPACR0_TILE_INC already advances the SrcA tile index, so no end-op advance is needed
-        advance_srcA_tile = TT_OP_NOP;
+        // UNPACR0_TILE_INC already advances the SrcA tile index
+        unpack_srcA_face_last = unpack_srcA_face;
+        unpack_srcB_face      = TT_OP_UNPACR1_TILE_INC(0, 0, buf_desc_id_1, 1 /*Set Dvalid*/);
     }
 
     const bool needs_srca_clear = (REDUCE_DIMENSION == ReduceDim::REDUCE_SCALAR) || (tensor_shape.face_r_dim < FACE_R_DIM);
@@ -61,14 +61,14 @@ inline void _llk_unpack_reduce_mop_config_(
 
         ckernel_template temp(MOP_OUTER_LOOP, MOP_INNER_LOOP, unpack_zero_srcA, unpack_srcA_face);
         temp.set_start_op(unpack_srcB_face);
-        temp.set_end_op(advance_srcA_tile);
+        temp.set_last_inner_loop_instr(unpack_srcA_face_last);
         temp.program_bank0_sw_cntl(instrn_buffer);
     }
     else
     {
         ckernel_template temp(MOP_OUTER_LOOP, MOP_INNER_LOOP, unpack_srcA_face);
         temp.set_start_op(unpack_srcB_face);
-        temp.set_end_op(advance_srcA_tile);
+        temp.set_last_inner_loop_instr(unpack_srcA_face_last);
         temp.program_bank0_sw_cntl(instrn_buffer);
     }
 }
