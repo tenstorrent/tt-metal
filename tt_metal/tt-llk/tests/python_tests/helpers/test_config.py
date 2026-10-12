@@ -563,6 +563,8 @@ class TestConfig:
             f"{no_wh_ebreak_fixup}"
             f"-DTENSIX_FIRMWARE -DENV_LLK_INFRA -DKERNEL_BUILD {llk_assert_define}{TestConfig.ARCH_DEFINE} "
             f"{'-DSPEED_OF_LIGHT' if TestConfig.SPEED_OF_LIGHT else ''}"
+            # experiment hook (ncwork): extra flags for every TRISC and the BRISC build, e.g. -DNCW_NOWORK
+            f" {os.environ.get('LLK_EXP_CFLAGS', '')} "
         )
         TestConfig.INCLUDES = (
             [
