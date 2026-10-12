@@ -127,7 +127,7 @@ void run_kernel(RUNTIME_PARAMETERS params)
         {
             if constexpr (!unpack_to_dest)
             {
-                _perf_math_loop_clear_valid<true, true>(LOOP_FACTOR * TILE_CNT * TILE_NUM_FACES);
+                _perf_math_loop_clear_valid<true, true, PERF_RUN_TYPE>(LOOP_FACTOR * TILE_CNT * TILE_NUM_FACES);
                 return;
             }
 
