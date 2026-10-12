@@ -3,34 +3,35 @@
 // SPDX-License-Identifier: Apache-2.0
 
 // clang-format off
+// DEFINE: %{diagnose} = %{blackhole_tensix_diagnose} %{blackhole_unpack_thread}
 // RUN: %split-file %s %t
-// RUN: not %{blackhole_tensix_diagnose} %{blackhole_unpack_thread} %t/read-word-tensix.cpp 2>&1 | FileCheck %s --check-prefix=READ_ACCESS
-// RUN: not %{blackhole_tensix_diagnose} %{blackhole_unpack_thread} %t/read-section.cpp 2>&1 | FileCheck %s --check-prefix=SECTION
-// RUN: not %{blackhole_tensix_diagnose} %{blackhole_unpack_thread} %t/write-section.cpp 2>&1 | FileCheck %s --check-prefix=SECTION
-// RUN: not %{blackhole_tensix_diagnose} %{blackhole_unpack_thread} %t/array-section.cpp 2>&1 | FileCheck %s --check-prefix=SECTION
-// RUN: not %{blackhole_tensix_diagnose} %{blackhole_unpack_thread} %t/extract-section.cpp 2>&1 | FileCheck %s --check-prefix=SECTION
-// RUN: not %{blackhole_tensix_diagnose} %{blackhole_unpack_thread} %t/state-read-end.cpp 2>&1 | FileCheck %s --check-prefix=READ_OFFSET
-// RUN: not %{blackhole_tensix_diagnose} %{blackhole_unpack_thread} %t/state-read-wrap.cpp 2>&1 | FileCheck %s --check-prefix=READ_OFFSET
-// RUN: not %{blackhole_tensix_diagnose} %{blackhole_unpack_thread} %t/thread-read-end.cpp 2>&1 | FileCheck %s --check-prefix=READ_OFFSET
-// RUN: not %{blackhole_tensix_diagnose} %{blackhole_unpack_thread} %t/thread-read-wrap.cpp 2>&1 | FileCheck %s --check-prefix=READ_OFFSET
-// RUN: not %{blackhole_tensix_diagnose} %{blackhole_unpack_thread} %t/anchor-read-span.cpp 2>&1 | FileCheck %s --check-prefix=ANCHOR_READ
-// RUN: not %{blackhole_tensix_diagnose} %{blackhole_unpack_thread} %t/anchor-shifted-read-span.cpp 2>&1 | FileCheck %s --check-prefix=ANCHOR_READ
-// RUN: not %{blackhole_tensix_diagnose} %{blackhole_unpack_thread} %t/anchor-section-read-span.cpp 2>&1 | FileCheck %s --check-prefix=ANCHOR_READ
-// RUN: not %{blackhole_tensix_diagnose} %{blackhole_unpack_thread} %t/state-read-target.cpp 2>&1 | FileCheck %s --check-prefix=TARGET_STATE
+// RUN: not %{diagnose} %t/read-word-tensix.cpp 2>&1 | FileCheck %s --check-prefix=READ_ACCESS
+// RUN: not %{diagnose} %t/read-section.cpp 2>&1 | FileCheck %s --check-prefix=SECTION
+// RUN: not %{diagnose} %t/write-section.cpp 2>&1 | FileCheck %s --check-prefix=SECTION
+// RUN: not %{diagnose} %t/array-section.cpp 2>&1 | FileCheck %s --check-prefix=SECTION
+// RUN: not %{diagnose} %t/extract-section.cpp 2>&1 | FileCheck %s --check-prefix=SECTION
+// RUN: not %{diagnose} %t/state-read-end.cpp 2>&1 | FileCheck %s --check-prefix=READ_OFFSET
+// RUN: not %{diagnose} %t/state-read-wrap.cpp 2>&1 | FileCheck %s --check-prefix=READ_OFFSET
+// RUN: not %{diagnose} %t/thread-read-end.cpp 2>&1 | FileCheck %s --check-prefix=READ_OFFSET
+// RUN: not %{diagnose} %t/thread-read-wrap.cpp 2>&1 | FileCheck %s --check-prefix=READ_OFFSET
+// RUN: not %{diagnose} %t/anchor-read-span.cpp 2>&1 | FileCheck %s --check-prefix=ANCHOR_READ
+// RUN: not %{diagnose} %t/anchor-shifted-read-span.cpp 2>&1 | FileCheck %s --check-prefix=ANCHOR_READ
+// RUN: not %{diagnose} %t/anchor-section-read-span.cpp 2>&1 | FileCheck %s --check-prefix=ANCHOR_READ
+// RUN: not %{diagnose} %t/state-read-target.cpp 2>&1 | FileCheck %s --check-prefix=TARGET_STATE
 // RUN: not %{blackhole_tensix_diagnose} %t/thread-read-brisc.cpp 2>&1 | FileCheck %s --check-prefix=BRISC_TARGET
 // RUN: not %{blackhole_tensix_diagnose} %t/thread-read-brisc.cpp -DCOMPILE_FOR_TRISC=3 2>&1 | FileCheck %s --check-prefix=TRISC_ID
-// RUN: not %{blackhole_tensix_diagnose} %{blackhole_unpack_thread} %t/extract-wide.cpp 2>&1 | FileCheck %s --check-prefix=EXTRACT_WIDE
-// RUN: not %{blackhole_tensix_diagnose} %{blackhole_unpack_thread} %t/extract-word-crossing.cpp 2>&1 | FileCheck %s --check-prefix=EXTRACT_CROSS
-// RUN: not %{blackhole_tensix_diagnose} %{blackhole_unpack_thread} %t/write-thread.cpp 2>&1 | FileCheck %s --check-prefix=WRITE_THREAD
-// RUN: not %{blackhole_tensix_diagnose} %{blackhole_unpack_thread} %t/write-wide.cpp 2>&1 | FileCheck %s --check-prefix=WRITE_WIDE
-// RUN: not %{blackhole_tensix_diagnose} %{blackhole_unpack_thread} %t/group-thread-mixed.cpp 2>&1 | FileCheck %s --check-prefix=GROUP_THREAD
-// RUN: not %{blackhole_tensix_diagnose} %{blackhole_unpack_thread} %t/array-tensix.cpp 2>&1 | FileCheck %s --check-prefix=ARRAY_ACCESS
-// RUN: not %{blackhole_tensix_diagnose} %{blackhole_unpack_thread} %t/array-thread.cpp 2>&1 | FileCheck %s --check-prefix=ARRAY_THREAD
-// RUN: not %{blackhole_tensix_diagnose} %{blackhole_unpack_thread} %t/array-cross-end.cpp 2>&1 | FileCheck %s --check-prefix=ARRAY_END
-// RUN: not %{blackhole_tensix_diagnose} %{blackhole_unpack_thread} %t/array-outside-start.cpp 2>&1 | FileCheck %s --check-prefix=ARRAY_START
-// RUN: not %{blackhole_tensix_diagnose} %{blackhole_unpack_thread} %t/array-source-size.cpp 2>&1 | FileCheck %s --check-prefix=ARRAY_SOURCE
-// RUN: not %{blackhole_tensix_diagnose} %{blackhole_unpack_thread} %t/anchor-array-span.cpp 2>&1 | FileCheck %s --check-prefix=ANCHOR_ARRAY
-// RUN: not %{blackhole_tensix_diagnose} %{blackhole_unpack_thread} %t/anchor-group-without-raw.cpp 2>&1 | FileCheck %s --check-prefix=ANCHOR_GROUP
+// RUN: not %{diagnose} %t/extract-wide.cpp 2>&1 | FileCheck %s --check-prefix=EXTRACT_WIDE
+// RUN: not %{diagnose} %t/extract-word-crossing.cpp 2>&1 | FileCheck %s --check-prefix=EXTRACT_CROSS
+// RUN: not %{diagnose} %t/write-thread.cpp 2>&1 | FileCheck %s --check-prefix=WRITE_THREAD
+// RUN: not %{diagnose} %t/write-wide.cpp 2>&1 | FileCheck %s --check-prefix=WRITE_WIDE
+// RUN: not %{diagnose} %t/group-thread-mixed.cpp 2>&1 | FileCheck %s --check-prefix=GROUP_THREAD
+// RUN: not %{diagnose} %t/array-tensix.cpp 2>&1 | FileCheck %s --check-prefix=ARRAY_ACCESS
+// RUN: not %{diagnose} %t/array-thread.cpp 2>&1 | FileCheck %s --check-prefix=ARRAY_THREAD
+// RUN: not %{diagnose} %t/array-cross-end.cpp 2>&1 | FileCheck %s --check-prefix=ARRAY_END
+// RUN: not %{diagnose} %t/array-outside-start.cpp 2>&1 | FileCheck %s --check-prefix=ARRAY_START
+// RUN: not %{diagnose} %t/array-source-size.cpp 2>&1 | FileCheck %s --check-prefix=ARRAY_SOURCE
+// RUN: not %{diagnose} %t/anchor-array-span.cpp 2>&1 | FileCheck %s --check-prefix=ANCHOR_ARRAY
+// RUN: not %{diagnose} %t/anchor-group-without-raw.cpp 2>&1 | FileCheck %s --check-prefix=ANCHOR_GROUP
 
 // State: 40 + 184 reaches word 224; 40 + 0xffffffd8 would wrap to zero.
 // Thread: 5 + 63 reaches word 68; 5 + 0xfffffffb would wrap to zero.

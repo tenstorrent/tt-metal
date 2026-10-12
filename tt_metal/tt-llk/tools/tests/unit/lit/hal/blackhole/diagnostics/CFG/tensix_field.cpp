@@ -3,25 +3,26 @@
 // SPDX-License-Identifier: Apache-2.0
 
 // clang-format off
+// DEFINE: %{diagnose} = %{blackhole_tensix_diagnose} %{blackhole_unpack_thread}
 // RUN: %split-file %s %t
-// RUN: not %{blackhole_tensix_diagnose} %{blackhole_unpack_thread} %t/constant-mmio.cpp 2>&1 | FileCheck %s --check-prefix=ACCESS
-// RUN: not %{blackhole_tensix_diagnose} %{blackhole_unpack_thread} %t/runtime-scalar.cpp 2>&1 | FileCheck %s --check-prefix=VALUE_ACCESS
-// RUN: not %{blackhole_tensix_diagnose} %{blackhole_unpack_thread} %t/constant-wide.cpp 2>&1 | FileCheck %s --check-prefix=WIDE_WRITE
-// RUN: not %{blackhole_tensix_diagnose} %{blackhole_unpack_thread} %t/constant-section.cpp 2>&1 | FileCheck %s --check-prefix=SECTION
-// RUN: not %{blackhole_tensix_diagnose} %{blackhole_unpack_thread} %t/assignment-section.cpp 2>&1 | FileCheck %s --check-prefix=SECTION
-// RUN: not %{blackhole_tensix_diagnose} %{blackhole_unpack_thread} %t/constant-value.cpp 2>&1 | FileCheck %s --check-prefix=VALUE
-// RUN: not %{blackhole_tensix_diagnose} %{blackhole_unpack_thread} %t/rmwcib-constant.cpp 2>&1 | FileCheck %s --check-prefix=RMWCIB_IGNORED
-// RUN: not %{blackhole_tensix_diagnose} %{blackhole_unpack_thread} %t/rmwcib-runtime.cpp 2>&1 | FileCheck %s --check-prefix=RMWCIB_IGNORED
-// RUN: not %{blackhole_tensix_diagnose} %{blackhole_unpack_thread} %t/group-scalar-constant.cpp 2>&1 | FileCheck %s --check-prefix=GROUP_ACCESS
-// RUN: not %{blackhole_tensix_diagnose} %{blackhole_unpack_thread} %t/group-state-overlap.cpp 2>&1 | FileCheck %s --check-prefix=GROUP_OVERLAP
-// RUN: not %{blackhole_tensix_diagnose} %{blackhole_unpack_thread} %t/group-thread-overlap.cpp 2>&1 | FileCheck %s --check-prefix=GROUP_OVERLAP
-// RUN: not %{blackhole_tensix_diagnose} %{blackhole_unpack_thread} %t/assignment-wide-runtime.cpp 2>&1 | FileCheck %s --check-prefix=WIDE_ASSIGN
-// RUN: not %{blackhole_tensix_diagnose} %{blackhole_unpack_thread} %t/assignment-wide-constant.cpp 2>&1 | FileCheck %s --check-prefix=WIDE_ASSIGN
-// RUN: not %{blackhole_tensix_diagnose} %{blackhole_unpack_thread} %t/group-state-outside.cpp 2>&1 | FileCheck %s --check-prefix=GROUP_OUTSIDE
-// RUN: not %{blackhole_tensix_diagnose} %{blackhole_unpack_thread} %t/group-thread-outside.cpp 2>&1 | FileCheck %s --check-prefix=GROUP_OUTSIDE
-// RUN: not %{blackhole_tensix_diagnose} %{blackhole_unpack_thread} %t/prepacked-access.cpp 2>&1 | FileCheck %s --check-prefix=PREPACKED_ACCESS
-// RUN: not %{blackhole_tensix_diagnose} %{blackhole_unpack_thread} %t/prepacked-state.cpp 2>&1 | FileCheck %s --check-prefix=PREPACKED_SCOPE
-// RUN: not %{blackhole_tensix_diagnose} %{blackhole_unpack_thread} %t/prepacked-shifted.cpp 2>&1 | FileCheck %s --check-prefix=PREPACKED_SHIFT
+// RUN: not %{diagnose} %t/constant-mmio.cpp 2>&1 | FileCheck %s --check-prefix=ACCESS
+// RUN: not %{diagnose} %t/runtime-scalar.cpp 2>&1 | FileCheck %s --check-prefix=VALUE_ACCESS
+// RUN: not %{diagnose} %t/constant-wide.cpp 2>&1 | FileCheck %s --check-prefix=WIDE_WRITE
+// RUN: not %{diagnose} %t/constant-section.cpp 2>&1 | FileCheck %s --check-prefix=SECTION
+// RUN: not %{diagnose} %t/assignment-section.cpp 2>&1 | FileCheck %s --check-prefix=SECTION
+// RUN: not %{diagnose} %t/constant-value.cpp 2>&1 | FileCheck %s --check-prefix=VALUE
+// RUN: not %{diagnose} %t/rmwcib-constant.cpp 2>&1 | FileCheck %s --check-prefix=RMWCIB_IGNORED
+// RUN: not %{diagnose} %t/rmwcib-runtime.cpp 2>&1 | FileCheck %s --check-prefix=RMWCIB_IGNORED
+// RUN: not %{diagnose} %t/group-scalar-constant.cpp 2>&1 | FileCheck %s --check-prefix=GROUP_ACCESS
+// RUN: not %{diagnose} %t/group-state-overlap.cpp 2>&1 | FileCheck %s --check-prefix=GROUP_OVERLAP
+// RUN: not %{diagnose} %t/group-thread-overlap.cpp 2>&1 | FileCheck %s --check-prefix=GROUP_OVERLAP
+// RUN: not %{diagnose} %t/assignment-wide-runtime.cpp 2>&1 | FileCheck %s --check-prefix=WIDE_ASSIGN
+// RUN: not %{diagnose} %t/assignment-wide-constant.cpp 2>&1 | FileCheck %s --check-prefix=WIDE_ASSIGN
+// RUN: not %{diagnose} %t/group-state-outside.cpp 2>&1 | FileCheck %s --check-prefix=GROUP_OUTSIDE
+// RUN: not %{diagnose} %t/group-thread-outside.cpp 2>&1 | FileCheck %s --check-prefix=GROUP_OUTSIDE
+// RUN: not %{diagnose} %t/prepacked-access.cpp 2>&1 | FileCheck %s --check-prefix=PREPACKED_ACCESS
+// RUN: not %{diagnose} %t/prepacked-state.cpp 2>&1 | FileCheck %s --check-prefix=PREPACKED_SCOPE
+// RUN: not %{diagnose} %t/prepacked-shifted.cpp 2>&1 | FileCheck %s --check-prefix=PREPACKED_SHIFT
 
 // ACCESS: error: static assertion failed: compile-time instruction emission requires Access::TensixCfgUnit
 // VALUE_ACCESS: error: static assertion failed: value-backed cfg::write requires Access::MMIO or Access::TensixCfgUnit
