@@ -1056,9 +1056,20 @@ def test_softmax_explicit_fp32_acc_keeps_fp32_intermediates(device):
     )
     tt_input = ttnn.from_torch(torch_input, layout=ttnn.TILE_LAYOUT, device=device)
     explicit_out = ttnn.to_torch(ttnn.softmax(tt_input, dim=-1, compute_kernel_config=explicit_config))
-    assert device.cache_entries_counter.total == 1
+
+    # An explicit config with the same values as the softmax default still gets its own program.
+    is_wormhole = device.arch() == ttnn.device.Arch.WORMHOLE_B0
+    default_equal_config = ttnn.init_device_compute_kernel_config(
+        device.arch(),
+        math_fidelity=ttnn.MathFidelity.HiFi3 if is_wormhole else ttnn.MathFidelity.HiFi4,
+        math_approx_mode=True,
+        fp32_dest_acc_en=True,
+        packer_l1_acc=False,
+    )
+    ttnn.softmax(tt_input, dim=-1, compute_kernel_config=default_equal_config)
+    entries_explicit = device.num_program_cache_entries()
     ttnn.softmax(tt_input, dim=-1)
-    assert device.cache_entries_counter.total == 2
+    assert device.num_program_cache_entries() == entries_explicit + 1, "defaulted call reused the explicit program"
 
     # With Float32 bulk buffers the output takes a single bfloat16 rounding, so nearly every element
     # matches the correctly rounded result; rounding exp(x - max) to bfloat16 first drops this to
