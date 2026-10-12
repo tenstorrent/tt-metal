@@ -186,3 +186,20 @@ def test_rotary_embedding_hf_decode_rejects_cos_sin_orientation_mismatch(device,
         ttnn.experimental.rotary_embedding_hf(
             input_tensor, cos_tt, sin_tt, is_decode_mode=True, compute_kernel_config=_hf_rope_compute_kernel_config()
         )
+
+
+def test_rotary_embedding_hf_decode_rejects_oversized_cos_sin_shard(device, expect_error):
+    # Eight users on eight cores read one cos/sin tile row per core, so a two-row shard would leave
+    # the later users reading padding.
+    batch_grid = ttnn.num_cores_to_corerangeset(8, device.compute_with_storage_grid_size(), row_wise=True)
+    trig_mem = ttnn.MemoryConfig(
+        ttnn.TensorMemoryLayout.HEIGHT_SHARDED,
+        ttnn.BufferType.L1,
+        ttnn.ShardSpec(batch_grid, [2 * ttnn.TILE_SIZE, 64], ttnn.ShardOrientation.ROW_MAJOR),
+    )
+    input_tensor, cos_tt, sin_tt = _decode_hf_inputs(device, trig_mem)
+
+    with expect_error(RuntimeError, "Cos/sin shard height 64 must be 32"):
+        ttnn.experimental.rotary_embedding_hf(
+            input_tensor, cos_tt, sin_tt, is_decode_mode=True, compute_kernel_config=_hf_rope_compute_kernel_config()
+        )
