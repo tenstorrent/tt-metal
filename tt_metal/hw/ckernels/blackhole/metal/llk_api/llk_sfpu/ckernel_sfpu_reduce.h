@@ -206,9 +206,10 @@ constexpr std::uint32_t AVG_RECIP_REG = p_sfpu::LREG12;
  * This function divides by 32 by multiplying by the constant 1/32 (0.03125), which
  * init_reduce_sum_avg() preloaded into AVG_RECIP_REG (sfpi::vConstFloatPrgm0).
  */
+template <std::uint32_t LREG = p_sfpu::LREG0>
 inline void perform_float_average() {
     // Multiply by 1/32 (divide by 32) using the preloaded constant register.
-    TTI_SFPMUL(p_sfpu::LREG0, AVG_RECIP_REG, p_sfpu::LCONST_0, p_sfpu::LREG0, 0);
+    TTI_SFPMUL(LREG, AVG_RECIP_REG, p_sfpu::LCONST_0, LREG, 0);
 }
 
 constexpr std::uint32_t COL_SUM_UPPER_FACE_ADDRS[NUM_FACES] = {0, 0, 16, 16};    // Face 0, 0, 1, 1
@@ -301,6 +302,73 @@ inline void perform_reduce_col_sum_avg_group() {
     TTI_SFPSTORE(p_sfpu::LREG0, STORE_MODE, ADDR_MOD_7, UPPER);
 }
 
+template <InstrModLoadStore INSTRUCTION_MODE, std::uint32_t LREG, std::uint32_t ADDR>
+inline void col_sum_load_float() {
+    TTI_SFPLOAD(LREG, INSTRUCTION_MODE, ADDR_MOD_7, ADDR);
+}
+
+template <std::uint32_t DST, std::uint32_t A, std::uint32_t C>
+inline void col_sum_add_float() {
+    TTI_SFPADD(A, p_sfpu::LCONST_1, C, DST, 0);
+}
+
+// Float groups GROUP and GROUP + 1 as a pair: the second group's tree runs in the free registers around the first's
+// cross-face add, and one transpose serves both (the second group's partial sums in LREG0, the first's in LREG4), so
+// only the transpose reads an add result on the next cycle. Every column keeps the single-group addition order.
+template <PoolType pool_type, InstrModLoadStore INSTRUCTION_MODE, std::uint32_t GROUP>
+inline void perform_reduce_col_sum_avg_float_pair() {
+    static_assert(GROUP + 1 < NUM_FACES, "a pair of column groups");
+    constexpr std::uint32_t A_UP = COL_SUM_UPPER_FACE_ADDRS[GROUP] + COL_SUM_COLUMN_OFFSETS[GROUP];
+    constexpr std::uint32_t A_LO = COL_SUM_LOWER_FACE_ADDRS[GROUP] + COL_SUM_COLUMN_OFFSETS[GROUP];
+    constexpr std::uint32_t B_UP = COL_SUM_UPPER_FACE_ADDRS[GROUP + 1] + COL_SUM_COLUMN_OFFSETS[GROUP + 1];
+    constexpr std::uint32_t B_LO = COL_SUM_LOWER_FACE_ADDRS[GROUP + 1] + COL_SUM_COLUMN_OFFSETS[GROUP + 1];
+    constexpr std::uint32_t R = ROWS_PER_LOAD;
+
+    col_sum_load_float<INSTRUCTION_MODE, p_sfpu::LREG0, A_UP>();
+    col_sum_load_float<INSTRUCTION_MODE, p_sfpu::LREG1, A_UP + R>();
+    col_sum_load_float<INSTRUCTION_MODE, p_sfpu::LREG2, A_UP + 2 * R>();
+    col_sum_load_float<INSTRUCTION_MODE, p_sfpu::LREG3, A_UP + 3 * R>();
+    col_sum_load_float<INSTRUCTION_MODE, p_sfpu::LREG4, A_LO>();
+    col_sum_load_float<INSTRUCTION_MODE, p_sfpu::LREG5, A_LO + R>();
+    col_sum_load_float<INSTRUCTION_MODE, p_sfpu::LREG6, A_LO + 2 * R>();
+    col_sum_load_float<INSTRUCTION_MODE, p_sfpu::LREG7, A_LO + 3 * R>();
+    lltt::replay(0, 6);
+
+    // The second group: upper sum into LREG7, lower sum into LREG6.
+    col_sum_load_float<INSTRUCTION_MODE, p_sfpu::LREG2, B_UP + 2 * R>();
+    col_sum_load_float<INSTRUCTION_MODE, p_sfpu::LREG3, B_UP + 3 * R>();
+    col_sum_load_float<INSTRUCTION_MODE, p_sfpu::LREG6, B_LO + 2 * R>();
+    col_sum_load_float<INSTRUCTION_MODE, p_sfpu::LREG7, B_LO + 3 * R>();
+    col_sum_add_float<p_sfpu::LREG2, p_sfpu::LREG2, p_sfpu::LREG3>();
+    col_sum_add_float<p_sfpu::LREG6, p_sfpu::LREG6, p_sfpu::LREG7>();
+    col_sum_load_float<INSTRUCTION_MODE, p_sfpu::LREG1, B_UP + R>();
+    col_sum_load_float<INSTRUCTION_MODE, p_sfpu::LREG5, B_LO + R>();
+    col_sum_add_float<p_sfpu::LREG1, p_sfpu::LREG1, p_sfpu::LREG2>();
+    col_sum_add_float<p_sfpu::LREG5, p_sfpu::LREG5, p_sfpu::LREG6>();
+    col_sum_load_float<INSTRUCTION_MODE, p_sfpu::LREG7, B_UP>();
+    col_sum_load_float<INSTRUCTION_MODE, p_sfpu::LREG6, B_LO>();
+    col_sum_add_float<p_sfpu::LREG7, p_sfpu::LREG7, p_sfpu::LREG1>();
+    col_sum_add_float<p_sfpu::LREG6, p_sfpu::LREG6, p_sfpu::LREG5>();
+
+    // Cross-face adds, upper operand first as in the single group: the first group into LREG4, the second into LREG0.
+    col_sum_add_float<p_sfpu::LREG4, p_sfpu::LREG0, p_sfpu::LREG4>();
+    col_sum_add_float<p_sfpu::LREG0, p_sfpu::LREG7, p_sfpu::LREG6>();
+    TTI_SFPTRANSP(0, 0, 0, 0);
+
+    col_sum_add_float<p_sfpu::LREG2, p_sfpu::LREG2, p_sfpu::LREG3>();
+    col_sum_add_float<p_sfpu::LREG6, p_sfpu::LREG6, p_sfpu::LREG7>();
+    col_sum_add_float<p_sfpu::LREG1, p_sfpu::LREG1, p_sfpu::LREG2>();
+    col_sum_add_float<p_sfpu::LREG5, p_sfpu::LREG5, p_sfpu::LREG6>();
+    col_sum_add_float<p_sfpu::LREG0, p_sfpu::LREG0, p_sfpu::LREG1>();
+    col_sum_add_float<p_sfpu::LREG4, p_sfpu::LREG4, p_sfpu::LREG5>();
+    if constexpr (pool_type == PoolType::AVG) {
+        perform_float_average<p_sfpu::LREG0>();
+        perform_float_average<p_sfpu::LREG4>();
+    }
+    TTI_SFPSTORE(p_sfpu::LREG0, INSTRUCTION_MODE, ADDR_MOD_7, B_UP);
+    TTI_SFPSTORE(p_sfpu::LREG4, INSTRUCTION_MODE, ADDR_MOD_7, A_UP);
+}
+
 template <
     PoolType pool_type,
     InstrModLoadStore INSTRUCTION_MODE,
@@ -308,17 +376,26 @@ template <
     bool pack_low16,
     bool is_signed_int>
 inline void perform_reduce_col_sum_avg() {
-    // The group is a template parameter, so every load, add and store is an immediate (TTI_) push.
-    constexpr std::uint32_t LOWER0 = COL_SUM_LOWER_FACE_ADDRS[0] + COL_SUM_COLUMN_OFFSETS[0];
-    col_sum_load<INSTRUCTION_MODE, clear_high_bits, p_sfpu::LREG4, LOWER0>();
-    col_sum_load<INSTRUCTION_MODE, clear_high_bits, p_sfpu::LREG5, LOWER0 + ROWS_PER_LOAD>();
-    col_sum_load<INSTRUCTION_MODE, clear_high_bits, p_sfpu::LREG6, LOWER0 + 2 * ROWS_PER_LOAD>();
-    col_sum_load<INSTRUCTION_MODE, clear_high_bits, p_sfpu::LREG7, LOWER0 + 3 * ROWS_PER_LOAD>();
+    constexpr bool is_integer_mode =
+        (INSTRUCTION_MODE == InstrModLoadStore::INT32 || INSTRUCTION_MODE == InstrModLoadStore::LO16);
+    // An integer add's result is free to the next instruction, so the integer groups need no pairing.
+    if constexpr (!is_integer_mode) {
+        static_assert(!clear_high_bits && !pack_low16, "float formats load and store the whole word");
+        perform_reduce_col_sum_avg_float_pair<pool_type, INSTRUCTION_MODE, 0>();
+        perform_reduce_col_sum_avg_float_pair<pool_type, INSTRUCTION_MODE, 2>();
+    } else {
+        // The group is a template parameter, so every load, add and store is an immediate (TTI_) push.
+        constexpr std::uint32_t LOWER0 = COL_SUM_LOWER_FACE_ADDRS[0] + COL_SUM_COLUMN_OFFSETS[0];
+        col_sum_load<INSTRUCTION_MODE, clear_high_bits, p_sfpu::LREG4, LOWER0>();
+        col_sum_load<INSTRUCTION_MODE, clear_high_bits, p_sfpu::LREG5, LOWER0 + ROWS_PER_LOAD>();
+        col_sum_load<INSTRUCTION_MODE, clear_high_bits, p_sfpu::LREG6, LOWER0 + 2 * ROWS_PER_LOAD>();
+        col_sum_load<INSTRUCTION_MODE, clear_high_bits, p_sfpu::LREG7, LOWER0 + 3 * ROWS_PER_LOAD>();
 
-    perform_reduce_col_sum_avg_group<pool_type, INSTRUCTION_MODE, clear_high_bits, pack_low16, is_signed_int, 0>();
-    perform_reduce_col_sum_avg_group<pool_type, INSTRUCTION_MODE, clear_high_bits, pack_low16, is_signed_int, 1>();
-    perform_reduce_col_sum_avg_group<pool_type, INSTRUCTION_MODE, clear_high_bits, pack_low16, is_signed_int, 2>();
-    perform_reduce_col_sum_avg_group<pool_type, INSTRUCTION_MODE, clear_high_bits, pack_low16, is_signed_int, 3>();
+        perform_reduce_col_sum_avg_group<pool_type, INSTRUCTION_MODE, clear_high_bits, pack_low16, is_signed_int, 0>();
+        perform_reduce_col_sum_avg_group<pool_type, INSTRUCTION_MODE, clear_high_bits, pack_low16, is_signed_int, 1>();
+        perform_reduce_col_sum_avg_group<pool_type, INSTRUCTION_MODE, clear_high_bits, pack_low16, is_signed_int, 2>();
+        perform_reduce_col_sum_avg_group<pool_type, INSTRUCTION_MODE, clear_high_bits, pack_low16, is_signed_int, 3>();
+    }
 }
 
 // ============================================================================
