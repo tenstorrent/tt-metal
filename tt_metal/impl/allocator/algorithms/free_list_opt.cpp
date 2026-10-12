@@ -71,6 +71,10 @@ FreeListOpt::FreeListOpt(
 void FreeListOpt::init() {
     max_size_bytes_ += shrink_size_;
     shrink_size_ = 0;
+    // clear() rebuilds the block table through init(). Drop the cached lowest address too, or a
+    // later alloc/free above the old value never refreshes it (deallocate only updates when the
+    // freed address is <= lowest_occupied_address_).
+    lowest_occupied_address_ = std::nullopt;
 
     block_address_.clear();
     block_size_.clear();
@@ -158,21 +162,28 @@ std::optional<DeviceAddr> FreeListOpt::allocate(DeviceAddr size_bytes, bool bott
     TT_ASSERT(segregated_item_index < segregated_list->size(), "Segregated item index out of bounds");
     TT_ASSERT(
         block_is_allocated_[*target_block_index] == false, "Block we are trying allocate from is already allocated");
-    segregated_list->erase(segregated_list->begin() + static_cast<std::ptrdiff_t>(segregated_item_index));
 
-    // Allocate the block
+    // Reject before mutating. allocate_in_block() marks the block allocated and may split it;
+    // throwing afterwards leaks that block, because callers (BankManager) only record the address
+    // after allocate() returns. Top-down placement sits at block_address + offset, not at the
+    // free block's start, so the limit has to use that address.
     size_t offset = 0;
     if (!bottom_up) {
         offset = block_size_[*target_block_index] - alloc_size;
     }
-    size_t allocated_block_index = allocate_in_block(*target_block_index, alloc_size, offset);
-    DeviceAddr start_address = block_address_[allocated_block_index];
+    const DeviceAddr start_address = block_address_[*target_block_index] + offset;
     if (start_address + offset_bytes_ < address_limit) {
         TT_THROW(
             "Out of Memory: Cannot allocate at an address below {}. Allocation at {}",
             address_limit,
             start_address + offset_bytes_);
     }
+
+    segregated_list->erase(segregated_list->begin() + static_cast<std::ptrdiff_t>(segregated_item_index));
+    size_t allocated_block_index = allocate_in_block(*target_block_index, alloc_size, offset);
+    TT_ASSERT(
+        block_address_[allocated_block_index] == start_address,
+        "Allocated address diverged from the address-limit check");
     update_lowest_occupied_address(start_address);
     return start_address + offset_bytes_;
 }
