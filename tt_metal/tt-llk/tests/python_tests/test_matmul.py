@@ -99,6 +99,7 @@ def test_matmul(
     row_mop=False,
     transpose=False,
     unpack_ttsync=False,
+    dest_sync=DestSync.Half,
 ):
     torch_format = format_dict[format_dest_acc_and_dims[0].output_format]
 
@@ -162,12 +163,12 @@ def test_matmul(
         templates=[
             MATH_FIDELITY(math_fidelity),
             PERF_RUN_TYPE(PerfRunType.L1_TO_L1),
-            DEST_SYNC(),
+            DEST_SYNC(dest_sync),
             THROTTLE_LEVEL(),
             *([MATMUL_ROW_MOP()] if row_mop else []),
             *([MATMUL_UNPACK_TTSYNC()] if unpack_ttsync else []),
             *MATMUL_STREAM_NARROW.for_block(
-                formats, dest_acc, matmul_dims.ct_dim, matmul_dims.rt_dim
+                formats, dest_acc, dest_sync, matmul_dims.ct_dim, matmul_dims.rt_dim
             ),
         ],
         runtimes=[
@@ -228,15 +229,22 @@ def test_matmul_row_mop(math_fidelity, format_dest_acc_and_dims):
     test_matmul(math_fidelity, format_dest_acc_and_dims, row_mop=True)
 
 
-# The unpack's row base addresses through GPRs and WRCFG under Auto TTSync (Blackhole only) on every block shape.
+# The unpack's row base addresses through GPRs and WRCFG under Auto TTSync (Blackhole only) on every block shape; full
+# sync also runs it with the 8-bit stream.
 @skip_for_wormhole
 @pytest.mark.nightly
 @parametrize(
     math_fidelity=[MathFidelity.LoFi, MathFidelity.HiFi2],
     format_dest_acc_and_dims=ROW_MOP_COMBINATIONS,
+    dest_sync=[DestSync.Half, DestSync.Full],
 )
-def test_matmul_unpack_ttsync(math_fidelity, format_dest_acc_and_dims):
-    test_matmul(math_fidelity, format_dest_acc_and_dims, unpack_ttsync=True)
+def test_matmul_unpack_ttsync(math_fidelity, format_dest_acc_and_dims, dest_sync):
+    test_matmul(
+        math_fidelity,
+        format_dest_acc_and_dims,
+        unpack_ttsync=True,
+        dest_sync=dest_sync,
+    )
 
 
 # in1 transposed tile by tile (SDPA's Q K^T), with the per-tile MOP and with the row MOP.
@@ -347,7 +355,11 @@ def test_matmul_full_sync(math_fidelity, formats, dims):
             DEST_SYNC(DestSync.Full),
             THROTTLE_LEVEL(),
             *MATMUL_STREAM_NARROW.for_block(
-                formats, DestAccumulation.No, matmul_dims.ct_dim, matmul_dims.rt_dim
+                formats,
+                DestAccumulation.No,
+                DestSync.Full,
+                matmul_dims.ct_dim,
+                matmul_dims.rt_dim,
             ),
         ],
         runtimes=[

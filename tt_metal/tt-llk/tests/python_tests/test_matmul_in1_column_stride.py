@@ -7,12 +7,13 @@ import torch
 from conftest import skip_for_quasar
 from helpers.format_config import DataFormat
 from helpers.golden_generators import MatmulGolden, get_golden_generator
-from helpers.llk_params import DestAccumulation, MathFidelity
+from helpers.llk_params import DestAccumulation, DestSync, MathFidelity
 from helpers.param_config import input_output_formats, parametrize
 from helpers.stimuli_config import StimuliConfig
 from helpers.test_config import TestConfig
 from helpers.test_variant_parameters import (
     CRK_TILE_DIMM,
+    DEST_SYNC,
     MATH_FIDELITY,
     MATMUL_STREAM_NARROW,
     NUM_FACES,
@@ -71,11 +72,7 @@ def test_matmul_in1_column_stride_and_restore(formats, dest_acc, kt_dim):
     configuration = TestConfig(
         "sources/matmul_in1_column_stride_test.cpp",
         formats,
-        templates=[
-            MATH_FIDELITY(MathFidelity.LoFi),
-            THROTTLE_LEVEL(0),
-            *MATMUL_STREAM_NARROW.for_block(formats, dest_acc, ct_dim, 1),
-        ],
+        templates=[MATH_FIDELITY(MathFidelity.LoFi), THROTTLE_LEVEL(0), DEST_SYNC()],
         runtimes=[
             NUM_FACES(),
             TILE_COUNT(2 * ct_dim),
@@ -124,8 +121,9 @@ def test_matmul_in1_column_stride_and_restore(formats, dest_acc, kt_dim):
     formats=input_output_formats([DataFormat.Float16_b, DataFormat.Bfp8_b]),
     dest_acc=[DestAccumulation.No, DestAccumulation.Yes],
     kt_dim=[3, 20],
+    dest_sync=[DestSync.Half, DestSync.Full],
 )
-def test_matmul_in1_column_stride_formats(formats, dest_acc, kt_dim):
+def test_matmul_in1_column_stride_formats(formats, dest_acc, kt_dim, dest_sync):
     """Strided then contiguous in1 columns with one constant per tile, checked tile by tile, for 16-bit and 8-bit inputs."""
     ct_dim = 4
     a_shape, b_shape = (32, kt_dim * 32), (kt_dim * 32, ct_dim * 32)
@@ -163,7 +161,8 @@ def test_matmul_in1_column_stride_formats(formats, dest_acc, kt_dim):
         templates=[
             MATH_FIDELITY(MathFidelity.LoFi),
             THROTTLE_LEVEL(0),
-            *MATMUL_STREAM_NARROW.for_block(formats, dest_acc, ct_dim, 1),
+            DEST_SYNC(dest_sync),
+            *MATMUL_STREAM_NARROW.for_block(formats, dest_acc, dest_sync, ct_dim, 1),
         ],
         runtimes=[
             NUM_FACES(),

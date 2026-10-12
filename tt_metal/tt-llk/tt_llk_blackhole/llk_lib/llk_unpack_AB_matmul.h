@@ -81,16 +81,18 @@ inline constexpr bool _llk_unpack_AB_matmul_narrow_format_(const std::uint32_t u
 
 /**
  * Whether the operand a matmul streams holds 8 bits per datum or less: the stream_narrow template argument of @ref _llk_unpack_AB_matmul_init_.
- * @param fp32_dest_acc_en: Whether DEST holds 32-bit data; such a kernel keeps the GPR advance for every format.
+ * @param dest_max_tiles: The 32x32 tiles DEST holds in the kernel's sync and accumulation mode (get_dest_max_tiles); only
+ *                        a full-sync 16-bit DEST (16 tiles) takes the 8-bit body, since at half sync it costs about two
+ *                        cycles per DEST section wherever the math thread bounds the matmul.
  */
 inline constexpr bool _llk_unpack_AB_matmul_stream_narrow_(
     const std::uint32_t ct_dim,
     const std::uint32_t rt_dim,
     const std::uint32_t unpA_src_format,
     const std::uint32_t unpB_src_format,
-    const bool fp32_dest_acc_en)
+    const std::uint32_t dest_max_tiles)
 {
-    return !fp32_dest_acc_en && ((ct_dim >= rt_dim) ? _llk_unpack_AB_matmul_narrow_format_(unpA_src_format) : _llk_unpack_AB_matmul_narrow_format_(unpB_src_format));
+    return dest_max_tiles > 8 && ((ct_dim >= rt_dim) ? _llk_unpack_AB_matmul_narrow_format_(unpA_src_format) : _llk_unpack_AB_matmul_narrow_format_(unpB_src_format));
 }
 
 /**

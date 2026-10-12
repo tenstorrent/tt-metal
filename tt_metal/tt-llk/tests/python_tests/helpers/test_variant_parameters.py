@@ -112,9 +112,11 @@ class MATMUL_STREAM_NARROW(TemplateParameter):
         return "#define MATMUL_STREAM_NARROW"
 
     @staticmethod
-    def for_block(formats, dest_acc, ct_dim: int, rt_dim: int) -> list:
-        """[MATMUL_STREAM_NARROW()] where _llk_unpack_AB_matmul_stream_narrow_ is true, else []."""
+    def for_block(formats, dest_acc, dest_sync, ct_dim: int, rt_dim: int) -> list:
+        """[MATMUL_STREAM_NARROW()] where _llk_unpack_AB_matmul_stream_narrow_ is true (full sync, 16-bit DEST), else []."""
         if get_chip_architecture() != ChipArchitecture.BLACKHOLE:
+            return []
+        if dest_sync != DestSync.Full:
             return []
         if dest_acc == DestAccumulation.Yes or is_dest_acc_needed(formats):
             return []

@@ -106,7 +106,8 @@ __attribute__((always_inline)) inline void llk_unpack_AB_matmul_init(
     const std::uint32_t unpB_face_r_dim = get_operand_face_r_dim(operandB_id);
 
     const bool reuse_a = ct_dim >= rt_dim;
-    constexpr bool has_narrow_format = llk_unpack_AB_matmul_kernel_has_narrow_format();
+    constexpr std::uint32_t dest_max_tiles = get_dest_max_tiles<DST_SYNC_MODE, DST_ACCUM_MODE, DstTileShape::Tile32x32>();
+    constexpr bool may_stream_narrow = dest_max_tiles > 8 && llk_unpack_AB_matmul_kernel_has_narrow_format();
     const bool partial_face_a = get_operand_partial_face(operandA_id);
     const bool partial_face_b = get_operand_partial_face(operandB_id);
 
@@ -139,8 +140,8 @@ __attribute__((always_inline)) inline void llk_unpack_AB_matmul_init(
         StateVal<Operand<Exu::Unpack>::NumFacesA>(unpA_num_faces),
         StateVal<Operand<Exu::Unpack>::NumFacesB>(unpB_num_faces)));
 
-    if (has_narrow_format && _llk_unpack_AB_matmul_stream_narrow_(
-                                 ct_dim, rt_dim, unpack_src_format[operandA_id], unpack_src_format[operandB_id], DST_ACCUM_MODE)) {
+    if (may_stream_narrow && _llk_unpack_AB_matmul_stream_narrow_(
+                                 ct_dim, rt_dim, unpack_src_format[operandA_id], unpack_src_format[operandB_id], dest_max_tiles)) {
         llk_unpack_AB_matmul_init_impl<ttsync, true>(
             transpose,
             ct_dim,

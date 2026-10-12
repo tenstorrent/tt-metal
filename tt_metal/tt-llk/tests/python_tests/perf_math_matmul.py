@@ -260,6 +260,7 @@ def test_perf_math_matmul(
             *MATMUL_STREAM_NARROW.for_block(
                 formats,
                 matmul_config.dest_acc,
+                matmul_config.dest_sync,
                 matmul_config.tile_dimensions.ct_dim,
                 matmul_config.tile_dimensions.rt_dim,
             ),
