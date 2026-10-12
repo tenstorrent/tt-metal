@@ -18,6 +18,7 @@
 #include <tt-metalium/tt_backend_api_types.hpp>
 #include <tt-metalium/work_split.hpp>
 
+#include "ttnn/operations/data_movement/common/common.hpp"
 #include "ttnn/operations/data_movement/pad/codegen/pad_codegen_supported.hpp"
 #include "ttnn/tensor/tensor.hpp"
 
@@ -122,7 +123,11 @@ uint32_t source_index_before(const Coord4& p, const Coord4& front, const Coord4&
 }
 
 ProgramDescriptor build_pad_tiled(
-    const PadCodegenParams& attrs, const Tensor& input, Tensor& output, tt::DataFormat format) {
+    const PadCodegenParams& attrs,
+    const operations::data_movement::pad_codegen::BatchPlan& batches,
+    const Tensor& input,
+    Tensor& output,
+    tt::DataFormat format) {
     Buffer* src_buffer = input.buffer();
     Buffer* dst_buffer = output.buffer();
 
@@ -140,7 +145,7 @@ ProgramDescriptor build_pad_tiled(
     const CoreSplit split = split_work(input, total);
 
     ProgramDescriptor desc;
-    const uint32_t depth = operations::data_movement::pad_codegen::cb_depth(attrs.read_batch, attrs.write_batch);
+    const uint32_t depth = operations::data_movement::pad_codegen::cb_depth(batches.read_batch, batches.write_batch);
     desc.cbs.push_back(make_cb(split.all_cores, kCbOut, format, tile_bytes, depth));
     desc.cbs.push_back(make_cb(split.all_cores, kCbPad, format, tile_bytes, 1));
 
@@ -155,14 +160,14 @@ ProgramDescriptor build_pad_tiled(
     reader_desc.named_compile_time_args = {
         {"seq_id", kSeqPad},
         {"cb_id", kCbOut},
-        {"batch", attrs.read_batch},
+        {"batch", batches.read_batch},
         {"src_page_pitch", 0},
     };
     reader_desc.config = ReaderConfigDescriptor{};
 
     std::vector<uint32_t> writer_ct_args = {kCbOut, tile_bytes};
     TensorAccessorArgs(*dst_buffer).append_to(writer_ct_args);
-    writer_ct_args.push_back(attrs.write_batch);
+    writer_ct_args.push_back(batches.write_batch);
 
     KernelDescriptor writer_desc;
     writer_desc.kernel_source = std::string(kSharedKernelDir) + "/writer_interleaved.cpp";
@@ -217,10 +222,9 @@ ProgramDescriptor build_fill_partial_tile(
     const auto tile = input.tensor_spec().tile();
     const uint32_t tile_h = tile.get_height();
     const uint32_t tile_w = tile.get_width();
-    const auto face_shape = tile.get_face_shape();
     const uint32_t tile_bytes = operations::data_movement::pad_codegen::tile_page_bytes(input);
     const uint32_t elem = input.element_size();
-    const uint32_t face_bytes = face_shape[0] * face_shape[1] * elem;
+    const uint32_t face_bytes = operations::data_movement::pad_codegen::fill_face_bytes(input);
 
     const uint32_t Ht = tt::div_up(attrs.H_out, tile_h);
     const uint32_t Wt = tt::div_up(attrs.W_out, tile_w);
@@ -237,7 +241,8 @@ ProgramDescriptor build_fill_partial_tile(
     const CoreSplit split = split_work(input, total);
 
     ProgramDescriptor desc;
-    desc.cbs.push_back(make_cb(split.all_cores, kCbOut, format, tile_bytes, 2));
+    desc.cbs.push_back(make_cb(
+        split.all_cores, kCbOut, format, tile_bytes, operations::data_movement::pad_codegen::kFillScratchPages));
     desc.cbs.push_back(make_cb(split.all_cores, kCbPad, format, face_bytes, 1));
 
     std::vector<uint32_t> ct_args = {kCbOut, tile_bytes, elem, attrs.packed_pad_value, kCbPad};
@@ -263,15 +268,27 @@ ProgramDescriptor build_fill_partial_tile(
 
 }  // namespace
 
+// The batching follows the L1 free right now, sampled after the output is allocated; compute_program_hash keys the
+// same plan so a cached program never outlives the L1 it was sized for. The routing gate only checked the smallest
+// plan against the static window, so live occupancy can still leave no room: that is an error here, not a fallback.
 ProgramDescriptor PadCodegenProgramFactory::create_descriptor(
     const PadCodegenParams& operation_attributes, const PadCodegenInputs& tensor_args, Tensor& tensor_return_value) {
+    namespace pc = operations::data_movement::pad_codegen;
     const Tensor& input = tensor_args.input;
+
+    const auto batches = pc::plan_batches_live(input, operation_attributes);
+    if (!batches.has_value()) {
+        TT_THROW(
+            "ttnn.pad: codegen path needs {} B of L1 per core for its circular buffers but only {} B is free",
+            pc::cb_footprint_bytes(input, operation_attributes, pc::BatchPlan{}),
+            operations::data_movement::get_max_l1_space(input));
+    }
 
     const tt::DataFormat format = datatype_to_dataformat_converter(input.dtype());
     if (operation_attributes.fill_partial_tile) {
         return build_fill_partial_tile(operation_attributes, input, tensor_return_value, format);
     }
-    return build_pad_tiled(operation_attributes, input, tensor_return_value, format);
+    return build_pad_tiled(operation_attributes, *batches, input, tensor_return_value, format);
 }
 
 }  // namespace ttnn::prim

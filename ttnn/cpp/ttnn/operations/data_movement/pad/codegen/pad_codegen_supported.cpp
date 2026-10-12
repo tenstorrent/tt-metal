@@ -29,6 +29,7 @@ namespace {
 
 using tt::tt_metal::DataType;
 
+// Batching the CB plan starts from; plan_batches halves it until the plan fits the L1 it is given.
 constexpr uint32_t kReadBatch = 8;
 constexpr uint32_t kWriteBatch = 4;
 
@@ -104,8 +105,9 @@ bool fill_supported(const Tensor& input) {
     return elem == 2 || elem == 4;
 }
 
-// The gate must not depend on what happens to be allocated right now, or the same call would route differently
-// across runs.
+// The gate must not depend on what happens to be allocated right now: routing and the prim's validate evaluate it at
+// different moments of one dispatch, and the output allocation between them would flip the answer. What is free
+// right now is the program factory's concern (plan_batches_live).
 uint64_t static_l1_ceiling(const Tensor& input) {
     auto* device = input.device();
     const uint64_t size = device->l1_size_per_core();
@@ -116,6 +118,13 @@ uint64_t static_l1_ceiling(const Tensor& input) {
 uint64_t l1_output_reservation(const Tensor& input, const ttnn::prim::PadCodegenParams& attrs) {
     if (attrs.fill_partial_tile) {
         return 0;
+    }
+    if (composes_via_bf16(input, attrs)) {
+        // The pad runs on a bfloat16 copy of the input, which stays allocated next to the bfloat16 output.
+        return static_cast<uint64_t>(get_pending_l1_output_reservation(
+                   input, input.logical_shape(), input.memory_config(), DataType::BFLOAT16, input.layout())) +
+               get_pending_l1_output_reservation(
+                   input, attrs.output_logical_shape, attrs.output_mem_config, DataType::BFLOAT16, input.layout());
     }
     return get_pending_l1_output_reservation(
         input, attrs.output_logical_shape, attrs.output_mem_config, input.dtype(), input.layout());
@@ -131,18 +140,12 @@ uint32_t tile_page_bytes_as(const Tensor& input, DataType dtype) {
     return tt::round_up(input.tensor_spec().tile().get_tile_size(format), tt::tt_metal::hal::get_dram_alignment());
 }
 
+// The smallest CB plan must fit the static window; the program factory then scales the batching to the L1 that is
+// free when it builds.
 bool tile_fits_l1(const Tensor& input, const ttnn::prim::PadCodegenParams& attrs, uint64_t reserved) {
-    const uint64_t tile_bytes =
-        tile_page_bytes_as(input, composes_via_bf16(input, attrs) ? DataType::BFLOAT16 : input.dtype());
-    const uint64_t budget = gate_l1_budget(input, reserved);
-    if (attrs.fill_partial_tile) {
-        const uint64_t face_bytes = 16ull * 16ull * input.element_size();
-        return 2 * tile_bytes + face_bytes <= budget;
-    }
-    return (static_cast<uint64_t>(cb_depth(attrs.read_batch, attrs.write_batch)) + 1) * tile_bytes <= budget;
+    return plan_batches(input, attrs, gate_l1_budget(input, reserved)).has_value();
 }
 
-// Smallest possible footprint (batch 1, depth 2) must fit; the factory scales batches down to it.
 // Conditions that depend on neither the padding nor L1, so routing can decline before building params.
 bool structurally_supported(const Tensor& input, const tt::tt_metal::MemoryConfig& output_mem_config) {
     if (input.storage_type() != ttnn::StorageType::DEVICE || input.buffer() == nullptr) {
@@ -205,8 +208,6 @@ ttnn::prim::PadCodegenParams base_params(
     p.front_h = front[2];
     p.front_w = front[3];
     p.packed_pad_value = pack_pad_value(input.dtype(), value);
-    p.read_batch = kReadBatch;
-    p.write_batch = kWriteBatch;
     p.output_mem_config = output_mem_config;
     return p;
 }
@@ -214,6 +215,37 @@ ttnn::prim::PadCodegenParams base_params(
 }  // namespace
 
 uint32_t tile_page_bytes(const Tensor& input) { return tile_page_bytes_as(input, input.dtype()); }
+
+uint32_t fill_face_bytes(const Tensor& input) {
+    const auto face_shape = input.tensor_spec().tile().get_face_shape();
+    return face_shape[0] * face_shape[1] * input.element_size();
+}
+
+uint64_t cb_footprint_bytes(const Tensor& input, const ttnn::prim::PadCodegenParams& attrs, const BatchPlan& batches) {
+    // A composed block-float pad builds its program for the bfloat16 copy.
+    const uint64_t tile_bytes =
+        tile_page_bytes_as(input, composes_via_bf16(input, attrs) ? DataType::BFLOAT16 : input.dtype());
+    if (attrs.fill_partial_tile) {
+        return kFillScratchPages * tile_bytes + fill_face_bytes(input);
+    }
+    return (static_cast<uint64_t>(cb_depth(batches.read_batch, batches.write_batch)) + 1) * tile_bytes;
+}
+
+std::optional<BatchPlan> plan_batches(const Tensor& input, const ttnn::prim::PadCodegenParams& attrs, uint64_t budget) {
+    BatchPlan batches = attrs.fill_partial_tile ? BatchPlan{1, 1} : BatchPlan{kReadBatch, kWriteBatch};
+    while (cb_footprint_bytes(input, attrs, batches) > budget) {
+        if (batches.read_batch == 1 && batches.write_batch == 1) {
+            return std::nullopt;
+        }
+        batches.read_batch = std::max(1u, batches.read_batch / 2);
+        batches.write_batch = std::max(1u, batches.write_batch / 2);
+    }
+    return batches;
+}
+
+std::optional<BatchPlan> plan_batches_live(const Tensor& input, const ttnn::prim::PadCodegenParams& attrs) {
+    return plan_batches(input, attrs, get_max_l1_space(input));
+}
 
 bool composes_via_bf16(const Tensor& input, const ttnn::prim::PadCodegenParams& attrs) {
     return input.dtype() == DataType::BFLOAT8_B && attrs.packed_pad_value != 0;

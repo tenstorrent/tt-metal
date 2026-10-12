@@ -11,6 +11,8 @@
 #include "ttnn/operations/data_movement/pad/codegen/pad_codegen_supported.hpp"
 #include "ttnn/tensor/tensor_ops.hpp"
 
+#include <tt_stl/reflection.hpp>
+
 namespace ttnn::prim {
 
 PadCodegenDeviceOperation::program_factory_t PadCodegenDeviceOperation::select_program_factory(
@@ -58,6 +60,19 @@ void PadCodegenDeviceOperation::validate_on_program_cache_miss(
 void PadCodegenDeviceOperation::validate_on_program_cache_hit(
     const operation_attributes_t& operation_attributes, const tensor_args_t& tensor_args) {
     validate_tensors(operation_attributes, tensor_args);
+}
+
+// The CB batching follows the L1 free right now (plan_batches_live runs on every dispatch), so it is part of the key:
+// an occupancy change that moves the plan is a miss that rebuilds, not a hit that replays CBs sized for L1 that is no
+// longer free.
+ttsl::hash::hash_t PadCodegenDeviceOperation::compute_program_hash(
+    const operation_attributes_t& operation_attributes, const tensor_args_t& tensor_args) {
+    const auto batches =
+        ttnn::operations::data_movement::pad_codegen::plan_batches_live(tensor_args.input, operation_attributes);
+    const uint32_t read_batch = batches.has_value() ? batches->read_batch : 0;
+    const uint32_t write_batch = batches.has_value() ? batches->write_batch : 0;
+    return ttsl::hash::hash_objects_with_default_seed(
+        ttsl::hash::type_hash<PadCodegenDeviceOperation>, operation_attributes, tensor_args, read_batch, write_batch);
 }
 
 PadCodegenDeviceOperation::spec_return_value_t PadCodegenDeviceOperation::compute_output_specs(

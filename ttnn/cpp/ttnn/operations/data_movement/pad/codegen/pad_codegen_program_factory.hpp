@@ -30,9 +30,6 @@ struct PadCodegenParams {
     uint32_t front_h{};
     uint32_t front_w{};
     uint32_t packed_pad_value{};
-    // Page batching of the reader and writer.
-    uint32_t read_batch{};
-    uint32_t write_batch{};
     // In-place pass that writes the pad value into the unused lanes of the input's partial border tiles.
     bool fill_partial_tile{};
     tt::tt_metal::MemoryConfig output_mem_config;

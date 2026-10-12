@@ -22,6 +22,31 @@ uint32_t cb_depth(uint32_t read_batch, uint32_t write_batch);
 // Aligned bytes of one TILE page.
 uint32_t tile_page_bytes(const Tensor& input);
 
+// Pages of the fill pass's tile scratch CB.
+inline constexpr uint32_t kFillScratchPages = 2;
+
+// Bytes of the fill pass's pad-value CB: one face.
+uint32_t fill_face_bytes(const Tensor& input);
+
+// Page batching of the tile pad's reader and writer.
+struct BatchPlan {
+    uint32_t read_batch = 1;
+    uint32_t write_batch = 1;
+};
+
+// Per-core CB bytes of the program for `attrs` at `batches` (the fill pass has no batching). The single footprint
+// both the routing gate and the program factory plan against.
+uint64_t cb_footprint_bytes(const Tensor& input, const ttnn::prim::PadCodegenParams& attrs, const BatchPlan& batches);
+
+// Largest batching whose footprint fits `budget`, halving from the default down to one page each; nullopt when even
+// that does not fit.
+std::optional<BatchPlan> plan_batches(const Tensor& input, const ttnn::prim::PadCodegenParams& attrs, uint64_t budget);
+
+// plan_batches against the L1 free on the device right now. Only the program hash and the program factory call it:
+// both run after the output is allocated, so the live query already accounts for it. The routing gate budgets the
+// static window instead, so a live read there would change the answer between routing and validate.
+std::optional<BatchPlan> plan_batches_live(const Tensor& input, const ttnn::prim::PadCodegenParams& attrs);
+
 // A nonzero fill of a block-float tensor has no scalar page pattern, so the caller pads a bfloat16 copy instead.
 bool composes_via_bf16(const Tensor& input, const ttnn::prim::PadCodegenParams& attrs);
 
