@@ -10,7 +10,10 @@ rm -rf $SL; mkdir -p $SL/perf_data $SL/out
 echo "== runner $(hostname) $(nproc) cores $(date -u +%FT%TZ)"; ls /dev/tenstorrent 2>&1 | head -3
 if [[ -n ${RA_PY:-} ]]; then PY=$RA_PY; else
   python3 -m venv $SL/venv && $SL/venv/bin/pip install -q -r tt_metal/tt-llk/tests/requirements.txt > $SL/pip.log 2>&1; echo "== pip rc=$? $(tail -1 $SL/pip.log)"
-  PY=$SL/venv/bin/python3; fi
+  PY=$SL/venv/bin/python3
+  if [[ ! -x $PY ]]; then python3 -m pip install -q -r tt_metal/tt-llk/tests/requirements.txt > $SL/pip2.log 2>&1; echo "== no venv; pip into $(command -v python3) rc=$?"; PY=$(command -v python3); fi
+fi
+$PY -c "import tt_exalens, pytest, torch; print('== harness python ok', torch.__version__)"
 SF=""
 for c in $R/runtime/sfpi /opt/tenstorrent/sfpi; do [[ -x $c/compiler/bin/riscv-tt-elf-g++ ]] && { SF=$c; break; }; done
 if [[ -z $SF ]]; then (cd tt_metal/tt-llk/tests && ./setup_testing_env.sh > $SL/sfpi.log 2>&1); SF=$R/tt_metal/tt-llk/tests/sfpi; fi
@@ -49,5 +52,5 @@ while read -r tag A B rts; do
 done < $S/lines.txt
 for L in $(awk '{print $2; print $3}' $S/lines.txt | sort -u); do $PY $S/tools/ra_imgs.py $SL/builds/$L $SL/out/$L.hash > $SL/out/img_$L.tsv 2>/dev/null; done
 tar -czf $SL/ra_out.tgz -C $SL perf_data/runs out
-echo "== results $(stat -c %s $SL/ra_out.tgz) bytes"; echo "=====RA_BEGIN====="; base64 -w 0 $SL/ra_out.tgz; echo; echo "=====RA_END====="
+echo "== results $(stat -c %s $SL/ra_out.tgz) bytes"; echo "=====RA_BEGIN====="; base64 -w 76 $SL/ra_out.tgz; echo "=====RA_END====="
 exit 0
