@@ -1,0 +1,5 @@
+tt_metal/hw/ckernels/blackhole/metal/llk_api/llk_sfpu/ckernel_sfpu_quant.h
+tt_metal/hw/inc/api/compute/quantization.h
+ttnn/cpp/ttnn/operations/eltwise/binary_ng/device/kernels/compute/eltwise_binary_sfpu_scalar.cpp
+tt_metal/hw/ckernels/blackhole/metal/llk_api/llk_sfpu/ckernel_sfpu_typecast.h
+tt_metal/hw/inc/api/compute/eltwise_unary/typecast.h
