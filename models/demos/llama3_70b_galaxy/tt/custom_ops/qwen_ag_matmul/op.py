@@ -23,6 +23,11 @@ FABRIC_1D_RING) followed by ``ttnn.experimental.minimal_matmul`` on the gathered
 
 ``matmul_port`` runs only the matmul part on a full in0 buffer (no fabric): the check that the port and the block
 lists keep the stock bits.
+
+``qwen_ag_matmul_v2``: the same op with the matmul on the full 7x10 grid; the eight fabric senders run inside in0
+receiver cores (kernels/v2_in0.cpp: a non-blocking sender pump called from every wait of the in0 relay loop), the
+injectors wait on per-wave words (every remote slot's wave j landed) and there is no hub. Column x takes a piece of the
+own slot and then every wave of remote slot (r + 1 + x) % 8, so each wave is one lockstep step. Used for FF1.
 """
 
 from __future__ import annotations
@@ -249,8 +254,10 @@ def _phys(mesh, x, y):
     return int(p.x), int(p.y)
 
 
-def _matmul_kernels(mesh, a, w, out, xl, cfg: MMConfig, ckc, col_lists, my_slot, T, fused, probe=None, resident=False):
-    """KernelDescriptors, CBs and semaphores of the matmul part (grid GX x GY). The CBs hold blocks of the plan's
+def _matmul_kernels(
+    mesh, a, w, out, xl, cfg: MMConfig, ckc, col_lists, my_slot, T, fused, probe=None, resident=False, gx=GX
+):
+    """KernelDescriptors, CBs and semaphores of the matmul part (grid gx x GY). The CBs hold blocks of the plan's
     largest block (the M block size does not change the bits); resident: the in1 CB holds the whole K x N block."""
     M_eff = max(rows for c in col_lists for _, rows, _, _ in c)
     M_tiles = int(a.shape[-2]) // TILE
@@ -268,7 +275,7 @@ def _matmul_kernels(mesh, a, w, out, xl, cfg: MMConfig, ckc, col_lists, my_slot,
     in0_ts, in1_ts, out_ts = TILE_BYTES[a.dtype], TILE_BYTES[w.dtype], TILE_BYTES[out.dtype]
     interm_dtype = ttnn.float32 if ckc.fp32_dest_acc_en else ttnn.bfloat16
 
-    mm = _crs(0, 0, GX - 1, GY - 1)
+    mm = _crs(0, 0, gx - 1, GY - 1)
     cbs = [
         _cb(CB_IN0, 2 * M_eff * cfg.K_block, in0_ts, a.dtype, mm),
         _cb(CB_IN1, (K_blocks if resident else 2) * cfg.K_block * cfg.N_block, in1_ts, w.dtype, mm),
@@ -300,17 +307,17 @@ def _matmul_kernels(mesh, a, w, out, xl, cfg: MMConfig, ckc, col_lists, my_slot,
 
     # Every matmul kernel takes only common runtime args; a core finds its neighbours, N range and block list
     # from its logical coordinates. The grid's NOC coordinates are separable (x from the column, y from the row).
-    px = [_phys(mesh, x, 0)[0] for x in range(GX)]
+    px = [_phys(mesh, x, 0)[0] for x in range(gx)]
     py = [_phys(mesh, 0, y)[1] for y in range(GY)]
-    for x in range(GX):
+    for x in range(gx):
         for y in range(GY):
             assert _phys(mesh, x, y) == (px[x], py[y]), "non-separable worker NOC coordinates"
 
     def lists(base):
-        """GX absolute offsets, then per column: num_blocks, (m_start_tile, rows) pairs."""
+        """gx absolute offsets, then per column: num_blocks, (m_start_tile, rows) pairs."""
         offs, body = [], []
-        at = base + GX
-        for x in range(GX):
+        at = base + gx
+        for x in range(gx):
             offs.append(at + len(body))
             body.append(len(col_lists[x]))
             for m0, rows, _, _ in col_lists[x]:
@@ -325,7 +332,7 @@ def _matmul_kernels(mesh, a, w, out, xl, cfg: MMConfig, ckc, col_lists, my_slot,
 
     def in0_ct(inj):
         ct = [K_tiles, padded_K, M_eff, cfg.K_block, in0_ts, SEM_IN0_SENDER, SEM_IN0_RECEIVER, SEM_IN0_VALID]
-        return ct + [int(inj), SEM_READY, T, my_slot, M_tiles, GX, GY]
+        return ct + [int(inj), SEM_READY, T, my_slot, M_tiles, gx, GY]
 
     def in1_ct(inj):
         ct = [K_tiles, padded_K, N_tiles, M_eff, cfg.K_block, cfg.N_block, in1_ts, out_ts]
@@ -335,7 +342,7 @@ def _matmul_kernels(mesh, a, w, out, xl, cfg: MMConfig, ckc, col_lists, my_slot,
             SEM_IN1_VALID,
             int(inj),
             M_tiles,
-            GX,
+            gx,
             GY,
             Ntpc,
             k_blocks_per_core,
@@ -344,7 +351,7 @@ def _matmul_kernels(mesh, a, w, out, xl, cfg: MMConfig, ckc, col_lists, my_slot,
     dm0 = ttnn.DataMovementConfigDescriptor(processor=ttnn.DataMovementProcessor.RISCV_0, noc=ttnn.NOC.NOC_0)
     dm1 = ttnn.DataMovementConfigDescriptor(processor=ttnn.DataMovementProcessor.RISCV_1, noc=ttnn.NOC.NOC_1)
     kernels = []
-    for inj, cores in ((True, _crs(0, 0, GX - 1, 0)), (False, _crs(0, 1, GX - 1, GY - 1))):
+    for inj, cores in ((True, _crs(0, 0, gx - 1, 0)), (False, _crs(0, 1, gx - 1, GY - 1))):
         kernels.append(
             ttnn.KernelDescriptor(
                 kernel_source=KERNELS["mm_in0"],
@@ -356,7 +363,7 @@ def _matmul_kernels(mesh, a, w, out, xl, cfg: MMConfig, ckc, col_lists, my_slot,
                 config=dm0,
             )
         )
-    for inj, cores in ((True, _crs(0, 0, 0, GY - 1)), (False, _crs(1, 0, GX - 1, GY - 1))):
+    for inj, cores in ((True, _crs(0, 0, 0, GY - 1)), (False, _crs(1, 0, gx - 1, GY - 1))):
         kernels.append(
             ttnn.KernelDescriptor(
                 kernel_source=KERNELS["mm_in1_out"],
@@ -544,8 +551,9 @@ def matmul_port(
     out=None,
     resident=False,
     split=0,
+    gx=GX,
 ):
-    """minimal_matmul(a, w) on the 6x10 grid with the planned block lists, no fabric (all of a read from DRAM).
+    """minimal_matmul(a, w) on the gx x 10 grid with the planned block lists, no fabric (all of a read from DRAM).
     Same bits as the stock call with the same K block / N block (any grid, any M split)."""
     _check_inputs("a", a)
     _check_inputs("w", w)
@@ -555,17 +563,17 @@ def matmul_port(
     M_tiles = int(a.shape[-2]) // TILE
     T = slot_rows or M_tiles // ROWS_RING
     N = int(w.shape[-1])
-    p = plan(T, cfg.M_block, N, tuple(waves) if waves else None, resident=resident, split=split)
+    p = plan(T, cfg.M_block, N, tuple(waves) if waves else None, ncols=gx, resident=resident, split=split)
     if out is None:
         out = ttnn.allocate_tensor_on_device(
             ttnn.Shape([1, 1, int(a.shape[-2]), N]), dtype, ttnn.TILE_LAYOUT, mesh, ttnn.DRAM_MEMORY_CONFIG
         )
-    key = ("port", cfg, p, str(compute_kernel_config.math_fidelity), bool(compute_kernel_config.fp32_dest_acc_en))
+    key = ("port", gx, cfg, p, str(compute_kernel_config.math_fidelity), bool(compute_kernel_config.fp32_dest_acc_en))
     key += (bool(compute_kernel_config.math_approx_mode), a.buffer_address(), w.buffer_address(), out.buffer_address())
     mp = _DESCRIPTOR_CACHE.get(key)
     if mp is None:
         k, c, s = _matmul_kernels(
-            mesh, a, w, out, None, cfg, compute_kernel_config, p.cols[0], 0, T, fused=False, resident=resident
+            mesh, a, w, out, None, cfg, compute_kernel_config, p.cols[0], 0, T, fused=False, resident=resident, gx=gx
         )
         prog = ttnn.ProgramDescriptor(kernels=k, semaphores=s, cbs=c)
         mp = ttnn.MeshProgramDescriptor()
@@ -665,6 +673,261 @@ def qwen_ag_matmul(
                         args = ttnn.setup_fabric_connection(me, fwd_node if fwd else bwd_node, l, prog, core)
                         prog.kernels[kidx].runtime_args[x][y].extend(args)
                 mp[ttnn.MeshCoordinateRange(coord, coord)] = prog
+        if len(_DESCRIPTOR_CACHE) >= _DESCRIPTOR_CACHE_MAX:
+            _DESCRIPTOR_CACHE.clear()
+        _DESCRIPTOR_CACHE[key] = mp
+    ttnn.generic_op([x_local, w, gathered, out], mp)
+    return out, gathered
+
+
+# ---------------------------------------------------------------------------------------------------------------
+# v2: the matmul on the full 7x10 grid, the fabric senders folded into eight in0 receiver cores (kernels/v2_in0.cpp)
+# ---------------------------------------------------------------------------------------------------------------
+GX2 = 7
+OWN = 0xFFFF
+# (x, y) of the sender of (link, fwd): in0 sinks of row 9, plus the row-8 relay of column 6
+V2_SENDERS = {(0, True): (0, 9), (1, True): (1, 9), (2, True): (2, 9), (3, True): (3, 9)}
+V2_SENDERS.update({(0, False): (4, 9), (1, False): (5, 9), (2, False): (6, 9), (3, False): (6, 8)})
+
+
+def v2_waves(T: int, resident: bool) -> tuple:
+    """Lockstep (non-resident, FF1) plans: a short first wave (the matmul starts on the own slot meanwhile), then
+    16-row waves (fewer, larger steps re-stream W1 less), the rest last. job383 at S=40960, FF1 ms (stock pair
+    2.79-2.90): 12,16,12 2.649; 8,16,16 2.718; 8,8,8,16 2.801; 8x5 2.861; 8,8,16,8 2.943. Resident plans (QKV):
+    8-row waves (8x5 1.594; 8,8,8,16 1.662; 8,16,16 1.734)."""
+    if resident:
+        return default_waves(T)
+    first = 12 if T >= 36 else 8
+    out, rem = [first], T - first
+    while rem > 16 + 8:
+        out.append(16)
+        rem -= 16
+    if rem > 16:
+        out += [rem - rem // 2, rem // 2]
+    elif rem:
+        out.append(rem)
+    return tuple(out)
+
+
+@functools.lru_cache(maxsize=64)
+def plan_v2(T: int, my_slot: int, ncols: int = GX2, nslots: int = ROWS_RING, waves: tuple | None = None):
+    """Column x: one piece of the own slot (the slot split over the columns), then every wave of remote slot
+    (my_slot + 1 + x) % nslots. With 7 columns and 7 remote slots every wave is one step of one block per column."""
+    assert ncols == nslots - 1
+    waves = tuple(waves) if waves else default_waves(T)
+    assert sum(waves) == T and len(waves) <= MAX_WAVES and max(waves) <= 16, waves
+    starts = [sum(waves[:j]) for j in range(len(waves))]
+    q, rem = divmod(T, ncols)
+    pieces = [q + (1 if x < rem else 0) for x in range(ncols)]
+    cols, off = [], 0
+    for x in range(ncols):
+        col = [(my_slot * T + off, pieces[x], OWN)] if pieces[x] else []
+        off += pieces[x]
+        s = (my_slot + 1 + x) % nslots
+        col += [(s * T + starts[j], w, j) for j, w in enumerate(waves)]
+        cols.append(tuple(col))
+    return waves, tuple(starts), tuple(cols)
+
+
+class _V2Words:
+    """Barrier word (sender cores) and wave words (injectors) at one L1 address on every device and core: a
+    zero-filled L1 buffer sharded over the injector and sender cores, created with a device sync."""
+
+    def __init__(self, mesh, cores):
+        import torch
+
+        width = (1 + MAX_WAVES) * _GlobalSems.STRIDE // 4
+        mem = ttnn.MemoryConfig(
+            ttnn.TensorMemoryLayout.HEIGHT_SHARDED,
+            ttnn.BufferType.L1,
+            ttnn.ShardSpec(cores, [1, width], ttnn.ShardOrientation.ROW_MAJOR),
+        )
+        n = cores.num_cores()
+        self.buf = ttnn.from_torch(
+            torch.zeros(1, 1, n, width, dtype=torch.int32),
+            dtype=ttnn.uint32,
+            layout=ttnn.ROW_MAJOR_LAYOUT,
+            device=mesh,
+            memory_config=mem,
+            mesh_mapper=ttnn.ReplicateTensorToMesh(mesh),
+        )
+        ttnn.synchronize_device(mesh)
+        self.addr = self.buf.buffer_address()
+
+
+_V2: dict = {}
+
+
+def _v2_word_cores():
+    cs = [ttnn.CoreRange(ttnn.CoreCoord(0, 0), ttnn.CoreCoord(GX2 - 1, 0))]
+    cs += [ttnn.CoreRange(ttnn.CoreCoord(x, y), ttnn.CoreCoord(x, y)) for x, y in sorted(set(V2_SENDERS.values()))]
+    return ttnn.CoreRangeSet(cs)
+
+
+def release_semaphores_v2(mesh):
+    """As release_semaphores, for qwen_ag_matmul_v2's word buffer."""
+    w = _V2.pop(id(mesh), None)
+    if w is not None:
+        ttnn.deallocate(w.buf)
+
+
+def _v2_program(mesh, xl, w, g, out, cfg, ckc, r, c, T, copy_local, resident, words, probe=None, waves=None):
+    waves, starts, cols = plan_v2(T, r, waves=waves)
+    pair_lists = [[(m0, rows, m0 // T, j) for m0, rows, j in col] for col in cols]
+    # matmul in1 / compute kernels from v1 (pairs), with the grid width GX2
+    k1, cbs, sems = _matmul_kernels(
+        mesh, g, w, out, xl, cfg, ckc, pair_lists, r, T, fused=False, resident=resident, gx=GX2
+    )
+    k1 = [k for k in k1 if KERNELS["mm_in0"] not in str(k.kernel_source)]
+    M_eff = max(rows for col in cols for _, rows, _ in col)
+    K_tiles = int(xl.shape[-1]) // TILE
+    in0_ts = TILE_BYTES[g.dtype]
+    px = [_phys(mesh, x, 0)[0] for x in range(GX2)]
+    py = [_phys(mesh, 0, y)[1] for y in range(GY)]
+    head = [g.buffer_address(), xl.buffer_address(), words.addr] + px + py
+    offs, body = [], []
+    at = len(head) + GX2
+    for col in cols:
+        offs.append(at + len(body))
+        body.append(len(col))
+        for m0, rows, j in col:
+            body += [m0, rows, j]
+    common = head + offs + body
+    for r0, rows in zip(starts, waves):
+        common += [r0, rows]
+    snd_order = [V2_SENDERS[(l, f)] for f in (True, False) for l in range(LINKS)]
+    for x, y in snd_order:
+        common += list(_phys(mesh, x, y))
+    acc = _accessor(g) + _accessor(xl)
+    base_ct = [K_tiles, K_tiles, M_eff, cfg.K_block, in0_ts, SEM_IN0_SENDER, SEM_IN0_RECEIVER, SEM_IN0_VALID]
+    arrivals = 2 * LINKS * (ROWS_RING - 1)
+    dm0 = ttnn.DataMovementConfigDescriptor(processor=ttnn.DataMovementProcessor.RISCV_0, noc=ttnn.NOC.NOC_0)
+    M_tiles = int(g.shape[-2]) // TILE
+
+    def ct(inj):
+        return base_ct + [int(inj), arrivals, T, r, M_tiles, GX2, GY, len(waves)] + acc
+
+    snd_set = set(snd_order)
+    recv = [
+        ttnn.CoreRange(ttnn.CoreCoord(x, y), ttnn.CoreCoord(x, y))
+        for x in range(GX2)
+        for y in range(1, GY)
+        if (x, y) not in snd_set
+    ]
+    kernels = [
+        ttnn.KernelDescriptor(
+            kernel_source=f"{KERNEL_ROOT}/v2_in0.cpp",
+            source_type=ttnn.KernelDescriptor.SourceType.FILE_PATH,
+            core_ranges=cores,
+            compile_time_args=ct(inj),
+            common_runtime_args=common,
+            defines=[("PROBE_NOWAIT", "1")] if probe == "nowait" else [],
+            config=dm0,
+        )
+        for inj, cores in ((True, _crs(0, 0, GX2 - 1, 0)), (False, ttnn.CoreRangeSet(recv)))
+    ]
+    page = TILE_BYTES[xl.dtype]
+    link_cols = K_tiles // LINKS
+    snd_k = []
+    for fwd in (True, False):
+        ra, rb = (4, 3) if fwd else (3, 4)
+        for l in range(LINKS):
+            x, y = V2_SENDERS[(l, fwd)]
+            sct = [page, ra, rb, int(fwd), int(l == 0), 4 if fwd else 3, BATCH, HDR, l * link_cols, link_cols]
+            sct += [int(copy_local), CB_STAGE_F, CB_HDR_F, len(snd_order)]
+            snd_k.append((len(kernels), l, fwd, x, y))
+            kernels.append(
+                ttnn.KernelDescriptor(
+                    kernel_source=f"{KERNEL_ROOT}/v2_in0.cpp",
+                    source_type=ttnn.KernelDescriptor.SourceType.FILE_PATH,
+                    core_ranges=_crs(x, y, x, y),
+                    compile_time_args=ct(False) + sct,
+                    common_runtime_args=common,
+                    runtime_args=[((x, y), [])],
+                    defines=[("SENDER", "1")],
+                    config=dm0,
+                )
+            )
+    snd_crs = ttnn.CoreRangeSet([ttnn.CoreRange(ttnn.CoreCoord(x, y), ttnn.CoreCoord(x, y)) for x, y in snd_order])
+    cbs = cbs + [
+        _cb(CB_STAGE_F, 2 * BATCH * TPP, page, xl.dtype, snd_crs),
+        ttnn.CBDescriptor(
+            total_size=(BATCH + GX2) * HDR,
+            core_ranges=snd_crs,
+            format_descriptors=[ttnn.CBFormatDescriptor(buffer_index=CB_HDR_F, data_format=ttnn.uint32, page_size=HDR)],
+        ),
+    ]
+    prog = ttnn.ProgramDescriptor(kernels=kernels + k1, semaphores=sems, cbs=cbs)
+    coord = ttnn.MeshCoordinate(r, c)
+    me = mesh.get_fabric_node_id(coord)
+    fwd_node = mesh.get_fabric_node_id(ttnn.MeshCoordinate((r + 1) % ROWS_RING, c))
+    bwd_node = mesh.get_fabric_node_id(ttnn.MeshCoordinate((r - 1) % ROWS_RING, c))
+    for kidx, l, fwd, x, y in snd_k:
+        args = ttnn.setup_fabric_connection(me, fwd_node if fwd else bwd_node, l, prog, ttnn.CoreCoord(x, y))
+        prog.kernels[kidx].runtime_args[x][y].extend(args)
+    return prog
+
+
+def qwen_ag_matmul_v2(
+    x_local,
+    w,
+    *,
+    config,
+    compute_kernel_config,
+    dtype=ttnn.bfloat8_b,
+    copy_local=False,
+    resident=None,
+    gathered=None,
+    out=None,
+    probe=None,
+    waves=None,
+):
+    """qwen_ag_matmul on the full 7x10 grid (no separate sender column): same contract and bits."""
+    _check_inputs("x_local", x_local, (ttnn.bfloat8_b,))
+    _check_inputs("w", w)
+    cfg = MMConfig.of(config)
+    mesh = x_local.device()
+    rows, cols = list(mesh.shape)
+    S32, K = int(x_local.shape[-2]), int(x_local.shape[-1])
+    T = S32 // TILE
+    N = int(w.shape[-1])
+    if resident is None:
+        resident = resident_fits(K, N, cfg, TILE_BYTES[w.dtype])
+    if waves is None:
+        waves = v2_waves(T, resident)
+    if gathered is None:
+        gathered = ttnn.allocate_tensor_on_device(
+            ttnn.Shape([1, 1, ROWS_RING * S32, K]), x_local.dtype, ttnn.TILE_LAYOUT, mesh, ttnn.DRAM_MEMORY_CONFIG
+        )
+    if out is None:
+        out = ttnn.allocate_tensor_on_device(
+            ttnn.Shape([1, 1, ROWS_RING * S32, N]), dtype, ttnn.TILE_LAYOUT, mesh, ttnn.DRAM_MEMORY_CONFIG
+        )
+    if id(mesh) not in _V2:
+        _V2[id(mesh)] = _V2Words(mesh, _v2_word_cores())
+    words = _V2[id(mesh)]
+    ckc = compute_kernel_config
+    key = (
+        "v2",
+        probe,
+        tuple(waves) if waves else None,
+        cfg,
+        T,
+        bool(copy_local),
+        bool(resident),
+        str(ckc.math_fidelity),
+        bool(ckc.fp32_dest_acc_en),
+    )
+    key += (bool(ckc.math_approx_mode), tuple(t.buffer_address() for t in (x_local, w, gathered, out)), words.addr)
+    mp = _DESCRIPTOR_CACHE.get(key)
+    if mp is None:
+        mp = ttnn.MeshProgramDescriptor()
+        for r in range(rows):
+            for c in range(cols):
+                prog = _v2_program(
+                    mesh, x_local, w, gathered, out, cfg, ckc, r, c, T, copy_local, resident, words, probe, waves
+                )
+                mp[ttnn.MeshCoordinateRange(ttnn.MeshCoordinate(r, c), ttnn.MeshCoordinate(r, c))] = prog
         if len(_DESCRIPTOR_CACHE) >= _DESCRIPTOR_CACHE_MAX:
             _DESCRIPTOR_CACHE.clear()
         _DESCRIPTOR_CACHE[key] = mp
