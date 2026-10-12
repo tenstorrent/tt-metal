@@ -14,6 +14,16 @@ m=$($B1 cat /var/tmp/fasth3/t409/build409.marker 2>&1 || true); log "build: $m"
 case "$m" in "rc=0 step=done"*) ;; *) ST=build-failed; exit 3;; esac
 scp -q $D/run409a.sh g15blx01:/var/tmp/fasth3/t409/run409a.sh.tmp
 $B1 mv /var/tmp/fasth3/t409/run409a.sh.tmp /var/tmp/fasth3/t409/run409a.sh
+# device-lint refuses while /var/tmp/fasth3 on blx01 is over 450 GB: wait (up to 12 h) for the project to free it.
+wait_cap() {
+  local i g
+  for i in $(seq 144); do
+    g=$($B1 "timeout 110 du -sxBG /var/tmp/fasth3" 2>/dev/null | sed -n 's/^\([0-9]*\)G.*/\1/p' || true)
+    [ -n "$g" ] && [ "$g" -le 449 ] && { log "cap: ${g}G"; return 0; }
+    [ $((i % 6)) = 1 ] && log "cap: ${g:-?}G, waiting"; sleep 300
+  done
+  return 1
+}
 wait_clear() {
   local ok=0 i s
   for i in $(seq 120); do
@@ -24,6 +34,7 @@ wait_clear() {
   return 1
 }
 for try in 1 2; do
+  wait_cap || { ST=over-cap; exit 8; }
   wait_clear || { ST=not-clear; exit 4; }
   rc=0
   for i in $(seq 60); do

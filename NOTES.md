@@ -43,3 +43,17 @@ Branch ttp/t409-port-vsa-sparse-attention-into-the-fasth, base a15eb37ec6a (t400
 - chain416a restarted from run 1597: log $RUN/chain416a.out (state/runs/1597), rc chain416a.rc.
   blx01 is busy with #408/#421/#430 jobs; the chain waits for 2 clear minutes, then submits.
 - Next: read /var/tmp/fasth3/t409/out_attn/run.log (PCC). Then step 4 once #408 is done.
+
+## t416 run 1611 (2026-10-12 01:10 PDT)
+- chain416a (run 1597) ended T416A_DONE 5 submit-rc2: device-lint refused because /var/tmp/fasth3 on blx01 was
+  455 GB (cap 450). Freed ~2 GB: removed the done #423/#427 worktrees (t423/b, t427/b; clean, commits on
+  g15blx02 branches) and JIT dirs from 10-06/07 in home/.cache/tt-metal-cache. Now 453 GB. Not removed (used by
+  open tasks or a coordinator call): models/ltx-2.5 (67 GB, idle since 10-10), dit-h3hf transformer_precomputed_adaln
+  (38 GB, #421), t408/b (#422 off arm), t428 builds.
+- Code 53f7b6b707b: VSA builds `to_gate_compress` only with MiniMaxH3VSAConfig(gate_compress=True). The default VSA
+  model has the dense weight set, so the pipeline reuses the dense DiT cache (no `_vsa` suffix): saves a 63 GB cache
+  on blx01 (it would also push / past lint's 88% cap) and the cold weight fill. A nonzero gate in a checkpoint
+  without gate_compress raises. Host tests 24/24. blx01 t409/b checked out at 53f7b6b707b (Python only, no rebuild).
+- chain416a now waits (<=12 h) for blx01 /var/tmp/fasth3 <= 449 GB before the broker-clear wait. Restarted detached
+  from run 1611 (state/runs/1611/chain416a.out).
+- Step 4 no longer needs a separate weight-cache fill for VSA; one JIT warm-up of the VSA kernels is still needed.
