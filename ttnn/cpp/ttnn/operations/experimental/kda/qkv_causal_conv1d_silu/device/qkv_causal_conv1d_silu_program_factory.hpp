@@ -55,9 +55,9 @@ inline uint32_t qkv_causal_conv1d_silu_tiled_group(uint32_t block_ct) {
 
 inline uint64_t qkv_causal_conv1d_silu_tiled_l1_bytes(uint64_t block_ct, uint64_t tile_bytes) {
     const uint64_t group = qkv_causal_conv1d_silu_tiled_group(block_ct);
-    // Diagonal weights, double-buffered shifted taps and double-buffered output groups.
-    const uint64_t dfb_tiles =
-        (qkv_causal_conv1d_silu_tap_count * block_ct) + (2 * qkv_causal_conv1d_silu_tap_count * group) + (2 * group);
+    // Tap tiles, diagonal weights and the identity; double-buffered shifted taps and output groups.
+    const uint64_t dfb_tiles = (2 * qkv_causal_conv1d_silu_tap_count * block_ct) + 1 +
+                               (2 * qkv_causal_conv1d_silu_tap_count * group) + (2 * group);
     return (dfb_tiles * tile_bytes) + qkv_causal_conv1d_silu_tiled_scratch_bytes(block_ct, tile_bytes);
 }
 
