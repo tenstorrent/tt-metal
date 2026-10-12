@@ -462,7 +462,8 @@ Tensor softmax(
             /*is_causal_mask=*/false,
             /*compute_kernel_config=*/compute_kernel_config_val,
             /*is_scale_causal_mask_hw_dims_softmax=*/false,
-            /*numeric_stable=*/numeric_stable);
+            /*numeric_stable=*/numeric_stable,
+            /*has_explicit_compute_kernel_config=*/compute_kernel_config.has_value());
     }
 
     auto input_tensor_4D = ttnn::unsqueeze_to_4D(input_tensor);
@@ -493,7 +494,8 @@ Tensor softmax(
             /*is_causal_mask=*/false,
             /*compute_kernel_config=*/compute_kernel_config_val,
             /*is_scale_causal_mask_hw_dims_softmax=*/false,
-            /*numeric_stable=*/numeric_stable);
+            /*numeric_stable=*/numeric_stable,
+            /*has_explicit_compute_kernel_config=*/compute_kernel_config.has_value());
     }
     // General-purpose softmax
     return ttnn::prim::softmax(
@@ -508,7 +510,8 @@ Tensor softmax(
         /*is_causal_mask=*/false,
         /*compute_kernel_config=*/compute_kernel_config_val,
         /*is_scale_causal_mask_hw_dims_softmax=*/false,
-        /*numeric_stable=*/numeric_stable);
+        /*numeric_stable=*/numeric_stable,
+        /*has_explicit_compute_kernel_config=*/compute_kernel_config.has_value());
 }
 
 Tensor scale_mask_softmax(
@@ -579,7 +582,8 @@ Tensor scale_mask_softmax(
             /*is_causal_mask=*/is_causal_mask,
             /*compute_kernel_config=*/compute_kernel_config_val,
             /*is_scale_causal_mask_hw_dims_softmax=*/false,
-            /*numeric_stable=*/numeric_stable);
+            /*numeric_stable=*/numeric_stable,
+            /*has_explicit_compute_kernel_config=*/compute_kernel_config.has_value());
     }
 
     // Operation
@@ -595,7 +599,8 @@ Tensor scale_mask_softmax(
         /*is_causal_mask=*/is_causal_mask,
         /*compute_kernel_config=*/compute_kernel_config_val,
         /*is_scale_causal_mask_hw_dims_softmax=*/false,
-        /*numeric_stable=*/numeric_stable);
+        /*numeric_stable=*/numeric_stable,
+        /*has_explicit_compute_kernel_config=*/compute_kernel_config.has_value());
 }
 
 Tensor softmax_in_place(
@@ -633,7 +638,8 @@ Tensor softmax_in_place(
         /*is_causal_mask=*/false,
         /*compute_kernel_config=*/compute_kernel_config_val,
         /*is_scale_causal_mask_hw_dims_softmax=*/false,
-        /*numeric_stable=*/numeric_stable);
+        /*numeric_stable=*/numeric_stable,
+        /*has_explicit_compute_kernel_config=*/compute_kernel_config.has_value());
 }
 
 Tensor scale_mask_softmax_in_place(
@@ -665,7 +671,8 @@ Tensor scale_mask_softmax_in_place(
         /*is_causal_mask=*/is_causal_mask,
         /*compute_kernel_config=*/compute_kernel_config_val,
         /*is_scale_causal_mask_hw_dims_softmax=*/false,
-        /*numeric_stable=*/numeric_stable);
+        /*numeric_stable=*/numeric_stable,
+        /*has_explicit_compute_kernel_config=*/compute_kernel_config.has_value());
 }
 
 Tensor scale_causal_mask_hw_dims_softmax_in_place(
@@ -696,7 +703,8 @@ Tensor scale_causal_mask_hw_dims_softmax_in_place(
         /*is_causal_mask=*/true,
         /*compute_kernel_config=*/compute_kernel_config_val,
         /*is_scale_causal_mask_hw_dims_softmax=*/true,
-        /*numeric_stable=*/numeric_stable);
+        /*numeric_stable=*/numeric_stable,
+        /*has_explicit_compute_kernel_config=*/compute_kernel_config.has_value());
 }
 
 Tensor softmax(
@@ -711,7 +719,8 @@ Tensor softmax(
     bool is_causal_mask,
     DeviceComputeKernelConfig compute_kernel_config,
     bool is_scale_causal_mask_hw_dims_softmax,
-    bool numeric_stable) {
+    bool numeric_stable,
+    bool has_explicit_compute_kernel_config) {
     return ttnn::device_operation::launch<SoftmaxDeviceOperation>(
         SoftmaxParams{
             softmax_type,
@@ -723,7 +732,8 @@ Tensor softmax(
             is_causal_mask,
             compute_kernel_config,
             is_scale_causal_mask_hw_dims_softmax,
-            numeric_stable},
+            numeric_stable,
+            has_explicit_compute_kernel_config},
         SoftmaxInputs{input_tensor, mask});
 }
 }  // namespace ttnn::prim
