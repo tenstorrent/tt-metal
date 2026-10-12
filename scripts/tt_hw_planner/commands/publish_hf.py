@@ -333,12 +333,15 @@ def _hardware_phrase(state: dict, hardware: str | None) -> str:
     of chips the model opened. ``device_count`` comes from the run's own manifest env."""
     arch = _arch_name(state)
     dc = _device_count(state)
-    if dc == 1:
-        return f"a single Tenstorrent {arch} chip"
-    if dc > 1:
-        return f"{dc} Tenstorrent {arch} chips" + (f" ({hardware})" if hardware else "")
+    # Prefer the packaging label (e.g. "p300x2") when known -- it names the exact Tenstorrent box and
+    # is how the other model packages describe their hardware. Fall back to a chip count only when no
+    # package tag is available.
     if hardware:
         return f"Tenstorrent {hardware}"
+    if dc == 1:
+        return "a single Tenstorrent chip" if arch == "Tenstorrent" else f"a single Tenstorrent {arch} chip"
+    if dc > 1:
+        return f"{dc} Tenstorrent chips" if arch == "Tenstorrent" else f"{dc} Tenstorrent {arch} chips"
     return "Tenstorrent" if arch == "Tenstorrent" else f"Tenstorrent {arch}"
 
 
