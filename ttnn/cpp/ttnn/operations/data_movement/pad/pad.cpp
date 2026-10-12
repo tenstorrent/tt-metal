@@ -492,7 +492,7 @@ std::optional<ttnn::Tensor> pad_tile_codegen(
     const auto planned =
         pc::plan_codegen(input_4d, front, after, value, memory_config_arg.value_or(input_tensor.memory_config()));
     if (route == PadRoute::Codegen) {
-        TT_FATAL(planned.has_value(), "ttnn.pad: input is not supported by the codegen path");
+        TT_FATAL(planned.has_value(), "ttnn.pad: codegen path does not support this input");
     } else if (!planned.has_value() || pc::is_demoted(input_4d, *planned)) {
         return std::nullopt;
     }
@@ -627,7 +627,8 @@ ttnn::Tensor pad_with_route(
         TT_FATAL(
             pad_codegen::supported_execution_controls(use_multicore, sub_core_grids),
             "ttnn.pad: codegen path does not support use_multicore=False or sub_core_grids");
-        TT_FATAL(input_tensor.layout() == ttnn::TILE_LAYOUT, "ttnn.pad: codegen path supports TILE layout only");
+        TT_FATAL(
+            input_tensor.layout() == ttnn::TILE_LAYOUT, "ttnn.pad: codegen path does not support ROW_MAJOR layout");
     }
 
     ttsl::SmallVector<PadSpecDim> working_padding = padding;
@@ -724,7 +725,7 @@ void require_codegen_supported(
     TT_FATAL(
         pc::plan_codegen(input_4d, front, after, value, memory_config_arg.value_or(input_tensor.memory_config()))
             .has_value(),
-        "ttnn.pad: input is not supported by the codegen path");
+        "ttnn.pad: codegen path does not support this input");
 }
 
 }  // namespace
