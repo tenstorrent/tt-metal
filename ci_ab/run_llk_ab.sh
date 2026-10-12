@@ -19,7 +19,7 @@ $SF/compiler/bin/riscv-tt-elf-g++ --version | grep -q '7\.86\.0' || { echo "== w
 P="tt_metal/tt-llk tt_metal/hw tt_metal/hostdevcommon tt_metal/tools/profiler tt_metal/sfpi-version ttnn/cpp/ttnn/operations/experimental"
 NP=$(( $(nproc) / 2 )); (( NP > 16 )) && NP=16; (( NP < 4 )) && NP=4; NP=${RA_NP:-$NP}
 for L in $(awk '{print $2; print $3}' $S/lines.txt | sort -u); do
-  D=$SL/$L; mkdir -p $D
+  D=$SL/$L; mkdir -p $D $SL/builds/$L
   tar -C $R -cf - $P | tar -C $D -xf -
   (cd $S/variants/$L/tree && find . -type f) | while read -r f; do mkdir -p "$(dirname "$D/$f")"; cp "$S/variants/$L/tree/$f" "$D/$f"; done
   ln -sfn $SF $D/tt_metal/tt-llk/tests/sfpi; rm -rf $D/tt_metal/tt-llk/perf_data; ln -sfn $SL/perf_data $D/tt_metal/tt-llk/perf_data
@@ -49,7 +49,7 @@ while read -r tag A B rts; do
 done < $S/lines.txt
 # Functional variants of the final composition with the LLK asserts on (one pytest, compile and run).
 if [[ $stop == 0 && -f $S/ids/fnF.txt && -d $S/variants/fnF_B ]]; then
-  L=fnF_B; D=$SL/$L; mkdir -p $D
+  L=fnF_B; D=$SL/$L; mkdir -p $D $SL/builds/$L
   tar -C $R -cf - $P | tar -C $D -xf -
   (cd $S/variants/$L/tree && find . -type f) | while read -r f; do mkdir -p "$(dirname "$D/$f")"; cp "$S/variants/$L/tree/$f" "$D/$f"; done
   ln -sfn $SF $D/tt_metal/tt-llk/tests/sfpi; rm -rf $D/tt_metal/tt-llk/perf_data; ln -sfn $SL/perf_data $D/tt_metal/tt-llk/perf_data
