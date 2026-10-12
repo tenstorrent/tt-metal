@@ -142,6 +142,15 @@ class LTXDistilledPipeline(LTXPipeline):
         if self._traced:
             self._prealloc_trace_io("s1", num_frames=num_frames, height=height // 2, width=width // 2)
             self._prealloc_trace_io("s2", num_frames=num_frames, height=height, width=width)
+            # The shared prompt buffers are held trace inputs too: seed them and compile their traced copy now
+            # (see _prealloc_trace_io), not on gen 0's first traced update.
+            for held, make in (
+                (self._prompt_v, lambda: self._prepare_prompt(v_p)),
+                (self._prompt_a, lambda: bf16_tensor(a_p.unsqueeze(0), device=self.mesh_device)),
+            ):
+                if held.value is None:
+                    held.update(make(), False)
+                held.update(make(), True)
 
         # Late capture: the enhancer warms eagerly here and captures its decode trace at the end of warmup,
         # after every persistent buffer below is allocated, so its replays cannot write over them.
@@ -369,6 +378,26 @@ class LTXDistilledPipeline(LTXPipeline):
                 mesh_axes=[None, None, sp_axis, None],
                 device=self.mesh_device,
             )
+            # A traced update copies into the held buffer. Run one per held input now so every Copy program is
+            # compiled before any capture: its kernel binary is allocated on the first copy and re-read on every
+            # later one, so compiling it in gen 0 would put it after the late enhancer capture (job 130120).
+            sp_axes = [None, None, sp_axis, None]
+            held = [
+                (state._tt_video_lat, torch.zeros(1, 1, video_N, self.in_channels), sp_axes),
+                (state._tt_audio_lat, torch.zeros(1, 1, audio_N, self.in_channels), sp_axes),
+                (state._tt_i2v_mask, torch.zeros(1, 1, video_N, 1), sp_axes),
+                (state._tt_i2v_clean, torch.zeros(1, 1, video_N, self.in_channels), sp_axes),
+                (state._tt_timestep, torch.zeros(1, 1, 1, 1), None),
+            ]
+            if getattr(self.transformer, "image_conditioning", False):
+                held += [
+                    (state._tt_video_ts_pair, torch.zeros(1, 1, 2, 1), None),
+                    (state._tt_video_pin_mask, torch.zeros(1, 1, video_N, 1), sp_axes),
+                ]
+            for buf, zeros, axes in held:
+                if buf.value is None:
+                    buf.update(zeros, False, mesh_axes=axes, device=self.mesh_device)
+                buf.update(zeros, True, mesh_axes=axes, device=self.mesh_device)
 
     def _denoise_no_guidance(
         self,
