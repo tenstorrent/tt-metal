@@ -220,3 +220,14 @@ Next (tunnel up): `ssh exabox-login 'df -h /data; curl -sI https://huggingface.c
 - Next: read chain452.log; per-step time from each run.log ("denoise breakdown"); PSNR of sla/vsa vs dense from the
   saved yuv; still per arm. If seed 0 is sane, make s{1..4}-{dense,sla0.85,vsa0.9}.txt (sed s/s0/sN/; T409_SEED=N) and
   rerun chain452.sh on them; then VBench subset and recommendation.
+
+## t452 run 1707 (2026-10-12 10:10 PDT) — seed 0 failed on a cold JIT cache, rerun
+- All three seed-0 arms (blx01 jobs 998 dense, 004 sla0.85, 006 vsa0.9; each 439 s, exit 1) stopped at the t286 warm
+  deadline (400 s): "RuntimeError: [t286] warm deadline 400 s passed in Warming audio decode lengths / prompt encoder
+  keyframe layouts / vision merge sequence lengths". Cause: the overlay root /var/tmp/fasth3/t452/w gives new kernel
+  paths, so the JIT cache started cold (job 998: 0/1889 hits; 004: 1889/3446; 006: 3446/5373). A warm t409 run builds
+  ~6692 programs (89.7% hits), so the cache is ~80% filled now. Not a drop, not a code failure. Clock: AICLK ceiling 900 MHz.
+- Rerun of the same three specs: chain452 detached in run 1707 (log state/runs/1707/chain452.log). If an arm still hits the
+  warm deadline, rerun it once more (the cache keeps filling); do not raise the 540 s job timeout.
+- Next: per-step time ("denoise breakdown") per arm, PSNR of sla/vsa vs dense from the saved outputs, a still per arm;
+  then s1..s4 specs and the same chain.
