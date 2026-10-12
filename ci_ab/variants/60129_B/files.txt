@@ -1,0 +1,2 @@
+tt_metal/hw/ckernels/blackhole/metal/llk_api/llk_sfpu/ckernel_sfpu_logical_not.h
+tt_metal/hw/inc/api/compute/eltwise_unary/logical_not.h

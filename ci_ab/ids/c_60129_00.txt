@@ -1,0 +1,1 @@
+perf_eltwise_unary_sfpu.py::test_perf_eltwise_unary_sfpu_int32[formats:Int32->Int32-mathop:LogicalNot-input_dimensions:[128, 64]]

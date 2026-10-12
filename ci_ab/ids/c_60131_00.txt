@@ -1,0 +1,4 @@
+perf_eltwise_unary_sfpu.py::test_perf_eltwise_unary_sfpu[formats:Float16_b->Float16_b-approx_mode:No-mathop:Softshrink-dest_acc:No-loop_factor:16-iterations:32-fast_mode:No-stable_sort:No-fused_sort:No-input_dimensions:[128, 64]]
+perf_eltwise_unary_sfpu.py::test_perf_eltwise_unary_sfpu[formats:Float16_b->Float16_b-approx_mode:No-mathop:Softshrink-dest_acc:Yes-loop_factor:16-iterations:32-fast_mode:No-stable_sort:No-fused_sort:No-input_dimensions:[128, 64]]
+perf_eltwise_unary_sfpu.py::test_perf_eltwise_unary_sfpu[formats:Float16_b->Float16_b-approx_mode:Yes-mathop:Softshrink-dest_acc:No-loop_factor:16-iterations:32-fast_mode:No-stable_sort:No-fused_sort:No-input_dimensions:[128, 64]]
+perf_eltwise_unary_sfpu.py::test_perf_eltwise_unary_sfpu[formats:Float16_b->Float16_b-approx_mode:Yes-mathop:Softshrink-dest_acc:Yes-loop_factor:16-iterations:32-fast_mode:No-stable_sort:No-fused_sort:No-input_dimensions:[128, 64]]

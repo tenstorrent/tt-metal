@@ -1,0 +1,5 @@
+tt_metal/tt-llk/tests/helpers/include/sfpu_operations.h
+tt_metal/tt-llk/tests/python_tests/helpers/test_variant_parameters.py
+tt_metal/tt-llk/tests/python_tests/perf_eltwise_unary_sfpu.py
+tt_metal/tt-llk/tests/python_tests/test_sfpu_cumsum.py
+tt_metal/tt-llk/tests/sources/sfpu_cumsum_test.cpp
