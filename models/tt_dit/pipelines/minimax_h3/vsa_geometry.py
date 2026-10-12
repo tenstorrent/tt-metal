@@ -387,22 +387,25 @@ def build_vsa_geometry(
     )
 
 
-def build_sla_geometry(seq_len: int, video_grid: tuple[int, int, int], *, sp_factor: int) -> MiniMaxH3VSAGeometry:
+def build_sla_geometry(
+    seq_len: int, video_grid: tuple[int, int, int], *, sp_factor: int, q_block_tiles: int = 1
+) -> MiniMaxH3VSAGeometry:
     """Tile geometry for LightX2V's SLA block selection (Minimax-h3-Turbo-SLA LoRA).
 
     LightX2V's ``get_block_map`` mean-pools the whole packed ``[text | cond | audio | video]`` sequence
     in raster 64-token blocks (the tail block holds the remainder) and selects top-k over every block
     for every query block: no exempt rows or columns, no 3D cubes. So every real tile here is a 1D
     raster chunk and a candidate, placement is identity and pad tiles are appended. ``video_grid``
-    only labels the geometry.
+    only labels the geometry. ``q_block_tiles`` rounds the tiles per shard to a multiple of it, so query
+    blocks of that many tiles (see sla_query_averaging_matrix) never straddle two shards.
     """
-    if sp_factor < 1:
-        raise ValueError(f"sp_factor must be positive, got {sp_factor}")
+    if sp_factor < 1 or q_block_tiles < 1:
+        raise ValueError(f"sp_factor and q_block_tiles must be positive, got {sp_factor}, {q_block_tiles}")
     if seq_len < 1:
         raise ValueError(f"seq_len must be positive, got {seq_len}")
 
     n_real_tiles = math.ceil(seq_len / VSA_TILE_TOKENS)
-    n_tiles = math.ceil(n_real_tiles / sp_factor) * sp_factor
+    n_tiles = math.ceil(n_real_tiles / (sp_factor * q_block_tiles)) * sp_factor * q_block_tiles
     n_pad_tiles = n_tiles - n_real_tiles
 
     valid_counts = torch.zeros(n_tiles, dtype=torch.long)
@@ -435,3 +438,21 @@ def build_sla_geometry(seq_len: int, video_grid: tuple[int, int, int], *, sp_fac
         untile_index=torch.arange(seq_len, dtype=torch.long),
         row_source=row_source,
     )
+
+
+def sla_query_averaging_matrix(geometry: MiniMaxH3VSAGeometry, q_block_tiles: int) -> torch.Tensor:
+    """[n_tiles, padded_len] Q pooling for SLA query blocks of ``q_block_tiles`` raster tiles.
+
+    LightX2V's sage2 operator pools Q over 128-row blocks and K over 64-row blocks on non-sm90 GPUs
+    (the RTX 5090 setup published with the Turbo-SLA LoRA). Each tile's row here averages its whole
+    query block's valid rows, so every tile of a block gets that block's scores and selection.
+    """
+    base = geometry.averaging_matrix(torch.float64)
+    if q_block_tiles == 1:
+        return base.to(torch.float32)
+    if geometry.n_tiles % q_block_tiles:
+        raise ValueError(f"{geometry.n_tiles} tiles do not split into query blocks of {q_block_tiles}")
+    counts = geometry.valid_counts.to(torch.float64)
+    sums = (base * counts[:, None]).reshape(-1, q_block_tiles, geometry.padded_len).sum(1)
+    block_counts = counts.reshape(-1, q_block_tiles).sum(1).clamp(min=1)
+    return (sums / block_counts[:, None]).repeat_interleave(q_block_tiles, dim=0).to(torch.float32)
