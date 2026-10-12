@@ -75,10 +75,12 @@ _TUNED_PROJECTION_ROWS = 640
 def tuned_projection_matmul_configs(
     grid: ttnn.CoreCoord,
     rows: int,
+    input_n: int,
     output_k: int,
     output_n: int,
-    input_projection_math_fidelity: ttnn.MathFidelity = ttnn.MathFidelity.HiFi4,
-) -> tuple[ttnn.MinimalMatmulConfig | None, ttnn.MatmulMultiCoreReuseMultiCastProgramConfig | None]:
+) -> tuple[
+    ttnn.MatmulMultiCoreReuseMultiCastProgramConfig | None, ttnn.MatmulMultiCoreReuseMultiCastProgramConfig | None
+]:
     """Return the tuned input and output projection schedules laid out on ``grid``.
 
     Tuned on the 12x10 Blackhole worker grid at 640 rows per device with the production numerics
@@ -88,19 +90,24 @@ def tuned_projection_matmul_configs(
     row_tiles = rows // ttnn.TILE_SIZE
     per_core_m = math.ceil(row_tiles / grid.y)
     per_core_n = math.ceil(output_n // ttnn.TILE_SIZE / grid.x)
-    if per_core_m % 2 or (output_k // ttnn.TILE_SIZE) % 8:
+    input_per_core_n = math.ceil(math.ceil(input_n / ttnn.TILE_SIZE) / grid.x)
+    if per_core_m % 2 or (output_k // ttnn.TILE_SIZE) % 8 or (output_n // ttnn.TILE_SIZE) % 4 or input_per_core_n % 3:
         return None, None
-    # HiFi4 is compute-bound with short blocks. At HiFi2 the math halves and the weight stream becomes the
-    # bottleneck: longer N blocks cut the per-block overhead, and 8-tile K blocks keep each column's DRAM reader
-    # flowing better than 16 (K3 at 640 rows: 758 -> 589 us per device).
-    n_block = 3 if input_projection_math_fidelity == ttnn.MathFidelity.HiFi4 else 12
-    input_projection = ttnn.MinimalMatmulConfig(
-        M_block_size=2,
-        K_block_size=8,
-        N_block_size=n_block,
-        subblock_h=1,
-        subblock_w=3,
+    # One output block per core: each core keeps its whole [per_core_m, input_per_core_n] block resident and
+    # streams K in 4-tile blocks (K3 at 640 rows: 2 x 33 tiles per core, 56 K blocks), the widest that fits in
+    # L1 next to the L1 output with bf16 weights. At HiFi2 the bf16 weight stream from DRAM bounds it.
+    input_projection = ttnn.MatmulMultiCoreReuseMultiCastProgramConfig(
         compute_with_storage_grid_size=grid,
+        in0_block_w=4,
+        out_subblock_h=1,
+        out_subblock_w=3,
+        out_block_h=per_core_m,
+        out_block_w=input_per_core_n,
+        per_core_M=per_core_m,
+        per_core_N=input_per_core_n,
+        transpose_mcast=False,
+        fused_activation=None,
+        fuse_batch=True,
     )
     output_projection = ttnn.MatmulMultiCoreReuseMultiCastProgramConfig(
         compute_with_storage_grid_size=grid,
