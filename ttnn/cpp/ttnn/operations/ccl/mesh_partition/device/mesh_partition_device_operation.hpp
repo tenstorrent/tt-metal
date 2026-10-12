@@ -25,8 +25,6 @@ struct MeshPartitionDeviceOperation {
         uint32_t dim;
         std::optional<uint32_t> cluster_axis;
         const MemoryConfig output_mem_config;
-        // Cores the per-device slice runs on; the whole device grid when unset.
-        std::optional<CoreRangeSet> sub_core_grids;
     };
     struct tensor_args_t {
         const ttnn::Tensor input_tensor;
@@ -162,6 +160,5 @@ ttnn::Tensor mesh_partition(
     int32_t dim,
     std::optional<uint32_t> cluster_axis,
     const ttnn::MemoryConfig& memory_config,
-    const std::optional<ttnn::Tensor>& optional_output_tensor = std::nullopt,
-    const std::optional<CoreRangeSet>& sub_core_grids = std::nullopt);
+    const std::optional<ttnn::Tensor>& optional_output_tensor = std::nullopt);
 }  // namespace ttnn::prim

@@ -436,15 +436,13 @@ ttnn::Tensor mesh_partition(
     int32_t dim,
     std::optional<uint32_t> cluster_axis,
     const ttnn::MemoryConfig& memory_config,
-    const std::optional<ttnn::Tensor>& optional_output_tensor,
-    const std::optional<CoreRangeSet>& sub_core_grids) {
+    const std::optional<ttnn::Tensor>& optional_output_tensor) {
     using OperationType = ttnn::operations::ccl::MeshPartitionDeviceOperation;
     return ttnn::device_operation::launch<OperationType>(
         OperationType::operation_attributes_t{
             .dim = (dim < 0 ? uint32_t(input_tensor.logical_shape().rank() + dim) : (uint32_t)dim),
             .cluster_axis = cluster_axis,
             .output_mem_config = memory_config,
-            .sub_core_grids = sub_core_grids,
         },
         OperationType::tensor_args_t{.input_tensor = input_tensor, .optional_output_tensor = optional_output_tensor});
 }
