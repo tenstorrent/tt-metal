@@ -82,6 +82,7 @@ def _body(mesh_device):
         log=log,
     )
     pm = m.prefill_model
+    engram = any(L in (1, 14) for L in layer_ids)
     assert pm.vis, "DSV41_VISION=1 must reach the prefill model"
     # bias_vl == bias: the identity check isolates the embedding path from the routing path
     zero = ttnn.from_torch(
@@ -130,7 +131,8 @@ def _body(mesh_device):
         p = pcc(base[u][1], ident[u][1])
         eq = torch.equal(base[u][1], ident[u][1])
         log(f"identity user {u}: token {base[u][0]} vs {ident[u][0]}, logits PCC {p:.6f}, bit-equal {eq}")
-        assert base[u][0] == ident[u][0] and p > 0.99999, (u, p)
+        if not engram:  # (an Engram layer deliberately changes the image positions: no identity then)
+            assert base[u][0] == ident[u][0] and p > 0.99999, (u, p)
     rnd = torch.Generator().manual_seed(11)
     diff = run(
         {
@@ -141,6 +143,23 @@ def _body(mesh_device):
     ps = [pcc(base[u][1], diff[u][1]) for u in range(B)]
     log(f"random rows: PCC vs baseline {[round(x, 4) for x in ps]}")
     assert max(ps) < 0.999, "the override rows have no effect"
+    # the same images twice: bit-identical (the image path must be deterministic like the text path)
+    rows = {
+        u: (torch.randn(3, 90, 5120, generator=torch.Generator().manual_seed(100 + u)) * 0.05).to(torch.bfloat16)
+        for u in range(B)
+    }
+    rep = lambda: run(
+        {
+            u: spans_for(u, lambda u, s, n, k=[0]: rows[u][(k.__setitem__(0, k[0] + 1) or k[0] - 1) % 3])
+            for u in range(B)
+        }
+    )
+    r1, r2, r3 = rep(), rep(), rep()
+    for u in range(B):
+        assert torch.equal(r1[u][1], r2[u][1]) and torch.equal(
+            r1[u][1], r3[u][1]
+        ), f"user {u}: image prefill is not deterministic"
+    log("repeated image prefill: bit-identical x3")
     again = run(None)
     for u in range(B):
         assert torch.equal(

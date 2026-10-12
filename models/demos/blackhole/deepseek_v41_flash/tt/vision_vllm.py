@@ -28,13 +28,7 @@ from vllm.multimodal.processing.processor import (
 )
 
 from models.demos.blackhole.deepseek_v41_flash.tt import vision_prompt as VP
-from models.demos.blackhole.deepseek_v41_flash.tt.vision_args import VisionArgs, checkpoint_config
-
-
-def vision_args_of(hf_config):
-    """``VisionArgs`` from the serving config (vllm_config/config.json carries ``vision_config`` / ``image_token_id``), else the checkpoint's own config."""
-    d = hf_config.to_dict() if hasattr(hf_config, "to_dict") else dict(hf_config)
-    return VisionArgs(d if "vision_config" in d else checkpoint_config())
+from models.demos.blackhole.deepseek_v41_flash.tt.vision_args import vision_args_of
 
 
 class DSV41ProcessingInfo(BaseProcessingInfo):

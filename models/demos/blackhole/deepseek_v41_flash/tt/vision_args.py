@@ -38,3 +38,9 @@ def checkpoint_config():
         if d and os.path.exists(os.path.join(d, "config.json")):
             return json.load(open(os.path.join(d, "config.json")))
     raise FileNotFoundError("no checkpoint config.json (set DSV41_CKPT or MODEL_WEIGHTS_DIR)")
+
+
+def vision_args_of(hf_config):
+    """``VisionArgs`` from the serving config (vllm_config/config.json carries ``vision_config`` / ``image_token_id``), else the checkpoint's own config."""
+    d = hf_config.to_dict() if hasattr(hf_config, "to_dict") else dict(hf_config)
+    return VisionArgs(d if "vision_config" in d else checkpoint_config())
