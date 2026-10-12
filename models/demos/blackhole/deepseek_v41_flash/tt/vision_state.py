@@ -56,13 +56,21 @@ def locate_spans(tokens, span_lens, image_token_id, first=0):
 
 
 class VisionBook:
-    """Images of the live requests, per model user: the encoder rows computed so far and the spans located so far. ``update`` is called at every prefill call of a request (its
-    first chunk and every continuation chunk); ``pixel_values`` / ``grids`` hold ALL images of the request (vLLM's multimodal kwargs), the spans of the images whose tokens are
-    already in the prompt are located, and each image is encoded once."""
+    """Images of the live requests, per model user: the encoder rows computed so far and the spans located so far. ``update_many`` is called at every prefill call (the first chunk and every
+    continuation chunk of each request in it); ``pixel_values`` / ``grids`` hold ALL images of the request (vLLM's multimodal kwargs), the spans of the images whose tokens are already in
+    the prompt are located, and each image is encoded once. The images that still need the tower (of all the requests of the call) are encoded TOGETHER: ``DSV41Vision.encode_many`` puts
+    up to 4 of them on the 4 mesh rows at once."""
 
-    def __init__(self, vision, image_token_id):
+    def __init__(self, vision, image_token_id, cache_images=None):
         self.vision, self.image_token_id = vision, image_token_id
         self.seqs, self._rows = {}, {}
+        # encoder rows of recent images by content (an image that comes again, e.g. a shared system image or a retry, skips the tower): LRU of DSV41_VISION_CACHE entries (~10 MB each), 0 = off
+        import collections
+        import os
+
+        self.cache_max = int(os.environ.get("DSV41_VISION_CACHE", "32")) if cache_images is None else cache_images
+        self._cache = collections.OrderedDict()
+        self.hits = 0
 
     def drop(self, p):
         self.seqs.pop(p, None)
@@ -71,39 +79,76 @@ class VisionBook:
     def get(self, p):
         return self.seqs.get(p)
 
+    @staticmethod
+    def _key(patches, h, w):
+        import hashlib
+
+        return hashlib.sha1(patches.contiguous().view(torch.int16).numpy().tobytes() + f"{h}x{w}".encode()).hexdigest()
+
     def update(self, p, tokens, end, pixel_values, grids, start):
         """-> the user's ``VisionSeq`` for positions < end (None: no image in the prompt so far)."""
+        return self.update_many([(p, tokens, end, pixel_values, grids, start)])[p]
+
+    def update_many(self, requests):
+        """requests [(user, prompt tokens, end, pixel_values, grids, start)] -> {user: ``VisionSeq`` for positions < end or None}."""
         from models.demos.blackhole.deepseek_v41_flash.tt import vision_prompt as VP
 
-        if start == 0:
-            self.drop(p)
-        if pixel_values is None or grids is None or len(grids) == 0:
-            return self.seqs.get(p)
         a = self.vision.a
-        grids = torch.as_tensor(grids).reshape(-1, 3)
-        pv = torch.as_tensor(pixel_values)
-        vit = [(int(g[1]), int(g[2])) for g in grids]
-        llm = [(-(-h // a.ratio), -(-w // a.ratio)) for h, w in vit]
-        span_lens = [h * (w + 1) + 2 for h, w in llm]
-        toks = torch.as_tensor(tokens).reshape(-1)[:end]
-        starts = locate_spans(toks, span_lens, self.image_token_id)
-        rows = self._rows.setdefault(p, {})
-        offs = [0]
-        for h, w in vit:
-            offs.append(offs[-1] + h * w)
-        for j, s in enumerate(starts):
-            if j not in rows:
+        plans, jobs = {}, {}  # jobs: key -> (patches, h, w, types) of the images that need the tower
+        for p, tokens, end, pixel_values, grids, start in requests:
+            if start == 0:
+                self.drop(p)
+            if pixel_values is None or grids is None or len(grids) == 0:
+                continue
+            grids = torch.as_tensor(grids).reshape(-1, 3)
+            pv = torch.as_tensor(pixel_values)
+            vit = [(int(g[1]), int(g[2])) for g in grids]
+            llm = [(-(-h // a.ratio), -(-w // a.ratio)) for h, w in vit]
+            span_lens = [h * (w + 1) + 2 for h, w in llm]
+            starts = locate_spans(torch.as_tensor(tokens).reshape(-1)[:end], span_lens, self.image_token_id)
+            offs = [0]
+            for h, w in vit:
+                offs.append(offs[-1] + h * w)
+            rows = self._rows.setdefault(p, {})
+            todo = {}
+            for j in range(len(starts)):
+                if j in rows:
+                    continue
                 h, w = vit[j]
                 patches = pv[offs[j] : offs[j + 1]].reshape(h * w, 3, a.patch, a.patch)
-                types = VP._ip.image_token_types(*llm[j])
-                rows[j] = self.vision.image_rows(patches, h, w, types)
-        if not starts:
-            return self.seqs.get(p)
-        types = torch.full((end,), TEXT, dtype=torch.int64)
-        spans = []
-        for j, s in enumerate(starts):
-            t = VP._ip.image_token_types(*llm[j])
-            types[s : s + t.numel()] = t
-            spans.append((s, rows[j]))
-        self.seqs[p] = VisionSeq(types, spans)
-        return self.seqs[p]
+                key = self._key(patches, h, w)
+                if key in self._cache:
+                    self._cache.move_to_end(key)
+                    self.hits += 1
+                    rows[j] = self._cache[key]
+                else:
+                    todo[j] = key
+                    jobs.setdefault(key, (patches, h, w, VP._ip.image_token_types(*llm[j])))
+            plans[p] = (end, starts, llm, todo)
+        if jobs:
+            keys = list(jobs)
+            spans = self.vision.image_rows_many([jobs[k] for k in keys])
+            done = dict(zip(keys, spans))
+            if self.cache_max > 0:
+                for k, rows_ in done.items():
+                    self._cache[k] = rows_
+                while len(self._cache) > self.cache_max:
+                    self._cache.popitem(last=False)
+            for p, (end, starts, llm, todo) in plans.items():
+                for j, key in todo.items():
+                    self._rows[p][j] = done[key]
+        out = {}
+        for p, tokens, end, pixel_values, grids, start in requests:
+            if p not in plans or not plans[p][1]:
+                out[p] = self.seqs.get(p)
+                continue
+            end, starts, llm, _ = plans[p]
+            types = torch.full((end,), TEXT, dtype=torch.int64)
+            spans = []
+            for j, s in enumerate(starts):
+                t = VP._ip.image_token_types(*llm[j])
+                types[s : s + t.numel()] = t
+                spans.append((s, self._rows[p][j]))
+            self.seqs[p] = VisionSeq(types, spans)
+            out[p] = self.seqs[p]
+        return out

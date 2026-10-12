@@ -258,6 +258,12 @@ class DeepseekV41ForCausalLM(SupportsMultiModal):
             "DSV41_VLLM_WARM", "1"
         ) == "1":
             self.warm_serving()
+        if self.vision is not None and os.environ.get("DSV41_VISION_TRACE", "1") == "1":
+            # the tower's trunk as one trace per patch bucket (1.5x faster than eager for the common images of <= 2048 patches, bit-identical): captured LAST, after every persistent
+            # tensor of the process exists and every other trace was captured (tt/vision.py ``capture_traces``)
+            t1 = time.perf_counter()
+            self.vision.capture_traces()
+            logger.info(f"DSV4.1 vLLM: vision tower traces captured in {time.perf_counter() - t1:.1f} s")
         return self
 
     def warm_serving(self):
@@ -526,20 +532,17 @@ class DeepseekV41ForCausalLM(SupportsMultiModal):
         """Image input (DSV41_VISION=1): the device vision tower on the model's mesh / CCL (built BEFORE the warm-up captures any trace: its weights are persistent tensors) and the per-request
         image state. ``DSV41Vision.warmup`` compiles the tower's programs for every padded image length."""
         from models.demos.blackhole.deepseek_v41_flash.tt.vision import DSV41Vision
+        from models.demos.blackhole.deepseek_v41_flash.tt.vision_args import vision_args_of
         from models.demos.blackhole.deepseek_v41_flash.tt.vision_state import VisionBook
-        from models.demos.blackhole.deepseek_v41_flash.tt.vision_vllm import vision_args_of
 
         if not self.interleave:
             raise ValueError("image input needs the interleaved prefill (DSV41_VLLM_INTERLEAVE=1, the default)")
         va = vision_args_of(hf_config)
         t0 = time.perf_counter()
-        import ttnn
-        from models.demos.gpt_oss.tt.ccl import CCLManager
-
-        ccl = CCLManager(
-            self.m.md, num_links=2, topology=ttnn.Topology.Ring
-        )  # the tower's own semaphores: the model's are baked into its captured traces
-        self.vision = DSV41Vision(self.m.md, self.m.mc, ccl, args=va, log=lambda m: logger.info(m))
+        # The tower uses the MODEL's CCL manager. A second ``CCLManager`` created now (after the model's persistent L1 buffers) puts its global semaphores in the middle of L1 (1.51 MB; the
+        # model's sit right under the L1_SMALL region at 1.556 MB) where they get overwritten: its all-reduces return corrupted data (the replicas of a mesh row differ, errors up to 14), so the
+        # tower's rows varied from run to run and the same image gave different answers. Verified: with the model's manager the replicas agree and the tower is bit-identical run to run.
+        self.vision = DSV41Vision(self.m.md, self.m.mc, self.m.ccl, args=va, log=lambda m: logger.info(m))
         self.vbook = VisionBook(self.vision, va.image_token_id)
         self.vision.warmup()  # every program of the tower, so that no request pays a compile
         logger.info(f"DSV4.1 vLLM: image input ON (vision tower built + warmed in {time.perf_counter() - t0:.1f} s)")
@@ -802,11 +805,10 @@ class DeepseekV41ForCausalLM(SupportsMultiModal):
         if any(pv is not None for pv, _ in rows_mm) and self.vbook is None:
             raise ValueError("a request carries images but the server was started without image input (DSV41_VISION=1)")
         if self.vbook is not None:
-            vis = {}
-            for i, (p, _, st, e) in enumerate(items):
-                seq = self.vbook.update(p, toks[i], e, rows_mm[i][0], rows_mm[i][1], st)
-                if seq is not None:
-                    vis[p] = seq
+            seqs = self.vbook.update_many(
+                [(p, toks[i], e, rows_mm[i][0], rows_mm[i][1], st) for i, (p, _, st, e) in enumerate(items)]
+            )  # the images of the whole call are encoded together (up to 4 at a time over the mesh rows)
+            vis = {p: seq for p, seq in seqs.items() if seq is not None}
             if vis:
                 logger.info(
                     f"DSV4.1 prefill (interleave): images in users {sorted(vis)} ({sum(len(v.spans) for v in vis.values())} spans)"
