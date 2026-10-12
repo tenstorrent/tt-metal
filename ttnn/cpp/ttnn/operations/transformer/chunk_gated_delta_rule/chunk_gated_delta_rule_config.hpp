@@ -45,6 +45,10 @@ struct ChunkGdnFusedProgramConfig {
     uint32_t handoff_depth = 2;  // hand-off ring slots per CB, 1..8: how many chunks a producer may run ahead
     bool unicast = true;         // per-receiver unicast writes; false = the linked multicast chain
     bool posted = false;         // posted unicast data writes, VALID ordered by in-order delivery; needs unicast
+    // Heads per launch: the BH heads run as ceil(BH / wave_heads) programs of (nearly) equal size, each with
+    // its own geometry for its head count. nullopt = the op's plan: one program up to 32 heads when a geometry
+    // fits, else the fewest waves of at most 24 heads.
+    std::optional<uint32_t> wave_heads;
 };
 
 using ChunkGdnProgramConfig =

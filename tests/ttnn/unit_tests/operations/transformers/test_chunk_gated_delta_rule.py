@@ -80,6 +80,7 @@ _REGIME_SHAPES = [
     pytest.param(1, 16, 48, 128, 128, id="single_dev"),  # Qwen3.6-27B single-device shape (GQA group 3)
     pytest.param(1, 12, 12, 128, 128, id="no_gqa"),  # no GQA: group 1, so the head-map is the identity
     pytest.param(2, 4, 12, 128, 128, id="batch2"),  # batch > 1: BH = 24 independent scans
+    pytest.param(8, 4, 12, 128, 128, id="batch8", marks=_hw_only),  # BH = 96: more heads than one program holds
     pytest.param(1, 4, 12, 128, 64, id="v64"),  # Small V: V=64
     pytest.param(1, 4, 12, 128, 32, id="v32"),  # Small V: V=32
 ]
