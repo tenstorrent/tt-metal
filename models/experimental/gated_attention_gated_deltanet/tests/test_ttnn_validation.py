@@ -24,9 +24,6 @@ from models.common.device_utils import is_blackhole
 
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), ".."))
 
-# The chunked GatedDeltaNet path runs the gated_delta_attn_seq kernel, whose circular buffers fill a Wormhole
-# core's L1 and clash with the L1-resident model inputs of its validation; the kernel and this validation
-# come from the Blackhole bring-up, so the chunked validation is Blackhole-only.
 _CHUNKED_BLACKHOLE_ONLY = "test_gated_deltanet_chunked_ttnn runs on Blackhole only (the seq kernel's L1 use)"
 
 
