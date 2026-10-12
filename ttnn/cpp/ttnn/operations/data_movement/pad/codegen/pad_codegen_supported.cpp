@@ -57,6 +57,20 @@ bool tile_geometry_ok(const Tensor& input) {
            !tile.get_transpose_within_face() && !tile.get_transpose_of_faces();
 }
 
+// Tile ids are derived from the logical shape, so a padded shape with extra tiles (e.g. from
+// tilize_with_val_padding or a view) would be read and filled at the wrong pages.
+bool padded_shape_is_tile_rounded(const Tensor& input) {
+    if (input.layout() != ttnn::TILE_LAYOUT) {
+        return true;
+    }
+    const auto& logical = input.logical_shape();
+    const auto& padded = input.padded_shape();
+    const auto tile = input.tensor_spec().tile();
+    return padded.rank() == 4 && padded[0] == logical[0] && padded[1] == logical[1] &&
+           padded[2] == tt::round_up(logical[2], tile.get_height()) &&
+           padded[3] == tt::round_up(logical[3], tile.get_width());
+}
+
 bool dtype_ok(const Tensor& input) {
     switch (input.dtype()) {
         case DataType::BFLOAT16:
@@ -144,7 +158,7 @@ bool structurally_supported(const Tensor& input, const tt::tt_metal::MemoryConfi
     if (input.memory_config().is_sharded() || output_mem_config.is_sharded()) {
         return false;
     }
-    return tile_geometry_ok(input) && dtype_ok(input);
+    return tile_geometry_ok(input) && padded_shape_is_tile_rounded(input) && dtype_ok(input);
 }
 
 bool padding_supported_and_fits(const Tensor& input, const ttnn::prim::PadCodegenParams& attrs, uint64_t reserved) {
