@@ -149,6 +149,7 @@ def _write_tt_model_yaml(
     _batch = state.get("batch")
     serve_max = _batch or 32
     serve_maxlen = None
+    serve_hf_override = None
     try:
         _bm = Path(checkout) / extra_models_dir / slug / "vllm_metadata.json"
         if _bm.is_file():
@@ -159,9 +160,17 @@ def _write_tt_model_yaml(
             _ml = _md.get("max_model_len")
             if isinstance(_ml, int) and _ml > 0:
                 serve_maxlen = _ml
+            _ovr = _md.get("serve_hf_override_arch")
+            if isinstance(_ovr, str) and _ovr:
+                serve_hf_override = _ovr
     except Exception:
         pass
     arch = arch or a
+    # A novel-arch adapter is not a vLLM/Transformers built-in, so the engine must be told which
+    # registered TT class to use (there is no built-in to ride); stock arches omit this.
+    _serve_args = ["--trust-remote-code"]
+    if serve_hf_override:
+        _serve_args += ["--hf-overrides", json.dumps({"architectures": [serve_hf_override]})]
     hardware = hardware or hw
     mesh_device = mesh_device or mesh
     if not (arch and hardware and mesh_device):
@@ -227,7 +236,7 @@ def _write_tt_model_yaml(
         f"  mesh_device: {mesh_device}",
         "  env:",
         f"    ARCH_NAME: {arch}",
-        "  args: [--trust-remote-code]",
+        f"  args: {json.dumps(_serve_args)}",
         "",
         "verify:",
         f'  - "import models.demos.{slug} as m; assert m"',
@@ -1136,6 +1145,8 @@ def _scaffold_vllm_bundle(
                     "weights": weights or "REPLACE/with-base-weights-repo",
                     "note": note,
                     "max_num_seqs": 1,
+                    "max_model_len": kv,
+                    "serve_hf_override_arch": tt_arch,
                 },
                 indent=2,
             )
