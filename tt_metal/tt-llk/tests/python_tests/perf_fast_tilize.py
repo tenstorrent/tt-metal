@@ -51,6 +51,8 @@ def generate_input_dimensions(max_size: int) -> list[tuple[int, int]]:
 
 @skip_for_blackhole
 @pytest.mark.perf
+# Wormhole: L1_TO_L1 runs once per start phase, 961 launches (perf/phases.py)
+@pytest.mark.timeout(300)
 @parametrize(
     input_format=[DataFormat.Float32, DataFormat.Float16_b],
     output_format=[DataFormat.Float32, DataFormat.Float16_b, DataFormat.Bfp8_b],
