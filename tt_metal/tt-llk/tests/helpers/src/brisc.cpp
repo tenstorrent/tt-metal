@@ -111,7 +111,8 @@ __attribute__((noinline, noipa, section(".text.llk_dbg_serve"), aligned(1024))) 
         "li    s4, %[release]\n" // unused; s4 holds the release schedule from 60: on
         "li    s5, 0\n"          // park count: park 2 is the INIT entry park
         "1:\n\t"                 // arrive
-        "lw    a4, 0(t1)\n\tand   a4, a4, a4\n\t"
+        "lw    a4, 0(t1)\n\tand   a4, a4, a4\n"
+        "65:\n\t" // the last scheduled release has done the first read (78:)
         "lw    a4, 0(a7)\n\tand   a4, a4, a4\n\t"
         "lw    a4, 0(a6)\n\tand   a4, a4, a4\n\t"
         "lw    a4, %[scratch](s0)\n\tand   a4, a4, t0\n\tbeq   a4, t2, 9f\n"
@@ -181,25 +182,63 @@ __attribute__((noinline, noipa, section(".text.llk_dbg_serve"), aligned(1024))) 
         "li    a4, 64\n"
         "62:\n\t"
         "nop\n\taddi  a4, a4, -1\n\tbnez  a4, 62b\n\t"
-        // at a fixed 256 B boundary, so a change elsewhere in serve() (or before it) cannot move the code that spaces the
-        // releases: the gaps between the threads' starts stay the same cycle counts
+        // on its own 256 B boundary, so a change elsewhere in serve() (or before it) cannot move it
         "j     50f\n\t.balign 256\n"
-        "50:\n\t" // release schedule: thread s4[1:0], then s4[3:2], then s4[5:4], each by its own flush, %[gap] spins apart
-        "addi  s3, a5, %[cntl1]\n"
+        // release schedule: thread s4[1:0], then s4[3:2], then s4[5:4], each by its own flush request on a wall clock cycle
+        // (a0): the threads start (and their branch table LFSRs run) a fixed number of cycles apart, whatever BRISC fetches
+        "50:\n\t"
+        ".set  .Lrel_lead, 1024\n\t" // clock read to the first request: room for the first pass's icache misses
+        ".set  .Lrel_gap1, 5180\n\t" // first to second request: the first thread has reached its wait or its park
+        ".set  .Lrel_gap2, 5173\n\t" // second to third; with gap1 the spacing the spin loop gave before, so no value moves
+        ".set  .Lrel_quiet, 900\n\t" // spins (about 5 cycles each) after a request without register or L1 accesses
+        ".set  .Lrel_near, 64\n\t"   // the timed pass starts when the request is this many cycles away
+        ".set  .Lrel_k, 24\n\t"      // the timed pass runs (request - its clock read - k) NOPs, 0 to m
+        ".set  .Lrel_m, 32\n\t"
+        "lw    a0, %[wall](a5)\n\taddi  a0, a0, .Lrel_lead\n" // a0, a1 and t0 are borrowed until 78:
         "51:\n\t"
-        "andi  a2, s4, 3\n\tslli  a3, a2, 16\n\tadd   a3, a3, t1\n\tsw    zero, 0(a3)\n\t" // its release token
-        "addi  a3, a2, 1\n\tslli  a3, a3, 17\n\t"                                          // debug target: TRISC t is t + 1
-        "sw    t5, 0(s3)\n\tor    a4, a3, t3\n\tsw    a4, %[cntl0](a5)\n\tor    a2, a3, t4\n"
+        "andi  a2, s4, 3\n\taddi  a3, a2, 1\n\tslli  a3, a3, 17\n\t" // debug target: TRISC t is t + 1
+        "or    a1, a3, t3\n\tor    s3, a3, t4\n\t"                   // the flush request and its end
+        "li    t0, -1\n" // a first pass runs all the code below with m NOPs and no request, so the timed pass hits the icache
+        "70:\n\t"
+        "lw    a4, %[wall](a5)\n\tsub   a4, a0, a4\n\taddi  a4, a4, -.Lrel_k\n\t"
+        "li    a2, .Lrel_m\n\txor   a3, a4, a2\n\tand   a3, a3, t0\n\txor   a4, a4, a3\n\t"
+        "sltiu a3, a4, .Lrel_m + 1\n\tbeqz  a3, 77f\n\t"
+        "slli  a4, a4, 2\n"
+        "71:\n\t"
+        "la    a2, 72f\n\tsub   a2, a2, a4\n\t"
+        "xor   a3, a1, s3\n\tand   a3, a3, t0\n\txor   a3, a3, a1\n\t"
+        "jr    a2\n\t"
+        ".rept .Lrel_m\n\tnop\n\t.endr\n"
+        "72:\n\t"
+        "sw    a3, %[cntl0](a5)\n\t"
+        "bnez  t0, 76f\n"
         "52:\n\t"
         "lw    a4, %[status0](a5)\n\tbgez  a4, 52b\n\t"
-        "sw    a2, %[cntl0](a5)\n"
+        "sw    s3, %[cntl0](a5)\n"
         "53:\n\t"
         "lw    a4, %[status0](a5)\n\tbltz  a4, 53b\n\t"
-        "srli  s4, s4, 2\n\tli    a4, %[sched_end]\n\tbeq   s4, a4, 1b\n\t"
-        "li    a4, %[gap]\n"
-        "54:\n\t"
-        "nop\n\taddi  a4, a4, -1\n\tbnez  a4, 54b\n\t"
+        // after the last release BRISC waits for TRISC 0 in lines the earlier releases ran: it fetches nothing from L1
+        ".balign 16\n\t"
+        "srli  s4, s4, 2\n\tli    a4, %[sched_end]\n\tbne   s4, a4, 73f\n\t"
+        "lw    a4, 0(t1)\n\t"
+        "and   a4, a4, a4\n\tj     78f\n"
+        "73:\n\t"
+        "li    a4, .Lrel_gap2\n\tli    a2, 0x40\n\tbltu  s4, a2, 74f\n\tli    a4, .Lrel_gap1\n"
+        "74:\n\t"
+        "add   a0, a0, a4\n\tli    a4, .Lrel_quiet\n"
+        "75:\n\t"
+        "nop\n\taddi  a4, a4, -1\n\tbnez  a4, 75b\n\t"
         "j     51b\n"
+        "76:\n\t" // after the first pass: on the clock until the request is near, then the timed pass
+        "lw    a4, %[wall](a5)\n\tsub   a4, a0, a4\n\taddi  a4, a4, -.Lrel_near\n\tbgtz  a4, 76b\n\t"
+        // its release token and the command word shortly before the request, as the spin loop wrote them (stored about 600
+        // cycles early, they moved 1 in 3 isolate rows by a cycle or more)
+        "andi  a2, s4, 3\n\tslli  a3, a2, 16\n\tadd   a3, a3, t1\n\tsw    zero, 0(a3)\n\tsw    t5, %[cntl1](a5)\n\t"
+        "li    t0, 0\n\tj     70b\n"
+        "77:\n\t" // outside the sled: only if the gap left too little time
+        "li    a4, 0\n\tj     71b\n"
+        "78:\n\t" // TRISC 0 has arrived: the borrowed registers back, on with the arrive loop
+        "li    t0, 0x00ffffff\n\tli    a0, %[tstep]\n\tli    a1, %[tend]\n\tj     65b\n"
         "99:\n"
         :
         : [pcb0] "i"(PC_BUF[0]),
@@ -228,7 +267,7 @@ __attribute__((noinline, noipa, section(".text.llk_dbg_serve"), aligned(1024))) 
           [stagger] "i"(1500),
           [sched] "i"(llk_barrier::SCHEDULE_REG),
           [sched_end] "i"(llk_barrier::SCHEDULE_VALID >> 6),
-          [gap] "i"(1024) // about 5000 cycles: the earlier threads have reached their wait or their final park
+          [wall] "i"(RISCV_DEBUG_REG_WALL_CLOCK_L - DBG_REGS)
         : "t0", "t1", "t2", "t3", "t4", "t5", "t6", "a0", "a1", "a2", "a3", "a4", "a5", "a6", "a7", "s0", "s1", "s2", "s3", "s4", "s5", "memory");
 }
 } // namespace dbg_barrier
