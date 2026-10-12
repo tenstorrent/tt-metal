@@ -24,6 +24,7 @@ from ...utils.patchifiers import AudioLatentShape, VideoPixelShape
 from ...utils.tensor import bf16_tensor
 from ...utils.video import export_video_audio, export_video_audio_yuv
 from .pipeline_ltx import SPATIAL_COMPRESSION, TEMPORAL_COMPRESSION, LTXPipeline, LTXTransformerState, latent_grid
+from .prompt_enhancer import late_trace_capture
 
 # Distilled sigma schedules for the two stages.
 DISTILLED_SIGMA_VALUES = [1.0, 0.99375, 0.9875, 0.98125, 0.975, 0.909375, 0.725, 0.421875, 0.0]
@@ -142,13 +143,17 @@ class LTXDistilledPipeline(LTXPipeline):
             self._prealloc_trace_io("s1", num_frames=num_frames, height=height // 2, width=width // 2)
             self._prealloc_trace_io("s2", num_frames=num_frames, height=height, width=width)
 
+        # Late capture: the enhancer warms eagerly here and captures its decode trace at the end of warmup,
+        # after every persistent buffer below is allocated, so its replays cannot write over them.
+        late_capture = late_trace_capture()
+
         # Warm the encoder before any capture so its connector workspace isn't in a trace's
         # activation region (zeroed on replay). dynamic_load reloads per request → warms last.
         if self._traced and not self.dynamic_load:
             # The resident encoder captures its encode trace on this first encode, and a replay clobbers
             # any persistent buffer allocated after that capture: the enhancer's weights and KV cache
             # have to be resident before the encoder ever encodes.
-            self._warmup_prompt_enhancer()
+            self._warmup_prompt_enhancer(capture=not late_capture)
             self.gemma_encoder_pair.ensure_loaded()
             self.encode_prompts(["warmup"], use_cache=False)
 
@@ -225,9 +230,13 @@ class LTXDistilledPipeline(LTXPipeline):
         if self.dynamic_load or not self._traced:
             # Same ordering constraint as above: the encoder trace is captured on the first resident encode
             # regardless of whether the DiT is traced.
-            self._warmup_prompt_enhancer()
+            self._warmup_prompt_enhancer(capture=not late_capture)
             self.gemma_encoder_pair.ensure_loaded()
+            if late_capture:
+                self._capture_prompt_enhancer_trace()
             self.encode_prompts(["warmup"], use_cache=False)
+        elif late_capture:
+            self._capture_prompt_enhancer_trace()
 
         logger.info(f"warmup (distilled 2-stage) done in {time.time() - t0:.1f}s")
 

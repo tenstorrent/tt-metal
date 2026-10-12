@@ -45,6 +45,12 @@ def _host_sampling() -> bool:
     return os.environ.get("LTX_ENHANCER_HOST_SAMPLE", "0").lower() in ("1", "true", "yes")
 
 
+def late_trace_capture() -> bool:
+    """LTX_ENHANCER_LATE_CAPTURE=1 warms the rewriter eagerly and captures its decode trace only once the
+    pipeline's persistent buffers all exist, so a decode replay cannot write over them."""
+    return os.environ.get("LTX_ENHANCER_LATE_CAPTURE", "0").lower() in ("1", "true", "yes")
+
+
 class PromptTooLongError(ValueError):
     """The templated prompt does not fit the rewriter's context next to its token budget."""
 
@@ -204,9 +210,13 @@ class PromptEnhancer(ABC):
     def is_loaded(self) -> bool:
         """Whether the rewriter is resident (weights allocated) right now."""
 
-    def warmup(self) -> None:
-        """Load and compile whatever the first ``enhance`` would otherwise pay for. Default: just load."""
+    def warmup(self, *, capture: bool = True) -> None:
+        """Load and compile whatever the first ``enhance`` would otherwise pay for. Default: just load.
+        ``capture=False`` leaves any trace for ``capture_trace``."""
         self.ensure_loaded()
+
+    def capture_trace(self) -> None:
+        """Capture the traces ``enhance`` replays. Default: nothing to capture."""
 
     def unload(self) -> None:
         """Release the rewriter's weights. Default: nothing resident to release."""
@@ -540,6 +550,7 @@ class DevicePromptEnhancer(PromptEnhancer):
         self._page_table: torch.Tensor | None = None
         self._stop_tokens: list[int] = []
         self._warm = False
+        self._trace_captured = False
         self._warned_image = False
 
     @property
@@ -633,11 +644,11 @@ class DevicePromptEnhancer(PromptEnhancer):
         )
         return generator, kv_cache, tokenizer
 
-    def warmup(self) -> None:
+    def warmup(self, *, capture: bool = True) -> None:
         """Load and run one short greedy rewrite per prefill bucket (``WARMUP_PROMPTS``) so prefill and decode
         kernels compile before the first request. The generator's own prefill sweep is skipped: every
         prefill here runs untraced. Compiled programs live on the mesh handle, so this runs once per
-        process."""
+        process. ``capture=False`` decodes eagerly, leaving the decode trace to ``capture_trace``."""
         self.ensure_loaded()
         if self._warm:
             return
@@ -646,7 +657,13 @@ class DevicePromptEnhancer(PromptEnhancer):
         t0 = time.time()
         warmed = set()
         for prompt in WARMUP_PROMPTS:
-            self._generate(build_messages(prompt, "t2v"), seed=0, max_new_tokens=WARMUP_NEW_TOKENS, temperature=0.0)
+            self._generate(
+                build_messages(prompt, "t2v"),
+                seed=0,
+                max_new_tokens=WARMUP_NEW_TOKENS,
+                temperature=0.0,
+                enable_trace=self.enable_trace and capture,
+            )
             bucket = get_padded_prefill_len(self.last_stats["prompt_tokens"])
             warmed.add(bucket)
             logger.info(f"prompt enhancer warm prompt: {self.last_stats['prompt_tokens']} tokens -> {bucket} bucket")
@@ -659,6 +676,19 @@ class DevicePromptEnhancer(PromptEnhancer):
             )
         self._warm = True
         logger.info(f"prompt enhancer warm ({time.time() - t0:.1f}s)")
+
+    def capture_trace(self) -> None:
+        """Capture the decode trace with one short greedy rewrite. Every persistent buffer allocated after a
+        capture can sit in the trace's activation region and is overwritten by each replay, so the pipeline
+        calls this once its own persistent buffers exist."""
+        if not self.enable_trace or self._trace_captured:
+            return
+        self.warmup(capture=False)
+        t0 = time.time()
+        self._generate(
+            build_messages(WARMUP_PROMPTS[0], "t2v"), seed=0, max_new_tokens=WARMUP_NEW_TOKENS, temperature=0.0
+        )
+        logger.info(f"prompt enhancer decode trace captured ({time.time() - t0:.1f}s)")
 
     def unload(self) -> None:
         """Drop the generator and force-free the device tensors it owns. Idempotent."""
@@ -673,6 +703,7 @@ class DevicePromptEnhancer(PromptEnhancer):
                 generator.release_persistent_capture()
             except Exception as e:  # noqa: BLE001 — traces are best-effort cleanup; the weights still go
                 logger.warning(f"prompt enhancer: releasing traces failed: {e!r}")
+        self._trace_captured = False
         freed = _deallocate_device_tensors([generator, kv_cache], self._device_tensor_type())
         del generator, kv_cache
         gc.collect()
@@ -702,7 +733,16 @@ class DevicePromptEnhancer(PromptEnhancer):
             build_messages(prompt, mode), seed=seed, max_new_tokens=self.max_new_tokens, temperature=self.temperature
         )
 
-    def _generate(self, messages: list[dict[str, str]], *, seed: int, max_new_tokens: int, temperature: float) -> str:
+    def _generate(
+        self,
+        messages: list[dict[str, str]],
+        *,
+        seed: int,
+        max_new_tokens: int,
+        temperature: float,
+        enable_trace: bool | None = None,
+    ) -> str:
+        traced = self.enable_trace if enable_trace is None else enable_trace
         text = self._tokenizer.apply_chat_template(messages, tokenize=False, add_generation_prompt=True)
         prompt_ids = self._tokenize_prompt(text, max_new_tokens)
         prompt_len = len(prompt_ids)
@@ -753,7 +793,7 @@ class DevicePromptEnhancer(PromptEnhancer):
             out, _ = self._generator.decode_forward(
                 torch.tensor([[tok]]),
                 current_pos,
-                enable_trace=self.enable_trace,
+                enable_trace=traced,
                 page_table=self._page_table,
                 kv_cache=self._kv_cache,
                 sampling_params=sampling_params,
@@ -765,6 +805,7 @@ class DevicePromptEnhancer(PromptEnhancer):
             )
             current_pos += 1
             decode_steps += 1
+            self._trace_captured |= traced
             if sampling_params is not None:
                 tok = int(out.reshape(-1)[0].item())
             else:

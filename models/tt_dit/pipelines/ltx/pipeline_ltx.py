@@ -833,15 +833,24 @@ class LTXPipeline:
         self.last_enhanced_prompt = enhanced if enhanced != prompt else None
         return enhanced
 
-    def _warmup_prompt_enhancer(self) -> None:
+    def _warmup_prompt_enhancer(self, *, capture: bool = True) -> None:
         """Load the enhancer and compile its kernels so the first request does not pay for them. A device
-        enhancer stays resident from here on, so this has to run before any trace is captured."""
+        enhancer stays resident from here on, so this has to run before any trace is captured.
+        ``capture=False`` defers its own trace to ``_capture_prompt_enhancer_trace``."""
         if self.prompt_enhancer is None:
             return
         t0 = time.time()
-        logger.info(f"warmup prompt enhancer: {self.prompt_enhancer.name}")
-        self.prompt_enhancer.warmup()
+        logger.info(f"warmup prompt enhancer: {self.prompt_enhancer.name} (capture={capture})")
+        self.prompt_enhancer.warmup(capture=capture)
         logger.info(f"warmup prompt enhancer done in {time.time() - t0:.1f}s")
+
+    def _capture_prompt_enhancer_trace(self) -> None:
+        """Capture the enhancer's trace once every persistent pipeline buffer exists (LTX_ENHANCER_LATE_CAPTURE)."""
+        if self.prompt_enhancer is None:
+            return
+        t0 = time.time()
+        self.prompt_enhancer.capture_trace()
+        logger.info(f"prompt enhancer trace capture done in {time.time() - t0:.1f}s")
 
     def encode_prompts(
         self, prompts: list[str], *, use_cache: bool = True
