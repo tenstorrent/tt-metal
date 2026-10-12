@@ -29,6 +29,10 @@ HIDDEN = 5120
 INTER = 2304
 
 
+def _vision_enabled():
+    return os.environ.get("DSV41_VISION", "0") == "1"
+
+
 class _Shards:
     def __init__(self, ckpt_dir=CKPT_DIR):
         self.dir = ckpt_dir
@@ -115,6 +119,9 @@ def load_moe_layer(layer_id: int, dtype=torch.bfloat16, ckpt_dir=CKPT_DIR, exper
     return {
         "gate_weight": sh.get(p + "gate.weight").T.contiguous().to(torch.float32),  # [hidden, 384]
         "gate_bias": sh.get(p + "gate.bias").to(torch.float32),  # [384]
+        "gate_bias_vl": sh.get(p + "gate.bias_vl").to(torch.float32)
+        if _vision_enabled()
+        else None,  # [384] selection bias of image tokens
         "w0": w0,
         "w1": w1,
         "w2": w2,

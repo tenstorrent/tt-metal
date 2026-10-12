@@ -339,6 +339,7 @@ class DSV41PrefillLayer:
         self.debug = None  # set to a dict: per-chunk lists of a_c / hh / m / sh are kept (not freed) for diagnostics
 
     colsplit = False  # set by the model per chunk size (colsplit_active)
+    vl_rows = None  # [1,1,n,1] fp32 tile of the column's own rows: 1 inside an image span (routing with bias_vl); set by the model per forward (DSV41_VISION=1), colsplit + unified MoE only
     umoe = None  # tt/prefill_unified_moe.py DSV41UnifiedMoE (DSV41_PREFILL_MOE=unified), set by the model builder
 
     def _moe_unified(self, st, n8):
@@ -362,7 +363,9 @@ class DSV41PrefillLayer:
             overlap = (ov, lambda: box.append(ov.shared(L.shared, hh_own)))
         else:
             overlap = None
-        own = moe_cols(self.umoe, L.moe.gate, hh_own, L.mesh_config, L.ccl, overlap=overlap)  # [1,1,n8*32,D]
+        own = moe_cols(
+            self.umoe, L.moe.gate, hh_own, L.mesh_config, L.ccl, overlap=overlap, vl=self.vl_rows
+        )  # [1,1,n8*32,D]
         if overlap is not None:
             self._sh_pre = (
                 box[0],
@@ -485,9 +488,10 @@ class DSV41PrefillLayer:
             ):  # shared expert on a sub-device concurrently with the dispatch (tt/moe_overlap.py), as in _moe_unified
                 ov = moe_overlap.SDOverlap.get(L.mesh_device)
                 overlap = (ov, lambda: box.append(ov.shared(L.shared, hh)))
-            ms = [moe_cols(self.umoe, L.moe.gate, hh, mc, cc, overlap=overlap)]
+            ms = [moe_cols(self.umoe, L.moe.gate, hh, mc, cc, overlap=overlap, vl=self.vl_rows)]
             _mark("moe+allgather")
         else:
+            assert self.vl_rows is None, "image input (DSV41_VISION=1) needs the unified prefill MoE"
             route_own = os.environ.get("DSV41_PF_ROUTE_OWN", "1") == "1"
             if (
                 route_own
@@ -588,6 +592,9 @@ class DSV41PrefillLayer:
             self.umoe is not None
         ):  # DSV41_PREFILL_MOE=unified: the routed experts of the whole chunk in one count-driven pipeline
             ms = self._moe_unified(st, n8)
+        assert (
+            self.umoe is not None or self.vl_rows is None
+        ), "image input (DSV41_VISION=1) needs the unified prefill MoE"
         for g in range(n8 if self.umoe is None else 0):
             _drain(L, g, 2)
             hh_g = mc.allgather(st[g][4], cc, axis=1, dim=2)  # [1,1,256,D]
@@ -630,6 +637,7 @@ class DSV41PrefillLayer:
     def forward_full(self, xs, pres, S, s0=0):
         """xs: list of n chunks [T,1,4,D] fp32 (the mesh row's R = n*T tokens, user-major), pres: list of [T,1,1,4] fp32.
         -> (list of new streams, list of ffn_pre)."""
+        assert self.vl_rows is None, "image input (DSV41_VISION=1) needs the column-split prefill with the unified MoE"
         L, T = self.L, self.T
         n = len(xs)
         pmoe = (

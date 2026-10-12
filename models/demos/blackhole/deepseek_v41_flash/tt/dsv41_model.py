@@ -1174,7 +1174,7 @@ class Model:
             taken.add(sl)
         return out
 
-    def prefill_interleaved(self, items, chunk, s_pad_max=None, want_logits=False):
+    def prefill_interleaved(self, items, chunk, s_pad_max=None, want_logits=False, vis=None):
         """Prefill of SOME users (new requests / prompt chunks) through the captured chunk trace while the other users keep their decode state.
 
         ``items``: [(user b, tokens 1-D [>= end], start, end)]: positions [start, end) of user b are computed. ``start`` must be 0 or the position the previous call for
@@ -1183,9 +1183,13 @@ class Model:
         (default: all U users, slot = user); the slots that are not part of the window are masked: no write of the pool / ring / compressor state / carried prefill state
         (``DSV41_PF_UMASK=1``) / Engram history). With Up < U a user takes a free slot of its mesh row (users of the same row beyond Up are processed in further waves).
         A user whose ``end`` is not a multiple of the chunk has its last window padded (its carried state is then no longer resumable: it is the end of its prompt).
+        ``vis`` (DSV41_VISION=1): {user: ``VisionSeq``} for the users whose prompt has images: their image positions take the vision encoder's rows as embeddings, route with
+        bias_vl and have no Engram contribution / n-gram (tt/vision_state.py).
         Returns {user: (greedy token of position end - 1, logits [vocab] fp32 or None)}.
         """
         C = int(chunk)
+        if vis and not self.prefill_model.vis:
+            raise RuntimeError("a prompt has images but the model was built without DSV41_VISION=1")
         assert C % 128 == 0, "chunk must be a multiple of 128"
         B, pm, Up, U, rows = self.B, self.prefill_model, self.Up, self.U, self.rows
         general = Up != U
@@ -1273,12 +1277,26 @@ class Model:
                         active[sl], lens[b], slot_b[sl] = True, e, b
                     idx = active.nonzero().reshape(-1)
                     hs = None
+                    vw = None  # (image mask [rows*Up, C], embedding override [rows*Up, C, dim]) of this window, None without images
+                    if vis:
+                        img, ovr = torch.zeros(rows * Up, C, dtype=torch.bool), None
+                        for b, t, st, e in part:
+                            vs = vis.get(b)
+                            if vs is None:
+                                continue
+                            n = min(e - s0, C)
+                            m_, emb_ = vs.window(s0, n)
+                            if m_.any():
+                                ovr = torch.zeros(rows * Up, C, vs.dim, dtype=torch.bfloat16) if ovr is None else ovr
+                                img[slot_of[b], :n], ovr[slot_of[b], :n] = m_, emb_
+                        vw = (img, ovr) if ovr is not None else None
                     th0 = time.perf_counter()
                     if self.host_rows is not None:
                         hs = self.hasher(
                             tok[idx],
                             torch.full((len(idx),), s0, dtype=torch.long),
                             rows=torch.tensor([slot_b[i] for i in idx.tolist()]),
+                            token_mask=None if vw is None else ~vw[0][idx],
                         )
                     t_hash += time.perf_counter() - th0
                     self.sink.set_lengths(lens)
@@ -1287,7 +1305,7 @@ class Model:
                     self._last_pos = (
                         torch.tensor([-1 if b is None else int(lens[b]) - 1 for b in slot_b]) if general else lens - 1
                     )
-                    th, td = pm.replay_window(tok, hs, s0, C, active)
+                    th, td = pm.replay_window(tok, hs, s0, C, active, vis=vw)
                     n_replays, t_host, t_rep = n_replays + 1, t_host + th, t_rep + td
                     done = [b for b, _, _, e in part if e <= s0 + C]
                     te0 = time.perf_counter()

@@ -13,14 +13,17 @@ class RaggedNgramHash:
         self.st = state
 
     @torch.inference_mode()
-    def __call__(self, input_ids: torch.Tensor, start: torch.Tensor, rows=None) -> torch.Tensor:
+    def __call__(self, input_ids: torch.Tensor, start: torch.Tensor, rows=None, token_mask=None) -> torch.Tensor:
         """input_ids [B, L], start [B] int (position of column 0 of every user) -> hashes [B, L, n_engram_layers, n_hash_cols].
         ``rows`` (optional LongTensor [B]): the cache row (global user) of every input row; the token history of every OTHER user is neither read nor written
         (interleaved prefill: the users that are decoding keep their history). Default None = row i is user i (unchanged).
+        ``token_mask`` (optional bool [B, L]): False for tokens that take no part in an n-gram (image spans: cached as DEAD, so an n-gram never spans one, like the checkpoint's ``NgramHashState``).
         """
         st = self.st
         B, L = input_ids.shape
         compressed = st.token_map[input_ids]
+        if token_mask is not None:
+            compressed = torch.where(token_mask, compressed, st.DEAD)
         start = start.reshape(B, 1).long()
         positions = start + torch.arange(L).reshape(1, L)
         crow = torch.arange(B) if rows is None else torch.as_tensor(rows).long().reshape(B)
