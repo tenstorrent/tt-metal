@@ -184,8 +184,7 @@ ttnn::Tensor pad_impl(
     const float value,
     const bool use_multicore,
     const std::optional<MemoryConfig>& memory_config_arg,
-    const std::optional<CoreRangeSet>& sub_core_grids,
-    const PadRoute route) {
+    const std::optional<CoreRangeSet>& sub_core_grids) {
     auto input_logical_shape = input_tensor.logical_shape().view();
     // on host
     if (input_tensor.storage_type() != StorageType::DEVICE) {
@@ -204,27 +203,6 @@ ttnn::Tensor pad_impl(
     using ShardOrientation = tt::tt_metal::ShardOrientation;
 
     auto output_memory_config = memory_config_arg.value_or(input_tensor.memory_config());
-
-    if (route != PadRoute::Native && input_tensor.layout() == Layout::ROW_MAJOR) {
-        namespace pc = ttnn::operations::data_movement::pad_codegen;
-        std::array<uint32_t, 4> front{};
-        std::array<uint32_t, 4> after{};
-        for (size_t i = 0; i < 4; ++i) {
-            front[i] = input_tensor_start[i];
-            after[i] = output_padded_shape[i] - input_logical_shape[i] - input_tensor_start[i];
-        }
-        if (route == PadRoute::Codegen) {
-            const auto params = pc::plan_codegen(input_tensor, front, after, value, output_memory_config);
-            TT_FATAL(params.has_value(), "ttnn.pad: input is not supported by the codegen path");
-            return ttnn::prim::pad_codegen(input_tensor, *params);
-        }
-        if (pc::supported_execution_controls(use_multicore, sub_core_grids)) {
-            const auto params = pc::plan_codegen(input_tensor, front, after, value, output_memory_config);
-            if (params.has_value() && !pc::is_demoted(input_tensor, *params)) {
-                return ttnn::prim::pad_codegen(input_tensor, *params);
-            }
-        }
-    }
 
     bool input_output_same = true;
     for (size_t i = 0; i < rank; i++) {
@@ -300,8 +278,7 @@ ttnn::Tensor pad_impl(
                     value,
                     use_multicore,
                     width_pad_memory_config,
-                    std::nullopt,
-                    PadRoute::Native);
+                    std::nullopt);
 
                 TT_FATAL(
                     not(height_distinct(output_padded_shape, output_shape_width_padded) and
@@ -322,8 +299,7 @@ ttnn::Tensor pad_impl(
                     value,
                     use_multicore,
                     memory_config_arg.value_or(height_pad_memory_config),
-                    std::nullopt,
-                    PadRoute::Native);
+                    std::nullopt);
                 output_tensor_width_padded.deallocate();  // dealloc temporary width padded tensor
                 return output_tensor_height_padded;
             }
@@ -349,12 +325,11 @@ ttnn::Tensor pad_impl(
     const float value,
     const bool use_multicore,
     const std::optional<MemoryConfig>& memory_config_arg,
-    const std::optional<CoreRangeSet>& sub_core_grids,
-    const PadRoute route) {
+    const std::optional<CoreRangeSet>& sub_core_grids) {
     if (input_tensor.dtype() == DataType::BFLOAT8_B && input_tensor.layout() == Layout::TILE) {
         auto bfloat16_tensor = ttnn::typecast(input_tensor, DataType::BFLOAT16);
         auto padded_tensor =
-            pad_impl(bfloat16_tensor, padding, value, use_multicore, memory_config_arg, sub_core_grids, route);
+            pad_impl(bfloat16_tensor, padding, value, use_multicore, memory_config_arg, sub_core_grids);
         return ttnn::typecast(padded_tensor, DataType::BFLOAT8_B);
     }
     const int original_rank = input_tensor.logical_shape().rank();
@@ -412,14 +387,7 @@ ttnn::Tensor pad_impl(
     }
 
     return pad_impl(
-        input_tensor_4D,
-        output_padded_shape,
-        pad_front_array,
-        value,
-        use_multicore,
-        memory_config_arg,
-        sub_core_grids,
-        route);
+        input_tensor_4D, output_padded_shape, pad_front_array, value, use_multicore, memory_config_arg, sub_core_grids);
 }
 
 std::tuple<ttnn::Shape, ttnn::Shape> compute_requested_shape(
@@ -450,12 +418,11 @@ ttnn::Tensor invoke_rm(
     const float value,
     const bool use_multicore,
     const std::optional<MemoryConfig>& memory_config_arg,
-    const std::optional<CoreRangeSet>& sub_core_grids,
-    const PadRoute route) {
+    const std::optional<CoreRangeSet>& sub_core_grids) {
     const int original_rank = input_tensor.logical_shape().rank();
 
     ttnn::Tensor output_tensor =
-        pad_impl(input_tensor, padding_vec, value, use_multicore, memory_config_arg, sub_core_grids, route);
+        pad_impl(input_tensor, padding_vec, value, use_multicore, memory_config_arg, sub_core_grids);
 
     // output_tensor is currently 4D. We have to squeeze back to the original rank
     if (original_rank <= 4) {
@@ -619,13 +586,7 @@ ttnn::Tensor invoke_tile(
 
         // this tensor will be 4D
         output_tensor = pad_impl(
-            output_tensor,
-            std::move(padded_padding_vec),
-            value,
-            use_multicore,
-            memory_config_arg,
-            sub_core_grids,
-            PadRoute::Native);
+            output_tensor, std::move(padded_padding_vec), value, use_multicore, memory_config_arg, sub_core_grids);
 
         // this is the padded shape
         const auto output_shape = squeeze_or_unsqueeze_shape_to_ND(output_tensor.logical_shape(), requested_rank);
@@ -666,6 +627,7 @@ ttnn::Tensor pad_with_route(
         TT_FATAL(
             pad_codegen::supported_execution_controls(use_multicore, sub_core_grids),
             "ttnn.pad: codegen path does not support use_multicore=False or sub_core_grids");
+        TT_FATAL(input_tensor.layout() == ttnn::TILE_LAYOUT, "ttnn.pad: codegen path supports TILE layout only");
     }
 
     ttsl::SmallVector<PadSpecDim> working_padding = padding;
@@ -712,7 +674,7 @@ ttnn::Tensor pad_with_route(
         return invoke_tile(
             working_tensor, working_padding, value, use_multicore, memory_config_arg, sub_core_grids, route);
     }
-    return invoke_rm(working_tensor, working_padding, value, use_multicore, memory_config_arg, sub_core_grids, route);
+    return invoke_rm(working_tensor, working_padding, value, use_multicore, memory_config_arg, sub_core_grids);
 }
 
 ttnn::Tensor pad_native(

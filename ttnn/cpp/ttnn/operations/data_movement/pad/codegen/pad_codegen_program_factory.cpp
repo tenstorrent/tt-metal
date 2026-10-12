@@ -13,7 +13,6 @@
 #include <tt_stl/assert.hpp>
 
 #include <tt-metalium/core_coord.hpp>
-#include <tt-metalium/hal.hpp>
 #include <tt-metalium/math.hpp>
 #include <tt-metalium/program_descriptors.hpp>
 #include <tt-metalium/tensor_accessor_args.hpp>
@@ -31,13 +30,9 @@ namespace {
 
 constexpr uint32_t kCbOut = 0;
 constexpr uint32_t kCbPad = 1;
-constexpr uint32_t kCbStage = 2;
 
 // SEQ_PAD, see common/kernels/codegen/sequencers.h.
 constexpr uint32_t kSeqPad = 5;
-
-// The RM reader keys its direct-read admission on DRAM<->L1 address congruence.
-constexpr uint32_t kCongruentFast = 1;
 
 constexpr const char* kSharedKernelDir = "ttnn/cpp/ttnn/operations/data_movement/common/kernels/codegen";
 
@@ -112,14 +107,14 @@ Coord4 unflatten(uint32_t index, uint32_t C, uint32_t H, uint32_t W) {
     return r;
 }
 
-// Input rows/tiles consumed before output position `p`, with all four dims counted in the same unit.
-uint32_t source_index_before(const Coord4& p, const Coord4& front, const Coord4& in, bool has_w_dim) {
+// Input tiles consumed before output tile `p`.
+uint32_t source_index_before(const Coord4& p, const Coord4& front, const Coord4& in) {
     uint32_t count = data_before(p.n, front.n, in.n) * in.c * in.h * in.w;
     if (in_window(p.n, front.n, in.n)) {
         count += data_before(p.c, front.c, in.c) * in.h * in.w;
         if (in_window(p.c, front.c, in.c)) {
             count += data_before(p.h, front.h, in.h) * in.w;
-            if (has_w_dim && in_window(p.h, front.h, in.h)) {
+            if (in_window(p.h, front.h, in.h)) {
                 count += data_before(p.w, front.w, in.w);
             }
         }
@@ -181,7 +176,7 @@ ProgramDescriptor build_pad_tiled(
     for (const auto& core : split.cores_in_order) {
         const uint32_t n = work_for_core(split, core);
         const Coord4 p = unflatten(start, out_tiles.c, out_tiles.h, out_tiles.w);
-        const uint32_t src_start = source_index_before(p, front_tiles, in_tiles, /*has_w_dim=*/true);
+        const uint32_t src_start = source_index_before(p, front_tiles, in_tiles);
         reader_desc.emplace_runtime_args(
             core,
             RtArgs{
@@ -207,87 +202,6 @@ ProgramDescriptor build_pad_tiled(
                 front_tiles.h,
                 front_tiles.c,
                 front_tiles.n});
-        writer_desc.emplace_runtime_args(core, RtArgs{dst_buffer, n, start});
-        start += n;
-    }
-
-    desc.kernels.push_back(std::move(reader_desc));
-    desc.kernels.push_back(std::move(writer_desc));
-    return desc;
-}
-
-ProgramDescriptor build_pad_rm(
-    const PadCodegenParams& attrs, const Tensor& input, Tensor& output, tt::DataFormat format) {
-    Buffer* src_buffer = input.buffer();
-    Buffer* dst_buffer = output.buffer();
-
-    const auto sizes = operations::data_movement::pad_codegen::rm_page_sizes(input, attrs);
-    const auto& in_shape = input.logical_shape();
-    const uint32_t elem = input.element_size();
-    const uint32_t back_pad_w_bytes = (attrs.W_out - in_shape[3] - attrs.front_w) * elem;
-    const uint32_t front_pad_w_bytes = attrs.front_w * elem;
-
-    const uint32_t total = attrs.N_out * attrs.C_out * attrs.H_out;
-    const CoreSplit split = split_work(input, total);
-
-    ProgramDescriptor desc;
-    const uint32_t depth = operations::data_movement::pad_codegen::cb_depth(attrs.read_batch, attrs.write_batch);
-    desc.cbs.push_back(make_cb(split.all_cores, kCbOut, format, sizes.out_pitch, depth));
-    desc.cbs.push_back(make_cb(split.all_cores, kCbPad, format, sizes.pad_buf, 1));
-    desc.cbs.push_back(make_cb(split.all_cores, kCbStage, format, sizes.stage, 1));
-
-    std::vector<uint32_t> reader_ct_args = {
-        in_shape[2],
-        in_shape[1],
-        in_shape[0],
-        attrs.H_out,
-        attrs.C_out,
-        attrs.N_out,
-        sizes.stick,
-        sizes.stick_out,
-        sizes.out_pitch,
-        back_pad_w_bytes,
-        attrs.packed_pad_value,
-        attrs.read_batch,
-        kCbOut,
-        kCbPad,
-        front_pad_w_bytes,
-        attrs.front_h,
-        attrs.front_c,
-        attrs.front_n,
-        kCbStage};
-    TensorAccessorArgs(*src_buffer).append_to(reader_ct_args);
-    reader_ct_args.push_back(sizes.stage);
-    reader_ct_args.push_back(tt::tt_metal::hal::get_dram_alignment());
-    reader_ct_args.push_back(kCongruentFast);
-
-    KernelDescriptor reader_desc;
-    reader_desc.kernel_source =
-        "ttnn/cpp/ttnn/operations/data_movement/pad/codegen/kernels/reader_pad_rm_interleaved.cpp";
-    reader_desc.source_type = KernelDescriptor::SourceType::FILE_PATH;
-    reader_desc.core_ranges = split.all_cores;
-    reader_desc.compile_time_args = std::move(reader_ct_args);
-    reader_desc.config = ReaderConfigDescriptor{};
-
-    std::vector<uint32_t> writer_ct_args = {kCbOut, sizes.stick_out};
-    TensorAccessorArgs(*dst_buffer).append_to(writer_ct_args);
-    writer_ct_args.push_back(attrs.write_batch);
-
-    KernelDescriptor writer_desc;
-    writer_desc.kernel_source = std::string(kSharedKernelDir) + "/writer_interleaved.cpp";
-    writer_desc.source_type = KernelDescriptor::SourceType::FILE_PATH;
-    writer_desc.core_ranges = split.all_cores;
-    writer_desc.compile_time_args = std::move(writer_ct_args);
-    writer_desc.config = WriterConfigDescriptor{};
-
-    const Coord4 front{attrs.front_n, attrs.front_c, attrs.front_h, attrs.front_w};
-    const Coord4 in_rows{in_shape[0], in_shape[1], in_shape[2], 1};
-    uint32_t start = 0;
-    for (const auto& core : split.cores_in_order) {
-        const uint32_t n = work_for_core(split, core);
-        const Coord4 p = unflatten(start, attrs.C_out, attrs.H_out, 1);
-        const uint32_t src_start = source_index_before(p, front, in_rows, /*has_w_dim=*/false);
-        reader_desc.emplace_runtime_args(core, RtArgs{src_buffer, n, src_start, p.h, p.c, p.n});
         writer_desc.emplace_runtime_args(core, RtArgs{dst_buffer, n, start});
         start += n;
     }
@@ -376,10 +290,7 @@ ProgramDescriptor PadCodegenProgramFactory::create_descriptor(
     if (operation_attributes.fill_partial_tile) {
         return build_fill_partial_tile(operation_attributes, input, tensor_return_value, format);
     }
-    if (input.layout() == ttnn::TILE_LAYOUT) {
-        return build_pad_tiled(operation_attributes, input, tensor_return_value, format);
-    }
-    return build_pad_rm(operation_attributes, input, tensor_return_value, format);
+    return build_pad_tiled(operation_attributes, input, tensor_return_value, format);
 }
 
 }  // namespace ttnn::prim

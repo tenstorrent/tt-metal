@@ -16,18 +16,6 @@
 
 namespace ttnn::operations::data_movement::pad_codegen {
 
-// Bytes of one output page of each kind as the kernels see them. Shared by the gate and the program factory
-// so both size L1 from the same numbers.
-struct RmPageSizes {
-    uint32_t stick{};      // input row
-    uint32_t stick_out{};  // output row
-    uint32_t out_pitch{};  // output CB slot pitch
-    uint32_t pad_buf{};    // pad-constant scratch
-    uint32_t stage{};      // aligned staging read of one input row
-};
-
-RmPageSizes rm_page_sizes(const Tensor& input, const ttnn::prim::PadCodegenParams& attrs);
-
 // Output CB depth in pages for the given batching.
 uint32_t cb_depth(uint32_t read_batch, uint32_t write_batch);
 
@@ -49,8 +37,7 @@ ttnn::prim::PadCodegenParams make_codegen_params(
     const tt::tt_metal::MemoryConfig& output_mem_config);
 
 // Routing entry: the attributes when the codegen gate accepts the call, nullopt when it declines. Same decision as
-// make_codegen_params followed by supported_by_codegen, but declines before the L1 queries when it can and computes
-// the output reservation once.
+// make_codegen_params followed by supported_by_codegen, but declines before the L1 query when it can.
 std::optional<ttnn::prim::PadCodegenParams> plan_codegen(
     const Tensor& input,
     std::span<const uint32_t> front,
