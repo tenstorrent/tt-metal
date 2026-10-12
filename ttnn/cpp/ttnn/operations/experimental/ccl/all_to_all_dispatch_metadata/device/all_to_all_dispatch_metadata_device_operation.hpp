@@ -42,6 +42,8 @@ struct AllToAllDispatchMetadataDeviceOperation {
         // AllToAllDispatchMetadataSparse::override_runtime_arguments re-applies cross_device_semaphore.address() when the caller provides one.
         // clang-format on
         const std::optional<GlobalSemaphore> cross_device_semaphore;  // Optional external semaphore for persistent mode
+        // Presence selects the SKIP_INIT_SEMAPHORE compile-time define, so it is part of the program-cache key.
+        const bool has_cross_device_semaphore = false;
         static constexpr auto attribute_names = std::forward_as_tuple(
             "shared_expert_ids",
             "worker_core_range_set",
@@ -51,7 +53,8 @@ struct AllToAllDispatchMetadataDeviceOperation {
             "drain_sync_tilizer_core",
             "worker_mode",
             "mux_core_range_set",
-            "dispatch_algorithm");
+            "dispatch_algorithm",
+            "has_cross_device_semaphore");
         auto attribute_values() const {
             return std::forward_as_tuple(
                 shared_expert_ids,
@@ -62,7 +65,8 @@ struct AllToAllDispatchMetadataDeviceOperation {
                 drain_sync_tilizer_core,
                 worker_mode,
                 mux_core_range_set,
-                dispatch_algorithm);
+                dispatch_algorithm,
+                has_cross_device_semaphore);
         };
     };
     struct tensor_args_t {
