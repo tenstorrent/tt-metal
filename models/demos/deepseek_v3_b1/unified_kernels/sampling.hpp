@@ -686,7 +686,12 @@ void run_top32_llk(uint32_t row_elements, uint32_t num_input_tiles, uint32_t pha
     cb_push_back(out_indices_cb, 1);
 }
 
-template <uint32_t in_scores_cb, uint32_t in_indices_cb, uint32_t out_scores_cb, uint32_t out_indices_cb>
+template <
+    uint32_t in_scores_cb,
+    uint32_t in_indices_cb,
+    uint32_t out_scores_cb,
+    uint32_t out_indices_cb,
+    bool restore_face_geometry = true>
 void run_top32_llk_presorted_1024_opt(uint32_t row_elements, uint32_t num_input_tiles, uint32_t phase_number) {
     constexpr uint32_t value_offset_tiles = 0;
     constexpr uint32_t index_offset_tiles = 2;
@@ -856,10 +861,12 @@ void run_top32_llk_presorted_1024_opt(uint32_t row_elements, uint32_t num_input_
     UNPACK(TTI_SETADCXY(p_setadc::UNP_A, 0, 0, 0, 0, 0b1111));
     UNPACK(TTI_SETADCZW(p_setadc::UNP_A, 0, 0, 0, 0, 0b1111));
     // top32_rm init in the trailing chunk changes the face geometry, so restore it.
-    UNPACK((cfg_reg_rmw_tensix<THCON_SEC0_REG5_Tile_x_dim_cntx0_ADDR32, 0, 0xffffffff>(
-        FACE_R_DIM * FACE_C_DIM | (FACE_R_DIM * FACE_C_DIM << 16))));
-    UNPACK((cfg_reg_rmw_tensix<UNP0_ADDR_CTRL_XY_REG_1_Ystride_RMW>(
-        canonical_unpA_y_stride(unpack_dst_format[get_operand_id(in_scores_cb)]))));
+    if constexpr (restore_face_geometry) {
+        UNPACK((cfg_reg_rmw_tensix<THCON_SEC0_REG5_Tile_x_dim_cntx0_ADDR32, 0, 0xffffffff>(
+            FACE_R_DIM * FACE_C_DIM | (FACE_R_DIM * FACE_C_DIM << 16))));
+        UNPACK((cfg_reg_rmw_tensix<UNP0_ADDR_CTRL_XY_REG_1_Ystride_RMW>(
+            canonical_unpA_y_stride(unpack_dst_format[get_operand_id(in_scores_cb)]))));
+    }
 
     tile_regs_release();
 
@@ -1950,11 +1957,13 @@ struct TopKSampling {
             if constexpr (IsFinalCore && CTArgs::topk_k <= 32) {
                 {
                     DeviceZoneScopedN("SP-PHASE2LLK");
+                    // k 1 selects the top value whatever the softmax reads, so it skips the restore.
                     run_top32_llk_presorted_1024_opt<
                         CTArgs::topk_in_scores_cb,
                         CTArgs::topk_in_indices_cb,
                         CTArgs::topk_out_scores_cb,
-                        CTArgs::topk_out_indices_cb>(CTArgs::phase2_row_elements, CTArgs::phase2_num_input_tiles, 2);
+                        CTArgs::topk_out_indices_cb,
+                        (CTArgs::topk_k > 1)>(CTArgs::phase2_row_elements, CTArgs::phase2_num_input_tiles, 2);
                 }
             }
 
@@ -2000,7 +2009,8 @@ struct TopKSampling {
                     /*num_tiles=*/1,
                     CTArgs::enable_metadata,
                     CTArgs::metadata_output_l1_addr,
-                    CTArgs::inv_temp_bf16>();
+                    // k 1 draws the top value at any temperature.
+                    (CTArgs::topk_k > 1 ? CTArgs::inv_temp_bf16 : 0)>();
             }
 #endif
         }
