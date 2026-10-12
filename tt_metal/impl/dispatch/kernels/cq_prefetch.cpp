@@ -2550,9 +2550,7 @@ bool process_cmd(
         case CQ_PREFETCH_CMD_EXEC_BUF_END:
             // DPRINT("exec_buf_end: {}\n", cmd_ptr);
             ASSERT(exec_buf);
-            // exec_buf_end may be reached before the read-ahead issued by paged_read_into_cmddat_q has landed (e.g.
-            // when this device's trace is shorter than the trace buffer). Those reads target cmddat_q, which is handed
-            // back to upstream once exec_buf_end reaches dispatch, so they must complete before it is relayed.
+            // Read-ahead may still be landing in cmddat_q, which upstream reuses once exec_buf_end is relayed
             noc_async_read_barrier_with_trid(1);
             stride = process_exec_buf_relay_inline_cmd<DispatchRelayInlineState>(
                 cmd_ptr, downstream_data_ptr, exec_buf_state);

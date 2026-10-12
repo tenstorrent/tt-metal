@@ -561,9 +561,7 @@ TEST_F(MeshTraceTest2x4, NonConvexGridTrace) {
 }
 
 TEST_F(MeshTraceTest2x4, SingleDeviceTraceReplay) {
-    // Regression test for https://github.com/tenstorrent/tt-metal/issues/60338: devices outside the workload get a
-    // trace much shorter than the trace buffer, so their prefetcher reaches exec_buf_end while trace-buffer read-ahead
-    // is still in flight. On remote chips this used to corrupt the commands that followed and hang the device.
+    // Leaves out all other devices, including remote chips (#60338)
     auto programs = tt::tt_metal::distributed::test::utils::create_random_programs(
         1, mesh_device_->compute_with_storage_grid_size(), 0);
 
