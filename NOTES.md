@@ -205,3 +205,18 @@ Next (tunnel up): `ssh exabox-login 'df -h /data; curl -sI https://huggingface.c
   /var/tmp/fasth3; t409/b at 53f7b6b707 + uncommitted vsa host/kernel edits from #449). SLA code (04cbd225529, ff705742990) is
   Python-only; the one C++ diff 53f7b6b707..1d8e15320e3 is the vsa compute kernel (JIT). blx01 needs its own tree for the SLA
   code and the SLA LoRA (not gated; lightx2v) under /var/tmp/fasth3 (ionice -c3, --bwlimit, footprint <= 450 GB; / was 80%).
+
+## t452 run 1703 (2026-10-12 09:40 PDT) — A/Bs moved to blx01
+- Judgment: exabox device lint refuses NFS weights/caches and dit nodes have no local disk, so the A/Bs run on blx01,
+  where weights and caches are local. Exabox staging (/data/smarton/fasth3/t417, ~470 GB) is left in place for now; nothing runs there.
+- blx01: SLA LoRA fetched to /var/tmp/fasth3/models/lightx2v-h3-turbo-sla (1383677808 B, md5 differs from v1.0).
+  Code overlay /var/tmp/fasth3/t452/w (tt-project/t452/mk452.sh): symlinks into t409/b (53f7b6b707 + #449's uncommitted
+  vsa kernel/host edits, built; also used by #453, so not modified) with the two minimax_h3 Python dirs copied and
+  sla.patch (04cbd225529 + ff705742990) applied. Import check OK.
+- One arm takes ~316 s warm (t409 out_ab10-vsa0.9), so a pair (~630 s) is over the 600 s cap: one arm per broker job,
+  TIMEOUT 540, per-arm pytest limit 470. Specs tt-project/t452/s0-{dense,sla0.85,vsa0.9}.txt, device-lint passes.
+- chain452.sh (ttp detach on g15blx02, log state/runs/1703/chain452.log, rc chain452.rc) submits them one after another
+  through t288/blx01-submit.sh; outputs /var/tmp/fasth3/t452/out_s0-<arm>/ (run.log, latents, yuv, mp4, PASS).
+- Next: read chain452.log; per-step time from each run.log ("denoise breakdown"); PSNR of sla/vsa vs dense from the
+  saved yuv; still per arm. If seed 0 is sane, make s{1..4}-{dense,sla0.85,vsa0.9}.txt (sed s/s0/sN/; T409_SEED=N) and
+  rerun chain452.sh on them; then VBench subset and recommendation.
