@@ -74,6 +74,47 @@ for the per-cell NoC link-demand heatmaps):
 - The column exception (where the reverse NoC wins) is a property of the pathological column placement —
   not a reason to swap the default.
 
+## When it helps / when it does not
+Board: **Wormhole B0 n150** (8×8 Tensix grid; line length is capped at 8 Tensix cores so a diagonal fits).
+Numbers come from `test_noc_placement_regimes`: identity copy (`op="copy"`), `shape=(1024, 2048)` = 2048 bf16
+tiles (2 KB pages), `kernel_iters=2`, baseline and lever measured interleaved (A,B,A,B…), median of
+12 trials × 3 launches, spread = min–max over trials. "Outstanding reads" = Tensix cores × `block`
+(2 KB pages in flight per barrier per core) — the traffic the line puts on the NoC at once.
+
+| lever | condition | config | baseline ns | lever ns | speedup | trials | board |
+|---|---|---|---|---|---|---|---|
+| placement column → row | **helps:** bandwidth-bound line, 128 outstanding 2 KB reads | 8 cores, `block=16`, 256 tiles/core | 246 765 (246 316–247 525) | 84 917 (84 155–86 778) | **2.91×** | 12 | WH B0 n150 |
+| placement column → row | **does not help:** latency-bound line, 2 outstanding reads | 2 cores, `block=1`, 1024 tiles/core | 1 106 889 (1 091 085–1 115 261) | 1 077 065 (1 076 902–1 077 855) | **1.03×** | 12 | WH B0 n150 |
+| reads NoC1 → reads NoC0 (writes on the other NoC) | **helps:** spread row line, bandwidth-bound | row, 8 cores, `block=16` | 278 002 (276 867–279 155) | 85 066 (84 521–85 694) | **3.27×** | 12 | WH B0 n150 |
+| reads NoC1 → reads NoC0 | **does not help (loses):** a single Tensix core at (0,0) | 1 core, `block=16`, 2048 tiles/core | 404 600 (404 361–404 747) | 429 238 (428 252–429 843) | **0.94×** | 12 | WH B0 n150 |
+
+- **Placement helps** when the line's outstanding reads contend: a column funnels every core's DRAM traffic
+  through the same column links, a row spreads it across columns, so the row moves the same bytes ~2.9× faster.
+- **Placement stops paying** when the line is latency-bound (one page per barrier, few cores): no link is
+  saturated, so each read costs one round trip wherever the core sits.
+- **NoC0 for reads helps** on a spread line because NoC0 (east→south) fans the traffic out across columns before
+  turning toward DRAM, while NoC1 (north→west) concentrates it on the DRAM columns.
+- **The NoC choice does not help** without a line to disperse: one Tensix core at (0,0) has nothing to spread, and
+  there the canonical reads-NoC0 / writes-NoC1 pairing is ~6 % *slower* than the reverse (stable across runs) —
+  keep the default for multi-core lines, but do not expect it to help a single-core kernel.
+
+Boundary sweep (probe, same copy and shape, `kernel_iters=8`, 12 trials × 3 launches, column → row):
+
+| Tensix cores | `block` | outstanding 2 KB reads | speedup |
+|---|---|---|---|
+| 2 | 1 | 2 | 1.01× |
+| 4 | 1 | 4 | 1.04× |
+| 8 | 1 | 8 | 1.09× |
+| 2 | 16 | 32 | 1.31× |
+| 8 | 2 | 16 | 1.40× |
+| 4 | 16 | 64 | 2.20× |
+| 8 | 16 | 128 | 2.94× |
+
+Rule of thumb on WH B0: placement is worth changing once the line has ≳16 outstanding 2 KB reads; at ≤8 it is
+within ~10 %. Small payloads still benefit if the line is bandwidth-bound: 64 tiles (8 tiles/core, `block=16`,
+`kernel_iters=1`) measured 2.65×, 16 tiles (2 tiles/core) 1.51×. The NoC choice for reads is likewise flat when
+latency-bound (`block=1`: 1.04× at 2 cores, 1.07× at 8 cores; `op="read"`, row).
+
 ## Measure your own shapes/params
 ```bash
 python -m ttnn.operations.examples.noc_placement --shape 2048,2048 --cores 8 --block 32
@@ -96,6 +137,8 @@ python -m ttnn.operations.examples.noc_placement --report   # rewrites noc_place
 scripts/run_safe_pytest.sh --run-all tests/ttnn/unit_tests/operations/examples/test_noc_placement.py::test_noc_placement_correctness
 # device kernel duration for the 12-cell read/write × NoC × placement matrix
 scripts/run_safe_pytest.sh --run-all tests/ttnn/unit_tests/operations/examples/test_noc_placement.py::test_noc_placement_device_perf
+# helps / does-not-help regimes (asserted speedups)
+scripts/run_safe_pytest.sh --run-all tests/ttnn/unit_tests/operations/examples/test_noc_placement.py::test_noc_placement_regimes
 ```
 
 ## Code

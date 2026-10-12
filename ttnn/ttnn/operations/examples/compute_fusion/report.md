@@ -42,3 +42,15 @@ Metric: DEVICE KERNEL DURATION [ns] per expression evaluation. Speedup = unfused
 | reduce_recip | 16 | 1 | unfused | 4606.8 | 0.4% | 1.00x |
 | reduce_recip | 64 | 1 | fused | 11913.9 | 0.0% | 1.01x |
 | reduce_recip | 64 | 1 | unfused | 12090.5 | 0.0% | 1.00x |
+
+## 2026-10-12 - regimes (Wormhole B0 n150), `test_compute_fusion_regimes`
+11 interleaved trials per variant, kernel-iters 100, ns per evaluation; three runs identical to within 0.1 percent.
+
+| Scenario | n tiles | blk | baseline | median ns | lever | median ns | speedup | baseline min..max | lever min..max |
+|---|---:|---:|---|---:|---|---:|---:|---|---|
+| sfpu_chain | 4 | 4 | unfused | 9674 | fused | 8632 | 1.12x | 9671..9679 | 8631..8634 |
+| fpu_sfpu | 64 | 1 | unfused | 77734 | dstreuse | 84105 | 0.92x | 77708..77746 | 83856..84816 |
+
+Extra reading (not asserted): `reduce_recip` n=64, unfused 5284 -> fused 5099 ns = 1.04x (11 trials).
+Absolute times at n=64 differ from the 2026-07-10 table above (fpu_sfpu unfused 67395 ns then, 77734 ns now; reduce_recip unfused 12090 ns then, 5284 ns now),
+so the current kernel library/helper code is not the one that produced the older table; the qualitative rule (SFPU consumer fuses, FPU consumer loses) still holds, with dstreuse now 0.92x instead of 0.94x.

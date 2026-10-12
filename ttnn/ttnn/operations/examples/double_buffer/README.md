@@ -1,6 +1,6 @@
 # double_buffer — keeping bytes in flight on the NoC (reads/barrier · double buffering · transfer size)
 
-**Difficulty:** ⭐⭐ T2  ·  **Concept(s):** outstanding NoC reads per barrier (latency vs bandwidth) · double-buffered CBs (stage overlap) · transfer size (bytes per tile)
+**Problem type:** data movement below the ceiling: latency  ·  **Concept(s):** outstanding NoC reads per barrier (latency vs bandwidth) · double-buffered CBs (stage overlap) · transfer size (bytes per tile)
 **First profiled on:** `bgd-lab-t3003-special-mstaletovic-for-reservation-40918` · Wormhole B0 · 1000 MHz · 2026-07-09 · `bf5ebe7aacb`
 
 > Reading order: [`../master.md`](../master.md) → **this file** → run the CLI, and read the code only if you need to.
@@ -109,6 +109,30 @@ double_buffer   box=bgd-lab-t3003...  arch=WH-B0   N=20 (avg)   passes=1   kerne
 - Scope: this measures data movement, so compute is held light. If **compute** is your bottleneck,
   the compute engine's independent unpack/math/pack threads already hide the DRAM traffic and none of
   these levers help.
+
+## When it helps / when it does not
+Board: **Wormhole B0 n150** (8×8 = 64-Tensix-core grid, 12 DRAM banks), bf16 (2048 B per tile =
+per NoC read). Baseline = the trap (`block=1`, `single_buffered`); lever = `block=4`,
+`double_buffered` (4 reads per barrier, CB = 2 × 4 tiles). Numbers from `test_double_buffer_regimes`
+— median of 12 trials per variant (a trial = mean device kernel duration of 5 launches), baseline/lever
+trials interleaved; min–max in parentheses.
+
+| Condition | Shape | Trap (ns) | block=4 + double (ns) | Speedup | Trials | Board |
+|---|---|--:|--:|--:|--:|---|
+| **Helps:** 1 Tensix core, latency-bound (6.7 GB/s) | `[512, 512]`, 256 tiles/core | 155933 (155409–156387) | 59156 (59111–59187) | **2.64×** (runs: 2.64 / 2.63 / 2.63 / 2.64) | 12 | WH B0 n150 |
+| **Helps:** 8 Tensix cores, aggregate trap BW 52 GB/s ≪ DRAM peak | `[2048, 2048]`, 512 tiles/core | 322468 (321182–324683) | 118236 (118000–118480) | **2.73×** (runs: 2.73 / 2.73 / 2.73 / 2.73) | 12 | WH B0 n150 |
+| **Does not help:** 64 Tensix cores, trap already at DRAM peak (190.9 GB/s) | `[2048, 2048]`, 64 tiles/core | 87884 (87113–88587) | 89425 (88530–91177) | **0.98×** (runs: 0.98 / 0.98 / 0.97 / 0.97) | 12 | WH B0 n150 |
+
+- **Helps:** while each Tensix core's NoC is idle between one-tile round trips, batching 4 reads per
+  barrier and letting the reader prefetch the next block (depth 2) overlaps reads with writes and lifts
+  each Tensix core from ~6.7 to ~17.7 GB/s — the gain is per core, so it holds unchanged at 8 cores.
+- **Does not help:** the trap moves ~6.5 GB/s per Tensix core, so with enough cores the aggregate
+  reaches the DRAM ceiling (~190 GB/s on this board) and there is no idle NoC time left to recover;
+  the lever is flat to ~3% slower. Core-count sweep at 4096 tiles (bf16): 1 → 2.82×, 8 → 2.77×,
+  16 → 1.97×, **32 → 1.11×**, 64 → 0.98× — i.e. it stops paying once
+  `active Tensix cores × ~6.5 GB/s` approaches DRAM peak (≈30 cores for bf16).
+
+Reproduce: `scripts/run_safe_pytest.sh --run-all tests/ttnn/unit_tests/operations/examples/test_double_buffer.py::test_double_buffer_regimes`
 
 ## Run the predefined sweep (regenerates the report numbers)
 ```bash

@@ -105,3 +105,21 @@ group with several tiles/core (parallelizes the reduce across tile indices), but
 contention-immune (3344 -> 3641 ns), and it wins the tiny-payload and grid-filling regimes; its one
 extra round is why it does not beat tile-index reduce-scatter in an isolated, well-fed group.
 `reduce_root_mcast` is never fastest, never worst.
+
+## 2026-10-12 regime check (Wormhole B0 n150)
+
+`test_tensix_all_reduce_regimes`, baseline `reduce_root_mcast` vs lever `reduce_scatter_mcast`, bf16,
+kernel-iters=10, interleaved A/B, median of 11 retained trials (min-max in brackets), ns per all-reduce.
+Three runs per case:
+
+| Group | Groups | Tiles/core | Run | root ns | reduce-scatter ns | root / RS |
+|---|---:|---:|---:|---|---|---:|
+| 1x8 | 8 | 6 | 1 | 6145.3 [6136.4-6153.5] | 3663.2 [3601.2-3707.6] | 1.678x |
+| 1x8 | 8 | 6 | 2 | 6146.6 [6132.6-6150.1] | 3645.1 [3599.7-3690.1] | 1.686x |
+| 1x8 | 8 | 6 | 3 | 6142.2 [6137.6-6150.4] | 3646.1 [3609.9-3690.6] | 1.685x |
+| 1x4 | 16 | 6 | 1 | 3976.0 [3957.4-4129.7] | 4663.5 [4348.5-5426.5] | 0.853x |
+| 1x4 | 16 | 6 | 2 | 3972.4 [3958.9-4254.0] | 5120.5 [4558.7-5556.2] | 0.776x |
+| 1x4 | 16 | 6 | 3 | 3980.1 [3949.8-4032.7] | 5004.6 [4556.1-5491.7] | 0.795x |
+| 1x8 | 8 | 1 | 1 | 1613.2 [1603.9-1618.6] | 1994.0 [1990.2-1998.4] | 0.809x |
+| 1x8 | 8 | 1 | 2 | 1614.0 [1603.0-1621.5] | 1993.0 [1990.1-1999.0] | 0.810x |
+| 1x8 | 8 | 1 | 3 | 1613.8 [1606.1-1623.5] | 1995.3 [1989.0-2000.0] | 0.809x |

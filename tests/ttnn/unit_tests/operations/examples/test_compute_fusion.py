@@ -338,3 +338,59 @@ def _format_microbench(results, *, box, arch, num_tiles, kernel_iters):
         if len(PHASE_ZONES[variant]) > 1:
             lines.append(f"| {scenario} | {method} | **Σ wall** | | | | **{total:.0f}** |")
     return "\n".join(lines) + "\n"
+
+
+# =============================================================================
+# Regimes: where fusing through DEST helps, and where it does not (Wormhole B0 n150)
+# =============================================================================
+_REGIME_TRIALS = 11
+_REGIME_ITERS = 100
+
+# (scenario, num_tiles, block_size, lever method, verdict, measured speedup)
+#   helps:          sfpu_chain n=4 blk=4 -- every intermediate feeds an SFPU op, so the L1 round trip is pure
+#                   overhead; fused is ~1.12x at 4 tiles (the win shrinks to ~1.05x by 64 tiles).
+#   does_not_help:  fpu_sfpu n=64 blk=1 dstreuse -- the consumer is an FPU multiply, so "fusing" costs a
+#                   DEST->source transfer per tile that exceeds the pack+unpack it saves (~0.94x, a loss).
+_REGIMES = [
+    pytest.param("sfpu_chain", 4, 4, "fused", "helps", 1.12, id="helps_sfpu_chain_n4_blk4"),
+    pytest.param("fpu_sfpu", 64, 1, "dstreuse", "loses", 0.94, id="loses_fpu_consumer_dstreuse_n64"),
+]
+
+
+@pytest.mark.parametrize("scenario,num_tiles,block_size,lever,verdict,measured", _REGIMES)
+def test_compute_fusion_regimes(device, scenario, num_tiles, block_size, lever, verdict, measured):
+    # The regime thresholds below were calibrated on Wormhole B0 (n150). The boundary between
+    # "helps" and "does not help" moves with the arch (grid size, DRAM banks, NoC, clock), so on
+    # another arch re-measure the regimes and add its own thresholds before enabling this test.
+    if not ttnn.device.is_wormhole_b0(device):
+        pytest.skip("regime thresholds are calibrated on Wormhole B0 only; re-measure on this arch first")
+    inputs, expected, kind = _make_case(device, scenario, num_tiles)
+    base_variant, lever_variant = f"{scenario}.unfused", f"{scenario}.{lever}"
+    for variant in (base_variant, lever_variant):  # correctness gate
+        out = run_fusion(inputs, variant=variant, num_tiles=num_tiles, block_size=block_size, kernel_iters=1)
+        _check(out, expected, kind, f"{variant} n={num_tiles} blk={block_size}")
+
+    runners = {
+        name: (
+            lambda variant=variant: run_fusion(
+                inputs, variant=variant, num_tiles=num_tiles, block_size=block_size, kernel_iters=_REGIME_ITERS
+            )
+        )
+        for name, variant in (("base", base_variant), ("lever", lever_variant))
+    }
+    samples = _measure(device, runners, _REGIME_TRIALS, _REGIME_ITERS)  # interleaved A,B,A,B...
+    base, lev = samples["base"], samples["lever"]
+    b, l = statistics.median(base), statistics.median(lev)
+    speedup = b / l
+    arch = {"WORMHOLE_B0": "WH_B0", "BLACKHOLE": "BH"}.get(str(device.arch()).rsplit(".", 1)[-1], str(device.arch()))
+    logger.info(
+        f"[{arch}] {verdict} {scenario} n={num_tiles} tiles blk={block_size}: unfused {b:.0f} ns "
+        f"[{min(base):.0f}..{max(base):.0f}] -> {lever} {l:.0f} ns [{min(lev):.0f}..{max(lev):.0f}] "
+        f"= {speedup:.2f}x (trials={len(base)}, ns per expression evaluation)"
+    )
+    if verdict == "helps":
+        assert speedup >= max(1.05, 1 + 0.5 * (measured - 1)), f"expected fusion to help, got {speedup:.2f}x"
+    elif verdict == "loses":
+        assert speedup <= 1.0, f"expected fusion to lose (<= 1.00x), got {speedup:.2f}x"
+    else:
+        assert speedup <= 1.05, f"expected no meaningful gain (<= 1.05x), got {speedup:.2f}x"

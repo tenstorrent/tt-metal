@@ -62,3 +62,38 @@ python -m ttnn.operations.examples.split_reader \
 ```
 
 Performance remains reported evidence, not a test assertion.
+
+## 2026-10-12 — helps / gain-shrinks calibration (Wormhole B0 n150)
+
+| stamp | value |
+|---|---|
+| board | Wormhole B0 n150 (8×8 Tensix grid) |
+| branch | `adamjanovic/perf-example-improvements` (base `adce58258c3`) |
+| test | `test_split_reader_regimes` (8 source Tensix cores × 8 tiles, 8-tile blocks, bf16) |
+| method | 5 warmup launches per variant; then 12 trials per variant, interleaved off/on; a trial = mean per-launch `DEVICE KERNEL DURATION`, `DEVICE NCRISC KERNEL DURATION`, `DEVICE BRISC KERNEL DURATION` over 5 launches; medians compared |
+
+Run 1 (min–max of device time over the 12 trials; per-RISC-V values are median kernel lifetimes):
+
+| regime | bytes per NoC read | reads/launch | off device ns | off NCRISC ns | on device ns | on NCRISC ns | on BRISC ns | speedup |
+|---|--:|--:|---|--:|---|--:|--:|--:|
+| helps_issue_bound_32B | 32 | 4096 | 147273.5 (147235.6–147332.0) | 146273.2 | 79967.5 (79838.0–81450.6) | 73651.6 | 79948.9 | 1.84× |
+| diminished_2048B | 2048 | 64 | 25041.4 (25025.6–25077.4) | 24050.9 | 18182.3 (18175.4–18252.4) | 14830.8 | 18143.8 | 1.38× |
+
+Speedups over four runs: 32 B 1.84 / 1.84 / 1.84 / 1.84×; 2,048 B 1.38 / 1.38 / 1.38 / 1.38×.
+
+Search for a flat regime (`test_split_reader_device_perf` with `SR_*` overrides, mean of 20 launches,
+device-time speedup on/off):
+
+| sources × tiles/source, block | 16 B | 32 B | 256 B | 512 B | 1024 B | 2048 B |
+|---|--:|--:|--:|--:|--:|--:|
+| 8 × 8, block 8 | — | 1.83× | 1.50× | — | 1.36× | 1.38× |
+| 8 × 8, block 4 | 1.89× | — | — | 1.32× | — | 1.29× |
+| 8 × 8, block 32 | — | 1.84× | 1.59× | — | 1.50× | 1.48× |
+| 8 × 32, block 8 | — | 1.81× | 1.52× | — | 1.36× | 1.36× |
+| 2 × 4, block 4 | — | 1.83× | 1.50× | — | 1.37× | 1.33× |
+| 8 × 1, block 4 | — | 1.80× | 1.47× | — | 1.35× | 1.34× |
+
+No reachable configuration is flat: the reader barriers after every tile, so even with one 2 KiB read
+per tile a second issuing RISC-V doubles the tiles in flight. The issue-bound component of the gain
+(the part that grows as reads get smaller at fixed bytes) disappears from ~1 KiB per read up; the
+~1.3–1.5× floor is per-tile barrier latency, not issue rate.

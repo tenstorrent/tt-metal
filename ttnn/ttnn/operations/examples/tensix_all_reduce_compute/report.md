@@ -16,3 +16,20 @@ box=bgd-lab-t3003-special-mstaletovic-for-reservation-40918  arch=Arch.WORMHOLE_
 | 16 | sfpu_serial_bf16 | 23313.8 | 0.0% | 1.00x |
 | 16 | fpu_dest_reuse_bf16 | 3569.0 | 0.2% | 6.53x |
 | 16 | fpu_dest_reuse_fp32 | 3455.4 | 0.1% | 6.75x |
+
+## 2026-10-12 regime check (Wormhole B0 n150)
+
+`test_tensix_all_reduce_compute_regimes`, interleaved A/B, median of 11 retained trials (min-max in
+brackets), ns per reduction. Three runs:
+
+| Case | Baseline | Lever | Run | baseline ns | lever ns | speedup |
+|---|---|---|---:|---|---|---:|
+| 8 blocks x 6 tiles, ki=100 | sfpu_serial_bf16 | fpu_dest_reuse_fp32 | 1 | 11178.4 [11169.1-11180.1] | 1898.8 [1868.7-1911.8] | 5.887x |
+| | | | 2 | 11178.2 [11169.2-11180.4] | 1900.8 [1868.7-1914.1] | 5.881x |
+| | | | 3 | 11178.4 [11169.1-11180.0] | 1904.8 [1884.9-1914.0] | 5.868x |
+| 2 blocks x 1 tile, ki=1 | sfpu_serial_bf16 | fpu_dest_reuse_fp32 | 1 | 783.0 [775.0-803.0] | 568.0 [559.0-583.0] | 1.379x |
+| | | | 2 | 783.0 [773.0-800.0] | 570.0 [556.0-586.0] | 1.374x |
+| | | | 3 | 783.0 [772.0-788.0] | 570.0 [545.0-589.0] | 1.374x |
+| 16 blocks x 6 tiles, ki=100 | fpu_dest_reuse_bf16 | fpu_dest_reuse_fp32 | 1 | 3610.9 [3580.1-3660.0] | 3491.6 [3455.4-3499.9] | 1.034x |
+| | | | 2 | 3616.9 [3580.9-3663.0] | 3491.3 [3455.0-3499.7] | 1.036x |
+| | | | 3 | 3611.0 [3579.7-3658.0] | 3491.2 [3454.9-3522.1] | 1.034x |
