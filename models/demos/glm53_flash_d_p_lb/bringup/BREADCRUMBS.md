@@ -408,7 +408,7 @@ The comparator's negative control (+1 on one output) is flagged on every chip.
   moe_grouped_topk / hash-gate tests: 310 pass; the 5 realistic sqrtsoftplus cases fail identically without the change.
 - MLA latent cache striped block-cyclic over the 8 chips (GLM-5.3 standard's DSA layout; follows the ring indexer, so
   serving with GLM_INDEXER_RING=0 keeps the replicated cache): [max_seq / 8, 512] per chip instead of [max_seq, 512]
-  on every chip (1M tokens, 11 DSA layers: 1.3 GiB + one 1.07 GiB gather scratch vs 10.7 GiB per chip). Per DSA layer
+  on every chip (1M tokens, 11 DSA layers: 1.4 GiB + one 1.0 GiB gather scratch vs 11 GiB per chip). Per DSA layer
   the populated prefix is gathered into one scratch shared by all layers (high_bw_all_gather, full-mesh snake) and
   sparse_sdpa reads it with its block-cyclic remap. Real layer 3, chunks of 2048 and 5120 from 0 and a prefix reload:
   outputs and state bit-identical to the replicated cache (tests/zz_scratch_striped_latent.py). Cost at the longest
