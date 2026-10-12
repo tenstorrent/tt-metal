@@ -94,7 +94,15 @@ against upstream's modules, run on CPU with the checkpoint's weights.
 ### Detector
 
 `tt/tt_bevformer.py` runs the detector end to end: backbone and FPN, the perception transformer,
-and the head, for one image shape and batch size (the backbone's convs are pinned to it).
+and the head, for one image shape and batch size (the backbone's convs are pinned to it). Its
+output ends, as upstream's `simple_test` does, in 3D boxes from the last decoder layer.
+
+- `detect(cls_scores, bbox_preds)` runs upstream's `BEVFormerHead.get_bboxes` on device, in the
+  forward's trace: the NMS-free coder's top-k and box decoding, the post-center range test as a
+  validity mask, and each box's z moved to its bottom face, on fixed `(bs, 300)` tensors.
+  `get_bboxes(scores, labels, boxes, valid)` only drops the invalid boxes on the host: the count
+  that remains depends on the data, which no fixed-shape device tensor can hold. For BEVFormer-base
+  it drops none, as the head scales the box centers into `pc_range`, inside the post-center range.
 
 - `prepare_frame(img_metas, frame)` prepares or refills the frame's buffers; the caller carries the
   previous BEV between frames, as upstream does.
@@ -142,16 +150,16 @@ and, per decoder layer, the classification branch.
 layer by score, their box predictions decoded to `(cx, cy, cz, w, l, h, yaw, vx, vy)`, and the
 range and score filters.
 
-- The top-k and the decoding run on device, and the top-k is exact. On Blackhole a float32
-  top-k over all 9000 scores is far slower than a bfloat16 one, so the exact k-th logit is found
-  first: a bfloat16 top-k gives it rounded, and a bisection on counts narrows that to the float32
-  value. A bfloat16 top-k of the logits minus it then selects exactly the top 300, and a float32
-  top-k sorts them.
-- The range and score tests, upstream's lowering of the score threshold when no score passes it
-  included, run on device as a validity mask over the 300 boxes. Only dropping the invalid boxes
-  runs on host: it leaves a data-dependent number of boxes and ends the pipeline.
-- cz stays at the box's gravity center; upstream `get_bboxes` moves it to the bottom face after
-  the coder.
+- The top-k and the decoding run on device. A float32 top-k over all 9000 scores is slow, so the
+  logits are ranked in bfloat16 against a pivot, the bfloat16 k-th logit, and the 512 candidates
+  are re-ranked exactly in float32.
+- The range test runs on device too, as a validity mask on the 300 boxes; only dropping the
+  invalid ones runs on host (`compact`), as the count left depends on the data and device tensors
+  have fixed shapes.
+- `decode` keeps cz at the box's gravity center, as upstream's coder does; `finalize` moves it to
+  the bottom face on device, as upstream `get_bboxes` does after the coder.
+- Upstream's `score_threshold` is not ported: no BEVFormer config sets it, and its fallback lowers
+  the threshold until some score passes, which depends on the scores.
 
 ## Project Structure
 
@@ -248,7 +256,8 @@ Tests the detection head, and the coder on the head's outputs.
 - The box centers within a mean and a max error in metres (`tests/head_common.py`), which PCC
   over the 102.4 m axes does not bound
 - That the coder, on the head's outputs, selects pairs within twice the score error of the reference
-  head's top 300, with scores and boxes that match the reference's at those pairs by PCC
+  head's top 300 covering at least 90% of it, with the reference's scores (within 0.02) at those
+  pairs, and that its device box decoding matches the host's on the same predictions
 
 The decoder and reg branches use `tests/decoder_common.py`'s dummy-weight init, and the reference
 points BEVFormer's xavier init (`tests/head_common.py`).
@@ -313,7 +322,9 @@ pytest models/experimental/bevformer/tests/pcc/test_perception_transformer.py
 
 #### test_bevformer.py
 Tests the detector end to end on random camera images over two consecutive frames: the BEV, the
-last decoder layer's class logits and, channel by channel, its box predictions, at PCC 0.95.
+last decoder layer's class logits and, channel by channel, its box predictions, at PCC 0.95, and
+the 3D boxes: the device detections are checked as in `test_head.py`, and the host compaction
+runs on them.
 
 It uses dummy weights by default (the backbone's, encoder's and head's tests' weights). With
 `BEVFORMER_CHECKPOINT` set to the BEVFormer-base checkpoint

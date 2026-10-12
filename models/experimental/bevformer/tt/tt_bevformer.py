@@ -8,6 +8,11 @@ A frame's host-derived inputs (CAN bus, ego shift, previous-BEV rotation, the ca
 plan) are prepared by :meth:`TtBEVFormer.prepare_frame` into buffers refilled in place, so the
 forward runs on device only and a trace captured with a frame replays on the next one. The caller
 carries the previous BEV between frames, as upstream's ``forward_test`` does.
+
+:meth:`TtBEVFormer.detect` runs upstream's ``get_bboxes`` on device, in the forward's trace: the
+coder's top-k, the box decoding, the range test as a validity mask and z moved to the box's bottom
+face, all fixed ``(bs, max_num)`` tensors. :meth:`TtBEVFormer.get_bboxes` only drops the invalid
+boxes on the host, as no device tensor can hold a data-dependent count (see ``TtNMSFreeCoder``).
 """
 
 import ttnn
@@ -15,6 +20,7 @@ import ttnn
 from models.experimental.bevformer import model_config
 from models.experimental.bevformer.tt.tt_fpn import TtFPN
 from models.experimental.bevformer.tt.tt_head import TtBEVFormerHead
+from models.experimental.bevformer.tt.tt_nms_free_coder import TtNMSFreeCoder
 from models.experimental.bevformer.tt.tt_perception_transformer import TtPerceptionTransformer
 from models.experimental.bevformer.tt.tt_resnet import TtResNet
 
@@ -60,6 +66,7 @@ class TtBEVFormer:
         if self.batch_size > 1:
             bev_pos = ttnn.repeat(bev_pos, ttnn.Shape((self.batch_size, 1, 1)))
         self.bev_pos = bev_pos
+        self.coder = TtNMSFreeCoder()
 
     def prepare_frame(self, img_metas, frame=None, capacity=None):
         """See ``TtPerceptionTransformer.prepare_frame``."""
@@ -79,3 +86,16 @@ class TtBEVFormer:
         bev_embed = self.transformer(levels, self.params.bev_queries, self.bev_pos, frame, prev_bev=prev_bev)
         cls_scores, bbox_preds = self.head(bev_embed)
         return cls_scores, bbox_preds, bev_embed
+
+    def detect(self, cls_scores, bbox_preds):
+        """The last decoder layer's detections, on device: ``TtNMSFreeCoder.topk``'s scores, labels
+        and query indexes, and ``TtNMSFreeCoder.finalize``'s boxes and validity mask."""
+        scores, labels, query_index, boxes = self.coder.topk(cls_scores[-1], bbox_preds[-1])
+        boxes, valid = self.coder.finalize(boxes)
+        return scores, labels, query_index, boxes, valid
+
+    @staticmethod
+    def get_bboxes(scores, labels, boxes, valid):
+        """:meth:`detect`'s outputs to one ``(boxes, scores, labels)`` per sample on the host, the
+        valid ones, as ``reference.bevformer.BEVFormer.get_bboxes`` returns them."""
+        return TtNMSFreeCoder.compact(scores, labels, boxes, valid)

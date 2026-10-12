@@ -24,6 +24,7 @@ import torch
 
 from models.experimental.bevformer.model_config import (
     BOX_CENTER,
+    BOX_SIZE,
     CODE_COS,
     CODE_H,
     CODE_SIN,
@@ -74,6 +75,14 @@ def filter_boxes(scores, labels, boxes, post_center_range, score_threshold=None)
             thresh_mask = scores >= tmp_score
         mask &= thresh_mask
     return {"bboxes": boxes[mask], "scores": scores[mask], "labels": labels[mask]}
+
+
+def bottom_center(boxes):
+    """``(N, 9)`` decoded boxes with cz moved from the box's gravity center to its bottom face, as
+    upstream ``BEVFormerHead.get_bboxes`` sets it before building the LiDAR boxes."""
+    boxes = boxes.clone()
+    boxes[:, BOX_CENTER.start + 2] -= boxes[:, BOX_SIZE.start + 2] * 0.5
+    return boxes
 
 
 class NMSFreeCoder:
