@@ -717,6 +717,8 @@ struct perf_counter_scoped
 #endif
 #if defined(LLK_PERF_INIT_ONLY)
         llk_barrier::rendezvous<LOOP_PAD ? llk_barrier::PARK_LOOP : llk_barrier::PARK_INIT_TS>(
+#elif defined(LLK_DBG_BARRIER) // INIT: the thread released first (unpack) restarts the counters after its release
+        llk_barrier::rendezvous<LOOP_PAD ? llk_barrier::PARK_LOOP : (llk_barrier::THREAD_ID == 0 ? llk_barrier::PARK_SIZED_ARM : llk_barrier::PARK_SIZED)>(
 #else
         llk_barrier::rendezvous<LOOP_PAD>(
 #endif
