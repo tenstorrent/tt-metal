@@ -5,6 +5,7 @@
 #include <gtest/gtest.h>
 
 #include <cstdint>
+#include <limits>
 #include <map>
 #include <string>
 #include <vector>
@@ -712,6 +713,34 @@ TEST(KvChunkAddressTable, CPU_SetStridedRowRejectsBadInput) {
     std::vector<uint64_t> too_long(9, 0x1);                                                  // step > 8 position chunks
     EXPECT_ANY_THROW(
         table.set_strided_row(0, 0, 64, too_long, std::vector<int64_t>(9, 0), std::vector<DeviceGroupIndex>(9, g0)));
+}
+
+TEST(KvChunkAddressTable, CPU_SetStridedRowOverwritesTheRow) {
+    auto table = make_strided_only_table();
+    auto g0 = table.add_device_group({make_fnid(0, 0)});
+    auto g1 = table.add_device_group({make_fnid(0, 1)});
+    table.set_strided_row(0, 0, 64, {0x100, 0x200}, {0x10, 0x20}, {g0, g1});
+    // Same row again with a different step: replaces, never appends.
+    table.set_strided_row(0, 0, 128, {0x1000, 0x2000, 0x3000, 0x4000}, {0x8, 0x8, 0x8, 0x8}, {g1, g1, g0, g0});
+    for (uint32_t c = 0; c < 8; c++) {
+        const auto loc = table.lookup(0, c * 32, 0);
+        EXPECT_EQ(loc.noc_addr, 0x1000u * (c % 4 + 1) + (c / 4) * 0x8u);
+        EXPECT_EQ(loc.size_bytes, 128u);
+        EXPECT_EQ(*loc.device_group_index, c % 4 < 2 ? *g1 : *g0);
+    }
+}
+
+TEST(KvChunkAddressTable, CPU_SetStridedRowRejectsZeroSizeAndWrap) {
+    auto table = make_strided_only_table();  // 8 position chunks
+    auto g0 = table.add_device_group({make_fnid(0, 0)});
+    EXPECT_ANY_THROW(table.set_strided_row(0, 0, 0, {0x100}, {0x10}, {g0}));  // zero-size chunks
+    // step 1 -> 8 chunks: base 0x30 with stride -0x10 reaches -0x40 on the last chunk.
+    EXPECT_ANY_THROW(table.set_strided_row(0, 0, 64, {0x30}, {-0x10}, {g0}));
+    EXPECT_ANY_THROW(table.set_strided_row(
+        0, 0, 64, {std::numeric_limits<uint64_t>::max() - 0x10}, {0x10}, {g0}));  // overflows past 2^64
+    // The last address landing exactly on 0 is fine.
+    EXPECT_NO_THROW(table.set_strided_row(0, 0, 64, {0x70}, {-0x10}, {g0}));
+    EXPECT_EQ(table.lookup(0, 7 * 32, 0).noc_addr, 0u);
 }
 
 TEST(KvChunkAddressTable, CPU_SetStridedRowOnUnrolledConfigThrows) {

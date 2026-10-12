@@ -226,8 +226,36 @@ void bind_disaggregation_api(nb::module_& mod) {
             R"(
             Author one (slot, layer) row of a STRIDED_ROWS config: chunk c resolves to
             bases[c % step] + (c // step) * strides[c % step] on device group
-            device_group_indices[c % step], where step = len(bases).
+            device_group_indices[c % step], where step = len(bases). device_group_indices
+            takes ints or the DeviceGroupIndex objects add_device_group() returns.
             )")
+        .def(
+            "set_strided_row",
+            [](KvChunkAddressTable& table,
+               uint32_t layer,
+               uint32_t slot,
+               uint32_t size_bytes,
+               std::vector<uint64_t> bases,
+               std::vector<int64_t> strides,
+               std::vector<DeviceGroupIndex> device_group_indices,
+               uint32_t config_id) {
+                table.set_strided_row(
+                    layer,
+                    slot,
+                    size_bytes,
+                    std::move(bases),
+                    std::move(strides),
+                    std::move(device_group_indices),
+                    config_id);
+            },
+            nb::arg("layer"),
+            nb::arg("slot"),
+            nb::arg("size_bytes"),
+            nb::arg("bases"),
+            nb::arg("strides"),
+            nb::arg("device_group_indices"),
+            nb::arg("config_id") = 0,
+            "Overload of set_strided_row taking the DeviceGroupIndex objects add_device_group() returns.")
         .def(
             "set_fabric_node_host",
             &KvChunkAddressTable::set_fabric_node_host,

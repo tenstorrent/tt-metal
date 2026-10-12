@@ -8,6 +8,7 @@
 
 #include <algorithm>
 #include <cstring>
+#include <limits>
 
 #include <tt-metalium/experimental/fabric/control_plane.hpp>
 #include <tt-metalium/tt_metal.hpp>
@@ -270,8 +271,8 @@ void KvChunkAddressTable::set(
     auto* grid = std::get_if<UnrolledGrid>(&maps_[config_id]);
     TT_FATAL(
         grid != nullptr,
-        "set() on a compressed (STRIDED_ROWS) config {} — compressed maps are built at import; "
-        "build unrolled and serialize, or install_strided_map()",
+        "set() on a compressed (STRIDED_ROWS) config {} — author its rows with set_strided_row(), "
+        "or build it unrolled and serialize / install_strided_map()",
         config_id);
     grid->entries[grid->flat_index(layer, to_chunk_index(config_id, position), slot)] = location;
 }
@@ -336,6 +337,24 @@ void KvChunkAddressTable::set_strided_row(
         device_group_indices.size());
     for (const auto& dg : device_group_indices) {
         TT_FATAL(*dg < device_groups_.size(), "device group index {} not registered", *dg);
+    }
+    // A zero-size chunk with base 0 / group 0 is indistinguishable from an unset cell.
+    TT_FATAL(size_bytes > 0, "strided row size_bytes must be > 0 (config {})", config_id);
+    for (size_t r = 0; r < step; r++) {
+        // Residue r holds ceil((npc - r) / step) chunks; its last address must not wrap.
+        const uint64_t count = (map->num_position_chunks - r + step - 1) / step;
+        const __int128 last = static_cast<__int128>(bases[r]) + static_cast<__int128>(strides[r]) * (count - 1);
+        TT_FATAL(
+            last >= 0 && last <= static_cast<__int128>(std::numeric_limits<uint64_t>::max()),
+            "strided row residue {} wraps: base {:#x} + stride {} x {} (config {})",
+            r,
+            bases[r],
+            strides[r],
+            count - 1,
+            config_id);
+        if (count <= 1) {
+            strides[r] = 0;  // unused; canonical like the serializer's detect_row(), so exports compare equal
+        }
     }
     auto& row = map->rows[static_cast<size_t>(slot) * map->num_layers + layer];
     row.step = static_cast<uint32_t>(step);
