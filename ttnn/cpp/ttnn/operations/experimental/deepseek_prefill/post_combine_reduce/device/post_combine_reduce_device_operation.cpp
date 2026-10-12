@@ -91,8 +91,10 @@ void PostCombineReduceDeviceOperation::validate_on_program_cache_miss(
         "combine_output must be bfloat16, or packed per-token FP8_E4M3 rows (DeepSeek skip path only)");
     TT_FATAL(
         operation_attributes.fp8_scale_block_w == 0 ||
-            (operation_attributes.fp8_scale_block_w == 32 && combine_output.dtype() == DataType::FP8_E4M3),
-        "fp8_scale_block_w must be 0, or 32 with FP8_E4M3 combine rows; got {}",
+            ((operation_attributes.fp8_scale_block_w == 32 || operation_attributes.fp8_scale_block_w == 64 ||
+              operation_attributes.fp8_scale_block_w == 128) &&
+             combine_output.dtype() == DataType::FP8_E4M3),
+        "fp8_scale_block_w must be 0, or 32 / 64 / 128 with FP8_E4M3 combine rows; got {}",
         operation_attributes.fp8_scale_block_w);
     TT_FATAL(weights.layout() == ttnn::Layout::ROW_MAJOR, "weights must be ROW_MAJOR");
     TT_FATAL(weights.dtype() == DataType::BFLOAT16, "weights must be bfloat16");
@@ -134,7 +136,10 @@ tt::tt_metal::TensorSpec PostCombineReduceDeviceOperation::compute_output_specs(
     auto out_shape = output_shape;
     if (fp8_in) {
         // drop the 64-B row-scale tail, or the H/32 fp32 block scales (row = H + 4 * H / 32 = 9 H / 8)
-        out_shape[-1] = operation_attributes.fp8_scale_block_w != 0 ? output_shape[-1] / 9 * 8 : output_shape[-1] - 64;
+        out_shape[-1] = operation_attributes.fp8_scale_block_w != 0
+                            ? output_shape[-1] * operation_attributes.fp8_scale_block_w /
+                                  (operation_attributes.fp8_scale_block_w + 4)
+                            : output_shape[-1] - 64;
     }
     return tt::tt_metal::TensorSpec(
         out_shape,

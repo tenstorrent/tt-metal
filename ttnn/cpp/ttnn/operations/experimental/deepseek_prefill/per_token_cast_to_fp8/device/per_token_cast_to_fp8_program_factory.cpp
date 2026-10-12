@@ -399,10 +399,18 @@ ttnn::device_operation::CachedProgram<PerTokenCastToFp8SharedVariables> create_p
         scale_scratch_bytes = scale_page_bytes;
     }
 
-    if (!attrs.per_row_scale && attrs.scale_block_w == 32 && attrs.round_scale_to_power_of_two) {
+    // 1x128 (GLM 5.3) rides the same fast path on bf16 / bf8_b tiles: a 128-wide chunk is one scale block, so the
+    // compute folds the 4 tiles' row maxima in DEST and packs one 1/scale tile per chunk (FAST_BLOCK4).
+    const bool fast_block4 = !attrs.per_row_scale && attrs.scale_block_w == 128 && attrs.round_scale_to_power_of_two &&
+                             tile_layout && input.dtype() != DataType::FLOAT32;
+    if (!attrs.per_row_scale && (attrs.scale_block_w == 32 || fast_block4) && attrs.round_scale_to_power_of_two) {
         defines["FAST_1X32"] = "1";  // one-pass pow2 scale + 1/scale on column 0, one acquire per phase
         if (tile_layout && input.dtype() != DataType::FLOAT32) {
             defines["DIRECT_SRC"] = "1";  // bf16 / bf8_b tiles are exact in SrcA: no fp32 copy
+        }
+        if (fast_block4) {
+            defines["FAST_BLOCK4"] = "1";
+            defines["Q_SFPU_AMAX"] = "1";  // the 4-tile fold only exists in the SFPU amax path
         }
         if (tile_layout && attrs.token_count_aware) {
             // Units of 2 chunks (256 columns) of one tile-row: 256-B row writes, and enough units per core to even

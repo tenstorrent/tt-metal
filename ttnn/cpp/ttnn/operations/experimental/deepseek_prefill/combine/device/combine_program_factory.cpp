@@ -401,8 +401,10 @@ tt::tt_metal::ProgramDescriptor build_program_for_coord(
 
     // Rows the sender keeps in flight to the fabric: each row gets its own packet header and goes into the
     // current EDM slot non-blocking, with one flush per group instead of a flush-blocking header per row
-    // (K3 fp8 combine 290 -> 251 us; 2: 257, 8: 249).
-    constexpr uint32_t combine_pipe = 4;
+    // (K3 fp8 combine 290 -> 251 us; 2: 257, 8: 249). Only when a row fits one fabric packet: a wider row (GLM bf16,
+    // 12 KB) is split into several packets by the per-row path, which the in-flight slots do not do.
+    const uint32_t combine_pipe =
+        detail::get_aligned_page_size(output_tensor) <= static_cast<uint32_t>(fabric_max_packet_size) ? 4u : 1u;
     // Rows per untilize batch. Both layouts route through the untilizer pipeline and share the same receive_buf
     // ring / sender polling loop. TILE input is untilized a tile height at a time; ROW_MAJOR rows go in batches
     // of 4: batches are dealt round-robin over all untilizer cores (alternating senders), and at ~90 tokens per

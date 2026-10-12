@@ -42,8 +42,11 @@ tt::tt_metal::ProgramDescriptor create_fp8_block_descriptor(
     constexpr uint32_t TOKENS_PER_CHUNK = 32;
     constexpr uint32_t DRAM_ALIGN = 64;  // Blackhole DRAM reads keep source and destination congruent mod 64 B
     const uint32_t row_bytes = combine_shape[-1];
-    const uint32_t emb_dim = row_bytes / 9 * 8;  // H + 4 * H / 32
-    TT_FATAL(emb_dim * 9 == row_bytes * 8 && emb_dim % TILE_WIDTH == 0, "bad 1x32 fp8 row width {}", row_bytes);
+    // Rows are [H e4m3 | H / sbw fp32 scales]; one scale covers tiles_per_scale = sbw / 32 tiles of a row.
+    const uint32_t sbw = operation_attributes.fp8_scale_block_w;
+    const uint32_t tiles_per_scale = sbw / TILE_WIDTH;
+    const uint32_t emb_dim = row_bytes * sbw / (sbw + 4);  // H + 4 * H / sbw
+    TT_FATAL(emb_dim * (sbw + 4) == row_bytes * sbw && emb_dim % sbw == 0, "bad 1x{} fp8 row width {}", sbw, row_bytes);
     const uint32_t emb_wt = emb_dim / TILE_WIDTH;
     const uint32_t num_experts = combine_shape[expert_dim];
     uint32_t num_tokens = 1;
@@ -60,7 +63,7 @@ tt::tt_metal::ProgramDescriptor create_fp8_block_descriptor(
     // narrowest part whose parts x blocks still fit the grid, else the widest.
     uint32_t part_wt = 0;
     for (uint32_t d = 4; d <= 32 && d <= emb_wt; d += 4) {
-        if (emb_wt % d == 0) {
+        if (emb_wt % d == 0 && d % tiles_per_scale == 0) {
             part_wt = d;
             if ((emb_wt / d) * total_chunks <= num_cores_total) {
                 break;
@@ -172,6 +175,7 @@ tt::tt_metal::ProgramDescriptor create_fp8_block_descriptor(
     reader_kernel_desc.source_type = tt::tt_metal::KernelDescriptor::SourceType::FILE_PATH;
     reader_kernel_desc.core_ranges = core_range_set;
     reader_kernel_desc.compile_time_args = std::move(reader_ct_args);
+    reader_kernel_desc.defines = {{"TILES_PER_SCALE", std::to_string(tiles_per_scale)}};
     reader_kernel_desc.config = tt::tt_metal::ReaderConfigDescriptor{};
 
     tt::tt_metal::KernelDescriptor compute_kernel_desc;
@@ -208,10 +212,11 @@ tt::tt_metal::ProgramDescriptor create_fp8_block_descriptor(
         }
         const uint32_t chunks_this_core = base_chunks_per_core + (j < extra_chunks ? 1 : 0);
         const uint32_t part_offset = part * part_row_bytes;
-        const uint32_t scale_first = emb_dim + part * part_wt * 4;
+        const uint32_t scale_first = emb_dim + part * part_wt / tiles_per_scale * 4;
         const uint32_t scale_window = scale_first & ~(DRAM_ALIGN - 1);
         const uint32_t scale_skip_words = (scale_first - scale_window) / 4;
-        const uint32_t scale_read_bytes = tt::round_up(scale_first - scale_window + part_wt * 4, DRAM_ALIGN);
+        const uint32_t scale_read_bytes =
+            tt::round_up(scale_first - scale_window + part_wt / tiles_per_scale * 4, DRAM_ALIGN);
         TT_FATAL(
             scale_window + scale_read_bytes <= combine_aligned_page_size && scale_read_bytes <= scale_slot_bytes,
             "1x32 fp8 scale window [{}, +{}) exceeds the {}-B page",

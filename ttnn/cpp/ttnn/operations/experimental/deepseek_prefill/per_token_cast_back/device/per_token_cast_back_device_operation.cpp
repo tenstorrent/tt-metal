@@ -152,8 +152,10 @@ void PerTokenCastBackDeviceOperation::validate_on_program_cache_miss(
     TT_FATAL(sbw % tile_w == 0, "per_token_cast_back: tile width {} must divide scale_block_w={}", tile_w, sbw);
     if (attrs.tile_output) {
         TT_FATAL(
-            token_count_aware && attrs.scales_in_row_tail && sbw == 32 && !attrs.per_row_scale,
-            "per_token_cast_back: tile_output needs token_count_aware, scales_in_row_tail and scale_block_w 32");
+            token_count_aware && attrs.scales_in_row_tail && !attrs.per_row_scale &&
+                (sbw == 32 || attrs.row_segments == 1),
+            "per_token_cast_back: tile_output needs token_count_aware, scales_in_row_tail and block scales "
+            "(row_segments > 1 only with scale_block_w 32)");
         TT_FATAL(
             attrs.output_dtype == tt::tt_metal::DataType::BFLOAT8_B ||
                 attrs.output_dtype == tt::tt_metal::DataType::BFLOAT16,

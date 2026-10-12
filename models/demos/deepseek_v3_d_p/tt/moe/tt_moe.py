@@ -52,6 +52,9 @@ _MOE_FUSED_DQ2 = os.environ.get("MOE_FUSED_DQ2", "1") == "1"
 # more, but both L1 buffers together overlap the shared expert's CBs (it runs beside combine), so Q2 defaults to
 # DRAM whenever combine's output is in L1.
 _MOE_COMBINE_L1 = os.environ.get("MOE_COMBINE_L1", "1") == "1"
+# Round-to-nearest-even e4m3 in Q1 / Q2 (an SFPU pass) instead of packer truncation. "auto": on for 1x128 scales,
+# where truncation cost GLM 5.3 ~0.0019 final PCC vs bf16 (RNE: 0.0004) for ~3 us per Q.
+_MOE_FP8_RNE = os.environ.get("MOE_FP8_RNE", "auto")
 _MOE_Q2_L1 = os.environ.get("MOE_Q2_L1", "0" if _MOE_COMBINE_L1 else "1") == "1"
 _MOE_SPLIT_SHARED = os.environ.get("MOE_SPLIT_SHARED")
 # 1x32 fp8 dispatch under LatentMoE: Q1 on each chip's to_latent slice before the all-gather (MOE_Q1_PRE_GATHER=0:
@@ -382,6 +385,7 @@ class TtMoe(LightweightModule):
         self.dispatch_fp8 = dispatch_wire == "fp8"
         self.fp8_scale_block = fp8_scale_block
         self.fp8_per_row = fp8_scale_block == 0
+        self._fp8_rne = _MOE_FP8_RNE == "1" or (_MOE_FP8_RNE == "auto" and fp8_scale_block == 128)
         self._fp8_block_kw = dict(
             scale_block_w=128 if self.fp8_per_row else fp8_scale_block, per_row_scale=self.fp8_per_row
         )
@@ -969,7 +973,7 @@ class TtMoe(LightweightModule):
                 routed_x,
                 memory_config=ttnn.DRAM_MEMORY_CONFIG,
                 round_scale_to_power_of_two=True,
-                round_to_nearest_even=False,  # packer truncation, no SFPU rounding pass
+                round_to_nearest_even=self._fp8_rne,
                 pack_scales_in_row=not self.fp8_per_row,
                 **self._fp8_block_kw,
             )
@@ -1085,7 +1089,7 @@ class TtMoe(LightweightModule):
             # DQ1 (block scales): unpack the valid prefix of [H e4m3 | H/block fp32] rows, reading each row's scales
             # from its own tail. 1x32: straight to bf8_b tiles (the expert's tiled-x path, written in place: no
             # untilize here, no per-core tilize there); otherwise bf16 rows for the expert's fast tilize.
-            dq1_tile = _MOE_DQ1_TILE and self.fp8_scale_block == 32
+            dq1_tile = _MOE_DQ1_TILE and self.fp8_scale_block in (32, 64, 128)
             dispatched_fp8 = dispatched_buffer
             dispatched_buffer = ttnn.experimental.deepseek_prefill.per_token_cast_back(
                 dispatched_fp8,
@@ -1162,7 +1166,7 @@ class TtMoe(LightweightModule):
                 # L1 interleaved: the 128-1024 B partial-row writes are NoC/DRAM-endpoint bound in DRAM.
                 memory_config=ttnn.L1_MEMORY_CONFIG if _MOE_Q2_L1 else ttnn.DRAM_MEMORY_CONFIG,
                 round_scale_to_power_of_two=True,
-                round_to_nearest_even=False,  # packer truncation, no SFPU rounding pass
+                round_to_nearest_even=self._fp8_rne,
                 **self._fp8_block_kw,
                 token_count_aware=True,
                 expert_region_offsets=tt_expert_region_offsets,
@@ -1214,7 +1218,7 @@ class TtMoe(LightweightModule):
             ttnn.deallocate(metadata)
         # Fused DQ2 in post_combine_reduce: per-row scales (SFPU scalar multiplies) or 1x32 block scales
         # (tilize 32 tokens' compacted local slots, column-broadcast multiplies on the FPU).
-        fused_dq2 = self.combine_fp8 and _MOE_FUSED_DQ2 and (self.fp8_per_row or self.fp8_scale_block == 32)
+        fused_dq2 = self.combine_fp8 and _MOE_FUSED_DQ2 and (self.fp8_per_row or self.fp8_scale_block in (32, 64, 128))
         if self.combine_fp8 and not fused_dq2:
             # DQ2 (v1, standalone): unpack [e4m3 | fp32 scales] rows back to bf16 for the weighted reduce. Slots of
             # non-local experts are never written by combine; post_combine_reduce never reads them.

@@ -399,7 +399,14 @@ void kernel_main() {
     //   C: x * bcast_col(1/scale) (FPU) -> pack_untilize to e4m3.
     // A bf16 / bf8_b TILE input is read straight from cb_in (exact in SrcA); ROW_MAJOR or fp32 input goes
     // through the fp32 cb_tile first.
+#ifdef FAST_BLOCK4
+    // 1x128: the 4 tiles of a chunk share one scale per row (one 1/scale tile per chunk).
+    static_assert(scale_block_wt == 4 && tiles_per_block == 4, "FAST_BLOCK4: one scale per 4-tile chunk row");
+    constexpr uint32_t inv_per_chunk = 1;
+#else
     static_assert(scale_block_wt == 1 && tiles_per_block == 4, "FAST_1X32: one scale per tile row, 4-tile chunks");
+    constexpr uint32_t inv_per_chunk = tiles_per_block;
+#endif
 #ifdef DIRECT_SRC
     constexpr uint32_t cb_src_id = cb_in_id;
 #else
@@ -429,9 +436,11 @@ void kernel_main() {
         cb_src.wait_front(unit_tiles);
 
 #ifdef Q_SFPU_AMAX
-        // A+B in DEST: copy, then one fused SFPU pass per tile (|x| -> row max -> pow2 1/scale, kept in registers).
-        cb_scale_tiles.reserve_back(unit_tiles);
-        cb_inv_scale_tiles.reserve_back(unit_tiles);
+        // A+B in DEST: copy, then one fused SFPU pass per tile (|x| -> row max -> pow2 1/scale, kept in registers);
+        // 1x128 (FAST_BLOCK4): row max per tile, then one fold of the 4 tiles' maxima -> pow2 into tile 0.
+        constexpr uint32_t unit_inv_tiles = Q_UNIT * inv_per_chunk;
+        cb_scale_tiles.reserve_back(unit_inv_tiles);
+        cb_inv_scale_tiles.reserve_back(unit_inv_tiles);
         reconfig_full_operand_srca(cb_src_id);
         pack_reconfig_data_format(cb_inv_scale_tiles_id);
         for (uint32_t c = 0; c < Q_UNIT; ++c) {
@@ -441,21 +450,28 @@ void kernel_main() {
                 copy_tile(cb_src_id, c * tiles_per_block + k, k);
             }
             MATH((SFPU_UNARY_INIT(unused)));
+#ifdef FAST_BLOCK4
+            for (uint32_t k = 0; k < tiles_per_block; ++k) {
+                MATH((amax_rows_tile_call(k)));
+            }
+            MATH((fold4_pow2_inv_scale_tile(0, clamp_min_bits, inv_448_bits)));
+#else
             for (uint32_t k = 0; k < tiles_per_block; ++k) {
                 MATH((amax_pow2_inv_scale_tile(k, clamp_min_bits, inv_448_bits)));
             }
+#endif
             tile_regs_commit();
             tile_regs_wait();
-            for (uint32_t k = 0; k < tiles_per_block; ++k) {
+            for (uint32_t k = 0; k < inv_per_chunk; ++k) {
                 pack_tile(k, cb_inv_scale_tiles_id);
             }
-            for (uint32_t k = 0; k < tiles_per_block; ++k) {
+            for (uint32_t k = 0; k < inv_per_chunk; ++k) {
                 pack_tile(k, cb_scale_tiles_id);
             }
             tile_regs_release();
         }
-        cb_scale_tiles.push_back(unit_tiles);
-        cb_inv_scale_tiles.push_back(unit_tiles);
+        cb_scale_tiles.push_back(unit_inv_tiles);
+        cb_inv_scale_tiles.push_back(unit_inv_tiles);
 #else
         // A: |x|
         reconfig_full_operand_srca(cb_src_id);
@@ -512,7 +528,7 @@ void kernel_main() {
 #endif
 
         // C: x * (1/scale) per row -> e4m3 rows, each chunk at its column of the unit-wide output rows
-        cb_inv_scale_tiles.wait_front(unit_tiles);
+        cb_inv_scale_tiles.wait_front(Q_UNIT * inv_per_chunk);
         reconfig_data_format(cb_src_id, cb_inv_scale_tiles_id);
         mul_bcast_cols_init(cb_src_id, cb_inv_scale_tiles_id);
         pack_untilize_dest_init<tiles_per_block, group_tiles>(cb_output_e4m3_id);
@@ -523,7 +539,7 @@ void kernel_main() {
             tile_regs_acquire();
             for (uint32_t k = 0; k < tiles_per_block; ++k) {
                 const uint32_t t = c * tiles_per_block + k;
-                mul_tiles_bcast_cols(cb_src_id, cb_inv_scale_tiles_id, t, t, k);
+                mul_tiles_bcast_cols(cb_src_id, cb_inv_scale_tiles_id, t, c * inv_per_chunk + k % inv_per_chunk, k);
             }
             if constexpr (round_to_nearest_even) {
                 MATH((SFPU_UNARY_INIT(unused)));
@@ -545,7 +561,7 @@ void kernel_main() {
             ++group_pos;
         }
         cb_src.pop_front(unit_tiles);
-        cb_inv_scale_tiles.pop_front(unit_tiles);
+        cb_inv_scale_tiles.pop_front(Q_UNIT * inv_per_chunk);
     }
 #else
     for (uint32_t unit = 0; unit < num_blocks; ++unit) {

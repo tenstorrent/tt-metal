@@ -12,6 +12,9 @@
 // multiplies. Rows past an expert's count inside a tile-row are dequantized garbage, as on the row-major path; the
 // expert never emits them.
 
+#ifndef TILES_PER_SCALE
+#define TILES_PER_SCALE 1
+#endif
 #include <cstdint>
 
 #include "api/dataflow/dataflow_api.h"
@@ -117,10 +120,11 @@ void kernel_main() {
         const uint32_t in_seg = tile0 - seg * seg_tiles;
         const uint32_t col_bytes = seg * seg_bytes + in_seg * 32;
         // The unit's G scales follow its segment's e4m3 bytes: read the 64-B aligned window holding them.
-        const uint32_t scale_first = seg * seg_bytes + seg_tiles * 32 + in_seg * 4;
+        const uint32_t scale_first = seg * seg_bytes + seg_tiles * 32 + in_seg / TILES_PER_SCALE * 4;
         const uint32_t scale_window = scale_first & ~(DRAM_ALIGN - 1);
         const uint32_t scale_skip_words = (scale_first - scale_window) / 4;
-        const uint32_t scale_read_bytes = (scale_first - scale_window + G * 4 + DRAM_ALIGN - 1) & ~(DRAM_ALIGN - 1);
+        const uint32_t scale_read_bytes =
+            (scale_first - scale_window + G / TILES_PER_SCALE * 4 + DRAM_ALIGN - 1) & ~(DRAM_ALIGN - 1);
 
         cb_in_obj.reserve_back(G);
         for (uint32_t r = 0; r < TILE_H; ++r) {
@@ -151,15 +155,15 @@ void kernel_main() {
             const uint32_t col0 = (r < 16) ? r * 16 : 512 + (r - 16) * 16;
             const uint32_t* row_scales =
                 reinterpret_cast<const uint32_t*>(scratch + r * scale_slot_bytes) + scale_skip_words;
-            uint32_t v[G];
+            uint32_t v[G / TILES_PER_SCALE];
 #pragma GCC unroll 32
-            for (uint32_t j = 0; j < G; ++j) {
+            for (uint32_t j = 0; j < G / TILES_PER_SCALE; ++j) {
                 v[j] = row_scales[j];
             }
             volatile tt_l1_ptr uint16_t* dst = tiles + col0;
 #pragma GCC unroll 32
             for (uint32_t j = 0; j < G; ++j) {
-                dst[j * TILE_HW] = v[j] >> 16;  // pow2 fp32 -> bf16: the high half, exact
+                dst[j * TILE_HW] = v[j / TILES_PER_SCALE] >> 16;  // pow2 fp32 -> bf16: the high half, exact
             }
         }
         cb_scale_obj.push_back(G);

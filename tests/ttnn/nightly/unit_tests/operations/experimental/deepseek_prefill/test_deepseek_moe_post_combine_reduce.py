@@ -516,23 +516,25 @@ def test_fused_fp8_per_token_dequant_k3(device):
     assert pcc_fused >= pcc_bf16 - 1e-4, f"fused {pcc_fused:.6f} worse than the bf16 path {pcc_bf16:.6f}"
 
 
+@pytest.mark.parametrize("block", [32, 128], ids=["block_w32", "block_w128"])
 @pytest.mark.parametrize("num_tokens", [NUM_TOKENS, 64], ids=["prefill_chunk", "t64"])
-def test_fused_fp8_1x32_dequant_k3(device, num_tokens):
-    """1x32 scaled fp8 combine rows [H e4m3 | H/32 fp32 pow2 scales] reduced with the dequant fused in compute
+def test_fused_fp8_1x32_dequant_k3(device, num_tokens, block):
+    """1x32 (K3) / 1x128 (GLM 5.3) scaled fp8 combine rows [H e4m3 | H/block fp32 pow2 scales] reduced with the dequant fused in compute
     (32 tokens' local slots tilized, column-broadcast weight * scale on the FPU). Non-local slots hold NaN bytes,
     some tokens have no local expert, some only one, a few have many."""
     torch.manual_seed(13)
-    H, E, topk = 3584, 896, 16
+    # K3: 3584 wide, top-16 of 896 (224 local); GLM 5.3: 6144 wide, top-8 of 256 (64 local).
+    H, E, topk, n_local = (3584, 896, 16, 224) if block == 32 else (6144, 256, 8, 64)
     indices_torch, _ = make_indices(num_tokens, topk, device, num_routed_experts=E)
     local = torch.zeros(E, dtype=torch.bool)
-    local[:224] = True
+    local[:n_local] = True
     no_local = [0, 5, num_tokens - 1]
     for t in no_local:
-        indices_torch[0, t] = torch.randperm(E - 224)[:topk] + 224
+        indices_torch[0, t] = torch.randperm(E - n_local)[:topk] + n_local
     for t in [7, 40 % num_tokens]:
-        indices_torch[0, t, :-1] = torch.randperm(E - 224)[: topk - 1] + 224
-        indices_torch[0, t, -1] = int(torch.randint(0, 224, (1,)))
-    indices_torch[0, 9] = torch.randperm(224)[:topk]  # every slot local: 16 stages for its block
+        indices_torch[0, t, :-1] = torch.randperm(E - n_local)[: topk - 1] + n_local
+        indices_torch[0, t, -1] = int(torch.randint(0, n_local, (1,)))
+    indices_torch[0, 9] = torch.randperm(n_local)[:topk]  # every slot local: topk stages for its block
     indices_tt = ttnn.from_torch(
         indices_torch,
         device=device,
@@ -546,8 +548,8 @@ def test_fused_fp8_1x32_dequant_k3(device, num_tokens):
     )
 
     # Block magnitudes spread over 2^-6..2^5 so the per-block scales differ.
-    xb = torch.randn(1, num_tokens, topk, H // 32, 32) * torch.pow(
-        2.0, torch.randint(-6, 6, (1, num_tokens, topk, H // 32, 1)).float()
+    xb = torch.randn(1, num_tokens, topk, H // block, block) * torch.pow(
+        2.0, torch.randint(-6, 6, (1, num_tokens, topk, H // block, 1)).float()
     )
     s = torch.pow(2.0, torch.ceil(torch.log2(xb.abs().amax(-1, keepdim=True).clamp(min=1e-4) / 448.0)))
     q = (xb / s).to(torch.float8_e4m3fn)
@@ -566,7 +568,7 @@ def test_fused_fp8_1x32_dequant_k3(device, num_tokens):
         memory_config=ttnn.DRAM_MEMORY_CONFIG,
     )
     fused = ttnn.to_torch(
-        new_implementation(packed_tt, to_device(weights, device), indices_tt, table_tt, fp8_scale_block_w=32)
+        new_implementation(packed_tt, to_device(weights, device), indices_tt, table_tt, fp8_scale_block_w=block)
     ).float()
     ref_in = deq.clone()
     ref_in[0][~is_local] = 0.0

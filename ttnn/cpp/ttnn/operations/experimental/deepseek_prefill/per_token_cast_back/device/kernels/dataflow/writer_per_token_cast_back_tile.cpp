@@ -7,6 +7,10 @@
 
 #include <cstdint>
 
+#ifndef TILES_PER_SCALE
+#define TILES_PER_SCALE 1
+#endif
+
 #include "api/dataflow/dataflow_api.h"
 #include "api/dataflow/circular_buffer.h"
 #include "api/dataflow/noc.h"
@@ -70,10 +74,11 @@ void kernel_main() {
         const uint32_t row0 = (unit / units_per_row) * 32;
         const uint32_t tile0 = (unit % units_per_row) * G;
         const uint32_t seg = tile0 / seg_tiles;
-        const uint32_t scale_first = seg * seg_bytes + seg_tiles * 32 + (tile0 - seg * seg_tiles) * 4;
+        const uint32_t scale_first = seg * seg_bytes + seg_tiles * 32 + (tile0 - seg * seg_tiles) / TILES_PER_SCALE * 4;
         const uint32_t scale_window = scale_first & ~(DRAM_ALIGN - 1);
         const uint32_t skip_words = (scale_first - scale_window) / 4;
-        const uint32_t read_bytes = (scale_first - scale_window + G * 4 + DRAM_ALIGN - 1) & ~(DRAM_ALIGN - 1);
+        const uint32_t read_bytes =
+            (scale_first - scale_window + G / TILES_PER_SCALE * 4 + DRAM_ALIGN - 1) & ~(DRAM_ALIGN - 1);
         for (uint32_t r = 0; r < 32; ++r) {
             noc.async_read(
                 input,
@@ -92,15 +97,16 @@ void kernel_main() {
         for (uint32_t r = 0; r < 32; ++r) {
             const uint32_t col0 = (r < 16) ? r * 16 : 512 + (r - 16) * 16;
             const uint32_t* row_scales = reinterpret_cast<const uint32_t*>(scratch + r * scale_slot_bytes) + skip_words;
-            uint32_t v[G];
+            // One scale per TILES_PER_SCALE tiles (scale_block_w / 32).
+            uint32_t v[G / TILES_PER_SCALE];
 #pragma GCC unroll 32
-            for (uint32_t j = 0; j < G; ++j) {
+            for (uint32_t j = 0; j < G / TILES_PER_SCALE; ++j) {
                 v[j] = row_scales[j];
             }
             volatile tt_l1_ptr uint16_t* dst = tiles + col0;
 #pragma GCC unroll 32
             for (uint32_t j = 0; j < G; ++j) {
-                dst[j * 1024] = v[j] >> 16;  // pow2 fp32 -> bf16: the high half, exact
+                dst[j * 1024] = v[j / TILES_PER_SCALE] >> 16;  // pow2 fp32 -> bf16: the high half, exact
             }
         }
         cb_scale_obj.push_back(G);

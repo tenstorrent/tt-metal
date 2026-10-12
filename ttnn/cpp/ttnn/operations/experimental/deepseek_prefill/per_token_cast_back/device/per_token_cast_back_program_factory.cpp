@@ -70,7 +70,10 @@ PerTokenCastBackProgramFactory::cached_program_t create_tile_output_program(
     // A row is row_segments segments [seg e4m3 | seg/32 fp32 scales (| pad)]; one segment = [H e4m3 | H/32 fp32].
     const uint32_t segs = operation_attributes.row_segments;
     const uint32_t seg_bytes = row_bytes / segs;
-    const uint32_t seg_tiles = segs > 1 ? seg_bytes / 36 : row_bytes * 32 / 36 / 32;
+    // One fp32 scale per scale_block_w values: per tile 32 e4m3 bytes + 128 / scale_block_w scale bytes.
+    const uint32_t sbw = operation_attributes.scale_block_w;
+    const uint32_t tiles_per_scale = sbw / 32;
+    const uint32_t seg_tiles = segs > 1 ? seg_bytes / 36 : row_bytes * sbw / (sbw + 4) / 32;
     const uint32_t Wt = segs * seg_tiles;
     const uint32_t H = Wt * 32;
     // Wide units (28 tiles = 896 B per row read) keep the per-read overhead down; measured flat from 16 to 28. A unit
@@ -80,6 +83,7 @@ PerTokenCastBackProgramFactory::cached_program_t create_tile_output_program(
         G -= 4;
     }
     TT_FATAL(G >= 4, "per_token_cast_back tile_output: {} tiles per row need a multiple of 4", Wt);
+    TT_FATAL(G % tiles_per_scale == 0, "per_token_cast_back tile_output: unit of {} tiles splits a scale block", G);
     constexpr uint32_t DRAM_ALIGN = 64;
     const uint32_t scale_slot_bytes = tt::round_up(DRAM_ALIGN - 4 + G * 4, DRAM_ALIGN);
 
@@ -164,7 +168,7 @@ PerTokenCastBackProgramFactory::cached_program_t create_tile_output_program(
             .processor = DataMovementProcessor::RISCV_1,
             .noc = NOC::RISCV_0_default,
             .compile_args = reader_ct,
-            .defines = {{"SCALES_ON_WRITER", "1"}}});
+            .defines = {{"SCALES_ON_WRITER", "1"}, {"TILES_PER_SCALE", std::to_string(tiles_per_scale)}}});
 
     std::vector<uint32_t> writer_ct = {
         cb_out,
@@ -187,7 +191,10 @@ PerTokenCastBackProgramFactory::cached_program_t create_tile_output_program(
         kdir + "dataflow/writer_per_token_cast_back_tile.cpp",
         all_cores,
         DataMovementConfig{
-            .processor = DataMovementProcessor::RISCV_0, .noc = NOC::RISCV_1_default, .compile_args = writer_ct});
+            .processor = DataMovementProcessor::RISCV_0,
+            .noc = NOC::RISCV_1_default,
+            .compile_args = writer_ct,
+            .defines = {{"TILES_PER_SCALE", std::to_string(tiles_per_scale)}}});
 
     // Fp8 CBs on Blackhole need 32-bit DEST. The multiply is e4m3 data (4 significant bits) x a power-of-two scale,
     // so a single LoFi phase already forms the exact product.

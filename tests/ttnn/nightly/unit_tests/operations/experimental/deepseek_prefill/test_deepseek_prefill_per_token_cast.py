@@ -611,13 +611,14 @@ def test_token_count_aware_cast_back_scale_block_w(device, scale_block_w):
     assert torch.equal(out[:off][normal], golden[:off][normal]), "count-aware metadata-tail dequant mismatch"
 
 
+@pytest.mark.parametrize("block", [32, 128], ids=["block_w32", "block_w128"])
 @pytest.mark.parametrize("out_l1", [False, True], ids=["dram_out", "l1_out"])
 @pytest.mark.parametrize("counts", [[37, 0, 64, 5, 130], [0, 0, 0, 0, 1]], ids=["mixed", "one_token"])
-def test_count_aware_packed_quant_expert_buffer(device, counts, out_l1):
+def test_count_aware_packed_quant_expert_buffer(device, counts, out_l1, block):
     """Scaled fp8 combine source: quantize the valid prefix of a bf8_b TILE expert buffer into packed
     [H e4m3 | H/32 fp32] rows, then dequantize them with cast_back(scales_in_row_tail=True)."""
     torch.manual_seed(0)
-    H, capacity, block = K3_LATENT, 640, 32
+    H, capacity = (K3_LATENT, 640) if block == 32 else (6144, 640)  # 1x128: the GLM 5.3 row
     experts_per_chip = len(counts)
     table = [2 * s + 1 for s in range(experts_per_chip)]
     region, tok = [0] * (2 * experts_per_chip), [0] * (2 * experts_per_chip)
@@ -708,11 +709,12 @@ def test_count_aware_packed_round_trip(device, scale_block_w):
 
 
 @pytest.mark.parametrize("out_dtype", [ttnn.bfloat16, ttnn.bfloat8_b], ids=["bf16", "bf8"])
-def test_count_aware_packed_tile_output(device, out_dtype):
-    """1x32 count-aware dequant straight to TILE output (the routed expert's tiled-x input): the valid prefix
+@pytest.mark.parametrize("block", [32, 128], ids=["block_w32", "block_w128"])
+def test_count_aware_packed_tile_output(device, out_dtype, block):
+    """1x32 / 1x128 (GLM) count-aware dequant straight to TILE output (the routed expert's tiled-x input): the valid prefix
     must match the row-major path (bf16 exactly; bf8_b within its shared-exponent rounding)."""
     torch.manual_seed(6)
-    H, capacity = K3_LATENT, 2048
+    H, capacity = (K3_LATENT, 2048) if block == 32 else (6144, 1024)  # 1x128: the GLM 5.3 row
     counts = [23 + (7 * i) % 40 for i in range(20)]
     epc = len(counts)
     table = [2 * s + 1 for s in range(epc)]
@@ -726,7 +728,7 @@ def test_count_aware_packed_tile_output(device, out_dtype):
     )
     x_tt = ttnn.from_torch(x, dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT, device=device)
     packed_tt, _ = ttnn.experimental.deepseek_prefill.per_token_cast_to_fp8(
-        x_tt, round_scale_to_power_of_two=True, pack_scales_in_row=True, scale_block_w=32
+        x_tt, round_scale_to_power_of_two=True, pack_scales_in_row=True, scale_block_w=block
     )
     ca = dict(
         token_count_aware=True,
@@ -735,7 +737,7 @@ def test_count_aware_packed_tile_output(device, out_dtype):
         global_expert_idx_table=create_u32_tensor(device, table),
         experts_per_chip=epc,
         scales_in_row_tail=True,
-        scale_block_w=32,
+        scale_block_w=block,
     )
     ref = ttnn.to_torch(
         ttnn.experimental.deepseek_prefill.per_token_cast_back(packed_tt, None, output_dtype=ttnn.float32, **ca)

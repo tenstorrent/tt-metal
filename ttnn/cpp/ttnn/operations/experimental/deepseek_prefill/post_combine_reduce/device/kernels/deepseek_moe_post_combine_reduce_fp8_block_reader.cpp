@@ -2,7 +2,7 @@
 //
 // SPDX-License-Identifier: Apache-2.0
 
-// Reader for the 1x32 scaled-fp8 post_combine_reduce (fused DQ2, sparse SDPA style).
+// Reader for the 1x32 / 1x64 / 1x128 scaled-fp8 post_combine_reduce (fused DQ2, sparse SDPA style).
 //
 // Combine rows are [H e4m3 | H/32 fp32 scales]. Per 32-token block the reader stacks one combine row per token
 // as 32 row-major rows of this core's column part (part_wt tiles wide) in c_0; compute tilizes them so tile
@@ -16,6 +16,10 @@
 // and per block it hands compute the stage count through the c_7 mailbox.
 
 #include <cstdint>
+
+#ifndef TILES_PER_SCALE
+#define TILES_PER_SCALE 1
+#endif
 #include "api/dataflow/dataflow_api.h"
 #include "api/dataflow/noc.h"
 #include "api/dataflow/circular_buffer.h"
@@ -202,15 +206,16 @@ void kernel_main() {
                         weight_scratch + (t * num_experts + k) * weight_read_bytes)[0];
                     const uint32_t* row_scales =
                         reinterpret_cast<const uint32_t*>(scale_scratch + t * scale_slot_bytes) + scale_skip_words;
-                    uint32_t v[part_wt];
+                    // One scale per TILES_PER_SCALE tiles (scale_block_w / 32).
+                    uint32_t v[part_wt / TILES_PER_SCALE];
 #pragma GCC unroll 32
-                    for (uint32_t j = 0; j < part_wt; j++) {
+                    for (uint32_t j = 0; j < part_wt / TILES_PER_SCALE; j++) {
                         v[j] = row_scales[j];
                     }
                     volatile tt_l1_ptr uint16_t* dst = scale_tiles + col0;
 #pragma GCC unroll 32
                     for (uint32_t j = 0; j < part_wt; j++) {
-                        dst[j * tt::constants::TILE_HW] = v[j] >> 16;
+                        dst[j * tt::constants::TILE_HW] = v[j / TILES_PER_SCALE] >> 16;
                     }
                 } else {
                     weight_tile[col0] = 0;
