@@ -936,8 +936,7 @@ def _scaffold_vllm_bundle(
     bundle = base_dir / slug
     meta = bundle / "vllm_metadata.json"
     base_cls, is_stub = _pick_base_generator(arch, model_type)
-    if meta.is_file():
-        return False, is_stub, str(bundle)
+    created = not meta.is_file()
     bundle.mkdir(parents=True, exist_ok=True)
     tt_arch = arch if arch.startswith("TT") else "TT" + arch
     meta.write_text(
@@ -972,7 +971,7 @@ def _scaffold_vllm_bundle(
         f"class {tt_arch}(_Base):\n"
         f'    """TT generator for {arch} (base: {base_cls})."""\n\n' + todo
     )
-    return True, is_stub, str(bundle)
+    return created, is_stub, str(bundle)
 
 
 def _tidy_provenance_note(args) -> None:
