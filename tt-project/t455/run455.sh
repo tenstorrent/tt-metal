@@ -7,6 +7,7 @@
 set -o pipefail
 F=/var/tmp/fasth3; T=$F/t455; W=$T/w; VENV=$F/t48/python_env; L=$T/run.log
 use=$(df --output=pcent / | tail -1 | tr -dc 0-9); [ "$use" -le 88 ] || { echo "[t455] / at $use%"; exit 5; }
+gb=$(timeout 120 du -sxBG /var/tmp/fasth3 | cut -f1 | tr -dc 0-9); [ "${gb:-0}" -le 450 ] || { echo "[t455] /var/tmp/fasth3 at ${gb}G"; exit 5; }
 mkdir -p $F/tmp
 export HOME=$F/home XDG_CACHE_HOME=$F/home/.cache TMPDIR=$F/tmp HF_HUB_OFFLINE=1
 export TT_METAL_CACHE=$F/cache/tt-metal-cache-h3hf TT_DIT_CACHE_DIR=$F/cache/dit-h3hf
