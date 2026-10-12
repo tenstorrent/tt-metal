@@ -1,0 +1,108 @@
+blx01: broker up, device not held
+a smarton job is already running or queued on blx01
+blx01: broker up, device not held
+Job 865 queued (position: 0)
+Log: /var/log/tt-device-broker/2026-10-12_070335_865.log
+job=865
+retry_when: ssh -o BatchMode=yes -o ConnectTimeout=20 g15blx01 'tt-device-mcp status -j 865 | grep -q ^Status: && ! tt-device-mcp status -j 865 | grep -qiE "^Status: +(running|queued|pending)"'
+2026-10-12T07:03:35Z on: job 865 submitted
+Job:     865
+Owner:   smarton
+Status:  failed
+Command: env T408_REPLAYS=2 T408_SAVE=0 T408_PY_TIMEOUT=560 bash /var/tmp/fasth3/t422/run422.sh on on
+Exit:    1
+Runtime: 440.5s
+Log:     /var/log/tt-device-broker/2026-10-12_070335_865.log
+E               RuntimeError: [t286] warm deadline 400 s passed in Warming audio decode lengths
+
+../../t286/t286_skipvaewarm.py:121: RuntimeError
+- generated xml file: /var/tmp/fasth3/t422/b/generated/test_reports/most_recent_tests.xml -
+============================= slowest 25 durations =============================
+402.47s call     models/tt_dit/tests/models/minimax_h3/test_pipeline_turbo_minimax_h3.py::test_turbo_end_to_end[blackhole-4x8-5s]
+18.43s setup    models/tt_dit/tests/models/minimax_h3/test_pipeline_turbo_minimax_h3.py::test_turbo_end_to_end[blackhole-4x8-5s]
+0.03s teardown models/tt_dit/tests/models/minimax_h3/test_pipeline_turbo_minimax_h3.py::test_turbo_end_to_end[blackhole-4x8-5s]
+=========================== short test summary info ============================
+FAILED models/tt_dit/tests/models/minimax_h3/test_pipeline_turbo_minimax_h3.py::test_turbo_end_to_end[blackhole-4x8-5s] - RuntimeError: [t286] warm deadline 400 s passed in Warming audio decode lengths
+================= 1 failed, 11 deselected in 421.10s (0:07:01) =================
+2026-10-12 07:10:48.689 | info     |    BuildKernels | JIT cache stats: 0/1889 hits (0.0%) [0 cached, 38113 build-once dedup, 0 merged artifacts, 0 merged genfiles] (build_cache_telemetry.cpp:268)
+2026-10-12 07:10:48.689 | info     |    BuildKernels | JIT telemetry: 46 registered TelemetryTokens (build_cache_telemetry.cpp:325)
+2026-10-12 07:10:48.973 | info     |          Device | Closing user mode device drivers (tt_cluster.cpp:519)
+2026-10-12 07:10:48.973 | info     |             UMD | Closing devices in cluster (cluster.cpp:1319)
+2026-10-12 07:10:50.847 | info     |             UMD | Closing devices in cluster completed. (cluster.cpp:1329)
+2026-10-12 07:10:50.848 | info     |             UMD | Cluster destructor started. (cluster.cpp:1050)
+2026-10-12 07:10:50.848 | info     |             UMD | Cluster destructor completed. (cluster.cpp:1063)
+[t422] process wall 435 s
+T408_EXIT=1
+Denoising (per step)      |   1.4935s
+Total Pipeline            |   8.0932s
+Denoising (per step)      |   1.5264s
+Total Pipeline            |   8.8756s
+2026-10-12 06:41:23.304 | INFO     | models.tt_dit.utils.video:export_video_audio_yuv:205 - Saved: /var/tmp/fasth3/home/h3_turbo_artifacts/fl2va_turbo_1344x768_5s_4fwd.mp4 (124f @ 24fps, yuv420p fast path)
+2026-10-12 06:41:23.322 | INFO     | models.tt_dit.tests.models.minimax_h3.test_pipeline_turbo_minimax_h3:test_turbo_end_to_end:310 - wrote /var/tmp/fasth3/home/h3_turbo_artifacts/fl2va_turbo_1344x768_5s_4fwd.mp4
+[t422] process wall 255 s
+c79b7d37ba9c0f5034b3392af1f1a841  /var/tmp/fasth3/t422/out_off/fl2va_turbo_1344x768_5s_4fwd.mp4
+T408_EXIT=0
+[t422] process wall 435 s
+T408_EXIT=1
+2026-10-12T07:11:10Z T422ON_DONE 1
+=== 2026-10-12T07:12:08Z rerun on arm (first try cold JIT, job 865)
+blx01: broker up, device not held
+Job 867 queued (position: 0)
+Log: /var/log/tt-device-broker/2026-10-12_071215_867.log
+job=867
+retry_when: ssh -o BatchMode=yes -o ConnectTimeout=20 g15blx01 'tt-device-mcp status -j 867 | grep -q ^Status: && ! tt-device-mcp status -j 867 | grep -qiE "^Status: +(running|queued|pending)"'
+2026-10-12T07:12:15Z on: job 867 submitted
+Job:     867
+Owner:   smarton
+Status:  failed
+Command: env T408_REPLAYS=2 T408_SAVE=0 T408_PY_TIMEOUT=560 bash /var/tmp/fasth3/t422/run422.sh on on
+Exit:    1
+Runtime: 455.7s
+Log:     /var/log/tt-device-broker/2026-10-12_071215_867.log
+E               RuntimeError: [t286] warm deadline 400 s passed in Warming prompt encoder keyframe layouts
+
+../../t286/t286_skipvaewarm.py:121: RuntimeError
+- generated xml file: /var/tmp/fasth3/t422/b/generated/test_reports/most_recent_tests.xml -
+============================= slowest 25 durations =============================
+422.90s call     models/tt_dit/tests/models/minimax_h3/test_pipeline_turbo_minimax_h3.py::test_turbo_end_to_end[blackhole-4x8-5s]
+8.10s setup    models/tt_dit/tests/models/minimax_h3/test_pipeline_turbo_minimax_h3.py::test_turbo_end_to_end[blackhole-4x8-5s]
+0.04s teardown models/tt_dit/tests/models/minimax_h3/test_pipeline_turbo_minimax_h3.py::test_turbo_end_to_end[blackhole-4x8-5s]
+=========================== short test summary info ============================
+FAILED models/tt_dit/tests/models/minimax_h3/test_pipeline_turbo_minimax_h3.py::test_turbo_end_to_end[blackhole-4x8-5s] - RuntimeError: [t286] warm deadline 400 s passed in Warming prompt encoder keyframe layouts
+================= 1 failed, 11 deselected in 431.24s (0:07:11) =================
+2026-10-12 07:19:40.186 | info     |    BuildKernels | JIT cache stats: 1889/3446 hits (54.8%) [1889 cached, 81322 build-once dedup, 0 merged artifacts, 0 merged genfiles] (build_cache_telemetry.cpp:268)
+2026-10-12 07:19:40.186 | info     |    BuildKernels | JIT telemetry: 43 registered TelemetryTokens (build_cache_telemetry.cpp:325)
+2026-10-12 07:19:40.527 | info     |          Device | Closing user mode device drivers (tt_cluster.cpp:519)
+2026-10-12 07:19:40.527 | info     |             UMD | Closing devices in cluster (cluster.cpp:1319)
+2026-10-12 07:19:42.383 | info     |             UMD | Closing devices in cluster completed. (cluster.cpp:1329)
+2026-10-12 07:19:42.384 | info     |             UMD | Cluster destructor started. (cluster.cpp:1050)
+2026-10-12 07:19:42.384 | info     |             UMD | Cluster destructor completed. (cluster.cpp:1063)
+[t422] process wall 450 s
+T408_EXIT=1
+Denoising (per step)      |   1.4935s
+Total Pipeline            |   8.0932s
+Denoising (per step)      |   1.5264s
+Total Pipeline            |   8.8756s
+2026-10-12 06:41:23.304 | INFO     | models.tt_dit.utils.video:export_video_audio_yuv:205 - Saved: /var/tmp/fasth3/home/h3_turbo_artifacts/fl2va_turbo_1344x768_5s_4fwd.mp4 (124f @ 24fps, yuv420p fast path)
+2026-10-12 06:41:23.322 | INFO     | models.tt_dit.tests.models.minimax_h3.test_pipeline_turbo_minimax_h3:test_turbo_end_to_end:310 - wrote /var/tmp/fasth3/home/h3_turbo_artifacts/fl2va_turbo_1344x768_5s_4fwd.mp4
+[t422] process wall 255 s
+c79b7d37ba9c0f5034b3392af1f1a841  /var/tmp/fasth3/t422/out_off/fl2va_turbo_1344x768_5s_4fwd.mp4
+T408_EXIT=0
+[t422] process wall 450 s
+T408_EXIT=1
+2026-10-12T07:20:20Z T422ON_DONE 1
+2026-10-12T07:22:05Z run 1605: on arm try with warm deadline 500 s
+blx01: broker up, device not held
+a smarton job is already running or queued on blx01
+blx01: broker up, device not held
+a smarton job is already running or queued on blx01
+blx01: broker up, device not held
+a smarton job is already running or queued on blx01
+blx01: broker up, device not held
+a smarton job is already running or queued on blx01
+blx01: broker up, device not held
+a smarton job is already running or queued on blx01
+blx01: broker holds the device:   --          🔧 broker  1m7s     device HELD (degraded): device unverified: gate/post-job: 1/32 chip(s) off the b
+ttp-heal-key: blx01-degraded-hold
+2026-10-12T07:32:09Z T422ON_DONE 1
+2026-10-12T07:33:11Z run 1606: drop on blx01 (chip 24 off PCIe after job 868, fabric-check 870 failed, broker hold); submitter waits for recovery

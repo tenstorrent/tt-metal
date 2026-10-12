@@ -45,3 +45,10 @@ deadline 400 s):
   more cache per job. The replays are timed after warmup, so the deadline does not change the measurement.
 - submit_on.sh now tries up to 2 jobs; the second only if the first stopped at the warm deadline (log kept as
   out_on/run.fill<try>.log). Detached as run 1605 t422on3; log state/on.log ends with "T422ON_DONE <rc>".
+
+## 2026-10-12 run 1606
+- Drop: 2026-10-12 07:30 UTC, blx01, after job 868 (smarton, task t421, not ours). Fabric-check 870 failed (-9),
+  hold 871 "chip(s) left PCIe bus", bridge-reset 872 of chip 24 failed; broker holds the device (degraded, 1/32 off).
+  Our on-arm try (run 1605) refused at submit, no job of ours ran.
+- submit_on.sh now also waits (2 min steps, up to 5 h) while the broker holds the device or the box is unreachable.
+  Relaunched detached as run 1606 t422on4; log state/on.log ends with "T422ON_DONE <rc>".

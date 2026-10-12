@@ -8,9 +8,11 @@ trap 'rc=$?; echo "$(date -u +%FT%TZ) T422ON_DONE $rc" >> $L' EXIT
 B1="ssh -o BatchMode=yes -o ConnectTimeout=20 g15blx01"
 # Up to 2 jobs: the second runs only if the first stopped at the warm deadline (cold JIT, cache still filling).
 for try in 1 2; do
-  for i in $(seq 90); do
+  for i in $(seq 150); do
     rc=0; out=$(tt-project/t288/blx01-submit.sh $S/on.txt 2>&1) || rc=$?
-    echo "$out" >> $L; [ $rc = 75 ] || break; sleep 120
+    # 75: another smarton job holds the queue. A broker hold or unreachable box (chip drop, recovery) also waits.
+    echo "$out" >> $L; [ $rc = 75 ] || echo "$out" | grep -qE 'broker holds the device|broker inactive|unreachable' || break
+    sleep 120
   done
   [ $rc = 0 ] || exit $rc
   id=$(echo "$out" | sed -n 's/^job=//p'); echo "$(date -u +%FT%TZ) on: try $try job $id submitted" >> $L
