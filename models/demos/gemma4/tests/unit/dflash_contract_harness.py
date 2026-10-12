@@ -215,6 +215,15 @@ def _ordinary(model, anchors, positions, keys, result=None, sampling=True, **kwa
         model.results.append(result)
     if sampling:
         kwargs.setdefault("sampling_params", _sampling(len(anchors)))
+    kwargs = dict(
+        {
+            "reload_inputs": True,
+            "reload_page_table": False,
+            "reload_sampling_params": True,
+            "reset_sampling_state": True,
+        },
+        **kwargs,
+    )
     return model.decode_forward(
         tokens=_tensor(anchors).reshape(-1, 1),
         start_pos=_tensor(positions),
@@ -237,6 +246,15 @@ def _verify(model, blocks, positions, valid, keys, result=None, sampling=True, *
         model.results.append(result)
     if sampling:
         kwargs.setdefault("sampling_params", _sampling(len(blocks)))
+    kwargs = dict(
+        {
+            "reload_inputs": True,
+            "reload_page_table": False,
+            "reload_sampling_params": True,
+            "reset_sampling_state": True,
+        },
+        **kwargs,
+    )
     return model.decode_forward(
         tokens=_tensor(blocks),
         start_pos=_tensor(positions),

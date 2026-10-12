@@ -10,8 +10,11 @@ in the runner's order over a recording fused-decoder stub. What a replay
 computes on the device is not something a host test can attest.
 """
 
+import ast
 import dataclasses
 import json
+from pathlib import Path
+from types import SimpleNamespace
 
 import pytest
 import torch
@@ -65,12 +68,12 @@ def test_declares_the_contract_rail(adapter):
 
 
 @pytest.mark.parametrize("value", ["1", "true"])
-def test_async_gate_parses_like_the_other_gates(value):
+def test_dflash_cannot_enable_resident_decode_with_an_environment_override(value):
     with pytest.MonkeyPatch.context() as patch:
         module = import_adapter(patch, {"GEMMA4_CONTRACT_ASYNC": value})
         caps = module.Gemma4DFlashContractForCausalLM.model_capabilities
-        assert caps["supports_async_decode"] is True
-        assert caps["supports_async_spec_decode"] is True
+        assert caps["supports_async_decode"] is False
+        assert caps["supports_async_spec_decode"] is False
 
 
 def test_verify_count_pins_the_inherited_width_arithmetic(adapter):
@@ -155,7 +158,6 @@ def test_solo_prefill_then_ordinary_step_bootstraps_and_answers_from_the_replay(
     assert _names(model, "decode") == []  # the plain decode never ran
     assert model._dflash_retained is None
     assert model._dflash_owner_tables[0].tolist() == _table([10]).tolist()
-    assert model._slots_prefilled_since_decode == {0}
     assert model._spec_owner_slot == 0
 
 
@@ -424,7 +426,6 @@ def test_straddle_verify_answers_the_drafted_row_and_decodes_the_peer(model):
     assert int(out.argmax_ids[1, 0]) == 600
     assert _names(model, "decode") == [("decode", [150, 40], [-1, 9])]
     assert not model._spec_active and model._dflash_retained is None
-    assert model._slots_prefilled_since_decode == {0}
     proposal = _propose(
         model,
         [[201, 202, 251, -1, -1, -1], [600, -1, -1, -1, -1, -1]],
@@ -579,14 +580,13 @@ def test_a_draftless_verify_without_the_owner_keeps_its_outstanding_proposal(mod
     assert out.argmax_ids.tolist() == [[250, 251, 252, 253, 254, 255]]
 
 
-# -- device-resident decode inputs after drafter-served steps ---------------------
+# -- caller-owned decode updates after drafter-served steps ----------------------
 
 
-def test_the_first_plain_decode_after_a_straddle_reloads_host_inputs(model):
-    """The traced decode keeps tokens and positions on the device and reloads them
-    only on a layout change. The owner's rows were answered from the drafter, so
-    the peers' decode in the straddle and the owner's first plain decode after
-    it both carry reset_batch."""
+def test_drafter_history_does_not_override_the_reload_commands(model):
+    commands = dict(
+        reload_inputs=False, reload_page_table=True, reload_sampling_params=False, reset_sampling_state=False
+    )
     _start_solo(model)
     _verify(
         model,
@@ -595,28 +595,29 @@ def test_the_first_plain_decode_after_a_straddle_reloads_host_inputs(model):
         [5, 0],
         keys=[10, 20],
         result=DeviceResult(_tensor([0, 600])),
+        **commands,
     )
-    assert model.reloads == [True]
-    _ordinary(model, [251, 600], [6, 10], [10, 20], result="device")
-    assert model.reloads == [True, True]
+    assert model.decode_commands == [commands]
+    _ordinary(model, [251, 600], [6, 10], [10, 20], result="device", **commands)
+    assert model.decode_commands == [commands, commands]
     _ordinary(model, [7, 8], [7, 11], [10, 20], result="device")
-    assert model.reloads == [True, True, False]
+    assert model.reloads == [False, False, True]
 
 
-def test_the_first_plain_decode_after_a_decline_reloads_host_inputs(model):
+def test_decline_does_not_override_the_reload_command(model):
     _start_solo(model)
     _verify(model, [[150, 201, 202, 203, 204, 205]], [list(range(3, 9))], [5], keys=[10])
     model.model_args[0].max_seq_len = 11
     _propose(model, [[201, 202, 251, -1, -1, -1]], [[4, 5, 6, -1, -1, -1]], counts=[3])
-    _ordinary(model, [251], [6], [10], result="device")
+    _ordinary(model, [251], [6], [10], result="device", reload_inputs=False)
     _ordinary(model, [9], [7], [10], result="device")
-    assert model.reloads == [True, False]
+    assert model.reloads == [False, True]
 
 
-def test_a_plain_decode_with_no_drafter_history_does_not_force_a_reload(model):
+def test_plain_decode_forwards_the_reload_command(model):
     _prefill(model, prompt_len=2, key=10, rows=2)
     _ordinary(model, [3, 4], [2, 2], [10, 12], result="device")
-    assert model.reloads == [False]
+    assert model.reloads == [True]
 
 
 def test_release_logs_committed_tokens_per_step_for_the_session(model, adapter, monkeypatch):
@@ -752,13 +753,81 @@ def test_a_sampled_row_leaves_another_requests_outstanding_proposal_alone(model,
 def test_a_session_owner_seen_sampling_on_a_later_step_ends_its_session(model):
     """A host-sampled verify carries no sampling parameters, so it can start a
     session that the next device-sampled step shows to be for a sampled row."""
-    _start_solo(model)
+    _prefill(model, prompt_len=2, key=10)
+    first = _verify(model, [[3, 0, 0, 0, 0, 0]], [[2, 3, 4, 5, 6, 7]], [0], keys=[10], sampling=False)
+    assert first.argmax_ids[0, 0] == 150
+    assert model._spec_active
     out = _ordinary(model, [150], [3], [10], result="device", sampling_params=_sampling(1, temperature=1.0))
     assert out == "device"
     assert not model._spec_active and model._dflash_retained is None
     assert ("release_decoder", False) in model.events
     proposal = _propose(model, [[600, -1, -1, -1, -1, -1]], [[4, -1, -1, -1, -1, -1]])
     assert proposal.num_valid.tolist() == [0]
+
+
+@pytest.mark.parametrize("verify", [False, True], ids=["ordinary", "draftless-verify"])
+@pytest.mark.parametrize("sampling_values", [{"temperature": 1.0}, {"presence_penalty": 0.5}])
+def test_sampled_request_after_greedy_completion_uses_the_real_decode_contract(
+    model, adapter, monkeypatch, verify, sampling_values
+):
+    """Run the real decode interface over recording trace and sampling operations."""
+    _start_solo(model)
+    model.release_request(0)
+    _prefill(model, prompt_len=2, key=20)
+
+    source_path = Path(__file__).resolve().parents[2] / "tt" / "generator.py"
+    tree = ast.parse(source_path.read_text())
+    mixin = next(
+        node
+        for node in tree.body
+        if isinstance(node, ast.ClassDef) and node.name == "ChunkedPrefillPageTableGuardMixin"
+    )
+    decode = next(node for node in mixin.body if isinstance(node, ast.FunctionDef) and node.name == "decode_forward")
+    module = ast.Module(
+        body=[ast.ImportFrom(module="__future__", names=[ast.alias(name="annotations")], level=0), decode],
+        type_ignores=[],
+    )
+    namespace = {"torch": torch, "Mode": SimpleNamespace(DECODE="decode")}
+    exec(compile(ast.fix_missing_locations(module), str(source_path), "exec"), namespace)
+
+    def plain(self, *args, page_tables_per_layer=None, **kwargs):
+        return namespace["decode_forward"](self, *args, **kwargs)
+
+    trace_calls, sample_calls = [], []
+
+    def trace(**kwargs):
+        trace_calls.append(kwargs)
+        return "logits"
+
+    def sample(logits, **kwargs):
+        assert logits == "logits"
+        sample_calls.append(kwargs)
+        return _tensor([600])
+
+    monkeypatch.setattr(adapter.Gemma4ForCausalLM, "decode_forward", plain)
+    monkeypatch.setattr(model, "_clear_sequential_batch_page_tables", lambda: None, raising=False)
+    monkeypatch.setattr(model, "mode", "prefill", raising=False)
+    monkeypatch.setattr(model, "data_parallel", 1, raising=False)
+    monkeypatch.setattr(model.model[0], "switch_mode", lambda mode: None, raising=False)
+    monkeypatch.setattr(model, "_decode_forward_trace_text", trace, raising=False)
+    monkeypatch.setattr(model, "sample_decode_on_device", sample, raising=False)
+    sampling_params = _sampling(1, **sampling_values)
+    kwargs = dict(sampling_params=sampling_params, read_from_device=False)
+    if verify:
+        out = _verify(model, [[40, 0, 0, 0, 0, 0]], [[2, 3, 4, 5, 6, 7]], [0], keys=[20], **kwargs)
+        assert out.argmax_ids[0].tolist() == [600, -1, -1, -1, -1, -1]
+    else:
+        out = _ordinary(model, [40], [2], [20], **kwargs)
+        assert out.tolist() == [600]
+    assert not model._spec_active and model._spec_pending is None
+    assert len(trace_calls) == len(sample_calls) == 1
+    assert trace_calls[0]["tokens"][0].tolist() == [[40]]
+    assert trace_calls[0]["current_pos"][0].tolist() == [2]
+    assert trace_calls[0]["reload_inputs"] is True
+    assert trace_calls[0]["reload_page_table"] is False
+    assert sample_calls[0]["sampling_params"] is sampling_params
+    assert sample_calls[0]["reload_sampling_params"] is True
+    assert sample_calls[0]["reset_sampling_state"] is True
 
 
 def test_greedy_check_reads_per_row_values_and_shared_scalars(adapter):
