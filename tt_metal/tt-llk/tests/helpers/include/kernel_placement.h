@@ -10,6 +10,16 @@
 // The type RUNTIME_PARAMETERS expands to; build.h is not included because some kernels define RuntimeParams.
 struct RuntimeParams;
 
+#if defined(LLK_PERF_INIT_ONLY) // INIT measurement build: INIT runs from fixed sections ahead of main, run_kernel's place is free
+__attribute__((noinline, section(".text.run_kernel"))) void run_kernel(const struct RuntimeParams& params);
+// INIT's sections start at this offset into the code, ahead of the harness (sections.ld), so harness growth cannot move
+// them; the code starts with a jump to _start, where the loader starts the core
+asm(".globl llk_init_region_at\n"
+    ".set llk_init_region_at, 512\n"
+    ".pushsection .text.llk_init_entry, \"ax\", @progbits\n"
+    "j _start\n"
+    ".popsection");
+#else
 __attribute__((noinline, section(".text.run_kernel"), aligned(2048))) void run_kernel(const struct RuntimeParams& params);
 #if defined(LLK_DBG_BARRIER)
 // run_kernel's callees start on the thread's period (sections.ld), so run_kernel's size cannot move them, after
