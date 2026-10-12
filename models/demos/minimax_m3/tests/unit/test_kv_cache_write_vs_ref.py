@@ -238,7 +238,7 @@ def test_kv_cache_write_vs_ref(mesh_device, device_params, layer_kind, seq_len, 
         index_k_tp_shard=index_k_tp_shard,
     )
 
-    attn(x_tt, rope_mats=rope_sp, position_idx=None, kv_cache=kv_cache, user_id=0)
+    attn(x_tt, rope_mats=rope_sp, position_idx=None, kv_cache=kv_cache)
     ttnn.synchronize_device(mesh_device)
 
     # --- readback. Per chip the cache is [1, 1, s_local, HD]; heads on cols, seq on rows, batch slot 0.

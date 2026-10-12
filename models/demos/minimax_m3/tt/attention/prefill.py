@@ -5,6 +5,7 @@
 import ttnn
 from models.demos.minimax_m3.utils.profiler_utils import FINE, zone
 
+from ..prefill_entry import PrefillEntry
 from ..residual import use_sharded_residual
 from .config import AttentionConfig, ProgramConfig
 from .dense_sp import dense_sp_attention, dense_sp_attention_nocache
@@ -39,11 +40,10 @@ def attention_forward(
     transformation_mat,
     position_idx,
     ccl_manager,
-    user_id=0,
     batch_size=1,
     layer_idx=0,
-    cached_len=0,
     indexed_rope=False,
+    entries=None,
 ):
     """
     Prefill forward pass - optimized for sequence processing (seq_len>1).
@@ -60,10 +60,11 @@ def attention_forward(
         transformation_mat: Transformation matrix for RoPE
         position_idx: Position indices (unused in prefill)
         ccl_manager: Communication manager
-        user_id: cache slot index for the per-layer cache write
         layer_idx: this layer's index, for the per-layer cache write
-        cached_len: valid prefix length already in the cache BEFORE this chunk (0 = first/only chunk).
-            >0 selects the cache-read attention paths (current chunk attends the accumulated prefix).
+        entries: the forward's chunks (tt/prefill_entry.py), one equal block of rows each; None = one chunk
+            in slot 0 at position 0. Projections run once on all rows; the attention core runs per non-empty
+            entry against its slot at its start (>0 selects the cache-read paths). Empty entries (the tail)
+            get zero rows.
 
     Returns:
         Attention output [batch, seq_len, hidden_size]
@@ -96,6 +97,78 @@ def attention_forward(
     if batch_size > 1:
         xqkv_fused = ttnn.reshape(xqkv_fused, [batch_size, 1, seq_len, -1])
 
+    def core(xqkv, hidden, entry, rows, batch):
+        return _attention_core(
+            xqkv,
+            hidden,
+            rope_mats,
+            weights,
+            kv_cache,
+            config,
+            mesh_config,
+            mesh_device,
+            program_config,
+            transformation_mat,
+            ccl_manager,
+            entry.slot,
+            batch,
+            layer_idx,
+            entry.start,
+            indexed_rope,
+            rows,
+        )
+
+    entries = entries or [PrefillEntry(slot=0, start=0, end=seq_len)]
+    if len(entries) == 1:
+        tt_sdpa_out = core(xqkv_fused, hidden_states, entries[0], seq_len, batch_size)
+    else:
+        assert indexed_rope and batch_size == 1, "a packed forward needs the whole-cache indexed RoPE and batch 1"
+        rows = total_seq_len // len(entries)
+        real = [e for e in entries if not e.is_empty]
+
+        def entry_rows(t, k):
+            return ttnn.slice(t, (0, 0, k * rows, 0), (1, 1, (k + 1) * rows, t.shape[-1]))
+
+        outs = [
+            core(entry_rows(xqkv_fused, k), entry_rows(hidden_states, k) if config.is_sparse else None, e, rows, 1)
+            for k, e in enumerate(real)
+        ]
+        xqkv_fused.deallocate(True)
+        if config.is_sparse:
+            hidden_states.deallocate(True)
+        # Empty entries (the tail) get zero rows; concatenating all entries keeps one concat program per forward width.
+        if len(real) < len(entries):
+            outs.append(ttnn.zeros_like(outs[0]))
+        tt_sdpa_out = ttnn.concat(outs + [outs[-1]] * (len(entries) - len(outs)), dim=2)
+        for o in outs:
+            o.deallocate(True)
+
+    return _output_projection(
+        tt_sdpa_out, weights, mesh_config, ccl_manager, batch_size, total_seq_len, hidden_size, activation_dtype
+    )
+
+
+def _attention_core(
+    xqkv_fused,
+    hidden_states,
+    rope_mats,
+    weights,
+    kv_cache,
+    config,
+    mesh_config,
+    mesh_device,
+    program_config,
+    transformation_mat,
+    ccl_manager,
+    user_id,
+    batch_size,
+    layer_idx,
+    cached_len,
+    indexed_rope,
+    seq_len,
+):
+    """One chunk's rows, slot ``user_id`` at position ``cached_len``: split heads -> QK-norm -> RoPE -> KV write
+    -> attention -> concat heads. Consumes xqkv_fused (and hidden_states on MSA layers)."""
     # Split into Q, K, V heads
     num_local_heads = mesh_config.shard_size(config.num_heads)
     num_local_kv_heads = mesh_config.shard_size(config.num_kv_heads)
@@ -320,7 +393,12 @@ def attention_forward(
     with zone("concat_heads", FINE):
         tt_sdpa_out = concat_heads(tt_sdpa_out)
     tt_sdpa_out_pre_concat.deallocate(True)
+    return tt_sdpa_out
 
+
+def _output_projection(
+    tt_sdpa_out, weights, mesh_config, ccl_manager, batch_size, total_seq_len, hidden_size, activation_dtype
+):
     # Flatten back for output projection: [B, 1, S, H] -> [1, 1, B*S, H]
     if batch_size > 1:
         tt_sdpa_out = ttnn.reshape(tt_sdpa_out, [1, 1, total_seq_len, -1])
