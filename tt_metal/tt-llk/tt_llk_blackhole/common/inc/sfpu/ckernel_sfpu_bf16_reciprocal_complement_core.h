@@ -1,7 +1,6 @@
 // SPDX-FileCopyrightText: © 2026 Tenstorrent AI ULC
 // SPDX-License-Identifier: Apache-2.0
 #pragma once
-#include "ckernel_sfpu_bf16_sfpi_isa.h"
 
 // Selected reciprocal coordinate and reconstruction. Callers retain terminals,
 // coefficient ownership, rounding and traversal.
@@ -36,23 +35,23 @@ inline void reciprocal_complement_short_rung()
         constexpr unsigned word = Config::kCoefficientBits[kLateLoad];
         if constexpr (J == 0)
         {
-            ::ckernel::sfpu::bf16_sfpi::sfploadi(3, SFPLOADI_MOD0_UPPER, word >> 16);
+            TTI_SFPLOADI(3, SFPLOADI_MOD0_UPPER, word >> 16);
         }
         else
         {
-            ::ckernel::sfpu::bf16_sfpi::sfploadi(3, SFPLOADI_MOD0_LOWER, word & 0xffffu);
+            TTI_SFPLOADI(3, SFPLOADI_MOD0_LOWER, word & 0xffffu);
         }
     }
     else if constexpr (J == 4 && Config::kDegree == 7)
     {
-        ::ckernel::sfpu::bf16_sfpi::sfploadi(3, SFPLOADI_MOD0_UPPER, Config::kCoefficientBits[1] >> 16);
-        ::ckernel::sfpu::bf16_sfpi::sfploadi(3, SFPLOADI_MOD0_LOWER, Config::kCoefficientBits[1] & 0xffffu);
+        TTI_SFPLOADI(3, SFPLOADI_MOD0_UPPER, Config::kCoefficientBits[1] >> 16);
+        TTI_SFPLOADI(3, SFPLOADI_MOD0_LOWER, Config::kCoefficientBits[1] & 0xffffu);
     }
     else
     {
-        ::ckernel::sfpu::bf16_sfpi::sfpnop();
+        TTI_SFPNOP;
     }
-    ::ckernel::sfpu::bf16_sfpi::sfpmad(2, 1, (reciprocal_complement_short_addend<Config, J>()), 2, 0);
+    TTI_SFPMAD(2, 1, (reciprocal_complement_short_addend<Config, J>()), 2, 0);
     if constexpr (J + 2u < Config::kDegree)
     {
         reciprocal_complement_short_rung<Config, J + 1u>();
@@ -62,28 +61,22 @@ inline void reciprocal_complement_short_rung()
 template <class Config, unsigned Hold, unsigned Advance>
 inline void reciprocal_complement_body()
 {
-    ::ckernel::sfpu::bf16_sfpi::sfpload(0, 0, Hold, 0);
-    ::ckernel::sfpu::bf16_sfpi::sfpnop();
-    ::ckernel::sfpu::bf16_sfpi::sfpsetsgn(0, 0, 1, 1);
-    ::ckernel::sfpu::bf16_sfpi::sfparecip(0, 1, 3, 0);
-    ::ckernel::sfpu::bf16_sfpi::sfpmad(ckernel::p_sfpu::LCONST_neg1, 1, ckernel::p_sfpu::LCONST_1, 0, 0);
-    ::ckernel::sfpu::bf16_sfpi::sfpmad(1, 3, 12, 2, 2);
-    ::ckernel::sfpu::bf16_sfpi::sfpnop();
-    {
-        ::ckernel::sfpu::bf16_sfpi::Region cc_region;
-        ::ckernel::sfpu::bf16_sfpi::sfpsetcc(0, 2, 0, 0, cc_region);
-        ::ckernel::sfpu::bf16_sfpi::sfpmad(2, 3, ckernel::p_sfpu::LCONST_0, 3, 3, cc_region);
-        cc_region.close();
-    };
-    ::ckernel::sfpu::bf16_sfpi::sfpswap(0, 3, 1, 1);
-    ::ckernel::sfpu::bf16_sfpi::sfpmad(13, 1, 14, 2, 0);
+    TTI_SFPLOAD(0, 0, Hold, 0);
+    TTI_SFPNOP;
+    TTI_SFPSETSGN(0, 0, 1, 1);
+    TTI_SFPARECIP(0, 1, 3, 0);
+    TTI_SFPMAD(ckernel::p_sfpu::LCONST_neg1, 1, ckernel::p_sfpu::LCONST_1, 0, 0);
+    TTI_SFPMAD(1, 3, 12, 2, 2);
+    TTI_SFPNOP;
+    TTI_SFPSETCC(0, 2, 0, 0);
+    TTI_SFPMAD(2, 3, ckernel::p_sfpu::LCONST_0, 3, 3);
+    TTI_SFPENCC(3, 0, 0, 10);
+    TTI_SFPSWAP(0, 3, 1, 1);
+    TTI_SFPMAD(13, 1, 14, 2, 0);
     reciprocal_complement_short_rung<Config, 0>();
-    {
-        ::ckernel::sfpu::bf16_sfpi::Region cc_region;
-        ::ckernel::sfpu::bf16_sfpi::sfpsetcc(0, 0, 0, 0, cc_region);
-        ::ckernel::sfpu::bf16_sfpi::sfpmad(ckernel::p_sfpu::LCONST_neg1, 2, 4, 2, 0, cc_region);
-        cc_region.close();
-    };
+    TTI_SFPSETCC(0, 0, 0, 0);
+    TTI_SFPMAD(ckernel::p_sfpu::LCONST_neg1, 2, 4, 2, 0);
+    TTI_SFPENCC(3, 0, 0, 10);
     TTI_SFPLOADMACRO(3, 0, Advance, 0);
 }
 } // namespace sfpi

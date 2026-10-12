@@ -2,7 +2,6 @@
 // SPDX-License-Identifier: Apache-2.0
 
 #pragma once
-#include "ckernel_sfpu_bf16_sfpi_isa.h"
 #include <cstdint>
 namespace ckernel::sfpu {
 struct AtanBf16Config {
@@ -20,7 +19,7 @@ struct AtanBf16Config {
         __builtin_bit_cast(float, 0x3e1daa80u)};
 };
 }  // namespace ckernel::sfpu
-#include "ckernel_sfpu_bf16_reciprocal_complement.h"
+#include "sfpu/ckernel_sfpu_bf16_reciprocal_complement.h"
 
 namespace ckernel::sfpu {
 
