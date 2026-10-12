@@ -20,3 +20,12 @@ deadline 400 s):
   tt-project/t422/state/chain.log and ends with "T422_DONE <rc>".
 - Results land in /var/tmp/fasth3/t422/out_{off,on}/run.log, with md5sum lines for the mp4s.
 - Next: compare per-step denoise times (relative, at the clamp) and the mp4 md5s.
+
+## 2026-10-12 run 1598
+- off arm: blx01 job 860, completed (264 s). Per step 1.4935 s / 1.5264 s (2 replays), Total Pipeline 8.0932 s /
+  8.8756 s, process wall 255 s, mp4 md5 c79b7d37ba9c0f5034b3392af1f1a841 (out_off).
+- on arm: refused twice by the job lint (setsid in run422.sh; the lint got stricter after the off arm ran).
+  run422.sh now runs pytest in the broker's group (no setsid; TERM to timeout, then KILL). Deployed to blx01.
+- submit_on.sh (detached on g15blx02, run dir 1598, t422on.rc) queues the on arm behind job 864 (another
+  smarton job) and logs to state/on.log, ending with "T422ON_DONE <rc>".
+- Next: read state/on.log; compare per-step times (relative, clamp) and md5 against the off arm.
