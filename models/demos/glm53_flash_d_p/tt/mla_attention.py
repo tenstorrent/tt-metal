@@ -80,10 +80,18 @@ TP_HEADS = os.environ.get("GLM_MLA_TP", "1") == "1"
 TP_LINKS = int(os.environ.get("GLM_MOE_LINKS", "2"))
 # dtype of the 2D projection weights kv_a, q_b, o_proj (bf16 | bfp8; MiMo runs its projections on bfp8 weights)
 W_DTYPE = {"bf16": ttnn.bfloat16, "bfp8": ttnn.bfloat8_b}[os.environ.get("GLM_MLA_WDTYPE", "bf16")]
+# striped latent cache (split layout + own-row keys + the ring indexer; the serving path keeps the replicated one):
+# each chip keeps only the latent rows it computes, block-cyclic per chunk (chunk c's rows c S + d S/n .. on chip d
+# at its local rows c S/n ..; GLM-5.3's standard DSA layout), [max_seq / n, 512] per chip instead of a [max_seq, 512]
+# copy on every chip (1M tokens: 1.3 vs 10.7 GiB per chip for the 11 DSA layers). Per DSA layer the populated prefix
+# is all-gathered (one full-mesh snake, high_bw_all_gather) into one scratch shared by every layer; sparse_sdpa reads
+# it in place with the natural -> block-cyclic index remap. The chunk size is fixed per sequence.
+STRIPED = os.environ.get("GLM_MLA_STRIPED", "1") == "1"
+_SCRATCH = {}  # (mesh id, rows) -> the replicated [1, 1, rows, 512] gather scratch, shared by the DSA layers
 
 
 class TtMLA:
-    def __init__(self, mesh, w: dict, cfg, max_seq: int, tp: bool = False):
+    def __init__(self, mesh, w: dict, cfg, max_seq: int, tp: bool = False, striped: bool = False):
         self.mesh = mesh
         self.tp = tp and TP_HEADS and tuple(mesh.shape)[1] > 1
         self.nh, self.dqk, self.dv, self.r = cfg.num_attention_heads, cfg.qk_head_dim, cfg.v_head_dim, cfg.kv_lora_rank
@@ -127,12 +135,79 @@ class TtMLA:
             self.w_uv = replicate(mesh, w_uv.to(torch.bfloat16))
             self.w_o = up(w["o_proj"])  # [64 * 256, 4096]
         self.qb_cfg = minimal_config(mesh, 2, 8, 8, 1, 4)
-        self.cache = latent_cache(mesh, cfg, max_seq)
+        self.striped = striped and STRIPED and self.ndev > 1
+        if self.striped:
+            self.local_rows = -(-max_seq // self.ndev // 32) * 32  # per-chip stripe rows
+            self.cache = striped_latent_cache(mesh, cfg, self.local_rows)
+            self.chunk = None  # the sequence's chunk size, fixed by its first chunk
+            self._pending = None  # natural-order prefix from load_state, striped once the chunk size is known
+        else:
+            self.cache = latent_cache(mesh, cfg, max_seq)
 
     def bind_cache(self, cache: ttnn.Tensor) -> None:
         """Read and write another latent cache of the same shape (latent_cache; one per serving slot)."""
+        assert not self.striped, "serving slots use the replicated latent cache: run with GLM_INDEXER_RING=0"
         assert tuple(cache.shape) == tuple(self.cache.shape), (cache.shape, self.cache.shape)
         self.cache = cache
+
+    def _stripe_host(self, lat: torch.Tensor, n_rows: int) -> torch.Tensor:
+        """Natural rows [0, n_rows) of lat [*, 512] -> per-chip stripes [n, local_rows, 512] (block-cyclic, self.chunk)."""
+        c, n = self.chunk, self.ndev
+        out = torch.zeros(n, self.local_rows, self.r)
+        g = torch.arange(n_rows)
+        chip, local = (g % c) // (c // n), (g // c) * (c // n) + g % (c // n)
+        out[chip, local] = lat[:n_rows].float()
+        return out
+
+    def _set_chunk(self, s: int, start: int) -> None:
+        if self.chunk is None or start == 0:
+            assert s % (32 * self.ndev) == 0, f"chunk {s}: {self.ndev} tile-aligned stripes"
+            self.chunk = s
+        assert s == self.chunk and start % s == 0, f"striped latent: chunk {s} at {start}, the sequence's is {self.chunk}"
+        if self._pending is not None:  # a loaded prefix, striped now that the chunk size is known
+            lat, n_rows = self._pending
+            self._pending = None
+            host = self._stripe_host(lat, n_rows).reshape(*tuple(self.mesh.shape), self.local_rows, self.r)
+            d = ttnn.from_torch(
+                host.to(torch.bfloat16),
+                dtype=ttnn.bfloat16,
+                layout=ttnn.ROW_MAJOR_LAYOUT,
+                device=self.mesh,
+                memory_config=MC,
+                mesh_mapper=ttnn.ShardTensor2dMesh(self.mesh, dims=(0, 1), mesh_shape=tuple(self.mesh.shape)),
+            )
+            ttnn.copy(ttnn.reshape(d, (1, 1, self.local_rows, self.r)), self.cache)
+            ttnn.deallocate(d)
+
+    def _kv(self, start: int, s: int) -> ttnn.Tensor:
+        """The cache sparse_sdpa reads: the replicated cache, or (striped) the populated prefix gathered into the
+        shared scratch (each chip's stripe at its fixed slot, the block-cyclic layout the remap expects)."""
+        if not self.striped:
+            return self.cache
+        rows = self.local_rows * self.ndev
+        key = (id(self.mesh), rows)
+        if key not in _SCRATCH:
+            _SCRATCH[key] = ttnn.zeros(
+                (1, 1, rows, self.r), dtype=ttnn.bfloat16, layout=ttnn.ROW_MAJOR_LAYOUT, device=self.mesh, memory_config=MC
+            )
+        stamp_seq_sharded(self.cache, self.mesh)
+        return ttnn.experimental.high_bw_all_gather(
+            self.cache,
+            2,
+            output_tensor=_SCRATCH[key],
+            cluster_axis=None,
+            num_links=TP_LINKS,
+            gathered_dim_size=start + s,
+        )
+
+    def _sdpa_kw(self) -> dict:
+        if not self.striped:
+            return {}
+        return dict(
+            block_cyclic_sp_axis=0,
+            block_cyclic_chunk_local=self.chunk // tuple(self.mesh.shape)[0],
+            block_cyclic_cache_tp_sharded=True,
+        )
 
     def _local_rows(self, t: ttnn.Tensor) -> ttnn.Tensor:
         a = ttnn.mesh_partition(t, dim=-2, cluster_axis=0, memory_config=MC)
@@ -155,6 +230,15 @@ class TtMLA:
         ttnn.deallocate(lat)
         lb = ttnn.typecast(ln, ttnn.bfloat16, memory_config=MC)
         ttnn.deallocate(ln)
+        if self.striped:  # this chip's rows into its stripe, at local row start / n (same on every chip)
+            assert x_local, "the striped latent cache needs own-row keys"
+            self._set_chunk(s, start)
+            lrm = ttnn.to_layout(lb, ttnn.ROW_MAJOR_LAYOUT, memory_config=MC)
+            ttnn.deallocate(lb)
+            r0, r1 = start // self.ndev, (start + s) // self.ndev
+            ttnn.experimental.slice_write(lrm, self.cache, [0, 0, r0, 0], [1, 1, r1, self.r], [1, 1, 1, 1])
+            ttnn.deallocate(lrm)
+            return
         if x_local:
             from models.demos.glm53_flash_d_p.tt.common import gather_rows
 
@@ -182,9 +266,10 @@ class TtMLA:
         s = x.shape[-2] * (self.ndev if x_local else 1)
         assert start + s <= self.max_seq, f"chunk end {start + s} past max_seq {self.max_seq}"
         self._write_latent(x, start, x_local)
+        kv = self._kv(start, s)
         if self.tp:
             assert split and x_local, "head-parallel MLA needs the split layout with own-row keys"
-            return self._call_tp(q_resid, idx)
+            return self._call_tp(q_resid, idx, kv)
 
         qr = q_resid if split else self._local_rows(q_resid)
         q = ttnn.experimental.minimal_matmul(  # 0.271 -> 0.228 ms (tests/test_matmul_tune.py), same error
@@ -225,18 +310,19 @@ class TtMLA:
         if SDPA_MODE == "source":
             o = ttnn.transformer.sparse_sdpa(
                 qrm,
-                self.cache,
+                kv,
                 idx,
                 self.r,
                 kv_format=ttnn.transformer.SparseKVFormat.BF16,
                 scale=self.scale,
                 k_chunk_size=K_CHUNK,
                 compute_kernel_config=self.mm,
+                **self._sdpa_kw(),
             )
         else:
             o = ttnn.bringup.sparse_sdpa(
                 qrm,
-                self.cache,
+                kv,
                 idx,
                 self.r,
                 kv_format=ttnn.bringup.SparseKVFormat.BF16,
@@ -244,6 +330,7 @@ class TtMLA:
                 k_chunk_size=K_CHUNK,
                 compute_kernel_config=self.mm,
                 high_precision=True,
+                **self._sdpa_kw(),
             )
         ttnn.deallocate(qrm)
         ot = ttnn.to_layout(o, ttnn.TILE_LAYOUT, memory_config=MC)
@@ -290,24 +377,25 @@ class TtMLA:
         ttnn.deallocate(g1)
         return g2
 
-    def _sdpa(self, ql: ttnn.Tensor, idx: ttnn.Tensor) -> ttnn.Tensor:
+    def _sdpa(self, ql: ttnn.Tensor, idx: ttnn.Tensor, kv: ttnn.Tensor) -> ttnn.Tensor:
         """Absorbed q [1, 64, S/8, 512] TILE -> sparse attention over the latent cache -> [1, 64, S/8, 512] TILE."""
         qrm = ttnn.to_layout(ql, ttnn.ROW_MAJOR_LAYOUT, memory_config=MC)
         if SDPA_MODE == "source":
             o = ttnn.transformer.sparse_sdpa(
                 qrm,
-                self.cache,
+                kv,
                 idx,
                 self.r,
                 kv_format=ttnn.transformer.SparseKVFormat.BF16,
                 scale=self.scale,
                 k_chunk_size=K_CHUNK,
                 compute_kernel_config=self.mm,
+                **self._sdpa_kw(),
             )
         else:
             o = ttnn.bringup.sparse_sdpa(
                 qrm,
-                self.cache,
+                kv,
                 idx,
                 self.r,
                 kv_format=ttnn.bringup.SparseKVFormat.BF16,
@@ -315,13 +403,14 @@ class TtMLA:
                 k_chunk_size=K_CHUNK,
                 compute_kernel_config=self.mm,
                 high_precision=True,
+                **self._sdpa_kw(),
             )
         ttnn.deallocate(qrm)
         ot = ttnn.to_layout(o, ttnn.TILE_LAYOUT, memory_config=MC)
         ttnn.deallocate(o)
         return ot
 
-    def _call_tp(self, q_resid: ttnn.Tensor, idx: ttnn.Tensor) -> ttnn.Tensor:
+    def _call_tp(self, q_resid: ttnn.Tensor, idx: ttnn.Tensor, kv: ttnn.Tensor) -> ttnn.Tensor:
         """Head-parallel projections, sequence-parallel attention. q_resid / idx / the output: this chip's S/8 rows."""
         from models.demos.glm53_flash_d_p.tt.common import gather_half
 
@@ -352,7 +441,7 @@ class TtMLA:
             ql, in_dim=1, out_dim=2, num_links=TP_LINKS, memory_config=MC, cluster_axis=1
         )
         ttnn.deallocate(ql)
-        ot = self._sdpa(qs, idx)
+        ot = self._sdpa(qs, idx, kv)
         ttnn.deallocate(qs)
         oh_ = ttnn.experimental.all_to_all_async_generic(  # rows -> heads: [1, 16, S/2, 512]
             ot, in_dim=2, out_dim=1, num_links=TP_LINKS, memory_config=MC, cluster_axis=1
@@ -405,6 +494,9 @@ class TtMLA:
         """Latent rows [n, 512] (reference layout, rows [0, length) valid) -> the device cache."""
         lat = tensors["kv_latent"].float()
         n = lat.shape[0] if length is None else length
+        if self.striped:  # striped at the next chunk (its size fixes the layout)
+            self._pending = (lat, n)
+            return
         host = torch.zeros(1, 1, self.max_seq, self.r)
         host[0, 0, :n] = lat[:n]
         d = replicate(self.mesh, host.to(torch.bfloat16), layout=ttnn.ROW_MAJOR_LAYOUT)
@@ -412,7 +504,22 @@ class TtMLA:
         ttnn.deallocate(d)
 
     def state_torch(self) -> dict:
-        """The latent cache [max_seq, 512] (chip 0's copy; replicated)."""
+        """The latent cache [max_seq, 512] (chip 0's copy; replicated), or the stripes back in natural order."""
+        if self.striped:
+            out = torch.zeros(self.max_seq, self.r)
+            if self._pending is not None:
+                lat, n_rows = self._pending
+                out[:n_rows] = lat[:n_rows]
+                return {"kv_latent": out}
+            if self.chunk is None:
+                return {"kv_latent": out}
+            st = torch.stack(
+                [ttnn.to_torch(t).reshape(self.local_rows, self.r).float() for t in ttnn.get_device_tensors(self.cache)]
+            )
+            c, n = self.chunk, self.ndev
+            g = torch.arange(self.max_seq)
+            out[:] = st[(g % c) // (c // n), (g // c) * (c // n) + g % (c // n)]
+            return {"kv_latent": out}
         t = ttnn.to_torch(ttnn.get_device_tensors(self.cache)[0])
         return {"kv_latent": t.reshape(self.max_seq, self.r).float()}
 
@@ -426,6 +533,24 @@ def latent_cache(mesh, cfg, max_seq: int) -> ttnn.Tensor:
         device=mesh,
         memory_config=MC,
     )
+
+
+def striped_latent_cache(mesh, cfg, local_rows: int) -> ttnn.Tensor:
+    """This chip's stripe of the latent cache [1, 1, local_rows, 512] bf16 ROW_MAJOR, zeroed, declared sharded on the
+    sequence dim over both mesh axes in row-major chip order (what the full-mesh gather checks)."""
+    t = ttnn.zeros(
+        (1, 1, local_rows, cfg.kv_lora_rank), dtype=ttnn.bfloat16, layout=ttnn.ROW_MAJOR_LAYOUT, device=mesh, memory_config=MC
+    )
+    stamp_seq_sharded(t, mesh)
+    return t
+
+
+def stamp_seq_sharded(t: ttnn.Tensor, mesh) -> None:
+    """Declare t sharded on dim 2 over both mesh axes, row-major chip order (host metadata only; in-place device ops
+    such as slice_write leave the default replicated topology behind)."""
+    dist = ttnn.MeshShape(*tuple(mesh.shape))
+    coords = [ttnn.MeshCoordinate([c[i] for i in range(c.dims())]) for c in ttnn.MeshCoordinateRange(dist)]
+    t.update_tensor_topology(ttnn.TensorTopology(dist, [ttnn.PlacementShard(2), ttnn.PlacementShard(2)], coords))
 
 
 def idx_to_device(mesh, topk: torch.Tensor) -> ttnn.Tensor:
@@ -449,7 +574,7 @@ def idx_to_device(mesh, topk: torch.Tensor) -> ttnn.Tensor:
     return ttnn.bitcast(d, ttnn.uint32)
 
 
-def build_mla(mesh, loader, cfg, layer: int, max_seq: int, tp: bool = False) -> TtMLA:
+def build_mla(mesh, loader, cfg, layer: int, max_seq: int, tp: bool = False, striped: bool = False) -> TtMLA:
     p = f"{PREFIX}layers.{layer}.self_attn."
     w = {
         "kv_a": loader.weight(p + "kv_a_proj_with_mqa.weight"),
@@ -458,4 +583,4 @@ def build_mla(mesh, loader, cfg, layer: int, max_seq: int, tp: bool = False) -> 
         "kv_b": loader.weight(p + "kv_b_proj.weight"),
         "o_proj": loader.weight(p + "o_proj.weight"),
     }
-    return TtMLA(mesh, w, cfg, max_seq, tp=tp)
+    return TtMLA(mesh, w, cfg, max_seq, tp=tp, striped=striped)
