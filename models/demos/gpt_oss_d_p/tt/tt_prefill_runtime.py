@@ -552,8 +552,15 @@ class TtPrefillRuntime:
         if wants_dflash_result:
             from .dflash import DFlashFeatureLayout, DFlashPrefillResult
 
-            logits_tt = model_out
             assert owner_row is not None and final_in_tile is not None
+            # Reduce the BF8 tile to the final token's BF16 row on device; host-side
+            # BF8 tile unpacking of all 32 rows dominates the handoff otherwise.
+            logits_bf16 = ttnn.typecast(model_out, ttnn.bfloat16)
+            ttnn.deallocate(model_out)
+            logits_rm = ttnn.to_layout(logits_bf16, ttnn.ROW_MAJOR_LAYOUT)
+            ttnn.deallocate(logits_bf16)
+            logits_tt = ttnn.slice(logits_rm, (0, 0, final_in_tile, 0), (1, 1, final_in_tile + 1, logits_rm.shape[-1]))
+            ttnn.deallocate(logits_rm)
             shards = ttnn.get_device_tensors(logits_tt)
             mesh_cols = self.config.mesh_shape[1]
 
@@ -567,7 +574,7 @@ class TtPrefillRuntime:
                 [ttnn.to_torch(shards[shard_index(tp_coordinate)]) for tp_coordinate in range(self.config.tp_factor)],
                 dim=-1,
             )
-            logits = logits[..., final_in_tile, : self.model.vocab_size].reshape(-1).float()
+            logits = logits[..., 0, : self.model.vocab_size].reshape(-1).float()
             y0 = int(torch.argmax(logits).item())
             ttnn.deallocate(logits_tt)
             timings = {
