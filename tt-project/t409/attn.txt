@@ -1,6 +1,7 @@
 ID=t409-attn-1
 TASK=t409
 WORKDIR=/var/tmp/fasth3/t409
+ENV=/var/tmp/fasth3/t409/env409.yaml
 CONFIG=t409-vsa-attn-sp0
 TIMEOUT=600
 CMD=bash /var/tmp/fasth3/t409/run409a.sh

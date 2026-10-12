@@ -60,3 +60,9 @@ Branch ttp/t409-port-vsa-sparse-attention-into-the-fasth, base a15eb37ec6a (t400
 
 ## t416 run 1613 (2026-10-12 01:10 PDT)
 - Host reboot killed chain416a (run 1611). Restarted unchanged from run 1613 (state/runs/1613/chain416a.out). blx01 /var/tmp/fasth3 still 453 GB, so it waits for the cap. Branch push of 502ae371602 landed.
+
+## t416 run 1647 (2026-10-12 02:50 PDT)
+- chain416a (run 1613) passed the cap (430 GB at 08:14Z), then ended T416A_DONE 5 submit-rc2 at 09:46Z. Cause: attn.txt
+  had no ENV line, so blx01-submit.sh ran `run-bg ... -e -t 600` and the broker CLI refused (rc 2). Lint passed.
+- Fix: tt-project/t409/env409.yaml (t400 env with t409/b paths), copied to blx01 /var/tmp/fasth3/t409/; attn.txt ENV= it.
+- Direct submit at 09:50Z got 75 (another smarton job on blx01). chain416a restarted detached from run 1647.
