@@ -21,20 +21,22 @@ std::uint32_t unp_cfg_context          = 0;
 std::uint32_t pack_sync_tile_dst_ptr   = 0;
 std::uint32_t math_sync_tile_dst_index = 0;
 
-template <bool Produce, ckernel::BroadcastType BType>
-inline void perf_binary_source_handshakes(
-    const std::uint32_t loop_factor, const std::uint32_t num_tiles, const std::uint32_t num_faces_r, const std::uint32_t num_faces_c)
+template <bool Produce, ckernel::BroadcastType BType, PerfRunType RUN_TYPE = PerfRunType::L1_CONGESTION>
+inline void perf_binary_mock(const std::uint32_t loop_factor, const std::uint32_t num_tiles, const std::uint32_t num_faces_r, const std::uint32_t num_faces_c)
 {
     const std::uint32_t num_faces = num_faces_r * num_faces_c;
 
+    if constexpr (perf_mock_mop<RUN_TYPE>()) // Wormhole isolate mocks: the handshakes below as one MOP stream (perf.h)
+    {
+        return _perf_mock_binary_<Produce, static_cast<std::uint32_t>(BType)>(loop_factor * num_tiles, num_faces_r, num_faces_c);
+    }
     for (std::uint32_t loop = 0; loop < loop_factor; ++loop)
     {
         for (std::uint32_t tile = 0; tile < num_tiles; ++tile)
         {
             if constexpr (BType == ckernel::BroadcastType::COL)
             {
-                // The COL MOP loads B once per face row, then consumes A once
-                // per face column while retaining B until the row completes.
+                // The COL MOP loads B once per face row, then consumes A once per face column while retaining B until the row completes.
                 for (std::uint32_t face_r = 0; face_r < num_faces_r; ++face_r)
                 {
                     if constexpr (Produce)
@@ -49,9 +51,8 @@ inline void perf_binary_source_handshakes(
                     }
                 }
             }
-            else if constexpr (BType == ckernel::BroadcastType::SCALAR)
+            else if constexpr (BType == ckernel::BroadcastType::SCALAR) // Scalar B remains valid while all A faces are consumed.
             {
-                // Scalar B remains valid while all A faces are consumed.
                 if constexpr (Produce)
                 {
                     _perf_unpack_loop_set_valid<false /*set_a*/, true /*set_b*/>(1);
@@ -63,9 +64,8 @@ inline void perf_binary_source_handshakes(
                     _perf_math_loop_clear_valid<false /*clear_a*/, true /*clear_b*/>(1);
                 }
             }
-            else
+            else // NONE and ROW load and clear both sources once per face.
             {
-                // NONE and ROW load and clear both sources once per face.
                 if constexpr (Produce)
                 {
                     _perf_unpack_loop_set_valid<true /*set_a*/, true /*set_b*/>(num_faces);
@@ -150,7 +150,7 @@ void run_kernel(RUNTIME_PARAMETERS params)
         }
         else if constexpr (PERF_RUN_TYPE == PerfRunType::MATH_ISOLATE)
         {
-            perf_binary_source_handshakes<true, BROADCAST_TYPE>(LOOP_FACTOR, num_total_tiles, tensor_shape.num_faces_r_dim, tensor_shape.num_faces_c_dim);
+            perf_binary_mock<true, BROADCAST_TYPE, PERF_RUN_TYPE>(LOOP_FACTOR, num_total_tiles, tensor_shape.num_faces_r_dim, tensor_shape.num_faces_c_dim);
         }
         else
         {
@@ -233,7 +233,7 @@ void run_kernel(RUNTIME_PARAMETERS params)
         }
         else if constexpr (PERF_RUN_TYPE == PerfRunType::UNPACK_ISOLATE || PERF_RUN_TYPE == PerfRunType::L1_CONGESTION)
         {
-            perf_binary_source_handshakes<false, BROADCAST_TYPE>(LOOP_FACTOR, num_input_tiles, tensor_shape.num_faces_r_dim, tensor_shape.num_faces_c_dim);
+            perf_binary_mock<false, BROADCAST_TYPE, PERF_RUN_TYPE>(LOOP_FACTOR, num_input_tiles, tensor_shape.num_faces_r_dim, tensor_shape.num_faces_c_dim);
         }
         else
         {
@@ -294,7 +294,7 @@ void run_kernel(RUNTIME_PARAMETERS params)
         }
         else if constexpr (PERF_RUN_TYPE == PerfRunType::UNPACK_ISOLATE || PERF_RUN_TYPE == PerfRunType::L1_CONGESTION)
         {
-            perf_binary_source_handshakes<false, BROADCAST_TYPE>(LOOP_FACTOR, num_input_tiles, tensor_shape.num_faces_r_dim, tensor_shape.num_faces_c_dim);
+            perf_binary_mock<false, BROADCAST_TYPE, PERF_RUN_TYPE>(LOOP_FACTOR, num_input_tiles, tensor_shape.num_faces_r_dim, tensor_shape.num_faces_c_dim);
         }
         else
         {
