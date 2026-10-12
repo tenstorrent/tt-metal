@@ -479,6 +479,20 @@ FORCE_INLINE void setup_dfb_implicit_sync(uint32_t tt_l1_ptr* dfb_config_base, u
     }
     const uint32_t t_after_cmdbuf = rdcycle();
 
+    // Drop any interrupt-pending bit a previous launch left latched on the trids this launch is about to enable.
+    // The ISR resolves a fired trid through g_txn_dfb_descriptor, which now holds this launch's tile counters, so a
+    // stale pending bit would post or ack tiles that this launch never moved (tt-metal#59923).
+    // W0C: writing 0 clears a bit, writing 1 leaves it unchanged.
+    __builtin_riscv_ttrocc_cmdbuf_wr_reg(
+        OVERLAY_RD_CMD_BUF,
+        TT_ROCC_ACCEL_TT_ROCC_CPU0_CMD_BUF_R_PER_TR_ID_IP_1_REG_OFFSET / 8,
+        ~(static_cast<uint64_t>(producer_txn_id_mask) << 32));
+    __builtin_riscv_ttrocc_cmdbuf_wr_reg(
+        OVERLAY_WR_CMD_BUF,
+        TT_ROCC_ACCEL_TT_ROCC_CPU0_CMD_BUF_R_PER_TR_ID_IP_2_REG_OFFSET / 8,
+        ~static_cast<uint64_t>(consumer_txn_id_mask));
+    asm volatile("nop");  // let the clear propagate before IE is written (same hw note as in the ISR)
+
     const uint32_t t_before_ie = rdcycle();
     uint64_t reg_val = __builtin_riscv_ttrocc_cmdbuf_rd_reg(
         OVERLAY_RD_CMD_BUF, TT_ROCC_ACCEL_TT_ROCC_CPU0_CMD_BUF_R_PER_TR_ID_IE_1_REG_OFFSET / 8);
