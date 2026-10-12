@@ -312,6 +312,23 @@ void Conv3dDeviceOperation::validate_on_program_cache_miss(
     }
 }
 
+// The default key (attributes + tensor specs) cannot tell apart two calls whose L1 plans differ because the
+// live L1 frontier moved between them, and validate_circular_buffer_region re-checks a cached program's CB
+// region against the frontier on every enqueue. Keying on the plan's decisions makes such a call a miss that
+// re-plans, instead of a hit that replays a CB layout the check rejects. A custom hash opts the op out of the
+// framework's attribute-level collision guard, so the inputs of the default key are folded in unchanged.
+ttsl::hash::hash_t Conv3dDeviceOperation::compute_program_hash(
+    const operation_attributes_t& args, const tensor_args_t& tensor_args) {
+    const Conv3dL1Plan plan = select_l1_plan(args, tensor_args);
+    return ttsl::hash::hash_objects_with_default_seed(
+        ttsl::hash::type_hash<Conv3dDeviceOperation>,
+        args,
+        tensor_args,
+        plan.out_subblock_h,
+        plan.prefetch_shard,
+        plan.coalesced_scratch_rows);
+}
+
 tt::tt_metal::TensorSpec Conv3dDeviceOperation::compute_output_specs(
     const operation_attributes_t& args, const tensor_args_t& tensor_args) {
     const auto& input_tensor_a = tensor_args.input_tensor;
