@@ -382,6 +382,21 @@ class UpdateServerTests(UpdateServerFixture):
         self.assertEqual((self.root / "state/other-sub-at-build").read_text().strip(), other_latest)
         self.old.wait(timeout=5)
 
+    def test_rewritten_parent_with_moved_submodule_pins(self):
+        # A rebase onto main usually also moves submodule pins, e.g. tt_ops_code_gen and umd.
+        self.rewrite_parent_remote()
+        code_gen_pinned = self.move_submodule_pointer(CODE_GEN_SUBMODULE, self.code_gen_remote)
+        other_pinned = self.move_other_submodule_pointer()
+        tip = self.git(self.parent_remote, "rev-parse", "HEAD")
+        result = self.update()
+        self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
+        self.assertIn("was rewritten", result.stdout)
+        self.assertEqual(self.git(self.root, "rev-parse", "HEAD"), tip)
+        self.assertEqual(self.git(self.code_gen_sub, "rev-parse", "HEAD"), code_gen_pinned)
+        self.assertEqual(self.git(self.other_sub, "rev-parse", "HEAD"), other_pinned)
+        self.assertEqual((self.root / "state/other-sub-at-build").read_text().strip(), other_pinned)
+        self.old.wait(timeout=5)
+
     def test_dirty_other_submodule_is_rejected(self):
         self.move_other_submodule_pointer()
         (self.other_sub / "version").write_text("local edits")
