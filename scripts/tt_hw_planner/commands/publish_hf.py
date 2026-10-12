@@ -185,7 +185,7 @@ def _write_tt_model_yaml(
         perf_bits.append(f"at batch {batch}")
     if hardware:
         perf_bits.append(f"on {hardware}")
-    perf = " ".join(perf_bits) or "measured with tt_hw_planner; see the dashboard."
+    perf = " ".join(perf_bits) or "measured on Tenstorrent; see the dashboard."
     lines = [
         'schema: "5.1"',
         f"repo: {repo_id}",
@@ -234,12 +234,12 @@ def _write_tt_model_yaml(
         "",
         "card:",
         f"  description: >",
-        f"    {slug}, brought up and optimized on {_hardware_phrase(state, hardware)} with tt_hw_planner",
+        f"    {slug}, brought up and optimized on {_hardware_phrase(state, hardware)}",
         f"    (kernel/lever autotuning against a PCC-gated end-to-end pipeline).",
         f"  performance: >",
         f"    {perf}.",
         f"  limitations: >",
-        f"    Community bring-up via tt_hw_planner; validated on {_hardware_phrase(state, hardware)}.",
+        f"    Validated on {_hardware_phrase(state, hardware)}.",
         f"  architecture: autoport ({slug})",
         f"  status: Experimental community bring-up",
         "  license:",
@@ -297,6 +297,34 @@ def _arch_name(state: dict) -> str:
     if "wormhole" in a:
         return "Wormhole"
     return a or "Tenstorrent"
+
+
+def _ensure_hw_env(state: dict, demo_dir=None, box: str | None = None) -> dict:
+    """Fill state.env with the real hardware when the run env didn't record it: device_count from the
+    run's parallelism manifest (chips, else mesh product), arch from the operator's --box. Best-effort
+    and idempotent, so every card the publish builds can name the chips automatically."""
+    env = dict(state.get("env") or {})
+    if not env.get("device_count") and demo_dir:
+        try:
+            import glob as _g
+
+            for f in _g.glob(str(Path(demo_dir) / "**" / "parallelism_manifest.json"), recursive=True):
+                d = json.loads(Path(f).read_text())
+                chips = d.get("chips")
+                if not chips and isinstance(d.get("mesh"), (list, tuple)) and len(d["mesh"]) == 2:
+                    chips = int(d["mesh"][0]) * int(d["mesh"][1])
+                if chips:
+                    env["device_count"] = int(chips)
+                    break
+        except Exception:  # noqa: BLE001
+            pass
+    if not env.get("arch") and box:
+        tgt = _BOX_TARGET.get(box)
+        if tgt:
+            env["arch"] = tgt[0]
+    state = dict(state)
+    state["env"] = env
+    return state
 
 
 def _hardware_phrase(state: dict, hardware: str | None) -> str:
@@ -361,7 +389,7 @@ def _tt_validated_block(state: dict, hw_phrase: str, commit: str | None) -> str:
     table = "\n".join(["| Measured on Tenstorrent | Value |", "| --- | --- |", *rows])
     return (
         "## Validated on Tenstorrent\n\n"
-        f"Brought up and measured on {hw_phrase} with `tt_hw_planner` (PCC-gated end-to-end pipeline). "
+        f"Brought up and measured on {hw_phrase} through a PCC-gated end-to-end pipeline. "
         "Every figure in this section is measured on Tenstorrent hardware; the sections below are the "
         "upstream base-model card (measured by the base-model authors on GPU), reproduced for reference.\n\n"
         + table + "\n"
@@ -514,9 +542,7 @@ def _tt_run_section(slug: str) -> str:
         "# vLLM, OpenAI-compatible API via tt-inference-server, from an optimized tt-metal checkout:\n"
         f"python3 run.py --model {slug} --tt-device <device> --workflow server \\\n"
         "  --local-server --tt-metal-home <your tt-metal checkout>\n"
-        "```\n\n"
-        "_Published with `tt_hw_planner publish-hf`. The optimized model implementation lives under "
-        "`models/`; weights are referenced from the base repo above (not stored here)._\n"
+        "```\n"
     )
 
 
@@ -531,6 +557,7 @@ def _compose_mirrored_card(
     if not body:
         return None
     body = _mirror_body_tt(body, base_weights, demo_dir, state)  # strip GPU, TT-vs-GPU benchmarks
+    state = _ensure_hw_env(state, demo_dir)
     _, hw_tag, _ = _serve_target(None, state.get("env"))
     hw = _hardware_phrase(state, hw_tag)
     arch_tag = str((state.get("env") or {}).get("arch") or "").strip().lower()
@@ -542,7 +569,7 @@ def _compose_mirrored_card(
     fm.append("---")
     intro = (
         f"A Tenstorrent deployment of [`{base_weights}`](https://huggingface.co/{base_weights}) — the same "
-        f"weights, brought up on {hw} with `tt_hw_planner`. This card mirrors the upstream model card: the "
+        f"weights, brought up on {hw}. This card mirrors the upstream model card: the "
         "**Validated on Tenstorrent** section holds figures measured on Tenstorrent hardware. GPU-specific "
         "deployment/usage has been removed; the base-model benchmark tables are shown with a Tenstorrent "
         "column (the on-device score when a bounded TT eval has been run, else 'pending (TT)')."
@@ -591,8 +618,8 @@ def _build_card(state: dict, slug: str, base_weights: str | None, commit: str | 
         "",
         f"# {slug} — Tenstorrent-optimized",
         "",
-        "Optimized for Tenstorrent hardware with `tt_hw_planner` (kernel/lever autotuning "
-        "against a PCC-gated end-to-end pipeline).",
+        "Optimized for Tenstorrent hardware with kernel/lever autotuning "
+        "against a PCC-gated end-to-end pipeline.",
         "",
     ]
     if base_weights:
@@ -630,9 +657,6 @@ def _build_card(state: dict, slug: str, base_weights: str | None, commit: str | 
         f"python3 run.py --model {slug} --tt-device <device> --workflow server \\",
         "  --local-server --tt-metal-home <your tt-metal checkout>",
         "```",
-        "",
-        "_Published with `tt_hw_planner publish-hf`. The optimized model implementation lives under "
-        "`models/`; weights are referenced from the base repo above (not stored here)._",
         "",
     ]
     return "\n".join(L)
@@ -910,7 +934,7 @@ def _scaffold_vllm_bundle(
                 "arch": arch,
                 "main_class": "adapter:" + tt_arch,
                 "weights": weights or "REPLACE/with-base-weights-repo",
-                "note": "Generated by tt_hw_planner publish-hf.",
+                "note": "Auto-generated vLLM bundle for Tenstorrent.",
             },
             indent=2,
         )
@@ -1652,7 +1676,7 @@ def _run_container(args, state: dict, slug: str, demo_dir, commit: str | None) -
                 repo_id=args.repo,
                 folder_path=str(staged),
                 repo_type="model",
-                commit_message=f"Publish {slug} container bundle (tt_hw_planner)",
+                commit_message=f"Publish {slug} container bundle",
             )
     except Exception as e:
         low = str(e).lower()
@@ -1813,7 +1837,7 @@ def _maybe_autocommit(args, demo_dir) -> None:
         print(f"  [publish-hf] auto-commit skipped: {exc}")
 
 
-def _maybe_mirror_container_card(args, slug, state, base_weights, commit) -> None:
+def _maybe_mirror_container_card(args, slug, state, base_weights, commit, demo_dir=None) -> None:
     """After a container publish, re-publish the README MIRRORING the upstream HF model card the port
     is based on — a TT-validated header (numbers measured in this run) + correct hardware + the upstream
     body for reference. Default on; --no-mirror-upstream to keep tt-model's card. Best-effort."""
@@ -1821,7 +1845,7 @@ def _maybe_mirror_container_card(args, slug, state, base_weights, commit) -> Non
         return
     try:
         tok = _hf_token(args)
-        card = _compose_mirrored_card(state, slug, base_weights, commit, tok)
+        card = _compose_mirrored_card(state, slug, base_weights, commit, tok, demo_dir)
         if not card:
             print("  [publish-hf] upstream mirror: upstream card unavailable; kept tt-model card")
             return
@@ -1914,6 +1938,7 @@ def cmd_publish_hf(args) -> int:
         )
         return 2
 
+    state = _ensure_hw_env(state, demo_dir, getattr(args, "box", None))
     commit = _git_commit(state_root)
     # Auto-detect the base-weights HF id when the caller didn't pass one, so the card/manifest never
     # ship a placeholder. Also feeds the container path (it reads args.weights downstream).
@@ -1927,7 +1952,7 @@ def cmd_publish_hf(args) -> int:
     if getattr(args, "container", False):
         rc = _run_container(args, state, slug, demo_dir, commit)
         if rc == 0:
-            _maybe_mirror_container_card(args, slug, state, base_weights, commit)
+            _maybe_mirror_container_card(args, slug, state, base_weights, commit, demo_dir)
             _maybe_autocommit(args, demo_dir)
         return rc
 
@@ -1994,7 +2019,7 @@ def cmd_publish_hf(args) -> int:
             folder_path=str(stage),
             repo_type="model",
             token=token,
-            commit_message=f"Publish {slug} (tt_hw_planner; tt-metal {commit})",
+            commit_message=f"Publish {slug} (tt-metal {commit})",
         )
     except Exception as e:
         print(f"  [publish-hf] push failed: {e}")
