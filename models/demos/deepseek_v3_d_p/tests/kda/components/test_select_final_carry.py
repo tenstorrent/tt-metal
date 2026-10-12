@@ -120,3 +120,61 @@ def test_select_final_carry_follows_bounds_across_replays(mesh_device, bounded, 
         for tensor in (output, rank_final_tt, prefix_tt, start_tt, end_tt):
             if tensor is not None:
                 ttnn.deallocate(tensor)
+
+
+@pytest.mark.parametrize("mesh_device,device_params", _meshes(), indirect=True)
+@pytest.mark.parametrize(
+    "case, error",
+    [
+        pytest.param("rank_final_dtype", "rank_final must be FLOAT32", id="rank-final-must-be-fp32"),
+        pytest.param("prefix_final_dtype", "prefix_final must be FLOAT32", id="prefix-final-must-be-fp32"),
+        pytest.param("prefix_final_layout", "prefix_final must use TILE layout", id="prefix-final-must-be-tiled"),
+        pytest.param("prefix_final_rank", r"prefix_final must be \[B\*H, K, V\]", id="prefix-final-must-be-rank-3"),
+        pytest.param("state_shape", r"rank_final must be \[B\*H, K, V\], or", id="rank-final-must-match-prefix-final"),
+        pytest.param(
+            "group_shape", r"rank_final must be \[B\*H, K, V\], or", id="grouped-rank-final-must-match-prefix-final"
+        ),
+        pytest.param("actual_start_dtype", "actual_start must be UINT32", id="actual-start-must-be-uint32"),
+        pytest.param("local_rows", "local_rows must be positive and 32-aligned", id="local-rows-must-be-tile-aligned"),
+        pytest.param("axis", "sequence_parallel_axis 2 is out of range", id="sp-axis-must-be-in-range"),
+        pytest.param("num_links", "exceeds the", id="num-links-must-fit-the-axis"),
+    ],
+)
+def test_select_final_carry_rejects_contract_violations(mesh_device, case, error, expect_error):
+    def to_device(shape, dtype=ttnn.float32, layout=ttnn.TILE_LAYOUT):
+        return ttnn.from_torch(
+            torch.zeros(shape),
+            dtype=dtype,
+            layout=layout,
+            device=mesh_device,
+            mesh_mapper=ttnn.ReplicateTensorToMesh(mesh_device),
+        )
+
+    state_shape = (_HEADS, _KEY, _VALUE)
+    rank_final = to_device(state_shape)
+    prefix_final = to_device(state_shape)
+    actual_start = make_actual_start(mesh_device)
+    kwargs = {"local_rows": _ROWS, "sequence_parallel_axis": 0}
+    if case == "rank_final_dtype":
+        rank_final = to_device(state_shape, dtype=ttnn.bfloat16)
+    elif case == "prefix_final_dtype":
+        prefix_final = to_device(state_shape, dtype=ttnn.bfloat16)
+    elif case == "prefix_final_layout":
+        prefix_final = to_device(state_shape, layout=ttnn.ROW_MAJOR_LAYOUT)
+    elif case == "prefix_final_rank":
+        rank_final = prefix_final = to_device((1, *state_shape))
+    elif case == "state_shape":
+        rank_final = to_device((_HEADS, _KEY, 2 * _VALUE))
+    elif case == "group_shape":
+        rank_final = to_device((_HEADS, 4, _KEY, 2 * _VALUE))
+    elif case == "actual_start_dtype":
+        actual_start = to_device((1,), dtype=ttnn.int32, layout=ttnn.ROW_MAJOR_LAYOUT)
+    elif case == "local_rows":
+        kwargs["local_rows"] = _ROWS + 16
+    elif case == "axis":
+        kwargs["sequence_parallel_axis"] = 2
+    else:
+        kwargs["num_links"] = 1000
+
+    with expect_error(RuntimeError, error):
+        ttnn.experimental.kda.select_final_carry(rank_final, prefix_final, actual_start=actual_start, **kwargs)

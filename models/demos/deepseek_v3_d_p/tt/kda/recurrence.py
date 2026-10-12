@@ -40,7 +40,7 @@ def _group_summary_memory_config(device: ttnn.Device, group_heads: int, key_dim:
 
 
 @dataclass(frozen=True)
-class _AffineTransform:
+class AffineTransform:
     """State-space affine map ``state -> a @ state + b``."""
 
     a: ttnn.Tensor
@@ -169,7 +169,7 @@ def _summarize_chunk_groups(
     groups_per_head: int,
     summary_memory_config: ttnn.MemoryConfig,
     compute_config: _RecurrenceComputeConfig,
-) -> _AffineTransform:
+) -> AffineTransform:
     """Summarize whole groups for the single-rank path at the BF16 prefix boundary."""
     a, b, tail_a, tail_b = ttnn.experimental.kda.summarize_chunk_recurrence(
         *grouped.as_kernel_args(),
@@ -183,7 +183,7 @@ def _summarize_chunk_groups(
     # A single sequence rank has no split tail, so only the head summaries are needed.
     ttnn.deallocate(tail_a)
     ttnn.deallocate(tail_b)
-    return _AffineTransform(a, b)
+    return AffineTransform(a, b)
 
 
 def _scan_chunks(
@@ -211,7 +211,7 @@ def _scan_chunks(
     return RecurrenceResult(output=output, final_state=final_states)
 
 
-def _pack_transform(transform: _AffineTransform) -> ttnn.Tensor:
+def pack_transform(transform: AffineTransform) -> ttnn.Tensor:
     """Pack a FP32 transform into the BF16 [1, BH, K, K+V] rows of [A | B] that the prefix gathers."""
     transform_a, transform_b = transform.a, transform.b
     batch_heads, key_dim = tuple(transform_a.shape)[0], tuple(transform_a.shape)[1]
@@ -229,7 +229,7 @@ def _pack_transform(transform: _AffineTransform) -> ttnn.Tensor:
     return ttnn.typecast(packed, KDA_AFFINE_SUMMARY_DTYPE, memory_config=KDA_OUTPUT_MEMORY_CONFIG)
 
 
-def _distributed_prefix(
+def distributed_prefix(
     packed: ttnn.Tensor,
     initial_state: ttnn.Tensor,
     *,
@@ -283,7 +283,7 @@ def _last_group_state(
 
 def _ordinary_group_scan(
     grouped: _PreparedChunks,
-    summary: _AffineTransform,
+    summary: AffineTransform,
     initial_state: ttnn.Tensor,
     *,
     actual_start: ttnn.Tensor,
@@ -365,7 +365,7 @@ def _scan_local_grouped_chunks(
 
 
 def _partition_prefix(
-    summary: _AffineTransform,
+    summary: AffineTransform,
     initial_state: ttnn.Tensor,
     *,
     groups_per_head: int,
@@ -386,8 +386,8 @@ def _partition_prefix(
         memory_config=KDA_OUTPUT_MEMORY_CONFIG,
         compute_kernel_config=compute_config.affine_prefix,
     )
-    return _distributed_prefix(
-        _pack_transform(_AffineTransform(a, b)),
+    return distributed_prefix(
+        pack_transform(AffineTransform(a, b)),
         initial_state,
         sequence_parallel_axis=sequence_parallel_axis,
         compute_config=compute_config.affine_prefix,
@@ -425,7 +425,7 @@ def _scan_sp_grouped_chunks(
             compute_kernel_config=compute_config.preparation,
             packed_head=True,
         )
-        group_entry_states, prefix_final_state = _distributed_prefix(
+        group_entry_states, prefix_final_state = distributed_prefix(
             packed,
             initial_state,
             sequence_parallel_axis=sequence_parallel_axis,
@@ -444,7 +444,7 @@ def _scan_sp_grouped_chunks(
             compute_kernel_config=compute_config.preparation,
         )
         local_entry_state, prefix_final_state = _partition_prefix(
-            _AffineTransform(head_a, head_b),
+            AffineTransform(head_a, head_b),
             initial_state,
             groups_per_head=groups,
             local_rows=geometry.local_rows,
