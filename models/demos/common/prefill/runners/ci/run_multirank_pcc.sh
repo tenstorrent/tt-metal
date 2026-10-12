@@ -32,10 +32,12 @@ CHUNK_SIZE=5120
 WARMUP_CHUNKS=10
 PCC_THRESHOLD=0.85
 GOLDEN_LEN=56320
-# Off by default. Reads the runner-side probe in summarize_ci_run.py's perf JSON, not the producer's
-# log line, which times the push schedule and returns long before the model is done.
+# Off unless set here or found in perf_baselines.json. Reads the runner-side probe in
+# summarize_ci_run.py's perf JSON, not the producer's log line, which times the push schedule and
+# returns long before the model is done.
 EXPECTED_TPS="${PREFILL_EXPECTED_TPS:-}"
-PERF_MARGIN="${PREFILL_PERF_MARGIN:-0.15}"
+EXPECTED_PROBE=""
+PERF_BASELINES="${TT_METAL_HOME}/models/demos/common/prefill/runners/ci/perf_baselines.json"
 # Demand a measurement even before a baseline exists, so a leg being calibrated cannot pass green
 # on nothing.
 REQUIRE_TPS="${PREFILL_REQUIRE_TPS:-0}"
@@ -160,6 +162,35 @@ TTRUN_PY="${TT_METAL_HOME}/ttnn/ttnn/distributed/ttrun.py"
 MPIRUN=$(command -v mpirun-ulfm || command -v mpirun)
 
 RESOLVED_HOSTS=$(awk 'NF && $1 !~ /^#/ {printf "%s,", $1}' "${TTRUN_DIR}/hostfile" | sed 's/,$//')
+
+# Throughput tracks the galaxies' power budget, so the baseline is picked per power class. A host
+# missing from the table counts as the lowest class: a pipeline runs at its slowest galaxy's pace.
+BASELINE_MARGIN=""
+if [ -z "${EXPECTED_TPS}" ] && [ -f "${PERF_BASELINES}" ]; then
+  read -r EXPECTED_TPS EXPECTED_PROBE BASELINE_MARGIN < <(
+    python3 - "${PERF_BASELINES}" "${MODEL}" "${CONFIG}" "${RESOLVED_HOSTS}" <<'BASEPY'
+import json, sys
+
+path, model, config, hosts = sys.argv[1:]
+table = json.load(open(path))
+entry = table["baselines"].get(model, {}).get(config)
+if entry is None:
+    sys.exit(0)
+power = {host: cls for cls, members in table["power"].items() for host in members}
+names = [host.split(".")[0] for host in hosts.split(",") if host]
+unknown = [host for host in names if host not in power]
+if unknown:
+    print(f"TPS baseline WARN: {unknown} not in {path}; treating them as 8kw", file=sys.stderr)
+cls = "14kw" if names and all(power.get(host) == "14kw" for host in names) else "8kw"
+if cls not in entry:
+    print(f"TPS baseline: none for {model} {config} on {cls}", file=sys.stderr)
+    sys.exit(0)
+print(f"TPS baseline: {model} {config} on {cls}: {entry[cls]} tok/s {entry['probe']}", file=sys.stderr)
+print(entry[cls], entry["probe"], table["margin"])
+BASEPY
+  ) || true
+fi
+PERF_MARGIN="${PREFILL_PERF_MARGIN:-${BASELINE_MARGIN:-0.15}}"
 TTRUN_CWD="${PIPELINE_DIR}/ttrun-cwd"
 mkdir -p "${TTRUN_CWD}"
 
@@ -358,10 +389,10 @@ if [ "${REQUIRE_TPS}" = 1 ] || [ -n "${EXPECTED_TPS}" ]; then
   # a file to read. The trap's own call is a no-op once this one has run.
   emit_summary
   python3 - "${PREFILL_SUMMARIES}/perf_json/${MODEL}_${CONFIG}.json" "${EXPECTED_TPS}" "${PERF_MARGIN}" \
-    <<'TPSPY' || TPS_GATE_RC=$?
+    "${EXPECTED_PROBE}" <<'TPSPY' || TPS_GATE_RC=$?
 import json, sys
 
-path, expected, margin = sys.argv[1], sys.argv[2], float(sys.argv[3])
+path, expected, margin, expected_probe = sys.argv[1], sys.argv[2], float(sys.argv[3]), sys.argv[4]
 try:
     rec = json.load(open(path))
 except Exception as e:
@@ -381,12 +412,19 @@ if not expected:
     print(f"TPS: {tps:,.0f} tok/s {label} (no PREFILL_EXPECTED_TPS set -- reporting, not gating)")
     sys.exit(0)
 
+if expected_probe and label != expected_probe:
+    print(f"TPS GATE FAIL: baseline is for {expected_probe} but the deepest probe is {label}; "
+          f"the context length changed, so re-measure and update perf_baselines.json", file=sys.stderr)
+    sys.exit(1)
+
 expected = float(expected)
 lo, hi = expected * (1 - margin), expected * (1 + margin)
 print(f"TPS GATE {label}: {tps:,.0f} tok/s vs {expected:,.0f} +/- {margin * 100:.0f}% [{lo:,.0f}, {hi:,.0f}]")
-if not lo <= tps <= hi:
-    print(f"TPS GATE FAIL: {tps:,.0f} outside [{lo:,.0f}, {hi:,.0f}]", file=sys.stderr)
+if tps < lo:
+    print(f"TPS GATE FAIL: {tps:,.0f} below {lo:,.0f}", file=sys.stderr)
     sys.exit(1)
+if tps > hi:
+    print(f"TPS GATE WARN: {tps:,.0f} above {hi:,.0f}; raise the baseline if this holds")
 print("TPS GATE PASS")
 TPSPY
 fi

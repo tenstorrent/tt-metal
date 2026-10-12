@@ -1,0 +1,84 @@
+{
+  "margin": 0.05,
+  "power": {
+    "14kw": [
+      "bh-glx-120-d06u02",
+      "bh-glx-120-d06u08",
+      "bh-glx-120-d07u02",
+      "bh-glx-120-d07u08",
+      "bh-glx-120-d08u02",
+      "bh-glx-120-d08u08",
+      "bh-glx-120-d09u02",
+      "bh-glx-120-d09u08"
+    ],
+    "8kw": [
+      "bh-glx-120-d01u02",
+      "bh-glx-120-d01u08",
+      "bh-glx-120-d01u14",
+      "bh-glx-120-d01u20",
+      "bh-glx-120-d02u02",
+      "bh-glx-120-d02u08",
+      "bh-glx-120-d02u14",
+      "bh-glx-120-d02u20",
+      "bh-glx-120-d03u02",
+      "bh-glx-120-d03u08",
+      "bh-glx-120-d03u14",
+      "bh-glx-120-d03u20",
+      "bh-glx-120-d04u02",
+      "bh-glx-120-d04u08",
+      "bh-glx-120-d04u14",
+      "bh-glx-120-d04u20",
+      "bh-glx-120-d05u02",
+      "bh-glx-120-d05u08",
+      "bh-glx-120-d05u14",
+      "bh-glx-120-d05u20",
+      "bh-glx-120-d06u14",
+      "bh-glx-120-d06u20",
+      "bh-glx-120-d07u14",
+      "bh-glx-120-d07u20",
+      "bh-glx-120-d08u14",
+      "bh-glx-120-d08u20",
+      "bh-glx-120-d09u14",
+      "bh-glx-120-d09u20",
+      "bh-glx-120-d10u02",
+      "bh-glx-120-d10u08",
+      "bh-glx-120-d10u14",
+      "bh-glx-120-d10u20"
+    ]
+  },
+  "baselines": {
+    "kimi27": {
+      "sc4": {
+        "probe": "@250k",
+        "8kw": 6174,
+        "14kw": 8318
+      },
+      "sc1": {
+        "probe": "@250k",
+        "14kw": 2345
+      }
+    },
+    "glm53": {
+      "sc4": {
+        "probe": "@1020k",
+        "8kw": 10855,
+        "14kw": 11414
+      },
+      "sc1": {
+        "probe": "@1020k",
+        "14kw": 3305
+      }
+    },
+    "kimi_k3": {
+      "sc4": {
+        "probe": "@1M",
+        "8kw": 2655,
+        "14kw": 3475
+      },
+      "sc1": {
+        "probe": "@1M",
+        "14kw": 4226
+      }
+    }
+  }
+}

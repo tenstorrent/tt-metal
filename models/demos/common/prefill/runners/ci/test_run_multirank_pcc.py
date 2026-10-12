@@ -18,6 +18,9 @@ import unittest
 from pathlib import Path
 
 HARNESS = Path(__file__).with_name("run_multirank_pcc.sh")
+BASELINES = Path(__file__).with_name("perf_baselines.json")
+HIGH_POWER_QUAD = [f"bh-glx-120-d08u{u}" for u in ("02", "08")] + [f"bh-glx-120-d09u{u}" for u in ("02", "08")]
+LOW_POWER_QUAD = [f"bh-glx-120-d02u{u}" for u in ("02", "08", "14", "20")]
 STUB = r"""
 import json
 import os
@@ -104,8 +107,8 @@ elif args and args[0].endswith("summarize_ci_run.py"):
         out = Path(os.environ["PREFILL_SUMMARIES"]) / "perf_json"
         out.mkdir(parents=True, exist_ok=True)
         (out / ("%s.json" % summary_name)).write_text(json.dumps({
-            "chunk_index": {"@5k": 0, "@55k": 10},
-            "throughput_tok_s": {"@5k": 37234.8, "@55k": float(os.environ["TEST_TPS"])},
+            "chunk_index": {"@5k": 0, os.environ.get("TEST_PROBE", "@55k"): 10},
+            "throughput_tok_s": {"@5k": 37234.8, os.environ.get("TEST_PROBE", "@55k"): float(os.environ["TEST_TPS"])},
         }))
 elif args and args[0].endswith("plot_pipeline_trace.py"):
     pass
@@ -118,7 +121,16 @@ else:
 
 class MultirankPccHarnessTests(unittest.TestCase):
     def run_harness(
-        self, model, *, verdict="pass", runner_rc=0, missing_cache=False, hosts=None, config=None, extra_env=None
+        self,
+        model,
+        *,
+        verdict="pass",
+        runner_rc=0,
+        missing_cache=False,
+        hosts=None,
+        config=None,
+        extra_env=None,
+        baselines=False,
     ):
         temporary = tempfile.TemporaryDirectory()
         self.addCleanup(temporary.cleanup)
@@ -134,9 +146,8 @@ class MultirankPccHarnessTests(unittest.TestCase):
         metal.mkdir()
         mgd_dir = metal / "models/demos/common/prefill/runners/topology_configuration/ci"
         mgd_dir.mkdir(parents=True)
-        for model_key in ("kimi27", "glm52"):
-            for system in ("sc1", "sc4"):
-                (mgd_dir / f"{model_key}_{system}_mgd.textproto").touch()
+        for system in ("sc1", "sc4"):
+            (mgd_dir / f"{system}_mgd.textproto").touch()
         # manifest_env() reads PREFILL_MAX_SEQ_LEN / PREFILL_NUM_USERS straight off these, so the
         # fake tree needs them or the harness dies before it launches anything. Values mirror the
         # real manifests; only their presence and the sc1 override path are under test here.
@@ -162,6 +173,10 @@ class MultirankPccHarnessTests(unittest.TestCase):
             (golden / "kv_cache" / f"layer_{layer}.safetensors").touch()
         harness = metal / "run_multirank_pcc.sh"
         shutil.copyfile(HARNESS, harness)
+        if baselines:
+            table = metal / "models/demos/common/prefill/runners/ci/perf_baselines.json"
+            table.parent.mkdir(parents=True)
+            shutil.copyfile(BASELINES, table)
         ttrun_dir = root / "ttop"
         ttrun_dir.mkdir()
         if hosts is None:
@@ -296,6 +311,52 @@ class MultirankPccHarnessTests(unittest.TestCase):
         self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
         self.assertIn("TPS: 17,000 tok/s @55k", result.stdout)
         self.assertIn("reporting, not gating", result.stdout)
+
+    def test_baseline_follows_the_power_class_of_the_hosts(self):
+        for hosts, tps, passes in (
+            (HIGH_POWER_QUAD, "8318", True),
+            (LOW_POWER_QUAD, "6174", True),
+            (HIGH_POWER_QUAD, "6174", False),
+        ):
+            with self.subTest(hosts=hosts[0], tps=tps):
+                result = self.run_baseline_gate(hosts, tps)
+                self.assertEqual(result.returncode == 0, passes, result.stdout + result.stderr)
+                self.assertIn("TPS GATE PASS" if passes else "TPS GATE FAIL", result.stdout + result.stderr)
+
+    def test_faster_than_baseline_only_warns(self):
+        result = self.run_baseline_gate(LOW_POWER_QUAD, "8318")
+        self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
+        self.assertIn("TPS GATE WARN", result.stdout)
+        self.assertIn("TPS GATE PASS", result.stdout)
+
+    def test_baseline_matches_domain_qualified_hosts(self):
+        result = self.run_baseline_gate([f"{host}.example.com" for host in HIGH_POWER_QUAD], "8318")
+        self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
+        self.assertIn("on 14kw", result.stderr)
+
+    def test_mixed_or_unknown_hosts_gate_as_8kw(self):
+        for hosts in (HIGH_POWER_QUAD[:2] + LOW_POWER_QUAD[:2], HIGH_POWER_QUAD[:3] + ["worker3"]):
+            with self.subTest(hosts=hosts[-1]):
+                result = self.run_baseline_gate(hosts, "6174")
+                self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
+                self.assertIn("on 8kw", result.stderr)
+        result = self.run_baseline_gate(HIGH_POWER_QUAD[:3] + ["worker3"], "6174")
+        self.assertIn("treating them as 8kw", result.stderr)
+
+    def test_baseline_fails_when_the_deepest_probe_moved(self):
+        result = self.run_baseline_gate(HIGH_POWER_QUAD, "8318", probe="@55k")
+        self.assertNotEqual(result.returncode, 0, result.stdout + result.stderr)
+        self.assertIn("context length changed", result.stderr)
+
+    def test_explicit_expected_tps_overrides_the_baseline(self):
+        result = self.run_baseline_gate(HIGH_POWER_QUAD, "100", extra_env={"PREFILL_EXPECTED_TPS": "100"})
+        self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
+        self.assertIn("TPS GATE PASS", result.stdout)
+
+    def run_baseline_gate(self, hosts, tps, probe="@250k", extra_env=None):
+        env = {"TEST_TPS": tps, "TEST_PROBE": probe, **(extra_env or {})}
+        result, _ = self.run_harness("kimi27", hosts=hosts, extra_env=env, baselines=True)
+        return result
 
     def test_perf_knobs_absent_leaves_pcc_gating_untouched(self):
         result, _ = self.run_harness("mistral4")
