@@ -827,6 +827,29 @@ PERF_TEST_SCHEMAS = {
         "aliases": {"formats.sfpu_math": "formats.sfpu_src"},
         "test_name_aliases": {"perf_unpack_transpose": "perf_unpack_transpose"},
     },
+    "perf_unpack_transpose_block": {
+        "version": 1,
+        "columns": [
+            "dest_acc",
+            "formats.input_A",
+            "formats.input_B",
+            "formats.output",
+            "formats.register_A",
+            "formats.register_B",
+            "formats.sfpu_src",
+            "formats.sfpu_dst",
+            "loop_factor",
+            "marker",
+            "tile_cnt",
+            "unpack_to_dest",
+            "unpack_transpose_faces",
+            "unpack_transpose_within_face",
+        ],
+        "aliases": {"formats.sfpu_math": "formats.sfpu_src"},
+        "test_name_aliases": {
+            "perf_unpack_transpose_block": "perf_unpack_transpose_block"
+        },
+    },
 }
 
 

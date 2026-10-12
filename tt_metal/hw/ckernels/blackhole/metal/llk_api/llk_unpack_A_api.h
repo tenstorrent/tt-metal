@@ -168,3 +168,36 @@ inline void llk_unpack_A_uninit() {
 
     _llk_unpack_A_uninit_<BType>();
 }
+
+// Consecutive tiles from one config context; the init is transpose_init's llk_unpack_A_init (transpose_of_faces set).
+inline void llk_unpack_A_transpose_block(
+    const std::uint32_t operand, const std::uint32_t start_tile_index, const std::uint32_t ntiles) {
+    const std::uint32_t operand_id = get_operand_id(operand);
+    const std::uint32_t tile_stride = get_local_cb_interface(operand_id).fifo_page_size;
+    const std::uint32_t address = get_local_cb_interface(operand_id).fifo_rd_ptr - 1 + start_tile_index * tile_stride;
+
+    LLK_ASSERT(cb_access_within_bounds(operand_id, start_tile_index, ntiles), "Block tile read exceeds CB boundary");
+
+    LLK_ASSERT_BLOCK(
+        (is_unpacker_A_configured_correctly<UnpackerProgramType::ProgramByTile, false /*check_unpacker_b*/>(
+            unpack_src_format[operand_id],
+            unpack_dst_format[operand_id],
+            get_operand_face_r_dim(operand_id),
+            get_operand_num_faces(operand_id))));
+
+    SAN_HOOK(execute<OperationUnpackUnary>(
+        StateVal<OperationUnpackUnary::BroadcastType>(to_underlying(BroadcastType::NONE)),
+        StateVal<OperationUnpackUnary::AccumulateToDest>(false),
+        StateVal<OperationUnpackUnary::BinaryReuseDest>(to_underlying(EltwiseBinaryReuseDestType::NONE)),
+        StateVal<OperationUnpackUnary::UnpackToDest>(false),
+        StateVal<Operand<Exu::Unpack>::InputFormatA>(unpack_src_format[operand_id]),
+        StateVal<Operand<Exu::Unpack>::OutputFormatA>(unpack_dst_format[operand_id]),
+        StateVal<Operand<Exu::Unpack>::FaceHeightA>(get_operand_face_r_dim(operand_id)),
+        StateVal<Operand<Exu::Unpack>::NumFacesA>(get_operand_num_faces(operand_id)),
+        StateDiscard<std::uint32_t>(start_tile_index),
+        StateDiscard<std::uint32_t>(ntiles)));
+
+    WAYPOINT("UPAW");
+    _llk_unpack_A_transpose_block_(address, ntiles, tile_stride);
+    WAYPOINT("UPAD");
+}

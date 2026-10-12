@@ -365,6 +365,70 @@ inline void _llk_unpack_A_uninit_()
 {
 }
 
+namespace llk_unpack_a_detail
+{
+template <std::uint32_t base_address_reg>
+inline void transpose_block_tiles(const std::uint32_t num_tiles)
+{
+    for (std::uint32_t tile = 0; tile < num_tiles; ++tile)
+    {
+        TTI_CFGSHIFTMASK(1, 0b011, 32 - 1, 0, 0b11, base_address_reg);
+        // Also the one instruction between the config write and the UNPACR that consumes it
+        TTI_SETADCZW(0b011, 0, 0, 0, 0, 0b1111);
+        ckernel::ckernel_template::run();
+    }
+}
+} // namespace llk_unpack_a_detail
+
+/**
+ * @brief Unpack a block of tiles (operand A) through the transpose MOP from one config context.
+ *
+ * The RISC programs the first address and the stride once; CFGSHIFTMASK adds the stride (SCRATCH_SEC0) to the
+ * context's base address before each tile.
+ *
+ * @param address: L1 address of the first tile.
+ * @param num_tiles: Number of tiles, at least one.
+ * @param tile_stride_16B: L1 distance between consecutive tiles of the block, in 16-byte words.
+ * @note Call @ref _llk_unpack_A_init_ with transpose_of_faces set, no broadcast and no unpack to dest before this function.
+ */
+inline void _llk_unpack_A_transpose_block_(const std::uint32_t address, const std::uint32_t num_tiles, const std::uint32_t tile_stride_16B)
+{
+    LLK_ASSERT(num_tiles > 0, "A block has at least one tile");
+    LLK_ASSERT(is_valid_L1_address(address), "L1 address must be in valid L1 memory region");
+    LLK_ASSERT(is_valid_L1_address(address + (num_tiles - 1) * tile_stride_16B), "L1 address of the last tile must be in valid L1 memory region");
+
+    // Through the stream, so the write lands behind the CFGSHIFTMASKs of an earlier block
+    TT_SETDMAREG(0, LOWER_HALFWORD(tile_stride_16B), 0, LO_16(p_gpr_unpack::TMP0));
+    TT_SETDMAREG(0, UPPER_HALFWORD(tile_stride_16B), 0, HI_16(p_gpr_unpack::TMP0));
+    TTI_STALLWAIT(p_stall::STALL_CFG, p_stall::THCON);
+    TTI_WRCFG(p_gpr_unpack::TMP0, p_cfg::WRCFG_32b, SCRATCH_SEC0_val_ADDR32);
+
+    const bool context_0                   = unp_cfg_context == 0;
+    volatile std::uint32_t tt_reg_ptr *cfg = get_cfg_pointer();
+    wait_for_next_context(2);
+
+    // Every tile adds the stride first
+    cfg[context_0 ? THCON_SEC0_REG3_Base_address_ADDR32 : THCON_SEC0_REG3_Base_cntx1_address_ADDR32] = address - tile_stride_16B;
+
+    semaphore_post(semaphore::UNPACK_SYNC);
+
+    // The CFGSHIFTMASKs and UNPACRs wait for the base address store
+    TTI_STALLWAIT(p_stall::STALL_UNPACK | p_stall::STALL_CFG, p_stall::TRISC_CFG);
+
+    if (context_0)
+    {
+        llk_unpack_a_detail::transpose_block_tiles<THCON_SEC0_REG3_Base_address_ADDR32>(num_tiles);
+    }
+    else
+    {
+        llk_unpack_a_detail::transpose_block_tiles<THCON_SEC0_REG3_Base_cntx1_address_ADDR32>(num_tiles);
+    }
+
+    t6_semaphore_get(semaphore::UNPACK_SYNC);
+
+    switch_config_context(unp_cfg_context);
+}
+
 /**
  * @brief Unpack a single tile (operand A) from L1 into the SrcA/SrcB or dest register.
  *
