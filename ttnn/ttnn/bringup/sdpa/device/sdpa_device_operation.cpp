@@ -26,6 +26,12 @@ void SDPAOperation::validate_on_program_cache_miss(const SDPAParams& attrs, cons
             tensors.v.has_value(),
             "Non-MLA SDPA requires V tensor to be provided (Q, K, V). V tensor not provided in tensor_args.");
     }
+    if (attrs.output_concat_heads) {
+        TT_FATAL(
+            !tensors.page_table.has_value() && !attrs.chunk_start_idx.has_value() &&
+                !tensors.chunk_start_idx_tensor.has_value(),
+            "output_concat_heads is supported for the plain (non-chunked, non-paged) SDPA only");
+    }
 
     const Tensor& q = tensors.q;
     const Tensor& k = tensors.k;
@@ -73,7 +79,9 @@ void SDPAOperation::validate_on_program_cache_miss(const SDPAParams& attrs, cons
         const auto Sq = q_shape[2];
         const auto DH = q_shape[3];
         const auto Sk = k_shape[2];
-        if (attrs.is_causal) {
+        // Windowed causal is exempt: its diagonal is at global positions (windowed_q_token_offset + Q row),
+        // so a sequence-parallel Q shard with Sq < Sk is well defined; validate_windowed_mode bounds it.
+        if (attrs.is_causal && !is_windowed_mode(attrs.windowed_mode)) {
             TT_FATAL(
                 Sq == Sk, "Causal SDPA requires Q and K to have the same sequence length. Got Q: {}, K: {}", Sq, Sk);
         }
@@ -432,7 +440,6 @@ void SDPAOperation::validate_on_program_cache_miss(const SDPAParams& attrs, cons
 
     auto validate_windowed_mode = [&]() {
         TT_FATAL(tensors.cu_window_seqlens.has_value(), "Windowed SDPA requires cu_window_seqlens.");
-        TT_FATAL(!attrs.is_causal, "Windowed SDPA is non-causal; is_causal must be false.");
         TT_FATAL(
             !tensors.attn_mask.has_value(),
             "Windowed SDPA builds its mask from cu_window_seqlens; attn_mask must not be provided.");
@@ -443,8 +450,8 @@ void SDPAOperation::validate_on_program_cache_miss(const SDPAParams& attrs, cons
         TT_FATAL(attrs.sliding_window_size.value_or(0) == 0, "Windowed SDPA does not support sliding_window_size.");
         TT_FATAL(!tensors.attention_sink.has_value(), "Windowed SDPA does not support attention_sink.");
 
-        // Windowed attention is otherwise plain non-causal SDPA, so apply the same Q/K/V shape and
-        // chunk-size validation as the regular path.
+        // Windowed attention is otherwise plain SDPA, so apply the same Q/K/V shape and chunk-size
+        // validation as the regular path.
         validate_shapes_and_chunks();
         TT_FATAL(
             v.logical_shape()[3] == q.logical_shape()[3],
@@ -519,7 +526,7 @@ void SDPAOperation::validate_on_program_cache_miss(const SDPAParams& attrs, cons
     check_conditions();
     bool is_chunked_mode = attrs.chunk_start_idx.has_value() || attrs.chunk_start_idx_tensor.has_value();
 
-    if (attrs.is_windowed) {
+    if (is_windowed_mode(attrs.windowed_mode)) {
         validate_windowed_mode();
     } else if (is_chunked_mode) {
         validate_chunked_mode();
@@ -545,6 +552,9 @@ SDPAOperation::spec_return_value_t SDPAOperation::compute_output_specs(
     } else if (tensors.v.has_value() && !attrs.paged_cache_geometry.active()) {
         // The output has V's head dim (narrower than Q's when V is; equal otherwise).
         shape[3] = tensors.v->logical_shape()[3];
+    }
+    if (attrs.output_concat_heads) {
+        shape = ttnn::Shape({shape[0], 1, shape[2], shape[1] * shape[3]});
     }
     return tt::tt_metal::TensorSpec(
         shape, TensorLayout(tensors.q.dtype(), PageConfig(Layout::TILE), attrs.output_mem_config));
@@ -657,7 +667,8 @@ Tensor sdpa(
     const std::optional<Tensor>& cu_window_seqlens,
     uint32_t windowed_q_token_offset,
     const std::optional<Tensor>& windowed_q_token_offset_tensor,
-    std::optional<ttnn::operations::transformer::PagedCacheGeometryOverride> paged_cache_geometry) {
+    std::optional<ttnn::operations::transformer::PagedCacheGeometryOverride> paged_cache_geometry,
+    bool output_concat_heads) {
     using OperationType = ttnn::prim::bringup::SDPAOperation;
     return ttnn::device_operation::launch<OperationType>(
         OperationType::operation_attributes_t{
@@ -671,10 +682,13 @@ Tensor sdpa(
             .use_mla = use_mla,
             .head_dim_v = head_dim_v,
             .sliding_window_size = sliding_window_size,
-            .is_windowed = cu_window_seqlens.has_value(),
+            .windowed_mode = !cu_window_seqlens.has_value() ? WindowedMode::None
+                             : is_causal                    ? WindowedMode::Causal
+                                                            : WindowedMode::Bidirectional,
             .windowed_q_token_offset = windowed_q_token_offset,
             .paged_cache_geometry =
                 paged_cache_geometry.value_or(ttnn::operations::transformer::PagedCacheGeometryOverride{}),
+            .output_concat_heads = output_concat_heads,
         },
         OperationType::tensor_args_t{
             .q = input_tensor_q,

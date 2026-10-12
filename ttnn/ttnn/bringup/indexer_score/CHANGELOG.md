@@ -85,3 +85,13 @@ Mechanical fork changes (fork_op.py): namespace `ttnn::operations::bringup`, CMa
 - Needed by: rebase onto origin/malimpic/llk_helper_library_rebased_0110_2 (keep the fork's bug fixes current)
 - Files: `device/indexer_score_device_operation.cpp`, `device/indexer_score_host_common.hpp`,
   `device/kernels/writer_indexer_score.cpp`, `device/ring_indexer_score_dsa_program_factory.cpp`
+
+### Upstream sync to source @ `bdc576fa652` (2026-10-12): compressed-key indexer, MSA KV dedup
+- What: a 3-way merge (base = fork_op.py's mechanical copy of the source @ `73027b6e6ff` without #58122, the fork's
+  last sync; theirs = the same copy @ `bdc576fa652`; ours = this fork), no conflicts, of #57194 (compressed-key
+  indexer_score and the CSA indexer), #58812 (MSA index_k cache stored once over TP), and #58122 (GLM-5.2 -> 5.3
+  comment rename, skipped at the last sync). The fork is now the source @ `bdc576fa652` plus its own changes.
+- Default behaviour: the fork's own changes (opt-in fp32 DEST for DSA scoring, k_chunk 32, config `__repr__`) are
+  kept; the new source modes are opt-in.
+- Needed by: rebase onto origin/llk_helper_library @ `bdc576fa652` (2026-10-12)
+- Files: 12 merged files under `device/` and `indexer_score_nanobind.cpp`
