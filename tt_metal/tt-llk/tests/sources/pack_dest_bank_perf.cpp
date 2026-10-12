@@ -50,15 +50,15 @@ void run_kernel(RUNTIME_PARAMETERS params)
             /* num_faces */ 4);
         _llk_unpack_A_init_<BroadcastType::NONE, false, EltwiseBinaryReuseDestType::NONE, unpack_to_dest>(
             0 /* transpose_of_faces */, 0 /* within_face_16x16_transpose */, ckernel::DEFAULT_TENSOR_SHAPE, formats.unpack_A_src, formats.unpack_A_dst);
+        LLK_INIT_ZONE_END(); // INIT's zone ends here (perf.h); the rest of the block fills srcA for the loop
         PROFILER_SYNC();
-
         for (std::uint32_t tile = 0; tile < TILE_CNT; tile++)
         {
             _llk_unpack_A_<BroadcastType::NONE, false, EltwiseBinaryReuseDestType::NONE, unpack_to_dest>(
                 PERF_ADDRESS(PERF_INPUT_A, tile), formats.unpack_A_src, formats.unpack_A_dst);
         }
     }
-    LLK_INIT_END;
+    LLK_INIT_PREP_END;
     {
         START_PERF_MEASURE("TILE_LOOP")
         if constexpr (PERF_RUN_TYPE == PerfRunType::PACK_ISOLATE)
@@ -115,7 +115,7 @@ void run_kernel(RUNTIME_PARAMETERS params)
         _llk_math_hw_configure_<is_fp32_dest_acc_en>(formats.math, formats.math);
         _llk_math_eltwise_unary_datacopy_init_wrapper_<DataCopyType::A2D, is_fp32_dest_acc_en, BroadcastType::NONE, is_int_fpu_en, PackMode::Default>(
             4 /* num_faces */, formats.math);
-
+        LLK_INIT_ZONE_END(); // INIT's zone ends here (perf.h); the rest of the block fills dest for the loop
         for (std::uint32_t block_tile = 0; block_tile < TILE_CNT; block_tile++)
         {
             _llk_math_eltwise_unary_datacopy_wrapper_<DataCopyType::A2D, DstSync::SyncHalf, is_fp32_dest_acc_en, BroadcastType::NONE, unpack_to_dest>(
@@ -125,7 +125,7 @@ void run_kernel(RUNTIME_PARAMETERS params)
 
         PROFILER_SYNC();
     }
-    LLK_INIT_END;
+    LLK_INIT_PREP_END;
     {
         START_PERF_MEASURE("TILE_LOOP")
         if constexpr (PERF_RUN_TYPE == PerfRunType::PACK_ISOLATE)
