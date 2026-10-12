@@ -28,11 +28,15 @@ from models.demos.common.prefill.runners.runner_utils import (
     activation_global_spec,
     build_h2d_service,
     compute_layer_split,
-    indexer_indices_global_spec,
 )
 from models.demos.common.prefill.runners.runner_utils import d2d_activation_rows as d2d_rows_for
 from models.demos.common.prefill.runners.runner_utils import d2d_activation_width as d2d_width
-from models.demos.common.prefill.runners.runner_utils import make_h2d_spec, num_mtp_tokens, open_mesh_device
+from models.demos.common.prefill.runners.runner_utils import (
+    indexer_indices_global_spec,
+    make_h2d_spec,
+    num_mtp_tokens,
+    open_mesh_device,
+)
 from models.demos.deepseek_v3_d_p.tt.mla.utils import mtp_lookahead_positions
 
 
@@ -307,6 +311,7 @@ def build_d2d_index_endpoints(mesh_device, rank: int, per_chip_shape, *, inbound
     last ``full`` layer selection. Built only on such boundaries, after the activation endpoints and in
     the same receiver-then-sender order, so both ends of each edge pair up. Shares the activation
     socket's worker cores, FIFO and fabric-link lease discipline."""
+
     def _common():
         return dict(
             global_spec=indexer_indices_global_spec(per_chip_shape, GLOBAL_MESH_SHAPE),
