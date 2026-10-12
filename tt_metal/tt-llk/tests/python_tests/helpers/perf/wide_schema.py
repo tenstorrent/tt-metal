@@ -80,6 +80,7 @@ DB_SCHEMA = [
     # key
     Column("loop_factor", "int64", True, "key"),
     Column("tile_cnt", "int64", True, "key"),
+    Column("work_tiles", "int64", True, "key"),
     # configuration
     Column("acc_to_dest", "bool", True, "configuration"),
     Column("alpha_bits", "int64", True, "configuration"),

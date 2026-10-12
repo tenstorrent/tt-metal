@@ -27,6 +27,13 @@ void run_kernel(RUNTIME_PARAMETERS params)
 #if defined(RUNTIME_FORMATS) && !defined(SPEED_OF_LIGHT)
     const FormatConfig& formats = params.formats;
 #endif
+    // Compile-time formats can put each operand in its own buffer. Runtime formats
+    // stay on the interleaved buffer_A path.
+#ifndef RUNTIME_FORMATS
+    constexpr bool mixed_src_formats = formats.unpack_A_src != formats.unpack_B_src;
+#else
+    constexpr bool mixed_src_formats = false;
+#endif
 #ifndef SPEED_OF_LIGHT
     const std::uint32_t LOOP_FACTOR = params.LOOP_FACTOR;
     const std::uint32_t num_faces   = params.num_faces;
@@ -86,10 +93,30 @@ void run_kernel(RUNTIME_PARAMETERS params)
         {
             for (std::uint32_t loop = 0; loop < LOOP_FACTOR; ++loop)
             {
-                for (std::uint32_t i = 0; i < TILE_CNT; i++)
+                if constexpr (mixed_src_formats)
                 {
-                    _llk_unpack_A_<BROADCAST_TYPE, false, EltwiseBinaryReuseDestType::NONE, unpack_to_dest>(
-                        L1_ADDRESS(buffer_A[i]), formats.unpack_A_src, formats.unpack_A_dst);
+                    // Src is 2-deep, so the two operands stay in lockstep. Reconfig
+                    // switches the L1 format and the tile-size GPR between them.
+                    const Operand& buffer_B = params.buffer_B;
+                    for (std::uint32_t i = 0; i < TILE_CNT; i += 2)
+                    {
+                        _llk_unpack_A_<BROADCAST_TYPE, false, EltwiseBinaryReuseDestType::NONE, unpack_to_dest>(
+                            L1_ADDRESS(buffer_A[i / 2]), formats.unpack_A_src, formats.unpack_A_dst);
+                        _llk_unpack_reconfig_data_format_srca_impl_<is_fp32_dest_acc_en, p_dim_stride_target::IGNORE>(
+                            static_cast<std::uint32_t>(formats.unpack_B_src), static_cast<std::uint32_t>(formats.unpack_B_dst), params.TILE_SIZE_UNPACK_B);
+                        _llk_unpack_A_<BROADCAST_TYPE, false, EltwiseBinaryReuseDestType::NONE, unpack_to_dest>(
+                            L1_ADDRESS(buffer_B[i / 2]), formats.unpack_B_src, formats.unpack_B_dst);
+                        _llk_unpack_reconfig_data_format_srca_impl_<is_fp32_dest_acc_en, p_dim_stride_target::IGNORE>(
+                            static_cast<std::uint32_t>(formats.unpack_A_src), static_cast<std::uint32_t>(formats.unpack_A_dst), params.TILE_SIZE_UNPACK_A);
+                    }
+                }
+                else
+                {
+                    for (std::uint32_t i = 0; i < TILE_CNT; i++)
+                    {
+                        _llk_unpack_A_<BROADCAST_TYPE, false, EltwiseBinaryReuseDestType::NONE, unpack_to_dest>(
+                            L1_ADDRESS(buffer_A[i]), formats.unpack_A_src, formats.unpack_A_dst);
+                    }
                 }
             }
         }
@@ -115,6 +142,11 @@ void run_kernel(RUNTIME_PARAMETERS params)
 {
 #if defined(RUNTIME_FORMATS) && !defined(SPEED_OF_LIGHT)
     const FormatConfig& formats = params.formats;
+#endif
+#ifndef RUNTIME_FORMATS
+    constexpr bool mixed_src_formats = formats.unpack_A_src != formats.unpack_B_src;
+#else
+    constexpr bool mixed_src_formats = false;
 #endif
 #ifndef SPEED_OF_LIGHT
     const std::uint32_t LOOP_FACTOR        = params.LOOP_FACTOR;
@@ -190,7 +222,19 @@ void run_kernel(RUNTIME_PARAMETERS params)
             {
                 for (int block = 0; block < NUM_BLOCKS; ++block)
                 {
-                    if constexpr (!unpack_to_dest)
+                    if constexpr (mixed_src_formats)
+                    {
+                        for (std::uint32_t tile = 0; tile < NUM_TILES_IN_BLOCK; tile += 2)
+                        {
+                            _llk_math_eltwise_unary_datacopy_<copy_type, DstSync::SyncHalf, is_fp32_dest_acc_en, BROADCAST_TYPE, unpack_to_dest>(
+                                tile, formats.math, formats.math);
+                            _llk_math_reconfig_data_format_srca_<is_fp32_dest_acc_en>(static_cast<std::uint32_t>(formats.unpack_B_dst));
+                            _llk_math_eltwise_unary_datacopy_<copy_type, DstSync::SyncHalf, is_fp32_dest_acc_en, BROADCAST_TYPE, unpack_to_dest>(
+                                tile + 1, formats.math, formats.math);
+                            _llk_math_reconfig_data_format_srca_<is_fp32_dest_acc_en>(static_cast<std::uint32_t>(formats.unpack_A_dst));
+                        }
+                    }
+                    else if constexpr (!unpack_to_dest)
                     {
                         for (std::uint32_t tile = 0; tile < NUM_TILES_IN_BLOCK; ++tile)
                         {
@@ -221,10 +265,28 @@ void run_kernel(RUNTIME_PARAMETERS params)
                 for (int block = 0; block < NUM_BLOCKS; ++block)
                 {
                     _llk_math_wait_for_dest_available_<DstSync::SyncHalf>();
-                    for (std::uint32_t tile = 0; tile < NUM_TILES_IN_BLOCK; ++tile)
+                    if constexpr (mixed_src_formats)
                     {
-                        _llk_math_eltwise_unary_datacopy_<copy_type, DstSync::SyncHalf, is_fp32_dest_acc_en, BROADCAST_TYPE, unpack_to_dest>(
-                            tile, formats.math, formats.math);
+                        // Same per-pair order as unpack. Both dest formats match for
+                        // Float16_b x Bfp8_b; the call still mirrors production's
+                        // reconfig between the two datacopies.
+                        for (std::uint32_t tile = 0; tile < NUM_TILES_IN_BLOCK; tile += 2)
+                        {
+                            _llk_math_eltwise_unary_datacopy_<copy_type, DstSync::SyncHalf, is_fp32_dest_acc_en, BROADCAST_TYPE, unpack_to_dest>(
+                                tile, formats.math, formats.math);
+                            _llk_math_reconfig_data_format_srca_<is_fp32_dest_acc_en>(static_cast<std::uint32_t>(formats.unpack_B_dst));
+                            _llk_math_eltwise_unary_datacopy_<copy_type, DstSync::SyncHalf, is_fp32_dest_acc_en, BROADCAST_TYPE, unpack_to_dest>(
+                                tile + 1, formats.math, formats.math);
+                            _llk_math_reconfig_data_format_srca_<is_fp32_dest_acc_en>(static_cast<std::uint32_t>(formats.unpack_A_dst));
+                        }
+                    }
+                    else
+                    {
+                        for (std::uint32_t tile = 0; tile < NUM_TILES_IN_BLOCK; ++tile)
+                        {
+                            _llk_math_eltwise_unary_datacopy_<copy_type, DstSync::SyncHalf, is_fp32_dest_acc_en, BROADCAST_TYPE, unpack_to_dest>(
+                                tile, formats.math, formats.math);
+                        }
                     }
 
                     for (std::uint32_t tile = 0; tile < NUM_TILES_IN_BLOCK; tile += 2)

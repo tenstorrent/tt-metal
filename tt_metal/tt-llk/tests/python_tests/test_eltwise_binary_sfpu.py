@@ -68,6 +68,7 @@ from helpers.test_variant_parameters import (
     SFPU_DST_ROUNDING_MODE,
     SIGN_MAGNITUDE_FORMAT,
     TILE_COUNT,
+    WORK_TILES,
     ZERO_POINT,
     generate_input_dim,
 )
@@ -474,6 +475,7 @@ def sfpu_binary(
     approx_mode=ApproximationMode.No,
     dst_rounding_mode=DstRoundingMode.Default,
     check_contract=True,
+    pin_block_geometry=False,
 ):
     """*unspecified_nonfinite_sign* compares a non-finite result by magnitude only.
 
@@ -494,47 +496,97 @@ def sfpu_binary(
             [128, 128] if formats.input_format.is_32_bit() else [256, 128]
         )
 
-    # Per-operand domains. Both operands live in buffer_A (even tile = in0, odd tile = in1),
-    # so there is no spec_B knob in generate_stimuli -- the two specs are interleaved into one
-    # spec's face_specs here, where the tile count is known. Unlike the unary sweep, most ops
-    # here are not registered, and a missing entry falls back to the format default.
-    reads_registry = _classify_stimuli_source(mathop)
-    if spec_A is None and reads_registry and not formats.input_format.is_integer():
-        specs = exclude_undefined_pair(mathop, for_op(mathop, formats.input_format))
-        spec_A, spec_B = specs.spec_A, specs.spec_B
-
-    if spec_B is not None:
-        if spec_A is None:
+    # Different L1 formats cannot share buffer_A: Operand strides one tile size.
+    # Each operand gets its own buffer, and the golden is interleaved afterwards.
+    mixed_formats = formats.input_format != formats.input_format_B
+    if mixed_formats:
+        if broadcast_type not in (None, LlkBroadcastType.None_):
+            raise ValueError("mixed input formats do not support broadcast")
+        if src_A_override is not None or spec_A is not None or spec_B is not None:
             raise ValueError(
-                "spec_B requires spec_A (it fills the odd tile of each pair)"
+                "mixed input formats take neither an override nor a domain spec"
             )
-        spec_A = _pair_operand_specs(spec_A, spec_B, input_dimensions)
-
-    src_A, tile_cnt_A, src_B, tile_cnt_B = generate_stimuli(
-        stimuli_format_A=formats.input_format,
-        input_dimensions_A=input_dimensions,
-        stimuli_format_B=formats.input_format,
-        input_dimensions_B=input_dimensions,
-        spec_A=spec_A,
-    )
-
-    # The kernel only consumes buffer_A (operand 0 = tile 0, operand 1 = tile 1), so an
-    # explicit src_A fully controls inputs for edge cases; src_B stays random but unused.
-    if src_A_override is not None:
-        override = src_A_override.to(src_A.dtype).flatten()
-        if src_A.numel() % override.numel() != 0:
+        src_A, tile_cnt_A, _, _ = generate_stimuli(
+            stimuli_format_A=formats.input_format,
+            input_dimensions_A=input_dimensions,
+            stimuli_format_B=formats.input_format,
+            input_dimensions_B=input_dimensions,
+        )
+        src_B, tile_cnt_B, _, _ = generate_stimuli(
+            stimuli_format_A=formats.input_format_B,
+            input_dimensions_A=input_dimensions,
+            stimuli_format_B=formats.input_format_B,
+            input_dimensions_B=input_dimensions,
+        )
+        if tile_cnt_A != tile_cnt_B:
             raise ValueError(
-                "SFPU binary override must contain a whole number of tile pairs"
+                "mixed input formats need the same tile count on both operands"
             )
-        src_A = override.repeat(src_A.numel() // override.numel())
+        elements_per_tile = DEFAULT_TILE_R_DIM * DEFAULT_TILE_C_DIM
+        golden_a = quantize_input_to_unpack_format(
+            src_A.flatten(), formats.input_format
+        )
+        golden_b = quantize_input_to_unpack_format(
+            src_B.flatten(), formats.input_format_B
+        )
+        golden_src = torch.stack(
+            (
+                golden_a.flatten().view(tile_cnt_A, elements_per_tile),
+                golden_b.flatten().view(tile_cnt_B, elements_per_tile),
+            ),
+            dim=1,
+        ).reshape(-1)
+        stimuli_b_format = formats.input_format_B
+        result_tile_cnt = tile_cnt_A + tile_cnt_B
+        block_dimensions = [
+            DEFAULT_TILE_R_DIM,
+            DEFAULT_TILE_C_DIM * result_tile_cnt,
+        ]
+    else:
+        # Per-operand domains. Both operands live in buffer_A (even tile = in0, odd tile = in1),
+        # so there is no spec_B knob in generate_stimuli -- the two specs are interleaved into one
+        # spec's face_specs here, where the tile count is known. Unlike the unary sweep, most ops
+        # here are not registered, and a missing entry falls back to the format default.
+        reads_registry = _classify_stimuli_source(mathop)
+        if spec_A is None and reads_registry and not formats.input_format.is_integer():
+            specs = exclude_undefined_pair(mathop, for_op(mathop, formats.input_format))
+            spec_A, spec_B = specs.spec_A, specs.spec_B
 
-    # generate_stimuli does not round-trip Bfp8_b stimuli through their pack/unpack
-    # quantization, so a registry domain or an override would leave the device seeing
-    # quantized operands while the golden sees the unrounded originals. Quantize the golden's
-    # copy only: src_A keeps the unrounded values, since the packer rounds on the way to L1.
-    golden_src = src_A
-    if formats.input_format == DataFormat.Bfp8_b:
-        golden_src = quantize_input_to_unpack_format(golden_src, DataFormat.Bfp8_b)
+        if spec_B is not None:
+            if spec_A is None:
+                raise ValueError(
+                    "spec_B requires spec_A (it fills the odd tile of each pair)"
+                )
+            spec_A = _pair_operand_specs(spec_A, spec_B, input_dimensions)
+
+        src_A, tile_cnt_A, src_B, tile_cnt_B = generate_stimuli(
+            stimuli_format_A=formats.input_format,
+            input_dimensions_A=input_dimensions,
+            stimuli_format_B=formats.input_format,
+            input_dimensions_B=input_dimensions,
+            spec_A=spec_A,
+        )
+
+        # The kernel only consumes buffer_A (operand 0 = tile 0, operand 1 = tile 1), so an
+        # explicit src_A fully controls inputs for edge cases; src_B stays random but unused.
+        if src_A_override is not None:
+            override = src_A_override.to(src_A.dtype).flatten()
+            if src_A.numel() % override.numel() != 0:
+                raise ValueError(
+                    "SFPU binary override must contain a whole number of tile pairs"
+                )
+            src_A = override.repeat(src_A.numel() // override.numel())
+
+        # generate_stimuli does not round-trip Bfp8_b stimuli through their pack/unpack
+        # quantization, so a registry domain or an override would leave the device seeing
+        # quantized operands while the golden sees the unrounded originals. Quantize the golden's
+        # copy only: src_A keeps the unrounded values, since the packer rounds on the way to L1.
+        golden_src = src_A
+        if formats.input_format == DataFormat.Bfp8_b:
+            golden_src = quantize_input_to_unpack_format(golden_src, DataFormat.Bfp8_b)
+        stimuli_b_format = formats.input_format
+        result_tile_cnt = tile_cnt_A
+        block_dimensions = input_dimensions
 
     if broadcast_type is not None and broadcast_type != LlkBroadcastType.None_:
         generate_broadcast_golden = get_golden_generator(BroadcastGolden)
@@ -568,6 +620,7 @@ def sfpu_binary(
     golden_format = (
         DataFormat.Float16_b
         if formats.input_format == DataFormat.Bfp8_b
+        or formats.input_format_B == DataFormat.Bfp8_b
         else formats.input_format
     )
     elements_per_pair = 2 * _ELEMENTS_PER_TILE
@@ -601,9 +654,14 @@ def sfpu_binary(
 
     bcast = broadcast_type if broadcast_type else LlkBroadcastType.None_
 
+    # dest_acc=Yes halves 16-bit Dest capacity, so a Yes-vs-No delta otherwise
+    # includes a different block handshake. The float perf family pins both
+    # modes to the Yes geometry; every other caller keeps the requested one.
+    geometry_dest_acc = DestAccumulation.Yes if pin_block_geometry else dest_acc
     num_blocks, num_tiles_in_block = get_num_blocks_and_num_tiles_in_block(
-        DestSync.Half, dest_acc, formats, input_dimensions, TILE_DIMENSIONS
+        DestSync.Half, geometry_dest_acc, formats, block_dimensions, TILE_DIMENSIONS
     )
+    work_tiles = loop_factor * num_blocks * num_tiles_in_block
 
     run_types = _resolve_perf_args(is_perf, perf_report, run_types)
 
@@ -617,7 +675,7 @@ def sfpu_binary(
         "test_name": "sources/sfpu_binary_test.cpp",
         "formats": formats,
         "templates": [
-            generate_input_dim(input_dimensions, input_dimensions),
+            generate_input_dim(block_dimensions, block_dimensions),
             MATH_OP(mathop=mathop),
             APPROX_MODE(approx_mode),
             ITERATIONS(iterations),
@@ -627,7 +685,8 @@ def sfpu_binary(
             SIGN_MAGNITUDE_FORMAT(sign_magnitude),
         ],
         "runtimes": [
-            TILE_COUNT(tile_cnt_A),
+            TILE_COUNT(result_tile_cnt),
+            WORK_TILES(work_tiles),
             NUM_BLOCKS(num_blocks),
             NUM_TILES_IN_BLOCK(num_tiles_in_block),
             LOOP_FACTOR(loop_factor),
@@ -638,11 +697,11 @@ def sfpu_binary(
             src_A,
             formats.input_format,
             src_B,
-            formats.input_format,
+            stimuli_b_format,
             formats.output_format,
             tile_count_A=tile_cnt_A,
             tile_count_B=tile_cnt_B,
-            tile_count_res=tile_cnt_A,
+            tile_count_res=result_tile_cnt,
             twos_complement=twos_complement,
         ),
         "dest_acc": dest_acc,
@@ -851,6 +910,25 @@ def test_eltwise_binary_sfpu_float(
         dest_acc,
         mathop,
         broadcast_type=bcast_dim,
+        pin_block_geometry=bool(run_kwargs.get("is_perf")),
+        **run_kwargs,
+    )
+
+
+# One directed point: Float16_b x Bfp8_b -> Float16_b. Quasar has no block-float.
+@parametrize(
+    formats=[
+        InputOutputFormat(DataFormat.Float16_b, DataFormat.Float16_b, DataFormat.Bfp8_b)
+    ],
+    mathop=[MathOperation.SfpuElwadd],
+    dest_acc=[DestAccumulation.No],
+)
+def test_eltwise_binary_sfpu_mixed_format(formats, mathop, dest_acc, **run_kwargs):
+    sfpu_binary(
+        formats,
+        dest_acc,
+        mathop,
+        input_dimensions=[32, 32],
         **run_kwargs,
     )
 
@@ -2014,6 +2092,7 @@ def _run_sfpu_add_top_row(
         ],
         "runtimes": [
             TILE_COUNT(tile_cnt_A),
+            WORK_TILES(loop_factor * num_blocks * num_tiles_in_block),
             NUM_BLOCKS(num_blocks),
             NUM_TILES_IN_BLOCK(num_tiles_in_block),
             LOOP_FACTOR(loop_factor),
@@ -2194,6 +2273,7 @@ def _run_sfpu_binary_bcast(
         ],
         "runtimes": [
             TILE_COUNT(tile_cnt_A + tile_cnt_B),
+            WORK_TILES(loop_factor * num_blocks * num_tiles_in_block),
             NUM_BLOCKS(num_blocks),
             NUM_TILES_IN_BLOCK(num_tiles_in_block),
             LOOP_FACTOR(loop_factor),

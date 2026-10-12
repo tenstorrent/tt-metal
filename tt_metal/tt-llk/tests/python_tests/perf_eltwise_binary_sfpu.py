@@ -180,6 +180,40 @@ def test_perf_eltwise_binary_sfpu_float_shallow(
 
 @pytest.mark.perf
 @parametrize(
+    formats=[
+        _func.InputOutputFormat(
+            _func.DataFormat.Float16_b,
+            _func.DataFormat.Float16_b,
+            _func.DataFormat.Bfp8_b,
+        )
+    ],
+    mathop=[MathOperation.SfpuElwadd],
+    dest_acc=[DestAccumulation.No],
+    **_PERF_AXES,
+)
+def test_perf_eltwise_binary_sfpu_mixed_format(
+    perf_report,
+    formats,
+    mathop,
+    dest_acc,
+    run_types,
+    loop_factor,
+    iterations,
+    approx_mode,
+    is_perf,
+):
+    _func.test_eltwise_binary_sfpu_mixed_format(
+        formats,
+        mathop,
+        dest_acc,
+        **_perf_kwargs(
+            perf_report, run_types, loop_factor, iterations, approx_mode, is_perf
+        ),
+    )
+
+
+@pytest.mark.perf
+@parametrize(
     **_distinct_dest_acc(_func.DIV_SWEEP),
     **_PERF_AXES,
 )

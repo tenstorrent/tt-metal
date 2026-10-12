@@ -131,7 +131,7 @@ PERF_TEST_SCHEMAS = {
         },
     },
     "perf_eltwise_binary_sfpu": {
-        "version": 7,
+        "version": 8,
         "columns": [
             "approx_mode",
             "block_ct_dim",
@@ -165,6 +165,7 @@ PERF_TEST_SCHEMAS = {
             "sign_magnitude",
             "tile_cnt",
             "unpack_to_dest",
+            "work_tiles",
             "zero_point_bits",
         ],
         "aliases": {"formats.sfpu_math": "formats.sfpu_src"},
