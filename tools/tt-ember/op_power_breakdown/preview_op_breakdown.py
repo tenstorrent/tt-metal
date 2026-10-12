@@ -1,4 +1,8 @@
 #!/usr/bin/env python3
+# SPDX-FileCopyrightText: (c) 2026 Tenstorrent AI ULC
+#
+# SPDX-License-Identifier: Apache-2.0
+
 """Label a tt-ember run with op names and render a per-op power breakdown.
 
 tt-ember's summary format only understands a compute grid, so ttnn_ops_workload.py encodes the
