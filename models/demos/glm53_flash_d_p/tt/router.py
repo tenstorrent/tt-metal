@@ -14,8 +14,9 @@ replicated: every chip routes all S tokens of the replicated ffn_norm output, no
 Without the dense matrix (the model's all-gather experts) everything after the matmul is one
 ttnn.experimental.deepseek_prefill.moe_grouped_topk (n_groups 1) with fp32_selection: the selection is exact fp32
 (0 expert-set mismatches vs a float64 reference on the real layer-4 gate, 5120 rows; without fp32_selection its TF32
-source reads swap near-tied experts on 19% of rows), weights bf16 (within ~1 bf16 ulp), idx uint16 - what the experts
-take. Router 162 -> 116 us per MoE layer at 640 rows per chip.
+source reads swap near-tied experts on 19% of rows) and the weights normalized in fp32 on the SFPU (bf16 output: 2 of
+40960 differ from bf16 of the float64 weights; the TF32 normalize biased them low, last-chunk top1 0.6726 -> 0.6622),
+idx uint16 - what the experts take. Router 162 -> 116 us per MoE layer at 640 rows per chip; 56k top1 0.6816.
 
 The layer-3 bias is 7.42..7.79, so the raw choice score reaches 8.8 (fp32 step 1e-6, fine; bf16 / TF32 are not, see
 known issues); recentring moves it near 1 for extra margin. Constants (weight, bias, the scatter's zeros for max_rows)
