@@ -245,6 +245,20 @@ class TtMoEGatePrefill(LightweightModule):
 
         if torch_bias is None:
             torch_bias = torch.empty(config.n_routed_experts)
+        # DS41F-0040: the bias only ranks experts (score + bias -> top-k; the weights come from the unbiased scores), so a constant
+        # shift is exact -- and DeepSeek-V4.1's biases sit near 57 where bf16's step is 0.25, collapsing the near-ties between
+        # experts: CPU emulation of this router (run_golden --ablate gate_prefill) changed the expert set on 752 of 2320 (token,
+        # layer) rows raw vs 59 centred on its midrange (gate_prefill_mid). Centre BEFORE the bf16 cast; the cache name changes
+        # with it so a raw cache is never reused. V41_PREFILL_GATE_BIAS_CENTER = mid (default for the sqrt-softplus V4 family) | 0.
+        import os as _os
+
+        _center_default = "mid" if str(getattr(config, "score_func", "")) == "sqrtsoftplus" else "0"
+        _bias_center = _os.environ.get("V41_PREFILL_GATE_BIAS_CENTER", _center_default)
+        _bias_cache_name = "e_score_correction_bias"
+        if _bias_center == "mid" and torch_weight is not None:
+            _b = torch_bias.float()
+            torch_bias = _b - (_b.min() + _b.max()) / 2
+            _bias_cache_name = "e_score_correction_bias_mid"
 
         # Convert weight
         weight_tt = ttnn.as_tensor(
@@ -267,7 +281,7 @@ class TtMoEGatePrefill(LightweightModule):
             device=None,  # Always load to host first
             dtype=ttnn.bfloat16,
             layout=ttnn.TILE_LAYOUT,
-            cache_file_name=_cache_name("e_score_correction_bias"),
+            cache_file_name=_cache_name(_bias_cache_name),
         )
 
         if device is None:
