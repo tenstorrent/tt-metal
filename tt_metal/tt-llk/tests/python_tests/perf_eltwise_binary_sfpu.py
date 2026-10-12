@@ -30,21 +30,10 @@ _ATAN2_PERF_AXES = {
     "approx_mode": [ApproximationMode.Yes, ApproximationMode.No],
 }
 
-_PERF_EXCLUDED_MATHOPS = {
-    # TODO(#58145): profiler register pressure prevents a production-equivalent build.
-    MathOperation.SfpuDivInt32,
-    MathOperation.SfpuDivInt32Floor,
-}
-
 # A functional sweep dict shared below becomes perf cases, times the run types.
-# Narrow it here when a point should stay functional-only, as with the ops below.
+# Narrow it here when a point should stay functional-only.
 _INT_UNIFORM_PERF_SWEEP = {
     **_func.INT_UNIFORM_SWEEP,
-    "mathop": [
-        mathop
-        for mathop in _func.INT_UNIFORM_SWEEP["mathop"]
-        if mathop not in _PERF_EXCLUDED_MATHOPS
-    ],
 }
 
 
