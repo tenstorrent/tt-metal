@@ -65,7 +65,7 @@ class RolloutBatch:
 class RolloutSampler(ABC):
     """Generates completions and their log-probs with updatable weights.
 
-    weight_version starts at 0. update_weights(weights, version) requires version > weight_version.
+    weight_version starts at 0. update_weights(weights, version) sets weight_version to version.
     """
 
     @abstractmethod
@@ -86,13 +86,6 @@ class RolloutSampler(ABC):
 
     def close(self) -> None:
         pass
-
-
-def check_new_weight_version(current: int, version: int) -> int:
-    version = int(version)
-    if version <= current:
-        raise ValueError(f"update_weights: version {version} must be > current weight_version {current}")
-    return version
 
 
 ROLLOUT_SOURCES = ("ttml", "ttt")
@@ -1717,10 +1710,7 @@ class GRPOTrainer:
 
     def train(self) -> None:
         if self._train_called:
-            raise RuntimeError(
-                "GRPOTrainer.train() can only be called once: the step counter restarts at 0 while sampler "
-                "weight versions only increase. Build a new GRPOTrainer to train again."
-            )
+            raise RuntimeError("GRPOTrainer.train() can only be called once. Build a new GRPOTrainer to train again.")
         self._train_called = True
         if is_rollout_rank(self.config):
             self._serve_rollouts()
