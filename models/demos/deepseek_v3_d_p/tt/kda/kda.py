@@ -53,14 +53,12 @@ def _effective_qkv_channel_chunk_size(channels: int, configured_chunk_size: int)
 
 @dataclass(frozen=True)
 class _ProjectedInputs:
+    # The fused input projection. The decay's low-rank activations, the output gate and beta's pre-sigmoid logits
+    # are read in place from their column offsets, so it stays allocated until the gated norm.
+    projected: ttnn.Tensor
     qkv: ttnn.Tensor
-    # The fused projection again; the decay's low-rank activations are its columns from decay_rank_offset.
-    decay_rank: ttnn.Tensor
     decay_rank_offset: int
-    output_gate: ttnn.Tensor
     output_gate_offset: int
-    # The fused projection again; beta's pre-sigmoid logits are its columns from beta_offset.
-    beta: ttnn.Tensor
     beta_offset: int
 
 
@@ -89,6 +87,10 @@ class ttKDA:
     local rows. Construct another instance for a different physical length;
     weights may be shared. Runtime ``actual_start`` changes chronology within
     the constructed graph without changing grouping or reading device values.
+
+    On geometries whose chunk terms and decay gate fit their L1 budgets (see config.py), those tensors live in L1
+    while the recurrence runs. Open the device with an L1_SMALL region, as the model's prefill tests do, so the CCL
+    semaphores allocated on the first call do not fragment L1 between warm-up and trace capture.
     """
 
     def __init__(
@@ -346,16 +348,10 @@ class ttKDA:
             )
         auxiliary_start = self._convolution_width
         return _ProjectedInputs(
+            projected=projected,
             qkv=_slice_width(projected, 0, auxiliary_start),
-            # The decay projection reads its low-rank columns in place.
-            decay_rank=projected,
             decay_rank_offset=auxiliary_start,
-            # The gated norm reads its gate columns straight from the fused projection, which therefore
-            # stays allocated until the norm instead of only its gate slice.
-            output_gate=projected,
             output_gate_offset=auxiliary_start + config.head_k_dim,
-            # Chunk preparation reads beta's logits in place and applies the sigmoid.
-            beta=projected,
             beta_offset=auxiliary_start + config.head_k_dim + config.v_dim,
         )
 
@@ -492,25 +488,25 @@ class ttKDA:
         # All geometries use the same selection graph for full and padded calls.
         if selections is None:
             selections = self.selections(actual_start, actual_end)
-        projected = self._project_inputs(hidden_states)
-        qkv = ttnn.to_layout(projected.qkv, ttnn.ROW_MAJOR_LAYOUT, memory_config=ttnn.DRAM_MEMORY_CONFIG)
+        inputs = self._project_inputs(hidden_states)
+        qkv = ttnn.to_layout(inputs.qkv, ttnn.ROW_MAJOR_LAYOUT, memory_config=ttnn.DRAM_MEMORY_CONFIG)
         convolution_state = ttnn.to_layout(
             state.convolution, ttnn.ROW_MAJOR_LAYOUT, memory_config=ttnn.DRAM_MEMORY_CONFIG
         )
         q, k, v, new_convolution = self._convolve_qkv(qkv, convolution_state, selections, actual_start)
-        gate = self._compute_decay(projected.decay_rank, projected.decay_rank_offset)
+        gate = self._compute_decay(inputs.projected, inputs.decay_rank_offset)
         result = self.recurrence(
             q=q,
             k=k,
             v=v,
             gate=gate,
-            beta=projected.beta,
-            beta_logits_column_offset=projected.beta_offset,
+            beta=inputs.projected,
+            beta_logits_column_offset=inputs.beta_offset,
             initial_state=state.recurrent,
             actual_start=actual_start,
             actual_end=actual_end,
+            release_gate=True,
         )
-        ttnn.deallocate(gate)
-        output = self._kda_rms_norm(result.output, projected.output_gate, projected.output_gate_offset)
+        output = self._kda_rms_norm(result.output, inputs.projected, inputs.output_gate_offset)
         output = self._project_output(output)
         return output, KdaState(recurrent=result.final_state, convolution=new_convolution)

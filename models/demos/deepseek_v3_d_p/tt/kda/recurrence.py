@@ -114,10 +114,10 @@ def _prepare_chunk_terms(
     actual_end: ttnn.Tensor | None,
     sequence_parallel_axis: int,
     gate_scale: float,
-    beta_logits_column_offset: int | None,
+    beta_logits_column_offset: int,
     memory_config: ttnn.MemoryConfig,
 ) -> _PreparedChunks:
-    # Chunk preparation reads each head's column straight from token-major [1, rows, heads] beta.
+    # Chunk preparation reads each head's logit column in place from the token-major projection and activates it.
     outputs = ttnn.experimental.kda.prepare_chunk_recurrence(
         q,
         k,
@@ -592,15 +592,15 @@ class KDARecurrence:
         gate: ttnn.Tensor,
         beta: ttnn.Tensor,
         initial_state: ttnn.Tensor,
-        beta_logits_column_offset: int | None,
+        beta_logits_column_offset: int,
+        release_gate: bool,
     ) -> tuple[_PreparedChunks, ttnn.Tensor, _RecurrenceGeometry]:
         geometry = self._geometry
-        # Activated beta holds exactly one column per head; logits are a column window of a wider projection.
-        if beta_logits_column_offset is None:
-            beta_width_ok = beta.shape[-1] == geometry.heads
-        else:
-            beta_width_ok = beta.shape[-1] >= beta_logits_column_offset + geometry.heads
-        if tuple(beta.shape)[:2] != (geometry.batch, geometry.local_rows) or not beta_width_ok:
+        # Beta's logits are a column window of a wider projection.
+        if (
+            tuple(beta.shape)[:2] != (geometry.batch, geometry.local_rows)
+            or beta.shape[-1] < beta_logits_column_offset + geometry.heads
+        ):
             raise ValueError("recurrence beta shape does not match constructed geometry")
         for name, tensor, width in (
             ("q", q, geometry.heads * geometry.key_dim),
@@ -630,6 +630,9 @@ class KDARecurrence:
             beta_logits_column_offset=beta_logits_column_offset,
             memory_config=self._preparation_memory,
         )
+        if release_gate:
+            # Only chunk preparation reads the gate; freeing it here lowers L1 use during the scans.
+            ttnn.deallocate(gate)
         return prepared, state, geometry
 
     @staticmethod
@@ -651,12 +654,15 @@ class KDARecurrence:
         gate: ttnn.Tensor,
         beta: ttnn.Tensor,
         initial_state: ttnn.Tensor,
-        beta_logits_column_offset: int | None = None,
+        beta_logits_column_offset: int,
+        release_gate: bool = False,
     ) -> RecurrenceResult:
         """Execute the constructed graph using caller-owned state and chronology.
 
-        ``beta`` is the activated token-major beta, or with ``beta_logits_column_offset`` a wider BF16 tensor whose
-        columns from that offset hold beta's pre-sigmoid logits; chunk preparation then applies the sigmoid.
+        ``beta`` is a token-major BF16 tensor whose ``heads`` columns from ``beta_logits_column_offset`` hold beta's
+        pre-sigmoid logits, such as the fused input projection; chunk preparation applies the sigmoid.
+        With ``release_gate`` the recurrence takes ownership of ``gate`` and frees it once chunk preparation has
+        read it.
         """
         prepared, state, geometry = self._prepare(
             q=q,
@@ -668,6 +674,7 @@ class KDARecurrence:
             actual_start=actual_start,
             actual_end=actual_end,
             beta_logits_column_offset=beta_logits_column_offset,
+            release_gate=release_gate,
         )
         result = self._execute(prepared, state, actual_start, actual_end)
         # Release the chunk terms as soon as the scan consumed them, so every call sees the same free memory.

@@ -8,6 +8,7 @@
 //   qd=q*exp(G), kl=k*exp(G), kr=k*exp(-G)
 //   Akk=strictly_lower((beta*kl)@kr^T), Aqk=tril(qd@kr^T)
 //   kd=beta*kl, k_dec_t=(kr*exp(G_last))^T, dl=exp(G_last).
+// dl is logically [K,1]: only its column 0 is defined, and consumers broadcast that column.
 // T_inv uses a face-blocked polynomial inverse so large gate magnitudes remain stable.
 
 #include <cstdint>
@@ -497,7 +498,9 @@ inline void prepare_gate_factors(
         centered_g.pop_front(chunk_key_tiles);
     }
 
-    // exp(G_last/2) is row-replicated; only its leading rows are computed, and row 0 is read.
+    // exp(G_last/2) is row-replicated and the broadcasts read only row 0, so only the face rows holding it are
+    // computed. That takes two SFPU iterations: one leaves part of row 0 unwritten, and kd, q_decay, k_dec_t and
+    // final_decay come out wrong.
     exponential_tiles<VectorMode::R, 2>(anchor_g, anchor_decay, chunk_key_tiles);
     anchor_decay.wait_front(chunk_key_tiles);
     anchor_g.pop_front(chunk_key_tiles);
@@ -656,7 +659,7 @@ inline void prepare_decay_outputs(
     }
 }
 
-template <uint32_t Ct, uint32_t Kt, uint32_t Vt, uint32_t SCALE_BITS, uint32_t EPS_BITS, uint32_t beta_logits>
+template <uint32_t Ct, uint32_t Kt, uint32_t Vt, uint32_t SCALE_BITS, uint32_t EPS_BITS>
 TT_KERNEL void compute(uint32_t work_item_start, uint32_t work_item_count, uint32_t num_chunks) {
     DataflowBuffer control(dfb::chronology_compute);
     const uint32_t valid_chunks = kda_chronology::receive(control).chunk_count();
@@ -671,10 +674,9 @@ TT_KERNEL void compute(uint32_t work_item_start, uint32_t work_item_count, uint3
     DataflowBuffer k(dfb::k);
     DataflowBuffer v(dfb::v);
     DataflowBuffer g(dfb::g);
-    DataflowBuffer beta_input(dfb::beta);
-    DataflowBuffer beta_activated(dfb::beta_activated);
-    // Beta logits are activated into beta_activated once per work item; activated beta is used as read.
-    DataflowBuffer& beta = beta_logits ? beta_activated : beta_input;
+    // Beta logits are activated into beta once per work item.
+    DataflowBuffer beta_logits(dfb::beta);
+    DataflowBuffer beta(dfb::beta_activated);
     DataflowBuffer eye(dfb::eye);
     DataflowBuffer tril(dfb::tril);
     DataflowBuffer block_masks(dfb::block_masks);
@@ -724,11 +726,9 @@ TT_KERNEL void compute(uint32_t work_item_start, uint32_t work_item_count, uint3
         k.wait_front(chunk_key_tiles);
         v.wait_front(chunk_value_tiles);
         g.wait_front(chunk_key_tiles);
-        beta_input.wait_front(Ct);
-        if constexpr (beta_logits) {
-            activate_beta<Ct>(beta_input, beta_activated);
-            beta_activated.wait_front(Ct);
-        }
+        beta_logits.wait_front(Ct);
+        activate_beta<Ct>(beta_logits, beta);
+        beta.wait_front(Ct);
 
         normalize_l2_rows<Ct, Kt, true, dfb::workspace_3, dfb::tile_workspace_0>(
             q,
