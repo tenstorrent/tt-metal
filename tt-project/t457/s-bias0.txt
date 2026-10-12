@@ -1,0 +1,8 @@
+ID=t457-bias0
+TASK=t457
+WORKDIR=/var/tmp/fasth3/t457
+ENV=/var/tmp/fasth3/t452/env452.yaml
+CONFIG=t457-sla0-bias
+TIMEOUT=540
+CMD=env T409_SEED=0 T409_SAVE=0 T409_PY_TIMEOUT=490 bash /var/tmp/fasth3/t457/run457.sh b0 v10sla0.0
+NEEDS=/var/tmp/fasth3/t409/b/ttnn/ttnn/_ttnn.so,/var/tmp/fasth3/t452/w/OVERLAY

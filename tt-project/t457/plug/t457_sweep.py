@@ -7,6 +7,8 @@ devices T457_DEVS (default 0,24) and heads 0..T457_HEADS-1 (default 14), every 1
 The sdpa column is the bf16 floor of the dense kernel family (HiFi2, fp32_dest_acc off, exact exp, as the dense
 ring path) on the same data. Prints per-head min/median and the 12 worst vsa tiles with their sdpa value, then
 raises T457_SWEEP_DONE after the last index.
+Per head it also prints the scale bias <o, ref>/<ref, ref> and the whole-head relative error of both kernels
+(PCC cannot see a uniform attenuation of O, which would still compound over the 200 calls of a video).
 """
 import math
 import os
@@ -63,6 +65,7 @@ def _sweep(call, q, k, v, out, kwargs):
     qs, ks, vs, os_ = (ttnn.get_device_tensors(x) for x in (q, k, v, out))
     print(f"[t457] call {call}: kwargs {kwargs} skipped {_state['n']} prep {time.time() - t0:.1f}s", flush=True)
     worst = []
+    bias = []
     for d in devs:
         qd, kd, vd, od = (ttnn.to_torch(x)[0].float() for x in (qs[d], ks[d], vs[d], os_[d]))
         dd = ttnn.to_torch(dts[d])[0].float() if dts is not None else None
@@ -70,6 +73,7 @@ def _sweep(call, q, k, v, out, kwargs):
         for h in range(min(heads, qd.shape[0])):
             th = time.time()
             vsa_p, sd_p = [], []
+            acc = torch.zeros(6, dtype=torch.float64)  # <o,r> <r,r> |o-r|^2 for vsa, then sdpa (scale bias)
             for c0 in range(0, qd.shape[1], 1024):
                 qc = qd[h, c0 : c0 + 1024]
                 s = (qc @ kd[h].T) * scale
@@ -93,6 +97,15 @@ def _sweep(call, q, k, v, out, kwargs):
                     if dd is not None:
                         ds = dd[h, c0 + t * 128 : c0 + (t + 1) * 128]
                         ps, rs = _pcc(ds, ref_a[r]), _rel(ds, ref_a[r])
+                    rr = ref_r[r].double()
+                    acc[0] += float((o.double() * rr).sum())
+                    acc[1] += float((rr * rr).sum())
+                    acc[2] += float(((o.double() - rr) ** 2).sum())
+                    if dd is not None:
+                        ra = ref_a[r].double()
+                        acc[3] += float((ds.double() * ra).sum())
+                        acc[4] += float((ra * ra).sum())
+                        acc[5] += float(((ds.double() - ra) ** 2).sum())
                     vsa_p.append(pv)
                     sd_p.append(ps)
                     worst.append((pv, d, h, tile, rv, ps, rs))
@@ -101,6 +114,14 @@ def _sweep(call, q, k, v, out, kwargs):
             print(
                 f"[t457] call {call} dev {d} h{h}: tiles {len(vsa_p)} vsa min {vp.min():.5f} med {vp.median():.5f} "
                 f"sdpa min {sp.min():.5f} med {sp.median():.5f} ({time.time() - th:.1f}s)",
+                flush=True,
+            )
+            sv, ss = acc[0] / acc[1], acc[3] / max(float(acc[4]), 1e-30)
+            ev, es = (acc[2] / acc[1]).sqrt(), (acc[5] / max(float(acc[4]), 1e-30)) ** 0.5
+            bias.append((float(sv), float(ss), float(ev), float(es)))
+            print(
+                f"[t457] call {call} dev {d} h{h} bias: vsa scale {sv:.5f} rel {ev:.5f} | "
+                f"sdpa scale {ss:.5f} rel {es:.5f}",
                 flush=True,
             )
     worst.sort()
@@ -116,6 +137,13 @@ def _sweep(call, q, k, v, out, kwargs):
         f"[t457] call {call} summary: {len(worst)} tiles, vsa<0.999: {int((allv < 0.999).sum())}, "
         f"sdpa<0.999: {int((alls < 0.999).sum())}, vsa mean {allv.mean():.5f} sdpa mean {alls.nanmean():.5f} "
         f"({time.time() - t0:.1f}s)",
+        flush=True,
+    )
+    b = torch.tensor(bias, dtype=torch.float64)
+    print(
+        f"[t457] call {call} bias summary: vsa scale mean {b[:, 0].mean():.5f} min {b[:, 0].min():.5f} "
+        f"rel mean {b[:, 2].mean():.5f} | sdpa scale mean {b[:, 1].mean():.5f} min {b[:, 1].min():.5f} "
+        f"rel mean {b[:, 3].mean():.5f}",
         flush=True,
     )
     if dts is not None:

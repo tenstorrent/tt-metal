@@ -43,3 +43,20 @@ Branch ttp/t457-..., based on t456 head da96dd1c143 (ff-merged).
   /var/tmp/fasth3/t48/python_env/bin/python -I /var/tmp/fasth3/t452/psnr452.py /var/tmp/fasth3/t452/out_s0-dense /var/tmp/fasth3/t457/out_s0k256b-dense
   ~19 dB => floor confirmed (no kernel fix; step-4 A/B not applicable). >>19 dB => vsa has a systematic error beyond
   per-call numerics; next suspects: lazy max / bf16 O L1-acc on heads 0/1.
+
+## Step 1c result: job 042 PASS (13:11-13:15 PDT, no drops, 900 MHz clamp; `[t457] sdpa ... k_chunk 512 -> 256` seen)
+- out_s0k256b-dense vs out_s0-dense: Y PSNR 23.00 dB (per-frame min 19.67, median 23.08), yuv 24.61 dB, latent PCC 0.9628.
+- So an equal-precision reorder of the dense kernel alone drifts to ~23 dB: the trajectory is very sensitive.
+  SLA sparsity 0 (vsa_sdpa) is 18.98 dB / PCC 0.9222, ~4 dB and 2x (1-PCC) further. Part of the "floor" is
+  trajectory sensitivity, but vsa adds more drift than a reorder does.
+- vsa_sdpa config already matches the dense ring path: HiFi2, exact exp, fp32_dest_acc off, bf16 intermediates
+  (vsa_sdpa.cpp defaults). fp32_dest_acc cannot be turned on for the streaming kernel (Sqt 2 x vDHt 4 = 8 > 4 DEST).
+- Suspect: a uniform scale bias in O (bf16 O accumulation over ~1179 visits per row absorbing small increments;
+  the row sum is exact via the int64 sum service, O is not). PCC is blind to a uniform scale.
+
+## Step 1d: scale-bias check, blx01 job 043 (submitted 13:19 PDT, spec s-bias0.txt, TIMEOUT 540 = 330 s +50% + margin)
+- Plug t457_sweep.py now also prints per head `bias: vsa scale <o,ref>/<ref,ref> rel ... | sdpa scale ... rel ...`
+  and a `bias summary` line per call. Log /var/log/tt-device-broker/2026-10-12_201928_043.log.
+- Reading: vsa scale clearly < 1 (e.g. <0.995) while sdpa ~1.000 => O attenuation in vsa's accumulation (kernel fix
+  target: accumulate O in fp32/L1 or rescale). Both ~1 and similar rel => no per-call bias; the 4 dB is the
+  different kernel's (equal-size) rounding noise, and no kernel fix is warranted.
