@@ -1,4 +1,8 @@
 #!/usr/bin/env python3
+# SPDX-FileCopyrightText: (c) 2026 Tenstorrent AI ULC
+#
+# SPDX-License-Identifier: Apache-2.0
+
 """How many Tensix cores does each op of the block actually occupy?
 
 The power breakdown cannot answer this. tt-ember measures board power, and a low reading is

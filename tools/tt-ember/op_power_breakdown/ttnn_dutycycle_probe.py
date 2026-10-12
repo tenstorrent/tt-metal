@@ -1,4 +1,8 @@
 #!/usr/bin/env python3
+# SPDX-FileCopyrightText: (c) 2026 Tenstorrent AI ULC
+#
+# SPDX-License-Identifier: Apache-2.0
+
 """Does measured power depend on per-call duration? A duty-cycle probe for tt-ember.
 
 Telemetry samples every ~103 us while op calls take 32-470 us, so an individual call is never

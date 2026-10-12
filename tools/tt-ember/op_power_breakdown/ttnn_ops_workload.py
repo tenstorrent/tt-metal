@@ -1,4 +1,8 @@
 #!/usr/bin/env python3
+# SPDX-FileCopyrightText: (c) 2026 Tenstorrent AI ULC
+#
+# SPDX-License-Identifier: Apache-2.0
+
 """Per-op power breakdown of a transformer block, as a tt-ember workload.
 
 tt-ember drives any executable passed as --app-exe and parses its stdout, so this is used
