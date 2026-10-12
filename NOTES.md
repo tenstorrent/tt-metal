@@ -249,3 +249,18 @@ Next (tunnel up): `ssh exabox-login 'df -h /data; curl -sI https://huggingface.c
 - Next: per arm "denoise breakdown" and "[t452] audio" lines from out_s<N>-<arm>/run.log; psnr452.py out_sN-dense out_sN-sla0.85
   for each seed (note: SLA uses a different LoRA, so PSNR vs v1.0 dense measures drift, not just sparsity error); stills at 5 s
   (ffmpeg -ss 5); VBench subset on dense vs SLA; recommendation.
+
+## t452 run 1709 (2026-10-12 11:35 PDT) — seeds 0-4 done: SLA output is noise; isolation jobs queued
+- Chain 1708 all PASS on blx01 (900 MHz AICLK ceiling, relative only): jobs 013 (s0 sla), 014-021 (s1..s4 dense, sla). No drops.
+- Steady denoise per step: dense 3104-3108 ms; SLA LoRA + sla 0.85: 2455-2482 ms (-20.5%). Denoising total ~12.7 s vs ~10.2 s.
+- SLA vs dense (psnr452.py): Y PSNR 12.9-13.7 dB, yuv 14.5-15.2 dB, latent PCC 0.27-0.45 on all 5 seeds.
+  Stills (tt-project/t452/stills/grid.jpg, top dense s0-s4, bottom SLA s0-s4, 5 s): every SLA frame is colored streak noise, no fox.
+  Audio: dense peak 0.02-0.26, rms 0.002-0.019, 0% clipped; SLA peak 1.0, rms 0.43-0.64, 1.5-10.3% clipped (noise).
+  This is a broken integration, not a quality trade-off. The 20% speed number is meaningless until SLA output is sane.
+- LoRA loading is not the obvious cause: SLA v0.1 and v1.0 files have the same 312 target set (624 keys), both bind 208 targets
+  over 266 promoted linears (token_refiner unbound in both), shapes rank 128 in both.
+- Isolation (seed 0, one arm per blx01 job): run452.sh arms `slalora` (SLA LoRA, dense attention) and `v10sla0.85`
+  (v1.0 LoRA + MINIMAX_H3_VSA_MODE=sla). Chain run 1709 (log state/runs/1709/chain452.log).
+  If slalora is sane and v10sla is noise: our SLA selection mode is wrong (or SLA needs its linear-attention branch, which the
+  selection-only mode lacks). If slalora is noise too: the SLA LoRA needs the SLA kernel to be meaningful, or a different base.
+- Next: psnr452.py out_s0-dense out_s0-{slalora,v10sla0.85}; stills at 5 s; recommendation.

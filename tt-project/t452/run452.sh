@@ -3,7 +3,8 @@
 # 768p, fl2va, 10 s, 4 steps, 4x8, for each arm given, one pytest process per arm, in order. Tree: the t452/w overlay
 # (t409/b build + SLA selection code, see mk452.sh). One arm takes ~316 s warm, so a job runs one arm.
 # Args: <tag> <arm>... where arm is dense (v1.0 LoRA), vsa<s> (v1.0 LoRA + VSA sparsity s, e.g. vsa0.9) or
-# sla<s> (SLA LoRA v0.1 + MINIMAX_H3_VSA_MODE=sla, sparsity s).
+# sla<s> (SLA LoRA v0.1 + MINIMAX_H3_VSA_MODE=sla, sparsity s); isolation arms: slalora (SLA LoRA, dense
+# attention), v10sla<s> (v1.0 LoRA + MINIMAX_H3_VSA_MODE=sla).
 # T409_SEED (default 0), T409_REPLAYS (default 1), T409_SAVE=1 saves latents and video per arm,
 # T409_PY_TIMEOUT per-arm pytest limit (default 270). Same inputs as t408/run408.sh (#408 baseline).
 # pytest runs in the broker job's process group (no setsid) under timeout --foreground -k 10; the EXIT trap and
@@ -11,7 +12,7 @@
 set -o pipefail
 F=/var/tmp/fasth3; T=$F/t452; W=${T409_W:-$T/w}; VENV=$F/t48/python_env
 TAG=${1:?tag}; shift; [ $# -ge 1 ] || { echo "[t409] no arms"; exit 2; }
-for a in "$@"; do case $a in dense|vsa0.[0-9]*|sla0.[0-9]*) ;; *) echo "[t409] bad arm $a"; exit 2;; esac; done
+for a in "$@"; do case $a in dense|slalora|vsa0.[0-9]*|sla0.[0-9]*|v10sla0.[0-9]*) ;; *) echo "[t409] bad arm $a"; exit 2;; esac; done
 use=$(df --output=pcent / | tail -1 | tr -dc 0-9); [ "$use" -le 88 ] || { echo "[t409] / at $use%"; exit 5; }
 gb=$(timeout 120 du -csxBG $F 2>/dev/null | tail -1 | cut -f1 | tr -dc 0-9); [ "${gb:-0}" -le 450 ] || { echo "[t409] footprint ${gb}G"; exit 5; }
 mkdir -p $F/tmp
@@ -54,6 +55,8 @@ for ARM in "$@"; do
   unset MINIMAX_H3_VSA_SPARSITY MINIMAX_H3_VSA_MODE; export MINIMAX_H3_TURBO_LORA_PATH=$LORA_V10
   case $ARM in
     vsa*) export MINIMAX_H3_VSA_SPARSITY=${ARM#vsa};;
+    slalora) export MINIMAX_H3_TURBO_LORA_PATH=$LORA_SLA;;
+    v10sla*) export MINIMAX_H3_VSA_SPARSITY=${ARM#v10sla} MINIMAX_H3_VSA_MODE=sla;;
     sla*) export MINIMAX_H3_VSA_SPARSITY=${ARM#sla} MINIMAX_H3_VSA_MODE=sla MINIMAX_H3_TURBO_LORA_PATH=$LORA_SLA;;
   esac
   unset MINIMAX_H3_TURBO_SAVE_DIR; [ "${T409_SAVE:-1}" = 1 ] && export MINIMAX_H3_TURBO_SAVE_DIR=$OUT
