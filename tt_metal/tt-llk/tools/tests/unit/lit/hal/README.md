@@ -19,3 +19,9 @@ Tests write `objdump -t --special-syms -drz` output to a text file, then pass it
 to `%{blackhole_compare_codegen}`. The script compares the function pairs,
 including instruction bytes and operands and relocation types, targets, and
 addends.
+
+The comparison checks that the public API inlines and folds to the same code as
+the explicit operations, including the absence of extra calls, instructions, or
+memory accesses. Reference operations assume inputs satisfy the API's documented
+constraints. Separate assertion and diagnostic checks cover invalid inputs;
+these compile-only tests do not execute on hardware.
