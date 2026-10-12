@@ -222,13 +222,24 @@ class _FakeGenerator:
 
     def decode_forward(self, out_tok, current_pos, **kwargs):
         self.decode_calls.append((int(out_tok.reshape(-1)[0]), int(current_pos.reshape(-1)[0]), dict(kwargs)))
-        return self._logits(len(self.decode_calls)), None
+        logits = self._logits(len(self.decode_calls))
+        if kwargs.get("sampling_params") is not None:
+            # Device sampling returns the token id, not logits (argmax stands in for the device sampler).
+            return logits.argmax(dim=-1), None
+        return logits, None
 
     def release_persistent_capture(self):
         self.released += 1
 
 
-def _device_enhancer(monkeypatch, script, *, peaked=True, tokenizer=None, real_tokenize=False, **kwargs):
+def _device_enhancer(
+    monkeypatch, script, *, peaked=True, tokenizer=None, real_tokenize=False, device_sampling=False, **kwargs
+):
+    # The fake has no device sampler: default to the host path unless a test exercises device sampling.
+    if device_sampling:
+        monkeypatch.delenv("LTX_ENHANCER_HOST_SAMPLE", raising=False)
+    else:
+        monkeypatch.setenv("LTX_ENHANCER_HOST_SAMPLE", "1")
     gen = _FakeGenerator(script, peaked=peaked)
     kv = [[layer.kv_cache for layer in gen.model[0].layers]]
     tok = tokenizer or _FakeTokenizer()
@@ -309,6 +320,18 @@ def test_device_enhancer_decodes_only_new_tokens_and_feeds_back_positions(monkey
         assert kwargs["enable_trace"] is False
         assert kwargs["sampling_params"] is None
         assert kwargs["kv_cache"][0][0] is gen.model[0].layers[0].kv_cache
+
+
+def test_device_enhancer_device_sampling_feeds_back_sampled_ids(monkeypatch):
+    enhancer, gen = _device_enhancer(monkeypatch, [7, 8, 9], temperature=0.0, max_new_tokens=3, device_sampling=True)
+    assert enhancer.enhance("a cat") == "t7 t8 t9"
+    assert enhancer.last_stats["sampling"] == "device"
+    assert [(tok, pos) for tok, pos, _ in gen.decode_calls] == [(7, len(PROMPT_IDS)), (8, len(PROMPT_IDS) + 1)]
+    params = [kwargs["sampling_params"] for _, _, kwargs in gen.decode_calls]
+    # Greedy reaches the device sampler as top_k=1; its params are loaded and its state reset at step 0 only.
+    assert all(p.temperature == 0.0 and p.top_k == 1 for p in params)
+    assert [kwargs["reload_sampling_params"] for _, _, kwargs in gen.decode_calls] == [True, False]
+    assert [kwargs["reset_sampling_state"] for _, _, kwargs in gen.decode_calls] == [True, False]
 
 
 def test_device_enhancer_warmup_is_short_greedy_per_bucket_and_once(monkeypatch):
