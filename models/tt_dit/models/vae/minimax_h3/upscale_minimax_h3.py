@@ -79,6 +79,18 @@ def upscale_blocks_reference(
     return torch.cat(rows, dim=-2)
 
 
+def upscale_unserved(in_hw: tuple[int, int], out_hw: tuple[int, int], mesh_shape: tuple[int, int]) -> str | None:
+    """Why `CanvasUpscaler` cannot resize `in_hw` to `out_hw` on this mesh, or None."""
+    mesh_rows, mesh_cols = mesh_shape
+    (in_h, _), (out_h, out_w) = in_hw, out_hw
+    if in_h % mesh_rows or out_h % mesh_rows or out_w % mesh_cols:
+        return f"{tuple(in_hw)} -> {tuple(out_hw)} does not split over the {mesh_rows}x{mesh_cols} mesh"
+    per_h, per_w = out_h // mesh_rows, out_w // mesh_cols
+    if per_h % 2 or per_w % 2:
+        return f"per-device patch {per_h}x{per_w} must be even for 4:2:0"
+    return None
+
+
 class CanvasUpscaler:
     """Resizes a row-partitioned `(1, C, T, H / mesh_rows, W)` canvas to a 2D-sharded `(out_h, out_w)` one.
 
@@ -89,11 +101,10 @@ class CanvasUpscaler:
     def __init__(self, mesh_device: ttnn.MeshDevice, in_hw: tuple[int, int], out_hw: tuple[int, int]) -> None:
         mesh_rows, mesh_cols = tuple(mesh_device.shape)
         (in_h, in_w), (out_h, out_w) = in_hw, out_hw
-        if in_h % mesh_rows or out_h % mesh_rows or out_w % mesh_cols:
-            raise ValueError(f"{in_hw} -> {out_hw} does not split over the {mesh_rows}x{mesh_cols} mesh")
+        reason = upscale_unserved(in_hw, out_hw, (mesh_rows, mesh_cols))
+        if reason is not None:
+            raise ValueError(reason)
         self.per_h, self.per_w = out_h // mesh_rows, out_w // mesh_cols
-        if self.per_h % 2 or self.per_w % 2:
-            raise ValueError(f"per-device patch {self.per_h}x{self.per_w} must be even for 4:2:0")
         self.mesh_device = mesh_device
         self.in_hw, self.out_hw = in_hw, out_hw
         shape = (mesh_rows, mesh_cols)

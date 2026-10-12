@@ -20,6 +20,7 @@ import math
 import os
 import time
 from pathlib import Path
+from types import SimpleNamespace
 
 import numpy as np
 import pytest
@@ -150,6 +151,147 @@ def test_upscale_blocks_match_interpolate(in_hw, out_hw, mesh_shape):
     assert torch.allclose(matrix.sum(dim=1), torch.ones(out_hw[1], dtype=torch.float64))
 
 
+class _StubMesh:
+    """The mesh surface the canvas routing and the VAE warmup read; no device behind it."""
+
+    shape = (4, 8)
+
+    def get_num_devices(self) -> int:
+        return 32
+
+    def num_program_cache_entries(self) -> int:
+        return 0
+
+
+def _stub_vae(upscale_to, *, stitch_exchange="strips"):
+    """A `MiniMaxH3Vae` with only the attributes its tile geometry and upscale routing read."""
+    from ....models.vae.minimax_h3.vae_minimax_h3 import (
+        DEFAULT_TILE_OVERLAP,
+        DEFAULT_TILE_SIZE,
+        MiniMaxH3Vae,
+        MiniMaxH3VaeConfig,
+    )
+
+    vae = object.__new__(MiniMaxH3Vae)
+    vae.config = MiniMaxH3VaeConfig()
+    vae.mesh_device = _StubMesh()
+    vae.tile_size, vae.tile_overlap = DEFAULT_TILE_SIZE, DEFAULT_TILE_OVERLAP
+    vae.device_stitch, vae.stitch_exchange, vae.ccl_manager = True, stitch_exchange, None
+    vae.upscale_to, vae._upscalers, vae._warned_upscale = dict(upscale_to), {}, set()
+    return vae
+
+
+@pytest.mark.parametrize(
+    ("raw", "expected"),
+    [
+        ("", {}),
+        ("1920x1080", {IN_HW: OUT_HW}),
+        (" 1344x768:1920x1080 , 768x1344:1080x1920", {IN_HW: OUT_HW, (1344, 768): (1920, 1080)}),
+    ],
+)
+def test_upscale_env(monkeypatch, raw, expected):
+    from ....pipelines.minimax_h3 import pipeline_minimax_h3 as pm
+
+    monkeypatch.setenv("MINIMAX_H3_UPSCALE", raw)
+    assert pm._upscale_from_env() == expected
+
+
+@pytest.mark.parametrize("raw", ["1920", "1920x1080x3", "1344x768:", "axb"])
+def test_upscale_env_rejects(monkeypatch, expect_error, raw):
+    from ....pipelines.minimax_h3 import pipeline_minimax_h3 as pm
+
+    monkeypatch.setenv("MINIMAX_H3_UPSCALE", raw)
+    with expect_error(ValueError, "MINIMAX_H3_UPSCALE"):
+        pm._upscale_from_env()
+
+
+def test_upscale_target_every_canvas(monkeypatch):
+    """`MINIMAX_H3_UPSCALE=1920x1080` resizes the 16:9 768p canvas only; no decodable canvas raises."""
+    from ....pipelines.minimax_h3 import pipeline_minimax_h3 as pm
+    from ....pipelines.minimax_h3.policy import decodable_canvases
+
+    monkeypatch.setenv("MINIMAX_H3_UPSCALE", "1920x1080")
+    vae = _stub_vae(pm._upscale_from_env())
+    ratio = vae.config.spatial_compression_ratio
+    canvases = decodable_canvases()
+    unserved = [c for c in canvases if vae._strips_unserved(c[0] // ratio, c[1] // ratio, "yuv420") is not None]
+    assert unserved and IN_HW in canvases and IN_HW not in unserved
+
+    targets = {c: vae.upscale_target(c[0] // ratio, c[1] // ratio) for c in canvases}
+    assert targets.pop(IN_HW) == OUT_HW
+    assert set(targets.values()) == {None}
+    assert vae.upscale_target(IN_HW[0] // ratio, IN_HW[1] // ratio, "float") is None
+
+
+def test_upscale_target_falls_back_when_strips_cannot_serve():
+    """A mapped canvas the strip stitch cannot serve keeps its size instead of raising."""
+    from ....pipelines.minimax_h3.policy import decodable_canvases
+
+    gather = _stub_vae({IN_HW: OUT_HW}, stitch_exchange="gather")
+    ratio = gather.config.spatial_compression_ratio
+    assert gather.upscale_target(IN_HW[0] // ratio, IN_HW[1] // ratio) is None
+
+    vae = _stub_vae({c: (c[0] * 2, c[1] * 2) for c in decodable_canvases()})
+    for height, width in decodable_canvases():
+        served = vae._strips_unserved(height // ratio, width // ratio, "yuv420") is None
+        target = vae.upscale_target(height // ratio, width // ratio)
+        assert target == ((height * 2, width * 2) if served else None)
+
+
+def test_upscale_to_rejects_a_target_the_mesh_cannot_split():
+    from ....models.vae.minimax_h3.upscale_minimax_h3 import upscale_unserved
+
+    assert upscale_unserved(IN_HW, OUT_HW, (4, 8)) is None
+    assert "split" in upscale_unserved(IN_HW, (1081, 1920), (4, 8))
+    assert "even" in upscale_unserved(IN_HW, (1080, 1928), (4, 8))
+
+
+def test_upscaler_kept_per_canvas(monkeypatch):
+    """A serving loop that alternates canvases builds each canvas's upscaler (and its matrices) once."""
+    from ....models.vae.minimax_h3 import upscale_minimax_h3, vae_minimax_h3
+
+    built = []
+
+    class CountingUpscaler:
+        def __init__(self, mesh_device, in_hw, out_hw):
+            built.append((in_hw, out_hw))
+
+        def __call__(self, canvas_rows):
+            return canvas_rows
+
+    monkeypatch.setattr(upscale_minimax_h3, "CanvasUpscaler", CountingUpscaler)
+    monkeypatch.setattr(vae_minimax_h3, "fast_device_to_host_yuv", lambda *args, **kwargs: None)
+    other = ((1344, 768), (1920, 1080))
+    vae = _stub_vae({IN_HW: OUT_HW, other[0]: other[1]})
+    for in_hw, out_hw in (IN_HW, OUT_HW), other, (IN_HW, OUT_HW), other:
+        vae._read_canvas_yuv_upscaled(None, in_hw, out_hw)
+    assert built == [(IN_HW, OUT_HW), other]
+
+
+def test_warm_vae_decode_reaches_the_upscale(monkeypatch):
+    """Pipeline warmup with `MINIMAX_H3_UPSCALE` set decodes every canvas without raising, the 768p one resized."""
+    from ....pipelines.minimax_h3 import pipeline_minimax_h3 as pm
+
+    monkeypatch.setenv("MINIMAX_H3_UPSCALE", "1920x1080")
+    monkeypatch.setattr(pm, "_is_host_rank", lambda: False)
+    vae = _stub_vae(pm._upscale_from_env())
+    decoded = {}
+
+    def decode(latents, *, output_type):
+        canvas = tuple(int(n) * vae.config.spatial_compression_ratio for n in latents.shape[-2:])
+        decoded[canvas] = vae.upscale_target(*latents.shape[-2:], output_type)
+
+    vae.decode = decode
+    vae.decode_unit_shape = lambda: (1, 16, 16)
+    pipeline = SimpleNamespace(
+        vae_config=vae.config, _vae=vae, mesh_device=vae.mesh_device, _host_log=lambda message: None
+    )
+    pm.MiniMaxH3Pipeline._warm_vae_decode(pipeline)
+
+    assert decoded.pop(IN_HW) == OUT_HW
+    assert decoded and set(decoded.values()) == {None}
+
+
 @pytest.mark.timeout(600)
 @pytest.mark.parametrize(("mesh_device", "device_params"), MESH_4X8_RING, indirect=["mesh_device", "device_params"])
 def test_upscale_frames(mesh_device):
@@ -241,7 +383,7 @@ def test_decode_upscale(mesh_device):
     latents = torch.randn(1, config.latent_channels, latent_frames, 48, 84)
 
     def decode(upscale_to, output_type, z):
-        vae.upscale_to = upscale_to
+        vae.upscale_to = {IN_HW: upscale_to} if upscale_to else {}
         started = time.perf_counter()
         video = vae.decode(z, output_type=output_type)
         return video, time.perf_counter() - started

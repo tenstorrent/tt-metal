@@ -151,21 +151,29 @@ from .weights_minimax_h3 import resolve_weights_dir
 MINIMAX_H3_PIXEL_MEAN = _MINIMAX_H3_PIXEL_MEAN
 MINIMAX_H3_PIXEL_STD = _MINIMAX_H3_PIXEL_STD
 
-# "WIDTHxHEIGHT" (e.g. "1920x1080"): bicubic-resize the yuv420 video to it on device, inside the VAE
-# readback, instead of leaving the resize to the caller's host.
+# Comma-separated "INWxINH:OUTWxOUTH" entries: bicubic-resize the yuv420 video of canvas INWxINH to
+# OUTWxOUTH on device, inside the VAE readback, instead of leaving the resize to the caller's host.
+# A bare "OUTWxOUTH" (e.g. "1920x1080") names the 16:9 canvas. Every other canvas keeps its size, so
+# the resize never changes a video's aspect ratio unless an entry asks for it.
 _UPSCALE_ENV = "MINIMAX_H3_UPSCALE"
 
 
-def _upscale_from_env() -> tuple[int, int] | None:
-    """`(height, width)` from `MINIMAX_H3_UPSCALE`, or None when unset."""
+def _upscale_from_env() -> dict[tuple[int, int], tuple[int, int]]:
+    """`{(in_height, in_width): (out_height, out_width)}` from `MINIMAX_H3_UPSCALE`; empty when unset."""
     raw = os.environ.get(_UPSCALE_ENV, "").strip()
-    if not raw:
-        return None
-    try:
-        width, height = (int(v) for v in raw.lower().split("x"))
-    except ValueError:
-        raise ValueError(f"{_UPSCALE_ENV} must be WIDTHxHEIGHT, got {raw!r}") from None
-    return height, width
+
+    def size(text: str) -> tuple[int, int]:
+        width, height = (int(v) for v in text.strip().lower().split("x"))
+        return height, width
+
+    upscale = {}
+    for entry in filter(None, (e.strip() for e in raw.split(","))):
+        try:
+            source, _, target = entry.rpartition(":")
+            upscale[size(source) if source else resolve_canvas_size(16, 9)] = size(target)
+        except ValueError:
+            raise ValueError(f"{_UPSCALE_ENV} entries must be [INWxINH:]OUTWxOUTH, got {entry!r}") from None
+    return upscale
 
 
 # The timestep a ref2va reference soundtrack's rows run at: a literal 1.0, every step. They are
@@ -2505,7 +2513,8 @@ class MiniMaxH3Pipeline:
         kernels, and one decoder chunk per canvas reaches all of them. The gather stitch slices each
         tile out of the wave by its slot, one program per slot, and the slots are shared by every
         canvas: the first canvas whose chunks fill a wave exactly decodes a full wave, which reaches
-        every slot.
+        every slot. A canvas `MINIMAX_H3_UPSCALE` names decodes through its device resize here, so
+        the resize compiles too.
         """
         config = self.vae_config
         ratio = config.spatial_compression_ratio
