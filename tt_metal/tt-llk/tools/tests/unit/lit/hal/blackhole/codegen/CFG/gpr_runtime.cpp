@@ -31,7 +31,7 @@ extern "C" __attribute__((noinline, used)) void write_runtime_gpr_default_comple
 
 extern "C" __attribute__((noinline, used)) void reference_write_runtime_gpr_default_completion(std::uint32_t index)
 {
-    TT_WRCFG(index, 0, 76);
+    TT_WRCFG(index, 0 /*wr128b*/, 76 /*CfgReg*/);
 }
 
 extern "C" __attribute__((noinline, used)) void write_runtime_gpr_wait(std::uint32_t index)
@@ -42,7 +42,7 @@ extern "C" __attribute__((noinline, used)) void write_runtime_gpr_wait(std::uint
 
 extern "C" __attribute__((noinline, used)) void reference_write_runtime_gpr_wait(std::uint32_t index)
 {
-    TT_WRCFG(index, 0, 76);
+    TT_WRCFG(index, 0 /*wr128b*/, 76 /*CfgReg*/);
     TTI_NOP;
 }
 
@@ -53,7 +53,7 @@ extern "C" __attribute__((noinline, used)) void write_runtime_gpr_last_block(std
 
 extern "C" __attribute__((noinline, used)) void reference_write_runtime_gpr_last_block(std::uint32_t index)
 {
-    TT_WRCFG(index, 1, 220);
+    TT_WRCFG(index, 1 /*wr128b*/, 220 /*CfgReg*/);
 }
 
 // The runtime transfer is last in the group, so Wait appends the final NOP.
@@ -67,9 +67,9 @@ extern "C" __attribute__((noinline, used)) void write_runtime_from_gpr_wait_grou
 
 extern "C" __attribute__((noinline, used)) void reference_write_runtime_from_gpr_wait_group(std::uint32_t index)
 {
-    TTI_RMWCIB0(0x0f, 1, 0);
-    TTI_RMWCIB0(0x01, 1, 5);
-    TT_WRCFG(index, 0, 76);
+    TTI_RMWCIB0(0x0f /*Mask*/, 1 /*Data*/, 0 /*CfgRegAddr*/);
+    TTI_RMWCIB0(0x01 /*Mask*/, 1 /*Data*/, 5 /*CfgRegAddr*/);
+    TT_WRCFG(index, 0 /*wr128b*/, 76 /*CfgReg*/);
     TTI_NOP;
 }
 
@@ -82,11 +82,11 @@ extern "C" __attribute__((noinline, used)) void write_runtime_from_gpr_deferred_
 
 extern "C" __attribute__((noinline, used)) void reference_write_runtime_from_gpr_deferred_group(std::uint32_t index)
 {
-    TT_WRCFG(index, 1, 76);
-    TTI_RMWCIB0(0xff, 3, 80);
-    TTI_RMWCIB1(0xff, 0, 80);
-    TTI_RMWCIB2(0xff, 0, 80);
-    TTI_RMWCIB3(0xff, 0, 80);
+    TT_WRCFG(index, 1 /*wr128b*/, 76 /*CfgReg*/);
+    TTI_RMWCIB0(0xff /*Mask*/, 3 /*Data*/, 80 /*CfgRegAddr*/);
+    TTI_RMWCIB1(0xff /*Mask*/, 0 /*Data*/, 80 /*CfgRegAddr*/);
+    TTI_RMWCIB2(0xff /*Mask*/, 0 /*Data*/, 80 /*CfgRegAddr*/);
+    TTI_RMWCIB3(0xff /*Mask*/, 0 /*Data*/, 80 /*CfgRegAddr*/);
 }
 
 #ifdef ENABLE_LLK_ASSERT

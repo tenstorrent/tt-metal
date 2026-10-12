@@ -30,7 +30,7 @@ extern "C" __attribute__((noinline, used)) void write_runtime_state_byte_0(std::
 
 extern "C" __attribute__((noinline, used)) void reference_write_runtime_state_byte_0(std::uint32_t format)
 {
-    TT_RMWCIB0(0x0f, format & 0xffu, 64);
+    TT_RMWCIB0(0x0f /*Mask*/, format & 0xffu, 64 /*CfgRegAddr*/);
 }
 
 // SrcB_val (bits 8:5) needs RMWCIB0 with mask 0xe0 and RMWCIB1 with mask 0x01, both at word 0.
@@ -41,8 +41,8 @@ extern "C" __attribute__((noinline, used)) void write_runtime_state_byte_straddl
 
 extern "C" __attribute__((noinline, used)) void reference_write_runtime_state_byte_straddle(std::uint32_t format)
 {
-    TT_RMWCIB0(0xe0, (format << 5) & 0xffu, 0);
-    TT_RMWCIB1(0x01, (format >> 3) & 0xffu, 0);
+    TT_RMWCIB0(0xe0 /*Mask*/, (format << 5) & 0xffu, 0 /*CfgRegAddr*/);
+    TT_RMWCIB1(0x01 /*Mask*/, (format >> 3) & 0xffu, 0 /*CfgRegAddr*/);
 }
 
 // Each byte lane gets its own RMWCIB at word 186.
@@ -53,10 +53,10 @@ extern "C" __attribute__((noinline, used)) void write_runtime_state_full_word(st
 
 extern "C" __attribute__((noinline, used)) void reference_write_runtime_state_full_word(std::uint32_t seed)
 {
-    TT_RMWCIB0(0xff, seed & 0xffu, 186);
-    TT_RMWCIB1(0xff, (seed >> 8) & 0xffu, 186);
-    TT_RMWCIB2(0xff, (seed >> 16) & 0xffu, 186);
-    TT_RMWCIB3(0xff, seed >> 24, 186);
+    TT_RMWCIB0(0xff /*Mask*/, seed & 0xffu, 186 /*CfgRegAddr*/);
+    TT_RMWCIB1(0xff /*Mask*/, (seed >> 8) & 0xffu, 186 /*CfgRegAddr*/);
+    TT_RMWCIB2(0xff /*Mask*/, (seed >> 16) & 0xffu, 186 /*CfgRegAddr*/);
+    TT_RMWCIB3(0xff /*Mask*/, seed >> 24, 186 /*CfgRegAddr*/);
 }
 
 // SETC16 to thread word 19 with the value shifted to bits 13:8.
@@ -67,7 +67,7 @@ extern "C" __attribute__((noinline, used)) void write_runtime_thread_section(std
 
 extern "C" __attribute__((noinline, used)) void reference_write_runtime_thread_section(std::uint32_t increment)
 {
-    TT_SETC16(19, (increment << 8) & 0xffffu);
+    TT_SETC16(19 /*setc16_reg*/, (increment << 8) & 0xffffu);
 }
 
 // Word 64 is emitted once with both runtime fields, before the later constant word.
@@ -85,9 +85,9 @@ extern "C" __attribute__((noinline, used)) void write_shuffled_runtime_group(std
 
 extern "C" __attribute__((noinline, used)) void reference_write_shuffled_runtime_group(std::uint32_t format, std::uint32_t uncompressed)
 {
-    TT_RMWCIB0(0x1f, ((format & 0x0fu) | (uncompressed << 4)) & 0xffu, 64);
-    TTI_RMWCIB0(0x3f, 0x15, 72);
-    TTI_WRCFG(4, 1, 76);
+    TT_RMWCIB0(0x1f /*Mask*/, ((format & 0x0fu) | (uncompressed << 4)) & 0xffu, 64 /*CfgRegAddr*/);
+    TTI_RMWCIB0(0x3f /*Mask*/, 0x15 /*Data*/, 72 /*CfgRegAddr*/);
+    TTI_WRCFG(4 /*GprAddress*/, 1 /*wr128b*/, 76 /*CfgReg*/);
 }
 
 // The constant Uncompressed bit (0x1000 = 1 << 4 << 8) joins the runtime format.
@@ -101,8 +101,8 @@ extern "C" __attribute__((noinline, used)) void write_mixed_constant_runtime_wor
 
 extern "C" __attribute__((noinline, used)) void reference_write_mixed_constant_runtime_word(std::uint32_t format)
 {
-    TT_RMWCIB0(0x1f, (format & 0x0fu) | 0x10u, 64);
-    TTI_WRCFG(4, 0, 76);
+    TT_RMWCIB0(0x1f /*Mask*/, (format & 0x0fu) | 0x10u, 64 /*CfgRegAddr*/);
+    TTI_WRCFG(4 /*GprAddress*/, 0 /*wr128b*/, 76 /*CfgReg*/);
 }
 
 // Word 2: byte 0 mixes runtime mode with threshold bits. Bytes 1 and 2 are constant.
@@ -114,9 +114,9 @@ extern "C" __attribute__((noinline, used)) void write_mixed_relu_bytes(std::uint
 
 extern "C" __attribute__((noinline, used)) void reference_write_mixed_relu_bytes(std::uint32_t mode)
 {
-    TT_RMWCIB0(0xfc, (mode & 0x0fu) << 2, 2);
-    TTI_RMWCIB1(0xff, 0x8d, 2);
-    TTI_RMWCIB2(0x3f, 0x04, 2);
+    TT_RMWCIB0(0xfc /*Mask*/, (mode & 0x0fu) << 2, 2 /*CfgRegAddr*/);
+    TTI_RMWCIB1(0xff /*Mask*/, 0x8d /*Data*/, 2 /*CfgRegAddr*/);
+    TTI_RMWCIB2(0x3f /*Mask*/, 0x04 /*Data*/, 2 /*CfgRegAddr*/);
 }
 
 // Word 112: preserve byte order with constant bytes on both sides of runtime byte 1.
@@ -131,10 +131,10 @@ extern "C" __attribute__((noinline, used)) void write_mixed_descriptor_bytes(std
 
 extern "C" __attribute__((noinline, used)) void reference_write_mixed_descriptor_bytes(std::uint32_t blobs)
 {
-    TTI_RMWCIB0(0x0f, 0, 112);
-    TT_RMWCIB1(0x0f, blobs & 0x0fu, 112);
-    TTI_RMWCIB2(0xff, 0x34, 112);
-    TTI_RMWCIB3(0xff, 0x12, 112);
+    TTI_RMWCIB0(0x0f /*Mask*/, 0 /*Data*/, 112 /*CfgRegAddr*/);
+    TT_RMWCIB1(0x0f /*Mask*/, blobs & 0x0fu, 112 /*CfgRegAddr*/);
+    TTI_RMWCIB2(0xff /*Mask*/, 0x34 /*Data*/, 112 /*CfgRegAddr*/);
+    TTI_RMWCIB3(0xff /*Mask*/, 0x12 /*Data*/, 112 /*CfgRegAddr*/);
 }
 
 // Thread word 5 and state word 5 are separate: one SETC16 for both thread fields
@@ -151,9 +151,9 @@ extern "C" __attribute__((noinline, used)) void write_thread_and_state_same_addr
 
 extern "C" __attribute__((noinline, used)) void reference_write_thread_and_state_same_address(std::uint32_t base, std::uint32_t override_address)
 {
-    TT_SETC16(5, ((base & 0x03u) | (override_address << 2)) & 0x07u);
-    TTI_RMWCIB0(0x01, 1, 5);
-    TTI_WRCFG(4, 0, 76);
+    TT_SETC16(5 /*setc16_reg*/, ((base & 0x03u) | (override_address << 2)) & 0x07u);
+    TTI_RMWCIB0(0x01 /*Mask*/, 1 /*Data*/, 5 /*CfgRegAddr*/);
+    TTI_WRCFG(4 /*GprAddress*/, 0 /*wr128b*/, 76 /*CfgReg*/);
 }
 
 // A runtime field is masked only when another field of its group lies above it:
@@ -168,12 +168,54 @@ extern "C" __attribute__((noinline, used)) void write_runtime_fields_stacked(std
 extern "C" __attribute__((noinline, used)) void reference_write_runtime_fields_stacked(std::uint32_t mode, std::uint32_t threshold)
 {
     const std::uint32_t data = ((mode << 2) & 0x3cu) | (threshold << 6);
-    TT_RMWCIB0(0xfc, data & 0xffu, 2);
-    TT_RMWCIB1(0xff, (data >> 8) & 0xffu, 2);
-    TT_RMWCIB2(0x3f, (data >> 16) & 0xffu, 2);
+    TT_RMWCIB0(0xfc /*Mask*/, data & 0xffu, 2 /*CfgRegAddr*/);
+    TT_RMWCIB1(0xff /*Mask*/, (data >> 8) & 0xffu, 2 /*CfgRegAddr*/);
+    TT_RMWCIB2(0x3f /*Mask*/, (data >> 16) & 0xffu, 2 /*CfgRegAddr*/);
 }
 
 #ifdef ENABLE_LLK_ASSERT
+
+// Direct scalar writes validate the unshifted value before selecting the
+// state or thread backend. The maximum valid values must not trap.
+extern "C" void write_runtime_field_overflow()
+{
+    cfg::write<cfg::Access::TensixCfgUnit, cfg::AluAccCtrl::Fp32_enabled, cfg::Sec::S0>(2);
+}
+
+// ASSERT-LABEL: <write_runtime_field_overflow>:
+// ASSERT-NOT: sw
+// ASSERT-NOT: ttrmwcib
+// ASSERT: ebreak
+// ASSERT: ret
+
+extern "C" void write_runtime_field_max()
+{
+    cfg::write<cfg::Access::TensixCfgUnit, cfg::AluAccCtrl::Fp32_enabled, cfg::Sec::S0>(1);
+}
+
+// ASSERT-LABEL: <write_runtime_field_max>:
+// ASSERT-NOT: ebreak
+// ASSERT: ret
+
+extern "C" void write_runtime_thread_field_overflow()
+{
+    cfg::write<cfg::Access::TensixCfgUnit, cfg::AddrMod[cfg::SrcA].Incr, cfg::Sec::S0>(64);
+}
+
+// ASSERT-LABEL: <write_runtime_thread_field_overflow>:
+// ASSERT-NOT: sw
+// ASSERT-NOT: ttsetc16
+// ASSERT: ebreak
+// ASSERT: ret
+
+extern "C" void write_runtime_thread_field_max()
+{
+    cfg::write<cfg::Access::TensixCfgUnit, cfg::AddrMod[cfg::SrcA].Incr, cfg::Sec::S0>(63);
+}
+
+// ASSERT-LABEL: <write_runtime_thread_field_max>:
+// ASSERT-NOT: ebreak
+// ASSERT: ret
 
 extern "C" void write_prepacked_thread_word_overflow()
 {
@@ -183,6 +225,15 @@ extern "C" void write_prepacked_thread_word_overflow()
 // ASSERT-LABEL: <write_prepacked_thread_word_overflow>:
 // ASSERT: ebreak
 // ASSERT: ret
+
+extern "C" void write_prepacked_thread_word_valid_boundaries()
+{
+    cfg::write<cfg::Access::TensixCfgUnit, cfg::AddrMod[cfg::SrcA].Incr>(7, 0xffff);
+}
+
+// ASSERT-LABEL: <write_prepacked_thread_word_valid_boundaries>:
+// ASSERT-NEXT: ttsetc16 19,65535{{$}}
+// ASSERT-NEXT: ret
 
 // Runtime assignments must validate values before masking, even when a group
 // has only one member or the invalid assignment is not its first member.

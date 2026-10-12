@@ -21,17 +21,20 @@
 
 namespace cfg = hal::cfg;
 
-// Explicit bank addressing for the reference MMIO operations.
+// Independent hardware-layout constants for the reference MMIO operations.
+inline constexpr std::uint32_t StateBankWords  = 224;
+inline constexpr std::uint32_t ThreadCfgBase   = 672;
+inline constexpr std::uint32_t ThreadCfgStride = 68;
+
 inline volatile std::uint32_t tt_reg_ptr* reference_cfg_bank()
 {
-    const std::uint32_t bank_offset = (ckernel::cfg_state_id == 0) ? 0u : 224u;
+    const std::uint32_t bank_offset = (ckernel::cfg_state_id == 0) ? 0u : StateBankWords;
     return reinterpret_cast<volatile std::uint32_t tt_reg_ptr*>(TENSIX_CFG_BASE) + bank_offset;
 }
 
-// State words are addressed from the bank selected by cfg_state_id (see
-// mmio_compile_time.cpp), so each byte offset below is 4 * word. Thread words
-// are read through the debug CREG_READ (88) and CREG_RDDATA (120) registers
-// with index 672 + 68 * thread + word.
+// State-word indices are relative to the bank selected by cfg_state_id.
+// Thread words are read through the debug CREG_READ (88) and CREG_RDDATA (120)
+// registers with index ThreadCfgBase + ThreadCfgStride * thread + word.
 
 inline constexpr cfg::Field state_first {cfg::RegisterScope::State, 32, 0, 0, 0, 32, 1, 0};
 
@@ -157,15 +160,15 @@ extern "C" __attribute__((noinline, used)) void reference_write_last_state_words
     bank[223]  = values[1];
 }
 
-extern "C" __attribute__((noinline, used)) void write_full_state_bank(const std::array<std::uint32_t, 224>& values)
+extern "C" __attribute__((noinline, used)) void write_full_state_bank(const std::array<std::uint32_t, StateBankWords>& values)
 {
-    cfg::write<cfg::Access::MMIO, state_first, cfg::Sec::S0, 224>(values);
+    cfg::write<cfg::Access::MMIO, state_first, cfg::Sec::S0, StateBankWords>(values);
 }
 
-extern "C" __attribute__((noinline, used)) void reference_write_full_state_bank(const std::array<std::uint32_t, 224>& values)
+extern "C" __attribute__((noinline, used)) void reference_write_full_state_bank(const std::array<std::uint32_t, StateBankWords>& values)
 {
     auto* bank = reference_cfg_bank();
-    for (std::uint32_t i = 0; i < 224; ++i)
+    for (std::uint32_t i = 0; i < StateBankWords; ++i)
     {
         bank[i] = values[i];
     }
@@ -274,8 +277,8 @@ extern "C" __attribute__((noinline, used)) std::uint32_t read_current_thread_fie
 
 extern "C" __attribute__((noinline, used)) std::uint32_t reference_read_current_thread_field()
 {
-    ckernel::reg_write(RISCV_DEBUG_REG_TENSIX_CREG_READ, 672 + 68 * COMPILE_FOR_TRISC + 5);
-    ckernel::wait(1);
+    ckernel::reg_write(RISCV_DEBUG_REG_TENSIX_CREG_READ, ThreadCfgBase + ThreadCfgStride * COMPILE_FOR_TRISC + 5);
+    ckernel::wait(1 /*cycles*/);
     return ckernel::reg_read(RISCV_DEBUG_REG_TENSIX_CREG_RDDATA) & 0x03u;
 }
 
@@ -287,8 +290,8 @@ extern "C" __attribute__((noinline, used)) std::uint32_t read_last_thread_word()
 
 extern "C" __attribute__((noinline, used)) std::uint32_t reference_read_last_thread_word()
 {
-    ckernel::reg_write(RISCV_DEBUG_REG_TENSIX_CREG_READ, 672 + 68 * COMPILE_FOR_TRISC + 67);
-    ckernel::wait(1);
+    ckernel::reg_write(RISCV_DEBUG_REG_TENSIX_CREG_READ, ThreadCfgBase + ThreadCfgStride * COMPILE_FOR_TRISC + 67);
+    ckernel::wait(1 /*cycles*/);
     return ckernel::reg_read(RISCV_DEBUG_REG_TENSIX_CREG_RDDATA) & 0xffffu;
 }
 
@@ -300,12 +303,31 @@ extern "C" __attribute__((noinline, used)) std::uint32_t read_other_thread_field
 
 extern "C" __attribute__((noinline, used)) std::uint32_t reference_read_other_thread_field()
 {
-    ckernel::reg_write(RISCV_DEBUG_REG_TENSIX_CREG_READ, 813);
-    ckernel::wait(1);
+    ckernel::reg_write(RISCV_DEBUG_REG_TENSIX_CREG_READ, ThreadCfgBase + ThreadCfgStride * 2 + 5);
+    ckernel::wait(1 /*cycles*/);
     return ckernel::reg_read(RISCV_DEBUG_REG_TENSIX_CREG_RDDATA) & 0x03u;
 }
 
 #ifdef ENABLE_LLK_ASSERT
+
+extern "C" void write_runtime_mmio_field_overflow()
+{
+    cfg::write<cfg::Access::MMIO, cfg::AluAccCtrl::Fp32_enabled, cfg::Sec::S0>(2);
+}
+
+// ASSERT-LABEL: {{^}}write_runtime_mmio_field_overflow:
+// ASSERT-NOT: sw {{[a-z0-9]+}},
+// ASSERT: ebreak
+// ASSERT: ret
+
+extern "C" void write_runtime_mmio_field_max()
+{
+    cfg::write<cfg::Access::MMIO, cfg::AluAccCtrl::Fp32_enabled, cfg::Sec::S0>(1);
+}
+
+// ASSERT-LABEL: {{^}}write_runtime_mmio_field_max:
+// ASSERT-NOT: ebreak
+// ASSERT: ret
 
 extern "C" void write_runtime_mmio_group_single_overflow()
 {
@@ -325,6 +347,18 @@ extern "C" void write_runtime_mmio_group_later_overflow()
 // ASSERT-LABEL: {{^}}write_runtime_mmio_group_later_overflow:
 // ASSERT-NOT: sw {{[a-z0-9]+}},
 // ASSERT: ebreak
+// ASSERT: ret
+
+extern "C" void write_runtime_mmio_group_valid_boundaries()
+{
+    cfg::write<cfg::Access::MMIO>(
+        cfg::set<cfg::AluAccCtrl::Fp32_enabled, cfg::Sec::S0>(1),
+        cfg::set<cfg::AluAccCtrl::SFPU_Fp32_enabled, cfg::Sec::S0>(1),
+        cfg::set<cfg::PrngSeed::Seed_Val, cfg::Sec::S0>(0xffffffffu));
+}
+
+// ASSERT-LABEL: {{^}}write_runtime_mmio_group_valid_boundaries:
+// ASSERT-NOT: ebreak
 // ASSERT: ret
 
 #endif
