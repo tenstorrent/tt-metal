@@ -80,8 +80,8 @@ void run_kernel(RUNTIME_PARAMETERS params)
                 // Works only when unpacking to dest is not used.
                 _perf_unpack_loop_set_valid<
                     /* src A */ true,
-                    /* src B */ is_fp32_dest_acc_en>(
-                    /* iterations*/ num_faces * TILE_CNT * LOOP_FACTOR);
+                    /* src B */ is_fp32_dest_acc_en,
+                    PERF_RUN_TYPE>(/* iterations*/ num_faces * TILE_CNT * LOOP_FACTOR);
             }
         }
         else if constexpr (PERF_RUN_TYPE != PerfRunType::PACK_ISOLATE) // UNPACK_ISOLATE, L1_TO_L1, L1_CONGESTION
@@ -150,7 +150,11 @@ void run_kernel(RUNTIME_PARAMETERS params)
     {
         START_PERF_MEASURE("TILE_LOOP")
 
-        if constexpr (PERF_RUN_TYPE == PerfRunType::UNPACK_ISOLATE)
+        if constexpr (PERF_RUN_TYPE == PerfRunType::UNPACK_ISOLATE && perf_mock_mop<PERF_RUN_TYPE>() && !unpack_to_dest) // Wormhole: one MOP stream (perf.h)
+        {
+            _perf_math_loop_clear_valid<true, true, PERF_RUN_TYPE>(num_faces * TILE_CNT * LOOP_FACTOR);
+        }
+        else if constexpr (PERF_RUN_TYPE == PerfRunType::UNPACK_ISOLATE)
         {
             for (std::uint32_t loop = 0; loop < LOOP_FACTOR; ++loop)
             {
@@ -159,20 +163,16 @@ void run_kernel(RUNTIME_PARAMETERS params)
                     // For unpack isolate scenario, math should only perform necessary synchronization and nothing else.
                     if constexpr (unpack_to_dest)
                     {
-                        // In this case, unpacker needs software synchronization from math - to acknowledge that destination register is
-                        // "consumed" and can be overwritten with new data.
-                        // Due to the fact that BROADCAST_TYPE is always NONE in the test and combination of unpack_to_dest and 32b data is always set,
-                        // this method will perform synchronization only and no actual data copy.
+                        // In this case, unpacker needs software synchronization from math - to acknowledge that destination register is "consumed" and can be
+                        // overwritten with new data. Due to the fact that BROADCAST_TYPE is always NONE in the test and combination of unpack_to_dest and 32b
+                        // data is always set, this method will perform synchronization only and no actual data copy.
                         _llk_math_eltwise_unary_datacopy_<data_copy_type, DST_SYNC_MODE, is_fp32_dest_acc_en, BROADCAST_TYPE, unpack_to_dest>(
                             i % MAX_TILES_DEST, formats.math, formats.math);
                     }
                     else
                     {
                         // Perform only necessary hardware synchronization to indicate that source registers are consumed.
-                        _perf_math_loop_clear_valid<
-                            /* src A */ true,
-                            /* src B */ true>(
-                            /* iterations*/ num_faces);
+                        _perf_math_loop_clear_valid</* src A */ true, /* src B */ true>(/* iterations*/ num_faces);
                     }
                 }
             }

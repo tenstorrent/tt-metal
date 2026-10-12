@@ -59,7 +59,7 @@ void run_kernel(RUNTIME_PARAMETERS params)
         }
         else if constexpr (PERF_RUN_TYPE == PerfRunType::MATH_ISOLATE)
         {
-            _perf_unpack_loop_set_valid<true, false>(TILE_CNT * LOOP_FACTOR);
+            _perf_unpack_loop_set_valid<true, false, PERF_RUN_TYPE>(TILE_CNT * LOOP_FACTOR);
             return;
         }
         else
