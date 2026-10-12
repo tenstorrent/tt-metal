@@ -58,7 +58,8 @@ void kernel_main() {
 
     constexpr uint32_t cb_gamma_idx = tt::CBIndex::c_2;
     constexpr uint32_t cb_beta_idx = tt::CBIndex::c_3;
-    constexpr uint32_t cb_times_gamma_out_idx = (do_gamma && do_beta) ? tt::CBIndex::c_13 : cb_out_idx;
+    constexpr uint32_t cb_gamma_out_tmp_idx = tt::CBIndex::c_13;  // gamma result when beta follows
+    constexpr uint32_t cb_times_gamma_out_idx = (do_gamma && do_beta) ? cb_gamma_out_tmp_idx : cb_out_idx;
 
     CircularBuffer cb_reduce(cb_reduce_idx);
     DataflowBuffer cb_eps(cb_eps_idx);
@@ -69,7 +70,8 @@ void kernel_main() {
     DataflowBuffer cb_norm_x_input(cb_norm_x_input_idx);
     DataflowBuffer cb_x_normed(cb_x_normed_idx);
     DataflowBuffer cb_out(cb_out_idx);
-    DataflowBuffer cb_times_gamma_out(cb_times_gamma_out_idx);
+    DataflowBuffer cb_gamma_out_tmp(cb_gamma_out_tmp_idx);
+    DataflowBuffer& cb_times_gamma_out = (do_gamma && do_beta) ? cb_gamma_out_tmp : cb_out;
 
     compute_kernel_hw_startup(cb_inp, cb_inp, cb_var_idx);
 

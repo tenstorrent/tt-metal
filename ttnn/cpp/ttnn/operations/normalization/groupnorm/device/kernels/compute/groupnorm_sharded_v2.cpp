@@ -109,7 +109,8 @@ void kernel_main() {
     constexpr uint32_t dfb_ex_partial_id = tt::CBIndex::c_8;
     constexpr uint32_t dfb_ex_id = tt::CBIndex::c_9;
     constexpr uint32_t dfb_ex_external_id = tt::CBIndex::c_10;
-    constexpr uint32_t dfb_ex_global_id = num_cores_per_mcast_group == 1 ? dfb_ex_partial_id : tt::CBIndex::c_15;
+    constexpr uint32_t dfb_ex_global_mcast_id = tt::CBIndex::c_15;
+    constexpr uint32_t dfb_ex_global_id = num_cores_per_mcast_group == 1 ? dfb_ex_partial_id : dfb_ex_global_mcast_id;
     constexpr uint32_t dfb_ex2pe_id = tt::CBIndex::c_17;
     constexpr uint32_t dfb_ones_id = tt::CBIndex::c_26;
     // Composed-mask CBs, created only under pad correction (has_row_mask); aliased to
@@ -227,18 +228,23 @@ void kernel_main() {
     DataflowBuffer dfb_eps(dfb_eps_id);
     DataflowBuffer dfb_ex(dfb_ex_id);
     DataflowBuffer dfb_ex2pe(dfb_ex2pe_id);
-    DataflowBuffer dfb_ex_global(dfb_ex_global_id);
     DataflowBuffer dfb_ex_partial(dfb_ex_partial_id);
+    DataflowBuffer dfb_ex_global_mcast(dfb_ex_global_mcast_id);
+    DataflowBuffer& dfb_ex_global = num_cores_per_mcast_group == 1 ? dfb_ex_partial : dfb_ex_global_mcast;
     DataflowBuffer dfb_gamma(dfb_gamma_id);
     DataflowBuffer dfb_in(dfb_in_id);
     DataflowBuffer dfb_in_negative_mask(dfb_in_negative_mask_id);
-    DataflowBuffer dfb_inbeta(dfb_inbeta_id);
     DataflowBuffer dfb_input_mask(dfb_input_mask_id);
     DataflowBuffer dfb_mask_last(dfb_mask_last_id);
     DataflowBuffer dfb_ones(dfb_ones_id);
     DataflowBuffer dfb_out(dfb_out_id);
     DataflowBuffer dfb_outbeta(dfb_outbeta_id);
     DataflowBuffer dfb_outgamma(dfb_outgamma_id);
+    // dfb_inbeta_id always aliases one of these buffers; bind the existing object.
+    static_assert(dfb_inbeta_id == dfb_in_id || dfb_inbeta_id == dfb_out_id || dfb_inbeta_id == dfb_outgamma_id);
+    DataflowBuffer& dfb_inbeta = dfb_inbeta_id == dfb_in_id    ? dfb_in
+                                 : dfb_inbeta_id == dfb_out_id ? dfb_out
+                                                               : dfb_outgamma;
     DataflowBuffer dfb_rowvalid(dfb_rowvalid_id);
     DataflowBuffer dfb_scaler(dfb_scaler_id);
     DataflowBuffer dfb_scaler_global(dfb_scaler_global_id);
