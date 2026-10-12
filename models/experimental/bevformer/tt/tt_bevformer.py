@@ -91,7 +91,7 @@ class TtBEVFormer:
         """The last decoder layer's detections, on device: ``TtNMSFreeCoder.topk``'s scores, labels
         and query indexes, and ``TtNMSFreeCoder.finalize``'s boxes and validity mask."""
         scores, labels, query_index, boxes = self.coder.topk(cls_scores[-1], bbox_preds[-1])
-        boxes, valid = self.coder.finalize(boxes)
+        boxes, valid = self.coder.finalize(scores, boxes)
         return scores, labels, query_index, boxes, valid
 
     @staticmethod
