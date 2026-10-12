@@ -1677,7 +1677,7 @@ void call_unary_sfpu_operation(std::uint32_t dst_index, std::uint32_t math_forma
     }
     else if constexpr (OPERATION == SfpuType::cumsum)
     {
-        call_cumsum_sfpu_operation<DST_SYNC_MODE, DST_ACCUM_MODE, APPROX_MODE, ITERATIONS>(dst_index, true);
+        SFPU_UNARY_CALL(DST_SYNC_MODE, DST_ACCUM_MODE, calculate_cumsum, (APPROX_MODE, ITERATIONS), dst_index, VectorMode::RC_custom, true);
     }
     else if constexpr (OPERATION == SfpuType::typecast)
     {
