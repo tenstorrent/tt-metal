@@ -127,13 +127,19 @@ void CombineFabric2dDeviceOperation::validate_on_program_cache_miss(
         "combine_fabric2d: token page {} B + {} B of forwarding metadata must be 64-byte aligned for DRAM",
         token_page,
         cmbf2d::FORWARDING_METADATA_SIZE);
-    // A forwarded packet carries the token PLUS its routing tail, so the payload the fabric must accept is
-    // token + tail, not just token.
+    // A token goes as one packet or as two halves, and a forwarded token's last packet also carries its
+    // routing tail, so the payload the fabric must accept is that last packet plus the tail.
+    const uint32_t first_packet = cmbf2d::first_packet_bytes(token_page);
     TT_FATAL(
-        token_page + cmbf2d::FORWARDING_METADATA_SIZE <= tt::tt_fabric::get_tt_fabric_max_payload_size_bytes(),
-        "combine_fabric2d: token page {} B + {} B routing tail exceeds the fabric max payload {}. Raise "
-        "max_payload_size in the device's fabric_router_config.",
-        token_page,
+        first_packet % 16 == 0,
+        "combine_fabric2d: a token's first packet {} B must be 16-byte aligned for NoC transfers",
+        first_packet);
+    const uint32_t last_packet = first_packet == token_page ? token_page : token_page - first_packet;
+    TT_FATAL(
+        last_packet + cmbf2d::FORWARDING_METADATA_SIZE <= tt::tt_fabric::get_tt_fabric_max_payload_size_bytes(),
+        "combine_fabric2d: a token's last packet {} B + {} B routing tail exceeds the fabric max payload {}. "
+        "Raise max_payload_size in the device's fabric_router_config.",
+        last_packet,
         cmbf2d::FORWARDING_METADATA_SIZE,
         tt::tt_fabric::get_tt_fabric_max_payload_size_bytes());
     TT_FATAL(
