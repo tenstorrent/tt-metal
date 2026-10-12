@@ -162,10 +162,10 @@ inline void llk_unpack_A(const std::uint32_t operand, const std::uint32_t tile_i
 
     if constexpr (BType == BroadcastType::NONE) {
         if constexpr (unpack_to_dest) {
-            // EN_32BIT_DEST sizes the SyncHalf bank flip and is pinned to true regardless of DST_ACCUM_MODE: the pack
-            // side (llk_pack_dest_section_done) pins it the same way, and the two must agree or unpack and pack
-            // address different DEST halves. A 16-bit unpack-to-dest just uses half of each bank. Change both together.
-            _llk_unpack_unary_operand_to_dest_<DST_SYNC_MODE, true /*EN_32BIT_DEST*/>(l1_tile_idx);
+            // EN_32BIT_DEST sizes the SyncHalf bank flip. It must agree with the pack side
+            // (llk_pack_dest_section_done) or unpack and pack address different DEST halves; both derive it from
+            // DST_ACCUM_MODE, and the pack side static_asserts that its caller did not override it.
+            _llk_unpack_unary_operand_to_dest_<DST_SYNC_MODE, DST_ACCUM_MODE>(l1_tile_idx);
         } else {
             const ckernel::TensorShape tensor_shape = get_operand_tensor_shape(operand_id);
             _llk_unpack_unary_operand_<p_unpacr::UNP_A, binary_reuse_dest>(l1_tile_idx, tensor_shape);
@@ -212,8 +212,8 @@ inline void llk_unpack_A_block(
         WAYPOINT("UPAW");
         if constexpr (BType == BroadcastType::NONE) {
             if constexpr (unpack_to_dest) {
-                // EN_32BIT_DEST pinned to true to match the pack side, see llk_unpack_A.
-                _llk_unpack_unary_operand_to_dest_<DST_SYNC_MODE, true /*EN_32BIT_DEST*/>(rd_entry_idx + tile_index);
+                // EN_32BIT_DEST must match the pack side, see llk_unpack_A.
+                _llk_unpack_unary_operand_to_dest_<DST_SYNC_MODE, DST_ACCUM_MODE>(rd_entry_idx + tile_index);
             } else {
                 _llk_unpack_unary_operand_<p_unpacr::UNP_A, binary_reuse_dest>(rd_entry_idx + tile_index, tensor_shape);
             }
