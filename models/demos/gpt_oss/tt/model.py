@@ -94,6 +94,12 @@ class Model:
     - Compatible with tt_transformers generator interface
     """
 
+    # Generator: re-capture the decode trace at the start of a request when programs were compiled since its capture.
+    # The prefill's stock CCL ops (ttnn.all_reduce) create global semaphores held by their program-cache entries; the
+    # first prefill of a new length after the capture could place them in the decode trace's scratch region, where
+    # every decode replay overwrites them (the next prefill of that length then hangs or decodes garbage).
+    _tt_recapture_decode_trace_on_new_programs = True
+
     def __init__(
         self,
         mesh_device,
