@@ -86,8 +86,7 @@ void run_kernel(RUNTIME_PARAMETERS params)
                 block_tile, formats.math, formats.math);
 
             const bool first = CUMSUM_CHAIN ? (block_tile == 0) : true;
-            test_utils::call_unary_sfpu_operation<DST_SYNC, is_fp32_dest_acc_en, SFPU_UNARY_OPERATION, APPROX_MODE, is_fp32_dest_acc_en, iterations, FAST_MODE>(
-                block_tile, formats.math, 5.0f /* fill_const_value, unused by cumsum */, VectorMode::RC_custom, first);
+            test_utils::call_cumsum_sfpu_operation<DST_SYNC, is_fp32_dest_acc_en, APPROX_MODE, iterations>(block_tile, first);
         }
 
         _llk_math_dest_section_done_<DST_SYNC, is_fp32_dest_acc_en>();

@@ -737,6 +737,13 @@ void call_unary_sfpu_operation_init(std::uint32_t math_format)
     }
 }
 
+// One cumsum tile; `first` false continues the carry of the previous tile.
+template <DstSync DST_SYNC_MODE, bool DST_ACCUM_MODE, bool APPROX_MODE, int ITERATIONS>
+void call_cumsum_sfpu_operation(std::uint32_t dst_index, bool first)
+{
+    SFPU_UNARY_CALL(DST_SYNC_MODE, DST_ACCUM_MODE, calculate_cumsum, (APPROX_MODE, ITERATIONS), dst_index, VectorMode::RC_custom, first);
+}
+
 /**
  * Calls only the calculate portion of a unary SFPU operation.
  * Must be preceded by a call to call_unary_sfpu_operation_init() for the same operation.
@@ -761,7 +768,6 @@ void call_unary_sfpu_operation_init(std::uint32_t math_format)
  * @tparam ITERATIONS Number of SFPU iterations (typically 32 for full tile)
  * @param dst_index Destination tile index in the destination register
  * @param math_format Optional math format for operations that need format-specific behavior
- * @param first Whether this tile starts a new accumulation chain (cumsum only)
  */
 template <
     DstSync DST_SYNC_MODE,
@@ -776,8 +782,7 @@ template <
     DataFormat TYPECAST_IN  = DataFormat::Invalid,
     DataFormat TYPECAST_OUT = DataFormat::Invalid,
     bool FUSED_SORT         = false>
-void call_unary_sfpu_operation(
-    std::uint32_t dst_index, std::uint32_t math_format = 0, float fill_const_value = 5.0f, VectorMode vector_mode = VectorMode::None, bool first = true)
+void call_unary_sfpu_operation(std::uint32_t dst_index, std::uint32_t math_format = 0, float fill_const_value = 5.0f, VectorMode vector_mode = VectorMode::None)
 {
     // Fixed dispatch constants shared with the golden (golden_generators.py:
     // _int_maxmin_scalar / _int_shift_amount). The two sides must move together, so
@@ -1672,8 +1677,7 @@ void call_unary_sfpu_operation(
     }
     else if constexpr (OPERATION == SfpuType::cumsum)
     {
-        // One call per tile; `first` false continues the carry of the previous tile.
-        SFPU_UNARY_CALL(DST_SYNC_MODE, DST_ACCUM_MODE, calculate_cumsum, (APPROX_MODE, ITERATIONS), dst_index, VectorMode::RC_custom, first);
+        call_cumsum_sfpu_operation<DST_SYNC_MODE, DST_ACCUM_MODE, APPROX_MODE, ITERATIONS>(dst_index, true);
     }
     else if constexpr (OPERATION == SfpuType::typecast)
     {
