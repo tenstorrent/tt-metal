@@ -888,8 +888,8 @@ void kernel_main() {
                     tile_regs_acquire();
                     copy_tile(cb_sumsrc, cb_sumsrc == cb_sumback ? s : 0, 0);
 #ifdef ARCH_BLACKHOLE
-                    recip_tile_init<false>();
-                    MATH((recip_tile<false>(0, VectorMode::C)));
+                    recip_tile_init();
+                    MATH((recip_tile(0, VectorMode::C)));
 #else
                     recip_tile_init();
                     MATH((recip_tile_first_column_wh_idst0_direct()));
