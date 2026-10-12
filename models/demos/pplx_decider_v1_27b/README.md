@@ -1,154 +1,60 @@
-# pplx-decider-v1-27b on one Blackhole p150a (TTNN, prefill only)
+# pplx-decider-v1-27b on one Blackhole p150a
 
-[`perplexity-ai/pplx-decider-v1-27b`](https://huggingface.co/perplexity-ai/pplx-decider-v1-27b)
-(revision `b01a5cbaca5391f73bd55103d4f27e8982cd5e60`) is a 255-way decision classifier on a
-Qwen3.5 hybrid text backbone: 64 decoder layers (48 Gated DeltaNet `linear_attention` layers and
-16 gated `full_attention` layers, full at index 3 mod 4), then the final RMSNorm, the last token's
-hidden state, a 5120x255 `readout`, a mask by option count, `/ temperature` and a softmax. It has no
-decode step, no KV cache across requests and no LM head.
+[`perplexity-ai/pplx-decider-v1-27b`](https://huggingface.co/perplexity-ai/pplx-decider-v1-27b) (revision
+`b01a5cbaca5391f73bd55103d4f27e8982cd5e60`) is a 255-way decision classifier. It runs a Qwen3.5 hybrid
+backbone (48 Gated DeltaNet + 16 gated full-attention layers) over a prompt, reads the last token's
+hidden state through a 5120x255 `readout` and returns a softmax over the options. It does prefill only:
+no decode, no KV cache across requests. This directory runs text and image requests on one p150a, batch 1.
 
-Status: stage 6 (full model, decision head, demo). All 64 layers, the embedding and the decision
-head run on one p150a; 27.30 GiB of weights and state stay in device DRAM. On the 25-row HF bf16
-decision golden, TT makes the same decision on **25/25** rows. Readout-logit PCC is >= 0.998 on
-every row. Warmed request latency at batch 1 runs from 148 ms (128 bucket) to 3.5 s (8192 bucket)
-for an isolated request, and is 1.25-1.36x higher under sustained back-to-back load. Details:
-[`doc/full_model/README.md`](doc/full_model/README.md).
-
-Stage 3 (optimized decoder; same weights and precision): 3A tuned the prefill matmul configs, 3B
-the non-matmul ops (one causal SDPA per request with approximate exp and q chunk 256, the fused
-Gated DeltaNet scan program, conv and norm configs, sharded norms at the 128 bucket). Isolated-request
-latency is now 115 / 315 / 564 / 1228 / 2895 ms at the 128 / 1024 / 2048 / 4096 / 8192 buckets
-(3A: 126 / 339 / 619 / 1370 / 3256 ms in the same run; stage 6: 149 / 366 / 665 / 1481 / 3498 ms).
-Per-layer warmed prefill: linear_attention 1.89 / 5.15 / 9.01 / 18.43 / 39.27 ms, full_attention
-1.78 / 4.45 / 7.84 / 16.69 / 36.72 ms. Decisions stay 25/25 (text) and 8/8 (image). Details:
-[`doc/optimized_decoder/README.md`](doc/optimized_decoder/README.md).
-
-Stage 8 (datatype sweep, short) kept the all-BFP8 HiFi2 policy (person decision) and stage 6's numbers stand.
-The policy is now `doc/datatype_sweep/selected_precision_config.json`, which the default construction path
-reads. A BFP4 MLP (C1/C2) agrees on 25/25 rows but fails the per-row logit-PCC bar on one row (0.98895 < 0.99).
-BFP4 with LoFi would be 17 % faster at the 2048 bucket and would free 8 GiB of DRAM. Details:
-[`doc/datatype_sweep/README.md`](doc/datatype_sweep/README.md).
-
-Stage 12B (image decisions end to end): `TTDecider.predict(state, question, images=[...])` takes
-the app's images. Input prep on host gives the 3D mRoPE position ids (a port of HF
-`get_rope_index`) and the per-request cos/sin. On device, the vision tower's features replace the
-`<|image_pad|>` embedding rows, and the 64 layers and the decision head run as for text. Measured on
-the 8-row HF BF16 image golden (bucket 1024):
-
-- 8/8 decisions agree (bar 7/8) and readout-logit PCC is >= 0.9994 (bar 0.99). On v02 the
-  agreement has no margin: TT's top two logits are equal in BF16 and the app's first-maximum rule
-  picks the HF answer.
-- Spliced embeddings: 7/8 rows have PCC >= 0.999. v01 has 0.998655, which is the 12A tower's
-  feature PCC on that image. The splice copies rows and adds no error.
-- Text-only requests are bit identical to before 12B (25/25, all output tensors equal).
-- No host calls inside an image request between the input upload and the probability readback.
-
-Details: [`doc/vision/README.md`](doc/vision/README.md).
-
-Stage 12A (vision tower, text model unchanged): the Qwen3.5 ViT runs on the same p150a in BF16. It
-covers the patch embed, the learned position embedding, 27 blocks and the 2x2 merger, and outputs
-5120-wide image features. Results on 8 golden images (256-1024 patches), measured against the HF
-BF16 golden:
-
-- Teacher forced, every module and every block has PCC >= 0.999976 (bar 0.995).
-- The whole tower, fed only the pixels, has PCC >= 0.998654 (bar 0.99).
-- Padded keys are masked. An image of 936 patches in the 1024 bucket scores 0.999758.
-
-The tower takes 15.5-28.6 ms per image. Its weights take 0.964 GiB of DRAM, which leaves 3.57 GiB
-free next to the full text model. Details: [`doc/vision/README.md`](doc/vision/README.md).
-
-Stage 1 (functional layers): every module and both decoder-layer kinds match the HF reference with
-real weights (PCC >= 0.995) at the prefill buckets 128, 1024, 2048, 4096 and 8192. The app pads a
-prompt on the right to the next bucket. The classifier reads the last real token. Details are in
-[`doc/functional_decoder/README.md`](doc/functional_decoder/README.md).
-
-Stage 2 (graph fusing, prefill) changed the modules in place:
-
-- fused SwiGLU MLP matmul;
-- separate q|k|v and gate matmuls;
-- one full-width fused RoPE op on pre-permuted q/k head dims;
-- GDN in-projection as qkv plus z|b|a.
-
-Layers are 3-8 % faster at S >= 1024, and S=128 is about 12 % slower. Details are in
-[`doc/fused_decoder/README.md`](doc/fused_decoder/README.md).
-
-## Layout
-
-| path | content |
+| what | result |
 |---|---|
-| `tt/` | TTNN modules: `embedding.py`, `norm.py`, `rope.py` (1D tables; 3D mRoPE `get_rope_index` port and per-request `PplxRequestRotary`), `attention.py` (gated full attention), `gated_deltanet.py`, `mlp.py`, `decoder.py` (both layer kinds), `readout.py`, `head.py` (final norm -> readout -> mask -> / T -> softmax), `model.py` (the full model, weight cache, bucket padding, image input prep and on-device splice); `weight_adapter.py` (HF -> TT weight transforms), `optimizations.py` (the one place for dtypes and op configs), `model_config.py`. |
-| `tt/vision/` | Vision tower (stage 12A): `config.py` (vision args, patch buckets), `weights.py` (`visual.*` -> TT weights, strict keys, head-dim / intermediate padding), `inputs.py` (host pos-embed and rotary tables, as HF), `patch_embed.py`, `layernorm.py`, `attention.py` (masked windowed SDPA), `mlp.py`, `block.py`, `merger.py`, `tower.py` (`PplxVisionTower`: `prepare_inputs` + device-only `forward`). |
-| `demo/` | `decider.py` (`TTDecider.predict(state, question, images=...)`, the app's `Decider.predict`), `demo.py` (the snapshot `inference.py` text and `--image` examples, plus `--golden-row` for an image golden row). |
-| `reference/image_decision_prompts.py`, `reference/hf_vision_reference.py`, `reference/hf_image_decision_golden.py` | The 8-row image prompt set (synthetic PNGs), the HF vision tower golden and the layer-streamed HF BF16 image-decision golden. |
-| `reference/hf_reference.py` | Layer-streamed HF golden generator. Builds one HF module at a time from the snapshot; never loads the 54 GB model. |
-| `reference/decision_prompts.py`, `reference/hf_decision_golden.py`, `reference/hf_demo_reference.py` | The 25-row decision prompt set, its layer-streamed HF bf16 golden, and HF answers for the demo rows. |
-| `tests/e2e/` | Full-model decision-agreement gate vs the HF golden, layer-wise trace, bucket padding, determinism, fallback audit (`test_model.py`, text; `test_image_model.py`, images: splice, agreement, `TTDecider` image predict, determinism, audit); `compare_outputs.py` (bit-identity of two output dumps). |
-| `tests/pcc/test_mrope.py` | 3D mRoPE: `get_rope_index` and the cos/sin vs HF on the 8 image rows (CPU, bit exact), layer 3 on an image row (device). |
-| `tests/perf/test_image_perf.py` | Image-request latency per golden row with a phase breakdown, and a text-only request of the same bucket. |
-| `tests/perf/test_model_perf.py` | Full-model latency per bucket (burst and sustained), trace replay, profiler target. |
-| `tests/pcc/` | Real-weight PCC tests per module and per layer kind, the chunked-prefill contract test and the runtime fallback audit. |
-| `tests/perf/test_prefill_perf.py` | Warmed prefill latency per layer kind and module; device-profiler capture target. |
-| `tests/vision/` | Vision tower vs the HF BF16 golden: host tables and adapter (CPU), per-module and per-block PCC (teacher forced), tower end to end, key mask, GELU variant, fallback audit, determinism, latency, DRAM next to the text model. |
-| `doc/vision/` | Stage-12A/12B README and work log (vision PCC table, image decisions, mRoPE, splice, perf, DRAM). |
-| `tests/probe/test_context_probe.py` | Context probe beyond the app limit (S=16384) with DRAM numbers. |
-| `doc/context_contract.json` | Context contract (HF-advertised, app limit, tested). |
-| `doc/functional_decoder/` | Stage-1 README, work log and `perf/` (tt-perf-report tables and CSVs). |
-| `doc/fused_decoder/` | Stage-2 (graph fusing) README, work log and `perf/` (tt-perf-report at S=128/2048/8192). |
-| `doc/optimized_decoder/` | Stage-3A (prefill matmul configs) and 3B (SDPA, Gated DeltaNet, norms, chunking) README, work log (topology audits, sweeps, A/B, gates) and `perf/` (tt-perf-report with advice at S=128/2048/8192; `opt_*` = 3A, `opt3b_*` = 3B). |
-| `doc/full_model/` | Stage-6 README (latency, agreement table, layer trace), work log, `perf/` (tt-perf-report summary of one 2048 forward). |
+| Decisions vs HF bf16 | 25/25 text rows, 8/8 image rows |
+| Accuracy (200 examples each) | WinoGrande 87.0 %, FinancialPhraseBank 84.0 %, Belebele 96.5 % (card: 83.3 / 84.18 / 94.0 %) |
+| Request latency, burst (ms) | 115 / 315 / 564 / 1227 / 2882 at buckets 128 / 1024 / 2048 / 4096 / 8192 |
+| Request latency, sustained (ms) | 114 / 414 / 821 / 1679 / 3510 |
+| Image request, 1024 bucket | 336-354 ms burst |
+| Mixed throughput | 3.10 decisions/s (buckets 128 + 1024) |
+
+All numbers are measured. The full report is in [`doc/benchmark/REPORT.md`](doc/benchmark/REPORT.md).
 
 ## Setup
 
-Requirements: a source build of tt-metal with its `python_env`, one Blackhole p150a, the HF snapshot
-in the local HF cache, about 2 GB of free disk for the goldens plus 27 GB for the full-model weight
-cache, and about 20 GB of free host RAM.
+You need a source build of tt-metal with its `python_env`, one Blackhole p150a, about 50 GB of disk
+for the HF snapshot, 27 GB for the device weight cache, 2 GB for the goldens, and about 20 GB of free
+host RAM. Run every command in this README from the tt-metal root.
 
 ```bash
-cd /path/to/tt-metal
 source python_env/bin/activate
 export TT_METAL_HOME=$PWD PYTHONPATH=$PWD
-export HF_HOME=/local/ttuser/gtobar/hf          # HF cache that holds the snapshot
+export HF_HOME=/path/to/hf_cache                       # where the snapshot lives (HF default: ~/.cache/huggingface)
+hf download perplexity-ai/pplx-decider-v1-27b --revision b01a5cbaca5391f73bd55103d4f27e8982cd5e60
+export PPLX_DECIDER_ARTIFACTS=/path/to/artifacts       # optional; default <tt-metal>/generated/pplx_decider
 ```
 
-Environment variables read by this model directory:
-
-| variable | default | purpose |
-|---|---|---|
-| `HF_HOME` | HF default | HF cache; the snapshot is resolved with `local_files_only=True`. |
-| `PPLX_DECIDER_SNAPSHOT` | resolved from `HF_HOME` | Absolute snapshot directory, overrides the cache lookup. |
-| `PPLX_DECIDER_GOLDEN_DIR` | `/local/ttuser/gtobar/artifacts/pplx_decider/goldens` | HF layer inputs streamed from the snapshot. |
-| `PPLX_DECIDER_PCC_LOG` | `/local/ttuser/gtobar/artifacts/pplx_decider/logs/pcc_results.jsonl` | PCC records appended by every test. |
-| `PPLX_DECIDER_PERF_LOG` | `/local/ttuser/gtobar/artifacts/pplx_decider/perf/prefill_perf.jsonl` | Perf records. |
-| `PPLX_DECIDER_PROBE_LOG` | `/local/ttuser/gtobar/artifacts/pplx_decider/logs/context_probe.jsonl` | Context-probe records (`tests/probe`). |
-| `PPLX_DECIDER_WEIGHT_CACHE` | `/local/ttuser/gtobar/artifacts/pplx_decider/weight_cache` | ttnn disk weight cache of the full model (27 GB; `<revision>/weights/` below it, shared by all policies; file names carry the dtype). |
-| `PPLX_DECIDER_PRECISION_CONFIG` | `doc/datatype_sweep/selected_precision_config.json` | Precision policy JSON read by `PrecisionPolicy.default()`; set it to a file in `doc/datatype_sweep/candidates/` to run another policy. |
-| `PPLX_DECIDER_DECISION_GOLDEN` | `/local/ttuser/gtobar/artifacts/pplx_decider/goldens/decisions` | Stage-6 decision golden (`reference/hf_decision_golden.py`). |
-| `PPLX_DECIDER_STAGE6_DIR` | `/local/ttuser/gtobar/artifacts/pplx_decider/stage6` | JSON results of the e2e and full-model perf tests. |
-| `PPLX_DECIDER_IMAGE_E2E_DIR` | `$PPLX_DECIDER_STAGE12B_DIR`, else `/local/ttuser/gtobar/artifacts/pplx_decider/stage12b/image_e2e` | JSON and safetensors results of `tests/e2e/test_image_model.py`; set it per run so a rerun does not overwrite another stage's evidence. |
-
-Generate the goldens once (CPU only, about 10 minutes, about 800 MB):
+The code finds the snapshot in the HF cache at that revision (`local_files_only=True`); set
+`PPLX_DECIDER_SNAPSHOT=<dir>` to use a snapshot directory directly. Everything the code writes (goldens,
+weight cache, logs, test results) goes under `$PPLX_DECIDER_ARTIFACTS`. To print every resolved
+location (CPU only):
 
 ```bash
-python -m models.demos.pplx_decider_v1_27b.reference.hf_reference \
-  --seq-len 8192 --layers 0 3 61 63 --through-final
+python -m models.demos.pplx_decider_v1_27b.tt.paths
 ```
 
-The stage-6 decision golden (25 rows, CPU, about 0.5 h, peak RSS about 5 GB):
+The first model load converts the weights from the snapshot into the weight cache
+(`$PPLX_DECIDER_ARTIFACTS/weight_cache/b01a5cbaca53/weights`, 27 GB, about 160 s). Later loads read the
+cache: about 37 s with a cold page cache, about 5 s with a warm one.
+
+## How to run the model
+
+The demo runs the examples of the snapshot's `inference.py` and prints JSON in the app's
+`Decider.predict` format. It does not need the goldens.
 
 ```bash
-python -m models.demos.pplx_decider_v1_27b.reference.hf_decision_golden
-```
-
-## Run the demo
-
-The first run converts the weights layer by layer from the snapshot into the disk weight cache
-(about 2.7 minutes, 27 GB). Later loads read the cache: about 37 s with a cold page cache, and 4 s
-when the files are still in the page cache.
-
-```bash
-python models/demos/pplx_decider_v1_27b/demo/demo.py           # snapshot inference.py example, prints JSON
+python models/demos/pplx_decider_v1_27b/demo/demo.py                     # text: urgency (yes/no) + routing (choice)
+python models/demos/pplx_decider_v1_27b/demo/demo.py --image photo.png   # image: "What is the dominant color?"
 python models/demos/pplx_decider_v1_27b/demo/demo.py --state "Refund my order" \
   --question '{"type": "noul", "instructions": "Is this a refund request?"}'
+python models/demos/pplx_decider_v1_27b/demo/demo.py --golden-row v02_count_circles   # image golden row vs HF (needs the image golden)
 ```
 
 In Python:
@@ -158,97 +64,185 @@ import ttnn
 from models.demos.pplx_decider_v1_27b.demo.decider import TTDecider
 
 device = ttnn.open_device(device_id=0, l1_small_size=24576)
-decider = TTDecider.from_pretrained(device)
+decider = TTDecider.from_pretrained(device)          # vision=False: text only, 0.96 GiB less DRAM
 print(decider.predict("My Stripe integration keeps failing.", {"type": "noul", "instructions": "Is it urgent?"}))
-```
-
-### Images
-
-`TTDecider.from_pretrained(device)` also loads the vision tower (BF16, 0.96 GiB of DRAM; pass
-`vision=False` for text only). `images` takes what the app's `open_image` takes: file paths,
-`data:image/...` URLs or PIL images. Each image costs 64 to 256 prompt tokens, which count toward
-the 8192-token limit.
-
-```bash
-python models/demos/pplx_decider_v1_27b/demo/demo.py --image photo.png           # inference.py --image: dominant color
-python models/demos/pplx_decider_v1_27b/demo/demo.py --golden-row v02_count_circles  # an image golden row, compared with HF
-```
-
-```python
 question = {"type": "choice", "instructions": "What is the dominant color?",
             "criteria": {"red": "Red", "green": "Green", "blue": "Blue", "other": "Another color"}}
 print(decider.predict("Look at the supplied image.", question, images=["photo.png"]))
+ttnn.close_device(device)
 ```
 
-## Run the end-to-end test and the full-model perf
+`images` takes what the app's `open_image` takes: file paths, `data:image/...` URLs or PIL images. Each
+image adds 64 to 256 prompt tokens, which count toward the 8192-token limit. Longer prompts are rejected.
+
+## Generate the HF reference goldens (CPU, once)
+
+The tests compare against HF bf16/fp32 outputs that are computed on CPU, one layer at a time, from
+the snapshot. The 54 GB model is never loaded at once. A test whose golden is missing fails with the
+command that generates it.
+
+| golden | command | time | peak RAM | disk |
+|---|---|---:|---:|---:|
+| layer inputs (PCC tests) | `python -m models.demos.pplx_decider_v1_27b.reference.hf_reference --seq-len 8192 --layers 0 3 61 63 --through-final` | ~10 min | not recorded | 0.8 GB |
+| 25-row text decisions (e2e) | `python -m models.demos.pplx_decider_v1_27b.reference.hf_decision_golden` | ~32 min | 5.4 GB | 0.6 GB |
+| vision tower, 8 images | `python -m models.demos.pplx_decider_v1_27b.reference.hf_vision_reference` | ~13 s | 2.3 GB | 0.4 GB |
+| 8-row image decisions | `python -m models.demos.pplx_decider_v1_27b.reference.hf_image_decision_golden` | ~3 min | 4.0 GB | 30 MB |
+
+Run the vision golden before the image golden: it draws the 8 PNGs that the image rows use. Outputs go
+to `$PPLX_DECIDER_ARTIFACTS/goldens/{S8192,decisions,vision,vision/e2e}`.
+
+## Correctness tests
+
+Times are wall clock with the weight cache built and in the page cache.
+
+| what it checks | file | command | time |
+|---|---|---|---:|
+| every module and both layer kinds vs HF (PCC >= 0.995, 5 buckets) | `tests/pcc/` | `pytest models/demos/pplx_decider_v1_27b/tests/pcc -q` | ~11 min |
+| one layer kind at one length | `tests/pcc/test_decoder_layer.py` | `pytest models/demos/pplx_decider_v1_27b/tests/pcc/test_decoder_layer.py -q -k "L3 and S2048"` | ~20 s |
+| text decisions vs HF (>= 24/25, logit PCC >= 0.99), padding, determinism, on-device audit | `tests/e2e/test_model.py` | `pytest models/demos/pplx_decider_v1_27b/tests/e2e/test_model.py -q` | ~50 s |
+| image decisions vs HF (>= 7/8), splice, 3D positions, `TTDecider` images | `tests/e2e/test_image_model.py` | `pytest models/demos/pplx_decider_v1_27b/tests/e2e/test_image_model.py -q` | ~20 s |
+| vision tower: host tables, per-block and tower PCC, key mask, audit, latency, DRAM | `tests/vision/` | `pytest models/demos/pplx_decider_v1_27b/tests/vision -q` | ~25 s |
+| 3D mRoPE vs HF (CPU, bit exact) and layer 3 on an image row | `tests/pcc/test_mrope.py` | `pytest models/demos/pplx_decider_v1_27b/tests/pcc/test_mrope.py -q` | ~12 s |
+| a prefill pass issues no host round trips or torch ops | `tests/pcc/test_runtime_audit.py` | `pytest models/demos/pplx_decider_v1_27b/tests/pcc/test_runtime_audit.py -q` | ~10 s |
+| default path loads the dtypes and fidelities of the precision JSON | `tests/e2e/test_precision_config.py` | `pytest models/demos/pplx_decider_v1_27b/tests/e2e/test_precision_config.py -q -s` | ~5 s |
+
+Tables from the logs: `python models/demos/pplx_decider_v1_27b/tests/pcc_report.py` (PCC suite),
+`python models/demos/pplx_decider_v1_27b/tests/vision/vision_pcc_report.py` (vision) and
+`python models/demos/pplx_decider_v1_27b/tests/e2e/report_layer_trace.py` (per-layer trace from the
+last `test_model.py` run). To check that a change leaves text outputs bit-identical, compare two
+`e2e_outputs.safetensors` dumps:
 
 ```bash
-pytest models/demos/pplx_decider_v1_27b/tests/e2e/test_model.py -q -s     # 25-row agreement gate + checks, ~2 min
-python models/demos/pplx_decider_v1_27b/tests/e2e/report_layer_trace.py   # doc/full_model/layer_trace.{md,png}
-pytest models/demos/pplx_decider_v1_27b/tests/perf/test_model_perf.py -q -s -k "test_model_perf and not traced and not profile"
-pytest models/demos/pplx_decider_v1_27b/tests/e2e/test_image_model.py -q -s     # 8 image rows + splice, audit, ~1 min
-pytest models/demos/pplx_decider_v1_27b/tests/pcc/test_mrope.py -q -s           # 3D mRoPE (CPU) + layer 3 on an image row
-pytest models/demos/pplx_decider_v1_27b/tests/perf/test_image_perf.py -q -s     # image request latency, ~17 min (idle gaps)
+python -m models.demos.pplx_decider_v1_27b.tests.e2e.compare_outputs BEFORE.safetensors AFTER.safetensors
 ```
 
-## Run the PCC tests
+## Performance
+
+All perf tests are warmed (compile and program cache excluded) and report medians. "Burst" means each
+pass runs after 10 s idle; "sustained" means back to back. The device is slower when sustained.
+
+| what it measures | file | command | time |
+|---|---|---|---:|
+| wall clock per layer kind and module (layer, mixer, MLP, embedding, head), 5 buckets | `tests/perf/test_prefill_perf.py` | `pytest models/demos/pplx_decider_v1_27b/tests/perf/test_prefill_perf.py -q -s -k "test_layer_and_module_perf or test_embedding_and_head_perf"` | ~15 s |
+| wall clock of a full request per bucket, burst and sustained; device forward, tokenize, upload | `tests/perf/test_model_perf.py` | `pytest models/demos/pplx_decider_v1_27b/tests/perf/test_model_perf.py -q -s -k "test_model_perf and not traced and not profile"` | ~12 min |
+| traced vs eager full forward (128 / 1024 / 2048) | `tests/perf/test_model_perf.py` | `pytest models/demos/pplx_decider_v1_27b/tests/perf/test_model_perf.py -q -s -k test_traced_forward` | ~35 s |
+| image request per golden row, with a phase breakdown | `tests/perf/test_image_perf.py` | `pytest models/demos/pplx_decider_v1_27b/tests/perf/test_image_perf.py -q -s` | ~17 min |
+| vision tower per patch bucket; DRAM next to the text model | `tests/vision/test_vision_perf.py` | `pytest models/demos/pplx_decider_v1_27b/tests/vision/test_vision_perf.py -q -s` | <25 s |
+| benchmark accuracy, mixed throughput, image latency | `benchmark/run_benchmark.py` | see [Benchmark](#benchmark-stage-11) | ~8 min |
+
+The long runs are long on purpose: burst mode idles 10 s before every timed pass.
+
+Print the per-layer table from its log: `python models/demos/pplx_decider_v1_27b/tests/perf/test_prefill_perf.py`.
+Results land in `$PPLX_DECIDER_ARTIFACTS/perf/prefill_perf.jsonl`, `e2e/model_perf.json`,
+`image_e2e/image_perf.json` and `vision/vision_perf.json`.
+
+### Tracy device profile and tt-perf-report
+
+Two tests exist only to be profiled. Each runs warm-up passes, then one pass between the
+`PREFILL_START` / `PREFILL_END` signposts.
 
 ```bash
-pytest models/demos/pplx_decider_v1_27b/tests/pcc -q                     # all cases, about 11 minutes
-pytest models/demos/pplx_decider_v1_27b/tests/pcc/test_decoder_layer.py -q -k "L3 and S4096"
-python models/demos/pplx_decider_v1_27b/tests/pcc_report.py               # PCC table from the log
+# one decoder layer: L0_linear or L3_full, at S128, S2048 or S8192
+python -m tracy -r -p -v --no-web-server -o generated/pplx_tracy/layer -m pytest \
+  "models/demos/pplx_decider_v1_27b/tests/perf/test_prefill_perf.py::test_profile_layer[L3_full-S2048-device_params0]"
+# the full 64-layer model at the 2048 bucket (~1.7k ops; raise the profiler program count)
+TT_METAL_PROFILER_PROGRAM_SUPPORT_COUNT=4000 python -m tracy -r -p -v --no-web-server -o generated/pplx_tracy/model \
+  -m pytest "models/demos/pplx_decider_v1_27b/tests/perf/test_model_perf.py::test_profile_model"
 ```
 
-## Run the vision tower tests
+The op CSV lands in `<-o dir>/reports/<timestamp>/ops_perf_results_<timestamp>.csv`. Summarize the
+signposted window:
 
 ```bash
-pytest models/demos/pplx_decider_v1_27b/tests/vision -q -k "not test_dram_with_text_model"  # about 20 s
-pytest models/demos/pplx_decider_v1_27b/tests/vision/test_vision_perf.py -q -s -k test_dram_with_text_model
-python models/demos/pplx_decider_v1_27b/tests/vision/vision_pcc_report.py                  # PCC table from the log
+tt-perf-report generated/pplx_tracy/layer/reports/<timestamp>/ops_perf_results_<timestamp>.csv \
+  --start-signpost PREFILL_START --end-signpost PREFILL_END --no-advice --csv layer_ops.csv
 ```
+
+Drop `--no-advice` to get optimization hints. Earlier reports are in `doc/*/perf/`.
 
 ## Benchmark (stage 11)
 
-These are the accuracy figures on three model-card benchmarks. Each benchmark is a frozen, seeded
-subset of 200 examples, run as `choice` decisions through `TTDecider.predict` (C0, batch 1).
-Measured on the stage-3 code (`da43bdb9eff`).
-
-| benchmark | TT accuracy (95% CI) | before stage 3 | card pplx-decider-v1-27b | card Qwen3.8-27B base |
-|---|---:|---:|---:|---:|
-| WinoGrande (xl, validation) | 87.0% (81.6-91.0) | 87.0% | 83.30% | 73.10% |
-| FinancialPhraseBank (50agree) | 84.0% (78.3-88.4) | 82.5% | 84.18% | 75.68% |
-| Belebele (eng_Latn, test) | 96.5% (93.0-98.3) | 96.5% | 94.00% | 93.20% |
-
-The card's numbers come from the Perplexity API, with an unknown prompt protocol and on full test
-sets. Read the deltas as indicative, not as a pass or fail result. Every card figure falls inside
-the TT 95% confidence interval. Against the run before stage 3, 5 of 600 predictions changed. All 5
-were near-ties (top-two gap of at most 0.08), so the FPB +1.5 pp is numeric noise.
-
-Mixed throughput: the 600 benchmark prompts (buckets 128 and 1024) run back to back at
-3.10 decisions/s (2.72 before stage 3), with p50 / p90 / p99 latency of 400 / 425 / 432 ms (before:
-449 / 473 / 479). Isolated-request latency per bucket in the same refresh: 115 / 315 / 564 / 1227 /
-2882 ms (before: 149 / 366 / 665 / 1481 / 3536). Tables, roofline and protocol are in
-`doc/benchmark/` (`REPORT.md`, `results.json`, `predictions.csv`, `subsets_manifest.json`,
-`identity.json`).
+WinoGrande, FinancialPhraseBank and Belebele: a frozen, seeded subset of 200 examples each, run as
+`choice` decisions through `TTDecider.predict`. The dataset step downloads the datasets into the HF
+cache and needs network access.
 
 ```bash
-S11=/local/ttuser/gtobar/artifacts/pplx_decider/stage11_refresh   # first run (before stage 3): .../stage11
-python -m models.demos.pplx_decider_v1_27b.benchmark.datasets --out $S11/subsets            # CPU
-PPLX_DECIDER_STAGE6_DIR=$S11/perf_buckets pytest models/demos/pplx_decider_v1_27b/tests/perf/test_model_perf.py::test_model_perf -s -q
-python -m models.demos.pplx_decider_v1_27b.benchmark.run_benchmark --subsets $S11/subsets --out $S11/run
-python -m models.demos.pplx_decider_v1_27b.benchmark.report --stage11 $S11 --doc models/demos/pplx_decider_v1_27b/doc/benchmark
+B=$PPLX_DECIDER_ARTIFACTS/benchmark
+python -m models.demos.pplx_decider_v1_27b.benchmark.datasets --out $B/subsets                  # CPU
+PPLX_DECIDER_STAGE6_DIR=$B/perf_buckets pytest models/demos/pplx_decider_v1_27b/tests/perf/test_model_perf.py::test_model_perf -q -s
+python -m models.demos.pplx_decider_v1_27b.benchmark.run_benchmark --subsets $B/subsets --out $B/run
+python -m models.demos.pplx_decider_v1_27b.benchmark.report --stage11 $B --doc models/demos/pplx_decider_v1_27b/doc/benchmark
 ```
 
-## Run the perf measurements
+`run_benchmark` needs the image golden (it times two golden image rows). `report` rewrites
+`doc/benchmark/results.json` and `predictions.csv`. `REPORT.md` is written by hand from those files.
 
-```bash
-pytest models/demos/pplx_decider_v1_27b/tests/perf/test_prefill_perf.py -q -s \
-  -k "test_layer_and_module_perf or test_embedding_and_head_perf"
-python models/demos/pplx_decider_v1_27b/tests/perf/test_prefill_perf.py  # median table
+## Environment variables
 
-# Device profiler: one warmed layer between PREFILL_START / PREFILL_END signposts
-python -m tracy -r -p -v --no-web-server -o /tmp/pplx_tracy -m pytest \
-  models/demos/pplx_decider_v1_27b/tests/perf/test_prefill_perf.py -k "test_profile_layer and L3_full and S2048"
-tt-perf-report /tmp/pplx_tracy/reports/<timestamp>/ops_perf_results_<timestamp>.csv \
-  --start-signpost PREFILL_START --end-signpost PREFILL_END --no-advice
+| variable | default | used for |
+|---|---|---|
+| `HF_HOME` | HF default | HF cache with the snapshot (and the benchmark datasets) |
+| `PPLX_DECIDER_SNAPSHOT` | HF cache at the pinned revision | snapshot directory, overrides the cache lookup |
+| `PPLX_DECIDER_ARTIFACTS` | `<tt-metal>/generated/pplx_decider` | root of every default below |
+| `PPLX_DECIDER_WEIGHT_CACHE` | `$ARTIFACTS/weight_cache` | ttnn device weight cache (27 GB) |
+| `PPLX_DECIDER_GOLDEN_DIR` | `$ARTIFACTS/goldens` | HF layer inputs (`S8192/`, `S16384/`) |
+| `PPLX_DECIDER_DECISION_GOLDEN` | `$ARTIFACTS/goldens/decisions` | 25-row text decision golden |
+| `PPLX_DECIDER_VISION_GOLDEN` | `$ARTIFACTS/goldens/vision` | vision tower golden and the 8 PNGs |
+| `PPLX_DECIDER_IMAGE_GOLDEN` | `$PPLX_DECIDER_VISION_GOLDEN/e2e` | 8-row image decision golden |
+| `PPLX_DECIDER_PCC_LOG` | `$ARTIFACTS/logs/pcc_results.jsonl` | PCC records of the PCC tests |
+| `PPLX_DECIDER_PROBE_LOG` | `$ARTIFACTS/logs/context_probe.jsonl` | context probe (`tests/probe`, S=16384) |
+| `PPLX_DECIDER_PERF_LOG` | `$ARTIFACTS/perf/prefill_perf.jsonl` | per-layer perf records |
+| `PPLX_DECIDER_STAGE6_DIR` | `$ARTIFACTS/e2e` | text e2e results, `model_perf.json`, precision check |
+| `PPLX_DECIDER_STAGE12B_DIR` | `$ARTIFACTS/image_e2e` | `image_perf.json`; fallback for the next row |
+| `PPLX_DECIDER_IMAGE_E2E_DIR` | `$PPLX_DECIDER_STAGE12B_DIR` | image e2e results |
+| `PPLX_DECIDER_STAGE12A_DIR` | `$ARTIFACTS/vision` | vision test results |
+| `PPLX_DECIDER_VISION_PCC_LOG` | `$PPLX_DECIDER_STAGE12A_DIR/pcc_vision.jsonl` | vision PCC records |
+| `PPLX_DECIDER_PRECISION_CONFIG` | `doc/datatype_sweep/selected_precision_config.json` | precision policy JSON; candidates in `doc/datatype_sweep/candidates/` |
+
+All locations are defined in [`tt/paths.py`](tt/paths.py). Set a result directory per run when you do
+not want to overwrite an earlier run's JSON.
+
+## Code layout
+
 ```
+tt/                  TTNN model
+  model.py           PplxDeciderModel: weight cache, bucket padding, image input prep, on-device splice
+  decoder.py         one decoder layer (both kinds); attention.py, gated_deltanet.py, mlp.py, norm.py
+  rope.py            1D tables, 3D mRoPE (get_rope_index port), per-request rotary
+  embedding.py, readout.py, head.py   embedding; final norm -> readout -> mask -> / T -> softmax
+  weight_adapter.py  HF -> TT weight transforms; optimizations.py: dtypes and op configs (one place)
+  paths.py           every filesystem location (see Environment variables)
+  vision/            vision tower: patch embed, 27 blocks, merger (tower.py)
+demo/                decider.py (TTDecider, the app's Decider.predict) and demo.py (CLI)
+reference/           CPU HF goldens, built one layer at a time; prompt sets (decision_prompts.py, image_decision_prompts.py)
+tests/pcc/           per-module and per-layer PCC, mRoPE, prefill contract, runtime audit
+tests/e2e/           full-model decision gates (text, image), precision config, compare_outputs.py
+tests/vision/        vision tower tests; tests/perf/: latency; tests/probe/: context probe beyond 8192
+benchmark/           stage-11 datasets, runner and report
+doc/                 per-stage READMEs, work logs and perf reports
+```
+
+## Precision and limits
+
+- Text model: precision config C0 (`doc/datatype_sweep/selected_precision_config.json`): BFP8_B
+  weights for every projection and the readout, HiFi2 matmuls with fp32 accumulation, BF16
+  activations, fp32 DeltaNet state and fp32 head. The vision tower runs in BF16. BFP4 MLP weights
+  were 17 % faster at 2048 but failed the per-row logit-PCC bar; see the datatype sweep.
+- Batch 1 only. Prompts are right-padded to buckets 128 / 1024 / 2048 / 4096 / 8192; prompts over
+  8192 tokens are rejected, as in the app.
+- Tested with one image per request. Several images per request go through the same code but are
+  untested.
+- Weights and state take 27.3 GiB of the 31.8 GiB DRAM; with the vision tower, 3.6 GiB stay free.
+
+## Stage reports
+
+| stage | report |
+|---|---|
+| 1, functional layers | [`doc/functional_decoder/README.md`](doc/functional_decoder/README.md) |
+| 2, graph fusing | [`doc/fused_decoder/README.md`](doc/fused_decoder/README.md) |
+| 3A/3B, optimized decoder | [`doc/optimized_decoder/README.md`](doc/optimized_decoder/README.md) |
+| 6, full model and demo | [`doc/full_model/README.md`](doc/full_model/README.md) |
+| 8, datatype sweep | [`doc/datatype_sweep/README.md`](doc/datatype_sweep/README.md) |
+| 11, benchmark | [`doc/benchmark/REPORT.md`](doc/benchmark/REPORT.md) |
+| 12A/12B, vision tower and image decisions | [`doc/vision/README.md`](doc/vision/README.md) |
+| context contract | [`doc/context_contract.json`](doc/context_contract.json) |
