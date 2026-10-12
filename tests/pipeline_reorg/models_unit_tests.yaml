@@ -93,6 +93,7 @@
     wh_n150:
       timeout: 8
       tier: 3
+  owner_id: U03PUAKE719 # Miguel Tairum Cruz (CI mirror of #59131)
   team: models
   budget_type: unit
 

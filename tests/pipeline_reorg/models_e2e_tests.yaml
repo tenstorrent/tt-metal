@@ -342,7 +342,7 @@
       timeout: 15
       tier: 3
       release_ready: false
-  owner_id: TODO # Command-R7B bringup owner — replace with Slack member ID
+  owner_id: U03PUAKE719 # Miguel Tairum Cruz (CI mirror of #59131)
   team: models
   budget_type: e2e
 
