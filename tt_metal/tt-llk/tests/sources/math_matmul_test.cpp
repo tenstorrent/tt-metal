@@ -59,11 +59,11 @@ void run_kernel(RUNTIME_PARAMETERS params)
 #else
     constexpr bool stream_narrow = false;
 #endif
-#define MATMUL_UNPACK_TEMPLATE_ARGS 0, 0, false, get_dest_max_tiles<dest_sync, is_fp32_dest_acc_en, DstTileShape::Tile32x32>()
-#define MATMUL_STREAM_NARROW_ARG(narrow) , narrow
+#define MATMUL_UNPACK_INIT_TEMPLATE_ARGS 0, 0, false, stream_narrow
+#define MATMUL_UNPACK_TEMPLATE_ARGS      0, 0, false, get_dest_max_tiles<dest_sync, is_fp32_dest_acc_en, DstTileShape::Tile32x32>()
 #else
+#define MATMUL_UNPACK_INIT_TEMPLATE_ARGS
 #define MATMUL_UNPACK_TEMPLATE_ARGS
-#define MATMUL_STREAM_NARROW_ARG(narrow)
 #endif
 
     {
@@ -79,7 +79,7 @@ void run_kernel(RUNTIME_PARAMETERS params)
             num_faces_A, // in0
             TILE_SIZE_UNPACK_B,
             TILE_SIZE_UNPACK_A);
-        _llk_unpack_AB_matmul_init_<>(
+        _llk_unpack_AB_matmul_init_<MATMUL_UNPACK_INIT_TEMPLATE_ARGS>(
             UNPACK_TRANSPOSE_FACES,
             CT_DIM,
             RT_DIM,
@@ -89,8 +89,7 @@ void run_kernel(RUNTIME_PARAMETERS params)
             num_faces_B,    // in1
             num_faces_A,    // in0
             PARTIAL_FACE_B, // in1
-            PARTIAL_FACE_A
-                MATMUL_STREAM_NARROW_ARG(stream_narrow));
+            PARTIAL_FACE_A);
         PROFILER_SYNC();
     }
     {

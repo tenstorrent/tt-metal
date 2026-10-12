@@ -60,13 +60,11 @@ void run_kernel(RUNTIME_PARAMETERS params)
 #else
     constexpr bool stream_narrow = false;
 #endif
-#define MATMUL_UNPACK_INIT_TEMPLATE_ARGS 0, 0, unpack_ttsync
-#define MATMUL_UNPACK_TEMPLATE_ARGS 0, 0, unpack_ttsync, MAX_TILES_DEST
-#define MATMUL_STREAM_NARROW_ARG(narrow) , narrow
+#define MATMUL_UNPACK_INIT_TEMPLATE_ARGS 0, 0, unpack_ttsync, stream_narrow
+#define MATMUL_UNPACK_TEMPLATE_ARGS      0, 0, unpack_ttsync, MAX_TILES_DEST
 #else
 #define MATMUL_UNPACK_INIT_TEMPLATE_ARGS
 #define MATMUL_UNPACK_TEMPLATE_ARGS
-#define MATMUL_STREAM_NARROW_ARG(narrow)
 #endif
 
     {
@@ -92,7 +90,7 @@ void run_kernel(RUNTIME_PARAMETERS params)
             num_faces_A,
             num_faces_B,
             false,
-            false MATMUL_STREAM_NARROW_ARG(stream_narrow));
+            false);
         PROFILER_SYNC();
     }
     {

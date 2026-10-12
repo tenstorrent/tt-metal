@@ -80,7 +80,7 @@ inline constexpr bool _llk_unpack_AB_matmul_narrow_format_(const std::uint32_t u
 }
 
 /**
- * Whether the operand a matmul streams holds 8 bits per datum or less: the value of the stream_narrow argument of @ref _llk_unpack_AB_matmul_init_.
+ * Whether the operand a matmul streams holds 8 bits per datum or less: the stream_narrow template argument of @ref _llk_unpack_AB_matmul_init_.
  * @param fp32_dest_acc_en: Whether DEST holds 32-bit data; such a kernel keeps the GPR advance for every format.
  */
 inline constexpr bool _llk_unpack_AB_matmul_stream_narrow_(
@@ -96,8 +96,8 @@ inline constexpr bool _llk_unpack_AB_matmul_stream_narrow_(
 /**
  * Record the replay body for one streamed tile of a matmul row: the UNPACR group, the address advance and the NOP.
  */
-template <std::uint32_t SRC, std::uint32_t CFG_REG, std::uint32_t STRIDE_GPR, bool ADVANCE>
-inline void _llk_unpack_AB_matmul_stream_tile_body_(const bool partial_face, const bool narrow)
+template <std::uint32_t SRC, std::uint32_t CFG_REG, std::uint32_t STRIDE_GPR, bool ADVANCE, bool NARROW>
+inline void _llk_unpack_AB_matmul_stream_tile_body_(const bool partial_face)
 {
     if (partial_face)
     {
@@ -117,12 +117,12 @@ inline void _llk_unpack_AB_matmul_stream_tile_body_(const bool partial_face, con
         TTI_NOP;
         TTI_NOP;
         TTI_NOP;
-        if (!narrow)
+        if constexpr (!NARROW)
         {
             TTI_NOP;
         }
     }
-    else if (narrow)
+    else if constexpr (NARROW)
     {
         // CFG_REG += SCRATCH_SEC0_val; the stride is copied from the GPR every tile, so it follows a data format reconfig
         TTI_STALLWAIT(p_stall::STALL_CFG, p_stall::THCON);
@@ -155,9 +155,8 @@ inline void _llk_unpack_AB_matmul_stream_tile_body_(const bool partial_face, con
  * @param unpA_partial_face: Whether operand A is unpacked face-by-face (partial faces).
  * @param unpB_partial_face: Whether operand B is unpacked face-by-face (partial faces).
  */
-template <std::uint32_t kernel_broadcast_a = 0, std::uint32_t kernel_broadcast_b = 0>
-inline void _llk_unpack_AB_matmul_mop_config_(
-    const std::uint32_t ct_dim, const std::uint32_t rt_dim, const bool unpA_partial_face, const bool unpB_partial_face, const bool stream_narrow = false)
+template <std::uint32_t kernel_broadcast_a = 0, std::uint32_t kernel_broadcast_b = 0, bool stream_narrow = false>
+inline void _llk_unpack_AB_matmul_mop_config_(const std::uint32_t ct_dim, const std::uint32_t rt_dim, const bool unpA_partial_face, const bool unpB_partial_face)
 {
     // in0/inA - loaded to SrcB
     // in1/inB - loaded to SrcA
@@ -177,12 +176,12 @@ inline void _llk_unpack_AB_matmul_mop_config_(
             0,
             replay_buf_prog_len,
             // Lambda function to set up replay buffer
-            [unpA_partial_face, stream_narrow]
+            [unpA_partial_face]
             {
-                _llk_unpack_AB_matmul_stream_tile_body_<SrcA, THCON_SEC0_REG3_Base_address_ADDR32, p_gpr_unpack::TILE_SIZE_A, advance>(
-                    unpA_partial_face, stream_narrow);
-                _llk_unpack_AB_matmul_stream_tile_body_<SrcA, THCON_SEC0_REG3_Base_cntx1_address_ADDR32, p_gpr_unpack::TILE_SIZE_A, advance>(
-                    unpA_partial_face, stream_narrow);
+                _llk_unpack_AB_matmul_stream_tile_body_<SrcA, THCON_SEC0_REG3_Base_address_ADDR32, p_gpr_unpack::TILE_SIZE_A, advance, stream_narrow>(
+                    unpA_partial_face);
+                _llk_unpack_AB_matmul_stream_tile_body_<SrcA, THCON_SEC0_REG3_Base_cntx1_address_ADDR32, p_gpr_unpack::TILE_SIZE_A, advance, stream_narrow>(
+                    unpA_partial_face);
             });
     }
     else
@@ -193,12 +192,12 @@ inline void _llk_unpack_AB_matmul_mop_config_(
             0,
             replay_buf_prog_len,
             // Lambda function to set up replay buffer
-            [unpB_partial_face, stream_narrow]
+            [unpB_partial_face]
             {
-                _llk_unpack_AB_matmul_stream_tile_body_<SrcB, THCON_SEC1_REG3_Base_address_ADDR32, p_gpr_unpack::TMP_LO, advance>(
-                    unpB_partial_face, stream_narrow);
-                _llk_unpack_AB_matmul_stream_tile_body_<SrcB, THCON_SEC1_REG3_Base_cntx1_address_ADDR32, p_gpr_unpack::TMP_LO, advance>(
-                    unpB_partial_face, stream_narrow);
+                _llk_unpack_AB_matmul_stream_tile_body_<SrcB, THCON_SEC1_REG3_Base_address_ADDR32, p_gpr_unpack::TMP_LO, advance, stream_narrow>(
+                    unpB_partial_face);
+                _llk_unpack_AB_matmul_stream_tile_body_<SrcB, THCON_SEC1_REG3_Base_cntx1_address_ADDR32, p_gpr_unpack::TMP_LO, advance, stream_narrow>(
+                    unpB_partial_face);
             });
     }
 
@@ -227,6 +226,8 @@ inline void _llk_unpack_AB_matmul_mop_config_(
  * @tparam kernel_broadcast_b: Tile count to wrap operand B around for kernel broadcast (0 = disabled).
  * @tparam ttsync: Write each row's base addresses through two GPRs and WRCFG under Auto TTSync instead of polling for a
  *                 free context; the kernel must define MATMUL_UNPACK_TTSYNC and pass the same value to the execute.
+ * @tparam stream_narrow: The value of @ref _llk_unpack_AB_matmul_stream_narrow_; true advances the streamed operand's
+ *                        address with one CFGSHIFTMASK.
  * @param transpose: Nonzero to enable within-face (16x16) transpose for SrcA.
  * @param ct_dim: Number of column tiles in the output block.
  * @param rt_dim: Number of row tiles in the output block.
@@ -237,15 +238,13 @@ inline void _llk_unpack_AB_matmul_mop_config_(
  * @param unpB_num_faces: Number of faces for operand B, valid values = <1, 2, 4>.
  * @param unpA_partial_face: Whether operand A is unpacked face-by-face (partial faces).
  * @param unpB_partial_face: Whether operand B is unpacked face-by-face (partial faces).
- * @param stream_narrow: The value of @ref _llk_unpack_AB_matmul_stream_narrow_; true advances the streamed operand's
- *                       address with one CFGSHIFTMASK.
  * @note Call @ref _llk_unpack_AB_matmul_uninit_ to restore the modified datum-count state.
  * @note With ttsync, run a new init after any unpack config write, and while the form is on let no RISC store target a
  *       GPR that a MOP or replay uses.
  * @ref _llk_unpack_AB_matmul_ is the matching execute call.
  * @ref _llk_math_matmul_init_ is the matching init on the math thread (consumes SrcA/SrcB).
  */
-template <std::uint32_t kernel_broadcast_a = 0, std::uint32_t kernel_broadcast_b = 0, bool ttsync = false>
+template <std::uint32_t kernel_broadcast_a = 0, std::uint32_t kernel_broadcast_b = 0, bool ttsync = false, bool stream_narrow = false>
 __attribute__((always_inline)) inline void _llk_unpack_AB_matmul_init_(
     const std::uint32_t transpose       = 0,
     const std::uint32_t ct_dim          = 1,
@@ -256,8 +255,7 @@ __attribute__((always_inline)) inline void _llk_unpack_AB_matmul_init_(
     const std::uint32_t unpA_num_faces  = 4,
     const std::uint32_t unpB_num_faces  = 4,
     const bool unpA_partial_face        = false,
-    const bool unpB_partial_face        = false,
-    const bool stream_narrow            = false)
+    const bool unpB_partial_face        = false)
 {
     LLK_ASSERT(unpA_num_faces == 1 || unpA_num_faces == 2 || unpA_num_faces == 4, "unpA_num_faces must be 1, 2, or 4");
     LLK_ASSERT(unpB_num_faces == 1 || unpB_num_faces == 2 || unpB_num_faces == 4, "unpB_num_faces must be 1, 2, or 4");
@@ -300,7 +298,7 @@ __attribute__((always_inline)) inline void _llk_unpack_AB_matmul_init_(
 
     TT_SETDMAREG(0, LOWER_HALFWORD(kt_dim), 0, LO_16(p_gpr_unpack::KT_DIM)); // store kt_dim to gpr for scaling tile size
 
-    _llk_unpack_AB_matmul_mop_config_<kernel_broadcast_a, kernel_broadcast_b>(ct_dim, rt_dim, unpA_partial_face, unpB_partial_face, stream_narrow);
+    _llk_unpack_AB_matmul_mop_config_<kernel_broadcast_a, kernel_broadcast_b, stream_narrow>(ct_dim, rt_dim, unpA_partial_face, unpB_partial_face);
 
     if constexpr (ttsync)
     {

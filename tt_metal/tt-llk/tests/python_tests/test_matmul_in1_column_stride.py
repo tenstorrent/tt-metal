@@ -14,6 +14,7 @@ from helpers.test_config import TestConfig
 from helpers.test_variant_parameters import (
     CRK_TILE_DIMM,
     MATH_FIDELITY,
+    MATMUL_STREAM_NARROW,
     NUM_FACES,
     THROTTLE_LEVEL,
     TILE_COUNT,
@@ -70,7 +71,11 @@ def test_matmul_in1_column_stride_and_restore(formats, dest_acc, kt_dim):
     configuration = TestConfig(
         "sources/matmul_in1_column_stride_test.cpp",
         formats,
-        templates=[MATH_FIDELITY(MathFidelity.LoFi), THROTTLE_LEVEL(0)],
+        templates=[
+            MATH_FIDELITY(MathFidelity.LoFi),
+            THROTTLE_LEVEL(0),
+            *MATMUL_STREAM_NARROW.for_block(formats, dest_acc, ct_dim, 1),
+        ],
         runtimes=[
             NUM_FACES(),
             TILE_COUNT(2 * ct_dim),
@@ -155,7 +160,11 @@ def test_matmul_in1_column_stride_formats(formats, dest_acc, kt_dim):
     configuration = TestConfig(
         "sources/matmul_in1_column_stride_test.cpp",
         formats,
-        templates=[MATH_FIDELITY(MathFidelity.LoFi), THROTTLE_LEVEL(0)],
+        templates=[
+            MATH_FIDELITY(MathFidelity.LoFi),
+            THROTTLE_LEVEL(0),
+            *MATMUL_STREAM_NARROW.for_block(formats, dest_acc, ct_dim, 1),
+        ],
         runtimes=[
             NUM_FACES(),
             TILE_COUNT(2 * ct_dim),
