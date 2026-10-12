@@ -15,6 +15,13 @@ import math
 
 import ttnn
 
+try:
+    from tracy import signpost
+except ModuleNotFoundError:  # Tracy is only installed for profiling.
+
+    def signpost(header, message=None):
+        pass
+
 
 def layer_norm(x, params, residual=None):
     """``ttnn.layer_norm(x + residual)`` with the eps of the module ``params`` were preprocessed from.

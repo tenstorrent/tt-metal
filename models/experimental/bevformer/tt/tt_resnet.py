@@ -13,7 +13,7 @@ from types import SimpleNamespace
 import torch
 
 import ttnn
-from models.experimental.bevformer.tt.tt_common import TtnnConv2D
+from models.experimental.bevformer.tt.tt_common import TtnnConv2D, signpost
 from models.experimental.bevformer.tt.tt_modulated_deform_conv import TtModulatedDeformConv2dDevice
 
 
@@ -349,6 +349,8 @@ class TtResNet:
         )
 
     def __call__(self, x):
+        signpost(header="TTNN ResNet Forward Start")
+        signpost(header="ResNet Stem Start")
         x, out_h, out_w = self.conv1(x)
         pool = self.maxpool_args
         x = ttnn.max_pool2d(
@@ -364,10 +366,14 @@ class TtResNet:
             memory_config=ttnn.DRAM_MEMORY_CONFIG,
             ceil_mode=False,
         )
+        signpost(header="ResNet Stem Complete")
 
         outs = []
         for i, res_layer in enumerate(self.res_layers):
+            signpost(header=f"ResNet Layer{i + 1} Start")
             x = res_layer(x)
+            signpost(header=f"ResNet Layer{i + 1} Complete")
             if i in self.out_indices:
                 outs.append(x)
+        signpost(header="TTNN ResNet Forward End")
         return tuple(outs)

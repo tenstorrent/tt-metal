@@ -23,7 +23,7 @@ import math
 
 import ttnn
 from models.experimental.bevformer.model_config import CODE_XY, CODE_Z, GRID_DTYPE
-from models.experimental.bevformer.tt.tt_common import TtFFN, layer_norm
+from models.experimental.bevformer.tt.tt_common import TtFFN, layer_norm, signpost
 from models.experimental.bevformer.tt.tt_ms_deformable_attention import TTMSDeformableAttention, fp32_grid_sample_config
 
 
@@ -86,10 +86,21 @@ class TtDetrTransformerDecoderLayer:
         """All batch-first: ``query``/``query_pos`` ``(bs, nq, C)``, ``value`` ``(bs, bev_h * bev_w, C)``,
         ``reference_points`` ``(bs, nq, 1, 2)`` in [0, 1]."""
         norms = self.params.norms
-        query = layer_norm(self.self_attn(query, query_pos), norms[0], residual=query)
+        signpost(header="TTNN DecoderLayer Forward Start")
+        signpost(header="DecoderLayer SelfAttn Start")
+        self_attn_output = self.self_attn(query, query_pos)
+        signpost(header="DecoderLayer SelfAttn Complete")
+        query = layer_norm(self_attn_output, norms[0], residual=query)
+        signpost(header="DecoderLayer CrossAttn Start")
         query = self.cross_attn(query=query, value=value, query_pos=query_pos, reference_points=reference_points)
+        signpost(header="DecoderLayer CrossAttn Complete")
         query = layer_norm(query, norms[1])
-        return layer_norm(self.ffn(query), norms[2], residual=query)
+        signpost(header="DecoderLayer FFN Start")
+        ffn_output = self.ffn(query)
+        signpost(header="DecoderLayer FFN Complete")
+        query = layer_norm(ffn_output, norms[2], residual=query)
+        signpost(header="TTNN DecoderLayer Forward End")
+        return query
 
 
 class TtDetectionTransformerDecoder:
@@ -145,10 +156,12 @@ class TtDetectionTransformerDecoder:
             # The cross-attention's single level is the new axis 2.
             output = layer(output, value, query_pos, ttnn.unsqueeze(reference_points[..., :2], 2))
 
+            signpost(header="Decoder RegBranch Start")
             box_code = self._reg_branch(output, branch)
-            # The codes come centers first (CENTERS_FIRST). The clamp (a no-op on the first
-            # layer's logit output) runs inside the add.
-            logits = ttnn.add(box_code[..., 0:3], logits, input_tensor_b_activations=CLAMP_LOGITS)
+            signpost(header="Decoder RegBranch Complete")
+            center_delta = ttnn.concat([box_code[..., CODE_XY], box_code[..., CODE_Z]], dim=-1)
+            # The clamp (a no-op on the first layer's logit output) runs inside the add.
+            logits = ttnn.add(center_delta, logits, input_tensor_b_activations=CLAMP_LOGITS)
             reference_points = ttnn.sigmoid(logits)
 
             intermediate.append(output)

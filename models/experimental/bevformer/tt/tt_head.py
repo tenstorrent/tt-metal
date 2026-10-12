@@ -29,7 +29,7 @@ from models.experimental.bevformer.model_config import (
     GRID_DTYPE,
     SCORE_DTYPE,
 )
-from models.experimental.bevformer.tt.tt_common import layer_norm
+from models.experimental.bevformer.tt.tt_common import layer_norm, signpost
 from models.experimental.bevformer.tt.tt_decoder import TtDetectionTransformerDecoder
 
 # The dtypes of the head's outputs. Class logits: in bfloat16 many of the num_query * num_classes
@@ -81,6 +81,7 @@ class TtBEVFormerHead:
         (``SCORE_DTYPE``) and box predictions ``(L, bs, num_query, code_size)`` (``GRID_DTYPE``):
         ``model_config.py``'s box code layout with cx, cy and cz in metres.
         """
+        signpost(header="TTNN Head Forward Start")
         p = self.params
         bs = bev_embed.shape[0]
         query, query_pos, reference_points = p.query, p.query_pos, p.reference_points
@@ -89,14 +90,21 @@ class TtBEVFormerHead:
                 ttnn.repeat(t, (bs, 1, 1)) for t in (query, query_pos, reference_points)
             )
 
+        signpost(header="Head Decoder Start")
         hs, refined_points, box_codes = self.decoder(query, bev_embed, query_pos, reference_points, p.reg_branches)
+        signpost(header="Head Decoder Complete")
+        signpost(header="Head ClsBranches Start")
         all_cls_scores = ttnn.stack(
             [self._cls_branch(hs[lvl], branch) for lvl, branch in enumerate(p.cls_branches)], dim=0
         )
+        signpost(header="Head ClsBranches Complete")
+        signpost(header="Head BoxPreds Start")
 
         centers = ttnn.add(ttnn.multiply(refined_points, self.pc_size), self.pc_min)
         # The refined points and the codes' first three channels are (x, y, z).
         all_bbox_preds = ttnn.concat(
             [centers[..., 0:2], box_codes[..., 3:5], centers[..., 2:3], box_codes[..., 5:]], dim=-1
         )
+        signpost(header="Head BoxPreds Complete")
+        signpost(header="TTNN Head Forward End")
         return all_cls_scores, all_bbox_preds
