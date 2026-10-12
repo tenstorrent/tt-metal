@@ -38,7 +38,6 @@ struct DramPrefetcherTensorGeometry {
 // The block geometry dram_prefetcher derives from its weight tensors and its sender -> receivers layout.
 // Shared by the GlobalCircularBuffer and the PrefetcherPipe program factories.
 struct DramPrefetcherGeometry {
-    uint32_t num_readers = 0;
     // Blocks each reader pushes per tensor: one per receiver of the whole ring.
     uint32_t num_blocks = 0;
     std::vector<DramPrefetcherTensorGeometry> tensors;
@@ -60,11 +59,18 @@ void append_per_tensor_args(
     const DramPrefetcherGeometry& geometry,
     uint32_t DramPrefetcherTensorGeometry::* field);
 
-// The cores the GlobalCircularBuffer path reads on, in reader order: the first `num_readers` of
-// `global_cb`'s senders, in sender_receiver_core_mapping order. Reader i reads DRAM bank i. `global_cb`
-// must have at least `num_readers` senders.
-std::vector<CoreCoord> dram_prefetcher_gcb_reader_cores(
-    const tt::tt_metal::experimental::GlobalCircularBuffer& global_cb, uint32_t num_readers);
+// The cores dram_prefetcher reads on, taken from its delivery target.
+struct DramPrefetcherReaders {
+    // In reader order: reader i reads DRAM bank i.
+    std::vector<CoreCoord> cores;
+    // Every reader's receiver count.
+    uint32_t num_receivers_per_reader = 0;
+};
+
+// The first `num_readers` senders of whichever target `params` delivers into: `global_cb`'s, in
+// sender_receiver_core_mapping order, or `prefetcher_pipes`', in the order given. TT_FATALs unless there are
+// that many, each on its own core and all with the same number of receivers. `num_readers` must be nonzero.
+DramPrefetcherReaders dram_prefetcher_readers(const DramPrefetcherParams& params, uint32_t num_readers);
 
 // The NoC virtual channel reader `reader_index` of `reader_cores` reads its DRAM bank on, chosen so that
 // readers on one row alternate channels.

@@ -4,21 +4,11 @@
 
 #pragma once
 
-#include <cstdint>
-
 #include "ttnn/metal_v2_artifacts.hpp"
-#include "ttnn/prefetcher_pipe.hpp"
 
 #include "dram_prefetcher_device_operation_types.hpp"
 
 namespace ttnn::prim {
-
-// The pipes dram_prefetcher drives, in reader order: the first `num_readers` of `prefetcher_pipes`, in the
-// order given, as the GlobalCircularBuffer path takes its senders in sender_receiver_core_mapping order.
-// Reader i is pipe i's sender and reads DRAM bank i. The pipes must be non-null (see
-// ttnn::prefetcher_pipe_refs), and the readers' senders must be distinct.
-ttnn::PrefetcherPipeList dram_prefetcher_reader_pipes(
-    const ttnn::PrefetcherPipeList& prefetcher_pipes, uint32_t num_readers);
 
 // Delivers into worker-sender PrefetcherPipes (`prefetcher_pipes`). A Program binds a pipe only through a
 // ProgramSpec, so this path is a Metal 2.0 spec factory beside the GlobalCircularBuffer descriptor factory.

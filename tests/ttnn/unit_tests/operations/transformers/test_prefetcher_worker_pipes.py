@@ -21,7 +21,12 @@ import ttnn
 from loguru import logger
 
 from tests.tt_eager.python_api_testing.sweep_tests.comparison_funcs import comp_pcc
-from tests.ttnn.unit_tests.operations.prefetcher_common import bytes_per_tile, make_krow_major_weight, round_up
+from tests.ttnn.unit_tests.operations.prefetcher_common import (
+    bank_receivers_contiguous,
+    bytes_per_tile,
+    make_krow_major_weight,
+    round_up,
+)
 from tests.ttnn.unit_tests.operations.prefetcher_support import require_tensor_prefetcher
 
 # Two weights whose per-receiver blocks differ in size, so every tensor switch re-sizes the pipes:
@@ -58,9 +63,7 @@ class _Layout:
 
     def bank_receivers(self, b):
         """Bank b's receivers: the row-major matmul workers b*R .. b*R + R - 1, a row segment."""
-        first = b * self.recv_per_reader
-        x, y = first % self.matmul_grid[0], first // self.matmul_grid[0]
-        return _core_range(x, y, x + self.recv_per_reader - 1, y)
+        return bank_receivers_contiguous(b, self.recv_per_reader, ring_cols=self.matmul_grid[0])
 
     def sender_receiver_mapping(self):
         """Bank b's (sender, receivers), in bank order."""
@@ -71,7 +74,7 @@ class _Layout:
         return self.in0_block_w * per_core_n * bytes_per_tile(dtype)
 
 
-def _make_pipes(device, layout, ring_size, mapping=None):
+def _make_pipes(device, layout, ring_size, mapping=None, receiver_domain=None):
     """A worker PrefetcherPipeSpace over the layout's senders and receivers and the pipes carved from it.
 
     Returns (space, pipes); the space must outlive the pipes, so callers keep both.
@@ -80,7 +83,7 @@ def _make_pipes(device, layout, ring_size, mapping=None):
     space = ttnn.experimental.create_prefetcher_pipe_space(
         device,
         sender_cores=layout.sender_cores,
-        receiver_domain=layout.receiver_cores,
+        receiver_domain=layout.receiver_cores if receiver_domain is None else receiver_domain,
         ring_size=ring_size,
         max_receivers_per_pipe=max(receivers.num_cores() for _, receivers in mapping),
     )
@@ -323,15 +326,10 @@ def test_worker_pipes_rejects_differing_receiver_counts(device, expect_error):
     extra_receiver = _core_range(spare.x, spare.y, spare.x, spare.y)
     mapping = layout.sender_receiver_mapping()
     mapping[0] = (mapping[0][0], mapping[0][1].merge(extra_receiver))
-    space = ttnn.experimental.create_prefetcher_pipe_space(
-        device,
-        sender_cores=layout.sender_cores,
-        receiver_domain=layout.receiver_cores.merge(extra_receiver),
-        ring_size=ring_size,
-        max_receivers_per_pipe=2,
+    _space, pipes = _make_pipes(
+        device, layout, ring_size, mapping, receiver_domain=layout.receiver_cores.merge(extra_receiver)
     )
-    pipes = space.create_pipes(mapping)
-    with expect_error(RuntimeError, "same number of receivers on every reader's PrefetcherPipe"):
+    with expect_error(RuntimeError, "same number of receivers per reader"):
         ttnn.dram_prefetcher(tensors, 1, prefetcher_pipes=pipes)
 
 
@@ -378,18 +376,8 @@ def test_worker_pipes_rejects_partial_tile_split(device, expect_error):
     K = layout.k_tiles * ttnn.TILE_SIZE
     # Three tiles per bank cannot be split evenly over two receivers.
     shard_width = 3 * ttnn.TILE_SIZE
-    weight = ttnn.as_tensor(
-        torch.randn(1, 1, K, layout.num_banks * shard_width),
-        device=device,
-        dtype=ttnn.bfloat16,
-        layout=ttnn.TILE_LAYOUT,
-        memory_config=ttnn.MemoryConfig(
-            ttnn.TensorMemoryLayout.WIDTH_SHARDED,
-            ttnn.BufferType.DRAM,
-            ttnn.ShardSpec(
-                _core_range(0, 0, layout.num_banks - 1, 0), [K, shard_width], ttnn.ShardOrientation.ROW_MAJOR
-            ),
-        ),
+    weight = make_krow_major_weight(
+        device, torch.randn(1, 1, K, layout.num_banks * shard_width), layout.num_banks, ttnn.bfloat16
     )
     _space, pipes = _make_pipes(device, layout, _ring_size([layout.entry_size(ttnn.bfloat16, 2)]))
     with expect_error(RuntimeError, "does not split evenly over the 2 receiver cores per sender"):

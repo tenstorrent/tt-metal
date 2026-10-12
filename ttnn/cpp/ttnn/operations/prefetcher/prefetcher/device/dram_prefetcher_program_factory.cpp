@@ -9,8 +9,8 @@
 #include <tt-metalium/hal.hpp>
 #include <tt-metalium/math.hpp>
 #include <tt-metalium/program_descriptors.hpp>
-#include <tt-metalium/work_split.hpp>
 
+#include <tt-metalium/experimental/prefetcher_pipe.hpp>
 #include <tt-metalium/global_circular_buffer.hpp>
 
 #include "dram_prefetcher_program_factory.hpp"
@@ -42,8 +42,8 @@ DramPrefetcherGeometry compute_dram_prefetcher_geometry(
     const ttsl::Span<const Tensor> weight_tensors, const uint32_t num_receivers_per_reader) {
     TT_FATAL(!weight_tensors.empty(), "dram_prefetcher needs at least one weight tensor besides the address tensor");
     DramPrefetcherGeometry geometry;
-    geometry.num_readers = weight_tensors[0].shard_spec()->grid.num_cores();
-    geometry.num_blocks = geometry.num_readers * num_receivers_per_reader;
+    const uint32_t num_readers = weight_tensors[0].shard_spec()->grid.num_cores();
+    geometry.num_blocks = num_readers * num_receivers_per_reader;
     const uint32_t num_blocks = geometry.num_blocks;
 
     // Largest page the reader's DRAM reads and the writer's receiver writes are split into.
@@ -68,9 +68,7 @@ DramPrefetcherGeometry compute_dram_prefetcher_geometry(
             max_page_size, width_in_tiles / num_receivers_per_reader, tt::tile_size(t.data_format));
         t.block_size_per_receiver = t.block_num_tiles * t.tile_size / num_receivers_per_reader;
         geometry.tensors.push_back(t);
-    }
 
-    for (const auto& t : geometry.tensors) {
         geometry.max_block_num_tiles = std::max(geometry.max_block_num_tiles, t.block_num_tiles);
         // The first tensor with the largest tile size sets the staging buffer's data format.
         if (t.tile_size > geometry.max_tile_size) {
@@ -91,17 +89,44 @@ void append_per_tensor_args(
     }
 }
 
-std::vector<CoreCoord> dram_prefetcher_gcb_reader_cores(
-    const tt::tt_metal::experimental::GlobalCircularBuffer& global_cb, const uint32_t num_readers) {
-    // The sender set holds one single-core range per sender, in mapping order, so this walk keeps that order.
-    std::vector<CoreCoord> reader_cores = corerange_to_cores(global_cb.sender_cores(), std::nullopt, true);
-    TT_ASSERT(
-        reader_cores.size() >= num_readers,
-        "global_cb has {} senders, fewer than the {} readers",
-        reader_cores.size(),
-        num_readers);
-    reader_cores.resize(num_readers);
-    return reader_cores;
+DramPrefetcherReaders dram_prefetcher_readers(const DramPrefetcherParams& params, const uint32_t num_readers) {
+    const bool has_pipes = !params.prefetcher_pipes.empty();
+    const std::vector<std::pair<CoreCoord, CoreRangeSet>> mapping =
+        has_pipes
+            ? experimental::GetPrefetcherPipeSenderReceiverMapping(ttnn::prefetcher_pipe_refs(params.prefetcher_pipes))
+            : params.global_cb->sender_receiver_core_mapping();
+    TT_FATAL(
+        mapping.size() >= num_readers,
+        "ttnn.dram_prefetcher needs one {} per reader core: the weights are sharded over {} DRAM banks, so {} reader "
+        "cores, but only {} were given",
+        has_pipes ? "PrefetcherPipe" : "GlobalCircularBuffer sender",
+        num_readers,
+        num_readers,
+        mapping.size());
+
+    DramPrefetcherReaders readers{.num_receivers_per_reader = mapping.front().second.num_cores()};
+    readers.cores.reserve(num_readers);
+    for (uint32_t i = 0; i < num_readers; ++i) {
+        const auto& [sender, receivers] = mapping[i];
+        TT_FATAL(
+            std::find(readers.cores.begin(), readers.cores.end(), sender) == readers.cores.end(),
+            "ttnn.dram_prefetcher runs one reader per sender core, but reader {} shares sender {} with an earlier "
+            "reader. Give each of the first {} senders its own core.",
+            i,
+            sender.str(),
+            num_readers);
+        TT_FATAL(
+            receivers.num_cores() == readers.num_receivers_per_reader,
+            "ttnn.dram_prefetcher needs the same number of receivers per reader, but reader {} (sender {}) has {} and "
+            "reader 0 (sender {}) has {}",
+            i,
+            sender.str(),
+            receivers.num_cores(),
+            mapping.front().first.str(),
+            readers.num_receivers_per_reader);
+        readers.cores.push_back(sender);
+    }
+    return readers;
 }
 
 uint32_t dram_prefetcher_reader_vc(const std::vector<CoreCoord>& reader_cores, const uint32_t reader_index) {
@@ -143,35 +168,25 @@ ProgramDescriptor DramPrefetcherProgramFactory::create_descriptor(
 
     // In validate we make sure that all tensors are on the same device
     uint32_t num_tensors = tensors.size();
-    auto sender_receiver_core_mapping = global_cb.sender_receiver_core_mapping()[0];
-    uint32_t num_receivers_per_reader = sender_receiver_core_mapping.second.num_cores();
+    const DramPrefetcherReaders readers =
+        dram_prefetcher_readers(operation_attributes, tensors[0].shard_spec()->grid.num_cores());
+    const uint32_t num_receivers_per_reader = readers.num_receivers_per_reader;
 
     const DramPrefetcherGeometry geometry = compute_dram_prefetcher_geometry(tensors, num_receivers_per_reader);
-    const uint32_t num_readers = geometry.num_readers;
     const uint32_t num_blocks = geometry.num_blocks;
     const uint32_t max_block_tiles = geometry.max_block_num_tiles;
     const uint32_t max_tile_size = geometry.max_tile_size;
     const tt::DataFormat max_tile_size_df = geometry.max_tile_size_data_format;
     const uint32_t max_block_size_per_reader_core = geometry.max_block_size;
 
-    uint32_t max_tensor_size = max_block_size_per_reader_core / num_receivers_per_reader * num_blocks;
-
-    TT_FATAL(
-        max_tensor_size <= global_cb.size(),
-        "largest tensor {} must fit in global cb {}",
-        max_tensor_size,
-        global_cb.size());
-
     /* Cores setup */
-    const std::vector<CoreCoord> reader_cores = dram_prefetcher_gcb_reader_cores(global_cb, num_readers);
+    const std::vector<CoreCoord>& reader_cores = readers.cores;
     const CoreRangeSet reader_core_range(std::vector<CoreRange>(reader_cores.begin(), reader_cores.end()));
 
     /* read cb setup */
     uint32_t reader_cb_single_tile_size = max_tile_size;
     const uint32_t total_num_blocks_in_buffer = kDramPrefetcherStagingBlocks;
     uint32_t reader_cb_size = max_block_size_per_reader_core * total_num_blocks_in_buffer;
-
-    TT_FATAL(reader_cb_size <= global_cb.size(), "reader_cb_size must not be larger than global cb");
 
     uint32_t reader_cb_index = tt::CBIndex::c_0;
     uint32_t sync_cb_index = tt::CBIndex::c_3;

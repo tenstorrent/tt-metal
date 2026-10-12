@@ -21,39 +21,17 @@ DramPrefetcherOperation::program_factory_t DramPrefetcherOperation::select_progr
 
 namespace {
 
-// The GlobalCircularBuffer target: a worker-sender GCB whose first num_readers senders each feed the same
-// number of receivers. Returns that receiver count.
-uint32_t validate_global_cb_target(
-    const tt::tt_metal::experimental::GlobalCircularBuffer& global_cb, const uint32_t num_readers) {
-    TT_FATAL(
-        tt::tt_metal::experimental::sender_core_type(global_cb) != tt::tt_metal::experimental::SenderCoreType::Dram,
-        "ttnn.dram_prefetcher does not support DRAM-sender GlobalCircularBuffers. Use "
-        "ttnn.experimental.start_tensor_prefetcher / ttnn.experimental.stop_tensor_prefetcher instead.");
-
-    // Check that global_cb sender_receiver_core_mapping has same number of receivers for each sender core
-    const auto& sender_receiver_core_mapping = global_cb.sender_receiver_core_mapping();
-    TT_FATAL(
-        sender_receiver_core_mapping.size() >= num_readers,
-        "ttnn.dram_prefetcher needs one GlobalCircularBuffer sender per reader core: the weights are sharded over {} "
-        "DRAM banks, so {} reader cores, but global_cb has only {} senders",
-        num_readers,
-        num_readers,
-        sender_receiver_core_mapping.size());
-    for (uint32_t i = 0; i < num_readers; ++i) {
-        const auto& [sender_core, receiver_core_range] = sender_receiver_core_mapping[i];
-        TT_FATAL(
-            receiver_core_range.size() == sender_receiver_core_mapping.begin()->second.size(),
-            "Global circular buffer must have same number of receivers for each sender core");
-    }
-    return sender_receiver_core_mapping[0].second.num_cores();
-}
-
-// The PrefetcherPipe target: worker-sender pipes, at least one per reader, the ones the readers drive all
-// with the same receiver count and ring size. Returns the readers' pipes in reader order.
-ttnn::PrefetcherPipeList validate_prefetcher_pipes_target(
-    const ttnn::PrefetcherPipeList& prefetcher_pipes, const uint32_t num_readers) {
+// A target built for the Tensor prefetcher (DRAM senders) is redirected there before anything else is checked.
+void validate_worker_senders(const DramPrefetcherParams& args) {
     using tt::tt_metal::experimental::SenderCoreType;
-    const auto pipes = ttnn::prefetcher_pipe_refs(prefetcher_pipes);
+    if (args.global_cb.has_value()) {
+        TT_FATAL(
+            tt::tt_metal::experimental::sender_core_type(*args.global_cb) != SenderCoreType::Dram,
+            "ttnn.dram_prefetcher does not support DRAM-sender GlobalCircularBuffers. Use "
+            "ttnn.experimental.start_tensor_prefetcher / ttnn.experimental.stop_tensor_prefetcher instead.");
+        return;
+    }
+    const auto pipes = ttnn::prefetcher_pipe_refs(args.prefetcher_pipes);
     for (size_t p = 0; p < pipes.size(); ++p) {
         const tt::tt_metal::experimental::PrefetcherPipe& pipe = pipes[p];
         TT_FATAL(
@@ -65,31 +43,45 @@ ttnn::PrefetcherPipeList validate_prefetcher_pipes_target(
             pipe.sender_core().str(),
             pipe.sender_core_type());
     }
+}
 
-    ttnn::PrefetcherPipeList reader_pipes = dram_prefetcher_reader_pipes(prefetcher_pipes, num_readers);
-    const tt::tt_metal::experimental::PrefetcherPipe& first_pipe = *reader_pipes.front();
-    for (uint32_t i = 0; i < num_readers; ++i) {
-        const tt::tt_metal::experimental::PrefetcherPipe& pipe = *reader_pipes[i];
+// What the target must hold. The GlobalCircularBuffer holds every receiver's share of the largest tensor, and
+// on its senders the reader's staging. A PrefetcherPipe ring holds one entry, one receiver's slice of one block,
+// of every tensor.
+void validate_target_capacity(
+    const DramPrefetcherParams& args, const DramPrefetcherGeometry& geometry, const uint32_t num_receivers_per_reader) {
+    if (args.global_cb.has_value()) {
+        const uint32_t global_cb_size = args.global_cb->size();
+        const uint32_t max_tensor_size = geometry.max_block_size / num_receivers_per_reader * geometry.num_blocks;
         TT_FATAL(
-            pipe.receiver_cores().num_cores() == first_pipe.receiver_cores().num_cores(),
-            "ttnn.dram_prefetcher needs the same number of receivers on every reader's PrefetcherPipe, but reader {} "
-            "(sender {}) has {} and reader 0 (sender {}) has {}",
-            i,
-            pipe.sender_core().str(),
-            pipe.receiver_cores().num_cores(),
-            first_pipe.sender_core().str(),
-            first_pipe.receiver_cores().num_cores());
+            max_tensor_size <= global_cb_size,
+            "largest tensor {} must fit in global cb {}",
+            max_tensor_size,
+            global_cb_size);
+        const uint32_t reader_cb_size = geometry.max_block_size * kDramPrefetcherStagingBlocks;
         TT_FATAL(
-            pipe.ring_size() == first_pipe.ring_size(),
-            "ttnn.dram_prefetcher needs one ring size across its PrefetcherPipes, but reader {} (sender {}) has {} B "
-            "and reader 0 (sender {}) has {} B",
-            i,
-            pipe.sender_core().str(),
-            pipe.ring_size(),
-            first_pipe.sender_core().str(),
-            first_pipe.ring_size());
+            reader_cb_size <= global_cb_size,
+            "reader_cb_size {} must not be larger than global cb {}",
+            reader_cb_size,
+            global_cb_size);
+        return;
     }
-    return reader_pipes;
+    // The ring need not hold a whole number of entries: the pipe skips the gap at the wrap. The readers' pipes
+    // share the writer's one accessor, which ProgramSpec holds to one ring size.
+    const uint32_t ring_size = args.prefetcher_pipes.front()->ring_size();
+    for (size_t t = 0; t < geometry.tensors.size(); ++t) {
+        TT_FATAL(
+            geometry.tensors[t].block_size_per_receiver <= ring_size,
+            "ttnn.dram_prefetcher delivers each receiver one block of tensor {} per PrefetcherPipe entry, {} B "
+            "({} tiles of {} B over {} receivers), but the pipes' ring is only {} B. Use a larger ring or more "
+            "receivers per pipe.",
+            t,
+            geometry.tensors[t].block_size_per_receiver,
+            geometry.tensors[t].block_num_tiles,
+            geometry.tensors[t].tile_size,
+            num_receivers_per_reader,
+            ring_size);
+    }
 }
 
 }  // namespace
@@ -107,25 +99,14 @@ void DramPrefetcherOperation::validate_on_program_cache_miss(
         "global_cb={} and {} prefetcher_pipes",
         has_global_cb ? "set" : "None",
         args.prefetcher_pipes.size());
+    validate_worker_senders(args);
 
     const ttnn::Tensor& tensor_addrs = input_tensors.back();  // Last tensor is tensor_addrs
 
     uint32_t num_readers = input_tensors[0].shard_spec()->grid.num_cores();
-    ttnn::PrefetcherPipeList reader_pipes;
-    std::vector<CoreCoord> reader_cores;
-    uint32_t num_receivers_per_sender = 0;
-    if (has_pipes) {
-        reader_pipes = validate_prefetcher_pipes_target(args.prefetcher_pipes, num_readers);
-        num_receivers_per_sender = reader_pipes.front()->receiver_cores().num_cores();
-        for (const auto& pipe : reader_pipes) {
-            reader_cores.push_back(pipe->sender_core());
-        }
-    } else {
-        num_receivers_per_sender = validate_global_cb_target(*args.global_cb, num_readers);
-        reader_cores = dram_prefetcher_gcb_reader_cores(*args.global_cb, num_readers);
-    }
-
     TT_FATAL(num_readers > 0, "Number of reader cores must be greater than zero");
+    const DramPrefetcherReaders readers = dram_prefetcher_readers(args, num_readers);
+    const uint32_t num_receivers_per_sender = readers.num_receivers_per_reader;
     TT_FATAL(num_receivers_per_sender > 0, "Number of receiver cores per sender must be greater than zero");
 
     for (size_t i = 0; i < input_tensors.size() - 1; ++i) {
@@ -156,26 +137,9 @@ void DramPrefetcherOperation::validate_on_program_cache_miss(
             "Input tensors must be of type Bfp4_b, Bfp8_b, or Float16_b");
     }
 
-    if (has_pipes) {
-        // Each receiver is delivered one block per pipe entry, so a ring must hold one block of every tensor.
-        // It need not hold a whole number of them: the pipe skips the gap at the wrap.
-        const uint32_t ring_size = reader_pipes.front()->ring_size();
-        const ttsl::Span<const Tensor> weight_tensors(input_tensors.data(), input_tensors.size() - 1);
-        const auto geometry = compute_dram_prefetcher_geometry(weight_tensors, num_receivers_per_sender);
-        for (size_t t = 0; t < geometry.tensors.size(); ++t) {
-            TT_FATAL(
-                geometry.tensors[t].block_size_per_receiver <= ring_size,
-                "ttnn.dram_prefetcher delivers each receiver one block of tensor {} per PrefetcherPipe entry, {} B "
-                "({} tiles of {} B over {} receivers), but the pipes' ring is only {} B. Use a larger ring or more "
-                "receivers per pipe.",
-                t,
-                geometry.tensors[t].block_size_per_receiver,
-                geometry.tensors[t].block_num_tiles,
-                geometry.tensors[t].tile_size,
-                num_receivers_per_sender,
-                ring_size);
-        }
-    }
+    const ttsl::Span<const Tensor> weight_tensors(input_tensors.data(), input_tensors.size() - 1);
+    validate_target_capacity(
+        args, compute_dram_prefetcher_geometry(weight_tensors, num_receivers_per_sender), num_receivers_per_sender);
 
     TT_FATAL(
         tensor_addrs.device() == input_tensors[0].device(),
@@ -200,7 +164,7 @@ void DramPrefetcherOperation::validate_on_program_cache_miss(
         args.num_layers,
         num_tensors,
         addrs_shard_spec.shape[1]);
-    for (const CoreCoord& core : reader_cores) {
+    for (const CoreCoord& core : readers.cores) {
         TT_FATAL(
             addrs_shard_spec.grid.contains(core),
             "tensor_addrs must be sharded over the reader cores, each of which reads the addresses from its own "

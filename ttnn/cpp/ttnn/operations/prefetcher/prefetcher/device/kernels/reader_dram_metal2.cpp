@@ -53,11 +53,13 @@ void kernel_main() {
             const uint32_t curr_page_size = get_common_vararg(t);
             const uint32_t curr_block_num_pages = get_common_vararg(num_tensors + t);
 
-            // Address setup. The read state holds the bank's NoC coordinates; each read supplies the low
-            // 32 bits of its address.
+            // Address setup. The read state holds the bank's NoC coordinates, the page size and the VC; each
+            // read supplies the low 32 bits of its address.
             const uint32_t tensor_base_address = tensor_addrs_l1[layer * num_tensors + t];
             const uint32_t src_base_addr = static_cast<uint32_t>(
                 dram_bank.get_noc_addr_from_bank_id(bank_id, tensor_base_address, noc.get_noc_id()));
+            noc.set_async_read_state<NocOptions::CUSTOM_VC, NOC_MAX_BURST_SIZE>(
+                dram_bank, curr_page_size, {.bank_id = bank_id, .addr = tensor_base_address}, {.vc = vc});
 
             uint32_t src_read_addr = 0;
 
@@ -76,11 +78,7 @@ void kernel_main() {
 
             for (uint32_t block = 0; block < num_blocks; block++) {
                 // Every read of this block carries its staging slot's transaction id.
-                noc.set_async_read_state<NocOptions::CUSTOM_VC | NocOptions::TXN_ID, NOC_MAX_BURST_SIZE>(
-                    dram_bank,
-                    curr_page_size,
-                    {.bank_id = bank_id, .addr = tensor_base_address},
-                    {.vc = vc, .trid = curr_block_trid});
+                noc_async_read_set_trid(curr_block_trid, noc.get_noc_id());
 
                 // Issue noc async read commands for current block. Noc::async_read_with_state always counts
                 // the read as issued; performance mode skips that count (re-synced at exit), which only the
@@ -125,9 +123,8 @@ void kernel_main() {
     }
 
     // Leave the read command buffer untagged: in dynamic-NOC mode it is also an atomic buffer, whose
-    // packet tag the firmware requires to be zero before the next kernel. The Noc object sets a tag only
-    // along with a whole read state.
-    noc_async_read_set_trid(0);
+    // packet tag the firmware requires to be zero before the next kernel.
+    noc_async_read_set_trid(0, noc.get_noc_id());
 
     // In performance mode the reads skipped the NoC counters; re-sync them before exit. The writer shares
     // this NOC and, in dynamic-NOC mode, the counters, so wait until it has no traffic in flight.
