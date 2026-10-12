@@ -275,6 +275,8 @@ void kernel_main() {
     DataflowBuffer dfb_outgamma(dfb_outgamma_id);
     DataflowBuffer dfb_reread_out(dfb_reread_out_id);
     DataflowBuffer dfb_reread_write_out(dfb_reread_write_out_id);
+    DataflowBuffer dfb_scaler(dfb_scaler_id);
+    DataflowBuffer dfb_scaler_global(dfb_scaler_global_id);
     DataflowBuffer dfb_x(dfb_x_id);
     DataflowBuffer dfb_xmm(dfb_xmm_id);
 
@@ -1036,11 +1038,11 @@ void kernel_main() {
     // above; pop them here so they are left balanced. The scaler waits are not present in this
     // file: compute_kernel_lib::reduce waits one page on the buffer it is given as the scaler and
     // leaves it unpopped so that one pushed tile serves all of this kernel's reduce calls.
-    DataflowBuffer(dfb_scaler_id).pop_front(1);
+    dfb_scaler.pop_front(1);
     if constexpr (is_mcast_sender) {
         // The global-reduce scaler is waited only by the global reductions on the mcast sender;
         // pop it under the same guard that gated those reductions.
-        DataflowBuffer(dfb_scaler_global_id).pop_front(1);
+        dfb_scaler_global.pop_front(1);
     }
     // The epsilon tile is pushed once by the reader and re-waited on every group, so it is
     // popped once here to balance the buffer.

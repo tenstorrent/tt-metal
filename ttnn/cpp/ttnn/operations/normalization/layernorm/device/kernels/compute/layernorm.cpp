@@ -444,9 +444,9 @@ void kernel_main() {
     // so that sum never exceeds Wt and reaches Wt on the last block of a row. Pop Wt once here
     // rather than per block.
 #ifdef FUSE_GAMMA
-    DataflowBuffer(dfb_gamma_id).pop_front(Wt);
+    dfb_gamma.pop_front(Wt);
 #endif
 #ifdef FUSE_BETA
-    DataflowBuffer(dfb_beta_id).pop_front(Wt);
+    dfb_beta.pop_front(Wt);
 #endif
 }
