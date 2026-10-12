@@ -291,7 +291,12 @@ def test_decode_stage(mesh_device, seconds, mode):
     config = MiniMaxH3VaeConfig.from_pretrained(weights_dir)
     ccl_manager = CCLManager(mesh_device, num_links=2, topology=ttnn.Topology.Ring)
     vae = MiniMaxH3Vae(
-        config, task="t2va", mesh_device=mesh_device, ccl_manager=ccl_manager, **DECODE_STAGE_MODES[mode]
+        config,
+        task="t2va",
+        mesh_device=mesh_device,
+        ccl_manager=ccl_manager,
+        profile=os.environ.get("MINIMAX_H3_VAE_PROFILE") == "1",
+        **DECODE_STAGE_MODES[mode],
     )
     output_type = "yuv420" if mode.startswith("yuv420") else "float"
 
@@ -330,6 +335,95 @@ def test_decode_stage(mesh_device, seconds, mode):
         + f" waves={int(profile.get('waves', 0))} units={int(profile.get('units', 0))}"
         + f" readback_gb={profile.get('readback_mb', 0.0) / 1000:.2f}"
     )
+
+
+# ---- traced strip-stitch decode, off/on pair -----------------------------------------------
+#
+# Decodes the same latents untraced and traced (`traced_decode=True`) for each seed in
+# MINIMAX_H3_VAE_AB_SEEDS (default "0,1,2,3,4"), in one process so both arms share box and clock.
+# The traced arm must match bit for bit, or reach PSNR >= 40 dB and PCC >= 0.999.
+#   pytest models/tt_dit/tests/models/minimax_h3/test_performance_vae_minimax_h3.py -k decode_trace_ab -s
+
+MESH_4X8_RING_TRACE = [
+    pytest.param(
+        (4, 8),
+        {
+            "fabric_config": ttnn.FabricConfig.FABRIC_1D_RING,
+            "require_exact_physical_num_devices": True,
+            "l1_small_size": 65536,
+            "trace_region_size": 300_000_000,
+        },
+        id="4x8ring",
+    )
+]
+
+
+def _video_tensor(video) -> torch.Tensor:
+    """`decode` returns a planar uint8 numpy array for yuv420."""
+    return video if isinstance(video, torch.Tensor) else torch.from_numpy(video)
+
+
+@pytest.mark.timeout(3600)
+@pytest.mark.parametrize(
+    ("mesh_device", "device_params"), MESH_4X8_RING_TRACE, indirect=["mesh_device", "device_params"]
+)
+@pytest.mark.parametrize("seconds", [5, 15], ids=["5s", "15s"])
+def test_decode_trace_ab(mesh_device, seconds):
+    from loguru import logger
+
+    weights_dir = weights_subdir("vae")
+    if weights_dir is None:
+        pytest.skip("MiniMax-H3 vae not found; set MINIMAX_H3_MODEL_PATH")
+
+    config = MiniMaxH3VaeConfig.from_pretrained(weights_dir)
+    ccl_manager = CCLManager(mesh_device, num_links=2, topology=ttnn.Topology.Ring)
+    vae = MiniMaxH3Vae(
+        config, task="t2va", mesh_device=mesh_device, ccl_manager=ccl_manager, **DECODE_STAGE_MODES["yuv420"]
+    )
+    vae.load_state(_decode_stage_state(weights_dir))
+    latent_h, latent_w = DECODE_STAGE_LATENT_HW
+    seeds = [int(x) for x in os.environ.get("MINIMAX_H3_VAE_AB_SEEDS", "0,1,2,3,4").split(",")]
+
+    torch.manual_seed(0)
+    vae.decode(
+        torch.randn(1, config.latent_channels, DECODE_STAGE_WARM_FRAMES, latent_h, latent_w), output_type="yuv420"
+    )
+
+    failures = []
+    try:
+        for seed in seeds:
+            torch.manual_seed(seed)
+            latents = torch.randn(1, config.latent_channels, DECODE_STAGE_FRAMES[seconds], latent_h, latent_w)
+            arms = {}
+            for arm in ("off", "on"):
+                vae.traced_decode = arm == "on"
+                started = time.time()
+                video = vae.decode(latents, output_type="yuv420")
+                elapsed = time.time() - started
+                profile = dict(vae.last_decode_profile)
+                arms[arm] = _video_tensor(video).clone()
+                each = profile.get("dispatch_each") or [0.0]
+                logger.info(
+                    f"TRACE_AB seed={seed} seconds={seconds} arm={arm} total={elapsed:.3f}s "
+                    f"device={profile.get('device', 0.0):.3f} readback={profile.get('readback', 0.0):.3f} "
+                    f"readback_join={profile.get('readback_join', 0.0):.3f} waves={int(profile.get('waves', 0))} "
+                    f"dispatch_each_ms=[{' '.join(f'{v * 1000:.0f}' for v in each)}]"
+                )
+            off, on = arms["off"].float(), arms["on"].float()
+            identical = torch.equal(arms["off"], arms["on"])
+            mse = torch.mean((off - on) ** 2).item()
+            peak = float(off.abs().max().item()) or 1.0
+            psnr = float("inf") if mse == 0 else 10 * torch.log10(torch.tensor(peak**2 / mse)).item()
+            pcc = 1.0 if identical else torch.corrcoef(torch.stack([off.reshape(-1), on.reshape(-1)]))[0, 1].item()
+            logger.info(
+                f"TRACE_AB_QUALITY seed={seed} identical={identical} psnr={psnr:.2f} pcc={pcc:.6f} "
+                f"max_abs={float((off - on).abs().max().item()):.4f}"
+            )
+            if not identical and not (psnr >= 40 and pcc >= 0.999):
+                failures.append(seed)
+    finally:
+        vae.release_decode_trace()
+    assert not failures, f"traced decode diverged on seeds {failures}"
 
 
 # ---- whole-stage `encode` timing, per conditioning case --------------------------------------

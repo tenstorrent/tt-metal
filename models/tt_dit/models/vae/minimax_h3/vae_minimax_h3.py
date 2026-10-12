@@ -44,6 +44,7 @@ from loguru import logger
 import ttnn
 
 from ....utils.tensor import fast_device_to_host, float_to_uint8, local_device_to_torch
+from ....utils.tracing import Tracer
 from ....utils.yuv_d2h import fast_device_to_host_yuv, replicated_to_host_yuv
 from .encoder_minimax_h3 import MiniMaxH3Encoder3d
 
@@ -357,6 +358,7 @@ class MiniMaxH3Vae:
         readback_uint8: bool = False,
         waves_per_device: int = 1,
         stitch_exchange: str = "strips",
+        traced_decode: bool = False,
     ) -> None:
         if task not in ("t2va", "ref2va"):
             raise ValueError(f"task must be 't2va' (also serves fl2va) or 'ref2va', got {task!r}")
@@ -393,6 +395,11 @@ class MiniMaxH3Vae:
         # Synchronize after each decode forward so `device` and `readback` are separable in the
         # profile -- which also serializes them, so it is opt-in.
         self.profile = profile
+        # Replay the strip stitch's per-wave decoder + unpatchify + column stitch from a trace instead
+        # of dispatching it op by op. The trace bakes the decoder's weight addresses, so a caller that
+        # moves the decoder's weights must call `release_decode_trace` first.
+        self.traced_decode = traced_decode
+        self._wave_trace: tuple | None = None
         assert waves_per_device >= 1, f"waves_per_device must be >= 1, got {waves_per_device}"
         self.waves_per_device = waves_per_device
         self.log_profile = True
@@ -496,6 +503,14 @@ class MiniMaxH3Vae:
             state, pixel_denorm=self.pixel_denorm, out_channels=self.config.out_channels
         )
 
+    def release_decode_trace(self) -> None:
+        if self._wave_trace is not None:
+            _, tracer, held = self._wave_trace
+            self._wave_trace = None
+            tracer.release_trace()
+            for kept in held:
+                ttnn.deallocate(kept)
+
     @staticmethod
     def _empty_profile() -> dict[str, float]:
         return {
@@ -514,6 +529,8 @@ class MiniMaxH3Vae:
             "readback_join": 0.0,
             "readback_each": [],
             "device_each": [],
+            "dispatch_each": [],
+            "wait_each": [],
         }
 
     def _read_wave_units(self, wave: ttnn.Tensor) -> torch.Tensor:
@@ -574,13 +591,14 @@ class MiniMaxH3Vae:
                 f"{sorted(each)[len(each) // 2] * 1000:.0f} / max {max(each) * 1000:.0f} ms  "
                 f"[{' '.join(f'{v * 1000:.0f}' for v in each)}]  on {p.get('shape')} {p.get('dtype')}"
             )
-        each_d = p.get("device_each") or []
-        if each_d:
-            logger.info(
-                f"    device   per wave: min {min(each_d) * 1000:.0f} / median "
-                f"{sorted(each_d)[len(each_d) // 2] * 1000:.0f} / max {max(each_d) * 1000:.0f} ms  "
-                f"[{' '.join(f'{v * 1000:.0f}' for v in each_d)}]"
-            )
+        for label, key in (("device  ", "device_each"), ("dispatch", "dispatch_each"), ("wait    ", "wait_each")):
+            each_d = p.get(key) or []
+            if each_d:
+                logger.info(
+                    f"    {label} per wave: min {min(each_d) * 1000:.0f} / median "
+                    f"{sorted(each_d)[len(each_d) // 2] * 1000:.0f} / max {max(each_d) * 1000:.0f} ms  "
+                    f"[{' '.join(f'{v * 1000:.0f}' for v in each_d)}]"
+                )
         waves, units = int(p["waves"]), int(p["units"])
         logger.info(
             f"VAE decode profile: {total:.2f} s over {waves} waves / {units} units "
@@ -1261,12 +1279,9 @@ class MiniMaxH3Vae:
                 canvases.append(pending.pop(0).result())
                 profile["readback_join"] += time.perf_counter() - mark
 
-        staged = stage(waves[0])
-        for wave_index, wave in enumerate(waves):
-            n_units, (num_frames, height, width), tokens = staged
-            staged = None
+        num_frames, height, width = decoder.latent_shape
 
-            mark = time.perf_counter()
+        def column_stage(tokens):
             decoded = decoder(tokens)
             decoded = ttnn.typecast(decoded, ttnn.float32)
             pixels = self._unpatchify(decoded, num_frames, height, width)
@@ -1281,6 +1296,47 @@ class MiniMaxH3Vae:
                 edge = ttnn.mesh_partition(edge, dim=-2, cluster_axis=0)
                 edges = ttnn.all_gather(edge, 0, cluster_axis=1, topology=ttnn.Topology.Ring)
                 ttnn.deallocate(edge)
+            return strips, edges
+
+        traced = self.traced_decode
+        trace_key = (decoder.latent_shape, grid_rows, grid_cols, tuple(y_overlaps), tuple(x_overlaps), edge_width)
+        if traced and self._wave_trace is not None and self._wave_trace[0] != trace_key:
+            self.release_decode_trace()
+
+        def run_wave(tokens):
+            """`(strips, edges, replayed)`; replayed outputs belong to the trace and are overwritten by the next replay."""
+            if not traced:
+                return (*column_stage(tokens), False)
+            if self._wave_trace is None:
+                # The first wave runs eagerly: it builds the stitcher's ramps and the readback's
+                # constants, which would otherwise be written mid-capture. Held strips must outlive
+                # replays, and a tensor allocated after capture can sit where a replay writes its
+                # intermediates, so their slots are allocated now.
+                strips, edges = column_stage(tokens)
+                held = []
+                if dense:
+                    held = [entry(strips, grid_cols) for _ in range(grid_cols)]
+                    if edges is not None:
+                        held += [entry(edges, grid_cols) for _ in range(grid_cols)]
+                tracer = Tracer(column_stage, device=self.mesh_device, prep_run=False, clone_prep_inputs=False)
+                self._wave_trace = (trace_key, tracer, held)
+                return strips, edges, False
+            strips, edges = self._wave_trace[1](tokens, tracer_blocking_execution=False)
+            return strips, edges, True
+
+        staged = stage(waves[0])
+        for wave_index, wave in enumerate(waves):
+            n_units, _, tokens = staged
+            staged = None
+
+            mark = time.perf_counter()
+            strips, edges, replayed = run_wave(tokens)
+            elapsed = time.perf_counter() - mark
+            profile["dispatch_each"].append(elapsed)
+            if self.profile:
+                mark_wait = time.perf_counter()
+                ttnn.synchronize_device(self.mesh_device)
+                profile["wait_each"].append(time.perf_counter() - mark_wait)
             elapsed = time.perf_counter() - mark
             profile["device"] += elapsed
             profile["waves"] += 1
@@ -1290,25 +1346,36 @@ class MiniMaxH3Vae:
                 staged = stage(waves[wave_index + 1])
 
             for k in range(len(wave["mains"])):
-                readback(row_stage(strips, edges, k * grid_cols), str(pixels.dtype))
+                readback(row_stage(strips, edges, k * grid_cols), str(strips.dtype))
             if wave["extra"] is not None:
-                held_strips.append(entry(strips, grid_cols))
+                kept = [entry(strips, grid_cols)] + ([entry(edges, grid_cols)] if edges is not None else [])
+                if traced:
+                    slots = self._wave_trace[2]
+                    n = len(held_strips)
+                    targets = [slots[n]] + ([slots[grid_cols + n]] if edges is not None else [])
+                    for src, dst in zip(kept, targets):
+                        ttnn.copy(src, dst)
+                        ttnn.deallocate(src)
+                    kept = targets
+                held_strips.append(kept[0])
                 if edges is not None:
-                    held_edges.append(entry(edges, grid_cols))
-            ttnn.deallocate(strips)
-            if edges is not None:
-                ttnn.deallocate(edges)
+                    held_edges.append(kept[1])
+            if not replayed:
+                ttnn.deallocate(strips)
+                if edges is not None:
+                    ttnn.deallocate(edges)
             if wave["flush"]:
                 strips_e = ttnn.concat(held_strips, dim=0)
                 edges_e = ttnn.concat(held_edges, dim=0) if held_edges else None
-                for kept in held_strips + held_edges:
-                    ttnn.deallocate(kept)
+                if not traced:
+                    for kept in held_strips + held_edges:
+                        ttnn.deallocate(kept)
                 held_strips, held_edges = [], []
                 canvas_rows = row_stage(strips_e, edges_e, 0)
                 ttnn.deallocate(strips_e)
                 if edges_e is not None:
                     ttnn.deallocate(edges_e)
-                readback(canvas_rows, str(pixels.dtype))
+                readback(canvas_rows, str(strips.dtype))
         if pending:
             mark = time.perf_counter()
             canvases.extend(future.result() for future in pending)
