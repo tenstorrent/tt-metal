@@ -92,6 +92,29 @@ constexpr bool PERF_PACK_SECTION_RELEASE = false;
 #define LLK_PERF_OPAQUE(v)
 #endif
 
+// experiment hooks (holdall, mockfix): LLK_HA_MOCK_NOPS_U / _M = k RISC nops per handshake of the RISC-V loop unpack / math
+// mock; LLK_MF_RNOPS = k RISC nops before every MOP the Wormhole MOP mock pushes; LLK_MF_TNOPS: its kind0 handshakes carry
+// three Tensix NOPs
+#define LLK_HA_XSTR_(x) #x
+#define LLK_HA_XSTR(x)  LLK_HA_XSTR_(x)
+#if defined(LLK_HA_MOCK_NOPS_U)
+#define LLK_HA_MOCK_U_() asm volatile(".rept " LLK_HA_XSTR(LLK_HA_MOCK_NOPS_U) "\n\tnop\n\t.endr")
+#else
+#define LLK_HA_MOCK_U_()
+#endif
+#if defined(LLK_HA_MOCK_NOPS_M)
+#define LLK_HA_MOCK_M_() asm volatile(".rept " LLK_HA_XSTR(LLK_HA_MOCK_NOPS_M) "\n\tnop\n\t.endr")
+#else
+#define LLK_HA_MOCK_M_()
+#endif
+#if defined(LLK_MF_RNOPS)
+#define LLK_MF_PUSH_() asm volatile(".rept " LLK_HA_XSTR(LLK_MF_RNOPS) "\n\tnop\n\t.endr")
+#elif defined(LLK_MF_DELAY) // a spin of LLK_MF_DELAY iterations: the same code for every value, so only the work changes
+#define LLK_MF_PUSH_() asm volatile("li t0, %0\n1:\n\tbeqz t0, 2f\n\taddi t0, t0, -1\n\tj 1b\n2:" : : "i"(LLK_MF_DELAY) : "t0")
+#else
+#define LLK_MF_PUSH_()
+#endif
+
 // The run types whose source mock goes through the MOP expander: on Wormhole, MATH_ISOLATE's unpack mock and
 // UNPACK_ISOLATE's math mock, and every L1_CONGESTION mock. Blackhole and Quasar keep the RISC-V loop mocks below.
 // A mock call site shared by UNPACK_ISOLATE and L1_CONGESTION whose UNPACK_ISOLATE mock keeps the RISC-V loop: only
@@ -145,7 +168,19 @@ inline void program(const std::uint32_t kind0, const std::uint32_t kind1, const 
 {
     volatile std::uint32_t* mop_cfg = reinterpret_cast<volatile std::uint32_t*>(TENSIX_MOP_CFG_BASE);
     ckernel::mop_sync(); // no expansion in flight while the template changes
-    mop_cfg[1] = 1;      // the B instruction, no A1-A3
+#if defined(LLK_MF_TNOPS)
+    mop_cfg[1] = 3; // experiment hook: A1-A3 = NOP
+    mop_cfg[4] = TT_OP_NOP;
+    mop_cfg[5] = TT_OP_NOP;
+    mop_cfg[6] = TT_OP_NOP;
+#elif defined(LLK_MF_LAG)
+    mop_cfg[1] = 3; // experiment hook: A1 = a second STALLWAIT, met at once (no unpacker 0 instruction of this thread): +latch +lag
+    mop_cfg[4] = TT_OP_STALLWAIT(PRODUCE ? ckernel::p_stall::STALL_TDMA : ckernel::p_stall::STALL_MATH, ckernel::p_stall::UNPACK0);
+    mop_cfg[5] = TT_OP_NOP;
+    mop_cfg[6] = TT_OP_NOP;
+#else
+    mop_cfg[1] = 1; // the B instruction, no A1-A3
+#endif
     mop_cfg[2] = flip_op<PRODUCE>(kind0);
     mop_cfg[3] = wait_op<PRODUCE>(kind0);
     mop_cfg[7] = wait_op<PRODUCE>(kind1);
@@ -224,6 +259,7 @@ inline bool segments(const std::uint32_t once, const std::uint32_t burst, const 
     }
     for (std::uint32_t i = 0; i < mops; i++)
     {
+        LLK_MF_PUSH_();
         TTI_MOP(1, 0, 0);
     }
     return true;
@@ -236,10 +272,12 @@ inline void run(const std::uint32_t kind, std::uint32_t count)
     program<PRODUCE>(kind, kind, 0);
     for (; count >= 128; count -= 128)
     {
+        LLK_MF_PUSH_();
         TTI_MOP(0, 127, 0);
     }
     if (count != 0)
     {
+        LLK_MF_PUSH_();
         TT_MOP(0, count - 1, 0);
     }
 }
@@ -259,10 +297,12 @@ inline void stream(const std::uint32_t kind0, const std::uint32_t kind1, const s
     const std::uint32_t mop = TT_OP_MOP(0, per_mop * period - 1, mask & 0xFFFF);
     for (; periods >= per_mop; periods -= per_mop)
     {
+        LLK_MF_PUSH_();
         ckernel::instrn_buffer[0] = mop;
     }
     if (periods != 0)
     {
+        LLK_MF_PUSH_();
         TT_MOP(0, periods * period - 1, mask & 0xFFFF);
     }
 }
@@ -307,16 +347,19 @@ inline void matmul(
             const std::uint32_t burst = std::min(static_cast<std::uint32_t>(2), reuse_loop - reuse_iter);
             if constexpr (PRODUCE)
             {
+                LLK_MF_PUSH_();
                 TT_MOP(0, burst - 1, (1u << burst) - 1);
             }
             for (std::uint32_t left = reload_loop; left != 0;)
             {
                 const std::uint32_t count = std::min(left, static_cast<std::uint32_t>(128));
+                LLK_MF_PUSH_();
                 TT_MOP(0, count - 1, 0);
                 left -= count;
             }
             if constexpr (!PRODUCE)
             {
+                LLK_MF_PUSH_();
                 TT_MOP(0, burst - 1, (1u << burst) - 1);
             }
         }
@@ -340,16 +383,19 @@ inline void srcb_reuse(const std::uint32_t a_count, std::uint32_t periods)
     {
         if constexpr (PRODUCE)
         {
+            LLK_MF_PUSH_();
             TTI_MOP(0, 0, 1);
         }
         for (std::uint32_t left = a_count; left != 0;)
         {
             const std::uint32_t count = std::min(left, static_cast<std::uint32_t>(128));
+            LLK_MF_PUSH_();
             TT_MOP(0, count - 1, 0);
             left -= count;
         }
         if constexpr (!PRODUCE)
         {
+            LLK_MF_PUSH_();
             TTI_MOP(0, 0, 1);
         }
     }
@@ -380,6 +426,7 @@ inline void _perf_mock_binary_(const std::uint32_t tiles, const std::uint32_t nu
 
 inline void _perf_unpack_set_valid(std::uint32_t source)
 {
+    LLK_HA_MOCK_U_();
     std::uint32_t set_a = source == ckernel::SrcA ? 1 : 0;
     std::uint32_t set_b = source == ckernel::SrcB ? 1 : 0;
 
@@ -410,6 +457,7 @@ inline void _perf_unpack_set_valid(std::uint32_t source)
 
 inline void _perf_math_clear_valid(std::uint32_t source)
 {
+    LLK_HA_MOCK_M_();
     std::uint32_t clear_a = source == ckernel::SrcA ? 1 : 0;
     std::uint32_t clear_b = source == ckernel::SrcB ? 1 : 0;
 
@@ -439,6 +487,7 @@ inline void _perf_unpack_loop_set_valid(std::uint32_t iterations)
 #endif
     while (iterations-- > 0)
     {
+        LLK_HA_MOCK_U_();
         constexpr std::uint32_t cond_clear_a = set_a ? ckernel::p_stall::SRCA_CLR : 0;
         constexpr std::uint32_t cond_clear_b = set_b ? ckernel::p_stall::SRCB_CLR : 0;
 
@@ -472,6 +521,7 @@ inline void _perf_math_loop_clear_valid(std::uint32_t iterations)
 #endif
     while (iterations-- > 0)
     {
+        LLK_HA_MOCK_M_();
         constexpr std::uint32_t cond_valid_a = clear_a ? ckernel::p_stall::SRCA_VLD : 0;
         constexpr std::uint32_t cond_valid_b = clear_b ? ckernel::p_stall::SRCB_VLD : 0;
 #ifdef ARCH_QUASAR
@@ -637,3 +687,31 @@ inline void _perf_math_matmul_mock(std::uint32_t loop_factor, std::uint32_t rt_d
         }
     }
 }
+
+// experiment hooks (final): nikola's loop shift (B) and congpr's per-call NOPs; each expands to nothing without its flag
+#define LLK_EXPH_XSTR_(x) #x
+#define LLK_EXPH_XSTR(x)  LLK_EXPH_XSTR_(x)
+#if defined(LLK_NK_LOOPSHIFT)
+#define LLK_NK_LOOPSHIFT_HOOK() asm volatile(".rept " LLK_EXPH_XSTR(LLK_NK_LOOPSHIFT) "\n\tnop\n\t.endr")
+#else
+#define LLK_NK_LOOPSHIFT_HOOK() \
+    do                          \
+    {                           \
+    } while (0)
+#endif
+#if defined(LLK_EXP_UNOP)
+#define LLK_EXP_UNOP_HOOK() asm volatile(".rept " LLK_EXPH_XSTR(LLK_EXP_UNOP) "\n\tnop\n\t.endr")
+#else
+#define LLK_EXP_UNOP_HOOK() \
+    do                      \
+    {                       \
+    } while (0)
+#endif
+#if defined(LLK_EXP_PNOP)
+#define LLK_EXP_PNOP_HOOK() asm volatile(".rept " LLK_EXPH_XSTR(LLK_EXP_PNOP) "\n\tnop\n\t.endr")
+#else
+#define LLK_EXP_PNOP_HOOK() \
+    do                      \
+    {                       \
+    } while (0)
+#endif
