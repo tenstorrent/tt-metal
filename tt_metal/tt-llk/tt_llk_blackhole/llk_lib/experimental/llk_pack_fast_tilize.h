@@ -241,22 +241,25 @@ inline void _llk_pack_fast_tilize_l1_step_mop_config_(const std::uint32_t unit_d
     _llk_pack_fast_tilize_mop_config_(unit_dim, output_16b && (unit_dim == 2));
 }
 
-template <DstSync Dst, bool output_16b>
+template <DstSync Dst, bool output_16b, bool program_mop>
 __attribute__((noinline)) void _llk_pack_fast_tilize_l1_step_init_(
     const std::uint32_t pack_dst_format, const std::uint32_t unit_dim, const std::uint32_t pack_src_format)
 {
     _llk_pack_fast_tilize_configure_<Dst, false>(pack_dst_format, 4, pack_src_format);
     _llk_pack_fast_tilize_configure_addrmod_();
     _llk_pack_fast_tilize_load_l1_step_replay_();
-    _llk_pack_fast_tilize_l1_step_mop_config_<output_16b>(unit_dim);
-    // After the MOP program, whose sync then does not wait on it; the register's high half is zero, as the WRCFG
-    // address-update replay's ADDDMAREG also requires.
+    if constexpr (program_mop)
+    {
+        _llk_pack_fast_tilize_l1_step_mop_config_<output_16b>(unit_dim);
+    }
+    // Last, so a MOP program's sync does not wait on it; the register's high half is zero, as the WRCFG address-update
+    // replay's ADDDMAREG also requires.
     TTI_WRCFG(p_gpr_pack::OUTPUT_ADDR_OFFSET, 0, SCRATCH_SEC2_val_ADDR32);
 }
 
 // For callers that know the input's L1 format: a 16-bit input through a 16-bit DEST takes the L1 step, a 32-bit input or
 // DEST the init above. With compile-time formats only one of them is compiled in.
-template <DstSync Dst, bool is_fp32_dest_acc_en>
+template <DstSync Dst, bool is_fp32_dest_acc_en, bool program_mop = true>
 TT_ALWAYS_INLINE void _llk_pack_fast_tilize_init_(
     const std::uint32_t use_32bit_dest,
     const std::uint32_t pack_dst_format,
@@ -275,11 +278,11 @@ TT_ALWAYS_INLINE void _llk_pack_fast_tilize_init_(
     }
     else if (datum_size_in_bytes(pack_dst_format) == 2)
     {
-        _llk_pack_fast_tilize_l1_step_init_<Dst, true>(pack_dst_format, unit_dim, pack_src_format);
+        _llk_pack_fast_tilize_l1_step_init_<Dst, true, program_mop>(pack_dst_format, unit_dim, pack_src_format);
     }
     else
     {
-        _llk_pack_fast_tilize_l1_step_init_<Dst, false>(pack_dst_format, unit_dim, pack_src_format);
+        _llk_pack_fast_tilize_l1_step_init_<Dst, false, program_mop>(pack_dst_format, unit_dim, pack_src_format);
     }
 }
 

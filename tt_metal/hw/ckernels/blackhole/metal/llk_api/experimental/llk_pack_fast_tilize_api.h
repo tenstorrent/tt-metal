@@ -23,7 +23,8 @@ inline void llk_pack_fast_tilize_init(
     // pack_dst_format holds every CB's L1 format, the input's included
     const bool input_32b = pack_dst_format[get_output_id(input_operand)] == (uint)DataFormat::Float32;
     LLK_ASSERT_BLOCK(pack_fast_tilize_two_tile_row = false);
-    _llk_pack_fast_tilize_init_<DST_SYNC_MODE, is_fp32_dest_acc_en>(
+    // The L1 step leaves the MOP to fast_tilize_block, which programs it at the entry of every block.
+    _llk_pack_fast_tilize_init_<DST_SYNC_MODE, is_fp32_dest_acc_en, false>(
         use_32bit_dest, pack_dst_format[output_id], unit_dim, num_faces, pack_src_format[output_id], input_32b);
 }
 
