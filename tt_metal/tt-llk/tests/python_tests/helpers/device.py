@@ -288,6 +288,25 @@ def host_signal_address(slot: int) -> int | None:
     return 0xFFB40000 + slot * 0x1000 + index * 4
 
 
+# The zones a perf launch counts (counters.h counted_zones), a register the host writes before every launch: STREAM_SCRATCH_1
+# of overlay stream 0 on Wormhole and Blackhole, TT_CLUSTER_CTRL_SCRATCH_27 on Quasar.
+_COUNTED_ZONES_SCRATCH_INDEX = {
+    ChipArchitecture.WORMHOLE: 249,
+    ChipArchitecture.BLACKHOLE: 37,
+}
+_QUASAR_COUNTED_ZONES = 0x030000AC
+
+
+def counted_zones_address() -> int | None:
+    """Address of the counted zones register, or None on targets that do not model it (ttsim)."""
+    if host_signal_address(0) is None:
+        return None
+    arch = get_chip_architecture()
+    if arch == ChipArchitecture.QUASAR:
+        return _QUASAR_COUNTED_ZONES
+    return 0xFFB40000 + _COUNTED_ZONES_SCRATCH_INDEX[arch] * 4
+
+
 def commit_brisc_command(
     location="0,0", command: BriscCmd = BriscCmd.IDLE_STATE, timeout=1
 ):

@@ -1394,6 +1394,8 @@ class TestConfig:
             "init_launch",
             # Which run types' variants also build the INIT measurement ELFs (perf/core.py); the variant is the same.
             "init_run_types",
+            # Which zones a launch counts, a register the host writes before it (counters.h counted_zones).
+            "counted_zones",
         ]
 
         if not TestConfig.SPEED_OF_LIGHT:
@@ -2522,6 +2524,16 @@ class TestConfig:
             str((VARIANT_ELF_DIR / f"{trisc_name}.elf").absolute())
             for trisc_name in TestConfig.KERNEL_COMPONENTS
         ]
+
+        # every launch names the zones it counts (counters.h counted_zones), 0 unless a perf run counts them
+        counted_zones_reg = device_module.counted_zones_address()
+        if counted_zones_reg is not None:
+            write_words_to_device(
+                TestConfig.TENSIX_LOCATION,
+                counted_zones_reg,
+                [getattr(self, "counted_zones", 0)],
+                safe_mode=False,  # a register, as host_signal's (device.py reset_mailboxes)
+            )
 
         if TestConfig.LAST_LOADED_ELFS != VARIANT_ELF_DIR:
             TestConfig.LAST_LOADED_ELFS = VARIANT_ELF_DIR

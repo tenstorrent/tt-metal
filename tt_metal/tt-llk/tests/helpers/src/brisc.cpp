@@ -359,8 +359,15 @@ int main()
 
                 device_setup();
 
-                // Configure + arm counters before releasing TRISCs (no-op in NC builds).
+                // Configure + arm counters before releasing TRISCs (only when the launch counts a zone).
                 llk_perf::configure_and_arm_from_brisc();
+#if defined(ARCH_BLACKHOLE)
+                // Every L1 bank's round robin pointer last granted BRISC, whatever L1 traffic the configure did
+                for (std::uint32_t addr = 16; addr <= 1024; addr += 16) // not 0: -Wnull-dereference
+                {
+                    (void)*reinterpret_cast<volatile std::uint32_t*>(addr);
+                }
+#endif
 
                 clear_trisc_soft_reset();
 
