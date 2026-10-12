@@ -31,6 +31,7 @@ std::array<Tensor, 2> moe_grouped_topk(
     const std::optional<MemoryConfig>& output_mem_config = std::nullopt,
     const std::optional<Tensor>& padding_config = std::nullopt,
     const std::optional<Tensor>& biased_scores = std::nullopt,
-    tt::tt_metal::Layout weights_layout = tt::tt_metal::Layout::TILE);
+    tt::tt_metal::Layout weights_layout = tt::tt_metal::Layout::TILE,
+    bool fp32_selection = false);
 
 }  // namespace ttnn::operations::experimental::deepseek_prefill::moe_grouped_topk
