@@ -81,11 +81,23 @@ class MiniMaxH3VSAConfig:
     # build the `to_gate_compress` linear (O_c branch). The base checkpoint has none, so the default
     # leaves it out and the model keeps the dense weight-cache layout.
     gate_compress: bool = False
+    # block selection: "vsa" (FastVideo: 4x4x4 video cubes, prefix tiles exempt) | "sla" (LightX2V SLA, for
+    # the Minimax-h3-Turbo-SLA LoRA: raster 64-token blocks over the whole packed sequence, nothing exempt,
+    # floor top-k; build the geometry with build_sla_geometry)
+    selection: str = "vsa"
+
+
+VSA_SELECTIONS = ("vsa", "sla")
 
 
 def compute_topk(sparsity: float, num_candidates: int) -> int:
     """Candidate tiles to keep; FastVideo's compute_topk, clamped to [1, n]."""
     return max(1, min(math.ceil((1 - sparsity) * num_candidates), num_candidates))
+
+
+def compute_topk_sla(sparsity: float, num_blocks: int) -> int:
+    """LightX2V get_block_map's top-k: int(topk_ratio * K) floored, topk_ratio = 1 - sparsity, clamped to [1, K]."""
+    return max(1, min(num_blocks, int((1 - sparsity) * num_blocks)))
 
 
 def _round_up(value: int, multiple: int) -> int:
@@ -100,6 +112,7 @@ class MiniMaxH3VSACoarseStage:
         geometry: MiniMaxH3VSAGeometry,
         *,
         sparsity: float,
+        selection: str = "vsa",
         padded_pooling: bool = False,
         head_dim: int,
         mesh_device: ttnn.MeshDevice,
@@ -120,7 +133,13 @@ class MiniMaxH3VSACoarseStage:
         real_ids = torch.nonzero(geometry.valid_counts > 0, as_tuple=False).reshape(-1)
         self.n_exempt = int(exempt_ids.numel())
         self.n_candidates = int(geometry.is_candidate.sum())
-        self.k = compute_topk(sparsity, self.n_candidates)
+        if selection not in VSA_SELECTIONS:
+            raise ValueError(f"selection must be one of {VSA_SELECTIONS}, got {selection!r}")
+        if selection == "sla" and self.n_exempt:
+            raise ValueError("SLA selection exempts nothing: build the geometry with build_sla_geometry")
+        self.selection = selection
+        topk = compute_topk_sla if selection == "sla" else compute_topk
+        self.k = topk(sparsity, self.n_candidates)
         self.k_pad = max(_TOPK_K_MULTIPLE, _round_up(self.k, _TOPK_K_MULTIPLE))
         # Index width: global tile count, padded so W*4 bytes meets DRAM row alignment and the
         # static row layout [exempt | top-k | sentinel tail] fits.
@@ -231,7 +250,7 @@ class MiniMaxH3VSACoarseStage:
         prefix = (
             self._host_exempt_ids.to(torch.int32).reshape(1, 1, 1, -1).expand(geometry.sp_factor, num_heads, rows, -1)
         )
-        self.exempt_prefix = upload(prefix, ttnn.uint32, ttnn.Layout.ROW_MAJOR)
+        self.exempt_prefix = upload(prefix, ttnn.uint32, ttnn.Layout.ROW_MAJOR) if self.n_exempt else None
 
         # [sp, H, rows, tail] sentinel tail (absent when exempt + top-k fill the row exactly)
         tail = w - self.n_exempt - self.k
@@ -405,7 +424,7 @@ class MiniMaxH3VSACoarseStage:
         if self.k != self.k_pad:
             topk_ids = ttnn.slice(topk_ids, [0, 0, 0, 0], [1, num_heads, self.geometry.tiles_per_shard, self.k])
 
-        parts = [self.exempt_prefix, topk_ids] + ([self.sentinel_tail] if self.sentinel_tail is not None else [])
+        parts = [p for p in (self.exempt_prefix, topk_ids, self.sentinel_tail) if p is not None]
         sparse_rows = ttnn.concat(parts, dim=-1)  # [1, H, rows, W]
         ttnn.deallocate(topk_ids)
 

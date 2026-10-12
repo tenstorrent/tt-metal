@@ -470,16 +470,23 @@ class MiniMaxH3Output:
 
 
 def _vsa_config_from_env():
-    """MiniMaxH3VSAConfig from MINIMAX_H3_VSA_SPARSITY, or None (dense) when unset or empty."""
+    """MiniMaxH3VSAConfig from MINIMAX_H3_VSA_SPARSITY, or None (dense) when unset or empty.
+
+    MINIMAX_H3_VSA_MODE picks the block selection: "vsa" (default) or "sla" (LightX2V SLA, for the
+    Minimax-h3-Turbo-SLA LoRA).
+    """
     raw = os.environ.get("MINIMAX_H3_VSA_SPARSITY", "").strip()
     if not raw:
         return None
     sparsity = float(raw)
     if not 0.0 <= sparsity < 1.0:
         raise ValueError(f"MINIMAX_H3_VSA_SPARSITY must be in [0, 1), got {raw!r}")
-    from ...models.transformers.minimax_h3.vsa_stages_minimax_h3 import MiniMaxH3VSAConfig
+    from ...models.transformers.minimax_h3.vsa_stages_minimax_h3 import VSA_SELECTIONS, MiniMaxH3VSAConfig
 
-    return MiniMaxH3VSAConfig(sparsity=sparsity)
+    selection = os.environ.get("MINIMAX_H3_VSA_MODE", "").strip() or "vsa"
+    if selection not in VSA_SELECTIONS:
+        raise ValueError(f"MINIMAX_H3_VSA_MODE must be one of {VSA_SELECTIONS}, got {selection!r}")
+    return MiniMaxH3VSAConfig(sparsity=sparsity, selection=selection)
 
 
 def _is_host_rank() -> bool:
@@ -1463,7 +1470,7 @@ class MiniMaxH3Pipeline:
         per geometry, never freed, because a captured trace replays the stage's device tensors.
         """
         from ...models.transformers.minimax_h3.vsa_stages_minimax_h3 import MiniMaxH3VSACoarseStage
-        from .vsa_geometry import build_vsa_geometry
+        from .vsa_geometry import build_sla_geometry, build_vsa_geometry
 
         if layout.num_condition_audio_rows:
             raise NotImplementedError("VSA supports t2va/fl2va layouts only (no audio condition rows)")
@@ -1478,12 +1485,16 @@ class MiniMaxH3Pipeline:
         signature = (n_text, n_cond, a_target, grid)
         stage = self._vsa_stages.get(signature)
         if stage is None:
-            geometry = build_vsa_geometry(
-                (n_text, n_cond, a_target), grid, sp_factor=self.sp_factor, placement=self.vsa_config.placement
-            )
+            if self.vsa_config.selection == "sla":
+                geometry = build_sla_geometry(layout.sequence_length, grid, sp_factor=self.sp_factor)
+            else:
+                geometry = build_vsa_geometry(
+                    (n_text, n_cond, a_target), grid, sp_factor=self.sp_factor, placement=self.vsa_config.placement
+                )
             stage = MiniMaxH3VSACoarseStage(
                 geometry,
                 sparsity=self.vsa_config.sparsity,
+                selection=self.vsa_config.selection,
                 padded_pooling=self.vsa_config.padded_pooling,
                 head_dim=self.transformer_config["attention_head_dim"],
                 mesh_device=self.mesh_device,
@@ -1493,7 +1504,8 @@ class MiniMaxH3Pipeline:
             self._vsa_stages[signature] = stage
             self._log(
                 f"VSA geometry: {geometry.n_tiles} tiles ({geometry.n_pad_tiles} pad), "
-                f"k={stage.k} of {stage.n_candidates} candidates, sparsity={self.vsa_config.sparsity}"
+                f"k={stage.k} of {stage.n_candidates} candidates, sparsity={self.vsa_config.sparsity}, "
+                f"selection={self.vsa_config.selection}"
             )
         self._transformer.set_vsa_stage(stage)
         return stage.geometry
