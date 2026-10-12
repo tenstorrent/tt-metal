@@ -57,6 +57,16 @@ SECTIONS
      loader writes only .init and .text (ElfLoader.SECTIONS_TO_LOAD), so this stays in .init. */
   .init __firmware_start :
   {
+    /* INIT measurement build (LLK_PERF_INIT_ONLY): the loader starts the core at .init's first word, a jump to _start
+       (kernel_placement.h); then the helpers INIT calls (.text.llk_init_callee.<n>: the functions GCC left out of line,
+       test_config.py), INIT's body, the zone around it, at llk_init_region_at ahead of the harness, main and the kernel,
+       so no code outside INIT moves them (empty in every other build) */
+    *(.text.llk_init_entry)
+    . = DEFINED(llk_init_region_at) ? llk_init_region_at : .; /* inside the section: an offset from its start */
+    *(.text.llk_init_callee .text.llk_init_callee.*)
+    *(.llk_init_body)
+    PROVIDE (__llk_init_body_end = .); /* counters.h: math's TRISC_END_PC */
+    *(.llk_init_tramp)
     KEEP (*(SORT_NONE(.init)))
     . = ALIGN(256);
     *(.text.llk_zone.reserve)
