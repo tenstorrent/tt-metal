@@ -180,12 +180,36 @@ Conv3dL1Plan plan_l1(const Conv3dCbGeometry& g, uint32_t l1_usable_for_cbs) {
         plan.out_subblock_h = shrunk;
     }
 
+    // The loop stops at out_subblock_h=1 whether or not the CBs fit. Fail here, where the message can say what
+    // was asked for, rather than at enqueue where only the region clash is reported; and say when the fit is
+    // inside the slack, since a small move of the L1 frontier then fails the next call.
+    const uint32_t static_cb_bytes = static_cb_bytes_for(plan.out_subblock_h);
+    TT_FATAL(
+        static_cb_bytes <= l1_usable_for_cbs,
+        "conv3d: the static circular buffers need {} B at out_subblock_h={} (M_t={}, K_t={}, N_t={}, C_in blocks={}) "
+        "but only {} B of L1 are free for them; shrink the blocking or free L1 before the call",
+        static_cb_bytes,
+        plan.out_subblock_h,
+        g.matmul_M_t,
+        g.matmul_K_t,
+        g.matmul_N_t,
+        g.C_in_num_blocks,
+        l1_usable_for_cbs);
+    if (static_cb_bytes + L1_STATIC_CB_SLACK > l1_usable_for_cbs) {
+        log_warning(
+            tt::LogOp,
+            "conv3d: the static circular buffers ({} B at out_subblock_h={}) fit the {} B of free L1 with less than "
+            "{} B to spare; any L1 tensor allocated before the next call can fail it",
+            static_cb_bytes,
+            plan.out_subblock_h,
+            l1_usable_for_cbs,
+            L1_STATIC_CB_SLACK);
+    }
+
     // L1 pre-fetch buffer for kernels > 1x1x1 with no dilation: gathers the spatial receptive field from DRAM
     // once per spatial block, then vol2col reads from L1. Budget: the L1 span minus the static CBs, capped.
     constexpr uint32_t L1_PREFETCH_HARD_CAP = 500 * 1024;
-    const uint32_t static_cb_bytes = static_cb_bytes_for(plan.out_subblock_h);
-    plan.l1_prefetch_max_bytes =
-        static_cb_bytes < l1_usable_for_cbs ? std::min(l1_usable_for_cbs - static_cb_bytes, L1_PREFETCH_HARD_CAP) : 0;
+    plan.l1_prefetch_max_bytes = std::min(l1_usable_for_cbs - static_cb_bytes, L1_PREFETCH_HARD_CAP);
     if (g.shard_positions == 0) {
         return plan;
     }
