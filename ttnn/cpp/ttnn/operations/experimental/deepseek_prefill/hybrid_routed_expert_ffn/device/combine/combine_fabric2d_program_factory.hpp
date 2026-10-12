@@ -41,7 +41,13 @@ struct CombineL1 {
     const tt::tt_metal::GlobalSemaphore* fwd_arrived = nullptr;
     const tt::tt_metal::GlobalSemaphore* final_arrived = nullptr;
     tt::tt_metal::Buffer* arena = nullptr;  // null: circular buffers are static, at the allocator base
+    // DRAM, of forwarding_buffer_spec. Null: combine allocates its own at cache miss and the cached workload keeps
+    // it, which pins it wherever DRAM was free in the middle of that first forward.
+    tt::tt_metal::Buffer* forwarding = nullptr;
 };
+
+// The spec of combine's forwarding buffer: one page per relayed token, the token plus its forwarding metadata.
+tt::tt_metal::TensorSpec forwarding_buffer_spec(const CombineFabric2dParams& args, uint32_t token_size_bytes);
 
 // Where a chip's routed-expert writers report: its collector's core and the per-step count array on it.
 struct CollectorTarget {

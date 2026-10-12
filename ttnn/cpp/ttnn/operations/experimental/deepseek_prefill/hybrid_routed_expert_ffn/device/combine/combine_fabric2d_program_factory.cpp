@@ -276,23 +276,29 @@ struct ForwardingBuffer {
 // read and a DRAM write per forwarded token.
 //
 ForwardingBuffer allocate_forwarding_buffer(
-    ttnn::MeshDevice* mesh, const CombineFabric2dParams& args, const CombineFabric2dInputs& tensor_args) {
+    ttnn::MeshDevice* mesh,
+    const CombineFabric2dParams& args,
+    const CombineFabric2dInputs& tensor_args,
+    tt::tt_metal::Buffer* provided) {
     ForwardingBuffer fwd;
     fwd.pages_per_stream = fwd_pages_per_stream(args);
     const uint32_t page_bytes = token_size_bytes(tensor_args) + cmbf2d::FORWARDING_METADATA_SIZE;
-    TT_FATAL(
-        page_bytes % 64 == 0, "combine_fabric2d: forwarding page {} B must be 64-byte aligned for DRAM", page_bytes);
-    const uint32_t pages = stream_count(args.num_links) * fwd.pages_per_stream;
-    const tt::tt_metal::TensorSpec spec(
-        ttnn::Shape({pages, page_bytes / static_cast<uint32_t>(sizeof(uint32_t))}),
-        tt::tt_metal::TensorLayout(
-            tt::tt_metal::DataType::UINT32,
-            tt::tt_metal::PageConfig(tt::tt_metal::Layout::ROW_MAJOR),
-            tt::tt_metal::MemoryConfig{tt::tt_metal::TensorMemoryLayout::INTERLEAVED, tt::tt_metal::BufferType::DRAM}));
-    // Throws if it does not fit DRAM, which IS the "verify it fits" check.
-    fwd.owner = std::make_shared<ttnn::Tensor>(create_device_tensor(spec, mesh));
-    fwd.buffer = fwd.owner->buffer();
+    if (provided != nullptr) {
+        fwd.buffer = provided;
+    } else {
+        // Throws if it does not fit DRAM, which IS the "verify it fits" check.
+        fwd.owner = std::make_shared<ttnn::Tensor>(
+            create_device_tensor(forwarding_buffer_spec(args, token_size_bytes(tensor_args)), mesh));
+        fwd.buffer = fwd.owner->buffer();
+    }
     TT_FATAL(fwd.buffer != nullptr, "combine_fabric2d: forwarding buffer has no device buffer");
+    TT_FATAL(
+        fwd.buffer->size() >= uint64_t{stream_count(args.num_links)} * fwd.pages_per_stream * page_bytes,
+        "combine_fabric2d: forwarding buffer is {} B, smaller than the {} streams x {} pages x {} B it stages",
+        fwd.buffer->size(),
+        stream_count(args.num_links),
+        fwd.pages_per_stream,
+        page_bytes);
     TT_FATAL(
         fwd.buffer->aligned_page_size() == page_bytes,
         "combine_fabric2d: forwarding page size is {} B after alignment but the op addresses it as {} B. "
@@ -629,6 +635,19 @@ tt::tt_metal::ProgramDescriptor build_program_for_coord(
 }
 }  // namespace
 
+tt::tt_metal::TensorSpec forwarding_buffer_spec(const CombineFabric2dParams& args, uint32_t token_size_bytes) {
+    const uint32_t page_bytes = token_size_bytes + cmbf2d::FORWARDING_METADATA_SIZE;
+    TT_FATAL(
+        page_bytes % 64 == 0, "combine_fabric2d: forwarding page {} B must be 64-byte aligned for DRAM", page_bytes);
+    const uint32_t pages = stream_count(args.num_links) * fwd_pages_per_stream(args);
+    return tt::tt_metal::TensorSpec(
+        ttnn::Shape({pages, page_bytes / static_cast<uint32_t>(sizeof(uint32_t))}),
+        tt::tt_metal::TensorLayout(
+            tt::tt_metal::DataType::UINT32,
+            tt::tt_metal::PageConfig(tt::tt_metal::Layout::ROW_MAJOR),
+            tt::tt_metal::MemoryConfig{tt::tt_metal::TensorMemoryLayout::INTERLEAVED, tt::tt_metal::BufferType::DRAM}));
+}
+
 tt::tt_metal::WorkloadDescriptor CombineFabric2dProgramFactory::create_workload_descriptor(
     const CombineFabric2dParams& operation_attributes,
     const CombineFabric2dInputs& tensor_args,
@@ -667,7 +686,8 @@ tt::tt_metal::WorkloadDescriptor create_combine_workload(
         "combine_fabric2d: the number of routed-expert writer cores must be set");
     const auto placement = decide_placement(
         mesh_device, operation_attributes.axis, operation_attributes.num_links, per_group, /*with_collector=*/true);
-    const auto fwd = allocate_forwarding_buffer(mesh_device, operation_attributes, tensor_args);
+    const auto fwd =
+        allocate_forwarding_buffer(mesh_device, operation_attributes, tensor_args, l1_resources.forwarding);
 
     // Every buffer here is interleaved DRAM whose base address is uniform across the mesh, so a sender can
     // address the same buffer on any chip by page index. That is what lets a token carry a final destination
@@ -685,7 +705,9 @@ tt::tt_metal::WorkloadDescriptor create_combine_workload(
     tt::tt_metal::WorkloadDescriptor workload_descriptor;
     workload_descriptor.semaphores.push_back(sems.fwd_arrived);
     workload_descriptor.semaphores.push_back(sems.final_arrived);
-    workload_descriptor.buffers.push_back({fwd.owner, fwd.buffer});
+    if (fwd.owner != nullptr) {
+        workload_descriptor.buffers.push_back({fwd.owner, fwd.buffer});
+    }
 
     for (const auto& coord : tensor_coords.coords()) {
         workload_descriptor.programs.push_back(

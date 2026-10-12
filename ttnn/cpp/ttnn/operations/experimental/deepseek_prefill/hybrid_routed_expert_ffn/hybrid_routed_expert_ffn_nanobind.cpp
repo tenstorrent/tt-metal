@@ -37,7 +37,9 @@ void bind_hybrid_routed_expert_ffn(nb::module_& mod) {
         The overlap also needs fwd_arrived_semaphore, final_arrived_semaphore and expert_go_semaphore:
         global semaphores created once, initialised to zero, and passed on every call, since
         neighbouring chips bump them across launches. Everything else it places in L1 is freed when
-        the call returns.
+        the call returns. forwarding_buffer is combine's DRAM staging buffer from
+        hybrid_routed_expert_moe_forwarding_buffer; omitted, combine allocates its own at the first
+        call and keeps it for the program's lifetime.
         )doc",
         &hybrid_routed_expert_moe,
         nb::arg("dispatched_buffer").noconvert(),
@@ -64,7 +66,27 @@ void bind_hybrid_routed_expert_ffn(nb::module_& mod) {
         nb::arg("seq_len_per_chip") = 0,
         nb::arg("fwd_arrived_semaphore") = nb::none(),
         nb::arg("final_arrived_semaphore") = nb::none(),
-        nb::arg("expert_go_semaphore") = nb::none());
+        nb::arg("expert_go_semaphore") = nb::none(),
+        nb::arg("forwarding_buffer") = nb::none());
+
+    ttnn::bind_function<"hybrid_routed_expert_moe_forwarding_buffer", "ttnn.experimental.deepseek_prefill.">(
+        mod,
+        R"doc(
+        Allocate combine's DRAM forwarding buffer for hybrid_routed_expert_moe overlapped with combine.
+
+        Create it once per mesh, before the first overlapped forward, and pass it as forwarding_buffer
+        on every call. The arguments are the ones the overlapped call passes; emb_dim is the routed
+        token width.
+        )doc",
+        &hybrid_routed_expert_moe_forwarding_buffer,
+        nb::arg("mesh_device"),
+        nb::kw_only(),
+        nb::arg("emb_dim"),
+        nb::arg("experts_per_chip"),
+        nb::arg("num_experts_per_tok"),
+        nb::arg("seq_len_per_chip"),
+        nb::arg("combine_axis") = 0,
+        nb::arg("combine_num_links") = 2);
 }
 
 }  // namespace ttnn::operations::experimental::deepseek_prefill::hybrid_routed_expert_ffn::detail

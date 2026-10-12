@@ -110,7 +110,11 @@ tt::tt_metal::WorkloadDescriptor HybridOverlapProgramFactory::create_workload_de
         combine_inputs(t),
         output,
         tensor_coords,
-        combine::CombineL1{.fwd_arrived = &*op.fwd_arrived, .final_arrived = &*op.final_arrived, .arena = arena},
+        combine::CombineL1{
+            .fwd_arrived = &*op.fwd_arrived,
+            .final_arrived = &*op.final_arrived,
+            .arena = arena,
+            .forwarding = t.forwarding_buffer.has_value() ? t.forwarding_buffer->buffer() : nullptr},
         &collectors);
 
     for (auto& program : workload.programs) {

@@ -179,6 +179,8 @@ class TT_CCL:
         # The routed expert / combine_fabric2d overlap's fwd_arrived, final_arrived and expert_go, shared by every
         # MoE layer. Created on first use; see get_combine_overlap_semaphores.
         self.combine_overlap_semaphores = None
+        # The same overlap's DRAM forwarding buffer, one per shape; see get_combine_forwarding_buffer.
+        self.combine_forwarding_buffers = {}
 
     def get_fused_rmsnorm_resources(self, x, weight, cluster_axis, num_links):
         key = (
@@ -222,6 +224,30 @@ class TT_CCL:
             # Every chip must have zeroed its copies before any neighbour bumps them.
             ttnn.synchronize_device(self.mesh_device)
         return self.combine_overlap_semaphores
+
+    def get_combine_forwarding_buffer(
+        self, emb_dim, experts_per_chip, num_experts_per_tok, seq_len_per_chip, num_links
+    ):
+        """combine_fabric2d's DRAM forwarding buffer for hybrid_routed_expert_moe overlapped with combine.
+
+        One per shape, shared by every MoE layer, which run one after another. Call it before the first overlapped
+        forward: left to the op, it is allocated while that forward's dispatch buffer and outputs are live and stays
+        pinned there, splitting the DRAM each later layer's dispatch buffer needs in one piece.
+        """
+        key = (emb_dim, experts_per_chip, num_experts_per_tok, seq_len_per_chip, num_links)
+        buffer = self.combine_forwarding_buffers.get(key)
+        if buffer is None:
+            buffer = ttnn.experimental.deepseek_prefill.hybrid_routed_expert_moe_forwarding_buffer(
+                self.mesh_device,
+                emb_dim=emb_dim,
+                experts_per_chip=experts_per_chip,
+                num_experts_per_tok=num_experts_per_tok,
+                seq_len_per_chip=seq_len_per_chip,
+                combine_axis=0,
+                combine_num_links=num_links,
+            )
+            self.combine_forwarding_buffers[key] = buffer
+        return buffer
 
     def get_sparse_mla_overlap_resources(self, profile: str) -> SparseMlaOverlapResources:
         """Create or return the exact 80/40 production or 80/30 QB2 overlap profile.

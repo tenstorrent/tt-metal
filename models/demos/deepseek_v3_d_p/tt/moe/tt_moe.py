@@ -568,6 +568,8 @@ class TtMoe(LightweightModule):
         self.combine_overlap_semaphores = (
             self.tt_ccl.get_combine_overlap_semaphores() if overlap_routed_expert_with_combine else None
         )
+        # Fetched in set_trace_controller: only a traced forward overlaps, and that is the last point before it.
+        self.combine_forwarding_buffer = None
         self.replicated_global_expert_idx_tt = None
         if overlap_routed_expert_with_combine:
             assert (
@@ -664,6 +666,18 @@ class TtMoe(LightweightModule):
         dispatch overlap routes its sub-device load/clear through the controller so a ttnn trace can
         be split at those boundaries (see utils/sub_device_trace.py)."""
         self._trace_controller = controller
+        if (
+            controller is not None
+            and self.overlap_routed_expert_with_combine
+            and self.combine_forwarding_buffer is None
+        ):
+            self.combine_forwarding_buffer = self.tt_ccl.get_combine_forwarding_buffer(
+                self.routed_emb_dim,
+                self.experts_per_chip,
+                self.num_experts_per_tok,
+                self.seq_len_per_chip,
+                self.row_num_links,
+            )
 
     def release_sub_device_manager(self):
         """Remove the overlap sub-device manager this MoE created (no-op if overlap is off). Call
@@ -776,6 +790,7 @@ class TtMoe(LightweightModule):
             num_experts_per_tok=self.num_experts_per_tok,
             seq_len_per_chip=self.seq_len_per_chip,
             combine_semaphores=self.combine_overlap_semaphores,
+            forwarding_buffer=self.combine_forwarding_buffer,
         )
 
     def forward(
