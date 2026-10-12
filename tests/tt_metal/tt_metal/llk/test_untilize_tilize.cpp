@@ -962,7 +962,8 @@ static void run_quasar_tilize_untilize_test(
     tt::DataFormat output_data_format,
     std::array<std::uint32_t, 2> tile_shape_in_faces = {2, 2},
     std::uint32_t face_r_dim = tt::constants::FACE_HEIGHT,
-    bool tilize_cross_tile_rows = false) {
+    bool tilize_cross_tile_rows = false,
+    bool unpack_to_dest = false) {
     bool is_tilize = (mode == QuasarTestMode::TILIZE);
 
     auto& cq = mesh_device.mesh_command_queue();
@@ -1074,10 +1075,15 @@ static void run_quasar_tilize_untilize_test(
         }
     }
 
+    experimental::ComputeHardwareConfig::ComputeUnpackModes unpack_modes{};
+    if (unpack_to_dest) {
+        unpack_modes = {{INPUT_DFB, tt::tt_metal::UnpackMode::UnpackToDest}};
+    }
     experimental::ComputeHardwareConfig compute_hw_config;
     compute_hw_config = experimental::ComputeHardwareConfig{
         .enable_32_bit_dest = fp32_dest_acc_en,
         .double_buffer_dest = !dst_full_sync_en,
+        .unpack_modes = unpack_modes,
     };
     experimental::KernelSpec compute_spec{
         .unique_id = COMPUTE,
@@ -1129,6 +1135,11 @@ static void run_quasar_tilize_untilize_test(
         src_vec.resize(src_dram_buffer_size / sizeof(std::uint32_t));
         for (std::uint32_t i = 0; i < src_vec.size(); i++) {
             src_vec[i] = std::bit_cast<std::uint32_t>(static_cast<float>(i));
+        }
+    } else if (is_tilize && input_data_format == tt::DataFormat::Int32) {
+        src_vec.resize(src_dram_buffer_size / sizeof(std::uint32_t));
+        for (std::uint32_t i = 0; i < src_vec.size(); i++) {
+            src_vec[i] = i;
         }
     } else {
         src_vec = create_arange_vector_of_bfloat16(src_dram_buffer_size, false);
@@ -1337,6 +1348,46 @@ TEST_F(QuasarMeshDeviceSingleCardFixture, QuasarComputeUnpackTilize) {
             }
         }
     }
+
+    // Unpack-to-dest tilize: 32-bit inputs tilize straight into a 32-bit DEST (the path the ttnn tilize factories
+    // take for fp32), Float16_b into a 16-bit DEST. Every tile is its own DEST section, so {5,3} and {2,10} run
+    // several SyncHalf sections per block and exercise the bank alternation.
+    for (auto& cfg : test_configs) {
+        for (bool dst_full_sync_en : {true, false}) {
+            for (tt::DataFormat input_data_format :
+                 {tt::DataFormat::Float32, tt::DataFormat::Int32, tt::DataFormat::Float16_b}) {
+                const bool fp32_dest_acc_en = input_data_format != tt::DataFormat::Float16_b;
+                run_quasar_tilize_untilize_test(
+                    this->device(),
+                    cfg[0],
+                    cfg[1],
+                    QuasarTestMode::TILIZE,
+                    dst_full_sync_en,
+                    fp32_dest_acc_en,
+                    input_data_format,
+                    input_data_format,
+                    /*tile_shape_in_faces=*/{2, 2},
+                    /*face_r_dim=*/tt::constants::FACE_HEIGHT,
+                    /*tilize_cross_tile_rows=*/false,
+                    /*unpack_to_dest=*/true);
+            }
+        }
+    }
+    // Non-zero input_tile_index per tile row on the unpack-to-dest path (tilize_across_tile_rows.cpp drives the
+    // cross-tile-row L1 offset through _llk_unpack_tilize_set_src_offset_<UNP_DEST>).
+    run_quasar_tilize_untilize_test(
+        this->device(),
+        2,
+        10,
+        QuasarTestMode::TILIZE,
+        /*dst_full_sync_en=*/false,
+        /*fp32_dest_acc_en=*/true,
+        tt::DataFormat::Float32,
+        tt::DataFormat::Float32,
+        /*tile_shape_in_faces=*/{2, 2},
+        /*face_r_dim=*/tt::constants::FACE_HEIGHT,
+        /*tilize_cross_tile_rows=*/true,
+        /*unpack_to_dest=*/true);
 }
 
 // Unpack Tilize tiny tile (1x32, 2x32) via tilize_block.
