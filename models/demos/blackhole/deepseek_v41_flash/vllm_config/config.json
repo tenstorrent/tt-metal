@@ -1,7 +1,9 @@
 {
-  "architectures": ["DeepseekV41ForCausalLM"],
+  "architectures": [
+    "DeepseekV41ForCausalLM"
+  ],
   "model_type": "llama",
-  "_comment": "Serving shim for vLLM: transformers does not know model_type deepseek_v41 (the real checkpoint config.json), so vLLM gets this llama-shaped config via --hf-config-path (dims from the checkpoint). The TT model class reads the real checkpoint itself (DSV41_CKPT) and ignores this file apart from the dims vLLM sizes its scheduler with. The checkpoint's fp8/fp4 quantization_config is deliberately absent: the weights are loaded by tt/loader.py, not by vLLM.",
+  "_comment": "Serving shim for vLLM: transformers does not know model_type deepseek_v41 (the real checkpoint config.json), so vLLM gets this llama-shaped config via --hf-config-path (dims from the checkpoint). The TT model class reads the real checkpoint itself (DSV41_CKPT) and ignores this file apart from the dims vLLM sizes its scheduler with. The checkpoint's fp8/fp4 quantization_config is deliberately absent: the weights are loaded by tt/loader.py, not by vLLM. It also carries the checkpoint's vision_config / image_token_id: the multimodal processor (tt/vision_vllm.py) reads them (no checkpoint access in the frontend process).",
   "vocab_size": 129280,
   "hidden_size": 5120,
   "intermediate_size": 2304,
@@ -18,5 +20,19 @@
   "bos_token_id": 0,
   "eos_token_id": 1,
   "pad_token_id": 2,
-  "torch_dtype": "bfloat16"
+  "torch_dtype": "bfloat16",
+  "image_token_id": 129264,
+  "vision_config": {
+    "model_type": "deepseek_v41_vision",
+    "num_hidden_layers": 32,
+    "hidden_size": 1024,
+    "num_attention_heads": 16,
+    "intermediate_size": 2816,
+    "patch_size": 14,
+    "rope_theta": 10000,
+    "downsample_ratio": 3,
+    "max_image_tokens": 1024,
+    "min_pixels": 295936,
+    "max_wh_ratio": null
+  }
 }

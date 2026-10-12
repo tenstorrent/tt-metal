@@ -109,3 +109,18 @@ def test_prompt_expansion():
     # the span length is predictable from the pixel size alone (scheduler / placeholder expansion)
     assert VP.image_span_len(640, 480, va) == imgs[0].types.numel()
     assert VP.image_span_len(300, 900, va) == imgs[1].types.numel()
+
+
+def test_vendored_image_processor_matches_checkpoint():
+    ref = VP.checkpoint_image_processor()
+    if ref is None:
+        return  # no checkpoint here
+    va = VisionArgs()
+    cargs = VP.checkpoint_args(va)
+    for w, h, s in [(640, 480, 0), (300, 900, 1), (64, 64, 2), (3000, 200, 3), (1400, 1000, 4)]:
+        rec = {"data": _png(w, h, s)}
+        a, b = VP._ip.load_image(rec, cargs), ref.load_image(rec, cargs)
+        assert torch.equal(a[0], b[0]) and a[1:] == b[1:], (w, h)
+        im = Image.open(io.BytesIO(rec["data"]))
+        c = VP.patchify_pil(im, va)
+        assert torch.equal(c[0], b[0]) and c[1:] == b[1:], (w, h)
