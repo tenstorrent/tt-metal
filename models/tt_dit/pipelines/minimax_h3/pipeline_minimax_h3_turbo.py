@@ -57,6 +57,8 @@ TURBO_NUM_FORWARDS = (4, 8)
 
 #: A HyperFlow file's float32 targets: the base time embedder and the endpoint copy it adds.
 HYPERFLOW_HOST_PREFIXES = ("time_embedder.", "endpoint_time_embedder.")
+#: A Turbo file's targets that the precomputed AdaLN table absorbs, should it carry any.
+TURBO_ADALN_HOST_PREFIXES = ("time_embedder.",)
 _TIME_EMBEDDER_KEYS = ("linear_1.weight", "linear_1.bias", "linear_2.weight", "linear_2.bias")
 
 #: Bumped whenever the table's row layout or build changes, so an old cached file is never read back.
@@ -68,6 +70,10 @@ class MiniMaxH3TurboPipeline(MiniMaxH3Pipeline):
 
     `lora_strength` multiplies the adapter's own `alpha / rank`, which the loader reads from the file;
     1.0 runs the adapter as trained.
+
+    `adaln_num_inference_steps` commits a Turbo file to one step count for the pipeline's lifetime,
+    which makes its schedule fixed and lets the AdaLN modulation come from a host-built table, as under
+    HyperFlow. Requests at any other count are then refused.
     """
 
     def __init__(
@@ -75,6 +81,7 @@ class MiniMaxH3TurboPipeline(MiniMaxH3Pipeline):
         *,
         lora_path: str | os.PathLike,
         lora_strength: float = 1.0,
+        adaln_num_inference_steps: int | None = None,
         **kwargs,
     ) -> None:
         # Bound onto the built transformer after the base weights load, never fused into the
@@ -101,6 +108,9 @@ class MiniMaxH3TurboPipeline(MiniMaxH3Pipeline):
             video_shift=VIDEO_SHIFT if video_shift is None else float(video_shift),
             audio_shift=AUDIO_SHIFT if audio_shift is None else float(audio_shift),
         )
+        if self.hyperflow is not None:
+            self.hyperflow.assert_forwards(adaln_num_inference_steps)
+        self.adaln_num_inference_steps = None if adaln_num_inference_steps is None else int(adaln_num_inference_steps)
         super().__init__(**kwargs)
 
     @classmethod
@@ -157,7 +167,7 @@ class MiniMaxH3TurboPipeline(MiniMaxH3Pipeline):
                 str(self.lora_path),
                 scale=self.lora_strength,
                 name=self.lora_path.name,
-                host_prefixes=HYPERFLOW_HOST_PREFIXES if contract is not None else (),
+                host_prefixes=self._adapter_host_prefixes(),
             )
             logger.info(
                 f"turbo adapter {self._adapter.name}: {len(self._adapter)} targets, strength {self.lora_strength:g}"
@@ -188,6 +198,12 @@ class MiniMaxH3TurboPipeline(MiniMaxH3Pipeline):
             if self._time_embedder_states is not None and not self.coresident:
                 transformer.time_embedder.load_torch_state_dict(self._time_embedder_states["time_embedder"])
         return transformer
+
+    def _adapter_host_prefixes(self) -> tuple[str, ...]:
+        """Adapter targets folded on host rather than bound to a device Linear."""
+        if self.hyperflow is not None:
+            return HYPERFLOW_HOST_PREFIXES
+        return TURBO_ADALN_HOST_PREFIXES if self._precomputed_adaln() else ()
 
     def _fused_time_embedder_states(self) -> dict[str, dict[str, torch.Tensor]]:
         """Base `time_embedder` weights plus each embedder's own float32 delta, as two state dicts."""
@@ -232,7 +248,16 @@ class MiniMaxH3TurboPipeline(MiniMaxH3Pipeline):
 
     def _build_schedulers(self, num_inference_steps: int) -> tuple[MiniMaxH3Scheduler, MiniMaxH3Scheduler]:
         contract = self.hyperflow
-        if contract is None or self._warming:
+        if self._warming:
+            return super()._build_schedulers(num_inference_steps)
+        if contract is None:
+            fixed = self.adaln_num_inference_steps
+            # The resident table covers one schedule; another count would index rows of the wrong levels.
+            if self._precomputed_adaln() and int(num_inference_steps) != fixed:
+                raise ValueError(
+                    f"this pipeline precomputes AdaLN for num_inference_steps={fixed}; "
+                    f"num_inference_steps={num_inference_steps} cannot be honoured"
+                )
             return super()._build_schedulers(num_inference_steps)
         contract.assert_forwards(num_inference_steps)
         return self._contract_schedulers()
@@ -256,24 +281,30 @@ class MiniMaxH3TurboPipeline(MiniMaxH3Pipeline):
     # ------------------------------------------------------------------ precomputed AdaLN
 
     def _precomputed_adaln(self) -> bool:
-        # A HyperFlow contract fixes the schedule before the first request, which is what makes the
-        # table finite. A Turbo file leaves the step count to the caller, so it keeps the on-device
-        # projections. MINIMAX_H3_ADALN_PRECOMPUTE=0 keeps them on device under HyperFlow too, for A/Bs.
+        # A schedule fixed before the first request is what makes the table finite: a HyperFlow
+        # contract's grid, or a Turbo file's `adaln_num_inference_steps`. A Turbo file without one
+        # leaves the step count to the caller, so it keeps the on-device projections.
+        # MINIMAX_H3_ADALN_PRECOMPUTE=0 keeps them on device in either case, for A/Bs.
         if os.environ.get("MINIMAX_H3_ADALN_PRECOMPUTE", "1") == "0":
             return False
-        return self.hyperflow is not None
+        return self.hyperflow is not None or self.adaln_num_inference_steps is not None
+
+    def _adaln_schedulers(self) -> tuple[MiniMaxH3Scheduler, MiniMaxH3Scheduler]:
+        """The one schedule the table covers."""
+        if self.hyperflow is not None:
+            return self._contract_schedulers()
+        return super()._build_schedulers(self.adaln_num_inference_steps)
 
     def _prepare_adaln(self, slot_roles: tuple[str, ...]) -> tuple[MiniMaxH3AdalnCache, list[torch.Tensor]]:
-        """The resident table for the contract's schedule and, per step, each slot's absolute row.
+        """The resident table for the fixed schedule and, per step, each slot's absolute row.
 
-        Built (or loaded) and uploaded once per pipeline: the contract fixes the schedule, so warmup
-        and serving share it. Warmup's own shorter schedule indexes this table modulo its length,
-        which compiles the same programs; its output is discarded.
+        Built (or loaded) and uploaded once per pipeline: the schedule is fixed, so warmup and serving
+        share it. Warmup's own shorter schedule indexes this table modulo its length, which compiles
+        the same programs; its output is discarded.
         """
-        scheduler, audio_scheduler = self._contract_schedulers()
-        contract = self.hyperflow
-        video_endpoints = contract.endpoints(scheduler.sigmas)
-        audio_endpoints = contract.endpoints(audio_scheduler.sigmas)
+        scheduler, audio_scheduler = self._adaln_schedulers()
+        # A single-time schedule has no endpoints: r == t, and the table is a one-axis build.
+        video_endpoints, audio_endpoints = self._step_endpoints(scheduler, audio_scheduler) or (None, None)
         audio_condition_timestep = MINIMAX_H3_AUDIO_CONDITION_TIMESTEP if self.task == "ref2va" else None
         if self._adaln_cache is None:
             step_levels = request_step_levels(
@@ -331,11 +362,21 @@ class MiniMaxH3TurboPipeline(MiniMaxH3Pipeline):
             f"{self.transformer_subfolder}/ (reads the checkpoint)"
         )
         t0 = time.time()
-        deltas = self._hyperflow_host_deltas()
-        fold = MiniMaxH3AdalnLoraFold(
-            {key: delta for key, delta in deltas.items() if not key.startswith(MiniMaxH3AdalnLoraFold.ENDPOINT_PREFIX)}
-        )
-        two_time = AdalnTwoTime(gate=self.hyperflow.gate, weight_hook=MiniMaxH3AdalnLoraFold.endpoint(deltas))
+        if self.hyperflow is not None:
+            deltas = self._hyperflow_host_deltas()
+            fold = MiniMaxH3AdalnLoraFold(
+                {
+                    key: delta
+                    for key, delta in deltas.items()
+                    if not key.startswith(MiniMaxH3AdalnLoraFold.ENDPOINT_PREFIX)
+                }
+            )
+            two_time = AdalnTwoTime(gate=self.hyperflow.gate, weight_hook=MiniMaxH3AdalnLoraFold.endpoint(deltas))
+        else:
+            fold = MiniMaxH3AdalnLoraFold(
+                h3_host_deltas(str(self.lora_path), TURBO_ADALN_HOST_PREFIXES, scale=self.lora_strength)
+            )
+            two_time = None
         num_layers, hidden_size, freq_dim = self._adaln_geometry()
         table = precompute_adaln_table(
             self.weights_dir / self.transformer_subfolder,
@@ -347,7 +388,8 @@ class MiniMaxH3TurboPipeline(MiniMaxH3Pipeline):
             two_time=two_time,
         )
         # Both folds: a spelling neither recognises still builds a valid table, from unadapted weights.
-        for name, folded in (("base", fold), ("endpoint", two_time.weight_hook)):
+        folds = [("base", fold)] + ([] if two_time is None else [("endpoint", two_time.weight_hook)])
+        for name, folded in folds:
             unapplied = folded.unapplied()
             if unapplied:
                 raise KeyError(
@@ -390,7 +432,7 @@ class MiniMaxH3TurboPipeline(MiniMaxH3Pipeline):
                 self.transformer_subfolder,
                 _ADALN_TABLE_FORMAT,
                 f"sigmas=[{grids}]",
-                self.hyperflow.identity(),
+                "single-time" if self.hyperflow is None else self.hyperflow.identity(),
                 MINIMAX_H3_KEYFRAME_NOISE_AUG,
                 # ref2va carries a fourth level, the clean audio conditioning rows.
                 self.task,

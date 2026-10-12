@@ -342,7 +342,9 @@ class _FakeAdalnCache:
         assert num_inference_steps == self.num_steps
 
 
-def _pipeline(weights_dir, adapter_path, *, task="t2va", strength=1.0, hyperflow=True) -> MiniMaxH3TurboPipeline:
+def _pipeline(
+    weights_dir, adapter_path, *, task="t2va", strength=1.0, hyperflow=True, fixed_steps=None
+) -> MiniMaxH3TurboPipeline:
     """The AdaLN hooks read these attributes; skip the mesh-bound constructor."""
     pipeline = object.__new__(MiniMaxH3TurboPipeline)
     pipeline.hyperflow = (
@@ -362,6 +364,8 @@ def _pipeline(weights_dir, adapter_path, *, task="t2va", strength=1.0, hyperflow
     pipeline._adaln_cache = pipeline._adaln_table = None
     pipeline._adaln_slot_rows = {}
     pipeline._lora_digest = None
+    pipeline.adaln_num_inference_steps = fixed_steps
+    pipeline._warming = False
     return pipeline
 
 
@@ -483,3 +487,116 @@ def test_read_safetensors_keeps_other_partitions_whole(hyperflow):
     (weights_dir / "vae").mkdir()
     save_file(vae, str(weights_dir / "vae" / "diffusion_pytorch_model.safetensors"))
     assert set(_pipeline(weights_dir, adapter_path)._read_safetensors("vae")) == set(vae)
+
+
+# ------------------------------------------------------------------ a Turbo file at a fixed step count
+
+TURBO_STEPS = 5
+
+
+def _turbo_adapter(path, generator, *, time_embedder=False) -> None:
+    """A lightx2v-style Turbo file: no HyperFlow header, attention targets, optionally the time embedder."""
+    adapter = {
+        "transformer.transformer_blocks.0.attn.to_out.0.lora_A.weight": torch.randn(RANK, HIDDEN, generator=generator),
+        "transformer.transformer_blocks.0.attn.to_out.0.lora_B.weight": torch.randn(HIDDEN, RANK, generator=generator),
+    }
+    if time_embedder:
+        adapter["transformer.time_embedder.linear_1.lora_A.weight"] = torch.randn(RANK, FREQ, generator=generator)
+        adapter["transformer.time_embedder.linear_1.lora_B.weight"] = torch.randn(
+            TEMB_HIDDEN, RANK, generator=generator
+        )
+    save_file(adapter, str(path), metadata={"lora_alpha": str(RANK)})
+
+
+@pytest.fixture
+def turbo_adapter(hyperflow, tmp_path):
+    weights_dir, _, state = hyperflow
+    adapter_path = tmp_path / "turbo.safetensors"
+    _turbo_adapter(adapter_path, torch.Generator().manual_seed(3))
+    return weights_dir, adapter_path, state
+
+
+def test_a_fixed_turbo_schedule_builds_a_single_time_table(turbo_adapter, tmp_path, monkeypatch):
+    weights_dir, adapter_path, state = turbo_adapter
+    roles = ("video", "audio", "condition_video")
+    pipeline = _pipeline(weights_dir, adapter_path, hyperflow=False, fixed_steps=TURBO_STEPS)
+    assert pipeline._precomputed_adaln()
+    assert pipeline._dit_weight_mode() == "precomputed_adaln"
+    assert pipeline._adapter_host_prefixes() == turbo.TURBO_ADALN_HOST_PREFIXES
+    cache, rows = pipeline._prepare_adaln(roles)
+    assert cache.num_steps == len(rows) == TURBO_STEPS - 1
+
+    video, audio = pipeline._adaln_schedulers()
+    expected_video, _ = MiniMaxH3TurboPipeline.__mro__[1]._build_schedulers(pipeline, TURBO_STEPS)
+    assert torch.equal(video.sigmas, expected_video.sigmas)
+    step_levels = request_step_levels(video.sigmas, audio.sigmas, MINIMAX_H3_KEYFRAME_NOISE_AUG)
+    assert all(torch.equal(levels[:, 0], levels[:, 1]) for levels in step_levels)
+    # The adapter targets no AdaLN weight, so the table is the base checkpoint's.
+    _assert_matches_reference(cache.table, step_levels, state)
+
+    path = pipeline._adaln_cache_path(video, audio)
+    assert path.is_file()
+
+    def no_build(*args, **kwargs):
+        raise AssertionError("rebuilt a cached table")
+
+    monkeypatch.setattr(turbo, "precompute_adaln_table", no_build)
+    cached, _ = _pipeline(weights_dir, adapter_path, hyperflow=False, fixed_steps=TURBO_STEPS)._prepare_adaln(roles)
+    assert torch.equal(cached.table.block_params, cache.table.block_params)
+
+
+def test_a_turbo_time_embedder_delta_reaches_the_table(hyperflow, tmp_path):
+    weights_dir, _, state = hyperflow
+    adapter_path = tmp_path / "turbo_temb.safetensors"
+    _turbo_adapter(adapter_path, torch.Generator().manual_seed(4), time_embedder=True)
+    pipeline = _pipeline(weights_dir, adapter_path, hyperflow=False, fixed_steps=TURBO_STEPS)
+    cache, _ = pipeline._prepare_adaln(("video",))
+
+    from models.tt_dit.experimental.lora.h3_adapter_loader import h3_host_deltas
+
+    deltas = h3_host_deltas(str(adapter_path), turbo.TURBO_ADALN_HOST_PREFIXES)
+    assert set(deltas) == {"time_embedder.linear_1.weight"}
+    folded = dict(state)
+    folded["time_embedder.linear_1.weight"] = (
+        state["time_embedder.linear_1.weight"] + deltas["time_embedder.linear_1.weight"]
+    )
+    video, audio = pipeline._adaln_schedulers()
+    _assert_matches_reference(
+        cache.table, request_step_levels(video.sigmas, audio.sigmas, MINIMAX_H3_KEYFRAME_NOISE_AUG), folded
+    )
+
+
+def test_the_cache_key_separates_turbo_schedules(turbo_adapter):
+    weights_dir, adapter_path, _ = turbo_adapter
+    four = _pipeline(weights_dir, adapter_path, hyperflow=False, fixed_steps=5)
+    eight = _pipeline(weights_dir, adapter_path, hyperflow=False, fixed_steps=9)
+    four_path = four._adaln_cache_path(*four._adaln_schedulers())
+    assert four_path == _pipeline(weights_dir, adapter_path, hyperflow=False, fixed_steps=5)._adaln_cache_path(
+        *four._adaln_schedulers()
+    )
+    assert eight._adaln_cache_path(*eight._adaln_schedulers()) != four_path
+    shifted = _pipeline(weights_dir, adapter_path, hyperflow=False, fixed_steps=5)
+    shifted.video_shift = 6.0
+    assert shifted._adaln_cache_path(*shifted._adaln_schedulers()) != four_path
+    # Same grid, but one table is single-time and the other carries HyperFlow endpoints.
+    contract = _pipeline(weights_dir, adapter_path)
+    assert contract._adaln_cache_path(*four._adaln_schedulers()) != four_path
+
+
+def test_a_fixed_turbo_schedule_refuses_another_step_count(turbo_adapter, monkeypatch, expect_error):
+    weights_dir, adapter_path, _ = turbo_adapter
+    pipeline = _pipeline(weights_dir, adapter_path, hyperflow=False, fixed_steps=TURBO_STEPS)
+    video, _ = pipeline._build_schedulers(TURBO_STEPS)
+    assert video.sigmas.numel() == TURBO_STEPS
+    with expect_error(ValueError, "num_inference_steps=9"):
+        pipeline._build_schedulers(9)
+    # Warmup's short schedule is discarded output; it indexes the table modulo its length.
+    pipeline._warming = True
+    assert pipeline._build_schedulers(2)[0].sigmas.numel() == 2
+    # With the projections kept on device the step count is free again.
+    pipeline._warming = False
+    monkeypatch.setenv("MINIMAX_H3_ADALN_PRECOMPUTE", "0")
+    assert not pipeline._precomputed_adaln()
+    assert pipeline._dit_weight_mode() == "resident_adaln"
+    assert pipeline._adapter_host_prefixes() == ()
+    assert pipeline._build_schedulers(9)[0].sigmas.numel() == 9

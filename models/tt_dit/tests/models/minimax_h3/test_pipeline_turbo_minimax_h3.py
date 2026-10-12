@@ -94,6 +94,9 @@ TASK = os.environ.get("MINIMAX_H3_TURBO_TASK", "fl2va")
 WARM_RUNGS = [int(rung) for rung in os.environ.get("MINIMAX_H3_TURBO_WARM_RUNGS", "").split(",") if rung.strip()]
 WARM_USED_LAYOUTS = os.environ.get("MINIMAX_H3_TURBO_WARM_USED_LAYOUTS") == "1"
 CACHE_ONLY = os.environ.get("MINIMAX_H3_TURBO_CACHE_ONLY") == "1"
+# MINIMAX_H3_ADALN_PRECOMPUTE=1 commits the pipeline to this test's step count, so the AdaLN modulation
+# comes from a host-built table (opt-in; HyperFlow fixes its schedule itself and defaults to it).
+FIXED_ADALN_STEPS = NUM_INFERENCE_STEPS if os.environ.get("MINIMAX_H3_ADALN_PRECOMPUTE") == "1" else None
 # Timed generations after warmup, one perf table each: a single replay cannot separate an A/B delta of a few
 # percent from run-to-run noise.
 REPLAYS = int(os.environ.get("MINIMAX_H3_TURBO_REPLAYS", 1))
@@ -183,6 +186,7 @@ def test_turbo_end_to_end(mesh_device, reset_seeds, duration_s):
         warmup=not CACHE_ONLY,
         warm_rungs=WARM_RUNGS or None,
         warm_canvases=warm_canvases,
+        adaln_num_inference_steps=FIXED_ADALN_STEPS,
     )
     if CACHE_ONLY:
         if pipeline._precomputed_adaln():
