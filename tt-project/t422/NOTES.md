@@ -58,3 +58,14 @@ deadline 400 s):
   cache/tt-metal-cache-h3hf (45 GB) are most of the footprint.
 - Relaunched as run 1606 t422on5: on arm is blx01 job 875 (queued 07:34 UTC). Log state/on.log, "T422ON_DONE <rc>".
 - Next: read state/on.log; compare per-step times (relative, clamp) and md5 with the off arm (job 860).
+
+## 2026-10-12 run 1610
+- on arm job 875 failed at the 500 s warm deadline (530.7 s, exit 1), now in "Initializing bucket buffers: 120320,41984",
+  further than job 867. Still cold JIT for the new build, not a code error. No drop: post-job health passed (fabric OK).
+- The fill retry was refused by the lint: /var/tmp/fasth3 on blx01 at 455 GB (cap 450). The shared JIT cache
+  cache/tt-metal-cache-h3hf grew 45 -> 50 GB with our fills.
+- Nothing safe to free: t409/b (#416 queued), t420/b (#426 queued), t428 main+t48 (12.6 GB, #428 queued), t48 (used by
+  t420/t421/t428 envs), t421/t423/t427 (queued). home/.cache/tt-metal-cache (5 GB) is live; its entries untouched since
+  10-08 total only 0.2 GB. Judgment: no deletion of other tasks' data; handed off waiting on disk with a cleanup followup.
+- Next (once du /var/tmp/fasth3 < 448 GB on blx01): relaunch tt-project/t422/submit_on.sh detached (same as run 1606),
+  then compare per-step times and md5 with the off arm (job 860: 1.4935 / 1.5264 s/step, md5 c79b7d37ba9c0f5034b3392af1f1a841).

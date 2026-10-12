@@ -117,3 +117,16 @@ Log: /var/log/tt-device-broker/2026-10-12_073456_875.log
 job=875
 retry_when: ssh -o BatchMode=yes -o ConnectTimeout=20 g15blx01 'tt-device-mcp status -j 875 | grep -q ^Status: && ! tt-device-mcp status -j 875 | grep -qiE "^Status: +(running|queued|pending)"'
 2026-10-12T07:34:56Z on: try 1 job 875 submitted
+Job:     875
+Owner:   smarton
+Status:  failed
+Command: env T286_WARM_DEADLINE_S=500 T286_WARM_LATE_S=430 T408_REPLAYS=2 T408_SAVE=0 T408_PY_TIMEOUT=560 bash /var/tmp/fasth3/t422/run422.sh on on
+Exit:    1
+Runtime: 530.7s
+Log:     /var/log/tt-device-broker/2026-10-12_073456_875.log
+2026-10-12T07:51:36Z on: try 1 stopped at the warm deadline
+blx01 busy: broker gate/recovery in progress:   --          🔧 broker  4s       health-gate/post-job: health check: fabric traffic pass across all links (~45s)
+ttp-heal-key: blx01-broker-gate
+lint: ERROR /var/tmp/fasth3 on g15blx01 is 455 GB, over its 450 GB cap: delete our outputs and caches first
+lint: refused; fix the problems above before launching
+2026-10-12T07:51:43Z T422ON_DONE 2
