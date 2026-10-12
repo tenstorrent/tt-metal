@@ -123,7 +123,38 @@ Numbers come from 188-step greedy runs of `e2b_bringup.py::test_e2b_decode_timin
 - If Phase 4 is ever done, `compute_device_pli` only handles the `[1,1,35,256]` decode shape. Prefill needs its own column-slice chain.
 - First experiment, if any: time the host PLI share of eager prefill at S=1024/2048 on b02u08. Also explain the 0.669 s prefill outlier in job 128880.
 
-## Open bug (do NOT re-debug blind; file or hand to runtime)
+## Deadlock: root cause found, fix validated (2026-10-12)
+
+**Cause.** Persistent buffers allocated after a trace was captured got overwritten each time the trace replayed. The E2B decode trace was captured at the *start* of LTX warmup. The whole LTX warmup then allocated under it: in 128486 the tracker flagged 3507 buffers alive at the first E2B replay, including 1786 weight uploads and 80 global semaphores. The E2B replays wrote over some of them. The next LTX op that used a clobbered semaphore waited forever, which is the deadlock. Attempt 1 of the 10-06 A/B was the same bug corrupting data instead of a semaphore.
+
+**Fix (`03c33ae`, opt-in `LTX_ENHANCER_LATE_CAPTURE=1`).**
+- The enhancer warms eagerly, for both prefill lengths, at the start of warmup.
+- It captures its decode trace at the *end* of `warmup_buffers`, after every LTX persistent buffer exists.
+- The cmd file is `metal-galaxy-ltx-late-capture.sh`.
+
+**Job 130120 (bh-glx-120-b03u02): PASSED.**
+- 3 generations ran with `LTX_TRACED=1` and a traced enhancer. This is the 128486 config, which hung after gen 0 stage 1.
+- Latents are finite and the rewrites are coherent.
+- Buffers the tracker flagged as alive at each E2B replay:
+
+  | | Count |
+  |---|---|
+  | Gen 0 | **1** (vs 3507 before; the eager prefill's logits `Slice`) |
+  | Gen 1 | 23, allocated when LTX gen 0 captured its DiT/VAE traces after the E2B capture (`to_device`, `allocate_tensor_on_device`, `Copy`, `Clone`) |
+  | Gen 2 | 4 (E2B's own prefill outputs) |
+
+- Total: 107 unique buffers over the run (enhancer 6, LTX 101).
+
+**Still open.**
+- **(a) Gen-1 leftovers.** The 23 buffers allocated during LTX's own trace captures are still alive at E2B replays. They didn't hang this run, but they are the same class of hazard. Options: preallocate them before the E2B capture, or capture E2B after the LTX traces.
+- **(b) Rewrite latency in this run was 60–92 s** (~0.3–0.5 s/step), against 17 ms/step standalone. The suspected cause is the tracker's per-allocation tracebacks and per-replay checks (128486 was 144 s). Needs a run with the tracker off.
+- **(c) No same-node control yet.** The knob-off config hasn't been rerun on b03u02; the hangs were all on d07u02.
+- **(d) Teardown noise.** After PASSED, teardown logs a `SubDeviceManagerTracker is not initialized on MeshDevice 1` TT_THROW. It happens after the test and doesn't affect the result.
+- **(e) Make the knob the default** once (a)–(c) are settled.
+
+**Hardware.** bh-glx-120-b02u08 shows only 24/32 chips at reset (jobs 130110 and 130111 failed before the test). It needs infra.
+
+## Open bug (history; root cause above)
 
 - Traced enhancer + LTX work deadlocks the mesh after trace **replays**
 - Signature: fetch-queue wait timeout; then "device unrecoverable"
