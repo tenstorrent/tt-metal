@@ -57,3 +57,6 @@ Branch ttp/t409-port-vsa-sparse-attention-into-the-fasth, base a15eb37ec6a (t400
 - chain416a now waits (<=12 h) for blx01 /var/tmp/fasth3 <= 449 GB before the broker-clear wait. Restarted detached
   from run 1611 (state/runs/1611/chain416a.out).
 - Step 4 no longer needs a separate weight-cache fill for VSA; one JIT warm-up of the VSA kernels is still needed.
+
+## t416 run 1613 (2026-10-12 01:10 PDT)
+- Host reboot killed chain416a (run 1611). Restarted unchanged from run 1613 (state/runs/1613/chain416a.out). blx01 /var/tmp/fasth3 still 453 GB, so it waits for the cap. Branch push of 502ae371602 landed.
