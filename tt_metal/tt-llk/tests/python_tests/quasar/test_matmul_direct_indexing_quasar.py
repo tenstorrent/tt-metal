@@ -3,7 +3,7 @@
 
 import pytest
 from helpers.constraints import get_valid_math_fidelities
-from helpers.llk_params import PerfRunType
+from helpers.llk_params import DestSync, PerfRunType
 from helpers.param_config import parametrize, runtime
 from quasar.test_matmul_quasar import (
     FULL_MATMUL_SHAPES,
@@ -20,7 +20,6 @@ DIRECT_INDEXING_KT_DIMS = (1, 2)
 
 
 def matmul_direct_indexing_tile_dimensions(dest_acc, dest_sync_mode):
-    """Single tile plus every dest-filling (ct, rt) block: reuse-A, reuse-B and strided-dest."""
     shapes = {(1, 1)} | {
         (ct_dim, rt_dim)
         for ct_dim, rt_dim, _ in matmul_tile_dimensions(
@@ -70,5 +69,5 @@ def test_matmul_direct_indexing(
         enable_direct_indexing=True,
         transpose=transpose,
         run_types=[PerfRunType.L1_TO_L1],
-        loop_factor=1,
+        loop_factor=2 if dest_sync_mode == DestSync.Half else 1,
     )
