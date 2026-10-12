@@ -394,3 +394,23 @@ bit-exactly on device with its first output (sticky per-chip markers, read once 
 The comparator's negative control (+1 on one output) is flagged on every chip.
 - 3.50 h: 3920 passes, 23834 chunks (1.89 chunks/s), every (stream, position) visited 175 .. 1967 times:
   0 mismatches, no hang (safe-pytest dispatch timeout 5 s never fired). PASS.
+
+## Router as one fused gate; striped MLA latent cache (2026-10-12)
+
+- Router: the bf16 -> fp32 typecast of x before the fp32-weight matmul is gone (exact; 230 -> 162 us). The 7 ops after
+  the matmul are one `deepseek_prefill.moe_grouped_topk` (n_groups 1) with its new `fp32_selection` option: the
+  default op reads its selection and normalization operands through the TF32 source registers - on the real layer-4
+  gate (5120 rows) 960 rows pick a different expert set than float64 (near-ties, gaps <= 1e-3) and the weights are
+  biased low (mean -2.7e-4, from TF32 truncation; full model last-chunk top1 0.6726 -> 0.6622). fp32_selection unpacks
+  to the fp32 DEST and runs bias add / row sum / reciprocal / scaling on the SFPU: 0 mismatching rows, 2 of 40960
+  weights differ from bf16(float64). Router 162 -> 123 us per MoE layer. Full model 56k: top1 0.6816 / top5 0.8865
+  (old router 0.6726 / 0.8801; the weights match to 2 / 40960, so read the difference as noise). Nightly
+  moe_grouped_topk / hash-gate tests: 310 pass; the 5 realistic sqrtsoftplus cases fail identically without the change.
+- MLA latent cache striped block-cyclic over the 8 chips (GLM-5.3 standard's DSA layout; follows the ring indexer, so
+  serving with GLM_INDEXER_RING=0 keeps the replicated cache): [max_seq / 8, 512] per chip instead of [max_seq, 512]
+  on every chip (1M tokens, 11 DSA layers: 1.3 GiB + one 1.07 GiB gather scratch vs 10.7 GiB per chip). Per DSA layer
+  the populated prefix is gathered into one scratch shared by all layers (high_bw_all_gather, full-mesh snake) and
+  sparse_sdpa reads it with its block-cyclic remap. Real layer 3, chunks of 2048 and 5120 from 0 and a prefix reload:
+  outputs and state bit-identical to the replicated cache (tests/zz_scratch_striped_latent.py). Cost at the longest
+  context (chunk at 51200): attention 8.21 -> 8.72 ms (gather 0.58 ms, ~86 GB/s per chip; the old latent gathers
+  0.06 ms gone). Full model 56k top1 unchanged (0.6726 with the old router).
