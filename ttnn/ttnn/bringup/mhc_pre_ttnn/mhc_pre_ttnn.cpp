@@ -99,7 +99,7 @@ int64_t check_contract(const Tensor& x, const Tensor& w, const Tensor& b, int64_
 
 tt::tt_metal::ComputeConfigDescriptor default_compute_kernel_config() {
     tt::tt_metal::ComputeConfigDescriptor c;
-    c.math_fidelity = MathFidelity::HiFi4;
+    c.math_fidelity = tt::tt_metal::MathFidelity::HiFi4;
     c.fp32_dest_acc_en = true;
     c.math_approx_mode = false;
     return c;

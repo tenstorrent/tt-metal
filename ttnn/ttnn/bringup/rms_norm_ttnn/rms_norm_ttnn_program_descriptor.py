@@ -1961,7 +1961,7 @@ def _combine_noc(native_in: bool):
     return COMBINE_NOC_RESIDENT if native_in else COMBINE_NOC_STREAMED
 
 
-def _mcast_cfg(native_in: bool, base_sem_id: int = 0):
+def _mcast_cfg(native_in: bool):
     """The combine's McastConfig.
 
     The `noc` here is not cosmetic: NOC_0 and NOC_1 traverse a rectangle from opposite
@@ -1969,33 +1969,63 @@ def _mcast_cfg(native_in: bool, base_sem_id: int = 0):
     agree with the writer kernel's own NoC or the broadcast covers the wrong box, which is
     why both come off `_combine_noc` and nothing else.
     """
-    return ttnn.McastConfig(noc=_combine_noc(native_in), handshake=True, base_sem_id=base_sem_id)
+    return ttnn.McastConfig(noc=_combine_noc(native_in), handshake=True)
 
 
-def _mcast_cfg_acks(native_in: bool, ack_count: int):
-    """`_mcast_cfg` with the old Mcast2D `num_active` (#57547: McastConfig's ack_count_override)."""
+def _with_handshake_cores(cfg, cores):
+    """`cfg` where only `cores` (the ones doing work) send the ready signal: a box can hold idle cores."""
     return ttnn.McastConfig(
-        noc=_combine_noc(native_in), handshake=True, base_sem_id=0, ack_count_override=int(ack_count)
+        noc=cfg.noc,
+        handshake=True,
+        handshake_cores=ttnn.CoreRangeSet([ttnn.CoreRange(c, c) for c in cores]),
+        data_ready=cfg.data_ready,
     )
 
 
-# #57547 dropped the old helpers' compile_time_args() / runtime_args(core) / owned_semaphores()
-# queries for attach(descriptor, prefix, kernels), which appends a family's argument blocks to a
+def _without_handshake(cfg):
+    return ttnn.McastConfig(noc=cfg.noc, handshake=False, data_ready=cfg.data_ready)
+
+
+def _rect_box(rect):
+    box = rect.bounding_box()
+    assert rect.num_cores() == (box.end.x - box.start.x + 1) * (
+        box.end.y - box.start.y + 1
+    ), f"rms_norm_ttnn: a multicast needs a full rectangle, got {rect}"
+    return box
+
+
+def _line_mcast(device, rect, per_row: bool, sender_cfg, cfg):
+    """One group per row (or column) of the rectangle `rect`, each with the same fixed in-line sender."""
+    box = _rect_box(rect)
+    size = (box.end.x - box.start.x + 1) if per_row else (box.end.y - box.start.y + 1)
+    order = ttnn.McastCoreOrder.RowMajor if per_row else ttnn.McastCoreOrder.ColumnMajor
+    return ttnn.Mcast(device, cfg, rect, size, sender_cfg, order)
+
+
+def _row_major_index(box, core):
+    assert box.start.x <= core.x <= box.end.x and box.start.y <= core.y <= box.end.y
+    return (core.y - box.start.y) * (box.end.x - box.start.x + 1) + (core.x - box.start.x)
+
+
+def _box_mcast(device, rect, sender, cfg):
+    """One group over the whole rectangle `rect`, sent by `sender` (a core of the rectangle)."""
+    box = _rect_box(rect)
+    return ttnn.Mcast(
+        device, cfg, rect, rect.num_cores(), ttnn.McastFixedSenderConfig(sender_index=_row_major_index(box, sender))
+    )
+
+
+# Mcast.attach(descriptor, prefix, kernels, first_semaphore_id) appends a channel's argument blocks to a
 # kernel's CURRENT argument lists.  This builder places the wire in the MIDDLE of its argument lists
-# (fixed bases the kernels decode with the still-positional McastArgs<CT, RT>), so `_McastWire`
-# attaches the family to a scratch data-movement kernel with empty argument lists and reads the
-# blocks back -- exactly what attach() would append; nothing is re-encoded.  The C++ factory does the
-# same (device/mcast_wire.hpp).  The old per-kernel `pre_handshake` override has no equivalent in the
-# new API: compile_time_args(pre_handshake=...) sets / clears the wire's PRE_HANDSHAKE flag the way it
-# did, and the family keeps its consumer-ready semaphore either way (so every id after it is unchanged).
-_MCAST_TAG, _MCAST_FAMILY = 0, 1
-_MCAST_CT_FLAGS, _MCAST_CT_ROTATING_SPAN, _MCAST_CT_RECTANGLE_CAPACITY = 5, 6, 10
-_MCAST_PRE_HANDSHAKE, _MCAST_CAN_SEND = 0x1, 0x1
+# (fixed bases the kernels decode with the positional McastArgs<CT, RT>), so `_McastWire` attaches the
+# channel to a scratch data-movement kernel with empty argument lists and reads the blocks back --
+# exactly what attach() would append; nothing is re-encoded.  The C++ factory does the same
+# (device/mcast_wire.hpp).
 _MCAST_ABSENT_CT = [0]  # one ABSENT tag word: no runtime block, no semaphores
 
 
 class _McastWire:
-    def __init__(self, family, cores, noc, existing_semaphores=()):
+    def __init__(self, mcast, cores, noc, first_semaphore_id, adopt=False):
         scratch_kernel = ttnn.KernelDescriptor(
             kernel_source="mcast_wire_scratch",
             core_ranges=cores,
@@ -2003,18 +2033,16 @@ class _McastWire:
             runtime_args=ttnn.RuntimeArgs(),
             config=ttnn.DataMovementConfigDescriptor(noc=noc),
         )
-        scratch = ttnn.ProgramDescriptor(semaphores=list(existing_semaphores))
-        family.attach(scratch, "mcast_wire", [scratch_kernel])
+        scratch = ttnn.ProgramDescriptor()
+        mcast.attach(scratch, "mcast_wire", [scratch_kernel], first_semaphore_id)
         self.ct = [int(v) for v in scratch_kernel.compile_time_args]
         self.rt = {(c.x, c.y): [int(v) for v in scratch_kernel.runtime_args[c.x][c.y]] for c in _cores_in(cores)}
-        self.semaphores = list(scratch.semaphores)[len(existing_semaphores) :]
+        # With `adopt` the program already owns these ids (the caller's own semaphores).
+        self.semaphores = [] if adopt else list(scratch.semaphores)
+        self.next_semaphore_id = mcast.next_semaphore_id()
 
-    def compile_time_args(self, pre_handshake=None):
-        ct = list(self.ct)
-        if pre_handshake is not None and ct[_MCAST_TAG] == _MCAST_FAMILY:
-            flags = ct[_MCAST_CT_FLAGS]
-            ct[_MCAST_CT_FLAGS] = (flags | _MCAST_PRE_HANDSHAKE) if pre_handshake else (flags & ~_MCAST_PRE_HANDSHAKE)
-        return ct
+    def compile_time_args(self):
+        return list(self.ct)
 
     def runtime_args(self, core):
         return list(self.rt[(core.x, core.y)])
@@ -2022,14 +2050,33 @@ class _McastWire:
     def owned_semaphores(self):
         return list(self.semaphores)
 
-    def next_base_sem_id(self):
-        return max((s.id + 1 for s in self.semaphores), default=0)
 
-    def is_sender(self, core):
-        # roles word: after [num_rectangles, ack], the sender coords and the rectangles (multicast families)
-        span, cap = self.ct[_MCAST_CT_ROTATING_SPAN], self.ct[_MCAST_CT_RECTANGLE_CAPACITY]
-        roles = 2 + 2 * (span if span else 1) + 7 * cap
-        return (self.rt[(core.x, core.y)][roles] & _MCAST_CAN_SEND) != 0
+class _CombineMcast:
+    """The combine's multicast (line groups or one box) as its positional wire.
+
+    The writer decides later whether the sender waits for the receivers' ready signal
+    (`_combine_mcast_pre_handshake`), so both wires are built; the handshake one owns the semaphores
+    either way (ids from 0), so the semaphore set and every id after it do not depend on that choice.
+    """
+
+    def __init__(self, make, cfg, cores):
+        self.hs = _McastWire(make(cfg), cores, cfg.noc, 0)
+        self.fire_and_forget = _McastWire(make(_without_handshake(cfg)), cores, cfg.noc, 0, adopt=True)
+
+    def _wire(self, pre_handshake):
+        return self.hs if pre_handshake else self.fire_and_forget
+
+    def compile_time_args(self, pre_handshake):
+        return self._wire(pre_handshake).compile_time_args()
+
+    def runtime_args(self, core, pre_handshake):
+        return self._wire(pre_handshake).runtime_args(core)
+
+    def owned_semaphores(self):
+        return self.hs.owned_semaphores()
+
+    def next_base_sem_id(self):
+        return self.hs.next_semaphore_id
 
 
 def _combine_noc_swapped(plan) -> bool:
@@ -3020,16 +3067,10 @@ def _plan_interleaved_width_split(device, input_tensor, output_tensor, Rt, Wt, W
                 _work_tile_axis(core, row_start, rows, w_start, wt_per_core, core.x == 0, core.x, W=W, R_rm=R_rm)
             )
         mcast = (
-            _McastWire(
-                ttnn.Mcast1D(
-                    device,
-                    crs,
-                    ttnn.Mcast1DShape.PerRow,
-                    ttnn.Mcast1DFixedSenderConfig(starting_sender_index=0),
-                    mc_cfg,
-                ),
+            _CombineMcast(
+                lambda c: _line_mcast(device, crs, True, ttnn.McastFixedSenderConfig(), c),
+                mc_cfg,
                 crs,
-                _combine_noc(False),
             )
             if gw > 1
             else None
@@ -3051,15 +3092,10 @@ def _plan_interleaved_width_split(device, input_tensor, output_tensor, Rt, Wt, W
                 continue
             assignment.append(_work_tile_axis(core, 0, Rt, i * wt_per_core, wt_per_core, i == 0, i, W=W, R_rm=R_rm))
         root = assignment[0].core
-        mcast = _McastWire(
-            ttnn.Mcast2D(
-                device,
-                crs,
-                ttnn.Mcast2DFixedSenderConfig(sender=ttnn.CoreCoord(root.x, root.y)),
-                _mcast_cfg_acks(False, gw - 1),
-            ),
+        mcast = _CombineMcast(
+            lambda c: _box_mcast(device, crs, ttnn.CoreCoord(root.x, root.y), c),
+            _with_handshake_cores(mc_cfg, [w.core for w in assignment[:gw]]),
             crs,
-            _combine_noc(False),
         )
         group_axis = None  # one group over the whole box
     return _Plan(
@@ -3212,15 +3248,10 @@ def _plan_band(device, input_tensor, output_tensor, *, Rt, Wt, W, R_rm):
             )
         all_cores = bbox_crs
         mcast = (
-            _McastWire(
-                ttnn.Mcast2D(
-                    device,
-                    bbox_crs,
-                    ttnn.Mcast2DFixedSenderConfig(sender=ttnn.CoreCoord(root.x, root.y)),
-                    _mcast_cfg_acks(False, group_size - 1),  # BAND stages x, it does not alias it
-                ),
+            _CombineMcast(
+                lambda c: _box_mcast(device, bbox_crs, ttnn.CoreCoord(root.x, root.y), c),
+                _with_handshake_cores(_mcast_cfg(False), shard_cores),  # BAND stages x, it does not alias it
                 bbox_crs,
-                _combine_noc(False),
             )
             if group_size > 1
             else None
@@ -3254,16 +3285,10 @@ def _plan_band(device, input_tensor, output_tensor, *, Rt, Wt, W, R_rm):
         all_cores = shard_grid
         group_axis = "y" if shard_row_wise else "x"
         mcast = (
-            _McastWire(
-                ttnn.Mcast1D(
-                    device,
-                    shard_grid,
-                    ttnn.Mcast1DShape.PerRow if shard_row_wise else ttnn.Mcast1DShape.PerColumn,
-                    ttnn.Mcast1DFixedSenderConfig(starting_sender_index=0),
-                    _mcast_cfg(native_in=False),  # BAND stages x, it does not alias it
-                ),
+            _CombineMcast(
+                lambda c: _line_mcast(device, shard_grid, shard_row_wise, ttnn.McastFixedSenderConfig(), c),
+                _mcast_cfg(native_in=False),  # BAND stages x, it does not alias it
                 shard_grid,
-                _combine_noc(False),
             )
             if group_size > 1
             else None
@@ -3399,15 +3424,10 @@ def _plan_placement(device, input_tensor, output_tensor, *, is_tile, Rt, Wt, W, 
             )
         all_cores = bbox_crs
         mcast = (
-            _McastWire(
-                ttnn.Mcast2D(
-                    device,
-                    bbox_crs,
-                    ttnn.Mcast2DFixedSenderConfig(sender=ttnn.CoreCoord(root.x, root.y)),
-                    _mcast_cfg_acks(True, group_size - 1),  # x is the resident shard
-                ),
+            _CombineMcast(
+                lambda c: _box_mcast(device, bbox_crs, ttnn.CoreCoord(root.x, root.y), c),
+                _with_handshake_cores(_mcast_cfg(True), shard_cores),  # x is the resident shard
                 bbox_crs,
-                _combine_noc(True),
             )
             if group_size > 1
             else None
@@ -3447,16 +3467,10 @@ def _plan_placement(device, input_tensor, output_tensor, *, is_tile, Rt, Wt, W, 
         all_cores = shard_grid
         group_axis = "y" if shard_row_wise else "x"
         mcast = (
-            _McastWire(
-                ttnn.Mcast1D(
-                    device,
-                    shard_grid,
-                    ttnn.Mcast1DShape.PerRow if shard_row_wise else ttnn.Mcast1DShape.PerColumn,
-                    ttnn.Mcast1DFixedSenderConfig(starting_sender_index=0),
-                    _mcast_cfg(native_in=True),  # x is the resident shard
-                ),
+            _CombineMcast(
+                lambda c: _line_mcast(device, shard_grid, shard_row_wise, ttnn.McastFixedSenderConfig(), c),
+                _mcast_cfg(native_in=True),  # x is the resident shard
                 shard_grid,
-                _combine_noc(True),
             )
             if group_size > 1
             else None
@@ -4587,37 +4601,41 @@ def create_program_descriptor(
                 noc=_reader_noc(plan),
                 handshake=handshake,
                 data_ready=(ttnn.McastDataReady.Flag if handshake else ttnn.McastDataReady.Counter),
-                base_sem_id=base_sem,
             )
             if PC_MCAST_MODE in ("col", "row"):
-                shape = ttnn.Mcast1DShape.PerColumn if PC_MCAST_MODE == "col" else ttnn.Mcast1DShape.PerRow
+                per_row = PC_MCAST_MODE == "row"
                 placement = (
-                    ttnn.Mcast1DSenderPlacement.Diagonal if PC_MCAST_DIAGONAL else ttnn.Mcast1DSenderPlacement.Uniform
+                    ttnn.McastSenderPlacement.Staggered if PC_MCAST_DIAGONAL else ttnn.McastSenderPlacement.Uniform
                 )
                 pc_mcast = _McastWire(
-                    ttnn.Mcast1D(
+                    _line_mcast(
                         device,
                         all_cores,
-                        shape,
-                        ttnn.Mcast1DFixedSenderConfig(
-                            starting_sender_index=PC_MCAST_SENDER_INDEX, sender_placement=placement
-                        ),
+                        per_row,
+                        ttnn.McastFixedSenderConfig(sender_index=PC_MCAST_SENDER_INDEX, placement=placement),
                         cfg,
                     ),
                     all_cores,
                     _reader_noc(plan),
+                    base_sem,
                 )
+                # Line g's sender is its core PC_MCAST_SENDER_INDEX (+ g, wrapped, when staggered).
+                box = _rect_box(all_cores)
+                lines = sorted({(c.y if per_row else c.x) for c in cores})
+                size = (box.end.x - box.start.x + 1) if per_row else (box.end.y - box.start.y + 1)
+                senders = set()
+                for g, line in enumerate(lines):
+                    i = (PC_MCAST_SENDER_INDEX + (g if PC_MCAST_DIAGONAL else 0)) % size
+                    senders.add((box.start.x + i, line) if per_row else (line, box.start.y + i))
                 on = {k for g in live for k in g}
                 pc_role = {
-                    (c.x, c.y): ((1 if pc_mcast.is_sender(c) else 0) if (c.x, c.y) in on else PC_OPT_OUT) for c in cores
+                    (c.x, c.y): ((1 if (c.x, c.y) in senders else 0) if (c.x, c.y) in on else PC_OPT_OUT) for c in cores
                 }
             elif PC_MCAST_MODE == "one":
                 pc_mcast = _McastWire(
-                    ttnn.Mcast2D(device, all_cores, ttnn.Mcast2DFixedSenderConfig(sender=cores[0]), cfg),
-                    all_cores,
-                    _reader_noc(plan),
+                    _box_mcast(device, all_cores, cores[0], cfg), all_cores, _reader_noc(plan), base_sem
                 )
-                pc_role = {(c.x, c.y): (1 if pc_mcast.is_sender(c) else 0) for c in cores}
+                pc_role = {(c.x, c.y): (1 if (c.x, c.y) == (cores[0].x, cores[0].y) else 0) for c in cores}
             else:
                 # SPLIT.  The injectors are spread EVENLY through the rectangle in
                 # (y, x) order -- the same order `Mcast2D::senders_from_grid_` sorts
@@ -4630,16 +4648,16 @@ def create_program_descriptor(
                 sender_grid = ttnn.CoreRangeSet([ttnn.CoreRange(c, c) for c in pick])
                 assert rotating
                 pc_mcast = _McastWire(
-                    ttnn.Mcast2D(
+                    ttnn.Mcast(
                         device,
-                        all_cores,
-                        ttnn.Mcast2DRotatingSenderConfig(
-                            sender_grid=sender_grid, sender_order=ttnn.Mcast2DSenderOrder.RowMajor
-                        ),
                         cfg,
+                        all_cores,
+                        all_cores.num_cores(),
+                        ttnn.McastRotatingSenderConfig(sender_grid, sender_order=ttnn.McastCoreOrder.RowMajor),
                     ),
                     all_cores,
                     _reader_noc(plan),
+                    base_sem,
                 )
                 order = {(c.x, c.y): i for i, c in enumerate(sorted(pick, key=lambda c: (c.y, c.x)))}
                 pc_role = {(c.x, c.y): (order.get((c.x, c.y), -1) + 1) for c in cores}
@@ -4756,9 +4774,7 @@ def create_program_descriptor(
     # of the fire-and-forget lever -- one flags bit, no new CT arg, no kernel change (both
     # SenderPipe and ReceiverPipe read the same bit).  `_combine_mcast_pre_handshake` is the
     # single place the gate lives.
-    writer_ct_args.extend(
-        plan.mcast.compile_time_args(pre_handshake=mcast_pre_handshake) if combine else _MCAST_ABSENT_CT
-    )
+    writer_ct_args.extend(plan.mcast.compile_time_args(mcast_pre_handshake) if combine else _MCAST_ABSENT_CT)
     writer_ct_args.extend(ttnn.TensorAccessorArgs(output_tensor).get_compile_time_args())
 
     # ---- compute ----------------------------------------------------------
@@ -4864,7 +4880,7 @@ def create_program_descriptor(
             [out_addr, w.row_start, w.row_count, w.w_start, 1 if w.is_root else 0, w.slot]
             + band_rt
             + tree_parent.get((core.x, core.y), [0, 0])
-            + (list(plan.mcast.runtime_args(core)) if combine else [])
+            + (list(plan.mcast.runtime_args(core, mcast_pre_handshake)) if combine else [])
         )
         compute_rt[core.x][core.y] = [w.row_count, owns_last_w, 1 if w.is_root else 0, w.slot]
 

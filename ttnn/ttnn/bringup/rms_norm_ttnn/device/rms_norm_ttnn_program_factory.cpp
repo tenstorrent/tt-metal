@@ -19,6 +19,7 @@
 #include <cstdint>
 #include <cstdlib>
 #include <cstring>
+#include <functional>
 #include <map>
 #include <optional>
 #include <set>
@@ -38,7 +39,7 @@
 #include <tt-metalium/tensor_accessor_args.hpp>
 #include <tt-metalium/work_split.hpp>
 
-#include "ttnn/cpp/ttnn/kernel_lib/mcast/host/mcast_host.hpp"
+#include "ttnn/kernel_lib/mcast/host/mcast.hpp"
 #include "mcast_wire.hpp"
 #include "ttnn/tensor/tensor_utils.hpp"
 
@@ -485,18 +486,53 @@ bool combine_mcast_pre_handshake(bool combine, bool single_round) {
 
 NOC combine_noc(bool native_in) { return native_in ? COMBINE_NOC_RESIDENT : COMBINE_NOC_STREAMED; }
 
-kh::McastConfig mcast_cfg(bool native_in, uint32_t base_sem_id = 0) {
+kh::McastConfig mcast_cfg(bool native_in) {
     kh::McastConfig cfg;
     cfg.noc = combine_noc(native_in);
     cfg.handshake = true;
-    cfg.base_sem_id = base_sem_id;
     return cfg;
 }
 
-// The same config with the old Mcast2D `num_active` (#57547: McastConfig::ack_count_override).
-kh::McastConfig with_ack_count(kh::McastConfig cfg, int64_t ack_count) {
-    cfg.ack_count_override = static_cast<uint32_t>(ack_count);
+// Only the cores that do work send the ready signal (a group's bounding box can hold idle cores).
+kh::McastConfig with_handshake_cores(kh::McastConfig cfg, const std::vector<CoreCoord>& cores) {
+    std::vector<CoreRange> ranges;
+    ranges.reserve(cores.size());
+    for (const auto& c : cores) {
+        ranges.emplace_back(c);
+    }
+    cfg.handshake_cores = CoreRangeSet(ranges);
     return cfg;
+}
+
+// One group per row (or column) of the rectangle `rect`, each with the same fixed in-line sender.
+kh::Mcast line_mcast(
+    tt::tt_metal::IDevice* device,
+    const CoreRangeSet& rect,
+    bool per_row,
+    const kh::McastFixedSenderConfig& sender,
+    const kh::McastConfig& cfg) {
+    const auto box = rect.bounding_box();
+    TT_FATAL(rect.num_cores() == box.size(), "rms_norm_ttnn: a line multicast needs a full rectangle");
+    return kh::Mcast(
+        *device,
+        cfg,
+        rect,
+        static_cast<uint32_t>(per_row ? box.grid_size().x : box.grid_size().y),
+        sender,
+        per_row ? kh::McastCoreOrder::RowMajor : kh::McastCoreOrder::ColumnMajor);
+}
+
+// One group over the whole rectangle `rect`, sent by `sender` (a core of the rectangle).
+kh::Mcast box_mcast(
+    tt::tt_metal::IDevice* device, const CoreRangeSet& rect, const CoreCoord& sender, const kh::McastConfig& cfg) {
+    const auto box = rect.bounding_box();
+    TT_FATAL(rect.num_cores() == box.size(), "rms_norm_ttnn: a box multicast needs a full rectangle");
+    return kh::Mcast(
+        *device,
+        cfg,
+        rect,
+        static_cast<uint32_t>(rect.num_cores()),
+        kh::McastFixedSenderConfig{.sender_index = mcast_wire::row_major_index(box, sender)});
 }
 
 // ---- per-channel form ------------------------------------------------------------------------
@@ -661,28 +697,42 @@ Work work_inactive(CoreCoord core) {
     return w;
 }
 
-// The combine's multicast: a Mcast1D line family or one Mcast2D box, held as its positional wire
-// (mcast_wire.hpp: #57547's attach() read back from a scratch kernel on `cores`, the writer's NoC).
+// The combine's multicast (line groups or one box), held as its positional wire (mcast_wire.hpp: attach() read back
+// from a scratch kernel on `cores`, the writer's NoC). The writer decides later whether the sender waits for the
+// receivers' ready signal (combine_mcast_pre_handshake), so both wires are built; the handshake one owns the
+// semaphores either way (ids from 0), so the semaphore set and every id after it do not depend on that choice.
 struct CombineMcast {
-    mcast_wire::McastWire w;
+    mcast_wire::McastWire hs;
+    mcast_wire::McastWire fire_and_forget;
 
-    template <typename Family>
-    CombineMcast(const Family& family, const CoreRangeSet& cores, NOC noc) :
-        w(mcast_wire::extract(family, cores, noc)) {}
+    CombineMcast(
+        const std::function<kh::Mcast(const kh::McastConfig&)>& make,
+        const kh::McastConfig& cfg,
+        const CoreRangeSet& cores) :
+        hs(mcast_wire::extract(make(cfg), cores, cfg.noc, 0)),
+        fire_and_forget(mcast_wire::extract(
+            make(without_handshake(cfg)),
+            cores,
+            cfg.noc,
+            0,
+            true,
+            tt::tt_metal::ProgramDescriptor::SemaphoreDescriptors(hs.semaphores.begin(), hs.semaphores.end()))) {}
 
-    std::vector<uint32_t> compile_time_args(std::optional<bool> pre_handshake) const {
-        return w.compile_time_args(pre_handshake);
+    static kh::McastConfig without_handshake(kh::McastConfig cfg) {
+        cfg.handshake = false;
+        cfg.handshake_cores = std::nullopt;
+        return cfg;
     }
-    const std::vector<uint32_t>& runtime_args(const CoreCoord& core) const { return w.runtime_args(core); }
-    std::vector<SemaphoreDescriptor> owned_semaphores() const { return w.semaphores; }
-    // The first id after the family's own (they are consecutive from its base_sem_id).
-    uint32_t next_base_sem_id() const {
-        uint32_t next = 0;
-        for (const auto& s : w.semaphores) {
-            next = std::max(next, s.id + 1);
-        }
-        return next;
+
+    const mcast_wire::McastWire& wire(bool pre_handshake) const { return pre_handshake ? hs : fire_and_forget; }
+    const std::vector<uint32_t>& compile_time_args(bool pre_handshake) const {
+        return wire(pre_handshake).compile_time_args();
     }
+    const std::vector<uint32_t>& runtime_args(const CoreCoord& core, bool pre_handshake) const {
+        return wire(pre_handshake).runtime_args(core);
+    }
+    const std::vector<SemaphoreDescriptor>& owned_semaphores() const { return hs.semaphores; }
+    uint32_t next_base_sem_id() const { return hs.next_semaphore_id; }
 };
 
 struct Plan {
@@ -784,14 +834,11 @@ Plan plan_interleaved_width_split(
         }
         if (gw > 1) {
             p.mcast = CombineMcast(
-                kh::Mcast1D(
-                    device,
-                    crs,
-                    kh::Mcast1DShape::PerRow,
-                    kh::Mcast1DFixedSenderConfig{.starting_sender_index = 0},
-                    mc_cfg),
-                crs,
-                mc_cfg.noc);
+                [&](const kh::McastConfig& c) {
+                    return line_mcast(device, crs, true, kh::McastFixedSenderConfig{}, c);
+                },
+                mc_cfg,
+                crs);
         }
         p.group_axis = GroupAxis::Y;
         p.all_cores = crs;
@@ -809,14 +856,16 @@ Plan plan_interleaved_width_split(
             ++i;
         }
         const auto root = p.assignment[0].core;
+        std::vector<CoreCoord> active;
+        for (const auto& w : p.assignment) {
+            if (static_cast<int64_t>(active.size()) < gw) {
+                active.push_back(w.core);
+            }
+        }
         p.mcast = CombineMcast(
-            kh::Mcast2D(
-                device,
-                crs,
-                kh::Mcast2DFixedSenderConfig{.sender = CoreCoord(root.x, root.y)},
-                with_ack_count(mc_cfg, gw - 1)),
-            crs,
-            mc_cfg.noc);
+            [&](const kh::McastConfig& c) { return box_mcast(device, crs, CoreCoord(root.x, root.y), c); },
+            with_handshake_cores(mc_cfg, active),
+            crs);
         p.group_axis = GroupAxis::None;
         p.all_cores = crs;
     }
@@ -912,13 +961,9 @@ Plan plan_band(tt::tt_metal::IDevice* device, const Tensor& input, const Tensor&
         p.group_size = group_size;
         if (group_size > 1) {
             p.mcast = CombineMcast(
-                kh::Mcast2D(
-                    device,
-                    bbox_crs,
-                    kh::Mcast2DFixedSenderConfig{.sender = CoreCoord(root.x, root.y)},
-                    with_ack_count(mcast_cfg(false), group_size - 1)),
-                bbox_crs,
-                mcast_cfg(false).noc);
+                [&](const kh::McastConfig& c) { return box_mcast(device, bbox_crs, CoreCoord(root.x, root.y), c); },
+                with_handshake_cores(mcast_cfg(false), shard_cores),
+                bbox_crs);
         }
     } else {
         const int64_t nx = bbox.end_coord.x - bbox.start_coord.x + 1;
@@ -947,14 +992,11 @@ Plan plan_band(tt::tt_metal::IDevice* device, const Tensor& input, const Tensor&
         p.group_size = group_size;
         if (group_size > 1) {
             p.mcast = CombineMcast(
-                kh::Mcast1D(
-                    device,
-                    shard_grid,
-                    row_wise ? kh::Mcast1DShape::PerRow : kh::Mcast1DShape::PerColumn,
-                    kh::Mcast1DFixedSenderConfig{.starting_sender_index = 0},
-                    mcast_cfg(false)),
-                shard_grid,
-                mcast_cfg(false).noc);
+                [&](const kh::McastConfig& c) {
+                    return line_mcast(device, shard_grid, row_wise, kh::McastFixedSenderConfig{}, c);
+                },
+                mcast_cfg(false),
+                shard_grid);
         }
     }
     int64_t wt_band = 1;
@@ -1060,13 +1102,9 @@ Plan plan_placement(
         p.group_size = group_size;
         if (group_size > 1) {
             p.mcast = CombineMcast(
-                kh::Mcast2D(
-                    device,
-                    bbox_crs,
-                    kh::Mcast2DFixedSenderConfig{.sender = CoreCoord(root.x, root.y)},
-                    with_ack_count(mcast_cfg(true), group_size - 1)),
-                bbox_crs,
-                mcast_cfg(true).noc);
+                [&](const kh::McastConfig& c) { return box_mcast(device, bbox_crs, CoreCoord(root.x, root.y), c); },
+                with_handshake_cores(mcast_cfg(true), shard_cores),
+                bbox_crs);
         }
     } else {
         TT_FATAL(
@@ -1096,14 +1134,11 @@ Plan plan_placement(
         p.group_size = group_size;
         if (group_size > 1) {
             p.mcast = CombineMcast(
-                kh::Mcast1D(
-                    device,
-                    shard_grid,
-                    row_wise ? kh::Mcast1DShape::PerRow : kh::Mcast1DShape::PerColumn,
-                    kh::Mcast1DFixedSenderConfig{.starting_sender_index = 0},
-                    mcast_cfg(true)),
-                shard_grid,
-                mcast_cfg(true).noc);
+                [&](const kh::McastConfig& c) {
+                    return line_mcast(device, shard_grid, row_wise, kh::McastFixedSenderConfig{}, c);
+                },
+                mcast_cfg(true),
+                shard_grid);
         }
     }
     p.native_in = true;
@@ -1919,13 +1954,12 @@ ProgramDescriptor create_program_descriptor(
             cfg.handshake = handshake;
             cfg.data_ready =
                 handshake ? dataflow_kernel_lib::DataReadySignal::Flag : dataflow_kernel_lib::DataReadySignal::Counter;
-            cfg.base_sem_id = base_sem;
-            const kh::Mcast1DFixedSenderConfig sender_cfg{
-                .starting_sender_index = PC_MCAST_SENDER_INDEX,
-                .sender_placement =
-                    PC_MCAST_DIAGONAL ? kh::Mcast1DSenderPlacement::Diagonal : kh::Mcast1DSenderPlacement::Uniform};
+            const kh::McastFixedSenderConfig sender_cfg{
+                .sender_index = PC_MCAST_SENDER_INDEX,
+                .placement =
+                    PC_MCAST_DIAGONAL ? kh::McastSenderPlacement::Staggered : kh::McastSenderPlacement::Uniform};
             pc_mcast.emplace(mcast_wire::extract(
-                kh::Mcast1D(device, all_cores, kh::Mcast1DShape::PerRow, sender_cfg, cfg), all_cores, cfg.noc));
+                line_mcast(device, all_cores, true, sender_cfg, cfg), all_cores, cfg.noc, base_sem));
             std::set<std::pair<uint32_t, uint32_t>> on;
             for (const auto& g : live) {
                 on.insert(g.begin(), g.end());
@@ -2144,7 +2178,7 @@ ProgramDescriptor create_program_descriptor(
             wr.push_back(0);
         }
         if (combine) {
-            const auto m = plan.mcast->runtime_args(core);
+            const auto m = plan.mcast->runtime_args(core, mcast_pre_handshake);
             wr.insert(wr.end(), m.begin(), m.end());
         }
         writer_rt.emplace_back(core, std::move(wr));
