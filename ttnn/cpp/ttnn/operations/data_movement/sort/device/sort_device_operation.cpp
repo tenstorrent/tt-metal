@@ -265,10 +265,11 @@ ttnn::prim::SortDeviceOperation::tensor_return_value_t sort(
     bool descending,
     bool stable,
     const MemoryConfig& output_memory_config,
-    const std::vector<std::optional<Tensor>>& output_tensors) {
+    const std::vector<std::optional<Tensor>>& output_tensors,
+    bool sort_dim_padded) {
     using OperationType = ttnn::prim::SortDeviceOperation;
     return ttnn::device_operation::launch<OperationType>(
-        OperationType::operation_attributes_t{dim, descending, stable, output_memory_config},
+        OperationType::operation_attributes_t{dim, descending, stable, output_memory_config, sort_dim_padded},
         OperationType::tensor_args_t{input_tensor, output_tensors});
 }
 }  // namespace ttnn::prim
