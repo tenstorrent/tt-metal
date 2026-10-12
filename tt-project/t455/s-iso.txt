@@ -1,0 +1,8 @@
+ID=t455-iso
+TASK=t455
+WORKDIR=/var/tmp/fasth3/t455
+ENV=/var/tmp/fasth3/t452/env452.yaml
+CONFIG=t455-sla-device-iso
+TIMEOUT=600
+CMD=bash /var/tmp/fasth3/t455/run455.sh
+NEEDS=/var/tmp/fasth3/t409/b/ttnn/ttnn/_ttnn.so,/var/tmp/fasth3/t455/w/OVERLAY
