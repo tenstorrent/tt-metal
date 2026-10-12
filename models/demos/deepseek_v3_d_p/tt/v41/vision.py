@@ -24,6 +24,7 @@ model.py's ``merge_image_embeddings`` writes into the IMAGE slots of the span.
 from __future__ import annotations
 
 import math
+import os
 
 import torch
 import torch.nn.functional as F
@@ -37,7 +38,17 @@ HEAD_DIM = 64
 INTER = 2816
 RATIO = 3
 EPS = 1e-6
-ROW_PAD = 128  # SDPA q/k chunk
+# SDPA chunks. The flash kernel keeps its running output / max in bf16 CBs (sdpa_program_factory.cpp im_df), so every k chunk
+# is one bf16 rescale-and-add: the error grows with N / k_chunk (DS41F-0045, T4's 8649 patches vs fp32, aligner rows per-row
+# mean: k 128 0.99674 / 439 ms, k 512 0.99796 / 394 ms, k 1024 (q 64) 0.99817 / 440 ms, k 2048 (q 32) fails to build; the fp32
+# math path 0.99927 / 7962 ms)
+Q_CHUNK = int(os.environ.get("V41_VIT_Q_CHUNK", "128"))
+K_CHUNK = int(os.environ.get("V41_VIT_K_CHUNK", "512"))
+ROW_PAD = max(Q_CHUNK, K_CHUNK)  # the padded patch count is a multiple of both chunks
+# V41_VIT_ATTN=math: explicit attention per block of query rows -- S = q k^T in fp32, the pad keys masked, an fp32 softmax,
+# then P v -- no running bf16 rescale; slower, the precision reference for the flash path
+ATTN_MODE = os.environ.get("V41_VIT_ATTN", "flash")
+MATH_ROWS = int(os.environ.get("V41_VIT_MATH_ROWS", "1024"))
 K_PAD = 608  # 588 = 3 * 14 * 14 -> 19 tiles
 
 
@@ -163,6 +174,37 @@ class V41Vision:
             )
         return self._rope[key]
 
+    def _math_attention(self, q, k, v, n_pad: int):
+        """softmax(q k^T * scale + key_mask) v with an fp32 score / softmax, per block of MATH_ROWS query rows."""
+        kt = ttnn.transpose(k, -2, -1)
+        outs = []
+        for r0 in range(0, n_pad, MATH_ROWS):
+            r1 = min(n_pad, r0 + MATH_ROWS)
+            qc = ttnn.slice(q, [0, 0, r0, 0], [1, HEADS, r1, HEAD_DIM])
+            sc = ttnn.matmul(qc, kt, dtype=ttnn.float32, compute_kernel_config=self.ck_hifi4)
+            ttnn.deallocate(qc)
+            sc = ttnn.add(ttnn.multiply(sc, self.scale), self._key_mask, dtype=ttnn.float32)
+            p = ttnn.softmax(sc, dim=-1, numeric_stable=True, compute_kernel_config=self.ck_hifi4)
+            ttnn.deallocate(sc)
+            outs.append(ttnn.matmul(p, v, dtype=ttnn.bfloat16, compute_kernel_config=self.ck_hifi4))
+            ttnn.deallocate(p)
+        ttnn.deallocate(kt)
+        o = outs[0] if len(outs) == 1 else ttnn.concat(outs, dim=2)
+        return o
+
+    def _windows(self, n: int, n_pad: int):
+        """The SDPA windows [0, n, n_pad] (real rows attend real rows only) and, for the math path, the key mask."""
+        if ATTN_MODE == "math":
+            m = torch.zeros(1, 1, 1, n_pad)
+            m[..., n:] = float("-inf")
+            self._key_mask = ttnn.from_torch(
+                m, dtype=ttnn.float32, layout=ttnn.TILE_LAYOUT, device=self.device
+            )  # row-broadcast
+        bounds = [0, n] + ([n_pad] if n_pad > n else [])
+        return ttnn.from_torch(
+            torch.tensor(bounds, dtype=torch.int32), dtype=ttnn.int32, layout=ttnn.ROW_MAJOR_LAYOUT, device=self.device
+        )
+
     def _rms(self, x, w):
         return ttnn.rms_norm(x, epsilon=EPS, weight=w, compute_kernel_config=self.ck_hifi4)
 
@@ -176,8 +218,9 @@ class V41Vision:
             compute_kernel_config=self.ck_hifi4,
         )
 
-    def block(self, x, i: int, cos, sin, cu):
-        """x [1, 1, Np, 1024] -> the next block's input (model.py ``Block.forward``)."""
+    def block(self, x, i: int, cos, sin, cu, taps: dict | None = None):
+        """x [1, 1, Np, 1024] -> the next block's input (model.py ``Block.forward``). ``taps``: receives the attention
+        sublayer output ``attn`` and the MLP output ``mlp`` (device tensors, before their residual adds)."""
         w = self.blocks[i]
         h = self._rms(x, w["n1"])
         qkv = self._lin(h, w["wqkv"], w["bqkv"])
@@ -191,21 +234,24 @@ class V41Vision:
         ttnn.deallocate(q)
         ttnn.deallocate(k)
         n_pad = x.shape[-2]
-        o = ttnn.transformer.scaled_dot_product_attention(
-            q2,
-            k2,
-            v,
-            is_causal=False,
-            scale=self.scale,
-            cu_window_seqlens=cu,
-            program_config=ttnn.SDPAProgramConfig(
-                compute_with_storage_grid_size=self.device.compute_with_storage_grid_size(),
-                q_chunk_size=min(128, n_pad),
-                k_chunk_size=min(128, n_pad),
-                exp_approx_mode=False,
-            ),
-            compute_kernel_config=self.ck_sdpa,
-        )
+        if ATTN_MODE == "math":
+            o = self._math_attention(q2, k2, v, n_pad)
+        else:
+            o = ttnn.transformer.scaled_dot_product_attention(
+                q2,
+                k2,
+                v,
+                is_causal=False,
+                scale=self.scale,
+                cu_window_seqlens=cu,
+                program_config=ttnn.SDPAProgramConfig(
+                    compute_with_storage_grid_size=self.device.compute_with_storage_grid_size(),
+                    q_chunk_size=min(Q_CHUNK, n_pad),
+                    k_chunk_size=min(K_CHUNK, n_pad),
+                    exp_approx_mode=False,
+                ),
+                compute_kernel_config=self.ck_sdpa,
+            )
         for t in (q2, k2, v):
             ttnn.deallocate(t)
         o2 = ttnn.experimental.nlp_concat_heads(o, memory_config=ttnn.DRAM_MEMORY_CONFIG)
@@ -213,7 +259,10 @@ class V41Vision:
         a = self._lin(o2, w["wo"], w["bo"])
         ttnn.deallocate(o2)
         x = ttnn.add(x, a)
-        ttnn.deallocate(a)
+        if taps is not None:
+            taps["attn"] = a
+        else:
+            ttnn.deallocate(a)
         h = self._rms(x, w["n2"])
         # mlp_fp32 (experiment, default off): gate / up and silu(gate) * up in fp32. From block 12 a few hidden units drive the
         # massive channels (308 / 53, +-1520) to ~0 on ordinary rows; fp32 here did NOT recover those rows (T1 block 12 per-row
@@ -242,8 +291,33 @@ class V41Vision:
         ttnn.deallocate(m)
         out = ttnn.add(x, y)
         ttnn.deallocate(x)
-        ttnn.deallocate(y)
+        if taps is not None:
+            taps["mlp"] = y
+        else:
+            ttnn.deallocate(y)
         return out
+
+    def block_forced(self, x_in: torch.Tensor, i: int, n_h: int, n_w: int) -> dict:
+        """Block ``i`` alone on a host input [N, 1024] (teacher forcing from a reference's block i-1 output): the host
+        tensors ``attn`` and ``mlp`` (sublayer outputs before their residual adds) and ``out`` [N, 1024]."""
+        n = n_h * n_w
+        n_pad = -(-n // ROW_PAD) * ROW_PAD
+        x = ttnn.from_torch(
+            F.pad(x_in.to(torch.bfloat16), (0, 0, 0, n_pad - n)).reshape(1, 1, n_pad, DIM),
+            dtype=ttnn.bfloat16,
+            layout=ttnn.TILE_LAYOUT,
+            device=self.device,
+            memory_config=ttnn.DRAM_MEMORY_CONFIG,
+        )
+        cos, sin = self._rope_tables(n_h, n_w, n_pad)
+        cu = self._windows(n, n_pad)
+        taps: dict = {}
+        out = self.block(x, i, cos, sin, cu, taps=taps)
+        res = {k: ttnn.to_torch(t).reshape(n_pad, DIM)[:n].float() for k, t in taps.items()}
+        res["out"] = ttnn.to_torch(out).reshape(n_pad, DIM)[:n].float()
+        for t in list(taps.values()) + [out]:
+            ttnn.deallocate(t)
+        return res
 
     # ── public ──────────────────────────────────────────────────────────────────────────────────────────────────────
     def vit(self, patches: torch.Tensor, n_h: int, n_w: int, *, capture: list | None = None) -> torch.Tensor:
@@ -259,10 +333,7 @@ class V41Vision:
         )
         x = self._lin(x, self.pe_w, self.pe_b)
         cos, sin = self._rope_tables(n_h, n_w, n_pad)
-        bounds = [0, n] + ([n_pad] if n_pad > n else [])
-        cu = ttnn.from_torch(
-            torch.tensor(bounds, dtype=torch.int32), dtype=ttnn.int32, layout=ttnn.ROW_MAJOR_LAYOUT, device=self.device
-        )
+        cu = self._windows(n, n_pad)
         for i in range(self.n_layers):
             x = self.block(x, i, cos, sin, cu)
             if capture is not None:
