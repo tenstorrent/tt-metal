@@ -779,12 +779,28 @@ def _pgroup_io_counters(pgid) -> tuple:
     """
     calls = 0
     total = 0
+    for c, b in _tree_io_counters(pgid).values():
+        calls += c
+        total += b
+    return calls, total
+
+
+def _tree_io_counters(pgid) -> dict:
+    """{pid: (syscalls, io_bytes)} for every member of the run -- its group and everything its leader
+    started (see _pgroup_io_counters, which sums this). {} when /proc cannot be read.
+
+    Per process, because the stall check needs to know WHICH processes are moving the counters: a
+    hung test's background threads keep ticking its syscall count while its main thread sits in one
+    call for hours, and only that process's stack can say so."""
     members = {pid for pid, fields in _proc_stat_fields() if len(fields) > 2 and fields[2] == str(pgid)}
     try:
         members.update(_descendant_pids(int(pgid)))
     except (TypeError, ValueError):
         pass
+    out = {}
     for pid in members:
+        calls = 0
+        total = 0
         try:
             with open("/proc/%d/io" % pid) as fh:
                 for line in fh:
@@ -795,31 +811,61 @@ def _pgroup_io_counters(pgid) -> tuple:
                         total += int(v)
         except (FileNotFoundError, ProcessLookupError, PermissionError, OSError, ValueError):
             continue
-    return calls, total
+        out[pid] = (calls, total)
+    return out
+
+
+def _py_spy_exe() -> str:
+    """py-spy on PATH, else the one installed beside the running interpreter, else "".
+
+    A supervisor started as `python_env/bin/python -m ...` without activating the venv has the venv's
+    bin off PATH, so a py-spy pip-installed into that venv was invisible and every stack read came
+    back empty -- the stack check silently never ran."""
+    import shutil as _shutil
+
+    exe = _shutil.which("py-spy")
+    if exe:
+        return exe
+    beside = Path(sys.executable).parent / "py-spy"
+    return str(beside) if beside.is_file() and os.access(beside, os.X_OK) else ""
 
 
 def _stack_fingerprint(pid) -> str:
-    """The top of the process's Python stack, or "" when it cannot be sampled.
+    """A digest of the process's Python stacks AND their local variables, or "" when it cannot be
+    sampled.
 
     THE ONE SIGNAL A KERNEL-SIDE LIVELOCK CANNOT FAKE. A poll loop asking the driver "ready yet?"
     moves the syscall counter forever, so the counters above call it alive; its STACK does not move.
     Sampled with py-spy when it is installed -- optional by design, because the counters already
     cover the common case and a missing profiler must not make the tool refuse to run.
+
+    LOCALS, because a healthy loop can sit on the same line every time it is sampled: a decode loop
+    that spends most of each step waiting in one read lands there sample after sample, and frames
+    alone would call it frozen. Its loop variable does not stay still; a hung call's locals do.
+    --nonblocking, because pausing a profiled run to look at it would show up in what it measures.
+    Digested whole rather than cut to a prefix: py-spy prints the innermost frame first, so a prefix
+    keeps the frame that never changes and drops the outer loop that does.
     """
-    import shutil as _shutil
+    import hashlib as _hashlib
     import subprocess as _sp
 
-    exe = _shutil.which("py-spy")
+    exe = _py_spy_exe()
     if not exe:
         return ""
     try:
-        r = _sp.run([exe, "dump", "--pid", str(int(pid))], capture_output=True, text=True, timeout=8)
+        r = _sp.run(
+            [exe, "dump", "--pid", str(int(pid)), "--locals", "--nonblocking"],
+            capture_output=True,
+            text=True,
+            timeout=8,
+        )
     except Exception:  # noqa: BLE001 -- an unsampleable process contributes nothing, never an error
         return ""
     if r.returncode != 0:
         return ""
     # The frames only -- not the thread header, which carries a state that flickers between samples.
-    return "\n".join(ln.strip() for ln in (r.stdout or "").splitlines() if ln.startswith("    "))[:2000]
+    frames = "\n".join(ln.strip() for ln in (r.stdout or "").splitlines() if ln.startswith("    "))
+    return _hashlib.sha1(frames.encode()).hexdigest() if frames else ""
 
 
 def progress_signature(pgid, log_path=None, pid=None) -> tuple:
@@ -855,9 +901,17 @@ class ProgressWatch:
     already diverging on the day it was written. So it lives here, once.
 
     Holds the last signature and the last time a stack was sampled; `moved()` folds a fresh sample
-    in and answers. The stack is the expensive field -- it costs a subprocess -- so it is only
-    sampled once the cheap counters have been still for half the stall window (and never more often
-    than _STACK_EVERY_S), and only when the caller offers a pid.
+    in and answers. The stack is the expensive field -- it costs a subprocess -- so it is never
+    sampled more often than _STACK_EVERY_S, and only when the caller offers a pid.
+
+    WHEN THE COUNTERS MOVE, THE STACKS OF WHOEVER MOVED THEM DECIDE. The counters were trusted on
+    their own, and the stack only consulted once they went quiet -- which a hung device run never
+    does. Measured 2026-10-12 on a MiniCPM5-2B profile: the test sat in one `to_torch` for three
+    hours, Python stack byte-identical across samples, while its background threads moved ~200
+    syscalls every 20 s. Every poll called that progress, so the stall clock never started and only
+    the 12 h ceiling stood behind it. Now counters that move only count while the processes moving
+    them also move their stacks (frames and locals). A process whose stack cannot be read -- a
+    compiler, the capture tool, a box without py-spy -- keeps the counters' word, exactly as before.
     """
 
     def __init__(self, pgid, log_path=None, stall_s=0.0):
@@ -867,6 +921,10 @@ class ProgressWatch:
         self._sig = progress_signature(pgid, log_path)
         self._last_stack_at = 0.0
         self._max_gap = 0.0
+        # pid -> (its io counters, its stack digest) as of the last busy-tree sample.
+        self._busy = {}
+        # True while every process moving the counters was last seen with an unchanged stack.
+        self._frozen = False
 
     # A WINDOW MAY NEVER BE TIGHTER THAN A GAP THIS RUN HAS ALREADY SURVIVED.
     #
@@ -899,7 +957,38 @@ class ProgressWatch:
         did = new[:3] != old[:3] or (bool(new[3]) and bool(old[3]) and new[3] != old[3])
         # Keep the last stack we managed to read, so a poll that skipped it does not look like a change.
         self._sig = new if (new[3] or not old[3]) else (new[0], new[1], new[2], old[3])
+        if new[0] != old[0]:
+            # The log grew. Nothing a hung process does writes its log, so this is never second-guessed.
+            self._frozen = False
+            return True
+        if pid is not None and new[1:3] != old[1:3]:
+            if now - self._last_stack_at >= _STACK_EVERY_S:
+                self._last_stack_at = now
+                self._frozen = self._busy_and_frozen()
+            return not self._frozen
+        if did:
+            self._frozen = False
         return did
+
+    def _busy_and_frozen(self) -> bool:
+        """Is every process that moved the counters since the last sample sitting on the stack it had
+        then? False whenever any of them cannot be read, is new, or moved -- the counters then decide.
+
+        Stops sampling at the first mover that is not frozen: one is enough to call the run alive,
+        and a compile can have dozens of short-lived movers that py-spy cannot read anyway. A mover
+        left unsampled is remembered with no stack, so it cannot read as frozen next time either.
+        """
+        io = _tree_io_counters(self._pgid)
+        movers = [p for p, v in io.items() if p not in self._busy or self._busy[p][0] != v]
+        stacks = {p: "" for p in movers}
+        frozen = bool(movers)
+        for p in movers:
+            stacks[p] = _stack_fingerprint(p)
+            if not (stacks[p] and p in self._busy and stacks[p] == self._busy[p][1]):
+                frozen = False
+                break
+        self._busy = {p: (v, stacks[p] if p in stacks else self._busy[p][1]) for p, v in io.items()}
+        return frozen
 
 
 def _pgroup_cpu_jiffies(pgid: int) -> int:
@@ -1714,9 +1803,9 @@ def _execute(
             _stall_limit = _watch.limit()
             if stall_timeout_s and now - last_progress >= _stall_limit:
                 _kill_and_raise(
-                    f"{KILL_STALL} for {int(_stall_limit)}s -- no log growth, no syscalls, "
-                    f"no bytes and an unchanged stack. CPU alone is not progress; a livelock has "
-                    f"plenty of it. Process group killed"
+                    f"{KILL_STALL} for {int(_stall_limit)}s -- no log growth, and no syscalls or "
+                    f"bytes except from processes whose stack had not moved. CPU alone is not "
+                    f"progress; a livelock has plenty of it. Process group killed"
                 )
             # THE SAME RULE AS _run_device_proc: a clock does not get to call working code dead.
             #

@@ -4211,8 +4211,8 @@ def _run_device_proc(
                 idle = now - last_progress
                 if idle >= limit:
                     print(
-                        f"  [optimize/cc] {label or 'device subprocess'} STALLED (no output, syscalls, "
-                        f"bytes or stack movement for "
+                        f"  [optimize/cc] {label or 'device subprocess'} STALLED (no output, and no syscalls, "
+                        f"bytes or stack movement except under a frozen stack, for "
                         f"{int(idle)}s > adaptive limit {limit}s) -- treating as wedge",
                         flush=True,
                     )
