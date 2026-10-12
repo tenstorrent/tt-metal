@@ -74,11 +74,29 @@ ALWI void sdpa_custom_mm_block(
     const std::uint32_t kt_dim,
     const std::uint32_t ct_dim = 1,
     const bool mask_chunk = false) {
-    UNPACK((llk_unpack_AB_sdpa_custom_mm<
-            read_transposed,
-            configure_mask_extent,
-            sdpa_custom_mm_unpack_waits_at_end(signal_granularity)>(
-        in0_cb_id, in1_cb_id, mask_cb_id, in0_tile_index, in1_tile_index, kt_dim, ct_dim, mask_chunk, row_stride)));
+    // Callers pass constant kt_dim and ct_dim, so the drain choice folds at compile time
+    UNPACK(
+        (sdpa_custom_mm_unpack_waits_at_end(signal_granularity, ct_dim, kt_dim)
+             ? llk_unpack_AB_sdpa_custom_mm<read_transposed, configure_mask_extent, true>(
+                   in0_cb_id,
+                   in1_cb_id,
+                   mask_cb_id,
+                   in0_tile_index,
+                   in1_tile_index,
+                   kt_dim,
+                   ct_dim,
+                   mask_chunk,
+                   row_stride)
+             : llk_unpack_AB_sdpa_custom_mm<read_transposed, configure_mask_extent, false>(
+                   in0_cb_id,
+                   in1_cb_id,
+                   mask_cb_id,
+                   in0_tile_index,
+                   in1_tile_index,
+                   kt_dim,
+                   ct_dim,
+                   mask_chunk,
+                   row_stride)));
     MATH((llk_math_sdpa_custom_mm<signal_granularity>(in0_cb_id, in1_cb_id, dst_index, kt_dim, ct_dim, mask_chunk)));
 }
 
