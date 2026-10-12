@@ -960,7 +960,8 @@ class DeepseekGenerator(ModelCapabilitiesMixin, WarmupForwardMixin):
             self.sampling_generator.seed_manager.reset_seed(seed_slots, list(range(len(seed_slots))))
         self.sampling_generator.apply_decode_state(
             sampling_param_chunks,
-            reset_batch=True,
+            reload_sampling_params=True,
+            reset_sampling_state=True,
             prompt_tokens=torch.zeros((batch_size_per_row, 1), dtype=torch.int64),
             output_tokens=torch.zeros((batch_size_per_row, 1), dtype=torch.int64),
         )

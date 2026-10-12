@@ -2734,7 +2734,10 @@ class Generator(ModelCapabilitiesMixin, WarmupForwardMixin):
         output). Returning None makes sampling allocate its own output instead
         of writing into ``device_inputs[0]``.
         """
-        if not getattr(model, "_tt_supports_decode_token_feedback", True):
+        # Models that refresh trace inputs every step stage their own token buffer, which need
+        # not be a valid sampling output, so they opt out unless they declare otherwise.
+        default = not getattr(model, "_tt_vllm_always_refresh_decode_trace_inputs", False)
+        if not getattr(model, "_tt_supports_decode_token_feedback", default):
             return None
         return device_inputs[0]
 

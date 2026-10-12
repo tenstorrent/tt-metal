@@ -80,7 +80,8 @@ class _FakeSamplingGenerator:
         self.seed_manager = _FakeSeedManager(padded_batch_size * sampling_dp)
         self.decode_state_calls = []
 
-    def apply_decode_state(self, sampling_param_chunks, **kwargs):
+    def apply_decode_state(self, sampling_param_chunks, *, reload_sampling_params, reset_sampling_state, **kwargs):
+        kwargs.update(reload_sampling_params=reload_sampling_params, reset_sampling_state=reset_sampling_state)
         self.decode_state_calls.append((sampling_param_chunks, kwargs))
 
 
@@ -120,7 +121,8 @@ def test_deepseek_reset_sampling_state_does_not_preformat_sampling_params():
         sampling_param_chunks[0], max_batch_size=batch_size_per_row
     ).temperature[0]
     assert first_chunk_temperature == pytest.approx(1 / 0.6)
-    assert kwargs["reset_batch"] is True
+    assert kwargs["reload_sampling_params"] is True
+    assert kwargs["reset_sampling_state"] is True
     assert kwargs["prompt_tokens"].shape == (batch_size_per_row, 1)
     assert kwargs["output_tokens"].shape == (batch_size_per_row, 1)
     [seed_reset] = sampling_generator.seed_manager.reset_calls
