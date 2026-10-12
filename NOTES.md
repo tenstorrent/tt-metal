@@ -82,3 +82,9 @@ Branch ttp/t409-port-vsa-sparse-attention-into-the-fasth, base a15eb37ec6a (t400
 - Fix: run409a.sh PYTHONPATH adds $T/pydeps (only run409a; run409b keeps diffusers 0.38 so the dense arm matches #408).
   Copied to blx01 via tmp+mv; import check with that PYTHONPATH resolves pydeps/.../transformer_minimax_h3.py.
 - chain416a restarted detached from run 1664 (state/runs/1664/chain416a.out).
+
+## t416 run 1674 (2026-10-12 07:50 PDT)
+- chain416a (run 1664) was killed by the 12:51Z g15blx02 reboot at the cap check (12:47Z), before submitting. Broker had
+  no job of ours queued (only ltx-host 970). Submitted attn.txt directly with blx01-submit.sh (lint ok): blx01 job 971,
+  queued behind ltx-host. The job lives in blx01's broker, so g15blx02 reboots cannot kill it; no local chain now.
+- Next: read /var/tmp/fasth3/t409/out_attn/run.log on blx01 (PCC, T409_EXIT). Step 4 after #408.
