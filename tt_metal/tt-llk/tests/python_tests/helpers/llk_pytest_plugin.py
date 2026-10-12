@@ -58,7 +58,8 @@ _IS_XDIST_WORKER = "PYTEST_XDIST_WORKER" in os.environ
 _SHOULD_RUN_SIMULATOR = _IS_XDIST_WORKER or (
     "--run-simulator" in sys.argv and "--compile-producer" not in sys.argv
 )
-if _SHOULD_RUN_SIMULATOR and _SIMULATOR_PATH and _SIMULATOR_PATH.endswith(".so"):
+_SIM_INPROC = os.environ.get("LLK_SIM_INPROC") == "1"  # experiment: run the RTL simulator in-process as UMD host
+if _SHOULD_RUN_SIMULATOR and _SIMULATOR_PATH and (_SIMULATOR_PATH.endswith(".so") or _SIM_INPROC):
     from ttexalens import tt_exalens_init as _tt_exalens_init
 
     _tt_exalens_init.init_ttexalens(simulation_directory=_SIMULATOR_PATH)
@@ -559,7 +560,7 @@ def pytest_configure(config):
                     returncode=1,
                 )
 
-            if _SIMULATOR_PATH.endswith(".so"):
+            if _SIMULATOR_PATH.endswith(".so") or _SIM_INPROC:
                 # ttsim: already initialized at module import above; runs in-process, no server.
                 # --reset-simulator-per-test restarts the SimulationServer, which ttsim doesn't use,
                 # so it would be a silent no-op. Fail fast to avoid confusing false-green runs.
