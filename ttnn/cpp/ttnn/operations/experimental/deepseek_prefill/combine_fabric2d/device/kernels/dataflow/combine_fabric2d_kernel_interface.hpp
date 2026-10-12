@@ -23,6 +23,7 @@
 #include <vector>
 
 #include <tt-metalium/buffer.hpp>
+#include <tt-metalium/experimental/fabric/fabric.hpp>
 
 #include "../../combine_fabric2d_placement.hpp"
 #include "../../combine_fabric2d_types.hpp"
@@ -93,7 +94,7 @@ struct L1Layout {
     uint32_t pkt_hdr_drain;
     uint32_t drain_sink;
     uint32_t ring;          // num_l1_slots tokens, filled by the reader and drained by the sender
-    uint32_t pkt_hdr_ring;  // one prebuilt payload header per ring slot
+    uint32_t pkt_hdr_ring;  // one prebuilt payload header per packet of each ring slot
     // The reader's copy of the control tensors, read once at startup and then indexed from L1.
     // Laid out as [expert_offsets: dispatch_group_size x num_routed_experts][counts: num_routed_experts]
     // [region_offsets: num_routed_experts], all uint32. Unlike everything above it, nothing on another chip
@@ -252,6 +253,20 @@ static_assert(offsetof(FwdMetadata, final_addr) == 0);
 static_assert(offsetof(FwdMetadata, dst_chip) == sizeof(uint64_t));
 static_assert(offsetof(FwdMetadata, cmd) == 2 * sizeof(uint64_t));
 static_assert(offsetof(FwdMetadata, this_addr) == 3 * sizeof(uint64_t));
+
+#ifndef KERNEL_BUILD
+// Bytes of a token its first fabric packet carries. A token goes whole when it fits the fabric payload with its
+// routing tail, else as two halves with the tail on the second, so the mesh needs only half a token of payload:
+// a larger payload means larger fabric router buffers, and so fewer of them.
+inline uint32_t first_packet_bytes(uint32_t token_size_bytes) {
+    const auto max_payload = static_cast<uint32_t>(tt::tt_fabric::get_tt_fabric_max_payload_size_bytes());
+    return token_size_bytes + FORWARDING_METADATA_SIZE <= max_payload ? token_size_bytes : token_size_bytes / 2;
+}
+
+inline uint32_t packets_per_token(uint32_t token_size_bytes) {
+    return first_packet_bytes(token_size_bytes) == token_size_bytes ? 1 : 2;
+}
+#endif
 
 constexpr uint64_t CMD_END = 0;  // end of stream; the slot carries no token
 constexpr uint64_t CMD_FINAL_WRITE = 1;
