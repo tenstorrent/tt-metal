@@ -121,7 +121,9 @@ class MATMUL_STREAM_NARROW(TemplateParameter):
         if dest_acc == DestAccumulation.Yes or is_dest_acc_needed(formats):
             return []
         streamed = formats.input_format if ct_dim >= rt_dim else formats.input_format_B
-        return [MATMUL_STREAM_NARROW()] if streamed in MATMUL_NARROW_STREAM_FORMATS else []
+        return (
+            [MATMUL_STREAM_NARROW()] if streamed in MATMUL_NARROW_STREAM_FORMATS else []
+        )
 
 
 @dataclass
