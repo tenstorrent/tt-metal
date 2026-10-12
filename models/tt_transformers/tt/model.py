@@ -288,11 +288,6 @@ class Transformer(LightweightModule):
         else:
             self.sampling = None
 
-        # The prefetcher's pipe rings are persistent L1 on its cores, so they are reserved now that every
-        # prefetched weight exists, before the first prefill places circular buffers on those cores
-        if self.prefetcher is not None:
-            self.prefetcher.create_pipes()
-
     def update_weights(
         self,
         hf_state_dict: dict[str, ttnn.Tensor],
