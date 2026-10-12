@@ -151,6 +151,14 @@ tt_metal/hw/firmware/src/tt-1xx/*erisc* @aliuTT @ubcheema
 tt_metal/hw/firmware/ @abhullar-tt @arikTT @jbaumanTT @nathan-TT @kstevensTT
 tt_metal/hw/inc/ @abhullar-tt @jbaumanTT @kstevensTT @nathan-TT @vvukomanovicTT @atatuzunerTT @ruizhangTT @arikTT
 tt_metal/hw/inc/api/debug/ @tenstorrent/metalium-developers-triage
+tt_metal/hw/inc/api/debug/kernel_profiler.hpp @mo-tenstorrent @akerteszTT @yusufbashiTT
+tt_metal/hw/inc/internal/profiler/ @mo-tenstorrent @akerteszTT @yusufbashiTT
+tt_metal/hw/inc/internal/profiler/event_metadata.hpp @sohaibnadeemTT
+tt_metal/hw/inc/internal/profiler/fabric_event_profiler.hpp @sohaibnadeemTT
+tt_metal/hw/inc/internal/profiler/noc_event_profiler.hpp @sohaibnadeemTT
+tt_metal/hw/inc/hostdev/fabric_edm_packet_header.hpp @ubcheema @aliuTT @aagarwalTT @tt-aho @SeanNijjar @yugaoTT @Riddy21 @cfjchu @p1-0tr @nnyamagoudar-TT
+tt_metal/hw/inc/hostdev/fabric_direction_table_interface.h @ubcheema @aliuTT @aagarwalTT @tt-aho @SeanNijjar @yugaoTT @Riddy21 @cfjchu @p1-0tr @nnyamagoudar-TT
+tt_metal/hw/inc/hostdev/fabric_routing_path_interface.h @ubcheema @aliuTT @aagarwalTT @tt-aho @SeanNijjar @yugaoTT @Riddy21 @cfjchu @p1-0tr @nnyamagoudar-TT
 tt_metal/hw/inc/hostdev/realtime_profiler_msgs.h @mo-tenstorrent @yusufbashiTT @abhullar-tt @jbaumanTT @kstevensTT @nathan-TT @vvukomanovicTT @atatuzunerTT @ruizhangTT @arikTT
 tt_metal/hw/inc/hostdev/streaming_profiler_common.h @mo-tenstorrent @yusufbashiTT
 tt_metal/hw/inc/internal/ethernet/ @aliuTT @ubcheema
@@ -230,9 +238,6 @@ tt_metal/tools/mem_bench @abhullar-tt # should be moved to tests micro benchmark
 tt_metal/tools/precompile_fw @abhullar-tt @ruizhangTT
 tt_metal/tools/precompile_fw/**/CMakeLists.txt @abhullar-tt @ruizhangTT @tenstorrent/metalium-developers-infra
 tt_metal/tools/profiler/ @mo-tenstorrent @akerteszTT @yusufbashiTT
-tt_metal/tools/profiler/event_metadata.hpp @sohaibnadeemTT
-tt_metal/tools/profiler/fabric_event_profiler.hpp @sohaibnadeemTT
-tt_metal/tools/profiler/noc_event_profiler.hpp @sohaibnadeemTT
 tt_metal/tools/profiler/noc_event_profiler_utils.hpp @sohaibnadeemTT
 tt_metal/tools/profiler/tracy_debug_categories.txt @mo-tenstorrent @akerteszTT @yusufbashiTT
 tt_metal/tools/profiler/tracy_debug_zones.hpp @mo-tenstorrent @akerteszTT @yusufbashiTT

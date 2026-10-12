@@ -145,7 +145,7 @@ DevicePlacement decide_device_placement(
             num_links);
         for (uint32_t k = 0; k < num_links; k++) {
             const auto [worker, noc_hops] = tt::tt_metal::experimental::Device::get_closest_worker_to_eth_core(
-                *dev, tt::tt_fabric::get_forwarding_eth_core(self_node, nbr_node, k), SENDER_NOC);
+                *dev, tt::tt_fabric::get_forwarding_eth_core(*mesh, self_node, nbr_node, k), SENDER_NOC);
             candidates.emplace(make_stream_id(k, delta == 1), WorkerCandidate{worker, noc_hops, *nbr, nbr_node});
         }
     }
