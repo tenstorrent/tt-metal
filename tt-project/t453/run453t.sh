@@ -8,7 +8,7 @@ gb=$(timeout 120 du -sxBG $F | cut -f1 | tr -dc 0-9); [ "${gb:-0}" -le 450 ] || 
 mkdir -p $OUT $F/tmp
 export HOME=$F/home XDG_CACHE_HOME=$F/home/.cache TMPDIR=$F/tmp TORCH_HOME=$F/home/.cache/torch HF_HOME=$F/home/.cache/huggingface HF_HUB_OFFLINE=1
 export TT_METAL_CACHE=$F/cache/tt-metal-cache-h3hf TT_METAL_HOME=$W PYTHONPATH=$W:$W/ttnn:$W/tools:$T/plug
-export T409_ALARM_S=$(( ${T409_PY_TIMEOUT:-540} - 35 ))
+export T409_ALARM_S=${T409_ALARM_S:-$(( ${T409_PY_TIMEOUT:-540} - 35 ))}
 cd $W || exit 3
 [ -f ttnn/ttnn/_ttnn.so ] || { echo "[t453] no build in $W"; exit 3; }
 source $VENV/bin/activate || exit 3

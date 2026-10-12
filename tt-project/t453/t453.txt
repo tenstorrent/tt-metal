@@ -1,8 +1,8 @@
-ID=t453-attn-timing-r2
+ID=t453-attn-timing-r3
 TASK=t409
 WORKDIR=/var/tmp/fasth3/t409
 ENV=/var/tmp/fasth3/t409/env409.yaml
 CONFIG=t453-dense-vs-vsa09-1layer
-TIMEOUT=600
-CMD=bash /var/tmp/fasth3/t409/run453t.sh
+TIMEOUT=75
+CMD=env T409_PY_TIMEOUT=70 T409_ALARM_S=62 bash /var/tmp/fasth3/t409/run453t.sh
 NEEDS=/var/tmp/fasth3/t409/b/ttnn/ttnn/_ttnn.so
