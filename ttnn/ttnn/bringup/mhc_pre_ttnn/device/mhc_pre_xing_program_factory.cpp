@@ -235,9 +235,9 @@ ProgramDescriptor create_xing_program_descriptor(
     cc.fp32_dest_acc_en = true;
     cc.math_approx_mode = false;
     cc.dst_full_sync_en = true;  // n + 1 fp32 DEST tiles in the y-mix window
-    cc.unpack_to_dest_mode.assign(NUM_CIRCULAR_BUFFERS, UnpackToDestMode::Default);
+    cc.unpack_to_dest_mode.assign(NUM_CIRCULAR_BUFFERS, tt::tt_metal::UnpackToDestMode::Default);
     for (uint8_t cb : {CB_SOA, CB_PB, CB_X}) {
-        cc.unpack_to_dest_mode[cb] = UnpackToDestMode::UnpackToDestFp32;
+        cc.unpack_to_dest_mode[cb] = tt::tt_metal::UnpackToDestMode::UnpackToDestFp32;
     }
 
     desc.kernels.push_back(make_kernel(

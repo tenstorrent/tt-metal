@@ -47,3 +47,8 @@ two perf-tournament rounds); its golden suite is `eval/golden_tests/mhc_post` on
      references differ; the mesh fixture opens the case mesh matching the box's device count, since a 2x2 submesh of
      a 4x2 box fails the 2D fabric handshake).
    - Needed by: xing40_a4b_d_p P.2 (tt/residual.py, XING_RESIDUAL_MIX=fused, the default).
+
+6. Alias removal: `tt::tt_metal::MathFidelity` / `UnpackToDestMode` (#59097 removed the global aliases; the fork did
+   not build). Default behaviour unchanged.
+   - Needed by: rebase onto origin/llk_helper_library @ `bdc576fa652` (2026-10-12)
+   - Files: `mhc_post_ttnn.cpp`, `device/mhc_post_ttnn_program_factory.cpp`

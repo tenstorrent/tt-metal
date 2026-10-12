@@ -258,20 +258,21 @@ def _reader_noc_of(group_y0, flip_rows):
 # mod banks measure slower (640x1792: 4 -> 48.7, 8 -> 45.4 us). 0 = even split.
 OWNER_C_DISCOUNT = 7
 W_ROLE_DRAM, W_ROLE_SPREAD = 0, 1  # mirrors the writer's W_ROLE_* constants
-W_MCAST_PLACEHOLDER_CT = [0]  # #57547: an absent McastArgs block is one ABSENT tag word (no RT words, no semaphores)
+W_MCAST_PLACEHOLDER_CT = [0]  # an absent McastArgs block is one ABSENT tag word (no RT words, no semaphores)
 
 
 class _McastWire:
-    """The positional wire of one multicast family, on #57547's attachment API.
+    """The positional wire of one multicast channel whose data-ready semaphore the program already owns.
 
-    #57547 replaced the old helpers' compile_time_args() / runtime_args(core) with attach(descriptor, prefix,
-    kernels), which appends a family's blocks to a kernel's CURRENT argument lists. This builder places the wire at
-    fixed bases in the middle of the writer's lists (the kernel decodes it with the still-positional
-    McastArgs<CT, RT>), so the family is attached to a scratch data-movement kernel with empty argument lists and the
-    blocks are read back: exactly what attach() would append. The C++ factory does the same (device/mcast_wire.hpp).
+    Mcast.attach(descriptor, prefix, kernels, first_semaphore_id) appends a channel's blocks to a kernel's CURRENT
+    argument lists. This builder places the wire at fixed bases in the middle of the writer's lists (the kernel
+    decodes it with the positional McastArgs<CT, RT>), so the channel is attached to a scratch data-movement kernel
+    with empty argument lists and the blocks are read back: exactly what attach() would append. The channel's
+    semaphores start at `semaphore_id`, which must be one of `existing_semaphores` (it adds none of its own). The C++
+    factory does the same (device/mcast_wire.hpp).
     """
 
-    def __init__(self, family, cores, noc, existing_semaphores):
+    def __init__(self, mcast, cores, noc, semaphore_id, existing_semaphores):
         scratch_kernel = ttnn.KernelDescriptor(
             kernel_source="mcast_wire_scratch",
             core_ranges=cores,
@@ -279,8 +280,10 @@ class _McastWire:
             runtime_args=ttnn.RuntimeArgs(),
             config=ttnn.DataMovementConfigDescriptor(noc=noc),
         )
-        scratch = ttnn.ProgramDescriptor(semaphores=list(existing_semaphores))
-        family.attach(scratch, "mcast_wire", [scratch_kernel])
+        scratch = ttnn.ProgramDescriptor()
+        mcast.attach(scratch, "mcast_wire", [scratch_kernel], semaphore_id)
+        owned = {s.id for s in existing_semaphores}
+        assert all(s.id in owned for s in scratch.semaphores), "mcast semaphores must be the program's own"
         self.ct = [int(v) for v in scratch_kernel.compile_time_args]
         self.rt = {
             (c.x, c.y): [int(v) for v in scratch_kernel.runtime_args[c.x][c.y]]
@@ -628,7 +631,9 @@ def create_program_descriptor(
     flip_rows = _flip_rows(plan.grid_y, levers)
     reader_nocs = sorted({_reader_noc_of(gy0, flip_rows) for _, _, gy0 in groups}, key=lambda c: c.value)
 
-    w_mcast = {}  # reader NoC of the kernel set -> Mcast1D (same rectangle and semaphore; senders may ride either NoC)
+    w_mcast = (
+        {}
+    )  # reader NoC of the kernel set -> column multicast (same rectangle and semaphore; senders ride either NoC)
     if w_bcast:
         w_rect = ttnn.CoreRangeSet(
             [ttnn.CoreRange(ttnn.CoreCoord(0, 0), ttnn.CoreCoord(plan.groups_x * plan.group_w - 1, active_rows - 1))]
@@ -638,19 +643,27 @@ def create_program_descriptor(
                 noc=_other_noc(rnoc),
                 handshake=False,
                 data_ready=ttnn.McastDataReady.Counter,
-                sem_ids=[SEM_W_READY],
             )
+            # One group per column, rotating over its cores; the data-ready semaphore is SEM_W_READY.
             w_mcast[rnoc] = _McastWire(
-                ttnn.Mcast1D(device, w_rect, ttnn.Mcast1DShape.PerColumn, ttnn.Mcast1DRotatingSenderConfig(), w_cfg),
+                ttnn.Mcast(
+                    device,
+                    w_cfg,
+                    w_rect,
+                    active_rows,
+                    ttnn.McastRotatingSenderConfig(),
+                    ttnn.McastCoreOrder.ColumnMajor,
+                ),
                 w_rect,
                 _other_noc(rnoc),
+                SEM_W_READY,
                 semaphores,
             )
 
     # fp32 W hi/lo split done per column share (bf16 X only: the fp32-X grid split needs the whole slice's max).
     w_presplit = bool(w_mcast) and w_pieces(w_tensor.dtype) > 1 and x_pieces(x_tensor.dtype) == 1
 
-    # ---- group combine mcast (one Mcast2D per group; identical CT wire across groups) ----
+    # ---- group combine mcast (one box multicast per group; identical CT wire across groups) ----
     helpers = {}
     mcast_ct = {}  # reader NoC of the kernel set -> the group-mcast CT wire (identical within a set)
     if G > 1:
@@ -659,7 +672,7 @@ def create_program_descriptor(
             # No consumer-ready handshake (Perf 1): cb_coef_in holds 2 blocks and the root multicasts S(b+1) only after
             # gathering every P(b+1), so the landing slot is free and the Flag was reset (see the writer). A Counter
             # data-ready signal hangs here (its non-posted multicast atomic also waits for the looped-back root's ack).
-            mcast_cfg = ttnn.McastConfig(noc=_other_noc(rnoc), handshake=False, sem_ids=[SEM_MCAST_READY])
+            mcast_cfg = ttnn.McastConfig(noc=_other_noc(rnoc), handshake=False)
             rect = ttnn.CoreRangeSet(
                 [
                     ttnn.CoreRange(
@@ -667,17 +680,22 @@ def create_program_descriptor(
                     )
                 ]
             )
+            # One group over the box, sent by its first core (in-group index 0); the data-ready semaphore is
+            # SEM_MCAST_READY.
             helpers[g] = _McastWire(
-                ttnn.Mcast2D(device, rect, ttnn.Mcast2DFixedSenderConfig(sender=ttnn.CoreCoord(gx0, gy0)), mcast_cfg),
+                ttnn.Mcast(
+                    device, mcast_cfg, rect, plan.group_w * plan.group_h, ttnn.McastFixedSenderConfig(sender_index=0)
+                ),
                 rect,
                 _other_noc(rnoc),
+                SEM_MCAST_READY,
                 semaphores,
             )
             ct = list(helpers[g].compile_time_args())
             assert mcast_ct.get(rnoc, ct) == ct, "mcast CT wire must be identical across the groups of a set"
             mcast_ct[rnoc] = ct
     else:
-        # group_cores == 1: no receivers, the pipe is never used. #57547: an absent block (one ABSENT tag word).
+        # group_cores == 1: no receivers, the pipe is never used: an absent block (one ABSENT tag word).
         mcast_ct = {rnoc: [0] for rnoc in reader_nocs}
 
     # ---- kernel CT args ----

@@ -342,13 +342,13 @@ ProgramDescriptor create_program_descriptor(
     compute_cfg.fp32_dest_acc_en = compute_config.fp32_dest_acc_en;
     compute_cfg.math_approx_mode = compute_config.math_approx_mode;
     compute_cfg.dst_full_sync_en = DST_FULL_SYNC;
-    compute_cfg.unpack_to_dest_mode.assign(NUM_CIRCULAR_BUFFERS, UnpackToDestMode::Default);
+    compute_cfg.unpack_to_dest_mode.assign(NUM_CIRCULAR_BUFFERS, tt::tt_metal::UnpackToDestMode::Default);
     for (auto [index, dtype] :
          {std::pair{CB_SUBLAYER_TILES, input.dtype()},
           std::pair{CB_RESIDUAL_TILES, residual.dtype()},
           std::pair{CB_COEF_BCAST, post.dtype()}}) {
         if (dtype == DataType::FLOAT32) {
-            compute_cfg.unpack_to_dest_mode[index] = UnpackToDestMode::UnpackToDestFp32;
+            compute_cfg.unpack_to_dest_mode[index] = tt::tt_metal::UnpackToDestMode::UnpackToDestFp32;
         }
     }
 

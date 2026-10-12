@@ -90,3 +90,22 @@ two perf-tournament rounds); its golden suite is `eval/golden_tests/mhc_pre` on 
    - Needed by: rebase onto origin/malimpic/llk_helper_library_rebased_0110_2 (the fork no longer compiled).
    - Files: `device/mcast_wire.hpp` (new), `device/mhc_pre_ttnn_program_factory.cpp`, `mhc_pre_program_descriptor.py`,
      `kernels/mhc_pre_writer.cpp`.
+
+6. Port to the unified multicast helper (`kernel_lib/mcast/host/mcast.hpp`; kernel helper library @ `bdc576fa652`,
+   2026-10-12). Mcast1D / Mcast2D and their wire became one `Mcast` (receivers + group size + sender config) with a new
+   wire; host and kernel move together.
+   - Host (C++ factory and Python builder): the W broadcast (old rotating Mcast1D PerColumn) is one group per column,
+     column-major, rotating sender; each group combine (old Mcast2D, fixed sender at the box corner) is one group over
+     the box with sender index 0. The old `sem_ids` adoption has no equivalent: the channel is attached at the
+     program's own id (SEM_W_READY / SEM_MCAST_READY), and `device/mcast_wire.hpp` / `_McastWire` check that the
+     program owns it and add none. Also `tt::tt_metal::MathFidelity` / `UnpackToDestMode` (#59097 removed the global
+     aliases).
+   - Writer kernel: the new rotating Counter sender counts its own send through a NoC atomic, so the race that 5.
+     worked around is gone; `send_w_share` (a non-rotating pipe built from the old wire's sender record) is deleted
+     and the share goes out through the channel's own sender. The receive waits for one more event on a core that
+     sent (its own count).
+   - Why: the old helper and the aliases no longer exist, so the fork did not build.
+   - Default behaviour: same transfers and semaphore ids; the wire format is the new helper's.
+   - Needed by: rebase onto origin/llk_helper_library @ `bdc576fa652` (2026-10-12)
+   - Files: `device/mcast_wire.hpp`, `device/mhc_pre_ttnn_program_factory.cpp`, `device/mhc_pre_xing_program_factory.cpp`,
+     `mhc_pre_ttnn.cpp`, `mhc_pre_program_descriptor.py`, `kernels/mhc_pre_writer.cpp`.
