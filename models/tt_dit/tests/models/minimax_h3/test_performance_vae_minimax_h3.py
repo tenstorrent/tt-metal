@@ -325,6 +325,7 @@ def test_decode_stage(mesh_device, seconds, mode):
                 "stitch",
                 "unpatchify",
                 "blend",
+                "blend_streamed",
                 "concat",
                 "tiling",
                 "upload",
@@ -424,6 +425,83 @@ def test_decode_trace_ab(mesh_device, seconds):
     finally:
         vae.release_decode_trace()
     assert not failures, f"traced decode diverged on seeds {failures}"
+
+
+# ---- streamed temporal assembly, off/on pair -----------------------------------------------
+#
+# Decodes the same latents with the temporal assembly after the last wave (`stream_blend=False`)
+# and on the readback worker as each clip lands (`stream_blend=True`), alternating arms
+# MINIMAX_H3_VAE_AB_REPEATS times (default 2) per seed. Both arms must match bit for bit, or
+# reach PSNR >= 40 dB and PCC >= 0.999.
+#   pytest models/tt_dit/tests/models/minimax_h3/test_performance_vae_minimax_h3.py -k decode_stream_blend_ab -s
+
+
+@pytest.mark.timeout(3600)
+@pytest.mark.parametrize(("mesh_device", "device_params"), MESH_4X8_RING, indirect=["mesh_device", "device_params"])
+@pytest.mark.parametrize("seconds", [5, 15], ids=["5s", "15s"])
+def test_decode_stream_blend_ab(mesh_device, seconds):
+    from loguru import logger
+
+    weights_dir = weights_subdir("vae")
+    if weights_dir is None:
+        pytest.skip("MiniMax-H3 vae not found; set MINIMAX_H3_MODEL_PATH")
+
+    config = MiniMaxH3VaeConfig.from_pretrained(weights_dir)
+    ccl_manager = CCLManager(mesh_device, num_links=2, topology=ttnn.Topology.Ring)
+    vae = MiniMaxH3Vae(
+        config, task="t2va", mesh_device=mesh_device, ccl_manager=ccl_manager, **DECODE_STAGE_MODES["yuv420"]
+    )
+    vae.load_state(_decode_stage_state(weights_dir))
+    latent_h, latent_w = DECODE_STAGE_LATENT_HW
+    seeds = [int(x) for x in os.environ.get("MINIMAX_H3_VAE_AB_SEEDS", "0,1,2,3,4").split(",")]
+    repeats = int(os.environ.get("MINIMAX_H3_VAE_AB_REPEATS", "2"))
+    logger.info(f"STREAM_AB affinity={len(os.sched_getaffinity(0))} cpus {sorted(os.sched_getaffinity(0))[:16]}")
+
+    torch.manual_seed(0)
+    for stream in (False, True):
+        vae.stream_blend = stream
+        vae.decode(
+            torch.randn(1, config.latent_channels, DECODE_STAGE_WARM_FRAMES, latent_h, latent_w),
+            output_type="yuv420",
+        )
+
+    failures = []
+    for seed in seeds:
+        torch.manual_seed(seed)
+        latents = torch.randn(1, config.latent_channels, DECODE_STAGE_FRAMES[seconds], latent_h, latent_w)
+        arms, totals = {}, {"off": [], "on": []}
+        for repeat in range(repeats):
+            for arm in ("off", "on"):
+                vae.stream_blend = arm == "on"
+                started = time.time()
+                video = vae.decode(latents, output_type="yuv420")
+                elapsed = time.time() - started
+                profile = dict(vae.last_decode_profile)
+                totals[arm].append(elapsed)
+                arms[arm] = _video_tensor(video).clone()
+                logger.info(
+                    f"STREAM_AB seed={seed} seconds={seconds} arm={arm} repeat={repeat} total={elapsed:.3f}s "
+                    f"device={profile.get('device', 0.0):.3f} readback={profile.get('readback', 0.0):.3f} "
+                    f"readback_join={profile.get('readback_join', 0.0):.3f} blend={profile.get('blend', 0.0):.3f} "
+                    f"blend_streamed={profile.get('blend_streamed', 0.0):.3f} waves={int(profile.get('waves', 0))}"
+                )
+        logger.info(
+            f"STREAM_AB_SUMMARY seed={seed} seconds={seconds} off_min={min(totals['off']):.3f}s "
+            f"on_min={min(totals['on']):.3f}s saved={min(totals['off']) - min(totals['on']):.3f}s"
+        )
+        off, on = arms["off"].float(), arms["on"].float()
+        identical = torch.equal(arms["off"], arms["on"])
+        mse = torch.mean((off - on) ** 2).item()
+        peak = float(off.abs().max().item()) or 1.0
+        psnr = float("inf") if mse == 0 else 10 * torch.log10(torch.tensor(peak**2 / mse)).item()
+        pcc = 1.0 if identical else torch.corrcoef(torch.stack([off.reshape(-1), on.reshape(-1)]))[0, 1].item()
+        logger.info(
+            f"STREAM_AB_QUALITY seed={seed} identical={identical} psnr={psnr:.2f} pcc={pcc:.6f} "
+            f"max_abs={float((off - on).abs().max().item()):.4f}"
+        )
+        if not identical and not (psnr >= 40 and pcc >= 0.999):
+            failures.append(seed)
+    assert not failures, f"streamed assembly diverged on seeds {failures}"
 
 
 # ---- whole-stage `encode` timing, per conditioning case --------------------------------------

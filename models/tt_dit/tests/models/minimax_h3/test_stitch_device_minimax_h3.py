@@ -396,6 +396,41 @@ def test_temporal_crossfade_survives_the_yuv_conversion():
     assert worst <= 1, f"reordering the cross-fade past the YUV conversion costs {worst} LSB, not <=1"
 
 
+def test_planar_crossfade_matches_the_whole_block_formula():
+    """Every uint8 pair at every extent up to 8 frames, against the formula it replaced."""
+    from ....models.vae.minimax_h3.vae_minimax_h3 import blend_clip_frames
+
+    values = np.arange(256, dtype=np.uint8)
+    a_frame = np.repeat(values, 256).reshape(256, 256)
+    b_frame = np.tile(values, 256).reshape(256, 256)
+    for extent in range(1, 9):
+        a = np.repeat(a_frame[None], extent + 2, axis=0)
+        b = np.repeat(b_frame[None], extent + 2, axis=0)
+        pos = np.arange(extent, dtype=np.float32).reshape(-1, 1, 1)
+        head = a[-extent:].astype(np.float32) * (1.0 - pos / extent) + b[:extent].astype(np.float32) * (pos / extent)
+        expected = np.concatenate([np.clip(np.rint(head), 0, 255).astype(np.uint8), b[extent:]], axis=0)
+        assert np.array_equal(blend_clip_frames(a, b, extent), expected), f"extent {extent} differs"
+
+
+@pytest.mark.parametrize("num_clips", [1, 2, 7])
+@pytest.mark.parametrize("token_drop", [3, 0])
+def test_streamed_clip_assembly_matches_batch_assembly(num_clips, token_drop):
+    from ....models.vae.minimax_h3.vae_minimax_h3 import StreamedClipAssembly, assemble_clip_parts, clip_parts
+
+    config = MiniMaxH3VaeConfig()
+    chunk_num_frames = config.tokens_chunk_size * config.temporal_compression_ratio
+    clip_frames = chunk_num_frames + config.token_overlap * config.temporal_compression_ratio
+    rng = np.random.default_rng(num_clips)
+    clips = [rng.integers(0, 256, size=(clip_frames, 24, 16), dtype=np.uint8) for _ in range(num_clips)]
+
+    split = (chunk_num_frames, config.frame_pre_padding, token_drop)
+    expected = assemble_clip_parts(clip_parts(clips, *split), config.frame_overlap)
+    assembly = StreamedClipAssembly(num_clips, *split, config.frame_overlap)
+    for clip in clips:
+        assert assembly.feed(clip) is clip
+    assert np.array_equal(assembly.result(), expected)
+
+
 @pytest.mark.parametrize("width", [1152, 1120], ids=["w1152", "w1120"])
 @pytest.mark.parametrize(("mesh_device", "device_params"), GALAXY_MESHES, indirect=["mesh_device", "device_params"])
 def test_replicated_readback_matches_gather_path(mesh_device, width):
