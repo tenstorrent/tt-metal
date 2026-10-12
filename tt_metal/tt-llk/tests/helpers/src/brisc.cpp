@@ -88,6 +88,12 @@ constexpr std::uint32_t RELEASE_ALL     = (1U << 0) | (1U << 10) | (1U << 20);
 static_assert(REQ == 1U << 31 && READ_VALID == 1U << 30 && REG_STATUS == 0, "serve() tests REQ and READ_VALID by sign");
 static_assert(DBG_CNTL_1 == DBG_CNTL_0 + 4 && DBG_STATUS_0 == DBG_CNTL_0 + 8 && DBG_STATUS_1 == DBG_CNTL_0 + 12 && PC_BUF_OVERRIDE == DBG_CNTL_0 + 16);
 
+// This launch's two release gaps in cycles, set by serve() before the first release (local data memory)
+extern "C"
+{
+    __attribute__((used)) volatile std::uint32_t llk_release_gaps[2];
+}
+
 // Serve loop, one rendezvous per pass: wait until all TRISCs park, let them halt, flush them and release them together.
 // Pinned in assembly (GCC's code for the C version) in its own 1 KiB section, so no other BRISC change moves its timing.
 __attribute__((noinline, noipa, section(".text.llk_dbg_serve"), aligned(1024))) void serve()
@@ -217,11 +223,6 @@ __attribute__((noinline, noipa, section(".text.llk_dbg_serve"), aligned(1024))) 
         "li    a4, 64\n"
         "62:\n\t"
         "nop\n\taddi  a4, a4, -1\n\tbnez  a4, 62b\n\t"
-        // on its own 256 B boundary, so a change elsewhere in serve() (or before it) cannot move it
-        "j     50f\n\t.balign 256\n"
-        // release schedule: thread s4[1:0], then s4[3:2], then s4[5:4], each by its own flush request on a wall clock cycle
-        // (a0): the threads start (and their branch table LFSRs run) a fixed number of cycles apart, whatever BRISC fetches
-        "50:\n\t"
         ".set  .Lrel_lead, 1024\n\t" // clock read to the first request: room for the first pass's icache misses
         ".set  .Lrel_gap1, 5180\n\t" // first to second request: the first thread has reached its wait or its park
         ".set  .Lrel_gap2, 5173\n\t" // second to third; with gap1 the spacing the spin loop gave before, so no value moves
@@ -229,6 +230,19 @@ __attribute__((noinline, noipa, section(".text.llk_dbg_serve"), aligned(1024))) 
         ".set  .Lrel_near, 64\n\t"   // the timed pass starts when the request is this many cycles away
         ".set  .Lrel_k, 24\n\t"      // the timed pass runs (request - its clock read - k) NOPs, 0 to m
         ".set  .Lrel_m, 24\n\t"
+        ".set  .Lrel_phase, __runtime_args_end - 16\n\t" // the start phase (perf/phases.py), runtime arguments' last 16 B
+        ".set  .Lrel_phase_valid, 0x6A900000\n\t"        // its first word when the host wrote one: then cycles added to gap1, gap2
+        // this launch's gaps (llk_release_gaps): the canonical ones plus the start phase, read before any thread runs
+        "lui   a4, %%hi(.Lrel_phase)\n\tlw    a3, %%lo(.Lrel_phase)(a4)\n\tli    s3, .Lrel_phase_valid\n\t"
+        "li    a2, .Lrel_gap1\n\tli    a1, .Lrel_gap2\n\tbne   a3, s3, 67f\n\t"
+        "lw    a3, %%lo(.Lrel_phase + 4)(a4)\n\tadd   a2, a2, a3\n\tlw    a3, %%lo(.Lrel_phase + 8)(a4)\n\tadd   a1, a1, a3\n"
+        "67:\n\t"
+        "lui   a4, %%hi(llk_release_gaps)\n\tsw    a2, %%lo(llk_release_gaps)(a4)\n\tsw    a1, %%lo(llk_release_gaps + 4)(a4)\n\t"
+        // on its own 256 B boundary, so a change elsewhere in serve() (or before it) cannot move it
+        "j     50f\n\t.balign 256\n"
+        // release schedule: thread s4[1:0], then s4[3:2], then s4[5:4], each by its own flush request on a wall clock cycle
+        // (a0): the threads start (and their branch table LFSRs run) a fixed number of cycles apart, whatever BRISC fetches
+        "50:\n\t"
         "lw    a0, %[wall](a5)\n\taddi  a0, a0, .Lrel_lead\n" // a0, a1 and t0 are borrowed until the last release
         "51:\n\t"
         "andi  a2, s4, 3\n\taddi  a3, a2, 1\n\tslli  a3, a3, 17\n\t" // debug target: TRISC t is t + 1
@@ -259,7 +273,8 @@ __attribute__((noinline, noipa, section(".text.llk_dbg_serve"), aligned(1024))) 
         "lw    a4, 0(t1)\n\t"
         "and   a4, a4, a4\n\tli    a0, %[tstep]\n\tj     65b\n"
         "73:\n\t"
-        "li    a4, .Lrel_gap2\n\tli    a2, 0x40\n\tbltu  s4, a2, 74f\n\tli    a4, .Lrel_gap1\n"
+        "lui   a3, %%hi(llk_release_gaps)\n\tlw    a4, %%lo(llk_release_gaps + 4)(a3)\n\tli    a2, 0x40\n\tbltu  s4, a2, 74f\n\t"
+        "lw    a4, %%lo(llk_release_gaps)(a3)\n"
         "74:\n\t"
         "add   a0, a0, a4\n\tli    a4, .Lrel_quiet\n"
         "75:\n\t"
