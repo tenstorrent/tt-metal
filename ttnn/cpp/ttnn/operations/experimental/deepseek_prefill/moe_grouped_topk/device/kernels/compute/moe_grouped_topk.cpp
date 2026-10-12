@@ -57,6 +57,7 @@ void kernel_main() {
     constexpr bool sort_keys_tf32 = get_named_compile_time_arg_val("sort_keys_tf32") != 0;
     constexpr bool rank_tag = stable_sort && sort_keys_tf32;
     constexpr uint32_t score_func = get_named_compile_time_arg_val("score_func");
+    constexpr bool precise = get_named_compile_time_arg_val("precise") != 0;
 
     constexpr uint32_t end_phase = log_group_size - 1;
 
@@ -73,7 +74,7 @@ void kernel_main() {
         blocks::apply_score_func<score_func>(cb_scores_fp32, cb_sigmoid_scores, width_tiles);
 
         // Perform add bias on activated scores
-        blocks::add_bias<dump_biased_scores != 0>(
+        blocks::add_bias<dump_biased_scores != 0, precise>(
             cb_sigmoid_scores, cb_bias_fp32, cb_biased_scores, width_tiles, cb_biased_dump);
         // Note: cb_sigmoid_scores is NOT popped here - writer will pop it after gather
 

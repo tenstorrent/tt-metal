@@ -57,6 +57,10 @@ void bind_moe_grouped_topk(nb::module_& mod) {
                 weights_layout (ttnn.Layout, optional): Layout of the BFLOAT16 weights. Defaults to TILE.
                     ROW_MAJOR supports interleaved L1/DRAM output and at most 32 activated experts.
                     Indices remain TILE in either case.
+                fp32_selection (bool, optional): Run the expert selection (activation, bias add, top-k keys)
+                    entirely in fp32: inputs unpack straight to the fp32 DEST and the bias add runs on the SFPU.
+                    By default those steps read their operands through the TF32 source registers, which can
+                    swap near-tied experts (score gaps ~1e-3). Slightly slower. Defaults to False.
 
             Returns:
                 Tuple[ttnn.Tensor, ttnn.Tensor]: A tuple containing the scaled expert scores (dtype BFLOAT16) and selected expert indices (dtype UINT16). The shape of the scores tensor should be [N, B, S, 8]. The shape of the indices tensor should be [N, B, S, 8]. N, B and S can be any value. 8 is the number of experts in the final selected groups.
@@ -76,7 +80,8 @@ void bind_moe_grouped_topk(nb::module_& mod) {
         nb::arg("memory_config") = nb::none(),
         nb::arg("padding_config") = nb::none(),
         nb::arg("biased_scores") = nb::none(),
-        nb::arg("weights_layout") = tt::tt_metal::Layout::TILE);
+        nb::arg("weights_layout") = tt::tt_metal::Layout::TILE,
+        nb::arg("fp32_selection") = false);
 }
 
 }  // namespace ttnn::operations::experimental::deepseek_prefill::moe_grouped_topk::detail

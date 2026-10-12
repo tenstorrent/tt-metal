@@ -169,7 +169,7 @@ void apply_score_func(uint32_t cb_in_scores_id, uint32_t cb_activated_scores_id,
     }
 }
 
-template <bool dump_biased = false>
+template <bool dump_biased = false, bool precise = false>
 void add_bias(
     uint32_t cb_sigmoid_scores_id,
     uint32_t cb_in_bias_id,
@@ -180,6 +180,42 @@ void add_bias(
     CircularBuffer cb_in_bias(cb_in_bias_id);
     CircularBuffer cb_biased_scores(cb_biased_scores_id);
     CircularBuffer cb_biased_dump(cb_biased_dump_id);
+    if constexpr (precise) {
+        // Both operands unpacked straight to the fp32 DEST, added on the SFPU: an exact fp32 add (the FPU
+        // add_tiles reads its operands through the TF32 source registers).
+        cb_sigmoid_scores.wait_front(width_tiles);
+        for (uint32_t width_tile = 0; width_tile < width_tiles; width_tile++) {
+            cb_in_bias.wait_front(1);
+            tile_regs_acquire();
+            reconfig_data_format_srca(cb_sigmoid_scores_id);
+            copy_init(cb_sigmoid_scores_id);
+            copy_tile(cb_sigmoid_scores_id, width_tile, 0);
+            reconfig_data_format_srca(cb_in_bias_id);
+            copy_init(cb_in_bias_id);
+            copy_tile(cb_in_bias_id, 0, 1);
+            add_binary_tile_init();
+            add_binary_tile(0, 1, 0);
+            tile_regs_commit();
+            cb_in_bias.pop_front(1);
+
+            cb_biased_scores.reserve_back(1);
+            if constexpr (dump_biased) {
+                cb_biased_dump.reserve_back(1);
+            }
+            tile_regs_wait();
+            pack_reconfig_data_format(cb_biased_scores_id);
+            pack_tile(0, cb_biased_scores_id);
+            if constexpr (dump_biased) {
+                pack_tile(0, cb_biased_dump_id);
+            }
+            tile_regs_release();
+            cb_biased_scores.push_back(1);
+            if constexpr (dump_biased) {
+                cb_biased_dump.push_back(1);
+            }
+        }
+        return;
+    }
     // Perform add bias on sigmoid scores
     add_init(cb_sigmoid_scores_id, cb_in_bias_id, false);
     cb_sigmoid_scores.wait_front(width_tiles);

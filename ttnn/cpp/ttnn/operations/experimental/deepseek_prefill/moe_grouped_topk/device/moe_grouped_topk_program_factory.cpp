@@ -276,6 +276,18 @@ tt::tt_metal::ProgramDescriptor MoeGroupedTopkDeviceOperation::ProgramFactory::c
     // read (an UnpackToDestFp32 mode there turns it off and the kernel keeps the comparator engine).
     std::vector<tt::tt_metal::UnpackToDestMode> unpack_to_dest_mode(
         NUM_CIRCULAR_BUFFERS, tt::tt_metal::UnpackToDestMode::Default);
+    // fp32_selection: every read on the selection path unpacks straight to the fp32 DEST instead of through the
+    // TF32 source registers (the logits / bias upcasts, the activation input, the bias add, which then runs on the
+    // SFPU, and the sort keys, which turns off the rank-tag engine), so the chosen experts are those of an fp32
+    // reference: near-tied experts (gaps ~1e-3) otherwise swap.
+    const bool precise = operation_attributes.fp32_selection;
+    if (precise) {
+        for (auto cb : {cb_in_scores, cb_in_bias, cb_scores_fp32, cb_bias_fp32, cb_sigmoid_scores, cb_biased_scores,
+                        cb_group_summed_scores}) {
+            unpack_to_dest_mode[static_cast<uint32_t>(cb)] = tt::tt_metal::UnpackToDestMode::UnpackToDestFp32;
+        }
+    }
+    compute_named_compile_time_args["precise"] = static_cast<uint32_t>(precise);
     const auto default_unpack = [&](tt::CBIndex cb) {
         return unpack_to_dest_mode[static_cast<uint32_t>(cb)] == tt::tt_metal::UnpackToDestMode::Default;
     };
