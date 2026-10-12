@@ -68,3 +68,16 @@ def with_release_phase(runtime_arguments: bytes, phase) -> bytes:
     return runtime_arguments.ljust(RELEASE_PHASE_OFFSET, b"\0") + struct.pack(
         "<Iiii", RELEASE_PHASE_VALID, a, b, 0
     )
+
+
+def _exp_averaged():  # experiment hook (brphase): LLK_EXP_AVERAGED=<json file of [source, run type, design]> replaces AVERAGED
+    import json
+    import os
+
+    path = os.environ.get("LLK_EXP_AVERAGED")
+    if path:
+        AVERAGED.clear()
+        AVERAGED.update({(s, r): d for s, r, d in json.load(open(path))})
+
+
+_exp_averaged()
