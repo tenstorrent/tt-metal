@@ -43,6 +43,7 @@ namespace ckernel {
  * | dense_packing    | Whether to pack consecutive tiles 32 rows apart (instead of 64, doubles dest capacity) | bool     | true/false                            | False (default false) |
  * | fp32_dest_acc_en | Whether dest accumulates in fp32; defaults to the kernel's DST_ACCUM_MODE              | bool     | true/false                            | False                 |
  * | clear_src        | Whether to clear SrcB at init (saves power as only 1/8 FPU rows are used)              | bool     | true/false                            | False (default true)  |
+ * | group_finalize   | One-group finalize of a call's tiles at M 1 and 8; false for 16-bit and 32-bit weights | bool     | true/false                            | False (default true)  |
  * | in0_cb_id        | The identifier of the first input circular buffer (CB)                                 | uint32_t | 0 to 31                               | True                  |
  * | in1_cb_id        | The identifier of the second input circular buffer (CB)                                | uint32_t | 0 to 31                               | True                  |
  * | out_cb_id        | The identifier of the output circular buffer (CB)                                      | uint32_t | 0 to 31                               | True                  |
@@ -54,7 +55,8 @@ template <
     bool split_acc = false,
     bool dense_packing = false,
     bool fp32_dest_acc_en = DST_ACCUM_MODE,
-    bool clear_src = true>
+    bool clear_src = true,
+    bool group_finalize = true>
 ALWI void custom_mm_block_init(
     const std::uint32_t in0_cb_id,
     const std::uint32_t in1_cb_id,
@@ -66,7 +68,7 @@ ALWI void custom_mm_block_init(
 
     MATH((llk_math_pack_sync_init<fp32_dest_acc_en>()));
     MATH((llk_math_hw_configure<fp32_dest_acc_en>(in0_cb_id, in1_cb_id)));
-    MATH((llk_math_custom_mm_init<transpose, split_acc, dense_packing>(in0_cb_id, in1_cb_id, ct_dim)));
+    MATH((llk_math_custom_mm_init<transpose, split_acc, dense_packing, group_finalize>(in0_cb_id, in1_cb_id, ct_dim)));
 
     PACK((llk_pack_dest_init<fp32_dest_acc_en, PackMode::Default>(out_cb_id)));
     PACK((llk_pack_hw_configure<fp32_dest_acc_en>(out_cb_id)));
@@ -96,13 +98,19 @@ ALWI void custom_mm_block_init(
  * | split_acc      | Whether to accumulate partials within a single tile in different dest locations        | bool     | true/false                            | False (default false) |
  * | dense_packing  | Whether to pack consecutive tiles 32 rows apart (instead of 64, doubles dest capacity) | bool     | true/false                            | False (default false) |
  * | clear_src      | Whether to clear SrcB at init (saves power as only 1/8 FPU rows are used)              | bool     | true/false                            | False (default true)  |
+ * | group_finalize | One-group finalize of a call's tiles at M 1 and 8; false for 16-bit and 32-bit weights | bool     | true/false                            | False (default true)  |
  * | in0_cb_id      | The identifier of the first input circular buffer (CB)                                 | uint32_t | 0 to 31                               | True                  |
  * | in1_cb_id      | The identifier of the second input circular buffer (CB)                                | uint32_t | 0 to 31                               | True                  |
  * | out_cb_id      | The identifier of the output circular buffer (CB)                                      | uint32_t | 0 to 31                               | True                  |
  * | ct_dim         | The width of the output matrix in tiles                                                | uint32_t | 1 to 16                               | False (default 1)     |
  */
 // clang-format on
-template <bool transpose = false, bool split_acc = false, bool dense_packing = false, bool clear_src = true>
+template <
+    bool transpose = false,
+    bool split_acc = false,
+    bool dense_packing = false,
+    bool clear_src = true,
+    bool group_finalize = true>
 ALWI void custom_mm_block_init_short(
     const std::uint32_t in0_cb_id,
     const std::uint32_t in1_cb_id,
@@ -110,7 +118,7 @@ ALWI void custom_mm_block_init_short(
     const std::uint32_t ct_dim = 1) {
     UNPACK((llk_unpack_AB_custom_mm_init<transpose, clear_src>(in0_cb_id, in1_cb_id, ct_dim)));
 
-    MATH((llk_math_custom_mm_init<transpose, split_acc, dense_packing>(in0_cb_id, in1_cb_id, ct_dim)));
+    MATH((llk_math_custom_mm_init<transpose, split_acc, dense_packing, group_finalize>(in0_cb_id, in1_cb_id, ct_dim)));
 
     PACK((_llk_pack_custom_mm_init_<dense_packing>()));
 }
@@ -145,9 +153,10 @@ ALWI void custom_mm_block_init_short(
  * | kt_dim          | The inner dimension in tiles                                                                                    | uint32_t | Any integer from 1 to 256 (inclusive)            | True                  |
  * | ct_dim          | The width of the output matrix in tiles                                                                         | uint32_t | 1 to 16, the same as at the init                 | False (default 1)     |
  * | banked          | Alternate the two configuration banks, between custom_mm_block_bank_init and custom_mm_block_bank_end           | bool     | true/false (one weight page size)                | False (default false) |
+ * | group_finalize  | The init's group_finalize                                                                                       | bool     | true/false                                       | False (default true)  |
  */
 // clang-format on
-template <bool finalize = true, bool read_transposed = false, bool banked = false>
+template <bool finalize = true, bool read_transposed = false, bool banked = false, bool group_finalize = true>
 ALWI void custom_mm_block(
     const std::uint32_t in0_cb_id,
     const std::uint32_t in1_cb_id,
@@ -158,7 +167,7 @@ ALWI void custom_mm_block(
     const std::uint32_t ct_dim = 1) {
     UNPACK((llk_unpack_AB_custom_mm<read_transposed, banked>(
         in0_cb_id, in1_cb_id, in0_tile_index, in1_tile_index, kt_dim, ct_dim)));
-    MATH((llk_math_custom_mm<finalize>(in0_cb_id, in1_cb_id, dst_index, kt_dim, ct_dim)));
+    MATH((llk_math_custom_mm<finalize, group_finalize>(in0_cb_id, in1_cb_id, dst_index, kt_dim, ct_dim)));
 }
 
 // clang-format off
@@ -223,6 +232,7 @@ ALWI void custom_mm_block_unpack(
  * | Argument        | Description                                                                                                    | Type     | Valid Range                                      | Required              |
  * |-----------------|----------------------------------------------------------------------------------------------------------------|----------|--------------------------------------------------|-----------------------|
  * | finalize        | Whether to perform the finalization step which merges split_accumulation partials                              | bool     | true/false (must be false if split_acc is false) | False (default true)  |
+ * | group_finalize  | The init's group_finalize                                                                                      | bool     | true/false                                       | False (default true)  |
  * | in0_cb_id       | The identifier of the first input circular buffer (CB)                                                         | uint32_t | 0 to 31                                          | True                  |
  * | in1_cb_id       | The identifier of the second input circular buffer (CB)                                                        | uint32_t | 0 to 31                                          | True                  |
  * | dst_index       | The index of the tile in DST REG to which the result C will be written                                         | uint32_t | Must be less than the acquired size of DST REG   | True                  |
@@ -230,14 +240,14 @@ ALWI void custom_mm_block_unpack(
  * | ct_dim          | The width of the output matrix in tiles                                                                        | uint32_t | 1 to 16, the same as at the init                 | False (default 1)     |
  */
 // clang-format on
-template <bool finalize = true>
+template <bool finalize = true, bool group_finalize = true>
 ALWI void custom_mm_block_math(
     const std::uint32_t in0_cb_id,
     const std::uint32_t in1_cb_id,
     const std::uint32_t dst_index,
     const std::uint32_t kt_dim,
     const std::uint32_t ct_dim = 1) {
-    MATH((llk_math_custom_mm<finalize>(in0_cb_id, in1_cb_id, dst_index, kt_dim, ct_dim)));
+    MATH((llk_math_custom_mm<finalize, group_finalize>(in0_cb_id, in1_cb_id, dst_index, kt_dim, ct_dim)));
 }
 
 // clang-format off

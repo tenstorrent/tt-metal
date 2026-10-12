@@ -100,6 +100,7 @@ DB_SCHEMA = [
     Column("full_ct_dim", "int64", True, "configuration"),
     Column("full_rt_dim", "int64", True, "configuration"),
     Column("fused_sort", "string", True, "configuration"),
+    Column("group_finalize", "bool", True, "configuration"),
     Column("in0_c_dim", "int64", True, "configuration"),
     Column("in0_face_c_dim", "int64", True, "configuration"),
     Column("in0_face_r_dim", "int64", True, "configuration"),

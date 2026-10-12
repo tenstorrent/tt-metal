@@ -169,7 +169,7 @@ void run_kernel(RUNTIME_PARAMETERS params)
         math::_configure_preserve_zero_flag_state_();
     }
 
-    _llk_math_custom_mm_init_<false /* transpose */, CUSTOM_MM_SPLIT_ACC, CUSTOM_MM_DENSE_PACKING>(params.in0_face_r_dim, CT_DIM);
+    _llk_math_custom_mm_init_<false /* transpose */, CUSTOM_MM_SPLIT_ACC, CUSTOM_MM_DENSE_PACKING, CUSTOM_MM_GROUP_FINALIZE>(params.in0_face_r_dim, CT_DIM);
     if constexpr (CUSTOM_MM_REUSE_REPLAY)
     {
         _llk_math_custom_mm_reuse_dest_srcb_replay_init_();
@@ -197,11 +197,11 @@ void run_kernel(RUNTIME_PARAMETERS params)
         {
             if (call == num_calls - 1)
             {
-                _llk_math_custom_mm_<true /* finalize */>(params.in0_face_r_dim, 0 /* dst_index */, kt_per_call, CT_DIM);
+                _llk_math_custom_mm_<true /* finalize */, CUSTOM_MM_GROUP_FINALIZE>(params.in0_face_r_dim, 0 /* dst_index */, kt_per_call, CT_DIM);
                 break;
             }
         }
-        _llk_math_custom_mm_<false /* finalize */>(params.in0_face_r_dim, 0 /* dst_index */, kt_per_call, CT_DIM);
+        _llk_math_custom_mm_<false /* finalize */, CUSTOM_MM_GROUP_FINALIZE>(params.in0_face_r_dim, 0 /* dst_index */, kt_per_call, CT_DIM);
     }
 
     _llk_math_dest_section_done_<DstSync::SyncHalf, is_fp32_dest_acc_en>();
