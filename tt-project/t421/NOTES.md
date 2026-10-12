@@ -28,3 +28,14 @@
   look at stills, recommend default on/off. Then delete on blx01:
   /var/tmp/fasth3/cache/dit-h3hf/minimax-h3/transformer_precomputed_adaln (~38 GB), the t421 table in
   cache/dit-h3hf/minimax-h3-adaln, and /var/tmp/fasth3/t421.
+
+## Status 2026-10-12 00:10 PDT (run 1603)
+- on-cache: job 850 completed (194 s). off-s0: job 861 failed at the 400 s warm deadline in
+  "Warming audio decode lengths" (4/12 done, ~60 s each). Cause: cold JIT kernel cache for the new
+  tree path (JIT stats 178/1370 hits, 13%); kernel hashes depend on TT_METAL_HOME. Not a drop.
+- The chain then hit the new device-lint setsid rule (harness a8268f2) for on-s0/off-s1 and stopped
+  (3 skips). No device time used by those.
+- Fixes: setsid re-exec block removed from run421.sh (pytest already under timeout --foreground -k 10);
+  chain called analyze400.py, now analyze421.py; off-s0/on-s0 specs at -t 600 (unmeasured cold JIT),
+  py 570, warm deadline 520. Other seeds stay at -t 500 / deadline 400.
+- Relaunched chain (off-s0 .. on-s4) and post421.sh, both detached in run dir 1603.

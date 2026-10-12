@@ -2,7 +2,7 @@
 # t421 chain (detached on g15blx02): submits the blx01 specs in order, one job at a time through
 # tt-project/t288/blx01-submit.sh (refuses while another smarton job runs there). A job that does not
 # complete is retried once after the broker is clear; a second failure skips that spec. A failed
-# on-cache skips every on arm; three skipped specs in a row stop the chain. Then runs analyze400.py.
+# on-cache skips every on arm; three skipped specs in a row stop the chain. Then runs analyze421.py.
 # Writes T421_DONE <rc> last to tt-project/state/t421/chain.log (untracked).
 set -eo pipefail
 cd /home/smarton/fasth3/tt-metal
@@ -54,4 +54,4 @@ for spec in "$@"; do
   fi
 done
 log "analysis"
-timeout 1200 python_env/bin/python $D/analyze400.py >> $L 2>&1
+timeout 1200 python_env/bin/python $D/analyze421.py >> $L 2>&1

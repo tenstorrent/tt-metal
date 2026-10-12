@@ -16,14 +16,6 @@ case $(hostname -s) in
   *)        W=${T288_W:-/home/smarton/fasth3/t286}; VENV=${T288_VENV:-/home/smarton/fasth3/tt-metal/python_env}
             ROOT_MAX=${T288_ROOT_MAX:-85}; FOOT_MAX=${T288_FOOT_MAX:-200}; FOOT="$T $F/cache/dit-h3hf $F/cache/tt-metal-cache-h3hf" ;;
 esac
-# Run the work in its own process group and kill the whole group on exit or signal, so no pytest
-# child outlives the broker job (device-lint requires it). Inside, pytest runs under timeout --foreground.
-if [ -z "$T288_INNER" ]; then
-  T288_INNER=1 setsid bash "$0" "$@" & PG=$!
-  trap 'kill -TERM -- -$PG 2>/dev/null; sleep 5; kill -KILL -- -$PG 2>/dev/null' EXIT
-  trap 'exit 143' TERM; trap 'exit 130' INT
-  wait $PG; exit $?
-fi
 TAG=${1:?tag}; ARM=${2:?on|off}; MODE=${3:-}
 case $ARM in on) PRE=1;; off) PRE=0;; *) echo "[t288] arm must be on or off"; exit 2;; esac
 case $MODE in cache) CACHE_ONLY=1;; "") CACHE_ONLY=${T288_CACHE_ONLY:-0};; *) echo "[t288] mode must be cache or empty"; exit 2;; esac
