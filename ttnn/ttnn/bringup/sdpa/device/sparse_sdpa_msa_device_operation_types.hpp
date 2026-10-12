@@ -25,7 +25,8 @@ struct SparseSDPAMsaParams {
     // Set -> enforce a token-level causal mask on the diagonal block (the query's own block, whose later tokens are
     // future). Unset -> no token-level causality; the op attends the full selected blocks.
     std::optional<uint32_t> chunk_start_idx = std::nullopt;
-    // SP mesh axis used to derive the per-device chunk_start (chunk_start_idx + rank*S); host-side only.
+    // SP mesh axis used to derive the per-device causal geometry; host-side only. chunk_start_idx + rank*S, or,
+    // with a block-cyclic cache, the KV writer's rotated position (see compute_causal_geometry).
     std::optional<uint32_t> cluster_axis = std::nullopt;
     bool has_indexed_kv_cache() const { return cache_batch_idx.has_value(); }
     bool causal_enabled() const { return chunk_start_idx.has_value(); }

@@ -182,3 +182,32 @@ Build fixes after fork_op.py (no behaviour change):
 - Needed by: rebase onto origin/malimpic/llk_helper_library_rebased_0110_2
 - Files: 24 merged files under `device/` and `sdpa_nanobind.cpp`; new `device/kernels/chunked_q_mapping.hpp`,
   `device/ring_joint_sdpa_schedule.hpp`
+
+### Upstream sync to source @ `bdc576fa652` (2026-10-12): full sync, including #56922 and #57636
+- What: a 3-way merge (base = fork_op.py's mechanical copy of the source @ `73027b6e6ff` without #56922 and #57636,
+  the fork's last sync; theirs = the same copy @ `bdc576fa652`; ours = this fork). The fork is now the source @
+  `bdc576fa652` plus its own changes. Taken:
+  - the two commits not taken at the last sync: #56922 `output_concat_heads` (+ pad-key blanking) for
+    scaled_dot_product_attention, #57636 sparse_sdpa_msa rotated causal geometry (multi-turn resume);
+  - features (new options, default off): #58032 ring_joint K split and packed latent V, #58223 configurable attention
+    matmul fidelity and segmented accumulation, #57998 block-cyclic sliding Q wrapping a slab, #58436 chunked SDPA
+    sinks, #59055 windowed mode with causal masking, #58613 split-KV ring MLA with fused full-mesh KV gather;
+  - perf: #57878 ring MLA prefill with batched V matmul and compute overlap;
+  - bug fixes (they change default behaviour where they apply): #59349 the SDPA reader no longer adds the scalar
+    chunk offset to valid_Skt twice, #58436 sliding-window masks, #59060 MiniMax robustness;
+  - cleanups: #54162 (docs), #59272 (log level), #58505 (CoreRange aliases), #59097 (alias removal), #59418 (includes).
+  Nine conflicts, each resolved as upstream's text with the fork's change on top: the namespace spellings the fork had
+  fixed by hand (`ttnn::operations::transformer::PagedCacheGeometryOverride`,
+  `ttnn::transformer::bringup::sdpa::streaming_qktv_h`) on lines upstream extended; ring_joint's streaming rule
+  (latent V at fp32 DEST streams) next to upstream's new K-stripe assert; a ring_distributed hunk where the fork only
+  had formatter whitespace (upstream's kept).
+- Default behaviour: the fork's own changes are kept (narrower non-MLA V, sparse_sdpa high_precision, ring_mla at fp32
+  DEST, ring joint kv_actual_isl=0 full prefill); the upstream bug fixes above apply to every caller.
+- Needed by: rebase onto origin/llk_helper_library @ `bdc576fa652` (2026-10-12)
+- Files: 36 merged files under `device/`, `sdpa.{cpp,hpp}`, `sdpa_nanobind.cpp`, `sparse_sdpa*.cpp`; new
+  `device/kernels/{ring_joint_ksplit,ring_mla_geometry,ring_mla_packing_plan,windowed_mode}.hpp`
+- Tests: the shared `SDPAProgramConfig` now prints three more (default) fields (#58032 `max_k_splits`, #58223
+  `matmul_math_fidelity`, `segmented_accumulation`), so every captured call that passes one has a new signature; the
+  five such cases in `tests/cases.py` (mimo_v2_6_d_p x2, mimo_v2_6_d_p_2x2 x2, xing40_a4b_d_p ring_mla) and the
+  models' `results/fork_calls.json` are re-keyed (same call, recomputed sig; checked against a fresh mimo_v2_6_d_p_2x2
+  capture). Unit suite 28 passed / 10 skipped (the 8-device Xing cases), model cases 5 passed / 1 skipped (Xing).

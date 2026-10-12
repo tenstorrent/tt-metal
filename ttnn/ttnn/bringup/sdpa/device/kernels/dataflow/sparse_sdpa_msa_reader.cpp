@@ -76,8 +76,12 @@ void kernel_main() {
         k_group_tile_stride = get_arg_val<uint32_t>(8);
         v_group_tile_stride = get_arg_val<uint32_t>(9);
     }
-    // Per-device global position of this core's query row 0 (chunk_start_idx + rank*S); patched at dispatch.
+    // Per-device global position of this core's query row 0, patched at dispatch. Query rows >= straddle_row sit
+    // straddle_jump positions further along: the boundary chip of a mid-slab (non-chunk-aligned) chunk start holds
+    // the tail of one slab block and the head of its next one (jump 0 everywhere else).
     const uint32_t chunk_start_local = CAUSAL_MASK_ENABLED ? get_arg_val<uint32_t>(10) : 0;
+    const uint32_t straddle_row = CAUSAL_MASK_ENABLED ? get_arg_val<uint32_t>(11) : 0;
+    const uint32_t straddle_jump = CAUSAL_MASK_ENABLED ? get_arg_val<uint32_t>(12) : 0;
     constexpr uint32_t keys_per_tile = tt::constants::TILE_WIDTH;
 
     Noc noc;
@@ -146,7 +150,7 @@ void kernel_main() {
         uint32_t boundary_tile = 0;  // first fully-masked key-tile within the diagonal block
         uint32_t boundary_col = 0;   // within-tile column where masking starts (0 -> boundary_tile fully masked)
         if constexpr (CAUSAL_MASK_ENABLED) {
-            const uint32_t p = chunk_start_local + tok;  // global query position
+            const uint32_t p = chunk_start_local + tok + (tok >= straddle_row ? straddle_jump : 0);  // global position
             const uint32_t diag_block = p / block_size;
             for (uint32_t c = 0; c < n_active; ++c) {  // block_ids are topk-ordered (unsorted) -> linear scan
                 if (idx_ptr[c] == diag_block) {

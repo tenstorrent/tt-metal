@@ -97,7 +97,8 @@ void kernel_main() {
     constexpr bool use_zigzag_balancing = get_compile_time_arg_val(32) == 1;
     // Windowed K-range narrowing: the reader computes each Q chunk's [k_lo, k_hi) from
     // cu_window_seqlens, streams only that range, and feeds it to compute over a ctrl CB.
-    constexpr bool use_windowed_narrowing = get_compile_time_arg_val(33) == 1;
+    constexpr auto windowed_mode = static_cast<WindowedMode>(get_compile_time_arg_val(33));
+    constexpr bool use_windowed_narrowing = is_windowed_mode(windowed_mode);
 
     constexpr auto q_args = TensorAccessorArgs<34>();
     constexpr auto k_args = TensorAccessorArgs<q_args.next_compile_time_args_offset()>();
@@ -319,8 +320,10 @@ void kernel_main() {
             // Flexible or ring: cap at valid_Skt so we never read past K/V extent.
             valid_Skt_bound = std::min(chunked_q_chunk_offset * Sq_chunk_t + valid_Sqt, valid_Skt);
         } else {
-            // Legacy: extend by offset so one program can serve all chunks (valid_Skt is chunk 0's).
-            valid_Skt_bound = valid_Skt + chunked_q_chunk_offset * Sq_chunk_t;
+            // Scalar-offset factories already include the prefix in valid_Skt.
+            // Adding it again can resolve page-table entries beyond the valid KV
+            // extent instead of zero-filling the final partial K/V chunk.
+            valid_Skt_bound = valid_Skt;
         }
 
         // Global Q scheduling: iterate over a linear range of B*NQH*q_num_chunks chunks.
@@ -390,7 +393,7 @@ void kernel_main() {
             uint32_t windowed_k_lo = 0;
             uint32_t windowed_k_hi = k_num_chunks;
             if constexpr (use_windowed_narrowing) {
-                const auto range = windowed_k_chunk_range(
+                const auto range = windowed_k_chunk_range<windowed_mode>(
                     q_chunk,
                     Sq_chunk_t,
                     valid_Sqt,
