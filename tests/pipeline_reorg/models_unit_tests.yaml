@@ -2317,3 +2317,17 @@
   owner_id: U03PUAKE719 # Miguel Tairum Cruz (external bring-up by ign-rahultp)
   team: models
   budget_type: unit
+
+# CI only for #57845 (Parakeet TDT 0.6B), not for merge: the PR's pytest suite (config, encoder NRMSE, transcription vs CPU reference).
+- name: "Parakeet TDT 0.6B tests (CI mirror of #57845)"
+  cmd: >-
+    pytest --timeout 900 -v models/experimental/parakeet/tests/test_parakeet.py
+  model: parakeet-tdt-0.6b
+  model_family: Parakeet
+  skus:
+    bh_p150:
+      timeout: 15
+      tier: 3
+  owner_id: U03PUAKE719 # Miguel Tairum Cruz (CI mirror of #57845)
+  team: models
+  budget_type: unit
