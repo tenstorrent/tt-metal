@@ -112,7 +112,7 @@ __attribute__((noinline, noipa, section(".text.llk_dbg_serve"), aligned(1024))) 
         "li    s5, 0\n"          // park count: park 2 is the INIT entry park
         "1:\n\t"                 // arrive
         "lw    a4, 0(t1)\n\tand   a4, a4, a4\n"
-        "65:\n\t" // the last scheduled release has done the first read (78:)
+        "65:\n\t" // the last scheduled release has done the first read (after 53:)
         "lw    a4, 0(a7)\n\tand   a4, a4, a4\n\t"
         "lw    a4, 0(a6)\n\tand   a4, a4, a4\n\t"
         "lw    a4, %[scratch](s0)\n\tand   a4, a4, t0\n\tbeq   a4, t2, 9f\n"
@@ -193,8 +193,8 @@ __attribute__((noinline, noipa, section(".text.llk_dbg_serve"), aligned(1024))) 
         ".set  .Lrel_quiet, 900\n\t" // spins (about 5 cycles each) after a request without register or L1 accesses
         ".set  .Lrel_near, 64\n\t"   // the timed pass starts when the request is this many cycles away
         ".set  .Lrel_k, 24\n\t"      // the timed pass runs (request - its clock read - k) NOPs, 0 to m
-        ".set  .Lrel_m, 32\n\t"
-        "lw    a0, %[wall](a5)\n\taddi  a0, a0, .Lrel_lead\n" // a0, a1 and t0 are borrowed until 78:
+        ".set  .Lrel_m, 24\n\t"
+        "lw    a0, %[wall](a5)\n\taddi  a0, a0, .Lrel_lead\n" // a0, a1 and t0 are borrowed until the last release
         "51:\n\t"
         "andi  a2, s4, 3\n\taddi  a3, a2, 1\n\tslli  a3, a3, 17\n\t" // debug target: TRISC t is t + 1
         "or    a1, a3, t3\n\tor    s3, a3, t4\n\t"                   // the flush request and its end
@@ -217,11 +217,12 @@ __attribute__((noinline, noipa, section(".text.llk_dbg_serve"), aligned(1024))) 
         "sw    s3, %[cntl0](a5)\n"
         "53:\n\t"
         "lw    a4, %[status0](a5)\n\tbltz  a4, 53b\n\t"
-        // after the last release BRISC waits for TRISC 0 in lines the earlier releases ran: it fetches nothing from L1
+        "li    t0, 0x00ffffff\n\tli    a1, %[tend]\n\t" // the arrive loop's t0 and a1 back (51: sets its own)
+        // after the last release BRISC waits for TRISC 0 and goes on in lines the earlier releases ran: no L1 fetch
         ".balign 16\n\t"
         "srli  s4, s4, 2\n\tli    a4, %[sched_end]\n\tbne   s4, a4, 73f\n\t"
         "lw    a4, 0(t1)\n\t"
-        "and   a4, a4, a4\n\tj     78f\n"
+        "and   a4, a4, a4\n\tli    a0, %[tstep]\n\tj     65b\n"
         "73:\n\t"
         "li    a4, .Lrel_gap2\n\tli    a2, 0x40\n\tbltu  s4, a2, 74f\n\tli    a4, .Lrel_gap1\n"
         "74:\n\t"
@@ -237,8 +238,6 @@ __attribute__((noinline, noipa, section(".text.llk_dbg_serve"), aligned(1024))) 
         "li    t0, 0\n\tj     70b\n"
         "77:\n\t" // outside the sled: only if the gap left too little time
         "li    a4, 0\n\tj     71b\n"
-        "78:\n\t" // TRISC 0 has arrived: the borrowed registers back, on with the arrive loop
-        "li    t0, 0x00ffffff\n\tli    a0, %[tstep]\n\tli    a1, %[tend]\n\tj     65b\n"
         "99:\n"
         :
         : [pcb0] "i"(PC_BUF[0]),
