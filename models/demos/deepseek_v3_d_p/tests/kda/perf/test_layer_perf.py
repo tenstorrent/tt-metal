@@ -49,9 +49,9 @@ _PERF_SKU = "bh_loudbox"
 _PERF_MARGIN = 0.03
 # LoudBox targets.
 _PERF_REFERENCE_MS = {
-    "SP1xTP8": 8.617,
-    "SP2xTP4": 8.758,
-    "SP4xTP2": 9.066,
+    "SP1xTP8": 8.651,
+    "SP2xTP4": 8.701,
+    "SP4xTP2": 8.823,
 }
 _GALAXY_PERF_REFERENCE_MS = 2.542
 
