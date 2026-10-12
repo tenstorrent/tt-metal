@@ -915,6 +915,170 @@ def _pick_base_generator(arch: str, model_type: str | None) -> tuple[str, bool]:
     return ("HybridAttentionForCausalLM" if hybrid else "LlamaForCausalLM"), True
 
 
+_PIPELINE_ADAPTER_TMPL = '''# SPDX-License-Identifier: Apache-2.0
+"""vLLM generator for @SLUG@ (@ARCH@) on Tenstorrent.
+
+The tt-metal vLLM plugin registers this class as @TTARCH@ via vllm_metadata.json and drives it through
+the generator contract (initialize_vllm_model -> allocate_kv_cache_per_layer -> warmups ->
+prefill_forward / decode_forward). @ARCH@ is not a plugin built-in, so this wraps the demo's own
+resident pipeline (@PMOD@) rather than a stock generator.
+
+Starting serve profile (matches the validated demo): ONE sequence at a time (--max-num-seqs 1), prompt
+and generated tokens bounded by the pipeline KV capacity (--max-model-len @KV@), host-side sampling
+(logits are returned to vLLM). Concurrent users / long context / on-device sampling are model work; see
+the TODOs below.
+"""
+from __future__ import annotations
+
+import logging
+
+import torch
+
+try:
+    import ttnn  # noqa: F401
+    from @PMOD@ import build_pipeline as _build_pipeline, read_host as _read_host
+    try:
+        from @PMOD@ import KV_CAPACITY as _KV_CAPACITY
+    except Exception:  # noqa: BLE001
+        _KV_CAPACITY = @KV@
+except Exception:  # available only inside the serving image
+    _build_pipeline = None
+    _read_host = None
+    _KV_CAPACITY = @KV@
+
+log = logging.getLogger(__name__)
+
+
+class @TTARCH@:
+    """Generator contract over the demo resident pipeline (@PMOD@)."""
+
+    # Read by the plugin off the CLASS before the model exists.
+    model_capabilities = {"supports_sample_on_device": False}
+
+    def __init__(self, pipe, max_batch_size, max_seq_len):
+        self.pipe = pipe
+        self.max_batch_size = int(max_batch_size)
+        self.max_seq_len = int(max_seq_len)
+        self.vocab_size = int(getattr(pipe.config, "vocab_size", 0)) or None
+        self._state = None
+        self._active = False
+        self.already_warmed_up_prefill = False
+
+    @classmethod
+    def initialize_vllm_model(cls, hf_config, mesh_device, max_batch_size, max_seq_len=None, n_layers=None, **_ignored):
+        if int(max_batch_size) != 1:
+            raise ValueError(
+                "%s serves one sequence at a time; launch vLLM with --max-num-seqs 1 (got %s)."
+                % (cls.__name__, max_batch_size)
+            )
+        msl = int(max_seq_len or _KV_CAPACITY)
+        if msl > _KV_CAPACITY:
+            raise ValueError(
+                "%s: resident KV capacity is %d tokens; use --max-model-len %d or less (got %d)."
+                % (cls.__name__, _KV_CAPACITY, _KV_CAPACITY, msl)
+            )
+        if _build_pipeline is None:
+            raise RuntimeError("pipeline module @PMOD@ not importable; run inside the serving image")
+        pipe = _build_pipeline(mesh_device, layers=n_layers)
+        log.info("built @SLUG@ pipeline (device rows=%s, KV=%s)", getattr(pipe, "batch", "?"), _KV_CAPACITY)
+        return cls(pipe, max_batch_size, msl)
+
+    def allocate_kv_cache_per_layer(self, per_layer_specs):
+        return [None for _ in per_layer_specs]  # the pipeline owns its cache
+
+    def allocate_kv_cache(self, kv_cache_shape=None, dtype=None, num_layers=None):
+        return [None for _ in range(int(num_layers or 0))]
+
+    def _host_logits_row0(self, logits_dev):
+        host = _read_host(logits_dev).reshape(-1)
+        v = self.vocab_size or host.numel()
+        return host[:v].float().reshape(1, 1, v)
+
+    def prefill_forward(self, tokens, page_table=None, *, prompt_lens=None, start_pos=None, **_compat):
+        if tokens.shape[0] != 1:
+            raise ValueError("one sequence at a time: got a prefill batch of %d" % tokens.shape[0])
+        if start_pos is not None and int(torch.as_tensor(start_pos).max()) != 0:
+            raise ValueError("chunked / prefix-cached prefill is not supported by this generator")
+        T = int(prompt_lens[0]) if prompt_lens is not None else int(tokens.shape[1])
+        if T > self.max_seq_len:
+            raise ValueError("prompt of %d tokens exceeds max_model_len=%d" % (T, self.max_seq_len))
+        ids = tokens[0, :T].to(torch.int64).tolist()
+        self._state = self.pipe.decode_prefill([ids])  # seeds the resident caches for every device row
+        self._active = True
+        return self._host_logits_row0(self._state["logits"])
+
+    def decode_forward(self, tokens, start_pos=None, page_table=None, **_compat):
+        if not self._active:
+            raise RuntimeError("decode_forward before prefill_forward")
+        # TODO(author): vLLM sampled `tokens` on the host. The demo pipeline commits its OWN
+        #   device-sampled token, so to honor vLLM's token exactly (non-greedy sampling, penalties)
+        #   write that id into the pipeline resident next-token buffer before stepping. Greedy decode
+        #   matches without this; wire it for full sampler fidelity.
+        self._state = self.pipe.decode_step(self._state)
+        return self._host_logits_row0(self._state["logits"])
+
+    def warmup_model_prefill(self, *, kv_cache=None, can_sample_on_device=False, enable_trace=False):
+        if enable_trace:
+            return  # eager generator; trace warmup is a no-op
+        bos = int(getattr(self.pipe.config, "bos_token_id", 1) or 1)
+        self.prefill_forward(torch.full((1, 8), bos, dtype=torch.int64), None, prompt_lens=[8])
+        self.already_warmed_up_prefill = True
+
+    def warmup_model_decode(self, *, kv_cache=None, max_batch_size=1, num_blocks=0, can_sample_on_device=False, enable_trace=False):
+        if enable_trace or not self._active:
+            return
+        self.decode_forward(torch.zeros((1, 1), dtype=torch.int64), None, None)
+        self._active = False  # warmup sequence done; next prefill reseeds
+
+    def cleanup(self):
+        pass
+'''
+
+
+def _demo_pipeline_module(checkout, slug):
+    """Dotted import path to the demo resident pipeline if it exposes build_pipeline, else None."""
+    pf = Path(checkout) / "models" / "demos" / slug / "tt" / "pipeline.py"
+    try:
+        if pf.is_file() and "def build_pipeline" in pf.read_text(errors="replace"):
+            return "models.demos.%s.tt.pipeline" % slug
+    except Exception:  # noqa: BLE001
+        pass
+    return None
+
+
+def _pipeline_serve_profile(checkout, slug):
+    """(kv_capacity, mesh_str) for the serve note, from the demo pipeline + parallelism manifest."""
+    import re as _re
+
+    kv = 2048
+    try:
+        pf = Path(checkout) / "models" / "demos" / slug / "tt" / "pipeline.py"
+        m = _re.search(r"KV_CAPACITY\\s*=\\s*(\\d+)", pf.read_text(errors="replace"))
+        if m:
+            kv = int(m.group(1))
+    except Exception:  # noqa: BLE001
+        pass
+    mesh = None
+    try:
+        d = json.loads((Path(checkout) / "models" / "demos" / slug / "parallelism_manifest.json").read_text())
+        if isinstance(d.get("mesh"), (list, tuple)) and len(d["mesh"]) == 2:
+            mesh = "(%d, %d)" % (int(d["mesh"][0]), int(d["mesh"][1]))
+    except Exception:  # noqa: BLE001
+        pass
+    return kv, mesh
+
+
+def _pipeline_adapter_src(slug, arch, tt_arch, pipeline_mod, kv):
+    """Render the pipeline-wrapping adapter for a novel arch that has its own demo pipeline."""
+    return (
+        _PIPELINE_ADAPTER_TMPL.replace("@SLUG@", slug)
+        .replace("@TTARCH@", tt_arch)
+        .replace("@ARCH@", arch)
+        .replace("@PMOD@", pipeline_mod)
+        .replace("@KV@", str(kv))
+    )
+
+
 def _scaffold_vllm_bundle(
     checkout: Path, extra_models_dir: str, arch: str, model_type: str | None, weights: str | None, slug: str
 ) -> tuple[bool, bool, str]:
@@ -939,6 +1103,36 @@ def _scaffold_vllm_bundle(
     created = not meta.is_file()
     bundle.mkdir(parents=True, exist_ok=True)
     tt_arch = arch if arch.startswith("TT") else "TT" + arch
+
+    # Novel arch WITH its own resident demo pipeline -> ship a real pipeline-wrapping generator
+    # skeleton (the Nemotron-shaped serve contract) instead of a no-op stub, so publish-hf always
+    # produces a servable-shaped adapter and never leaves "no adapter" for the next run.
+    pipeline_mod = _demo_pipeline_module(checkout, slug) if is_stub else None
+    if pipeline_mod:
+        kv, mesh = _pipeline_serve_profile(checkout, slug)
+        note = (
+            "Single-sequence generator over the demo tt/pipeline.py; serve with "
+            "--max-num-seqs 1 --max-model-len %d" % kv
+        )
+        if mesh:
+            note += ' and MESH_DEVICE="%s"' % mesh
+        note += "."
+        meta.write_text(
+            json.dumps(
+                {
+                    "arch": arch,
+                    "main_class": "adapter:" + tt_arch,
+                    "weights": weights or "REPLACE/with-base-weights-repo",
+                    "note": note,
+                    "max_num_seqs": 1,
+                },
+                indent=2,
+            )
+            + "\n"
+        )
+        (bundle / "adapter.py").write_text(_pipeline_adapter_src(slug, arch, tt_arch, pipeline_mod, kv))
+        return created, is_stub, str(bundle)
+
     meta.write_text(
         json.dumps(
             {
