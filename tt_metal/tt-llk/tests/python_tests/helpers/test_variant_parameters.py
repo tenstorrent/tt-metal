@@ -1198,6 +1198,21 @@ class TOPK_XL(TemplateParameter):
 
 
 @dataclass
+class TOP32_RM_PERF(TemplateParameter):
+    """Knobs of the top32_rm chunk walk perf kernel: the row length and the L1 datum size of the value and index rows."""
+
+    top32_perf_row_elements: int = 256
+    top32_perf_datum_bytes: int = 2
+
+    def convert_to_cpp(self) -> str:
+        lines: list[str] = [
+            f"constexpr std::uint32_t TOP32_ROW_ELEMENTS = {self.top32_perf_row_elements}u;",
+            f"constexpr std::uint32_t TOP32_DATUM_BYTES = {self.top32_perf_datum_bytes}u;",
+        ]
+        return "\n".join(lines)
+
+
+@dataclass
 class TOP32_RM(TemplateParameter):
     """Compile-time knobs for ``top32_rm_test.cpp`` (the DeepSeek top32_rm family).
 
