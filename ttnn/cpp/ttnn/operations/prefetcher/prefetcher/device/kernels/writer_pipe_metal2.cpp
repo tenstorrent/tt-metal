@@ -54,10 +54,9 @@ void kernel_main() {
                 for (uint32_t block = 0; block < num_blocks; ++block) {
                     staging.wait_front(max_block_num_tiles);
                     pipe.reserve_back(1);
-                    pipe.write_strided(noc, staging, block_height_in_tiles, coalesced_num_pages, coalesced_page_size);
-                    // Also what frees the staging slot: write_strided's source is that slot.
-                    pipe.flush_writes(noc);
-                    pipe.push_back(1, noc);
+                    // Returns with the writes flushed, which is what frees the staging slot they are read from.
+                    pipe.write_strided_and_push_back(
+                        noc, staging, 1, block_height_in_tiles, coalesced_num_pages, coalesced_page_size);
                     staging.pop_front(max_block_num_tiles);
                 }
             }
