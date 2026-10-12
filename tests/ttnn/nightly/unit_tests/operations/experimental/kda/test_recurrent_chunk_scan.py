@@ -67,7 +67,7 @@ _PRODUCTION_CASE = _PerformanceCase(
     num_chunks=20,
     key_dim=128,
     value_dim=128,
-    expected_duration_ns=372_476,
+    expected_duration_ns=368_665,
 )
 _PRODUCTION_BF16 = frozenset({"kd", "q_decay", "final_decay"})
 

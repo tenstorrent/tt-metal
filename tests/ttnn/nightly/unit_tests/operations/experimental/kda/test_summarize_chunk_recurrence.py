@@ -58,14 +58,14 @@ _REGRESSION_CASE = _PerformanceCase(
     batch_heads=8,
     num_chunks=4,
     dim=32,
-    expected_duration_ns=14_559,
+    expected_duration_ns=14_567,
 )
 _PRODUCTION_CASE = _PerformanceCase(
     "pr7-leaf-bh96-n20-d128",
     batch_heads=96,
     num_chunks=20,
     dim=128,
-    expected_duration_ns=304_251,
+    expected_duration_ns=295_405,
 )
 _PRODUCTION_BF16 = frozenset({"kd", "q_decay", "final_decay"})
 
