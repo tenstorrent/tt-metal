@@ -20,8 +20,9 @@ ego shift included.
 
 import ttnn
 from models.experimental.bevformer.model_config import GRID_DTYPE
+
 from models.experimental.bevformer.reference.point_sampling_3d_2d import bev_reference_points, camera_geometry
-from models.experimental.bevformer.tt.tt_common import TtFFN, layer_norm
+from models.experimental.bevformer.tt.tt_common import TtFFN, layer_norm, signpost
 from models.experimental.bevformer.tt.tt_ms_deformable_attention import fp32_grid_sample_config
 from models.experimental.bevformer.tt.tt_spatial_cross_attention import (
     TTSpatialCrossAttention,
@@ -79,11 +80,21 @@ class TTBEVFormerLayer:
     def __call__(self, query, value, bev_pos, prev_bev, grid_bias, sca_frame):
         """``grid_bias`` as ``tt_temporal_self_attention.tsa_grid_bias`` lays it out, ``sca_frame`` from
         ``TTSpatialCrossAttention.frame_inputs``; both shared by every layer of a frame."""
+        signpost(header="TTNN BEVFormerLayer Forward Start")
+        signpost(header="BEVLayer TSA Start")
         query = self.temporal_self_attention(query, prev_bev, bev_pos, grid_bias)
+        signpost(header="BEVLayer TSA Complete")
         query = layer_norm(query, self.params.norms[0])
+        signpost(header="BEVLayer SCA Start")
         query = self.spatial_cross_attention(query, value, sca_frame)
+        signpost(header="BEVLayer SCA Complete")
         query = layer_norm(query, self.params.norms[1])
-        return layer_norm(self.ffn(query), self.params.norms[2], residual=query)
+        signpost(header="BEVLayer FFN Start")
+        ffn_output = self.ffn(query)
+        signpost(header="BEVLayer FFN Complete")
+        query = layer_norm(ffn_output, self.params.norms[2], residual=query)
+        signpost(header="TTNN BEVFormerLayer Forward End")
+        return query
 
 
 class TTBEVFormerEncoder:
@@ -124,7 +135,7 @@ class TTBEVFormerEncoder:
         # BEV's half.
         channels_per_map = self.num_heads * self.tsa_num_points
         base = (2 * bev_reference_points(bev_h, bev_w, 1) - 1).expand(-1, -1, 2 * channels_per_map, -1)
-        self._tsa_grid_base = ttnn.from_torch(
+        self.tsa_grid_base = ttnn.from_torch(
             base.reshape(1, bev_h * bev_w, 2 * channels_per_map * 2),
             device=device,
             dtype=GRID_DTYPE,
@@ -174,7 +185,7 @@ class TTBEVFormerEncoder:
         assert num_query == self.bev_h * self.bev_w, f"{num_query} queries for a {self.bev_h}x{self.bev_w} BEV"
         assert value.shape[1] == self.num_keys, f"{value.shape[1]} keys, expected {self.num_keys}"
 
-        grid_bias = self._tsa_grid_base if bs == 1 else ttnn.repeat(self._tsa_grid_base, ttnn.Shape((bs, 1, 1)))
+        grid_bias = self.tsa_grid_base if bs == 1 else ttnn.repeat(self.tsa_grid_base, ttnn.Shape((bs, 1, 1)))
         if prev_bev is not None:
             if shift is not None:
                 assert (
