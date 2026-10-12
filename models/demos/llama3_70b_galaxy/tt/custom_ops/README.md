@@ -21,6 +21,10 @@ to a descriptor or a kernel needs no `_ttnn.so` rebuild. Conventions follow
             kernels/             cp_{reader,compute,writer}.cpp (the op), cp_step.hpp (its K-chunk step),
                                  stock_{reader,compute,writer}.cpp (verbatim copies of the stock SDPA kernels,
                                  used by chunked_sdpa_port)
+        qwen_ag_matmul/          Qwen context-parallel row all-gather along M (fabric, from the op) + QKV matmul
+            __init__.py, op.py
+            kernels/             mm_{in0,in1_out,compute}.cpp (minimal_matmul kernels with block lists),
+                                 ag_sender.cpp (fabric multicast sender), ag_hub.cpp (barrier + block release)
 
 ## Conventions
 
@@ -268,3 +272,35 @@ specialised to this configuration, with two packer-stall cuts that leave every v
 grouped to one L1-acc switch per sub_exp block; no mask stamp for row groups wholly below the diagonal). 40k
 pipelined: 12.490 -> 12.230 ms per call; output `torch.equal` to the stock pair. `QWEN_CP_SDPA_DEFINES` passes
 extra compile-time defines to the kernels (measurement knobs listed in `cp_step.hpp`; unset in the model).
+
+## qwen_ag_matmul
+
+Replaces `_row_ag` (all_gather_async along dim 2 over the mesh rows, FABRIC_1D_RING) + the QKV
+`minimal_matmul` of `qwen_cp_prefill.attention_prefill` with one `ttnn.generic_op` program per device
+(`QWEN_CP_FUSED_AG=1`, S >= 32768; default off). The fabric connections come from
+`ttnn.setup_fabric_connection` on the program descriptor, so no C++ op is needed.
+
+`qwen_ag_matmul(x_local, w, *, config, compute_kernel_config, dtype, copy_local=False) -> (out, gathered)`:
+`x_local` [1, 1, S/32, 5120] bf8 (this row's slot), `w` [1, 1, 5120, N] (N = 10 * N_block). `gathered`
+[1, 1, S/4, 5120] gets every other row's slot (and the own slot with `copy_local`).
+
+| Cores | Kernels |
+| --- | --- |
+| (0..5, 0..9) | the stock minimal_matmul program for the transposed grid (M over x, N over y), reduced to one N block per core, with an explicit M-block list per column (common runtime args only; a core finds its neighbours from its logical coordinates). With W_qkv's K x N_block (680 KiB) resident in L1, in1 is relayed only for each column's first block, then re-pushed from L1, so the columns run independently. |
+| (6, 0..3) | fabric senders of links 0..3: BRISC fwd (half A 4 hops, half B 3), NCRISC bwd (3 / 4). Each link carries 40 of the 160 K-tile columns; rows go in waves of 8; each wave-half ends with an atomic inc of that (slot, wave)'s arrival word on the receivers' hub. Senders start once every peer has launched the call (barrier). |
+| (6, 4) | hub: barrier, then releases each column's blocks in list order (own slot at once, remote blocks once their arrival word reaches 8 = 4 links x 2 halves). |
+
+Bits: a tile's K order depends only on K_block and the N-block parity, never on the M split, so the
+output equals the stock pair's; the gather copies bytes. The barrier and arrival words live in a
+zero-filled L1 buffer on the hub core, created at the first call of a prefill (with a device sync, so no
+peer's barrier inc can be wiped by a late zero-fill) and freed at the end of the prefill
+(`release_semaphores`): L1 kept across the prefill -> decode switch moves the decode global CB, and the
+decode trace capture then misses its program cache.
+
+Checks (`tests/test_qwen_ag_matmul_op.py`): `matmul_port` (the 6x10 matmul with the block lists, no
+fabric) and the fused op are `torch.equal` to the stock pair on all 32 devices at S = 16k / 24k / 32k /
+40k, twice on fresh zero-filled buffers, every gathered slot equal; the plan covers every row once.
+Pipelined ms per pair, stock -> fused (job367): 16k 0.895 -> 1.026, 24k 1.123 -> 1.381, 32k 1.507 ->
+1.431, 40k 1.783 -> 1.603 (hence S >= 32768). At 40k the all-gather alone takes 1.13-1.15 ms and the
+unwaited concurrent bound is 1.48 ms. The FF1 shape (W1 1.74 MB per core, not resident) runs in lockstep
+and is slower than its stock pair (2.96-3.51 vs 2.84-2.89 ms, job366), so the MLP keeps the stock pair.
