@@ -68,7 +68,19 @@ export (`fill_cache_for_user_` for recurrent, reshape/permute/`slice_write` for 
 import (`slice` back to a native carry) and the host decoders (`recurrent_segment_to_torch`,
 `convolution_segment_to_torch`, `assemble_*`). `KdaStateCache.commit` exports every committed layer
 inside the captured region, so the state a reader sees is the one after the last committed chunk, and
-it lands before any later MLA layer acks that chunk. `reset(slot)` zeroes the slot's regions too.
+it lands before any later MLA layer acks that chunk. Request initialization happens in KDA's seed
+readers when device `actual_start == 0`; persistent carries and slabs are not cleared at request start.
+
+A newly assigned or reused slot has **no valid KDA slab for the new request until its first
+completed commit/export**. Old bytes can remain before that point. Consumers must fence completion
+before reading them; Python `commit()` during capture and an H2D input-delivery barrier are not proof
+that replayed compute/export completed. The migration driver requires the model-aware acknowledgement
+count and rejects missing, partial, timed-out, or unexpected counts. K3's current channel only acks MLA
+layers, so the executed prefix must end at MLA to fence preceding KDA exports; trailing KDA or KDA-only
+prefix migration requires an additional completion protocol. Eligibility is checked before sending
+prefill work. Rank zero publishes success or failure to all validator ranks before they enter the
+resident-state broadcast, so a rejected or timed-out prefill does not leave validators waiting there.
+Cross-host ordering and external consumers still require deployment qualification. Imports at positive starts use both imported carries.
 
 ## Reading it back
 

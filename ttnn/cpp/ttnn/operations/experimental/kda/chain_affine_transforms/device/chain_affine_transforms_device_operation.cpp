@@ -130,7 +130,8 @@ std::pair<Tensor, Tensor> chain_affine_transforms(
     const DeviceComputeKernelConfig& compute_kernel_config,
     const Tensor& actual_start,
     uint32_t sequence_parallel_axis,
-    uint32_t local_rows) {
+    uint32_t local_rows,
+    bool zero_initial_state_on_start) {
     // Cache-miss validation cannot protect attribute construction on cache hits. Keep these guards here because the
     // launcher indexes both shapes before dispatching validation.
     const auto& t_shape = transforms.logical_shape();
@@ -145,6 +146,7 @@ std::pair<Tensor, Tensor> chain_affine_transforms(
             .value_dim = static_cast<uint32_t>(s_shape[2]),
             .sequence_parallel_axis = sequence_parallel_axis,
             .local_rows = local_rows,
+            .zero_initial_state_on_start = zero_initial_state_on_start,
             .output_mem_config = memory_config,
             .compute_kernel_config = compute_kernel_config},
         ChainAffineTransformsInputs{

@@ -47,6 +47,8 @@ class ChronologicalSelections:
         projected_qkv: ttnn.Tensor,
         layer_history: ttnn.Tensor,
         predecessor_history: ttnn.Tensor | None = None,
+        *,
+        request_start: ttnn.Tensor | None = None,
     ) -> ttnn.Tensor:
         """Three tokens ending at this rank's valid end; ignored when this rank is empty.
 
@@ -54,6 +56,14 @@ class ChronologicalSelections:
         it: ``layer_history`` before the logical start, else ``predecessor_history``
         (the layer history when omitted, as on a single rank).
         """
+        if request_start is not None:
+            return ttnn.experimental.kda.select_request_history(
+                projected_qkv,
+                layer_history,
+                layer_history if predecessor_history is None else predecessor_history,
+                self._selection_records,
+                request_start,
+            )
         record = _layout.LOCAL_FINAL_HISTORY
         local = self._select_rows(projected_qkv, record)
         candidates = ttnn.concat(

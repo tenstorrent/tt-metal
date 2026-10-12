@@ -2134,17 +2134,22 @@ def run_chunked_transformer_updated(
     # into 1-element uint32 DRAM tensors the metadata ops read on-device; the token input moves into a
     # persistent buffer refreshed in place. With return_intermediates=False the forward is device-only
     # (no host readback), so it is capturable.
-    # The KDA recurrent/conv carries are the one piece of state a replay MUTATES, so they have to be
-    # zeroed in two places: after capture (which costs chunk 0 two extra forwards) and before each
-    # iteration, which would otherwise start where the previous one finished.
-    def _reset_kda_carries(reason):
+    # Device start zero initializes request state. A synthetic positive-offset benchmark instead
+    # restores its pretend prefix after capture and before each iteration, outside measured regions.
+    def _restore_synthetic_kda_prefix(reason):
         kda_states = getattr(transformer, "kda_states", None)
-        if kda_states is None:
+        if kda_states is None or preload_isl == 0:
             return
+        if check_layer_pcc or check_pcc:
+            raise ValueError("KDA positive-offset correctness requires the matching prefix state, not synthetic zeros")
+        # This benchmark pretends a prefix exists. Restore its synthetic seed outside measurement;
+        # request-start runs initialize in the readers and need no restoration.
         for slot in range(kda_states.num_slots):
-            kda_states.reset(slot)
+            for layer in transformer.layers:
+                if not layer.attention.writes_kv:
+                    kda_states.commit(layer.layer_idx, layer.attention.kda.allocate_state(), slot)
         ttnn.synchronize_device(mesh_device)
-        logger.info(f"[trace] reset {kda_states.num_slots} KDA carry slot(s) {reason}")
+        logger.info(f"[trace] restored {kda_states.num_slots} synthetic KDA prefix slot(s) {reason}")
 
     trace_controller = None
     trace_input = None
@@ -2219,13 +2224,8 @@ def run_chunked_transformer_updated(
         # check_pcc would compare the warm pass's (correct) KV. Fail instead of reporting that.
         assert trace_controller.num_segments > 0, "use_trace captured 0 segments — nothing to replay"
 
-        # Capture cost chunk 0 two EXTRA forwards (the warm/compile pass and the recorded pass).
-        # For a KV cache that is idempotent -- same positions, same tokens, same values. For a
-        # RECURRENT carry it is not: every forward advances it, so by the measured loop the carry
-        # has absorbed chunk 0 three times instead of once, and the error rides into every later
-        # chunk. Dense models never see this; Kimi-K3's KDA carries are the first recurrence here.
-        # Zero them so the replay starts from the same state the untraced path starts from.
-        _reset_kda_carries("after capture")
+        # Restore only the synthetic positive-offset prefix. Request-start replay ignores capture's carry.
+        _restore_synthetic_kda_prefix("after capture")
 
     if determinism_check and num_iters < 2:
         pytest.skip("determinism_check requires num_iters >= 2 (iteration 0 is the baseline)")
@@ -2234,11 +2234,8 @@ def run_chunked_transformer_updated(
 
     profiler.start("tt_forward")
     for it in range(num_iters):
-        # Unconditional. The carry is the one piece of state an iteration MUTATES, so iteration N
-        # otherwise starts where N-1 finished: a false failure under determinism_check, and worse
-        # under check_pcc, where the post-loop KV PCC then scores a cache conditioned on the prefix
-        # twice. num_iters=1 is unaffected (the carry is already zero at this point).
-        _reset_kda_carries(f"before iter {it}")
+        # Keep each synthetic positive-offset benchmark iteration on the same pretend prefix.
+        _restore_synthetic_kda_prefix(f"before iter {it}")
         iter_start = time.time()
         chunk_times: list[float] = []
         for c in range(n_chunks):

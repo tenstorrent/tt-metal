@@ -34,6 +34,12 @@ void AffineExclusiveScanOperation::validate_on_program_cache_miss(
     }
     constexpr std::array accepted_summary_dtypes = {tt::tt_metal::DataType::FLOAT32, tt::tt_metal::DataType::BFLOAT16};
     kda_factory_detail::check_allocated_device_tensor(in.a, operation_name, "a");
+    const auto* mesh = in.a.device();
+    TT_FATAL(attrs.sequence_parallel_axis < mesh->shape().dims(), "{}: invalid sequence_parallel_axis", operation_name);
+    TT_FATAL(
+        !attrs.zero_initial_state_on_start || mesh->shape()[attrs.sequence_parallel_axis] == 1,
+        "{}: zero_initial_state_on_start requires SP1; distributed rank entry states are already computed",
+        operation_name);
     TT_FATAL(
         in.a.device()->arch() == tt::ARCH::BLACKHOLE,
         "{} is only supported on Blackhole architecture, got {}",
@@ -164,7 +170,8 @@ Tensor affine_exclusive_scan(
     const Tensor& actual_start,
     uint32_t sequence_parallel_axis,
     uint32_t local_rows,
-    const std::optional<Tensor>& actual_end) {
+    const std::optional<Tensor>& actual_end,
+    bool zero_initial_state_on_start) {
     // Cache-miss validation cannot protect attribute construction on cache hits. Keep these guards here because the
     // launcher divides by groups and indexes all three input shapes before dispatching validation.
     TT_FATAL(groups > 0, "affine_exclusive_scan: groups_per_head must be positive");
@@ -184,6 +191,7 @@ Tensor affine_exclusive_scan(
             .value_dim = static_cast<uint32_t>(b.logical_shape()[2]),
             .sequence_parallel_axis = sequence_parallel_axis,
             .local_rows = local_rows,
+            .zero_initial_state_on_start = zero_initial_state_on_start,
             .output_mem_config = mem,
             .compute_kernel_config = cfg},
         AffineExclusiveScanInputs{

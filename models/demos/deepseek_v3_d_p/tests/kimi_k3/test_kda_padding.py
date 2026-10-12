@@ -18,6 +18,9 @@ from models.demos.deepseek_v3_d_p.tests.kda.utils import (
     reconstruct_state_at_sp_rank,
     to_sp_input,
 )
+from models.demos.deepseek_v3_d_p.tt.kda.config import KDAProgramConfig, KDARecurrenceProgramConfig
+from models.demos.deepseek_v3_d_p.tt.kda.kda import ttKDA
+from models.demos.deepseek_v3_d_p.tt.kda.state_adapter import KdaContractGeometry, KdaStates, allocate_native_state
 from models.demos.deepseek_v3_d_p.tt.kimi_k3.attention import K3AttnContext, TtK3KdaAttention
 from models.demos.deepseek_v3_d_p.tt.kimi_k3.kda_state import KdaStateCache
 from tests.ttnn.unit_tests.operations.experimental.kda.kda_test_utils import assert_bit_identical, make_actual_start
@@ -25,19 +28,132 @@ from tests.ttnn.unit_tests.operations.experimental.kda.kda_test_utils import ass
 pytestmark = run_for_blackhole()
 
 
+@pytest.mark.parametrize("mesh_device", [(2, 4)], indirect=True)
+@pytest.mark.parametrize("device_params", [{"fabric_config": ttnn.FabricConfig.FABRIC_1D}], indirect=True)
+def test_k3_eager_request_restart_preserves_other_slot(mesh_device, device_params):
+    config = KDAConfig(hidden_size=256, num_heads=8, head_k_dim=32, head_v_dim=32, conv_kernel_size=4, norm_eps=1e-5)
+    weights = random_weights(config)
+    layer = build_layer(mesh_device, config, weights, 0, 1, active_seq_len=128, zero_initial_state_on_start=True)
+    cache = KdaStateCache({0: layer}, num_slots=2)
+    attention = TtK3KdaAttention(layer, 0, 1, 1, ttnn.Topology.Linear, cache)
+    references = [None, None]
+    generator = torch.Generator().manual_seed(988)
+
+    def snapshot(slot):
+        state = cache.read(0, slot)
+        return [
+            ttnn.to_torch(shard).clone()
+            for tensor in (state.recurrent, state.convolution)
+            for shard in ttnn.get_device_tensors(tensor)
+        ]
+
+    addresses = [
+        (cache.read(0, s).recurrent.buffer_address(), cache.read(0, s).convolution.buffer_address()) for s in range(2)
+    ]
+    try:
+        for slot, start in ((0, 0), (1, 0), (0, 128), (1, 128), (0, 0), (1, 256)):
+            other = snapshot(1 - slot)
+            hidden = torch.randn(1, 128, 256, generator=generator).bfloat16()
+            expected, references[slot] = kda_forward_reference(
+                hidden, weights, config, None if start == 0 else references[slot]
+            )
+            permutation = mla_row_permutation(start, 2, 64)
+            input_tt = ttnn.from_torch(
+                hidden[:, permutation].unsqueeze(0),
+                device=mesh_device,
+                dtype=ttnn.bfloat16,
+                layout=ttnn.TILE_LAYOUT,
+                mesh_mapper=ttnn.ShardTensor2dMesh(mesh_device, dims=(2, 3), mesh_shape=(2, 4)),
+            )
+            output = attention.forward(
+                input_tt, K3AttnContext(actual_start=start, actual_end=start + 128, cache_user_id=slot)
+            )
+            assert_matches_reference(
+                output_tt=output,
+                state=cache.read(0, slot),
+                permutation=permutation,
+                expected_output=expected.bfloat16(),
+                expected_state=references[slot],
+                mesh_device=mesh_device,
+                sp_axis=0,
+                tp_axis=1,
+                config=config,
+                label=f"slot={slot} start={start}",
+            )
+            for before, after in zip(other, snapshot(1 - slot), strict=True):
+                assert_bit_identical(before, after, name="unselected slot")
+            assert (
+                cache.read(0, slot).recurrent.buffer_address(),
+                cache.read(0, slot).convolution.buffer_address(),
+            ) == addresses[slot]
+            ttnn.deallocate(output)
+            ttnn.deallocate(input_tt)
+    finally:
+        cache.deallocate()
+
+
 @pytest.mark.parametrize(
     "mesh_device,sp_axis,tp_axis", [((1, 8), 0, 1), ((2, 4), 0, 1), ((2, 4), 1, 0)], indirect=["mesh_device"]
 )
 @pytest.mark.parametrize("device_params", [{"fabric_config": ttnn.FabricConfig.FABRIC_1D}], indirect=True)
-def test_k3_padding_eager_and_trace_continue_exact_carries(mesh_device, sp_axis, tp_axis, device_params):
+@pytest.mark.parametrize("head_dim", [32, 128])
+@pytest.mark.parametrize("request_cases", ["intervals", "fresh_short"])
+def test_k3_padding_eager_and_trace_continue_exact_carries(
+    mesh_device, sp_axis, tp_axis, device_params, head_dim, request_cases
+):
     sp = tuple(mesh_device.shape)[sp_axis]
     local_rows = 256
     capacity = sp * local_rows
-    config = KDAConfig(hidden_size=256, num_heads=8, head_k_dim=32, head_v_dim=32, conv_kernel_size=4, norm_eps=1e-5)
+    config = KDAConfig(
+        hidden_size=256,
+        num_heads=96 if head_dim == 128 else 8,
+        head_k_dim=head_dim,
+        head_v_dim=head_dim,
+        conv_kernel_size=4,
+        norm_eps=1e-5,
+    )
     weights = random_weights(config)
     hidden = torch.randn(1, capacity, config.hidden_size, generator=torch.Generator().manual_seed(197)).bfloat16()
-    layer = build_layer(mesh_device, config, weights, sp_axis, tp_axis, active_seq_len=capacity, summary_group_chunks=2)
+    original_hidden = hidden
+    layer = build_layer(
+        mesh_device,
+        config,
+        weights,
+        sp_axis,
+        tp_axis,
+        active_seq_len=capacity,
+        summary_group_chunks=4 if head_dim == 128 else 2,
+        zero_initial_state_on_start=True,
+    )
     cache = KdaStateCache({1: layer})
+    # Independent generic control: the same grouped arithmetic with an explicit zero seed at request start.
+    control = ttKDA(
+        mesh_device,
+        config,
+        weights=layer.weights,
+        tt_ccl=layer.tt_ccl,
+        sp_axis=sp_axis,
+        tp_axis=tp_axis,
+        active_seq_len=capacity,
+        program_config=KDAProgramConfig(
+            recurrence=KDARecurrenceProgramConfig(
+                local_scan_strategy="grouped", summary_group_chunks=4 if head_dim == 128 else 2
+            ),
+            gated_rms_output_dtype=ttnn.bfloat16,
+            output_projection_math_fidelity=ttnn.MathFidelity.HiFi2,
+        ),
+    )
+    slabs = None
+    if head_dim == 128:
+        geometry = KdaContractGeometry.from_kda_config(
+            config,
+            mesh_shape=tuple(mesh_device.shape),
+            sp_axis=sp_axis,
+            tp_axis=tp_axis,
+        )
+        slabs = KdaStates.allocate(mesh_device, geometry, layer_ids=(1,), num_slots=1)
+        cache.bind_slabs(slabs)
+        slab_addresses = slabs.recurrent.buffer_address(), slabs.convolution.buffer_address()
     attention = TtK3KdaAttention(layer, 1, tp_axis, 1, ttnn.Topology.Linear, cache)
     dims = [None, None]
     dims[sp_axis], dims[tp_axis] = 2, 3
@@ -52,8 +168,8 @@ def test_k3_padding_eager_and_trace_continue_exact_carries(mesh_device, sp_axis,
         )
 
     input_tt = upload(hidden)
-    start_tt, end_tt = make_actual_start(mesh_device, 0), make_actual_start(mesh_device, capacity)
-    ctx = K3AttnContext(actual_start=999, actual_end=999, metadata=(None, start_tt, end_tt))
+    start_tt, end_tt = make_actual_start(mesh_device, 32), make_actual_start(mesh_device, capacity)
+    ctx = K3AttnContext(actual_start=None, actual_end=None, metadata=(None, start_tt, end_tt))
     state = cache.read(1)
     addresses = state.recurrent.buffer_address(), state.convolution.buffer_address()
     # Nonzero carried state before the short intervals, including ends just past
@@ -67,6 +183,9 @@ def test_k3_padding_eager_and_trace_continue_exact_carries(mesh_device, sp_axis,
     if sp > 1:
         cases += [(32, capacity - 31), (0, local_rows + 2)]
     cases += [(0, capacity)]
+    cases += [(0, capacity), (capacity, 32), (0, capacity), (capacity, 64)]
+    if request_cases == "fresh_short":
+        cases = [(0, 32), (32, 32), (0, 96), (96, 32), (0, 1), (32, 1), (0, 2), (32, 2)]
 
     def snapshots(output, permutation, length, state=None):
         state = cache.read(1) if state is None else state
@@ -89,8 +208,8 @@ def test_k3_padding_eager_and_trace_continue_exact_carries(mesh_device, sp_axis,
                 trace = ttnn.begin_trace_capture(mesh_device, cq_id=0)
                 traced_output = attention.forward(input_tt, ctx)
                 ttnn.end_trace_capture(mesh_device, trace, cq_id=0)
-            cache.reset()
             for case_index, (start, length) in enumerate(cases):
+                hidden = original_hidden.roll(case_index * 32, dims=1)
                 permutation = mla_row_permutation(start, sp, local_rows)
                 # Keep nonzero padded data: neither K3 nor the caller must need
                 # to zero it to get the right final state.
@@ -100,6 +219,18 @@ def test_k3_padding_eager_and_trace_continue_exact_carries(mesh_device, sp_axis,
                 # Grade each transition from its actual incoming carry, retaining
                 # the existing error gates without accumulating prior BF16 error.
                 incoming = cache.read(1)
+                if start == 0 and request_cases == "fresh_short":
+                    # Even missing history rows in one/two-token requests must ignore stale/NaN seeds.
+                    for tensor in (incoming.recurrent, incoming.convolution):
+                        poison = ttnn.from_torch(
+                            torch.full(tuple(tensor.shape), float("nan")),
+                            dtype=tensor.dtype,
+                            layout=tensor.layout,
+                            device=mesh_device,
+                            mesh_mapper=ttnn.ReplicateTensorToMesh(mesh_device),
+                        )
+                        ttnn.copy(poison, tensor)
+                        ttnn.deallocate(poison)
                 history = reconstruct_convolution_at_sp_rank(
                     incoming.convolution,
                     mesh_device,
@@ -116,12 +247,19 @@ def test_k3_padding_eager_and_trace_continue_exact_carries(mesh_device, sp_axis,
                     k_convolution=history[..., config.q_dim : config.q_dim + config.k_dim],
                     v_convolution=history[..., config.q_dim + config.k_dim :],
                 )
+                # Absolute zero starts a request, including after dirty warmup/capture and slot reuse.
+                if start == 0:
+                    reference_state = None
                 expected, reference_state = kda_forward_reference(hidden[:, :length], weights, config, reference_state)
                 if not traced:
                     native_input = to_sp_input(hidden[:, permutation], mesh_device, sp_axis)
                     native_start = make_actual_start(mesh_device, start)
                     native_end = make_actual_start(mesh_device, start + length)
-                    native_output, native_state = layer.forward(native_input, incoming, native_start, native_end)
+                    seed = control.allocate_state() if start == 0 else incoming
+                    native_output, native_state = control.forward(native_input, seed, native_start, native_end)
+                    if start == 0:
+                        ttnn.deallocate(seed.recurrent)
+                        ttnn.deallocate(seed.convolution)
                     native_result = snapshots(native_output, permutation, length, native_state)
                     for tensor in (
                         native_input,
@@ -154,11 +292,44 @@ def test_k3_padding_eager_and_trace_continue_exact_carries(mesh_device, sp_axis,
                     # This native SP4 transition exceeds the recurrent peak gate
                     # (0.604 vs 0.600). Require exact native/eager/trace agreement
                     # below, while retaining CPU PCC/RMSE and all other gates.
-                    state_linf_threshold=None if sp == 4 and start == 96 and length == capacity - 64 else 0.6,
+                    # The 0.6 peak gate is calibrated for the small 32-wide fixture. Production-width
+                    # carries retain CPU PCC/RMSE plus bit-exact comparison with the generic zero-seed control.
+                    state_linf_threshold=(
+                        None if head_dim == 128 or (sp == 4 and start == 96 and length == capacity - 64) else 0.6
+                    ),
                     label=f"K3 {'trace' if traced else 'eager'} SP{sp} start={start} length={length}",
                 )
                 current = cache.read(1)
                 assert (current.recurrent.buffer_address(), current.convolution.buffer_address()) == addresses
+                if slabs is not None:
+                    assert (slabs.recurrent.buffer_address(), slabs.convolution.buffer_address()) == slab_addresses
+                    imported = allocate_native_state(mesh_device, geometry)
+                    slabs.import_layer(imported, 0, 1)
+                    for live, restored in (
+                        (current.recurrent, imported.recurrent),
+                        (current.convolution, imported.convolution),
+                    ):
+                        for live_shard, restored_shard in zip(
+                            ttnn.get_device_tensors(live), ttnn.get_device_tensors(restored), strict=True
+                        ):
+                            assert_bit_identical(
+                                ttnn.to_torch(live_shard), ttnn.to_torch(restored_shard), name="committed slab"
+                            )
+                        ttnn.deallocate(restored)
+                    if start == 0:
+                        # Prove that the next positive-start call consumes an actual imported carry.
+                        # Corrupt only the live buffers, then restore the completed slab in place.
+                        for tensor in (current.recurrent, current.convolution):
+                            poison = ttnn.from_torch(
+                                torch.full(tuple(tensor.shape), float("nan")),
+                                dtype=tensor.dtype,
+                                layout=tensor.layout,
+                                device=mesh_device,
+                                mesh_mapper=ttnn.ReplicateTensorToMesh(mesh_device),
+                            )
+                            ttnn.copy(poison, tensor)
+                            ttnn.deallocate(poison)
+                        cache.import_layer(1)
                 observed = snapshots(output, permutation, length)
                 if traced:
                     for eager, replayed in zip(eager_results[case_index], observed, strict=True):
@@ -173,5 +344,8 @@ def test_k3_padding_eager_and_trace_continue_exact_carries(mesh_device, sp_axis,
             ttnn.release_trace(mesh_device, trace)
             ttnn.deallocate(traced_output)
         cache.deallocate()
+        if slabs is not None:
+            ttnn.deallocate(slabs.recurrent)
+            ttnn.deallocate(slabs.convolution)
         for tensor in (input_tt, start_tt, end_tt):
             ttnn.deallocate(tensor)

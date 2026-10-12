@@ -96,7 +96,8 @@ ttnn::device_operation::MeshWorkloadArtifacts ChainAffineTransformsProgramFactor
                 m2::TensorBinding{entry_state_name, "entry_state"},
                 m2::TensorBinding{final_state_name, "final_state"},
             },
-        .compile_time_args = {{"Kt", Kt}, {"Vt", Vt}, {"BH", BH}},
+        .compile_time_args =
+            {{"Kt", Kt}, {"Vt", Vt}, {"BH", BH}, {"zero_initial_state_on_start", attrs.zero_initial_state_on_start}},
         .runtime_arg_schema = {.runtime_arg_names = {"head"}},
         // The kernel manages every DFB credit explicitly, including the 4-byte actual_start read.
         .hw_config = ttnn::create_reader_datamovement_config(/*disable_dfb_implicit_sync_for_all=*/true),

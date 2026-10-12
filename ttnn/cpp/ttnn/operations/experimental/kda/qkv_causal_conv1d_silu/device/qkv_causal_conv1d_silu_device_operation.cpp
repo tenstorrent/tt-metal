@@ -172,7 +172,8 @@ std::vector<Tensor> qkv_causal_conv1d_silu(
     const DeviceComputeKernelConfig& compute_kernel_config,
     const Tensor& actual_start,
     uint32_t sequence_parallel_axis,
-    const Tensor& predecessor_carry) {
+    const Tensor& predecessor_carry,
+    bool zero_initial_state_on_start) {
     const auto& input_shape = input.logical_shape();
     TT_FATAL(input_shape.rank() == 3, "qkv_causal_conv1d_silu: input must be [1,T,Q+K+V]");
     return ttnn::device_operation::launch<QkvCausalConv1dSiluOperation>(
@@ -183,6 +184,7 @@ std::vector<Tensor> qkv_causal_conv1d_silu(
             .v_width = v_width,
             .channel_chunk_size = channel_chunk_size,
             .sequence_parallel_axis = sequence_parallel_axis,
+            .zero_initial_state_on_start = zero_initial_state_on_start,
             .output_mem_config = output_mem_config,
             .compute_kernel_config = compute_kernel_config},
         QkvCausalConv1dSiluInputs{

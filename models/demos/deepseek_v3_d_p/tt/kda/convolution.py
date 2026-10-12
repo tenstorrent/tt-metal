@@ -12,6 +12,7 @@ def exchange_convolution_carry(
     *,
     sequence_parallel_axis: int,
     selections: ChronologicalSelections,
+    request_start: ttnn.Tensor | None = None,
 ) -> tuple[ttnn.Tensor, ttnn.Tensor]:
     """Return predecessor history and the replacement logical stream carry.
 
@@ -25,7 +26,9 @@ def exchange_convolution_carry(
         outgoing, dim=1, cluster_axis=sequence_parallel_axis, memory_config=ttnn.DRAM_MEMORY_CONFIG
     )
     predecessor = selections.select_predecessor_history(gathered_outgoing_history)
-    physical_tail_history = selections.select_local_final_history(projected_qkv, layer_history, predecessor)
+    physical_tail_history = selections.select_local_final_history(
+        projected_qkv, layer_history, predecessor, request_start=request_start
+    )
     broadcast_tail_histories = ttnn.all_broadcast(physical_tail_history, cluster_axis=sequence_parallel_axis)
     candidates = ttnn.concat(broadcast_tail_histories, dim=1, memory_config=ttnn.DRAM_MEMORY_CONFIG)
     final_carry = selections.select_final_history(candidates)
