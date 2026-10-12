@@ -88,3 +88,11 @@ Branch ttp/t409-port-vsa-sparse-attention-into-the-fasth, base a15eb37ec6a (t400
   no job of ours queued (only ltx-host 970). Submitted attn.txt directly with blx01-submit.sh (lint ok): blx01 job 971,
   queued behind ltx-host. The job lives in blx01's broker, so g15blx02 reboots cannot kill it; no local chain now.
 - Next: read /var/tmp/fasth3/t409/out_attn/run.log on blx01 (PCC, T409_EXIT). Step 4 after #408.
+
+## Run 1677 (2026-10-12 07:55 PDT)
+blx01 job 971 (attn PCC, run409a.sh) FAILED in 48 s, exit 1: JIT kernel compile error, not a drop (post-job health gate all OK).
+First error (log /var/log/tt-device-broker/2026-10-12_145010_971.log on blx01, line 387):
+  vsa_sdpa_stream_compute.cpp:891:43: error: no matching function for call to 'recip_tile_init<false>()'
+  could not convert 'false' from 'bool' to 'ckernel::ReciprocalDestAcc'
+Cause: the t400 base changed recip_tile_init's template param from bool to enum ckernel::ReciprocalDestAcc. The host build (step 1) cannot see device kernels; they compile at JIT time.
+Next: fix line 891 (and any other recip_tile_init<bool>/recip_tile<bool> uses in vsa_* kernels) to match how sdpa_flash/compute_common.hpp on the base calls it; sync the kernel file to /var/tmp/fasth3/t409 (no rebuild needed for kernel sources if build tree reads them from the src tree; check b/ttnn path is a copy), resubmit attn.txt.
