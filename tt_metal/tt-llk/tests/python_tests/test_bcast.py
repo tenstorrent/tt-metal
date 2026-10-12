@@ -8,6 +8,7 @@ from helpers.format_config import DataFormat
 from helpers.golden_generators import (
     BroadcastGolden,
     get_golden_generator,
+    quantize_input_to_unpack_format,
 )
 from helpers.llk_params import (
     BlocksCalculationAlgorithm,
@@ -101,7 +102,7 @@ def get_valid_broadcast_types(formats, dest_acc, tile_dimensions):
             and formats.input_format == DataFormat.UInt16
         ):
             continue
-        # TODO: pgardner - Column broadcast for tiny tiles needs kernel support
+        # TODO(#47328): Column broadcast for tiny tiles needs kernel support
         if broadcast_type == BroadcastType.Column and tile_dimensions != [32, 32]:
             continue
         # TODO: pgardner - known WH issue with row broadcast + dest accumulation
@@ -228,7 +229,7 @@ def _run_unpack_bcast_test(
 
     # --- Golden model ----------------------------------------------------
     # Broadcast types use BroadcastGolden which handles all face geometries.
-    # Datacopy (None_) golden is just the input cast to the output format.
+    # Datacopy (None_) golden is the input as unpacked from L1, cast to the output format.
     if broadcast_type != BroadcastType.None_:
         generate_broadcast_golden = get_golden_generator(BroadcastGolden)
         golden_tensor = generate_broadcast_golden(
@@ -240,7 +241,9 @@ def _run_unpack_bcast_test(
             face_r_dim=face_r_dim,
         )
     else:
-        golden_tensor = src_A.to(format_dict[formats.output_format])
+        golden_tensor = quantize_input_to_unpack_format(src_A, formats.input_format).to(
+            format_dict[formats.output_format]
+        )
 
     res_from_L1 = configuration.run().result
 

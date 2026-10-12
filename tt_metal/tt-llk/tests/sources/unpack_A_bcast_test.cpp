@@ -2,7 +2,6 @@
 //
 // SPDX-License-Identifier: Apache-2.0
 
-#include <algorithm>
 #include <cstdint>
 #include <cstdio>
 
@@ -54,7 +53,7 @@ inline std::uint32_t srcb_valids_per_tile(const std::uint32_t num_faces)
     }
     else if constexpr (BROADCAST_TYPE == ckernel::BroadcastType::COL)
     {
-        return 2;
+        return 2; // COL unpacks SrcB face 0, then face 2 after srcb_set_z_2
     }
     else
     {
@@ -65,7 +64,6 @@ inline std::uint32_t srcb_valids_per_tile(const std::uint32_t num_faces)
 struct SrcValidsPerTile
 {
     std::uint32_t paired;
-    std::uint32_t a_only;
     std::uint32_t b_only;
 };
 
@@ -73,14 +71,18 @@ inline SrcValidsPerTile src_valids_per_tile(const std::uint32_t num_faces)
 {
     const std::uint32_t srca_valids = srca_valids_per_tile(num_faces);
     const std::uint32_t srcb_valids = srcb_valids_per_tile(num_faces);
-    const std::uint32_t paired      = std::min(srca_valids, srcb_valids);
-    return {paired, srca_valids - paired, srcb_valids - paired};
+    LLK_ASSERT(srca_valids <= srcb_valids, "Without acc_to_dest no broadcast type publishes more SrcA than SrcB valids");
+    return {srca_valids, srcb_valids - srca_valids};
 }
 
 #ifdef LLK_TRISC_UNPACK
 
 #include "llk_unpack_A.h"
 #include "llk_unpack_common.h"
+
+// _llk_unpack_A_init_ and _llk_unpack_A_ must agree on these.
+constexpr bool unpack_acc_to_dest                             = false;
+constexpr EltwiseBinaryReuseDestType unpack_binary_reuse_dest = EltwiseBinaryReuseDestType::NONE;
 
 void run_kernel(RUNTIME_PARAMETERS params)
 {
@@ -106,8 +108,8 @@ void run_kernel(RUNTIME_PARAMETERS params)
             formats.unpack_A_src, formats.unpack_B_src, formats.unpack_A_dst, formats.unpack_B_dst, TEST_FACE_R_DIM, TEST_FACE_R_DIM, num_faces, num_faces);
         _llk_unpack_configure_stoch_rnd_<StochRndType::None>();
         const ckernel::TensorShape tensor_shape = ckernel::make_tensor_shape(TEST_FACE_R_DIM, TEST_FACE_C_DIM, num_faces_r_dim_A, num_faces_c_dim_A);
-        _llk_unpack_A_init_<BROADCAST_TYPE, false /* acc_to_dest */, EltwiseBinaryReuseDestType::NONE, unpack_to_dest>(
-            0 /* transpose_of_faces */, 0 /* within_face_16x16_transpose */, tensor_shape, formats.unpack_A_src, formats.unpack_A_dst);
+        _llk_unpack_A_init_<BROADCAST_TYPE, unpack_acc_to_dest, unpack_binary_reuse_dest, unpack_to_dest>(
+            0 /*transpose_of_faces*/, 0 /*within_face_16x16_transpose*/, tensor_shape, formats.unpack_A_src, formats.unpack_A_dst);
         PROFILER_SYNC();
     }
     {
@@ -115,26 +117,34 @@ void run_kernel(RUNTIME_PARAMETERS params)
         if constexpr (PERF_RUN_TYPE == PerfRunType::PACK_ISOLATE)
         {
         }
-        else if constexpr (PERF_RUN_TYPE == PerfRunType::MATH_ISOLATE && !unpack_to_dest)
+        else if constexpr (PERF_RUN_TYPE == PerfRunType::MATH_ISOLATE && unpack_to_dest)
+        {
+            // Stand in for the unpacker's half of the unpack-to-dest handshake without unpacking:
+            // take math's Dest index from the mailbox and release the tile through UNPACK_TO_DEST.
+            for (std::uint32_t tile = 0; tile < LOOP_FACTOR * num_tiles; ++tile)
+            {
+                (void)mailbox_read(ThreadId::MathThreadId);
+                wait_for_dest_available();
+                t6_semaphore_post<p_stall::UNPACK0>(semaphore::UNPACK_TO_DEST);
+            }
+        }
+        else if constexpr (PERF_RUN_TYPE == PerfRunType::MATH_ISOLATE)
         {
             const SrcValidsPerTile valids = src_valids_per_tile(num_faces);
             for (std::uint32_t tile = 0; tile < LOOP_FACTOR * num_tiles; ++tile)
             {
-                _perf_unpack_loop_set_valid<true /* set_a */, true /* set_b */>(valids.paired);
-                _perf_unpack_loop_set_valid<true /* set_a */, false /* set_b */>(valids.a_only);
-                _perf_unpack_loop_set_valid<false /* set_a */, true /* set_b */>(valids.b_only);
+                _perf_unpack_loop_set_valid<true /*set_a*/, true /*set_b*/>(valids.paired);
+                _perf_unpack_loop_set_valid<false /*set_a*/, true /*set_b*/>(valids.b_only);
             }
         }
         else
         {
-            // Unpack-to-dest hands each tile to math through the UNPACK_TO_DEST semaphore and the
-            // math->unpack mailbox, so every non-pack mode runs the real unpacker for it.
             for (std::uint32_t loop = 0; loop < LOOP_FACTOR; ++loop)
             {
                 for (std::uint32_t tile = 0; tile < num_tiles; ++tile)
                 {
-                    _llk_unpack_A_<BROADCAST_TYPE, false /* acc_to_dest */, EltwiseBinaryReuseDestType::NONE, unpack_to_dest>(
-                        L1_ADDRESS(buffer_A[tile]), formats.unpack_A_src, formats.unpack_A_dst);
+                    _llk_unpack_A_<BROADCAST_TYPE, unpack_acc_to_dest, unpack_binary_reuse_dest, unpack_to_dest>(
+                        L1_ADDRESS(buffer_A[tile]) /*address*/, formats.unpack_A_src, formats.unpack_A_dst);
                 }
             }
         }
@@ -168,10 +178,10 @@ void run_kernel(RUNTIME_PARAMETERS params)
 
     {
         START_PERF_MEASURE("INIT")
-        _llk_math_eltwise_unary_datacopy_init_wrapper_<copy_type, is_fp32_dest_acc_en, BROADCAST_TYPE, false /* is_int_fpu_en */, PackMode::Default>(
-            num_faces, formats.math);
         _llk_math_pack_sync_init_<sync_mode, is_fp32_dest_acc_en>();
         _llk_math_hw_configure_<is_fp32_dest_acc_en>(formats.math, formats.math);
+        _llk_math_eltwise_unary_datacopy_init_wrapper_<copy_type, is_fp32_dest_acc_en, BROADCAST_TYPE, false /*is_int_fpu_en*/, PackMode::Default>(
+            num_faces, formats.math);
         PROFILER_SYNC();
     }
     {
@@ -184,14 +194,13 @@ void run_kernel(RUNTIME_PARAMETERS params)
             const SrcValidsPerTile valids = src_valids_per_tile(num_faces);
             for (std::uint32_t tile = 0; tile < LOOP_FACTOR * NUM_BLOCKS * NUM_TILES_IN_BLOCK; ++tile)
             {
-                _perf_math_loop_clear_valid<true /* clear_a */, true /* clear_b */>(valids.paired);
-                _perf_math_loop_clear_valid<true /* clear_a */, false /* clear_b */>(valids.a_only);
-                _perf_math_loop_clear_valid<false /* clear_a */, true /* clear_b */>(valids.b_only);
+                _perf_math_loop_clear_valid<true /*clear_a*/, true /*clear_b*/>(valids.paired);
+                _perf_math_loop_clear_valid<false /*clear_a*/, true /*clear_b*/>(valids.b_only);
             }
         }
         else
         {
-            // Pack only drains Dest in L1_TO_L1; every other mode must not wait on it.
+            // Only L1_TO_L1 pairs math with pack through the Dest section handshake.
             constexpr bool dest_sync_en = (PERF_RUN_TYPE == PerfRunType::L1_TO_L1);
             for (std::uint32_t loop = 0; loop < LOOP_FACTOR; ++loop)
             {
@@ -206,8 +215,8 @@ void run_kernel(RUNTIME_PARAMETERS params)
                         LLK_ASSERT(
                             (tile_in_block < get_dest_max_tiles<sync_mode, is_fp32_dest_acc_en, DstTileShape::Tile32x32>()),
                             "Block tile index exceeds maximum destination tiles");
-                        _llk_math_eltwise_unary_datacopy_<copy_type, sync_mode, is_fp32_dest_acc_en, BROADCAST_TYPE, unpack_to_dest>(
-                            tile_in_block, formats.math, formats.math);
+                        _llk_math_eltwise_unary_datacopy_wrapper_<copy_type, sync_mode, is_fp32_dest_acc_en, BROADCAST_TYPE, unpack_to_dest>(
+                            tile_in_block, formats.math, formats.math, num_faces);
                     }
                     if constexpr (dest_sync_en)
                     {
@@ -247,8 +256,8 @@ void run_kernel(RUNTIME_PARAMETERS params)
     {
         START_PERF_MEASURE("INIT")
         _llk_pack_hw_configure_wrapper_<is_fp32_dest_acc_en, PackMode::Default>(
-            formats.pack_src, formats.pack_dst, TEST_FACE_R_DIM * TEST_FACE_C_DIM * num_faces /* tile_size */, TEST_FACE_R_DIM, TILE_C_DIM, num_faces);
-        _llk_pack_init_wrapper_<PackMode::Default, false /* zero_output */>(formats.pack_dst, TEST_FACE_R_DIM, TILE_C_DIM, num_faces);
+            formats.pack_src, formats.pack_dst, TEST_FACE_R_DIM * TEST_FACE_C_DIM * num_faces /*tile_size*/, TEST_FACE_R_DIM, TILE_C_DIM, num_faces);
+        _llk_pack_init_wrapper_<PackMode::Default, false /*zero_output*/>(formats.pack_dst, TEST_FACE_R_DIM, TILE_C_DIM, num_faces);
         _llk_pack_dest_init_wrapper_<sync_mode, is_fp32_dest_acc_en, PackMode::Default>();
         PROFILER_SYNC();
     }
@@ -259,7 +268,7 @@ void run_kernel(RUNTIME_PARAMETERS params)
         }
         else
         {
-            // Math only fills Dest in L1_TO_L1; PACK_ISOLATE and L1_CONGESTION must not wait on it.
+            // Only L1_TO_L1 pairs pack with math through the Dest section handshake.
             constexpr bool dest_sync_en = (PERF_RUN_TYPE == PerfRunType::L1_TO_L1);
             for (std::uint32_t loop = 0; loop < LOOP_FACTOR; ++loop)
             {
@@ -275,7 +284,7 @@ void run_kernel(RUNTIME_PARAMETERS params)
                             (tile_in_block < get_dest_max_tiles<sync_mode, is_fp32_dest_acc_en, DstTileShape::Tile32x32>()),
                             "Block tile index exceeds maximum destination tiles");
                         _llk_pack_<sync_mode, is_fp32_dest_acc_en, ckernel::PackMode::Default>(
-                            tile_in_block, L1_ADDRESS(buffer_Res[(block * NUM_TILES_IN_BLOCK) + tile_in_block]));
+                            tile_in_block, L1_ADDRESS(buffer_Res[(block * NUM_TILES_IN_BLOCK) + tile_in_block]) /*address*/);
                     }
                     if constexpr (dest_sync_en)
                     {
