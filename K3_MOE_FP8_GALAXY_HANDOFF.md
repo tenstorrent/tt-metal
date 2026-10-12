@@ -125,3 +125,42 @@ of each group on the dispatch row; compare sender writer end vs reader end vs un
 - If the shared expert's CBs shrink by ~111 KB, Q2 and combine outputs can both live in L1 (Q2 −20 µs more).
 - DQ1 output in L1 would save ~24 µs but overlaps the routed expert's CBs by ~9 KB (its narrower config costs +42 µs).
 - post_combine_reduce at 101 µs has not been re-profiled since its source moved to L1; DQ2's own share is unmeasured.
+
+---
+
+# GLM 5.3: same fp8 wire with native 1×128 scales (plan: `GLM53_MOE_FP8_WIRE_PLAN.md`)
+
+GLM rows are `[6144 e4m3 | 48 fp32 pow2 scales]` = 6336 B; Q1 runs before dispatch (no latent projection). Select it
+with `MOE_FP8_SCALE_BLOCK=128` (RNE rounding turns on automatically for 1×128, `MOE_FP8_RNE=auto`).
+
+LoudBox 2×4 results (256 experts = 32/chip; the device gate needs exactly 256, so Galaxy's 8/chip can't be emulated):
+
+| | bf16 | fp8 1×128 |
+|---|---|---|
+| traced T_moe p50 (payload 7168) | 4.507 ms | **4.138 ms** |
+| dispatch / combine / PCR | 358 / 524 / 97 µs | 176 / 127 / 71 µs |
+| Q1 / DQ1 / Q2 | — | 39 / 71 / 70 µs |
+| final_output PCC (`test_glm_moe` pcc) | 0.988194 | 0.987759 (hybrid threshold 320 on) |
+
+**Fabric payload:** `GLM53Config.FABRIC_PAYLOAD_SIZE = 6144` is smaller than the fp8 row, so each row splits into two
+packets (still correct, dispatch ~2× slower). `test_glm_moe` already uses the DSv3 payload (7168). For the scratch
+perf test pass `K3_FABRIC_PAYLOAD=7168`. Changing the GLM config itself is a model-level decision (it is shared with
+migration code).
+
+Steps on the Galaxy:
+
+1. PCC (fp8 and bf16; set `MOE_HYBRID_THRESHOLD=320` to exercise GLM's hybrid routed expert under the DSv3 reference
+   variant):
+   ```bash
+   MOE_DISPATCH_WIRE=fp8 MOE_COMBINE_WIRE=fp8 MOE_FP8_SCALE_BLOCK=128 MOE_HYBRID_THRESHOLD=320 scripts/run_safe_pytest.sh \
+     "models/demos/deepseek_v3_d_p/tests/pcc/test_ttnn_moe.py::test_glm_moe" -k "torus-xy-8x4 and pad0 and pcc"
+   ```
+   Pass: final_output ≥ 0.982 (test bar) and within ~0.001 of the bf16 run.
+2. Traced perf, fp8 vs bf16:
+   ```bash
+   K3_MESH=8x4 K3_FABRIC=torus_xy K3_FABRIC_PAYLOAD=7168 K3_TRACE=1 K3_TRACE_ITERS=20 \
+   MOE_DISPATCH_WIRE=fp8 MOE_COMBINE_WIRE=fp8 MOE_FP8_SCALE_BLOCK=128 MOE_HYBRID_THRESHOLD=320 scripts/run_safe_pytest.sh \
+     models/demos/deepseek_v3_d_p/tests/perf/test_scratch_glm_moe_perf_lb.py
+   ```
+   Repeat without the three wire vars for bf16; then once with `--profile` (no `K3_TRACE`) for per-op times.
+3. Report into `GLM53_MOE_FP8_WIRE_PLAN.md` status (G6).
