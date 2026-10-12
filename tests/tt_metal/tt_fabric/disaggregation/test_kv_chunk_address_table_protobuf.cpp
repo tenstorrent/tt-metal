@@ -622,6 +622,7 @@ PartialPeriodTables partial_period_tables(const std::vector<int64_t>& strides) {
                     .noc_addr = addr(slot, i), .size_bytes = 512, .device_group_index = i % 2 ? grp_b : grp_a});
         }
         std::vector<uint64_t> row_bases;
+        row_bases.reserve(kStep);
         for (uint32_t r = 0; r < kStep; r++) {
             row_bases.push_back(addr(slot, r));
         }
