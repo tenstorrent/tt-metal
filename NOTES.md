@@ -66,3 +66,11 @@ Branch ttp/t409-port-vsa-sparse-attention-into-the-fasth, base a15eb37ec6a (t400
   had no ENV line, so blx01-submit.sh ran `run-bg ... -e -t 600` and the broker CLI refused (rc 2). Lint passed.
 - Fix: tt-project/t409/env409.yaml (t400 env with t409/b paths), copied to blx01 /var/tmp/fasth3/t409/; attn.txt ENV= it.
 - Direct submit at 09:50Z got 75 (another smarton job on blx01). chain416a restarted detached from run 1647.
+
+## t416 run 1655 (2026-10-12 04:55 PDT)
+- chain416a (run 1647) submitted blx01 job 939 at ~11:29Z: failed at collection, `No module named
+  'diffusers.models.transformers.transformer_minimax_h3'` (t48 env has diffusers 0.38; the test needs the pinned
+  commit abc5e9bf from MiniMaxH3.md). No device time used, no drop. Then the host reboot killed the chain.
+- Fix: pinned diffusers installed with uv --no-deps --target /var/tmp/fasth3/t409/pydeps on blx01 (30 MB; shared
+  t48 env untouched); env409.yaml PYTHONPATH gets it. `pytest --collect-only` on blx01: 4 tests collected.
+- chain416a restarted detached from run 1655 (state/runs/1655/chain416a.out). Same next step as before.
