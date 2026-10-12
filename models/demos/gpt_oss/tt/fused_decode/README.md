@@ -38,7 +38,8 @@ fused_decode/
      and sends the partial sum.
 3. `DecodeTerminal.lm_head` runs the last boundary (+ final norm) inside the streamed LM head. It keeps a
    top-32 per writer core, merges and exchanges them over the fabric, and the greedy pick writes the next token
-   straight into the decode input.
+   straight into the decode input. Requests with penalties, log-probs or a grammar mask instead convert the logits
+   to the original decode layout on device (`DecodeTerminal.stock_logits`) and use the common sampler.
 
 Between layers the residual stream is a flat BF16 vector (hidden value h at byte 2h) on one core, replicated
 on every device; `boundary.py` documents this contract.

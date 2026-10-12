@@ -21,17 +21,28 @@ FUSED_DECODE_DRAM_BANKS = 8
 
 
 def fused_decode_layout_supported(
-    is_blackhole, mesh_shape, tp, ep, num_experts, use_throughput_experts, tokens, grid=(11, 10), dram_banks=8
+    is_blackhole,
+    mesh_shape,
+    tp,
+    ep,
+    num_experts,
+    use_throughput_experts,
+    tokens,
+    grid=(11, 10),
+    dram_banks=8,
+    system_devices=4,
 ):
     """Host-only form of fused_decode_supported (no device): the validated envelope of the fused decode layer
-    (grid: the device compute-with-storage grid, x by y; dram_banks: the device's DRAM bank count).
+    (grid: the device compute-with-storage grid, x by y; dram_banks: the device's DRAM bank count; system_devices:
+    the number of devices in the whole system).
 
     The fused layer serves one token per device with TP over a single mesh row and no expert parallelism. Its
     layouts (the flat 3-page residual and boundary all-reduce of fused_decode/boundary.py on a 4-device ring, the
     30-core LM-head input, Q/K/V head buffers, the streamed weights' per-DRAM-bank column split and worker cores) are
     sized for the gpt-oss-20b shapes on the 11x10 Blackhole grid at TP=4, and its decode-only streamed weight copies
-    (about +3.2 GB of DRAM per device) were budgeted for that model. Every other layout keeps the original decode
-    path."""
+    (about +3.2 GB of DRAM per device) were budgeted for that model. The boundary all-reduce also assumes the mesh is
+    the whole system (a closed 4-device fabric ring), so a 1x4 slice of a larger system (e.g. one data-parallel
+    submesh of a LoudBox or Galaxy) is excluded. Every other layout keeps the original decode path."""
     return (
         is_blackhole
         and tuple(mesh_shape) == (1, 4)
@@ -43,6 +54,7 @@ def fused_decode_layout_supported(
         and grid[0] >= FUSED_DECODE_MIN_GRID[0]
         and grid[1] >= FUSED_DECODE_MIN_GRID[1]
         and dram_banks == FUSED_DECODE_DRAM_BANKS
+        and system_devices == mesh_shape[0] * mesh_shape[1]
     )
 
 
@@ -61,6 +73,7 @@ def fused_decode_supported(mesh_device, mesh_config, hf_config, use_throughput_e
         tokens_per_device,
         (grid.x, grid.y),
         mesh_device.dram_grid_size().x,
+        ttnn.get_num_devices(),
     )
 
 

@@ -1333,7 +1333,8 @@ class Model:
 
     def read_output_decode(self, tt_out, sample_rows, blocking=True):
         """Read a prepared slot range without compiling or allocating device buffers."""
-        if self.decode_terminal is not None and self.decode_terminal.is_folded(tt_out):
+        terminal = getattr(self, "decode_terminal", None)  # absent on host-only stand-ins of the model
+        if terminal is not None and terminal.is_folded(tt_out):
             # Folded logits of the fused decode terminal path hold one user (row 0) spread over all 32 rows, so
             # there is no per-user row to select: read the whole tensor; process_output_decode unfolds it.
             if list(sample_rows) != [0]:
@@ -1352,17 +1353,13 @@ class Model:
             # Token IDs or log probs: shape [1, 1, B] or [1, 1, 1, B] -> [B]
             return concat_out.reshape(-1)[:B]
 
-        if self.decode_terminal is not None and list(tt_out.shape) == [
-            1,
-            1,
-            ttnn.TILE_SIZE,
-            self.decode_terminal.width,
-        ]:
+        terminal = getattr(self, "decode_terminal", None)  # absent on host-only stand-ins of the model
+        if terminal is not None and list(tt_out.shape) == [1, 1, ttnn.TILE_SIZE, terminal.width]:
             # Folded logits of the fused decode terminal path (one user).
             if sample_rows is not None and list(sample_rows) != [0]:
                 raise ValueError(f"Fused decode serves one user (row 0); got sample rows {sample_rows}")
-            device_tensors = ttnn.get_device_tensors(tt_out)[: self.decode_terminal.tp]
-            logits = self.decode_terminal.unfold_host([ttnn.to_torch(t) for t in device_tensors])
+            device_tensors = ttnn.get_device_tensors(tt_out)[: terminal.tp]
+            logits = terminal.unfold_host([ttnn.to_torch(t) for t in device_tensors])
             return logits.reshape(1, S, -1)[:B]
 
         # Host-side TP gather: concatenate TP shards per row, then DP rows.

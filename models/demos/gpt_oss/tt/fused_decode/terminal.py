@@ -132,6 +132,7 @@ class DecodeTerminal:
             torch.zeros(1, 1, TILE, TOPK * self.tp, dtype=torch.int32), ttnn.uint32, ttnn.ROW_MAJOR_LAYOUT
         )
         self.exchange = TerminalExchange(self) if DECODE_TERMINAL_EXCHANGE == "fused" else None
+        self._init_stock_layout(mesh_device)
         logger.info(
             f"Fused decode terminal: LM head {self.hidden}x{self.vd} per device ({self.n_tiles} tiles, "
             f"folded {TILE}x{self.width}), candidates '{DECODE_TERMINAL_EXCHANGE}', greedy sampler '{DECODE_GREEDY_SAMPLER}'"
@@ -161,6 +162,79 @@ class DecodeTerminal:
         """Host view of the folded logits: per-device torch tensors [1, 1, 32, width] -> [vocab] logits."""
         parts = [t.reshape(TILE, self.width)[:, : self.row_len].reshape(-1)[: self.vd] for t in device_tensors]
         return torch.cat(parts)[: self.vocab_size]
+
+    def _init_stock_layout(self, mesh_device):
+        """The common sampler's decode logits layout (stock_logits): device d holds the global vocab ids
+        [d * stock_width, (d + 1) * stock_width) (the original LM head's power-of-two shard width), user 0 in row 0.
+        The 32x32 selector holds 1 at (0, d) on device d and zeros elsewhere."""
+        per_device = -(-self.vocab_size // self.tp)
+        per_device = -(-per_device // TILE) * TILE
+        self.stock_width = 1 << (per_device - 1).bit_length()
+        selector = torch.zeros(self.tp, 1, TILE, TILE)
+        for d in range(self.tp):
+            selector[d, 0, 0, d] = 1.0
+        self.stock_selector = ttnn.from_torch(
+            selector,
+            device=mesh_device,
+            dtype=ttnn.bfloat16,
+            layout=ttnn.TILE_LAYOUT,
+            memory_config=ttnn.DRAM_MEMORY_CONFIG,
+            mesh_mapper=ttnn.ShardTensorToMesh(mesh_device, dim=0),
+        )
+        self.stock_compute_config = ttnn.init_device_compute_kernel_config(
+            mesh_device.arch(), math_fidelity=ttnn.MathFidelity.HiFi4, fp32_dest_acc_en=True, packer_l1_acc=False
+        )
+
+    def stock_logits(self, folded):
+        """Folded logits -> the original decode path's logits layout, for requests the fused sampler does not serve
+        (penalties, log-probs, grammar masks): per device a [1, 1, 32, stock_width] BF16 tile tensor holding the
+        common sampler's vocab shard of device d in row 0 and zeros in rows 1..31 (as the original path pads batch 1).
+
+        The fused LM head splits the vocab evenly (device d: ids [d * vd, (d + 1) * vd)), the common sampler by
+        stock_width, so the ids move between devices: all-gather the folded logits (row d then holds device d's local
+        vocab), cut each stock_width shard out of those rows (ids past the vocab are 0, as the original LM head's
+        zero-padded weight columns give), and select row d with the device's one-hot selector (a matmul, exact with
+        FP32 accumulation). Row-major rows stay at most stock_width wide (one page per row)."""
+        dram = ttnn.DRAM_MEMORY_CONFIG
+        gathered = ttnn.all_gather(folded, dim=2, memory_config=dram)  # [1, 1, tp * 32, width] tiles
+        x = ttnn.untilize(gathered, memory_config=dram)
+        x = ttnn.slice(x, [0, 0, 0, 0], [1, 1, self.tp * TILE, self.row_len], memory_config=dram)
+        local = ttnn.reshape(x, [1, 1, self.tp, TILE * self.row_len])  # row d: device d's local vocab in order
+        shards = []
+        for s in range(self.tp):
+            lo, hi = s * self.stock_width, (s + 1) * self.stock_width
+            pieces = []
+            for d in range(self.tp):
+                a, b = max(lo, d * self.vd), min(hi, (d + 1) * self.vd, self.vocab_size)
+                if a < b:
+                    pieces.append(
+                        ttnn.slice(
+                            local, [0, 0, d, a - d * self.vd], [1, 1, d + 1, b - d * self.vd], memory_config=dram
+                        )
+                    )
+            row = pieces[0] if len(pieces) == 1 else ttnn.concat(pieces, dim=3, memory_config=dram) if pieces else None
+            width = row.shape[-1] if row is not None else 0
+            if row is None:
+                row = ttnn.zeros(
+                    [1, 1, 1, self.stock_width],
+                    dtype=ttnn.bfloat16,
+                    layout=ttnn.ROW_MAJOR_LAYOUT,
+                    device=self.mesh_device,
+                    memory_config=dram,
+                )
+            elif width < self.stock_width:
+                row = ttnn.pad(row, [(0, 0), (0, 0), (0, 0), (0, self.stock_width - width)], 0.0)
+            shards.append(row)
+        rows = ttnn.concat(shards, dim=2, memory_config=dram)  # [1, 1, tp, stock_width]: row d = device d's shard
+        rows = ttnn.pad(rows, [(0, 0), (0, 0), (0, TILE - self.tp), (0, 0)], 0.0)
+        tiles = ttnn.tilize(rows, memory_config=dram)
+        return ttnn.matmul(
+            self.stock_selector,
+            tiles,
+            dtype=ttnn.bfloat16,
+            memory_config=dram,
+            compute_kernel_config=self.stock_compute_config,
+        )
 
     # ---- sampling ----
 
@@ -442,14 +516,8 @@ class FusedDecodeSampling(TTSampling):
                 return super().forward(x, tt_out_tok=tt_out_tok, apply_grammar=apply_grammar)
             finally:
                 self._force_argmax_sampling = forced
-        if apply_grammar:
-            raise NotImplementedError(
-                "grammar masks are not implemented on the fused batch-1 decode path (fused_decode/terminal.py)"
-            )
-        if self.log_probs_calculator.enable_log_probs:
-            raise NotImplementedError(
-                "log-probs are not implemented on the fused batch-1 decode path (fused_decode/terminal.py)"
-            )
+        # FusedSamplingGenerator converts the folded logits for grammar masks and log-probs (stock_logits).
+        assert not apply_grammar and not self.log_probs_calculator.enable_log_probs, "use FusedSamplingGenerator"
         values, ids = self.terminal.candidates(x)
         if self._force_argmax_sampling:
             tok = tt_out_tok if tt_out_tok is not None else self.terminal.new_token_tensor()
@@ -470,10 +538,10 @@ class FusedDecodeSampling(TTSampling):
 
 
 class FusedSamplingGenerator(SamplingGenerator):
-    """SamplingGenerator over FusedDecodeSampling. The fused decode path implements greedy and top-k / top-p /
-    temperature sampling; penalties and log-probs (the batch-128 Galaxy serving configurations) are not implemented on
-    it: a decode sample / capture with them active raises before any trace capture starts, and their decode warmup
-    variants are skipped."""
+    """SamplingGenerator over FusedDecodeSampling. Greedy and top-k / top-p / temperature requests sample from the
+    fused LM head's candidates. Requests with penalties, log-probs or a grammar mask take the original sampling path:
+    the folded logits are first converted to the original decode logits layout on device (DecodeTerminal.stock_logits),
+    inside the same sampling trace."""
 
     def __init__(self, *, args, mesh_device, tt_ccl, terminal, cq_id=0):
         super().__init__(args=args, mesh_device=mesh_device, tt_ccl=tt_ccl, cq_id=cq_id)
@@ -505,27 +573,32 @@ class FusedSamplingGenerator(SamplingGenerator):
             return
         super().reset_trace()
 
+    def _uses_stock_sampler(self, penalties_on, grammar_on):
+        """Penalties, log-probs and grammar masks are served by the original sampler (DecodeTerminal.stock_logits)."""
+        return penalties_on or grammar_on or bool(self.tt_sampling.log_probs_calculator.enable_log_probs)
+
     def _run_sampling(self, logits, *, penalties_on, grammar_on, tt_out_tok=None, count_tokens=True):
-        if (penalties_on or grammar_on) and self.terminal.is_folded(logits):
-            raise NotImplementedError(
-                "sampling penalties / grammar masks are not implemented on the fused batch-1 decode path "
-                "(fused_decode/terminal.py)"
-            )
+        if self.terminal.is_folded(logits) and self._uses_stock_sampler(penalties_on, grammar_on):
+            logits = self.terminal.stock_logits(logits)
         return super()._run_sampling(
             logits, penalties_on=penalties_on, grammar_on=grammar_on, tt_out_tok=tt_out_tok, count_tokens=count_tokens
         )
 
     def capture_trace(self, logits, *, tt_out_tok=None, skip_precompile=False, grammar_bitmask=None):
-        """SamplingGenerator.capture_trace without its whole-window corruptible_allocation_scope for the fused path:
-        the fused sampling ops allocate nothing inside the capture (the pick and ttnn.sampling write the preallocated
-        tt_out_tok, manual_seed has no output, the candidates are persistent), so the trace allocation tracker keeps
-        checking the window. Other logits (stock path) keep the base behavior."""
-        if not self.terminal.is_folded(logits) or tt_out_tok is None:
+        """SamplingGenerator.capture_trace without its whole-window corruptible_allocation_scope for the fused
+        candidates path: those sampling ops allocate nothing inside the capture (the pick and ttnn.sampling write the
+        preallocated tt_out_tok, manual_seed has no output, the candidates are persistent), so the trace allocation
+        tracker keeps checking the window. Other logits, and requests served by the original sampler (whose layout
+        conversion allocates), keep the base behavior."""
+        penalties_on = self._penalties_active
+        if (
+            not self.terminal.is_folded(logits)
+            or tt_out_tok is None
+            or self._uses_stock_sampler(penalties_on, grammar_bitmask is not None)
+        ):
             return super().capture_trace(
                 logits, tt_out_tok=tt_out_tok, skip_precompile=skip_precompile, grammar_bitmask=grammar_bitmask
             )
-        self._check_supported(grammar_bitmask)
-        penalties_on = self._penalties_active
         log_probs_on = getattr(self, "_log_probs_active", False)
         key, slot = self._trace_slot(penalties_on, log_probs_on, self.tt_sampling.force_argmax_sampling)
         if not skip_precompile:
@@ -541,61 +614,3 @@ class FusedSamplingGenerator(SamplingGenerator):
         slot["output"] = (tt_out_tok, sampled[-1]) if isinstance(sampled, tuple) else (tt_out_tok, sampled)
         slot["kwargs"] = {"tt_out_tok": tt_out_tok}
         return slot["output"]
-
-    def _check_supported(self, grammar_bitmask=None):
-        """Penalties / log-probs / grammar masks requested for fused decode: reject before any trace capture starts
-        (the generator's prefill warmup legitimately compiles them on the stock path, so the parameters themselves are
-        accepted)."""
-        if self._penalties_active or getattr(self, "_log_probs_active", False) or grammar_bitmask is not None:
-            raise NotImplementedError(
-                "sampling penalties / log-probs / grammar masks are not implemented on the fused batch-1 decode path "
-                "(fused_decode/terminal.py)"
-            )
-
-    def sample(
-        self,
-        logits,
-        *,
-        enable_trace=True,
-        tt_out_tok=None,
-        skip_precompile=False,
-        count_tokens=True,
-        grammar_bitmask=None,
-    ):
-        if self.terminal.is_folded(logits):
-            self._check_supported(grammar_bitmask)
-        return super().sample(
-            logits,
-            enable_trace=enable_trace,
-            tt_out_tok=tt_out_tok,
-            skip_precompile=skip_precompile,
-            count_tokens=count_tokens,
-            grammar_bitmask=grammar_bitmask,
-        )
-
-    def precompile(
-        self, logits, *, tt_out_tok=None, grammar_bitmask=None, compile_token_update=False, all_configs=False
-    ):
-        if not (all_configs and self.terminal.is_folded(logits)):
-            return super().precompile(
-                logits,
-                tt_out_tok=tt_out_tok,
-                grammar_bitmask=grammar_bitmask,
-                compile_token_update=compile_token_update,
-                all_configs=all_configs,
-            )
-        if grammar_bitmask is not None:
-            self._check_supported(grammar_bitmask)
-        # The fused path's variants: greedy pick (force-argmax key) and the ttnn.sampling draw. Penalties are not
-        # supported on it, so there is no penalty token-count update to compile (compile_token_update).
-        saved = self.tt_sampling._force_argmax_sampling
-        try:
-            for force_argmax in (False, True):
-                if force_argmax and not self.tt_sampling._allow_force_argmax_sampling:
-                    continue
-                self.tt_sampling._force_argmax_sampling = force_argmax
-                self._run_sampling(
-                    logits, penalties_on=False, grammar_on=False, tt_out_tok=tt_out_tok, count_tokens=False
-                )
-        finally:
-            self.tt_sampling._force_argmax_sampling = saved
