@@ -27,7 +27,6 @@ import pytest
 from filelock import FileLock
 from ttexalens.tt_exalens_lib import (
     TTException,
-    load_elf,
     parse_elf,
     read_word_from_device,
 )
@@ -41,6 +40,7 @@ from .chip_architecture import (
 )
 from .data_format_inference import data_formats, effective_dest_acc
 from .device import (
+    load_elf,
     CHIP_DEFAULT_BOOT_MODES,
     KERNEL_COMPLETE,
     TRISC_CORES,
