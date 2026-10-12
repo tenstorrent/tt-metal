@@ -19,6 +19,7 @@ End-to-end metrics are logged, not asserted.
 """
 
 import os
+import shutil
 import time
 from pathlib import Path
 
@@ -40,6 +41,7 @@ from models.demos.deepseek_v3_d_p.tests.v4.test_transformer import (
     streams_to_host,
     upload_tokens,
 )
+from models.demos.deepseek_v3_d_p.tt.moe.validation_helpers import score_activation
 from models.demos.deepseek_v3_d_p.tt.tt_ccl import per_axis_topology
 from models.demos.deepseek_v3_d_p.tt.v4 import TtV4Transformer
 from models.demos.deepseek_v3_d_p.tt.v4.weights import (
@@ -57,6 +59,10 @@ _GOLDEN = {DeepSeekV4ProConfig: golden.V4_PRO, DeepSeekV4FlashConfig: golden.V4_
 _HEAD = "head.weight"
 _PRO_SPLIT = 36  # first layer of the second Pro tail process
 _HANDOFF = Path(os.getenv("V4_DEPTH_HANDOFF_DIR", "generated/v4_depth_handoff")) / "pro"
+_ROUTING_DIR = Path(os.getenv("V4_DEPTH_ROUTING_DIR", "generated/v4_depth_routing"))
+_DUMP_ENV = "PREFILL_DUMP_ROUTING_DIR"
+# Positions of the largest-norm tokens in the golden's last layer, all inside chunk 0.
+_OUTLIERS = {DeepSeekV4FlashConfig: (442, 521, 523, 1604), DeepSeekV4ProConfig: (161, 1604, 1606)}
 
 _GALAXY = [p for p in mesh_params(DeepSeekV4ProConfig.FABRIC_PAYLOAD_SIZE) if p.id == "torus-xy-8x4"]
 
@@ -141,6 +147,91 @@ def _log_compressed_kv(trace, config, model, label):
         logger.info(f"[{label}] layer {i} {kind} compressed KV PCC: nope {nope_pcc:.6f} pe {pe_pcc:.6f}")
 
 
+def _stream_layers(trace, group, prefix):
+    """Layers whose ``group/<prefix><i>`` directory exists; the manifest can list more than were kept."""
+    return sorted(
+        int(name.rsplit("_", 1)[1])
+        for name in trace.streams
+        if name.startswith(prefix) and (trace.path / group / name).is_dir()
+    )
+
+
+def _log_trace_streams(trace, label):
+    logger.info(
+        f"[{label}] trace keeps decoder_output {trace.kept_layers}, "
+        f"expert_ids {_stream_layers(trace, 'routing', 'expert_ids_layer_')}, "
+        f"router_logits {_stream_layers(trace, 'routing', 'router_logits_layer_')}, "
+        f"compressed_entries {_stream_layers(trace, 'compressed_entries', 'compressed_entries_layer_')}"
+    )
+
+
+def _norm_stats(streams, positions):
+    """Per-token norm summary of ``[1, S, n, D]`` streams, plus the norms at ``positions``."""
+    norms = streams[0].flatten(1).norm(dim=-1)
+    at = " ".join(f"{p}:{norms[p]:.1f}" for p in positions if p < norms.numel())
+    return (
+        f"max {norms.max():.1f} at {int(norms.argmax())}, p99 {torch.quantile(norms, 0.99):.1f}, "
+        f"median {norms.median():.1f}; outliers {at}"
+    )
+
+
+def _topk_agreement(ours, truth):
+    """Per token: whether the two top-k sets are equal, and the share of ``truth``'s experts ``ours`` has."""
+    exact = (ours.sort(dim=-1).values == truth.sort(dim=-1).values).all(dim=-1)
+    overlap = (ours.unsqueeze(-1) == truth.unsqueeze(-2)).any(dim=-1).sum(dim=-1) / truth.shape[-1]
+    return exact, overlap
+
+
+def _log_routing(trace, checkpoint, config, layers, routing_dir, label):
+    """Log each layer's device top-k expert sets over the whole prompt against the golden's.
+
+    For tokens whose set differs, the gap between the golden's k-th and (k+1)-th selection key says
+    whether the flip is a near-tie or a real divergence. The key is the score plus the correction
+    bias, which is what the top-k ranks; the two ``key_check`` figures recompute the golden's own
+    picks from its ``router_logits`` and confirm whether those are pre-activation. Hash layers route
+    by token id, so anything short of an exact match there is a harness or plumbing fault.
+    """
+    have = set(_stream_layers(trace, "routing", "expert_ids_layer_"))
+    have_logits = set(_stream_layers(trace, "routing", "router_logits_layer_"))
+    for i in layers:
+        files = [sorted((routing_dir / f"chunk{c:02d}").glob(f"routing_layer{i}_*.pt")) for c in range(N_CHUNKS)]
+        if any(len(f) != 1 for f in files) or i not in have:
+            logger.warning(f"[{label}] layer {i} routing: dump files {[len(f) for f in files]}, golden {i in have}")
+            continue
+        ours = torch.cat([torch.load(f[0])["expert_ids"].to(torch.int64) for f in files])
+        truth = trace.expert_ids(i)
+        k = truth.shape[1]
+        exact, overlap = _topk_agreement(ours, truth)
+        msg = (
+            f"exact {exact.float().mean():.4f} overlap {overlap.mean():.4f} "
+            f"exact_c0 {exact[:CHUNK].float().mean():.4f} overlap_c0 {overlap[:CHUNK].mean():.4f}"
+        )
+        if config.mlp_layer_types[i] == "hash_moe":
+            logger.info(f"[{label}] layer {i} routing (hash): {msg}")
+            if not exact.all():
+                logger.warning(f"[{label}] layer {i} is hash-routed but {int((~exact).sum())} tokens differ")
+            continue
+        if i not in have_logits:
+            logger.info(f"[{label}] layer {i} routing: {msg}; no golden router_logits")
+            continue
+        logits = trace.router_logits(i)
+        bias = load_checkpoint_tensors(checkpoint, [f"layers.{i}.ffn.gate.bias"])[f"layers.{i}.ffn.gate.bias"].float()
+        ranked = (score_activation(logits, config.scoring_func) + bias).topk(k + 1, dim=-1)
+        gap = ranked.values[:, k - 1] - ranked.values[:, k]
+        key_check = _topk_agreement(ranked.indices[:, :k], truth)[0].float().mean()
+        raw_check = _topk_agreement((logits + bias).topk(k, dim=-1).indices, truth)[0].float().mean()
+        miss = gap[~exact]
+        if miss.numel():
+            msg += (
+                f" gap_med {miss.median():.3e} gap_p90 {torch.quantile(miss, 0.9):.3e} "
+                f"near_tie {(miss < 1e-3).float().mean():.3f}"
+            )
+        logger.info(
+            f"[{label}] layer {i} routing: {msg} gap_all_med {gap.median():.3e} "
+            f"key_check {key_check:.4f} raw_key_check {raw_check:.4f}"
+        )
+
+
 def _end_to_end(trace, checkpoint, final, label):
     """Log the last rank's next-token predictions against vLLM's top-k at each chunk's last position.
 
@@ -187,6 +278,8 @@ def run_depth(mesh_device, device_params, num_links, model_config, first, count,
     assert checkpoint is not None, f"no checkpoint at {gold.checkpoint}; ${' / $'.join(gold.ckpt_envs)} override it"
 
     last = first + count
+    label = f"v4 depth {model_config.__name__} [{first}, {last})"
+    _log_trace_streams(trace, label)
     is_first, is_last = first == 0, last == model_config.NUM_LAYERS
     from_golden = not is_first and first - 1 in trace.kept_layers
     needed = graded + ([first - 1] if from_golden else [])
@@ -222,6 +315,9 @@ def run_depth(mesh_device, device_params, num_links, model_config, first, count,
 
     if writes_handoff:
         _HANDOFF.mkdir(parents=True, exist_ok=True)
+    routing_dir = _ROUTING_DIR / model_config.__name__ / f"{first}_{last}"
+    shutil.rmtree(routing_dir, ignore_errors=True)
+    outliers = _OUTLIERS[model_config]
     per_layer = {i: torch.zeros(1, SEQ_CACHE, n, hidden) for i in graded}
     final = torch.zeros(N_CHUNKS, hidden)
     for chunk in range(N_CHUNKS):
@@ -229,8 +325,13 @@ def run_depth(mesh_device, device_params, num_links, model_config, first, count,
         start = chunk * CHUNK
 
         def tap(i, h, start=start):
+            if i not in per_layer and start:
+                return
+            host = streams_to_host(mesh_device, h, n)
             if i in per_layer:
-                per_layer[i][:, start : start + CHUNK] = streams_to_host(mesh_device, h, n)
+                per_layer[i][:, start : start + CHUNK] = host
+            if not start:
+                logger.info(f"[{label}] layer {i} chunk-0 device norms: {_norm_stats(host, outliers)}")
 
         if is_first:
             tt_in = upload_tokens(mesh_device, trace.token_ids(CHUNK, start))
@@ -240,7 +341,13 @@ def run_depth(mesh_device, device_params, num_links, model_config, first, count,
         else:
             tt_in = _upload_streams(mesh_device, torch.load(_handoff_file(chunk)))
 
-        out = model(tt_in, actual_isl=CHUNK, actual_start=start, layer_tap=tap)
+        # TtMoe names its dump by actual_start, which the V4 block always passes as 0, so each chunk
+        # gets its own directory.
+        os.environ[_DUMP_ENV] = str(routing_dir / f"chunk{chunk:02d}")
+        try:
+            out = model(tt_in, actual_isl=CHUNK, actual_start=start, layer_tap=tap)
+        finally:
+            os.environ.pop(_DUMP_ENV)
         ttnn.deallocate(tt_in)
         if is_last:
             final[chunk] = hidden_to_host(mesh_device, out)[0, CHUNK - 1]
@@ -249,8 +356,8 @@ def run_depth(mesh_device, device_params, num_links, model_config, first, count,
         ttnn.deallocate(out)
         logger.info(f"  chunk {chunk} done (start={start}) in {time.monotonic() - t0:.0f} s")
 
-    label = f"v4 depth {model_config.__name__} [{first}, {last})"
     _log_compressed_kv(trace, config, model, label)
+    _log_routing(trace, checkpoint, config, range(first, last), routing_dir, label)
     failures = []
     for i in graded:
         truth = trace.decoder_output(i).reshape(1, SEQ_CACHE, n, hidden)
@@ -258,6 +365,7 @@ def run_depth(mesh_device, device_params, num_links, model_config, first, count,
         _, pcc = comp_pcc(truth, dev)
         logger.info(f"[{label}] layer {i} PCC: {pcc:.6f}")
         _log_layer_breakdown(truth, dev, f"[{label}] layer {i}")
+        logger.info(f"[{label}] layer {i} chunk-0 golden norms: {_norm_stats(truth[:, :CHUNK], outliers)}")
         del truth, dev
         if pcc < layer_floor(config, i, floor):
             failures.append(f"layer {i} {pcc:.6f} < {layer_floor(config, i, floor)}")
