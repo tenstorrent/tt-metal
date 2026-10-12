@@ -382,6 +382,48 @@ def test_zero_weight_slots_not_read(device, config):
     assert torch.all(result[:, ::4, :] == 0), "tokens without an active slot must be exact zeros"
 
 
+@pytest.mark.parametrize("use_dispatch_table", [True, False], ids=["dispatch_table", "zero_weight"])
+@pytest.mark.parametrize("num_slots", [32, 33, 64])
+def test_wide_topk(device, num_slots, use_dispatch_table):
+    """Top-k at and above 32 slots per token: inactive slots hold NaN and are never read, and a token with no
+    active slot is exact zeros."""
+    torch.manual_seed(42)
+    num_tokens, emb_dim, num_routed_experts, local_expert_end = 256, 2048, 256, 128
+    if use_dispatch_table:
+        indices = torch.stack([torch.randperm(num_routed_experts)[:num_slots] for _ in range(num_tokens)])
+        for t in range(0, num_tokens, 4):  # every 4th token routes only to non-local experts
+            indices[t] = torch.randperm(num_routed_experts - local_expert_end)[:num_slots] + local_expert_end
+        active = (indices < local_expert_end).unsqueeze(0)  # [1, T, K]
+        indices_tt = ttnn.from_torch(
+            indices.unsqueeze(0).to(torch.uint16),
+            device=device,
+            layout=ttnn.ROW_MAJOR_LAYOUT,
+            dtype=ttnn.uint16,
+            memory_config=ttnn.DRAM_MEMORY_CONFIG,
+        )
+        table = torch.full((num_routed_experts,), -1, dtype=torch.int32)
+        table[:local_expert_end] = 0
+        dispatch_table_tt = to_device(table, device)
+        weights = torch.randn(1, num_tokens, num_slots, 1, dtype=torch.bfloat16)
+    else:
+        active = torch.rand(1, num_tokens, num_slots) < 0.5
+        active[:, ::4, :] = False  # every 4th token has no active slot
+        weights = torch.where(
+            active.unsqueeze(-1), torch.randn(1, num_tokens, num_slots, 1), torch.zeros(1, num_tokens, num_slots, 1)
+        ).to(torch.bfloat16)
+        indices_tt = dispatch_table_tt = None
+    combine = torch.randn(1, num_tokens, num_slots, emb_dim, dtype=torch.bfloat16)
+    combine[~active] = float("nan")
+
+    ref = pytorch_reference(torch.where(active.unsqueeze(-1), combine, torch.zeros_like(combine)), weights)
+    result = ttnn.to_torch(
+        new_implementation(to_device(combine, device), to_device(weights, device), indices_tt, dispatch_table_tt)
+    )
+    assert_pcc(result, ref, label=f"wide_topk_{num_slots}")
+    no_active = ~active.any(dim=-1)  # [1, T]
+    assert no_active.any() and torch.all(result[no_active] == 0), "tokens without an active slot must be exact zeros"
+
+
 # ============================================================================
 # Output format test
 # ============================================================================

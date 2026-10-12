@@ -42,7 +42,6 @@ constexpr auto indices_accessor_args =
     TensorAccessorArgs<dispatch_table_accessor_args.next_compile_time_args_offset()>();
 
 constexpr uint32_t TOKENS_PER_CHUNK = 32;
-static_assert(num_experts <= 32, "the per-token active-slot mask is a uint32_t");
 
 void kernel_main() {
     // Runtime args: combine_addr, weight_addr, (dispatch-table mode: dispatch_table_addr, indices_addr),
@@ -102,7 +101,20 @@ void kernel_main() {
         noc.async_read_barrier();
     }
 
-    uint32_t active_mask[TOKENS_PER_CHUNK];
+    // Valid for the current chunk once its indices (dispatch-table mode) or weights (weight mode) are in L1.
+    const auto is_active = [&](uint32_t t, uint32_t k) -> bool {
+        if constexpr (use_dispatch_table_skip) {
+            auto* dispatch_table = reinterpret_cast<volatile tt_l1_ptr int32_t*>(dispatch_table_l1);
+            auto* token_indices =
+                reinterpret_cast<volatile tt_l1_ptr uint16_t*>(indices_l1 + t * indices_aligned_page_size);
+            const uint32_t expert_id = token_indices[k];
+            // -1 = expert owned by another dispatch group; out-of-range ids are never local.
+            return expert_id < dispatch_table_entries && dispatch_table[expert_id] != -1;
+        } else {
+            return (weight_at(t, k) & 0x7FFF) != 0;  // bf16 +0 and -0 are inactive
+        }
+    };
+    uint32_t num_active[TOKENS_PER_CHUNK];
 
     for (uint32_t chunk = 0; chunk < num_chunks; ++chunk) {
         // Phase 1: pick the active slots and land their weights in c_5.
@@ -117,20 +129,15 @@ void kernel_main() {
                     {.offset_bytes = t * indices_aligned_page_size});
             }
             noc.async_read_barrier();
-            auto* dispatch_table = reinterpret_cast<volatile tt_l1_ptr int32_t*>(dispatch_table_l1);
             for (uint32_t t = 0; t < TOKENS_PER_CHUNK; ++t) {
-                auto* token_indices =
-                    reinterpret_cast<volatile tt_l1_ptr uint16_t*>(indices_l1 + t * indices_aligned_page_size);
-                uint32_t mask = 0;
+                uint32_t n = 0;
                 for (uint32_t k = 0; k < num_experts; ++k) {
-                    const uint32_t expert_id = token_indices[k];
-                    // -1 = expert owned by another dispatch group; out-of-range ids are never local.
-                    if (expert_id < dispatch_table_entries && dispatch_table[expert_id] != -1) {
-                        mask |= 1u << k;
+                    if (is_active(t, k)) {
+                        ++n;
                         read_weight(t, k);
                     }
                 }
-                active_mask[t] = mask;
+                num_active[t] = n;
             }
             noc.async_read_barrier();
         } else {
@@ -141,24 +148,18 @@ void kernel_main() {
             }
             noc.async_read_barrier();
             for (uint32_t t = 0; t < TOKENS_PER_CHUNK; ++t) {
-                uint32_t mask = 0;
+                uint32_t n = 0;
                 for (uint32_t k = 0; k < num_experts; ++k) {
-                    if ((weight_at(t, k) & 0x7FFF) != 0) {  // bf16 +0 and -0 are inactive
-                        mask |= 1u << k;
-                    }
+                    n += is_active(t, k) ? 1 : 0;
                 }
-                active_mask[t] = mask;
+                num_active[t] = n;
             }
         }
 
         cb_token_counts.reserve_back(1);
         auto* counts = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(cb_token_counts.get_write_ptr());
         for (uint32_t t = 0; t < TOKENS_PER_CHUNK; ++t) {
-            uint32_t n = 0;
-            for (uint32_t mask = active_mask[t]; mask != 0; mask &= mask - 1) {
-                ++n;
-            }
-            counts[t] = n;
+            counts[t] = num_active[t];
         }
         cb_token_counts.push_back(1);
 
@@ -166,7 +167,7 @@ void kernel_main() {
         for (uint32_t t = 0; t < TOKENS_PER_CHUNK; ++t) {
             const uint32_t global_token_idx = token_start_idx + t;
             for (uint32_t k = 0; k < num_experts; ++k) {
-                if ((active_mask[t] & (1u << k)) == 0) {
+                if (!is_active(t, k)) {
                     continue;
                 }
                 cb_combine_input.reserve_back(emb_dim_cb_tiles);

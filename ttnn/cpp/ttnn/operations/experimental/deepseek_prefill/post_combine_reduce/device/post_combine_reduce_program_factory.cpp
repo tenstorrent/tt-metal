@@ -69,8 +69,6 @@ tt::tt_metal::ProgramDescriptor PostCombineReduceProgramFactory::create_descript
         "Embedding dimension tiles {} must fit in 8 DST registers for batching",
         emb_dim_cb_tiles);
 
-    TT_FATAL(num_experts <= 32, "post_combine_reduce: at most 32 slots per token, got {}", num_experts);
-
     constexpr uint32_t TOKENS_PER_CHUNK = 32;
     TT_FATAL(num_tokens > 0, "post_combine_reduce: num_tokens must be > 0, got {}", num_tokens);
     TT_FATAL(
