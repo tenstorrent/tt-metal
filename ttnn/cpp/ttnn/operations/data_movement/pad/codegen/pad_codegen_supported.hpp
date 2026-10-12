@@ -79,8 +79,8 @@ bool has_partial_tile(const Tensor& input);
 // Output spec the codegen path builds; a caller-supplied output must match it.
 tt::tt_metal::TensorSpec codegen_output_spec(const Tensor& input, const ttnn::prim::PadCodegenParams& attrs);
 
-// Correctness and device-resource gate, shared by the free function's routing, pad_force_codegen and the
-// codegen prim's checks.
+// Correctness and device-resource gate for already-built attributes; the codegen prim's validation calls it.
+// Routing and pad_force_codegen reach the same decision through plan_codegen.
 bool supported_by_codegen(
     const Tensor& input,
     const ttnn::prim::PadCodegenParams& attrs,

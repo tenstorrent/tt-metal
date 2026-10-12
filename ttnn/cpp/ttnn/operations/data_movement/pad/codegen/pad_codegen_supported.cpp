@@ -340,7 +340,8 @@ bool supported_by_codegen(
     return padding_supported_and_fits(input, attrs, l1_output_reservation(input, attrs));
 }
 
-// Padding that stays inside the input's existing tiles: native copies without staging, codegen only adds launch cost.
+// Padding that stays inside the input's existing tiles: native fills the partial-tile lanes in place and returns a
+// view, while codegen copies every tile into a new output.
 bool tile_pad_adds_no_tiles(const Tensor& input, const ttnn::prim::PadCodegenParams& attrs) {
     if (input.layout() != ttnn::TILE_LAYOUT) {
         return false;

@@ -181,6 +181,7 @@ ProgramDescriptor build_pad_tiled(
         const uint32_t n = work_for_core(split, core);
         const Coord4 p = unflatten(start, out_tiles.c, out_tiles.h, out_tiles.w);
         const uint32_t src_start = source_index_before(p, front_tiles, in_tiles);
+        // Slot order is the reader's ArgsPad layout; the kernel reads these by position.
         reader_desc.emplace_runtime_args(
             core,
             RtArgs{

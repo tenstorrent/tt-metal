@@ -179,7 +179,8 @@ def test_pad_with_program_cache(device, n, c, h, w, padding, torch_padding, valu
             device=device,
             memory_config=ttnn.L1_MEMORY_CONFIG,
         )
-    # A nonzero bfloat8_b pad value goes through bfloat16 (typecast, pad, typecast); a zero value is packed directly.
+    # This bfloat8_b tile pad routes to codegen, which goes through bfloat16 (typecast, pad, typecast) only for a
+    # nonzero value; a zero value pads the block-float tiles directly.
     expected_cache_entries = 3 if dtype == ttnn.bfloat8_b and value != 0 else 1
     assert device.cache_entries_counter.total == expected_cache_entries
 
