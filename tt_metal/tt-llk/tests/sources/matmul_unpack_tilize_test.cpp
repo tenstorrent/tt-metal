@@ -223,10 +223,8 @@ void run_kernel(RUNTIME_PARAMETERS params)
 
     // Start of second pack kernel to perform final pack after executing matmul on tilized data
     run = 1; // second L1-to-L1 run, we access the second set of formats_array in our array
-    _llk_pack_reconfig_data_format_<is_fp32_dest_acc_en>(
-        formats_array[run].pack_src,
-        formats_array[run]
-            .pack_dst); // need to reconfigure data formats_array for next pack, also calls set_packer_strides to readjust strides after pack tilizing
+    // need to reconfigure data formats_array for next pack, also calls set_packer_strides to readjust strides after pack tilizing
+    _llk_pack_reconfig_data_format_<is_fp32_dest_acc_en>(formats_array[run].pack_src, formats_array[run].pack_dst);
 
 #ifdef ARCH_BLACKHOLE
     // Strides + X counter were re-established by the reconfig above, so skip strides here.

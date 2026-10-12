@@ -279,7 +279,7 @@ inline void _llk_packer_wait_for_math_done_()
 template <std::uint32_t WaitRes = p_stall::NOTHING>
 inline void _llk_packer_set_math_semaphore_()
 {
-    t6_semaphore_get<WaitRes>(semaphore::MATH_PACK); // Indicate that packer is done and header is written into L1
+    t6_semaphore_get<WaitRes>(semaphore::MATH_PACK); // Indicate that packer is done
 }
 
 /**

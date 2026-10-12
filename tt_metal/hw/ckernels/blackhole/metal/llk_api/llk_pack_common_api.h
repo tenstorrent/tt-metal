@@ -153,8 +153,8 @@ inline void llk_pack_dest_init([[maybe_unused]] const std::uint32_t pack_output)
 /**
  * Reconfigure the packer for a new output operand's data format.
  *
- * Face geometry (face_r_dim, num_faces) and tile column dimension are derived from the new
- * output's CB metadata.
+ * The tile column dimension and face count (num_faces) are derived from the new output's CB
+ * metadata.
  *
  * @tparam is_fp32_dest_acc_en Enable FP32 accumulation in the destination register.
  * @param  new_output          New output circular buffer / operand index to configure for.
