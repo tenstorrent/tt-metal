@@ -3,8 +3,9 @@
 # (test_pipeline_turbo_minimax_h3.py), 768p, fl2va, 5 s, seed 0, v1.0 4-step adapter, 4x8.
 # Args: <tag> <off|on>. off = t408/b (bff7d82040c, t284 build); on = t422/b (the port, own build).
 # T408_REPLAYS (default 2) timed replays; T408_SAVE=1 saves the latents and decoded video in the out dir.
-# pytest runs in its own process group (setsid, no re-exec of this script) under timeout --foreground; the
-# traps kill that whole group, and a 90 s no-progress watchdog (log output or new cache files) ends it early.
+# pytest runs in the broker's process group under timeout --foreground -k 10 (no setsid, per the job lint);
+# stop() sends TERM to timeout, which relays it to python, then KILLs both; a 90 s no-progress watchdog
+# (log output or new cache files) ends it early.
 set -o pipefail
 F=/var/tmp/fasth3; T=$F/t422; VENV=$F/t48/python_env
 TAG=${1:?tag}; ARM=${2:?off|on}; DUR=5
@@ -47,8 +48,13 @@ echo "[t422] host=$(hostname) commit=$(git -C $W rev-parse HEAD) tag=$TAG arm=$A
 echo "[t422] cmd: $CMD" | tee -a $L
 env | grep -E '^(MINIMAX|TT_|T286_)' | sort >> $L
 T0=$(date +%s)
-setsid bash -c "$CMD" >> $L 2>&1 < /dev/null & PG=$!
-trap 'kill -TERM -- -$PG 2>/dev/null; sleep 5; kill -KILL -- -$PG 2>/dev/null' EXIT
+bash -c "exec $CMD" >> $L 2>&1 < /dev/null & PG=$!
+stop() {
+  [ -n "$PG" ] || return 0
+  local kids; kids=$(cat /proc/$PG/task/*/children 2>/dev/null)
+  kill -TERM $PG 2>/dev/null; sleep "$1"; kill -KILL $PG $kids 2>/dev/null
+}
+trap 'stop 5' EXIT
 trap 'exit 143' TERM; trap 'exit 130' INT
 tail -n +1 -f --pid=$PG $L & TAILPID=$!
 STAMP=$T/.wd_$TAG; touch $STAMP; last=$(stat -c %s $L); idle=0
@@ -61,10 +67,10 @@ while kill -0 $PG 2>/dev/null; do
   idle=$((idle + 15))
   if [ $idle -ge 90 ]; then
     echo "[t422] watchdog: no output and no new cache files for $idle s, ending the job" | tee -a $L
-    kill -TERM -- -$PG 2>/dev/null; sleep 10; kill -KILL -- -$PG 2>/dev/null; break
+    stop 10; break
   fi
 done
-wait $PG; rc=$?
+wait $PG; rc=$?; PG=
 wait $TAILPID 2>/dev/null; rm -f $STAMP
 echo "[t422] process wall $(( $(date +%s) - T0 )) s" | tee -a $L
 mv $MP4 $OUT/ 2>/dev/null && md5sum $OUT/$(basename $MP4) | tee -a $L
