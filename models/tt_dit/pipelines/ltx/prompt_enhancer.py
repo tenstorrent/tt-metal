@@ -46,9 +46,10 @@ def _host_sampling() -> bool:
 
 
 def late_trace_capture() -> bool:
-    """LTX_ENHANCER_LATE_CAPTURE=1 warms the rewriter eagerly and captures its decode trace only once the
-    pipeline's persistent buffers all exist, so a decode replay cannot write over them."""
-    return os.environ.get("LTX_ENHANCER_LATE_CAPTURE", "0").lower() in ("1", "true", "yes")
+    """On by default: warm the rewriter eagerly and capture its decode trace only once the pipeline's persistent
+    buffers all exist, so a decode replay cannot write over them. Capturing first let replays clobber LTX global
+    semaphores and hang gen 0 (jobs 128486, 130193); LTX_ENHANCER_LATE_CAPTURE=0 restores that order."""
+    return os.environ.get("LTX_ENHANCER_LATE_CAPTURE", "1").lower() in ("1", "true", "yes")
 
 
 class PromptTooLongError(ValueError):
