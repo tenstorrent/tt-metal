@@ -762,14 +762,20 @@ def test_quasar_untilize_l1_output_reserved_in_budget(device, dtype):
     info = ttnn._ttnn.reports.get_device_info(device)
     free_l1, num_banks = info.cb_limit, info.l1_num_banks
 
-    Wt = 64
+    # The output takes OUTPUT_FRACTION_PCT % of free L1: enough that the full-row CBs no longer
+    # fit beside it (so the reservation must divert to the block factory), the block factory still fits
+    # in the remaining ~6% of free L1, and the input is DRAM-interleaved so it costs no L1.
+    # Wt = 32 keeps num_tiles_per_row <= 32, which disables select_program_factory's second route to the block
+    # factory (num_tiles_per_row > 32), so only the enough_space_height flag can pick it.
+    Wt = 32
+    OUTPUT_FRACTION_PCT = 94
     row_bytes = Wt * tile_dim * 2
     cbs = Wt * (in_tile_bytes + out_tile_bytes)
-    rows = -(-(94 * free_l1 // 100) * num_banks // row_bytes)
+    rows = -(-(OUTPUT_FRACTION_PCT * free_l1 // 100) * num_banks // row_bytes)
     Ht = -(-rows // tile_dim)
     output = -(-Ht * tile_dim // num_banks) * row_bytes
 
-    if not (Wt > 0 and cbs < free_l1 < cbs + output):
+    if not (cbs < free_l1 < cbs + output):
         pytest.skip(f"No shape separates the routes on this device (free_l1={free_l1}, banks={num_banks})")
 
     shape = (1, 1, Ht * tile_dim, Wt * tile_dim)
