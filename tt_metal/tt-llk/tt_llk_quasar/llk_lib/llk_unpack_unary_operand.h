@@ -84,9 +84,9 @@ inline void _llk_unpack_unary_operand_variable_tile_size_mop_config_(
  * @param buf_desc_id: The buffer descriptor ID where the buffer information is
  * stored in the buffer descriptor table; allocated from the unpack TRISC partition [0,16) at op-init time (see llk_bfd_alloc.h)
  * @param num_tiles: number of tiles to unpack at a time for a single operand
- * @note For UNP_DEST no dvalid is set (no math is involved): the caller's dest-dvalid handshake, @ref _llk_unpack_dest_dvalid_section_done_,
- *       takes its place. The semaphore-synchronized unpack-to-DEST form (unpack_to_dest = true in @ref _llk_unpack_unary_operand_init_) does
- *       not use this MOP; it builds its own in llk_unpack_unary_operand_to_dest.h.
+ * @note For UNP_DEST no dvalid is set (no math is involved): the caller's DEST handshake takes its place, either the dest-dvalid
+ *       @ref _llk_unpack_dest_dvalid_section_done_ for a bare UNP_DEST unpack, or the UNPACK_MATH / MATH_PACK semaphore protocol of
+ *       llk_unpack_unary_operand_to_dest.h (@ref _llk_unpack_unary_operand_to_dest_tile_, @ref _llk_unpack_unary_operand_to_dest_block_).
  */
 template <std::uint32_t UNP_SEL, bool EN_32BIT_DEST>
 inline void _llk_unpack_unary_operand_mop_config_(const std::uint32_t buf_desc_id, const std::uint32_t num_tiles)
@@ -285,8 +285,9 @@ inline void _llk_unpack_unary_operand_reuse_dest_mop_config_(const std::uint32_t
  * @tparam TRANSPOSE_EN: Enables transpose of a tile, supported for SrcA and SrcB, values = <true/false>
  * @tparam EN_32BIT_DEST: Enables using the math destination register in 32-bit mode, values = <true/false>
  * @tparam reuse_dest: When not NONE, configures per-face unpack with dummy dvalid, values = <NONE/DEST_TO_SRCA/DEST_TO_SRCB>
- * @tparam unpack_to_dest: When true, selects the semaphore-synchronized unpack-to-DEST path by forwarding to
- *         @ref _llk_unpack_unary_operand_to_dest_init_ (llk_unpack_unary_operand_to_dest.h); requires UNP_SEL == UNP_DEST, values = <true/false>
+ * @tparam unpack_to_dest: When true, selects the semaphore-synchronized unpack-to-DEST path of llk_unpack_unary_operand_to_dest.h (this
+ *         init keeps the num_tiles MOP, the execute forwards to @ref _llk_unpack_unary_operand_to_dest_tile_); requires UNP_SEL == UNP_DEST,
+ *         values = <true/false>
  * @param buf_desc_id: The buffer descriptor ID where the buffer information is
  *        stored in the buffer descriptor table; allocated from the unpack TRISC partition [0,16) at op-init time (see llk_bfd_alloc.h)
  * @param tensor_shape: Contains all the information of the tile shape: num faces, face row/col dim, etc
@@ -314,11 +315,15 @@ inline void _llk_unpack_unary_operand_init_(const std::uint32_t buf_desc_id, con
     {
         static_assert(UNP_SEL == p_unpacr::UNP_DEST, "unpack_to_dest path requires UNP_SEL == p_unpacr::UNP_DEST");
 
-        // Forward to the standalone unpack-to-dest family (see the @note above). The per-init DEST bank reset is
-        // what this arm did before the family was split out: unpack owns the DEST section base in this path and
-        // the callers of this arm issue no separate once-per-program _llk_unpack_dest_init_.
+        // Compatibility path for callers that still size the MOP at init (see the @note above): the unpack-to-dest
+        // family's own MOP is one tile per run, so this arm keeps this family's num_tiles MOP and only the execute
+        // (@ref _llk_unpack_unary_operand_) forwards. The per-init DEST bank reset is what this arm did before the
+        // family was split out: unpack owns the DEST section base in this path and these callers issue no separate
+        // once-per-program _llk_unpack_dest_init_.
         _llk_unpack_dest_init_();
-        _llk_unpack_unary_operand_to_dest_init_(buf_desc_id, num_tiles);
+        cfg_rmw(THCON_UNPACKER0_REG0_TRANSPOSE_RMW, 0 /*TRANSPOSE_EN forced false for UNP_DEST*/);
+        cfg_rmw(THCON_UNPACKER1_REG0_TRANSPOSE_RMW, 0);
+        _llk_unpack_unary_operand_mop_config_<UNP_SEL, EN_32BIT_DEST>(buf_desc_id, num_tiles);
         return;
     }
 
@@ -366,8 +371,8 @@ inline void _llk_unpack_unary_operand_init_(const std::uint32_t buf_desc_id, con
  *
  * @tparam UNP_SEL: Selects which unpacker resource to use, values = <p_unpacr::UNP_A/UNP_B/UNP_DEST>
  * @tparam reuse_dest: When not NONE, sets the source counter for the CB unpacker only, values = <NONE/DEST_TO_SRCA/DEST_TO_SRCB>
- * @tparam unpack_to_dest: When true, forwards to @ref _llk_unpack_unary_operand_to_dest_, which runs the UNPACK_MATH / MATH_PACK semaphore
- *         handshake for unpack-to-DEST; requires UNP_SEL == UNP_DEST, values = <true/false>
+ * @tparam unpack_to_dest: When true, forwards to @ref _llk_unpack_unary_operand_to_dest_tile_, which runs the UNPACK_MATH / MATH_PACK
+ *         semaphore handshake for unpack-to-DEST around one run of the init's num_tiles MOP; requires UNP_SEL == UNP_DEST, values = <true/false>
  * @tparam DEST_SYNC_MODE: Only used with unpack_to_dest: in SyncHalf the DEST section base flips to the other bank after each call,
  *         values = <SyncFull/SyncHalf>
  * @param l1_tile_idx: Index into the L1 buffer for a tile.
@@ -386,9 +391,10 @@ inline void _llk_unpack_unary_operand_(const std::uint32_t l1_tile_idx, const Te
     {
         static_assert(UNP_SEL == p_unpacr::UNP_DEST, "unpack_to_dest path requires UNP_SEL == p_unpacr::UNP_DEST");
 
-        // Forward to the standalone unpack-to-dest family. EN_32BIT_DEST stays pinned to true, as it was when this
-        // arm was inline: it sizes the SyncHalf bank flip and must match the pack side of the same op.
-        _llk_unpack_unary_operand_to_dest_<DEST_SYNC_MODE, true /*EN_32BIT_DEST*/>(l1_tile_idx);
+        // Forward to the standalone unpack-to-dest family: one MOP run (the init's num_tiles tiles) into DEST tiles
+        // [0, num_tiles) as one section. EN_32BIT_DEST stays pinned to true, as it was when this arm was inline: it
+        // sizes the SyncHalf bank flip and must match the pack side of the same op.
+        _llk_unpack_unary_operand_to_dest_tile_<DEST_SYNC_MODE, true /*EN_32BIT_DEST*/>(l1_tile_idx, 0 /*dst_tile_idx*/);
         return;
     }
 
