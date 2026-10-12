@@ -218,7 +218,14 @@ def _rtl_sim_reset(value, location="0,0", device_id=0):
     device = check_context().devices[device_id]
     x, y = OnChipCoordinate.create(location, device=device).to("noc0")
     tt_device = device._umd_device.get_local_tt_device()
-    core = tt_umd.CoreCoord(x, y, tt_umd.CoreType.TENSIX, tt_umd.CoordSystem.NOC0)
+    soc = tt_device.get_soc_descriptor()
+    core = None
+    for c in soc.get_cores(tt_umd.CoreType.TENSIX):  # the core as the soc descriptor names it, matched on noc0 x, y
+        n = soc.translate_coord_to(c, tt_umd.CoordSystem.NOC0)
+        if (n.x, n.y) == (x, y):
+            core = c
+            break
+    assert core is not None, f"no Tensix core at noc0 {x},{y}"
     if value:
         tt_device.assert_risc_reset(core, tt_umd.RiscType.ALL)
     else:
