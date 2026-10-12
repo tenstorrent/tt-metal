@@ -15,6 +15,7 @@ from __future__ import annotations
 
 import os
 import re
+import time
 import unicodedata
 
 import torch
@@ -28,6 +29,7 @@ from models.demos.blackhole.paddleocr_vl.tt.vision.model import VISION_BUCKETS, 
 from models.demos.blackhole.paddleocr_vl.tt.vision.vision_model_config import VisionModelArgs
 from models.demos.blackhole.paddleocr_vl.tt.weight_mapping import map_vision_state_dict
 from models.demos.qwen3_vl.tt.generator import Generator as VLGenerator
+from models.demos.utils.common_demo_utils import report_e2e_metrics
 from models.tt_transformers.tt.common import get_padded_prefill_len
 from models.tt_transformers.tt.model_config import ModelArgs
 
@@ -36,6 +38,10 @@ OCR_PROMPT = "OCR:"
 MAX_NEW_TOKENS = 256
 MEAN_CER_GATE = 0.01  # "gate: <= 1.00%" -- see tests/probe_ocr_e2e.py history
 GT_CER_GATE = 0.03  # headroom over the measured mean; a broken tower reads far above it
+
+# Report-only decode telemetry for the CI dashboard (#58596). _read_page appends one
+# (decode_tokens, decode_seconds) pair per page; the CI test aggregates and emits them.
+_DECODE_STATS: list[tuple[int, float]] = []
 
 
 def _to_torch_logits(x, mesh, vocab_size: int, row: int = -1) -> torch.Tensor:
@@ -114,6 +120,8 @@ def _read_page(sample: dict, processor, tower, generator, embed_tokens, image_to
     generated = [token]
 
     eos = set(tokenizer.all_special_ids or [])
+    decode_tokens = 0
+    decode_start = time.perf_counter()
     for step in range(MAX_NEW_TOKENS - 1):
         if token in eos:
             break
@@ -133,6 +141,9 @@ def _read_page(sample: dict, processor, tower, generator, embed_tokens, image_to
         lg = out[0] if isinstance(out, tuple) else out
         token = int(_to_torch_logits(lg, device, text_args.vocab_size).argmax().item())
         generated.append(token)
+        decode_tokens += 1
+
+    _DECODE_STATS.append((decode_tokens, time.perf_counter() - decode_start))
 
     return tokenizer.decode([t for t in generated if t not in eos], skip_special_tokens=True)
 
@@ -215,4 +226,18 @@ def test_ocr_mean_cer_vs_ground_truth(device, tmp_path):
     print(
         f"mean CER vs ground truth over {len(cers)} pages: {mean_cer * 100:.2f}%  (gate: <= {GT_CER_GATE * 100:.2f}%)"
     )
+
+    # Report-only perf for the CI dashboard (#58596): aggregate single-user decode rate
+    # across all pages. No-op outside CI; device is still open for the SKU lookup.
+    total_tokens = sum(n for n, _ in _DECODE_STATS)
+    total_decode_s = sum(s for _, s in _DECODE_STATS)
+    if total_tokens > 0 and total_decode_s > 0:
+        decode_tps_u = total_tokens / total_decode_s
+        report_e2e_metrics(
+            "paddleocr-vl-1.6",
+            {"decode_t/s": decode_tps_u, "decode_t/s/u": decode_tps_u},
+            batch_size=1,
+            model_type="vlm",
+        )
+
     assert mean_cer <= GT_CER_GATE

@@ -8,10 +8,13 @@ Verifies the complete end-to-end flow: text encoder → DIT denoising loop → V
 decode, including Metal Trace capture and replay for all three models.
 """
 
+import time
+
 import pytest
 from PIL import Image
 
 import ttnn
+from models.demos.utils.common_demo_utils import report_generation_rate
 from models.demos.z_image_turbo.tt.z_image_turbo import ZImageTurbo
 
 
@@ -27,9 +30,15 @@ def test_z_image_turbo_pipeline(mesh_device, tmp_path):
     assert isinstance(warmup_image, Image.Image), "Warmup did not return a PIL Image"
     assert warmup_image.size == (512, 512), f"Expected 512x512, got {warmup_image.size}"
 
+    generate_start = time.perf_counter()
     image = pipeline("a cat sitting on a mat", steps=9, seed=42)
+    generate_elapsed_s = time.perf_counter() - generate_start
     assert isinstance(image, Image.Image), "Forward did not return a PIL Image"
     assert image.size == (512, 512), f"Expected 512x512, got {image.size}"
+
+    # Report-only perf for the CI dashboard (#58596): images/s for a single traced generate.
+    # No-op outside CI.
+    report_generation_rate("z-image-turbo", generate_elapsed_s, 1)
 
     out_path = tmp_path / "test_output.png"
     image.save(str(out_path))

@@ -2640,3 +2640,97 @@ targets:
             accuracy: {}
             owner_id: U0ATR08RCQ0 # James Lee
             team: models
+
+  # Report-only placeholders, issue #58596. These e2e legs now emit a benchmark
+  # payload (report_vision_fps / report_generation_rate / report_e2e_metrics), but
+  # there are no measured numbers yet. Populate perf and flip to
+  # `status: active` + `enforce_perf: false` after the first tiered run reports
+  # numbers; until then measured values print as no-target on the dashboard.
+  mnist-mlp:
+    aliases: ["mnist-mlp", "MNIST MLP"]
+    skus:
+      wh_n150:
+        entries:
+          - batch_size: null
+            seq_len: null
+            status: TODO
+            perf: {}
+            accuracy: {}
+            team: models
+  vggnet:
+    aliases: ["vggnet", "VGGNet", "VGG11", "VGG16"]
+    skus:
+      wh_n150:
+        entries:
+          - batch_size: null
+            seq_len: null
+            status: TODO
+            perf: {}
+            accuracy: {}
+            team: models
+  bert-tiny:
+    aliases: ["bert-tiny", "mrm8488/bert-tiny-finetuned-squadv2"]
+    skus:
+      wh_n150:
+        entries:
+          - batch_size: null
+            seq_len: null
+            status: TODO
+            perf: {}
+            accuracy: {}
+            team: models
+  modernbert-base:
+    aliases: ["modernbert-base", "ModernBERT-base", "answerdotai/ModernBERT-base"]
+    skus:
+      wh_n300:
+        entries:
+          - batch_size: null
+            seq_len: null
+            status: TODO
+            perf: {}
+            accuracy: {}
+            team: models
+  z-image-turbo:
+    aliases: ["z-image-turbo", "Z-Image-Turbo"]
+    skus:
+      bh_quietbox_2:
+        entries:
+          - batch_size: null
+            seq_len: null
+            status: TODO
+            perf: {}
+            accuracy: {}
+            team: models
+  hunyuan-image-3.0:
+    aliases: ["hunyuan-image-3.0", "HunyuanImage-3.0", "tencent/HunyuanImage-3.0"]
+    skus:
+      bh_quietbox_2:
+        entries:
+          - batch_size: null
+            seq_len: null
+            status: TODO
+            perf: {}
+            accuracy: {}
+            team: models
+  vibevoice-1.5b:
+    aliases: ["vibevoice-1.5b", "VibeVoice-1.5B", "microsoft/VibeVoice-1.5B"]
+    skus:
+      bh_p150b_civ2:
+        entries:
+          - batch_size: null
+            seq_len: null
+            status: TODO
+            perf: {}
+            accuracy: {}
+            team: models
+  deepseek-v3-tg:
+    aliases: ["deepseek-v3-tg", "DeepSeek-V3", "deepseek-ai/DeepSeek-R1-0528"]
+    skus:
+      wh_galaxy_perf:
+        entries:
+          - batch_size: null
+            seq_len: null
+            status: TODO
+            perf: {}
+            accuracy: {}
+            team: models
