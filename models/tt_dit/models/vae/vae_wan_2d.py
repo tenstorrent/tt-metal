@@ -29,6 +29,7 @@ from models.tt_dit.models.vae.vae import (
 from models.tt_dit.parallel.config import VaeHWParallelConfig
 from models.tt_dit.parallel.manager import CCLManager
 from models.tt_dit.utils import cache, tensor
+from models.tt_dit.utils.conv3d import conv3d_blocking_hash
 from models.tt_dit.utils.substate import pop_substate, rename_substate
 from models.tt_dit.utils.tracing import Tracer
 
@@ -493,7 +494,7 @@ class WanVaeDecoder2DAdapter:
                 self._decoder,
                 get_torch_state_dict=self._load_torch_state_dict,
                 model_name=self._name.split("/")[-1],
-                subfolder="vae",
+                subfolder=f"vae_{conv3d_blocking_hash(self._decoder)}",
                 parallel_config=self._parallel_config,
                 mesh_shape=tuple(self._device.shape),
                 mesh_device=self._device,
@@ -584,7 +585,7 @@ class WanVaeEncoder2DAdapter:
                 self._encoder,
                 get_torch_state_dict=self._load_torch_state_dict,
                 model_name=self._name.split("/")[-1],
-                subfolder="vae_encoder",
+                subfolder=f"vae_encoder_{conv3d_blocking_hash(self._encoder)}",
                 parallel_config=self._parallel_config,
                 mesh_shape=tuple(self._device.shape),
                 mesh_device=self._device,
@@ -642,6 +643,7 @@ def _vae_context(
         w_factor=wp.factor,
         device=device,
         ccl_manager=ccl_manager,
+        use_conv3d=True,
     )
 
 

@@ -525,6 +525,47 @@ _DEFAULT_BLOCKINGS = {
     (256, 128, (1, 3, 3)): (256, 32, 1, 8, 16),
     (32, 512, (1, 3, 3)): (32, 32, 1, 8, 16),  # conv_in (z_channels 8 -> aligned 32)
     (128, 32, (1, 3, 3)): (128, 32, 1, 8, 16),  # conv_out (out_ch 2 -> aligned 32)
+    # Qwen-Image and FIBO VAEs on splits without a _SPLIT_BLOCKINGS entry, taken from the T3K
+    # sweeps. The hardcoded default would overflow L1 at 1024 input channels.
+    (32, 384, (1, 3, 3)): (32, 128, 1, 4, 16),
+    (384, 384, (1, 3, 3)): (384, 96, 1, 8, 4),
+    (192, 384, (1, 3, 3)): (192, 96, 1, 8, 4),
+    (192, 192, (1, 3, 3)): (192, 96, 1, 16, 4),
+    (96, 96, (1, 3, 3)): (96, 96, 1, 8, 8),
+    (96, 3, (1, 3, 3)): (96, 32, 1, 4, 32),
+    (32, 96, (1, 3, 3)): (32, 96, 1, 16, 16),
+    (96, 192, (1, 3, 3)): (96, 96, 1, 8, 8),
+    (384, 16, (1, 3, 3)): (384, 32, 1, 16, 2),
+    (64, 1024, (1, 3, 3)): (64, 128, 1, 4, 8),
+    (1024, 1024, (1, 3, 3)): (256, 128, 1, 4, 32),
+    (1024, 512, (1, 3, 3)): (256, 128, 1, 2, 32),
+    (256, 12, (1, 3, 3)): (256, 32, 1, 4, 8),
+    (32, 160, (1, 3, 3)): (32, 32, 1, 8, 32),
+    (160, 160, (1, 3, 3)): (160, 32, 1, 4, 8),
+    (160, 320, (1, 3, 3)): (160, 64, 1, 4, 8),
+    (320, 320, (1, 3, 3)): (160, 64, 1, 2, 16),
+    (320, 640, (1, 3, 3)): (320, 128, 1, 4, 16),
+    (640, 640, (1, 3, 3)): (320, 64, 1, 2, 16),
+    (640, 48, (1, 3, 3)): (160, 32, 1, 16, 2),
+}
+
+
+# Table by arch, mesh split and channels: (arch, h_factor, w_factor, C_in, C_out, kernel) -> blocking.
+# Used when no exact match exists, for convs that run at several spatial sizes. arch is "wh" or "bh".
+_SPLIT_BLOCKINGS = {
+    # Qwen-Image VAE (Wan 2.1), conv2d run as conv3d with T = 1, swept at 1024², each at the
+    # largest size the channel pair runs at. T3K: H split 4 ways, W 2 ways.
+    ("wh", 4, 2, 32, 384, (1, 3, 3)): (32, 128, 1, 4, 16),  # decoder conv_in
+    ("wh", 4, 2, 384, 384, (1, 3, 3)): (384, 96, 1, 8, 4),
+    ("wh", 4, 2, 384, 192, (1, 3, 3)): (192, 96, 1, 32, 8),
+    ("wh", 4, 2, 192, 384, (1, 3, 3)): (192, 96, 1, 8, 4),
+    ("wh", 4, 2, 192, 192, (1, 3, 3)): (192, 96, 1, 16, 4),
+    ("wh", 4, 2, 192, 96, (1, 3, 3)): (192, 96, 1, 4, 16),
+    ("wh", 4, 2, 96, 96, (1, 3, 3)): (96, 96, 1, 8, 8),
+    ("wh", 4, 2, 96, 3, (1, 3, 3)): (96, 32, 1, 4, 32),  # decoder conv_out
+    ("wh", 4, 2, 32, 96, (1, 3, 3)): (32, 96, 1, 16, 16),  # encoder conv_in
+    ("wh", 4, 2, 96, 192, (1, 3, 3)): (96, 96, 1, 8, 8),
+    ("wh", 4, 2, 384, 16, (1, 3, 3)): (384, 32, 1, 16, 2),  # encoder conv_out
 }
 
 
@@ -630,7 +671,8 @@ def get_conv3d_config(
 ):
     """Get optimized Conv3dConfig for a conv3d layer.
 
-    Lookup chain: exact (mesh, shape, T, spatial) match -> fallback (channel, kernel) match -> default.
+    Lookup chain: exact (mesh, shape, T, spatial) match -> (arch, mesh split, channel, kernel) match ->
+    fallback (channel, kernel) match -> default.
     Pass h_factor, w_factor, T, H, W for best results. When these are not
     available the fallback table is used.
     """
@@ -656,8 +698,12 @@ def get_conv3d_config(
     channel_key = (in_channels, out_channels, kernel_size)
 
     exact = _BLOCKINGS.get(blocking_key)
+    arch = "bh" if ttnn.device.is_blackhole() else "wh"
+    split = _SPLIT_BLOCKINGS.get((arch, h_factor, w_factor, *channel_key))
     if exact is not None:
         C_in_block, C_out_block, T_out_block, H_out_block, W_out_block = exact
+    elif split is not None:
+        C_in_block, C_out_block, T_out_block, H_out_block, W_out_block = split
     else:
         fallback = _DEFAULT_BLOCKINGS.get(channel_key)
         if fallback is not None:

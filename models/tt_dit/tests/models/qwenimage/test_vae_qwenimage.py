@@ -38,7 +38,7 @@ ITERATIONS = 5
 )
 @pytest.mark.parametrize(
     "device_params",
-    [pytest.param({**line_params_req_exact_devices, "l1_small_size": 32768, "trace_region_size": 20000000}, id="line")],
+    [pytest.param({**line_params_req_exact_devices, "trace_region_size": 20000000}, id="line")],
     indirect=True,
 )
 @pytest.mark.parametrize(("height", "width"), [(1024, 1024)])
@@ -80,7 +80,7 @@ def test_vae_decoder(*, mesh_device: ttnn.MeshDevice, submesh_shape: tuple[int, 
 )
 @pytest.mark.parametrize(
     "device_params",
-    [pytest.param({**line_params_req_exact_devices, "l1_small_size": 32768, "trace_region_size": 20000000}, id="line")],
+    [pytest.param({**line_params_req_exact_devices, "trace_region_size": 20000000}, id="line")],
     indirect=True,
 )
 @pytest.mark.parametrize(("height", "width"), [(1024, 1024)])
