@@ -142,10 +142,9 @@ LoudBox 2×4 results (256 experts = 32/chip; the device gate needs exactly 256, 
 | Q1 / DQ1 / Q2 | — | 39 / 71 / 70 µs |
 | final_output PCC (`test_glm_moe` pcc) | 0.988194 | 0.987759 (hybrid threshold 320 on) |
 
-**Fabric payload:** `GLM53Config.FABRIC_PAYLOAD_SIZE = 6144` is smaller than the fp8 row, so each row splits into two
-packets (still correct, dispatch ~2× slower). `test_glm_moe` already uses the DSv3 payload (7168). For the scratch
-perf test pass `K3_FABRIC_PAYLOAD=7168`. Changing the GLM config itself is a model-level decision (it is shared with
-migration code).
+**Fabric payload:** `GLM53Config.FABRIC_PAYLOAD_SIZE` is now 6400 B (fp8 row 6336 + 64 B fused metadata = the largest
+dispatch packet); the scratch perf test uses it by default (`K3_FABRIC_PAYLOAD` overrides). `test_glm_moe` uses the
+DSv3 payload (7168), which also fits.
 
 Steps on the Galaxy:
 
@@ -158,7 +157,7 @@ Steps on the Galaxy:
    Pass: final_output ≥ 0.982 (test bar) and within ~0.001 of the bf16 run.
 2. Traced perf, fp8 vs bf16:
    ```bash
-   K3_MESH=8x4 K3_FABRIC=torus_xy K3_FABRIC_PAYLOAD=7168 K3_TRACE=1 K3_TRACE_ITERS=20 \
+   K3_MESH=8x4 K3_FABRIC=torus_xy K3_TRACE=1 K3_TRACE_ITERS=20 \
    MOE_DISPATCH_WIRE=fp8 MOE_COMBINE_WIRE=fp8 MOE_FP8_SCALE_BLOCK=128 MOE_HYBRID_THRESHOLD=320 scripts/run_safe_pytest.sh \
      models/demos/deepseek_v3_d_p/tests/perf/test_scratch_glm_moe_perf_lb.py
    ```

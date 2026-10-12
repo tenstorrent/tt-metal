@@ -48,9 +48,9 @@ Done:
   wider than one packet (GLM bf16, 12 KB) — hung the GLM bf16 PCC test; now pipelining only applies to single-packet rows.
 
 Open:
-- **Fabric payload (model-level decision):** `GLM53Config.FABRIC_PAYLOAD_SIZE = 6144` < 6336 B fp8 row. fp8 still works
-  (two packets per row) but dispatch costs 315 vs 176 µs. The config is shared with migration code ("must stay in sync"),
-  so it was not changed here; set it to ≥ 6400 (e.g. 7168, as DSv3) when the GLM model enables the fp8 wire.
+- **Fabric payload: set to 6400 B** = the largest single MoE transfer (dispatch: 6336 B fp8 row + 64 B fused metadata
+  page; combine: the 6336 B row). Was 6144 (every fp8 row split in two: dispatch 315 vs 175 µs); bf16 unchanged (two
+  packets per 12 KB row either way). The migration code that shares this value lives outside this repo — keep it in sync.
 - Galaxy-equivalent load cannot be emulated on the LB (gate needs 256 experts → 32/chip vs 8/chip on 8×4); G6 on Galaxy.
 
 ## 1. Where the code stands for block = 128 today (from a code survey; not run)
