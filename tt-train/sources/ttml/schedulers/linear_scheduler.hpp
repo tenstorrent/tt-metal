@@ -13,10 +13,11 @@ public:
     LinearScheduler(optimizers::OptimizerBase *optimizer, float start_factor, float end_factor, size_t total_steps);
 
     [[nodiscard]] serialization::StateDict get_state_dict() const override;
-    void set_state_dict(const serialization::StateDict &dict) override;
 
 protected:
     [[nodiscard]] float compute_lr(float base_lr) const override;
+
+    void restore_own_state(const serialization::StateDict &dict) override;
 
 private:
     float m_start_factor = 0.F;

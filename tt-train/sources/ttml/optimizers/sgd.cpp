@@ -101,9 +101,9 @@ serialization::StateDict SGD::get_state_dict() const {
 }
 
 void SGD::set_state_dict(const serialization::StateDict& dict) {
+    restore_param_groups(dict);
     m_steps = serialization::get_value_type<size_t>(dict, "steps");
     m_nesterov = serialization::get_value_type<bool>(dict, "nesterov");
-    restore_param_groups(dict);
     m_momentum = std::get<serialization::NamedParameters>(dict.at("momentum"));
     // Restored buffers are treated as past their first update. Buffers are preallocated
     // for every trainable parameter, so a buffer that never received a gradient before the

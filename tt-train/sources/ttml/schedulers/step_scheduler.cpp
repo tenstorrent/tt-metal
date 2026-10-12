@@ -23,13 +23,11 @@ float StepScheduler::compute_lr(float base_lr) const {
     return base_lr * std::pow(m_gamma, static_cast<float>(num_steps));
 }
 
-void StepScheduler::set_state_dict(const serialization::StateDict &dict) {
+void StepScheduler::restore_own_state(const serialization::StateDict &dict) {
     const auto step_size = serialization::get_value_type<size_t>(dict, "m_step_size");
     const auto gamma = serialization::get_value_type<float>(dict, "m_gamma");
-    validate_state_dict(dict);
     m_step_size = step_size;
     m_gamma = gamma;
-    LRSchedulerBase::set_state_dict(dict);
 }
 
 serialization::StateDict StepScheduler::get_state_dict() const {

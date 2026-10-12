@@ -114,8 +114,8 @@ serialization::StateDict MuonComposite::get_state_dict() const {
 }
 
 void MuonComposite::set_state_dict(const serialization::StateDict& dict) {
-    m_steps = serialization::get_value_type<size_t>(dict, "steps");
     restore_param_groups(dict);
+    m_steps = serialization::get_value_type<size_t>(dict, "steps");
     m_ns_steps = serialization::get_value_type<int>(dict, "ns_steps");
     m_momentum_buffer = std::get<serialization::NamedParameters>(dict.at("momentum_buffer"));
 }

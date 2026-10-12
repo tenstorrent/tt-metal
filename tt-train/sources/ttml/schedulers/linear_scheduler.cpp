@@ -38,15 +38,13 @@ float LinearScheduler::compute_lr(float base_lr) const {
     return base_lr * current_factor;
 }
 
-void LinearScheduler::set_state_dict(const serialization::StateDict& dict) {
+void LinearScheduler::restore_own_state(const serialization::StateDict& dict) {
     const auto start_factor = serialization::get_value_type<float>(dict, "m_start_factor");
     const auto end_factor = serialization::get_value_type<float>(dict, "m_end_factor");
     const auto total_steps = serialization::get_value_type<int>(dict, "m_total_steps");
-    validate_state_dict(dict);
     m_start_factor = start_factor;
     m_end_factor = end_factor;
     m_total_steps = total_steps;
-    LRSchedulerBase::set_state_dict(dict);
 }
 
 serialization::StateDict LinearScheduler::get_state_dict() const {

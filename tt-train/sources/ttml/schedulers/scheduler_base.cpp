@@ -47,20 +47,26 @@ serialization::StateDict LRSchedulerBase::get_state_dict() const {
     return res;
 }
 
-void LRSchedulerBase::validate_state_dict(const serialization::StateDict &dict) const {
-    const size_t num_saved = serialization::get_value_type<std::vector<float>>(dict, "m_base_lrs").size();
+void LRSchedulerBase::set_state_dict(const serialization::StateDict &dict) {
+    auto last_step = serialization::get_value_type<size_t>(dict, "m_last_step");
+    auto base_lrs = serialization::get_value_type<std::vector<float>>(dict, "m_base_lrs");
+    auto last_lrs = serialization::get_value_type<std::vector<float>>(dict, "m_last_lrs");
     const size_t num_groups = m_optimizer->get_group_lrs().size();
-    if (num_saved != num_groups) {
-        throw std::runtime_error(
-            fmt::format("Scheduler checkpoint has {} param groups, but the optimizer has {}", num_saved, num_groups));
+    if (base_lrs.size() != num_groups || last_lrs.size() != num_groups) {
+        throw std::runtime_error(fmt::format(
+            "Scheduler checkpoint has {} base LRs and {} last LRs, but the optimizer has {} param groups",
+            base_lrs.size(),
+            last_lrs.size(),
+            num_groups));
     }
+    restore_own_state(dict);
+    m_optimizer->set_group_lrs(last_lrs);
+    m_last_step = last_step;
+    m_base_lrs = std::move(base_lrs);
+    m_last_lrs = std::move(last_lrs);
 }
 
-void LRSchedulerBase::set_state_dict(const serialization::StateDict &dict) {
-    validate_state_dict(dict);
-    m_last_step = serialization::get_value_type<size_t>(dict, "m_last_step");
-    m_base_lrs = serialization::get_value_type<std::vector<float>>(dict, "m_base_lrs");
-    apply_lrs();
+void LRSchedulerBase::restore_own_state(const serialization::StateDict & /*dict*/) {
 }
 
 }  // namespace ttml::schedulers

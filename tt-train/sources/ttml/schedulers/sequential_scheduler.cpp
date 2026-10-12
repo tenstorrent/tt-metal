@@ -74,7 +74,7 @@ void SequentialScheduler::step() {
     m_last_lrs = scheduler.get_last_lrs();
 }
 
-void SequentialScheduler::set_state_dict(const serialization::StateDict &dict) {
+void SequentialScheduler::restore_own_state(const serialization::StateDict &dict) {
     const auto index = serialization::get_value_type<size_t>(dict, "m_current_scheduler_index");
     const auto step_in_scheduler = serialization::get_value_type<int>(dict, "m_current_step_in_scheduler");
     if (index >= m_schedulers.size()) {
@@ -90,7 +90,6 @@ void SequentialScheduler::set_state_dict(const serialization::StateDict &dict) {
             index,
             m_milestones[index]));
     }
-    validate_state_dict(dict);
 
     // Restore every wrapped child scheduler's state. Each child ``i`` reads
     // back its keys from the flat dict under the ``scheduler_{i}/`` prefix.
@@ -129,13 +128,6 @@ void SequentialScheduler::set_state_dict(const serialization::StateDict &dict) {
     // Only after the children accepted their states, so a rejected state dict leaves the chain's position unchanged.
     m_current_scheduler_index = index;
     m_current_step_in_scheduler = step_in_scheduler;
-
-    // Restoring a child also writes that child's LRs to the optimizer (every
-    // set_state_dict ends with apply_lrs), so after the loop the optimizer holds
-    // the LAST child's LRs, even if another child is the active one. The base
-    // restore ends with apply_lrs() too, which here re-applies the LRs of the
-    // current child, fixing that.
-    LRSchedulerBase::set_state_dict(dict);
 }
 serialization::StateDict SequentialScheduler::get_state_dict() const {
     auto res = LRSchedulerBase::get_state_dict();

@@ -1568,7 +1568,9 @@ def test_rejected_scheduler_state_leaves_scheduler_unchanged(expect_error):
     opt = _make_opt(0.3)
     dst = StepScheduler(opt, step_size=1, gamma=0.5)
     dst.step()
-    with expect_error(ValueError, "Scheduler checkpoint has 2 param groups, but the optimizer has 1"):
+    with expect_error(
+        ValueError, "Scheduler checkpoint has 2 base LRs and 2 last LRs, but the optimizer has 1 param groups"
+    ):
         dst.set_state_dict(two_group_state)
 
     # Neither the base state nor the StepScheduler hyperparameters changed.
@@ -1576,6 +1578,21 @@ def test_rejected_scheduler_state_leaves_scheduler_unchanged(expect_error):
     assert dst.get_state_dict()["m_base_lrs"] == pytest.approx([0.3])
     dst.step()
     assert opt.get_group_lrs() == pytest.approx([0.3 * 0.25])
+
+
+def test_state_with_wrong_last_lrs_count_leaves_scheduler_unchanged(expect_error):
+    src = StepScheduler(_make_opt(), step_size=2, gamma=0.1)
+    state = dict(src.get_state_dict())
+    state["m_last_lrs"] = [BASE_LR, BASE_LR]
+
+    opt = _make_opt()
+    dst = StepScheduler(opt, step_size=1, gamma=0.5)
+    before = dst.get_state_dict()
+    with expect_error(
+        ValueError, "Scheduler checkpoint has 1 base LRs and 2 last LRs, but the optimizer has 1 param groups"
+    ):
+        dst.set_state_dict(state)
+    assert dst.get_state_dict() == before
 
 
 def test_lambda_restore_does_not_call_a_stateful_callable():
@@ -1632,7 +1649,7 @@ def test_sequential_rejected_child_state_rolls_back(expect_error):
 
 
 def test_lambda_restore_applies_lr_from_restored_callable_state():
-    """On load the LR is re-applied from the checkpointed callable state, not from a freshly built callable."""
+    """On load the LR comes from the checkpoint and the callable state is restored, not taken from a fresh callable."""
 
     class _Scaled:
         def __init__(self):
@@ -1652,3 +1669,4 @@ def test_lambda_restore_applies_lr_from_restored_callable_state():
     dst = LambdaScheduler(dst_opt, _Scaled())  # fresh callable: scale 1.0
     dst.set_state_dict(state)
     assert dst_opt.get_group_lrs()[0] == pytest.approx(BASE_LR * 0.25, abs=1e-8)
+    assert dst._lr_lambda.scale == 0.25

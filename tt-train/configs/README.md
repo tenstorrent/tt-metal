@@ -291,7 +291,8 @@ top-level values. LR schedulers drive every group from its own base LR.
 |-----------|-------------------|---------------------|
 | `AdamW` | `lr`, `beta1`, `beta2`, `epsilon`, `weight_decay` | `amsgrad`, `stochastic_rounding` |
 | `AdamWFullPrecision` | `lr`, `beta1`, `beta2`, `epsilon`, `weight_decay` | `amsgrad` |
-| `MorehAdamW`, `AdamWComposite` | `lr`, `beta1`, `beta2`, `epsilon`, `weight_decay` | `amsgrad`, `kahan_summation` |
+| `MorehAdamW` | `lr`, `beta1`, `beta2`, `epsilon`, `weight_decay` | - |
+| `AdamWComposite` | `lr`, `beta1`, `beta2`, `epsilon`, `weight_decay` | `amsgrad`, `kahan_summation` |
 | `SGD`, `SGDComposite` | `lr`, `momentum`, `dampening`, `weight_decay` | `nesterov` |
 | `MuonComposite` | `lr`, `momentum` | `ns_steps` |
 

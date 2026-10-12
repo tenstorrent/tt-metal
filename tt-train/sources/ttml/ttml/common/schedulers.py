@@ -105,18 +105,28 @@ class _SchedulerBase:
         }
 
     def set_state_dict(self, state: dict):
-        """Restore the step count and base LRs, then re-apply the LRs at that step."""
-        self._validate_state_dict(state)
-        self._last_step = state["m_last_step"]
-        self._base_lrs = list(state["m_base_lrs"])
-        self._apply_lrs()
+        """Restore the step count, base LRs and the subclass's own state, then write the saved last LRs back.
 
-    def _validate_state_dict(self, state: dict):
-        """Raise if ``state`` cannot be restored onto this scheduler"""
-        num_saved = len(state["m_base_lrs"])
+        Raises without changing the scheduler if ``state`` is rejected.
+        """
+        last_step, base_lrs, last_lrs = state["m_last_step"], list(state["m_base_lrs"]), list(state["m_last_lrs"])
         num_groups = len(self._optimizer.get_group_lrs())
-        if num_saved != num_groups:
-            raise ValueError(f"Scheduler checkpoint has {num_saved} param groups, but the optimizer has {num_groups}")
+        if len(base_lrs) != num_groups or len(last_lrs) != num_groups:
+            raise ValueError(
+                f"Scheduler checkpoint has {len(base_lrs)} base LRs and {len(last_lrs)} last LRs, "
+                f"but the optimizer has {num_groups} param groups"
+            )
+        self._restore_own_state(state)
+        # The saved LRs are written back rather than recomputed, so a LambdaScheduler's callable is not called on load.
+        self._optimizer.set_group_lrs(last_lrs)
+        self._last_step, self._base_lrs, self._last_lrs = last_step, base_lrs, last_lrs
+
+    def _restore_own_state(self, state: dict):
+        """Read and assign the subclass's own state.
+
+        ``set_state_dict`` calls it after reading the base state and before assigning it, so it must leave the
+        scheduler unchanged if it raises.
+        """
 
 
 class CosineAnnealingScheduler(_SchedulerBase):
@@ -140,11 +150,8 @@ class CosineAnnealingScheduler(_SchedulerBase):
         state["m_eta_min"] = self._eta_min
         return state
 
-    def set_state_dict(self, state: dict):
-        t_max, eta_min = state["m_T_max"], state["m_eta_min"]
-        self._validate_state_dict(state)
-        self._T_max, self._eta_min = t_max, eta_min
-        super().set_state_dict(state)
+    def _restore_own_state(self, state: dict):
+        self._T_max, self._eta_min = state["m_T_max"], state["m_eta_min"]
 
 
 class StepScheduler(_SchedulerBase):
@@ -169,11 +176,8 @@ class StepScheduler(_SchedulerBase):
         state["m_gamma"] = self._gamma
         return state
 
-    def set_state_dict(self, state: dict):
-        step_size, gamma = state["m_step_size"], state["m_gamma"]
-        self._validate_state_dict(state)
-        self._step_size, self._gamma = step_size, gamma
-        super().set_state_dict(state)
+    def _restore_own_state(self, state: dict):
+        self._step_size, self._gamma = state["m_step_size"], state["m_gamma"]
 
 
 class LinearScheduler(_SchedulerBase):
@@ -204,11 +208,12 @@ class LinearScheduler(_SchedulerBase):
         state["m_total_steps"] = self._total_steps
         return state
 
-    def set_state_dict(self, state: dict):
-        start_factor, end_factor, total_steps = state["m_start_factor"], state["m_end_factor"], state["m_total_steps"]
-        self._validate_state_dict(state)
-        self._start_factor, self._end_factor, self._total_steps = start_factor, end_factor, total_steps
-        super().set_state_dict(state)
+    def _restore_own_state(self, state: dict):
+        self._start_factor, self._end_factor, self._total_steps = (
+            state["m_start_factor"],
+            state["m_end_factor"],
+            state["m_total_steps"],
+        )
 
 
 class LambdaScheduler(_SchedulerBase):
@@ -234,18 +239,10 @@ class LambdaScheduler(_SchedulerBase):
             state["m_lr_lambda"] = self._lr_lambda.__dict__.copy()
         return state
 
-    def set_state_dict(self, state: dict):
+    def _restore_own_state(self, state: dict):
         lr_lambda_state = state.get("m_lr_lambda")
-        self._validate_state_dict(state)
         if lr_lambda_state is not None:
             self._lr_lambda.__dict__.update(lr_lambda_state)
-        # Unlike the other schedulers, the LRs are not recomputed: that would call the callable once more and advance
-        # any state it keeps (a counter, say), so the resumed callable would be one call ahead.
-        # The restored callable is not called on load; the saved last LRs are written back instead.
-        self._last_step = state["m_last_step"]
-        self._base_lrs = list(state["m_base_lrs"])
-        self._last_lrs = list(state["m_last_lrs"])
-        self._optimizer.set_group_lrs(self._last_lrs)
 
 
 class SequentialScheduler(_SchedulerBase):
@@ -322,7 +319,7 @@ class SequentialScheduler(_SchedulerBase):
                 state[prefix + k] = v
         return state
 
-    def set_state_dict(self, state: dict):
+    def _restore_own_state(self, state: dict):
         # NOTE: assumes the destination ``SequentialScheduler`` was constructed
         # with the same number of children as the source. A size mismatch will
         # cause the child's ``set_state_dict`` to raise ``KeyError`` because
@@ -339,7 +336,6 @@ class SequentialScheduler(_SchedulerBase):
                 f"SequentialScheduler state has {step_in_scheduler} steps in scheduler {index}, "
                 f"outside [0, {self._milestones[index]}]"
             )
-        self._validate_state_dict(state)
         # A later child can still reject its state after earlier ones were restored (and wrote their LRs to the
         # optimizer), so snapshot everything and roll back on failure.
         snapshots = [child.get_state_dict() for child in self._schedulers]
@@ -357,10 +353,3 @@ class SequentialScheduler(_SchedulerBase):
         # Only after the children accepted their states, so a rejected state dict leaves the chain's position unchanged.
         self._current_scheduler_index = index
         self._current_step_in_scheduler = step_in_scheduler
-
-        # Restoring a child also writes that child's LRs to the optimizer (every
-        # set_state_dict ends with _apply_lrs), so after the loop the optimizer
-        # holds the LAST child's LRs, even if another child is the active one.
-        # The base restore ends with _apply_lrs() too, which here re-applies the
-        # LRs of the current child, fixing that.
-        super().set_state_dict(state)

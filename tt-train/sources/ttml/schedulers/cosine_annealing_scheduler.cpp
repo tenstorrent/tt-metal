@@ -31,13 +31,11 @@ serialization::StateDict CosineAnnealingScheduler::get_state_dict() const {
     return res;
 }
 
-void CosineAnnealingScheduler::set_state_dict(const serialization::StateDict& dict) {
+void CosineAnnealingScheduler::restore_own_state(const serialization::StateDict& dict) {
     const auto t_max = serialization::get_value_type<size_t>(dict, "m_T_max");
     const auto eta_min = serialization::get_value_type<float>(dict, "m_eta_min");
-    validate_state_dict(dict);
     m_T_max = t_max;
     m_eta_min = eta_min;
-    LRSchedulerBase::set_state_dict(dict);
 }
 
 }  // namespace ttml::schedulers

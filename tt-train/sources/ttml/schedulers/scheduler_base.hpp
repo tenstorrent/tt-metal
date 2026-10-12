@@ -35,15 +35,16 @@ public:
     // Derived schedulers add their own hyperparameters on top.
     [[nodiscard]] virtual serialization::StateDict get_state_dict() const;
 
-    // Restores the step count and the base LRs, then re-applies the LRs at that step.
-    // Derived schedulers read their own hyperparameters.
+    // Restores the step count, the base LRs and the derived scheduler's own state, then writes the saved last LRs
+    // back to the optimizer. Throws without changing the scheduler if the state dict is rejected.
     virtual void set_state_dict(const serialization::StateDict &dict);
 
 private:
     core::not_null<optimizers::OptimizerBase *> m_optimizer;
 
 protected:
-    void validate_state_dict(const serialization::StateDict &dict) const;
+    // Reads and assigns the derived scheduler's own state.
+    virtual void restore_own_state(const serialization::StateDict &dict);
 
     // LR of one param group at m_last_step, given the group's base LR.
     [[nodiscard]] virtual float compute_lr(float base_lr) const = 0;

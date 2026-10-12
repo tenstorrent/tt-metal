@@ -16,10 +16,10 @@ public:
 
     [[nodiscard]] serialization::StateDict get_state_dict() const override;
 
-    void set_state_dict(const serialization::StateDict &dict) override;
-
 protected:
     [[nodiscard]] float compute_lr(float base_lr) const override;
+
+    void restore_own_state(const serialization::StateDict &dict) override;
 
 private:
     size_t m_step_size = 0;

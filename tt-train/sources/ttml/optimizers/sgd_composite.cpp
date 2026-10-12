@@ -128,9 +128,9 @@ serialization::StateDict SGDComposite::get_state_dict() const {
 }
 
 void SGDComposite::set_state_dict(const serialization::StateDict& dict) {
+    restore_param_groups(dict);
     m_theta = std::get<serialization::NamedParameters>(dict.at("theta"));
     m_steps = serialization::get_value_type<size_t>(dict, "steps");
-    restore_param_groups(dict);
     // Restored buffers are treated as past their first update. Buffers are preallocated
     // for every trainable parameter, so a buffer that never received a gradient before the
     // checkpoint (frozen parameter, or a checkpoint saved before any step) is also marked,

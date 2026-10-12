@@ -542,6 +542,29 @@ TEST(LambdaSchedulerTest, StateDictRoundTripRestoresStepAndLR) {
     }
 }
 
+TEST(LambdaSchedulerTest, StateDictRestoreDoesNotCallLambda) {
+    // Restoring writes back the saved LRs; calling a stateful callable again would advance it.
+    int src_calls = 0;
+    auto src_opt = std::make_unique<ttml::optimizers::MockOptimizer>(1.0F);
+    ttml::schedulers::LambdaScheduler src(
+        src_opt.get(), [&src_calls](int) { return 1.0F / static_cast<float>(++src_calls); });
+    for (int i = 0; i < 3; ++i) {
+        src.step();
+    }
+    auto state = src.get_state_dict();
+
+    int dst_calls = 0;
+    auto dst_opt = std::make_unique<ttml::optimizers::MockOptimizer>(1.0F);
+    ttml::schedulers::LambdaScheduler dst(
+        dst_opt.get(), [&dst_calls](int) { return 1.0F / static_cast<float>(++dst_calls); });
+    ASSERT_EQ(dst_calls, 1);  // lambda(0) at construction
+    dst.set_state_dict(state);
+
+    EXPECT_EQ(dst_calls, 1);
+    EXPECT_EQ(dst.get_last_lrs(), src.get_last_lrs());
+    EXPECT_FLOAT_EQ(dst_opt->lr(), src_opt->lr());
+}
+
 TEST(SequentialSchedulerTest, StateDictSavesAllChildSchedulers) {
     // Build a Linear-warmup -> Linear-decay chain and step partway into the
     // *second* child. The state dict must contain entries for BOTH children
@@ -1012,6 +1035,63 @@ TEST(ParamGroupSchedulingTest, RejectedStateDictLeavesSchedulerUnchanged) {
     EXPECT_FLOAT_EQ(one_group.lr(), 0.15F);
     dst.step();  // still usable
     EXPECT_FLOAT_EQ(one_group.lr(), 0.075F);
+}
+
+TEST(ParamGroupSchedulingTest, StateDictMissingBaseKeyLeavesSchedulerUnchanged) {
+    // The base state is read before a derived scheduler assigns its own state, so a rejected dict changes nothing.
+    ttml::optimizers::MockOptimizer src_opt(0.3F);
+    ttml::schedulers::StepScheduler src(&src_opt, /*step_size=*/2, /*gamma=*/0.1F);
+    src.step();
+    auto state = src.get_state_dict();
+    state.erase("m_last_step");
+
+    ttml::optimizers::MockOptimizer dst_opt(0.3F);
+    ttml::schedulers::StepScheduler dst(&dst_opt, /*step_size=*/1, /*gamma=*/0.5F);
+    EXPECT_ANY_THROW(dst.set_state_dict(state));
+    const auto after = dst.get_state_dict();
+    EXPECT_EQ(ttml::serialization::get_value_type<size_t>(after, "m_step_size"), 1U);
+    EXPECT_FLOAT_EQ(ttml::serialization::get_value_type<float>(after, "m_gamma"), 0.5F);
+}
+
+TEST(SequentialSchedulerTest, StateDictMissingBaseKeyLeavesChildrenUnchanged) {
+    auto make_chain = [](ttml::optimizers::OptimizerBase *opt, float gamma) {
+        std::vector<std::unique_ptr<ttml::schedulers::LRSchedulerBase>> children;
+        children.push_back(std::make_unique<ttml::schedulers::LinearScheduler>(opt, 0.5F, 1.0F, 2));
+        children.push_back(std::make_unique<ttml::schedulers::StepScheduler>(opt, 1, gamma));
+        return ttml::schedulers::SequentialScheduler(opt, std::move(children), std::vector<size_t>{2U, 4U});
+    };
+    ttml::optimizers::MockOptimizer src_opt(0.3F);
+    auto src = make_chain(&src_opt, /*gamma=*/0.1F);
+    for (int i = 0; i < 3; ++i) {
+        src.step();
+    }
+    auto state = src.get_state_dict();
+    state.erase("m_last_step");
+
+    ttml::optimizers::MockOptimizer dst_opt(0.3F);
+    auto dst = make_chain(&dst_opt, /*gamma=*/0.5F);
+    const auto before = dst.get_state_dict();
+    EXPECT_ANY_THROW(dst.set_state_dict(state));
+    const auto after = dst.get_state_dict();
+    EXPECT_FLOAT_EQ(ttml::serialization::get_value_type<float>(after, "scheduler_1/m_gamma"), 0.5F);
+    EXPECT_EQ(
+        ttml::serialization::get_value_type<size_t>(after, "scheduler_1/m_last_step"),
+        ttml::serialization::get_value_type<size_t>(before, "scheduler_1/m_last_step"));
+    EXPECT_FLOAT_EQ(dst_opt.lr(), 0.3F * 0.5F);
+}
+
+TEST(ParamGroupSchedulingTest, StateDictWithWrongLastLrsCountLeavesSchedulerUnchanged) {
+    ttml::optimizers::MockOptimizer src_opt(0.3F);
+    ttml::schedulers::StepScheduler src(&src_opt, /*step_size=*/2, /*gamma=*/0.1F);
+    auto state = src.get_state_dict();
+    state["m_last_lrs"] = std::vector<float>{0.3F, 0.3F};
+
+    ttml::optimizers::MockOptimizer dst_opt(0.3F);
+    ttml::schedulers::StepScheduler dst(&dst_opt, /*step_size=*/1, /*gamma=*/0.5F);
+    EXPECT_THROW(dst.set_state_dict(state), std::runtime_error);
+    const auto after = dst.get_state_dict();
+    EXPECT_EQ(ttml::serialization::get_value_type<size_t>(after, "m_step_size"), 1U);
+    EXPECT_FLOAT_EQ(ttml::serialization::get_value_type<float>(after, "m_gamma"), 0.5F);
 }
 
 TEST(SequentialSchedulerTest, RejectedChildStateRollsBack) {
