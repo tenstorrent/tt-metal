@@ -1437,8 +1437,9 @@ class MiniMaxH3Pipeline:
         )
 
     def _prepare_transformer(self) -> MiniMaxH3Transformer3DModel:
-        # VSA adds the zero-init `to_gate_compress` weights, so it caches apart from the dense build.
-        vsa_suffix = "_vsa" if self.vsa_config is not None else ""
+        # Only a VSA build with the `to_gate_compress` linear changes the weight set; without it the
+        # dense cache is reused as is.
+        vsa_suffix = "_vsa" if self.vsa_config is not None and self.vsa_config.gate_compress else ""
         cache.load_model(
             self._transformer,
             model_name=MODEL_NAME,
