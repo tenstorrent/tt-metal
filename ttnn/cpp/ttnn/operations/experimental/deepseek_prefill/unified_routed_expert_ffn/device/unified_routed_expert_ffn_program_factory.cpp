@@ -220,13 +220,18 @@ tt::tt_metal::ProgramDescriptor UnifiedRoutedExpertFfnProgramFactory::create_des
     uint32_t chunk_M_tiles = kMaxChunkMTiles;
     uint32_t in0_block_w_gu = 16;
     const auto grid_size = t.x.device()->compute_with_storage_grid_size();
+    const CoreCoord origin = op.core_grid_origin;
     TT_FATAL(
-        grid_size.x >= kCoreGridX && grid_size.y >= kCoreGridY,
-        "unified_routed_expert_ffn: expected at least {}x{} compute grid, got {}x{}",
+        origin.x + kCoreGridX <= grid_size.x && origin.y + kCoreGridY <= grid_size.y,
+        "unified_routed_expert_ffn: a {}x{} grid at origin ({}, {}) does not fit the {}x{} compute grid",
         kCoreGridX,
         kCoreGridY,
+        origin.x,
+        origin.y,
         grid_size.x,
         grid_size.y);
+    // Grid-relative (gx, gy) -> device logical core.
+    const auto logical_core = [origin](uint32_t gx, uint32_t gy) { return CoreCoord{origin.x + gx, origin.y + gy}; };
     // per_core_M upper bound (the CB-sized max). The adaptive L1-budget guard
     // below may shrink per_core_M / in0_block_w_gu (and hence chunk_M_tiles) to
     // fit the device's per-core L1 on large models.
@@ -550,7 +555,7 @@ tt::tt_metal::ProgramDescriptor UnifiedRoutedExpertFfnProgramFactory::create_des
     const uint32_t d_out_block_num_tiles = per_core_M * per_core_N_d;
 
     // -------------------------- compute grid ------------------------------
-    const CoreRange core_range({0, 0}, {GRID_X - 1, GRID_Y - 1});
+    const CoreRange core_range(logical_core(0, 0), logical_core(GRID_X - 1, GRID_Y - 1));
     const CoreRangeSet core_range_set{core_range};
 
     // Representative expert-0 buffers: one TensorAccessorArgs layout descriptor
@@ -1174,7 +1179,7 @@ tt::tt_metal::ProgramDescriptor UnifiedRoutedExpertFfnProgramFactory::create_des
     cores.reserve(GRID_X * GRID_Y);
     for (uint32_t gy = 0; gy < GRID_Y; ++gy) {
         for (uint32_t gx = 0; gx < GRID_X; ++gx) {
-            cores.push_back(CoreCoord{gx, gy});
+            cores.push_back(logical_core(gx, gy));
         }
     }
 
@@ -1215,14 +1220,14 @@ tt::tt_metal::ProgramDescriptor UnifiedRoutedExpertFfnProgramFactory::create_des
             gy);
 
         const bool is_in1_sender = (gy == in1_sender_row);
-        const auto sender_noc = device->worker_core_from_logical_core(CoreCoord{gx, in1_sender_row});
+        const auto sender_noc = device->worker_core_from_logical_core(logical_core(gx, in1_sender_row));
         // The rectangle spans the WHOLE column, sender included: a multicast rectangle
         // must be contiguous and the sender is no longer on an edge row, so "everything
         // but the sender" is not expressible as one rectangle. The non-loopback
         // multicast drops the sender's own copy (it already holds the block), so
         // num_dests stays GRID_Y - 1.
-        const auto first_recv_noc = device->worker_core_from_logical_core(CoreCoord{gx, 0});
-        const auto last_recv_noc = device->worker_core_from_logical_core(CoreCoord{gx, GRID_Y - 1});
+        const auto first_recv_noc = device->worker_core_from_logical_core(logical_core(gx, 0));
+        const auto last_recv_noc = device->worker_core_from_logical_core(logical_core(gx, GRID_Y - 1));
         const uint32_t in1_num_receivers = GRID_Y - 1;
         const uint32_t in1_mcast_nx_start = first_recv_noc.x;
         const uint32_t in1_mcast_ny_start = first_recv_noc.y;
@@ -1234,9 +1239,9 @@ tt::tt_metal::ProgramDescriptor UnifiedRoutedExpertFfnProgramFactory::create_des
         // x (in0) multicast: per M-row, sender at in0_sender_col; the rectangle spans
         // the whole row for the same reason as the weight column above.
         const bool is_in0_sender = (gx == in0_sender_col);
-        const auto in0_sender_noc = device->worker_core_from_logical_core(CoreCoord{in0_sender_col, gy});
-        const auto in0_first_recv_noc = device->worker_core_from_logical_core(CoreCoord{0, gy});
-        const auto in0_last_recv_noc = device->worker_core_from_logical_core(CoreCoord{GRID_X - 1, gy});
+        const auto in0_sender_noc = device->worker_core_from_logical_core(logical_core(in0_sender_col, gy));
+        const auto in0_first_recv_noc = device->worker_core_from_logical_core(logical_core(0, gy));
+        const auto in0_last_recv_noc = device->worker_core_from_logical_core(logical_core(GRID_X - 1, gy));
         const uint32_t in0_num_receivers = GRID_X - 1;
         const uint32_t in0_mcast_nx_start = in0_first_recv_noc.x;
         const uint32_t in0_mcast_ny_start = in0_first_recv_noc.y;
@@ -1284,8 +1289,8 @@ tt::tt_metal::ProgramDescriptor UnifiedRoutedExpertFfnProgramFactory::create_des
         // spanning the whole worker grid; the non-loopback multicast drops the sender's
         // own copy, so num_dests is one less than the grid.
         {
-            const auto grid_first = device->worker_core_from_logical_core(CoreCoord{0, 0});
-            const auto grid_last = device->worker_core_from_logical_core(CoreCoord{GRID_X - 1, GRID_Y - 1});
+            const auto grid_first = device->worker_core_from_logical_core(logical_core(0, 0));
+            const auto grid_last = device->worker_core_from_logical_core(logical_core(GRID_X - 1, GRID_Y - 1));
             reader_args.push_back(static_cast<uint32_t>(gx == 0 && gy == 0));  // is_counts_reader
             reader_args.push_back(static_cast<uint32_t>(grid_first.x));
             reader_args.push_back(static_cast<uint32_t>(grid_first.y));
@@ -1305,7 +1310,7 @@ tt::tt_metal::ProgramDescriptor UnifiedRoutedExpertFfnProgramFactory::create_des
         // phase-4 K-block (kb=0..K_down_tiles_padded-1) to find the sender's
         // NoC addr and to build the M-row mcast rectangle.
         for (uint32_t gxi = 0; gxi < GRID_X; ++gxi) {
-            const auto noc = device->worker_core_from_logical_core(CoreCoord{gxi, gy});
+            const auto noc = device->worker_core_from_logical_core(logical_core(gxi, gy));
             reader_args.push_back(static_cast<uint32_t>(noc.x));
             reader_args.push_back(static_cast<uint32_t>(noc.y));
         }

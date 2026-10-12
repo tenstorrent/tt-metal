@@ -63,6 +63,8 @@ void bind_unified_routed_expert_ffn(nb::module_& mod) {
                 Silu (default, DeepSeek), SwiGluOai (clamped, MiniMax-M3 / gpt-oss),
                 SituGlu (tanh-capped, Kimi K3; Blackhole only), or ClampedSiluGlu
                 (silu(min(gate,10)) * clamp(up,+/-10), DeepSeek V4; Blackhole only).
+            core_grid_origin (ttnn.CoreCoord, optional): top-left logical core of the
+                fixed ``UNIFIED_ROUTED_EXPERT_CORE_GRID`` rectangle. Defaults to (0, 0).
 
         Each per-expert FFN picks its chunk_M_tiles / per_core_M / num_chunks at
         RUNTIME from the device-resident token count, so there is no expected-token
@@ -87,7 +89,8 @@ void bind_unified_routed_expert_ffn(nb::module_& mod) {
         nb::arg("up_biases") = nb::none(),
         nb::arg("down_biases") = nb::none(),
         nb::arg("min_active_tokens") = 0,
-        nb::arg("max_active_tokens") = std::numeric_limits<uint32_t>::max());
+        nb::arg("max_active_tokens") = std::numeric_limits<uint32_t>::max(),
+        nb::arg("core_grid_origin") = CoreCoord{0, 0});
 }
 
 }  // namespace ttnn::operations::experimental::deepseek_prefill::unified_routed_expert_ffn::detail
