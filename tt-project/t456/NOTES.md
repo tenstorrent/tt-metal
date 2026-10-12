@@ -49,3 +49,26 @@ noise is the sparse approximation; ~12 dB => plumbing bug (75776 rung, row_sourc
 - Log /var/log/tt-device-broker/2026-10-12_194205_036.log; read the `[t456] dev` lines.
 - Reading: a device with real PCC << 0.999 is the bug site; `all` > `real` means pad keys leak into softmax.
   All devices ~0.999 => layer 0 fine everywhere; next dump a later layer/step (T456_CALL skip count).
+
+## Step 2c result: job 036 (blx01, 19:42-19:47 UTC, ended T456_DUMP_DONE as designed, no drops, post-job health OK)
+- Layer 0 step 1, sparsity 0, every device 0-31, head 0, q tiles 0/37/73: device out vs dense over the 75449 real keys
+  PCC 0.9994-0.9999, except tile 0 on dev 0 (0.9961) and dev 24 (0.9934). Kernel excludes pad keys correctly
+  (`all` drops to 0.05/0.61 on dev 7/31 tail tiles, `real` stays 0.998+). No bad shard, no pad leak.
+- CPU read of the rest of the plumbing, no mismatch found: rung = geometry.padded_len (75776) for rope tables,
+  tsi/adaln row indices, assembly and output indices (pipeline_minimax_h3.py:2882-3003); build_sla_geometry is
+  identity with tail pads repeating a valid row; gate_compress is zero for these checkpoints (use_gate False).
+  The 100 vsa_sdpa calls before the first 9472-row call are the 76800-rung warm-up (outputs unused).
+- Key cross-check: #453 measured VSA-0.9 on Turbo at PSNR 19.1 dB and blamed dense-trained weights; SLA at
+  sparsity 0 here is 18.98 dB. Both go through vsa_sdpa, so the ~19 dB floor is probably the vsa_sdpa path
+  itself (kernel numerics on real data, worst on tile-0 rows: 0.993-0.996 per call, compounding over
+  50 layers x 4 steps), not sparsity and not SLA selection. #453's conclusion may be wrong too.
+
+## Next (not started; budget spent)
+1. Per-tile sweep: extend plug/t456_dump.py _check_all to every 128-row q tile on devices 0 and 24, heads 0-13,
+   print the 10 worst tiles (PCC vs fp32 dense over real keys). If the worst tiles sit well below the bf16
+   floor (~0.9995), the kernel numerics are the bug: read the vsa_sdpa compute kernel's math fidelity,
+   fp32_dest_acc, exp approximation and running-max handling against ring SDPA's (the dense path's) config.
+2. Same check at a later call (layer 49 of step 1, and layer 0 of step 4): count 9472-row calls in the plug
+   and check at T456_AT indices, to see whether the error grows with depth/step.
+3. Isolation e2e (one arm per job): MINIMAX_H3_VSA_MODE=vsa sparsity 0 with v1.0 LoRA. If it also gives ~19 dB,
+   the floor is shared vsa_sdpa plumbing/numerics, confirmed.
