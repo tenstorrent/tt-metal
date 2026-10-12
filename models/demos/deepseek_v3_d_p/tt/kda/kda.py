@@ -14,6 +14,7 @@ import ttnn
 from models.demos.deepseek_v3_d_p.reference.kda.config import KDA_SOFTPLUS_BETA, KDA_SOFTPLUS_THRESHOLD, KDAConfig
 from models.demos.deepseek_v3_d_p.tt.kda.chronological_selections import ChronologicalSelections
 from models.demos.deepseek_v3_d_p.tt.kda.config import (
+    KDA_ACTIVATION_L1_BYTES_PER_CORE,
     KDA_CHUNK_SIZE,
     KDA_DECAY_L1_BYTES_PER_CORE,
     KDA_OUTPUT_MEMORY_CONFIG,
@@ -191,6 +192,10 @@ class ttKDA:
         # The prepared chunk terms read the decay gate; L1 spares its DRAM round trip.
         self.decay_memory_config = l1_when_it_fits(
             mesh_device, self.active_seq_len_local * decay_width * 2, KDA_DECAY_L1_BYTES_PER_CORE
+        )
+        # The gated norm's output feeds only the output projection; keep it in L1 when it fits.
+        self.norm_memory_config = l1_when_it_fits(
+            mesh_device, self.active_seq_len_local * self.config.v_dim * 2, KDA_ACTIVATION_L1_BYTES_PER_CORE
         )
         # Experimental KDA operations reject packer_l1_acc=True because their kernels do not
         # accumulate through L1. Keep this separate from projection matmuls, which accept the flag.
@@ -415,7 +420,7 @@ class ttKDA:
             weights.norm,
             config.num_heads,
             epsilon=config.norm_eps,
-            memory_config=ttnn.DRAM_MEMORY_CONFIG,
+            memory_config=self.norm_memory_config,
             compute_kernel_config=self.kda_compute_config,
             output_dtype=self.gated_rms_output_dtype,
             gate_column_offset=output_gate_offset,

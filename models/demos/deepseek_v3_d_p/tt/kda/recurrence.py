@@ -8,12 +8,14 @@ perform the bespoke kernels exposed by ``ttnn.experimental.kda``.
 
 from __future__ import annotations
 
+import math
 from dataclasses import dataclass
 
 from loguru import logger
 
 import ttnn
 from models.demos.deepseek_v3_d_p.tt.kda.config import (
+    KDA_ACTIVATION_L1_BYTES_PER_CORE,
     KDA_AFFINE_SUMMARY_DTYPE,
     KDA_CHUNK_SIZE,
     KDA_DISTRIBUTED_PREFIX_MEMORY_CONFIG,
@@ -202,11 +204,15 @@ def _scan_chunks(
     compute_config: ttnn.DeviceComputeKernelConfig,
     groups_per_head: int = 1,
 ) -> RecurrenceResult:
+    # The output feeds only the gated norm; keep it in L1 when it fits.
+    output_memory = l1_when_it_fits(
+        prepared.v_beta.device(), math.prod(prepared.v_beta.shape) * 2, KDA_ACTIVATION_L1_BYTES_PER_CORE
+    )
     output, final_states = ttnn.experimental.kda.recurrent_chunk_scan(
         *prepared.as_kernel_args(),
         group_entry_states,
         groups_per_head=groups_per_head,
-        memory_config=KDA_OUTPUT_MEMORY_CONFIG,
+        memory_config=output_memory,
         compute_kernel_config=compute_config,
         actual_start=actual_start,
         actual_end=actual_end,
