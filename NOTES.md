@@ -34,3 +34,12 @@ Branch ttp/t409-port-vsa-sparse-attention-into-the-fasth, base a15eb37ec6a (t400
   cache + VSA kernels).
 - Note: I moved ttp/t409-... to d39d16e5c9b by mistake with `git branch -f` and restored it to a2dee6756f1 at once
   (update-ref); the t409 worktree was clean.
+
+## t416 run 1597 (2026-10-12 00:05 PDT)
+- Build409 finished 2026-10-12 05:42Z rc=0: the VSA C++ ops compile on the t400 base (compile check passed).
+- chain416a (run 1565) never submitted: device-lint refused run409a.sh for `setsid`. Both run409a.sh and
+  run409b.sh now run pytest in the broker's process group under `timeout --foreground -k 10` (b: watchdog stops
+  $PG and its children by pid). Both pass device-lint and killscan; copied to blx01 /var/tmp/fasth3/t409/.
+- chain416a restarted from run 1597: log $RUN/chain416a.out (state/runs/1597), rc chain416a.rc.
+  blx01 is busy with #408/#421/#430 jobs; the chain waits for 2 clear minutes, then submits.
+- Next: read /var/tmp/fasth3/t409/out_attn/run.log (PCC). Then step 4 once #408 is done.
