@@ -38,13 +38,13 @@ gated_attention_gated_deltanet/
 
 ## Environment Setup
 
-All TTNN tests require a Tenstorrent Wormhole device. Set up the environment from the `tt-metal` root:
+All TTNN tests require a Tenstorrent device. The Gated DeltaNet chunked-mode validation (`--mode chunk` below)
+runs on Blackhole only: its scan kernel's circular buffers fill a Wormhole core's L1 and leave no room for the
+validation's L1-resident inputs, so that test skips on Wormhole. Set up the environment from the `tt-metal` root:
 
 ```bash
 cd /path/to/tt-metal
 source python_env/bin/activate
-export ARCH_NAME=wormhole_b0
-export WH_ARCH_YAML=wormhole_b0_80_arch_eth_dispatch.yaml
 export TT_METAL_HOME=$(pwd)
 export PYTHONPATH=$(pwd)
 ```
@@ -82,7 +82,7 @@ python models/experimental/gated_attention_gated_deltanet/tests/test_ttnn_valida
 # Validate Gated DeltaNet with a specific sequence length
 python models/experimental/gated_attention_gated_deltanet/tests/test_ttnn_validation.py --module deltanet --seq-len 32
 
-# Validate Gated DeltaNet in chunked mode (for prefill)
+# Validate Gated DeltaNet in chunked mode (for prefill); Blackhole only
 python models/experimental/gated_attention_gated_deltanet/tests/test_ttnn_validation.py --module deltanet --mode chunk --seq-len 128 --chunk-size 64
 ```
 
