@@ -52,3 +52,9 @@ deadline 400 s):
   Our on-arm try (run 1605) refused at submit, no job of ours ran.
 - submit_on.sh now also waits (2 min steps, up to 5 h) while the broker holds the device or the box is unreachable.
   Relaunched detached as run 1606 t422on4; log state/on.log ends with "T422ON_DONE <rc>".
+- The submit then passed health but the lint refused: /var/tmp/fasth3 on blx01 was 453 GB (cap 450). Deleted
+  /var/tmp/fasth3/t400/b (3.0 GB; #400 done, referenced only by t400's own scripts) -> 450 GB. Kept t284/b (base build
+  for t286/t408/t409/t420/t421 setups) and t408/b (our off arm). cache/dit-h3hf (152 GB) and
+  cache/tt-metal-cache-h3hf (45 GB) are most of the footprint.
+- Relaunched as run 1606 t422on5: on arm is blx01 job 875 (queued 07:34 UTC). Log state/on.log, "T422ON_DONE <rc>".
+- Next: read state/on.log; compare per-step times (relative, clamp) and md5 with the off arm (job 860).

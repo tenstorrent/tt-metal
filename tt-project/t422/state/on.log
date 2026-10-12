@@ -106,3 +106,14 @@ blx01: broker holds the device:   --          🔧 broker  1m7s     device HELD 
 ttp-heal-key: blx01-degraded-hold
 2026-10-12T07:32:09Z T422ON_DONE 1
 2026-10-12T07:33:11Z run 1606: drop on blx01 (chip 24 off PCIe after job 868, fabric-check 870 failed, broker hold); submitter waits for recovery
+blx01: broker up, device not held
+lint: ERROR /var/tmp/fasth3 on g15blx01 is 453 GB, over its 450 GB cap: delete our outputs and caches first
+lint: refused; fix the problems above before launching
+2026-10-12T07:33:19Z T422ON_DONE 2
+2026-10-12T07:34:50Z run 1606: deleted /var/tmp/fasth3/t400/b on blx01 (#400 done) for the 450 GB cap; relaunch
+blx01: broker up, device not held
+Job 875 queued (position: 1)
+Log: /var/log/tt-device-broker/2026-10-12_073456_875.log
+job=875
+retry_when: ssh -o BatchMode=yes -o ConnectTimeout=20 g15blx01 'tt-device-mcp status -j 875 | grep -q ^Status: && ! tt-device-mcp status -j 875 | grep -qiE "^Status: +(running|queued|pending)"'
+2026-10-12T07:34:56Z on: try 1 job 875 submitted
