@@ -322,6 +322,8 @@ class ModelArgs:
         load entirely (the load that OOMs/hangs during prefill, #48509) without needing the
         manual --skip-model-load flag. Set GPT_OSS_FORCE_MODEL_LOAD=1 to force a fresh load
         (e.g. to regenerate the cache)."""
+        # VALIDATION PROBE ONLY (#60193): always take the cold load, whatever the cache holds.
+        return False
         if os.getenv("GPT_OSS_FORCE_MODEL_LOAD") == "1":
             return False
         cache_path = self.weight_cache_path(dtype)
