@@ -40,7 +40,10 @@ _WARMUP_ITERS = max(1, int(os.environ.get("TT_TRACE_WARMUP_ITERS", "3")))
 # How far into a container the read-set walk looks for tensors. Op arguments nest a level or two
 # (a list of tensors, a dict of them); anything deeper is structure, not a read set.
 _NOTE_MAX_DEPTH = 3
-_REPLAY_ITERS = max(1, int(os.environ.get("TT_TRACE_REPLAY_ITERS", "16")))
+# The replay count an operator may ask for (emit-e2e / optimize --trace-replays set it); this is its
+# one spelling, which the CLI and the gate server forward by name.
+REPLAY_ITERS_ENV = "TT_TRACE_REPLAY_ITERS"
+_REPLAY_ITERS = max(1, int(os.environ.get(REPLAY_ITERS_ENV, "16")))
 
 
 # HOW MANY REPLAYS TO AVERAGE IS A CONSEQUENCE OF WHAT ONE COSTS, NOT A NUMBER PER MODEL.

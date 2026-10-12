@@ -2536,6 +2536,14 @@ def _run_emit_e2e_cc(*, model_id, demo_dir, pcc, timeout_s, agent_bin, max_round
     # count its failures under a different run than this one (see device_recovery.stamp_run).
     if _os.environ.get("PERF_MCP_RUN_ID"):
         mcp_env["PERF_MCP_RUN_ID"] = _os.environ["PERF_MCP_RUN_ID"]
+    # The server's trace gate runs the replays, so an operator's --trace-replays must reach it too.
+    try:
+        from models.experimental.perf_automation.agent.trace_replay import REPLAY_ITERS_ENV
+
+        if _os.environ.get(REPLAY_ITERS_ENV):
+            mcp_env[REPLAY_ITERS_ENV] = _os.environ[REPLAY_ITERS_ENV]
+    except Exception as exc:  # noqa: BLE001 -- the gate still runs, at trace_replay's own count
+        print("  [emit-e2e] WARNING: the gate server will not see --trace-replays (%s)" % exc, file=sys.stderr)
     # The server runs the device gates, and this env is built from scratch: carry the run's thermal tag
     # and plugin explicitly rather than trusting the agent CLI to pass its own environment through.
     mcp_env = _thermal_env(mcp_env)

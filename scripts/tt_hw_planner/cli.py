@@ -10242,6 +10242,7 @@ from .commands.emit_e2e import cmd_emit_e2e  # noqa: F401
 from .commands.optimize import cmd_optimize  # noqa: F401
 from .commands.optimize_dashboard import cmd_optimize_dashboard  # noqa: F401
 from .commands.autocommit import wrap as _autocommit_wrap, add_commit_push_args as _add_commit_push_args  # noqa: F401
+from ._cli_helpers.trace_replays import add_trace_replays_arg, apply_trace_replays
 from .commands.publish_hf import cmd_publish_hf  # noqa: F401
 from .commands.run_demo import cmd_run_demo  # noqa: F401
 from .commands.auto_onboard import cmd_auto_onboard  # noqa: F401
@@ -11425,6 +11426,7 @@ def main(argv: Optional[List[str]] = None) -> int:
             "on a 32 GB Blackhole box). Omit to keep the prompt unchanged."
         ),
     )
+    add_trace_replays_arg(pe2e)
     _add_commit_push_args(pe2e)
     pe2e.set_defaults(func=_autocommit_wrap(cmd_emit_e2e, "emit-e2e"))
 
@@ -11642,6 +11644,7 @@ def main(argv: Optional[List[str]] = None) -> int:
         "together with --achievable-low. Default: the model's physics-derived band "
         "(dense 60-80%%, MoE 37.5-50%%).",
     )
+    add_trace_replays_arg(popt)
     _add_commit_push_args(popt)
     popt.set_defaults(func=_autocommit_wrap(cmd_optimize, "optimize"))
 
@@ -11752,15 +11755,22 @@ def main(argv: Optional[List[str]] = None) -> int:
     pph.add_argument("--public", action="store_true", help="push the bundle public (shared by link)")
     pph.add_argument("--publish", action="store_true", help="push public AND list in the catalog")
     pph.add_argument(
-        "--no-commit-push", dest="commit_push", action="store_false", default=True,
+        "--no-commit-push",
+        dest="commit_push",
+        action="store_false",
+        default=True,
         help="Do NOT auto-commit+push the model to its repo after a clean publish (default: do).",
     )
     pph.add_argument(
-        "--commit-remote", default=None,
+        "--commit-remote",
+        default=None,
         help="Git remote for the post-publish auto-commit (default: branch upstream, else 'apande', else 'origin').",
     )
     pph.add_argument(
-        "--no-mirror-upstream", dest="mirror_upstream", action="store_false", default=True,
+        "--no-mirror-upstream",
+        dest="mirror_upstream",
+        action="store_false",
+        default=True,
         help="Do NOT mirror the upstream HF model card (default: publish a card matching the upstream model's structure, with a TT-validated header).",
     )
     pph.set_defaults(func=cmd_publish_hf)
@@ -12081,4 +12091,5 @@ def main(argv: Optional[List[str]] = None) -> int:
         except Exception:
             pass
 
+    apply_trace_replays(args)
     return args.func(args)
