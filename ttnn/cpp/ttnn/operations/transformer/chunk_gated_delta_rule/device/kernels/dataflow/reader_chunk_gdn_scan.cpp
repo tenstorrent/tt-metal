@@ -111,9 +111,11 @@ void kernel_main() {
     // mechanism: a producer sends chunk c only once every receiver of the head has reserved chunk
     // c's slots, so at most one hand-off per receiver is in flight and VALIDs cannot interleave.
     // N_INIT = init-barrier increments to expect before the first credit (NP in the per-head form).
-    // The producers' virtual worker coords follow as NP (x, y) pairs from arg 6.
+    // The producers' virtual worker coords follow as NP (x, y) pairs from arg 6, then the DRAM row
+    // offset of this program's head 0 in initial_state (the protocol's head indices start at 0).
     const uint32_t NP = get_arg_val<uint32_t>(4);
     const uint32_t N_INIT = get_arg_val<uint32_t>(5);
+    const uint32_t s0_row = h + get_arg_val<uint32_t>(6 + 2 * NP);
 #elif defined(GDN_MCAST_RECEIVER)
     const uint32_t vb_addr = get_arg_val<uint32_t>(3);
     const uint32_t s0_addr = get_arg_val<uint32_t>(4);
@@ -191,7 +193,11 @@ void kernel_main() {
 
     // initial state S [K, V] (once) — a required input (the public op builds zeros for a fresh sequence). V-sliced
     // (degenerates to the full state on fused receivers: vb = 0, Vt = Vt_full).
+#if defined(GDN_FUSED_RECEIVER)
+    read_vslice(s0_acc, cb_S, s0_row * Kt * Vt_full, Kt);
+#else
     read_vslice(s0_acc, cb_S, h * Kt * Vt_full, Kt);
+#endif
 
     // One fp32 identity tile for the compute's `I @ v_beta` DST accumulation (scan_step). Written once,
     // never popped: the NoC zero-fills the tile (a loopback read of the firmware's zero region, no RISC
