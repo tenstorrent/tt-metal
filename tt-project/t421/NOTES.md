@@ -52,3 +52,15 @@
   blx01 / now 165 GB free.
 - g15blx02 rebooted ~01:03 PDT and killed the run. Relaunched chain (off-s0..on-s4) and post421.sh
   detached in run 1615.
+
+## Status 2026-10-12 05:05 PDT (run 1658)
+- Results of the run-1615 chain: off-s1 (job 932) and off-s2 (job 938) completed; off-s0 failed twice
+  on cold JIT (jobs 868, 907: T288_EXIT=124 at 571 s, still compiling). Every on arm failed after
+  warmup (on-s0 924/929, on-s1 934/936, on-s2 940) with "ValueError: this pipeline precomputes AdaLN
+  for num_inference_steps=5; num_inference_steps=3 cannot be honoured".
+- Cause: run_warm_generation (common_av.py) warms with 3 steps unless the pipeline has a HyperFlow
+  contract. Fixed in d943ff0dfe5: it also keeps the step count when adaln_num_inference_steps is set.
+  New CPU test test_warm_generation_keeps_a_fixed_step_count (fails without the fix); host file 24/24 pass.
+  Fixed common_av.py copied into blx01 /var/tmp/fasth3/t421/b (md5 b8d07600...).
+- g15blx02 rebooted again 04:44 PDT. Relaunched chain: off-s0 on-s0 on-s1 on-s2 off-s3 on-s3 off-s4
+  on-s4, plus post421.sh, detached in run 1658. off-s1/off-s2 outputs stay on blx01 and are reused.
