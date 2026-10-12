@@ -206,8 +206,9 @@ done <<< "$CHANGED_FILES"
 
 # --- llk-sfpu-kernels-changed: its own scan --------------------------------
 # The Wormhole SFPU kernels and the compiler that builds them, for the exhaustive ULP
-# sweep in PR Gate (llk-sfpu-accuracy.yaml). A pass of its own because the case above
-# stops at the first match, and every one of these also matches a broader LLK pattern.
+# sweep in PR Gate (llk-sfpu-ulp-sweep.yaml), and the sweep's own workflow and matrix,
+# so a change to its CI plumbing runs it. A pass of its own because the case above
+# stops at the first match, and every one of these also matches a broader pattern.
 # Test and harness changes are deliberately absent: the sweep re-measures kernels.
 while IFS= read -r FILE; do
     case "$FILE" in
@@ -217,7 +218,9 @@ while IFS= read -r FILE; do
         tt_metal/tt-llk/tt_llk_wormhole_b0/llk_lib/llk_math_eltwise_sfpu_common.h|\
         tt_metal/hw/ckernels/wormhole_b0/metal/llk_api/llk_sfpu/*|\
         tt_metal/hw/ckernels/wormhole_b0/metal/llk_api/llk_sfpu_types.h|\
-        tt_metal/sfpi-version|tt_metal/sfpi-info.sh)
+        tt_metal/sfpi-version|tt_metal/sfpi-info.sh|\
+        .github/workflows/llk-sfpu-ulp-sweep.yaml|\
+        tests/pipeline_reorg/llk_sfpu_accuracy_tests.yaml)
             LLK_SFPU_KERNELS_CHANGED=true
             ;;
     esac

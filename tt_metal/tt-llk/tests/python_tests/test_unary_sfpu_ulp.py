@@ -12,7 +12,7 @@ One device run per variant covers the whole format: 65,279 finite bfloat16 value
 63,487 float16 ones, in 64 tiles. ``Bfp8_b`` is swept in bfloat16 and packed on the way
 in; a ``Float32`` input has 2**32 values, so it is walked with a stride instead.
 Marked ``accuracy``, which llk-e2e and the other marker-selected LLK workflows deselect;
-PR Gate runs it by path when an SFPU kernel changes (llk-sfpu-accuracy.yaml). Run it as
+PR Gate runs it by path when an SFPU kernel changes (llk-sfpu-ulp-sweep.yaml). Run it as
 a gate::
 
     pytest test_unary_sfpu_ulp.py

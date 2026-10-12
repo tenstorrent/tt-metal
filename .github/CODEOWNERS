@@ -90,6 +90,8 @@ tests/pipeline_reorg/models_unit_tests.yaml @tenstorrent/metalium-models-maintai
 tests/pipeline_reorg/vllm_model_tests.yaml @viktorpusTT @tchedaTT @ppetrovicTT @tenstorrent/metalium-developers-infra
 tests/pipeline_reorg/ttsim-skip-list.yaml @roseli-TT @tdowdallTT @mcraigheadTT @tenstorrent-github-bot @dpopovTT
 tests/pipeline_reorg/llk_pr_gate_tests.yaml @amokanTT @fvranicTT @ldjurovicTT @ndivnicTT @nvelickovicTT @rtawfik01 @skotaracTT @skrsmanovicTT @sstanisicTT @vkrsmanovicTT @atatuzunerTT
+.github/workflows/llk-sfpu-ulp-*.yaml @ldjurovicTT @ndivnicTT @fvranicTT @nvelickovicTT @tenstorrent/metalium-developers-infra
+tests/pipeline_reorg/llk_sfpu_accuracy_tests.yaml @ldjurovicTT @ndivnicTT @fvranicTT @nvelickovicTT @tenstorrent/metalium-developers-infra
 tests/scripts/ @tenstorrent/metalium-developers-infra
 tests/scripts/quasar @kstevensTT @fvranicTT @tenstorrent/metalium-developers-infra
 tests/scripts/single_card/run_bh_tensor_prefetcher_mpfe_tune.py @anashTT @jbaumanTT @tt-asaigal @tt-aho @sidnadTT @tenstorrent/metalium-developers-infra

@@ -551,7 +551,7 @@ def _change_row(c: Change, *, with_provenance: bool) -> str:
     return cells
 
 
-def render_budget_diff(changes: List[Change], label_hint: str) -> str:
+def render_budget_diff(changes: List[Change]) -> str:
     """The PR comment. Regressions first, and what to do about them."""
     if not changes:
         return "### SFPU ULP budgets\n\nNo budget changed.\n"
@@ -570,9 +570,9 @@ def render_budget_diff(changes: List[Change], label_hint: str) -> str:
                 [_change_row(c, with_provenance=True) for c in regressions],
             ),
             "",
-            "If these are genuine re-measurements, say so in the PR body and add the "
-            f"`{label_hint}` label. If they are not, the budget is being fitted to a "
-            "failure and the kernel or the golden is what moved.",
+            "If these are genuine re-measurements, say so in the PR body for the "
+            "table's code owners to approve. If they are not, the budget is being "
+            "fitted to a failure and the kernel or the golden is what moved.",
             "",
         ]
     if improvements:
@@ -590,12 +590,12 @@ def render_budget_diff(changes: List[Change], label_hint: str) -> str:
     return "\n".join(out) + "\n"
 
 
-def _allowed_note(regressions: List[Change], label_hint: str) -> str:
-    """Appended when the override label admits the loosened gates; the ones admitted
-    without a fresh measurement are still named."""
+def _allowed_note(regressions: List[Change]) -> str:
+    """Appended under --allow-raises, as PR Gate runs it: the loosened gates are
+    reported, not blocked, and the ones without a fresh measurement are named."""
     note = (
-        f"\n_Allowed: the `{label_hint}` label is set on this pull request, admitting "
-        f"{len(regressions)} loosened gate(s)._\n"
+        f"\n_Advisory: {len(regressions)} loosened gate(s) reported, not blocked; "
+        "approving them is the table's code owners' review._\n"
     )
     unmeasured = [c for c in regressions if not c.remeasured]
     if unmeasured:
@@ -894,10 +894,10 @@ def _diff(args) -> Tuple[str, int]:
         parse_table(args.base.read_text(encoding="utf-8")),
         parse_table(args.head.read_text(encoding="utf-8")),
     )
-    report = render_budget_diff(changes, args.label_hint)
+    report = render_budget_diff(changes)
     regressions = [c for c in changes if c.is_regression]
     if regressions and args.allow_raises:
-        report += _allowed_note(regressions, args.label_hint)
+        report += _allowed_note(regressions)
     return report, 0 if not regressions or args.allow_raises else 1
 
 
@@ -938,9 +938,8 @@ def main(argv: Optional[List[str]] = None) -> int:
     d.add_argument(
         "--allow-raises",
         action="store_true",
-        help="report loosened gates but exit 0 (the override label is set)",
+        help="report loosened gates but exit 0 (advisory, as PR Gate runs it)",
     )
-    d.add_argument("--label-hint", default="ulp-budget-raise-approved")
     d.add_argument("--out", type=Path, help="write the report here as well as stdout")
 
     h = sub.add_parser("headroom", help="compare a --ulp-measure run against the table")
@@ -960,7 +959,7 @@ def main(argv: Optional[List[str]] = None) -> int:
         report, status = (_diff if args.mode == "diff" else _headroom)(args)
     except ValueError as refused:
         # A table the registry would refuse to load. No verdict on it means anything,
-        # and the override label cannot admit one: the fix is the table.
+        # and --allow-raises cannot admit one: the fix is the table.
         report, status = (
             f"### SFPU ULP budgets\n\nThe table cannot load: {refused}\n",
             2,
