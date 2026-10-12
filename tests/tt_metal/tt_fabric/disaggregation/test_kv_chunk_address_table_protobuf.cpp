@@ -586,6 +586,82 @@ TEST(KvChunkAddressTableProtobuf, SetStridedRowMatchesUnrolledAuthoring) {
     expect_tables_equal(strided, import_from_protobuf(pb_strided.SerializeAsString()));
 }
 
+// Rows authored with set_strided_row() and with set() at 11 chunks, step 4: residues 0-2 hold three
+// chunks and residue 3 two, so the last period is partial and import must accept per-residue run
+// counts of ceil((npc - r) / step). The device group alternates per residue.
+struct PartialPeriodTables {
+    KvChunkAddressTable unrolled;
+    KvChunkAddressTable strided;
+};
+
+PartialPeriodTables partial_period_tables(const std::vector<int64_t>& strides) {
+    constexpr uint32_t kStep = 4;
+    constexpr uint32_t kChunks = 11;
+    KvChunkAddressTableConfig cfg{
+        .num_layers = 1, .max_sequence_length = kChunks * 32, .num_slots = 2, .chunk_n_tokens = 32};
+    const std::vector<uint64_t> bases{0x10'0000, 0x20'0000, 0x30'0000, 0x50'0000};
+    auto addr = [&](uint32_t slot, uint32_t i) {
+        const int64_t offset = static_cast<int64_t>(i / kStep) * strides[i % kStep];
+        return bases[i % kStep] + slot * 0x100'0000ULL + static_cast<uint64_t>(offset);
+    };
+    PartialPeriodTables t{
+        KvChunkAddressTable(std::map<std::string, KvChunkAddressTableConfig>{{"kv", cfg}}),
+        KvChunkAddressTable(std::map<std::string, KvChunkAddressTable::NamedConfigInit>{
+            {"kv", {.config = cfg, .compression = ChunkCompression::kStridedRows}}})};
+    auto grp_a = t.unrolled.add_device_group({make_proto_fnid(0, 0)});
+    auto grp_b = t.unrolled.add_device_group({make_proto_fnid(0, 1)});
+    t.strided.add_device_group({make_proto_fnid(0, 0)});
+    t.strided.add_device_group({make_proto_fnid(0, 1)});
+    for (uint32_t slot = 0; slot < 2; slot++) {
+        for (uint32_t i = 0; i < kChunks; i++) {
+            t.unrolled.set(
+                0,
+                i * 32,
+                slot,
+                KvCacheLocation{
+                    .noc_addr = addr(slot, i), .size_bytes = 512, .device_group_index = i % 2 ? grp_b : grp_a});
+        }
+        std::vector<uint64_t> row_bases;
+        for (uint32_t r = 0; r < kStep; r++) {
+            row_bases.push_back(addr(slot, r));
+        }
+        t.strided.set_strided_row(0, slot, 512, row_bases, strides, {grp_a, grp_b, grp_a, grp_b});
+    }
+    return t;
+}
+
+TEST(KvChunkAddressTableProtobuf, SetStridedRowPartialPeriodNegativeStrideMatchesUnrolled) {
+    // One negative stride for every residue (the export detects a period only when the stride is
+    // uniform): both builds export the same runs and round-trip as STRIDED_ROWS.
+    DualWriteEnvGuard guard("0");
+    auto t = partial_period_tables({-0x400, -0x400, -0x400, -0x400});
+    EXPECT_EQ(t.strided.lookup(0, 10 * 32, 1).noc_addr, 0x130'0000ULL - 2 * 0x400);  // residue 2, third chunk
+    expect_tables_equal(t.unrolled, t.strided);
+    ::tt::disaggregation::proto::KvChunkAddressTable pb_unrolled;
+    ::tt::disaggregation::proto::KvChunkAddressTable pb_strided;
+    ASSERT_TRUE(pb_unrolled.ParseFromString(export_to_protobuf(t.unrolled)));
+    ASSERT_TRUE(pb_strided.ParseFromString(export_to_protobuf(t.strided)));
+    pb_unrolled.clear_origin_host();
+    pb_strided.clear_origin_host();
+    EXPECT_EQ(pb_unrolled.SerializeAsString(), pb_strided.SerializeAsString());
+    auto restored = import_from_protobuf(pb_strided.SerializeAsString());
+    EXPECT_EQ(restored.compression(0), ChunkCompression::kStridedRows);
+    expect_tables_equal(t.strided, restored);
+}
+
+TEST(KvChunkAddressTableProtobuf, SetStridedRowPartialPeriodMixedStridesRoundTrip) {
+    // A different stride per residue, two of them negative: the strided row reads back like the
+    // per-chunk one and survives export/import as STRIDED_ROWS.
+    DualWriteEnvGuard guard("0");
+    auto t = partial_period_tables({0x100, -0x200, 0x300, -0x400});
+    EXPECT_EQ(t.strided.lookup(0, 10 * 32, 1).noc_addr, 0x130'0000ULL + 2 * 0x300);  // residue 2, third chunk
+    EXPECT_EQ(t.strided.lookup(0, 7 * 32, 0).noc_addr, 0x50'0000ULL - 0x400);        // residue 3, last chunk
+    expect_tables_equal(t.unrolled, t.strided);
+    auto restored = import_from_protobuf(export_to_protobuf(t.strided));
+    EXPECT_EQ(restored.compression(0), ChunkCompression::kStridedRows);
+    expect_tables_equal(t.strided, restored);
+}
+
 TEST(KvChunkAddressTableProtobuf, ShardedRowRunsRoundTrip) {
     // SP-sharded row: 4 devices each own a contiguous 5-chunk block of every 20-chunk span,
     // and each device round-robins its own chunks over 8 banks. The row switches device group
