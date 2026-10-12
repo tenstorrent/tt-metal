@@ -19,9 +19,37 @@ D = dict(
 <li>A mispredict costs a 2-cycle bubble ({isa("TensixTile/BabyRISCV/README.md", "ISA doc: Baby RISCV, Integer Unit")}).</li>
 <li>Only a reset clears the table (<code>bp_row &lt;= 'd0</code> under <code>!i_reset_n</code>). The predictor can be turned off per TRISC: <code>DISABLE_RISC_BP_Disable_trisc</code> ({code("tt_metal/hw/inc/internal/tt-1xx/wormhole/wormhole_b0_defines/cfg_defines.h", 1731, "cfg_defines.h")}).</li>
 </ul>""",
-    how="""<ol class="chain">
-<li>The pack loop has an inner and an outer branch, 8 bytes apart.</li>
-<li>With +1 nop they sit at <code>0xf1ec</code> and <code>0xf1f4</code>; both hash to entry 9.</li>
+    how="""<p><b>The code.</b> The repro is the pack side of <code>math_matmul_test.cpp</code> in PACK_ISOLATE: three nested loops around one <code>_llk_pack_</code> call.</p>
+<pre>for (loop = 0; loop &lt; LOOP_FACTOR; loop++)              // outermost loop
+    for (block = 0; block &lt; NUM_BLOCKS; ++block)         // "outer" branch below
+        for (tile = 0; tile &lt; CT_DIM * RT_DIM; tile++)   // "inner" branch below
+            _llk_pack_&lt;...&gt;(DST_INDEX + tile, PERF_ADDRESS(PERF_OUTPUT, tile));</pre>
+<p>GCC turns the end of the two inner loops into two <code>bne</code> instructions with one instruction between them, so they are 8 bytes apart. The pack ELF with 0 nops (<code>pack.elf</code> of the repro build, <code>objdump -d</code>):</p>
+<pre>    f1ac:  andi   a5,a4,15            &lt;- tile loop starts here
+    ...                               (address math and 3 stores for the pack setup)
+    f1d0:  ttreg2flop 1,0,0,0,5,12
+    f1d4:  ttpacr     2,0,15,0,0,1,0
+    f1d8:  sw     a0,0(s9)
+    f1dc:  ttmop  1,0,0               &lt;- start the pack MOP for this tile
+    f1e0:  addi   a4,a4,1             tile++
+    <b>f1e4:  bne    s8,a4,f1ac</b>          <b>inner branch</b>: next tile
+    f1e8:  addi   s0,s0,1             block++
+    <b>f1ec:  bne    s2,s0,f194</b>          <b>outer branch</b>: next block
+    f1f0:  lw     a5,8(sp)            (the outermost loop: loop++)
+    ...
+    f200:  bne    a4,a5,f188</pre>
+<p>With one more nop before the loop, the same code starts 8 bytes later: the inner branch is at <code>0xf1ec</code> and the outer branch at <code>0xf1f4</code>.</p>
+<p><b>The math.</b> The predictor has 16 entries and no tag. It picks the entry from 7 address bits, <code>a[8:2]</code>, with this hash (""" + rtl("briscv/rtl/tt_bp.sv", 91) + """):</p>
+<pre>entry = { ~(a[8] ^ a[6]),  a[7] ^ a[5],  ~(a[4] ^ a[3]),  a[2] }    // 4 bits: bit 3, 2, 1, 0</pre>
+<p>Only the low 9 bits of the address matter (bits 2 to 8). Work it out for the three addresses:</p>
+<div class="tw"><table><tr><th>Branch address</th><th>Low 9 bits (a8 … a0)</th><th>bit 3 = ~(a8^a6)</th><th>bit 2 = a7^a5</th><th>bit 1 = ~(a4^a3)</th><th>bit 0 = a2</th><th>Entry</th></tr>
+<tr><td class="m">0xf1e4</td><td class="m">1 1110 0100</td><td class="m">~(1^1) = 1</td><td class="m">1^1 = 0</td><td class="m">~(0^0) = 1</td><td class="m">1</td><td class="m">1011 = <b>11</b></td></tr>
+<tr><td class="m">0xf1ec</td><td class="m">1 1110 1100</td><td class="m">~(1^1) = 1</td><td class="m">1^1 = 0</td><td class="m">~(0^1) = 0</td><td class="m">1</td><td class="m">1001 = <b>9</b></td></tr>
+<tr><td class="m">0xf1f4</td><td class="m">1 1111 0100</td><td class="m">~(1^1) = 1</td><td class="m">1^1 = 0</td><td class="m">~(1^0) = 0</td><td class="m">1</td><td class="m">1001 = <b>9</b></td></tr></table></div>
+<ul><li><b>0 nops:</b> inner branch 0xf1e4 → entry 11, outer branch 0xf1ec → entry 9. Each branch has its own entry.</li>
+<li><b>+1 nop:</b> inner branch 0xf1ec → entry 9, outer branch 0xf1f4 → entry 9. The two addresses differ only in bits 3 and 4 (0x…ec = …0 1100, 0x…f4 = …1 0100). The hash folds those two bits into one bit, <code>~(a4 ^ a3)</code>, and both flips together give the same result, so both branches land on entry 9.</li></ul>
+<p><b>What follows:</b></p>
+<ol class="chain">
 <li>Each branch overwrites the next address the other one stored. Both mispredict on every pass (2 per pass, 3 cycles each).</li>
 <li>The pass takes 36 cycles instead of 35, the pack core can no longer keep the packers' queue full, and the loop is 1 cycle per tile slower.</li>
 </ol>""",
