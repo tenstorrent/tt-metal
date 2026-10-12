@@ -228,7 +228,7 @@ class ttKDA:
             tuned_projection_matmul_configs(
                 mesh_device.compute_with_storage_grid_size(),
                 self.active_seq_len_local,
-                self.weights.input_projection.shape[-1],
+                *tuple(self.weights.input_projection.shape)[-2:],
                 *tuple(self.weights.output_projection.shape)[-2:],
             )
             if program_config.tuned_projection_matmuls
