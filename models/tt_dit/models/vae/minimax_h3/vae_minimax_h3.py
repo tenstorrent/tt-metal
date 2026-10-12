@@ -357,6 +357,7 @@ class MiniMaxH3Vae:
         readback_uint8: bool = False,
         waves_per_device: int = 1,
         stitch_exchange: str = "strips",
+        upscale_to: tuple[int, int] | None = None,
     ) -> None:
         if task not in ("t2va", "ref2va"):
             raise ValueError(f"task must be 't2va' (also serves fl2va) or 'ref2va', got {task!r}")
@@ -380,6 +381,10 @@ class MiniMaxH3Vae:
         # overlapping tiles and blending them on host.
         self.device_stitch = device_stitch
         self.stitch_exchange = stitch_exchange
+        # `(height, width)` to bicubic-resize the yuv420 output to, on device, before the YUV
+        # conversion. Only the strip stitch serves it: its row bands are what `CanvasUpscaler` takes.
+        self.upscale_to = tuple(upscale_to) if upscale_to is not None else None
+        self._upscaler = None
         # `(mean, std)` of the ImageNet normalization the decoder's pixels are still in. Set it and
         # the de-normalization is folded into `proj_out`, so `decode` emits `[-1, 1]` pixels and the
         # caller keeps no copy of the constants. Left unset the decoder emits reference-space values,
@@ -918,6 +923,8 @@ class MiniMaxH3Vae:
             reason = self._strips_unserved(chunk_latents[0].shape[-2], chunk_latents[0].shape[-1], output_type)
             if reason is None:
                 return self._decode_clips_strip_stitched(chunk_latents, output_type)
+            if self.upscale_to is not None and output_type == "yuv420":
+                raise ValueError(f"upscale_to needs the strip stitch, which cannot serve: {reason}")
             if not getattr(self, "_warned_strips_fallback", False):
                 self._warned_strips_fallback = True
                 logger.warning(f"strips stitch: {reason}; using the gather stitch")
@@ -1541,6 +1548,8 @@ class MiniMaxH3Vae:
             mesh_rows = tuple(self.mesh_device.shape)[0]
             rows, width = int(canvas.shape[-2]), int(canvas.shape[-1])
             height = rows * mesh_rows
+            if self.upscale_to is not None:
+                return self._read_canvas_yuv_upscaled(canvas, (height, width))
             canvas = ttnn.mesh_partition(canvas, dim=-1, cluster_axis=1)
             canvas = ttnn.clamp(canvas, min=-1.0, max=1.0)
             canvas = ttnn.typecast(canvas, ttnn.bfloat16)
@@ -1557,6 +1566,20 @@ class MiniMaxH3Vae:
         height, width = int(canvas.shape[-2]), int(canvas.shape[-1])
         planar = replicated_to_host_yuv(canvas, self.mesh_device)
         return lambda: planar.reshape(planar.shape[0], height * 3 // 2, width)
+
+    def _read_canvas_yuv_upscaled(self, canvas_rows: ttnn.Tensor, canvas_hw: tuple[int, int]):
+        """`_read_canvas_yuv` for a strip canvas resized to `upscale_to` first."""
+        from .upscale_minimax_h3 import CanvasUpscaler
+
+        upscaler = self._upscaler
+        if upscaler is None or upscaler.in_hw != canvas_hw or upscaler.out_hw != self.upscale_to:
+            upscaler = self._upscaler = CanvasUpscaler(self.mesh_device, canvas_hw, self.upscale_to)
+        patch = upscaler(canvas_rows)
+        planar = fast_device_to_host_yuv(
+            patch, self.mesh_device, ccl_manager=self.ccl_manager, use_persistent_buffer=False, defer=True
+        )
+        height, width = self.upscale_to
+        return lambda: planar().reshape(-1, height * 3 // 2, width)
 
     def decode_clip(self, z_BCTHW: torch.Tensor) -> torch.Tensor:
         """Decode one temporal clip, spatially tiled -- the reference ``_decode_clip``.
@@ -1640,6 +1663,10 @@ class MiniMaxH3Vae:
                 raise ValueError("output_type='yuv420' needs device_stitch=True; it reads back the stitched canvas")
             if self.pixel_denorm is None:
                 raise ValueError("output_type='yuv420' needs pixel_denorm; the YUV kernel takes [-1, 1] pixels")
+            if self.upscale_to is not None and self.stitch_exchange != "strips":
+                raise ValueError(f"upscale_to needs stitch_exchange='strips', got {self.stitch_exchange!r}")
+        elif self.upscale_to is not None:
+            raise ValueError(f"upscale_to applies to output_type='yuv420' only, got {output_type!r}")
 
         threads = _DECODE_TORCH_THREADS
         previous_threads = torch.get_num_threads()

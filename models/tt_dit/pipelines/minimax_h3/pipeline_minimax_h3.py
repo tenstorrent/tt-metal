@@ -149,6 +149,23 @@ from .weights_minimax_h3 import resolve_weights_dir
 MINIMAX_H3_PIXEL_MEAN = _MINIMAX_H3_PIXEL_MEAN
 MINIMAX_H3_PIXEL_STD = _MINIMAX_H3_PIXEL_STD
 
+# "WIDTHxHEIGHT" (e.g. "1920x1080"): bicubic-resize the yuv420 video to it on device, inside the VAE
+# readback, instead of leaving the resize to the caller's host.
+_UPSCALE_ENV = "MINIMAX_H3_UPSCALE"
+
+
+def _upscale_from_env() -> tuple[int, int] | None:
+    """`(height, width)` from `MINIMAX_H3_UPSCALE`, or None when unset."""
+    raw = os.environ.get(_UPSCALE_ENV, "").strip()
+    if not raw:
+        return None
+    try:
+        width, height = (int(v) for v in raw.lower().split("x"))
+    except ValueError:
+        raise ValueError(f"{_UPSCALE_ENV} must be WIDTHxHEIGHT, got {raw!r}") from None
+    return height, width
+
+
 # The timestep a ref2va reference soundtrack's rows run at: a literal 1.0, every step. They are
 # clean -- posterior mean, no fp16 round trip, no noise augmentation -- unlike the visual
 # conditioning rows, which sit at max(t, 0.999). See `references.py`.
@@ -717,6 +734,7 @@ class MiniMaxH3Pipeline:
             pixel_norm=(MINIMAX_H3_PIXEL_MEAN, MINIMAX_H3_PIXEL_STD),
             readback_uint8=self.vae_output_type == "uint8",
             waves_per_device=self.vae_waves_per_device,
+            upscale_to=_upscale_from_env(),
         )
         self._vae.load_state(self._read_safetensors("vae"))
 
