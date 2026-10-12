@@ -33,7 +33,7 @@ from __future__ import annotations
 import json
 import math
 import time
-from collections.abc import Sequence
+from collections.abc import Mapping, Sequence
 from concurrent.futures import ThreadPoolExecutor
 from pathlib import Path
 
@@ -46,6 +46,7 @@ import ttnn
 from ....utils.tensor import fast_device_to_host, float_to_uint8, local_device_to_torch
 from ....utils.yuv_d2h import fast_device_to_host_yuv, replicated_to_host_yuv
 from .encoder_minimax_h3 import MiniMaxH3Encoder3d
+from .upscale_minimax_h3 import upscale_unserved
 
 DEFAULT_TILE_SIZE = 256
 DEFAULT_TILE_OVERLAP = 64
@@ -357,7 +358,7 @@ class MiniMaxH3Vae:
         readback_uint8: bool = False,
         waves_per_device: int = 1,
         stitch_exchange: str = "strips",
-        upscale_to: tuple[int, int] | None = None,
+        upscale_to: Mapping[tuple[int, int], tuple[int, int]] | None = None,
     ) -> None:
         if task not in ("t2va", "ref2va"):
             raise ValueError(f"task must be 't2va' (also serves fl2va) or 'ref2va', got {task!r}")
@@ -381,10 +382,18 @@ class MiniMaxH3Vae:
         # overlapping tiles and blending them on host.
         self.device_stitch = device_stitch
         self.stitch_exchange = stitch_exchange
-        # `(height, width)` to bicubic-resize the yuv420 output to, on device, before the YUV
-        # conversion. Only the strip stitch serves it: its row bands are what `CanvasUpscaler` takes.
-        self.upscale_to = tuple(upscale_to) if upscale_to is not None else None
-        self._upscaler = None
+        # Canvas `(height, width)` -> `(height, width)` to bicubic-resize its yuv420 output to, on
+        # device, before the YUV conversion. Other canvases keep their size. Only the strip stitch
+        # serves it: its row bands are what `CanvasUpscaler` takes. See `upscale_target`.
+        self.upscale_to = {tuple(k): tuple(v) for k, v in (upscale_to or {}).items()}
+        for in_hw, out_hw in self.upscale_to.items():
+            reason = upscale_unserved(in_hw, out_hw, tuple(mesh_device.shape))
+            if reason is not None:
+                raise ValueError(f"upscale_to {in_hw} -> {out_hw}: {reason}")
+        # One upscaler per canvas: each holds its interpolation matrices on device, so a serving
+        # loop that alternates canvases does not rebuild and re-upload them.
+        self._upscalers = {}
+        self._warned_upscale = set()
         # `(mean, std)` of the ImageNet normalization the decoder's pixels are still in. Set it and
         # the de-normalization is folded into `proj_out`, so `decode` emits `[-1, 1]` pixels and the
         # caller keeps no copy of the constants. Left unset the decoder emits reference-space values,
@@ -917,18 +926,45 @@ class MiniMaxH3Vae:
             yield from read_wave(*pending)
 
     def _decode_clips_device_stitched(self, chunk_latents: list[torch.Tensor], output_type: str = "float") -> list:
+        upscale_to = self.upscale_target(chunk_latents[0].shape[-2], chunk_latents[0].shape[-1], output_type)
+        if upscale_to is not None:
+            return self._decode_clips_strip_stitched(chunk_latents, output_type, upscale_to)
         if self.stitch_exchange == "neighbor":
             return self._decode_clips_neighbor_stitched(chunk_latents, output_type)
         if self.stitch_exchange == "strips":
             reason = self._strips_unserved(chunk_latents[0].shape[-2], chunk_latents[0].shape[-1], output_type)
             if reason is None:
                 return self._decode_clips_strip_stitched(chunk_latents, output_type)
-            if self.upscale_to is not None and output_type == "yuv420":
-                raise ValueError(f"upscale_to needs the strip stitch, which cannot serve: {reason}")
             if not getattr(self, "_warned_strips_fallback", False):
                 self._warned_strips_fallback = True
                 logger.warning(f"strips stitch: {reason}; using the gather stitch")
         return self._decode_clips_gather_stitched(chunk_latents, output_type)
+
+    def upscale_target(self, latent_h: int, latent_w: int, output_type: str = "yuv420") -> tuple[int, int] | None:
+        """The `(height, width)` `upscale_to` resizes this decode to, or None to keep its native size.
+
+        A canvas `upscale_to` names but the strip stitch cannot serve keeps its size too, with a
+        one-time warning, rather than failing a warmup or a request that reaches it.
+        """
+        if not self.upscale_to:
+            return None
+        (y_starts, y_lengths, _), (x_starts, x_lengths, _) = self._decode_tile_grid(latent_h, latent_w)
+        canvas = (y_starts[-1] + y_lengths[-1], x_starts[-1] + x_lengths[-1])
+        target = self.upscale_to.get(canvas)
+        if target is None:
+            return None
+        if output_type != "yuv420":
+            reason = f"output_type {output_type!r} is not 'yuv420'"
+        elif not self.device_stitch or self.stitch_exchange != "strips":
+            reason = "it needs device_stitch=True and stitch_exchange='strips'"
+        else:
+            reason = self._strips_unserved(latent_h, latent_w, output_type)
+        if reason is None:
+            return target
+        if (canvas, reason) not in self._warned_upscale:
+            self._warned_upscale.add((canvas, reason))
+            logger.warning(f"upscale_to: canvas {canvas} keeps its size: {reason}")
+        return None
 
     def _strips_unserved(self, latent_h: int, latent_w: int, output_type: str) -> str | None:
         """Why strips cannot serve, or None."""
@@ -1108,8 +1144,10 @@ class MiniMaxH3Vae:
             profile["readback_join"] += time.perf_counter() - mark
         return canvases
 
-    def _decode_clips_strip_stitched(self, chunk_latents: list[torch.Tensor], output_type: str = "float") -> list:
-        """Each device blends only the tiles it reads back."""
+    def _decode_clips_strip_stitched(
+        self, chunk_latents: list[torch.Tensor], output_type: str = "float", upscale_to: tuple[int, int] | None = None
+    ) -> list:
+        """Each device blends only the tiles it reads back, resized to `upscale_to` if given (yuv420)."""
         from .stitch_device_minimax_h3 import StripTileStitcher
 
         (y_starts, y_lengths, y_overlaps), (x_starts, x_lengths, x_overlaps) = self._decode_tile_grid(
@@ -1246,9 +1284,10 @@ class MiniMaxH3Vae:
             rows_shape = tuple(canvas_rows.shape)
             canvas_shape = (*rows_shape[:-2], canvas_h, rows_shape[-1])
             if output_type == "yuv420":
-                finish = self._read_canvas_yuv(canvas_rows, rows_partitioned=True)
+                finish = self._read_canvas_yuv(canvas_rows, rows_partitioned=True, upscale_to=upscale_to)
                 ttnn.deallocate(canvas_rows)
-                read_bytes = canvas_shape[-3] * canvas_shape[-2] * canvas_shape[-1] * 3 // 2
+                out_h, out_w = upscale_to or canvas_shape[-2:]
+                read_bytes = canvas_shape[-3] * out_h * out_w * 3 // 2
                 pending.append(self._yuv_finish_pool.submit(finish))
             else:
                 patch = ttnn.mesh_partition(canvas_rows, dim=-1, cluster_axis=1)
@@ -1530,7 +1569,9 @@ class MiniMaxH3Vae:
             self._yuv_pool = ThreadPoolExecutor(max_workers=1, thread_name_prefix="h3_yuv_finish")
         return self._yuv_pool
 
-    def _read_canvas_yuv(self, canvas: ttnn.Tensor, *, rows_partitioned: bool = False):
+    def _read_canvas_yuv(
+        self, canvas: ttnn.Tensor, *, rows_partitioned: bool = False, upscale_to: tuple[int, int] | None = None
+    ):
         """Convert the replicated canvas to YUV 4:2:0 on device and read it back as planar uint8.
 
         Two things earn their keep here. The `clamp` is the reference's post-stitch `clamp(0, 1)`,
@@ -1548,8 +1589,8 @@ class MiniMaxH3Vae:
             mesh_rows = tuple(self.mesh_device.shape)[0]
             rows, width = int(canvas.shape[-2]), int(canvas.shape[-1])
             height = rows * mesh_rows
-            if self.upscale_to is not None:
-                return self._read_canvas_yuv_upscaled(canvas, (height, width))
+            if upscale_to is not None:
+                return self._read_canvas_yuv_upscaled(canvas, (height, width), upscale_to)
             canvas = ttnn.mesh_partition(canvas, dim=-1, cluster_axis=1)
             canvas = ttnn.clamp(canvas, min=-1.0, max=1.0)
             canvas = ttnn.typecast(canvas, ttnn.bfloat16)
@@ -1567,18 +1608,21 @@ class MiniMaxH3Vae:
         planar = replicated_to_host_yuv(canvas, self.mesh_device)
         return lambda: planar.reshape(planar.shape[0], height * 3 // 2, width)
 
-    def _read_canvas_yuv_upscaled(self, canvas_rows: ttnn.Tensor, canvas_hw: tuple[int, int]):
+    def _read_canvas_yuv_upscaled(
+        self, canvas_rows: ttnn.Tensor, canvas_hw: tuple[int, int], upscale_to: tuple[int, int]
+    ):
         """`_read_canvas_yuv` for a strip canvas resized to `upscale_to` first."""
         from .upscale_minimax_h3 import CanvasUpscaler
 
-        upscaler = self._upscaler
-        if upscaler is None or upscaler.in_hw != canvas_hw or upscaler.out_hw != self.upscale_to:
-            upscaler = self._upscaler = CanvasUpscaler(self.mesh_device, canvas_hw, self.upscale_to)
+        key = (tuple(canvas_hw), tuple(upscale_to))
+        upscaler = self._upscalers.get(key)
+        if upscaler is None:
+            upscaler = self._upscalers[key] = CanvasUpscaler(self.mesh_device, canvas_hw, upscale_to)
         patch = upscaler(canvas_rows)
         planar = fast_device_to_host_yuv(
             patch, self.mesh_device, ccl_manager=self.ccl_manager, use_persistent_buffer=False, defer=True
         )
-        height, width = self.upscale_to
+        height, width = upscale_to
         return lambda: planar().reshape(-1, height * 3 // 2, width)
 
     def decode_clip(self, z_BCTHW: torch.Tensor) -> torch.Tensor:
@@ -1663,10 +1707,6 @@ class MiniMaxH3Vae:
                 raise ValueError("output_type='yuv420' needs device_stitch=True; it reads back the stitched canvas")
             if self.pixel_denorm is None:
                 raise ValueError("output_type='yuv420' needs pixel_denorm; the YUV kernel takes [-1, 1] pixels")
-            if self.upscale_to is not None and self.stitch_exchange != "strips":
-                raise ValueError(f"upscale_to needs stitch_exchange='strips', got {self.stitch_exchange!r}")
-        elif self.upscale_to is not None:
-            raise ValueError(f"upscale_to applies to output_type='yuv420' only, got {output_type!r}")
 
         threads = _DECODE_TORCH_THREADS
         previous_threads = torch.get_num_threads()
