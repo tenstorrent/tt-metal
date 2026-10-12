@@ -36,3 +36,12 @@ deadline 400 s):
   on the off arm), not a code error. No drop (fabric-check 866 passed). Cold log kept as out_on/run.cold.log.
 - Rerun: blx01 job 867 (submit_on.sh, detached as run 1604 t422on2), log state/on.log.
 - Next: read state/on.log; compare per-step times and md5 with the off arm (job 860).
+
+## 2026-10-12 run 1605
+- on arm job 867 failed again at the 400 s warm deadline, now in "Warming prompt encoder keyframe layouts". The JIT
+  cache grew: 3446 kernel lookups (1889 hits) vs 6329 for a full warm run on the off arm, so about 2700 kernels
+  are still cold. Audio decode is now cached (+2180 programs). No drop; not a code error.
+- Judgment call: warm deadline 500 s, late limit 430 s (pytest timeout 560 s, job -t 600 s) for the on arm, to fill
+  more cache per job. The replays are timed after warmup, so the deadline does not change the measurement.
+- submit_on.sh now tries up to 2 jobs; the second only if the first stopped at the warm deadline (log kept as
+  out_on/run.fill<try>.log). Detached as run 1605 t422on3; log state/on.log ends with "T422ON_DONE <rc>".
