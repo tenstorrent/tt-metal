@@ -448,6 +448,20 @@ def _read_generation_config_eos(model_path: str) -> list[int] | None:
     return list(eos) if isinstance(eos, list) else [eos]
 
 
+def _disable_sliding_tail_stash(generator, max_seq_len: int) -> None:
+    """Every enhancer prefill is one chunk, so the sliding-window K/V tail gemma4 stashes for a continuation chunk
+    is never read; its length-keyed slice would otherwise compile a new program per prompt length."""
+    for args in getattr(generator, "model_args", []):
+        chunk = getattr(args, "max_prefill_chunk_size", None)
+        if chunk is not None and chunk < max_seq_len:
+            raise RuntimeError(f"prompt enhancer needs single-chunk prefill ({chunk=} < {max_seq_len=})")
+    for model in getattr(generator, "model", []):
+        for layer in getattr(model, "layers", []):
+            cfg = getattr(getattr(layer, "self_attn", None), "config", None)
+            if cfg is not None:
+                cfg.stash_sliding_prefill_tail = False
+
+
 def _identity_page_table(num_blocks: int) -> torch.Tensor:
     """Batch-1 identity logical->physical page table, shared by prefill and decode."""
     return torch.arange(num_blocks, dtype=torch.int32).reshape(1, num_blocks)
@@ -642,6 +656,7 @@ class DevicePromptEnhancer(PromptEnhancer):
             paged_attention_config=config,
             bounded_sliding_kv_cache=False,
         )
+        _disable_sliding_tail_stash(generator, self.max_seq_len)
         return generator, kv_cache, tokenizer
 
     def warmup(self, *, capture: bool = True) -> None:

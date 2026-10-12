@@ -387,7 +387,8 @@ class LTXPipeline:
                 )
 
     def release_traces(self) -> None:
-        """Release captured denoise traces and free their device trace memory."""
+        """Release captured traces (denoise, decoders, enhancer) and free their device trace memory. End of life:
+        the resident enhancer is unloaded with its trace."""
         if self.transformer is not None:
             for tracer in LTXTransformerModel.inner_step._tracers_keyed.get(self.transformer, {}).values():
                 tracer.release_trace()
@@ -397,6 +398,10 @@ class LTXPipeline:
             self.tt_mel_decoder.release_trace()
         if self.vae_decoder is not None:
             self.vae_decoder.release_trace()
+        if self.prompt_enhancer is not None:
+            # The E2B decode trace must go while the mesh is open; left to Generator.__del__ it is released
+            # after the submesh closes and TT_THROWs (SubDeviceManagerTracker is not initialized).
+            self.prompt_enhancer.unload()
         self._trace_state.clear()
         self._prompt_v = StateTensor()
         self._prompt_a = StateTensor()

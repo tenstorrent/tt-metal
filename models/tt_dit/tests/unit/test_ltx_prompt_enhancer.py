@@ -519,3 +519,21 @@ def test_device_enhancer_rejects_a_prompt_preprocessing_would_clip(monkeypatch, 
     assert gen.prefill_calls == []
     # Through apply_prompt_enhancer the request survives with the raw prompt.
     assert apply_prompt_enhancer(enhancer, "a cat") == "a cat"
+
+
+def test_device_enhancer_disables_the_sliding_tail_stash(expect_error):
+    from types import SimpleNamespace
+
+    def layer():
+        return SimpleNamespace(self_attn=SimpleNamespace(config=SimpleNamespace()))
+
+    layers = [layer(), layer(), SimpleNamespace()]
+    gen = SimpleNamespace(
+        model=[SimpleNamespace(layers=layers)], model_args=[SimpleNamespace(max_prefill_chunk_size=2048)]
+    )
+    pe._disable_sliding_tail_stash(gen, 2048)
+    assert [l.self_attn.config.stash_sliding_prefill_tail for l in layers[:2]] == [False, False]
+    # Multi-chunk prefill reads the stash back, so the opt-out must refuse it.
+    gen.model_args[0].max_prefill_chunk_size = 1024
+    with expect_error(RuntimeError, "single-chunk"):
+        pe._disable_sliding_tail_stash(gen, 2048)

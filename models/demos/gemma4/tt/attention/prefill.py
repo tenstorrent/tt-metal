@@ -915,6 +915,10 @@ def _prefill_forward_single(
         and sliding_window is not None
         and tt_k is not None
         and shared_kv is None
+        # Single-chunk-only callers (the LTX prompt enhancer) opt out: the next request's first chunk drops the
+        # stash unread, and the slice is keyed on the exact prompt length, so every new length would compile
+        # (and allocate a kernel binary for) a fresh program after the decode trace is captured.
+        and getattr(config, "stash_sliding_prefill_tail", True)
     ):
         hist = ((sliding_window + 31) // 32) * 32
         # Short-pad uses ttnn.zeros (host write) — illegal mid-trace-capture.
