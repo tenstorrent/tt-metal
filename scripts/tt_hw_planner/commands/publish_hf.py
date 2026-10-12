@@ -309,7 +309,9 @@ def _hardware_phrase(state: dict, hardware: str | None) -> str:
         return f"a single Tenstorrent {arch} chip"
     if dc > 1:
         return f"{dc} Tenstorrent {arch} chips" + (f" ({hardware})" if hardware else "")
-    return f"Tenstorrent {hardware}" if hardware else f"Tenstorrent {arch}"
+    if hardware:
+        return f"Tenstorrent {hardware}"
+    return "Tenstorrent" if arch == "Tenstorrent" else f"Tenstorrent {arch}"
 
 
 def _fetch_upstream_card(base_weights: str, token: str | None) -> str | None:
@@ -456,6 +458,26 @@ def _augment_benchmark_tables(body: str, base_weights: str, tt_results: dict) ->
     return re.sub(r"(?m)^(\|.*\|[ \t]*\n\|[\s:|-]+\|[ \t]*\n(?:\|.*\|[ \t]*\n?)+)", repl, body)
 
 
+_GPU_RUN_ROW_RE = __import__("re").compile(
+    r"\b(A100|H100|H200|B100|B200|B300|GB200|HGX|SXM|NVIDIA|CUDA|cuda|ROCm|vllm serve|sglang|TensorRT)\b"
+)
+
+
+def _scrub_gpu_run_rows(body: str) -> str:
+    """Drop lines that describe how to RUN on GPU — GPU hardware-requirement / compute / serve-command
+    rows (A100/H100/B200/NVIDIA/CUDA/vllm serve/sglang/...). Benchmark SCORE rows (no GPU-hardware
+    token) are kept, so the GPU numbers remain as the comparison column next to Tenstorrent. Prose
+    lines mentioning a GPU serve command are dropped too; plain prose is left alone."""
+    out = []
+    for ln in body.splitlines():
+        st = ln.strip()
+        is_table_row = st.startswith("|")
+        if _GPU_RUN_ROW_RE.search(ln) and (is_table_row or "vllm serve" in ln.lower() or "sglang" in ln.lower()):
+            continue
+        out.append(ln)
+    return "\n".join(out)
+
+
 def _mirror_body_tt(body: str, base_weights: str, demo_dir, state: dict) -> str:
     """Transform the upstream body for a TT card: strip GPU-specific sections and turn benchmark
     tables into TT-vs-GPU comparisons. Fully best-effort — any error returns the body unchanged so
@@ -463,6 +485,7 @@ def _mirror_body_tt(body: str, base_weights: str, demo_dir, state: dict) -> str:
     try:
         tt_results = _load_tt_eval(demo_dir) if demo_dir else {}
         b = _strip_gpu_sections(body)
+        b = _scrub_gpu_run_rows(b)
         b = _augment_benchmark_tables(b, base_weights, tt_results)
         return b
     except Exception:  # noqa: BLE001
