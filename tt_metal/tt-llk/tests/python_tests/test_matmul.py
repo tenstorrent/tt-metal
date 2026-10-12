@@ -31,6 +31,7 @@ from helpers.test_variant_parameters import (
     LOOP_FACTOR,
     MATH_FIDELITY,
     MATMUL_ROW_MOP,
+    MATMUL_STREAM_NARROW,
     MATMUL_UNPACK_TTSYNC,
     NUM_FACES,
     PERF_RUN_TYPE,
@@ -165,6 +166,9 @@ def test_matmul(
             THROTTLE_LEVEL(),
             *([MATMUL_ROW_MOP()] if row_mop else []),
             *([MATMUL_UNPACK_TTSYNC()] if unpack_ttsync else []),
+            *MATMUL_STREAM_NARROW.for_block(
+                formats, dest_acc, matmul_dims.ct_dim, matmul_dims.rt_dim
+            ),
         ],
         runtimes=[
             NUM_FACES(),
@@ -342,6 +346,9 @@ def test_matmul_full_sync(math_fidelity, formats, dims):
             PERF_RUN_TYPE(PerfRunType.L1_TO_L1),
             DEST_SYNC(DestSync.Full),
             THROTTLE_LEVEL(),
+            *MATMUL_STREAM_NARROW.for_block(
+                formats, DestAccumulation.No, matmul_dims.ct_dim, matmul_dims.rt_dim
+            ),
         ],
         runtimes=[
             NUM_FACES(),

@@ -48,17 +48,24 @@ void run_kernel(RUNTIME_PARAMETERS params)
     const Operand& buffer_B           = params.buffer_B;
 #endif
 
-#if defined(ARCH_BLACKHOLE) && defined(MATMUL_UNPACK_TTSYNC)
-#define MATMUL_UNPACK_TEMPLATE_ARGS 0, 0, true
-#else
-#define MATMUL_UNPACK_TEMPLATE_ARGS
-#endif
-
 #ifdef ARCH_BLACKHOLE
-    // only the Blackhole init takes stream_narrow
-    const bool stream_narrow = _llk_unpack_AB_matmul_stream_narrow_(CT_DIM, RT_DIM, formats.unpack_A_src, formats.unpack_B_src, is_fp32_dest_acc_en);
+#ifdef MATMUL_UNPACK_TTSYNC
+    constexpr bool unpack_ttsync = true;
+#else
+    constexpr bool unpack_ttsync = false;
+#endif
+    // the test chooses the 8-bit stream at compile time, as a kernel's compile-time formats do
+#ifdef MATMUL_STREAM_NARROW
+    constexpr bool stream_narrow = !is_fp32_dest_acc_en;
+#else
+    constexpr bool stream_narrow = false;
+#endif
+#define MATMUL_UNPACK_INIT_TEMPLATE_ARGS 0, 0, unpack_ttsync
+#define MATMUL_UNPACK_TEMPLATE_ARGS 0, 0, unpack_ttsync, MAX_TILES_DEST
 #define MATMUL_STREAM_NARROW_ARG(narrow) , narrow
 #else
+#define MATMUL_UNPACK_INIT_TEMPLATE_ARGS
+#define MATMUL_UNPACK_TEMPLATE_ARGS
 #define MATMUL_STREAM_NARROW_ARG(narrow)
 #endif
 
@@ -75,7 +82,7 @@ void run_kernel(RUNTIME_PARAMETERS params)
             num_faces_B,
             TILE_SIZE_UNPACK_A,
             TILE_SIZE_UNPACK_B);
-        _llk_unpack_AB_matmul_init_<MATMUL_UNPACK_TEMPLATE_ARGS>(
+        _llk_unpack_AB_matmul_init_<MATMUL_UNPACK_INIT_TEMPLATE_ARGS>(
             UNPACK_TRANSPOSE_FACES,
             CT_DIM,
             RT_DIM,

@@ -19,6 +19,7 @@ from helpers.test_variant_parameters import (
     DEST_SYNC,
     LOOP_FACTOR,
     MATH_FIDELITY,
+    MATMUL_STREAM_NARROW,
     MATMUL_ROW_MOP,
     NUM_FACES,
     THROTTLE_LEVEL,
@@ -97,6 +98,7 @@ def test_perf_matmul_row_mop(perf_report, combos, math_fidelity):
             DEST_SYNC(dest_sync),
             THROTTLE_LEVEL(),
             MATMUL_ROW_MOP(),
+            *MATMUL_STREAM_NARROW.for_block(formats, dest_acc, dims.ct_dim, dims.rt_dim),
         ],
         runtimes=[
             UNPACK_TRANS_FACES(Transpose.No),

@@ -53,10 +53,16 @@ void run_kernel(RUNTIME_PARAMETERS params)
 #endif
 
 #ifdef ARCH_BLACKHOLE
-    // only the Blackhole init takes stream_narrow
-    const bool stream_narrow = _llk_unpack_AB_matmul_stream_narrow_(CT_DIM, RT_DIM, formats.unpack_A_src, formats.unpack_B_src, is_fp32_dest_acc_en);
+    // the test chooses the 8-bit stream at compile time, as a kernel's compile-time formats do
+#ifdef MATMUL_STREAM_NARROW
+    constexpr bool stream_narrow = !is_fp32_dest_acc_en;
+#else
+    constexpr bool stream_narrow = false;
+#endif
+#define MATMUL_UNPACK_TEMPLATE_ARGS 0, 0, false, get_dest_max_tiles<dest_sync, is_fp32_dest_acc_en, DstTileShape::Tile32x32>()
 #define MATMUL_STREAM_NARROW_ARG(narrow) , narrow
 #else
+#define MATMUL_UNPACK_TEMPLATE_ARGS
 #define MATMUL_STREAM_NARROW_ARG(narrow)
 #endif
 
@@ -106,7 +112,7 @@ void run_kernel(RUNTIME_PARAMETERS params)
                 {
                     for (std::uint32_t j = 0; j < KT_DIM; j++)
                     {
-                        _llk_unpack_AB_matmul_<>(
+                        _llk_unpack_AB_matmul_<MATMUL_UNPACK_TEMPLATE_ARGS>(
                             L1_ADDRESS(buffer_A[0]),
                             L1_ADDRESS(buffer_B[0]),
                             j,

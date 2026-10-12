@@ -341,6 +341,9 @@ inline void _llk_unpack_AB_matmul_uninit_()
  *
  * @tparam kernel_broadcast_a: Tile count to wrap operand A around for kernel broadcast (0 = disabled).
  * @tparam kernel_broadcast_b: Tile count to wrap operand B around for kernel broadcast (0 = disabled).
+ * @tparam ttsync: The value passed to @ref _llk_unpack_AB_matmul_init_.
+ * @tparam dest_max_tiles: The 32x32 tiles DEST holds in the kernel's sync and accumulation mode (get_dest_max_tiles), which
+ *                         bounds the tiles of a row.
  * @param base_address_a: L1 base address of operand A's tile buffer.
  * @param base_address_b: L1 base address of operand B's tile buffer.
  * @param tile_index_a: Starting tile index into operand A.
@@ -356,7 +359,7 @@ inline void _llk_unpack_AB_matmul_uninit_()
  *       @ref _llk_unpack_AB_matmul_uninit_ after it to restore modified state.
  * @ref _llk_math_matmul_ on the math thread consumes the SrcA/SrcB tiles unpacked here.
  */
-template <std::uint32_t kernel_broadcast_a = 0, std::uint32_t kernel_broadcast_b = 0, bool ttsync = false>
+template <std::uint32_t kernel_broadcast_a = 0, std::uint32_t kernel_broadcast_b = 0, bool ttsync = false, std::uint32_t dest_max_tiles = 16>
 inline void _llk_unpack_AB_matmul_(
     const std::uint32_t base_address_a,
     const std::uint32_t base_address_b,
@@ -378,6 +381,9 @@ inline void _llk_unpack_AB_matmul_(
     const bool reuse_a        = ct_dim >= rt_dim;
     const std::uint32_t t_dim = reuse_a ? rt_dim : ct_dim;
     LLK_ASSERT(reuse_a == unpack_matmul_init_reuse_a, "matmul: ct_dim >= rt_dim differs from the init's; re-init for a block of the other reuse direction");
+    LLK_ASSERT((reuse_a ? ct_dim : rt_dim) <= dest_max_tiles, "matmul: a row has more tiles than DEST holds");
+    // the context 1 zmask needs a bit per tile of the row only when a row can be longer than 8 tiles
+    constexpr std::uint32_t context_1_zmask = (dest_max_tiles > 8) ? 0xffff : 0xff;
 
     if (!reuse_a)
     {
@@ -470,7 +476,7 @@ inline void _llk_unpack_AB_matmul_(
             }
         }
 
-        TT_MOP(0, (reuse_a ? ct_dim : rt_dim) - 1, unp_cfg_context == 0 ? 0 : 0xffff);
+        TT_MOP(0, (reuse_a ? ct_dim : rt_dim) - 1, unp_cfg_context == 0 ? 0 : context_1_zmask);
 
         // T6::SEMGET for context release
         t6_semaphore_get(semaphore::UNPACK_SYNC);

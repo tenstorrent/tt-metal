@@ -34,6 +34,7 @@ from helpers.test_variant_parameters import (
     IN_TILE_DIMS,
     LOOP_FACTOR,
     MATH_FIDELITY,
+    MATMUL_STREAM_NARROW,
     NUM_BLOCKS,
     NUM_FACES,
     NUM_TILES_IN_BLOCK,
@@ -256,6 +257,12 @@ def test_perf_math_matmul(
             MATH_FIDELITY(math_fidelity),
             DEST_SYNC(matmul_config.dest_sync),
             THROTTLE_LEVEL(throttle),
+            *MATMUL_STREAM_NARROW.for_block(
+                formats,
+                matmul_config.dest_acc,
+                matmul_config.tile_dimensions.ct_dim,
+                matmul_config.tile_dimensions.rt_dim,
+            ),
         ],
         runtimes=[
             DEST_INDEX(matmul_config.dst_index),

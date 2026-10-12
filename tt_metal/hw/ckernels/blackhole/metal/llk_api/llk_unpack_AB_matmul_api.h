@@ -57,7 +57,7 @@ inline void llk_unpack_AB_matmul_impl(
     const std::uint32_t rt_dim,
     const std::uint32_t kt_dim) {
     WAYPOINT("UPMW");
-    _llk_unpack_AB_matmul_<0, 0, ttsync>(
+    _llk_unpack_AB_matmul_<0, 0, ttsync, get_dest_max_tiles<DST_SYNC_MODE, DST_ACCUM_MODE, DstTileShape::Tile32x32>()>(
         base_address_a,
         base_address_b,
         tile_index_a,
