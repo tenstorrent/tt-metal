@@ -342,6 +342,29 @@ class Qwen2_5_VLForConditionalGeneration(QwenVLGenerator, SupportsMultiModal):
                     images.append((user, None, g))
                 else:
                     images.append((user, pv, g))
+        # A stripped image's placeholder rows must stay inside the resumed prefill's cached prefix: record,
+        # per user, the end of the last such image so the generator never floors the offset below it.
+        image_token_id = self.reference_model.config.image_token_id
+        min_start_pos = [None] * tokens.shape[0]
+        next_image_run = [0] * tokens.shape[0]
+        image_runs = {}
+        for user, pv, g in images:
+            if user not in image_runs:
+                positions = (inputs.input_ids[user, : prompt_lens[user]] == image_token_id).nonzero().flatten().tolist()
+                runs, run_start = [], None
+                for idx, pos in enumerate(positions):
+                    if run_start is None:
+                        run_start = pos
+                    if idx + 1 == len(positions) or positions[idx + 1] != pos + 1:
+                        runs.append((run_start, pos + 1))
+                        run_start = None
+                image_runs[user] = runs
+            k = next_image_run[user]
+            next_image_run[user] = k + 1
+            assert k < len(image_runs[user]), f"user {user}: image {k} has no token run in the prompt"
+            if pv is None:
+                end = image_runs[user][k][1]
+                min_start_pos[user] = end if min_start_pos[user] is None else max(min_start_pos[user], end)
         if images:
             inputs.image_grid_thw = torch.stack(
                 [g.to(device=tokens.device, dtype=torch.int32) for _, _, g in images], dim=0
@@ -415,6 +438,7 @@ class Qwen2_5_VLForConditionalGeneration(QwenVLGenerator, SupportsMultiModal):
             enable_trace=enable_trace,
             empty_slots=empty_slots,
             start_pos=num_cached_per_user,
+            min_start_pos=min_start_pos,
         )
         prefill_time = time.perf_counter() - prefill_start
         batch_size = tokens.shape[0]

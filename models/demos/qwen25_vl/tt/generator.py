@@ -233,6 +233,7 @@ class Generator(ModelCapabilitiesMixin, WarmupForwardMixin):
         enable_trace=True,
         empty_slots=None,
         start_pos=None,  # per-user cached prefix lengths (vLLM automatic prefix caching); None/zeros = full prefill
+        min_start_pos=None,  # per-user lowest admissible resumed offset (end of an image whose pixels were stripped)
     ):
         batch, batch_seq_len = tokens.shape[:2]
         output_logits = torch.zeros(batch, 1, self.model_args.vocab_size)
@@ -266,7 +267,9 @@ class Generator(ModelCapabilitiesMixin, WarmupForwardMixin):
         )
         if any_cached:
             assert page_table is not None and first_kv_cache is not None, "a cached prefix needs paged attention"
-            num_cached_per_user = self._align_cached_prefix_offsets(num_cached_per_user, prompt_lens, first_kv_cache)
+            num_cached_per_user = self._align_cached_prefix_offsets(
+                num_cached_per_user, prompt_lens, first_kv_cache, min_offsets=min_start_pos
+            )
 
         if use_batched_prefill:
             total_tokens = batch_seq_len * batch
@@ -638,14 +641,18 @@ class Generator(ModelCapabilitiesMixin, WarmupForwardMixin):
         assert all(x >= 0 for x in start_pos), f"negative cached prefix length in start_pos={start_pos}"
         return start_pos
 
-    def _align_cached_prefix_offsets(self, num_cached_per_user, prompt_lens, kv_cache):
-        """Floor each cached prefix length to what the paged K/V writes and the chunked SDPA need.
+    def _align_cached_prefix_offsets(self, num_cached_per_user, prompt_lens, kv_cache, min_offsets=None):
+        """Floor each cached prefix length to the KV block size.
 
-        vLLM caches whole KV blocks, so an offset is already a multiple of the block size; the
-        chunked SDPA additionally needs ``chunk_start_idx`` on the q-chunk its program is built
-        with for the padded suffix length. Flooring recomputes at most ``alignment - 1`` tokens,
-        whose K/V is rewritten identically into the same blocks. Mirrors the shared
-        tt_transformers generator's ``_align_resume_offsets``.
+        vLLM caches whole KV blocks, so an offset is normally already a multiple of the block size;
+        flooring recomputes at most ``block_size - 1`` tokens, whose K/V is rewritten identically into
+        the same block. No further alignment is applied: this resumed path is not traced, and the
+        chunked SDPA derives its q-chunk from ``chunk_start_idx`` itself (any multiple of 32 is valid),
+        so the offset never moves below what vLLM reported. That matters for cached images: vLLM
+        strips the pixels of an image that ends at or before the cached length, and the wrapper feeds
+        zero placeholders for its rows, which must therefore stay inside the cached prefix.
+        ``min_offsets`` (per user, or None) is the lowest offset a user tolerates for that reason; an
+        offset that would floor below it is an error rather than a silent wrong prefix.
         """
         block_size = get_block_size(kv_cache)
         aligned = []
@@ -658,16 +665,12 @@ class Generator(ModelCapabilitiesMixin, WarmupForwardMixin):
                 num_cached < seq_len
             ), f"user {i}: cached prefix {num_cached} must be shorter than the prompt {seq_len}"
             floored = (num_cached // block_size) * block_size
-            for _ in range(8):
-                padded_suffix = get_padded_prefill_len(seq_len - floored)
-                alignment = self._ttt_generator._resume_offset_alignment(padded_suffix, block_size)
-                settled = (num_cached // alignment) * alignment
-                if settled == floored:
-                    break
-                floored = settled
-            else:
-                raise RuntimeError(
-                    f"user {i}: cached prefix alignment did not settle (start_pos={num_cached}, seq_len={seq_len})"
+            min_offset = int(min_offsets[i]) if min_offsets is not None and min_offsets[i] is not None else 0
+            if floored < min_offset:
+                raise ValueError(
+                    f"user {i}: cached prefix {num_cached} floors to {floored} (block size {block_size}), below "
+                    f"the end ({min_offset}) of an image whose pixels were stripped as cached; those rows cannot "
+                    "be recomputed from placeholders"
                 )
             if floored != num_cached:
                 logger.debug(f"Cached prefix alignment: user {i} start_pos {num_cached} -> {floored}")
