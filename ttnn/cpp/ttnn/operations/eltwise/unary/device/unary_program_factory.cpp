@@ -106,7 +106,7 @@ struct CoreRtArgs {
     uint32_t out_units = 0;
     uint32_t start_id = 0;
     uint32_t compute_units = 0;
-    // DRAM-sharded: page order and, for the work queue, the worker's args.
+    // DRAM-sharded page order and work-queue args.
     std::array<uint32_t, 5> page_order{};
     struct Queue {
         uint32_t worker_id = 0;
@@ -131,13 +131,13 @@ struct RmChunkConstants {
     uint32_t total_rows = 0;
 };
 
-// NoC coordinates packed as x | (y << 16), as the work-queue kernels read them.
+// NoC coordinates packed as x | (y << 16).
 uint32_t noc_xy(const Tensor& tensor, const tt::tt_metal::CoreCoord& core) {
     const auto noc = tensor.device()->worker_core_from_logical_core(core);
     return static_cast<uint32_t>(noc.x) | (static_cast<uint32_t>(noc.y) << 16);
 }
 
-// TILE reader/writer args 1 .. kNumArgs - 1, laid out as in dram_sharded_common.hpp.
+// TILE reader/writer args after the buffer, laid out as in dram_sharded_common.hpp.
 using TileArgs = std::array<uint32_t, dram_shard::kNumArgs - 1>;
 
 TileArgs tile_args(uint32_t split0, uint32_t split1, const std::array<uint32_t, 5>& order, uint32_t q0, uint32_t q1) {
@@ -498,7 +498,7 @@ tt::tt_metal::ProgramDescriptor UnaryDeviceOperation::ProgramFactory::create_des
     DataFormat cb_data_format_for_input =
         (ops_chain[0].type() == unary::UnaryOpType::BITCAST) ? cb_data_format_output : cb_data_format;
 
-    // DRAM-sharded flow (get_dram_shard_plan). The CBs hold two bursts, so reads overlap compute.
+    // The CBs hold two bursts, so the next burst is read while compute works.
     const auto plan = get_dram_shard_plan(
         ops_chain,
         input.tensor_spec(),

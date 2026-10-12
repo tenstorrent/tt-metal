@@ -115,6 +115,9 @@ void add_input_dtype_defines(DataType dtype, std::map<std::string, std::string>&
 
 std::string_view get_compute_kernel_path(UnaryOpType op_type, std::optional<DataType> input_dtype = std::nullopt);
 
+// Whether the compute kernel takes its tiles chunk by chunk, as the DRAM-sharded work queue needs.
+bool compute_kernel_supports_work_queue(UnaryOpType op_type, std::optional<DataType> input_dtype);
+
 uint32_t pack_scalar_runtime_arg_impl(float param, DataType dtype);
 uint32_t pack_scalar_runtime_arg_impl(std::uint32_t param, DataType dtype);
 uint32_t pack_scalar_runtime_arg_impl(std::int32_t param, DataType dtype);

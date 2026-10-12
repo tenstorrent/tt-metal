@@ -30,13 +30,13 @@ const std::optional<tt::tt_metal::ShardSpec>& get_shard_spec(const tt::tt_metal:
 
 bool is_uneven(const tt::tt_metal::TensorSpec& t);
 
-/** DRAM height- or width-sharded TILE in and out with one shard spec, on grids with many cores per DRAM bank.
- * Pages are read slot by slot across the shards (SHARD_ROTATE), so consecutive pages hit different banks.
- * - StaticBurst: even split, several pages in flight.
- * - StaticOnePage: even split, one page in flight (compute-bound ops on small tensors).
- * - WorkQueue: cores pull chunks from a scheduler, so faster cores do more.
- * The flow is hashed; the sizes are runtime args. */
-enum class DramShardFlow : uint8_t { None, StaticBurst, StaticOnePage, WorkQueue };
+// How a DRAM height- or width-sharded unary op reads its pages; the flow is part of the program hash.
+enum class DramShardFlow : uint8_t {
+    None,           // main's path
+    StaticBurst,    // even split, rotated order, several pages per barrier
+    StaticOnePage,  // even split, rotated order, one page per barrier
+    WorkQueue,      // cores pull chunks from a scheduler
+};
 
 struct DramShardPlan {
     DramShardFlow flow = DramShardFlow::None;

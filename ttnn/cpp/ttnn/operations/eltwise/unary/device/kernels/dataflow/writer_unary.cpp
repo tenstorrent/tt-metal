@@ -66,7 +66,7 @@ void kernel_main() {
     auto order = dram_shard::RotatedPages::from_args();
     dram_shard::CbGroups groups{.depth = get_local_cb_interface(cb_id_dst).fifo_num_pages};
 #if WORK_QUEUE
-    auto queue = dram_shard::QueueWriter::from_args(dst_args.next_common_runtime_args_offset());
+    auto queue = dram_shard::QueueWriter::from_args(noc, dst_args.next_common_runtime_args_offset());
 #endif
     auto write_chunk = [&](uint32_t first, uint32_t count) {
         order.seek(first);

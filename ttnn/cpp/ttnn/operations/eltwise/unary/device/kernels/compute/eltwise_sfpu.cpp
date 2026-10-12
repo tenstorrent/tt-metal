@@ -26,28 +26,26 @@ void kernel_main() {
 
     compute_kernel_hw_startup(cb_input, cb_output);
     copy_init(cb_input);
-    dram_shard::for_each_chunk(num_tiles, [&](uint32_t count) {
-        for (uint32_t i = 0; i < count; ++i) {
-            tile_regs_acquire();
+    for (dram_shard::Tiles tiles(num_tiles); tiles.next();) {
+        tile_regs_acquire();
 
-            dfb_in.wait_front(1);
-            dfb_out.reserve_back(1);
+        dfb_in.wait_front(1);
+        dfb_out.reserve_back(1);
 
-            copy_tile(cb_input, 0, 0);
+        copy_tile(cb_input, 0, 0);
 
 #ifdef SFPU_OP_CHAIN_0
-            SFPU_OP_CHAIN_0
+        SFPU_OP_CHAIN_0
 #endif
 
-            tile_regs_commit();
-            tile_regs_wait();
+        tile_regs_commit();
+        tile_regs_wait();
 
-            pack_tile(0, cb_output);
+        pack_tile(0, cb_output);
 
-            dfb_in.pop_front(1);
-            dfb_out.push_back(1);
+        dfb_in.pop_front(1);
+        dfb_out.push_back(1);
 
-            tile_regs_release();
-        }
-    });
+        tile_regs_release();
+    }
 }
