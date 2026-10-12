@@ -1,32 +1,38 @@
-"""t457 noise-floor control: dense exp-ring SDPA with k_chunk capped at 256 (default 512), same precision.
+"""t457 noise-floor control: dense ring SDPA with k_chunk capped at 256 (default 512), same precision.
 
 Only the k-chunk accumulation order changes (more running max/sum rescales, different bf16 rounding). PSNR of this
 dense arm vs the stock dense arm is the trajectory floor for any equal-precision attention substitution.
+Turbo 4x8 (SP 8) takes ring_joint_sdpa with `_sdpa_program_config(ring=True)`; the exp-ring path is off there
+(job 041 patched only exp-ring and came out bit-identical).
 """
 import os
 
+import ttnn
 from models.tt_dit.models.transformers.minimax_h3 import attention_minimax_h3 as _am
 
-_init = _am.MiniMaxH3Attention.__init__
 _K = int(os.environ.get("T457_KMAX", "256"))
+_orig = _am.MiniMaxH3Attention._sdpa_program_config
+_seen = set()
 
 
-def _patched(self, *a, **kw):
-    _init(self, *a, **kw)
-    self.exp_ring_max_k_chunk = _K
+def _capped(self, seq_local, *, ring, windowed=False):
+    pc = _orig(self, seq_local, ring=ring, windowed=windowed)
+    if pc.k_chunk_size <= _K:
+        return pc
+    new = ttnn.SDPAProgramConfig(
+        compute_with_storage_grid_size=pc.compute_with_storage_grid_size,
+        q_chunk_size=pc.q_chunk_size,
+        k_chunk_size=_K,
+        exp_approx_mode=False,
+    )
+    self._sdpa_program_configs[(seq_local, ring, windowed)] = new
+    if (seq_local, ring) not in _seen:
+        _seen.add((seq_local, ring))
+        print(
+            f"[t457] sdpa seq_local {seq_local} ring {ring}: k_chunk {pc.k_chunk_size} -> {_K}, q {pc.q_chunk_size}",
+            flush=True,
+        )
+    return new
 
 
-_am.MiniMaxH3Attention.__init__ = _patched
-_seen = {}
-_build = _am.MiniMaxH3Attention._build_exp_sdpa_program_config
-
-
-def _logged(self, seq_local):
-    pc = _build(self, seq_local)
-    if seq_local not in _seen:
-        _seen[seq_local] = 1
-        print(f"[t457] exp sdpa seq_local {seq_local}: {pc}", flush=True)
-    return pc
-
-
-_am.MiniMaxH3Attention._build_exp_sdpa_program_config = _logged
+_am.MiniMaxH3Attention._sdpa_program_config = _capped
