@@ -243,3 +243,12 @@ spec tt-project/t453/t453.txt. blx01 broker job 992 (-t 600, py timeout 540, ala
 /var/tmp/fasth3/t409/out_t453/run.log; grep 'T453' for totals and per-op breakdowns (dense, vsa0.9_two_op,
 vsa0.9_ring).
 Next: read the breakdown; if a fix is clear, commit it and rerun one VSA arm vs dense, seed 0.
+
+## t453 run 1700 (2026-10-12 09:20 PDT)
+- blx01 job 992 failed at collection (exit 2, 11 s, no device work): `ModuleNotFoundError: No module named
+  'diffusers.models.transformers.transformer_minimax_h3'` (blx01 venv has stock diffusers 0.38.0). Not a drop.
+- Fix 7710e5c41bf: timing test builds its own random attention state dict and setup, no diffusers import.
+  Copied to blx01 t409/b (tmp+mv, md5 83ca5c37...). Collect-only on blx01: 2 tests (two_op, vsa_ring) for 4x8sp1tp0nl2.
+- Resubmitted as spec ID t453-attn-timing-r2: blx01 broker job 994 (-t 600). Log /var/tmp/fasth3/t409/out_t453/run.log.
+- Next: grep 'T453' in that log; compare dense vs vsa0.9 totals and the per-op split (coarse stage, all-gathers,
+  vsa_sdpa / vsa_ring_sdpa vs ring_joint_sdpa). Then push the branch (ttp push --own --detach).
