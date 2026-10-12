@@ -209,7 +209,65 @@ def init_share_key(source: str, inputs: list, header: str) -> str:
     """Key of the INIT measurement build a test takes: its source (the driver), its other compilation inputs and its
     speed-of-light header without the lines that declare INIT_NEUTRAL[source] names"""
     neutral = INIT_NEUTRAL.get(source.rsplit("/", 1)[-1], frozenset())
+    import os  # experiment hook (nsinit): LLK_EXP_INIT_SHARE=runtime (runtime names only) / percfg (no sharing)
+
+    mode = os.environ.get("LLK_EXP_INIT_SHARE", "")
+    if mode == "percfg":
+        neutral = frozenset()
+    elif mode == "runtime":
+        neutral = _EXP_NEUTRAL_RUNTIME.get(source.rsplit("/", 1)[-1], frozenset())
     lines = [l for l in header.split("\n") if declared_name(l) not in neutral]
     return sha256(
         " | ".join([source, *inputs, "<<speed-of-light header>>", *lines]).encode()
     ).hexdigest()
+
+
+# experiment hook (nsinit): the narrower table (runtime parameters only), LLK_EXP_INIT_SHARE=runtime
+_EXP_NEUTRAL_RUNTIME = {
+    "eltwise_binary_test.cpp": frozenset(
+        {"BLOCK_CT_DIM", "BLOCK_RT_DIM", "FULL_CT_DIM", "FULL_RT_DIM"}
+    ),
+    "fast_tilize_test.cpp": frozenset(
+        {"BLOCK_RT_DIM", "FULL_RT_DIM", "TILE_CNT", "buffer_B", "buffer_Res"}
+    ),
+    "math_matmul_test.cpp": frozenset(
+        {
+            "CT_DIM",
+            "INPUT_NUM_BLOCKS",
+            "INPUT_NUM_TILES_IN_BLOCK",
+            "KT_DIM",
+            "NUM_BLOCKS",
+            "NUM_TILES_IN_BLOCK",
+            "OUTPUT_NUM_BLOCKS",
+            "OUTPUT_NUM_TILES_IN_BLOCK",
+            "RT_DIM",
+            "TILE_CNT",
+            "UNPACK_TRANSPOSE_FACES",
+            "UNPACK_TRANSPOSE_WITHIN_FACE",
+            "buffer_B",
+            "buffer_Res",
+        }
+    ),
+    "matmul_test.cpp": frozenset(
+        {"CT_DIM", "KT_DIM", "RT_DIM", "TILE_CNT", "buffer_B", "buffer_Res"}
+    ),
+    "pack_dest_bank_perf.cpp": frozenset(
+        {
+            "INPUT_NUM_BLOCKS",
+            "INPUT_NUM_TILES_IN_BLOCK",
+            "NUM_BLOCKS",
+            "NUM_TILES_IN_BLOCK",
+            "OUTPUT_NUM_BLOCKS",
+            "OUTPUT_NUM_TILES_IN_BLOCK",
+        }
+    ),
+    "sfpu_reduce_row_max_perf.cpp": frozenset({"LOOP_FACTOR"}),
+    "sfpu_reduce_sdpa_perf.cpp": frozenset({"LOOP_FACTOR"}),
+    "unpack_a_bcast_eltwise_perf.cpp": frozenset(
+        {"SRCA_REUSE_COUNT", "TILE_CNT", "buffer_B", "buffer_Res"}
+    ),
+    "unpack_tilize_perf.cpp": frozenset(
+        {"BLOCK_RT_DIM", "FULL_RT_DIM", "TILE_CNT", "buffer_B", "buffer_Res"}
+    ),
+    "unpack_transpose_perf.cpp": frozenset({"UNPACK_TRANSPOSE_WITHIN_FACE"}),
+}
