@@ -98,10 +98,11 @@ class _LazyExpert(torch.nn.Module):
         return self.build()(*args)
 
 
-def reference_moe(model, snapshot_dir, loader, layer_id: int):
-    """fp32 ``model.MoE`` of layer ``layer_id``, with the checkpoint's (dequantized) weights."""
+def reference_moe(model, snapshot_dir, loader, layer_id: int, prefix: str | None = None):
+    """fp32 ``model.MoE`` of layer ``layer_id``, with the checkpoint's (dequantized) weights under ``prefix``
+    (default ``layers.{layer_id}.ffn.``)."""
     args = dataclasses.replace(model_args(model, snapshot_dir, max_seq=1), expert_dtype=None)
-    prefix = f"layers.{layer_id}.ffn."
+    prefix = prefix or f"layers.{layer_id}.ffn."
     with torch.device("meta"):
         moe = model.MoE(layer_id, args)
     for module, name in ((moe.gate, "gate"), (moe.shared_experts, "shared_experts")):
@@ -149,6 +150,49 @@ def reference_blocks(model, snapshot_dir, loader, layer_ids, max_seq: int) -> di
         block.load_state_dict({k: dequantized(loader, f"layers.{i}.{k}")() for k in own}, strict=False, assign=True)
         blocks[i] = block.eval()
     return blocks
+
+
+def reference_dspark(model, snapshot_dir, loader, max_seq: int):
+    """The checkpoint's DSpark drafter in fp32: ``model.DSparkBlock`` stages ``mtp.0..`` with the tied
+    ``embed`` / ``head``, driven by ``Transformer.forward_spec``.
+
+    Returns a namespace with ``mtp`` and ``hc_mult`` (what ``forward_spec`` reads) and
+    ``spec(input_ids, main_hidden, start_pos)``. ``main_hidden`` ``[b, 1, len(target_layer_ids) * dim]``
+    is the stream mean at the target layers' input for position ``start_pos``; at ``start_pos == 0`` it
+    may cover the whole prompt and only seeds the window.
+    """
+    args = model_args(model, snapshot_dir, max_seq)
+    embed = model.ParallelEmbedding(args.vocab_size, args.dim)
+    embed.weight = torch.nn.Parameter(dequantized(loader, "embed.weight")(), requires_grad=False)
+    head = model.ParallelHead(args.vocab_size, args.dim, args.norm_eps, args.hc_eps)
+    head.weight = torch.nn.Parameter(dequantized(loader, "head.weight")(), requires_grad=False)
+    stages = []
+    for stage in range(args.n_mtp_layers):
+        layer_id = args.n_layers + stage
+        prefix = f"mtp.{stage}."
+        attn = model.DSparkAttention(layer_id, args)
+        attn.load_state_dict({k: dequantized(loader, f"{prefix}attn.{k}")() for k in attn.state_dict()})
+        attn = attn.float().eval()
+
+        class Block(model.DSparkBlock):
+            """``model.DSparkBlock`` around the prebuilt attention, so the meta device below never reaches it."""
+
+            def attention_cls(self, layer_id, args, attn=attn):
+                return attn
+
+        with torch.device("meta"):
+            block = Block(layer_id, args)
+        block.ffn = reference_moe(model, snapshot_dir, loader, layer_id, prefix=f"{prefix}ffn.")
+        own = [k for k in block.state_dict() if not k.startswith(("attn.", "ffn.", "embed.", "head."))]
+        block.load_state_dict({k: dequantized(loader, prefix + k)() for k in own}, strict=False, assign=True)
+        block.embed, block.head = embed, head
+        block.temperature = 0  # greedy, as the device drafts
+        stages.append(block.eval())
+    drafter = types.SimpleNamespace(mtp=torch.nn.ModuleList(stages), hc_mult=args.hc_mult)
+    drafter.spec = lambda input_ids, main_hidden, start_pos: model.Transformer.forward_spec(
+        drafter, input_ids, main_hidden, start_pos
+    )
+    return drafter
 
 
 def reference_engram_hash(model, snapshot_dir, tokenizer, max_seq: int, max_batch_size: int = 1):

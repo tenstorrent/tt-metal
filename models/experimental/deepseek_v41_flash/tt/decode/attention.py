@@ -109,15 +109,21 @@ class DeepSeekV41LayerCache(_StaticLayerCache):
     ``new_key_row`` are ROW_MAJOR DRAM ``[1, 1, 1, Dh]`` / ``[1, 1, 1, index_head_dim]``: the
     compressed-KV row and index key the kv source wrote this step, carried to stages that select
     from the group without holding its source. They are ``None`` where no such stage exists.
+
+    ``win_hist_kv`` / ``win_hist_gate`` (speculative decode, ratio > 1 kv sources) are TILE DRAM
+    ``[1, 1, hist, Dh]``: every step's compressor-window row again, at ``pos % hist``, so a
+    rejected draft's write into the window can be undone.
     """
 
-    __slots__ = ("sel_tile", "new_kv_row", "new_key_row")
+    __slots__ = ("sel_tile", "new_kv_row", "new_key_row", "win_hist_kv", "win_hist_gate")
 
     def __init__(self, sel_tile=None, new_kv_row=None, new_key_row=None, **kwargs):
         super().__init__(**kwargs)
         self.sel_tile = sel_tile
         self.new_kv_row = new_kv_row
         self.new_key_row = new_key_row
+        self.win_hist_kv = None
+        self.win_hist_gate = None
 
 
 def _stash_row(row: ttnn.Tensor, buffer: ttnn.Tensor) -> None:
@@ -210,8 +216,11 @@ class DeepSeekV41Attention(DeepSeekV4Attention):
         if self.is_index_source:
             self.indexer = DeepSeekV41Indexer(config, weights, device, self.rot, cache, weight_dtype)
 
-    def _latent(self, tokens, scache, win_slot, pool: bool):
-        """Pre-RoPE compressed latent ``[1, 1, 1, Dh]`` of the group this step closes, else ``None``."""
+    def _latent(self, tokens, scache, win_slot, pool: bool, hist_slot=None):
+        """Pre-RoPE compressed latent ``[1, 1, 1, Dh]`` of the group this step closes, else ``None``.
+
+        ``hist_slot`` also writes the window rows into ``scache.win_hist_kv`` / ``win_hist_gate``.
+        """
         kv = ttnn.to_memory_config(
             self.comp_kv_proj(_decode_activation(self.comp_kv_proj, tokens)), ttnn.DRAM_MEMORY_CONFIG
         )
@@ -219,8 +228,12 @@ class DeepSeekV41Attention(DeepSeekV4Attention):
         if self.compress_ratio > 1:
             gate = self.comp_gate_proj(_decode_activation(self.comp_gate_proj, tokens))
             gate = ttnn.reshape(ttnn.to_memory_config(gate, ttnn.DRAM_MEMORY_CONFIG), [1, 1, 1, self.head_dim])
-            _update_cache_at(scache.win_kv, _one_row_per_user(kv), win_slot)
-            _update_cache_at(scache.win_gate, _one_row_per_user(gate), win_slot)
+            kv_row, gate_row = _one_row_per_user(kv), _one_row_per_user(gate)
+            _update_cache_at(scache.win_kv, kv_row, win_slot)
+            _update_cache_at(scache.win_gate, gate_row, win_slot)
+            if hist_slot is not None:
+                _update_cache_at(scache.win_hist_kv, kv_row, hist_slot)
+                _update_cache_at(scache.win_hist_gate, gate_row, hist_slot)
             if not pool:
                 return None
             # softmax over a pair is sigmoid of the difference; a softmax over the 2-row
@@ -273,6 +286,7 @@ class DeepSeekV41Attention(DeepSeekV4Attention):
         pool: bool = False,
         select: bool = False,
         received_entry: ttnn.Tensor | None = None,
+        hist_slot: ttnn.Tensor | None = None,
     ) -> ttnn.Tensor:
         """One decode step: ``hidden`` ``[B, 1, 1, D]`` -> the block's output, same shape.
 
@@ -281,7 +295,8 @@ class DeepSeekV41Attention(DeepSeekV4Attention):
         ``select`` re-selects the top-k rows. Exactly one of ``sdpa_cur_pos`` / ``mask``
         bounds the KV axis. ``received_entry`` (an index source on a stage without its kv
         source, on a step the source pooled) writes the rows in ``scache.new_kv_row`` /
-        ``new_key_row`` at that index before selecting.
+        ``new_key_row`` at that index before selecting. ``hist_slot`` (speculative decode) is
+        where a ratio > 1 kv source keeps this step's window rows (see :class:`DeepSeekV41LayerCache`).
         """
         if self.compress_ratio == 0:
             return self.decode_static(
@@ -290,7 +305,7 @@ class DeepSeekV41Attention(DeepSeekV4Attention):
         b, s, _, d = hidden.shape
         assert b * s == 1, "fused_lightning_select_kv decodes one user"
         tokens = ttnn.experimental.deepseek.all_gather_for_matmul(_pack_tokens(hidden), self._decode_activation_grid())
-        latent = self._latent(tokens, scache, win_slot, pool) if self.is_kv_source else None
+        latent = self._latent(tokens, scache, win_slot, pool, hist_slot) if self.is_kv_source else None
         assert latent is None or select, "a closed group is written by the select that follows it"
         assert received_entry is None or (select and latent is None), "received rows are written by a non-source select"
         q, kv, q_a = self._qkv(tokens, cos, sin)
