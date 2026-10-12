@@ -1,0 +1,388 @@
+import torch
+from loguru import logger
+
+from lightx2v.utils.registry_factory import SPARSE_OPERATOR_REGISTER
+from lightx2v_platform.base.global_var import AI_DEVICE
+
+try:
+    from flash_attn.cute import flash_attn_func as flash_attn_func_v4
+    from flash_attn.cute.block_sparsity import BlockSparseTensorsTorch
+except (ImportError, AttributeError) as exc:
+    logger.info(f"FlashAttention 4 is unavailable: {exc}")
+    flash_attn_func_v4 = None
+    BlockSparseTensorsTorch = None
+
+try:
+    from sageattn3_sparse import sage3_block_sparse_attn
+except ImportError:
+    logger.info("sageattn3_sparse not found, please install sageattn3_sparse first")
+    sage3_block_sparse_attn = None
+
+try:
+    from magi_attention.functional import flex_flash_attn_func as magi_ffa_func
+except ImportError:
+    magi_ffa_func = None
+
+try:
+    from flex_block_attn import flex_block_attn_func
+except ImportError:
+    flex_block_attn_func = None
+
+try:
+    import flashinfer
+except ImportError:
+    flashinfer = None
+
+
+@SPARSE_OPERATOR_REGISTER("sla_triton_operator")
+class SlaTritonOperator:
+    def __init__(self, operator_setting={}):
+        from .kernels.sla_kernel import _attention
+
+        self._attention = _attention
+        self.q_block_size = 128
+        self.k_block_size = 128
+        self.operator_setting = operator_setting
+
+    def __call__(
+        self,
+        q,
+        k,
+        v,
+        mask,
+        cu_seqlens_q=None,
+        cu_seqlens_kv=None,
+        max_seqlen_q=None,
+        max_seqlen_kv=None,
+        **kwargs,
+    ):
+        # (L, H, D) -> (B, H, L, D)
+        q = q.unsqueeze(0).transpose(1, 2).contiguous()
+        k = k.unsqueeze(0).transpose(1, 2).contiguous()
+        v = v.unsqueeze(0).transpose(1, 2).contiguous()
+
+        # (B, H, Q_block_num, K_block_num)
+        mask = mask.int()
+        topk = int(mask.sum(dim=-1).max().item())
+        lut = torch.topk(mask, topk, dim=-1, sorted=False).indices
+
+        out = self._attention.apply(q, k, v, mask, lut, topk, self.q_block_size, self.k_block_size)
+        out = out.transpose(1, 2).reshape(max_seqlen_q, -1)
+        return out
+
+
+@SPARSE_OPERATOR_REGISTER("spas_sage2_operator")
+class SparseSageAttentionV2Operator:
+    def __init__(self, operator_setting={}):
+        from .utils.sla_util import get_cuda_arch
+        from .utils.sparge_util import block_map_incremental_lut_triton, sage2_block_sparse_attn
+
+        self._block_map_incremental_lut_triton = block_map_incremental_lut_triton
+        self._sage2_block_sparse_attn = sage2_block_sparse_attn
+        self.operator_setting = operator_setting
+
+        self.arch = get_cuda_arch(torch.cuda.current_device())
+        if self.arch == "sm90":
+            self.q_block_size, self.k_block_size = 64, 128
+        else:
+            self.q_block_size, self.k_block_size = 128, 64
+
+    def __call__(
+        self,
+        q,
+        k,
+        v,
+        mask,
+        cu_seqlens_q=None,
+        cu_seqlens_kv=None,
+        max_seqlen_q=None,
+        max_seqlen_kv=None,
+        **kwargs,
+    ):
+        # (L, H, D) -> (B, H, L, D)
+        q = q.unsqueeze(0).transpose(1, 2).contiguous()
+        k = k.unsqueeze(0).transpose(1, 2).contiguous()
+        v = v.unsqueeze(0).transpose(1, 2).contiguous()
+
+        # (B, H, Q_block_num, K_block_num)
+        lut, valid_block_num = self._block_map_incremental_lut_triton(mask)
+        out = self._sage2_block_sparse_attn(
+            q, k, v, lut, valid_block_num, self.q_block_size, self.k_block_size, self.arch
+        )
+        out = out.transpose(1, 2).reshape(max_seqlen_q, -1)
+        return out
+
+
+@SPARSE_OPERATOR_REGISTER("spas_sage3_operator")
+class SparseSageAttentionV3Operator:
+    def __init__(self, operator_setting={}):
+        from .utils.sparge_util import block_map_ordinal_lut_triton
+
+        self._block_map_ordinal_lut_triton = block_map_ordinal_lut_triton
+        self.q_block_size = 128
+        self.k_block_size = 128
+        self.operator_setting = operator_setting
+        self.per_block_mean = self.operator_setting.get("per_block_mean", False)
+
+    def __call__(
+        self,
+        q,
+        k,
+        v,
+        mask,
+        cu_seqlens_q=None,
+        cu_seqlens_kv=None,
+        max_seqlen_q=None,
+        max_seqlen_kv=None,
+        **kwargs,
+    ):
+        # (L, H, D) -> (B, H, L, D)
+        q = q.unsqueeze(0).transpose(1, 2).contiguous()
+        k = k.unsqueeze(0).transpose(1, 2).contiguous()
+        v = v.unsqueeze(0).transpose(1, 2).contiguous()
+
+        # (B, H, Q_block_num, K_block_num)
+        lut, valid_block_num = self._block_map_ordinal_lut_triton(mask)
+        out = sage3_block_sparse_attn(q, k, v, lut, valid_block_num, per_block_mean=self.per_block_mean)
+        out = out.transpose(1, 2).reshape(max_seqlen_q, -1)
+        return out
+
+
+@SPARSE_OPERATOR_REGISTER("spas_fa4_operator")
+class SparseFlashAttentionV4Operator:
+    def __init__(self, operator_setting={}):
+        from .utils.sparge_util import block_map_ordinal_lut_triton
+
+        self._block_map_ordinal_lut_triton = block_map_ordinal_lut_triton
+        self.q_block_size = 128
+        self.k_block_size = 128
+        self.operator_setting = operator_setting
+
+    def __call__(
+        self,
+        q,
+        k,
+        v,
+        mask,
+        cu_seqlens_q=None,
+        cu_seqlens_kv=None,
+        max_seqlen_q=None,
+        max_seqlen_kv=None,
+        **kwargs,
+    ):
+        # (L, H, D) -> (B, L, H, D)
+        q = q.unsqueeze(0)
+        k = k.unsqueeze(0)
+        v = v.unsqueeze(0)
+
+        # (B, H, Q_block_num, K_block_num)
+        full_block_idx, full_block_cnt = self._block_map_ordinal_lut_triton(mask)
+        mask_block_cnt = torch.zeros_like(full_block_cnt)
+        mask_block_idx = torch.zeros_like(full_block_idx)
+        block_sparse_tensors = BlockSparseTensorsTorch(
+            mask_block_cnt=mask_block_cnt,
+            mask_block_idx=mask_block_idx,
+            full_block_cnt=full_block_cnt,
+            full_block_idx=full_block_idx,
+            block_size=(self.q_block_size, self.k_block_size),
+        )
+
+        out, _ = flash_attn_func_v4(
+            q=q,
+            k=k,
+            v=v,
+            block_sparse_tensors=block_sparse_tensors,
+        )
+
+        out = out.reshape(max_seqlen_q, -1)
+        return out
+
+
+@SPARSE_OPERATOR_REGISTER("magi_operator")
+class MagiOperator:
+    def __init__(self, operator_setting={}):
+        self.q_block_size = 128
+        self.k_block_size = 128
+        self.operator_setting = operator_setting
+
+    def generate_qk_ranges(self, mask, q_block_size, k_block_size, seqlen):
+        # mask: [H, Q_block_num, K_block_num]
+        h_indices, i_indices, j_indices = torch.nonzero(mask, as_tuple=True)
+
+        base_offset = h_indices * seqlen
+
+        q_start = base_offset + i_indices * q_block_size
+        q_end = base_offset + torch.clamp((i_indices + 1) * q_block_size, max=seqlen)
+
+        k_start = base_offset + j_indices * k_block_size
+        k_end = base_offset + torch.clamp((j_indices + 1) * k_block_size, max=seqlen)
+
+        q_ranges = torch.stack([q_start, q_end], dim=1).to(dtype=torch.int32)
+        k_ranges = torch.stack([k_start, k_end], dim=1).to(dtype=torch.int32)
+
+        return q_ranges, k_ranges
+
+    def __call__(
+        self,
+        q,
+        k,
+        v,
+        mask,
+        cu_seqlens_q=None,
+        cu_seqlens_kv=None,
+        max_seqlen_q=None,
+        max_seqlen_kv=None,
+        **kwargs,
+    ):
+        seqlen, head_num, head_dim = q.shape
+        # (B, H, Q_block_num, K_block_num) -> (H, Q_block_num, K_block_num)
+        mask = mask.squeeze(0)
+        q_ranges, k_ranges = self.generate_qk_ranges(mask, self.q_block_size, self.k_block_size, seqlen)
+        attn_type_map = torch.zeros(len(q_ranges), dtype=torch.int32, device="cpu").to(q.device, non_blocking=True)
+
+        q = q.permute(1, 0, 2).reshape(head_num * seqlen, 1, head_dim)
+        k = k.permute(1, 0, 2).reshape(head_num * seqlen, 1, head_dim)
+        v = v.permute(1, 0, 2).reshape(head_num * seqlen, 1, head_dim)
+
+        out = magi_ffa_func(
+            q,
+            k,
+            v,
+            q_ranges=q_ranges,
+            k_ranges=k_ranges,
+            attn_type_map=attn_type_map,
+            softmax_scale=kwargs.get("softmax_scale", None),
+            auto_range_merge=True,
+        )[0]
+
+        out = out.reshape(head_num, seqlen, head_dim).permute(1, 0, 2)
+
+        return out.reshape(out.shape[0], -1)
+
+
+@SPARSE_OPERATOR_REGISTER("flex_block_operator")
+class FlexBlockOperator:
+    def __init__(self, operator_setting={}):
+        self.q_block_size = 128
+        self.k_block_size = 128
+        self.operator_setting = operator_setting
+
+    def __call__(
+        self,
+        q,
+        k,
+        v,
+        mask,
+        cu_seqlens_q=None,
+        cu_seqlens_kv=None,
+        max_seqlen_q=None,
+        max_seqlen_kv=None,
+        **kwargs,
+    ):
+        q = q.unsqueeze(0).transpose(1, 2)
+        k = k.unsqueeze(0).transpose(1, 2)
+        v = v.unsqueeze(0).transpose(1, 2)
+
+        pad_len = (self.q_block_size - q.shape[2] % self.q_block_size) % self.q_block_size
+        if pad_len > 0:
+            q = torch.nn.functional.pad(q, (0, 0, 0, pad_len))
+            k = torch.nn.functional.pad(k, (0, 0, 0, pad_len))
+            v = torch.nn.functional.pad(v, (0, 0, 0, pad_len))
+
+        # (B, H, Q_block_num, K_block_num)
+        mask = mask.bool()
+        out = flex_block_attn_func(q, k, v, self.q_block_size, self.k_block_size, mask)
+
+        if pad_len > 0:
+            out = out[:, :, :-pad_len, :]
+
+        out = out.transpose(1, 2)
+
+        return out.reshape(max_seqlen_q, -1)
+
+
+@SPARSE_OPERATOR_REGISTER("flashinfer_operator")
+class FlashinferOperator:
+    sparse_wrapper = None
+    mask = None
+    plan_key = None
+
+    def __init__(self, q_block_size=128, k_block_size=128, operator_setting={}):
+        self.q_block_size = q_block_size
+        self.k_block_size = k_block_size
+        self.operator_setting = operator_setting
+        self._ensure_sparse_wrapper()
+
+    @classmethod
+    def _ensure_sparse_wrapper(cls):
+        if cls.sparse_wrapper is None:
+            float_workspace_buffer = torch.empty(1024 * 1024 * 1024, dtype=torch.uint8, device=AI_DEVICE)
+            cls.sparse_wrapper = flashinfer.sparse.VariableBlockSparseAttentionWrapper(
+                float_workspace_buffer, backend="fa2"
+            )
+
+    def __call__(
+        self,
+        q,
+        k,
+        v,
+        mask,
+        cu_seqlens_q=None,
+        cu_seqlens_kv=None,
+        max_seqlen_q=None,
+        max_seqlen_kv=None,
+        **kwargs,
+    ):
+        self._ensure_sparse_wrapper()
+        seqlen, head_num, head_dim = q.shape
+        kv_seqlen = k.shape[0]
+        softmax_scale = kwargs.get("softmax_scale", None)
+        # (B, H, Q_block_num, K_block_num) -> (H, Q_block_num, K_block_num)
+        mask = mask.squeeze(0)
+        plan_key = (
+            tuple(mask.shape),
+            seqlen,
+            kv_seqlen,
+            head_num,
+            head_dim,
+            q.dtype,
+            k.dtype,
+            str(q.device),
+            str(k.device),
+            self.q_block_size,
+            self.k_block_size,
+            softmax_scale,
+        )
+        if (
+            FlashinferOperator.mask is None
+            or FlashinferOperator.plan_key != plan_key
+            or not torch.equal(mask, FlashinferOperator.mask)
+        ):
+            _, q_block_num, k_block_num = mask.shape
+            block_row_sz = torch.ones(q_block_num, dtype=torch.int32, device=q.device) * self.q_block_size
+            block_row_sz[-1] = seqlen - self.q_block_size * (q_block_num - 1)
+            block_row_sz = block_row_sz.unsqueeze(0).repeat(head_num, 1)
+            block_col_sz = torch.ones(k_block_num, dtype=torch.int32, device=k.device) * self.k_block_size
+            block_col_sz[-1] = kv_seqlen - self.k_block_size * (k_block_num - 1)
+            block_col_sz = block_col_sz.unsqueeze(0).repeat(head_num, 1)
+            FlashinferOperator.sparse_wrapper.plan(
+                block_mask_map=mask,
+                block_row_sz=block_row_sz,
+                block_col_sz=block_col_sz,
+                num_qo_heads=head_num,
+                num_kv_heads=head_num,
+                head_dim=head_dim,
+                q_data_type=q.dtype,
+                kv_data_type=k.dtype,
+                sm_scale=softmax_scale,
+            )
+            FlashinferOperator.mask = mask.clone()
+            FlashinferOperator.plan_key = plan_key
+
+        q = q.transpose(0, 1)
+        k = k.transpose(0, 1)
+        v = v.transpose(0, 1)
+        out = FlashinferOperator.sparse_wrapper.run(q, k, v)
+        out = out.transpose(0, 1)
+
+        return out.reshape(max_seqlen_q, -1)
