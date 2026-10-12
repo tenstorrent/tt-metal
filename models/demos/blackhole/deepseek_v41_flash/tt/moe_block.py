@@ -123,6 +123,7 @@ class DSV41MoEBlock:
             torch_gate_weight=weights["gate_weight"],
             torch_gate_bias=weights["gate_bias"],
             bias_shift=gate_bias_shift,
+            torch_gate_bias_vl=weights.get("gate_bias_vl"),
         )
         if expert_state is not None:
             self.decode = self._weightless_decode(mesh_device, decode_cfg, buffers, expert_state=expert_state)

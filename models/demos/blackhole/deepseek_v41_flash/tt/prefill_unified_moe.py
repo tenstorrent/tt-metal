@@ -428,12 +428,15 @@ def reduce_scatter_tokens(part, cc, piece=None, mode=None, free=True):
     return out
 
 
-def route_cols(gate, hh_own, h, mc, cc, mode=None, dbg=None):
+def route_cols(gate, hh_own, h, mc, cc, mode=None, dbg=None, vl=None):
     """Routing of the gathered rows h [1,1,8n,D] (row order [column][own chunk][32]) -> (weights [8n,1,1,k] bf16 RM, indices [8n,1,1,k] uint16 RM, tensors to free).
     mode "full": router on every gathered row (8x the router work); "own": router on the own rows hh_own only + all-gather of the (fp32 packed) routing.
     """
     n, D = hh_own.shape[2], hh_own.shape[3]
     mode = os.environ.get("DSV41_UNI_ROUTE", "own") if mode is None else mode
+    assert vl is None or (
+        mode == "own" and os.environ.get("DSV41_UNI_ROUTER", "batched") == "batched"
+    ), "image-aware routing (bias_vl) needs DSV41_UNI_ROUTE=own and DSV41_UNI_ROUTER=batched"
     if mode == "full":
         N = h.shape[2]
         parts = [gate.forward(ttnn.slice(h, [0, 0, 32 * i, 0], [1, 1, 32 * (i + 1), D])) for i in range(N // 32)]
@@ -445,7 +448,7 @@ def route_cols(gate, hh_own, h, mc, cc, mode=None, dbg=None):
         return sc_all, ix_all, ()
     if os.environ.get("DSV41_UNI_ROUTER", "batched") == "batched":
         # ONE router for all own rows (matmul / activations on n rows, router_select over n rows: bit-identical to the 32-row slices)
-        sc, ix = gate._forward_fused(hh_own, grid=(min(4, max(1, n // 128)), 8))
+        sc, ix = gate._forward_fused(hh_own, grid=(min(4, max(1, n // 128)), 8), vl=vl)
         parts = []
     else:
         parts = [gate.forward(ttnn.slice(hh_own, [0, 0, 32 * i, 0], [1, 1, 32 * (i + 1), D])) for i in range(n // 32)]
@@ -472,14 +475,15 @@ def route_cols(gate, hh_own, h, mc, cc, mode=None, dbg=None):
     return sc_all, ix_all, (sc, ix, ixf, scf)
 
 
-def moe_cols(um, gate, hh_own, mc, cc, overlap=None):
+def moe_cols(um, gate, hh_own, mc, cc, overlap=None, vl=None):
     """Column-split MoE of a whole chunk. hh_own [1,1,n,D] tile bf16: the (n = N/8) normed hidden rows THIS column owns (own 32-token chunks in order).
     Routes the own rows (router per 32 rows), all-gathers hidden + routing over the 8 columns (row order [column][own chunk][32]: dispatch does not
     care about the token order), runs the pipeline and reduce-scatters the column partial sums back -> [1,1,n,D] (own rows, same order).
+    ``vl`` [1,1,n,1] fp32 tile (optional): 1 for the own rows inside an image span, which route with the gate's ``bias_vl``.
     """
     D = hh_own.shape[3]
     h = mc.allgather(hh_own, cc, axis=1, dim=2)
-    sc_all, ix_all, junk = route_cols(gate, hh_own, h, mc, cc)
+    sc_all, ix_all, junk = route_cols(gate, hh_own, h, mc, cc, vl=vl)
     x_rm = ttnn.reshape(ttnn.to_layout(h, ttnn.ROW_MAJOR_LAYOUT), [1, h.shape[2], D])
     ttnn.deallocate(h)
     part = um.forward(x_rm, sc_all, ix_all, overlap=overlap)

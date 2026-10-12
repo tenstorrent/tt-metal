@@ -83,10 +83,16 @@ class DSV41DeviceEmbedding:
             mesh_mapper=ttnn.ShardTensor2dMesh(self.md, dims=(0, None), mesh_shape=(rows, cols)),
         )
 
-    def forward(self, tokens):
-        """tokens [T,1] uint32 -> (streams [T,1,4,D] fp32, pre [T,1,1,4] fp32)."""
+    def forward(self, tokens, override=None, keep=None):
+        """tokens [T,1] uint32 -> (streams [T,1,4,D] fp32, pre [T,1,1,4] fp32).
+        ``override`` [1,1,T,D] bf16 tile + ``keep`` [1,1,T,1] (1 = keep the table row, 0 = take the override row; the override row is zero where keep = 1): image positions
+        of a prompt take the vision encoder's rows instead of the table row of the image token id (``emb * keep + override`` is exact: keep is 0 / 1).
+        """
         T = tokens.shape[0]
         emb = ttnn.embedding(tokens, self.weight, layout=ttnn.TILE_LAYOUT, dtype=ttnn.bfloat16)  # [T,1,D]
+        if override is not None:
+            e2 = ttnn.add(ttnn.multiply(ttnn.reshape(emb, [1, 1, T, emb.shape[-1]]), keep), override)
+            emb = ttnn.reshape(e2, [T, 1, emb.shape[-1]])
         h = ttnn.typecast(ttnn.reshape(emb, [T, 1, 1, emb.shape[-1]]), ttnn.float32)
         streams = ttnn.repeat(h, [1, 1, HC, 1])
         return streams, self.pre

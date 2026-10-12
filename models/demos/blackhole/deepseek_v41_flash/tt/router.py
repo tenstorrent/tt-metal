@@ -38,7 +38,9 @@ ROUTED_GAIN = float(os.environ.get("DSV41_ROUTED_GAIN", "1.0"))
 class DSV41Gate(TTMoEGate):
     """sqrtsoftplus, ungrouped, kernel path (257-512 experts), selection bias split into hi/lo."""
 
-    def __init__(self, mesh_device, config, torch_gate_weight, torch_gate_bias, bias_shift: float = 0.0):
+    def __init__(
+        self, mesh_device, config, torch_gate_weight, torch_gate_bias, bias_shift: float = 0.0, torch_gate_bias_vl=None
+    ):
         assert config.score_func == "sqrtsoftplus" and config.n_group == 1 and config.score_correction_bias
         # Ranking is invariant to a constant added to every expert's bias. Subtracting the layer's typical
         # selection cutoff (the 6th-ranked score+bias, std across tokens ~0.1) moves the values near the
@@ -114,6 +116,13 @@ class DSV41Gate(TTMoEGate):
             layout=ttnn.TILE_LAYOUT,
             memory_config=ttnn.DRAM_MEMORY_CONFIG,
             mesh_mapper=rep,
+        )
+        # image tokens select their experts with ``bias_vl`` instead of ``bias`` (checkpoint ``Gate``): per-token bias = bias + vl * (bias_vl - bias), the (shifted)
+        # ``bias`` of the exact router plus the difference of the raw biases (same shift on both: only the ranking matters)
+        self._dbias = (
+            None
+            if torch_gate_bias_vl is None
+            else const((torch_gate_bias_vl.to(torch.float32) - torch_gate_bias.to(torch.float32)).reshape(1, 1, 1, E))
         )
         self._zero_exact = const(torch.zeros(1, 1, 1, E))
         self._arange_col = const(torch.arange(E, dtype=torch.float32).reshape(1, 1, E, 1))
@@ -250,7 +259,7 @@ class DSV41Gate(TTMoEGate):
         )
         return weights, indices
 
-    def _forward_fused(self, tt_x: ttnn.Tensor, grid=(1, 8)):
+    def _forward_fused(self, tt_x: ttnn.Tensor, grid=(1, 8), vl=None):
         """DSV41_ROUTER=fused: fp32 matmul, score = sqrt(softplus) and rank = score + bias as in ``_forward_exact_fast2``
         (bit-identical rank values), then ONE JIT program (``router_select``: one core per token) replaces ``ttnn.topk`` (single
         core, 63-68 us), the one-hot select, the normalisation and the layout/typecast ops: exact fp32 top-k (lowest index wins
@@ -276,7 +285,13 @@ class DSV41Gate(TTMoEGate):
             memory_config=L1,
         )
         ttnn.deallocate(logits)
-        rank = ttnn.add(score, self._bias_exact, memory_config=L1)
+        if vl is None:
+            rank = ttnn.add(score, self._bias_exact, memory_config=L1)
+        else:  # ``vl`` [1,1,T,1] fp32 tile, 1 for the tokens inside an image span (they rank with bias_vl)
+            assert self._dbias is not None, "image tokens need the gate's bias_vl (built without it)"
+            bias_rows = ttnn.add(ttnn.multiply(vl, self._dbias, memory_config=L1), self._bias_exact, memory_config=L1)
+            rank = ttnn.add(score, bias_rows, memory_config=L1)
+            ttnn.deallocate(bias_rows)
         weights, indices = router_select(rank, score, k, 1e-20, self.scaling_factor / ROUTED_GAIN)
         ttnn.deallocate(rank)
         ttnn.deallocate(score)

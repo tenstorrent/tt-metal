@@ -23,6 +23,7 @@ from models.demos.blackhole.deepseek_v41_flash.tt.prefill_layer import colsplit_
 from models.demos.blackhole.deepseek_v41_flash.tt.prefill_taps import TAP_LAYERS
 
 T = 32
+DIM = 5120
 ER_RM = (
     os.environ.get("DSV41_ENGRAM_UPLOAD", "rm") == "rm"
 )  # Engram rows uploaded row-major and tilized on the device (="tile": old host tilize)
@@ -71,6 +72,10 @@ class DSV41PrefillModel:
         )
         self.timing = {}
         self._bufs = {}
+        self.vis = (
+            os.environ.get("DSV41_VISION", "0") == "1"
+        )  # image input: per-chunk embedding override / image mask buffers, bias_vl routing (colsplit + unified MoE only)
+        self._vis_dirty, self._vctx = {}, None
         self.pre_replay_hooks, self.post_replay_hooks = [], []
         self.cs = False
         self.dyn = self.dyn_trace = None
@@ -123,19 +128,68 @@ class DSV41PrefillModel:
             )
             for lid, e in self.engram.items()
         }
-        self._bufs[C] = (tok, er)
+        vb = None
+        if self.vis:
+            assert (
+                self.cs
+            ), "image input needs the column-split prefill (users per row x chunk a multiple of 256 tokens, grouped / unified MoE)"
+            n_own = R // self.cols
+            vb = (  # per device the rows of its own 32-token chunks (the layout of ``tok``): embedding override rows and the image mask
+                ttnn.from_torch(
+                    torch.zeros(rows * n_own, self.cols * DIM, dtype=torch.bfloat16),
+                    device=self.md,
+                    dtype=ttnn.bfloat16,
+                    layout=ttnn.ROW_MAJOR_LAYOUT,
+                    memory_config=ttnn.DRAM_MEMORY_CONFIG,
+                    mesh_mapper=self.shard_rc,
+                ),
+                ttnn.from_torch(
+                    torch.zeros(rows * n_own, self.cols, dtype=torch.float32),
+                    device=self.md,
+                    dtype=ttnn.float32,
+                    layout=ttnn.ROW_MAJOR_LAYOUT,
+                    memory_config=ttnn.DRAM_MEMORY_CONFIG,
+                    mesh_mapper=self.shard_rc,
+                ),
+            )
+            self._vis_dirty[C] = False
+        self._bufs[C] = (tok, er, vb)
         return self._bufs[C]
+
+    def _own_layout(self, x):
+        """[B, C, *tail] (user-major per mesh row) -> [rows * n8 * T, cols * prod(tail)]: the layout of the column-split ``tok`` upload (chunk 8g + c of a row -> column c)."""
+        B, C = x.shape[:2]
+        tail = x.shape[2:]
+        w = int(torch.tensor(tail).prod()) if tail else 1
+        n8 = self.U * C // T // self.cols
+        x = x.reshape(self.rows, n8, self.cols, T, w).permute(0, 1, 3, 2, 4)  # [rows, n8, T, cols, w]
+        return x.reshape(self.rows * n8 * T, self.cols * w).contiguous()
 
     def _host(self, t, dtype, layout):
         return ttnn.from_torch(t.contiguous(), dtype=dtype, layout=layout, mesh_mapper=self.shard)
 
-    def prep_inputs(self, tokens, hashes=None, active=None):
+    def prep_inputs(self, tokens, hashes=None, active=None, vis=None):
         """CPU part of a chunk's inputs (safe to run in a worker thread): tokens [B, C] (padded) and the Engram row gather -> host tensors.
         ``active`` (LongTensor of user indices, interleaved prefill): ``hashes`` then holds only those users ([len(active), C, ...]) and only their rows are
-        gathered from the Engram tables (the other users are masked fillers: zero rows)."""
+        gathered from the Engram tables (the other users are masked fillers: zero rows).
+        ``vis`` (DSV41_VISION=1): None, or (image [B, C] bool, override [B, C, dim] bf16): the positions inside an image span take the override rows as embeddings, route with
+        bias_vl and get no Engram contribution (their Engram rows are zero: the contribution is gate * value and value = wkv(0) = 0, exactly the checkpoint's masked gate).
+        """
         B, C = tokens.shape
         rows, R = self.rows, self.U * C
         out = {"tok": tokens.reshape(rows * R, 1).to(torch.int32)}
+        keep = None
+        if self.vis:
+            if vis is not None:
+                img, ovr = vis
+                out["vl"] = self._own_layout(img.float())
+                out["ov"] = self._own_layout(ovr.to(torch.bfloat16))
+                keep = (~img).reshape(B, C, 1).to(torch.bfloat16)
+                self._vis_dirty[C] = True
+            elif self._vis_dirty.get(C):  # a window without images after one with: clear the buffers once
+                out["vl"] = torch.zeros(rows * (R // self.cols), self.cols)
+                out["ov"] = torch.zeros(rows * (R // self.cols), self.cols * DIM, dtype=torch.bfloat16)
+                self._vis_dirty[C] = False
         if active is not None:
             act = torch.as_tensor(active).long()
             for lid in self.engram:
@@ -143,6 +197,8 @@ class DSV41PrefillModel:
                 full = torch.zeros(B, C, self.engram[lid].kin, dtype=torch.bfloat16)
                 if len(act):
                     full[act] = self.host_rows.rows(lid, hashes).to(torch.bfloat16)
+                if keep is not None:
+                    full = full * keep
                 out[lid] = full.reshape(rows, 1, R, full.shape[-1])
                 self.timing["host_rows_gather_dequant"] = (
                     self.timing.get("host_rows_gather_dequant", 0.0) + time.perf_counter() - t1
@@ -158,13 +214,14 @@ class DSV41PrefillModel:
                 continue
             r = self.host_rows.rows(lid, hashes)  # [B, C, Kin] bf16, user-major: table gather + fp8 -> bf16 dequant
             t2 = time.perf_counter()
-            out[lid] = r.reshape(rows, 1, R, r.shape[-1]).to(torch.bfloat16)
+            r = r.to(torch.bfloat16) if keep is None else r.to(torch.bfloat16) * keep
+            out[lid] = r.reshape(rows, 1, R, r.shape[-1])
             self.timing["host_rows_gather_dequant"] = self.timing.get("host_rows_gather_dequant", 0.0) + t2 - t1
         return out
 
     def upload_inputs(self, prepped, bufs):
         t0 = time.perf_counter()
-        tok, er = bufs
+        tok, er, vb = bufs
         if self.cs:  # chunk i (32 tokens) of a row goes to column i % 8: [rows*R,1] -> [rows*(R/8), cols]
             tk = prepped["tok"].reshape(self.rows, -1, self.cols, T).permute(0, 1, 3, 2)  # [rows, n8, T, cols]
             htok = ttnn.from_torch(
@@ -191,6 +248,20 @@ class DSV41PrefillModel:
                 if hasattr(self, "h2d_bytes")
                 else prepped[lid].numel() * 2 * self.cols
             )
+        if "ov" in prepped:
+            ov_dev, vl_dev = vb
+            h2d(
+                ttnn.from_torch(
+                    prepped["ov"], dtype=ttnn.bfloat16, layout=ttnn.ROW_MAJOR_LAYOUT, mesh_mapper=self.shard_rc
+                ),
+                ov_dev,
+            )
+            h2d(
+                ttnn.from_torch(
+                    prepped["vl"], dtype=ttnn.float32, layout=ttnn.ROW_MAJOR_LAYOUT, mesh_mapper=self.shard_rc
+                ),
+                vl_dev,
+            )
         self.timing["host_upload"] = self.timing.get("host_upload", 0.0) + time.perf_counter() - t0
 
     def write_inputs(self, tokens, hashes=None, bufs=None):
@@ -199,11 +270,37 @@ class DSV41PrefillModel:
         self.timing["host_gather"] = self.timing.get("host_gather", 0.0) + time.perf_counter() - t0
         self.upload_inputs(pre, bufs or self.alloc_inputs(tokens.shape[1]))
 
+    def _vision_ctx(self, vb, C):
+        """Per-forward tensors of the image input (DSV41_VISION=1) from the persistent buffers [rows*n_own, cols*dim] / [rows*n_own, cols] (per device the own rows): the
+        embedding override rows (tile bf16 [1,1,n,D]), keep = 1 - image mask and the image mask itself (tile fp32 [1,1,n,1], the routers' ``vl_rows``).
+        """
+        ov_dev, vl_dev = vb
+        n_own = self.U * C // self.cols
+        ov = ttnn.reshape(ttnn.to_layout(ov_dev, ttnn.TILE_LAYOUT), [1, 1, n_own, DIM])
+        vl = ttnn.reshape(ttnn.to_layout(vl_dev, ttnn.TILE_LAYOUT), [1, 1, n_own, 1])
+        return {"ov": ov, "vl": vl, "keep": ttnn.rsub(vl, 1.0)}
+
     def forward_device(self, bufs, S, s0, C, hook=None, profile=False, dyn=False):
+        vb = bufs[2]
+        if vb is None:
+            return self._forward_device(bufs, S, s0, C, hook, profile, dyn)
+        self._vctx = self._vision_ctx(vb, C)
+        for _, pl in self.layers:
+            pl.vl_rows = self._vctx["vl"]
+        try:
+            return self._forward_device(bufs, S, s0, C, hook, profile, dyn)
+        finally:
+            for _, pl in self.layers:
+                pl.vl_rows = None
+            for t in self._vctx.values():
+                ttnn.deallocate(t)
+            self._vctx = None
+
+    def _forward_device(self, bufs, S, s0, C, hook=None, profile=False, dyn=False):
         """One prompt chunk (positions [s0, s0+C) of every user): embedding -> layers (+Engram) -> (last chunk only) head on the chunks holding the
         last real token of each user. Only enqueues device ops (traceable when ``hook`` / ``profile`` are off). Returns {local user: logits shard
         [1,1,1,vocab/cols] of its last token} for the last chunk, else None."""
-        tok_dev, erows_dev = bufs
+        tok_dev, erows_dev, _ = bufs
         last = s0 + C >= S
         sink = getattr(self, "sink", None)
         taps = getattr(sink, "taps", None) if dyn else None  # (the traced / dynamic chunk of the hand-off model only)
@@ -218,7 +315,21 @@ class DSV41PrefillModel:
 
         t0 = time.perf_counter()
         n32 = self.U * C // T // (self.cols if self.cs else 1)
-        xs = [self.embedding.forward(ttnn.slice(tok_dev, [c * T, 0], [(c + 1) * T, 1]))[0] for c in range(n32)]
+        vc = self._vctx
+        xs = [
+            self.embedding.forward(
+                ttnn.slice(tok_dev, [c * T, 0], [(c + 1) * T, 1]),
+                *(
+                    ()
+                    if vc is None
+                    else (
+                        ttnn.slice(vc["ov"], [0, 0, c * T, 0], [1, 1, (c + 1) * T, DIM]),
+                        ttnn.slice(vc["keep"], [0, 0, c * T, 0], [1, 1, (c + 1) * T, 1]),
+                    )
+                ),
+            )[0]
+            for c in range(n32)
+        ]
         pres = [self.pre32 for _ in xs]
         sync("embedding", t0)
         if not getattr(self, "_moe_warm", False) and os.environ.get("DSV41_PREFILL_MOE_WARM", "1") != "0":
@@ -701,13 +812,14 @@ class DSV41PrefillModel:
         self._dyn_compiled = None
         self.timing["compile_and_capture"] = time.perf_counter() - t0
 
-    def replay_window(self, tokens, hashes, s0, C, active):
+    def replay_window(self, tokens, hashes, s0, C, active, vis=None):
         """One replay of the captured chunk trace for the window of positions [s0, s0 + C): tokens [B, C] (fillers 0), hashes of the active users only,
-        ``active`` bool [B]. Returns (host seconds, device seconds)."""
+        ``active`` bool [B]; ``vis`` (DSV41_VISION=1): (image mask [B, C] bool, embedding override [B, C, dim] bf16) or None. Returns (host seconds, device seconds).
+        """
         t0 = time.perf_counter()
         self.active_mask = torch.as_tensor(active).bool()
         act = self.active_mask.nonzero().reshape(-1)
-        self.upload_inputs(self.prep_inputs(tokens, hashes, act), self._bufs[C])
+        self.upload_inputs(self.prep_inputs(tokens, hashes, act, vis=vis), self._bufs[C])
         self.begin_chunk(s0, C)
         t1 = time.perf_counter()
         from models.demos.blackhole.deepseek_v41_flash.tt.decode_buckets import check_trace_allocations
