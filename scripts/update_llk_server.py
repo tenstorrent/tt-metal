@@ -183,18 +183,20 @@ def main():
         if git(root, "branch", "--show-current") != "llk_helper_library":
             raise RuntimeError("Run from a checkout on branch llk_helper_library")
         pending = Path(git(root, "rev-parse", "--path-format=absolute", "--git-path", "llk-server-update-pending"))
+        sources_pending = pending.with_name("llk-server-sources-pending")
+        published_head = pending.with_name("llk-server-published-head")
         remote_ref = "refs/heads/llk_helper_library"
         remote = git(root, "ls-remote", "--exit-code", "--refs", "origin", remote_ref)
         remote_tip, ref = remote.split()
         if ref != remote_ref:
             raise RuntimeError(f"Unexpected remote reference: {ref}")
         local_tip = git(root, "rev-parse", "HEAD")
-        if remote_tip == local_tip and not options.force and not pending.exists():
+        if remote_tip == local_tip and not options.force and not pending.exists() and not sources_pending.exists():
             print("llk_helper_library is unchanged; skipping fetch, build, and restart.", flush=True)
             return
         if remote_tip != local_tip:
             print(f"llk_helper_library changed: {local_tip[:12]} -> {remote_tip[:12]}", flush=True)
-        elif pending.exists():
+        elif pending.exists() or sources_pending.exists():
             print("Retrying an unfinished update.", flush=True)
         # Submodules follow the commits the parent pins.
         sub_paths = git(root, "config", "-f", ".gitmodules", "--get-regexp", r"^submodule\..*\.path$").split()[1::2]
@@ -207,6 +209,15 @@ def main():
         branch = "llk_helper_library"
         # Checked before the fetch, while the pre-rewrite remote commits are still known.
         had_local_commits = git(root, "rev-list", "--count", "HEAD", "--not", "--remotes=origin") != "0"
+        # A previous fetch may have replaced the remote history before the update
+        # failed. Only trust that earlier publication check for the exact same HEAD;
+        # commits added locally since then must still be protected.
+        if published_head.exists() and published_head.read_text().strip() == local_tip:
+            had_local_commits = False
+        if not had_local_commits:
+            temporary = published_head.with_suffix(".tmp")
+            temporary.write_text(local_tip + "\n")
+            temporary.replace(published_head)
         # Submodules are fetched by `submodule update` below.
         run(
             root,
@@ -216,12 +227,14 @@ def main():
             "origin",
             f"+refs/heads/{branch}:refs/remotes/origin/{branch}",
         )
+        remote_tip = git(root, "rev-parse", f"origin/{branch}")
         command = advance_command(root, branch, had_local_commits)
         # A rewritten branch (e.g. llk_helper_library rebased onto main) always rebuilds.
         rewritten = not is_ancestor(root, local_tip, remote_tip)
         rebuild = options.force or pending.exists() or rewritten or server_paths_changed(root, local_tip, remote_tip)
         server = find_server(root) if rebuild else None
         try:
+            sources_pending.write_text(remote_tip + "\n")
             if rebuild:
                 # Remember unfinished work before advancing HEAD, so a failed build
                 # is retried on the next timer tick even if the remote is unchanged.
@@ -233,11 +246,15 @@ def main():
                 # --checkout overrides `update = none`.
                 run(root, "git", "submodule", "update", "--checkout", "--", code_gen_path)
             if not rebuild:
+                sources_pending.unlink()
+                published_head.unlink(missing_ok=True)
                 print("No server-relevant changes; sources updated without a build or restart.", flush=True)
                 return
             run(root, "./build_metal.sh", *build_args)
             restart(root, server)
             pending.unlink()
+            sources_pending.unlink()
+            published_head.unlink(missing_ok=True)
         finally:
             if server is not None:
                 server[4].close()

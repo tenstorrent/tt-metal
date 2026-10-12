@@ -329,6 +329,21 @@ class UpdateServerTests(UpdateServerFixture):
         self.assert_not_restarted(self.update())
         self.assertTrue((self.root / ".git/llk-server-update-pending").exists())
 
+    def test_source_only_submodule_failure_retries_without_server(self):
+        self.bring_parent_up_to_date()
+        pinned = self.move_other_submodule_pointer()
+        self.old.terminate()
+        self.old.wait(timeout=5)
+        self.git(self.other_sub, "remote", "set-url", "origin", str(self.base / "missing"))
+        self.assertNotEqual(self.update().returncode, 0)
+        self.git(self.other_sub, "remote", "set-url", "origin", str(self.other_sub_remote))
+        result = self.update()
+        self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
+        self.assertEqual(self.git(self.other_sub, "rev-parse", "HEAD"), pinned)
+        self.assertFalse((self.root / "state/build-ran").exists())
+        self.assertFalse((self.root / ".git/llk-server-sources-pending").exists())
+        self.assertIn("unchanged; skipping", self.update().stdout)
+
     def rewrite_parent_remote(self, extra_file=None):
         """Simulate a rebase of llk_helper_library: the harness commit is replaced by a rewritten copy."""
         self.git(self.root, "fetch", "-q", "origin")  # as a previous update would have
@@ -354,6 +369,28 @@ class UpdateServerTests(UpdateServerFixture):
         before = self.commit(self.root, "local", "local commit")
         result = self.update()
         self.assert_not_restarted(result)
+        self.assertIn("local commits", result.stderr)
+        self.assertEqual(self.git(self.root, "rev-parse", "HEAD"), before)
+
+    def test_rewritten_parent_retries_after_server_discovery_failure(self):
+        tip = self.rewrite_parent_remote()
+        self.old.terminate()
+        self.old.wait(timeout=5)
+        self.assertIn("found 0", self.update().stderr)
+        self.start_server()
+        result = self.update()
+        self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
+        self.assertEqual(self.git(self.root, "rev-parse", "HEAD"), tip)
+        self.old.wait(timeout=5)
+
+    def test_rewrite_retry_protects_new_local_commits(self):
+        self.rewrite_parent_remote()
+        self.old.terminate()
+        self.old.wait(timeout=5)
+        self.assertIn("found 0", self.update().stderr)
+        before = self.commit(self.root, "local", "new local work")
+        result = self.update()
+        self.assertNotEqual(result.returncode, 0)
         self.assertIn("local commits", result.stderr)
         self.assertEqual(self.git(self.root, "rev-parse", "HEAD"), before)
 
