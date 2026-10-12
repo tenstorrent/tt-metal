@@ -19,27 +19,32 @@
 
 #include "api/dataflow/dataflow_api.h"
 #include "api/dataflow/dataflow_buffer.h"
+#include "api/dataflow/endpoints.h"
+#include "api/dataflow/noc.h"
 #include "experimental/kernel_args.h"
 
 void kernel_main() {
     constexpr uint32_t num_layers = get_arg(args::num_layers);
     constexpr uint32_t num_tensors = get_arg(args::num_tensors);
     constexpr uint32_t num_blocks = get_arg(args::num_blocks);
-    constexpr uint32_t staging_size_bytes = get_arg(args::staging_size_bytes);
     constexpr uint32_t num_staging_blocks = get_arg(args::num_staging_blocks);
     constexpr uint32_t max_block_num_tiles = get_arg(args::max_block_num_tiles);
-    constexpr uint32_t max_block_size = get_arg(args::max_block_size);
     constexpr bool skip_ptr_update = get_arg(args::skip_ptr_update);
 
     const uint32_t bank_id = get_arg(args::bank_id);
     const uint32_t vc = get_arg(args::vc);
 
+    const Noc noc;
+    const AllocatorBank<AllocatorBankType::DRAM> dram_bank;
     DataflowBuffer staging(dfb::staging);
     DataflowBuffer addrs(dfb::addrs);
     DataflowBuffer sync(dfb::sync);
 
+    // The staging ring is addressed directly: reads for the next block are issued before the current one is
+    // pushed, so the DFB's write pointer lags the address being filled.
+    const uint32_t max_block_size = max_block_num_tiles * staging.get_entry_size();
     const uint32_t l1_buffer_start_addr = staging.get_write_ptr();
-    const uint32_t l1_buffer_end_addr = l1_buffer_start_addr + staging_size_bytes;
+    const uint32_t l1_buffer_end_addr = l1_buffer_start_addr + staging.get_total_size_bytes();
 
     volatile tt_l1_ptr uint32_t* tensor_addrs_l1 = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(addrs.get_read_ptr());
 
@@ -48,10 +53,11 @@ void kernel_main() {
             const uint32_t curr_page_size = get_common_vararg(t);
             const uint32_t curr_block_num_pages = get_common_vararg(num_tensors + t);
 
-            // Address setup
-            uint32_t tensor_base_address = tensor_addrs_l1[layer * num_tensors + t];
-            uint64_t src_base_addr = get_noc_addr_from_bank_id<true>(bank_id, tensor_base_address);
-            noc_async_read_one_packet_set_state<true>(src_base_addr, curr_page_size, vc);
+            // Address setup. The read state holds the bank's NoC coordinates; each read supplies the low
+            // 32 bits of its address.
+            const uint32_t tensor_base_address = tensor_addrs_l1[layer * num_tensors + t];
+            const uint32_t src_base_addr = static_cast<uint32_t>(
+                dram_bank.get_noc_addr_from_bank_id(bank_id, tensor_base_address, noc.get_noc_id()));
 
             uint32_t src_read_addr = 0;
 
@@ -69,10 +75,16 @@ void kernel_main() {
             uint32_t l1_write_addr = l1_write_addr_start;
 
             for (uint32_t block = 0; block < num_blocks; block++) {
-                // Set trid for current block
-                noc_async_read_set_trid(curr_block_trid);
+                // Every read of this block carries its staging slot's transaction id.
+                noc.set_async_read_state<NocOptions::CUSTOM_VC | NocOptions::TXN_ID, NOC_MAX_BURST_SIZE>(
+                    dram_bank,
+                    curr_page_size,
+                    {.bank_id = bank_id, .addr = tensor_base_address},
+                    {.vc = vc, .trid = curr_block_trid});
 
-                // Issue noc async read commands for current block
+                // Issue noc async read commands for current block. Noc::async_read_with_state always counts
+                // the read as issued; performance mode skips that count (re-synced at exit), which only the
+                // free function can.
                 uint32_t temp_l1_write_addr = l1_write_addr;
                 for (uint32_t h = 0; h < curr_block_num_pages; ++h) {
                     noc_async_read_one_packet_with_state_with_trid<skip_ptr_update>(
@@ -85,7 +97,7 @@ void kernel_main() {
                     // After the first block, keep issuing reads rather than wait for it.
                     num_free_blocks_in_buffer -= 1;
                 } else {
-                    noc_async_read_barrier_with_trid(block_trid_to_wait);
+                    noc.async_read_barrier<NocOptions::TXN_ID>({.trid = block_trid_to_wait});
                     staging.push_back(max_block_num_tiles);
                     block_trid_to_wait = block_trid_to_wait == num_staging_blocks ? 1 : (block_trid_to_wait + 1);
                 }
@@ -107,22 +119,19 @@ void kernel_main() {
             }
 
             // last block to wait
-            noc_async_read_barrier_with_trid(block_trid_to_wait);
+            noc.async_read_barrier<NocOptions::TXN_ID>({.trid = block_trid_to_wait});
             staging.push_back(max_block_num_tiles);
         }
     }
 
     // Leave the read command buffer untagged: in dynamic-NOC mode it is also an atomic buffer, whose
-    // packet tag the firmware requires to be zero before the next kernel.
+    // packet tag the firmware requires to be zero before the next kernel. The Noc object sets a tag only
+    // along with a whole read state.
     noc_async_read_set_trid(0);
 
     // In performance mode the reads skipped the NoC counters; re-sync them before exit. The writer shares
-    // this NOC (dynamic-NOC mode shares the counters too), so wait until it has no traffic in flight.
+    // this NOC and, in dynamic-NOC mode, the counters, so wait until it has no traffic in flight.
     sync.wait_front(1);
     sync.pop_front(1);
-    if (noc_mode == DM_DEDICATED_NOC) {
-        ncrisc_noc_counters_init();
-    } else {
-        dynamic_noc_local_state_init();
-    }
+    dynamic_noc_local_state_init();
 }

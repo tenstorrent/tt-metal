@@ -235,9 +235,10 @@ ProgramSpec, and a GCB and a pipe cannot share a Program, so this path is a
 second program factory (`DramPrefetcherPipeSpecFactory`, a Metal 2.0 spec
 factory) beside the GCB's descriptor factory; the geometry above is shared.
 
-- Senders: the pipes' sender cores are the reader cores. Taken in row-major
-  order, the i-th reads DRAM bank i (the order the GCB path takes its sender
-  cores in); pipes beyond the reader count are not used.
+- Senders: the pipes' sender cores are the reader cores. In the order given,
+  the i-th pipe's sender reads DRAM bank i, as the GCB path's i-th sender in
+  `sender_receiver_core_mapping` does; pipes beyond the reader count are not
+  used, and the readers' senders must be distinct.
 - Receivers: every reader's pipe has the same receiver count R. Receiver r, in
   the order the pipe's `receiver_cores()` lists them, gets column slice r of
   every block row (`PrefetcherPipe::write_strided`, the same split as

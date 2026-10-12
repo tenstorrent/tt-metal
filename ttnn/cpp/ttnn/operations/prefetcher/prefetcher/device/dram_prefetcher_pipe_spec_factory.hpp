@@ -13,9 +13,10 @@
 
 namespace ttnn::prim {
 
-// The pipes dram_prefetcher drives, in reader order: the first `num_readers` of `prefetcher_pipes` with
-// their sender cores taken in row-major order, the order the GlobalCircularBuffer path takes its sender
-// cores in. Reader i is pipe i's sender and reads DRAM bank i.
+// The pipes dram_prefetcher drives, in reader order: the first `num_readers` of `prefetcher_pipes`, in the
+// order given, as the GlobalCircularBuffer path takes its senders in sender_receiver_core_mapping order.
+// Reader i is pipe i's sender and reads DRAM bank i. The pipes must be non-null (see
+// ttnn::prefetcher_pipe_refs), and the readers' senders must be distinct.
 ttnn::PrefetcherPipeList dram_prefetcher_reader_pipes(
     const ttnn::PrefetcherPipeList& prefetcher_pipes, uint32_t num_readers);
 

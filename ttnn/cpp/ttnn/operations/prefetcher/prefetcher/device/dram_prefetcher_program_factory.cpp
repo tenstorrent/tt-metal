@@ -39,15 +39,14 @@ std::pair<uint32_t, uint32_t> get_max_page_size_and_num_pages(
 }  // namespace
 
 DramPrefetcherGeometry compute_dram_prefetcher_geometry(
-    const std::vector<Tensor>& weight_tensors, const uint32_t num_receivers_per_reader) {
+    const ttsl::Span<const Tensor> weight_tensors, const uint32_t num_receivers_per_reader) {
     TT_FATAL(!weight_tensors.empty(), "dram_prefetcher needs at least one weight tensor besides the address tensor");
     DramPrefetcherGeometry geometry;
-    geometry.num_receivers_per_reader = num_receivers_per_reader;
     geometry.num_readers = weight_tensors[0].shard_spec()->grid.num_cores();
     geometry.num_blocks = geometry.num_readers * num_receivers_per_reader;
     const uint32_t num_blocks = geometry.num_blocks;
 
-    // Largest single NoC transfer the reader and writer issue.
+    // Largest page the reader's DRAM reads and the writer's receiver writes are split into.
     constexpr uint32_t max_page_size = 8192;
 
     geometry.tensors.reserve(weight_tensors.size());
@@ -83,6 +82,28 @@ DramPrefetcherGeometry compute_dram_prefetcher_geometry(
     return geometry;
 }
 
+void append_per_tensor_args(
+    std::vector<uint32_t>& args,
+    const DramPrefetcherGeometry& geometry,
+    uint32_t DramPrefetcherTensorGeometry::* const field) {
+    for (const auto& t : geometry.tensors) {
+        args.push_back(t.*field);
+    }
+}
+
+std::vector<CoreCoord> dram_prefetcher_gcb_reader_cores(
+    const tt::tt_metal::experimental::GlobalCircularBuffer& global_cb, const uint32_t num_readers) {
+    // The sender set holds one single-core range per sender, in mapping order, so this walk keeps that order.
+    std::vector<CoreCoord> reader_cores = corerange_to_cores(global_cb.sender_cores(), std::nullopt, true);
+    TT_ASSERT(
+        reader_cores.size() >= num_readers,
+        "global_cb has {} senders, fewer than the {} readers",
+        reader_cores.size(),
+        num_readers);
+    reader_cores.resize(num_readers);
+    return reader_cores;
+}
+
 uint32_t dram_prefetcher_reader_vc(const std::vector<CoreCoord>& reader_cores, const uint32_t reader_index) {
     // Reader i reads DRAM bank i, on one of the two DRAM-read VCs (2 and 3) by bank parity. A reader
     // whose row already holds a reader of the same parity moves to the other VC.
@@ -115,7 +136,7 @@ ProgramDescriptor DramPrefetcherProgramFactory::create_descriptor(
     const ttnn::Tensor& tensor_addrs = input_tensors.back();  // Last tensor is tensor_addrs
     Buffer* tensor_addrs_buffer = tensor_addrs.buffer();
     // tensors that with actual data
-    const std::vector<Tensor> tensors(input_tensors.begin(), input_tensors.end() - 1);
+    const ttsl::Span<const Tensor> tensors(input_tensors.data(), input_tensors.size() - 1);
 
     /* Dataformats */
     tt::DataFormat tensor_addrs_data_format = tt::tt_metal::datatype_to_dataformat_converter(tensor_addrs.dtype());
@@ -142,15 +163,8 @@ ProgramDescriptor DramPrefetcherProgramFactory::create_descriptor(
         global_cb.size());
 
     /* Cores setup */
-    const auto& all_reader_core_range = global_cb.sender_cores();
-    auto reader_core_range_vec = corerange_to_cores(all_reader_core_range, std::nullopt, true);
-    std::vector<CoreRange> active_reader_core_range_vec;
-    active_reader_core_range_vec.reserve(num_readers);
-    for (uint32_t i = 0; i < num_readers; ++i) {
-        auto core = reader_core_range_vec[i];
-        active_reader_core_range_vec.push_back(CoreRange{core, core});
-    }
-    auto reader_core_range = CoreRangeSet{std::move(active_reader_core_range_vec)};
+    const std::vector<CoreCoord> reader_cores = dram_prefetcher_gcb_reader_cores(global_cb, num_readers);
+    const CoreRangeSet reader_core_range(std::vector<CoreRange>(reader_cores.begin(), reader_cores.end()));
 
     /* read cb setup */
     uint32_t reader_cb_single_tile_size = max_tile_size;
@@ -248,24 +262,18 @@ ProgramDescriptor DramPrefetcherProgramFactory::create_descriptor(
     writer_ct_args.push_back(static_cast<uint32_t>(enable_performance_mode));
 
     /* Runtime args */
-    std::vector<uint32_t> page_sizes;
-    std::vector<uint32_t> block_num_pages;
-    std::vector<uint32_t> tensor_block_num_tiles;
-    std::vector<uint32_t> coalesced_page_sizes;
-    std::vector<uint32_t> coalesced_num_pages;
-    std::vector<uint32_t> tensor_tile_sizes;
-    std::vector<uint32_t> block_heights_in_tiles;
-    for (const auto& t : geometry.tensors) {
-        page_sizes.push_back(t.page_size);
-        block_num_pages.push_back(t.block_num_pages);
-        tensor_block_num_tiles.push_back(t.block_num_tiles);
-        coalesced_page_sizes.push_back(t.coalesced_page_size);
-        coalesced_num_pages.push_back(t.coalesced_num_pages);
-        tensor_tile_sizes.push_back(t.tile_size);
-        block_heights_in_tiles.push_back(t.block_height_in_tiles);
-    }
-
-    const auto& reader_cores = corerange_to_cores(reader_core_range, std::nullopt, true);
+    // The per-tensor tables every core's runtime args end with, in the order the kernels index them.
+    using TensorGeometry = DramPrefetcherTensorGeometry;
+    std::vector<uint32_t> reader_tensor_args;
+    append_per_tensor_args(reader_tensor_args, geometry, &TensorGeometry::page_size);
+    append_per_tensor_args(reader_tensor_args, geometry, &TensorGeometry::block_num_pages);
+    append_per_tensor_args(reader_tensor_args, geometry, &TensorGeometry::block_num_tiles);
+    std::vector<uint32_t> writer_tensor_args;
+    append_per_tensor_args(writer_tensor_args, geometry, &TensorGeometry::coalesced_page_size);
+    append_per_tensor_args(writer_tensor_args, geometry, &TensorGeometry::coalesced_num_pages);
+    append_per_tensor_args(writer_tensor_args, geometry, &TensorGeometry::block_num_tiles);
+    append_per_tensor_args(writer_tensor_args, geometry, &TensorGeometry::tile_size);
+    append_per_tensor_args(writer_tensor_args, geometry, &TensorGeometry::block_height_in_tiles);
 
     KernelDescriptor reader_desc;
     reader_desc.kernel_source = "ttnn/cpp/ttnn/operations/prefetcher/prefetcher/device/kernels/reader_dram.cpp";
@@ -297,24 +305,12 @@ ProgramDescriptor DramPrefetcherProgramFactory::create_descriptor(
         const uint32_t bank_id = core_index;
         const uint32_t vc = dram_prefetcher_reader_vc(reader_cores, core_index);
 
-        std::vector<uint32_t> reader_rt_args;
-        reader_rt_args.reserve(3 + 3 * num_tensors);
-        reader_rt_args.insert(reader_rt_args.end(), {bank_id, vc, total_num_blocks_in_buffer});
-        reader_rt_args.insert(reader_rt_args.end(), page_sizes.begin(), page_sizes.end());
-        reader_rt_args.insert(reader_rt_args.end(), block_num_pages.begin(), block_num_pages.end());
-        reader_rt_args.insert(reader_rt_args.end(), tensor_block_num_tiles.begin(), tensor_block_num_tiles.end());
-
+        std::vector<uint32_t> reader_rt_args = {bank_id, vc, total_num_blocks_in_buffer};
+        reader_rt_args.insert(reader_rt_args.end(), reader_tensor_args.begin(), reader_tensor_args.end());
         reader_desc.runtime_args.emplace_back(core, std::move(reader_rt_args));
 
         /* writer kernel */
-        std::vector<uint32_t> writer_rt_args;
-        writer_rt_args.reserve(5 * num_tensors);
-        writer_rt_args.insert(writer_rt_args.end(), coalesced_page_sizes.begin(), coalesced_page_sizes.end());
-        writer_rt_args.insert(writer_rt_args.end(), coalesced_num_pages.begin(), coalesced_num_pages.end());
-        writer_rt_args.insert(writer_rt_args.end(), tensor_block_num_tiles.begin(), tensor_block_num_tiles.end());
-        writer_rt_args.insert(writer_rt_args.end(), tensor_tile_sizes.begin(), tensor_tile_sizes.end());
-        writer_rt_args.insert(writer_rt_args.end(), block_heights_in_tiles.begin(), block_heights_in_tiles.end());
-
+        std::vector<uint32_t> writer_rt_args = writer_tensor_args;
         writer_desc.runtime_args.emplace_back(core, std::move(writer_rt_args));
     }
 

@@ -60,11 +60,8 @@ void kernel_main() {
                     pipe.push_back(1, noc);
                     staging.pop_front(max_block_num_tiles);
                 }
-
-                if (t == num_tensors - 1) {
-                    pipe.barrier();
-                }
             }
+            pipe.barrier();
         }
     }  // The pipe's destructor runs here: nothing of this kernel's is in flight on the NOC past this point.
 

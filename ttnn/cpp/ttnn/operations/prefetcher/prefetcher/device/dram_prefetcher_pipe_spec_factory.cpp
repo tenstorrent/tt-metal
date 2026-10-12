@@ -4,13 +4,14 @@
 
 #include "dram_prefetcher_pipe_spec_factory.hpp"
 
-#include <algorithm>
+#include <set>
 #include <string>
 #include <utility>
 #include <vector>
 
 #include <fmt/format.h>
 #include <tt-metalium/core_coord.hpp>
+#include <tt-metalium/hal.hpp>
 #include <tt-metalium/experimental/metal2_host_api/program_run_args.hpp>
 #include <tt-metalium/experimental/metal2_host_api/program_spec.hpp>
 #include <tt-metalium/experimental/prefetcher_pipe.hpp>
@@ -40,28 +41,24 @@ using tt::tt_metal::experimental::WorkUnitSpec;
 
 ttnn::PrefetcherPipeList dram_prefetcher_reader_pipes(
     const ttnn::PrefetcherPipeList& prefetcher_pipes, const uint32_t num_readers) {
-    std::vector<CoreRange> sender_ranges;
-    sender_ranges.reserve(prefetcher_pipes.size());
-    for (const auto& pipe : ttnn::prefetcher_pipe_refs(prefetcher_pipes)) {
-        sender_ranges.emplace_back(pipe.get().sender_core());
-    }
-    const std::vector<CoreCoord> senders =
-        corerange_to_cores(CoreRangeSet(std::move(sender_ranges)), std::nullopt, /*row_wise=*/true);
     TT_FATAL(
-        senders.size() >= num_readers,
-        "dram_prefetcher needs a PrefetcherPipe with its own sender core for each of its {} readers, but the {} "
-        "prefetcher_pipes have only {} distinct sender cores",
+        prefetcher_pipes.size() >= num_readers,
+        "ttnn.dram_prefetcher needs one PrefetcherPipe per reader core: the weights are sharded over {} DRAM banks, "
+        "so {} reader cores, but only {} prefetcher_pipes were given",
         num_readers,
-        prefetcher_pipes.size(),
-        senders.size());
+        num_readers,
+        prefetcher_pipes.size());
 
-    ttnn::PrefetcherPipeList reader_pipes;
-    reader_pipes.reserve(num_readers);
+    ttnn::PrefetcherPipeList reader_pipes(prefetcher_pipes.begin(), prefetcher_pipes.begin() + num_readers);
+    std::set<CoreCoord> reader_cores;
     for (uint32_t i = 0; i < num_readers; ++i) {
-        const auto it = std::find_if(prefetcher_pipes.begin(), prefetcher_pipes.end(), [&](const auto& pipe) {
-            return pipe->sender_core() == senders[i];
-        });
-        reader_pipes.push_back(*it);
+        TT_FATAL(
+            reader_cores.insert(reader_pipes[i]->sender_core()).second,
+            "ttnn.dram_prefetcher runs one reader per PrefetcherPipe sender core, but prefetcher_pipes[{}] shares "
+            "sender {} with an earlier pipe. Give each of the first {} pipes its own sender core.",
+            i,
+            reader_pipes[i]->sender_core().str(),
+            num_readers);
     }
     return reader_pipes;
 }
@@ -72,7 +69,7 @@ ttnn::device_operation::ProgramArtifacts DramPrefetcherPipeSpecFactory::create_p
     Tensor& /*tensor_return_value*/) {
     const auto& input_tensors = tensor_args.input_tensors;
     const Tensor& tensor_addrs = input_tensors.back();
-    const std::vector<Tensor> weight_tensors(input_tensors.begin(), input_tensors.end() - 1);
+    const ttsl::Span<const Tensor> weight_tensors(input_tensors.data(), input_tensors.size() - 1);
     const uint32_t num_tensors = weight_tensors.size();
     const uint32_t num_layers = operation_attributes.num_layers;
 
@@ -83,14 +80,11 @@ ttnn::device_operation::ProgramArtifacts DramPrefetcherPipeSpecFactory::create_p
     const DramPrefetcherGeometry geometry = compute_dram_prefetcher_geometry(weight_tensors, num_receivers_per_reader);
 
     std::vector<CoreCoord> reader_cores;
-    std::vector<CoreRange> reader_ranges;
     reader_cores.reserve(num_readers);
-    reader_ranges.reserve(num_readers);
     for (const auto& pipe : reader_pipes) {
         reader_cores.push_back(pipe->sender_core());
-        reader_ranges.emplace_back(pipe->sender_core());
     }
-    const CoreRangeSet reader_core_range(std::move(reader_ranges));
+    const CoreRangeSet reader_core_range(std::vector<CoreRange>(reader_cores.begin(), reader_cores.end()));
 
     const DFBSpecName STAGING_DFB{"staging"};
     const DFBSpecName ADDRS_DFB{"addrs"};
@@ -122,7 +116,7 @@ ttnn::device_operation::ProgramArtifacts DramPrefetcherPipeSpecFactory::create_p
         // meaning, so one entry of the smallest size.
         DataflowBufferSpec{
             .unique_id = SYNC_DFB,
-            .entry_size = kDramPrefetcherSyncEntryBytes,
+            .entry_size = tt::tt_metal::hal::get_l1_alignment(),
             .num_entries = 1,
         },
     };
@@ -176,10 +170,8 @@ ttnn::device_operation::ProgramArtifacts DramPrefetcherPipeSpecFactory::create_p
                 {"num_layers", num_layers},
                 {"num_tensors", num_tensors},
                 {"num_blocks", geometry.num_blocks},
-                {"staging_size_bytes", kDramPrefetcherStagingBlocks * geometry.max_block_size},
                 {"num_staging_blocks", kDramPrefetcherStagingBlocks},
                 {"max_block_num_tiles", geometry.max_block_num_tiles},
-                {"max_block_size", geometry.max_block_size},
                 {"skip_ptr_update", static_cast<uint32_t>(operation_attributes.enable_performance_mode)},
             },
         .runtime_arg_schema = {.runtime_arg_names = {"bank_id", "vc"}},
@@ -192,9 +184,9 @@ ttnn::device_operation::ProgramArtifacts DramPrefetcherPipeSpecFactory::create_p
                         .noc_mode = tt::tt_metal::NOC_MODE::DM_DYNAMIC_NOC,
                     },
             },
+        // Per tensor: DRAM page size, then pages per block.
+        .advanced_options = {.num_common_runtime_varargs = 2 * num_tensors},
     };
-    // Per tensor: DRAM page size, then pages per block.
-    reader.advanced_options.num_common_runtime_varargs = 2 * num_tensors;
 
     KernelSpec writer{
         .unique_id = WRITER,
@@ -224,14 +216,16 @@ ttnn::device_operation::ProgramArtifacts DramPrefetcherPipeSpecFactory::create_p
                         .noc_mode = tt::tt_metal::NOC_MODE::DM_DYNAMIC_NOC,
                     },
             },
+        .advanced_options =
+            {
+                // Per tensor: pipe entry size, block height in tile rows, then one receiver's row as writes
+                // of coalesced_page_size x coalesced_num_pages.
+                .num_common_runtime_varargs = 4 * num_tensors,
+                // The writer runs only on the reader cores, which host the pipes' senders and none of their
+                // receivers, so it is every pipe's sender.
+                .prefetcher_pipe_bindings = {{.pipe_parameter_names = prefetcher_pipe_names, .accessor_name = "out"}},
+            },
     };
-    // Per tensor: pipe entry size, block height in tile rows, then one receiver's row as writes of
-    // coalesced_page_size x coalesced_num_pages.
-    writer.advanced_options.num_common_runtime_varargs = 4 * num_tensors;
-    // The writer runs only on the reader cores, which host the pipes' senders and none of their receivers,
-    // so it is every pipe's sender.
-    writer.advanced_options.prefetcher_pipe_bindings = {
-        {.pipe_parameter_names = prefetcher_pipe_names, .accessor_name = "out"}};
 
     ////////////////////////////////////////////////////////////////////////////
     //                      Run args
@@ -245,26 +239,15 @@ ttnn::device_operation::ProgramArtifacts DramPrefetcherPipeSpecFactory::create_p
             reader_cores[i],
             {{"bank_id", i}, {"vc", dram_prefetcher_reader_vc(reader_cores, i)}});
     }
+    using TensorGeometry = DramPrefetcherTensorGeometry;
     auto& reader_varargs = reader_run_args.advanced_options.common_runtime_varargs;
+    append_per_tensor_args(reader_varargs, geometry, &TensorGeometry::page_size);
+    append_per_tensor_args(reader_varargs, geometry, &TensorGeometry::block_num_pages);
     auto& writer_varargs = writer_run_args.advanced_options.common_runtime_varargs;
-    for (const auto& t : geometry.tensors) {
-        reader_varargs.push_back(t.page_size);
-    }
-    for (const auto& t : geometry.tensors) {
-        reader_varargs.push_back(t.block_num_pages);
-    }
-    for (const auto& t : geometry.tensors) {
-        writer_varargs.push_back(t.block_size_per_receiver);
-    }
-    for (const auto& t : geometry.tensors) {
-        writer_varargs.push_back(t.block_height_in_tiles);
-    }
-    for (const auto& t : geometry.tensors) {
-        writer_varargs.push_back(t.coalesced_page_size);
-    }
-    for (const auto& t : geometry.tensors) {
-        writer_varargs.push_back(t.coalesced_num_pages);
-    }
+    append_per_tensor_args(writer_varargs, geometry, &TensorGeometry::block_size_per_receiver);
+    append_per_tensor_args(writer_varargs, geometry, &TensorGeometry::block_height_in_tiles);
+    append_per_tensor_args(writer_varargs, geometry, &TensorGeometry::coalesced_page_size);
+    append_per_tensor_args(writer_varargs, geometry, &TensorGeometry::coalesced_num_pages);
 
     ProgramRunArgs run_args;
     run_args.kernel_run_args.push_back(std::move(reader_run_args));

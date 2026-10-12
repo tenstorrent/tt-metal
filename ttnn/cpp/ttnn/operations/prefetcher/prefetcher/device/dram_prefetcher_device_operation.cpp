@@ -32,6 +32,13 @@ uint32_t validate_global_cb_target(
 
     // Check that global_cb sender_receiver_core_mapping has same number of receivers for each sender core
     const auto& sender_receiver_core_mapping = global_cb.sender_receiver_core_mapping();
+    TT_FATAL(
+        sender_receiver_core_mapping.size() >= num_readers,
+        "ttnn.dram_prefetcher needs one GlobalCircularBuffer sender per reader core: the weights are sharded over {} "
+        "DRAM banks, so {} reader cores, but global_cb has only {} senders",
+        num_readers,
+        num_readers,
+        sender_receiver_core_mapping.size());
     for (uint32_t i = 0; i < num_readers; ++i) {
         const auto& [sender_core, receiver_core_range] = sender_receiver_core_mapping[i];
         TT_FATAL(
@@ -42,8 +49,8 @@ uint32_t validate_global_cb_target(
 }
 
 // The PrefetcherPipe target: worker-sender pipes, at least one per reader, the ones the readers drive all
-// with the same receiver count and ring size. Returns that receiver count.
-uint32_t validate_prefetcher_pipes_target(
+// with the same receiver count and ring size. Returns the readers' pipes in reader order.
+ttnn::PrefetcherPipeList validate_prefetcher_pipes_target(
     const ttnn::PrefetcherPipeList& prefetcher_pipes, const uint32_t num_readers) {
     using tt::tt_metal::experimental::SenderCoreType;
     const auto pipes = ttnn::prefetcher_pipe_refs(prefetcher_pipes);
@@ -58,15 +65,8 @@ uint32_t validate_prefetcher_pipes_target(
             pipe.sender_core().str(),
             pipe.sender_core_type());
     }
-    TT_FATAL(
-        pipes.size() >= num_readers,
-        "ttnn.dram_prefetcher needs one PrefetcherPipe per reader core: the weights are sharded over {} DRAM banks, "
-        "so {} reader cores, but only {} prefetcher_pipes were given",
-        num_readers,
-        num_readers,
-        pipes.size());
 
-    const auto reader_pipes = dram_prefetcher_reader_pipes(prefetcher_pipes, num_readers);
+    ttnn::PrefetcherPipeList reader_pipes = dram_prefetcher_reader_pipes(prefetcher_pipes, num_readers);
     const tt::tt_metal::experimental::PrefetcherPipe& first_pipe = *reader_pipes.front();
     for (uint32_t i = 0; i < num_readers; ++i) {
         const tt::tt_metal::experimental::PrefetcherPipe& pipe = *reader_pipes[i];
@@ -89,29 +89,41 @@ uint32_t validate_prefetcher_pipes_target(
             first_pipe.sender_core().str(),
             first_pipe.ring_size());
     }
-    return first_pipe.receiver_cores().num_cores();
+    return reader_pipes;
 }
 
 }  // namespace
 
 void DramPrefetcherOperation::validate_on_program_cache_miss(
     const operation_attributes_t& args, const tensor_args_t& tensor_args) {
-    auto input_tensors = tensor_args.input_tensors;
+    const auto& input_tensors = tensor_args.input_tensors;
     TT_FATAL(!input_tensors.empty(), "Must have at least one input tensor");
     TT_FATAL(args.num_layers > 0, "Prefetcher must run for at least 1 layer");
+    const bool has_global_cb = args.global_cb.has_value();
+    const bool has_pipes = !args.prefetcher_pipes.empty();
     TT_FATAL(
-        args.global_cb.has_value() != !args.prefetcher_pipes.empty(),
+        has_global_cb != has_pipes,
         "ttnn.dram_prefetcher needs exactly one delivery target, global_cb or prefetcher_pipes, but got "
         "global_cb={} and {} prefetcher_pipes",
-        args.global_cb.has_value() ? "set" : "None",
+        has_global_cb ? "set" : "None",
         args.prefetcher_pipes.size());
 
     const ttnn::Tensor& tensor_addrs = input_tensors.back();  // Last tensor is tensor_addrs
 
     uint32_t num_readers = input_tensors[0].shard_spec()->grid.num_cores();
-    const uint32_t num_receivers_per_sender =
-        args.global_cb.has_value() ? validate_global_cb_target(*args.global_cb, num_readers)
-                                   : validate_prefetcher_pipes_target(args.prefetcher_pipes, num_readers);
+    ttnn::PrefetcherPipeList reader_pipes;
+    std::vector<CoreCoord> reader_cores;
+    uint32_t num_receivers_per_sender = 0;
+    if (has_pipes) {
+        reader_pipes = validate_prefetcher_pipes_target(args.prefetcher_pipes, num_readers);
+        num_receivers_per_sender = reader_pipes.front()->receiver_cores().num_cores();
+        for (const auto& pipe : reader_pipes) {
+            reader_cores.push_back(pipe->sender_core());
+        }
+    } else {
+        num_receivers_per_sender = validate_global_cb_target(*args.global_cb, num_readers);
+        reader_cores = dram_prefetcher_gcb_reader_cores(*args.global_cb, num_readers);
+    }
 
     TT_FATAL(num_readers > 0, "Number of reader cores must be greater than zero");
     TT_FATAL(num_receivers_per_sender > 0, "Number of receiver cores per sender must be greater than zero");
@@ -126,12 +138,15 @@ void DramPrefetcherOperation::validate_on_program_cache_miss(
             "Input tensors must be width sharded");
         TT_FATAL(tensor.memory_config().buffer_type() == BufferType::DRAM, "Input tensors must be in DRAM");
 
-        // Check that all tensors' N (per shard) is divisible by number of cores in global CB receiver
+        // Each receiver is sent the same whole number of tile columns of every block row.
+        const uint32_t shard_width_in_tiles =
+            tensor.buffer()->shard_spec().shape()[1] / tensor.tensor_spec().tile().get_tile_shape()[1];
         TT_FATAL(
-            tensor.buffer()->shard_spec().shape()[1] % num_receivers_per_sender == 0,
-            "All tensors' padded shard size (in last dim) {} must be divisible by the number of receiver cores per "
-            "sender {}.",
-            tensor.buffer()->shard_spec().shape()[1],
+            shard_width_in_tiles % num_receivers_per_sender == 0,
+            "Tensor {}'s shard is {} tiles wide, which does not split evenly over the {} receiver cores per sender. "
+            "Each receiver must get the same whole number of tile columns.",
+            i,
+            shard_width_in_tiles,
             num_receivers_per_sender);
 
         tt::DataFormat tensor_data_format = tt::tt_metal::datatype_to_dataformat_converter(tensor.dtype());
@@ -141,12 +156,11 @@ void DramPrefetcherOperation::validate_on_program_cache_miss(
             "Input tensors must be of type Bfp4_b, Bfp8_b, or Float16_b");
     }
 
-    if (!args.prefetcher_pipes.empty()) {
+    if (has_pipes) {
         // Each receiver is delivered one block per pipe entry, so a ring must hold one block of every tensor.
         // It need not hold a whole number of them: the pipe skips the gap at the wrap.
-        const uint32_t ring_size =
-            dram_prefetcher_reader_pipes(args.prefetcher_pipes, num_readers).front()->ring_size();
-        const std::vector<Tensor> weight_tensors(input_tensors.begin(), input_tensors.end() - 1);
+        const uint32_t ring_size = reader_pipes.front()->ring_size();
+        const ttsl::Span<const Tensor> weight_tensors(input_tensors.data(), input_tensors.size() - 1);
         const auto geometry = compute_dram_prefetcher_geometry(weight_tensors, num_receivers_per_sender);
         for (size_t t = 0; t < geometry.tensors.size(); ++t) {
             TT_FATAL(
@@ -174,6 +188,26 @@ void DramPrefetcherOperation::validate_on_program_cache_miss(
 
     tt::DataFormat tensor_addrs_data_format = tt::tt_metal::datatype_to_dataformat_converter(tensor_addrs.dtype());
     TT_FATAL(tensor_addrs_data_format == tt::DataFormat::UInt32, "Tensor containing addresses must be of type UInt32");
+
+    // Each reader reads the weights' addresses in place from its own shard, every layer's in its first row.
+    TT_FATAL(tensor_addrs.shard_spec().has_value(), "Tensor containing addresses must have a 2D shard spec");
+    const tt::tt_metal::ShardSpec& addrs_shard_spec = *tensor_addrs.shard_spec();
+    const uint32_t num_tensors = input_tensors.size() - 1;
+    TT_FATAL(
+        addrs_shard_spec.shape[1] >= args.num_layers * num_tensors,
+        "Each row of tensor_addrs must hold the address of every tensor of every layer, {} layers x {} tensors, but "
+        "its shard is only {} wide",
+        args.num_layers,
+        num_tensors,
+        addrs_shard_spec.shape[1]);
+    for (const CoreCoord& core : reader_cores) {
+        TT_FATAL(
+            addrs_shard_spec.grid.contains(core),
+            "tensor_addrs must be sharded over the reader cores, each of which reads the addresses from its own "
+            "shard, but reader core {} is outside its shard grid {}",
+            core.str(),
+            addrs_shard_spec.grid.str());
+    }
 }
 
 tt::tt_metal::TensorSpec DramPrefetcherOperation::compute_output_specs(

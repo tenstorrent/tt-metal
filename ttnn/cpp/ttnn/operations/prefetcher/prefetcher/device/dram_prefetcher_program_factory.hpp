@@ -10,6 +10,7 @@
 #include <tt-metalium/core_coord.hpp>
 #include <tt-metalium/program_descriptors.hpp>
 #include <tt-metalium/tt_backend_api_types.hpp>
+#include <tt_stl/span.hpp>
 
 #include "dram_prefetcher_device_operation_types.hpp"
 
@@ -38,7 +39,6 @@ struct DramPrefetcherTensorGeometry {
 // Shared by the GlobalCircularBuffer and the PrefetcherPipe program factories.
 struct DramPrefetcherGeometry {
     uint32_t num_readers = 0;
-    uint32_t num_receivers_per_reader = 0;
     // Blocks each reader pushes per tensor: one per receiver of the whole ring.
     uint32_t num_blocks = 0;
     std::vector<DramPrefetcherTensorGeometry> tensors;
@@ -51,7 +51,20 @@ struct DramPrefetcherGeometry {
 
 // `weight_tensors` are dram_prefetcher's inputs without the trailing address tensor.
 DramPrefetcherGeometry compute_dram_prefetcher_geometry(
-    const std::vector<Tensor>& weight_tensors, uint32_t num_receivers_per_reader);
+    ttsl::Span<const Tensor> weight_tensors, uint32_t num_receivers_per_reader);
+
+// Appends `field` of every tensor in `geometry` to `args`: one per-tensor table of the kernels' runtime
+// args, which index it as table * num_tensors + tensor.
+void append_per_tensor_args(
+    std::vector<uint32_t>& args,
+    const DramPrefetcherGeometry& geometry,
+    uint32_t DramPrefetcherTensorGeometry::* field);
+
+// The cores the GlobalCircularBuffer path reads on, in reader order: the first `num_readers` of
+// `global_cb`'s senders, in sender_receiver_core_mapping order. Reader i reads DRAM bank i. `global_cb`
+// must have at least `num_readers` senders.
+std::vector<CoreCoord> dram_prefetcher_gcb_reader_cores(
+    const tt::tt_metal::experimental::GlobalCircularBuffer& global_cb, uint32_t num_readers);
 
 // The NoC virtual channel reader `reader_index` of `reader_cores` reads its DRAM bank on, chosen so that
 // readers on one row alternate channels.
@@ -59,9 +72,6 @@ uint32_t dram_prefetcher_reader_vc(const std::vector<CoreCoord>& reader_cores, u
 
 // Reader blocks the staging buffer holds: one being filled, one in flight, one draining.
 constexpr uint32_t kDramPrefetcherStagingBlocks = 3;
-
-// Entry size of the pipe path's writer -> reader exit-sync buffer: the L1 alignment, the smallest entry.
-constexpr uint32_t kDramPrefetcherSyncEntryBytes = 16;
 
 // Delivers into a worker-sender GlobalCircularBuffer (`global_cb`).
 struct DramPrefetcherProgramFactory {
