@@ -274,6 +274,7 @@
     export EXTRA_MODELS_DIR="$PWD/models/demos" TT_METAL_CACHE="$work/tt-cache"
     export HF_DATASETS_CACHE="$work/datasets" HF_MODULES_CACHE="$work/hf-modules"
     export TT_METAL_PINNED_MEMORY_CACHE_LIMIT_BYTES=0
+    export TT_MESH_GRAPH_DESC_PATH="$PWD/tt_metal/fabric/mesh_graph_descriptors/p300_x2_mesh_graph_descriptor.textproto"
     export VLLM_DEBUG_LOG_API_SERVER_RESPONSE=false
     export GEMMA4_26B_ALLOW_HOST_SAMPLING=1
 

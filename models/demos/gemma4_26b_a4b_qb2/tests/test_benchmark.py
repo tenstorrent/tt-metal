@@ -190,6 +190,7 @@ def test_startup_status_never_copies_log_content():
             "Gemma4 model loaded",
             "Warming model trace",
             "Traceback (most recent call last): PRIVATE_EXCEPTION_SENTINEL",
+            "Timed out while waiting for active ethernet core PRIVATE_DEVICE_SENTINEL",
             "Loading Gemma4 layer 999999 PRIVATE_ANSWER_SENTINEL",
         )
     )
@@ -197,11 +198,13 @@ def test_startup_status_never_copies_log_content():
         "last_stage": "weight_loading",
         "last_layer_started": 29,
         "exception_logged": True,
+        "failure_category": "active_ethernet_timeout",
     }
     assert startup_status("PRIVATE_REASONING_SENTINEL") == {
         "last_stage": "unknown",
         "last_layer_started": None,
         "exception_logged": False,
+        "failure_category": "unknown",
     }
 
 

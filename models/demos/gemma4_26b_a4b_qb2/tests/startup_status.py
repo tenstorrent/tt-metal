@@ -17,16 +17,28 @@ STAGES = (
     ("sampling_trace_capture", "Capturing sampling trace"),
 )
 
+FAILURES = (
+    ("active_ethernet_timeout", "Timed out while waiting for active ethernet core"),
+    ("ethernet_heartbeat", "ETH core heartbeat check failed"),
+    ("missing_weights", "GatedRepoError"),
+    ("missing_weights", "LocalEntryNotFoundError"),
+    ("missing_module", "ModuleNotFoundError"),
+    ("import_error", "ImportError"),
+    ("out_of_memory", "Out of memory"),
+)
+
 
 def startup_status(text):
     """Return only fixed labels, booleans and a bounded layer index."""
     positions = [(text.rfind(marker), stage) for stage, marker in STAGES]
     position, stage = max(positions)
     layers = [int(value) for value in re.findall(r"Loading Gemma4 layer (\d{1,2})\b", text)]
+    failure_category = next((category for category, marker in FAILURES if marker in text), "unknown")
     return {
         "last_stage": stage if position >= 0 else "unknown",
         "last_layer_started": next((layer for layer in reversed(layers) if 0 <= layer < 30), None),
         "exception_logged": "Traceback (most recent call last)" in text,
+        "failure_category": failure_category,
     }
 
 
