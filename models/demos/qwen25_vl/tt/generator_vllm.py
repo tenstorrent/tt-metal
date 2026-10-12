@@ -195,8 +195,12 @@ class Qwen2_5_VLForConditionalGeneration(QwenVLGenerator, SupportsMultiModal):
     ) -> int:
         """Returns config-specific all-user KV-cache token capacity."""
         devices_per_dp_cache = num_devices // tt_data_parallel
+        # 72B on a 1x8 Wormhole cache: ~5.6 GB of the 12 GB DRAM holds weights and the bfp8 KV cache costs 22 KB per
+        # token per chip, so a pool covering the full 128k context (plus the plugin's per-user reservation) costs
+        # 2.9 GB. What bounds it is the prefill working set: a 16k-token chunk no longer fits next to that pool,
+        # so the T3K prefill chunk is 8k (MAX_PREFILL_CHUNK_SIZES_DIV1024); measured TTFT and TPOT are unchanged.
         if "Qwen2.5-VL-72B" in model_name and devices_per_dp_cache == 8 and is_wormhole_b0():
-            return 65_536
+            return 135_168
         # 32B on a 1x8 Wormhole cache: ~4.5 GB of the 12 GB DRAM holds weights (bfp4 MLPs / bfp8 attention), the
         # bfp8 KV cache costs 17 KB per token per chip, so 256k tokens (4.5 GB) still leave room for the prefill
         # working set of the full 128k context.
