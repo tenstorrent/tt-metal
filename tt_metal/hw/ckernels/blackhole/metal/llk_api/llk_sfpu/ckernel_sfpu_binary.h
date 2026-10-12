@@ -212,7 +212,7 @@ inline void calculate_sfpu_binary(
         sfpi::dst_reg++;
     };
 
-    if constexpr (BINOP == BinaryOp::XLOGY && is_fp32_dest_acc_en) {
+    if constexpr ((BINOP == BinaryOp::XLOGY && is_fp32_dest_acc_en) || BINOP == BinaryOp::POW) {
         for (int d = 0; d < ITERATIONS; d++) {
             row();
         }

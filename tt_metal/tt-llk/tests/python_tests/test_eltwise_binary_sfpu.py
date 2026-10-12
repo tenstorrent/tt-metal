@@ -8,7 +8,7 @@ from typing import Dict
 
 import pytest
 import torch
-from conftest import skip_for_quasar
+from conftest import blackhole_only, skip_for_quasar
 from helpers.chip_architecture import ChipArchitecture
 from helpers.data_format_inference import effective_dest_acc
 from helpers.format_config import DataFormat, InputOutputFormat
@@ -468,6 +468,11 @@ def sfpu_binary(
     # variant near its tolerance fail unreproducibly.
     torch.manual_seed(0)
 
+    # SfpuElwpowTile is pow through the body power_binary_tile runs: pow's stimuli, golden and contract.
+    golden_op = (
+        MathOperation.SfpuElwpow if mathop == MathOperation.SfpuElwpowTile else mathop
+    )
+
     # FP32 destination tiles occupy twice the register space. Keep four full destination
     # blocks for those formats and four blocks of eight tiles for the remaining formats.
     if input_dimensions is None:
@@ -479,9 +484,11 @@ def sfpu_binary(
     # so there is no spec_B knob in generate_stimuli -- the two specs are interleaved into one
     # spec's face_specs here, where the tile count is known. Unlike the unary sweep, most ops
     # here are not registered, and a missing entry falls back to the format default.
-    reads_registry = _classify_stimuli_source(mathop)
+    reads_registry = _classify_stimuli_source(golden_op)
     if spec_A is None and reads_registry and not formats.input_format.is_integer():
-        specs = exclude_undefined_pair(mathop, for_op(mathop, formats.input_format))
+        specs = exclude_undefined_pair(
+            golden_op, for_op(golden_op, formats.input_format)
+        )
         spec_A, spec_B = specs.spec_A, specs.spec_B
 
     if spec_B is not None:
@@ -556,7 +563,7 @@ def sfpu_binary(
     generated_nan_chunks = []
     for offset in range(0, golden_src.numel(), elements_per_pair):
         chunk = generate_golden(
-            mathop,
+            golden_op,
             golden_src[offset : offset + elements_per_pair],
             0,
             1,
@@ -649,7 +656,7 @@ def sfpu_binary(
         res_tensor = torch.where(unspecified, res_tensor.abs(), res_tensor)
 
     assert_against_contract(
-        mathop,
+        golden_op,
         formats,
         dest_acc,
         golden_tensor,
@@ -822,6 +829,27 @@ def test_eltwise_binary_sfpu_div(formats, dest_acc, **run_kwargs):
         formats,
         dest_acc,
         MathOperation.SfpuElwdiv,
+        broadcast_type=LlkBroadcastType.None_,
+        **run_kwargs,
+    )
+
+
+# The body power_binary_tile runs, apart from SfpuElwpow's generic loop arm in FLOAT_SWEEP.
+POW_TILE_SWEEP = dict(
+    formats=input_output_formats([DataFormat.Float32, DataFormat.Float16_b], same=True),
+    dest_acc=[DestAccumulation.No, DestAccumulation.Yes],
+)
+
+
+@blackhole_only
+@parametrize(**POW_TILE_SWEEP)
+def test_eltwise_binary_sfpu_pow_tile(formats, dest_acc, **run_kwargs):
+    _skip_fp32_no_dest_acc(formats, dest_acc)
+
+    sfpu_binary(
+        formats,
+        dest_acc,
+        MathOperation.SfpuElwpowTile,
         broadcast_type=LlkBroadcastType.None_,
         **run_kwargs,
     )
