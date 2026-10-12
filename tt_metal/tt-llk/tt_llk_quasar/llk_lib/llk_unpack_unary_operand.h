@@ -117,7 +117,18 @@ inline void _llk_unpack_unary_operand_mop_config_(const std::uint32_t buf_desc_i
     if constexpr (EN_32BIT_DEST && (UNP_SEL == p_unpacr::UNP_A || UNP_SEL == p_unpacr::UNP_B))
     {
         const std::uint32_t clr_unused_unpacr_engine = nop_insn_for_unused_unpacker_engine<UNP_SEL>();
-        temp.set_end_op(clr_unused_unpacr_engine);
+        if constexpr (UNP_SEL == p_unpacr::UNP_A)
+        {
+            // A source bank's format tag is updated only by a real write; CLRSRC/ZEROSRC zero the data but keep the
+            // old tag. If SrcB was last written in a packed format (e.g. MxFp4_2x_B by a 2x matmul), ELWADD reads
+            // the cleared bank through the packed path and adds non-zero garbage. Unpack into SrcB first (no
+            // dvalid, no index increment) so the bank takes unpacker B's output format, then clear it.
+            temp.set_end_ops(TT_OP_UNPACR1_TILE_INC(0 /*Dst_Tile_Idx_Inc*/, 0 /*Src_Tile_Idx_Inc*/, buf_desc_id, 0 /*SetDatValid*/), clr_unused_unpacr_engine);
+        }
+        else
+        {
+            temp.set_end_op(clr_unused_unpacr_engine);
+        }
     }
 
     temp.program_bank0_sw_cntl(instrn_buffer);

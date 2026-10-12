@@ -465,8 +465,7 @@ TEST_F(LLKQuasarMeshDeviceSingleCardFixture, TensixMxFp6RToFloat16b) {
         /*fp32_dest_acc_en=*/false);
 }
 
-// Disabled due to hang: tenstorrent/tt-metal#59923
-TEST_F(LLKQuasarMeshDeviceSingleCardFixture, DISABLED_TensixMxFp6RToFloat16bFp32Dest) {
+TEST_F(LLKQuasarMeshDeviceSingleCardFixture, TensixMxFp6RToFloat16bFp32Dest) {
     mxfp6_tc::run_random_typecast_test(
         this->device(),
         tt::DataFormat::MxFp6R,
@@ -548,8 +547,7 @@ TEST_F(LLKQuasarMeshDeviceSingleCardFixture, TensixMxFp6PToFloat16b) {
         /*fp32_dest_acc_en=*/false);
 }
 
-// Disabled due to hang: tenstorrent/tt-metal#59923
-TEST_F(LLKQuasarMeshDeviceSingleCardFixture, DISABLED_TensixMxFp6PToFloat16bFp32Dest) {
+TEST_F(LLKQuasarMeshDeviceSingleCardFixture, TensixMxFp6PToFloat16bFp32Dest) {
     mxfp6_tc::run_random_typecast_test(
         this->device(),
         tt::DataFormat::MxFp6P,
