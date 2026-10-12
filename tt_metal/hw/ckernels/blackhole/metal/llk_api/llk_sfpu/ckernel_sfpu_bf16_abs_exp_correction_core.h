@@ -1,7 +1,6 @@
 // SPDX-FileCopyrightText: © 2026 Tenstorrent AI ULC
 // SPDX-License-Identifier: Apache-2.0
 #pragma once
-#include "ckernel_sfpu_bf16_sfpi_isa.h"
 
 // Single-row residual replay. Callers own numerical init, replay recording,
 // row count, address modes and counter restoration.
