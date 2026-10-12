@@ -455,7 +455,7 @@ models:
   vllm:
     wh_galaxy_perf: 430
     bh_quietbox_2: 310
-    wh_llmbox: 410
+    wh_llmbox: 370
     bh_loudbox: 320
     bh_galaxy: 65
     wh_n150: 65

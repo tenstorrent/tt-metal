@@ -2600,9 +2600,9 @@ class ModelArgs:
                 "Llama-3.2-90B": {"N150": None, "N300": None, "T3K": 32, "TG": 128, "P150x4": 128},
                 "DeepSeek-R1-Distill-Llama-70B": {"N150": None, "N300": None, "T3K": 32, "TG": 128, "P150x4": 128},
                 "Qwen2.5-7B": {"N150": 4, "N300": 32, "T3K": 128, "TG": 128, "P150x4": 128},
-                "Qwen2.5-VL-3B": {"N150": 4, "N300": 32, "T3K": 128, "TG": 128, "P150x4": None},
-                "Qwen2.5-VL-7B": {"N150": 4, "N300": 16, "T3K": 128, "TG": 128, "P150x4": None},
-                "olmOCR-2-7B": {"N150": 4, "N300": 16, "T3K": 128, "TG": 128, "P150x4": None},
+                "Qwen2.5-VL-3B": {"N150": 128, "N300": 128, "T3K": 128, "TG": 128, "P150x4": None},
+                "Qwen2.5-VL-7B": {"N150": 64, "N300": 128, "T3K": 128, "TG": 128, "P150x4": None},
+                "olmOCR-2-7B": {"N150": 64, "N300": 128, "T3K": 128, "TG": 128, "P150x4": None},
                 "Qwen2.5-32B": {"N150": None, "N300": None, "T3K": 64, "TG": 128, "P150x4": 128, "P150x8": 128},
                 # Large single-chunk prefill matters for EXAONE: chunked prefill is
                 # unsupported on sliding-window layers (48 of its 64 layers).
@@ -3004,15 +3004,12 @@ class ModelArgs:
                 self.model_name = os.path.basename(normalized_path)
             logger.info(f"Model name from config: {self.model_name}")
 
-        if self.base_model_name in ["Qwen2.5-7B", "Qwen2.5-VL-7B", "olmOCR-2-7B"] and self.num_devices not in [
-            0,
-            2,
-            4,
-            8,
-            32,
-        ]:
+        if self.base_model_name == "Qwen2.5-7B" and self.num_devices not in [0, 2, 4]:
+            raise AssertionError("Qwen2.5-7B is only supported on 2 or 4 devices (N300)")
+        if self.base_model_name in ["Qwen2.5-VL-7B", "olmOCR-2-7B"] and self.num_devices not in [0, 2, 4, 8, 32]:
+            # 8 and 32 devices rely on the padded KV heads (PAD_HEADS_FOR_TP_MODELS)
             raise AssertionError(
-                "Qwen2.5-7B, Qwen2.5-VL-7B and olmOCR-2-7B are only supported on 2 or 4 devices (N300), 8 devices (T3K), or 32 devices (TG)"
+                "Qwen2.5-VL-7B and olmOCR-2-7B are only supported on 2 or 4 devices (N300), 8 devices (T3K), or 32 devices (TG)"
             )
 
         if self.num_devices > 0 and self.cluster_shape != [1, 1]:

@@ -238,7 +238,6 @@ Models covered (system · classification tier):
 | Qwen3.6-27B | BH QuietBox 2 | 1 |
 | Qwen2.5-VL-72B | WH LLMBox | 2 |
 | Qwen2.5-VL-7B | WH LLMBox | 3 |
-| olmOCR-2-7B | WH LLMBox | 3 |
 | Qwen3-VL-32B | WH LLMBox | 2 |
 | GPT-OSS 120B | WH Galaxy | 1 |
 | Gemma-3-27B | WH LLMBox, WH Galaxy | 2 |

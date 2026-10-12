@@ -196,7 +196,7 @@ class Attention(LightweightModule):
             if self._needs_head_rearrangement():
                 wq_bias, wk_bias, wv_bias = self._rearrange_qkv_1d(wq_bias, wk_bias, wv_bias)
 
-            if configuration.subtract_k_bias_post_rope:
+            if getattr(configuration, "subtract_k_bias_post_rope", False):
                 self._create_k_bias_shift(wk_bias, bias_num_devices, configuration)
 
             qkv_bias = torch.concat(

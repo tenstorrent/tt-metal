@@ -14,12 +14,12 @@ def galaxy_distributed_norm_core_grid(dim: int) -> tuple[int, int]:
     """Choose the Galaxy decode RMSNorm grid as (y, x).
 
     Returns the legacy ``(min(4, dim // 4 // 32 // 8), 8)`` grid for every dim it
-    already handled. Only dims that grid cannot tile-align get an override (the
-    largest tile-aligned grid up to 4x8), and a dim with no tile-aligned grid at
-    all keeps the legacy grid with a warning rather
+    tile-aligns. A dim that grid cannot tile-align (Qwen2.5-VL-7B's 3584, the Gemma
+    sizes) gets the largest grid up to 4x8 that does, e.g. 3584 -> (4, 7); only a
+    dim with no tile-aligned grid at all keeps the legacy grid with a warning rather
     than raising -- ``gather_in_mem_cfg`` / ``ln_prg_cfg`` are consumed only on the
     sharded decode path, so raising here would break prefill-only Galaxy runs that
-    never read them (e.g. every Gemma variant).
+    never read them.
     """
     hidden_size_per_device = dim // 4
     legacy_core_grid = (min(4, hidden_size_per_device // 32 // 8), 8)

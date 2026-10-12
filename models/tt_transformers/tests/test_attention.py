@@ -71,10 +71,6 @@ def test_attention_inference(
     mode = Mode.DECODE
     dtype = ttnn.bfloat8_b
     pcc = 0.99
-    if model_args.base_model_name in ModelArgs.PAD_HEADS_FOR_TP_MODELS:
-        # 7B-class decode keeps its QK^T scores in bf16 (see Attention._create_k_bias_shift); with the shift the
-        # batch-1 attention output measures PCC 0.989-0.998 per position on T3K, so this model class uses 0.985.
-        pcc = 0.985
     llama90b_hf_rope_pcc = 0.97
     llama33_70b_mllama_rope_pcc = 0.9891
     num_tensors = 2
@@ -93,10 +89,12 @@ def test_attention_inference(
     )
 
     if model_args.base_model_name in ModelArgs.PAD_HEADS_FOR_TP_MODELS:
-        # The Qwen2.5-VL demo opts in to the post-RoPE K-bias shift (see Attention._create_k_bias_shift);
-
-        # test the configuration that is deployed, which also keeps batch-1 decode above the PCC bar.
-
+        # 7B-class decode keeps its QK^T scores in bf16 (see Attention._create_k_bias_shift); with the shift the
+        # batch-1 attention output measures PCC 0.989-0.998 per position on T3K, so this model class uses 0.985.
+        pcc = 0.985
+    if model_args.base_model_name.startswith("Qwen2.5-VL") or model_args.base_model_name == "olmOCR-2-7B":
+        # The Qwen2.5-VL demo opts in to the post-RoPE K-bias shift for every size (qwen25_vl ModelArgs, see
+        # Attention._create_k_bias_shift); test the configuration that is deployed.
         model_args.subtract_k_bias_post_rope = True
     if model_args.model_name == "Llama-3.2-90B-Instruct" and use_hf_rope:
         pcc = llama90b_hf_rope_pcc
@@ -327,7 +325,7 @@ def test_attention_inference(
                 cache_length_to_check = min(model_args.max_seq_len, generation_start_pos + i + 1)
                 cache_pt = cache_pt[:, :, generation_start_pos:cache_length_to_check, :]
                 cache_tt = cache_tt[:, :, generation_start_pos:cache_length_to_check, :]
-                if cache_pt.shape != cache_tt.shape:
+                if cache_pt.shape != cache_tt.shape and model_args.base_model_name in ModelArgs.PAD_HEADS_FOR_TP_MODELS:
                     # Padded/duplicated KV heads (PAD_HEADS_FOR_TP_MODELS): each original head is
                     # duplicated in a contiguous group (Attention._build_kv_head_order), so keep
                     # the first copy of every group and compare against the reference layout.
