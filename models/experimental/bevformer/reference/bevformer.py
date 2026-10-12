@@ -14,6 +14,13 @@ detector in ``tt/tt_bevformer.py`` is checked against:
 2. ``PerceptionTransformer.get_bev_features`` builds the BEV map from them, the learned BEV queries
    and positional encoding, and the previous frame's BEV.
 3. The head decodes the BEV map into per-layer class logits and boxes.
+4. ``get_bboxes`` turns the last layer's into 3D boxes: upstream's ``BEVFormerHead.get_bboxes``,
+   its ``NMSFreeCoder`` (``reference/nms_free_coder.py``) followed by moving each box's z to its
+   bottom face. Upstream wraps the boxes in mmdet3d's ``LiDARInstance3DBoxes``; here they stay the
+   ``(N, 9)`` tensor that class holds.
+
+``forward`` returns the head's outputs, which the TTNN detector is checked against layer by layer;
+``simple_test`` is upstream's ``simple_test_pts``, the BEV and the boxes.
 
 The caller carries the previous BEV between frames and makes the CAN bus relative to the previous
 frame (:func:`relative_can_bus`), as upstream's ``forward_test`` does.
@@ -30,6 +37,7 @@ from models.experimental.bevformer.model_config import BEV_H, BEV_W, EMBED_DIMS,
 from models.experimental.bevformer.reference.encoder import BEVFormerEncoder
 from models.experimental.bevformer.reference.fpn import FPN
 from models.experimental.bevformer.reference.head import BEVFormerHead
+from models.experimental.bevformer.reference.nms_free_coder import NMSFreeCoder, bottom_center
 from models.experimental.bevformer.reference.perception_transformer import PerceptionTransformer
 from models.experimental.bevformer.reference.resnet import ResNet
 
@@ -76,12 +84,24 @@ class BEVFormer(nn.Module):
         head (nn.Module): ``reference.head.BEVFormerHead``, which holds the decoder.
         bev_h, bev_w (int): BEV grid.
         embed_dims (int): Channels of the BEV queries and their positional encoding.
+        bbox_coder (NMSFreeCoder, optional): Upstream's head's ``bbox_coder``; BEVFormer-base's by
+            default.
 
     ``bev_embedding`` and ``positional_encoding`` are upstream's head's; they are kept here, next to
     the BEV side that uses them.
     """
 
-    def __init__(self, img_backbone, img_neck, transformer, head, bev_h=BEV_H, bev_w=BEV_W, embed_dims=EMBED_DIMS):
+    def __init__(
+        self,
+        img_backbone,
+        img_neck,
+        transformer,
+        head,
+        bev_h=BEV_H,
+        bev_w=BEV_W,
+        embed_dims=EMBED_DIMS,
+        bbox_coder=None,
+    ):
         super().__init__()
         self.bev_h, self.bev_w = bev_h, bev_w
         self.img_backbone = img_backbone
@@ -90,6 +110,7 @@ class BEVFormer(nn.Module):
         self.head = head
         self.bev_embedding = nn.Embedding(bev_h * bev_w, embed_dims)
         self.positional_encoding = LearnedPositionalEncoding(embed_dims // 2, bev_h, bev_w)
+        self.bbox_coder = NMSFreeCoder() if bbox_coder is None else bbox_coder
 
     def extract_img_feat(self, img):
         """``img`` ``(bs, num_cams, 3, H, W)`` -> per FPN level ``(bs, num_cams, C, h, w)``."""
@@ -110,6 +131,20 @@ class BEVFormer(nn.Module):
         )
         cls_scores, bbox_preds = self.head(bev_embed)
         return cls_scores, bbox_preds, bev_embed
+
+    def get_bboxes(self, cls_scores, bbox_preds):
+        """The head's per-layer outputs to one ``(boxes, scores, labels)`` per sample, from the last
+        layer: boxes ``(N, 9)`` as ``(cx, cy, cz, w, l, h, yaw, vx, vy)`` with cz at the bottom
+        face, N up to ``bbox_coder.max_num``."""
+        return [
+            (bottom_center(d["bboxes"]), d["scores"], d["labels"])
+            for d in self.bbox_coder.decode(cls_scores, bbox_preds)
+        ]
+
+    def simple_test(self, img, img_metas, prev_bev=None):
+        """``forward``'s inputs to this frame's BEV and :meth:`get_bboxes`' boxes."""
+        cls_scores, bbox_preds, bev_embed = self(img, img_metas, prev_bev=prev_bev)
+        return bev_embed, self.get_bboxes(cls_scores, bbox_preds)
 
 
 def build_bevformer_base(bev_h=BEV_H, bev_w=BEV_W):
