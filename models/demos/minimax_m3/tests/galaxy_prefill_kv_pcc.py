@@ -13,6 +13,9 @@ Env:
                       in multi-run optional: seeds the initial capacity and the default PREFILL_GOLDEN_ROOT]
   PREFILL_CHUNKED     "1" -> chunked prefill (chunk loop, cache-read path); "0" -> one-shot  [default 0]
   PREFILL_CHUNK_SIZE  chunk size in tokens (chunked mode)                                  [default 5120]
+  PREFILL_FORWARD_TOKENS  tokens per forward (chunked mode): consecutive chunks of the prompt packed into
+                      one forward of PREFILL_FORWARD_TOKENS // PREFILL_CHUNK_SIZE entries, the last forward
+                      padded with empty entries                                        [default: chunk size]
   PREFILL_TPS_ITERS   prefill repetitions for the throughput measurement (less noise)      [default 1]
   PREFILL_SKIP_PCC    "1" -> perf only: skip the per-layer golden KV PCC (no kv_cache/ needed) [default 0]
   PREFILL_EXPECTED_TPS  whole-sequence tok/s baseline; when set, assert measured median is
@@ -106,6 +109,7 @@ from loguru import logger
 import ttnn
 from models.demos.minimax_m3.tt.ccl import L1_SMALL_SIZE
 from models.demos.minimax_m3.tt.moe import shared_overlap
+from models.demos.minimax_m3.tt.prefill_entry import PrefillEntry
 from models.demos.minimax_m3.utils.fabric_env import ccl_topology_from_env, fabric_config_from_env
 
 
@@ -388,13 +392,14 @@ def run_one(runtime, state: dict, mesh, spec: RunSpec, num_layers, hf_config) ->
     is re-allocated, the runtime re-targeted (reconfigure_capacity) and the JIT buckets re-warmed."""
     from models.demos.minimax_m3.tt.attention import allocate_kv_caches
 
-    chunk = runtime.config.chunk_size
+    chunk, fwd_chunks = runtime.config.chunk_size, runtime.config.forward_chunks
     trace_ids = load_trace_tokens(spec.trace_dir)
     n_trace = len(trace_ids)
     n_tokens = spec.isl if spec.isl is not None else n_trace  # tokens actually prefilled (the "isl")
     token_ids = tile_tokens(trace_ids, n_tokens) if n_tokens != n_trace else trace_ids
     n_pcc = min(n_tokens, n_trace)  # golden covers the trace only; causality keeps the tiled tail off it
     n_chunks = max(1, math.ceil(n_tokens / chunk))
+    n_forwards = math.ceil(n_chunks / fwd_chunks)
     total = n_chunks * chunk
     capacity = math.ceil((spec.capacity if spec.capacity is not None else total) / chunk) * chunk
     if total > capacity:
@@ -407,7 +412,7 @@ def run_one(runtime, state: dict, mesh, spec: RunSpec, num_layers, hf_config) ->
     print(
         f"[prefill-pcc] === run '{spec.name}': golden={spec.trace_dir} isl={n_tokens} (trace {n_trace}"
         f"{', TILED cyclically' if n_tokens > n_trace else (', truncated' if n_tokens < n_trace else '')}) "
-        f"chunk={chunk} n_chunks={n_chunks} total={total} capacity={capacity} "
+        f"chunk={chunk} n_chunks={n_chunks} forwards={n_forwards}x{fwd_chunks} total={total} capacity={capacity} "
         f"warmup_iters={warmup_iters} tps_iters={tps_iters} skip_pcc={spec.skip_pcc}",
         flush=True,
     )
@@ -448,30 +453,33 @@ def run_one(runtime, state: dict, mesh, spec: RunSpec, num_layers, hf_config) ->
 
     # --- throughput. Each iteration re-fills slot 0 (valid for the PCC check after the loop) and
     # times two distinct full-prefill passes, each with syncs placed so it pays for no extra barrier:
-    #   WHOLE SEQUENCE  all n_chunks cold from an empty cache, ONE sync at the very end
+    #   WHOLE SEQUENCE  all n_forwards cold from an empty cache, ONE sync at the very end
     #                   -> time to prefill the whole prompt         (e.g. 55k @ 0 cache)
-    #   LAST CHUNK      pre-fill chunks 0..n-2, sync ONCE (barrier, NOT timed), then time only the
-    #                   final chunk against that accumulated cache   (e.g. 5k @ 50k cache)
+    #   LAST CHUNK      pre-fill forwards 0..n-2, sync ONCE (barrier, NOT timed), then time only the
+    #                   final forward against that accumulated cache   (e.g. 5k @ 50k cache)
     padded = token_ids + [0] * (total - n_tokens)
-    a_last = (n_chunks - 1) * chunk  # context tokens already in cache ahead of the final chunk
-    last_len = min(a_last + chunk, total) - a_last  # width of the final chunk (incl pad)
+    a_last = (n_forwards - 1) * fwd_chunks * chunk  # context tokens already in cache ahead of the final forward
+    last_len = total - a_last  # width of the final forward's chunks (incl pad)
 
-    def prefill_chunk(c):
-        a = c * chunk
-        inp = runtime.make_chunk_input(padded[a : a + chunk], a)
-        runtime.prefill_chunk(inp, kv_cache, slot_id=0, actual_start=a, actual_end=min(a + chunk, n_tokens))
+    def prefill_forward(f):
+        # Forward f packs chunks f*fwd_chunks.. of slot 0; past the prompt's last chunk the entries are empty.
+        starts = [c * chunk for c in range(f * fwd_chunks, (f + 1) * fwd_chunks)]
+        entries = [PrefillEntry(0, a, min(a + chunk, n_tokens)) if a < total else PrefillEntry(0, 0, 0) for a in starts]
+        tokens = [padded[e.start : e.start + chunk] if not e.is_empty else [0] * chunk for e in entries]
+        inp = runtime.make_forward_input(tokens, [e.start for e in entries])
+        runtime.prefill_forward(inp, kv_cache, entries)
 
     def run_whole():  # cold, no mid-loop syncs — one barrier at the end
-        for c in range(n_chunks):
-            prefill_chunk(c)
+        for f in range(n_forwards):
+            prefill_forward(f)
         ttnn.synchronize_device(mesh)
 
-    def run_last_chunk():  # returns the timed last-chunk wall seconds
-        for c in range(n_chunks - 1):
-            prefill_chunk(c)
+    def run_last_chunk():  # returns the timed last-forward wall seconds
+        for f in range(n_forwards - 1):
+            prefill_forward(f)
         ttnn.synchronize_device(mesh)  # barrier before the timed region — NOT counted
         t0 = time.perf_counter()
-        prefill_chunk(n_chunks - 1)
+        prefill_forward(n_forwards - 1)
         ttnn.synchronize_device(mesh)
         return time.perf_counter() - t0
 
@@ -590,6 +598,7 @@ def main():
     runs_source = os.environ.get("PREFILL_RUNS")
     chunked = os.getenv("PREFILL_CHUNKED", "0") == "1"
     chunk_size = int(os.getenv("PREFILL_CHUNK_SIZE", "5120"))
+    forward_tokens = int(os.getenv("PREFILL_FORWARD_TOKENS") or chunk_size)
     golden_root = os.environ.get("PREFILL_GOLDEN_ROOT") or (
         os.path.dirname(os.path.normpath(golden_dir)) if golden_dir else None
     )
@@ -748,6 +757,7 @@ def main():
             max_seq_len=capacity,
             mesh_shape=(rows, cols),
             chunk_size=chunk,
+            forward_tokens=forward_tokens if chunked or runs_source is not None else chunk,
             num_users=1,
             expert_weight_dtype=expert_dtype,
             weight_cache_path=cache_path,

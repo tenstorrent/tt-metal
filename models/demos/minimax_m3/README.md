@@ -55,6 +55,10 @@ PREFILL_CHUNKED=0 PREFILL_TRACE_DIR=/path/to/golden/longbook_5120 \
 # Chunked (2 chunks -> exercises the cache-read path):
 PREFILL_CHUNKED=1 PREFILL_CHUNK_SIZE=5120 PREFILL_TRACE_DIR=/path/to/golden/longbook_10240 \
   python3 models/demos/minimax_m3/tests/galaxy_prefill_kv_pcc.py
+
+# Packed (4 x 1024-token chunks per forward):
+PREFILL_CHUNKED=1 PREFILL_CHUNK_SIZE=1024 PREFILL_FORWARD_TOKENS=4096 PREFILL_TRACE_DIR=/path/to/golden/longbook_56320 \
+  python3 models/demos/minimax_m3/tests/galaxy_prefill_kv_pcc.py
 ```
 
 Module-level PCC tests (vs torch reference / HF) live under [`tests/unit/`](tests/unit/); golden generation is in [`scripts/`](scripts/).
@@ -107,6 +111,7 @@ the `prefill_chunk` alignment assert on M3.
 | `PREFILL_TRACE_DIR` | unset (required in single-run) | Golden trace dir (`metadata.json` with `token_ids`, plus `kv_cache/` for the PCC check). In multi-run mode it only seeds the initial capacity and the default `PREFILL_GOLDEN_ROOT`. |
 | `PREFILL_CHUNKED` | `0` | `1` = chunked prefill (exercises the cache-read path); `0` = one-shot. |
 | `PREFILL_CHUNK_SIZE` | `5120` | Tokens per chunk: whole 128-token MSA blocks per SP rank (a multiple of 1024 at SP=8). |
+| `PREFILL_FORWARD_TOKENS` | `PREFILL_CHUNK_SIZE` | Chunked mode: tokens per forward, a multiple of the chunk size. Each forward packs `PREFILL_FORWARD_TOKENS / PREFILL_CHUNK_SIZE` consecutive chunks of the prompt (`TtPrefillRuntime.prefill_forward`); the last forward ends in empty entries. |
 | `PREFILL_NUM_LAYERS` | all 60 | Build / run only the first N layers (sets `M3_LOAD_NLAYERS`). |
 | `PREFILL_TPS_ITERS` | `1` | Timed whole-sequence repetitions. |
 | `PREFILL_SKIP_PCC` | unset | `1` = perf only, skip the per-layer KV PCC (synthetic traces carry no golden). |
