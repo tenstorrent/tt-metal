@@ -18,6 +18,8 @@ import ttnn
 from models.tt_dit.models.vae.vae_wan_2d import WanVaeDecoder2DAdapter, WanVaeEncoder2DAdapter
 from models.tt_dit.parallel.config import VaeHWParallelConfig
 from models.tt_dit.parallel.manager import CCLManager
+from models.tt_dit.pipelines.cfg import submesh_shape
+from models.tt_dit.pipelines.qwenimage.pipeline_qwenimage import QwenImagePipelineConfig
 from models.tt_dit.utils.check import assert_quality
 from models.tt_dit.utils.test import line_params_req_exact_devices
 
@@ -28,28 +30,18 @@ CHECKPOINT = "Qwen/Qwen-Image"
 ITERATIONS = 5
 
 
-@pytest.mark.parametrize(
-    ("mesh_device", "submesh_shape"),
-    [
-        pytest.param((2, 2), (1, 2), id="2x2_1x2"),
-        pytest.param((2, 4), (1, 4), id="2x4_1x4"),
-    ],
-    indirect=["mesh_device"],
-)
+@pytest.mark.parametrize("mesh_device", [(2, 2), (2, 4), (4, 8)], ids=["2x2", "2x4", "4x8"], indirect=True)
 @pytest.mark.parametrize(
     "device_params",
     [pytest.param({**line_params_req_exact_devices, "trace_region_size": 20000000}, id="line")],
     indirect=True,
 )
 @pytest.mark.parametrize(("height", "width"), [(1024, 1024)])
-def test_vae_decoder(*, mesh_device: ttnn.MeshDevice, submesh_shape: tuple[int, int], height: int, width: int) -> None:
+def test_vae_decoder(*, mesh_device: ttnn.MeshDevice, height: int, width: int) -> None:
     """The decoder against diffusers, untraced and traced, and its decode times."""
     torch.manual_seed(0)
 
-    # The submesh and VAE parallel config of the pipeline's last submesh.
-    submesh_device = mesh_device.create_submesh(ttnn.MeshShape(*submesh_shape))
-    ccl_manager = CCLManager(submesh_device, topology=ttnn.Topology.Linear)
-    parallel_config = VaeHWParallelConfig.from_axes(submesh_device, h_axis=1, w_axis=0)
+    submesh_device, ccl_manager, parallel_config = _pipeline_vae_setup(mesh_device)
 
     torch_vae = WanVaeDecoder2DAdapter(
         checkpoint_name=CHECKPOINT, parallel_config=parallel_config, ccl_manager=ccl_manager, use_torch=True
@@ -70,27 +62,18 @@ def test_vae_decoder(*, mesh_device: ttnn.MeshDevice, submesh_shape: tuple[int, 
         assert_quality(torch_out, out, pcc=0.99, relative_rmse=0.1)
 
 
-@pytest.mark.parametrize(
-    ("mesh_device", "submesh_shape"),
-    [
-        pytest.param((2, 2), (1, 2), id="2x2_1x2"),
-        pytest.param((2, 4), (1, 4), id="2x4_1x4"),
-    ],
-    indirect=["mesh_device"],
-)
+@pytest.mark.parametrize("mesh_device", [(2, 2), (2, 4), (4, 8)], ids=["2x2", "2x4", "4x8"], indirect=True)
 @pytest.mark.parametrize(
     "device_params",
     [pytest.param({**line_params_req_exact_devices, "trace_region_size": 20000000}, id="line")],
     indirect=True,
 )
 @pytest.mark.parametrize(("height", "width"), [(1024, 1024)])
-def test_vae_encoder(*, mesh_device: ttnn.MeshDevice, submesh_shape: tuple[int, int], height: int, width: int) -> None:
+def test_vae_encoder(*, mesh_device: ttnn.MeshDevice, height: int, width: int) -> None:
     """The encoder against diffusers, untraced and traced."""
     torch.manual_seed(0)
 
-    submesh_device = mesh_device.create_submesh(ttnn.MeshShape(*submesh_shape))
-    ccl_manager = CCLManager(submesh_device, topology=ttnn.Topology.Linear)
-    parallel_config = VaeHWParallelConfig.from_axes(submesh_device, h_axis=1, w_axis=0)
+    submesh_device, ccl_manager, parallel_config = _pipeline_vae_setup(mesh_device)
 
     torch_vae = WanVaeEncoder2DAdapter(
         checkpoint_name=CHECKPOINT, parallel_config=parallel_config, ccl_manager=ccl_manager, use_torch=True
@@ -108,6 +91,14 @@ def test_vae_encoder(*, mesh_device: ttnn.MeshDevice, submesh_shape: tuple[int, 
         out = tt_vae.encode(images, traced=traced)
         assert out.shape == torch_out.shape, f"{out.shape} != {torch_out.shape}"
         assert_quality(torch_out, out, pcc=0.99, relative_rmse=0.1)
+
+
+def _pipeline_vae_setup(mesh_device: ttnn.MeshDevice) -> tuple[ttnn.MeshDevice, CCLManager, VaeHWParallelConfig]:
+    """Returns the submesh, CCL manager and parallel config the pipeline runs the VAE with."""
+    config = QwenImagePipelineConfig.default(mesh_shape=mesh_device.shape)
+    submesh_device = mesh_device.create_submesh(submesh_shape(config.dit_parallel_config))
+    ccl_manager = CCLManager(submesh_device, num_links=config.num_links, topology=config.topology)
+    return submesh_device, ccl_manager, config.vae_parallel_config
 
 
 def _time_decode(decode: Callable[[], torch.Tensor], device: ttnn.MeshDevice) -> tuple[list[float], torch.Tensor]:
