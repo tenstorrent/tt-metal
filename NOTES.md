@@ -176,3 +176,14 @@ Next (tunnel up): `ssh exabox-login 'df -h /data; curl -sI https://huggingface.c
 - Check: `ttp detach --check --host exabox-login /data/smarton/fasth3/t417/detach/stage417b`, then read stage417.done.
 - Next: point the run config's model path at t417/models/MiniMax-H3/FL2VA (check run409b.sh's expected layout), submit a build-only
   sbatch on a dit node idle 2 h+ (t160 qualify.sh/submit.sh pattern), then the cache-fill job, then the A/B pairs per seed.
+
+## t417 run 1693 (2026-10-12 09:05 PDT)
+- stage417b ended STAGE417_RC=3 although all 468 GB had arrived: `find | grep -q .` under pipefail dies of SIGPIPE (rc 141).
+  Fixed with `find -print -quit`. Rerun stage417d (default rev 1d8e15320e3: same code as HEAD; notes commits are not on exabox): STAGE417_RC=0.
+  Layout: t417/models/MiniMax-H3/FL2VA/{transformer,text_encoder,video_vae,audio_vae,processor,tokenizer}, LoRAs in lightx2v-h3-turbo{,-sla}.
+- Build: tt-project/t417/build417.sbatch via submit417.sh (qualify.sh idle >= 2 h rule). Slurm job 130130, node bh-glx-120-b04u02
+  (partition bh_sc5_B2B9_D12, idle 548 min, LastBusyTime 2026-10-12T06:53:43), submitted 16:02:02Z, tlim 45 min, no device.
+  Log /data/smarton/fasth3/t417/slurm-130130.out, rc /data/smarton/fasth3/t417/job-130130.rc, alloc log t417/alloc.log.
+- Next: check JOB_RC=0 and `squeue -u smarton` empty. Then write the device sbatch (run409b.sh as template; model root
+  t417/models/MiniMax-H3/FL2VA; drop the local-disk check, /data is NFS; timeout --foreground -k 10; full 4x8 mesh),
+  first a cache-fill/JIT job, then one A/B pair per job per seed: (v1.0 dense, v1.0 VSA) and (v1.0 dense, SLA LoRA + sla 0.85).
