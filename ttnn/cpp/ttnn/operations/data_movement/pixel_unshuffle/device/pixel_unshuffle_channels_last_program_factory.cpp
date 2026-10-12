@@ -62,7 +62,7 @@ tt::tt_metal::ProgramDescriptor PixelUnshuffle::MultiCoreChannelsLast::create_de
     const uint32_t row_nbytes_in = W * datum_sz;
     const uint32_t aligned_row_nbytes_in = tt::align(row_nbytes_in, hal::get_dram_alignment());
     const uint32_t rows_per_item = C * r;  // input rows feeding one output image row
-    constexpr uint32_t depth = 2;          // image rows in flight per RISC
+    constexpr uint32_t depth = 2;          // image rows in flight per reader (CB pages)
 
     // Output: one stick per pixel, Cp elements, page-aligned by the tensor layout.
     const uint32_t out_row_nbytes = static_cast<uint32_t>(dst_buffer->aligned_page_size());
@@ -96,25 +96,49 @@ tt::tt_metal::ProgramDescriptor PixelUnshuffle::MultiCoreChannelsLast::create_de
         desc.cbs.push_back(std::move(cb_out));
     }
 
-    // Private input staging per RISC: depth x (r*C rows). Never pushed/popped.
+    // Input staging per reader: depth pages of one image row (r*C input rows) each. The reader pushes a
+    // page when its reads have landed; the compute helpers pop it when their gather is done.
+    const uint32_t slot_nbytes = rows_per_item * aligned_row_nbytes_in;
     const uint32_t cb_in_idx[2] = {tt::CBIndex::c_0, tt::CBIndex::c_1};
     for (uint32_t k = 0; k < 2; k++) {
         CBDescriptor cb_in;
-        cb_in.total_size = depth * rows_per_item * aligned_row_nbytes_in;
+        cb_in.total_size = depth * slot_nbytes;
         cb_in.core_ranges = all_cores;
         cb_in.format_descriptors.push_back(CBFormatDescriptor{
             .buffer_index = static_cast<uint8_t>(cb_in_idx[k]),
             .data_format = in_data_fmt,
-            .page_size = aligned_row_nbytes_in,
+            .page_size = slot_nbytes,
         });
         desc.cbs.push_back(std::move(cb_in));
     }
+    // PACK/MATH -> UNPACK "my share of this page is gathered" counters, one CB per reader (its received/acked registers; no data).
+    const uint32_t cb_done_idx[2] = {tt::CBIndex::c_2, tt::CBIndex::c_3};
+    for (uint32_t k = 0; k < 2; k++) {
+        CBDescriptor cb_done;
+        cb_done.total_size = depth * 32;
+        cb_done.core_ranges = all_cores;
+        cb_done.format_descriptors.push_back(CBFormatDescriptor{
+            .buffer_index = static_cast<uint8_t>(cb_done_idx[k]),
+            .data_format = tt::DataFormat::UInt32,
+            .page_size = 32,
+        });
+        desc.cbs.push_back(std::move(cb_done));
+    }
+    // Gather split per reader span, in 24ths: the reader keeps 24 - helper24; of the helpers' part MATH takes math24
+    // and UNPACK / PACK split the rest. Measured on the BEV stems: the readers gather slowest (they also issue the
+    // NOC reads) and MATH is slower than UNPACK/PACK at L1 copies.
+    constexpr uint32_t helper24 = 24;
+    constexpr uint32_t math24 = 0;  // MATH measured slower than UNPACK/PACK at the L1 copies (8/24: 382 us, 4/24: 353 us, 0: 335 us on the block C stem)
 
     constexpr const char* kernel_src =
         "ttnn/cpp/ttnn/operations/data_movement/pixel_unshuffle/device/kernels/dataflow/"
         "pixel_unshuffle_nhwc_sharded.cpp";
 
-    KernelDescriptor kernels[2];
+    constexpr const char* gather_src =
+        "ttnn/cpp/ttnn/operations/data_movement/pixel_unshuffle/device/kernels/compute/"
+        "pixel_unshuffle_nhwc_gather.cpp";
+
+    KernelDescriptor kernels[3];
     for (uint32_t k = 0; k < 2; k++) {
         std::vector<uint32_t> cta = {
             W,                                             // 0
@@ -130,8 +154,8 @@ tt::tt_metal::ProgramDescriptor PixelUnshuffle::MultiCoreChannelsLast::create_de
             cb_in_idx[k],                                  // 10
             tt::CBIndex::c_16,                             // 11
             static_cast<uint32_t>(op_attr.channel_order),  // 12 (0=CHANNEL_MAJOR, 1=SPATIAL_MAJOR)
-            depth,                                         // 13
-            k,                                             // 14 which half of each image row
+            k,                                             // 13 which half of each image row
+            helper24,                                      // 14
         };
         TensorAccessorArgs(*src_buffer).append_to(cta);
 
@@ -142,6 +166,30 @@ tt::tt_metal::ProgramDescriptor PixelUnshuffle::MultiCoreChannelsLast::create_de
     }
     kernels[0].config = ReaderConfigDescriptor{};  // NCRISC
     kernels[1].config = WriterConfigDescriptor{};  // BRISC
+    kernels[2].kernel_source = gather_src;
+    kernels[2].source_type = KernelDescriptor::SourceType::FILE_PATH;
+    kernels[2].core_ranges = all_cores;
+    kernels[2].compile_time_args = {
+        W,                                             // 0
+        C,                                             // 1
+        H,                                             // 2
+        r,                                             // 3
+        Ho,                                            // 4
+        Wo,                                            // 5
+        datum_sz,                                      // 6
+        Cp,                                            // 7
+        out_row_nbytes,                                // 8
+        aligned_row_nbytes_in,                         // 9
+        cb_in_idx[0],                                  // 10
+        cb_in_idx[1],                                  // 11
+        tt::CBIndex::c_16,                             // 12
+        cb_done_idx[0],                                // 13
+        cb_done_idx[1],                                // 14
+        static_cast<uint32_t>(op_attr.channel_order),  // 15
+        helper24,                                      // 16
+        math24,                                        // 17
+    };
+    kernels[2].config = ComputeConfigDescriptor{};
 
     for (uint32_t i = 0; i < cores.size(); i++) {
         const uint32_t pix0 = std::min(i * shard_h, total_pixels);
@@ -149,10 +197,12 @@ tt::tt_metal::ProgramDescriptor PixelUnshuffle::MultiCoreChannelsLast::create_de
         for (uint32_t k = 0; k < 2; k++) {
             kernels[k].emplace_runtime_args(cores[i], {src_buffer, pix0, npix});
         }
+        kernels[2].emplace_runtime_args(cores[i], {pix0, npix});
     }
 
     desc.kernels.push_back(std::move(kernels[0]));
     desc.kernels.push_back(std::move(kernels[1]));
+    desc.kernels.push_back(std::move(kernels[2]));
     return desc;
 }
 
