@@ -163,7 +163,7 @@ inline void _llk_pack_fast_tilize_mop_config_(const std::uint32_t unit_dim, cons
     tmp.program();
 }
 
-template <DstSync Dst, bool is_fp32_dest_acc_en, bool l1_step>
+template <DstSync Dst, bool is_fp32_dest_acc_en>
 TT_ALWAYS_INLINE void _llk_pack_fast_tilize_configure_(
     const std::uint32_t pack_dst_format, [[maybe_unused]] const std::uint32_t num_faces, const std::uint32_t pack_src_format)
 {
@@ -191,11 +191,6 @@ TT_ALWAYS_INLINE void _llk_pack_fast_tilize_configure_(
     // Per-tile L1 advance (used by addr-update replay's ADDDMAREG).
     const std::uint32_t tile_l1_size = GET_L1_HEADERLESS_TILE_SIZE(pack_dst_format);
     TT_SETDMAREG(0, LOWER_HALFWORD(tile_l1_size), 0, LO_16(p_gpr_pack::OUTPUT_ADDR_OFFSET));
-    if constexpr (l1_step)
-    {
-        // A tile is under 64 KB; the whole register is written to SCRATCH_SEC2.
-        TTI_SETDMAREG(0, 0, 0, HI_16(p_gpr_pack::OUTPUT_ADDR_OFFSET));
-    }
 
     TTI_SETDMAREG(0, 0x000, 0, LO_16(p_gpr_pack::DEST_OFFSET_LO + 0));
     TTI_SETDMAREG(0, DEST_REGISTER_HALF_SIZE, 0, LO_16(p_gpr_pack::DEST_OFFSET_HI + 0));
@@ -223,10 +218,6 @@ TT_ALWAYS_INLINE void _llk_pack_fast_tilize_configure_(
     TTI_STALLWAIT(p_stall::STALL_CFG, p_stall::THCON);
     TTI_WRCFG(p_gpr_pack::TMP0, p_cfg::WRCFG_32b, PCK0_ADDR_CTRL_XY_REG_0_Xstride_ADDR32);
     TTI_WRCFG(p_gpr_pack::TMP1, p_cfg::WRCFG_32b, PCK0_ADDR_CTRL_ZW_REG_0_Zstride_ADDR32);
-    if constexpr (l1_step)
-    {
-        TTI_WRCFG(p_gpr_pack::OUTPUT_ADDR_OFFSET, 0, SCRATCH_SEC2_val_ADDR32);
-    }
 }
 
 template <DstSync Dst, bool is_fp32_dest_acc_en = false>
@@ -237,7 +228,7 @@ __attribute__((noinline)) void _llk_pack_fast_tilize_init_(
     [[maybe_unused]] const std::uint32_t num_faces = 4,
     const std::uint32_t pack_src_format            = (std::uint32_t)DataFormat::Float16_b)
 {
-    _llk_pack_fast_tilize_configure_<Dst, is_fp32_dest_acc_en, false>(pack_dst_format, num_faces, pack_src_format);
+    _llk_pack_fast_tilize_configure_<Dst, is_fp32_dest_acc_en>(pack_dst_format, num_faces, pack_src_format);
     _llk_pack_fast_tilize_configure_addrmod_();
     _llk_pack_fast_tilize_load_replay_();
     _llk_pack_fast_tilize_mop_config_(unit_dim);
@@ -254,10 +245,13 @@ template <DstSync Dst, bool output_16b>
 __attribute__((noinline)) void _llk_pack_fast_tilize_l1_step_init_(
     const std::uint32_t pack_dst_format, const std::uint32_t unit_dim, const std::uint32_t pack_src_format)
 {
-    _llk_pack_fast_tilize_configure_<Dst, false, true>(pack_dst_format, 4, pack_src_format);
+    _llk_pack_fast_tilize_configure_<Dst, false>(pack_dst_format, 4, pack_src_format);
     _llk_pack_fast_tilize_configure_addrmod_();
     _llk_pack_fast_tilize_load_l1_step_replay_();
     _llk_pack_fast_tilize_l1_step_mop_config_<output_16b>(unit_dim);
+    // After the MOP program, whose sync then does not wait on it; the register's high half is zero, as the WRCFG
+    // address-update replay's ADDDMAREG also requires.
+    TTI_WRCFG(p_gpr_pack::OUTPUT_ADDR_OFFSET, 0, SCRATCH_SEC2_val_ADDR32);
 }
 
 // For callers that know the input's L1 format: a 16-bit input through a 16-bit DEST takes the L1 step, a 32-bit input or
