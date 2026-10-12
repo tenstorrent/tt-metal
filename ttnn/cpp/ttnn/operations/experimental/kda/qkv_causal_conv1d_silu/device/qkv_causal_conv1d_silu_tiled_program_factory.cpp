@@ -50,6 +50,8 @@ ttnn::device_operation::MeshWorkloadArtifacts QkvCausalConv1dSiluTiledProgramFac
     const KernelSpecName compute_name{"compute"};
     const DFBSpecName act_name{"act_tile"};
     const DFBSpecName weights_name{"weights"};
+    const DFBSpecName taps_name{"taps"};
+    const DFBSpecName eye_name{"eye"};
     const DFBSpecName output_name{"output"};
     const ScratchpadSpecName scratch_name{"act_window"};
 
@@ -62,6 +64,8 @@ ttnn::device_operation::MeshWorkloadArtifacts QkvCausalConv1dSiluTiledProgramFac
     Group<DataflowBufferSpec> dfbs = {
         make_dfb(act_name, 2 * qkv_causal_conv1d_silu_tap_count * group),
         make_dfb(weights_name, qkv_causal_conv1d_silu_tap_count * block_ct),
+        make_dfb(taps_name, qkv_causal_conv1d_silu_tap_count * block_ct),
+        make_dfb(eye_name, 1),
         make_dfb(output_name, 2 * group),
     };
 
@@ -84,7 +88,8 @@ ttnn::device_operation::MeshWorkloadArtifacts QkvCausalConv1dSiluTiledProgramFac
         .dfb_bindings =
             {
                 DFBBinding{act_name, "act_tile", DFBEndpointType::PRODUCER},
-                DFBBinding{weights_name, "weights", DFBEndpointType::PRODUCER},
+                DFBBinding{taps_name, "taps", DFBEndpointType::PRODUCER},
+                DFBBinding{eye_name, "eye", DFBEndpointType::PRODUCER},
             },
         .scratchpad_bindings = {{scratch_name, "act_window"}},
         .tensor_bindings =
@@ -133,6 +138,9 @@ ttnn::device_operation::MeshWorkloadArtifacts QkvCausalConv1dSiluTiledProgramFac
         .dfb_bindings =
             {
                 DFBBinding{act_name, "act_tile", DFBEndpointType::CONSUMER},
+                DFBBinding{taps_name, "taps", DFBEndpointType::CONSUMER},
+                DFBBinding{eye_name, "eye", DFBEndpointType::CONSUMER},
+                DFBBinding{weights_name, "weights", DFBEndpointType::PRODUCER},
                 DFBBinding{weights_name, "weights", DFBEndpointType::CONSUMER},
                 DFBBinding{output_name, "output", DFBEndpointType::PRODUCER},
             },

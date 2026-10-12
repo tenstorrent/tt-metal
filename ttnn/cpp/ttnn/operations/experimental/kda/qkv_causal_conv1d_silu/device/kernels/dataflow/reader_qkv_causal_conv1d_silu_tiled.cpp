@@ -9,7 +9,7 @@
 // tile, stored as 32-byte face rows, so the tile's faces land in it with four contiguous face reads. Every tap's
 // shifted tile is then four contiguous 512-byte local copies out of the two strips: tap t reads tokens r - 3 + t,
 // i.e. strip rows [t, t + 16) and [t + 16, t + 32). Compute applies the taps as matmuls with diagonal weight tiles,
-// which the reader builds once per channel block.
+// which it builds once per channel block from the tap tiles and an identity tile the reader supplies.
 
 #include "ttnn/cpp/ttnn/operations/experimental/kda/chronological_selections/device/kernels/chronology.hpp"
 #include "api/dataflow/dataflow_api.h"
@@ -62,7 +62,8 @@ TT_KERNEL void reader(uint32_t wi_start, uint32_t wi_count) {
     const auto tap1 = TensorAccessor(tensor::tap1);
     const auto tap2 = TensorAccessor(tensor::tap2);
     const auto tap3 = TensorAccessor(tensor::tap3);
-    DataflowBuffer weights(dfb::weights);
+    DataflowBuffer taps(dfb::taps);
+    DataflowBuffer eye(dfb::eye);
     DataflowBuffer activation(dfb::act_tile);
     Scratchpad<uint16_t> scratch(scratch::act_window);
     Noc noc;
@@ -76,7 +77,7 @@ TT_KERNEL void reader(uint32_t wi_start, uint32_t wi_count) {
     constexpr uint32_t block_row_bytes = block_ct * 2 * face_row_bytes;
     // Scratch layout (offsets from a 64-byte aligned base):
     //   strips   [2 parities][block_ct][left, right] x strip_stride, shifted by strip_phase
-    //   staging  block_ct tiles: the previous tile's bottom faces, or tap rows while building weights
+    //   staging  block_ct tiles: the previous tile's bottom faces
     //   rows     history_rows x block_row_bytes: three carried rows of the channel block
     const uint32_t scratch_base = scratch.get_base_address();
     const uint32_t base = align_up(scratch_base, 64);
@@ -134,64 +135,35 @@ TT_KERNEL void reader(uint32_t wi_start, uint32_t wi_count) {
         const uint32_t ct_start = block * block_ct;
 
         if (block != loaded_block) {
-            // Diagonal weight tiles, laid out [tap][channel tile]: diag(tap)[c][c] = tap[c].
-            // The weight buffer holds exactly one block, so every block lands at the same address: zero it once,
-            // after which each block only rewrites the diagonals.
-            weights.reserve_back(tap_count * block_ct);
+            // Compute turns each tap into a diagonal tile, identity times the tap's row: it needs the identity once
+            // and, per channel block, the tap tiles laid out [tap][channel tile]. Row 0 of a tap tile holds the
+            // weights, so only its top faces (0 and 1) are read.
             if (loaded_block == no_block) {
-                noc.async_write_zeros(weights, tap_count * block_ct * tile_bytes);
+                eye.reserve_back(1);
+                noc.async_write_zeros(eye, tile_bytes);
+                noc.write_zeros_l1_barrier();
+                constexpr uint16_t bf16_one = 0x3F80;
+                auto* tile = reinterpret_cast<volatile tt_l1_ptr uint16_t*>(eye.get_write_ptr());
+                for (uint32_t i = 0; i < face_rows; ++i) {
+                    tile[i * 16 + i] = bf16_one;            // face 0
+                    tile[3 * 256 + i * 16 + i] = bf16_one;  // face 3
+                }
+                eye.push_back(1);
             }
-            // Each (channel tile, tap) gets a 128-byte slot: the face 0 row at +0 and the face 1 row at +64, so every
-            // 32-byte DRAM read lands 64-byte aligned.
-            constexpr uint32_t slot_bytes = 128;
-            static_assert(block_ct * tap_count * slot_bytes <= block_ct * tile_bytes);
+            taps.reserve_back(tap_count * block_ct);
             for (uint32_t ct = 0; ct < block_ct; ++ct) {
                 const uint32_t source_ct = ct_start + ct;
-                for (uint32_t face = 0; face < 2; ++face) {
-                    // Row 0 of the tap tile holds the weights: face 0 has channels 0-15, face 1 channels 16-31.
-                    const uint32_t src = face * face_bytes;
-                    const uint32_t d = offset_of(staging) + ct * tap_count * slot_bytes + face * 64;
+                const auto read_tap = [&](const auto& tap, uint32_t index) {
                     noc.async_read(
-                        tap0,
-                        scratch,
-                        face_row_bytes,
-                        {.page_id = source_ct, .offset_bytes = src},
-                        {.offset_bytes = d});
-                    noc.async_read(
-                        tap1,
-                        scratch,
-                        face_row_bytes,
-                        {.page_id = source_ct, .offset_bytes = src},
-                        {.offset_bytes = d + slot_bytes});
-                    noc.async_read(
-                        tap2,
-                        scratch,
-                        face_row_bytes,
-                        {.page_id = source_ct, .offset_bytes = src},
-                        {.offset_bytes = d + 2 * slot_bytes});
-                    noc.async_read(
-                        tap3,
-                        scratch,
-                        face_row_bytes,
-                        {.page_id = source_ct, .offset_bytes = src},
-                        {.offset_bytes = d + 3 * slot_bytes});
-                }
+                        tap, taps, 2 * face_bytes, {.page_id = source_ct}, {.offset_bytes = index * tile_bytes});
+                };
+                read_tap(tap0, ct);
+                read_tap(tap1, block_ct + ct);
+                read_tap(tap2, 2 * block_ct + ct);
+                read_tap(tap3, 3 * block_ct + ct);
             }
-            noc.write_zeros_l1_barrier();
             noc.async_read_barrier();
-            auto* diag = reinterpret_cast<volatile tt_l1_ptr uint16_t*>(weights.get_write_ptr());
-            for (uint32_t ct = 0; ct < block_ct; ++ct) {
-                for (uint32_t tap = 0; tap < tap_count; ++tap) {
-                    const auto* values =
-                        reinterpret_cast<volatile tt_l1_ptr uint16_t*>(staging + (ct * tap_count + tap) * slot_bytes);
-                    auto* tile = diag + (tap * block_ct + ct) * (tile_bytes / sizeof(uint16_t));
-                    for (uint32_t i = 0; i < face_rows; ++i) {
-                        tile[i * 16 + i] = values[i];                 // face 0
-                        tile[3 * 256 + i * 16 + i] = values[32 + i];  // face 3
-                    }
-                }
-            }
-            weights.push_back(tap_count * block_ct);
+            taps.push_back(tap_count * block_ct);
             loaded_block = block;
         }
 
