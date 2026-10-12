@@ -5,7 +5,8 @@
 #pragma once
 
 // First in every TRISC unit of a profiler build. TRISC timing depends on the code address, so run_kernel gets a 2 KiB
-// aligned section that sections.ld places after the harness code, and harness changes cannot move it.
+// aligned section that sections.ld places after the harness code, and harness changes cannot move it (Wormhole perf
+// builds: no harness code ahead of it but the zone helpers).
 #if !defined(ARCH_QUASAR)
 // The type RUNTIME_PARAMETERS expands to; build.h is not included because some kernels define RuntimeParams.
 struct RuntimeParams;
@@ -16,7 +17,25 @@ __attribute__((noinline, section(".text.run_kernel"))) void run_kernel(const str
 // them; the code starts with a jump to _start, where the loader starts the core
 asm(".globl llk_init_region_at\n"
     ".set llk_init_region_at, 512\n"
-    ".pushsection .text.llk_init_entry, \"ax\", @progbits\n"
+    ".pushsection .text.llk_entry, \"ax\", @progbits\n"
+    "j _start\n"
+    ".popsection");
+#elif defined(LLK_DBG_BARRIER) // Wormhole TILE_LOOP build
+// run_kernel on its thread's period (the icache and predictor period, perf/layout.py) right after the zone helpers;
+// _start, main and the rest of the harness go after the kernel (test_config.py) in a fixed reserve (1.0-1.2 KiB used,
+// so 1 KiB of growth), so harness growth moves nothing
+__attribute__((noinline, section(".text.run_kernel"))) void run_kernel(const struct RuntimeParams& params);
+#if defined(COMPILE_FOR_TRISC) && COMPILE_FOR_TRISC == 1
+#define LLK_KERNEL_ALIGN_ "512"
+#else
+#define LLK_KERNEL_ALIGN_ "1024"
+#endif
+asm(".globl llk_kernel_align\n"
+    ".set llk_kernel_align, " LLK_KERNEL_ALIGN_
+    "\n"
+    ".globl llk_harness_reserve\n"
+    ".set llk_harness_reserve, 2304\n"
+    ".pushsection .text.llk_entry, \"ax\", @progbits\n"
     "j _start\n"
     ".popsection");
 #else
