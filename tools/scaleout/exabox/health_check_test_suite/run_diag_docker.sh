@@ -58,10 +58,10 @@ Wrapper options:
                          the console transcript. Created if absent and chmod
                          0777 so the image user can write to it.
                          (default: ./test_output_<date>-<time>)
-  -i, --image IMAGE      Container image, checked against the registry on every
-                         run so a moved tag is picked up (default:
-                         exabox-tools:latest; see DEFAULT_IMAGE at the top of
-                         this script). --docker-arg --pull=never skips the check.
+  -i, --image IMAGE      Container image (default: exabox-tools:latest; see
+                         DEFAULT_IMAGE at the top of this script). :latest is
+                         re-checked against the registry on every run;
+                         --docker-arg --pull=never skips that.
       --docker-arg ARG   Extra argument for \`docker run\`, repeatable. Use for
                          one-offs such as --docker-arg --shm-size=4g
   -h, --help             This text
@@ -213,11 +213,16 @@ exec > >(tee -a "${OUTPUT_DIR}/console.log") 2>&1
 
 DOCKER_ARGS=(
     --rm
-    --pull always
     --entrypoint ""
     --network host
     --cap-add SYSLOG
 )
+
+# docker run only pulls missing images, so a cached :latest would never be refreshed.
+IMAGE_NAME="${IMAGE##*/}"
+if [[ "${IMAGE_NAME}" != *@* && ( "${IMAGE_NAME}" != *:* || "${IMAGE_NAME}" == *:latest ) ]]; then
+    DOCKER_ARGS+=(--pull always)
+fi
 
 add_device() {
     local path=$1 perms=$2 required=$3 why=$4

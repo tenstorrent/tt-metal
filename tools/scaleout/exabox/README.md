@@ -82,7 +82,7 @@ ghcr.io/tenstorrent/tt-metal/exabox-tools:<tag>
 
 `run_validation.sh` and `recover.sh` use `exabox-tools:latest` when you omit `--image`; `run_fabric_tests.sh` and `run_dispatch_tests.sh` require it to be passed explicitly. Tags and how to build one are described below.
 
-The scripts run docker with `--pull=always`, so a moved `:latest` is picked up on the next run. Hosts that already have the current build only do a quick registry check.
+For `:latest` the scripts run docker with `--pull=always`, so a moved tag is picked up on the next run. Pinned tags run from the local cache.
 
 **`exabox-tools` image**
 
