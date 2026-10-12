@@ -191,13 +191,14 @@ void kernel_main() {
 
     constexpr uint32_t full_N_tiles_bytes = N_block_tiles * in1_tile_size;
 
-    // The injector reads in1 one block ahead: after publishing a block it reserves the next slot and issues that
-    // block's DRAM reads before forwarding the current block, so the reads overlap the forward. A fused all-gather
-    // picks k blocks as they arrive, so it keeps reading each block when it is needed.
+    // Every core requests in1 one block ahead: after publishing a block it reserves the next slot and either issues
+    // that block's DRAM reads (the injector) or tells its upstream core it is ready (relay cores) before forwarding
+    // the current block, so receiving the next block overlaps forwarding this one. A fused all-gather picks the
+    // injector's k blocks as they arrive, so its injector keeps reading each block when it is needed.
 #ifdef FUSE_AG
-    constexpr bool prefetch_in1 = false;
+    constexpr bool prefetch_in1 = !is_injector_core;
 #else
-    constexpr bool prefetch_in1 = is_injector_core;
+    constexpr bool prefetch_in1 = true;
 #endif
     bool in1_prefetched = false;
 
@@ -338,8 +339,10 @@ void kernel_main() {
                             n_tile_end);
                     }
                 } else {
-                    in1_receiver_semaphore.set(INVALID);
-                    in1_sender_semaphore.up(noc, in1_sender_noc_x, in1_sender_noc_y, 1);
+                    if (!in1_prefetched) {
+                        in1_receiver_semaphore.set(INVALID);
+                        in1_sender_semaphore.up(noc, in1_sender_noc_x, in1_sender_noc_y, 1);
+                    }
                     in1_receiver_semaphore.wait(VALID);
                 }
 
@@ -364,7 +367,13 @@ void kernel_main() {
                         }
                     }
                     in1_prefetched = next_m_iter < M_blocks_per_core;
-                    if (in1_prefetched) {
+                    if (in1_prefetched && !is_injector_core) {
+                        // Upstream may write the next block into the slot reserved here once it sees the
+                        // increment; the previous block's valid flag has already been consumed.
+                        dfb_in1.reserve_back(in1_block_num_tiles);
+                        in1_receiver_semaphore.set(INVALID);
+                        in1_sender_semaphore.up(noc, in1_sender_noc_x, in1_sender_noc_y, 1);
+                    } else if (in1_prefetched) {
                         const uint32_t next_k_block = next_k_forward ? next_k_iter : (K_num_blocks - 1) - next_k_iter;
                         const uint32_t next_n_tile = N_start_tile + next_n_iter * N_block_tiles;
                         dfb_in1.reserve_back(in1_block_num_tiles);
