@@ -30,17 +30,43 @@ constexpr uint32_t causal_diag_tile(
     return chunk_start_tiles + q_row_abs + (q_row_abs >= straddle_q_tile ? straddle_jump_tiles : 0);
 }
 
-/** Unmasked prefix k-tiles of q-tile-row q_row_abs in a unit (start k_tile_start, k_tiles_in_unit
- *  valid). Tiles [0, this) are below the diagonal (no mask); diagonal and beyond are masked. */
+/** Compressed K tile containing the per-row causal boundary for this 32-query-row tile. Query placement
+ *  and straddle are in 32-token tiles; K is in compressed rows. */
+constexpr uint32_t causal_partial_tile(
+    uint32_t q_row_abs,
+    uint32_t chunk_start_tiles,
+    uint32_t straddle_q_tile,
+    uint32_t straddle_jump_tiles,
+    uint32_t key_compression_ratio) {
+    const uint32_t query_tile = causal_diag_tile(q_row_abs, chunk_start_tiles, straddle_q_tile, straddle_jump_tiles);
+    const uint32_t first_row_valid_keys = (query_tile * 32u + 1u) / key_compression_ratio;
+    return first_row_valid_keys / 32u;
+}
+
+/** Partial-mask pattern for this query tile. ratio=4 yields residues {0,8,16,24} -> indices {0,1,2,3}. */
+constexpr uint32_t causal_mask_index(
+    uint32_t q_row_abs,
+    uint32_t chunk_start_tiles,
+    uint32_t straddle_q_tile,
+    uint32_t straddle_jump_tiles,
+    uint32_t key_compression_ratio) {
+    const uint32_t query_tile = causal_diag_tile(q_row_abs, chunk_start_tiles, straddle_q_tile, straddle_jump_tiles);
+    const uint32_t first_row_valid_keys = (query_tile * 32u + 1u) / key_compression_ratio;
+    return (first_row_valid_keys % 32u) / (32u / key_compression_ratio);
+}
+
+/** Unmasked prefix K tiles before the partial causal tile. */
 constexpr uint32_t valid_prefix_tiles(
     uint32_t q_row_abs,
     uint32_t k_tile_start,
     uint32_t k_tiles_in_unit,
     uint32_t chunk_start_tiles,
     uint32_t straddle_q_tile,
-    uint32_t straddle_jump_tiles) {
-    const uint32_t diag_tile = causal_diag_tile(q_row_abs, chunk_start_tiles, straddle_q_tile, straddle_jump_tiles);
-    const uint32_t v = diag_tile > k_tile_start ? diag_tile - k_tile_start : 0;
+    uint32_t straddle_jump_tiles,
+    uint32_t key_compression_ratio = 1) {
+    const uint32_t partial_tile =
+        causal_partial_tile(q_row_abs, chunk_start_tiles, straddle_q_tile, straddle_jump_tiles, key_compression_ratio);
+    const uint32_t v = partial_tile > k_tile_start ? partial_tile - k_tile_start : 0;
     return v < k_tiles_in_unit ? v : k_tiles_in_unit;
 }
 

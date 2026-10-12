@@ -55,3 +55,16 @@ Mechanical fork changes (fork_op.py): namespace `ttnn::operations::bringup`, CMa
 - Why: task O.1, every call a model makes to a fork gets a case.
 - Needed by: hy4_preview_d_p O.1
 - Files: `tests/cases.py`, `tests/reference.py`, `tests/test_unified_routed_expert_ffn.py`
+
+### Upstream sync to source @ `bdc576fa652` (2026-10-12): ProgramDescriptor port, alias removal
+- What: a 3-way merge (base = fork_op.py's mechanical copy of the source @ `73027b6e6ff`, theirs = the same copy of
+  the source @ `bdc576fa652`, ours = this fork) of two source commits:
+  - #57539: the program factory describes the program as a ProgramDescriptor (KernelDescriptor /
+    ComputeConfigDescriptor, `add_semaphore()`, defines as a list of pairs) instead of building a Program;
+  - #59097: the deprecated global `MathFidelity` / `UnpackToDestMode` aliases are gone (required to build).
+  Three conflicts in `device/unified_routed_expert_ffn_program_factory.cpp`, each the fork's change re-applied on the
+  descriptor API: the GeluTanh `ROUTED_GELU_TANH` define, the caller's math fidelity for GeluTanh / high_precision
+  (`compute_fidelity`), and the `DS_NO_WRITER_MCAST` diagnostic comment.
+- Default behaviour: the fork's own changes are kept; the kernels, their arguments and the CBs are the source's.
+- Needed by: rebase onto origin/llk_helper_library @ `bdc576fa652` (2026-10-12)
+- Files: `device/unified_routed_expert_ffn_program_factory.{cpp,hpp}`

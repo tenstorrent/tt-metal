@@ -66,6 +66,10 @@ struct operation_attributes_t {
     // Absolute chunk_start of rank 0. Rank r uses chunk_start_idx + r*Sq; the per-device value is derived
     // host-side and passed to compute as a RUNTIME arg (hash-excluded), so distinct values reuse one program.
     uint32_t chunk_start_idx{0};  // elements, tile-aligned
+    // Query tokens represented by one K-cache row. DSA supports 1 (legacy) and 4 (compressed keys). Query
+    // placement remains in token units; K shape, kv_len, and block_cyclic.chunk_local are compressed-row units.
+    // Compile-time + hashed because it changes causal mask generation and geometry.
+    uint32_t key_compression_ratio{1};
     // Mesh axes the query sequence is sharded over, outermost (SP ring) first: {} = linear device order,
     // {sp} = 1D SP ring, {sp, tp} = 2D SP ring + TP sub-shard. The SP axis sets each device's causal offset;
     // the optional TP axis (only alongside an SP axis + block_cyclic) adds a Sq-row sub-offset so each device
@@ -116,9 +120,9 @@ struct operation_attributes_t {
     std::optional<uint32_t> kv_len{std::nullopt};
     bool has_runtime_kv_len() const { return kv_len.has_value(); }
     // Resolved block-cyclic (per-SP-shard) K layout. When set, the reader remaps each logical k-tile to its
-    // physical (permuted) tile, presenting K in natural token order. HASHED (sp/chunk_local shape the reader
-    // binary via compile-time arguments). nullopt == contiguous K
-    // (which is also what sp == 1 resolves to, since that is the identity permutation).
+    // physical (permuted) tile, presenting K in natural key-row order. chunk_local is stored in compressed K
+    // rows (the public block_cyclic_chunk_local argument remains query-token rows). HASHED (sp/chunk_local
+    // shape the reader binary via compile-time arguments). nullopt == contiguous K.
     std::optional<BlockCyclicLayout> block_cyclic{std::nullopt};
     bool has_block_cyclic() const { return block_cyclic.has_value(); }
     // Ring-fused all-gather config (see FusedRingConfig). nullopt = the classic unfused path (caller pre-gathers

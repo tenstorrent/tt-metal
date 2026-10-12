@@ -8,7 +8,7 @@
  },
  "calls": [
   {
-   "sig": "239d54bae3",
+   "sig": "3ec3d15624",
    "count": 2,
    "op": "ttnn.bringup.chunked_scaled_dot_product_attention",
    "args": [
@@ -93,7 +93,7 @@
      "packer_l1_acc": false,
      "dst_full_sync_en": false
     },
-    "program_config": "SDPAProgramConfig(compute_with_storage_grid_size=11-10, sub_core_grids=std::nullopt, q_chunk_size=512, k_chunk_size=128, exp_approx_mode=true, max_cores_per_head_batch=16)",
+    "program_config": "SDPAProgramConfig(compute_with_storage_grid_size=11-10, sub_core_grids=std::nullopt, q_chunk_size=512, k_chunk_size=128, exp_approx_mode=true, max_cores_per_head_batch=16, max_k_splits=1, matmul_math_fidelity=std::nullopt, segmented_accumulation=false)",
     "scale": 0.07216878235340118
    }
   },
@@ -449,7 +449,7 @@
    }
   },
   {
-   "sig": "3f237ff436",
+   "sig": "3cd893eaad",
    "count": 4,
    "op": "ttnn.bringup.scaled_dot_product_attention",
    "args": [
@@ -536,7 +536,7 @@
      "dst_full_sync_en": false
     },
     "is_causal": true,
-    "program_config": "SDPAProgramConfig(compute_with_storage_grid_size=11-10, sub_core_grids=std::nullopt, q_chunk_size=128, k_chunk_size=128, exp_approx_mode=false, max_cores_per_head_batch=16)",
+    "program_config": "SDPAProgramConfig(compute_with_storage_grid_size=11-10, sub_core_grids=std::nullopt, q_chunk_size=128, k_chunk_size=128, exp_approx_mode=false, max_cores_per_head_batch=16, max_k_splits=1, matmul_math_fidelity=std::nullopt, segmented_accumulation=false)",
     "scale": 0.0625,
     "sliding_window_size": 128
    }

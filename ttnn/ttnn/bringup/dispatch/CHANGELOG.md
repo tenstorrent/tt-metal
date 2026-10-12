@@ -46,3 +46,11 @@ Mechanical fork changes (fork_op.py): namespace `ttnn::operations::bringup`, CMa
 - Why: task O.1, every call a model makes to a fork gets a case.
 - Needed by: hy4_preview_d_p O.1
 - Files: `tests/cases.py`
+
+### Upstream sync to source @ `bdc576fa652` (2026-10-12): include and alias cleanups
+- What: a 3-way merge (base = fork_op.py's mechanical copy of the source @ `73027b6e6ff`, theirs = the same copy of
+  the source @ `bdc576fa652`, ours = this fork), no conflicts, of three source cleanups: #58514 (repo root off
+  libtt_metal's public include path), #59097 (deprecated alias removal), #59418 (include cleaner).
+- Default behaviour: unchanged.
+- Needed by: rebase onto origin/llk_helper_library @ `bdc576fa652` (2026-10-12)
+- Files: `device/dispatch_program_factory.cpp`, `device/kernels/dataflow/dispatch_plan.hpp`
