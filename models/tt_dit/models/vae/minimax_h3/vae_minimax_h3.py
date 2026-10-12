@@ -184,12 +184,64 @@ def blend_clip_frames(a, b, extent: int):
         return blend(a, b, extent, dim=-3)
 
     extent = min(a.shape[0], b.shape[0], extent)
-    positions = np.arange(extent, dtype=np.float32).reshape(-1, *([1] * (a.ndim - 1)))
-    head = a[-extent:].astype(np.float32) * (1.0 - positions / extent) + b[:extent].astype(np.float32) * (
-        positions / extent
-    )
-    head = np.clip(np.rint(head), 0, 255).astype(np.uint8)
+    head = np.empty((extent, *b.shape[1:]), dtype=np.uint8)
+    _crossfade_planar_into(head, a[-extent:], b[:extent])
     return head if extent == b.shape[0] else np.concatenate([head, b[extent:]], axis=0)
+
+
+def _crossfade_planar_into(out: np.ndarray, a: np.ndarray, b: np.ndarray) -> None:
+    """``out[k] = round(a[k] * (1 - k/n) + b[k] * k/n)`` in float32, one frame at a time.
+
+    Bit-identical to the whole-block formula; a frame of scratch instead of four blocks of it.
+    """
+    extent = out.shape[0]
+    weight_b = np.arange(extent, dtype=np.float32) / extent
+    weight_a = 1.0 - weight_b
+    for k in range(extent):
+        mixed = np.multiply(a[k], weight_a[k], dtype=np.float32)
+        np.add(mixed, np.multiply(b[k], weight_b[k], dtype=np.float32), out=mixed)
+        np.rint(mixed, out=mixed)
+        np.clip(mixed, 0, 255, out=mixed)
+        out[k] = mixed
+
+
+def _write_clip_part(out, start: int, segment, previous, frame_overlap: int) -> None:
+    frames = clip_num_frames(segment)
+    slab = clip_frames(out, start, start + frames)
+    extent = 0 if previous is None else min(clip_num_frames(previous), frames, frame_overlap)
+    if extent:
+        if isinstance(out, np.ndarray):
+            _crossfade_planar_into(slab[:extent], previous[-extent:], segment[:extent])
+            np.copyto(slab[extent:], segment[extent:])
+        else:
+            slab[:, :, :extent] = blend_clip_frames(previous, clip_frames(segment, 0, extent), extent)
+            slab[:, :, extent:].copy_(segment[:, :, extent:])
+    elif isinstance(out, np.ndarray):
+        np.copyto(slab, segment)
+    else:
+        slab.copy_(segment)
+
+
+def split_decoded_clip(clip, chunk_num_frames: int, frame_pre_padding: int, token_drop: int) -> tuple:
+    """``(segment, overlap_or_None)``: the frames a decoded clip contributes and the tail the next one blends with."""
+    pieces = []
+    for j in range(int(token_drop > 0) + 1):
+        piece = clip_frames(clip, j * chunk_num_frames, (j + 1) * chunk_num_frames)
+        pieces.append(clip_frames(piece, frame_pre_padding, clip_num_frames(piece)))
+    return pieces[0], (pieces[1] if len(pieces) > 1 else None)
+
+
+def clip_parts(clips: list, chunk_num_frames: int, frame_pre_padding: int, token_drop: int) -> list[tuple]:
+    """The ``(segment, previous_overlap_or_None)`` list :func:`assemble_clip_parts` takes."""
+    parts, overlap = [], None
+    for clip in clips:
+        segment, tail = split_decoded_clip(clip, chunk_num_frames, frame_pre_padding, token_drop)
+        parts.append((segment, overlap))
+        if tail is not None:
+            overlap = tail
+    if overlap is not None:
+        parts.append((overlap, None))
+    return parts
 
 
 def assemble_clip_parts(parts: list[tuple], frame_overlap: int):
@@ -206,34 +258,64 @@ def assemble_clip_parts(parts: list[tuple], frame_overlap: int):
         shape[2] = total
         out = torch.empty(shape, dtype=first.dtype)
 
-    def write(start: int, segment, previous) -> None:
-        frames = clip_num_frames(segment)
-        slab = clip_frames(out, start, start + frames)
-        extent = 0 if previous is None else min(clip_num_frames(previous), frames, frame_overlap)
-        if extent:
-            head = blend_clip_frames(previous, clip_frames(segment, 0, extent), extent)
-            if isinstance(out, np.ndarray):
-                slab[:extent] = head
-                np.copyto(slab[extent:], segment[extent:])
-            else:
-                slab[:, :, :extent] = head
-                slab[:, :, extent:].copy_(segment[:, :, extent:])
-        elif isinstance(out, np.ndarray):
-            np.copyto(slab, segment)
-        else:
-            slab.copy_(segment)
-
     jobs, start = [], 0
     for segment, previous in parts:
-        jobs.append((start, segment, previous))
+        jobs.append((out, start, segment, previous, frame_overlap))
         start += clip_num_frames(segment)
     if len(jobs) == 1:
-        write(*jobs[0])
+        _write_clip_part(*jobs[0])
     else:
         with ThreadPoolExecutor(max_workers=min(8, len(jobs))) as pool:
-            for done in [pool.submit(write, *job) for job in jobs]:
+            for done in [pool.submit(_write_clip_part, *job) for job in jobs]:
                 done.result()
     return out
+
+
+class StreamedClipAssembly:
+    """:func:`assemble_clip_parts` for planar clips fed one at a time, in order, as each is read back.
+
+    Clip ``i``'s slab only needs clip ``i - 1``'s overlap, so all but the last tail is written while
+    later waves still run on device. Byte-identical to the batch assembly.
+    """
+
+    def __init__(
+        self, num_clips: int, chunk_num_frames: int, frame_pre_padding: int, token_drop: int, frame_overlap: int
+    ) -> None:
+        self.num_clips = num_clips
+        self._split = (chunk_num_frames, frame_pre_padding, token_drop)
+        self.frame_overlap = frame_overlap
+        self.fed = 0
+        self.seconds = 0.0
+        self._out = None
+        self._start = 0
+        self._overlap = None
+        self._shape = None
+
+    def feed(self, clip: np.ndarray) -> np.ndarray:
+        mark = time.perf_counter()
+        assert self.fed < self.num_clips, f"clip {self.fed} fed to a {self.num_clips}-clip assembly"
+        segment, tail = split_decoded_clip(clip, *self._split)
+        if self._out is None:
+            self._shape = clip.shape
+            tail_frames = 0 if tail is None else clip_num_frames(tail)
+            total = self.num_clips * clip_num_frames(segment) + tail_frames
+            self._out = np.empty((total, *clip.shape[1:]), dtype=clip.dtype)
+        assert clip.shape == self._shape, f"clip {self.fed} is {clip.shape}, clip 0 was {self._shape}"
+        _write_clip_part(self._out, self._start, segment, self._overlap, self.frame_overlap)
+        self._start += clip_num_frames(segment)
+        if tail is not None:
+            self._overlap = tail
+        self.fed += 1
+        self.seconds += time.perf_counter() - mark
+        return clip
+
+    def result(self) -> np.ndarray:
+        assert self.fed == self.num_clips, f"{self.fed} of {self.num_clips} clips fed"
+        if self._overlap is not None:
+            _write_clip_part(self._out, self._start, self._overlap, None, self.frame_overlap)
+            self._start += clip_num_frames(self._overlap)
+        assert self._start == self._out.shape[0], f"wrote {self._start} of {self._out.shape[0]} frames"
+        return self._out
 
 
 def stitch_tiles(
@@ -359,6 +441,7 @@ class MiniMaxH3Vae:
         waves_per_device: int = 1,
         stitch_exchange: str = "strips",
         traced_decode: bool = False,
+        stream_blend: bool = True,
     ) -> None:
         if task not in ("t2va", "ref2va"):
             raise ValueError(f"task must be 't2va' (also serves fl2va) or 'ref2va', got {task!r}")
@@ -400,6 +483,9 @@ class MiniMaxH3Vae:
         # moves the decoder's weights must call `release_decode_trace` first.
         self.traced_decode = traced_decode
         self._wave_trace: tuple | None = None
+        # Assemble each clip's frames on the readback worker as it lands, under the remaining waves,
+        # instead of all of them after the last one. Strip-stitched yuv420 only.
+        self.stream_blend = stream_blend
         assert waves_per_device >= 1, f"waves_per_device must be >= 1, got {waves_per_device}"
         self.waves_per_device = waves_per_device
         self.log_profile = True
@@ -929,13 +1015,16 @@ class MiniMaxH3Vae:
         if pending is not None:
             yield from read_wave(*pending)
 
-    def _decode_clips_device_stitched(self, chunk_latents: list[torch.Tensor], output_type: str = "float") -> list:
+    def _decode_clips_device_stitched(
+        self, chunk_latents: list[torch.Tensor], output_type: str = "float", on_clip=None
+    ) -> list:
+        """``on_clip`` sees each yuv420 clip in order on the readback worker; paths that cannot stream ignore it."""
         if self.stitch_exchange == "neighbor":
             return self._decode_clips_neighbor_stitched(chunk_latents, output_type)
         if self.stitch_exchange == "strips":
             reason = self._strips_unserved(chunk_latents[0].shape[-2], chunk_latents[0].shape[-1], output_type)
             if reason is None:
-                return self._decode_clips_strip_stitched(chunk_latents, output_type)
+                return self._decode_clips_strip_stitched(chunk_latents, output_type, on_clip)
             if not getattr(self, "_warned_strips_fallback", False):
                 self._warned_strips_fallback = True
                 logger.warning(f"strips stitch: {reason}; using the gather stitch")
@@ -1119,7 +1208,9 @@ class MiniMaxH3Vae:
             profile["readback_join"] += time.perf_counter() - mark
         return canvases
 
-    def _decode_clips_strip_stitched(self, chunk_latents: list[torch.Tensor], output_type: str = "float") -> list:
+    def _decode_clips_strip_stitched(
+        self, chunk_latents: list[torch.Tensor], output_type: str = "float", on_clip=None
+    ) -> list:
         """Each device blends only the tiles it reads back."""
         from .stitch_device_minimax_h3 import StripTileStitcher
 
@@ -1260,6 +1351,8 @@ class MiniMaxH3Vae:
                 finish = self._read_canvas_yuv(canvas_rows, rows_partitioned=True)
                 ttnn.deallocate(canvas_rows)
                 read_bytes = canvas_shape[-3] * canvas_shape[-2] * canvas_shape[-1] * 3 // 2
+                if on_clip is not None:
+                    finish = lambda finish=finish: on_clip(finish())
                 pending.append(self._yuv_finish_pool.submit(finish))
             else:
                 patch = ttnn.mesh_partition(canvas_rows, dim=-1, cluster_axis=1)
@@ -1739,8 +1832,15 @@ class MiniMaxH3Vae:
             z_BCTHW[:, :, i * chunk_size : i * chunk_size + chunk_size + config.token_overlap]
             for i in range(num_chunks)
         ]
+        assembly = None
         if self.device_stitch and chunk_latents:
-            clips = self._decode_clips_device_stitched(chunk_latents, output_type)
+            if self.stream_blend and output_type == "yuv420":
+                assembly = StreamedClipAssembly(
+                    num_chunks, chunk_num_frames, config.frame_pre_padding, config.token_drop, config.frame_overlap
+                )
+            clips = self._decode_clips_device_stitched(
+                chunk_latents, output_type, None if assembly is None else assembly.feed
+            )
         elif chunk_latents:
             latent_height, latent_width = chunk_latents[0].shape[-2], chunk_latents[0].shape[-1]
             mark = time.perf_counter()
@@ -1767,21 +1867,13 @@ class MiniMaxH3Vae:
             clips = []
 
         assemble_mark = time.perf_counter()
-        parts, overlap = [], None
-        for i in range(num_chunks):
-            clip = clips[i]
-            for j in range(int(config.token_drop > 0) + 1):
-                frame_start = j * chunk_num_frames
-                chunk = clip_frames(clip, frame_start, frame_start + chunk_num_frames)
-                chunk = clip_frames(chunk, config.frame_pre_padding, clip_num_frames(chunk))
-                if j == 0:
-                    parts.append((chunk, overlap))
-                else:
-                    overlap = chunk
-        if overlap is not None:
-            parts.append((overlap, None))
-
-        result = assemble_clip_parts(parts, config.frame_overlap) if parts else concat_clip_frames([])
+        if assembly is not None and assembly.fed == num_chunks:
+            result = assembly.result()
+            # Worker time hidden under the waves; not part of the stage's critical path.
+            self._profile["blend_streamed"] = assembly.seconds
+        else:
+            parts = clip_parts(clips[:num_chunks], chunk_num_frames, config.frame_pre_padding, config.token_drop)
+            result = assemble_clip_parts(parts, config.frame_overlap) if parts else concat_clip_frames([])
         self._profile["blend"] = time.perf_counter() - assemble_mark
         self._profile["concat"] = 0.0
         if pad_tokens > 0:
