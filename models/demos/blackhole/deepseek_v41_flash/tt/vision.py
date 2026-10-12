@@ -30,6 +30,9 @@ TILE = 32
 SDPA_CHUNK = 128  # q / k chunk of the flash attention; image lengths are padded to a multiple of it
 # padded lengths of the tower (patches) and of the aligner (tokens): a few buckets instead of every multiple of the chunk, so that ``warmup`` can compile every program at startup (a
 # new shape compiles for ~10 s); the padded tail is fenced off by cu_window_seqlens. Above the last bucket: multiples of the chunk.
+TRACE_MAX = int(
+    os.environ.get("DSV41_VISION_TRACE_MAX", "3072")
+)  # patch buckets above this run eager: the tower is device bound there (a trace gains 1.7-1.9x up to 2048 patches, 1.2-1.4x at 3072, nothing beyond)
 VIT_BUCKETS = [
     int(x) for x in os.environ.get("DSV41_VIT_BUCKETS", "256,512,1024,2048,3072,4096,6144,9216").split(",")
 ]  # (an image of n patches uses the first bucket >= n + 1: one zero row to gather from)
@@ -502,11 +505,11 @@ class DSV41Vision:
                 ttnn.synchronize_device(self.md)
 
     def capture_traces(self):
-        """Capture the ViT trunk as one trace per patch bucket: AFTER every other trace of the process was captured and every persistent tensor allocated (the inputs, weights and the CCL
+        """Capture the ViT trunk as one trace per patch bucket up to ``TRACE_MAX`` patches: AFTER every other trace of the process was captured and every persistent tensor allocated (the inputs, weights and the CCL
         semaphores of this object exist since ``__init__``): the trace's intermediates are allocated and freed during the capture, and a persistent tensor allocated after a capture could sit
         on them. ``_encode_wave`` replays the trace of the wave's bucket; the aligner (a few ops, nt_pad dependent) runs eager. The trunk outputs stay allocated (the traces write them).
         """
-        for n_pad in VIT_BUCKETS:
+        for n_pad in [b for b in VIT_BUCKETS if b <= TRACE_MAX]:
             self._upload_wave(self._synthetic_wave(n_pad), n_pad, self.warm_pairs(n_pad)[0])
             ttnn.synchronize_device(self.md)
             tid = ttnn.begin_trace_capture(self.md, cq_id=0)
