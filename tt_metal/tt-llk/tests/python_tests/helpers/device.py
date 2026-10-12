@@ -203,6 +203,26 @@ def get_register_store(location="0,0", device_id=0, neo_id=0):
     return register_store
 
 
+
+# experiment (Versim): the RTL simulator has no host-side register bus; register reads return 0xdeadbeef. Reset goes
+# through the UMD simulator backdoor (whole core), and the checks that read registers are skipped.
+def _rtl_sim() -> bool:
+    path = os.environ.get("TT_METAL_SIMULATOR") or os.environ.get("TT_UMD_SIMULATOR_PATH") or ""
+    return TestTargetConfig().run_simulator and not path.endswith(".so")
+
+
+def _rtl_sim_reset(value, location="0,0", device_id=0):
+    import tt_umd
+    from ttexalens.tt_exalens_lib import check_context
+
+    device = check_context().devices[device_id]
+    x, y = OnChipCoordinate.create(location, device=device).to("noc0")
+    tt_device = device._umd_device.get_local_tt_device()
+    if value:
+        tt_device.assert_risc_reset(tt_umd.tt_xy_pair(x, y), tt_umd.RiscType.ALL)
+    else:
+        tt_device.deassert_risc_reset(tt_umd.tt_xy_pair(x, y), tt_umd.RiscType.ALL, False)
+
 def get_soft_reset_mask(cores: list[RiscCore]):
     if INVALID_CORE in cores:
         raise ValueError("Attempting to reset a core that doesn't exist on this chip")
@@ -212,6 +232,9 @@ def get_soft_reset_mask(cores: list[RiscCore]):
 def set_tensix_soft_reset(
     value, cores: list[RiscCore] = ALL_CORES, location="0,0", device_id=0
 ):
+    if _rtl_sim():  # experiment (Versim)
+        _rtl_sim_reset(value, location, device_id)
+        return
     soft_reset = get_register_store(location, device_id).read_register(
         "RISCV_DEBUG_REG_SOFT_RESET_0"
     )
@@ -228,6 +251,9 @@ def set_tensix_soft_reset(
 def commit_tensix_soft_reset(
     value, cores: list[RiscCore] = ALL_CORES, location="0,0", device_id=0
 ):
+    if _rtl_sim():  # experiment (Versim)
+        _rtl_sim_reset(value, location, device_id)
+        return
     soft_reset = get_register_store(location, device_id).read_register(
         "RISCV_DEBUG_REG_SOFT_RESET_0"
     )
@@ -356,6 +382,8 @@ def wait_brisc_boot_ready(location: str = "0,0", timeout: float = 1.0):
 
 
 def assert_if_all_in_reset(location: str = "0,0", place: str = ""):
+    if _rtl_sim():  # experiment (Versim)
+        return
     soft_reset = get_register_store(location, 0).read_register(
         "RISCV_DEBUG_REG_SOFT_RESET_0"
     )
@@ -440,6 +468,8 @@ def _print_callstack(risc_name: str, callstack: list[CallstackEntry]) -> str:
 
 
 def handle_if_assert_hit(elfs: list[str], core_loc="0,0", device_id=0):
+    if _rtl_sim():  # experiment (Versim): no RISC debug access
+        return
     assertion_hits = []
     temp_stack_traces = ""
     for core in TRISC_CORES:
@@ -524,3 +554,22 @@ def _send_arc_message(message_type: str, device_id: int):
         args=[0, 0],
         timeout=datetime.timedelta(seconds=10),
     )
+
+
+def load_elf(elf_file, location, risc_name, neo_id=None, device_id=0, context=None, return_start_address=False, verify_write=True):
+    """ttexalens load_elf; under Versim (experiment) only the section writes, since the reset check reads a register."""
+    from ttexalens.tt_exalens_lib import load_elf as _load_elf
+
+    if not _rtl_sim():
+        return _load_elf(elf_file=elf_file, location=location, risc_name=risc_name, neo_id=neo_id, device_id=device_id,
+                         context=context, return_start_address=return_start_address, verify_write=verify_write)
+    from ttexalens.elf import read_elf
+    from ttexalens.elf_loader import ElfLoader
+    from ttexalens.tt_exalens_lib import check_context, convert_coordinate
+
+    context = check_context(context)
+    coordinate = convert_coordinate(location, device_id, context)
+    risc_debug = coordinate.noc_block.get_risc_debug(risc_name, neo_id)
+    elf = read_elf(context.file_api, elf_file, require_debug_symbols=False)
+    start_address = ElfLoader(risc_debug).load_elf_sections(elf, loader_data=".loader_init", loader_code=".loader_code", verify_write=verify_write)
+    return start_address if return_start_address else None
