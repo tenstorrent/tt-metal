@@ -20,6 +20,17 @@ for v in main base int bin; do
   echo "== bits $v rc=$? $(grep -aE '[0-9]+ (passed|failed|error)' $OUT/log/bits_$v.log | tail -1) $(ls $OUT/bits_$v | wc -l) files"
   timeout -s INT -k 60 1800 python3 $S/tools/exh_dump.py $OUT/exh_$v.json add,subtract,multiply,rsub,xlogy,nextafter > $OUT/log/exh_$v.log 2>&1
   echo "== exh $v rc=$? $(tail -1 $OUT/log/exh_$v.log)"
+  python3 - $OUT/bits_$v $v <<'PYB'
+import glob, hashlib, os, sys
+import numpy as np
+d, v = sys.argv[1], sys.argv[2]
+for f in sorted(glob.glob(d + "/*.npz")):
+    z = np.load(f); h = hashlib.sha256()
+    for k in sorted(z.files):
+        h.update(k.encode()); h.update(np.ascontiguousarray(z[k]).tobytes())
+    print("SBTB", v, os.path.basename(f)[:-4], h.hexdigest()[:20], sum(z[k].size for k in z.files))
+PYB
+  python3 -c "import json,sys; d=json.load(open('$OUT/exh_$v.json')); [print('SBTE', '$v', k, str(x).replace(' ','_')) for k, x in sorted(d.items()) if k not in ('other',)]" 2>/dev/null
 done
 PI="add_i32_hs add_i32_dram_1024x1024 sub_i32_hs rsub_i32_hs add_i32_penalties_32x128256"
 PB="add_f32_hs add_f32_dram_1024x1024 sub_f32_hs rsub_f32_hs xlogy_bf16_hs xlogy_bf16_dram_1024x1024 mul_bf16_hs"
@@ -48,7 +59,6 @@ for v in main base int bin; do
   find $OUT/cache_$v -name '*.elf' 2>/dev/null | while read e; do echo "SBTK $v ${e#$OUT/cache_$v/} $(sha256sum < $e | cut -c1-16)"; done | sort > $OUT/elf_$v.txt
   echo "== $v kernels $(wc -l < $OUT/elf_$v.txt)"
 done
+for v in main int bin; do echo "SBTKD $v $(join -j1 <(awk '{print $3, $4}' $OUT/elf_base.txt | sort) <(awk '{print $3, $4}' $OUT/elf_$v.txt | sort) | awk '$2!=$3' | wc -l) kernels differ from base of $(wc -l < $OUT/elf_base.txt)"; join -j1 <(awk '{print $3, $4}' $OUT/elf_base.txt | sort) <(awk '{print $3, $4}' $OUT/elf_$v.txt | sort) | awk '$2!=$3{print "SBTKN", v, $1}' v=$v | sed 's|/[0-9a-f]\{20,\}/| |' | sort -u | head -40; done
 use base
-tar -czf $OUT.tgz -C $OUT bits_main bits_base bits_int bits_bin exh_main.json exh_base.json exh_int.json exh_bin.json elf_main.txt elf_base.txt elf_int.txt elf_bin.txt log
-echo "== results $(stat -c %s $OUT.tgz) bytes"; echo "=====SBT_BEGIN====="; base64 -w 0 $OUT.tgz; echo; echo "=====SBT_END====="
 exit 0
