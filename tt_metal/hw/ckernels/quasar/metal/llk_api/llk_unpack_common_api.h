@@ -101,13 +101,14 @@ inline void llk_unpack_wait_for_dest_available() {
  * Once UNPACK0 has drained, so that no post can overtake the DEST writes math and pack will read, posts UNPACK_PACK
  * (the section now occupies a bank, see @ref llk_unpack_wait_for_dest_available) and then UNPACK_MATH (the section is
  * ready for math). UNPACK_PACK goes first: the packer gets it only after math has forwarded the section, which needs
- * the UNPACK_MATH post, so the get can never land before the post. Then (SyncHalf) moves the unpack thread's section
- * base to the other bank. Counterpart of @ref llk_math_dest_section_done and @ref llk_pack_dest_section_done.
+ * the UNPACK_MATH post, so the get can never land before the post. Then (SyncHalf) moves the unpack thread to the other
+ * bank: the bank is carried in the UNP_DEST tile index (@ref _llk_unpack_dest_bank_tile_offset_), the SEC registers do
+ * not move UNPACR_DEST. Counterpart of @ref llk_math_dest_section_done and @ref llk_pack_dest_section_done.
  *
  * @tparam EN_32BIT_DEST: Sizes the SyncHalf bank flip: bank-1 base at 256 rows when true, 512 when false (see
  *         @ref _update_dest_register_offset_). Must equal the value the pack thread passes to
- *         @ref _llk_sync_advance_dest_section_ for this op, or the two sides address different DEST halves (the two
- *         calls live in different TRISC TUs, so no static_assert can compare them). values = <true/false>
+ *         @ref llk_pack_dest_section_done for this op, or the two sides address different DEST halves (the two calls
+ *         live in different TRISC TUs, so no static_assert can compare them). values = <true/false>
  * @note Math blocks in tile_regs_acquire until this post, so it sees nothing of the section before the unpack thread
  *       commits it. SrcA / SrcB unpacks issued in the same section are therefore consumed only after this call and
  *       must fit the src banks. A section that mixes unpack-to-dest copies with a src-path run is outside
@@ -119,7 +120,7 @@ inline void llk_unpack_dest_section_done() {
         _llk_sync_post_<p_stall::UNPACK0>(semaphore::UNPACK_PACK);
         _llk_sync_post_<p_stall::UNPACK0>(semaphore::UNPACK_MATH);
         if constexpr (DST_SYNC_MODE == DstSync::SyncHalf) {
-            _llk_sync_advance_dest_section_<to_underlying(TriscID::Unpack), EN_32BIT_DEST, p_stall::UNPACK0>();
+            _llk_unpack_dest_section_advance_<EN_32BIT_DEST>();
         }
     }
 }
