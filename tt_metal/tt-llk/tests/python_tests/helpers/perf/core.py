@@ -26,6 +26,7 @@ from ..profiler import Profiler, ProfilerData
 from ..stimuli_config import StimuliConfig
 from ..test_config import BuildMode, ProfilerBuild, TestConfig
 from ..test_variant_parameters import PERF_RUN_TYPE, RuntimeParameter, TemplateParameter
+from .phases import CANONICAL_PHASE, release_phases
 from .schema import (
     COUPLING_BASE,
     COUPLING_PIPELINE_RUN_TYPE,
@@ -744,50 +745,50 @@ def assert_zones_dont_overlap(profiler_data: ProfilerData) -> None:
     zones = profiler_data.zones().frame()
     if zones.empty:
         return
-    zones = zones.assign(
-        finish=zones["timestamp"] + zones["duration"],
-        # a phased L1_CONGESTION launch repeats INIT and TILE_LOOP: the k-th zone of a name is its own phase
-        occurrence=zones.groupby([MARKER, "thread"]).cumcount(),
-    )
-    # Identity is the name: marker_id is a per-callsite hash, different on every thread.
-    span = (
-        zones.groupby([MARKER, "occurrence", "thread"])
-        .agg(begin=("timestamp", "min"), finish=("finish", "max"))
-        .reset_index()
-    )
-    wrappers = set()
-    for _, group in span.groupby("thread"):
-        rows = group.to_dict("records")
-        for a in rows:
-            for b in rows:
-                if (
-                    a is not b
-                    and a["begin"] <= b["begin"] <= b["finish"] <= a["finish"]
-                ):
-                    wrappers.add(a[MARKER])
-    phases = (
-        span[~span[MARKER].isin(wrappers)]
-        .groupby([MARKER, "occurrence"])
-        .agg(first_open=("begin", "min"), last_close=("finish", "max"))
-        .sort_values("first_open")
-        .reset_index()
-    )
+    # Plain Python over the launch's few zones: a phased row runs this check once per launch (perf/phases.py), and
+    # pandas' groupby made it the costliest step of a launch. A phased L1_CONGESTION launch repeats INIT and TILE_LOOP:
+    # the k-th zone of a name is its own phase. Identity is the name: marker_id is a per-callsite hash, different on
+    # every thread.
+    count = {}
+    spans = []  # (thread, name, occurrence, begin, finish)
+    for thread, name, begin, duration in zip(
+        zones["thread"], zones[MARKER], zones["timestamp"], zones["duration"]
+    ):
+        occurrence = count.get((name, thread), 0)
+        count[(name, thread)] = occurrence + 1
+        spans.append((thread, name, occurrence, begin, begin + duration))
+    wrappers = {
+        a[1]
+        for i, a in enumerate(spans)
+        for j, b in enumerate(spans)
+        if i != j and a[0] == b[0] and a[3] <= b[3] <= b[4] <= a[4]
+    }
+    phases = {}
+    for thread, name, occurrence, begin, finish in spans:
+        if name not in wrappers:
+            first_open, last_close = phases.get((name, occurrence), (begin, finish))
+            phases[(name, occurrence)] = (
+                min(first_open, begin),
+                max(last_close, finish),
+            )
     prev = None
-    for row in phases.itertuples(index=False):
+    for (name, _), (first_open, last_close) in sorted(
+        phases.items(), key=lambda phase: (phase[1][0], phase[0])
+    ):
         if (
             prev is not None
-            and row.marker not in NON_RENDEZVOUS_MARKERS
-            and prev.last_close > row.first_open
+            and name not in NON_RENDEZVOUS_MARKERS
+            and prev[1] > first_open
         ):
             raise AssertionError(
-                f"Zones overlap across threads: the last {prev.marker} closed at "
-                f"{prev.last_close} but the first {row.marker} opened at {row.first_open}, "
-                f"{prev.last_close - row.first_open} cycles earlier. Both windows therefore "
+                f"Zones overlap across threads: the last {prev[0]} closed at "
+                f"{prev[1]} but the first {name} opened at {first_open}, "
+                f"{prev[1] - first_open} cycles earlier. Both windows therefore "
                 f"cover time belonging to the other phase. The usual cause is a kernel opening "
                 f"its zones with ZONE_SCOPED instead of START_PERF_MEASURE, which is what "
                 f"supplies the cross-thread rendezvous at zone entry."
             )
-        prev = row
+        prev = (name, last_close)
 
 
 # Release phases of a Wormhole L1_CONGESTION launch (barrier.h L1_CONGESTION_PHASES, brisc.cpp serve_phases).
@@ -1100,6 +1101,7 @@ class PerfConfig(TestConfig):
                 self.wait_for_tensix_operations_finished()
 
         stats_by_run_type = {}  # INIT rows are replaced from the INIT launch below
+        phased_run_types = set()
         for templates, runtimes, run_type in self.run_configs:
             self._select_run_type(templates, runtimes, run_type)
 
@@ -1120,8 +1122,18 @@ class PerfConfig(TestConfig):
 
             variant_raw_data = []
             variant_counter_results = []
-            for run_index in range(run_count):
-                self.write_runtimes_to_L1()
+            # rows that depend on the TILE_LOOP start phase run once per phase and report the mean (perf/phases.py)
+            phases = (
+                release_phases(self.test_name, run_type.name, TestConfig.SPEED_OF_LIGHT)
+                if self._wormhole_perf_barrier()
+                else (CANONICAL_PHASE,)
+            )
+            if len(phases) > 1:
+                phased_run_types.add(run_type)
+            else:
+                phases *= run_count
+            for run_index, phase in enumerate(phases):
+                self.write_runtimes_to_L1(release_phase=phase)
                 self.run_elf_files()
                 self.wait_for_tensix_operations_finished()
                 # Counter config is written by BRISC from built-in array (local L1 write).
@@ -1260,9 +1272,9 @@ class PerfConfig(TestConfig):
                             ].values[0]
                         elif (
                             run_type == PerfRunType.L1_CONGESTION
-                            and column.startswith(stat_prefix(STD))
-                        ):
-                            # one INIT launch has no spread (the phased launch ran INIT once per phase)
+                            or run_type in phased_run_types
+                        ) and column.startswith(stat_prefix(STD)):
+                            # one INIT launch has no spread (the phased launches ran INIT once per phase)
                             target.loc[target[MARKER] == "INIT", column] = float("nan")
             finally:
                 self.init_launch = False
