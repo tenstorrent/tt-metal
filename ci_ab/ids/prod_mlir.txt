@@ -1,0 +1,8 @@
+perf_sfpu_reduce_prod_x.py::test_perf_mlir_col_sum[1-1]
+perf_sfpu_reduce_prod_x.py::test_perf_mlir_col_sum[1-16]
+perf_sfpu_reduce_prod_x.py::test_perf_mlir_col_sum[2-1]
+perf_sfpu_reduce_prod_x.py::test_perf_mlir_col_sum[2-16]
+perf_sfpu_reduce_prod_x.py::test_perf_mlir_col_sum[4-1]
+perf_sfpu_reduce_prod_x.py::test_perf_mlir_col_sum[4-16]
+perf_sfpu_reduce_prod_x.py::test_perf_mlir_col_sum[5-1]
+perf_sfpu_reduce_prod_x.py::test_perf_mlir_col_sum[5-16]
