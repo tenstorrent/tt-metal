@@ -2,7 +2,8 @@
 # #58822 regression audit phase 2 on one CI Blackhole runner (knowledge/process/17_CI_AB.md), path-matched tt-llk harness
 # A/B. Slot /tmp/sr/slot is the checkout's device and test dirs plus ci_ab/tests; every variant is that slot with its own
 # reduce header (ci_ab/hdr/<v>.h) compiled into its own build dir, so all sides run from one tree path. Slot /tmp/sr/dc
-# adds #58819's device files (ci_ab/dc). Fresh build dirs and JIT cache per job. Both sides in one job, alternated.
+# adds #58819's device files (ci_ab/dc). Fresh build dirs and JIT cache per job. Both sides in one job, alternated; the
+# A/A pair is main built twice into two build dirs of the same slot (ma).
 # usage: run_sr.sh j1   pacing scan of the Int32 column SUM (main, head, p1..p12), the production shadows for the best
 #                       two by tools/sel_k.py's rule, the sweep with SDPA for main, head, g, c and the layout A/A m1..m3
 #        run_sr.sh j2   the combined slot (main against c with #58819), c's four reduce modules with LLK asserts on,
@@ -51,7 +52,7 @@ run() {  # run <slot> <build> <ids> <tag> [pytest args]; RTS, ASSERTS and EXTRA 
 STOP=0
 mkslot slot
 if [[ $JOB == j1 ]]; then
-  build slot main ra_m b_m; build slot head ra_h b_h; build slot g2 ra_g b_s; build slot c ra_c b_s
+  build slot main ra_m b_m; build slot main ra_ma b_s; build slot head ra_h b_h; build slot g2 ra_g b_s; build slot c ra_c b_s
   for k in 1 2 3; do build slot m$k ra_m$k b_s; done
   for k in $(seq 12); do build slot p$k ra_p$k b_p; done
   echo "== A: Int32 column SUM pacing scan $(date -u +%T)"; n=0
@@ -69,17 +70,17 @@ if [[ $JOB == j1 ]]; then
   else b m; b h; b h; b m; fi
   echo "== C: sweep with SDPA $(date -u +%T)"; n=0
   c() { n=$((n+1)); [[ $STOP == 1 ]] && return; run slot ra_$1 b_s c1_$1_$n; }
-  for blk in 1 2; do c m; c h; c g; c c; c m1; c m2; c m3; c m3; c m2; c m1; c c; c g; c h; c m; done
+  for blk in 1 2; do c m; c ma; c h; c g; c c; c m1; c m2; c m3; c m3; c m2; c m1; c c; c g; c h; c ma; c m; done
 elif [[ $JOB == j2 ]]; then
   mkslot dc $S/dc
-  build dc main dc_m b_s; build dc c dc_c b_s
+  build dc main dc_m b_s; build dc main dc_ma b_s; build dc c dc_c b_s
   ASSERTS=1 RTS=L1_TO_L1,MATH_ISOLATE build slot c fn_c fn
   ASSERTS=1 RTS=L1_TO_L1,MATH_ISOLATE build slot c fnd_c fnd --disable-sfploadmacro
   ASSERTS=1 RTS=L1_TO_L1,MATH_ISOLATE build slot main fb_m fbits
   ASSERTS=1 RTS=L1_TO_L1,MATH_ISOLATE build slot c fb_c fbits
   echo "== D: combined with #58819 $(date -u +%T)"; n=0
   d() { n=$((n+1)); [[ $STOP == 1 ]] && return; run dc dc_$1 b_s d1_$1_$n; }
-  for blk in 1 2; do d m; d c; d c; d m; done
+  for blk in 1 2; do d m; d ma; d c; d c; d ma; d m; done
   echo "== E: functional and bits $(date -u +%T)"
   [[ $STOP == 0 ]] && ASSERTS=1 RTS=L1_TO_L1,MATH_ISOLATE run slot fn_c fn fn_c_1
   [[ $STOP == 0 ]] && ASSERTS=1 RTS=L1_TO_L1,MATH_ISOLATE run slot fnd_c fnd fnd_c_1 --disable-sfploadmacro
