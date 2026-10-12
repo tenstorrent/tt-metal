@@ -39,3 +39,16 @@
   chain called analyze400.py, now analyze421.py; off-s0/on-s0 specs at -t 600 (unmeasured cold JIT),
   py 570, warm deadline 520. Other seeds stay at -t 500 / deadline 400.
 - Relaunched chain (off-s0 .. on-s4) and post421.sh, both detached in run dir 1603.
+
+## Status 2026-10-12 01:15 PDT (runs 1612, 1615)
+- off-s0 job 868 (-t 600, deadline 520) failed again on cold JIT: deadline passed in "Warming prompt
+  encoder keyframe layouts" (JIT hits 1370/3446, 40%; more kernels cached each try). Not a drop.
+- Then every submit was refused by lint: blx01 /var/tmp/fasth3 at 455 GB, over its 450 GB cap.
+  Chain stopped (T421_DONE 8), post.marker POST421_DONE 1 (no pairs).
+- Drop (not ours to fix): 2026-10-12 07:30:54Z blx01, chip 24 left the PCIe bus right after our
+  job 868 ended (hold 871, bridge-resets 872/873 failed, recovered 00:42 PDT, fabric-check 878 ok).
+- Freed space: prunejit421.sh deletes JIT kernel cache entries whose source tree is gone (the hash
+  includes the tree path, so they can never hit). Removed 22.6 GiB (t400/b, t288/b, t423/b, t427/b).
+  blx01 / now 165 GB free.
+- g15blx02 rebooted ~01:03 PDT and killed the run. Relaunched chain (off-s0..on-s4) and post421.sh
+  detached in run 1615.
