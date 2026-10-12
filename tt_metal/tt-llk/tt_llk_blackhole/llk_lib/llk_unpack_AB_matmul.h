@@ -90,7 +90,7 @@ inline constexpr bool _llk_unpack_AB_matmul_stream_narrow_(
     const std::uint32_t unpB_src_format,
     const bool fp32_dest_acc_en)
 {
-    return !fp32_dest_acc_en && _llk_unpack_AB_matmul_narrow_format_((ct_dim >= rt_dim) ? unpA_src_format : unpB_src_format);
+    return !fp32_dest_acc_en && ((ct_dim >= rt_dim) ? _llk_unpack_AB_matmul_narrow_format_(unpA_src_format) : _llk_unpack_AB_matmul_narrow_format_(unpB_src_format));
 }
 
 /**
