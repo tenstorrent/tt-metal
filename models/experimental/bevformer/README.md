@@ -150,10 +150,12 @@ Tests the six-layer detection decoder.
 - That a second eager run adds no programs to the program cache
 
 It uses seeded random weights (`tests/decoder_common.py`): BEVFormer's sampling-offset grid init
-with random weights on top, spread as in the BEVFormer-base checkpoint for the sampling offsets,
-the cross- and self-attention logits and the reg branches' refinement rows. The BEV features are
-random but spatially smooth, as the encoder's are, and the reference points include the grid
-edges. bfloat16 error grows through the reference-point refinement, faster on the 200x200 grid.
+with random weights on top, scaled to what the BEVFormer-base checkpoint's decoder shows on the
+same BEV features: the sampling offsets and the cross- and self-attention logits, and in the reg
+branches' last Linear the reference-point refinements and the other box channels' spread. The BEV
+features are random but spatially smooth, as the encoder's are, and the reference points include
+the grid edges. bfloat16 error grows through the reference-point refinement, faster on the 200x200
+grid.
 
 **Usage:**
 ```bash
@@ -170,9 +172,7 @@ Tests the detection head, and the coder on the head's outputs.
 - That the coder, on the head's outputs, selects pairs within twice the score error of the reference
   head's top 300, with the reference's scores and boxes at those pairs
 
-The dummy decoder and reg-branch weights are scaled to the BEVFormer-base checkpoint's
-statistics (sampling offsets, attention logits, reference-point refinements, box channel spread);
-`tests/decoder_common.py` lists them.
+The decoder and reg branches use `test_decoder.py`'s dummy weights.
 
 **Usage:**
 ```bash
