@@ -138,6 +138,15 @@ protected:
 
 class DramKernelDRISCBWFixture : public DramKernelFixture, public testing::WithParamInterface<uint32_t> {};
 
+// DramKernelFixture in fast dispatch, where kernel config writes go through the command queue.
+class DramKernelFastDispatchFixture : public DramKernelFixture {
+protected:
+    bool validate_dispatch_mode() override {
+        this->slow_dispatch_ = getenv("TT_METAL_SLOW_DISPATCH_MODE") != nullptr;
+        return !this->slow_dispatch_;
+    }
+};
+
 // Smoke test: run a single DRAM kernel that writes a compile-time constant to L1,
 // then read it back via the host and verify.
 TEST_F(DramKernelFixture, DramKernelWriteToL1) {
@@ -279,7 +288,7 @@ TEST_F(DramKernelFixture, DramKernelOnMultipleCores) {
 
 // Common runtime args on DRAM cores are sent with one NO_STRIDE packed write: a single copy of the args
 // written to every core. Run on every DRISC-usable core, then change the args in place and run again.
-TEST_F(DramKernelFixture, DramKernelCommonRuntimeArgsOnAllCores) {
+TEST_F(DramKernelFastDispatchFixture, DramKernelCommonRuntimeArgsOnAllCores) {
     constexpr uint32_t kNumArgs = 256;
     const auto& soc_desc = MetalContext::instance().get_cluster().get_soc_desc(mesh_device_->build_id());
     const auto dram_compute_grid = soc_desc.get_dram_compute_grid_size();
