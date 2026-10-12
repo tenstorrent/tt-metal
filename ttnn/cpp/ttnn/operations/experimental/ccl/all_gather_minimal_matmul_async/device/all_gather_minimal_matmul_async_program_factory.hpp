@@ -29,7 +29,7 @@ struct AllGatherMinimalMatmulAsyncProgramFactory {
         const AllGatherMinimalMatmulAsyncParams& operation_attributes,
         const AllGatherMinimalMatmulAsyncInputs& tensor_args,
         std::vector<Tensor>& tensor_return_value,
-        std::optional<ttnn::MeshCoordinate> mesh_coordinate = std::nullopt);
+        const std::optional<ttnn::MeshCoordinate>& mesh_coordinate = std::nullopt);
 };
 
 }  // namespace ttnn::experimental::prim
