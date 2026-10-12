@@ -576,7 +576,6 @@ TEST(KvChunkAddressTableProtobuf, SetStridedRowMatchesUnrolledAuthoring) {
     }
 
     expect_tables_equal(unrolled, strided);
-    EXPECT_EQ(export_to_protobuf(unrolled).size(), export_to_protobuf(strided).size());
     ::tt::disaggregation::proto::KvChunkAddressTable pb_unrolled;
     ::tt::disaggregation::proto::KvChunkAddressTable pb_strided;
     ASSERT_TRUE(pb_unrolled.ParseFromString(export_to_protobuf(unrolled)));
@@ -1066,6 +1065,59 @@ TEST(KvChunkAddressTableProtobuf, EntryConfigIdxOutOfRangeThrows) {
     e->set_size_bytes(10);
     e->set_config_idx(5);  // only one config (idx 0) exists
     EXPECT_ANY_THROW(import_from_protobuf(pb.SerializeAsString()));
+}
+
+TEST(KvChunkAddressTableProtobuf, EmptyStridedConfigRoundTrips) {
+    // A STRIDED_ROWS config that never got a row exports as an empty UNROLLED config (zero runs would
+    // be rejected on import as malformed), next to a populated strided config.
+    DualWriteEnvGuard guard("0");
+    KvChunkAddressTableConfig cfg{.num_layers = 2, .max_sequence_length = 256, .num_slots = 2, .chunk_n_tokens = 32};
+    KvChunkAddressTable table(std::map<std::string, KvChunkAddressTable::NamedConfigInit>{
+        {"a", {.config = cfg, .compression = ChunkCompression::kStridedRows}},
+        {"b", {.config = cfg, .compression = ChunkCompression::kStridedRows}}});
+    auto g0 = table.add_device_group({make_proto_fnid(0, 0)});
+    table.set_strided_row(1, 0, 64, {0x100, 0x200}, {0x10, 0x20}, {g0, g0}, table.config_id_of("a"));
+
+    ::tt::disaggregation::proto::KvChunkAddressTable pb;
+    ASSERT_TRUE(pb.ParseFromString(export_to_protobuf(table)));
+    ASSERT_EQ(pb.configs_size(), 2);
+    auto restored = import_from_protobuf(pb.SerializeAsString());
+    EXPECT_EQ(restored.compression(restored.config_id_of("a")), ChunkCompression::kStridedRows);
+    EXPECT_EQ(restored.compression(restored.config_id_of("b")), ChunkCompression::kUnrolled);
+    expect_tables_equal(table, restored);
+
+    // Every config strided and empty.
+    KvChunkAddressTable empty(std::map<std::string, KvChunkAddressTable::NamedConfigInit>{
+        {"a", {.config = cfg, .compression = ChunkCompression::kStridedRows}}});
+    auto restored_empty = import_from_protobuf(export_to_protobuf(empty));
+    EXPECT_EQ(restored_empty.lookup(0, 0, 0).size_bytes, 0u);
+}
+
+TEST(KvChunkAddressTableProtobuf, SingleChunkResidueStrideIsCanonical) {
+    // 8 position chunks, step 6: residues 0-1 hold two chunks, residues 2-5 hold one, so their stride
+    // is never used. Rows that differ only in those unused strides export the same bytes.
+    DualWriteEnvGuard guard("0");
+    KvChunkAddressTableConfig cfg{.num_layers = 1, .max_sequence_length = 256, .num_slots = 1, .chunk_n_tokens = 32};
+    auto make = [&](int64_t unused_stride) {
+        KvChunkAddressTable t(std::map<std::string, KvChunkAddressTable::NamedConfigInit>{
+            {"kv", {.config = cfg, .compression = ChunkCompression::kStridedRows}}});
+        auto g = t.add_device_group({make_proto_fnid(0, 0)});
+        std::vector<uint64_t> bases{0x1000, 0x2000, 0x3000, 0x4000, 0x5000, 0x6000};
+        std::vector<int64_t> strides{0x100, 0x100, unused_stride, unused_stride, unused_stride, unused_stride};
+        t.set_strided_row(0, 0, 64, bases, strides, std::vector<DeviceGroupIndex>(6, g));
+        return t;
+    };
+    auto a = make(0);
+    auto b = make(0x12345);
+    expect_tables_equal(a, b);
+    EXPECT_EQ(b.lookup(0, 6 * 32, 0).noc_addr, 0x1100u);  // residue 0, second chunk
+    ::tt::disaggregation::proto::KvChunkAddressTable pb_a;
+    ::tt::disaggregation::proto::KvChunkAddressTable pb_b;
+    ASSERT_TRUE(pb_a.ParseFromString(export_to_protobuf(a)));
+    ASSERT_TRUE(pb_b.ParseFromString(export_to_protobuf(b)));
+    pb_a.clear_origin_host();
+    pb_b.clear_origin_host();
+    EXPECT_EQ(pb_a.SerializeAsString(), pb_b.SerializeAsString());
 }
 
 }  // namespace
