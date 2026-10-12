@@ -2,6 +2,7 @@
 #
 # SPDX-License-Identifier: Apache-2.0
 
+import os
 import re
 from dataclasses import dataclass
 from enum import Enum
@@ -13,6 +14,23 @@ from .device_io import read_words_from_device
 from .llk_params import PerfRunType
 from .perf.schema import MARKER, MEAN, STD, stat_column, stat_prefix
 from .test_config import TestConfig
+
+
+_RAW_SEQ = [0]
+
+
+def _raw_dump(df):
+    # CI A/B only: every device run's zone entries, appended per process
+    d = os.environ.get("RAW_ZONE_DIR")
+    if not d:
+        return
+    os.makedirs(d, exist_ok=True)
+    _RAW_SEQ[0] += 1
+    z = df[df["type"].isin(["ZONE_START", "ZONE_END"])][["thread", "type", MARKER, "timestamp"]].copy()
+    z["node"] = os.environ.get("PYTEST_CURRENT_TEST", "?").split(" ")[0]
+    z["seq"] = _RAW_SEQ[0]
+    path = os.path.join(d, f"raw_{os.getpid()}.csv")
+    z.to_csv(path, mode="a", header=not os.path.exists(path), index=False)
 
 
 @dataclass
@@ -603,4 +621,6 @@ class Profiler:
             for buffer_address in TestConfig.THREAD_PERFORMANCE_DATA_BUFFER
         ]
 
-        return Profiler._parse_buffers(buffer_data, meta)
+        data = Profiler._parse_buffers(buffer_data, meta)
+        _raw_dump(data.df)
+        return data
