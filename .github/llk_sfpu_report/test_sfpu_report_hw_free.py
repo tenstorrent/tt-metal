@@ -9,8 +9,10 @@ ops a run measures first, how special-input results are compared, and what the
 rendered comment says for a synthetic run.
 """
 
+import json
 import sys
 from pathlib import Path
+from types import SimpleNamespace
 
 import pytest
 
@@ -246,6 +248,68 @@ def test_an_old_merge_base_falls_back_to_rebase_mode(monkeypatch, builds, mode, 
     assert cli._choose_sides(None, None, "merge-base", "wormhole", None, 1, notes) == (mode, "base", "head")
     assert seen == built
     assert bool(notes) is not builds
+
+
+#: What ``git apply --3way`` printed on #57421, whose square kernels main rewrote.
+CONFLICT = """Applied patch to 'tt_metal/hw/ckernels/blackhole/metal/llk_api/llk_sfpu/ckernel_sfpu_square.h' with conflicts.
+Applied patch to 'tt_metal/tt-llk/tests/helpers/include/sfpu_operations.h' cleanly.
+U tt_metal/hw/ckernels/blackhole/metal/llk_api/llk_sfpu/ckernel_sfpu_square.h
+U tt_metal/hw/ckernels/wormhole_b0/metal/llk_api/llk_sfpu/ckernel_sfpu_square.h"""
+SQUARE = [
+    "tt_metal/hw/ckernels/blackhole/metal/llk_api/llk_sfpu/ckernel_sfpu_square.h",
+    "tt_metal/hw/ckernels/wormhole_b0/metal/llk_api/llk_sfpu/ckernel_sfpu_square.h",
+]
+PLAN = SimpleNamespace(tool_sha="c" * 40, base_sha="b" * 40, head_sha="a" * 40, applied=SQUARE, not_applied=[])
+
+
+def test_a_patch_conflict_names_the_conflicted_files():
+    assert overlay.PatchConflict(CONFLICT).files == SQUARE
+
+
+@pytest.mark.parametrize("mode, cause", [("rebase", "This PR's"), ("merge-base", "does not build")])
+def test_a_pr_that_conflicts_with_main_is_not_measured(monkeypatch, mode, cause):
+    def sides(plan, work, m):
+        if m == "rebase":
+            raise overlay.PatchConflict(CONFLICT)
+        return "base", "head"
+
+    monkeypatch.setattr(cli, "_sides", sides)
+    monkeypatch.setattr(cli, "_harness_compiles", lambda *args: False)
+    notes = []
+    with pytest.raises(cli.NotMeasured) as raised:
+        cli._choose_sides(PLAN, None, mode, "wormhole", None, 1, notes)
+    assert cause in raised.value.reason
+    assert "`cccccccccc`" in raised.value.reason and "Rebase the PR onto main" in raised.value.reason
+    assert raised.value.files == SQUARE
+    assert notes == []  # no "this report compares main ..." note for a report that compares nothing
+
+
+def test_a_run_that_cannot_measure_writes_a_report_that_says_why(monkeypatch, tmp_path):
+    monkeypatch.setattr(overlay, "make_plan", lambda *args: PLAN)
+    monkeypatch.setattr(cli, "_board", lambda: "n150")
+    monkeypatch.setattr(cli, "_merge_base_age", lambda plan: 18)
+
+    def conflict(*args):
+        raise cli.NotMeasured("This PR's kernel changes do not apply cleanly to current main.", SQUARE)
+
+    monkeypatch.setattr(cli, "_choose_sides", conflict)
+    with pytest.raises(SystemExit) as exited:
+        cli.main(["--arch", "wormhole", "--head", "x", "--work", str(tmp_path), "run", "--pr", "57421", "--check"])
+    assert exited.value.code == 2  # --check: not a pass
+    summary = json.loads((tmp_path / "summary-wormhole.json").read_text())
+    assert summary["conflicts"] == SQUARE and summary["ops"]["measured"] == []
+    text = (tmp_path / "report-wormhole.md").read_text()
+    assert text.startswith(report.COMMENT_MARKER)
+    assert "**Not measured** on Wormhole. This PR's kernel changes do not apply" in text
+    assert f"- `{SQUARE[1]}`" in text
+    assert "No regressions" not in text
+
+
+def test_an_arch_that_was_not_measured_is_a_note_beside_the_one_that_was():
+    blackhole = dict(_summary(), arch="blackhole", not_measured="This PR's kernel changes do not apply.")
+    text = report.render([_summary(), blackhole])
+    assert "on Wormhole (" in text and "Blackhole (" not in text
+    assert "- Blackhole was not measured. This PR's kernel changes do not apply." in text
 
 
 def test_rebase_mode_says_what_it_compared():

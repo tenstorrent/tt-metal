@@ -157,6 +157,15 @@ def _harness_compiles(side, arch, log, jobs):
     return detect.compile_all(side, arch, "unary", log, jobs, only_ops=("neg",)) in (0, 5)
 
 
+class NotMeasured(Exception):
+    """No two sides can be built; ``reason`` says why and what the author can do."""
+
+    def __init__(self, reason, files=()):
+        super().__init__(reason)
+        self.reason = reason
+        self.files = list(files)
+
+
 def _choose_sides(plan, work, mode, arch, log, jobs, notes):
     """The two sides to compare, and the mode they were built in.
 
@@ -164,15 +173,32 @@ def _choose_sides(plan, work, mode, arch, log, jobs, notes):
     merge-base's device code no longer builds with it (a toolchain or harness change
     on main since), every variant would fail on both sides and nothing would be
     measured, so the run falls back to rebase mode and says so.
+
+    Rebase mode needs the PR's kernel diff to apply to main. When main has changed
+    the same lines since, nothing can be measured until the PR is rebased: raises
+    NotMeasured.
     """
-    base, head = _sides(plan, work, mode)
-    if mode == "merge-base" and not _harness_compiles(base, arch, log, jobs):
+    fell_back = False
+    if mode == "merge-base":
+        base, head = _sides(plan, work, mode)
+        if _harness_compiles(base, arch, log, jobs):
+            return mode, base, head
+        mode, fell_back = "rebase", True
+    try:
+        base, head = _sides(plan, work, mode)
+    except overlay.PatchConflict as conflict:
+        cause = "The merge-base does not build with today's test harness, and this" if fell_back else "This"
+        raise NotMeasured(
+            f"{cause} PR's kernel changes do not apply cleanly to current main "
+            f"(`{plan.tool_sha[:10]}`), which has changed the same lines since. "
+            "Rebase the PR onto main, then comment `/llk-sfpu-test` again.",
+            conflict.files,
+        ) from conflict
+    if fell_back:
         notes.append(
             "The merge-base does not build with today's test harness, so this report "
             "compares current main with main plus this PR's kernel changes."
         )
-        mode = "rebase"
-        base, head = _sides(plan, work, mode)
     return mode, base, head
 
 
@@ -191,7 +217,26 @@ def cmd_run(args):
     plan = overlay.make_plan(args.repo, args.head, args.base, args.main_ref)
     print(f"tool {plan.tool_sha[:12]}  base {plan.base_sha[:12]}  head {plan.head_sha[:12]}  mode {args.mode}")
     notes = []
-    args.mode, base, head = _choose_sides(plan, work, args.mode, args.arch, log, args.jobs, notes)
+    try:
+        args.mode, base, head = _choose_sides(plan, work, args.mode, args.arch, log, args.jobs, notes)
+    except NotMeasured as why_not:
+        print(f"not measured: {why_not.reason}")
+        _write_summary(
+            args,
+            plan,
+            work,
+            t0,
+            detection=None,
+            ops={"measured": [], "not_covered": [], "why": "not measured"},
+            perf={},
+            accuracy=[],
+            notes=notes,
+            not_measured=why_not.reason,
+            conflicts=why_not.files,
+        )
+        if args.check:
+            sys.exit(2)
+        return
     if args.ops:
         ops, unknown = _requested_ops(args.ops)
         if unknown:
@@ -308,6 +353,28 @@ def cmd_run(args):
     if args.simulator:
         notes.append("Run on ttsim, the functional simulator: accuracy only, no perf.")
 
+    summary = _write_summary(
+        args,
+        plan,
+        work,
+        t0,
+        detection=found,
+        ops={"measured": ops, "not_covered": not_covered, "why": why},
+        perf=perf_rows,
+        accuracy=acc,
+        notes=notes,
+    )
+    if args.check:
+        found = report.findings([summary])
+        for f in found:
+            print(f"REGRESSION {f['text']}")
+        if found:
+            sys.exit(1)
+        print("no regressions")
+
+
+def _write_summary(args, plan, work, t0, **results):
+    """Write this run's summary-<arch>.json and its report-<arch>.md; return the summary."""
     cmd = " ".join(["python3", ".github/llk_sfpu_report/cli.py", *sys.argv[1:]])
     summary = {
         "arch": args.arch,
@@ -323,13 +390,9 @@ def cmd_run(args):
         "merge_base_age_days": _merge_base_age(plan),
         "applied": plan.applied,
         "not_applied": plan.not_applied,
-        "detection": found,
-        "ops": {"measured": ops, "not_covered": not_covered, "why": why},
         "iterations": args.iterations,
         "thresholds": THRESHOLDS,
-        "perf": perf_rows,
-        "accuracy": acc,
-        "notes": notes,
+        **results,
         "commands": [cmd],
         "seconds": round(time.time() - t0),
     }
@@ -337,13 +400,7 @@ def cmd_run(args):
     out.write_text(json.dumps(summary, indent=1, default=str))
     (work / f"report-{args.arch}.md").write_text(report.render([summary]))
     print(f"wrote {out} in {summary['seconds']} s")
-    if args.check:
-        found = report.findings([summary])
-        for f in found:
-            print(f"REGRESSION {f['text']}")
-        if found:
-            sys.exit(1)
-        print("no regressions")
+    return summary
 
 
 def cmd_rerender(args):
@@ -387,7 +444,7 @@ def main(argv=None):
     run.add_argument(
         "--check",
         action="store_true",
-        help="exit 1 when the report has a regression (a ⚠️): usable as a pass/fail test",
+        help="exit 1 when the report has a regression (a ⚠️), 2 when nothing could be measured",
     )
     run.add_argument("--pr", help="PR number, for the reproduce commands in the report")
     run.add_argument(
