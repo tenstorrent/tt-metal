@@ -28,13 +28,15 @@ using namespace ckernel;
  * @tparam math_fidelity: Math fidelity for controlling precision, values = <LoFi/HiFi2/HiFi3/HiFi4>
  * @tparam tile_dvalid: Whole-tile program (see @ref eltwise_binary_tile_dvalid): ADDR_MOD_2 and ADDR_MOD_3 return the counters to the tile base
  * @tparam row_step: Slot of the whole-tile row broadcast's face step; the dest-reuse execute keeps ADDR_MOD_1 for its moves and clears
+ * @tparam zero_addr_mod_1: Program ADDR_MOD_1 as the no-op step; the whole-tile program without dest reuse never reads it
  */
 template <
     EltwiseBinaryType eltwise_binary_type,
     BroadcastType bcast_type,
     MathFidelity math_fidelity,
     bool tile_dvalid      = false,
-    std::uint8_t row_step = ADDR_MOD_1>
+    std::uint8_t row_step = ADDR_MOD_1,
+    bool zero_addr_mod_1  = true>
 inline void eltwise_binary_configure_addrmod()
 {
     static_assert(
@@ -55,7 +57,7 @@ inline void eltwise_binary_configure_addrmod()
         .set(ADDR_MOD_0);
 
     // The whole-tile row broadcast without dest reuse writes its face step into ADDR_MOD_1 below
-    if constexpr (!(tile_dvalid && bcast_type == BroadcastType::ROW && row_step == ADDR_MOD_1))
+    if constexpr (zero_addr_mod_1 && !(tile_dvalid && bcast_type == BroadcastType::ROW && row_step == ADDR_MOD_1))
     {
         addr_mod_t {
             .srca = {.incr = 0},
@@ -328,7 +330,7 @@ inline void _llk_math_eltwise_binary_standard_init_(const ckernel::TensorShape t
     {
         if (__builtin_expect(eltwise_binary_tile_shape<src_b_bcast_type>(tensor_shape), true))
         {
-            eltwise_binary_configure_addrmod<eltwise_binary_type, src_b_bcast_type, math_fidelity, true>();
+            eltwise_binary_configure_addrmod<eltwise_binary_type, src_b_bcast_type, math_fidelity, true, ADDR_MOD_1, false>();
             eltwise_binary_configure_mop_tile<eltwise_binary_type, src_b_bcast_type, math_fidelity>(acc_to_dest, tensor_shape.total_num_faces());
         }
         else
@@ -388,7 +390,11 @@ inline void _llk_math_eltwise_binary_standard_(const ckernel::TensorShape tensor
         if (__builtin_expect(eltwise_binary_tile_shape<src_b_bcast_type>(tensor_shape), true))
         {
             ckernel_template::run();
-            math::clear_dst_reg_addr();
+            // Above LoFi the MOP's last instruction (ADDR_MOD_3) already returns the DEST counter to the tile base
+            if constexpr (!high_fidelity)
+            {
+                math::clear_dst_reg_addr();
+            }
             return;
         }
     }
@@ -854,7 +860,11 @@ inline void _llk_math_eltwise_binary_with_dest_reuse_(const ckernel::TensorShape
         if (__builtin_expect(eltwise_binary_reuse_tile_shape<src_b_bcast_type>(tensor_shape), true))
         {
             eltwise_binary_run_with_dest_reuse_tile<eltwise_binary_type, is_fp32_dest_acc_en, binary_reuse_dest>(num_faces, clear_fp32_dst_acc, dst_index);
-            math::clear_dst_reg_addr();
+            // Above LoFi the MOP's last instruction (ADDR_MOD_3) already returns the DEST counter to the tile base
+            if constexpr (!is_high_fidelity(math_fidelity))
+            {
+                math::clear_dst_reg_addr();
+            }
             return;
         }
     }
