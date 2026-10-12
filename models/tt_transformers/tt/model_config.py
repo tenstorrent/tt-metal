@@ -17,6 +17,7 @@ import torch
 from loguru import logger
 
 import ttnn
+from models.common.tensor_utils import with_dram_sharded_cores_per_bank
 from models.common.utility_functions import hf_cache_to_legacy, is_blackhole, is_wormhole_b0, nearest_32
 from models.common.weight_cache import WEIGHT_CACHE_FORMAT_VERSION as _WC_FORMAT_VERSION
 from models.common.weight_cache import WEIGHT_CACHE_MARKER as _WC_MARKER
@@ -3885,13 +3886,16 @@ class ModelArgs:
             in0_block_w = self.dram_decode_in0_block_w(k, n, num_cores)
         else:
             in0_block_w = self.find_largest_divisor(k // (ttnn.TILE_SIZE * num_cores))
-        return ttnn.MatmulMultiCoreReuseMultiCastDRAMShardedProgramConfig(
+        program_config = ttnn.MatmulMultiCoreReuseMultiCastDRAMShardedProgramConfig(
             in0_block_w=in0_block_w,
             per_core_M=math.ceil(m / ttnn.TILE_SIZE),
             per_core_N=math.ceil(n / (ttnn.TILE_SIZE * num_cores)),
             fused_activation=fused_activation,
             num_workers_per_dram_bank=num_workers_per_dram_bank,
         )
+        if self.is_galaxy or self.prefetcher is not None:
+            return program_config
+        return with_dram_sharded_cores_per_bank(program_config, m, k, n, num_cores)
 
     def matmul_1d_ring_config(
         self,

@@ -326,6 +326,8 @@ def test_matmul_in1_dram_sharded_multi_workers_rejects_oversized_storage(
     if not is_blackhole():
         pytest.skip("Multiple DRAM-sharded matmul workers per bank are currently Blackhole-only")
 
+    # With a fused bias the call stays on the single-reader program, whose readers split the shard evenly.
+    # (Without one it runs the multi-core pipeline, which takes any shard width.)
     with expect_error(RuntimeError, "requires weight shard width"):
         run_test_matmul_in1_dram_sharded(
             device=device,
@@ -337,7 +339,7 @@ def test_matmul_in1_dram_sharded_multi_workers_rejects_oversized_storage(
             N=288,
             fidelity=ttnn.MathFidelity.HiFi2,
             packer_l1_acc=True,
-            has_bias=False,
+            has_bias=True,
             activation=None,
             grid_size=(1, 1),
             in0_dtype=ttnn.bfloat16,
