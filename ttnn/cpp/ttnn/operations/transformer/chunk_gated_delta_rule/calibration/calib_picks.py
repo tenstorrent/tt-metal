@@ -98,7 +98,7 @@ def main():
             print(f"   {desc(*key):40s} {t:7.1f} {(t / t_pick - 1) * 100:+7.1f}% {ms:>18s}{mark}")
             if a.emit_rows and not m:
                 cnv, cnp, cpl, cd, cnum = key
-                args = f"--method {a.method} --T {a.T} --iters {a.iters} --hk {hk} --hv {bh}"
+                args = f"--method {a.method} --T {a.T} --d {a.vt * 32} --iters {a.iters} --hk {hk} --hv {bh}"
                 if cpl == 2:
                     emit.append(
                         f"{a.emit_rows}_bh{bh}_pool_nv{cnv}p{cnp}_s{cnum}_d{cd} calib_capture.py {args} --pool --nv {cnv} --np {cnp} --share {cnum / cnp:.4f} --nbuf {cd}"

@@ -5,9 +5,9 @@
   python calib_collect.py <rows file> [<rows file> ...] [--json out.json] [--vt 4] [--out DIR]
 
 A row is "label script args" (calib_rows.py / calib_batch.sh). The geometry comes from the args (--hv, --nv, --np,
---pool, --share, --nbuf, --rl, --phased); for a row with no pinned geometry (the op's own pick) the receiver and
-producer cores are read from the capture's zones and the depth / share from the binding's pick for that geometry
-(so run this on the tree that took the captures). The last run of the capture is analysed (the device profiler keeps
+--pool, --share, --nbuf, --rl, --phased) and Vt from --d (--vt for rows without it); for a row with no pinned
+geometry (the op's own pick) the receiver and producer cores are read from the capture's zones and the depth / share
+from the binding's pick for that geometry (so run this on the tree that took the captures). The last run of the capture is analysed (the device profiler keeps
 every run; the TRISC zones hold ~21 steps / 10 items per core, the BRISC and NCRISC zones the whole run).
 
 Per capture:
@@ -53,8 +53,9 @@ def parse_row_args(args):
         "np": 0,
         "hv": 0,
         "T": 2048,
+        "d": 0,
     }
-    for k in ("hv", "nv", "np", "nbuf", "rl", "T"):
+    for k in ("hv", "nv", "np", "nbuf", "rl", "T", "d"):
         if f"--{k}" in a:
             g[k] = int(a[a.index(f"--{k}") + 1])
     if "--share" in a:
@@ -237,6 +238,7 @@ def main():
                 continue
             label, script, args = line.split(None, 2)
             g = parse_row_args(args)
+            g["vt"] = g["d"] // 32 if g["d"] else a.vt
             d = f"{a.out}/{label}"
             op = op_median(d)
             r = {
@@ -244,6 +246,7 @@ def main():
                 "op": op,
                 "BH": g["BH"],
                 "NC": g["NC"],
+                "vt": g["vt"],
                 "phased": g["phased"],
                 "nv": g["nv"],
                 "np": g["np"],
@@ -263,7 +266,7 @@ def main():
                 else:
                     Z, xs, ys, run, runs = lz
                     if r["geom_src"] == "auto":
-                        inf = infer_geometry(Z, xs, ys, g["BH"], g["NC"], a.vt)
+                        inf = infer_geometry(Z, xs, ys, g["BH"], g["NC"], g["vt"])
                         if inf is None:
                             r["note"] = "geometry not recognised"
                             print("geometry not recognised", file=sys.stderr)
@@ -284,7 +287,7 @@ def main():
                                 len(ys),
                                 g["BH"],
                                 g["NC"],
-                                a.vt,
+                                g["vt"],
                                 g["nv"],
                                 g["np"],
                                 0,
@@ -299,7 +302,7 @@ def main():
                                 end=" ",
                             )
                     g["PL"] = r["PL"]
-                    r.update(metrics(Z, xs, ys, g, a.vt))
+                    r.update(metrics(Z, xs, ys, g, g["vt"]))
                     r["run"], r["runs"] = run, runs
                     print(
                         f"op {op:.1f} item {r['item']} per {r['per']} fill {r['fill']} step {r['step']} pace {r['pace']} {r['regime']}",
