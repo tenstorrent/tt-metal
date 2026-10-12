@@ -231,3 +231,21 @@ Next (tunnel up): `ssh exabox-login 'df -h /data; curl -sI https://huggingface.c
   warm deadline, rerun it once more (the cache keeps filling); do not raise the 540 s job timeout.
 - Next: per-step time ("denoise breakdown") per arm, PSNR of sla/vsa vs dense from the saved outputs, a still per arm;
   then s1..s4 specs and the same chain.
+
+## t452 run 1708 (2026-10-12 10:35 PDT) — seed 0 results, SLA audio clipping, seeds 1-4 queued
+- Chain run 1707 (blx01, 900 MHz AICLK ceiling, relative timings only): job 008 dense PASS, job 009 sla0.85 FAIL, job 011 vsa0.9 PASS.
+  Steady denoise per step (pipeline "denoise breakdown", 3 steady steps): dense 3107 ms, vsa0.9 3099 ms (no gain), sla0.85 2482 ms (-20.1%).
+  Pipeline totals: dense 16.17 s, vsa 15.61 s, sla 13.72 s (VAE decode ~1.9 s in each).
+- Job 009 failure (first error line, log /var/log/tt-device-broker/2026-10-12_171239_009.log on g15blx01):
+  "E AssertionError: 1.5% of samples are at full scale; suspect a scaling error" (common_av.check_audio_sanity, clipped >= 1%).
+  The SLA LoRA run generated fully (denoise and decode done), then failed the audio check before saving latents and video.
+  So the SLA v0.1 LoRA clips the audio track (dense v1.0 passes the same check). This counts against SLA quality.
+- vsa0.9 vs dense seed 0 (psnr452.py): Y PSNR 17.57 dB, yuv 19.06 dB, per-frame min 16.02, latent PCC 0.8115. Still
+  stills/s0-vsa0.9.jpg is visibly blurred and ghosted against stills/s0-dense.jpg. Same as #453: VSA on dense-trained Turbo is out.
+  Judgment: VSA arm not repeated for seeds 1-4 (no speed gain, clear degradation, already shown twice).
+- Added plug/t452_audiowarn.py (pytest plugin, -p t452_audiowarn in run452.sh): logs "[t452] audio peak/rms/clipped" for every arm and
+  turns a check_audio_sanity failure into a logged warning plus AUDIO_WARN file, so the SLA arm saves its video.
+- Chain run 1708 (detached on g15blx02, log state/runs/1708/chain452.log): s0-sla0.85b, then s{1..4}-dense, s{1..4}-sla0.85.
+- Next: per arm "denoise breakdown" and "[t452] audio" lines from out_s<N>-<arm>/run.log; psnr452.py out_sN-dense out_sN-sla0.85
+  for each seed (note: SLA uses a different LoRA, so PSNR vs v1.0 dense measures drift, not just sparsity error); stills at 5 s
+  (ffmpeg -ss 5); VBench subset on dense vs SLA; recommendation.

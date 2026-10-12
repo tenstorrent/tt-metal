@@ -1,0 +1,8 @@
+ID=t452-s2-dense
+TASK=t452
+WORKDIR=/var/tmp/fasth3/t452
+ENV=/var/tmp/fasth3/t452/env452.yaml
+CONFIG=t452-turbo10s-dense
+TIMEOUT=540
+CMD=env T409_SEED=2 T409_PY_TIMEOUT=470 bash /var/tmp/fasth3/t452/run452.sh s2 dense
+NEEDS=/var/tmp/fasth3/t409/b/ttnn/ttnn/_ttnn.so,/var/tmp/fasth3/t452/w/OVERLAY

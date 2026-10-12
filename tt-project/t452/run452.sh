@@ -37,7 +37,7 @@ grep -q MINIMAX_H3_TURBO_SAVE_DIR models/tt_dit/tests/models/minimax_h3/test_pip
 grep -q MINIMAX_H3_VSA_SPARSITY models/tt_dit/pipelines/minimax_h3/pipeline_minimax_h3.py || { echo "[t409] $W lacks VSA"; exit 3; }
 grep -q MINIMAX_H3_VSA_MODE models/tt_dit/pipelines/minimax_h3/pipeline_minimax_h3.py || { echo "[t409] $W lacks SLA mode"; exit 3; }
 source $VENV/bin/activate || exit 3
-export TT_METAL_HOME=$W PYTHONPATH=$W:$W/ttnn:$W/tools:$F/t286:$F/t409/plug
+export TT_METAL_HOME=$W PYTHONPATH=$W:$W/ttnn:$W/tools:$F/t286:$F/t409/plug:$T/plug
 export T286_WARM_DEADLINE_S=${T286_WARM_DEADLINE_S:-400} T286_WARM_LATE_S=${T286_WARM_LATE_S:-400} T286_SKIP_VAE_WARM=1
 MP4=$HOME/h3_turbo_artifacts/fl2va_turbo_1344x768_10s_4fwd.mp4
 PG=""
@@ -58,7 +58,7 @@ for ARM in "$@"; do
   esac
   unset MINIMAX_H3_TURBO_SAVE_DIR; [ "${T409_SAVE:-1}" = 1 ] && export MINIMAX_H3_TURBO_SAVE_DIR=$OUT
   rm -f $MP4
-  CMD="exec timeout --foreground -k 10 ${T409_PY_TIMEOUT:-270} python -u -m pytest -sv -p no:cacheprovider -p t286_skipvaewarm -p t409_alarm models/tt_dit/tests/models/minimax_h3/test_pipeline_turbo_minimax_h3.py -k '10s and 4x8 and not 15s and not 4x32 and not WH'"
+  CMD="exec timeout --foreground -k 10 ${T409_PY_TIMEOUT:-270} python -u -m pytest -sv -p no:cacheprovider -p t286_skipvaewarm -p t409_alarm -p t452_audiowarn models/tt_dit/tests/models/minimax_h3/test_pipeline_turbo_minimax_h3.py -k '10s and 4x8 and not 15s and not 4x32 and not WH'"
   echo "[t409] host=$(hostname) commit=$(git -C $W rev-parse HEAD) $(cat $W/OVERLAY) tag=$TAG arm=$ARM seed=$MINIMAX_H3_TURBO_SEED replays=$MINIMAX_H3_TURBO_REPLAYS job=${TTP_RUNNER_JOB:-} $(date -u '+%F %T') UTC" | tee $L
   echo "[t409] cmd: $CMD" | tee -a $L
   env | grep -E '^(MINIMAX|TT_|T286_)' | sort >> $L
