@@ -1,7 +1,7 @@
 # SPDX-FileCopyrightText: © 2026 Tenstorrent AI ULC
 # SPDX-License-Identifier: Apache-2.0
 
-"""Raw device results for the LLK SFPU report (``tt-llk/sfpu_report``).
+"""Raw device results for the LLK SFPU report (``.github/llk_sfpu_report``).
 
 Not a test in the usual sense: it asserts nothing about accuracy. It runs each
 requested op over two stimuli per variant and saves ``(src, golden, result)``, so

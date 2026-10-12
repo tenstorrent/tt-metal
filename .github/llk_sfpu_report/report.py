@@ -6,8 +6,7 @@
 
 The layout follows how SFPU bounty PRs already report results (old/new cycles,
 speedup, old/new max ULP per arch), so a reviewer reads it the same way. Every
-number comes from the summaries; the AI summary, if any, is inserted later at
-``AI_SUMMARY_MARKER`` by the workflow and is labelled as such.
+number comes from the summaries.
 """
 
 import json
@@ -17,7 +16,6 @@ from pathlib import Path
 from perf import ROWS_PER_TILE
 
 COMMENT_MARKER = "<!-- llk-sfpu-report -->"
-AI_SUMMARY_MARKER = "<!-- llk-sfpu-report:ai-summary -->"
 STALE_DAYS = 14
 
 _ARCH = {"wormhole": "Wormhole", "blackhole": "Blackhole"}
@@ -703,7 +701,6 @@ def render(summaries):
         return _fit("\n".join(not_measured_report(not_measured)) + "\n")
     parts = header(summaries)
     parts += glance_section(summaries)
-    parts += [AI_SUMMARY_MARKER, ""]
     parts += perf_section(summaries)
     parts += accuracy_section(summaries)
     parts += edge_section(summaries)
@@ -713,7 +710,7 @@ def render(summaries):
     return _fit("\n".join(parts) + "\n")
 
 
-#: A GitHub comment holds 65,536 characters; leave room for the AI summary and footer.
+#: A GitHub comment holds 65,536 characters; leave some headroom.
 MAX_CHARS = 60000
 
 

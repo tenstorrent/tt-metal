@@ -2,7 +2,7 @@
 #
 # SPDX-License-Identifier: Apache-2.0
 
-"""Hardware-free tests of the LLK SFPU report (``tt-llk/sfpu_report``).
+"""Hardware-free tests of the LLK SFPU report (``.github/llk_sfpu_report``).
 
 Everything here runs on the host: which changed files count as device code, which
 ops a run measures first, how special-input results are compared, and what the
@@ -164,7 +164,6 @@ def _summary():
 def test_report_flags_the_regressions():
     text = report.render([_summary()])
     assert text.startswith(report.COMMENT_MARKER)
-    assert report.AI_SUMMARY_MARKER in text
     assert "⚠️ 479" in text  # perf
     assert "⚠️ 1,024" in text  # accuracy
     assert "⚠️ `nan`" in text  # edge case changed kind
