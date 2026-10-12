@@ -341,7 +341,8 @@ inline void perform_reduce_col_sum_avg() {
 // windows below survive a row reduce under one shared init (sfpu_reduce_multidim_test.cpp REDUCE_ORDER).
 //
 // Replay slots (REPLAY_BUF_SIZE = 32 per thread; the FPU ops' windows start at ckernel::math::replay_buf_offset = 16):
-//   init_reduce_sum_avg:                [0, 6)   tree-add window (column and row SUM/AVG; the column half tree inline)
+//   init_reduce_sum_avg:                [0, 6)   tree-add window (column and row SUM/AVG; the column half tree inline),
+//                                       [0, 9)   for Float16_b SUM in a 32-bit Dest
 //   init_reduce_max_min:                [0, 10)  LOADMACRO column window (float, UInt16 in a 16-bit Dest)
 //   init_reduce_max_min_int32:          [0, 3)   manual 3-swap window (UInt16 in 32-bit Dest)
 //   init_reduce_max_min_int32_signed:   [0, 15)  signed Int32 (and bit-31-flipped UInt32) column window
@@ -1346,8 +1347,9 @@ inline void init_reduce_max_min([[maybe_unused]] std::uint32_t num_cols) {
  *
  * @tparam INSTRUCTION_MODE The instruction mode for integer and float formats: INT32, LO16, DEFAULT
  * (FP32, FP16B)
+ * @tparam record_half_tree Also record the half tree at positions 6-8, which no kernel replays.
  */
-template <InstrModLoadStore INSTRUCTION_MODE, PoolType pool_type>
+template <InstrModLoadStore INSTRUCTION_MODE, PoolType pool_type, bool record_half_tree = false>
 inline void init_reduce_sum_avg() {
     _init_sfpu_config_reg();
 
@@ -1378,7 +1380,7 @@ inline void init_reduce_sum_avg() {
         TTI_SFPIADD(0, p_sfpu::LREG1, p_sfpu::LREG0, 4);  // LREG0 = LREG0 + LREG1
         TTI_SFPIADD(0, p_sfpu::LREG5, p_sfpu::LREG4, 4);  // LREG4 = LREG4 + LREG5
     } else {
-        lltt::record(0, 6);
+        lltt::record(0, record_half_tree ? 9 : 6);
 
         // Full reduce (positions 0-5): interleaved to eliminate read-after-write dependencies
         TTI_SFPADD(p_sfpu::LREG2, p_sfpu::LCONST_1, p_sfpu::LREG3, p_sfpu::LREG2, 0);  // A1
@@ -1387,6 +1389,11 @@ inline void init_reduce_sum_avg() {
         TTI_SFPADD(p_sfpu::LREG5, p_sfpu::LCONST_1, p_sfpu::LREG6, p_sfpu::LREG5, 0);  // B2
         TTI_SFPADD(p_sfpu::LREG0, p_sfpu::LCONST_1, p_sfpu::LREG1, p_sfpu::LREG0, 0);  // A3
         TTI_SFPADD(p_sfpu::LREG4, p_sfpu::LCONST_1, p_sfpu::LREG5, p_sfpu::LREG4, 0);  // B3
+        if constexpr (record_half_tree) {
+            TTI_SFPADD(p_sfpu::LREG2, p_sfpu::LCONST_1, p_sfpu::LREG3, p_sfpu::LREG2, 0);
+            TTI_SFPADD(p_sfpu::LREG1, p_sfpu::LCONST_1, p_sfpu::LREG2, p_sfpu::LREG1, 0);
+            TTI_SFPADD(p_sfpu::LREG0, p_sfpu::LCONST_1, p_sfpu::LREG1, p_sfpu::LREG0, 0);
+        }
     }
 }
 
@@ -2030,7 +2037,11 @@ inline void init_reduce(std::uint32_t block_ct_dim = 1) {
             init_reduce_max_min<INSTRUCTION_MODE, pool_type, false>(block_ct_dim);
         }
     } else if constexpr (pool_type == PoolType::SUM || pool_type == PoolType::AVG) {
-        init_reduce_sum_avg<INSTRUCTION_MODE, pool_type>();
+        // Float16_b SUM in a 32-bit Dest has no caller, and its pack-isolated harness rows follow the init's length,
+        // so it records the half tree as well.
+        constexpr bool record_half_tree =
+            format == DataFormat::Float16_b && is_fp32_dest_acc_en && pool_type == PoolType::SUM;
+        init_reduce_sum_avg<INSTRUCTION_MODE, pool_type, record_half_tree>();
     } else {
         static_assert(
             pool_type == PoolType::SUM || pool_type == PoolType::AVG || pool_type == PoolType::MAX ||
