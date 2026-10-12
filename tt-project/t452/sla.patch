@@ -1,0 +1,286 @@
+diff --git a/models/tt_dit/models/transformers/minimax_h3/vsa_stages_minimax_h3.py b/models/tt_dit/models/transformers/minimax_h3/vsa_stages_minimax_h3.py
+index da5f59e3234..3e8228ce787 100644
+--- a/models/tt_dit/models/transformers/minimax_h3/vsa_stages_minimax_h3.py
++++ b/models/tt_dit/models/transformers/minimax_h3/vsa_stages_minimax_h3.py
+@@ -31,7 +31,7 @@ import torch
+ 
+ import ttnn
+ 
+-from ....pipelines.minimax_h3.vsa_geometry import VSA_TILE_TOKENS, MiniMaxH3VSAGeometry
++from ....pipelines.minimax_h3.vsa_geometry import VSA_TILE_TOKENS, MiniMaxH3VSAGeometry, sla_query_averaging_matrix
+ from ....utils.tensor import from_torch
+ 
+ VSA_INDEX_SENTINEL = 0xFFFFFFFF
+@@ -81,6 +81,16 @@ class MiniMaxH3VSAConfig:
+     # build the `to_gate_compress` linear (O_c branch). The base checkpoint has none, so the default
+     # leaves it out and the model keeps the dense weight-cache layout.
+     gate_compress: bool = False
++    # block selection: "vsa" (FastVideo: 4x4x4 video cubes, prefix tiles exempt) | "sla" (LightX2V SLA, for
++    # the Minimax-h3-Turbo-SLA LoRA: raster 64-token blocks over the whole packed sequence, nothing exempt,
++    # floor top-k; build the geometry with build_sla_geometry)
++    selection: str = "vsa"
++    # SLA query block in 64-token tiles: 2 = LightX2V sage2's 128-row Q blocks (non-sm90 GPUs, the
++    # published RTX 5090 setup for the Turbo-SLA LoRA); 1 = its triton operator's 64-row blocks
++    sla_q_block_tiles: int = 2
++
++
++VSA_SELECTIONS = ("vsa", "sla")
+ 
+ 
+ def compute_topk(sparsity: float, num_candidates: int) -> int:
+@@ -88,6 +98,11 @@ def compute_topk(sparsity: float, num_candidates: int) -> int:
+     return max(1, min(math.ceil((1 - sparsity) * num_candidates), num_candidates))
+ 
+ 
++def compute_topk_sla(sparsity: float, num_blocks: int) -> int:
++    """LightX2V get_block_map's top-k: int(topk_ratio * K) floored, topk_ratio = 1 - sparsity, clamped to [1, K]."""
++    return max(1, min(num_blocks, int((1 - sparsity) * num_blocks)))
++
++
+ def _round_up(value: int, multiple: int) -> int:
+     return (value + multiple - 1) // multiple * multiple
+ 
+@@ -100,6 +115,8 @@ class MiniMaxH3VSACoarseStage:
+         geometry: MiniMaxH3VSAGeometry,
+         *,
+         sparsity: float,
++        selection: str = "vsa",
++        sla_q_block_tiles: int = 1,
+         padded_pooling: bool = False,
+         head_dim: int,
+         mesh_device: ttnn.MeshDevice,
+@@ -120,20 +137,34 @@ class MiniMaxH3VSACoarseStage:
+         real_ids = torch.nonzero(geometry.valid_counts > 0, as_tuple=False).reshape(-1)
+         self.n_exempt = int(exempt_ids.numel())
+         self.n_candidates = int(geometry.is_candidate.sum())
+-        self.k = compute_topk(sparsity, self.n_candidates)
++        if selection not in VSA_SELECTIONS:
++            raise ValueError(f"selection must be one of {VSA_SELECTIONS}, got {selection!r}")
++        if selection == "sla" and self.n_exempt:
++            raise ValueError("SLA selection exempts nothing: build the geometry with build_sla_geometry")
++        self.selection = selection
++        topk = compute_topk_sla if selection == "sla" else compute_topk
++        self.k = topk(sparsity, self.n_candidates)
+         self.k_pad = max(_TOPK_K_MULTIPLE, _round_up(self.k, _TOPK_K_MULTIPLE))
+         # Index width: global tile count, padded so W*4 bytes meets DRAM row alignment and the
+         # static row layout [exempt | top-k | sentinel tail] fits.
+         self.index_width = _round_up(max(n_tiles, self.n_exempt + self.k), _TOPK_K_MULTIPLE)
+ 
+         # --- averaging matrices, sharded: shard s owns the diagonal block of A^T ---
+-        matrix = geometry.averaging_matrix()  # [n_tiles, padded_len] fp64->fp32
+         rows_local = geometry.padded_len // geometry.sp_factor
+-        blocks = [
+-            matrix[s * tiles_per_shard : (s + 1) * tiles_per_shard, s * rows_local : (s + 1) * rows_local].T
+-            for s in range(geometry.sp_factor)
+-        ]
+-        a_t = torch.cat(blocks, dim=0)  # [padded_len, tiles_per_shard]
++
++        def shard_diagonal_t(matrix: torch.Tensor) -> torch.Tensor:  # -> [padded_len, tiles_per_shard]
++            blocks = [
++                matrix[s * tiles_per_shard : (s + 1) * tiles_per_shard, s * rows_local : (s + 1) * rows_local].T
++                for s in range(geometry.sp_factor)
++            ]
++            return torch.cat(blocks, dim=0)
++
++        a_t = shard_diagonal_t(geometry.averaging_matrix())
++        a_t_q = a_t
++        if selection == "sla" and sla_q_block_tiles > 1:
++            if tiles_per_shard % sla_q_block_tiles:
++                raise ValueError("SLA query blocks straddle shards: build_sla_geometry(q_block_tiles=...)")
++            a_t_q = shard_diagonal_t(sla_query_averaging_matrix(geometry, sla_q_block_tiles))
+         # Padded pooling: pad each shard's tile axis to a power of two >= 32 (zero columns) so the
+         # pooled K^T / V gathers are tile-aligned (the CCL otherwise falls back to a broadcast+concat
+         # composite, ~1.6 ms per block at 15 s). Scores/top-k then run in the padded per-shard
+@@ -145,6 +176,7 @@ class MiniMaxH3VSACoarseStage:
+             while self.slots_per_shard < tiles_per_shard:
+                 self.slots_per_shard *= 2
+             a_t = torch.nn.functional.pad(a_t, (0, self.slots_per_shard - tiles_per_shard))
++            a_t_q = torch.nn.functional.pad(a_t_q, (0, self.slots_per_shard - tiles_per_shard))
+         self.coarse_slots_shift = self.slots_per_shard.bit_length() - 1 if padded_pooling else 0
+         mesh_axes = [..., sp_axis, None]
+         self.a_t_kv = from_torch(
+@@ -154,7 +186,7 @@ class MiniMaxH3VSACoarseStage:
+             mesh_axes=mesh_axes,
+         )
+         self.a_t_q = from_torch(
+-            (a_t / math.sqrt(head_dim)).reshape(1, 1, geometry.padded_len, self.slots_per_shard),
++            (a_t_q / math.sqrt(head_dim)).reshape(1, 1, geometry.padded_len, self.slots_per_shard),
+             device=mesh_device,
+             dtype=ttnn.bfloat16,
+             mesh_axes=mesh_axes,
+@@ -231,7 +263,7 @@ class MiniMaxH3VSACoarseStage:
+         prefix = (
+             self._host_exempt_ids.to(torch.int32).reshape(1, 1, 1, -1).expand(geometry.sp_factor, num_heads, rows, -1)
+         )
+-        self.exempt_prefix = upload(prefix, ttnn.uint32, ttnn.Layout.ROW_MAJOR)
++        self.exempt_prefix = upload(prefix, ttnn.uint32, ttnn.Layout.ROW_MAJOR) if self.n_exempt else None
+ 
+         # [sp, H, rows, tail] sentinel tail (absent when exempt + top-k fill the row exactly)
+         tail = w - self.n_exempt - self.k
+@@ -405,7 +437,7 @@ class MiniMaxH3VSACoarseStage:
+         if self.k != self.k_pad:
+             topk_ids = ttnn.slice(topk_ids, [0, 0, 0, 0], [1, num_heads, self.geometry.tiles_per_shard, self.k])
+ 
+-        parts = [self.exempt_prefix, topk_ids] + ([self.sentinel_tail] if self.sentinel_tail is not None else [])
++        parts = [p for p in (self.exempt_prefix, topk_ids, self.sentinel_tail) if p is not None]
+         sparse_rows = ttnn.concat(parts, dim=-1)  # [1, H, rows, W]
+         ttnn.deallocate(topk_ids)
+ 
+diff --git a/models/tt_dit/pipelines/minimax_h3/pipeline_minimax_h3.py b/models/tt_dit/pipelines/minimax_h3/pipeline_minimax_h3.py
+index e74115c8d4f..a16c6ac4bb2 100644
+--- a/models/tt_dit/pipelines/minimax_h3/pipeline_minimax_h3.py
++++ b/models/tt_dit/pipelines/minimax_h3/pipeline_minimax_h3.py
+@@ -470,16 +470,26 @@ class MiniMaxH3Output:
+ 
+ 
+ def _vsa_config_from_env():
+-    """MiniMaxH3VSAConfig from MINIMAX_H3_VSA_SPARSITY, or None (dense) when unset or empty."""
++    """MiniMaxH3VSAConfig from MINIMAX_H3_VSA_SPARSITY, or None (dense) when unset or empty.
++
++    MINIMAX_H3_VSA_MODE picks the block selection: "vsa" (default) or "sla" (LightX2V SLA, for the
++    Minimax-h3-Turbo-SLA LoRA). MINIMAX_H3_SLA_BLKQ sets SLA's query block rows: 128 (default) or 64.
++    """
+     raw = os.environ.get("MINIMAX_H3_VSA_SPARSITY", "").strip()
+     if not raw:
+         return None
+     sparsity = float(raw)
+     if not 0.0 <= sparsity < 1.0:
+         raise ValueError(f"MINIMAX_H3_VSA_SPARSITY must be in [0, 1), got {raw!r}")
+-    from ...models.transformers.minimax_h3.vsa_stages_minimax_h3 import MiniMaxH3VSAConfig
++    from ...models.transformers.minimax_h3.vsa_stages_minimax_h3 import VSA_SELECTIONS, MiniMaxH3VSAConfig
+ 
+-    return MiniMaxH3VSAConfig(sparsity=sparsity)
++    selection = os.environ.get("MINIMAX_H3_VSA_MODE", "").strip() or "vsa"
++    if selection not in VSA_SELECTIONS:
++        raise ValueError(f"MINIMAX_H3_VSA_MODE must be one of {VSA_SELECTIONS}, got {selection!r}")
++    blkq = int(os.environ.get("MINIMAX_H3_SLA_BLKQ", "").strip() or 128)
++    if blkq not in (64, 128):
++        raise ValueError(f"MINIMAX_H3_SLA_BLKQ must be 64 or 128, got {blkq}")
++    return MiniMaxH3VSAConfig(sparsity=sparsity, selection=selection, sla_q_block_tiles=blkq // 64)
+ 
+ 
+ def _is_host_rank() -> bool:
+@@ -1463,7 +1473,7 @@ class MiniMaxH3Pipeline:
+         per geometry, never freed, because a captured trace replays the stage's device tensors.
+         """
+         from ...models.transformers.minimax_h3.vsa_stages_minimax_h3 import MiniMaxH3VSACoarseStage
+-        from .vsa_geometry import build_vsa_geometry
++        from .vsa_geometry import build_sla_geometry, build_vsa_geometry
+ 
+         if layout.num_condition_audio_rows:
+             raise NotImplementedError("VSA supports t2va/fl2va layouts only (no audio condition rows)")
+@@ -1478,12 +1488,22 @@ class MiniMaxH3Pipeline:
+         signature = (n_text, n_cond, a_target, grid)
+         stage = self._vsa_stages.get(signature)
+         if stage is None:
+-            geometry = build_vsa_geometry(
+-                (n_text, n_cond, a_target), grid, sp_factor=self.sp_factor, placement=self.vsa_config.placement
+-            )
++            if self.vsa_config.selection == "sla":
++                geometry = build_sla_geometry(
++                    layout.sequence_length,
++                    grid,
++                    sp_factor=self.sp_factor,
++                    q_block_tiles=self.vsa_config.sla_q_block_tiles,
++                )
++            else:
++                geometry = build_vsa_geometry(
++                    (n_text, n_cond, a_target), grid, sp_factor=self.sp_factor, placement=self.vsa_config.placement
++                )
+             stage = MiniMaxH3VSACoarseStage(
+                 geometry,
+                 sparsity=self.vsa_config.sparsity,
++                selection=self.vsa_config.selection,
++                sla_q_block_tiles=self.vsa_config.sla_q_block_tiles,
+                 padded_pooling=self.vsa_config.padded_pooling,
+                 head_dim=self.transformer_config["attention_head_dim"],
+                 mesh_device=self.mesh_device,
+@@ -1493,7 +1513,8 @@ class MiniMaxH3Pipeline:
+             self._vsa_stages[signature] = stage
+             self._log(
+                 f"VSA geometry: {geometry.n_tiles} tiles ({geometry.n_pad_tiles} pad), "
+-                f"k={stage.k} of {stage.n_candidates} candidates, sparsity={self.vsa_config.sparsity}"
++                f"k={stage.k} of {stage.n_candidates} candidates, sparsity={self.vsa_config.sparsity}, "
++                f"selection={self.vsa_config.selection}"
+             )
+         self._transformer.set_vsa_stage(stage)
+         return stage.geometry
+diff --git a/models/tt_dit/pipelines/minimax_h3/vsa_geometry.py b/models/tt_dit/pipelines/minimax_h3/vsa_geometry.py
+index d1ef5b3be12..d7439405303 100644
+--- a/models/tt_dit/pipelines/minimax_h3/vsa_geometry.py
++++ b/models/tt_dit/pipelines/minimax_h3/vsa_geometry.py
+@@ -385,3 +385,74 @@ def build_vsa_geometry(
+         untile_index=untile_index,
+         row_source=row_source,
+     )
++
++
++def build_sla_geometry(
++    seq_len: int, video_grid: tuple[int, int, int], *, sp_factor: int, q_block_tiles: int = 1
++) -> MiniMaxH3VSAGeometry:
++    """Tile geometry for LightX2V's SLA block selection (Minimax-h3-Turbo-SLA LoRA).
++
++    LightX2V's ``get_block_map`` mean-pools the whole packed ``[text | cond | audio | video]`` sequence
++    in raster 64-token blocks (the tail block holds the remainder) and selects top-k over every block
++    for every query block: no exempt rows or columns, no 3D cubes. So every real tile here is a 1D
++    raster chunk and a candidate, placement is identity and pad tiles are appended. ``video_grid``
++    only labels the geometry. ``q_block_tiles`` rounds the tiles per shard to a multiple of it, so query
++    blocks of that many tiles (see sla_query_averaging_matrix) never straddle two shards.
++    """
++    if sp_factor < 1 or q_block_tiles < 1:
++        raise ValueError(f"sp_factor and q_block_tiles must be positive, got {sp_factor}, {q_block_tiles}")
++    if seq_len < 1:
++        raise ValueError(f"seq_len must be positive, got {seq_len}")
++
++    n_real_tiles = math.ceil(seq_len / VSA_TILE_TOKENS)
++    n_tiles = math.ceil(n_real_tiles / (sp_factor * q_block_tiles)) * sp_factor * q_block_tiles
++    n_pad_tiles = n_tiles - n_real_tiles
++
++    valid_counts = torch.zeros(n_tiles, dtype=torch.long)
++    valid_counts[:n_real_tiles] = VSA_TILE_TOKENS
++    valid_counts[n_real_tiles - 1] = seq_len - (n_real_tiles - 1) * VSA_TILE_TOKENS
++    order = torch.arange(n_tiles, dtype=torch.long)
++    tile_ids = torch.where(order < n_real_tiles, order, torch.full_like(order, -1))
++
++    gather_index = torch.full((n_tiles * VSA_TILE_TOKENS,), -1, dtype=torch.long)
++    gather_index[:seq_len] = torch.arange(seq_len, dtype=torch.long)
++    # pad slots of the tail tile repeat its first row, like build_vsa_geometry; pad tiles read row 0
++    row_source = torch.zeros(n_tiles * VSA_TILE_TOKENS, dtype=torch.long)
++    row_source[: n_real_tiles * VSA_TILE_TOKENS] = (n_real_tiles - 1) * VSA_TILE_TOKENS
++    row_source[:seq_len] = torch.arange(seq_len, dtype=torch.long)
++
++    return MiniMaxH3VSAGeometry(
++        sp_factor=sp_factor,
++        placement="identity",
++        video_grid=tuple(video_grid),
++        seq_len=seq_len,
++        n_prefix_tiles=n_real_tiles,
++        n_video_tiles=0,
++        n_pad_tiles=n_pad_tiles,
++        valid_counts=valid_counts,
++        tile_ids=tile_ids,
++        is_3d=torch.zeros(n_tiles, dtype=torch.bool),
++        is_exempt=torch.zeros(n_tiles, dtype=torch.bool),
++        is_candidate=valid_counts > 0,
++        gather_index=gather_index,
++        untile_index=torch.arange(seq_len, dtype=torch.long),
++        row_source=row_source,
++    )
++
++
++def sla_query_averaging_matrix(geometry: MiniMaxH3VSAGeometry, q_block_tiles: int) -> torch.Tensor:
++    """[n_tiles, padded_len] Q pooling for SLA query blocks of ``q_block_tiles`` raster tiles.
++
++    LightX2V's sage2 operator pools Q over 128-row blocks and K over 64-row blocks on non-sm90 GPUs
++    (the RTX 5090 setup published with the Turbo-SLA LoRA). Each tile's row here averages its whole
++    query block's valid rows, so every tile of a block gets that block's scores and selection.
++    """
++    base = geometry.averaging_matrix(torch.float64)
++    if q_block_tiles == 1:
++        return base.to(torch.float32)
++    if geometry.n_tiles % q_block_tiles:
++        raise ValueError(f"{geometry.n_tiles} tiles do not split into query blocks of {q_block_tiles}")
++    counts = geometry.valid_counts.to(torch.float64)
++    sums = (base * counts[:, None]).reshape(-1, q_block_tiles, geometry.padded_len).sum(1)
++    block_counts = counts.reshape(-1, q_block_tiles).sum(1).clamp(min=1)
++    return (sums / block_counts[:, None]).repeat_interleave(q_block_tiles, dim=0).to(torch.float32)
