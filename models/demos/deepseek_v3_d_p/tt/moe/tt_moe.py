@@ -322,7 +322,7 @@ class TtMoe(LightweightModule):
             overlap_routed_expert_with_combine: run the routed expert and combine_fabric2d as ONE program
                 (hybrid_routed_expert_moe in overlap mode), combine taking each expert as soon as it is
                 written. Blackhole only. None means on wherever it is supported AND the mesh's fabric payload
-                fits a whole bf16 token plus combine_fabric2d's routing tail -- open the mesh with
+                fits half a bf16 token plus combine_fabric2d's routing tail -- open the mesh with
                 init_helpers.moe_fabric_payload_size for that; with the model's own EMB_SIZE payload MoE runs
                 the routed expert then combine. Also needs a threshold that leaves the unified half
                 some experts. Even when enabled, a forward only overlaps while a trace controller is
@@ -536,9 +536,10 @@ class TtMoe(LightweightModule):
         global_expert_idx_tt = ttnn.squeeze(global_expert_idx_tt, 0)
 
         # Overlapping is the default wherever the op can run: only Blackhole has it, combine_fabric2d relays tokens
-        # around a ring so the 2D fabric must wrap along mesh axis 0, and each token is one fabric packet so the payload
-        # must fit it. A mesh opened with the model's own payload (EMB_SIZE), or on a fabric that does not wrap,
-        # runs the routed expert then combine instead; moe_fabric_payload_size opens one with room for the overlap.
+        # around a ring so the 2D fabric must wrap along mesh axis 0, and each token is at most two fabric packets so
+        # the payload must fit half of one. A mesh opened with the model's own payload (EMB_SIZE), or on a fabric that
+        # does not wrap, runs the routed expert then combine instead; moe_fabric_payload_size opens one with room for
+        # the overlap.
         overlap_payload = combine_overlap_payload_size(self.routed_emb_dim)
         fabric_payload = ttnn.get_tt_fabric_max_payload_size_bytes() if is_blackhole() else 0
         ring_axis_wraps = ttnn.get_fabric_config() in (
@@ -552,8 +553,8 @@ class TtMoe(LightweightModule):
             raise ValueError(
                 f"overlap_routed_expert_with_combine needs Blackhole, a 2D fabric that wraps along mesh axis 0 (got "
                 f"{'a ring' if ring_axis_wraps else 'no ring'}), and a fabric payload of at least {overlap_payload} B "
-                f"for a bf16 token plus combine_fabric2d's routing tail (got {fabric_payload} B); open the mesh with "
-                f"moe_fabric_payload_size on a torus"
+                f"for half a bf16 token plus combine_fabric2d's routing tail (got {fabric_payload} B); open the mesh "
+                f"with moe_fabric_payload_size on a torus"
             )
         logger.info(
             f"TtMoe: routed expert overlapped with combine_fabric2d: {overlap_routed_expert_with_combine} when traced, "
