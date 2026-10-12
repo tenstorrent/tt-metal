@@ -32,6 +32,9 @@ KDA_PREPARATION_L1_BYTES_PER_CORE = 320 * 1024
 KDA_DECAY_L1_BYTES_PER_CORE = 48 * 1024
 # The recurrence output and the gated norm's output each feed one following op; L1 spares their DRAM round trips.
 KDA_ACTIVATION_L1_BYTES_PER_CORE = 48 * 1024
+# The convolution's Q, K and V stay in L1 until chunk preparation reads them when they fit (98 KiB per core for
+# Kimi-K3 on Galaxy SP8xTP4).
+KDA_QKV_L1_BYTES_PER_CORE = 112 * 1024
 KDA_LOCAL_PREFIX_MEMORY_CONFIG = ttnn.L1_MEMORY_CONFIG
 KDA_DISTRIBUTED_PREFIX_MEMORY_CONFIG = ttnn.DRAM_MEMORY_CONFIG
 KDA_DISTRIBUTED_WORKING_MEMORY_CONFIG = ttnn.L1_MEMORY_CONFIG

@@ -18,6 +18,7 @@ from models.demos.deepseek_v3_d_p.tt.kda.config import (
     KDA_CHUNK_SIZE,
     KDA_DECAY_L1_BYTES_PER_CORE,
     KDA_OUTPUT_MEMORY_CONFIG,
+    KDA_QKV_L1_BYTES_PER_CORE,
     KDA_RECURRENT_STATE_DTYPE,
     KDAProgramConfig,
     decay_projection_program_config,
@@ -193,6 +194,10 @@ class ttKDA:
         self.decay_memory_config = l1_when_it_fits(
             mesh_device, self.active_seq_len_local * decay_width * 2, KDA_DECAY_L1_BYTES_PER_CORE
         )
+        # Only chunk preparation reads the convolution's Q, K and V; keep them in L1 when they fit.
+        self.qkv_memory_config = l1_when_it_fits(
+            mesh_device, self.active_seq_len_local * self._convolution_width * 2, KDA_QKV_L1_BYTES_PER_CORE
+        )
         # The gated norm's output feeds only the output projection; keep it in L1 when it fits.
         self.norm_memory_config = l1_when_it_fits(
             mesh_device, self.active_seq_len_local * self.config.v_dim * 2, KDA_ACTIVATION_L1_BYTES_PER_CORE
@@ -335,7 +340,7 @@ class ttKDA:
             history_table=history_table,
             actual_end=actual_end,
             sequence_parallel_axis=self.sequence_parallel_axis,
-            memory_config=ttnn.DRAM_MEMORY_CONFIG,
+            memory_config=self.qkv_memory_config,
         )
         ttnn.deallocate(history_table)
         return q, k, v, new_state
@@ -525,6 +530,7 @@ class ttKDA:
             actual_start=actual_start,
             actual_end=actual_end,
             release_gate=True,
+            release_qkv=True,
         )
         output = self._kda_rms_norm(result.output, projected.output_gate, projected.output_gate_offset)
         output = self._project_output(output)
