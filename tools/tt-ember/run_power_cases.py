@@ -69,7 +69,7 @@ RESET_COOLDOWN_S = 10
 # Scenarios" section for the full rationale behind each scenario. Case 3 (reader AND compute
 # both idle) is not in the default sweep below -- it's a two-variable case, and the four
 # single-variable ablations already isolate each engine's own contribution to dynamic power.
-# Case 5 (genuine USE_WRITER=0) is the writer's idle case, symmetric with case 2 (compute idle)
+# Case 5 (LONG_MATMUL_DISABLE_WRITER) is the writer's idle case, symmetric with case 2 (compute idle)
 # and case 4 (reader idle): all three compare "full real work" against "zero real work" for
 # exactly one engine, with the other two held identical (real, 100% write amplification) on
 # both sides. Case 0 ("regular", write amplification off) was used as the writer stand-in
