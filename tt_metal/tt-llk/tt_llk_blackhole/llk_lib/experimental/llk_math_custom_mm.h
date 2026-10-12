@@ -28,7 +28,7 @@ using namespace ckernel::math;
 // throttle: not supported
 
 template <bool transpose, bool split_acc, bool dense_packing>
-inline void custom_mm_configure_addrmod(const bool m1_group, const bool m8_group = false)
+inline void custom_mm_configure_addrmod()
 {
     constexpr std::uint8_t ADDR_MOD_0_SRCA_INCR  = transpose ? 32 : 16;
     constexpr std::uint8_t ADDR_MOD_1_SRCA_INCR  = transpose ? (64 - 16) : 16;
@@ -87,47 +87,6 @@ inline void custom_mm_configure_addrmod(const bool m1_group, const bool m8_group
     }
         .set(ADDR_MOD_6); // Move to next face in all three regs, used for final accumulation
 
-    if (m1_group)
-    {
-        addr_mod_t {
-            .srca = {.incr = 0, .clr = 0, .cr = 0},
-            .srcb = {.incr = 1, .clr = 0, .cr = 0},
-            .dest = {.incr = 16, .clr = 0, .cr = 0},
-        }
-            .set(ADDR_MOD_5); // M 1 finalize: next SrcB row, from a tile's face 0 to its face 1
-
-        addr_mod_t {
-            .srca = {.incr = 0, .clr = 0, .cr = 0},
-            .srcb = {.incr = 1, .clr = 0, .cr = 0},
-            .dest = {.incr = ADDR_MOD_2_DEST_INCR - 16, .clr = 0, .cr = 0},
-        }
-            .set(ADDR_MOD_6); // M 1 finalize: next SrcB row, from a tile's face 1 to the next tile
-    }
-
-    if (m8_group)
-    {
-        addr_mod_t {
-            .srca = {.incr = 0, .clr = 0, .cr = 0},
-            .srcb = {.incr = 8, .clr = 0, .cr = 0},
-            .dest = {.incr = 16, .clr = 0, .cr = 0},
-        }
-            .set(ADDR_MOD_5); // M 8 finalize: next 8 SrcB rows, from a tile's face 0 to its face 1
-
-        addr_mod_t {
-            .srca = {.incr = 0, .clr = 0, .cr = 0},
-            .srcb = {.incr = 8, .clr = 0, .cr = 0},
-            .dest = {.incr = ADDR_MOD_2_DEST_INCR - 16, .clr = 0, .cr = 0},
-        }
-            .set(ADDR_MOD_6); // M 8 finalize: next 8 SrcB rows, from a tile's face 1 to the next tile
-
-        addr_mod_t {
-            .srca = {.incr = 0, .clr = 0, .cr = 0},
-            .srcb = {.incr = 32, .clr = 0, .cr = 0},
-            .dest = {.incr = 2 * ADDR_MOD_2_DEST_INCR, .clr = 0, .cr = 0},
-        }
-            .set(ADDR_MOD_4); // M 8 finalize: past a pair of tiles in DEST and SrcB
-    }
-
     addr_mod_t {
         .srca = {.incr = 0, .clr = 0, .cr = 0},
         .srcb = {.incr = 0, .clr = 0, .cr = 0},
@@ -139,10 +98,9 @@ inline void custom_mm_configure_addrmod(const bool m1_group, const bool m8_group
 
 // At M 1 with more than one output tile the finalize moves all partial rows to SrcB rows 0 to 2 ct_dim - 1 first, so the
 // MOVD2B hold comes once per call; DEST rows above the tile height and those SrcB rows keep partials until the next init
-template <bool group_finalize>
 inline bool custom_mm_m1_group(const std::uint32_t operandB_face_r_dim, const std::uint32_t ct_dim)
 {
-    return group_finalize && operandB_face_r_dim == 1 && ct_dim > 1;
+    return operandB_face_r_dim == 1 && ct_dim > 1;
 }
 
 // The grouped finalize's end-of-call hold delays the next call's weight unpack; only block-float weights unpack fast
@@ -186,16 +144,19 @@ inline void custom_mm_record_m1_finalize()
 
 // At M 8 with 2 to 4 output tiles, the finalize moves the partials of all tiles of the call into SrcB and then adds them,
 // so the MOVD2B hold comes once per call; SrcB holds four tiles' partials, so wider calls keep the per-tile finalize
-template <bool group_finalize>
 inline bool custom_mm_m8_group(const std::uint32_t operandB_face_r_dim, const std::uint32_t ct_dim)
 {
-    return group_finalize && operandB_face_r_dim == 8 && ct_dim > 1 && ct_dim <= 4;
+    return operandB_face_r_dim == 8 && ct_dim > 1 && ct_dim <= 4;
 }
 
 template <bool group_finalize>
 inline std::uint32_t custom_mm_finalize_mode(const std::uint32_t operandB_face_r_dim, const std::uint32_t ct_dim)
 {
-    return custom_mm_m1_group<group_finalize>(operandB_face_r_dim, ct_dim) ? 1 : (custom_mm_m8_group<group_finalize>(operandB_face_r_dim, ct_dim) ? 2 : 0);
+    if constexpr (!group_finalize)
+    {
+        return 0;
+    }
+    return custom_mm_m1_group(operandB_face_r_dim, ct_dim) ? 1 : (custom_mm_m8_group(operandB_face_r_dim, ct_dim) ? 2 : 0);
 }
 
 // The finalize program and address modes the last init set up; written and read only under LLK asserts
@@ -211,34 +172,19 @@ inline void custom_mm_m8_moves(const std::uint32_t j, const std::uint32_t tile_r
     TT_MOVD2B(0, 16 * j + 12, j == 1 && pair_step ? ADDR_MOD_4 : ADDR_MOD_7, p_movd2a::MOV_4_ROWS, j * tile_rows + 28);
 }
 
-template <bool split_acc, bool dense_packing, bool group_finalize>
+template <bool split_acc>
 inline void custom_mm_configure_mop(const std::uint32_t operandB_face_r_dim, const std::uint32_t ct_dim)
 {
-    const bool m1_group                = custom_mm_m1_group<group_finalize>(operandB_face_r_dim, ct_dim);
-    const bool m8_group                = custom_mm_m8_group<group_finalize>(operandB_face_r_dim, ct_dim);
-    const std::uint32_t replay_buf_len = m1_group ? custom_mm_m1_replay_len : custom_mm_tile_replay_len(operandB_face_r_dim);
-    constexpr std::uint32_t tile_rows  = dense_packing ? 32 : 64;
+    const std::uint32_t replay_buf_len = operandB_face_r_dim == 8 ? 11 : 9;
 
     load_replay_buf(
         ckernel::math::replay_buf_offset,
         replay_buf_len,
-        [operandB_face_r_dim, ct_dim, m1_group, m8_group]
+        [operandB_face_r_dim]
         {
             TTI_MVMUL(p_setrwc::CLR_NONE, 0, ADDR_MOD_0, 0); // F0 @ F0 => 0
             TTI_MVMUL(p_setrwc::CLR_NONE, 0, ADDR_MOD_1, 0); // F0 @ F1 (F2 if transpose) => 16
             TTI_MVMUL(p_setrwc::CLR_NONE, 0, ADDR_MOD_0, 0); // F1 @ F2 (F1 if transpose) => 0 (8 if split_acc)
-
-            if (m1_group)
-            {
-                custom_mm_record_m1_finalize();
-                return;
-            }
-            if (m8_group)
-            {
-                custom_mm_m8_moves(0 /* j */, tile_rows, ct_dim > 2 /* pair_step */);
-                custom_mm_m8_moves(1 /* j */, tile_rows, ct_dim > 2 /* pair_step */);
-                return;
-            }
 
             // Finalization phase
             TTI_MVMUL(p_setrwc::CLR_NONE, 0, ADDR_MOD_4, 0); // F1 @ F3 => 16 (24 if split_acc) (clear none,
@@ -293,6 +239,92 @@ inline void custom_mm_configure_mop(const std::uint32_t operandB_face_r_dim, con
     tmp.program();
 }
 
+// Address modes the grouped finalize replaces: 4, 5 and 6 serve only the per-tile finalize
+template <bool dense_packing>
+inline void custom_mm_configure_group_addrmod(const bool m1_group, const bool m8_group)
+{
+    constexpr std::uint8_t ADDR_MOD_2_DEST_INCR = dense_packing ? 32 : 64;
+
+    if (m1_group)
+    {
+        addr_mod_t {
+            .srca = {.incr = 0, .clr = 0, .cr = 0},
+            .srcb = {.incr = 1, .clr = 0, .cr = 0},
+            .dest = {.incr = 16, .clr = 0, .cr = 0},
+        }
+            .set(ADDR_MOD_5); // M 1 finalize: next SrcB row, from a tile's face 0 to its face 1
+
+        addr_mod_t {
+            .srca = {.incr = 0, .clr = 0, .cr = 0},
+            .srcb = {.incr = 1, .clr = 0, .cr = 0},
+            .dest = {.incr = ADDR_MOD_2_DEST_INCR - 16, .clr = 0, .cr = 0},
+        }
+            .set(ADDR_MOD_6); // M 1 finalize: next SrcB row, from a tile's face 1 to the next tile
+    }
+
+    if (m8_group)
+    {
+        addr_mod_t {
+            .srca = {.incr = 0, .clr = 0, .cr = 0},
+            .srcb = {.incr = 8, .clr = 0, .cr = 0},
+            .dest = {.incr = 16, .clr = 0, .cr = 0},
+        }
+            .set(ADDR_MOD_5); // M 8 finalize: next 8 SrcB rows, from a tile's face 0 to its face 1
+
+        addr_mod_t {
+            .srca = {.incr = 0, .clr = 0, .cr = 0},
+            .srcb = {.incr = 8, .clr = 0, .cr = 0},
+            .dest = {.incr = ADDR_MOD_2_DEST_INCR - 16, .clr = 0, .cr = 0},
+        }
+            .set(ADDR_MOD_6); // M 8 finalize: next 8 SrcB rows, from a tile's face 1 to the next tile
+
+        addr_mod_t {
+            .srca = {.incr = 0, .clr = 0, .cr = 0},
+            .srcb = {.incr = 32, .clr = 0, .cr = 0},
+            .dest = {.incr = 2 * ADDR_MOD_2_DEST_INCR, .clr = 0, .cr = 0},
+        }
+            .set(ADDR_MOD_4); // M 8 finalize: past a pair of tiles in DEST and SrcB
+    }
+}
+
+template <bool split_acc, bool dense_packing>
+inline void custom_mm_configure_group_mop(const std::uint32_t operandB_face_r_dim, const std::uint32_t ct_dim)
+{
+    const bool m1_group = custom_mm_m1_group(operandB_face_r_dim, ct_dim);
+    if (!m1_group && !custom_mm_m8_group(operandB_face_r_dim, ct_dim))
+    {
+        custom_mm_configure_mop<split_acc>(operandB_face_r_dim, ct_dim);
+        return;
+    }
+    constexpr std::uint32_t tile_rows = dense_packing ? 32 : 64;
+
+    load_replay_buf(
+        ckernel::math::replay_buf_offset,
+        m1_group ? custom_mm_m1_replay_len : custom_mm_m8_replay_len,
+        [ct_dim, m1_group]
+        {
+            TTI_MVMUL(p_setrwc::CLR_NONE, 0, ADDR_MOD_0, 0);
+            TTI_MVMUL(p_setrwc::CLR_NONE, 0, ADDR_MOD_1, 0);
+            TTI_MVMUL(p_setrwc::CLR_NONE, 0, ADDR_MOD_0, 0);
+            if (m1_group)
+            {
+                custom_mm_record_m1_finalize();
+                return;
+            }
+            custom_mm_m8_moves(0 /* j */, tile_rows, ct_dim > 2 /* pair_step */);
+            custom_mm_m8_moves(1 /* j */, tile_rows, ct_dim > 2 /* pair_step */);
+        });
+
+    // The per-tile program's MOP: its first three entries are the same MVMULs
+    const std::uint32_t mvmul_base      = lltt::replay_insn(ckernel::math::replay_buf_offset + 0, 3);
+    const std::uint32_t mvmul_end_tile  = TT_OP_MVMUL(p_setrwc::CLR_A, 0, ADDR_MOD_2, 0);
+    const std::uint32_t mvmul_end_block = TT_OP_MVMUL(p_setrwc::CLR_AB, 0, ADDR_MOD_3, 0);
+    ckernel_template tmp                = ckernel_template(1, ct_dim, mvmul_base, mvmul_end_tile);
+    tmp.set_last_inner_loop_instr(mvmul_end_block);
+    tmp.set_last_outer_loop_instr(mvmul_end_block);
+    tmp.program();
+}
+
 /**
  * @brief Configure the math thread for custom_mm: programs address mods and the MVMUL MOP.
  *
@@ -310,15 +342,22 @@ inline void custom_mm_configure_mop(const std::uint32_t operandB_face_r_dim, con
 template <bool transpose = false, bool split_acc = false, bool dense_packing = false, bool group_finalize = true>
 inline void _llk_math_custom_mm_init_(const std::uint32_t operandB_face_r_dim, const std::uint32_t ct_dim = 1)
 {
-    custom_mm_configure_addrmod<transpose, split_acc, dense_packing>(
-        custom_mm_m1_group<group_finalize>(operandB_face_r_dim, ct_dim), custom_mm_m8_group<group_finalize>(operandB_face_r_dim, ct_dim));
-    custom_mm_configure_mop<split_acc, dense_packing, group_finalize>(operandB_face_r_dim, ct_dim);
+    custom_mm_configure_addrmod<transpose, split_acc, dense_packing>();
+    if constexpr (group_finalize)
+    {
+        custom_mm_configure_group_addrmod<dense_packing>(custom_mm_m1_group(operandB_face_r_dim, ct_dim), custom_mm_m8_group(operandB_face_r_dim, ct_dim));
+        custom_mm_configure_group_mop<split_acc, dense_packing>(operandB_face_r_dim, ct_dim);
+    }
+    else
+    {
+        custom_mm_configure_mop<split_acc>(operandB_face_r_dim, ct_dim);
+    }
 
     math::reset_counters(p_setrwc::SET_ABD_F);
-    LLK_ASSERT_BLOCK(custom_mm_init_finalize_mode = custom_mm_finalize_mode<group_finalize>(operandB_face_r_dim, ct_dim));
 
     // A preceding datacopy leaves the Src zero flag at keep; MVMUL needs the operand-driven value.
     math::_configure_default_zero_flag_state_();
+    LLK_ASSERT_BLOCK(custom_mm_init_finalize_mode = custom_mm_finalize_mode<group_finalize>(operandB_face_r_dim, ct_dim));
 }
 
 inline void custom_mm_group_finalize_start_(const std::uint32_t ct_dim)
@@ -395,7 +434,7 @@ inline void _llk_math_custom_mm_(
         "custom_mm: Src zero-substitution flag does not hold the operand-driven value; an op between the init and "
         "this call left it at keep, so denormal Src operands would not be flushed");
 
-    const std::uint32_t replay_buf_len = custom_mm_tile_replay_len(operandB_face_r_dim);
+    const std::uint32_t replay_buf_len = operandB_face_r_dim == 8 ? 11 : 9;
     math::set_dst_write_addr<DstTileShape::Tile32x32, UnpackDestination::SrcRegs>(dst_index);
 
     // Run mop kt_dim - 1 times, the last inner dim is handled separately to choose whether to run finalization or not
@@ -409,17 +448,20 @@ inline void _llk_math_custom_mm_(
         LLK_ASSERT(
             custom_mm_finalize_mode<group_finalize>(operandB_face_r_dim, ct_dim) == custom_mm_init_finalize_mode,
             "custom_mm: the call's ct_dim selects another finalize than its init recorded");
-        if (custom_mm_m1_group<group_finalize>(operandB_face_r_dim, ct_dim))
+        if constexpr (group_finalize)
         {
-            custom_mm_group_finalize_start_(ct_dim);
-            custom_mm_finalize_m1_(ct_dim);
-            return;
-        }
-        if (custom_mm_m8_group<group_finalize>(operandB_face_r_dim, ct_dim))
-        {
-            custom_mm_group_finalize_start_(ct_dim);
-            custom_mm_finalize_m8_(ct_dim);
-            return;
+            if (custom_mm_m1_group(operandB_face_r_dim, ct_dim))
+            {
+                custom_mm_group_finalize_start_(ct_dim);
+                custom_mm_finalize_m1_(ct_dim);
+                return;
+            }
+            if (custom_mm_m8_group(operandB_face_r_dim, ct_dim))
+            {
+                custom_mm_group_finalize_start_(ct_dim);
+                custom_mm_finalize_m8_(ct_dim);
+                return;
+            }
         }
         // Run the full replay ct_dim - 1 times as it has the full finalization sequence for cases where SrcB is reused
         for (std::uint32_t i = 0; i < ct_dim - 1; i++)
