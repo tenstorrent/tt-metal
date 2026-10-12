@@ -187,3 +187,21 @@ Next (tunnel up): `ssh exabox-login 'df -h /data; curl -sI https://huggingface.c
 - Next: check JOB_RC=0 and `squeue -u smarton` empty. Then write the device sbatch (run409b.sh as template; model root
   t417/models/MiniMax-H3/FL2VA; drop the local-disk check, /data is NFS; timeout --foreground -k 10; full 4x8 mesh),
   first a cache-fill/JIT job, then one A/B pair per job per seed: (v1.0 dense, v1.0 VSA) and (v1.0 dense, SLA LoRA + sla 0.85).
+
+## t452 run 1696 (2026-10-12 09:20 PDT) — continue #417 on exabox: device lint refuses exabox
+- Branch ttp/t452-... reset to t417 head 197ba8066f6 (t452 had no own commits). `ttp push --own` refuses to publish
+  ttp/t417-... from this task ("publishes only this task's own branch"), so the t417 commits are published as part of ttp/t452-....
+- Model root: t417/models/MiniMax-H3 (top level), not .../FL2VA. Its transformer/vae/text_encoder config.json md5s equal
+  blx01's /var/tmp/fasth3/models/MiniMax-H3 (#408 baseline); FL2VA/ has a different transformer config and video_vae/ instead of vae/.
+- Weight cache is adapter-independent (pipeline_minimax_h3_turbo.py: LoRA fused after load), so one dit cache serves dense, VSA and SLA arms.
+- Wrote tt-project/t417/run417.sh (Slurm job script from run409b.sh: arms dense / vsa<s> / sla<s> (SLA LoRA + MINIMAX_H3_VSA_MODE=sla) / fill
+  (CACHE_ONLY), per-arm timeout --foreground -k 10 270 s, 90 s no-progress watchdog, JOB_RC trap) and copied it plus plug/
+  (t286_skipvaewarm.py, t409_alarm.py from blx01) to exabox t417/.
+- device-lint.sh exabox-login refuses it: models, LoRAs and both caches are on /data (nfs4), and the lint requires local disk
+  for weights/caches (job 086 D-state hang on network fs). Dit nodes report TmpDisk=0; /data is the only space we have there, and
+  the 2 h idle rule puts each job on a different node, so per-node staging (~135 GB weights + ~150 GB cache) cannot fit a 600 s job.
+  No device job was submitted. Also: lint reports slurm-login-01 / at 87% (cap 85%).
+- Judgment: FastH3 device A/Bs cannot run on exabox under the current lint. Run them on blx01 (weights and caches local in
+  /var/tmp/fasth3; t409/b at 53f7b6b707 + uncommitted vsa host/kernel edits from #449). SLA code (04cbd225529, ff705742990) is
+  Python-only; the one C++ diff 53f7b6b707..1d8e15320e3 is the vsa compute kernel (JIT). blx01 needs its own tree for the SLA
+  code and the SLA LoRA (not gated; lightx2v) under /var/tmp/fasth3 (ionice -c3, --bwlimit, footprint <= 450 GB; / was 80%).
