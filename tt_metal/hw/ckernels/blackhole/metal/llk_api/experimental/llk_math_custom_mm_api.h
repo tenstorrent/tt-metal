@@ -22,7 +22,7 @@
  * Uses llk_math_custom_mm.h as the low-level implementation.
  *************************************************************************/
 
-template <bool transpose = false, bool split_acc = false, bool dense_packing = false>
+template <bool transpose = false, bool split_acc = false, bool dense_packing = false, bool group_finalize = true>
 inline void llk_math_custom_mm_init(
     const std::uint32_t operand0, const std::uint32_t operand1, const std::uint32_t ct_dim = 1) {
     SAN_HOOK(unsupported());
@@ -30,10 +30,10 @@ inline void llk_math_custom_mm_init(
     const std::uint32_t operandB_id = get_operand_id(operand0);
     const std::uint32_t operandB_face_r_dim = get_operand_face_r_dim(operandB_id);
 
-    _llk_math_custom_mm_init_<transpose, split_acc, dense_packing>(operandB_face_r_dim, ct_dim);
+    _llk_math_custom_mm_init_<transpose, split_acc, dense_packing, group_finalize>(operandB_face_r_dim, ct_dim);
 }
 
-template <bool finalize = true>
+template <bool finalize = true, bool group_finalize = true>
 inline void llk_math_custom_mm(
     const std::uint32_t operand0,
     const std::uint32_t operand1,
@@ -45,5 +45,5 @@ inline void llk_math_custom_mm(
     const std::uint32_t operandB_id = get_operand_id(operand0);
     const std::uint32_t operandB_face_r_dim = get_operand_face_r_dim(operandB_id);
 
-    _llk_math_custom_mm_<finalize>(operandB_face_r_dim, dst_index, kt_dim, ct_dim);
+    _llk_math_custom_mm_<finalize, group_finalize>(operandB_face_r_dim, dst_index, kt_dim, ct_dim);
 }

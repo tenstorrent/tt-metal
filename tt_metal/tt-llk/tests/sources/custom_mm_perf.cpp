@@ -3,7 +3,7 @@
 // SPDX-License-Identifier: Apache-2.0
 
 // Perf twin of sources/custom_mm_test.cpp: one custom_mm call per loop iteration, TILE_COUNT = kt x ct weight tiles.
-// SPLIT_ACC comes from perf_custom_mm.py (CUSTOM_MM_PERF_FLAGS).
+// SPLIT_ACC and GROUP_FINALIZE come from perf_custom_mm.py (CUSTOM_MM_PERF_FLAGS).
 
 #include <cstdint>
 
@@ -98,7 +98,7 @@ void run_kernel(RUNTIME_PARAMETERS params)
         START_PERF_MEASURE("INIT")
         _llk_math_pack_sync_init_<DstSync::SyncHalf, is_fp32_dest_acc_en>();
         _llk_math_hw_configure_<is_fp32_dest_acc_en>(formats.math, formats.math);
-        _llk_math_custom_mm_init_<false /* transpose */, SPLIT_ACC, DENSE_PACKING>(params.in0_face_r_dim, CT_DIM);
+        _llk_math_custom_mm_init_<false /* transpose */, SPLIT_ACC, DENSE_PACKING, GROUP_FINALIZE>(params.in0_face_r_dim, CT_DIM);
         PROFILER_SYNC();
     }
     {
@@ -114,7 +114,7 @@ void run_kernel(RUNTIME_PARAMETERS params)
         {
             for (std::uint32_t loop = 0; loop < LOOP_FACTOR; ++loop)
             {
-                _llk_math_custom_mm_<FINALIZE>(params.in0_face_r_dim, 0 /* dst_index */, KT_DIM, CT_DIM);
+                _llk_math_custom_mm_<FINALIZE, GROUP_FINALIZE>(params.in0_face_r_dim, 0 /* dst_index */, KT_DIM, CT_DIM);
             }
         }
         else
@@ -122,7 +122,7 @@ void run_kernel(RUNTIME_PARAMETERS params)
             for (std::uint32_t loop = 0; loop < LOOP_FACTOR; ++loop)
             {
                 _llk_math_wait_for_dest_available_<DstSync::SyncHalf>();
-                _llk_math_custom_mm_<FINALIZE>(params.in0_face_r_dim, 0 /* dst_index */, KT_DIM, CT_DIM);
+                _llk_math_custom_mm_<FINALIZE, GROUP_FINALIZE>(params.in0_face_r_dim, 0 /* dst_index */, KT_DIM, CT_DIM);
                 _llk_math_dest_section_done_<DstSync::SyncHalf, is_fp32_dest_acc_en>();
             }
         }

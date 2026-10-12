@@ -239,7 +239,9 @@ inline void _llk_unpack_AB_custom_mm_run_(
     const std::uint32_t block_increment,
     const std::uint32_t inner_increment,
     const std::uint32_t kt_dim,
-    const std::uint32_t ct_dim) {
+    const std::uint32_t ct_dim,
+    const bool wait_at_end)
+{
     // Program SrcB address once, its updated using counters for up to 256 kt_dim
     cfg[THCON_SEC1_REG3_Base_address_ADDR32] = address_b;
     // Program SrcA address once, its updated using CFGSHIFTMASK
@@ -280,8 +282,16 @@ inline void _llk_unpack_AB_custom_mm_run_(
 
     t6_semaphore_get(semaphore::UNPACK_SYNC);
 
-    // No second context poll here: the next call polls before it writes its configuration.
-    switch_config_context(unp_cfg_context);
+    if (wait_at_end)
+    {
+        wait_for_next_context(1);
+        reset_config_context();
+    }
+    else
+    {
+        // The next call polls before it writes its configuration, so its setup overlaps this call's end
+        switch_config_context(unp_cfg_context);
+    }
 
     // Reset counters at the end
     TTI_SETADCZW(0b011, 0, 0, 0, 0, 0b1111);
@@ -355,7 +365,10 @@ inline void _llk_unpack_AB_custom_mm_(
     }
     reset_config_context();
 
-    _llk_unpack_AB_custom_mm_run_(cfg, address_a, address_b, block_increment, inner_increment, kt_dim, ct_dim);
+    // A call of 8 or more output tiles over 16 or more K tiles gains nothing from the overlap and reads slower when the
+    // next call starts before it drains
+    const bool wait_at_end = !banked && ct_dim >= 8 && kt_dim >= 16;
+    _llk_unpack_AB_custom_mm_run_(cfg, address_a, address_b, block_increment, inner_increment, kt_dim, ct_dim, wait_at_end);
 }
 
 // key names the operands' formats, face geometry and transpose; a second bank that already holds it is not copied again.
