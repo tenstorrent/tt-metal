@@ -18,6 +18,8 @@
 # top-level `:` (as an inline `{"fabric_config": ...}` dict would), which corrupts the
 # rendered example. The decorators themselves are not rendered into the docs.
 
+import os
+
 import pytest
 import torch
 from loguru import logger
@@ -143,6 +145,8 @@ def test_mesh_partition(mesh_device):
 @pytest.mark.parametrize("device_params", FABRIC_1D, indirect=True)
 @pytest.mark.parametrize("mesh_device", [(1, 2)], indirect=True)
 def test_point_to_point(mesh_device):
+    if os.environ.get("ARCH_NAME", "") == "wormhole_b0":
+        pytest.skip("Skipped on wormhole_b0: TT_FATAL tensor not present on MeshCoordinate([0, 1]), refs #52555")
     torch_input = torch.randn([1, 1, 32, 256], dtype=torch.bfloat16)
     tt_input = ttnn.from_torch(
         torch_input,
