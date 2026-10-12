@@ -31,7 +31,9 @@ Against the targets (50% of speed of light, measured without vLLM, tables below)
     128 tokens the 32 prompts are one 4K-token prefill: 58 ms of collectives plus 31 ms of expert matmuls vs 66 ms.
 - DFlash speculative decoding reaches the batch-1 decode target at every input length over a 2048-token answer
   (188 / 200 / 194 / 202 / 160 vs 158 / 157 / 156 / 155 / 152 tok/s at 128 / 1K / 2K / 4K / 8K; over 1024 tokens at
-  1K-4K, 3% short at 128 and 8K).
+  1K-4K). Over 1024 tokens it is 3% short at 128 and 8K (154 vs 158, 147 vs 152), judged unhittable: the same
+  128-token prompt gives 154-173 tok/s between runs (near-tie token flips change acceptance), and the one larger
+  lever, a check attention in which the checked rows share one cache read, is worth about 3% at 8K only.
   Over only the first 256 tokens the draft accepts 1.15-1.5 tokens per round on real text: even at the cost of a
   1-row check every round (2.5 + 12.2 ms) that caps 1K / 2K / 8K at 152 / 153 / 146 tok/s, under target.
   About 7x faster than on 2026-10-09 (25 -> 171 tok/s on AIME24 and 21-25 -> 107-132 tok/s on real text over the
