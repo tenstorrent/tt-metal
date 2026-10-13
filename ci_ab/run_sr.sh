@@ -158,6 +158,13 @@ elif [[ $JOB == j4 ]]; then
   [[ $STOP == 0 ]] && ASSERTS=1 RTS=L1_TO_L1,MATH_ISOLATE EXTRA="FCOL_OUT=$SL/out/fcol_m" run slot fb_m fbits fb_m_1
   [[ $STOP == 0 ]] && ASSERTS=1 RTS=L1_TO_L1,MATH_ISOLATE EXTRA="FCOL_OUT=$SL/out/fcol_f2" run slot fb_f2 fbits fb_f2_1
   $PY $S/tools/fcol_cmp.py $SL/out/fcol_m $SL/out/fcol_f2 | tee $SL/out/fcol_cmp.txt
+elif [[ $JOB == j5 ]]; then
+  # Counters (--dump-perf-counters) of the float column SUM and AVG and the Int32 column SUM, MATH_ISOLATE: main against
+  # the final head f2, ABBA twice.
+  RTS=MATH_ISOLATE build slot main wc_m wc --dump-perf-counters; RTS=MATH_ISOLATE build slot f2 wc_f2 wc --dump-perf-counters
+  echo "== W: counters $(date -u +%T)"; n=0
+  w() { n=$((n+1)); [[ $STOP == 1 ]] && return; RTS=MATH_ISOLATE run slot wc_$1 wc w5_$1_$n --dump-perf-counters; }
+  for blk in 1 2; do w m; w f2; w f2; w m; done
 fi
 # loadable code only (.init, .text, .ldm_data), as the build path is in the ELF's other sections
 OBJ=$SF/compiler/bin/riscv-tt-elf-objcopy
