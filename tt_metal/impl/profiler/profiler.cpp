@@ -76,25 +76,6 @@ kernel_profiler::PacketTypes get_packet_type(uint32_t timer_id) {
         kernel_profiler::PROFILER_TIMER_PACKET_TYPE_MASK);
 }
 
-void add_program_sub_device_meta_data(
-    nlohmann::json& meta_data, ContextId context_id, tt::ChipId device_id, uint32_t runtime_id) {
-    const std::optional<tt::ProgramSubDeviceInfo> sub_device_info =
-        tt::GetProgramSubDevice(context_id, device_id, static_cast<uint16_t>(runtime_id));
-    if (!sub_device_info.has_value()) {
-        return;
-    }
-    meta_data["sub_device_id"] = sub_device_info->sub_device_id;
-    meta_data["sub_device_manager_id"] = sub_device_info->sub_device_manager_id;
-}
-
-void add_program_sub_device_meta_data(nlohmann::json& meta_data, ContextId context_id, uint32_t encoded_run_host_id) {
-    if (encoded_run_host_id == 0) {
-        return;
-    }
-    const auto decoded = detail::DecodePerDeviceProgramID(encoded_run_host_id);
-    add_program_sub_device_meta_data(meta_data, context_id, decoded.device_id, decoded.base_program_id);
-}
-
 #if defined(TRACY_ENABLE)
 NOCDebugEvent make_noc_debug_event(
     const CoreCoord& src_core,
@@ -1970,6 +1951,25 @@ std::pair<uint64_t, uint64_t> DeviceProfiler::getTraceIdAndCount(
     return {trace_id, trace_id_count};
 }
 
+std::optional<DeviceProfiler::ProgramSubDeviceMetaData> DeviceProfiler::getProgramSubDeviceMetaData(
+    uint32_t run_host_id) {
+    if (run_host_id == 0) {
+        return std::nullopt;
+    }
+    auto [it, inserted] = program_sub_device_meta_data_cache.try_emplace(run_host_id);
+    if (inserted) {
+        const auto decoded = detail::DecodePerDeviceProgramID(run_host_id);
+        const std::optional<tt::ProgramSubDeviceInfo> sub_device_info = tt::GetProgramSubDevice(
+            ctx_.get_context_id(), decoded.device_id, static_cast<uint16_t>(decoded.base_program_id));
+        if (sub_device_info.has_value()) {
+            it->second = ProgramSubDeviceMetaData{
+                .sub_device_id = sub_device_info->sub_device_id,
+                .sub_device_manager_id = sub_device_info->sub_device_manager_id};
+        }
+    }
+    return it->second;
+}
+
 void DeviceProfiler::readDeviceMarkerData(
     std::set<tracy::TTDeviceMarker>& device_markers,
     uint32_t run_host_id,
@@ -1984,7 +1984,10 @@ void DeviceProfiler::readDeviceMarkerData(
     ZoneScoped;
 
     nlohmann::json meta_data;
-    add_program_sub_device_meta_data(meta_data, ctx_.get_context_id(), run_host_id);
+    if (const auto sub_device_meta_data = getProgramSubDeviceMetaData(run_host_id)) {
+        meta_data["sub_device_id"] = sub_device_meta_data->sub_device_id;
+        meta_data["sub_device_manager_id"] = sub_device_meta_data->sub_device_manager_id;
+    }
     const tracy::MarkerDetails marker_details = getMarkerDetails(timer_id);
     const kernel_profiler::PacketTypes packet_type = get_packet_type(timer_id);
     const auto [trace_id, trace_id_count] = getTraceIdAndCount(run_host_id, device_trace_counter);
