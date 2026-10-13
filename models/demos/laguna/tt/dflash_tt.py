@@ -307,10 +307,12 @@ def dflash_bf16_policy() -> PrecisionPolicy:
         # Five (XS) or six (S) serial draft layers amplify projection error enough to change
         # proposal top-1 under HiFi2.  These matrices are BF16 and the proposal
         # block is only 16 rows, so use the accurate fp32-destination kernels.
-        fid_attn_qkv="HiFi4",
-        fid_attn_o="HiFi4",
+        # the projections at HiFi2 (TT_LAGUNA_DFLASH_DRAFT_FID=HiFi4 keeps HiFi4): half the math of HiFi4, same
+        # teacher-forced AIME24 acceptance (2.667-2.687 vs 2.677-2.687 drafts per round, first draft 0.869 both)
+        fid_attn_qkv=os.environ.get("TT_LAGUNA_DFLASH_DRAFT_FID", "HiFi2"),
+        fid_attn_o=os.environ.get("TT_LAGUNA_DFLASH_DRAFT_FID", "HiFi2"),
         fid_attn_gate="HiFi4",
-        fid_dense="HiFi4",
+        fid_dense=os.environ.get("TT_LAGUNA_DFLASH_DRAFT_FID", "HiFi2"),
         fid_shared="HiFi4",
         fid_router="HiFi4",
         fid_moe="HiFi4",
@@ -1168,7 +1170,8 @@ class DFlashTTCore:
         # few rows (a round's committed rows): the norms run width-sharded over 32 cores through the draft layer's
         # _rms (same HiFi4 / fp32 kernel config and epsilon; the interleaved norm used one core per 32-row tile row,
         # ~65 us each); more rows (a prefill window) keep the interleaved norm
-        if tokens <= TILE and float(layer0.cfg.eps) == float(self.config.rms_norm_eps):
+        sharded_rows = max(TILE, int(getattr(layer0, "_norm_max_rows", TILE)))  # batched DFlash: more rows
+        if tokens <= sharded_rows and float(layer0.cfg.eps) == float(self.config.rms_norm_eps):
             def norm(x, weight):
                 return layer0._rms(x, weight)
         else:
@@ -1206,7 +1209,9 @@ class DFlashTTCore:
                 f"DFlash final norm expects hidden width {self.config.hidden_size}, " f"got {hidden_states.shape[-1]}"
             )
         layer0 = next(iter(self.layers.values()))
-        if hidden_states.shape[-2] <= TILE and float(layer0.cfg.eps) == float(self.config.rms_norm_eps):
+        if hidden_states.shape[-2] <= max(TILE, int(getattr(layer0, "_norm_max_rows", TILE))) and float(
+            layer0.cfg.eps
+        ) == float(self.config.rms_norm_eps):
             # query rows: width-sharded over 32 cores (the draft layers' _rms; the interleaved norm runs on one core,
             # ~65 us)
             return layer0._rms(hidden_states, self.shared.final_norm)

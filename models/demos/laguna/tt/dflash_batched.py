@@ -22,6 +22,7 @@ layer (slot of position p: (p - base_u) % 544), exactly as the batch-1 ring (dfl
 from __future__ import annotations
 
 import math
+import os
 import time
 
 import torch
@@ -36,7 +37,9 @@ TILE = 32
 class BatchedDFlash:
     # >= 511 context rows + 33 uncommitted checked rows; two users' rings side by side make 2 * 560 + 32 = 1152 keys,
     # 9 chunks of 128 for the draft attention
-    RING = 560
+    # (the draft writes its 16 rows per user into the ring too: 576 >= 511 + 33 keeps every written slot outside the
+    # window, and 2 * 576 = 1152 keys per user pair are 9 chunks of 128)
+    RING = 576
 
     def __init__(self, gen, core, users: int = 32, drafts: int = 1):
         self.gen, self.core = gen, core
@@ -62,6 +65,12 @@ class BatchedDFlash:
         self.bonus = [0] * self.U
         self.stats = []
         self._traced = False
+        self._gqa = int(layer0.cfg.num_heads) // self.nkv
+        self._gqa_fold = os.environ.get("TT_LAGUNA_DFLASH_DRAFT_GQA_FOLD", "1") == "1" and self._gqa > 1
+        # the draft's U * 16-row norms width-sharded over the grid (the interleaved norm used 16 cores)
+        for layer in core.layers.values():
+            layer._norm_max_rows = int(os.environ.get("TT_LAGUNA_DFLASH_DRAFT_NORM_ROWS", str(self.U * self.block)))
+            layer._glu_fused_silu = os.environ.get("TT_LAGUNA_DFLASH_DRAFT_GLU_FUSED", "1") == "1"
 
     # ---- helpers ------------------------------------------------------------------------------------------------ #
     def _dev(self, t, layout=ttnn.ROW_MAJOR_LAYOUT, dtype=ttnn.bfloat16):
@@ -97,7 +106,7 @@ class BatchedDFlash:
             rings += list(self.rings[i])
             srcs += [k, v]
         d = self._dev(torch.as_tensor(dests, dtype=torch.int64).to(torch.int32).reshape(1, n), dtype=ttnn.uint32)
-        ring_write_batched(rings, srcs, d)
+        ring_write_batched(rings, srcs, d, rows_per_user=32)
 
     # ---- prefill ------------------------------------------------------------------------------------------------ #
     def prefill(self, prompts):
@@ -135,38 +144,43 @@ class BatchedDFlash:
     # ---- one round ---------------------------------------------------------------------------------------------- #
     def _draft_inputs(self):
         """Host inputs of a draft with two users per 32-row tile: token ids [1, U * 16] (pair c: user 2c's bonus +
-        15 mask tokens, then user 2c + 1's), (cos, sin) [P, 1, 32, hd] at each row's position, and the attention mask
-        [P, 1, 32, 2 * RING + 32] over the pair's ring slots then its 32 query rows: a row sees its own user's slots
-        in the causal sliding window and its own user's earlier query rows."""
+        15 mask tokens, then user 2c + 1's), (cos, sin) [P, 1, 32, hd] at each row's position, the ring slots
+        [1, U * 16] the rows' keys/values are written to (user * RING + slot), and the attention mask [P, 1, 32,
+        2 * RING] over the pair's ring slots: a row sees its own user's slots holding a position in its causal
+        sliding window -- committed context, and its own block's earlier rows (written there by the draft layers)."""
         U, P, R, B = self.U, self.P, self.RING, self.block
         ids = torch.full((1, U * B), self.mask_id, dtype=torch.int32)
         for u in range(U):
             ids[0, u * B] = self.bonus[u]
         p0 = torch.tensor([self.ctx_start[u] + self.ctx_rows[u] for u in range(U)], dtype=torch.int64)
+        base = torch.tensor(self.base, dtype=torch.int64)
         qi = torch.arange(B)
         qpos = p0[:, None] + qi[None, :]  # [U, 16]
         cos, sin = self._rope_rows(qpos.reshape(-1))
-        pos = self.slot_pos[:, None, :]  # [U, 1, R]
+        slots = (qpos - base[:, None]) % R  # [U, 16]
+        dests = (torch.arange(U)[:, None] * R + slots).reshape(1, U * B).to(torch.int32)
+        pos = self.slot_pos.clone()
+        pos.scatter_(1, slots, qpos)  # the block's rows at their slots
+        pos = pos[:, None, :]  # [U, 1, R]
         start = torch.tensor(self.ctx_start, dtype=torch.int64)[:, None, None]
-        own = (pos >= start) & (pos < qpos[:, :, None]) & (pos >= qpos[:, :, None] - self.window)  # [U, 16, R]
-        q_own = (qi[None, :] <= qi[:, None]).expand(U, B, B)  # [U, 16, 16]
-        allowed = torch.zeros((P, 2, B, 2 * R + 2 * B), dtype=torch.bool)
+        q = qpos[:, :, None]
+        own = (pos >= start) & (pos <= q) & (pos >= q - self.window)  # [U, 16, R]
+        allowed = torch.zeros((P, 2, B, 2 * R), dtype=torch.bool)
         own = own.reshape(P, 2, B, R)
-        q_own = q_own.reshape(P, 2, B, B)
         allowed[:, 0, :, :R] = own[:, 0]
-        allowed[:, 1, :, R : 2 * R] = own[:, 1]
-        allowed[:, 0, :, 2 * R : 2 * R + B] = q_own[:, 0]
-        allowed[:, 1, :, 2 * R + B :] = q_own[:, 1]
-        mask = torch.where(allowed, 0.0, -1e9).to(torch.bfloat16).reshape(P, 1, 2 * B, 2 * R + 2 * B)
-        return (ids, cos.reshape(P, 1, 2 * B, self.hd), sin.reshape(P, 1, 2 * B, self.hd), mask)
+        allowed[:, 1, :, R:] = own[:, 1]
+        mask = torch.where(allowed, 0.0, -1e9).to(torch.bfloat16).reshape(P, 1, 2 * B, 2 * R)
+        return (ids, cos.reshape(P, 1, 2 * B, self.hd), sin.reshape(P, 1, 2 * B, self.hd), mask, dests)
 
-    def _draft_body(self, ids_tt, rope, mask_tt, bufs):
+    def _draft_body(self, ids_tt, rope, mask_tt, bufs, dests_tt=None):
         """Device work of a draft (traceable): proposal blocks through the draft layers, rows 1..K of each block
         through the target LM head, greedy picks into ``bufs`` (one [1, 1, 1, 32] uint32 per 32 picks)."""
         m = self.model
+        if self._gqa_fold:  # the 32-row mask repeated once per query head of a KV group (dflash_query_forward_batched)
+            mask_tt = ttnn.repeat(mask_tt, ttnn.Shape((1, 1, self._gqa, 1)))
         x = m.embed_prefill(ids_tt)  # [1, U * 16, H]: two users per 32-row tile
         for i in sorted(self.core.layers):
-            x = self.core.layers[i].dflash_query_forward_batched(x, *self.rings[i], rope, mask_tt)
+            x = self.core.layers[i].dflash_query_forward_batched(x, *self.rings[i], rope, mask_tt, dests_tt)
         x = self.core.apply_final_norm(x)
         H, B, K = self.gen.hidden, self.block, self.K
         xp = ttnn.reshape(x, (self.P, TILE, H))
@@ -198,7 +212,7 @@ class BatchedDFlash:
             k, v = layer.dflash_kv_rows(x, rope_rows)
             rings += list(self.rings[i])
             srcs += [k, v]
-        ring_write_batched(rings, srcs, dests_tt)
+        ring_write_batched(rings, srcs, dests_tt, rows_per_user=self.K + 1)
 
     def _verify_host(self, drafts):
         """Host inputs of a verify: tokens [1, T], positions [T], page-table rows [T, blocks], ring rope (cos, sin)
@@ -226,9 +240,10 @@ class BatchedDFlash:
         U, K = self.U, self.K
         T = U * (K + 1)
         g = self.gen
-        ids, cos, sin, mask = self._draft_inputs()
+        ids, cos, sin, mask, dd = self._draft_inputs()
         self._d_in = (self._dev(ids, dtype=ttnn.uint32), self._dev(cos, ttnn.TILE_LAYOUT),
-                      self._dev(sin, ttnn.TILE_LAYOUT), self._dev(mask, ttnn.TILE_LAYOUT))  # fmt: skip
+                      self._dev(sin, ttnn.TILE_LAYOUT), self._dev(mask, ttnn.TILE_LAYOUT),
+                      self._dev(dd, dtype=ttnn.uint32))  # fmt: skip
         self._d_out = [g._rep(torch.zeros([1, 1, 1, TILE], dtype=torch.int32), ttnn.uint32) for _ in range(U * K // TILE)]
         toks, pos, pt_rows, rc, rs, dests = self._verify_host([[0] * K for _ in range(U)])
         self._v_in = (g._rep(toks, ttnn.uint32), g._rep(pos, ttnn.int32), g._rep(pos.reshape(1, T), ttnn.uint32),
@@ -241,8 +256,8 @@ class BatchedDFlash:
         ttnn.copy_host_to_device_tensor(self._host(skip, ttnn.uint32), self._v_in[6])
 
         def draft():
-            ids_tt, c, s_, mk = self._d_in
-            self._draft_body(ids_tt, (c, s_), mk, self._d_out)
+            ids_tt, c, s_, mk, dd_tt = self._d_in
+            self._draft_body(ids_tt, (c, s_), mk, self._d_out, dd_tt)
 
         def verify():
             t, p, r, pt, c, s_, d = self._v_in
@@ -272,12 +287,13 @@ class BatchedDFlash:
 
     def draft(self):
         """U x K draft tokens (host lists)."""
-        ids, cos, sin, mask = self._draft_inputs()
+        ids, cos, sin, mask, dd = self._draft_inputs()
         if self._traced:
             for dst, (t, dt, lay) in zip(self._d_in, ((ids, ttnn.uint32, ttnn.ROW_MAJOR_LAYOUT),
                                                       (cos, ttnn.bfloat16, ttnn.TILE_LAYOUT),
                                                       (sin, ttnn.bfloat16, ttnn.TILE_LAYOUT),
-                                                      (mask, ttnn.bfloat16, ttnn.TILE_LAYOUT))):  # fmt: skip
+                                                      (mask, ttnn.bfloat16, ttnn.TILE_LAYOUT),
+                                                      (dd, ttnn.uint32, ttnn.ROW_MAJOR_LAYOUT))):  # fmt: skip
                 ttnn.copy_host_to_device_tensor(self._host(t, dt, lay), dst)
             ttnn.execute_trace(self.mesh, self._tid_d, cq_id=0, blocking=False)
             picks = self._read(self._d_out, self.U * self.K)
@@ -286,7 +302,7 @@ class BatchedDFlash:
                     for _ in range(self.U * self.K // TILE)]  # fmt: skip
             self._draft_body(self._dev(ids, dtype=ttnn.uint32),
                              (self._dev(cos, ttnn.TILE_LAYOUT), self._dev(sin, ttnn.TILE_LAYOUT)),
-                             self._dev(mask, ttnn.TILE_LAYOUT), bufs)  # fmt: skip
+                             self._dev(mask, ttnn.TILE_LAYOUT), bufs, self._dev(dd, dtype=ttnn.uint32))  # fmt: skip
             picks = self._read(bufs, self.U * self.K)
         return [picks[u * self.K : (u + 1) * self.K] for u in range(self.U)]
 

@@ -1674,7 +1674,10 @@ class MultichipDecoder(OptimizedDecoder):
         shp = list(gu.shape)
         g = ttnn.slice(gu, [0] * len(shp), shp[:-1] + [I])
         u = ttnn.slice(gu, [0] * (len(shp) - 1) + [I], shp[:-1] + [2 * I])
-        gg = ttnn.mul(ttnn.silu(g), u)
+        if getattr(self, "_glu_fused_silu", False):  # the batched DFlash draft: silu as the multiply's lhs activation
+            gg = ttnn.mul(g, u, input_tensor_a_activations=[ttnn.UnaryOpType.SILU])
+        else:
+            gg = ttnn.mul(ttnn.silu(g), u)
         return self._prefill_linear(gg, w[dk], ck)
 
     # ---- dense/shared MLP: gate/up column, down row -> caller reduces ------ #
@@ -1910,12 +1913,14 @@ class MultichipDecoder(OptimizedDecoder):
         v = ttnn.concat([v_ctx, v], dim=2)
         return self._dflash_query_tail(x_q, ln_q, q, k, v, mask)
 
-    def dflash_query_forward_batched(self, x_q, k_ring, v_ring, rope_q, mask):
+    def dflash_query_forward_batched(self, x_q, k_ring, v_ring, rope_q, mask, ring_dests=None):
         """dflash_query_forward_cached for U users at once: x_q [1, U * 32, H] (user u's 32 query rows -- its 16
         proposal rows, then padding -- at rows u * 32 ..); k_ring / v_ring [U, nkv, RING, hd] the users' context
         rings; rope_q (cos, sin) [U, 1, 32, hd] at each user's query positions; mask [U, 1, 32, RING + 32] over the
         user's ring slots then its 32 query rows. Matmuls, gate, O projection, all-reduce and MLP run once over all
-        U * 32 rows; attention is batched over users (each user's queries see only its own ring and rows)."""
+        U * 32 rows; attention is batched over users (each user's queries see only its own ring and rows).
+        ring_dests (uint32 [1, U * 32]): write the rows' keys/values into the rings at these slots (ring_write_batched)
+        and attend over the rings alone (mask [U, 1, 32, RING] covering the rows' own slots)."""
         cfg = self.cfg
         U = int(k_ring.shape[0])
         T = U * TILE
@@ -1925,23 +1930,46 @@ class MultichipDecoder(OptimizedDecoder):
             ttnn.reshape(qkv, (U, 1, TILE, self.meta["qkv_w"])), num_heads=cfg.num_heads,
             num_kv_heads=cfg.num_kv_heads, transpose_k_heads=False, memory_config=ttnn.DRAM_MEMORY_CONFIG,
         )  # fmt: skip
-        q = self._apply_rope(self._per_head_norm(q, self.w["q_norm"]), *rope_q)
+        # the attention scale folded into a pre-scaled copy of the q-norm weight (made at the first, eager, call):
+        # with scale 1 the SDPA op does not multiply the whole mask by 1 / scale on every call
+        if "q_norm_scaled" not in self.w:
+            self.w["q_norm_scaled"] = ttnn.multiply(self.w["q_norm"], float(cfg.scaling))
+        q = self._apply_rope(self._per_head_norm(q, self.w["q_norm_scaled"]), *rope_q)
         k = self._apply_rope(self._per_head_norm(k, self.w["k_norm"]), *rope_q)
-        k = ttnn.concat([k_ring, k], dim=2)
-        v = ttnn.concat([v_ring, v], dim=2)
+        if ring_dests is not None:
+            # the 32 rows' keys/values written into the rings at their positions' slots (slots whose old positions
+            # are outside every window); attention reads the rings as they are (no ring + rows concat per layer)
+            from .ring_write import ring_write_batched
+
+            ring_write_batched([k_ring, v_ring], [k, v], ring_dests, rows_per_user=16)
+            k, v = k_ring, v_ring
+        else:
+            k = ttnn.concat([k_ring, k], dim=2)
+            v = ttnn.concat([v_ring, v], dim=2)
         S = int(k.shape[-2])
         kc = next(c for c in (128, 64, 32) if S % c == 0)
-        if getattr(self, "_dflash_q_pc", {}).get(kc) is None:
+        # GQA fold: the num_heads / nkv query heads sharing a KV head as one block of query rows ([U, nkv, G * 32, hd],
+        # the same memory: heads are consecutive per KV head), so each KV head's keys/values are read once per query
+        # chunk instead of once per query head; mask: [U, 1, G * 32, S] (the 32-row mask repeated G times)
+        G = cfg.num_heads // cfg.num_kv_heads
+        fold = int(mask.shape[-2]) == G * TILE
+        qc = int(os.environ.get("TT_LAGUNA_DFLASH_DRAFT_QC", str(min(G * TILE, 96)))) if fold else TILE
+        key = (qc, kc)
+        if getattr(self, "_dflash_q_pc", {}).get(key) is None:
             grid = self.device.compute_with_storage_grid_size()
-            self.__dict__.setdefault("_dflash_q_pc", {})[kc] = ttnn.SDPAProgramConfig(
-                compute_with_storage_grid_size=ttnn.CoreCoord(grid.x, grid.y), q_chunk_size=TILE, k_chunk_size=kc,
+            self.__dict__.setdefault("_dflash_q_pc", {})[key] = ttnn.SDPAProgramConfig(
+                compute_with_storage_grid_size=ttnn.CoreCoord(grid.x, grid.y), q_chunk_size=qc, k_chunk_size=kc,
                 exp_approx_mode=False,
             )  # fmt: skip
         sdpa_ck = getattr(self, "_sdpa_compute_sliding", self._sdpa_compute) if cfg.is_sliding else self._sdpa_compute
+        if fold:
+            q = ttnn.reshape(q, (U, cfg.num_kv_heads, G * TILE, cfg.head_dim))
         attn = ttnn.transformer.scaled_dot_product_attention(
-            q, k, v, is_causal=False, attn_mask=mask, scale=cfg.scaling, program_config=self._dflash_q_pc[kc],
+            q, k, v, is_causal=False, attn_mask=mask, scale=1.0, program_config=self._dflash_q_pc[key],
             compute_kernel_config=sdpa_ck,
         )  # fmt: skip
+        if fold:
+            attn = ttnn.reshape(attn, (U, cfg.num_heads, TILE, cfg.head_dim))
         attn = ttnn.experimental.nlp_concat_heads(attn, memory_config=ttnn.DRAM_MEMORY_CONFIG)  # [U, 1, 32, nh * hd]
         attn = ttnn.reshape(attn, (1, T, cfg.num_heads * cfg.head_dim))
         g = ttnn.linear(ln_q, self.w["wg"], compute_kernel_config=self._ck_gate)

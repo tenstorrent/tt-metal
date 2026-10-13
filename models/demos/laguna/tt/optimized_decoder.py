@@ -827,7 +827,7 @@ class OptimizedDecoder(LightweightModule):
         # Also the local rows of a sequence-parallel prefill ([1, seq / D, H], 3D) up to _SHARDED_NORM_MAX_ROWS.
         rows = x.shape[-2]
         lead = math.prod(list(x.shape)[:-2])
-        max_rows = 128 if out_cores else _SHARDED_NORM_MAX_ROWS
+        max_rows = 128 if out_cores else getattr(self, "_norm_max_rows", _SHARDED_NORM_MAX_ROWS)
         if lead == 1 and len(x.shape) in (3, 4) and rows <= max_rows and x.layout == ttnn.TILE_LAYOUT:
             shape3 = x.shape if len(x.shape) == 3 else None
             if shape3 is not None:

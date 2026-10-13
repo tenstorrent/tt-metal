@@ -51,27 +51,35 @@ def ring_write(rings, srcs, slots, written):
                                                                             cbs=[cb(0, 2048, 2), cb(1, 128, 1)]))  # fmt: skip
 
 
-def ring_write_batched(rings, srcs, dests):
-    """Batched rings: rings [U, nkv, RING, hd], srcs [1, nkv, T, hd] (T a multiple of 32, at most 128), both bf16 TILE
-    DRAM; dests: uint32 [1, T] row-major device tensor, dests[r] = user * RING + slot for row r (0xFFFFFFFF: skip).
-    One core per (ring, kv head, head_dim tile); see kernels/ring_write_batched.cpp."""
+def ring_write_batched(rings, srcs, dests, rows_per_user=1):
+    """Batched rings: rings [U, nkv, RING, hd], srcs [1, nkv, T, hd] or [T / 32, nkv, 32, hd] (T a multiple of 32, at
+    most 512), both bf16 TILE DRAM; dests: uint32 [1, T] row-major device tensor, dests[r] = user * RING + slot for
+    row r (0xFFFFFFFF: skip). One core per (ring, kv head, head_dim tile); see kernels/ring_write_batched.cpp."""
     assert len(rings) == len(srcs) and rings, (len(rings), len(srcs))
     device = rings[0].device()
     R = len(rings)
     nkv, ring_len, hd = rings[0].shape[1], rings[0].shape[2], rings[0].shape[3]
-    T = int(srcs[0].shape[2])
-    assert ring_len % 32 == 0 and hd % 32 == 0 and T % 32 == 0 and T <= 128, (ring_len, hd, T)
+    src_batched = int(srcs[0].shape[0]) > 1
+    T = int(srcs[0].shape[0]) * int(srcs[0].shape[2])
+    assert ring_len % 32 == 0 and hd % 32 == 0 and T % 32 == 0 and T <= 512, (ring_len, hd, T)
+    assert not src_batched or int(srcs[0].shape[2]) == 32, srcs[0].shape
     for t in list(rings) + list(srcs):
         assert t.dtype == ttnn.bfloat16 and t.layout == ttnn.TILE_LAYOUT and not t.is_sharded(), (t.dtype, t.layout)
     units = R * nkv * (hd // 32)
     gs = device.compute_with_storage_grid_size()
     assert units <= gs.x * gs.y, units
-    grid = ttnn.num_cores_to_corerangeset(units, gs, True)
+    # row groups (whole users each, so no two cores write one ring tile) over the rest of the grid
+    users = T // int(rows_per_user)
+    groups = max(1, min(users, (gs.x * gs.y) // units))
+    while users % groups:
+        groups -= 1
+    group_rows = T // groups
+    grid = ttnn.num_cores_to_corerangeset(units * groups, gs, True)
     k = ttnn.KernelDescriptor(
         kernel_source=str(_KDIR / "ring_write_batched.cpp"),
         source_type=ttnn.KernelDescriptor.SourceType.FILE_PATH,
         core_ranges=grid,
-        compile_time_args=[gs.x, R, nkv, hd // 32, ring_len, T]
+        compile_time_args=[gs.x, R, nkv, hd // 32, ring_len, T, int(src_batched), group_rows]
         + list(ttnn.TensorAccessorArgs(dests).get_compile_time_args())
         + list(ttnn.TensorAccessorArgs(srcs[0]).get_compile_time_args())
         + list(ttnn.TensorAccessorArgs(rings[0]).get_compile_time_args()),
@@ -89,4 +97,5 @@ def ring_write_batched(rings, srcs, dests):
         )
 
     ttnn.generic_op([dests] + list(srcs) + list(rings), ttnn.ProgramDescriptor(
-        kernels=[k], semaphores=[], cbs=[cb(0, 2048, T // 32 + 1, ttnn.bfloat16), cb(1, T * 4, 1, ttnn.uint32)]))  # fmt: skip
+        kernels=[k], semaphores=[], cbs=[cb(0, 2048, -(-group_rows // 32) + 2, ttnn.bfloat16),
+                                         cb(1, T * 4, 1, ttnn.uint32)]))  # fmt: skip
