@@ -6,10 +6,8 @@ from conftest import skip_for_wormhole
 from helpers.format_config import DataFormat, is_dest_acc_needed
 from helpers.llk_params import DestAccumulation, MathFidelity, PerfRunType, Transpose
 from helpers.matmul_sweep import (
-    DEST_HALF_BFP_PACK_HANG_REASON,
     PERF_RING_TILES,
     generate_tile_dims,
-    is_dest_half_bfp_pack_hang,
 )
 from helpers.param_config import input_output_formats, parametrize
 from helpers.perf.core import PerfConfig
@@ -65,9 +63,6 @@ def _ttsync_combos():
 def test_perf_matmul_unpack_ttsync(perf_report, combos, math_fidelity):
 
     formats, dest_acc, dest_sync, (matrix_a, matrix_b) = combos
-
-    if is_dest_half_bfp_pack_hang(dest_sync, dest_acc, formats):
-        pytest.skip(DEST_HALF_BFP_PACK_HANG_REASON)
 
     run_types = [
         PerfRunType.L1_TO_L1,
