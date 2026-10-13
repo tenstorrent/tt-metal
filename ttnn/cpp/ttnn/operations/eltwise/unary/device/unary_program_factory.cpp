@@ -721,6 +721,9 @@ ttnn::device_operation::ProgramArtifacts UnaryDeviceOperation::ProgramFactory::c
             })) {
             unary_defines["SFPU_START_AFTER_COPY"] = "1";
         }
+        if (!src_sharded) {
+            unary_defines["SFPU_SIGMOID_LITERAL_CONSTANTS"] = "1";
+        }
     }
 
     DataFormat dfb_data_format_for_input =

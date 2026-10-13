@@ -15,7 +15,7 @@ inline void calculate_silu() {
     // The exp's constants, loaded once and kept in LRegs for the whole loop (see _sfpu_sigmoid_prgm_); 1/ln2 is
     // Prgm1 from silu_init. x stays live across the sigmoid, so the fp32 arm has room for two of its
     // three: p1 stays a per-row literal.
-    HoistedIf<!is_fp32_dest_acc_en> c0 = EXP_21F_C0, c1 = EXP_21F_C1, c2 = EXP_21F_C2;
+    HoistedIf<sigmoid_registered_constants && !is_fp32_dest_acc_en> c0 = EXP_21F_C0, c1 = EXP_21F_C1, c2 = EXP_21F_C2;
     HoistedIf<is_fp32_dest_acc_en> neg_ln2_hi = EXP_FP32_NEG_LN2_HI, p0 = EXP_FP32_P0;
     constexpr float p1 = EXP_FP32_P1;
 #pragma GCC unroll 8
