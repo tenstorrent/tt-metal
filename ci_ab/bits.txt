@@ -1,0 +1,6 @@
+B0 all_bits.txt
+ID id_bits.txt
+IC id_bits.txt
+I0 id_bits.txt
+SM ss_bits.txt
+SN ss_bits.txt

@@ -1,0 +1,3 @@
+test_fl_bits.py::test_fl_bits[bf16_d16-identity]
+test_fl_bits.py::test_fl_bits[bf16_d32-identity]
+test_fl_bits.py::test_fl_bits[fp32_d32-identity]
