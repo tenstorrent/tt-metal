@@ -567,13 +567,18 @@ def test_bw_tensor_prefetcher_streaming(device, op_name, shape):
     indirect=True,
 )
 @pytest.mark.parametrize("op_name,shape", LLAMA_SHAPES)
-def test_bw_workercore_prefetcher(device, op_name, shape):
+@pytest.mark.parametrize("transport", ["gcb", "pipe"])
+def test_bw_workercore_prefetcher(device, op_name, shape, transport):
     """Worker-core prefetcher → discard receiver. Same shape as test_bw_dram_core:
     prefetcher enqueued ONCE outside the trace with `num_layers = trace_repeats + 1`,
     one warmup consumer call (drains 1 layer, primes the cached workload), then trace
     captures `trace_repeats` consumer ops (each drains one layer). Sub-device pins the
-    consumer to the GCB receivers to avoid dispatch-core collision. Sender/receiver
+    consumer to the receivers to avoid dispatch-core collision. Sender/receiver
     layout from `models/tt_transformers/tt/prefetcher/prefetcher_config.yaml`.
+
+    `transport` delivers through a GlobalCircularBuffer or through one worker-sender PrefetcherPipe
+    per sender, each one layer deep per receiver; both discard receivers wait and pop one page at a
+    time.
     """
     _apply_shape(shape)
     if device.dram_grid_size().x != 8:
@@ -626,9 +631,25 @@ def test_bw_workercore_prefetcher(device, op_name, shape):
     device.set_sub_device_stall_group([receiver_sub_device_id])
 
     # Worker prefetcher validates max_tensor_size <= gcb.size(); size GCB to one full
-    # per-receiver tensor (= pages_per_layer * page_size).
+    # per-receiver tensor (= pages_per_layer * page_size). The pipes' rings match it.
     gcb_size = pages_per_layer * page_size
-    gcb = ttnn.create_global_circular_buffer(device, sender_receiver_mapping, gcb_size)
+    if transport == "gcb":
+        gcb = ttnn.create_global_circular_buffer(device, sender_receiver_mapping, gcb_size)
+        target = dict(global_cb=gcb)
+    else:
+        pipe_space = ttnn.experimental.create_prefetcher_pipe_space(
+            device,
+            sender_cores=sender_core_range_set,
+            receiver_domain=receiver_core_range_set,
+            ring_size=gcb_size,
+            max_receivers_per_pipe=_NUM_RECV_PER_BANK,
+        )
+        target = dict(prefetcher_pipes=pipe_space.create_pipes(sender_receiver_mapping))
+    consume_layer = (
+        ttnn.experimental.test_dram_prefetcher_consumer
+        if transport == "gcb"
+        else ttnn.experimental.test_tensor_prefetcher_pipe_consumer
+    )
 
     tt_weight = _build_weight(device, num_senders)
 
@@ -652,21 +673,15 @@ def test_bw_workercore_prefetcher(device, op_name, shape):
     # Launch the prefetcher exactly once for the whole bench (mirrors the DRAM-core
     # path's `start_tensor_prefetcher` call). One op invocation pushes
     # num_prefetch_layers tensors; the consumer drains them in pages_per_layer chunks.
-    ttnn.dram_prefetcher(
-        [tt_weight, tt_addrs], num_layers=num_prefetch_layers, global_cb=gcb, enable_performance_mode=True
-    )
+    ttnn.dram_prefetcher([tt_weight, tt_addrs], num_layers=num_prefetch_layers, enable_performance_mode=True, **target)
 
     # Warmup: drain 1 layer's worth of pages (also primes the cached consumer workload).
-    ttnn.experimental.test_dram_prefetcher_consumer(
-        device, num_iters=pages_per_layer, page_size_bytes=page_size, global_cb=gcb
-    )
+    consume_layer(device, num_iters=pages_per_layer, page_size_bytes=page_size, **target)
     ttnn.synchronize_device(device)
 
     bench_trace = ttnn.begin_trace_capture(device, cq_id=0)
     for _ in range(trace_repeats):
-        ttnn.experimental.test_dram_prefetcher_consumer(
-            device, num_iters=pages_per_layer, page_size_bytes=page_size, global_cb=gcb
-        )
+        consume_layer(device, num_iters=pages_per_layer, page_size_bytes=page_size, **target)
     ttnn.end_trace_capture(device, bench_trace, cq_id=0)
 
     t0 = time.perf_counter()
@@ -680,7 +695,7 @@ def test_bw_workercore_prefetcher(device, op_name, shape):
     bw_total = _gbps(bytes_total, elapsed)
     bw_per_recv = bw_total / _RING_SIZE
     logger.info(
-        f"[workercore_bw][{op_name}] trace_elapsed={elapsed * 1e3:.2f}ms "
+        f"[workercore_bw][{transport}][{op_name}] trace_elapsed={elapsed * 1e3:.2f}ms "
         f"bytes_per_recv={bytes_per_recv / 1e6:.1f}MB total_bytes={bytes_total / 1e9:.2f}GB "
         f"aggregate_bw={bw_total:.2f} GB/s per_recv_bw={bw_per_recv:.3f} GB/s"
     )
