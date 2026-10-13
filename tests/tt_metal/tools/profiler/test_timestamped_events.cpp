@@ -58,12 +58,15 @@ void RunFillUpAllBuffers(
         all_cores,
         tt_metal::ComputeConfig{.compile_args = trisc_kernel_args, .defines = kernel_defines});
 
-    for (auto core : eth_cores) {
-        tt_metal::CreateKernel(
-            program,
-            "tests/tt_metal/tools/profiler/kernels/timestamped_events.cpp",
-            (CoreCoord){core.x, core.y},
-            tt_metal::EthernetConfig{.noc = tt_metal::NOC::NOC_0, .defines = kernel_defines});
+    // Fast dispatch to active ethernet has been removed; only program eth cores under slow dispatch
+    if (!fast_dispatch) {
+        for (auto core : eth_cores) {
+            tt_metal::CreateKernel(
+                program,
+                "tests/tt_metal/tools/profiler/kernels/timestamped_events.cpp",
+                (CoreCoord){core.x, core.y},
+                tt_metal::EthernetConfig{.noc = tt_metal::NOC::NOC_0, .defines = kernel_defines});
+        }
     }
 
     workload.add_program(device_range, std::move(program));
