@@ -384,7 +384,10 @@ def _run_moe_compute_single_card_test(
         torch_w1 = create_torch_w1(num_layers, experts_per_device, hidden_size, N)
         torch_w2 = create_torch_w2(num_layers, experts_per_device, N, hidden_size)
     else:
-        assert not has_bias and not compute_only
+        assert not has_bias and not compute_only, (
+            f"weight_initializer supports the fused path without bias only; got has_bias={has_bias}, "
+            f"compute_only={compute_only}"
+        )
         torch_w0, torch_w1, torch_w2 = weight_initializer(num_layers, experts_per_device, hidden_size, N)
 
     # Bias tensors (mirrors test_moe_compute_6U.run_moe_compute_test bias block).
@@ -525,11 +528,13 @@ def _run_moe_compute_single_card_test(
         # Exact BFP4 weights leave no quantization error: check the gain as well as the correlation.
         actual = ttnn.to_torch(ttnn.get_device_tensors(tt_combine_output)[0]).float()
         expected = combine_goldens[0][layer_id].float()
-        assert tuple(actual.shape) == tuple(expected.shape)
-        assert bool(torch.isfinite(actual).all())
+        assert tuple(actual.shape) == tuple(
+            expected.shape
+        ), f"output shape {tuple(actual.shape)}, golden {tuple(expected.shape)}"
+        assert bool(torch.isfinite(actual).all()), f"{int((~torch.isfinite(actual)).sum())} non-finite output values"
         relative_l2 = torch.linalg.vector_norm(actual - expected) / torch.linalg.vector_norm(expected).clamp_min(1e-8)
         logger.info(f"Structured weights combine relative L2: {float(relative_l2):.8f}")
-        assert relative_l2 < 0.03
+        assert relative_l2 < 0.03, f"relative L2 {float(relative_l2):.6f} >= 0.03"
 
     def deallocate_l1_moe_compute_outputs(output_tensors):
         # Slots 3 and 4 share a backing buffer; deallocating slot 4 releases the shared L1 output.
@@ -1600,7 +1605,7 @@ def _clamp_boundary_weights(layers, experts, hidden, intermediate):
     """Power-of-two sparse projections, exact in BFP4: every gate / up output is one scaled input and every
     down output one scaled activation. Inputs cover [-0.5, 0.5), so gate x32 and up x64 reach both clamp
     limits, and the negative gate branch stays unbounded."""
-    assert intermediate <= hidden
+    assert intermediate <= hidden, f"structured weights need intermediate <= hidden; got {intermediate} > {hidden}"
     gate = torch.zeros((layers, experts, hidden, intermediate), dtype=torch.bfloat16)
     up = torch.zeros_like(gate)
     down = torch.zeros((layers, experts, intermediate, hidden), dtype=torch.bfloat16)
@@ -1656,7 +1661,8 @@ def test_moe_compute_clamped_silu_rejects_invalid_limit(mesh_device, mesh_shape,
         _call_moe_compute_for_rejection(
             mesh_device, activation_type=MoEActivationFunction.CLAMPED_SILU, activation_limit=activation_limit
         )
-    assert mesh_device.num_program_cache_entries() == before
+    after = mesh_device.num_program_cache_entries()
+    assert after == before, f"a rejected call changed the program cache: {before} -> {after} entries"
 
 
 @pytest.mark.parametrize("mesh_shape, mesh_device", [((1, 1), (1, 1))], indirect=["mesh_device"])
@@ -1667,7 +1673,8 @@ def test_moe_compute_other_activations_reject_limit(mesh_device, mesh_shape, exp
     before = mesh_device.num_program_cache_entries()
     with expect_error(RuntimeError, "must be omitted for other activations"):
         _call_moe_compute_for_rejection(mesh_device, activation_type=activation_type, activation_limit=10.0)
-    assert mesh_device.num_program_cache_entries() == before
+    after = mesh_device.num_program_cache_entries()
+    assert after == before, f"a rejected call changed the program cache: {before} -> {after} entries"
 
 
 @pytest.mark.parametrize("device_params", [{"l1_small_size": 16384, "trace_region_size": 500000}], indirect=True)
