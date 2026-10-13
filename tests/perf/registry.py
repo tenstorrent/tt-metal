@@ -66,6 +66,11 @@ def load(path: Path = REGISTRY) -> dict[str, Suite]:
         kind = entry.get("kind", "google_benchmark")
         if kind not in KINDS:
             raise RegistryError(f"suite {name} has kind {kind!r}; expected one of {KINDS}")
+        repetitions = entry.get("repetitions")
+        counts = repetitions.values() if isinstance(repetitions, dict) else [repetitions]
+        counts = [c for c in counts if c is not None] + [entry.get("process_repetitions", 1)]
+        if any(int(c) < 1 for c in counts):
+            raise RegistryError(f"suite {name} must run at least one repetition")
         suites[name] = Suite(
             name=name,
             binary=REPO_ROOT / entry["binary"],
