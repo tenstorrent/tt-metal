@@ -54,27 +54,27 @@ _NETWORK_OPS = {"sort": "TopKLocalSort", "merge": "TopKMerge", "rebuild": "TopKR
 @dataclass
 class TOPK_NETWORK_PERF(TemplateParameter):
     # Field names double as perf-report columns (helpers/perf/wide_schema.py).
-    mathop: str = "TopKLocalSort"
-    topk_k: int = 32
-    topk_idir: int = 0
-    stable_sort: str = "No"
-    topk_fused_stable: bool = False
-    topk_rank_stamped: bool = False
-    topk_rebuild_skip_second: int = 1
+    topk_network_call: str = "TopKLocalSort"
+    topk_network_k: int = 32
+    topk_network_idir: int = 0
+    topk_network_stable: bool = False
+    topk_network_fused: bool = False
+    topk_network_rank_stamped: bool = False
+    topk_network_skip_second: int = 1
 
     def convert_to_cpp(self) -> str:
-        network_op = list(_NETWORK_OPS.values()).index(self.mathop)
-        logk = self.topk_k.bit_length() - 1
+        network_op = list(_NETWORK_OPS.values()).index(self.topk_network_call)
+        logk = self.topk_network_k.bit_length() - 1
         return "\n".join(
             [
                 f"constexpr int TOPK_NETWORK_OP = {network_op};",
-                f"constexpr int TOPK_K = {self.topk_k};",
+                f"constexpr int TOPK_K = {self.topk_network_k};",
                 f"constexpr int TOPK_LOGK = {logk};",
-                f"constexpr int TOPK_IDIR = {self.topk_idir};",
-                f"constexpr bool TOPK_STABLE_SORT = {str(self.stable_sort == 'Yes').lower()};",
-                f"constexpr bool TOPK_FUSED_STABLE = {str(self.topk_fused_stable).lower()};",
-                f"constexpr bool TOPK_RANK_STAMPED = {str(self.topk_rank_stamped).lower()};",
-                f"constexpr int TOPK_REBUILD_SKIP_SECOND = {self.topk_rebuild_skip_second};",
+                f"constexpr int TOPK_IDIR = {self.topk_network_idir};",
+                f"constexpr bool TOPK_STABLE_SORT = {str(self.topk_network_stable).lower()};",
+                f"constexpr bool TOPK_FUSED_STABLE = {str(self.topk_network_fused).lower()};",
+                f"constexpr bool TOPK_RANK_STAMPED = {str(self.topk_network_rank_stamped).lower()};",
+                f"constexpr int TOPK_REBUILD_SKIP_SECOND = {self.topk_network_skip_second};",
             ]
         )
 
@@ -101,12 +101,12 @@ def test_perf_topk_network(perf_report, formats, mode_dest, network, idir, loop_
         run_types=[PerfRunType.MATH_ISOLATE],
         templates=[
             TOPK_NETWORK_PERF(
-                mathop=mathop,
-                topk_k=K,
-                topk_idir=idir,
-                stable_sort="Yes" if sort_mode == "stable" else "No",
-                topk_fused_stable=sort_mode == "fused",
-                topk_rank_stamped=sort_mode == "rank_stamped",
+                topk_network_call=mathop,
+                topk_network_k=K,
+                topk_network_idir=idir,
+                topk_network_stable=sort_mode == "stable",
+                topk_network_fused=sort_mode == "fused",
+                topk_network_rank_stamped=sort_mode == "rank_stamped",
             ),
         ],
         runtimes=[
