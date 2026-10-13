@@ -388,6 +388,9 @@ EmuleProgramDescriptor build_emule_descriptor(Program& program, IDevice* device)
                 // num_rt needs no handling: crta_vararg_offset (below) already counts those words.
                 kd.bindings.tensor.push_back(TensorBinding{name, cta_off, addr_crta_off, serialize_llk_metadata(llk)});
             });
+            k.process_prefetcher_pipe_binding_handles([&kd](const std::string& name, uint8_t prefetcher_pipe_id) {
+                kd.bindings.prefetcher_pipe.push_back(PrefetcherPipeBinding{name, prefetcher_pipe_id});
+            });
             k.process_scratchpad_binding_handles([&kd](
                                                      const std::string& name,
                                                      uint32_t size_bytes,
