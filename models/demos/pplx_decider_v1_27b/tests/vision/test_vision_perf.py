@@ -64,6 +64,7 @@ def test_tower_latency(device):
     after = dram_view(device)
     weights_gib = after["allocated_gib"] - before["allocated_gib"]
     results = {
+        "vision_policy": tower.config.optimizations.policy.name,
         "load_s": load_s,
         "dram_empty": before,
         "dram_after_vision_weights": after,
@@ -141,6 +142,7 @@ def test_dram_with_text_model(device):
         ttnn.deallocate(t)
     result = {
         "text_policy": model.config.optimizations.policy.name,
+        "vision_policy": tower.config.optimizations.policy.name,
         "text_load_s": text_load_s,
         "text_weights_gib": steps["text_model_loaded"]["allocated_gib"] - steps["empty"]["allocated_gib"],
         "vision_weights_gib": steps["text_plus_vision_weights"]["allocated_gib"]

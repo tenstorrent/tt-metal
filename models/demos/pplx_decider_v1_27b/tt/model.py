@@ -329,10 +329,14 @@ class PplxDeciderModel(LightweightModule):
         vision: bool = False,
         max_seq_len: int = APP_MAX_LENGTH,
         max_batch_size: int = 1,
+        vision_precision=None,
     ) -> "PplxDeciderModel":
         """Build and upload every weight. ``layer_ids`` (default: all 64) allows a reduced stack for debugging.
 
         ``vision=True`` also loads the BF16 vision tower (``PplxVisionTower``, ~0.96 GiB) for image requests.
+        ``vision_precision`` (opt-in, vision tower only): ``"bfp8"`` stores its projection weights as
+        BFP8 (``tt/optimizations.py: VISION_PRECISIONS``); ``None`` reads ``$PPLX_DECIDER_VISION_PRECISION``,
+        else ``"bf16"``. It never changes the text model.
         ``max_seq_len`` (one of ``BUCKETS``) is the largest prefill bucket ``upload_tokens`` accepts; it
         does not change what is built. ``max_batch_size`` (1..max(BATCH_CAPS)) is the most requests a
         scheduler puts in one forward; it allocates nothing (a batch needs transient activations only).
@@ -441,7 +445,7 @@ class PplxDeciderModel(LightweightModule):
             from models.demos.pplx_decider_v1_27b.tt.vision.tower import PplxVisionTower
 
             start = time.perf_counter()
-            tower = PplxVisionTower.from_snapshot(mesh_device, reader)
+            tower = PplxVisionTower.from_snapshot(mesh_device, reader, policy=vision_precision)
             report.seconds["vision"] = time.perf_counter() - start
             full_config = json.loads((reader.path / "config.json").read_text())
             if full_config.get("image_token_id") != IMAGE_TOKEN_ID:

@@ -95,6 +95,9 @@ ttnn.close_device(device)
 - `max_seq_len`: the largest prefill bucket, one of 128, 1024, 2048, 4096 or 8192. Longer prompts are
   rejected, never truncated.
 - `vision=False` skips the vision tower: text only, 0.96 GiB less DRAM.
+- `vision_precision="bfp8"` (opt-in; default `"bf16"`, or set `$PPLX_DECIDER_VISION_PRECISION`) stores the
+  vision projection weights as BFP8: 0.44 GiB less DRAM, image decisions within the BF16 gates. It never
+  changes the text model. See [BFP8 vision weights](doc/vision/README.md#bfp8-vision-weights-opt-in).
 
 `predict_batch(rows)` takes dicts with `state`, `question` and optional `images`. It groups the rows by
 prefill bucket, so each row runs at its own bucket as in `predict`. It then splits each group into
@@ -263,6 +266,7 @@ from an earlier run, add `--compare $B/run/predictions_accuracy.jsonl`.
 | `PPLX_DECIDER_STAGE12A_DIR` | `$ARTIFACTS/vision` | vision test results |
 | `PPLX_DECIDER_VISION_PCC_LOG` | `$PPLX_DECIDER_STAGE12A_DIR/pcc_vision.jsonl` | vision PCC records |
 | `PPLX_DECIDER_PRECISION_CONFIG` | `doc/datatype_sweep/selected_precision_config.json` | precision policy JSON; candidates in `doc/datatype_sweep/candidates/` |
+| `PPLX_DECIDER_VISION_PRECISION` | `bf16` | vision weight precision when `vision_precision=` is not given: `bf16`, `bfp8` (opt-in), `bfp8_except_qkv`, `bfp8_except_merger` |
 
 All locations are defined in [`tt/paths.py`](tt/paths.py). Set a result directory per run when you do
 not want to overwrite an earlier run's JSON.

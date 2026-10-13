@@ -4,7 +4,9 @@
 
 The builders take the vision-local dict (prefix ``visual.`` stripped, keys exactly as in
 ``Qwen3_5VisionModel.state_dict()``) and check it strictly: every expected key present, nothing
-extra (333 tensors). All weights stay BF16 (person decision for the vision tower).
+extra (333 tensors). All weights are BF16 by default (person decision for the vision tower); the
+opt-in ``bfp8`` vision precisions store the projection weights (``_linear``, per role) as BFP8 and
+keep biases, LayerNorm weights and the host pos-embed table BF16.
 
 HF -> TT transforms, all here:
 - ``Linear`` weights [out, in] -> [in, out]; biases -> [1, out];

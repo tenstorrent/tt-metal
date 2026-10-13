@@ -303,11 +303,23 @@ class Optimizations:
 # ----------------------------------------------------------------------------------------------
 # Vision tower (stage 12A). Kept apart from ``ROLES`` / ``PrecisionPolicy`` so the text precision
 # JSONs (which must name every text role) are unchanged. Person decision 2026-10-09: the vision
-# tower is BF16 end to end (weights and activations), fp32 matmul accumulation, no BFP8/BFP4.
+# tower is BF16 end to end (weights and activations), fp32 matmul accumulation, HiFi4. That is the
+# default. Opt-in (doc/vision/README.md, "BFP8 vision weights"): BFP8 projection weights through
+# ``$PPLX_DECIDER_VISION_PRECISION`` or ``from_snapshot(vision_precision=...)``; activations, biases,
+# LayerNorm weights and the HiFi4 fidelity stay as in the BF16 path.
 # ----------------------------------------------------------------------------------------------
 
 # Matmul roles of the vision tower. Each vision projection weight belongs to exactly one role.
 VISION_ROLES = ("vision_patch", "vision_qkv", "vision_proj", "vision_fc1", "vision_fc2", "merger_fc1", "merger_fc2")
+VISION_PRECISION_ENV = "PPLX_DECIDER_VISION_PRECISION"
+VISION_WEIGHT_DTYPES = ("bfloat16", "bfloat8_b")
+# Named vision precisions: name -> roles whose weights are BFP8 (every other role stays BF16).
+VISION_PRECISIONS = {
+    "bf16": (),
+    "bfp8": VISION_ROLES,
+    "bfp8_except_qkv": tuple(r for r in VISION_ROLES if r != "vision_qkv"),
+    "bfp8_except_merger": tuple(r for r in VISION_ROLES if not r.startswith("merger_")),
+}
 
 
 @dataclass(frozen=True)
@@ -325,9 +337,33 @@ class VisionPrecisionPolicy:
             missing = [r for r in VISION_ROLES if r not in getattr(self, table)]
             if missing:
                 raise ValueError(f"vision policy.{table} misses roles {missing}")
-        low = {r: d for r, d in self.weight_dtypes.items() if d != "bfloat16"}
-        if low or self.activation_dtype != "bfloat16":
-            raise ValueError(f"The vision tower is BF16 only (person decision); got {low or self.activation_dtype}")
+        bad = {r: d for r, d in self.weight_dtypes.items() if d not in VISION_WEIGHT_DTYPES}
+        if bad or self.activation_dtype != "bfloat16":
+            raise ValueError(
+                f"Vision weights must be one of {VISION_WEIGHT_DTYPES} and activations BF16; "
+                f"got {bad or self.activation_dtype}"
+            )
+
+    @classmethod
+    def from_name(cls, name: str) -> "VisionPrecisionPolicy":
+        """``bf16`` (default: the stage-12A policy, unchanged), ``bfp8`` (every projection weight BFP8),
+        ``bfp8_except_qkv`` / ``bfp8_except_merger`` (that role group kept BF16)."""
+        if name not in VISION_PRECISIONS:
+            raise ValueError(f"Unknown vision precision {name!r}; one of {sorted(VISION_PRECISIONS)}")
+        if name == "bf16":
+            return cls()
+        bfp8 = VISION_PRECISIONS[name]
+        return cls(
+            name=f"vision_bf16__w_{name}__hifi4",
+            weight_dtypes={r: "bfloat8_b" if r in bfp8 else "bfloat16" for r in VISION_ROLES},
+        )
+
+    @classmethod
+    def resolve(cls, value: "str | VisionPrecisionPolicy | None" = None) -> "VisionPrecisionPolicy":
+        """A policy, a precision name, or ``None``: ``$PPLX_DECIDER_VISION_PRECISION``, else ``bf16``."""
+        if isinstance(value, cls):
+            return value
+        return cls.from_name(value or os.environ.get(VISION_PRECISION_ENV) or "bf16")
 
     def weight_dtype(self, role: str) -> ttnn.DataType:
         return getattr(ttnn, self.weight_dtypes[role])
@@ -354,8 +390,10 @@ class VisionOptimizations:
     rope_compute_kernel_cfg: object
 
     @classmethod
-    def build(cls, mesh_device, *, policy: VisionPrecisionPolicy | None = None) -> "VisionOptimizations":
-        policy = policy or VisionPrecisionPolicy()
+    def build(cls, mesh_device, *, policy: VisionPrecisionPolicy | str | None = None) -> "VisionOptimizations":
+        """``policy``: a ``VisionPrecisionPolicy``, a name of ``VISION_PRECISIONS``, or ``None``
+        (``$PPLX_DECIDER_VISION_PRECISION``, else ``bf16``)."""
+        policy = VisionPrecisionPolicy.resolve(policy)
         grid = mesh_device.compute_with_storage_grid_size()
         return cls(
             mesh_device=mesh_device,

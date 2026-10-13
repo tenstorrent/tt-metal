@@ -22,7 +22,7 @@ Every test row reads `pixel_values` from `inputs/<id>.safetensors` and the per-b
 | Head dim 72 -> 96 with zero padding and rope permutation in the weights | The text model uses the same scheme (`tt/rope.py`). A single `rotary_embedding_llama` per tensor, cos 1 / sin 0 on dims 72..95, zero `proj` rows. |
 | MLP intermediate 4304 -> 4320 | 4304 is not whole tiles. Zero `fc1` columns and bias plus zero `fc2` rows contribute exactly 0, since `gelu_tanh(0) = 0`. |
 | Pos-embed interpolation and cos/sin on host in `prepare_inputs` | These depend only on `grid_thw`. HF's helper and op order make them bit exact (test). The brief allows a host precompute at setup; the forward stays device-only (audit). |
-| BF16 everywhere, HiFi4, fp32 accumulation | Person decision. `VisionPrecisionPolicy` rejects non-BF16 weights. |
+| BF16 everywhere, HiFi4, fp32 accumulation | Person decision. Still the default; BFP8 projection weights became an opt-in setting later (section "BFP8 vision weights" at the end of this file). |
 | `ttnn.linear` with fused bias and activation (not `minimal_matmul`) | S <= 1024. `minimal_matmul` is the text route for long rows, and its bias path was not needed. Not tuned. |
 | Vision roles kept out of `ROLES` | Adding them to `ROLES` would invalidate every text precision JSON (`from_json` requires all roles). |
 
@@ -201,3 +201,100 @@ both take the first maximum, so TT answers "4" like HF and like the app would on
 The run is deterministic (bit-identical twice), so the answer is stable, but the margin is zero. Any
 change in the text or vision numerics can flip it, and a flip would fail the gate (HF gap 0.080 is
 above the 0.05 near-tie line).
+
+Update 2026-10-13 (measured, `vision_bfp8/bf16/image/image_outputs.safetensors`, code at `4a58362f1cd`
+plus the BFP8 option): after the later text-model changes, v02 is no longer a tie. The TT logits are
+13.625, 17.25, **22.875**, 22.25, 15.3125, and the TT top-2 gap is 0.131.
+
+# BFP8 vision weights (opt-in experiment)
+
+Host: one Blackhole p150a. Branch `gtobarTT/pplx-decider-bringup`, base `4a58362f1cd`. Artifacts:
+`$PPLX_DECIDER_ARTIFACTS/vision_bfp8/` (`run.sh`, `run.log`, one log per step, `bf16/` and `bfp8/`
+result trees, `text/`, `latency_ab.py` and `latency_ab.json`, `summarize.py`). Labels: **measured**,
+**inferred**.
+
+Question: can the vision tower use BFP8 projection weights instead of BF16 on one p150a without
+losing accuracy? The default stays BF16 until the person decides.
+
+## Decisions
+
+| decision | why |
+|---|---|
+| BFP8 on the seven projection roles only; biases, LayerNorm weights, activations BF16 | The brief scope. These are the only large tensors (0.943 GiB of the 0.964 GiB). |
+| Fidelity unchanged: HiFi4, fp32 accumulation, `packer_l1_acc` | The brief: do not lower fidelity in this experiment. BF16 uses HiFi4 too. |
+| Selected by name: `$PPLX_DECIDER_VISION_PRECISION` or `vision_precision=` (`from_snapshot`, `from_pretrained` through `model_kwargs`) | One string is enough. `VisionPrecisionPolicy.resolve(None)` is `bf16` when the env var is unset, so the default is the same object as before. |
+| Variants `bfp8_except_qkv` and `bfp8_except_merger` defined but not run | They are kept for the case where BFP8 fails a gate. BFP8 passed every gate, so neither was needed. |
+
+## Log
+
+| # | step | command / evidence | result |
+|---|---|---|---|
+| 1 | Vision PCC, BFP8 then BF16 | `PPLX_DECIDER_VISION_PRECISION=bfp8 pytest tests/vision/test_vision_pcc.py` (and unset) | 34 passed for each. Mins below. |
+| 2 | Default unchanged: vision | BF16 `pcc_vision.jsonl` vs the 2026-10-12 BF16 run (`vision/pcc_vision.jsonl`) | 468/468 records have identical PCC and max abs diff. |
+| 3 | Image e2e, BFP8 then BF16 | `pytest tests/e2e/test_image_model.py` with `PPLX_DECIDER_IMAGE_E2E_DIR=vision_bfp8/<p>/image` | 7 passed for each: 8/8 agree, splice bit exact, determinism, 0 host calls (v02, v04), bucket padding 1024 vs 8192 argmax equal (BFP8 probabilities bit identical, logit PCC 1.0). |
+| 4 | Default unchanged: image | `compare_outputs.py verify_batch/image/image_outputs.safetensors vision_bfp8/bf16/image/image_outputs.safetensors` | BIT_IDENTICAL, 26/26 tensors. `splice.json`, `image_bucket_padding.json` and `image_determinism.json` are byte identical. |
+| 5 | Text unaffected | `PPLX_DECIDER_VISION_PRECISION=bfp8 pytest tests/e2e/test_model.py`; `compare_outputs.py review_3b/e2e/e2e_outputs.safetensors vision_bfp8/text/e2e_outputs.safetensors` | 6 passed, 25/25 agree. BIT_IDENTICAL, 100/100 tensors. |
+| 6 | DRAM and tower latency | `pytest tests/vision/test_vision_perf.py -s`, per precision | Vision weights: 0.964 GiB (BF16) and 0.521 GiB (BFP8). The analytic BFP8 size (1088 B per 1024-value tile) is 0.501 GiB of projections plus 0.020 GiB of BF16 biases and norms. Free DRAM with text C0 and vision resident: 3.568 and 4.011 GiB. After an 8192-bucket text forward: 3.563 and 4.005 GiB. |
+| 7 | Latency A/B in one process | `python vision_bfp8/latency_ab.py`: text model loaded once, both towers resident, `model.vision` swapped, order BF16, BFP8, BF16. Tower: 2 warm-ups and 7 synced runs. Requests: the stage-12B burst method (2 warm-ups, median of 5, each after 10 s idle). | Table below. No change beyond the BF16 repeat spread. |
+
+## Results
+
+Vision PCC, minimum over the 8 golden images (bars: 0.995 per module, 0.99 for the whole tower):
+
+| module | BF16 | BFP8 |
+|---|---|---|
+| patch embed | 0.999998 | 0.999979 (v07) |
+| patch embed + pos | 0.999997 | 0.999978 (v07) |
+| blocks (27, teacher forced) | 0.999976 (B1, v07) | 0.999947 (B0, v07) |
+| lowest blocks with BFP8 | B00 0.999983, B01 0.999976, B09 0.999983 | B00 0.999947, B01 0.999949, B09 0.999952 |
+| merger | 0.999996 (v08) | 0.999993 (v08) |
+| v02 with mask, 936 patches in 1024 | 0.999758 | 0.999723 |
+| v01 in the 512 bucket | 0.999105 | 0.996881 |
+
+Whole tower from pixels, per image:
+
+| image | BF16 | BFP8 |
+|---|---|---|
+| v01_dominant_color | 0.998654 | 0.996457 |
+| v02_count_circles | 0.999758 | 0.999723 |
+| v03_receipt_total | 0.999851 | 0.999728 |
+| v04_tallest_bar | 0.999586 | 0.999451 |
+| v05_red_circle_yes | 0.999717 | 0.999665 |
+| v06_red_circle_no | 0.999342 | 0.999484 |
+| v07_brightness_dark | 0.999138 | 0.994432 |
+| v08_progress_fill | 0.999347 | 0.999321 |
+
+Image decisions vs the HF BF16 golden (gates: >= 7/8 agree, logit PCC >= 0.99 per row):
+
+| row | HF choice (gap) | BF16 TT choice, prob | BF16 logit PCC | BF16 max dprob | BFP8 TT choice, prob | BFP8 logit PCC | BFP8 max dprob |
+|---|---|---|---|---|---|---|---|
+| v01_dominant_color | 2 (0.989) | 2, 0.9915 | 0.99991 | 0.0002 | 2, 0.9912 | 0.99981 | 0.0002 |
+| v02_count_circles | 2 (0.080) | 2, 0.5321 | 0.99923 | 0.0295 | 2, 0.5228 | 0.99983 | 0.0135 |
+| v03_receipt_total | 2 (0.992) | 2, 0.9946 | 0.99999 | 0.0004 | 2, 0.9947 | 0.99997 | 0.0005 |
+| v04_tallest_bar | 3 (0.985) | 3, 0.9871 | 0.99998 | 0.0014 | 3, 0.9867 | 0.99997 | 0.0019 |
+| v05_red_circle_yes | 1 (0.990) | 1, 0.9947 | 1.00000 | 0.0001 | 1, 0.9946 | 1.00000 | 0.0003 |
+| v06_red_circle_no | 0 (0.969) | 0, 0.9838 | 1.00000 | 0.0009 | 0, 0.9838 | 1.00000 | 0.0009 |
+| v07_brightness_dark | 0 (0.593) | 0, 0.7740 | 0.99985 | 0.0089 | 0, 0.7824 | 0.99975 | 0.0008 |
+| v08_progress_fill | 4 (0.885) | 4, 0.9268 | 0.99999 | 0.0047 | 4, 0.9280 | 0.99997 | 0.0035 |
+| total | | 8/8 | min 0.99923 | 0.0295 | 8/8 | min 0.99975 | 0.0135 |
+
+v02 TT logits: BF16 22.875 vs 22.25 for the top two options, BFP8 22.875 vs 22.375. The TT top-2
+probability gaps are 0.131 and 0.106.
+
+Latency, medians in ms (`latency_ab.json`; BF16 run 1 / BFP8 / BF16 run 2):
+
+| measure | BF16 #1 | BFP8 | BF16 #2 |
+|---|---|---|---|
+| tower, bucket 256 (v01) | 15.52 | 15.20 | 15.53 |
+| tower, bucket 512 (v05) | 19.34 | 19.15 | 19.42 |
+| tower, bucket 768 (v03) | 23.42 | 23.32 | 23.61 |
+| tower, bucket 1024 (v04) | 28.60 | 28.73 | 29.24 |
+| tower, bucket 1024 padded (v02) | 29.01 | 28.77 | 29.46 |
+| request v01 (burst) | 336.15 | 335.50 | 336.34 |
+| request v04 (burst) | 354.09 | 354.35 | 355.20 |
+| v04 phase `vision_tower` | 28.65 | 28.60 | 28.65 |
+
+Verdict: BFP8 vision weights pass every gate. They save 0.443 GiB of DRAM and give no measurable
+latency change. HiFi4 on these small-M matmuls is probably compute bound rather than DRAM bound
+(inferred, not profiled). The default stays BF16 (person decision pending). To make BFP8 the
+default, change the `None` fallback in `VisionPrecisionPolicy.resolve` and update this file.

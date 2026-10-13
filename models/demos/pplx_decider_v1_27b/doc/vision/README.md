@@ -168,15 +168,64 @@ GELU variants were checked on device (`test_gelu_variant`, fp32 output on an ide
 
 ## Precision
 
-The vision tower is all BF16 (person decision): BF16 weights and activations, HiFi4 matmuls with
-fp32 accumulation, and no BFP8 or BFP4. The policy is `VisionPrecisionPolicy` in
-`tt/optimizations.py`, and the constructor rejects any non-BF16 weight dtype. The code adds no fp32
+By default the vision tower is all BF16 (person decision): BF16 weights and activations, HiFi4
+matmuls with fp32 accumulation, and no BFP4. BFP8 projection weights are an opt-in setting, off by
+default: see [BFP8 vision weights (opt-in)](#bfp8-vision-weights-opt-in). The policy is
+`VisionPrecisionPolicy` in `tt/optimizations.py`. Its constructor accepts only BF16 or BFP8 weights
+and BF16 activations. The code adds no fp32
 casts of its own. The host tables are fp32 only where HF computes them in fp32: the pos-embed
 interpolation and the cos/sin values. Two differences from HF remain:
 
 - HF applies the rotary in fp32. TT applies it in BF16 with fp32 accumulation.
 - Bias and GELU run in the matmul epilogue on the fp32 accumulator. HF rounds the `fc1` output to
   BF16 before the GELU.
+
+## BFP8 vision weights (opt-in)
+
+The default is BF16 and is unchanged. BFP8 is opt-in: it stores the seven projection weight roles
+(`vision_patch`, `vision_qkv`, `vision_proj`, `vision_fc1`, `vision_fc2`, `merger_fc1`, `merger_fc2`)
+as BFP8. Activations, biases, LayerNorm weights and the host pos-embed table stay BF16. Matmuls stay
+HiFi4 with fp32 accumulation, as in the BF16 path.
+
+```python
+decider = TTDecider.from_pretrained(device, vision=True, vision_precision="bfp8")
+# or: model = PplxDeciderModel.from_snapshot(device, vision=True, vision_precision="bfp8")
+# or: tower = PplxVisionTower.from_snapshot(device, policy="bfp8")
+```
+
+```bash
+export PPLX_DECIDER_VISION_PRECISION=bfp8   # used when no vision_precision / policy is passed
+```
+
+The names are `bf16` (default), `bfp8`, `bfp8_except_qkv` and `bfp8_except_merger`
+(`tt/optimizations.py: VISION_PRECISIONS`). The vision tests and the image e2e test build the tower
+with the env var, so the same commands measure either setting.
+
+Measured on one p150a (2026-10-13, artifacts `$PPLX_DECIDER_ARTIFACTS/vision_bfp8/`), BF16 and BFP8 in
+the same session:
+
+| gate | bar | BF16 | BFP8 |
+|---|---|---|---|
+| patch embed (+pos), min of 8 images | 0.995 | 0.999997 | 0.999978 (v07) |
+| each of 27 blocks, teacher forced, min | 0.995 | 0.999976 (B1, v07) | 0.999947 (B0, v07) |
+| merger, min | 0.995 | 0.999996 | 0.999993 |
+| whole tower from pixels, min of 8 images | 0.99 | 0.998654 (v01) | 0.994432 (v07) |
+| image decisions agree with HF | >= 7/8 | 8/8 | 8/8 |
+| readout-logit PCC, min of 8 rows | 0.99 | 0.99923 (v02) | 0.99975 (v07) |
+| max abs prob diff vs HF | - | 0.0295 (v02) | 0.0135 (v02) |
+| vision weights in DRAM | - | 0.964 GiB | 0.521 GiB |
+| free DRAM, text C0 + vision resident | - | 3.568 GiB | 4.011 GiB |
+| tower latency 256 / 512 / 768 / 1024 buckets | - | 15.5 / 19.3 / 23.4 / 28.6 ms | 15.2 / 19.2 / 23.3 / 28.7 ms |
+| image request v01 / v04 (burst median) | - | 336.2 / 354.1 ms | 335.5 / 354.4 ms |
+
+BFP8 passes every gate. The largest losses are on the whole-tower PCC of v07 (0.999138 -> 0.994432)
+and v01 (0.998654 -> 0.996457), both one-color images. The decisions do not move: every row keeps
+its argmax. v02 (HF gap 0.080) answers "4" in both, with TT top-2 gaps of 0.131 (BF16) and 0.106
+(BFP8). BFP8 frees 0.443 GiB. Latency does not change: the tower and request deltas (-0.7 to +0.3 ms)
+are within the spread of two BF16 repeats in the same process (up to 1.1 ms). The likely reason is that HiFi4 matmuls at these
+sizes are compute bound, not weight-read bound (inferred). The text model is not touched: with
+`PPLX_DECIDER_VISION_PRECISION=bfp8` set, the 25-row text e2e outputs (100 tensors) are bit identical
+to the reference run.
 
 ## Patch buckets
 

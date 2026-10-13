@@ -20,6 +20,7 @@ from safetensors.torch import load_file
 import ttnn
 from models.common.utility_functions import comp_allclose, comp_pcc
 from models.demos.pplx_decider_v1_27b.tt import paths
+from models.demos.pplx_decider_v1_27b.tt.optimizations import VisionPrecisionPolicy
 
 GOLDEN_DIR = paths.VISION_GOLDEN_DIR
 STAGE_DIR = paths.VISION_DIR  # results of the vision tests ($PPLX_DECIDER_STAGE12A_DIR)
@@ -109,7 +110,7 @@ def pcc_record(
         max_abs_diff=float((reference - candidate).abs().max()),
         threshold=threshold,
         passed=bool(passing),
-        policy="vision_bf16__w_bf16__hifi4",
+        policy=VisionPrecisionPolicy.resolve().name,  # the policy build_tower uses ($PPLX_DECIDER_VISION_PRECISION)
         time=time.strftime("%Y-%m-%d %H:%M:%S"),
         **(extra or {}),
     )

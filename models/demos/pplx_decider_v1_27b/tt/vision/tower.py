@@ -15,7 +15,8 @@ Two phases:
 - ``forward(inputs)`` (device only): no torch, ``from_torch`` or ``to_torch`` (tests/vision audit).
 
 Weights: the 333 snapshot ``visual.*`` tensors (shard 1 only), strict key check, BF16, ~1.0 GB on
-device after the head-dim / intermediate padding.
+device after the head-dim / intermediate padding. ``policy="bfp8"`` (or ``$PPLX_DECIDER_VISION_PRECISION``)
+stores the projection weights as BFP8 instead (opt-in, ``tt/optimizations.py: VISION_PRECISIONS``).
 
 Usage::
 
@@ -90,9 +91,12 @@ class PplxVisionTower(LightweightModule):
 
     @classmethod
     def from_snapshot(
-        cls, mesh_device, reader=None, *, policy: VisionPrecisionPolicy | None = None, load: bool = True
+        cls, mesh_device, reader=None, *, policy: VisionPrecisionPolicy | str | None = None, load: bool = True
     ) -> "PplxVisionTower":
-        """Build from the snapshot ``visual.*`` tensors only (the 54 GB text checkpoint is never read)."""
+        """Build from the snapshot ``visual.*`` tensors only (the 54 GB text checkpoint is never read).
+
+        ``policy``: a ``VisionPrecisionPolicy`` or a precision name (``bf16`` / ``bfp8`` / ...);
+        ``None`` reads ``$PPLX_DECIDER_VISION_PRECISION``, else ``bf16``."""
         from models.demos.pplx_decider_v1_27b.reference.hf_reference import SnapshotReader
 
         reader = reader or SnapshotReader()

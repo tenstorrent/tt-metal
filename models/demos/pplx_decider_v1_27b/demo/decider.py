@@ -102,6 +102,8 @@ class TTDecider:
         Prompts longer than it are rejected (nothing is truncated); smaller buckets are unchanged.
 
         ``vision=False`` skips the vision tower (text-only use, ~0.96 GiB less DRAM).
+        ``vision_precision="bfp8"`` (a ``model_kwargs`` entry, or ``$PPLX_DECIDER_VISION_PRECISION``)
+        is the opt-in BFP8 vision-weight setting; the default is ``"bf16"`` (doc/vision/README.md).
         ``snapshot=`` is a deprecated alias of ``model_path``.
         """
         from models.demos.pplx_decider_v1_27b.reference.hf_reference import SnapshotReader
