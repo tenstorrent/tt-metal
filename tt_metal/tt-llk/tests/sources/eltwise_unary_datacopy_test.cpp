@@ -286,6 +286,28 @@ void run_kernel(RUNTIME_PARAMETERS params)
 #include "llk_pack_common.h"
 #include "params.h"
 
+// DATACOPY_PACK_BLOCK (driver template): one block pack per DEST block under the block unpack (Blackhole only)
+#ifndef DATACOPY_PACK_BLOCK
+#define DATACOPY_PACK_BLOCK 0
+#endif
+
+#if DATACOPY_PACK_BLOCK && defined(ARCH_BLACKHOLE)
+template <typename Res>
+inline void pack_dest_block(const std::uint32_t pack_dst, const std::uint32_t dst_index, const Res& buffer_Res, const std::uint32_t first, const std::uint32_t num_tiles)
+{
+    // Block-float outputs close every tile
+    if (IS_BFP_FORMAT(pack_dst))
+    {
+        _llk_pack_block_closed_<DstSync::SyncHalf, is_fp32_dest_acc_en>(
+            dst_index, L1_ADDRESS(buffer_Res[first]), num_tiles, (L1_ADDRESS(buffer_Res[first + 1]) - L1_ADDRESS(buffer_Res[first])) << 4);
+    }
+    else
+    {
+        _llk_pack_block_<DstSync::SyncHalf, is_fp32_dest_acc_en, ckernel::PackMode::Default>(dst_index, L1_ADDRESS(buffer_Res[first]), num_tiles);
+    }
+}
+#endif
+
 void run_kernel(RUNTIME_PARAMETERS params)
 {
 #if defined(RUNTIME_FORMATS) && !defined(SPEED_OF_LIGHT)
@@ -318,6 +340,9 @@ void run_kernel(RUNTIME_PARAMETERS params)
             {
                 for (int block_num = 0; block_num < NUM_BLOCKS; ++block_num)
                 {
+#if DATACOPY_PACK_BLOCK && defined(ARCH_BLACKHOLE)
+                    pack_dest_block(formats.pack_dst, DST_INDEX, buffer_Res, block_num * NUM_TILES_IN_BLOCK, NUM_TILES_IN_BLOCK);
+#else
                     for (std::uint32_t tile_num = 0; tile_num < NUM_TILES_IN_BLOCK; ++tile_num)
                     {
                         LLK_ASSERT(
@@ -326,6 +351,7 @@ void run_kernel(RUNTIME_PARAMETERS params)
                         _llk_pack_<DstSync::SyncHalf, is_fp32_dest_acc_en, ckernel::PackMode::Default>(
                             DST_INDEX + tile_num, L1_ADDRESS(buffer_Res[block_num * NUM_TILES_IN_BLOCK + tile_num]));
                     }
+#endif
                 }
             }
         }
@@ -336,6 +362,9 @@ void run_kernel(RUNTIME_PARAMETERS params)
                 for (int block_num = 0; block_num < NUM_BLOCKS; ++block_num)
                 {
                     _llk_packer_wait_for_math_done_();
+#if DATACOPY_PACK_BLOCK && defined(ARCH_BLACKHOLE)
+                    pack_dest_block(formats.pack_dst, DST_INDEX, buffer_Res, block_num * NUM_TILES_IN_BLOCK, NUM_TILES_IN_BLOCK);
+#else
                     for (std::uint32_t tile_num = 0; tile_num < NUM_TILES_IN_BLOCK; ++tile_num)
                     {
                         LLK_ASSERT(
@@ -344,6 +373,7 @@ void run_kernel(RUNTIME_PARAMETERS params)
                         _llk_pack_<DstSync::SyncHalf, is_fp32_dest_acc_en, ckernel::PackMode::Default>(
                             DST_INDEX + tile_num, L1_ADDRESS(buffer_Res[block_num * NUM_TILES_IN_BLOCK + tile_num]));
                     }
+#endif
                     _llk_pack_dest_section_done_<DstSync::SyncHalf, is_fp32_dest_acc_en>();
                 }
             }

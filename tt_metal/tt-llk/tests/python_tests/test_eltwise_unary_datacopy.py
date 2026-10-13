@@ -32,6 +32,7 @@ from helpers.perf.core import create_test_or_perf_config
 from helpers.stimuli_config import StimuliConfig
 from helpers.stimuli_generator import generate_stimuli
 from helpers.test_variant_parameters import (
+    DATACOPY_FLAG,
     DEST_INDEX,
     LOOP_FACTOR,
     NUM_BLOCKS,
@@ -218,6 +219,9 @@ def _run_unary_datacopy_test(
         blocks_calculation_algorithm,
     )
 
+    # Four-face blocks of two or more tiles pack with one block run under the block unpack.
+    pack_block = unpack_block and num_faces == 4 and num_tiles_in_block > 1
+
     if is_perf and perf_report is None:
         raise ValueError("perf_report must be provided when is_perf=True")
 
@@ -231,6 +235,7 @@ def _run_unary_datacopy_test(
             generate_input_dim(input_dimensions, input_dimensions),
             TILIZE(tilize),
             UNPACK_BLOCK(unpack_block),  # always present: one report schema
+            *([DATACOPY_FLAG("DATACOPY_PACK_BLOCK")] if pack_block else []),
         ],
         "runtimes": [
             DEST_INDEX(0),
