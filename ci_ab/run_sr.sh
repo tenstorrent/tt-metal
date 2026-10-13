@@ -159,8 +159,12 @@ elif [[ $JOB == j4 ]]; then
   [[ $STOP == 0 ]] && ASSERTS=1 RTS=L1_TO_L1,MATH_ISOLATE EXTRA="FCOL_OUT=$SL/out/fcol_f2" run slot fb_f2 fbits fb_f2_1
   $PY $S/tools/fcol_cmp.py $SL/out/fcol_m $SL/out/fcol_f2 | tee $SL/out/fcol_cmp.txt
 fi
+# loadable code only (.init, .text, .ldm_data), as the build path is in the ELF's other sections
+OBJ=$SF/compiler/bin/riscv-tt-elf-objcopy
 for b in $(ls $SL/builds); do
-  find $SL/builds/$b -path "*/elf/*.elf" | while read -r e; do echo "$b ${e#$SL/builds/$b/} $(sha256sum < $e | cut -c1-16)"; done
+  find $SL/builds/$b -path "*/elf/*.elf" | while read -r e; do
+    h=$(for sec in .init .text .ldm_data; do $OBJ -O binary -j $sec "$e" $SL/sec.bin 2>/dev/null && { echo $sec; cat $SL/sec.bin; }; done | sha256sum | cut -c1-16)
+    echo "$b ${e#$SL/builds/$b/} $h"; done
 done > $SL/out/elf_sha.txt
 for f in $SL/out/prod_*.log; do grep -aE '[0-9]+ (passed|failed|error)|error:' $f | tail -5 > $f.tail; rm -f $f; done
 (cd $SL && find perf_data/runs -name "*.csv" ! -name "*.post.csv"; cd $SL && find out -type f) > $SL/list.txt
