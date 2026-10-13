@@ -82,7 +82,7 @@ runtime args — callers never pass it.
 out = ttnn.experimental.fused_msda_from_offsets(
     value,                      # (B, S, H, D)          ROW_MAJOR bf16   [canonical]
                                 #   or (B, S, H*D)      ROW_MAJOR bf16   [packed]
-    reference_points,           # (B, Q, R, 2)          ROW_MAJOR bf16
+    reference_points,           # (B, Q, R, 2)          ROW_MAJOR bf16 or fp32
     sampling_offsets,           # (B, Q, H, L, P, 2)    ROW_MAJOR bf16   [canonical]
                                 #   or (B, Q, H, L*P*2) ROW_MAJOR bf16   [packed]
     attention_weights,          # as V1
@@ -216,7 +216,7 @@ pair per `(level, point, corner)`, `4 * L * P` pairs per output tile.
 | `c_3` `input_tile` | reader → compute, the `V_corner` values | `2 * n_d_tiles` | 2048 |
 | `c_4` `scalar_tile` | reader → compute, `attn * bilinear_coeff` per row | 2 | 2048 |
 | `c_5` `output_scratch` | writer-only assembly of one head's `D`-stick | 1 | `align(D*2)` |
-| `c_6` `ref_scratch` | **V2 only** — reference points arena | 32*R | `align(2*2)` |
+| `c_6` `ref_scratch` | **V2 only** — reference points arena, in their dtype (`REF_FP32` selects the reader's fp32 path) | 32*R | `align(2*sizeof(ref))`: 4 B bf16, 8 B fp32 |
 | `c_16` `output_tile` | compute → writer, the accumulator | `2 * n_d_tiles` | 2048 |
 
 `n_d_tiles = ceil(D / 32)`.
@@ -323,7 +323,7 @@ row's `D` values across them into a stick, and writes it at
 
 | Property | Value | Why |
 | --- | --- | --- |
-| dtype | `bfloat16` (all tensors) | tile format of the FPU path |
+| dtype | `bfloat16` (all tensors); `reference_points` may be `float32` | tile format of the FPU path; reference points only enter the reader's fp32 location arithmetic, where a bf16 point in [0, 1] would move in steps of up to 0.8 px at `W = 200` |
 | layout | `ROW_MAJOR` (all tensors) | reader/writer address by stick |
 | memory | `INTERLEAVED` only | `TensorAccessor` page indexing |
 | `D` | positive multiple of 16, and `D*2` a multiple of the device's buffer alignment when `H > 1` | a `D`-stick is scattered across `ceil(D/32)` tiles in 16-value face halves, and the writer's per-head byte offset `h*D*2` must be a legal NoC destination. `D = 16` gives a 32-B stride, which is fine where the alignment is 32 B but is rejected where it is 64 B; `D = 32` and up are unconstrained. Validated in the program factory, not assumed. |
@@ -376,7 +376,10 @@ models/experimental/bevformer/tests/pcc/test_fused_msda_bevformer.py
 BEVFormer's `TTMSDeformableAttention`
 (`models/experimental/bevformer/tt/tt_ms_deformable_attention.py`) computes its
 core attention with `fused_msda_from_offsets` and `reference_mode="pillar"`.
-Spatial cross-attention and temporal self-attention both build this module.
+Spatial cross-attention, temporal self-attention and the detection decoder build this
+module. The decoder passes float32 reference points through it unchanged: its 200x200
+BEV map is where bf16 points lose sub-pixel accuracy, compounded by its reference-point
+refinement.
 
 It feeds the op the packed rank-4 forms. The `sampling_offsets` Linear emits
 channels ordered `(head, level, point, xy)`, and the joint softmax produces
@@ -386,4 +389,5 @@ stay in feature-map pixel units; the reader applies the per-level scale.
 Numerics are pinned by
 `models/experimental/bevformer/tests/pcc/test_fused_msda_bevformer.py` plus
 `test_ms_deformable_attention.py`, `test_spatial_cross_attention.py`,
-`test_temporal_self_attention.py`, `test_layer.py` and `test_encoder.py`.
+`test_temporal_self_attention.py`, `test_layer.py`, `test_encoder.py` and `test_decoder.py`;
+the float32 reference-point path by `test_fused_msda_v2_float32_reference_points`.

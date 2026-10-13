@@ -562,6 +562,57 @@ def test_fused_msda_v2_bevformer_pillar_shape(device):
     _assert_close(_msda_reference(value, loc, attn, spatial_shapes), out)
 
 
+@pytest.mark.parametrize(
+    "reference_mode, spatial_shapes, Q, P, R",
+    [
+        # BEVFormer's decoder: L = R = 1, where level and pillar mode coincide.
+        ("level", [(200, 200)], 256, 4, 1),
+        # The encoder's spatial cross-attention: four z-anchors, a partial query tile.
+        ("pillar", [(29, 50), (15, 25), (8, 13), (4, 7)], 33, 8, 4),
+    ],
+    ids=["decoder-200x200", "pillar-R4"],
+)
+def test_fused_msda_v2_float32_reference_points(device, reference_mode, spatial_shapes, Q, P, R):
+    """float32 reference points, from which the reader forms the location unrounded, next to the
+    same points in bf16. Each run is checked against a reference sampling at its own points, so a
+    program built for one reference dtype and reused for the other fails."""
+    B, H, D = 1, 8, 32
+    L = len(spatial_shapes)
+    S = sum(h * w for h, w in spatial_shapes)
+
+    torch.manual_seed(0)
+    value = _bf16(torch.randn(B, S, H, D))
+    ref_pts = torch.rand(B, Q, R, 2)
+    offsets = _bf16(torch.randn(B, Q, H, L, P, 2) * 2.0)
+    attn = _bf16(torch.softmax(torch.randn(B, Q, H, L * P), dim=-1).reshape(B, Q, H, L, P))
+
+    def expected(points):
+        return _msda_reference(
+            value, _locations_from_offsets(points, offsets, spatial_shapes, reference_mode), attn, spatial_shapes
+        )
+
+    def run(ref_dtype):
+        return ttnn.to_torch(
+            ttnn.experimental.fused_msda_from_offsets(
+                _to_device(_pack_value(value), device),
+                ttnn.from_torch(ref_pts, dtype=ref_dtype, device=device, layout=ttnn.ROW_MAJOR_LAYOUT),
+                _to_device(_pack_locations(offsets), device),
+                _to_device(_pack_weights(attn), device),
+                spatial_shapes,
+                reference_mode=reference_mode,
+            )
+        ).to(torch.float32)
+
+    fp32_out = run(ttnn.float32)
+    bf16_out = run(ttnn.bfloat16)
+    _assert_close(expected(ref_pts), fp32_out, pcc=0.9999)
+    _assert_close(expected(_bf16(ref_pts)), bf16_out, pcc=0.9999)
+    # Against the unrounded points, the bf16 run carries the points' rounding as well.
+    fp32_error = (fp32_out - expected(ref_pts)).abs().mean()
+    bf16_error = (bf16_out - expected(ref_pts)).abs().mean()
+    assert fp32_error < 0.5 * bf16_error, f"float32 points {fp32_error:.5f}, bf16 points {bf16_error:.5f}"
+
+
 def test_fused_msda_v2_one_pixel_offset(device):
     """An offset of +1 feature-map pixel must sample the next pixel exactly.
 
@@ -803,6 +854,26 @@ def test_fused_msda_from_offsets_rejects_pillar_mode_indivisible_points(device, 
     ref_t = _to_device(torch.rand(1, 8, 3, 2), device)  # P=4 is not divisible by R=3
     with expect_error(RuntimeError, "divisible"):
         ttnn.experimental.fused_msda_from_offsets(value_t, ref_t, off_t, attn_t, shapes, reference_mode="pillar")
+
+
+@pytest.mark.parametrize("tensor", ["value", "sampling_offsets", "attention_weights"])
+def test_fused_msda_from_offsets_rejects_float32_inputs(device, expect_error, tensor):
+    """Only reference_points may be float32; the other inputs feed the bf16 tile path."""
+    value_t, off_t, attn_t, shapes = _valid_inputs(device)
+    ref_t = _to_device(torch.rand(1, 8, 2, 2), device)
+    inputs = {"value": value_t, "sampling_offsets": off_t, "attention_weights": attn_t}
+    inputs[tensor] = ttnn.from_torch(
+        ttnn.to_torch(inputs[tensor]).float(), dtype=ttnn.float32, device=device, layout=ttnn.ROW_MAJOR_LAYOUT
+    )
+    with expect_error(RuntimeError, "must be BFLOAT16,"):
+        ttnn.experimental.fused_msda_from_offsets(
+            inputs["value"],
+            ref_t,
+            inputs["sampling_offsets"],
+            inputs["attention_weights"],
+            shapes,
+            reference_mode="level",
+        )
 
 
 def test_fused_msda_from_offsets_rejects_unknown_reference_mode(device, expect_error):

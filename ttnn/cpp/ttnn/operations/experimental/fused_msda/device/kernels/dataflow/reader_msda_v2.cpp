@@ -16,6 +16,8 @@
 //   1 (pillar): P % R == 0, r = p % R — BEVFormer, where the point axis is
 //                                       laid out as (P / R, R) over z-anchors
 //
+// reference_points are bf16, or float32 with REF_FP32 defined.
+//
 // Everything after that step is fused_msda_reader_common.hpp, byte-identical to
 // V1 — which is what makes V2 a pure frontend and not a different operator.
 
@@ -52,12 +54,21 @@ struct ReferencePlusOffset {
 
     void location(uint32_t r, uint32_t l, uint32_t p, const fused_msda::LevelGeom& g, float& x, float& y) const {
         const uint32_t ref_idx = (REF_MODE == 0) ? l : (p % NUM_REFS);
-        CoreLocalMem<volatile uint16_t> ref(ref_arena_l1 + (r * NUM_REFS + ref_idx) * ref_stick_nbytes);
+        const uint32_t ref_l1 = ref_arena_l1 + (r * NUM_REFS + ref_idx) * ref_stick_nbytes;
+#ifdef REF_FP32
+        CoreLocalMem<volatile float> ref(ref_l1);
+        const float ref_x = ref[0];
+        const float ref_y = ref[1];
+#else
+        CoreLocalMem<volatile uint16_t> ref(ref_l1);
+        const float ref_x = fused_msda::bf16_to_float(ref[0]);
+        const float ref_y = fused_msda::bf16_to_float(ref[1]);
+#endif
         CoreLocalMem<volatile uint16_t> off(fused_msda::staged_loc_addr(off_arena_l1, r, l, p));
         // Offsets are raw feature-map pixels. inv_width / inv_height are
         // precomputed so this stays a multiply.
-        x = fused_msda::bf16_to_float(ref[0]) + fused_msda::bf16_to_float(off[0]) * g.inv_width;
-        y = fused_msda::bf16_to_float(ref[1]) + fused_msda::bf16_to_float(off[1]) * g.inv_height;
+        x = ref_x + fused_msda::bf16_to_float(off[0]) * g.inv_width;
+        y = ref_y + fused_msda::bf16_to_float(off[1]) * g.inv_height;
     }
 };
 
