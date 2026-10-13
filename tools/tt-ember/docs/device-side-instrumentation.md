@@ -39,9 +39,9 @@ invocation (not per-iteration — see §7 for why):
 
 | Kernel  | Markers | "Wait" = blocked in... | "Active" = time in... |
 |---------|---------|-------------------------|------------------------|
-| Reader  | `READER_KERNEL_START/END`, `READER_WAIT_CYCLES`, `READER_TRANSFER_CYCLES` | `cb_reserve_back` (input CB full) | `noc_async_read_tile` + barrier |
-| Compute | `COMPUTE_KERNEL_START/END`, `COMPUTE_WAIT_CYCLES`, `COMPUTE_COMPUTE_CYCLES` (once **per TRISC** — 3x per core) | `cb_wait_front` (no input yet) | `matmul_tiles` + `pack_tile` |
-| Writer  | `WRITER_KERNEL_START/END`, `WRITER_WAIT_CYCLES`, `WRITER_TRANSFER_CYCLES` | `cb_wait_front` (no output tile yet) | `noc_async_write_tile` + barrier |
+| Reader  | `READER_KERNEL_START/END`, `READER_WAIT_CYCLES`, `READER_TRANSFER_CYCLES` | `cb_reserve_back` (input CB full) | `noc_async_read_page` + barrier |
+| Compute | `COMPUTE_KERNEL_START/END`, `COMPUTE_WAIT_CYCLES`, `COMPUTE_COMPUTE_CYCLES` (once **per TRISC** — 3x per core) | TRISC0: `cb_wait_front` (no input yet); TRISC1: `tile_regs_acquire` (DEST still being packed); TRISC2: `tile_regs_wait` + `cb_reserve_back` (math not done, output CB full) | TRISC1: the math loop; TRISC2: `pack_tile`; TRISC0: the unpacker blocking inside `matmul_tiles` / `copy_tile` |
+| Writer  | `WRITER_KERNEL_START/END`, `WRITER_WAIT_CYCLES`, `WRITER_TRANSFER_CYCLES` | `cb_wait_front` (no output tile yet) | `noc_async_write_page` + barrier |
 
 Source: `tt_metal/programming_examples/long_matmul/kernels/{dataflow,compute}/*.cpp` and
 `kernels/profile_markers.h`. The host (`long_matmul.cpp`) drains these via
@@ -114,13 +114,13 @@ Written to `<output-root>/<subdir>/` alongside the existing `program_intervals.c
 `compute.cpp` is compiled once but **runs independently on 3 physical cores**
 (TRISC0/1/2). Each has its own 100% (its own lifetime), and they overlap in wall-clock time
 rather than partitioning it, so their percentages cannot be summed. Measured on Wormhole n150,
-`1024 2048 2048 40`, 1x1 blocking, grids 3x2 to 8x8:
+`POWER_CASE=1`, `1024 2048 2048 20`, 1x1 blocking, grids 3x2 to 8x8:
 
 | Role | Wait % | Active % | What it's actually doing |
 |---|---|---|---|
 | TRISC0 (unpack) | 92–97 | 1–3 | Feeds tiles from L1 into the FPU's source registers |
-| TRISC1 (math) | ~0.1 | 88–89 | The only role that issues `matmul_tiles` |
-| TRISC2 (pack) | ~0.1 | ~0.2 | Packs FPU results back into the output CB |
+| TRISC1 (math) | 1–2 | 88–94 | The only role that issues `matmul_tiles` |
+| TRISC2 (pack) | 87–98 | ~0.1 | Packs FPU results back into the output CB; mostly waits for the writer to free it |
 
 Same logic applies across kernels: reader/compute/writer run **concurrently** on separate
 cores for virtually the entire grid run (tightly coupled via the depth-2 circular buffers), so
@@ -144,13 +144,12 @@ barrier.
 exact by construction, since `lifetime_s` (from `KERNEL_START`/`KERNEL_END`) and `wait_s`/
 `active_s` are all independently measured across real hardware operations.
 
-One consequence worth knowing: for TRISC1/TRISC2, "overhead" often dominates once
-`LONG_MATMUL_DISABLE_COMPUTE=1` removes their real work (§9) — this does *not* mean they're
-doing pointless work. It means their *real* idle/handshake time isn't captured by the `wait`
-label (which only brackets `cb_wait_front`, and that call resolves almost instantly on
-TRISC1/TRISC2 — the real blocking likely happens inside `tile_regs_acquire`/`tile_regs_wait`,
-which aren't separately instrumented). "Overhead" is a catch-all for "everything not named
-wait or active," not a claim about *why* that time is spent.
+Each TRISC times the blocking calls it actually executes (`cb_wait_front` only runs on TRISC0,
+`tile_regs_acquire` on TRISC1, `tile_regs_wait` and `cb_reserve_back` on TRISC2), so the
+writer's back-pressure shows up as TRISC2 wait rather than overhead. With
+`LONG_MATMUL_DISABLE_COMPUTE=1` (§9) TRISC1 and TRISC2 have no active time, and their
+overhead grows. "Overhead" is a catch-all for "everything not named wait or active," not a
+claim about *why* that time is spent.
 
 Two details worth knowing if you change this code:
 - **Spans use the low 32 bits of the wall clock.** Reading both halves can tear, and a torn read
