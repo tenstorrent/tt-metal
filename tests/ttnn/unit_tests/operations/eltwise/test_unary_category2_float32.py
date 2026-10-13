@@ -110,7 +110,7 @@ def assert_ftz_band(result, band_mask, band_desc):
     ],
 )
 def test_exact_piecewise_ops(device, ttnn_op):
-    """Exhaustive normal bfloat16 coverage for relu = max(0, x) and relu6 = min(max(0, x), 6).
+    """Float32 sweep over every normal bfloat16 value for relu = max(0, x) and relu6 = min(max(0, x), 6).
 
     | Input range | Check | Reason                                          |
     |-------------|-------|-------------------------------------------------|
@@ -145,13 +145,11 @@ def hardsigmoid_cancellation_band(input_tensor):
 
 
 def test_hardmish(device):
-    """Exhaustive normal bfloat16 coverage for hardmish.
+    """Float32 sweep over every normal bfloat16 value for hardmish.
 
     | Input range | Check   | Reason                                                        |
     |-------------|---------|---------------------------------------------------------------|
     | all         | ULP ≤ 1 | for fp32 input the golden is plain x * clamp(x/2 + 1, 0, 1)   |
-    |             |         | (torch_hardmish only emulates SFPSTORE truncation for         |
-    |             |         | bfloat16), which the fp32 SFPU path matches (measured 0 ULP)  |
     """
     input_tensor = generate_float32_bits()
 
@@ -200,7 +198,7 @@ def test_hardmish_special_values(device):
 
 
 def test_hardsigmoid(device):
-    """Exhaustive normal bfloat16 coverage for hardsigmoid = clip(x/6 + 0.5, 0, 1).
+    """Float32 sweep over every normal bfloat16 value for hardsigmoid = clip(x/6 + 0.5, 0, 1).
 
     The kernel evaluates x * fp32(1/6) + 0.5.
 
@@ -231,7 +229,7 @@ def test_hardsigmoid(device):
 
 
 def test_hardswish(device):
-    """Exhaustive normal bfloat16 coverage for hardswish = x * hardsigmoid(x).
+    """Float32 sweep over every normal bfloat16 value for hardswish = x * hardsigmoid(x).
 
     Known artifacts are verified explicitly rather than excluded.
 
@@ -285,7 +283,7 @@ def test_hardswish(device):
     ],
 )
 def test_silu_swish_ops(device, ttnn_op):
-    """Exhaustive normal bfloat16 coverage for silu/swish = x * sigmoid(x).
+    """Float32 sweep over every normal bfloat16 value for silu/swish = x * sigmoid(x).
 
     swish is the same SILU kernel, so both share one set of bounds.
 
@@ -328,7 +326,7 @@ def test_silu_swish_ops(device, ttnn_op):
 
 
 def test_softsign(device):
-    """Exhaustive normal bfloat16 coverage for softsign = x / (1 + |x|).
+    """Float32 sweep over every normal bfloat16 value for softsign = x / (1 + |x|).
 
     The SFPU computes this via reciprocal(1 + |x|).
 
@@ -376,7 +374,7 @@ def test_softsign(device):
 
 
 def test_log_sigmoid(device):
-    """Exhaustive normal bfloat16 coverage for log_sigmoid = log(sigmoid(x)).
+    """Float32 sweep over every normal bfloat16 value for log_sigmoid = log(sigmoid(x)).
 
     Kernel branches (ckernel_sfpu_logsigmoid.h branches on -x):
 
@@ -443,7 +441,7 @@ def test_log_sigmoid(device):
 
 
 def test_tanhshrink(device):
-    """Exhaustive normal bfloat16 coverage for tanhshrink = x - tanh(x).
+    """Float32 sweep over every normal bfloat16 value for tanhshrink = x - tanh(x).
 
     For |x| <= 1 the kernel uses x^3 * Q(x^2); for |x| > 1, |x| - tanh(|x|).
 
