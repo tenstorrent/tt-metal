@@ -27,6 +27,7 @@ Path values may be pytest node ids (path::test_fn) — validated on the file par
 
 from __future__ import annotations
 
+import ast
 import json
 import os
 import re as _re
@@ -485,8 +486,76 @@ def _validate(pathmap: dict[str, Any], model_root: Path) -> dict[str, Any]:
 _PCC_THR_RE = _re.compile(r"(?:pcc|comp_pcc|assert_with_pcc|allclose)[^0-9]{0,48}(0\.9\d+)", _re.IGNORECASE)
 
 
+def _sibling_module(pcc_dir: Path, dotted: str) -> Path | None:
+    """The file in the gate's own directory that the dotted module name `dotted` denotes, or None.
+
+    `a.b.c` denotes pcc_dir/c.py only when pcc_dir itself ends in a/b -- the name must spell the
+    gate's package, not merely share a basename with a file in it."""
+    parts = dotted.split(".")
+    pkg = tuple(parts[:-1])
+    if pkg and tuple(pcc_dir.parts[-len(pkg) :]) != pkg:
+        return None
+    f = pcc_dir / (parts[-1] + ".py")
+    return f if f.is_file() else None
+
+
+def _imported_siblings(pcc_dir: Path, tree: ast.AST) -> list[Path]:
+    """Modules of the gate's own package that `tree` imports, in import order, no duplicates."""
+    found: list[Path] = []
+    for node in ast.walk(tree):
+        names: list[str] = []
+        if isinstance(node, ast.Import):
+            names = [a.name for a in node.names]
+        elif isinstance(node, ast.ImportFrom):
+            if node.level > 1:
+                continue  # `from ..x import y` leaves the gate's package
+            base = node.module or ""  # `from .common import f` / `from a.b.common import f`
+            if base:
+                names.append(base)
+            names += [(base + "." + a.name) if base else a.name for a in node.names]  # `from . import common`
+        for name in names:
+            f = _sibling_module(pcc_dir, name)
+            if f is not None and f not in found:
+                found.append(f)
+    return found
+
+
+def gate_package_modules(pcc_file: Path) -> list[Path]:
+    """The gate file followed by the modules of ITS OWN package that it imports (transitively, in
+    import order): together, the text that declares the gate's threshold.
+
+    A gate that keeps its checks in a sibling helper (`from ....tests.e2e.common import
+    check_against_golden`) declares its threshold in that helper. Scanning only the gate file read
+    such a gate as "declares no PCC threshold" (Devstral, 2026-10-13: the policy warned that every
+    edit would be rejected as unverified, while the gate printed `e2e PCC=0.9998` on every run and
+    had banked 13 wins), and the threshold used for check_pcc was the 0.99 fallback, not the one
+    the gate asserts.
+
+    Only a module that resolves to a file in the gate's own directory counts. A shared library
+    module must not vouch for a gate: models/utility_functions.py carries comp_pcc's 0.99 default,
+    so a token-accuracy test importing it would read as a PCC gate -- the llama3_1_8b_p150 failure
+    pcc_threshold_is_declared() exists to catch. A file that does not parse contributes its text
+    but no imports."""
+    pcc_file = Path(pcc_file).resolve()
+    pcc_dir = pcc_file.parent
+    out: list[Path] = [pcc_file]
+    queue = [pcc_file]
+    while queue:
+        f = queue.pop(0)
+        try:
+            tree = ast.parse(f.read_text(errors="ignore"))
+        except (OSError, SyntaxError, ValueError):
+            continue
+        for sib in _imported_siblings(pcc_dir, tree):
+            if sib not in out:
+                out.append(sib)
+                queue.append(sib)
+    return out
+
+
 def pcc_threshold_is_declared(pcc_file: Path) -> bool:
-    """Does this gate actually DECLARE a PCC threshold?
+    """Does this gate actually DECLARE a PCC threshold -- in its own text or in a helper module of
+    its own package that it imports (see gate_package_modules)?
 
     A supplied gate with no threshold used to be papered over by the 0.99 default below: the invented
     number satisfied the `no_pcc_threshold` fatal check, so a file that never computes a PCC at all
@@ -494,29 +563,31 @@ def pcc_threshold_is_declared(pcc_file: Path) -> bool:
     proceeded, banking wins with correctness never numerically checked.
     """
     try:
-        return bool(_PCC_THR_RE.search(pcc_file.read_text(errors="ignore")))
+        return any(_PCC_THR_RE.search(f.read_text(errors="ignore")) for f in gate_package_modules(pcc_file))
     except OSError:
         return False
 
 
 def _extract_pcc_threshold(pcc_file: Path, default: float = 0.99) -> float:
-    """Numeric PCC threshold lifted from the test text (e.g. assert_with_pcc(..., 0.99)).
+    """Numeric PCC threshold lifted from the gate's text (e.g. assert_with_pcc(..., 0.99)) -- the gate
+    file first, then the helper modules of its own package it imports, in import order.
 
     NOTE: `default` is a FALLBACK, not evidence a threshold exists -- callers gating on whether the
     supplied file is a real PCC gate must use pcc_threshold_is_declared() instead.
     """
-    try:
-        txt = pcc_file.read_text(errors="ignore")
-    except OSError:
-        return default
-    m = _PCC_THR_RE.search(txt)
-    if m:
+    for f in gate_package_modules(pcc_file):
         try:
-            v = float(m.group(1))
-            if 0.0 < v < 1.0:
-                return v
-        except ValueError:
-            pass
+            txt = f.read_text(errors="ignore")
+        except OSError:
+            continue
+        m = _PCC_THR_RE.search(txt)
+        if m:
+            try:
+                v = float(m.group(1))
+                if 0.0 < v < 1.0:
+                    return v
+            except ValueError:
+                pass
     return default
 
 
