@@ -109,6 +109,12 @@ class ModelConfig:
     tie_word_embeddings: bool
 
 
+class _VerifyChunks(list):
+    """verify_inputs_batched's per-chunk inputs, plus rope_all: {attention kind: (cos, sin)} over every row."""
+
+    rope_all = None
+
+
 class LagunaModel:
     """TTNN Laguna (S-2.1: 48 layers, XS-2.1: 40 layers) on a supported 1×D Blackhole mesh."""
 
@@ -671,7 +677,9 @@ class LagunaModel:
         [1, T] and page_table int32 [T, blocks]."""
         T = int(cur_pos.shape[-1])
         blocks = int(page_table.shape[-1])
-        chunks = []
+        chunks = _VerifyChunks()
+        if T > 32:  # every row's (cos, sin) too: one attention prologue op over all rows
+            chunks.rope_all = self._build_decode_rope(rope_idx, T)
         for c in range(T // 32):
             r0, r1 = c * 32, (c + 1) * 32
             ridx = ttnn.slice(rope_idx, [0, r0], [1, r1])
@@ -689,7 +697,9 @@ class LagunaModel:
         captured = []
         for dec, kv in zip(self.layers, kv_cache):
             kind = dec.cfg.attention_type
-            h = dec.verify_rows_forward(h, [(cur, rope[kind], pt) for cur, rope, pt in chunks], kv)
+            rope_all = getattr(chunks, "rope_all", None)
+            h = dec.verify_rows_forward(h, [(cur, rope[kind], pt) for cur, rope, pt in chunks], kv,
+                                        rope_all=rope_all[kind] if rope_all else None)  # fmt: skip
             if int(dec.layer_idx) in ids:
                 captured.append(h)
         if not capture:

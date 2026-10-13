@@ -309,6 +309,8 @@ class MultichipDecoder(OptimizedDecoder):
         # ... and attn_epilogue1 at 32 rows: batch-32 decode, and the batched verify's chunks writing into one shared
         # WO input (replaces the gate slice, reshape, gated multiply, reshard, head concat and unshard per chunk)
         self._ae32 = _parse_binary_env("TT_LAGUNA_AE32", True)
+        # the batched verify's prologue as one op over all its rows (3 rows per core at 96) instead of one per chunk
+        self._ap1_multi = _parse_binary_env("TT_LAGUNA_AP1_MULTI", True)
         # DFlash context K/V (dflash_kv_rows) from a K/V-only slice of the fused QKV weight
         self._dflash_kv_only = _parse_binary_env("TT_LAGUNA_DFLASH_KV_ONLY", True)
         # 32-row draft head split / join as one multi-core tile copy (tile_regroup) instead of nlp_create_qkv_heads /
@@ -2527,7 +2529,7 @@ class MultichipDecoder(OptimizedDecoder):
         o = self._dram_mm(attn, self.w["wo"], self.w["wo_ds"], q_w, cfg.hidden, self._ck_o)
         return self._decode_tail(o, residual, B, next_norm_cores)
 
-    def verify_rows_forward(self, x, chunks, kv_cache):
+    def verify_rows_forward(self, x, chunks, kv_cache, rope_all=None):
         """Batched DFlash verify: T (a multiple of 32) decode rows of many users in one step.
 
         Row r is one token of some user; a user's rows are consecutive positions. The weight-reading projections run
@@ -2536,7 +2538,8 @@ class MultichipDecoder(OptimizedDecoder):
         per-row attention runs the tuned batch-32 decode block per 32-row chunk (decode_forward with qkv_pre, up to
         the joined heads): head split, q/k norms, RoPE, share_cache KV writes merging rows that land in one cache
         tile, paged SDPA, gate. x: [1, 1, T, H] bf16 TILE; chunks: one (cur_pos int32 [32], (cos, sin)
-        [1, 32, 1, rotary_dim], page_table int32 [32, blocks]) per chunk (see LagunaModel.verify_layers_batched)."""
+        [1, 32, 1, rotary_dim], page_table int32 [32, blocks]) per chunk (see LagunaModel.verify_layers_batched);
+        rope_all: (cos, sin) [1, T, 1, rotary_dim] of every row (one prologue op over all rows)."""
         cfg = self.cfg
         T = int(x.shape[-2])
         n = T // TILE
@@ -2560,8 +2563,21 @@ class MultichipDecoder(OptimizedDecoder):
         if shared:
             ae_out = ttnn.allocate_tensor_on_device(ttnn.Shape([1, 1, T, self.meta["q_w"]]), ttnn.bfloat16,
                                                     ttnn.TILE_LAYOUT, self.device, ttnn.L1_MEMORY_CONFIG)  # fmt: skip
+        multi = shared and n > 1 and rope_all is not None and self._ap1_multi
+        multi = multi and self._fused_kv_update and self._seq_kv_fused
         self._stop_pre_wo = True
         try:
+            if multi:
+                from .attn_prologue1 import attn_prologue1
+
+                qs, ks, vs = attn_prologue1(
+                    qkvg, rope_all[0], rope_all[1], self.w["q_norm"], self.w["k_norm"], self._ap1_scaler,
+                    cfg.num_heads, cfg.num_kv_heads, cfg.rotary_dim, cfg.eps, self._kv_shard_memcfg(TILE),
+                    self._kv_shard_memcfg(TILE, y0=4), rows=T,
+                )  # fmt: skip
+                for c, (cur_c, _rope_c, pt_c) in enumerate(chunks):
+                    self._verify_chunk_attention(qs[c], ks[c], vs[c], cur_c, pt_c, kv_cache, qkvg, c * TILE, ae_out)
+                chunks = []
             for c, (cur_c, rope_c, pt_c) in enumerate(chunks):
                 if shared:
                     self.decode_forward(None, cur_c, None, pt_c, kv_cache, sequential_kv_write=True, rope_mats=rope_c,
@@ -2580,6 +2596,28 @@ class MultichipDecoder(OptimizedDecoder):
         if ln2.is_sharded():
             ln2 = ttnn.sharded_to_interleaved(ln2, ttnn.L1_MEMORY_CONFIG)
         return ttnn.add(h, self._mlp(ln2, T, sharded=False))
+
+    def _verify_chunk_attention(self, q, k_sh, v_sh, cur_pos, page_table, kv_cache, qkvg, row0, ae_out):
+        """One 32-row chunk of the batched verify after the shared prologue (verify_rows_forward), as decode_forward
+        runs it for a chunk: the fused K/V cache write with share_cache (rows of one user landing in one cache tile
+        merged on one core), the paged SDPA (verify program config), then the epilogue into rows row0 .. of the shared
+        WO input ae_out."""
+        from .attn_epilogue1 import attn_epilogue1
+
+        cfg = self.cfg
+        ttnn.experimental.paged_fused_update_cache(
+            kv_cache["k"], k_sh, kv_cache["v"], v_sh, update_idxs_tensor=cur_pos, page_table=page_table, share_cache=True
+        )
+        kw = {"cur_pos_tensor": cur_pos, "page_table_tensor": page_table, "scale": cfg.scaling,
+              "compute_kernel_config": self._sdpa_compute}  # fmt: skip
+        if cfg.is_sliding:
+            kw["sliding_window_size"] = cfg.sliding_window
+        if self._decode_use_sdpa_pc:
+            kw["program_config"] = self._sdpa_pc_verify
+            kw["num_kv_heads"] = cfg.num_kv_heads
+        attn = ttnn.transformer.paged_scaled_dot_product_attention_decode(q, kv_cache["k"], kv_cache["v"], **kw)
+        attn_epilogue1(attn, qkvg, self.meta["qkv_w"], cfg.num_heads, None, rows=TILE, row_in=row0, out=ae_out,
+                       row_out=row0)  # fmt: skip
 
     def _decode_tail(self, o, residual, B, next_norm_cores):
         """WO output (row-parallel partial) -> all-reduce, residual add, post norm, MLP, residual add."""

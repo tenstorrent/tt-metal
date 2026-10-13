@@ -1,8 +1,8 @@
 // SPDX-FileCopyrightText: © 2026 Tenstorrent AI ULC
 // SPDX-License-Identifier: Apache-2.0
 
-// Decode attention prologue (1..32 rows), reader (Laguna). Role 0 = q, role 1 = k (+ v); each core handles one
-// token row b (and, for q, one part of its heads). The fused qkv matmul output is [R, W] bf16 TILE (Wt tiles wide);
+// Decode attention prologue (1..96 rows), reader (Laguna). Role 0 = q, role 1 = k (+ v); each core handles rpc
+// consecutive token rows b (and, for q, one part of their heads). The fused qkv matmul output is [R, W] bf16 TILE (Wt tiles wide);
 // this call's rows are row0 .. row0 + B - 1 (the batched verify: one 32-row chunk of all its rows). Head h's 128 values
 // of row s = row0 + b are row s % 32 of tiles (s / 32) * Wt + off + 4h .. + 3 (16 values in face ((s % 32) / 16) * 2
 // at byte (s % 16) * 32, 16 in the next face). They become row h of a [32, 128] head-major block of 4 tiles (rows 0-15 in faces 0/1, rows 16-31
@@ -50,7 +50,8 @@ void kernel_main() {
     constexpr uint32_t parts = get_compile_time_arg_val(10);
     constexpr uint32_t row0 = get_compile_time_arg_val(11);  // first source row of this call
     constexpr uint32_t Wt = get_compile_time_arg_val(12);    // qkv width in tiles
-    constexpr auto qkv_args = TensorAccessorArgs<13>();
+    constexpr uint32_t rpc = get_compile_time_arg_val(13);   // rows per core (consecutive)
+    constexpr auto qkv_args = TensorAccessorArgs<14>();
     constexpr auto w_args = TensorAccessorArgs<qkv_args.next_compile_time_args_offset()>();
     constexpr auto cos_args = TensorAccessorArgs<w_args.next_compile_time_args_offset()>();
     constexpr auto sin_args = TensorAccessorArgs<cos_args.next_compile_time_args_offset()>();
@@ -61,35 +62,41 @@ void kernel_main() {
     const auto sn = TensorAccessor(sin_args, get_common_arg_val<uint32_t>(2), cs_page);
     const auto sc = TensorAccessor(sc_args, get_common_arg_val<uint32_t>(3), 2048);
     const uint32_t L = get_absolute_logical_y() * grid_x + get_absolute_logical_x() - base;
-    const uint32_t row = L / parts;
+    const uint32_t row_first = (L / parts) * rpc;
     // q split over parts: this core's heads [h0, h0 + n) keep their rows of the block
     const uint32_t part = role == 0 ? L % parts : 0;
     const uint32_t h0 = part * nheads;
     const uint32_t n = role == 0 ? (h0 >= total_heads ? 0 : (total_heads - h0 < nheads ? total_heads - h0 : nheads)) : nheads;
 
+    // once: the norm weight row and the reduce scaler (compute keeps them for every row)
     cb_reserve_back(cb_w, 4);
-    cb_reserve_back(cb_cos, rd_tiles);
-    cb_reserve_back(cb_sin, rd_tiles);
     cb_reserve_back(cb_scaler, 1);
     for (uint32_t j = 0; j < 4; ++j) {
         noc_async_read_page(j, wt, get_write_ptr(cb_w) + j * w_page);
     }
-    for (uint32_t j = 0; j < rd_tiles; ++j) {
-        noc_async_read_page(row * rd_tiles + j, cs, get_write_ptr(cb_cos) + j * cs_page);
-        noc_async_read_page(row * rd_tiles + j, sn, get_write_ptr(cb_sin) + j * cs_page);
-    }
     noc_async_read_page(0, sc, get_write_ptr(cb_scaler));
-    cb_reserve_back(cb_x, 4);
-    const uint32_t s = row0 + row, s_tiles = (s / 32) * Wt;
-    gather_heads(qkv, s_tiles + off_tiles, h0, n, get_write_ptr(cb_x), s % 32);  // its barriers also cover the reads above
-    cb_push_back(cb_w, 4);
-    cb_push_back(cb_cos, rd_tiles);
-    cb_push_back(cb_sin, rd_tiles);
-    cb_push_back(cb_scaler, 1);
-    cb_push_back(cb_x, 4);
-    if constexpr (role == 1) {
-        cb_reserve_back(cb_v, 4);
-        gather_heads(qkv, s_tiles + v_off_tiles, 0, nheads, get_write_ptr(cb_v), s % 32);
-        cb_push_back(cb_v, 4);
+    for (uint32_t i = 0; i < rpc; ++i) {
+        const uint32_t row = row_first + i;
+        cb_reserve_back(cb_cos, rd_tiles);
+        cb_reserve_back(cb_sin, rd_tiles);
+        for (uint32_t j = 0; j < rd_tiles; ++j) {
+            noc_async_read_page(row * rd_tiles + j, cs, get_write_ptr(cb_cos) + j * cs_page);
+            noc_async_read_page(row * rd_tiles + j, sn, get_write_ptr(cb_sin) + j * cs_page);
+        }
+        cb_reserve_back(cb_x, 4);
+        const uint32_t s = row0 + row, s_tiles = (s / 32) * Wt;
+        gather_heads(qkv, s_tiles + off_tiles, h0, n, get_write_ptr(cb_x), s % 32);  // its barriers cover the reads above
+        if (i == 0) {
+            cb_push_back(cb_w, 4);
+            cb_push_back(cb_scaler, 1);
+        }
+        cb_push_back(cb_cos, rd_tiles);
+        cb_push_back(cb_sin, rd_tiles);
+        cb_push_back(cb_x, 4);
+        if constexpr (role == 1) {
+            cb_reserve_back(cb_v, 4);
+            gather_heads(qkv, s_tiles + v_off_tiles, 0, nheads, get_write_ptr(cb_v), s % 32);
+            cb_push_back(cb_v, 4);
+        }
     }
 }

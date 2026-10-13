@@ -181,9 +181,9 @@ class BatchedDFlash:
         context, and its block's earlier rows (written there by the draft layers). The block's padding rows see every
         slot (their outputs are dropped)."""
         U, R, Q = self.U, self.RING, self.Q
-        ids = torch.full((1, U * Q), self.mask_id, dtype=torch.int32)
-        for u in range(U):
-            ids[0, u * Q] = self.bonus[u]
+        ids = torch.full((U, Q), self.mask_id, dtype=torch.int32)
+        ids[:, 0] = torch.tensor(self.bonus, dtype=torch.int32)
+        ids = ids.reshape(1, U * Q)
         p0 = torch.tensor([self.ctx_start[u] + self.ctx_rows[u] for u in range(U)], dtype=torch.int64)
         base = torch.tensor(self.base, dtype=torch.int64)
         qpos = p0[:, None] + torch.arange(Q)[None, :]  # [U, Q]
@@ -310,22 +310,18 @@ class BatchedDFlash:
         U, T = self.U, self.T
         n = [self.K] * U if n is None else n
         assert sum(n) + U == T, (sum(n), U, T)
-        toks = torch.zeros((1, T), dtype=torch.int32)
-        pos = torch.zeros((T,), dtype=torch.int32)
-        dests = torch.zeros((1, T), dtype=torch.int64)
-        user = torch.zeros((T,), dtype=torch.int64)
-        r = 0
+        # plain lists, one tensor conversion (per-element tensor writes cost ~0.7 ms per round)
+        toks, pos, dests, user = [], [], [], []
         for u in range(U):
             p0 = self.ctx_start[u] + self.ctx_rows[u]
-            row_toks = [self.bonus[u]] + list(drafts[u][: n[u]])
-            for i, t in enumerate(row_toks):
-                toks[0, r] = t
-                pos[r] = p0 + i
-                dests[0, r] = u * self.RING + (p0 + i - self.base[u]) % self.RING
-                user[r] = u
-                r += 1
-        pt_rows = self._pt_host()[user].to(torch.int32)
-        return torch.stack([toks[0], pos, dests[0].to(torch.int32)]).reshape(1, 1, 3, T), pt_rows
+            k = 1 + n[u]
+            toks += [self.bonus[u]] + list(drafts[u][: n[u]])
+            pos += range(p0, p0 + k)
+            dests += [u * self.RING + (p0 + i - self.base[u]) % self.RING for i in range(k)]
+            user += [u] * k
+        pt_rows = self._pt_host()[torch.tensor(user)].to(torch.int32)
+        pk = torch.tensor([toks, pos, dests], dtype=torch.int64).to(torch.int32).reshape(1, 1, 3, T)
+        return pk, pt_rows
 
     def capture_traces(self):
         """Persistent inputs and two traces: the draft, and the verify with its ring update. Call after prefill (the
