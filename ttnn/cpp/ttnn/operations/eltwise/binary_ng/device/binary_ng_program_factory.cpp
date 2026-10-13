@@ -14,6 +14,7 @@
 #include <tt-metalium/host_api.hpp>
 #include <tt-metalium/program.hpp>
 #include <tt-metalium/circular_buffer.hpp>
+#include <tt-metalium/math.hpp>
 
 #include <algorithm>
 #include <variant>

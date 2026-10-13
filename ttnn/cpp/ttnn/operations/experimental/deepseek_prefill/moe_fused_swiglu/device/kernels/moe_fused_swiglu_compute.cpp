@@ -44,7 +44,7 @@
 #include "api/compute/situ_glu.h"
 #endif
 #include "moe_fused_swiglu_compute_helpers.hpp"
-#include "tt_metal/tools/profiler/kernel_profiler.hpp"
+#include "api/debug/kernel_profiler.hpp"
 
 #include "moe_fused_swiglu_common.hpp"   // the ONE definition of the mailbox word layout
 #include "moe_fused_swiglu_ct_args.hpp"  // the ONE definition of the compile-time arg order

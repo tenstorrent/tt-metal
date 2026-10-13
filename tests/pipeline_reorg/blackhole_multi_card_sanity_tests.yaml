@@ -42,7 +42,10 @@
 
 - name: TTNN multi-device CCL, SDPA PERF, and indexer tests (QB2 only)
   cmd: |
-    pytest tests/nightly/blackhole/sdpa/ -svv
+    pytest tests/nightly/blackhole/sdpa/ -svv --ignore=tests/nightly/blackhole/sdpa/test_ring_mla_fused_gather.py
+    # Split-KV ring MLA: production-dimension accuracy and the comparison-mode golden only; the rest of
+    # the file is a local validation suite and its perf check runs on Galaxy (blaze prefill sdpa_perf).
+    pytest tests/nightly/blackhole/sdpa/test_ring_mla_fused_gather.py -k "production_dimensions or comparison_mode" -svv
     pytest tests/ttnn/unit_tests/operations/experimental/test_high_bw_all_gather.py::test_high_bw_all_gather_quietbox_ci_perf -q
     pytest tests/ttnn/nightly/unit_tests/operations/experimental/indexer_score/test_ring_indexer_score_dsa_perf.py -svv
     pytest tests/ttnn/nightly/unit_tests/operations/experimental/indexer_score/test_ring_indexer_score_dsa_4d.py -svv
