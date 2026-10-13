@@ -72,6 +72,7 @@ run() {  # run <side> <build> <ids> <tag> <run types|-> <limit>
   [[ -n ${LLKAB_DRY:-} ]] && return
   local v=$1 b=$2 ids=$3 tag=$4 rts=$5
   if [[ $rts == - ]]; then unset LLK_PERF_RUN_TYPES; else export LLK_PERF_RUN_TYPES=$rts; fi
+  echo "== run $tag reads $T/bs_$b: $(cd $T/bs_$b && find . -path '*/elf/unpack.elf' | sort | xargs cat 2>/dev/null | md5sum | cut -c1-12) (unpack ELFs)"
   TT_LLK_DISABLE_ASSERTS=1 PERF_RUN_TAG=$tag LIM=$6 harness $v $b $ids $T/cons_$tag.log --compile-consumer -o timeout_method=thread --timeout 120
   echo "== run $tag ($v, $b) rc=$? $(date -u +%T): $(grep -aE '[0-9]+ (passed|failed|error)' $T/cons_$tag.log | tail -n 1)"
   grep -aE '^(FAILED|ERROR) ' $T/cons_$tag.log | cut -c1-300 | sed -n 1,20p
@@ -106,7 +107,9 @@ for dp, dn, fn in os.walk(a):
         cnt[(f, st, k)] += 1
 for (f, st, k), n in sorted(cnt.items()): print(f"   {n:4d} {f:10s} {st:9s} {k}")
 PYEOF
-$PY $T/elfid.py $SF/compiler/bin/riscv-tt-elf- $T/bs_hp $T/bs_mp
+$PY $T/elfid.py $SF/compiler/bin/riscv-tt-elf- $T/bs_hp $T/bs_mp > $T/elfid.txt; cat $T/elfid.txt
+# guard (17_CI_AB.md): the sides must differ where the head changes code, or the A/B is void
+grep -q " differs " $T/elfid.txt || { echo "== GUARD FAIL: main and head builds are identical"; exit 3; }
 
 G=L1_TO_L1,UNPACK_ISOLATE,MATH_ISOLATE,L1_CONGESTION; F=L1_TO_L1,UNPACK_ISOLATE,L1_CONGESTION
 run main mp $S/ids_gap.txt G_m1 $G 900
