@@ -15,7 +15,7 @@ namespace ckernel::sfpu {
 #ifndef DISABLE_SFPLOADMACRO
 namespace softsign_detail {
 
-// Two rows in flight: row a in LREG0-3, row b in LREG4-7 (x then t2, y, t, y1 then the result's reciprocal).
+// Two rows in flight: row a in LREG0-3, row b in LREG4-7 (x then t2, y, t, then y1 and the final reciprocal).
 constexpr std::uint32_t xa = p_sfpu::LREG0, ya = p_sfpu::LREG1, ta = p_sfpu::LREG2, ra = p_sfpu::LREG3;
 constexpr std::uint32_t xb = p_sfpu::LREG4, yb = p_sfpu::LREG5, tb = p_sfpu::LREG6, rb = p_sfpu::LREG7;
 
@@ -31,7 +31,8 @@ inline void tail() {
     TTI_SFPLOADMACRO((macro << 2) | (t & 3), InstrModLoadStore::DEFAULT, ADDR_MOD_7, (off & 0x3fe) | (t >> 2));
 }
 
-// The two Newton steps of sfpu_reciprocal_iter<2, true>, the reciprocal kept in r.
+// The two Newton steps of sfpu_reciprocal_iter<2, true>, the reciprocal kept in r. x = |v| + 1 >= 1, so the
+// guard of the unnormalized form only sees inf and NaN, where both forms give the same words.
 inline void newton() {
     TTI_SFPARECIP(0, xa, ya, 0);
     TTI_SFPARECIP(0, xb, yb, 0);
