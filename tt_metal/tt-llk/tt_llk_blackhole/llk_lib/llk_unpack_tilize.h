@@ -193,12 +193,10 @@ inline void _llk_unpack_tilize_init_(
 
         _llk_unpack_tilize_mop_config_(unpack_to_dest);
 
-        // The whole-tile SrcA path also records the block body of _llk_unpack_tilize_block_ (unpack to dest never takes the block path).
+        // Unpack to dest never takes the block path
         if (!unpack_to_dest)
         {
-            llk_unpack_tilize_detail::load_block_replay_half<THCON_SEC0_REG3_Base_address_ADDR32, 0>();
-            llk_unpack_tilize_detail::load_block_replay_half<THCON_SEC0_REG3_Base_cntx1_address_ADDR32, llk_unpack_tilize_detail::BLOCK_REPLAY_HALF_LEN>();
-            block_replay_body() = BlockReplayBody::Tilize;
+            block_replay_body() = BlockReplayBody::TilizeInit;
         }
     }
 }
@@ -423,9 +421,10 @@ inline void _llk_unpack_tilize_block_(
     const bool unpack_to_dest =
         (unpack_source_format == DataFormat::UInt32) || (unpack_source_format == DataFormat::Int32) || (unpack_dest_format == DataFormat::Float32);
 
-    const bool body_recorded = block_replay_body() == BlockReplayBody::Tilize;
-    LLK_ASSERT(IS_8BIT_FORMAT(unpack_src_format) || unpack_to_dest || body_recorded, "_llk_unpack_tilize_block_ needs the body recorded by _llk_unpack_tilize_init_");
-    if (IS_8BIT_FORMAT(unpack_src_format) || unpack_to_dest || !body_recorded)
+    const BlockReplayBody record = block_replay_body();
+    const bool after_tilize_init = record == BlockReplayBody::Tilize || record == BlockReplayBody::TilizeInit;
+    LLK_ASSERT(IS_8BIT_FORMAT(unpack_src_format) || unpack_to_dest || after_tilize_init, "_llk_unpack_tilize_block_ needs _llk_unpack_tilize_init_ as the last unpack init");
+    if (IS_8BIT_FORMAT(unpack_src_format) || unpack_to_dest || !after_tilize_init)
     {
         for (std::uint32_t tile = 0; tile < num_tiles; ++tile)
         {
@@ -438,6 +437,13 @@ inline void _llk_unpack_tilize_block_(
     const std::uint32_t address         = base_address + first_tile_index * tile_offset_16B;
     LLK_ASSERT(is_valid_L1_address(address), "L1 base_address must be in valid L1 memory region");
     LLK_ASSERT(is_valid_L1_address(address + (num_tiles - 1) * tile_offset_16B), "L1 address of the last tile must be in valid L1 memory region");
+
+    if (record == BlockReplayBody::TilizeInit)
+    {
+        llk_unpack_tilize_detail::load_block_replay_half<THCON_SEC0_REG3_Base_address_ADDR32, 0>();
+        llk_unpack_tilize_detail::load_block_replay_half<THCON_SEC0_REG3_Base_cntx1_address_ADDR32, llk_unpack_tilize_detail::BLOCK_REPLAY_HALF_LEN>();
+        block_replay_body() = BlockReplayBody::Tilize;
+    }
 
     volatile std::uint32_t tt_reg_ptr* cfg = get_cfg_pointer(); // get pointer to registers for current state ID
 
