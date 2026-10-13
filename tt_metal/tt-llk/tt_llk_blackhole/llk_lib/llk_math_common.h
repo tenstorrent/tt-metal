@@ -30,6 +30,11 @@ using namespace ckernel::math;
 template <bool is_fp32_dest_acc_en = false>
 inline void _llk_math_hw_configure_(const std::uint32_t srca_data_format, const std::uint32_t srcb_data_format)
 {
+#if defined(LLK_EXP_NOP_MATH) && defined(LLK_EXP_HWC_EMPTY)
+    asm volatile(""); // experiment hook (integ4): the base of the pure nop3 leg
+#elif defined(LLK_EXP_NOP_MATH)
+    asm volatile("nop"); // experiment hook (integ4): INIT NOP
+#endif
     // SFPU_Fp32_enabled (written below) is read by SFPLOAD/SFPSTORE (MOD0_FMT_SRCB), so the SFPU must drain too.
     TTI_STALLWAIT(p_stall::STALL_CFG, p_stall::MATH | p_stall::WAIT_SFPU);
     // Configure ZEROACC to auto-detect destination bank (non-legacy mode).

@@ -75,6 +75,11 @@ inline void _llk_unpack_hw_configure_(
     const std::uint32_t unpA_tile_size = 0,
     const std::uint32_t unpB_tile_size = 0)
 {
+#if defined(LLK_EXP_NOP_UNPACK) && defined(LLK_EXP_HWC_EMPTY)
+    asm volatile(""); // experiment hook (integ4): the base of the pure nop3 leg
+#elif defined(LLK_EXP_NOP_UNPACK)
+    asm volatile("nop"); // experiment hook (integ4): INIT NOP
+#endif
     LLK_ASSERT(unpA_num_faces == 1 || unpA_num_faces == 2 || unpA_num_faces == 4, "unpA_num_faces must be 1, 2, or 4");
     LLK_ASSERT(unpB_num_faces == 1 || unpB_num_faces == 2 || unpB_num_faces == 4, "unpB_num_faces must be 1, 2, or 4");
 
