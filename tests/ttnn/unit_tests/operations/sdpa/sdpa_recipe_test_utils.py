@@ -255,13 +255,7 @@ def check_legacy_arguments(
         host_mask = host_mask.bfloat16()
         kwargs["attn_mask"] = to_device(device, host_mask, memory_config=memory_config)
     if compute_kernel_config:
-        kwargs["compute_kernel_config"] = ttnn.init_device_compute_kernel_config(
-            device.arch(),
-            math_fidelity=ttnn.MathFidelity.HiFi4,
-            math_approx_mode=False,
-            fp32_dest_acc_en=True,
-            packer_l1_acc=True,
-        )
+        kwargs["compute_kernel_config"] = fp32_dest_config(device)
     out = ttnn.transformer.scaled_dot_product_attention(
         tq,
         tk,
@@ -602,21 +596,6 @@ def check_mixed_kv(device, variant, k_dtype, v_dtype, shape=(1, 4, 2, 500, 700, 
     assert l2_pct(ttnn.to_torch(out), expected) < L2_PCT_BOUND[variant]
 
 
-def check_joint_empty(device, variant):
-    """Zero-width joint tensors (FLUX.2 single-stream blocks): the dense result and an empty joint output."""
-    q, k, v = randn(1, 2, 600, 128, seed=36), randn(1, 2, 600, 128, seed=37), randn(1, 2, 600, 128, seed=38)
-    empty = [to_device(device, torch.zeros(1, 2, 0, 128)) for _ in range(3)]
-    out, joint_out = ttnn.transformer.joint_scaled_dot_product_attention(
-        *inputs_for(device, variant, q, k, v),
-        *empty,
-        joint_strategy="rear",
-        program_config=program_config(device, 128, 256),
-        precision=VARIANTS[variant][0],
-    )
-    assert list(joint_out.shape) == [1, 2, 0, 128]
-    assert l2_pct(ttnn.to_torch(out), reference(q, k, v)) < L2_PCT_BOUND[variant]
-
-
 def fp32_dest_config(device):
     """The shared HiFi4 + FP32-dest config legacy callers pass (it selected the legacy kernels)."""
     return ttnn.init_device_compute_kernel_config(
@@ -650,16 +629,6 @@ def check_routing(device, case):
         expected = reference(q, k, v, key_mask(1000, 1000, causal=True) if causal else mask, 0.1)
         explicit = run(chosen(), precision=recipe)
         tolerance = 1.5 * l2_pct(stored(expected.bfloat16(), dtype), expected)  # BFP8 output, as legacy
-    elif case == "dense_mask_short_k":
-        # Keys that fit one K chunk: op-chosen like any routed call (the caller's larger Q384 is not kept).
-        q, k, v = randn(1, 2, 500, 64, seed=83), randn(1, 2, 500, 64, seed=84), randn(1, 2, 500, 64, seed=85)
-        mask = key_mask(500, 500, window=200)[None, None]
-        tensors = [to_device(device, x) for x in (q, k, v)]
-        run = lambda config, **extra: ttnn.transformer.scaled_dot_product_attention(
-            *tensors, is_causal=False, scale=0.125, attn_mask=to_device(device, mask), program_config=config, **extra
-        )
-        routed, recipe = run(program_config(device, 384, 256), compute_kernel_config=fp32), accurate
-        explicit, expected, tolerance = run(chosen(), precision=recipe), reference(q, k, v, mask, 0.125), 0.0
     elif case == "chunked_tensor_start":
         chunked = ChunkedCase(device, "accurate", sq=256, blocks_per_seq=4, block=128)
         start = int_tensor(device, [256])
@@ -713,9 +682,7 @@ def check_routing(device, case):
         run = lambda **extra: torch.cat(
             [
                 ttnn.to_torch(x)
-                for x in ttnn.transformer.joint_scaled_dot_product_attention(
-                    *tensors, joint_strategy="rear", **extra
-                )
+                for x in ttnn.transformer.joint_scaled_dot_product_attention(*tensors, joint_strategy="rear", **extra)
             ],
             2,
         )

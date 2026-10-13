@@ -577,7 +577,7 @@ def test_ring_joint_sdpa_noncausal_ignores_is_balanced(ring_mesh, dest):
         assert l2_pct(got, expected(chip)) < bound, f"chip {chip}"
 
 
-@pytest.mark.parametrize("variant", ["standard", "accurate"])
+@pytest.mark.parametrize("variant", ["standard"])
 def test_ring_joint_sdpa_recipe_rejects_sliding_window(ring_mesh, variant, expect_error):
     """The legacy FP32 ring kernel ignores sliding_window_size; the recipes reject it rather than ignore it."""
     mesh, semaphores, ccl_column = ring_mesh

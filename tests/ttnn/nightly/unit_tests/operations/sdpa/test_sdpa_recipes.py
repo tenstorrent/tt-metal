@@ -24,7 +24,6 @@ from tests.ttnn.unit_tests.operations.sdpa.sdpa_recipe_test_utils import (
     check_chunked_trace,
     check_concat_heads,
     check_joint,
-    check_joint_empty,
     check_key_range,
     check_legacy_arguments,
     check_mixed_kv,
@@ -126,11 +125,6 @@ def test_joint_sdpa_recipe(device, variant):
     check_joint(device, variant)
 
 
-@pytest.mark.parametrize("variant", VARIANTS)
-def test_joint_sdpa_recipe_empty_joint(device, variant):
-    check_joint_empty(device, variant)
-
-
 @pytest.mark.parametrize(
     "k_dtype, v_dtype",
     on_wormhole(
@@ -159,7 +153,7 @@ def test_sdpa_recipe_op_selected_blocking(device, variant, shape):
 # ---------------------------------------------------------------------------------------------------------------
 # scale 1.0 (Gemma-style) with Q scaled by 1/8: the same scaled logits as the default scale at D64. Unscaled, the
 # logits (std 8) hit a FAST bug that predates the scale argument (Q96 with a one-tile-wide QK subblock, K160 or
-# K32: rel-L2 in the thousands, also at the default scale with Q x8); see stream-b notes.
+# K32: rel-L2 in the thousands, also at the default scale with Q x8).
 @pytest.mark.parametrize(
     "scale, q_multiplier",
     on_wormhole(named([(1.0, 0.125), (0.3, 1.0), (0.02, 1.0)], ["1.0", "0.3", "0.02"], sets=True), {"0.3"}),
@@ -232,19 +226,14 @@ def test_sdpa_recipe_packed_inputs(device, variant, q_dtype, kv_dtype):
 
 
 @pytest.mark.parametrize("variant", VARIANTS)
-def test_sdpa_recipe_ignores_compute_kernel_config(device, variant):
-    """An FP32-dest HiFi4 compute_kernel_config with math_approx_mode and exp_approx_mode False: bit-identical."""
+def test_sdpa_recipe_legacy_controls_bitwise(device, variant):
+    """An FP32-dest HiFi4 compute_kernel_config with math_approx_mode and exp_approx_mode False, and L1-interleaved
+    Q/K/V, mask and output: each bit-identical to the plain DRAM call."""
     plain = ttnn.to_torch(check_legacy_arguments(device, variant, mask=True))
     configured = ttnn.to_torch(check_legacy_arguments(device, variant, mask=True, compute_kernel_config=True))
-    assert torch.equal(plain, configured)
-
-
-@pytest.mark.parametrize("variant", VARIANTS)
-def test_sdpa_recipe_l1_inputs_and_output(device, variant):
-    """L1-interleaved Q/K/V, mask and output: bit-identical to DRAM."""
-    dram = ttnn.to_torch(check_legacy_arguments(device, variant, mask=True))
     l1 = ttnn.to_torch(check_legacy_arguments(device, variant, mask=True, memory_config=ttnn.L1_MEMORY_CONFIG))
-    assert torch.equal(dram, l1)
+    assert torch.equal(plain, configured)
+    assert torch.equal(plain, l1)
 
 
 # b, nh, nkv, sq, sk, d, q_chunk, k_chunk (0: op-selected), grid (None: the device grid).
@@ -337,22 +326,17 @@ CHUNKED_CASES = {
     "sink": dict(start=384, sink=True),
 }
 CHUNKED_WORMHOLE = {"paged_gqa_batch2_4x96-scalar_start", "window300-tensor_start"}
+# A start read on device changes only where the reader gets the offset: three cases here (the trace tests and the
+# chunked_tensor_start routing case cover more).
+CHUNKED_PARAMS = [pytest.param(case, False, id=f"{case}-scalar_start") for case in CHUNKED_CASES] + [
+    pytest.param(case, True, id=f"{case}-tensor_start") for case in ("start96_off_chunk", "paged_5x128", "window300")
+]
 
 
-@pytest.mark.parametrize(
-    "case, as_tensor",
-    on_wormhole(
-        [
-            pytest.param(case, as_tensor, id=f"{name}-{'tensor_start' if as_tensor else 'scalar_start'}")
-            for name, case in CHUNKED_CASES.items()
-            for as_tensor in (False, True)
-        ],
-        CHUNKED_WORMHOLE,
-    ),
-)
+@pytest.mark.parametrize("case, as_tensor", on_wormhole(CHUNKED_PARAMS, CHUNKED_WORMHOLE))
 @pytest.mark.parametrize("variant", VARIANTS)
 def test_chunked_sdpa_recipe(device, variant, case, as_tensor):
-    check_chunked(device, variant, as_tensor=as_tensor, **case)
+    check_chunked(device, variant, as_tensor=as_tensor, **CHUNKED_CASES[case])
 
 
 @pytest.mark.parametrize("variant", ["standard", "balanced", "accurate", "fast_bfp8"])

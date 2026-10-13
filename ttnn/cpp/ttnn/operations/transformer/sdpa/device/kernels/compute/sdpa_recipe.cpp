@@ -4,21 +4,16 @@
 // Dense and joint SDPA precision recipes (host: sdpa_recipe.cpp): STANDARD, BALANCED, ACCURATE and FAST
 // (B-E) run recipe_streaming.hpp. The host selects the recipe with SDPA_RECIPE_FP32 / _ACCURATE / _LOFI.
 //
-// Optimization: the default level (-O3), except ACCURATE at -O2. The host disables the
-// SFPI compiler's replay optimization (tenstorrent/tt-metal#58433). Watcher builds are size-optimized.
+// Optimization: the default level (-O3), except ACCURATE at -O2 and, on Wormhole, BALANCED, fused and FAST builds at
+// -O2: Wormhole images are larger (SFPU launcher, four packers), and at -O3 these overflow the kernel config buffer
+// (BALANCED: its chunked prefill build with a sink and a device-tensor start, 70768 B). The host disables the SFPI
+// compiler's replay optimization (tenstorrent/tt-metal#58433). Watcher builds are size-optimized.
 #if defined(WATCHER_ENABLED)
 #define SDPA_RECIPE_OPTIMIZE_PUSHED
 #pragma GCC push_options
 #pragma GCC optimize("Os")
-#elif defined(SDPA_RECIPE_ACCURATE) || (defined(ARCH_WORMHOLE) && defined(SDPA_RECIPE_FP32))
-// Wormhole BALANCED too: at -O3 its chunked prefill build with a sink and a device-tensor start overflows the kernel
-// config buffer (70768 B).
-#define SDPA_RECIPE_OPTIMIZE_PUSHED
-#pragma GCC push_options
-#pragma GCC optimize("O2")
-#elif defined(ARCH_WORMHOLE) && (defined(SDPA_RECIPE_FUSED) || defined(SDPA_RECIPE_LOFI))
-// Wormhole images are larger (SFPU launcher, four packers): fused and FAST builds at -O3 overflow the kernel config
-// buffer.
+#elif defined(SDPA_RECIPE_ACCURATE) || \
+    (defined(ARCH_WORMHOLE) && (defined(SDPA_RECIPE_FP32) || defined(SDPA_RECIPE_FUSED) || defined(SDPA_RECIPE_LOFI)))
 #define SDPA_RECIPE_OPTIMIZE_PUSHED
 #pragma GCC push_options
 #pragma GCC optimize("O2")
