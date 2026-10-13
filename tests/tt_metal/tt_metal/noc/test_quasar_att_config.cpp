@@ -203,7 +203,7 @@ TEST(QuasarAttAetherConfig, RemoteWindowMatchesSlot1Narrowed) {
     EXPECT_EQ(w.compare, 0x1000000000ull);
     EXPECT_EQ(w.mask_bits, 32);
     EXPECT_EQ(w.endpoint_shift, 26);
-    // 64 MiB per endpoint: the whole of a 2x3 emulator DRAM channel (higher offsets wrap onto the low 64 MiB).
+    // 64 MiB per endpoint: the DRAM a 2x3 emulator channel backs.
     EXPECT_EQ(w.local_address_limit(), 64ull * 1024 * 1024);
     EXPECT_EQ(w.endpoint_size, 6);
     EXPECT_EQ(w.endpoint_table_offset, 1);

@@ -1023,14 +1023,16 @@ inline tt_metal::KernelHandle create_sd_cq_kernel(
             .defines = defines});
 }
 
-// The Quasar 2x3 emulator has 64 MiB of DRAM per channel. Its soc descriptor advertises 1 GiB per bank, but an
-// offset at or above 64 MiB wraps onto the low 64 MiB. Under an ATT map the DRAM window and the allocator's bank
-// clamp keep tt-metal inside it; plain-XY runs (TT_METAL_NOC_ATT unset) keep the descriptor's 1 GiB bank and have
-// no clamp. Test code that places DRAM data by hand must stay below 64 MiB itself.
+// The Quasar 1x3, 2x3 and 2x3_DISPATCH emulators back 64 MiB of DRAM per channel. Their soc descriptors declare
+// 1 GiB, but an offset at or above 64 MiB wraps onto the low 64 MiB. tt-metal clamps the descriptor's DRAM size to
+// 64 MiB on these models (qa_emulator_models.hpp), so the allocator, dram_size_per_channel() and both watchers see
+// 64 MiB on every run. Test code that places DRAM data by hand must still stay below 64 MiB itself.
 static constexpr uint32_t QUASAR_SIMULATION_PHYSICAL_DRAM_SIZE = 1u << 26;  // 64 MiB
 
 // DRAM addresses and sizes for the command queue on the Quasar simulator. Issue queue (8 MiB) and completion queue
-// (8 MiB) sit at [48, 56) and [56, 64) MiB, ending at the top of the emulator's 64 MiB DRAM channel.
+// (8 MiB) sit at [48, 56) and [56, 64) MiB, ending at the top of the emulator's 64 MiB DRAM channel. On these models
+// the allocator's DRAM bank also ends at 64 MiB, so the queues occupy its top 16 MiB; the slow-dispatch cq tests
+// allocate no DRAM buffers, and test_prefetcher.cpp checks the queue base against the allocator base.
 static constexpr uint32_t QUASAR_SIMULATION_ISSUE_QUEUE_BASE = 0x3000000u;  // 48 MiB
 static constexpr uint32_t QUASAR_SIMULATION_ISSUE_QUEUE_SIZE = 0x800000;    // 8 MiB
 static constexpr uint32_t QUASAR_SIMULATION_COMPLETION_QUEUE_BASE =

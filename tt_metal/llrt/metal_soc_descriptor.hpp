@@ -7,6 +7,7 @@
 #include <stdint.h>
 #include <cstddef>
 #include <map>
+#include <optional>
 #include <vector>
 
 #include <tt-metalium/core_coord.hpp>
@@ -36,11 +37,19 @@ public:
     std::vector<std::vector<tt::tt_metal::CoreCoord>> dram_bank_endpoint_coords;
 
     uint64_t dram_core_size{};
+    // Bytes per DRAM view. On the Quasar emulator models in qa_emulator_models.hpp it is clamped to
+    // the DRAM the model backs.
     uint64_t dram_view_size{};
 
     std::map<tt::tt_metal::CoreCoord, int> logical_eth_core_to_chan_map;
 
-    metal_SocDescriptor(const SocDescriptor& other, const tt::BoardType& board_type);
+    // dram_view_size_limit: the DRAM the device really backs per view when that is less than the
+    // descriptor declares (the Quasar emulator models in qa_emulator_models.hpp). dram_view_size and
+    // dram_core_size are clamped to it.
+    metal_SocDescriptor(
+        const SocDescriptor& other,
+        const tt::BoardType& board_type,
+        std::optional<uint64_t> dram_view_size_limit = std::nullopt);
 
     tt::tt_metal::CoreCoord get_preferred_worker_core_for_dram_view(int dram_view, uint8_t noc) const;
     tt::tt_metal::CoreCoord get_preferred_eth_core_for_dram_view(int dram_view, uint8_t noc) const;
@@ -108,7 +117,7 @@ private:
     // Argument must be a TRANSLATED (UMD) coord; a metal-logical {view, subchannel} coord never matches.
     bool is_noc0_dram_endpoint(const tt::tt_metal::CoreCoord& translated_coord) const;
 
-    void load_dram_metadata_from_device_descriptor();
+    void load_dram_metadata_from_device_descriptor(std::optional<uint64_t> dram_view_size_limit);
     void generate_logical_eth_coords_mapping();
     void generate_physical_routing_to_profiler_flat_id();
 };

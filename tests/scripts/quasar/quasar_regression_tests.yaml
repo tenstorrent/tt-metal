@@ -50,6 +50,12 @@ unit_tests_legacy:
     env:
       TT_METAL_SLOW_DISPATCH_MODE: 1
 
+  - filter: "*DramStaysInsideTheEmulatorBacking*"
+    config: 1x3
+    back2back: true
+    env:
+      TT_METAL_SLOW_DISPATCH_MODE: 1
+
   - filter: "*MeshDeviceSingleCardFixture.Bmm"
     config: 1x3
     back2back: true
@@ -82,6 +88,10 @@ unit_tests_legacy:
     back2back: true
 
   - filter: "*DmLoopback*"
+    config: 2x3_DISPATCH
+    back2back: true
+
+  - filter: "*DramStaysInsideTheEmulatorBacking*"
     config: 2x3_DISPATCH
     back2back: true
 

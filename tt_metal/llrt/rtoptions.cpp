@@ -517,6 +517,10 @@ void RunTimeOptions::HandleEnvVar(EnvVarID id, const char* value) {
 
         // TT_METAL_SIMULATOR
         // Path to simulator executable. When set, overrides mock cluster mode if both are set.
+        // For the Quasar emulator this is the image directory. Its name selects model-specific
+        // behaviour: emu-qsr-s1-* defaults TT_METAL_NOC_ATT to grendel_qsr1, and emu-quasar-1x3,
+        // emu-quasar-2x3 and emu-quasar-2x3_DISPATCH limit DRAM to the 64 MiB per channel they back
+        // (llrt/hal/tt-2xx/quasar/qa_emulator_models.hpp). A renamed directory loses both.
         // Default: Hardware mode (no simulator)
         // Usage: export TT_METAL_SIMULATOR=/path/to/simulator
         case EnvVarID::TT_METAL_SIMULATOR:

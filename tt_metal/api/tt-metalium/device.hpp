@@ -83,9 +83,10 @@ public:
 
     virtual int num_dram_channels() const = 0;
     virtual uint32_t l1_size_per_core() const = 0;
-    // DRAM size per channel as the soc descriptor advertises it. The allocator's DRAM bank size can be
-    // smaller: Quasar ATT maps clamp it to their DRAM window, and the Quasar 2x3 emulator backs only
-    // 64 MiB per channel (higher offsets wrap onto the low 64 MiB) although its descriptor says 1 GiB.
+    // DRAM size per channel: the soc descriptor's DRAM view size, except on the Quasar emulator models
+    // listed in qa_emulator_models.hpp, where it is clamped to the DRAM the model backs (64 MiB on 1x3,
+    // 2x3 and 2x3_DISPATCH; their descriptors declare 1 GiB). The allocator's DRAM bank is this (under a
+    // Quasar ATT map, at most the map's DRAM window) minus the HAL's reserved base and the trace region.
     virtual uint32_t dram_size_per_channel() const = 0;
     // Returns the AI clock frequency in MHz for this device.
     // This value is queried from the actual hardware via the cluster API

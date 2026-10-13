@@ -48,16 +48,14 @@ constexpr const MapInfo* find_map(std::string_view name) {
     return nullptr;
 }
 
-/// @brief The DRAM a bank may use under this map: the size of the DRAM window's
-/// local-address field. The allocator caps the DRAM bank size at this so every
-/// allocation, top-down kernel binaries included, stays inside the DRAM that exists.
+/// @brief The DRAM a bank may address under this map: the size of the DRAM
+/// window's local-address field. The allocator takes the smaller of this and the
+/// descriptor's DRAM size.
 ///
-/// - quasar_aether_2x3 and horizon_2x3: 64 MiB. The emulator's DRAM tile backs
-///   64 MiB per channel. Its soc descriptor advertises 1 GiB, but an offset at or
-///   above 64 MiB wraps onto the low 64 MiB, so the cap keeps tt-metal inside the
-///   real DRAM.
-/// - grendel_qsr1: 8 GiB, larger than the descriptor's DRAM view, so the cap
-///   changes nothing there.
+/// - quasar_aether_2x3: 64 MiB, the DRAM a 2x3 emulator channel backs
+///   (qa_emulator_models.hpp), which the descriptor is already clamped to.
+/// - horizon_2x3: 64 MiB.
+/// - grendel_qsr1: 8 GiB, larger than the descriptor's DRAM view.
 constexpr std::uint64_t dram_window_local_address_limit(const MapInfo& info) {
     return noc_att::map_window(info.map, noc_att::WindowClass::Dram).local_address_limit();
 }
