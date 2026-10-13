@@ -6864,6 +6864,32 @@ class TestReportNameDerivedFromTestId:
             leftovers = self._graph_capture_leftovers(report_path)
             assert not leftovers, f"graph capture inputs left after a {failure} failure: {leftovers}"
 
+    def test_comparison_records_json_is_removed_in_comparison_only_mode(self, request, device, tmp_path):
+        """Without a graph report the records are flushed straight to db.sqlite; their JSON copy is not kept."""
+        if ttnn.graph.is_graph_capture_active():
+            pytest.skip("graph reporting is already on for this run, so the nested fixture would join that capture")
+        with ttnn.manage_config("enable_fast_runtime_mode", False), ttnn.manage_config(
+            "enable_logging", True
+        ), ttnn.manage_config("enable_graph_report", False), ttnn.manage_config(
+            "enable_comparison_mode", True
+        ), ttnn.manage_config(
+            "root_report_path", tmp_path
+        ), ttnn.manage_config(
+            "report_name", "comparison_only_cleanup"
+        ):
+            with contextlib.contextmanager(graph_report.run_pytest_graph_report_fixture)(request):
+                report_path = Path(ttnn.CONFIG.report_path)
+                torch_input = torch.rand((32, 32), dtype=torch.bfloat16)
+                a = ttnn.from_torch(torch_input, layout=ttnn.TILE_LAYOUT, device=device)
+                b = ttnn.from_torch(torch_input, layout=ttnn.TILE_LAYOUT, device=device)
+                ttnn.add(a, b)
+                assert ttnn.graph.has_comparison_records(), "comparison mode recorded nothing to flush"
+            with sqlite3.connect(report_path / "db.sqlite") as conn:
+                (count,) = conn.execute("SELECT COUNT(*) FROM local_tensor_comparison_records").fetchone()
+            assert count > 0, "comparison records were not flushed to db.sqlite"
+            leftovers = self._graph_capture_leftovers(report_path)
+            assert not leftovers, f"comparison mode inputs left in the report: {leftovers}"
+
 
 class TestConfigHelpersUsedByTheReportFixture:
     """The derived report_name goes through manage_config, and configs written by ttnn spell an unset one as null."""
