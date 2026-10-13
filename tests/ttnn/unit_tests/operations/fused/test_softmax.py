@@ -937,6 +937,32 @@ def test_softmax_4096x4096_fp32(device):
 
 
 @pytest.mark.parametrize(
+    "n",
+    [32, 1024, 4096],
+)
+def test_softmax_float32_default_uses_accurate_exp(device, n):
+    """Regression test for issue #57633: a float32 input must default to the accurate exp
+    (fast_and_approximate_mode=False), matching ttnn.exp's own default. Previously the default
+    compute kernel config hard-coded math_approx_mode=True for every dtype, so an all-ones row
+    (every softmax output is exactly 1/n) came back ~2.9% low and rows summed to ~0.97."""
+    torch_input_tensor = torch.ones((1, 1, 32, n), dtype=torch.float32)
+    torch_output_tensor = F.softmax(torch_input_tensor, dim=-1, dtype=torch.float32)
+
+    ttnn_input_tensor = ttnn.from_torch(torch_input_tensor, dtype=ttnn.float32, layout=ttnn.TILE_LAYOUT, device=device)
+    ttnn_output_tensor = ttnn.softmax(ttnn_input_tensor, dim=-1)
+    output_torch = ttnn.to_torch(ttnn_output_tensor)
+
+    assert_numeric_metrics(
+        torch_output_tensor,
+        output_torch,
+        pcc_threshold=0.999,
+        rtol=0.01,
+        atol=1e-5,
+        frobenius_threshold=0.01,
+    )
+
+
+@pytest.mark.parametrize(
     "shape, dim",
     [
         ((1, 100, 6800), -1),
@@ -974,3 +1000,38 @@ def test_softmax_large_kernel_mask_padded(device, shape, dim):
         ulp_threshold=15,
         check_ulp=True,
     )
+
+
+# The dim range check used size_t arithmetic and ran before the rank-0 exit, so a 0-D input always
+# threw with a wrapped dim, and an out-of-range dim was reported as 18446744073709551613.
+@pytest.mark.parametrize("op", [ttnn.softmax, ttnn.softmax_in_place], ids=["softmax", "softmax_in_place"])
+@pytest.mark.parametrize("dim", [0, -1])
+def test_softmax_rank_0_returns_one(device, op, dim):
+    torch_input = torch.randn(())
+    tt_input = ttnn.from_torch(
+        torch_input,
+        dtype=ttnn.bfloat16,
+        layout=ttnn.TILE_LAYOUT,
+        device=device,
+        memory_config=ttnn.L1_MEMORY_CONFIG,
+    )
+    tt_output = op(tt_input, dim=dim)
+    assert tt_output.memory_config().buffer_type == ttnn.BufferType.L1
+    tt_output = ttnn.to_torch(tt_output)
+    assert tt_output.shape == torch.Size([])
+    assert tt_output.item() == 1.0
+
+
+@pytest.mark.parametrize("op", [ttnn.softmax, ttnn.softmax_in_place], ids=["softmax", "softmax_in_place"])
+@pytest.mark.parametrize("dim", [1, -2])
+def test_softmax_rank_0_rejects_out_of_range_dim(device, expect_error, op, dim):
+    tt_input = ttnn.from_torch(torch.randn(()), dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT, device=device)
+    with expect_error(RuntimeError, rf"expected to be in range of \[-1, 0\], but got {dim}"):
+        op(tt_input, dim=dim)
+
+
+@pytest.mark.parametrize("op", [ttnn.softmax, ttnn.softmax_in_place], ids=["softmax", "softmax_in_place"])
+def test_softmax_dim_out_of_range_reports_caller_dim(device, expect_error, op):
+    tt_input = ttnn.from_torch(torch.randn((1, 1, 32, 32)), dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT, device=device)
+    with expect_error(RuntimeError, r"expected to be in range of \[-4, 3\], but got -7"):
+        op(tt_input, dim=-7)

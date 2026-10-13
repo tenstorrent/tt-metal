@@ -416,7 +416,6 @@ jobs:
           echo "RTL sim check failed on the released commit. See the Jira step above for whether an issue was filed."
           exit 1
 
-
   # Per-release record of which AIIPSW requirements have passing test evidence,
   # plus a summary of the model e2e suites. Separate job so it can wait on
   # release-demo-tests without holding up the sim poll.
