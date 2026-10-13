@@ -107,44 +107,36 @@ __attribute__((noinline)) void calculate_sigmoid_appx_fresh_cpp() {
 }
 
 template <int ITERATIONS>
-// The same SigmoidAppx contract stated as a 3-range magnitude dispatch tree
-// with constant affine leaves -- the dataflow shape the compiler's LUT
-// instruction selection (-mtt-tensix-optimize-lut-select) proves and
-// re-selects as a single SFPLUTFP32.  Kept alongside the cubic above as a
-// second independently measurable selector: coefficients are a 3-piece fit
-// of sigmoid(|x|)-0.5 over the test's [-5, 5] stimulus domain; the explicit
-// setsgn restores the odd symmetry outside the tree (SGN_RETAIN folding is a
-// later compiler increment).  Same golden and tolerance contract as the
-// cubic (exact torch.sigmoid, atol 0.13 / rtol 0.05).
+// The same SigmoidAppx contract encoded as a typed three-entry magnitude LUT.
+// Its packed coefficients match the production table, while the explicit
+// infinity tail and sign restoration preserve the selector's endpoint and
+// odd-symmetry behavior. Kept alongside the cubic above as a separately
+// measurable selector with the same golden and tolerance contract (exact
+// torch.sigmoid, atol 0.13 / rtol 0.05).
 //
-// Lane JU coefficient repair (2026-08-31): the leaf constants are now the
-// production SFPLUT table's own entries, decoded from the fp8 (1s-3e-4m,
+// The entries decode from the production SFPLUT table's fp8 (1s-3e-4m,
 // negative-bias) coefficient pairs sigmoid_appx_init loads (l0=0x3DFF,
 // l1=0x21D8, l2=0xFF10; the fp8 code 0xFF decodes to +0 by ISA special case):
 //   |x| < 1 : 0.2265625 * |x| + 0
 //   |x| < 2 : 0.265625  * |x| - 0.046875
 //   else    : 0         * |x| + 0.5
-// All six values are exact in fp32 (and in the fp16 LUT-entry encoding), and
-// SFPLUT's evaluation IS the same single a*|x|+c MAD with sign-retain, so the
-// tree is a bit-exact restatement of the production kernel over the full
-// 2^16 space (hand-adopted numerics; the previous leaves were an own 3-piece
-// fit, 33,964/65,536 diverging inputs on the cubic row's certificate).
+// All six values are exact in fp32 and in the fp16 LUT-entry encoding. The
+// BF16 input/output selector is bit-exact with the prior affine tree over all
+// 2^16 input encodings; this does not assert all-FP32 equivalence.
 __attribute__((noinline)) void calculate_sigmoid_appx_tree_cpp()
 {
+    const sfpi::vLut8si c0(std::uint8_t(0x3d), std::uint8_t(0xff));
+    const sfpi::vLut8si c1(std::uint8_t(0x21), std::uint8_t(0xd8));
+    const sfpi::vLut8si c2(std::uint8_t(0xff), std::uint8_t(0x10));
     for (int row = 0; row < ITERATIONS; ++row)
     {
         const sfpi::vFloat input = sfpi::dst_reg[0];
         const sfpi::vFloat mag   = sfpi::abs(input);
-        // A literal tail is equivalent for every finite input and avoids the
-        // otherwise-observable 0*inf NaN at the saturated endpoints.
-        sfpi::vFloat g           = 0.5f;
-        v_if (mag < 1.0f)
+        sfpi::vFloat g           = sfpi::lut(mag, c0, c1, c2);
+        // The saturated table slot has a zero slope; avoid 0 * infinity.
+        v_if (mag == std::numeric_limits<float>::infinity())
         {
-            g = mag * 0.2265625f + 0.0f;
-        }
-        v_elseif (mag < 2.0f)
-        {
-            g = mag * 0.265625f + -0.046875f;
+            g = 0.5f;
         }
         v_endif;
         sfpi::vFloat result = sfpi::copysgn(g, input) + 0.5f;
