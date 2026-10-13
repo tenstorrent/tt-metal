@@ -196,6 +196,15 @@ def fresh_device_mesh():
     return _fresh_device_mesh
 
 
+@pytest.fixture(scope="session")
+def release_metal_env():
+    """``release_metal_env()`` -- see ``_release_metal_env``.
+
+    Session-scoped so fixtures of any scope can request it.
+    """
+    return _release_metal_env
+
+
 # ---------------------------------------------------------------------------
 # Shared [1, 2] tensor-parallel mesh
 # ---------------------------------------------------------------------------

@@ -55,6 +55,17 @@ def pytest_runtest_protocol(item, nextitem):
     gc.collect()
 
 
+@pytest.fixture(scope="session", autouse=True)
+def _release_ttml_device(release_metal_env):
+    """Close any ttml device an earlier module left open, so ``open_completer``
+    can open the chips with ``ttnn.open_mesh_device``.
+
+    Must run before ``_set_fabric_2d``, because closing the device also disables
+    fabric. Being session-scoped and autouse guarantees that.
+    """
+    release_metal_env()
+
+
 @pytest.fixture(scope="session")
 def _set_fabric_2d():
     """Configure ttnn fabric to 2-rank.
