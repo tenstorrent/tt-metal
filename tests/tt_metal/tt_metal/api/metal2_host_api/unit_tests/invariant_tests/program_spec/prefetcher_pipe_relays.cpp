@@ -137,11 +137,12 @@ TEST_F(PrefetcherPipeSpecTestQuasar, CPU_MultiPipeRelayOverlappingReceiversFails
 }
 
 TEST_F(PrefetcherPipeSpecTestQuasar, CPU_MultiPipeRelayProducerBindsSubsetFails) {
-    // Relay names {weights, other}; the producer's accessor names only {weights}, so 'other's receivers are just
-    // extra nodes of that receiver kernel and the producer does not drive 'other'.
+    // Relay names {weights, other}; the producer's accessor names only {weights} and so the producer
+    // also fails tiling (it runs on both receiver sets). The tiling rule fires first.
     ProgramSpec spec = MakeTwoPipeReceiverSpec();
     KernelNamed(spec, "receiver").advanced_options.prefetcher_pipe_bindings[0].pipe_parameter_names = {pipe_param_name};
-    EXPECT_SPEC_REJECTED(spec, "but has no PrefetcherPipe accessor naming exactly the relayed pipe set");
+    EXPECT_SPEC_REJECTED(
+        spec, "Kernel covers 6 node(s) besides 0 extra node(s): 3 of the 3 receiver node(s), 3 outside the receivers");
 }
 
 }  // namespace

@@ -73,8 +73,9 @@ namespace experimental {
 // applied_entry_size) matches the iface.
 //
 // A kernel binding a pipe may also run on extra nodes that are none of the pipe's senders or
-// receivers (the host gives them the same slot entry, so one multicast configures every node). It
-// must not construct a PrefetcherPipe there, nor a relay DataflowBuffer for it.
+// receivers (PrefetcherPipeBinding::extra_nodes; the host gives them the slot entry of the
+// binding's first pipe). It must not construct a PrefetcherPipe there, nor a relay DataflowBuffer
+// for it.
 //
 // Same push/pop/write API as CrossNodeDFB. Mid-flight page-size changes use
 // set_entry_size / set_receiver_entry_size after that endpoint's E1 operations.
