@@ -175,7 +175,7 @@ static_assert(!SFPU_ISSUE_LOADMACRO, "SFPLOADMACRO is disabled; only the Sfpi va
 
 // The SrcS layout is known only at runtime, so init and the tile loop each dispatch once.
 template <typename Layout>
-using ExpOp = ExpSrcs<true /*APPROXIMATION_MODE*/, Layout::layout, EXP_ISSUE>;
+using ExpOp = ExpSrcs<APPROX_MODE, Layout::layout, EXP_ISSUE>;
 
 void run_kernel(RUNTIME_PARAMETERS params)
 {
@@ -192,7 +192,7 @@ void run_kernel(RUNTIME_PARAMETERS params)
     const DataFormat srcs_format  = static_cast<DataFormat>(formats.unpack_S_dst);
 
     {
-        ZONE_SCOPED("INIT")
+        START_PERF_MEASURE("INIT")
         LLK_ASSERT(srcs_format == static_cast<DataFormat>(formats.pack_S_src), "SrcS EXP requires matching unpack destination and pack source formats");
         dispatch_sfpu_srcs_format(
             srcs_format,
@@ -208,7 +208,7 @@ void run_kernel(RUNTIME_PARAMETERS params)
         PROFILER_SYNC();
     }
     {
-        ZONE_SCOPED("TILE_LOOP")
+        START_PERF_MEASURE("TILE_LOOP")
         if constexpr (PERF_RUN_TYPE == PerfRunType::L1_TO_L1 || PERF_RUN_TYPE == PerfRunType::SFPU_ISOLATE)
         {
             // UNP_S -> SFPU exp -> PACK1; the op type decides Sfpi or LoadMacro and who clears the SrcS valids.

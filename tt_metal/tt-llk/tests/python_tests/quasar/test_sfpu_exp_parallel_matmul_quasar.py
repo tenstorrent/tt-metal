@@ -14,13 +14,14 @@ import os
 import pytest
 import torch
 from helpers.data_format_inference import data_formats
-from helpers.format_config import FormatConfig
+from helpers.format_config import DataFormat, FormatConfig
 from helpers.golden_generators import (
     MatmulGolden,
     UnarySFPUGolden,
     get_golden_generator,
 )
 from helpers.llk_params import (
+    ApproximationMode,
     DestAccumulation,
     DestSync,
     ImpliedMathFormat,
@@ -43,6 +44,7 @@ from helpers.stimuli_config import StimuliConfig
 from helpers.stimuli_generator import StimuliSpec, generate_stimuli
 from helpers.test_config import TestConfig
 from helpers.test_variant_parameters import (
+    APPROX_MODE,
     CRK_TILE_DIMM,
     DEST_SYNC,
     ENABLE_2X_FORMAT,
@@ -122,18 +124,29 @@ def generate_parallel_matmul_exp_combinations(
                     ):
                         continue
                     for sfpu_issue in impls:
-                        combinations.append(
-                            (
-                                fmt,
-                                dest_acc,
-                                dest_sync,
-                                implied_math_format,
-                                sfpu_issue,
-                                runtime(exp_input_dimensions),
-                                runtime(input_A_dimensions),
-                                runtime(input_B_dimensions),
-                            )
+                        # Accurate exp only differs for a Float32 SrcS layout with Sfpi; LoadMacro is LUT-only.
+                        approx_modes = (
+                            (ApproximationMode.Yes, ApproximationMode.No)
+                            if not is_perf
+                            and sfpu_issue == SfpuIssue.Sfpi
+                            and fmt.input_format == DataFormat.Float32
+                            and fmt.output_format == DataFormat.Float32
+                            else (ApproximationMode.Yes,)
                         )
+                        for approx_mode in approx_modes:
+                            combinations.append(
+                                (
+                                    fmt,
+                                    dest_acc,
+                                    dest_sync,
+                                    implied_math_format,
+                                    sfpu_issue,
+                                    approx_mode,
+                                    runtime(exp_input_dimensions),
+                                    runtime(input_A_dimensions),
+                                    runtime(input_B_dimensions),
+                                )
+                            )
     return combinations
 
 
@@ -164,6 +177,7 @@ def test_sfpu_exp_parallel_matmul_quasar(
         dest_sync,
         implied_math_format,
         sfpu_issue,
+        approx_mode,
         exp_input_dimensions,
         input_A_dimensions,
         input_B_dimensions,
@@ -278,6 +292,7 @@ def test_sfpu_exp_parallel_matmul_quasar(
             DEST_SYNC(dest_sync),
             UNPACK_TRANS_FACES(Transpose.No),
             SFPU_ISSUE(sfpu_issue),
+            APPROX_MODE(approx_mode),
         ],
         "runtimes": [
             CRK_TILE_DIMM(matmul_dims.ct_dim, matmul_dims.rt_dim, matmul_dims.kt_dim),

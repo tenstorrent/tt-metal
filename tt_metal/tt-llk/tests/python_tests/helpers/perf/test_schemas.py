@@ -1330,6 +1330,7 @@ PERF_TEST_SCHEMAS_QSR = {
     "perf_sfpu_exp_parallel_matmul_quasar": {
         "version": 4,
         "columns": [
+            "approx_mode",
             "c_dimm",
             "dest_acc",
             "dest_sync",
