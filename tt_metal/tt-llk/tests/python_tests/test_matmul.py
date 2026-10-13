@@ -27,6 +27,7 @@ from helpers.test_variant_parameters import (
     DEST_SYNC,
     LOOP_FACTOR,
     MATH_FIDELITY,
+    MATMUL_PACK_BLOCK,
     NUM_FACES,
     PERF_RUN_TYPE,
     THROTTLE_LEVEL,
@@ -145,6 +146,10 @@ def test_matmul(
             PERF_RUN_TYPE(PerfRunType.L1_TO_L1),
             DEST_SYNC(),
             THROTTLE_LEVEL(),
+            MATMUL_PACK_BLOCK(
+                matmul_dims.rt_dim * matmul_dims.ct_dim > 1
+                and not formats.output_format.is_block_float()
+            ),
         ],
         runtimes=[
             NUM_FACES(),

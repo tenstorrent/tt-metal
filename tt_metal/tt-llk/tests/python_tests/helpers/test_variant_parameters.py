@@ -821,6 +821,77 @@ class TILIZE(TemplateParameter):
 
 
 @dataclass
+class UNPACK_BLOCK(TemplateParameter):
+    """One block call per DEST block (datacopy) or block row (tilize).
+
+    A macro, so a kernel can default it to 0 when a driver does not pass it.
+    """
+
+    unpack_block: bool = False
+
+    def convert_to_cpp(self) -> str:
+        return f"#define UNPACK_BLOCK {1 if self.unpack_block else 0}"
+
+
+class DATACOPY_PACK_BLOCK(TemplateParameter):
+    """Block pack under the datacopy block unpack (Blackhole), picked from columns the test already reports, so it adds no column."""
+
+    def __repr__(self) -> str:
+        return "DATACOPY_PACK_BLOCK()"
+
+    def __eq__(self, other) -> bool:
+        return isinstance(other, DATACOPY_PACK_BLOCK)
+
+    def __hash__(self) -> int:
+        return hash("DATACOPY_PACK_BLOCK")
+
+    def convert_to_cpp(self) -> str:
+        return "#define DATACOPY_PACK_BLOCK 1"
+
+
+@dataclass
+class PACK_BLOCK(TemplateParameter):
+    """Pack every dest block with one _llk_pack_block_ run (Blackhole)."""
+
+    pack_block: bool = False
+
+    def convert_to_cpp(self) -> str:
+        return f"constexpr bool pack_block_en = {str(self.pack_block).lower()};"
+
+
+class MATMUL_PACK_BLOCK(TemplateParameter):
+    """PACK_BLOCK for matmul_test.cpp, picked from columns the test already reports, so it adds no column."""
+
+    def __init__(self, pack_block: bool = False):
+        self.matmul_pack_block = pack_block
+
+    def __repr__(self) -> str:
+        return f"MATMUL_PACK_BLOCK({self.matmul_pack_block})"
+
+    def __eq__(self, other) -> bool:
+        return (
+            isinstance(other, MATMUL_PACK_BLOCK)
+            and other.matmul_pack_block == self.matmul_pack_block
+        )
+
+    def __hash__(self) -> int:
+        return hash(self.matmul_pack_block)
+
+    def convert_to_cpp(self) -> str:
+        return f"constexpr bool pack_block_en = {str(self.matmul_pack_block).lower()};"
+
+
+@dataclass
+class TINY_PACK_MODE(TemplateParameter):
+    """Tiny-tile block pack (Blackhole): 0 block-contiguous run, 1 closed run per tile, 2 _llk_pack_ per tile."""
+
+    tiny_pack_mode: int = 0
+
+    def convert_to_cpp(self) -> str:
+        return f"constexpr int tiny_pack_mode = {self.tiny_pack_mode};"
+
+
+@dataclass
 class IMPLIED_MATH_FORMAT(TemplateParameter):
     implied_math_format: ImpliedMathFormat = ImpliedMathFormat.No
 
