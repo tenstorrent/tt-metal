@@ -442,11 +442,14 @@ void kernel_main() {
     // on every block of every NCHt row. Their chain inputs wait Upfront with PopPolicy::None, so the
     // chain waits block.start() + block.size() tiles and never pops. Pop them once here rather than
     // per block. The reader pushes a full block_size for every block, including the last partial
-    // one, so pop that padded total rather than Wt.
+    // one, so pop that padded total rather than Wt. The reader pushes them only on its first row, so a
+    // core with no rows has nothing to pop.
+    if (NCHt > 0) {
 #ifdef FUSE_GAMMA
-    dfb_gamma.pop_front(total_buffer_size);
+        dfb_gamma.pop_front(total_buffer_size);
 #endif
 #ifdef FUSE_BETA
-    dfb_beta.pop_front(total_buffer_size);
+        dfb_beta.pop_front(total_buffer_size);
 #endif
+    }
 }

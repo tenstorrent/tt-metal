@@ -490,7 +490,9 @@ void kernel_main() {
 
     // The reduce scalers are pushed once by the reader (on both the LayerNorm and RMSNorm paths) and
     // waited above; nothing else pops them. reduce_scaler_tile_count gives the number pushed, which
-    // depends on the compile time args.
+    // depends on the compile time args. dummy_unpack orders the pop after the wait on Quasar for a core
+    // whose row loop never unpacked the scaler (TEN-4746).
+    dummy_unpack(dfb_scaler_id);
     dfb_scaler.pop_front(num_scaler_tiles);
 
     // The epsilon tile is pushed once by the reader and read on every NCHt iteration, so it is
