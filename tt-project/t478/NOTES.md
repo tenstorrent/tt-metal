@@ -34,3 +34,20 @@ Code commits (base..56df249a1f6):
    then the host compare test. -t 600 (unmeasured; bundle kernels all recompile: #56023 changes NoC headers).
    device-lint.sh + health check first; submit via tt-project/t288/blx01-submit.sh.
 3. Gate 2 only if >=1% faster and 32/32 shards identical.
+
+## t481 progress (2026-10-13 12:05 PDT)
+- Own-branch push confirmed: 1a9d5bda3e6 on origin/ttp/t478-turbo-bit-identical-upstream-perf-bundle.
+- Tarballs built on g15blx02 (worktree tmp/t478tar, git-ignored): base = archive ae9534f5fb2 + test file from
+  56df249a1f6; bundle = archive 56df249a1f6; both + tracy/tt-cluster-descriptors/umd archives. rsync'd
+  (--bwlimit=100M) to blx01 /var/tmp/fasth3/t478; build478.sh (drv/) extracts and builds base then bundle,
+  detached: log /var/tmp/fasth3/t478/detach/build478.log, rc /var/tmp/fasth3/t478/build.rc.
+- drv/chain478.sh runs detached on g15blx02 (ttp detach, run 1803): waits for the build, submits spec478mb via
+  t288/blx01-submit.sh (retries every 5 min while blx01 is busy/unhealthy, up to 4 h), waits for the job end.
+  State: worktrees/t481/tmp/chain478/{job,marker}; log state/runs/1803/chain478.log.
+- Job: run478mb.sh (on blx01 /var/tmp/fasth3/t478), -t 600 (unmeasured), arms 260 s each, compare 60 s.
+  Output /var/tmp/fasth3/t478/out_mb/run.log; dumps base.pt/bundle.pt.
+
+## Next step
+Read out_mb/run.log: lines "T478 arm: ...", "T478 layer/ring_joint_sdpa: bundle/base best", "T478 bit-identical
+shards: N/32". Gate 2 (10 s seed-0 e2e A/B, separate job) only if >=1% faster and 32/32 identical and
+MiniMax-H3 weights are on blx01 (/var/tmp/fasth3/models/lightx2v-h3-turbo-sla). Then clean /var/tmp/fasth3/t478.
