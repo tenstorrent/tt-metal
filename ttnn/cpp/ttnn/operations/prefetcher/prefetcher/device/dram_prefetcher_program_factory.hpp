@@ -62,7 +62,7 @@ void append_per_tensor_args(
 // The cores dram_prefetcher reads on, taken from its delivery target.
 struct DramPrefetcherReaders {
     // In reader order: reader i reads DRAM bank i.
-    std::vector<CoreCoord> cores;
+    std::vector<tt::tt_metal::CoreCoord> cores;
     // Every reader's receiver count.
     uint32_t num_receivers_per_reader = 0;
 };
@@ -74,7 +74,7 @@ DramPrefetcherReaders dram_prefetcher_readers(const DramPrefetcherParams& params
 
 // The NoC virtual channel reader `reader_index` of `reader_cores` reads its DRAM bank on, chosen so that
 // readers on one row alternate channels.
-uint32_t dram_prefetcher_reader_vc(const std::vector<CoreCoord>& reader_cores, uint32_t reader_index);
+uint32_t dram_prefetcher_reader_vc(const std::vector<tt::tt_metal::CoreCoord>& reader_cores, uint32_t reader_index);
 
 // Reader blocks the staging buffer holds: one being filled, one in flight, one draining.
 constexpr uint32_t kDramPrefetcherStagingBlocks = 3;

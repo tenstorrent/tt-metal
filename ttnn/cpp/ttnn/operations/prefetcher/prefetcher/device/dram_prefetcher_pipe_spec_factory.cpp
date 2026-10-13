@@ -19,6 +19,9 @@
 
 namespace ttnn::prim {
 
+using tt::tt_metal::CoreCoord;
+using tt::tt_metal::CoreRange;
+using tt::tt_metal::CoreRangeSet;
 using tt::tt_metal::experimental::AddRuntimeArgsForNode;
 using tt::tt_metal::experimental::DataflowBufferSpec;
 using tt::tt_metal::experimental::DataMovementHardwareConfig;
