@@ -264,6 +264,9 @@ void kernel_main() {
     const uint32_t num_recv_rounds = tree ? get_arg_val<uint32_t>(topk_core_args::compute_num_recv_rounds) : 0;
     const bool sends_survivor = tree && get_arg_val<uint32_t>(topk_core_args::compute_sends_survivor) != 0;
     const bool has_split = tree && get_arg_val<uint32_t>(topk_core_args::compute_has_split) != 0;
+    // Without a split row the segment args already describe the whole rows.
+    const uint32_t whole_first_chunk = has_split ? 0 : seg_first_chunk;
+    const uint32_t whole_end_chunk = has_split ? UINT32_MAX : seg_end_chunk;
     const uint32_t search_len = get_common_arg_val<uint32_t>(topk_common_args::compute_search_length);
 
     constexpr uint32_t input_cb = get_compile_time_arg_val(0);
@@ -300,14 +303,19 @@ void kernel_main() {
         meta_cb_obj.wait_front(1);
         num_chunks = ckernel::read_tile_value(meta_cb, 0, topk_metadata_num_chunks_word);
         tail_elements = ckernel::read_tile_value(meta_cb, 0, topk_metadata_tail_elements_word);
-        split_num_chunks =
-            ckernel::read_tile_value(meta_cb, 0, topk_metadata_split_word_offset + topk_metadata_num_chunks_word);
-        split_tail_elements =
-            ckernel::read_tile_value(meta_cb, 0, topk_metadata_split_word_offset + topk_metadata_tail_elements_word);
+        if constexpr (tree) {
+            split_num_chunks =
+                ckernel::read_tile_value(meta_cb, 0, topk_metadata_split_word_offset + topk_metadata_num_chunks_word);
+            split_tail_elements = ckernel::read_tile_value(
+                meta_cb, 0, topk_metadata_split_word_offset + topk_metadata_tail_elements_word);
+        } else {
+            split_num_chunks = num_chunks;
+            split_tail_elements = tail_elements;
+        }
         meta_cb_obj.pop_front(1);
     } else {
         const auto row = calculate_topk_bounds(search_len, K);
-        const auto whole = calculate_topk_segment_bounds(row, K, 0, UINT32_MAX);
+        const auto whole = calculate_topk_segment_bounds(row, K, whole_first_chunk, whole_end_chunk);
         const auto split = calculate_topk_segment_bounds(row, K, seg_first_chunk, seg_end_chunk);
         num_chunks = whole.num_chunks;
         tail_elements = whole.tail_elements;
@@ -323,7 +331,7 @@ void kernel_main() {
     const uint32_t num_whole_rows = has_split ? num_rows - 1 : num_rows;
     for (uint32_t row = 0; row < num_rows; ++row) {
         const bool split_row = has_split && row == num_whole_rows;
-        const uint32_t first_chunk = split_row ? seg_first_chunk : 0;
+        const uint32_t first_chunk = split_row ? seg_first_chunk : whole_first_chunk;
         const uint32_t row_chunks = split_row ? split_num_chunks : num_chunks;
         const uint32_t row_tail = split_row ? split_tail_elements : tail_elements;
         const uint32_t row_recv_rounds = split_row ? num_recv_rounds : 0;

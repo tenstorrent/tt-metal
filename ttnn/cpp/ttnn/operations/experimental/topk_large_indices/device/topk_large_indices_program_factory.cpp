@@ -394,16 +394,16 @@ TopkLargeIndicesProgramFactory::cached_program_t TopkLargeIndicesProgramFactory:
     const bool has_vend = tensor_args.has_valid_end_metadata();
     interleaved_accessor_args(has_vend ? *tensor_args.valid_end_tensor : input).append_to(reader_compile_args);
 
-    auto reader_kernel = tt::tt_metal::CreateKernel(
-        program,
-        "ttnn/cpp/ttnn/operations/experimental/topk_large_indices/device/kernels/reader.cpp",
-        all_cores,
-        tt::tt_metal::ReaderDataMovementConfig(reader_compile_args));
-
     const uint32_t tree = row_split_possible(
                               flattened_rows_excluding_last_dim(input.logical_shape()), static_cast<uint32_t>(cores.size()))
                               ? 1u
                               : 0u;
+    auto reader_kernel = tt::tt_metal::CreateKernel(
+        program,
+        "ttnn/cpp/ttnn/operations/experimental/topk_large_indices/device/kernels/reader.cpp",
+        all_cores,
+        tt::tt_metal::ReaderDataMovementConfig(reader_compile_args, {}, {{"tree", tree}}));
+
     std::vector<uint32_t> compute_compile_args = {cb_in, cb_indices, llk_k, static_cast<uint32_t>(body_mode)};
     compute_compile_args.push_back(has_meta ? 1u : 0u);
     compute_compile_args.push_back(has_meta ? cb_meta : 0u);
