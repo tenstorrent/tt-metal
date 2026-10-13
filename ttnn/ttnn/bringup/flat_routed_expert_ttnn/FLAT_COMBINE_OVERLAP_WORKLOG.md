@@ -679,6 +679,34 @@ The overlap itself runs under slow dispatch (`FLAT_CMB_EAGER=1`, `--profile`; fa
 timing is not usable: chips launch one after another and their cycle counters are not synchronized, so the fabric
 ops' per-chip times include an unknown cross-chip skew. Overlap numbers need a real 12 x 10 (Galaxy) chip.
 
+## 8c. Weight readers vs every core reading its own weights (DRAM micro-benchmark, 2026-10-13)
+Question: drop the 16 gate/up weight readers and let each gate/up core read its own blocks? (It would free 16 cells:
+64 gate/up cores fit in rows 1-9 next to combine on the LoudBox.) `flat_combine_tools/dram_read_bench/` reproduces
+only the weight movement of one call (flat plan's cores, banks and byte volumes, bfp4, nothing consumed), one
+program per pattern, real-time profiler; a delivery check (pattern-filled DRAM, every landed block decoded) proves
+the 36 KB reads and the forwards move every byte. LoudBox p150, us per call, % of 512 GB/s:
+
+| pattern | GLM 5.3 (113 MB gate/up + 57 MB down) | Kimi K2.7 (198 + 99 MB) |
+|---|---|---|
+| down cores alone (26, each its own bank) | 200.8 (55%) | 344.8 (56%) |
+| readers alone, not forwarded | 222.6 (99%) | - |
+| **today: readers + forward + down cores** | **405.5-407.1 (82%)** | **706.3-707.0 (82%)** |
+| gate/up cores read their own (today's cells, NoC by bank side) + down | 417.9 (79%, +2.7%) | 728.3 (80%, +3.1%) |
+| same, all NOC0 / all NOC1, + down | 512.9 / 476.0 | - |
+| reader-free layout (gate/up in the reader columns, rows 1-8, nearest bank) + down | 450.0-477.0 (+11-17%) | 789.0-834.9 |
+| **readers stream all weights (gate/up + down), no down-core reads** | **333.4-334.4 (99%, -18%)** | **584.2-585.1 (99%, -17%)** |
+
+- Direct per-core reads lose: alone 55-65% of peak against the readers' 99%; neither reads in flight (DRB_DBATCH
+  2-8) nor larger requests (DRB_DMULT 1-4) move it, so the limit is the NoC paths into the grid, not latency. The
+  reader-free layout that would free combine's row is 11-17% slower in weight delivery. Readers stay.
+- The inefficient part today is the down cores' own streams (55% alone; they pull the readers' 99% down to 82%
+  together). The readers delivering the down weights too would cut the DRAM-bound (small M) floor of a call by
+  ~17-18% (GLM 5.3 406 -> 334 us of weight movement per call). Not built: the readers would forward down slices to
+  the down cores (and the readers' own NoC1 forwards double), the ~1/3 extra bytes per reader must stay within
+  its L1 / NoC budget, and the x / h / y traffic of a real call is not in the bench.
+  `scripts/run_safe_pytest.sh --run-all flat_combine_tools/dram_read_bench/test_dram_read_bench.py -s`
+  (`DRB_MODEL=kimi-k27`, `DRB_VARIANTS=...`, `DRB_CHECK=0`).
+
 ## 9. How to run (PR tree)
 ```
 cd /localdev/mstaletovic/tt-metal-pr58093
