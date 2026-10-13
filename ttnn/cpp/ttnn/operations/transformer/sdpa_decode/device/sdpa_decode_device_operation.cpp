@@ -9,6 +9,7 @@
 #include <cstdint>
 
 #include <tt-metalium/constants.hpp>
+#include <tt-metalium/math.hpp>
 
 #include "ttnn/operation.hpp"
 #include "ttnn/tensor/tensor_utils.hpp"
@@ -625,6 +626,14 @@ tt::tt_metal::TensorSpec SdpaDecodeDeviceOperation::compute_output_specs(
     ttnn::Shape output_shape = input.logical_shape();
     output_shape[1] = B;
     output_shape[2] = num_q_heads;
+    // Row-major Q is tilized in-kernel and the result is untilized straight into each output core's shard
+    // (c_20 is backed by the output buffer) as a full tile-height block per batch. Keep the head dim
+    // tile-padded in that case so the tensor's shard -> batch mapping matches what the kernel writes:
+    // with the unpadded head count a [32, D] shard logically holds 32 / num_q_heads batches while the
+    // kernel puts exactly one there, so every batch but the first of each shard reads back garbage.
+    if (output_layout == Layout::ROW_MAJOR && operation_attributes.output_mem_config.is_sharded() && !use_mla) {
+        output_shape[2] = tt::round_up(num_q_heads, tt::constants::TILE_HEIGHT);
+    }
 
     // Preserve logical head_dim by default; only override in MLA mode.
     if (use_mla) {

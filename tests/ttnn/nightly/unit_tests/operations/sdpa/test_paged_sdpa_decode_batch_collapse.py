@@ -2,10 +2,8 @@
 # SPDX-License-Identifier: Apache-2.0
 
 """
-Reproducer: paged_scaled_dot_product_attention_decode produces incorrect per-batch
-output for OLMo-3.1-32B's shape configuration on TG (Galaxy 8x4 mesh).
-
-For details and full diagnostics see PAGED_SDPA_DECODE_BATCH_BUG.md at the repo root.
+Regression tests: paged_scaled_dot_product_attention_decode per-batch output for
+OLMo-3.1-32B's shape configuration on TG (Galaxy 8x4 mesh).
 
 CORE INVARIANT
 --------------
@@ -14,27 +12,21 @@ positions) ⇒ identical SDPA output (across batch positions). Causal SDPA decod
 is a deterministic per-batch reduction; identical inputs MUST produce identical
 outputs.
 
-WHAT THIS TEST EXERCISES
-------------------------
-- Single-device variants (`_single_device` suffix): kernel correctly produces
-  identical output across all batch positions with identical inputs. These PASS
-  and serve as a sanity check that the kernel is correct in isolation.
-- Galaxy / TG variant (`_tg`): kernel produces DIFFERENT output across batch
-  positions despite bit-identical inputs. This is the OLMo bug — observed on
-  the actual model demo, reproduced here in a minimal harness.
-
-The Galaxy variant uses OLMo's exact configuration:
-- cluster_shape = (8, 4)
-- KV cache replicated to all 32 devices (cluster_axis=0 by head, cluster_axis=1 replicated)
-- Q sharded by batch across cluster_axis=1 (4 cols × 8 col-local batch = 32 total)
-- SCORES_BATCHED_MM_OUTPUT_MEMCFG sharded on sub_core_grids (50-core layout)
-- GQA ratio 8:1 per device
+Two bugs broke this invariant (only col-local batch 0 decoded coherently in the
+OLMo batch=32 demo); both are fixed in sdpa_decode:
+- Placement: sharded output is written in place on each batch's reducer core and
+  sharded Q is read from the shard holder, but reducers were taken from the first
+  B cores of the compute grid rather than from the Q/output shard grids. With Q,
+  output and sub_core_grids carved from different core ranges, batches read and
+  wrote each other's data. Reducers now follow the output shard grid and Q is read
+  from its own shard holder.
+- Row-major Q: the kernel untilizes a full tile-height block per batch into its
+  output shard, but the output spec used the unpadded head count, so a [32, D]
+  shard logically held 32 / num_q_heads batches. The head dim stays tile-padded
+  for row-major Q with a sharded output.
 
 Run:
     pytest tests/ttnn/nightly/unit_tests/operations/sdpa/test_paged_sdpa_decode_batch_collapse.py -xvs
-
-Skip single-device tests (already known to pass) and only run the TG repro:
-    pytest tests/ttnn/nightly/unit_tests/operations/sdpa/test_paged_sdpa_decode_batch_collapse.py::test_paged_sdpa_decode_olmo_tg_batch_identity -xvs
 """
 
 import torch
@@ -51,13 +43,13 @@ from tests.ttnn.unit_tests.operations.sdpa.sdpa_test_utils import (
 
 
 # OLMo-3.1-32B-Think on TG: per-device parameters seen by paged SDPA decode.
-B_LOCAL = 8       # batch_size_per_device_group (col-local batch on Galaxy)
-N_Q = 8           # n_local_heads padded to 8 (5 real + 3 phantom for OLMo)
-N_KV = 1          # n_local_kv_heads (1 KV head per device, GQA ratio 8:1)
-D = 128           # head_dim
+B_LOCAL = 8  # batch_size_per_device_group (col-local batch on Galaxy)
+N_Q = 8  # n_local_heads padded to 8 (5 real + 3 phantom for OLMo)
+N_KV = 1  # n_local_kv_heads (1 KV head per device, GQA ratio 8:1)
+D = 128  # head_dim
 BLOCK_SIZE = 64
-MAX_SEQ = 256     # small for the test; keep cache compact
-CUR_POS = 130     # past first cache update
+MAX_SEQ = 256  # small for the test; keep cache compact
+CUR_POS = 130  # past first cache update
 
 
 def _build_paged_cache_and_pt_identical(batch, n_kv, max_seq, block_size, d):
@@ -145,21 +137,32 @@ def test_paged_sdpa_decode_batch_identity_dram_single_device(device):
 
     program_cfg = ttnn.SDPAProgramConfig(
         compute_with_storage_grid_size=device.compute_with_storage_grid_size(),
-        exp_approx_mode=False, q_chunk_size=0, k_chunk_size=0,
+        exp_approx_mode=False,
+        q_chunk_size=0,
+        k_chunk_size=0,
     )
     compute_kernel_cfg = ttnn.WormholeComputeKernelConfig(
-        math_fidelity=ttnn.MathFidelity.HiFi4, math_approx_mode=False,
-        fp32_dest_acc_en=False, packer_l1_acc=False,
+        math_fidelity=ttnn.MathFidelity.HiFi4,
+        math_approx_mode=False,
+        fp32_dest_acc_en=False,
+        packer_l1_acc=False,
     )
 
     tt_K = ttnn.as_tensor(K_paged, device=device, dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT, memory_config=dram_cfg)
     tt_V = ttnn.as_tensor(V_paged, device=device, dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT, memory_config=dram_cfg)
-    tt_pt = ttnn.as_tensor(page_table, device=device, dtype=ttnn.int32, layout=ttnn.ROW_MAJOR_LAYOUT, memory_config=dram_cfg)
+    tt_pt = ttnn.as_tensor(
+        page_table, device=device, dtype=ttnn.int32, layout=ttnn.ROW_MAJOR_LAYOUT, memory_config=dram_cfg
+    )
     tt_Q = ttnn.as_tensor(Q, device=device, dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT, memory_config=in_cfg)
-    tt_cp = ttnn.as_tensor(cur_pos, device=device, dtype=ttnn.int32, layout=ttnn.ROW_MAJOR_LAYOUT, memory_config=dram_cfg)
+    tt_cp = ttnn.as_tensor(
+        cur_pos, device=device, dtype=ttnn.int32, layout=ttnn.ROW_MAJOR_LAYOUT, memory_config=dram_cfg
+    )
 
     tt_out = ttnn.transformer.paged_scaled_dot_product_attention_decode(
-        tt_Q, tt_K, tt_V, tt_pt,
+        tt_Q,
+        tt_K,
+        tt_V,
+        tt_pt,
         cur_pos_tensor=tt_cp,
         scale=D**-0.5,
         program_config=program_cfg,
@@ -175,9 +178,7 @@ def test_paged_sdpa_decode_batch_identity_dram_single_device(device):
 # ---------------------------------------------------------------------------
 
 
-@pytest.mark.parametrize(
-    "mesh_device", [pytest.param((8, 4), id="galaxy_8x4")], indirect=True
-)
+@pytest.mark.parametrize("mesh_device", [pytest.param((8, 4), id="galaxy_8x4")], indirect=True)
 @pytest.mark.parametrize("device_params", [{"l1_small_size": 24576, "trace_region_size": 0}], indirect=True)
 def test_paged_sdpa_decode_olmo_tg_batch_identity(mesh_device):
     """
@@ -187,14 +188,11 @@ def test_paged_sdpa_decode_olmo_tg_batch_identity(mesh_device):
     and Q across batch positions, and asserts that the SDPA decode output is also
     identical across batch positions.
 
-    EXPECTED on a correct kernel: all 8 col-local batch rows bit-identical.
-    OBSERVED in OLMo demo (and here): batch outputs split into chunks of 4 (DRAM)
-    or have 4 zero slots (height-sharded on sub_core_grids).
-
-    This test is expected to FAIL until the upstream SDPA decode kernel is fixed.
+    Expected: all 8 col-local batch rows bit-identical. Before the fix the output
+    shards sat on cores other than the op's reducers, so rows diverged.
     """
     cluster_shape = (8, 4)
-    batch_global = B_LOCAL * cluster_shape[1]   # 8 col-local users × 4 cols = 32
+    batch_global = B_LOCAL * cluster_shape[1]  # 8 col-local users × 4 cols = 32
     n_kv = N_KV
     n_q = N_Q
     d = D
@@ -205,9 +203,7 @@ def test_paged_sdpa_decode_olmo_tg_batch_identity(mesh_device):
 
     # KV cache on each device — replicated across the mesh, contains
     # bit-identical data per batch slot.
-    K_paged, V_paged, page_table = _build_paged_cache_and_pt_identical(
-        batch_global, n_kv, max_seq, block_size, d
-    )
+    K_paged, V_paged, page_table = _build_paged_cache_and_pt_identical(batch_global, n_kv, max_seq, block_size, d)
 
     # Page-table on TG decode: dims=(None, -2) — sharded along tensor dim 0
     # (batch) across cluster_axis=1 (4 cols), replicated across cluster_axis=0.
@@ -288,15 +284,22 @@ def test_paged_sdpa_decode_olmo_tg_batch_identity(mesh_device):
 
     program_cfg = ttnn.SDPAProgramConfig(
         compute_with_storage_grid_size=mesh_device.compute_with_storage_grid_size(),
-        exp_approx_mode=False, q_chunk_size=0, k_chunk_size=0,
+        exp_approx_mode=False,
+        q_chunk_size=0,
+        k_chunk_size=0,
     )
     compute_kernel_cfg = ttnn.WormholeComputeKernelConfig(
-        math_fidelity=ttnn.MathFidelity.HiFi4, math_approx_mode=False,
-        fp32_dest_acc_en=False, packer_l1_acc=False,
+        math_fidelity=ttnn.MathFidelity.HiFi4,
+        math_approx_mode=False,
+        fp32_dest_acc_en=False,
+        packer_l1_acc=False,
     )
 
     tt_out = ttnn.transformer.paged_scaled_dot_product_attention_decode(
-        tt_Q, tt_K, tt_V, tt_pt,
+        tt_Q,
+        tt_K,
+        tt_V,
+        tt_pt,
         cur_pos_tensor=tt_cp,
         scale=d**-0.5,
         program_config=program_cfg,
@@ -318,9 +321,7 @@ def test_paged_sdpa_decode_olmo_tg_batch_identity(mesh_device):
     _check_batch_identity(out_dev0, label="TG col-0 dev-0 SDPA output, B_local=8")
 
 
-@pytest.mark.parametrize(
-    "mesh_device", [pytest.param((8, 4), id="galaxy_8x4")], indirect=True
-)
+@pytest.mark.parametrize("mesh_device", [pytest.param((8, 4), id="galaxy_8x4")], indirect=True)
 @pytest.mark.parametrize("device_params", [{"l1_small_size": 24576, "trace_region_size": 0}], indirect=True)
 def test_paged_sdpa_decode_olmo_tg_batch_identity_rect_grid(mesh_device):
     """
@@ -343,40 +344,51 @@ def test_paged_sdpa_decode_olmo_tg_batch_identity_rect_grid(mesh_device):
 
     torch.manual_seed(42)
 
-    K_paged, V_paged, page_table = _build_paged_cache_and_pt_identical(
-        batch_global, n_kv, max_seq, block_size, d
-    )
+    K_paged, V_paged, page_table = _build_paged_cache_and_pt_identical(batch_global, n_kv, max_seq, block_size, d)
 
     tt_pt = ttnn.from_torch(
-        page_table, device=mesh_device, dtype=ttnn.int32, layout=ttnn.ROW_MAJOR_LAYOUT,
+        page_table,
+        device=mesh_device,
+        dtype=ttnn.int32,
+        layout=ttnn.ROW_MAJOR_LAYOUT,
         mesh_mapper=ttnn.ShardTensor2dMesh(mesh_device, dims=(None, -2), mesh_shape=cluster_shape),
     )
     tt_K = ttnn.from_torch(
-        K_paged, device=mesh_device, dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT,
+        K_paged,
+        device=mesh_device,
+        dtype=ttnn.bfloat16,
+        layout=ttnn.TILE_LAYOUT,
         mesh_mapper=ttnn.ReplicateTensorToMesh(mesh_device),
     )
     tt_V = ttnn.from_torch(
-        V_paged, device=mesh_device, dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT,
+        V_paged,
+        device=mesh_device,
+        dtype=ttnn.bfloat16,
+        layout=ttnn.TILE_LAYOUT,
         mesh_mapper=ttnn.ReplicateTensorToMesh(mesh_device),
     )
 
     Q_one = fa_rand(1, 1, n_q, d)
     Q = Q_one.repeat(1, batch_global, 1, 1)
     tt_Q = ttnn.from_torch(
-        Q, device=mesh_device, dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT,
+        Q,
+        device=mesh_device,
+        dtype=ttnn.bfloat16,
+        layout=ttnn.TILE_LAYOUT,
         mesh_mapper=ttnn.ShardTensor2dMesh(mesh_device, dims=(None, 1), mesh_shape=cluster_shape),
     )
     cur_pos = torch.full((batch_global,), CUR_POS, dtype=torch.int32)
     tt_cp = ttnn.from_torch(
-        cur_pos, device=mesh_device, dtype=ttnn.int32, layout=ttnn.ROW_MAJOR_LAYOUT,
+        cur_pos,
+        device=mesh_device,
+        dtype=ttnn.int32,
+        layout=ttnn.ROW_MAJOR_LAYOUT,
         mesh_mapper=ttnn.ShardTensor2dMesh(mesh_device, dims=(None, 0), mesh_shape=cluster_shape),
     )
 
     # CONTIGUOUS rectangular sub_core_grids (cols 1-6 × rows 0-9 = 60 cores).
     # No col-4 skip. Avoids col 0 (reserved) and col 7 (dispatch).
-    rect_sub_core_grids = ttnn.CoreRangeSet(
-        [ttnn.CoreRange(ttnn.CoreCoord(1, 0), ttnn.CoreCoord(6, 9))]
-    )
+    rect_sub_core_grids = ttnn.CoreRangeSet([ttnn.CoreRange(ttnn.CoreCoord(1, 0), ttnn.CoreCoord(6, 9))])
     rect_start_core = ttnn.CoreCoord(1, 0)
     padded_num_heads = nearest_pow_2(nearest_n(n_q, n=32))
     out_grid = ttnn.num_cores_to_corerangeset_in_subcoregrids(
@@ -393,15 +405,22 @@ def test_paged_sdpa_decode_olmo_tg_batch_identity_rect_grid(mesh_device):
 
     program_cfg = ttnn.SDPAProgramConfig(
         compute_with_storage_grid_size=mesh_device.compute_with_storage_grid_size(),
-        exp_approx_mode=False, q_chunk_size=0, k_chunk_size=0,
+        exp_approx_mode=False,
+        q_chunk_size=0,
+        k_chunk_size=0,
     )
     compute_kernel_cfg = ttnn.WormholeComputeKernelConfig(
-        math_fidelity=ttnn.MathFidelity.HiFi4, math_approx_mode=False,
-        fp32_dest_acc_en=False, packer_l1_acc=False,
+        math_fidelity=ttnn.MathFidelity.HiFi4,
+        math_approx_mode=False,
+        fp32_dest_acc_en=False,
+        packer_l1_acc=False,
     )
 
     tt_out = ttnn.transformer.paged_scaled_dot_product_attention_decode(
-        tt_Q, tt_K, tt_V, tt_pt,
+        tt_Q,
+        tt_K,
+        tt_V,
+        tt_pt,
         cur_pos_tensor=tt_cp,
         scale=d**-0.5,
         program_config=program_cfg,
@@ -416,3 +435,70 @@ def test_paged_sdpa_decode_olmo_tg_batch_identity_rect_grid(mesh_device):
         out_dev0 = out_dev0[..., :n_q, :]
 
     _check_batch_identity(out_dev0, label="TG col-0 dev-0 SDPA output (RECT GRID), B_local=8")
+
+
+# ---------------------------------------------------------------------------
+# OLMo decode configuration as the model actually issues it: row-major Q sharded
+# on one core range, output sharded on another, and the op running on a
+# sub_core_grids rectangle that matches neither of them.
+# ---------------------------------------------------------------------------
+@pytest.mark.parametrize("sliding_window_size", [None, 4096], ids=["full", "sliding"])
+@pytest.mark.parametrize("fp32_dest_acc_en", [False, True], ids=["bf16_acc", "fp32_acc"])
+@pytest.mark.parametrize(
+    "device_params", [{"l1_small_size": 24576, "dispatch_core_axis": ttnn.DispatchCoreAxis.COL}], indirect=True
+)
+def test_paged_sdpa_decode_olmo_model_config_batch_identity(device, sliding_window_size, fp32_dest_acc_en):
+    torch.manual_seed(0)
+    K_paged, V_paged, page_table = _build_paged_cache_and_pt_identical(B_LOCAL, N_KV, MAX_SEQ, BLOCK_SIZE, D)
+
+    q_grid = ttnn.CoreRangeSet(
+        [
+            ttnn.CoreRange(ttnn.CoreCoord(1, 0), ttnn.CoreCoord(3, 1)),
+            ttnn.CoreRange(ttnn.CoreCoord(1, 2), ttnn.CoreCoord(2, 2)),
+        ]
+    )
+    sdpa_grid = ttnn.CoreRangeSet([ttnn.CoreRange(ttnn.CoreCoord(1, 0), ttnn.CoreCoord(6, 9))])
+    out_grid = ttnn.num_cores_to_corerangeset_in_subcoregrids(ttnn.CoreCoord(1, 0), B_LOCAL, sdpa_grid, row_wise=True)
+
+    Q = fa_rand(1, 1, N_Q, D).repeat(1, B_LOCAL, 1, 1)
+    q_cfg = ttnn.MemoryConfig(
+        ttnn.TensorMemoryLayout.HEIGHT_SHARDED,
+        ttnn.BufferType.L1,
+        ttnn.ShardSpec(q_grid, (N_Q, D), ttnn.ShardOrientation.ROW_MAJOR),
+    )
+    tt_Q = ttnn.from_torch(Q, device=device, dtype=ttnn.bfloat16, layout=ttnn.ROW_MAJOR_LAYOUT, memory_config=q_cfg)
+    tt_K = ttnn.from_torch(K_paged, device=device, dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT)
+    tt_V = ttnn.from_torch(V_paged, device=device, dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT)
+    tt_pt = ttnn.from_torch(page_table, device=device, dtype=ttnn.int32, layout=ttnn.ROW_MAJOR_LAYOUT)
+    tt_cp = ttnn.from_torch(torch.full((B_LOCAL,), CUR_POS, dtype=torch.int32), device=device, dtype=ttnn.int32)
+    out_cfg = ttnn.MemoryConfig(
+        ttnn.TensorMemoryLayout.HEIGHT_SHARDED,
+        ttnn.BufferType.L1,
+        ttnn.ShardSpec(out_grid, (nearest_n(N_Q, n=32), D), ttnn.ShardOrientation.ROW_MAJOR),
+    )
+
+    tt_out = ttnn.transformer.paged_scaled_dot_product_attention_decode(
+        tt_Q,
+        tt_K,
+        tt_V,
+        cur_pos_tensor=tt_cp,
+        page_table_tensor=tt_pt,
+        scale=D**-0.5,
+        sliding_window_size=sliding_window_size,
+        program_config=ttnn.SDPAProgramConfig(
+            compute_with_storage_grid_size=(6, 10),
+            sub_core_grids=sdpa_grid,
+            exp_approx_mode=False,
+            q_chunk_size=0,
+            k_chunk_size=0,
+        ),
+        compute_kernel_config=ttnn.WormholeComputeKernelConfig(
+            math_fidelity=ttnn.MathFidelity.HiFi3,
+            math_approx_mode=False,
+            fp32_dest_acc_en=fp32_dest_acc_en,
+            packer_l1_acc=False,
+        ),
+        memory_config=out_cfg,
+    )
+    out = ttnn.to_torch(tt_out).float()[..., :N_Q, :]
+    _check_batch_identity(out, label=f"OLMo model config, window={sliding_window_size}, fp32={fp32_dest_acc_en}")

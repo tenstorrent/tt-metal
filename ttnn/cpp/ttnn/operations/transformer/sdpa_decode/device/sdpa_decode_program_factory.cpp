@@ -4,6 +4,7 @@
 
 #include "sdpa_decode_device_operation.hpp"
 
+#include <algorithm>
 #include <bit>
 #include <climits>
 #include <cmath>
@@ -287,6 +288,50 @@ ProgramDescriptor SdpaDecodeDeviceOperation::create_descriptor(
             "num_group_cols * num_group_rows must be equal to num_groups_total");
     }
 
+    // ========== Shard-Derived Per-Batch Cores ==========
+    // A sharded output is written in place (c_20 is backed by the output buffer) and sharded Q is read
+    // straight out of the shard holder's L1, so both must be addressed on the cores that actually hold
+    // batch b's shard. Derive those cores from the shard specs instead of assuming the shards occupy the
+    // first B cores of the compute grid -- when they don't (e.g. Q, output and sub_core_grids carved
+    // from different core ranges), batches silently read/write each other's data.
+    // Only applies when shard b holds exactly batch b; returns empty otherwise (legacy placement).
+    auto get_per_batch_shard_cores = [&](const Tensor& tensor) -> std::vector<CoreCoord> {
+        if (!tensor.is_sharded() || tensor.memory_config().memory_layout() != TensorMemoryLayout::HEIGHT_SHARDED) {
+            return {};
+        }
+        const auto& shard_spec = tensor.shard_spec().value();
+        const auto& padded_shape = tensor.padded_shape();
+        const uint64_t padded_height = tensor.physical_volume() / padded_shape[-1];
+        if (shard_spec.grid.num_cores() < B || static_cast<uint64_t>(shard_spec.shape[0]) * B != padded_height) {
+            return {};
+        }
+        return corerange_to_cores(shard_spec.grid, B, shard_spec.orientation == ShardOrientation::ROW_MAJOR);
+    };
+    const std::vector<CoreCoord> output_shard_cores =
+        use_col_major_group_indexing ? std::vector<CoreCoord>{} : get_per_batch_shard_cores(output_tensor);
+    // Put the output shard holders first (in batch order) so the reducer for batch b lands on output shard b.
+    auto order_output_cores_first = [&](std::vector<CoreCoord> cores) -> std::vector<CoreCoord> {
+        if (output_shard_cores.empty()) {
+            return cores;
+        }
+        std::vector<CoreCoord> ordered = output_shard_cores;
+        ordered.reserve(cores.size());
+        for (const auto& out_core : output_shard_cores) {
+            TT_FATAL(
+                std::find(cores.begin(), cores.end(), out_core) != cores.end(),
+                "SDPA decode output shard core {} is outside the op's compute cores {}; the output memory config "
+                "must be sharded on cores within program_config.sub_core_grids / compute_with_storage_grid_size",
+                out_core,
+                core_grid);
+        }
+        for (const auto& core : cores) {
+            if (std::find(output_shard_cores.begin(), output_shard_cores.end(), core) == output_shard_cores.end()) {
+                ordered.push_back(core);
+            }
+        }
+        return ordered;
+    };
+
     // ========== Core Group Assignment ==========
     // Core layout depends on sharding and indexing mode:
     // - Spatial indexing: simple linear order, spatial index computes batch/head from 2D position
@@ -299,7 +344,7 @@ ProgramDescriptor SdpaDecodeDeviceOperation::create_descriptor(
 
     if (on_subcoregrid) {
         TT_FATAL(is_q_sharded || is_output_sharded, "Subcoregrids require sharded Q or output");
-        auto cores_vec = corerange_to_cores(core_grid, num_cores_available, true);
+        auto cores_vec = order_output_cores_first(corerange_to_cores(core_grid, num_cores_available, true));
         uint32_t reducer_idx = 0, worker_idx = num_output_cores;
         for (uint32_t i = 0; i < num_cores_available; ++i) {
             bool is_reducer = (i % num_cores_per_batch == 0) && (reducer_idx < num_output_cores);
@@ -309,15 +354,19 @@ ProgramDescriptor SdpaDecodeDeviceOperation::create_descriptor(
     } else if ((is_q_sharded || is_output_sharded) && !use_col_major_group_indexing) {
         // Q/output sharded without row major group assignment: reorder cores so reducers are at batch boundaries
         // This ensures i % num_cores_per_batch == 0 identifies output/reducer cores
+        std::vector<CoreCoord> grid_cores;
+        grid_cores.reserve(num_cores_available);
+        for (uint32_t i = 0; i < num_cores_available; ++i) {
+            grid_cores.push_back({i % grid_size.x, i / grid_size.x});
+        }
+        const auto cores_vec = order_output_cores_first(std::move(grid_cores));
         uint32_t reducer_idx = 0, worker_idx = num_output_cores;
         for (uint32_t i = 0; i < num_cores_available; ++i) {
             CoreCoord core;
             if ((i % num_cores_per_batch == 0) && (reducer_idx < num_output_cores)) {
-                core = {reducer_idx % grid_size.x, reducer_idx / grid_size.x};
-                reducer_idx++;
+                core = cores_vec[reducer_idx++];
             } else {
-                core = {worker_idx % grid_size.x, worker_idx / grid_size.x};
-                worker_idx++;
+                core = cores_vec[worker_idx++];
             }
             (i < num_active_cores ? core_group : core_group_idle).push_back(core);
         }
@@ -371,6 +420,19 @@ ProgramDescriptor SdpaDecodeDeviceOperation::create_descriptor(
         output_core_physical_xs[idx] = physical.x;
         output_core_physical_ys[idx] = physical.y;
         output_count++;
+    }
+
+    // Cores the reader pulls sharded Q from (one per batch). Defaults to the output cores, which is where
+    // Q lives when Q and output share a shard grid; otherwise point each batch at its own Q shard holder.
+    std::vector<uint32_t> q_src_core_physical_xs = output_core_physical_xs;
+    std::vector<uint32_t> q_src_core_physical_ys = output_core_physical_ys;
+    if (is_q_sharded && !q_locally_available && q_heads_parallel_factor == 1 && !use_col_major_group_indexing) {
+        const auto q_shard_cores = get_per_batch_shard_cores(input_tensor_q);
+        for (uint32_t b = 0; b < q_shard_cores.size(); ++b) {
+            auto physical = device->worker_core_from_logical_core(q_shard_cores[b]);
+            q_src_core_physical_xs[b] = physical.x;
+            q_src_core_physical_ys[b] = physical.y;
+        }
     }
 
     // All active cores (for tree reduction lookups)
@@ -1012,7 +1074,12 @@ ProgramDescriptor SdpaDecodeDeviceOperation::create_descriptor(
         reader_rt_args.push_back(attn_mask_buffer);
         reader_rt_args.push_back(attention_sink_buffer);
         reader_rt_args.push_back(page_table_stick_size);
-        reader_rt_args.push_back(static_cast<uint32_t>(do_output));
+        // The reader only uses this flag to read sharded Q from its own L1, so it marks the Q source core.
+        const auto core_physical = device->worker_core_from_logical_core(core);
+        const bool is_q_src_core = cur_batch < num_output_cores &&
+                                   core_physical.x == q_src_core_physical_xs[cur_batch] &&
+                                   core_physical.y == q_src_core_physical_ys[cur_batch];
+        reader_rt_args.push_back(static_cast<uint32_t>(is_q_sharded ? is_q_src_core : do_output));
         reader_rt_args.push_back(cur_head);
         reader_rt_args.push_back(cur_batch);
         reader_rt_args.push_back(core_num_in_reduce);
@@ -1022,8 +1089,8 @@ ProgramDescriptor SdpaDecodeDeviceOperation::create_descriptor(
         reader_rt_args.push_back(mcast_y0);
         reader_rt_args.push_back(mcast_y1);
         reader_rt_args.push_back(num_dests);
-        reader_rt_args.append(output_core_physical_xs);
-        reader_rt_args.append(output_core_physical_ys);
+        reader_rt_args.append(q_src_core_physical_xs);
+        reader_rt_args.append(q_src_core_physical_ys);
 
         // writer runtime args (do_reduce is NOT included — writer doesn't use it)
         // The output address is passed as Buffer* (BufferBinding) so it is re-patched on the fast
