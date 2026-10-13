@@ -2666,18 +2666,24 @@ class TestConfig:
         return f"init_sol_{self._init_build_dir().name}"
 
     def _build_shared_init_elfs(self):
-        """The INIT measurement ELFs of this test's sharing key, compiled from the speed-of-light header of the first
-        test of the key to get here (perf/init_share.py)"""
+        """The INIT measurement ELFs of this test's sharing key (perf/init_share.py), compiled from the speed-of-light
+        header that sorts first among the key's tests built so far, so a producer's ELFs do not depend on build order;
+        a run that also executes keeps the first build, which a running test may be loading
+        """
         init_dir = self._init_build_dir()
-        if (init_dir / "init_elf" / ".build_complete").exists():
+        done = init_dir / "init_elf" / ".build_complete"
+        if done.exists() and TestConfig.BUILD_MODE != BuildMode.PRODUCE:
             return
+        header = self.generate_build_header(speed_of_light=True)
         with FileLock(TestConfig.SYNC_DIR / f"init-sol-{init_dir.name}.lock"):
-            if (init_dir / "init_elf" / ".build_complete").exists():
+            if done.exists() and (
+                TestConfig.BUILD_MODE != BuildMode.PRODUCE
+                or (init_dir / "build.h").read_text() <= header
+            ):
                 return
             create_directories([init_dir])
-            (init_dir / "build.h").write_text(
-                self.generate_build_header(speed_of_light=True)
-            )
+            done.unlink(missing_ok=True)
+            (init_dir / "build.h").write_text(header)
             self._build_init_elfs(init_dir, [])
 
     def read_coverage_data_from_device(self):
