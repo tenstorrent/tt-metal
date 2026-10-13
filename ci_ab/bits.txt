@@ -1,2 +1,2 @@
 M0 bits.txt
-F bits.txt
+V7 bits.txt
