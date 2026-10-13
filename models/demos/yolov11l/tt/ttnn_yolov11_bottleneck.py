@@ -23,5 +23,5 @@ class TtnnBottleneck:
             input = ttnn.to_layout(input, layout=ttnn.TILE_LAYOUT)
             x = ttnn.add(input, x, memory_config=x.memory_config())
         else:
-            x = ttnn.add(input, x, memory_config=x.memory_config(), use_legacy=False)
+            x = ttnn.add(input, x, memory_config=x.memory_config())
         return x
