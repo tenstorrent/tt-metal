@@ -41,6 +41,8 @@ _VAL_PADDING_CASES = [
     pytest.param(False, (1, 1, 1, 1), (1, 1, 32, 32), id="single_core-heavy_pad"),
     pytest.param(False, (1, 1, 64, 64), (1, 1, 64, 64), id="single_core-no_pad"),
     pytest.param(False, (1, 2, 33, 31), (1, 2, 64, 32), id="single_core-rank4"),
+    # odd bf16 widths: row bytes (66) not a multiple of 4 -> unaligned row-tail pad fill (#60285)
+    pytest.param(False, (1, 1, 32, 33), (1, 1, 32, 64), id="single_core-odd_width_unaligned_tail"),
     # ---- multi_core_default (use_multicore=True, narrow width -> not block-interleaved) ----
     # height + width padding with non-tile-aligned input rows -> varied BlockReps (data/mixed/pad)
     pytest.param(True, (1, 1, 400, 62), (1, 1, 416, 64), id="mc_default-mixed_blocks"),
