@@ -56,7 +56,7 @@ Conv3dCbGeometry derive_cb_geometry(const Conv3dParams& operation_attributes, co
     const uint32_t dtype_bytes = input_tensor.element_size();
     g.tile_size = tt::tile_size(data_format);
     const auto [math_fidelity, math_approx_mode, fp32_dest_acc_en, packer_l1_acc, dst_full_sync_en] =
-        get_compute_kernel_config_args(tt::tt_metal::hal::get_arch(), operation_attributes.compute_kernel_config);
+        get_compute_kernel_config_args(input_tensor.device()->arch(), operation_attributes.compute_kernel_config);
     // fp32-exact output path: whenever the conv computes in fp32 with fp32 dest, the tail (bias add, untilize,
     // and -- with multiple C_in blocks -- the partial reduction) reads its fp32 tiles back through
     // UnpackToDestFp32 + SFPU instead of the TF32-rounding Src path.
@@ -84,7 +84,7 @@ Conv3dCbGeometry derive_cb_geometry(const Conv3dParams& operation_attributes, co
     const uint32_t dst_size = ttnn::get_dest_reg_count(operation_attributes.compute_kernel_config);
     const uint32_t out_subblock_w = std::min(g.matmul_N_t, dst_size);
     const bool scale_subblock_h =
-        tt::tt_metal::hal::get_arch() == tt::ARCH::WORMHOLE_B0 && out_subblock_w == g.matmul_N_t;
+        input_tensor.device()->arch() == tt::ARCH::WORMHOLE_B0 && out_subblock_w == g.matmul_N_t;
     g.out_subblock_h = scale_subblock_h ? largest_divisor_up_to(g.matmul_M_t, dst_size / out_subblock_w) : 1;
 
     g.in_row_size_bytes = input_tensor.buffer()->aligned_page_size();
