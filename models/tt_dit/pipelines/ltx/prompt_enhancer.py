@@ -558,6 +558,7 @@ class DevicePromptEnhancer(PromptEnhancer):
         ), f"max_new_tokens={self.max_new_tokens} must leave room for the prompt in max_seq_len={self.max_seq_len}"
         self.cache_dir = resolve_enhancer_cache_dir(cache_dir)
         self.last_stats: dict | None = None
+        self.last_token_ids: list[int] = []
         self._model_dir: str | None = None
         self._generator = None
         self._kv_cache = None
@@ -836,6 +837,7 @@ class DevicePromptEnhancer(PromptEnhancer):
             "decode_s": round(decode_s, 3),
             "tok_s": round(decode_steps / decode_s, 3) if decode_steps and decode_s > 0 else None,
         }
+        self.last_token_ids = list(new_ids)
         return self._tokenizer.decode(new_ids, skip_special_tokens=True).strip()
 
     def _tokenize_prompt(self, text: str, max_new_tokens: int) -> list[int]:
