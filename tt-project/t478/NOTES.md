@@ -51,3 +51,11 @@ Code commits (base..56df249a1f6):
 Read out_mb/run.log: lines "T478 arm: ...", "T478 layer/ring_joint_sdpa: bundle/base best", "T478 bit-identical
 shards: N/32". Gate 2 (10 s seed-0 e2e A/B, separate job) only if >=1% faster and 32/32 identical and
 MiniMax-H3 weights are on blx01 (/var/tmp/fasth3/models/lightx2v-h3-turbo-sla). Then clean /var/tmp/fasth3/t478.
+
+## t481 run 1805 (2026-10-13 12:05 PDT)
+- First blx01 build failed (rc 1) at link step 1075/1445 (base tree): ld.lld "pthread_create has failed: Resource
+  temporarily unavailable" linking tracy-capture-daemon. blx01 had rebooted ~18:37 UTC (19 min before the build);
+  load ~21. ulimit/cgroup limits are high, so treated as transient. Old logs: /var/tmp/fasth3/t478/detach/old1/.
+- build478.sh now skips extraction of an already-extracted tree and sets CMAKE_BUILD_PARALLEL_LEVEL=24.
+  Restarted 19:01 UTC (ninja resumed at ~130/310). chain478 restarted (run 1805; log state/runs/1805/chain478.log,
+  rc state/runs/1805/chain478.rc, state worktrees/t481/tmp/chain478/{job,marker}).

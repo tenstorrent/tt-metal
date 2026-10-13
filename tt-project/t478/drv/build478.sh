@@ -5,10 +5,14 @@ T=/var/tmp/fasth3/t478
 trap 'echo $? > $T/build.rc' EXIT
 export HOME=/var/tmp/fasth3/home XDG_CACHE_HOME=/var/tmp/fasth3/home/.cache TMPDIR=/var/tmp/fasth3/tmp
 export CCACHE_DISABLE=1 CPM_SOURCE_CACHE=/var/tmp/fasth3/.cpmcache
+# attempt 1 died on pthread_create EAGAIN in a link step under load; cap parallelism
+export CMAKE_BUILD_PARALLEL_LEVEL=24
 for a in base bundle; do
-  mkdir -p $T/$a
-  echo "[$a] extract $(date -u)"
-  ionice -c3 nice -n 19 tar -xzf $T/$a.tar.gz -C $T/$a
+  if [ ! -f $T/$a/build_metal.sh ]; then
+    mkdir -p $T/$a
+    echo "[$a] extract $(date -u)"
+    ionice -c3 nice -n 19 tar -xzf $T/$a.tar.gz -C $T/$a
+  fi
   cd $T/$a
   echo "[$a] build start $(date -u)"
   ionice -c3 nice -n 19 ./build_metal.sh --build-type Release
