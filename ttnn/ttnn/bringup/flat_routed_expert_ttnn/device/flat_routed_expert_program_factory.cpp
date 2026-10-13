@@ -261,7 +261,7 @@ FlatRoutedExpertProgramFactory::cached_program_t FlatRoutedExpertProgramFactory:
             std::string(KDIR) + name,
             rect_ranges(cores),
             ComputeConfig{
-                .math_fidelity = MathFidelity::LoFi,
+                .math_fidelity = tt::tt_metal::MathFidelity::LoFi,
                 .fp32_dest_acc_en = fp32,
                 .dst_full_sync_en = full_sync,
                 .compile_args = ct,

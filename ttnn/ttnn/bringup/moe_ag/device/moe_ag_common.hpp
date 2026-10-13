@@ -106,7 +106,7 @@ inline tt::tt_metal::DataMovementConfigDescriptor dm_config(uint32_t processor, 
 }
 
 inline tt::tt_metal::ComputeConfigDescriptor fp32_compute_config() {
-    return tt::tt_metal::ComputeConfigDescriptor{.math_fidelity = MathFidelity::HiFi4, .fp32_dest_acc_en = true};
+    return tt::tt_metal::ComputeConfigDescriptor{.math_fidelity = tt::tt_metal::MathFidelity::HiFi4, .fp32_dest_acc_en = true};
 }
 
 // Validation helpers (TT_FATAL with the op name).
