@@ -412,7 +412,10 @@ class Gemma4Generator:
                             "layers": self._restore_prefill_history(state, page_table, slot, start),
                         }
                     if previous["end"] != start:
-                        raise ValueError("Prefill history does not match the scheduler continuation")
+                        raise ValueError(
+                            "Prefill history does not match the scheduler continuation: "
+                            f"key={key}, saved_end={previous['end']}, start={start}"
+                        )
                     rewind = start - aligned_start
                     histories = []
                     for tail in previous["layers"]:
