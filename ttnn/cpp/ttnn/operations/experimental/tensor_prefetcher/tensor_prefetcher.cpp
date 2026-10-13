@@ -87,7 +87,7 @@ void queue_tensor_prefetcher_request(
 
 std::vector<std::shared_ptr<metal_exp::PrefetcherPipe>> create_prefetcher_pipes_for_tensor_prefetcher(
     metal_exp::PrefetcherPipeSpace& space,
-    const std::vector<std::pair<uint32_t, CoreRangeSet>>& bank_to_receivers,
+    const std::vector<std::pair<uint32_t, tt::tt_metal::CoreRangeSet>>& bank_to_receivers,
     bool support_multi_receiver_shards) {
     std::vector<metal_exp::PrefetcherPipe> pipes =
         metal_exp::CreatePrefetcherPipesForTensorPrefetcher(space, bank_to_receivers, support_multi_receiver_shards);

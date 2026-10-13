@@ -11,6 +11,7 @@
 #include <tt-metalium/core_coord.hpp>
 #include "gtest/gtest.h"
 #include <tt_stl/reflection.hpp>
+#include "ttnn/operations/eltwise/unary/common/unary_op_types.hpp"
 #include "ttnn/operations/matmul/device/config/matmul_program_config_types.hpp"
 #include "ttnn/tensor/types.hpp"
 #include "ttnn/types.hpp"
@@ -48,7 +49,7 @@ INSTANTIATE_TEST_SUITE_P(
                 tt::tt_metal::TensorMemoryLayout::WIDTH_SHARDED,
                 ttnn::BufferType::DRAM,
                 tt::tt_metal::ShardSpec(
-                    CoreRangeSet{std::set<CoreRange>{CoreRange{tt::tt_metal::CoreCoord{1, 2}, tt::tt_metal::CoreCoord{7, 4}}}},
+                    tt::tt_metal::CoreRangeSet{std::set<tt::tt_metal::CoreRange>{tt::tt_metal::CoreRange{tt::tt_metal::CoreCoord{1, 2}, tt::tt_metal::CoreCoord{7, 4}}}},
                     {32, 128},
                     tt::tt_metal::ShardOrientation::ROW_MAJOR
                 )
@@ -92,4 +93,15 @@ TEST(TEST_JSON_CONVERSION, TEST_MATMUL_CONFIG) {
         matmul_multi_core_reuse_program_config.per_core_N,
         std::get<ttnn::operations::matmul::MatmulMultiCoreReuseProgramConfig>(deserialized_matmul_program_config)
             .per_core_N);
+}
+
+TEST(TEST_JSON_CONVERSION, TEST_UNARY_WITH_PARAM) {
+    // Regression: to_json writes the key "param", but from_json read "params".
+    const ttnn::operations::unary::UnaryWithParam op{ttnn::operations::unary::UnaryOpType::POWER, 2.5f};
+
+    auto json_object = ttsl::json::to_json(op);
+    auto deserialized = ttsl::json::from_json<ttnn::operations::unary::UnaryWithParam>(json_object);
+
+    ASSERT_EQ(deserialized.op_type, op.op_type);
+    ASSERT_EQ(deserialized.params, op.params);
 }

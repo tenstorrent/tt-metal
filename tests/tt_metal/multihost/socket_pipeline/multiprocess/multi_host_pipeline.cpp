@@ -11,12 +11,15 @@
 
 #include "tt_metal/multihost/fabric_tests/multihost_fabric_fixtures.hpp"
 #include <tt-metalium/experimental/sockets/mesh_socket.hpp>
+#include <tt-metalium/experimental/fabric/pipeline_builder.hpp>
+#include <tt-metalium/experimental/fabric/mesh_graph_descriptor.hpp>
 #include <tt-metalium/distributed_context.hpp>
 #include <tt-metalium/mesh_buffer.hpp>
 #include <tt-metalium/buffer_types.hpp>
 #include <tt-metalium/buffer.hpp>
 #include <tt-metalium/tt_backend_api_types.hpp>
 #include <chrono>
+#include <filesystem>
 #include <numeric>
 #include <optional>
 #include <tt-metalium/experimental/fabric/physical_system_descriptor.hpp>
@@ -38,8 +41,14 @@ struct PhysicalPipelineStageConfig {
 // Logical Coords for start, intermed and end nodes in the pipeline are derived from the physical config.
 struct LogicalPipelineStageConfig {
     std::size_t stage_index;
+    uint32_t rank;
     distributed::MeshCoordinate entry_node_coord;
     distributed::MeshCoordinate exit_node_coord;
+};
+
+struct LogicalPipelineConfig {
+    std::vector<LogicalPipelineStageConfig> stages;
+    distributed::MeshCoordinate start_coord;
 };
 
 // Determine how the Multi Mesh Coordinate system is instantiated on the physical cluster.
@@ -121,29 +130,67 @@ inline std::optional<PipelineType> pipeline_type_from_num_ranks(size_t num_ranks
     }
 }
 
+tt::tt_fabric::FabricConfig fabric_config_for_active_pipeline_mgd() {
+    using tt::tt_fabric::FabricConfig;
+    auto& rtoptions = MetalContext::instance().rtoptions();
+    if (!rtoptions.is_custom_fabric_mesh_graph_desc_path_specified()) {
+        return FabricConfig::FABRIC_2D;
+    }
+
+    const tt::tt_fabric::MeshGraphDescriptor mgd(
+        std::filesystem::path(rtoptions.get_custom_fabric_mesh_graph_desc_path()));
+    bool any_mesh = false;
+    bool ring_ns = true;
+    bool ring_ew = true;
+    for (const auto& mesh_name : mgd.get_all_mesh_names()) {
+        const auto topology = mgd.get_effective_declared_topology(mesh_name);
+        if (!topology.has_value()) {
+            continue;
+        }
+        any_mesh = true;
+        ring_ns = ring_ns && (!topology->ring_dims.empty() && topology->ring_dims[0]);
+        ring_ew = ring_ew && (topology->ring_dims.size() > 1 && topology->ring_dims[1]);
+    }
+    if (any_mesh && ring_ns && ring_ew) {
+        return FabricConfig::FABRIC_2D_TORUS_XY;
+    }
+    if (any_mesh && ring_ns) {
+        return FabricConfig::FABRIC_2D_TORUS_Y;
+    }
+    if (any_mesh && ring_ew) {
+        return FabricConfig::FABRIC_2D_TORUS_X;
+    }
+    return FabricConfig::FABRIC_2D;
+}
+
 // Universal pipeline fixture: selects config (Single Galaxy, Single Pod, Superpod 2 Pod, Superpod 4 Pod)
 // based on distributed context size. Set TT_FABRIC_MESH_GRAPH_DESC_PATH to the matching mesh graph.
-class BlitzDecodePipelineFixture : public tt::tt_fabric::fabric_router_tests::MeshDeviceExaboxFixture {
+class BlitzDecodePipelineFixture : public MeshDeviceFixtureBase {
 public:
+    BlitzDecodePipelineFixture() :
+        MeshDeviceFixtureBase(Config{.num_cqs = 1, .fabric_config = fabric_config_for_active_pipeline_mgd()}) {}
+
     void SetUp() override {
         if (not system_supported()) {
             GTEST_SKIP() << "Skipping: pipeline requires 4, 16, 32, or 64 ranks and matching mesh graph.";
         }
-        tt::tt_fabric::fabric_router_tests::MeshDeviceExaboxFixture::SetUp();
+        MeshDeviceFixtureBase::SetUp();
     }
 
     void TearDown() override {
         if (system_supported()) {
-            tt::tt_fabric::fabric_router_tests::MeshDeviceExaboxFixture::TearDown();
+            MeshDeviceFixtureBase::TearDown();
         }
     }
 
     bool system_supported() {
-        if (not tt::tt_fabric::fabric_router_tests::MeshDeviceExaboxFixture::system_supported()) {
+        const auto& cluster = MetalContext::instance().get_cluster();
+        const auto& mesh_graph = MetalContext::instance().get_control_plane().get_mesh_graph();
+        const auto num_ranks = *MetalContext::instance().global_distributed_context().size();
+        if (num_ranks != mesh_graph.get_mesh_ids().size() || not cluster.is_ubb_galaxy()) {
             return false;
         }
-        return pipeline_type_from_num_ranks(*tt::tt_metal::MetalContext::instance().global_distributed_context().size())
-            .has_value();
+        return pipeline_type_from_num_ranks(num_ranks).has_value();
     }
 };
 
@@ -719,10 +766,88 @@ std::vector<LogicalPipelineStageConfig> build_pipeline(
             tt::tt_metal::ASICLocation(phys.exit_node_asic_location));
         logical_pipeline_stage_configs.emplace_back(LogicalPipelineStageConfig{
             .stage_index = stage_index,
+            .rank = rank_for_host,
             .entry_node_coord = asic_id_to_mesh_coord.at(entry_node_asic_id),
             .exit_node_coord = asic_id_to_mesh_coord.at(exit_node_asic_id)});
     }
     return logical_pipeline_stage_configs;
+}
+
+// Resolve the single-galaxy pipeline from the automapper result. This keeps the socket
+// endpoints aligned with the cross-tray submeshes selected by the MGD instead of assuming
+// that rank N owns a particular physical tray.
+LogicalPipelineConfig build_automapped_single_galaxy_pipeline() {
+    const auto& control_plane = tt::tt_metal::MetalContext::instance().get_control_plane();
+    const auto& mesh_graph = control_plane.get_mesh_graph();
+    const auto& global_bindings = control_plane.get_global_logical_bindings();
+
+    auto mesh_ids = mesh_graph.get_mesh_ids();
+    std::sort(mesh_ids.begin(), mesh_ids.end());
+
+    std::vector<std::vector<tt::tt_fabric::ChipTuple>> submesh_chips;
+    std::vector<uint32_t> submesh_ranks;
+    for (const auto mesh_id : mesh_ids) {
+        for (const auto& [host_coord, host_rank] : mesh_graph.get_host_ranks(mesh_id)) {
+            const auto rank_shape = mesh_graph.get_mesh_shape(mesh_id, host_rank);
+            std::vector<tt::tt_fabric::ChipTuple> chips;
+            chips.reserve(rank_shape.mesh_size());
+            for (uint32_t row = 0; row < rank_shape[0]; ++row) {
+                for (uint32_t col = 0; col < rank_shape[1]; ++col) {
+                    const distributed::MeshCoordinate local_coord(row, col);
+                    const auto chip_id = mesh_graph.coordinate_to_chip(mesh_id, local_coord, host_rank);
+                    chips.emplace_back(*mesh_id, chip_id, row, col);
+                }
+            }
+            submesh_chips.push_back(std::move(chips));
+
+            const auto binding = std::make_pair(mesh_id, host_rank);
+            const auto rank_it =
+                std::find_if(global_bindings.begin(), global_bindings.end(), [&](const auto& rank_binding) {
+                    return rank_binding.second == binding;
+                });
+            TT_FATAL(
+                rank_it != global_bindings.end(), "No MPI rank is bound to mesh {} host rank {}", *mesh_id, *host_rank);
+            submesh_ranks.push_back(static_cast<uint32_t>(*rank_it->first));
+        }
+    }
+
+    constexpr std::size_t NUM_STAGES = 4;
+    TT_FATAL(
+        submesh_chips.size() == NUM_STAGES,
+        "Single-galaxy pipeline requires four automapped submeshes, found {}",
+        submesh_chips.size());
+
+    const std::vector<std::string> nodes = {"s0", "s1", "s2", "s3"};
+    const std::vector<tt::tt_fabric::EdgeInputTuple> edges = {
+        {"s0", "s1", false}, {"s1", "s2", false}, {"s2", "s3", false}, {"s3", "s0", true}};
+    const auto layout = tt::tt_fabric::resolve_graph_layout(nodes, edges, submesh_chips);
+
+    LogicalPipelineConfig pipeline{
+        .stages = std::vector<LogicalPipelineStageConfig>(
+            NUM_STAGES,
+            LogicalPipelineStageConfig{
+                .stage_index = 0,
+                .rank = 0,
+                .entry_node_coord = distributed::MeshCoordinate(0, 0),
+                .exit_node_coord = distributed::MeshCoordinate(0, 0)}),
+        .start_coord = distributed::MeshCoordinate(layout.h2d_entry_row, layout.h2d_entry_col)};
+
+    for (std::size_t stage_index = 0; stage_index < NUM_STAGES; ++stage_index) {
+        const auto submesh_index = layout.node_to_submesh.at(nodes[stage_index]);
+        pipeline.stages[stage_index].stage_index = stage_index;
+        pipeline.stages[stage_index].rank = submesh_ranks.at(submesh_index);
+
+        const auto& edge = layout.resolved_edges.at(stage_index);
+        pipeline.stages[stage_index].exit_node_coord = distributed::MeshCoordinate(edge.exit_row, edge.exit_col);
+        const auto downstream_stage = (stage_index + 1) % NUM_STAGES;
+        pipeline.stages[downstream_stage].entry_node_coord =
+            distributed::MeshCoordinate(edge.entry_row, edge.entry_col);
+    }
+
+    // Terminate the loopback directly on the sender at the stage-0 entry.
+    pipeline.start_coord = pipeline.stages[0].entry_node_coord;
+
+    return pipeline;
 }
 
 // Helper to get the device coords connecting the given pipeline stage and neighbor stage.
@@ -753,10 +878,8 @@ PhysicalSystemDescriptor create_physical_system_descriptor() {
         *cluster.get_cluster_desc(), distributed_context, rtoptions.get_target_device());
 }
 
-// Single-galaxy pipeline test helper (multi-process). 5 stages, 4 ranks: stage 4 (loopback) on rank 0.
-// Uses stage indices for coords and maps to ranks for global_bindings (downstream_rank 0 for loopback).
-//
-// Pipeline path: T1D2(send) -> T1D6 -> T3D6 -> T3D4 -> T4D4 -> T4D7 -> T2D7 -> T2D4 -> T1D4 -> T1D2(recv)
+// Multi-process loopback pipeline. On a single galaxy, the four stage placements and
+// endpoints are resolved from the automapped cross-tray topology.
 void run_single_galaxy_pipeline(
     std::shared_ptr<distributed::MeshDevice>& mesh_device,
     PipelineType pipeline_type,
@@ -770,23 +893,37 @@ void run_single_galaxy_pipeline(
     const auto logical_coord = CoreCoord(0, 0);
     const uint32_t socket_fifo_size = XFER_SIZE * 16;
 
-    auto physical_system_descriptor = create_physical_system_descriptor();
-    auto asic_id_to_mesh_coord = get_asic_id_to_mesh_coord_map(mesh_device);
-
-    // Build pipeline from the given pipeline type (e.g. 4 stages, one per tray for SINGLE_GALAXY)
-    auto physical_config = get_physical_pipeline_config(pipeline_type);
-    auto pipeline_stages = build_pipeline(physical_system_descriptor, asic_id_to_mesh_coord, physical_config);
+    std::optional<LogicalPipelineConfig> automapped_pipeline;
+    std::vector<LogicalPipelineStageConfig> pipeline_stages;
+    if (pipeline_type == PipelineType::SINGLE_GALAXY) {
+        automapped_pipeline = build_automapped_single_galaxy_pipeline();
+        pipeline_stages = automapped_pipeline->stages;
+    } else {
+        auto physical_system_descriptor = create_physical_system_descriptor();
+        auto asic_id_to_mesh_coord = get_asic_id_to_mesh_coord_map(mesh_device);
+        auto physical_config = get_physical_pipeline_config(pipeline_type);
+        pipeline_stages = build_pipeline(physical_system_descriptor, asic_id_to_mesh_coord, physical_config);
+    }
 
     const uint32_t num_stages = static_cast<uint32_t>(pipeline_stages.size());
     const uint32_t num_ranks = static_cast<uint32_t>(*(distributed_context->size()));
-    // Stage indices 0..num_stages-1; ranks 0..num_ranks-1. Loopback stage (last) is on rank 0.
-    const uint32_t downstream_stage = (my_rank + 1) % num_stages;
-    const uint32_t upstream_stage = (my_rank + num_stages - 1) % num_stages;
-    // Stage 4 (loopback) is on rank 0; stages 0..3 are on ranks 0..3.
-    const uint32_t downstream_rank = (downstream_stage == num_stages - 1u) ? 0u : downstream_stage;
-    const uint32_t upstream_rank = (upstream_stage == num_stages - 1u)
-                                       ? (num_ranks - 1u)
-                                       : upstream_stage;  // stage 4's upstream is stage 3 (rank 3)
+    const auto my_stage_it = std::find_if(
+        pipeline_stages.begin(), pipeline_stages.end(), [&](const auto& stage) { return stage.rank == my_rank; });
+    TT_FATAL(my_stage_it != pipeline_stages.end(), "MPI rank {} has no pipeline stage", my_rank);
+    const uint32_t my_stage = static_cast<uint32_t>(std::distance(pipeline_stages.begin(), my_stage_it));
+    const uint32_t downstream_stage = (my_stage + 1) % num_stages;
+    const uint32_t upstream_stage = (my_stage + num_stages - 1) % num_stages;
+
+    uint32_t downstream_rank;
+    uint32_t upstream_rank;
+    if (automapped_pipeline.has_value()) {
+        downstream_rank = pipeline_stages[downstream_stage].rank;
+        upstream_rank = pipeline_stages[upstream_stage].rank;
+    } else {
+        // Legacy multi-system configs model loopback as an extra local stage on rank 0.
+        downstream_rank = (downstream_stage == num_stages - 1u) ? 0u : downstream_stage;
+        upstream_rank = (upstream_stage == num_stages - 1u) ? (num_ranks - 1u) : upstream_stage;
+    }
 
     const auto& global_bindings =
         tt::tt_metal::MetalContext::instance().get_control_plane().get_global_logical_bindings();
@@ -819,11 +956,10 @@ void run_single_galaxy_pipeline(
         distributed_context->barrier();
     };
 
-    const bool is_pipeline_start = (my_rank == 0);
+    const bool is_pipeline_start = (my_stage == 0);
 
-    // My stage coordinates (stage index == my_rank for 4 ranks; stage 4 loopback on rank 0)
-    auto my_entry = pipeline_stages[my_rank].entry_node_coord;
-    auto my_exit = pipeline_stages[my_rank].exit_node_coord;
+    auto my_entry = pipeline_stages[my_stage].entry_node_coord;
+    auto my_exit = pipeline_stages[my_stage].exit_node_coord;
     auto upstream_exit = pipeline_stages[upstream_stage].exit_node_coord;
     auto downstream_entry = pipeline_stages[downstream_stage].entry_node_coord;
 
@@ -851,15 +987,12 @@ void run_single_galaxy_pipeline(
 
     const uint32_t latency_measurement_address = latency_measurement_buffer->address();
 
-    // Sender is stage 0 entry; last stage exit is the same ASIC (full loopback).
-    const distributed::MeshCoordinate start_coord = pipeline_stages[0].entry_node_coord;
-    TT_ASSERT(
-        pipeline_stages.back().exit_node_coord == start_coord,
-        "Loopback: last stage exit must equal first stage entry");
+    const distributed::MeshCoordinate start_coord =
+        automapped_pipeline.has_value() ? automapped_pipeline->start_coord : pipeline_stages[0].entry_node_coord;
 
     if (is_pipeline_start) {
         // Send path: start_coord -> my_exit -> downstream (use stage indices)
-        auto [my_sender, downstream_recv] = get_connecting_coords(pipeline_stages, my_rank, downstream_stage);
+        auto [my_sender, downstream_recv] = get_connecting_coords(pipeline_stages, my_stage, downstream_stage);
         auto [intermed_send, intermed_recv] = create_intermed_socket_pair(start_coord, my_sender);
 
         auto fwd_connection = distributed::SocketConnection(
@@ -869,16 +1002,16 @@ void run_single_galaxy_pipeline(
             {fwd_connection}, socket_mem_config, my_mesh_id, downstream_mesh_id, distributed_context);
         auto send_socket = distributed::MeshSocket(mesh_device, send_socket_config);
 
-        // Recv path: from last stage into pipeline end entry, then local forward to start (ClosetBox pattern)
-        auto [my_recv, upstream_send] = get_connecting_coords(pipeline_stages, num_stages - 1u, num_stages - 2u);
+        // Recv path: terminate the automapped loopback directly on the sender.
+        const auto my_recv = automapped_pipeline.has_value() ? start_coord : pipeline_stages.back().entry_node_coord;
+        const auto upstream_send = automapped_pipeline.has_value() ? pipeline_stages.back().exit_node_coord
+                                                                   : pipeline_stages[num_stages - 2u].exit_node_coord;
         auto bwd_connection = distributed::SocketConnection(
             distributed::MeshCoreCoord(upstream_send, logical_coord),
             distributed::MeshCoreCoord(my_recv, logical_coord));
         auto recv_socket_config = distributed::SocketConfig(
             {bwd_connection}, socket_mem_config, upstream_mesh_id, my_mesh_id, distributed_context);
         auto recv_socket = distributed::MeshSocket(mesh_device, recv_socket_config);
-
-        auto [intermed_send_2, intermed_recv_2] = create_intermed_socket_pair(my_recv, start_coord);
 
         // Create device buffer using metal-level API
         distributed::DeviceLocalBufferConfig buffer_config = {
@@ -902,22 +1035,41 @@ void run_single_galaxy_pipeline(
         Buffer* input_buffer = input_mesh_buffer->get_reference_buffer();
 
         // Launch kernels:
-        // - send_async on T1D2: sends data via intermed to T1D6, receives ack back via intermed_2 from T1D4
-        // - socket_forward on T1D6: forwards from intermed to cross-mesh send socket (to T3D6)
-        // - socket_forward on T1D4: forwards from cross-mesh recv socket (from T2D4) to intermed_2 (to T1D2)
-        tt::tt_metal::send_async(
-            mesh_device.get(),
-            input_buffer,
-            tt::DataFormat::UInt32,
-            intermed_send,
-            intermed_recv_2,
-            latency_measurement_address,
-            num_iterations,
-            enable_correctness_check);
-        tt::tt_metal::socket_forward(
-            mesh_device.get(), intermed_recv, send_socket, XFER_SIZE, latency_measurement_address, num_iterations);
-        tt::tt_metal::socket_forward(
-            mesh_device.get(), recv_socket, intermed_send_2, XFER_SIZE, latency_measurement_address, num_iterations);
+        if (automapped_pipeline.has_value()) {
+            // The sender receives the stage-3 loopback directly through recv_socket.
+            tt::tt_metal::send_async(
+                mesh_device.get(),
+                input_buffer,
+                tt::DataFormat::UInt32,
+                intermed_send,
+                recv_socket,
+                latency_measurement_address,
+                num_iterations,
+                enable_correctness_check);
+            tt::tt_metal::socket_forward(
+                mesh_device.get(), intermed_recv, send_socket, XFER_SIZE, latency_measurement_address, num_iterations);
+        } else {
+            // Legacy layouts return through an extra local forwarding stage.
+            auto [intermed_send_2, intermed_recv_2] = create_intermed_socket_pair(my_recv, start_coord);
+            tt::tt_metal::send_async(
+                mesh_device.get(),
+                input_buffer,
+                tt::DataFormat::UInt32,
+                intermed_send,
+                intermed_recv_2,
+                latency_measurement_address,
+                num_iterations,
+                enable_correctness_check);
+            tt::tt_metal::socket_forward(
+                mesh_device.get(), intermed_recv, send_socket, XFER_SIZE, latency_measurement_address, num_iterations);
+            tt::tt_metal::socket_forward(
+                mesh_device.get(),
+                recv_socket,
+                intermed_send_2,
+                XFER_SIZE,
+                latency_measurement_address,
+                num_iterations);
+        }
     } else {
         // Non-start ranks: receive from upstream, forward locally, send to downstream
 
@@ -957,6 +1109,7 @@ void run_single_galaxy_pipeline(
         tt::tt_metal::socket_forward(
             mesh_device.get(), intermed_recv, send_socket, XFER_SIZE, latency_measurement_address, num_iterations);
     }
+
     barrier();
     if (is_pipeline_start) {
         const auto& cluster = tt::tt_metal::MetalContext::instance().get_cluster();
@@ -1012,10 +1165,8 @@ TEST_F(BlitzDecodePipelineFixture, SendRecvPipelineWithCorrectnessCheck) {
 // Linear pipeline (no loopback): data flows one-way through pipeline stages.
 // Measures sustained pipeline throughput by pushing data for many iterations.
 
-// Multi-host rate pipeline test helper.
-// 4 stages, 4 ranks: sender on rank 0, fwd on ranks 1-2, receiver on rank 3.
-// Pipeline path (one-way): T1D2 -> T1D6 -> T3D6 -> T3D4 -> T4D4 -> T4D7 -> T2D7 -> T2D4
-// Timing is done on the host side using std::chrono, matching the original TTNN implementation.
+// Multi-host rate pipeline test helper. Timing is done on the host side using
+// std::chrono, matching the original TTNN implementation.
 void run_single_galaxy_rate_pipeline(
     std::shared_ptr<distributed::MeshDevice>& mesh_device,
     PipelineType pipeline_type,
@@ -1030,15 +1181,29 @@ void run_single_galaxy_rate_pipeline(
     const auto logical_coord = CoreCoord(0, 0);
     const uint32_t socket_fifo_size = XFER_SIZE * 16;
 
-    auto physical_system_descriptor = create_physical_system_descriptor();
-    auto asic_id_to_mesh_coord = get_asic_id_to_mesh_coord_map(mesh_device);
+    std::optional<LogicalPipelineConfig> automapped_pipeline;
+    std::vector<LogicalPipelineStageConfig> pipeline_stages;
+    if (pipeline_type == PipelineType::SINGLE_GALAXY) {
+        automapped_pipeline = build_automapped_single_galaxy_pipeline();
+        pipeline_stages = automapped_pipeline->stages;
+    } else {
+        auto physical_system_descriptor = create_physical_system_descriptor();
+        auto asic_id_to_mesh_coord = get_asic_id_to_mesh_coord_map(mesh_device);
+        auto physical_config = get_physical_pipeline_config(pipeline_type, false);
+        pipeline_stages = build_pipeline(physical_system_descriptor, asic_id_to_mesh_coord, physical_config);
+    }
 
-    auto physical_config = get_physical_pipeline_config(pipeline_type, false);
-    auto pipeline_stages = build_pipeline(physical_system_descriptor, asic_id_to_mesh_coord, physical_config);
-
-    // Linear pipeline: stage i is on rank i. No loopback.
-    const uint32_t downstream_rank = my_rank + 1;
-    const uint32_t upstream_rank = my_rank - 1;  // wraps for rank 0, but unused there
+    const auto my_stage_it = std::find_if(
+        pipeline_stages.begin(), pipeline_stages.end(), [&](const auto& stage) { return stage.rank == my_rank; });
+    TT_FATAL(my_stage_it != pipeline_stages.end(), "MPI rank {} has no pipeline stage", my_rank);
+    const uint32_t my_stage = static_cast<uint32_t>(std::distance(pipeline_stages.begin(), my_stage_it));
+    const uint32_t downstream_stage = my_stage + 1;
+    const uint32_t upstream_stage = my_stage - 1;  // wraps for stage 0, but unused there
+    const uint32_t downstream_rank = automapped_pipeline.has_value() && downstream_stage < pipeline_stages.size()
+                                         ? pipeline_stages[downstream_stage].rank
+                                         : my_rank + 1;
+    const uint32_t upstream_rank =
+        automapped_pipeline.has_value() && my_stage > 0 ? pipeline_stages[upstream_stage].rank : my_rank - 1;
 
     const auto& global_bindings =
         tt::tt_metal::MetalContext::instance().get_control_plane().get_global_logical_bindings();
@@ -1064,16 +1229,16 @@ void run_single_galaxy_rate_pipeline(
         distributed_context->barrier();
     };
 
-    const bool is_pipeline_start = (my_rank == 0);
-    const bool is_pipeline_end = (my_rank == num_ranks - 1);
+    const bool is_pipeline_start = (my_stage == 0);
+    const bool is_pipeline_end = (my_stage == num_ranks - 1);
 
-    auto my_entry = pipeline_stages[my_rank].entry_node_coord;
-    auto my_exit = pipeline_stages[my_rank].exit_node_coord;
+    auto my_entry = pipeline_stages[my_stage].entry_node_coord;
+    auto my_exit = pipeline_stages[my_stage].exit_node_coord;
 
     if (is_pipeline_start) {
         // Sender: start_coord -> my_exit (local), then my_exit -> downstream_entry (cross-mesh)
-        const auto& start_coord = my_entry;
-        auto [my_sender, downstream_recv] = get_connecting_coords(pipeline_stages, my_rank, downstream_rank);
+        const auto start_coord = automapped_pipeline.has_value() ? automapped_pipeline->start_coord : my_entry;
+        auto [my_sender, downstream_recv] = get_connecting_coords(pipeline_stages, my_stage, downstream_stage);
 
         auto [intermed_send, intermed_recv] = create_intermed_socket_pair(start_coord, my_sender);
 
@@ -1141,7 +1306,7 @@ void run_single_galaxy_rate_pipeline(
             rate_gbps * 1e3);
     } else if (is_pipeline_end) {
         // Receiver: upstream_exit -> my_entry (cross-mesh), then my_entry -> end_coord (local)
-        auto upstream_exit = pipeline_stages[upstream_rank].exit_node_coord;
+        auto upstream_exit = pipeline_stages[upstream_stage].exit_node_coord;
         const auto& end_coord = my_exit;
 
         const tt::tt_fabric::MeshId upstream_mesh_id =
@@ -1193,8 +1358,8 @@ void run_single_galaxy_rate_pipeline(
             rate_gbps * 1e3);
     } else {
         // Intermediate: upstream_exit -> my_entry (cross-mesh), local forward, my_exit -> downstream_entry (cross-mesh)
-        auto upstream_exit = pipeline_stages[upstream_rank].exit_node_coord;
-        auto downstream_entry = pipeline_stages[downstream_rank].entry_node_coord;
+        auto upstream_exit = pipeline_stages[upstream_stage].exit_node_coord;
+        auto downstream_entry = pipeline_stages[downstream_stage].entry_node_coord;
 
         const tt::tt_fabric::MeshId upstream_mesh_id =
             std::get<0>(global_bindings.at(distributed::multihost::Rank(upstream_rank)));

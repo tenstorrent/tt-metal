@@ -72,7 +72,7 @@ inline void llk_unpack_A_init(
     const ckernel::TensorShape tensor_shape = get_operand_tensor_shape(operand_id);
 
     constexpr ckernel::trisc::BfdResource engine = unpack_a_bfd_resource<BType, binary_reuse_dest, unpack_to_dest>();
-    llk_unpack_program_bfd<engine>(operand_id);
+    const std::uint8_t bfd_id = llk_unpack_program_bfd<engine>(operand_id);
 
     if constexpr (binary_reuse_dest != EltwiseBinaryReuseDestType::NONE) {
         static_assert(unpack_to_dest == false, "unpack_to_dest is not yet supported on Quasar");
@@ -86,7 +86,7 @@ inline void llk_unpack_A_init(
             p_unpacr::UNP_A,
             false /* TRANSPOSE_EN */,
             false /* IS_32b_DEST_EN */,
-            binary_reuse_dest>(ckernel::trisc::bfd_current<engine>(), tensor_shape, 1);
+            binary_reuse_dest>(bfd_id, tensor_shape, 1);
     } else {
         if constexpr (BType == BroadcastType::NONE) {
             LLK_ASSERT(
@@ -101,15 +101,15 @@ inline void llk_unpack_A_init(
                     false /*transpose*/,
                     DST_ACCUM_MODE,
                     binary_reuse_dest,
-                    true>(ckernel::trisc::bfd_current<engine>(), tensor_shape, 1);
+                    true>(bfd_id, tensor_shape, 1);
                 return;
             }
             if (transpose_of_faces && within_face_16x16_transpose) {
                 _llk_unpack_unary_operand_init_<p_unpacr::UNP_A, true, DST_ACCUM_MODE, binary_reuse_dest, false>(
-                    ckernel::trisc::bfd_current<engine>(), tensor_shape, 1);
+                    bfd_id, tensor_shape, 1);
             } else {
                 _llk_unpack_unary_operand_init_<p_unpacr::UNP_A, false, DST_ACCUM_MODE, binary_reuse_dest, false>(
-                    ckernel::trisc::bfd_current<engine>(), tensor_shape, 1);
+                    bfd_id, tensor_shape, 1);
             }
         } else {
             static_assert(!unpack_to_dest, "unpack_to_dest is not supported for unary broadcast");
@@ -120,8 +120,7 @@ inline void llk_unpack_A_init(
                     tensor_shape.num_faces_c_dim == MAX_NUM_FACES_C_DIM,
                 "Unary broadcast currently only supports 32x32 tiles (face_r_dim=16, 2x2 faces)");
             constexpr std::uint32_t unp_sel = unpack_to_dest ? p_unpacr::UNP_A : p_unpacr::UNP_B;
-            _llk_unpack_unary_broadcast_operands_init_<unp_sel, BType, DST_ACCUM_MODE, unpack_to_dest>(
-                ckernel::trisc::bfd_current<engine>(), 1);
+            _llk_unpack_unary_broadcast_operands_init_<unp_sel, BType, DST_ACCUM_MODE, unpack_to_dest>(bfd_id, 1);
         }
     }
 }
