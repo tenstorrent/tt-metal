@@ -765,10 +765,9 @@ inline void bitonic_topk_ph2_st3_to_1()
     }
     else
     {
-        // Step 3
+        // Step 3; mode 9 is ALL_ROWS_MAX followed by an unconditional swap, ties included.
         TTI_SFPSWAP(0, p_sfpu::LREG0, p_sfpu::LREG1, p_sfpswap::ALL_ROWS_MAX);
-        TTI_SFPSWAP(0, p_sfpu::LREG2, p_sfpu::LREG3, p_sfpswap::ALL_ROWS_MAX);
-        TTI_SFPSWAP(0, p_sfpu::LREG2, p_sfpu::LREG3, p_sfpswap::UNCONDITIONALLY);
+        TTI_SFPSWAP(0, p_sfpu::LREG2, p_sfpu::LREG3, TOPK_SFPSWAP_ALL_ROWS_MIN);
 
         TTI_SFPTRANSP(0, 0, 0, 0);
 
@@ -956,7 +955,7 @@ inline void _topk_step_macros_init_()
     TTI_SFPSWAP(0, p_sfpu::LREG1, 13, p_sfpswap::ALL_ROWS_MAX);
     if constexpr (FIRST_SWAPS)
     {
-        TTI_SFPSWAP(0, p_sfpu::LREG2, 14, p_sfpswap::ALL_ROWS_MAX);
+        TTI_SFPSWAP(0, p_sfpu::LREG2, 14, TOPK_SFPSWAP_ALL_ROWS_MIN);
     }
     constexpr std::uint32_t store = ((topk_step_store_delay<FUSED>() << 3) | 3) << 24;
     constexpr std::uint32_t mad_nop = 2 << 8;
@@ -1090,7 +1089,6 @@ inline void bitonic_topk_load16_first_swaps()
 // Phase 2 group after bitonic_topk_load16_first_swaps<..., true>.
 inline void bitonic_topk_ph2_after_first_swaps()
 {
-    TTI_SFPSWAP(0, p_sfpu::LREG2, p_sfpu::LREG3, p_sfpswap::UNCONDITIONALLY);
     TTI_SFPTRANSP(0, 0, 0, 0);
     TTI_SFPSWAP(0, p_sfpu::LREG0, p_sfpu::LREG2, p_sfpswap::ROWS_01_MAX);
     TTI_SFPSWAP(0, p_sfpu::LREG1, p_sfpu::LREG3, p_sfpswap::ROWS_01_MAX);
@@ -1295,6 +1293,64 @@ inline void _bitonic_topk_phases_steps(const int idir, const int i_end_phase, co
                 {
                     case 0:
                     {
+                        // Phases 0 to 3 stay within each 16-datum group, so they run on one Dst round trip per group.
+                        if (fuse_local_sort_passes && !STABLE_SORT && (i_end_phase >= 3))
+                        {
+                            for (int d = 0; d < 4; d++)
+                            {
+                                if (tile1_only && (d < 2))
+                                {
+                                    continue;
+                                }
+                                if (init_load)
+                                {
+                                    load_replay_buf<Exec>(0, ldst_count, [] { bitonic_topk_load16<is_fp32_dest_acc_en, FUSED, RANK_STAMPED>(4, 8); });
+                                    init_load = false;
+                                }
+                                else
+                                {
+                                    lltt::replay(0, ldst_count);
+                                }
+                                if (init_phase)
+                                {
+                                    load_replay_buf<Exec>(
+                                        16,
+                                        16,
+                                        []
+                                        {
+                                            bitonic_topk_ph0_ph1_fused<STABLE_SORT, TIE_ORDER>();
+                                            bitonic_topk_ph2_st3_to_1<STABLE_SORT, TIE_ORDER>();
+                                        });
+                                    init_phase = false;
+                                }
+                                else
+                                {
+                                    lltt::replay(16, 16);
+                                }
+                                if (dir == static_cast<bool>(SortDir::ArgMin))
+                                {
+                                    bitonic_topk_ph3_half_body<true, false>();
+                                    bitonic_topk_ph3_half_body<true, false>();
+                                }
+                                else
+                                {
+                                    bitonic_topk_ph3_half_body<false, false>();
+                                    bitonic_topk_ph3_half_body<false, false>();
+                                }
+                                if (init_store)
+                                {
+                                    load_replay_buf<Exec>(8, ldst_count, [] { bitonic_topk_store16<is_fp32_dest_acc_en, true, FUSED, RANK_STAMPED>(4, 8); });
+                                    init_store = false;
+                                }
+                                else
+                                {
+                                    lltt::replay(8, ldst_count);
+                                }
+                                dir = !dir;
+                            }
+                            ph = 3;
+                            break;
+                        }
                         // Phases 0 and 1 load and store the same four 16-datum groups through the
                         // same load16(4, 8)/store16(4, 8) windows, so when phase 1 is requested too
                         // both run on one Dst round trip per group (saves 4 groups x 16 ld/st).
@@ -1418,12 +1474,12 @@ inline void _bitonic_topk_phases_steps(const int idir, const int i_end_phase, co
                                 bitonic_topk_load16_first_swaps<is_fp32_dest_acc_en, FUSED, RANK_STAMPED, true>();
                                 if (init_phase)
                                 {
-                                    load_replay_buf<Exec>(16, 7, [] { bitonic_topk_ph2_after_first_swaps(); });
+                                    load_replay_buf<Exec>(16, 6, [] { bitonic_topk_ph2_after_first_swaps(); });
                                     init_phase = false;
                                 }
                                 else
                                 {
-                                    lltt::replay(16, 7);
+                                    lltt::replay(16, 6);
                                 }
                                 lltt::replay(8, ldst_count);
                                 continue;
@@ -1437,7 +1493,7 @@ inline void _bitonic_topk_phases_steps(const int idir, const int i_end_phase, co
                             }
                             else
                             {
-                                constexpr int replay_count = 9;
+                                constexpr int replay_count = 8;
                                 if (init_phase)
                                 {
                                     load_replay_buf<Exec>(16, replay_count, [] { bitonic_topk_ph2_st3_to_1<STABLE_SORT, TIE_ORDER>(); });
@@ -1565,16 +1621,37 @@ inline void _bitonic_topk_phases_steps(const int idir, const int i_end_phase, co
                         dir = pass_dir;
                         TTI_SETRWC(p_setrwc::CLR_NONE, 0, 0, 0, 0, p_setrwc::SET_D);
                         datums_compared = 0;
+                        bool init_rev   = true;
                         while (datums_compared < total_datums_to_compare)
                         {
                             if constexpr (first_swaps)
                             {
-                                bitonic_topk_ph3_group_first_swaps<is_fp32_dest_acc_en, FUSED, RANK_STAMPED>(dir, init_phase, 16);
+                                // The first swaps run under the loads only in the forward direction; mode 9 reverses the rest.
+                                if (dir == static_cast<bool>(SortDir::ArgMin))
+                                {
+                                    if (init_load)
+                                    {
+                                        load_replay_buf<NoExec>(0, ldst_count, [] { bitonic_topk_load16<is_fp32_dest_acc_en, FUSED, RANK_STAMPED>(4, 8); });
+                                        init_load = false;
+                                    }
+                                    lltt::replay(0, ldst_count);
+                                    if (init_rev)
+                                    {
+                                        load_replay_buf<NoExec>(24, 5, [] { bitonic_topk_ph3_half_body<true, false>(); });
+                                        init_rev = false;
+                                    }
+                                    lltt::replay(24, 5);
+                                    lltt::replay(24, 5);
+                                }
+                                else
+                                {
+                                    bitonic_topk_ph3_group_first_swaps<is_fp32_dest_acc_en, FUSED, RANK_STAMPED>(dir, init_phase, 16);
+                                }
                             }
                             else
                             {
                                 lltt::replay(0, ldst_count);
-                                bitonic_topk_ph3_st4_to_1<STABLE_SORT, TIE_ORDER>(dir, init_phase, 16);
+                                bitonic_topk_ph3_st4_to_1<STABLE_SORT, TIE_ORDER>(dir, init_phase, 16, STABLE_SORT ? -1 : 21);
                             }
                             lltt::replay(8, ldst_count);
                             datums_compared += 16;
@@ -1873,7 +1950,7 @@ inline void _bitonic_topk_rebuild_impl_(const bool idir, const int m_iter, const
     constexpr int ldst_count       = FUSED ? 4 : 8;   // bare load16/store16 windows
     constexpr int rebuild_win_ld8  = FUSED ? 18 : 22; // load8 + ph1 body + store8 + 8x INCRWC
     constexpr int rebuild_win_ph1  = FUSED ? 18 : 26; // load16 + ph1 body + store16 + 4x INCRWC
-    constexpr int rebuild_win_ph2  = FUSED ? 21 : 29; // load16 + ph2 body + store16 + 4x INCRWC
+    constexpr int rebuild_win_ph2  = FUSED ? 20 : 28; // load16 + ph2 body + store16 + 4x INCRWC
     constexpr int rebuild_win_st12 = FUSED ? 8 : 12;  // store16 + 4x INCRWC at base 13
     static_assert(TOPK_REBUILD_PH3_REV_REPLAY_START >= 13 + rebuild_win_st12, "reversed phase-3 window overlaps the store window");
     static_assert(TOPK_REBUILD_PH3_REV_REPLAY_START + 5 <= REPLAY_BUF_SIZE, "reversed phase-3 window must fit the replay buffer");
