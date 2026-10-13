@@ -277,10 +277,12 @@ A naive "run them + concatenate" can catch *less* than the audits alone (summari
 ## Ground-truth freshness contract (non-negotiable)
 Two sub-audits depend on sources that are **dynamic** and must be consulted live each run, never from data baked into a SKILL.md:
 - `instruction-latency-audit` grounds in the **`sfpi-gcc` version this build is pinned to** (latency tables, `xtt_delay`, `xtt_dynamic_bug` errata) — re-derive every run; optionally diff the tip and flag divergence; mark coverage bounded if the pinned compiler can't be resolved.
-- All HW-semantics verdicts ground in the **tt-isa-docs MCP** (fetched live), not cached prose.
+- All HW-semantics verdicts ground in the **tt-isa-docs MCP** (fetched live), not cached prose — except **ordering verdicts** (a guard is missing / unnecessary), which ground in the **RTL** per the gate below.
 Any instruction list / latency number / errata set appearing in a sub-skill is a *dated illustration*, subordinate to fresh derivation. The JOIN must not treat a stale baked list as authority.
 
 **ISA-precedence policy (applies to every sub-audit):** the live ISA doc (and, for `instruction-latency`, the pinned `sfpi-gcc`) **outranks** any rule, table, or example baked into a skill. When a live source **contradicts** a baked rule, do NOT silently resolve it — surface the conflict to the user and ask whether the baked rule should be overwritten, discarded, or kept; default to the live source. This holds whether a sub-audit is run standalone or inside this sweep.
+
+**RTL decides ordering (binding, every sub-audit — the text in `.claude/CLAUDE.md` § Hardware Ordering Claims is canonical):** any verdict that LLK code needs, or does not need, a hardware ordering guard (a `STALLWAIT`, a unit drain, a NOP gap, a fence, a semaphore) is decided by reading the target architecture's RTL, and by nothing else. The finding must record, with RTL file and line: (1) the cycle the writer's value commits, (2) the cycle the consumer samples the resource, (3) the issue and arbitration structure between them. If in-order issue puts (1) at or before (2) there is no finding and no guard is added. If any of the three was not read the claim is **UNCERTAIN** — neither RACE nor SAFE. ISA docs, Confluence pages, tickets, earlier findings, summaries and code comments are leads that say where to read, never evidence; when one of them disagrees with the RTL, the RTL wins and the conflict is surfaced. A filed finding that a later RTL read contradicts is retracted. Public write-ups describe the mechanism in words and never quote RTL.
 
 **Ground-truth source ladder (a SUPERSET of the sage agents' corpus; `assembly.yaml` deliberately excluded) — use every applicable source each run and combine them:**
 Authority is **per audit-class × arch**; never skip a source because it lacked coverage last time. HW facts are confirmed against an authoritative source, never extrapolated.
@@ -325,6 +327,7 @@ Before running any sub-audit, build a **source manifest** from the ladder above 
 - **sfpi-gcc source** (instruction-latency) — resolve the pin: `tt_metal/sfpi-version` gives an `sfpi_version` tag → that tag of `tenstorrent/sfpi` → its `gcc` submodule commit in `tenstorrent/sfpi-gcc`; confirm the files fetch (the exact three-step recipe lives in `instruction-latency`'s freshness contract — follow it there, don't re-derive).
 - **dataflow API source** (`tt_metal/hw/inc/api/dataflow/`) — present?
 - **code** (`tt_llk_*`) — present (≈ always).
+- **RTL checkout** (per target arch; internal) — present, and at a stated revision? Without it every **ordering** verdict for that arch is **UNCERTAIN** (the gate above), whatever the ISA docs say.
 
 Then state, **per unreachable source, which verdicts will be bounded or abstained** (e.g. Confluence unreachable → Quasar HW = `[code-only]`; sfpi-gcc unfetchable → latency abstains). **Pause and ask the user to choose:** (a) **proceed** accepting the listed coverage bounds, (b) **help reach a missing source** (authenticate Confluence, grant network, provide a local path/clone), or (c) **add a new source** to the ladder. Do not begin auditing until the user chooses; re-list if the reachable set changes mid-run.
 
