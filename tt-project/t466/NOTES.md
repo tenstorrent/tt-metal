@@ -46,3 +46,22 @@ logs "T466 summary: ring_joint_sdpa gain X%, layer gain Y%" and PCC between arms
   cherry-picks built there). Order: 10 s seed 0 pair, 6 s seed 0 pair, then 6 s seeds 1-4 pairs, each one job.
   Alternative if the user raises blx01's cap to ~360 GB: copy from blx03 to blx01 under ionice/nice/--bwlimit=100M.
 - blx01 leftovers of this task: /var/tmp/fasth3/t466 (build b + jit). Keep the build until the A/B host is decided.
+
+## 2026-10-13 12:40 UTC (05:40 PDT): reroute to blx01 sized, over the 150 GB cap -> blocked
+- Weights: weka copy found, read-only, no copy needed:
+  /mnt/MLPerf/tt-shield/persistent-volume/volume_id_tt_transformers-MiniMax-H3-v0.22.0/weights/MiniMax-H3
+  (/home/sulphur/models/minimax-h3 is a dir of symlinks into it). transformer/ = 62 GB.
+- dit-h3hf cache estimate: the tt-shield fl2va cache for the same model on weka
+  (tt_dit_cache_robust_fl2va/minimax-h3) is 115 GB; the generic one is 90 GB. Ours (fl2va, Turbo) ~115 GB,
+  plus ~17 GB JIT cache (t460 runs on blx03).
+- blx01 /var/tmp/fasth3 now 49 GB (home 10, models 7, .cpmcache 7, t466 4, t460 4, t409 4, t422 3, t420 3,
+  t284 3, t456/t457/t408 2 each, ~15 dirs of 1 GB). 49 + 115 + 17 = ~181 GB > 150 GB cap. Not written.
+- Even deleting every finished-task leftover (~30 GB, not ours to judge) leaves ~150 GB, no headroom.
+- Not used: the weka tt-shield caches read-only. They are built by v0.22.0 service code without the Turbo
+  adapter, and a cache miss would write to /mnt (forbidden).
+- t460's run460.sh refuses weights under /mnt; t466's job script must drop that guard (coordinator update allows
+  the weka path).
+- Next (after a decision): (a) temporary blx01 cap ~200 GB for this task (cache deleted at the end), or
+  (b) wait for blx03 (data already there; g14blx03-device paused until 2026-10-17T07:01Z at the latest).
+  Then: run466.sh = run460.sh pattern, one build t466/b for both arms (knob unset vs lofi) in ONE broker job,
+  10 s seed 0 first; cold first job builds the cache, so give it its own warm-up job.
