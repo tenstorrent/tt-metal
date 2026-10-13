@@ -64,6 +64,12 @@ void kernel_main() {
         }
     }  // The pipe's destructor runs here: nothing of this kernel's is in flight on the NOC past this point.
 
+    // On a dedicated NOC each RISC compares its own transaction counts with the NOC's hardware counters,
+    // which also count the reader's reads. The reader has read every block this kernel sent, so take its
+    // reads in now, for the firmware's end-of-kernel checks.
+    if (noc_mode == DM_DEDICATED_NOC) {
+        ncrisc_noc_counters_init();
+    }
     sync.reserve_back(1);
     sync.push_back(1);
 }

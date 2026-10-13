@@ -126,9 +126,13 @@ void kernel_main() {
     // packet tag the firmware requires to be zero before the next kernel.
     noc_async_read_set_trid(0, noc.get_noc_id());
 
-    // In performance mode the reads skipped the NoC counters; re-sync them before exit. The writer shares
-    // this NOC and, in dynamic-NOC mode, the counters, so wait until it has no traffic in flight.
+    // In performance mode the reads skipped the NoC counters; re-sync them before exit. The writer's traffic
+    // on this NOC lands in the same hardware counters, so wait until it has none in flight.
     sync.wait_front(1);
     sync.pop_front(1);
-    dynamic_noc_local_state_init();
+    if (noc_mode == DM_DEDICATED_NOC) {
+        ncrisc_noc_counters_init();
+    } else {
+        dynamic_noc_local_state_init();
+    }
 }
