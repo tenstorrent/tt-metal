@@ -375,7 +375,9 @@ def test_conv3d_cache_hash(
             num_cache_entries = device.num_program_cache_entries()
 
     # Repeating both shapes must hit the cache entries created by the first iteration
-    assert device.num_program_cache_entries() == num_cache_entries
+    assert (
+        device.num_program_cache_entries() == num_cache_entries
+    ), f"expected {num_cache_entries} program cache entries, got {device.num_program_cache_entries()}"
 
 
 @pytest.mark.parametrize(
