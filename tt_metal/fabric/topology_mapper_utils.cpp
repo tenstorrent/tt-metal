@@ -1071,6 +1071,21 @@ std::optional<std::string> add_exit_node_constraints(
             const auto& mapped_physical_dst_mesh_id = mesh_mappings.at(dst_logical_mesh);
             auto valid_physical_exit_nodes_it = valid_physical_exit_nodes_by_mesh.find(mapped_physical_dst_mesh_id);
             if (valid_physical_exit_nodes_it == valid_physical_exit_nodes_by_mesh.end()) {
+                // No physical exit nodes toward this destination mesh at all. Under RELAXED zero-link
+                // tolerance (issue #56762) this is legal even in a MIXED topology where the source mesh
+                // has links to some OTHER destination -- the requested connection to this destination
+                // stays logical-only (host interconnect). Warn and skip its exit constraint instead of
+                // failing the whole mapping. STRICT still fails.
+                if (inter_mesh_validation_mode == ::tt::tt_fabric::ConnectionValidationMode::RELAXED) {
+                    log_warning(
+                        tt::LogFabric,
+                        "Relaxed mode: requested inter-mesh connection toward logical mesh {} has NO physical exit "
+                        "nodes from the mapped source mesh ({} logical channel(s) requested); the connection is "
+                        "logical-only and traffic must use the host interconnect",
+                        dst_logical_mesh.get(),
+                        num_logical_exit_nodes_assigned);
+                    continue;
+                }
                 return fmt::format(
                     "no physical exit ASICs toward physical mesh {} (logical destination mesh {})",
                     mapped_physical_dst_mesh_id.get(),
@@ -1130,6 +1145,19 @@ std::optional<std::string> add_exit_node_constraints(
             }
 
             if (effective_exit_pair_min_count == 0) {
+                if (inter_mesh_validation_mode == ::tt::tt_fabric::ConnectionValidationMode::RELAXED) {
+                    // Zero-link tolerance (issue #56762): no physical links toward the mapped
+                    // destination mesh -- the requested connection stays logical-only. Warn loudly
+                    // and skip the exit cardinality constraint instead of failing the mapping.
+                    log_warning(
+                        tt::LogFabric,
+                        "Relaxed mode: requested inter-mesh connection toward logical mesh {} has ZERO physical "
+                        "links from the mapped source mesh ({} logical channel(s) requested); the connection is "
+                        "logical-only and traffic must use the host interconnect",
+                        dst_logical_mesh.get(),
+                        num_logical_exit_nodes_assigned);
+                    continue;
+                }
                 return fmt::format(
                     "mesh-level exit toward logical mesh {} has zero effective exit pairs ({} logical "
                     "channel(s), {} physical link(s))",
@@ -1181,6 +1209,8 @@ void apply_placement_stats(TopologyMappingStats& stats, const ::tt::tt_fabric::P
     stats.placement_attempted = placement.master_solve_attempted;
     stats.placement_success = placement.master_solve_success;
     stats.candidate_lists_complete = placement.candidate_lists_complete;
+    stats.placement_zero_link_fallback = placement.zero_link_fallback_engaged;
+    stats.placement_hard_seams_precheck_infeasible = placement.hard_seams_precheck_infeasible;
     stats.meshes_total = placement.meshes_total;
     stats.meshes_placed = placement.meshes_placed;
     stats.placement_candidates = placement.master_candidates_enumerated;
@@ -1203,12 +1233,13 @@ std::string format_sat_placement_failure(const ::tt::tt_fabric::PlacementSolveSt
     }
     return fmt::format(
         "SAT joint placement: no placement found after {} attempt(s) and {} growth cycle(s) over {} "
-        "candidate(s); candidate lists {} -- the UNSAT verdict is {}",
+        "candidate(s); candidate lists {} -- the UNSAT verdict is {}{}",
         stats.master_sat_attempts,
         stats.master_growth_rounds,
         stats.master_candidates_enumerated,
         stats.candidate_lists_complete ? "COMPLETE" : "TRUNCATED",
-        stats.candidate_lists_complete ? "trustworthy" : "NOT trustworthy");
+        stats.candidate_lists_complete ? "trustworthy" : "NOT trustworthy",
+        stats.zero_link_fallback_engaged ? " (even with RELAXED zero-link tolerance: inter-mesh seams SOFT)" : "");
 }
 
 void set_mapping_failure(TopologyMappingResult& result, std::string failure_stage, std::string error_message) {
@@ -1227,8 +1258,9 @@ std::string TopologyMappingStats::to_string() const {
         "  failure_stage: {}  failing meshes: logical={} physical={}\n"
         "  seated grouping: '{}' type '{}'\n"
         "  intra: {} n_target={} n_global={} required={} preferred={}/{} dfs_calls={} sat_solves={}\n"
-        "  placement: attempted={} success={} lists_complete={} meshes={}/{} candidates={} "
-        "growth={} sat_attempts={} vars={} clauses={}\n"
+        "  placement: attempted={} success={} lists_complete={} zero_link_fallback={} "
+        "hard_seams_precheck_infeasible={} "
+        "meshes={}/{} candidates={} growth={} sat_attempts={} vars={} clauses={}\n"
         "  inner_solver_calls={} candidates_generated={} warnings={}",
         failure_stage.empty() ? "-" : failure_stage,
         failing_logical_mesh.has_value() ? std::to_string(*failing_logical_mesh) : "-",
@@ -1246,6 +1278,8 @@ std::string TopologyMappingStats::to_string() const {
         placement_attempted,
         placement_success,
         candidate_lists_complete,
+        placement_zero_link_fallback,
+        placement_hard_seams_precheck_infeasible,
         meshes_placed,
         meshes_total,
         placement_candidates,
@@ -1746,6 +1780,21 @@ std::vector<TopologyMappingResult> MultiMeshSolutionEnumerator::next() {
     while (true) {
         AssignedMeshes seating = placement_session_->next();
         if (seating.empty()) {
+            // RELAXED zero-link fallback (issue #56762): the hard-seam placement is exhausted without a single
+            // complete mapping. Retry ONCE with the inter-mesh seams SOFT in the master solve: zero physical
+            // links tolerated per requested connection, realized connections maximized best-effort. Kept
+            // behind exhaustion so fully-cabled systems keep the fast fully-pruned hard path (identical
+            // behavior and solve cost to before). Gated on the EFFECTIVE inter-mesh validation mode (config
+            // override, else MGD policy): STRICT never relaxes.
+            if (emitted_ == 0 && inter_mesh_validation_mode_ == ConnectionValidationMode::RELAXED &&
+                placement_session_->enable_zero_link_tolerance()) {
+                log_warning(
+                    tt::LogFabric,
+                    "Multi-mesh mapping found no placement with all inter-mesh connections realized by physical "
+                    "links; retrying with RELAXED zero-link tolerance -- some requested inter-mesh connections may "
+                    "resolve to ZERO physical links (logical-only, host interconnect)");
+                continue;
+            }
             return give_up();
         }
 

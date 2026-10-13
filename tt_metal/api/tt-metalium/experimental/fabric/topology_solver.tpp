@@ -3803,10 +3803,10 @@ bool MappingValidator<TargetNode, GlobalNode>::validate_mapping(
                     std::string warn_msg = fmt::format(
                         "Relaxed mode: target graph edge from node {} to {} has NO physical link between {} and {} "
                         "(zero-link edge; traffic must use the host interconnect).",
-                        target_node,
-                        neighbor_target,
-                        global_node,
-                        neighbor_global);
+                        graph_data.printable_target(i),
+                        graph_data.printable_target(neighbor),
+                        graph_data.printable_global(global_idx),
+                        graph_data.printable_global(neighbor_global_idx));
                     log_warning(tt::LogFabric, "{}", warn_msg);
                     if (warnings != nullptr) {
                         warnings->push_back(warn_msg);

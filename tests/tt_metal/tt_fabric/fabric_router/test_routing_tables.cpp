@@ -240,8 +240,11 @@ TEST_F(ControlPlaneFixture, TestGalaxyLayoutCheck) {
 // (logical-only edge, host-interconnect data path).
 TEST_F(ControlPlaneFixture, TestDisconnectedQuadsZeroIntermeshResolved) {
     tt::tt_metal::MetalContext::instance().set_default_fabric_topology();
+    // Derive the fabric config from the active MGD (torus MGDs imply FABRIC_2D_TORUS_XY), exactly as
+    // TestGalaxyLayoutCheck / TestGalaxyCornerPins do: these tests share one process with them and the
+    // fabric config cannot be overridden once set.
     tt::tt_metal::MetalContext::instance().set_fabric_config(
-        tt::tt_fabric::FabricConfig::FABRIC_2D, tt::tt_fabric::FabricReliabilityMode::STRICT_SYSTEM_HEALTH_SETUP_MODE);
+        fabric_config_for_active_mgd(), tt::tt_fabric::FabricReliabilityMode::RELAXED_SYSTEM_HEALTH_SETUP_MODE);
     tt::tt_metal::MetalContext::instance().initialize_fabric_config();
 
     auto& control_plane = tt::tt_metal::MetalContext::instance().get_control_plane();
@@ -270,8 +273,11 @@ TEST_F(ControlPlaneFixture, TestDisconnectedQuadsZeroIntermeshResolved) {
 // directions.
 TEST_F(ControlPlaneFixture, TestAllRequestedIntermeshConnectionsResolved) {
     tt::tt_metal::MetalContext::instance().set_default_fabric_topology();
+    // Derive the fabric config from the active MGD (torus MGDs imply FABRIC_2D_TORUS_XY), exactly as
+    // TestGalaxyLayoutCheck / TestGalaxyCornerPins do: these tests share one process with them and the
+    // fabric config cannot be overridden once set.
     tt::tt_metal::MetalContext::instance().set_fabric_config(
-        tt::tt_fabric::FabricConfig::FABRIC_2D, tt::tt_fabric::FabricReliabilityMode::STRICT_SYSTEM_HEALTH_SETUP_MODE);
+        fabric_config_for_active_mgd(), tt::tt_fabric::FabricReliabilityMode::RELAXED_SYSTEM_HEALTH_SETUP_MODE);
     tt::tt_metal::MetalContext::instance().initialize_fabric_config();
 
     auto& control_plane = tt::tt_metal::MetalContext::instance().get_control_plane();

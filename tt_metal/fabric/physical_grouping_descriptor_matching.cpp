@@ -1227,7 +1227,7 @@ std::string PlacementSolveStats::to_string() const {
         "  candidates generated: {}  inner solutions: {}\n"
         "  slowest inner: {} {}x{} in {} us\n"
         "  master (SAT joint placement): attempted {}  success {}  candidates {}  growth rounds {}  attempts {}  "
-        "lists complete {}\n"
+        "lists complete {}  zero-link fallback {}  hard-seam precheck infeasible {}\n"
         "  master SAT: {} vars  {} clauses  enumerate {} us  encode {} us  solve {} us\n"
         "  total: {} us ({:.3f} ms)",
         success,
@@ -1252,6 +1252,8 @@ std::string PlacementSolveStats::to_string() const {
         master_growth_rounds,
         master_sat_attempts,
         candidate_lists_complete,
+        zero_link_fallback_engaged,
+        hard_seams_precheck_infeasible,
         master_sat_vars,
         master_sat_clauses,
         master_enumeration_elapsed.count(),
@@ -3213,9 +3215,147 @@ void SatPlacementEnumerationSession::finish_init(
     grow_sat_placement_pools(*pools_, kGrowBudgetPerVariant, stats_);
     master_solve_ = std::make_unique<MasterSolve>(this);
     ready_ = true;
+
+    if (auto violation = hard_seams_provably_infeasible(); violation.has_value()) {
+        hard_seams_infeasible_ = true;
+        hard_seams_infeasible_reason_ = std::move(*violation);
+        if (stats_ != nullptr) {
+            stats_->hard_seams_precheck_infeasible = true;
+        }
+    }
 }
 
-bool SatPlacementEnumerationSession::MasterSolve::restart(bool relaxed_mode, bool drop_cap) {
+// A hard mesh-level edge needs >= 1 fabric link between the two chosen footprints, so both footprints
+// lie in the same connected component of the physical graph; by induction every mesh of a connected
+// component of the LOGICAL mesh-level graph lies in one physical component, and footprints are disjoint.
+// So each logical component with at least one edge needs a physical component with at least the sum of
+// its meshes' chip counts. Checked on the full physical graph with each mesh's SMALLEST variant, which
+// only weakens the condition (allowlists and larger variants need more), so a violation is a sound UNSAT
+// proof for every hard-seam master solve regardless of pool growth. Without it, a disconnected cluster
+// (e.g. two quads from different systems) burns the whole growth budget proving the obvious before the
+// RELAXED zero-link fallback can engage.
+std::optional<std::string> SatPlacementEnumerationSession::hard_seams_provably_infeasible() const {
+    // Physical connected components (undirected BFS) -> largest component size.
+    std::size_t largest_physical_component = 0;
+    {
+        std::unordered_set<AsicID> seen;
+        for (const AsicID& start : physical_graph_.get_nodes()) {
+            if (!seen.insert(start).second) {
+                continue;
+            }
+            std::size_t component_size = 0;
+            std::vector<AsicID> frontier{start};
+            while (!frontier.empty()) {
+                const AsicID asic = frontier.back();
+                frontier.pop_back();
+                ++component_size;
+                for (const AsicID& neighbor : physical_graph_.get_neighbors(asic)) {
+                    if (seen.insert(neighbor).second) {
+                        frontier.push_back(neighbor);
+                    }
+                }
+            }
+            largest_physical_component = std::max(largest_physical_component, component_size);
+        }
+    }
+
+    // Smallest chip count any seating of this mesh could use. Prefer the enumerated footprints (exact: every
+    // candidate of a mesh instance places all of its chips); fall back to the variants' declared sizes.
+    const auto min_mesh_chips = [&](const GlobalMeshId& mesh_id) -> std::optional<std::size_t> {
+        std::optional<std::size_t> chips;
+        const auto consider = [&](std::size_t count) {
+            if (count == 0) {
+                return;
+            }
+            chips = chips.has_value() ? std::min(*chips, count) : count;
+        };
+        if (pools_ != nullptr) {
+            if (const auto it = pools_->find(mesh_id); it != pools_->end() && it->second != nullptr) {
+                for (const Candidate& candidate : it->second->candidates()) {
+                    consider(candidate.asics().size());
+                }
+            }
+        }
+        if (!chips.has_value()) {
+            if (const auto it = global_mesh_groupings_.find(mesh_id); it != global_mesh_groupings_.end()) {
+                for (const GroupingInfo& grouping : it->second) {
+                    consider(grouping.asic_count);
+                    consider(grouping.mesh_node_to_asic_position.size());
+                }
+            }
+            if (const auto it = mgd_fallback_by_mesh_.find(mesh_id); it != mgd_fallback_by_mesh_.end()) {
+                consider(it->second.asic_count);
+                consider(it->second.mesh_node_to_asic_position.size());
+            }
+        }
+        return chips;
+    };
+
+    // Logical connected components over the (symmetric) mesh-level graph.
+    std::set<GlobalMeshId> visited;
+    for (const GlobalMeshId& start : mesh_level_graph_.get_nodes()) {
+        if (visited.contains(start)) {
+            continue;
+        }
+        std::vector<GlobalMeshId> component;
+        std::vector<GlobalMeshId> frontier{start};
+        visited.insert(start);
+        while (!frontier.empty()) {
+            const GlobalMeshId mesh_id = frontier.back();
+            frontier.pop_back();
+            component.push_back(mesh_id);
+            for (const GlobalMeshId& neighbor : mesh_level_graph_.get_neighbors(mesh_id)) {
+                if (visited.insert(neighbor).second) {
+                    frontier.push_back(neighbor);
+                }
+            }
+        }
+        if (component.size() < 2) {
+            continue;  // no hard seam involved
+        }
+        std::size_t required_chips = 0;
+        bool all_sizes_known = true;
+        for (const GlobalMeshId& mesh_id : component) {
+            const auto chips = min_mesh_chips(mesh_id);
+            if (!chips.has_value()) {
+                all_sizes_known = false;
+                break;
+            }
+            required_chips += *chips;
+        }
+        log_debug(
+            tt::LogFabric,
+            "SAT joint placement: hard-seam pre-check: {} inter-mesh-connected mesh(es) need {} chips (sizes {}); "
+            "largest physical connected component {} of {} chip(s)",
+            component.size(),
+            required_chips,
+            all_sizes_known ? "known" : "UNKNOWN",
+            largest_physical_component,
+            physical_graph_.get_nodes().size());
+        if (!all_sizes_known) {
+            continue;  // cannot bound this component; leave it to the solver
+        }
+        if (required_chips > largest_physical_component) {
+            std::vector<uint32_t> ids;
+            ids.reserve(component.size());
+            for (const GlobalMeshId& mesh_id : component) {
+                ids.push_back(*mesh_id);
+            }
+            std::sort(ids.begin(), ids.end());
+            return fmt::format(
+                "the {} inter-mesh-connected mesh(es) [{}] need {} chips inside ONE physically connected component, "
+                "but the largest connected component of the physical graph has {} chip(s) (the requested inter-mesh "
+                "connections cannot all be realized by physical links)",
+                component.size(),
+                fmt::join(ids, ", "),
+                required_chips,
+                largest_physical_component);
+        }
+    }
+    return std::nullopt;
+}
+
+bool SatPlacementEnumerationSession::MasterSolve::restart(bool relaxed_mode, bool drop_cap, bool zero_link_mode) {
     reset();
     AdjacencyGraph<const Candidate*> seat_graph =
         build_sat_placement_seat_graph(*owner_->pools_, owner_->mesh_level_graph_);
@@ -3229,6 +3369,11 @@ bool SatPlacementEnumerationSession::MasterSolve::restart(bool relaxed_mode, boo
     if (drop_cap) {
         owner_->constraints_.set_max_same_rank_groups_used(0);
     }
+    // RELAXED zero-link tolerance (issue #56762): the mesh-level graph is the TARGET of this session and the
+    // seat graph (parallel edges = fabric link count between two footprints) is the GLOBAL graph, so making
+    // target edges soft here is exactly "a requested inter-mesh connection may resolve to zero physical links".
+    // The SAT backend then maximizes the realized-edge count (best effort); everything else stays hard.
+    owner_->constraints_.set_allow_unmatched_target_edges(zero_link_mode);
     const auto encode_start = std::chrono::steady_clock::now();
     session = std::make_unique<TopologyMappingEnumerationSession<MeshId, const Candidate*>>(
         owner_->mesh_level_graph_,
@@ -3249,6 +3394,7 @@ bool SatPlacementEnumerationSession::MasterSolve::restart(bool relaxed_mode, boo
     }
     relaxed = relaxed_mode;
     drop_host_cap = drop_cap;
+    zero_link = zero_link_mode;
     return true;
 }
 
@@ -3256,8 +3402,9 @@ MappingResult<MeshId, const Candidate*> SatPlacementEnumerationSession::MasterSo
     MappingResult<MeshId, const Candidate*> failure;
     failure.success = false;
     const bool relaxed_mode = owner_->relaxed_inter_mesh_policy_;
-    // Unchanged mode and host cap: this is another model from the session already encoded.
-    if (!matches(relaxed_mode, drop_cap) && !restart(relaxed_mode, drop_cap)) {
+    const bool zero_link_mode = owner_->zero_link_tolerance_;
+    // Unchanged mode, host cap and seam softness: this is another model from the session already encoded.
+    if (!matches(relaxed_mode, drop_cap, zero_link_mode) && !restart(relaxed_mode, drop_cap, zero_link_mode)) {
         return failure;
     }
     ++owner_->attempts_;
@@ -3437,6 +3584,39 @@ bool SatPlacementEnumerationSession::exclude_mapping(const AssignedMeshes& assig
     return true;
 }
 
+bool SatPlacementEnumerationSession::enable_zero_link_tolerance() {
+    if (!ready_ || zero_link_tolerance_ || master_solve_ == nullptr) {
+        return false;
+    }
+    bool has_mesh_level_edge = false;
+    for (const MeshId& mesh_id : mesh_level_graph_.get_nodes()) {
+        if (!mesh_level_graph_.get_neighbors(mesh_id).empty()) {
+            has_mesh_level_edge = true;
+            break;
+        }
+    }
+    if (!has_mesh_level_edge) {
+        return false;  // no inter-mesh seams to relax: the hard verdict already covers everything
+    }
+    zero_link_tolerance_ = true;
+    // The hard-seam verdict is void under soft seams: let next() solve again over the same (already grown)
+    // pools. The live encoding has hard seams, so it is rebuilt by MasterSolve::next via matches().
+    solved_ = false;
+    pending_.clear();
+    pending_index_ = 0;
+    master_solve_->reset();
+    if (stats_ != nullptr) {
+        stats_->zero_link_fallback_engaged = true;
+    }
+    log_warning(
+        tt::LogFabric,
+        "SAT joint placement: no seating realizes every requested inter-mesh connection with physical links; "
+        "retrying with RELAXED zero-link tolerance (issue #56762) -- inter-mesh seams become SOFT, the number of "
+        "realized connections is maximized best-effort, and any connection left with ZERO physical links is "
+        "logical-only (traffic must use the host interconnect)");
+    return true;
+}
+
 AssignedMeshes SatPlacementEnumerationSession::next() {
     if (!ready_) {
         return {};
@@ -3451,6 +3631,23 @@ AssignedMeshes SatPlacementEnumerationSession::next() {
         return assigned;
     }
     if (solved_) {
+        return {};
+    }
+    if (hard_seams_infeasible_ && !zero_link_tolerance_) {
+        // Provably UNSAT with hard seams (see hard_seams_provably_infeasible): skip the growth/solve loop.
+        // Under a RELAXED inter-mesh policy the caller engages enable_zero_link_tolerance() next.
+        solved_ = true;
+        if (stats_ != nullptr) {
+            stats_->master_growth_rounds = cycle_;
+            stats_->master_candidates_enumerated = count_sat_placement_candidates(*pools_);
+            stats_->candidate_lists_complete = true;  // the verdict needs no enumeration
+            stats_->master_sat_attempts = attempts_;
+        }
+        log_warning(
+            tt::LogFabric,
+            "SAT joint placement: no placement can realize every requested inter-mesh connection with physical "
+            "links -- {}; skipping the hard-seam solve",
+            hard_seams_infeasible_reason_);
         return {};
     }
 
@@ -3535,17 +3732,27 @@ AssignedMeshes SatPlacementEnumerationSession::next() {
         log_warning(
             tt::LogFabric,
             "SAT joint placement: no placement found after {} attempt(s) and {} growth cycle(s) over {} candidate(s); "
-            "candidate lists {} -- the UNSAT verdict is {}",
+            "candidate lists {} -- the UNSAT verdict is {}{}",
             attempts_,
             cycle_,
             candidates,
             complete ? "COMPLETE" : "TRUNCATED",
-            complete ? "trustworthy" : "NOT trustworthy");
+            complete ? "trustworthy" : "NOT trustworthy",
+            zero_link_tolerance_ ? " (inter-mesh seams were SOFT: zero-link tolerance engaged)" : "");
         return {};
     }
 
     AssignedMeshes assigned = decode_sat_placement(result);
     remember_yielded(assigned);
+    if (zero_link_tolerance_) {
+        // The SAT backend already logged how many soft seams were left unrealized; name the seating here so
+        // the warning is attributable when several placements are enumerated.
+        log_warning(
+            tt::LogFabric,
+            "SAT joint placement: seated {} mesh(es) under RELAXED zero-link tolerance; requested inter-mesh "
+            "connections not realized by physical links are logical-only (host interconnect). See issue #56762.",
+            assigned.size());
+    }
     if (stats_ != nullptr) {
         bool lists_complete = true;
         for (const auto& [_, pool] : *pools_) {
