@@ -3,6 +3,8 @@
 // SPDX-License-Identifier: Apache-2.0
 
 #pragma once
+#define LLK_EXP_BH_S2_(x) #x
+#define LLK_EXP_BH_S_(x)  LLK_EXP_BH_S2_(x)
 
 #include <cstdint>
 
@@ -392,6 +394,9 @@ inline void pack_init_apply(
     const std::uint32_t num_faces,
     const std::uint32_t num_tiles)
 {
+#if defined(LLK_EXP_NOP_PACK_INIT) // experiment hook (integ4): N NOPs at the top of the pack init body (both wrappers reach it)
+    asm volatile(".rept " LLK_EXP_BH_S_(LLK_EXP_NOP_PACK_INIT) "\n\tnop\n\t.endr");
+#endif
     static_assert(
         !mutex_ADC || pack_mode == PackMode::Default,
         "mutex_ADC is supported for PackMode::Default only: other modes issue ADC instructions from inside the MOP, "
@@ -474,6 +479,11 @@ inline void _llk_pack_hw_configure_(
     const bool partial_face         = false,
     const std::uint32_t relu_config = 0)
 {
+#if defined(LLK_EXP_NOP_PACK) && defined(LLK_EXP_HWC_EMPTY)
+    asm volatile(""); // experiment hook (integ4): the base of the pure nop3 leg
+#elif defined(LLK_EXP_NOP_PACK)
+    asm volatile("nop"); // experiment hook (integ4): INIT NOP
+#endif
     LLK_ASSERT(num_faces == 1 || num_faces == 2 || num_faces == 4, "num_faces must be 1, 2, or 4");
 
     configure_pack<is_fp32_dest_acc_en, pack_mode>(pack_src_format, pack_dst_format, tile_size, face_r_dim, tile_c_dim, num_faces, partial_face, relu_config);
