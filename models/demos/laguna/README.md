@@ -8,16 +8,6 @@ context) as an OpenAI-compatible vLLM server on four Blackhole ASICs (a TT-Quiet
 
 ## Status (2026-10-10)
 
-Through the vLLM server, batch 1, versus the first version of this branch (2026-10-06), same measurement
-(2026-10-09):
-
-| | First version | Now |
-|---|---:|---:|
-| Decode | 18 tok/s | 66-71 tok/s (3.7-3.9x) |
-| TTFT, 128-token prompt | 0.23 s | 87 ms |
-| TTFT, 8K-token prompt | 19.9 s | 0.89 s |
-| Batch-32 decode, all 32 users | 11 tok/s/user | 21-23 tok/s/user |
-
 Against the targets (50% of speed of light, measured without vLLM, tables below):
 
 - Met: batch-1 TTFT at 128 tokens (61 ms vs 66 ms) and batch-32 decode at every length (25-32 vs 18-20 tok/s/user).
@@ -82,8 +72,9 @@ Time to first token (measured / target):
 | 4,096 | 386 ms / 66 ms | 11.6 s / 1.60 s |
 | 8,192 | 714 ms / 103 ms | 23.4 s / 3.31 s |
 
-DFlash speculative decoding, batch 1 (decode tok/s over the first 256 / 1024 / 2048 generated tokens; normal decode is
-83-88 tok/s at these lengths; the draft accepts more later in an answer). A round
+DFlash speculative decoding, batch 1: decode tok/s over the first 256 / 1024 / 2048 generated tokens (normal decode is
+83-88 tok/s at these lengths; the draft accepts more later in an answer). DFlash runs one request at a time (the
+server needs `--max-num-seqs 1`), so there is no batch-32 DFlash number. A round
 drafts 15 tokens, then checks up to the first 5 in Laguna in one step (a 3-row check when 2 or fewer are checked) and keeps the matching ones plus one of
 Laguna's own. It checks fewer when the draft is unsure (once the product of its top-1 probabilities drops below 0.2),
 which reads fewer expert weights. 18-21 ms per round (draft 2.5 ms, check 16.0-18.4 ms) vs 11.3-12.0 ms per token
@@ -168,7 +159,6 @@ cd /tmp && env -u TT_METAL_HOME PYTHONPATH=$REPO \
 PYTHONPATH=$REPO $MODEL_DIR/.venv/bin/python $MODEL_DIR/demo/perf_direct.py   # performance tables, ~10 min
 PYTHONPATH=$REPO $MODEL_DIR/.venv/bin/python $MODEL_DIR/demo/perf_direct.py --modes dflash --dflash-prompt aime,text   # DFlash table (256 tokens; --dflash-tokens 1024 / 2048 for the other columns)
 PYTHONPATH=$REPO $MODEL_DIR/.venv/bin/python $MODEL_DIR/demo/roofline.py      # SoL and targets, no device
-python $MODEL_DIR/demo/perf_demo.py                                           # end to end through vLLM
 ```
 
 ## Serving options
