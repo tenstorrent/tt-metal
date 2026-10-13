@@ -204,9 +204,21 @@ struct KernelAdvancedOptions {
     // per-transaction overhead. Ignored for other kernels.
     //
     // CAUTION: Nothing checks the condition this relies on. The caller guarantees that no kind of NoC
-    //          transaction (reads, posted writes, non-posted writes, atomics) is issued by both kernels,
-    //          e.g. one only reads and the other only writes and issues atomics. A kind issued by both
-    //          can let a barrier return before its transactions complete.
+    //          transaction (reads, writes, atomics) is issued by both kernels, e.g. one only reads and the
+    //          other only writes and issues atomics. A kind issued by both can let a barrier return before
+    //          its transactions complete. Posted and non-posted writes, inline writes included, are one
+    //          kind: in dedicated mode both kernels issue them from the same command buffers, so one
+    //          kernel's write can redirect the other's stateful (set_state / with_state) writes.
+    //
+    // The NOC's hardware transaction counters count both kernels' traffic, but noc_async_full_barrier and
+    // the end-of-kernel checks (built with watcher or lightweight kernel asserts) compare each RISC's own
+    // counts against them. So neither kernel calls a full barrier, and each re-syncs its counters
+    // (ncrisc_noc_counters_init) before it returns, once the other kernel has nothing in flight on the NOC.
+    // Two other sources of NoC traffic also count against the condition:
+    //   - The device profiler pushes a full buffer to DRAM mid-kernel as posted writes on the kernel's NOC.
+    //   - On Blackhole, BRISC firmware sets up remote circular buffers with atomics on BRISC's NOC and then
+    //     waits for its own count of them, after it has started the NCRISC kernel. In a program with remote
+    //     circular buffers, the NCRISC kernel must not issue atomics on the shared NOC.
     DedicatedNocSharing dedicated_noc_sharing = DedicatedNocSharing::EXCLUSIVE;
 };
 

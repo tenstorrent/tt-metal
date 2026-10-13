@@ -47,6 +47,8 @@ struct DataMovementHardwareConfig {
         // need both DM cores to share a single NOC (e.g. to keep the other NOC
         // free for fabric/CCL traffic). Dynamic mode adds cross-core coordination
         // overhead and must be set identically on both DM kernels on a node.
+        // Two dedicated-NOC kernels whose traffic is disjoint can also share a NOC
+        // (KernelAdvancedOptions::dedicated_noc_sharing).
         tt::tt_metal::NOC_MODE noc_mode = tt::tt_metal::NOC_MODE::DM_DEDICATED_NOC;
     };
     // NOTE: If this kernel is built for a 1st-gen (1xx) architecture, config_1xx
