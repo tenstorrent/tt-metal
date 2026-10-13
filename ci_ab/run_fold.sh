@@ -2,11 +2,11 @@
 # #58819 datacopy fold A/B (17_CI_AB.md), measurement only (scratch, not for merge). This checkout is the #58819 head merged
 # with current main. Side trees at one depth, each a copy of this checkout's tt_metal/tt-llk and tt_metal/hw with its
 # variant's files on top (llk_math_eltwise_unary_datacopy.h):
-#   H  the head; F  the dest-counter fold alone; E  F plus the ELWADD copy's per-face SETRWC folded into the face's last
-#   ELWADD, built twice (bE, bE2: the A/A at one tree path); M  main's versions of every tt-llk and hw file the stack changes.
-# MODE=ab: harness rows (ids/perf_c.txt on H, E, E2, M; ids/perf_e.txt, the ELWADD rows, also on F; ids/perf_h.txt, rows
-# main lacks, on H, E, E2), rotated, 4 runs a side; then op level (run_fold_ol.sh). MODE=bits: bit dumps with LLK asserts
-# on, ids/bits.txt on H and E, ids/bits_m.txt on M.
+#   H  the head; G  the fold (the A2D MOP's last move clears the dest counter through ADDR_MOD_0), built twice (bG, bG2: the
+#   A/A at one tree path); M  main's versions of every tt-llk and hw file the stack changes.
+# MODE=ab: harness rows (ids/perf_c.txt on H, G, G2, M; ids/perf_h.txt, rows main lacks, on H, G, G2), rotated, 4 runs a
+# side; then op level (run_fold_ol.sh). MODE=bits: bit dumps with LLK asserts on, ids/bits.txt on H and G, ids/bits_m.txt
+# on M.
 # Each run's perf_data goes to the log as base64 tar.gz lines "LLKAB_DATA <tag> <chunk>".
 set +e +o pipefail
 R=${STK_ROOT:-/work}; S=$R/ci_ab; T=${STK_TMP:-/tmp/stk}; rm -rf $T; mkdir -p $T; NP=${STK_NPROD:-16}
@@ -92,22 +92,20 @@ run() {  # run <side> <build> <ids> <tag> <run types|-> <limit>
 }
 R5=L1_TO_L1,UNPACK_ISOLATE,MATH_ISOLATE,PACK_ISOLATE,L1_CONGESTION
 
-for v in H F E M; do mkside $v; done
+for v in H G M; do mkside $v; done
 MODE=${MODE:-ab}; echo "== mode $MODE"
 
 if [[ $MODE == ab ]]; then
 # Harness A/B
-for v in H:bH E:bE E:bE2 M:bM; do build ${v%%:*} ${v##*:} $S/ids/perf_c.txt $R5; done
-build F fF $S/ids/perf_e.txt $R5
-for v in H:hH E:hE E:hE2; do build ${v%%:*} ${v##*:} $S/ids/perf_h.txt $R5; done
-elfid bH bE; elfid bE bE2 same; elfid bH bM same; elfid hH hE
+for v in H:bH G:bG G:bG2 M:bM; do build ${v%%:*} ${v##*:} $S/ids/perf_c.txt $R5; done
+for v in H:hH G:hG G:hG2; do build ${v%%:*} ${v##*:} $S/ids/perf_h.txt $R5; done
+elfid bH bG; elfid bG bG2 same; elfid bH bM same; elfid hH hG
 [[ -n ${STK_DRY:-} ]] && { echo "== dry: builds only"; exit 0; }
 n=0
-for sb in H:bH:hH E:bE:hE F:fF:- M:bM:- E:bE2:hE2  E:bE2:hE2 M:bM:- F:fF:- E:bE:hE H:bH:hH \
-          F:fF:- H:bH:hH E:bE2:hE2 M:bM:- E:bE:hE  E:bE:hE M:bM:- E:bE2:hE2 H:bH:hH F:fF:-; do
+for sb in H:bH:hH G:bG:hG M:bM:- G:bG2:hG2  G:bG2:hG2 M:bM:- G:bG:hG H:bH:hH \
+          G:bG:hG H:bH:hH G:bG2:hG2 M:bM:-  M:bM:- G:bG2:hG2 H:bH:hH G:bG:hG; do
   IFS=: read -r v b h <<< "$sb"; n=$((n + 1))
-  ids=$S/ids/perf_c.txt; [[ $v == F ]] && ids=$S/ids/perf_e.txt
-  run $v $b $ids C_${v}_${b}_$n $R5 2400
+  run $v $b $S/ids/perf_c.txt C_${v}_${b}_$n $R5 2400
   [[ $h != - ]] && run $v $h $S/ids/perf_h.txt D_${v}_${h}_$n $R5 900
 done
 echo "== harness end $(date -u +%T)"
@@ -116,25 +114,25 @@ echo "== stk end $(date -u +%T)"
 exit 0
 fi
 
-# Bits with LLK asserts on: H and E on every reached functional test, M on the modules main shares; E again (E2) on any
-# test whose H and E dumps differ, to tell a nondeterministic test from a change
+# Bits with LLK asserts on: H and G on every reached functional test, M on the modules main shares; G again (G2) on any
+# test whose H and G dumps differ, to tell a nondeterministic test from a change
 unset LLK_PERF_RUN_TYPES
-for v in H:aH E:aE M:aM; do
+for v in H:aH G:aG M:aM; do
   ids=$S/ids/bits.txt; [[ ${v%%:*} == M ]] && ids=$S/ids/bits_m.txt
   build ${v%%:*} ${v##*:} $ids - asserts
 done
-elfid aH aE
+elfid aH aG
 bitrun() {  # bitrun <side> <build> <tag> <ids>
   local D=$T/bits_$3; mkdir -p $D
   BITDUMP_DIR=$D LIM=7200 harness $1 $2 $4 $T/cons_bits_$3.log -p bitdump_plugin --compile-consumer -o timeout_method=thread --timeout 300
   echo "== bits $3 rc=$? $(date -u +%T): $(grep -aE '[0-9]+ (passed|failed|error)' $T/cons_bits_$3.log | tail -n 1), $(ls $D | wc -l) files"
   grep -aE '^(FAILED|ERROR) ' $T/cons_bits_$3.log | cut -c1-300 | sed -n 1,20p
 }
-bitrun H aH H $S/ids/bits.txt; bitrun E aE E $S/ids/bits.txt; bitrun M aM M $S/ids/bits_m.txt
-for p in "H E" "M E" "M H"; do set -- $p; echo "== bits $1 against $2"; $PY $S/tools/bitcmp.py $T/bits_$1 $T/bits_$2; done
-$PY $S/tools/bitcmp.py $T/bits_H $T/bits_E --list | sed -n 's/^BITS differ //p' > $T/redo.txt
+bitrun H aH H $S/ids/bits.txt; bitrun G aG G $S/ids/bits.txt; bitrun M aM M $S/ids/bits_m.txt
+for p in "H G" "M G" "M H"; do set -- $p; echo "== bits $1 against $2"; $PY $S/tools/bitcmp.py $T/bits_$1 $T/bits_$2; done
+$PY $S/tools/bitcmp.py $T/bits_H $T/bits_G --list | sed -n 's/^BITS differ //p' > $T/redo.txt
 if [[ -s $T/redo.txt ]]; then
-  bitrun E aE E2 $T/redo.txt; bitrun H aH H2 $T/redo.txt
-  for p in "E E2" "H H2"; do set -- $p; echo "== bits $1 against $2 (the differing tests)"; $PY $S/tools/bitcmp.py $T/bits_$1 $T/bits_$2; done
+  bitrun G aG G2 $T/redo.txt; bitrun H aH H2 $T/redo.txt
+  for p in "G G2" "H H2"; do set -- $p; echo "== bits $1 against $2 (the differing tests)"; $PY $S/tools/bitcmp.py $T/bits_$1 $T/bits_$2; done
 fi
 echo "== bits end $(date -u +%T)"

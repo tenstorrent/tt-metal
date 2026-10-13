@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
-# #58819 datacopy fold, op level (17_CI_AB.md; scratch, not for merge): the device files of H (head), E (the fold), M (main's
-# versions of every device file the stack changes) and E2 (an A/A copy of E) swapped into /work and the
+# #58819 datacopy fold, op level (17_CI_AB.md; scratch, not for merge): the device files of H (head), G (the fold), M (main's
+# versions of every device file the stack changes) and G2 (an A/A copy of G) swapped into /work and the
 # installed runtime root before each run, each with its own fresh kernel cache, rotated per round, one case per tracy process.
 # Prints OLR <case> <variant> <round> <op> <calls> <median of the last N> <values> lines and the kernels' trisc identity.
 set +e +o pipefail
@@ -10,13 +10,13 @@ export TT_METAL_HOME=/work TRACY_NO_WEB_SERVER=1 HWLOCK_HELD=ci R3_NMEAS=${R3_NM
 export PYTHONPATH=/work:/work/tools:$S/tools
 RT=$(cd /tmp && env -u PYTHONPATH python3 -c "import ttnn, os; print(os.path.dirname(ttnn.__file__))" 2>/dev/null)
 echo "== ol start $(date -u +%T) $(git -C /work rev-parse HEAD 2>/dev/null) RT=$RT"
-FILES=$(cd $S/olvar/F && find . -type f | sed 's#^\./##')
+FILES=$(cd $S/olvar/G && find . -type f | sed 's#^\./##')
 nrt=0; for f in $FILES; do [ -f $RT/$f ] && nrt=$((nrt + 1)); done
 echo "== $(echo $FILES | wc -w) variant files, $nrt also in the runtime root"
 DC=tt_metal/tt-llk/tt_llk_blackhole/llk_lib/llk_math_eltwise_unary_datacopy.h
-for v in H F E M; do echo "== olvar $v datacopy $(md5sum $S/olvar/$v/$DC | cut -c1-10)"; done
+for v in H G M; do echo "== olvar $v datacopy $(md5sum $S/olvar/$v/$DC | cut -c1-10)"; done
 use() {  # use <variant>: its files into /work and the runtime root, its own kernel cache
-  local v=$1 src=$1; [[ $v == E2 ]] && src=E
+  local v=$1 src=$1; [[ $v == G2 ]] && src=G
   for f in $FILES; do cp $S/olvar/$src/$f /work/$f; [ -f $RT/$f ] && cp $S/olvar/$src/$f $RT/$f; done
   export TT_METAL_CACHE=$G/cache_$v; mkdir -p $TT_METAL_CACHE
 }
@@ -39,7 +39,7 @@ for op, vals in sorted(agg.items()):
 PYEOF
 CASES=${OL_CASES:-"tc_bf16_u16_hs tc_bf16_i32_hs tc_bf16_fp32_hs tc_bf16_u32_hs tc_i32_bf16_hs tc_bf16_fp32_dram_32x128256 exp_dram_1024x1024 exp_hs recip_dram_1024x1024 recip_hs gelu_dram_1024x4096 gelu_hs softmax_bf8_1x1x16384x256 softmax_bf8_1x8x256x256 quant_bf16_1024x1024 quant_fp32_1024x1024"}
 ROUNDS=${OL_ROUNDS:-4}
-read -ra VL <<< "${OL_VARS:-H E M E2}"
+read -ra VL <<< "${OL_VARS:-H G M G2}"
 for r in $(seq 1 $ROUNDS); do
   k=$(( (r - 1) % ${#VL[@]} )); VS=("${VL[@]:$k}" "${VL[@]:0:$k}")
   (( r % 2 == 0 )) && VS=($(printf '%s\n' "${VS[@]}" | tac))
@@ -56,11 +56,11 @@ for r in $(seq 1 $ROUNDS); do
   done
 done
 use H
-echo "== trisc identity, kernels of E against the others (same kernel dir in each cache)"
-for other in H M E2; do
+echo "== trisc identity, kernels of G against the others (same kernel dir in each cache)"
+for other in H M G2; do
   for t in trisc0 trisc1 trisc2; do
-    (cd $G/cache_E && find . -path "*$t*" -name '*.elf' | sort) | while read f; do
-      [[ -f $G/cache_$other/$f ]] && echo "$G/cache_E/$f $G/cache_$other/$f"; done > $G/pairs_${other}_$t.txt
+    (cd $G/cache_G && find . -path "*$t*" -name '*.elf' | sort) | while read f; do
+      [[ -f $G/cache_$other/$f ]] && echo "$G/cache_G/$f $G/cache_$other/$f"; done > $G/pairs_${other}_$t.txt
     paste -d' ' <(awk '{print $1}' $G/pairs_${other}_$t.txt | awk -F/ '{for(i=1;i<=NF;i++) if($i=="kernels") print $(i+1)}') <(python3 $S/tools/elfsec.py $G/pairs_${other}_$t.txt) | sort | uniq -c | sed "s/^/== kid $other $t /"
   done
 done
