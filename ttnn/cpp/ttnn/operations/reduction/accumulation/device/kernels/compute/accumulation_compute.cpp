@@ -4,6 +4,7 @@
 
 #include "api/compute/compute_kernel_api.h"
 #include "api/compute/add_int_sfpu.h"
+#include "api/compute/copy_dest_values.h"
 #include "api/compute/mul_int_sfpu.h"
 #include "api/compute/eltwise_binary.h"
 #include "api/compute/eltwise_unary/eltwise_unary.h"
@@ -128,20 +129,49 @@ void kernel_main() {
             // only for DIV/POW/XLOGY (ckernel_sfpu_binary.h), so BINARY_OP_INIT above covers both.
             sub_binary_tile(DST_IN, DST_COMP, DST_IN);    // y = in - c
             add_binary_tile(DST_ACC, DST_IN, DST_T);      // t = acc + y
+#ifndef ARCH_QUASAR
+            // c = (t - acc) - y, guarded for a non-finite step. Once t is +-inf, the plain expression
+            // gives c = +-inf or NaN, and y = in - c would turn every later element into NaN. The same
+            // happens when t stays finite but t - acc overflows.
+            // Zeroing c when t is not finite, c = where(isfinite(t), c, 0) as suggested in #58986, misses
+            // that second case: t is still finite at the step where t - acc overflows, so the inf c is
+            // kept and the next total is an inf the scan should not reach. Testing c instead of t would
+            // cover it, but the isfinite + where form measured slower than the clamps used here.
+            // So c is computed from a copy of t clamped to the finite range, and the difference is
+            // clamped too: tc = clamp(t), d = clamp(tc - acc), c = d - y. Both clamps are at the largest
+            // fp32, so they do nothing while t and t - acc are finite: a scan whose totals stay finite is
+            // bit-identical to one without the guard.
+            // When t is +-inf, c comes out zero, finite with the opposite sign, or the opposite inf, so
+            // y = in - c cannot overflow against the total and the total stays +-inf for every finite
+            // input. The second clamp covers tc - acc overflowing (an inf input arriving on a large
+            // total of the other sign), where c would otherwise be inf - inf.
+            // The guard leaves the two ops above alone: on finite inputs at the top of the fp32 range,
+            // y = in - c or acc + y can still overflow as before, and the total then stays at that inf.
+            // The clamps work on bit patterns. As an int32, every negative float is below FLT_MAX's
+            // pattern and +inf/+NaN are above it, so the signed min caps the positive side; as a uint32,
+            // every positive float is below -FLT_MAX's pattern and -inf/-NaN are above it, so the
+            // unsigned min caps the negative side.
+            // That is five more SFPU ops per tile: the copy and the four mins. The min ops' inits
+            // reprogram ADDR_MOD_6 and the SFPLOADMACRO configuration, which add and sub do not use, so
+            // the two subs below need no re-init either.
+            // The two min ops are BH/WH-only in compute_kernel_api.h. Quasar takes the plain expression
+            // below, and a non-finite running total still turns later elements into NaN there.
+            copy_dest_values_init();
+            copy_dest_values<DataFormat::Float32>(DST_T, DST_COMP);  // tc starts as a copy of t
+            unary_min_int32_tile_init();
+            unary_min_int32_tile(DST_COMP, 0x7f7fffffu);  // FLT_MAX
+            unary_min_uint32_tile_init();
+            unary_min_uint32_tile(DST_COMP, 0xff7fffffu);  // -FLT_MAX
+            sub_binary_tile(DST_COMP, DST_ACC, DST_COMP);  // tc - acc
+            unary_min_int32_tile_init();
+            unary_min_int32_tile(DST_COMP, 0x7f7fffffu);
+            unary_min_uint32_tile_init();
+            unary_min_uint32_tile(DST_COMP, 0xff7fffffu);
+            sub_binary_tile(DST_COMP, DST_IN, DST_COMP);  // c = d - y
+#else
             sub_binary_tile(DST_T, DST_ACC, DST_COMP);    // (t - acc)
             sub_binary_tile(DST_COMP, DST_IN, DST_COMP);  // c = (t - acc) - y
-            // Once the running total is non-finite, c is NaN (inf - inf) or +-inf (after an overflow),
-            // and y = in - c would turn every later element into NaN. Clamp c to [-2^102, 2^102]: any c
-            // the compensation holds while |t| < 2^126 is smaller and passes through unchanged, and
-            // y = in - c can no longer overflow, so the running total keeps the IEEE result.
-            // The clamp works on c's bit pattern. As an int32, every negative float is below 2^102's
-            // pattern and +inf/+NaN are above it, so the signed min caps the positive side; as a uint32,
-            // every positive float is below -2^102's pattern and -inf/-NaN are above it, so the unsigned
-            // min caps the negative side.
-            unary_min_int32_tile_init();
-            unary_min_int32_tile(DST_COMP, 0x72800000u);  // 2^102
-            unary_min_uint32_tile_init();
-            unary_min_uint32_tile(DST_COMP, 0xf2800000u);  // -2^102
+#endif
             constexpr uint32_t DST_RESULT = DST_T;
             dfb_comp_obj.pop_front(ONE_TILE);
 #else
