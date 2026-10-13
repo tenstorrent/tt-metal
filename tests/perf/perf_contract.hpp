@@ -59,10 +59,19 @@ namespace detail {
 inline std::string json_escape(std::string_view s) {
     std::string out;
     for (char c : s) {
-        if (c == '"' || c == '\\') {
-            out += '\\';
+        switch (c) {
+            case '"': out += "\\\""; break;
+            case '\\': out += "\\\\"; break;
+            case '\n': out += "\\n"; break;
+            case '\r': out += "\\r"; break;
+            case '\t': out += "\\t"; break;
+            default:
+                if (static_cast<unsigned char>(c) < 0x20) {
+                    out += fmt::format("\\u{:04x}", static_cast<unsigned char>(c));
+                } else {
+                    out += c;
+                }
         }
-        out += c;
     }
     return out;
 }
@@ -81,7 +90,8 @@ inline void write_result(
     out << "{\n  \"context\": {";
     for (size_t i = 0; i < metrics.size(); ++i) {
         auto [key, value] = metric_context_entry(metrics[i].first, metrics[i].second);
-        out << (i ? ",\n" : "\n") << fmt::format(R"(    "{}": "{}")", key, value);
+        out << (i ? ",\n" : "\n")
+            << fmt::format(R"(    "{}": "{}")", detail::json_escape(key), detail::json_escape(value));
     }
     out << "\n  },\n  \"benchmarks\": [";
     for (size_t i = 0; i < cases.size(); ++i) {

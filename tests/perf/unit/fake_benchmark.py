@@ -56,4 +56,7 @@ document = {
     "context": {f"perf.metric.{metric['name']}": metric["decl"], "perf.context.iommu": "on"},
     "benchmarks": rows,
 }
+# Lets a test declare a metric that no row reports.
+if "unreported_metric" in plan:
+    document["context"][f"perf.metric.{plan['unreported_metric']}"] = metric["decl"]
 Path(args["--benchmark_out"]).write_text(json.dumps(document))
