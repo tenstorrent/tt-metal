@@ -7,6 +7,7 @@
 #include <cstdint>
 #include <limits>
 
+#include "llk_defs.h"
 #include "sfpi.h"
 
 // Helper function for _sfpu_binary_power_
@@ -56,4 +57,14 @@ sfpi_inline sfpi::vFloat float32_to_bf16_rne(sfpi::vFloat in) {
 
     // Reinterpret back as float
     return sfpi::as<sfpi::vFloat>(bits);
+}
+
+// Rounds an fp32 result to nearest-even for a Float16_b Dest. A 32-bit or Float16 Dest is left to the store.
+template <bool is_fp32_dest_acc_en, DataFormat DEST_16BIT_FORMAT>
+sfpi_inline sfpi::vFloat round_to_dest(sfpi::vFloat result) {
+    if constexpr (is_fp32_dest_acc_en || DEST_16BIT_FORMAT != DataFormat::Float16_b) {
+        return result;
+    } else {
+        return float32_to_bf16_rne(result);
+    }
 }

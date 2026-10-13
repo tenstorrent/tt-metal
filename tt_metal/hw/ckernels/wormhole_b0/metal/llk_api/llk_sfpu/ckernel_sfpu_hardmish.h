@@ -6,6 +6,7 @@
 
 #include "ckernel.h"
 #include "ckernel_defs.h"
+#include "ckernel_sfpu_conversions.h"
 #include "cmath_common.h"
 #include "sfpi.h"
 
@@ -46,11 +47,13 @@ inline void hardmish_init() {
  * dependency stalls with the other row's work.
  *
  * @tparam APPROXIMATION_MODE: Unused; the kernel is exact in both modes.
+ * @tparam is_fp32_dest_acc_en: True for a 32-bit Dest; false rounds the result to the 16-bit Dest format.
+ * @tparam DEST_16BIT_FORMAT: Dest format when is_fp32_dest_acc_en is false.
  * @tparam ITERATIONS: Number of Dest rows to process; must be even.
  * @note Call @ref hardmish_init after any other SFPU init that writes vConstFloatPrgm0 or ADDR_MOD_6;
  *       this reads 0.5 from vConstFloatPrgm0 and advances Dest through ADDR_MOD_6.
  */
-template <bool APPROXIMATION_MODE, bool is_fp32_dest_acc_en, int ITERATIONS = 8>
+template <bool APPROXIMATION_MODE, bool is_fp32_dest_acc_en, DataFormat DEST_16BIT_FORMAT, int ITERATIONS = 8>
 inline void hardmish() {
     static_assert(ITERATIONS % 2 == 0, "hardmish processes two rows per iteration");
 #pragma GCC unroll 4
@@ -63,18 +66,12 @@ inline void hardmish() {
         scale0 = sfpi::clamp(scale0, /*lower*/ 0.0f, /*upper*/ 1.0f);
         scale1 = sfpi::clamp(scale1, 0.0f, 1.0f);
 
-        sfpi::vFloat result0 = x0 * scale0;
-        sfpi::vFloat result1 = x1 * scale1;
-        if constexpr (!is_fp32_dest_acc_en) {
-            result0 = sfpi::convert<sfpi::vFloat16b>(result0, sfpi::RoundMode::Nearest);
-            result1 = sfpi::convert<sfpi::vFloat16b>(result1, sfpi::RoundMode::Nearest);
-        }
-        sfpi::dst_reg[0] = result0;
+        sfpi::dst_reg[0] = round_to_dest<is_fp32_dest_acc_en, DEST_16BIT_FORMAT>(x0 * scale0);
 #if defined(MM_THROTTLE) && MM_THROTTLE > 0
-        sfpi::dst_reg[1] = result1;
+        sfpi::dst_reg[1] = round_to_dest<is_fp32_dest_acc_en, DEST_16BIT_FORMAT>(x1 * scale1);
         sfpi::dst_reg += 2;
 #else
-        sfpi::dst_reg[1].mode(ADDR_MOD_2) = result1;
+        sfpi::dst_reg[1].mode(ADDR_MOD_2) = round_to_dest<is_fp32_dest_acc_en, DEST_16BIT_FORMAT>(x1 * scale1);
 #endif
     }
 }

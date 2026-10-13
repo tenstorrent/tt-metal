@@ -1070,7 +1070,16 @@ void call_unary_sfpu_operation_quasar(
     }
     else if constexpr (OPERATION == SfpuType::hardmish)
     {
-        SFPU_UNARY_CALL_TINY_TILE(DST_SYNC, is_fp32_dest_acc_en, TILE_SHAPE, hardmish, (APPROX, is_fp32_dest_acc_en, ITERATIONS), dst_index, vector_mode);
+        if (sfpu_format == DataFormat::Float16)
+        {
+            SFPU_UNARY_CALL_TINY_TILE(
+                DST_SYNC, is_fp32_dest_acc_en, TILE_SHAPE, hardmish, (APPROX, is_fp32_dest_acc_en, DataFormat::Float16, ITERATIONS), dst_index, vector_mode);
+        }
+        else
+        {
+            SFPU_UNARY_CALL_TINY_TILE(
+                DST_SYNC, is_fp32_dest_acc_en, TILE_SHAPE, hardmish, (APPROX, is_fp32_dest_acc_en, DataFormat::Float16_b, ITERATIONS), dst_index, vector_mode);
+        }
     }
     else if constexpr (OPERATION == SfpuType::mish)
     {

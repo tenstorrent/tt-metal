@@ -6,6 +6,7 @@
 
 #include "ckernel.h"
 #include "ckernel_defs.h"
+#include "ckernel_sfpu_conversions.h"
 #include "cmath_common.h"
 #include "sfpi.h"
 
@@ -28,7 +29,7 @@ namespace sfpu {
 // so the final multiply produces exact 0 or exact x at transitions.
 inline void hardmish_init() { math::reset_counters(p_setrwc::SET_ABD_F); }
 
-template <bool APPROXIMATION_MODE, bool is_fp32_dest_acc_en, int ITERATIONS = 8>
+template <bool APPROXIMATION_MODE, bool is_fp32_dest_acc_en, DataFormat DEST_16BIT_FORMAT, int ITERATIONS = 8>
 inline void hardmish() {
     for (int d = 0; d < ITERATIONS; d++) {
         sfpi::vFloat x = sfpi::dst_reg[0];
@@ -36,11 +37,7 @@ inline void hardmish() {
 
         scale = sfpi::clamp(scale, 0.0f, 1.0f);
 
-        sfpi::vFloat result = x * scale;
-        if constexpr (!is_fp32_dest_acc_en) {
-            result = sfpi::convert<sfpi::vFloat16b>(result, sfpi::RoundMode::Nearest);
-        }
-        sfpi::dst_reg[0] = result;
+        sfpi::dst_reg[0] = round_to_dest<is_fp32_dest_acc_en, DEST_16BIT_FORMAT>(x * scale);
         sfpi::dst_reg++;
     }
 }
