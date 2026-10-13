@@ -29,6 +29,15 @@ TABLE = {
     "MLP_GELU_VARIANT": Setting(
         "Tanh", ("Tanh", "Accurate"), "2026-10-13 C.sliding.mlp: ttnn.gelu variant (reference is gelu tanh)"
     ),
+    "ROUTER_FIDELITY": Setting(
+        "HiFi4", ("HiFi4", "HiFi2", "LoFi"), "2026-10-13 C.sliding.router: rms_norm/linear/softmax math fidelity"
+    ),
+    "ROUTER_FP32_ACC": Setting(True, (True, False), "2026-10-13 C.sliding.router: fp32 accumulation for router ops"),
+    "ROUTER_WEIGHT_DTYPE": Setting(
+        "float32",
+        ("float32", "bfloat16", "bfloat8_b"),
+        "2026-10-13 C.sliding.router: router proj weight (scale folded in); bfp8 fails the selection checks",
+    ),
 }
 
 MAX_PRECISION = {
@@ -38,6 +47,9 @@ MAX_PRECISION = {
     "SDPA_FP32_ACC": True,
     "MLP_MATMUL_FIDELITY": "HiFi4",
     "MLP_MATMUL_FP32_ACC": True,
+    "ROUTER_FIDELITY": "HiFi4",
+    "ROUTER_FP32_ACC": True,
+    "ROUTER_WEIGHT_DTYPE": "float32",
 }
 
 settings = Settings("GEMMA4_A4B_GLX_", TABLE, max_precision=MAX_PRECISION)

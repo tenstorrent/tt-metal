@@ -127,6 +127,43 @@ def _attention_fn(mesh, module):
     return fn
 
 
+def _router_module(mesh, spec, layer):
+    """Router of `layer`; loads only router.{proj.weight, scale, per_expert_scale}."""
+    import os
+
+    from models.demos.gemma4_a4b_glx.reference.gemma4_ref import Gemma4TextConfig
+    from models.demos.gemma4_a4b_glx.tt.router import TtRouter
+
+    cfg = Gemma4TextConfig.from_json(os.path.join(str(spec.hf_dir), "config.json"))
+    loader = _weight_loader(spec)
+    p = f"{PREFIX}layers.{layer}.router."
+    return TtRouter(
+        mesh,
+        loader.get(p + "proj.weight"),
+        loader.get(p + "scale"),
+        loader.get(p + "per_expert_scale"),
+        top_k=cfg.top_k_experts,
+        eps=cfg.rms_norm_eps,
+    )
+
+
+def _router_fn(mesh, module):
+    """fn(ctx, h_mid_host [S, H]) -> host dense routing [S, E] (fp32). h_mid goes up as bf16, as the device
+    residual stream is (the golden is bf16, so this is exact on the golden)."""
+    import ttnn
+    from models.demos.gemma4_a4b_glx.tt.rms_norm import replicated_to_host, to_device_replicated
+
+    def fn(ctx, x):
+        xd = to_device_replicated(mesh, x)
+        dense, ids = module(xd)
+        y = replicated_to_host(dense)
+        for t in (xd, dense, ids):
+            ttnn.deallocate(t)
+        return y.to(x.dtype)
+
+    return fn
+
+
 def device_component(mesh, spec, layer, step):
     import ttnn
 
@@ -147,6 +184,8 @@ def device_component(mesh, spec, layer, step):
         from models.demos.gemma4_a4b_glx.tt.residual import TtResidualAdd
 
         return _host_fn2(mesh, TtResidualAdd(mesh))
+    if step == "router":
+        return _router_fn(mesh, _router_module(mesh, spec, layer))
     raise NotImplementedError(f"implement stage: no device module for {step} yet")
 
 

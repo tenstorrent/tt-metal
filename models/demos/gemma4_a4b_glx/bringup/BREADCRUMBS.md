@@ -133,3 +133,28 @@ I re-applied the attempt above unchanged; it had passed under an older framework
   `_host_fn`. The global block's mlp has the same shape, so it takes the same path.
 - Frozen test: pcc 0.999982, rel 0.0059 against the calibrated 0.0110, auto_margin_min 1.74, 6 device ops, 0 host FLOPs.
 - Re-run: `bfw job check --task C.sliding.mlp`
+
+## C.sliding.router (run 20261013-175448-gemma4-glx-14)
+- `tt/router.py`: `TtRouter` is replicated, so every chip of a row routes its own tokens and no CCL is needed.
+  - The ops run all in fp32 after a typecast of the bf16 input: `rms_norm` (no weight), then `linear` with
+    W' = (proj * router.scale * 2816^-0.5)^T (the scale is folded in at load, W' is fp32), then `softmax(numeric_stable)`.
+  - Then `topk(8)` gives the ids, and a bf16 `scatter` of ones at those ids into zeros gives an exact 0/1 mask
+    (scatter has no fp32 TILE path).
+  - Last, dense = probs * per_expert_scale * mask / sum(probs * mask). This equals renorm then per_expert_scale[id].
+    Every op is 128 wide, so there is no reduction over a padded 8-wide tile.
+  - It returns `(dense [1,1,S,128] fp32, ids [1,1,S,8] uint32)`. The experts step can use the ids.
+  - The zeros/ones scatter operands are built once per S on the device (`zeros_like`/`ones_like`) and cached.
+- Why fp32 W', from a CPU study on the layer-0 golden:
+  - bfp8 W fails the selection checks (overlap 0.9947, matched rel 0.0057).
+  - bf16 logits fail too (matched rel 0.0065 > 0.005).
+  - bf16 h input costs only rel 0.0006, so h_mid goes up as bf16. That is exact on the golden.
+- A first version built the mask as `probs >= topk_values[..., 7]`. It failed: 30-46 rows selected 7 or 9
+  experts. The topk values do not compare equal to the fp32 probs on this Blackhole build, so build the mask from the ids.
+- `tt/settings.py`: ROUTER_FIDELITY=HiFi4 and ROUTER_FP32_ACC=True, plus ROUTER_WEIGHT_DTYPE=float32
+  (choices float32/bfloat16/bfloat8_b). All three are in MAX_PRECISION.
+- `hooks.py`: `_router_module` loads `router.{proj.weight, scale, per_expert_scale}`. `_router_fn` uploads h_mid as
+  bf16 and returns the dense matrix. `device_component("router")` uses them. The global router is the same op.
+- Frozen test results:
+  - pcc 0.999816, overlap 0.99841 vs golden (0.99854 vs CPU), matched rel 0.0024 vs golden, row sums 0.0023.
+  - auto_margin_min 2.12, 13 device ops, 0 host FLOPs, deterministic.
+- Re-run: `bfw job check --task C.sliding.router`
