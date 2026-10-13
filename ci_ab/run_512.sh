@@ -14,7 +14,7 @@ use() {
   done < $S/files3.txt
   export TT_METAL_CACHE=$OUT/cache_$1; mkdir -p $TT_METAL_CACHE
 }
-for a in H N; do
+for a in ${ARMS:-H N}; do
   use $a
   timeout -s INT -k 60 1800 python3 -m pytest -p no:cacheprovider -o timeout_method=thread models/common/tests/modules/moe/test_generalized_moe_gate.py -k 512_global -rf > $OUT/ut_$a.log 2>&1
   echo "== $a 512_global rc=$? $(grep -aE '[0-9]+ (passed|failed)' $OUT/ut_$a.log | tail -1)"
