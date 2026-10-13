@@ -31,6 +31,10 @@ void kernel_main() {
     std::uint32_t buffer_size = get_arg_val<uint32_t>(7);
 
     bool use_inline_dw_write = static_cast<bool>(get_arg_val<uint32_t>(8));
+    // Address the destination as DRAM bank 0 instead of by coordinates (the ATT maps have no coordinate
+    // window for DRAM tiles, so a coordinate operand would trap in the address backend before the
+    // sanitizer sees it).
+    bool use_dram_bank_dst = static_cast<bool>(get_arg_val<uint32_t>(20));
     bool bad_linked_transaction = static_cast<bool>(get_arg_val<uint32_t>(9));
     std::uint32_t l1_overflow_addr = get_arg_val<uint32_t>(10);
     std::uint32_t eth_src_overflow_addr = get_arg_val<uint32_t>(11);
@@ -106,7 +110,11 @@ void kernel_main() {
     }
 
     UnicastEndpoint dst_unicast_endpoint;
-    if (use_inline_dw_write) {
+    if (use_inline_dw_write && use_dram_bank_dst) {
+        // Just write something to trigger the watcher assertion. Result data doesn't matter.
+        AllocatorBank<AllocatorBankType::DRAM> dram_bank;
+        noc.inline_dw_write(dram_bank, local_buffer[0], {.bank_id = 0, .addr = buffer_dst_addr});
+    } else if (use_inline_dw_write) {
         // Just write something to trigger the watcher assertion. Result data doesn't matter.
         noc.inline_dw_write(
             dst_unicast_endpoint, local_buffer[0], {.noc_x = dst_noc_x, .noc_y = dst_noc_y, .addr = buffer_dst_addr});
