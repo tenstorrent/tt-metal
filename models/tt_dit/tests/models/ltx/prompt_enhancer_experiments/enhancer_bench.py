@@ -117,31 +117,37 @@ def _mean(values):
     return round(sum(values) / len(values), 3) if values else None
 
 
-def _profile_decode(enhancer, mesh, temps, steps, results):
+def _profile_decode(enhancer, mesh, temps, steps, results, *, skip=2, prompt=BENCH_PROMPTS[0]):
     """One request per temperature with decode steps [skip, skip + steps) inside start/stop signposts. Each
     step reads its token back, so the device has finished the step (trace replay and the eager sampler) when
-    decode_forward returns; the drains bound the window so it alone has to fit the profiler buffer."""
+    decode_forward returns; the drains bound the window so it alone has to fit the profiler buffer. Without
+    the device profiler (not under Tracy) the signposts are no-ops and nothing is drained."""
     from tracy import signpost
 
-    skip = int(os.environ.get("BENCH_PROFILE_SKIP", "2"))
+    profiler_on = os.environ.get("TT_METAL_DEVICE_PROFILER", "0") == "1"
     generator = enhancer._generator
     orig = generator.decode_forward
     state = {"step": 0}
 
     def drain():
         ttnn.synchronize_device(mesh)
-        ttnn.ReadDeviceProfiler(mesh)
+        if profiler_on:
+            ttnn.ReadDeviceProfiler(mesh)
 
     def wrapped(*args, **kwargs):
         step = state["step"]
         if step == skip:
             drain()
             signpost("start")
+            state["t0"] = time.perf_counter()
         out = orig(*args, **kwargs)
         if step == skip + steps - 1:
             ttnn.synchronize_device(mesh)
+            state["window_ms"] = 1000 * (time.perf_counter() - state["t0"])
             signpost("stop")
+            logger.info("bench profile: draining the window")
             drain()
+            logger.info("bench profile: window drained")
         state["step"] += 1
         return out
 
@@ -154,8 +160,16 @@ def _profile_decode(enhancer, mesh, temps, steps, results):
         for temperature in temps:
             state["step"] = 0
             enhancer.temperature = temperature
-            enhancer.enhance(BENCH_PROMPTS[0], mode="t2v", seed=ENHANCER_SEED)
-            windows.append({"temperature": temperature, "first_step": skip, "steps": steps})
+            enhancer.enhance(prompt, mode="t2v", seed=ENHANCER_SEED)
+            windows.append(
+                {
+                    "temperature": temperature,
+                    "first_step": skip,
+                    "steps": steps,
+                    "window_wall_ms": round(state.get("window_ms", 0.0), 3),
+                    "token_ids": list(enhancer.last_token_ids),
+                }
+            )
             logger.info(f"bench profile: T={temperature} window steps {skip}..{skip + steps - 1}")
     finally:
         generator.decode_forward = orig
@@ -211,7 +225,9 @@ def test_enhancer_bench(mesh_device, device_params, sp_axis, tp_axis, num_links,
     dump()
     profile_steps = int(os.environ.get("BENCH_PROFILE_STEPS", "0"))
     if profile_steps > 0:
-        _profile_decode(enhancer, submesh, temps, profile_steps, results)
+        _profile_decode(
+            enhancer, submesh, temps, profile_steps, results, skip=int(os.environ.get("BENCH_PROFILE_SKIP", "2"))
+        )
         dump()
         enhancer.unload()
         return
