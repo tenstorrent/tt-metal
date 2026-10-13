@@ -24,13 +24,15 @@ The `do_restore` toggle makes this a controlled experiment:
     do_restore=True  -> transition restores the baseline; matmul must match golden.
     do_restore=False -> no restore; the leaked tilize state corrupts the matmul, for every
                         polluter geometry including the regular G0 (face_r_dim=16).
-                        What diverges is the leaked `tilize_mode` with its row pitch. With a
+                        The leaked state that corrupts the matmul is `tilize_mode` with its
+                        row pitch, which _llk_unpack_AB_matmul_init_ does not reset. With a
                         one-tile-wide polluter the pitch is one tile row: Wormhole's tilize
                         mode reads 16-datum rows, so that pitch skips every other chunk and
-                        the matmul diverges, but Blackhole reads 32-datum rows (2/4-byte
-                        formats), so the same pitch reads the tilized tile unchanged. The
-                        polluter is therefore two tiles wide (POLLUTER_CT_DIM), so the pitch
-                        differs from a tile row on both arches.
+                        the result is wrong; Blackhole reads 32-datum rows (2/4-byte
+                        formats), so the same pitch reads the tilized tile unchanged and the
+                        result still matches golden, which hides the leak. The polluter is
+                        therefore two tiles wide (POLLUTER_CT_DIM), so the pitch differs from
+                        a tile row on both arches and the control detects the leak on both.
 """
 
 from dataclasses import dataclass
