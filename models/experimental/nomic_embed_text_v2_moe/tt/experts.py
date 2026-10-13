@@ -79,6 +79,7 @@ from models.experimental.nomic_embed_text_v2_moe.tt.matmul_config import (
     stacked_w2_shard_tiles,
 )
 from models.experimental.nomic_embed_text_v2_moe.tt.model_config import OpGroup
+from models.experimental.nomic_embed_text_v2_moe.tt.router import Routing
 
 # The largest pass that runs stacked. See the module docstring.
 STACKED_MAX_TOKENS = 320
@@ -425,7 +426,7 @@ class TtNomicExperts(LightweightModule):
         ttnn.deallocate(summed)
         return out
 
-    def forward(self, x: ttnn.Tensor, dense_weights: ttnn.Tensor, buffers: StackedBuffers | None = None) -> ttnn.Tensor:
+    def forward(self, x: ttnn.Tensor, routing: Routing, buffers: StackedBuffers | None = None) -> ttnn.Tensor:
         """Run every expert, weight the outputs by the routing, sum them and add the shared bias.
 
         Tokens are processed in passes of at most max_tokens_per_pass (see MAX_TOKENS_PER_PASS).
@@ -434,13 +435,16 @@ class TtNomicExperts(LightweightModule):
 
         Args:
             x: (1, 1, T, H) flat token activations.
-            dense_weights: (1, 1, T, E) from TtNomicRouter, zero off the top-k.
+            routing: from TtNomicRouter. Both passes gate by its dense form.
             buffers: held across the MoE layers of a forward, by a caller whose whole input is at
                 most HELD_MAX_TILES tile rows (see StackedBuffers); None allocates per pass.
 
         Returns:
             ttnn.Tensor: (1, 1, T, H).
         """
+        dense_weights = routing.dense
+        if dense_weights is None:
+            raise ValueError("the expert passes gate by the dense routing weights; route with dense=True")
         tokens, hidden = x.shape[-2], x.shape[-1]
         if tokens <= self.max_tokens_per_pass:
             return self._weighted_expert_sum(x, dense_weights, buffers)

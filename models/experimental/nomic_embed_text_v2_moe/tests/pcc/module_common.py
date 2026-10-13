@@ -21,6 +21,8 @@ import ttnn
 
 from models.common.metrics import compute_max_abs_error, compute_pcc
 from models.experimental.nomic_embed_text_v2_moe.common import slice_state_dict
+from models.experimental.nomic_embed_text_v2_moe.tt.common import to_device
+from models.experimental.nomic_embed_text_v2_moe.tt.router import Routing
 
 # (batch, seqlen). 37 is deliberately off-tile: padding bugs only surface when S is not a
 # multiple of 32, and S is the batch's longest tokenized sequence, so that is the common case.
@@ -119,6 +121,12 @@ def dense_routing(tokens: int, experts: int, top_k: int) -> torch.Tensor:
     probabilities = torch.randn(tokens, experts).softmax(dim=-1)
     values, indices = torch.topk(probabilities, top_k, dim=-1)
     return torch.zeros_like(probabilities).scatter_(-1, indices, values)
+
+
+def device_routing(dense: torch.Tensor, device) -> Routing:
+    """A (T, E) dense routing tensor on the device, as the experts take it from the router."""
+    tokens, experts = dense.shape
+    return Routing(dense=to_device(dense.reshape(1, 1, tokens, experts), device))
 
 
 def bias_scale(got: torch.Tensor, without_bias: torch.Tensor, bias: torch.Tensor) -> torch.Tensor:

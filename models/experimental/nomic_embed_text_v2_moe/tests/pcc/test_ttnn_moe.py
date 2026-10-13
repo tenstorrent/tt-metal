@@ -32,6 +32,7 @@ from models.experimental.nomic_embed_text_v2_moe.tests.pcc.module_common import 
 from models.experimental.nomic_embed_text_v2_moe.tt.common import flatten_tokens, to_device
 from models.experimental.nomic_embed_text_v2_moe.tt.experts import HELD_MAX_TILES, StackedBuffers
 from models.experimental.nomic_embed_text_v2_moe.tt.moe import TtNomicMoELayer
+from models.experimental.nomic_embed_text_v2_moe.tt.router import Routing
 from tests.ttnn.utils_for_testing import assert_with_pcc
 
 pytestmark = [run_for_blackhole(), pytest.mark.use_module_device, pytest.mark.needs_weights]
@@ -113,8 +114,8 @@ def test_renormalizing_the_routed_weights_is_measurably_wrong(device, config, re
         ref = reference(x)
     agreeing = agreeing_tokens(config, reference, tt_moe, x, x_tt)
 
-    dense = tt_moe.router(flat)
-    renormalized = ttnn.divide(dense, ttnn.sum(dense, dim=-1, keepdim=True))
+    dense = tt_moe.router(flat).dense
+    renormalized = Routing(dense=ttnn.divide(dense, ttnn.sum(dense, dim=-1, keepdim=True)))
 
     correct = from_block_layout(tt_moe(x_tt))
     wrong = ttnn.to_torch(tt_moe.experts(flat, renormalized)).float().reshape(batch, seqlen, config.hidden_size)

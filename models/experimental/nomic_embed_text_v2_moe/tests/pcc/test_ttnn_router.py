@@ -116,11 +116,11 @@ def test_selection_agrees_with_torch(device, config, reference, tt_router, batch
 
 @pytest.mark.parametrize("batch, seqlen", TOKEN_SHAPES)
 def test_dense_routing_weights(device, config, tt_config, reference, tt_router, batch, seqlen):
-    """forward's dense (1, 1, T, E) output, which is what the expert gate multiply consumes."""
+    """forward's dense form, (1, 1, T, E), which is what the expert gate multiply consumes."""
     x = hidden_states(batch, seqlen, config.hidden_size)
     tokens = batch * seqlen
 
-    dense = tt_router(flat_input(x, device))
+    dense = tt_router(flat_input(x, device)).dense
 
     with torch.no_grad():
         _, ref_values, ref_indices = reference(x)
@@ -143,10 +143,30 @@ def test_weights_reach_the_gate_unrenormalized(device, config, tt_router, batch,
     """
     x = hidden_states(batch, seqlen, config.hidden_size)
 
-    dense = tt_router(flat_input(x, device))
+    dense = tt_router(flat_input(x, device)).dense
 
     row_sums = ttnn.to_torch(dense).float().reshape(batch * seqlen, config.num_experts).sum(-1)
     assert (row_sums < 1.0).all(), f"a routed row summed to {float(row_sums.max()):.4f}"
+
+
+@pytest.mark.parametrize("batch, seqlen", TOKEN_SHAPES)
+def test_routing_holds_only_the_form_asked_for(device, config, tt_router, batch, seqlen):
+    """forward returns the dense weights or the top-k selection, never both.
+
+    Up to 4096 tokens the selection sits in L1, where it would hold space beside the experts'
+    circular buffers through a whole dense pass that never reads it. The selection is select()'s
+    own, bit for bit.
+    """
+    flat = flat_input(hidden_states(batch, seqlen, config.hidden_size), device)
+    _, values, indices = tt_router.select(flat)
+
+    dense = tt_router(flat)
+    selection = tt_router(flat, dense=False)
+
+    assert dense.values is None and dense.indices is None and dense.dense is not None
+    assert selection.dense is None
+    assert torch.equal(ttnn.to_torch(selection.values), ttnn.to_torch(values))
+    assert torch.equal(ttnn.to_torch(selection.indices), ttnn.to_torch(indices))
 
 
 def test_one_call_covers_the_largest_batches(device, config, reference, tt_router):

@@ -48,9 +48,9 @@ class TtNomicMoELayer(LightweightModule):
         small = batch * ttnn.core.divup(seqlen, ttnn.TILE_SIZE) <= HELD_MAX_TILES
 
         flat = flatten_tokens(x)
-        dense_weights = self.router(flat)
-        out = self.experts(flat, dense_weights, buffers=self.buffers if small else None)
-        ttnn.deallocate(dense_weights)
+        routing = self.router(flat)
+        out = self.experts(flat, routing, buffers=self.buffers if small else None)
+        routing.deallocate()
         # flat is not freed: the reshape aliases x, which the block still needs as the residual
         # for norm2.
 

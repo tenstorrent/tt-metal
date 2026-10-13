@@ -25,6 +25,7 @@ from models.experimental.nomic_embed_text_v2_moe.tests.pcc.module_common import 
     TOKEN_SHAPES,
     assert_bias_added_once,
     dense_routing,
+    device_routing,
     hidden_states,
     load_reference,
     to_block_layout,
@@ -85,10 +86,7 @@ def run_both(device, config, reference, tt_experts, batch, seqlen):
     x = hidden_states(batch, seqlen, config.hidden_size)
     dense = dense_routing(tokens, config.num_experts, config.moe_top_k)
 
-    out = tt_experts(
-        flatten_tokens(to_device(to_block_layout(x), device)),
-        to_device(dense.reshape(1, 1, tokens, config.num_experts), device),
-    )
+    out = tt_experts(flatten_tokens(to_device(to_block_layout(x), device)), device_routing(dense, device))
 
     with torch.no_grad():
         ref = reference.dense_forward(x, dense)
@@ -163,14 +161,12 @@ def test_chunking_the_token_axis_does_not_change_the_answer(device, config, refe
     """
     tokens = batch * seqlen
     x = flatten_tokens(to_device(to_block_layout(hidden_states(batch, seqlen, config.hidden_size)), device))
-    dense = to_device(
-        dense_routing(tokens, config.num_experts, config.moe_top_k).reshape(1, 1, tokens, config.num_experts), device
-    )
+    routing = device_routing(dense_routing(tokens, config.num_experts, config.moe_top_k), device)
 
     results = {}
     for pass_size in (tokens, tokens // 2 + 1, 64, 30):
         tt_experts.max_tokens_per_pass = pass_size
-        results[pass_size] = ttnn.to_torch(tt_experts(x, dense)).float()
+        results[pass_size] = ttnn.to_torch(tt_experts(x, routing)).float()
 
     whole = results[tokens]
     stacked = [(size, got) for size, got in results.items() if pass_layouts(tokens, size) == {"stacked"}]
@@ -205,15 +201,12 @@ def test_held_buffers_match_a_pass_that_allocates_its_own(device, config, tt_exp
     try:
         for _ in range(2):
             x = flatten_tokens(to_device(to_block_layout(hidden_states(batch, seqlen, config.hidden_size)), device))
-            dense = to_device(
-                dense_routing(tokens, config.num_experts, config.moe_top_k).reshape(1, 1, tokens, config.num_experts),
-                device,
-            )
-            got = ttnn.to_torch(tt_experts(x, dense, buffers=buffers))
+            routing = device_routing(dense_routing(tokens, config.num_experts, config.moe_top_k), device)
+            got = ttnn.to_torch(tt_experts(x, routing, buffers=buffers))
             held = buffers.get(tokens)
 
             assert (held is not None) == holds
-            assert torch.equal(got, ttnn.to_torch(tt_experts(x, dense)))
+            assert torch.equal(got, ttnn.to_torch(tt_experts(x, routing)))
             addresses.append([tensor.buffer_address() for tensor in held or ()])
     finally:
         buffers.release()
@@ -235,13 +228,11 @@ def test_the_padding_of_x_does_not_reach_the_output(device, config, tt_experts, 
     """
     tokens = batch * seqlen
     x = flatten_tokens(to_device(to_block_layout(hidden_states(batch, seqlen, config.hidden_size)), device))
-    dense = to_device(
-        dense_routing(tokens, config.num_experts, config.moe_top_k).reshape(1, 1, tokens, config.num_experts), device
-    )
+    routing = device_routing(dense_routing(tokens, config.num_experts, config.moe_top_k), device)
 
-    clean = ttnn.to_torch(tt_experts(x, dense))
+    clean = ttnn.to_torch(tt_experts(x, routing))
     # In place: the fill writes the padding of x itself.
-    poisoned = ttnn.to_torch(tt_experts(ttnn.fill_implicit_tile_padding(x, 1e4), dense))
+    poisoned = ttnn.to_torch(tt_experts(ttnn.fill_implicit_tile_padding(x, 1e4), routing))
 
     assert torch.equal(clean, poisoned)
 
@@ -270,10 +261,7 @@ def test_shared_bias_is_added_after_the_weighted_sum(device, config, tt_config, 
     experts = TtNomicExperts(device, config, tt_config, state_dict, PREFIX)
 
     def run():
-        out = experts(
-            flatten_tokens(to_device(to_block_layout(x), device)),
-            to_device(dense.reshape(1, 1, tokens, config.num_experts), device),
-        )
+        out = experts(flatten_tokens(to_device(to_block_layout(x), device)), device_routing(dense, device))
         return ttnn.to_torch(out).float().reshape(batch, seqlen, config.hidden_size)
 
     got = run()
