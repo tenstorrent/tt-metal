@@ -906,9 +906,10 @@
 - name: GPT-OSS 20B e2e tests
   cmd: |
     export TT_CACHE_PATH=/mnt/MLPerf/huggingface/tt_cache/openai--gpt-oss-20b/ HF_MODEL=openai/gpt-oss-20b GPT_OSS_FORCE_MODEL_LOAD=1
-    # PROBE ONLY: peak host RSS of a forced weight load, lazy (this PR) then eager (old path).
+    # PROBE ONLY: peak host RSS of a forced weight load, lazy (this PR), eager (old path), lazy again with a warm page cache.
     echo "=== LAZY"; python3 -c 'import resource,subprocess,sys; rc=subprocess.run(sys.argv[1:]).returncode; print("PEAK_RSS_GB %.1f" % (resource.getrusage(resource.RUSAGE_CHILDREN).ru_maxrss/1048576)); sys.exit(rc)' pytest models/demos/gpt_oss/demo/text_demo.py --timeout 1200 || true
-    echo "=== EAGER"; GPT_OSS_EAGER_HF_LOAD=1 python3 -c 'import resource,subprocess,sys; rc=subprocess.run(sys.argv[1:]).returncode; print("PEAK_RSS_GB %.1f" % (resource.getrusage(resource.RUSAGE_CHILDREN).ru_maxrss/1048576)); sys.exit(rc)' pytest models/demos/gpt_oss/demo/text_demo.py --timeout 1200
+    echo "=== EAGER"; GPT_OSS_EAGER_HF_LOAD=1 python3 -c 'import resource,subprocess,sys; rc=subprocess.run(sys.argv[1:]).returncode; print("PEAK_RSS_GB %.1f" % (resource.getrusage(resource.RUSAGE_CHILDREN).ru_maxrss/1048576)); sys.exit(rc)' pytest models/demos/gpt_oss/demo/text_demo.py --timeout 1200 || true
+    echo "=== LAZY2"; python3 -c 'import resource,subprocess,sys; rc=subprocess.run(sys.argv[1:]).returncode; print("PEAK_RSS_GB %.1f" % (resource.getrusage(resource.RUSAGE_CHILDREN).ru_maxrss/1048576)); sys.exit(rc)' pytest models/demos/gpt_oss/demo/text_demo.py --timeout 1200
   model: gpt-oss-20b
   model_family: GPT-OSS
   skus:
