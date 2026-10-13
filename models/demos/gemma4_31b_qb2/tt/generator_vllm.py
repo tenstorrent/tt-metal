@@ -13,7 +13,7 @@ class Gemma4ForCausalLM:
     _router = ttnn.FabricRouterConfig()
     _router.max_packet_payload_size_bytes = 8192
     model_capabilities = {
-        "supports_prefix_caching": False,
+        "supports_prefix_caching": True,
         "supports_async_decode": True,
         "supports_sample_on_device": True,
         "supports_device_penalties": False,
@@ -38,6 +38,7 @@ class Gemma4ForCausalLM:
         self.entry = None
         self.cache = None
         self.prefill_slot_keys = {}
+        self.next_prefill_key = 0
 
     def embed_input_ids(self, input_ids):
         raise RuntimeError("Use the TT prefill_forward/decode_forward interface")
@@ -65,8 +66,6 @@ class Gemma4ForCausalLM:
     def get_kv_cache_spec(cls, vllm_config):
         from vllm.v1.kv_cache_interface import FullAttentionSpec, SlidingWindowSpec
 
-        if vllm_config.cache_config.enable_prefix_caching:
-            raise ValueError("Gemma4 QB2 does not implement prefix caching")
         if vllm_config.max_in_flight_tokens > 2 * cls.MAX_PREFILL_TOKENS:
             raise ValueError("Gemma4 QB2 supports at most 8192 batched tokens with async chunked prefill")
         config = vllm_config.model_config.hf_text_config
@@ -192,11 +191,14 @@ class Gemma4ForCausalLM:
         slots = list(range(len(lengths))) if empty_slots is None else list(empty_slots)
         tables = self._tables(kv_cache, page_tables_per_layer, slots=slots)
         self.entry = None
-        # Full-attention block zero identifies a live request across row moves.
-        full_layer = next(i for i, layer in enumerate(self.generator.model.layers) if not layer.sliding)
-        keys = [int(tables[full_layer][slot, 0]) for slot in slots]
-        self.prefill_slot_keys = {s: k for s, k in self.prefill_slot_keys.items() if s not in slots and k not in keys}
-        self.prefill_slot_keys.update(zip(slots, keys))
+        # Prefix pages can be shared by several live requests. History belongs
+        # to a request's stable state slot, never to a shared physical page.
+        keys = []
+        for slot in slots:
+            if slot not in self.prefill_slot_keys:
+                self.prefill_slot_keys[slot] = self.next_prefill_key
+                self.next_prefill_key += 1
+            keys.append(self.prefill_slot_keys[slot])
         outputs = self.generator.prefill_forward(
             tokens,
             page_table=tables,

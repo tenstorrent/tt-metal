@@ -327,6 +327,30 @@ class Gemma4Generator:
         self.counters["token_readbacks"] += 1
         return ttnn.to_torch(ttnn.get_device_tensors(token)[0]).reshape(-1)[:batch].long()
 
+    def _restore_prefill_history(self, state, page_tables, slot, start):
+        """Gather the preceding sliding window from vLLM's retained KV pages.
+
+        The scheduler owns cache identity and eviction. Only pages in this
+        request's current table are read; null pages are never valid history.
+        Decode and cached continuation consume the same stored BF8 values.
+        """
+        histories = []
+        for i, layer in enumerate(self.model.layers):
+            if not layer.sliding:
+                histories.append(None)
+                continue
+            first = max(0, start - layer.window) // Decoder.PAGE_SIZE
+            pages = page_tables[i][slot, first : start // Decoder.PAGE_SIZE].tolist()
+            if not pages or any(p <= 0 or p >= state.kv[i][0].shape[0] for p in pages):
+                raise ValueError(f"Missing sliding prefix pages for layer {i} at position {start}: {pages}")
+            pair = []
+            for cache in state.kv[i]:
+                parts = [cache[p : p + 1, :, :, :] for p in pages]
+                tail = parts[0] if len(parts) == 1 else ttnn.concat(parts, dim=2)
+                pair.append(ttnn.typecast(tail, ttnn.bfloat16))
+            histories.append(tuple(pair))
+        return histories
+
     def prefill_forward(
         self,
         tokens,
@@ -379,7 +403,14 @@ class Gemma4Generator:
                 if start == 0:
                     histories = [None] * len(self.model.layers)
                 else:
-                    previous = state.prefill_history[key]
+                    previous = state.prefill_history.get(key)
+                    if previous is None:
+                        if not state.vllm_owned or start != aligned_start:
+                            raise ValueError("Cached prefill must start at a whole page in the serving cache")
+                        previous = {
+                            "end": start,
+                            "layers": self._restore_prefill_history(state, page_table, slot, start),
+                        }
                     if previous["end"] != start:
                         raise ValueError("Prefill history does not match the scheduler continuation")
                     rewind = start - aligned_start

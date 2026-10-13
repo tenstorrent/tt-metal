@@ -1,6 +1,9 @@
 # SPDX-License-Identifier: Apache-2.0
 # SPDX-FileCopyrightText: 2026 Tenstorrent USA, Inc.
 """Resume checkpoint-weight prefills across aligned and partial cache pages."""
+
+from types import SimpleNamespace
+
 import pytest
 import torch
 from transformers import AutoConfig
@@ -9,6 +12,7 @@ from transformers.models.gemma4.modeling_gemma4 import Gemma4TextDecoderLayer, G
 import ttnn
 from models.demos.gemma4_31b_qb2.tests.test_decoder import ReferenceCache, check_rows, reference
 from models.demos.gemma4_31b_qb2.tt.decoder import Decoder
+from models.demos.gemma4_31b_qb2.tt.generator import Gemma4Generator
 from models.demos.gemma4_31b_qb2.tt.model import WeightReader, checkpoint_path
 
 
@@ -18,7 +22,7 @@ from models.demos.gemma4_31b_qb2.tt.model import WeightReader, checkpoint_path
     [(1024, 2048, 2177), (127, 1023, 1025, 2177), (1024, 2049, 3073, 4098), (1201, 2317, 3467, 4571)],
     ids=["aligned", "partial-pages", "after-full-window", "ragged-windows"],
 )
-def test_resumed_prefill_matches_hf(qb2_mesh, layer_index, ends):
+def test_resumed_prefill_matches_hf(qb2_mesh, layer_index, ends, cached_prefix=False):
     torch.set_num_threads(8)
     rng = torch.Generator().manual_seed(3600 + layer_index)
     path = checkpoint_path()
@@ -36,6 +40,8 @@ def test_resumed_prefill_matches_hf(qb2_mesh, layer_index, ends):
     layer._prepare_prefill_norm_stats()
     pages = (ends[-1] + 128) // 128
     table = torch.randperm(pages + 2, generator=rng)[2:].reshape(1, pages).int()
+    if cached_prefix:
+        table = (torch.randperm(pages, generator=rng) + 1).reshape(1, pages).int()
     cache = layer.allocate_cache(physical_pages=pages + 2)
     ref_cache = ReferenceCache(1, layer.kv_heads * 4, pages * 128, layer.head_dim)
     embedding = reader.get("model.language_model.embed_tokens.weight")
@@ -57,6 +63,11 @@ def test_resumed_prefill_matches_hf(qb2_mesh, layer_index, ends):
             valid = history[0].shape[2] - (previous_end - aligned_start)
             begin = max(0, valid - 1024)
             previous = tuple(t[:, :, begin:valid, :] for t in history) if valid else None
+        if cached_prefix and previous_end:
+            generator = object.__new__(Gemma4Generator)
+            generator.model = SimpleNamespace(layers=[layer])
+            state = SimpleNamespace(kv=[cache])
+            previous = generator._restore_prefill_history(state, {0: table}, 0, aligned_start)[0]
         x = inputs[:, aligned_start:end]
         sharded = layer.prefill_input_width(end - aligned_start) != config.hidden_size
         tx = ttnn.from_torch(
@@ -99,3 +110,8 @@ def test_resumed_prefill_matches_hf(qb2_mesh, layer_index, ends):
     actual = ttnn.to_torch(ttnn.get_device_tensors(out)[0]).reshape(1, 1, -1)
     expected = reference(hf, rope, dx, positions[:, None], ref_cache, layer.kind, layer.window)
     check_rows(expected, actual)
+
+
+@pytest.mark.parametrize("ends", [(128, 257), (1024, 1153), (1152, 2177)])
+def test_cached_sliding_prefill_matches_hf(qb2_mesh, ends):
+    test_resumed_prefill_matches_hf(qb2_mesh, 0, ends, cached_prefix=True)

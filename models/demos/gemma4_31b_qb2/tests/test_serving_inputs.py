@@ -127,3 +127,58 @@ def test_persistent_capture_release_discards_all_prefill_history():
     assert model.cache.prefill_history == {}
     assert model.entry is None
     assert closed == [True]
+
+
+@pytest.mark.parametrize("start", [128, 1024, 1152, 8192])
+def test_prefix_history_gathers_retained_pages_in_logical_order(monkeypatch, expect_error, start):
+    generator = object.__new__(Gemma4Generator)
+    generator.model = SimpleNamespace(
+        layers=[SimpleNamespace(sliding=True, window=1024), SimpleNamespace(sliding=False)]
+    )
+    table = torch.arange(start // 128, 0, -1).reshape(1, -1)
+    cache = torch.arange((start // 128 + 1) * 128).reshape(-1, 1, 128, 1).float()
+    state = SimpleNamespace(kv=[(cache, cache + 1), None])
+    monkeypatch.setattr(ttnn, "concat", torch.cat)
+    monkeypatch.setattr(ttnn, "typecast", lambda tensor, dtype: tensor)
+    histories = generator._restore_prefill_history(state, {0: table}, 0, start)
+    expected = torch.cat([cache[p : p + 1] for p in table[0, -8:]], dim=2)
+    assert torch.equal(histories[0][0], expected)
+    assert torch.equal(histories[0][1], expected + 1)
+    assert histories[1] is None
+    table[0, -1] = 0
+    with expect_error(ValueError, "Missing sliding prefix pages"):
+        generator._restore_prefill_history(state, {0: table}, 0, start)
+
+
+def test_concurrent_shared_prefixes_keep_private_history_and_follow_moves():
+    model = adapter()
+    model.prefill_slot_keys = {}
+    model.next_prefill_key = 0
+    model.cache.prefill_history = {}
+    submitted = []
+    model.generator = SimpleNamespace(prefill_forward=lambda *args, **kwargs: submitted.append(kwargs["history_keys"]))
+    shared = torch.tensor([[11, 12], [11, 13]])
+    tokens = torch.zeros(2, 256, dtype=torch.int32)
+    model.prefill_forward(
+        tokens,
+        None,
+        model.cache,
+        [256, 256],
+        page_tables_per_layer=[shared, shared],
+        start_pos=[128, 128],
+        empty_slots=[0, 1],
+    )
+    first, second = submitted[-1]
+    assert first != second
+    model.cache.prefill_history.update({first: object(), second: object()})
+    model.note_state_slots_moved({0: 2, 1: 0})
+    model.release_request(0)
+    assert set(model.cache.prefill_history) == {first}
+    model.prefill_forward(
+        tokens[:1], None, model.cache, [256], page_tables_per_layer=[shared, shared], start_pos=[128], empty_slots=[2]
+    )
+    assert submitted[-1] == [first]
+    model.prefill_forward(
+        tokens[:1], None, model.cache, [256], page_tables_per_layer=[shared, shared], start_pos=[128], empty_slots=[0]
+    )
+    assert submitted[-1][0] not in (first, second)
