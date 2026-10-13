@@ -3,8 +3,9 @@
 # SPDX-License-Identifier: Apache-2.0
 """ttnn.bringup.ring_indexer_score_dsa key_compression_ratio (pooled keys) on a full-mesh snake ring (cluster_axis None).
 
-Cases: tests/cases.py entries with "key_stride" (GLM-5.3 Flash on the 2x4 LoudBox: R 4, 640 query tokens per chip
-per 5120-token chunk, block_cyclic_chunk_local 640 tokens -> a 160-key stripe per chip per chunk).
+Cases: CASES below (GLM-5.3 Flash on the 2x4 LoudBox: R 4, 640 query tokens per chip per 5120-token chunk,
+block_cyclic_chunk_local 640 tokens -> a 160-key stripe per chip per chunk; T shortened to three chunks, each listed
+chunk start run with kv_len = (start + 5120) / 4 keys). The model's captured call is a model case in tests/cases.py.
 
 Layout (key units, reference.full_mesh_key_local_positions): chip d (row-major) holds, for every chunk c, keys
 c * 8 * 160 + d * 160 + [0, 160) at k_local rows c * 160 + [0, 160); the ring's full-T k buffer starts as random
@@ -35,7 +36,36 @@ def _load(name):
 
 
 ref = _load("reference")
-CASES = [c for c in _load("cases").CASES if c["op"] == "ring_indexer_score_dsa" and "key_compression_ratio" in c]
+CASES = [
+    {
+        "id": "2x4-ring-fullmesh-keystride4-q640-t3840-h32-d128-fp32dest",
+        "mesh": [2, 4],
+        "device_params": {"fabric_config": "FABRIC_2D"},
+        "heads": 32,
+        "head_dim": 128,
+        "q_rows": 640,
+        "t": 3840,
+        "k_local_rows": 480,
+        "num_semaphores": 2,
+        "topology": "Ring",
+        "num_links": 1,
+        "key_compression_ratio": 4,
+        "chunk_starts": [5120, 10240],
+        "block_cyclic_chunk_local": 640,
+        "program_config": {"q_chunk_size": 64, "k_chunk_size": 32, "head_group_size": 0},
+        "compute_kernel_config": {
+            "math_fidelity": "HiFi4",
+            "math_approx_mode": False,
+            "fp32_dest_acc_en": True,
+            "packer_l1_acc": False,
+            "dst_full_sync_en": False,
+        },
+        "gate_scale": 1.0 / 64,
+        "seed": 0,
+        "pcc": 0.9999,
+        "rel": 0.004,
+    },
+]
 
 pytestmark = pytest.mark.skipif(not ttnn.device.is_blackhole(), reason="indexer_score is Blackhole-only")
 

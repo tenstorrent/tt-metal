@@ -56,23 +56,26 @@ CASES = [
         "rel": 0.004,
     },
     {
-        # GLM-5.3 Flash DSA indexer on the LoudBox 2x4 mesh, pooled keys (key_compression_ratio 4): one full-mesh snake ring
-        # (cluster_axis None, Ring), each chip holds 640 query tokens of a 5120-token chunk and, per chunk, a
-        # 160-key stripe (block_cyclic_chunk_local 640 tokens / 4) of the block-cyclic pooled index-key cache.
-        # Planned call (glm53_flash_d_p indexer ring), not yet captured from the model: sig None. T is shortened to
-        # three chunks (3840 keys); each listed chunk start runs with kv_len = (start + 5120) / 4 keys.
-        "id": "glm53_flash_d_p-2x4-ring-fullmesh-keystride4-q640-t3840-h32-d128-fp32dest",
+        # GLM-5.3-Flash DSA indexer (tt/indexer.py, ring path, "mesh" geometry) on the 2x2 mesh, last 5120-token chunk
+        # of a 56320-token prefill: pooled keys (key_compression_ratio 4), one full-mesh snake ring (cluster_axis None,
+        # Ring). Chip d (row-major) scores its own 1280 query tokens (chunk start + d * 1280) and holds, per chunk, a
+        # 320-pool stripe (block_cyclic_chunk_local 1280 tokens / 4) of the block-cyclic pooled-key cache: k_local
+        # [5120, 128] (16 chunks' stripes, the 81920-token worst case); the ring's k buffer is [20480, 128]
+        # (tt_ccl.get_indexer_ring_k_buffer: k_local rows x 4 chips). kv_len = (51200 + 5120) / 4 = 14080 pools.
+        "id": "glm53_flash_d_p-2x2-ring-fullmesh-keystride4-q1280-t20480-kv14080-h32-d128-fp32dest",
         "model": "glm53_flash_d_p",
-        "task": "indexer ring (key_compression_ratio)",
-        "sig": None,
+        "task": "O.1",
+        "sig": "ef030f7670",
         "op": "ring_indexer_score_dsa",
-        "mesh": [2, 4],
-        "device_params": {"fabric_config": "FABRIC_2D"},
+        "mesh": [2, 2],
+        "device_params": {"fabric_config": "FABRIC_2D", "l1_small_size": 24576},
+        # q [1, 32, 1280, 128], k [1, 1, 20480, 128], weights [1, 1, 1280, 32], k_local [1, 1, 5120, 128]; all
+        # BFLOAT16 TILE DRAM interleaved, per device.
         "heads": 32,
         "head_dim": 128,
-        "q_rows": 640,
-        "t": 3840,
-        "k_local_rows": 480,
+        "q_rows": 1280,
+        "t": 20480,
+        "k_local_rows": 5120,
         "dtype": "BFLOAT16",
         "layout": "TILE",
         "num_semaphores": 2,
@@ -80,8 +83,9 @@ CASES = [
         "topology": "Ring",
         "num_links": 1,
         "key_compression_ratio": 4,
-        "chunk_starts": [5120, 10240],
-        "block_cyclic_chunk_local": 640,
+        "chunk_start_idx": 51200,
+        "kv_len": 14080,
+        "block_cyclic_chunk_local": 1280,
         "program_config": {"q_chunk_size": 64, "k_chunk_size": 32, "head_group_size": 0},
         "compute_kernel_config": {
             "math_fidelity": "HiFi4",
@@ -90,8 +94,13 @@ CASES = [
             "packer_l1_acc": False,
             "dst_full_sync_en": False,
         },
+        # q, k ~ N(0, 1); gates ~ N(0, 1) / 64 (the model folds 32^-0.5 * 128^-0.5 = 1/64 into them). The ring's k
+        # buffer starts as random garbage (the model shares one buffer across layers).
         "gate_scale": 1.0 / 64,
         "seed": 0,
+        # vs float32 on the same bf16 inputs, visible columns [0, kv_len). Measured (seed 0, 4 chips, 16.6-17.8M
+        # visible scores each): pcc 0.9999985, rel 0.00186 (the bf16 output rounding); limits as the hy4 case. Checked
+        # by hand: an output scaled by 1.01 fails (rel 0.0095).
         "pcc": 0.9999,
         "rel": 0.004,
     },
