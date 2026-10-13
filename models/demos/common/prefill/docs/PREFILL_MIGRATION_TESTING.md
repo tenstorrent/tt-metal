@@ -261,12 +261,13 @@ tt-d-gen's `PrefillPipeline::submit` logs one `prefill inject slot_id=S start=A 
 Point `PREFILL_PRODUCER_REPLAY_LOG` (manifest: `workload.replay_log`) at that log and the producer pushes
 exactly those chunks, in that order, instead of drawing a synthetic schedule. `PREFILL_PRODUCER_REPLAY_SPEED`
 (manifest: `workload.replay_speed`, default `1.0`) scales the captured inter-push timing: `2.0` replays twice
-as fast, `0` sends back to back. Timing needs the builtin sink's leading ISO timestamp; a log without one
-replays back to back.
+as fast, `0` sends back to back. Timing uses the builtin sink's ISO timestamp; a collector prefix such as
+kubectl's zoned timestamp is skipped. A log without one replays back to back.
 
-The log records shape, not content: tokens are refilled from the trace pool by absolute position, so there
-is no golden for the replayed KV and replay rejects `PREFILL_PRODUCER_CHECK_PCC=1`. That also makes replay
-single-rank only, since multi-rank producers exist only to verify. Pushes must fit the runner's geometry
+The log records shape, not content: tokens are refilled from the trace pool, cycled to `max_seq_len`, by
+absolute position, so there is no golden for the replayed KV and replay rejects `PREFILL_PRODUCER_CHECK_PCC=1`.
+The producer therefore runs as one process (`-np 1`) on the runner's rank-0 host, whatever the runner's rank
+count, since extra producer ranks exist only to verify. Pushes must fit the runner's geometry
 (`end - start <= chunk_size`, `end <= max_seq_len`, `slot_id < num_users`); the producer rejects the log
 before attaching otherwise. The synthetic workload knobs (`chunks`, `max_requests`, `p_gap`, ...) are ignored.
 
