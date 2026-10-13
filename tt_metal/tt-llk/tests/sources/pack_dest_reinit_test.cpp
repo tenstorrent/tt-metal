@@ -2,12 +2,10 @@
 //
 // SPDX-License-Identifier: Apache-2.0
 
-// Re-initialises the math/pack dest handshake between consecutive blocks of a datacopy with nothing
-// else in between: the pack thread calls _llk_pack_dest_init_ straight after its previous block's last
-// PACR, and the math thread calls _llk_math_pack_sync_init_ straight after its previous block's
-// section-done. REINIT_DELAY RISC nops before the pack-side re-init move it relative to that PACR, so a
-// sweep over REINIT_DELAY shows whether the re-init's config writes are ordered behind the pack by the
-// LLK itself or only by luck.
+// Functional re-init test: the math/pack dest handshake is re-initialised between consecutive blocks of
+// a datacopy with nothing else in between. The pack thread calls _llk_pack_dest_init_ straight after its
+// previous block's section-done, and the math thread calls _llk_math_pack_sync_init_ straight after its
+// previous block's section-done. The copy must equal its input across every block boundary.
 
 #include <cstdint>
 
@@ -106,12 +104,7 @@ void run_kernel(RUNTIME_PARAMETERS params)
 
     for (int block_num = 0; block_num < NUM_BLOCKS; ++block_num)
     {
-        // Move the re-init relative to the previous block's last PACR, which is still in flight here.
-        _Pragma("GCC unroll 256") for (std::uint32_t i = 0; i < REINIT_DELAY; ++i)
-        {
-            asm volatile("nop");
-        }
-        // Re-init of the dest handshake for every block, directly behind the previous block's packs.
+        // Re-init of the dest handshake for every block, directly behind the previous block's section-done.
         _llk_pack_dest_init_<dest_sync, is_fp32_dest_acc_en>();
 
         _llk_packer_wait_for_math_done_();

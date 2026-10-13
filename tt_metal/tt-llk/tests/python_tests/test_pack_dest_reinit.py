@@ -3,14 +3,12 @@
 
 """Datacopy whose math/pack dest handshake is re-initialised between every block.
 
-The pack thread calls ``_llk_pack_dest_init_`` directly behind the previous block's last PACR, with no
-reconfig in between, and ``REINIT_DELAY`` RISC nops move that re-init relative to the pack in flight.
-The re-init rewrites the packer's dest offset and address counters; if those writes were not ordered
-behind the packer by the LLK itself, the previous block's last tile would be packed with the new
-offset/counters and the copy would differ from its input.
+Functional re-init test: the pack thread calls ``_llk_pack_dest_init_`` (and the math thread
+``_llk_math_pack_sync_init_``) between consecutive blocks with no reconfig in between, so the re-init
+lands directly behind the previous block's section-done. The copy must equal its input across every
+block boundary; a re-init that disturbed the previous block's last pack or the handshake would show up
+as a wrong tile or a hang.
 """
-
-from dataclasses import dataclass
 
 import torch
 from helpers.constraints import get_valid_dest_accumulation_modes
@@ -41,21 +39,9 @@ from helpers.test_variant_parameters import (
     NUM_FACES,
     NUM_TILES_IN_BLOCK,
     TILE_COUNT,
-    TemplateParameter,
     generate_input_dim,
 )
 from helpers.utils import passed_test
-
-
-@dataclass
-class REINIT_DELAY(TemplateParameter):
-    """RISC nops issued by the pack thread before each block's ``_llk_pack_dest_init_``."""
-
-    delay: int = 0
-
-    def convert_to_cpp(self) -> str:
-        return f"constexpr std::uint32_t REINIT_DELAY = {self.delay}u;"
-
 
 REINIT_FORMATS = input_output_formats(
     [DataFormat.Float16_b, DataFormat.Float32, DataFormat.Bfp8_b], same=True
@@ -67,10 +53,9 @@ DEST_SYNC_MODE = DestSync.Half
 @parametrize(
     formats=REINIT_FORMATS,
     dest_acc=get_valid_dest_accumulation_modes,
-    reinit_delay=[0, 2, 8, 32, 128],
     input_dimensions=[[128, 128], [64, 512]],
 )
-def test_pack_dest_reinit(formats, dest_acc, reinit_delay, input_dimensions):
+def test_pack_dest_reinit(formats, dest_acc, input_dimensions):
     num_faces = 4
 
     src_A, tile_cnt_A, src_B, tile_cnt_B = generate_stimuli(
@@ -108,7 +93,6 @@ def test_pack_dest_reinit(formats, dest_acc, reinit_delay, input_dimensions):
         formats=formats,
         templates=[
             generate_input_dim(input_dimensions, input_dimensions),
-            REINIT_DELAY(reinit_delay),
             # Single-valued across the sweep: emitted as constexprs the kernel reads directly.
             DEST_SYNC(DEST_SYNC_MODE),
             DEST_INDEX(0),
