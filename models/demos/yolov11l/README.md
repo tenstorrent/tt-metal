@@ -1,7 +1,7 @@
 # YOLOv11l
 
 ## Platforms:
-    Wormhole (n150, n300, multi-device / T3K)
+    Wormhole (n150, n300, multi-device / T3K), Blackhole (p150)
 
 ## Introduction
 **YOLOv11l** is the large variant in the YOLO11 series (Ultralytics `yolo11l.pt`), ported on TT-NN with trace + 2 CQ. Architecture matches YOLO11l depth/width (dual `C3k` stacks per `C3k2`, dual PSABlocks in `C2PSA`).
