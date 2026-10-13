@@ -35,6 +35,7 @@ Run it from the repo root with `PYTHONPATH=$repo`. Device code only through `scr
 
 $previous
 ## When you finish
-If you learned something new, add it to `$bringup_dir/known_issues.md` (or a pointer to `$bringup_dir/repo_map.md`);
-append to `$breadcrumbs`, and end with a short summary.
+If you learned something new, add it to `$bringup_dir/known_issues.md` with the file's next id (or a pointer to
+`$bringup_dir/repo_map.md`); append to `$breadcrumbs`. Write the knowledge-use report `$knowledge_report` (agent rule
+11): the entries that changed what you did, the ones you found wrong, and what was missing. End with a short summary.
 Do not commit.

@@ -140,3 +140,21 @@ def test_a_shortened_entry_keeps_its_age_through_the_detail_file(tmp_path):
     _commit(repo, "split and trim")
     (entry,) = entries_of(bdir / "known_issues.md", repo)
     assert entry["blame"] == base
+
+
+def test_a_contradiction_after_the_last_check_makes_it_contradicted(tmp_path):
+    repo = tmp_path
+    _git(repo, "init", "-q")
+    shared = repo / SHARED
+    shared.parent.mkdir(parents=True)
+    shared.write_text("# Known issues\n\n## Testing\n")
+    base = _commit(repo, "base")
+    shared.write_text("# Known issues\n\n## Testing\n" + _entry("[K-1] A lesson", "method (tests)", base))
+    head = _commit(repo, "lesson")
+    res = Resolver(repo, head)
+    (e,) = entries_of(shared, repo)
+    assert e["id"] == "K-1" and e["title"] == "A lesson."
+    late = [{"t": "2999-01-01T00:00:00", "evidence": "x"}]
+    early = [{"t": "2000-01-01T00:00:00", "evidence": "x"}]
+    assert check_entry(e, res, head, late)["status"] == "contradicted"
+    assert check_entry(e, res, head, early)["status"] == "method"  # older than its Seen at: already re-checked
