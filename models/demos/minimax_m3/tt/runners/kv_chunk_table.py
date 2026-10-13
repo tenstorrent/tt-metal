@@ -29,7 +29,12 @@ receives every stripe on all its columns).
 The per-chip DRAM addressing (32-token blocks round-robin across the DRAM banks, block-cyclic positions,
 user-major ``slot*num_layers+layer`` fold) matches DeepSeek's ``create_kv_chunk_address_table_block_cyclic``, just
 repeated per config with each tensor's own ``buffer_address()`` / ``chunk_size_bytes`` and column set.
+
+Every config is STRIDED_ROWS: one ``set_strided_row`` per (slot, layer), each residue of the row's period an
+affine address on one device group, so a 1M-token table never materializes its per-chunk grid.
 """
+
+import math
 
 from loguru import logger
 
@@ -56,6 +61,11 @@ def config_name(config_id: int, num_configs: int) -> str:
     (at least two digits). Sorted names keep ids in position order."""
     width = max(2, len(str(num_configs - 1)))
     return f"{config_id:0{width}d}"
+
+
+def _page_noc_addr(page: int, *, base_addr: int, num_banks: int, chunk_bytes: int) -> int:
+    """NoC address of a chip's ``page``-th 32-token block in its ROUND_ROBIN_1D bank walk."""
+    return ((page % num_banks) << 32) | (base_addr + (page // num_banks) * chunk_bytes)
 
 
 def _make_config(*, num_layers, max_seq_len, num_users, chunk_size_bytes):
@@ -197,79 +207,83 @@ def build_and_serialize_kv_chunk_table(
                 f"space, so kv_migration_stages must report the same range for all three."
             )
 
-    table = ttnn.experimental.disaggregation.KvChunkAddressTable(
+    disagg = ttnn.experimental.disaggregation
+    names = [config_name(i, len(specs)) for i in range(len(specs))]
+    table = disagg.KvChunkAddressTable(
         {
-            config_name(i, len(specs)): _make_config(
+            name: _make_config(
                 num_layers=total_layers,
                 max_seq_len=seq_len,
                 num_users=num_users,
                 chunk_size_bytes=_chunk_size_bytes(dtype, head_dim),
             )
-            for i, (_, _, _, dtype) in enumerate(specs)
-        }
+            for name, (_, _, _, dtype) in zip(names, specs)
+        },
+        {name: disagg.ChunkCompression.STRIDED_ROWS for name in names},
     )
 
+    page_tokens = NUM_CONTIGUOUS_TOKENS_IN_DRAM_BANK
+    slab_pages = chunk_size // page_tokens
+    row_pages = tokens_per_chunk_local // page_tokens
     hosts_set = set()
 
     for config_id, (label, tensor_idx, row_groups, dtype) in enumerate(specs):
         chunk_bytes = _chunk_size_bytes(dtype, head_dim)
-        # Each group of a row owns an equal stripe of the row's per-chunk slab (the whole slab when the
-        # row has a single group).
-        tokens_per_group = tokens_per_chunk_local // len(row_groups)
+        # Pages one group (a whole SP row, or one TP stripe of it) owns per slab.
+        group_pages = row_pages // len(row_groups)
+        filter_layers = label == "index_k" and index_k_layers is not None
         for stage in stage_layouts[tensor_idx]:
             base_addr = stage["base_addr"]
             num_banks = stage["num_banks"]
             # Both gathered and local layouts use the same crc32 identity as the KV manager.
             host_name = stage.get("host_name") or f"host-{stage['host_tag']:08x}"
-            first = stage["first_layer"]
-            filter_layers = label == "index_k" and index_k_layers is not None
+            groups = {}
             for global_row in range(sp):
                 for stripe, group_cols in enumerate(row_groups):
                     fabric_node_ids = [stage["fnids"][global_row][c] for c in group_cols]
-                    group_idx = table.add_device_group(fabric_node_ids)
+                    groups[global_row, stripe] = table.add_device_group(fabric_node_ids)
                     for fid in fabric_node_ids:
                         key = (int(fid.mesh_id), int(fid.chip_id))
                         if key not in hosts_set:
                             table.set_fabric_node_host(fid, host_name=host_name)
                             hosts_set.add(key)
 
-                    # Replay the ND-shard ROUND_ROBIN_1D walk: 32-token blocks round-robin across the DRAM
-                    # banks (per chip / per tensor), advancing the per-bank offset after each full bank
-                    # sweep. The base address is identical on every chip (the tensor is allocated
-                    # identically everywhere), and each group's chips hold the same rows, so one walk per
-                    # group covers them. Each stage restarts the walk from ITS base address and writes at
-                    # the GLOBAL layer index; the slot fold on device is per-stage (slot * stage_count +
-                    # local_layer), which this slot -> local-layer order replays.
-                    curr_bank_id = 0
-                    curr_bank_offset = 0
-                    for slot in range(num_users):
-                        for local_layer in range(stage["count"]):
-                            global_layer = first + local_layer
-                            # A layer without index_k gets no rows, but still walks its region so later
-                            # layers keep their real addresses.
-                            publish = not filter_layers or global_layer in index_k_layers
-                            for seq_chunk in range(num_chunks_per_seq_len):
-                                chunk_token_start = (
-                                    seq_chunk * chunk_size
-                                    + global_row * tokens_per_chunk_local
-                                    + stripe * tokens_per_group
-                                )
-                                chunk_token_end = chunk_token_start + tokens_per_group
-                                for position in range(
-                                    chunk_token_start, chunk_token_end, NUM_CONTIGUOUS_TOKENS_IN_DRAM_BANK
-                                ):
-                                    if publish:
-                                        location = ttnn.experimental.disaggregation.KvCacheLocation()
-                                        location.noc_addr = (curr_bank_id << 32) | (base_addr + curr_bank_offset)
-                                        location.size_bytes = chunk_bytes
-                                        location.device_group_index = group_idx
-                                        table.set(global_layer, position, slot, location, config_id)
+            # A group's chip places its 32-token pages round-robin over its banks in slot -> local layer ->
+            # slab -> page order. The row period spans enough slabs for every residue to advance by whole
+            # bank sweeps, so each residue's address is affine in the chunk index.
+            period_slabs = min(num_banks // math.gcd(group_pages, num_banks), num_chunks_per_seq_len)
+            step = slab_pages * period_slabs
+            stride = period_slabs * group_pages // num_banks * chunk_bytes
+            residue_groups, residue_pages = [], []
+            for chunk in range(step):
+                slab, in_slab = divmod(chunk, slab_pages)
+                row, in_row = divmod(in_slab, row_pages)
+                stripe, page = divmod(in_row, group_pages)
+                residue_groups.append(groups[row, stripe])
+                residue_pages.append(slab * group_pages + page)
 
-                                    curr_bank_id = (curr_bank_id + 1) % num_banks
-                                    if curr_bank_id == 0:
-                                        curr_bank_offset += chunk_bytes
+            for slot in range(num_users):
+                for local_layer in range(stage["count"]):
+                    global_layer = stage["first_layer"] + local_layer
+                    if filter_layers and global_layer not in index_k_layers:
+                        continue
+                    walk_start = (slot * stage["count"] + local_layer) * num_chunks_per_seq_len * group_pages
+                    table.set_strided_row(
+                        global_layer,
+                        slot,
+                        chunk_bytes,
+                        [
+                            _page_noc_addr(
+                                walk_start + p, base_addr=base_addr, num_banks=num_banks, chunk_bytes=chunk_bytes
+                            )
+                            for p in residue_pages
+                        ],
+                        [stride] * step,
+                        residue_groups,
+                        config_id,
+                    )
 
-    ttnn.experimental.disaggregation.export_to_protobuf_file(table, path)
+    disagg.export_to_protobuf_file(table, path)
     logger.info(
         f"[migration] M3 KV chunk address table serialized to {path} "
         f"(configs={len(specs)} [{', '.join(s[0] for s in specs)}], stages={len(stage_layouts[0])}, "

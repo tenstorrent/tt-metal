@@ -11,16 +11,21 @@ single-member per-head device groups vs the full-row index_k replica group, and 
 row) bank-walk restart, and the index_k rows limited to the MSA layers. The ``dedup_table`` cases rebuild
 it with index_k TP-deduped (``index_k_tp_axis``): index_k stays one config but every chip owns a distinct
 stripe, addressed by a single-chip group and its own bank walk, while K / V are unchanged.
+
+The strided-row cases compare every chunk of the STRIDED_ROWS table with a replay of each chip's page walk
+across geometries (bank counts, period lengths), then check the 1M-token single-slot table the 16-chip
+prefill partition publishes, and that it pairs with a two-slot decode-side table of a different depth.
 """
 
 import os
+import zlib
 from types import SimpleNamespace
 
 import pytest
 
 import ttnn
 from models.demos.common.prefill.runners.migration import validate_stage_layout_contiguous
-from models.demos.minimax_m3.tt.attention.kv_cache import NUM_CONTIGUOUS_TOKENS_IN_DRAM_BANK
+from models.demos.minimax_m3.tt.attention.kv_cache import BH_NUM_DRAM_BANKS, NUM_CONTIGUOUS_TOKENS_IN_DRAM_BANK
 from models.demos.minimax_m3.tt.runners.kv_chunk_table import _chunk_size_bytes, build_and_serialize_kv_chunk_table
 
 SP = 2
@@ -377,3 +382,222 @@ def test_dedup_index_k_rows_limited_to_msa_layers(dedup_table, tmp_path):
                     assert _ids(filtered.get_device_group(got.device_group_index).fabric_node_ids) == _ids(
                         dedup_table.get_device_group(want.device_group_index).fabric_node_ids
                     ), f"config {cfg_id} slot {slot} layer {layer} pos {pos} changed device group"
+
+
+# --- strided rows ---------------------------------------------------------------------------------------------
+
+
+def _layouts(sp, cols, counts, num_banks, *, mesh_id=0, base=0x100000, host="prefill"):
+    """Gathered k / v / index_k layouts over ``len(counts)`` stages; each (stage, cache) has its own base."""
+    layouts = []
+    for cache_idx in range(3):
+        stages, first = [], 0
+        for i, count in enumerate(counts):
+            stages.append(
+                {
+                    "rank": i,
+                    "first_layer": first,
+                    "count": count,
+                    "base_addr": base + 0x10000000 * i + 0x4000000 * cache_idx,
+                    "num_banks": num_banks,
+                    "host_tag": zlib.crc32(host.encode()) & 0x7FFFFFFF,
+                    "fnids": [
+                        [ttnn.FabricNodeId(ttnn.MeshId(mesh_id + i), r * cols + c) for c in range(cols)]
+                        for r in range(sp)
+                    ],
+                }
+            )
+            first += count
+        layouts.append(stages)
+    return layouts
+
+
+def _build_table(path, layouts, *, sp, cols, chunk_size, seq_len, num_users, dedup, index_k_layers=None):
+    local_layers = layouts[0][0]["count"]
+    rows = seq_len // sp // (cols if dedup else 1)
+
+    def t(n_rows):
+        return SimpleNamespace(shape=(num_users * local_layers, 1, n_rows, HEAD_DIM), dtype=ttnn.bfloat8_b)
+
+    cache = SimpleNamespace(
+        k=t(seq_len // sp), v=t(seq_len // sp), index_k=t(rows), index_k_tp_axis=1 if dedup else None
+    )
+    build_and_serialize_kv_chunk_table(
+        mesh_device=None,
+        kv_cache=cache,
+        seq_len=seq_len,
+        num_layers=local_layers,
+        mesh_shape=(sp, cols),
+        sp_axis=0,
+        num_users=num_users,
+        chunk_size=chunk_size,
+        num_kv_heads=cols,
+        head_dim=HEAD_DIM,
+        path=str(path),
+        stage_layouts=layouts,
+        index_k_layers=index_k_layers,
+    )
+    return ttnn.experimental.disaggregation.import_from_protobuf_file(str(path))
+
+
+def _walk_reference(layouts, *, sp, cols, chunk_size, seq_len, num_users, dedup):
+    """(config, slot, layer, position) -> (noc_addr, chips) by replaying each chip's ROUND_ROBIN_1D page walk."""
+    chunk_local = chunk_size // sp
+    specs = [(0, [[h]]) for h in range(cols)] + [(1, [[h]]) for h in range(cols)]
+    specs.append((2, [[c] for c in range(cols)] if dedup else [list(range(cols))]))
+    chunk_bytes = _chunk_size_bytes(ttnn.bfloat8_b, HEAD_DIM)
+    out = {}
+    for config_id, (cache_idx, row_groups) in enumerate(specs):
+        group_tokens = chunk_local // len(row_groups)
+        for stage in layouts[cache_idx]:
+            for row in range(sp):
+                for stripe, group_cols in enumerate(row_groups):
+                    chips = sorted(_ids([stage["fnids"][row][c] for c in group_cols]))
+                    page = 0
+                    for slot in range(num_users):
+                        for local_layer in range(stage["count"]):
+                            for slab in range(seq_len // chunk_size):
+                                start = slab * chunk_size + row * chunk_local + stripe * group_tokens
+                                for pos in range(start, start + group_tokens, NUM_CONTIGUOUS_TOKENS_IN_DRAM_BANK):
+                                    bank, sweep = divmod(page, stage["num_banks"])[::-1]
+                                    noc = (bank << 32) | (stage["base_addr"] + sweep * chunk_bytes)
+                                    out[config_id, slot, stage["first_layer"] + local_layer, pos] = (noc, chips)
+                                    page += 1
+    return out
+
+
+@pytest.mark.parametrize(
+    "sp, cols, chunk_size, seq_len, num_banks, dedup",
+    [
+        (2, 4, 64, 128, 8, False),  # one page per slab: the period is the whole row
+        (2, 4, 128, 1024, 8, False),  # two pages per slab: four-slab period, two chunks per residue
+        (2, 4, 256, 1024, 8, True),  # TP-deduped index_k, one page per stripe
+        (4, 4, 4096, 16384, 8, False),  # 16-chip prefill partition geometry
+        (4, 4, 4096, 16384, 8, True),
+        (2, 4, 2048, 16384, 7, False),  # bank count coprime to the pages per slab
+    ],
+)
+def test_strided_rows_match_page_walk(tmp_path, sp, cols, chunk_size, seq_len, num_banks, dedup):
+    layouts = _layouts(sp, cols, STAGE_COUNTS, num_banks)
+    geometry = dict(sp=sp, cols=cols, chunk_size=chunk_size, seq_len=seq_len, num_users=2, dedup=dedup)
+    table = _build_table(tmp_path / "t.pb", layouts, **geometry)
+    disagg = ttnn.experimental.disaggregation
+    assert all(table.compression(c) == disagg.ChunkCompression.STRIDED_ROWS for c in range(table.num_configs()))
+    chunk_bytes = _chunk_size_bytes(ttnn.bfloat8_b, HEAD_DIM)
+    for (config_id, slot, layer, pos), (noc, chips) in _walk_reference(layouts, **geometry).items():
+        loc = table.lookup(layer, pos, slot, config_id)
+        assert (loc.noc_addr, loc.size_bytes) == (
+            noc,
+            chunk_bytes,
+        ), f"config {config_id} slot {slot} layer {layer} pos {pos}: {loc.noc_addr:#x}, expected {noc:#x}"
+        assert sorted(_ids(table.get_device_group(loc.device_group_index).fabric_node_ids)) == chips
+
+
+PREFILL_1M = dict(sp=4, cols=4, chunk_size=4096, seq_len=1 << 20, layers=60)
+
+
+def test_prefill_1m_single_slot_table(tmp_path, monkeypatch, expect_error):
+    # The 16-chip prefill partition at 1M positions, one slot, with runner_16chip_kvm_1m.yaml's dual-write budget.
+    monkeypatch.setenv("KV_CHUNK_TABLE_DUAL_WRITE_MAX_BYTES", "2080374784")
+    sp, cols, chunk, seq, layers = (PREFILL_1M[k] for k in ("sp", "cols", "chunk_size", "seq_len", "layers"))
+    msa = set(range(3, layers))
+    layouts = _layouts(sp, cols, (layers,), BH_NUM_DRAM_BANKS)
+    path = tmp_path / "prefill_1m.pb"
+    table = _build_table(
+        path, layouts, sp=sp, cols=cols, chunk_size=chunk, seq_len=seq, num_users=1, dedup=False, index_k_layers=msa
+    )
+    # Runs only: the per-chunk entries mirror alone would be ~0.85 GB.
+    assert os.path.getsize(path) < 64 << 20
+    disagg = ttnn.experimental.disaggregation
+    for config_id in range(2 * cols + 1):
+        cfg = table.config(config_id)
+        assert (cfg.num_slots, cfg.max_sequence_length, cfg.num_layers) == (1, seq, layers)
+        assert table.compression(config_id) == disagg.ChunkCompression.STRIDED_ROWS
+
+    chunk_bytes = _chunk_size_bytes(ttnn.bfloat8_b, HEAD_DIM)
+    chunk_local = chunk // sp
+    pages_per_slab = chunk_local // NUM_CONTIGUOUS_TOKENS_IN_DRAM_BANK
+    stage = [layout[0] for layout in layouts]
+    for layer in (0, 2, 3, layers - 1):
+        for pos in (0, chunk_local - 32, chunk_local, chunk + 3 * chunk_local, seq - chunk_local, seq - 32):
+            slab, in_slab = divmod(pos, chunk)
+            row, in_row = divmod(in_slab, chunk_local)
+            page = (layer * (seq // chunk) + slab) * pages_per_slab + in_row // NUM_CONTIGUOUS_TOKENS_IN_DRAM_BANK
+            bank, sweep = page % BH_NUM_DRAM_BANKS, page // BH_NUM_DRAM_BANKS
+            for config_id in range(2 * cols + 1):
+                cache_idx = min(config_id // cols, 2)
+                loc = table.lookup(layer, pos, 0, config_id)
+                if cache_idx == 2 and layer not in msa:
+                    assert loc.size_bytes == 0
+                    continue
+                assert loc.noc_addr == (bank << 32) | (stage[cache_idx]["base_addr"] + sweep * chunk_bytes)
+                head = config_id % cols
+                expected = [stage[cache_idx]["fnids"][row][c] for c in (range(cols) if cache_idx == 2 else [head])]
+                assert sorted(_ids(table.get_device_group(loc.device_group_index).fabric_node_ids)) == sorted(
+                    _ids(expected)
+                )
+    with expect_error(RuntimeError, "num_slots"):
+        table.lookup(0, 0, 1, 0)
+
+
+def _kv_manager_plan_errors(src, dst, *, src_slot, dst_slot, layers, pos_end):
+    """The checks the KV manager's migration planner runs per (layer, config) before booking a copy: both sides
+    cover the row or neither, chunk geometry matches, and every slot / position is inside its OWN table."""
+    errors = []
+    for layer in layers:
+        for config_id in range(src.num_configs()):
+            s, d = src.config(config_id), dst.config(config_id)
+            if src_slot >= s.num_slots or dst_slot >= d.num_slots:
+                errors.append(f"layer {layer} config {config_id}: slot {src_slot}->{dst_slot} out of range")
+                continue
+            if pos_end > s.max_sequence_length or pos_end > d.max_sequence_length:
+                errors.append(f"layer {layer} config {config_id}: pos_end {pos_end} past a table's depth")
+                continue
+            if s.chunk_n_tokens != d.chunk_n_tokens:
+                errors.append(f"config {config_id}: chunk_n_tokens {s.chunk_n_tokens} vs {d.chunk_n_tokens}")
+                continue
+            for pos in range(0, pos_end, s.chunk_n_tokens):
+                a, b = src.lookup(layer, pos, src_slot, config_id), dst.lookup(layer, pos, dst_slot, config_id)
+                if a.size_bytes != b.size_bytes:
+                    errors.append(f"layer {layer} config {config_id} pos {pos}: {a.size_bytes} vs {b.size_bytes} B")
+                    break
+    return errors
+
+
+def test_single_slot_prefill_pairs_with_two_slot_decode(tmp_path):
+    # Prefill: one slot at its own depth. Decode: two slots, twice the depth, a different slab and its own chips,
+    # so the per-slot strides differ. Only names, coverage and chunk geometry have to agree.
+    layers, msa = 4, {1, 2, 3}
+    prefill = _build_table(
+        tmp_path / "prefill.pb",
+        _layouts(4, 4, (layers,), 8),
+        sp=4,
+        cols=4,
+        chunk_size=4096,
+        seq_len=8192,
+        num_users=1,
+        dedup=False,
+        index_k_layers=msa,
+    )
+    decode = _build_table(
+        tmp_path / "decode.pb",
+        _layouts(4, 4, (layers,), 8, mesh_id=7, base=0x2000000, host="decode"),
+        sp=4,
+        cols=4,
+        chunk_size=8192,
+        seq_len=16384,
+        num_users=2,
+        dedup=False,
+        index_k_layers=msa,
+    )
+    names = [prefill.config_name(i) for i in range(prefill.num_configs())]
+    assert names == [decode.config_name(i) for i in range(decode.num_configs())]
+    assert (prefill.config(0).num_slots, decode.config(0).num_slots) == (1, 2)
+    assert decode.lookup(0, 0, 1, 0).noc_addr != decode.lookup(0, 0, 0, 0).noc_addr
+
+    plan = dict(layers=range(layers), pos_end=8192)
+    for dst_slot in (0, 1):
+        assert _kv_manager_plan_errors(prefill, decode, src_slot=0, dst_slot=dst_slot, **plan) == []
+    assert _kv_manager_plan_errors(prefill, decode, src_slot=0, dst_slot=2, **plan)
+    assert _kv_manager_plan_errors(prefill, decode, src_slot=1, dst_slot=0, **plan)
+    assert _kv_manager_plan_errors(prefill, decode, src_slot=0, dst_slot=1, layers=range(layers), pos_end=16384)
