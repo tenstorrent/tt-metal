@@ -31,8 +31,6 @@ PV and row sums are added. The recipes differ in the arithmetic of each step.
 | K/V storage | BF16 | BF16 | BF16 | BF16 | BF16, BFP8 or BFP4 |
 | Input rounding (caller) | none | none | none | none | `prepare_sdpa_input` |
 
-- **Legacy** is the existing streaming kernel (`compute_streaming.hpp`) that runs when `precision` is omitted.
-  It is not a recipe and is listed for reference.
 - **STANDARD** keeps O and l in FP32 in L1 with a *reference* row maximum m_ref. P = exp(scale·(S − m_ref))
   is computed in BF16 as in the legacy kernel, but the packer adds each chunk's PV and row sums onto the FP32 state in L1
   (the add is exact in FP32), so long-K accumulation does not swamp and needs no per-chunk fold. m_ref changes
@@ -74,9 +72,7 @@ QK → exp → PV without the max reduction:
   two-row groups.
 
 Fused chunks need a QK subblock of at least two tiles and no attn_mask; the factories drop their CBs
-(29–31) and run the reduce path when they do not fit L1. Errors are unchanged against the unfused chunks
-(19 input distributions: fused/unfused rel-L2 ratio geomean 0.94, at most 1.04), and every later optimization in this path is
-bit-identical.
+(29–31) and run the reduce path when they do not fit L1. Fused and unfused chunks have the same error.
 
 ## Accuracy and throughput
 
@@ -139,8 +135,7 @@ pass-outer and ring-inner.
 - With several Q chunks per core, each chunk's state (FP32 O and l, maxima) is checkpointed to the third output
   around every Q chunk on every ring step. With fused chunks (STANDARD, FAST) this is streamed: the last
   K chunk hands finished O row groups to the writer, a restore acks maxima and sums first and then each O row as
-  it lands, and compute waits only for the rows it is about to accumulate onto. On a BH Galaxy this takes
-  FAST BFP8 Wan 2.2 720p attention from 19.32 to 18.80 ms (480p 5.87 to 5.74 ms), bit-identical.
+  it lands, and compute waits only for the rows it is about to accumulate onto.
 
 ## FAST inputs
 
@@ -182,10 +177,6 @@ Compile-time defines set by the host:
 | `SDPA_RECIPE_RING` (in the ring kernels) | ring, exp ring | key-tail masking, resident state |
 | `SDPA_RING_STREAM_STATE` | ring STANDARD and FAST with fused chunks | streamed multi-Q checkpoints |
 
-**Code size.** Each program must fit the 70656 B kernel config buffer, and the ring and exp ring FAST
-kernels sit within a few hundred bytes of it. The reduce path (`SDPA_RECIPE_COLD`), normalization and the ring
-unpack copy of the fused chunk are size-optimized and out of line; the ring kernels build unpack/pack at -O2
-with fused chunks. FAST's ring kernels use a single no-MOP matmul init (every reinit re-records), and
-the streaming writer has one copy of the transfer loops. New code in these paths should be checked against the ring/exp ring FAST BFP8
-tests (Q224 two-pass, Wan Q320), and then on a Galaxy model: Galaxy programs are 0.7-1.5 KB larger than the
-1x2 test programs (multi-link reader/writer, joint text), so a 1x2 pass does not guarantee a fit.
+**Code size.** Each program must fit the 70656 B kernel config buffer; the ring and exp ring FAST kernels sit
+within a few hundred bytes of it (see the size notes in `streaming/recipe_fused_chunk.hpp`). Check changes on the
+ring / exp ring FAST BFP8 tests and on a Galaxy model, whose programs are 0.7-1.5 KB larger.

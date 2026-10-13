@@ -20,8 +20,6 @@
 #include "ttnn/operations/transformer/sdpa/sdpa_recipe.hpp"
 #include "ttnn/operations/transformer/sdpa/sdpa_recipe_blocking.hpp"
 
-#include <cmath>
-
 using namespace tt::tt_metal;
 
 namespace ttnn::prim {
@@ -60,39 +58,21 @@ void ExpRingJointSDPADeviceOperation::validate_on_program_cache_miss(
 
     const auto dtype = input_tensor_q.dtype();
     if (args.precision) {
-        // Named recipes: BF16 Q; K/V (primary, joint, gathered) share the recipe's KV storage type.
         namespace recipes = ttnn::operations::transformer::sdpa::detail;
-        const auto kv_dtype = tensor_args.input_k.dtype();
-        recipes::resolve_precision_policy(recipes::select_recipe(*args.precision, kv_dtype));
-        TT_FATAL(
-            input_tensor_q.device()->arch() == tt::ARCH::BLACKHOLE, "Named exp ring recipes require Blackhole");
-        TT_FATAL(dtype == DataType::BFLOAT16, "Named exp ring recipes require BF16 Q, got {}", dtype);
-        TT_FATAL(
-            kv_dtype == DataType::BFLOAT16 || kv_dtype == DataType::BFLOAT8_B || kv_dtype == DataType::BFLOAT4_B,
-            "Named exp ring recipes require BF16, BFP8 or BFP4 KV, got {}",
-            kv_dtype);
-        TT_FATAL(
-            tensor_args.input_v.dtype() == kv_dtype && tensor_args.gathered_k.dtype() == kv_dtype &&
-                tensor_args.gathered_v.dtype() == kv_dtype,
-            "Named exp ring recipe K/V and persistent buffers must share one KV type");
-        if (has_joint) {
-            TT_FATAL(
-                tensor_args.joint_q->dtype() == dtype && tensor_args.joint_k->dtype() == kv_dtype &&
-                    tensor_args.joint_v->dtype() == kv_dtype,
-                "Named exp ring recipe joint types must match their primary Q/K/V types");
-        }
-        // Supported geometry lives in recipe_geometry_rejection (shared with the blocking chooser); L1 fit is
-        // checked when the program is built.
-        const uint32_t head_dim = input_tensor_q.logical_shape()[3];
-        recipes::validate_recipe_geometry(
+        recipes::validate_ring_recipe_inputs(
             recipes::RecipeOp::ExpRing,
-            recipes::resolve_precision_policy(recipes::select_recipe(*args.precision, kv_dtype)),
+            *args.precision,
+            input_tensor_q,
+            tensor_args.input_k,
+            tensor_args.input_v,
+            tensor_args.gathered_k,
+            tensor_args.gathered_v,
+            tensor_args.joint_q,
+            tensor_args.joint_k,
+            tensor_args.joint_v,
             args.get_q_chunk_size(),
             args.get_k_chunk_size(),
-            head_dim);
-        TT_FATAL(
-            !args.scale || *args.scale == 1.0f / std::sqrt(static_cast<float>(head_dim)),
-            "Named exp ring recipes require the default 1/sqrt(head_dim) scale");
+            args.scale);
     } else {
         // Validate all tensors have the same dtype
         for (const auto& tensor : sdpa_input_tensors) {
@@ -374,7 +354,7 @@ void ExpRingJointSDPADeviceOperation::validate_on_program_cache_miss(
         total_segments);
 
     // Segments per row: each core row hosts up to kMaxPasses head-segments, walked as serial
-    // passes. Keep in lockstep with kMaxPasses in exp_ring_joint_sdpa_program_builder.cpp
+    // passes. Keep in lockstep with kMaxPasses in exp_ring_joint_sdpa_program_factory.cpp
     // (L1-bound).
     constexpr uint32_t kMaxPasses = 3;
     const uint32_t num_passes = (total_segments + sdpa_grid_y - 1) / sdpa_grid_y;

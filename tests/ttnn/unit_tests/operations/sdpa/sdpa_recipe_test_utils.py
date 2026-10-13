@@ -129,24 +129,23 @@ def check_attn_mask(device, variant, mask_kind):
     assert l2_pct(actual, reference(q, k, v, mask)) < L2_PCT_BOUND[variant]
 
 
+def run_joint(device, variant, q, k, v, jq, jk, jv, config):
+    """Joint SDPA with a recipe; returns (actual, expected), each the primary rows followed by the joint rows."""
+    out, joint_out = ttnn.transformer.joint_scaled_dot_product_attention(
+        *inputs_for(device, variant, q, k, v),
+        *inputs_for(device, variant, jq, jk, jv),
+        joint_strategy="rear",
+        program_config=config,
+        precision=VARIANTS[variant][0],
+    )
+    actual = torch.cat([ttnn.to_torch(out), ttnn.to_torch(joint_out)], 2)
+    return actual, reference(torch.cat([q, jq], 2), torch.cat([k, jk], 2), torch.cat([v, jv], 2))
+
+
 def check_joint(device, variant):
     q, k, v = randn(1, 2, 1000, 128, seed=11), randn(1, 2, 1000, 128, seed=12), randn(1, 2, 1000, 128, seed=13)
     jq, jk, jv = randn(1, 2, 77, 128, seed=14), randn(1, 2, 77, 128, seed=15), randn(1, 2, 77, 128, seed=16)
-    tq, tk, tv = inputs_for(device, variant, q, k, v)
-    tjq, tjk, tjv = inputs_for(device, variant, jq, jk, jv)
-    out, joint_out = ttnn.transformer.joint_scaled_dot_product_attention(
-        tq,
-        tk,
-        tv,
-        tjq,
-        tjk,
-        tjv,
-        joint_strategy="rear",
-        program_config=program_config(device, 256, 512),
-        precision=VARIANTS[variant][0],
-    )
-    expected = reference(torch.cat([q, jq], 2), torch.cat([k, jk], 2), torch.cat([v, jv], 2))
-    actual = torch.cat([ttnn.to_torch(out), ttnn.to_torch(joint_out)], 2)
+    actual, expected = run_joint(device, variant, q, k, v, jq, jk, jv, program_config(device, 256, 512))
     assert l2_pct(actual, expected) < L2_PCT_BOUND[variant]
 
 
@@ -171,15 +170,6 @@ def check_op_selected_blocking(device, variant, shape):
         actual, expected = ttnn.to_torch(out), reference(q, k, v)
     else:
         jq, jk, jv = randn(b, nh, joint, d, seed=30), randn(b, nh, joint, d, seed=31), randn(b, nh, joint, d, seed=32)
-        out, joint_out = ttnn.transformer.joint_scaled_dot_product_attention(
-            *inputs_for(device, variant, q, k, v),
-            *inputs_for(device, variant, jq, jk, jv),
-            joint_strategy="rear",
-            program_config=ttnn.SDPAProgramConfig(
-                compute_with_storage_grid_size=device.compute_with_storage_grid_size()
-            ),
-            precision=precision,
-        )
-        actual = torch.cat([ttnn.to_torch(out), ttnn.to_torch(joint_out)], 2)
-        expected = reference(torch.cat([q, jq], 2), torch.cat([k, jk], 2), torch.cat([v, jv], 2))
+        grid_only = ttnn.SDPAProgramConfig(compute_with_storage_grid_size=device.compute_with_storage_grid_size())
+        actual, expected = run_joint(device, variant, q, k, v, jq, jk, jv, grid_only)
     assert l2_pct(actual, expected) < L2_PCT_BOUND[variant]

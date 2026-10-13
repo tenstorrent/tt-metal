@@ -56,8 +56,9 @@ inline void init_sdpa_exp_grid() {
     TTI_SFPCONFIG(0, 14, 0);
 }
 
-// ACCURATE: negate the row maximum so the packer's FP32 L1 accumulate computes s - m exactly in FP32,
-// separately from the grid MAD (which would otherwise fold the subtraction into a * x + b).
+// Negate a tile. ACCURATE negates the row maximum so the packer's FP32 L1 accumulate computes s - m exactly in
+// FP32, separately from the grid MAD (which would otherwise fold the subtraction into a * x + b); the fused chunks
+// build their -e0 operand from the zeroed column identity.
 inline void calculate_sdpa_negate_max() {
     addr_mod_t{.srca = {.incr = 0}, .srcb = {.incr = 0}, .dest = {.incr = 0}}.set(ADDR_MOD_7);
     for (int i = 0; i < 32; ++i) {

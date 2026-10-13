@@ -40,7 +40,6 @@ Tensor prepare_sdpa_input(const Tensor& input, bool is_query, DataType dtype) {
     const uint32_t tiles = padded.volume() / 1024;
     // Preparation is per tile; batching only groups tiles per CB transaction.
     const uint32_t batch = tiles % 4 == 0 ? 4 : tiles % 2 == 0 ? 2 : 1;
-    TT_FATAL(tiles > 0, "SDPA preparation requires at least one tile");
     const auto hardware = input.device()->compute_with_storage_grid_size();
     const uint32_t batches = tiles / batch;
     const uint32_t cores = std::min<uint32_t>(batches, hardware.x * hardware.y);
@@ -49,7 +48,7 @@ Tensor prepare_sdpa_input(const Tensor& input, bool is_query, DataType dtype) {
     const CoreRangeSet grid = num_cores_to_corerangeset(cores, hardware, /*row_wise=*/true);
     TensorSpec spec(input.logical_shape(), TensorLayout(dtype, PageConfig(Layout::TILE), DRAM_MEMORY_CONFIG));
     auto output = create_device_tensor(spec, input.device());
-    const uint32_t bytes = dtype == DataType::BFLOAT16 ? 2048 : dtype == DataType::BFLOAT8_B ? 1088 : 576;
+    const uint32_t bytes = tt::tile_size(datatype_to_dataformat_converter(dtype));
     ProgramDescriptor program;
     program.cbs = {
         {.total_size = 2 * batch * 2048,

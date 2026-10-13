@@ -7,7 +7,6 @@
 #include "ttnn/operations/transformer/sdpa/sdpa_recipe.hpp"
 
 #include <algorithm>
-#include <array>
 #include <cstdint>
 #include <optional>
 
@@ -48,9 +47,6 @@ public:
         uint32_t Sq_chunk_t,
         uint32_t Sk_chunk_t,
         uint32_t DHt) override {
-        TT_FATAL(
-            args.precision.has_value(),
-            "The ring recipe program factory serves the named recipes");
         program_ = ring_recipes::recipe_compute_program(
             ring_recipes::resolve_precision_policy(
                 ring_recipes::select_recipe(*args.precision, tensor_args.input_k.dtype())),
@@ -112,18 +108,8 @@ public:
                     .buffer_index = index, .data_format = tt::DataFormat::UInt32, .page_size = kCheckpointPageBytes}}}});
         }
         // Every recipe and ring CB spans the whole worker grid; reject before program creation.
-        auto cb_total = [&] {
-            uint64_t bytes = 0;
-            for (const auto& cb : desc.cbs) {
-                bytes += cb.total_size;
-            }
-            return bytes;
-        };
-        uint64_t cb_bytes = cb_total();
-        // Static CBs must stay below the lowest live L1 buffer (global semaphores, persistent buffers).
-        const auto lowest = device->lowest_occupied_compute_l1_address();
-        const uint64_t top = lowest.has_value() ? static_cast<uint64_t>(*lowest) : device->l1_size_per_core();
-        const uint64_t available = top - device->allocator()->get_base_allocator_addr(tt::tt_metal::HalMemType::L1);
+        uint64_t cb_bytes = ring_recipes::recipe_cb_bytes(desc);
+        const uint64_t available = ring_recipes::recipe_free_l1(*device);
         if (cb_bytes > available) {
             // The recipe double-buffers Q. The ring reader reserves one Q chunk at a time and
             // compute pops it when done, so a single slot is correct; it only gives up Q prefetch.
@@ -134,7 +120,7 @@ public:
                     log_debug(tt::LogOp, "Named ring recipe: single-slot Q to fit L1");
                 }
             }
-            cb_bytes = cb_total();
+            cb_bytes = ring_recipes::recipe_cb_bytes(desc);
         }
         if (cb_bytes > available) {
             // Then the fused chunks' CBs: without them every K chunk runs on the reduce path (slower than giving

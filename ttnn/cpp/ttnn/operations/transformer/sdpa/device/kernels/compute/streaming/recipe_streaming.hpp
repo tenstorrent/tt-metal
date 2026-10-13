@@ -27,38 +27,6 @@ constexpr uint32_t sdpa_out_stride = 2;
 // Blackhole's pack-to-unpack handshake overlaps row-max reduction with QK packing.
 constexpr bool reduce_trigger_supported = true;
 
-// Template-driven profiling: MaybeDeviceZoneScopedN(ENABLED, name)
-// When ENABLED=true: RAII profileScope writes timestamps (same as DeviceZoneScopedN)
-// When ENABLED=false: empty struct, zero overhead (compiler eliminates entirely)
-#if defined(PROFILE_KERNEL)
-template <bool Enabled, uint32_t timer_id>
-struct MaybeProfileScope {
-    inline __attribute__((always_inline)) MaybeProfileScope() {}
-    inline __attribute__((always_inline)) ~MaybeProfileScope() {}
-};
-template <uint32_t timer_id>
-struct MaybeProfileScope<true, timer_id> : kernel_profiler::profileScope<timer_id> {};
-
-#define MaybeDeviceZoneScopedN(ENABLED, name)                                  \
-    DO_PRAGMA(message(PROFILER_MSG_NAME(name)));                               \
-    auto constexpr hash = kernel_profiler::Hash16_CT(PROFILER_MSG_NAME(name)); \
-    MaybeProfileScope<ENABLED, hash> zone;
-#else
-#define MaybeDeviceZoneScopedN(ENABLED, name)
-#endif
-
-// --- Outlined out-of-order pack (code-size) ---
-#ifdef SDPA_RECIPE_FP32
-// A full tile's four contiguous FP32 faces extend naturally to eight faces
-// for two adjacent score tiles. One unpack-to-DST handshake owns both tiles.
-// Only valid for the fixed two-score, full-face, unpadded recipe path.
-ALWI void sdpa_score_unpack_mop(uint32_t faces) {
-    UNPACK((
-        ckernel_template(faces, 1, TT_OP_UNPACR(0, 0b00010001, 0, 0, 0, 1, 0, p_unpacr::RAREFYB_DISABLE, 0, 0, 0, 0, 1))
-            .program()));
-}
-#endif
-
 #include "sdpa_cb_protocol.hpp"
 #ifdef SDPA_RECIPE_FP32
 #include "fp32_state.hpp"
@@ -67,6 +35,13 @@ ALWI void sdpa_score_unpack_mop(uint32_t faces) {
 struct AccumulatorHalf {
     uint32_t sum, max, out;
 };
+
+// PACK -> UNPACK handshake: UNPACK continues once PACK's preceding L1 writes are visible.
+ALWI void recipe_pack_to_unpack_barrier() {
+    PACK((t6_semaphore_post<p_stall::STALL_PACK>(semaphore::PACK_DONE)));
+    UNPACK((t6_semaphore_wait_on_zero<p_stall::STALL_SYNC>(semaphore::PACK_DONE)));
+    UNPACK((t6_semaphore_get<>(semaphore::PACK_DONE)));
+}
 
 // LoFi no-MOP matmuls bake the reuse-side source clear into the recorded replay image
 // (reuse A when ct_dim >= rt_dim, else reuse B); mm_no_mop_reinit_short does not re-record it.
@@ -112,12 +87,9 @@ ALWI void recipe_opaque_tail_rows(uint32_t& rows) {
     }
 }
 
-// Q chunks up to 1024 rows (32 tiles).
+// Q chunks up to 1024 rows (32 tiles). Any tile-aligned K chunk: the QK subblock width (SDPA_RECIPE_QK_W,
+// host-chosen to divide it) sets the reduction pieces.
 constexpr uint32_t kRecipeMaxQTiles = 32;
-// Any tile-aligned K chunk: the QK subblock width (SDPA_RECIPE_QK_W, host-chosen to divide
-// it) sets the reduction pieces; the early max-reduce overlap needs at least two subblocks.
-template <uint32_t Sk_chunk_t>
-constexpr bool kRecipeValidKTiles = Sk_chunk_t >= 1;
 #ifndef SDPA_RECIPE_QK_W
 #define SDPA_RECIPE_QK_W 4
 #endif
@@ -432,15 +404,6 @@ inline void calculate_sdpa_trunc7() {
         sfpi::dst_reg += 2;
     }
 }
-// Negate a tile: builds the fused chunks' -e0 operand from the zeroed column identity.
-inline void calculate_sdpa_negate_tile() {
-    addr_mod_t{.srca = {.incr = 0}, .srcb = {.incr = 0}, .dest = {.incr = 0}}.set(ADDR_MOD_7);
-    for (int i = 0; i < 32; ++i) {
-        sfpi::vFloat x = sfpi::dst_reg[0];
-        sfpi::dst_reg[0] = -x;
-        sfpi::dst_reg++;
-    }
-}
 #endif
 // dest tiles [0, w): state; [w, 2w): this chunk's term; tile 2w: column-broadcast correction c.
 // state = state * c + term.
@@ -584,9 +547,7 @@ static void sdpa_subtract_max_l1(uint32_t inout_cb, uint32_t max_cb, uint32_t ro
     }
     PACK((llk_pack_reconfig_l1_acc(0)));
     tile_regs_release();
-    PACK((t6_semaphore_post<p_stall::STALL_PACK>(semaphore::PACK_DONE)));
-    UNPACK((t6_semaphore_wait_on_zero<p_stall::STALL_SYNC>(semaphore::PACK_DONE)));
-    UNPACK((t6_semaphore_get<>(semaphore::PACK_DONE)));
+    recipe_pack_to_unpack_barrier();
 }
 #endif
 #endif
@@ -595,7 +556,7 @@ static void sdpa_subtract_max_l1(uint32_t inout_cb, uint32_t max_cb, uint32_t ro
  * In-place sub_exp on cb_qkt_im: subtracts max, applies exp with ReLU clamping,
  * writes back to same positions. Accumulates row sums into reduce_cb.
  */
-template <bool profiling_enabled, uint32_t scale_fp32>
+template <uint32_t scale_fp32>
 SDPA_RECIPE_COLD void sub_exp_block_bcast_cols(
     uint32_t inout_cb,
     uint32_t max_cb,
@@ -629,7 +590,8 @@ SDPA_RECIPE_COLD void sub_exp_block_bcast_cols(
             tile_regs_acquire();
             sdpa_stream_reconfig(7, 7);
             unary_bcast_init<BroadcastType::NONE>(7);
-            sdpa_score_unpack_mop(4 * score_batch);
+            // Two adjacent FP32 score tiles' eight contiguous faces in one unpack-to-DST handshake.
+            sdpa::streaming::state_unpack_mop(4 * score_batch);
             unary_bcast<BroadcastType::NONE>(7, index, 0);
             // The generic one-tile helper cleared tile 0's zero flags. Preserve
             // the Blackhole unpack-to-DST workaround for tile 1 as well.
@@ -638,7 +600,7 @@ SDPA_RECIPE_COLD void sub_exp_block_bcast_cols(
                     TT_ZEROACC(p_zeroacc::CLR_16, 1, 1, ADDR_MOD_3, get_dest_index_in_faces(tile, face));
                 }
             })
-            sdpa_score_unpack_mop(4);
+            sdpa::streaming::state_unpack_mop(4);
             unary_bcast_uninit<BroadcastType::NONE>(7);
             tile_regs_commit();
             tile_regs_wait();
@@ -672,7 +634,6 @@ SDPA_RECIPE_COLD void sub_exp_block_bcast_cols(
 #endif
 
     {
-        MaybeDeviceZoneScopedN(profiling_enabled, "SUB_EXP_BLOCK_INIT");
 #ifdef SDPA_RECIPE_FP32
         if (skip_pack_configure) {
             sdpa_stream_reconfig_srca(inout_cb);
@@ -691,7 +652,6 @@ SDPA_RECIPE_COLD void sub_exp_block_bcast_cols(
 
     tile_regs_acquire();
     {
-        MaybeDeviceZoneScopedN(profiling_enabled, "SUB");
         uint32_t dst_index = 0;
         for (uint32_t i = 0; i < tiles_per_row; i++) {
             uint32_t in0_tile_index = (max_row_base + i) * cols_in_row + global_col_base;
@@ -705,7 +665,6 @@ SDPA_RECIPE_COLD void sub_exp_block_bcast_cols(
     tile_regs_wait();
     PACK((llk_pack_relu_config(ReluConfig::zero())));
     {
-        MaybeDeviceZoneScopedN(profiling_enabled, "EXP");
         uint32_t dst_index = 0;
         constexpr int iterations = 32;
         constexpr VectorMode vector_mode_exp = VectorMode::None;
@@ -750,7 +709,6 @@ SDPA_RECIPE_COLD void sub_exp_block_bcast_cols(
     }
 
     {
-        MaybeDeviceZoneScopedN(profiling_enabled, "PACK SUB_EXP");
         // Pack back to inout_cb at the same absolute positions.
         // In Phase 1, the caller pre-configures (cb_qkt_im, actual_sbw) before the kt loop
         // and blocked_matmul_and_pack restores it after each sub_exp. Skip the redundant
@@ -828,7 +786,7 @@ inline uint32_t sdpa_scan_identity_maxima(
  * Column-only exp(prev_max - cur_max) for SALAD corrections.
  * Operates on first-column subset of tiles.
  */
-template <bool profiling_enabled, uint32_t scale_fp32>
+template <uint32_t scale_fp32>
 #ifdef SDPA_RECIPE_FP32
 bool sub_exp_first_col_blocks(uint32_t in0_cb, uint32_t in1_cb, uint32_t out_cb, uint32_t q_subblock, uint32_t sbh) {
 #else
@@ -1009,7 +967,6 @@ void salad_correct_fused(
  * scratch_cb is a 1-tile CB reused for the reciprocal intermediate.
  */
 template <
-    bool profiling_enabled,
     uint32_t head_dim_t_,
     uint32_t dst_size,
     uint32_t col_identity_cb,
@@ -1026,9 +983,7 @@ static __attribute__((noinline, noclone)) SDPA_RECIPE_COLD void normalize_row_st
     for (uint32_t s = 0; s < sbh; s++) {
         // 1+2. Fused matmul_reduce + recip: sum × col_identity → recip → 1/sum in scratch
         {
-            MaybeDeviceZoneScopedN(profiling_enabled, "NORM_MATMUL_RECIP");
             constexpr uint32_t N = 1;
-#ifndef SDPA_RECIPE_FP32
             // The matmul unpack path does not read Float32 into a 16-bit dest: round the accumulated
             // denominator to BF16 through dest into the one-tile CB 8 first.
             constexpr uint32_t sum_bf16_cb = 8;
@@ -1048,9 +1003,6 @@ static __attribute__((noinline, noclone)) SDPA_RECIPE_COLD void normalize_row_st
             reconfig_data_format_srca(sum_bf16_cb);
             configure_single_tile_pack(scratch_cb);
             const uint32_t norm_sum_cb = sum_bf16_cb;
-#else
-            const uint32_t norm_sum_cb = cur_sum_cb;
-#endif
 #ifdef SDPA_RECIPE_LOFI
             // The no-MOP matmul the chunks already use: FAST's ring kernels then carry no MOP matmul code.
             recipe_mm_init(norm_sum_cb, col_identity_cb, false, N, 1, N);
@@ -1082,20 +1034,15 @@ static __attribute__((noinline, noclone)) SDPA_RECIPE_COLD void normalize_row_st
             tile_regs_release();
             CircularBuffer(scratch_cb).push_back(1);
 
-#ifndef SDPA_RECIPE_FP32
             CircularBuffer(norm_sum_cb).pop_front(1);
-#endif
             CircularBuffer(cur_sum_cb).pop_front(1);
         }
 
         // 3. Normalize: multiply output tiles by bcast_cols(1/sum)
         // Process in batches of up to dst_size tiles (DST capacity).
         {
-            MaybeDeviceZoneScopedN(profiling_enabled, "NORM_MUL_BCAST");
             constexpr uint32_t batch = (head_dim_t_ < dst_size) ? head_dim_t_ : dst_size;
-#ifndef SDPA_RECIPE_FP32
             reconfig_data_format_srca(cur_out_cb);
-#endif
             recipe_output_scale_init(cur_out_cb, scratch_cb);
             // Pack output to normalized_out_cb; old/new skips when it has the same format as scratch.
             sdpa_maybe_pack_reconfig_data_format<scratch_cb, normalized_out_cb>();
@@ -1121,9 +1068,7 @@ static __attribute__((noinline, noclone)) SDPA_RECIPE_COLD void normalize_row_st
 
             CircularBuffer(scratch_cb).pop_front(1);
             CircularBuffer(cur_out_cb).pop_front(head_dim_t_ * sdpa_out_stride);
-#ifndef SDPA_RECIPE_FP32
             reconfig_data_format_srca(normalized_out_cb);
-#endif
         }
     }
     // Restore pack format to scratch_cb (im_df = Float16_b) so that subsequent ops
@@ -1182,7 +1127,6 @@ static __attribute__((noinline, noclone)) void recipe_add_attn_mask(uint32_t row
  * Phase 2: Drain + QKT@V with SALAD corrections, streaming normalization on last K iter.
  */
 template <
-    bool profiling_enabled,
     uint32_t Sq_chunk_t,
     uint32_t Sk_chunk_t,
     uint32_t DHt,
@@ -1203,11 +1147,7 @@ template <
     uint32_t cb_normalized_out,
     bool independent_q_release = false>
 static SDPA_RECIPE_COLD bool sdpa_inner_loop_step(
-    AccumulatorHalf& prev,
-    AccumulatorHalf& cur,
-    bool is_last_iter,
-    bool is_first_iter,
-    bool release_q = false) {
+    AccumulatorHalf& prev, AccumulatorHalf& cur, bool is_last_iter, bool is_first_iter, bool release_q = false) {
     constexpr uint32_t KT_stride = Sk_chunk_t;
     constexpr uint32_t active_Sk = Sk_chunk_t;
     constexpr uint32_t actual_sbw = qkt_subblock_w;
@@ -1219,8 +1159,7 @@ static SDPA_RECIPE_COLD bool sdpa_inner_loop_step(
 #else
     // Row groups pair two query tile rows; an odd Q chunk ends with a single-row group.
     static_assert(
-        Sq_chunk_t >= 1 && Sq_chunk_t <= kRecipeMaxQTiles && kRecipeValidKTiles<Sk_chunk_t> && vDHt >= 1 &&
-        qkt_subblock_h == 2 && qktv_subblock_h == 2);
+        Sq_chunk_t >= 1 && Sq_chunk_t <= kRecipeMaxQTiles && vDHt >= 1 && qkt_subblock_h == 2 && qktv_subblock_h == 2);
 #endif
     const uint32_t kt_num_full_subblocks = active_Sk / actual_sbw;
     constexpr uint32_t dst_size = compute_kernel_lib::DEST_AUTO_LIMIT;
@@ -1339,7 +1278,6 @@ static SDPA_RECIPE_COLD bool sdpa_inner_loop_step(
     CircularBuffer(cb_kt_in).wait_front(DHt * KT_stride);
 
     for (uint32_t q_subblock = 0; q_subblock < q_num_subblocks; q_subblock++) {
-        MaybeDeviceZoneScopedN(profiling_enabled, "Softmax(Q@KT)");
         const uint32_t cur_qk_h = qk_rows(q_subblock);
         const uint32_t cur_qk_index = qk_index(q_subblock);
         CircularBuffer(cb_q_in).wait_front(q_wait_tiles - (qkt_subblock_h - cur_qk_h) * in0_block_w);
@@ -1382,7 +1320,7 @@ static SDPA_RECIPE_COLD bool sdpa_inner_loop_step(
 #ifndef SDPA_RECIPE_FP32
                     sdpa_maybe_reconfig_data_format<cb_kt_in, cb_qkt_im, cb_q_in, cb_qkt_im>();
 #endif
-                    sub_exp_block_bcast_cols<profiling_enabled, scale_fp32>(
+                    sub_exp_block_bcast_cols<scale_fp32>(
                         cb_qkt_im,
                         cur.max,
                         chunk_sum_cb(),
@@ -1407,7 +1345,6 @@ static SDPA_RECIPE_COLD bool sdpa_inner_loop_step(
 #endif
                 }
                 {
-                    MaybeDeviceZoneScopedN(profiling_enabled, "Q@KT MM+Pack");
                     blocked_matmul_and_pack<true, KT_stride, KT_stride>(
                         cb_q_in,
                         cb_kt_in,
@@ -1469,7 +1406,6 @@ static SDPA_RECIPE_COLD bool sdpa_inner_loop_step(
 
         // Max reduce: reads from cb_qkt_im at q_subblock position
         {
-            MaybeDeviceZoneScopedN(profiling_enabled, "Reduce max");
             CircularBuffer(cur.max).reserve_back(cur_qk_h);
             configure_single_tile_pack(cur.max);
             // Use reduce_trigger to enable early reduce start (before all matmul output is ready).
@@ -1537,9 +1473,7 @@ static SDPA_RECIPE_COLD bool sdpa_inner_loop_step(
         uint32_t qktv_in0_wait_tiles = qktv_in0_row_tiles;
 
 #ifdef SDPA_RECIPE_FP32
-        static_assert(
-            Sq_chunk_t >= 1 && Sq_chunk_t <= kRecipeMaxQTiles && kRecipeValidKTiles<Sk_chunk_t> && vDHt >= 1 &&
-            qktv_h == 1);
+        static_assert(qktv_h == 1);
         // FP32 recipes use single-row QK and PV groups, so odd Q chunks need no remainder group.
         uint32_t inplace_numerator = !is_first_iter;
         if (inplace_numerator) {
@@ -1712,23 +1646,17 @@ static SDPA_RECIPE_COLD bool sdpa_inner_loop_step(
 
         // q_subblock 0: drain last row's sub_exp in-place + first QKT@V matmul
         {
-            MaybeDeviceZoneScopedN(profiling_enabled, "Softmax(Q@KT)@V");
             const uint32_t matmul_inner = actual_sbw;
             const uint32_t drain_subblocks = kt_num_full_subblocks;
             // Group 0 is short only when the whole chunk is one single-row group (a one-tile
             // BF16 chunk); cb_qkt_im then holds one row, not qktv_h.
             constexpr uint32_t first_h = last_group == 0 ? last_h : qktv_h;
 
-            // sub_exp_block_bcast_cols softmaxes the last Q row in place, one column-subblock at a
-            // time. The PACK->UNPACK barrier after it makes those in-place pack writes visible to
-            // the V-matmul unpack; only needed when q_num_subblocks==1 (Phase 1's hold_wr_ptr
-            // didn't sync them).
-
             {
-                // Split-drain (common, materialized-V path): interleave each column-subblock's
-                // sub_exp with its partial V matmul; partial products accumulate across kt_sub via L1.
+                // Interleave each column-subblock's sub_exp with its partial V matmul; partial products
+                // accumulate across kt_sub via L1.
                 for (uint32_t kt_sub = 0; kt_sub < drain_subblocks; ++kt_sub) {
-                    sub_exp_block_bcast_cols<profiling_enabled, scale_fp32>(
+                    sub_exp_block_bcast_cols<scale_fp32>(
                         cb_qkt_im,
                         cur.max,
                         chunk_sum_cb(),
@@ -1740,9 +1668,7 @@ static SDPA_RECIPE_COLD bool sdpa_inner_loop_step(
                     if constexpr (q_num_subblocks == 1) {
                         // Phase 1 published no earlier row, so make the in-place exponential
                         // visible to the PV unpack explicitly.
-                        PACK((t6_semaphore_post<p_stall::STALL_PACK>(semaphore::PACK_DONE)));
-                        UNPACK((t6_semaphore_wait_on_zero<p_stall::STALL_SYNC>(semaphore::PACK_DONE)));
-                        UNPACK((t6_semaphore_get<>(semaphore::PACK_DONE)));
+                        recipe_pack_to_unpack_barrier();
                     }
 
                     if (kt_sub == 0) {
@@ -1757,7 +1683,6 @@ static SDPA_RECIPE_COLD bool sdpa_inner_loop_step(
                     REF_MAX_PV_BEGIN(out_cb, kt_sub > 0 || pv_accumulates(0));
 #endif
                     {
-                        MaybeDeviceZoneScopedN(profiling_enabled, "QKT@V MM+Pack");
                         uint32_t v_index_offset = 0;
                         sdpa_maybe_reconfig_data_format<cb_normalized_out, cb_v_in, cb_normalized_out, cb_qkt_im>(
                             out_cb, out_cb);
@@ -1767,21 +1692,13 @@ static SDPA_RECIPE_COLD bool sdpa_inner_loop_step(
                         recipe_mm_reinit(cb_qkt_im, cb_v_in, false, qktv_subblock_w, first_h, KT_stride);
                         configure_row_pack_width(out_cb, qktv_subblock_w);
                         for (uint32_t v_subblock = 0; v_subblock < qktv_v_num_subblocks; ++v_subblock) {
-#ifdef SDPA_RECIPE_FP32
                             const uint32_t pv_inner_offset = kt_sub * matmul_inner;
                             const uint32_t qktv_in1_index = pv_inner_offset * vDHt + v_index_offset;
-#else
-                            const uint32_t qktv_in1_index = kt_sub * matmul_inner * vDHt + v_index_offset;
-#endif
                             blocked_matmul_and_pack<false, vDHt, vDHt>(
                                 cb_qkt_im,
                                 cb_v_in,
                                 out_cb,
-#ifdef SDPA_RECIPE_FP32
                                 qktv_in0_index_offset + pv_inner_offset,
-#else
-                                qktv_in0_index_offset + kt_sub * matmul_inner,
-#endif
                                 qktv_in1_index,
                                 0,
 #ifdef SDPA_RECIPE_FP32
@@ -1823,14 +1740,8 @@ static SDPA_RECIPE_COLD bool sdpa_inner_loop_step(
             qktv_in0_wait_tiles += qktv_in0_row_tiles;
         }
 
-        // Pack→unpack barrier between Phase 2's q_sub=0 drain and the main V-matmul loop.
-        // The drain runs sub_exp in-place on cb_qkt_im at the last q_subblock's positions
-        // (PACK writes); the upcoming V matmul (UNPACK reads) targets those same positions.
-        // Without an explicit handshake, UNPACK can see stale L1 bytes — observed as wildly
-        // wrong V matmul output (rmse > 1) on small-DHt + small-chunk causal shapes.
-        PACK((t6_semaphore_post<p_stall::STALL_PACK>(semaphore::PACK_DONE)));
-        UNPACK((t6_semaphore_wait_on_zero<p_stall::STALL_SYNC>(semaphore::PACK_DONE)));
-        UNPACK((t6_semaphore_get<>(semaphore::PACK_DONE)));
+        // PACK wrote the drain row's P in place; UNPACK must see it before the PV matmul.
+        recipe_pack_to_unpack_barrier();
 #ifndef SDPA_RECIPE_FP32
         if constexpr (q_num_subblocks > 1) {
             if (!is_first_iter) {
@@ -1904,17 +1815,10 @@ static SDPA_RECIPE_COLD bool sdpa_inner_loop_step(
 
 #endif
         auto normalize_row = [&](uint32_t& pushed, uint32_t sbh) {
-            MaybeDeviceZoneScopedN(profiling_enabled, "ROW_NORM");
             fold_first(sbh);
             CircularBuffer(cur.sum).push_back(sbh);
             CircularBuffer(out_cb).push_back(sbh * vDHt * sdpa_out_stride);
-            normalize_row_streaming<
-                profiling_enabled,
-                vDHt,
-                dst_size,
-                cb_col_identity,
-                cb_recip_scratch,
-                cb_normalized_out>(
+            normalize_row_streaming<vDHt, dst_size, cb_col_identity, cb_recip_scratch, cb_normalized_out>(
                 cur.sum, out_cb, sbh);
 
             pushed++;
@@ -1942,7 +1846,6 @@ static SDPA_RECIPE_COLD bool sdpa_inner_loop_step(
             }
             PACK((llk_pack_reconfig_l1_acc(1)));
             {
-                MaybeDeviceZoneScopedN(profiling_enabled, "S_CORR_FUSED");
                 // ob_q_subblock=0: prev.out and cb_exp_max_diff are popped row-by-row (read from front).
                 // sum_q_subblock=salad_row: prev.sum uses cumulative indexing (not popped per-row).
                 salad_correct_fused<qktv_h, vDHt, dst_size>(
@@ -1972,7 +1875,6 @@ static SDPA_RECIPE_COLD bool sdpa_inner_loop_step(
         // leaves ADDR_MOD_7 at a DST increment of 4, and the FP32 correction does not reset it itself.
         exp_packthread_tile_init<EXP_APPROX_MODE>();
         for (uint32_t q_subblock = 1; q_subblock < total_v_row_groups; ++q_subblock) {
-            MaybeDeviceZoneScopedN(profiling_enabled, "Softmax(Q@KT)@V");
             uint32_t cur_h = pv_rows(q_subblock);
             recipe_opaque_tail_rows<q_tail_row>(cur_h);
             uint32_t salad_row = q_subblock - 1;
@@ -1984,10 +1886,10 @@ static SDPA_RECIPE_COLD bool sdpa_inner_loop_step(
                 CircularBuffer(cb_exp_max_diff).reserve_back(qktv_h);
 #ifdef SDPA_RECIPE_FP32
                 identity_corrections[salad_row] =
-                    inplace_numerator || sub_exp_first_col_blocks<profiling_enabled, scale_fp32>(
-                                             prev.max, cur.max, cb_exp_max_diff, salad_row, qktv_h);
+                    inplace_numerator ||
+                    sub_exp_first_col_blocks<scale_fp32>(prev.max, cur.max, cb_exp_max_diff, salad_row, qktv_h);
 #else
-                identity_corrections[salad_row] = sub_exp_first_col_blocks<profiling_enabled, scale_fp32>(
+                identity_corrections[salad_row] = sub_exp_first_col_blocks<scale_fp32>(
                     prev.max, cur.max, cb_exp_max_diff, salad_row, qktv_h, sdpa_identity_flags[salad_row]);
 #endif
                 CircularBuffer(cb_exp_max_diff).push_back(qktv_h);
@@ -2006,7 +1908,6 @@ static SDPA_RECIPE_COLD bool sdpa_inner_loop_step(
 #ifndef SDPA_RECIPE_FP32
                 REF_MAX_PV_BEGIN(out_cb, pv_accumulates(q_subblock));
 #endif
-                MaybeDeviceZoneScopedN(profiling_enabled, "QKT@V MM+Pack");
                 uint32_t v_index_offset = 0;
                 sdpa_maybe_reconfig_data_format<cb_normalized_out, cb_v_in, cb_normalized_out, cb_qkt_im>(
                     out_cb, out_cb);
@@ -2053,10 +1954,10 @@ static SDPA_RECIPE_COLD bool sdpa_inner_loop_step(
                     CircularBuffer(cb_exp_max_diff).reserve_back(drain_h);
 #ifdef SDPA_RECIPE_FP32
                     identity_corrections[drain_salad_row] =
-                        inplace_numerator || sub_exp_first_col_blocks<profiling_enabled, scale_fp32>(
+                        inplace_numerator || sub_exp_first_col_blocks<scale_fp32>(
                                                  prev.max, cur.max, cb_exp_max_diff, drain_salad_row, drain_h);
 #else
-                    identity_corrections[drain_salad_row] = sub_exp_first_col_blocks<profiling_enabled, scale_fp32>(
+                    identity_corrections[drain_salad_row] = sub_exp_first_col_blocks<scale_fp32>(
                         prev.max,
                         cur.max,
                         cb_exp_max_diff,
@@ -2120,10 +2021,10 @@ static SDPA_RECIPE_COLD bool sdpa_inner_loop_step(
                     CircularBuffer(cb_exp_max_diff).reserve_back(drain_h);
 #ifdef SDPA_RECIPE_FP32
                     identity_corrections[0] =
-                        inplace_numerator || sub_exp_first_col_blocks<profiling_enabled, scale_fp32>(
-                                                 prev.max, cur.max, cb_exp_max_diff, pv_index(0), drain_h);
+                        inplace_numerator ||
+                        sub_exp_first_col_blocks<scale_fp32>(prev.max, cur.max, cb_exp_max_diff, pv_index(0), drain_h);
 #else
-                    identity_corrections[0] = sub_exp_first_col_blocks<profiling_enabled, scale_fp32>(
+                    identity_corrections[0] = sub_exp_first_col_blocks<scale_fp32>(
                         prev.max, cur.max, cb_exp_max_diff, pv_index(0), drain_h, sdpa_identity_flags[0]);
 #endif
                     CircularBuffer(cb_exp_max_diff).push_back(drain_h);
@@ -2152,8 +2053,6 @@ static SDPA_RECIPE_COLD bool sdpa_inner_loop_step(
                 }
             }
         }
-
-        // All rows pushed individually — no bulk push needed.
 
         CircularBuffer(cb_v_in).pop_front(KT_stride * vDHt);
         CircularBuffer(cb_qkt_im).pop_front(Sq_chunk_t * KT_stride);
@@ -2185,9 +2084,7 @@ template <
     uint32_t cb_normalized_out,
     bool independent_q_release = false>
 ALWI void sdpa_segment_v2(RecipeAccumulatorState& state, uint32_t k_num_chunks, bool final_segment, bool release_q) {
-    static_assert(
-        Sq_chunk_t >= 1 && Sq_chunk_t <= kRecipeMaxQTiles && kRecipeValidKTiles<Sk_chunk_t> && DHt == vDHt &&
-        DHt >= 1);
+    static_assert(Sq_chunk_t >= 1 && Sq_chunk_t <= kRecipeMaxQTiles && DHt == vDHt && DHt >= 1);
     ASSERT(k_num_chunks > 0);
     auto& prev = state.prev;
     auto& cur = state.cur;
@@ -2204,7 +2101,6 @@ ALWI void sdpa_segment_v2(RecipeAccumulatorState& state, uint32_t k_num_chunks, 
         const bool last_local = k_chunk == k_num_chunks - 1;
         const bool is_last = final_segment && last_local;
         [[maybe_unused]] const bool fused = sdpa_inner_loop_step<
-            false,
             Sq_chunk_t,
             Sk_chunk_t,
             DHt,
@@ -2223,12 +2119,7 @@ ALWI void sdpa_segment_v2(RecipeAccumulatorState& state, uint32_t k_num_chunks, 
             cb_col_identity,
             cb_recip_scratch,
             cb_normalized_out,
-            independent_q_release>(
-            prev,
-            cur,
-            is_last,
-            is_first,
-            release_q && last_local);
+            independent_q_release>(prev, cur, is_last, is_first, release_q && last_local);
 #ifdef SDPA_RECIPE_FP32
         // prev.out and cb_exp_max_diff are already popped row-by-row inside salad_correct_row.
         if (!is_first) {

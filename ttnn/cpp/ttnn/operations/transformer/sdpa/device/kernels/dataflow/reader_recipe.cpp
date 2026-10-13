@@ -1,8 +1,8 @@
 // SPDX-FileCopyrightText: © 2026 Tenstorrent USA, Inc.
 // SPDX-License-Identifier: Apache-2.0
 
-// Private noncausal, per-head KV unicast-chain reader. Compute and writer are
-// unchanged. Every core reads its own Q; only rank zero reads K/V from DRAM.
+// Private noncausal, per-head KV unicast-chain reader. Every core reads its own Q;
+// only rank zero reads K/V from DRAM.
 //
 // CTA: [q_tiles, k_chunks, q_chunks_per_head, primary/joint Q rows, primary/joint KV rows, accessors...]
 // Runtime args:
@@ -33,10 +33,8 @@
 #include "sequence_accessor.hpp"
 #include "tile_padding.hpp"
 
-// DRAM read-barrier interval for the chain head's K/V fetch. Barriering every two
-// tiles serialized the fetch and left multi-core chains 12-30% behind legacy SDPA;
-// 16 tiles keeps enough reads in flight (measured 10x8192x8192 D128, full grid:
-// legacy-numerics recipe Q256 2.16 -> 1.78 ms, Q128 4.12 -> 2.45 ms) and is neutral on 1-4 cores.
+// DRAM read barrier every 16 K/V tiles keeps enough reads in flight for the chain head (every 2 tiles serialized
+// the fetch).
 constexpr uint32_t reader_barrier_tiles = 16;
 constexpr uint32_t kv_tiles = SDPA_K_CHUNK_TILES * SDPA_RECIPE_DHT;
 
@@ -251,8 +249,6 @@ void kernel_main() {
                 read_kv_from_dram<kbytes, true>(noc, k, first_kv_page, kptr);
             }
             if (forward) {
-                // Production ChainLink waits for downstream reservation, sends
-                // to (next_x,next_y,kptr), flushes its source, then relays valid.
                 link.forward(noc, kptr, kv_tiles, kbytes);
             }
             // Publish on every rank only AFTER forwarding has released its source.
