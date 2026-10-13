@@ -403,6 +403,10 @@ public:
         // The bound pipe's num_credit_lanes(). On a sender-only slot it can differ from the slot's.
         uint32_t num_credit_lanes = 1;
         bool is_bound() const { return pipe_identity != experimental::PrefetcherPipeIdentity{0}; }
+        // The slot's kernel runs on this core, but none of the slot's pipes has it as sender or receiver. The record
+        // copies a participant's so the slot's config is the same on every core of the kernel; the kernel must not
+        // construct the pipe here.
+        bool extra_node = false;
     };
 
     // Program-wide PrefetcherPipe slot (dense [0, num) id space, one per kernel accessor, i.e. per
@@ -411,7 +415,7 @@ public:
     // finalize / dispatch never need a live pipe; the per-core PrefetcherPipeParticipant records
     // are its device-side entries, filled when a pipe binds.
     struct PrefetcherPipeSlot {
-        CoreRangeSet cores;           // every core the slot is present on in this program
+        CoreRangeSet cores;           // every core the slot is present on in this program, extra nodes included
         CoreRangeSet receiver_cores;  // subset of `cores` where this slot's kernel is a pipe receiver
         uint32_t ring_size = 0;
         uint32_t entry_size = 0;
@@ -491,6 +495,10 @@ public:
         PrefetcherPipeBindPreflight& preflight) const;
     void commit_prefetcher_pipe_slot_bind(
         uint8_t prefetcher_pipe_id, const CoreRangeSet& cores, const experimental::PrefetcherPipeImpl& prefetcher_pipe);
+    // Once every pipe of slot `prefetcher_pipe_id` is bound, give the slot's extra nodes (its cores that are none of
+    // its pipes' senders or receivers) the record of its first pipe by parameter name, so the slot's config is the
+    // same on every core and dispatch can multicast it.
+    void bind_prefetcher_pipe_extra_nodes(uint8_t prefetcher_pipe_id);
 
     // The slot whose relay DFB is `relay_dfb_host_id`, if that DFB relays a pipe.
     std::optional<uint8_t> get_prefetcher_pipe_id_for_relay(uint32_t relay_dfb_host_id) const;
