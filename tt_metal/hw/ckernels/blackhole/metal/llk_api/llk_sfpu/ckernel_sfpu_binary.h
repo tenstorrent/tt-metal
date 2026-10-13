@@ -244,6 +244,9 @@ inline void calculate_sfpu_binary_mul(
     const std::uint32_t dst_index_in0, const std::uint32_t dst_index_in1, const std::uint32_t dst_index_out) {
     // size of each tile in Dest is 64/SFP_DESTREG_STRIDE = 32 rows when using sfpi to load/store
     constexpr std::uint32_t dst_tile_size_sfpi = 32;
+    const sfpi::vUInt rne_bias = bf16_rne_bias();
+    // The store steps Dest; an op that reads ADDR_MOD_6 after this one runs its own init first.
+    addr_mod_t{.srca = {.incr = 0}, .srcb = {.incr = 0}, .dest = {.incr = 2}}.set(ADDR_MOD_6);
 #pragma GCC unroll 8
     for (int d = 0; d < ITERATIONS; d++) {
         sfpi::vFloat in0 = sfpi::dst_reg[dst_index_in0 * dst_tile_size_sfpi];
@@ -252,17 +255,17 @@ inline void calculate_sfpu_binary_mul(
         sfpi::vFloat result = in0 * in1;
 
         if constexpr (!is_fp32_dest_acc_en) {
-            // Software RNE; where either input is +0 the sum stays 0x7fff, which the mask turns into +0,
-            // matching the FPU's 0 * x = 0 for bfloat16.
+            // float32_to_bf16_rne_for_store's sum, where either input is +0 left at 0x7fff, whose stored high half is +0:
+            // the FPU's 0 * x = 0.
             sfpi::vUInt bits = sfpi::as<sfpi::vUInt>(result);
-            sfpi::vUInt rounded = 0x7fffU;
-            v_if(in0 != 0 && in1 != 0) { rounded += bits + ((bits >> 16) & 1); }
+            sfpi::vUInt lsb = (bits << 15) >> 31;
+            sfpi::vUInt rounded = rne_bias;
+            v_if(in0 != 0 && in1 != 0) { rounded += bits + lsb; }
             v_endif;
-            result = sfpi::as<sfpi::vFloat>(rounded & 0xFFFF0000U);
+            result = sfpi::as<sfpi::vFloat>(rounded);
         }
 
-        sfpi::dst_reg[dst_index_out * dst_tile_size_sfpi] = result;
-        sfpi::dst_reg++;
+        sfpi::dst_reg[dst_index_out * dst_tile_size_sfpi].mode(ADDR_MOD_6) = result;
     }
 }
 
