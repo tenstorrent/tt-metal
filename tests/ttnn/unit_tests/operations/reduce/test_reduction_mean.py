@@ -200,7 +200,7 @@ def test_mean_multi_axis_bf16(device):
     torch_output = torch.mean(torch_input.double(), dim=[1, 3], keepdim=True).to(torch.bfloat16)
 
     compute_kernel_config = ttnn.init_device_compute_kernel_config(
-        device.arch(), math_fidelity=ttnn.MathFidelity.HiFi4, fp32_dest_acc_en=True
+        device.arch(), math_fidelity=ttnn.MathFidelity.HiFi3, fp32_dest_acc_en=True
     )
     input_tensor = ttnn.from_torch(torch_input, layout=ttnn.TILE_LAYOUT, device=device)
     output_tensor = ttnn.mean(input_tensor, dim=[1, 3], keepdim=True, compute_kernel_config=compute_kernel_config)
