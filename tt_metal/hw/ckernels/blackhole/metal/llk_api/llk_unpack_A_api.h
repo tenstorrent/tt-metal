@@ -290,6 +290,6 @@ inline void llk_unpack_A_transpose_block(
         StateDiscard<std::uint32_t>(ntiles)));
 
     WAYPOINT("UPAW");
-    _llk_unpack_A_transpose_block_(address, ntiles, tile_stride);
+    _llk_unpack_A_transpose_block_(address, ntiles, tile_stride, unpack_src_format[operand_id]);
     WAYPOINT("UPAD");
 }

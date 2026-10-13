@@ -66,7 +66,7 @@ void run_kernel(RUNTIME_PARAMETERS params)
             for (std::uint32_t block_start = 0; block_start < TILE_CNT; block_start += MAX_TILES_DEST)
             {
                 _llk_unpack_A_transpose_block_(
-                    PERF_ADDRESS(PERF_INPUT_A, 0) + block_start * tile_stride, std::min(TILE_CNT - block_start, MAX_TILES_DEST), tile_stride);
+                    PERF_ADDRESS(PERF_INPUT_A, 0) + block_start * tile_stride, std::min(TILE_CNT - block_start, MAX_TILES_DEST), tile_stride, formats.unpack_A_src);
             }
 #else
             for (std::uint32_t tile = 0; tile < TILE_CNT; tile++)

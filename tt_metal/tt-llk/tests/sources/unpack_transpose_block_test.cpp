@@ -41,7 +41,7 @@ void run_kernel(RUNTIME_PARAMETERS params)
         const std::uint32_t first = block * num_tiles_in_block;
         if (UNPACK_FORM == 1 || block % 2 == 0)
         {
-            _llk_unpack_A_transpose_block_(L1_ADDRESS(params.buffer_A[first]), num_tiles_in_block, tile_stride);
+            _llk_unpack_A_transpose_block_(L1_ADDRESS(params.buffer_A[first]), num_tiles_in_block, tile_stride, formats.unpack_A_src);
         }
         else
         {
