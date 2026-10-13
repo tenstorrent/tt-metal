@@ -34,7 +34,8 @@ protected:
     const std::string kernel_path = "tests/tt_metal/tt_metal/test_kernels/dataflow/noc_atomic_ops_probe.cpp";
     uint32_t l1_unreserved_base{0};
     bool is_quasar{false};
-    // NOC API v1 has no noc_fast_atomic_cas4 (semaphore_dm_impl.h gates its CAS lock on it too).
+    // NOC API v1 has no noc_fast_atomic_cas4 (semaphore_dm_impl.h gates its CAS lock on it too). An ATT map
+    // selects V3 whatever the configured version.
     bool has_noc_cas4{false};
     std::shared_ptr<distributed::MeshDevice> mesh_device_;
     uint32_t num_dms_{0};
@@ -49,7 +50,9 @@ protected:
         num_dms_ = MetalContext::instance().hal().get_processor_types_count(HalProgrammableCoreType::TENSIX, 0);
         l1_unreserved_base = mesh_device_->allocator()->get_base_allocator_addr(HalMemType::L1);
         is_quasar = arch_ == tt::ARCH::QUASAR;
-        has_noc_cas4 = is_quasar && MetalContext::instance().rtoptions().get_quasar_noc_api_version() >= 2;
+        const auto& rtoptions = MetalContext::instance().rtoptions();
+        has_noc_cas4 =
+            is_quasar && (rtoptions.get_noc_att_map().has_value() || rtoptions.get_quasar_noc_api_version() >= 2);
         if (is_quasar) {
             num_dms_ = std::min(num_dms_, 6u);
         }
