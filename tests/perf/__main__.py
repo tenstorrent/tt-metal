@@ -82,9 +82,10 @@ def cmd_report(args) -> int:
     base = session.Record.load(args.base)
     baseline = Golden(
         suite=run.suite,
-        metrics=base.metrics,
         environments={
-            run.environment: Environment(repetitions=base.repetitions, context=base.context, cases=base.cases)
+            run.environment: Environment(
+                metrics=base.metrics, repetitions=base.repetitions, context=base.context, cases=base.cases
+            )
         },
     )
     comparison = cmp.compare(
