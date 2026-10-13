@@ -410,6 +410,7 @@ class Orchestrator:
         # promotes the durable ones when the run ends.
         return [
             f"{b}/known_issues.md",
+            f"{b}/known_issues_detail.md",
             f"{b}/repo_map.md",
             f"{b}/BREADCRUMBS.md",
             f"{b}/findings.yaml",

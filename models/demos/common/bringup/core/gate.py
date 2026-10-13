@@ -208,6 +208,7 @@ def stage_paths(spec: Spec, ledger: Ledger, task: dict) -> list[str]:
         "approvals.yaml",
         "findings.yaml",
         "known_issues.md",  # the model's own lessons and repo pointers (agents write these, not the shared files)
+        "known_issues_detail.md",
         "repo_map.md",
         "__init__.py",
         "results/block_graphs.json",

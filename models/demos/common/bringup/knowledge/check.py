@@ -27,6 +27,9 @@ FIELDS = ("Symptom:", "Cause:", "Fix:", "Found:")
 ANCHORS = ("Applies to:", "Seen at:")
 # Every agent step reads the shared file in full: one lesson is one short bullet (detail goes to the model's file).
 SHARED_MAX_CHARS = 800
+# A model's agents read its file in full too: one short bullet per lesson, the full text in known_issues_detail.md
+# (a `## <title>` section, pointed at by `Detail: known_issues_detail.md.` in the bullet).
+MODEL_MAX_CHARS = 600
 
 
 def entries(text: str) -> dict[str, list[str]]:
@@ -61,6 +64,23 @@ def check_model_known_issues(path: Path) -> tuple[list[str], int]:
         return [], 0
     items = [line for line in path.read_text().splitlines() if line.startswith("- ")]
     errs = [f"entry {it[:60]!r} lacks {miss}" for it in items if (miss := [f for f in FIELDS if f not in it])]
+    errs += [
+        f"entry {it[:60]!r} is {len(it)} chars (max {MODEL_MAX_CHARS}; put the rest in known_issues_detail.md)"
+        for it in items
+        if len(it) > MODEL_MAX_CHARS
+    ]
+    detail = path.with_name("known_issues_detail.md")
+    sections = (
+        {s.strip().rstrip(".") for s in re.findall(r"^## (.+)$", detail.read_text(), re.M)}
+        if detail.exists()
+        else set()
+    )
+    for it in items:
+        if "Detail: known_issues_detail.md" in it:
+            m = re.match(r"- \*\*(.+?)\*\*", it)
+            title = m.group(1).strip().rstrip(".") if m else ""
+            if title not in sections:
+                errs.append(f"entry {it[:60]!r} points at known_issues_detail.md, which has no '## {title}' section")
     return errs, len(items)
 
 
