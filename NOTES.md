@@ -67,3 +67,6 @@ for layers 0/49, steps 1/4; device-lint; submit via blx01 broker (t288/blx01-sub
 - Read: if (a) and (b) hold at all four calls, our SLA path is faithful to LightX2V's selection math and the garbage
   is not a device bug (then check LightX2V's real sparse kernel semantics: sage2 SLA, block sizes, k rounding).
   If (b) drops at L49/step 4: stale or mis-staged selection inputs; if (a) drops: vsa_sdpa kernel at that call.
+- chain479 detached on g15blx02 at 12:23 PDT (pid in ttp detach), files in /home/smarton/fasth3/tt-metal/tt-project/state/runs/1810:
+  chain479.log, chain479.done (exit code: 0 all dumps, 10 build failed, 15 collect failed, 11 submit), replay479.txt.
+  Next: read replay479.txt, write results here, then bisect/fix (step 4) or stop per the spec's stop condition.
