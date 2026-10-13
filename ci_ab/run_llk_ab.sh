@@ -23,13 +23,13 @@ echo "== sfpi $SF: $($SF/compiler/bin/riscv-tt-elf-g++ --version | head -1)"
 $SF/compiler/bin/riscv-tt-elf-g++ --version | grep -q '7\.86\.0' || { echo "== wrong sfpi, stopping"; exit 1; }
 P="tt_metal/tt-llk tt_metal/hw tt_metal/hostdevcommon tt_metal/tools/profiler tt_metal/sfpi-version ttnn/cpp/ttnn/operations/experimental"
 NP=$(( $(nproc) / 2 )); (( NP > 16 )) && NP=16; (( NP < 4 )) && NP=4; NP=${RA_NP:-$NP}
-for L in $(awk '{print $2; print $3}' $S/lines.txt | sort -u); do
+for L in $(awk '{print $2; print $3}' $S/${LINES:-lines.txt} | sort -u); do
   D=$SL/$L; mkdir -p $D $SL/builds/$L
   tar -C $R -cf - $P | tar -C $D -xf -
   (cd $S/variants/$L/tree && find . -type f) | while read -r f; do mkdir -p "$(dirname "$D/$f")"; cp "$S/variants/$L/tree/$f" "$D/$f"; done
   ln -sfn $SF $D/tt_metal/tt-llk/tests/sfpi; rm -rf $D/tt_metal/tt-llk/perf_data; ln -sfn $SL/perf_data $D/tt_metal/tt-llk/perf_data
-  rts=$(awk -v l=$L '$2==l || $3==l {print $4}' $S/lines.txt | tr ',' '\n' | sort -u | paste -sd,)
-  cat $(awk -v l=$L -v s=$S '$2==l || $3==l {print s"/ids/"$1".txt"}' $S/lines.txt) | sort -u > $SL/ids_$L.txt
+  rts=$(awk -v l=$L '$2==l || $3==l {print $4}' $S/${LINES:-lines.txt} | tr ',' '\n' | sort -u | paste -sd,)
+  cat $(awk -v l=$L -v s=$S '$2==l || $3==l {print s"/ids/"$1".txt"}' $S/${LINES:-lines.txt}) | sort -u > $SL/ids_$L.txt
   CF=(); [[ $L == *c ]] && CF=(--dump-perf-counters)
   ( cd $D/tt_metal/tt-llk/tests/python_tests; mapfile -t N < $SL/ids_$L.txt
     env CHIP_ARCH=blackhole LLK_HOME=$D/tt_metal/tt-llk TT_LLK_DISABLE_ASSERTS=1 TMPDIR=$SL/builds/$L LLK_PERF_L1_MUX_GROUP=0 LLK_PERF_RUN_TYPES=$rts \
@@ -38,14 +38,14 @@ for L in $(awk '{print $2; print $3}' $S/lines.txt | sort -u); do
   echo "== built $L ($rts, $(wc -l < $SL/ids_$L.txt) nodes): $(grep -aE '[0-9]+ (passed|failed|error)' $SL/prod_$L.log | tail -1) $(date -u +%T)"
   grep -a -m3 'error:' $SL/prod_$L.log
 done
-for L in $(awk '{print $2; print $3}' $S/lines.txt | sort -u); do $PY $S/tools/ra_imgs.py $SL/builds/$L $SL/out/$L.hash > $SL/out/img_$L.tsv 2>/dev/null; done
+for L in $(awk '{print $2; print $3}' $S/${LINES:-lines.txt} | sort -u); do $PY $S/tools/ra_imgs.py $SL/builds/$L $SL/out/$L.hash > $SL/out/img_$L.tsv 2>/dev/null; done
 while read -r tag A B rts; do
   [[ -z $tag || $tag == \#* ]] && continue
   nd=$(join -t $'\t' <(awk -F'\t' '{print $1"|"$2"\t"$3}' $SL/out/img_$A.tsv | sort) <(awk -F'\t' '{print $1"|"$2"\t"$3}' $SL/out/img_$B.tsv | sort) | awk -F'\t' '$2!=$3' | wc -l)
   ns=$(join -t $'\t' <(awk -F'\t' '{print $1"|"$2"\t"$3}' $SL/out/img_$A.tsv | sort) <(awk -F'\t' '{print $1"|"$2"\t"$3}' $SL/out/img_$B.tsv | sort) | awk -F'\t' '$2==$3' | wc -l)
   echo "== guard $tag $A against $B: $nd node and run type images differ, $ns identical"
   [[ $A != $B && $nd == 0 ]] && { echo "== VOID A/B in $tag: $A and $B build the same images, stopping"; exit 1; }
-done < $S/lines.txt
+done < $S/${LINES:-lines.txt}
 run() { # run <tag> <side> <k> <label> <rts>
   local tag=$1 s=$2 k=$3 L=$4 rts=$5 D=$SL/$4 log=$SL/out/run_$1_$2$3.log
   local CF=(); [[ $L == *c ]] && CF=(--dump-perf-counters)
@@ -61,8 +61,8 @@ while read -r tag A B rts; do
   [[ -z $tag || $tag == \#* || $stop == 1 ]] && continue
   echo "== $tag ($A against $B, $rts) $(date -u +%T)"; k=0
   for b in 1 2; do for s in A B B A; do k=$((k+1)); L=$A; [[ $s == B ]] && L=$B; run $tag $s $k $L $rts || { stop=1; break 2; }; done; done
-done < $S/lines.txt
-for L in $(awk '{print $2; print $3}' $S/lines.txt | sort -u); do $PY $S/tools/ra_imgs.py $SL/builds/$L $SL/out/$L.hash > $SL/out/img_$L.tsv 2>/dev/null; done
+done < $S/${LINES:-lines.txt}
+for L in $(awk '{print $2; print $3}' $S/${LINES:-lines.txt} | sort -u); do $PY $S/tools/ra_imgs.py $SL/builds/$L $SL/out/$L.hash > $SL/out/img_$L.tsv 2>/dev/null; done
 tar -czf $SL/ra_out.tgz -C $SL perf_data/runs out
 echo "== results $(stat -c %s $SL/ra_out.tgz) bytes"; echo "=====RA_BEGIN====="; base64 -w 76 $SL/ra_out.tgz; echo "=====RA_END====="
 exit 0
