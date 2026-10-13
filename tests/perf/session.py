@@ -43,6 +43,8 @@ class Record:
     retry: dict[str, dict[str, float]] = field(default_factory=dict)
     # Number of out-of-band cases that were not re-run because too much of the suite moved.
     retry_skipped: int = 0
+    # Why the re-run failed, if it did. The first run's statuses then stand.
+    retry_error: str | None = None
     case_filter: str | None = None
 
     @property
@@ -94,6 +96,8 @@ def execute(suite: Suite, environment: str, case_filter: str | None = None) -> R
         errors=raw.errors,
         case_filter=case_filter,
     )
+    # Saved before any re-run so a crash there cannot lose the first run's results.
+    record.save(out_dir / "measurements.json")
     _, comparison = evaluate(record, suite)
     # Report-only suites never fail on these statuses, so a re-run would only cost CI time.
     retry_cases = []
@@ -106,8 +110,12 @@ def execute(suite: Suite, environment: str, case_filter: str | None = None) -> R
     elif retry_cases:
         print(f"Re-running {len(retry_cases)} cases outside tolerance to rule out noise", flush=True)
         retry_filter = runner.exact_filter(retry_cases) if suite.kind == "google_benchmark" else None
-        retry_raw = contract.read(runner.run(suite, environment, out_dir, tag="retry", case_filter=retry_filter))
-        record.retry = {case: v for case, v in contract.aggregate(retry_raw).items() if case in retry_cases}
+        try:
+            retry_raw = contract.read(runner.run(suite, environment, out_dir, tag="retry", case_filter=retry_filter))
+            record.retry = {case: v for case, v in contract.aggregate(retry_raw).items() if case in retry_cases}
+        except (runner.RunError, contract.ContractError) as error:
+            print(f"Re-run failed, keeping the first run's statuses: {error}", flush=True)
+            record.retry_error = str(error)
     record.save(out_dir / "measurements.json")
     return record
 
@@ -147,14 +155,19 @@ def failures(record: Record, suite: Suite, golden: golden_io.Golden, comparison:
 
 def publish(record: Record, suite: Suite, golden: golden_io.Golden, comparison: cmp.Comparison, show_all: bool):
     env = golden.environments.get(record.environment)
+    notes = []
+    if record.retry_skipped:
+        notes.append(
+            f"Not re-run: {record.retry_skipped} of {len(record.cases)} cases moved, so the shift is systematic"
+        )
+    if record.retry_error:
+        notes.append(f"Re-run failed, so statuses are from the first run only: {record.retry_error}")
     kwargs = dict(
         context=record.context,
         golden_context=env.context if env else {},
         enforce=suite.policy.enforce,
         show_all=show_all,
-        notes=[f"Not re-run: {record.retry_skipped} of {len(record.cases)} cases moved, so the shift is systematic"]
-        if record.retry_skipped
-        else [],
+        notes=notes,
     )
     units = {name: spec.unit for name, spec in record.metrics.items()}
     title = f"{record.suite} / {record.environment}"
