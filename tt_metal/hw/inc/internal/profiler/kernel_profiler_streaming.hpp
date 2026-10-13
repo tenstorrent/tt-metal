@@ -580,6 +580,8 @@ struct stackCanaryScope {};  // FW builds and active ERISC: no kernel stack floo
 
 #define DeviceZoneScopedNC(name, color) (void(name), void(sizeof(color)))
 
+#define DeviceZoneScopedWith(...) (void(sizeof(__VA_ARGS__)))
+
 #define DeviceZoneScopedNIf(name, active) (void(name), void(sizeof(active)))
 
 #define DeviceZoneScopedSumN1(name) (void(name))
