@@ -17,6 +17,7 @@
 #include "sdpa.hpp"
 #include "sparse_sdpa.hpp"
 #include "sparse_sdpa_msa.hpp"
+#include "sol_attn.hpp"
 #include "ttnn-nanobind/bind_function.hpp"
 #include "ttnn/operations/ccl/ccl_host_types.hpp"
 #include "ttnn/operations/ccl/ccl_common.hpp"
@@ -1106,5 +1107,30 @@ void bind_sdpa(nb::module_& mod) {
         nb::arg("compute_kernel_config") = nb::none(),
         nb::arg("page_table") = nb::none(),
         nb::arg("chunk_start_idx") = nb::none());
+
+    ttnn::bind_function<"sol_attn", "ttnn.transformer.">(
+        mod,
+        R"doc(
+        Sol-Attn. Currently an exact clone of scaled_dot_product_attention, forked so chunk skipping,
+        a block mask and the pooled-summary residual can be added against a known-good baseline.
+        )doc",
+        &ttnn::transformer::sol_attn,
+        nb::arg("input_tensor_q").noconvert(),
+        nb::arg("input_tensor_k").noconvert(),
+        nb::arg("input_tensor_v").noconvert(),
+        nb::kw_only(),
+        nb::arg("attn_mask") = nb::none(),
+        nb::arg("is_causal").noconvert() = true,
+        nb::arg("scale") = nb::none(),
+        nb::arg("sliding_window_size") = nb::none(),
+        nb::arg("memory_config") = nb::none(),
+        nb::arg("program_config") = nb::none(),
+        nb::arg("compute_kernel_config") = nb::none(),
+        nb::arg("attention_sink") = nb::none(),
+        nb::arg("cu_window_seqlens") = nb::none(),
+        nb::arg("windowed_q_token_offset") = 0,
+        nb::arg("windowed_q_token_offset_tensor") = nb::none(),
+        nb::arg("chunk_keep_every") = 0,
+        nb::arg("block_mask") = nb::none());
 }
 }  // namespace ttnn::operations::transformer
