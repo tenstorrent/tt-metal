@@ -384,8 +384,9 @@ def test_no_bcast_mixed_strategy_and_grid(device, op_name, a_mem, b_mem, out_mem
 # shape (last param): _BIG_SHAPE (1280 tiles) for the single-sharded-input cases, _BIG_SHAPE_2SHARD (1024
 # tiles) for the two-sharded-input cases so both input shards co-reside in one Quasar L1 bank (see the
 # big-shape config block above). Metal 2.0 routing: an interleaved output means not-all-sharded, so every
-# operand (any sharded input included) is NoC-read/written -- nothing is borrowed. The native factory
-# borrows a sharded input in place and runs on its shard grid instead.
+# operand (any sharded input included) is NoC-read/written -- nothing is borrowed. The native factory borrows
+# nothing either: each input shard sits on 4 clusters, fewer than the 32 that the legacy binary_ng splits the
+# tiles over, so no shard is an anchor.
 _MIXED_INTERLEAVED_OUT_CASES = [
     pytest.param(_BIG_HEIGHT, _I, _I, _BIG_SHAPE, id="H.I.I"),  # S.I.I: one height input
     pytest.param(_I, _BIG_HEIGHT, _I, _BIG_SHAPE, id="I.H.I"),  # I.S.I: one height input
