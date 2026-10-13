@@ -60,8 +60,8 @@ constexpr unsigned shft2_r(unsigned x) {
         case 0: return 0x0e; case 1: return 0x0f;
         case 2: return 0x0e | bit(c(x));
         case 3: case 4: return bit(c(x));
-        case 5: return bit(b(x)) | bit(c(x));
-        case 6: return bit(b(x)); default: return 0xff;
+        case 5: return bit(d(x)) | bit(c(x));
+        case 6: return bit(d(x)); default: return 0xff;
     }
 }
 constexpr unsigned shft2_w(unsigned x) {
