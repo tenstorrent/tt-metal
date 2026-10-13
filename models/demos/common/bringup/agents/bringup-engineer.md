@@ -68,12 +68,18 @@ You start with no memory of earlier steps. Everything you need is in the brief a
    model's `bringup/known_issues_detail.md`, and the bullet's Fix ends with `Detail: known_issues_detail.md.` If you found a useful piece of repo code neither repo map lists, add a row to the model's
    `bringup/repo_map.md`. Never edit the shared files under `models/demos/common/bringup/knowledge/`: the overseer
    promotes durable lessons there when the run ends.
-   Before you finish, write the knowledge-use report the brief names (JSON, every list may be empty):
+   When a known-issues entry decides something you do, name its id where you reason about it and where you explain
+   the choice (your messages, BREADCRUMBS): "K-12: the op returns its input buffer, so copy first".
+   When you find an entry wrong or out of date (the code, a commit or a device result disagrees), write it into the
+   knowledge-use report the brief names at once, with the evidence, before you go on (it survives a failed or cut-short
+   attempt; the owner is told when the step ends).
+   Before you finish, complete that report (JSON, every list may be empty):
    `{"used": [{"id", "how"}], "contradicted": [{"id", "evidence"}], "missing": ["topic"]}`. `used`: entries (by id,
    from either known-issues file) that changed what you did; `how` says what, in one line. Having read an entry is not
    a use. `contradicted`: entries the code or a device result showed wrong or out of date; `evidence` is the commit,
    `file:line` or result. `missing`: what you had to work out that an entry should have told you. The orchestrator
-   checks the uses against the files you touched; the counts decide which entries stay, move or go.
+   checks the uses against the files you touched and the ids you named; the counts decide which entries stay, move or
+   go.
 12. Append a short section to the model's `bringup/BREADCRUMBS.md`: what you did, decisions and why, gotchas, the
    re-run command. Facts only.
 13. Deferring a step (implement role, component tasks only). When TTNN has no proper op for a step (no op, no
