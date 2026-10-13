@@ -32,7 +32,8 @@ inline void llk_math_reduce(const std::uint32_t dst_index, const ckernel::Tensor
         StateDiscard<bool>(is_fp32_dest_acc_en),
         StateDiscard<bool>(is_int_fpu_en)));
 
-    _llk_math_reduce_<type, dim, is_fp32_dest_acc_en, math_fidelity, is_int_fpu_en, normal_scaler>(dst_index, tensor_shape);
+    _llk_math_reduce_<type, dim, is_fp32_dest_acc_en, math_fidelity, is_int_fpu_en, normal_scaler>(
+        dst_index, tensor_shape);
 }
 
 template <
@@ -58,7 +59,8 @@ inline void llk_math_reduce(const std::uint32_t operandA, const std::uint32_t op
         StateDiscard<bool>(is_fp32_dest_acc_en),
         StateDiscard<bool>(is_int_fpu_en)));
 
-    _llk_math_reduce_<type, dim, is_fp32_dest_acc_en, math_fidelity, is_int_fpu_en, normal_scaler>(dst_index, tensor_shape);
+    _llk_math_reduce_<type, dim, is_fp32_dest_acc_en, math_fidelity, is_int_fpu_en, normal_scaler>(
+        dst_index, tensor_shape);
 }
 
 template <
