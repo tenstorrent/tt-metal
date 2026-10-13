@@ -192,10 +192,9 @@ target_include_directories(
 # are embedded in the archive and also linked into tt_metal directly.)
 target_link_libraries(
     fabric
-    PUBLIC
-        TT::ScaleoutTopology
     PRIVATE
         $<TARGET_OBJECTS:scaleout_topology>
+        TT::ScaleoutTopology
         TT::ScaleoutTools
         Metalium::Metal::LLRT
         umd::tt-umd
