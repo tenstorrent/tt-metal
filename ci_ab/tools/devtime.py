@@ -52,7 +52,7 @@ for n in names:
         hs, vs = sorted(s["H"].items()), sorted(s[v].items())
         # block b holds runs 2b-1 and 2b of every side
         signs = []
-        for b in (1, 2):
+        for b in sorted({(k + 1) // 2 for k, _ in hs}):
             a = [x for k, x in hs if (k + 1) // 2 == b]
             c = [x for k, x in vs if (k + 1) // 2 == b]
             if a and c:
