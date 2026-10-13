@@ -23,6 +23,7 @@ from models.demos.qwen25_vl.tt.model_config import VisionModelArgs, qwen25_vl_me
     [None, 1, 2],  # None means all layers, specific numbers will run fewer layers
     ids=["all_layers", "single_layer", "two_layers"],
 )
+@pytest.mark.parametrize("device_params", [{"fabric_config": True}], indirect=True)  # CCLs of the tensor-parallel tower
 def test_wrapped_vision_model_inference(
     mesh_device,
     qwen25_vl_mesh_device,

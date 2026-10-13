@@ -8,6 +8,7 @@ import torch
 import ttnn
 from models.common.lightweightmodule import LightweightModule
 from models.demos.qwen25_vl.tt.vision_rmsnorm import RMSNorm
+from models.tt_transformers.tt.ccl import tt_all_gather, tt_all_reduce
 from models.tt_transformers.tt.common import Mode
 from models.tt_transformers.tt.model_config import OpGroup, TensorGroup
 
@@ -79,7 +80,9 @@ class VisionAttention(LightweightModule):
         self.MAX_QKV_MM_SEQ_LEN = configuration.MAX_QKV_MM_SEQ_LEN
         self.tile_size = configuration.tile_size
 
-        self.num_devices_per_group = 1  # [INFO] each device runs a copy of the vision model
+        # 1: each device runs a copy of the vision model (one image per chip); N: heads split over N chips
+        self.num_devices_per_group = configuration.vision_tp_devices
+        self.tensor_parallel = self.num_devices_per_group > 1
 
         self.n_local_heads = self.n_heads // self.num_devices_per_group
         self.n_local_kv_heads = self.n_kv_heads // self.num_devices_per_group
@@ -189,7 +192,7 @@ class VisionAttention(LightweightModule):
             self.wqkv_bias_prefill = ttnn.as_tensor(
                 qkv_bias,
                 device=self.mesh_device,
-                mesh_mapper=ttnn.ReplicateTensorToMesh(self.mesh_device),
+                mesh_mapper=self._shard_or_replicate(-1),
                 dtype=ttnn.bfloat16,
                 memory_config=ttnn.DRAM_MEMORY_CONFIG,
                 layout=ttnn.TILE_LAYOUT,
@@ -246,8 +249,8 @@ class VisionAttention(LightweightModule):
             layout=ttnn.TILE_LAYOUT,
             device=self.mesh_device,
             memory_config=ttnn.DRAM_MEMORY_CONFIG,
-            mesh_mapper=ttnn.ReplicateTensorToMesh(self.mesh_device),
-            cache_file_name=cache_name("wqkv"),
+            mesh_mapper=self._shard_or_replicate(-1),
+            cache_file_name=cache_name(self._tp_name("wqkv")),
         )
 
         def norm_reshard(x, norm, mode):
@@ -306,12 +309,14 @@ class VisionAttention(LightweightModule):
             # note that torch weights are already transposed to have input in last dim
             pt_wo_t = self.state_dict[f"{wo_str}.weight"]
             # pt_wo_t.shape = [1280, 1280]
-            heads = pt_wo_t.reshape(-1, self.n_local_heads, self.head_dim)
+            heads = pt_wo_t.reshape(
+                -1, self.n_heads, self.head_dim
+            )  # all heads; tensor parallel shards the K rows below
             # heads.shape = [-1, 8, 80]
             heads = torch.nn.functional.pad(
                 heads, (0, self.padded_head_dim - self.head_dim)
             )  # tail-pad last dim with 0
-            pt_wo = heads.reshape(1, 1, -1, self.n_local_heads * self.padded_head_dim).transpose(-1, -2)
+            pt_wo = heads.reshape(1, 1, -1, self.n_heads * self.padded_head_dim).transpose(-1, -2)
             # pt_wo.shape = [1, 1, 768, 2560]
 
         else:
@@ -327,8 +332,8 @@ class VisionAttention(LightweightModule):
             layout=ttnn.TILE_LAYOUT,
             device=self.mesh_device,
             memory_config=ttnn.DRAM_MEMORY_CONFIG,
-            mesh_mapper=ttnn.ReplicateTensorToMesh(self.mesh_device),
-            cache_file_name=cache_name("wo"),
+            mesh_mapper=self._shard_or_replicate(-2),  # tensor parallel: each chip holds the K rows of its own heads
+            cache_file_name=cache_name(self._tp_name("wo")),
         )
         # self.wo.shape = [1, 1, 384, 2560] each device of N300 sharded on dim=2
 
@@ -351,22 +356,57 @@ class VisionAttention(LightweightModule):
         per_core_N_qkv = math.ceil(configuration.vision_qkv_size / target_device_shape[1] / 32 / dram_shard_grid_width)
         # Largest out_subblock_w in [1..4] that divides per_core_N (out_subblock_h=1 keeps the product <= 4)
         out_subblock_w_qkv = next(w for w in (4, 3, 2, 1) if per_core_N_qkv % w == 0)
-        self.xqkv_prefill_progcfg = lambda seq_len: ttnn.MatmulMultiCoreReuseMultiCastProgramConfig(
-            compute_with_storage_grid_size=(8, 8),
-            in0_block_w=4,  # 4 K-tiles per iteration (K=1280 -> 10 iterations instead of 40)
-            out_subblock_h=1,  # Must be divisible by per_core_M (which can be 1 for small seqlens)
-            out_subblock_w=out_subblock_w_qkv,  # Must be divisible by per_core_N
-            per_core_M=max(
-                1, 8 if seq_len >= self.MAX_QKV_MM_SEQ_LEN else math.ceil(seq_len / self.tile_size / 8)  # 8 rows
-            ),  # M / TILE_HEIGHT / Grid_Size (dynamic based on seqlen)
-            per_core_N=per_core_N_qkv,  # N / TILE_WIDTH / grid width
-            transpose_mcast=False,
-            fused_activation=None,
-            fuse_batch=seq_len <= self.MAX_QKV_MM_SEQ_LEN,
+        self.xqkv_prefill_progcfg = (
+            lambda seq_len: None
+            if self.tensor_parallel
+            else ttnn.MatmulMultiCoreReuseMultiCastProgramConfig(
+                compute_with_storage_grid_size=(8, 8),
+                in0_block_w=4,  # 4 K-tiles per iteration (K=1280 -> 10 iterations instead of 40)
+                out_subblock_h=1,  # Must be divisible by per_core_M (which can be 1 for small seqlens)
+                out_subblock_w=out_subblock_w_qkv,  # Must be divisible by per_core_N
+                per_core_M=max(
+                    1, 8 if seq_len >= self.MAX_QKV_MM_SEQ_LEN else math.ceil(seq_len / self.tile_size / 8)  # 8 rows
+                ),  # M / TILE_HEIGHT / Grid_Size (dynamic based on seqlen)
+                per_core_N=per_core_N_qkv,  # N / TILE_WIDTH / grid width
+                transpose_mcast=False,
+                fused_activation=None,
+                fuse_batch=seq_len <= self.MAX_QKV_MM_SEQ_LEN,
+            )
         )
 
     # Rows per QKV pass (see forward_prefill)
     MAX_ROWS_PER_PASS = 8192
+
+    def _shard_or_replicate(self, dim):
+        if self.tensor_parallel:
+            return ttnn.ShardTensorToMesh(self.mesh_device, dim=dim)
+        return ttnn.ReplicateTensorToMesh(self.mesh_device)
+
+    def _tp_name(self, name):
+        return f"{name}_tp{self.num_devices_per_group}" if self.tensor_parallel else name
+
+    def _reduce_across_chips(self, partial_11SH):
+        """Sum the per-chip partial projections (tensor parallel): reduce-scatter then all-gather."""
+        reduced = tt_all_reduce(
+            partial_11SH,
+            self.mesh_device,
+            self.configuration.get_tt_ccl(),
+            cluster_axis=0,
+            dim=3,
+            topology=self.ccl_topology,
+            memory_config=ttnn.DRAM_MEMORY_CONFIG,
+            dtype=self.ccl_dtype,
+        )
+        return tt_all_gather(
+            reduced,
+            self.mesh_device,
+            self.configuration.get_tt_ccl(),
+            cluster_axis=None,  # 1x8 mesh: gather over the whole mesh
+            dim=3,
+            memory_config=ttnn.DRAM_MEMORY_CONFIG,
+            topology=self.ccl_topology,
+            dtype=self.ccl_dtype,
+        )
 
     def _qkv_rows(self, x_11SH, rot_mats):
         """Fused QKV projection, head split, (optional) q/k norm, rotary embedding and bfp8 typecast for
@@ -541,7 +581,7 @@ class VisionAttention(LightweightModule):
         output_11SH = ttnn.linear(
             attn_output_11SH,
             self.wo,
-            bias=self.wo_bias_prefill,
+            bias=None if self.tensor_parallel else self.wo_bias_prefill,
             compute_kernel_config=self.li_o_prefill_compute_kernel_cfg,
             dtype=self.activation_dtype or ttnn.bfloat8_b,
             memory_config=ttnn.DRAM_MEMORY_CONFIG,
@@ -551,5 +591,11 @@ class VisionAttention(LightweightModule):
         if seq_len > 1024:
             output_11SH = ttnn.reshape(output_11SH, [1, 1, seq_len, -1])
         ttnn.deallocate(attn_output_11SH)
+
+        if self.tensor_parallel:
+            # per-chip partial sums over this chip's heads -> full projection on every chip, then the bias once
+            output_11SH = self._reduce_across_chips(output_11SH)
+            if self.wo_bias_prefill is not None:
+                output_11SH = ttnn.add(output_11SH, self.wo_bias_prefill, memory_config=ttnn.DRAM_MEMORY_CONFIG)
 
         return output_11SH

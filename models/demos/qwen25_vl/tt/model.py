@@ -212,6 +212,9 @@ class DropInVisionTransformer(torch.nn.Module):
         if image_parallel:
             shard0 = ttnn.ShardTensorToMesh(mesh, dim=0)
             return shard0, shard0, shard0
+        if self.model_args.vision_tp:
+            rep = ttnn.ReplicateTensorToMesh(mesh)
+            return rep, rep, rep
         return (
             ttnn.ShardTensor2dMesh(mesh, dims=(None, -1), mesh_shape=self.model_args.cluster_shape),
             ttnn.ReplicateTensorToMesh(mesh),
@@ -281,6 +284,8 @@ class DropInVisionTransformer(torch.nn.Module):
                 tt_out = entry["out"]
         if image_parallel:
             out = ttnn.to_torch(tt_out, mesh_composer=ttnn.ConcatMeshToTensor(mesh, dim=0))
+        elif self.model_args.vision_tp:
+            out = ttnn.to_torch(tt_out, mesh_composer=ttnn.ConcatMeshToTensor(mesh, dim=0))[0:1]  # replicated
         else:
             out = ttnn.to_torch(tt_out, mesh_composer=ttnn.ConcatMeshToTensor(mesh, dim=1))[:, 0:1]
         if not self.use_trace:
@@ -316,7 +321,7 @@ class DropInVisionTransformer(torch.nn.Module):
         # On a 32-chip Galaxy mesh the vision tower is tensor-parallel over the mesh columns (VisionModelArgs
         # splits the weights), so images go through one at a time with the hidden dim column-sharded; on
         # every other mesh the weights are replicated and the chips take one image each.
-        image_parallel = not self.model_args.is_galaxy
+        image_parallel = not (self.model_args.is_galaxy or self.model_args.vision_tp)
         num_devices = mesh.get_num_devices() if image_parallel else 1
         # --- per-image host preprocessing ---
         images = []

@@ -123,6 +123,15 @@ class ModelOptimizations:
         self.bfp4_mlp = "Qwen2.5-VL-72B" in model_name
 
 
+def vision_tower_tensor_parallel(base_model_name: str, num_devices: int, is_galaxy: bool) -> bool:
+    """Whether the vision tower is split over the chips of the mesh (see VisionModelArgs.vision_tp). On by default
+    for 72B on a 1x8 mesh only; QWEN25_VL_VISION_TP=0/1 overrides (tests, experiments)."""
+    tp_env = os.environ.get("QWEN25_VL_VISION_TP")
+    if tp_env in ("0", "1"):
+        return tp_env == "1" and num_devices > 1 and not is_galaxy
+    return base_model_name == "Qwen2.5-VL-72B" and num_devices == 8 and not is_galaxy
+
+
 class VisionModelArgs(ModelArgs):
     def __init__(self, *args, **kwargs):
         super().__init__(*args, **kwargs)
@@ -153,6 +162,16 @@ class VisionModelArgs(ModelArgs):
         self.vision_qkv_size = self.vision_padded_head_dim * (2 * self.vision_n_kv_heads + self.vision_n_heads)
         self.MAX_QKV_MM_SEQ_LEN = self.MAX_QKV_MM_SEQ_LEN
 
+        # Tensor-parallel vision tower: attention heads and the MLP hidden dim are split over every chip
+        # of the mesh and each image goes through all chips (residual stream replicated, reduce-scatter +
+        # all-gather after the two output projections). Used for 72B on a 1x8 Wormhole mesh, where the
+        # replicated tower (one image per chip) leaves no DRAM for the 128k KV pool next to the weights;
+        # the other sizes keep the image-parallel tower. QWEN25_VL_VISION_TP=0/1 overrides (tests).
+        self.vision_tp = vision_tower_tensor_parallel(self.base_model_name, self.num_devices, self.is_galaxy)
+        self.vision_tp_devices = self.num_devices if self.vision_tp else 1
+        self.tt_ccl = None  # created on first use by get_tt_ccl() when vision_tp
+        assert self.vision_n_heads % self.vision_tp_devices == 0, "vision heads must split evenly over the chips"
+
         self.optimizations = ModelOptimizations(
             self.model_name
         )  # todo)) implement finer grained control similar to tt_transformers'
@@ -162,7 +181,7 @@ class VisionModelArgs(ModelArgs):
         n_dim = self.vision_dim // self.cluster_shape[1] if self.is_galaxy else self.vision_dim
         # WO weight K dimension is n_heads * padded_head_dim (e.g. 1536), not vision_dim (1280)
         # Use in0_block_w=2 which safely divides all possible Kt values
-        wo_k_dim = self.vision_n_heads * self.vision_padded_head_dim
+        wo_k_dim = self.vision_n_heads * self.vision_padded_head_dim // self.vision_tp_devices
 
         self.model_config["VISION_WO_PREFILL_PROGCFG"] = lambda seq_len: self.matmul_config(
             m=num_rows(seq_len),
@@ -242,6 +261,15 @@ class VisionModelArgs(ModelArgs):
                     )
 
             self.model_config["PREFILL_FF2_MINIMAL_MATMUL_CONFIG"] = prefill_ff2_minimal_matmul_config
+
+    def get_tt_ccl(self):
+        """CCL helper shared by the tensor-parallel vision modules (created lazily so unit tests that build a
+        single block get one too)."""
+        if self.tt_ccl is None:
+            from models.tt_transformers.tt.ccl import TT_CCL
+
+            self.tt_ccl = TT_CCL(self.mesh_device)
+        return self.tt_ccl
 
     def prepare_residual_tensor_prefill(self, x_bsh, force_replicated=False):
         """
