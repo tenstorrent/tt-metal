@@ -83,17 +83,6 @@ const tt::tt_metal::experimental::DFBSpecName OUT_DFB{"out"};    // legacy index
 const tt::tt_metal::experimental::TensorParamName INPUT{"input"};
 const tt::tt_metal::experimental::TensorParamName OUTPUT{"output"};
 
-// Blackhole eltwise_sfpu.cpp: an op whose body loads DEST before it stores, so its SFPU start can follow copy_tile's
-// datacopy with a NOP instead of an FPU drain; tiled_prod and typecast keep the drain.
-bool sfpu_start_after_copy(const EltwiseUnaryWithParam& op) {
-    switch (op.type()) {
-        case UnaryOpType::FILL:  // stores before it loads
-        case UnaryOpType::TILED_PROD:
-        case UnaryOpType::TYPECAST: return false;
-        default: return true;
-    }
-}
-
 // Blackhole SFPU state beyond the part every init writes alike (LaneConfig, ADDR_MOD_7 = 0, counter reset).
 enum SfpuState : uint32_t {
     kPrgm0 = 1u << 0,  // LREG12-14, the programmable constants
@@ -709,18 +698,15 @@ ttnn::device_operation::ProgramArtifacts UnaryDeviceOperation::ProgramFactory::c
         fmt::format("ttnn/cpp/ttnn/operations/eltwise/unary/device/kernels/compute/{}", compute_kernel);
     // A chain's op-major block on a native L1 shard of 12 or more tiles, 16-bit DEST: the tiles half of DEST holds.
     uint32_t chain_block = 1;
-    if (compute_kernel == "eltwise_sfpu.cpp" && input.device()->arch() == tt::ARCH::BLACKHOLE) {
+    // Only on a native shard: on an interleaved input the per-tile inits keep the DRAM-bound op faster.
+    if (compute_kernel == "eltwise_sfpu_metal2.cpp" && src_sharded && input.device()->arch() == tt::ARCH::BLACKHOLE) {
+        unary_defines["SFPU_OP_CHAIN_INIT_ONCE"] = "1";
         if (src_num_tiles_per_shard.value_or(0) >= 12 && dst_num_tiles_per_shard.value_or(0) >= 12 &&
             !operation_attributes.fp32_dest_acc_en) {
             chain_block = 8;
         }
         unary_defines.merge(CMAKE_UNIQUE_NAMESPACE::get_chain_init_once_defines(
             ops_chain, input.dtype(), operation_attributes.fp32_dest_acc_en, chain_block));
-        if (std::all_of(ops_chain.begin(), ops_chain.end(), [](const auto& op) {
-                return CMAKE_UNIQUE_NAMESPACE::sfpu_start_after_copy(op);
-            })) {
-            unary_defines["SFPU_START_AFTER_COPY"] = "1";
-        }
     }
     if (!src_sharded && input.device()->arch() == tt::ARCH::BLACKHOLE) {
         unary_defines["SFPU_UNARY_LITERAL_CONSTANTS"] = "1";
