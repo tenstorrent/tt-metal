@@ -1239,7 +1239,10 @@ std::string format_sat_placement_failure(const ::tt::tt_fabric::PlacementSolveSt
         stats.master_candidates_enumerated,
         stats.candidate_lists_complete ? "COMPLETE" : "TRUNCATED",
         stats.candidate_lists_complete ? "trustworthy" : "NOT trustworthy",
-        stats.zero_link_fallback_engaged ? " (even with RELAXED zero-link tolerance: inter-mesh seams SOFT)" : "");
+        stats.zero_link_fallback_engaged ? " (even with RELAXED zero-link tolerance: inter-mesh seams SOFT)"
+        : stats.hard_seams_precheck_infeasible
+            ? fmt::format(" -- hard-seam pre-check: {}", stats.hard_seams_precheck_reason)
+            : "");
 }
 
 void set_mapping_failure(TopologyMappingResult& result, std::string failure_stage, std::string error_message) {
@@ -1384,14 +1387,13 @@ TopologyMappingResult complete_intra_mesh_for_placement(
         }
         const auto& physical_exit_node_graph = *physical_exit_node_graph_ptr;
 
+        // RELAXED zero-link tolerance (issue #56762) is INTER-MESH ONLY: intra-mesh target edges stay
+        // hard (allow_unmatched_target_edges is never set on these constraints), since a zero-link
+        // intra-mesh edge would mean an unroutable mesh interior. The TT_FATAL before the solve below
+        // fast-fails if any constraint builder on this path ever flips the (shared-type) flag.
+        // TODO(fabric-2.0): revisit intra-mesh zero-link tolerance once host-interconnect intra-mesh
+        // routing lands.
         ::tt::tt_fabric::MappingConstraints<FabricNodeId, tt::tt_metal::experimental::PhysicalNodeId> intra_mesh_constraints;
-        // RELAXED zero-link tolerance (issue #56762) is INTER-MESH ONLY: intra-mesh target edges
-        // stay hard, so allow_unmatched_target_edges is deliberately left false here. A mesh's own
-        // chips must be physically connected -- a zero-link intra-mesh edge would mean an
-        // unroutable mesh interior.
-        // TODO(fabric-2.0): intra-mesh zero-link tolerance is NOT yet allowed; revisit once Fabric
-        // 2.0 lands (host-interconnect intra-mesh routing). Do not call
-        // intra_mesh_constraints.set_allow_unmatched_target_edges(true) until then.
 
         if (!config.disable_rank_bindings) {
             add_rank_binding_constraints(
@@ -1464,10 +1466,7 @@ TopologyMappingResult complete_intra_mesh_for_placement(
 
         auto validation_mode = determine_intra_mesh_validation_mode(config, logical_mesh_id);
 
-        // Enforce the inter-mesh-only invariant of RELAXED zero-link tolerance (issue #56762): a
-        // mesh's own interior must be physically connected, so intra-mesh target edges are always
-        // hard. This fast-fails if a future edit ever flips the (shared-type) flag on this path.
-        // TODO(fabric-2.0): revisit intra-mesh zero-link tolerance.
+        // Inter-mesh-only invariant of zero-link tolerance (see the note at the declaration above).
         TT_FATAL(
             !intra_mesh_constraints.allow_unmatched_target_edges(),
             "Intra-mesh solve must not allow unmatched target edges (zero-link tolerance is inter-mesh only); "

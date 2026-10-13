@@ -198,6 +198,7 @@ struct PlacementSolveStats {
     // connected component with at least its summed chip count, else every hard-seam master solve is UNSAT.
     // When true the hard solve was skipped entirely (fast fail / fast zero-link fallback).
     bool hard_seams_precheck_infeasible = false;
+    std::string hard_seams_precheck_reason;  ///< Human-readable violation when the pre-check fired
     std::size_t master_sat_vars = 0;     ///< Variables in the last master encoding
     std::size_t master_sat_clauses = 0;  ///< Clauses in the last master encoding
     std::chrono::microseconds master_enumeration_elapsed{};

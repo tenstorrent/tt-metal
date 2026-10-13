@@ -3221,6 +3221,7 @@ void SatPlacementEnumerationSession::finish_init(
         hard_seams_infeasible_reason_ = std::move(*violation);
         if (stats_ != nullptr) {
             stats_->hard_seams_precheck_infeasible = true;
+            stats_->hard_seams_precheck_reason = hard_seams_infeasible_reason_;
         }
     }
 }
@@ -3401,8 +3402,11 @@ bool SatPlacementEnumerationSession::MasterSolve::restart(bool relaxed_mode, boo
 MappingResult<MeshId, const Candidate*> SatPlacementEnumerationSession::MasterSolve::next(bool drop_cap) {
     MappingResult<MeshId, const Candidate*> failure;
     failure.success = false;
-    const bool relaxed_mode = owner_->relaxed_inter_mesh_policy_;
+    // Zero-link tolerance implies RELAXED seams: the caller engages it under the EFFECTIVE inter-mesh mode
+    // (a TopologyMappingConfig override may relax an MGD that says STRICT), and a soft-seam model must not be
+    // rejected by STRICT channel-count validation of the very edges it is allowed to leave unrealized.
     const bool zero_link_mode = owner_->zero_link_tolerance_;
+    const bool relaxed_mode = owner_->relaxed_inter_mesh_policy_ || zero_link_mode;
     // Unchanged mode, host cap and seam softness: this is another model from the session already encoded.
     if (!matches(relaxed_mode, drop_cap, zero_link_mode) && !restart(relaxed_mode, drop_cap, zero_link_mode)) {
         return failure;

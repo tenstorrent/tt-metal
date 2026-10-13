@@ -55,6 +55,12 @@ struct SatSearchBackend::Impl {
     // Zero-link tolerance (allow_unmatched_target_edges): edge_threshold_lits[j], when assumed,
     // forces at least j+1 of enc.edge_realized_lits true. Drives realized-edge maximization.
     std::vector<int> edge_threshold_lits;
+    // For the zero-link maximization loop: the global adjacency lists (owned by the session's
+    // GraphIndexData, which outlives the engine -- the TopologySatGraphView passed to start() is a
+    // temporary and must NOT be retained) and the validation mode, so the realized-edge count can be
+    // read off the decoded mapping's adjacency.
+    const std::vector<std::vector<size_t>>* global_adj_idx = nullptr;
+    ConnectionValidationMode validation_mode = ConnectionValidationMode::RELAXED;
 };
 
 SatSearchBackend::SatSearchBackend() = default;
@@ -1142,6 +1148,7 @@ void topology_sat_encode_adjacency_support(
             if (allow_unmatched_target_edges) {
                 realized_lit = solver.declare_one_more_variable();
                 enc.edge_realized_lits.push_back(realized_lit);
+                enc.edge_realized_edges.emplace_back(t1, t2);
             }
             const auto& gidx1 = enc.allowed_global_idx[t1];
             const auto& lit1 = enc.assign_lit[t1];
@@ -1704,6 +1711,8 @@ bool SatSearchBackend::start(
     s.conflict_cap = conflict_cap_;
     s.solver.configure_for_blocking_clause_enumeration();
     s.unique_shapes = unique_shapes;
+    s.global_adj_idx = &graph_data.global_adj_idx;
+    s.validation_mode = validation_mode;
     s.enc = {};
     if (!topology_sat_encode_hard_constraints(s.solver, graph_data, constraint_data, s.enc, validation_mode)) {
         if (error_out != nullptr) {
@@ -1840,9 +1849,12 @@ bool SatSearchBackend::start(
     }
 
     // Zero-link tolerance: build per-threshold literals over the realized-edge indicators so the
-    // driver can maximize realized edges via assumptions (skipped for unique_shapes enumeration,
-    // mirroring the preferred objective: ranking must not perturb shape coverage).
-    if (!s.enc.edge_realized_lits.empty() && !unique_shapes) {
+    // driver can maximize realized edges via assumptions. Unlike the preferred objective above this is
+    // NOT skipped for unique_shapes enumeration: the production placement sessions run with
+    // unique_shapes=true, and realized-link maximization is the advertised best-effort contract of the
+    // RELAXED zero-link fallback, not a ranking nicety. Shape blocking still happens after the maximized
+    // model is chosen (next() blocks the returned mapping), so every distinct shape stays reachable.
+    if (!s.enc.edge_realized_lits.empty()) {
         topology_sat_build_at_least_threshold_lits(s.solver, s.enc.edge_realized_lits, s.edge_threshold_lits);
     }
 
@@ -1962,11 +1974,33 @@ bool SatSearchBackend::next(std::vector<int>& mapping_out) {
     // solution just found, demand one more realized edge under the same objective assumptions;
     // repeat until UNSAT (proven maximum) or the conflict budget runs out (best effort).
     if (!s.edge_threshold_lits.empty()) {
+        // Realized count of the CURRENT decoded mapping. The realized literal is only forced false when
+        // support is missing; nothing forces it true when support holds, so the literal alone can
+        // under-count (which would start the ramp too low and mis-report the warning). Under RELAXED
+        // validation (adjacency is the whole support requirement) an edge is also realized when its
+        // mapped endpoints are physically adjacent. Under STRICT the support also needs the channel
+        // count, so the literal stays authoritative there (an over-count could end the ramp early).
         const auto count_realized = [&]() -> size_t {
             size_t realized = 0;
-            for (int lit : s.enc.edge_realized_lits) {
-                if (s.solver.val(lit) > 0) {
+            for (size_t i = 0; i < s.enc.edge_realized_lits.size(); ++i) {
+                if (s.solver.val(s.enc.edge_realized_lits[i]) > 0) {
                     ++realized;
+                    continue;
+                }
+                if (s.validation_mode == ConnectionValidationMode::RELAXED && s.global_adj_idx != nullptr &&
+                    i < s.enc.edge_realized_edges.size()) {
+                    const auto [t1, t2] = s.enc.edge_realized_edges[i];
+                    if (t1 < mapping_out.size() && t2 < mapping_out.size() && mapping_out[t1] >= 0 &&
+                        mapping_out[t2] >= 0) {
+                        const auto g1 = static_cast<size_t>(mapping_out[t1]);
+                        const auto g2 = static_cast<size_t>(mapping_out[t2]);
+                        if (g1 < s.global_adj_idx->size()) {
+                            const auto& adj = (*s.global_adj_idx)[g1];
+                            if (std::binary_search(adj.begin(), adj.end(), g2)) {
+                                ++realized;
+                            }
+                        }
+                    }
                 }
             }
             return realized;
@@ -1977,10 +2011,13 @@ bool SatSearchBackend::next(std::vector<int>& mapping_out) {
         // (fix target 0 -> global 0) is only a search hint, and on equal-size graphs it can make a
         // higher threshold UNSAT even when it is achievable without the hint -- so, exactly like the
         // primary solve, attempt WITH the hint first and, on non-SAT, retry WITHOUT it before
-        // concluding the maximum is reached.
+        // concluding the maximum is reached. Once a hinted attempt has failed, the hint is dropped for
+        // the rest of the ramp (thresholds only tighten, so it cannot start holding again); this keeps
+        // the worst case at one solve per step instead of two.
+        bool symmetry_hint_usable = s.symmetry_lit != 0;
         const auto solve_threshold = [&](int threshold_lit) -> int {
             auto attempt = [&](bool with_symmetry_hint) -> int {
-                if (with_symmetry_hint && s.symmetry_lit != 0) {
+                if (with_symmetry_hint) {
                     s.solver.assume(s.symmetry_lit);
                 }
                 for (int lit : optional_lits) {
@@ -1990,10 +2027,11 @@ bool SatSearchBackend::next(std::vector<int>& mapping_out) {
                 ++s.solve_calls;
                 return s.solver.solve_limited(kZeroLinkMaximizeConflictBudget);
             };
-            if (s.symmetry_lit != 0) {
+            if (symmetry_hint_usable) {
                 if (attempt(/*with_symmetry_hint=*/true) == TopologySatSolver::kSat) {
                     return TopologySatSolver::kSat;
                 }
+                symmetry_hint_usable = false;
             }
             return attempt(/*with_symmetry_hint=*/false);
         };

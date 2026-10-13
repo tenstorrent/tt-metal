@@ -3939,16 +3939,30 @@ void ControlPlane::validate_requested_intermesh_connections(
                 if (resolved == 0) {
                     // RELAXED zero-link tolerance (issue #56762): a requested inter-mesh connection
                     // may resolve zero routers -- the connection is logical-only and traffic rides
-                    // the host interconnect. Warn loudly instead of failing initialization.
-                    log_warning(
-                        tt::LogFabric,
-                        "Inter-mesh routing (relaxed): the Mesh Graph Descriptor requests a connection "
-                        "({} channel(s)) between mesh {} and mesh {}, but ZERO connections were resolved during "
-                        "control plane initialization; the connection is logical-only (host interconnect)",
+                    // the host interconnect. Warn loudly instead of failing initialization. Mesh-level
+                    // connections are requested under BOTH policies, so STRICT keeps the per-pair
+                    // failure: the aggregate count check above cannot catch a single zero pair masked
+                    // by surplus links on other pairs.
+                    if (inter_mesh_relaxed) {
+                        log_warning(
+                            tt::LogFabric,
+                            "Inter-mesh routing (relaxed): the Mesh Graph Descriptor requests a connection "
+                            "({} channel(s)) between mesh {} and mesh {}, but ZERO connections were resolved during "
+                            "control plane initialization; the connection is logical-only (host interconnect)",
+                            requested_channels,
+                            src_mesh,
+                            dst_mesh);
+                        continue;
+                    }
+                    TT_THROW(
+                        "Inter-mesh routing validation failed (strict): the Mesh Graph Descriptor requests a "
+                        "connection ({} channel(s)) between mesh {} and mesh {}, but ZERO connections were resolved "
+                        "during control plane initialization (all candidate channels were dropped, e.g. by a Z/non-Z "
+                        "direction mismatch). Under a STRICT inter-mesh policy every requested connection must "
+                        "resolve at least one router; zero-link tolerance (issue #56762) applies to RELAXED only.",
                         requested_channels,
                         src_mesh,
                         dst_mesh);
-                    continue;
                 }
                 if (requested_channels > resolved) {
                     const std::string msg = fmt::format(

@@ -1467,16 +1467,34 @@ TEST(MultiHost, BHDualGalaxyFabricConfigMismatchAcrossRanksFatal) {
         control_plane->configure_routing_tables_for_fabric_ethernet_channels();
     });
 }
-// Negative test: mesh 2 is a single (1x1) exit chip cabled to BOTH mesh 0 and mesh 1, and both boundaries are
-// marked assign_z_direction. They both try to claim mesh 2's one Z lane; the losing boundary is Z-only (never
-// falls back to NESW), so it resolves zero routers. Under RELAXED zero-link tolerance (issue #56762)
-// control-plane initialization no longer fails for that: the losing boundary stays logical-only with a loud
-// warning. The conflict is now DETECTED by the zero-resolved connection on exactly one of the two boundaries
-// (the winner keeps its Z lane). See t3k_assign_z_conflict_mesh_graph_descriptor.textproto.
-TEST(MultiHost, T3KAssignZConflictLosingBoundaryResolvesZero) {
+// Negative test (STRICT inter-mesh policy): mesh 2 is a single (1x1) exit chip cabled to BOTH mesh 0 and
+// mesh 1, and both boundaries are marked assign_z_direction. They both try to claim mesh 2's one Z lane; a
+// boundary that does not get it is Z-only (never falls back to NESW), so it resolves zero routers. Under a
+// STRICT inter-mesh policy every requested connection must resolve at least one router, so control-plane
+// initialization must fail. Zero-link tolerance (issue #56762) is RELAXED-only and must NOT rescue this.
+// See t3k_assign_z_conflict_mesh_graph_descriptor.textproto.
+TEST(MultiHost, T3KAssignZConflictStrictFatal) {
     const std::filesystem::path conflict_mesh_graph_desc_path =
         std::filesystem::path(tt::tt_metal::MetalContext::instance().rtoptions().get_root_dir()) /
         "tests/tt_metal/tt_fabric/custom_mesh_descriptors/t3k_assign_z_conflict_mesh_graph_descriptor.textproto";
+    EXPECT_ANY_THROW({
+        auto control_plane = make_control_plane(
+            conflict_mesh_graph_desc_path.string(),
+            tt::tt_fabric::FabricConfig::FABRIC_2D,
+            tt::tt_fabric::FabricReliabilityMode::STRICT_SYSTEM_HEALTH_SETUP_MODE);
+        control_plane->configure_routing_tables_for_fabric_ethernet_channels();
+    });
+}
+
+// Same engineered conflict with a RELAXED inter-mesh policy: under RELAXED zero-link tolerance (issue #56762)
+// control-plane initialization no longer fails for an unbound boundary -- it stays logical-only with a loud
+// warning. On this fixture the mutual contention leaves BOTH boundaries unbound (neither claims the lane), so
+// both connections resolve zero. See t3k_assign_z_conflict_relaxed_mesh_graph_descriptor.textproto.
+TEST(MultiHost, T3KAssignZConflictLosingBoundaryResolvesZero) {
+    const std::filesystem::path conflict_mesh_graph_desc_path =
+        std::filesystem::path(tt::tt_metal::MetalContext::instance().rtoptions().get_root_dir()) /
+        "tests/tt_metal/tt_fabric/custom_mesh_descriptors/"
+        "t3k_assign_z_conflict_relaxed_mesh_graph_descriptor.textproto";
     auto control_plane = make_control_plane(
         conflict_mesh_graph_desc_path.string(),
         tt::tt_fabric::FabricConfig::FABRIC_2D,
@@ -1497,14 +1515,9 @@ TEST(MultiHost, T3KAssignZConflictLosingBoundaryResolvesZero) {
     // The exit-peer maps are rebuilt from intermesh_connections, which is produced on rank 0 and
     // broadcast verbatim, so they are IDENTICAL on every rank (see
     // rebuild_intermesh_exit_maps_from_connections). Conflict invariant: mesh 2's SINGLE Z lane can
-    // never satisfy BOTH boundaries, so they must not both bind. Observed on this mock: neither binds
-    // -- under mutual contention the Z lane is claimed by neither, so both connections resolve zero
-    // and become logical-only (issue #56762). (The pre-change comment assumed one boundary would win;
-    // it does not on this fixture.)
-    EXPECT_FALSE(!pairs_0_to_2.empty() && !pairs_1_to_2.empty())
-        << "Both contending assign_z boundaries bound mesh 2's single Z lane; at most one may. "
-           "Resolved 0->2: "
-        << pairs_0_to_2.size() << ", 1->2: " << pairs_1_to_2.size();
+    // never satisfy BOTH boundaries. Observed on this mock: neither binds -- under mutual contention the
+    // Z lane is claimed by neither, so both connections resolve zero and become logical-only (issue
+    // #56762). The both-empty assertion below implies the at-most-one invariant.
     EXPECT_TRUE(pairs_0_to_2.empty() && pairs_1_to_2.empty())
         << "Under mutual assign_z contention for a single Z lane both connections are expected to "
            "resolve zero (logical-only). Resolved 0->2: "

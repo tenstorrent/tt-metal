@@ -491,7 +491,8 @@ public:
      *
      * When enabled, a mapping where some target edges have no corresponding global (physical)
      * edge is still valid — the solver instead MAXIMIZES the number of realized target edges
-     * (best effort, strictly below the host-cap / minimize-groups objectives), and unrealized
+     * (best effort: strictly below the host-cap / minimize-groups objectives and bounded by a
+     * per-step conflict budget, so a sub-maximal mapping is possible on hard instances), and unrealized
      * edges are reported as warnings instead of failing validation. Set only for the
      * inter-mesh (mesh-level) solve when the inter-mesh policy is RELAXED; intra-mesh solves
      * must keep edges hard. The maximization is implemented on the SAT engine; engine
@@ -1008,6 +1009,8 @@ struct TopologySatHardEncoding {
     // Zero-link tolerance (allow_unmatched_target_edges): one literal per soft target edge that is
     // TRUE iff the edge's adjacency support is enforced (edge realized). Empty when edges are hard.
     std::vector<int> edge_realized_lits;
+    // (t1, t2) target-index endpoints of each soft edge, parallel to edge_realized_lits.
+    std::vector<std::pair<size_t, size_t>> edge_realized_edges;
 };
 
 /**
