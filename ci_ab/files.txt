@@ -1,0 +1,3 @@
+tt_metal/hw/inc/api/compute/experimental/generalized_moe_gate.h
+ttnn/cpp/ttnn/operations/experimental/deepseek/moe/generalized_moe_gate/device/unified_kernels/generalized_moe_gate.hpp
+ttnn/cpp/ttnn/operations/experimental/deepseek/moe/generalized_moe_gate/device/kernels/generalized_moe_gate_kernel.cpp
