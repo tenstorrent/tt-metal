@@ -33,3 +33,14 @@ def pytest_pyfunc_call(pyfuncitem):
     if failure is not None:
         raise failure
     return True
+
+
+@pytest.hookimpl(trylast=True)
+def pytest_collection_modifyitems(config, items):
+    # MM_SELECT: comma-separated node id substrings; tracy re-joins argv through /bin/sh, so -k with spaces breaks
+    sel = [k for k in os.environ.get("MM_SELECT", "").split(",") if k]
+    if not sel:
+        return
+    keep = [i for i in items if any(k in i.nodeid for k in sel)]
+    config.hook.pytest_deselected(items=[i for i in items if i not in keep])
+    items[:] = keep

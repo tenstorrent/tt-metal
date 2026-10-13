@@ -124,6 +124,16 @@ h, o, c = load("head"), load("old"), load("ctl")
 co = [k for k in h if k in o]; cc = [k for k in h if k in c]
 do = sum(sorted(h[k]) != sorted(o[k]) for k in co); dc = sum(sorted(h[k]) != sorted(c[k]) for k in cc)
 print(f"== guard: old against head {do} of {len(co)} shared builds differ, ctl against head {dc} of {len(cc)}")
+for name, other, keys in (("old", o, co), ("ctl", c, cc)):
+    per = collections.defaultdict(lambda: [0, 0])
+    for k in keys:
+        per[k.split("/")[0] + " " + k.split("/")[-1]][0] += 1
+        per[k.split("/")[0] + " " + k.split("/")[-1]][1] += sorted(h[k]) != sorted(other[k])
+    print(f"== shared builds, {name} against head (kernel ELF: differ of shared)")
+    for kk, (n, d) in sorted(per.items()):
+        if d:
+            print(f"   {kk}: {d} of {n}")
+    print(f"   identical everywhere else: {sum(n for n, d in per.values() if not d)} builds")
 if do == 0 or dc > 0:
     print("== GUARD FAIL: old must differ from head somewhere and ctl nowhere")
 PY
