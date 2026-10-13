@@ -83,9 +83,10 @@ ProgramDescriptor DramPrefetcherOperation::create_descriptor(
     std::vector<uint32_t> tensor_block_num_tiles;
     std::vector<std::vector<uint32_t>> tensor_shapes(num_tensors, std::vector<uint32_t>(2));
     std::vector<uint32_t> tensor_tile_sizes;
-    // The shard height is padded up to a multiple of num_blocks; the reader must not read the pad rows from DRAM
-    // (they lie past the end of the shard) and delivers them as zeros instead. num_full_blocks blocks lie entirely
-    // inside the shard; the next block holds partial_block_num_tiles real tiles (possibly 0); the rest are all pad.
+    // The shard height (the rows allocated per bank) is padded to a multiple of num_blocks in the block layout only;
+    // the reader must not read the pad rows from DRAM (they lie past the end of the shard) and delivers them as zeros.
+    // num_full_blocks blocks lie entirely inside the shard; the next block holds partial_block_num_tiles real tiles
+    // (possibly 0); the rest are all pad.
     std::vector<uint32_t> tensor_num_full_blocks;
     std::vector<uint32_t> tensor_partial_block_num_tiles;
     tensor_block_num_tiles.reserve(num_tensors);
