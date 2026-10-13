@@ -261,38 +261,27 @@ flatbuffers::Offset<ttnn::flatbuffer::Tensor> to_flatbuffer(
     return tensor_offset;
 }
 
-Tensor from_flatbuffer(
-    const ttnn::flatbuffer::Tensor* fb_tensor,
-    ttsl::Span<std::byte> tensor_data,
-    const tt::tt_metal::MemoryPin& memory_pin) {
+TensorFileDescription describe_tensor_file(const ttnn::flatbuffer::Tensor* fb_tensor) {
     auto spec = ttnn::from_flatbuffer(fb_tensor->tensor_spec());
 
     const auto* mesh_shape = fb_tensor->mesh_shape();
     TT_FATAL(mesh_shape != nullptr, "Mesh shape is required for tensor");
-    const tt::tt_metal::distributed::MeshShape ttnn_mesh_shape = from_flatbuffer(mesh_shape);
+    tt::tt_metal::distributed::MeshShape ttnn_mesh_shape = from_flatbuffer(mesh_shape);
 
-    // File shards are host-local. Loading them must not initialize MetalContext or acquire device locks.
-    auto distributed_buffer = tt::tt_metal::DistributedHostBuffer::create(
-        ttnn_mesh_shape,
-        ttnn_mesh_shape,
-        tt::tt_metal::distributed::MeshCoordinate::zero_coordinate(ttnn_mesh_shape.dims()),
-        /*context=*/nullptr);
+    std::vector<TensorFileShard> shards;
+    shards.reserve(fb_tensor->shards()->size());
     for (size_t i = 0; i < fb_tensor->shards()->size(); ++i) {
         const auto* shard = fb_tensor->shards()->Get(i);
 
         const auto* inline_storage = shard->buffer_as<ttnn::flatbuffer::InlineFileStorage>();
         TT_FATAL(inline_storage != nullptr, "Only InlineFileStorage is supported in flatbuffer deserialization");
-
-        const uint64_t offset = inline_storage->offset();
-        const uint64_t size = inline_storage->size();
-
-        tt::tt_metal::HostBuffer host_buffer = create_host_buffer_from_bytes(
-            size, spec, ttsl::Span<std::byte>(tensor_data.data() + offset, size), memory_pin);
-
         TT_FATAL(shard->mesh_coordinate() != nullptr, "Mesh coordinate is required for each shard");
-        const auto coord = from_flatbuffer(shard->mesh_coordinate());
-        distributed_buffer.emplace_shard(
-            coord, [host_buffer = std::move(host_buffer)]() mutable { return std::move(host_buffer); });
+
+        shards.push_back(TensorFileShard{
+            .coord = from_flatbuffer(shard->mesh_coordinate()),
+            .offset = inline_storage->offset(),
+            .size = inline_storage->size(),
+        });
     }
 
     // NOTE: Existing tensor cache files may not have a tensor topology.
@@ -302,8 +291,38 @@ Tensor from_flatbuffer(
         fb_topology != nullptr ? from_flatbuffer(fb_topology)
                                : tt::tt_metal::TensorTopology::create_fully_replicated_tensor_topology(ttnn_mesh_shape);
 
-    return Tensor(
-        tt::tt_metal::host_tensor_from_buffer_with_topology(std::move(distributed_buffer), spec, std::move(topology)));
+    return TensorFileDescription{
+        .spec = std::move(spec),
+        .mesh_shape = std::move(ttnn_mesh_shape),
+        .topology = std::move(topology),
+        .shards = std::move(shards),
+    };
+}
+
+Tensor from_flatbuffer(
+    const ttnn::flatbuffer::Tensor* fb_tensor,
+    ttsl::Span<std::byte> tensor_data,
+    const tt::tt_metal::MemoryPin& memory_pin) {
+    auto description = describe_tensor_file(fb_tensor);
+
+    // File shards are host-local. Loading them must not initialize MetalContext or acquire device locks.
+    auto distributed_buffer = tt::tt_metal::DistributedHostBuffer::create(
+        description.mesh_shape,
+        description.mesh_shape,
+        tt::tt_metal::distributed::MeshCoordinate::zero_coordinate(description.mesh_shape.dims()),
+        /*context=*/nullptr);
+    for (const auto& shard : description.shards) {
+        tt::tt_metal::HostBuffer host_buffer = create_host_buffer_from_bytes(
+            shard.size,
+            description.spec,
+            ttsl::Span<std::byte>(tensor_data.data() + shard.offset, shard.size),
+            memory_pin);
+        distributed_buffer.emplace_shard(
+            shard.coord, [host_buffer = std::move(host_buffer)]() mutable { return std::move(host_buffer); });
+    }
+
+    return Tensor(tt::tt_metal::host_tensor_from_buffer_with_topology(
+        std::move(distributed_buffer), std::move(description.spec), std::move(description.topology)));
 }
 
 }  // namespace ttnn

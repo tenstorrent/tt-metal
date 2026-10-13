@@ -31,4 +31,11 @@ void dump_tensor_flatbuffer(
     const std::string& file_name, const Tensor& tensor, DumpTensorMode mode = DumpTensorMode::DISTRIBUTED_GATHER);
 Tensor load_tensor_flatbuffer(const std::string& file_name, tt::tt_metal::distributed::MeshDevice* device = nullptr);
 
+// Experimental. Loads a tensor file onto `device` like `load_tensor_flatbuffer`, but streams the shards from disk with
+// O_DIRECT reads into a small set of staging buffers instead of mapping the file. The page cache is bypassed in both
+// directions: an already-cached file is still read from disk, and loading does not fill the cache.
+// Falls back to `load_tensor_flatbuffer` when the shards do not cover the whole mesh, when the memory config is not
+// interleaved, or when the file system rejects O_DIRECT.
+Tensor load_tensor_flatbuffer_direct(const std::string& file_name, tt::tt_metal::distributed::MeshDevice& device);
+
 }  // namespace ttnn

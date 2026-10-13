@@ -4,7 +4,12 @@
 
 #pragma once
 
+#include <cstdint>
+#include <vector>
+
 #include <tt_stl/span.hpp>
+#include <tt-metalium/mesh_coord.hpp>
+#include <tt-metalium/experimental/distributed_tensor/topology/tensor_topology.hpp>
 
 #include "tensor_generated.h"
 
@@ -15,6 +20,23 @@
 #include "ttnn/tensor/tensor.hpp"
 
 namespace ttnn {
+
+// Where one shard of a serialized tensor lives, relative to the start of the file's tensor data region.
+struct TensorFileShard {
+    tt::tt_metal::distributed::MeshCoordinate coord;
+    uint64_t offset = 0;
+    uint64_t size = 0;
+};
+
+// Everything a FlatBuffer tensor header says, without touching tensor data. Replicated shards may share an offset.
+struct TensorFileDescription {
+    tt::tt_metal::TensorSpec spec;
+    tt::tt_metal::distributed::MeshShape mesh_shape;
+    tt::tt_metal::TensorTopology topology;
+    std::vector<TensorFileShard> shards;
+};
+
+TensorFileDescription describe_tensor_file(const ttnn::flatbuffer::Tensor* fb_tensor);
 
 // Converts FlatBuffer tensor to Tensor object, using inline file storage to offset into `tensor_data`.
 // The data is provided in `tensor_data` and `memory_pin` to load the tensor data lazily.

@@ -689,6 +689,15 @@ void tensor_mem_config_module(nb::module_& m_tensor) {
             nb::arg("device") = nullptr,
             R"doc(
                 Load tensor to file using FlatBuffer format with inline file storage.
+            )doc")
+        .def(
+            "load_tensor_flatbuffer_direct",
+            &load_tensor_flatbuffer_direct,
+            nb::arg("file_name"),
+            nb::arg("device"),
+            R"doc(
+                Experimental. Load a tensor file onto a device by streaming it with O_DIRECT reads, bypassing the
+                page cache. Falls back to load_tensor_flatbuffer for layouts it does not handle.
             )doc");
 
     nb::class_<OverlappedTensorView>(m_tensor, "OverlappedTensor", R"doc(

@@ -37,6 +37,7 @@ set(TTNN_CORE_SRCS
     core/tensor/overlapped_serialization.cpp
     core/tensor/host_buffer/functions.cpp
     core/tensor/serialization.cpp
+    core/tensor/serialization_direct.cpp
     core/tensor/storage.cpp
     core/tensor/tensor.cpp
     core/tensor/tensor_attributes.cpp
