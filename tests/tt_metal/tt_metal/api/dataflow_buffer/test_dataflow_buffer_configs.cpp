@@ -2336,6 +2336,9 @@ TEST_F(UnitMeshFixture, DFBConfigSerializationPreservesGappedDeviceSlots) {
 // DFBs on disjoint cores all fit at slot 0.
 TEST_F(UnitMeshFixture, DFBDeviceSlotLimitIsPerCoreNotPerProgram) {
     const uint32_t max_slots = hal::get_num_dataflow_buffers();
+    if (this->device().arch() == ARCH::QUASAR) {
+        EXPECT_EQ(max_slots, static_cast<uint32_t>(::dfb::NUM_DFBS));
+    }
     const CoreCoord grid = this->device().compute_with_storage_grid_size();
     const uint32_t num_dfbs = max_slots + 4;
     if (grid.x * grid.y < num_dfbs) {
