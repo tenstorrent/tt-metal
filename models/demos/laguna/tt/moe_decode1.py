@@ -320,6 +320,8 @@ def expert_sum32(x, sparsity, memory_config=ttnn.L1_MEMORY_CONFIG):
 
 
 _GU32_X_MCAST = os.environ.get("TT_LAGUNA_GU32_X_MCAST", "1") == "1"
+# more than 32 tokens: gate_up32 computes / writes only the token tiles holding a row routed to the expert
+_GU32_SKIP = os.environ.get("TT_LAGUNA_GU32_SKIP", "1") == "1"
 _DN32_ROW_READS = os.environ.get("TT_LAGUNA_DN32_ROW_READS", "1") == "1"
 
 
@@ -354,14 +356,16 @@ def _gate_up32_parts(x, gu_cols, wv, sparsity, out, grid, core_base, groups, chu
         _cb(grid, 4, ttnn.bfloat16, sp_page, sp_rows + 1),
         _cb(grid, 5, ttnn.bfloat16, page, Mt),
         _cb(grid, 6, ttnn.bfloat16, page, Mt),
-        _cb(grid, 7, ttnn.bfloat16, sp_page, sp_rows),
+        _cb(grid, 7, ttnn.bfloat16, sp_page, sp_rows + 1),
+        _cb(grid, 8, ttnn.uint32, 64, 2),
         _cb(grid, 16, ttnn.bfloat16, page, 2),
     ]
+    skip = int(_GU32_SKIP and Mt > 1)
     reader = ttnn.KernelDescriptor(
         kernel_source=str(_KDIR / "gu32_reader.cpp"),
         source_type=ttnn.KernelDescriptor.SourceType.FILE_PATH,
         core_ranges=grid,
-        compile_time_args=[Kt, nt, E, chunk, page, wt, sp_page, gs.x, groups, core_base, Mt]
+        compile_time_args=[Kt, nt, E, chunk, page, wt, sp_page, gs.x, groups, core_base, Mt, skip]
         + _accessor_args(x, gu_cols.buf, sparsity if wv is None else wv, sparsity),
         common_runtime_args=[x.buffer_address(), gu_cols.buf.buffer_address(), 0 if wv is None else wv.buffer_address(),
                              sparsity.buffer_address(), sp_rows, len(rects)] + [v for r in rects for v in r],
@@ -371,7 +375,7 @@ def _gate_up32_parts(x, gu_cols, wv, sparsity, out, grid, core_base, groups, chu
         kernel_source=str(_KDIR / "gu32_writer.cpp"),
         source_type=ttnn.KernelDescriptor.SourceType.FILE_PATH,
         core_ranges=grid,
-        compile_time_args=[nt, E, page, sp_page, gs.x, groups, core_base, Mt] + _accessor_args(out, sparsity),
+        compile_time_args=[nt, E, page, sp_page, gs.x, groups, core_base, Mt, skip] + _accessor_args(out, sparsity),
         common_runtime_args=[out.buffer_address(), sparsity.buffer_address(), sp_rows],
         config=ttnn.WriterConfigDescriptor(),
     )
@@ -383,7 +387,7 @@ def _gate_up32_parts(x, gu_cols, wv, sparsity, out, grid, core_base, groups, chu
         kernel_source=str(_KDIR / "gu32_compute.cpp"),
         source_type=ttnn.KernelDescriptor.SourceType.FILE_PATH,
         core_ranges=grid,
-        compile_time_args=[Kt, chunk, Mt, int(os.environ.get("TT_LAGUNA_MOE_MMBLOCK", "0") == "1")],
+        compile_time_args=[Kt, chunk, Mt, int(os.environ.get("TT_LAGUNA_MOE_MMBLOCK", "0") == "1"), skip],
         config=cfg,
     )
     return [reader, writer, compute], cbs

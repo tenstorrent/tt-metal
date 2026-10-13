@@ -5,7 +5,9 @@
 // column n for the active experts a with a % G == g. Pushes: cb_meta <- unit count; cb_x <- the Kt activation tiles
 // (once); per unit cb_wv <- the expert's routing-weight tile, cb_w <- the gate column then the up column, CHUNK tiles
 // per push (each chunk one contiguous read from its column page). Mt > 1 (more than 32 tokens): cb_x holds the Mt x Kt
-// activation tiles (tile m * Kt + k) and each unit pushes Mt routing-weight tiles (rows m * 32 .. of the routing rows).
+// activation tiles (tile m * Kt + k) and each unit pushes Mt routing-weight tiles (rows m * 32 .. of the routing rows)
+// and (skip) a cb_mask word: bit m set when token tile m holds a row routed to the unit's expert (compute and writer
+// skip the other tiles: ~30% of an expert's tiles at 96 rows hold none of its rows).
 
 #include <stdint.h>
 #include "api/dataflow/dataflow_api.h"
@@ -23,7 +25,9 @@ void kernel_main() {
     constexpr uint32_t cb_x = 0, cb_w = 1, cb_wv = 2, cb_meta = 3, cb_sp = 4;
     constexpr uint32_t core_base = get_compile_time_arg_val(9);  // first core of this kernel's grid (row-major index)
     constexpr uint32_t Mt = get_compile_time_arg_val(10);        // 32-row token tiles
-    constexpr auto x_args = TensorAccessorArgs<11>();
+    constexpr bool skip = get_compile_time_arg_val(11) == 1 && Mt > 1;
+    constexpr uint32_t cb_mask = 8;
+    constexpr auto x_args = TensorAccessorArgs<12>();
     constexpr auto w_args = TensorAccessorArgs<x_args.next_compile_time_args_offset()>();
     constexpr auto wv_args = TensorAccessorArgs<w_args.next_compile_time_args_offset()>();
     constexpr auto sp_args = TensorAccessorArgs<wv_args.next_compile_time_args_offset()>();
@@ -140,6 +144,18 @@ void kernel_main() {
             }
         }
         cb_push_back(cb_wv, Mt);
+        if constexpr (skip) {
+            uint32_t mask = (1u << Mt) - 1;
+            if (wv_addr == 0) {  // the routing rows: the tiles holding a row routed to e
+                mask = 0;
+                for (uint32_t t = 0; t < sp_rows; ++t) {
+                    mask |= (rowsv[t * (sp_page / 2) + e] != 0 ? 1u : 0u) << (t / 32);
+                }
+            }
+            cb_reserve_back(cb_mask, 1);
+            reinterpret_cast<volatile tt_l1_ptr uint32_t*>(get_write_ptr(cb_mask))[0] = mask;
+            cb_push_back(cb_mask, 1);
+        }
         for (uint32_t half = 0; half < 2; ++half) {
             // tile (k = 0) of the column; its Kt tiles follow contiguously in the column's shard
             const uint64_t col = w.get_noc_addr(e * Kt * 2 * Nt + half * Nt + n);
