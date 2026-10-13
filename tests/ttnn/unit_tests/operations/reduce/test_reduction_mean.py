@@ -9,19 +9,25 @@ pytestmark = pytest.mark.use_module_device
 import torch
 
 import ttnn
-from tests.ttnn.utils_for_testing import assert_allclose, assert_numeric_metrics, assert_with_ulp
+from tests.ttnn.utils_for_testing import assert_allclose, assert_numeric_metrics, assert_with_ulp, merge_gate_subset
 from tt_py_test_utils_common.utility_functions import torch_random
 
 TEST_PADDING_VALUE = -42
 
 
-@pytest.mark.merge_gate
-@pytest.mark.parametrize("batch_size", [1, 16])
-@pytest.mark.parametrize("h", [32, 64, 41, 37])
-@pytest.mark.parametrize("w", [32, 64, 31, 63])
-@pytest.mark.parametrize("dim", [-1, -2])
-@pytest.mark.parametrize("keepdim", [True, False])
-@pytest.mark.parametrize("dtype", [ttnn.bfloat16, ttnn.float32], ids=["bf16", "fp32"])
+@pytest.mark.parametrize(
+    *merge_gate_subset(
+        {
+            "dtype": {"bf16": ttnn.bfloat16, "fp32": ttnn.float32},
+            "keepdim": [True, False],
+            "dim": [-1, -2],
+            "w": [32, 64, 31, 63],
+            "h": [32, 64, 41, 37],
+            "batch_size": [1, 16],
+        },
+        keep=lambda batch_size, h, w, **_: batch_size == 16 and h in (64, 41) and w in (64, 31),
+    )
+)
 def test_mean(device, batch_size, h, w, dim, keepdim, dtype):
     torch.manual_seed(0)
 
