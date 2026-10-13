@@ -38,8 +38,9 @@ def open_mesh_device(
         fabric_config = ttnn.FabricConfig.FABRIC_2D_TORUS_XY
     logger.info(f"Fabric config: {fabric_config} (sp={sp}, PREFILL_FABRIC_MODE={fabric_mode or 'unset'})")
 
+    # A/B knob: a floor on the fabric payload, to measure what a larger one costs.
     fabric_router_config = _create_fabric_router_config(
-        max_payload_size=model_cfg.FABRIC_PAYLOAD_SIZE,
+        max_payload_size=max(model_cfg.FABRIC_PAYLOAD_SIZE, int(os.environ.get("PREFILL_TEST_FABRIC_PAYLOAD", "0"))),
     )
 
     ttnn.set_fabric_config(
