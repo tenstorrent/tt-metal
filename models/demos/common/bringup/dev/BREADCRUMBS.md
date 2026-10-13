@@ -797,3 +797,24 @@ first A/B then measured HiFi4 twice (the agent had put the default back on the o
   REJECTED (counts as done). Profile guard: `testing/accuracy_guard.py` (ACCURACY_FAIL marker; BRINGUP_AB=1 exempt).
 - Open: the table lists the F56 mistake sweep's expected control lines (`pcc=0.000000`, `rel=1 row=1`) as failures,
   and its header says "on = the tree as the agent left it" (should name ab.change).
+
+## F59 (2026-10-13): two-tier knowledge: a short anchored shared file, each model's own lessons in its bringup dir
+
+- Symptom: every agent step read `knowledge/known_issues.md` (209 KB, ~50k tokens) and `repo_map.md` (22 KB) in full;
+  205 of 245 known issues and 42 of 64 map rows sat under "Proposed" because nothing ever merged them, and many were
+  about one model's layers, tests or code. Entries had no tie to the code they describe, so a rebase could leave them
+  stale unnoticed.
+- Fix: a reviewed proposal (bucketing, merges, rewrites, staleness against 9b393736f86) applied in one pass. Shared
+  `known_issues.md` keeps 80 durable lessons in six sections (new: Testing; no Proposed), each with `Applies to:` and
+  `Seen at:` anchors, at most SHARED_MAX_CHARS (800); shared `repo_map.md` keeps general rows. Model-specific entries
+  moved to `models/demos/<model>/bringup/known_issues.md` / `repo_map.md` (6 models); 18 entries deleted (duplicates;
+  framework bugs since fixed: F40-F42, 06c216f0224, 3c9fdf4ee27, 8a8d3452ee2, the contract hooks path).
+- Process: agents write only their model's files (engineer rule 11, brief "When you finish"; `common_paths` and the
+  gate's staging changed accordingly, shared files are no longer swept into task commits); briefs and PRIOR_READS list
+  the model files; `knowledge/check.py` checks the shared file (sections, fields, anchors, length) and, with
+  `--model-dir`, the model's files (the orchestrator checks both after every step). The overseer skill curates at run
+  end: promote durable lessons into the shared files, delete fixed ones, owner approves the diff.
+- References: claude.ai artifact links are unreadable to agents and other people; `knowledge/references/` holds the
+  Kimi K2.7 4x4 layer plan (page + text version), which the repo map's sharding row now points at.
+- Still open: the staleness re-check after a rebase / fork sync (the anchors make it mechanical) belongs in a
+  `/rebase-bringup` skill.

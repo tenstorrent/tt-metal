@@ -207,6 +207,8 @@ def stage_paths(spec: Spec, ledger: Ledger, task: dict) -> list[str]:
     for extra in (
         "approvals.yaml",
         "findings.yaml",
+        "known_issues.md",  # the model's own lessons and repo pointers (agents write these, not the shared files)
+        "repo_map.md",
         "__init__.py",
         "results/block_graphs.json",
         "spec.yaml",
@@ -235,17 +237,13 @@ def stage_paths(spec: Spec, ledger: Ledger, task: dict) -> list[str]:
     if task.get("step") == "contract":
         paths.append("models/demos/common/prefill")  # orchestrator.CONTRACT_SHARED: the contract agent may change it
         paths.append(rel(ledger.dir / "hooks.py"))  # and the model's hooks (contract_state_pcc)
-    # F48: every agent may write the shared knowledge files and ttnn/ttnn/bringup (a fork, or a change to one behind
-    # an option); one agent runs at a time, so what changed there is this task's. Only changed files, so the gate's
-    # formatting pass does not touch the other forks.
-    paths += _dirty_under(repo, [*SHARED_KNOWLEDGE, BRINGUP_OPS])
+    # F48: every agent may write ttnn/ttnn/bringup (a fork, or a change to one behind an option); one agent runs at a
+    # time, so what changed there is this task's. Only changed files, so the gate's formatting pass does not touch the
+    # other forks. The shared knowledge files are no longer agent-writable (the overseer curates them at run end).
+    paths += _dirty_under(repo, [BRINGUP_OPS])
     return list(dict.fromkeys(p for p in paths if (repo / p).exists() or _tracked(repo, p)))
 
 
-SHARED_KNOWLEDGE = (
-    "models/demos/common/bringup/knowledge/known_issues.md",
-    "models/demos/common/bringup/knowledge/repo_map.md",
-)
 BRINGUP_OPS = "ttnn/ttnn/bringup"
 
 

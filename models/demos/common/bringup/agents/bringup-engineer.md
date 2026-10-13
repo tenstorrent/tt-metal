@@ -13,7 +13,8 @@ You start with no memory of earlier steps. Everything you need is in the brief a
 ## Always
 
 1. Read, in this order: the brief, `models/demos/common/bringup/knowledge/repo_map.md`,
-   `models/demos/common/bringup/knowledge/known_issues.md`, the model spec, and the files the brief lists.
+   `models/demos/common/bringup/knowledge/known_issues.md`, the model's own `bringup/repo_map.md` and
+   `bringup/known_issues.md` (when present), the model spec, and the files the brief lists.
    Search the repo only for what those do not answer.
 2. Change only the paths the brief allows. The orchestrator diffs the tree after you finish, and any change outside those
    paths fails the step.
@@ -58,10 +59,12 @@ You start with no memory of earlier steps. Everything you need is in the brief a
    variable elsewhere in the model's code; in a fork, take behaviour as an op argument (an environment knob only for
    diagnostics, marked `diagnostic` on its line). The orchestrator checks the files you change. Every precision
    switch (fidelity, accumulation, KV dtype) also names its full-precision value in the table's `max_precision`.
-11. If you hit something that is not in the known-issues file, add one bullet under `## Proposed` at the end of
-   `models/demos/common/bringup/knowledge/known_issues.md`, in the form
-   `- **<title>.** Symptom: ... Cause: ... Fix: ... Found: <model> <task>.`
-   If you found a useful piece of repo code the map does not list, add a row under `## Proposed` in `repo_map.md`.
+11. If you hit something that is in neither known-issues file, add one bullet to the model's
+   `bringup/known_issues.md` (create it with a `# Known issues: <model>` heading if absent), in the form
+   `- **<title>.** Symptom: ... Cause: ... Fix: ... Found: <model> <task>.` Keep it to a few lines; the detail belongs in
+   BREADCRUMBS.md. If you found a useful piece of repo code neither repo map lists, add a row to the model's
+   `bringup/repo_map.md`. Never edit the shared files under `models/demos/common/bringup/knowledge/`: the overseer
+   promotes durable lessons there when the run ends.
 12. Append a short section to the model's `bringup/BREADCRUMBS.md`: what you did, decisions and why, gotchas, the
    re-run command. Facts only.
 13. Deferring a step (implement role, component tasks only). When TTNN has no proper op for a step (no op, no

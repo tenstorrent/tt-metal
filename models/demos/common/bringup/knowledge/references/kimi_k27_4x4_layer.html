@@ -1,0 +1,559 @@
+<!doctype html><html><head><meta charset=utf8><meta name=viewport content="width=device-width,initial-scale=1,viewport-fit=cover"><style>:root{color-scheme:light;box-sizing:border-box;padding-top:env(safe-area-inset-top,0px);padding-bottom:env(safe-area-inset-bottom,0px)}html{scroll-padding-top:env(safe-area-inset-top,0px)}body{margin:0;padding:0;font:14px -apple-system,BlinkMacSystemFont,sans-serif;background:#faf9f5;color:#141413}img{max-width:100%}[hidden]:not([hidden=until-found i]){display:none!important}</style></head><body>
+<title>Kimi K2.7 Layer on 4×4</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=IBM+Plex+Sans+Condensed:wght@500;600;700&family=IBM+Plex+Sans:wght@400;500;600&family=IBM+Plex+Mono:wght@400;500&display=swap">
+<style>
+:root{
+  --ground:#F2F4F3; --panel:#FFFFFF; --ink:#16201E; --muted:#58645F; --rule:#D2DAD7; --soft:#E7ECEA;
+  --compute:#0B6E5F; --compute-soft:#D7EDE8;
+  --memory:#3D5A99; --memory-soft:#DEE5F4;
+  --comm:#A45F0C; --comm-soft:#F5E7D3;
+  --sel:#16201E;
+  --display:"IBM Plex Sans Condensed","Arial Narrow",system-ui,sans-serif;
+  --body:"IBM Plex Sans",system-ui,-apple-system,"Segoe UI",sans-serif;
+  --mono:"IBM Plex Mono",ui-monospace,Menlo,Consolas,monospace;
+}
+@media (prefers-color-scheme: dark){
+  :root:not([data-theme="light"]){
+    color-scheme:dark;
+    --ground:#0F1413; --panel:#161D1B; --ink:#E2E9E6; --muted:#98A6A1; --rule:#2A3431; --soft:#1D2624;
+    --compute:#4FC2A7; --compute-soft:#15322B; --memory:#8DA6E0; --memory-soft:#1C2539; --comm:#E3A553; --comm-soft:#33260F; --sel:#E2E9E6;
+  }
+}
+:root[data-theme="dark"]{
+  color-scheme:dark;
+  --ground:#0F1413; --panel:#161D1B; --ink:#E2E9E6; --muted:#98A6A1; --rule:#2A3431; --soft:#1D2624;
+  --compute:#4FC2A7; --compute-soft:#15322B; --memory:#8DA6E0; --memory-soft:#1C2539; --comm:#E3A553; --comm-soft:#33260F; --sel:#E2E9E6;
+}
+*{box-sizing:border-box}
+body{background:var(--ground);color:var(--ink);font-family:var(--body);font-size:15px;line-height:1.55;margin:0;padding:0 18px}
+.wrap{max-width:1180px;margin:0 auto;padding-block:32px 64px;display:flex;flex-direction:column;gap:28px}
+h1,h2,h3{font-family:var(--display);margin:0;line-height:1.15;text-wrap:balance}
+h1{font-size:clamp(1.7rem,3.6vw,2.4rem);font-weight:700}
+h2{font-size:1.25rem;font-weight:700}
+p{margin:0}
+.mono{font-family:var(--mono);font-size:.86em}
+.muted{color:var(--muted)}
+header{display:flex;flex-direction:column;gap:10px;max-width:78ch}
+.facts{display:flex;flex-wrap:wrap;gap:8px 18px;font-size:.9rem;color:var(--muted)}
+.facts b{color:var(--ink);font-weight:600}
+
+/* timeline */
+.timeline{background:var(--panel);border:1px solid var(--rule);border-radius:10px;padding:16px 16px 12px;display:flex;flex-direction:column;gap:10px}
+.tl-head{display:flex;justify-content:space-between;align-items:baseline;gap:12px;flex-wrap:wrap}
+.tl-total{font-family:var(--display);font-size:1.6rem;font-weight:700;font-variant-numeric:tabular-nums}
+.bar{display:flex;height:34px;border-radius:6px;overflow:hidden;border:1px solid var(--rule)}
+.seg{border:0;padding:0;margin:0;cursor:pointer;min-width:3px;border-right:1px solid var(--panel);position:relative}
+.seg:last-child{border-right:0}
+.seg.compute{background:var(--compute)} .seg.memory{background:var(--memory)} .seg.comm{background:var(--comm)} .seg.other{background:var(--muted)}
+.seg[aria-current="true"]{outline:3px solid var(--sel);outline-offset:-3px;z-index:1}
+.seg:focus-visible{outline:3px solid var(--sel);outline-offset:-3px}
+.parts{display:flex;font-family:var(--display);font-size:.82rem;color:var(--muted);font-variant-numeric:tabular-nums}
+.parts span{border-left:1px solid var(--rule);padding-left:6px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+.legend{display:flex;flex-wrap:wrap;gap:6px 16px;font-size:.84rem;color:var(--muted)}
+.legend i{display:inline-block;width:11px;height:11px;border-radius:2px;margin-right:6px;vertical-align:-1px}
+
+/* main */
+.main{display:grid;grid-template-columns:minmax(260px,340px) minmax(0,1fr);gap:22px;align-items:start}
+@media (max-width:900px){.main{grid-template-columns:minmax(0,1fr)}}
+.steps{background:var(--panel);border:1px solid var(--rule);border-radius:10px;padding:8px;display:flex;flex-direction:column;gap:2px;max-height:78vh;overflow:auto}
+@media (max-width:900px){.steps{max-height:none}}
+.grp{font-family:var(--display);font-size:.78rem;letter-spacing:.1em;text-transform:uppercase;color:var(--muted);padding:10px 8px 4px}
+.step{display:grid;grid-template-columns:24px 1fr auto;gap:8px;align-items:baseline;width:100%;text-align:left;background:none;border:0;border-radius:6px;padding:7px 8px;cursor:pointer;color:var(--ink);font:inherit}
+.step:hover{background:var(--soft)}
+.step[aria-current="true"]{background:var(--soft);box-shadow:inset 3px 0 0 var(--sel)}
+.step:focus-visible{outline:2px solid var(--sel);outline-offset:1px}
+.step .n{font-family:var(--mono);font-size:.78rem;color:var(--muted);font-variant-numeric:tabular-nums}
+.step .nm{font-size:.92rem;line-height:1.3}
+.step .ms{font-family:var(--mono);font-size:.8rem;font-variant-numeric:tabular-nums;display:flex;align-items:center;gap:6px}
+.dot{width:8px;height:8px;border-radius:50%;display:inline-block}
+.dot.compute{background:var(--compute)} .dot.memory{background:var(--memory)} .dot.comm{background:var(--comm)} .dot.other{background:var(--muted)}
+
+.detail{background:var(--panel);border:1px solid var(--rule);border-radius:10px;padding:20px;display:flex;flex-direction:column;gap:16px;min-width:0}
+.d-head{display:flex;flex-wrap:wrap;gap:8px 14px;align-items:baseline}
+.pill{font-family:var(--display);font-size:.78rem;font-weight:600;letter-spacing:.06em;text-transform:uppercase;padding:2px 8px;border-radius:999px}
+.pill.compute{background:var(--compute-soft);color:var(--compute)} .pill.memory{background:var(--memory-soft);color:var(--memory)} .pill.comm{background:var(--comm-soft);color:var(--comm)} .pill.other{background:var(--soft);color:var(--muted)}
+.d-ms{font-family:var(--display);font-size:1.4rem;font-weight:700;font-variant-numeric:tabular-nums;margin-left:auto}
+.d-body{display:grid;grid-template-columns:minmax(0,1.05fr) minmax(0,1fr);gap:20px;align-items:start}
+@media (max-width:640px){.d-body{grid-template-columns:minmax(0,1fr)}}
+figure{margin:0;display:flex;flex-direction:column;gap:8px}
+figure svg{width:100%;height:auto;max-width:460px;color:var(--ink)}
+figcaption{font-size:.84rem;color:var(--muted)}
+.kv{display:grid;grid-template-columns:auto 1fr;gap:6px 12px;font-size:.9rem}
+.kv dt{color:var(--muted)}
+.kv dd{margin:0;font-family:var(--mono);font-size:.84rem;overflow-wrap:anywhere}
+.what{display:flex;flex-direction:column;gap:10px;max-width:62ch}
+.note{border-left:3px solid var(--comm);padding:2px 0 2px 12px;font-size:.9rem}
+.nav{display:flex;gap:8px}
+.nav button{font:inherit;font-size:.88rem;border:1px solid var(--rule);background:var(--panel);color:var(--ink);border-radius:6px;padding:5px 12px;cursor:pointer}
+.nav button:hover{background:var(--soft)}
+.nav button:focus-visible{outline:2px solid var(--sel);outline-offset:1px}
+.flow{background:var(--panel);border:1px solid var(--rule);border-radius:10px;padding:20px;display:flex;flex-direction:column;gap:16px}
+.flow-head{display:flex;flex-direction:column;gap:6px;max-width:80ch}
+.flow-grid{display:grid;grid-template-columns:minmax(0,1.35fr) minmax(0,1fr);gap:26px;align-items:start}
+@media (max-width:980px){.flow-grid{grid-template-columns:minmax(0,1fr)}}
+.scroll{overflow-x:auto}
+#dag{width:100%;min-width:560px;height:auto;color:var(--ink)}
+#dag .node{cursor:pointer}
+#dag .node:focus-visible rect.box{stroke-width:3}
+#dag .node:hover rect.box{stroke-width:2.4}
+.journey{display:flex;flex-direction:column;gap:12px;position:sticky;top:calc(env(safe-area-inset-top,0px) + 16px)}
+@media (max-width:980px){.journey{position:static}}
+.journey h3{font-size:1.05rem}
+.journey ol{margin:0;padding-left:1.2em;display:flex;flex-direction:column;gap:6px}
+#journey{width:100%;max-width:400px;height:auto;color:var(--ink)}
+.foot{font-size:.86rem;color:var(--muted);max-width:90ch;display:flex;flex-direction:column;gap:6px}
+</style>
+
+<div class="wrap">
+  <header>
+    <h1>One Kimi K2.7 expert layer, split across a 4×4 grid of chips</h1>
+    <p class="muted">How tt-moe-nappkin lays out and costs one layer: which chip holds what at each step, which chips talk to each other, and how long each step takes. Click a step, a segment of the bar, or use the ← → keys.</p>
+    <div class="facts">
+      <span><b>5,120</b> tokens in this chunk</span>
+      <span><b>46,080</b> earlier tokens in the KV cache (last chunk of a 51,200-token prompt)</span>
+      <span><b>16 chips</b>: rows split the tokens, columns split the weights</span>
+      <span><b>384</b> experts, 8 used per token, 1 shared</span>
+    </div>
+  </header>
+
+  <section class="timeline" aria-label="Time per step, to scale">
+    <div class="tl-head">
+      <h2>Where the time goes</h2>
+      <span class="tl-total" id="tl-total">15.86 ms</span>
+    </div>
+    <div class="bar" id="bar"></div>
+    <div class="parts" id="parts"></div>
+    <div class="legend">
+      <span><i style="background:var(--compute)"></i>limited by maths</span>
+      <span><i style="background:var(--memory)"></i>limited by memory</span>
+      <span><i style="background:var(--comm)"></i>chip-to-chip communication</span>
+      <span><i style="background:var(--muted)"></i>norms and residual adds</span>
+    </div>
+  </section>
+
+  <section class="main">
+    <nav class="steps" id="steps" aria-label="Steps of the layer"></nav>
+    <article class="detail" id="detail" aria-live="polite">
+      <div class="d-head">
+        <h2 id="d-name"></h2>
+        <span class="pill" id="d-pill"></span>
+        <span class="d-ms" id="d-ms"></span>
+      </div>
+      <div class="d-body">
+        <figure>
+          <svg id="grid" viewBox="0 0 460 440" role="img" aria-label=""></svg>
+          <figcaption id="d-cap"></figcaption>
+        </figure>
+        <div class="what">
+          <p id="d-what"></p>
+          <dl class="kv">
+            <dt>One chip reads</dt><dd id="d-in"></dd>
+            <dt>One chip writes</dt><dd id="d-out"></dd>
+          </dl>
+          <p class="note" id="d-note" hidden></p>
+          <div class="nav">
+            <button type="button" id="prev">← Previous step</button>
+            <button type="button" id="next">Next step →</button>
+          </div>
+        </div>
+      </div>
+    </article>
+  </section>
+
+  <section class="flow" aria-labelledby="flow-h">
+    <div class="flow-head">
+      <h2 id="flow-h">How the tokens flow through the layer</h2>
+      <p class="muted">Every box is one step, and every arrow is data moving between steps, labelled with what one chip holds. Branches side by side run independently. Amber boxes move data between chips (in a row or in a column). Click a box to see its chips above.</p>
+    </div>
+    <div class="flow-grid">
+      <figure class="dag-fig">
+        <div class="scroll"><svg id="dag" viewBox="0 0 760 1880" role="img" aria-label="Flow of one layer: norm, attention with separate query and key-value branches, residual add, norm, gather, router and shared expert branches, dispatch, 24 experts per chip, combine, weighted sum, reduce-scatter, add, residual add, output."></svg></div>
+        <figcaption>One layer, top to bottom. The two long lines on the left are the residual connections: the layer's input is added back after attention, and that result is added back after the experts.</figcaption>
+      </figure>
+      <div class="journey">
+        <h3>Following one token through the experts</h3>
+        <p>Take token 3,000 of the chunk. It belongs to <b>row 2</b> (tokens 2,560–3,839), so it starts out split across the four chips of that row, a quarter of its 7,168 values on each.</p>
+        <ol>
+          <li><b>Attention.</b> Its query is scored against every earlier position it may see: the 46,080 cached tokens plus the chunk tokens before it, about 49,000 keys. Each chip in row 2 does 16 of the 64 heads.</li>
+          <li><b>Gather.</b> The row all-gather gives all four chips of row 2 the whole token.</li>
+          <li><b>Router.</b> It picks 8 of the 384 experts. Below is an <i>example</i> choice; the real choice depends on the token.</li>
+          <li><b>Dispatch.</b> Expert <i>e</i> lives on chip number ⌊e ÷ 24⌋. Each copy of the token only serves experts in its own column, so the token travels straight up or down.</li>
+          <li><b>Combine and reduce.</b> Outputs travel back to row 2. Each chip adds up the experts from its column, and the row reduce-scatter adds the four columns together, leaving each chip a quarter of the result.</li>
+        </ol>
+        <figure>
+          <svg id="journey" viewBox="0 0 400 330" role="img" aria-label="Example: token 3000 in row 2 is sent to 8 experts; each copy moves only within its own column."></svg>
+          <figcaption>Example routing: experts 5, 57, 101, 130, 199, 250, 311 and 377. Arrows start on the row-2 chip in each column. Experts 199 and 250 sit on row-2 chips (2,0 and 2,2), so they need no transfer.</figcaption>
+        </figure>
+      </div>
+    </div>
+  </section>
+
+  <section class="foot">
+    <p>Numbers come from tt-moe-nappkin's defaults for the Kimi K2.7 preset: <span class="mono">layer_costs(isl=5120, kv_cache=46080)</span> on a 4×4 mesh. Attention runs at HiFi2 (213 TFLOPS per chip), routed experts at LoFi (426 TFLOPS), DRAM at 80% of 512 GB/s, and links at 80% of 2 × 200 Gb/s in each direction.</p>
+    <p>Two defaults matter a lot here. Steps run one after another (with nappkin's "parallel" overlap option, where the shared expert runs during the dispatch and each expert during the previous combine, the expert part drops from 4.46 to 3.76 ms). Expert load is worst case: one expert on each chip receives the whole chunk.</p>
+    <p>This is the last chunk of the prompt, so attention is at its most expensive. On the first chunk (no earlier tokens) attention takes 1.59 ms and the whole layer 6.16 ms.</p>
+  </section>
+</div>
+
+<script>
+(function(){
+  var ROWS = 4, COLS = 4;
+  // pattern: "local" = no chip-to-chip traffic, "row" = collective among the 4 chips of each row (weight split),
+  // "col" = all-to-all among the 4 chips of each column (token dispatch/combine)
+  var S = [
+    {part:"attn", name:"Compress Q (wq_a)", ms:0.0331, b:"compute", pat:"local", cell:"tok+wk",
+     what:"Each chip multiplies its row's 1,280 tokens by its quarter of the wq_a weight. The weight is split along its input side, so each chip produces a partial sum that has to be added up across the row next.",
+     inp:"[1280, 1792] tokens × [1792, 1536] weight (bfp8)", out:"[1280, 1536] partial sum"},
+    {part:"attn", name:"Sum and share Q across the row", ms:0.0738, b:"comm", pat:"row", cell:"tok",
+     what:"A reduce-scatter adds up the four partial sums across each row, then an all-gather gives every chip in the row the full compressed Q for its 1,280 tokens.",
+     inp:"[1280, 1536]", out:"[1280, 1536] complete", sub:"reduce-scatter 0.037 ms + all-gather 0.037 ms"},
+    {part:"attn", name:"Expand Q per head (wq_b)", ms:0.0567, b:"compute", pat:"local", cell:"heads",
+     what:"Heads are split across columns: each chip computes Q for its own 16 of the 64 heads (16 × 192 = 3,072 values per token).",
+     inp:"[1280, 1536] × [1536, 3072]", out:"[1280, 3072] (16 heads)"},
+    {part:"attn", name:"Fold Q into the compressed space", ms:0.0154, b:"memory", pat:"local", cell:"heads",
+     what:"MLA's absorbed form: each head's Q is pushed through the key-expansion weight so attention can run directly against the small 512-wide compressed cache.",
+     inp:"[16, 1280, 128] × [16, 128, 512]", out:"[16, 1280, 512]"},
+    {part:"attn", name:"Compress K,V (wkv_a) and share", ms:0.0690, b:"comm", pat:"row", cell:"tok",
+     what:"The new tokens' compressed K,V (576 values each) is computed from each chip's weight slice and all-gathered across the row.",
+     inp:"[1280, 1792] × [1792, 576]", out:"[1280, 576] per row", sub:"matmul 0.014 ms + all-gather 0.055 ms"},
+    {part:"attn", name:"Scores: q · kᵀ over 51,200 keys", ms:5.6032, b:"compute", pat:"local", cell:"heads",
+     what:"The biggest step. Each chip scores its 1,280 queries against all 51,200 keys (the 46,080 cached plus the chunk itself), for its 16 heads, in the 576-wide compressed space. The costed chip is the last row, whose tokens see the most keys (98.75% of the full matrix after the causal mask).",
+     inp:"[16, 1280, 576] × [16, 576, 51200]", out:"[16, 1280, 51200] scores",
+     note:"Softmax over these scores runs on the slower vector unit and is costed at 3.11 ms, hidden under the 5.60 ms of matrix work."},
+    {part:"attn", name:"Weighted sum: scores · v", ms:4.9806, b:"compute", pat:"local", cell:"heads",
+     what:"The scores weight the 512-wide compressed values for all 51,200 positions.",
+     inp:"[16, 1280, 51200] × [16, 51200, 512]", out:"[16, 1280, 512]"},
+    {part:"attn", name:"Read the KV cache", ms:0.0576, b:"memory", pat:"local", cell:"tok",
+     what:"The 46,080 cached tokens' compressed K,V is streamed from DRAM once. It's small because MLA stores only 512 values per token.",
+     inp:"[46080, 512] (bfp8) from DRAM", out:"nothing (feeds the two steps above)"},
+    {part:"attn", name:"Expand V per head (wkv_b2)", ms:0.0538, b:"memory", pat:"local", cell:"heads",
+     what:"Each head's output leaves the compressed space: 512 → 128 values.",
+     inp:"[16, 1280, 512] × [16, 512, 128]", out:"[16, 1280, 128]"},
+    {part:"attn", name:"Output projection + reduce-scatter", ms:0.3485, b:"comm", pat:"row", cell:"tok+wk",
+     what:"Each chip projects its 16 heads back to the model width (a partial sum over heads), then a reduce-scatter across the row adds the four partials and leaves each chip a quarter of the width.",
+     inp:"[1280, 2048] × [2048, 7168]", out:"[1280, 1792]", sub:"matmul 0.177 ms + reduce-scatter 0.172 ms"},
+
+    {part:"moe", name:"Gather full width across the row", ms:0.0860, b:"comm", pat:"row", cell:"tok",
+     what:"Everything in the expert block wants whole token rows, so the four quarter-width slices are all-gathered across each row. Now every chip in a row holds the same 1,280 tokens at full width.",
+     inp:"[1280, 1792]", out:"[1280, 7168]"},
+    {part:"moe", name:"Router (gate)", ms:0.0239, b:"memory", pat:"row", cell:"tok+wk",
+     what:"Scores the 384 experts for each token. The gate weight is split across the row, so each chip computes partial scores; a reduce-scatter and all-gather complete them.",
+     inp:"[1280, 1792] × [1792, 384]", out:"[1280, 384] expert scores", sub:"matmul 0.015 ms + reduce-scatter 0.005 ms + all-gather 0.005 ms"},
+    {part:"moe", name:"Shared expert (tensor-parallel)", ms:0.2569, b:"memory", pat:"row", cell:"shared",
+     what:"The shared expert is split across the row like a normal tensor-parallel MLP: each chip holds a quarter of every matrix (hidden 2048 ÷ 4 = 512). Gate and up are split by output, down by input, and a reduce-scatter adds the partial results.",
+     inp:"[1280, 7168] × [7168, 512] (×2), then [1280, 512] × [512, 7168]", out:"[1280, 1792]", sub:"gate 0.066 + up 0.066 + activation 0.016 + down with reduce-scatter 0.109 ms"},
+    {part:"moe", name:"Dispatch tokens to experts", ms:0.4588, b:"comm", pat:"col", cell:"experts",
+     what:"All-to-all up and down each column. Each column hosts 96 experts (24 per chip), and after the gather every column has all tokens of its rows, so tokens only travel vertically, to the chip in their column that hosts the chosen expert.",
+     inp:"[1280, 7168]", out:"[640, 7168] tokens for this chip's experts"},
+    {part:"moe", name:"Routed experts (24 per chip)", ms:2.8750, b:"compute", pat:"local", cell:"experts",
+     what:"Pure expert parallelism: every chip holds 24 whole experts (384 ÷ 16), none split across chips. The costing assumes the worst case: one expert per chip gets all 5,120 tokens (1.19 ms, limited by maths), and the other 23 get 212 each (0.073 ms each, limited by memory).",
+     inp:"per expert [tokens, 7168] × [7168, 2048] (bfp4), ×2, then × [2048, 7168]", out:"[tokens, 7168] per expert",
+     note:"Balanced load would be about 106 tokens per expert, padded ×2 by the capacity factor to 212."},
+    {part:"moe", name:"Combine expert outputs", ms:0.4588, b:"comm", pat:"col", cell:"experts",
+     what:"The reverse all-to-all: expert outputs travel back up and down each column to the chips holding their tokens.",
+     inp:"[640, 7168]", out:"[4, 1280, 7168] (one slot per source chip)"},
+    {part:"moe", name:"Weighted sum of the 8 experts", ms:0.1792, b:"memory", pat:"local", cell:"tok",
+     what:"Each token's expert outputs are added with the router's weights.",
+     inp:"[4, 1280, 7168]", out:"[1280, 7168]"},
+    {part:"moe", name:"Reduce-scatter back to quarter width", ms:0.0860, b:"comm", pat:"row", cell:"tok+wk",
+     what:"Returns to the layer's resting layout: each chip keeps a quarter of the width for its row's tokens.",
+     inp:"[1280, 7168]", out:"[1280, 1792]"},
+    {part:"moe", name:"Add shared + routed outputs", ms:0.0336, b:"memory", pat:"local", cell:"tok+wk",
+     what:"The shared expert's output and the routed experts' output are added.",
+     inp:"[1280, 1792] + [1280, 1792]", out:"[1280, 1792]"},
+    {part:"other", name:"Norms and residual adds", ms:0.1120, b:"other", pat:"local", cell:"tok+wk",
+     what:"Two RMSNorms (costed on the vector unit) and two residual adds for the layer.",
+     inp:"[1280, 1792]", out:"[1280, 1792]"}
+  ];
+  var PARTS = {attn:"Attention (MLA)", moe:"Expert block (MoE)", other:"Other"};
+  var BOUND = {compute:"limited by maths", memory:"limited by memory", comm:"chip-to-chip", other:"norms / adds"};
+  var total = S.reduce(function(a,s){return a+s.ms},0);
+  var cur = 14;
+
+  var bar = document.getElementById("bar"), steps = document.getElementById("steps");
+  document.getElementById("tl-total").textContent = total.toFixed(2) + " ms";
+
+  // timeline
+  S.forEach(function(s,i){
+    var b = document.createElement("button");
+    b.type="button"; b.className="seg " + s.b; b.style.flexGrow = s.ms;
+    b.title = s.name + " · " + s.ms.toFixed(3) + " ms";
+    b.setAttribute("aria-label", s.name + ", " + s.ms.toFixed(3) + " milliseconds");
+    b.addEventListener("click", function(){ select(i); });
+    bar.appendChild(b);
+  });
+  var parts = document.getElementById("parts");
+  ["attn","moe","other"].forEach(function(p){
+    var ms = S.filter(function(s){return s.part===p}).reduce(function(a,s){return a+s.ms},0);
+    var sp = document.createElement("span"); sp.style.flexGrow = ms;
+    sp.textContent = PARTS[p] + " " + ms.toFixed(2) + " ms";
+    parts.appendChild(sp);
+  });
+
+  // step list
+  var last = null;
+  S.forEach(function(s,i){
+    if (s.part !== last){ var g=document.createElement("div"); g.className="grp"; g.textContent=PARTS[s.part]; steps.appendChild(g); last=s.part; }
+    var b = document.createElement("button"); b.type="button"; b.className="step";
+    b.innerHTML = '<span class="n">'+(i+1)+'</span><span class="nm"></span><span class="ms"><span class="dot '+s.b+'"></span>'+s.ms.toFixed(3)+'</span>';
+    b.querySelector(".nm").textContent = s.name;
+    b.addEventListener("click", function(){ select(i); });
+    steps.appendChild(b);
+  });
+
+  var NS = "http://www.w3.org/2000/svg";
+  function el(tag, attrs, text){
+    var e=document.createElementNS(NS,tag), style="";
+    for (var k in attrs){
+      var v = String(attrs[k]);
+      if (k==="style"){ style += v.replace(/;?$/,";"); }
+      else if ((k==="fill"||k==="stroke"||k==="color") && v.indexOf("var(")===0){ style += k+":"+v+";"; }
+      else e.setAttribute(k,v);
+    }
+    if (style) e.setAttribute("style", style);
+    if (text!=null) e.textContent=text;
+    return e;
+  }
+
+  function cellText(s, r, c){
+    var t0 = r*1280;
+    switch(s.cell){
+      case "tok":    return ["tokens " + t0 + "–" + (t0+1279), ""];
+      case "tok+wk": return ["tokens " + t0 + "–" + (t0+1279), "weight slice " + (c+1) + "/4"];
+      case "heads":  return ["tokens " + t0 + "–" + (t0+1279), "heads " + (c*16) + "–" + (c*16+15)];
+      case "shared": return ["tokens " + t0 + "–" + (t0+1279), "shared ¼ #" + (c+1)];
+      case "experts": var e0 = (r*COLS + c)*24; return ["experts " + e0 + "–" + (e0+23), "column " + (c+1) + " group"];
+    }
+    return ["",""];
+  }
+
+  function drawGrid(s){
+    var svg = document.getElementById("grid");
+    while (svg.firstChild) svg.removeChild(svg.firstChild);
+    var defs = el("defs",{});
+    var mk = el("marker",{id:"ah",viewBox:"0 0 10 10",refX:"9",refY:"5",markerWidth:"7",markerHeight:"7",orient:"auto-start-reverse"});
+    mk.appendChild(el("path",{d:"M0,0 L10,5 L0,10 z",fill:"currentColor"}));
+    defs.appendChild(mk); svg.appendChild(defs);
+
+    var x0=62, y0=44, w=88, h=74, gx=12, gy=18;
+    // axis labels
+    svg.appendChild(el("text",{x:x0+ (COLS*w+(COLS-1)*gx)/2, y:18, "text-anchor":"middle","font-size":"12","font-family":"IBM Plex Sans Condensed, Arial Narrow, sans-serif",fill:"currentColor",opacity:"0.7"},"columns split the weights (TP = 4)"));
+    var mid = y0 + (ROWS*h+(ROWS-1)*gy)/2;
+    var ty = el("text",{x:16, y:mid, "text-anchor":"middle","font-size":"12","font-family":"IBM Plex Sans Condensed, Arial Narrow, sans-serif",fill:"currentColor",opacity:"0.7",transform:"rotate(-90 16 "+mid+")"},"rows split the tokens (SP = 4)");
+    svg.appendChild(ty);
+
+    var tone = {compute:"var(--compute)",memory:"var(--memory)",comm:"var(--comm)",other:"var(--muted)"}[s.b];
+    var fillSoft = {compute:"var(--compute-soft)",memory:"var(--memory-soft)",comm:"var(--comm-soft)",other:"var(--soft)"}[s.b];
+
+    for (var r=0;r<ROWS;r++){
+      for (var c=0;c<COLS;c++){
+        var x = x0 + c*(w+gx), y = y0 + r*(h+gy);
+        var hot = (s.cell==="experts" && s.name.indexOf("Routed")===0);
+        svg.appendChild(el("rect",{x:x,y:y,width:w,height:h,rx:"6",fill:fillSoft,stroke:tone,"stroke-width":"1.4"}));
+        svg.appendChild(el("text",{x:x+8,y:y+16,"font-size":"10.5","font-family":"IBM Plex Mono, monospace",fill:"currentColor",opacity:"0.6"},"chip "+r+","+c));
+        var lines = cellText(s,r,c);
+        svg.appendChild(el("text",{x:x+w/2,y:y+40,"text-anchor":"middle","font-size":"11","font-family":"IBM Plex Sans, sans-serif",fill:"currentColor"},lines[0]));
+        if (lines[1]) svg.appendChild(el("text",{x:x+w/2,y:y+56,"text-anchor":"middle","font-size":"11","font-family":"IBM Plex Sans, sans-serif",fill:"currentColor",opacity:"0.75"},lines[1]));
+        if (hot){
+          svg.appendChild(el("rect",{x:x+w-20,y:y+6,width:"12",height:"12",rx:"2",fill:tone}));
+        }
+      }
+    }
+    // traffic
+    if (s.pat==="row"){
+      for (var r2=0;r2<ROWS;r2++){
+        var yy = y0 + r2*(h+gy) + h + gy/2;
+        svg.appendChild(el("line",{x1:x0+10,y1:yy,x2:x0+COLS*w+(COLS-1)*gx-10,y2:yy,stroke:"var(--comm)","stroke-width":"2.2","marker-start":"url(#ah)","marker-end":"url(#ah)",color:"var(--comm)"}));
+      }
+    } else if (s.pat==="col"){
+      for (var c2=0;c2<COLS;c2++){
+        var xx = x0 + c2*(w+gx) + w + gx/2;
+        svg.appendChild(el("line",{x1:xx,y1:y0+8,x2:xx,y2:y0+ROWS*h+(ROWS-1)*gy-8,stroke:"var(--comm)","stroke-width":"2.2","marker-start":"url(#ah)","marker-end":"url(#ah)",color:"var(--comm)"}));
+      }
+    }
+    var bottom = y0 + ROWS*h + (ROWS-1)*gy + 26;
+    var msg = s.pat==="row" ? "traffic: within each row (the 4 chips sharing one token group)"
+            : s.pat==="col" ? "traffic: up and down each column (the 4 chips sharing one expert group)"
+            : "no chip-to-chip traffic: every chip works on its own data";
+    svg.appendChild(el("text",{x:x0,y:bottom,"font-size":"12","font-family":"IBM Plex Sans Condensed, Arial Narrow, sans-serif",fill:s.pat==="local"?"currentColor":"var(--comm)",opacity:s.pat==="local"?"0.7":"1"},msg));
+    if (s.cell==="experts" && s.name.indexOf("Routed")===0){
+      svg.appendChild(el("rect",{x:x0,y:bottom+12,width:"12",height:"12",rx:"2",fill:tone}));
+      svg.appendChild(el("text",{x:x0+18,y:bottom+22,"font-size":"12","font-family":"IBM Plex Sans Condensed, Arial Narrow, sans-serif",fill:"currentColor",opacity:"0.8"},"worst case: one expert per chip gets all 5,120 tokens"));
+    }
+    svg.setAttribute("aria-label", s.name + ": " + msg);
+    return msg;
+  }
+
+  function select(i){
+    cur = Math.max(0, Math.min(S.length-1, i));
+    var s = S[cur];
+    Array.prototype.forEach.call(bar.children, function(b,k){ b.setAttribute("aria-current", k===cur ? "true":"false"); });
+    Array.prototype.forEach.call(steps.querySelectorAll(".step"), function(b,k){ b.setAttribute("aria-current", k===cur ? "true":"false"); });
+    document.getElementById("d-name").textContent = (cur+1) + ". " + s.name;
+    var pill = document.getElementById("d-pill"); pill.className = "pill " + s.b; pill.textContent = BOUND[s.b];
+    document.getElementById("d-ms").textContent = s.ms.toFixed(3) + " ms · " + (100*s.ms/total).toFixed(1) + "%";
+    document.getElementById("d-what").textContent = s.what + (s.sub ? " (" + s.sub + ")" : "");
+    document.getElementById("d-in").textContent = s.inp;
+    document.getElementById("d-out").textContent = s.out;
+    var note = document.getElementById("d-note");
+    if (s.note){ note.textContent = s.note; note.hidden = false; } else { note.hidden = true; }
+    var msg = drawGrid(s);
+    document.getElementById("d-cap").textContent = "What each of the 16 chips holds during this step. " + msg.charAt(0).toUpperCase() + msg.slice(1) + ".";
+  }
+
+  document.getElementById("prev").addEventListener("click", function(){ select(cur-1); });
+  document.getElementById("next").addEventListener("click", function(){ select(cur+1); });
+  document.addEventListener("keydown", function(e){
+    if (e.target && (e.target.tagName==="INPUT" || e.target.tagName==="TEXTAREA")) return;
+    if (e.key==="ArrowRight"){ select(cur+1); e.preventDefault(); }
+    if (e.key==="ArrowLeft"){ select(cur-1); e.preventDefault(); }
+  });
+  // ---------- flow diagram ----------
+  var TONE = {compute:"var(--compute)",memory:"var(--memory)",comm:"var(--comm)",other:"var(--muted)",data:"currentColor"};
+  var SOFT = {compute:"var(--compute-soft)",memory:"var(--memory-soft)",comm:"var(--comm-soft)",other:"var(--soft)",data:"var(--panel)"};
+  var L=160, C=380, R=600, NW=214, NH=48;
+  var N = {
+    in:  {x:C,y:20,  t:"Layer input", s:"1,280 tokens × 1,792 per chip", k:"data"},
+    n1:  {x:C,y:100, t:"RMSNorm", s:"vector unit", k:"other", st:19},
+    a1:  {x:L,y:190, t:"Compress Q · wq_a", s:"partial sums [1280, 1536]", k:"compute", st:0},
+    k1:  {x:R,y:190, t:"Compress K,V · wkv_a", s:"+ all-gather in row", k:"comm", st:4},
+    a2:  {x:L,y:270, t:"Sum + share Q", s:"reduce-scatter + all-gather, row", k:"comm", st:1},
+    k2:  {x:R,y:270, t:"KV cache in DRAM", s:"new 5,120 tokens added", k:"data"},
+    a3:  {x:L,y:350, t:"Expand Q · wq_b", s:"16 heads per chip", k:"compute", st:2},
+    k3:  {x:R,y:350, t:"Read cached K,V", s:"46,080 × 512", k:"memory", st:7},
+    a4:  {x:L,y:430, t:"Fold Q into latent", s:"[16, 1280, 512]", k:"memory", st:3},
+    a5:  {x:C,y:520, t:"Scores q · kᵀ", s:"1,280 queries × 51,200 keys", k:"compute", st:5},
+    a6:  {x:C,y:600, t:"Softmax", s:"vector unit, overlapped", k:"other", st:5},
+    a7:  {x:C,y:680, t:"Weighted sum · v", s:"[16, 1280, 512]", k:"compute", st:6},
+    a8:  {x:C,y:760, t:"Expand V · wkv_b2", s:"[16, 1280, 128]", k:"memory", st:8},
+    a9:  {x:C,y:840, t:"Output projection", s:"+ reduce-scatter in row", k:"comm", st:9},
+    r1:  {x:C,y:920, t:"Residual add", s:"+ layer input", k:"other", st:19},
+    n2:  {x:C,y:1000,t:"RMSNorm", s:"vector unit", k:"other", st:19},
+    m1:  {x:C,y:1080,t:"Gather full width", s:"all-gather in row", k:"comm", st:10},
+    s1:  {x:L,y:1170,t:"Shared expert", s:"¼ of each matrix, row RS", k:"memory", st:12},
+    g1:  {x:R,y:1170,t:"Router", s:"384 scores → top-8", k:"memory", st:11},
+    d1:  {x:C,y:1260,t:"Dispatch", s:"all-to-all in column", k:"comm", st:13},
+    e1:  {x:C,y:1340,t:"Routed experts", s:"24 per chip, 8 per token", k:"compute", st:14},
+    c1:  {x:C,y:1420,t:"Combine", s:"all-to-all in column", k:"comm", st:15},
+    w1:  {x:C,y:1500,t:"Weighted sum of 8", s:"this column's experts", k:"memory", st:16},
+    rs1: {x:C,y:1580,t:"Reduce-scatter", s:"adds the 4 columns, row", k:"comm", st:17},
+    j1:  {x:C,y:1660,t:"Add shared + routed", s:"[1280, 1792]", k:"memory", st:18},
+    r2:  {x:C,y:1740,t:"Residual add", s:"+ attention result", k:"other", st:19},
+    out: {x:C,y:1820,t:"Layer output", s:"to the next layer", k:"data"}
+  };
+  // [from, to, label, dashed]
+  var E = [
+    ["in","n1","[1280, 1792]"],
+    ["n1","a1","[1280, 1792]"], ["n1","k1","[1280, 1792]"],
+    ["a1","a2",""], ["a2","a3","[1280, 1536]"], ["a3","a4","[1280, 3072]"],
+    ["k1","k2","[1280, 576]"], ["k2","k3",""],
+    ["a4","a5","queries"], ["k3","a5","keys, values"],
+    ["a5","a6","[16, 1280, 51200]"], ["a6","a7",""], ["a7","a8",""], ["a8","a9","[1280, 2048]"],
+    ["a9","r1","[1280, 1792]"], ["r1","n2",""], ["n2","m1","[1280, 1792]"],
+    ["m1","s1","[1280, 7168]"], ["m1","g1","[1280, 7168]"], ["m1","d1","tokens [1280, 7168]"],
+    ["g1","d1","which experts", true],
+    ["d1","e1","[640, 7168]"], ["e1","c1",""], ["c1","w1","[4, 1280, 7168]"],
+    ["w1","rs1","[1280, 7168]"], ["rs1","j1","[1280, 1792]"], ["j1","r2",""], ["r2","out","[1280, 1792]"]
+  ];
+  var dag = document.getElementById("dag");
+  var dd = el("defs",{});
+  var mk2 = el("marker",{id:"dah",viewBox:"0 0 10 10",refX:"9",refY:"5",markerWidth:"6",markerHeight:"6",orient:"auto-start-reverse"});
+  mk2.appendChild(el("path",{d:"M0,0 L10,5 L0,10 z",fill:"currentColor"}));
+  dd.appendChild(mk2); dag.appendChild(dd);
+
+  function edgePath(a,b){
+    var x1=a.x, y1=a.y+NH, x2=b.x, y2=b.y;
+    if (x1===x2) return {d:"M"+x1+","+y1+" V"+y2, lx:x1+8, ly:(y1+y2)/2+4};
+    var ym = y1 + Math.min(22,(y2-y1)/2);
+    return {d:"M"+x1+","+y1+" V"+ym+" H"+x2+" V"+y2, lx:x2+8, ly:(ym+y2)/2+6};
+  }
+  var small = {"font-size":"11","font-family":"IBM Plex Mono, monospace",fill:"currentColor",opacity:"0.72"};
+  E.forEach(function(e){
+    var a=N[e[0]], b=N[e[1]], p=edgePath(a,b);
+    var attrs = {d:p.d,fill:"none",stroke:"currentColor","stroke-width":"1.4",opacity:e[3]?"0.65":"0.8","marker-end":"url(#dah)"};
+    if (e[3]) attrs["stroke-dasharray"]="5 4";
+    dag.appendChild(el("path",attrs));
+    if (e[2]) dag.appendChild(el("text",Object.assign({x:p.lx,y:p.ly},small),e[2]));
+  });
+  // residual (skip) connections on the left
+  function skip(fromKey, toKey, x, label){
+    var a=N[fromKey], b=N[toKey];
+    var ya=a.y+NH/2, yb=b.y+NH/2, xa=a.x-NW/2, xb=b.x-NW/2;
+    dag.appendChild(el("path",{d:"M"+xa+","+ya+" H"+x+" V"+yb+" H"+xb,fill:"none",stroke:"currentColor","stroke-width":"1.4",opacity:"0.55","stroke-dasharray":"2 4","marker-end":"url(#dah)"}));
+    dag.appendChild(el("text",{x:x+6,y:(ya+yb)/2,"font-size":"11","font-family":"IBM Plex Sans Condensed, Arial Narrow, sans-serif",fill:"currentColor",opacity:"0.7",transform:"rotate(-90 "+(x+6)+" "+((ya+yb)/2)+")","text-anchor":"middle"},label));
+  }
+  skip("in","r1",28,"residual: layer input added back");
+  skip("r1","r2",44,"residual: attention result added back");
+  // router weights to the weighted sum, on the right
+  (function(){
+    var a=N.g1, b=N.w1, xa=a.x+NW/2, ya=a.y+NH/2, yb=b.y+NH/2, x=742;
+    dag.appendChild(el("path",{d:"M"+xa+","+ya+" H"+x+" V"+yb+" H"+(b.x+NW/2),fill:"none",stroke:"currentColor","stroke-width":"1.4",opacity:"0.6","stroke-dasharray":"5 4","marker-end":"url(#dah)"}));
+    dag.appendChild(el("text",{x:x-6,y:(ya+yb)/2,"font-size":"11","font-family":"IBM Plex Sans Condensed, Arial Narrow, sans-serif",fill:"currentColor",opacity:"0.7",transform:"rotate(90 "+(x-6)+" "+((ya+yb)/2)+")","text-anchor":"middle"},"router weights for the 8 experts"));
+  })();
+  // shared expert output down the left lane to the join
+  (function(){
+    var a=N.s1, b=N.j1;
+    dag.appendChild(el("path",{d:"M"+a.x+","+(a.y+NH)+" V"+(b.y+NH/2)+" H"+(b.x-NW/2),fill:"none",stroke:"currentColor","stroke-width":"1.4",opacity:"0.8","marker-end":"url(#dah)"}));
+    dag.appendChild(el("text",Object.assign({x:a.x+8,y:(a.y+NH+b.y)/2},small),"[1280, 1792]"));
+  })();
+  // section bands
+  function band(y1,y2,label){
+    dag.appendChild(el("text",{x:752,y:y1+14,"text-anchor":"end","font-size":"11","font-family":"IBM Plex Sans Condensed, Arial Narrow, sans-serif","letter-spacing":"1",fill:"currentColor",opacity:"0.55"},label));
+  }
+  band(160,0,"ATTENTION");
+  band(990,0,"EXPERT BLOCK");
+  // nodes
+  Object.keys(N).forEach(function(key){
+    var n=N[key], g=el("g",{class:"node"});
+    var x=n.x-NW/2;
+    g.appendChild(el("rect",{class:"box",x:x,y:n.y,width:NW,height:NH,rx:"7",fill:SOFT[n.k],stroke:TONE[n.k],"stroke-width":n.k==="data"?"1.2":"1.6"}));
+    g.appendChild(el("text",{x:n.x,y:n.y+20,"text-anchor":"middle","font-size":"13","font-weight":"600","font-family":"IBM Plex Sans, sans-serif",fill:"currentColor"},n.t));
+    g.appendChild(el("text",{x:n.x,y:n.y+37,"text-anchor":"middle","font-size":"11","font-family":"IBM Plex Sans, sans-serif",fill:"currentColor",opacity:"0.72"},n.s));
+    if (n.st!=null){
+      g.setAttribute("tabindex","0"); g.setAttribute("role","button");
+      g.setAttribute("aria-label", n.t + ": show this step on the chip grid");
+      var go = function(){ select(n.st); document.getElementById("detail").scrollIntoView({behavior: matchMedia("(prefers-reduced-motion: reduce)").matches ? "auto" : "smooth", block:"start"}); };
+      g.addEventListener("click", go);
+      g.addEventListener("keydown", function(ev){ if (ev.key==="Enter"||ev.key===" "){ ev.preventDefault(); go(); } });
+    }
+    dag.appendChild(g);
+  });
+
+  // ---------- one token's journey ----------
+  (function(){
+    var sv=document.getElementById("journey");
+    var defs=el("defs",{}), m=el("marker",{id:"jah",viewBox:"0 0 10 10",refX:"9",refY:"5",markerWidth:"6",markerHeight:"6",orient:"auto-start-reverse"});
+    m.appendChild(el("path",{d:"M0,0 L10,5 L0,10 z",fill:"currentColor"})); defs.appendChild(m); sv.appendChild(defs);
+    var x0=50,y0=30,w=74,h=56,gx=14,gy=16;
+    var experts=[5,57,101,130,199,250,311,377];
+    var at={}; experts.forEach(function(e){ var k=Math.floor(e/24); var key=Math.floor(k/4)+","+(k%4); (at[key]=at[key]||[]).push(e); });
+    sv.appendChild(el("text",{x:x0+(4*w+3*gx)/2,y:16,"text-anchor":"middle","font-size":"11","font-family":"IBM Plex Sans Condensed, Arial Narrow, sans-serif",fill:"currentColor",opacity:"0.7"},"columns (weight split)"));
+    for (var r=0;r<4;r++) for (var c=0;c<4;c++){
+      var x=x0+c*(w+gx), y=y0+r*(h+gy), key=r+","+c, home=(r===2);
+      sv.appendChild(el("rect",{x:x,y:y,width:w,height:h,rx:"6",fill:home?"var(--soft)":"var(--panel)",stroke:home?"currentColor":"var(--rule)","stroke-width":home?"1.6":"1.2"}));
+      sv.appendChild(el("text",{x:x+6,y:y+13,"font-size":"10","font-family":"IBM Plex Mono, monospace",fill:"currentColor",opacity:"0.55"},"chip "+key));
+      if (at[key]){
+        sv.appendChild(el("circle",{cx:x+w/2,cy:y+34,r:"13",fill:"var(--compute)"}));
+        sv.appendChild(el("text",{x:x+w/2,y:y+38,"text-anchor":"middle","font-size":"10.5","font-weight":"600","font-family":"IBM Plex Mono, monospace",fill:"var(--panel)"},at[key].join(",")));
+      }
+      if (home && !at[key]) sv.appendChild(el("text",{x:x+w/2,y:y+38,"text-anchor":"middle","font-size":"10.5","font-family":"IBM Plex Sans, sans-serif",fill:"currentColor",opacity:"0.8"},"token copy"));
+    }
+    sv.appendChild(el("text",{x:x0-10,y:y0+2*(h+gy)+h/2+4,"text-anchor":"end","font-size":"11","font-family":"IBM Plex Sans Condensed, Arial Narrow, sans-serif",fill:"currentColor"},"row 2"));
+    // arrows from row 2, same column, to each expert chip
+    Object.keys(at).forEach(function(key){
+      var rr=+key.split(",")[0], cc=+key.split(",")[1];
+      if (rr===2) return;
+      var x=x0+cc*(w+gx)+w-8-(rr===0?12:0);
+      var ya = y0+2*(h+gy)+(rr<2?0:h), yb = y0+rr*(h+gy)+(rr<2?h:0);
+      sv.appendChild(el("line",{x1:x,y1:ya,x2:x,y2:yb,stroke:"var(--comm)","stroke-width":"2",style:"color:var(--comm)","marker-end":"url(#jah)"}));
+    });
+    sv.appendChild(el("text",{x:x0,y:y0+4*(h+gy)+10,"font-size":"11","font-family":"IBM Plex Sans Condensed, Arial Narrow, sans-serif",fill:"currentColor",opacity:"0.75"},"green = chosen expert (number shown), arrows = dispatch"));
+  })();
+
+  select(cur);
+})();
+</script>
+
+</body></html>

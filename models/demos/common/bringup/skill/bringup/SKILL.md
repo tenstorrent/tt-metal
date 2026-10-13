@@ -110,6 +110,7 @@ the dashboards. Classify every failure before acting, and log every intervention
 | the input or data (implausible accuracy, degenerate generations) | stop, show the evidence, ask the person |
 | an approval point (plan, performance picks) | bring the person the plan or list; record their decision with `$B approve` |
 | an agent needs something its step does not allow (a shared file, a wider path, a framework change) | decide yourself (below) |
+| someone edits the tree while an agent step runs | the step's tree diff fails it; finish or revert the edit, then rerun the task |
 | a task became DEFERRED (the agent requested an op from op-gen) | review the evidence like a gate commit; accept it and tell the owner in one line, or reject it as cheating (below); section 5 |
 
 ### Decide; do not ask
@@ -166,6 +167,13 @@ Report briefly on each gate the person would care about; say plainly what you de
 After every gate, re-export and republish both dashboards (never switch to "problems only" watching).
 
 ### At the end
+
+Curate the model's knowledge before reporting. Go through `<bringup_dir>/known_issues.md` and `repo_map.md`: promote
+every lesson that would change what an agent does on a different model (TTNN / fork behaviour, op limits, precision
+mechanisms, testing method, framework / infra / hardware, serving rules) into the shared
+`models/demos/common/bringup/knowledge/` files, merged with the entry it overlaps, at most three lines, with
+`Applies to:` and `Seen at:` (`python -m models.demos.common.bringup.knowledge.check --model-dir <model_dir>` checks
+both). Delete model entries the model's code has since fixed. Show the owner the shared-file diff for approval.
 
 Besides the metrics the person asked for, report every change the agents made beyond the model's own code, one line
 each with its commit and your verdict: fork changes (ttnn/ttnn/bringup: what, why, which tests), framework, test or
