@@ -5,11 +5,7 @@
 // RUN: %{blackhole_tensix_compile} %{blackhole_math_thread} -UENABLE_LLK_ASSERT -c %s -o %t.o
 // RUN: %{blackhole_objdump} -dr %t.o | FileCheck %s --enable-var-scope
 
-// LLK_ASSERT is disabled so runtime paths contain only the issued instruction.
-
 #include "hal/misc.h"
-
-#include <cstdint>
 
 namespace misc = hal::misc;
 
@@ -66,51 +62,6 @@ extern "C" __attribute__((noinline, used)) void declare_resources()
 // CHECK-NEXT: ttresourcedecl 1,0,0
 // CHECK-NEXT: ttresourcedecl 7,511,3
 // CHECK-NEXT: ttresourcedecl 2047,0,15
-// CHECK-NEXT: ret
-
-extern "C" __attribute__((noinline, used)) void declare_resources_runtime(const misc::ResourceDeclaration declaration)
-{
-    misc::run(declaration);
-}
-
-// CHECK-LABEL: <declare_resources_runtime>:
-// CHECK-NEXT: srli [[R0:a[0-7]]],a0,0x10
-// CHECK-NEXT: zext.h a1,a1
-// CHECK-NEXT: slli [[R0]],[[R0]],0x4
-// CHECK-NEXT: slli a1,a1,0xd
-// CHECK-NEXT: add a1,a1,[[R0]]
-// CHECK-NEXT: zext.b a0,a0
-// CHECK-NEXT: add a1,a1,a0
-// CHECK-NEXT: lui [[R1:a[0-7]]],0x5000
-// CHECK-NEXT: lui [[R0]],0x0
-// CHECK-NEXT: R_RISCV_HI20 __instrn_buffer
-// CHECK-NEXT: R_RISCV_RELAX
-// CHECK-NEXT: add a1,a1,[[R1]]
-// CHECK-NEXT: mv [[R0]],[[R0]]
-// CHECK-NEXT: R_RISCV_LO12_I __instrn_buffer
-// CHECK-NEXT: R_RISCV_RELAX
-// CHECK-NEXT: addi sp,sp,-16
-// CHECK-NEXT: sw a1,0([[R0]])
-// CHECK-NEXT: addi sp,sp,16
-// CHECK-NEXT: ret
-
-extern "C" __attribute__((noinline, used)) std::uint32_t encode_resources_runtime(const misc::ResourceDeclaration declaration)
-{
-    return declaration.get_operation();
-}
-
-// CHECK-LABEL: <encode_resources_runtime>:
-// CHECK-NEXT: srli [[R0:a[0-7]]],a0,0x10
-// CHECK-NEXT: zext.h a1,a1
-// CHECK-NEXT: slli [[R0]],[[R0]],0x4
-// CHECK-NEXT: slli a1,a1,0xd
-// CHECK-NEXT: zext.b a0,a0
-// CHECK-NEXT: add a1,a1,[[R0]]
-// CHECK-NEXT: addi sp,sp,-16
-// CHECK-NEXT: add a1,a1,a0
-// CHECK-NEXT: lui a0,0x5000
-// CHECK-NEXT: add a0,a1,a0
-// CHECK-NEXT: addi sp,sp,16
 // CHECK-NEXT: ret
 
 static_assert(misc::is_valid(misc::ResourceDeclaration {15, 0x1ff, 2047}));

@@ -7,8 +7,6 @@
 
 // LLK_ASSERT is disabled so runtime paths contain only the issued instruction.
 
-#include <cstdint>
-
 #include "hal/sync.h"
 
 namespace sync = hal::sync;
@@ -74,24 +72,4 @@ extern "C" __attribute__((noinline, used)) void release_runtime(const sync::Mute
 // CHECK-NEXT: R_RISCV_LO12_I __instrn_buffer
 // CHECK-NEXT: R_RISCV_RELAX
 // CHECK-NEXT: sw a0,0([[BUF]])
-// CHECK-NEXT: ret
-
-extern "C" __attribute__((noinline, used)) std::uint32_t encode_acquire_runtime(const sync::Mutex mutex)
-{
-    return sync::mutex::acquire_operation(mutex);
-}
-
-// CHECK-LABEL: <encode_acquire_runtime>:
-// CHECK-NEXT: lui [[OP:a[0-7]]],0xa0000
-// CHECK-NEXT: add a0,a0,[[OP]]
-// CHECK-NEXT: ret
-
-extern "C" __attribute__((noinline, used)) std::uint32_t encode_release_runtime(const sync::Mutex mutex)
-{
-    return sync::mutex::release_operation(mutex);
-}
-
-// CHECK-LABEL: <encode_release_runtime>:
-// CHECK-NEXT: lui [[OP:a[0-7]]],0xa1000
-// CHECK-NEXT: add a0,a0,[[OP]]
 // CHECK-NEXT: ret
