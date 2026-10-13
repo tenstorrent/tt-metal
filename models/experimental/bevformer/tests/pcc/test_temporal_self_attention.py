@@ -17,8 +17,7 @@ from models.experimental.bevformer.tests.common import (
     random_encoder_inputs,
 )
 from models.experimental.bevformer.tt.model_preprocessing import create_temporal_self_attention_parameters
-from models.experimental.bevformer.tt.tt_ms_deformable_attention import fp32_grid_sample_config
-from models.experimental.bevformer.tt.tt_temporal_self_attention import TTTemporalSelfAttention, tsa_grid_bias
+from models.experimental.bevformer.tt.tt_temporal_self_attention import TTTemporalSelfAttention
 
 CASES = [
     # (name, bev_shape, batch_size, with_previous_bev)
@@ -28,7 +27,7 @@ CASES = [
     # bs=2 with a per-sample shift, so a batch mix-up in the stacked (previous, current) maps or
     # the shifted reference points shows.
     ("tiny-bs2-previous-bev", BEV_SHAPES["tiny"], 2, True),
-    # Non-square, so a swapped (h, w) in the grid scale or the reference points shows.
+    # Non-square, so a swapped (h, w) in the offset scale or the reference points shows.
     ("50x100-previous-bev", (50, 100), 1, True),
 ]
 
@@ -68,22 +67,16 @@ def test_temporal_self_attention(device, reset_seeds, name, bev_shape, batch_siz
     )
 
     tt_model = TTTemporalSelfAttention(
-        create_temporal_self_attention_parameters(torch_model, device),
         device,
-        bev_shape=bev_shape,
-        grid_sample_compute_config=fp32_grid_sample_config(device),
-    )
-    grid_bias = tsa_grid_bias(
-        _to_device(reference_points, device, GRID_DTYPE, ttnn.ROW_MAJOR_LAYOUT),
-        tt_model.num_heads,
-        tt_model.num_points,
-        GRID_DTYPE,
+        create_temporal_self_attention_parameters(torch_model, device),
+        num_points=torch_model.num_points,
+        spatial_shapes=[[bev_h, bev_w]],
     )
     tt_output = tt_model(
         _to_device(query, device),
-        None if value is None else _to_device(value, device),
-        _to_device(pos, device),
-        grid_bias,
+        value=None if value is None else _to_device(value, device),
+        query_pos=_to_device(pos, device),
+        reference_points=_to_device(reference_points, device, GRID_DTYPE, ttnn.ROW_MAJOR_LAYOUT),
     )
     tt_output = ttnn.to_torch(tt_output).float().reshape(torch_output.shape)
     # comp_pcc zeroes NaN and Inf before correlating, so they must be ruled out here.

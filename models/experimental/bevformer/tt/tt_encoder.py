@@ -23,7 +23,6 @@ from models.experimental.bevformer.model_config import GRID_DTYPE
 
 from models.experimental.bevformer.reference.point_sampling_3d_2d import bev_reference_points, camera_geometry
 from models.experimental.bevformer.tt.tt_common import TtFFN, layer_norm, signpost
-from models.experimental.bevformer.tt.tt_ms_deformable_attention import fp32_grid_sample_config
 from models.experimental.bevformer.tt.tt_spatial_cross_attention import (
     TTSpatialCrossAttention,
     build_rebatch_plan,
@@ -49,20 +48,17 @@ class TTBEVFormerLayer:
         num_points,
         tsa_num_points,
         num_cams,
-        grid_sample_compute_config,
     ):
         """``params`` is one entry of ``create_bevformer_encoder_parameters(...).layers``."""
         self.params = params
         self.ffn = TtFFN(params.ffn)
         self.temporal_self_attention = TTTemporalSelfAttention(
-            params.tsa,
             device,
-            bev_shape=bev_shape,
+            params.tsa,
             embed_dims=embed_dims,
             num_heads=num_heads,
             num_points=tsa_num_points,
-            grid_dtype=GRID_DTYPE,
-            grid_sample_compute_config=grid_sample_compute_config,
+            spatial_shapes=[list(bev_shape)],
         )
         self.spatial_cross_attention = TTSpatialCrossAttention(
             params.sca,
@@ -73,16 +69,14 @@ class TTBEVFormerLayer:
             num_heads=num_heads,
             num_levels=num_levels,
             num_points=num_points,
-            grid_dtype=GRID_DTYPE,
-            grid_sample_compute_config=grid_sample_compute_config,
         )
 
-    def __call__(self, query, value, bev_pos, prev_bev, grid_bias, sca_frame):
-        """``grid_bias`` as ``tt_temporal_self_attention.tsa_grid_bias`` lays it out, ``sca_frame`` from
+    def __call__(self, query, value, bev_pos, prev_bev, ref_2d, sca_frame):
+        """``ref_2d`` from :meth:`TTBEVFormerEncoder.reference_points`, ``sca_frame`` from
         ``TTSpatialCrossAttention.frame_inputs``; both shared by every layer of a frame."""
         signpost(header="TTNN BEVFormerLayer Forward Start")
         signpost(header="BEVLayer TSA Start")
-        query = self.temporal_self_attention(query, prev_bev, bev_pos, grid_bias)
+        query = self.temporal_self_attention(query, value=prev_bev, query_pos=bev_pos, reference_points=ref_2d)
         signpost(header="BEVLayer TSA Complete")
         query = layer_norm(query, self.params.norms[0])
         signpost(header="BEVLayer SCA Start")
@@ -98,12 +92,7 @@ class TTBEVFormerLayer:
 
 
 class TTBEVFormerEncoder:
-    """Encoder over a ``(bev_h, bev_w)`` BEV grid and camera features of ``spatial_shapes``.
-
-    The deformable attentions fold the BEV and feature sizes into their sampling-offset Linears;
-    the spatial cross-attention's fold consumes ``params.layers[*].sca.deformable_attention.sampling_offsets``,
-    so each instance needs its own ``create_bevformer_encoder_parameters``, and reusing them raises.
-    """
+    """Encoder over a ``(bev_h, bev_w)`` BEV grid and camera features of ``spatial_shapes``."""
 
     def __init__(
         self,
@@ -130,18 +119,13 @@ class TTBEVFormerEncoder:
         self.num_points_in_pillar = config.num_points_in_pillar
         self.pc_range = list(config.pc_range)
         self.num_keys = sum(h * w for h, w in spatial_shapes)
-        # The self-attention's grid bias, ``2 * ref - 1`` in its offset Linear's queue-major channels
-        # (tsa_grid_bias), depends on the BEV grid only; a frame adds its ego shift to the previous
-        # BEV's half.
-        channels_per_map = self.num_heads * self.tsa_num_points
-        base = (2 * bev_reference_points(bev_h, bev_w, 1) - 1).expand(-1, -1, 2 * channels_per_map, -1)
-        self.tsa_grid_base = ttnn.from_torch(
-            base.reshape(1, bev_h * bev_w, 2 * channels_per_map * 2),
+        # The BEV cells' centres in [0, 1], the self-attention's reference points.
+        self.ref_2d = ttnn.from_torch(
+            bev_reference_points(bev_h, bev_w, 1).reshape(1, bev_h * bev_w, 2),
             device=device,
             dtype=GRID_DTYPE,
             layout=ttnn.ROW_MAJOR_LAYOUT,
         )
-        grid_sample_compute_config = fp32_grid_sample_config(device)
         self.layers = [
             TTBEVFormerLayer(
                 layer_params,
@@ -154,10 +138,20 @@ class TTBEVFormerEncoder:
                 num_points=config.num_points,
                 tsa_num_points=config.tsa_num_points,
                 num_cams=config.num_cams,
-                grid_sample_compute_config=grid_sample_compute_config,
             )
             for layer_params in params.layers
         ]
+
+    def reference_points(self, bs, shift=None):
+        """The self-attention's reference points ``(bs * 2, num_query, 1, 2)``, the previous BEV's
+        then the current query's per sample, as upstream's ``hybird_ref_2d``: the previous BEV's
+        shifted by ``shift`` (the ego translation in BEV fractions, ``(bs, 1, 1, 2)`` float32
+        ROW_MAJOR) when given."""
+        num_query = self.bev_h * self.bev_w
+        ref = self.ref_2d if bs == 1 else ttnn.repeat(self.ref_2d, ttnn.Shape((bs, 1, 1)))
+        # The add stays 3-D and ROW_MAJOR: tilizing (.., 1, 2) would pad every cell to a tile.
+        shifted = ref if shift is None else ttnn.add(ref, ttnn.reshape(shift, (bs, 1, 2)))
+        return ttnn.reshape(ttnn.concat([shifted, ref], dim=1), (bs * 2, num_query, 1, 2))
 
     def prepare_frame(self, img_metas, plan=None, capacity=None):
         """The spatial cross-attention's rebatch plan for this frame's cameras (``lidar2img`` and
@@ -170,9 +164,7 @@ class TTBEVFormerEncoder:
             img_metas, self.bev_h, self.bev_w, self.num_points_in_pillar, self.pc_range
         )
         if plan is None:
-            return build_rebatch_plan(
-                reference_points_cam, bev_mask, self.embed_dims, self.device, GRID_DTYPE, capacity
-            )
+            return build_rebatch_plan(reference_points_cam, bev_mask, self.embed_dims, self.device, capacity)
         update_rebatch_plan(plan, reference_points_cam, bev_mask)
         return plan
 
@@ -185,19 +177,13 @@ class TTBEVFormerEncoder:
         assert num_query == self.bev_h * self.bev_w, f"{num_query} queries for a {self.bev_h}x{self.bev_w} BEV"
         assert value.shape[1] == self.num_keys, f"{value.shape[1]} keys, expected {self.num_keys}"
 
-        grid_bias = self.tsa_grid_base if bs == 1 else ttnn.repeat(self.tsa_grid_base, ttnn.Shape((bs, 1, 1)))
+        if prev_bev is not None and shift is not None:
+            assert (
+                tuple(shift.shape) == (bs, 1, 1, 2) and shift.dtype == GRID_DTYPE
+            ), f"shift must be {GRID_DTYPE} (bs, 1, 1, 2), got {shift.dtype} {tuple(shift.shape)}"
+        # Upstream shifts the previous BEV's points only when there is a previous BEV.
+        ref_2d = self.reference_points(bs, shift if prev_bev is not None else None)
         if prev_bev is not None:
-            if shift is not None:
-                assert (
-                    tuple(shift.shape) == (bs, 1, 1, 2) and shift.dtype == GRID_DTYPE
-                ), f"shift must be {GRID_DTYPE} (bs, 1, 1, 2), got {shift.dtype} {tuple(shift.shape)}"
-                # The previous BEV's points are ego-shifted: 2 * shift on its (head, point) channels,
-                # the first half of each row; the current queries' half stays.
-                channels_per_map = self.num_heads * self.tsa_num_points
-                shift_bias = ttnn.repeat(ttnn.mul(shift, 2.0), ttnn.Shape((1, 1, channels_per_map, 1)))
-                shift_bias = ttnn.reshape(shift_bias, (bs, 1, channels_per_map * 2))
-                shift_bias = ttnn.pad(shift_bias, [(0, 0), (0, 0), (0, channels_per_map * 2)], 0.0)
-                grid_bias = ttnn.add(grid_bias, shift_bias)
             # The previous BEV is paired with the encoder's input query, not each layer's input.
             prev_bev = ttnn.concat([ttnn.unsqueeze(prev_bev, 1), ttnn.unsqueeze(bev_query, 1)], dim=1)
             prev_bev = ttnn.reshape(prev_bev, (bs * 2, num_query, embed_dims))
@@ -207,5 +193,5 @@ class TTBEVFormerEncoder:
 
         output = bev_query
         for layer in self.layers:
-            output = layer(output, value, bev_pos, prev_bev, grid_bias, sca_frame)
+            output = layer(output, value, bev_pos, prev_bev, ref_2d, sca_frame)
         return output
