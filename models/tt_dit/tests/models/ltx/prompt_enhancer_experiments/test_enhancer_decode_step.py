@@ -5,9 +5,10 @@
 """One traced decode step of the device prompt enhancer (Gemma-4-E2B) on a 1x8 row, for device profiling.
 
 The enhancer runs TP=8 along a mesh row, and every row of the LTX 4x8 mesh holds the same program, so one row
-opened on its own carries the per-chip work of the served configuration while the profiler only has 8 chips to
-drain. The ring fabric matches the pipeline's; the collectives run over a single row's ring instead of a row of
-the full mesh, so check CCL numbers against the 4x8 bench's ms/token.
+carries the per-chip work of the served configuration. The test opens the full 4x8 mesh with the pipeline's
+ring fabric (a 1x8 mesh opened on its own does not bring the ring up: half of a chip's routers wait on peers
+that were never opened) and runs the enhancer on row 0 as a 1x8 submesh, so the row's collectives use the
+same links as in production. The profiler drains only the row's 8 chips.
 
 Load, eager warmup and decode-trace capture as in the bench, then per temperature:
   1. a reference request decoding ``skip + steps + 2`` tokens past any stop id;
@@ -43,14 +44,14 @@ from models.tt_dit.utils.test import ring_params_8k
 OUT_DIR = os.path.join(
     os.environ.get("LTX_ENHANCER_EXP_DIR", os.path.expanduser("~/ltx_enhancer_experiments")), "decode_step"
 )
-# The bench's 4x8 ring device params, without require_exact_physical_num_devices (a row is not the whole system).
-ROW_DEVICE_PARAMS = {**ring_params_8k, "trace_region_size": 500_000_000, "l1_small_size": 32768}
+# The bench's 4x8 ring device params.
+MESH_DEVICE_PARAMS = {**ring_params_8k, "trace_region_size": 500_000_000, "l1_small_size": 32768}
 
 
 @pytest.mark.parametrize(
     "mesh_device, device_params, topology",
-    [((1, 8), ROW_DEVICE_PARAMS, ttnn.Topology.Ring)],
-    ids=["1x8_ring"],
+    [((4, 8), MESH_DEVICE_PARAMS, ttnn.Topology.Ring)],
+    ids=["row0_of_4x8_ring"],
     indirect=["mesh_device", "device_params"],
 )
 def test_enhancer_decode_step(mesh_device, device_params, topology):
@@ -60,15 +61,14 @@ def test_enhancer_decode_step(mesh_device, device_params, topology):
     assert steps >= 1 and skip >= 1, "the window needs at least one step, after the restaging step 0"
     os.makedirs(OUT_DIR, exist_ok=True)
 
-    enhancer = DevicePromptEnhancer(
-        default_ltx_enhancer(), mesh_device=mesh_device, ccl_topology=topology, enable_trace=True
-    )
+    row = mesh_device.create_submesh(ttnn.MeshShape(1, int(mesh_device.shape[1])))
+    enhancer = DevicePromptEnhancer(default_ltx_enhancer(), mesh_device=row, ccl_topology=topology, enable_trace=True)
     knobs = {k: v for k, v in os.environ.items() if k.startswith(("LTX_ENHANCER_", "GEMMA4_", "STEP_"))}
-    results = {"mesh": list(mesh_device.shape), "knobs": knobs, "dram": []}
+    results = {"mesh": list(row.shape), "knobs": knobs, "dram": []}
     enhancer.ensure_loaded()
     enhancer.warmup(capture=False)
     enhancer.capture_trace()
-    results["dram"] = [d for d in [log_dram(mesh_device, "after capture")] if d]
+    results["dram"] = [d for d in [log_dram(row, "after capture")] if d]
 
     # Reference: the same short requests with nothing around the steps.
     prompt = BENCH_PROMPTS[0]
@@ -82,7 +82,7 @@ def test_enhancer_decode_step(mesh_device, device_params, topology):
     enhancer.ignore_stop = False
     enhancer.max_new_tokens = budget
 
-    _profile_decode(enhancer, mesh_device, temps, steps, results, skip=skip, prompt=prompt)
+    _profile_decode(enhancer, row, temps, steps, results, skip=skip, prompt=prompt)
     out_path = os.path.join(OUT_DIR, "decode_step.json")
     with open(out_path, "w") as f:
         json.dump(results, f, indent=1)
