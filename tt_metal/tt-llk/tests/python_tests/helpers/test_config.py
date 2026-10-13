@@ -371,11 +371,37 @@ def _text_after_libraries(text: str, rest: bool = True) -> str:
     return "\n".join(out)
 
 
+def _spill_section(elf_path: str):
+    return _spill_section_of(elf_path, os.stat(elf_path).st_mtime_ns)
+
+
+@functools.lru_cache(maxsize=64)
+def _spill_section_of(elf_path: str, _mtime: int):
+    """(address, bytes) of a Wormhole perf TILE_LOOP ELF's .llk_spill, the code no window runs in its own L1 area
+    (sections.ld): the loader writes only .init and .text, so the host writes it; None when the ELF has none
+    """
+    data = Path(elf_path).read_bytes()
+    (shoff,) = struct.unpack_from("<I", data, 0x20)
+    shentsize, shnum, shstrndx = struct.unpack_from("<HHH", data, 0x2E)
+    heads = [
+        struct.unpack_from("<IIIIIIIIII", data, shoff + i * shentsize)
+        for i in range(shnum)
+    ]
+    strtab = heads[shstrndx][4]
+    for h in heads:
+        if (
+            data[strtab + h[0] : data.index(b"\0", strtab + h[0])] == b".llk_spill"
+            and h[5]
+        ):
+            return h[3], data[h[4] : h[4] + h[5]] + bytes(-h[5] % 4)
+    return None
+
+
 def _harness_last(text: str) -> str:
     """Wormhole perf TILE_LOOP build assembly with _start, main and any other .init code in .llk_harness, which
-    sections.ld places after the kernel's code: only the entry jump and the zone helpers precede run_kernel, so a
-    harness size change moves no code a window runs. The parks main runs after run_kernel lose their restart alignment
-    (barrier.h's out of line parks), which no window needs, so the harness fits its reserve wherever it starts.
+    sections.ld places with the other code no window runs (.llk_spill): only the entry jump and the zone helpers
+    precede run_kernel, so a harness size change moves no code a window runs. The parks main runs after run_kernel
+    lose their restart alignment (barrier.h's out of line parks), which no window needs.
     """
     lines = [_HARNESS_SECTION.sub(r"\1.llk_harness", line) for line in text.split("\n")]
     _, sections = _asm_functions(lines)
@@ -2828,6 +2854,13 @@ class TestConfig:
                         return_start_address=True,
                         verify_write=False,
                     )
+                    spill = _spill_section(elf_file_path)
+                    if spill is not None:
+                        write_words_to_device(
+                            TestConfig.TENSIX_LOCATION,
+                            spill[0],
+                            np.frombuffer(spill[1], dtype=np.uint32).tolist(),
+                        )
                     write_words_to_device(
                         TestConfig.TENSIX_LOCATION,
                         TestConfig.TRISC_START_ADDRS[i],
