@@ -4,6 +4,9 @@
 
 #pragma once
 
+#include <cstdint>
+#include "llk_defs.h"
+
 // Helper function for _sfpu_binary_power_
 // This function is based on _float32_to_int32_, but expects a positive input, which simplifies the code
 // and makes it faster
@@ -14,7 +17,7 @@ sfpi_inline sfpi::vInt _float_to_int32_positive_(sfpi::vFloat in) {
     v_elseif(exp > 30)  // overflow occurs above this range
     {
         // set to int32 max value in case of overflow
-        result = std::numeric_limits<int32_t>::max();
+        result = std::numeric_limits<std::int32_t>::max();
     }
     v_else {
         // extract mantissa
@@ -51,4 +54,14 @@ sfpi_inline sfpi::vFloat float32_to_bf16_rne(sfpi::vFloat in) {
 
     // Reinterpret back as float
     return sfpi::as<sfpi::vFloat>(bits);
+}
+
+// Rounds an fp32 result to nearest-even for a Float16_b Dest. A 32-bit or Float16 Dest is left to the store.
+template <bool is_fp32_dest_acc_en, DataFormat DEST_16BIT_FORMAT>
+sfpi_inline sfpi::vFloat round_to_dest(sfpi::vFloat result) {
+    if constexpr (is_fp32_dest_acc_en || DEST_16BIT_FORMAT != DataFormat::Float16_b) {
+        return result;
+    } else {
+        return float32_to_bf16_rne(result);
+    }
 }

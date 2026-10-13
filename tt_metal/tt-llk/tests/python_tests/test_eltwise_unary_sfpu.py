@@ -688,6 +688,172 @@ def test_sqrt_family_negative_zero_regression(
     )
 
 
+# hardmish on a Float16 Dest over every positive normal fp16 value: the identity branch, where
+# the clamp pins the scale to exactly 1.0 and the answer is x itself. The two tests below read
+# the same run. The sweep above sees neither defect: Hardmish is in the standard profile, which
+# has no Float16 input, and its domain is [-4, 4], where the tolerance absorbs a 3-bit loss.
+#
+# dest_acc=Yes is the control in both: the kernel's bf16 round is compiled out on a 32-bit Dest,
+# so it has to pass on any kernel. Blackhole's SFPU does not compute on a 16-bit Float16 Dest
+# (measured: hardmish(-0.5) reads back -0.5), so the No cell skips there, as the sweep's own
+# guard does.
+_HARDMISH_FLOAT16_DEST_ACC = pytest.mark.parametrize(
+    "dest_acc",
+    [DestAccumulation.No, DestAccumulation.Yes],
+    ids=lambda d: f"dest_acc_{d.name}",
+)
+
+
+def _hardmish_float16_identity_branch(dest_acc: DestAccumulation):
+    """``(x, hardmish(x))`` as fp16, for x every positive normal fp16 value."""
+    formats = InputOutputFormat(DataFormat.Float16, DataFormat.Float16)
+    _skip_bh_unsupported_float_combo(formats, dest_acc)
+
+    # 32 tiles, so blocks divide evenly at both Dest widths (8 or 4 tiles per half).
+    input_dimensions = [256, 128]
+    num_elements = input_dimensions[0] * input_dimensions[1]
+    tile_cnt = num_elements // (TILE_DIMENSIONS[0] * TILE_DIMENSIONS[1])
+
+    # 0x0400..0x7BFF: every positive normal fp16, ending at 65504. Subnormals are left out
+    # because the unpack flushes them, which is the unpack and not the op.
+    probes = torch.arange(0x0400, 0x7C00, dtype=torch.int16).view(torch.float16)
+    # The rest of the 32 tiles cycles through quadratic-branch inputs whose answers are exact
+    # in fp16 and in bf16 alike, so a bf16 round cannot move them. On the identity branch a
+    # datacopy, or an SFPU that reads the Float16 Dest as bf16 bits and writes the same bits
+    # back, is indistinguishable from hardmish; these lanes are what tell them apart.
+    sentinels = {-0.5: -0.375, -1.0: -0.5, -1.5: -0.375, -4.0: 0.0}
+    num_sentinel_lanes = num_elements - probes.numel()
+    sentinel_in = torch.tensor(list(sentinels), dtype=torch.float16).repeat(
+        num_sentinel_lanes // len(sentinels)
+    )
+    sentinel_out = torch.tensor(list(sentinels.values()), dtype=torch.float16).repeat(
+        num_sentinel_lanes // len(sentinels)
+    )
+    src_fp16 = torch.cat([probes, sentinel_in])
+    src_A = src_fp16.to(torch.float32)
+    src_B = torch.zeros(num_elements, dtype=torch.float32)
+
+    num_blocks, num_tiles_in_block = get_num_blocks_and_num_tiles_in_block(
+        DestSync.Half,
+        dest_acc,
+        formats,
+        input_dimensions,
+        TILE_DIMENSIONS,
+        BlocksCalculationAlgorithm.Standard,
+    )
+
+    configuration = TestConfig(
+        "sources/eltwise_unary_sfpu_test.cpp",
+        formats,
+        templates=[
+            generate_input_dim(input_dimensions, input_dimensions),
+            APPROX_MODE(ApproximationMode.No),
+            FAST_MODE(FastMode.No),
+            CLAMP_NEGATIVE(True),
+            MATH_OP(mathop=MathOperation.Hardmish),
+        ],
+        runtimes=[
+            TILE_COUNT(tile_cnt),
+            NUM_BLOCKS(num_blocks),
+            NUM_TILES_IN_BLOCK(num_tiles_in_block),
+        ],
+        variant_stimuli=StimuliConfig(
+            src_A,
+            formats.input_format,
+            src_B,
+            formats.input_format,
+            formats.output_format,
+            tile_count_A=tile_cnt,
+            tile_count_B=tile_cnt,
+            tile_count_res=tile_cnt,
+        ),
+        dest_acc=dest_acc,
+        unpack_to_dest=False,
+    )
+
+    res = torch.tensor(configuration.run().result, dtype=torch.float32).to(
+        torch.float16
+    )
+    assert res.numel() == num_elements, "result and stimulus differ in length"
+
+    # By value: -4.0 answers a zero whose sign the kernel does not pin.
+    res_sentinel = res[probes.numel() :]
+    off = res_sentinel != sentinel_out
+    num_off = int(off.sum())
+    assert num_off == 0, (
+        f"hardmish missed {num_off} of {off.numel()} quadratic-branch sentinels "
+        f"(dest_acc={dest_acc.name}), e.g. hardmish({sentinel_in[off][0].item()!r}) = "
+        f"{res_sentinel[off][0].item()!r}, expected {sentinel_out[off][0].item()!r}. The "
+        "op did not run on fp16 values, so the identity-branch checks would prove nothing."
+    )
+
+    return probes, res[: probes.numel()]
+
+
+def _fp16_lanes(mask, x, got, also=None, limit=4):
+    """The first *limit* lanes of *mask* as ``x -> got`` (``, also`` when given)."""
+    return ", ".join(
+        f"{x[i].item()!r} -> {got[i].item()!r}"
+        + ("" if also is None else f" (nearest-even {also[i].item()!r})")
+        for i in mask.nonzero().flatten()[:limit].tolist()
+    )
+
+
+# The answer is x, bit for bit. A bf16 round of the result gated only on !is_fp32_dest_acc_en
+# is wrong here, because a 16-bit Dest holds Float16 (fp16a, 10 mantissa bits) as well as
+# Float16_b: it drops the three low mantissa bits of every lane and carries 65408..65504 past
+# 65504 to inf -- #58607's defect class, which Celu and Elu carry through the same round.
+@_HARDMISH_FLOAT16_DEST_ACC
+def test_hardmish_float16_dest_identity_branch(dest_acc: DestAccumulation):
+    x, got = _hardmish_float16_identity_branch(dest_acc)
+
+    wrong = got.view(torch.int16) != x.view(torch.int16)
+    num_wrong = int(wrong.sum())
+    nonfinite = wrong & ~torch.isfinite(got)
+    assert num_wrong == 0, (
+        f"hardmish(x) != x on {num_wrong} of {x.numel()} positive fp16 inputs "
+        f"(dest_acc={dest_acc.name}), e.g. {_fp16_lanes(wrong, x, got)}; "
+        f"{int(nonfinite.sum())} non-finite: {_fp16_lanes(nonfinite, x, got) or 'none'}. "
+        "For x >= 0 hardmish is the identity; a mismatch on a 16-bit Dest is the result being "
+        "rounded to bf16 although the Dest holds fp16a. See ckernel_sfpu_hardmish.h and #58607."
+    )
+
+
+# The bf16 round is documented as nearest-even (test_unary_category2_bfloat16.py: "fp32 result
+# rounded to nearest-even, as torch does"), but it is sfpi::RoundMode::Nearest, which on
+# Wormhole and Blackhole is NearestAway (sfpi_lib.h; ckernel_sfpu_logaddexp2.h and
+# ckernel_sfpu_recip.h say so too). Only Quasar's Nearest is NearestEven.
+#
+# bf16 data cannot show the difference. Every exact bf16 tie the quadratic branch produces has
+# an odd last bit -- for x = -a 2^-t with a odd, x(x+2)/2 has the odd numerator a(2^(t+1) - a),
+# which is -a^2 = 3 (mod 4) -- so both rules agree on every bf16 input and an exhaustive bf16
+# test passes either way. The identity branch on a Float16 Dest can: an fp16 x whose three low
+# mantissa bits are 100 is an exact bf16 tie, and half of those have an even last bit.
+#
+# Two answers are right: x, if the round is gated off a Float16 Dest as the test above asks,
+# or x rounded to nearest-even bf16, as documented. A tie rounded away from zero is neither.
+@_HARDMISH_FLOAT16_DEST_ACC
+def test_hardmish_16bit_dest_round_breaks_ties_to_even(dest_acc: DestAccumulation):
+    x, got = _hardmish_float16_identity_branch(dest_acc)
+
+    nearest_even = x.to(torch.bfloat16).to(torch.float16)
+    got_bits = got.view(torch.int16)
+    neither = (got_bits != x.view(torch.int16)) & (
+        got_bits != nearest_even.view(torch.int16)
+    )
+    num_neither = int(neither.sum())
+    x_bits = x.view(torch.int16)
+    even_tie = ((x_bits & 0x7) == 0x4) & ((x_bits & 0x8) == 0)
+    assert num_neither == 0, (
+        f"{num_neither} of {x.numel()} positive fp16 inputs (dest_acc={dest_acc.name}) "
+        f"answer neither x nor x rounded to nearest-even bf16, e.g. "
+        f"{_fp16_lanes(neither, x, got, nearest_even)}. {int((neither & even_tie).sum())} of "
+        f"them are bf16 ties with an even last bit, of {int(even_tie.sum())} in the sweep: "
+        "RoundMode::Nearest breaks ties away from zero on Wormhole and Blackhole. "
+        "float32_to_bf16_rne in ckernel_sfpu_conversions.h rounds to even."
+    )
+
+
 # Integer unary SFPU ops. Each has a dedicated integer kernel and runs through the
 # shared driver with the input unpacked straight to DST (dest_acc=Yes is required for
 # the 32-bit int path). Golden is exact (no PCC/tolerance).
