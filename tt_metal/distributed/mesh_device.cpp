@@ -1843,7 +1843,7 @@ bool MeshDeviceImpl::with_realtime_profiler(F&& f) const {
 
 tt::tt_metal::experimental::ProgramRealtimeProfilerCallbackHandle MeshDeviceImpl::register_realtime_profiler_callback(
     tt::tt_metal::experimental::ProgramRealtimeProfilerCallback callback) {
-    const auto handle = tt::AllocateProgramRealtimeProfilerCallbackHandle();
+    const auto handle = RealtimeProfilerManager::allocate_consumer_handle();
     with_realtime_profiler([&](RealtimeProfilerManager& realtime_profiler, const auto& chip_filter) {
         realtime_profiler.add_consumer(handle, std::move(callback), chip_filter);
     });

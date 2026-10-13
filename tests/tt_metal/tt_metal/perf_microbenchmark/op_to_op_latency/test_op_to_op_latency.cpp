@@ -507,7 +507,7 @@ struct RealtimeProfilerDrainGuard {
         if (!profiler_active) {
             log_warning(
                 LogTest,
-                "Real-time profiler: --use-realtime-profiler set but IsProgramRealtimeProfilerActive() is false; "
+                "Real-time profiler: --use-realtime-profiler set but IsProgramRealtimeProfilerActive(mesh) is false; "
                 "skipping (ETH dispatch / remote chip / resources — see "
                 "tech_reports/real_time_profiler/getting-started.md).");
             return;

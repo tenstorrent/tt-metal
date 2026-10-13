@@ -47,10 +47,10 @@ struct RealtimeProfilerCoreL1Addrs {
 
 // Owns the RT-profiler subsystem for one MeshDevice: per-device state, the receiver thread, the Tracy handler, and the
 // host-device sync handshake (sharded across a small worker pool, with a 60s per-chip throttle).
-class RealtimeProfilerManager : private tt::RealtimeProfilerCallbackListener {
+class RealtimeProfilerManager {
 public:
     explicit RealtimeProfilerManager(const std::shared_ptr<MeshDevice>& mesh_device);
-    ~RealtimeProfilerManager() override;
+    ~RealtimeProfilerManager();
 
     RealtimeProfilerManager(const RealtimeProfilerManager&) = delete;
     RealtimeProfilerManager& operator=(const RealtimeProfilerManager&) = delete;
@@ -64,6 +64,9 @@ public:
     // Requests the receiver to run a finish-path sync and blocks until it completes or times out; throttled to one
     // request per 60s and a no-op when no devices are active.
     void trigger_sync_check();
+
+    // Returns a consumer handle that is unique across every manager in the process.
+    static tt::ProgramRealtimeProfilerCallbackHandle allocate_consumer_handle();
 
     // Delivers records to `callback` on its own thread until remove_consumer() or shutdown(); shutdown() drains the
     // remaining records into it first. With `chip_filter`, only records from those chips are delivered. A no-op when
@@ -171,9 +174,6 @@ private:
 
     void run_consumer(Consumer& consumer);
     void stop_consumer(Consumer& consumer, ConsumerStopMode stop_mode);
-    void on_callback_registered(
-        tt::ProgramRealtimeProfilerCallbackHandle handle, const tt::ProgramRealtimeProfilerCallback& callback) override;
-    void on_callback_unregistered(tt::ProgramRealtimeProfilerCallbackHandle handle) override;
 
     // Receiver thread entry point: drain every device socket, advance the finish-sync handshake, and
     // publish decoded records to the ring for consumer threads to read.

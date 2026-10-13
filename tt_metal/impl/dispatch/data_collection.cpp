@@ -5,7 +5,6 @@
 #include <tt_stl/fmt.hpp>
 #include "data_collection.hpp"
 
-#include <atomic>
 #include <cstdint>
 #include "impl/context/metal_context.hpp"
 #include "impl/kernels/kernel.hpp"
@@ -92,25 +91,6 @@ std::span<const std::string_view> GetKernelSourcesForRuntimeId(ContextId context
     return MetalContext::instance(context_id).data_collector()->GetKernelSourcesForRuntimeId(runtime_id);
 }
 
-ProgramRealtimeProfilerCallbackHandle RegisterProgramRealtimeProfilerCallback(
-    ProgramRealtimeProfilerCallback callback) {
-    return tt::tt_metal::MetalContext::instance().data_collector()->RegisterProgramRealtimeProfilerCallback(
-        std::move(callback));
-}
-
-void UnregisterProgramRealtimeProfilerCallback(ProgramRealtimeProfilerCallbackHandle handle) {
-    tt::tt_metal::MetalContext::instance().data_collector()->UnregisterProgramRealtimeProfilerCallback(handle);
-}
-
-ProgramRealtimeProfilerCallbackHandle AllocateProgramRealtimeProfilerCallbackHandle() {
-    static std::atomic<ProgramRealtimeProfilerCallbackHandle> next_handle{0};
-    return next_handle.fetch_add(1, std::memory_order_relaxed);
-}
-
-bool IsProgramRealtimeProfilerActive() {
-    return tt::tt_metal::MetalContext::instance().data_collector()->IsRealtimeProfilerActive();
-}
-
 bool IsProgramRealtimeProfilerActive(ContextId context_id) {
     return tt::tt_metal::MetalContext::instance(context_id).data_collector()->IsRealtimeProfilerActive();
 }
@@ -124,19 +104,3 @@ void NotifyProgramRealtimeProfilerDeactivated(ContextId context_id, uint32_t chi
 }
 
 }  // namespace tt
-
-// Public experimental API — delegates to the internal tt:: functions.
-namespace tt::tt_metal::experimental {
-
-ProgramRealtimeProfilerCallbackHandle RegisterProgramRealtimeProfilerCallback(
-    ProgramRealtimeProfilerCallback callback) {
-    return tt::RegisterProgramRealtimeProfilerCallback(std::move(callback));
-}
-
-void UnregisterProgramRealtimeProfilerCallback(ProgramRealtimeProfilerCallbackHandle handle) {
-    tt::UnregisterProgramRealtimeProfilerCallback(handle);
-}
-
-bool IsProgramRealtimeProfilerActive() { return tt::IsProgramRealtimeProfilerActive(); }
-
-}  // namespace tt::tt_metal::experimental
