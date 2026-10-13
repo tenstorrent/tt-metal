@@ -431,6 +431,31 @@ def test_moe_compute_expert_rows_bias(mesh_device, mesh_shape, act):
 
 
 @pytest.mark.parametrize("device_params", DEVICE_PARAMS, indirect=True)
+@pytest.mark.parametrize("mesh_shape, mesh_device", [((1, 1), (1, 1))], indirect=["mesh_device"])
+def test_moe_compute_expert_rows_top_k_max(mesh_device, mesh_shape):
+    """top_k 32, the expert rows reader's largest: both paths, outputs match the goldens."""
+    _skip_unless_blackhole(mesh_device)
+    case = _Case(mesh_device, 64, 1, 32, 512, 2048)
+    js, _ = _expert_rows_and_ring(case, math_fidelity=ttnn.MathFidelity.HiFi4, fp32_dest_acc_en=True)
+    assert case.rows_rel_l2(js) <= 0.01
+
+
+@pytest.mark.parametrize("device_params", DEVICE_PARAMS, indirect=True)
+@pytest.mark.parametrize("mesh_shape, mesh_device", [((1, 1), (1, 1))], indirect=["mesh_device"])
+def test_moe_compute_expert_rows_top_k_over_max(mesh_device, mesh_shape):
+    """top_k 33: a forced expert rows call is refused before any kernel compiles, and the automatic choice runs the
+    ring (one program), whose outputs match the goldens."""
+    _skip_unless_blackhole(mesh_device)
+    case = _Case(mesh_device, 64, 1, 33, 512, 2048)
+    precision = dict(math_fidelity=ttnn.MathFidelity.HiFi4, fp32_dest_acc_en=True)
+    with _kernel("expert_rows"), pytest.raises(RuntimeError, match="top_k 33 outside 1..32"):
+        case.call(**precision)
+    outs, added = _programs_added(mesh_device, lambda: case.call(**precision))
+    assert added == 1, f"top_k 33 compiled {added} programs, expected the ring's 1"
+    case.read(outs, check=True)
+
+
+@pytest.mark.parametrize("device_params", DEVICE_PARAMS, indirect=True)
 @pytest.mark.parametrize("tokens", [1, 2, 3, 6, 16, 32, 48, 63, 64, 128])
 @pytest.mark.parametrize("cfg", [(4, 4, 256, 512), (8, 4, 256, 320)], ids=["c4_h512", "c2_h320"])
 @pytest.mark.parametrize("mesh_shape, mesh_device", [((1, 1), (1, 1))], indirect=["mesh_device"])

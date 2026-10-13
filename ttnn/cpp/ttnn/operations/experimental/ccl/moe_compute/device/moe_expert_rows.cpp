@@ -34,6 +34,7 @@ namespace {
 
 constexpr uint32_t kTileBytesBf16 = 2048;
 constexpr uint32_t kJobRows = 32;
+constexpr uint32_t kMaxTopK = 32;  // rows_reader keeps one u16 per k of a token on its stack (its static_assert)
 constexpr std::array<uint32_t, 3> kBlockSlots = {8, 6, 4};  // weight blocks per reader core, tried in order
 constexpr uint32_t kBlockBytes = 16 * 1024;                 // weight bytes per read block
 constexpr uint32_t kTwoReadersCoresPerBank = 8;             // worker cores per DRAM bank from which k = 2
@@ -811,6 +812,9 @@ std::optional<MoEExpertRowsParams> select_moe_compute_expert_rows(
         const uint32_t fits = per_core / 2 / (H / dp);                  // rows of one half that fit one core
         shape.row_cap = std::min(shape.tokens, ntp * std::min(combine_stride, fits));
     }
+    if (shape.top_k < 1 || shape.top_k > kMaxTopK) {
+        return ring_because(fmt::format("top_k {} outside 1..{}", shape.top_k, kMaxTopK));
+    }
     if (aligned_page(sc) != shape.index_page_bytes || shape.tokens % shape.num_sources != 0 ||
         shape.tokens * shape.top_k > 65535) {
         return ring_because("routing tensors outside the expert rows rules");
@@ -1040,6 +1044,7 @@ void MoEExpertRowsDeviceOperation::validate_on_program_cache_miss(
     const auto& s = args.shape;
     TT_FATAL(
         s.tokens % s.num_sources == 0, "moe_compute expert rows: {} tokens over {} sources", s.tokens, s.num_sources);
+    TT_FATAL(s.top_k >= 1 && s.top_k <= kMaxTopK, "moe_compute expert rows: top_k {} outside 1..{}", s.top_k, kMaxTopK);
     TT_FATAL(s.tokens * s.top_k <= 65535, "moe_compute expert rows: tokens * top_k must fit 16 bits");
     TT_FATAL(
         tensor_args.w0_w1_tensor.dtype() == DataType::BFLOAT4_B && tensor_args.w2_tensor.dtype() == DataType::BFLOAT4_B,
