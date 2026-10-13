@@ -1,0 +1,4 @@
+test_sfpu_reduce.py
+test_sfpu_reduce_multidim.py
+test_sfpu_reduce_sdpa.py
+test_sdpa_reduce_row.py
