@@ -60,10 +60,19 @@ void run_kernel(RUNTIME_PARAMETERS params)
 
         for (std::uint32_t loop = 0; loop < LOOP_FACTOR; loop++)
         {
+#ifdef UNPACK_TRANSPOSE_BLOCK
+            // One block per DEST section, as the math and pack threads below take them
+            const std::uint32_t tile_stride = PERF_ADDRESS(PERF_INPUT_A, 1) - PERF_ADDRESS(PERF_INPUT_A, 0);
+            for (std::uint32_t block_start = 0; block_start < TILE_CNT; block_start += MAX_TILES_DEST)
+            {
+                _llk_unpack_A_transpose_block_(PERF_ADDRESS(PERF_INPUT_A, block_start), std::min(TILE_CNT - block_start, MAX_TILES_DEST), tile_stride);
+            }
+#else
             for (std::uint32_t tile = 0; tile < TILE_CNT; tile++)
             {
                 _llk_unpack_A_<>(PERF_ADDRESS(PERF_INPUT_A, tile), formats.unpack_A_src, formats.unpack_A_dst);
             }
+#endif
         }
         PROFILER_SYNC();
     }

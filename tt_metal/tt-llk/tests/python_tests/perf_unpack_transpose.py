@@ -18,7 +18,7 @@ from helpers.test_variant_parameters import (
 @pytest.mark.perf
 @parametrize(
     formats=input_output_formats(
-        [DataFormat.Bfp8_b, DataFormat.Float16, DataFormat.Int32],
+        [DataFormat.Bfp8_b, DataFormat.Float16, DataFormat.Float16_b, DataFormat.Int32],
     ),
     unpack_transpose_faces=[Transpose.No, Transpose.Yes],
     unpack_transpose_within_face=[Transpose.No, Transpose.Yes],
@@ -43,10 +43,11 @@ def test_perf_unpack_transpose(
         ):
             pytest.skip("Transpose not supported for Int32")
 
-    # Packer: Bfp8_b and Float16 cannot convert to Int32 in this test matrix.
+    # Packer: Bfp8_b, Float16 and Float16_b cannot convert to Int32 in this test matrix.
     if formats.output_format == DataFormat.Int32 and formats.input_format in [
         DataFormat.Bfp8_b,
         DataFormat.Float16,
+        DataFormat.Float16_b,
     ]:
         pytest.skip(
             f"{formats.input_format.name} -> Int32 conversion not supported (packer limitation)"

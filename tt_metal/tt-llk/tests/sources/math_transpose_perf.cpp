@@ -20,7 +20,8 @@ std::uint32_t unp_cfg_context          = 0;
 std::uint32_t pack_sync_tile_dst_ptr   = 0;
 std::uint32_t math_sync_tile_dst_index = 0;
 
-static_assert(PERF_RUN_TYPE == PerfRunType::L1_TO_L1, "Only L1 to L1 is supported for this benchmark");
+static_assert(
+    PERF_RUN_TYPE == PerfRunType::L1_TO_L1 || PERF_RUN_TYPE == PerfRunType::MATH_ISOLATE, "Only L1 to L1 and math isolation are supported for this benchmark");
 
 static constexpr std::uint32_t MAX_TILES_DEST = is_fp32_dest_acc_en ? 4 : 8;
 
@@ -51,6 +52,13 @@ void run_kernel(RUNTIME_PARAMETERS params)
 
     {
         START_PERF_MEASURE("TILE_LOOP")
+
+        if constexpr (PERF_RUN_TYPE == PerfRunType::MATH_ISOLATE)
+        {
+            _perf_unpack_loop_set_valid<true, true>(TILE_CNT);
+            PROFILER_SYNC();
+            return;
+        }
 
         for (std::uint32_t block_start = 0; block_start < TILE_CNT; block_start += MAX_TILES_DEST)
         {
@@ -91,11 +99,25 @@ void run_kernel(RUNTIME_PARAMETERS params)
 
         _llk_math_pack_sync_init_<DstSync::SyncHalf, is_fp32_dest_acc_en>();
         _llk_math_hw_configure_<is_fp32_dest_acc_en>(formats.math, formats.math);
+        if constexpr (PERF_RUN_TYPE == PerfRunType::MATH_ISOLATE)
+        {
+            _llk_math_transpose_dest_init_<MATH_TRANSPOSE_FACES, is_fp32_dest_acc_en>();
+        }
         PROFILER_SYNC();
     }
 
     {
         START_PERF_MEASURE("TILE_LOOP")
+
+        if constexpr (PERF_RUN_TYPE == PerfRunType::MATH_ISOLATE)
+        {
+            for (std::uint32_t tile = 0; tile < TILE_CNT; tile++)
+            {
+                _llk_math_transpose_dest_wrapper_<is_fp32_dest_acc_en, MATH_TRANSPOSE_FACES, is_fp32_dest_acc_en>(tile % MAX_TILES_DEST);
+            }
+            PROFILER_SYNC();
+            return;
+        }
 
         for (std::uint32_t block_start = 0; block_start < TILE_CNT; block_start += MAX_TILES_DEST)
         {
@@ -155,6 +177,12 @@ void run_kernel(RUNTIME_PARAMETERS params)
     }
     {
         START_PERF_MEASURE("TILE_LOOP")
+
+        if constexpr (PERF_RUN_TYPE == PerfRunType::MATH_ISOLATE)
+        {
+            PROFILER_SYNC();
+            return;
+        }
 
         for (std::uint32_t block_start = 0; block_start < TILE_CNT; block_start += MAX_TILES_DEST)
         {
