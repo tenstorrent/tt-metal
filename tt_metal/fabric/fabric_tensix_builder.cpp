@@ -10,7 +10,7 @@
 #include <tt_metal.hpp>
 #include <tt-logger/tt-logger.hpp>
 
-#include "impl/context/metal_context.hpp"
+#include "tt_metal/llrt/hal.hpp"
 #include "fabric_context.hpp"
 #include "fabric_builder_context.hpp"
 #include "fabric_host_utils.hpp"
@@ -570,6 +570,8 @@ std::shared_ptr<FabricTensixDatamoverMuxConfig> FabricTensixDatamoverConfig::cre
     }
 
     return std::make_shared<FabricTensixDatamoverMuxConfig>(
+        fabric_context_,
+        *this,
         channel_type_configs,         // channel_type_configs map (already sorted)
         base_l1_addresses_[core_id],  // base_l1_address
         l1_end_address                // l1_end_address
@@ -590,6 +592,8 @@ std::shared_ptr<FabricTensixDatamoverRelayConfig> FabricTensixDatamoverConfig::c
     );
 
     return std::make_shared<FabricTensixDatamoverRelayConfig>(
+        fabric_context_,
+        *this,
         channel_type_configs,         // channel_type_configs map (already sorted)
         base_l1_addresses_[core_id],  // base_l1_address
         l1_end_address                // l1_end_address
@@ -914,6 +918,7 @@ FabricTensixDatamoverBuilder::FabricTensixDatamoverBuilder(
 }
 
 FabricTensixDatamoverBuilder FabricTensixDatamoverBuilder::build(
+    const FabricContext& fabric_context,
     tt_metal::IDevice* device,
     tt_metal::Program& /*program*/,
     tt::tt_fabric::FabricNodeId local_fabric_node_id,
@@ -921,10 +926,9 @@ FabricTensixDatamoverBuilder FabricTensixDatamoverBuilder::build(
     uint32_t ethernet_channel_id,
     eth_chan_directions direction,
     std::vector<bool>&& sender_channel_injection_flags) {
-    const auto& control_plane = tt_metal::MetalContext::instance().get_control_plane();
-    const auto& fabric_context = control_plane.get_fabric_context();
+    const auto& control_plane = fabric_context.get_control_plane();
     const auto& tensix_config = fabric_context.get_builder_context().get_tensix_config();
-    auto fabric_tensix_config = tt_metal::MetalContext::instance().get_fabric_tensix_config();
+    auto fabric_tensix_config = fabric_context.get_fabric_tensix_config();
 
     // Get core for this ethernet channel
     tt::tt_metal::CoreCoord my_core_logical = tensix_config.get_core_for_channel(device->id(), ethernet_channel_id);
@@ -986,15 +990,15 @@ FabricTensixDatamoverBuilder FabricTensixDatamoverBuilder::build(
 }
 
 FabricTensixDatamoverBuilder FabricTensixDatamoverBuilder::build_for_missing_direction(
+    const FabricContext& fabric_context,
     tt_metal::IDevice* device,
     tt_metal::Program& /*program*/,
     tt::tt_fabric::FabricNodeId local_fabric_node_id,
     routing_plane_id_t routing_plane_id,
     eth_chan_directions direction) {
-    const auto& control_plane = tt_metal::MetalContext::instance().get_control_plane();
-    const auto& fabric_context = control_plane.get_fabric_context();
+    const auto& control_plane = fabric_context.get_control_plane();
     const auto& tensix_config = fabric_context.get_builder_context().get_tensix_config();
-    auto fabric_tensix_config = tt_metal::MetalContext::instance().get_fabric_tensix_config();
+    auto fabric_tensix_config = fabric_context.get_fabric_tensix_config();
 
     // This method is only valid for UDM mode
     TT_FATAL(

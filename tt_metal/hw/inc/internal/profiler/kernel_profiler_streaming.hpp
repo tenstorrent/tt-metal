@@ -9,7 +9,7 @@
 // capacity. PP_* wire types and the SpscControlBuffer slots are owned here; ControlBuffer/PacketTypes belong
 // to the DRAM backend, and sharing a control word breaks both.
 //
-// SELECTION: this header is reached ONLY through tools/profiler/kernel_profiler.hpp, which includes it when
+// SELECTION: this header is reached ONLY through api/debug/kernel_profiler.hpp, which includes it when
 // the JIT build defines PROFILE_STREAMING (TT_METAL_STREAMING_PROFILER=1, jit_build/build.cpp). Without that
 // define kernel_profiler.hpp is the DRAM profiler's own text, untouched. The two are never compiled into the
 // same process: llrt/rtoptions.cpp TT_FATALs when both env vars are set. Never include this file directly.
@@ -511,7 +511,7 @@ struct stackCanaryScope {};  // FW builds and active ERISC: no kernel stack floo
 
 #include "noc_event_profiler.hpp"
 #include "perf_counters.hpp"
-#include "tools/profiler/synchronization_event_profiler.hpp"
+#include "internal/profiler/synchronization_event_profiler.hpp"
 
 #define DeviceZoneScopedN(name)    \
     TT_ZONE_DEFINE_ID(hash, name); \
