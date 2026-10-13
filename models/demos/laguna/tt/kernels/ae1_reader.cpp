@@ -16,19 +16,22 @@ void kernel_main() {
     constexpr uint32_t grid_x = get_compile_time_arg_val(3);
     constexpr uint32_t row_in = get_compile_time_arg_val(4);  // qkv row of token row 0
     constexpr uint32_t Wt = get_compile_time_arg_val(5);      // qkv width in tiles
-    constexpr auto a_args = TensorAccessorArgs<7>();
+    constexpr uint32_t n_attn = get_compile_time_arg_val(7);  // SDPA outputs, one per 32 rows (common args 2 ..)
+    constexpr auto a_args = TensorAccessorArgs<8>();
     constexpr auto x_args = TensorAccessorArgs<a_args.next_compile_time_args_offset()>();
     constexpr uint32_t T = 2048, cb_attn = 0, cb_g = 1, cb_tmp = 2;
-    const auto attn = TensorAccessor(a_args, get_common_arg_val<uint32_t>(0), T);
+    // more than 32 rows: token row b's SDPA output is row b % 32 of chunk b / 32's (common arg 2 + chunk)
     const auto x = TensorAccessor(x_args, get_common_arg_val<uint32_t>(1), T);
 
     const uint32_t L = get_absolute_logical_y() * grid_x + get_absolute_logical_x();
     const uint32_t b = L / (4 / TJ);
     const uint32_t j0 = (L % (4 / TJ)) * TJ;
     const uint32_t s = row_in + b, r = s % 32;
+    const auto attn = TensorAccessor(a_args, get_common_arg_val<uint32_t>(n_attn > 1 ? 2 + b / 32 : 0), T);
+    const uint32_t ab = n_attn > 1 ? b % 32 : b;
     cb_reserve_back(cb_attn, TJ);
     for (uint32_t j = 0; j < TJ; ++j) {
-        noc_async_read(attn.get_noc_addr(b * 4 + j0 + j), get_write_ptr(cb_attn) + j * T, T);
+        noc_async_read(attn.get_noc_addr(ab * 4 + j0 + j), get_write_ptr(cb_attn) + j * T, T);
     }
     cb_reserve_back(cb_g, 1);
     const uint32_t gt = get_write_ptr(cb_g), tmp = get_write_ptr(cb_tmp);

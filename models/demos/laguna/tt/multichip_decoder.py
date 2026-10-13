@@ -2575,8 +2575,12 @@ class MultichipDecoder(OptimizedDecoder):
                     cfg.num_heads, cfg.num_kv_heads, cfg.rotary_dim, cfg.eps, self._kv_shard_memcfg(TILE),
                     self._kv_shard_memcfg(TILE, y0=4), rows=T,
                 )  # fmt: skip
-                for c, (cur_c, _rope_c, pt_c) in enumerate(chunks):
-                    self._verify_chunk_attention(qs[c], ks[c], vs[c], cur_c, pt_c, kv_cache, qkvg, c * TILE, ae_out)
+                attns = [self._verify_chunk_attention(qs[c], ks[c], vs[c], cur_c, pt_c, kv_cache)
+                         for c, (cur_c, _rope_c, pt_c) in enumerate(chunks)]  # fmt: skip
+                # one epilogue over every row (each chunk's SDPA output for its rows) into the shared WO input
+                from .attn_epilogue1 import attn_epilogue1
+
+                attn_epilogue1(attns, qkvg, self.meta["qkv_w"], cfg.num_heads, None, rows=T, out=ae_out)
                 chunks = []
             for c, (cur_c, rope_c, pt_c) in enumerate(chunks):
                 if shared:
@@ -2597,13 +2601,10 @@ class MultichipDecoder(OptimizedDecoder):
             ln2 = ttnn.sharded_to_interleaved(ln2, ttnn.L1_MEMORY_CONFIG)
         return ttnn.add(h, self._mlp(ln2, T, sharded=False))
 
-    def _verify_chunk_attention(self, q, k_sh, v_sh, cur_pos, page_table, kv_cache, qkvg, row0, ae_out):
+    def _verify_chunk_attention(self, q, k_sh, v_sh, cur_pos, page_table, kv_cache):
         """One 32-row chunk of the batched verify after the shared prologue (verify_rows_forward), as decode_forward
         runs it for a chunk: the fused K/V cache write with share_cache (rows of one user landing in one cache tile
-        merged on one core), the paged SDPA (verify program config), then the epilogue into rows row0 .. of the shared
-        WO input ae_out."""
-        from .attn_epilogue1 import attn_epilogue1
-
+        merged on one core), then the paged SDPA (verify program config). Returns the SDPA output."""
         cfg = self.cfg
         ttnn.experimental.paged_fused_update_cache(
             kv_cache["k"], k_sh, kv_cache["v"], v_sh, update_idxs_tensor=cur_pos, page_table=page_table, share_cache=True
@@ -2615,9 +2616,7 @@ class MultichipDecoder(OptimizedDecoder):
         if self._decode_use_sdpa_pc:
             kw["program_config"] = self._sdpa_pc_verify
             kw["num_kv_heads"] = cfg.num_kv_heads
-        attn = ttnn.transformer.paged_scaled_dot_product_attention_decode(q, kv_cache["k"], kv_cache["v"], **kw)
-        attn_epilogue1(attn, qkvg, self.meta["qkv_w"], cfg.num_heads, None, rows=TILE, row_in=row0, out=ae_out,
-                       row_out=row0)  # fmt: skip
+        return ttnn.transformer.paged_scaled_dot_product_attention_decode(q, kv_cache["k"], kv_cache["v"], **kw)
 
     def _decode_tail(self, o, residual, B, next_norm_cores):
         """WO output (row-parallel partial) -> all-reduce, residual add, post norm, MLP, residual add."""

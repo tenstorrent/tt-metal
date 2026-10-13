@@ -35,12 +35,15 @@ def attn_epilogue1(attn, qkv, g_col, num_heads, out_mem, beta=1.0, threshold=20.
     """attn: SDPA output [1, rows, H, 128] bf16 TILE; qkv: the fused qkv(+gate) output [.., R, W] bf16 TILE whose rows
     row_in .. row_in + rows - 1 hold the gate logits at columns g_col .. g_col + H - 1 (g_col a multiple of 32).
     Returns [1, 1, rows, H * 128] bf16 TILE in out_mem: row b = concat over heads of attn[b, h] * softplus(g[b, h]);
-    or, given out ([1, 1, T, H * 128]), writes those rows at row_out .. of it and returns out."""
+    or, given out ([1, 1, T, H * 128]), writes those rows at row_out .. of it and returns out. attn may be a list of
+    one SDPA output per 32 rows (the batched verify: one epilogue over all its rows)."""
+    attns = list(attn) if isinstance(attn, (list, tuple)) else [attn]
+    attn = attns[0]
     device = attn.device()
     H = int(num_heads)
     assert attn.dtype == ttnn.bfloat16 and qkv.dtype == ttnn.bfloat16 and H <= 32 and g_col % 32 == 0
     assert attn.padded_shape[-1] == 128 and qkv.padded_shape[-1] >= g_col + H
-    assert 1 <= rows <= 32 and row_in + rows <= qkv.padded_shape[-2], (rows, row_in, qkv.padded_shape)
+    assert 1 <= rows <= 32 * len(attns) and row_in + rows <= qkv.padded_shape[-2], (rows, row_in, qkv.padded_shape)
     if out is None:
         out = ttnn.allocate_tensor_on_device(
             ttnn.Shape([1, 1, rows, H * 128]), ttnn.bfloat16, ttnn.TILE_LAYOUT, device, out_mem
@@ -58,10 +61,11 @@ def attn_epilogue1(attn, qkv, g_col, num_heads, out_mem, beta=1.0, threshold=20.
         kernel_source=str(_KDIR / "ae1_reader.cpp"),
         source_type=ttnn.KernelDescriptor.SourceType.FILE_PATH,
         core_ranges=grid,
-        compile_time_args=[H, g_col // 32, tj] + pos
+        compile_time_args=[H, g_col // 32, tj] + pos + [len(attns)]
         + list(ttnn.TensorAccessorArgs(attn).get_compile_time_args())
         + list(ttnn.TensorAccessorArgs(qkv).get_compile_time_args()),
-        common_runtime_args=[attn.buffer_address(), qkv.buffer_address()],
+        common_runtime_args=[attn.buffer_address(), qkv.buffer_address()]
+        + ([a.buffer_address() for a in attns] if len(attns) > 1 else []),
         config=ttnn.ReaderConfigDescriptor(),
     )
     writer = ttnn.KernelDescriptor(
@@ -84,6 +88,6 @@ def attn_epilogue1(attn, qkv, g_col, num_heads, out_mem, beta=1.0, threshold=20.
     )
     cbs = [_cb(grid, 0, 4), _cb(grid, 1, 1), _cb(grid, 2, 1), _cb(grid, 3, 1), _cb(grid, 16, 4)]
     ttnn.generic_op(
-        [attn, qkv, out], ttnn.ProgramDescriptor(kernels=[reader, writer, compute], semaphores=[], cbs=cbs)
+        attns + [qkv, out], ttnn.ProgramDescriptor(kernels=[reader, writer, compute], semaphores=[], cbs=cbs)
     )
     return out
