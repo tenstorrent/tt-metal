@@ -170,7 +170,7 @@ jobs:
         id: gate
         # Pinned to @main: a PR branch runs the current gate, not whatever
         # copy (or lack of one) happens to sit at its own head.
-        uses: ./.github/actions/verify-changed-tests
+        uses: tenstorrent/tt-metal/.github/actions/verify-changed-tests@main
         with:
           event: ${{ github.event_name }}
           base: ${{ github.event.pull_request.base.sha || github.event.merge_group.base_sha }}
