@@ -1,0 +1,15 @@
+# H2: perf_eltwise_unary_sfpu TopK rows (local sort, rebuild; merge and defuse compiled for the ELF check only). A B B2 B2 B A twice.
+p A ids/u_merge.txt none
+p B ids/u_merge.txt none
+r A ids/u_sort_rb.txt MATH_ISOLATE,L1_TO_L1
+r B ids/u_sort_rb.txt MATH_ISOLATE,L1_TO_L1
+r B2 ids/u_sort_rb.txt MATH_ISOLATE,L1_TO_L1
+r B2 ids/u_sort_rb.txt MATH_ISOLATE,L1_TO_L1
+r B ids/u_sort_rb.txt MATH_ISOLATE,L1_TO_L1
+r A ids/u_sort_rb.txt MATH_ISOLATE,L1_TO_L1
+r A ids/u_sort_rb.txt MATH_ISOLATE,L1_TO_L1
+r B ids/u_sort_rb.txt MATH_ISOLATE,L1_TO_L1
+r B2 ids/u_sort_rb.txt MATH_ISOLATE,L1_TO_L1
+r B2 ids/u_sort_rb.txt MATH_ISOLATE,L1_TO_L1
+r B ids/u_sort_rb.txt MATH_ISOLATE,L1_TO_L1
+r A ids/u_sort_rb.txt MATH_ISOLATE,L1_TO_L1

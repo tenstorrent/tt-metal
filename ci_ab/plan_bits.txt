@@ -1,0 +1,4 @@
+# tt-llk functional bits with LLK asserts on: main's header, the stack's current header (A) and the round's head (B)
+b main ids/bits_main.txt - bits
+b A ids/bits_all.txt - bits
+b B ids/bits_all.txt - bits

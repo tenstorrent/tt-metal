@@ -1,0 +1,23 @@
+# H1: perf_topk, perf_topk_phase, perf_topk_network. A = the stack's current header, M = #58254 merged, B = the round's head,
+# B2 = A/A copy of B; A B M B2 B2 M B A twice; then counters on A, B and the no-swap probes Ap and Bp.
+r A ids/h1.txt -
+r B ids/h1.txt -
+r M ids/h1.txt -
+r B2 ids/h1.txt -
+r B2 ids/h1.txt -
+r M ids/h1.txt -
+r B ids/h1.txt -
+r A ids/h1.txt -
+r A ids/h1.txt -
+r B ids/h1.txt -
+r M ids/h1.txt -
+r B2 ids/h1.txt -
+r B2 ids/h1.txt -
+r M ids/h1.txt -
+r B ids/h1.txt -
+r A ids/h1.txt -
+c A_wc ids/cnt.txt - wc
+c B_wc ids/cnt.txt - wc
+c M_wc ids/cnt.txt - wc
+c Ap_wc ids/cnt.txt - wc
+c Bp_wc ids/cnt.txt - wc
