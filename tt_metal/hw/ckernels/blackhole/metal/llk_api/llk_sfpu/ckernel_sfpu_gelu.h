@@ -258,8 +258,6 @@ void gelu_init() {
     } else if constexpr (is_fp32_dest_acc_en) {
         // FP32 accurate mode: rational erf evaluation requires reciprocal init
         sfpu_reciprocal_init<false>();
-        sfpi::vConstFloatPrgm1 = GELU_ERF_NUM[15];
-        sfpi::vConstFloatPrgm2 = GELU_ERF_DEN[16];
     }
     // BF16 accurate mode: no init needed (correction polynomial has no reciprocal)
 }
@@ -303,7 +301,10 @@ inline void calculate_gelu() {
         // unroll 8 fills the SFPU pipeline across 8 independent dst-tile chains.
         constexpr float INV_SQRT2 = 0.7071067811865475f;
         constexpr float GELU_SAT = -5.54259443f;  // 0xc0b15cef: first x where libm erff=-1.0
-        // The leading erf coefficients stay in registers (two from gelu_init) so rows do not reload them.
+        // The leading erf coefficients stay in registers so rows do not reload them; Prgm1 and Prgm2 are set per call
+        // so that gelu_init stays short.
+        sfpi::vConstFloatPrgm1 = GELU_ERF_NUM[15];
+        sfpi::vConstFloatPrgm2 = GELU_ERF_DEN[16];
         const sfpi::vFloat den_next = GELU_ERF_DEN[14];
         const sfpi::vFloat num_next = GELU_ERF_NUM[13];
 #pragma GCC unroll 0
