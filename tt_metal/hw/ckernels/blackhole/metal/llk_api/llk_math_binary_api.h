@@ -22,7 +22,8 @@ template <
     BroadcastType src_b_bcast_type,
     MathFidelity math_fidelity,
     EltwiseBinaryReuseDestType binary_reuse_dest = EltwiseBinaryReuseDestType::NONE,
-    SrcDvalid src_dvalid = SrcDvalid::PerFace>
+    SrcDvalid src_dvalid = SrcDvalid::PerFace,
+    bool dst_step = false>
 inline void llk_math_eltwise_binary_init_impl(
     const ckernel::TensorShape& tensor_shape, const std::uint32_t acc_to_dest) {
     constexpr auto effective_math_fidelity = get_effective_math_fidelity<eltwise_binary_type, math_fidelity>();
@@ -42,7 +43,8 @@ inline void llk_math_eltwise_binary_init_impl(
         src_b_bcast_type,
         effective_math_fidelity,
         binary_reuse_dest,
-        src_dvalid>(tensor_shape, acc_to_dest);
+        src_dvalid,
+        dst_step>(tensor_shape, acc_to_dest);
 }
 
 template <
@@ -78,13 +80,15 @@ inline void llk_math_eltwise_binary_impl(
  * @param operand_A: Logical dataflow buffer id for input A, used to derive the tensor / tile shape
  * @param operand_B: Logical dataflow buffer id for input B, read for a row or column broadcast with SrcDvalid::PerTile.
  * @param acc_to_dest: Flag to control if the result should be accumulated with the current dest.
+ * @tparam dst_step: Set when the tiles run through llk_math_eltwise_binary_block (see _llk_math_eltwise_binary_block_)
  */
 template <
     EltwiseBinaryType eltwise_binary_type,
     BroadcastType src_b_bcast_type,
     MathFidelity math_fidelity,
     EltwiseBinaryReuseDestType binary_reuse_dest = EltwiseBinaryReuseDestType::NONE,
-    SrcDvalid src_dvalid = SrcDvalid::PerFace>
+    SrcDvalid src_dvalid = SrcDvalid::PerFace,
+    bool dst_step = false>
 inline void llk_math_eltwise_binary_init(
     const std::uint32_t operand_A,
     [[maybe_unused]] const std::uint32_t operand_B,
@@ -103,8 +107,13 @@ inline void llk_math_eltwise_binary_init(
             return;
         }
     }
-    llk_math_eltwise_binary_init_impl<eltwise_binary_type, src_b_bcast_type, math_fidelity, binary_reuse_dest, src_dvalid>(
-        tensor_shape, acc_to_dest);
+    llk_math_eltwise_binary_init_impl<
+        eltwise_binary_type,
+        src_b_bcast_type,
+        math_fidelity,
+        binary_reuse_dest,
+        src_dvalid,
+        dst_step>(tensor_shape, acc_to_dest);
 }
 
 template <
@@ -199,4 +208,44 @@ inline void llk_math_eltwise_binary(
         math_fidelity,
         binary_reuse_dest,
         src_dvalid>(tensor_shape, dst_index, clear_fp32_dst_acc);
+}
+
+// Standard op (no broadcast, no dest reuse) on num_tiles consecutive DEST tiles from dst_index; dst_step as at the
+// init.
+template <
+    EltwiseBinaryType eltwise_binary_type,
+    bool is_fp32_dest_acc_en,
+    MathFidelity math_fidelity,
+    SrcDvalid src_dvalid = SrcDvalid::PerFace,
+    bool dst_step = false>
+inline void llk_math_eltwise_binary_block(
+    const std::uint32_t operand_A, std::uint32_t dst_index, const std::uint32_t num_tiles) {
+    LLK_ASSERT(
+        (dst_index + num_tiles <= get_dest_max_tiles_rt<DST_SYNC_MODE, DstTileShape::Tile32x32>()),
+        "llk_math_eltwise_binary_block: dst index exceeds available dest register capacity.");
+
+    const std::uint32_t operand_id = get_operand_id(operand_A);
+    const ckernel::TensorShape tensor_shape = get_operand_tensor_shape(operand_id);
+
+    constexpr auto effective_math_fidelity = get_effective_math_fidelity<eltwise_binary_type, math_fidelity>();
+
+    SAN_HOOK(execute<OperationFpuEltwiseBinary>(
+        StateVal<OperationFpuEltwiseBinary::EltwiseBinaryType>(to_underlying(eltwise_binary_type)),
+        StateVal<OperationFpuEltwiseBinary::BroadcastType>(to_underlying(BroadcastType::NONE)),
+        StateVal<OperationFpuEltwiseBinary::MathFidelity>(to_underlying(effective_math_fidelity)),
+        StateVal<OperationFpuEltwiseBinary::ReuseDest>(to_underlying(EltwiseBinaryReuseDestType::NONE)),
+        StateVal<OperationFpuEltwiseBinary::FaceHeight>(tensor_shape.face_r_dim),
+        StateVal<OperationFpuEltwiseBinary::NumFaces>(tensor_shape.total_num_faces()),
+        StateVal<OperationFpuEltwiseBinary::NumFacesCDim>(tensor_shape.num_faces_c_dim),
+        StateDiscard<std::uint32_t>(dst_index),
+        StateDiscard<bool>(false)));
+
+    _llk_math_eltwise_binary_block_<
+        eltwise_binary_type,
+        BroadcastType::NONE,
+        DST_SYNC_MODE,
+        is_fp32_dest_acc_en,
+        effective_math_fidelity,
+        src_dvalid,
+        dst_step>(tensor_shape, dst_index, num_tiles);
 }

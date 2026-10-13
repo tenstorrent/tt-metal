@@ -63,7 +63,8 @@ ALWI void binary_math_init(std::uint32_t icb0, std::uint32_t icb1, std::uint32_t
         BroadcastType::NONE,
         math_fidelity,
         reuse_dest,
-        binary_src_dvalid<reuse_dest>>(icb0, icb1, acc_to_dest);
+        binary_src_dvalid<reuse_dest>,
+        BINARY_BLOCK_UNPACK && reuse_dest == EltwiseBinaryReuseDestType::NONE>(icb0, icb1, acc_to_dest);
 }
 
 template <
@@ -94,10 +95,22 @@ ALWI void binary_block(
     MATH(
         constexpr MathFidelity math_fidelity =
             (eltwise_binary_type == EltwiseBinaryType::ELWMUL) ? MATH_FIDELITY : MathFidelity::LoFi);
-    for (std::uint32_t i = 0; i < ntiles; ++i) {
-        MATH((binary_math<eltwise_binary_type, is_fp32_dest_acc_en, math_fidelity, EltwiseBinaryReuseDestType::NONE>(
-            icb0, icb1, start_idst + i)));
+#ifdef TRISC_MATH
+    // Above LoFi the math thread binds, so the section's tiles run as one call; LoFi sections are bound by the pack
+    if constexpr (math_fidelity != MathFidelity::LoFi) {
+        llk_math_eltwise_binary_block<
+            eltwise_binary_type,
+            is_fp32_dest_acc_en,
+            math_fidelity,
+            BINARY_SRC_DVALID,
+            BINARY_BLOCK_UNPACK>(icb0, start_idst, ntiles);
+    } else {
+        for (std::uint32_t i = 0; i < ntiles; ++i) {
+            binary_math<eltwise_binary_type, is_fp32_dest_acc_en, math_fidelity, EltwiseBinaryReuseDestType::NONE>(
+                icb0, icb1, start_idst + i);
+        }
     }
+#endif
 }
 }  // namespace detail
 #endif  // ARCH_BLACKHOLE

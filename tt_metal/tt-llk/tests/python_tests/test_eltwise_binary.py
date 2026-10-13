@@ -41,6 +41,7 @@ from helpers.test_variant_parameters import (
     DEST_SYNC,
     EN_DEST_REUSE,
     LOOP_FACTOR,
+    MATH_BLOCK,
     MATH_FIDELITY,
     MATH_OP,
     NUM_BLOCKS,
@@ -314,6 +315,7 @@ def _run_eltwise_binary_test(
     loop_factor=1,
     per_face_handoff=None,
     unpack_ab_block=0,
+    math_block=False,
 ):
     if per_face_handoff is None:
         # Functional variants take the per-tile hand-off; perf variants where the opted-in kernels do: a multiply above LoFi on a tile the LLK runs per tile.
@@ -327,6 +329,12 @@ def _run_eltwise_binary_test(
         )
     # A transposed SrcA is handed over per face on both threads.
     per_face_handoff = per_face_handoff or transpose_srca == Transpose.Yes
+    if math_block and (
+        per_face_handoff or broadcast_type != BroadcastType.None_ or acc_to_dest
+    ):
+        pytest.skip(
+            "The block math call takes the per-tile hand-off without broadcast or accumulation"
+        )
     if transpose_srca == Transpose.Yes and broadcast_type == BroadcastType.Scalar:
         pytest.skip("SrcA transpose is not supported with scalar broadcast")
 
@@ -486,6 +494,7 @@ def _run_eltwise_binary_test(
             ACC_TO_DEST(acc_to_dest),
             PER_FACE_HANDOFF(per_face_handoff),
             UNPACK_AB_BLOCK(unpack_ab_block),
+            MATH_BLOCK(math_block),
         ],
         "runtimes": [
             generate_input_dim(
@@ -1357,6 +1366,7 @@ def test_eltwise_binary_dest_reuse_unpack_a(
     tile_dimensions=[[32, 32]],
     input_dimensions=[[64, 32], [256, 32], [512, 32]],
     per_face_handoff=[False, True],
+    math_block=[False, True],
 )
 def test_eltwise_binary_unpack_ab_block(
     dest_acc,
@@ -1368,6 +1378,7 @@ def test_eltwise_binary_unpack_ab_block(
     tile_dimensions,
     input_dimensions,
     per_face_handoff,
+    math_block,
 ):
     _run_eltwise_binary_test(
         dest_acc,
@@ -1383,6 +1394,7 @@ def test_eltwise_binary_unpack_ab_block(
         False,
         per_face_handoff=per_face_handoff,
         unpack_ab_block=1,
+        math_block=math_block,
     )
 
 
@@ -1645,6 +1657,7 @@ def test_eltwise_binary_dest_reuse_unpack_a_smoke(
     tile_dimensions=[[32, 32]],
     input_dimensions=[[64, 32], [512, 32]],
     per_face_handoff=[False, True],
+    math_block=[False, True],
 )
 def test_eltwise_binary_unpack_ab_block_smoke(
     dest_acc,
@@ -1656,6 +1669,7 @@ def test_eltwise_binary_unpack_ab_block_smoke(
     tile_dimensions,
     input_dimensions,
     per_face_handoff,
+    math_block,
 ):
     test_eltwise_binary_unpack_ab_block(
         dest_acc,
@@ -1667,4 +1681,5 @@ def test_eltwise_binary_unpack_ab_block_smoke(
         tile_dimensions,
         input_dimensions,
         per_face_handoff,
+        math_block,
     )

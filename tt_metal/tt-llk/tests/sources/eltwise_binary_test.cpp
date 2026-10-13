@@ -26,10 +26,13 @@ std::uint32_t math_sync_tile_dst_index = 0;
 // program does not cover fall back to per face inside the LLK.
 #define SRC_DVALID     (per_face_handoff ? ckernel::SrcDvalid::PerFace : ckernel::SrcDvalid::PerTile)
 #define SRC_DVALID_ARG , SRC_DVALID
+// math_block: each DEST section runs as one _llk_math_eltwise_binary_block_ call, as binary_ng's block sections do
+#define DST_STEP_ARG , math_block
 #define PER_TILE_MOCK(shape) \
     tile_handoff<BROADCAST_TYPE>(SRC_DVALID == ckernel::SrcDvalid::PerTile, (shape).face_r_dim, (shape).num_faces_r_dim, (shape).num_faces_c_dim)
 #else
 #define SRC_DVALID_ARG
+#define DST_STEP_ARG
 #define PER_TILE_MOCK(shape) false
 #endif
 
@@ -366,7 +369,8 @@ void run_kernel(RUNTIME_PARAMETERS params)
         _llk_math_hw_configure_<is_fp32_dest_acc_en>(formats.math, formats.math);
 #ifndef EN_DEST_REUSE
         constexpr auto REUSE_DEST_TYPE = ckernel::EltwiseBinaryReuseDestType::NONE;
-        _llk_math_eltwise_binary_init_<ELTWISE_BINARY_OP, BROADCAST_TYPE, MATH_FIDELITY, REUSE_DEST_TYPE SRC_DVALID_ARG>(tensor_shape, ACC_TO_DEST);
+        _llk_math_eltwise_binary_init_<ELTWISE_BINARY_OP, BROADCAST_TYPE, MATH_FIDELITY, REUSE_DEST_TYPE SRC_DVALID_ARG DST_STEP_ARG>(
+            tensor_shape, ACC_TO_DEST);
 #endif
         PROFILER_SYNC();
     }
@@ -486,7 +490,14 @@ void run_kernel(RUNTIME_PARAMETERS params)
                     {
                         _llk_math_wait_for_dest_available_<dest_sync>();
                     }
-                    for (std::uint32_t tile = 0; tile < output_tiles_in_block; ++tile)
+#if defined(ARCH_BLACKHOLE)
+                    if constexpr (math_block)
+                    {
+                        _llk_math_eltwise_binary_block_<ELTWISE_BINARY_OP, BROADCAST_TYPE, dest_sync, is_fp32_dest_acc_en, MATH_FIDELITY, SRC_DVALID, true>(
+                            tensor_shape, 0, output_tiles_in_block);
+                    }
+#endif
+                    for (std::uint32_t tile = 0; tile < (math_block ? 0 : output_tiles_in_block); ++tile)
                     {
                         LLK_ASSERT(
                             (tile < get_dest_max_tiles<dest_sync, is_fp32_dest_acc_en, DstTileShape::Tile32x32>()),

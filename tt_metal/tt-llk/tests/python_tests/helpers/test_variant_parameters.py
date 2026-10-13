@@ -863,6 +863,22 @@ class UNPACK_AB_BLOCK(TemplateParameter):
         return f"constexpr std::uint32_t unpack_ab_block = {self.value};"
 
 
+@dataclass(repr=False)
+class MATH_BLOCK(TemplateParameter):
+    """Blackhole eltwise binary: each DEST section runs as one _llk_math_eltwise_binary_block_ call. Not a report column; repr carries it into the variant hash."""
+
+    _math_block: InitVar[bool] = False
+
+    def __post_init__(self, _math_block: bool):
+        self.value = bool(_math_block)
+
+    def __repr__(self) -> str:
+        return f"MATH_BLOCK({self.value})"
+
+    def convert_to_cpp(self) -> str:
+        return f"constexpr bool math_block = {str(self.value).lower()};"
+
+
 @dataclass
 class IMPLIED_MATH_FORMAT(TemplateParameter):
     implied_math_format: ImpliedMathFormat = ImpliedMathFormat.No
