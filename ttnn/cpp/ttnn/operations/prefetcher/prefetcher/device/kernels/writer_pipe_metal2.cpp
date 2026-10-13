@@ -5,8 +5,8 @@
 // PrefetcherPipe counterpart of writer_l1.cpp (the GlobalCircularBuffer writer, which lives beside it).
 //
 // Drains the reader's staging ring into this core's PrefetcherPipe: each staged block becomes one pipe
-// entry per receiver, receiver r getting the r-th column slice of every block row (write_strided). The
-// pipe's entry size follows the tensor being delivered.
+// entry per receiver, receiver r getting the r-th column slice of every block row
+// (write_strided_and_push_back). The pipe's entry size follows the tensor being delivered.
 //
 // Bindings:
 //   dfb::staging - CONSUMER: the reader's staging ring, max_block_num_tiles entries per block
@@ -16,8 +16,10 @@
 // size), block height in tile rows, coalesced_page_size, coalesced_num_pages. One receiver's slice of a
 // block row is coalesced_num_pages writes of coalesced_page_size bytes.
 //
-// The pipe's destructor commits its cursors and drains its credit atomics; the reader, which shares this
-// NOC, re-syncs the NoC counters at exit, so it is released only after that.
+// This kernel and the reader share one dedicated NOC (DramPrefetcherPipeSpecFactory): this kernel issues
+// only posted writes and atomics, the reader only reads. The NOC's hardware counters count both kernels'
+// traffic, so both re-sync their own counters from them at exit: this kernel once the pipe's destructor
+// has drained its credit atomics, the reader only after this kernel releases it through dfb::sync.
 
 #include <stdint.h>
 
@@ -27,9 +29,6 @@
 #include "api/dataflow/prefetcher_pipe.h"
 #include "experimental/kernel_args.h"
 
-// DramPrefetcherPipeSpecFactory runs this kernel and the reader on NOC 0 as a dedicated-NOC pair with
-// disjoint traffic (this kernel only issues posted writes and atomics); the counter re-sync at exit relies
-// on it.
 static_assert(noc_mode == DM_DEDICATED_NOC, "writer_pipe_metal2 shares a dedicated NOC with the reader");
 
 void kernel_main() {
