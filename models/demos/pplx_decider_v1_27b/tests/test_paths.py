@@ -8,10 +8,15 @@
 from __future__ import annotations
 
 import os
+import shutil
+from pathlib import Path
 
 import pytest
 
 from models.demos.pplx_decider_v1_27b.tt import paths
+
+# The real HF cache, captured before the `env` fixture clears $HF_HOME (used only if the snapshot is present).
+_REAL_HF_HOME = Path(os.environ.get("HF_HOME", "~/.cache/huggingface")).expanduser()
 
 ENV = ("HF_MODEL", "PPLX_DECIDER_SNAPSHOT", "TT_CACHE_PATH", "PPLX_DECIDER_WEIGHT_CACHE", "HF_HOME")
 
@@ -102,8 +107,39 @@ def test_cache_key(env):
     c = make_checkpoint(tmp / "c", readout=b"a different readout")
     keys = {paths.cache_key(p) for p in (a, b, c)}
     assert len(keys) == 3 and all(k.startswith("local-") for k in keys)
-    # Same checkpoint, same key; a rewritten readout (new mtime) is a new key.
+    # Same checkpoint, same key. A plain `cp` (new mtimes) keeps the key; a readout of another size does not.
     assert paths.cache_key(a) == paths.cache_key(tmp / "a")
-    st = (a / "readout.safetensors").stat()
-    os.utime(a / "readout.safetensors", ns=(st.st_atime_ns, st.st_mtime_ns + 10**9))
-    assert paths.cache_key(a) not in keys
+    copy = tmp / "a_copy"
+    shutil.copytree(a, copy, copy_function=shutil.copyfile)  # copyfile: new mtimes, like a plain cp
+    st = (copy / "readout.safetensors").stat()
+    os.utime(copy / "readout.safetensors", ns=(st.st_atime_ns, st.st_mtime_ns + 10**9))
+    assert paths.cache_key(copy) == paths.cache_key(a)
+    (copy / "readout.safetensors").write_bytes(b"rr")
+    assert paths.cache_key(copy) not in keys
+    # A shard named by the index is part of the key through its size.
+    d = make_checkpoint(tmp / "d", index='{"weight_map": {"w": "model-00001-of-00001.safetensors"}}')
+    (d / "model-00001-of-00001.safetensors").write_bytes(b"x" * 8)
+    key_d = paths.cache_key(d)
+    (d / "model-00001-of-00001.safetensors").write_bytes(b"x" * 9)
+    assert paths.cache_key(d) != key_d
+
+
+def test_cache_key_symlinked_snapshot(env):
+    """A symlink to an HF-cache snapshot (or HF_MODEL=<symlink>) keeps the revision key: no silent cold
+    cache under a `local-` key. Checked on the fake snapshot and, when present, on the real one."""
+    tmp, mp = env["tmp"], env["mp"]
+    snapshots = [env["hf_snapshot"]]
+    real = _REAL_HF_HOME / "hub/models--perplexity-ai--pplx-decider-v1-27b/snapshots" / paths.REVISION
+    if Path(real).is_dir():
+        snapshots.append(Path(real))
+    for i, snap in enumerate(snapshots):
+        link = tmp / f"link{i}" / "pplx-decider"
+        link.parent.mkdir()
+        link.symlink_to(snap, target_is_directory=True)
+        assert paths.cache_key(link) == paths.REVISION, snap
+        mp.setenv("HF_MODEL", str(link))
+        model_dir, source = paths.resolve_model_path()
+        assert source == "$HF_MODEL"
+        cache_dir, _ = paths.resolve_model_cache_path(model_dir, create=False)
+        assert cache_dir.name == paths.REVISION
+        assert cache_dir.resolve() == (snap / "tt_weight_cache" / paths.REVISION).resolve()

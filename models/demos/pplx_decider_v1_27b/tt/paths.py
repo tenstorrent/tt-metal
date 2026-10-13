@@ -16,9 +16,10 @@ The model path and the device weight cache follow ``models/demos/gemma4`` instea
 - ``resolve_model_cache_path(model_path)``: the root is ``$TT_CACHE_PATH``, else
   ``$PPLX_DECIDER_WEIGHT_CACHE`` (legacy), else the local model directory itself (the cache sits next to
   the weights), else ``$HF_HOME/tt_cache/<repo id with / -> -->``. The cache is
-  ``<root>/tt_weight_cache/<key>``; ``<key>`` is the snapshot revision for an HF-cache snapshot directory,
-  else ``local-<sha256[:12]>`` of the checkpoint's ``config.json`` and ``model.safetensors.index.json``
-  bytes and the size and mtime of ``readout.safetensors``, so two checkpoints never share a cache.
+  ``<root>/tt_weight_cache/<key>``; ``<key>`` is the snapshot revision for an HF-cache snapshot directory
+  (checked after resolving symlinks), else ``local-<sha256[:12]>`` of the checkpoint's ``config.json`` and
+  ``model.safetensors.index.json`` bytes and the sizes of ``readout.safetensors`` and the index's shards,
+  so two checkpoints never share a cache and a copied checkpoint keeps its key.
 
 Layout below ``ARTIFACTS``::
 
@@ -42,6 +43,7 @@ from __future__ import annotations
 
 import errno
 import hashlib
+import json
 import os
 from pathlib import Path
 
@@ -169,17 +171,21 @@ def cache_key(model_dir: Path | str) -> str:
     """Weight cache key of a checkpoint directory.
 
     An HF-cache snapshot (``.../models--<org>--<name>/snapshots/<revision>``) is keyed by its revision.
-    Any other directory gets ``local-`` + sha256[:12] of its ``config.json`` and
-    ``model.safetensors.index.json`` bytes and the size and mtime of ``readout.safetensors``.
+    The layout is checked on the symlink-resolved path, so a symlink to a snapshot (or ``HF_MODEL=<symlink>``)
+    keeps the revision key. Any other directory gets ``local-`` + sha256[:12] of its ``config.json`` and
+    ``model.safetensors.index.json`` bytes and the byte sizes of ``readout.safetensors`` and of every shard
+    the index names. No mtime: a plain ``cp`` of a checkpoint keeps its key.
     """
-    model_dir = Path(model_dir).absolute()
+    model_dir = Path(model_dir).expanduser().resolve()
     if model_dir.parent.name == "snapshots" and model_dir.parent.parent.name.startswith("models--"):
         return model_dir.name
     digest = hashlib.sha256()
     for name in ("config.json", "model.safetensors.index.json"):
         digest.update(name.encode() + b"\0" + (model_dir / name).read_bytes() + b"\0")
-    stat = (model_dir / "readout.safetensors").stat()
-    digest.update(f"readout.safetensors {stat.st_size} {stat.st_mtime_ns}".encode())
+    index = json.loads((model_dir / "model.safetensors.index.json").read_text())
+    for name in ["readout.safetensors", *sorted(set(index.get("weight_map", {}).values()))]:
+        size = (model_dir / name).stat().st_size if (model_dir / name).exists() else -1
+        digest.update(f"{name} {size}\0".encode())
     return "local-" + digest.hexdigest()[:12]
 
 

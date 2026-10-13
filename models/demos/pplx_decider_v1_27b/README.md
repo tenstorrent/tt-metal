@@ -93,9 +93,11 @@ The device weight cache (27 GB) is located from the model path, as in `models/de
    `$HF_HOME/hub/models--perplexity-ai--pplx-decider-v1-27b/snapshots/<revision>/`.
 
 The cache is the `tt_weight_cache/<key>/` directory under that root. `<key>` is the revision for an HF-cache
-snapshot, else `local-` plus a hash of the checkpoint's `config.json`, `model.safetensors.index.json` and
-`readout.safetensors` size and mtime, so two checkpoints never share a cache. The load log names the model
-path and the cache directory, and says whether the cache was a full hit.
+snapshot, also when you reach the snapshot through a symlink (the layout is checked on the resolved path).
+Any other directory gets `local-` plus a hash of its `config.json` and `model.safetensors.index.json` and
+the sizes of `readout.safetensors` and the shards, so two checkpoints never share a cache and a plain `cp`
+of a checkpoint keeps its key. The load log names the model path and the cache directory, and says whether
+the cache was a full hit.
 
 To keep the cache somewhere else, for example on another disk, move the directory and point
 `TT_CACHE_PATH` at the new root:
