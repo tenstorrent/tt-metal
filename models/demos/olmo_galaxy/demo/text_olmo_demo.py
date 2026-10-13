@@ -15,6 +15,7 @@ Run with:
     pytest models/demos/olmo_galaxy/demo/text_olmo_demo.py::test_olmo_text_demo -v -k "quick"
 """
 
+import json
 import os
 from datetime import datetime
 
@@ -397,6 +398,22 @@ def run_olmo_demo(
                 f"\n==BATCH {batch_idx}\n==USER {i} - PROMPT\n{short_prompt}\n==USER {i} - OUTPUT\n{generated_text.strip()}\n"
             )
 
+        # OLMO_DUMP_TOKENS=<path>: save prompts + generated ids so two runs can be diffed per user
+        # (models/demos/olmo_galaxy/scripts/compare_decode_tokens.py).
+        dump_path = os.environ.get("OLMO_DUMP_TOKENS")
+        if dump_path:
+            with open(dump_path, "w") as f:
+                json.dump(
+                    {
+                        "prompts": [list(map(int, p)) for p in encoded_prompts],
+                        "generated": [
+                            list(map(int, all_outputs[i][len(encoded_prompts[i]) :])) for i in range(batch_size)
+                        ],
+                    },
+                    f,
+                )
+            logger.info(f"Dumped generated tokens to {dump_path}")
+
         num_tokens_generated_decode.append(iteration)
 
     profiler.end("inference_decode", iteration=batch_idx)
@@ -477,6 +494,20 @@ def run_olmo_demo(
             False,  # stop_at_eos
             64,  # num_layers
             True,  # is_cur_pos_sharded
+        ),
+        (  # gate-b32: decode accuracy gate, 32 distinct prompts, greedy, 256 decode tokens
+            "models/demos/olmo_galaxy/demo/sample_prompts/input_data_questions.json",
+            True,
+            1,
+            128 * 1024,
+            32,
+            256,
+            True,
+            {"page_block_size": 64, "page_max_num_blocks": 2048},
+            {"temperature": 1.0, "top_p": 1.0},  # argmax
+            False,
+            64,
+            True,
         ),
         (  # batch-1: Latency run, 1 user, short prompt
             "models/demos/olmo_galaxy/demo/sample_prompts/input_data_questions_prefill_128.json",
@@ -791,6 +822,7 @@ def run_olmo_demo(
     ],
     ids=[
         "batch-32",
+        "gate-b32",
         "batch-1",
         "quick",
         "single",
