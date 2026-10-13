@@ -19,7 +19,8 @@ struct WorkUnitSpec {
     //   - Gen1: at most 1 across compute kernels, at most 2 across data-movement kernels.
     //   - Gen2: at most 4 across compute kernels, at most 6 across data-movement kernels.
     // - Gen1: the data-movement kernels use distinct config_1xx->processor values and the same
-    //   config_1xx->noc_mode. Those in DM_DEDICATED_NOC mode also use distinct config_1xx->noc values.
+    //   config_1xx->noc_mode. Those in DM_DEDICATED_NOC mode also use distinct config_1xx->noc values,
+    //   unless both set config_1xx->dedicated_noc_sharing to SHARED_DISJOINT_TRAFFIC.
     // - For each DataflowBufferSpec these kernels bind, exactly one of them binds it as PRODUCER and
     //   exactly one binds it as CONSUMER. (The producer and consumer may be the same kernel.)
     // - For each ScratchpadSpec, at most one of these kernels binds it.
