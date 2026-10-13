@@ -15,6 +15,11 @@
 //   4 PULL_BW   noc_async_read total_bytes from data_dst into local_src, chunked, log cycles
 //   5 PULL_ONCE noc_async_read total_bytes (<= 64 KiB) from data_dst into local_src, host verifies L1
 //   6 POLL      noc_async_read 64 B from flag_dst until word0 == total_bytes (expected value) or timeout
+//   7 BIDIR     runs on both chips at once: exchange GO through the peer flag, stream total_bytes like
+//               mode 3, then exchange DONE; logs own stream cycles and cycles until both sides are done
+//   8 PULL_LAT  iters x (noc_async_read chunk bytes from data_dst + barrier), log per-read cycles
+//  10 BIDIR_PULL like BIDIR, but each side streams noc_async_reads of the peer's window into local_src
+//   9 PUSH_LAT  like PINGPONG, but each iteration first writes chunk bytes to data_dst, then the seq flag
 
 #include <cstdint>
 #include "api/dataflow/dataflow_api.h"
@@ -125,6 +130,69 @@ void kernel_main() {
         return;
     }
 
+    if (mode == 8) {
+        for (uint32_t k = 0; k < iters; ++k) {
+            const uint64_t t0 = get_timestamp();
+            noc_async_read(data_dst, local_src, chunk);
+            noc_async_read_barrier();
+            res[8 + k] = static_cast<uint32_t>(get_timestamp() - t0);
+        }
+        res[0] = RESULT_STATUS_OK;
+        res[1] = iters;
+        return;
+    }
+
+    if (mode == 7 || mode == 10) {
+        constexpr uint32_t GO = 0x60600001, DONE = 0xD0E00002;
+        auto exchange = [&](uint32_t v, uint64_t t_start) -> bool {
+            seq_blk[0] = v;
+            noc_async_write(local_flag_src, flag_dst, flag_bytes);
+            noc_async_write_barrier();
+            // a fast peer may already have overwritten its GO with DONE
+            while (flag[0] != v && flag[0] != DONE) {
+                if (get_timestamp() - t_start > timeout) {
+                    res[0] = RESULT_STATUS_NO_RESPONDER;
+                    res[6] = flag[0];
+                    return false;
+                }
+            }
+            return true;
+        };
+        if (!exchange(GO, get_timestamp())) {
+            return;
+        }
+        uint32_t off = 0;
+        const uint64_t t0 = get_timestamp();
+        for (uint32_t sent = 0; sent < total_bytes; sent += chunk) {
+            if (mode == 7) {
+                noc_async_write(local_src, data_dst + off, chunk);
+            } else {
+                noc_async_read(data_dst + off, local_src, chunk);
+            }
+            off += chunk;
+            if (off + chunk > window_span) {
+                off = 0;
+            }
+        }
+        if (mode == 7) {
+            noc_async_write_barrier();
+        } else {
+            noc_async_read_barrier();
+        }
+        const uint64_t t1 = get_timestamp();
+        if (!exchange(DONE, t0)) {
+            return;
+        }
+        const uint64_t t2 = get_timestamp();
+        res[2] = static_cast<uint32_t>(t1 - t0);
+        res[3] = static_cast<uint32_t>((t1 - t0) >> 32);
+        res[4] = static_cast<uint32_t>(t2 - t0);
+        res[5] = static_cast<uint32_t>((t2 - t0) >> 32);
+        res[0] = RESULT_STATUS_OK;
+        res[1] = total_bytes / chunk;
+        return;
+    }
+
     // Persistent semantics: wait until the responder on B is up and spinning before starting any clock.
     {
         const uint64_t t0 = get_timestamp();
@@ -136,11 +204,14 @@ void kernel_main() {
         }
     }
 
-    if (mode == 1) {
+    if (mode == 1 || mode == 9) {
         uint32_t done = 0;
         for (uint32_t k = 1; k <= iters; ++k) {
             seq_blk[0] = k;
             const uint64_t t0 = get_timestamp();
+            if (mode == 9) {
+                noc_async_write(local_src, data_dst, chunk);
+            }
             noc_async_write(local_flag_src, flag_dst, flag_bytes);
             while (flag[0] != k) {
                 if (get_timestamp() - t0 > timeout) {

@@ -217,6 +217,9 @@ inline void dump_chip(const Chip& c) {
     fmt::print("    {} of {} regions free\n", free_cnt, kIatuRegions);
 }
 
+// NoC that inbound window traffic uses to reach its target (TLB noc_sel); set from --inbound-noc.
+inline uint32_t g_inbound_noc = 0;
+
 // Point a fresh 2 MiB window on `c` at NoC (x,y) + local_offset. Returns the window's BAR0 offset.
 inline uint64_t make_inbound_window(
     Chip& c, uint32_t x, uint32_t y, uint64_t local_offset, uint64_t ordering, const char* what) {
@@ -225,7 +228,7 @@ inline uint64_t make_inbound_window(
     cfg.local_offset = local_offset;
     cfg.x_end = x;
     cfg.y_end = y;
-    cfg.noc_sel = 0;
+    cfg.noc_sel = g_inbound_noc;
     cfg.ordering = ordering;
     tlb->configure(cfg);
     const int id = tlb->get_tlb_id();

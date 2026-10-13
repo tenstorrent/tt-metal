@@ -17,6 +17,7 @@
 
 #include <fmt/format.h>
 #include <algorithm>
+#include <array>
 #include <atomic>
 #include <sys/mman.h>
 #include <sys/wait.h>
@@ -57,6 +58,8 @@ using namespace tt::tt_metal::pcie_p2p;
 
 namespace {
 
+NOC g_kernel_noc = NOC::RISCV_0_default;  // NoC the P2P kernels issue on; set from --kernel-noc
+
 struct Options {
     int chip_a = 0;
     int chip_b = 1;
@@ -80,6 +83,8 @@ struct Options {
     uint64_t peer_phys = 0;  // !=0: chip A pushes into an arbitrary PCIe address (e.g. a GPU's BAR1 region); no chip B
     uint32_t peer_span = 2u << 20;  // bytes of that region to cycle through
     bool pull = false;              // with --peer-phys: read from the peer instead of writing
+    bool lat = false;               // latency sweep over message sizes: push (data + flag, echoed) vs pull (read)
+    bool bidir = false;             // both chips stream into each other at the same time (one core each)
     bool pingpong = false;  // with --peer-phys: ping-pong against a responder living at the peer (e.g. a CUDA kernel)
     CoreCoord core_a{0, 0};
     CoreCoord core_b{0, 0};
@@ -151,6 +156,14 @@ Options parse(int argc, char** argv) {
             o.peer_span = std::stoul(next(), nullptr, 0);
         } else if (a == "--pull") {
             o.pull = true;
+        } else if (a == "--kernel-noc") {
+            g_kernel_noc = std::stoul(next()) ? NOC::NOC_1 : NOC::NOC_0;
+        } else if (a == "--inbound-noc") {
+            g_inbound_noc = std::stoul(next());
+        } else if (a == "--lat") {
+            o.lat = true;
+        } else if (a == "--bidir") {
+            o.bidir = true;
         } else if (a == "--pingpong") {
             o.pingpong = true;
         } else if (a == "-h" || a == "--help") {
@@ -161,7 +174,7 @@ Options parse(int argc, char** argv) {
                 "                     [--noc-base HEX] [--core-a x,y --core-b x,y] [--data-span N] [--flag-bytes "
                 "16|64]\n"
                 "                     [--timeout S] [--dump-only] [--no-bw] [--no-pingpong] [--force] [--isolated] "
-                "[--split] [--cores N]\n"
+                "[--split] [--cores N] [--bidir] [--lat] [--pull] [--kernel-noc 0|1] [--inbound-noc 0|1]\n"
                 "                     [--peer-phys HEX --peer-span N]  (chip A -> arbitrary PCIe address, e.g. GPU "
                 "BAR1)\n");
             exit(0);
@@ -288,7 +301,7 @@ static int split_child(const Options& opt, SplitShared& sh, int role) {
             p,
             kdir + "p2p_responder.cpp",
             my_core,
-            DataMovementConfig{.processor = DataMovementProcessor::RISCV_0, .noc = NOC::RISCV_0_default});
+            DataMovementConfig{.processor = DataMovementProcessor::RISCV_0, .noc = g_kernel_noc});
         SetRuntimeArgs(
             p,
             k,
@@ -311,7 +324,7 @@ static int split_child(const Options& opt, SplitShared& sh, int role) {
             p,
             kdir + "p2p_initiator.cpp",
             my_core,
-            DataMovementConfig{.processor = DataMovementProcessor::RISCV_0, .noc = NOC::RISCV_0_default});
+            DataMovementConfig{.processor = DataMovementProcessor::RISCV_0, .noc = g_kernel_noc});
         SetRuntimeArgs(
             p,
             k,
@@ -527,7 +540,7 @@ static int run_peer_phys(const Options& opt) {
             p,
             kdir + "p2p_initiator.cpp",
             opt.core_a,
-            DataMovementConfig{.processor = DataMovementProcessor::RISCV_0, .noc = NOC::RISCV_0_default});
+            DataMovementConfig{.processor = DataMovementProcessor::RISCV_0, .noc = g_kernel_noc});
         SetRuntimeArgs(
             p,
             k,
@@ -576,7 +589,7 @@ static int run_peer_phys(const Options& opt) {
             p,
             kdir + "p2p_initiator.cpp",
             opt.core_a,
-            DataMovementConfig{.processor = DataMovementProcessor::RISCV_0, .noc = NOC::RISCV_0_default});
+            DataMovementConfig{.processor = DataMovementProcessor::RISCV_0, .noc = g_kernel_noc});
         SetRuntimeArgs(
             p,
             k,
@@ -623,7 +636,7 @@ static int run_peer_phys(const Options& opt) {
             p,
             kdir + "p2p_initiator.cpp",
             opt.core_a,
-            DataMovementConfig{.processor = DataMovementProcessor::RISCV_0, .noc = NOC::RISCV_0_default});
+            DataMovementConfig{.processor = DataMovementProcessor::RISCV_0, .noc = g_kernel_noc});
         SetRuntimeArgs(
             p,
             k,
@@ -904,7 +917,7 @@ int main(int argc, char** argv) {
             p,
             kdir + "p2p_initiator.cpp",
             opt.core_a,
-            DataMovementConfig{.processor = DataMovementProcessor::RISCV_0, .noc = NOC::RISCV_0_default});
+            DataMovementConfig{.processor = DataMovementProcessor::RISCV_0, .noc = g_kernel_noc});
         SetRuntimeArgs(
             p,
             k,
@@ -932,7 +945,7 @@ int main(int argc, char** argv) {
             p,
             kdir + "p2p_responder.cpp",
             opt.core_b,
-            DataMovementConfig{.processor = DataMovementProcessor::RISCV_0, .noc = NOC::RISCV_0_default});
+            DataMovementConfig{.processor = DataMovementProcessor::RISCV_0, .noc = g_kernel_noc});
         SetRuntimeArgs(
             p,
             k,
@@ -1114,10 +1127,12 @@ int main(int argc, char** argv) {
         for (uint32_t i = 0; i < pat.size(); ++i) {
             pat[i] = 0x5A000000u | i;
         }
+        const CoreCoord grid = A.dev->compute_with_storage_grid_size();
+        TT_FATAL(n <= grid.x * grid.y, "--cores {} exceeds the {}x{} worker grid", n, grid.x, grid.y);
         Program pa;
         std::vector<CoreCoord> cores;
         for (uint32_t ci = 0; ci < n; ++ci) {
-            CoreCoord core{ci, 0};
+            CoreCoord core{ci % grid.x, ci / grid.x};
             cores.push_back(core);
             write_l1(A.dev, core, SRC, pat);
             write_l1(A.dev, core, RESULTS, std::vector<uint32_t>(16, 0));
@@ -1126,7 +1141,7 @@ int main(int argc, char** argv) {
                 pa,
                 kdir + "p2p_initiator.cpp",
                 core,
-                DataMovementConfig{.processor = DataMovementProcessor::RISCV_0, .noc = NOC::RISCV_0_default});
+                DataMovementConfig{.processor = DataMovementProcessor::RISCV_0, .noc = g_kernel_noc});
             SetRuntimeArgs(
                 pa,
                 k,
@@ -1166,6 +1181,262 @@ int main(int argc, char** argv) {
             (per_core * n) >> 20,
             t * 1e3,
             per_core * n / t / 1e9);
+    }
+
+    // ---- latency sweep: push N bytes + flag (B echoes the flag) vs pull N bytes (one read round trip) ----
+    if (opt.lat) {
+        TT_FATAL(opt.iters <= 16000, "iters <= 16000");
+        fmt::print(
+            "\n=== latency vs message size: {} iters, ordering {}, target {} (ns, p50 / min / p99) ===\n",
+            opt.iters,
+            opt.ordering,
+            opt.target);
+        auto stats = [&](std::vector<uint32_t> v) {
+            std::sort(v.begin(), v.end());
+            auto ns = [&](uint32_t c) { return c * 1000.0 / mhz_a; };
+            return std::array<double, 3>{ns(v[v.size() / 2]), ns(v.front()), ns(v[v.size() * 99 / 100])};
+        };
+        auto run_mode = [&](uint32_t mode, uint32_t size, bool with_responder) {
+            zero_flags();
+            Program pa, pb;
+            if (with_responder) {
+                responder(opt.iters, pb);
+            }
+            auto k = CreateKernel(
+                pa,
+                kdir + "p2p_initiator.cpp",
+                opt.core_a,
+                DataMovementConfig{.processor = DataMovementProcessor::RISCV_0, .noc = g_kernel_noc});
+            SetRuntimeArgs(
+                pa,
+                k,
+                opt.core_a,
+                std::vector<uint32_t>{
+                    mode,
+                    lo(data_dst),
+                    hi(data_dst),
+                    lo(flag_dst_on_b),
+                    hi(flag_dst_on_b),
+                    FLAG,
+                    SRC,
+                    FLAG_SRC,
+                    RESULTS,
+                    opt.iters,
+                    size,
+                    0,
+                    data_span,
+                    lo(timeout_cycles),
+                    hi(timeout_cycles),
+                    opt.flag_bytes});
+            run_pair(*B.mesh, std::move(pb), *A.mesh, std::move(pa), with_responder);
+            auto r = read_l1(A.dev, opt.core_a, RESULTS, 0x40 + opt.iters * 4);
+            TT_FATAL(
+                r[0] == 1 && r[1] == opt.iters, "latency mode {} size {}: status {} done {}", mode, size, r[0], r[1]);
+            return stats(std::vector<uint32_t>(r.begin() + 8, r.begin() + 8 + opt.iters));
+        };
+        const auto flag_rtt = run_mode(1, 64, true);
+        const double flag_one_way = flag_rtt[0] / 2;
+        fmt::print("  flag-only ping-pong RTT p50 {:.0f} ns -> one-way {:.0f} ns\n", flag_rtt[0], flag_one_way);
+        fmt::print(
+            "  {:>7} | {:>26} | {:>22} | {:>20}\n",
+            "bytes",
+            "push one-way (RTT - flag)",
+            "push RTT p50/min/p99",
+            "pull p50/min/p99");
+        for (uint32_t size : {64u, 256u, 1024u, 4096u, 16384u}) {
+            if (size > data_span) {
+                continue;
+            }
+            const auto push = run_mode(9, size, true);
+            const auto pull = run_mode(8, size, false);
+            fmt::print(
+                "  {:>7} | {:>26.0f} | {:>6.0f} / {:>5.0f} / {:>5.0f} | {:>6.0f} / {:>5.0f} / {:>5.0f}\n",
+                size,
+                push[0] - flag_one_way,
+                push[0],
+                push[1],
+                push[2],
+                pull[0],
+                pull[1],
+                pull[2]);
+        }
+    }
+
+    // ---- pull: N cores on A read B's window (completions flow B -> A); --cores 0/1 = core A only ----
+    if (opt.pull && !opt.bidir) {
+        const uint32_t n = std::max<uint32_t>(opt.cores, 1);
+        const CoreCoord grid = A.dev->compute_with_storage_grid_size();
+        TT_FATAL(n <= grid.x * grid.y, "--cores {} exceeds the {}x{} worker grid", n, grid.x, grid.y);
+        const uint32_t slice = (data_span / n) & ~uint32_t(0xFFF);
+        TT_FATAL(slice >= opt.chunk, "window span too small for {} cores with {} B chunks", n, opt.chunk);
+        const uint64_t per_core = (opt.bw_bytes / n) & ~uint64_t(opt.chunk - 1);
+        fmt::print(
+            "\n=== pull bandwidth: {} cores on A each read {} MiB from B {} in {} B reads, ordering {} ===\n",
+            n,
+            per_core >> 20,
+            opt.target,
+            opt.chunk,
+            opt.ordering);
+        Program pa;
+        std::vector<CoreCoord> cores;
+        for (uint32_t ci = 0; ci < n; ++ci) {
+            CoreCoord core = n == 1 ? opt.core_a : CoreCoord{ci % grid.x, ci / grid.x};
+            cores.push_back(core);
+            write_l1(A.dev, core, RESULTS, std::vector<uint32_t>(16, 0));
+            const uint64_t src = data_dst + uint64_t(ci) * slice;
+            auto k = CreateKernel(
+                pa,
+                kdir + "p2p_initiator.cpp",
+                core,
+                DataMovementConfig{.processor = DataMovementProcessor::RISCV_0, .noc = g_kernel_noc});
+            SetRuntimeArgs(
+                pa,
+                k,
+                core,
+                std::vector<uint32_t>{
+                    4,
+                    lo(src),
+                    hi(src),
+                    0,
+                    0,
+                    FLAG,
+                    SRC,
+                    FLAG_SRC,
+                    RESULTS,
+                    1,
+                    opt.chunk,
+                    uint32_t(per_core),
+                    slice,
+                    lo(timeout_cycles),
+                    hi(timeout_cycles),
+                    opt.flag_bytes});
+        }
+        Program pb;
+        run_pair(*B.mesh, std::move(pb), *A.mesh, std::move(pa), false);
+        uint64_t max_cyc = 0;
+        std::string per_core_s;
+        for (auto core : cores) {
+            auto r = read_l1(A.dev, core, RESULTS, 64);
+            const uint64_t cyc = (uint64_t(r[3]) << 32) | r[2];
+            max_cyc = std::max(max_cyc, cyc);
+            per_core_s += fmt::format(" {:.2f}", per_core / (cyc / (mhz_a * 1e6)) / 1e9);
+        }
+        const double t = max_cyc / (mhz_a * 1e6);
+        fmt::print(
+            "  per-core GB/s:{}\n  aggregate: {} MiB in {:.3f} ms -> {:.2f} GB/s\n",
+            n > 16 ? std::string(" (omitted)") : per_core_s,
+            (per_core * n) >> 20,
+            t * 1e3,
+            per_core * n / t / 1e9);
+        // pulled data must match what B holds in the first slot (L1 target only: host can read B's L1 directly)
+        if (opt.target == "l1") {
+            uint32_t off = 0, last = 0;  // replay the kernel's wrap to find core 0's final read slot
+            for (uint64_t got_b = 0; got_b < per_core; got_b += opt.chunk) {
+                last = off;
+                off += opt.chunk;
+                if (off + opt.chunk > slice) {
+                    off = 0;
+                }
+            }
+            auto want = read_l1(B.dev, opt.core_b, DATA + last, opt.chunk);
+            auto got = read_l1(A.dev, cores[0], SRC, opt.chunk);
+            uint32_t bad = 0;
+            for (uint32_t i = 0; i < want.size(); ++i) {
+                bad += got[i] != want[i];
+            }
+            fmt::print("  data check (core 0 last read vs B slot +0x{:x}): {} mismatching words\n", last, bad);
+        }
+    }
+
+    // ---- bidirectional: core A streams into B's L1 while core B streams into A's L1 ----
+    if (opt.bidir) {
+        TT_FATAL(opt.target == "l1", "--bidir supports --target l1 only");
+        fmt::print(
+            "\n=== bidirectional {} bandwidth: {} MiB each way, {} B chunks, ordering {} ===\n",
+            opt.pull ? "PULL (each chip reads the other)" : "push",
+            opt.bw_bytes >> 20,
+            opt.chunk,
+            opt.ordering);
+        zero_flags();
+        std::vector<uint32_t> pat_a(opt.chunk / 4), pat_b(opt.chunk / 4);
+        for (uint32_t i = 0; i < pat_a.size(); ++i) {
+            pat_a[i] = 0x5A000000u | i;
+            pat_b[i] = 0xB5000000u | i;
+        }
+        write_l1(A.dev, opt.core_a, SRC, pat_a);
+        write_l1(B.dev, opt.core_b, SRC, pat_b);
+        if (opt.pull) {  // each side reads the peer's DATA into its own SRC; fill DATA cyclically with that side's
+                         // pattern
+            for (uint32_t off = 0; off + opt.chunk <= opt.data_span; off += opt.chunk) {
+                write_l1(A.dev, opt.core_a, DATA + off, pat_a);
+                write_l1(B.dev, opt.core_b, DATA + off, pat_b);
+            }
+        }
+        const uint64_t data_dst_on_a = B.pcie_noc_base | (opt.noc_base + DATA);
+        auto bidir_kernel = [&](Program& p, CoreCoord core, uint64_t dst, uint64_t flag_dst) {
+            auto k = CreateKernel(
+                p,
+                kdir + "p2p_initiator.cpp",
+                core,
+                DataMovementConfig{.processor = DataMovementProcessor::RISCV_0, .noc = g_kernel_noc});
+            SetRuntimeArgs(
+                p,
+                k,
+                core,
+                std::vector<uint32_t>{
+                    opt.pull ? 10u : 7u,
+                    lo(dst),
+                    hi(dst),
+                    lo(flag_dst),
+                    hi(flag_dst),
+                    FLAG,
+                    SRC,
+                    FLAG_SRC,
+                    RESULTS,
+                    1,
+                    opt.chunk,
+                    uint32_t(opt.bw_bytes),
+                    opt.data_span,
+                    lo(timeout_cycles),
+                    hi(timeout_cycles),
+                    opt.flag_bytes});
+        };
+        Program pa, pb;
+        bidir_kernel(pa, opt.core_a, data_dst, flag_dst_on_b);
+        bidir_kernel(pb, opt.core_b, data_dst_on_a, ack_dst_on_a);
+        run_pair(*B.mesh, std::move(pb), *A.mesh, std::move(pa), true);
+        auto ra = read_l1(A.dev, opt.core_a, RESULTS, 64);
+        auto rb = read_l1(B.dev, opt.core_b, RESULTS, 64);
+        fmt::print("  status A {} B {}\n", ra[0], rb[0]);
+        if (ra[0] == 1 && rb[0] == 1) {
+            const double mhz_b = B.dev->get_clock_rate_mhz();
+            const double gb = opt.bw_bytes / 1e9;
+            const double sa = ((uint64_t(ra[3]) << 32) | ra[2]) / (mhz_a * 1e6);
+            const double sb = ((uint64_t(rb[3]) << 32) | rb[2]) / (mhz_b * 1e6);
+            const double da = ((uint64_t(ra[5]) << 32) | ra[4]) / (mhz_a * 1e6);
+            const double db = ((uint64_t(rb[5]) << 32) | rb[4]) / (mhz_b * 1e6);
+            fmt::print(
+                "  A -> B data   : {:.3f} ms -> {:.2f} GB/s\n", (opt.pull ? sb : sa) * 1e3, gb / (opt.pull ? sb : sa));
+            fmt::print(
+                "  B -> A data   : {:.3f} ms -> {:.2f} GB/s\n", (opt.pull ? sa : sb) * 1e3, gb / (opt.pull ? sa : sb));
+            const double both = std::max(da, db);
+            fmt::print(
+                "  both done      : {:.3f} ms -> {:.2f} GB/s aggregate (2 x {} MiB)\n",
+                both * 1e3,
+                2 * gb / both,
+                opt.bw_bytes >> 20);
+            // push: data landed in the peer's DATA; pull: the peer's DATA pattern landed in our SRC
+            auto got_b = read_l1(B.dev, opt.core_b, opt.pull ? SRC : DATA, opt.chunk);
+            auto got_a = read_l1(A.dev, opt.core_a, opt.pull ? SRC : DATA, opt.chunk);
+            uint32_t bad_b = 0, bad_a = 0;
+            for (uint32_t i = 0; i < pat_a.size(); ++i) {
+                bad_b += got_b[i] != pat_a[i];
+                bad_a += got_a[i] != pat_b[i];
+            }
+            fmt::print("  data check (first chunk slot): on B {} / on A {} mismatching words\n", bad_b, bad_a);
+        } else {
+            fmt::print("  A last flag 0x{:08x}, B last flag 0x{:08x}\n", ra[6], rb[6]);
+        }
     }
 
     // ---- cleanup ----
