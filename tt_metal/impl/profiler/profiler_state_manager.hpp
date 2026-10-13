@@ -24,10 +24,12 @@ class RunTimeOptions;
 
 namespace tt_metal {
 
+class MetalContext;
 class MetalEnvImpl;
 
 namespace detail {
 void ReadDeviceProfilerResultsInternal(
+    MetalContext& ctx,
     distributed::MeshDevice* mesh_device,
     IDevice* device,
     const std::vector<CoreCoord>& virtual_cores,
@@ -36,14 +38,13 @@ void ReadDeviceProfilerResultsInternal(
     bool include_l1 = false);
 }  // namespace detail
 
-void LaunchIntervalBasedProfilerReadThread(const std::vector<IDevice*>& active_devices);
+void LaunchIntervalBasedProfilerReadThread(MetalContext& ctx, const std::vector<IDevice*>& active_devices);
 uint32_t get_profiler_dram_bank_size_per_risc_bytes(llrt::RunTimeOptions& rtoptions);
-uint32_t get_profiler_dram_bank_size_per_risc_bytes();
 uint32_t get_profiler_dram_bank_size_for_hal_allocation(llrt::RunTimeOptions& rtoptions);
 
 struct ProfilerStateManager {
 public:
-    explicit ProfilerStateManager(MetalEnvImpl& env);
+    explicit ProfilerStateManager(MetalContext& ctx);
 
     ~ProfilerStateManager() = default;
 
@@ -65,6 +66,7 @@ public:
 
     static constexpr CoreCoord SYNC_CORE = {0, 0};
 
+    MetalContext& ctx_;
     MetalEnvImpl& env_;
     std::unordered_map<ChipId, DeviceProfiler> device_profiler_map;
     mutable std::recursive_mutex device_profiler_map_mutex;

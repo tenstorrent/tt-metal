@@ -18,6 +18,7 @@ from loguru import logger
 
 import ttnn
 import ttnn.operation_tracer
+from ttnn.comparison import comp_pcc, comp_ulp
 from ttnn.tools.trace_allocation_tracker import TRACE_ALLOC_DIAGNOSTICS, TRACE_ALLOC_TRACKING
 
 
@@ -127,8 +128,6 @@ def compare_tensors_using_pcc(
 ):
     import numbers
     import torch
-
-    from models.common.utility_functions import comp_pcc, comp_ulp
 
     golden_outputs, outputs = _split_complex_outputs(golden_outputs, outputs)
     if isinstance(golden_outputs, (list, tuple, dict)) or isinstance(outputs, (list, tuple, dict)):
@@ -745,11 +744,14 @@ def get_tensor_report_record(tensor):
         address = None
         memory_config = None
         buffer_type = None
-        if ttnn.has_storage_type_of(tensor, ttnn.DEVICE_STORAGE_TYPE) and tensor.is_allocated():
-            memory_config = ttnn.get_memory_config(tensor)
-            device_id = tensor.device().id()
-            address = tensor.buffer_address()
+        is_device_tensor = ttnn.has_storage_type_of(tensor, ttnn.DEVICE_STORAGE_TYPE)
+        if is_device_tensor:
+            # From the TensorSpec, so a deallocated tensor still says where it lived (matches graph capture)
+            memory_config = tensor.memory_config()
             buffer_type = memory_config.buffer_type.value
+            if tensor.is_allocated():
+                device_id = tensor.device().id()
+                address = tensor.buffer_address()
 
         return {
             "tensor_id": int(tensor.tensor_id),
@@ -760,6 +762,7 @@ def get_tensor_report_record(tensor):
             "device_id": device_id,
             "address": address,
             "buffer_type": buffer_type,
+            "storage_type": "DEVICE" if is_device_tensor else "HOST",
         }
 
     if isinstance(tensor, torch.Tensor):
@@ -772,6 +775,7 @@ def get_tensor_report_record(tensor):
             "device_id": None,
             "address": None,
             "buffer_type": None,
+            "storage_type": "HOST",
         }
 
     raise RuntimeError(f"Unsupported tensor report record type: {type(tensor)}")
