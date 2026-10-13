@@ -2,14 +2,20 @@
 //
 // SPDX-License-Identifier: Apache-2.0
 
-// Legacy (pre-Metal 2.0) 2D multicast matmul builder, used only by the CCL-fused ops
-// all_gather_matmul_async and matmul_reduce_scatter_async, which build the matmul and the CCL
-// kernels into one tt::tt_metal::Program and exchange fused-op signals through positional
-// runtime args (ttnn/operations/ccl/ccl_op_fusion.hpp).
+// Pre-Metal 2.0 2D multicast matmul builder, used only by the CCL-fused ops all_gather_matmul_async
+// and matmul_reduce_scatter_async, which build the matmul and the CCL kernels into one program per
+// device and exchange fused-op signals through positional runtime args (ttnn/operations/ccl/ccl_op_fusion.hpp).
+// Delete this file once those CCL ops are on Metal 2.0 and use matmul's spec-based builder instead.
 //
-// Moved verbatim out of ttnn/operations/matmul/device/factory/matmul_multicore_reuse_mcast_2d_program_factory.cpp
-// when that factory was ported to Metal 2.0, so that matmul itself carries no legacy builder. Delete
-// this file once those CCL ops are on Metal 2.0 and use matmul's spec-based builder instead.
+// It holds two forms of the same builder:
+// - Program&: moved verbatim out of
+//   ttnn/operations/matmul/device/factory/matmul_multicore_reuse_mcast_2d_program_factory.cpp when that
+//   factory was ported to Metal 2.0, so that matmul itself carries no legacy builder. Only
+//   all_gather_matmul_async still calls it; delete it when that op is ported to ProgramDescriptor (#59566).
+// - ProgramDescriptor: used by matmul_reduce_scatter_async. Its origin is described above its definition
+//   in the .cpp.
+// Both bind the same kernels, which parse their runtime args positionally, so the two must push the same
+// args in the same order. Keep them in sync until the Program& form is deleted.
 //
 // It binds matmul's legacy kernels in ttnn/operations/matmul/device/kernels/ (not their _metal2 forks),
 // which matmul's legacy 1D builder binds too. Copy them here before matmul deletes them.

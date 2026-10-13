@@ -2,14 +2,20 @@
 //
 // SPDX-License-Identifier: Apache-2.0
 
-// Legacy (pre-Metal 2.0) 2D multicast matmul builder, used only by the CCL-fused ops
-// all_gather_matmul_async and matmul_reduce_scatter_async, which build the matmul and the CCL
-// kernels into one tt::tt_metal::Program and exchange fused-op signals through positional
-// runtime args (ttnn/operations/ccl/ccl_op_fusion.hpp).
+// Pre-Metal 2.0 2D multicast matmul builder, used only by the CCL-fused ops all_gather_matmul_async
+// and matmul_reduce_scatter_async, which build the matmul and the CCL kernels into one program per
+// device and exchange fused-op signals through positional runtime args (ttnn/operations/ccl/ccl_op_fusion.hpp).
+// Delete this file once those CCL ops are on Metal 2.0 and use matmul's spec-based builder instead.
 //
-// Moved verbatim out of ttnn/operations/matmul/device/factory/matmul_multicore_reuse_mcast_2d_program_factory.cpp
-// when that factory was ported to Metal 2.0, so that matmul itself carries no legacy builder. Delete
-// this file once those CCL ops are on Metal 2.0 and use matmul's spec-based builder instead.
+// It holds two forms of the same builder:
+// - Program&: moved verbatim out of
+//   ttnn/operations/matmul/device/factory/matmul_multicore_reuse_mcast_2d_program_factory.cpp when that
+//   factory was ported to Metal 2.0, so that matmul itself carries no legacy builder. Only
+//   all_gather_matmul_async still calls it; delete it when that op is ported to ProgramDescriptor (#59566).
+// - ProgramDescriptor: used by matmul_reduce_scatter_async. Its origin is described above its definition
+//   in the .cpp.
+// Both bind the same kernels, which parse their runtime args positionally, so the two must push the same
+// args in the same order. Keep them in sync until the Program& form is deleted.
 //
 // It binds matmul's legacy kernels in ttnn/operations/matmul/device/kernels/ (not their _metal2 forks),
 // which matmul's legacy 1D builder binds too. Copy them here before matmul deletes them.
@@ -35,6 +41,12 @@
 
 using ttnn::operations::unary::UnaryOpType;
 using ttnn::operations::unary::UnaryWithParam;
+
+using tt::tt_metal::CBDescriptor;
+using tt::tt_metal::CBFormatDescriptor;
+using tt::tt_metal::ComputeConfigDescriptor;
+using tt::tt_metal::DataMovementConfigDescriptor;
+using tt::tt_metal::KernelDescriptor;
 
 namespace ttnn::prim::ccl_fusion {
 
@@ -1896,6 +1908,8 @@ ttnn::device_operation::CachedProgram<Mcast2DSharedVariables> matmul_multi_core_
 
 namespace reuse_mcast_optimized_helpers {
 
+// Mirrors the Program& builder's structure one-to-one so the two stay easy to diff; splitting it up would lose that.
+// NOLINTNEXTLINE(readability-function-cognitive-complexity)
 void create_program_mcast_in0_in1_descriptor(
     tt::tt_metal::ProgramDescriptor& desc,
     const tt::tt_metal::distributed::MeshDevice& device,
@@ -3226,6 +3240,17 @@ void create_program_mcast_in0_in1_descriptor(
                     }
                 }
 
+                // The fused-op args go before the DRAM-sharded in1 args: the kernel's OpSignaler parses them
+                // first, as in the Program& builder.
+                if (fuse_op) {
+                    if (fused_op_signaler->is_all_gather()) {
+                        fused_op_signaler->push_matmul_fused_op_rt_args(mm_in1_sender_writer_args, true);
+                    } else if (fused_op_signaler->is_reduce_scatter()) {
+                        fused_op_signaler->push_matmul_fused_op_rt_args(mm_in1_sender_writer_args, in0_idx, in1_idx);
+                    } else {
+                        TT_FATAL(false, "Fused operation must be either all_gather or reduce_scatter.");
+                    }
+                }
                 if (in1_is_sharded and in1_is_dram) {  // in1 is dram sharded
                     if (in1_is_width_sharded) {
                         uint32_t num_iter_index = mm_in1_sender_writer_args.size() + 1;
@@ -3295,15 +3320,6 @@ void create_program_mcast_in0_in1_descriptor(
                     } else {
                         // Height sharded: no additional runtime args needed
                         // (bank/offset computed from compile-time args + batch index)
-                    }
-                }
-                if (fuse_op) {
-                    if (fused_op_signaler->is_all_gather()) {
-                        fused_op_signaler->push_matmul_fused_op_rt_args(mm_in1_sender_writer_args, true);
-                    } else if (fused_op_signaler->is_reduce_scatter()) {
-                        fused_op_signaler->push_matmul_fused_op_rt_args(mm_in1_sender_writer_args, in0_idx, in1_idx);
-                    } else {
-                        TT_FATAL(false, "Fused operation must be either all_gather or reduce_scatter.");
                     }
                 }
                 {
