@@ -792,3 +792,35 @@ def test_quasar_untilize_l1_output_reserved_in_budget(device, dtype):
     ref = ttnn.to_torch(ttnn_in)
     got = ttnn.to_torch(result)
     assert_with_ulp(expected_result=ref, actual_result=got, ulp_threshold=0)
+# Regression for the HC sharded transpose deriving its cores from the shard-grid bounding box:
+# grids not anchored at (0,0), or made of several ranges, used to abort at program build.
+@pytest.mark.parametrize(
+    "grid_ranges",
+    [
+        [((1, 0), (2, 0))],  # offset single range
+        [((0, 0), (0, 0)), ((2, 0), (2, 0))],  # disjoint ranges
+    ],
+    ids=["offset_range", "multi_range"],
+)
+# [1, 2, 8, 128] takes the factory's special case. [1, 2, 3, 64] gives shard height 3 with C=2, H=3,
+# which fails the special-case divisibility checks and so takes the generic per-shard NoC path.
+@pytest.mark.parametrize("shape", [[1, 2, 8, 128], [1, 2, 3, 64]], ids=["special_case", "generic"])
+def test_quasar_transpose_hc_sharded_non_origin_grid(device, grid_ranges, shape):
+    compute_grid = device.compute_with_storage_grid_size()
+    if compute_grid.x < 3:
+        pytest.skip("needs at least 3 columns of worker cores")
+    grid = ttnn.CoreRangeSet({ttnn.CoreRange(ttnn.CoreCoord(*s), ttnn.CoreCoord(*e)) for s, e in grid_ranges})
+    num_cores = grid.num_cores()
+    n, c, h, w = shape
+    shard_h = (n * c * h) // num_cores
+    mem_cfg = ttnn.MemoryConfig(
+        ttnn.TensorMemoryLayout.HEIGHT_SHARDED,
+        ttnn.BufferType.L1,
+        ttnn.ShardSpec(grid, (shard_h, w), ttnn.ShardOrientation.ROW_MAJOR),
+    )
+    torch.manual_seed(0)
+    x = torch.rand(shape, dtype=torch.bfloat16)
+    tt_in = ttnn.from_torch(x, layout=ttnn.ROW_MAJOR_LAYOUT, dtype=ttnn.bfloat16, device=device, memory_config=mem_cfg)
+    out = ttnn.experimental.quasar.transpose(tt_in, 1, 2)
+    actual = ttnn.to_torch(out).to(torch.bfloat16)
+    assert torch.equal(actual, x.transpose(1, 2))
