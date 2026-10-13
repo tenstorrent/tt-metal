@@ -707,6 +707,32 @@ the 36 KB reads and the forwards move every byte. LoudBox p150, us per call, % o
   `scripts/run_safe_pytest.sh --run-all flat_combine_tools/dram_read_bench/test_dram_read_bench.py -s`
   (`DRB_MODEL=kimi-k27`, `DRB_VARIANTS=...`, `DRB_CHECK=0`).
 
+### 8c stage 0: the readers forwarding the down weights to the real down cores (2026-10-13)
+The 99% above was the readers streaming everything without delivering the down slices where they are used. Now
+they deliver them: each reader takes a 16th of the down chunks (in down-core order, so a down core can be fed by two
+readers; balanced per bank), and the delivery check covers the down landings too. `+bg` adds a call's other traffic
+at M 128 per expert (relays read x and multicast it into the rectangles on NOC0; down cores pass h along a chain on
+NOC1 and write y rows). us per call:
+
+| | GLM 5.3 | Kimi K2.7 |
+|---|---|---|
+| today: readers forward gate/up, down cores read their own | 406.3 | 707.2 |
+| readers stream everything, not delivered (ceiling) | 333.4 | 584.2 |
+| rd_dfwd: BRISC reads both and forwards down (NOC0), NCRISC gate/up (NOC1) | 447.5-451.8 (+10%) | 768.9-770.2 (+9%) |
+| rd_dfwd1: BRISC only reads, NCRISC forwards both (NOC1) | 398.3 (-2%) | 669.3 (-5%) |
+| today + bg | 581.4-582.6 | 976.6-977.2 |
+| rd_dfwd + bg | 615.1 (+6%) | 1012.7 (+4%) |
+| rd_dfwd1 + bg | 758.1 (+30%) | 1218.0 (+25%) |
+
+- Delivering the down slices across the grid costs most of the ceiling's gain: the best split (NCRISC forwards both
+  streams) saves 2-5% alone, and with the other traffic it is 25-30% worse: its down forwards share NOC1 with the h
+  chain. Forwarding down on NOC0 from the reading BRISC serializes read and write (+9-10% alone), +4-6% with the
+  traffic.
+- The synthetic background is heavier than a real call's (K2.7 today + bg 977 us vs the real op's ~871 us at M 128),
+  so the +bg numbers are pessimistic, but no variant beats today by more than 5% even without it.
+- Not worth the 1-2 weeks of 8c's plan: the readers stay as they are (gate/up only), the down cores keep reading
+  their own weights.
+
 ## 9. How to run (PR tree)
 ```
 cd /localdev/mstaletovic/tt-metal-pr58093
