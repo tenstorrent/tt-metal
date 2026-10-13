@@ -1,0 +1,1 @@
+tests/ttnn/unit_tests/operations/fused/test_group_norm.py::test_group_norm_sharded_all_config[two_pass-row_major-fp32-gb_bf16-N=1-C=320-H=32-W=32-num_groups=16-grid_y=1-grid_x=8]
