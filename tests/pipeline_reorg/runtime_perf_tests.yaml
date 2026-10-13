@@ -49,19 +49,7 @@
 - name: runtime_perf_rw_buffer
   cmd: |
     mkdir -p generated/test_reports
-    if [ "$ARCH_NAME" = "blackhole" ]; then
-      ./build/test/tt_metal/perf_microbenchmark/dispatch/benchmark_rw_buffer \
-        --benchmark_out_format=json --benchmark_out=buffer_bench.json --benchmark_repetitions=11
-      ./tests/tt_metal/tt_metal/perf_microbenchmark/dispatch/compare_benchmark_rw_buffer.py \
-        --golden tests/tt_metal/tt_metal/perf_microbenchmark/dispatch/benchmark_rw_buffer_blackhole_golden.json \
-        buffer_bench.json --ignore-times
-    else
-      ./build/test/tt_metal/perf_microbenchmark/dispatch/benchmark_rw_buffer \
-        --benchmark_out_format=json --benchmark_out=buffer_bench.json --benchmark_repetitions=5
-      ./tests/tt_metal/tt_metal/perf_microbenchmark/dispatch/compare_benchmark_rw_buffer.py \
-        buffer_bench.json --ignore-times \
-        --golden tests/tt_metal/tt_metal/perf_microbenchmark/dispatch/benchmark_rw_buffer_n300_iommu_golden.json
-    fi
+    pytest --noconftest -p tests.perf.plugin "tests/perf/test_suites.py::test_perf[rw_buffer]"
   skus:
     wh_n300_civ2:
       timeout: 25
@@ -73,33 +61,32 @@
 
 # --- JIT Build (local host compile) Throughput Benchmark ---
 # Adapts DISABLED_TensixCompileStress into a runtime perf gate: real attached
-# device, no remote compile server, N cache-bypassing kernels compiled locally
-# per rep (kernels are compiled, not dispatched). The driver takes the fastest
-# rep and compares it against a per-arch golden (record mode until goldens are
-# armed). Auto-picks the golden from $ARCH_NAME.
+# device, no remote compile server, 300 cache-bypassing kernels compiled locally
+# per rep (kernels are compiled, not dispatched). See the jit_build suite in
+# tests/perf/suites.yaml.
 - name: runtime_perf_jit_build
   cmd: |
     mkdir -p generated/test_reports
-    ./tests/tt_metal/tt_metal/jit_build/compile_stress_ci.py \
-      --arch "$ARCH_NAME" --num-kernels 300 --repetitions 3
+    pytest --noconftest -p tests.perf.plugin "tests/perf/test_suites.py::test_perf[jit_build]"
+  # Compile time scales with host cores, which differ across the bh_p150_perf machines.
   skus:
     wh_n300_civ2:
       timeout: 10
-    bh_p150_perf:
+    bh_p150_perf_gh04:
       timeout: 10
   owner_id: U099A7FMKL2 # Manish Sudumbrekar
   team: runtime
   budget_type: perf
 
 # --- PCIe host/device bandwidth (mem_bench) ---
-# Same command and CIv2 P150b SKU as the former metal-run-microbenchmarks
-# "BH P150 PCIe Performance" job. No golden gate yet; keep it off bare-metal
-# perf runners so it does not block the dispatch/buffer jobs
+# Same benchmark filter and CIv2 P150b SKU as the former metal-run-microbenchmarks
+# "BH P150 PCIe Performance" job. Report only until it has a golden; keep it off
+# bare-metal perf runners so it does not block the dispatch/buffer jobs
 # (https://github.com/tenstorrent/tt-metal/pull/28148#issuecomment-3275595011).
 - name: runtime_perf_pcie_mem_bench
   cmd: |
     mkdir -p generated/test_reports
-    ./build/tools/mem_bench --benchmark_filter='Device (Reading|Writing) Host'
+    pytest --noconftest -p tests.perf.plugin "tests/perf/test_suites.py::test_perf[pcie_mem_bench]"
   skus:
     bh_p150b_civ2_viommu:
       timeout: 10

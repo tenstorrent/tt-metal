@@ -27,3 +27,43 @@ pgm_dispatch_no_trace:
   args: ["--benchmark_filter=no_trace"]
   repetitions: 2
   policy: {regression_pct: 5, improvement_pct: 5}
+
+rw_buffer:
+  binary: build/test/tt_metal/perf_microbenchmark/dispatch/benchmark_rw_buffer
+  golden: tests/tt_metal/tt_metal/perf_microbenchmark/dispatch/goldens/rw_buffer.json
+  repetitions: {wh_n300_civ2: 5, bh_p150_perf: 11}
+  # Bandwidth is not yet stable across runs, so only errors and changed case sets fail.
+  policy: {regression_pct: 5, improvement_pct: 5, enforce: false}
+
+jit_build:
+  binary: build/test/tt_metal/unit_tests_jit_build
+  golden: tests/tt_metal/tt_metal/jit_build/goldens/jit_build.json
+  kind: contract
+  args: [--gtest_also_run_disabled_tests, "--gtest_filter=*TensixCompileStress*", --gtest_color=no]
+  # A fresh process per repetition so the in-memory JIT cache starts cold every time.
+  process_repetitions: 3
+  env:
+    TT_METAL_COMPILE_STRESS_MOCK: "0"
+    TT_METAL_COMPILE_STRESS_NUM_KERNELS: "300"
+    TT_METAL_COMPILE_STRESS_ARCH: "{env[ARCH_NAME]}"
+    TT_METAL_COMPILE_STRESS_CLIENT_ID: "{rep}"
+    # A distinct seed per repetition gives unique kernels, so nothing is served from a cache.
+    TT_METAL_COMPILE_STRESS_SEED: "{rep}"
+    TT_METAL_COMPILE_STRESS_SHARED_FRACTION: "0"
+    TT_METAL_CACHE: "{scratch}/cache"
+    TT_METAL_JIT_SERVER_ENABLE: "0"
+    CCACHE_DISABLE: "1"
+  env_unset:
+    - TT_METAL_SIMULATOR
+    - TT_METAL_EMULE_MODE
+    - TT_METAL_MOCK_CLUSTER_DESC_PATH
+    - TT_METAL_JIT_SERVER_ENDPOINTS
+    - TT_METAL_CCACHE_KERNEL_SUPPORT
+  policy: {regression_pct: 15, improvement_pct: 15}
+
+pcie_mem_bench:
+  binary: build/tools/mem_bench
+  # No golden yet: the first one is recorded from a CI run with `python -m tests.perf update --from-run <id> --force`.
+  golden: tt_metal/tools/mem_bench/goldens/pcie_mem_bench.json
+  args: ["--benchmark_filter=Device (Reading|Writing) Host"]
+  policy: {regression_pct: 10, improvement_pct: 10, enforce: false}
