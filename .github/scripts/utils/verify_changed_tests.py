@@ -3,24 +3,32 @@
 All logic for .github/workflows/verify-changed-tests.yaml, in a single pass.
 
 The gate proves that the test entries a PR edits in tests/pipeline_reorg/ still
-run green, and nothing more. One invocation does three things:
+run green, and nothing more. One invocation does two things:
 
   1. Diffs the changed yamls at test-entry level, working out which entries were
-     added or behaviourally changed, which legs (entry x SKU) must run, which are
-     blocked behind an owner review, and which build flavours those legs need.
-     Also scopes entries whose cmd names an edited file (see "Source references").
+     added or behaviourally changed, which legs (entry x SKU) must run, and which
+     build flavours those legs need. Also scopes entries whose cmd names an edited
+     file (see "Source references").
 
-  2. Runs prepare_test_matrix.py over the changed yamls and narrows its output to
-     exactly those legs, so the dispatched matrix is the touched work and nothing
-     else.
-
-  3. Reports whether every blocked leg carries a code owner's approval, as the
-     `review-met` output. It does not fail on a missing one: the approval is
-     already required to merge, since CODEOWNERS plus the main ruleset's
-     require_code_owner_review block the PR by themselves.
+  2. Runs prepare_test_matrix.py over those yamls and narrows its output to exactly
+     those legs, so the dispatched matrix is the touched work and nothing else.
 
 With --event merge_group only step 1 runs: those legs already ran on the PR head,
 and the queue only needs the scope to resolve.
+
+What this gate does NOT do
+--------------------------
+It decides what to run, and says nothing about who may merge it. Anything it
+cannot or must not dispatch is dropped, not reported:
+
+  * UNSUPPORTED_YAMLS  excluded before the file is read -- not parsed, not diffed,
+                       not scanned.
+  * REVIEW_ONLY_SKUS   dropped per entry; an entry left with no runnable SKU of its
+                       own is dropped whole.
+
+No approval is looked up and no owner is notified. CODEOWNERS and the branch
+ruleset already gate edits to these files, and duplicating that here only produced
+a second, weaker copy of a rule GitHub enforces properly.
 
 Design notes
 ------------
@@ -65,15 +73,12 @@ coverage -- a short matrix would otherwise look exactly like a pass.
 
 import argparse
 import copy
-import fnmatch
 import hashlib
 import json
 import os
 import re
 import subprocess
 import sys
-import urllib.error
-import urllib.request
 from pathlib import Path
 
 import yaml
@@ -98,7 +103,6 @@ PACKAGE_INSTALL_PREFIXES = ("/usr/share/tt-metalium", "/usr/libexec/tt-metalium"
 # tt-metal's own tests/.
 LLK_WORKDIR = "tt_metal/tt-llk"
 
-DEFAULT_CODEOWNERS = ".github/CODEOWNERS"
 DEFAULT_TTSIM_SKIP_LIST = "tests/pipeline_reorg/ttsim-skip-list.yaml"
 DEFAULT_SKU_CONFIG = ".github/sku_config.yaml"
 DEFAULT_PREPARE_SCRIPT = ".github/scripts/utils/prepare_test_matrix.py"
@@ -134,10 +138,53 @@ def write_github_output(pairs):
                 f.write(f"{key}={value}\n")
 
 
-def git_show(ref, path):
-    """Return file contents at ref, or None when the file does not exist there."""
-    result = subprocess.run(["git", "show", f"{ref}:{path}"], capture_output=True, text=True)
-    return None if result.returncode != 0 else result.stdout
+def git_show_many(ref, paths):
+    """{path: contents at ref}, with a path missing from ref mapped to None.
+
+    One `git cat-file --batch` rather than a `git show` per file: the gate used to
+    spawn a subprocess for every yaml it looked at, which on a wide PR was the bulk
+    of its runtime. cat-file reads the whole request list on stdin and streams every
+    blob back in one go.
+
+    The wire format per object is a header line -- `<sha> blob <size>` on success,
+    `<request> missing` otherwise -- followed by exactly <size> bytes and a newline.
+    Reading by the declared size rather than splitting on newlines is what keeps a
+    yaml containing a `missing` line from being mistaken for a header.
+    """
+    paths = list(dict.fromkeys(paths))
+    if not paths:
+        return {}
+
+    request = "".join(f"{ref}:{path}\n" for path in paths)
+    result = subprocess.run(
+        ["git", "cat-file", "--batch"],
+        input=request.encode(),
+        capture_output=True,
+    )
+    if result.returncode != 0:
+        raise GateError(f"git cat-file at {ref} failed: {result.stderr.decode(errors='replace').strip()}")
+
+    out, pos, contents = result.stdout, 0, {}
+    for path in paths:
+        newline = out.find(b"\n", pos)
+        if newline == -1:
+            raise GateError(f"git cat-file output ended before {ref}:{path}")
+        header = out[pos:newline].decode(errors="replace")
+        pos = newline + 1
+        if header.endswith(" missing"):
+            contents[path] = None
+            continue
+        # "<sha> <type> <size>". Anything but a blob means the path names a tree or
+        # a tag, whose bytes are not a tests yaml and must not be parsed as one.
+        fields = header.rsplit(" ", 2)
+        if len(fields) != 3 or fields[1] != "blob" or not fields[2].isdigit():
+            raise GateError(f"unexpected git cat-file header for {ref}:{path}: {header!r}")
+        size = int(fields[2])
+        if pos + size > len(out):
+            raise GateError(f"git cat-file returned a short blob for {ref}:{path}")
+        contents[path] = out[pos : pos + size].decode(errors="replace")
+        pos += size + 1  # trailing newline cat-file adds after each blob
+    return contents
 
 
 def merge_base(base):
@@ -196,8 +243,12 @@ def tracked_paths(base):
         raise GateError(f"git ls-tree at {base} failed: {tree.stderr.strip()}")
     paths |= set(tree.stdout.splitlines())
 
-    # The index rather than ls-tree HEAD, so staged files resolve when run locally.
-    index = subprocess.run(["git", "ls-files"], capture_output=True, text=True)
+    # The index plus untracked files rather than ls-tree HEAD, so a test file added
+    # but not yet committed still resolves when this is run locally. --exclude-standard
+    # honours .gitignore, which is what keeps build output out.
+    index = subprocess.run(
+        ["git", "ls-files", "--cached", "--others", "--exclude-standard"], capture_output=True, text=True
+    )
     if index.returncode != 0:
         raise GateError(f"git ls-files failed: {index.stderr.strip()}")
     paths |= set(index.stdout.splitlines())
@@ -216,7 +267,30 @@ def changed_sources(base):
     diff = subprocess.run(["git", "diff", "--name-only", "--no-renames", base], capture_output=True, text=True)
     if diff.returncode != 0:
         raise GateError(f"git diff against {base} failed: {diff.stderr.strip()}")
-    return {name for name in diff.stdout.splitlines() if name and not name.startswith(TESTS_DIR + "/")}
+
+    # Untracked too, so a brand new source file counts when this is run locally
+    # before committing -- the same reason changed_files() collects them.
+    untracked = subprocess.run(["git", "ls-files", "--others", "--exclude-standard"], capture_output=True, text=True)
+    if untracked.returncode != 0:
+        raise GateError(f"git ls-files --others failed: {untracked.stderr.strip()}")
+
+    names = set(diff.stdout.splitlines()) | set(untracked.stdout.splitlines())
+    return {name for name in names if name and not name.startswith(TESTS_DIR + "/")}
+
+
+def tracked_dirs(tracked):
+    """Every directory prefix of a tracked file.
+
+    Precomputed so the directory fallback below is a set lookup rather than a scan
+    of all ~24k tracked paths per token, per entry, per yaml.
+    """
+    dirs = set()
+    for path in tracked:
+        head = path.rsplit("/", 1)[0] if "/" in path else ""
+        while head and head not in dirs:
+            dirs.add(head)
+            head = head.rsplit("/", 1)[0] if "/" in head else ""
+    return dirs
 
 
 # Shell punctuation and pytest/CLI decorations wrapped around a path. `::` splits a
@@ -224,29 +298,39 @@ def changed_sources(base):
 CMD_TOKEN_SPLIT = re.compile(r"[\s;|&()<>{}\"'`=]+")
 
 
-def cmd_referenced_paths(cmd, tracked):
+def cmd_referenced_paths(cmd, tracked, dirs, workdir=""):
     """Repo paths a cmd names outright.
 
     A token counts only if it is a tracked file or a directory tracked files sit
     under, so `-k some_filter` and untracked `./build/test/...` never match.
+
+    workdir is the leg's working directory (see resolve_workdir). The LLK yamls'
+    cmds are relative to it, so `cd tests/python_tests` means tt_metal/tt-llk/tests/
+    python_tests, not a repo-root path that does not exist. Tokens are resolved
+    workdir-first, then from the root, since a cmd can legitimately name both.
     """
+    prefixes = ([workdir] if workdir else []) + [""]
     paths = set()
     for raw in CMD_TOKEN_SPLIT.split(cmd or ""):
-        token = raw.split("::", 1)[0].strip().lstrip("./").rstrip("/")
+        token = raw.split("::", 1)[0].strip().removeprefix("./").rstrip("/")
         # A bare word cannot be a repo path.
         if not token or "/" not in token:
             continue
-        if token in tracked:
-            paths.add(token)
-        elif any(entry.startswith(token + "/") for entry in tracked):
-            paths.add(token + "/")
+        for prefix in prefixes:
+            candidate = f"{prefix}/{token}" if prefix else token
+            if candidate in tracked:
+                paths.add(candidate)
+                break
+            if candidate in dirs:
+                paths.add(candidate + "/")
+                break
     return paths
 
 
-def sources_touching(cmd, tracked, changed):
+def sources_touching(cmd, tracked, dirs, changed, workdir=""):
     """The changed files a cmd names, directly or via a directory it points at."""
     hits = set()
-    for path in cmd_referenced_paths(cmd, tracked):
+    for path in cmd_referenced_paths(cmd, tracked, dirs, workdir):
         if path.endswith("/"):
             hits |= {name for name in changed if name.startswith(path)}
         elif path in changed:
@@ -291,7 +375,7 @@ def rename_sources(base):
 
 def load_review_only_skus(raw, sku_config_path):
     """
-    Parse the review-only SKU list.
+    Parse the list of SKUs this gate must never dispatch.
 
     The list lives in verify-changed-tests.yaml so the gate's hardware policy sits
     next to the gate itself. Names are validated against sku_config.yaml so a typo
@@ -346,57 +430,6 @@ def deselect_args(sku, skips):
     if arch is None:
         return ""
     return " ".join("--deselect=" + test_id for test_id in skips.get(arch) or [])
-
-
-def load_codeowners(path):
-    """
-    Parse CODEOWNERS into an ordered list of (pattern, owners).
-
-    Order is preserved because GitHub gives precedence to the *last* matching
-    pattern -- which is what makes `tests/pipeline_reorg/` a fallback beneath the
-    more specific per-file lines that follow it.
-    """
-    rules = []
-    if not os.path.exists(path):
-        return rules
-    with open(path, "r") as f:
-        for raw in f:
-            line = raw.split("#", 1)[0].strip()
-            if not line:
-                continue
-            parts = line.split()
-            rules.append((parts[0], parts[1:]))
-    return rules
-
-
-def codeowners_match(pattern, path):
-    """Match one CODEOWNERS pattern against a repo-relative path."""
-    pattern = pattern.lstrip("/")
-    if pattern.endswith("/"):
-        return path.startswith(pattern)
-    if pattern.startswith("**/"):
-        tail = pattern[3:]
-        return fnmatch.fnmatch(path, tail) or fnmatch.fnmatch(path, f"*/{tail}")
-    if "/" in pattern:
-        return fnmatch.fnmatch(path, pattern)
-    return fnmatch.fnmatch(os.path.basename(path), pattern)
-
-
-def owners_for(path, rules):
-    """
-    Owners of a path, honouring CODEOWNERS last-match-wins precedence.
-
-    Returns (individual logins, team slugs). Teams cannot be expanded with the
-    workflow token, so a path owned only by teams falls back to accepting any
-    approving review and letting the ruleset's own code-owner requirement decide.
-    """
-    owners = []
-    for pattern, entries in rules:
-        if codeowners_match(pattern, path):
-            owners = entries
-    individuals = {o.lstrip("@") for o in owners if o.startswith("@") and "/" not in o}
-    teams = {o.lstrip("@") for o in owners if o.startswith("@") and "/" in o}
-    return individuals, teams
 
 
 # ---------------------------------------------------------------------------
@@ -530,8 +563,10 @@ def scope_file(
     llk_workdir_files,
     base_path=None,
     tracked=None,
+    dirs=None,
     changed_src=None,
     edited=True,
+    base_blobs=None,
 ):
     """Diff one tests yaml and return its scoping result.
 
@@ -539,51 +574,65 @@ def scope_file(
     the base matrix is read from there so a rename is not mistaken for a file
     full of new entries.
 
-    tracked/changed_src drive the source pass: an entry is scoped when its cmd names
-    an edited file, even if its own yaml is untouched.
+    tracked/dirs/changed_src drive the source pass: an entry is scoped when its cmd
+    names an edited file, even if its own yaml is untouched.
 
     edited says whether the PR touched this yaml. The source pass reads every yaml,
-    so an unedited malformed one is skipped rather than failing the gate.
+    so an unedited broken one is skipped rather than failing the gate -- for every
+    way it can be broken, not just a reshaped matrix: bad YAML syntax, entries that
+    are not mappings and duplicate keys all raise too.
     """
-    if os.path.basename(path) in non_matrix_files:
-        # Declared as holding no test matrix (e.g. ttsim-skip-list.yaml, a per-arch
-        # mapping of test ids). Nothing here for the gate to prove.
-        return {"no_entries": True, "run_legs": [], "review_legs": [], "metadata_only": []}
+    skip = {"no_entries": True, "run_legs": []}
 
-    unsupported = os.path.basename(path) in unsupported_files
+    # Excluded before anything is read. A yaml this gate does not support is not
+    # parsed, diffed or scanned -- whatever it holds is somebody else's problem,
+    # and CODEOWNERS already gates edits to it.
+    #   non_matrix   declared as holding no test matrix (ttsim-skip-list.yaml).
+    #   unsupported  a real matrix the gate cannot dispatch (no cmd, or an impl
+    #                that rewrites the cmd before running it).
+    if os.path.basename(path) in non_matrix_files or os.path.basename(path) in unsupported_files:
+        return skip
 
     old_path = base_path or path
-    old_entries = parse_entries(git_show(base, old_path))
-    new_entries = parse_entries(open(path).read() if os.path.exists(path) else None)
 
-    if not edited and (new_entries is None or old_entries is None):
-        # Read only because the source pass sweeps the directory; not this PR's problem.
-        return {"no_entries": True, "run_legs": [], "review_legs": [], "metadata_only": []}
+    try:
+        new_entries = parse_entries(open(path).read() if os.path.exists(path) else None)
+        # An unedited yaml cannot differ from its base, so it is never requested.
+        old_entries = new_entries if not edited else parse_entries((base_blobs or {}).get(old_path))
 
-    # Reaching here with a non-list means a real test matrix was reshaped into
-    # something else. prepare_test_matrix.py errors on that shape, and so does the
-    # gate -- silently marking it "no tests" would pass the PR with zero coverage.
-    for entries, label in ((new_entries, path), (old_entries, f"{old_path}@{base}")):
-        if entries is None:
-            raise GateError(
-                f"{label} is not a list of test entries. If it legitimately holds no test "
-                "matrix, add its filename to NON_MATRIX_YAMLS in "
-                ".github/workflows/verify-changed-tests.yaml; otherwise fix the file."
-            )
+        if not edited and (new_entries is None or old_entries is None):
+            return skip
 
-    old_index = index_entries(old_entries, f"{old_path}@{base}", strict=False)
-    new_index = index_entries(new_entries, path)
+        # Reaching here with a non-list means a real test matrix was reshaped into
+        # something else. prepare_test_matrix.py errors on that shape, and so does the
+        # gate -- silently marking it "no tests" would pass the PR with zero coverage.
+        for entries, label in ((new_entries, path), (old_entries, f"{old_path}@{base}")):
+            if entries is None:
+                raise GateError(
+                    f"{label} is not a list of test entries. If it legitimately holds no test "
+                    "matrix, add its filename to NON_MATRIX_YAMLS in "
+                    ".github/workflows/verify-changed-tests.yaml; otherwise fix the file."
+                )
 
-    touched, metadata_only = [], []
+        old_index = index_entries(old_entries, f"{old_path}@{base}", strict=False)
+        new_index = index_entries(new_entries, path)
+    except (GateError, yaml.YAMLError):
+        if edited:
+            raise
+        return skip
+
+    touched = []
     for key, entry in new_index.items():
         previous = old_index.get(key)
         if previous is None:
             touched.append((key, entry, "added"))
         elif canonical(behavioural_view(previous)) != canonical(behavioural_view(entry)):
             touched.append((key, entry, "changed"))
-        elif canonical(previous) != canonical(entry):
-            metadata_only.append(key_str(key))
     # Removed entries are intentionally ignored: there is no test left to prove.
+    # Metadata-only edits fall out here too -- behavioural_view() already said they
+    # cannot change how the test executes.
+
+    workdir = resolve_workdir(path, llk_workdir_files)
 
     # Entries already touched above keep their reason and are not added twice.
     if changed_src:
@@ -591,46 +640,40 @@ def scope_file(
         for key, entry in new_index.items():
             if key in already:
                 continue
-            hits = sources_touching(entry.get("cmd") or "", tracked or set(), changed_src)
+            hits = sources_touching(entry.get("cmd") or "", tracked or set(), dirs or set(), changed_src, workdir)
             if hits:
                 touched.append((key, entry, "source:" + ",".join(hits)))
-                metadata_only[:] = [name for name in metadata_only if name != key_str(key)]
 
-    run_legs, review_legs = [], []
+    run_legs = []
     for key, entry, reason in touched:
         skus = entry.get("skus")
         if not isinstance(skus, dict) or not skus:
             raise GateError(f"{path}: entry '{key_str(key)}' has no skus mapping; cannot resolve any leg to run")
-        team = entry.get("team")
-        for sku in skus:
-            leg = {
-                "file": path,
-                "name": entry.get("name"),
-                "gtest_shard_index": entry.get("gtest_shard_index"),
-                "sku": sku,
-                "team": team,
-                "reason": reason,
-                "profile": resolve_profile(path, tracy_files),
-                "packages": needs_packages(entry),
-                "workdir": resolve_workdir(path, llk_workdir_files),
-            }
-            if unsupported:
-                # The gate cannot build a runnable matrix for this pipeline, so the
-                # edit goes to its code owners instead of passing unverified.
-                leg["blocked_by"] = "unsupported_yaml"
-                review_legs.append(leg)
-            elif sku in review_only:
-                leg["blocked_by"] = "review_only_sku"
-                review_legs.append(leg)
-            else:
-                run_legs.append(leg)
 
-    return {
-        "no_entries": False,
-        "run_legs": run_legs,
-        "review_legs": review_legs,
-        "metadata_only": metadata_only,
-    }
+        # Review-only SKUs are dropped, not reported. An entry left with none of its
+        # own SKUs is dropped whole -- there is nothing this gate can run for it, and
+        # CODEOWNERS decides whether the edit is allowed.
+        runnable = [sku for sku in skus if sku not in review_only]
+        if not runnable:
+            continue
+
+        team = entry.get("team")
+        for sku in runnable:
+            run_legs.append(
+                {
+                    "file": path,
+                    "name": entry.get("name"),
+                    "gtest_shard_index": entry.get("gtest_shard_index"),
+                    "sku": sku,
+                    "team": team,
+                    "reason": reason,
+                    "profile": resolve_profile(path, tracy_files),
+                    "packages": needs_packages(entry),
+                    "workdir": workdir,
+                }
+            )
+
+    return {"no_entries": False, "run_legs": run_legs}
 
 
 def build_scope(
@@ -644,12 +687,20 @@ def build_scope(
     renames=None,
     changed_src=None,
 ):
-    run_legs, review_legs, metadata_only, skipped = [], [], [], []
+    run_legs, skipped = [], []
     renames = renames or {}
 
     # The source pass must read every yaml; without it the scan is just the diff.
     tracked = tracked_paths(base) if changed_src else set()
+    dirs = tracked_dirs(tracked) if changed_src else set()
     scanned = sorted(set(files) | (set(all_test_yamls()) if changed_src else set()))
+
+    # Every base revision the diff needs, in one call. Only edited yamls have a base
+    # worth reading, and excluded ones are never parsed, so neither is requested.
+    excluded = non_matrix_files | unsupported_files
+    base_blobs = git_show_many(
+        base, [renames.get(path, path) for path in files if os.path.basename(path) not in excluded]
+    )
 
     for path in scanned:
         scoped = scope_file(
@@ -662,8 +713,10 @@ def build_scope(
             llk_workdir_files,
             base_path=renames.get(path),
             tracked=tracked,
+            dirs=dirs,
             changed_src=changed_src,
             edited=path in files,
+            base_blobs=base_blobs,
         )
         if scoped["no_entries"]:
             # Only a yaml the PR edited is worth reporting as skipped.
@@ -671,19 +724,12 @@ def build_scope(
                 skipped.append(path)
             continue
         run_legs.extend(scoped["run_legs"])
-        review_legs.extend(scoped["review_legs"])
-        metadata_only.extend(f"{path}: {name}" for name in scoped["metadata_only"])
 
-    if review_legs:
-        status = "blocked"
-    elif run_legs:
-        status = "run"
-    else:
-        status = "no_op"
+    status = "run" if run_legs else "no_op"
 
     # Identifies exactly this set of legs, so the merge_group run can confirm it is
     # looking at the same work the pull_request run proved.
-    digest = hashlib.sha256(canonical(sorted(canonical(leg) for leg in run_legs + review_legs)).encode()).hexdigest()
+    digest = hashlib.sha256(canonical(sorted(canonical(leg) for leg in run_legs)).encode()).hexdigest()
 
     # Only the build flavours the surviving legs need, so a PR touching one cpp
     # pipeline does not pay for a wheel or a tracy build.
@@ -695,9 +741,7 @@ def build_scope(
         "changed_sources": sorted(changed_src or []),
         "skipped_files": skipped,
         "run_legs": run_legs,
-        "review_legs": review_legs,
         "expected_leg_count": len(run_legs),
-        "metadata_only": metadata_only,
         "profiles": profiles,
         "leg_digest": digest,
     }
@@ -775,7 +819,7 @@ def build_matrices(scope, prepare_script, sku_config, work_dir):
     work_dir.mkdir(parents=True, exist_ok=True)
 
     # Off the legs, not the changed files: a source-scoped leg can come from a yaml
-    # the PR never touched. A fully blocked yaml has no row and would fail the gate.
+    # the PR never touched.
     needed = sorted({leg["file"] for leg in scope["run_legs"]})
 
     matrices = {}
@@ -898,169 +942,12 @@ def filter_matrix(scope, matrices, skips):
 
 
 # ---------------------------------------------------------------------------
-# reviews
-# ---------------------------------------------------------------------------
-
-
-def next_page_url(link_header):
-    """The rel="next" URL from a GitHub Link header, or None on the last page."""
-    for part in (link_header or "").split(","):
-        segments = part.split(";")
-        if len(segments) < 2:
-            continue
-        url = segments[0].strip()
-        if not (url.startswith("<") and url.endswith(">")):
-            continue
-        if any(segment.strip().replace('"', "").replace(" ", "") == "rel=next" for segment in segments[1:]):
-            return url[1:-1]
-    return None
-
-
-# A self-referential Link header would otherwise spin forever and hang the job.
-# 100 pages is 10k review submissions -- far past any real PR.
-MAX_REVIEW_PAGES = 100
-
-
-def fetch_reviews(repo, pr, token):
-    """Every review submission on the PR, following pagination to the last page.
-
-    Pagination is not optional here. The endpoint returns OLDEST first, and counts
-    every submission -- each approve, request-changes and plain review comment --
-    as a review. Reading only the first page therefore hands back the oldest 100
-    and silently drops the newest, which is precisely where an approval on the
-    current head has to be. The result was a false block on a properly approved
-    PR, most likely on exactly the long-lived galaxy PRs this gate exists to route
-    to owners.
-    """
-    url = f"https://api.github.com/repos/{repo}/pulls/{pr}/reviews?per_page=100"
-    reviews = []
-    for _ in range(MAX_REVIEW_PAGES):
-        request = urllib.request.Request(url)
-        request.add_header("Accept", "application/vnd.github+json")
-        request.add_header("X-GitHub-Api-Version", "2022-11-28")
-        if token:
-            request.add_header("Authorization", f"Bearer {token}")
-        try:
-            with urllib.request.urlopen(request) as response:
-                page = json.load(response)
-                link_header = response.headers.get("Link", "")
-        except urllib.error.HTTPError as err:
-            raise GateError(f"GitHub API returned {err.code} fetching reviews for {repo}#{pr}")
-        except urllib.error.URLError as err:
-            raise GateError(f"could not reach the GitHub API: {err.reason}")
-
-        if not isinstance(page, list):
-            raise GateError(f"unexpected reviews payload for {repo}#{pr}: expected a list")
-        reviews.extend(page)
-
-        url = next_page_url(link_header)
-        if not url:
-            return reviews
-
-    raise GateError(f"reviews for {repo}#{pr} did not terminate after {MAX_REVIEW_PAGES} pages")
-
-
-def approving_logins(reviews):
-    """
-    Logins whose current review on the PR is an approval.
-
-    Only the latest verdict per person counts: a COMMENTED review leaves an earlier
-    approval standing (GitHub does the same), while a later CHANGES_REQUESTED or a
-    dismissal withdraws it. Reviews arrive oldest first, so the last verdict seen
-    for a login wins.
-    """
-    verdicts = {}
-    for review in reviews:
-        login = (review.get("user") or {}).get("login")
-        state = review.get("state")
-        if not login or state in (None, "COMMENTED", "PENDING"):
-            continue
-        verdicts[login] = state
-    return {login for login, state in verdicts.items() if state == "APPROVED"}
-
-
-def check_reviews(review_legs, repo, pr, codeowners_path):
-    """
-    Require an approving review from the edited yaml's own code owners.
-
-    Checked per file, because two blocked yamls can have different owners --
-    an approval from the models owners says nothing about a fabric edit.
-
-    These legs are on highly contended SKUs the gate will not run, so the
-    requirement falls back to the ordinary rule: the PR must carry an approval from
-    a code owner. Which commit that approval sits on is not considered --
-    dismiss_stale_reviews_on_push is false on main, so an approval survives later
-    pushes, and this gate does not second-guess that.
-
-    Where a path resolves to no individual owners -- unowned, or owned only by a
-    team, which the workflow token cannot expand -- this falls back to accepting
-    any approving review and leaves the question to the normal CODEOWNERS system,
-    which the ruleset enforces via require_code_owner_review.
-    """
-    if not review_legs:
-        print("No legs need an owner review.")
-        return 0
-
-    rules = load_codeowners(codeowners_path)
-    reviews = fetch_reviews(repo, pr, os.environ.get("GH_TOKEN"))
-    approvers = approving_logins(reviews)
-
-    by_file = {}
-    for leg in review_legs:
-        by_file.setdefault(leg["file"], []).append(leg)
-
-    unmet = []
-    for path, legs in sorted(by_file.items()):
-        reasons = sorted({leg.get("blocked_by") or "review_only_sku" for leg in legs})
-        individuals, teams = owners_for(path, rules)
-        matched = sorted(approvers & individuals)
-
-        print(f"\n{path}  ({len(legs)} leg(s); {', '.join(reasons)})")
-        for leg in legs:
-            print(f"    - {leg['name']} | sku={leg['sku']}")
-
-        if individuals:
-            print(f"    code owners: {', '.join('@' + o for o in sorted(individuals))}")
-            if matched:
-                print(f"    approved by: {', '.join('@' + o for o in matched)}")
-            else:
-                unmet.append((path, sorted(individuals)))
-        else:
-            # No individual owner to match against; defer to the ruleset.
-            where = f"team-owned ({', '.join(sorted(teams))})" if teams else "no code owner"
-            print(f"    {where}; falling back to the normal CODEOWNERS review requirement")
-            if approvers:
-                print(f"    approved by: {', '.join('@' + o for o in sorted(approvers))}")
-            else:
-                unmet.append((path, []))
-
-    if unmet:
-        print("", file=sys.stderr)
-        for path, owners in unmet:
-            who = ", ".join("@" + o for o in owners) if owners else "a code owner"
-            print(
-                f"::error::{path} has legs on highly contended SKUs that this gate does not "
-                f"run. The PR needs an approving review from {who}.",
-                file=sys.stderr,
-            )
-        return 1
-
-    print(f"\nAll {len(review_legs)} leg(s) needing review carry a code owner's approval.")
-    return 0
-
-
-# ---------------------------------------------------------------------------
 # entry point
 # ---------------------------------------------------------------------------
 
 
 def run(args):
-    """
-    One pass: scope the diff, narrow the matrix, and enforce the owner review.
-
-    Outputs are written before the review check so the workflow still has the
-    matrix and counts even when the gate fails on a missing approval.
-    """
+    """One pass: scope the diff, then narrow the matrix to what it found."""
     review_only = load_review_only_skus(args.review_skus, args.sku_config)
     tracy_files = set(split_list(args.tracy_files))
     non_matrix_files = set(split_list(args.non_matrix_files))
@@ -1095,7 +982,7 @@ def run(args):
     )
 
     # In a merge group the legs already ran on the PR head, so there is no matrix
-    # to build and no review to re-check -- only the scope needs to resolve.
+    # to build -- only the scope needs to resolve.
     dispatching = args.event == "pull_request"
 
     legs, sim_libs = [], []
@@ -1121,7 +1008,6 @@ def run(args):
         [
             ("status", scope["status"]),
             ("expected-leg-count", scope["expected_leg_count"]),
-            ("review-leg-count", len(scope["review_legs"])),
             ("leg-digest", scope["leg_digest"]),
             ("changed-file-count", len(scope["changed_files"])),
             ("needs-default", str("default" in profiles).lower()),
@@ -1138,16 +1024,6 @@ def run(args):
             path = "sim" if str(row.get("sku", "")).startswith("sim_") else "hw"
             print(f"  - [{path}] {describe_row(row_key(row))}  [{row['source_yaml']}]")
 
-    # The review verdict is reported as an output, not as this step's exit code.
-    # Failing here would skip every downstream job, so a single leg parked behind an
-    # owner review would stop the legs this gate CAN run from running at all -- the
-    # changed tests still have to be proven either way. verify-changed-tests turns an
-    # unmet review into the gate failure at the end, once the runnable legs are in.
-    review_met = True
-    if dispatching and scope["review_legs"]:
-        review_met = check_reviews(scope["review_legs"], args.repo, args.pr, args.codeowners) == 0
-
-    write_github_output([("review-met", str(review_met).lower())])
     return 0
 
 
@@ -1205,13 +1081,10 @@ def main(argv=None):
             "Without it an entry is also scoped when its cmd names a file the PR changed."
         ),
     )
-    parser.add_argument("--codeowners", default=DEFAULT_CODEOWNERS)
     parser.add_argument("--ttsim-skip-list", default=DEFAULT_TTSIM_SKIP_LIST)
     parser.add_argument("--prepare-script", default=DEFAULT_PREPARE_SCRIPT)
     parser.add_argument("--work-dir", default="gate-matrices")
     parser.add_argument("--matrix-dir", default=None, help="Pre-built matrices; omit to run prepare_test_matrix.py")
-    parser.add_argument("--repo", default=os.environ.get("GITHUB_REPOSITORY", ""), help="owner/repo")
-    parser.add_argument("--pr", default="")
     parser.add_argument("--output", default=None, help="Also write the JSON result here")
 
     args = parser.parse_args(argv)

@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Tests for verify_changed_tests.py -- entry diffing, leg scoping, filtering and review gating."""
+"""Tests for verify_changed_tests.py -- entry diffing, leg scoping and matrix filtering."""
 
 from __future__ import annotations
 
@@ -101,7 +101,7 @@ class Repo:
         Run the scope-only path.
 
         --event merge_group is exactly that path: it resolves the touched entries
-        without building a matrix or calling the reviews API.
+        without building a matrix.
         """
         argv = [
             sys.executable,
@@ -165,7 +165,7 @@ def test_owner_id_change_needs_no_hardware(repo: Repo):
     code, payload, _ = repo.scope()
     assert code == 0
     assert payload["status"] == "no_op"
-    assert payload["metadata_only"] == ["tests/pipeline_reorg/sample_unit_tests.yaml: unit alpha"]
+    assert payload["run_legs"] == []
 
 
 def test_team_change_needs_no_hardware(repo: Repo):
@@ -173,7 +173,7 @@ def test_team_change_needs_no_hardware(repo: Repo):
     code, payload, _ = repo.scope()
     assert code == 0
     assert payload["status"] == "no_op"
-    assert len(payload["metadata_only"]) == 1
+    assert payload["run_legs"] == []
 
 
 def test_timeout_change_needs_hardware(repo: Repo):
@@ -185,7 +185,6 @@ def test_timeout_change_needs_hardware(repo: Repo):
     code, payload, _ = repo.scope()
     assert code == 0
     assert payload["status"] == "run"
-    assert payload["metadata_only"] == []
     # A touched entry runs every SKU it declares.
     assert sorted(leg["sku"] for leg in payload["run_legs"]) == ["wh_n150_civ2", "wh_n300_civ2"]
 
@@ -310,11 +309,11 @@ def test_per_sku_tier_change_runs(repo: Repo):
 
 
 def test_review_only_legs_do_not_pull_in_a_build(repo: Repo):
-    """A blocked galaxy leg is never dispatched, so its build flavour is not needed."""
+    """A dropped galaxy leg is never dispatched, so its build flavour is not needed."""
     repo.write("tests/pipeline_reorg/sample_galaxy_tests.yaml", BASE_GALAXY_YAML.replace("test_alpha", "test_beta"))
     code, payload, _ = repo.scope()
     assert code == 0
-    assert payload["status"] == "blocked"
+    assert payload["status"] == "no_op"
     assert payload["profiles"] == []
 
 
@@ -376,18 +375,15 @@ def test_listed_yaml_selects_the_tracy_profile(repo: Repo):
     assert json.loads((repo.root / "result.json").read_text())["profiles"] == ["profiler"]
 
 
-# --- review gating -----------------------------------------------------------
+# --- review-only skus --------------------------------------------------------
 
 
-def test_galaxy_leg_blocks_instead_of_running(repo: Repo):
+def test_galaxy_leg_is_dropped_instead_of_running(repo: Repo):
     repo.write("tests/pipeline_reorg/sample_galaxy_tests.yaml", BASE_GALAXY_YAML.replace("test_alpha", "test_beta"))
     code, payload, _ = repo.scope()
     assert code == 0
-    assert payload["status"] == "blocked"
+    assert payload["status"] == "no_op"
     assert payload["run_legs"] == []
-    assert len(payload["review_legs"]) == 1
-    assert payload["review_legs"][0]["sku"] == "wh_galaxy"
-    assert payload["review_legs"][0]["file"] == "tests/pipeline_reorg/sample_galaxy_tests.yaml"
 
 
 def test_removing_a_sku_from_the_review_list_makes_it_runnable(repo: Repo):
@@ -395,7 +391,6 @@ def test_removing_a_sku_from_the_review_list_makes_it_runnable(repo: Repo):
     code, payload, _ = repo.scope(review_skus="")
     assert code == 0
     assert payload["status"] == "run"
-    assert payload["review_legs"] == []
     assert len(payload["run_legs"]) == 1
 
 
@@ -795,6 +790,9 @@ def src_repo(tmp_path: Path) -> Repo:
     r.git("config", "user.email", "gate@test")
     r.git("config", "user.name", "gate")
     r.write(".github/sku_config.yaml", SKU_CONFIG)
+    # Mirrors the real repo: untracked paths count as resolvable, so the promise that
+    # build output never matches rests on it being ignored.
+    r.write(".gitignore", "build\n")
     r.write("tests/pipeline_reorg/sample_src_tests.yaml", SOURCE_YAML)
     r.write("tests/ttnn/unit_tests/test_alpha.py", "def test_alpha(): pass\n")
     r.write("tests/ttnn/unit_tests/test_other.py", "def test_other(): pass\n")
@@ -856,16 +854,6 @@ def test_yaml_edit_and_source_edit_do_not_double_count(src_repo: Repo):
     assert alpha[0]["reason"] == "changed"
 
 
-def test_unedited_malformed_yaml_does_not_fail_someone_elses_pr(src_repo: Repo):
-    """A broken yaml the PR never opened is not its problem; editing one still fails closed."""
-    src_repo.write("tests/pipeline_reorg/broken_tests.yaml", "not:\n  - a list of entries\n")
-    src_repo.commit_base()
-    src_repo.write("tests/ttnn/unit_tests/test_alpha.py", "def test_alpha(): assert True\n")
-    code, payload, stderr = src_repo.scope()
-    assert code == 0, stderr
-    assert sorted(leg["name"] for leg in payload["run_legs"]) == ["src alpha", "src beta"]
-
-
 def test_deleting_a_named_test_file_still_scopes_its_entry(src_repo: Repo):
     """Resolving only against HEAD would reject the token and miss the broken cmd."""
     src_repo.git("rm", "-q", "tests/ttnn/unit_tests/test_alpha.py")
@@ -885,14 +873,162 @@ def test_renaming_a_named_test_file_still_scopes_its_entry(src_repo: Repo):
 
 
 def test_deleted_build_output_is_still_not_a_source_reference(src_repo: Repo):
-    """The base-revision union must not start matching generated paths."""
+    """Generated paths stay invisible to every revision the resolver consults.
+
+    build is gitignored, so it is absent from base, from the index and -- because
+    --exclude-standard honours .gitignore -- from the untracked set that now feeds
+    the resolver too. Creating and deleting one must still scope nothing.
+    """
     src_repo.write("build/test/tt_metal/gamma", "binary\n")
-    src_repo.commit("add build output")
-    src_repo.git("rm", "-q", "build/test/tt_metal/gamma")
-    src_repo.commit("remove build output")
     code, payload, stderr = src_repo.scope()
     assert code == 0, stderr
     assert not any(leg["name"] == "src gamma" for leg in payload["run_legs"])
+
+    os.remove(src_repo.root / "build/test/tt_metal/gamma")
+    code, payload, stderr = src_repo.scope()
+    assert code == 0, stderr
+    assert not any(leg["name"] == "src gamma" for leg in payload["run_legs"])
+
+
+LLK_SRC_YAML = """\
+- name: llk alpha
+  cmd: |
+    cd tests/python_tests
+    pytest -q .
+  skus:
+    wh_n150_civ2:
+      timeout: 10
+  team: llk
+  owner_id: U020
+
+- name: llk beta
+  cmd: ./tests/run_llk_perf.sh
+  skus:
+    wh_n150_civ2:
+      timeout: 10
+  team: llk
+  owner_id: U021
+"""
+
+
+@pytest.fixture
+def llk_repo(tmp_path: Path) -> Repo:
+    r = Repo(tmp_path)
+    r.git("init", "-q")
+    r.git("config", "user.email", "gate@test")
+    r.git("config", "user.name", "gate")
+    r.write(".github/sku_config.yaml", SKU_CONFIG)
+    r.write("tests/pipeline_reorg/llk_src_tests.yaml", LLK_SRC_YAML)
+    # Under the LLK tree, which is what the cmds above are relative to.
+    r.write("tt_metal/tt-llk/tests/python_tests/test_llk.py", "def test_llk(): pass\n")
+    r.write("tt_metal/tt-llk/tests/run_llk_perf.sh", "#!/bin/bash\n")
+    # A decoy at the repo root: resolving without the workdir must not find this.
+    r.write("tests/python_tests/decoy.py", "def test_decoy(): pass\n")
+    r.commit_base()
+    return r
+
+
+def test_llk_cmds_resolve_against_their_working_directory(llk_repo: Repo):
+    """Their cmds are relative to tt_metal/tt-llk, not the checkout root."""
+    llk_repo.write("tt_metal/tt-llk/tests/python_tests/test_llk.py", "def test_llk(): assert True\n")
+    code, payload, stderr = llk_repo.scope(llk_workdir_files="llk_src_tests.yaml")
+    assert code == 0, stderr
+    assert sorted(leg["name"] for leg in payload["run_legs"]) == ["llk alpha"]
+
+
+def test_llk_script_reference_resolves_against_the_working_directory(llk_repo: Repo):
+    llk_repo.write("tt_metal/tt-llk/tests/run_llk_perf.sh", "#!/bin/bash\necho hi\n")
+    code, payload, stderr = llk_repo.scope(llk_workdir_files="llk_src_tests.yaml")
+    assert code == 0, stderr
+    assert sorted(leg["name"] for leg in payload["run_legs"]) == ["llk beta"]
+
+
+def test_workdir_does_not_make_root_paths_match(llk_repo: Repo):
+    """The repo-root decoy must not be picked up by a workdir-relative token."""
+    llk_repo.write("tests/python_tests/decoy.py", "def test_decoy(): assert True\n")
+    code, payload, stderr = llk_repo.scope(llk_workdir_files="llk_src_tests.yaml")
+    assert code == 0, stderr
+    assert payload["run_legs"] == []
+
+
+UNTRACKED_YAML = """\
+- name: untracked alpha
+  cmd: pytest tests/ttnn/unit_tests/test_brand_new.py
+  skus:
+    wh_n150_civ2:
+      timeout: 10
+  team: ttnn
+  owner_id: U040
+"""
+
+DOTDIR_YAML = """\
+- name: dot alpha
+  cmd: python3 .github/scripts/helper.py
+  skus:
+    wh_n150_civ2:
+      timeout: 10
+  team: ttnn
+  owner_id: U030
+"""
+
+
+@pytest.fixture
+def dotdir_repo(tmp_path: Path) -> Repo:
+    r = Repo(tmp_path)
+    r.git("init", "-q")
+    r.git("config", "user.email", "gate@test")
+    r.git("config", "user.name", "gate")
+    r.write(".github/sku_config.yaml", SKU_CONFIG)
+    r.write("tests/pipeline_reorg/dotdir_tests.yaml", DOTDIR_YAML)
+    r.write(".github/scripts/helper.py", "print('hi')\n")
+    r.commit_base()
+    return r
+
+
+def test_dot_prefixed_directories_survive_token_cleanup(dotdir_repo: Repo):
+    """lstrip('./') is a character-set strip: it would turn .github into github."""
+    dotdir_repo.write(".github/scripts/helper.py", "print('changed')\n")
+    code, payload, stderr = dotdir_repo.scope()
+    assert code == 0, stderr
+    assert sorted(leg["name"] for leg in payload["run_legs"]) == ["dot alpha"]
+
+
+@pytest.mark.parametrize(
+    "broken",
+    [
+        pytest.param("not:\n  - a list of entries\n", id="not-a-list"),
+        pytest.param("- name: a\n   bad indent: [\n", id="yaml-syntax-error"),
+        pytest.param("- just a string\n- another\n", id="entries-not-mappings"),
+        pytest.param("- name: dup\n  cmd: x\n- name: dup\n  cmd: y\n", id="duplicate-keys"),
+    ],
+)
+def test_unedited_broken_yaml_never_fails_someone_elses_pr(src_repo: Repo, broken: str):
+    """The source pass sweeps every yaml, so all four break shapes must be tolerated
+    on a file the PR never opened -- not just the reshaped-matrix one."""
+    src_repo.write("tests/pipeline_reorg/broken_tests.yaml", broken)
+    src_repo.commit_base()  # already on main; the PR below never opens it
+    src_repo.write("tests/ttnn/unit_tests/test_alpha.py", "def test_alpha(): assert True\n")
+    code, payload, stderr = src_repo.scope()
+    assert code == 0, stderr
+    assert "src alpha" in {leg["name"] for leg in payload["run_legs"]}
+
+
+def test_editing_a_broken_yaml_still_fails_closed(src_repo: Repo):
+    """Tolerance is only for files the PR left alone."""
+    src_repo.write("tests/pipeline_reorg/broken_tests.yaml", "- just a string\n")
+    code, _, stderr = src_repo.scope()
+    assert code == 1
+    assert "broken_tests.yaml" in stderr or "mappings" in stderr
+
+
+def test_untracked_source_file_is_scoped(src_repo: Repo):
+    """Keeps the local pre-commit story working: a new file is untracked until added."""
+    src_repo.write("tests/pipeline_reorg/untracked_tests.yaml", UNTRACKED_YAML)
+    src_repo.commit_base()  # the entry is already on main; only the new file is the PR
+    src_repo.write("tests/ttnn/unit_tests/test_brand_new.py", "def test_new(): pass\n")
+    code, payload, stderr = src_repo.scope()
+    assert code == 0, stderr
+    assert "untracked alpha" in {leg["name"] for leg in payload["run_legs"]}
 
 
 def test_no_source_scope_restores_yaml_only_behaviour(src_repo: Repo):
@@ -988,176 +1124,11 @@ def test_same_entry_twice_in_one_yaml_still_fails_closed(repo: Repo):
     assert "same entry twice" in stderr
 
 
-# --- CODEOWNERS resolution ---------------------------------------------------
-
-CODEOWNERS = """\
-# last match wins
-/* @tenstorrent/metalium-developers-infra
-tests/pipeline_reorg/ @roseli-TT @tdowdallTT
-tests/pipeline_reorg/sample_galaxy_tests.yaml @mtairum @uaydonat
-tests/pipeline_reorg/sample_team_tests.yaml @tenstorrent/metalium-developers-infra
-"""
+# --- excluded yamls ----------------------------------------------------------
 
 
-def owners_of(repo: Repo, path: str):
-    import importlib.util
-
-    spec = importlib.util.spec_from_file_location("gate", SCRIPT)
-    mod = importlib.util.module_from_spec(spec)
-    spec.loader.exec_module(mod)
-    rules = mod.load_codeowners(str(repo.root / ".github/CODEOWNERS"))
-    return mod.owners_for(path, rules)
-
-
-def test_codeowners_last_match_wins(repo: Repo):
-    repo.write(".github/CODEOWNERS", CODEOWNERS)
-    ind, teams = owners_of(repo, "tests/pipeline_reorg/sample_galaxy_tests.yaml")
-    assert ind == {"mtairum", "uaydonat"}
-    assert teams == set()
-
-
-def test_codeowners_directory_rule_is_the_fallback(repo: Repo):
-    repo.write(".github/CODEOWNERS", CODEOWNERS)
-    ind, _ = owners_of(repo, "tests/pipeline_reorg/sample_unit_tests.yaml")
-    assert ind == {"roseli-TT", "tdowdallTT"}
-
-
-def test_codeowners_team_only_path_yields_no_individuals(repo: Repo):
-    """A team cannot be expanded with the workflow token, so this must fall back."""
-    repo.write(".github/CODEOWNERS", CODEOWNERS)
-    ind, teams = owners_of(repo, "tests/pipeline_reorg/sample_team_tests.yaml")
-    assert ind == set()
-    assert teams == {"tenstorrent/metalium-developers-infra"}
-
-
-# --- owner review gating -----------------------------------------------------
-
-
-def run_reviews(repo: Repo, reviews: list):
-    """Invoke the gate with the reviews API stubbed by a local http server."""
-    import http.server, json as _json, threading
-
-    payload = _json.dumps(reviews).encode()
-
-    class Handler(http.server.BaseHTTPRequestHandler):
-        def do_GET(self):
-            self.send_response(200)
-            self.send_header("Content-Type", "application/json")
-            self.send_header("Content-Length", str(len(payload)))
-            self.end_headers()
-            self.wfile.write(payload)
-
-        def log_message(self, *a):
-            pass
-
-    server = http.server.HTTPServer(("127.0.0.1", 0), Handler)
-    threading.Thread(target=server.serve_forever, daemon=True).start()
-    port = server.server_address[1]
-
-    shim = repo.root / "shim.py"
-    shim.write_text(
-        "import runpy, sys, urllib.request\n"
-        "_orig = urllib.request.Request\n"
-        "def _patched(url, *a, **k):\n"
-        f"    return _orig('http://127.0.0.1:{port}/reviews', *a, **k)\n"
-        "urllib.request.Request = _patched\n"
-        f"sys.argv = ['gate', '--base', {repo.base!r}, '--sku-config', '.github/sku_config.yaml',\n"
-        f"            '--review-skus', {DEFAULT_REVIEW_SKUS!r}, '--non-matrix-files', {DEFAULT_NON_MATRIX!r},\n"
-        f"            '--codeowners', '.github/CODEOWNERS', '--unsupported-files', 'sample_vllm_tests.yaml',\n"
-        "            '--matrix-dir', 'empty', '--repo', 'o/r', '--pr', '1',\n"
-        "            '--output', 'result.json']\n"
-        f"runpy.run_path({str(SCRIPT)!r}, run_name='__main__')\n"
-    )
-    (repo.root / "empty").mkdir(exist_ok=True)
-    (repo.root / "empty/placeholder.json").write_text("[]")
-    step_output = repo.root / "step-output"
-    step_output.write_text("")
-    result = subprocess.run(
-        [sys.executable, str(shim)],
-        cwd=repo.root,
-        capture_output=True,
-        text=True,
-        env=dict(os.environ, GITHUB_OUTPUT=str(step_output)),
-    )
-    server.shutdown()
-    outputs = dict(
-        line.split("=", 1) for line in step_output.read_text().splitlines() if "=" in line and not line.startswith(" ")
-    )
-    return result.returncode, result.stdout, result.stderr, outputs
-
-
-def test_approval_from_the_files_own_code_owner_satisfies_the_gate(repo: Repo):
-    repo.write(".github/CODEOWNERS", CODEOWNERS)
-    repo.write("tests/pipeline_reorg/sample_galaxy_tests.yaml", BASE_GALAXY_YAML.replace("test_alpha", "test_beta"))
-    code, stdout, stderr, outputs = run_reviews(
-        repo, [{"state": "APPROVED", "commit_id": "headsha", "user": {"login": "mtairum"}}]
-    )
-    assert code == 0, stderr
-    assert outputs["review-met"] == "true"
-    assert "approved by: @mtairum" in stdout
-
-
-def test_approval_from_an_unrelated_owner_does_not_satisfy_the_gate(repo: Repo):
-    """roseli-TT owns the directory, but this file has its own more specific owners."""
-    repo.write(".github/CODEOWNERS", CODEOWNERS)
-    repo.write("tests/pipeline_reorg/sample_galaxy_tests.yaml", BASE_GALAXY_YAML.replace("test_alpha", "test_beta"))
-    code, _, stderr, outputs = run_reviews(
-        repo, [{"state": "APPROVED", "commit_id": "headsha", "user": {"login": "roseli-TT"}}]
-    )
-    assert code == 0, stderr
-    assert outputs["review-met"] == "false"
-    assert "@mtairum" in stderr
-
-
-def test_approval_on_an_earlier_commit_still_counts(repo: Repo):
-    """dismiss_stale_reviews_on_push is false on main, so GitHub keeps the approval
-    standing and the gate does not second-guess it."""
-    repo.write(".github/CODEOWNERS", CODEOWNERS)
-    repo.write("tests/pipeline_reorg/sample_galaxy_tests.yaml", BASE_GALAXY_YAML.replace("test_alpha", "test_beta"))
-    code, stdout, stderr, outputs = run_reviews(
-        repo, [{"state": "APPROVED", "commit_id": "oldsha", "user": {"login": "mtairum"}}]
-    )
-    assert code == 0, stderr
-    assert outputs["review-met"] == "true"
-    assert "approved by: @mtairum" in stdout
-
-
-def test_team_owned_path_falls_back_to_any_approval(repo: Repo):
-    repo.write(".github/CODEOWNERS", CODEOWNERS)
-    repo.write("tests/pipeline_reorg/sample_team_tests.yaml", BASE_GALAXY_YAML)
-    code, stdout, stderr, outputs = run_reviews(
-        repo, [{"state": "APPROVED", "commit_id": "headsha", "user": {"login": "anyone"}}]
-    )
-    assert code == 0, stderr
-    assert outputs["review-met"] == "true"
-    assert "falling back to the normal CODEOWNERS review requirement" in stdout
-
-
-def test_team_owned_path_with_no_approval_reports_unmet(repo: Repo):
-    """The gate reports the unmet review; the branch ruleset is what blocks the merge."""
-    repo.write(".github/CODEOWNERS", CODEOWNERS)
-    repo.write("tests/pipeline_reorg/sample_team_tests.yaml", BASE_GALAXY_YAML)
-    code, _, stderr, outputs = run_reviews(repo, [])
-    assert code == 0, stderr
-    assert outputs["review-met"] == "false"
-    assert "a code owner" in stderr
-
-
-# --- unsupported yamls -------------------------------------------------------
-
-
-def test_unsupported_yaml_is_blocked_not_skipped(repo: Repo):
-    """vllm entries carry no cmd, so they route to review rather than passing."""
-    repo.write(".github/CODEOWNERS", CODEOWNERS)
-    repo.write("tests/pipeline_reorg/sample_vllm_tests.yaml", BASE_GALAXY_YAML.replace("wh_galaxy", "bh_p150"))
-    code, _, stderr, outputs = run_reviews(repo, [])
-    assert code == 0, stderr
-    assert outputs["review-met"] == "false"
-    assert "sample_vllm_tests.yaml" in stderr
-
-
-def test_unsupported_yaml_never_produces_a_run_leg(repo: Repo):
-    repo.write("tests/pipeline_reorg/sample_vllm_tests.yaml", BASE_GALAXY_YAML.replace("wh_galaxy", "bh_p150"))
+def unsupported_scope(repo: Repo):
+    """Scope with sample_vllm_tests.yaml declared unsupported."""
     argv = [
         sys.executable,
         str(SCRIPT),
@@ -1175,11 +1146,48 @@ def test_unsupported_yaml_never_produces_a_run_leg(repo: Repo):
         "result.json",
     ]
     result = subprocess.run(argv, cwd=repo.root, capture_output=True, text=True)
-    assert result.returncode == 0, result.stderr
-    payload = json.loads((repo.root / "result.json").read_text())
-    assert payload["status"] == "blocked"
+    payload = json.loads((repo.root / "result.json").read_text()) if result.returncode == 0 else None
+    return result.returncode, payload, result.stderr
+
+
+def test_unsupported_yaml_is_dropped_not_reported(repo: Repo):
+    """vllm entries carry no cmd. The gate cannot run them and says nothing about
+    them -- CODEOWNERS gates the edit."""
+    repo.write("tests/pipeline_reorg/sample_vllm_tests.yaml", BASE_GALAXY_YAML.replace("wh_galaxy", "bh_p150"))
+    code, payload, stderr = unsupported_scope(repo)
+    assert code == 0, stderr
+    assert payload["status"] == "no_op"
     assert payload["run_legs"] == []
-    assert {leg["blocked_by"] for leg in payload["review_legs"]} == {"unsupported_yaml"}
+
+
+def test_unsupported_yaml_is_never_parsed(repo: Repo):
+    """Excluded at the head of the parse, so even a broken one costs nothing."""
+    repo.write("tests/pipeline_reorg/sample_vllm_tests.yaml", "{ this is: not, valid yaml\n")
+    code, payload, stderr = unsupported_scope(repo)
+    assert code == 0, stderr
+    assert payload["status"] == "no_op"
+
+
+def test_entry_with_only_review_only_skus_is_dropped_whole(repo: Repo):
+    """galaxy alpha is wh_galaxy only, so nothing is left for the gate to run."""
+    repo.write("tests/pipeline_reorg/sample_galaxy_tests.yaml", BASE_GALAXY_YAML.replace("U003", "U999x"))
+    code, payload, _ = repo.scope()
+    assert code == 0
+    assert payload["status"] == "no_op"
+    assert payload["run_legs"] == []
+
+
+def test_review_only_skus_are_dropped_but_runnable_ones_survive(repo: Repo):
+    """A mixed entry keeps its runnable legs and silently loses the rest."""
+    mixed = BASE_GALAXY_YAML.replace(
+        "    wh_galaxy:\n      timeout: 30\n",
+        "    wh_galaxy:\n      timeout: 30\n    bh_p150:\n      timeout: 30\n",
+    )
+    repo.write("tests/pipeline_reorg/sample_galaxy_tests.yaml", mixed)
+    code, payload, _ = repo.scope()
+    assert code == 0
+    assert payload["status"] == "run"
+    assert [leg["sku"] for leg in payload["run_legs"]] == ["bh_p150"]
 
 
 # --- simulator timeout stripping ---------------------------------------------
@@ -1369,51 +1377,30 @@ CMDLESS_VLLM_YAML = """\
 
 
 def run_building_matrices(repo: Repo, unsupported: str, review_skus: str = DEFAULT_REVIEW_SKUS):
-    """Invoke the real build_matrices path -- prepare script runs, no --matrix-dir stub.
-
-    Reviews are stubbed as in run_reviews(): an unsupported yaml always yields a review leg.
-    """
-    import http.server, threading
-
-    payload = json.dumps([]).encode()
-
-    class Handler(http.server.BaseHTTPRequestHandler):
-        def do_GET(self):
-            self.send_response(200)
-            self.send_header("Content-Type", "application/json")
-            self.send_header("Content-Length", str(len(payload)))
-            self.end_headers()
-            self.wfile.write(payload)
-
-        def log_message(self, *a):
-            pass
-
-    server = http.server.HTTPServer(("127.0.0.1", 0), Handler)
-    threading.Thread(target=server.serve_forever, daemon=True).start()
-    port = server.server_address[1]
-
-    shim = repo.root / "matrix_shim.py"
-    shim.write_text(
-        "import runpy, sys, urllib.request\n"
-        "_orig = urllib.request.Request\n"
-        "def _patched(url, *a, **k):\n"
-        f"    return _orig('http://127.0.0.1:{port}/reviews', *a, **k)\n"
-        "urllib.request.Request = _patched\n"
-        f"sys.argv = ['gate', '--base', {repo.base!r}, '--sku-config', '.github/sku_config.yaml',\n"
-        f"            '--review-skus', {review_skus!r}, '--unsupported-files', {unsupported!r},\n"
-        f"            '--prepare-script', {str(Path(SCRIPT).parent / 'prepare_test_matrix.py')!r},\n"
-        "            '--repo', 'o/r', '--pr', '1',\n"
-        "            '--output', 'result.json']\n"
-        f"runpy.run_path({str(SCRIPT)!r}, run_name='__main__')\n"
-    )
-    result = subprocess.run([sys.executable, str(shim)], cwd=repo.root, capture_output=True, text=True)
-    server.shutdown()
+    """Invoke the real build_matrices path -- prepare script runs, no --matrix-dir stub."""
+    argv = [
+        sys.executable,
+        str(SCRIPT),
+        "--base",
+        repo.base,
+        "--sku-config",
+        ".github/sku_config.yaml",
+        "--review-skus",
+        review_skus,
+        "--unsupported-files",
+        unsupported,
+        "--prepare-script",
+        str(Path(SCRIPT).parent / "prepare_test_matrix.py"),
+        "--output",
+        "result.json",
+    ]
+    result = subprocess.run(argv, cwd=repo.root, capture_output=True, text=True)
     payload = json.loads((repo.root / "result.json").read_text()) if result.returncode == 0 else None
     return result.returncode, payload, result.stdout + result.stderr
 
 
 def test_unsupported_yaml_is_not_handed_to_prepare_test_matrix(repo: Repo):
-    """An unsupported yaml's legs are all blocked, so no matrix is built for it.
+    """An unsupported yaml is dropped before the parse, so no matrix is built for it.
 
     vllm entries carry no `cmd`, so building one exits non-zero and fails the gate.
     The supported yaml changed in the same PR must still resolve.
@@ -1427,4 +1414,88 @@ def test_unsupported_yaml_is_not_handed_to_prepare_test_matrix(repo: Repo):
     assert code == 0, output
     assert "cmd is missing" not in output
     assert {leg["sku"] for leg in payload["run_legs"]} == {"wh_n150_civ2", "wh_n300_civ2"}
-    assert [leg["blocked_by"] for leg in payload["review_legs"]] == ["unsupported_yaml"]
+
+
+# --- batched base-blob reads -------------------------------------------------
+
+
+def gate_module():
+    """Import verify_changed_tests.py for direct unit tests."""
+    import importlib.util
+
+    spec = importlib.util.spec_from_file_location("gate_mod", SCRIPT)
+    mod = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(mod)
+    return mod
+
+
+def test_git_show_many_round_trips_against_git_show(src_repo: Repo):
+    """Contents must match byte for byte, and a missing path maps to None."""
+    mod = gate_module()
+    cwd = os.getcwd()
+    os.chdir(src_repo.root)
+    try:
+        got = mod.git_show_many(
+            src_repo.base,
+            ["tests/pipeline_reorg/sample_src_tests.yaml", "nope/missing.yaml", ".gitignore"],
+        )
+        for path in ("tests/pipeline_reorg/sample_src_tests.yaml", ".gitignore"):
+            expected = subprocess.run(["git", "show", f"{src_repo.base}:{path}"], capture_output=True, text=True).stdout
+            assert got[path] == expected
+        assert got["nope/missing.yaml"] is None
+    finally:
+        os.chdir(cwd)
+
+
+def test_git_show_many_handles_a_blob_containing_a_missing_line(src_repo: Repo):
+    """Parsing by declared size, not by newline, is what makes this safe."""
+    mod = gate_module()
+    src_repo.write("tests/decoy.txt", "deadbeef missing\nsecond line\n")
+    src_repo.commit_base()
+    cwd = os.getcwd()
+    os.chdir(src_repo.root)
+    try:
+        got = mod.git_show_many(src_repo.base, ["tests/decoy.txt", ".gitignore"])
+        assert got["tests/decoy.txt"] == "deadbeef missing\nsecond line\n"
+        assert got[".gitignore"] is not None  # the next header was still found
+    finally:
+        os.chdir(cwd)
+
+
+def test_git_show_many_rejects_a_non_blob(src_repo: Repo):
+    """A directory resolves to a tree, whose bytes are not a tests yaml."""
+    mod = gate_module()
+    cwd = os.getcwd()
+    os.chdir(src_repo.root)
+    try:
+        with pytest.raises(Exception) as excinfo:
+            mod.git_show_many(src_repo.base, ["tests/pipeline_reorg"])
+        assert "cat-file header" in str(excinfo.value)
+    finally:
+        os.chdir(cwd)
+
+
+def test_git_show_many_is_a_single_subprocess(src_repo: Repo, monkeypatch):
+    """The whole point: one call regardless of how many paths are requested."""
+    mod = gate_module()
+    calls = []
+    real = subprocess.run
+
+    def counting(cmd, *a, **k):
+        if isinstance(cmd, list) and cmd[:2] == ["git", "cat-file"]:
+            calls.append(cmd)
+        return real(cmd, *a, **k)
+
+    monkeypatch.setattr(mod.subprocess, "run", counting)
+    cwd = os.getcwd()
+    os.chdir(src_repo.root)
+    try:
+        mod.git_show_many(src_repo.base, [f"tests/pipeline_reorg/sample_src_tests.yaml"] * 3 + [".gitignore"])
+    finally:
+        os.chdir(cwd)
+    assert len(calls) == 1
+
+
+def test_git_show_many_with_no_paths_does_not_call_git(src_repo: Repo):
+    mod = gate_module()
+    assert mod.git_show_many(src_repo.base, []) == {}
