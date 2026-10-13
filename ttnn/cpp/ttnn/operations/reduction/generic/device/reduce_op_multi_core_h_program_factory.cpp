@@ -12,6 +12,7 @@
 #include <tt-metalium/math.hpp>
 #include <tt-metalium/bfloat16.hpp>
 #include <bit>
+#include <cstdlib>
 #include <cmath>
 #include <limits>
 #include <numeric>
@@ -320,11 +321,16 @@ ReduceDeviceOperation::ReduceMultiCoreHProgramFactory::create_program_artifacts(
         });
     } else {
         uint32_t num_output_tiles = use_fpu_negate ? chunk_size : 2;
+        // Scratch timing bound (not for merge): pack a 1x32 reduced tile and write only its 64 B, the padding rows unwritten.
+        static const bool probe_1x32 = std::getenv("TT_HR_REDUCE_H_1X32") != nullptr;
+        const bool row_tile = probe_1x32 && !tile_h_split && !use_fpu_negate &&
+                              (dst_cb_data_format == tt::DataFormat::Float16_b || dst_cb_data_format == tt::DataFormat::Float32);
         spec.dataflow_buffers.push_back(DataflowBufferSpec{
             .unique_id = OUT_DFB,
-            .entry_size = dst_single_tile_size,
+            .entry_size = row_tile ? dst_single_tile_size / 32 : dst_single_tile_size,
             .num_entries = num_output_tiles,
             .data_format_metadata = dst_cb_data_format,
+            .tile_format_metadata = row_tile ? std::optional<tt::tt_metal::Tile>(tt::tt_metal::Tile({1, 32})) : std::nullopt,
         });
     }
 
