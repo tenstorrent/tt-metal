@@ -14,6 +14,7 @@ $serving
 ## Read first
 - `models/demos/common/bringup/knowledge/repo_map.md`
 - `models/demos/common/bringup/knowledge/known_issues.md`
+- `$bringup_dir/repo_map.md` and `$bringup_dir/known_issues.md` (this model's own; absent until a step adds to them)
 - `$spec_path` (the model spec)
 $read_list
 
@@ -34,5 +35,6 @@ Run it from the repo root with `PYTHONPATH=$repo`. Device code only through `scr
 
 $previous
 ## When you finish
-Add a known-issues or repo-map proposal if you learned something new, append to `$breadcrumbs`, and end with a short summary.
+If you learned something new, add it to `$bringup_dir/known_issues.md` (or a pointer to `$bringup_dir/repo_map.md`);
+append to `$breadcrumbs`, and end with a short summary.
 Do not commit.

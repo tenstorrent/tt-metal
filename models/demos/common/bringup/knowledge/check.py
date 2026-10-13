@@ -1,13 +1,15 @@
 # SPDX-FileCopyrightText: © 2026 Tenstorrent AI ULC
 #
 # SPDX-License-Identifier: Apache-2.0
-"""Format check for the shared knowledge files (run by the orchestrator after every agent step).
+"""Format check for the knowledge files (run by the orchestrator after every agent step).
 
-    python -m models.demos.common.bringup.knowledge.check [--known-issues PATH] [--repo-map PATH]
+    python -m models.demos.common.bringup.knowledge.check [--known-issues PATH] [--repo-map PATH] [--model-dir DIR]
 
-known_issues.md: the five sections plus "Proposed", every bullet has Symptom:, Cause:, Fix:, Found:.
-repo_map.md: a table with a Need and a Where column; every backticked repo path in it exists.
-Records known_issue_errors, repo_map_errors, proposed_entries.
+Shared known_issues.md: the six sections; every bullet has Symptom:, Cause:, Fix:, Found:, the anchors Applies to: and
+Seen at:, and stays within SHARED_MAX_CHARS. A model's bringup/known_issues.md (--model-dir): bullets with Symptom:,
+Cause:, Fix:, Found: (no sections, no anchors required). repo_map.md (shared and the model's): a table with a Need and
+a Where column; every backticked repo path in it exists.
+Records known_issue_errors, repo_map_errors, model_entries (the model's known issues, for the run-end curation).
 """
 
 from __future__ import annotations
@@ -20,8 +22,11 @@ from models.demos.common.bringup.core import metrics
 from models.demos.common.bringup.core.spec import CODE_ROOT
 
 HERE = Path(__file__).resolve().parent
-SECTIONS = ["API behavior", "Accuracy", "Performance", "Infrastructure", "Serving contract", "Proposed"]
+SECTIONS = ["API behavior", "Accuracy", "Testing", "Performance", "Infrastructure", "Serving contract"]
 FIELDS = ("Symptom:", "Cause:", "Fix:", "Found:")
+ANCHORS = ("Applies to:", "Seen at:")
+# Every agent step reads the shared file in full: one lesson is one short bullet (detail goes to the model's file).
+SHARED_MAX_CHARS = 800
 
 
 def entries(text: str) -> dict[str, list[str]]:
@@ -36,15 +41,27 @@ def entries(text: str) -> dict[str, list[str]]:
 
 
 def check_known_issues(path: Path) -> tuple[list[str], int]:
+    """The shared file: (errors, number of entries)."""
     ent = entries(path.read_text())
     errs = [f"missing section '{s}'" for s in SECTIONS if s not in ent]
     errs += [f"unknown section '{s}'" for s in ent if s not in SECTIONS]
     for sec, items in ent.items():
         for it in items:
-            miss = [f for f in FIELDS if f not in it]
+            miss = [f for f in FIELDS + ANCHORS if f not in it]
             if miss:
                 errs.append(f"{sec}: entry {it[:60]!r} lacks {miss}")
-    return errs, len(ent.get("Proposed", []))
+            if len(it) > SHARED_MAX_CHARS:
+                errs.append(f"{sec}: entry {it[:60]!r} is {len(it)} chars (max {SHARED_MAX_CHARS})")
+    return errs, sum(len(v) for v in ent.values())
+
+
+def check_model_known_issues(path: Path) -> tuple[list[str], int]:
+    """A model's bringup/known_issues.md (absent is fine): (errors, number of entries)."""
+    if not path.exists():
+        return [], 0
+    items = [line for line in path.read_text().splitlines() if line.startswith("- ")]
+    errs = [f"entry {it[:60]!r} lacks {miss}" for it in items if (miss := [f for f in FIELDS if f not in it])]
+    return errs, len(items)
 
 
 def check_repo_map(path: Path, root: Path = CODE_ROOT) -> list[str]:
@@ -60,16 +77,24 @@ def main(argv=None):
     ap = argparse.ArgumentParser()
     ap.add_argument("--known-issues", default=str(HERE / "known_issues.md"))
     ap.add_argument("--repo-map", default=str(HERE / "repo_map.md"))
+    ap.add_argument("--model-dir", help="also check <dir>/bringup/known_issues.md and repo_map.md")
     a = ap.parse_args(argv)
-    ki, proposed = check_known_issues(Path(a.known_issues))
+    ki, _ = check_known_issues(Path(a.known_issues))
     rm = check_repo_map(Path(a.repo_map))
+    model_entries = 0
+    if a.model_dir:
+        b = Path(a.model_dir) / "bringup"
+        mki, model_entries = check_model_known_issues(b / "known_issues.md")
+        ki += [f"{b / 'known_issues.md'}: {e}" for e in mki]
+        if (b / "repo_map.md").exists():
+            rm += [f"{b / 'repo_map.md'}: {e}" for e in check_repo_map(b / "repo_map.md")]
     for e in ki:
         print(f"KNOWN ISSUES {e}")
     for e in rm:
         print(f"REPO MAP {e}")
     metrics.record("known_issue_errors", len(ki))
     metrics.record("repo_map_errors", len(rm))
-    metrics.record("proposed_entries", proposed)
+    metrics.record("model_entries", model_entries)
     return 1 if ki or rm else 0
 
 
