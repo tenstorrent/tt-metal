@@ -54,17 +54,17 @@ extern "C" __attribute__((noinline, used)) void declare_resources()
 {
     misc::run<misc::ResourceDeclaration {}>();
     misc::run<misc::ResourceDeclaration {3, 0x1ff, 7}>();
-    misc::run<misc::ResourceDeclaration {15, 0, 2047}>();
+    misc::run<misc::ResourceDeclaration {15, 0, 15}>();
 }
 
 // The default declaration is class 0, no resources, and a one-cycle linger.
 // CHECK-LABEL: <declare_resources>:
 // CHECK-NEXT: ttresourcedecl 1,0,0
 // CHECK-NEXT: ttresourcedecl 7,511,3
-// CHECK-NEXT: ttresourcedecl 2047,0,15
+// CHECK-NEXT: ttresourcedecl 15,0,15
 // CHECK-NEXT: ret
 
-static_assert(misc::is_valid(misc::ResourceDeclaration {15, 0x1ff, 2047}));
+static_assert(misc::is_valid(misc::ResourceDeclaration {15, 0x1ff, 15}));
 static_assert(!misc::is_valid(misc::ResourceDeclaration {16, 0, 1}));
 static_assert(!misc::is_valid(misc::ResourceDeclaration {0, 0x200, 1}));
-static_assert(!misc::is_valid(misc::ResourceDeclaration {0, 0, 2048}));
+static_assert(!misc::is_valid(misc::ResourceDeclaration {0, 0, 16}));

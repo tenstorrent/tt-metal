@@ -96,7 +96,7 @@ extern "C" void reject_invalid_runtime_descriptors()
     (void)hm::FlushTdma {static_cast<hm::FlushScope>(16)}.operation();
     (void)hm::ResourceDeclaration {16, 0, 1}.operation();
     (void)hm::ResourceDeclaration {0, 512, 1}.operation();
-    (void)hm::ResourceDeclaration {0, 0, 2048}.operation();
+    (void)hm::ResourceDeclaration {0, 0, 16}.operation();
 }
 
 // ASSERT-LABEL: <reject_invalid_runtime_descriptors>:

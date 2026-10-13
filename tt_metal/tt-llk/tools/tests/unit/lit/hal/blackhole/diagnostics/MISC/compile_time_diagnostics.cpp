@@ -55,7 +55,7 @@ void probe()
 
 void probe()
 {
-    misc::run<misc::ResourceDeclaration {0, 0, 2048}>();
+    misc::run<misc::ResourceDeclaration {0, 0, 16}>();
 }
 
 //--- constant-encoding.cpp
