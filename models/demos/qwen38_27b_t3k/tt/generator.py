@@ -13,7 +13,7 @@ from transformers import AutoTokenizer
 
 import ttnn
 from models.common.sampling.tt_sampling import TTSampling
-from models.demos.qwen38_27b_t3k.tt.model import MAX_SERVING_BATCH, Qwen38Model
+from models.demos.qwen38_27b_t3k.tt.model import CONV_HISTORY, MAX_SERVING_BATCH, Qwen38Model
 
 # Mirrors FabricEriscDatamoverBuilder::max_packet_payload_size_bytes_{wormhole,blackhole} in
 # tt_metal/fabric/erisc_datamover_builder.hpp (7 and 14 Bfp8_b tiles of 1088 B), the same way
@@ -54,6 +54,23 @@ def configure_fabric(*, payload_bytes=None):
 # One live snapshot per serving slot. Each costs 19.24 MB per device, so the whole set is about
 # 5% of the state budget left beside a two-context KV pool.
 MAX_PREFIX_SNAPSHOTS = MAX_SERVING_BATCH
+
+
+def prefill_bucket(valid, capacity, start=0):
+    """Round a prompt up to the pages the scheduler has already given it.
+
+    Device programs are built per logical length, so an unrounded prompt compiles the whole stack
+    the first time that exact token count is served. A 32-token page is the ceiling: the scheduler
+    allocates ceil(prompt/32) blocks, so rounding there stays on pages this request owns, and
+    rounding past it would write a block the table pads with zero -- physical page 0, somebody
+    else's.
+    """
+    bucket = (valid + 31) // 32 * 32
+    if start + bucket > capacity or valid < CONV_HISTORY:
+        # Too short to hold one convolution history window, so the selectors that keep the prompt
+        # length out of the program have nothing to point at.
+        return valid
+    return bucket
 
 
 def validate_prefix_continuity(starts, slots, prefix_lens):
@@ -129,6 +146,7 @@ class Qwen38Generator:
         self._state_snapshots = {}
         self._next_snapshot_handle = 0
         self.prefill_signatures = set()
+        self._prefill_selectors = {}
         self.page_host = None
         self.counters = Counter()
         self.last_perf = {}
@@ -203,6 +221,8 @@ class Qwen38Generator:
             cache=cache,
             page_table=self.page_table,
             length=prepared["length"],
+            valid=prepared["valid"],
+            selectors=prepared["selectors"],
             positions=prepared["positions"],
         )
         return ttnn.pad(logits, [(0, 0), (0, 0), (0, 31), (0, 0)], value=0.0)
@@ -217,9 +237,12 @@ class Qwen38Generator:
         resident = getattr(self.model, "_resident_decode_bucket", None)
         if resident is not None and not (resident[1] == (0,) and self.model._resident_decode_valid):
             self.model.suspend_decode_bucket()
-        length = tokens.shape[-1]
+        valid = tokens.shape[-1]
         if (tokens < 0).any() or (tokens >= self.model.config.vocab_size).any():
             raise ValueError("Token IDs lie outside the vocabulary")
+        length = prefill_bucket(valid, self.cache.capacity)
+        if length != valid:
+            tokens = torch.nn.functional.pad(tokens, (0, length - valid))
         key = (
             id(self.cache),
             self.cache.batch_size,
@@ -239,7 +262,9 @@ class Qwen38Generator:
             self.prefill_prepared = dict(
                 key=key,
                 length=length,
+                valid=valid,
                 trace_sampling=trace_sampling,
+                selectors=None if length == valid else self._bucket_selectors(length),
                 tokens=self.model.upload(tokens.int(), dtype=ttnn.uint32, layout=ttnn.ROW_MAJOR_LAYOUT),
                 positions=self.model.upload(
                     torch.arange(length, dtype=torch.int32).reshape(1, length),
@@ -249,12 +274,14 @@ class Qwen38Generator:
             )
             # This is the real prefill, so it both warms the graph and advances
             # request state exactly once. Allocate and warm the output copy too.
+            self._aim_prefill_selectors(valid)
             logits = self._prefill_trace_logits()
             self.prefill_prepared["output"] = ttnn.clone(logits)
             ttnn.copy(logits, self.prefill_prepared["output"])
             self.counters["prefill_eager_calls"] += 1
         else:
             self._copy(tokens.int(), self.prefill_prepared["tokens"], "prefill_token_refreshes")
+            self._aim_prefill_selectors(valid)
             if self.prefill_trace is None:
                 # G=1 need not create a decode pair just to capture prefill.
                 self._prefill_trace_step()
@@ -264,6 +291,31 @@ class Qwen38Generator:
                 self.counters["prefill_replays"] += 1
         self.prefill_signatures.add((self.cache.batch_size, tuple(self.page_table.shape), 0, 0, length, False))
         return self.prefill_prepared["output"]
+
+    def _bucket_selectors(self, bucket):
+        """One selector set per bucket, kept for the generator's life.
+
+        They hold no request state and no cache binding, so reusing them is what keeps a second
+        prompt of the same bucket from allocating behind a live trace.
+        """
+        selectors = self._prefill_selectors.get(bucket)
+        if selectors is None:
+            selectors = self._prefill_selectors[bucket] = self.model.prefill_selectors(length=bucket)
+            self.counters["prefill_selector_allocations"] += 1
+        return selectors
+
+    def _aim_prefill_selectors(self, valid):
+        """Point this bucket's selectors at the prompt about to run.
+
+        The copies must land before replay and outside the trace: the trace holds the buffers, not
+        their contents, which is the whole reason a second prompt of a different length can reuse
+        it.
+        """
+        self.prefill_prepared["valid"] = valid
+        selectors = self.prefill_prepared["selectors"]
+        if selectors is not None:
+            selectors.update(valid)
+            self.counters["prefill_selector_refreshes"] += 1
 
     def serving_prefill_tokens(self, tokens, *, page_table, kv_cache, prompt_lens, start_pos, slots):
         """Sample scheduler rows; prompt_lens are absolute exclusive prompt ends."""
@@ -459,7 +511,14 @@ class Qwen38Generator:
         if len(starts) != len(slots) or len(slots) != len(prompt_lens) or len(set(slots)) != len(slots):
             raise ValueError("Each prompt must name one distinct fixed slot")
         signatures = {
-            (kv_cache.batch_size, tuple(page_table.shape), slot, start, length, return_all_logits)
+            (
+                kv_cache.batch_size,
+                tuple(page_table.shape),
+                slot,
+                start,
+                prefill_bucket(min(4096, length), kv_cache.capacity, start),
+                return_all_logits,
+            )
             for slot, start, length in zip(slots, starts, prompt_lens)
         }
         if getattr(self, "batched_prefill", False) and len(slots) > 1:
@@ -515,22 +574,28 @@ class Qwen38Generator:
             chunks = []
             for offset in range(0, length, 4096):
                 count = min(4096, length - offset)
-                ids = self.model.upload(
-                    tokens[row : row + 1, offset : offset + count].int(),
-                    dtype=ttnn.uint32,
-                    layout=ttnn.ROW_MAJOR_LAYOUT,
-                )
+                bucket = prefill_bucket(count, kv_cache.capacity, start + offset)
+                piece = tokens[row : row + 1, offset : offset + count].int()
+                if bucket != count:
+                    piece = torch.nn.functional.pad(piece, (0, bucket - count))
+                ids = self.model.upload(piece, dtype=ttnn.uint32, layout=ttnn.ROW_MAJOR_LAYOUT)
+                selectors = None
+                if bucket != count:
+                    selectors = self._bucket_selectors(bucket)
+                    selectors.update(count)
                 logits = self.model.prefill(
                     ids,
                     cache=kv_cache,
                     page_table=table,
-                    length=count,
+                    length=bucket,
+                    valid=count,
+                    selectors=selectors,
                     start_pos=start + offset,
                     slot=slot,
                     all_logits=return_all_logits,
                 )
                 if return_all_logits:
-                    chunks.append(self._host_logits(logits))
+                    chunks.append(self._host_logits(logits)[:, :count, :])
             self._end_prefix([slot], [start + length])
             results.append(torch.cat(chunks, dim=1) if return_all_logits else logits)
         self.prefill_signatures.update(signatures)

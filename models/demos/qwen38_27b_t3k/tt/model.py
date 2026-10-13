@@ -81,6 +81,42 @@ def head_decode_chunks(shard_vocab, banks, target=16384):
     return chunks, (aligned, shard_vocab) if aligned < shard_vocab else None
 
 
+CONV_HISTORY = 3
+
+
+class PrefillSelectors:
+    """Which rows of a bucketed prefill are the prompt, as device buffers a trace can re-read.
+
+    One set per bucket, reused by every prompt that rounds into it. update() is the only thing a
+    new prompt length changes, so the programs built around these buffers, and the trace holding
+    them, stay valid.
+    """
+
+    def __init__(self, *, length, beta, decay, tail, last, heads):
+        self.length, self.heads = length, heads
+        self.beta, self.decay, self.tail, self.last = beta, decay, tail, last
+        self.valid = None
+
+    def update(self, valid):
+        if not CONV_HISTORY <= valid <= self.length:
+            raise ValueError("A bucketed prompt must hold at least one convolution history window")
+        if valid == self.valid:
+            return
+        rows = torch.zeros(1, self.length, self.heads)
+        rows[:, :valid, :] = 1.0
+        last = torch.zeros(1, 1, self.length)
+        last[0, 0, valid - 1] = 1.0
+        tail = torch.zeros(1, CONV_HISTORY, self.length)
+        for row in range(CONV_HISTORY):
+            tail[0, row, valid - CONV_HISTORY + row] = 1.0
+        for host, target in ((rows, self.beta), (rows, self.decay), (tail, self.tail), (last, self.last)):
+            if target is not None:
+                ttnn.copy_host_to_device_tensor(
+                    ttnn.from_torch(host.contiguous(), dtype=target.dtype, layout=target.layout), target
+                )
+        self.valid = valid
+
+
 class Qwen38Model:
     def __init__(self, mesh_device, *, snapshot=None, layer_indices=None, head_strategy="dram", precision_config=None):
         self.TP = resolve_mesh_tp(mesh_device)
@@ -322,8 +358,60 @@ class Qwen38Model:
             )
         return ttnn.concat(parts, dim=-1)
 
-    def prefill(self, tokens, *, cache, page_table, length, start_pos=0, slot=0, all_logits=False, positions=None):
-        """Single request, logical length; independent fixed-slot state is updated on device."""
+    def prefill_selectors(self, *, length):
+        """Persistent buffers that say which rows of a bucketed prefill are the prompt.
+
+        Everything here exists so the prompt length stays out of the program. A slice bakes its
+        offset into the kernel, which makes every prompt length its own compilation and its own
+        trace; a selector of fixed shape whose contents change moves that into a host-to-device
+        copy, which a captured trace reads on replay.
+        """
+        layer = next((layer for layer in self.layers if layer.kind == "linear_attention"), None)
+        heads = 0 if layer is None else layer.config.linear_num_value_heads
+        return PrefillSelectors(
+            length=length,
+            beta=None if layer is None else self.upload(torch.zeros(1, length, heads), dtype=ttnn.bfloat16),
+            decay=None if layer is None else self.upload(torch.zeros(1, length, heads), dtype=ttnn.float32),
+            tail=None if layer is None else self.upload(torch.zeros(1, CONV_HISTORY, length)),
+            last=self.upload(torch.zeros(1, 1, length)),
+            heads=heads,
+        )
+
+    def prefill(
+        self,
+        tokens,
+        *,
+        cache,
+        page_table,
+        length,
+        start_pos=0,
+        slot=0,
+        all_logits=False,
+        positions=None,
+        valid=None,
+        selectors=None,
+    ):
+        """Single request, logical length; independent fixed-slot state is updated on device.
+
+        A bucketed prompt passes valid < length: length sizes every program, valid says how much of
+        it is the prompt. Both are needed because the 48 recurrent layers summarise what they are
+        given, so the padding has to be masked out rather than ignored.
+        """
+        valid = length if valid is None else valid
+        if not 1 <= valid <= length:
+            raise ValueError("Prefill valid length lies outside the prompt")
+        if valid != length and length % 32:
+            raise ValueError("A bucketed prefill must be a whole number of pages")
+        if valid != length:
+            if selectors is None:
+                selectors = self.prefill_selectors(length=length)
+                selectors.update(valid)
+            elif selectors.length != length or selectors.valid != valid:
+                # Aiming them is the caller's, because the copies have to happen outside any trace
+                # this call is being captured into.
+                raise ValueError("Prefill selectors do not match this prompt")
+        else:
+            selectors = None
         x = self.embed(tokens, batch=1, length=length)
         if positions is None:
             positions = self.upload(
@@ -348,7 +436,15 @@ class Qwen38Model:
             else:
                 local = state
             x = layer.prefill_forward(
-                x, state=local, start_pos=start_pos, page_table=table, cos=cc, sin=ss, positions=pos_matrix
+                x,
+                state=local,
+                start_pos=start_pos,
+                page_table=table,
+                cos=cc,
+                sin=ss,
+                positions=pos_matrix,
+                valid=valid,
+                selectors=selectors,
             )
             if local is not state:
                 # Slice outputs do not alias their source. Scatter the request state back.
@@ -359,7 +455,9 @@ class Qwen38Model:
                         pieces.append(before[slot + 1 :])
                     ttnn.copy(ttnn.concat(pieces, dim=0), before)
         if not all_logits:
-            x = x[:, length - 1 : length, :]
+            # A one-hot read rather than a slice: the row index is data the trace reloads, not an
+            # offset compiled into it.
+            x = x[:, valid - 1 : valid, :] if selectors is None else ttnn.matmul(selectors.last, x)
         return self.logits(x, decode=not all_logits)
 
     def prefill_batch(self, tokens, *, cache, page_table, length, start_pos, slots, positions=None, return_logits=True):

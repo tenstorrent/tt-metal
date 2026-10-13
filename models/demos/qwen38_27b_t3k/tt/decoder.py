@@ -884,11 +884,14 @@ class Qwen38Decoder(LightweightModule):
         attention = outputs[0] if b == 1 else ttnn.concat(outputs, dim=0)
         return self._attention_output(attention, gate)
 
-    def _delta(self, x, state):
+    def _delta(self, x, state, selectors=None, valid=None):
         if len(x.shape) == 4:
             b, t = x.shape[-2], 1
         else:
             b, t, _ = x.shape
+        valid = t if valid is None else valid
+        if not 1 <= valid <= t:
+            raise ValueError("Recurrent valid length lies outside its chunk")
         c = self.config
         h, hv, d = c.linear_num_key_heads, c.linear_num_value_heads, c.linear_key_head_dim
         packed = self._linear(x, "linear_attn.packed")
@@ -928,9 +931,13 @@ class Qwen38Decoder(LightweightModule):
                     )
                 )
             q, k, v = [parts[0] if b == 1 else ttnn.concat(parts, dim=0) for parts in zip(*chunks)]
-        history_tail = (
-            row_qkv[:, t - 3 : t, :] if t >= 3 else ttnn.concat([state.conv[:, t:, :], row_qkv[:, :t, :]], dim=1)
-        )
+        if selectors is not None:
+            # The window the next step convolves over, read by one-hot so its position stays data.
+            history_tail = ttnn.to_layout(ttnn.matmul(selectors.tail, padded_qkv), ttnn.ROW_MAJOR_LAYOUT)
+        elif valid >= 3:
+            history_tail = row_qkv[:, valid - 3 : valid, :]
+        else:
+            history_tail = ttnn.concat([state.conv[:, valid:, :], row_qkv[:, :valid, :]], dim=1)
         ttnn.copy(history_tail, state.conv)
 
         g = ttnn.mul(
@@ -947,6 +954,11 @@ class Qwen38Decoder(LightweightModule):
             # log-decay make every padded recurrence step an identity, even
             # when its convolution Q/K/V values are nonzero.
             g, beta = [pad_time(a) for a in (g, beta)]
+        if selectors is not None:
+            # A bucketed prompt carries real values in its trailing rows, so the
+            # identity has to be multiplied in rather than padded in.
+            g = ttnn.mul(g, selectors.decay)
+            beta = ttnn.mul(beta, selectors.beta)
         # The native scan assigns one value head to each core. Split only
         # its independent batch axis, preserving the public batch contract.
         grid = self.device.compute_with_storage_grid_size()
@@ -998,7 +1010,9 @@ class Qwen38Decoder(LightweightModule):
         )
         return self._finish(x, attention)
 
-    def prefill_forward(self, x, *, state, start_pos=0, page_table=None, cos=None, sin=None, positions=None):
+    def prefill_forward(
+        self, x, *, state, start_pos=0, page_table=None, cos=None, sin=None, positions=None, valid=None, selectors=None
+    ):
         """Logical [B,S,5120] prompt/continuation; start_pos is absolute prefix length.
 
         For full attention, positions is an INT32 device tensor [S,B]. It is
@@ -1006,10 +1020,18 @@ class Qwen38Decoder(LightweightModule):
         this prefill batch share the same logical length and prefix position.
         Linear-attention request state must correspond to that prefix; fresh
         requests receive newly allocated or explicitly restored zero state.
+
+        A bucketed prompt supplies valid < S and the matching recurrent mask, so
+        the programs this builds depend on the bucket rather than on the prompt.
+        Attention needs neither: the trailing rows land on pages this request
+        already owns, at positions decode overwrites before it reads them.
         """
         length = x.shape[1]
         if length < 1 or start_pos < 0 or start_pos + length > self.config.max_position_embeddings:
             raise ValueError("Prefill lies outside the advertised context")
+        valid = length if valid is None else valid
+        if not 1 <= valid <= length:
+            raise ValueError("Prefill valid length lies outside the prompt")
         outputs = []
         offset = 0
         while offset < length:
@@ -1019,7 +1041,10 @@ class Qwen38Decoder(LightweightModule):
             chunk = ttnn.to_layout(x[:, offset : offset + count, :], ttnn.TILE_LAYOUT)
             n = self._norm(chunk, "input_layernorm")
             if self.kind == "linear_attention":
-                attention = self._delta(n, state)
+                chunk_valid = min(max(valid - offset, 0), count)
+                if chunk_valid == 0:
+                    raise ValueError("A prefill chunk must hold at least one real token")
+                attention = self._delta(n, state, selectors=selectors, valid=chunk_valid)
             else:
                 cc = ttnn.to_layout(cos[:, offset : offset + count, :], ttnn.TILE_LAYOUT)
                 ss = ttnn.to_layout(sin[:, offset : offset + count, :], ttnn.TILE_LAYOUT)

@@ -70,6 +70,8 @@ class ServingPrefillTraceTests(unittest.TestCase):
                 "_ensure_cache",
                 "bind_cache",
                 "_prefill_trace_logits",
+                "_aim_prefill_selectors",
+                "_bucket_selectors",
                 "reset_recurrent_slots",
                 "_write_recurrent_slots",
                 "_begin_prefix",
@@ -80,7 +82,12 @@ class ServingPrefillTraceTests(unittest.TestCase):
         self.gen = SimpleNamespace(
             mesh=object(),
             cache=SimpleNamespace(batch_size=4, capacity=8192, num_pages=1024, layers=[]),
-            model=SimpleNamespace(config=SimpleNamespace(vocab_size=250000)),
+            model=SimpleNamespace(
+                config=SimpleNamespace(vocab_size=250000),
+                prefill_selectors=lambda *, length: SimpleNamespace(
+                    length=length, valid=None, update=lambda valid: None
+                ),
+            ),
             page_table=SimpleNamespace(shape=(4, 256)),
             _slot_prefix_len=[0] * 4,
             _state_snapshots={},
@@ -101,6 +108,9 @@ class ServingPrefillTraceTests(unittest.TestCase):
         self.gen._refresh_table = lambda table: self.events.append(("table", table))
         self.gen._sampling_step = lambda output: self.events.append(("sample", output))
         self.gen._release_traces = MethodType(self.methods["_release_traces"], self.gen)
+        self.gen._aim_prefill_selectors = MethodType(self.methods["_aim_prefill_selectors"], self.gen)
+        self.gen._bucket_selectors = MethodType(self.methods["_bucket_selectors"], self.gen)
+        self.gen._prefill_selectors = {}
         self.gen._write_recurrent_slots = MethodType(self.methods["_write_recurrent_slots"], self.gen)
         self.gen._begin_prefix = MethodType(self.methods["_begin_prefix"], self.gen)
         self.gen._end_prefix = MethodType(self.methods["_end_prefix"], self.gen)
@@ -323,11 +333,13 @@ class ServingPrefillTraceTests(unittest.TestCase):
         resident = SimpleNamespace(batch_size=1)
         self.gen.model._resident_decode_bucket = (self.gen.cache, (0,), resident)
         self.gen.model._resident_decode_valid = True
-        self.gen.prefill_prepared = dict(tokens=object(), positions=object(), length=128)
+        self.gen.prefill_prepared = dict(tokens=object(), positions=object(), length=128, valid=100, selectors=object())
         calls = []
         self.gen.model.prefill = lambda tokens, **kw: calls.append(kw) or FakeLogits()
         self.methods["_prefill_trace_logits"](self.gen)
         self.assertIs(calls[0]["cache"], resident)
+        # The bucket sizes the programs; the prompt says how much of it the state may absorb.
+        self.assertEqual((calls[0]["length"], calls[0]["valid"]), (128, 100))
 
     def test_single_slot_reset_zeros_resident_state_in_place(self):
         state = SimpleNamespace(conv=torch.ones(1, 3, 4), recurrent=torch.ones(1, 2, 4, 4))
