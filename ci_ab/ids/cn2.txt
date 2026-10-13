@@ -1,0 +1,3 @@
+perf_reduce.py::test_perf_reduce[formats:Float16_b->Float16_b-dest_acc:No-reduce_dim:Row-pool_type:Max-math_fidelity:HiFi4]
+perf_reduce.py::test_perf_reduce[formats:Float16_b->Float16_b-dest_acc:Yes-reduce_dim:Row-pool_type:Max-math_fidelity:HiFi4]
+perf_reduce.py::test_perf_reduce[formats:Float32->Float32-dest_acc:Yes-reduce_dim:Row-pool_type:Max-math_fidelity:HiFi4]
