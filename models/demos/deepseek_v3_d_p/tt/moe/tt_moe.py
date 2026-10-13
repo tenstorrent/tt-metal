@@ -946,7 +946,7 @@ class TtMoe(LightweightModule):
         # The fp8 dispatch input is freed only after the sub-device clear below. Under the shared-expert
         # overlap, dispatch is still reading it when the host returns here, and the shared expert running
         # beside it would be allocated into the freed range. Under q1_pre_gather the input is to_latent's
-        # persistent gather buffer, reused next forward, so it is never freed.
+        # fp8 gather buffer, shared by every MoE layer on the mesh, so it is never freed.
         fp8_dispatch_input = dispatch_input if self.dispatch_fp8 and not q1_pre_gather else None
         dispatch_input = None
         if DEBUG_LOGGING_ENABLED:
@@ -993,7 +993,7 @@ class TtMoe(LightweightModule):
         if not self.use_latent_moe:
             routed_x = None
         elif q1_pre_gather:
-            # routed_x is to_latent's persistent fp8 gather buffer, reused next forward: never free it.
+            # routed_x is the fp8 gather buffer shared by every MoE layer on the mesh: never free it.
             routed_x = None
         elif return_intermediates:
             # to_memory_config short-circuits when the config already matches, handing back a tensor

@@ -303,8 +303,6 @@ class TtLatentMoeProjections(LightweightModule):
         self.tp_factor = mesh_device.shape[1]
         self.tt_ccl = get_tt_ccl(mesh_device)
         self.compute_kernel_config = compute_kernel_config
-        # Persistent output of the fp8 latent all-gather (high_bw_all_gather writes into a caller-owned buffer).
-        self._fp8_gathered = None
 
         weights = self._convert_and_cache_weights(
             torch_weights,
@@ -391,22 +389,16 @@ class TtLatentMoeProjections(LightweightModule):
             if self.tp_factor > 1:
                 gathered_shape = list(latent.shape)
                 gathered_shape[-1] *= self.tp_factor
-                if (
-                    self._fp8_gathered is None
-                    or list(self._fp8_gathered.shape) != gathered_shape
-                    or self._fp8_gathered.device() != latent.device()
-                ):
-                    self._fp8_gathered = ttnn.empty(
-                        gathered_shape,
-                        dtype=latent.dtype,
-                        layout=latent.layout,
-                        device=latent.device(),
-                        memory_config=ttnn.DRAM_MEMORY_CONFIG,
-                    )
+                # high_bw_all_gather writes into a caller-owned buffer. One buffer per mesh serves every MoE layer:
+                # each layer's dispatch reads it before the next layer's gather (same command queue, in order), so
+                # per-layer buffers only cost DRAM (2.6 MB each on K3; 60 MB per chip over 23 MoE layers).
+                gathered_out = self.tt_ccl.persistent_dram_buffer(
+                    "latent_fp8_gather", gathered_shape, latent.dtype, latent.layout
+                )
                 gathered = ttnn.experimental.high_bw_all_gather(
                     latent,
                     dim=len(gathered_shape) - 1,
-                    output_tensor=self._fp8_gathered,
+                    output_tensor=gathered_out,
                     cluster_axis=1,
                     num_links=self.num_links,
                 )

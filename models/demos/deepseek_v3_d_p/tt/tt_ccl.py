@@ -85,6 +85,8 @@ class TT_CCL:
         mesh_device,
     ):
         self.mesh_device = mesh_device
+        # Device buffers shared by every caller on this mesh; see persistent_dram_buffer.
+        self._persistent_buffers = {}
         full_compute_grid = self.mesh_device.compute_with_storage_grid_size()
         self.sub_device_crs = ttnn.CoreRangeSet(
             {
@@ -285,6 +287,22 @@ class TT_CCL:
             f"KV gather={gather_core_grid.num_cores()} cores"
         )
         return resources
+
+    def persistent_dram_buffer(self, name: str, shape, dtype, layout) -> ttnn.Tensor:
+        """One DRAM buffer per (name, shape, dtype, layout) on this mesh, shared by every caller.
+
+        For ops that write into a caller-owned output whose result is consumed before the next caller runs,
+        e.g. the fp8 latent all-gather, which every MoE layer's dispatch reads before the next layer gathers. The
+        address stays fixed, so traced replays may reuse it. Never deallocate the returned tensor.
+        """
+        key = (name, tuple(shape), dtype, layout)
+        buf = self._persistent_buffers.get(key)
+        if buf is None or not buf.is_allocated():
+            buf = ttnn.empty(
+                list(shape), dtype=dtype, layout=layout, device=self.mesh_device, memory_config=ttnn.DRAM_MEMORY_CONFIG
+            )
+            self._persistent_buffers[key] = buf
+        return buf
 
     def reset_sparse_mla_overlap_semaphores(self) -> None:
         """Drain and restore caller-owned gather semaphores after an aborted overlap region."""
