@@ -146,29 +146,37 @@ CASES = [
         "rel": 0.03,
     },
     {
-        # GLM-5.3-Flash DSA sparse MLA (NoPE, absorbed kv_b) on a 2x2 mesh: the last 5120-token chunk of a 56320-token
-        # context, chip d holding query rows 1280 d .. + 1279 of the chunk, all 64 heads; kv = the latent cache
-        # [1, 1, 56320, 512] (K = V = its 512 columns), 2176 ids per row (2051 selected + 0xFFFFFFFF sentinels),
-        # k_chunk 128 (17 chunks), scale 256^-0.5 = 1/16, HiFi4 + fp32 dest, high_precision (the fork's option).
-        # q / kv / idx bf16 / bf16 / uint32, all ROW_MAJOR DRAM interleaved; output [1, 64, 1280, 512].
-        "id": "glm53_flash_d_p-2x2-sparse-q64x1280-kv56320-k512-idx2176-hifi4-hp-kc128",
+        # GLM-5.3-Flash DSA sparse MLA (NoPE, absorbed kv_b) on a 2x2 mesh with the striped latent cache
+        # (mla_attention._kv): the last 5120-token chunk of a 56320-token context, chip d holding query rows 1280 d ..
+        # + 1279 of the chunk, all 64 heads. kv is the gathered scratch [1, 1, 81920, 512] (the 81920-token worst
+        # case): block-cyclic over all 4 chips (block_cyclic_cache_tp_sharded; SP axis 0, block_cyclic_chunk_local
+        # 2560 = 5120 / 2 rows -> 4 stripes of 1280 tokens per 5120-token slab), chip L's stripe at rows
+        # L * 20480 + slab * 1280 + w. The indices are NATURAL token ids, remapped by the op. K = V = the 512 columns,
+        # 2176 ids per row (2051 selected + 0xFFFFFFFF sentinels), k_chunk 128 (17 chunks), scale 256^-0.5 = 1/16,
+        # HiFi4 + fp32 dest, high_precision (the fork's option). q / kv / idx bf16 / bf16 / uint32, all ROW_MAJOR
+        # DRAM interleaved; output [1, 64, 1280, 512].
+        "id": "glm53_flash_d_p-2x2-sparse-blockcyclic-q64x1280-kv81920-k512-idx2176-hifi4-hp-kc128",
         "model": "glm53_flash_d_p",
         "task": "O.1",
-        "sig": "d894c9aab4",
+        "sig": "9085af2b5f",
         "op": "sparse_sdpa",
         "mesh": [2, 2],
         "device_params": {"fabric_config": "FABRIC_2D", "l1_small_size": 24576},
         "q": [1, 64, 1280, 512],
-        "kv": [1, 1, 56320, 512],
+        "kv": [1, 1, 81920, 512],
         "indices": [1, 1, 1280, 2176],
         "v_dim": 512,
         "q_pos": 51200,  # position of chip 0's first query row
+        "kv_populated": 56320,  # ids are drawn below this (the chunk's end); the rest of the cache is never selected
         "n_valid": 2051,
         "n_short_every": 16,  # every 16th row: 1 .. 2051 valid ids
         "kv_format": "BF16",
         "scale": 0.0625,
         "k_chunk_size": 128,
         "high_precision": True,
+        "block_cyclic_sp_axis": 0,
+        "block_cyclic_chunk_local": 2560,
+        "block_cyclic_cache_tp_sharded": True,
         "compute_kernel_config": {
             "math_fidelity": "HiFi4",
             "math_approx_mode": False,
@@ -177,11 +185,10 @@ CASES = [
             "dst_full_sync_en": False,
         },
         "seed": 0,
-        # vs the float32 reference on the same bf16 inputs. Measured (seed 0, 4 chips): pcc 0.999984, rel L2
-        # 0.0057-0.0059, per (head, row) norm ratio [0.9867, 1.0139]. Every full row is off by ~0.0055: random q / kv
-        # give near-uniform attention over 2051 ids (|out| ~ 1.9 vs ~ 22.6 for one kv row). The unit test's 0.0017
-        # at this geometry is diluted by its exact 1-id rows (their norm dominates); with all rows at 2051 ids the
-        # same op gives 0.0058 there too. A 1.01 output scale (rel ~ 0.0115, ratio max ~ 1.024) fails both limits.
+        # vs the float32 reference on the same bf16 inputs (natural-order kv). Measured (seed 0, 4 chips): pcc
+        # 0.999984, rel L2 0.0057-0.0058, per (head, row) norm ratio [0.9863, 1.0161] (near-uniform attention over
+        # 2051 ids, as the replicated-cache case it replaces). Limits as that case. Checked by hand: a 1.01 output
+        # scale fails (rel 0.0107), and so does the natural-order kv on device (pcc 0.52: the remap is exercised).
         "pcc": 0.9999,
         "rel": 0.008,
         "ratio": [0.98, 1.02],

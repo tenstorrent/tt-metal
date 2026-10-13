@@ -12,7 +12,11 @@ q / k / gates:
 - causal columns: PCC and the relative L2 error, per chip.
 Don't-care: nothing (kv_len = T, so every column of every row is written).
 
-Key-stride (pooled-key, full-mesh) cases run in tests/unit/test_key_stride_ring.py."""
+ring_indexer_score_dsa with key_compression_ratio R (pooled keys) on a full-mesh snake ring (cluster_axis None): chip d
+(row-major) holds, for every chunk c, keys c * n * stripe + d * stripe + [0, stripe) at k_local rows c * stripe + ..
+(stripe = block_cyclic_chunk_local / R, reference.full_mesh_key_local_positions) and queries chunk_start + d * Sq + ..;
+per chip, columns [0, kv_len): every pool-future column -inf and every visible column finite (exact), then PCC and
+relative L2 error on the visible ones. Don't-care: columns >= kv_len."""
 
 import importlib.util
 from pathlib import Path
@@ -185,5 +189,117 @@ def _call(mesh_device, c, dev, sems):
         block_cyclic_sp_axis=c["block_cyclic_sp_axis"],
         block_cyclic_chunk_local=c["block_cyclic_chunk_local"],
         block_cyclic_cache_tp_sharded=c["block_cyclic_cache_tp_sharded"],
+    )
+    return out, tt_k
+
+
+_KS = [c for c in CASES if c["op"] == "ring_indexer_score_dsa" and "key_compression_ratio" in c]
+
+
+@pytest.mark.timeout(1800)
+@pytest.mark.parametrize(
+    "mesh_device, device_params, case",
+    [(tuple(c["mesh"]), _device_params(c), c) for c in _KS],
+    ids=[c["id"] for c in _KS],
+    indirect=["mesh_device", "device_params"],
+)
+def test_ring_indexer_score_dsa_key_stride(mesh_device, device_params, case):
+    c = case
+    rows, cols = c["mesh"]
+    n_dev = rows * cols
+    assert c["cluster_axis"] is None, "the test lays out the full-mesh block-cyclic ring"
+    Sq, T, R, kv = c["q_rows"], c["t"], c["key_compression_ratio"], c["kv_len"]
+    assert c["block_cyclic_chunk_local"] == Sq and c["k_local_rows"] * n_dev == T
+    assert kv == (c["chunk_start_idx"] + n_dev * Sq) // R
+    grid = mesh_device.compute_with_storage_grid_size()
+    crs = ttnn.CoreRangeSet({ttnn.CoreRange(ttnn.CoreCoord(0, 0), ttnn.CoreCoord(grid.x - 1, grid.y - 1))})
+    sems = [ttnn.create_global_semaphore(mesh_device, crs, 0) for _ in range(c["num_semaphores"])]
+    (q, w, k_nat), dev = _inputs_key_stride(mesh_device, c, c["seed"])
+    out, tt_k = _call_key_stride(mesh_device, c, dev, sems)
+    outs = [ttnn.to_torch(t).float().reshape(Sq, T) for t in ttnn.get_device_tensors(out)]
+    assert len(outs) == n_dev
+
+    for d in range(n_dev):
+        q0 = c["chunk_start_idx"] + d * Sq
+        blk = slice(d * Sq, (d + 1) * Sq)
+        want = ref.dsa_score(q[0, :, blk], k_nat, w[0, 0, blk], q0, key_stride=R)[:, :kv]
+        got = outs[d][:, :kv]
+        future = torch.isneginf(want)
+        n_mask = int((~torch.isneginf(got[future])).sum())
+        n_nonfinite = int((~torch.isfinite(got[~future])).sum())
+        assert n_mask == 0, f"dev {d}: {n_mask} pool-future columns not -inf"
+        assert n_nonfinite == 0, f"dev {d}: {n_nonfinite} visible columns not finite"
+        a, b = got[~future], want[~future]
+        pcc = _pcc(a, b)
+        rel = float((a - b).norm() / b.norm())
+        logger.info(
+            f"dev {d}: tokens from {q0}, kv_len {kv}, {int((~future).sum())} visible, {int(future.sum())} masked, "
+            f"pcc {pcc:.7f}, rel {rel:.5f}"
+        )
+        assert (
+            pcc >= c["pcc"] and rel <= c["rel"]
+        ), f"dev {d}: pcc {pcc:.7f} (min {c['pcc']}), rel {rel:.5f} (max {c['rel']})"
+
+    # The op fills the ring's k buffer (an input): each call gets a fresh copy of its starting garbage, and the filled
+    # buffer is compared too. Score columns >= kv_len are unspecified (the op leaves them as the fresh allocation
+    # held), so only [0, kv_len) is compared.
+    def defined(res):
+        o, k = res
+        cut = [ttnn.to_torch(t).reshape(Sq, T)[:, :kv] for t in ttnn.get_device_tensors(o)]
+        ttnn.deallocate(o)
+        return cut, k
+
+    dev_b = _inputs_key_stride(mesh_device, c, c["seed"] + 1)[1]
+    determinism.assert_deterministic(
+        lambda: defined(_call_key_stride(mesh_device, c, dev, sems)),
+        lambda: defined(_call_key_stride(mesh_device, c, dev_b, sems)),
+        first=defined((out, tt_k)),
+        label=c["id"],
+    )
+
+
+def _inputs_key_stride(mesh_device, c, seed):
+    """Host (q, w, k_nat) and the device inputs (q, w, k_local) plus the host garbage of the k buffer."""
+    rows, cols = c["mesh"]
+    n_dev = rows * cols
+    H, D, Sq, T = c["heads"], c["head_dim"], c["q_rows"], c["t"]
+    g = torch.Generator().manual_seed(seed)
+    q = torch.randn(1, H, n_dev * Sq, D, generator=g).to(torch.bfloat16)
+    w = (torch.randn(1, 1, n_dev * Sq, H, generator=g) * c["gate_scale"]).to(torch.bfloat16)
+    k_nat = torch.randn(T, D, generator=g).to(torch.bfloat16)
+    garbage = torch.randn(1, 1, T, D, generator=g).to(torch.bfloat16)
+    pos = ref.full_mesh_key_local_positions(T, n_dev, c["block_cyclic_chunk_local"] // c["key_compression_ratio"])
+    k_local_host = k_nat[pos.reshape(-1)].reshape(1, 1, T, D)  # chip d = rows [d * T / n_dev, (d + 1) * T / n_dev)
+    per_dev = ttnn.ShardTensorToMesh(mesh_device, dim=2)  # row-major over the whole mesh
+    tt_q, tt_w = _put(mesh_device, c, q, per_dev), _put(mesh_device, c, w, per_dev)
+    tt_k_local = _put(mesh_device, c, k_local_host, per_dev)
+    assert list(tt_q.shape) == [1, H, Sq, D] and list(tt_w.shape) == [1, 1, Sq, H]
+    assert list(tt_k_local.shape) == [1, 1, c["k_local_rows"], D]
+    return (q, w, k_nat), (tt_q, tt_w, tt_k_local, garbage)
+
+
+def _call_key_stride(mesh_device, c, dev, sems):
+    """One call on a fresh copy of the k buffer's garbage; returns (scores, the filled k buffer)."""
+    tt_q, tt_w, tt_k_local, garbage = dev
+    tt_k = _put(mesh_device, c, garbage, ttnn.ReplicateTensorToMesh(mesh_device))
+    assert list(tt_k.shape) == [1, 1, c["t"], c["head_dim"]]
+    pc = c["program_config"]
+    out = ttnn.bringup.ring_indexer_score_dsa(
+        tt_q,
+        tt_k,
+        tt_w,
+        tt_k_local,
+        sems,
+        cluster_axis=None,
+        topology=getattr(ttnn.Topology, c["topology"]),
+        num_links=c["num_links"],
+        chunk_start_idx=c["chunk_start_idx"],
+        program_config=ttnn.bringup.IndexerScoreProgramConfig(
+            q_chunk_size=pc["q_chunk_size"], k_chunk_size=pc["k_chunk_size"], head_group_size=pc["head_group_size"]
+        ),
+        compute_kernel_config=_kernel_config(c["compute_kernel_config"]),
+        kv_len=c["kv_len"],
+        block_cyclic_chunk_local=c["block_cyclic_chunk_local"],
+        key_compression_ratio=c["key_compression_ratio"],
     )
     return out, tt_k

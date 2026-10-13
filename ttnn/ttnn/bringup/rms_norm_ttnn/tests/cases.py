@@ -151,16 +151,17 @@ CASES = [
         "rtol": 0.004,
     },
     {
-        # GLM-5.3-Flash kv_a_layernorm on the 512-wide latent of all 5120 chunk rows (every chip), fp32 in and out (the
-        # kv_a projection's fp32 output), bf16 weight, 2x2 mesh.
-        "id": "glm53_flash_d_p-2x2-s5120-h512-fp32-w-eps1e-5",
+        # GLM-5.3-Flash kv_a_layernorm on the 512-wide latent of this chip's 1280 rows of a 5120-token chunk (the
+        # block-cyclic striped latent cache: each chip normalizes only its own rows), fp32 in and out (the kv_a
+        # projection's fp32 output), bf16 weight, 2x2 mesh.
+        "id": "glm53_flash_d_p-2x2-s1280-h512-fp32-w-eps1e-5",
         "model": "glm53_flash_d_p",
         "task": "O.1",
-        "sig": "693a2b7a58",
+        "sig": "77f466eb2c",
         "mesh": [2, 2],
         "device_params": {"fabric_config": "FABRIC_2D", "l1_small_size": 24576},
-        # input [1, 1, 5120, 512] FLOAT32 TILE DRAM interleaved (per device)
-        "input": {"shape": [1, 1, 5120, 512], "dtype": "FLOAT32", "layout": "TILE"},
+        # input [1, 1, 1280, 512] FLOAT32 TILE DRAM interleaved (per device)
+        "input": {"shape": [1, 1, 1280, 512], "dtype": "FLOAT32", "layout": "TILE"},
         # weight [1, 1, 1, 512] bf16 TILE DRAM interleaved
         "weight": {"shape": [1, 1, 1, 512], "dtype": "BFLOAT16", "layout": "TILE"},
         "epsilon": 1e-05,
@@ -173,8 +174,8 @@ CASES = [
         },
         "seed": 0,
         # float64 reference on the same fp32 x and bf16 w. Measured (seed 0, 4 chips): pcc 0.9999999, max abs err
-        # 0.0094-0.0131, max rel 0.0022 (the FPU reads fp32 operands at TF32 precision). Limits atol 0.002 + rtol 0.004;
-        # a 1.01 output scale fails them (checked by hand).
+        # 0.0092-0.0101, max rel 0.0021-0.0022 (TF32 operand reads). Limits atol 0.002 + rtol 0.004 (as the other
+        # glm fp32 case); a 1.01 output scale fails them (checked by hand: 441586 elements out on chip 0).
         "pcc": 0.99999,
         "atol": 0.002,
         "rtol": 0.004,
