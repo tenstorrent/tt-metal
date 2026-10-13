@@ -88,7 +88,7 @@ inline void perf_binary_mock(const std::uint32_t loop_factor, const std::uint32_
 void run_kernel(RUNTIME_PARAMETERS params)
 {
 #ifdef SPEED_OF_LIGHT
-    constexpr ckernel::TensorShape tensor_shape = {
+    LLK_INIT_STATIC constexpr ckernel::TensorShape tensor_shape = {
         static_cast<std::uint8_t>(TEST_FACE_R_DIM),
         static_cast<std::uint8_t>(TEST_FACE_C_DIM),
         static_cast<std::uint8_t>(num_faces_r_dim_A),
