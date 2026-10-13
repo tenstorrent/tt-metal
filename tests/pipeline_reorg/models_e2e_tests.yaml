@@ -905,8 +905,10 @@
 
 - name: GPT-OSS 20B e2e tests
   cmd: |
-    export TT_CACHE_PATH=/mnt/MLPerf/huggingface/tt_cache/openai--gpt-oss-20b/ HF_MODEL=openai/gpt-oss-20b
-    pytest models/demos/gpt_oss/demo/text_demo.py --timeout 600
+    export TT_CACHE_PATH=/mnt/MLPerf/huggingface/tt_cache/openai--gpt-oss-20b/ HF_MODEL=openai/gpt-oss-20b GPT_OSS_FORCE_MODEL_LOAD=1
+    # PROBE ONLY: peak host RSS of a forced weight load, lazy (this PR) then eager (old path).
+    echo "=== LAZY"; python3 -c 'import resource,subprocess,sys; rc=subprocess.run(sys.argv[1:]).returncode; print("PEAK_RSS_GB %.1f" % (resource.getrusage(resource.RUSAGE_CHILDREN).ru_maxrss/1048576)); sys.exit(rc)' pytest models/demos/gpt_oss/demo/text_demo.py --timeout 1200 || true
+    echo "=== EAGER"; GPT_OSS_EAGER_HF_LOAD=1 python3 -c 'import resource,subprocess,sys; rc=subprocess.run(sys.argv[1:]).returncode; print("PEAK_RSS_GB %.1f" % (resource.getrusage(resource.RUSAGE_CHILDREN).ru_maxrss/1048576)); sys.exit(rc)' pytest models/demos/gpt_oss/demo/text_demo.py --timeout 1200
   model: gpt-oss-20b
   model_family: GPT-OSS
   skus:
@@ -919,7 +921,7 @@
       tier: 2
       release_ready: false
     bh_quietbox_2:
-      timeout: 15
+      timeout: 60
       tier: 2
       release_ready: false
   owner_id: U08TJ70UFRT # Harry Andrews
@@ -933,7 +935,9 @@
     # Check mlperf-write-access in the workflow to load weights and regenerate the cache.
     SKIP_MODEL_LOAD="--skip-model-load"
     [ "${MLPERF_READ_ONLY:-true}" = "false" ] && SKIP_MODEL_LOAD=""
-    pytest models/demos/gpt_oss/demo/text_demo.py --timeout 1500 $SKIP_MODEL_LOAD
+    export GPT_OSS_FORCE_MODEL_LOAD=1
+    # PROBE ONLY: peak host RSS of a forced weight load through the lazy path. Eager is not run here: it is the OOM.
+    echo "=== LAZY"; python3 -c 'import resource,subprocess,sys; rc=subprocess.run(sys.argv[1:]).returncode; print("PEAK_RSS_GB %.1f" % (resource.getrusage(resource.RUSAGE_CHILDREN).ru_maxrss/1048576)); sys.exit(rc)' pytest models/demos/gpt_oss/demo/text_demo.py --timeout 3000
   model: gpt-oss-120b
   model_family: GPT-OSS
   skus:
@@ -942,7 +946,7 @@
       tier: 1
       release_ready: false
     bh_quietbox_2:
-      timeout: 35
+      timeout: 90
       tier: 1
       release_ready: true
     bh_galaxy:
