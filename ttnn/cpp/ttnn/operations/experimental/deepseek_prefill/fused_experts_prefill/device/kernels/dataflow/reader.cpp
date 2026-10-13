@@ -15,7 +15,7 @@
 #include "api/compile_time_args.h"
 #include "tools/profiler/kernel_profiler.hpp"
 
-// Reader (DRAM -> L1) for fused_experts_prefill. One instance per worker core; the 8 cores of a group
+// Reader (DRAM -> L1) for fused_experts_prefill. One instance per worker core; the cores of a group
 // walk the same experts in lock-step (expert e is owned by group e % num_groups and every core derives
 // the same routing, so the skip decisions agree).
 //
@@ -31,26 +31,37 @@
 //     [hdr_words + jl * T, + counts[jl])   entries of expert jl, in token order
 //
 // ---- 2. Per owned expert with a non-zero count, per chunk of m_chunk tile rows ----
-//   cb_w  <- gate_up slot: this core's `it_pc` gate_up shards (shard ids c*it_pc .. +it_pc).
+//   This core owns the run of gate_up shards [gu_first, gu_first + gu_cnt) (one shard = one I tile); a weight
+//   slot holds up to `spp` of them, so the run is ceil(gu_cnt / spp) slots.
+//   RESIDENT (spp >= every core's gu_cnt, one slot): cb_w <- the gate_up slot once per chunk, ahead of the
+//   M-blocks; every M-block of the chunk then runs against it.
+//   STREAMED: the slots are pushed again for every M-block, right after its rows.
 //   per M-block of m_block tile rows: for each row, the 32 tokens' x rows are gathered from the
 //   row-major DRAM tensor in kt / rm_chunk 1 KB-per-token segments into cb_rm (compute tilizes them),
 //   then the block's per-row routing weights are pushed as one scalar tile per row (cb_rscal).
-//   cb_w  <- down slot, prefetched after the first block (consumed by compute after all gate_up work).
+//   cb_w  <- down slots: a slot holds up to `dpp` of this core's dn_shards down shards. Resident (dpp >= dn_shards,
+//   one slot kept across the M-blocks): pushed once per chunk, prefetched after the first block (gate_up resident)
+//   or after the last block's gate_up slots (the ring is FIFO). Streamed: after the chunk's gate_up work, the
+//   ceil(dn_shards / dpp) slots are pushed once per M-block. Consumed by compute after all gate_up work.
 //
 // Compile-time args:
 //   0 cb_meta  1 cb_rm  2 cb_w  3 cb_rscal
 //   4 T  5 E  6 top_k  7 index_is_bf16  8 rank_from_scores  9 scaling_bits  10 eps_bits
-//   11 num_groups  12 kt  13 it_pc  14 dn_shards  15 gu_shard_tiles  16 dn_shard_tiles
+//   11 num_groups  12 kt  13 spp (gate_up shards per slot)  14 dn_shards  15 gu_shard_tiles  16 dn_shard_tiles
 //   17 w_tile_bytes  18 slot_tiles  19 m_chunk  20 m_block  21 hdr_words  22 rm_chunk_tiles
 //   23 row_bytes  24 score_tiles (E / 32 rounded up)  25 tile_bytes (bf16)
 //   26 cb_scratch (routing scratch CB)
 //   27 tpc  28 ks  29 sem_route  30 grid_x  31 grid_y
 //   32 rm_group (row-major segments gathered per barrier = cb_rm capacity in segments)
-//   33+ TensorAccessorArgs: x, ids, scores, ranking, gate_up[0], down[0]
+//   33 resident (1: the whole gate_up run is one slot kept across the M-blocks)
+//   34 dpp (down shards per slot)  35 dn_resident (1: all the down shards are one slot)
+//   36+ TensorAccessorArgs: x, ids, scores, ranking, gate_up[0], down[0]
 // Runtime args:
 //   0 x  1 ids  2 scores  3 ranking  (buffer addresses)
-//   4 c (core index in group)  5 g (group)  6 n (experts owned by this group)
-//   7 .. 7+n-1 gate_up addresses, then n down addresses (owned experts in ascending id order)
+//   4 dn_first (this core's first down shard)  5 g (group)  6 n (experts owned by this group)  7 flat core index
+//   8 gu_cnt (this core's gate_up shards)  9 gu_first (its first shard id)
+//   10 .. 10+grid_x+grid_y-1 NoC x of the columns, NoC y of the rows
+//   then n gate_up addresses, then n down addresses (owned experts in ascending id order)
 
 namespace {
 
@@ -93,7 +104,7 @@ void kernel_main() {
     constexpr uint32_t eps_bits = get_compile_time_arg_val(10);
     constexpr uint32_t num_groups = get_compile_time_arg_val(11);
     constexpr uint32_t kt = get_compile_time_arg_val(12);
-    constexpr uint32_t it_pc = get_compile_time_arg_val(13);
+    constexpr uint32_t spp = get_compile_time_arg_val(13);
     constexpr uint32_t dn_shards = get_compile_time_arg_val(14);
     constexpr uint32_t gu_shard_tiles = get_compile_time_arg_val(15);
     constexpr uint32_t dn_shard_tiles = get_compile_time_arg_val(16);
@@ -114,8 +125,11 @@ void kernel_main() {
     constexpr uint32_t grid_y = get_compile_time_arg_val(31);
 
     constexpr uint32_t rm_group = get_compile_time_arg_val(32);
+    constexpr bool resident = get_compile_time_arg_val(33) == 1;
+    constexpr uint32_t dpp = get_compile_time_arg_val(34);
+    constexpr bool dn_resident = get_compile_time_arg_val(35) == 1;
 
-    constexpr auto x_args = TensorAccessorArgs<33>();
+    constexpr auto x_args = TensorAccessorArgs<36>();
     constexpr auto ids_args = TensorAccessorArgs<x_args.next_compile_time_args_offset()>();
     constexpr auto scores_args = TensorAccessorArgs<ids_args.next_compile_time_args_offset()>();
     constexpr auto rank_args = TensorAccessorArgs<scores_args.next_compile_time_args_offset()>();
@@ -126,11 +140,13 @@ void kernel_main() {
     const uint32_t ids_addr = get_arg_val<uint32_t>(1);
     const uint32_t scores_addr = get_arg_val<uint32_t>(2);
     const uint32_t rank_addr = get_arg_val<uint32_t>(3);
-    const uint32_t c = get_arg_val<uint32_t>(4);
+    const uint32_t dn_first = get_arg_val<uint32_t>(4);
     const uint32_t g = get_arg_val<uint32_t>(5);
     const uint32_t n_owned = get_arg_val<uint32_t>(6);
     const uint32_t cid = get_arg_val<uint32_t>(7);  // flat core index over the whole grid
-    constexpr uint32_t kNocXRt = 8;                 // grid_x NoC x coordinates, then grid_y NoC y coordinates
+    const uint32_t gu_cnt = get_arg_val<uint32_t>(8);
+    const uint32_t gu_first = get_arg_val<uint32_t>(9);
+    constexpr uint32_t kNocXRt = 10;  // grid_x NoC x coordinates, then grid_y NoC y coordinates
     constexpr uint32_t kAddrRt = kNocXRt + grid_x + grid_y;
 
     constexpr uint32_t seg_bytes = rm_chunk_tiles * 32 * 2;  // one row-major segment of one token row
@@ -158,23 +174,31 @@ void kernel_main() {
     constexpr uint32_t gu_shard_bytes = gu_shard_tiles * w_tile_bytes;
     constexpr uint32_t dn_shard_bytes = dn_shard_tiles * w_tile_bytes;
 
-    auto read_gate_up = [&](uint32_t jl) {
+    // Slot `slot` of the gate_up run of expert jl: its (up to spp) shards, at the front of the ring slot.
+    const uint32_t gu_slots = (gu_cnt + spp - 1) / spp;
+    auto read_gate_up = [&](uint32_t jl, uint32_t slot) {
         const auto gu = TensorAccessor(gu_args, get_arg_val<uint32_t>(kAddrRt + jl));
         ShardView gu_shard(gu);
-        for (uint32_t s = 0; s < it_pc; ++s) {
+        const uint32_t first = slot * spp;
+        const uint32_t cnt = (gu_cnt - first) < spp ? (gu_cnt - first) : spp;
+        for (uint32_t s = 0; s < cnt; ++s) {
             noc.async_read(
-                gu_shard, cb_w, gu_shard_bytes, {.shard_id = c * it_pc + s}, {.offset_bytes = s * gu_shard_bytes});
+                gu_shard,
+                cb_w,
+                gu_shard_bytes,
+                {.shard_id = gu_first + first + s},
+                {.offset_bytes = s * gu_shard_bytes});
         }
     };
 
-    // The first owned expert's gate_up slot is prefetched while the routing runs. It is used if that expert
+    // The first owned expert's first gate_up slot is prefetched while the routing runs. It is used if that expert
     // turns out to have tokens. The routing's read barriers after the issue guarantee it has landed by
     // the time the prologue is done (the main loop barriers on it explicitly).
     bool gu_prefetched = false;
     auto issue_prefetch = [&]() {
         if (n_owned > 0 && !gu_prefetched) {
             cb_w.reserve_back(slot_tiles);
-            read_gate_up(0);
+            read_gate_up(0, 0);
             gu_prefetched = true;
         }
     };
@@ -514,17 +538,42 @@ void kernel_main() {
         for (uint32_t r0 = 0; r0 < m; r0 += m_chunk) {
             const uint32_t mc = (m - r0) < m_chunk ? (m - r0) : m_chunk;
 
-            // ---- gate_up slot (already in flight / landed for the first owned expert's first chunk) ----
-            {
+            // Pushes slot `slot` of expert jl's gate_up run. The very first one (first owned expert, first
+            // chunk, first M-block) is already in flight / landed from the routing prologue.
+            auto push_gate_up = [&](uint32_t slot, bool first_of_all) {
                 DeviceZoneScopedN("R_GU");
-                if (gu_prefetched && jl == 0 && r0 == 0) {
+                if (gu_prefetched && first_of_all) {
                     noc.async_read_barrier();
                 } else {
                     cb_w.reserve_back(slot_tiles);
-                    read_gate_up(jl);
+                    read_gate_up(jl, slot);
                     noc.async_read_barrier();
                 }
                 cb_w.push_back(slot_tiles);
+            };
+            // Pushes slot `slot` of expert jl's down run: its (up to dpp) shards [dn_first + slot * dpp, ...).
+            auto push_down = [&](uint32_t slot) {
+                DeviceZoneScopedN("R_DN");
+                const auto dn = TensorAccessor(dn_args, get_arg_val<uint32_t>(kAddrRt + n_owned + jl));
+                ShardView dn_shard(dn);
+                const uint32_t first = slot * dpp;
+                const uint32_t cnt = (dn_shards - first) < dpp ? (dn_shards - first) : dpp;
+                cb_w.reserve_back(slot_tiles);
+                for (uint32_t s = 0; s < cnt; ++s) {
+                    noc.async_read(
+                        dn_shard,
+                        cb_w,
+                        dn_shard_bytes,
+                        {.shard_id = dn_first + first + s},
+                        {.offset_bytes = s * dn_shard_bytes});
+                }
+                noc.async_read_barrier();
+                cb_w.push_back(slot_tiles);
+            };
+            constexpr uint32_t dn_slots = (dn_shards + dpp - 1) / dpp;
+
+            if constexpr (resident) {
+                push_gate_up(0, jl == 0 && r0 == 0);
             }
 
             for (uint32_t b0 = 0; b0 < mc; b0 += m_block) {
@@ -537,22 +586,27 @@ void kernel_main() {
                 }
                 push_scalars(jl, count, r0 + b0, mb);
 
-                // ---- down slot: prefetched while compute works on the gate_up blocks. ----
-                if (b0 == 0) {
-                    const auto dn = TensorAccessor(dn_args, get_arg_val<uint32_t>(kAddrRt + n_owned + jl));
-                    ShardView dn_shard(dn);
-                    DeviceZoneScopedN("R_DN");
-                    cb_w.reserve_back(slot_tiles);
-                    for (uint32_t s = 0; s < dn_shards; ++s) {
-                        noc.async_read(
-                            dn_shard,
-                            cb_w,
-                            dn_shard_bytes,
-                            {.shard_id = c * dn_shards + s},
-                            {.offset_bytes = s * dn_shard_bytes});
+                if constexpr (!resident) {
+                    for (uint32_t slot = 0; slot < gu_slots; ++slot) {
+                        push_gate_up(slot, jl == 0 && r0 == 0 && b0 == 0 && slot == 0);
                     }
-                    noc.async_read_barrier();
-                    cb_w.push_back(slot_tiles);
+                }
+
+                // ---- resident down slot: prefetched while compute works on the gate_up blocks (after the last
+                // block's gate_up slots when those are streamed: the ring is FIFO). ----
+                if constexpr (dn_resident) {
+                    if (resident ? b0 == 0 : b0 + m_block >= mc) {
+                        push_down(0);
+                    }
+                }
+            }
+
+            // Streamed down slots: every M-block of the chunk passes over them once.
+            if constexpr (!dn_resident) {
+                for (uint32_t b0 = 0; b0 < mc; b0 += m_block) {
+                    for (uint32_t slot = 0; slot < dn_slots; ++slot) {
+                        push_down(slot);
+                    }
                 }
             }
         }

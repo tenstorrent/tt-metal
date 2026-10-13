@@ -153,6 +153,7 @@ def _construct_model(
     num_stages: int = 8,
     submeshes=None,
     use_prefetcher=None,
+    layer_submesh_ids=None,
 ):
     """Build ``DeepSeekV41Model`` + ``lm_head`` and attach the prefetcher session."""
     if loader is None:
@@ -177,6 +178,7 @@ def _construct_model(
         num_stages=num_stages,
         submeshes=submeshes,
         use_prefetcher=use_prefetcher,
+        layer_submesh_ids=layer_submesh_ids,
     )
     lm_head = Linear(
         dequantized(loader, "lm_head.weight", translate=True),

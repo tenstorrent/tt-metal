@@ -228,16 +228,36 @@ class _Fp32(torch.nn.Module):
         return self.module(*args).float()
 
 
-def reference_engram(model, snapshot_dir, loader, layer_id: int, weight: torch.Tensor, scale: torch.Tensor):
+class GivenRows(torch.nn.Module):
+    """Stands in for ``Engram.embed`` over rows looked up elsewhere: ignores the hash ids and returns ``rows``
+    ``[B, L, n_hash_cols * head_dim]`` as fp32 ``[B, L, n_hash_cols, head_dim]``, so a test needs no ~100 GB table."""
+
+    def __init__(self, rows: torch.Tensor, head_dim: int):
+        super().__init__()
+        self.rows = rows.float().unflatten(-1, (-1, head_dim))
+
+    def forward(self, hash_ids):
+        return self.rows
+
+
+def reference_engram_with_embed(model, snapshot_dir, loader, layer_id: int, embed: torch.nn.Module):
     """fp32 ``model.Engram`` of layer ``layer_id``: the checkpoint's dequantized ``wkv`` / ``q_weight`` /
-    ``k_weight``, and its table as :func:`reference_engram_embedding` over the caller's ``weight`` / ``scale``."""
+    ``k_weight``, and ``embed`` (hash ids -> fp32 ``[B, L, n_hash_cols, head_dim]`` rows) as its table lookup."""
     args = model_args(model, snapshot_dir, max_seq=1)
     layout = model.EngramLayout.from_args(args)
     with torch.device("meta"):
         engram = model.Engram(args, layer_id, layout)
-    engram.embed = _Fp32(reference_engram_embedding(model, layout, layer_id, weight, scale))
+    engram.embed = embed
     prefix = f"layers.{layer_id}.engram."
     engram.wkv.weight = torch.nn.Parameter(dequantized(loader, prefix + "wkv.weight")(), requires_grad=False)
     for name in ("q_weight", "k_weight"):
         setattr(engram, name, torch.nn.Parameter(dequantized(loader, prefix + name)().float(), requires_grad=False))
     return engram.eval()
+
+
+def reference_engram(model, snapshot_dir, loader, layer_id: int, weight: torch.Tensor, scale: torch.Tensor):
+    """:func:`reference_engram_with_embed` with the table as :func:`reference_engram_embedding` over the caller's
+    ``weight`` / ``scale``."""
+    layout = model.EngramLayout.from_args(model_args(model, snapshot_dir, max_seq=1))
+    embed = _Fp32(reference_engram_embedding(model, layout, layer_id, weight, scale))
+    return reference_engram_with_embed(model, snapshot_dir, loader, layer_id, embed)
