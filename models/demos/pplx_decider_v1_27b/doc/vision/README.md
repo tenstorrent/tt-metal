@@ -20,26 +20,34 @@ host input prep (per request)                         device (no host calls)
 ```
 
 Results against the HF BF16 image-decision golden (8 rows, bucket 1024, 174-370 tokens, 64-256
-image tokens; `tests/e2e/test_image_model.py`; measured):
+image tokens; `tests/e2e/test_image_model.py`; measured on the current code, default BF16 vision,
+`$PPLX_DECIDER_ARTIFACTS/verify_batch/image/image_decisions.json`, 2026-10-13):
 
-| row | type | tokens | HF choice (prob, top-2 gap) | TT choice (prob) | logit PCC | final-hidden PCC | max prob diff |
+| row | type | tokens | HF choice (prob, top-2 gap) | TT choice (prob, top-2 gap) | logit PCC | final-hidden PCC | max prob diff |
 |---|---|---:|---|---|---:|---:|---:|
-| v01_dominant_color | choice | 174 | blue (0.9914, 0.989) | blue (0.9915) | 0.99996 | 0.99975 | 0.0001 |
-| v02_count_circles | choice | 357 | 4 (0.5100, 0.080) | 4 (0.4705, **tie**) | 0.99940 | 0.99964 | 0.0402 |
-| v03_receipt_total | choice | 315 | $17.50 (0.9942, 0.992) | $17.50 (0.9941) | 0.99999 | 0.99979 | 0.0001 |
-| v04_tallest_bar | choice | 370 | Thu (0.9886, 0.985) | Thu (0.9886) | 0.99997 | 0.99973 | 0.0001 |
-| v05_red_circle_yes | noul | 183 | true (0.9949, 0.990) | true (0.9949) | 1.00000 | 0.99973 | 0.0000 |
-| v06_red_circle_no | noul | 243 | false (0.9847, 0.969) | false (0.9847) | 1.00000 | 0.99978 | 0.0000 |
-| v07_brightness_dark | score | 271 | 0 (0.7825, 0.593) | 0 (0.7820) | 0.99990 | 0.99982 | 0.0005 |
-| v08_progress_fill | score | 364 | 4 (0.9315, 0.885) | 4 (0.9319) | 0.99998 | 0.99966 | 0.0004 |
+| v01_dominant_color | choice | 174 | blue (0.9914, 0.989) | blue (0.9915, 0.989) | 0.99991 | 0.99921 | 0.0002 |
+| v02_count_circles | choice | 357 | 4 (0.5100, 0.080) | 4 (0.5321, 0.131) | 0.99923 | 0.99913 | 0.0295 |
+| v03_receipt_total | choice | 315 | $17.50 (0.9942, 0.992) | $17.50 (0.9946, 0.992) | 0.99999 | 0.99932 | 0.0004 |
+| v04_tallest_bar | choice | 370 | Thu (0.9886, 0.985) | Thu (0.9871, 0.983) | 0.99998 | 0.99932 | 0.0014 |
+| v05_red_circle_yes | noul | 183 | true (0.9949, 0.990) | true (0.9947, 0.989) | 1.00000 | 0.99941 | 0.0001 |
+| v06_red_circle_no | noul | 243 | false (0.9847, 0.969) | false (0.9838, 0.968) | 1.00000 | 0.99929 | 0.0009 |
+| v07_brightness_dark | score | 271 | 0 (0.7825, 0.593) | 0 (0.7740, 0.575) | 0.99985 | 0.99975 | 0.0089 |
+| v08_progress_fill | score | 364 | 4 (0.9315, 0.885) | 4 (0.9268, 0.878) | 0.99999 | 0.99937 | 0.0047 |
 
-- Decisions: 8/8 agree (gate >= 7/8). Logit PCC min 0.99940 (gate 0.99).
-- **v02 is an exact tie on TT.** HF logits for "4" and "5" are 23.0 and 22.625. TT gives 22.875
-  for both. The readout output is BF16 on both sides (the HF readout is BF16 too), and the BF16
-  step at this magnitude is 0.125. So the two TT probabilities are equal (0.4705). The app's
-  `answer` takes the first maximum (`max(range(n), key=values.__getitem__)`), and so does
-  `torch.argmax`, so TT answers "4" as HF does. The margin is zero. If the row flipped it would be
-  a non-near-tie miss (HF gap 0.080 > 0.05) and the gate would fail.
+- Decisions: 8/8 agree (gate >= 7/8). Logit PCC min 0.99923, v02 (gate 0.99).
+- v02 is the closest row. HF logits for "4" and "5" are 23.0 and 22.625. TT gives 22.875 and
+  22.25 (BF16 vision) or 22.875 and 22.375 (opt-in BFP8 vision, see below). The readout output is
+  BF16 on both sides, and the BF16 step at this magnitude is 0.125. TT answers "4" as HF does, with
+  a top-2 probability gap of 0.131 (HF 0.080). If the row flipped it would be a non-near-tie miss
+  (HF gap 0.080 > 0.05) and the gate would fail.
+- History: at the stage 12B code (2026-10-09, `review_12b/image/image_outputs.safetensors`) v02
+  was an exact tie on TT: 22.875 for both "4" and "5", probability 0.4705 each, logit PCC 0.99940,
+  max prob diff 0.0402. TT still answered "4" because `torch.argmax` and the app's `answer` take
+  the first maximum. The stage-3 text-model changes removed the tie: the stage 3A review outputs
+  (`review_3a/e2e_image`) give 22.875 / 22.625, and from stage 3B on (`stage3b/e2e_image`,
+  `review_3b/image`, 2026-10-10) the values are the current 22.875 / 22.25. The other rows of the
+  12B table moved by at most 0.008 in TT probability
+  (v07, measured, same files).
 - Splice gate (measured, all 8 rows): the image-token rows of the spliced `inputs_embeds` equal the
   TT vision-tower output bit for bit, and the text rows equal the TT text embedding bit for bit.
   The spliced-embedding PCC vs the HF golden is reported per row and held to the 12A tower bar
@@ -50,8 +58,9 @@ image tokens; `tests/e2e/test_image_model.py`; measured):
   measures the tower, and 0.999 was a second, stricter tower bar than the 12A gate (0.99). v01
   failed it at 0.998655 while passing 12A. The test now checks the splice by exact equality
   (TT vs TT) and the golden PCC against the 12A bar.
-- Layer trace (last-token residual PCC after each of the 64 layers): v02 min 0.99936, last 0.99984;
-  v07 min 0.99972, last 0.99993.
+- Layer trace (last-token residual PCC after each of the 64 layers, current code): v02 min 0.99895,
+  last 0.99963; v07 min 0.99958, last 0.99991. At the 12B code: v02 min 0.99936, last 0.99984; v07
+  min 0.99972, last 0.99993.
 - Text-only requests are unchanged: the 25-row stage-6 e2e test passes 25/25 and all 100 output
   tensors (probs, logits, final hidden, 64-layer trace per row) are bit identical to a run of the
   code before 12B.
@@ -200,6 +209,11 @@ export PPLX_DECIDER_VISION_PRECISION=bfp8   # used when no vision_precision / po
 The names are `bf16` (default), `bfp8`, `bfp8_except_qkv` and `bfp8_except_merger`
 (`tt/optimizations.py: VISION_PRECISIONS`). The vision tests and the image e2e test build the tower
 with the env var, so the same commands measure either setting.
+`PplxDeciderModel.from_snapshot` checks `vision_precision` before any weight loads: an unknown name
+raises `ValueError`, also with `vision=False`; a valid name with `vision=False` has no effect and logs a
+warning. `tests/vision/test_vision_precision.py` reads the device dtype of every vision weight for the
+default, `bfp8` (kwarg and env), a `bf16` kwarg over a `bfp8` env, and the two `except` names, and
+checks that biases and LayerNorm weights stay BF16 (a PCC pass alone cannot show that BFP8 loaded).
 
 Measured on one p150a (2026-10-13, artifacts `$PPLX_DECIDER_ARTIFACTS/vision_bfp8/`), BF16 and BFP8 in
 the same session:

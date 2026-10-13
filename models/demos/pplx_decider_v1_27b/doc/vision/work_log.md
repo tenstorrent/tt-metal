@@ -189,9 +189,20 @@ An image adds 20-44 ms (5-12 %) to a 1024-bucket request: the vision tower (15.6
 the processor (3.6-10.9 ms on host) and input prep with uploads (3.4-6.2 ms). The splice costs 0.45 ms.
 The text forward does not change with images (363.9 vs 364.1 ms), because the bucket fixes its shape.
 
-## v02 is a tie on TT
+## v02 was a tie on TT at the 12B code (gone since stage 3)
 
-Measured (`image_e2e/image_outputs.safetensors`, golden `v02_count_circles.logits`). TT logits for the
+Current state (measured, 2026-10-13, `verify_batch/image/` and `verify_vision_bfp8/{default,bfp8}/image/`,
+golden `goldens/vision/e2e/golden_bf16.safetensors`): v02 is not a tie. TT logits for "4" / "5" are
+22.875 / 22.25 with BF16 vision (prob of "4" 0.5321, TT top-2 gap 0.131, logit PCC 0.99923, max prob
+diff 0.0295) and 22.875 / 22.375 with opt-in BFP8 vision (prob 0.5228, gap 0.106). HF: 23.0 / 22.625.
+Stored v02 logits by code version (measured): 12B (`review_12b/image`, 2026-10-09) 22.875 / 22.875;
+stage 3A (`review_3a/e2e_image`) 22.875 / 22.625; stage 3B on (`stage3b/e2e_image`, `review_3b/image`,
+2026-10-10, and every later run) 22.875 / 22.25. So the tie went away with the stage-3 text-model
+changes, not with the BFP8 vision option.
+
+History (stage 12B, 2026-10-09; the numbers below are those of the 12B code). Measured
+(`image_e2e/image_outputs.safetensors` at the time, since overwritten by later runs; the same values are
+kept in `review_12b/image/image_outputs.safetensors`; golden `v02_count_circles.logits`). TT logits for the
 five options of v02: 13.4375, 17.125, **22.875, 22.875**, 15.625. HF: 13.5, 17.125, 23.0, 22.625, 15.5.
 So TT "4" = "5" = 22.875 exactly, against HF 23.0 / 22.625. The readout output is BF16 in both (the
 app's `readout` is a BF16 Linear, so the HF readout is BF16 too); at this magnitude the BF16 step is
@@ -201,10 +212,6 @@ both take the first maximum, so TT answers "4" like HF and like the app would on
 The run is deterministic (bit-identical twice), so the answer is stable, but the margin is zero. Any
 change in the text or vision numerics can flip it, and a flip would fail the gate (HF gap 0.080 is
 above the 0.05 near-tie line).
-
-Update 2026-10-13 (measured, `vision_bfp8/bf16/image/image_outputs.safetensors`, code at `4a58362f1cd`
-plus the BFP8 option): after the later text-model changes, v02 is no longer a tie. The TT logits are
-13.625, 17.25, **22.875**, 22.25, 15.3125, and the TT top-2 gap is 0.131.
 
 # BFP8 vision weights (opt-in experiment)
 

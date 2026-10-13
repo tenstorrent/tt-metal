@@ -59,7 +59,7 @@ from models.demos.pplx_decider_v1_27b.tt.decoder import DecoderLayerConfig, Pplx
 from models.demos.pplx_decider_v1_27b.tt.embedding import EmbeddingConfig, PplxEmbedding
 from models.demos.pplx_decider_v1_27b.tt.head import PADDED_OPTIONS, DecisionHeadConfig, PplxDecisionHead
 from models.demos.pplx_decider_v1_27b.tt.model_config import APP_MAX_LENGTH, PplxDeciderArgs
-from models.demos.pplx_decider_v1_27b.tt.optimizations import Optimizations, PrecisionPolicy
+from models.demos.pplx_decider_v1_27b.tt.optimizations import Optimizations, PrecisionPolicy, VisionPrecisionPolicy
 from models.demos.pplx_decider_v1_27b.tt.rope import PplxBatchRotary, PplxRequestRotary, PplxRotary, get_rope_index
 from models.demos.pplx_decider_v1_27b.tt.weight_adapter import (
     build_decoder_layer_weights,
@@ -336,7 +336,10 @@ class PplxDeciderModel(LightweightModule):
         ``vision=True`` also loads the BF16 vision tower (``PplxVisionTower``, ~0.96 GiB) for image requests.
         ``vision_precision`` (opt-in, vision tower only): ``"bfp8"`` stores its projection weights as
         BFP8 (``tt/optimizations.py: VISION_PRECISIONS``); ``None`` reads ``$PPLX_DECIDER_VISION_PRECISION``,
-        else ``"bf16"``. It never changes the text model.
+        else ``"bf16"``. It never changes the text model. It is validated before any weight loads: an
+        unknown name raises ``ValueError`` (with ``vision=False`` too); a value given with ``vision=False``
+        has no effect and logs a warning. ``$PPLX_DECIDER_VISION_PRECISION`` is read only when
+        ``vision=True``.
         ``max_seq_len`` (one of ``BUCKETS``) is the largest prefill bucket ``upload_tokens`` accepts; it
         does not change what is built. ``max_batch_size`` (1..max(BATCH_CAPS)) is the most requests a
         scheduler puts in one forward; it allocates nothing (a batch needs transient activations only).
@@ -351,6 +354,11 @@ class PplxDeciderModel(LightweightModule):
 
         buckets_up_to(max_seq_len)  # validate before the long load
         validate_max_batch_size(max_batch_size)
+        if vision:
+            vision_precision = VisionPrecisionPolicy.resolve(vision_precision)  # raises on an unknown name
+        elif vision_precision is not None:
+            VisionPrecisionPolicy.resolve(vision_precision)  # unknown names raise even without the tower
+            logger.warning(f"vision_precision={vision_precision!r} has no effect with vision=False (no vision tower)")
         reader = reader or SnapshotReader()
         args = PplxDeciderArgs.from_hf_config(reader.text_config)
         opts = Optimizations.build(
