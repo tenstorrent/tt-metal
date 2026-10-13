@@ -75,7 +75,9 @@ def main():
     parser.add_argument("--config", default="")
     parser.add_argument("--power", default="", choices=["", "8kw", "14kw"], help="skip the tt-smi TDP probe")
     parser.add_argument("--expected-tps", default="", help="explicit tok/s target; overrides the table")
-    parser.add_argument("--margin", default="", help="margin for --expected-tps (default 0.15); the table carries its own")
+    parser.add_argument(
+        "--margin", default="", help="margin for --expected-tps (default 0.15); the table carries its own"
+    )
     parser.add_argument("--require", default="0", help="1 fails the run if nothing was measured")
     args = parser.parse_args()
 
