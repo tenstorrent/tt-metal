@@ -331,6 +331,9 @@ uint32_t SparseSDPAMsaOperation::resolve_kv_cache_slots(
     // Fewer than KV_CACHE_SLOTS_MIN fitting selects the streamed kernels; they need the L1 of one slot, so that
     // program fails at launch only where the cache-off op would.
     auto* device = t.q.device();
+    if (device == nullptr) {  // host or deallocated q: validation runs after this and reports it
+        return 0;
+    }
     const uint64_t cb_align = tt::tt_metal::hal::get_dram_alignment();
     uint64_t base_bytes =
         tt::align(static_cast<uint64_t>(message_page_bytes(1)) * sparse_sdpa_msa::KV_CACHE_SLOT_DEPTH, cb_align);
