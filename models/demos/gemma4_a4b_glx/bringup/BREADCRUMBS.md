@@ -195,3 +195,12 @@ I re-applied the attempt above unchanged; it had passed under an older framework
   attn_residual. `device_component("ffn_combine")` returns the existing `TtResidualAdd` through `_host_fn2`; no new
   module or setting.
 - Re-run: `bfw job check --task C.sliding.ffn_combine`
+
+## C.sliding.ffn_residual (run 20261013-175448-gemma4-glx-14)
+- `tt/residual.py`: `TtScaledResidualAdd(mesh, scalar)` computes out = (h_mid + ffn_out) * layer_scalar.
+  - `ttnn.add` writes an fp32 sum, then `ttnn.multiply` by the Python float scalar writes bf16. 2 device ops.
+  - `layer_scalar` (shape [1]) is read once at load in `hooks.py` from `layers.{L}.layer_scalar`, then turned into a float.
+- `hooks.py`: `device_component("ffn_residual")` returns it through `_host_fn2`. The global block uses the same path.
+- No new setting.
+- Frozen test results: pcc 0.9999965, auto_margin_min 2.74, 0 host FLOPs. All 13 earlier sliding components still pass.
+- Re-run: `bfw job check --task C.sliding.ffn_residual`

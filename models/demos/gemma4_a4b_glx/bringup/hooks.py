@@ -214,6 +214,11 @@ def device_component(mesh, spec, layer, step):
         from models.demos.gemma4_a4b_glx.tt.residual import TtResidualAdd
 
         return _host_fn2(mesh, TtResidualAdd(mesh))
+    if step == "ffn_residual":
+        from models.demos.gemma4_a4b_glx.tt.residual import TtScaledResidualAdd
+
+        scalar = _weight_loader(spec).get(f"{PREFIX}layers.{layer}.layer_scalar")
+        return _host_fn2(mesh, TtScaledResidualAdd(mesh, scalar.float().reshape(-1)[0].item()))
     if step == "router":
         return _router_fn(mesh, _router_module(mesh, spec, layer))
     if step == "experts":
