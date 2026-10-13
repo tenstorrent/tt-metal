@@ -176,20 +176,21 @@ inline void setup_remote_cb_interfaces(
         uint32_t config_addr = circular_buffer_config_addr[0];
         uint32_t page_size = circular_buffer_config_addr[1];
         circular_buffer_config_addr += UINT32_WORDS_PER_REMOTE_CIRCULAR_BUFFER_CONFIG;
-        // Unconfigured remote CB at this index on this core (config_addr == 0). Zero the interface's
-        // fifo_start_addr so a stale value from a prior program can't be picked up: the align define is
-        // emitted per-kernel and may run align_local_cbs_to_remote_cb for this index on a core that
-        // doesn't own the CB, which treats fifo_start_addr == 0 as "not present" (a real remote CB start
-        // is an L1 buffer address, never 0). sender and receiver views alias the same interface word.
-        if (config_addr == 0) {
+        volatile tt_l1_ptr uint32_t* l1_remote_cb_config_addr =
+            reinterpret_cast<volatile tt_l1_ptr uint32_t*>(config_addr);
+        // No remote CB at this index on this core: either none is configured (config_addr == 0), or this core
+        // is outside the GlobalCircularBuffer, whose config page here is zeroed. A real fifo_start_addr is an L1
+        // buffer address, never 0. Zero the interface's fifo_start_addr so a stale value from a prior program
+        // can't be picked up: the align define is emitted per-kernel and may run align_local_cbs_to_remote_cb
+        // for this index on a core that doesn't own the CB, which treats fifo_start_addr == 0 as "not present".
+        // sender and receiver views alias the same interface word.
+        const uint32_t fifo_start_addr = config_addr == 0 ? 0 : l1_remote_cb_config_addr[2];
+        if (fifo_start_addr == 0) {
             get_remote_receiver_cb_interface(cb_id).fifo_start_addr = 0;
             continue;
         }
-        volatile tt_l1_ptr uint32_t* l1_remote_cb_config_addr =
-            reinterpret_cast<volatile tt_l1_ptr uint32_t*>(config_addr);
         const bool is_sender = l1_remote_cb_config_addr[0];
         uint32_t num_receivers = l1_remote_cb_config_addr[1];
-        uint32_t fifo_start_addr = l1_remote_cb_config_addr[2];
         uint32_t fifo_ptr = l1_remote_cb_config_addr[4];
         uint32_t remote_noc_xy_addr = l1_remote_cb_config_addr[5];
         uint32_t aligned_pages_sent_addr = l1_remote_cb_config_addr[6];

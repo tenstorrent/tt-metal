@@ -52,6 +52,7 @@ public:
     const CoreRangeSet& sender_cores() const;
     const CoreRangeSet& receiver_cores() const;
     const CoreRangeSet& all_cores() const;
+    const CoreRangeSet& config_cores() const;
     DeviceAddr buffer_address() const;
     DeviceAddr config_address() const;
     uint32_t size() const;
@@ -89,6 +90,10 @@ private:
     CoreRangeSet sender_cores_;
     CoreRangeSet receiver_cores_;
     CoreRangeSet all_cores_;
+    // Every worker core holds a config page at config_address(): the senders' and receivers' describe their
+    // role, the rest are zero, which firmware reads as "not part of this GlobalCircularBuffer". So a
+    // circular buffer backed by it can span cores beyond all_cores_ with the same config on every core.
+    CoreRangeSet config_cores_;
     uint32_t size_ = 0;
     // Private experimental DRAM-sender metadata. `sender_core_type_value_` is stored as
     // uint8_t (0=Worker, 1=Dram) so the SenderCoreType enum stays in the experimental
