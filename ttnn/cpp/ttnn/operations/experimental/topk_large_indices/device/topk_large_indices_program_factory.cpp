@@ -368,18 +368,25 @@ TopkLargeIndicesProgramFactory::cached_program_t TopkLargeIndicesProgramFactory:
         tt::tt_metal::CreateCircularBuffer(program, all_cores, meta_cb_config);
     }
 
-    const auto create_survivor_cb = [&](uint8_t cb) {
-        const auto survivor_cb_config =
-            // Raw 32 bit words: the index tiles are integers and must not pass through the float packer.
-            tt::tt_metal::CircularBufferConfig(survivor_bytes, {{cb, tt::DataFormat::UInt32}})
-                .set_page_size(cb, survivor_tile_bytes);
-        tt::tt_metal::CreateCircularBuffer(program, all_cores, survivor_cb_config);
-    };
-    create_survivor_cb(cb_landing);
-    create_survivor_cb(cb_send);
-
-    const uint32_t credit_semaphore_id = tt::tt_metal::CreateSemaphore(program, all_cores, 0);
-    const uint32_t data_semaphore_id = tt::tt_metal::CreateSemaphore(program, all_cores, 0);
+    const uint32_t tree = row_split_possible(
+                              flattened_rows_excluding_last_dim(input.logical_shape()), static_cast<uint32_t>(cores.size()))
+                              ? 1u
+                              : 0u;
+    uint32_t credit_semaphore_id = 0;
+    uint32_t data_semaphore_id = 0;
+    if (tree) {
+        const auto create_survivor_cb = [&](uint8_t cb) {
+            const auto survivor_cb_config =
+                // Raw 32 bit words: the index tiles are integers and must not pass through the float packer.
+                tt::tt_metal::CircularBufferConfig(survivor_bytes, {{cb, tt::DataFormat::UInt32}})
+                    .set_page_size(cb, survivor_tile_bytes);
+            tt::tt_metal::CreateCircularBuffer(program, all_cores, survivor_cb_config);
+        };
+        create_survivor_cb(cb_landing);
+        create_survivor_cb(cb_send);
+        credit_semaphore_id = tt::tt_metal::CreateSemaphore(program, all_cores, 0);
+        data_semaphore_id = tt::tt_metal::CreateSemaphore(program, all_cores, 0);
+    }
 
     std::vector<uint32_t> reader_compile_args = {cb_in, input_chunk_bytes, input_tile_bytes, tiles_per_sequence};
     interleaved_accessor_args(input).append_to(reader_compile_args);
@@ -394,10 +401,6 @@ TopkLargeIndicesProgramFactory::cached_program_t TopkLargeIndicesProgramFactory:
     const bool has_vend = tensor_args.has_valid_end_metadata();
     interleaved_accessor_args(has_vend ? *tensor_args.valid_end_tensor : input).append_to(reader_compile_args);
 
-    const uint32_t tree = row_split_possible(
-                              flattened_rows_excluding_last_dim(input.logical_shape()), static_cast<uint32_t>(cores.size()))
-                              ? 1u
-                              : 0u;
     auto reader_kernel = tt::tt_metal::CreateKernel(
         program,
         "ttnn/cpp/ttnn/operations/experimental/topk_large_indices/device/kernels/reader.cpp",

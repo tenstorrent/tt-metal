@@ -142,7 +142,7 @@ void kernel_main() {
     Noc noc;
 
     // The landing CB is one survivor slot cycled whole, so its base is the same address on every core.
-    const uint32_t landing_base = landing_cb.get_write_ptr();
+    const uint32_t landing_base = tree ? landing_cb.get_write_ptr() : 0;
 
     const uint32_t num_whole_rows = has_split ? num_rows - 1 : num_rows;
     for (uint32_t local_row = 0; local_row < num_rows; ++local_row) {
