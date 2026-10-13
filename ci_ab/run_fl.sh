@@ -4,7 +4,7 @@
 # its own reduce header (ci_ab/hdr/<v>.h: main, head, n) compiled into its own build dir, so all sides run from one tree
 # path. Fresh build dirs and JIT cache per job; both sides in one job, alternated; the A/A pair is main built twice (ma).
 # The ELF guard stops the job when the new side's UInt32 and four-tile row kernels equal the head's (a void A/B).
-# usage: run_fl.sh f1|f2   sweep (PR module + UInt32 rows) ABBA twice for main, ma, head, n; counters of the targets for
+# usage: run_fl.sh f1..f5   sweep (PR module + UInt32 rows) ABBA twice for main, ma, head, n; counters of the targets for
 #                       head and n; row and UInt32 bits of main and n; the four reduce modules with LLK asserts on and
 #                       test_sfpu_reduce.py without load macros, on n
 set +e +o pipefail
@@ -55,8 +55,9 @@ run() {  # run <slot> <build> <ids> <tag> [pytest args]; RTS, ASSERTS and EXTRA 
 }
 STOP=0
 mkslot slot
-if [[ $JOB == f1 || $JOB == f2 || $JOB == f3 || $JOB == f4 ]]; then
+if [[ $JOB == f1 || $JOB == f2 || $JOB == f3 || $JOB == f4 || $JOB == f5 ]]; then
   build slot main ra_m sweep; build slot main ra_ma sweep; build slot head ra_h sweep; build slot n ra_n sweep
+  [[ $JOB == f5 ]] && for k in 1 2 3; do build slot m$k ra_m$k sweep; done
   RTS=MATH_ISOLATE build slot head wc_h wc --dump-perf-counters; RTS=MATH_ISOLATE build slot n wc_n wc --dump-perf-counters
   ASSERTS=1 build slot main rb_m rowb; ASSERTS=1 build slot n rb_n rowb
   ASSERTS=1 build slot main ub_m u32b; ASSERTS=1 build slot n ub_n u32b
@@ -66,7 +67,11 @@ if [[ $JOB == f1 || $JOB == f2 || $JOB == f3 || $JOB == f4 ]]; then
   grep -q "ELF GUARD PASS" $SL/out/elf_guard.txt || { echo "== ELF guard failed, stopping"; STOP=1; }
   echo "== C: sweep, n against main and head, A/A pair $(date -u +%T)"; n=0
   c() { n=$((n+1)); [[ $STOP == 1 ]] && return; run slot ra_$1 sweep f1c_$1_$n; }
-  for blk in 1 2; do c m; c ma; c h; c n; c n; c h; c ma; c m; done
+  if [[ $JOB == f5 ]]; then
+    for blk in 1 2; do c m; c ma; c h; c n; c m1; c m2; c m3; c m3; c m2; c m1; c n; c h; c ma; c m; done
+  else
+    for blk in 1 2; do c m; c ma; c h; c n; c n; c h; c ma; c m; done
+  fi
   echo "== W: counters $(date -u +%T)"; n=0
   w() { n=$((n+1)); [[ $STOP == 1 ]] && return; RTS=MATH_ISOLATE run slot wc_$1 wc f1w_$1_$n --dump-perf-counters; }
   w h; w n; w n; w h
