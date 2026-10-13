@@ -2,6 +2,8 @@
 //
 // SPDX-License-Identifier: Apache-2.0
 
+#include <cstdlib>
+#include <string>
 #include "binary_ng_utils.hpp"
 #include <tt-metalium/work_split.hpp>
 #include "ttnn/operations/cb_utils.hpp"
@@ -1406,20 +1408,36 @@ tt::tt_metal::ProgramDescriptor BinaryNgDeviceOperation::ProgramFactory::create_
         a_data_format == tt::DataFormat::Bfp8_b &&
         (b_data_format == tt::DataFormat::Float16_b || b_data_format == tt::DataFormat::Bfp8_b) &&
         (c_data_format == tt::DataFormat::Float16_b || c_data_format == tt::DataFormat::Bfp8_b) && block_tiles >= 4;
+    // CI A/B only (not for merge): EB_HR_BNG=main builds main's program, s0 the head before the switch, s1 (default) the switch
+    const char* eb_hr_env = std::getenv("EB_HR_BNG");
+    const std::string eb_hr = eb_hr_env ? eb_hr_env : "s1";
+    if (eb_hr == "s0") {
+        const bool s0_pack = block_kernel && block_tiles >= 16;
+        const bool s0_alone = block_kernel && !has_post_activations && block_tiles >= 6 &&
+                              std::get<OpConfig::FpuBinaryOp>(op_config.binary_op) != OpConfig::FpuBinaryOp::MUL;
+        if (s0_pack || s0_alone || block_unpack_mixed) {
+            compute_kernel_defines["BINARY_NG_BLOCK"] = "1";
+        }
+        if (s0_pack) {
+            compute_kernel_defines["BINARY_NG_BLOCK_PACK"] = "1";
+            compute_kernel_defines["BINARY_NG_BLOCK_PACK_CONTIG"] = "1";
+        }
+    } else if (eb_hr != "main") {
     if (block_pack || block_unpack_mixed) {
         compute_kernel_defines["BINARY_NG_BLOCK"] = "1";
     }
     if (block_pack) {
         compute_kernel_defines["BINARY_NG_BLOCK_PACK"] = "1";
     }
+    }
     // Blackhole sharded sections are compute bound, so they keep the binary init across a post activation.
-    if (tt::tt_metal::hal::get_arch() == tt::ARCH::BLACKHOLE && !is_sfpu_op && has_post_activations &&
+    if (eb_hr != "main" && tt::tt_metal::hal::get_arch() == tt::ARCH::BLACKHOLE && !is_sfpu_op && has_post_activations &&
         num_tiles_per_cycle > 1 && compute_kernel == CMAKE_UNIQUE_NAMESPACE::KernelName::ComputeNoBcast) {
         compute_kernel_defines["BINARY_NG_POST_KEEPS_INIT"] = "1";
     }
     // Interleaved ops keep it only on a core with at most one DEST section of tiles; the kernel checks its runtime tile
     // count, as one program serves every tensor volume.
-    if (tt::tt_metal::hal::get_arch() == tt::ARCH::BLACKHOLE && !is_sfpu_op && has_post_activations &&
+    if (eb_hr != "main" && tt::tt_metal::hal::get_arch() == tt::ARCH::BLACKHOLE && !is_sfpu_op && has_post_activations &&
         !has_operand_activations && num_tiles_per_cycle == 1 &&
         compute_kernel == CMAKE_UNIQUE_NAMESPACE::KernelName::ComputeNoBcast) {
         compute_kernel_defines["BINARY_NG_POST_KEEPS_INIT_UP_TO"] = "8";

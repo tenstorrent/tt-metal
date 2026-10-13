@@ -11,11 +11,17 @@
 #ifndef BINARY_NG_BLOCK_PACK
 #define BINARY_NG_BLOCK_PACK 0
 #endif
+#ifndef BINARY_NG_BLOCK_PACK_CONTIG
+#define BINARY_NG_BLOCK_PACK_CONTIG 0
+#endif
 // Blackhole: the block section (BINARY_NG_BLOCK) hands each operand tile over whole, as its block unpack needs.
 #define ELTWISE_BINARY_PER_TILE_HANDOFF BINARY_NG_BLOCK
 #define ELTWISE_BINARY_BLOCK_UNPACK BINARY_NG_BLOCK
 #include "api/compute/eltwise_binary.h"
 #include "api/compute/pack.h"
+#if BINARY_NG_BLOCK_PACK_CONTIG
+#include "api/compute/experimental/pack_block.h"
+#endif
 #include "eltwise_utils_common.hpp"
 #include "eltwise_utils.hpp"
 
@@ -49,6 +55,9 @@ void kernel_main() {
     compute_kernel_hw_startup(cb_post_lhs.get_cb_id(), cb_post_rhs.get_cb_id(), cb_out.get_cb_id());
 #ifdef PACK_RELU
     pack_relu_config(ReluConfig::zero());
+#endif
+#if BINARY_NG_BLOCK_PACK_CONTIG
+    pack_block_contiguous_init(cb_out.get_cb_id());
 #endif
 
 #if not(HAS_ACTIVATIONS(LHS) or HAS_ACTIVATIONS(RHS) or BINARY_NG_POST_REINIT)
@@ -100,7 +109,9 @@ void kernel_main() {
         tile_regs_commit();
 
         tile_regs_wait();
-#if BINARY_NG_BLOCK_PACK
+#if BINARY_NG_BLOCK_PACK_CONTIG
+        pack_block_contiguous(0, cb_out.get_cb_id(), n);
+#elif BINARY_NG_BLOCK_PACK
         pack_block_mop(0, cb_out.get_cb_id(), n);
 #else
         for (uint32_t i = 0; i < n; ++i) {
