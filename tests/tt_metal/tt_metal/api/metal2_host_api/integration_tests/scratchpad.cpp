@@ -43,9 +43,9 @@ using test_helpers::ProgramSpecHWTest;
 // TT_METAL_SLOW_DISPATCH_MODE=1) exercises exactly that path.
 //
 // One Gen1 DM kernel binds a 64-byte scratchpad, writes a known pattern into it, and reports its
-// Scratchpad::get_base_address() to a host-known L1 address. The host reads the reported base, then
-// reads the scratchpad L1 and confirms the pattern landed — closing the loop on both "the scratchpad is
-// real, writable, node-local L1" and "the framework delivered its base address to the kernel".
+// Scratchpad::get_base_address() and get_dataformat() to a host-known L1 address. The host reads the
+// reported values, then reads the scratchpad L1 and confirms the pattern landed — closing the loop on
+// the scratchpad being real, writable, node-local L1 and the framework delivering its metadata.
 TEST_F(ProgramSpecHWTest, ScratchpadWriteReadback) {
     auto mesh_device = devices_.at(0);
 
@@ -79,7 +79,11 @@ TEST_F(ProgramSpecHWTest, ScratchpadWriteReadback) {
     ProgramSpec spec;
     spec.name = "scratchpad_write_readback_slow_dispatch";
     spec.kernels = {dm_kernel};
-    spec.scratchpads = {ScratchpadSpec{.unique_id = ScratchpadSpecName{"pad"}, .size_per_node = kScratchpadBytes}};
+    spec.scratchpads = {ScratchpadSpec{
+        .unique_id = ScratchpadSpecName{"pad"},
+        .size_per_node = kScratchpadBytes,
+        .data_format_metadata = tt::DataFormat::Float16_b,
+    }};
     spec.work_units = std::vector<WorkUnitSpec>{WorkUnitSpec{
         .name = "work_unit_0",
         .kernels = {KernelSpecName{"scratch_kernel"}},
@@ -97,17 +101,18 @@ TEST_F(ProgramSpecHWTest, ScratchpadWriteReadback) {
 
     // Pre-zero the report location so a kernel that never wrote it would be caught (the readback base
     // address would be 0, which is not a valid scratchpad L1 address → the pattern check fails).
-    std::vector<uint32_t> zero_report(1, 0u);
+    std::vector<uint32_t> zero_report(2, 0u);
     slow_dispatch::WriteToL1(*mesh_device, node, kReportAddr, zero_report);
 
     // Dispatch via the slow-dispatch path (blocking — wait_until_cores_done defaults to true).
     LaunchProgram(*mesh_device, std::move(program));
 
     std::vector<uint32_t> reported;
-    slow_dispatch::ReadFromL1(*mesh_device, node, kReportAddr, sizeof(uint32_t), reported);
-    ASSERT_EQ(reported.size(), 1u);
+    slow_dispatch::ReadFromL1(*mesh_device, node, kReportAddr, 2 * sizeof(uint32_t), reported);
+    ASSERT_EQ(reported.size(), 2u);
     const uint32_t scratch_base = reported[0];
     EXPECT_NE(scratch_base, 0u) << "Kernel reported a 0 scratchpad base address (token not delivered?)";
+    EXPECT_EQ(reported[1], static_cast<uint32_t>(tt::DataFormat::Float16_b));
 
     std::vector<uint32_t> scratch_contents;
     slow_dispatch::ReadFromL1(*mesh_device, node, scratch_base, kScratchpadBytes, scratch_contents);

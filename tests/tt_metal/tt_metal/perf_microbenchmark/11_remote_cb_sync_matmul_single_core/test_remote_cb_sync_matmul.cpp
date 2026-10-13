@@ -316,7 +316,7 @@ std::tuple<std::vector<tt_metal::Program>, ::tt_metal::experimental::GlobalCircu
         "bmm_large_block_zm_fused_bias_activation_copy.cpp",
         l1_receiver_cores,
         tt_metal::ComputeConfig{
-            .math_fidelity = tile_format == tt::DataFormat::Float16_b ? MathFidelity::HiFi2 : MathFidelity::LoFi,
+            .math_fidelity = tile_format == tt::DataFormat::Float16_b ? tt::tt_metal::MathFidelity::HiFi2 : tt::tt_metal::MathFidelity::LoFi,
             .fp32_dest_acc_en = true,
             .math_approx_mode = true,
             .compile_args = compute_kernel_compile_time_args});

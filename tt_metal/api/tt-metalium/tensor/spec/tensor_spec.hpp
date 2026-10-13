@@ -4,8 +4,22 @@
 
 #pragma once
 
+#include <cstddef>
+#include <cstdint>
+#include <optional>
 #include <tt-metalium/tensor/tensor_types.hpp>
 #include <tt-metalium/tensor/spec/layout/tensor_layout.hpp>
+#include <tt-metalium/buffer.hpp>
+#include <tt-metalium/buffer_types.hpp>
+#include <tt-metalium/core_coord.hpp>
+#include <tt-metalium/shape.hpp>
+#include <tt-metalium/shape2d.hpp>
+#include <tt-metalium/tensor/spec/layout/layout.hpp>
+#include <tt-metalium/tensor/spec/layout/page_config.hpp>
+#include <tt-metalium/tensor/spec/memory_config/memory_config.hpp>
+#include <tt-metalium/tile.hpp>
+#include <tt_stl/span.hpp>
+#include <tuple>
 
 namespace tt::tt_metal {
 

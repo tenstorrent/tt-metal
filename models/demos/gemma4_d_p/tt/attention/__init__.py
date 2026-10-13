@@ -13,8 +13,8 @@ from .ring_prefill import init_global_ring_kv_cache, init_sliding_ring_kv_cache
 from .global_kv_cache import GLOBAL_HEAD_DIM, GLOBAL_ROTARY_DIM, pack_global_kv_device
 from .operations import (
     apply_per_head_norm,
+    apply_output_projection,
     apply_qkv_projection,
-    projection_matmul_configs,
     prefill_short_lived_memcfg,
     split_qkv_heads_prefill,
 )
@@ -123,7 +123,6 @@ class Gemma4Attention:
     def __call__(
         self,
         hidden_states,
-        rope_mats,
         prefill_metadata,
         chunk_start_idx=0,
         packed_global_rope=None,
@@ -136,6 +135,7 @@ class Gemma4Attention:
         chunk_offset = int(chunk_start_idx)
         kv_tied = self.config.is_kv_tied
         xqkv = apply_qkv_projection(hidden_states, self.weights, kv_tied=kv_tied)
+        hidden_states.deallocate(True)
 
         # Short-lived prefill activations in L1 when GEMMA4_PREFILL_L1_ACT=1 (Qwen36
         # #48861). o_proj / allreduce stay DRAM (CB clash with CCL).
@@ -218,8 +218,6 @@ class Gemma4Attention:
             packed_kv = pack_global_kv_device(
                 tt_v,
                 self.weights.k_norm_rotary_weight,
-                rope_mats[0],
-                rope_mats[1],
                 canonical_k=tt_k,
                 packed_rope_mats=packed_global_rope,
                 value_is_packed=True,
@@ -301,10 +299,7 @@ class Gemma4Attention:
 
         # Concat heads + apply out proj + all_reduce
         tt_out = ttnn.experimental.nlp_concat_heads(tt_sdpa, memory_config=ttnn.DRAM_MEMORY_CONFIG)
-        program_config, compute_kernel_config = projection_matmul_configs(tt_out, self.weights.o_proj)
-        projected = ttnn.linear(
-            tt_out, self.weights.o_proj, program_config=program_config, compute_kernel_config=compute_kernel_config
-        )
+        projected = apply_output_projection(tt_out, self.weights)
         tt_out.deallocate(True)
         tt_out = ccl_reduce_scatter_rows(projected, self.mesh_config, self.ccl_manager)
 

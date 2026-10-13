@@ -49,13 +49,6 @@ inline void select_cfg_state(const std::uint32_t state_id)
     }
 }
 
-// Mailbox reads are bare volatile loads. Fence so later config / CLEANUP_DONE
-// writes cannot race ahead when the payload is only checked under LLK_ASSERT.
-inline void mailbox_fence()
-{
-    asm volatile("fence" ::: "memory");
-}
-
 /**
  * Enter cleanup and wait until this thread owns the configure turn.
  *
@@ -75,28 +68,24 @@ inline void start()
     {
         mailbox_write(MathThreadId, UNPACK_READY);
         const std::uint32_t configure = mailbox_read(MathThreadId);
-        mailbox_fence();
         LLK_ASSERT(configure == UNPACK_CONFIGURE, "Unexpected unpack cleanup configuration grant.");
     }
     else if constexpr (thread_id == PackThreadId)
     {
         mailbox_write(MathThreadId, PACK_READY);
         const std::uint32_t configure = mailbox_read(MathThreadId);
-        mailbox_fence();
         LLK_ASSERT(configure == PACK_CONFIGURE, "Unexpected pack cleanup configuration grant.");
     }
     else
     {
         const std::uint32_t unpack_ready = mailbox_read(UnpackThreadId);
         const std::uint32_t pack_ready   = mailbox_read(PackThreadId);
-        mailbox_fence();
         LLK_ASSERT(unpack_ready == UNPACK_READY, "Unexpected cleanup message from unpack thread.");
         LLK_ASSERT(pack_ready == PACK_READY, "Unexpected cleanup message from pack thread.");
 
         // Unpack configures while Math blocks on CONFIGURED.
         mailbox_write(UnpackThreadId, UNPACK_CONFIGURE);
         const std::uint32_t configured = mailbox_read(UnpackThreadId);
-        mailbox_fence();
         LLK_ASSERT(configured == UNPACK_CONFIGURED, "Unexpected unpack cleanup configuration completion.");
     }
 }
@@ -124,14 +113,12 @@ inline void finish()
     {
         mailbox_write(MathThreadId, UNPACK_CONFIGURED);
         const std::uint32_t done = mailbox_read(MathThreadId);
-        mailbox_fence();
         LLK_ASSERT(done == CLEANUP_DONE, "Unexpected unpack cleanup completion.");
     }
     else if constexpr (thread_id == PackThreadId)
     {
         mailbox_write(MathThreadId, PACK_CONFIGURED);
         const std::uint32_t done = mailbox_read(MathThreadId);
-        mailbox_fence();
         LLK_ASSERT(done == CLEANUP_DONE, "Unexpected pack cleanup completion.");
     }
     else
@@ -139,7 +126,6 @@ inline void finish()
         // Pack configures while Math blocks on CONFIGURED.
         mailbox_write(PackThreadId, PACK_CONFIGURE);
         const std::uint32_t configured = mailbox_read(PackThreadId);
-        mailbox_fence();
         LLK_ASSERT(configured == PACK_CONFIGURED, "Unexpected pack cleanup configuration completion.");
 
         mailbox_write(UnpackThreadId, CLEANUP_DONE);

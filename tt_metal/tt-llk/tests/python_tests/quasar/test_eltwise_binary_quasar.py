@@ -47,6 +47,7 @@ from helpers.test_variant_parameters import (
     NUM_TILES_IN_BLOCK,
     OUTPUT_TILE_CNT,
     TEST_FACE_DIMS,
+    TILE_COUNT,
     generate_input_dim,
 )
 from helpers.tile_constants import is_mx_unsupported_tile_dims
@@ -336,6 +337,7 @@ def test_eltwise_binary(
             generate_input_dim(
                 input_dimensions, input_dimensions, tile_dimensions=tile_dimensions
             ),
+            TILE_COUNT(tile_cnt_A),
             INPUT_TILE_CNT(tile_cnt_A),
             OUTPUT_TILE_CNT(tile_cnt_res),
             NUM_FACES(num_faces, num_faces, num_faces),
