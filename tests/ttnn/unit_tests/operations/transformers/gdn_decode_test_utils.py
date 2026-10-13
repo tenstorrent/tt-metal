@@ -6,9 +6,10 @@
 
 The reference semantics live in the op's registered golden (ttnn.get_golden_function(op), implemented in
 ttnn/ttnn/operations/transformer_golden.py); this module holds what is not reference semantics: the model shapes, input
-generation, the chained single-token helper, the accuracy gates and metrics, and a vendored copy of FLA's naive
-recurrence as the oracle the golden is checked against."""
+generation, the chained single-token helper, the accuracy gates and metrics, the output digest, and a vendored copy of
+FLA's naive recurrence as the oracle the golden is checked against."""
 
+import hashlib
 from dataclasses import dataclass
 
 import torch
@@ -97,6 +98,11 @@ def assert_accuracy(ref, got, label, *, pcc_min=PCC_MIN, max_abs_rel=MAX_ABS_REL
     m = metrics(ref, got)
     assert m["pcc"] >= pcc_min and m["max_abs_rel"] <= max_abs_rel, f"{label}: {m}"
     return m
+
+
+def golden_digest(tensor):
+    """sha256 of the fp32 bytes of a tensor: the compatibility golden of an output."""
+    return hashlib.sha256(tensor.detach().to(torch.float32).contiguous().numpy().tobytes()).hexdigest()
 
 
 def fla_naive_recurrent_gated_delta_rule(q, k, v, beta, g, scale=None, initial_state=None, output_final_state=False):
