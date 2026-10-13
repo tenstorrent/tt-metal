@@ -39,13 +39,14 @@ void FusedExpertsPrefillDeviceOperation::validate_on_program_cache_miss(
         x.logical_shape());
     const uint32_t hidden = static_cast<uint32_t>(x.logical_shape()[-1]);
     const uint32_t tokens = static_cast<uint32_t>(x.logical_shape()[-2]);
+    // The down output is split over a group's cores in [*, 64] shards (two tile columns).
     TT_FATAL(
-        hidden % (kTile * kCoresPerGroup * 2) == 0 && (hidden / kTile) % kRmChunkTiles == 0 &&
-            hidden / kTile >= 2 * kRmChunkTiles,
+        hidden % (kTile * 2) == 0 && hidden / (kTile * 2) >= kMaxCoresPerGroup &&
+            (hidden / kTile) % kRmChunkTiles == 0 && hidden / kTile >= 2 * kRmChunkTiles,
         "fused_experts_prefill: H ({}) must be a multiple of {} and at least {}",
         hidden,
-        kTile * kCoresPerGroup * 2,
-        2 * kRmChunkTiles * kTile);
+        std::max(kTile * 2, kRmChunkTiles * kTile),
+        std::max(kTile * 2 * kMaxCoresPerGroup, 2 * kRmChunkTiles * kTile));
     TT_FATAL(
         tokens % kTile == 0 && tokens <= kMaxTokens,
         "fused_experts_prefill: T ({}) must be a multiple of {} and at most {}",
@@ -108,7 +109,7 @@ void FusedExpertsPrefillDeviceOperation::validate_on_program_cache_miss(
     }
 
     // gate_up: [H, 2I], DRAM ND-sharded [H, 64] (one [gate_32 | up_32] pair per shard, I/32 shards).
-    // Each of the 8 cores of a group covers I/32/8 consecutive shards.
+    // Each core of a group covers a run of consecutive shards.
     const uint32_t two_i = static_cast<uint32_t>(tensor_args.gate_up_weights[0].logical_shape()[-1]);
     const uint32_t inter = two_i / 2;
     TT_FATAL(
@@ -116,12 +117,15 @@ void FusedExpertsPrefillDeviceOperation::validate_on_program_cache_miss(
         "fused_experts_prefill: intermediate_size ({}) does not match gate_up_weights ({})",
         attributes.intermediate_size,
         inter);
+    // The I tiles are split over the cores of a group in runs (the first ones get one more).
     TT_FATAL(
-        inter % (kTile * kCoresPerGroup) == 0,
-        "fused_experts_prefill: local intermediate size ({}) must be a multiple of {} (I-tiles split over {} cores)",
+        inter % kTile == 0 && inter / kTile >= kMaxCoresPerGroup,
+        "fused_experts_prefill: local intermediate size ({}) must be a multiple of {} and at least {} (one I tile "
+        "for each of the up to {} cores of a group)",
         inter,
-        kTile * kCoresPerGroup,
-        kCoresPerGroup);
+        kTile,
+        kTile * kMaxCoresPerGroup,
+        kMaxCoresPerGroup);
     for (size_t e = 0; e < num_experts; ++e) {
         const auto& w = tensor_args.gate_up_weights[e];
         TT_FATAL(w.buffer()->buffer_type() == tt::tt_metal::BufferType::DRAM, "gate_up_weights[{}] must be in DRAM", e);

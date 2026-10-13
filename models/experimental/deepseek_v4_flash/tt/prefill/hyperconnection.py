@@ -114,8 +114,13 @@ class DeepSeekV4PrefillHyperConnection(DeepSeekV4Module):
         self.comb_b = bias("comb_b", 2 * hc, 2 * hc + hc * hc)
         self.pre_scale, self.post_scale, self.comb_scale = (float(scale[0]), float(scale[1]), float(scale[2]))
 
-    def forward(self, hidden_streams: ttnn.Tensor):
-        """``hidden_streams`` ``[B, S, hc, D]`` -> ``(post [B,S,hc,1], comb [B,S,hc,hc], collapsed [B,S,1,D])``."""
+    def forward(self, hidden_streams: ttnn.Tensor, pre_mix: Optional[ttnn.Tensor] = None):
+        """``hidden_streams`` ``[B, S, hc, D]`` -> ``(post [B,S,hc,1], comb [B,S,hc,hc], collapsed [B,S,1,D])``.
+
+        ``pre_mix`` ``[B, S, 1, hc]`` is passed to the op as the ``pre`` weights of ``collapsed`` in place of
+        the ones it computes from ``fn``; the op then also returns the ``pre`` it computed, as a fourth
+        output, for the next block to use.
+        """
         shape = tuple(hidden_streams.shape)
         if len(shape) != 4 or shape[2] != self.hc or shape[3] != self.hidden:
             raise ValueError(f"expected streams [B, S, {self.hc}, {self.hidden}], got {shape}")
@@ -142,6 +147,7 @@ class DeepSeekV4PrefillHyperConnection(DeepSeekV4Module):
             post_scale=self.post_scale,
             comb_scale=self.comb_scale,
             eps=self.eps,
+            pre_mix=pre_mix,
         )
         ttnn.deallocate(fused_w)
         return outputs

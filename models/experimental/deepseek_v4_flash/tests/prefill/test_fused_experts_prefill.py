@@ -97,14 +97,17 @@ def _run_case(
     path: str = "ranking",
     check_every: int = 1,
     x_scale: float = 1.0,
+    hidden: int = _HIDDEN,
+    inter: int = _INTER,
 ):
-    """Run the op and compare tokens ``t % check_every == 0`` (and the last one) to torch."""
+    """Run the op and compare tokens ``t % check_every == 0`` (and the last one) to torch, at hidden size
+    ``hidden`` and per-rank intermediate size ``inter`` (the decode layout's shards are [H, 64] / [I, 64])."""
     rng = random.Random(0)
     torch.manual_seed(0)
     dram_banks = device.dram_grid_size().x
 
     sel, scores = _make_routing(num_tokens, num_experts, top_k, list(hot), rng)
-    x = (torch.randn(num_tokens, _HIDDEN) * x_scale).to(torch.bfloat16)
+    x = (torch.randn(num_tokens, hidden) * x_scale).to(torch.bfloat16)
 
     checked_tokens = [t for t in range(num_tokens) if t % check_every == 0 or t == num_tokens - 1]
     needed = sorted({e for t in checked_tokens for e in sel[t]})
@@ -118,8 +121,8 @@ def _run_case(
     )
 
     # ---- weights: quantize on the host, upload the interleaved copy in the decode layout ----
-    gate_up_nd = _fused_nd_dram_config(_HIDDEN, 2 * _INTER, 2 * _TILE, dram_banks)
-    down_nd = _fused_nd_dram_config(_INTER, _HIDDEN, _HIDDEN // 64, dram_banks)
+    gate_up_nd = _fused_nd_dram_config(hidden, 2 * inter, 2 * _TILE, dram_banks)
+    down_nd = _fused_nd_dram_config(inter, hidden, 2 * _TILE, dram_banks)
     gate_up_q, down_q, gate_up_tt, down_tt = {}, {}, [], []
     dummy = None
 
@@ -144,9 +147,9 @@ def _run_case(
             gate_up_tt.append(dummy[0])
             down_tt.append(dummy[1])
             continue
-        gate = torch.randn(_HIDDEN, _INTER) / _HIDDEN**0.5
-        up = torch.randn(_HIDDEN, _INTER) / _HIDDEN**0.5
-        down = torch.randn(_INTER, _HIDDEN) / _INTER**0.5
+        gate = torch.randn(hidden, inter) / hidden**0.5
+        up = torch.randn(hidden, inter) / hidden**0.5
+        down = torch.randn(inter, hidden) / inter**0.5
         gu_q, dn_q, gu_t, dn_t = _upload(gate, up, down)
         if e in needed_set:
             gate_up_q[e], down_q[e] = gu_q, dn_q
@@ -156,7 +159,7 @@ def _run_case(
         down_tt.append(dn_t)
 
     x_tt = ttnn.from_torch(
-        x.reshape(1, 1, num_tokens, _HIDDEN),
+        x.reshape(1, 1, num_tokens, hidden),
         dtype=ttnn.bfloat16,
         layout=ttnn.ROW_MAJOR_LAYOUT,
         device=device,
@@ -180,7 +183,7 @@ def _run_case(
         scores_tt,
         gate_up_tt,
         down_tt,
-        _INTER,
+        inter,
         _LIMIT,
         top_k,
         _SCALING,
@@ -188,7 +191,7 @@ def _run_case(
         routing_indices=indices_tt,
         ranking_scores=ranking_tt,
     )
-    out = ttnn.to_torch(out_tt).reshape(num_tokens, _HIDDEN).float()
+    out = ttnn.to_torch(out_tt).reshape(num_tokens, hidden).float()
 
     # ---- reference, per checked token ----
     ref_rows, got_rows = [], []
@@ -196,10 +199,10 @@ def _run_case(
     for i, t in enumerate(checked_tokens):
         s_sel = torch.tensor([scores[t, e] for e in sel[t]], dtype=torch.float32)
         w = (s_sel * (_SCALING / (s_sel.sum() + _EPS))).to(torch.bfloat16).float()
-        ref = torch.zeros(_HIDDEN)
+        ref = torch.zeros(hidden)
         for j, e in enumerate(sel[t]):
             gate_up = x_q[i : i + 1] @ gate_up_q[e]
-            gate, up = gate_up[:, :_INTER], gate_up[:, _INTER:]
+            gate, up = gate_up[:, :inter], gate_up[:, inter:]
             act = torch.nn.functional.silu(gate.clamp(max=_LIMIT)) * up.clamp(-_LIMIT, _LIMIT)
             act_q = _quantize_rows(act * w[j], ttnn.bfloat8_b)  # the op gathers (w * act) in bf8
             ref += (act_q @ down_q[e])[0]

@@ -18,6 +18,12 @@ replaces the parts V4.1 changed.
   edge sends ``sel_tile`` of each group the two stages share and, when a stage without the
   group's kv source selects from it, the one compressed-KV row and index key the source wrote
   this step -- not the whole caches, which grow with the context.
+
+Prefill (:meth:`DeepSeekV41Model.build_prefill`) builds a
+:class:`~.prefill.model.DeepSeekV41PrefillModel` on the decode stages, sharing the routed experts,
+embedding, ``lm_head`` and Engram lookup, and :meth:`DeepSeekV41Model.commit_prefill_state` writes
+its per-layer state into the decode caches. Traced prefill needs its stages to start at index
+sources, so build the decode model with ``layer_submesh_ids=plan_prefill_placement(...)``.
 """
 
 from __future__ import annotations
@@ -26,7 +32,7 @@ import collections
 import math
 import queue
 import threading
-from typing import Optional, Sequence
+from typing import Callable, Optional, Sequence
 
 import torch
 import ttnn
@@ -39,6 +45,7 @@ from models.experimental.deepseek_v41_flash.tt.config import (
 )
 from models.experimental.deepseek_v41_flash.tt.decode.attention import _SELECT_KV_RATE, DeepSeekV41LayerCache
 from models.experimental.deepseek_v41_flash.tt.decode.decoder_layer import DeepSeekV41DecoderLayer
+from models.experimental.deepseek_v41_flash.tt.decode.engram import open_rows_sockets, rows_page_bytes
 from models.experimental.deepseek_v41_flash.tt.decode.dspark import DeepSeekV41DSpark, host_to_device
 from models.experimental.deepseek_v41_flash.tt.decode.moe import DeepSeekV41PreloadedExperts
 from models.experimental.deepseek_v41_flash.tt.engram_lookup import (
@@ -46,6 +53,7 @@ from models.experimental.deepseek_v41_flash.tt.engram_lookup import (
     engram_table_nbytes,
     load_engram_table,
 )
+from models.experimental.deepseek_v41_flash.tt.prefill.model import DeepSeekV41PrefillModel
 from models.experimental.deepseek_v4_flash.tt.common import (
     _HIFI4,
     _MASK_NEG,
@@ -70,6 +78,7 @@ from models.experimental.deepseek_v4_flash.tt.model import (
     _PKT_SOCKET_CORE,
     plan_layer_placement,
 )
+from models.experimental.deepseek_v4_flash.tt.prefill.attention import ALIGNMENT, PrefillAttentionState
 from models.experimental.deepseek_v4_flash.tt.system_config import load_system_config, set_active_system_config
 from models.experimental.deepseek_v4_flash.tt.weight_cache import WeightCache, _as_cache
 from models.experimental.deepseek_v4_flash.tt.weight_loader import DeepseekV4WeightLoader
@@ -104,6 +113,8 @@ class DeepSeekV41Model(DeepSeekV4Model):
     row. ``use_submeshes`` stays on: traced decode sends the packet and the residual over sockets.
     ``weight_dtype`` is the attention and routed-expert dtype (bfloat4_b in the demo); the shared
     expert stays bfloat8_b and the Engram, norms and hyper-connections stay at their own defaults.
+    ``layer_submesh_ids`` (one non-decreasing stage index per built layer) overrides V4's even
+    :func:`plan_layer_placement`, e.g. with the prefill placement when a prefill model shares the stages.
 
     Do not call :meth:`DeepSeekV4Model.__init__`. It builds V4 layers, reads ``compress_rates`` and
     ``mlp_layer_types``, and constructs ``hc_head``, none of which exist on this checkpoint.
@@ -127,6 +138,7 @@ class DeepSeekV41Model(DeepSeekV4Model):
         num_stages: int = 8,
         submeshes: Optional[Sequence[ttnn.MeshDevice]] = None,
         use_prefetcher: Optional[bool] = None,
+        layer_submesh_ids: Optional[Sequence[int]] = None,
     ):
         self.config = config
         self.loader = loader
@@ -181,7 +193,19 @@ class DeepSeekV41Model(DeepSeekV4Model):
         self.num_layers = n
         if pipeline_group_size is None:
             pipeline_group_size = max(0, system_config.pipeline.group_size)
-        self.layer_submesh_ids = plan_layer_placement(self.num_layers, self.num_submeshes, pipeline_group_size)
+        if layer_submesh_ids is None:
+            self.layer_submesh_ids = plan_layer_placement(self.num_layers, self.num_submeshes, pipeline_group_size)
+        else:
+            self.layer_submesh_ids = list(layer_submesh_ids)
+            if len(self.layer_submesh_ids) != n:
+                raise ValueError(f"got {len(self.layer_submesh_ids)} layer placements for {n} layers")
+            if self.layer_submesh_ids != sorted(self.layer_submesh_ids) or not all(
+                0 <= s < self.num_submeshes for s in self.layer_submesh_ids
+            ):
+                raise ValueError(
+                    f"layer placement {self.layer_submesh_ids} must be non-decreasing stage indices below "
+                    f"{self.num_submeshes}"
+                )
         self.pipeline_submesh_ids = list(dict.fromkeys(self.layer_submesh_ids))
         self.pipeline_stages = len(self.pipeline_submesh_ids)
         self.pipeline_edges = list(
@@ -222,6 +246,11 @@ class DeepSeekV41Model(DeepSeekV4Model):
         self._mtp_hiddens = None
 
         self._require_engram_ram()
+        engram_sockets = {
+            li: open_rows_sockets(self.submeshes[self.layer_submesh_ids[li]], rows_page_bytes(config))
+            for li in config.engram_layer_ids
+            if li < n
+        }
         self.embed_tokens = DeepSeekV4Embedding(loader, self.first_device, cache=cache)
         self.layers: list[DeepSeekV41DecoderLayer] = []
         self.layer_devices: list[ttnn.MeshDevice] = []
@@ -255,6 +284,7 @@ class DeepSeekV41Model(DeepSeekV4Model):
                     tp_size=tp_size,
                     use_prefetcher=self.use_prefetcher,
                     prefetch_buffers=prefetch_buffers,
+                    engram_sockets=engram_sockets.get(li),
                 )
             )
             _profile(current_device)
@@ -671,6 +701,18 @@ class DeepSeekV41Model(DeepSeekV4Model):
             raise RuntimeError("call prepare_static_decode() before using sessions")
         return {"sessions": (len(self._session_pos), 1), "max_seq": self._decode_max_seq}
 
+    def reset_session(self, sid: int) -> None:
+        """Rewind session ``sid`` to position 0.
+
+        Nothing on device needs clearing: every row a step reads was written earlier in the same
+        sequence (the ring is masked below ``sliding_window``, a select scores only the groups closed
+        so far, and a ratio-2 window slot is written before its group pools).
+        """
+        if sid not in self._session_pos:
+            raise KeyError(f"no such session {sid}")
+        self._wait_replays_dispatched()
+        self._session_pos[sid] = 0
+
     def _step_context(self, sm: dict, pkt: ttnn.Tensor, causal: bool, r2_pool: bool, r2_select: bool) -> dict:
         """Token, positions, RoPE rows and the per-ratio mask or ``cur_pos`` for one step.
 
@@ -896,6 +938,129 @@ class DeepSeekV41Model(DeepSeekV4Model):
                 if pre_send not in persistent:
                     pre_send.deallocate()
         return out if out is not None else streams
+
+    # -- prefill: the decode stages, experts and Engram lookup; the decode caches as its state -- #
+    def build_prefill(self, rope: dict, lm_head=None, **kwargs) -> DeepSeekV41PrefillModel:
+        """Build the :class:`DeepSeekV41PrefillModel` on this model's stages.
+
+        Every prefill layer lives on its decode layer's submesh and reads that layer's routed experts in
+        place. The embedding table, ``lm_head`` (when given), the D2D socket pairs and the Engram host
+        lookup are shared too, so a prefill and the decode steps after it hash one token history.
+        ``kwargs`` go to the prefill constructor.
+
+        Call it after :meth:`prepare_static_decode` (which builds the Engram lookup) and before the decode
+        traces are captured.
+        """
+        if self._decode_max_seq is None:
+            raise RuntimeError("call prepare_static_decode() before build_prefill()")
+        self.prefill_model = DeepSeekV41PrefillModel(
+            self.config,
+            self.loader,
+            self.first_device,
+            rope,
+            num_layers=self.num_layers,
+            tp_size=self.tp_size,
+            layer_devices=self.layer_devices,
+            engram_lookup=self._engram_lookup,
+            experts=[layer.mlp.experts for layer in self.layers],
+            embedding_weight=self.embed_tokens.embedding_weight,
+            lm_head=lm_head,
+            **kwargs,
+        )
+        # Each receiver FIFO is permanent L1 on its stage, so a second set would cost prefill's ops that room.
+        self.prefill_model.shared_socket_pairs = {
+            (id(self.submeshes[from_id]), id(self.submeshes[to_id])): pair
+            for (from_id, to_id), pair in self.submesh_socket_pairs.items()
+        }
+        # Same for the Engram rows FIFOs (one per device of the stage, ~100 KB of a TP4 stage's L1 per layer).
+        self.prefill_model.shared_engram_sockets = {
+            li: layer.engram.sockets for li, layer in enumerate(self.layers) if layer.engram is not None
+        }
+        self.prefill_model.keep_decode_prefetcher = bool(self._prefetch_buffers_by_device)
+        return self.prefill_model
+
+    def commit_prefill_state(
+        self,
+        states: list[PrefillAttentionState],
+        session_id: int,
+        progress: Optional[Callable[[str], None]] = None,
+    ) -> int:
+        """Write a prefill's per-layer ``states`` into the decode caches of ``session_id``; returns ``T``.
+
+        For a prompt of ``T`` tokens (a multiple of ``sliding_window``, so ring slot ``j`` holds token
+        ``T - W + j``, and of every compress ratio, so no compressor window is half full):
+
+        * every layer: ``kv_tail`` -> its ring ``kv``;
+        * every stage holding a group's ``comp_kv`` (it has an index source of the group): the kv source's
+          ``compressed_kv`` -> ``comp_kv`` and ``idx_keys`` -> ``idx_key_cache`` (identity paging). A source
+          on another stage is copied over through the host.
+
+        ``win_kv`` / ``win_gate``, ``sel_kv`` / ``sel_tile`` and the carried rows need nothing: the next step
+        writes them before it reads them. The caches are written in place, so captured traces stay valid.
+        """
+        note = progress or (lambda message: None)
+        if not self.paged:
+            raise RuntimeError("call prepare_static_decode() first")
+        if session_id not in self._session_pos:
+            raise KeyError(f"no such session {session_id}")
+        if len(states) < self.num_layers:
+            raise ValueError(f"need {self.num_layers} layer states, got {len(states)}")
+        lengths = {state.seq_len for state in states[: self.num_layers]}
+        if len(lengths) != 1:
+            raise ValueError(f"layer states disagree on the prompt length: {sorted(lengths)}")
+        total = lengths.pop()
+        if total <= 0 or total % ALIGNMENT or total % self.sliding_window:
+            raise ValueError(
+                f"prefilled length {total} must be a positive multiple of {ALIGNMENT} and of the "
+                f"{self.sliding_window}-token sliding window"
+            )
+        self.ensure_session_capacity(total - 1)
+        for sm in self.submeshes_io:
+            device = sm["device"]
+            committed = set()
+            for li in sm["layers"]:
+                state = states[li]
+                if list(state.kv_tail.device().get_device_ids()) != list(device.get_device_ids()):
+                    raise RuntimeError(f"prefill layer {li}'s state is not on its decode submesh")
+                scache = sm["scaches"][li]
+                note(f"commit layer {li + 1}/{self.num_layers} on decode submesh {sm['index']}")
+                ring = ttnn.to_layout(state.kv_tail, ttnn.TILE_LAYOUT)
+                self._overwrite(scache.kv, ring)
+                ttnn.deallocate(ring)
+                src = self._kv_source_of.get(li)
+                if src is None or src in committed or scache.comp_kv is None:
+                    continue
+                committed.add(src)
+                source = states[src]
+                if source.num_entries != total // self.config.compress_ratios[src]:
+                    raise ValueError(f"kv source {src} holds {source.num_entries} entries for {total} tokens")
+                entries = self._on_stage(source.compressed_kv, device)
+                keys = self._on_stage(source.idx_keys, device)
+                self._commit_index_keys(
+                    scache, PrefillAttentionState(seq_len=total, compressed_kv=entries, idx_keys=keys)
+                )
+                for copy, original in ((entries, source.compressed_kv), (keys, source.idx_keys)):
+                    if copy is not original:
+                        ttnn.deallocate(copy)
+        for sm in self.submeshes_io:
+            ttnn.synchronize_device(sm["device"])
+        self._session_pos[session_id] = total
+        note("prefill state committed")
+        return total
+
+    @staticmethod
+    def _on_stage(tensor: ttnn.Tensor, device: ttnn.MeshDevice) -> ttnn.Tensor:
+        """A replicated bf16 ROW_MAJOR ``tensor`` on ``device``: itself when it is there, else a copy through the host."""
+        if list(tensor.device().get_device_ids()) == list(device.get_device_ids()):
+            return tensor
+        return ttnn.from_torch(
+            ttnn.to_torch(ttnn.get_device_tensors(tensor)[0]),
+            dtype=ttnn.bfloat16,
+            layout=ttnn.ROW_MAJOR_LAYOUT,
+            device=device,
+            memory_config=ttnn.DRAM_MEMORY_CONFIG,
+            mesh_mapper=ttnn.ReplicateTensorToMesh(device) if device.get_num_devices() > 1 else None,
+        )
 
     # -- DSpark speculative decode -- #
     def prepare_spec_decode(self, rope_main, drafter: bool = True, hist: int = 32, **drafter_kwargs) -> None:
