@@ -20,7 +20,7 @@ SF=""
 for c in $R/runtime/sfpi /opt/tenstorrent/sfpi; do [[ -x $c/compiler/bin/riscv-tt-elf-g++ ]] && { SF=$c; break; }; done
 if [[ -z $SF ]]; then (cd tt_metal/tt-llk/tests && ./setup_testing_env.sh > $SL/sfpi.log 2>&1); SF=$R/tt_metal/tt-llk/tests/sfpi; fi
 echo "== sfpi $SF: $($SF/compiler/bin/riscv-tt-elf-g++ --version | head -1)"
-$SF/compiler/bin/riscv-tt-elf-g++ --version | grep -q '7\.86\.0' || { echo "== wrong sfpi, stopping"; exit 1; }
+WANT=$(sed -n "s/^sfpi_version='\(.*\)'/\1/p" $R/tt_metal/sfpi-version); $SF/compiler/bin/riscv-tt-elf-g++ --version | grep -qF "sfpi:$WANT" || { echo "== wrong sfpi (want $WANT), stopping"; exit 1; }
 P="tt_metal/tt-llk tt_metal/hw tt_metal/hostdevcommon tt_metal/tools/profiler tt_metal/sfpi-version ttnn/cpp/ttnn/operations/experimental"
 NP=$(( $(nproc) / 2 )); (( NP > 16 )) && NP=16; (( NP < 4 )) && NP=4; NP=${RA_NP:-$NP}
 for L in $(awk '{print $2; print $3}' $S/lines.txt | sort -u); do
