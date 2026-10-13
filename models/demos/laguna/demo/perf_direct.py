@@ -334,25 +334,53 @@ def run_dflash32(lens, tokens_out, drafts, rows_checked):
     from models.demos.laguna.tt.dflash_tt import DFlashTTCore
 
     U = 32
-    # a round commits 1 .. drafts + 1 tokens per user, and runs until the users average tokens_out
-    horizon = -(-(max(lens) + tokens_out * (drafts + 1) + 256) // 128) * 128
+    # a round commits 1 .. drafts + 1 tokens per user and runs until the users average tokens_out; the cache holds
+    # 2 x tokens_out past the prompt (32 users x tokens_out x (drafts + 1) would not fit next to the weights at 8K), and
+    # the rounds stop early if a user gets within one round of its end. One model load for every length: the cache is
+    # re-made (the old one freed first) when a longer prompt needs more
+    lens = sorted(lens)
+    horizon = -(-(max(lens) + 2 * tokens_out + 256) // 128) * 128
+    clock = [time.perf_counter()]
+
+    def phase(name):  # setup time per phase, so a slow run shows where it went
+        now = time.perf_counter()
+        print(f"[perf direct] dflash32 setup: {name} {now - clock[0]:.1f} s", flush=True)
+        clock[0] = now
+
     mesh = open_mesh(ttnn, resolve_profile("p150x4", trace_region_size=200_000_000))
+    phase("open mesh")
     out = {}
     gen = None
     try:
         tokenizer = AutoTokenizer.from_pretrained(os.environ["TT_LAGUNA_MODEL"])
         gen = LagunaGenerator.from_pretrained(mesh, max_seq_len=horizon + 128)
-        gen._ensure_cache(U, horizon)
+        phase("Laguna load")
         core = DFlashTTCore.from_checkpoint(mesh, max_seq_len=horizon + 128, enable_experimental=True)
+        phase("draft model load")
         for length in lens:
+            need = length + 2 * tokens_out + 256
+            if gen._kv_cache is not None and need > gen._kv_seq:
+                for c in gen._kv_cache:
+                    ttnn.deallocate(c["k"])
+                    ttnn.deallocate(c["v"])
+                gen._kv_cache = None
+            gen._ensure_cache(U, need)
+            limit = gen._kv_seq
+            phase(f"KV cache for {length}")
             prompts = [text_prompt(tokenizer, length, offset=u * 997) for u in range(U)]
             bd = BatchedDFlash(gen, core, U, drafts, rows_checked)
+            phase("prompts")
             prefill_s = bd.prefill(prompts)
+            phase("prefill of the 32 prompts")
             bd.capture_traces()
+            phase("trace capture")
             per_user = [0] * U
             rounds = 0
             start = time.perf_counter()
-            while sum(per_user) < U * tokens_out and rounds < tokens_out:
+            def room():
+                return max(bd.ctx_start[u] + bd.ctx_rows[u] for u in range(U)) + drafts + 1 < limit
+
+            while sum(per_user) < U * tokens_out and rounds < tokens_out and room():
                 for u, c in enumerate(bd.round()):
                     per_user[u] += len(c)
                 rounds += 1
@@ -362,7 +390,7 @@ def run_dflash32(lens, tokens_out, drafts, rows_checked):
                    "accepted_mean": statistics.mean(sum(s["accepted"]) / U for s in bd.stats),
                    "draft_ms_mean": statistics.mean(s["draft_s"] for s in bd.stats) * 1e3,
                    "verify_ms_mean": statistics.mean(s["verify_s"] for s in bd.stats) * 1e3, "prefill_32_s": prefill_s,
-                   "tokens_per_user_min_max": [min(per_user), max(per_user)]}  # fmt: skip
+                   "tokens_per_user_min_max": [min(per_user), max(per_user)], "stopped_early": not room()}  # fmt: skip
             for tid in (bd._tid_d, bd._tid_v):
                 ttnn.release_trace(mesh, tid)
             for k, v in bd.rings.values():
