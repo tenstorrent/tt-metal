@@ -284,6 +284,20 @@ class K2Generator(Generator):
         self.counters["token_readbacks"] += 1
         return ttnn.to_torch(ttnn.get_device_tensors(self.state["tokens"])[0]).reshape(-1)[:batch].long()
 
+    def read_resident_inputs(self, *, batch):
+        """Return the decode tokens and positions as the device currently holds them.
+
+        Under the explicit reload contract the host copies may trail an overlapped
+        device-sampling decode by one step; the resident buffers are authoritative.
+        Inactive rows keep position -1 and a valid placeholder token.
+        """
+        if self.state is None or self.state["trace"] is None:
+            raise ValueError("No resident decode state to read")
+        tokens = self._read_tokens(batch=batch)
+        self.counters["position_readbacks"] = self.counters.get("position_readbacks", 0) + 1
+        positions = ttnn.to_torch(ttnn.get_device_tensors(self.state["positions"])[0]).reshape(-1)[:batch].long()
+        return tokens, positions
+
     def _validate_cache(self, table, cache):
         if not isinstance(table, torch.Tensor) or table.ndim != 2 or table.shape[1] % 4:
             raise ValueError("Host page table must be rank 2 and cover whole K128 read windows (4 pages)")

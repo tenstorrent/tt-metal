@@ -27,6 +27,10 @@ class K2HorizonForCausalLM:
         "max_device_top_k": 32,
         "supports_device_penalties": False,
     }
+    # Explicit decode reload contract: the plugin commands reloads with
+    # reload_inputs / reload_page_table / reload_sampling_params /
+    # reset_sampling_state; the adapter infers nothing from its own state.
+    decode_input_update_contract = 1
 
     def compute_logits(self, hidden_states, sampling_metadata=None):
         raise NotImplementedError("The TT plugin calls prefill_forward/decode_forward directly")
@@ -207,22 +211,43 @@ class K2HorizonForCausalLM:
         enable_trace=True,
         read_from_device=True,
         sampling_params=None,
-        reset_batch=False,
+        reload_inputs=True,
+        reload_page_table=False,
+        reload_sampling_params=True,
+        reset_sampling_state=True,
         prompt_tokens=None,
         output_tokens=None,
         slot_remap=None,
+        **kwargs,
     ):
+        if "reset_batch" in kwargs:
+            raise TypeError("decode_input_update_contract=1 requires explicit reload flags")
+        if kwargs:
+            raise TypeError(f"Unsupported decode options: {sorted(kwargs)}")
         if self.benchmark_phase is not None:
             self.benchmark_phase.annotate(
                 generated_entry_ns=self.benchmark_phase.entry(), generator_counters_before=dict(self.generator.counters)
             )
         if not enable_trace:
             raise ValueError("K2 serving decode requires trace replay")
+        if reset_sampling_state and not reload_inputs:
+            raise ValueError("Resetting sampling state requires current tokens and positions")
         mode = "device" if sampling_params is not None else "host"
         state = self.generator.state
-        reload_inputs = reset_batch or self.mode != mode or state is None or state["trace"] is None or mode == "host"
+        resident = state is not None and state["trace"] is not None
+        if not reload_inputs and (not resident or self.mode != mode):
+            # The plugin reloads after prefill work, batch mutation and sampling-mode
+            # changes; anything else here means the two sides disagree.
+            raise ValueError("A retired decode trace or a sampling-mode change requires current scheduler inputs")
+        feed_tokens = feed_positions = None
         if reload_inputs:
-            mode = self._sampling(sampling_params, list(map(int, start_pos)))
+            positions = list(map(int, start_pos))
+            if mode == "host":
+                self._sampling(None, positions)
+            elif reload_sampling_params or reset_sampling_state:
+                # Parameters and position-aligned seeds are refreshed together: a
+                # seed reset is only meaningful against authoritative positions.
+                self._sampling(sampling_params, positions)
             self.decode_table_width = self._table(page_table, int(start_pos.max()) + 1).shape[1]
             active = torch.nonzero(start_pos >= 0).reshape(-1)
             count = int(active[-1]) + 1 if len(active) else 1
@@ -230,6 +255,15 @@ class K2HorizonForCausalLM:
             # existing power-of-two batch at scheduler resets; admission still
             # supports every slot and output retains the full wire shape.
             self.decode_batch = min(self.max_batch_size, 1 << (count - 1).bit_length())
+            feed_tokens, feed_positions = tokens[: self.decode_batch], start_pos[: self.decode_batch]
+        elif reload_page_table:
+            width = self._resident_table_width(page_table, start_pos)
+            if width > self.decode_table_width:
+                # A row crossed a capacity bucket while decoding resident. The host
+                # tokens and positions may trail the device by one step, so the
+                # resident buffers are the inputs the wider state is rebuilt from.
+                feed_tokens, feed_positions = self.generator.read_resident_inputs(batch=self.decode_batch)
+                self.decode_table_width = width
         if self.benchmark_phase is not None:
             preparation_key = (
                 self.decode_batch,
@@ -245,14 +279,14 @@ class K2HorizonForCausalLM:
             )
             self.benchmark_phase.decode(
                 positions=start_pos.tolist(),
-                reload_inputs=reload_inputs,
+                reload_inputs=feed_tokens is not None,
                 generated_batch=self.decode_batch,
                 table_capacity=self.decode_table_width * 32,
             )
         self.mode = mode
         out = self.generator.decode_forward(
-            tokens[: self.decode_batch] if reload_inputs else None,
-            start_pos[: self.decode_batch] if reload_inputs else None,
+            feed_tokens,
+            feed_positions,
             page_table=self._table(page_table[: self.decode_batch, : self.decode_table_width]),
             kv_cache=kv_cache,
             sampling_mode=mode,
@@ -261,11 +295,13 @@ class K2HorizonForCausalLM:
         if self.benchmark_phase is not None:
             self.benchmark_phase.annotate(generator_counters_after=dict(self.generator.counters))
             self.benchmark_phase.submitted()
-        if reload_inputs:
+        if feed_tokens is not None:
             self._audit(
                 "decode_refresh",
                 positions=start_pos.tolist(),
-                reset_batch=bool(reset_batch),
+                reload_inputs=bool(reload_inputs),
+                reload_page_table=bool(reload_page_table),
+                reset_sampling_state=bool(reset_sampling_state),
                 table_width=self.decode_table_width,
                 decode_batch=self.decode_batch,
                 page_heads=page_table[:, :16].tolist(),
@@ -278,6 +314,20 @@ class K2HorizonForCausalLM:
                 )
             return torch.nn.functional.pad(out, (0, 0, 0, self.max_batch_size - self.decode_batch)).unsqueeze(1)
         return out
+
+    def _resident_table_width(self, page_table, start_pos):
+        """Table width a resident decode needs after page growth.
+
+        Host positions may trail the device by one step, so the bucket covers the
+        next position too. vLLM never maps a live block to page 0 (its null block),
+        so the last populated column also bounds the capacity independently of
+        how stale the positions are.
+        """
+        rows = page_table[: self.decode_batch]
+        populated = torch.nonzero(rows.any(dim=0)).reshape(-1)
+        last_page = int(populated[-1]) + 1 if len(populated) else 0
+        logical_end = max(int(start_pos[: self.decode_batch].max()) + 2, last_page * 32)
+        return self._table(page_table, logical_end).shape[1]
 
     def read_decode_output(self, tt_out, async_read=False):
         if self.mode == "device":
