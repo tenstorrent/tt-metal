@@ -79,6 +79,7 @@ class SamplingParams:
     seed: int | list[int] | None = None
     enable_log_probs: bool | list[bool] = False
     num_logprobs: int | list[int] = 0
+    log_probs_enable_temperature: bool | list[bool] = False
 
 
 SAMPLING_PARAM_FIELDS = tuple(f.name for f in fields(SamplingParams))
@@ -360,6 +361,7 @@ class SamplingGenerator:
             enable_log_probs=sampling_params.enable_log_probs,
             num_logprobs=num_logprobs,
             empty_slots=empty_slots,
+            log_probs_enable_temperature=getattr(sampling_params, "log_probs_enable_temperature", None),
         )
 
         old_penalties_active = self._penalties_active
@@ -749,6 +751,7 @@ def format_sampling_params(sampling_params, max_batch_size):
         "seed": None,
         "num_logprobs": 0,
         "enable_log_probs": False,
+        "log_probs_enable_temperature": False,
     }
 
     def _pad(lst, name):
@@ -798,6 +801,9 @@ def format_sampling_params(sampling_params, max_batch_size):
         return _pad(lst, name)
 
     enable_log_probs = _broadcast_pad(sampling_params.enable_log_probs, "enable_log_probs")
+    log_probs_enable_temperature = _broadcast_pad(
+        getattr(sampling_params, "log_probs_enable_temperature", False), "log_probs_enable_temperature"
+    )
     if getattr(sampling_params, "num_logprobs", None) is not None:
         num_logprobs = _broadcast_pad(sampling_params.num_logprobs, "num_logprobs")
     else:
@@ -864,6 +870,8 @@ def format_sampling_params(sampling_params, max_batch_size):
         kwargs["num_logprobs"] = num_logprobs
     if "enable_log_probs" in input_fields:
         kwargs["enable_log_probs"] = enable_log_probs
+    if "log_probs_enable_temperature" in input_fields:
+        kwargs["log_probs_enable_temperature"] = log_probs_enable_temperature
 
     return replace(sampling_params, **kwargs)
 
