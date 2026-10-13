@@ -278,7 +278,16 @@ inline void _llk_math_reduce_(const std::uint32_t dst_index, const ckernel::Tens
         {
             // The pools run under the operand default of the Src zero flag and the transposes under preserve, so both face
             // rows are pooled first; the last face's banks stay for the transposes.
-            math::_configure_default_zero_flag_state_();
+            // Constant config writes: the tracked setters' calls and checks starve the math thread's instruction issue.
+            const bool default_is_preserve = requires_disabled_src_zero_flag(math::src_zero_flag_srca_fmt, math::src_zero_flag_srcb_fmt);
+            if (default_is_preserve)
+            {
+                math::_configure_preserve_zero_flag_state_();
+            }
+            else
+            {
+                cfg_reg_rmw_tensix<ALU_ACC_CTRL_Zero_Flag_disabled_src_RMW>(0);
+            }
             if (tensor_shape.num_faces_r_dim > 1)
             {
                 reduce_row_pool_all_faces_release<type, high_fidelity>(tensor_shape.num_faces_c_dim);
@@ -286,7 +295,11 @@ inline void _llk_math_reduce_(const std::uint32_t dst_index, const ckernel::Tens
             }
             reduce_row_pool_all_faces<type, high_fidelity>(tensor_shape.num_faces_c_dim);
 
-            math::_configure_preserve_zero_flag_state_();
+            if (!default_is_preserve)
+            {
+                cfg_reg_rmw_tensix<ALU_ACC_CTRL_Zero_Flag_disabled_src_RMW>(1);
+            }
+            math::src_zero_flag_hw = 1;
             if (tensor_shape.num_faces_r_dim > 1)
             {
                 TTI_SETRWC(p_setrwc::CLR_NONE, 0, 0, 0, 0, p_setrwc::SET_D);
