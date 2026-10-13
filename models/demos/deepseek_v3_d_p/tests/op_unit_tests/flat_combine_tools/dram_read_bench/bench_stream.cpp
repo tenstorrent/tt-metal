@@ -6,7 +6,10 @@
 // c at offset + c * STRIDE_BYTES, BATCH chunks per read barrier, into an L1 ring of SLOTS chunks (or, PUSH, into CB
 // pages for bench_fwd.cpp on the other RISC). The bytes are never consumed: delivery bandwidth only.
 //
-// CT: 0 CB, 1 CHUNK_BYTES, 2 N_CHUNKS, 3 BATCH, 4 SLOTS (multiple of BATCH), 5 STRIDE_BYTES, 6 PUSH
+// ROTATE: chunk c comes from bank (bank id + c) % 8 at offset + (c / 8) * STRIDE_BYTES (the core's region is spread
+// over all 8 banks, like unified_routed_expert_ffn's one-tile-row ND shards), so every core rotates over the banks.
+//
+// CT: 0 CB, 1 CHUNK_BYTES, 2 N_CHUNKS, 3 BATCH, 4 SLOTS (multiple of BATCH), 5 STRIDE_BYTES, 6 PUSH, 7 ROTATE
 // RT: 0 bank base address, 1 bank id, 2 byte offset in the bank
 
 #include <stdint.h>
@@ -20,10 +23,11 @@ void kernel_main() {
     constexpr uint32_t slots = get_compile_time_arg_val(4);
     constexpr uint32_t stride = get_compile_time_arg_val(5);
     constexpr bool push = get_compile_time_arg_val(6) != 0;
+    constexpr bool rotate = get_compile_time_arg_val(7) != 0;
     static_assert(slots % batch == 0, "slots must be a multiple of batch");
 
-    const uint64_t src =
-        get_noc_addr_from_bank_id<true>(get_arg_val<uint32_t>(1), get_arg_val<uint32_t>(0) + get_arg_val<uint32_t>(2));
+    const uint32_t bank0 = get_arg_val<uint32_t>(1), addr0 = get_arg_val<uint32_t>(0) + get_arg_val<uint32_t>(2);
+    const uint64_t src = get_noc_addr_from_bank_id<true>(bank0, addr0);
     const uint32_t ring = get_write_ptr(cb);
     for (uint32_t c = 0, b = 0; c < n; c += batch, ++b) {
         const uint32_t nb = n - c < batch ? n - c : batch;
@@ -32,7 +36,12 @@ void kernel_main() {
         }
         const uint32_t dst = push ? get_write_ptr(cb) : ring + (b % (slots / batch)) * batch * chunk;
         for (uint32_t i = 0; i < nb; ++i) {
-            noc_async_read(src + uint64_t(c + i) * stride, dst + i * chunk, chunk);
+            if constexpr (rotate) {
+                const uint32_t k = c + i;
+                noc_async_read(get_noc_addr_from_bank_id<true>((bank0 + k) % 8, addr0 + (k / 8) * stride), dst + i * chunk, chunk);
+            } else {
+                noc_async_read(src + uint64_t(c + i) * stride, dst + i * chunk, chunk);
+            }
         }
         noc_async_read_barrier();
         if constexpr (push) {

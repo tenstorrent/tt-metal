@@ -20,6 +20,8 @@ profiler (median of DRB_ITERS calls):
   dir_strided   dir_side on today's layout (a core's blocks every 64 tiles, interleaved with its 3 neighbours')
   nr_noc0 / nr_noc1 / nr_side   direct reads in a layout without readers (row 0 free for combine): gate/up in the
                 4 columns from each DRAM-optimal column, rows 1-8, each cell on its nearest bank; down on the rest
+  dir_rot / dir_rot1   gate/up cores read their own blocks rotating over all 8 banks (as unified_routed_expert_ffn's
+                one-tile-row ND shards), NOC by column half / by core parity; DRB_DROT=1: the down cores rotate too
   rd_dfwd       the readers deliver the down weights too: BRISC reads gate/up (for the NCRISC's forwards, NOC1) and
                 down chunks, interleaved in proportion, and writes the down chunks on to its 1-2 down cores (NOC0)
   +bg           a real call's other traffic at DRB_M rows per expert (default 128): relays read x and multicast it
@@ -51,10 +53,11 @@ MODEL = os.environ.get("DRB_MODEL", "glm-53")
 ITERS = int(os.environ.get("DRB_ITERS", "10"))
 DBATCH = int(os.environ.get("DRB_DBATCH", "2"))
 DMULT = int(os.environ.get("DRB_DMULT", "1"))  # direct, contiguous layout: blocks per read request
+DROT = os.environ.get("DRB_DROT", "0") == "1"  # down cores read their slice rotating over the 8 banks
 M_BG = int(os.environ.get("DRB_M", "128"))  # rows per expert for the +bg traffic
 DRAM_GBS = 512.0
 DFWD = ("rd_dfwd", "rd_dfwd1")
-GU_VARIANTS = ("rd", "rd_fwd", "rd_all", "rd_all_fwd", "rd_dfwd", "rd_dfwd1", "dir_noc0", "dir_noc1", "dir_side", "dir_strided", "nr_noc0", "nr_noc1", "nr_side")
+GU_VARIANTS = ("rd", "rd_fwd", "rd_all", "rd_all_fwd", "rd_dfwd", "rd_dfwd1", "dir_rot", "dir_rot1", "dir_noc0", "dir_noc1", "dir_side", "dir_strided", "nr_noc0", "nr_noc1", "nr_side")
 
 
 def _crs(cores):
@@ -226,7 +229,7 @@ class Layout:
         """rd_dfwd: reader r's down region in its bank (its run of down chunks back to back)."""
         return self.dn_off + (r // 8) * max(self.r_dn_chunks) * self.dn_chunk
 
-    def down_kernels(self, nr=False):
+    def down_kernels(self, nr=False, rot=False):
         # one kernel + CB per distinct block width (pcd differs by one column across the down cores)
         down = self.nr_down if nr else self.down
         nd = len(down)
@@ -235,8 +238,11 @@ class Layout:
         for i, pcd in enumerate(sorted(set(pcds))):
             ds = [d for d in range(nd) if pcds[d] == pcd]
             cores, blk = [down[d] for d in ds], KBLK * pcd * TILE
-            rt = [[self.base, d % 8, 2 * self.rd_bytes + (d // 8) * self.E * self.It * pcds[0] * TILE] for d in ds]
-            out.append(_kernel(STREAM, cores, [2 + i, blk, self.E * self.It // KBLK, 2, 4, blk, 0], rt, 1, 0))
+            if rot:  # down core d's slice spread over all 8 banks: its 8th of each bank at d * (slice / 8)
+                rt = [[self.base, d % 8, 2 * self.rd_bytes + d * -(-self.E * self.It * pcds[0] * TILE // 8)] for d in ds]
+            else:
+                rt = [[self.base, d % 8, 2 * self.rd_bytes + (d // 8) * self.E * self.It * pcds[0] * TILE] for d in ds]
+            out.append(_kernel(STREAM, cores, [2 + i, blk, self.E * self.It // KBLK, 2, 4, blk if not rot else blk, 0, int(rot)], rt, 1, 0))
             cbs.append(_cb(2 + i, cores, blk, 4))
         return out, cbs
 
@@ -250,7 +256,7 @@ class Layout:
                 rt = [[self.base, r % 8, (r // 8) * per] for r in range(16)]
             else:
                 rt = [[self.base, r % 8, (r // 8) * self.rd_bytes] for r in range(16)]
-            ks = [_kernel(STREAM, self.readers, [0, self.chunk, n_rd, 1, 2, self.chunk, int(fwd)], rt, 0, 0)]
+            ks = [_kernel(STREAM, self.readers, [0, self.chunk, n_rd, 1, 2, self.chunk, int(fwd), 0], rt, 0, 0)]
             if fwd:
                 land = self.land.buffer_address()
                 frt = [[land] + [self.vxy(self.gu[r * self.R + j]) for j in range(self.R)] for r in range(16)]
@@ -283,25 +289,31 @@ class Layout:
             ks.append(_kernel(FWD, self.readers, [0, self.R, self.blk, n_rd, self.land_slots], frt, 1, 1))
             return ks, cbs
         strided = v == "dir_strided"
+        rot = v in ("dir_rot", "dir_rot1")
         groups = {0: [], 1: []}
+        if rot:  # each gate/up core's blocks spread over all 8 banks (its 64th of each bank), NOC0 / NOC1 by column half
+            per = self.gu_bytes // 64 // 8
+            for i, c in enumerate(self.gu):
+                noc = (c[0] >= self.grid.x // 2) if v == "dir_rot" else (i % 2)
+                groups[int(noc)].append((c, [self.base, i % 8, i * per]))
         if v.startswith("nr_"):  # the reader-free layout: core k of bank b reads quarter k % 8 of the bank's 2 regions
             seen = [0] * 8
             for i, c in enumerate(self.nr_gu):
                 b = self.nr_bank[i]
                 off, seen[b] = seen[b] * (self.rd_bytes // 4), seen[b] + 1
                 groups[{"nr_noc0": 0, "nr_noc1": 1}.get(v, int(self.east[b]))].append((c, [self.base, b, off]))
-        for i, c in enumerate(self.gu if not v.startswith("nr_") else []):
+        for i, c in enumerate(self.gu if not (v.startswith("nr_") or rot) else []):
             r = i // self.R
             bank, j = r % 8, i % self.R
             off = (r // 8) * self.rd_bytes + (j * self.blk if strided else j * (self.rd_bytes // self.R))
             noc = {"dir_noc0": 0, "dir_noc1": 1}.get(v, int(self.east[bank]))
             groups[noc].append((c, [self.base, bank, off]))
-        mult = 1 if strided else DMULT
+        mult = 1 if strided or rot else DMULT
         assert n_rd % mult == 0, (n_rd, mult)
         req = mult * self.blk
-        stride = self.chunk if strided else req
+        stride = self.chunk if strided else req  # (rotating: the next chunk in the same bank is one block on)
         ks = [
-            _kernel(STREAM, [c for c, _ in g], [1, req, n_rd // mult, DBATCH, 2 * DBATCH, stride, 0], [a for _, a in g], 0, noc)
+            _kernel(STREAM, [c for c, _ in g], [1, req, n_rd // mult, DBATCH, 2 * DBATCH, stride, 0, int(rot)], [a for _, a in g], 0, noc)
             for noc, g in groups.items()
             if g
         ]
@@ -342,7 +354,7 @@ def m_v(lay, c):
 def _program(lay, gu_v, with_down, with_bg=False):
     ks, cbs = lay.gu_kernels(gu_v) if gu_v else ([], [])
     if with_down:
-        dk, dc = lay.down_kernels(nr=bool(gu_v) and gu_v.startswith("nr_"))
+        dk, dc = lay.down_kernels(nr=bool(gu_v) and gu_v.startswith("nr_"), rot=DROT)
         ks, cbs = ks + dk, cbs + dc
     if with_bg:
         bk, bc = _bg_kernels(lay)

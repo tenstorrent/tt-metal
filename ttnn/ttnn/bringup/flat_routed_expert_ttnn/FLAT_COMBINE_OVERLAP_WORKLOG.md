@@ -733,6 +733,35 @@ NOC1 and write y rows). us per call:
 - Not worth the 1-2 weeks of 8c's plan: the readers stay as they are (gate/up only), the down cores keep reading
   their own weights.
 
+### 8d. How unified (Dream-RSI best, tt-metal-dream 8e5d558699a) reads its weights: bank rotation (2026-10-13)
+Dream's unified op (1.6x over main on uniform top-k; 7-32% faster than flat there, 84-90% DRAM vs flat's 68-77%; but
+1.25-4.4x slower than flat on real Kimi K2.6 routing, measured by session tt-metal-c7) runs one expert per grid row
+(GRID_M = 1): no weight multicast, every one of its 88 cores reads its own N slice of its own expert from DRAM. What
+makes that fast is the weight layout (routed_expert_weight_memory_config, also on main): ND shards of ONE tile-row x
+per_core_N tiles placed ROUND_ROBIN_1D, so a core's consecutive K-rows sit in different banks and every core's
+requests rotate over all 8 banks ("a bank-pinned core saturates near 30 GB/s against ~370 GB/s rotating"). Flat's
+down cores (and the bench's per-core gate/up variants above) are bank-pinned: one bank per core.
+
+Bench (`bench_stream.cpp` ROTATE: chunk c from bank (b0 + c) % 8; `dir_rot` / `dir_rot1` gate/up cores rotating,
+NOC by column half / by core parity; `DRB_DROT=1` down cores rotating), us per call:
+
+| | GLM 5.3 pinned down | GLM 5.3 rotating down | K2.7 pinned down | K2.7 rotating down |
+|---|---|---|---|---|
+| down cores alone | 201.6 (55%) | 171.5 (65%) | - | - |
+| today: readers + down cores | 406.7 | **371.1 (-8.8%, 89%)** | 707.3 | **648.8 (-8.3%, 90%)** |
+| gate/up cores read their own, rotating (parity NoC) + down | 387.6 | 366.6 | 672.2 | 642.3 |
+| gate/up cores alone, rotating (parity NoC / column-half NoC) | 236.7 (93%) / 263.3 | | | |
+| today + bg | 584.0 | 578.0 | 976.8 | 974.3 |
+| gate/up cores rotating + down + bg | 637.6 | 613.1 | 1081.6 | 1033.1 |
+
+- Rotation is the lever, not readers vs per-core reads: rotating per-core gate/up reads run at 93% alone (pinned:
+  55-65%) and match the readers with the down streams (366.6 vs 371.1). With the synthetic x / h / y traffic they
+  are ~6% worse than the readers, so the readers stay for gate/up.
+- **Rotating the down cores' reads: -8.3 / -8.8% of weight movement, a layout + address change only** (down regions
+  spread over the banks by block, se6_dw.cpp's block address rotates the bank); no new kernels. Under the (heavier
+  than real) synthetic traffic it is a wash (-0.3 / -1%), so it needs the real op to tell: the small-M sweep and
+  the real-routing count sets.
+
 ## 9. How to run (PR tree)
 ```
 cd /localdev/mstaletovic/tt-metal-pr58093
