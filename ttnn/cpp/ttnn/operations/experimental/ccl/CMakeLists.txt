@@ -30,8 +30,6 @@ file(
     reduce_scatter_minimal_direct/device/kernels/*.cpp
     ring_attention_all_gather_async/device/kernels/*.cpp
     ring_attention_all_gather_async/device/kernels/*.hpp
-    dit_fused_distributed_rmsnorm/device/kernels/*.cpp
-    dit_fused_distributed_rmsnorm/device/kernels/*.hpp
     send_recv_async/send_async/device/kernels/*.cpp
     send_recv_async/recv_async/device/kernels/*.cpp
     send_recv_async/recv_async_h2d/device/kernels/*.cpp
@@ -51,7 +49,6 @@ file(
     all_gather_minimal_matmul_async/device/kernels/*.hpp
     send_recv_async/send_direct_async/device/kernels/*.cpp
     send_recv_async/recv_direct_async/device/kernels/*.cpp
-    dit_fused_norm_common/kernels/*.cpp
     neighbor_pad_common/kernels/*.hpp
     reduce_scatter_common/kernels/*.hpp
 )
