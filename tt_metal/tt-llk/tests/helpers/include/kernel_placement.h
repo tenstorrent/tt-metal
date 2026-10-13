@@ -22,19 +22,25 @@ asm(".globl llk_init_region_at\n"
     ".popsection");
 #elif defined(LLK_DBG_BARRIER) // Wormhole TILE_LOOP build
 // run_kernel on its thread's period (the icache and predictor period, perf/layout.py) right after the zone helpers;
-// _start, main and the rest of the harness go after the kernel (test_config.py) in a fixed reserve (1.0-1.2 KiB used,
-// so 1 KiB of growth), so harness growth moves nothing
+// the code no window runs (the harness, the kernel's other functions, INIT's out of line blocks) goes to an L1 area of
+// its own (sections.ld .llk_spill, 12 KiB per TRISC above the code regions; the device print buffer's place when on)
 __attribute__((noinline, section(".text.run_kernel"))) void run_kernel(const struct RuntimeParams& params);
 #if defined(COMPILE_FOR_TRISC) && COMPILE_FOR_TRISC == 1
 #define LLK_KERNEL_ALIGN_ "512"
 #else
 #define LLK_KERNEL_ALIGN_ "1024"
 #endif
+#if !defined(DEBUG_PRINT_ENABLED) && defined(COMPILE_FOR_TRISC)
+#define LLK_SPILL_STR2_(x) #x
+#define LLK_SPILL_STR_(x)  LLK_SPILL_STR2_(x)
+asm(".globl llk_spill_at\n"
+    ".set llk_spill_at, 0x12800 + 0x3000 * " LLK_SPILL_STR_(COMPILE_FOR_TRISC) "\n"
+    ".globl llk_spill_size\n"
+    ".set llk_spill_size, 0x3000");
+#endif
 asm(".globl llk_kernel_align\n"
     ".set llk_kernel_align, " LLK_KERNEL_ALIGN_
     "\n"
-    ".globl llk_harness_reserve\n"
-    ".set llk_harness_reserve, 2304\n"
     ".pushsection .text.llk_entry, \"ax\", @progbits\n"
     "j _start\n"
     ".popsection");
