@@ -52,6 +52,8 @@ DIM = int(os.environ.get("AG_DIM", "0"))  # 0, or 2 (= dim -2 of the [1, 1, H, W
 LINKS = tuple(int(x) for x in os.environ.get("AG_LINKS", "1,2").split(","))
 # schedule variants: "b" = balanced ring (far shard split between directions), "d" = desynchronized bank walks
 VARIANTS = tuple(os.environ.get("AG_VARIANTS", "base").split(","))
+INC_EVERY = tuple(int(x) for x in os.environ.get("AG_INC_EVERY", "8").split(","))  # arrival increment every N chunks
+CB_KB = tuple(int(x) for x in os.environ.get("AG_CB_KB", "112").split(","))  # CB budget per port, KiB
 _FABRICS = {
     "1d": "FABRIC_1D",
     "1d_ring": "FABRIC_1D_RING",
@@ -206,10 +208,13 @@ def _gather_one_size(mesh_device, H, W, fabric, link_gbps):
         # output slots are in row-major chip order for every scheme (a snake travels in snake order)
         groups = [sorted(g) for g in build_groups((rows, cols), cluster_axis)]
         G = len(groups[0])
-        for num_links, variant in [(l, v) for l in LINKS for v in VARIANTS]:
+        cases = [(l, v, i, c) for l in LINKS for v in VARIANTS for i in INC_EVERY for c in CB_KB]
+        for num_links, variant, inc, cb in cases:
             balance, desync = "b" in variant and variant != "base", "d" in variant and variant != "base"
-            kw = dict(balance=balance, desync=desync)
+            kw = dict(balance=balance, desync=desync, inc_every=inc, cb_bytes=cb * 1024)
             tag = f"    {fabric:<27} {topo_name:<15} {size:<22} G={G:<2} links={num_links} {variant:<4}"
+            if INC_EVERY != (8,) or CB_KB != (112,):
+                tag += f" inc={inc} cb={cb}"
             try:
                 out = fabric_all_gather(
                     inp, cluster_axis=cluster_axis, topology=topology, num_links=num_links, dim=DIM, scheme=scheme, **kw
