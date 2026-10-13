@@ -19,8 +19,9 @@ per ring receiver. Mcast-in0 uses ``K_tiles / in0_block_w`` natural-order blocks
 per receiver.
 
 The delivery target is either a ``GlobalCircularBuffer`` or the list of ``PrefetcherPipe``
-objects from one ``create_prefetcher_pipes_for_tensor_prefetcher`` call; pipes are mcast-in0
-only, and their block count comes from the program config rather than the ring.
+objects from one ``create_prefetcher_pipes_for_tensor_prefetcher`` call; gather-in0 takes pipes
+only when streaming (``stream_in1``), and the block count comes from the program config rather
+than the ring.
 
 This is a host-side composition, not a device-level fusion: the prefetch still
 runs on the DRAM-core (DRISC) path off the command queue while the matmul is
@@ -59,8 +60,8 @@ def prefetch_and_linear(
             the matmul. Supply exactly one of ``global_cb`` / ``prefetcher_pipes``.
         prefetcher_pipes: The DRAM-sender PrefetcherPipes (every pipe of one
             ``create_prefetcher_pipes_for_tensor_prefetcher`` call) shared by the prefetch and
-            the matmul, as an alternative to ``global_cb``. Mcast-in0 with a
-            receiver-contiguous weight only.
+            the matmul, as an alternative to ``global_cb``. Receiver-contiguous weight only;
+            mcast-in0, or streaming gather-in0.
         program_config: 1D matmul program config driving the matmul.
         **linear_kwargs: Forwarded to ``ttnn.linear`` (e.g. ``memory_config``,
             ``compute_kernel_config``, ``dtype``, ``bias``). A ``queue_id``/``cq_id``
