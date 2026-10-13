@@ -41,6 +41,8 @@ from models.demos.deepseek_v3_d_p.tests.v4.test_transformer import (
     streams_to_host,
     upload_tokens,
 )
+from models.demos.deepseek_v3_d_p.tt.mla.indexer import normalized_hadamard_matrix
+from models.demos.deepseek_v3_d_p.tt.mla.utils import blockcyclic_positions
 from models.demos.deepseek_v3_d_p.tt.moe.validation_helpers import score_activation
 from models.demos.deepseek_v3_d_p.tt.tt_ccl import per_axis_topology
 from models.demos.deepseek_v3_d_p.tt.v4 import TtV4Transformer
@@ -50,7 +52,7 @@ from models.demos.deepseek_v3_d_p.tt.v4.weights import (
     v4_model_from_checkpoint,
 )
 from models.demos.deepseek_v3_d_p.utils.chunk_config import PREFILL_CHUNK_TOKENS
-from models.demos.deepseek_v3_d_p.utils.test_utils import cache_half_pccs
+from models.demos.deepseek_v3_d_p.utils.test_utils import cache_half_pccs, gather_cache_tp0, unrotate_cache_layer
 
 CHUNK = PREFILL_CHUNK_TOKENS
 SEQ_CACHE = 55 * 1024  # 56320, the length the golden was captured at
@@ -145,6 +147,41 @@ def _log_compressed_kv(trace, config, model, label):
         # pe_interleave=False: V4's compressed rope is interleaved on both sides.
         nope_pcc, pe_pcc = cache_half_pccs(truth, dev, nope, pe_interleave=False)
         logger.info(f"[{label}] layer {i} {kind} compressed KV PCC: nope {nope_pcc:.6f} pe {pe_pcc:.6f}")
+
+
+def _log_indexer_keys(trace, config, model, mesh_device, label):
+    """Log every CSA layer's indexer key cache after the whole prompt against the golden's.
+
+    The device writes the keys Hadamard-rotated, block-cyclic over the SP axis at one chunk's worth of
+    entries per stripe. The golden's convention is not recorded, so the PCC is logged both as stored
+    and with the rotation undone; the orthonormal Sylvester matrix is its own inverse.
+    """
+    kind = "compressed_sparse_attention"
+    rate = config.compress_rates[kind]
+    entries = SEQ_CACHE // rate
+    hadamard = normalized_hadamard_matrix(config.index_head_dim).float()
+    for local_idx, block in enumerate(model.layers):
+        i = model.first_layer_idx + local_idx
+        if config.layer_types[i] != kind:
+            continue
+        name = f"indexer_key_cache_layer_{i}"
+        dirs = [d for d in trace.path.glob(f"*/{name}") if d.is_dir()]
+        if not dirs:
+            logger.warning(f"[{label}] layer {i} indexer keys: golden has no {name} directory")
+            continue
+        stored = gather_cache_tp0(block.attn_state.index_kv_cache, mesh_device)[0]
+        positions = blockcyclic_positions(mesh_device.shape[0], CHUNK // rate, stored.shape[0])
+        dev = unrotate_cache_layer(stored, positions, entries)
+        truth = trace.rows(dirs[0].parent.name, name, 0, min(entries, trace.row_count(name)))
+        if truth.shape != dev.shape:
+            logger.warning(
+                f"[{label}] layer {i} indexer keys: golden {tuple(truth.shape)} vs device {tuple(dev.shape)}; "
+                f"manifest {trace.streams[name]}"
+            )
+            continue
+        _, as_stored = comp_pcc(truth, dev)
+        _, unrotated = comp_pcc(truth, dev @ hadamard)
+        logger.info(f"[{label}] layer {i} indexer keys PCC: as stored {as_stored:.6f} unrotated {unrotated:.6f}")
 
 
 def _stream_layers(trace, group, prefix):
@@ -357,6 +394,7 @@ def run_depth(mesh_device, device_params, num_links, model_config, first, count,
         logger.info(f"  chunk {chunk} done (start={start}) in {time.monotonic() - t0:.0f} s")
 
     _log_compressed_kv(trace, config, model, label)
+    _log_indexer_keys(trace, config, model, mesh_device, label)
     _log_routing(trace, checkpoint, config, range(first, last), routing_dir, label)
     failures = []
     for i in graded:
