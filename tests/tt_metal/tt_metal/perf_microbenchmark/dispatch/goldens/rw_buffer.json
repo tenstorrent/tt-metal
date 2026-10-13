@@ -1,9 +1,9 @@
 {
   "schema_version": 1,
   "suite": "rw_buffer",
-  "metrics": {"bytes_per_second": {"aggregate": "median", "better": "higher", "unit": "B/s"}},
   "environments": {
     "bh_p150_perf": {
+      "metrics": {"bytes_per_second": {"aggregate": "median", "better": "higher", "unit": "B/s"}},
       "repetitions": 11,
       "provenance": {"commit": "5d845af94990a909397597683cd715ed147d630a", "date": "2026-10-06", "source": "CI run 37395653300"},
       "context": {"aiclk_mhz": "1350", "iommu": "off"},
@@ -55,6 +55,7 @@
       }
     },
     "wh_n300_civ2": {
+      "metrics": {"bytes_per_second": {"aggregate": "median", "better": "higher", "unit": "B/s"}},
       "repetitions": 5,
       "provenance": {"commit": "5d845af94990a909397597683cd715ed147d630a", "date": "2026-10-06", "source": "CI run 37395653300"},
       "context": {"aiclk_mhz": "1000", "iommu": "on"},
