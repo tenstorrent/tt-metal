@@ -16,6 +16,7 @@
 #define ELTWISE_BINARY_BLOCK_UNPACK BINARY_NG_BLOCK
 #include "api/compute/eltwise_binary.h"
 #include "api/compute/pack.h"
+#include "api/compute/experimental/reg_api.h"
 #include "eltwise_utils_common.hpp"
 #include "eltwise_utils.hpp"
 
@@ -79,7 +80,12 @@ void kernel_main() {
             binary_tiles_init<true, BINARY_OP_TYPE>(cb_post_lhs.get_cb_id(), cb_post_rhs.get_cb_id());
         }
 #endif
+#if BINARY_NG_BLOCK_PACK
+        // The block sections are pack bound and DEST has no writer but the math thread, so it clears each one.
+        tile_regs_acquire_math_only();
+#else
         tile_regs_acquire();
+#endif
 #if BINARY_NG_BLOCK
         if constexpr (BINARY_OP_TYPE == EltwiseBinaryType::ELWMUL) {
             mul_block(cb_post_lhs.get_cb_id(), cb_post_rhs.get_cb_id(), 0, 0, 0, n);
@@ -102,12 +108,13 @@ void kernel_main() {
         tile_regs_wait();
 #if BINARY_NG_BLOCK_PACK
         pack_block_mop(0, cb_out.get_cb_id(), n);
+        tile_regs_release_math_only();
 #else
         for (uint32_t i = 0; i < n; ++i) {
             pack_tile(i, cb_out.get_cb_id());
         }
-#endif
         tile_regs_release();
+#endif
 
         cb_out.push_back(n);
         cb_post_lhs.pop_front(n);
