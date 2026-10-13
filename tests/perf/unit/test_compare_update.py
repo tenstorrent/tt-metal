@@ -25,7 +25,7 @@ def not_in_ci(monkeypatch):
 
 
 def golden_of(cases, metrics=LOWER, repetitions=2):
-    return Golden("s", dict(metrics), {ENV: Environment(repetitions=repetitions, cases=cases)})
+    return Golden("s", {ENV: Environment(metrics=dict(metrics), repetitions=repetitions, cases=cases)})
 
 
 def statuses(comparison):
@@ -166,12 +166,35 @@ def test_config_change_rerecords_environment_only_with_force(expect_error):
     assert golden.environments[ENV].repetitions == 2
 
 
+def test_rerecording_one_environment_with_a_new_metric_leaves_the_others_flagged():
+    median = {"t": MetricSpec("s", "lower", "median")}
+    golden = golden_of({"a": {"t": 1.0}})
+    golden.environments["bh"] = Environment(metrics=dict(LOWER), repetitions=2, cases={"a": {"t": 1.0}})
+    comparison = cmp.compare({"a": {"t": 1.0}}, golden, ENV, median, POLICY, repetitions=2)
+    update.apply(
+        golden,
+        ENV,
+        comparison,
+        {"a": {"t": 1.0}},
+        median,
+        repetitions=2,
+        context={},
+        provenance={},
+        filtered=False,
+        force=True,
+    )
+    assert golden.environments[ENV].metrics == median
+    assert golden.environments["bh"].metrics == LOWER
+    bh_run = cmp.compare({"a": {"t": 1.0}}, golden, "bh", median, POLICY, repetitions=2)
+    assert bh_run.config_errors and "aggregate" in bh_run.config_errors[0]
+
+
 def test_new_environment_needs_force(expect_error):
     golden = Golden("s")
     with expect_error(update.UpdateRefused, "new cases"):
         apply(golden, {"a": {"t": 1.0}})
     apply(golden, {"a": {"t": 1.0}}, force=True)
-    assert golden.metrics == LOWER and golden.environments[ENV].cases == {"a": {"t": 1.0}}
+    assert golden.environments[ENV].metrics == LOWER and golden.environments[ENV].cases == {"a": {"t": 1.0}}
 
 
 def test_update_is_refused_in_ci(expect_error, monkeypatch):

@@ -21,12 +21,11 @@ METRICS = {"t": MetricSpec("s", "lower", "min")}
 def test_golden_round_trip_is_deterministic_with_one_case_per_line(tmp_path):
     golden = Golden(
         "pgm",
-        METRICS,
         {
             "wh": Environment(
-                2, {"commit": "abc"}, {"aiclk_mhz": "1000"}, {"b/x:2": {"t": 1.23456e-6}, "a/x:1": {"t": 2e-6}}
+                METRICS, 2, {"commit": "abc"}, {"aiclk_mhz": "1000"}, {"b/x:2": {"t": 1.23456e-6}, "a/x:1": {"t": 2e-6}}
             ),
-            "bh": Environment(2, {}, {}, {}),
+            "bh": Environment(METRICS, 2, {}, {}, {}),
         },
     )
     path = tmp_path / "g.json"
@@ -47,10 +46,10 @@ def test_missing_golden_file_is_empty(tmp_path):
 @pytest.mark.parametrize(
     "document, message",
     [
-        ({"schema_version": 2, "suite": "pgm", "metrics": {}}, "schema_version"),
-        ({"schema_version": 1, "suite": "other", "metrics": {}}, "suite"),
+        ({"schema_version": 2, "suite": "pgm"}, "schema_version"),
+        ({"schema_version": 1, "suite": "other"}, "suite"),
         (
-            {"schema_version": 1, "suite": "pgm", "metrics": {}, "environments": {"wh": {"cases": {"a": {"t": 1}}}}},
+            {"schema_version": 1, "suite": "pgm", "environments": {"wh": {"metrics": {}, "cases": {"a": {"t": 1}}}}},
             "undeclared metric",
         ),
     ],
