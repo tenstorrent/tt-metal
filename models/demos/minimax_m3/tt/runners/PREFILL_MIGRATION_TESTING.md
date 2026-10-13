@@ -110,7 +110,8 @@ python -m models.demos.common.prefill.runners.prefill_producer \
   --manifest $M3/m3_producer_mock_migration.yaml
 ```
 
-**Expect:** runner `[mock-migration] KV chunk table -> /tmp/m3_kv_chunk_table.pb, device map -> …`;
+**Expect:** runner `[migration] merged KV chunk table -> /tmp/m3_kv_chunk_table.pb (no worker handshake)`
+and `[migration] rank 0: local device map -> …`;
 producer `[producer] layer acks 240/240`, per-layer `K=… V=… index_k=…`, then
 `[producer] slot N M3 KV PCC over [0,10240) across 60 layers` and `[producer] KV cache PCC PASSED`
 (threshold `PREFILL_STANDALONE_CHUNKED_PCC`, producer default `0.93` — different from the runner's `0.88`
@@ -228,7 +229,7 @@ python -m models.demos.common.prefill.runners.prefill_producer \
   --manifest $M3/m3_producer_mock_migration_2rank.yaml
 ```
 
-**Expect:** rank 0 `[mock-migration] merged KV chunk table -> /data/philei/tmp/m3_kv_chunk_table_pp.pb`
+**Expect:** rank 0 `[migration] merged KV chunk table -> /data/philei/tmp/m3_kv_chunk_table_pp.pb`
 (configs=9, layers=60); each rank `local device map -> /tmp/m3_kv_device_map_r<rank>.json`; producer
 merges both maps (`merged 2 device maps: 32 chips total`), then per-layer `K=… V=… index_k=…` across
 `60/60 local layers` and `KV cache PCC PASSED`.
