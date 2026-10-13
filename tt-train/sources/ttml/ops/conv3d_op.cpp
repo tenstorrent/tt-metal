@@ -49,6 +49,7 @@ struct Conv3dGeometry {
     uint32_t C_out = 0;
     Conv3dDims kernel{};
     Conv3dDims stride{};
+    Conv3dDims padding{};
     Conv3dDims dilation{};
 
     [[nodiscard]] uint32_t kernel_volume() const {
@@ -210,6 +211,35 @@ PreparedWeight prepare_transposed_weight(const ttnn::Tensor& raw_weight, uint32_
     return prepare_weight(pad_output_channels(weight, c_in_padded));
 }
 
+// Rank-4 view so the pad kernel addresses the padded axis directly.
+ttnn::Tensor pad_spatial_dim_both_sides(const ttnn::Tensor& tensor, size_t dim, uint32_t amount) {
+    if (amount == 0U) {
+        return tensor;
+    }
+    const auto shape = tensor.logical_shape();
+    uint32_t outer = 1U;
+    for (size_t i = 0; i < dim; ++i) {
+        outer *= shape[i];
+    }
+    uint32_t rows_after = 1U;
+    for (size_t i = dim + 1; i + 1 < shape.rank(); ++i) {
+        rows_after *= shape[i];
+    }
+    const uint32_t channels = shape[-1];
+    const uint32_t length = shape[dim];
+
+    auto view = ttnn::reshape(tensor, ttnn::Shape({outer, length, rows_after, channels}));
+    view = ttnn::pad(
+        view,
+        ttsl::SmallVector<std::array<uint32_t, 2>>{{0U, 0U}, {amount, amount}, {0U, 0U}, {0U, 0U}},
+        0.0F,
+        /*use_multicore=*/true);
+
+    ttsl::SmallVector<uint32_t> out_shape(shape.cbegin(), shape.cend());
+    out_shape[dim] = length + 2U * amount;
+    return ttnn::reshape(view, ttnn::Shape(out_shape));
+}
+
 ttnn::Tensor zero_upsample_spatial_dim(
     const ttnn::Tensor& tensor, size_t dim, uint32_t stride, uint32_t target_length) {
     const auto shape = tensor.logical_shape();
@@ -277,7 +307,6 @@ Conv3dDims output_block(
     return block;
 }
 
-// `padding` is only non-zero for the transposed convolution of dX, which pads by the kernel span.
 ttnn::Tensor run_ttnn_conv3d(
     const ttnn::Tensor& input_row_major,
     const PreparedWeight& prepared_weight,
@@ -326,12 +355,21 @@ ttnn::Tensor conv3d_input_grad(
 
     auto grad = pad_after(grad_output_row_major, /*dim=*/4, c_out_padded - geometry.C_out);
 
-    // A stride-1 conv padded by the kernel span over the zero-upsampled dY (length in - span) yields dX directly.
+    // A stride-1 conv with padding q over the zero-upsampled dY (length in + 2p - span) holds dX[j - (q - span + p)]
+    // at index j: q = span - p yields dX directly; for p > span, q = span and dX starts at offset p.
     Conv3dDims transposed_padding{};
+    Conv3dDims crop_offset{};
     for (size_t i = 0; i < 3; ++i) {
         const uint32_t kernel_span = geometry.effective_kernel(i) - 1U;
-        grad = zero_upsample_spatial_dim(grad, i + 1, geometry.stride[i], geometry.in_size[i] - kernel_span);
-        transposed_padding[i] = kernel_span;
+        const uint32_t target_length = geometry.in_size[i] + 2U * geometry.padding[i] - kernel_span;
+        grad = zero_upsample_spatial_dim(grad, i + 1, geometry.stride[i], target_length);
+        if (geometry.padding[i] <= kernel_span) {
+            transposed_padding[i] = kernel_span - geometry.padding[i];
+            crop_offset[i] = 0U;
+        } else {
+            transposed_padding[i] = kernel_span;
+            crop_offset[i] = geometry.padding[i];
+        }
     }
 
     auto grad_input = run_ttnn_conv3d(
@@ -343,13 +381,26 @@ ttnn::Tensor conv3d_input_grad(
         /*stride=*/{1U, 1U, 1U},
         transposed_padding,
         geometry.dilation);
-    return slice_channels(grad_input, geometry.C_in);
+
+    if (crop_offset != Conv3dDims{0U, 0U, 0U} || c_in_padded != geometry.C_in) {
+        grad_input = ttnn::slice(
+            grad_input,
+            ttsl::SmallVector<uint32_t>{0U, crop_offset[0], crop_offset[1], crop_offset[2], 0U},
+            ttsl::SmallVector<uint32_t>{
+                geometry.N,
+                crop_offset[0] + geometry.in_size[0],
+                crop_offset[1] + geometry.in_size[1],
+                crop_offset[2] + geometry.in_size[2],
+                geometry.C_in},
+            ttsl::SmallVector<uint32_t>{1U, 1U, 1U, 1U, 1U});
+    }
+    return grad_input;
 }
 
-// dW[co, ci, k] = sum_m dY^T[co, m] * X[m * stride + k * dilation, ci]: one matmul per kernel offset.
+// dW[co, ci, k] = sum_m dY^T[co, m] * Xpad[m * stride + k * dilation, ci]: one matmul per kernel offset.
 ttnn::Tensor conv3d_weight_grad(
     const ttnn::Tensor& grad_output_t_tile,  // [C_out, M] TILE
-    const ttnn::Tensor& input_row_major,     // [N, D, H, W, C_in]
+    const ttnn::Tensor& padded_input,        // [N, D + 2p, H + 2p, W + 2p, C_in] ROW_MAJOR
     const Conv3dGeometry& geometry) {
     const uint32_t M = geometry.num_output_positions();
     std::vector<ttnn::Tensor> per_offset_grads;
@@ -368,7 +419,7 @@ ttnn::Tensor conv3d_weight_grad(
                     geometry.C_in};
                 ttsl::SmallVector<uint32_t> steps{1U, geometry.stride[0], geometry.stride[1], geometry.stride[2], 1U};
 
-                auto window = ttnn::slice(input_row_major, begins, ends, steps);  // [N, D_out, H_out, W_out, C_in]
+                auto window = ttnn::slice(padded_input, begins, ends, steps);  // [N, D_out, H_out, W_out, C_in]
                 window = ttnn::reshape(window, ttnn::Shape({M, geometry.C_in}));
                 auto grad_k = ttnn_fixed::matmul(grad_output_t_tile, to_tile(window));  // [C_out, C_in]
                 grad_k = to_row_major(grad_k);
@@ -389,6 +440,7 @@ Conv3dGeometry validate_and_build_geometry(
     const autograd::TensorPtr& weight,
     const autograd::TensorPtr& bias,
     const Conv3dDims& stride,
+    const Conv3dDims& padding,
     const Conv3dDims& dilation) {
     if (input == nullptr || weight == nullptr) {
         throw std::invalid_argument("conv3d: input and weight must not be null");
@@ -416,6 +468,7 @@ Conv3dGeometry validate_and_build_geometry(
     geometry.C_out = weight_shape[0];
     geometry.kernel = {weight_shape[2], weight_shape[3], weight_shape[4]};
     geometry.stride = stride;
+    geometry.padding = padding;
     geometry.dilation = dilation;
 
     if (weight_shape[1] != geometry.C_in) {
@@ -439,14 +492,15 @@ Conv3dGeometry validate_and_build_geometry(
         if (dilation[i] == 0U) {
             throw std::invalid_argument("conv3d: dilation must be >= 1 in every dimension");
         }
-        if (geometry.in_size[i] < geometry.effective_kernel(i)) {
+        const uint32_t padded_size = geometry.in_size[i] + 2U * padding[i];
+        if (padded_size < geometry.effective_kernel(i)) {
             throw std::invalid_argument(fmt::format(
-                "conv3d: effective kernel size {} exceeds input size {} in spatial dimension {}",
+                "conv3d: effective kernel size {} exceeds padded input size {} in spatial dimension {}",
                 geometry.effective_kernel(i),
-                geometry.in_size[i],
+                padded_size,
                 i));
         }
-        geometry.out_size[i] = (geometry.in_size[i] - geometry.effective_kernel(i)) / stride[i] + 1U;
+        geometry.out_size[i] = (padded_size - geometry.effective_kernel(i)) / stride[i] + 1U;
     }
 
     if (bias != nullptr) {
@@ -493,8 +547,9 @@ autograd::TensorPtr conv3d(
     const autograd::TensorPtr& weight,
     const autograd::TensorPtr& bias,
     const Conv3dDims& stride,
+    const Conv3dDims& padding,
     const Conv3dDims& dilation) {
-    const Conv3dGeometry geometry = validate_and_build_geometry(input, weight, bias, stride, dilation);
+    const Conv3dGeometry geometry = validate_and_build_geometry(input, weight, bias, stride, padding, dilation);
     const auto& input_value = input->get_value();
     const uint32_t c_in_padded = geometry.padded_activation(geometry.C_in);
     const uint32_t c_out_padded = geometry.padded_output(geometry.C_out);
@@ -513,7 +568,7 @@ autograd::TensorPtr conv3d(
         c_out_padded,
         geometry.kernel,
         geometry.stride,
-        /*padding=*/{0U, 0U, 0U},
+        geometry.padding,
         geometry.dilation);
     output = slice_channels(output, geometry.C_out);
 
@@ -540,9 +595,12 @@ autograd::TensorPtr conv3d(
             auto grad_output_flat = to_tile(ttnn::reshape(grad_output_row_major, ttnn::Shape({M, geometry.C_out})));
 
             if (needs_weight_grad) {
+                auto padded_input = to_row_major(input_value);
+                for (size_t i = 0; i < 3; ++i) {
+                    padded_input = pad_spatial_dim_both_sides(padded_input, i + 1, geometry.padding[i]);
+                }
                 auto grad_output_t = ttnn::transpose(grad_output_flat, -2, -1);
-                weight->add_grad(
-                    to_layout_of(conv3d_weight_grad(grad_output_t, to_row_major(input_value), geometry), weight_value));
+                weight->add_grad(to_layout_of(conv3d_weight_grad(grad_output_t, padded_input, geometry), weight_value));
             }
 
             if (needs_bias_grad) {

@@ -60,6 +60,7 @@ def _run_case(
     spatial=(4, 5, 6),
     kernel=(3, 3, 3),
     stride=(1, 1, 1),
+    padding=(0, 0, 0),
     dilation=(1, 1, 1),
     input_requires_grad=True,
     layout=ttnn.Layout.ROW_MAJOR,
@@ -76,7 +77,7 @@ def _run_case(
     w_torch.requires_grad_(True)
     b_torch.requires_grad_(True)
 
-    out_torch = torch.nn.functional.conv3d(x_torch, w_torch, b_torch, stride=stride, dilation=dilation)
+    out_torch = torch.nn.functional.conv3d(x_torch, w_torch, b_torch, stride=stride, padding=padding, dilation=dilation)
     grad_out_torch = _round_to_bf16(np.random.uniform(-1, 1, tuple(out_torch.shape)).astype(np.float32))
     out_torch.backward(grad_out_torch)
 
@@ -84,7 +85,7 @@ def _run_case(
     w_ttml = _to_ttml(w_torch.detach().numpy(), layout, dtype, True)
     b_ttml = _to_ttml(b_torch.detach().numpy().reshape(1, 1, 1, C_out), layout, dtype, True)
 
-    out_ttml = ttml.ops.conv.conv3d(x_ttml, w_ttml, b_ttml, stride=stride, dilation=dilation)
+    out_ttml = ttml.ops.conv.conv3d(x_ttml, w_ttml, b_ttml, stride=stride, padding=padding, dilation=dilation)
 
     expected_out = out_torch.detach().numpy().transpose(0, 2, 3, 4, 1)
     assert out_ttml.shape() == list(expected_out.shape)
@@ -103,17 +104,22 @@ def _run_case(
     _assert_close(b_ttml.get_grad_tensor().to_numpy(FP32).reshape(C_out), b_torch.grad.numpy(), "grad_bias")
 
 
-def test_conv3d_batch_and_stride():
-    _run_case(N=2, spatial=(5, 6, 7), stride=(2, 2, 2))
+def test_conv3d_batch_stride_padding():
+    _run_case(N=2, spatial=(5, 6, 7), stride=(2, 2, 2), padding=(1, 1, 1))
 
 
-def test_conv3d_dilation_with_stride_and_batch():
-    _run_case(N=2, spatial=(7, 8, 9), dilation=(2, 1, 2), stride=(1, 2, 1))
+def test_conv3d_dilation_with_stride_and_padding():
+    _run_case(N=2, spatial=(7, 8, 9), dilation=(2, 1, 2), stride=(1, 2, 1), padding=(2, 1, 2))
+
+
+def test_conv3d_padding_beyond_kernel_span():
+    # span = 2 * (3 - 1) = 4; padding 5 takes the dX crop path with a dilated kernel
+    _run_case(spatial=(5, 6, 7), dilation=(2, 2, 2), padding=(5, 5, 5))
 
 
 @pytest.mark.parametrize("layout", [ttnn.Layout.ROW_MAJOR, ttnn.Layout.TILE], ids=["row_major", "tile"])
 def test_conv3d_unaligned_channels_with_batch(layout):
-    _run_case(N=2, C_in=24, C_out=40, layout=layout)
+    _run_case(N=2, C_in=24, C_out=40, padding=(1, 1, 1), layout=layout)
 
 
 # fp32 storage exercises the autocast path (parameters held in float32, computed in bf16), not fp32 compute.
@@ -160,7 +166,7 @@ def test_conv3d_rejects_unsupported_arguments(expect_error):
     with expect_error(ValueError, "dilation"):
         ttml.ops.conv.conv3d(x, w, dilation=(1, 0, 1))
     with expect_error(ValueError, "effective kernel"):
-        # dilation 3 makes the effective kernel 7 > D = 4
+        # dilation 3 makes the effective kernel 7 > D = 4 with no padding
         ttml.ops.conv.conv3d(x, w, dilation=(3, 1, 1))
     with expect_error(ValueError, "rank 5"):
         ttml.ops.conv.conv3d(_zeros((4, 5, 6, 32)), w)

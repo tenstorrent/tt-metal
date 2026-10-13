@@ -32,6 +32,7 @@ struct Conv3dCase {
     uint32_t C_out = 32;
     Dims3 kernel{3, 3, 3};
     Dims3 stride{1, 1, 1};
+    Dims3 padding{0, 0, 0};
     Dims3 dilation{1, 1, 1};
     bool with_bias = true;
     bool bias_rank1 = false;  // pass the bias as [C_out] instead of [1, 1, 1, C_out]
@@ -45,7 +46,7 @@ struct Conv3dCase {
         Dims3 out{};
         for (size_t i = 0; i < 3; ++i) {
             const uint32_t effective_kernel = dilation[i] * (kernel[i] - 1) + 1;
-            out[i] = (in_size[i] - effective_kernel) / stride[i] + 1;
+            out[i] = (in_size[i] + 2 * padding[i] - effective_kernel) / stride[i] + 1;
         }
         return out;
     }
@@ -97,13 +98,30 @@ Conv3dReference compute_reference(
                             ref.grad_bias[co] += dy;
                         }
                         for (uint32_t kd = 0; kd < kD; ++kd) {
-                            const uint32_t id = od * c.stride[0] + kd * c.dilation[0];
+                            const int64_t id = static_cast<int64_t>(od) * c.stride[0] + kd * c.dilation[0] -
+                                               static_cast<int64_t>(c.padding[0]);
+                            if (id < 0 || id >= static_cast<int64_t>(D)) {
+                                continue;
+                            }
                             for (uint32_t kh = 0; kh < kH; ++kh) {
-                                const uint32_t ih = oh * c.stride[1] + kh * c.dilation[1];
+                                const int64_t ih = static_cast<int64_t>(oh) * c.stride[1] + kh * c.dilation[1] -
+                                                   static_cast<int64_t>(c.padding[1]);
+                                if (ih < 0 || ih >= static_cast<int64_t>(H)) {
+                                    continue;
+                                }
                                 for (uint32_t kw = 0; kw < kW; ++kw) {
-                                    const uint32_t iw = ow * c.stride[2] + kw * c.dilation[2];
+                                    const int64_t iw = static_cast<int64_t>(ow) * c.stride[2] + kw * c.dilation[2] -
+                                                       static_cast<int64_t>(c.padding[2]);
+                                    if (iw < 0 || iw >= static_cast<int64_t>(W)) {
+                                        continue;
+                                    }
                                     for (uint32_t ci = 0; ci < c.C_in; ++ci) {
-                                        const size_t i_idx = input_index(n, id, ih, iw, ci);
+                                        const size_t i_idx = input_index(
+                                            n,
+                                            static_cast<uint32_t>(id),
+                                            static_cast<uint32_t>(ih),
+                                            static_cast<uint32_t>(iw),
+                                            ci);
                                         const size_t w_idx = weight_index(co, ci, kd, kh, kw);
                                         acc += input[i_idx] * weight[w_idx];
                                         ref.grad_input[i_idx] += dy * weight[w_idx];
@@ -195,7 +213,7 @@ void run_case(const Conv3dCase& c) {
         }
     };
 
-    auto result = ttml::ops::conv3d(input, weight, bias, c.stride, c.dilation);
+    auto result = ttml::ops::conv3d(input, weight, bias, c.stride, c.padding, c.dilation);
 
     ASSERT_EQ(result->get_value().logical_shape(), output_shape);
     EXPECT_EQ(result->get_value().layout(), c.layout);
@@ -241,6 +259,7 @@ void run_case(const Conv3dCase& c) {
 
 TEST_F(Conv3dOpTest, ForwardBackwardWithBias) {
     Conv3dCase c;
+    c.padding = {1, 1, 1};
     run_case(c);
 }
 
@@ -250,18 +269,20 @@ TEST_F(Conv3dOpTest, ForwardBackwardNoBias) {
     run_case(c);
 }
 
-TEST_F(Conv3dOpTest, BatchAndStride) {
+TEST_F(Conv3dOpTest, BatchStrideAndPadding) {
     Conv3dCase c;
     c.N = 2;
     c.in_size = {5, 6, 7};
     c.stride = {2, 2, 2};
+    c.padding = {1, 1, 1};
     run_case(c);
 }
 
-TEST_F(Conv3dOpTest, NIGHTLY_AsymmetricStride) {
+TEST_F(Conv3dOpTest, NIGHTLY_AsymmetricStrideAndPadding) {
     Conv3dCase c;
     c.in_size = {6, 7, 8};
     c.stride = {1, 2, 3};
+    c.padding = {0, 1, 2};
     run_case(c);
 }
 
@@ -269,15 +290,17 @@ TEST_F(Conv3dOpTest, Dilation) {
     Conv3dCase c;
     c.in_size = {6, 7, 8};
     c.dilation = {2, 2, 2};
+    c.padding = {2, 2, 2};
     run_case(c);
 }
 
-TEST_F(Conv3dOpTest, NIGHTLY_DilationWithStrideAndBatch) {
+TEST_F(Conv3dOpTest, NIGHTLY_DilationWithStrideAndPadding) {
     Conv3dCase c;
     c.N = 2;
     c.in_size = {7, 8, 9};
     c.dilation = {2, 1, 2};
     c.stride = {1, 2, 1};
+    c.padding = {2, 1, 2};
     run_case(c);
 }
 
@@ -285,18 +308,52 @@ TEST_F(Conv3dOpTest, NIGHTLY_PerAxisDilation) {
     Conv3dCase c;
     c.in_size = {6, 8, 10};
     c.dilation = {1, 2, 3};
+    c.padding = {1, 2, 3};
+    run_case(c);
+}
+
+// span = dil * (k - 1) = 4 on every axis; padding 5 exceeds it, so dX takes the crop path with a dilated kernel.
+TEST_F(Conv3dOpTest, NIGHTLY_DilationWithPaddingBeyondSpan) {
+    Conv3dCase c;
+    c.in_size = {5, 6, 7};
+    c.dilation = {2, 2, 2};
+    c.padding = {5, 5, 5};
+    run_case(c);
+}
+
+TEST_F(Conv3dOpTest, PaddingLargerThanKernelSpanPointwise) {
+    Conv3dCase c;
+    c.kernel = {1, 1, 1};
+    c.padding = {1, 1, 1};
+    run_case(c);
+}
+
+// span 2 with padding above it: the dX crop path, unreachable from the pointwise case (span 0).
+TEST_F(Conv3dOpTest, PaddingLargerThanKernelSpan) {
+    Conv3dCase c;
+    c.padding = {3, 4, 3};
+    run_case(c);
+}
+
+TEST_F(Conv3dOpTest, NIGHTLY_PaddingLargerThanKernelSpanWithStride) {
+    Conv3dCase c;
+    c.N = 2;
+    c.stride = {2, 2, 2};
+    c.padding = {3, 3, 3};
     run_case(c);
 }
 
 TEST_F(Conv3dOpTest, NIGHTLY_OutputChannelsNotTileAligned) {
     Conv3dCase c;
     c.C_out = 40;
+    c.padding = {1, 1, 1};
     run_case(c);
 }
 
 TEST_F(Conv3dOpTest, NIGHTLY_InputChannelsNotTileAligned) {
     Conv3dCase c;
     c.C_in = 12;
+    c.padding = {1, 1, 1};
     run_case(c);
 }
 
@@ -306,6 +363,7 @@ TEST_F(Conv3dOpTest, InputAndOutputChannelsNotTileAligned) {
     c.C_out = 40;
     c.N = 2;
     c.stride = {2, 1, 2};
+    c.padding = {1, 1, 1};
     run_case(c);
 }
 
@@ -331,6 +389,7 @@ TEST_F(Conv3dOpTest, PatchEmbedKernel) {
 TEST_F(Conv3dOpTest, NIGHTLY_AsymmetricOddKernel) {
     Conv3dCase c;
     c.kernel = {1, 3, 3};
+    c.padding = {0, 1, 1};
     run_case(c);
 }
 
@@ -341,12 +400,13 @@ TEST_F(Conv3dOpTest, NIGHTLY_EvenCubicKernelWithStride) {
     run_case(c);
 }
 
-// dW and db reduce over M = 2 * 6 * 46 * 46 = 25392 output positions, the accumulation length of a video layer;
+// dW and db reduce over M = 2 * 8 * 48 * 48 = 36864 output positions, the accumulation length of a video layer;
 // sums that long are compared by relative L2, since elementwise bounds are unstable on them.
 TEST_F(Conv3dOpTest, NIGHTLY_VideoSizedReduction) {
     Conv3dCase c;
     c.N = 2;
     c.in_size = {8, 48, 48};
+    c.padding = {1, 1, 1};
     c.relative_l2_tolerance = 1e-2F;
     run_case(c);
 }
@@ -354,12 +414,14 @@ TEST_F(Conv3dOpTest, NIGHTLY_VideoSizedReduction) {
 TEST_F(Conv3dOpTest, TileLayoutTensors) {
     Conv3dCase c;
     c.layout = ttnn::Layout::TILE;
+    c.padding = {1, 1, 1};
     run_case(c);
 }
 
 TEST_F(Conv3dOpTest, OneDimensionalBias) {
     Conv3dCase c;
     c.bias_rank1 = true;
+    c.padding = {1, 1, 1};
     run_case(c);
 }
 
@@ -367,6 +429,7 @@ TEST_F(Conv3dOpTest, NIGHTLY_LargerChannelCounts) {
     Conv3dCase c;
     c.C_in = 128;
     c.C_out = 128;
+    c.padding = {1, 1, 1};
     run_case(c);
 }
 
@@ -376,6 +439,7 @@ TEST_F(Conv3dOpTest, TileLayoutUnalignedChannelsWithBatch) {
     c.N = 2;
     c.C_in = 24;
     c.C_out = 40;
+    c.padding = {1, 1, 1};
     run_case(c);
 }
 
@@ -383,12 +447,14 @@ TEST_F(Conv3dOpTest, FrozenWeightAndBias) {
     Conv3dCase c;
     c.weight_requires_grad = false;
     c.bias_requires_grad = false;
+    c.padding = {1, 1, 1};
     run_case(c);
 }
 
 TEST_F(Conv3dOpTest, FrozenInput) {
     Conv3dCase c;
     c.input_requires_grad = false;
+    c.padding = {1, 1, 1};
     run_case(c);
 }
 
@@ -414,6 +480,7 @@ TEST_F(Conv3dOpTest, ProgramCacheStableAcrossSteps) {
     c.N = 2;
     c.C_out = 40;
     c.stride = {1, 2, 2};
+    c.padding = {1, 1, 1};
     const auto out = c.out_size();
     const auto [D, H, W] = c.in_size;
     const auto [kD, kH, kW] = c.kernel;
@@ -429,7 +496,7 @@ TEST_F(Conv3dOpTest, ProgramCacheStableAcrossSteps) {
             ttml::core::from_xtensor(uniform(weight_shape, -0.5F, 0.5F, seed + 1), device, c.layout), true);
         auto bias = ttml::autograd::create_tensor(
             ttml::core::from_xtensor(uniform(bias_shape, -1.F, 1.F, seed + 2), device, c.layout), true);
-        auto result = ttml::ops::conv3d(input, weight, bias, c.stride, c.dilation);
+        auto result = ttml::ops::conv3d(input, weight, bias, c.stride, c.padding, c.dilation);
         result->set_grad(ttml::core::from_xtensor(uniform(output_shape, -1.F, 1.F, seed + 3), device, c.layout));
         result->backward();
         ttml::autograd::ctx().reset_graph();
@@ -493,13 +560,16 @@ TEST_F(Conv3dOpTest, RejectsUnsupportedArguments) {
     auto weight = zeros(weight_shape);
 
     const Dims3 unit{1, 1, 1};
+    const Dims3 none{0, 0, 0};
 
     EXPECT_THROW(ttml::ops::conv3d(input, weight, nullptr, /*stride=*/{0, 1, 1}), std::invalid_argument);
     EXPECT_THROW(
-        ttml::ops::conv3d(input, weight, nullptr, /*stride=*/unit, /*dilation=*/{1, 0, 1}), std::invalid_argument);
-    // dilation 3 makes the effective kernel 7 > D = 4
+        ttml::ops::conv3d(input, weight, nullptr, /*stride=*/unit, /*padding=*/none, /*dilation=*/{1, 0, 1}),
+        std::invalid_argument);
+    // dilation 3 makes the effective kernel 7 > D = 4 with no padding
     EXPECT_THROW(
-        ttml::ops::conv3d(input, weight, nullptr, /*stride=*/unit, /*dilation=*/{3, 1, 1}), std::invalid_argument);
+        ttml::ops::conv3d(input, weight, nullptr, /*stride=*/unit, /*padding=*/none, /*dilation=*/{3, 1, 1}),
+        std::invalid_argument);
     EXPECT_THROW(ttml::ops::conv3d(zeros(ttnn::Shape({D, H, W, c.C_in})), weight), std::invalid_argument);
     EXPECT_THROW(ttml::ops::conv3d(input, zeros(ttnn::Shape({c.C_out, c.C_in, kD, kH}))), std::invalid_argument);
     EXPECT_THROW(ttml::ops::conv3d(input, zeros(ttnn::Shape({c.C_out, 64U, kD, kH, kW}))), std::invalid_argument);
