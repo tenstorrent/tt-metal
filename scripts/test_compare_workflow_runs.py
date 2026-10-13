@@ -4,6 +4,7 @@
 
 """Tests for the pure comparison logic of compare_workflow_runs.py (no gh calls)."""
 
+import json
 import os
 import subprocess
 import sys
@@ -117,3 +118,35 @@ def test_gh_failure_raises_instead_of_returning_none(monkeypatch):
     monkeypatch.setattr(cwr.subprocess, "run", fake_run)
     with pytest.raises(cwr.GhCommandError, match="base repo"):
         cwr.run_gh_command(["run", "list"])
+
+
+def _run_cli(monkeypatch, capsys, branch_run, main_run, *flags):
+    """Run main() in-process with gh calls faked; returns (exit code, stdout)."""
+    monkeypatch.setattr(cwr, "check_prerequisites", lambda: True)
+    monkeypatch.setattr(cwr, "get_latest_run", lambda workflow, branch: main_run if branch == "main" else branch_run)
+    monkeypatch.setattr(cwr, "iter_main_history", lambda workflow, exclude_run_id: iter([]))
+    argv = ["compare_workflow_runs.py", "--branch", "feature", "--workflows", "sanity-tests.yaml", *flags]
+    monkeypatch.setattr(sys, "argv", argv)
+    with pytest.raises(SystemExit) as exc:
+        cwr.main()
+    return exc.value.code, capsys.readouterr().out
+
+
+@pytest.mark.parametrize("flags", [(), ("--json",)], ids=["text", "json"])
+@pytest.mark.parametrize(
+    "branch_jobs, main_jobs, expected",
+    [
+        ([job(ELTWISE), job(QB2, "failure")], [job(ELTWISE)], 1),  # failed job not found on main
+        ([job(ELTWISE, "failure")], [job(ELTWISE)], 1),  # new failure
+        ([job(ELTWISE, "failure")], [job(ELTWISE, "failure")], 0),  # pre-existing failure
+        ([job(ELTWISE)], [job(ELTWISE)], 0),  # all passing
+        ([job(ELTWISE, None, "in_progress")], [job(ELTWISE)], 0),  # still running
+    ],
+    ids=["unmatched", "new", "same", "passing", "running"],
+)
+def test_cli_exit_code_is_the_same_in_text_and_json_mode(monkeypatch, capsys, flags, branch_jobs, main_jobs, expected):
+    branch_run = run(branch_jobs, branch="feature", event="workflow_dispatch", conclusion="failure")
+    code, out = _run_cli(monkeypatch, capsys, branch_run, run(main_jobs, run_id=10), *flags)
+    assert code == expected
+    if flags:
+        json.loads(out)  # stdout is only the JSON document

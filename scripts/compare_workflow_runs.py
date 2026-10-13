@@ -462,6 +462,16 @@ def main():
         sys.exit(1)
 
 
+def compute_exit_code(comparisons: list[dict]) -> int:
+    """Exit status for a set of comparisons; independent of the output format (text or --json).
+
+    1 = new failures, or failed branch jobs not found on main; 0 otherwise (including "still running").
+    """
+    if any(c["new_failures"] or c["unmatched_failures"] for c in comparisons):
+        return 1
+    return 0
+
+
 def run():
     parser = argparse.ArgumentParser(
         description="Compare workflow runs between branch and main", epilog="Prerequisites: gh CLI (authenticated), git"
@@ -624,6 +634,7 @@ def run():
 
     if args.json:
         print(json.dumps(comparisons, indent=2))
+        sys.exit(compute_exit_code(comparisons))
     else:
         # Print summary header
         total_new_failures = sum(len(c["new_failures"]) for c in comparisons)
@@ -658,16 +669,13 @@ def run():
         print("\n" + "=" * 60)
         if total_new_failures > 0:
             print("❌ VERDICT: New failures detected - review needed")
-            sys.exit(1)
         elif total_unmatched > 0:
             print("❌ VERDICT: Failed jobs on branch not found in recent main runs - review needed")
-            sys.exit(1)
         elif total_in_progress > 0:
             print("⏳ VERDICT: Workflows still running - run again later")
-            sys.exit(0)
         else:
             print("✅ VERDICT: Safe to merge (no new failures)")
-            sys.exit(0)
+        sys.exit(compute_exit_code(comparisons))
 
 
 if __name__ == "__main__":
