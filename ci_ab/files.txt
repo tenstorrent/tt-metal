@@ -1,0 +1,13 @@
+tt_metal/hw/ckernels/blackhole/metal/llk_api/llk_sfpu/ckernel_sfpu_topk.h
+tt_metal/hw/inc/api/compute/topk.h
+tt_metal/tt-llk/tt_llk_blackhole/common/inc/sfpu/ckernel_sfpu_topk.h
+tt_metal/tt-llk/tt_llk_blackhole/common/inc/sfpu/experimental/ckernel_sfpu_topk_xl.h
+ttnn/cpp/ttnn/operations/data_movement/sort/device/kernels/compute/sort_single_row_single_core.cpp
+ttnn/cpp/ttnn/operations/experimental/deepseek_prefill/moe_grouped_topk/device/kernels/compute/moe_gate_common_compute.hpp
+ttnn/cpp/ttnn/operations/experimental/deepseek_prefill/moe_grouped_topk/device/kernels/compute/moe_grouped_topk.cpp
+ttnn/cpp/ttnn/operations/experimental/deepseek_prefill/moe_grouped_topk/device/kernels/dataflow/writer_moe_grouped_topk.cpp
+ttnn/cpp/ttnn/operations/experimental/topk_large_indices/device/kernels/compute.cpp
+ttnn/cpp/ttnn/operations/experimental/topk_large_indices/device/kernels/topk_large_indices_split.hpp
+ttnn/cpp/ttnn/operations/reduction/sampling/device/kernels/compute/sampling.cpp
+ttnn/cpp/ttnn/operations/reduction/topk/device/kernels/compute/topk.cpp
+ttnn/cpp/ttnn/operations/reduction/topk/device/kernels/compute/topk_fused_raw16.hpp
