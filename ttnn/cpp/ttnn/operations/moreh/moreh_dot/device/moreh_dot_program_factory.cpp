@@ -10,7 +10,7 @@
 
 #include "ttnn/operations/core/compute_kernel/compute_kernel_config.hpp"
 #include "ttnn/operations/core/data_movement_kernel/datamovement_kernel_config.hpp"
-#include "ttnn/cpp/ttnn/kernel_lib/host/reduce_host.hpp"
+#include "ttnn/kernel_lib/host/reduce_host.hpp"
 
 namespace ttnn::operations::moreh::moreh_dot {
 

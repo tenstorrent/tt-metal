@@ -7,7 +7,7 @@
 #include <tt_stl/assert.hpp>
 #include "ttnn/operations/moreh/moreh_softmax/device/moreh_softmax_device_operation.hpp"
 #include "ttnn/operations/moreh/moreh_helper_functions.hpp"
-#include "ttnn/cpp/ttnn/kernel_lib/host/reduce_host.hpp"
+#include "ttnn/kernel_lib/host/reduce_host.hpp"
 #include "ttnn/operations/core/compute_kernel/compute_kernel_config.hpp"
 #include "ttnn/operations/core/data_movement_kernel/datamovement_kernel_config.hpp"
 
@@ -65,8 +65,11 @@ ttnn::device_operation::ProgramArtifacts MorehSoftmaxOperation::MorehSoftmaxWSma
     // Circular-buffer formats
     auto data_format = tt::tt_metal::datatype_to_dataformat_converter(input.dtype());
     auto intermed_data_format = fp32_dest_acc_en ? tt::DataFormat::Float32 : data_format;
+    // The reader writes a bfloat16 mask tile.
+    auto mask_scaler_format = (data_format == tt::DataFormat::Bfp8_b) ? tt::DataFormat::Float16_b : data_format;
     const std::uint32_t tile_size_data = tile_size(data_format);
     const std::uint32_t tile_size_intermed = tile_size(intermed_data_format);
+    const std::uint32_t tile_size_mask_scaler = tile_size(mask_scaler_format);
 
     // ---- Resource names (program-scope; local to avoid unity-build symbol clashes) ----
     const KernelSpecName READER{"reader"};
@@ -137,7 +140,10 @@ ttnn::device_operation::ProgramArtifacts MorehSoftmaxOperation::MorehSoftmaxWSma
         DataflowBufferSpec{
             .unique_id = IN, .entry_size = tile_size_data, .num_entries = Wt, .data_format_metadata = data_format},
         DataflowBufferSpec{
-            .unique_id = MASK, .entry_size = tile_size_data, .num_entries = 1, .data_format_metadata = data_format},
+            .unique_id = MASK,
+            .entry_size = tile_size_mask_scaler,
+            .num_entries = 1,
+            .data_format_metadata = mask_scaler_format},
         DataflowBufferSpec{
             .unique_id = MAX_SCALER,
             .entry_size = max_auxiliary->page_size,
@@ -219,7 +225,8 @@ ttnn::device_operation::ProgramArtifacts MorehSoftmaxOperation::MorehSoftmaxWSma
     if (op == MorehSoftmaxOp::LOGSOFTMAX) {
         compute_defines["LOG"] = "1";
     }
-    if (fp32_dest_acc_en) {
+    // Bfp8_b input needs the format reconfig this define enables.
+    if (fp32_dest_acc_en || data_format == tt::DataFormat::Bfp8_b) {
         compute_defines["FP32_DEST_ACC_EN"] = "1";
     }
 

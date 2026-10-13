@@ -5,6 +5,7 @@
 from dataclasses import dataclass, field
 from typing import TYPE_CHECKING, List, Optional, Tuple, Union
 
+from helpers.chip_architecture import ChipArchitecture
 from helpers.data_format_inference import (
     infer_math_format,
     infer_pack_in,
@@ -173,6 +174,12 @@ class FuserSentinel:
         src_a_fmt, src_b_fmt = self._get_src_formats(
             config, compute_node, output_format, operation
         )
+        if config.architecture == ChipArchitecture.QUASAR:
+            # UInt16 is an SFPU access mode, not a Quasar unpack/math/pack encoding.
+            src_a_fmt, src_b_fmt, output_format = (
+                DataFormat.Int16 if fmt == DataFormat.UInt16 else fmt
+                for fmt in (src_a_fmt, src_b_fmt, output_format)
+            )
         unpack_to_dest = compute_node.unpack_to_dest.value
         dest_acc = config.dest_acc
 
@@ -256,6 +263,11 @@ class FuserSentinel:
     ) -> Tuple[DataFormat, DataFormat]:
         """Infer pack_src and pack_dst formats for a given pack node."""
         output_format = pack_node.output.data_format
+        if (
+            config.architecture == ChipArchitecture.QUASAR
+            and output_format == DataFormat.UInt16
+        ):
+            output_format = DataFormat.Int16
 
         formats = {
             self._infer_node_formats(config, source, output_format, operation)[5]

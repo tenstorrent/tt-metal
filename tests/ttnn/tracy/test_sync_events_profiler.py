@@ -45,7 +45,7 @@ NONBLOCKING_CYCLES = 1000
 
 L1_MAX = 0x200000
 
-# Legacy timer_id -> event name mapping (kSyncNames in streaming_profiler_zone_csv.cpp)
+# Legacy timer_id -> event name mapping (kSyncNames in zone_csv.cpp)
 SYNC_LEGACY_IDS = {
     1000: "SYNC-CB-PUSH",
     1003: "SYNC-SEM-SET",

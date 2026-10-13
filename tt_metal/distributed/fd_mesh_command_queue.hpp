@@ -49,6 +49,11 @@ private:
     CoreCoord virtual_program_dispatch_core() const;
     CoreType dispatch_core_type() const;
 
+    void submit_replay_buffer(
+        const std::unordered_map<SubDeviceId, TraceWorkerDescriptor>& worker_descriptors,
+        const std::vector<SubDeviceId>& sub_device_ids,
+        const MeshBuffer& buffer);
+
     void increment_num_entries_in_completion_queue();
     MeshEvent enqueue_record_event_helper(
         ttsl::Span<const SubDeviceId> sub_device_ids,
@@ -284,6 +289,15 @@ public:
     void record_begin(const MeshTraceId& trace_id, const std::shared_ptr<MeshTraceDescriptor>& ctx) override;
     void record_end() override;
     void enqueue_trace(const MeshTraceId& trace_id, bool blocking) override;
+    // Enqueue a command list without entering the mesh-trace lifecycle.
+    void enqueue_command_list(
+        const std::unordered_map<SubDeviceId, TraceWorkerDescriptor>& worker_descriptors,
+        const std::vector<SubDeviceId>& sub_device_ids,
+        const MeshBuffer& buffer,
+        SubDeviceManagerId sub_device_manager_id,
+        bool blocking);
+    // Wait until this host's queued device work completes.
+    void drain_device_work();
     // Main function (event loop) for the Completion Queue Reader
     void read_completion_queue();
     // Helper function - read events from Completion Queue

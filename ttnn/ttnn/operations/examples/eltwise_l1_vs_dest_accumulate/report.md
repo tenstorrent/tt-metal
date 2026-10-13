@@ -1,7 +1,7 @@
 # eltwise_l1_vs_dest_accumulate — device report
 
-- box: `bh-qb-11-special-dnijemcevic-for-reservation-42432`
-- arch: blackhole
+- box: `bh-50-special-malimpic-for-reservation-133300`
+- arch: Arch.BLACKHOLE
 - shape: 64 blocks x 1 tiles (fp32); kernel_iters=100; rounds=10x5
 - accumulation steps per launch: 6400
 - metric: DEVICE KERNEL DURATION [ns], median over rounds (±% = pstdev/median)
@@ -11,6 +11,6 @@
 
 | method | ns/op | ±% | vs rmw |
 |--------|-------|----|--------|
-| rmw | 975683.2 | 0.0 | 1.00x |
-| pack_l1_acc | 191806.7 | 0.0 | 5.09x |
-| dest_acc | 92150.7 | 0.0 | 10.59x |
+| rmw | 977481.2 | 0.0 | 1.00x |
+| pack_l1_acc | 185657.4 | 0.0 | 5.26x |
+| dest_acc | 92166.5 | 0.0 | 10.61x |

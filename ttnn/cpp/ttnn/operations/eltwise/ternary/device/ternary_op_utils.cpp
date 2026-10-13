@@ -537,6 +537,8 @@ std::map<std::string, std::string> get_compute_defines(TernaryOpType op_type, Da
                 defines["TERNARY_SFPU_OP_FUNC"] = "where_tile<DataFormat::Float32>";
             } else if (dtype == DataType::INT32) {
                 defines["TERNARY_SFPU_OP_FUNC"] = "where_tile<DataFormat::Int32>";
+            } else if (dtype == DataType::UINT32) {
+                defines["TERNARY_SFPU_OP_FUNC"] = "where_tile<DataFormat::UInt32>";
             } else {
                 defines["TERNARY_SFPU_OP_FUNC"] = "where_tile<DataFormat::Float16_b>";
             }

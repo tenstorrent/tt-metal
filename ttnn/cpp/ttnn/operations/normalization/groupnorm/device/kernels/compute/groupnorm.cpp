@@ -11,6 +11,7 @@
 #include "api/compute/reduce.h"
 #include "api/compute/bcast.h"
 #include "api/compute/eltwise_binary.h"
+#include "api/compute/eltwise_unary/fill.h"
 #include "api/compute/layernorm.h"
 #include "api/compute/tile_move_copy.h"
 #include "api/compute/tilize.h"
@@ -22,7 +23,6 @@
 #include "ttnn/cpp/ttnn/kernel_lib/eltwise/api/chain.hpp"
 #include "ttnn/cpp/ttnn/kernel_lib/eltwise/api/convenience.hpp"
 #include "ttnn/cpp/ttnn/kernel_lib/eltwise/unary/math.hpp"
-#include "api/compute/eltwise_unary/fill.h"
 #include "ttnn/cpp/ttnn/operations/normalization/groupnorm/device/kernels/groupnorm_constants.hpp"
 #include "api/dataflow/dataflow_buffer.h"
 
@@ -474,8 +474,6 @@ void kernel_main() {
                 dfb_x.wait_front(static_cast<uint16_t>(out_block_hw_normal));
                 reduce_local_group<dfb_x_id, dfb_ex_partial_id, decltype(runtime_offset)::value>(out_block_h_actual);
                 dfb_x.pop_front(static_cast<uint16_t>(out_block_hw_normal));
-
-                dfb_ex_partial.wait_front(1);
             };
             // Each call site supplies its runtime-record offset as a template
             // argument. reduce<Call>() alone interprets the record's shape.
@@ -919,7 +917,6 @@ void kernel_main() {
                     }
                     dfb_outgamma.push_back(static_cast<uint16_t>(out_block_hw_normal));
                     dfb_reread_write_out.pop_front(static_cast<uint16_t>(out_block_hw_normal));
-                    dfb_outgamma.wait_front(static_cast<uint16_t>(out_block_hw_normal));
                 }
                 // End Optional Gamma
                 //
@@ -927,6 +924,11 @@ void kernel_main() {
                 if constexpr (do_beta) {
                     dfb_outbeta.reserve_back(static_cast<uint16_t>(out_block_hw_normal));
                     dfb_beta.wait_front(per_core_N);
+                    // dfb_inbeta holds tiles this kernel packed earlier in the iteration: the gamma
+                    // stage's result with gamma, the pre-gamma block without it. Either way the pack
+                    // has to complete before the reads below, and this wait is what the pop at the end
+                    // of this stage matches.
+                    dfb_inbeta.wait_front(static_cast<uint16_t>(out_block_hw_normal));
                     for (std::uint32_t j = 0; j < block_w_curr; ++j) {
                         if (apply_gamma_beta[j]) {
                             // fp32: reset both srcs so bf16 beta isn't read through the fp32 dfb_inbeta format.
@@ -951,7 +953,6 @@ void kernel_main() {
                     }
                     dfb_outbeta.push_back(static_cast<uint16_t>(out_block_hw_normal));
                     dfb_inbeta.pop_front(static_cast<uint16_t>(out_block_hw_normal));
-                    dfb_outbeta.wait_front(static_cast<uint16_t>(out_block_hw_normal));
                 }
                 // End Optional Beta
 
@@ -1009,4 +1010,26 @@ void kernel_main() {
         // End Group Loop
     }
     // End Batch Loop
+
+    // Buffers holding a value reused for the whole core's work are never popped inside the loops
+    // above; pop them here so they are left balanced. The auxiliary waits are not present in this
+    // file: compute_kernel_lib::reduce waits the auxiliary tiles of the buffer it is given and
+    // leaves them unpopped so that one pushed set serves all of this kernel's reduce calls.
+    DataflowBuffer(dfb_scaler_id).pop_front(get_named_compile_time_arg_val("reduce_local_auxiliary_tiles"));
+    if constexpr (is_mcast_sender) {
+        // The global-reduce auxiliary tiles are waited only by the global reductions on the mcast
+        // sender; pop them under the same guard that gated those reductions.
+        DataflowBuffer(dfb_scaler_global_id).pop_front(get_named_compile_time_arg_val("reduce_global_auxiliary_tiles"));
+    }
+    // The epsilon tile is pushed once by the reader and re-waited on every group, so it is
+    // popped once here to balance the buffer.
+    dfb_eps.pop_front(1);
+    // Gamma and beta are each one row of per_core_N tiles pushed once by the reader and re-waited on
+    // every output block, so they are popped once here.
+    if constexpr (do_gamma) {
+        dfb_gamma.pop_front(per_core_N);
+    }
+    if constexpr (do_beta) {
+        dfb_beta.pop_front(per_core_N);
+    }
 }

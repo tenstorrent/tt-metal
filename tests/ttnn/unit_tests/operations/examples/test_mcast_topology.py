@@ -11,8 +11,8 @@ Both variants use the SAME fixed 2-D work split (grid rows carry M, grid columns
 core holds the same slices either way. Only the transport differs:
   per_core_dram — every core reads its own A row-slice and B column-slice from DRAM. Redundant by
                   construction: Gc cores read the same A slice, Gr cores read the same B slice.
-  mcast_1d_pair — each slice is read once per line and broadcast: Mcast1D(PerRow) for A,
-                  Mcast1D(PerColumn) for B.
+  mcast_1d_pair — each slice is read once per line and broadcast: an Mcast grouped by row
+                  for A, an Mcast grouped by column for B.
 
 See ttnn/ttnn/operations/examples/mcast_topology/README.md.
 
@@ -175,7 +175,7 @@ def test_mcast_topology_device_perf(device):
     logger.info(header)
     lines = []
     for variant, r, c, cores, med, spread in rows:
-        shape = "per-core DRAM reads" if variant == "per_core_dram" else "2x Mcast1D (PerRow + PerColumn)"
+        shape = "per-core DRAM reads" if variant == "per_core_dram" else "2x Mcast (RowMajor + ColumnMajor)"
         rel = f"  -> {base / med:.2f}x" if (med and base) else ""
         occ = 100.0 * cores / total_cores
         line = (

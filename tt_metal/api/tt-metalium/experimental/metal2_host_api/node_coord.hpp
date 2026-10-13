@@ -19,9 +19,12 @@
 // A "node" is a NOC endpoint with an x,y address - a block in the accelerator grid.
 // This header provides type aliases for the new "Node" terminology.
 
+#include <cstdint>
+#include <optional>
 #include <variant>
 
 #include <tt-metalium/core_coord.hpp>
+#include <vector>
 
 namespace tt::tt_metal::experimental {
 

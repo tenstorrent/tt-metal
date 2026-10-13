@@ -9,7 +9,7 @@
 #include <tt-metalium/tensor_accessor_args.hpp>
 #include <tt-metalium/program_descriptors.hpp>
 
-#include "ttnn/cpp/ttnn/kernel_lib/host/reduce_host.hpp"
+#include "ttnn/kernel_lib/host/reduce_host.hpp"
 
 namespace ttnn::experimental::prim {
 

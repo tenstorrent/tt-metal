@@ -42,6 +42,9 @@
  *
  * IMPORTANT: The auxiliary (scaler) CB must contain the tiles the selected
  * algorithm reads BEFORE calling reduce().
+ * reduce() waits the auxiliary tiles but never pops them, so one pushed set can serve any number of
+ * reduce() calls that pass the same auxiliary CB. The caller owns those pages and must pop them once,
+ * after its last such call, to leave the CB balanced.
  *
  * Basic Usage:
  *   #include "ttnn/cpp/ttnn/kernel_lib/reduce_helpers_compute.hpp"

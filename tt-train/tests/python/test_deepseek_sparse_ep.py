@@ -19,9 +19,11 @@ Blackhole, so the module skips on other archs rather than exercising an untuned
 path.
 
 Runs on a full 32-chip Blackhole galaxy as an ``8 x 4`` mesh (DP=8, EP=4). The
-module-scoped fixture skips if that mesh cannot be opened, so it is inert on
-smaller boards. The bundled ``bh_galaxy_8_4_torus_x`` descriptor is used unless
-``TT_MESH_GRAPH_DESC_PATH`` is already set.
+module-scoped fixture skips only on hosts with fewer than 32 devices, so it is
+inert on smaller boards. On a host large enough for the mesh, any failure to
+open it (topology, fabric init, ...) is a test failure. The bundled
+``bh_galaxy_8_4_torus_x`` descriptor is used unless ``TT_MESH_GRAPH_DESC_PATH``
+is already set.
 
 Multi-device only: this module opens a mesh, so it must not share a process with
 tests that open a default single-device context first — reopening the device as
@@ -30,16 +32,11 @@ a mesh afterwards leaves the fabric routers half-initialized.
 
 from __future__ import annotations
 
-import os
-import sys
-from typing import Optional
-
 import numpy as np
 import pytest
 import torch
 
-sys.path.insert(0, os.path.dirname(__file__))
-from tests.ttnn.utils_for_testing import assert_with_pcc  # noqa: E402
+from tests.ttnn.utils_for_testing import assert_with_pcc
 
 import ttnn
 import ttml
@@ -54,13 +51,6 @@ SEED = 2026
 DP_AXIS_SIZE = 8
 EP_AXIS_SIZE = 4
 MESH_SHAPE = (DP_AXIS_SIZE, EP_AXIS_SIZE)
-
-_REPO_ROOT = os.path.abspath(os.path.join(os.path.dirname(__file__), "..", ".."))
-# Blackhole galaxy only — see the module docstring. The galaxy fabric is a torus
-# in X; a LINE/LINE descriptor faults with SIGBUS, so this must be the torus_x one.
-_MGD_FOR_SHAPE = {
-    MESH_SHAPE: os.path.join(_REPO_ROOT, "configs", "mgd", "bh_galaxy_8_4_torus_x.textproto"),
-}
 
 
 class _Cfg:
@@ -105,54 +95,15 @@ pytestmark = [
 ]
 
 
-def _close_device_quietly() -> None:
-    try:
-        ttml.autograd.AutoContext.get_instance().close_device()
-    except Exception:  # noqa: BLE001
-        pass
-
-
-def _ensure_mgd_path(shape: tuple[int, ...]) -> Optional[str]:
-    """Point TT_MESH_GRAPH_DESC_PATH at a bundled MGD if unset. Returns the old value."""
-    previous = os.environ.get("TT_MESH_GRAPH_DESC_PATH")
-    if previous:
-        return previous
-    candidate = _MGD_FOR_SHAPE.get(shape)
-    if candidate and os.path.isfile(candidate):
-        os.environ["TT_MESH_GRAPH_DESC_PATH"] = candidate
-    return previous
-
-
-def _restore_mgd_path(previous: Optional[str]) -> None:
-    if previous is None:
-        os.environ.pop("TT_MESH_GRAPH_DESC_PATH", None)
-    else:
-        os.environ["TT_MESH_GRAPH_DESC_PATH"] = previous
-
-
 @pytest.fixture(scope="module")
-def ep_mesh():
-    """Open the ``[8, 4]`` galaxy mesh with axes ``("dp", "ep")``."""
-    shape = MESH_SHAPE
-    previous_mgd = _ensure_mgd_path(shape)
+def ep_mesh(fresh_device_mesh):
+    """Open the ``[8, 4]`` galaxy mesh with axes ``("dp", "ep")``.
 
-    _close_device_quietly()
-    try:
-        ttml.open_device_mesh(ttml.Mesh(shape, ("dp", "ep")))
-    except Exception as e:  # noqa: BLE001
-        _restore_mgd_path(previous_mgd)
-        pytest.skip(f"sparse_ep tests need a {shape[0]}x{shape[1]} mesh ('ep' axis = {EP_AXIS_SIZE}): {e}")
-
-    yield ttml.mesh()
-
-    _close_device_quietly()
-    try:
-        import ttml._mesh as _mesh_mod  # type: ignore[import-not-found]
-
-        _mesh_mod._mesh = None
-    except Exception:  # noqa: BLE001
-        pass
-    _restore_mgd_path(previous_mgd)
+    Skips on a host too small for the shape. A host that has enough but
+    still can't open the mesh fails instead.
+    """
+    with fresh_device_mesh(MESH_SHAPE, ("dp", "ep"), what=f"sparse_ep tests ('ep' axis = {EP_AXIS_SIZE})") as mesh:
+        yield mesh
 
 
 # ---------------------------------------------------------------------------

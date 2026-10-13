@@ -74,11 +74,10 @@ static void add_block_bcast_rows_inplace(
     DataflowBuffer in1_dfb_obj(static_cast<uint16_t>(in1_dfb));
 
     const uint32_t num_tiles = rows * cols;
+    reconfig_data_format(in0_dfb, in1_dfb);
     if (first_call) {
-        compute_kernel_hw_startup(in0_dfb, in1_dfb, in0_dfb);
         bcast_init<EltwiseBinaryType::ELWADD, BroadcastType::ROW>(in0_dfb, in1_dfb);
     } else {
-        reconfig_data_format(in0_dfb, in1_dfb);
         add_bcast_rows_init(in0_dfb, in1_dfb);
     }
     in0_dfb_obj.wait_front(static_cast<uint16_t>(num_tiles));
@@ -479,4 +478,17 @@ void kernel_main() {
 
     // final sum
     reduce_c<MoeSumCall<dfb::out>>();
+
+    // Buffers this kernel waited and left unpopped, popped here so they are left balanced. All
+    // three are produced and consumed entirely within this kernel: sub_exp_block_bcast_cols_inplace
+    // waits Ht tiles of dfb::cur_max, mul_block_inplace waits Ht * Kt tiles of dfb::output_ind, and
+    // reduce_c waits Ht * Kt tiles of dfb::values.
+    DataflowBuffer(dfb::cur_max).pop_front(Ht);
+    DataflowBuffer(dfb::output_ind).pop_front(Ht * Kt);
+    DataflowBuffer(dfb::values).pop_front(Ht * Kt);
+
+    // dfb::scale is pushed once by the writer and waited inside compute_kernel_lib::reduce, which
+    // leaves it unpopped so the auxiliary tiles serve every reduce call. Pop them here so dfb::scale
+    // is left balanced.
+    DataflowBuffer(dfb::scale).pop_front(MoeMaxArgs::auxiliary_tile_count);
 }

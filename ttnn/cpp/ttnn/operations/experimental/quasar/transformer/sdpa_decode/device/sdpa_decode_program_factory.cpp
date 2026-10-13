@@ -2,7 +2,7 @@
 //
 // SPDX-License-Identifier: Apache-2.0
 
-#include "ttnn/cpp/ttnn/kernel_lib/host/reduce_host.hpp"
+#include "ttnn/kernel_lib/host/reduce_host.hpp"
 #include "sdpa_decode_device_operation.hpp"
 
 #include <bit>
@@ -17,6 +17,7 @@
 #include <tt-metalium/constants.hpp>
 #include <tt-metalium/experimental/metal2_host_api/program_spec.hpp>
 #include <tt-metalium/experimental/metal2_host_api/program_run_args.hpp>
+#include <tt-metalium/math.hpp>
 #include <tt-logger/tt-logger.hpp>
 #include "ttnn/operation.hpp"
 #include "ttnn/metal_v2_artifacts.hpp"
@@ -565,7 +566,6 @@ ttnn::device_operation::ProgramArtifacts SdpaDecodeDeviceOperation::SdpaDecodePr
     const DFBSpecName DFB_PAGE_TABLE{"page_table"};
     const DFBSpecName DFB_Q_RM{"q_rm"};
     const DFBSpecName DFB_OUT_WORKER{"out_worker"};
-    const DFBSpecName DFB_ZERO_IN{"zero_in"};
     const DFBSpecName DFB_SLIDING_MASK{"sliding_window_mask_in"};
     const DFBSpecName DFB_BLOCK_PAD_MASK{"block_pad_mask"};
     const DFBSpecName DFB_COMPUTE_CUR_POS{"compute_cur_pos"};
@@ -688,8 +688,11 @@ ttnn::device_operation::ProgramArtifacts SdpaDecodeDeviceOperation::SdpaDecodePr
         bind(compute_dfb, DFB_ATTN_SINK, "attention_sink", DFBEndpointType::CONSUMER);
     }
 
-    // identity_scale — writer produces, compute consumes.
-    add_dfb(DFB_IDENTITY_SCALE, scalar_tile_size, scale_tiles, scalar_df, &scalar_tile);
+    // identity_scale — writer produces, compute consumes. Entry 0 is the reduce scaler, entry 1 the zero
+    // tile the fused QK mask add reads (formerly a separate zero_in DFB). Sharing one DFB saves a
+    // DM-visible tile counter: Quasar has 16 per Neo, and the sliding-window GPT-OSS config needs 17
+    // DM<->Tensix DFBs otherwise.
+    add_dfb(DFB_IDENTITY_SCALE, scalar_tile_size, scale_tiles + 1, scalar_df, &scalar_tile);
     bind(writer_dfb, DFB_IDENTITY_SCALE, "identity_scale_in", DFBEndpointType::PRODUCER);
     bind(compute_dfb, DFB_IDENTITY_SCALE, "identity_scale_in", DFBEndpointType::CONSUMER);
 
@@ -746,11 +749,6 @@ ttnn::device_operation::ProgramArtifacts SdpaDecodeDeviceOperation::SdpaDecodePr
                 ScratchpadBinding{.scratchpad_spec_name = PAGE_TABLE_SCRATCH, .accessor_name = "page_table"});
         }
     }
-
-    // zero_in — writer produces, compute consumes.
-    add_dfb(DFB_ZERO_IN, scalar_tile_size, scale_tiles, scalar_df, &scalar_tile);
-    bind(writer_dfb, DFB_ZERO_IN, "zero_in", DFBEndpointType::PRODUCER);
-    bind(compute_dfb, DFB_ZERO_IN, "zero_in", DFBEndpointType::CONSUMER);
 
     // sliding_window_mask — writer produces, compute consumes (conditional).
     if (sliding_window_size > 0) {
@@ -1066,7 +1064,6 @@ ttnn::device_operation::ProgramArtifacts SdpaDecodeDeviceOperation::SdpaDecodePr
         maybe_unpack(DFB_V_IN, v_df, true);
         maybe_unpack(DFB_MASK_IN, mask_df, true);
         maybe_unpack(DFB_IDENTITY_SCALE, scalar_df, true);
-        maybe_unpack(DFB_ZERO_IN, scalar_df, true);
         maybe_unpack(DFB_Q_RM, q_df, tilize_q);
         maybe_unpack(DFB_SLIDING_MASK, mask_df, sliding_window_size > 0);
         maybe_unpack(DFB_BLOCK_PAD_MASK, mask_df, has_block_padding);
@@ -1075,6 +1072,23 @@ ttnn::device_operation::ProgramArtifacts SdpaDecodeDeviceOperation::SdpaDecodePr
     // ---- Kernel specs ----
     const std::string kernel_path =
         "ttnn/cpp/ttnn/operations/experimental/quasar/transformer/sdpa_decode/device/kernels/";
+    // Quasar: every DM-side DFB endpoint with implicit sync draws NoC transaction IDs from one 24-entry
+    // program-wide pool. The attention-sink and sliding-window DFBs (GPT-OSS) push it past the limit, so
+    // they use explicit sync; their producers barrier before push_back.
+    // The tree-reduction stats DFBs also use explicit sync: with PNHt == 2 (64 q heads, GPT-OSS) each
+    // takes 2 txn ids, which alone overflows the pool. The writer already barriers its NoC reads before
+    // pushing m_in/l_in and its NoC writes before popping out_m/out_l.
+    auto reader_hw = ttnn::create_reader_datamovement_config();
+    auto writer_hw = ttnn::create_writer_datamovement_config();
+    for (const auto& stats_dfb : {DFB_M_IN, DFB_L_IN, DFB_OUT_M, DFB_OUT_L}) {
+        writer_hw.config_2xx->disable_dfb_implicit_sync_for.push_back(stats_dfb);
+    }
+    if (use_attention_sink) {
+        reader_hw.config_2xx->disable_dfb_implicit_sync_for.push_back(DFB_ATTN_SINK);
+    }
+    if (sliding_window_size > 0) {
+        writer_hw.config_2xx->disable_dfb_implicit_sync_for.push_back(DFB_SLIDING_MASK);
+    }
     KernelSpec reader{
         .unique_id = READER,
         .source = std::filesystem::path(kernel_path + "dataflow/reader_decode_all.cpp"),
@@ -1099,7 +1113,7 @@ ttnn::device_operation::ProgramArtifacts SdpaDecodeDeviceOperation::SdpaDecodePr
                   "mcast_y0",
                   "mcast_y1",
                   "num_dests"}},
-        .hw_config = ttnn::create_reader_datamovement_config(),
+        .hw_config = std::move(reader_hw),
         .advanced_options = {.num_runtime_varargs = 2 * num_output_cores},
     };
     const auto reduction_auxiliary = ttnn::kernel_lib::host::ReduceAuxiliaryArgs(
@@ -1137,7 +1151,7 @@ ttnn::device_operation::ProgramArtifacts SdpaDecodeDeviceOperation::SdpaDecodePr
                   "children_per_round_3",
                   "children_per_round_4",
                   "children_per_round_5"}},
-        .hw_config = ttnn::create_writer_datamovement_config(),
+        .hw_config = std::move(writer_hw),
         .advanced_options =
             {.num_runtime_varargs = 2 * num_cores_per_head + 2 * num_reducer_cores + 2 * num_output_cores,
              .compile_time_varargs = reduction_auxiliary},

@@ -551,10 +551,10 @@ inline void mailbox_write(const std::uint8_t thread, const std::uint32_t data)
     mailbox_base[thread][0] = data;
 }
 
-// Blocking read
-inline std::uint32_t mailbox_read(const std::uint8_t thread)
+// Blocking read: returns only once the message has arrived, even when the caller never uses the value.
+[[nodiscard]] inline std::uint32_t mailbox_read(const std::uint8_t thread)
 {
-    return mailbox_base[thread][0];
+    return load_blocking(&mailbox_base[thread][0]);
 }
 
 inline bool mailbox_not_empty(const std::uint8_t thread)

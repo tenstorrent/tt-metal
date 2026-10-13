@@ -15,8 +15,8 @@
 #include <tt-metalium/experimental/metal2_host_api/kernel_spec.hpp>
 
 #include "ttnn/tensor/tensor.hpp"
-#include "ttnn/cpp/ttnn/kernel_lib/reduce_types.hpp"
-#include "ttnn/cpp/ttnn/kernel_lib/host/reduce_host.hpp"
+#include "ttnn/kernel_lib/reduce_types.hpp"
+#include "ttnn/kernel_lib/host/reduce_host.hpp"
 
 namespace tt::tt_metal {
 class Buffer;
@@ -149,7 +149,7 @@ RmPlan make_rm_plan(
     tt::tt_metal::ReduceOpMath math_op,
     tt::tt_metal::ReduceOpDim dim);
 
-// The factory-level RM preconditions: interleaved I/O, SUM only, no negate, dim is H or W.
+// The factory-level RM preconditions: interleaved I/O, SUM/MAX/MIN, no negate, dim is H or W.
 // `dim_label` is "Reduce W" / "Reduce H" for the fatal messages.
 void validate_rm_preconditions(
     const tt::tt_metal::MeshTensor& input,

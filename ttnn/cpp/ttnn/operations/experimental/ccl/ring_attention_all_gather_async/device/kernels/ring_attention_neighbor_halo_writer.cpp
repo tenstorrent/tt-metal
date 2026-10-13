@@ -66,8 +66,11 @@ void kernel_main() {
     std::array<uint32_t, num_inputs> input_batch_head_count;
     std::array<uint32_t, num_inputs> input_tile_id_start;
     std::array<uint32_t, num_inputs> input_tile_id_end;
-    // First page this exchange writes in the receiver's compact buffer (chunked_sliding_halo_block_dest_row).
+    // First page of each tail this exchange writes in the receiver's compact buffer
+    // (chunked_sliding_halo_block_dest_row), and the pages per tail.
     std::array<uint32_t, num_inputs> output_origin_page;
+    std::array<uint32_t, num_inputs> output_second_origin_page;
+    std::array<uint32_t, num_inputs> tail_pages;
 
     for (uint32_t input_idx = 0; input_idx < num_inputs; input_idx++) {
         output_batch_head_stride_pages[input_idx] = get_arg_val<uint32_t>(arg_idx++);
@@ -75,6 +78,8 @@ void kernel_main() {
         input_tile_id_start[input_idx] = get_arg_val<uint32_t>(arg_idx++);
         input_tile_id_end[input_idx] = get_arg_val<uint32_t>(arg_idx++);
         output_origin_page[input_idx] = get_arg_val<uint32_t>(arg_idx++);
+        output_second_origin_page[input_idx] = get_arg_val<uint32_t>(arg_idx++);
+        tail_pages[input_idx] = get_arg_val<uint32_t>(arg_idx++);
     }
 
     uint32_t mc_hop_count = 1;
@@ -181,16 +186,22 @@ void kernel_main() {
     const uint64_t out_ready_sem_noc_addr_in_pkt =
         safe_get_noc_addr(out_ready_sem_noc0_x, out_ready_sem_noc0_y, out_ready_sem, 0);
 
-    // Sends `count` (up to NOC_SCATTER_WRITE_MAX_CHUNKS) consecutive output pages from L1; `signal`
-    // fuses the ready-increment, which takes at most two pages.
+    // Sends `count` (up to NOC_SCATTER_WRITE_MAX_CHUNKS) consecutive payload pages from L1 into batch-head
+    // `output_batch_head_base`; a page past the first tail lands in the second halo slot. `signal` fuses
+    // the ready-increment, which takes at most two pages.
     static_assert(packet_size_in_pages <= NOC_SCATTER_WRITE_MAX_CHUNKS);
-    const auto send_pages = [&](uint32_t input_idx, uint32_t first_tile, uint32_t count, size_t l1_addr, bool signal) {
+    uint32_t output_batch_head_base = 0;
+    const auto send_pages = [&](uint32_t input_idx, uint32_t first_page, uint32_t count, size_t l1_addr, bool signal) {
         if (count == 0) {
             return;
         }
         std::array<uint64_t, NOC_SCATTER_WRITE_MAX_CHUNKS> noc_addrs{};
         for (uint32_t i = 0; i < count; ++i) {
-            noc_addrs[i] = output_addrgens[input_idx].get_noc_addr(first_tile + i);
+            const uint32_t payload_page = first_page + i;
+            const uint32_t tile = payload_page < tail_pages[input_idx]
+                                      ? output_origin_page[input_idx] + payload_page
+                                      : output_second_origin_page[input_idx] + payload_page - tail_pages[input_idx];
+            noc_addrs[i] = output_addrgens[input_idx].get_noc_addr(output_batch_head_base + tile);
         }
         const uint16_t page = static_cast<uint16_t>(output_page_size);
         if (count == 1 && signal) {
@@ -233,21 +244,20 @@ void kernel_main() {
             for (uint32_t bh_idx = 0; bh_idx < input_batch_head_count[input_idx]; bh_idx++) {
                 uint32_t tiles_read = input_tile_id_start[input_idx];
                 const uint32_t tiles_to_read = input_tile_id_end[input_idx];
-                const uint32_t output_batch_head_base = bh_idx * output_batch_head_stride_pages[input_idx];
+                output_batch_head_base = bh_idx * output_batch_head_stride_pages[input_idx];
                 while (tiles_read < tiles_to_read) {
                     const uint32_t num_pages_to_read = std::min(tiles_to_read - tiles_read, packet_size_in_pages);
                     cb_output.wait_front(packet_size_in_pages);
                     const size_t l1_read_addr = cb_output.get_read_ptr();
-                    const uint32_t tile_id = output_batch_head_base + output_origin_page[input_idx] + tiles_read;
                     const bool is_last_source_packet = input_idx + 1 == num_inputs &&
                                                        bh_idx + 1 == input_batch_head_count[input_idx] &&
                                                        tiles_read + num_pages_to_read >= tiles_to_read;
                     const uint32_t signal_pages = is_last_source_packet ? std::min<uint32_t>(num_pages_to_read, 2) : 0;
                     const uint32_t plain_pages = num_pages_to_read - signal_pages;
-                    send_pages(input_idx, tile_id, plain_pages, l1_read_addr, false);
+                    send_pages(input_idx, tiles_read, plain_pages, l1_read_addr, false);
                     send_pages(
                         input_idx,
-                        tile_id + plain_pages,
+                        tiles_read + plain_pages,
                         signal_pages,
                         l1_read_addr + plain_pages * output_page_size,
                         true);

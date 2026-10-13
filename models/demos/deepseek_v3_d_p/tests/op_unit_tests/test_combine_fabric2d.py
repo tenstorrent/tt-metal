@@ -471,15 +471,15 @@ def test_combine_fabric2d_unaligned_emb_dim(mesh_device, device_params, num_link
     "input_layout", [ttnn.ROW_MAJOR_LAYOUT, ttnn.TILE_LAYOUT], ids=lambda ly: "tile" if ly == ttnn.TILE_LAYOUT else "rm"
 )
 @pytest.mark.timeout(900)
-# The reader zeroes fwd_arrived at end of stream, dropping a bump from an upstream chip already in the
-# next launch, which hangs the ring: https://github.com/tenstorrent/tt-metal/issues/57948
-@pytest.mark.skip(reason="overlapped launches can hang: https://github.com/tenstorrent/tt-metal/issues/57948")
 def test_combine_fabric2d_back_to_back(mesh_device, device_params, num_links, input_layout):
     """Four launches queued with no host sync between them, as in a traced replay.
 
-    A chip that finishes early can send into a neighbour still finishing the previous launch, racing the
-    counter reset that launch ends with: a lost increment hangs, a stale one reads early. Alternating two
-    draws makes stale slots visible.
+    A chip that finishes early starts bumping a neighbour's arrival counter while that neighbour is still
+    finishing the previous launch. The counter must keep those bumps: a lost one hangs, a stale one reads a
+    page early. Alternating two draws makes stale slots visible.
+
+    Only the counter is covered. An upstream chip far enough ahead can still overwrite forwarding pages its
+    neighbour has not read yet: https://github.com/tenstorrent/tt-metal/issues/57948
     """
     cfg = extract_mesh_config(mesh_device)
     a = _Fixture(mesh_device, cfg.dispatch_group_size, cfg.num_dispatch_groups, seed=31)
@@ -493,3 +493,77 @@ def test_combine_fabric2d_back_to_back(mesh_device, device_params, num_links, in
     for i, (fx, output) in enumerate(zip(order, results)):
         fx.check(output, f"launch {i} of four with no host sync between them")
     logger.info("back-to-back: 4 unsynchronised launches byte-exact")
+
+
+# Exactly representable in bfloat16 and far outside the random payload, so equality is a safe test.
+_SENTINEL = torch.tensor(3.0e38, dtype=torch.bfloat16).item()
+
+
+def _sentinel_rows(t, mesh_device):
+    """Output rows still holding the sentinel, summed over the mesh. A token is written whole, so a row's
+    first 32 elements (one 64 B NoC unit) say whether it landed; reading only those keeps this cheap."""
+    probe = ttnn.slice(t, [0] * len(t.shape), list(t.shape)[:-1] + [32])
+    rows = ttnn.to_torch(probe, mesh_composer=ttnn.ConcatMeshToTensor(mesh_device, dim=0)).float()
+    ttnn.deallocate(probe)
+    return int((rows[..., 0] == _SENTINEL).sum())
+
+
+@pytest.mark.parametrize(
+    "mesh_device, device_params, num_links",
+    _PRODUCTION_MESH,
+    indirect=["mesh_device", "device_params"],
+)
+@pytest.mark.timeout(1800)
+def test_combine_fabric2d_next_op_sees_every_token(mesh_device, device_params, num_links):
+    """The next op on a chip finds every token combine delivered to it.
+
+    A neighbour writes a FINAL_WRITE token straight into this chip's output. If the chip's program could end
+    while some are still in flight, the next op on it would read rows that have not landed. The other tests
+    read the output only after a host synchronize, when every chip has finished, so they cannot see this.
+
+    The memory combine's output takes is filled with a sentinel, and an on-device clone is queued right
+    behind combine with no host sync. A row that is the sentinel in the clone but a token in the output
+    read later had not landed when the next op ran. The race is timing dependent: without the receive
+    count a launch loses 1-2 rows in about 9 of 10 launches here, so ten launches make a regression all but
+    certain to fail. Full-width tokens, because the window is widest when every write is 14 kB.
+    """
+    cfg = extract_mesh_config(mesh_device)
+    fx = _Fixture(mesh_device, cfg.dispatch_group_size, cfg.num_dispatch_groups, emb_dim=7168, seed=41)
+    # Built and launched once first, so the program, its forwarding buffer and its semaphores are allocated
+    # before the sentinel goes down and cannot take the output's address in a measured launch.
+    ttnn.deallocate(fx.run(cfg.sp_axis, num_links))
+    ttnn.synchronize_device(mesh_device)
+
+    out_shape = [1, 1, fx.seq_len_per_chip, fx.topk, fx.emb_dim]
+    late_per_launch = []
+    for launch in range(10):
+        poison = ttnn.full(
+            out_shape,
+            fill_value=_SENTINEL,
+            dtype=ttnn.bfloat16,
+            layout=ttnn.ROW_MAJOR_LAYOUT,
+            device=mesh_device,
+            memory_config=ttnn.DRAM_MEMORY_CONFIG,
+        )
+        poison_addr = poison.buffer_address()
+        ttnn.deallocate(poison)
+
+        output = fx.run(cfg.sp_axis, num_links)
+        assert output.buffer_address() == poison_addr, "combine's output did not land on the sentinel-filled memory"
+        # The next op on each chip, queued behind combine with no host sync.
+        snapshot = ttnn.clone(output, memory_config=ttnn.DRAM_MEMORY_CONFIG)
+        ttnn.synchronize_device(mesh_device)
+
+        # Slots of picks routed to another group are never written, so they are the sentinel in both.
+        unwritten = _sentinel_rows(output, mesh_device)
+        late = _sentinel_rows(snapshot, mesh_device) - unwritten
+        assert late >= 0, f"launch {launch}: the next op saw fewer unwritten rows than the final output"
+        logger.info(f"launch {launch}: {late} of {int(fx.kept.sum())} kept picks had not landed for the next op")
+        late_per_launch.append(late)
+        ttnn.deallocate(snapshot)
+        ttnn.deallocate(output)
+
+    assert sum(late_per_launch) == 0, (
+        f"rows not yet landed when the next op on their chip read the output, per launch: {late_per_launch}. "
+        "A chip finished combine_fabric2d before its neighbours' FINAL_WRITEs arrived."
+    )

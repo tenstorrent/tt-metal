@@ -49,7 +49,7 @@
 // PROFILE_KERNEL is a global JIT define, so dispatch kernels get it too; no relay serves a dispatch core, so a
 // producer there would fill its ring and wedge the next relay bring-up. The relay kernel is excluded as well:
 // this producer is ~1 KB it has no code room for (its self-profiling is its own staging-slot markers, see
-// tools/profiler/kernels/streaming_profiler_relay.cpp).
+// impl/streaming_profiler/kernels/drisc_relay.cpp).
 #if defined(PROFILE_KERNEL) && !defined(DISPATCH_KERNEL) && !defined(STREAMING_PROFILER_RELAY_KERNEL)
 
 #if defined(KERNEL_BUILD) && !defined(COMPILE_FOR_ERISC)

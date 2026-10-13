@@ -25,6 +25,123 @@
 
 namespace tt::tt_metal::distributed {
 
+namespace {
+
+struct GoSignalSequenceConfig {
+    uint8_t cq_id;
+    MeshDevice* mesh_device;
+    SubDeviceId sub_device_id;
+    uint32_t expected_num_workers_completed;
+    CoreCoord dispatch_core;
+    bool send_mcast;
+    bool send_unicasts;
+    const program_dispatch::ProgramDispatchMetadata& dispatch_metadata;
+    std::optional<uint32_t> config_ring_sync_count;
+};
+
+uint32_t go_signal_sequence_size(const GoSignalSequenceConfig& config) {
+    auto& mesh_impl = config.mesh_device->impl();
+    auto& metal_ctx = mesh_impl.metal_context();
+    DeviceCommandCalculator calculator(metal_ctx);
+    if (config.config_ring_sync_count.has_value()) {
+        calculator.add_dispatch_wait();
+    }
+    if (metal_ctx.get_dispatch_query_manager().dispatch_s_enabled()) {
+        calculator.add_notify_dispatch_s_go_signal_cmd();
+    }
+    calculator.add_dispatch_go_signal_mcast();
+
+    const uint32_t pcie_alignment = mesh_impl.metal_env().get_hal().get_alignment(HalMemType::HOST);
+    return calculator.write_offset_bytes() +
+           (config.dispatch_metadata.prefetcher_cache_info.is_cached
+                ? 0
+                : tt::align(static_cast<uint32_t>(sizeof(CQPrefetchCmd)), pcie_alignment));
+}
+
+template <bool HugepageWrite>
+void populate_go_signal_sequence(DeviceCommand<HugepageWrite>& commands, const GoSignalSequenceConfig& config) {
+    auto& mesh_impl = config.mesh_device->impl();
+    auto& metal_ctx = mesh_impl.metal_context();
+    const auto& hal = mesh_impl.metal_env().get_hal();
+
+    if (!config.dispatch_metadata.prefetcher_cache_info.is_cached) {
+        commands.add_prefetch_set_ringbuffer_offset(
+            config.dispatch_metadata.prefetcher_cache_info.offset +
+                config.dispatch_metadata.prefetcher_cache_info.mesh_max_program_kernels_sizeB,
+            true);
+    }
+
+    if (config.config_ring_sync_count.has_value()) {
+        commands.add_dispatch_wait(
+            CQ_DISPATCH_CMD_WAIT_FLAG_WAIT_STREAM,
+            0,
+            metal_ctx.dispatch_mem_map().get_dispatch_stream_index(*config.sub_device_id),
+            *config.config_ring_sync_count,
+            config.cq_id);
+    }
+
+    const uint8_t sub_device_index = *config.sub_device_id;
+    const uint32_t go_message = hal.make_go_msg_u32(
+        dev_msgs::RUN_MSG_GO,
+        config.dispatch_core.x,
+        config.dispatch_core.y,
+        metal_ctx.dispatch_mem_map().get_dispatch_message_update_offset(sub_device_index) +
+            metal_ctx.dispatch_mem_map().get_completion_counter_offset(config.cq_id));
+
+    // When running with dispatch_s enabled:
+    //   - dispatch_d must notify dispatch_s that a go signal can be sent.
+    //   - dispatch_s then multicasts the go signal to all workers.
+    // When running without dispatch_s:
+    //   - dispatch_d sends the go signal to all workers.
+    // No dispatch_d barrier is needed before the notification or go signal because
+    // this sequence is not preceded by NOC transactions for program configuration data.
+    DispatcherSelect dispatcher = DispatcherSelect::DISPATCH_MASTER;
+    if (metal_ctx.get_dispatch_query_manager().dispatch_s_enabled()) {
+        // Each bit selects the dispatch_s semaphore for one sub-device; this sequence targets only sub_device_index.
+        commands.add_notify_dispatch_s_go_signal_cmd(0, static_cast<uint16_t>(1U << sub_device_index));
+        dispatcher = DispatcherSelect::DISPATCH_SUBORDINATE;
+    }
+    commands.add_dispatch_go_signal_mcast(
+        config.expected_num_workers_completed,
+        go_message,
+        metal_ctx.dispatch_mem_map().get_dispatch_stream_index(sub_device_index),
+        (config.send_mcast && config.mesh_device->impl().has_noc_mcast_txns(config.sub_device_id))
+            ? *config.sub_device_id
+            : CQ_DISPATCH_CMD_GO_NO_MULTICAST_OFFSET,
+        config.send_unicasts ? config.mesh_device->impl().num_virtual_eth_cores(config.sub_device_id) : 0,
+        config.mesh_device->impl().noc_data_start_index(config.sub_device_id, config.send_unicasts),
+        dispatcher);
+
+    TT_ASSERT(commands.size_bytes() == commands.write_offset_bytes());
+}
+
+}  // namespace
+
+HostMemDeviceCommand build_go_signal_sequence(
+    uint8_t cq_id,
+    MeshDevice* mesh_device,
+    SubDeviceId sub_device_id,
+    uint32_t expected_num_workers_completed,
+    CoreCoord dispatch_core,
+    bool send_mcast,
+    bool send_unicasts,
+    const program_dispatch::ProgramDispatchMetadata& dispatch_metadata,
+    std::optional<uint32_t> config_ring_sync_count) {
+    const GoSignalSequenceConfig config{
+        .cq_id = cq_id,
+        .mesh_device = mesh_device,
+        .sub_device_id = sub_device_id,
+        .expected_num_workers_completed = expected_num_workers_completed,
+        .dispatch_core = dispatch_core,
+        .send_mcast = send_mcast,
+        .send_unicasts = send_unicasts,
+        .dispatch_metadata = dispatch_metadata,
+        .config_ring_sync_count = config_ring_sync_count};
+    HostMemDeviceCommand commands(mesh_device->impl().metal_context(), go_signal_sequence_size(config));
+    populate_go_signal_sequence(commands, config);
+    return commands;
+}
+
 // Write the dispatch sequence for a device not running a program.
 // In the MeshWorkload context, a go signal must be sent to each device when
 // a workload is dispatched, in order to maintain consistent global state.
@@ -39,78 +156,20 @@ void write_go_signal_sequence(
     bool send_unicasts,
     const program_dispatch::ProgramDispatchMetadata& dispatch_md,
     std::optional<uint32_t> config_ring_sync_count) {
-    auto& mesh_impl = mesh_device->impl();
-    MetalContext& metal_ctx = mesh_impl.metal_context();
-    const auto& dispatch_mem_map = metal_ctx.dispatch_mem_map();
-    const auto& dispatch_query_manager = metal_ctx.get_dispatch_query_manager();
-    const auto& hal = mesh_impl.metal_env().get_hal();
-    uint32_t pcie_alignment = hal.get_alignment(HalMemType::HOST);
-    DeviceCommandCalculator calculator(metal_ctx);
-    if (config_ring_sync_count.has_value()) {
-        calculator.add_dispatch_wait();
-    }
-    if (dispatch_query_manager.dispatch_s_enabled()) {
-        calculator.add_notify_dispatch_s_go_signal_cmd();
-    }
-    calculator.add_dispatch_go_signal_mcast();
-    uint32_t cmd_sequence_sizeB = calculator.write_offset_bytes();
-    cmd_sequence_sizeB +=
-        dispatch_md.prefetcher_cache_info.is_cached ? 0 : align(sizeof(CQPrefetchCmd), pcie_alignment);
-
+    const GoSignalSequenceConfig config{
+        .cq_id = cq_id,
+        .mesh_device = mesh_device,
+        .sub_device_id = sub_device_id,
+        .expected_num_workers_completed = expected_num_workers_completed,
+        .dispatch_core = dispatch_core,
+        .send_mcast = send_mcast,
+        .send_unicasts = send_unicasts,
+        .dispatch_metadata = dispatch_md,
+        .config_ring_sync_count = config_ring_sync_count};
+    const uint32_t cmd_sequence_sizeB = go_signal_sequence_size(config);
     void* cmd_region = sysmem_manager.issue_queue_reserve(cmd_sequence_sizeB, cq_id);
-
-    auto sub_device_index = *sub_device_id;
-
-    HugepageDeviceCommand go_signal_cmd_sequence(metal_ctx, cmd_region, cmd_sequence_sizeB);
-
-    if (not dispatch_md.prefetcher_cache_info.is_cached) {
-        go_signal_cmd_sequence.add_prefetch_set_ringbuffer_offset(
-            dispatch_md.prefetcher_cache_info.offset + dispatch_md.prefetcher_cache_info.mesh_max_program_kernels_sizeB,
-            true);
-    }
-
-    if (config_ring_sync_count.has_value()) {
-        go_signal_cmd_sequence.add_dispatch_wait(
-            CQ_DISPATCH_CMD_WAIT_FLAG_WAIT_STREAM,
-            0,
-            dispatch_mem_map.get_dispatch_stream_index(*sub_device_id),
-            config_ring_sync_count.value(),
-            cq_id);
-    }
-
-    uint32_t go_msg_u32_val = hal.make_go_msg_u32(
-        dev_msgs::RUN_MSG_GO,
-        dispatch_core.x,
-        dispatch_core.y,
-        dispatch_mem_map.get_dispatch_message_update_offset(sub_device_index) +
-            dispatch_mem_map.get_completion_counter_offset(cq_id));
-
-    // When running with dispatch_s enabled:
-    //   - dispatch_d must notify dispatch_s that a go signal can be sent
-    //   - dispatch_s then mcasts the go signal to all workers.
-    // When running without dispatch_s:
-    //   - dispatch_d handles sending the go signal to all workers
-    // There is no need for dispatch_d to barrier before sending the dispatch_s notification or go signal,
-    // since this go signal is not preceded by NOC txns for program config data
-    DispatcherSelect dispatcher_for_go_signal = DispatcherSelect::DISPATCH_MASTER;
-    if (dispatch_query_manager.dispatch_s_enabled()) {
-        uint16_t index_bitmask = 1 << sub_device_index;
-        go_signal_cmd_sequence.add_notify_dispatch_s_go_signal_cmd(
-            0,                                   /* wait */
-            index_bitmask /* index_bitmask */);  // When running on sub devices, we must account for this
-        dispatcher_for_go_signal = DispatcherSelect::DISPATCH_SUBORDINATE;
-    }
-    go_signal_cmd_sequence.add_dispatch_go_signal_mcast(
-        expected_num_workers_completed,
-        go_msg_u32_val,
-        dispatch_mem_map.get_dispatch_stream_index(sub_device_index),
-        (send_mcast && mesh_device->impl().has_noc_mcast_txns(sub_device_id)) ? *sub_device_id
-                                                                              : CQ_DISPATCH_CMD_GO_NO_MULTICAST_OFFSET,
-        send_unicasts ? mesh_device->impl().num_virtual_eth_cores(sub_device_id) : 0,
-        mesh_device->impl().noc_data_start_index(sub_device_id, send_unicasts), /* noc_data_start_idx */
-        dispatcher_for_go_signal);
-
-    TT_ASSERT(go_signal_cmd_sequence.size_bytes() == go_signal_cmd_sequence.write_offset_bytes());
+    HugepageDeviceCommand go_signal_cmd_sequence(mesh_device->impl().metal_context(), cmd_region, cmd_sequence_sizeB);
+    populate_go_signal_sequence(go_signal_cmd_sequence, config);
 
     sysmem_manager.issue_queue_push_back(cmd_sequence_sizeB, cq_id);
 

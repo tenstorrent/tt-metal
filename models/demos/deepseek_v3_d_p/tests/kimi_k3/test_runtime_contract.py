@@ -30,7 +30,12 @@ import torch
 
 import ttnn
 from models.demos.deepseek_v3_d_p.tt.kda.kda import ttKDA
-from models.demos.deepseek_v3_d_p.tt.kimi_k3.attention import K3AttnContext, TtK3KdaAttention, build_attention
+from models.demos.deepseek_v3_d_p.tt.kimi_k3.attention import (
+    K3AttnContext,
+    K3KdaChunk,
+    TtK3KdaAttention,
+    build_attention,
+)
 from models.demos.deepseek_v3_d_p.tt.kimi_k3.block import TtKimiK3Block
 from models.demos.deepseek_v3_d_p.tt.kimi_k3.transformer import TtKimiK3Transformer
 
@@ -189,6 +194,7 @@ def test_kda_forward_uses_live_metadata_or_eager_position(monkeypatch, host_star
         states.read.return_value,
         actual_start=scalar,
         actual_end=end_scalar if use_metadata or host_end is not None else None,
+        selections=None,
     )
     states.commit.assert_called_once_with(1, new_state, 2)
     if use_metadata:
@@ -211,6 +217,42 @@ def test_kda_forward_uses_live_metadata_or_eager_position(monkeypatch, host_star
             "mesh_mapper": mapper,
         }
         assert any(call.args == (scalar,) for call in deallocate.call_args_list)
+
+
+def test_kda_chunk_shares_bounds_and_selections_across_layers(monkeypatch):
+    kdas = [create_autospec(ttKDA, instance=True) for _ in range(2)]
+    device = object()
+    for kda in kdas:
+        kda.device = device
+        kda.sequence_parallel_axis = 0
+        kda.active_seq_len_local = 640
+        kda.config = SimpleNamespace(num_heads=24, head_k_dim=128, head_v_dim=128)
+        kda.forward.return_value = object(), object()
+    start, end = object(), object()
+    from_torch = Mock(side_effect=[start, end])
+    deallocate = Mock()
+    monkeypatch.setattr(ttnn, "from_torch", from_torch)
+    monkeypatch.setattr(ttnn, "ReplicateTensorToMesh", lambda device: object())
+    monkeypatch.setattr(ttnn, "deallocate", deallocate)
+    monkeypatch.setattr(ttnn, "all_gather", lambda tensor, **kwargs: tensor)
+    monkeypatch.setattr(ttnn, "squeeze", lambda tensor, **kwargs: tensor)
+    monkeypatch.setattr(ttnn, "unsqueeze", lambda tensor, **kwargs: tensor)
+    chunk = K3KdaChunk(5120, 10240)
+    ctx = K3AttnContext(actual_start=5120, actual_end=10240, kda_chunk=chunk)
+    for layer_idx, kda in enumerate(kdas):
+        TtK3KdaAttention(kda, layer_idx, 1, 1, ttnn.Topology.Linear, Mock()).forward(object(), ctx)
+
+    assert from_torch.call_count == 2
+    kdas[0].selections.assert_called_once_with(start, end)
+    kdas[1].selections.assert_not_called()
+    shared = kdas[0].selections.return_value
+    for kda in kdas:
+        assert kda.forward.call_args.kwargs == {"actual_start": start, "actual_end": end, "selections": shared}
+    # The layers do not free the shared bounds; the transformer releases them once per chunk.
+    assert all(call.args not in ((start,), (end,)) for call in deallocate.call_args_list)
+    deallocate.reset_mock()
+    chunk.release()
+    assert [call.args for call in deallocate.call_args_list] == [(start,), (end,)]
 
 
 @pytest.mark.parametrize("start,end", [(1, 64), (0, 33), (-32, 32), (32, 32), (64, 32)])

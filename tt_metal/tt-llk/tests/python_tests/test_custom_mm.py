@@ -52,7 +52,12 @@ from helpers.pack import pack_bfp4_b, pack_bfp8_b, pack_bfp16, pack_fp32
 from helpers.param_config import input_output_formats, parametrize
 from helpers.stimuli_config import StimuliConfig
 from helpers.test_config import TestConfig
-from helpers.test_variant_parameters import CRK_TILE_DIMM, IN_FACE_DIMS, NUM_FACES
+from helpers.test_variant_parameters import (
+    CRK_TILE_DIMM,
+    CUSTOM_MM_CALLS,
+    IN_FACE_DIMS,
+    NUM_FACES,
+)
 from helpers.tile_constants import DEFAULT_TILE_C_DIM, DEFAULT_TILE_R_DIM, FACE_C_DIM
 from helpers.tilize_untilize import tilize, untilize
 from helpers.unpack import unpack_bfp4_b, unpack_bfp8_b
@@ -110,7 +115,7 @@ class CustomMMStimuliConfig(StimuliConfig):
         write_to_device(location, self.buf_b_addr, self.packed_b)
 
 
-def _run_custom_mm(M, kt, ct, formats, dest_acc):
+def _run_custom_mm(M, kt, ct, formats, dest_acc, calls=CUSTOM_MM_CALLS()):
     K = kt * DEFAULT_TILE_R_DIM
     N = ct * DEFAULT_TILE_C_DIM
     in0_format = formats.input_format
@@ -183,6 +188,7 @@ def _run_custom_mm(M, kt, ct, formats, dest_acc):
         formats,
         templates=[
             CRK_TILE_DIMM(c_dimm=ct, r_dimm=1, k_dimm=kt),
+            calls,
         ],
         runtimes=[
             # Result / in0 use 2 faces (M x 16 each); in1 (B) uses 4 full faces.
@@ -310,3 +316,29 @@ ODD_K_CASES = [
 def test_custom_mm_odd_k(formats, M, kt, ct):
     """Exercise the single-K replay tail with both unpack tunings."""
     _run_custom_mm(M, kt, ct, formats, DestAccumulation.No)
+
+
+# Multi-call: K splits over back-to-back calls that accumulate into one DEST, the way the blaze
+# Matmul drives row blocks. The kernel holds math back before each call, so the unpacker enters
+# the next call while math still holds SrcB; a both-bank SrcB clear issued there by an execute
+# (rather than once by the init) drops the SrcA writes it overlaps.
+MULTI_CALL_CASES = [
+    # (id, M, kt, ct, calls, in1 format)
+    ("m1-ct1", 1, 32, 1, 16, DataFormat.Float16_b),
+    ("m8-ct1", 8, 32, 1, 16, DataFormat.Float16_b),
+    ("m1-ct2", 1, 16, 2, 8, DataFormat.Float16_b),
+    ("m1-ct1-bfp8", 1, 32, 1, 16, DataFormat.Bfp8_b),
+]
+
+
+@blackhole_only
+@pytest.mark.parametrize(
+    "M,kt,ct,num_calls,in1_format",
+    [pytest.param(*case[1:], id=case[0]) for case in MULTI_CALL_CASES],
+)
+def test_custom_mm_multi_call(M, kt, ct, num_calls, in1_format):
+    """Back-to-back calls into one DEST, checked against the full-K golden."""
+    formats = InputOutputFormat(DataFormat.Float16_b, DataFormat.Float16_b, in1_format)
+    _run_custom_mm(
+        M, kt, ct, formats, DestAccumulation.No, CUSTOM_MM_CALLS(num_calls=num_calls)
+    )

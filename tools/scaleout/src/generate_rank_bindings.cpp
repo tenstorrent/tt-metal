@@ -627,6 +627,7 @@ int main(int argc, char** argv) {
             mgd_paths_in_order.push_back(mgd_path);
         }
         std::optional<PhysicalGroupingDescriptor> pgd = PhysicalGroupingDescriptor::find_and_load(
+            MetalContext::instance().get_cluster(),
             args.physical_grouping_descriptor_path.has_value()
                 ? std::optional<std::filesystem::path>(*args.physical_grouping_descriptor_path)
                 : std::nullopt,

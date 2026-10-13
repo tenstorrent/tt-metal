@@ -33,16 +33,16 @@ TT_KERNEL void derive() {
         noc.async_read_barrier();
         topology = derive_interval(start, words[0], sp_rank, sp_size, local_rows);
     }
-    for (uint32_t row = 0; row < selection::record_count(sp_size); ++row) {
+    for (uint32_t row = 0; row < selection::record_count; ++row) {
         for (uint32_t i = 0; i < selection::record_width; ++i) {
             words[i] = 0;
         }
-        if (row == selection::local_final_history(sp_size)) {
+        if (row == selection::local_final_history) {
             const uint32_t history_end = topology.valid_rows == 0 ? selection::history_rows : topology.valid_rows;
             for (uint32_t i = 0; i < selection::history_rows; ++i) {
                 words[i] = history_end - selection::history_rows + i;
             }
-        } else if (row < selection::local_entry_state) {
+        } else if (row < selection::final_state) {
             uint32_t base;
             if (row == selection::outgoing_history) {
                 base = (topology.local_split ? topology.head_rows : local_rows) - selection::history_rows;
@@ -55,22 +55,15 @@ TT_KERNEL void derive() {
                 words[i] = base + i;
             }
         } else {
-            uint32_t selected;
-            if (row < selection::final_state) {
-                selected = (topology.rank + sp_size - topology.first_rank) % sp_size;
-            } else if (row < selection::affine_transforms) {
-                // Candidates contain one final state per rank, followed by the
-                // completed distributed prefix at index sp_size for unsplit execution.
-                selected = topology.split ? topology.final_owner : sp_size;
-            } else {
-                selected = (topology.first_rank + (row - selection::affine_transforms) / 2) % sp_size;
-            }
-            const bool is_end_record = (row - selection::local_entry_state) % 2 != 0;
+            // Candidates contain one final state per rank, followed by the
+            // completed distributed prefix at index sp_size for unsplit execution.
+            const uint32_t selected = topology.split ? topology.final_owner : sp_size;
+            const bool is_end_record = row != selection::final_state;
             words[0] = selected + uint32_t(is_end_record);
             if (is_end_record) {
                 words[1] = BH;
                 words[2] = K;
-                words[3] = row >= selection::affine_transforms ? K + V : V;
+                words[3] = V;
             }
         }
         noc.async_write(

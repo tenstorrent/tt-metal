@@ -1,0 +1,49 @@
+# isclose(a, b) with torch's rtol = 1e-5, atol = 1e-8: a is the constant 1.0; b spans [0.5, 1.5]
+# plus exact points just inside and outside the fp32 threshold, 1, 2, 0 and -1, so both outcomes
+# occur in every format.
+#
+# Generated for the Quasar port of the Blackhole SFPI kernels, using only existing fuser features:
+# dest_acc is fixed per file (hence the _dest16 / _dest32 pairs), every float input goes through
+# the FPU datacopy path, and stimuli are finite intervals and points (no inf, NaN, -0 or INT_MIN).
+# Special points sit outside the random ranges, so each is drawn about as often as a unit of range.
+
+dest_acc: true
+
+operands:
+  - name: "input_A"
+    dims: [32, 32]
+    format: [Float32]
+    stimuli:
+      include:
+        - 1.0
+  - name: "input_B"
+    dims: [32, 32]
+    format: [Float16_b, Float16]
+    stimuli:
+      include:
+        - [0.5, 0.9999]
+        - [1.0001, 1.5]
+        - 0.99998
+        - 0.99999
+        - 1.0
+        - 1.000005
+        - 1.00002
+        - 2.0
+        - 0.0
+        - -1.0
+  - name: "sfpu_out"
+    dims: [32, 32]
+    format: Float32
+
+operations:
+  - math:
+      - {type: "Fpu", in0: "input_A", operation: "Datacopy", unpacker: "UnpackerA", math_fidelity: "LoFi", unpack_to_dest: false, block_size: [32, 32], indexes: {in0: 0, dest: 0}}
+      - {type: "Fpu", in0: "input_B", operation: "Datacopy", unpacker: "UnpackerA", math_fidelity: "LoFi", unpack_to_dest: false, block_size: [32, 32], indexes: {in0: 0, dest: 1}}
+      - type: "BinarySfpu"
+        operation: [SfpuIsclose]
+        approximation_mode: false
+        iterations: 32
+        block_size: [32, 32]
+        indexes: {src0: 0, src1: 1, dest: 2}
+    pack:
+      - {output: "sfpu_out", packer: "Packer", block_size: [32, 32], indexes: {dest: 2, out: 0}}

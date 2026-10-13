@@ -1599,7 +1599,8 @@ MultiMeshSolutionEnumerator::MultiMeshSolutionEnumerator(
         session_pinnings,
         asic_id_to_mesh_rank_,
         unique_shapes,
-        fabric_node_id_to_mesh_rank_);
+        fabric_node_id_to_mesh_rank_,
+        config_.placement_asic_allowlist);
 }
 
 MultiMeshSolutionEnumerator::MultiMeshSolutionEnumerator(
@@ -1623,7 +1624,8 @@ MultiMeshSolutionEnumerator::MultiMeshSolutionEnumerator(
         placement_stats_.get(),
         session_pinnings,
         asic_id_to_mesh_rank_,
-        unique_shapes);
+        unique_shapes,
+        config_.placement_asic_allowlist);
 }
 
 MultiMeshSolutionEnumerator::MultiMeshSolutionEnumerator(
@@ -1642,7 +1644,8 @@ MultiMeshSolutionEnumerator::MultiMeshSolutionEnumerator(
         placement_stats_.get(),
         session_pinnings,
         asic_id_to_mesh_rank_,
-        unique_shapes);
+        unique_shapes,
+        config_.placement_asic_allowlist);
 }
 
 MultiMeshSolutionEnumerator::MultiMeshSolutionEnumerator(MultiMeshSolutionEnumerator&&) noexcept = default;

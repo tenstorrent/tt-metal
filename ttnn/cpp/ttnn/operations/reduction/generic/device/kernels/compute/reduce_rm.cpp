@@ -23,6 +23,7 @@
 // input entries). Padded rows / W columns past valid data carry the reduction identity (0 for SUM)
 // from the reader's pre-fill, so they contribute nothing to the running sum.
 //
+#include "api/dataflow/dataflow_buffer.h"
 #include "experimental/kernel_args.h"
 #include "ttnn/cpp/ttnn/kernel_lib/reduce_helpers_compute.hpp"
 #include "ttnn/cpp/ttnn/kernel_lib/reduce_plan_args.hpp"
@@ -35,10 +36,26 @@
 
 namespace {
 
+constexpr uint32_t call_count = get_compile_time_arg_val(0);
+
+template <uint32_t Index>
+using RmCall = ttnn::kernel_lib::ReduceCallAtT<1, Index>;
+
+// The calls share one auxiliary CB; the writer pushes the union of their slices.
+template <uint32_t Index>
+constexpr uint32_t auxiliary_tiles_through() {
+    constexpr uint32_t end = RmCall<Index>::auxiliary_tile_offset + RmCall<Index>::auxiliary_tile_count;
+    if constexpr (Index == 0) {
+        return end;
+    } else {
+        constexpr uint32_t previous = auxiliary_tiles_through<Index - 1>();
+        return previous > end ? previous : end;
+    }
+}
+
 template <uint32_t Index>
 FORCE_INLINE void reduce_chunk() {
-    using Call = ttnn::kernel_lib::
-        BoundReduceCallArgs<ttnn::kernel_lib::ReduceCallAtT<1, Index>, dfb::tile_in, dfb::scaler, dfb::out, dfb::acc>;
+    using Call = ttnn::kernel_lib::BoundReduceCallArgs<RmCall<Index>, dfb::tile_in, dfb::scaler, dfb::out, dfb::acc>;
     compute_kernel_lib::reduce<Call>(
 #ifdef REDUCE_POST_MUL
         [](uint32_t dst_idx) {
@@ -56,7 +73,6 @@ FORCE_INLINE void reduce_chunk() {
 }
 
 FORCE_INLINE void reduce_block(uint32_t chunk_idx, bool is_last_chunk) {
-    constexpr uint32_t call_count = get_compile_time_arg_val(0);
     if constexpr (call_count == 1) {
         reduce_chunk<0>();
     } else {
@@ -136,4 +152,8 @@ void kernel_main() {
             }
         }
     }
+
+    // compute_kernel_lib::reduce waits the auxiliary tiles but never pops them, so they serve
+    // every planned call; pop them at the end so the buffer is left balanced.
+    DataflowBuffer(dfb::scaler).pop_front(auxiliary_tiles_through<call_count - 1>());
 }

@@ -21,7 +21,7 @@ from helpers.llk_params import (
     format_dict,
 )
 from helpers.logger import logger
-from helpers.param_config import parametrize
+from helpers.param_config import parametrize, runtime
 from helpers.perf.core import create_test_or_perf_config
 from helpers.stimuli_config import StimuliConfig
 from helpers.test_variant_parameters import (
@@ -293,9 +293,9 @@ def _reduce_test_config_kwargs(
     reduce_pool=REDUCE_POOLS,
     formats=REDUCE_FORMATS,
     mathop=get_supported_reduce_axes,
-    input_bounds=get_format_input_bounds,
+    input_bounds=runtime(get_format_input_bounds),
     dimension_combinations=get_dimension_combinations,
-    reduced_extent=get_reduce_extents,
+    reduced_extent=runtime(get_reduce_extents),
     implied_math_format=get_implied_math_formats,
 )
 def test_sfpu_reduce_quasar(
@@ -520,13 +520,9 @@ def _run_int32_reduce(mathop, reduce_pool, injected_value, base_range):
     "mathop", [MathOperation.ReduceColumn, MathOperation.ReduceRow]
 )
 @pytest.mark.parametrize("reduce_pool", [ReducePool.Max, ReducePool.Min])
-@pytest.mark.parametrize(
-    "injected_value", [INT32_MIN, INT32_MAX], ids=["INT32_MIN", "INT32_MAX"]
-)
-@pytest.mark.parametrize(
-    "base_range",
-    [(-1000, 1000), (-1000, -1), (1, 1000)],
-    ids=["mixed", "all_negative", "all_positive"],
+@parametrize(
+    injected_value=runtime([INT32_MIN, INT32_MAX]),
+    base_range=runtime([(-1000, 1000), (-1000, -1), (1, 1000)]),
 )
 def test_int32_reduce_extreme(mathop, reduce_pool, injected_value, base_range):
     """Guard for the Int32 range ends of a MAX/MIN reduce, pinning the comparator's domain.

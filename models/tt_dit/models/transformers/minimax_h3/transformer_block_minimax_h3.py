@@ -66,9 +66,12 @@ class MiniMaxH3TransformerBlock(Module):
         ccl_manager: CCLManager,
         parallel_config: DiTParallelConfig,
         is_fsdp: bool = False,
+        kv_gather_capacity: int | None = None,
+        use_persistent_ccl_buffers: bool = True,
     ) -> None:
         super().__init__()
 
+        self.use_persistent_ccl_buffers = use_persistent_ccl_buffers
         self.hidden_size = hidden_size
         self.ffn_dim = ffn_dim
         self.time_embed_dim = time_embed_dim
@@ -102,6 +105,8 @@ class MiniMaxH3TransformerBlock(Module):
             ccl_manager=ccl_manager,
             parallel_config=parallel_config,
             is_fsdp=is_fsdp,
+            kv_gather_capacity=kv_gather_capacity,
+            use_persistent_ccl_buffers=use_persistent_ccl_buffers,
         )
         self.norm2 = DistributedRMSNorm(
             embedding_dim=hidden_size,
@@ -316,6 +321,7 @@ class MiniMaxH3TransformerBlock(Module):
                 parallel_config=self.parallel_config if self.use_fused_agmm else None,
                 default_block_size=ff1_block_size,
                 force_transpose=False,
+                use_persistent_buffer=self.use_persistent_ccl_buffers,
             )
         ff_out = self.ff(
             normed,
@@ -323,5 +329,6 @@ class MiniMaxH3TransformerBlock(Module):
             parallel_config=self.parallel_config if self.use_fused_agmm else None,
             default_block_size=ff1_block_size,
             force_transpose=False,
+            use_persistent_buffer=self.use_persistent_ccl_buffers,
         )
         return ttnn.addcmul(residual, ff_out, modulation(_GATE_MLP))

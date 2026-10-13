@@ -5,7 +5,7 @@
 #include <algorithm>
 #include <string>
 
-#include "ttnn/cpp/ttnn/kernel_lib/host/reduce_host.hpp"
+#include "ttnn/kernel_lib/host/reduce_host.hpp"
 #include <vector>
 
 #include "moreh_linear_backward_device_operation.hpp"

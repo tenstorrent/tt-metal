@@ -43,9 +43,12 @@
 #include <tt-metalium/mesh_buffer.hpp>
 #include <tt-metalium/mesh_device.hpp>
 #include <tt-metalium/mesh_workload.hpp>
+#include <tt-metalium/experimental/program_preparation.hpp>
 #include <tt-metalium/program.hpp>
 #include <tt-metalium/runtime_args_data.hpp>
 #include "impl/buffers/semaphore.hpp"
+#include "impl/program/dispatch.hpp"
+#include "impl/program/program_impl.hpp"
 #include "impl/context/metal_context.hpp"
 #include "impl/dispatch/worker_config_buffer.hpp"
 #include <tt_stl/span.hpp>
@@ -165,7 +168,7 @@ void verify_cb_config(
 
 void clear_cb_config_report(
     const std::shared_ptr<MeshDevice>& mesh_device, const CoreRangeSet& crs, uint32_t report_addr) {
-    std::vector<uint32_t> cleared_report = {0, 0};
+    std::vector<uint32_t> cleared_report = {0, 0, 0};
     for (auto* device : mesh_device->get_devices()) {
         for (const auto& core_range : crs.ranges()) {
             for (const auto& core : core_range) {
@@ -179,15 +182,19 @@ void verify_cb_config_report(
     const std::shared_ptr<MeshDevice>& mesh_device,
     const CoreRangeSet& crs,
     uint32_t report_addr,
-    const CBConfig& expected_config) {
+    const CBConfig& expected_config,
+    std::optional<uint32_t> expected_address = std::nullopt) {
     for (auto* device : mesh_device->get_devices()) {
         for (const auto& core_range : crs.ranges()) {
             for (const auto& core : core_range) {
                 std::vector<uint32_t> report;
-                ::tt::tt_metal::detail::ReadFromDeviceL1(device, core, report_addr, 2 * sizeof(uint32_t), report);
-                ASSERT_EQ(report.size(), 2);
+                ::tt::tt_metal::detail::ReadFromDeviceL1(device, core, report_addr, 3 * sizeof(uint32_t), report);
+                ASSERT_EQ(report.size(), 3);
                 EXPECT_EQ(report[0], expected_config.page_size);
                 EXPECT_EQ(report[1], expected_config.num_pages);
+                if (expected_address.has_value()) {
+                    EXPECT_EQ(report[2], *expected_address);
+                }
             }
         }
     }
@@ -216,6 +223,49 @@ void validate_sems(
 using MeshWorkloadTest2x4 = MeshDevice2x4Fixture;
 using MeshWorkloadTest4x8 = MeshDevice4x8Fixture;
 using MeshWorkloadTestSuite = GenericMeshDeviceFixture;
+
+TEST_F(MeshWorkloadTestSuite, ProgramPreparationRejectsEmptyWorkload) {
+    MeshWorkload workload;
+
+    EXPECT_THAT(
+        [&] { experimental::program_preparation::prepare(*mesh_device_, workload); },
+        ThrowsMessage<std::runtime_error>(HasSubstr("Cannot prepare a MeshWorkload that has no programs")));
+
+    // The rejected call must leave the workload open, so the caller can add a program and retry.
+    Program program = CreateProgram();
+    CreateKernel(program, "tests/tt_metal/tt_metal/test_kernels/compute/blank.cpp", CoreCoord{0, 0}, ComputeConfig{});
+    EXPECT_NO_THROW(workload.add_program(MeshCoordinateRange(mesh_device_->shape()), std::move(program)));
+    EXPECT_NO_THROW(experimental::program_preparation::prepare(*mesh_device_, workload));
+}
+
+TEST_F(MeshWorkloadTestSuite, ProgramPreparationRejectsReuseOnAnotherMeshDevice) {
+    const MeshShape parent_shape = mesh_device_->shape();
+    std::optional<MeshShape> sub_shape;
+    if (parent_shape.dims() == 2 && parent_shape[1] % 2 == 0) {
+        sub_shape = MeshShape(parent_shape[0], parent_shape[1] / 2);
+    } else if (parent_shape.dims() == 2 && parent_shape[0] % 2 == 0) {
+        sub_shape = MeshShape(parent_shape[0] / 2, parent_shape[1]);
+    }
+    if (!sub_shape.has_value()) {
+        GTEST_SKIP() << "Mesh shape is not evenly splittable into two submeshes";
+    }
+    auto submeshes = mesh_device_->create_submeshes(*sub_shape);
+    ASSERT_EQ(submeshes.size(), 2u);
+
+    Program program = CreateProgram();
+    CreateKernel(program, "tests/tt_metal/tt_metal/test_kernels/compute/blank.cpp", CoreCoord{0, 0}, ComputeConfig{});
+    MeshWorkload workload;
+    workload.add_program(MeshCoordinateRange(*sub_shape), std::move(program));
+
+    experimental::program_preparation::prepare(*submeshes[0], workload);
+
+    // Finalized offsets and binary sizes belong to the first submesh; reusing them elsewhere must fail.
+    EXPECT_THAT(
+        [&] { experimental::program_preparation::prepare(*submeshes[1], workload); },
+        ThrowsMessage<std::runtime_error>(
+            HasSubstr("Reusing MeshWorkloads across MeshDevices is currently not supported")));
+    EXPECT_NO_THROW(experimental::program_preparation::prepare(*submeshes[0], workload));
+}
 
 // A worker still reading its kernel config must not have that config overwritten, including on devices left out of the
 // workloads that follow. The host holds one device's worker while other devices run enough workloads to wrap the
@@ -1024,6 +1074,93 @@ TEST_F(MeshWorkloadTestSuite, MeshWorkloadCBUpdate) {
     Finish(mesh_device_->mesh_command_queue());
     verify_cb_config_report(mesh_device_, cr_set, report_addr, updated_cb_config);
     mesh_device_->release_mesh_trace(updated_trace_id);
+
+    // Keep both buffers live so cached dynamic address updates cannot accidentally reuse an address.
+    constexpr uint32_t backing_bytes_per_core = 65536;
+    auto make_backing = [&] {
+        return MeshBuffer::create(
+            ReplicatedBufferConfig{.size = backing_bytes_per_core * cr_set.num_cores()},
+            {.page_size = 2048, .buffer_type = BufferType::L1},
+            mesh_device_.get());
+    };
+    auto backing_a = make_backing();
+    auto backing_b = make_backing();
+    ASSERT_NE(backing_a->address(), backing_b->address());
+    const auto updated_handle = cb_handles[updated_cb_index];
+    auto enqueue_and_check = [&](uint32_t expected_address) {
+        // First dispatch refreshes the payload; the second reuses the unchanged generation.
+        for (int repeat = 0; repeat < 2; ++repeat) {
+            clear_cb_config_report(mesh_device_, cr_set, report_addr);
+            EnqueueMeshWorkload(mesh_device_->mesh_command_queue(), mesh_workload, false);
+            Finish(mesh_device_->mesh_command_queue());
+            verify_cb_config_report(mesh_device_, cr_set, report_addr, updated_cb_config, expected_address);
+        }
+    };
+    UpdateDynamicCircularBufferAddress(workload_program, updated_handle, *backing_a->get_reference_buffer());
+    enqueue_and_check(backing_a->address());
+    EXPECT_THAT(
+        [&] {
+            UpdateDynamicCircularBufferAddressAndTotalSize(
+                workload_program, updated_handle, *backing_b->get_reference_buffer(), backing_bytes_per_core + 2048);
+        },
+        ThrowsMessage<std::exception>(HasSubstr("larger than")));
+    EXPECT_EQ(
+        GetCircularBufferConfig(workload_program, updated_handle).globally_allocated_address(), backing_a->address());
+    enqueue_and_check(backing_a->address());
+    updated_cb_config.num_pages /= 2;
+    const uint32_t updated_size = updated_cb_config.num_pages * updated_cb_config.page_size;
+    UpdateDynamicCircularBufferAddressAndTotalSize(
+        workload_program, updated_handle, *backing_b->get_reference_buffer(), updated_size);
+    enqueue_and_check(backing_b->address());
+    UpdateDynamicCircularBufferAddress(
+        workload_program, updated_handle, *backing_a->get_reference_buffer(), updated_cb_config.page_size);
+    enqueue_and_check(backing_a->address() + updated_cb_config.page_size);
+
+    // Offset updates must reject invalid ranges without changing the backing buffer or cached payload.
+    const uint32_t bank_size = backing_b->get_reference_buffer()->aligned_size_per_bank();
+    for (const uint32_t invalid_offset : {bank_size, bank_size + updated_cb_config.page_size}) {
+        EXPECT_ANY_THROW(UpdateDynamicCircularBufferAddress(
+            workload_program, updated_handle, *backing_b->get_reference_buffer(), invalid_offset));
+        const auto& config = GetCircularBufferConfig(workload_program, updated_handle);
+        EXPECT_EQ(config.shadow_global_buffer, backing_a->get_reference_buffer());
+        EXPECT_EQ(config.address_offset(), updated_cb_config.page_size);
+        EXPECT_EQ(config.total_size(), updated_size);
+        EXPECT_EQ(config.max_size(), bank_size - updated_cb_config.page_size);
+        EXPECT_EQ(config.globally_allocated_address(), backing_a->address() + updated_cb_config.page_size);
+        enqueue_and_check(backing_a->address() + updated_cb_config.page_size);
+    }
+    EXPECT_ANY_THROW(UpdateCircularBufferTotalSize(workload_program, updated_handle, bank_size));
+    EXPECT_ANY_THROW(UpdateDynamicCircularBufferAddressAndTotalSize(
+        workload_program, updated_handle, *backing_b->get_reference_buffer(), bank_size));
+    enqueue_and_check(backing_a->address() + updated_cb_config.page_size);
+
+    // A range ending exactly at the bank boundary is valid, including subsequent resizing.
+    const uint32_t boundary_offset = bank_size - updated_size;
+    UpdateDynamicCircularBufferAddress(
+        workload_program, updated_handle, *backing_b->get_reference_buffer(), boundary_offset);
+    UpdateCircularBufferTotalSize(workload_program, updated_handle, updated_size);
+    enqueue_and_check(backing_b->address() + boundary_offset);
+
+    // A failed cached-payload update must remain dirty and recover on the next valid update.
+    UpdateDynamicCircularBufferAddress(workload_program, updated_handle, *backing_a->get_reference_buffer(), 0);
+    UpdateCircularBufferTotalSize(workload_program, updated_handle, backing_bytes_per_core);
+    UpdateCircularBufferPageSize(workload_program, updated_handle, updated_cb_index, 1);
+    // Check the payload updater directly: an enqueue exception after queue reservations
+    // does not support retrying that queue. No device commands are issued for this invalid config.
+    auto& command_sequences = workload_program.impl().get_cached_program_command_sequences();
+    ASSERT_FALSE(command_sequences.empty());
+    for (auto& [key, sequence] : command_sequences) {
+        for (int attempt = 0; attempt < 2; ++attempt) {
+            EXPECT_THAT(
+                [&] { program_dispatch::update_circular_buffer_configs(sequence); },
+                ThrowsMessage<std::exception>(HasSubstr("number of CB pages")));
+        }
+    }
+    UpdateCircularBufferPageSize(workload_program, updated_handle, updated_cb_index, updated_cb_config.page_size);
+    UpdateCircularBufferTotalSize(workload_program, updated_handle, updated_size);
+    UpdateDynamicCircularBufferAddress(
+        workload_program, updated_handle, *backing_a->get_reference_buffer(), updated_cb_config.page_size);
+    enqueue_and_check(backing_a->address() + updated_cb_config.page_size);
 }
 
 TEST_F(MeshWorkloadTestSuite, MeshWorkloadSemaphoreSanity) {

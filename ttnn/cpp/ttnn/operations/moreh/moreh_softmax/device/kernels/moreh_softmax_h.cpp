@@ -156,6 +156,9 @@ void kernel_main() {
 #endif
         dfb_x_m_max_obj.pop_front(Ht);
     }
+    // The mask tile and the reduce auxiliary tiles are pushed once and re-read on every iteration,
+    // so they are waited once up front. Pop them here to leave the buffers balanced.
+    dfb_mask_obj.pop_front(onetile);
     dfb_max_scaler_obj.pop_front(MaxCall::auxiliary_tile_count);
     dfb_sum_scaler_obj.pop_front(SumCall::auxiliary_tile_count);
 }

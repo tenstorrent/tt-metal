@@ -14,7 +14,7 @@
 #include <tt-metalium/bfloat16.hpp>
 
 #include "ttnn/tensor/tensor.hpp"
-#include "ttnn/cpp/ttnn/kernel_lib/host/reduce_host.hpp"
+#include "ttnn/kernel_lib/host/reduce_host.hpp"
 
 namespace tt::tt_metal {
 class Buffer;

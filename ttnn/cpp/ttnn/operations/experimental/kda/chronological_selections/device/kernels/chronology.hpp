@@ -12,12 +12,9 @@ constexpr uint32_t slice_rank = 4;
 constexpr uint32_t outgoing_history = 0;
 constexpr uint32_t predecessor_history = outgoing_history + 1;
 constexpr uint32_t final_history = predecessor_history + 1;
-constexpr uint32_t local_entry_state = final_history + 1;
-constexpr uint32_t final_state = local_entry_state + 2;
-constexpr uint32_t affine_transforms = final_state + 2;
-constexpr uint32_t affine_transform(uint32_t step) { return affine_transforms + 2 * step; }
-constexpr uint32_t local_final_history(uint32_t sp_size) { return affine_transform(sp_size); }
-constexpr uint32_t record_count(uint32_t sp_size) { return local_final_history(sp_size) + 1; }
+constexpr uint32_t final_state = final_history + 1;
+constexpr uint32_t local_final_history = final_state + 2;
+constexpr uint32_t record_count = local_final_history + 1;
 }  // namespace selection
 
 struct Topology {

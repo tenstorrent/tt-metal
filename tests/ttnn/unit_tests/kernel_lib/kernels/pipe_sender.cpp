@@ -1,7 +1,7 @@
 // SPDX-FileCopyrightText: © 2026 Tenstorrent USA, Inc.
 // SPDX-License-Identifier: Apache-2.0
 //
-// mcast_pipe helper unit test: SENDER kernel. The host emits the mcast wire via ttnn.Mcast2D; this
+// mcast_pipe helper unit test: SENDER kernel. The host emits the mcast wire via ttnn.Mcast; this
 // kernel decodes it with McastArgs and drives SenderPipe::send() for `num_iters` rounds. The sender is
 // out-of-rect here, so the broadcast is a plain (no-loopback) mcast to the receiver rect.
 #include <stdint.h>
