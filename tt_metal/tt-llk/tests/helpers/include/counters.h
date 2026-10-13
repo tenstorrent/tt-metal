@@ -857,6 +857,11 @@ struct init_measurement_no_zone // START_PERF_MEASURE("INIT") in the INIT measur
     {
 #if defined(LLK_TRISC_MATH)
         ckernel::icache_prefetch_head_start();
+#else
+        // tt-metal reaches unpack / pack init code mid-stream, so INIT starts after a 2-line lead past the cold jal
+        // entry; the restores and jal ahead of it leave the window too
+        asm volatile(".rept 8\n\tnop\n\t.endr" ::: "memory");
+        read_init_end(llk_barrier::init_start_ts);
 #endif
     }
 
