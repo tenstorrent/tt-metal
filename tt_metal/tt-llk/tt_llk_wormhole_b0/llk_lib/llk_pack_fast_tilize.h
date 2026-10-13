@@ -268,6 +268,7 @@ inline void _llk_pack_fast_tilize_uninit_(
 inline void _llk_pack_fast_tilize_block_(
     const std::uint32_t tile_index, const std::uint32_t address, const std::uint32_t unit_dim, const std::uint32_t num_units, const std::uint32_t num_faces = 4)
 {
+    LLK_FID_POINT(); // fidelity experiment hook (ckernel.h), empty unless LLK_FID_T is defined
     LLK_ASSERT(num_faces == 2 || num_faces == 4, "num_faces must be 2 or 4");
     // use false here so that the 31st bit of the address remains set as the offset addresses for the other packers continue to be used
     // while the address for the first packer is manipulated using ADDDMAREG and REG2FLOP
