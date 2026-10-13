@@ -50,9 +50,9 @@ void run_kernel(RUNTIME_PARAMETERS params)
 
 #ifdef ARCH_BLACKHOLE
 #ifdef MATMUL_UNPACK_TTSYNC
-    constexpr bool unpack_ttsync = true;
+    constexpr bool unpack_auto_ttsync = true;
 #else
-    constexpr bool unpack_ttsync = false;
+    constexpr bool unpack_auto_ttsync = false;
 #endif
     // the test chooses the 8-bit stream at compile time, as a kernel's compile-time formats do
 #ifdef MATMUL_STREAM_NARROW
@@ -60,8 +60,8 @@ void run_kernel(RUNTIME_PARAMETERS params)
 #else
     constexpr bool stream_narrow = false;
 #endif
-#define MATMUL_UNPACK_INIT_TEMPLATE_ARGS 0, 0, unpack_ttsync, stream_narrow
-#define MATMUL_UNPACK_TEMPLATE_ARGS      0, 0, unpack_ttsync, MAX_TILES_DEST
+#define MATMUL_UNPACK_INIT_TEMPLATE_ARGS 0, 0, unpack_auto_ttsync, stream_narrow
+#define MATMUL_UNPACK_TEMPLATE_ARGS      0, 0, unpack_auto_ttsync, MAX_TILES_DEST
 #else
 #define MATMUL_UNPACK_INIT_TEMPLATE_ARGS
 #define MATMUL_UNPACK_TEMPLATE_ARGS

@@ -376,7 +376,7 @@ inline void _llk_unpack_AB_matmul_mop_config_(
  *
  * @tparam kernel_broadcast_a: Tile count to wrap operand A around for kernel broadcast (0 = disabled).
  * @tparam kernel_broadcast_b: Tile count to wrap operand B around for kernel broadcast (0 = disabled).
- * @tparam ttsync: Write each row's base addresses through two GPRs and WRCFG under Auto TTSync instead of polling for a
+ * @tparam auto_ttsync: Write each row's base addresses through two GPRs and WRCFG under Auto TTSync instead of polling for a
  *                 free context; the kernel must define MATMUL_UNPACK_TTSYNC and pass the same value to the execute.
  * @tparam stream_narrow: The value of @ref _llk_unpack_AB_matmul_stream_narrow_; true advances the streamed operand's
  *                        address with one CFGSHIFTMASK.
@@ -391,12 +391,12 @@ inline void _llk_unpack_AB_matmul_mop_config_(
  * @param unpA_partial_face: Whether operand A is unpacked face-by-face (partial faces).
  * @param unpB_partial_face: Whether operand B is unpacked face-by-face (partial faces).
  * @note Call @ref _llk_unpack_AB_matmul_uninit_ to restore the modified datum-count state.
- * @note With ttsync, run a new init after any unpack config write, and while the form is on let no RISC store target a
+ * @note With auto_ttsync, run a new init after any unpack config write, and while the form is on let no RISC store target a
  *       GPR that a MOP or replay uses.
  * @ref _llk_unpack_AB_matmul_ is the matching execute call.
  * @ref _llk_math_matmul_init_ is the matching init on the math thread (consumes SrcA/SrcB).
  */
-template <std::uint32_t kernel_broadcast_a = 0, std::uint32_t kernel_broadcast_b = 0, bool ttsync = false, bool stream_narrow = false>
+template <std::uint32_t kernel_broadcast_a = 0, std::uint32_t kernel_broadcast_b = 0, bool auto_ttsync = false, bool stream_narrow = false>
 __attribute__((always_inline)) inline void _llk_unpack_AB_matmul_init_(
     const std::uint32_t transpose       = 0,
     const std::uint32_t ct_dim          = 1,
@@ -460,7 +460,7 @@ __attribute__((always_inline)) inline void _llk_unpack_AB_matmul_init_(
         _llk_unpack_AB_matmul_mop_config_<kernel_broadcast_a, kernel_broadcast_b>(ct_dim, rt_dim, unpA_partial_face, unpB_partial_face);
     }
 
-    if constexpr (ttsync)
+    if constexpr (auto_ttsync)
     {
         static_assert(unpack_matmul_ttsync_restored, "a kernel that runs the ttsync matmul unpack must define MATMUL_UNPACK_TTSYNC");
         if (!unpack_matmul_ttsync_on)
@@ -499,7 +499,7 @@ inline void _llk_unpack_AB_matmul_uninit_()
  *
  * @tparam kernel_broadcast_a: Tile count to wrap operand A around for kernel broadcast (0 = disabled).
  * @tparam kernel_broadcast_b: Tile count to wrap operand B around for kernel broadcast (0 = disabled).
- * @tparam ttsync: The value passed to @ref _llk_unpack_AB_matmul_init_.
+ * @tparam auto_ttsync: The value passed to @ref _llk_unpack_AB_matmul_init_.
  * @tparam dest_max_tiles: The 32x32 tiles DEST holds in the kernel's sync and accumulation mode (get_dest_max_tiles), which
  *                         bounds the tiles of a row.
  * @param base_address_a: L1 base address of operand A's tile buffer.
@@ -517,7 +517,7 @@ inline void _llk_unpack_AB_matmul_uninit_()
  *       @ref _llk_unpack_AB_matmul_uninit_ after it to restore modified state.
  * @ref _llk_math_matmul_ on the math thread consumes the SrcA/SrcB tiles unpacked here.
  */
-template <std::uint32_t kernel_broadcast_a = 0, std::uint32_t kernel_broadcast_b = 0, bool ttsync = false, std::uint32_t dest_max_tiles = 16>
+template <std::uint32_t kernel_broadcast_a = 0, std::uint32_t kernel_broadcast_b = 0, bool auto_ttsync = false, std::uint32_t dest_max_tiles = 16>
 inline void _llk_unpack_AB_matmul_(
     const std::uint32_t base_address_a,
     const std::uint32_t base_address_b,
@@ -564,7 +564,7 @@ inline void _llk_unpack_AB_matmul_(
         std::uint32_t address_a = base_address_a + offset_address_a;
         std::uint32_t address_b = base_address_b + offset_address_b;
 
-        if constexpr (ttsync)
+        if constexpr (auto_ttsync)
         {
             LLK_ASSERT(is_valid_L1_address(address_a), "L1 address_a must be in valid L1 memory region");
             LLK_ASSERT(is_valid_L1_address(address_b), "L1 address_b must be in valid L1 memory region");
