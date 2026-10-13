@@ -27,6 +27,8 @@ Env (defaults = the deployed 16p16d prefill config):
   M3_CCL_TOPOLOGY     linear | ring                                                  [linear]
   BENCH_CHUNK         prefill chunk size (production 4096)                           [4096]
   BENCH_CAPACITY      KV capacity in tokens, multiple of the chunk (production 1M)   [1048576]
+  BENCH_NUM_USERS     KV-cache slots, each BENCH_CAPACITY deep (production 1)        [1]
+  BENCH_SLOT          slot the prefix fill, request, KV dump and trace use           [0]
   BENCH_PREFIX        cached tokens before the request                               [51200]
   BENCH_NEW           request tokens                                                 [5120]
   BENCH_TOKENS        dir with metadata.json {"token_ids": [...]} (>= PREFIX+NEW, tiled otherwise)  [required]
@@ -119,6 +121,16 @@ def open_mesh(rows, cols, trace_region_size=0):
     )
     log(f"mesh {tuple(mesh.shape)} ndev={mesh.get_num_devices()} fabric={fabric} ccl={ccl_topology_from_env()}")
     return mesh
+
+
+def dram_view(mesh):
+    """Per-chip DRAM in GiB: allocated and free over all banks, and the largest free block of one bank."""
+    mv = ttnn.get_memory_view(mesh, ttnn.BufferType.DRAM)
+    return {
+        "allocated_gib": round(mv.total_bytes_allocated_per_bank * mv.num_banks / 2**30, 3),
+        "free_gib": round(mv.total_bytes_free_per_bank * mv.num_banks / 2**30, 3),
+        "largest_free_per_bank_gib": round(mv.largest_contiguous_bytes_free_per_bank / 2**30, 3),
+    }
 
 
 def maybe_stop(phase):
@@ -227,6 +239,8 @@ def main():
     rows, cols = (int(x) for x in os.getenv("BENCH_MESH", "4x4").lower().split("x"))
     chunk = int(os.getenv("BENCH_CHUNK", "4096"))
     capacity = int(os.getenv("BENCH_CAPACITY", "1048576"))
+    num_users = int(os.getenv("BENCH_NUM_USERS", "1"))
+    slot = int(os.getenv("BENCH_SLOT", "0"))
     prefix = int(os.getenv("BENCH_PREFIX", "51200"))
     new = int(os.getenv("BENCH_NEW", "5120"))
     iters = int(os.getenv("BENCH_ITERS", "5"))
@@ -240,6 +254,7 @@ def main():
         iters = 1
     assert capacity % chunk == 0, f"capacity {capacity} must be a multiple of the chunk {chunk}"
     assert prefix + new <= capacity, "request does not fit the capacity"
+    assert 0 <= slot < num_users, f"BENCH_SLOT {slot} outside the {num_users} allocated slot(s)"
     assert ack_mode in ("sync", "event", "none"), ack_mode
     total = prefix + new
     tokens = load_tokens(total)
@@ -258,7 +273,8 @@ def main():
         + tuple(k for k in os.environ if k.startswith("M3_KA_"))
     }
     log(
-        f"config mesh={rows}x{cols} chunk={chunk} capacity={capacity} prefix={prefix} new={new} iters={iters} "
+        f"config mesh={rows}x{cols} chunk={chunk} capacity={capacity} slots={num_users} slot={slot} prefix={prefix} "
+        f"new={new} iters={iters} "
         f"ack={ack_mode} layers={layer_ids or os.getenv('BENCH_NUM_LAYERS', '60')} env={env_echo}"
     )
 
@@ -268,6 +284,8 @@ def main():
         "tag": os.getenv("BENCH_TAG"),
         "chunk": chunk,
         "capacity": capacity,
+        "num_users": num_users,
+        "slot": slot,
         "prefix": prefix,
         "new": new,
         "ack": ack_mode,
@@ -296,7 +314,7 @@ def main():
             max_seq_len=capacity,
             mesh_shape=(rows, cols),
             chunk_size=chunk,
-            num_users=1,
+            num_users=num_users,
             expert_weight_dtype=expert_dtype,
             weight_cache_path=cache_path,
             layer_indices=layer_ids,
@@ -306,10 +324,13 @@ def main():
         t0 = time.perf_counter()
         runtime = TtPrefillRuntime(mesh, hf_config, {}, cfg)
         result["build_s"] = time.perf_counter() - t0
+        result["dram_after_weights"] = dram_view(mesh)
         kv_cache = allocate_kv_caches(
-            mesh, num_layers=num_layers, max_seq_len=capacity, num_users=1, head_dim=hf_config.head_dim
+            mesh, num_layers=num_layers, max_seq_len=capacity, num_users=num_users, head_dim=hf_config.head_dim
         )
+        result["dram_after_kv"] = dram_view(mesh)
         log(f"model built in {result['build_s']:.1f} s (cache {cache_path})")
+        log(f"DRAM per chip: weights {result['dram_after_weights']}; + {num_users}-slot KV {result['dram_after_kv']}")
 
         # ---- per-layer ack (production: host callback after synchronize_device) ----------------------------
         layer_stamps = []  # (layer, perf_counter) — filled by the ack sink in sync/event mode
@@ -352,6 +373,8 @@ def main():
         sync()
         result["compile_s"] = time.perf_counter() - t0
         log(f"compile (3 warm-up variants) {result['compile_s']:.1f} s")
+        result["dram_after_compile"] = dram_view(mesh)
+        log(f"DRAM per chip after compile: {result['dram_after_compile']}")
 
         def run_span(start, end, **kw):
             """prefill [start, end) in chunk-size pieces; piece boundaries follow the chunk grid of the
@@ -362,7 +385,9 @@ def main():
                 b = min(a + chunk, end)
                 piece = tokens[a:b] + [0] * (chunk - (b - a))
                 inp = runtime.make_chunk_input(piece, a)
-                outs.append((a, b, runtime.prefill_chunk(inp, kv_cache, slot_id=0, actual_start=a, actual_end=b, **kw)))
+                outs.append(
+                    (a, b, runtime.prefill_chunk(inp, kv_cache, slot_id=slot, actual_start=a, actual_end=b, **kw))
+                )
                 a = b
             return outs
 
@@ -633,7 +658,7 @@ def main():
 
                 os.makedirs(dump_dir, exist_ok=True)
                 t0 = time.perf_counter()
-                blocks = runtime.read_slot_kv(kv_cache, 0, total)
+                blocks = runtime.read_slot_kv(kv_cache, slot, total)
                 seq = runtime.read_seq_len(total)
                 for name, blk in zip(("k", "v", "ik"), blocks):
                     nat = torch.stack([naturalize_kv_block(blk[L], total, rows, chunk, seq) for L in range(num_layers)])
@@ -681,7 +706,7 @@ def main():
             def fwd():
                 ttnn.deallocate = keep_input
                 try:
-                    runtime.prefill_chunk(inp, kv_cache, slot_id=0, actual_start=prefix, actual_end=total)
+                    runtime.prefill_chunk(inp, kv_cache, slot_id=slot, actual_start=prefix, actual_end=total)
                 finally:
                     ttnn.deallocate = real_dealloc
 
