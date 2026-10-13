@@ -1,0 +1,6 @@
+perf_sfpu_welford.py::test_perf_sfpu_welford[formats:Float16_b->Float16_b-dest_acc:No-recip_size:256]
+perf_sfpu_welford.py::test_perf_sfpu_welford[formats:Float16_b->Float16_b-dest_acc:Yes-recip_size:256]
+perf_sfpu_welford.py::test_perf_sfpu_welford[formats:Float16_b->Float16_b-dest_acc:No-recip_size:0]
+perf_sfpu_welford.py::test_perf_sfpu_welford[formats:Float16_b->Float16_b-dest_acc:Yes-recip_size:0]
+perf_sfpu_welford.py::test_perf_sfpu_welford[formats:Float32->Float32-dest_acc:Yes-recip_size:256]
+perf_sfpu_welford.py::test_perf_sfpu_welford[formats:Float32->Float32-dest_acc:Yes-recip_size:0]
