@@ -274,9 +274,7 @@ PerTokenCastBackProgramFactory::cached_program_t PerTokenCastBackProgramFactory:
     const bool scales_in_row_tail = operation_attributes.scales_in_row_tail;
     if (scales_in_row_tail) {
         // Packed row [H e4m3 | H/scale_block_w fp32]: H is the data width, the row is wider.
-        H = operation_attributes.per_row_scale
-                ? H - 64
-                : H * operation_attributes.scale_block_w / (operation_attributes.scale_block_w + 4);
+        H = H * operation_attributes.scale_block_w / (operation_attributes.scale_block_w + 4);
     }
 
     // Tile / face dims come from the tensor's tile spec.
@@ -302,10 +300,9 @@ PerTokenCastBackProgramFactory::cached_program_t PerTokenCastBackProgramFactory:
     const uint32_t out_tile_bytes = tile_h * tile_w * out_elem_bytes;  // cb_out page = one output tile
     // Scale staging: one slot per token. Row-tail scales are read on their own (the tail, at byte H of the
     // packed row) rather than with the whole row; other sources read their whole (aligned) scale page.
-    const uint32_t scale_aligned_page_bytes =
-        scales_in_row_tail
-            ? tt::round_up((operation_attributes.per_row_scale ? 1u : H / operation_attributes.scale_block_w) * 4u, 64u)
-            : input_scale.buffer()->aligned_page_size();
+    const uint32_t scale_aligned_page_bytes = scales_in_row_tail
+                                                  ? tt::round_up((H / operation_attributes.scale_block_w) * 4u, 64u)
+                                                  : input_scale.buffer()->aligned_page_size();
     const uint32_t scale_read_offset = scales_in_row_tail ? H : 0u;
 
     // Token-count-aware-only metadata tensors (unset on the plain path).
@@ -322,9 +319,8 @@ PerTokenCastBackProgramFactory::cached_program_t PerTokenCastBackProgramFactory:
     //   entry = [ x x x s1 s2 ... sn ]   (x = routing data, not ours; s = scales)
     //   scales_start_offset = scale_entry_length - scales_per_token   (n scales in the tail)
     const uint32_t scale_block_w = operation_attributes.scale_block_w;
-    // Per-row: a single scale per token; every chunk reads tail entry 0 (chunk_scale_blocks = 1).
-    const uint32_t chunk_scale_blocks = operation_attributes.per_row_scale ? 1u : block_w / scale_block_w;
-    const uint32_t scales_per_token = operation_attributes.per_row_scale ? 1u : H / scale_block_w;
+    const uint32_t chunk_scale_blocks = block_w / scale_block_w;
+    const uint32_t scales_per_token = H / scale_block_w;
     const uint32_t scale_entry_length = static_cast<uint32_t>(input_scale.logical_shape()[-1]);
     // Packed-row scales are read from the row tail on their own (byte H), so they start at word 0 of the slot.
     const uint32_t scales_start_offset = scales_in_row_tail ? 0u
@@ -522,9 +518,6 @@ PerTokenCastBackProgramFactory::cached_program_t PerTokenCastBackProgramFactory:
             .compile_args = reader_ct_args,
             .defines = [&] {
                 auto d = token_count_aware_defines;
-                if (operation_attributes.per_row_scale) {
-                    d["PER_ROW_SCALE"] = "1";
-                }
                 d["SCALE_READ_OFFSET"] = std::to_string(scale_read_offset);
                 return d;
             }()});

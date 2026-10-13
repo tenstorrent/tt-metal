@@ -131,16 +131,6 @@ void kernel_main() {
     constexpr uint32_t cb_counter_total_pages =
         get_compile_time_arg_val(output_args.next_compile_time_args_offset() + 13);
     constexpr uint32_t SLOTS_PER_UNTILIZER = get_compile_time_arg_val(output_args.next_compile_time_args_offset() + 14);
-    // Scaled FP8 combine: output row = [data_row_bytes e4m3 | data_row_bytes/32 fp32 scales].
-    constexpr bool fp8_scaled = get_compile_time_arg_val(output_args.next_compile_time_args_offset() + 15) != 0;
-    constexpr uint32_t data_row_bytes = get_compile_time_arg_val(output_args.next_compile_time_args_offset() + 16);
-    constexpr uint32_t scale_block_ct_dim = get_compile_time_arg_val(output_args.next_compile_time_args_offset() + 17);
-    constexpr uint32_t cb_scaler_id = get_compile_time_arg_val(output_args.next_compile_time_args_offset() + 18);
-    constexpr uint32_t cb_scale_id = get_compile_time_arg_val(output_args.next_compile_time_args_offset() + 19);
-    constexpr uint32_t cb_scale_staging_id = get_compile_time_arg_val(output_args.next_compile_time_args_offset() + 20);
-    // c_2 row stride: e4m3 data only when scaled (scales are appended from staging), else the full page.
-    constexpr uint32_t untilize_row_stride = fp8_scaled ? data_row_bytes : aligned_output_page_size;
-    constexpr uint32_t scale_row_bytes = fp8_scaled ? data_row_bytes / 8 : 0;  // data_row_bytes/32 fp32
     constexpr uint32_t counter_data_total_size = experts_tok_counter_pages * aligned_experts_tok_counter_page_size;
     // Dispatch lays each expert's region out tile-row aligned (32 rows) whatever the batch size: the region
     // stride uses the tile height, not read_batch_size (ROW_MAJOR batches can be smaller than a tile).
@@ -193,22 +183,6 @@ void kernel_main() {
     // for the next invocation.
     volatile tt_l1_ptr uint32_t* counter_ready_sem_ptr =
         reinterpret_cast<volatile tt_l1_ptr uint32_t*>(get_semaphore(counter_ready_semaphore_id));
-    if constexpr (fp8_scaled) {
-        // Reduce scaler for the compute's row-max: 1.0 in row 0 of each 16x16 face (REDUCE MAX layout).
-        CircularBuffer cb_scaler(cb_scaler_id);
-        cb_scaler.reserve_back(1);
-        volatile tt_l1_ptr uint32_t* sc = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(cb_scaler.get_write_ptr());
-        for (uint32_t i = 0; i < 32 * 32; ++i) {
-            sc[i] = 0;
-        }
-        for (uint32_t f = 0; f < 4; ++f) {
-            for (uint32_t j = 0; j < 16; ++j) {
-                sc[f * 256 + j] = 0x3f800000u;  // 1.0f
-            }
-        }
-        cb_scaler.push_back(1);
-    }
-
     cb_experts_tok_counter.wait_front(cb_counter_total_pages);
     uint32_t counter_cb_base = cb_experts_tok_counter.get_read_ptr();
     const volatile tt_l1_ptr uint32_t* trailer =
@@ -279,32 +253,6 @@ void kernel_main() {
             // the corresponding metadata pages.  cb_metadata_batch_id is pushed/popped in
             // fixed read_batch_size chunks (only the first batch_count entries are valid),
             // so its fifo pointers wrap cleanly even when batch_count < read_batch_size.
-            uint32_t scale_staging_ptr = 0;
-            if constexpr (fp8_scaled) {
-                // Collect this batch's scales: compute pushes one fp32 tile per data tile whose
-                // column 0 holds the 32 row scales. Stage them as [row][hidden/32] so each routed
-                // row can append its own scale run.
-                CircularBuffer cb_scale(cb_scale_id);
-                CircularBuffer cb_scale_staging(cb_scale_staging_id);
-                scale_staging_ptr = cb_scale_staging.get_write_ptr();
-                volatile tt_l1_ptr uint32_t* staging =
-                    reinterpret_cast<volatile tt_l1_ptr uint32_t*>(scale_staging_ptr);
-                constexpr uint32_t scales_per_row = scale_row_bytes / 4;
-                for (uint32_t blk = 0; blk < tiles_per_batch / scale_block_ct_dim; ++blk) {
-                    cb_scale.wait_front(scale_block_ct_dim);
-                    const volatile tt_l1_ptr uint32_t* tiles =
-                        reinterpret_cast<const volatile tt_l1_ptr uint32_t*>(cb_scale.get_read_ptr());
-                    for (uint32_t k = 0; k < scale_block_ct_dim; ++k) {
-                        const volatile tt_l1_ptr uint32_t* tile = tiles + k * 1024;
-                        const uint32_t col = blk * scale_block_ct_dim + k;
-                        for (uint32_t r = 0; r < 32; ++r) {
-                            // column 0 of row r: face (r / 16) * 2, in-face row r % 16, 16 words per row
-                            staging[r * scales_per_row + col] = tile[(r >> 4) * 512 + (r & 15) * 16];
-                        }
-                    }
-                    cb_scale.pop_front(scale_block_ct_dim);
-                }
-            }
             cb_untilize.wait_front(read_batch_size);
             cb_metadata_batch.wait_front(read_batch_size);
 
@@ -315,32 +263,19 @@ void kernel_main() {
                 const volatile tt_l1_ptr uint32_t* metadata = reinterpret_cast<const volatile tt_l1_ptr uint32_t*>(
                     metadata_read_ptr + t * aligned_dispatched_metadata_page_size);
                 uint32_t dst_chip = metadata[0];
-                uint32_t untilize_row_addr = untilize_read_ptr + t * untilize_row_stride;
+                uint32_t untilize_row_addr = untilize_read_ptr + t * aligned_output_page_size;
 
                 if (dst_chip == linearized_mesh_coord) {
                     // DeviceZoneScopedN("LOCAL-row-write");
                     uint32_t dst_token_idx = metadata[1];
                     uint32_t dst_topk_indice = metadata[2];
                     uint32_t output_page_idx = dst_token_idx * num_experts_per_tok + dst_topk_indice;
-                    if constexpr (fp8_scaled) {
-                        noc.async_write(
-                            cb_untilize,
-                            output_addr_gen,
-                            data_row_bytes,
-                            {.offset_bytes = t * untilize_row_stride},
-                            {.page_id = output_page_idx});
-                        noc_async_write(
-                            scale_staging_ptr + t * scale_row_bytes,
-                            output_addr_gen.get_noc_addr(output_page_idx, data_row_bytes),
-                            scale_row_bytes);
-                    } else {
-                        noc.async_write(
-                            cb_untilize,
-                            output_addr_gen,
-                            aligned_output_page_size,
-                            {.offset_bytes = t * aligned_output_page_size},
-                            {.page_id = output_page_idx});
-                    }
+                    noc.async_write(
+                        cb_untilize,
+                        output_addr_gen,
+                        aligned_output_page_size,
+                        {.offset_bytes = t * aligned_output_page_size},
+                        {.page_id = output_page_idx});
 
                 } else {
                     if (local_credits == 0) {
@@ -364,22 +299,13 @@ void kernel_main() {
                     uint32_t off = 0;
                     {
                         // DeviceZoneScopedN("FABRIC-row-write");
-                        constexpr uint32_t row_data_bytes = fp8_scaled ? data_row_bytes : aligned_output_page_size;
-                        while (off < row_data_bytes) {
-                            uint32_t chunk = (row_data_bytes - off > (uint32_t)NOC_MAX_BURST_SIZE)
+                        while (off < aligned_output_page_size) {
+                            uint32_t chunk = (aligned_output_page_size - off > (uint32_t)NOC_MAX_BURST_SIZE)
                                                  ? (uint32_t)NOC_MAX_BURST_SIZE
-                                                 : (row_data_bytes - off);
+                                                 : (aligned_output_page_size - off);
                             noc_async_write_one_packet_with_trid(
                                 untilize_row_addr + off, dst_addr + off, chunk, TRID_NON_LOCAL_WRITE);
                             off += chunk;
-                        }
-                        if constexpr (fp8_scaled) {
-                            // Scales go right after the data in the ring slot = the packed output page.
-                            noc_async_write_one_packet_with_trid(
-                                scale_staging_ptr + t * scale_row_bytes,
-                                dst_addr + data_row_bytes,
-                                scale_row_bytes,
-                                TRID_NON_LOCAL_WRITE);
                         }
                         // The tagged barrier drains this row's remote metadata and
                         // data writes without waiting for local DRAM writes.

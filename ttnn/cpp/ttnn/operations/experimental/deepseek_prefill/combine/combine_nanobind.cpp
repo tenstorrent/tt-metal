@@ -66,10 +66,11 @@ void bind_combine(nb::module_& mod) {
                 Defaults to Linear.
             init_zeros (bool, optional): Whether to zero-initialize the output buffer before writing.
                 Defaults to True.
-            fp8_scaled_combine (bool, optional): When True (Blackhole, TILE input), each output row is
-                packed as [hidden e4m3 bytes | hidden/32 fp32 scales]: one power-of-two scale per 1x32
-                block, values rounded to nearest even. Output last dim = hidden + hidden/8. Dequantize
-                with per_token_cast_back(scales_in_row_tail=True). Defaults to False.
+            fp8_scaled_combine (bool, optional): When True (Blackhole), dispatched_buffer must be a
+                ROW_MAJOR FP8_E4M3 tensor of packed rows [e4m3 bytes | fp32 scales], already quantized
+                upstream by per_token_cast_to_fp8; combine moves the rows byte for byte (no quantization
+                in combine, TILE input is rejected). The packed output is dequantized by
+                post_combine_reduce (fp8_scale_block_w). Defaults to False.
             use_fp8_combine (bool, optional): When True, emit the combined output in fp8_e4m3.
                 Requires Blackhole hardware. Defaults to False.
 

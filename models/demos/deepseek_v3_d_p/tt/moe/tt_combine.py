@@ -77,9 +77,11 @@ class TtCombineModule(LightweightModule):
             memory_config: Output memory configuration. Must be interleaved (L1 or DRAM).
             init_zeros: Whether to zero-initialize the output buffer before writing.
             fp8_output: Emit the combined output in fp8_e4m3. Requires Blackhole hardware.
-            fp8_scaled: Scaled FP8 wire (Blackhole, TILE input): each output row is packed as
-                [emb_dim e4m3 bytes | emb_dim/32 fp32 scales]; dequantize with
-                per_token_cast_back(scales_in_row_tail=True, scale_block_w=32).
+            fp8_scaled: Scaled FP8 wire (Blackhole): dispatched_buffer must be a ROW_MAJOR FP8_E4M3
+                tensor of packed rows [emb_dim e4m3 bytes | fp32 block scales], already quantized by
+                per_token_cast_to_fp8; combine moves the rows byte for byte (it does not quantize, and a
+                TILE input is rejected). The packed output is dequantized inside post_combine_reduce
+                (fp8_scale_block_w).
         """
         if fp8_output and mesh_device.arch() != ttnn.Arch.BLACKHOLE:
             raise ValueError("fp8_output requires Blackhole hardware")
@@ -147,6 +149,12 @@ class TtCombineModule(LightweightModule):
         if self.fp8_output and dispatched_buffer.layout != ttnn.TILE_LAYOUT:
             raise ValueError(
                 f"fp8_output=True requires dispatched_buffer in TILE_LAYOUT (got {dispatched_buffer.layout})"
+            )
+        # fp8_scaled only moves rows already quantized upstream (packed ROW_MAJOR FP8_E4M3).
+        if self.fp8_scaled and dispatched_buffer.layout != ttnn.ROW_MAJOR_LAYOUT:
+            raise ValueError(
+                "fp8_scaled=True requires a ROW_MAJOR dispatched_buffer of packed fp8 rows "
+                f"(quantize with per_token_cast_to_fp8 first; got {dispatched_buffer.layout})"
             )
 
         output = ttnn.experimental.deepseek_prefill.combine(

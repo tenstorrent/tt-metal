@@ -100,13 +100,6 @@ struct UnifiedRoutedExpertFfnParams {
     uint32_t min_active_tokens = 0;
     uint32_t max_active_tokens = std::numeric_limits<uint32_t>::max();
 
-    // Per-token scaled fp8 x (fused dispatch dequant): x is ROW_MAJOR FP8_E4M3 and x_row_scales holds one
-    // fp32 scale per token row (int32 word x_row_scale_word of each dispatch-metadata row). The scale is
-    // constant along K, so it is applied to the gate/up accumulators (column broadcast per token row)
-    // before the activation. Needs 32-bit DEST (an fp8 CB on the core).
-    bool x_row_scaled = false;
-    uint32_t x_row_scale_word = 3;
-
     static constexpr auto attribute_names = std::forward_as_tuple(
         "m_tiles",
         "experts_per_chip",
@@ -114,20 +107,10 @@ struct UnifiedRoutedExpertFfnParams {
         "activation",
         "fuse_bias",
         "min_active_tokens",
-        "max_active_tokens",
-        "x_row_scaled",
-        "x_row_scale_word");
+        "max_active_tokens");
     auto attribute_values() const {
         return std::forward_as_tuple(
-            m_tiles,
-            experts_per_chip,
-            x_is_row_major,
-            activation,
-            fuse_bias,
-            min_active_tokens,
-            max_active_tokens,
-            x_row_scaled,
-            x_row_scale_word);
+            m_tiles, experts_per_chip, x_is_row_major, activation, fuse_bias, min_active_tokens, max_active_tokens);
     }
 };
 
@@ -174,8 +157,6 @@ struct UnifiedRoutedExpertFfnInputs {
     std::vector<Tensor> gate_biases;
     std::vector<Tensor> up_biases;
     std::vector<Tensor> down_biases;
-    // x_row_scaled only: the dispatch metadata (INT32 ROW_MAJOR, one row per x row).
-    std::optional<Tensor> x_row_scales;
 };
 
 }  // namespace ttnn::operations::experimental::deepseek_prefill::unified_routed_expert_ffn

@@ -679,7 +679,6 @@ class TtRoutedExpert(LightweightModule):
         dispatched_buffer: ttnn.Tensor,
         expert_token_counts: ttnn.Tensor,
         expert_region_offsets: ttnn.Tensor,
-        x_row_scales: ttnn.Tensor | None = None,
     ) -> ttnn.Tensor:
         """
         On Blackhole, delegates the per-local-expert work to the
@@ -752,9 +751,6 @@ class TtRoutedExpert(LightweightModule):
                     up_biases=self.up_biases,
                     down_biases=self.down_biases,
                     min_active_tokens=0 if threshold is None else threshold + 1,
-                    # Per-token fp8 dispatch: dispatched_buffer is ROW_MAJOR e4m3 and the scales are word 3
-                    # of each dispatch-metadata row; the op rescales the gate/up accumulators per token.
-                    x_row_scales=x_row_scales,
                 )
             else:
                 # Nobody allocated for us. Match what the composite hands back: one shared

@@ -284,9 +284,7 @@ tt::tt_metal::ProgramDescriptor PostCombineReduceProgramFactory::create_descript
 
     const uint32_t expert_dim = operation_attributes.expert_dim;
 
-    // Per-token scaled fp8 combine rows: [H e4m3 | 64-B tail with the fp32 row scale at byte H] (fused DQ2).
-    const bool fp8_in = combine_output.dtype() == tt::tt_metal::DataType::FP8_E4M3;
-    const uint32_t emb_dim = fp8_in ? combine_shape[-1] - 64 : combine_shape[-1];
+    const uint32_t emb_dim = combine_shape[-1];
     const uint32_t num_experts = combine_shape[expert_dim];
 
     uint32_t num_tokens = 1;
@@ -338,11 +336,6 @@ tt::tt_metal::ProgramDescriptor PostCombineReduceProgramFactory::create_descript
     const uint32_t num_cores = cores_per_part * num_parts;
     const uint32_t base_chunks_per_core = total_chunks / cores_per_part;
     const uint32_t extra_chunks = total_chunks % cores_per_part;
-    const uint32_t elem_bytes = fp8_in ? 1 : BF16_BYTES;
-    TT_FATAL(
-        !fp8_in || part_cb_tiles <= 4,
-        "fused fp8 dequant: {} pseudo-tiles per core exceed the 4 fp32 DST tiles",
-        part_cb_tiles);
 
     constexpr bool row_major = true;
 
@@ -382,20 +375,6 @@ tt::tt_metal::ProgramDescriptor PostCombineReduceProgramFactory::create_descript
             .page_size = weight_tile_size,
         }}},
     });
-
-    // c_4 (fp8 only): each slot's fp32 row scale (the 16-B head of the row tail), read by the reader beside c_0.
-    if (fp8_in) {
-        constexpr uint32_t scale_page = 64;  // DRAM reads keep the source offset modulo 64 B
-        desc.cbs.push_back(tt::tt_metal::CBDescriptor{
-            .total_size = 2 * num_experts * scale_page,
-            .core_ranges = core_range_set,
-            .format_descriptors = {{tt::tt_metal::CBFormatDescriptor{
-                .buffer_index = static_cast<uint8_t>(tt::CBIndex::c_4),
-                .data_format = tt::DataFormat::Float32,
-                .page_size = scale_page,
-            }}},
-        });
-    }
 
     // c_2 / c_3 CBs (dispatch table, indices) are only allocated when the
     // DeepSeek skip path is in use; the GPT-OSS path does not touch them.
@@ -475,12 +454,11 @@ tt::tt_metal::ProgramDescriptor PostCombineReduceProgramFactory::create_descript
     auto* indices_buffer = use_dispatch_table_skip ? indices_opt->buffer() : nullptr;
     auto* dispatch_table_buffer = use_dispatch_table_skip ? dispatch_table_opt->buffer() : nullptr;
 
-    // Reader compile-time args: num_experts, part_cb_tiles, fp8_in, combine accessor.
+    // Reader compile-time args: num_experts, part_cb_tiles, combine accessor.
     // Reader does not need to know about expert-skip; that logic lives in compute + writer.
     std::vector<uint32_t> reader_compile_time_args = {
         num_experts,
         part_cb_tiles,
-        static_cast<uint32_t>(fp8_in ? 1 : 0),  // 2: read each slot's fp32 row scale into c_4
     };
     tt::tt_metal::TensorAccessorArgs(combine_buffer).append_to(reader_compile_time_args);
 
@@ -492,7 +470,6 @@ tt::tt_metal::ProgramDescriptor PostCombineReduceProgramFactory::create_descript
         part_cb_tiles,
         dispatch_table_num_pages,
         static_cast<uint32_t>(use_dispatch_table_skip ? 1 : 0),
-        static_cast<uint32_t>(fp8_in ? 1 : 0),  // 4: fused per-token fp8 dequant (row scale in c_4)
     };
 
     // Writer compile-time args use a fixed layout across both paths. In the
@@ -543,19 +520,6 @@ tt::tt_metal::ProgramDescriptor PostCombineReduceProgramFactory::create_descript
         .fp32_dest_acc_en = false,
         .dst_full_sync_en = false,
     };
-    if (fp8_in) {
-        // Fp8_e4m3 CBs on Blackhole need 32-bit DEST; fp8 rows and bf16 weights unpack straight to it.
-        tt::tt_metal::ComputeConfigDescriptor::UnpackToDestModes m(
-            NUM_CIRCULAR_BUFFERS, tt::tt_metal::UnpackToDestMode::Default);
-        m[tt::CBIndex::c_0] = tt::tt_metal::UnpackToDestMode::UnpackToDestFp32;
-        m[tt::CBIndex::c_1] = tt::tt_metal::UnpackToDestMode::UnpackToDestFp32;
-        compute_kernel_desc.config = tt::tt_metal::ComputeConfigDescriptor{
-            .math_fidelity = tt::tt_metal::MathFidelity::HiFi4,
-            .fp32_dest_acc_en = true,
-            .dst_full_sync_en = false,
-            .unpack_to_dest_mode = std::move(m),
-        };
-    }
 
     tt::tt_metal::KernelDescriptor writer_kernel_desc;
     writer_kernel_desc.kernel_source =
@@ -587,9 +551,8 @@ tt::tt_metal::ProgramDescriptor PostCombineReduceProgramFactory::create_descript
         reader_rt_args.push_back(combine_buffer);
         reader_rt_args.push_back(token_start);
         reader_rt_args.push_back(chunks_this_core);
-        reader_rt_args.push_back(part_first_elem * elem_bytes);  // part's byte offset in a row
-        reader_rt_args.push_back(part_elems * elem_bytes);       // part's bytes per row
-        reader_rt_args.push_back(emb_dim * elem_bytes);          // fp8: the row scale's byte offset
+        reader_rt_args.push_back(part_first_elem * BF16_BYTES);  // part's byte offset in a row
+        reader_rt_args.push_back(part_elems * BF16_BYTES);       // part's bytes per row
         reader_kernel_desc.emplace_runtime_args(core, reader_rt_args);
 
         // Compute RT args (no Buffer*).

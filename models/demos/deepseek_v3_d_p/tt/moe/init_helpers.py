@@ -442,7 +442,6 @@ def compute_constants(
     experts_per_chip_override: int | None = None,
     emb_dim: int | None = None,
     fp8_scaled_input: bool = False,
-    fp8_scale_block: int = 128,
 ):
     """
     Compute derived constants for MoE configuration.
@@ -465,9 +464,8 @@ def compute_constants(
             physically live on each chip (not 256/8=32).
         emb_dim: Embedding (hidden) dimension. Only required when fp8_scaled_input
             is True, to size the per-token fp32 scale tail in the metadata.
-        fp8_scaled_input: If True, each token appends its emb_dim/fp8_scale_block fp32 scales
+        fp8_scaled_input: If True, each token appends its emb_dim/128 fp32 scales
             (bit-cast int32) after the 3 routing fields, growing metadata_len.
-        fp8_scale_block: Elements per fp8 scale (128 = DeepSeek 1x128; 32 = MXFP8 granularity, K3).
 
     Returns:
         experts_per_chip: Number of experts per chip
@@ -489,11 +487,9 @@ def compute_constants(
         experts_per_chip = num_routed_experts // num_devices
     metadata_len = 3  # chip, token, topk_idx
     if fp8_scaled_input:
-        # Each token appends its emb_dim/fp8_scale_block fp32 scales (bit-cast int32) after the 3 routing fields.
+        # Each token appends its emb_dim/128 fp32 scales (bit-cast int32) after the 3 routing fields.
         assert emb_dim is not None, "emb_dim is required when fp8_scaled_input is True"
-        assert fp8_scale_block in (32, 64, 128), f"fp8_scale_block must be 32, 64 or 128, got {fp8_scale_block}"
-        assert emb_dim % 128 == 0, f"emb_dim ({emb_dim}) must be a multiple of 128"
-        metadata_len += emb_dim // fp8_scale_block
+        metadata_len += emb_dim // 128
 
     # TODO: For now, we are ignoring the num_experts_per_tok, but it will be needed once
     # we support replicated experts (See Issue #41293)

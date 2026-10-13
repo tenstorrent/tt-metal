@@ -66,10 +66,10 @@
 #include "ttnn/cpp/ttnn/operations/matmul/device/kernels/compute/bmm_fused_activation.hpp"
 #include "ttnn/cpp/ttnn/operations/experimental/deepseek_prefill/unified_routed_expert_ffn/device/kernels/adaptive_chunk.hpp"
 
-#if defined(FUSE_BIAS) || defined(X_ROW_SCALE)
-// Row-broadcast bias add (gpt-oss) / column-broadcast per-token fp8 scale (X_ROW_SCALE). Bias is a (1, N) tensor tiled
-// to one tile-row; add_tiles_bcast_rows adds its row 0 to every row of the output tile. Same primitive the canonical
-// matmul FUSE_BIAS path uses.
+#ifdef FUSE_BIAS
+// Row-broadcast bias add (gpt-oss). Bias is a (1, N) tensor tiled to one
+// tile-row; add_tiles_bcast_rows adds its row 0 to every row of the output
+// tile. Same primitive the canonical matmul FUSE_BIAS path uses.
 #include "api/compute/bcast.h"
 #endif
 
@@ -83,9 +83,6 @@
 #endif
 #if defined(SWIGLU_OAI) || defined(SITU_GLU) || defined(CLAMPED_SILU_GLU)
 #define FUSED_BINARY_ACT 1
-#endif
-#if defined(X_ROW_SCALE) && !defined(FUSED_BINARY_ACT)
-#error "X_ROW_SCALE is applied in binary_activation_phase and needs a fused binary activation"
 #endif
 
 #ifdef SWIGLU_OAI
@@ -701,20 +698,9 @@ FORCE_INLINE void matmul_phase_fused_gu(
 #define BINARY_ACT_INIT() MATH((ckernel::llk_math_eltwise_binary_sfpu_swiglu_init()))
 #define BINARY_ACT_TILE(fp32, g, u, o) MATH((ckernel::llk_math_eltwise_binary_sfpu_swiglu<fp32>(g, u, o)))
 #elif defined(SITU_GLU)
-// SiTU-GLU at bf16 precision whatever the DEST mode: situ_glu_tile would switch to the accurate exp and a
-// two-step reciprocal under fp32 DEST (+16% on this phase), but the result is packed straight to Bfp8_b, so
-// that precision is never kept. Only the per-token fp8 x path runs fp32 DEST here (Fp8 CBs require it).
+// situ_glu_tile takes its fp32-dest mode from DST_ACCUM_MODE and wraps itself in MATH().
 #define BINARY_ACT_INIT() situ_glu_tile_init()
-#define BINARY_ACT_TILE(fp32, g, u, o)                  \
-    MATH((SFPU_BINARY_CALL(                             \
-        DST_SYNC_MODE,                                  \
-        DST_ACCUM_MODE,                                 \
-        calculate_situ_glu,                             \
-        (false, 8, ::ckernel::sfpu::SituGluConfigKimi), \
-        g,                                              \
-        u,                                              \
-        o,                                              \
-        VectorMode::RC)))
+#define BINARY_ACT_TILE(fp32, g, u, o) situ_glu_tile(g, u, o)
 #elif defined(CLAMPED_SILU_GLU)
 // clamped_silu_glu_tile takes its fp32-dest mode from DST_ACCUM_MODE and wraps itself in MATH().
 #define BINARY_ACT_INIT() clamped_silu_glu_tile_init()
@@ -785,17 +771,6 @@ FORCE_INLINE void binary_activation_phase(
     // before the init (add_bcast uses both operands, unlike the copy path).
     reconfig_data_format(gate_partials_cb_id, gate_bias_cb_id);
     add_bcast_rows_init(gate_partials_cb_id, gate_bias_cb_id);
-#elif defined(X_ROW_SCALE)
-    // Per-token fp8 dispatch: x was e4m3 * (1/scale_row), and the scale is constant along K, so the gate and
-    // up accumulators are rescaled per token row (column broadcast of the reader's scale tiles) here,
-    // before the activation. One scale tile per tile-row of this chunk.
-    (void)gate_bias_cb_id;
-    (void)up_bias_cb_id;
-    constexpr uint32_t cb_row_scale = get_named_compile_time_arg_val("cb_row_scale");
-    CircularBuffer row_scale_cb(cb_row_scale);
-    row_scale_cb.wait_front(EFF_OUT_MAX / per_core_N_gu);
-    reconfig_data_format(gate_partials_cb_id, cb_row_scale);
-    mul_bcast_cols_init(gate_partials_cb_id, cb_row_scale);
 #else
     (void)gate_bias_cb_id;
     (void)up_bias_cb_id;
@@ -813,10 +788,6 @@ FORCE_INLINE void binary_activation_phase(
             const uint32_t ncol = (base + j) % per_core_N_gu;
             add_tiles_bcast_rows(gate_partials_cb_id, gate_bias_cb_id, base + j, ncol, j);
             add_tiles_bcast_rows(up_partials_cb_id, up_bias_cb_id, base + j, ncol, c + j);
-#elif defined(X_ROW_SCALE)
-            const uint32_t m_row = (base + j) / per_core_N_gu;
-            mul_tiles_bcast_cols(gate_partials_cb_id, cb_row_scale, base + j, m_row, j);
-            mul_tiles_bcast_cols(up_partials_cb_id, cb_row_scale, base + j, m_row, c + j);
 #else
             copy_tile(gate_partials_cb_id, base + j, j);
             copy_tile(up_partials_cb_id, base + j, c + j);
@@ -847,9 +818,6 @@ FORCE_INLINE void binary_activation_phase(
     }
     gate_partials_cb.pop_front(EFF_OUT_MAX);
     up_partials_cb.pop_front(EFF_OUT_MAX);
-#if defined(X_ROW_SCALE) && !defined(FUSE_BIAS)
-    row_scale_cb.pop_front(EFF_OUT_MAX / per_core_N_gu);
-#endif
 }
 #endif
 

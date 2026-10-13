@@ -105,7 +105,7 @@ KernelIds build_kernels_and_cbs(
     // A 128-wide chunk carries chunk_scale_blocks = 128 / scale_block_w scales per row.
     const uint32_t scale_block_wt = scale_block_w / tile_w;       // tiles per scale block
     const uint32_t chunk_scale_blocks = block_w / scale_block_w;  // scales per chunk row
-    const uint32_t scale_blocks_per_row = attrs.per_row_scale ? 1u : H / scale_block_w;  // scales per row
+    const uint32_t scale_blocks_per_row = H / scale_block_w;      // scales per row
     const uint32_t chunks_per_row = H / fp8::BLOCK_W;             // 128-wide chunks per row
     const uint32_t in_elem_bytes = input.element_size();
     const uint32_t input_block_bytes = block_w * in_elem_bytes;      // reader CT[1]; ROW_MAJOR-only
@@ -144,22 +144,12 @@ KernelIds build_kernels_and_cbs(
     // cb_in: input, one tile per page; tiles_per_block pages = one 128-wide block, double-buffered.
     // ROW_MAJOR input: the reader fills the block ([tile_h x 128]) contiguously across these pages.
     // TILE input: the reader reads the tiles_per_block tiles individually into these pages.
-    // Per-row scale: the reader keeps whole column segments resident (both passes read them); even rows go to
-    // cb_in and odd rows to c_21 (the compute holds rows k and k+1 at once), two segments each.
     const uint32_t q_unit = defines.contains("Q_UNIT") ? std::stoul(defines.at("Q_UNIT")) : 1u;
     const uint32_t q_wgroup = defines.contains("Q_WGROUP") ? std::stoul(defines.at("Q_WGROUP")) : 1u;
-    const uint32_t in_block_tiles = attrs.per_row_scale
-                                        ? (chunks_per_row / std::stoul(defines.at("PR_SEGMENTS"))) * tiles_per_block
-                                        : q_unit * tiles_per_block;
+    const uint32_t in_block_tiles = q_unit * tiles_per_block;
     CircularBufferConfig cb_in_cfg = CircularBufferConfig(2 * in_block_tiles * in_tile_bytes, {{cb_in_idx, input_df}})
                                          .set_page_size(cb_in_idx, in_tile_bytes);
     CreateCircularBuffer(program, all_cores, cb_in_cfg);
-    if (attrs.per_row_scale) {
-        CircularBufferConfig cb_in_odd_cfg =
-            CircularBufferConfig(2 * in_block_tiles * in_tile_bytes, {{CBIndex::c_21, input_df}})
-                .set_page_size(CBIndex::c_21, in_tile_bytes);
-        CreateCircularBuffer(program, all_cores, cb_in_odd_cfg);
-    }
 
     // cb_tile: input tiles in fp32. ROW_MAJOR: tilized input; TILE: copied input (already tiles).
     make_fp32_tile_cb(cb_tile_idx, tiles_per_block);
@@ -182,16 +172,6 @@ KernelIds build_kernels_and_cbs(
         make_fp32_tile_cb(cb_abs_idx, 2 * block_wt);  // abs tiles for one block row
     }
     make_scale_tile_cb(cb_scale_tiles_idx, 2 * q_unit * block_ht * chunk_scale_blocks);  // col0 = scale (FAST: 1/scale)
-    if (attrs.per_row_scale) {
-        const uint32_t segments = std::stoul(defines.at("PR_SEGMENTS"));
-        make_fp32_tile_cb(CBIndex::c_2, 2);                           // folded max|x| tile of one segment
-        make_fp32_tile_cb(CBIndex::c_20, chunks_per_row / segments);  // per-chunk max|x| tiles of one segment
-        make_fp32_tile_cb(CBIndex::c_18, 2);                          // own partial row max (rows k and k+1 in flight)
-        if (segments > 1) {
-            make_fp32_tile_cb(CBIndex::c_17, 2);                   // partial row max -> writer -> partners
-            make_fp32_tile_cb(CBIndex::c_19, 3 * (segments - 1));  // partners' partials, ring of three rows
-        }
-    }
     make_scale_tile_cb(cb_inv_scale_tiles_idx, std::max(2u, q_unit) * block_ht * chunk_scale_blocks);  // col0 = 1/scale
 
     // cb_output_e4m3: e4m3 output, always row-major, one tile per page, double-buffered.
@@ -224,7 +204,7 @@ KernelIds build_kernels_and_cbs(
              num_cores_total,
              attrs.experts_per_chip,
              M,
-             attrs.per_row_scale ? 1u : chunks_per_row / q_unit});  // units per row; per-row: a whole tile-row
+             chunks_per_row / q_unit});  // units per row
         TensorAccessorArgs(tensor_args.expert_region_offsets->buffer()).append_to(reader_ct_args);
         TensorAccessorArgs(tensor_args.expert_token_counts->buffer()).append_to(reader_ct_args);
         TensorAccessorArgs(tensor_args.global_expert_idx_table->buffer()).append_to(reader_ct_args);
@@ -319,9 +299,7 @@ KernelIds build_kernels_and_cbs(
         static_cast<uint32_t>(round_scale_to_power_of_two),
         scale_block_wt,
         static_cast<uint32_t>(round_to_nearest_even),
-        static_cast<uint32_t>(CBIndex::c_8),   // 14: loop-count mailbox (token_count_aware)
-        chunks_per_row,                        // 15: chunks per tile-row (per_row_scale)
-        static_cast<uint32_t>(CBIndex::c_2)};  // 16: running row max (per_row_scale)
+        static_cast<uint32_t>(CBIndex::c_8)};  // 14: loop-count mailbox (token_count_aware)
     // fp32_dest_acc_en=True is required whenever an 8-bit-float CB (output_e4m3) is on the core (DEST in
     // 32-bit family-agnostic mode); it also gives fp32 precision for the reduce/divide stages.
     ids.compute = CreateKernel(
@@ -358,9 +336,8 @@ ttnn::device_operation::CachedProgram<PerTokenCastToFp8SharedVariables> create_p
     const uint32_t tile_h = tile_shape[0];
     const uint32_t chunks_per_row = H / fp8::BLOCK_W;  // 128-wide column chunks per row (the work unit)
     // Must match build_kernels_and_cbs' staging stride: packed rows stage at a 64-B aligned scale row.
-    const uint32_t scale_page_bytes = attrs.pack_scales_in_row
-                                          ? tt::round_up((attrs.per_row_scale ? 1u : H / attrs.scale_block_w) * 4u, 64u)
-                                          : output_scale.buffer()->aligned_page_size();
+    const uint32_t scale_page_bytes = attrs.pack_scales_in_row ? tt::round_up((H / attrs.scale_block_w) * 4u, 64u)
+                                                               : output_scale.buffer()->aligned_page_size();
 
     // Work-split unit, scale-scratch size, and kernel define differ by layout. TILE also needs a bit of
     // extra geometry (computed here) to build its per-core args in the loop below.
@@ -379,14 +356,7 @@ ttnn::device_operation::CachedProgram<PerTokenCastToFp8SharedVariables> create_p
         rows_per_plane = static_cast<uint32_t>(input_shape[input_shape.size() - 2]);  // R = rows in one [R,H] plane
         const uint32_t num_planes = M / rows_per_plane;        // trailing [R,H] planes (1 for a 2D input)
         row_tiles_per_plane = div_up(rows_per_plane, tile_h);  // tile-rows per plane (R padded up to tile_h)
-        total_units = num_planes * row_tiles_per_plane * (attrs.per_row_scale ? 1u : chunks_per_row);
-        if (attrs.per_row_scale) {
-            defines["PER_ROW_SCALE"] = "1";  // work unit = a column segment of a tile-row; two passes over it
-            defines["PR_CHUNKS"] = std::to_string(chunks_per_row);
-            if (input.dtype() != DataType::FLOAT32) {
-                defines["PR_DIRECT_SCALE"] = "1";  // pass 2 scales straight from the input CB (exact in SrcA)
-            }
-        }
+        total_units = num_planes * row_tiles_per_plane * chunks_per_row;
         scale_scratch_bytes = tile_h * scale_page_bytes;  // one plane's tile-row = tile_h scale rows
         defines["INPUT_TILE_LAYOUT"] = "1";
     } else {
@@ -401,9 +371,9 @@ ttnn::device_operation::CachedProgram<PerTokenCastToFp8SharedVariables> create_p
 
     // 1x128 (GLM 5.3) rides the same fast path on bf16 / bf8_b tiles: a 128-wide chunk is one scale block, so the
     // compute folds the 4 tiles' row maxima in DEST and packs one 1/scale tile per chunk (FAST_BLOCK4).
-    const bool fast_block4 = !attrs.per_row_scale && attrs.scale_block_w == 128 && attrs.round_scale_to_power_of_two &&
-                             tile_layout && input.dtype() != DataType::FLOAT32;
-    if (!attrs.per_row_scale && (attrs.scale_block_w == 32 || fast_block4) && attrs.round_scale_to_power_of_two) {
+    const bool fast_block4 = attrs.scale_block_w == 128 && attrs.round_scale_to_power_of_two && tile_layout &&
+                             input.dtype() != DataType::FLOAT32;
+    if ((attrs.scale_block_w == 32 || fast_block4) && attrs.round_scale_to_power_of_two) {
         defines["FAST_1X32"] = "1";  // one-pass pow2 scale + 1/scale on column 0, one acquire per phase
         if (tile_layout && input.dtype() != DataType::FLOAT32) {
             defines["DIRECT_SRC"] = "1";  // bf16 / bf8_b tiles are exact in SrcA: no fp32 copy
@@ -434,30 +404,6 @@ ttnn::device_operation::CachedProgram<PerTokenCastToFp8SharedVariables> create_p
     Program program{};
     auto compute_grid = input.device()->compute_with_storage_grid_size();
     auto [num_cores, all_cores, crs1, crs2, upc1, upc2] = split_work_to_cores(compute_grid, total_units);
-    // Per-row scale: split each tile-row's width into pr_segments column segments over fixed partner cores
-    // (see kernels/dataflow/per_row_assignment.hpp), so few tile-rows still spread over the grid. A count-aware
-    // expert buffer's row count is only known on device; it is typically above the grid, so use 4 segments.
-    uint32_t pr_segments = 1, pr_group = 0;
-    if (attrs.per_row_scale) {
-        const uint32_t grid = compute_grid.x * compute_grid.y;
-        const uint32_t max_segments = attrs.token_count_aware ? 4u : std::max<uint32_t>(1u, grid / total_units);
-        for (uint32_t d = 1; d <= std::min<uint32_t>(max_segments, 8u); ++d) {
-            if (chunks_per_row % d == 0) {
-                pr_segments = d;
-            }
-        }
-        pr_group = grid / pr_segments;
-        num_cores = grid;
-        all_cores = CoreRangeSet{CoreRange{{0, 0}, {compute_grid.x - 1, compute_grid.y - 1}}};
-        defines["PR_SEGMENTS"] = std::to_string(pr_segments);
-        defines["PR_GROUP"] = std::to_string(pr_group);
-        defines["PR_CPS"] = std::to_string(chunks_per_row / pr_segments);
-        defines["PR_CB_SEND"] = std::to_string(static_cast<uint32_t>(CBIndex::c_17));
-        defines["PR_CB_OWN"] = std::to_string(static_cast<uint32_t>(CBIndex::c_18));
-        defines["PR_CB_PEERS"] = std::to_string(static_cast<uint32_t>(CBIndex::c_19));
-        defines["PR_CB_CHUNK"] = std::to_string(static_cast<uint32_t>(CBIndex::c_20));
-        defines["PR_CB_IN_ODD"] = std::to_string(static_cast<uint32_t>(CBIndex::c_21));
-    }
     if (attrs.token_count_aware) {
         // The host does not know the valid prefix: light up the whole grid; each core sizes its slice on device.
         num_cores = compute_grid.x * compute_grid.y;
@@ -485,18 +431,6 @@ ttnn::device_operation::CachedProgram<PerTokenCastToFp8SharedVariables> create_p
     const uint32_t dst_scale_addr = output_scale.buffer()->address();
 
     auto all_cores_vec = corerange_to_cores(all_cores, num_cores, true);
-    // Per-row exchange args (writer): semaphore id, then the NoC (x, y) of each segment's core in this group.
-    const uint32_t peers_sem = attrs.per_row_scale ? CreateSemaphore(program, all_cores, 0) : 0;
-    auto per_row_exchange_args = [&](uint32_t i) {
-        std::vector<uint32_t> args{peers_sem};
-        const uint32_t grp = i % pr_group;
-        for (uint32_t sp = 0; sp < pr_segments; ++sp) {
-            const auto noc = input.device()->worker_core_from_logical_core(all_cores_vec[sp * pr_group + grp]);
-            args.push_back(noc.x);
-            args.push_back(noc.y);
-        }
-        return args;
-    };
     uint32_t offset = 0;  // ROW_MAJOR: first row; TILE: first 128-block. Advances by this core's unit count.
     // Count-aware work split: core i gets [frac_bounds[i], frac_bounds[i+1]) of the units, in 1/65536 units. Even
     // shares: the grid-row weighting that paid off while every core read the routing tables itself (Q2 91 -> 88 us)
@@ -506,27 +440,13 @@ ttnn::device_operation::CachedProgram<PerTokenCastToFp8SharedVariables> create_p
     for (uint32_t i = 0; i <= num_cores; ++i) {
         frac_bounds[i] = static_cast<uint32_t>((65536ull * i) / num_cores);
     }
-    // Count-aware (non per-row): core 0's reader multicasts the valid tile-row count to every core's semaphore.
-    const bool mcast_rows = attrs.token_count_aware && !attrs.per_row_scale;
+    // Count-aware: core 0's reader multicasts the valid tile-row count to every core's semaphore.
+    const bool mcast_rows = attrs.token_count_aware;
     const uint32_t rows_sem = mcast_rows ? CreateSemaphore(program, all_cores, 0) : 0;
     const auto mcast_start = input.device()->worker_core_from_logical_core(all_cores.bounding_box().start_coord);
     const auto mcast_end = input.device()->worker_core_from_logical_core(all_cores.bounding_box().end_coord);
     for (uint32_t i = 0; i < num_cores; ++i) {
         const auto& core = all_cores_vec[i];
-        if (attrs.per_row_scale && !attrs.token_count_aware) {
-            // Rows i % group, + group, ... of segment i / group (cores past segments * group idle).
-            const uint32_t grp = i % pr_group;
-            const uint32_t my_rows =
-                (i < pr_segments * pr_group && total_units > grp) ? (total_units - grp + pr_group - 1) / pr_group : 0;
-            SetRuntimeArgs(program, k.reader, core, {src_addr, i, total_units});
-            std::vector<uint32_t> wargs{
-                dst_e4m3_addr, dst_scale_addr, i, total_units, rows_per_plane, row_tiles_per_plane};
-            const auto x = per_row_exchange_args(i);
-            wargs.insert(wargs.end(), x.begin(), x.end());
-            SetRuntimeArgs(program, k.writer, core, wargs);
-            SetRuntimeArgs(program, k.compute, core, {my_rows});
-            continue;
-        }
         const uint32_t core_units = units_for_core_from_split(core, crs1, crs2, upc1, upc2);
         uint32_t num_blocks = 0;
         if (attrs.token_count_aware) {
@@ -561,10 +481,6 @@ ttnn::device_operation::CachedProgram<PerTokenCastToFp8SharedVariables> create_p
                 tensor_args.expert_token_counts->buffer()->address(),
                 tensor_args.global_expert_idx_table->buffer()->address(),
                 i};
-            if (attrs.per_row_scale) {
-                const auto x = per_row_exchange_args(i);
-                wargs.insert(wargs.end(), x.begin(), x.end());
-            }
             if (mcast_rows) {
                 wargs.push_back(rows_sem);
             }

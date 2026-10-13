@@ -73,7 +73,6 @@ def run_single_routed_expert(
     weights_dtype=ttnn.bfloat4_b,
     pcc_threshold: float = 0.97,
     min_cap_frac: tuple[float, float] | None = None,
-    x_fp8_row_scaled: bool = False,
 ):
     """
     Simplest scenario: 1 chip, 1 expert. Shared body for the per-model entrypoints below — they
@@ -102,10 +101,6 @@ def run_single_routed_expert(
     down matmul. That is a property of bf4 + saturation rather than of the kernel (SiTU-GLU
     holds ~0.999 at every scale with bf8/bf16 weights, and the SFPU op passes its own
     saturation-coverage test), so a saturated bf4 case needs its own bar to stay meaningful.
-
-    ``x_fp8_row_scaled`` feeds x as ROW_MAJOR e4m3 with one pow2 fp32 scale per token row, carried in word 3 of
-    a dispatch-metadata-shaped tensor (the per-token fp8 dispatch wire); the op applies the scale to its gate/up
-    accumulators. Implies ``x_row_major``.
 
     ``min_cap_frac`` is a ``(gate, up)`` pair of minimum fractions of activation inputs that
     must land past their respective cap (beta for SiTU-GLU, ±limit for clamped SiLU-GLU, where
@@ -199,35 +194,13 @@ def run_single_routed_expert(
     # The composite op branches on x layout: ROW_MAJOR is bf16 (tilized and bf8-packed
     # inside the op), TILE is consumed directly as bf8. Pair the dtype with the layout so
     # each variation drives its real device path.
-    tt_row_scales = None
-    if x_fp8_row_scaled:
-        row_scale = torch.pow(
-            2.0, torch.ceil(torch.log2(torch_input.abs().amax(-1, keepdim=True).clamp(min=1e-4) / 448.0))
-        )
-        metadata = torch.zeros(allocated_tokens, 4, dtype=torch.int32)
-        metadata[:, 3:] = row_scale.contiguous().view(torch.int32)
-        tt_row_scales = ttnn.from_torch(
-            metadata,
-            mesh_mapper=ttnn.ReplicateTensorToMesh(device),
-            layout=ttnn.ROW_MAJOR_LAYOUT,
-            device=device,
-            dtype=ttnn.uint32,
-        )
-        tt_input = ttnn.from_torch(
-            (torch_input / row_scale).to(torch.float8_e4m3fn).float(),
-            mesh_mapper=ttnn.ReplicateTensorToMesh(device),
-            layout=ttnn.ROW_MAJOR_LAYOUT,
-            device=device,
-            dtype=ttnn.fp8_e4m3,
-        )
-    else:
-        tt_input = ttnn.from_torch(
-            torch_input,
-            mesh_mapper=ttnn.ReplicateTensorToMesh(device),
-            layout=ttnn.ROW_MAJOR_LAYOUT if x_row_major else ttnn.TILE_LAYOUT,
-            device=device,
-            dtype=ttnn.bfloat16 if x_row_major else ttnn.bfloat8_b,
-        )
+    tt_input = ttnn.from_torch(
+        torch_input,
+        mesh_mapper=ttnn.ReplicateTensorToMesh(device),
+        layout=ttnn.ROW_MAJOR_LAYOUT if x_row_major else ttnn.TILE_LAYOUT,
+        device=device,
+        dtype=ttnn.bfloat16 if x_row_major else ttnn.bfloat8_b,
+    )
     logger.debug(f"TTNN input shape: {tt_input.shape}")
 
     # Single-expert auxiliaries (1D, length 1, UINT32 ROW_MAJOR DRAM):
@@ -266,7 +239,7 @@ def run_single_routed_expert(
 
     # Run TTNN forward
     logger.debug("Running TTNN forward...")
-    tt_output = tt_expert(tt_input, expert_token_counts_tt, expert_region_offsets_tt, x_row_scales=tt_row_scales)
+    tt_output = tt_expert(tt_input, expert_token_counts_tt, expert_region_offsets_tt)
     logger.debug(f"TTNN output shape: {tt_output.shape}")
 
     # Convert back to torch for comparison. For a 1-device replicated tensor,
@@ -451,25 +424,6 @@ def test_single_routed_expert_k3_sweep(device, num_tokens: int, x_row_major: boo
         KimiK3Config.MOE_INTERMEDIATE_SIZE,
         x_row_major=x_row_major,
         activation=ttnn.RoutedExpertActivation.SituGlu,
-    )
-
-
-@pytest.mark.parametrize(
-    "allocated_tokens, active_tokens", [(256, 256), (5120, 37), (5120, 1000)], ids=["full256", "a37", "a1000"]
-)
-@pytest.mark.skipif(not is_blackhole(), reason="SiTU-GLU routed expert and Fp8_e4m3 CBs are Blackhole-only")
-def test_single_routed_expert_k3_fp8_row_scaled(device, allocated_tokens: int, active_tokens: int):
-    """Kimi K3 expert fed by the per-token fp8 dispatch wire: ROW_MAJOR e4m3 x plus one pow2 fp32 scale per
-    token in word 3 of the dispatch metadata, applied to the gate/up accumulators (fused DQ1, fp32 DEST)."""
-    run_single_routed_expert(
-        device,
-        allocated_tokens,
-        KimiK3Config.ROUTED_EXPERT_HIDDEN_SIZE,
-        KimiK3Config.MOE_INTERMEDIATE_SIZE,
-        active_tokens=active_tokens,
-        x_row_major=True,
-        activation=ttnn.RoutedExpertActivation.SituGlu,
-        x_fp8_row_scaled=True,
     )
 
 

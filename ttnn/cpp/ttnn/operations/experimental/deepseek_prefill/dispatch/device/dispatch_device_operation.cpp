@@ -13,7 +13,7 @@
 namespace ttnn::operations::experimental::deepseek_prefill::dispatch {
 
 // per_token_cast_to_fp8 block-wise quantization: 128 elements share one fp32 scale.
-constexpr uint32_t numbers_per_scale_block = 128;  // default; 64 and 32 are also accepted
+constexpr uint32_t numbers_per_scale_block = 128;
 
 void DispatchDeviceOperation::validate_on_program_cache_miss(
     const operation_attributes_t& operation_attributes, const tensor_args_t& tensor_args) {
@@ -131,19 +131,15 @@ void DispatchDeviceOperation::validate_on_program_cache_miss(
             "scales row count ({}) must match input token count ({})",
             scale_rows,
             input_tokens);
-        // input hidden divisible by the scale block size with one scale per block. The block size is
-        // implied by the scales tensor: 128 (DeepSeek 1x128) or 64 / 32 (32 = MXFP8 granularity).
-        // num_scales == 1 is one scale per token row (per-token quantization).
-        const bool block_ok = num_scales == 1 || (num_scales > 0 && input_hidden % num_scales == 0 &&
-                                                  (input_hidden / num_scales == numbers_per_scale_block ||
-                                                   input_hidden / num_scales == 64 || input_hidden / num_scales == 32));
+        // input hidden divisible by the scale block size with one scale per block
         TT_FATAL(
-            block_ok,
-            "fp8_scaled_input requires one fp32 scale per {}, 64 or 32 elements of the input hidden dim ({}); got {} "
-            "scale words",
-            numbers_per_scale_block,
+            input_hidden % numbers_per_scale_block == 0 && num_scales == input_hidden / numbers_per_scale_block,
+            "fp8_scaled_input requires input hidden dim ({}) divisible by {} with one fp32 scale per "
+            "block; got {} scale words (expected {})",
             input_hidden,
-            num_scales);
+            numbers_per_scale_block,
+            num_scales,
+            input_hidden / numbers_per_scale_block);
     } else {
         TT_FATAL(
             !tensor_args.scales_tensor.has_value(),

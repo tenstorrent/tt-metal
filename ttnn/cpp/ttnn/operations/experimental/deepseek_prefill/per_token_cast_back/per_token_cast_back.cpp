@@ -23,7 +23,6 @@ ttnn::Tensor per_token_cast_back(
     const std::optional<ttnn::Tensor>& metadata,
     uint32_t scale_block_w,
     bool scales_in_row_tail,
-    bool per_row_scale,
     bool tile_output,
     uint32_t row_segments) {
     const auto dtype = output_dtype.value_or(tt::tt_metal::DataType::BFLOAT16);
@@ -54,7 +53,6 @@ ttnn::Tensor per_token_cast_back(
             /*scales_from_metadata=*/false,
             scale_block_w,
             /*scales_in_row_tail=*/true,
-            per_row_scale,
             tile_output,
             row_segments);
     }
@@ -79,8 +77,7 @@ ttnn::Tensor per_token_cast_back(
             /*experts_per_chip=*/0,
             /*scales_from_metadata=*/false,
             scale_block_w,
-            /*scales_in_row_tail=*/false,
-            per_row_scale);
+            /*scales_in_row_tail=*/false);
     }
 
     // Token-count-aware path. Exactly one scale source: either a plain fp32 (M, H/128) scale tensor, or
@@ -107,8 +104,7 @@ ttnn::Tensor per_token_cast_back(
         experts_per_chip,
         scales_from_metadata,
         scale_block_w,
-        /*scales_in_row_tail=*/false,
-        per_row_scale);
+        /*scales_in_row_tail=*/false);
 }
 
 }  // namespace ttnn::operations::experimental::deepseek_prefill::per_token_cast_back

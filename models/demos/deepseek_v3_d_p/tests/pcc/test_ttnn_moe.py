@@ -139,7 +139,7 @@ def run_model(
     gate_up_scale=1.0,
     score_func=None,
     skip_upstream_reference=False,
-    dispatch_wire=None,
+    moe_model_config=None,
 ):
     """TtMoe PCC body — shared by every per-model test in this file.
 
@@ -158,6 +158,10 @@ def run_model(
     the shared expert's; each is mirrored onto the matching torch reference. They are separate knobs
     because the two sites run different implementations -- a fused kernel vs the Python-composed
     ttnn ops in TtSharedExpert -- even where Kimi-K3 sets both to SiTU (#53625).
+
+    ``moe_model_config`` supplies the MoE settings the model ships -- the dispatch/combine wire and the
+    routed-expert hybrid threshold -- and defaults to the variant's config. test_glm_moe runs under the DSv3
+    variant (for its reference) and passes GLM53Config here.
 
     ``clamped_silu_glu_limit`` is required by the clamped activation and ignored otherwise.
     ``gate_up_scale`` multiplies the routed and shared gate/up projections in place so they reach
@@ -513,6 +517,7 @@ def run_model(
     # ========================================
     profiler.start("tt_moe_creation")
     logger.debug("Creating TtMoe...")
+    moe_cfg = moe_model_config or variant.model_config
     tt_moe = TtMoe(
         mesh_device=mesh_device,
         dispatch_group_size=dispatch_group_size,
@@ -537,10 +542,7 @@ def run_model(
         # takes it too, so every variant this file can run is graded on the dispatch it ships -- the
         # fused-only sentinel for K2.7, 1792 for GLM 5.2, absent (single-op) everywhere else,
         # K3 included: its crossover is measured but parked until the split is enabled for it.
-        # MOE_HYBRID_THRESHOLD overrides the variant's value (e.g. GLM's 320 under the DSv3 reference variant).
-        routed_expert_hybrid_token_threshold=int(os.environ["MOE_HYBRID_THRESHOLD"])
-        if os.environ.get("MOE_HYBRID_THRESHOLD")
-        else getattr(variant.model_config, "ROUTED_EXPERT_HYBRID_TOKEN_THRESHOLD", None),
+        routed_expert_hybrid_token_threshold=getattr(moe_cfg, "ROUTED_EXPERT_HYBRID_TOKEN_THRESHOLD", None),
         shared_expert_activations_dtype=ttnn.bfloat16,
         shared_expert_weights_dtype=ttnn.bfloat8_b,
         shared_expert_activation=shared_activation,
@@ -562,10 +564,10 @@ def run_model(
         latent_weights=latent_weights,
         latent_use_norm=latent_use_norm,
         rms_norm_eps=rms_norm_eps,
-        # MOE_DISPATCH_WIRE=fp8 selects the fp8 dispatch wire (K3 fp8 plan) without a new param id.
-        dispatch_wire=dispatch_wire or os.environ.get("MOE_DISPATCH_WIRE", "bf16"),
-        fp8_scale_block=int(os.environ.get("MOE_FP8_SCALE_BLOCK", "0")),
-        combine_wire=os.environ.get("MOE_COMBINE_WIRE", "bf16"),
+        # The wire the model ships (TtPrefillBlock reads the same attributes): fp8 for K3 and GLM 5.3, else bf16.
+        dispatch_wire=getattr(moe_cfg, "MOE_DISPATCH_WIRE", "bf16"),
+        fp8_scale_block=getattr(moe_cfg, "MOE_FP8_SCALE_BLOCK", 32),
+        combine_wire=getattr(moe_cfg, "MOE_COMBINE_WIRE", "bf16"),
     )
     ttnn.synchronize_device(mesh_device)
     profiler.end("tt_moe_creation")
@@ -691,7 +693,7 @@ def run_model(
             continue
         tt_host = ttnn.to_torch(tt_tensor, mesh_composer=composer, dtype=torch.bfloat16)
         _, pcc = comp_pcc(torch_tensor.float(), tt_host.float())
-        # Wire-format numerics gate (K3 fp8 plan §1.2): metrics PCC cannot see.
+        # Numerics PCC cannot see: a uniform scale error (norm_drift) leaves PCC unchanged.
         ref_f, tt_f = torch_tensor.float().reshape(-1, torch_tensor.shape[-1]), tt_host.float().reshape(
             -1, tt_host.shape[-1]
         )
@@ -1078,6 +1080,7 @@ def test_glm_moe(
         request,
         is_balanced=is_balanced,
         padded_percent=padded_percent,
+        moe_model_config=GLM53Config,
     )
 
 

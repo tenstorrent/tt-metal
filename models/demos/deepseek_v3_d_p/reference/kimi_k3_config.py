@@ -133,6 +133,12 @@ class KimiK3Config:
     # from Python-level ttnn ops (there is no fused kernel at 6144 / 33792 wide).
     ROUTED_EXPERT_ACTIVATION = "situ"
     SHARED_EXPERT_ACTIVATION = "situ"
+    # MoE dispatch/combine wire: fp8 e4m3 rows with one pow2 fp32 scale per 32 elements (rounded to nearest even);
+    # Q1 runs on each chip's latent slice before the all-gather. 8x4 Galaxy: traced MoE 6.50 -> 5.57 ms, 24-layer
+    # model 286 -> 259 ms per 5120-token chunk, KV PCC 0.99380 -> 0.99371. "bf16" turns it off.
+    MOE_DISPATCH_WIRE = "fp8"
+    MOE_COMBINE_WIRE = "fp8"
+    MOE_FP8_SCALE_BLOCK = 32
     DENSE_FFN_ACTIVATION = "situ"
     # Must match SituGluConfigKimi, which the fused routed-expert kernel bakes in; the two composed
     # sites read these directly, so all three activations stay on one pair of betas.

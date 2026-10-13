@@ -28,14 +28,11 @@
 #ifdef TOKEN_COUNT_AWARE
 #include "ttnn/cpp/ttnn/operations/experimental/deepseek_prefill/per_token_cast_to_fp8/device/kernels/dataflow/count_aware_range.hpp"
 #endif
-#ifdef PER_ROW_SCALE
-#include "ttnn/cpp/ttnn/operations/experimental/deepseek_prefill/per_token_cast_to_fp8/device/kernels/dataflow/per_row_assignment.hpp"
-#endif
 
 void kernel_main() {
 #ifdef INPUT_TILE_LAYOUT
     uint32_t src_addr = get_arg_val<uint32_t>(0);
-#if !defined(TOKEN_COUNT_AWARE) && !defined(PER_ROW_SCALE)
+#ifndef TOKEN_COUNT_AWARE
     uint32_t block_offset = get_arg_val<uint32_t>(1);          // first global block of this core
     uint32_t num_blocks = get_arg_val<uint32_t>(2);            // blocks owned by this core
 #endif
@@ -69,10 +66,6 @@ void kernel_main() {
 
     const auto src = TensorAccessor(src_args, src_addr);
     Noc noc;
-#if defined(PER_ROW_SCALE) && !defined(TOKEN_COUNT_AWARE)
-    const PerRowAssignment work =
-        per_row_assignment(get_arg_val<uint32_t>(1), get_arg_val<uint32_t>(2), PR_SEGMENTS, PR_GROUP);
-#endif
 #ifdef TOKEN_COUNT_AWARE
     // Expert-buffer mode: this core's slice of the valid prefix, computed on device; num_blocks is
     // published to the compute kernel through the loop-count mailbox.
@@ -95,26 +88,6 @@ void kernel_main() {
     CircularBuffer cb_region_scratch_obj(cb_region_scratch);
     CircularBuffer cb_counts_scratch_obj(cb_counts_scratch);
     CircularBuffer cb_table_scratch_obj(cb_table_scratch);
-#ifdef PER_ROW_SCALE
-    const PerRowAssignment work = per_row_assignment(
-        core_id,
-        count_aware_valid_tile_rows(
-            noc,
-            region,
-            counts,
-            table,
-            cb_region_scratch_obj,
-            cb_counts_scratch_obj,
-            cb_table_scratch_obj,
-            ca_experts_per_chip,
-            ca_max_rows,
-            tile_h),
-        PR_SEGMENTS,
-        PR_GROUP);
-    const uint32_t num_blocks = work.num_rows;
-    (void)ca_chunks_per_row;
-    (void)ca_num_cores;
-#else
     // Host-assigned share of the units (runtime args 5 / 6, 1/65536 units).
     // Core 0 reads the routing tables and multicasts the valid tile-row count (args 7..12: semaphore id, NoC 0
     // multicast rectangle, destination count); the writer reads it from the same semaphore.
@@ -154,15 +127,12 @@ void kernel_main() {
         get_arg_val<uint32_t>(6));
     const uint32_t block_offset = range.first_block;
     const uint32_t num_blocks = range.num_blocks;
-#endif
     {
         CircularBuffer cb_loop_count_obj(cb_loop_count);
         cb_loop_count_obj.reserve_back(1);
         reinterpret_cast<volatile tt_l1_ptr uint32_t*>(cb_loop_count_obj.get_write_ptr())[0] = num_blocks;
-#ifndef PER_ROW_SCALE
         // First unit's global index: the compute closes write groups at tile-row ends.
         reinterpret_cast<volatile tt_l1_ptr uint32_t*>(cb_loop_count_obj.get_write_ptr())[1] = block_offset;
-#endif
         cb_loop_count_obj.push_back(1);
     }
 #endif
@@ -186,29 +156,6 @@ void kernel_main() {
     // Tiles are dense in tile-index space and one tile-row is exactly scale_blocks_per_row blocks wide
     // (num_w_tiles == scale_blocks_per_row * tiles_per_block), so global block g starts at tile g * tiles_per_block.
     const uint32_t in_tile_bytes = get_tile_size(cb_in);
-#ifdef PER_ROW_SCALE
-    // PER_ROW_SCALE: work unit = this core's column segment (PR_CPS chunks) of tile-rows grp, grp + PR_GROUP, ....
-    // The segment's tiles are contiguous in tile-index space; read them once (one barrier) and leave them
-    // resident in cb_in: compute runs both passes (partial row amax, quantize) over the same pages.
-    constexpr uint32_t seg_tiles = PR_CPS * tiles_per_block;
-    for (uint32_t k = 0; k < work.num_rows; ++k) {
-        const uint32_t row_tile = work.grp + k * PR_GROUP;
-        const uint32_t first_tile_id = (row_tile * PR_CHUNKS + work.seg * PR_CPS) * tiles_per_block;
-        // even rows -> cb_in, odd rows -> PR_CB_IN_ODD (the compute holds rows k and k+1 at once)
-        CircularBuffer row_cb((k & 1) ? PR_CB_IN_ODD : cb_in);
-        row_cb.reserve_back(seg_tiles);
-        for (uint32_t t = 0; t < seg_tiles; ++t) {
-            noc.async_read(
-                src,
-                row_cb,
-                in_tile_bytes,
-                {.page_id = first_tile_id + t, .offset_bytes = 0},
-                {.offset_bytes = t * in_tile_bytes});
-        }
-        noc.async_read_barrier();
-        row_cb.push_back(seg_tiles);
-    }
-#else
     const uint32_t global_block_end = block_offset + num_blocks;
     // A unit is Q_UNIT consecutive 128-wide chunks of one tile-row (contiguous tile ids in a TILE buffer).
     constexpr uint32_t unit_tiles = Q_UNIT * tiles_per_block;
@@ -230,7 +177,6 @@ void kernel_main() {
             }
         }
     }
-#endif
 #else
     // Stream 128-element blocks into tile_h-block batches, one bank-contiguous run per NoC read.
     const uint32_t end_row = start_row + num_rows;

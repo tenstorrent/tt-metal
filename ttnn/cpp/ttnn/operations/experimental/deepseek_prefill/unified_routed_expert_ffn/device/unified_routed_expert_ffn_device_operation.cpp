@@ -65,31 +65,7 @@ void UnifiedRoutedExpertFfnDeviceOperation::validate_on_program_cache_miss(
     //     sticks and the compute kernel tilizes them to bf8_b before the matmul,
     //     fusing the standalone to_layout. Off preserves the pre-fusion path for
     //     standalone / Wormhole callers.
-    if (op.x_row_scaled) {
-        TT_FATAL(op.x_is_row_major, "x_row_scaled requires a ROW_MAJOR x");
-        TT_FATAL(
-            t.x.dtype() == tt::tt_metal::DataType::FP8_E4M3, "x_row_scaled requires FP8_E4M3 x, got {}", t.x.dtype());
-        TT_FATAL(t.x_row_scales.has_value(), "x_row_scaled requires x_row_scales (the dispatch metadata)");
-        TT_FATAL(
-            t.x_row_scales->layout() == tt::tt_metal::Layout::ROW_MAJOR &&
-                (t.x_row_scales->dtype() == tt::tt_metal::DataType::INT32 ||
-                 t.x_row_scales->dtype() == tt::tt_metal::DataType::UINT32),
-            "x_row_scales must be INT32/UINT32 ROW_MAJOR");
-        TT_FATAL(
-            t.x_row_scales->logical_shape()[-2] == t.x.logical_shape()[-2] &&
-                op.x_row_scale_word < t.x_row_scales->logical_shape()[-1],
-            "x_row_scales must have one row per x row and hold word {}",
-            op.x_row_scale_word);
-        TT_FATAL(!op.fuse_bias, "x_row_scaled does not combine with fused biases");
-        TT_FATAL(
-            op.activation == RoutedExpertActivation::SituGlu || op.activation == RoutedExpertActivation::SwiGluOai ||
-                op.activation == RoutedExpertActivation::ClampedSiluGlu,
-            "x_row_scaled applies the scale in the fused binary activation; plain SiLU is not supported");
-        TT_FATAL(
-            t.x_row_scales->buffer()->aligned_page_size() <= 64,
-            "x_row_scales page ({} B) exceeds the 64-B metadata staging slot",
-            t.x_row_scales->buffer()->aligned_page_size());
-    } else if (op.x_is_row_major) {
+    if (op.x_is_row_major) {
         TT_FATAL(
             t.x.dtype() == tt::tt_metal::DataType::BFLOAT16,
             "x must be BFLOAT16 when x_is_row_major, got {}",
@@ -420,9 +396,7 @@ ttnn::Tensor unified_routed_expert_moe(
     const std::vector<ttnn::Tensor>& up_biases,
     const std::vector<ttnn::Tensor>& down_biases,
     uint32_t min_active_tokens,
-    uint32_t max_active_tokens,
-    const std::optional<ttnn::Tensor>& x_row_scales,
-    uint32_t x_row_scale_word) {
+    uint32_t max_active_tokens) {
     using OperationType =
         ttnn::operations::experimental::deepseek_prefill::unified_routed_expert_ffn::UnifiedRoutedExpertFfnDeviceOperation;
     return ttnn::device_operation::launch<OperationType>(
@@ -434,9 +408,7 @@ ttnn::Tensor unified_routed_expert_moe(
             .fuse_bias = !gate_biases.empty(),
             .compute_kernel_config = compute_kernel_config,
             .min_active_tokens = min_active_tokens,
-            .max_active_tokens = max_active_tokens,
-            .x_row_scaled = x_row_scales.has_value(),
-            .x_row_scale_word = x_row_scale_word},
+            .max_active_tokens = max_active_tokens},
         OperationType::tensor_args_t{
             .x = x,
             .gate_projs = gate_projs,
@@ -448,8 +420,7 @@ ttnn::Tensor unified_routed_expert_moe(
             .expert_region_offsets = expert_region_offsets,
             .gate_biases = gate_biases,
             .up_biases = up_biases,
-            .down_biases = down_biases,
-            .x_row_scales = x_row_scales});
+            .down_biases = down_biases});
 }
 
 }  // namespace ttnn::prim

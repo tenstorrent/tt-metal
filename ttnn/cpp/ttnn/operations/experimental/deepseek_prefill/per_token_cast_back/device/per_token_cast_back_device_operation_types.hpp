@@ -29,8 +29,6 @@ struct PerTokenCastBackParams {
     // Plain path only: each e4m3 input row is packed as [H e4m3 bytes | H/scale_block_w fp32 scales]
     // (the scaled FP8 combine output). input_scale is the same tensor; the output is H wide.
     bool scales_in_row_tail = false;
-    // One scale per token row (scale tensor / metadata tail holds a single fp32; packed rows end in a 64-B tail).
-    bool per_row_scale = false;
     // Token-count-aware, 1x32 row-tail scales only: write TILE output (output_dtype BFLOAT8_B / BFLOAT16) so the
     // consumer skips its tilize; nothing is untilized here.
     bool tile_output = false;

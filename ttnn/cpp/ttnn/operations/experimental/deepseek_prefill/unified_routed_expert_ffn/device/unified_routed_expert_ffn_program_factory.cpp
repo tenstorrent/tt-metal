@@ -68,10 +68,6 @@ constexpr uint32_t CB_X_RM = tt::CBIndex::c_16;
 constexpr uint32_t CB_GATE_BIAS = tt::CBIndex::c_17;
 constexpr uint32_t CB_UP_BIAS = tt::CBIndex::c_18;
 constexpr uint32_t CB_DOWN_BIAS = tt::CBIndex::c_19;
-// Per-token scaled fp8 x (x_row_scaled): fp32 tiles whose column 0 holds the 32 token-row scales of one
-// tile-row (reader-built, double-buffered per chunk), and the reader's metadata-row staging.
-constexpr uint32_t CB_ROW_SCALE = tt::CBIndex::c_20;
-constexpr uint32_t CB_ROW_SCALE_SCRATCH = tt::CBIndex::c_21;
 
 // Tile columns per DRAM ND shard of a weight tensor, or 0 when it is not ND-sharded (the
 // interleaved default). The kernels take this as a compile-time arg and coalesce a shard row into
@@ -140,9 +136,6 @@ void visit_writer_common_buffers(
     fn(start_buffer);
     visit_weight_buffers(t.up_projs, fn);
     visit_weight_buffers(t.down_projs, fn);
-    if (t.x_row_scales.has_value()) {
-        fn(t.x_row_scales->buffer());  // last common arg: the dispatch metadata (per-token fp8 scales)
-    }
 }
 
 template <typename Visit>
@@ -318,10 +311,8 @@ tt::tt_metal::ProgramDescriptor UnifiedRoutedExpertFfnProgramFactory::create_des
     // Single source of truth for the dst-accumulator mode: drives DST_CAPACITY,
     // the ComputeConfig below, and (via -DFP32_DEST_ACC_EN) the compute kernel's
     // SwiGLU-OAI dst budget + SFPU fp32-dest template, so they can't drift.
-    // fp8 x (x_row_scaled) puts an Fp8_e4m3 CB on every core, which Blackhole only allows with 32-bit DEST.
-    // The matmuls are unaffected by the smaller DEST (measured on K3); the activation keeps bf16-precision SiTU-GLU.
-    const bool kFp32DestAccEn = op.x_row_scaled;
-    const uint32_t DST_CAPACITY = kFp32DestAccEn ? 4u : 8u;
+    constexpr bool kFp32DestAccEn = false;
+    constexpr uint32_t DST_CAPACITY = kFp32DestAccEn ? 4u : 8u;
     const uint32_t gu_out_subblock_h = 1;
     uint32_t gu_sub_w = 1;
     for (uint32_t cand = DST_CAPACITY; cand >= 1; --cand) {
@@ -425,12 +416,7 @@ tt::tt_metal::ProgramDescriptor UnifiedRoutedExpertFfnProgramFactory::create_des
         total += static_cast<uint64_t>(M * w_gu * (op.x_is_row_major ? 1 : 2)) *
                  in0_x_tile_size;  // cb_in0_x (RM: single-buf)
         if (op.x_is_row_major) {
-            total += static_cast<uint64_t>(M * w_gu * 2) *
-                     tt::tile_size(op.x_row_scaled ? tt::DataFormat::Fp8_e4m3 : tt::DataFormat::Float16_b);  // cb_x_rm
-        }
-        if (op.x_row_scaled) {
-            total += static_cast<uint64_t>(M * 2) * tt::tile_size(tt::DataFormat::Float32);  // cb_row_scale
-            total += static_cast<uint64_t>(M) * 32 * 64;                                     // metadata staging
+            total += static_cast<uint64_t>(M * w_gu * 2) * partials_gu_tile_size;  // cb_x_rm (bf16 staging)
         }
         total += static_cast<uint64_t>(w_gu * per_core_N_gu * 2) * gate_tile_size;          // cb_in1_gate
         total += static_cast<uint64_t>(w_gu * per_core_N_gu * 2) * up_tile_size;            // cb_in1_up
@@ -732,14 +718,11 @@ tt::tt_metal::ProgramDescriptor UnifiedRoutedExpertFfnProgramFactory::create_des
     // mid-mcast and deadlocks. Skipped when x is TILE so the bf8_b path's L1 is
     // unchanged.
     if (op.x_is_row_major) {
-        const tt::DataFormat x_rm_df = op.x_row_scaled ? tt::DataFormat::Fp8_e4m3 : tt::DataFormat::Float16_b;
-        make_cb(CB_X_RM, x_rm_df, /*tiles=*/gu_in0_block_num_tiles * 2, tt::tile_size(x_rm_df));
-    }
-    if (op.x_row_scaled) {
         make_cb(
-            CB_ROW_SCALE, tt::DataFormat::Float32, /*tiles=*/per_core_M * 2, tt::tile_size(tt::DataFormat::Float32));
-        // Whole metadata pages for one chunk's tile-rows (the writer reads them all before assembling).
-        make_cb(CB_ROW_SCALE_SCRATCH, tt::DataFormat::UInt32, /*tiles=*/1, per_core_M * 32 * 64);
+            CB_X_RM,
+            tt::DataFormat::Float16_b,
+            /*tiles=*/gu_in0_block_num_tiles * 2,
+            tt::tile_size(tt::DataFormat::Float16_b));
     }
     make_cb(CB_IN1_GATE, gate_df, /*tiles=*/gu_in1_block_num_tiles * 2, gate_tile_size);
     make_cb(CB_IN1_UP, up_df, /*tiles=*/gu_in1_block_num_tiles * 2, up_tile_size);
@@ -930,7 +913,7 @@ tt::tt_metal::ProgramDescriptor UnifiedRoutedExpertFfnProgramFactory::create_des
         TILE,
         // X_RM_ELEM_BYTES — byte size of one row-major x element (x is bf16 in
         // the row-major path).
-        op.x_row_scaled ? 1u : tt::datum_size(tt::DataFormat::Float16_b),
+        tt::datum_size(tt::DataFormat::Float16_b),
         // DOWN_SPLIT: K-rows of each down block this RISC keeps; the writer reads the
         // rest on NoC 1. Equals in0_block_w_d when the split is off.
         down_split_k,  // 30
@@ -1055,20 +1038,6 @@ tt::tt_metal::ProgramDescriptor UnifiedRoutedExpertFfnProgramFactory::create_des
     writer_kernel_desc.core_ranges = core_range_set;
     writer_kernel_desc.compile_time_args = std::move(writer_ct_args);
     writer_kernel_desc.config = tt::tt_metal::WriterConfigDescriptor{};
-    if (op.x_row_scaled) {
-        // Per-token fp8 scales: the writer (idle during gate/up on most cores) fills CB_ROW_SCALE from the
-        // dispatch metadata (its last common arg) once per chunk; compute consumes it in the activation phase.
-        tt::tt_metal::KernelDescriptor::Defines writer_defines;
-        writer_defines.emplace_back("X_ROW_SCALE", "1");
-        writer_defines.emplace_back("CB_ROW_SCALE", std::to_string(CB_ROW_SCALE));
-        writer_defines.emplace_back("CB_ROW_SCALE_SCRATCH", std::to_string(CB_ROW_SCALE_SCRATCH));
-        writer_defines.emplace_back("ROW_SCALE_TILES", std::to_string(per_core_M));
-        writer_defines.emplace_back("ROW_SCALE_WORD", std::to_string(op.x_row_scale_word));
-        writer_defines.emplace_back(
-            "ROW_SCALE_PAGE_BYTES", std::to_string(t.x_row_scales->buffer()->aligned_page_size()));
-        writer_defines.emplace_back("COMMON_ROW_SCALE", std::to_string(2 + 2 * op.experts_per_chip));
-        writer_kernel_desc.defines = std::move(writer_defines);
-    }
 
     // Compute kernel compile-time args: positional + named CB ids.
     std::vector<uint32_t> compute_ct_args = {
@@ -1171,11 +1140,6 @@ tt::tt_metal::ProgramDescriptor UnifiedRoutedExpertFfnProgramFactory::create_des
         // Clamped SiLU-GLU (DeepSeek V4), with limit=10.0 (ClampedSiluGluConfigDsV4) baked
         // into the kernel.
         compute_defines.emplace_back("CLAMPED_SILU_GLU", "1");
-    }
-    if (op.x_row_scaled) {
-        // Per-token fp8 scale applied to the gate/up accumulators (column broadcast) before the activation.
-        compute_defines.emplace_back("X_ROW_SCALE", "1");
-        compute_named_args.emplace_back("cb_row_scale", CB_ROW_SCALE);
     }
     if (fuse_bias) {
         // FUSE_BIAS: add gate/up bias (broadcast across rows) before the fused binary

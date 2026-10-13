@@ -83,18 +83,22 @@ void PostCombineReduceDeviceOperation::validate_on_program_cache_miss(
     const auto& expert_dispatch_table = tensor_args.expert_dispatch_table;
 
     TT_FATAL(combine_output.layout() == ttnn::Layout::ROW_MAJOR, "combine_output must be ROW_MAJOR");
-    // FP8_E4M3 = per-token scaled-fp8 combine rows [H e4m3 | 64-B tail, fp32 scale at byte H], dequantized
-    // inside this op (fused DQ2).
+    // FP8_E4M3 = 1xB block-scaled fp8 combine rows [H e4m3 | H/B fp32 scales], dequantized inside this op
+    // (fused DQ2). Per-row scaled fp8 (fp8_scale_block_w = 0) is not supported.
     TT_FATAL(
         combine_output.dtype() == DataType::BFLOAT16 ||
             (combine_output.dtype() == DataType::FP8_E4M3 && indices.has_value()),
-        "combine_output must be bfloat16, or packed per-token FP8_E4M3 rows (DeepSeek skip path only)");
+        "combine_output must be bfloat16, or packed block-scaled FP8_E4M3 rows (DeepSeek skip path only)");
+    TT_FATAL(
+        combine_output.dtype() != DataType::FP8_E4M3 || operation_attributes.fp8_scale_block_w != 0,
+        "FP8_E4M3 combine_output requires fp8_scale_block_w = 32 / 64 / 128 (1xB block scales); per-row scaled fp8 "
+        "(fp8_scale_block_w = 0) is not supported");
     TT_FATAL(
         operation_attributes.fp8_scale_block_w == 0 ||
             ((operation_attributes.fp8_scale_block_w == 32 || operation_attributes.fp8_scale_block_w == 64 ||
               operation_attributes.fp8_scale_block_w == 128) &&
              combine_output.dtype() == DataType::FP8_E4M3),
-        "fp8_scale_block_w must be 0, or 32 / 64 / 128 with FP8_E4M3 combine rows; got {}",
+        "fp8_scale_block_w must be 0 (bfloat16 combine rows), or 32 / 64 / 128 with FP8_E4M3 combine rows; got {}",
         operation_attributes.fp8_scale_block_w);
     TT_FATAL(weights.layout() == ttnn::Layout::ROW_MAJOR, "weights must be ROW_MAJOR");
     TT_FATAL(weights.dtype() == DataType::BFLOAT16, "weights must be bfloat16");
@@ -135,11 +139,9 @@ tt::tt_metal::TensorSpec PostCombineReduceDeviceOperation::compute_output_specs(
     const bool fp8_in = combine_output.dtype() == DataType::FP8_E4M3;
     auto out_shape = output_shape;
     if (fp8_in) {
-        // drop the 64-B row-scale tail, or the H/32 fp32 block scales (row = H + 4 * H / 32 = 9 H / 8)
-        out_shape[-1] = operation_attributes.fp8_scale_block_w != 0
-                            ? output_shape[-1] * operation_attributes.fp8_scale_block_w /
-                                  (operation_attributes.fp8_scale_block_w + 4)
-                            : output_shape[-1] - 64;
+        // drop the H/B fp32 block scales (row = H + 4 * H / B)
+        out_shape[-1] =
+            output_shape[-1] * operation_attributes.fp8_scale_block_w / (operation_attributes.fp8_scale_block_w + 4);
     }
     return tt::tt_metal::TensorSpec(
         out_shape,

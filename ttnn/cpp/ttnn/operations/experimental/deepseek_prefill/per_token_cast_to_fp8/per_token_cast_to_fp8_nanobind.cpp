@@ -57,7 +57,6 @@ void bind_experimental_per_token_cast_to_fp8_operation(nb::module_& mod) {
         nb::arg("global_expert_idx_table") = nb::none(),
         nb::arg("experts_per_chip") = 0,
         nb::arg("pack_scales_in_row") = false,
-        nb::arg("per_row_scale") = false,
         nb::arg("packed_row_align") = 0);
 }
 

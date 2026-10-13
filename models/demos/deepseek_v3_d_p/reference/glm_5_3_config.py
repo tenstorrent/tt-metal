@@ -34,6 +34,11 @@ class GLM53Config:
     # routed-expert matmul shape, expert count and activation (6144x2048, 256 experts, top-8, no
     # pre-projection, SiLU). Re-measure if any of those change.
     ROUTED_EXPERT_HYBRID_TOKEN_THRESHOLD = 320
+    # MoE dispatch/combine wire: fp8 e4m3 rows with one pow2 fp32 scale per 128 elements (rounded to nearest even).
+    # 8x4 Galaxy, traced MoE: 3.33 -> 2.70 ms; final_output PCC 0.98813 -> 0.98774. "bf16" turns it off.
+    MOE_DISPATCH_WIRE = "fp8"
+    MOE_COMBINE_WIRE = "fp8"
+    MOE_FP8_SCALE_BLOCK = 128
     INTERMEDIATE_SIZE = 12288  # Dense FFN hidden dimension
 
     # MoE configuration

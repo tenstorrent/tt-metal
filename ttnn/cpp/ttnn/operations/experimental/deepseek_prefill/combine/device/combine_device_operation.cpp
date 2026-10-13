@@ -64,34 +64,29 @@ void CombineDeviceOperation::validate_on_program_cache_miss(
         !operation_attributes.output_mem_config.is_sharded(),
         "Output memory config must be interleaved (L1 or DRAM), not sharded");
 
+    if (operation_attributes.fp8_scaled_combine) {
+        auto arch = tensor_args.dispatched_buffer.device()->arch();
+        TT_FATAL(
+            arch == tt::ARCH::BLACKHOLE, "fp8_scaled_combine=true requires Blackhole hardware (got arch {})", arch);
+        TT_FATAL(!operation_attributes.use_fp8_combine, "fp8_scaled_combine and use_fp8_combine are exclusive");
+        // Combine does not quantize: the buffer must already hold packed [H e4m3 | H/32 fp32 scales]
+        // rows (per_token_cast_to_fp8 upstream), which are moved byte for byte.
+        TT_FATAL(
+            tensor_args.dispatched_buffer.layout() == tt::tt_metal::Layout::ROW_MAJOR,
+            "fp8_scaled_combine=true requires a ROW_MAJOR dispatched buffer of packed FP8_E4M3 rows "
+            "(quantize upstream with per_token_cast_to_fp8); TILE input is not supported (got layout {})",
+            tensor_args.dispatched_buffer.layout());
+        TT_FATAL(
+            tensor_args.dispatched_buffer.dtype() == DataType::FP8_E4M3,
+            "fp8_scaled_combine=true expects packed FP8_E4M3 rows, got {}",
+            tensor_args.dispatched_buffer.dtype());
+    }
     // FP8 output is only supported on Blackhole, and only when the dispatched buffer is TILE.
     // The BF16 -> FP8 conversion happens in the packer when the untilize compute kernel writes
     // tiles into the untilize CB (which inherits the output tensor's Fp8_e4m3 DataFormat).
     // The ROW_MAJOR path has no untilize stage, so the reader would forward unconverted BF16
     // bytes through FP8-sized output pages, producing corrupt output (local writes) or
     // overrunning the output-sized writer CB (non-local writes).
-    if (operation_attributes.fp8_scaled_combine) {
-        auto arch = tensor_args.dispatched_buffer.device()->arch();
-        TT_FATAL(
-            arch == tt::ARCH::BLACKHOLE, "fp8_scaled_combine=true requires Blackhole hardware (got arch {})", arch);
-        TT_FATAL(!operation_attributes.use_fp8_combine, "fp8_scaled_combine and use_fp8_combine are exclusive");
-        if (tensor_args.dispatched_buffer.layout() == tt::tt_metal::Layout::TILE) {
-            // Quantized here, in the untilize stage (one scale per 32-wide tile row).
-            const auto& tile = tensor_args.dispatched_buffer.tensor_spec().tile();
-            TT_FATAL(
-                tile.get_height() == 32 && tile.get_width() == 32,
-                "fp8_scaled_combine=true requires 32x32 tiles (one scale per 32-wide tile row)");
-            TT_FATAL(
-                tensor_args.dispatched_buffer.logical_shape()[-1] % 128 == 0,
-                "fp8_scaled_combine=true requires hidden dim % 128 == 0, got {}",
-                tensor_args.dispatched_buffer.logical_shape()[-1]);
-        } else {
-            // Already quantized upstream: packed [H e4m3 | H/32 fp32] rows, moved byte for byte.
-            TT_FATAL(
-                tensor_args.dispatched_buffer.dtype() == DataType::FP8_E4M3,
-                "fp8_scaled_combine with a ROW_MAJOR buffer expects packed FP8_E4M3 rows");
-        }
-    }
     if (operation_attributes.use_fp8_combine) {
         auto arch = tensor_args.dispatched_buffer.device()->arch();
         TT_FATAL(arch == tt::ARCH::BLACKHOLE, "use_fp8_combine=true requires Blackhole hardware (got arch {})", arch);
@@ -149,16 +144,6 @@ CombineDeviceOperation::spec_return_value_t CombineDeviceOperation::compute_outp
     auto output_dtype = (operation_attributes.use_fp8_combine || operation_attributes.fp8_scaled_combine)
                             ? DataType::FP8_E4M3
                             : DataType::BFLOAT16;
-    if (operation_attributes.fp8_scaled_combine &&
-        tensor_args.dispatched_buffer.layout() == tt::tt_metal::Layout::TILE) {
-        // Packed row: [hidden_dim e4m3 bytes | hidden_dim/32 fp32 scales (4 bytes each)].
-        output_shape = ttnn::Shape(
-            {1,
-             1,
-             operation_attributes.seq_len_per_chip,
-             operation_attributes.num_experts_per_tok,
-             hidden_dim + hidden_dim / 8});
-    }
 
     auto output_spec = tt::tt_metal::TensorSpec(
         Shape(output_shape), tt::tt_metal::TensorLayout(output_dtype, tt::tt_metal::PageConfig(layout), mem_config));

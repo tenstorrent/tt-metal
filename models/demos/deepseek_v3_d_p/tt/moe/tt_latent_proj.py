@@ -344,10 +344,6 @@ class TtLatentMoeProjections(LightweightModule):
 
     # The tp_factor == 1 branches here and in from_latent are exercised by local runs only; every CI
     # row pins fabric2d-mesh-8x4.
-    def fp8_gather_buffer(self) -> Optional[ttnn.Tensor]:
-        """The persistent buffer to_latent(fp8_block=32) returns; callers must not deallocate it."""
-        return self._fp8_gathered
-
     def to_latent(self, x: ttnn.Tensor, fp8_block: int = 0) -> ttnn.Tensor:
         """emb_dim (replicated) -> routed_emb_dim (replicated). Runs before dispatch.
 
@@ -385,7 +381,7 @@ class TtLatentMoeProjections(LightweightModule):
                 latent,
                 memory_config=ttnn.DRAM_MEMORY_CONFIG,
                 round_scale_to_power_of_two=True,
-                round_to_nearest_even=False,
+                round_to_nearest_even=True,
                 scale_block_w=fp8_block,
                 pack_scales_in_row=True,
                 packed_row_align=64,

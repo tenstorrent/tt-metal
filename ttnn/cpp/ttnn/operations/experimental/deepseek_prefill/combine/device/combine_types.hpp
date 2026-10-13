@@ -25,8 +25,8 @@ struct CombineParams {
     bool init_zeros;
     bool use_l1_small_for_semaphores = false;
     bool use_fp8_combine = false;
-    // Scaled FP8 combine: each output row is [H e4m3 bytes | H/32 fp32 scales] (one scale per 1x32
-    // block = one tile row), quantized with power-of-two scales and round-to-nearest-even.
+    // Scaled FP8 combine: the ROW_MAJOR dispatched buffer already holds packed [H e4m3 | H/32 fp32 scales]
+    // rows (quantized upstream); combine moves them byte for byte. TILE input is rejected.
     bool fp8_scaled_combine = false;
 
     static constexpr auto attribute_names = std::forward_as_tuple(

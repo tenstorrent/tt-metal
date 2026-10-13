@@ -560,11 +560,9 @@ def test_cast_to_fp8_scale_block_w(device, shape, scale_block_w, input_layout, r
         logger.info(f"rne signed bias {bias:.3e}")
 
 
-@pytest.mark.parametrize("scale_block_w", [32, 128, 0], ids=lambda b: f"block_w{b}" if b else "per_row")
+@pytest.mark.parametrize("scale_block_w", [32, 128], ids=lambda b: f"block_w{b}")
 def test_token_count_aware_cast_back_scale_block_w(device, scale_block_w):
-    """Metadata-tail scales with a K3-shaped metadata row (3 routing words + H/scale_block_w scales, or one
-    per-token scale when scale_block_w == 0)."""
-    per_row = scale_block_w == 0
+    """Metadata-tail scales with a K3-shaped metadata row (3 routing words + H/scale_block_w scales)."""
     torch.manual_seed(0)
     H = K3_LATENT
     counts = [37, 0, 64, 5, 130]
@@ -580,7 +578,7 @@ def test_token_count_aware_cast_back_scale_block_w(device, scale_block_w):
         off += _ceil_tile(c)
     capacity = 1024
     e4m3 = (torch.randn(capacity, H) * 3.0).clamp(-E4M3_MAX, E4M3_MAX).to(torch.float8_e4m3fn)
-    n_scales = 1 if per_row else H // scale_block_w
+    n_scales = H // scale_block_w
     scales = torch.pow(2.0, torch.randint(-8, 4, (capacity, n_scales)).float())
     meta = torch.full((capacity, 3 + n_scales), 0x0BADF00D, dtype=torch.int32)
     meta[:, 3:] = scales.contiguous().view(torch.int32)
@@ -601,11 +599,10 @@ def test_token_count_aware_cast_back_scale_block_w(device, scale_block_w):
                 device=device,
                 memory_config=ttnn.DRAM_MEMORY_CONFIG,
             ),
-            scale_block_w=128 if per_row else scale_block_w,
-            per_row_scale=per_row,
+            scale_block_w=scale_block_w,
         )
     ).float()
-    golden = e4m3.float() * scales.repeat_interleave(H if per_row else scale_block_w, dim=-1)
+    golden = e4m3.float() * scales.repeat_interleave(scale_block_w, dim=-1)
     # e4m3 subnormals are not decoded exactly by the unpacker (same mask as test_token_count_aware_cast_back).
     normal = e4m3.float()[:off].abs() > 2.0**-6
     assert torch.equal(out[:off][normal], golden[:off][normal]), "count-aware metadata-tail dequant mismatch"
@@ -663,13 +660,12 @@ def test_count_aware_packed_quant_expert_buffer(device, counts, out_l1, block):
     assert match >= 0.999, f"packed quant/dequant match {match:.4%}"
 
 
-@pytest.mark.parametrize("scale_block_w", [32, 0], ids=["block_w32", "per_row"])
+@pytest.mark.parametrize("scale_block_w", [32], ids=["block_w32"])
 def test_count_aware_packed_round_trip(device, scale_block_w):
     """Packed rows [H e4m3 | scales] quantized and dequantized count-aware (the dispatch-side DQ1 path):
     the dequant reads each row's scales from its own tail and only the valid expert prefix."""
     torch.manual_seed(5)
     H, capacity = K3_LATENT, 2048
-    per_row = scale_block_w == 0
     counts = [23 + (7 * i) % 40 for i in range(20)]
     epc = len(counts)
     table = [2 * s + 1 for s in range(epc)]
@@ -680,7 +676,7 @@ def test_count_aware_packed_round_trip(device, scale_block_w):
         off += _ceil_tile(c)
     x = torch.randn(capacity, H) * torch.pow(2.0, torch.randint(-4, 4, (capacity, 1)).float())
     x_tt = ttnn.from_torch(x, dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT, device=device)
-    blk = dict(scale_block_w=128 if per_row else scale_block_w, per_row_scale=per_row)
+    blk = dict(scale_block_w=scale_block_w)
     packed_tt, _ = ttnn.experimental.deepseek_prefill.per_token_cast_to_fp8(
         x_tt, round_scale_to_power_of_two=True, pack_scales_in_row=True, **blk
     )
@@ -704,7 +700,7 @@ def test_count_aware_packed_round_trip(device, scale_block_w):
     assert tuple(aware.shape) == (capacity, H)
     assert torch.equal(aware[:off], plain[:off]), "count-aware row-tail dequant differs from the plain path"
     rel = ((aware[:off] - x[:off]).norm() / x[:off].norm()).item()
-    logger.info(f"count-aware packed round trip ({'per_row' if per_row else scale_block_w}): rel err {rel:.4f}")
+    logger.info(f"count-aware packed round trip ({scale_block_w}): rel err {rel:.4f}")
     assert rel < 0.08
 
 
@@ -813,89 +809,3 @@ def test_count_aware_packed_tile_output_row_segments(device):
     assert not bad.any(), "segmented tile dequant mismatch"
     rel = ((out[:off] - x[:off]).norm() / x[:off].norm()).item()
     assert rel < 0.08, rel
-
-
-def _ref_pow2_row_scale(x_fp32):
-    amax = x_fp32.abs().amax(dim=-1, keepdim=True).clamp(min=1e-4)
-    return torch.pow(2.0, torch.ceil(torch.log2(amax / E4M3_MAX)))
-
-
-@pytest.mark.parametrize("dtype", [ttnn.bfloat16, ttnn.bfloat8_b], ids=["bf16", "bf8"])
-@pytest.mark.parametrize(
-    "shape", [(PREFILL_CHUNK_TOKENS_PER_CHIP, K3_LATENT), (1, 30, 1152)], ids=lambda s: "x".join(map(str, s))
-)
-def test_cast_to_fp8_per_row_scale(device, shape, dtype):
-    """One fp32 scale per token row (K3 fused-dequant wire): two-pass row amax, RNE e4m3."""
-    torch.manual_seed(1)
-    x = torch.randn(shape) * torch.pow(2.0, torch.randint(-5, 5, shape[:-1] + (1,)).float())
-    x_tt = ttnn.from_torch(
-        x, dtype=dtype, layout=ttnn.TILE_LAYOUT, device=device, memory_config=ttnn.DRAM_MEMORY_CONFIG
-    )
-    xd = ttnn.to_torch(x_tt).float()
-    q_tt, s_tt = ttnn.experimental.deepseek_prefill.per_token_cast_to_fp8(
-        x_tt, round_scale_to_power_of_two=True, round_to_nearest_even=True, per_row_scale=True
-    )
-    assert tuple(s_tt.shape) == tuple(shape[:-1]) + (1,)
-    s = ttnn.to_torch(s_tt).float()
-    ratio = s / _ref_pow2_row_scale(xd)
-    assert torch.all((ratio == 1.0) | (ratio == 2.0) | (ratio == 0.5))
-    assert (ratio == 1.0).float().mean().item() >= 0.999
-    back = ttnn.to_torch(
-        ttnn.experimental.deepseek_prefill.per_token_cast_back(
-            q_tt, s_tt, output_dtype=ttnn.float32, per_row_scale=True
-        )
-    ).float()
-    expected = (xd / s).to(torch.float8_e4m3fn).float() * s
-    normal = (xd / s).abs() >= 2.0**-6
-    match = (back[normal] == expected[normal]).float().mean().item()
-    logger.info(f"per-row {shape} {dtype}: match {match:.6%}")
-    assert match >= 0.9999
-
-
-# "multi_row": K3-like expert buffer whose valid prefix gives every core several tile-rows (exercises the per-row
-# segment exchange across rows, i.e. the row-parity peer slots and the software pipeline).
-@pytest.mark.parametrize(
-    "counts, capacity",
-    [([37, 0, 64, 5, 130], 640), ([23 + (7 * i) % 40 for i in range(112)], 9952)],
-    ids=["few_rows", "multi_row"],
-)
-def test_count_aware_packed_per_row_expert_buffer(device, counts, capacity):
-    torch.manual_seed(2)
-    H = K3_LATENT
-    epc = len(counts)
-    table = [2 * s + 1 for s in range(epc)]
-    region, tok = [0] * (2 * epc), [0] * (2 * epc)
-    off = 0
-    for slot, c in enumerate(counts):
-        region[table[slot]], tok[table[slot]] = off, c
-        off += _ceil_tile(c)
-    x = torch.randn(capacity, H) * torch.pow(2.0, torch.randint(-4, 4, (capacity, 1)).float())
-    x_tt = ttnn.from_torch(
-        x, dtype=ttnn.bfloat8_b, layout=ttnn.TILE_LAYOUT, device=device, memory_config=ttnn.DRAM_MEMORY_CONFIG
-    )
-    xd = ttnn.to_torch(x_tt).float()
-    packed_tt, _ = ttnn.experimental.deepseek_prefill.per_token_cast_to_fp8(
-        x_tt,
-        round_scale_to_power_of_two=True,
-        round_to_nearest_even=True,
-        per_row_scale=True,
-        token_count_aware=True,
-        expert_region_offsets=create_u32_tensor(device, region),
-        expert_token_counts=create_u32_tensor(device, tok),
-        global_expert_idx_table=create_u32_tensor(device, table),
-        experts_per_chip=epc,
-        pack_scales_in_row=True,
-    )
-    assert tuple(packed_tt.shape) == (capacity, H + 64)
-    back = ttnn.to_torch(
-        ttnn.experimental.deepseek_prefill.per_token_cast_back(
-            packed_tt, None, output_dtype=ttnn.float32, scales_in_row_tail=True, per_row_scale=True
-        )
-    ).float()
-    ref = xd[:off]
-    s = _ref_pow2_row_scale(ref)
-    expected = (ref / s).to(torch.float8_e4m3fn).float() * s
-    normal = (ref / s).abs() >= 2.0**-6
-    match = (back[:off][normal] == expected[normal]).float().mean().item()
-    logger.info(f"count-aware packed per-row: match {match:.6%}")
-    assert match >= 0.999

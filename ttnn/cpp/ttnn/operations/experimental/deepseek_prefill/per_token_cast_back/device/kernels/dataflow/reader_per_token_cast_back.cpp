@@ -235,12 +235,8 @@ void kernel_main() {
                 uint32_t col0_off = face_base_off;
                 for (uint32_t r = 0; r < face_h; ++r) {
                     if (s < real_in_block) {
-#ifdef PER_ROW_SCALE
-                        page[page_base + (col0_off >> 2)] = scratch_mem[(tok_off >> 2) + scale_col_offset];
-#else
                         page[page_base + (col0_off >> 2)] =
                             scratch_mem[(tok_off >> 2) + scale_col_offset + block_idx_b * chunk_scale_blocks + sb];
-#endif
                         ++block_idx_b;
                         if (block_idx_b >= blocks_per_row) {
                             block_idx_b = 0;

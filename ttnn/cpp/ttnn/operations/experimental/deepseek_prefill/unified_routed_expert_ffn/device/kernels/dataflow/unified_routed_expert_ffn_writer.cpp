@@ -49,10 +49,6 @@ void kernel_main() {
 
     const uint32_t output_addr = get_common_arg_val<uint32_t>(0);
     const uint32_t my_mt = get_arg_val<uint32_t>(0);
-#ifdef X_ROW_SCALE
-    const InterleavedAddrGen<true> meta_gen = {
-        .bank_base_address = get_common_arg_val<uint32_t>(COMMON_ROW_SCALE), .page_size = ROW_SCALE_PAGE_BYTES};
-#endif
     const uint32_t my_nt_d = get_arg_val<uint32_t>(1);
     const uint32_t start_addr = get_common_arg_val<uint32_t>(1);
     // UP_SPLIT up-weight read args. The per-expert `up` addresses live in the
@@ -265,29 +261,6 @@ void kernel_main() {
         const uint32_t row_offset_tiles = start_ptr[global_expert_id] / TILE_HEIGHT;
 
         for (uint32_t chunk = 0; chunk < effective_chunks; ++chunk) {
-#ifdef X_ROW_SCALE
-            // Per-token fp8 scales for this core's tile-rows (word ROW_SCALE_WORD of each dispatch-metadata
-            // row): issue the whole 64-B metadata pages now, assemble the scale tiles after the up feed below.
-            // Compute only needs them in the activation phase, so the reads hide behind the gate/up matmuls.
-            const uint32_t rs_per_core_M = adaptive_chunk::per_core_M_for_chunk(chunk, count_tiles, chunk_M_max);
-            const uint32_t rs_first_row = chunk * chunk_M_max + my_mt * rs_per_core_M;
-            const uint32_t rs_meta_l1 = CircularBuffer(CB_ROW_SCALE_SCRATCH).get_write_ptr();
-            for (uint32_t m = 0; m < rs_per_core_M; ++m) {
-                const uint32_t tile_row = rs_first_row + m;
-                if (tile_row >= count_tiles) {
-                    break;
-                }
-                const uint32_t row_base = tile_row * TILE_HEIGHT;
-                const uint32_t real_r =
-                    (row_base + TILE_HEIGHT <= count_value) ? TILE_HEIGHT : (count_value - row_base);
-                for (uint32_t r = 0; r < real_r; ++r) {
-                    noc_async_read_page(
-                        start_ptr[global_expert_id] + row_base + r,
-                        meta_gen,
-                        rs_meta_l1 + (m * TILE_HEIGHT + r) * ROW_SCALE_PAGE_BYTES);
-                }
-            }
-#endif
             // ---- Phase 1/2 weight feed: writer reads `up` on NoC 1 (UP_SPLIT) ----
             // Streams `up` from DRAM concurrent with the reader's NoC-0 `gate` read.
             // Runs before the cb_out drain.
@@ -399,34 +372,6 @@ void kernel_main() {
             // which only holds while up_seq counts gate/up blocks alone. Folding down
             // blocks into that counter shifts the up slot by num_blocks_d per chunk and
             // corrupts the gate/up path from the second chunk on.
-#ifdef X_ROW_SCALE
-            // One fp32 tile per tile-row, column 0 = the 32 token scales (0 for padding rows). Pushed before
-            // the down feed: compute's activation phase consumes it ahead of the down matmul.
-            {
-                noc_async_read_barrier();
-                CircularBuffer row_scale_cb(CB_ROW_SCALE);
-                row_scale_cb.reserve_back(ROW_SCALE_TILES);
-                volatile tt_l1_ptr uint32_t* tiles =
-                    reinterpret_cast<volatile tt_l1_ptr uint32_t*>(row_scale_cb.get_write_ptr());
-                for (uint32_t m = 0; m < rs_per_core_M; ++m) {
-                    const uint32_t tile_row = rs_first_row + m;
-                    const uint32_t row_base = tile_row * TILE_HEIGHT;
-                    const uint32_t real_r = (tile_row >= count_tiles)                 ? 0
-                                            : (row_base + TILE_HEIGHT <= count_value) ? TILE_HEIGHT
-                                                                                      : (count_value - row_base);
-                    volatile tt_l1_ptr uint32_t* meta = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(
-                        rs_meta_l1 + m * TILE_HEIGHT * ROW_SCALE_PAGE_BYTES);
-                    volatile tt_l1_ptr uint32_t* tile = tiles + m * 1024;
-                    for (uint32_t r = 0; r < TILE_HEIGHT; ++r) {
-                        // column 0 of row r: face 0 for rows 0-15, face 2 for rows 16-31 (16 words per face row)
-                        const uint32_t w = (r < 16) ? r * 16 : 512 + (r - 16) * 16;
-                        tile[w] = (r < real_r) ? meta[r * (ROW_SCALE_PAGE_BYTES / 4) + ROW_SCALE_WORD] : 0u;
-                    }
-                }
-                row_scale_cb.push_back(ROW_SCALE_TILES);
-            }
-#endif
-
             if constexpr (writer_split_down) {
                 if (is_up_sender) {
                     const auto down_acc = TensorAccessor(

@@ -60,8 +60,9 @@ void bind_post_combine_reduce(nb::module_& mod) {
                 output_memory_config (ttnn.MemoryConfig, optional): Output memory configuration.
                     Defaults to L1_MEMORY_CONFIG.
 
-                fp8_scale_block_w (int, keyword-only): FP8_E4M3 combine rows only. 0 (default): per-token
-                    row scale in a 64-B tail. 32: one fp32 scale per 1x32 block packed after the H values.
+                fp8_scale_block_w (int, keyword-only): 0 (default) for bfloat16 combine rows. 32 / 64 / 128 for
+                    FP8_E4M3 combine rows: one fp32 scale per 1xB block packed after the H values. FP8_E4M3
+                    rows with fp8_scale_block_w=0 (per-row scale) are rejected.
 
             Returns:
                 ttnn.Tensor: Reduced output in TILE_LAYOUT ready for reduce_scatter.

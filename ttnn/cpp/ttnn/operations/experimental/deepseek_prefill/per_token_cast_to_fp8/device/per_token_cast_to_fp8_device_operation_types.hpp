@@ -21,9 +21,6 @@ struct PerTokenCastToFp8Params {
     uint32_t experts_per_chip = 0;
     // Write each row as [H e4m3 | H/scale_block_w fp32 scales] in the e4m3 output (scale output unused).
     bool pack_scales_in_row = false;
-    // One scale per token row (amax over the whole row, two passes). TILE input only. The scale tensor is
-    // [..., 1]; packed rows end in a 64-B tail holding the fp32 scale.
-    bool per_row_scale = false;
     // pack_scales_in_row only: pad each packed row to a multiple of this many bytes (0 = no padding). 64 keeps
     // every row segment of a later width-concat (e.g. an all-gather of per-chip slices) DRAM-read aligned.
     uint32_t packed_row_align = 0;

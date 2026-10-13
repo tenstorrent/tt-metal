@@ -37,7 +37,6 @@ ttnn::Tensor per_token_cast_back(
     const std::optional<ttnn::Tensor>& metadata = std::nullopt,
     uint32_t scale_block_w = 128,
     bool scales_in_row_tail = false,
-    bool per_row_scale = false,
     bool tile_output = false,
     uint32_t row_segments = 1);
 
