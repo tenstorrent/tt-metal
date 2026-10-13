@@ -361,7 +361,7 @@ inline void _llk_pack_untilize_counter_form_mop_config_(const std::uint32_t bloc
     tmp.program();
 }
 
-// _llk_pack_untilize_init_ for a caller that names datum sizes or whose Dest math fills: known sizes fold the run-time
+// _llk_pack_untilize_init_ for a caller that names datum sizes or turns the pace off: known sizes fold the run-time
 // choices as compile-time formats do.
 template <
     std::uint32_t block_ct_dim,
@@ -369,7 +369,7 @@ template <
     bool narrow_row,
     std::uint32_t row_num_datums,
     bool dense,
-    bool dest_from_unpacker,
+    bool pace_32bit_rows,
     std::uint32_t src_datum_size,
     std::uint32_t dst_datum_size>
 inline void _llk_pack_untilize_init_sized_(
@@ -444,7 +444,7 @@ inline void _llk_pack_untilize_init_sized_(
     // 32-bit rows of three tiles are paced, and in the block form step L1 by CFGSHIFTMASK: packed back to back they
     // cost an unpacker writing Dest more L1 cycles than they save.
     constexpr bool may_pace = ((block_ct_dim == 3) || (src32_dst16 && (block_ct_dim == 4) && !l1_rows_contiguous)) && !split_row;
-    const bool pace         = dest_from_unpacker && may_pace && src_32b && !dst_8bit;
+    const bool pace         = pace_32bit_rows && may_pace && src_32b && !dst_8bit;
     const bool l1_row_step_by_cfg =
         row_ends_stream &&
         ((pace && !l1_rows_contiguous) || (output_addr_offset > (PCK0_ADDR_CTRL_XY_REG_1_Ystride_MASK >> PCK0_ADDR_CTRL_XY_REG_1_Ystride_SHAMT)) ||
@@ -526,7 +526,8 @@ inline void _llk_pack_untilize_init_sized_(
  * @param pack_src_format: Source (dest register) data format.
  * @param pack_dst_format: Destination (L1) data format.
  * @param face_r_dim: Number of rows per face.
- * @tparam dest_from_unpacker: False when math, not an unpack to Dest, fills the Dest this packer reads; such rows are not paced.
+ * @tparam pace_32bit_rows: False to leave 32-bit rows in blocks of three unpaced: for a Dest that math fills, or a kernel
+ *         that reads equal or faster without the pace.
  * @tparam src_datum_size, dst_datum_size: Bytes per datum of pack_src_format and pack_dst_format when the caller knows them
  *         at compile time but passes the formats at run time, 0 otherwise (see _llk_pack_untilize_init_sized_).
  * @param num_faces: Faces per tile, valid values = <1, 2, 4>
@@ -539,15 +540,15 @@ template <
     bool narrow_row              = false,
     std::uint32_t row_num_datums = TILE_C_DIM,
     bool dense                   = false,
-    bool dest_from_unpacker      = true,
+    bool pace_32bit_rows      = true,
     std::uint32_t src_datum_size = 0,
     std::uint32_t dst_datum_size = 0>
 inline void _llk_pack_untilize_init_(
     const std::uint32_t pack_src_format, const std::uint32_t pack_dst_format, const std::uint32_t face_r_dim = FACE_R_DIM, const std::uint32_t num_faces = 4)
 {
-    if constexpr (!dest_from_unpacker || (src_datum_size != 0) || (dst_datum_size != 0))
+    if constexpr (!pace_32bit_rows || (src_datum_size != 0) || (dst_datum_size != 0))
     {
-        _llk_pack_untilize_init_sized_<block_ct_dim, full_ct_dim, narrow_row, row_num_datums, dense, dest_from_unpacker, src_datum_size, dst_datum_size>(
+        _llk_pack_untilize_init_sized_<block_ct_dim, full_ct_dim, narrow_row, row_num_datums, dense, pace_32bit_rows, src_datum_size, dst_datum_size>(
             pack_src_format, pack_dst_format, face_r_dim, num_faces);
         return;
     }

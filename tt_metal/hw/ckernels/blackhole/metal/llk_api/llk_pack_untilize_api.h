@@ -30,7 +30,8 @@ template <
     std::uint32_t full_ct_dim = block_ct_dim,
     bool narrow_row = false,
     std::uint32_t row_num_datums = TILE_C_DIM,
-    bool dense = false>
+    bool dense = false,
+    bool pace_32bit_rows = true>
 inline void llk_pack_untilize_init_impl(
     const std::uint32_t pack_src_format,
     const std::uint32_t pack_dst_format,
@@ -62,7 +63,7 @@ inline void llk_pack_untilize_init_impl(
         StateDiscard<bool>(false /* diagonal: WH-only */),
         StateDiscard<bool>(dense)));
 
-    _llk_pack_untilize_init_<block_ct_dim, full_ct_dim, narrow_row, row_num_datums, dense>(
+    _llk_pack_untilize_init_<block_ct_dim, full_ct_dim, narrow_row, row_num_datums, dense, pace_32bit_rows>(
         pack_src_format, pack_dst_format, face_r_dim, num_faces);
 }
 
@@ -146,14 +147,15 @@ template <
     bool diagonal = false /* unused */,
     bool narrow_row = false,
     std::uint32_t row_num_datums = TILE_C_DIM,
-    bool dense = false>
+    bool dense = false,
+    bool pace_32bit_rows = true>
 inline void llk_pack_untilize_init(std::uint32_t output) {
     static_assert(diagonal == false, "Diagonal is only supported on WH");
     const std::uint32_t output_id = get_output_id(output);
     const std::uint32_t face_r_dim = get_output_face_r_dim(output_id);
     const std::uint32_t num_faces = get_output_num_faces(output_id);
 
-    llk_pack_untilize_init_impl<block_ct_dim, full_ct_dim, narrow_row, row_num_datums, dense>(
+    llk_pack_untilize_init_impl<block_ct_dim, full_ct_dim, narrow_row, row_num_datums, dense, pace_32bit_rows>(
         pack_src_format[output_id], pack_dst_format[output_id], face_r_dim, num_faces);
 }
 

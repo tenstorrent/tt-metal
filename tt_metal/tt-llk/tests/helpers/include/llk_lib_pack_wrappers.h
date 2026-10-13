@@ -117,7 +117,7 @@ template <
     bool narrow_row                               = false,
     std::uint32_t row_num_datums                  = TILE_C_DIM,
     bool dense /*maybe_unused*/                   = false,
-    bool dest_from_unpacker /*maybe_unused*/      = true,
+    bool pace_32bit_rows /*maybe_unused*/      = true,
     std::uint32_t src_datum_size /*maybe_unused*/ = 0,
     std::uint32_t dst_datum_size /*maybe_unused*/ = 0>
 inline void _llk_pack_untilize_init_wrapper_(
@@ -247,7 +247,7 @@ template <
     bool narrow_row              = false,
     std::uint32_t row_num_datums = TILE_C_DIM,
     bool dense                   = false,
-    bool dest_from_unpacker      = true,
+    bool pace_32bit_rows      = true,
     std::uint32_t src_datum_size = 0,
     std::uint32_t dst_datum_size = 0>
 inline void _llk_pack_untilize_init_wrapper_(
@@ -257,7 +257,7 @@ inline void _llk_pack_untilize_init_wrapper_(
     const std::uint32_t num_faces  = 4)
 {
     static_assert(!diagonal, "Blackhole pack untilize does not support diagonal mode");
-    _llk_pack_untilize_init_<block_ct_dim, full_ct_dim, narrow_row, row_num_datums, dense, dest_from_unpacker, src_datum_size, dst_datum_size>(
+    _llk_pack_untilize_init_<block_ct_dim, full_ct_dim, narrow_row, row_num_datums, dense, pace_32bit_rows, src_datum_size, dst_datum_size>(
         pack_src_format, pack_dst_format, face_r_dim, num_faces);
 }
 
