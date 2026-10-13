@@ -1,0 +1,1435 @@
+diff --git a/models/tt_dit/models/vae/minimax_h3/upscale_minimax_h3.py b/models/tt_dit/models/vae/minimax_h3/upscale_minimax_h3.py
+new file mode 100644
+index 00000000000..07e808a9e1e
+--- /dev/null
++++ b/models/tt_dit/models/vae/minimax_h3/upscale_minimax_h3.py
+@@ -0,0 +1,151 @@
++# SPDX-FileCopyrightText: © 2026 Tenstorrent AI ULC
++#
++# SPDX-License-Identifier: Apache-2.0
++
++"""Bicubic resize of the stitched VAE canvas on device, before the YUV readback.
++
++Bicubic resize is separable, so it is two matmuls with fixed interpolation matrices: one along the
++width, one along the height. Each device of the mesh computes one output patch, so the result is
++already sharded the way `fast_device_to_host_yuv` reads it: H over mesh rows, W over mesh columns.
++
++The strip stitch leaves each device with a horizontal band of the canvas (`1/mesh_rows` of the
++rows, full width). The width matmul runs on that band directly, keeping only this device's output
++columns, and an all-gather over the mesh rows then gives every device all input rows of its
++columns. Each output pixel therefore sees exactly the input pixels it would see on host: there is
++no halo to exchange and no seam at the device boundaries.
++"""
++
++from __future__ import annotations
++
++import torch
++import torch.nn.functional as F
++
++import ttnn
++
++TILE = 32
++
++
++def bicubic_matrix(size_in: int, size_out: int) -> torch.Tensor:
++    """`(size_out, size_in)` matrix `M` with `M @ x` equal to torch's bicubic resize of `x` along one axis.
++
++    Built by resizing an identity, so it has torch's exact taps (a = -0.75) and border clamping
++    (`align_corners=False`).
++    """
++    eye = torch.eye(size_in, dtype=torch.float64).reshape(size_in, 1, 1, size_in)
++    out = F.interpolate(eye, size=(1, size_out), mode="bicubic", align_corners=False)
++    return out.reshape(size_in, size_out).T.contiguous()
++
++
++def padded(n: int) -> int:
++    return -(-n // TILE) * TILE
++
++
++def transposed_blocks(matrix: torch.Tensor, parts: int) -> torch.Tensor:
++    """`matrix.T` cut into `parts` equal column blocks, each zero-padded to a tile multiple.
++
++    Block `k` holds the weights of output rows `k * per : (k + 1) * per` of `matrix`, so sharding
++    the result's last dim `parts` ways gives each device the weights of its own output patch.
++    """
++    size_out, size_in = matrix.shape
++    per = size_out // parts
++    blocks = matrix.T.reshape(size_in, parts, per)
++    return F.pad(blocks, (0, padded(per) - per)).reshape(size_in, parts * padded(per))
++
++
++def upscale_blocks_reference(
++    canvas: torch.Tensor, out_hw: tuple[int, int], mesh_shape: tuple[int, int]
++) -> torch.Tensor:
++    """Torch model of `CanvasUpscaler`: each device's patch from its row band, then the patches assembled.
++
++    `canvas` is `(..., H, W)`; returns `(..., out_h, out_w)`.
++    """
++    mesh_rows, mesh_cols = mesh_shape
++    in_h, in_w = canvas.shape[-2:]
++    out_h, out_w = out_hw
++    per_h, per_w = out_h // mesh_rows, out_w // mesh_cols
++    width = transposed_blocks(bicubic_matrix(in_w, out_w), mesh_cols).to(canvas.dtype)
++    height = transposed_blocks(bicubic_matrix(in_h, out_h), mesh_rows).to(canvas.dtype)
++    bands = canvas.chunk(mesh_rows, dim=-2)
++    rows = []
++    for r in range(mesh_rows):
++        patches = []
++        for c in range(mesh_cols):
++            width_c = width[:, c * padded(per_w) : (c + 1) * padded(per_w)]
++            height_r = height[:, r * padded(per_h) : (r + 1) * padded(per_h)]
++            gathered = torch.cat([band @ width_c for band in bands], dim=-2)
++            patch = (gathered.transpose(-2, -1) @ height_r).transpose(-2, -1)
++            patches.append(patch[..., :per_h, :per_w])
++        rows.append(torch.cat(patches, dim=-1))
++    return torch.cat(rows, dim=-2)
++
++
++def upscale_unserved(in_hw: tuple[int, int], out_hw: tuple[int, int], mesh_shape: tuple[int, int]) -> str | None:
++    """Why `CanvasUpscaler` cannot resize `in_hw` to `out_hw` on this mesh, or None."""
++    mesh_rows, mesh_cols = mesh_shape
++    (in_h, _), (out_h, out_w) = in_hw, out_hw
++    if in_h % mesh_rows or out_h % mesh_rows or out_w % mesh_cols:
++        return f"{tuple(in_hw)} -> {tuple(out_hw)} does not split over the {mesh_rows}x{mesh_cols} mesh"
++    per_h, per_w = out_h // mesh_rows, out_w // mesh_cols
++    if per_h % 2 or per_w % 2:
++        return f"per-device patch {per_h}x{per_w} must be even for 4:2:0"
++    return None
++
++
++class CanvasUpscaler:
++    """Resizes a row-partitioned `(1, C, T, H / mesh_rows, W)` canvas to a 2D-sharded `(out_h, out_w)` one.
++
++    Output per device: `(1, C, T, out_h / mesh_rows, out_w / mesh_cols)` bfloat16 ROW_MAJOR, clamped
++    to `[-1, 1]`: the input `fast_device_to_host_yuv` takes.
++    """
++
++    def __init__(self, mesh_device: ttnn.MeshDevice, in_hw: tuple[int, int], out_hw: tuple[int, int]) -> None:
++        mesh_rows, mesh_cols = tuple(mesh_device.shape)
++        (in_h, in_w), (out_h, out_w) = in_hw, out_hw
++        reason = upscale_unserved(in_hw, out_hw, (mesh_rows, mesh_cols))
++        if reason is not None:
++            raise ValueError(reason)
++        self.per_h, self.per_w = out_h // mesh_rows, out_w // mesh_cols
++        self.mesh_device = mesh_device
++        self.in_hw, self.out_hw = in_hw, out_hw
++        shape = (mesh_rows, mesh_cols)
++
++        def upload(matrix, dims):
++            return ttnn.from_torch(
++                matrix.float(),
++                dtype=ttnn.float32,
++                layout=ttnn.TILE_LAYOUT,
++                device=mesh_device,
++                mesh_mapper=ttnn.ShardTensor2dMesh(mesh_device, mesh_shape=shape, dims=dims),
++            )
++
++        self._width = upload(transposed_blocks(bicubic_matrix(in_w, out_w), mesh_cols), (None, -1))
++        self._height = upload(transposed_blocks(bicubic_matrix(in_h, out_h), mesh_rows), (-1, None))
++        # fp32 accumulation: the taps are signed, so bf16 sums would cost the PSNR the resize is held to.
++        self._compute = ttnn.init_device_compute_kernel_config(
++            mesh_device.arch(),
++            math_fidelity=ttnn.MathFidelity.HiFi4,
++            math_approx_mode=False,
++            fp32_dest_acc_en=True,
++            packer_l1_acc=False,
++        )
++
++    def __call__(self, canvas_rows: ttnn.Tensor) -> ttnn.Tensor:
++        _, channels, frames, rows, width = tuple(canvas_rows.shape)
++        if (rows * tuple(self.mesh_device.shape)[0], width) != tuple(self.in_hw):
++            raise ValueError(f"canvas band {rows}x{width} does not match the upscaler's {self.in_hw} input")
++        x = canvas_rows
++        if x.layout != ttnn.TILE_LAYOUT:
++            x = ttnn.to_layout(x, ttnn.TILE_LAYOUT)
++        if x.dtype != ttnn.float32:
++            x = ttnn.typecast(x, ttnn.float32)
++        x = ttnn.reshape(x, (1, channels * frames, rows, width))
++        x = ttnn.matmul(x, self._width, dtype=ttnn.float32, compute_kernel_config=self._compute)
++        x = ttnn.all_gather(x, 2, cluster_axis=0, topology=ttnn.Topology.Ring)
++        x = ttnn.transpose(x, -2, -1)
++        x = ttnn.matmul(x, self._height, dtype=ttnn.float32, compute_kernel_config=self._compute)
++        x = ttnn.transpose(x, -2, -1)
++        x = ttnn.clamp(x, min=-1.0, max=1.0)
++        x = ttnn.typecast(x, ttnn.bfloat16)
++        x = ttnn.to_layout(x, ttnn.ROW_MAJOR_LAYOUT)
++        x = ttnn.slice(x, (0, 0, 0, 0), (1, channels * frames, self.per_h, self.per_w))
++        return ttnn.reshape(x, (1, channels, frames, self.per_h, self.per_w))
+diff --git a/models/tt_dit/models/vae/minimax_h3/vae_minimax_h3.py b/models/tt_dit/models/vae/minimax_h3/vae_minimax_h3.py
+index 65c8bdc02b6..a86029ae657 100644
+--- a/models/tt_dit/models/vae/minimax_h3/vae_minimax_h3.py
++++ b/models/tt_dit/models/vae/minimax_h3/vae_minimax_h3.py
+@@ -33,7 +33,7 @@ from __future__ import annotations
+ import json
+ import math
+ import time
+-from collections.abc import Sequence
++from collections.abc import Mapping, Sequence
+ from concurrent.futures import ThreadPoolExecutor
+ from pathlib import Path
+ 
+@@ -44,8 +44,10 @@ from loguru import logger
+ import ttnn
+ 
+ from ....utils.tensor import fast_device_to_host, float_to_uint8, local_device_to_torch
++from ....utils.tracing import Tracer
+ from ....utils.yuv_d2h import fast_device_to_host_yuv, replicated_to_host_yuv
+ from .encoder_minimax_h3 import MiniMaxH3Encoder3d
++from .upscale_minimax_h3 import upscale_unserved
+ 
+ DEFAULT_TILE_SIZE = 256
+ DEFAULT_TILE_OVERLAP = 64
+@@ -183,14 +185,66 @@ def blend_clip_frames(a, b, extent: int):
+         return blend(a, b, extent, dim=-3)
+ 
+     extent = min(a.shape[0], b.shape[0], extent)
+-    positions = np.arange(extent, dtype=np.float32).reshape(-1, *([1] * (a.ndim - 1)))
+-    head = a[-extent:].astype(np.float32) * (1.0 - positions / extent) + b[:extent].astype(np.float32) * (
+-        positions / extent
+-    )
+-    head = np.clip(np.rint(head), 0, 255).astype(np.uint8)
++    head = np.empty((extent, *b.shape[1:]), dtype=np.uint8)
++    _crossfade_planar_into(head, a[-extent:], b[:extent])
+     return head if extent == b.shape[0] else np.concatenate([head, b[extent:]], axis=0)
+ 
+ 
++def _crossfade_planar_into(out: np.ndarray, a: np.ndarray, b: np.ndarray) -> None:
++    """``out[k] = round(a[k] * (1 - k/n) + b[k] * k/n)`` in float32, one frame at a time.
++
++    Bit-identical to the whole-block formula; a frame of scratch instead of four blocks of it.
++    """
++    extent = out.shape[0]
++    weight_b = np.arange(extent, dtype=np.float32) / extent
++    weight_a = 1.0 - weight_b
++    for k in range(extent):
++        mixed = np.multiply(a[k], weight_a[k], dtype=np.float32)
++        np.add(mixed, np.multiply(b[k], weight_b[k], dtype=np.float32), out=mixed)
++        np.rint(mixed, out=mixed)
++        np.clip(mixed, 0, 255, out=mixed)
++        out[k] = mixed
++
++
++def _write_clip_part(out, start: int, segment, previous, frame_overlap: int) -> None:
++    frames = clip_num_frames(segment)
++    slab = clip_frames(out, start, start + frames)
++    extent = 0 if previous is None else min(clip_num_frames(previous), frames, frame_overlap)
++    if extent:
++        if isinstance(out, np.ndarray):
++            _crossfade_planar_into(slab[:extent], previous[-extent:], segment[:extent])
++            np.copyto(slab[extent:], segment[extent:])
++        else:
++            slab[:, :, :extent] = blend_clip_frames(previous, clip_frames(segment, 0, extent), extent)
++            slab[:, :, extent:].copy_(segment[:, :, extent:])
++    elif isinstance(out, np.ndarray):
++        np.copyto(slab, segment)
++    else:
++        slab.copy_(segment)
++
++
++def split_decoded_clip(clip, chunk_num_frames: int, frame_pre_padding: int, token_drop: int) -> tuple:
++    """``(segment, overlap_or_None)``: the frames a decoded clip contributes and the tail the next one blends with."""
++    pieces = []
++    for j in range(int(token_drop > 0) + 1):
++        piece = clip_frames(clip, j * chunk_num_frames, (j + 1) * chunk_num_frames)
++        pieces.append(clip_frames(piece, frame_pre_padding, clip_num_frames(piece)))
++    return pieces[0], (pieces[1] if len(pieces) > 1 else None)
++
++
++def clip_parts(clips: list, chunk_num_frames: int, frame_pre_padding: int, token_drop: int) -> list[tuple]:
++    """The ``(segment, previous_overlap_or_None)`` list :func:`assemble_clip_parts` takes."""
++    parts, overlap = [], None
++    for clip in clips:
++        segment, tail = split_decoded_clip(clip, chunk_num_frames, frame_pre_padding, token_drop)
++        parts.append((segment, overlap))
++        if tail is not None:
++            overlap = tail
++    if overlap is not None:
++        parts.append((overlap, None))
++    return parts
++
++
+ def assemble_clip_parts(parts: list[tuple], frame_overlap: int):
+     """Temporal assembly into one preallocated buffer: seam math on overlap frames, memcpy for the rest.
+ 
+@@ -205,36 +259,66 @@ def assemble_clip_parts(parts: list[tuple], frame_overlap: int):
+         shape[2] = total
+         out = torch.empty(shape, dtype=first.dtype)
+ 
+-    def write(start: int, segment, previous) -> None:
+-        frames = clip_num_frames(segment)
+-        slab = clip_frames(out, start, start + frames)
+-        extent = 0 if previous is None else min(clip_num_frames(previous), frames, frame_overlap)
+-        if extent:
+-            head = blend_clip_frames(previous, clip_frames(segment, 0, extent), extent)
+-            if isinstance(out, np.ndarray):
+-                slab[:extent] = head
+-                np.copyto(slab[extent:], segment[extent:])
+-            else:
+-                slab[:, :, :extent] = head
+-                slab[:, :, extent:].copy_(segment[:, :, extent:])
+-        elif isinstance(out, np.ndarray):
+-            np.copyto(slab, segment)
+-        else:
+-            slab.copy_(segment)
+-
+     jobs, start = [], 0
+     for segment, previous in parts:
+-        jobs.append((start, segment, previous))
++        jobs.append((out, start, segment, previous, frame_overlap))
+         start += clip_num_frames(segment)
+     if len(jobs) == 1:
+-        write(*jobs[0])
++        _write_clip_part(*jobs[0])
+     else:
+         with ThreadPoolExecutor(max_workers=min(8, len(jobs))) as pool:
+-            for done in [pool.submit(write, *job) for job in jobs]:
++            for done in [pool.submit(_write_clip_part, *job) for job in jobs]:
+                 done.result()
+     return out
+ 
+ 
++class StreamedClipAssembly:
++    """:func:`assemble_clip_parts` for planar clips fed one at a time, in order, as each is read back.
++
++    Clip ``i``'s slab only needs clip ``i - 1``'s overlap, so all but the last tail is written while
++    later waves still run on device. Byte-identical to the batch assembly.
++    """
++
++    def __init__(
++        self, num_clips: int, chunk_num_frames: int, frame_pre_padding: int, token_drop: int, frame_overlap: int
++    ) -> None:
++        self.num_clips = num_clips
++        self._split = (chunk_num_frames, frame_pre_padding, token_drop)
++        self.frame_overlap = frame_overlap
++        self.fed = 0
++        self.seconds = 0.0
++        self._out = None
++        self._start = 0
++        self._overlap = None
++        self._shape = None
++
++    def feed(self, clip: np.ndarray) -> np.ndarray:
++        mark = time.perf_counter()
++        assert self.fed < self.num_clips, f"clip {self.fed} fed to a {self.num_clips}-clip assembly"
++        segment, tail = split_decoded_clip(clip, *self._split)
++        if self._out is None:
++            self._shape = clip.shape
++            tail_frames = 0 if tail is None else clip_num_frames(tail)
++            total = self.num_clips * clip_num_frames(segment) + tail_frames
++            self._out = np.empty((total, *clip.shape[1:]), dtype=clip.dtype)
++        assert clip.shape == self._shape, f"clip {self.fed} is {clip.shape}, clip 0 was {self._shape}"
++        _write_clip_part(self._out, self._start, segment, self._overlap, self.frame_overlap)
++        self._start += clip_num_frames(segment)
++        if tail is not None:
++            self._overlap = tail
++        self.fed += 1
++        self.seconds += time.perf_counter() - mark
++        return clip
++
++    def result(self) -> np.ndarray:
++        assert self.fed == self.num_clips, f"{self.fed} of {self.num_clips} clips fed"
++        if self._overlap is not None:
++            _write_clip_part(self._out, self._start, self._overlap, None, self.frame_overlap)
++            self._start += clip_num_frames(self._overlap)
++        assert self._start == self._out.shape[0], f"wrote {self._start} of {self._out.shape[0]} frames"
++        return self._out
++
++
+ def stitch_tiles(
+     tiles: list[list[torch.Tensor]], height_overlaps: list[int], width_overlaps: list[int]
+ ) -> torch.Tensor:
+@@ -357,6 +441,9 @@ class MiniMaxH3Vae:
+         readback_uint8: bool = False,
+         waves_per_device: int = 1,
+         stitch_exchange: str = "strips",
++        traced_decode: bool = False,
++        stream_blend: bool = True,
++        upscale_to: Mapping[tuple[int, int], tuple[int, int]] | None = None,
+     ) -> None:
+         if task not in ("t2va", "ref2va"):
+             raise ValueError(f"task must be 't2va' (also serves fl2va) or 'ref2va', got {task!r}")
+@@ -380,6 +467,18 @@ class MiniMaxH3Vae:
+         # overlapping tiles and blending them on host.
+         self.device_stitch = device_stitch
+         self.stitch_exchange = stitch_exchange
++        # Canvas `(height, width)` -> `(height, width)` to bicubic-resize its yuv420 output to, on
++        # device, before the YUV conversion. Other canvases keep their size. Only the strip stitch
++        # serves it: its row bands are what `CanvasUpscaler` takes. See `upscale_target`.
++        self.upscale_to = {tuple(k): tuple(v) for k, v in (upscale_to or {}).items()}
++        for in_hw, out_hw in self.upscale_to.items():
++            reason = upscale_unserved(in_hw, out_hw, tuple(mesh_device.shape))
++            if reason is not None:
++                raise ValueError(f"upscale_to {in_hw} -> {out_hw}: {reason}")
++        # One upscaler per canvas: each holds its interpolation matrices on device, so a serving
++        # loop that alternates canvases does not rebuild and re-upload them.
++        self._upscalers = {}
++        self._warned_upscale = set()
+         # `(mean, std)` of the ImageNet normalization the decoder's pixels are still in. Set it and
+         # the de-normalization is folded into `proj_out`, so `decode` emits `[-1, 1]` pixels and the
+         # caller keeps no copy of the constants. Left unset the decoder emits reference-space values,
+@@ -393,6 +492,14 @@ class MiniMaxH3Vae:
+         # Synchronize after each decode forward so `device` and `readback` are separable in the
+         # profile -- which also serializes them, so it is opt-in.
+         self.profile = profile
++        # Replay the strip stitch's per-wave decoder + unpatchify + column stitch from a trace instead
++        # of dispatching it op by op. The trace bakes the decoder's weight addresses, so a caller that
++        # moves the decoder's weights must call `release_decode_trace` first.
++        self.traced_decode = traced_decode
++        self._wave_trace: tuple | None = None
++        # Assemble each clip's frames on the readback worker as it lands, under the remaining waves,
++        # instead of all of them after the last one. Strip-stitched yuv420 only.
++        self.stream_blend = stream_blend
+         assert waves_per_device >= 1, f"waves_per_device must be >= 1, got {waves_per_device}"
+         self.waves_per_device = waves_per_device
+         self.log_profile = True
+@@ -496,6 +603,14 @@ class MiniMaxH3Vae:
+             state, pixel_denorm=self.pixel_denorm, out_channels=self.config.out_channels
+         )
+ 
++    def release_decode_trace(self) -> None:
++        if self._wave_trace is not None:
++            _, tracer, held = self._wave_trace
++            self._wave_trace = None
++            tracer.release_trace()
++            for kept in held:
++                ttnn.deallocate(kept)
++
+     @staticmethod
+     def _empty_profile() -> dict[str, float]:
+         return {
+@@ -514,6 +629,8 @@ class MiniMaxH3Vae:
+             "readback_join": 0.0,
+             "readback_each": [],
+             "device_each": [],
++            "dispatch_each": [],
++            "wait_each": [],
+         }
+ 
+     def _read_wave_units(self, wave: ttnn.Tensor) -> torch.Tensor:
+@@ -574,13 +691,14 @@ class MiniMaxH3Vae:
+                 f"{sorted(each)[len(each) // 2] * 1000:.0f} / max {max(each) * 1000:.0f} ms  "
+                 f"[{' '.join(f'{v * 1000:.0f}' for v in each)}]  on {p.get('shape')} {p.get('dtype')}"
+             )
+-        each_d = p.get("device_each") or []
+-        if each_d:
+-            logger.info(
+-                f"    device   per wave: min {min(each_d) * 1000:.0f} / median "
+-                f"{sorted(each_d)[len(each_d) // 2] * 1000:.0f} / max {max(each_d) * 1000:.0f} ms  "
+-                f"[{' '.join(f'{v * 1000:.0f}' for v in each_d)}]"
+-            )
++        for label, key in (("device  ", "device_each"), ("dispatch", "dispatch_each"), ("wait    ", "wait_each")):
++            each_d = p.get(key) or []
++            if each_d:
++                logger.info(
++                    f"    {label} per wave: min {min(each_d) * 1000:.0f} / median "
++                    f"{sorted(each_d)[len(each_d) // 2] * 1000:.0f} / max {max(each_d) * 1000:.0f} ms  "
++                    f"[{' '.join(f'{v * 1000:.0f}' for v in each_d)}]"
++                )
+         waves, units = int(p["waves"]), int(p["units"])
+         logger.info(
+             f"VAE decode profile: {total:.2f} s over {waves} waves / {units} units "
+@@ -911,18 +1029,50 @@ class MiniMaxH3Vae:
+         if pending is not None:
+             yield from read_wave(*pending)
+ 
+-    def _decode_clips_device_stitched(self, chunk_latents: list[torch.Tensor], output_type: str = "float") -> list:
++    def _decode_clips_device_stitched(
++        self, chunk_latents: list[torch.Tensor], output_type: str = "float", on_clip=None
++    ) -> list:
++        """``on_clip`` sees each yuv420 clip in order on the readback worker; paths that cannot stream ignore it."""
++        upscale_to = self.upscale_target(chunk_latents[0].shape[-2], chunk_latents[0].shape[-1], output_type)
++        if upscale_to is not None:
++            return self._decode_clips_strip_stitched(chunk_latents, output_type, on_clip, upscale_to)
+         if self.stitch_exchange == "neighbor":
+             return self._decode_clips_neighbor_stitched(chunk_latents, output_type)
+         if self.stitch_exchange == "strips":
+             reason = self._strips_unserved(chunk_latents[0].shape[-2], chunk_latents[0].shape[-1], output_type)
+             if reason is None:
+-                return self._decode_clips_strip_stitched(chunk_latents, output_type)
++                return self._decode_clips_strip_stitched(chunk_latents, output_type, on_clip)
+             if not getattr(self, "_warned_strips_fallback", False):
+                 self._warned_strips_fallback = True
+                 logger.warning(f"strips stitch: {reason}; using the gather stitch")
+         return self._decode_clips_gather_stitched(chunk_latents, output_type)
+ 
++    def upscale_target(self, latent_h: int, latent_w: int, output_type: str = "yuv420") -> tuple[int, int] | None:
++        """The `(height, width)` `upscale_to` resizes this decode to, or None to keep its native size.
++
++        A canvas `upscale_to` names but the strip stitch cannot serve keeps its size too, with a
++        one-time warning, rather than failing a warmup or a request that reaches it.
++        """
++        if not self.upscale_to:
++            return None
++        (y_starts, y_lengths, _), (x_starts, x_lengths, _) = self._decode_tile_grid(latent_h, latent_w)
++        canvas = (y_starts[-1] + y_lengths[-1], x_starts[-1] + x_lengths[-1])
++        target = self.upscale_to.get(canvas)
++        if target is None:
++            return None
++        if output_type != "yuv420":
++            reason = f"output_type {output_type!r} is not 'yuv420'"
++        elif not self.device_stitch or self.stitch_exchange != "strips":
++            reason = "it needs device_stitch=True and stitch_exchange='strips'"
++        else:
++            reason = self._strips_unserved(latent_h, latent_w, output_type)
++        if reason is None:
++            return target
++        if (canvas, reason) not in self._warned_upscale:
++            self._warned_upscale.add((canvas, reason))
++            logger.warning(f"upscale_to: canvas {canvas} keeps its size: {reason}")
++        return None
++
+     def _strips_unserved(self, latent_h: int, latent_w: int, output_type: str) -> str | None:
+         """Why strips cannot serve, or None."""
+         (y_starts, y_lengths, _), (x_starts, x_lengths, _) = self._decode_tile_grid(latent_h, latent_w)
+@@ -1101,8 +1251,14 @@ class MiniMaxH3Vae:
+             profile["readback_join"] += time.perf_counter() - mark
+         return canvases
+ 
+-    def _decode_clips_strip_stitched(self, chunk_latents: list[torch.Tensor], output_type: str = "float") -> list:
+-        """Each device blends only the tiles it reads back."""
++    def _decode_clips_strip_stitched(
++        self,
++        chunk_latents: list[torch.Tensor],
++        output_type: str = "float",
++        on_clip=None,
++        upscale_to: tuple[int, int] | None = None,
++    ) -> list:
++        """Each device blends only the tiles it reads back, resized to `upscale_to` if given (yuv420)."""
+         from .stitch_device_minimax_h3 import StripTileStitcher
+ 
+         (y_starts, y_lengths, y_overlaps), (x_starts, x_lengths, x_overlaps) = self._decode_tile_grid(
+@@ -1239,9 +1395,12 @@ class MiniMaxH3Vae:
+             rows_shape = tuple(canvas_rows.shape)
+             canvas_shape = (*rows_shape[:-2], canvas_h, rows_shape[-1])
+             if output_type == "yuv420":
+-                finish = self._read_canvas_yuv(canvas_rows, rows_partitioned=True)
++                finish = self._read_canvas_yuv(canvas_rows, rows_partitioned=True, upscale_to=upscale_to)
+                 ttnn.deallocate(canvas_rows)
+-                read_bytes = canvas_shape[-3] * canvas_shape[-2] * canvas_shape[-1] * 3 // 2
++                out_h, out_w = upscale_to or canvas_shape[-2:]
++                read_bytes = canvas_shape[-3] * out_h * out_w * 3 // 2
++                if on_clip is not None:
++                    finish = lambda finish=finish: on_clip(finish())
+                 pending.append(self._yuv_finish_pool.submit(finish))
+             else:
+                 patch = ttnn.mesh_partition(canvas_rows, dim=-1, cluster_axis=1)
+@@ -1261,12 +1420,9 @@ class MiniMaxH3Vae:
+                 canvases.append(pending.pop(0).result())
+                 profile["readback_join"] += time.perf_counter() - mark
+ 
+-        staged = stage(waves[0])
+-        for wave_index, wave in enumerate(waves):
+-            n_units, (num_frames, height, width), tokens = staged
+-            staged = None
++        num_frames, height, width = decoder.latent_shape
+ 
+-            mark = time.perf_counter()
++        def column_stage(tokens):
+             decoded = decoder(tokens)
+             decoded = ttnn.typecast(decoded, ttnn.float32)
+             pixels = self._unpatchify(decoded, num_frames, height, width)
+@@ -1281,6 +1437,47 @@ class MiniMaxH3Vae:
+                 edge = ttnn.mesh_partition(edge, dim=-2, cluster_axis=0)
+                 edges = ttnn.all_gather(edge, 0, cluster_axis=1, topology=ttnn.Topology.Ring)
+                 ttnn.deallocate(edge)
++            return strips, edges
++
++        traced = self.traced_decode
++        trace_key = (decoder.latent_shape, grid_rows, grid_cols, tuple(y_overlaps), tuple(x_overlaps), edge_width)
++        if traced and self._wave_trace is not None and self._wave_trace[0] != trace_key:
++            self.release_decode_trace()
++
++        def run_wave(tokens):
++            """`(strips, edges, replayed)`; replayed outputs belong to the trace and are overwritten by the next replay."""
++            if not traced:
++                return (*column_stage(tokens), False)
++            if self._wave_trace is None:
++                # The first wave runs eagerly: it builds the stitcher's ramps and the readback's
++                # constants, which would otherwise be written mid-capture. Held strips must outlive
++                # replays, and a tensor allocated after capture can sit where a replay writes its
++                # intermediates, so their slots are allocated now.
++                strips, edges = column_stage(tokens)
++                held = []
++                if dense:
++                    held = [entry(strips, grid_cols) for _ in range(grid_cols)]
++                    if edges is not None:
++                        held += [entry(edges, grid_cols) for _ in range(grid_cols)]
++                tracer = Tracer(column_stage, device=self.mesh_device, prep_run=False, clone_prep_inputs=False)
++                self._wave_trace = (trace_key, tracer, held)
++                return strips, edges, False
++            strips, edges = self._wave_trace[1](tokens, tracer_blocking_execution=False)
++            return strips, edges, True
++
++        staged = stage(waves[0])
++        for wave_index, wave in enumerate(waves):
++            n_units, _, tokens = staged
++            staged = None
++
++            mark = time.perf_counter()
++            strips, edges, replayed = run_wave(tokens)
++            elapsed = time.perf_counter() - mark
++            profile["dispatch_each"].append(elapsed)
++            if self.profile:
++                mark_wait = time.perf_counter()
++                ttnn.synchronize_device(self.mesh_device)
++                profile["wait_each"].append(time.perf_counter() - mark_wait)
+             elapsed = time.perf_counter() - mark
+             profile["device"] += elapsed
+             profile["waves"] += 1
+@@ -1290,25 +1487,36 @@ class MiniMaxH3Vae:
+                 staged = stage(waves[wave_index + 1])
+ 
+             for k in range(len(wave["mains"])):
+-                readback(row_stage(strips, edges, k * grid_cols), str(pixels.dtype))
++                readback(row_stage(strips, edges, k * grid_cols), str(strips.dtype))
+             if wave["extra"] is not None:
+-                held_strips.append(entry(strips, grid_cols))
++                kept = [entry(strips, grid_cols)] + ([entry(edges, grid_cols)] if edges is not None else [])
++                if traced:
++                    slots = self._wave_trace[2]
++                    n = len(held_strips)
++                    targets = [slots[n]] + ([slots[grid_cols + n]] if edges is not None else [])
++                    for src, dst in zip(kept, targets):
++                        ttnn.copy(src, dst)
++                        ttnn.deallocate(src)
++                    kept = targets
++                held_strips.append(kept[0])
++                if edges is not None:
++                    held_edges.append(kept[1])
++            if not replayed:
++                ttnn.deallocate(strips)
+                 if edges is not None:
+-                    held_edges.append(entry(edges, grid_cols))
+-            ttnn.deallocate(strips)
+-            if edges is not None:
+-                ttnn.deallocate(edges)
++                    ttnn.deallocate(edges)
+             if wave["flush"]:
+                 strips_e = ttnn.concat(held_strips, dim=0)
+                 edges_e = ttnn.concat(held_edges, dim=0) if held_edges else None
+-                for kept in held_strips + held_edges:
+-                    ttnn.deallocate(kept)
++                if not traced:
++                    for kept in held_strips + held_edges:
++                        ttnn.deallocate(kept)
+                 held_strips, held_edges = [], []
+                 canvas_rows = row_stage(strips_e, edges_e, 0)
+                 ttnn.deallocate(strips_e)
+                 if edges_e is not None:
+                     ttnn.deallocate(edges_e)
+-                readback(canvas_rows, str(pixels.dtype))
++                readback(canvas_rows, str(strips.dtype))
+         if pending:
+             mark = time.perf_counter()
+             canvases.extend(future.result() for future in pending)
+@@ -1523,7 +1731,9 @@ class MiniMaxH3Vae:
+             self._yuv_pool = ThreadPoolExecutor(max_workers=1, thread_name_prefix="h3_yuv_finish")
+         return self._yuv_pool
+ 
+-    def _read_canvas_yuv(self, canvas: ttnn.Tensor, *, rows_partitioned: bool = False):
++    def _read_canvas_yuv(
++        self, canvas: ttnn.Tensor, *, rows_partitioned: bool = False, upscale_to: tuple[int, int] | None = None
++    ):
+         """Convert the replicated canvas to YUV 4:2:0 on device and read it back as planar uint8.
+ 
+         Two things earn their keep here. The `clamp` is the reference's post-stitch `clamp(0, 1)`,
+@@ -1541,6 +1751,8 @@ class MiniMaxH3Vae:
+             mesh_rows = tuple(self.mesh_device.shape)[0]
+             rows, width = int(canvas.shape[-2]), int(canvas.shape[-1])
+             height = rows * mesh_rows
++            if upscale_to is not None:
++                return self._read_canvas_yuv_upscaled(canvas, (height, width), upscale_to)
+             canvas = ttnn.mesh_partition(canvas, dim=-1, cluster_axis=1)
+             canvas = ttnn.clamp(canvas, min=-1.0, max=1.0)
+             canvas = ttnn.typecast(canvas, ttnn.bfloat16)
+@@ -1558,6 +1770,23 @@ class MiniMaxH3Vae:
+         planar = replicated_to_host_yuv(canvas, self.mesh_device)
+         return lambda: planar.reshape(planar.shape[0], height * 3 // 2, width)
+ 
++    def _read_canvas_yuv_upscaled(
++        self, canvas_rows: ttnn.Tensor, canvas_hw: tuple[int, int], upscale_to: tuple[int, int]
++    ):
++        """`_read_canvas_yuv` for a strip canvas resized to `upscale_to` first."""
++        from .upscale_minimax_h3 import CanvasUpscaler
++
++        key = (tuple(canvas_hw), tuple(upscale_to))
++        upscaler = self._upscalers.get(key)
++        if upscaler is None:
++            upscaler = self._upscalers[key] = CanvasUpscaler(self.mesh_device, canvas_hw, upscale_to)
++        patch = upscaler(canvas_rows)
++        planar = fast_device_to_host_yuv(
++            patch, self.mesh_device, ccl_manager=self.ccl_manager, use_persistent_buffer=False, defer=True
++        )
++        height, width = upscale_to
++        return lambda: planar().reshape(-1, height * 3 // 2, width)
++
+     def decode_clip(self, z_BCTHW: torch.Tensor) -> torch.Tensor:
+         """Decode one temporal clip, spatially tiled -- the reference ``_decode_clip``.
+ 
+@@ -1672,8 +1901,15 @@ class MiniMaxH3Vae:
+             z_BCTHW[:, :, i * chunk_size : i * chunk_size + chunk_size + config.token_overlap]
+             for i in range(num_chunks)
+         ]
++        assembly = None
+         if self.device_stitch and chunk_latents:
+-            clips = self._decode_clips_device_stitched(chunk_latents, output_type)
++            if self.stream_blend and output_type == "yuv420":
++                assembly = StreamedClipAssembly(
++                    num_chunks, chunk_num_frames, config.frame_pre_padding, config.token_drop, config.frame_overlap
++                )
++            clips = self._decode_clips_device_stitched(
++                chunk_latents, output_type, None if assembly is None else assembly.feed
++            )
+         elif chunk_latents:
+             latent_height, latent_width = chunk_latents[0].shape[-2], chunk_latents[0].shape[-1]
+             mark = time.perf_counter()
+@@ -1700,21 +1936,13 @@ class MiniMaxH3Vae:
+             clips = []
+ 
+         assemble_mark = time.perf_counter()
+-        parts, overlap = [], None
+-        for i in range(num_chunks):
+-            clip = clips[i]
+-            for j in range(int(config.token_drop > 0) + 1):
+-                frame_start = j * chunk_num_frames
+-                chunk = clip_frames(clip, frame_start, frame_start + chunk_num_frames)
+-                chunk = clip_frames(chunk, config.frame_pre_padding, clip_num_frames(chunk))
+-                if j == 0:
+-                    parts.append((chunk, overlap))
+-                else:
+-                    overlap = chunk
+-        if overlap is not None:
+-            parts.append((overlap, None))
+-
+-        result = assemble_clip_parts(parts, config.frame_overlap) if parts else concat_clip_frames([])
++        if assembly is not None and assembly.fed == num_chunks:
++            result = assembly.result()
++            # Worker time hidden under the waves; not part of the stage's critical path.
++            self._profile["blend_streamed"] = assembly.seconds
++        else:
++            parts = clip_parts(clips[:num_chunks], chunk_num_frames, config.frame_pre_padding, config.token_drop)
++            result = assemble_clip_parts(parts, config.frame_overlap) if parts else concat_clip_frames([])
+         self._profile["blend"] = time.perf_counter() - assemble_mark
+         self._profile["concat"] = 0.0
+         if pad_tokens > 0:
+diff --git a/models/tt_dit/pipelines/minimax_h3/pipeline_minimax_h3.py b/models/tt_dit/pipelines/minimax_h3/pipeline_minimax_h3.py
+index 75791cd538e..f357985cbbf 100644
+--- a/models/tt_dit/pipelines/minimax_h3/pipeline_minimax_h3.py
++++ b/models/tt_dit/pipelines/minimax_h3/pipeline_minimax_h3.py
+@@ -151,6 +151,31 @@ from .weights_minimax_h3 import resolve_weights_dir
+ MINIMAX_H3_PIXEL_MEAN = _MINIMAX_H3_PIXEL_MEAN
+ MINIMAX_H3_PIXEL_STD = _MINIMAX_H3_PIXEL_STD
+ 
++# Comma-separated "INWxINH:OUTWxOUTH" entries: bicubic-resize the yuv420 video of canvas INWxINH to
++# OUTWxOUTH on device, inside the VAE readback, instead of leaving the resize to the caller's host.
++# A bare "OUTWxOUTH" (e.g. "1920x1080") names the 16:9 canvas. Every other canvas keeps its size, so
++# the resize never changes a video's aspect ratio unless an entry asks for it.
++_UPSCALE_ENV = "MINIMAX_H3_UPSCALE"
++
++
++def _upscale_from_env() -> dict[tuple[int, int], tuple[int, int]]:
++    """`{(in_height, in_width): (out_height, out_width)}` from `MINIMAX_H3_UPSCALE`; empty when unset."""
++    raw = os.environ.get(_UPSCALE_ENV, "").strip()
++
++    def size(text: str) -> tuple[int, int]:
++        width, height = (int(v) for v in text.strip().lower().split("x"))
++        return height, width
++
++    upscale = {}
++    for entry in filter(None, (e.strip() for e in raw.split(","))):
++        try:
++            source, _, target = entry.rpartition(":")
++            upscale[size(source) if source else resolve_canvas_size(16, 9)] = size(target)
++        except ValueError:
++            raise ValueError(f"{_UPSCALE_ENV} entries must be [INWxINH:]OUTWxOUTH, got {entry!r}") from None
++    return upscale
++
++
+ # The timestep a ref2va reference soundtrack's rows run at: a literal 1.0, every step. They are
+ # clean -- posterior mean, no fp16 round trip, no noise augmentation -- unlike the visual
+ # conditioning rows, which sit at max(t, 0.999). See `references.py`.
+@@ -721,6 +746,7 @@ class MiniMaxH3Pipeline:
+             pixel_norm=(MINIMAX_H3_PIXEL_MEAN, MINIMAX_H3_PIXEL_STD),
+             readback_uint8=self.vae_output_type == "uint8",
+             waves_per_device=self.vae_waves_per_device,
++            upscale_to=_upscale_from_env(),
+         )
+         self._vae.load_state(self._read_safetensors("vae"))
+ 
+@@ -2487,7 +2513,8 @@ class MiniMaxH3Pipeline:
+         kernels, and one decoder chunk per canvas reaches all of them. The gather stitch slices each
+         tile out of the wave by its slot, one program per slot, and the slots are shared by every
+         canvas: the first canvas whose chunks fill a wave exactly decodes a full wave, which reaches
+-        every slot.
++        every slot. A canvas `MINIMAX_H3_UPSCALE` names decodes through its device resize here, so
++        the resize compiles too.
+         """
+         config = self.vae_config
+         ratio = config.spatial_compression_ratio
+diff --git a/models/tt_dit/tests/models/minimax_h3/test_performance_vae_minimax_h3.py b/models/tt_dit/tests/models/minimax_h3/test_performance_vae_minimax_h3.py
+index cd29668753c..f0357c5b6c7 100644
+--- a/models/tt_dit/tests/models/minimax_h3/test_performance_vae_minimax_h3.py
++++ b/models/tt_dit/tests/models/minimax_h3/test_performance_vae_minimax_h3.py
+@@ -291,7 +291,12 @@ def test_decode_stage(mesh_device, seconds, mode):
+     config = MiniMaxH3VaeConfig.from_pretrained(weights_dir)
+     ccl_manager = CCLManager(mesh_device, num_links=2, topology=ttnn.Topology.Ring)
+     vae = MiniMaxH3Vae(
+-        config, task="t2va", mesh_device=mesh_device, ccl_manager=ccl_manager, **DECODE_STAGE_MODES[mode]
++        config,
++        task="t2va",
++        mesh_device=mesh_device,
++        ccl_manager=ccl_manager,
++        profile=os.environ.get("MINIMAX_H3_VAE_PROFILE") == "1",
++        **DECODE_STAGE_MODES[mode],
+     )
+     output_type = "yuv420" if mode.startswith("yuv420") else "float"
+ 
+@@ -320,6 +325,7 @@ def test_decode_stage(mesh_device, seconds, mode):
+                 "stitch",
+                 "unpatchify",
+                 "blend",
++                "blend_streamed",
+                 "concat",
+                 "tiling",
+                 "upload",
+@@ -332,6 +338,172 @@ def test_decode_stage(mesh_device, seconds, mode):
+     )
+ 
+ 
++# ---- traced strip-stitch decode, off/on pair -----------------------------------------------
++#
++# Decodes the same latents untraced and traced (`traced_decode=True`) for each seed in
++# MINIMAX_H3_VAE_AB_SEEDS (default "0,1,2,3,4"), in one process so both arms share box and clock.
++# The traced arm must match bit for bit, or reach PSNR >= 40 dB and PCC >= 0.999.
++#   pytest models/tt_dit/tests/models/minimax_h3/test_performance_vae_minimax_h3.py -k decode_trace_ab -s
++
++MESH_4X8_RING_TRACE = [
++    pytest.param(
++        (4, 8),
++        {
++            "fabric_config": ttnn.FabricConfig.FABRIC_1D_RING,
++            "require_exact_physical_num_devices": True,
++            "l1_small_size": 65536,
++            "trace_region_size": 300_000_000,
++        },
++        id="4x8ring",
++    )
++]
++
++
++def _video_tensor(video) -> torch.Tensor:
++    """`decode` returns a planar uint8 numpy array for yuv420."""
++    return video if isinstance(video, torch.Tensor) else torch.from_numpy(video)
++
++
++@pytest.mark.timeout(3600)
++@pytest.mark.parametrize(
++    ("mesh_device", "device_params"), MESH_4X8_RING_TRACE, indirect=["mesh_device", "device_params"]
++)
++@pytest.mark.parametrize("seconds", [5, 15], ids=["5s", "15s"])
++def test_decode_trace_ab(mesh_device, seconds):
++    from loguru import logger
++
++    weights_dir = weights_subdir("vae")
++    if weights_dir is None:
++        pytest.skip("MiniMax-H3 vae not found; set MINIMAX_H3_MODEL_PATH")
++
++    config = MiniMaxH3VaeConfig.from_pretrained(weights_dir)
++    ccl_manager = CCLManager(mesh_device, num_links=2, topology=ttnn.Topology.Ring)
++    vae = MiniMaxH3Vae(
++        config, task="t2va", mesh_device=mesh_device, ccl_manager=ccl_manager, **DECODE_STAGE_MODES["yuv420"]
++    )
++    vae.load_state(_decode_stage_state(weights_dir))
++    latent_h, latent_w = DECODE_STAGE_LATENT_HW
++    seeds = [int(x) for x in os.environ.get("MINIMAX_H3_VAE_AB_SEEDS", "0,1,2,3,4").split(",")]
++
++    torch.manual_seed(0)
++    vae.decode(
++        torch.randn(1, config.latent_channels, DECODE_STAGE_WARM_FRAMES, latent_h, latent_w), output_type="yuv420"
++    )
++
++    failures = []
++    try:
++        for seed in seeds:
++            torch.manual_seed(seed)
++            latents = torch.randn(1, config.latent_channels, DECODE_STAGE_FRAMES[seconds], latent_h, latent_w)
++            arms = {}
++            for arm in ("off", "on"):
++                vae.traced_decode = arm == "on"
++                started = time.time()
++                video = vae.decode(latents, output_type="yuv420")
++                elapsed = time.time() - started
++                profile = dict(vae.last_decode_profile)
++                arms[arm] = _video_tensor(video).clone()
++                each = profile.get("dispatch_each") or [0.0]
++                logger.info(
++                    f"TRACE_AB seed={seed} seconds={seconds} arm={arm} total={elapsed:.3f}s "
++                    f"device={profile.get('device', 0.0):.3f} readback={profile.get('readback', 0.0):.3f} "
++                    f"readback_join={profile.get('readback_join', 0.0):.3f} waves={int(profile.get('waves', 0))} "
++                    f"dispatch_each_ms=[{' '.join(f'{v * 1000:.0f}' for v in each)}]"
++                )
++            off, on = arms["off"].float(), arms["on"].float()
++            identical = torch.equal(arms["off"], arms["on"])
++            mse = torch.mean((off - on) ** 2).item()
++            peak = float(off.abs().max().item()) or 1.0
++            psnr = float("inf") if mse == 0 else 10 * torch.log10(torch.tensor(peak**2 / mse)).item()
++            pcc = 1.0 if identical else torch.corrcoef(torch.stack([off.reshape(-1), on.reshape(-1)]))[0, 1].item()
++            logger.info(
++                f"TRACE_AB_QUALITY seed={seed} identical={identical} psnr={psnr:.2f} pcc={pcc:.6f} "
++                f"max_abs={float((off - on).abs().max().item()):.4f}"
++            )
++            if not identical and not (psnr >= 40 and pcc >= 0.999):
++                failures.append(seed)
++    finally:
++        vae.release_decode_trace()
++    assert not failures, f"traced decode diverged on seeds {failures}"
++
++
++# ---- streamed temporal assembly, off/on pair -----------------------------------------------
++#
++# Decodes the same latents with the temporal assembly after the last wave (`stream_blend=False`)
++# and on the readback worker as each clip lands (`stream_blend=True`), alternating arms
++# MINIMAX_H3_VAE_AB_REPEATS times (default 2) per seed. Both arms must match bit for bit, or
++# reach PSNR >= 40 dB and PCC >= 0.999.
++#   pytest models/tt_dit/tests/models/minimax_h3/test_performance_vae_minimax_h3.py -k decode_stream_blend_ab -s
++
++
++@pytest.mark.timeout(3600)
++@pytest.mark.parametrize(("mesh_device", "device_params"), MESH_4X8_RING, indirect=["mesh_device", "device_params"])
++@pytest.mark.parametrize("seconds", [5, 15], ids=["5s", "15s"])
++def test_decode_stream_blend_ab(mesh_device, seconds):
++    from loguru import logger
++
++    weights_dir = weights_subdir("vae")
++    if weights_dir is None:
++        pytest.skip("MiniMax-H3 vae not found; set MINIMAX_H3_MODEL_PATH")
++
++    config = MiniMaxH3VaeConfig.from_pretrained(weights_dir)
++    ccl_manager = CCLManager(mesh_device, num_links=2, topology=ttnn.Topology.Ring)
++    vae = MiniMaxH3Vae(
++        config, task="t2va", mesh_device=mesh_device, ccl_manager=ccl_manager, **DECODE_STAGE_MODES["yuv420"]
++    )
++    vae.load_state(_decode_stage_state(weights_dir))
++    latent_h, latent_w = DECODE_STAGE_LATENT_HW
++    seeds = [int(x) for x in os.environ.get("MINIMAX_H3_VAE_AB_SEEDS", "0,1,2,3,4").split(",")]
++    repeats = int(os.environ.get("MINIMAX_H3_VAE_AB_REPEATS", "2"))
++    logger.info(f"STREAM_AB affinity={len(os.sched_getaffinity(0))} cpus {sorted(os.sched_getaffinity(0))[:16]}")
++
++    torch.manual_seed(0)
++    for stream in (False, True):
++        vae.stream_blend = stream
++        vae.decode(
++            torch.randn(1, config.latent_channels, DECODE_STAGE_WARM_FRAMES, latent_h, latent_w),
++            output_type="yuv420",
++        )
++
++    failures = []
++    for seed in seeds:
++        torch.manual_seed(seed)
++        latents = torch.randn(1, config.latent_channels, DECODE_STAGE_FRAMES[seconds], latent_h, latent_w)
++        arms, totals = {}, {"off": [], "on": []}
++        for repeat in range(repeats):
++            for arm in ("off", "on"):
++                vae.stream_blend = arm == "on"
++                started = time.time()
++                video = vae.decode(latents, output_type="yuv420")
++                elapsed = time.time() - started
++                profile = dict(vae.last_decode_profile)
++                totals[arm].append(elapsed)
++                arms[arm] = _video_tensor(video).clone()
++                logger.info(
++                    f"STREAM_AB seed={seed} seconds={seconds} arm={arm} repeat={repeat} total={elapsed:.3f}s "
++                    f"device={profile.get('device', 0.0):.3f} readback={profile.get('readback', 0.0):.3f} "
++                    f"readback_join={profile.get('readback_join', 0.0):.3f} blend={profile.get('blend', 0.0):.3f} "
++                    f"blend_streamed={profile.get('blend_streamed', 0.0):.3f} waves={int(profile.get('waves', 0))}"
++                )
++        logger.info(
++            f"STREAM_AB_SUMMARY seed={seed} seconds={seconds} off_min={min(totals['off']):.3f}s "
++            f"on_min={min(totals['on']):.3f}s saved={min(totals['off']) - min(totals['on']):.3f}s"
++        )
++        off, on = arms["off"].float(), arms["on"].float()
++        identical = torch.equal(arms["off"], arms["on"])
++        mse = torch.mean((off - on) ** 2).item()
++        peak = float(off.abs().max().item()) or 1.0
++        psnr = float("inf") if mse == 0 else 10 * torch.log10(torch.tensor(peak**2 / mse)).item()
++        pcc = 1.0 if identical else torch.corrcoef(torch.stack([off.reshape(-1), on.reshape(-1)]))[0, 1].item()
++        logger.info(
++            f"STREAM_AB_QUALITY seed={seed} identical={identical} psnr={psnr:.2f} pcc={pcc:.6f} "
++            f"max_abs={float((off - on).abs().max().item()):.4f}"
++        )
++        if not identical and not (psnr >= 40 and pcc >= 0.999):
++            failures.append(seed)
++    assert not failures, f"streamed assembly diverged on seeds {failures}"
++
++
+ # ---- whole-stage `encode` timing, per conditioning case --------------------------------------
+ #
+ # Times the "vae_encode" stage through the production entry points; asserts row counts, not wall time.
+diff --git a/models/tt_dit/tests/models/minimax_h3/test_stitch_device_minimax_h3.py b/models/tt_dit/tests/models/minimax_h3/test_stitch_device_minimax_h3.py
+index e6a69623e65..ff62756a247 100644
+--- a/models/tt_dit/tests/models/minimax_h3/test_stitch_device_minimax_h3.py
++++ b/models/tt_dit/tests/models/minimax_h3/test_stitch_device_minimax_h3.py
+@@ -396,6 +396,41 @@ def test_temporal_crossfade_survives_the_yuv_conversion():
+     assert worst <= 1, f"reordering the cross-fade past the YUV conversion costs {worst} LSB, not <=1"
+ 
+ 
++def test_planar_crossfade_matches_the_whole_block_formula():
++    """Every uint8 pair at every extent up to 8 frames, against the formula it replaced."""
++    from ....models.vae.minimax_h3.vae_minimax_h3 import blend_clip_frames
++
++    values = np.arange(256, dtype=np.uint8)
++    a_frame = np.repeat(values, 256).reshape(256, 256)
++    b_frame = np.tile(values, 256).reshape(256, 256)
++    for extent in range(1, 9):
++        a = np.repeat(a_frame[None], extent + 2, axis=0)
++        b = np.repeat(b_frame[None], extent + 2, axis=0)
++        pos = np.arange(extent, dtype=np.float32).reshape(-1, 1, 1)
++        head = a[-extent:].astype(np.float32) * (1.0 - pos / extent) + b[:extent].astype(np.float32) * (pos / extent)
++        expected = np.concatenate([np.clip(np.rint(head), 0, 255).astype(np.uint8), b[extent:]], axis=0)
++        assert np.array_equal(blend_clip_frames(a, b, extent), expected), f"extent {extent} differs"
++
++
++@pytest.mark.parametrize("num_clips", [1, 2, 7])
++@pytest.mark.parametrize("token_drop", [3, 0])
++def test_streamed_clip_assembly_matches_batch_assembly(num_clips, token_drop):
++    from ....models.vae.minimax_h3.vae_minimax_h3 import StreamedClipAssembly, assemble_clip_parts, clip_parts
++
++    config = MiniMaxH3VaeConfig()
++    chunk_num_frames = config.tokens_chunk_size * config.temporal_compression_ratio
++    clip_frames = chunk_num_frames + config.token_overlap * config.temporal_compression_ratio
++    rng = np.random.default_rng(num_clips)
++    clips = [rng.integers(0, 256, size=(clip_frames, 24, 16), dtype=np.uint8) for _ in range(num_clips)]
++
++    split = (chunk_num_frames, config.frame_pre_padding, token_drop)
++    expected = assemble_clip_parts(clip_parts(clips, *split), config.frame_overlap)
++    assembly = StreamedClipAssembly(num_clips, *split, config.frame_overlap)
++    for clip in clips:
++        assert assembly.feed(clip) is clip
++    assert np.array_equal(assembly.result(), expected)
++
++
+ @pytest.mark.parametrize("width", [1152, 1120], ids=["w1152", "w1120"])
+ @pytest.mark.parametrize(("mesh_device", "device_params"), GALAXY_MESHES, indirect=["mesh_device", "device_params"])
+ def test_replicated_readback_matches_gather_path(mesh_device, width):
+diff --git a/models/tt_dit/tests/models/minimax_h3/test_upscale_minimax_h3.py b/models/tt_dit/tests/models/minimax_h3/test_upscale_minimax_h3.py
+new file mode 100644
+index 00000000000..80b1d72e458
+--- /dev/null
++++ b/models/tt_dit/tests/models/minimax_h3/test_upscale_minimax_h3.py
+@@ -0,0 +1,416 @@
++# SPDX-FileCopyrightText: © 2026 Tenstorrent AI ULC
++#
++# SPDX-License-Identifier: Apache-2.0
++
++"""Device bicubic 768p -> 1080p (`CanvasUpscaler`, `MiniMaxH3Vae(upscale_to=...)`) against host bicubic.
++
++Both arms end in the same device YUV 4:2:0 conversion, so a difference is the resize alone. The host
++arm is `F.interpolate(..., mode="bicubic", align_corners=False)` on float RGB, as the 1080p export does.
++
++    # CPU only: the per-device block math equals F.interpolate.
++    pytest models/tt_dit/tests/models/minimax_h3/test_upscale_minimax_h3.py -k blocks
++    # 4x8: real frames (one mp4 per seed), and a 10 s VAE decode with the resize inside the readback.
++    MINIMAX_H3_UPSCALE_MP4S=s0.mp4,s1.mp4 MINIMAX_H3_UPSCALE_OUT=out/ \\
++    MINIMAX_H3_MODEL_PATH=/path/to/MiniMax-H3 pytest ... -k "frames or decode" -s
++"""
++
++from __future__ import annotations
++
++import math
++import os
++import time
++from pathlib import Path
++from types import SimpleNamespace
++
++import numpy as np
++import pytest
++import torch
++import torch.nn.functional as F
++
++import ttnn
++
++from ....models.vae.minimax_h3.upscale_minimax_h3 import CanvasUpscaler, bicubic_matrix, upscale_blocks_reference
++from ....utils.yuv_d2h import fast_device_to_host_yuv
++
++IN_HW = (768, 1344)
++OUT_HW = (1080, 1920)
++CHUNK_FRAMES = 20
++
++MESH_4X8_RING = [
++    pytest.param(
++        (4, 8),
++        {
++            "fabric_config": ttnn.FabricConfig.FABRIC_1D_RING,
++            "require_exact_physical_num_devices": True,
++            "l1_small_size": 65536,
++        },
++        id="4x8ring",
++    )
++]
++
++
++def host_bicubic(video_BCTHW: torch.Tensor, out_hw: tuple[int, int]) -> torch.Tensor:
++    """The host reference: float bicubic in chunks of 16 frames, clamped to [-1, 1]."""
++    _, c, t, h, w = video_BCTHW.shape
++    frames = video_BCTHW[0].permute(1, 0, 2, 3)
++    out = torch.empty(t, c, *out_hw)
++    for start in range(0, t, 16):
++        out[start : start + 16] = F.interpolate(
++            frames[start : start + 16], size=out_hw, mode="bicubic", align_corners=False
++        ).clamp_(-1.0, 1.0)
++    return out.permute(1, 0, 2, 3).unsqueeze(0)
++
++
++def psnr_uint8(reference: np.ndarray, test: np.ndarray) -> float:
++    mse = float(np.mean((reference.astype(np.float64) - test.astype(np.float64)) ** 2))
++    return math.inf if mse == 0.0 else 10.0 * math.log10(255.0**2 / mse)
++
++
++def boundary_report(reference: np.ndarray, test: np.ndarray, mesh_shape: tuple[int, int]) -> dict[str, float]:
++    """Max |dY| on the luma rows and columns either side of a device patch boundary, and elsewhere."""
++    height, width = OUT_HW
++    diff = np.abs(reference[:, :height].astype(np.int16) - test[:, :height].astype(np.int16))
++    rows = sorted({r + d for k in range(1, mesh_shape[0]) for d in (-1, 0) for r in [k * height // mesh_shape[0]]})
++    cols = sorted({c + d for k in range(1, mesh_shape[1]) for d in (-1, 0) for c in [k * width // mesh_shape[1]]})
++    inner = np.ones((height, width), dtype=bool)
++    inner[rows, :] = False
++    inner[:, cols] = False
++    return {
++        "boundary_rows_max": float(diff[:, rows, :].max()),
++        "boundary_cols_max": float(diff[:, :, cols].max()),
++        "interior_max": float(diff[:, inner].max()),
++        "boundary_rows_mean": float(diff[:, rows, :].mean()),
++        "interior_mean": float(diff[:, inner].mean()),
++    }
++
++
++def yuv420_to_rgb(planar: np.ndarray, frame: int) -> np.ndarray:
++    """One frame of limited-range BT.601 planar 4:2:0 to RGB uint8, for stills."""
++    height = planar.shape[1] * 2 // 3
++    width = planar.shape[2]
++    y = planar[frame, :height].astype(np.float32)
++    chroma = planar[frame, height:].reshape(2, height // 2, width // 2).astype(np.float32)
++    cb, cr = (np.repeat(np.repeat(p, 2, axis=0), 2, axis=1) - 128.0 for p in chroma)
++    y = (y - 16.0) * (255.0 / 219.0)
++    rgb = np.stack([y + 1.596 * cr, y - 0.392 * cb - 0.813 * cr, y + 2.017 * cb], axis=-1)
++    return np.clip(rgb + 0.5, 0, 255).astype(np.uint8)
++
++
++def save_still(planar: np.ndarray, frame: int, path: Path) -> None:
++    from PIL import Image
++
++    path.parent.mkdir(parents=True, exist_ok=True)
++    Image.fromarray(yuv420_to_rgb(planar, frame)).save(path)
++
++
++def read_mp4(path: str) -> torch.Tensor:
++    """`(1, 3, T, H, W)` float in [-1, 1]."""
++    import av
++
++    with av.open(path) as container:
++        frames = [f.to_ndarray(format="rgb24") for f in container.decode(video=0)]
++    video = torch.from_numpy(np.stack(frames)).permute(3, 0, 1, 2).unsqueeze(0)
++    return video.float().div_(127.5).sub_(1.0)
++
++
++def patches_to_yuv(patch_BCTHW: ttnn.Tensor, mesh_device, out_hw) -> np.ndarray:
++    planar = fast_device_to_host_yuv(patch_BCTHW, mesh_device, use_persistent_buffer=False)
++    return np.asarray(planar).reshape(-1, out_hw[0] * 3 // 2, out_hw[1])
++
++
++def host_to_yuv(video_BCTHW: torch.Tensor, mesh_device) -> np.ndarray:
++    """Host pixels through the same device YUV conversion the device arm ends in."""
++    mesh_shape = tuple(mesh_device.shape)
++    parts = []
++    for start in range(0, video_BCTHW.shape[2], CHUNK_FRAMES):
++        chunk = video_BCTHW[:, :, start : start + CHUNK_FRAMES]
++        patch = ttnn.from_torch(
++            chunk,
++            dtype=ttnn.bfloat16,
++            layout=ttnn.ROW_MAJOR_LAYOUT,
++            device=mesh_device,
++            mesh_mapper=ttnn.ShardTensor2dMesh(mesh_device, mesh_shape=mesh_shape, dims=(3, 4)),
++        )
++        parts.append(patches_to_yuv(patch, mesh_device, video_BCTHW.shape[-2:]))
++        ttnn.deallocate(patch)
++    return np.concatenate(parts)
++
++
++@pytest.mark.parametrize(("in_hw", "out_hw", "mesh_shape"), [(IN_HW, OUT_HW, (4, 8)), ((64, 96), (90, 160), (2, 4))])
++def test_upscale_blocks_match_interpolate(in_hw, out_hw, mesh_shape):
++    """Each device's patch, assembled, is exactly the host resize: no seam at a device boundary."""
++    torch.manual_seed(0)
++    canvas = torch.rand(1, 3, 2, *in_hw, dtype=torch.float64) * 2 - 1
++    expected = F.interpolate(canvas[0].transpose(0, 1), size=out_hw, mode="bicubic", align_corners=False)
++    expected = expected.transpose(0, 1).unsqueeze(0)
++    got = upscale_blocks_reference(canvas, out_hw, mesh_shape)
++    assert got.shape == expected.shape
++    assert (got - expected).abs().max().item() < 1e-12
++
++    matrix = bicubic_matrix(in_hw[1], out_hw[1])
++    assert torch.allclose(matrix.sum(dim=1), torch.ones(out_hw[1], dtype=torch.float64))
++
++
++class _StubMesh:
++    """The mesh surface the canvas routing and the VAE warmup read; no device behind it."""
++
++    shape = (4, 8)
++
++    def get_num_devices(self) -> int:
++        return 32
++
++    def num_program_cache_entries(self) -> int:
++        return 0
++
++
++def _stub_vae(upscale_to, *, stitch_exchange="strips"):
++    """A `MiniMaxH3Vae` with only the attributes its tile geometry and upscale routing read."""
++    from ....models.vae.minimax_h3.vae_minimax_h3 import (
++        DEFAULT_TILE_OVERLAP,
++        DEFAULT_TILE_SIZE,
++        MiniMaxH3Vae,
++        MiniMaxH3VaeConfig,
++    )
++
++    vae = object.__new__(MiniMaxH3Vae)
++    vae.config = MiniMaxH3VaeConfig()
++    vae.mesh_device = _StubMesh()
++    vae.tile_size, vae.tile_overlap = DEFAULT_TILE_SIZE, DEFAULT_TILE_OVERLAP
++    vae.device_stitch, vae.stitch_exchange, vae.ccl_manager = True, stitch_exchange, None
++    vae.upscale_to, vae._upscalers, vae._warned_upscale = dict(upscale_to), {}, set()
++    return vae
++
++
++@pytest.mark.parametrize(
++    ("raw", "expected"),
++    [
++        ("", {}),
++        ("1920x1080", {IN_HW: OUT_HW}),
++        (" 1344x768:1920x1080 , 768x1344:1080x1920", {IN_HW: OUT_HW, (1344, 768): (1920, 1080)}),
++    ],
++)
++def test_upscale_env(monkeypatch, raw, expected):
++    from ....pipelines.minimax_h3 import pipeline_minimax_h3 as pm
++
++    monkeypatch.setenv("MINIMAX_H3_UPSCALE", raw)
++    assert pm._upscale_from_env() == expected
++
++
++@pytest.mark.parametrize("raw", ["1920", "1920x1080x3", "1344x768:", "axb"])
++def test_upscale_env_rejects(monkeypatch, expect_error, raw):
++    from ....pipelines.minimax_h3 import pipeline_minimax_h3 as pm
++
++    monkeypatch.setenv("MINIMAX_H3_UPSCALE", raw)
++    with expect_error(ValueError, "MINIMAX_H3_UPSCALE"):
++        pm._upscale_from_env()
++
++
++def test_upscale_target_every_canvas(monkeypatch):
++    """`MINIMAX_H3_UPSCALE=1920x1080` resizes the 16:9 768p canvas only; no decodable canvas raises."""
++    from ....pipelines.minimax_h3 import pipeline_minimax_h3 as pm
++    from ....pipelines.minimax_h3.policy import decodable_canvases
++
++    monkeypatch.setenv("MINIMAX_H3_UPSCALE", "1920x1080")
++    vae = _stub_vae(pm._upscale_from_env())
++    ratio = vae.config.spatial_compression_ratio
++    canvases = decodable_canvases()
++    unserved = [c for c in canvases if vae._strips_unserved(c[0] // ratio, c[1] // ratio, "yuv420") is not None]
++    assert unserved and IN_HW in canvases and IN_HW not in unserved
++
++    targets = {c: vae.upscale_target(c[0] // ratio, c[1] // ratio) for c in canvases}
++    assert targets.pop(IN_HW) == OUT_HW
++    assert set(targets.values()) == {None}
++    assert vae.upscale_target(IN_HW[0] // ratio, IN_HW[1] // ratio, "float") is None
++
++
++def test_upscale_target_falls_back_when_strips_cannot_serve():
++    """A mapped canvas the strip stitch cannot serve keeps its size instead of raising."""
++    from ....pipelines.minimax_h3.policy import decodable_canvases
++
++    gather = _stub_vae({IN_HW: OUT_HW}, stitch_exchange="gather")
++    ratio = gather.config.spatial_compression_ratio
++    assert gather.upscale_target(IN_HW[0] // ratio, IN_HW[1] // ratio) is None
++
++    vae = _stub_vae({c: (c[0] * 2, c[1] * 2) for c in decodable_canvases()})
++    for height, width in decodable_canvases():
++        served = vae._strips_unserved(height // ratio, width // ratio, "yuv420") is None
++        target = vae.upscale_target(height // ratio, width // ratio)
++        assert target == ((height * 2, width * 2) if served else None)
++
++
++def test_upscale_to_rejects_a_target_the_mesh_cannot_split():
++    from ....models.vae.minimax_h3.upscale_minimax_h3 import upscale_unserved
++
++    assert upscale_unserved(IN_HW, OUT_HW, (4, 8)) is None
++    assert "split" in upscale_unserved(IN_HW, (1081, 1920), (4, 8))
++    assert "even" in upscale_unserved(IN_HW, (1080, 1928), (4, 8))
++
++
++def test_upscaler_kept_per_canvas(monkeypatch):
++    """A serving loop that alternates canvases builds each canvas's upscaler (and its matrices) once."""
++    from ....models.vae.minimax_h3 import upscale_minimax_h3, vae_minimax_h3
++
++    built = []
++
++    class CountingUpscaler:
++        def __init__(self, mesh_device, in_hw, out_hw):
++            built.append((in_hw, out_hw))
++
++        def __call__(self, canvas_rows):
++            return canvas_rows
++
++    monkeypatch.setattr(upscale_minimax_h3, "CanvasUpscaler", CountingUpscaler)
++    monkeypatch.setattr(vae_minimax_h3, "fast_device_to_host_yuv", lambda *args, **kwargs: None)
++    other = ((1344, 768), (1920, 1080))
++    vae = _stub_vae({IN_HW: OUT_HW, other[0]: other[1]})
++    for in_hw, out_hw in (IN_HW, OUT_HW), other, (IN_HW, OUT_HW), other:
++        vae._read_canvas_yuv_upscaled(None, in_hw, out_hw)
++    assert built == [(IN_HW, OUT_HW), other]
++
++
++def test_warm_vae_decode_reaches_the_upscale(monkeypatch):
++    """Pipeline warmup with `MINIMAX_H3_UPSCALE` set decodes every canvas without raising, the 768p one resized."""
++    from ....pipelines.minimax_h3 import pipeline_minimax_h3 as pm
++
++    monkeypatch.setenv("MINIMAX_H3_UPSCALE", "1920x1080")
++    monkeypatch.setattr(pm, "_is_host_rank", lambda: False)
++    vae = _stub_vae(pm._upscale_from_env())
++    decoded = {}
++
++    def decode(latents, *, output_type):
++        canvas = tuple(int(n) * vae.config.spatial_compression_ratio for n in latents.shape[-2:])
++        decoded[canvas] = vae.upscale_target(*latents.shape[-2:], output_type)
++
++    vae.decode = decode
++    vae.decode_unit_shape = lambda: (1, 16, 16)
++    pipeline = SimpleNamespace(
++        vae_config=vae.config, _vae=vae, mesh_device=vae.mesh_device, _host_log=lambda message: None
++    )
++    pm.MiniMaxH3Pipeline._warm_vae_decode(pipeline)
++
++    assert decoded.pop(IN_HW) == OUT_HW
++    assert decoded and set(decoded.values()) == {None}
++
++
++@pytest.mark.timeout(600)
++@pytest.mark.parametrize(("mesh_device", "device_params"), MESH_4X8_RING, indirect=["mesh_device", "device_params"])
++def test_upscale_frames(mesh_device):
++    """Real 768p frames per seed: device resize vs host bicubic, PSNR and device-boundary error."""
++    from loguru import logger
++
++    paths = [p for p in os.environ.get("MINIMAX_H3_UPSCALE_MP4S", "").split(",") if p]
++    if not paths:
++        pytest.skip("set MINIMAX_H3_UPSCALE_MP4S to 768p mp4s, one per seed")
++    out_dir = Path(os.environ.get("MINIMAX_H3_UPSCALE_OUT", "upscale_out"))
++    mesh_shape = tuple(mesh_device.shape)
++    upscaler = CanvasUpscaler(mesh_device, IN_HW, OUT_HW)
++
++    def device_arm(video):
++        parts = []
++        for start in range(0, video.shape[2], CHUNK_FRAMES):
++            rows = ttnn.from_torch(
++                video[:, :, start : start + CHUNK_FRAMES],
++                dtype=ttnn.float32,
++                layout=ttnn.TILE_LAYOUT,
++                device=mesh_device,
++                mesh_mapper=ttnn.ShardTensor2dMesh(mesh_device, mesh_shape=mesh_shape, dims=(3, None)),
++            )
++            parts.append(patches_to_yuv(upscaler(rows), mesh_device, OUT_HW))
++            ttnn.deallocate(rows)
++        return np.concatenate(parts)
++
++    device_arm(read_mp4(paths[0])[:, :, :CHUNK_FRAMES])
++    worst = math.inf
++    for path in paths:
++        name = Path(path).stem
++        video = read_mp4(path)
++        assert tuple(video.shape[-2:]) == IN_HW, f"{path} is {tuple(video.shape[-2:])}, want {IN_HW}"
++
++        started = time.perf_counter()
++        host = host_bicubic(video, OUT_HW)
++        host_s = time.perf_counter() - started
++        reference = host_to_yuv(host, mesh_device)
++        del host
++
++        started = time.perf_counter()
++        test = device_arm(video)
++        device_s = time.perf_counter() - started
++
++        assert test.shape == reference.shape
++        score = psnr_uint8(reference, test)
++        luma = psnr_uint8(reference[:, : OUT_HW[0]], test[:, : OUT_HW[0]])
++        seams = boundary_report(reference, test, mesh_shape)
++        worst = min(worst, score)
++        logger.info(
++            f"UPSCALE_FRAMES {name} frames={video.shape[2]} psnr_yuv={score:.2f} psnr_y={luma:.2f} "
++            f"host_bicubic={host_s:.3f}s device_upscale_yuv={device_s:.3f}s "
++            + " ".join(f"{k}={v:.2f}" for k, v in seams.items())
++        )
++        middle = video.shape[2] // 2
++        save_still(test, middle, out_dir / f"{name}_device_f{middle}.png")
++        save_still(reference, middle, out_dir / f"{name}_host_f{middle}.png")
++    assert worst >= 40.0, f"worst PSNR {worst:.2f} dB < 40"
++
++
++@pytest.mark.timeout(600)
++@pytest.mark.parametrize(("mesh_device", "device_params"), MESH_4X8_RING, indirect=["mesh_device", "device_params"])
++def test_decode_upscale(mesh_device):
++    """10 s VAE decode: yuv420 768p, yuv420 resized on device, and float + host bicubic, same latents."""
++    from loguru import logger
++
++    from ....models.vae.minimax_h3.vae_minimax_h3 import MiniMaxH3Vae, MiniMaxH3VaeConfig
++    from ....parallel.manager import CCLManager
++    from .common import weights_subdir
++    from .test_performance_vae_minimax_h3 import DECODE_STAGE_MODES, DECODE_STAGE_WARM_FRAMES, _decode_stage_state
++
++    weights_dir = weights_subdir("vae")
++    if weights_dir is None:
++        pytest.skip("MiniMax-H3 vae not found; set MINIMAX_H3_MODEL_PATH")
++    out_dir = Path(os.environ.get("MINIMAX_H3_UPSCALE_OUT", "upscale_out"))
++    # 10 s is 243 frames on the 17n + 5 grid, which decodes from 72 latent frames.
++    latent_frames = int(os.environ.get("MINIMAX_H3_UPSCALE_LATENT_FRAMES", "72"))
++    seed = int(os.environ.get("MINIMAX_H3_UPSCALE_SEED", "0"))
++
++    config = MiniMaxH3VaeConfig.from_pretrained(weights_dir)
++    ccl_manager = CCLManager(mesh_device, num_links=2, topology=ttnn.Topology.Ring)
++    vae = MiniMaxH3Vae(
++        config, task="t2va", mesh_device=mesh_device, ccl_manager=ccl_manager, **DECODE_STAGE_MODES["yuv420"]
++    )
++    vae.load_state(_decode_stage_state(weights_dir))
++
++    torch.manual_seed(seed)
++    warm = torch.randn(1, config.latent_channels, DECODE_STAGE_WARM_FRAMES, 48, 84)
++    latents = torch.randn(1, config.latent_channels, latent_frames, 48, 84)
++
++    def decode(upscale_to, output_type, z):
++        vae.upscale_to = {IN_HW: upscale_to} if upscale_to else {}
++        started = time.perf_counter()
++        video = vae.decode(z, output_type=output_type)
++        return video, time.perf_counter() - started
++
++    for upscale_to, output_type in ((None, "yuv420"), (OUT_HW, "yuv420"), (None, "float")):
++        decode(upscale_to, output_type, warm)
++
++    plain, plain_s = decode(None, "yuv420", latents)
++    test, device_s = decode(OUT_HW, "yuv420", latents)
++    pixels, float_s = decode(None, "float", latents)
++    started = time.perf_counter()
++    host = host_bicubic(pixels.float().clamp(-1.0, 1.0), OUT_HW)
++    host_s = time.perf_counter() - started
++    reference = host_to_yuv(host, mesh_device)
++
++    test = np.asarray(test)
++    assert test.shape == reference.shape, f"{test.shape} vs {reference.shape}"
++    score = psnr_uint8(reference, test)
++    seams = boundary_report(reference, test, tuple(mesh_device.shape))
++    logger.info(
++        f"UPSCALE_DECODE frames={test.shape[0]} plain_768p={np.asarray(plain).shape} psnr_yuv={score:.2f} "
++        f"psnr_y={psnr_uint8(reference[:, :OUT_HW[0]], test[:, :OUT_HW[0]]):.2f} "
++        f"decode_yuv768={plain_s:.3f}s decode_yuv1080_device={device_s:.3f}s "
++        f"device_upscale_stage={device_s - plain_s:.3f}s decode_float={float_s:.3f}s host_bicubic={host_s:.3f}s "
++        + " ".join(f"{k}={v:.2f}" for k, v in seams.items())
++    )
++    middle = test.shape[0] // 2
++    save_still(test, middle, out_dir / f"decode_seed{seed}_device_f{middle}.png")
++    save_still(reference, middle, out_dir / f"decode_seed{seed}_host_f{middle}.png")
++    assert score >= 40.0, f"PSNR {score:.2f} dB < 40"
