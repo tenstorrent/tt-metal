@@ -17,7 +17,6 @@ from helpers.llk_params import (
     BlocksCalculationAlgorithm,
     DestAccumulation,
     DestSync,
-    ImpliedMathFormat,
     PackerReluType,
     PerfRunType,
     format_dict,
@@ -39,7 +38,6 @@ from helpers.stimuli_generator import (  # generate_stimuli_w_tile_dimensions
 from helpers.test_config import BootMode
 from helpers.test_variant_parameters import (
     DEST_SYNC,
-    IMPLIED_MATH_FORMAT,
     LOOP_FACTOR,
     NUM_BLOCKS,
     NUM_FACES,
@@ -320,7 +318,6 @@ def test_pack_quasar(
         "test_name": "sources/quasar/pack_quasar_test.cpp",
         "formats": formats,
         "templates": [
-            IMPLIED_MATH_FORMAT(ImpliedMathFormat.Yes),
             DEST_SYNC(dest_sync_mode),
         ],
         "runtimes": [

@@ -121,7 +121,7 @@ void run_kernel(RUNTIME_PARAMETERS params)
         }
 
         DataFormat math_format = static_cast<DataFormat>(formats.math);
-        _llk_math_srcAB_hw_configure_<IMPLIED_MATH_FORMAT, is_fp32_dest_acc_en>(math_format, math_format);
+        _llk_math_srcAB_hw_configure_<false, is_fp32_dest_acc_en>(math_format, math_format);
 
         // ENABLE_2X_FORMAT enables the 2x-packed FP4 matmul path (8 MVMULs per tile vs 16, K-dim
         // halved per MVMUL via the SrcA 2x sub-datum expansion). Set when SrcA/SrcB are
@@ -129,12 +129,7 @@ void run_kernel(RUNTIME_PARAMETERS params)
         // ENABLE_DIRECT_INDEXING selects the DI variant (MVMULDI with explicit indices) vs
         // the auto-increment-addr_mod MVMUL variant.
         _llk_math_matmul_init_<(ckernel::MathFidelity)MATH_FIDELITY, ENABLE_DIRECT_INDEXING, ENABLE_2X_FORMAT>(
-            static_cast<DataFormat>(IMPLIED_MATH_FORMAT ? formats.unpack_B_dst : formats.math),
-            static_cast<DataFormat>(IMPLIED_MATH_FORMAT ? formats.unpack_A_dst : formats.math),
-            CT_DIM,
-            RT_DIM,
-            tensor_shape_A,
-            tensor_shape_B);
+            static_cast<DataFormat>(formats.math), static_cast<DataFormat>(formats.math), CT_DIM, RT_DIM, tensor_shape_A, tensor_shape_B);
         PROFILER_SYNC();
     }
     {

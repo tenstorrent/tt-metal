@@ -24,7 +24,6 @@ from .llk_params import (
     FastMode,
     FusedSort,
     GatedReduceScale,
-    ImpliedMathFormat,
     L1Accumulation,
     MathFidelity,
     MathOperation,
@@ -845,14 +844,6 @@ class TILIZE(TemplateParameter):
 
     def convert_to_cpp(self) -> str:
         return f"constexpr bool tilize_en = {str(self.tilize.value).lower()};"
-
-
-@dataclass
-class IMPLIED_MATH_FORMAT(TemplateParameter):
-    implied_math_format: ImpliedMathFormat = ImpliedMathFormat.No
-
-    def convert_to_cpp(self) -> str:
-        return f"constexpr bool IMPLIED_MATH_FORMAT = {self.implied_math_format.value};"
 
 
 @dataclass

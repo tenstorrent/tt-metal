@@ -23,7 +23,6 @@ from helpers.golden_generators import (
 from helpers.llk_params import (
     DestAccumulation,
     DestSync,
-    ImpliedMathFormat,
     MathFidelity,
     PerfRunType,
     Transpose,
@@ -45,7 +44,6 @@ from helpers.test_variant_parameters import (
     DEST_SYNC,
     ENABLE_2X_FORMAT,
     ENABLE_DIRECT_INDEXING,
-    IMPLIED_MATH_FORMAT,
     IN_FACE_DIMS,
     LOOP_FACTOR,
     MATH_FIDELITY,
@@ -175,14 +173,6 @@ def matmul_tile_dimensions(
     ]
 
 
-def matmul_implied_math_formats(format, *, is_perf=False):
-    if is_perf:
-        return [ImpliedMathFormat.Yes]
-    if format.input_format.is_mx_format():
-        return [ImpliedMathFormat.Yes]
-    return [ImpliedMathFormat.No, ImpliedMathFormat.Yes]
-
-
 def matmul_register_format_hints(format):
     # MxFp4_2x is Quasar only. Quasar Architecture derivations don't support it.
     if format.input_format != DataFormat.MxFp4 or _ARCH != ChipArchitecture.QUASAR:
@@ -285,7 +275,6 @@ _ARCH = get_chip_architecture()
             dest_acc, dest_sync_mode
         )
     ),
-    implied_math_format=lambda format: matmul_implied_math_formats(format),
     register_format_hint=matmul_register_format_hints,
     enable_direct_indexing=matmul_enable_direct_indexing,
     transpose=matmul_transpose_modes,
@@ -300,7 +289,6 @@ def test_matmul(
     dest_sync_mode,
     dest_acc,
     format,
-    implied_math_format,
     register_format_hint,
     enable_direct_indexing,
     transpose,
@@ -477,7 +465,6 @@ def test_matmul(
 
     templates = [
         MATH_FIDELITY(math_fidelity),
-        IMPLIED_MATH_FORMAT(implied_math_format),
         ENABLE_2X_FORMAT(enable_2x_format),
         ENABLE_DIRECT_INDEXING(enable_direct_indexing),
         DEST_SYNC(dest_sync_mode),
@@ -584,7 +571,6 @@ def test_matmul(
             dest_acc, dest_sync_mode
         )
     ),
-    implied_math_format=lambda format: matmul_implied_math_formats(format),
     register_format_hint=matmul_register_format_hints,
     enable_direct_indexing=matmul_enable_direct_indexing,
     transpose=matmul_tiny_transpose_modes,
@@ -598,7 +584,6 @@ def test_matmul_tiny(
     dest_sync_mode,
     dest_acc,
     format,
-    implied_math_format,
     register_format_hint,
     enable_direct_indexing,
     transpose,
@@ -612,7 +597,6 @@ def test_matmul_tiny(
         dest_sync_mode,
         dest_acc,
         format,
-        implied_math_format,
         register_format_hint,
         enable_direct_indexing,
         transpose,
@@ -637,7 +621,6 @@ def test_matmul_tiny(
             dest_acc, dest_sync_mode
         )
     ),
-    implied_math_format=[ImpliedMathFormat.Yes],
     register_format_hint=[DataFormat.Int8_2x],
     enable_direct_indexing=[True, False],
     transpose=[Transpose.No],
@@ -651,7 +634,6 @@ def test_matmul_int8_2x(
     dest_sync_mode,
     dest_acc,
     format,
-    implied_math_format,
     register_format_hint,
     enable_direct_indexing,
     transpose,
@@ -665,7 +647,6 @@ def test_matmul_int8_2x(
         dest_sync_mode,
         dest_acc,
         format,
-        implied_math_format,
         register_format_hint,
         enable_direct_indexing,
         transpose,

@@ -115,24 +115,20 @@ void run_kernel(RUNTIME_PARAMETERS params)
             set_up_fpu_to_pack_dest_dvalid_chain<dest_dvalid_client::FPU>();
         }
 
-        _llk_math_srcAB_hw_configure_<IMPLIED_MATH_FORMAT, is_fp32_dest_acc_en>(static_cast<DataFormat>(formats.math), static_cast<DataFormat>(formats.math));
+        _llk_math_srcAB_hw_configure_<false, is_fp32_dest_acc_en>(static_cast<DataFormat>(formats.math), static_cast<DataFormat>(formats.math));
 
         if (is_int_fpu_en)
         {
             if constexpr (int_fpu_reduce_supported)
             {
                 _llk_math_reduce_init_<POOL_TYPE, REDUCE_DIM, is_fp32_dest_acc_en, MATH_FIDELITY, true /* is_int_fpu_en */>(
-                    IMPLIED_MATH_FORMAT ? static_cast<DataFormat>(formats.unpack_A_dst) : static_cast<DataFormat>(formats.math),
-                    IMPLIED_MATH_FORMAT ? static_cast<DataFormat>(formats.unpack_B_dst) : static_cast<DataFormat>(formats.math),
-                    tensor_shape_A);
+                    static_cast<DataFormat>(formats.math), static_cast<DataFormat>(formats.math), tensor_shape_A);
             }
         }
         else
         {
             _llk_math_reduce_init_<POOL_TYPE, REDUCE_DIM, is_fp32_dest_acc_en, MATH_FIDELITY, false /* is_int_fpu_en */>(
-                IMPLIED_MATH_FORMAT ? static_cast<DataFormat>(formats.unpack_A_dst) : static_cast<DataFormat>(formats.math),
-                IMPLIED_MATH_FORMAT ? static_cast<DataFormat>(formats.unpack_B_dst) : static_cast<DataFormat>(formats.math),
-                tensor_shape_A);
+                static_cast<DataFormat>(formats.math), static_cast<DataFormat>(formats.math), tensor_shape_A);
         }
         PROFILER_SYNC();
     }
