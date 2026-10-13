@@ -1,0 +1,8 @@
+o1 head
+o1 f6
+o1 f6
+o1 head
+o1 f6
+o1 head
+o1 head
+o1 f6

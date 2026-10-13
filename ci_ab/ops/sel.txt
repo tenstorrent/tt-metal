@@ -1,0 +1,13 @@
+test_kda_qkv_conv1d_silu
+test_group_norm_dram_welford
+test_group_norm_dram_tile_reduction
+test_group_norm_sharded_sdxl
+test_group_norm_sharded_welford
+test_rms_norm_interleaved
+test_layer_norm_interleaved
+test_layer_norm_sdxl_l1
+test_rotary_llama_prefill
+test_bng_sharded
+test_kda_prepare_chunk_recurrence
+test_softmax_attention
+test_prod_all

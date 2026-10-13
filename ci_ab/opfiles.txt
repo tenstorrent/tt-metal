@@ -1,0 +1,3 @@
+tt_metal/tt-llk/tt_llk_blackhole/llk_lib/llk_math_eltwise_binary.h
+tt_metal/tt-llk/tt_llk_blackhole/llk_lib/llk_unpack_AB.h
+tt_metal/tt-llk/tt_llk_blackhole/llk_lib/llk_unpack_A.h
