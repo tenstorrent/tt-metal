@@ -49,3 +49,7 @@ Branch ttp/t477-turbo-per-op-profile-of-one-10-s-block-t, base ae9534f5fb2 (t473
   Marker chain477.done in the run dir (CHAIN_OUT), log chain477.log.
 - Next: read out_prof/run.log + ops_perf_results CSV (tt-perf-report), out_ab/run.log (T477 lines + JIT grep),
   fill the tables below, rm -rf /var/tmp/fasth3/t477 on blx01, ttp push --own --detach.
+- 18:55 UTC: build done (build.rc 0, ~3 min). First chain run stopped at collect (diffusers fork missing):
+  job PYTHONPATH now adds /var/tmp/fasth3/t409/pydeps (MiniMax-H3 diffusers); collect then found 2/52.
+- Chain restarted as chain477b (run 1801 dir: /home/smarton/fasth3/tt-metal/tt-project/state/runs/1801/chain477.log,
+  marker chain477.done, rc chain477b.rc). Profile job = blx01 broker job 195 (submitted 18:57 UTC).
