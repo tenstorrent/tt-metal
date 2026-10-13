@@ -83,16 +83,16 @@ def apply(
 
     plan = UpdatePlan()
     if comparison.config_errors:
-        # A different measurement makes every old value incomparable, so the environment is recorded afresh.
+        # A different measurement makes this environment's old values incomparable, so it is recorded afresh.
+        # Other environments keep their own metrics and fail on their next run until they are re-recorded too.
         golden.environments[environment] = Environment(
-            cases={case: dict(values) for case, values in measurements.items()}
+            metrics=dict(metrics), cases={case: dict(values) for case, values in measurements.items()}
         )
-        golden.metrics.update(metrics)
         plan.replaced_environment = True
     else:
         env = golden.environments.setdefault(environment, Environment())
         for name, spec in metrics.items():
-            golden.metrics.setdefault(name, spec)
+            env.metrics.setdefault(name, spec)
         for result in by_status.get(STALE, []) + (
             by_status.get(REGRESSION, []) + by_status.get(NEW, []) if force else []
         ):

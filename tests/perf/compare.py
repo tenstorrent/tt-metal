@@ -93,11 +93,13 @@ class Comparison:
 
 def config_errors(golden: Golden, environment: str, metrics: dict[str, MetricSpec], repetitions: int | None) -> list:
     errors = []
-    for name, spec in metrics.items():
-        if name in golden.metrics and golden.metrics[name] != spec:
-            errors.append(f"metric {name} is now {spec.as_dict()} but the golden has {golden.metrics[name].as_dict()}")
     env = golden.environments.get(environment)
-    if env is not None and env.repetitions is not None and repetitions is not None and env.repetitions != repetitions:
+    if env is None:
+        return errors
+    for name, spec in metrics.items():
+        if name in env.metrics and env.metrics[name] != spec:
+            errors.append(f"metric {name} is now {spec.as_dict()} but the golden has {env.metrics[name].as_dict()}")
+    if env.repetitions is not None and repetitions is not None and env.repetitions != repetitions:
         errors.append(f"run used {repetitions} repetitions but the golden was recorded with {env.repetitions}")
     return errors
 
