@@ -21,13 +21,18 @@ namespace hal::misc
  * default table lives in instructions/assembly.yaml). MOP- and replay-expanded instructions
  * inherit the parent MOP/REPLAY instruction's declared class.
  *
+ * linger_time is a four-bit mask OR'ed into a shift register while a conflicting RISC
+ * MMIO access stalls a Tensix instruction. After that access completes, the register shifts
+ * right once per cycle; the instruction remains stalled until it reaches zero. For example,
+ * 0b0100 adds three cycles of delay, and zero adds none. The declaration remains persistent.
+ *
  * @note No LLK call site exists; the hardware defaults are in use everywhere today.
  */
 struct ResourceDeclaration
 {
     std::uint8_t instruction_class = 0; // AutoSync class, 4 bits
     std::uint16_t resources        = 0; // 9-bit resource mask: {TDMA RW, GPR RW, CFG zones, CFG RW}
-    std::uint16_t linger_time      = 1; // cycles the declaration lingers after issue
+    std::uint16_t linger_time      = 1; // 4-bit linger shift-register mask, not a cycle count
 
     /** @brief Encode the operation. */
     constexpr std::uint32_t operation() const;
@@ -144,7 +149,7 @@ namespace detail
 
 constexpr bool is_valid(const ResourceDeclaration declaration)
 {
-    return declaration.instruction_class < 16u && declaration.resources < (1u << 9) && declaration.linger_time < (1u << 11);
+    return declaration.instruction_class < 16u && declaration.resources < (1u << 9) && declaration.linger_time < (1u << 4);
 }
 
 constexpr bool is_valid(const FlushTdma flush)
@@ -175,7 +180,7 @@ inline __attribute__((always_inline)) void assert_valid(const ResourceDeclaratio
 {
     LLK_ASSERT(declaration.instruction_class < 16u, "RESOURCEDECL instruction class is 4 bits");
     LLK_ASSERT(declaration.resources < (1u << 9), "RESOURCEDECL resource mask is 9 bits");
-    LLK_ASSERT(declaration.linger_time < (1u << 11), "RESOURCEDECL linger time is 11 bits");
+    LLK_ASSERT(declaration.linger_time < (1u << 4), "RESOURCEDECL linger time is 4 bits");
 }
 
 inline __attribute__((always_inline)) void assert_valid(const FlushTdma flush)
