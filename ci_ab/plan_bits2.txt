@@ -1,0 +1,6 @@
+# tt-llk functional bits with LLK asserts on, one worker (fixed test order, so L1 residue in partly written outputs repeats):
+# main's header, the stack before the round (A), the round's head (B) and its A/A copy (B2)
+b main ids/bits_main.txt - bits
+b A ids/bits_all.txt - bits
+b B ids/bits_all.txt - bits
+b B2 ids/bits_all.txt - bits
