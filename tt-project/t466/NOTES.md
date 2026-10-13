@@ -149,3 +149,20 @@ logs "T466 summary: ring_joint_sdpa gain X%, layer gain Y%" and PCC between arms
   writes state/t468/psnr6s.txt and stills, runs ltx_eval batch (lofi cand, base ref) -> state/t468/vbench.
 - Next: when vb468.rc exists, read the 6 s timing tables (out_c6s0_*, out_ab6s*_*/run.log), psnr6s.txt, vbench,
   look at stills; then clean up blx01 (models/MiniMax-H3, t466/cache, t466/jit), report final du.
+
+## 2026-10-13 15:20 UTC (08:20 PDT, #468 run 1779): 6 s A/B + VBench done, blx01 cleaned -> done
+- chain468b rc 0: cold 6 s base 163, cold 6 s lofi 164, A/B 6 s seeds 0-4 = jobs 165-169 (all exit 0, 452 s each).
+  No drops during 163-169 (broker status 20).
+- 6 s, per seed (same job/box/clock, 900 MHz clamp, relative only), Denoise total / Total Pipeline, s:
+  s0 base 7.2852/9.3990 lofi 6.8580/8.8148 | s1 7.1508/9.3941 vs 6.6978/8.8228 | s2 7.2616/9.2537 vs 6.5911/8.6527
+  s3 7.1907/9.2269 vs 6.6671/8.8392 | s4 7.2256/9.3472 vs 6.5457/8.9335
+  mean: denoise 7.2228 -> 6.6719 (-7.6%; 1.8057 -> 1.6680 s/step), total 9.3242 -> 8.8126 (-5.5%).
+- 10 s seed 0 (job 162): denoise -10.7%, total -12.1%.
+- VBench (lofi cand vs base ref, 5 seeds, mean): subject 0.9521/0.9511, background 0.9584/0.9532,
+  imaging 0.6806/0.6810, motion 0.9883/0.9887 -> neutral. Per-seed imaging delta -0.011 (s1) .. +0.010 (s0).
+  ltx_eval batch "FAIL" is only its pcc>=0.99 / psnr_min>=30 gates, which Turbo drift breaks by design (#457).
+  mp4 PSNR lofi vs base 24.3-26.1 dB, SSIM 0.87-0.91 (state/t468/psnr6s.txt), above the ~19 dB drift floor.
+  s1 frame 79 compare still: same scene, small pose shift (drift), no artifacts or grain.
+- Cleanup: deleted models/MiniMax-H3 (135G), t466/cache (115G), t466/jit (12G), t466/b (3G), out_*/*.pt.
+  Logs + mp4s copied to state/t468/logs. blx01 /var/tmp/fasth3 now 33G; / 525G free.
+- Recommendation: quality-neutral on 5 seeds -> default-on in the Turbo lineage (separate code task).
