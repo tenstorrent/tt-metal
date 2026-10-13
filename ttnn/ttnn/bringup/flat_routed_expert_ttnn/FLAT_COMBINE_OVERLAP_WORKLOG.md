@@ -693,3 +693,25 @@ baseline), `FLAT_CMB_ITERS`, `FLAT_CMB_LOG`, `TT_CMBF2D_IDLE`, `CMBF2D_RD_VC` / 
 `MIMO_FL_RD_SAMECOL`, `MIMO_FL_XDOWN`, `MIMO_FL_ND`, probes `MIMO_FL_W_NOREAD`, `MIMO_FL_XRD_SKIP`,
 `MIMO_FL_CMB_EARLY` (garbage output, perf only). Profile: `TT_METAL_DEVICE_PROFILER=1
 TT_METAL_PROFILER_MID_RUN_DUMP=1`, then `cmb_timeline.py <csv> <run group>` / `cmb_split.py`.
+
+### 9.1 On a Galaxy (prepared 2026-10-13, not run yet)
+```
+git checkout mstaletovic/flat-combine-overlap && ninja -C build_Release install   # python env active
+models/demos/deepseek_v3_d_p/tests/op_unit_tests/flat_combine_tools/run_galaxy_overlap.sh   # ~1-2 h
+```
+Runs everything and writes `generated/flat_cmb_galaxy/<timestamp>/summary.md` (one row per model and routing:
+serial baseline, overlap with flat on rows 1-9, overlap with combine's free row-0 cells as extra down cores, best
+saving, combine hidden; then the accuracy verdicts). Steps and knobs are in the script's header; the essentials:
+- `FLAT_CMB_MESH=galaxy-8x1` (default): the whole 8 x 4 torus comes up (a smaller mesh's fabric cannot) and the ops
+  run on one column, the LoudBox ring's work, so the numbers compare with 6.19 / 8b directly. `galaxy-8x4`: all 32
+  chips, every dispatch group routed (each replays the one-group routing at its top-k share); not run anywhere yet.
+- Step 1, `galaxy_plan_check.py`, is host-side and takes seconds: on a Galaxy chip it should print `grid 12 x 10` and
+  `np 1 g 1 gate/up 64` for glm-53 / kimi-k27 on `rows` (mock Galaxy: down 24, max 7 / 8 columns; with combine's
+  free row-0 cells 29). If it shows np 2 on rows, the Galaxy premise fails and the rest is the LoudBox story.
+- The free row-0 cells come from the rows run's `FLAT_CMB_LOG` line, so they are the Galaxy's own (not the LoudBox's
+  (1,0) (4,0) (9,0) (10,0)). `XDOWN="x,0;..."` sets them by hand, `STEPS="2 4 5"` re-runs a subset, `ACC=0` skips
+  accuracy.
+- What to expect (flat alone, 12 x 10 slow dispatch, 8b): row 0 costs GLM-5.3-Flash nothing with the row-0 cells and
+  K2.7 nothing without them; full GLM 5.3 (H 6144) is between the two and was not measured.
+- The planner is the galaxy branch's (east readers in column 7 on a Galaxy chip, rectangles sized after the readers;
+  K3 auto-shape). Plans on the LoudBox's 11 x 10 are unchanged by it except K3's full grid (26 -> 28 down).

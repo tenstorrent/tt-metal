@@ -47,8 +47,15 @@ from models.demos.deepseek_v3_d_p.tt.moe.init_helpers import (
 from models.demos.deepseek_v3_d_p.tt.moe.validation_helpers import validate_combine_output
 from models.demos.deepseek_v3_d_p.tt.tt_ccl import per_axis_topology
 
-_MESH = (8, 1)
-_FABRIC = ttnn.FabricConfig.FABRIC_2D_TORUS_Y
+# FLAT_CMB_MESH: ring-8x1 (default): a LoudBox's 8 p150s as one ring (TT_MESH_GRAPH_DESC_PATH=
+# flat_combine_tools/p150_x8_ring_8x1.textproto). galaxy-8x1: a Galaxy's whole 8 x 4 torus comes up (a smaller mesh's
+# fabric cannot: every router needs a live partner) and the ops run on one column, 8 chips and one dispatch group, the
+# LoudBox ring's work. galaxy-8x4: all 32 chips, every dispatch group replaying the one-group routing at its top-k
+# share (as test_hybrid_routed_expert_combine.py's (8, 4)). flat_combine_tools/run_galaxy_overlap.sh runs the set.
+_MESH_MODE = os.environ.get("FLAT_CMB_MESH", "ring-8x1")
+assert _MESH_MODE in ("ring-8x1", "galaxy-8x1", "galaxy-8x4"), _MESH_MODE
+_MESH = (8, 1) if _MESH_MODE == "ring-8x1" else (8, 4)
+_FABRIC = ttnn.FabricConfig.FABRIC_2D_TORUS_Y if _MESH_MODE == "ring-8x1" else hyb._MESHES[(8, 4)]
 _PERF_ITERS = int(os.environ.get("FLAT_CMB_ITERS", "20"))
 _K3_BASE, _K3_HI = "kimi-k27", (3584, 3072)  # kimi-k3: K2.7 routing at K3's hidden / intermediate
 
@@ -75,11 +82,18 @@ def _params():
                     _device_params(),
                     threshold_id,
                     model_id,
-                    marks=pytest.mark.requires_mesh_topology(mesh_shape=_MESH, topology="ring"),
-                    id=f"{model_id}-8x1-{threshold_id}",
+                    marks=pytest.mark.requires_mesh_topology(
+                        mesh_shape=_MESH, topology="ring" if _MESH_MODE == "ring-8x1" else "mesh-8x4"
+                    ),
+                    id=f"{model_id}-{'8x1' if _MESH_MODE == 'ring-8x1' else _MESH_MODE}-{threshold_id}",
                 )
             )
     return out
+
+
+def _op_mesh(mesh_device):
+    """The mesh the ops run on: one column of a Galaxy for galaxy-8x1, else the opened mesh."""
+    return mesh_device.create_submesh(ttnn.MeshShape(8, 1)) if _MESH_MODE == "galaxy-8x1" else mesh_device
 
 
 def _build_case(mesh_device, device_params, threshold_id, model_id):
@@ -102,7 +116,11 @@ def _build_case(mesh_device, device_params, threshold_id, model_id):
         experts_per_chip=experts_per_chip, dispatch_group_size=dg_size, num_dispatch_groups=n_dg
     )
     group_counts = hyb._CAPTURED_COUNTS[_K3_BASE if model_id == "kimi-k3" else model_id][threshold_id]
-    indices = hyb._indices_from_counts(group_counts, dg_size, seq, num_experts_per_tok)
+    # every dispatch group replays the one-group routing at its top-k share (group g owns experts g * len onward)
+    assert num_experts_per_tok % n_dg == 0, f"top-{num_experts_per_tok} over {n_dg} dispatch groups"
+    gi = hyb._indices_from_counts(group_counts, dg_size, seq, num_experts_per_tok // n_dg)
+    assert len(group_counts) * n_dg == num_routed_experts, f"{len(group_counts)} counts x {n_dg} groups"
+    indices = torch.cat([gi + g * len(group_counts) for g in range(n_dg)], dim=-1)
     dispatch_table = ExpertMapping.create_dispatch_table(
         num_routed_experts=num_routed_experts, dispatch_group_size=dg_size, num_dispatch_groups=n_dg
     )
@@ -313,6 +331,7 @@ def _combine_input(y):
     "mesh_device, device_params, threshold_id, model_id", _params(), indirect=["mesh_device", "device_params"]
 )
 def test_flat_combine_overlap(mesh_device, device_params, threshold_id, model_id):
+    mesh_device = _op_mesh(mesh_device)
     c = _build_case(mesh_device, device_params, threshold_id, model_id)
     # back to back first (the reference rewrites the host dispatch buffer in place, so the device runs first)
     y = c["flat_solo"]()
@@ -337,6 +356,7 @@ def test_flat_combine_overlap(mesh_device, device_params, threshold_id, model_id
     "mesh_device, device_params, threshold_id, model_id", _params(), indirect=["mesh_device", "device_params"]
 )
 def test_flat_combine_overlap_perf(mesh_device, device_params, threshold_id, model_id):
+    mesh_device = _op_mesh(mesh_device)
     c = _build_case(mesh_device, device_params, threshold_id, model_id)
     if os.environ.get("FLAT_CMB_EAGER"):
         # no traces (slow dispatch, e.g. the 12 x 10 grid): every program runs eagerly, synchronized, _PERF_ITERS

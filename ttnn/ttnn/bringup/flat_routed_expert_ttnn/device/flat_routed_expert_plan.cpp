@@ -51,6 +51,11 @@ std::pair<uint32_t, bool> gu_dst(uint32_t np, uint32_t ht, uint32_t x_slots, boo
     if (!fp32) {
         return {8, false};
     }
+    // MIMO_FL_GU_SPLIT with np 3 / 4 (probe): the gate/up sub-block in a full-sync fp32 DST (8 tiles: one row tile of
+    // 2 np <= 8 tiles per M-group), the mode bf16 x runs in; default plans are unchanged
+    if (np > 2 && 2 * np <= 8 && std::getenv("MIMO_FL_GU_SPLIT") && ht / KBLK <= x_slots) {
+        return {8, true};
+    }
     const bool rp = np <= 2 && ht / KBLK <= x_slots;
     return rp ? std::pair<uint32_t, bool>{8, true} : std::pair<uint32_t, bool>{4, false};
 }
@@ -71,8 +76,16 @@ std::optional<std::pair<uint32_t, uint32_t>> gu_split(
     std::vector<Cand> cands;
     std::optional<std::tuple<int, int, int>> best_key;
     uint32_t best_np = 0, best_g = 0, best_cores = 0;
+    // MIMO_FL_GU_SPLIT=np,g (probe): only that split (still subject to the checks below)
+    uint32_t force_np = 0, force_g = 0;
+    if (const char* fs = std::getenv("MIMO_FL_GU_SPLIT")) {
+        TT_FATAL(std::sscanf(fs, "%u,%u", &force_np, &force_g) == 2, "MIMO_FL_GU_SPLIT: np,g");
+    }
     for (uint32_t np : {1u, 2u, 3u, 4u}) {
         for (uint32_t g : {1u, 2u, 4u}) {
+            if (force_np && (np != force_np || g != force_g)) {
+                continue;
+            }
             const uint32_t ps = it / np;
             const uint32_t dst = gu_dst(np, ht, x_slots, fp32).first;
             if (it % np || ps % n_readers || ps * g > max_cores || std::min(dst / (2 * np), MT_MAX / g) < 1) {
@@ -96,7 +109,7 @@ std::optional<std::pair<uint32_t, uint32_t>> gu_split(
         return std::nullopt;
     }
     // fewer than 32 gate/up cores (TP4-like): 2 M-groups on twice the cores
-    if (best_cores < 32 && max_cores == 64) {
+    if (!force_np && best_cores < 32 && max_cores == 64) {
         for (const auto& c : cands) {
             if (c.g == 2 && c.np == best_np && c.cores >= 2 * best_cores) {
                 return std::make_pair(c.np, 2u);
@@ -239,7 +252,7 @@ FlatRoutedExpertPlan make_flat_routed_expert_plan(tt::tt_metal::IDevice* device,
     // A grid of fewer than 10 rows (dispatch on a row: 12 x 9 on a p150) plans on all of its rows the same way.
     const uint32_t grid_rows = device->compute_with_storage_grid_size().y;
     uint32_t row0 = 0, row1 = std::min(grid_rows, 10u) - 1;
-    const bool rows_cap = std::getenv("MIMO_FL_ROWS") != nullptr || grid_rows < 10;
+    bool rows_cap = std::getenv("MIMO_FL_ROWS") != nullptr || grid_rows < 10;
     if (std::getenv("MIMO_FL_ROWS")) {
         TT_FATAL(
             std::sscanf(std::getenv("MIMO_FL_ROWS"), "%u,%u", &row0, &row1) == 2 && row0 <= row1 &&
@@ -250,15 +263,38 @@ FlatRoutedExpertPlan make_flat_routed_expert_plan(tt::tt_metal::IDevice* device,
         TT_FATAL(p.nsg == 1, "MIMO_FL_ROWS: one subgrid only (It {})", p.It);
     }
     const uint32_t nrows = row1 - row0 + 1;
-    // with the rows capped, the east gate/up rectangle may use every column east of the east readers (4 on a 12-wide
-    // grid: 64 gate/up cores fit in 8 rows)
-    const uint32_t bw_max = rows_cap ? std::min(4u, uint32_t(device->compute_with_storage_grid_size().x) - 8) : 3u;
+    const auto grid = device->compute_with_storage_grid_size();
+    // The DRAM-optimal readers (one per bank): columns 0 and E (E = 6 on a p150's 11 x 10, 7 on a Galaxy chip's
+    // 12 x 10). Queried before the rectangles are sized, because with the rows capped they stretch to the columns the
+    // readers leave. With dispatch on a row (12 x 9 on a p150) the driver's assignment names cores of the dispatch row
+    // and throws; the p150's column-dispatch assignment is the same physical placement (rows 0-8 and the first 11
+    // columns map identically), and the reader relocation below moves the ones on the missing row.
+    std::vector<Core> opt;
+    try {
+        opt = device->get_optimal_dram_bank_to_logical_worker_assignment(tt::tt_metal::NOC::NOC_0);
+    } catch (const std::exception&) {
+        TT_FATAL(rows_cap, "flat_routed_expert: no DRAM-optimal worker assignment on a full-height grid");
+        opt = {Core(0, 9), Core(0, 0), Core(0, 7), Core(0, 3), Core(6, 9), Core(6, 1), Core(6, 6), Core(6, 4)};
+    }
+    uint32_t east0 = 0;
+    for (const auto& c : opt) {
+        east0 = std::max<uint32_t>(east0, c.x);
+    }
+    TT_FATAL(east0 >= 6, "flat_routed_expert: east DRAM readers in column {} (expected >= 6)", east0);
     // MIMO_FL_RD_SAMECOL (with rows capped): a bank's second reader in its first reader's column (nearest free row)
-    // instead of the column east of it, so columns 1 and E + 1 join the gate/up rectangles (west 1..5, east 7..10 on a
-    // p150): 64 gate/up cores fit next to a combine that keeps grid row 0
+    // instead of the column east of it, so columns 1 and E + 1 join the gate/up rectangles: 64 gate/up cores fit next
+    // to a combine that keeps grid row 0
     const bool rd_samecol = rows_cap && std::getenv("MIMO_FL_RD_SAMECOL") != nullptr;
-    const uint32_t aw_max = rd_samecol ? 5u : 4u, bw_cap = rd_samecol ? bw_max + 1 : bw_max,
-                   b_x0 = rd_samecol ? 7u : 8u, hb_max = rd_samecol ? nrows : std::min(nrows, 8u);
+    // With the rows capped, the gate/up rectangles take every column the readers leave: west from column 2 (1 with
+    // same-column readers) up to E - 1, east from E + 2 (E + 1) to the grid's edge (at most 4 wide). On a p150 that is
+    // 4 x 3 (5 x 4 same-column); on a Galaxy chip 5 x 3 (6 x 4): its extra column lands west of the east readers.
+    // Full grid: the fixed 4 x 3 below. (The east width used to be min(4, grid - 8), which assumed E = 6 and ran a
+    // Galaxy chip's east rectangle off the grid.)
+    const uint32_t a_x0 = rd_samecol ? 1u : 2u, b_x0 = rd_samecol ? east0 + 1 : east0 + 2;
+    TT_FATAL(grid.x > b_x0, "flat_routed_expert: no column east of the east readers on a {}-wide grid", grid.x);
+    uint32_t aw_max = rows_cap ? east0 - a_x0 : 4u;
+    uint32_t bw_cap = rows_cap ? std::min<uint32_t>(rd_samecol ? 5u : 4u, uint32_t(grid.x) - b_x0) : 3u;
+    const uint32_t hb_max = rd_samecol ? nrows : std::min(nrows, 8u);
     if (p.nsg == 1) {
         p.rects = {{2, 5, row0, row1}, {8, 10, row0, row0 + std::min(nrows, 8u) - 1}};
     } else if (p.nsg == 2) {
@@ -268,6 +304,10 @@ FlatRoutedExpertPlan make_flat_routed_expert_plan(tt::tt_metal::IDevice* device,
     }
     p.gu_fp32 = p.nsg != 3;  // 3 subgrids: bf16 DEST + packer L1 accumulation
     p.gu_l1acc = !p.gu_fp32;
+    if (std::getenv("MIMO_FL_GU_BF16")) {  // (perf probe: plain bf16 gate/up DEST, half-sync 8 tiles; inaccurate)
+        p.gu_fp32 = false;
+        p.gu_l1acc = false;
+    }
     uint32_t min_rect = 1000;
     for (const auto& [x0, x1, y0, y1] : p.rects) {
         min_rect = std::min(min_rect, (x1 - x0 + 1) * (y1 - y0 + 1));
@@ -297,6 +337,16 @@ FlatRoutedExpertPlan make_flat_routed_expert_plan(tt::tt_metal::IDevice* device,
         }
     }
     TT_FATAL(found, "flat_routed_expert: no gate/up split for {} tile columns", p.It);
+    // Full grid, one subgrid, a split of fewer gate/up cores than the fixed rectangles' 64 (K3: 48, 16 cells idle):
+    // shape the rectangles to the split as with the rows capped (all rows), so those cells do down work; the down
+    // cores are then trimmed below. (The split above still saw the fixed 64 cells.) MIMO_FL_NO_SHAPE=1: fixed rectangles
+    const bool auto_shape =
+        !rows_cap && p.nsg == 1 && p.It / p.np * p.g < 64 && std::getenv("MIMO_FL_NO_SHAPE") == nullptr;
+    if (auto_shape) {
+        rows_cap = true;
+        aw_max = east0 - a_x0;
+        bw_cap = std::min<uint32_t>(4u, uint32_t(grid.x) - b_x0);
+    }
     if (rows_cap) {  // rectangles of exactly the split's cores (4 columns x hA + bw columns x hB), the rest is down
                      // work
         const uint32_t want = p.It / p.np * p.g;
@@ -313,7 +363,10 @@ FlatRoutedExpertPlan make_flat_routed_expert_plan(tt::tt_metal::IDevice* device,
                     const int imb = std::abs(int(aw) * ha - int(bw * hb));
                     if (imb < best) {
                         best = imb;
-                        p.rects = {{6 - aw, 5, row0, row0 + ha - 1}, {b_x0, b_x0 + bw - 1, row0, row0 + hb - 1}};
+                        // west anchored against the east readers; east in p150 columns (shifted by E - 6 below)
+                        p.rects = {
+                            {east0 - aw, east0 - 1, row0, row0 + ha - 1},
+                            {b_x0 - (east0 - 6), b_x0 - (east0 - 6) + bw - 1, row0, row0 + hb - 1}};
                         shaped = true;
                     }
                 }
@@ -346,7 +399,7 @@ FlatRoutedExpertPlan make_flat_routed_expert_plan(tt::tt_metal::IDevice* device,
     }
     // bf16 x + bfp8 h (128-row sub-blocks): gate/up in a full-sync DST (bf16 x + bfp8 h at M 160 / 512 / 2048: 48.9 /
     // 101.6 / 373.1 -> 44.2 / 91.4 / 366.5 us per expert); with 64-row sub-blocks there is one row pass anyway
-    p.gu_full_sync = cfg.x_bf16 && p.gu_fp32 && p.gu_rp && p.mt / p.g * 2 * p.np > 4;
+    p.gu_full_sync = (cfg.x_bf16 || p.np > 2) && p.gu_fp32 && p.gu_rp && p.mt / p.g * 2 * p.np > 4;
     TT_FATAL(p.mt % p.g == 0 && (p.mt / p.g) * 2 * p.np <= p.dst_tiles, "flat_routed_expert: sub-block split");
     p.mtg = p.mt / p.g;
     const uint32_t m_pad = (p.m + p.mt * 32 - 1) / (p.mt * 32) * p.mt * 32;
@@ -361,17 +414,6 @@ FlatRoutedExpertPlan make_flat_routed_expert_plan(tt::tt_metal::IDevice* device,
     }
 
     // ---- layout ----
-    const auto grid = device->compute_with_storage_grid_size();
-    // With dispatch on a row (12 x 9 on a p150) the driver's DRAM-optimal assignment names cores of the dispatch row
-    // and throws; the p150's column-dispatch assignment is the same physical placement (rows 0-8 and the first 11
-    // columns map identically), and the reader relocation below moves the ones on the missing row.
-    std::vector<Core> opt;
-    try {
-        opt = device->get_optimal_dram_bank_to_logical_worker_assignment(tt::tt_metal::NOC::NOC_0);
-    } catch (const std::exception&) {
-        TT_FATAL(rows_cap, "flat_routed_expert: no DRAM-optimal worker assignment on a full-height grid");
-        opt = {Core(0, 9), Core(0, 0), Core(0, 7), Core(0, 3), Core(6, 9), Core(6, 1), Core(6, 6), Core(6, 4)};
-    }
     p.readers = opt;
     if (rd_samecol) {
         std::set<std::pair<uint32_t, uint32_t>> used;
@@ -525,9 +567,20 @@ FlatRoutedExpertPlan make_flat_routed_expert_plan(tt::tt_metal::IDevice* device,
     }
     // MIMO_FL_COLS=n (probe): down cores only in columns [0, n), e.g. 11 on a 12-column grid to reproduce the 11 x 10
     const uint32_t cols_cap = std::getenv("MIMO_FL_COLS") ? std::atoi(std::getenv("MIMO_FL_COLS")) : grid.x;
+    // MIMO_FL_SKIP_COLS="x,x,.." (probe): no down cores in these columns, e.g. 6 on a Galaxy chip (12 x 10, east
+    // readers in column 7): the column a p150's 11 x 10 doesn't have, so the plan is the p150's (cores-for-cores) on a
+    // Galaxy chip
+    std::set<uint32_t> skip_cols;
+    if (const char* sc = std::getenv("MIMO_FL_SKIP_COLS")) {
+        for (const char* q = sc; *q;) {
+            char* end = nullptr;
+            skip_cols.insert(static_cast<uint32_t>(std::strtoul(q, &end, 10)));
+            q = *end == ',' ? end + 1 : end;
+        }
+    }
     for (uint32_t y = row0; y <= std::min(row1, uint32_t(grid.y) - 1); ++y) {
         for (uint32_t x = 0; x < std::min(cols_cap, uint32_t(grid.x)); ++x) {
-            if (!taken.contains({x, y})) {
+            if (!taken.contains({x, y}) && !skip_cols.contains(x)) {
                 p.down.emplace_back(x, y);
             }
         }
@@ -641,6 +694,26 @@ FlatRoutedExpertPlan make_flat_routed_expert_plan(tt::tt_metal::IDevice* device,
         p.pcd_r = static_cast<uint32_t>(std::atoi(pr));
     }
     p.rem_cols = p.Ht - p.n_rdn * p.pcd_r;
+    if (auto_shape && !std::getenv("MIMO_FL_ND")) {
+        // down cores under the east rectangle (its columns, below it) are slow (far from the h relays, in the east
+        // gate/up's traffic): drop them, then keep the fewest cores with the same most tile columns per core (K3 at
+        // M 2048, us per expert: 26 down 5 columns max 409, 28 / 30 at 4 384, 32 at 4 400, 34 / 42 into columns 8+ 443
+        // / 408)
+        const uint32_t east_x0 = b_x0 - (east0 - 6);
+        std::vector<Core> kept;
+        for (const auto& c : p.down) {
+            if (c.x < east_x0) {
+                kept.push_back(c);
+            }
+        }
+        if (!kept.empty()) {
+            const uint32_t per = (p.rem_cols + kept.size() - 1) / kept.size();
+            kept.resize(std::min<size_t>(kept.size(), (p.rem_cols + per - 1) / per));
+            p.down = kept;
+            ND = p.down.size();
+            p.nd_sg = ND;
+        }
+    }
     if (p.nd_sg > p.rem_cols) {
         // more down cores than output tile columns (small H on a wide grid, e.g. a Galaxy chip's 12 x 10): keep each
         // subgrid's first rem_cols (its block is ordered nearest first); the rest stay idle
