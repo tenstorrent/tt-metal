@@ -858,3 +858,20 @@ first A/B then measured HiFi4 twice (the agent had put the default back on the o
   staleness.md say so; orchestrator / gate let agents write and commit the detail file.
 - stale.py: knowledge files are never anchors (the Detail pointer); a shortened entry keeps its age through its
   detail section's original title. Ages and statuses identical before and after the trim (211 entries).
+
+## F63 (2026-10-13): knowledge-use tracking: entry ids, per-step reports, usage tally
+
+- Owner asked how we know the knowledge is used. Every entry now starts with an id (`- **[K-12] Title.**`; models:
+  GEM / GLM / HY4 / MIMO / M22 / XING), unique over all files, never reused; a moved or promoted entry keeps it.
+  check.py checks presence and uniqueness and prints each file's NEXT ID; the length limits leave the id out.
+- Every agent step writes `bringup/results/knowledge_use/<task>.<role>.<attempt>.json` (the brief names it, engineer
+  rule 11): used (id, how it changed the step), contradicted (id, evidence), missing (topics). The orchestrator
+  validates it, adds meta (model, run, task, HEAD, the files the step read / searched / edited / changed, from the
+  transcript) and marks each use traced (the step touched the entry's Applies-to code), untraced, or unchecked
+  (no anchors). A missing or malformed report is recorded in the agent run and echoed, not a failed attempt. The gate
+  commits the reports with the step.
+- knowledge/usage.py tallies all committed reports: uses, last use, contradictions, relevant runs (a run of the
+  entry's model, or any model for a shared entry, that touched its code; every such run for an entry without anchors)
+  and the unused streak; flagged at 5 (owner), model entries used in 2+ runs are promotion candidates, missing topics
+  grouped. stale.py gets a `contradicted` status (a report's contradiction after the entry's Seen at), staleness.md
+  verifies it first. The run-end curation (skill/bringup) acts on usage.md; both dashboards get a knowledge panel.

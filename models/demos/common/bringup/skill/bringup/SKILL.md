@@ -173,7 +173,15 @@ every lesson that would change what an agent does on a different model (TTNN / f
 mechanisms, testing method, framework / infra / hardware, serving rules) into the shared
 `models/demos/common/bringup/knowledge/` files, merged with the entry it overlaps, at most three lines, with
 `Applies to:` and `Seen at:` (`python -m models.demos.common.bringup.knowledge.check --model-dir <model_dir>` checks
-both). Delete model entries the model's code has since fixed. Show the owner the shared-file diff for approval.
+both). Delete model entries the model's code has since fixed. Promoted or moved entries keep their id.
+Then tally what the agents used: `python -m models.demos.common.bringup.knowledge.usage --out runs/<run>/knowledge`
+(it reads every step's knowledge-use report, all runs and models) and act on `usage.md`:
+- contradicted: re-check each like a `changed` entry (`skill/rebase-bringup/staleness.md` step 2), fix or delete;
+- unused over 5 relevant runs: cut it, or move a shared entry that only one model needs to that model's file;
+- a model entry used in 2+ runs: a promotion candidate (above);
+- a missing topic that recurs: write the entry, if the run has the evidence;
+- uses never traced to the entry's code: say so in the report (the agent may cite entries it did not apply).
+Show the owner the shared-file diff and the usage summary for approval.
 
 Besides the metrics the person asked for, report every change the agents made beyond the model's own code, one line
 each with its commit and your verdict: fork changes (ttnn/ttnn/bringup: what, why, which tests), framework, test or
