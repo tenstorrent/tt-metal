@@ -29,6 +29,10 @@ std::uint32_t math_sync_tile_dst_index = 0;
 #ifndef UNPACK_BLOCK
 #define UNPACK_BLOCK 0
 #endif
+// DATACOPY_TILES_BACK_TO_BACK (driver template): the block's tiles are uncompressed and back to back in L1
+#ifndef DATACOPY_TILES_BACK_TO_BACK
+#define DATACOPY_TILES_BACK_TO_BACK 0
+#endif
 
 void run_kernel(RUNTIME_PARAMETERS params)
 {
@@ -92,7 +96,13 @@ void run_kernel(RUNTIME_PARAMETERS params)
                     const std::uint32_t tile_stride_16B = (buffer_A[1] - buffer_A[0]) >> 4;
                     for (int block_num = 0; block_num < NUM_BLOCKS; ++block_num)
                     {
-                        _llk_unpack_A_block_<BroadcastType::NONE, false, EltwiseBinaryReuseDestType::NONE, unpack_to_dest, is_fp32_dest_acc_en>(
+                        _llk_unpack_A_block_<
+                            BroadcastType::NONE,
+                            false,
+                            EltwiseBinaryReuseDestType::NONE,
+                            unpack_to_dest,
+                            is_fp32_dest_acc_en,
+                            DATACOPY_TILES_BACK_TO_BACK != 0>(
                             L1_ADDRESS(buffer_A[block_num * NUM_TILES_IN_BLOCK]),
                             NUM_TILES_IN_BLOCK,
                             tile_stride_16B,

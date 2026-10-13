@@ -196,14 +196,26 @@ inline void llk_unpack_A_block(
         }
         if (ntiles > 2) {
             WAYPOINT("UPAW");
-            _llk_unpack_A_block_<BType, acc_to_dest, binary_reuse_dest, unpack_to_dest, DST_ACCUM_MODE>(
-                address,
-                ntiles,
-                offset_address,
-                unpack_src_format[operand_id],
-                unpack_dst_format[operand_id],
-                get_operand_num_faces(operand_id),
-                get_operand_face_r_dim(operand_id));
+            // A CB page holds one tile, so the tiles of an uncompressed block lie back to back
+            if (!IS_BFP_FORMAT(unpack_src_format[operand_id])) {
+                _llk_unpack_A_block_<BType, acc_to_dest, binary_reuse_dest, unpack_to_dest, DST_ACCUM_MODE, true>(
+                    address,
+                    ntiles,
+                    offset_address,
+                    unpack_src_format[operand_id],
+                    unpack_dst_format[operand_id],
+                    get_operand_num_faces(operand_id),
+                    get_operand_face_r_dim(operand_id));
+            } else {
+                _llk_unpack_A_block_<BType, acc_to_dest, binary_reuse_dest, unpack_to_dest, DST_ACCUM_MODE>(
+                    address,
+                    ntiles,
+                    offset_address,
+                    unpack_src_format[operand_id],
+                    unpack_dst_format[operand_id],
+                    get_operand_num_faces(operand_id),
+                    get_operand_face_r_dim(operand_id));
+            }
             WAYPOINT("UPAD");
             return;
         }
