@@ -1,0 +1,24 @@
+[
+  {
+    "cores": 7,
+    "baseline_us": 27.415,
+    "noc_capture_us": 34.338,
+    "npe_fast_us": 34.19925925925926,
+    "npe_none_us": 34.19925925925926,
+    "incremental_congestion_us": 0.0,
+    "congestion_fraction_percent": 0.0,
+    "npe_fast_step16_us": 34.19925925925926,
+    "dram_util_sim_percent": 56.779224154735864
+  },
+  {
+    "cores": 44,
+    "baseline_us": 21.933,
+    "noc_capture_us": 22.263,
+    "npe_fast_us": 23.515555555555554,
+    "npe_none_us": 18.223703703703702,
+    "incremental_congestion_us": 5.2918518518518525,
+    "congestion_fraction_percent": 22.503622503622513,
+    "npe_fast_step16_us": 23.664444444444445,
+    "dram_util_sim_percent": 82.57544257544257
+  }
+]

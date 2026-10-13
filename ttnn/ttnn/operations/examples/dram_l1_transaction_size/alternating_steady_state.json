@@ -1,0 +1,244 @@
+{
+  "host": "bh-qbge-09-special-dstoiljkovic-for-reservation-117054",
+  "arch": "Arch.BLACKHOLE",
+  "date": "2026-10-08T12:13:37.421893+00:00",
+  "git": "20d0afc3fdfaf84f98548d61dc81d708ddd35316",
+  "shape": [
+    1,
+    1,
+    4096,
+    1024
+  ],
+  "cores": 7,
+  "logical_cores": [
+    [
+      0,
+      0
+    ],
+    [
+      1,
+      0
+    ],
+    [
+      2,
+      0
+    ],
+    [
+      3,
+      0
+    ],
+    [
+      4,
+      0
+    ],
+    [
+      5,
+      0
+    ],
+    [
+      6,
+      0
+    ]
+  ],
+  "clock_mhz": 1350,
+  "trials": 5,
+  "kernel_iters": 16,
+  "row_bytes": 2048,
+  "allocated_l1_bytes_per_core": 1200128,
+  "model": {
+    "shape": [
+      1,
+      1,
+      4096,
+      1024
+    ],
+    "cores": 7,
+    "bytes_per_element": 2,
+    "model_clock_ghz": 1.35,
+    "workbook_sha256": "095daac809fb68d6914ceca898ddca14f5ca9bb1fb85e4cc26bd5d598f2b2447",
+    "hardware": {
+      "AI clock": 1.35,
+      "NoC bytes per cycle": 64,
+      "DRAM aggregate bandwidth": 512,
+      "Physical DRAM banks": 8,
+      "Available compute cores": 120,
+      "Physical L1 per core": 1572864,
+      "Reserved L1 per core": 262144,
+      "Available shard L1": 1310720,
+      "DRAM read alignment": 64,
+      "Maximum single transaction payload": 16384,
+      "Active DRAM banks": 8,
+      "DRAM efficiency": 1,
+      "Measurement clock": 1.35,
+      "Read latency: one bank": 0.3289004,
+      "Read latency: all banks": 0.3305547,
+      "NoCs used for placement": 2
+    },
+    "predictions": [
+      {
+        "transaction_bytes": 64,
+        "expected_us": 447.8089552238806,
+        "core_service_us": 447.8089552238806,
+        "dram_floor_us": 16.384,
+        "max_shard_bytes": 1200128,
+        "transactions_max_core": 18752.0
+      },
+      {
+        "transaction_bytes": 128,
+        "expected_us": 224.4488498223303,
+        "core_service_us": 224.4488498223303,
+        "dram_floor_us": 16.384,
+        "max_shard_bytes": 1200128,
+        "transactions_max_core": 9376.0
+      },
+      {
+        "transaction_bytes": 256,
+        "expected_us": 112.01493373156617,
+        "core_service_us": 112.01493373156617,
+        "dram_floor_us": 16.384,
+        "max_shard_bytes": 1200128,
+        "transactions_max_core": 4688.0
+      },
+      {
+        "transaction_bytes": 512,
+        "expected_us": 55.89790405216581,
+        "core_service_us": 55.89790405216581,
+        "dram_floor_us": 16.384,
+        "max_shard_bytes": 1200128,
+        "transactions_max_core": 2344.0
+      },
+      {
+        "transaction_bytes": 1024,
+        "expected_us": 28.143610909176182,
+        "core_service_us": 28.143610909176182,
+        "dram_floor_us": 16.384,
+        "max_shard_bytes": 1200128,
+        "transactions_max_core": 1172.0
+      },
+      {
+        "transaction_bytes": 2048,
+        "expected_us": 16.384,
+        "core_service_us": 14.8374605921988,
+        "dram_floor_us": 16.384,
+        "max_shard_bytes": 1200128,
+        "transactions_max_core": 586.0
+      }
+    ]
+  },
+  "results": [
+    {
+      "variant": "txn_64",
+      "transaction_bytes": 64,
+      "transactions_max_core": 18752,
+      "expected_us": 447.8089552238806,
+      "median_us": 361.4355,
+      "std_us": 0.005246665607808245,
+      "ratio": 0.8071198572152303,
+      "gbps": 23.209142433435563,
+      "samples_us": [
+        361.4355,
+        361.4429375,
+        361.429,
+        361.429875,
+        361.4385
+      ],
+      "correct": true,
+      "noise": false
+    },
+    {
+      "variant": "txn_128",
+      "transaction_bytes": 128,
+      "transactions_max_core": 9376,
+      "expected_us": 224.4488498223303,
+      "median_us": 187.777625,
+      "std_us": 0.0029149399650816414,
+      "ratio": 0.8366165616292595,
+      "gbps": 44.673096701484006,
+      "samples_us": [
+        187.7735625,
+        187.7775625,
+        187.7825625,
+        187.7793125,
+        187.777625
+      ],
+      "correct": true,
+      "noise": false
+    },
+    {
+      "variant": "txn_256",
+      "transaction_bytes": 256,
+      "transactions_max_core": 4688,
+      "expected_us": 112.01493373156617,
+      "median_us": 100.955375,
+      "std_us": 0.0017381743295772998,
+      "ratio": 0.9012671046338391,
+      "gbps": 83.09223753564385,
+      "samples_us": [
+        100.95375,
+        100.9535,
+        100.955375,
+        100.958375,
+        100.955375
+      ],
+      "correct": true,
+      "noise": false
+    },
+    {
+      "variant": "txn_512",
+      "transaction_bytes": 512,
+      "transactions_max_core": 2344,
+      "expected_us": 55.89790405216581,
+      "median_us": 54.9500625,
+      "std_us": 0.003004059753068828,
+      "ratio": 0.9830433436058488,
+      "gbps": 152.65875266292917,
+      "samples_us": [
+        54.9500625,
+        54.946,
+        54.9523125,
+        54.9533125,
+        54.9463125
+      ],
+      "correct": true,
+      "noise": false
+    },
+    {
+      "variant": "txn_1024",
+      "transaction_bytes": 1024,
+      "transactions_max_core": 1172,
+      "expected_us": 28.143610909176182,
+      "median_us": 44.671,
+      "std_us": 0.00589353459309405,
+      "ratio": 1.5872519039635773,
+      "gbps": 187.78643862908822,
+      "samples_us": [
+        44.67525,
+        44.667125,
+        44.671,
+        44.68425,
+        44.670625
+      ],
+      "correct": true,
+      "noise": false
+    },
+    {
+      "variant": "txn_2048",
+      "transaction_bytes": 2048,
+      "transactions_max_core": 586,
+      "expected_us": 16.384,
+      "median_us": 43.070625,
+      "std_us": 0.047302616206716906,
+      "ratio": 2.6288223266601562,
+      "gbps": 194.76401840001162,
+      "samples_us": [
+        43.070625,
+        42.972625,
+        43.100125,
+        43.0654375,
+        43.10275
+      ],
+      "correct": true,
+      "noise": false
+    }
+  ]
+}

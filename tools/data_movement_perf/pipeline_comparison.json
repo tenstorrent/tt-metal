@@ -1,0 +1,97 @@
+{
+  "recommended_cores": 7,
+  "transaction_bytes": 2048,
+  "predicted_us": 16.384,
+  "results": [
+    {
+      "cores": 7,
+      "measured_us": 27.121,
+      "predicted_us": 16.384,
+      "error_percent": -39.589248184064004
+    },
+    {
+      "cores": 8,
+      "measured_us": 31.603,
+      "predicted_us": 16.384,
+      "error_percent": -48.156820555010604
+    },
+    {
+      "cores": 9,
+      "measured_us": 24.372500000000002,
+      "predicted_us": 16.384,
+      "error_percent": -32.77669504564571
+    },
+    {
+      "cores": 10,
+      "measured_us": 22.839,
+      "predicted_us": 16.384,
+      "error_percent": -28.26305880292481
+    },
+    {
+      "cores": 11,
+      "measured_us": 22.1495,
+      "predicted_us": 16.384,
+      "error_percent": -26.02993295559719
+    },
+    {
+      "cores": 12,
+      "measured_us": 22.862000000000002,
+      "predicted_us": 16.384,
+      "error_percent": -28.335228763887677
+    },
+    {
+      "cores": 22,
+      "measured_us": 22.332,
+      "predicted_us": 16.384,
+      "error_percent": -26.63442593587677
+    },
+    {
+      "cores": 33,
+      "measured_us": 22.492,
+      "predicted_us": 16.384,
+      "error_percent": -27.15632224791037
+    },
+    {
+      "cores": 44,
+      "measured_us": 21.875,
+      "predicted_us": 16.384,
+      "error_percent": -25.101714285714284
+    },
+    {
+      "cores": 55,
+      "measured_us": 21.930500000000002,
+      "predicted_us": 16.384,
+      "error_percent": -25.291261029160307
+    },
+    {
+      "cores": 66,
+      "measured_us": 21.9165,
+      "predicted_us": 16.384,
+      "error_percent": -25.2435379736728
+    },
+    {
+      "cores": 77,
+      "measured_us": 21.984,
+      "predicted_us": 16.384,
+      "error_percent": -25.473071324599715
+    },
+    {
+      "cores": 88,
+      "measured_us": 21.8985,
+      "predicted_us": 16.384,
+      "error_percent": -25.18209009749526
+    },
+    {
+      "cores": 99,
+      "measured_us": 21.945,
+      "predicted_us": 16.384,
+      "error_percent": -25.340624287992707
+    },
+    {
+      "cores": 110,
+      "measured_us": 22.180500000000002,
+      "predicted_us": 16.384,
+      "error_percent": -26.13331529947477
+    }
+  ]
+}

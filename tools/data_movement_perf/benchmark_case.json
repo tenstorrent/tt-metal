@@ -1,0 +1,80 @@
+{
+  "shape": [
+    1,
+    1,
+    4096,
+    1024
+  ],
+  "cores": 7,
+  "bytes_per_element": 2,
+  "model_clock_ghz": 1.35,
+  "workbook_sha256": "095daac809fb68d6914ceca898ddca14f5ca9bb1fb85e4cc26bd5d598f2b2447",
+  "hardware": {
+    "AI clock": 1.35,
+    "NoC bytes per cycle": 64,
+    "DRAM aggregate bandwidth": 512,
+    "Physical DRAM banks": 8,
+    "Available compute cores": 120,
+    "Physical L1 per core": 1572864,
+    "Reserved L1 per core": 262144,
+    "Available shard L1": 1310720,
+    "DRAM read alignment": 64,
+    "Maximum single transaction payload": 16384,
+    "Active DRAM banks": 8,
+    "DRAM efficiency": 1,
+    "Measurement clock": 1.35,
+    "Read latency: one bank": 0.3289004,
+    "Read latency: all banks": 0.3305547,
+    "NoCs used for placement": 2
+  },
+  "predictions": [
+    {
+      "transaction_bytes": 64,
+      "expected_us": 447.8089552238806,
+      "core_service_us": 447.8089552238806,
+      "dram_floor_us": 16.384,
+      "max_shard_bytes": 1200128,
+      "transactions_max_core": 18752.0
+    },
+    {
+      "transaction_bytes": 128,
+      "expected_us": 224.4488498223303,
+      "core_service_us": 224.4488498223303,
+      "dram_floor_us": 16.384,
+      "max_shard_bytes": 1200128,
+      "transactions_max_core": 9376.0
+    },
+    {
+      "transaction_bytes": 256,
+      "expected_us": 112.01493373156617,
+      "core_service_us": 112.01493373156617,
+      "dram_floor_us": 16.384,
+      "max_shard_bytes": 1200128,
+      "transactions_max_core": 4688.0
+    },
+    {
+      "transaction_bytes": 512,
+      "expected_us": 55.89790405216581,
+      "core_service_us": 55.89790405216581,
+      "dram_floor_us": 16.384,
+      "max_shard_bytes": 1200128,
+      "transactions_max_core": 2344.0
+    },
+    {
+      "transaction_bytes": 1024,
+      "expected_us": 28.143610909176182,
+      "core_service_us": 28.143610909176182,
+      "dram_floor_us": 16.384,
+      "max_shard_bytes": 1200128,
+      "transactions_max_core": 1172.0
+    },
+    {
+      "transaction_bytes": 2048,
+      "expected_us": 16.384,
+      "core_service_us": 14.8374605921988,
+      "dram_floor_us": 16.384,
+      "max_shard_bytes": 1200128,
+      "transactions_max_core": 586.0
+    }
+  ]
+}

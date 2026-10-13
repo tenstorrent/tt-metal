@@ -1,0 +1,145 @@
+{
+  "host": "bh-qbge-09-special-dstoiljkovic-for-reservation-117054",
+  "arch": "Arch.BLACKHOLE",
+  "date": "2026-10-08T12:47:55.280658+00:00",
+  "git": "20d0afc3fdfaf84f98548d61dc81d708ddd35316",
+  "shape": [
+    1,
+    1,
+    4096,
+    1024
+  ],
+  "cores": 10,
+  "logical_cores": [
+    [
+      0,
+      0
+    ],
+    [
+      1,
+      0
+    ],
+    [
+      2,
+      0
+    ],
+    [
+      3,
+      0
+    ],
+    [
+      4,
+      0
+    ],
+    [
+      5,
+      0
+    ],
+    [
+      6,
+      0
+    ],
+    [
+      7,
+      0
+    ],
+    [
+      8,
+      0
+    ],
+    [
+      9,
+      0
+    ]
+  ],
+  "noc_policy": "runtime preferred read NoC via ReaderConfigDescriptor (NoC0 in this build)",
+  "clock_mhz": 1350,
+  "trials": 30,
+  "kernel_iters": 1,
+  "row_bytes": 2048,
+  "allocated_l1_bytes_per_core": 839680,
+  "model": {
+    "shape": [
+      1,
+      1,
+      4096,
+      1024
+    ],
+    "cores": 10,
+    "bytes_per_element": 2,
+    "model_clock_ghz": 1.35,
+    "workbook_sha256": "fc8fc9bad1fe05d5230df542203c162f01c0736c94f433d460d87ae27be51fc9",
+    "hardware": {
+      "AI clock": 1.35,
+      "NoC bytes per cycle": 64,
+      "DRAM aggregate bandwidth": 512,
+      "Physical DRAM banks": 8,
+      "Available compute cores": 120,
+      "Physical L1 per core": 1572864,
+      "Reserved L1 per core": 262144,
+      "Available shard L1": 1310720,
+      "DRAM read alignment": 64,
+      "Maximum single transaction payload": 16384,
+      "Active DRAM banks": 8,
+      "DRAM efficiency": 1,
+      "Measurement clock": 1.35,
+      "Read latency: one bank": 0.3289004,
+      "Read latency: all banks": 0.3305547,
+      "NoCs used for placement": 2
+    },
+    "predictions": [
+      {
+        "cores": 10,
+        "transaction_bytes": 2048,
+        "expected_us": 16.384,
+        "max_shard_bytes": 839680
+      }
+    ]
+  },
+  "results": [
+    {
+      "variant": "txn_2048",
+      "transaction_bytes": 2048,
+      "transactions_max_core": 410,
+      "expected_us": 16.384,
+      "median_us": 22.839,
+      "std_us": 0.1129447455863068,
+      "ratio": 1.3939819335937498,
+      "gbps": 367.2931389290249,
+      "samples_us": [
+        22.874,
+        22.893,
+        22.87,
+        22.754,
+        22.834,
+        22.79,
+        22.73,
+        22.794,
+        22.884,
+        22.966,
+        22.685,
+        22.753,
+        22.87,
+        22.79,
+        22.854,
+        23.043,
+        22.601,
+        23.176,
+        22.872,
+        22.925,
+        22.856,
+        22.793,
+        22.782,
+        22.737,
+        22.833,
+        23.053,
+        22.747,
+        22.739,
+        22.844,
+        22.862
+      ],
+      "correct": true,
+      "noise": false
+    }
+  ]
+}

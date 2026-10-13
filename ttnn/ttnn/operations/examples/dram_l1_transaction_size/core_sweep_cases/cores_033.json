@@ -1,0 +1,237 @@
+{
+  "host": "bh-qbge-09-special-dstoiljkovic-for-reservation-117054",
+  "arch": "Arch.BLACKHOLE",
+  "date": "2026-10-08T12:47:55.943160+00:00",
+  "git": "20d0afc3fdfaf84f98548d61dc81d708ddd35316",
+  "shape": [
+    1,
+    1,
+    4096,
+    1024
+  ],
+  "cores": 33,
+  "logical_cores": [
+    [
+      0,
+      0
+    ],
+    [
+      1,
+      0
+    ],
+    [
+      2,
+      0
+    ],
+    [
+      3,
+      0
+    ],
+    [
+      4,
+      0
+    ],
+    [
+      5,
+      0
+    ],
+    [
+      6,
+      0
+    ],
+    [
+      7,
+      0
+    ],
+    [
+      8,
+      0
+    ],
+    [
+      9,
+      0
+    ],
+    [
+      10,
+      0
+    ],
+    [
+      0,
+      1
+    ],
+    [
+      1,
+      1
+    ],
+    [
+      2,
+      1
+    ],
+    [
+      3,
+      1
+    ],
+    [
+      4,
+      1
+    ],
+    [
+      5,
+      1
+    ],
+    [
+      6,
+      1
+    ],
+    [
+      7,
+      1
+    ],
+    [
+      8,
+      1
+    ],
+    [
+      9,
+      1
+    ],
+    [
+      10,
+      1
+    ],
+    [
+      0,
+      2
+    ],
+    [
+      1,
+      2
+    ],
+    [
+      2,
+      2
+    ],
+    [
+      3,
+      2
+    ],
+    [
+      4,
+      2
+    ],
+    [
+      5,
+      2
+    ],
+    [
+      6,
+      2
+    ],
+    [
+      7,
+      2
+    ],
+    [
+      8,
+      2
+    ],
+    [
+      9,
+      2
+    ],
+    [
+      10,
+      2
+    ]
+  ],
+  "noc_policy": "runtime preferred read NoC via ReaderConfigDescriptor (NoC0 in this build)",
+  "clock_mhz": 1350,
+  "trials": 30,
+  "kernel_iters": 1,
+  "row_bytes": 2048,
+  "allocated_l1_bytes_per_core": 256000,
+  "model": {
+    "shape": [
+      1,
+      1,
+      4096,
+      1024
+    ],
+    "cores": 33,
+    "bytes_per_element": 2,
+    "model_clock_ghz": 1.35,
+    "workbook_sha256": "fc8fc9bad1fe05d5230df542203c162f01c0736c94f433d460d87ae27be51fc9",
+    "hardware": {
+      "AI clock": 1.35,
+      "NoC bytes per cycle": 64,
+      "DRAM aggregate bandwidth": 512,
+      "Physical DRAM banks": 8,
+      "Available compute cores": 120,
+      "Physical L1 per core": 1572864,
+      "Reserved L1 per core": 262144,
+      "Available shard L1": 1310720,
+      "DRAM read alignment": 64,
+      "Maximum single transaction payload": 16384,
+      "Active DRAM banks": 8,
+      "DRAM efficiency": 1,
+      "Measurement clock": 1.35,
+      "Read latency: one bank": 0.3289004,
+      "Read latency: all banks": 0.3305547,
+      "NoCs used for placement": 2
+    },
+    "predictions": [
+      {
+        "cores": 33,
+        "transaction_bytes": 2048,
+        "expected_us": 16.384,
+        "max_shard_bytes": 256000
+      }
+    ]
+  },
+  "results": [
+    {
+      "variant": "txn_2048",
+      "transaction_bytes": 2048,
+      "transactions_max_core": 125,
+      "expected_us": 16.384,
+      "median_us": 22.492,
+      "std_us": 0.11577492052349773,
+      "ratio": 1.372802734375,
+      "gbps": 372.9596300906989,
+      "samples_us": [
+        22.53,
+        22.52,
+        22.709,
+        22.397,
+        22.6,
+        22.608,
+        22.424,
+        22.498,
+        22.486,
+        22.35,
+        22.444,
+        22.505,
+        22.194,
+        22.411,
+        22.389,
+        22.59,
+        22.485,
+        22.599,
+        22.461,
+        22.46,
+        22.498,
+        22.356,
+        22.236,
+        22.596,
+        22.48,
+        22.643,
+        22.624,
+        22.527,
+        22.567,
+        22.344
+      ],
+      "correct": true,
+      "noise": false
+    }
+  ]
+}

@@ -17,6 +17,17 @@ on. They are illustrative of the *effect*, not CI bounds.
 
 ---
 
+## ⭐ T1 — [`dram_l1_transaction_size`](dram_l1_transaction_size/README.md)
+**Concepts:** read transaction payload size and core-count scaling for DRAM → resident L1 shards.
+**Situation:** a complete shard already fits L1; choose the read payload while keeping one final barrier per core.
+**Measured win:** on BH at 1350 MHz, BF16 `[1,1,4096,1024]`, seven row-major cores, runtime-preferred read NoC (NoC0):
+2048 B requests take **27,144 ns** versus **361,958 ns** for 64 B (**334,814 ns saved; 13.33×**).
+The bandwidth model predicts 16,384 ns for 2048 B; measured throughput is ~309 GB/s for this placement.
+**Gist:** read directly into final shard offsets with row-dividing transactions, then one completion barrier.
+Increasing payload reduces issue count without increasing L1 footprint; measure where throughput stops improving.
+**Core-count sweep (BH):** all 7–110 available counts tested at 2048 B. In 30-trial confirmation,
+44 cores take 21,875 ns; 11 cores take 22,150 ns (only 1.25% slower). Larger counts form a near-tied plateau.
+
 ## ⭐⭐ T2 — [`noc_placement`](noc_placement/README.md)
 **Concept:** two knobs for interleaved-DRAM NoC contention — core **placement** (column/row/diagonal)
 and **NoC selection** (which NoC a read/write stream uses) — as a switchable placement × NoC × op matrix.

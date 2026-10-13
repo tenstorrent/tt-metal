@@ -1,0 +1,129 @@
+{
+  "efficiency": 0.7,
+  "bandwidth_cap_gbps": 358.4,
+  "recommended_cores": 7,
+  "recommended_transaction": 2048,
+  "recommended_us": 23.405714285714286,
+  "results": [
+    {
+      "cores": 7,
+      "measured_us": 27.121,
+      "predicted_70_us": 23.405714285714286,
+      "error_70_percent": -13.6989259772343,
+      "predicted_75_us": 21.845333333333333,
+      "error_75_percent": -19.452330912085348
+    },
+    {
+      "cores": 8,
+      "measured_us": 31.603,
+      "predicted_70_us": 23.405714285714286,
+      "error_70_percent": -25.93831507858657,
+      "predicted_75_us": 21.845333333333333,
+      "error_75_percent": -30.875760740014137
+    },
+    {
+      "cores": 9,
+      "measured_us": 24.372500000000002,
+      "predicted_70_us": 23.405714285714286,
+      "error_70_percent": -3.966707208065301,
+      "predicted_75_us": 21.845333333333333,
+      "error_75_percent": -10.368926727527617
+    },
+    {
+      "cores": 10,
+      "measured_us": 22.839,
+      "predicted_70_us": 23.405714285714286,
+      "error_70_percent": 2.4813445672502654,
+      "predicted_75_us": 21.845333333333333,
+      "error_75_percent": -4.350745070566431
+    },
+    {
+      "cores": 11,
+      "measured_us": 22.1495,
+      "predicted_70_us": 23.405714285714286,
+      "error_70_percent": 5.671524349146861,
+      "predicted_75_us": 21.845333333333333,
+      "error_75_percent": -1.3732439407962538
+    },
+    {
+      "cores": 12,
+      "measured_us": 22.862000000000002,
+      "predicted_70_us": 23.405714285714286,
+      "error_70_percent": 2.3782446230176113,
+      "predicted_75_us": 21.845333333333333,
+      "error_75_percent": -4.446971685183576
+    },
+    {
+      "cores": 22,
+      "measured_us": 22.332,
+      "predicted_70_us": 23.405714285714286,
+      "error_70_percent": 4.8079629487474795,
+      "predicted_75_us": 21.845333333333333,
+      "error_75_percent": -2.1792345811690317
+    },
+    {
+      "cores": 33,
+      "measured_us": 22.492,
+      "predicted_70_us": 23.405714285714286,
+      "error_70_percent": 4.062396788699463,
+      "predicted_75_us": 21.845333333333333,
+      "error_75_percent": -2.8750963305471666
+    },
+    {
+      "cores": 44,
+      "measured_us": 21.875,
+      "predicted_70_us": 23.405714285714286,
+      "error_70_percent": 6.997551020408155,
+      "predicted_75_us": 21.845333333333333,
+      "error_75_percent": -0.13561904761905108
+    },
+    {
+      "cores": 55,
+      "measured_us": 21.930500000000002,
+      "predicted_70_us": 23.405714285714286,
+      "error_70_percent": 6.7267699583424045,
+      "predicted_75_us": 21.845333333333333,
+      "error_75_percent": -0.388348038880415
+    },
+    {
+      "cores": 66,
+      "measured_us": 21.9165,
+      "predicted_70_us": 23.405714285714286,
+      "error_70_percent": 6.794945751896009,
+      "predicted_75_us": 21.845333333333333,
+      "error_75_percent": -0.32471729823040363
+    },
+    {
+      "cores": 77,
+      "measured_us": 21.984,
+      "predicted_70_us": 23.405714285714286,
+      "error_70_percent": 6.467040964857551,
+      "predicted_75_us": 21.845333333333333,
+      "error_75_percent": -0.630761766132959
+    },
+    {
+      "cores": 88,
+      "measured_us": 21.8985,
+      "predicted_70_us": 23.405714285714286,
+      "error_70_percent": 6.882728432149632,
+      "predicted_75_us": 21.845333333333333,
+      "error_75_percent": -0.24278679666034364
+    },
+    {
+      "cores": 99,
+      "measured_us": 21.945,
+      "predicted_70_us": 23.405714285714286,
+      "error_70_percent": 6.656251017153281,
+      "predicted_75_us": 21.845333333333333,
+      "error_75_percent": -0.454165717323618
+    },
+    {
+      "cores": 110,
+      "measured_us": 22.180500000000002,
+      "predicted_70_us": 23.405714285714286,
+      "error_70_percent": 5.523835286464607,
+      "predicted_75_us": 21.845333333333333,
+      "error_75_percent": -1.5110870659663656
+    }
+  ]
+}

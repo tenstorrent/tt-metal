@@ -1,0 +1,766 @@
+{
+  "shape": [
+    1,
+    1,
+    4096,
+    1024
+  ],
+  "cores": 7,
+  "bytes_per_element": 2,
+  "model_clock_ghz": 1.35,
+  "workbook_sha256": "fc8fc9bad1fe05d5230df542203c162f01c0736c94f433d460d87ae27be51fc9",
+  "hardware": {
+    "AI clock": 1.35,
+    "NoC bytes per cycle": 64,
+    "DRAM aggregate bandwidth": 512,
+    "Physical DRAM banks": 8,
+    "Available compute cores": 120,
+    "Physical L1 per core": 1572864,
+    "Reserved L1 per core": 262144,
+    "Available shard L1": 1310720,
+    "DRAM read alignment": 64,
+    "Maximum single transaction payload": 16384,
+    "Active DRAM banks": 8,
+    "DRAM efficiency": 1,
+    "Measurement clock": 1.35,
+    "Read latency: one bank": 0.3289004,
+    "Read latency: all banks": 0.3305547,
+    "NoCs used for placement": 2
+  },
+  "predictions": [
+    {
+      "transaction_bytes": 64,
+      "expected_us": 447.8089552238806,
+      "core_service_us": 447.8089552238806,
+      "dram_floor_us": 16.384,
+      "max_shard_bytes": 1200128,
+      "transactions_max_core": 18752.0
+    },
+    {
+      "transaction_bytes": 128,
+      "expected_us": 224.4488498223303,
+      "core_service_us": 224.4488498223303,
+      "dram_floor_us": 16.384,
+      "max_shard_bytes": 1200128,
+      "transactions_max_core": 9376.0
+    },
+    {
+      "transaction_bytes": 256,
+      "expected_us": 112.01493373156617,
+      "core_service_us": 112.01493373156617,
+      "dram_floor_us": 16.384,
+      "max_shard_bytes": 1200128,
+      "transactions_max_core": 4688.0
+    },
+    {
+      "transaction_bytes": 512,
+      "expected_us": 55.89790405216581,
+      "core_service_us": 55.89790405216581,
+      "dram_floor_us": 16.384,
+      "max_shard_bytes": 1200128,
+      "transactions_max_core": 2344.0
+    },
+    {
+      "transaction_bytes": 1024,
+      "expected_us": 28.143610909176182,
+      "core_service_us": 28.143610909176182,
+      "dram_floor_us": 16.384,
+      "max_shard_bytes": 1200128,
+      "transactions_max_core": 1172.0
+    },
+    {
+      "transaction_bytes": 2048,
+      "expected_us": 16.384,
+      "core_service_us": 14.8374605921988,
+      "dram_floor_us": 16.384,
+      "max_shard_bytes": 1200128,
+      "transactions_max_core": 586.0
+    }
+  ],
+  "core_predictions": [
+    {
+      "cores": 7,
+      "transaction_bytes": 2048,
+      "expected_us": 16.384,
+      "max_shard_bytes": 1200128
+    },
+    {
+      "cores": 8,
+      "transaction_bytes": 2048,
+      "expected_us": 16.384,
+      "max_shard_bytes": 1048576
+    },
+    {
+      "cores": 9,
+      "transaction_bytes": 2048,
+      "expected_us": 16.384,
+      "max_shard_bytes": 933888
+    },
+    {
+      "cores": 10,
+      "transaction_bytes": 2048,
+      "expected_us": 16.384,
+      "max_shard_bytes": 839680
+    },
+    {
+      "cores": 11,
+      "transaction_bytes": 2048,
+      "expected_us": 16.384,
+      "max_shard_bytes": 763904
+    },
+    {
+      "cores": 12,
+      "transaction_bytes": 2048,
+      "expected_us": 16.384,
+      "max_shard_bytes": 700416
+    },
+    {
+      "cores": 13,
+      "transaction_bytes": 2048,
+      "expected_us": 16.384,
+      "max_shard_bytes": 647168
+    },
+    {
+      "cores": 14,
+      "transaction_bytes": 2048,
+      "expected_us": 16.384,
+      "max_shard_bytes": 600064
+    },
+    {
+      "cores": 15,
+      "transaction_bytes": 2048,
+      "expected_us": 16.384,
+      "max_shard_bytes": 561152
+    },
+    {
+      "cores": 16,
+      "transaction_bytes": 2048,
+      "expected_us": 16.384,
+      "max_shard_bytes": 524288
+    },
+    {
+      "cores": 17,
+      "transaction_bytes": 2048,
+      "expected_us": 16.384,
+      "max_shard_bytes": 493568
+    },
+    {
+      "cores": 18,
+      "transaction_bytes": 2048,
+      "expected_us": 16.384,
+      "max_shard_bytes": 466944
+    },
+    {
+      "cores": 19,
+      "transaction_bytes": 2048,
+      "expected_us": 16.384,
+      "max_shard_bytes": 442368
+    },
+    {
+      "cores": 20,
+      "transaction_bytes": 2048,
+      "expected_us": 16.384,
+      "max_shard_bytes": 419840
+    },
+    {
+      "cores": 21,
+      "transaction_bytes": 2048,
+      "expected_us": 16.384,
+      "max_shard_bytes": 401408
+    },
+    {
+      "cores": 22,
+      "transaction_bytes": 2048,
+      "expected_us": 16.384,
+      "max_shard_bytes": 382976
+    },
+    {
+      "cores": 23,
+      "transaction_bytes": 2048,
+      "expected_us": 16.384,
+      "max_shard_bytes": 366592
+    },
+    {
+      "cores": 24,
+      "transaction_bytes": 2048,
+      "expected_us": 16.384,
+      "max_shard_bytes": 350208
+    },
+    {
+      "cores": 25,
+      "transaction_bytes": 2048,
+      "expected_us": 16.384,
+      "max_shard_bytes": 335872
+    },
+    {
+      "cores": 26,
+      "transaction_bytes": 2048,
+      "expected_us": 16.384,
+      "max_shard_bytes": 323584
+    },
+    {
+      "cores": 27,
+      "transaction_bytes": 2048,
+      "expected_us": 16.384,
+      "max_shard_bytes": 311296
+    },
+    {
+      "cores": 28,
+      "transaction_bytes": 2048,
+      "expected_us": 16.384,
+      "max_shard_bytes": 301056
+    },
+    {
+      "cores": 29,
+      "transaction_bytes": 2048,
+      "expected_us": 16.384,
+      "max_shard_bytes": 290816
+    },
+    {
+      "cores": 30,
+      "transaction_bytes": 2048,
+      "expected_us": 16.384,
+      "max_shard_bytes": 280576
+    },
+    {
+      "cores": 31,
+      "transaction_bytes": 2048,
+      "expected_us": 16.384,
+      "max_shard_bytes": 272384
+    },
+    {
+      "cores": 32,
+      "transaction_bytes": 2048,
+      "expected_us": 16.384,
+      "max_shard_bytes": 262144
+    },
+    {
+      "cores": 33,
+      "transaction_bytes": 2048,
+      "expected_us": 16.384,
+      "max_shard_bytes": 256000
+    },
+    {
+      "cores": 34,
+      "transaction_bytes": 2048,
+      "expected_us": 16.384,
+      "max_shard_bytes": 247808
+    },
+    {
+      "cores": 35,
+      "transaction_bytes": 2048,
+      "expected_us": 16.384,
+      "max_shard_bytes": 241664
+    },
+    {
+      "cores": 36,
+      "transaction_bytes": 2048,
+      "expected_us": 16.384,
+      "max_shard_bytes": 233472
+    },
+    {
+      "cores": 37,
+      "transaction_bytes": 2048,
+      "expected_us": 16.384,
+      "max_shard_bytes": 227328
+    },
+    {
+      "cores": 38,
+      "transaction_bytes": 2048,
+      "expected_us": 16.384,
+      "max_shard_bytes": 221184
+    },
+    {
+      "cores": 39,
+      "transaction_bytes": 2048,
+      "expected_us": 16.384,
+      "max_shard_bytes": 217088
+    },
+    {
+      "cores": 40,
+      "transaction_bytes": 2048,
+      "expected_us": 16.384,
+      "max_shard_bytes": 210944
+    },
+    {
+      "cores": 41,
+      "transaction_bytes": 2048,
+      "expected_us": 16.384,
+      "max_shard_bytes": 204800
+    },
+    {
+      "cores": 42,
+      "transaction_bytes": 2048,
+      "expected_us": 16.384,
+      "max_shard_bytes": 200704
+    },
+    {
+      "cores": 43,
+      "transaction_bytes": 2048,
+      "expected_us": 16.384,
+      "max_shard_bytes": 196608
+    },
+    {
+      "cores": 44,
+      "transaction_bytes": 2048,
+      "expected_us": 16.384,
+      "max_shard_bytes": 192512
+    },
+    {
+      "cores": 45,
+      "transaction_bytes": 2048,
+      "expected_us": 16.384,
+      "max_shard_bytes": 188416
+    },
+    {
+      "cores": 46,
+      "transaction_bytes": 2048,
+      "expected_us": 16.384,
+      "max_shard_bytes": 184320
+    },
+    {
+      "cores": 47,
+      "transaction_bytes": 2048,
+      "expected_us": 16.384,
+      "max_shard_bytes": 180224
+    },
+    {
+      "cores": 48,
+      "transaction_bytes": 2048,
+      "expected_us": 16.384,
+      "max_shard_bytes": 176128
+    },
+    {
+      "cores": 49,
+      "transaction_bytes": 2048,
+      "expected_us": 16.384,
+      "max_shard_bytes": 172032
+    },
+    {
+      "cores": 50,
+      "transaction_bytes": 2048,
+      "expected_us": 16.384,
+      "max_shard_bytes": 167936
+    },
+    {
+      "cores": 51,
+      "transaction_bytes": 2048,
+      "expected_us": 16.384,
+      "max_shard_bytes": 165888
+    },
+    {
+      "cores": 52,
+      "transaction_bytes": 2048,
+      "expected_us": 16.384,
+      "max_shard_bytes": 161792
+    },
+    {
+      "cores": 53,
+      "transaction_bytes": 2048,
+      "expected_us": 16.384,
+      "max_shard_bytes": 159744
+    },
+    {
+      "cores": 54,
+      "transaction_bytes": 2048,
+      "expected_us": 16.384,
+      "max_shard_bytes": 155648
+    },
+    {
+      "cores": 55,
+      "transaction_bytes": 2048,
+      "expected_us": 16.384,
+      "max_shard_bytes": 153600
+    },
+    {
+      "cores": 56,
+      "transaction_bytes": 2048,
+      "expected_us": 16.384,
+      "max_shard_bytes": 151552
+    },
+    {
+      "cores": 57,
+      "transaction_bytes": 2048,
+      "expected_us": 16.384,
+      "max_shard_bytes": 147456
+    },
+    {
+      "cores": 58,
+      "transaction_bytes": 2048,
+      "expected_us": 16.384,
+      "max_shard_bytes": 145408
+    },
+    {
+      "cores": 59,
+      "transaction_bytes": 2048,
+      "expected_us": 16.384,
+      "max_shard_bytes": 143360
+    },
+    {
+      "cores": 60,
+      "transaction_bytes": 2048,
+      "expected_us": 16.384,
+      "max_shard_bytes": 141312
+    },
+    {
+      "cores": 61,
+      "transaction_bytes": 2048,
+      "expected_us": 16.384,
+      "max_shard_bytes": 139264
+    },
+    {
+      "cores": 62,
+      "transaction_bytes": 2048,
+      "expected_us": 16.384,
+      "max_shard_bytes": 137216
+    },
+    {
+      "cores": 63,
+      "transaction_bytes": 2048,
+      "expected_us": 16.384,
+      "max_shard_bytes": 135168
+    },
+    {
+      "cores": 64,
+      "transaction_bytes": 2048,
+      "expected_us": 16.384,
+      "max_shard_bytes": 131072
+    },
+    {
+      "cores": 65,
+      "transaction_bytes": 2048,
+      "expected_us": 16.384,
+      "max_shard_bytes": 131072
+    },
+    {
+      "cores": 66,
+      "transaction_bytes": 2048,
+      "expected_us": 16.384,
+      "max_shard_bytes": 129024
+    },
+    {
+      "cores": 67,
+      "transaction_bytes": 2048,
+      "expected_us": 16.384,
+      "max_shard_bytes": 126976
+    },
+    {
+      "cores": 68,
+      "transaction_bytes": 2048,
+      "expected_us": 16.384,
+      "max_shard_bytes": 124928
+    },
+    {
+      "cores": 69,
+      "transaction_bytes": 2048,
+      "expected_us": 16.384,
+      "max_shard_bytes": 122880
+    },
+    {
+      "cores": 70,
+      "transaction_bytes": 2048,
+      "expected_us": 16.384,
+      "max_shard_bytes": 120832
+    },
+    {
+      "cores": 71,
+      "transaction_bytes": 2048,
+      "expected_us": 16.384,
+      "max_shard_bytes": 118784
+    },
+    {
+      "cores": 72,
+      "transaction_bytes": 2048,
+      "expected_us": 16.384,
+      "max_shard_bytes": 116736
+    },
+    {
+      "cores": 73,
+      "transaction_bytes": 2048,
+      "expected_us": 16.384,
+      "max_shard_bytes": 116736
+    },
+    {
+      "cores": 74,
+      "transaction_bytes": 2048,
+      "expected_us": 16.384,
+      "max_shard_bytes": 114688
+    },
+    {
+      "cores": 75,
+      "transaction_bytes": 2048,
+      "expected_us": 16.384,
+      "max_shard_bytes": 112640
+    },
+    {
+      "cores": 76,
+      "transaction_bytes": 2048,
+      "expected_us": 16.384,
+      "max_shard_bytes": 110592
+    },
+    {
+      "cores": 77,
+      "transaction_bytes": 2048,
+      "expected_us": 16.384,
+      "max_shard_bytes": 110592
+    },
+    {
+      "cores": 78,
+      "transaction_bytes": 2048,
+      "expected_us": 16.384,
+      "max_shard_bytes": 108544
+    },
+    {
+      "cores": 79,
+      "transaction_bytes": 2048,
+      "expected_us": 16.384,
+      "max_shard_bytes": 106496
+    },
+    {
+      "cores": 80,
+      "transaction_bytes": 2048,
+      "expected_us": 16.384,
+      "max_shard_bytes": 106496
+    },
+    {
+      "cores": 81,
+      "transaction_bytes": 2048,
+      "expected_us": 16.384,
+      "max_shard_bytes": 104448
+    },
+    {
+      "cores": 82,
+      "transaction_bytes": 2048,
+      "expected_us": 16.384,
+      "max_shard_bytes": 102400
+    },
+    {
+      "cores": 83,
+      "transaction_bytes": 2048,
+      "expected_us": 16.384,
+      "max_shard_bytes": 102400
+    },
+    {
+      "cores": 84,
+      "transaction_bytes": 2048,
+      "expected_us": 16.384,
+      "max_shard_bytes": 100352
+    },
+    {
+      "cores": 85,
+      "transaction_bytes": 2048,
+      "expected_us": 16.384,
+      "max_shard_bytes": 100352
+    },
+    {
+      "cores": 86,
+      "transaction_bytes": 2048,
+      "expected_us": 16.384,
+      "max_shard_bytes": 98304
+    },
+    {
+      "cores": 87,
+      "transaction_bytes": 2048,
+      "expected_us": 16.384,
+      "max_shard_bytes": 98304
+    },
+    {
+      "cores": 88,
+      "transaction_bytes": 2048,
+      "expected_us": 16.384,
+      "max_shard_bytes": 96256
+    },
+    {
+      "cores": 89,
+      "transaction_bytes": 2048,
+      "expected_us": 16.384,
+      "max_shard_bytes": 96256
+    },
+    {
+      "cores": 90,
+      "transaction_bytes": 2048,
+      "expected_us": 16.384,
+      "max_shard_bytes": 94208
+    },
+    {
+      "cores": 91,
+      "transaction_bytes": 2048,
+      "expected_us": 16.384,
+      "max_shard_bytes": 94208
+    },
+    {
+      "cores": 92,
+      "transaction_bytes": 2048,
+      "expected_us": 16.384,
+      "max_shard_bytes": 92160
+    },
+    {
+      "cores": 93,
+      "transaction_bytes": 2048,
+      "expected_us": 16.384,
+      "max_shard_bytes": 92160
+    },
+    {
+      "cores": 94,
+      "transaction_bytes": 2048,
+      "expected_us": 16.384,
+      "max_shard_bytes": 90112
+    },
+    {
+      "cores": 95,
+      "transaction_bytes": 2048,
+      "expected_us": 16.384,
+      "max_shard_bytes": 90112
+    },
+    {
+      "cores": 96,
+      "transaction_bytes": 2048,
+      "expected_us": 16.384,
+      "max_shard_bytes": 88064
+    },
+    {
+      "cores": 97,
+      "transaction_bytes": 2048,
+      "expected_us": 16.384,
+      "max_shard_bytes": 88064
+    },
+    {
+      "cores": 98,
+      "transaction_bytes": 2048,
+      "expected_us": 16.384,
+      "max_shard_bytes": 86016
+    },
+    {
+      "cores": 99,
+      "transaction_bytes": 2048,
+      "expected_us": 16.384,
+      "max_shard_bytes": 86016
+    },
+    {
+      "cores": 100,
+      "transaction_bytes": 2048,
+      "expected_us": 16.384,
+      "max_shard_bytes": 83968
+    },
+    {
+      "cores": 101,
+      "transaction_bytes": 2048,
+      "expected_us": 16.384,
+      "max_shard_bytes": 83968
+    },
+    {
+      "cores": 102,
+      "transaction_bytes": 2048,
+      "expected_us": 16.384,
+      "max_shard_bytes": 83968
+    },
+    {
+      "cores": 103,
+      "transaction_bytes": 2048,
+      "expected_us": 16.384,
+      "max_shard_bytes": 81920
+    },
+    {
+      "cores": 104,
+      "transaction_bytes": 2048,
+      "expected_us": 16.384,
+      "max_shard_bytes": 81920
+    },
+    {
+      "cores": 105,
+      "transaction_bytes": 2048,
+      "expected_us": 16.384,
+      "max_shard_bytes": 81920
+    },
+    {
+      "cores": 106,
+      "transaction_bytes": 2048,
+      "expected_us": 16.384,
+      "max_shard_bytes": 79872
+    },
+    {
+      "cores": 107,
+      "transaction_bytes": 2048,
+      "expected_us": 16.384,
+      "max_shard_bytes": 79872
+    },
+    {
+      "cores": 108,
+      "transaction_bytes": 2048,
+      "expected_us": 16.384,
+      "max_shard_bytes": 77824
+    },
+    {
+      "cores": 109,
+      "transaction_bytes": 2048,
+      "expected_us": 16.384,
+      "max_shard_bytes": 77824
+    },
+    {
+      "cores": 110,
+      "transaction_bytes": 2048,
+      "expected_us": 16.384,
+      "max_shard_bytes": 77824
+    },
+    {
+      "cores": 111,
+      "transaction_bytes": 2048,
+      "expected_us": 16.384,
+      "max_shard_bytes": 75776
+    },
+    {
+      "cores": 112,
+      "transaction_bytes": 2048,
+      "expected_us": 16.384,
+      "max_shard_bytes": 75776
+    },
+    {
+      "cores": 113,
+      "transaction_bytes": 2048,
+      "expected_us": 16.384,
+      "max_shard_bytes": 75776
+    },
+    {
+      "cores": 114,
+      "transaction_bytes": 2048,
+      "expected_us": 16.384,
+      "max_shard_bytes": 73728
+    },
+    {
+      "cores": 115,
+      "transaction_bytes": 2048,
+      "expected_us": 16.384,
+      "max_shard_bytes": 73728
+    },
+    {
+      "cores": 116,
+      "transaction_bytes": 2048,
+      "expected_us": 16.384,
+      "max_shard_bytes": 73728
+    },
+    {
+      "cores": 117,
+      "transaction_bytes": 2048,
+      "expected_us": 16.384,
+      "max_shard_bytes": 73728
+    },
+    {
+      "cores": 118,
+      "transaction_bytes": 2048,
+      "expected_us": 16.384,
+      "max_shard_bytes": 71680
+    },
+    {
+      "cores": 119,
+      "transaction_bytes": 2048,
+      "expected_us": 16.384,
+      "max_shard_bytes": 71680
+    },
+    {
+      "cores": 120,
+      "transaction_bytes": 2048,
+      "expected_us": 16.384,
+      "max_shard_bytes": 71680
+    }
+  ]
+}
