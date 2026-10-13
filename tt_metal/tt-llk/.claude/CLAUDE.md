@@ -66,7 +66,7 @@ Before writing such a finding, fix, or review comment:
 
 Record all three with the RTL file and line in the working notes. If in-order issue puts the commit at or before the sample, there is no finding and no guard is added. If any of the three was not read, the claim is UNCERTAIN — neither a bug nor safe — and is reported as such.
 
-ISA docs, Confluence pages, tickets, earlier findings, summaries, and code comments are leads that say where to read; they are never evidence for the verdict. A filed finding that a later RTL read contradicts is retracted. Public write-ups (GitHub, Jira, Confluence) describe the mechanism in words and never quote RTL.
+ISA docs, Confluence pages, tickets, earlier findings, summaries, and code comments are leads that say where to read; they are never evidence for the verdict. A simulation or silicon run of the same instruction sequence can confirm or refute the read; it does not replace it. A filed finding that a later RTL read contradicts is retracted. Public write-ups (GitHub, Jira, Confluence) describe the mechanism in words and never quote RTL.
 
 ## Coding Style
 
