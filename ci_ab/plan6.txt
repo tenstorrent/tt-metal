@@ -1,0 +1,24 @@
+q4 main pertile_dedup.txt -
+q4 f6 pertile_dedup.txt -
+q4 f6 pertile_dedup.txt -
+q4 main pertile_dedup.txt -
+q4 f6 pertile_dedup.txt -
+q4 main pertile_dedup.txt -
+q4 main pertile_dedup.txt -
+q4 f6 pertile_dedup.txt -
+p4 main probe1.txt -
+p4 head probe1.txt -
+p4 f6 probe1.txt -
+p4 f6 probe1.txt -
+p4 head probe1.txt -
+p4 main probe1.txt -
+r2 main resid.txt -
+r2 f6 resid.txt -
+r2 f6 resid.txt -
+r2 main resid.txt -
+r2 f6 resid.txt -
+r2 main resid.txt -
+r2 main resid.txt -
+r2 f6 resid.txt -
+bits1 head bits.txt - bits
+bits1 f6 bits.txt - bits

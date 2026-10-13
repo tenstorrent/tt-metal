@@ -19,9 +19,9 @@ OUT=/tmp/llkab_out; rm -rf $OUT; mkdir -p $OUT
 cp $S/shadow/*.py $L/tests/python_tests/ 2>/dev/null
 cd $L/tests/python_tests
 # one producer per variant over the union of its ids
-for v in $(awk '!/^#/ && NF {print $2}' $PLAN | sort -u); do
+for v in $(awk '!/^#/ && NF && $5 != "bits" {print $2}' $PLAN | sort -u); do
   place $v
-  ids=$(awk -v v=$v '!/^#/ && NF && $2==v {print $3}' $PLAN | sort -u)
+  ids=$(awk -v v=$v '!/^#/ && NF && $2==v && $5 != "bits" {print $3}' $PLAN | sort -u)
   cat $(for f in $ids; do echo $S/$f; done) | sort -u > /tmp/ids_$v.txt
   mapfile -t NODES < /tmp/ids_$v.txt
   mkdir -p /tmp/llkb_$v
@@ -30,12 +30,12 @@ for v in $(awk '!/^#/ && NF {print $2}' $PLAN | sort -u); do
   echo "== produce $v rc=$? $(grep -E 'passed|failed|error' $OUT/prod_$v.log | tail -1 | cut -c1-150) $(date -u +%T)"
 done
 # Guard (17_CI_AB.md): each side's ELF hashes as compiled, and the sides must differ from main where their sources do
-for v in $(awk '!/^#/ && NF {print $2}' $PLAN | sort -u); do
+for v in $(awk '!/^#/ && NF && $5 != "bits" {print $2}' $PLAN | sort -u); do
   (cd /tmp/llkb_$v && find . -name "*.elf" -path "*/elf/*" | sort | while read -r e; do echo "$(md5sum < "$e" | cut -c1-12) $e"; done) > $OUT/elfs_$v.txt
   echo "== elfs $v: $(wc -l < $OUT/elfs_$v.txt) files, set $(md5sum < $OUT/elfs_$v.txt | cut -c1-12), dir $(ls -d /tmp/llkb_$v/tt-llk-build 2>/dev/null)"
 done
 GFAIL=0
-for v in $(awk '!/^#/ && NF {print $2}' $PLAN | sort -u); do
+for v in $(awk '!/^#/ && NF && $5 != "bits" {print $2}' $PLAN | sort -u); do
   [[ $v == ${GUARD_BASE:-main} || ! -s $OUT/elfs_${GUARD_BASE:-main}.txt ]] && continue
   d=$(awk 'NR==FNR {h[$1]=1; next} !($1 in h)' $OUT/elfs_${GUARD_BASE:-main}.txt $OUT/elfs_$v.txt | wc -l)
   echo "== guard $v against ${GUARD_BASE:-main}: $d of $(wc -l < $OUT/elfs_$v.txt) ELFs not among the base's"
@@ -49,6 +49,14 @@ while read -r tag v ids rts rawz; do
   i=$((i + 1)); t=${tag}_${i}_$v
   place $v
   mapfile -t NODES < $S/$ids
+  if [[ ${rawz:-} == bits ]]; then
+    # Functional runs with LLK asserts on, every result hashed bit for bit (resbits), own build directory
+    echo "== bits $t ${#NODES[@]} nodes $(date -u +%T)"
+    env -u TT_LLK_DISABLE_ASSERTS RUNNER_TEMP=/tmp/llkbits_$v TMPDIR=/tmp/llkbits_$v RESBITS_OUT=$OUT/bits_$t.jsonl timeout 3600 python -m pytest -n ${NBITS:-8} -p resbits -p no:cacheprovider --override-ini=log_cli=false -o timeout_method=thread -q -rfE "${NODES[@]}" > $OUT/run_$t.log 2>&1
+    rc=$?; echo "== bits $t rc=$rc $(grep -E 'passed|failed|error' $OUT/run_$t.log | tail -1 | cut -c1-150) $(date -u +%T)"
+    [[ $rc != 0 ]] && grep -a -E "^(FAILED|ERROR)" $OUT/run_$t.log | head -10 | cut -c1-240
+    continue
+  fi
   XA=(); [[ ${rawz:-} == rawz ]] && { XA=(-p rawzones); export RAWZONES_OUT=$OUT/rawz_$t.jsonl; }
   if [[ $rts != - ]]; then export LLK_PERF_RUN_TYPES=$rts; else unset LLK_PERF_RUN_TYPES; fi
   echo "== run $t ${#NODES[@]} nodes rts=$rts $(date -u +%T)"
@@ -60,6 +68,6 @@ while read -r tag v ids rts rawz; do
   unset RAWZONES_OUT
 done < $PLAN
 for f in $OUT/prod_*.log $OUT/run_*.log; do grep -q -E "failed|error" $f && { echo "== tail $f"; grep -a -E "^(FAILED|ERROR)" $f | head -3 | cut -c1-240; }; done
-tar -czf /tmp/llkab.tgz -C $OUT csv $(cd $OUT && ls rawz_*.jsonl elfs_*.txt 2>/dev/null) 2>/dev/null
+tar -czf /tmp/llkab.tgz -C $OUT csv $(cd $OUT && ls rawz_*.jsonl elfs_*.txt bits_*.jsonl 2>/dev/null) 2>/dev/null
 echo "@@RESULTS_BEGIN"; base64 -w 200 /tmp/llkab.tgz; echo "@@RESULTS_END"
 echo "== done $(date -u +%T)"
