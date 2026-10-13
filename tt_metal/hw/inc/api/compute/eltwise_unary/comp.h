@@ -13,13 +13,13 @@
 #include "llk_math_eltwise_unary_sfpu_macros.h"
 #else
 #include "ckernel_sfpu_comp.h"
+#include "ckernel_sfpu_unary_comp.h"
 #include "llk_math_eltwise_unary_sfpu_macros.h"
 #endif
 #endif
 
 namespace ckernel {
 
-#ifndef ARCH_QUASAR
 // unary ne : if x != value --> 1.0, else 0.0
 // clang-format off
 /**
@@ -337,7 +337,6 @@ ALWI void unary_le_tile_int32(uint32_t idst, uint32_t param0) {
  * Please refer to documentation for any_init.
  */
 ALWI void unary_le_tile_init() { MATH(SFPU_UNARY_INIT(unary_le)); }
-#endif  // !ARCH_QUASAR
 
 // clang-format off
 /**

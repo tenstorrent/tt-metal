@@ -4,9 +4,11 @@
 
 #include <tt-logger/tt-logger.hpp>
 #include <tt_stl/fmt.hpp>
+#include <tt_stl/assert.hpp>
 #include <tt-metalium/tensor/spec/layout/page_config.hpp>
 
 #include <tt-metalium/shape2d.hpp>
+#include <tt-metalium/float8.hpp>
 #include <numeric>
 #include <type_traits>
 #include <utility>
@@ -84,6 +86,10 @@ void validate_alignment_rm(
     if (memory_config.shard_spec().has_value() && memory_config.memory_layout() != TensorMemoryLayout::HEIGHT_SHARDED) {
         const auto& physical_shard_shape = memory_config.shard_spec().value().shape;
         const auto physical_shard_width = physical_shard_shape[1];
+        TT_FATAL(
+            width_alignment > 0,
+            "Row Major width alignment must be greater than 0; a sharded tensor takes it from the shard width ({})",
+            physical_shard_width);
         TT_FATAL(
             physical_shard_width % width_alignment == 0,
             "Alignment mismatch for sharded tensor: Expected physical shard shape {} to be aligned to {} along the "

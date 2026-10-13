@@ -149,7 +149,10 @@ std::string get_kernel_file_path(KernelName kernel_name, bool is_sfpu, bool is_w
 //  EnumT can either be FpuBinaryOp or SfpuBinaryOp
 template <class EnumT>
 OpConfig::OpConfig(
-    BinaryOpType binary_op_type, std::in_place_type_t<EnumT>, [[maybe_unused]] std::optional<DataType> dtype) :
+    BinaryOpType binary_op_type,
+    std::in_place_type_t<EnumT>,
+    [[maybe_unused]] std::optional<DataType> dtype,
+    const std::optional<binary::BinaryOpParams>& op_params) :
     binary_op(EnumT::SUB) {
     switch (binary_op_type) {
         case BinaryOpType::ADD: binary_op = EnumT::ADD; break;
@@ -221,10 +224,16 @@ OpConfig::OpConfig(
         // (a-b)**2
         case BinaryOpType::SQUARED_DIFFERENCE: postprocess = unary::UnaryOpType::SQUARE; break;
         // gelu(a+b)
-        case BinaryOpType::BIAS_GELU:
+        case BinaryOpType::BIAS_GELU: {
             binary_op = EnumT::ADD;
-            postprocess = unary::UnaryOpType::GELU;
+            const auto* gelu_params =
+                op_params.has_value() ? std::get_if<binary::BiasGeluParams>(&op_params.value()) : nullptr;
+            const bool fast_and_approximate = gelu_params != nullptr && gelu_params->fast_and_approximate;
+            // The parameter is required: without it this reaches gelu_tile's default template
+            // argument, which is the approximate variant, where ttnn.gelu defaults to exact.
+            postprocess = unary::EltwiseUnaryWithParam{unary::UnaryOpType::GELU, fast_and_approximate ? 1.0f : 0.0f};
             break;
+        }
         case BinaryOpType::LOGICAL_AND:
             process_lhs = unary::UnaryOpType::NEZ;
             process_rhs = unary::UnaryOpType::NEZ;
@@ -675,31 +684,45 @@ std::map<std::string, std::string> make_dataflow_defines(
 
     if (b_dtype == DataType::FLOAT32) {
         defines["FILL_TILE_WITH_FIRST_COLUMN_B"] = "fill_tile_with_first_column";
+        defines["FILL_TILE_WITH_FIRST_COLUMN_RM_B"] = "fill_tile_with_first_column_rm";
+        defines["FILL_TILE_WITH_FIRST_ROW_RM_B"] = "fill_tile_with_first_row_rm";
         defines["FILL_TILE_WITH_FIRST_ROW_B"] = "fill_tile_with_first_row";
         defines["FILL_TILE_WITH_FIRST_ELEMENT_B"] = "fill_tile_with_first_element<float>";
         defines["FILL_WITH_VALUE_FLOAT_B"] = "fill_with_val<1024, float>";
     } else if (b_dtype == DataType::INT32) {
         defines["FILL_TILE_WITH_FIRST_COLUMN_B"] = "fill_tile_with_first_column";
+        defines["FILL_TILE_WITH_FIRST_COLUMN_RM_B"] = "fill_tile_with_first_column_rm";
+        defines["FILL_TILE_WITH_FIRST_ROW_RM_B"] = "fill_tile_with_first_row_rm";
         defines["FILL_TILE_WITH_FIRST_ROW_B"] = "fill_tile_with_first_row";
         defines["FILL_TILE_WITH_FIRST_ELEMENT_B"] = "fill_tile_with_first_element<int32_t>";
         defines["FILL_WITH_VALUE_B"] = "fill_with_val<1024, int32_t>";
     } else if (b_dtype == DataType::UINT32) {
         defines["FILL_TILE_WITH_FIRST_COLUMN_B"] = "fill_tile_with_first_column";
+        defines["FILL_TILE_WITH_FIRST_COLUMN_RM_B"] = "fill_tile_with_first_column_rm";
+        defines["FILL_TILE_WITH_FIRST_ROW_RM_B"] = "fill_tile_with_first_row_rm";
         defines["FILL_TILE_WITH_FIRST_ROW_B"] = "fill_tile_with_first_row";
         defines["FILL_TILE_WITH_FIRST_ELEMENT_B"] = "fill_tile_with_first_element<uint32_t>";
         defines["FILL_WITH_VALUE_B"] = "fill_with_val<1024, uint32_t>";
     } else if (b_dtype == DataType::BFLOAT8_B) {
         defines["FILL_TILE_WITH_FIRST_COLUMN_B"] = "fill_tile_with_first_column_bfp8";
         defines["FILL_TILE_WITH_FIRST_ROW_B"] = "fill_tile_with_first_row_bfp8";
+        // Block float is not a flat row-major element type. These kernels pass
+        // (ptr, width[, rows]); keep the bf16 row-major helpers so the call compiles.
+        defines["FILL_TILE_WITH_FIRST_COLUMN_RM_B"] = "fill_tile_with_first_column_rm_bfloat16";
+        defines["FILL_TILE_WITH_FIRST_ROW_RM_B"] = "fill_tile_with_first_row_rm_bfloat16";
         defines["FILL_TILE_WITH_FIRST_ELEMENT_B"] = "fill_tile_with_first_element_bfp8";
         defines["FILL_WITH_VALUE_B"] = "fill_with_val_bfloat16";
     } else if (b_dtype == DataType::BFLOAT4_B) {
         defines["FILL_TILE_WITH_FIRST_COLUMN_B"] = "fill_tile_with_first_column_bfp4";
         defines["FILL_TILE_WITH_FIRST_ROW_B"] = "fill_tile_with_first_row_bfp4";
+        defines["FILL_TILE_WITH_FIRST_COLUMN_RM_B"] = "fill_tile_with_first_column_rm_bfloat16";
+        defines["FILL_TILE_WITH_FIRST_ROW_RM_B"] = "fill_tile_with_first_row_rm_bfloat16";
         defines["FILL_TILE_WITH_FIRST_ELEMENT_B"] = "fill_tile_with_first_element_bfp4";
         defines["FILL_WITH_VALUE_B"] = "fill_with_val_bfloat16";
     } else {
         defines["FILL_TILE_WITH_FIRST_COLUMN_B"] = "fill_tile_with_first_column_bfloat16";
+        defines["FILL_TILE_WITH_FIRST_COLUMN_RM_B"] = "fill_tile_with_first_column_rm_bfloat16";
+        defines["FILL_TILE_WITH_FIRST_ROW_RM_B"] = "fill_tile_with_first_row_rm_bfloat16";
         defines["FILL_TILE_WITH_FIRST_ROW_B"] = "fill_tile_with_first_row_bfloat16";
         defines["FILL_TILE_WITH_FIRST_ELEMENT_B"] = "fill_tile_with_first_element_bfloat16";
         defines["FILL_WITH_VALUE_B"] = "fill_with_val_bfloat16";
@@ -732,8 +755,16 @@ uint32_t pack_scalar_runtime_arg(const unary::ScalarVariant scalar, const DataTy
         scalar);
 }
 
-template OpConfig::OpConfig(BinaryOpType binary_op_type, std::in_place_type_t<FpuBinaryOp>, std::optional<DataType>);
-template OpConfig::OpConfig(BinaryOpType binary_op_type, std::in_place_type_t<SfpuBinaryOp>, std::optional<DataType>);
+template OpConfig::OpConfig(
+    BinaryOpType binary_op_type,
+    std::in_place_type_t<FpuBinaryOp>,
+    std::optional<DataType>,
+    const std::optional<binary::BinaryOpParams>&);
+template OpConfig::OpConfig(
+    BinaryOpType binary_op_type,
+    std::in_place_type_t<SfpuBinaryOp>,
+    std::optional<DataType>,
+    const std::optional<binary::BinaryOpParams>&);
 
 tt::tt_metal::ShardSpec adjust_to_shape(
     const tt::tt_metal::ShardSpec& shard_spec, const ttnn::Shape& from_shape, const ttnn::Shape& to_shape) {

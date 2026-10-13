@@ -419,15 +419,13 @@ AllToAllAsyncGenericProgram::create_at(
 
     tt::tt_metal::Program program{};
     MeshDevice* device = tensor_args.input_tensor.device();
-    // Mesh workloads build programs for global coordinates and discard remote programs at dispatch. Inspect the view's
-    // MaybeRemote entry rather than calling the deprecated physical-device APIs, which throw for remote coordinates.
-    // A remote coordinate only needs a representative device to complete construction; its translated NOC coordinates
-    // are never submitted by this rank. Local coordinates use their own chip for harvesting-aware NOC translation.
-    const auto coordinate_index = mesh_coordinate.to_linear_index(device->shape());
-    const auto& maybe_coordinate_device = *(device->get_view().begin() + static_cast<std::ptrdiff_t>(coordinate_index));
-    tt::tt_metal::IDevice* coordinate_device = maybe_coordinate_device.when(
-        [](tt::tt_metal::IDevice* local_device) { return local_device; },
-        [device]() { return static_cast<tt::tt_metal::IDevice*>(device); });
+    // Mesh workloads build programs for global coordinates and discard remote programs at dispatch. get_device throws
+    // for remote coordinates, so only call it for local ones. A remote coordinate only needs a representative device to
+    // complete construction; its translated NOC coordinates are never submitted by this rank. Local coordinates use
+    // their own chip for harvesting-aware NOC translation.
+    tt::tt_metal::IDevice* coordinate_device = device->is_local(mesh_coordinate)
+                                                   ? device->get_device(mesh_coordinate)
+                                                   : static_cast<tt::tt_metal::IDevice*>(device);
 
     std::vector<Tensor> input_tensors = {tensor_args.input_tensor};
     std::vector<Tensor> output_tensors = {tensor_return_value};
@@ -770,6 +768,7 @@ AllToAllAsyncGenericProgram::create_at(
     const size_t mux_l1_base_address = device->allocator()->get_base_allocator_addr(tt::tt_metal::HalMemType::L1);
     const size_t mux_l1_small_floor_address = ttnn::ccl::l1_small_floor_address(*device);
     tt::tt_fabric::FabricMuxV2Config mux_config(
+        /*mesh_device=*/*device,
         /*num_channels=*/static_cast<uint8_t>(mux_config_clients),
         /*num_buffers_per_channel=*/num_mux_buffers_per_channel,
         /*channel_buffer_size_bytes=*/tt::tt_fabric::get_tt_fabric_channel_buffer_size_bytes(),

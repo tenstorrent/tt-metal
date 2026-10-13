@@ -40,6 +40,7 @@ from helpers.param_config import (
     DEST_SYNC_TILE_LIMITS,
     input_output_formats,
     parametrize,
+    runtime,
 )
 from helpers.stimuli_config import StimuliConfig
 from helpers.stimuli_generator import generate_stimuli
@@ -103,9 +104,11 @@ def _block_shapes_fitting_dest(
     dest_acc=lambda formats: get_valid_dest_accumulation_modes(formats),
     implied_math_format=[ImpliedMathFormat.No, ImpliedMathFormat.Yes],
     dest_sync=[DestSync.Half, DestSync.Full],
-    tile_dimensions=TILE_DIMENSIONS,
-    block_shape=lambda dest_sync, dest_acc, tile_dimensions: _block_shapes_fitting_dest(
-        dest_sync, dest_acc, tile_dimensions
+    tile_dimensions=runtime(TILE_DIMENSIONS),
+    block_shape=runtime(
+        lambda dest_sync, dest_acc, tile_dimensions: _block_shapes_fitting_dest(
+            dest_sync, dest_acc, tile_dimensions
+        )
     ),
 )
 def test_eltwise_sub_bcast_col_custom_quasar(

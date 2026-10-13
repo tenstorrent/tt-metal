@@ -20,6 +20,8 @@ WORK=${WORK:?set WORK=<shared work dir>}; HOSTS=${HOSTS:?set HOSTS=<host:ranks,.
 STAMP=${STAMP:-$(date +%Y%m%d_%H%M%S)_s${STAGES}_c${CACHED}}
 TIMING_DIR=$WORK/timing_$STAMP; mkdir -p "$TIMING_DIR"
 MANIFEST=$WORK/manifest_$STAMP.json
+LC_JSON=""; [ -n "$MATRIX_LAYER_COUNTS" ] && LC_JSON=",
+    \"PREFILL_PP_LAYER_COUNTS\": \"$MATRIX_LAYER_COUNTS\""   # layers per stage (empty = the runner's even split)
 cat > "$MANIFEST" <<JSON
 {
   "env": {
@@ -30,7 +32,8 @@ cat > "$MANIFEST" <<JSON
     "HF_MODEL": "$HF_MODEL",
     "PREFILL_SYNC_PER_CHUNK": "1",
     "PREFILL_TIMING_DIR": "$TIMING_DIR",
-    "PREFILL_NUM_USERS": "$USERS"
+    "PREFILL_NUM_USERS": "$USERS",
+    "PREFILL_CHUNK_SIZE": "$MATRIX_CHUNK"$LC_JSON
   }
 }
 JSON
@@ -38,7 +41,7 @@ case $STAGES in 16) TEMPLATE=$PKG_DIR/binding_16stage_quad.yaml.in;; 12) TEMPLAT
 BINDING=$WORK/binding_$STAMP.yaml
 esc() { printf '%s' "$1" | sed 's/[&#\\]/\\&/g'; }   # sed replacement-side escaping for paths
 sed -e "s#@MAX_SEQ_LEN@#$((CACHED + MAX_NEW))#" -e "s#@PKG_DIR@#$(esc "$PKG_DIR")#g" -e "s#@MANIFEST@#$(esc "$MANIFEST")#" -e "s#@TT_CACHE_PATH@#$(esc "$TT_CACHE_PATH")#" "$TEMPLATE" > "$BINDING"
-echo "[runner] $(date) launch_host=$(hostname -s) commit=$(git rev-parse --short HEAD) stages=$STAGES cached=$CACHED users=$USERS capacity=$((CACHED + MAX_NEW)) binding=$BINDING manifest=$MANIFEST hosts=$HOSTS timing_dir=$TIMING_DIR"
+echo "[runner] $(date) launch_host=$(hostname -s) commit=$(git rev-parse --short HEAD) stages=$STAGES cached=$CACHED users=$USERS chunk=$MATRIX_CHUNK layer_counts=${MATRIX_LAYER_COUNTS:-even} capacity=$((CACHED + MAX_NEW)) binding=$BINDING manifest=$MANIFEST hosts=$HOSTS timing_dir=$TIMING_DIR"
 cat "$MANIFEST"
 for v in "${!SLURM@}"; do unset "$v"; done   # mpirun launches the remote ranks over ssh, not through Slurm
 export PRTE_MCA_ras="^slurm" PRTE_MCA_plm="^slurm"

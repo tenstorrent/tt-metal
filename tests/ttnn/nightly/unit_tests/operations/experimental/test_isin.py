@@ -2,6 +2,8 @@
 
 # SPDX-License-Identifier: Apache-2.0
 
+import math
+
 import pytest
 import torch
 import ttnn
@@ -57,8 +59,8 @@ def test_isin_typical_predefined_data(elements, test_elements, dtype, layout, in
     test_elements_torch = torch.tensor(test_elements, dtype=torch_dtype)
 
     # Convert to ttnn tensors
-    elements_ttnn = ttnn.from_torch(elements_torch, device=device, layout=layout)
-    test_elements_ttnn = ttnn.from_torch(test_elements_torch, device=device, layout=layout)
+    elements_ttnn = ttnn.from_torch(elements_torch, device=device, layout=layout, dtype=dtype)
+    test_elements_ttnn = ttnn.from_torch(test_elements_torch, device=device, layout=layout, dtype=dtype)
 
     # Act - Compute results
     torch_isin_result = torch.isin(elements_torch, test_elements_torch, invert=invert)
@@ -104,6 +106,34 @@ def test_isin_random_data(elements_shape, test_elements_shape, invert, device):
     assert torch.equal(torch_isin_result != 0, torch_result_from_ttnn != 0)
 
 
+def cache_hit_isin_inputs(elements_shape, test_elements_shape):
+    """Return two same-spec calls whose membership masks expose a stale binding.
+
+    The signal is the first three elements. Every other element is 0, and test-element
+    padding is 99, so neither value is in the other tensor's signal set. Membership of
+    those three positions is:
+
+        call 0 elements [10, 11, 12] vs {10, 20, 12} -> True, False, True
+        call 1 elements [20, 21, 22] vs {11, 21, 22} -> False, True, True
+        stale elements (call-0 elements, call-1 test) -> False, True, False
+        stale test elements (call-1 elements, call-0 test) -> True, False, False
+
+    Both buffers stale reproduces call 0. invert flips every mask and keeps them distinct.
+    """
+    assert math.prod(elements_shape) >= 3
+    assert math.prod(test_elements_shape) >= 3
+
+    elements_0 = torch.zeros(elements_shape, dtype=torch.int64)
+    elements_1 = torch.zeros(elements_shape, dtype=torch.int64)
+    test_elements_0 = torch.full(test_elements_shape, 99, dtype=torch.int64)
+    test_elements_1 = torch.full(test_elements_shape, 99, dtype=torch.int64)
+    elements_0.view(-1)[:3] = torch.tensor([10, 11, 12], dtype=torch.int64)
+    elements_1.view(-1)[:3] = torch.tensor([20, 21, 22], dtype=torch.int64)
+    test_elements_0.view(-1)[:3] = torch.tensor([10, 20, 12], dtype=torch.int64)
+    test_elements_1.view(-1)[:3] = torch.tensor([11, 21, 22], dtype=torch.int64)
+    return elements_0, test_elements_0, elements_1, test_elements_1
+
+
 @pytest.mark.parametrize(
     "elements_shape, test_elements_shape, invert, expected_num_program_cache_entries",
     [
@@ -116,24 +146,38 @@ def test_isin_random_data(elements_shape, test_elements_shape, invert, device):
 def test_isin_program_cache_and_random_data(
     elements_shape, test_elements_shape, invert, expected_num_program_cache_entries, device
 ):
-    torch.manual_seed(0)
+    elements_0, test_elements_0, elements_1, test_elements_1 = cache_hit_isin_inputs(
+        elements_shape, test_elements_shape
+    )
+    # A stale elements buffer, a stale test-elements buffer, and both stale together
+    # each disagree with the second call. The device comparison below then fails
+    # unless both reader bindings were refreshed.
+    outcome_masks = (
+        torch.isin(elements_0, test_elements_0, invert=invert),
+        torch.isin(elements_1, test_elements_1, invert=invert),
+        torch.isin(elements_0, test_elements_1, invert=invert),
+        torch.isin(elements_1, test_elements_0, invert=invert),
+    )
+    for left_index, left_mask in enumerate(outcome_masks):
+        for right_mask in outcome_masks[left_index + 1 :]:
+            assert not torch.equal(left_mask, right_mask)
 
-    # Arrange - Prepare data
-    elements_torch = torch.randint(0, 10000, elements_shape, dtype=torch.int64)
-    test_elements_torch = torch.randint(0, 10000, test_elements_shape, dtype=torch.int64)
-
-    # Convert to ttnn tensors
-    elements_ttnn = ttnn.from_torch(elements_torch, device=device, dtype=ttnn.int32)
-    test_elements_ttnn = ttnn.from_torch(test_elements_torch, device=device, dtype=ttnn.int32)
-
-    # Act - Compute results multiple times to test program cache
-    for _ in range(2):
+    # Keep both iterations' tensors alive so the second call gets a genuinely
+    # different buffer address instead of reusing a freed one.
+    kept_alive_tensors = []
+    for elements_torch, test_elements_torch in (
+        (elements_0, test_elements_0),
+        (elements_1, test_elements_1),
+    ):
+        elements_ttnn = ttnn.from_torch(elements_torch, device=device, dtype=ttnn.int32)
+        test_elements_ttnn = ttnn.from_torch(test_elements_torch, device=device, dtype=ttnn.int32)
         torch_isin_result = torch.isin(elements_torch, test_elements_torch, invert=invert)
         ttnn_isin_result = ttnn.experimental.isin(elements_ttnn, test_elements_ttnn, invert=invert)
+        kept_alive_tensors.append((elements_ttnn, test_elements_ttnn, ttnn_isin_result))
 
-    # Assert - Compare results
-    torch_result_from_ttnn = ttnn.to_torch(ttnn_isin_result).to(torch_isin_result.dtype)
-    assert torch_isin_result.shape == torch_result_from_ttnn.shape
-    assert torch_isin_result.count_nonzero() == torch_result_from_ttnn.count_nonzero()
-    assert torch.equal(torch_isin_result != 0, torch_result_from_ttnn != 0)
+        torch_result_from_ttnn = ttnn.to_torch(ttnn_isin_result).to(torch_isin_result.dtype)
+        assert torch_isin_result.shape == torch_result_from_ttnn.shape
+        assert torch_isin_result.count_nonzero() == torch_result_from_ttnn.count_nonzero()
+        assert torch.equal(torch_isin_result != 0, torch_result_from_ttnn != 0)
+    assert len(kept_alive_tensors) == 2
     assert device.num_program_cache_entries() == expected_num_program_cache_entries

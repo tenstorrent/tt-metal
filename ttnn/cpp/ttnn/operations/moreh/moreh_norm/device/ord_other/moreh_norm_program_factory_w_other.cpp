@@ -230,13 +230,14 @@ ttnn::device_operation::ProgramArtifacts MorehNormOperation::ProgramFactoryWOthe
     compute_defines["REDUCE_DIM"] = "ReduceDim::REDUCE_ROW";
     if (p == 0.0f) {
         compute_defines["REDUCE_OP"] = "PoolType::SUM";
-        compute_defines["IS_ZERO"] = "1";
     } else {
         compute_defines["REDUCE_OP"] = "PoolType::MAX";
-        if (p == -std::numeric_limits<float>::infinity()) {
-            compute_defines["MINUS_INF"] = "1";
-        }
     }
+
+    const KernelSpec::CompileTimeArgs compute_compile_time_args{
+        {"is_zero", static_cast<uint32_t>(p == 0.0f)},
+        {"minus_inf", static_cast<uint32_t>(p == -std::numeric_limits<float>::infinity())},
+    };
 
     const auto* const compute_kernel_file =
         "ttnn/cpp/ttnn/operations/moreh/moreh_norm/device/ord_other/moreh_norm_w/kernels/"
@@ -331,6 +332,7 @@ ttnn::device_operation::ProgramArtifacts MorehNormOperation::ProgramFactoryWOthe
                         .endpoint_type = DFBEndpointType::CONSUMER,
                     },
                 },
+            .compile_time_args = compute_compile_time_args,
             .runtime_arg_schema =
                 {
                     .runtime_arg_names = {"num_rows_per_core", "Wt", "origin_w"},

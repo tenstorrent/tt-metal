@@ -5,6 +5,7 @@
 #include "ring_distributed_sdpa_device_operation.hpp"
 #include "sdpa_interleaved_cb_ids.hpp"
 #include "sdpa_subblock_utils.hpp"
+#include "kernels/windowed_mode.hpp"
 
 #include <bit>
 #include <cmath>
@@ -286,15 +287,15 @@ ProgramDescriptor build_ring_distributed_sdpa_program_descriptor(
         0,                  // mla_kv_overlap
         qk_out_subblock_h,  // qk_subblock_h
         0,                  // sliding_window_size (ring uses no sliding window)
-        0                   // use_streaming_compute (ring uses legacy compute)
+        0,                  // use_streaming_compute (ring uses legacy compute)
+        // Semaphore placeholders (not used in ring, but kernel expects them at indices 28-31)
+        0,                                            // arg 28: sender_semaphore_id
+        0,                                            // arg 29: receiver_semaphore_id
+        0,                                            // arg 30: valid_semaphore_id
+        0,                                            // arg 31: mcast_enabled
+        static_cast<uint32_t>(use_zigzag_balancing),  // arg 32
+        static_cast<uint32_t>(WindowedMode::None),    // arg 33: windowed mode — ring is never windowed
     };
-    // Semaphore placeholders (not used in ring, but kernel expects them at indices 28-31)
-    reader_compile_time_args.push_back(0);  // sender_semaphore_id
-    reader_compile_time_args.push_back(0);  // receiver_semaphore_id
-    reader_compile_time_args.push_back(0);  // valid_semaphore_id
-    reader_compile_time_args.push_back(0);  // mcast_enabled
-    reader_compile_time_args.push_back(static_cast<uint32_t>(use_zigzag_balancing));  // arg 32
-    reader_compile_time_args.push_back(0);  // arg 33: use_windowed_narrowing — ring is never windowed
 
     TensorAccessorArgs(input_tensor_q.buffer()).append_to(reader_compile_time_args);
     TensorAccessorArgs(input_tensor_k.buffer()).append_to(reader_compile_time_args);
@@ -330,7 +331,8 @@ ProgramDescriptor build_ring_distributed_sdpa_program_descriptor(
         0,      // arg 18: out_subblock_h — unused when streaming is off
         0,      // arg 19: k_partial_col — non-streaming, no partial mask emitted
         static_cast<uint32_t>(use_zigzag_balancing),  // arg 20
-        0,  // arg 21: use_windowed_mask — ring never uses windowed (block-diagonal) attention
+        static_cast<uint32_t>(WindowedMode::None),    // arg 21: windowed mode — ring is never windowed
+        0,                                            // arg 22: out_concat_heads — ring writes the per-head layout
     };
     // out accessor, then the cu_window and Q-offset accessors chained right after it (mirrors the regular
     // factory so the writer's accessor offset chain stays intact). Ring is never windowed → placeholders.
@@ -368,7 +370,7 @@ ProgramDescriptor build_ring_distributed_sdpa_program_descriptor(
         valid_Skt,  // arg 25: unpadded K tiles for streaming padded_k_tiles
         0u,         // arg 26: k_partial_col - unused on ring's non-streaming path
         static_cast<uint32_t>(use_zigzag_balancing),  // arg 27: unified zigzag remap
-        0,                                            // arg 28: use_windowed_narrowing — ring is never windowed
+        static_cast<uint32_t>(WindowedMode::None),    // arg 28: windowed mode — ring is never windowed
     };
     std::map<std::string, std::string> defines_map;
     defines_map["STATS_GRANULARITY"] = std::to_string(stats_granularity);

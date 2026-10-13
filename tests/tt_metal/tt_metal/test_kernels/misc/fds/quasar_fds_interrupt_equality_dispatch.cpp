@@ -16,6 +16,7 @@
 #include <cstdint>
 #include "api/compile_time_args.h"
 
+#include "overlay/fds_signalling.hpp"
 #include "quasar_fds_common.h"
 #include "quasar_fds_interrupt.h"
 
@@ -35,7 +36,7 @@ constexpr uint32_t kTimeoutAtEquality = fds_interrupt_status::kTimeoutInterrupt;
 
 constexpr uint32_t kL1Address = get_named_compile_time_arg_val("l1_address");
 constexpr uint32_t kGroupId = get_named_compile_time_arg_val("group_id");
-constexpr uint32_t kWorkerMask = get_named_compile_time_arg_val("worker_mask");
+constexpr uint32_t kWorkerMask = overlay::fds_signalling::all_worker_lanes_mask;
 constexpr uint32_t kNumReadyWorkers = get_named_compile_time_arg_val("num_workers");
 constexpr uint32_t kPollIterations = get_named_compile_time_arg_val("poll_iterations");
 constexpr uint32_t kSilenceIterations = get_named_compile_time_arg_val("silence_iterations");
@@ -77,9 +78,10 @@ void kernel_main() {
         fds_interrupt::dispatch::disarm_external_interrupt(arming);
         return;
     }
+    fds_kernel::refresh_dispatch_group_status(kGroupId);
 
     overlay::FdsDispatch::fds_clear_go();
-    overlay::FdsDispatch::fds_go(/*ad_enable=*/false, kGroupId);
+    overlay::FdsDispatch::fds_go(kGroupId);
 
     // Waited out on status rather than on the count, because status is ungated by the enable mask
     // and so reports the lanes whether or not the group was ever configured to count them. Every
@@ -107,6 +109,7 @@ void kernel_main() {
         // One lane out of the count, and the arming that was silent must now deliver.
         const uint32_t cleared_lane = static_cast<uint32_t>(__builtin_ctz(status_at_arm));
         overlay::FdsDispatch::fds_clear_neo_status(cleared_lane);
+        fds_kernel::refresh_dispatch_group_status(kGroupId);
         if (!fds_interrupt::wait_for_interrupt_count(status, 1, kPollIterations)) {
             result = kTimeoutAtEquality;
         }

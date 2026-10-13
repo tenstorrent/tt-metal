@@ -9,6 +9,7 @@
 
 #include "dev_mem_map.h"
 #include "hostdev/dev_msgs.h"
+#include "hostdevcommon/fabric_telemetry_msgs.h"
 #include "noc/noc_parameters.h"
 #include "eth_l1_address_map.h"
 
@@ -33,3 +34,8 @@ static_assert(
     0);
 static_assert(MEM_AERISC_ROUTING_TABLE_BASE % 16 == 0, "Eth routing table base must be 16-byte aligned");
 static_assert(MEM_IERISC_ROUTING_TABLE_BASE % 16 == 0, "Eth routing table base must be 16-byte aligned");
+static_assert(sizeof(FabricTelemetry) == MEM_AERISC_FABRIC_TELEMETRY_SIZE);
+static_assert(
+    MEM_AERISC_FABRIC_POSTCODES_BASE == MEM_AERISC_FABRIC_TELEMETRY_BASE + offsetof(FabricTelemetry, postcode));
+static_assert(MEM_AERISC_FABRIC_SCRATCH_BASE == MEM_AERISC_FABRIC_TELEMETRY_BASE + offsetof(FabricTelemetry, scratch));
+static_assert(MEM_AERISC_FABRIC_SCRATCH_SIZE == sizeof(FabricTelemetry::scratch));

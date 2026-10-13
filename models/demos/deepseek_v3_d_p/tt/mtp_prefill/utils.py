@@ -2,7 +2,7 @@
 #
 # SPDX-License-Identifier: Apache-2.0
 
-"""Host-side helpers for the GLM-5.2 MTP module: checkpoint loading and the ``eh_proj`` TP layout.
+"""Host-side helpers for the GLM-5.3 MTP module: checkpoint loading and the ``eh_proj`` TP layout.
 
 Free of any ``ttnn`` import, so the shard math is unit-testable on a host with no device.
 """
@@ -18,7 +18,7 @@ MTP_CACHE_PREFIX = "mtp_0"
 """TTNN weight-cache key prefix for the shared MTP weight module. Shared by whoever BUILDS the cache
 and whoever checks it: a prefix mismatch does not raise, it just reports the cache incomplete."""
 
-MTP_CACHE_ENV = "TT_GLM52_MTP_TTNN_CACHE"
+MTP_CACHE_ENV = "TT_GLM53_MTP_TTNN_CACHE"
 """Env override for the MTP cache ROOT (the ``<variant>_<arch>_<N>dev/<sp>x<tp>`` leaf is appended).
 The MTP weights are keyed on layer 78, which the trunk cache does not carry, so they live in their
 own tree."""
@@ -75,7 +75,7 @@ def _resolve_weight_map(path: str) -> tuple[dict[str, str], bool]:
 
 
 def mtp_layer_idx_from_config(path: str) -> int:
-    """The layer index the MTP weights live on: ``num_hidden_layers`` (78 for GLM-5.2).
+    """The layer index the MTP weights live on: ``num_hidden_layers`` (78 for GLM-5.3).
 
     Reads ``config.json`` directly -- ``glm_moe_dsa`` is not AutoConfig-loadable.
     """
@@ -85,7 +85,7 @@ def mtp_layer_idx_from_config(path: str) -> int:
 
 
 def load_mtp_state_dict(path: str, *, layer_idx: int | None = None) -> dict[str, torch.Tensor]:
-    """Load the four MTP tensors from a GLM-5.2 HF checkpoint directory.
+    """Load the four MTP tensors from a GLM-5.3 HF checkpoint directory.
 
     Opens only the shards that hold them. Returns ``{"eh_proj", "enorm", "hnorm", "shared_head_norm"}``
     in HF layout.
@@ -132,11 +132,11 @@ def load_mtp_state_dict(path: str, *, layer_idx: int | None = None) -> dict[str,
 def mtp_indexer_types(config, mtp_layer_idx: int | None = None) -> list:
     """``config.indexer_types`` extended so the MTP layer owns an index-cache slot.
 
-    GLM-5.2's map covers the trunk layers only, which leaves the MTP layer's indexer cache one slot
+    GLM-5.3's map covers the trunk layers only, which leaves the MTP layer's indexer cache one slot
     short. Returns a new list, unchanged when the map already reaches the layer, and moves no trunk slot.
     """
     types = list(getattr(config, "indexer_types", None) or [])
-    assert types, "config has no indexer_types (GLM-5.1 and dense variants: every layer is full, nothing to extend)"
+    assert types, "config has no indexer_types (dense variants: every layer is full, nothing to extend)"
     if mtp_layer_idx is None:
         mtp_layer_idx = int(getattr(config, "num_hidden_layers", None) or len(types))
     while len(types) <= mtp_layer_idx:

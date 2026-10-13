@@ -149,7 +149,7 @@ def test_resnet_add_multitile_shard(device, dtype_tt):
 @pytest.mark.parametrize("dtype_tt", [ttnn.bfloat16])
 @pytest.mark.parametrize("fuse_relu", [False, True])
 def test_resnet_add_uneven_height_sharded(device, dtype_tt, fuse_relu):
-    # Uneven height shard (partial end core). The selector admits it because a/b/c share one shard spec;
+    # Uneven height shard (partial end core). The selector admits it because a/b/c share one memory config;
     # the DFB factory over-processes the full rounded-up shard into allocated padding, so the logical
     # output must still match the golden add.
     _run_resnet_add(

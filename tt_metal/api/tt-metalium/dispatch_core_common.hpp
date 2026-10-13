@@ -4,10 +4,13 @@
 
 #pragma once
 
+#include <cstddef>
+#include <cstdint>
+#include <functional>
 #include <optional>
+#include <tuple>
 
 #include <tt_stl/assert.hpp>
-#include <tt-metalium/core_coord.hpp>
 
 namespace tt::tt_metal {
 
