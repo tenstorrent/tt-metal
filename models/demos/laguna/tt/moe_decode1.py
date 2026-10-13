@@ -345,14 +345,15 @@ def _gate_up32_parts(x, gu_cols, wv, sparsity, out, grid, core_base, groups, chu
     page, wt, sp_page = 2048, _tile_bytes(gu_cols.buf.dtype), max(E * 2, 64)
     sp_rows = int(sparsity.shape[-2])
     assert wv is not None or sp_rows > 1
+    Mt = -(-int(x.shape[-2]) // TILE)  # 32-row token tiles (more than 32 tokens: the batched DFlash verify)
     cbs = [
-        _cb(grid, 0, ttnn.bfloat16, page, Kt),
+        _cb(grid, 0, ttnn.bfloat16, page, Mt * Kt),
         _cb(grid, 1, gu_cols.buf.dtype, wt, 2 * chunk),
-        _cb(grid, 2, ttnn.bfloat16, page, 2),
+        _cb(grid, 2, ttnn.bfloat16, page, 2 * Mt),
         _cb(grid, 3, ttnn.uint32, 64, 1),
         _cb(grid, 4, ttnn.bfloat16, sp_page, sp_rows + 1),
-        _cb(grid, 5, ttnn.bfloat16, page, 1),
-        _cb(grid, 6, ttnn.bfloat16, page, 1),
+        _cb(grid, 5, ttnn.bfloat16, page, Mt),
+        _cb(grid, 6, ttnn.bfloat16, page, Mt),
         _cb(grid, 7, ttnn.bfloat16, sp_page, sp_rows),
         _cb(grid, 16, ttnn.bfloat16, page, 2),
     ]
@@ -360,7 +361,7 @@ def _gate_up32_parts(x, gu_cols, wv, sparsity, out, grid, core_base, groups, chu
         kernel_source=str(_KDIR / "gu32_reader.cpp"),
         source_type=ttnn.KernelDescriptor.SourceType.FILE_PATH,
         core_ranges=grid,
-        compile_time_args=[Kt, nt, E, chunk, page, wt, sp_page, gs.x, groups, core_base]
+        compile_time_args=[Kt, nt, E, chunk, page, wt, sp_page, gs.x, groups, core_base, Mt]
         + _accessor_args(x, gu_cols.buf, sparsity if wv is None else wv, sparsity),
         common_runtime_args=[x.buffer_address(), gu_cols.buf.buffer_address(), 0 if wv is None else wv.buffer_address(),
                              sparsity.buffer_address(), sp_rows, len(rects)] + [v for r in rects for v in r],
@@ -370,7 +371,7 @@ def _gate_up32_parts(x, gu_cols, wv, sparsity, out, grid, core_base, groups, chu
         kernel_source=str(_KDIR / "gu32_writer.cpp"),
         source_type=ttnn.KernelDescriptor.SourceType.FILE_PATH,
         core_ranges=grid,
-        compile_time_args=[nt, E, page, sp_page, gs.x, groups, core_base] + _accessor_args(out, sparsity),
+        compile_time_args=[nt, E, page, sp_page, gs.x, groups, core_base, Mt] + _accessor_args(out, sparsity),
         common_runtime_args=[out.buffer_address(), sparsity.buffer_address(), sp_rows],
         config=ttnn.WriterConfigDescriptor(),
     )
@@ -382,7 +383,7 @@ def _gate_up32_parts(x, gu_cols, wv, sparsity, out, grid, core_base, groups, chu
         kernel_source=str(_KDIR / "gu32_compute.cpp"),
         source_type=ttnn.KernelDescriptor.SourceType.FILE_PATH,
         core_ranges=grid,
-        compile_time_args=[Kt, chunk],
+        compile_time_args=[Kt, chunk, Mt],
         config=cfg,
     )
     return [reader, writer, compute], cbs
@@ -431,6 +432,14 @@ def down32(glu, d_cols, sparsity, cols_per_core=8, expert_groups=8, memory_confi
     the last routed expert (summed by the same group reduction)."""
     device = glu.device()
     E, Kt, Nh = d_cols.E, d_cols.Kt, d_cols.Ct
+    Mt = -(-int(glu.shape[-2]) // TILE)
+    if Mt > 1:
+        # more than 32 tokens: DST holds cols_per_core x Mt fp32 tiles (at most 8), same core count
+        cores0 = Nh // cols_per_core * expert_groups
+        cols_per_core = max(1, 8 // Mt)
+        while Nh % cols_per_core:
+            cols_per_core -= 1
+        expert_groups = max(1, cores0 // (Nh // cols_per_core))
     # partial sums per expert group, reduced over dim 1 after the kernel
     out = ttnn.allocate_tensor_on_device(
         ttnn.Shape([1, expert_groups, glu.shape[-2], Nh * TILE]), ttnn.bfloat16, ttnn.TILE_LAYOUT, device, memory_config
@@ -450,13 +459,13 @@ def down32(glu, d_cols, sparsity, cols_per_core=8, expert_groups=8, memory_confi
     T = int(glu.shape[-2])
     x_rows = T if T <= 8 and _DN32_ROW_READS else 32  # <= 8: the packed-rows all-reduce reads rows < T only
     cbs = [
-        _cb(grid, 0, ttnn.bfloat16, page, 2 * Kt),
+        _cb(grid, 0, ttnn.bfloat16, page, 2 * Kt * Mt),
         _cb(grid, 1, ttnn.bfloat4_b, wt, 2 * cols_per_core * Kt),
         _cb(grid, 2, ttnn.uint32, 64, 1),
         _cb(grid, 3, ttnn.bfloat16, sp_page, sp_rows),
         _cb(grid, 4, ttnn.bfloat16, sp_page, sp_rows),
         _cb(grid, 5, ttnn.bfloat16, page, 1),
-        _cb(grid, 16, ttnn.bfloat16, page, cols_per_core),
+        _cb(grid, 16, ttnn.bfloat16, page, cols_per_core * Mt),
     ]
     if kt_sh:
         cbs.append(_cb(grid, 6, sh_cols.buf.dtype, w_sh, cols_per_core * kt_sh))
@@ -464,7 +473,7 @@ def down32(glu, d_cols, sparsity, cols_per_core=8, expert_groups=8, memory_confi
         kernel_source=str(_KDIR / "dn32_reader.cpp"),
         source_type=ttnn.KernelDescriptor.SourceType.FILE_PATH,
         core_ranges=grid,
-        compile_time_args=[Kt, Nh, E, page, wt, sp_page, gs.x, cols_per_core, expert_groups, kt_sh, w_sh, ks]
+        compile_time_args=[Kt, Nh, E, page, wt, sp_page, gs.x, cols_per_core, expert_groups, kt_sh, w_sh, ks, Mt]
         + _accessor_args(glu, d_cols.buf, sparsity, sh_glu, sh_cols.buf),
         # up to 8 token rows (DFlash verify): read only those rows of each activation tile; the output rows past them
         # are not used (the packed-rows all-reduce reads rows < T)
@@ -476,7 +485,7 @@ def down32(glu, d_cols, sparsity, cols_per_core=8, expert_groups=8, memory_confi
         kernel_source=str(_KDIR / "dn32_writer.cpp"),
         source_type=ttnn.KernelDescriptor.SourceType.FILE_PATH,
         core_ranges=grid,
-        compile_time_args=[page, gs.x, E, sp_page, cols_per_core, expert_groups, Nh, int(kt_sh > 0), ks]
+        compile_time_args=[page, gs.x, E, sp_page, cols_per_core, expert_groups, Nh, int(kt_sh > 0), ks, Mt]
         + _accessor_args(out, sparsity),
         common_runtime_args=[out.buffer_address(), sparsity.buffer_address(), sp_rows],
         config=ttnn.WriterConfigDescriptor(),
@@ -489,7 +498,7 @@ def down32(glu, d_cols, sparsity, cols_per_core=8, expert_groups=8, memory_confi
         kernel_source=str(_KDIR / "dn32_compute.cpp"),
         source_type=ttnn.KernelDescriptor.SourceType.FILE_PATH,
         core_ranges=grid,
-        compile_time_args=[Kt, cols_per_core, kt_sh, ks],
+        compile_time_args=[Kt, cols_per_core, kt_sh, ks, Mt],
         config=cfg,
     )
     io = [glu, d_cols.buf, sparsity, out] if shared is None else [glu, d_cols.buf, sparsity, sh_glu, sh_cols.buf, out]

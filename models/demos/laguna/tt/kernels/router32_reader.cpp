@@ -45,8 +45,10 @@ void kernel_main() {
     const auto sc = TensorAccessor(sc_args, sc_addr, tile_bytes);
     const auto out = TensorAccessor(out_args, out_addr, tile_bytes);
 
-    const uint32_t face0 = (t / 16) * 2;
-    const uint32_t row_off = (t % 16) * 64;
+    // more than 32 tokens: token t is row t % 32 of tile row t / 32 (tile mt * Et + j)
+    const uint32_t mt = t / 32, tr = t % 32;
+    const uint32_t face0 = (tr / 16) * 2;
+    const uint32_t row_off = (tr % 16) * 64;
     // local buffers: sel row [E], score row [E], output row [E] (fp32 each), sort keys [E] (uint32)
     const uint32_t buf = get_write_ptr(cb_buf);
     const uint32_t sel_l1 = buf, sc_l1 = buf + E * 4, out_l1 = buf + 2 * E * 4;
@@ -69,8 +71,8 @@ void kernel_main() {
     for (uint32_t j = 0; j < Et; ++j) {
         for (uint32_t h = 0; h < 2; ++h) {
             const uint32_t off = (face0 + h) * 1024 + row_off;
-            noc_async_read(sel.get_noc_addr(j) + off, sel_l1 + (j * 32 + h * 16) * 4, 64);
-            noc_async_read(sc.get_noc_addr(j) + off, sc_l1 + (j * 32 + h * 16) * 4, 64);
+            noc_async_read(sel.get_noc_addr(mt * Et + j) + off, sel_l1 + (j * 32 + h * 16) * 4, 64);
+            noc_async_read(sc.get_noc_addr(mt * Et + j) + off, sc_l1 + (j * 32 + h * 16) * 4, 64);
         }
     }
     // local mode: this chip's expert offset (one uint32 page of the mesh-sharded ep_off tensor), read with the rows
@@ -159,7 +161,7 @@ void kernel_main() {
     for (uint32_t j = 0; j < Et; ++j) {
         for (uint32_t h = 0; h < 2; ++h) {
             const uint32_t off = (face0 + h) * 1024 + row_off;
-            noc_async_write(out_l1 + (j * 32 + h * 16) * 4, out.get_noc_addr(j) + off, 64);
+            noc_async_write(out_l1 + (j * 32 + h * 16) * 4, out.get_noc_addr(mt * Et + j) + off, 64);
         }
     }
     noc_async_write_barrier();

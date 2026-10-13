@@ -3,7 +3,8 @@
 
 // Batched decode down + expert-sum reader over column-page weights (Laguna). Core c owns output columns
 // c*CPC .. c*CPC+CPC-1. Per active expert pushes its Kt activation tiles (the [1, E, 32, I] SwiGLU output row) and
-// its CPC down column pages (CPC*Kt tiles, one contiguous read per column).
+// its CPC down column pages (CPC*Kt tiles, one contiguous read per column). Mt > 1 (more than 32 tokens): a unit pushes
+// its Kq activation tiles for every token tile m (cb_x tile m * Kq + k; activation tile (e * Mt + m) * Kt + k).
 
 #include <stdint.h>
 #include "api/dataflow/dataflow_api.h"
@@ -27,7 +28,8 @@ void kernel_main() {
     // the expert groups in order -- finer than whole experts, so the groups stay balanced
     constexpr uint32_t KS = get_compile_time_arg_val(11);
     constexpr uint32_t Kq = Kt / KS;
-    constexpr auto x_args = TensorAccessorArgs<12>();
+    constexpr uint32_t Mt = get_compile_time_arg_val(12);
+    constexpr auto x_args = TensorAccessorArgs<13>();
     constexpr auto w_args = TensorAccessorArgs<x_args.next_compile_time_args_offset()>();
     constexpr auto sp_args = TensorAccessorArgs<w_args.next_compile_time_args_offset()>();
     constexpr auto xs_args = TensorAccessorArgs<sp_args.next_compile_time_args_offset()>();
@@ -86,21 +88,24 @@ void kernel_main() {
             for (uint32_t j = 0; j < CPC; ++j) {
                 noc_async_read(w.get_noc_addr(e * Kt * Nh + c0 + j) + kb * w_tile, w_l1 + j * Kq * w_tile, Kq * w_tile);
             }
-            cb_reserve_back(cb_x, Kq);
+            cb_reserve_back(cb_x, Mt * Kq);
             const uint32_t x_l1 = get_write_ptr(cb_x);
-            for (uint32_t k = 0; k < Kq; ++k) {
-                if (x_rows < 16) {
-                    // only rows 0..x_rows-1 are real: their 32-byte rows of face 0 and face 1 (other rows keep stale
-                    // data; matmul rows are independent, so they only reach output rows the caller never reads)
-                    const uint64_t src = x.get_noc_addr(e * Kt + kb + k);
-                    noc_async_read(src, x_l1 + k * x_page, x_rows * 32);
-                    noc_async_read(src + 512, x_l1 + k * x_page + 512, x_rows * 32);
-                } else {
-                    noc_async_read_tile(e * Kt + kb + k, x, x_l1 + k * x_page);
+            for (uint32_t m = 0; m < Mt; ++m) {
+                for (uint32_t k = 0; k < Kq; ++k) {
+                    const uint32_t dst = x_l1 + (m * Kq + k) * x_page;
+                    if (x_rows < 16) {
+                        // only rows 0..x_rows-1 are real: their 32-byte rows of face 0 and face 1 (other rows keep
+                        // stale data; matmul rows are independent, so they only reach output rows never read)
+                        const uint64_t src = x.get_noc_addr(e * Kt + kb + k);
+                        noc_async_read(src, dst, x_rows * 32);
+                        noc_async_read(src + 512, dst + 512, x_rows * 32);
+                    } else {
+                        noc_async_read_tile((e * Mt + m) * Kt + kb + k, x, dst);
+                    }
                 }
             }
             noc_async_read_barrier();
-            cb_push_back(cb_x, Kq);
+            cb_push_back(cb_x, Mt * Kq);
             cb_push_back(cb_w, CPC * Kq);
         }
     }
@@ -113,19 +118,19 @@ void kernel_main() {
             for (uint32_t j = 0; j < CPC; ++j) {
                 noc_async_read(ws.get_noc_addr(c0 + j), w_l1 + j * Kt_sh * w_sh_tile, Kt_sh * w_sh_tile);
             }
-            cb_reserve_back(cb_x, Kt_sh);
+            cb_reserve_back(cb_x, Mt * Kt_sh);
             const uint32_t x_l1 = get_write_ptr(cb_x);
-            for (uint32_t k = 0; k < Kt_sh; ++k) {
+            for (uint32_t k = 0; k < Mt * Kt_sh; ++k) {
                 if (x_rows < 16) {
                     const uint64_t src = xs.get_noc_addr(k);
                     noc_async_read(src, x_l1 + k * x_page, x_rows * 32);
                     noc_async_read(src + 512, x_l1 + k * x_page + 512, x_rows * 32);
                 } else {
-                    noc_async_read_tile(k, xs, x_l1 + k * x_page);
+                    noc_async_read_tile(k, xs, x_l1 + k * x_page);  // tile m * Kt_sh + k of [1, 1, 32 Mt, I_sh]
                 }
             }
             noc_async_read_barrier();
-            cb_push_back(cb_x, Kt_sh);
+            cb_push_back(cb_x, Mt * Kt_sh);
             cb_push_back(cb_w_sh, CPC * Kt_sh);
         }
     }

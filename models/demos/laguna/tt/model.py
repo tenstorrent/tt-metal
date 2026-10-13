@@ -665,6 +665,38 @@ class LagunaModel:
             layer_ids=tuple(DFLASH_TARGET_LAYER_IDS),
         )
 
+    def verify_inputs_batched(self, cur_pos, rope_idx, page_table):
+        """Per-32-row-chunk inputs of verify_layers_batched, built once per step (shared by every layer): a list of
+        (cur_pos [32], {attention kind: (cos, sin)}, page_table [32, blocks]) from cur_pos int32 [T], rope_idx uint32
+        [1, T] and page_table int32 [T, blocks]."""
+        T = int(cur_pos.shape[-1])
+        blocks = int(page_table.shape[-1])
+        chunks = []
+        for c in range(T // 32):
+            r0, r1 = c * 32, (c + 1) * 32
+            ridx = ttnn.slice(rope_idx, [0, r0], [1, r1])
+            chunks.append((ttnn.slice(cur_pos, [r0], [r1]), self._build_decode_rope(ridx, 32),
+                           ttnn.slice(page_table, [r0, 0], [r1, blocks])))  # fmt: skip
+        return chunks
+
+    def verify_layers_batched(self, hidden_11TH, chunks, kv_cache, *, capture=True):
+        """Batched DFlash verify over T rows of many users (MultichipDecoder.verify_rows_forward); chunks from
+        verify_inputs_batched. Returns (h [1, 1, T, H], aux [1, T, 6 H] or None), aux being the post-layer states of the
+        draft's target layers (DFLASH_TARGET_LAYER_IDS) for every row."""
+        T = int(hidden_11TH.shape[-2])
+        ids = set(DFLASH_TARGET_LAYER_IDS) if capture else set()
+        h = hidden_11TH
+        captured = []
+        for dec, kv in zip(self.layers, kv_cache):
+            kind = dec.cfg.attention_type
+            h = dec.verify_rows_forward(h, [(cur, rope[kind], pt) for cur, rope, pt in chunks], kv)
+            if int(dec.layer_idx) in ids:
+                captured.append(h)
+        if not capture:
+            return h, None
+        aux = ttnn.reshape(ttnn.concat(captured, dim=-1), (1, T, len(DFLASH_TARGET_LAYER_IDS) * self.cfg.hidden))
+        return h, aux
+
     # ---- terminal: final norm + LM head ------------------------------------ #
     def final_norm(self, hidden):
         return ttnn.rms_norm(hidden, weight=self.norm_w, epsilon=self.cfg.eps, compute_kernel_config=self._norm_ck)

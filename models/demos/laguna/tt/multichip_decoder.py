@@ -347,6 +347,9 @@ class MultichipDecoder(OptimizedDecoder):
         # 2..32-token decode (DFlash verify, batched decode): sigmoid fused into the router matmul, a row-repeated
         # bias, and the router kernel writing this chip's routing rows and expert weight tiles directly (_moe_rows_local)
         self._route_local_rows = _parse_binary_env("TT_LAGUNA_ROUTE_LOCAL_ROWS", True)
+        # more than 32 rows (the batched DFlash verify, 32-row multiples): the same router kernel and the routed-expert
+        # kernels over Mt token tiles (each weight read once for every tile) instead of the sparse-matmul chain
+        self._batched_rows_moe = _parse_binary_env("TT_LAGUNA_BATCHED_ROWS_MOE", True)
         self._route_topk_kernel = _parse_binary_env("TT_LAGUNA_ROUTE_TOPK_KERNEL", True)  # prefill dispatch router
         self._combine_local = _parse_binary_env("TT_LAGUNA_COMBINE_LOCAL", True)  # all-core local combine kernel
         self._swiglu32 = _parse_binary_env("TT_LAGUNA_SWIGLU32", True)  # fused routed SwiGLU, 32-row decode
@@ -1301,14 +1304,15 @@ class MultichipDecoder(OptimizedDecoder):
             and "gate_w_ds" in self.w
         ):
             return self._moe1_local(ln_flat, sharded)
+        many = T > TILE and T % TILE == 0 and T <= self.device.compute_with_storage_grid_size().x * self.device.compute_with_storage_grid_size().y
         if (
-            1 < T <= TILE
+            (1 < T <= TILE or (many and self._batched_rows_moe))
             and self.D > 1
             and self._route_local_rows
             and self._route_dense_mask
             and getattr(self, "_router32", False)
             and getattr(self, "_cp32", False)
-            and (T == TILE or self._cp32_short)
+            and (T >= TILE or self._cp32_short)
             and "ep_off" in self.w
             and "gate_w_ds" in self.w
             and "e_bias_f32_rows" in self.w
@@ -1460,10 +1464,12 @@ class MultichipDecoder(OptimizedDecoder):
         scores = self._router_scores(ln_flat)
         if T == TILE:
             bias = self.w["e_bias_f32_rows"]
-        else:  # the bias repeated over T rows (sliced once, at the first eager call, before any trace capture)
+        else:  # the bias repeated over T rows (made once, at the first eager call, before any trace capture)
             cache = self.__dict__.setdefault("_bias_rows_t", {})
             if T not in cache:
-                cache[T] = ttnn.slice(self.w["e_bias_f32_rows"], [0, 0, 0, 0], [1, 1, T, E])
+                rows32 = self.w["e_bias_f32_rows"]
+                cache[T] = (ttnn.concat([rows32] * (T // TILE), dim=2) if T > TILE
+                            else ttnn.slice(rows32, [0, 0, 0, 0], [1, 1, T, E]))  # fmt: skip
             bias = cache[T]
         sel = ttnn.add(scores, bias)
         rows = route_local_rows(
@@ -1507,6 +1513,12 @@ class MultichipDecoder(OptimizedDecoder):
         H, E = cfg.hidden, cfg.num_experts
         sig = ttnn.UnaryWithParam(ttnn.UnaryOpType.SIGMOID)
         kt = H // TILE
+        T = int(x.shape[-2])
+        if T > TILE:  # the batched DFlash verify: the 32-row DRAM-sharded matmul per 32-row chunk
+            parts = [self._router_scores(ttnn.slice(x, [0, 0, r0, 0], [1, 1, r0 + TILE, H],
+                                                    memory_config=ttnn.L1_MEMORY_CONFIG))
+                     for r0 in range(0, T, TILE)]  # fmt: skip
+            return ttnn.concat(parts, dim=2, memory_config=ttnn.L1_MEMORY_CONFIG)
         # up to 8 rows (batch 1, the DFlash verify); batch-32 decode kept the DRAM-sharded matmul (25.0 -> 24.1 tok/s
         # per user at 8K with this one)
         if self._router_1d and E % TILE == 0 and E // TILE <= 8 and x.shape[-2] <= 8:
@@ -1898,6 +1910,50 @@ class MultichipDecoder(OptimizedDecoder):
         v = ttnn.concat([v_ctx, v], dim=2)
         return self._dflash_query_tail(x_q, ln_q, q, k, v, mask)
 
+    def dflash_query_forward_batched(self, x_q, k_ring, v_ring, rope_q, mask):
+        """dflash_query_forward_cached for U users at once: x_q [1, U * 32, H] (user u's 32 query rows -- its 16
+        proposal rows, then padding -- at rows u * 32 ..); k_ring / v_ring [U, nkv, RING, hd] the users' context
+        rings; rope_q (cos, sin) [U, 1, 32, hd] at each user's query positions; mask [U, 1, 32, RING + 32] over the
+        user's ring slots then its 32 query rows. Matmuls, gate, O projection, all-reduce and MLP run once over all
+        U * 32 rows; attention is batched over users (each user's queries see only its own ring and rows)."""
+        cfg = self.cfg
+        U = int(k_ring.shape[0])
+        T = U * TILE
+        ln_q = self._rms(x_q, self.w["input_ln"])
+        qkv = self._prefill_linear(ln_q, self.w["wqkv"], self._ck_qkv)  # [1, T, qkv_w]
+        q, k, v = ttnn.experimental.nlp_create_qkv_heads(
+            ttnn.reshape(qkv, (U, 1, TILE, self.meta["qkv_w"])), num_heads=cfg.num_heads,
+            num_kv_heads=cfg.num_kv_heads, transpose_k_heads=False, memory_config=ttnn.DRAM_MEMORY_CONFIG,
+        )  # fmt: skip
+        q = self._apply_rope(self._per_head_norm(q, self.w["q_norm"]), *rope_q)
+        k = self._apply_rope(self._per_head_norm(k, self.w["k_norm"]), *rope_q)
+        k = ttnn.concat([k_ring, k], dim=2)
+        v = ttnn.concat([v_ring, v], dim=2)
+        S = int(k.shape[-2])
+        kc = next(c for c in (128, 64, 32) if S % c == 0)
+        if getattr(self, "_dflash_q_pc", {}).get(kc) is None:
+            grid = self.device.compute_with_storage_grid_size()
+            self.__dict__.setdefault("_dflash_q_pc", {})[kc] = ttnn.SDPAProgramConfig(
+                compute_with_storage_grid_size=ttnn.CoreCoord(grid.x, grid.y), q_chunk_size=TILE, k_chunk_size=kc,
+                exp_approx_mode=False,
+            )  # fmt: skip
+        sdpa_ck = getattr(self, "_sdpa_compute_sliding", self._sdpa_compute) if cfg.is_sliding else self._sdpa_compute
+        attn = ttnn.transformer.scaled_dot_product_attention(
+            q, k, v, is_causal=False, attn_mask=mask, scale=cfg.scaling, program_config=self._dflash_q_pc[kc],
+            compute_kernel_config=sdpa_ck,
+        )  # fmt: skip
+        attn = ttnn.experimental.nlp_concat_heads(attn, memory_config=ttnn.DRAM_MEMORY_CONFIG)  # [U, 1, 32, nh * hd]
+        attn = ttnn.reshape(attn, (1, T, cfg.num_heads * cfg.head_dim))
+        g = ttnn.linear(ln_q, self.w["wg"], compute_kernel_config=self._ck_gate)
+        if self._gate_expand is not None:
+            attn = ttnn.mul(attn, ttnn.matmul(ttnn.softplus(g), self._gate_expand, compute_kernel_config=self._ck_hifi4,
+                                              dtype=ttnn.bfloat16))  # fmt: skip
+        else:
+            attn = self._gate(attn, ln_q, g=g)
+        h = ttnn.add(x_q, self._reduce(self._prefill_linear(attn, self.w["wo"], self._ck_o)))
+        ln2 = self._rms(h, self.w["post_ln"])
+        return ttnn.add(h, ttnn.reshape(self._mlp(ln2, T, sharded=False), (1, T, cfg.hidden)))
+
     def _dflash_query_tail(self, x_q, ln_q, q, k, v, mask, g=None):
         """Masked attention of the 32 query rows over keys k / values v, gate, O projection + all-reduce, MLP. g: the
         gate logits [1, 32, num_heads] when already computed (else g_proj(ln_q))."""
@@ -2144,25 +2200,33 @@ class MultichipDecoder(OptimizedDecoder):
         sequential_kv_write=False,
         rope_mats=None,
         next_norm_cores=None,
+        qkv_pre=None,
     ):
+        """qkv_pre (verify_rows_forward): this 32-row chunk's fused QKV + gate projection, computed once over every
+        chunk (x_1BH is then unused); with self._stop_pre_wo the attention output (heads joined, interleaved L1
+        [1, 1, B, heads * head_dim]) is returned before the WO projection."""
         cfg = self.cfg
-        B = x_1BH.shape[-2]
+        B = (x_1BH if qkv_pre is None else qkv_pre).shape[-2]
         residual = x_1BH
         fold_g = self.use_dram_sharded and self.meta.get("qkvg_pad")
-        # with g_proj folded into QKV, ln's only decode consumer is that matmul: hand it off sharded
-        ln = self._rms(
-            x_1BH,
-            self.w["input_ln"],
-            out_cores=_decode_shard_cores(cfg.hidden, self.meta["qkvg_pad"]) if fold_g else None,
-        )
+        if qkv_pre is None:
+            # with g_proj folded into QKV, ln's only decode consumer is that matmul: hand it off sharded
+            ln = self._rms(
+                x_1BH,
+                self.w["input_ln"],
+                out_cores=_decode_shard_cores(cfg.hidden, self.meta["qkvg_pad"]) if fold_g else None,
+            )
         g = None
         if fold_g:
             # g_proj folded into the QKV matmul at the QKV fidelity (LoFi): HiFi2 doubled this M=32 matmul's
             # math and made it compute-bound (~41 us vs ~22 us)
-            qkv = self._dram_mm(ln, None, self.w["wqkvg_ds"], cfg.hidden, self.meta["qkvg_pad"], self._ck_qkv)
+            if qkv_pre is None:
+                qkv = self._dram_mm(ln, None, self.w["wqkvg_ds"], cfg.hidden, self.meta["qkvg_pad"], self._ck_qkv)
+            else:
+                qkv = qkv_pre
             # head split in L1 (q -> DRAM before SDPA): the slices read the width-sharded qkv directly
             split_mem = ttnn.L1_MEMORY_CONFIG
-            if not self._slice_sharded:
+            if not self._slice_sharded and qkv.is_sharded():
                 qkv = ttnn.sharded_to_interleaved(qkv, ttnn.L1_MEMORY_CONFIG)
             qkv_w = self.meta["qkv_w"]
             ae1 = (
@@ -2330,6 +2394,8 @@ class MultichipDecoder(OptimizedDecoder):
             attn = ttnn.mul(attn, g, input_tensor_b_activations=[softplus], memory_config=ttnn.L1_MEMORY_CONFIG)
             attn = ttnn.to_memory_config(attn, self._qkv_heads_decode_memcfg)
             attn = ttnn.experimental.nlp_concat_heads_decode(attn, num_heads=cfg.num_heads)
+            if getattr(self, "_stop_pre_wo", False):  # verify_rows_forward: WO runs once over every chunk
+                return ttnn.sharded_to_interleaved(attn, ttnn.L1_MEMORY_CONFIG)
             if self.use_dram_sharded and self._reshape_to_shard:
                 attn = ttnn.to_memory_config(attn, _width_sharded_l1(TILE, q_w, _decode_shard_cores(q_w, cfg.hidden)))
             o = self._dram_mm(attn, self.w["wo"], self.w["wo_ds"], q_w, cfg.hidden, self._ck_o)
@@ -2344,6 +2410,48 @@ class MultichipDecoder(OptimizedDecoder):
         attn = ttnn.reshape(attn, (1, 1, B, cfg.num_heads * cfg.head_dim), memory_config=wo_in)
         o = self._dram_mm(attn, self.w["wo"], self.w["wo_ds"], q_w, cfg.hidden, self._ck_o)
         return self._decode_tail(o, residual, B, next_norm_cores)
+
+    def verify_rows_forward(self, x, chunks, kv_cache):
+        """Batched DFlash verify: T (a multiple of 32) decode rows of many users in one step.
+
+        Row r is one token of some user; a user's rows are consecutive positions. The weight-reading projections run
+        once over all T rows (input norm, fused QKV + gate matmul, WO matmul, all-reduce; the MoE half: post-attention
+        norm, routed and shared experts reading each expert's weights once over T / 32 token tiles, all-reduce). The
+        per-row attention runs the tuned batch-32 decode block per 32-row chunk (decode_forward with qkv_pre, up to
+        the joined heads): head split, q/k norms, RoPE, share_cache KV writes merging rows that land in one cache
+        tile, paged SDPA, gate. x: [1, 1, T, H] bf16 TILE; chunks: one (cur_pos int32 [32], (cos, sin)
+        [1, 32, 1, rotary_dim], page_table int32 [32, blocks]) per chunk (see LagunaModel.verify_layers_batched)."""
+        cfg = self.cfg
+        T = int(x.shape[-2])
+        n = T // TILE
+        if T % TILE or n != len(chunks):
+            raise ValueError(f"batched verify takes {len(chunks)} 32-row chunks, got {T} rows")
+        if not (self.use_dram_sharded and self.meta.get("qkvg_pad") and "wqkvg_ds" in self.w):
+            raise RuntimeError("batched verify needs the fused QKV + gate weight (fold_g)")
+        if "dflash_wqkvg" not in self.w:  # an interleaved copy of the fused weight (made at the first, eager, call)
+            self.w["dflash_wqkvg"] = ttnn.to_memory_config(self.w["wqkvg_ds"], ttnn.DRAM_MEMORY_CONFIG)
+        ln = self._rms(x, self.w["input_ln"])
+        if ln.is_sharded():
+            ln = ttnn.sharded_to_interleaved(ln, ttnn.L1_MEMORY_CONFIG)
+        qkvg = self._prefill_linear(ln, self.w["dflash_wqkvg"], self._ck_qkv, memory_config=ttnn.L1_MEMORY_CONFIG)
+        pad = int(qkvg.shape[-1])
+        parts = []
+        self._stop_pre_wo = True
+        try:
+            for c, (cur_c, rope_c, pt_c) in enumerate(chunks):
+                q_c = ttnn.slice(qkvg, [0, 0, c * TILE, 0], [1, 1, (c + 1) * TILE, pad],
+                                 memory_config=ttnn.L1_MEMORY_CONFIG) if n > 1 else qkvg  # fmt: skip
+                parts.append(self.decode_forward(None, cur_c, None, pt_c, kv_cache, sequential_kv_write=True,
+                                                 rope_mats=rope_c, qkv_pre=q_c))  # fmt: skip
+        finally:
+            self._stop_pre_wo = False
+        attn = ttnn.concat(parts, dim=2) if n > 1 else parts[0]
+        o = self._reduce(self._prefill_linear(attn, self.w["wo"], self._ck_o, memory_config=ttnn.L1_MEMORY_CONFIG))
+        h = ttnn.add(x, o)
+        ln2 = self._rms(h, self.w["post_ln"])
+        if ln2.is_sharded():
+            ln2 = ttnn.sharded_to_interleaved(ln2, ttnn.L1_MEMORY_CONFIG)
+        return ttnn.add(h, self._mlp(ln2, T, sharded=False))
 
     def _decode_tail(self, o, residual, B, next_norm_cores):
         """WO output (row-parallel partial) -> all-reduce, residual add, post norm, MLP, residual add."""

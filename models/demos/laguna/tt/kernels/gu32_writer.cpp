@@ -1,8 +1,8 @@
 // SPDX-FileCopyrightText: © 2026 Tenstorrent AI ULC
 // SPDX-License-Identifier: Apache-2.0
 
-// Batched decode gate/up writer (Laguna): same unit rule as the reader; writes unit (e, n) to tile e*Nt + n of the
-// [1, E, 32, I] output (inactive experts' tiles unwritten).
+// Batched decode gate/up writer (Laguna): same unit rule as the reader; writes unit (e, n) to tiles (e * Mt + m) * Nt + n
+// of the [1, E, 32 Mt, I] output (inactive experts' tiles unwritten).
 
 #include <stdint.h>
 #include "api/dataflow/dataflow_api.h"
@@ -16,7 +16,8 @@ void kernel_main() {
     constexpr uint32_t G = get_compile_time_arg_val(5);
     constexpr uint32_t cb_sp2 = 7, cb_out = 16;
     constexpr uint32_t core_base = get_compile_time_arg_val(6);  // first core of this kernel's grid
-    constexpr auto out_args = TensorAccessorArgs<7>();
+    constexpr uint32_t Mt = get_compile_time_arg_val(7);
+    constexpr auto out_args = TensorAccessorArgs<8>();
     constexpr auto sp_args = TensorAccessorArgs<out_args.next_compile_time_args_offset()>();
     const uint32_t out_addr = get_common_arg_val<uint32_t>(0);
     const uint32_t sp_addr = get_common_arg_val<uint32_t>(1);
@@ -48,9 +49,11 @@ void kernel_main() {
         if (!mine) {
             continue;
         }
-        cb_wait_front(cb_out, 1);
-        noc_async_write_tile(e * Nt + n, out, get_read_ptr(cb_out));
-        noc_async_write_barrier();
-        cb_pop_front(cb_out, 1);
+        for (uint32_t m = 0; m < Mt; ++m) {
+            cb_wait_front(cb_out, 1);
+            noc_async_write_tile((e * Mt + m) * Nt + n, out, get_read_ptr(cb_out));
+            noc_async_write_barrier();
+            cb_pop_front(cb_out, 1);
+        }
     }
 }

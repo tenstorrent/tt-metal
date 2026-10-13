@@ -138,7 +138,7 @@ def route1_local(sel, scores, top_k, routed_scaling, norm_topk_prob, ep_off, loc
 
 def route_local_rows(sel, scores, top_k, routed_scaling, norm_topk_prob, ep_off, local_e,
                      memory_config=ttnn.L1_MEMORY_CONFIG, active=None):
-    """2..32 decode tokens: sel, scores [1, 1, T, E] fp32 TILE; ep_off as in route1_local. Returns this chip's
+    """2..110 decode tokens (one core per token): sel, scores [1, 1, T, E] fp32 TILE; ep_off as in route1_local. Returns this chip's
     [1, 1, T, local_e] bf16 row-major routing rows (normalized, scaled weights of each token's picked local experts,
     0 elsewhere): moe_decode1.gate_up32 / down32 union them into the active set and gate_up32 builds each expert's
     per-token weight tile from them. One core per token replaces the dense routing tile, EP-select matmul, row sum,
@@ -146,7 +146,7 @@ def route_local_rows(sel, scores, top_k, routed_scaling, norm_topk_prob, ep_off,
     of leading rows to route; later rows are written as zero rows."""
     device = sel.device()
     T, E = sel.shape[-2], sel.shape[-1]
-    assert 1 < T <= 32, sel.shape
+    assert 1 < T <= device.compute_with_storage_grid_size().x * device.compute_with_storage_grid_size().y, sel.shape
     rows = ttnn.allocate_tensor_on_device(
         ttnn.Shape([1, 1, T, local_e]), ttnn.bfloat16, ttnn.ROW_MAJOR_LAYOUT, device, memory_config
     )

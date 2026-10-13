@@ -1,9 +1,9 @@
 // SPDX-FileCopyrightText: © 2026 Tenstorrent AI ULC
 // SPDX-License-Identifier: Apache-2.0
 
-// Batched decode gate/up compute over column-page weights (Laguna): per unit, DST 0 = x @ Wg[:, n] and
-// DST 1 = x @ Wu[:, n] (Kt tile matmuls each), packed to cb_g / cb_u; then DST 1 = up * w (per-token weights
-// column-broadcast), DST 0 = gate, DST 0 = silu(DST 0) * DST 1, packed to cb_out.
+// Batched decode gate/up compute over column-page weights (Laguna): per unit and token tile m, gate_m = x_m @ Wg[:, n]
+// and up_m = x_m @ Wu[:, n] (Kt tile matmuls each; one weight chunk serves every token tile), packed to cb_g / cb_u;
+// then per m DST 1 = up * w (per-token weights column-broadcast), DST 0 = silu(gate) * DST 1, packed to cb_out.
 
 #include <cstdint>
 #include "api/compute/matmul.h"
@@ -19,6 +19,7 @@
 void kernel_main() {
     constexpr uint32_t Kt = get_compile_time_arg_val(0);
     constexpr uint32_t chunk = get_compile_time_arg_val(1);
+    constexpr uint32_t Mt = get_compile_time_arg_val(2);  // 32-row token tiles (gate in DST 0..Mt-1, then up)
     constexpr uint32_t cb_x = 0, cb_w = 1, cb_wv = 2, cb_meta = 3, cb_g = 5, cb_u = 6, cb_out = 16;
 
     compute_kernel_hw_startup<SrcOrder::Reverse>(cb_x, cb_w, cb_out);
@@ -28,52 +29,56 @@ void kernel_main() {
     if (units == 0) {
         return;
     }
-    cb_wait_front(cb_x, Kt);
+    cb_wait_front(cb_x, Mt * Kt);
     for (uint32_t u = 0; u < units; ++u) {
-        reconfig_data_format(cb_w, cb_x);
-        matmul_init(cb_x, cb_w);
-        tile_regs_acquire();
         for (uint32_t half = 0; half < 2; ++half) {
+            // one weight chunk feeds every token tile: DST m = x_m @ W[:, n] (gate column, then up column)
+            reconfig_data_format(cb_w, cb_x);
+            matmul_init(cb_x, cb_w);
+            tile_regs_acquire();
             for (uint32_t k0 = 0; k0 < Kt; k0 += chunk) {
                 cb_wait_front(cb_w, chunk);
                 for (uint32_t i = 0; i < chunk; ++i) {
-                    matmul_tiles(cb_x, cb_w, k0 + i, i, half);
+                    for (uint32_t m = 0; m < Mt; ++m) {
+                        matmul_tiles(cb_x, cb_w, m * Kt + k0 + i, i, m);
+                    }
                 }
                 cb_pop_front(cb_w, chunk);
             }
+            tile_regs_commit();
+            tile_regs_wait();
+            const uint32_t cb = half == 0 ? cb_g : cb_u;
+            cb_reserve_back(cb, Mt);
+            for (uint32_t m = 0; m < Mt; ++m) {
+                pack_tile(m, cb);
+            }
+            cb_push_back(cb, Mt);
+            tile_regs_release();
         }
-        tile_regs_commit();
-        tile_regs_wait();
-        cb_reserve_back(cb_g, 1);
-        cb_reserve_back(cb_u, 1);
-        pack_tile(0, cb_g);
-        pack_tile(1, cb_u);
-        cb_push_back(cb_g, 1);
-        cb_push_back(cb_u, 1);
-        tile_regs_release();
-
-        cb_wait_front(cb_g, 1);
-        cb_wait_front(cb_u, 1);
-        cb_wait_front(cb_wv, 1);
-        reconfig_data_format(cb_u, cb_wv);
-        tile_regs_acquire();
-        mul_bcast_cols_init_short(cb_u, cb_wv);
-        mul_tiles_bcast_cols(cb_u, cb_wv, 0, 0, 1);
-        copy_tile_init(cb_g);
-        copy_tile(cb_g, 0, 0);
-        silu_tile_init();
-        silu_tile(0);
-        mul_binary_tile_init();
-        mul_binary_tile(0, 1, 0);
-        tile_regs_commit();
-        cb_pop_front(cb_g, 1);
-        cb_pop_front(cb_u, 1);
-        cb_pop_front(cb_wv, 1);
-        tile_regs_wait();
-        cb_reserve_back(cb_out, 1);
-        pack_tile(0, cb_out);
-        cb_push_back(cb_out, 1);
-        tile_regs_release();
+        cb_wait_front(cb_g, Mt);
+        cb_wait_front(cb_u, Mt);
+        cb_wait_front(cb_wv, Mt);
+        for (uint32_t m = 0; m < Mt; ++m) {
+            reconfig_data_format(cb_u, cb_wv);
+            tile_regs_acquire();
+            mul_bcast_cols_init_short(cb_u, cb_wv);
+            mul_tiles_bcast_cols(cb_u, cb_wv, m, m, 1);
+            copy_tile_init(cb_g);
+            copy_tile(cb_g, m, 0);
+            silu_tile_init();
+            silu_tile(0);
+            mul_binary_tile_init();
+            mul_binary_tile(0, 1, 0);
+            tile_regs_commit();
+            tile_regs_wait();
+            cb_reserve_back(cb_out, 1);
+            pack_tile(0, cb_out);
+            cb_push_back(cb_out, 1);
+            tile_regs_release();
+        }
+        cb_pop_front(cb_g, Mt);
+        cb_pop_front(cb_u, Mt);
+        cb_pop_front(cb_wv, Mt);
     }
-    cb_pop_front(cb_x, Kt);
+    cb_pop_front(cb_x, Mt * Kt);
 }

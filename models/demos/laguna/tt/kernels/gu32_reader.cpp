@@ -4,7 +4,8 @@
 // Batched (32-token) decode routed gate/up reader over column-page weights (Laguna). Core (n, g) owns gate/up output
 // column n for the active experts a with a % G == g. Pushes: cb_meta <- unit count; cb_x <- the Kt activation tiles
 // (once); per unit cb_wv <- the expert's routing-weight tile, cb_w <- the gate column then the up column, CHUNK tiles
-// per push (each chunk one contiguous read from its column page).
+// per push (each chunk one contiguous read from its column page). Mt > 1 (more than 32 tokens): cb_x holds the Mt x Kt
+// activation tiles (tile m * Kt + k) and each unit pushes Mt routing-weight tiles (rows m * 32 .. of the routing rows).
 
 #include <stdint.h>
 #include "api/dataflow/dataflow_api.h"
@@ -21,7 +22,8 @@ void kernel_main() {
     constexpr uint32_t G = get_compile_time_arg_val(8);
     constexpr uint32_t cb_x = 0, cb_w = 1, cb_wv = 2, cb_meta = 3, cb_sp = 4;
     constexpr uint32_t core_base = get_compile_time_arg_val(9);  // first core of this kernel's grid (row-major index)
-    constexpr auto x_args = TensorAccessorArgs<10>();
+    constexpr uint32_t Mt = get_compile_time_arg_val(10);        // 32-row token tiles
+    constexpr auto x_args = TensorAccessorArgs<11>();
     constexpr auto w_args = TensorAccessorArgs<x_args.next_compile_time_args_offset()>();
     constexpr auto wv_args = TensorAccessorArgs<w_args.next_compile_time_args_offset()>();
     constexpr auto sp_args = TensorAccessorArgs<wv_args.next_compile_time_args_offset()>();
@@ -76,7 +78,7 @@ void kernel_main() {
     const uint32_t n_rects = get_common_arg_val<uint32_t>(5);
     const uint32_t x_l1 = get_write_ptr(cb_x);
     if (n_rects > 0 && core == 0) {
-        for (uint32_t k = 0; k < Kt; ++k) {
+        for (uint32_t k = 0; k < Mt * Kt; ++k) {
             noc_async_read_tile(k, x, x_l1 + k * x_page);
         }
         noc_async_read_barrier();
@@ -88,7 +90,7 @@ void kernel_main() {
             const uint32_t x0 = get_common_arg_val<uint32_t>(a), y0 = get_common_arg_val<uint32_t>(a + 1);
             const uint32_t x1 = get_common_arg_val<uint32_t>(a + 2), y1 = get_common_arg_val<uint32_t>(a + 3);
             const uint32_t dests = get_common_arg_val<uint32_t>(a + 4);
-            noc_async_write_multicast(x_l1, get_noc_multicast_addr(x0, y0, x1, y1, x_l1), Kt * x_page, dests);
+            noc_async_write_multicast(x_l1, get_noc_multicast_addr(x0, y0, x1, y1, x_l1), Mt * Kt * x_page, dests);
             noc_semaphore_set_multicast(sem, get_noc_multicast_addr(x0, y0, x1, y1, sem), dests);
         }
         noc_async_write_barrier();
@@ -96,18 +98,18 @@ void kernel_main() {
     if (units == 0) {
         return;
     }
-    cb_reserve_back(cb_x, Kt);
+    cb_reserve_back(cb_x, Mt * Kt);
     if (n_rects > 0) {
         if (core != 0) {
             noc_semaphore_wait(reinterpret_cast<volatile tt_l1_ptr uint32_t*>(get_semaphore(0)), 1);
         }
     } else {
-        for (uint32_t k = 0; k < Kt; ++k) {
+        for (uint32_t k = 0; k < Mt * Kt; ++k) {
             noc_async_read_tile(k, x, x_l1 + k * x_page);
         }
         noc_async_read_barrier();
     }
-    cb_push_back(cb_x, Kt);
+    cb_push_back(cb_x, Mt * Kt);
 
     seen = 0;
     for (uint32_t e = 0; e < E; ++e) {
@@ -119,22 +121,25 @@ void kernel_main() {
         if (!mine) {
             continue;
         }
-        cb_reserve_back(cb_wv, 1);
+        cb_reserve_back(cb_wv, Mt);
         if (wv_addr != 0) {
-            noc_async_read_tile(e, wv, get_write_ptr(cb_wv));
+            for (uint32_t m = 0; m < Mt; ++m) {
+                noc_async_read_tile(e * Mt + m, wv, get_write_ptr(cb_wv) + m * x_page);
+            }
             noc_async_read_barrier();
         } else {
-            // bf16 tile: face (t / 16) * 2 holds rows t of columns 0-15, 16 values per row
+            // bf16 tile: face (t / 16) * 2 holds rows t of columns 0-15, 16 values per row; tile m holds rows m * 32 ..
             volatile tt_l1_ptr uint32_t* tw = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(get_write_ptr(cb_wv));
-            for (uint32_t i = 0; i < x_page / 4; ++i) {
+            for (uint32_t i = 0; i < Mt * x_page / 4; ++i) {
                 tw[i] = 0;
             }
             volatile tt_l1_ptr uint16_t* th = reinterpret_cast<volatile tt_l1_ptr uint16_t*>(get_write_ptr(cb_wv));
             for (uint32_t t = 0; t < sp_rows; ++t) {
-                th[(t / 16) * 512 + (t % 16) * 16] = rowsv[t * (sp_page / 2) + e];
+                const uint32_t m = t / 32, r = t % 32;
+                th[m * (x_page / 2) + (r / 16) * 512 + (r % 16) * 16] = rowsv[t * (sp_page / 2) + e];
             }
         }
-        cb_push_back(cb_wv, 1);
+        cb_push_back(cb_wv, Mt);
         for (uint32_t half = 0; half < 2; ++half) {
             // tile (k = 0) of the column; its Kt tiles follow contiguously in the column's shard
             const uint64_t col = w.get_noc_addr(e * Kt * 2 * Nt + half * Nt + n);

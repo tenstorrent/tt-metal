@@ -49,3 +49,44 @@ def ring_write(rings, srcs, slots, written):
 
     ttnn.generic_op([slots] + list(srcs) + list(rings), ttnn.ProgramDescriptor(kernels=[k], semaphores=[],
                                                                             cbs=[cb(0, 2048, 2), cb(1, 128, 1)]))  # fmt: skip
+
+
+def ring_write_batched(rings, srcs, dests):
+    """Batched rings: rings [U, nkv, RING, hd], srcs [1, nkv, T, hd] (T a multiple of 32, at most 128), both bf16 TILE
+    DRAM; dests: uint32 [1, T] row-major device tensor, dests[r] = user * RING + slot for row r (0xFFFFFFFF: skip).
+    One core per (ring, kv head, head_dim tile); see kernels/ring_write_batched.cpp."""
+    assert len(rings) == len(srcs) and rings, (len(rings), len(srcs))
+    device = rings[0].device()
+    R = len(rings)
+    nkv, ring_len, hd = rings[0].shape[1], rings[0].shape[2], rings[0].shape[3]
+    T = int(srcs[0].shape[2])
+    assert ring_len % 32 == 0 and hd % 32 == 0 and T % 32 == 0 and T <= 128, (ring_len, hd, T)
+    for t in list(rings) + list(srcs):
+        assert t.dtype == ttnn.bfloat16 and t.layout == ttnn.TILE_LAYOUT and not t.is_sharded(), (t.dtype, t.layout)
+    units = R * nkv * (hd // 32)
+    gs = device.compute_with_storage_grid_size()
+    assert units <= gs.x * gs.y, units
+    grid = ttnn.num_cores_to_corerangeset(units, gs, True)
+    k = ttnn.KernelDescriptor(
+        kernel_source=str(_KDIR / "ring_write_batched.cpp"),
+        source_type=ttnn.KernelDescriptor.SourceType.FILE_PATH,
+        core_ranges=grid,
+        compile_time_args=[gs.x, R, nkv, hd // 32, ring_len, T]
+        + list(ttnn.TensorAccessorArgs(dests).get_compile_time_args())
+        + list(ttnn.TensorAccessorArgs(srcs[0]).get_compile_time_args())
+        + list(ttnn.TensorAccessorArgs(rings[0]).get_compile_time_args()),
+        common_runtime_args=[dests.buffer_address(), T]
+        + [t.buffer_address() for t in srcs]
+        + [t.buffer_address() for t in rings],
+        config=ttnn.ReaderConfigDescriptor(),
+    )
+
+    def cb(i, page, pages, fmt):
+        return ttnn.CBDescriptor(
+            total_size=page * pages,
+            core_ranges=grid,
+            format_descriptors=[ttnn.CBFormatDescriptor(buffer_index=i, data_format=fmt, page_size=page)],
+        )
+
+    ttnn.generic_op([dests] + list(srcs) + list(rings), ttnn.ProgramDescriptor(
+        kernels=[k], semaphores=[], cbs=[cb(0, 2048, T // 32 + 1, ttnn.bfloat16), cb(1, T * 4, 1, ttnn.uint32)]))  # fmt: skip
