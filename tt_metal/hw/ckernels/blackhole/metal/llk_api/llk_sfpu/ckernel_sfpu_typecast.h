@@ -56,8 +56,9 @@ inline void calculate_typecast_fp32_to_uint16() {
 #else
     // SFPLOADMACRO path for both Dest modes; init_typecast_fp32_to_uint16 programs the store for the Dest mode.
     // The macro address field takes (macro_select << 2) | (VD & 3) and VD >> 2, which reaches LREG0 to LREG7.
-    // Two rows per trip keep the macro words compile-time constants at any row count.
-#pragma GCC unroll 8
+    // Two rows per trip keep the macro words compile-time constants at any row count. Fully unrolled: when the tile is
+    // unpacked to Dest, the RISC-V loop control delays the SFPU issue.
+#pragma GCC unroll 16
     for (int d = 0; d + 1 < ITERATIONS; d += 2) {
         TTI_SFPLOADMACRO((0 << 2) | (p_sfpu::LREG0 & 3), InstrModLoadStore::DEFAULT, ADDR_MOD_6, p_sfpu::LREG0 >> 2);
         TTI_SFPNOP;
@@ -68,9 +69,8 @@ inline void calculate_typecast_fp32_to_uint16() {
         TTI_SFPLOADMACRO((0 << 2) | (p_sfpu::LREG0 & 3), InstrModLoadStore::DEFAULT, ADDR_MOD_6, p_sfpu::LREG0 >> 2);
         TTI_SFPNOP;
     }
-    TTI_SFPNOP;
-    TTI_SFPNOP;
-    TTI_SFPNOP;
+    // No drain NOPs: the round and store run a fixed 2 and 3 cycles after the last load (only the Simple unit waits on
+    // issued instructions), and the frame's SETRWC and STALLWAIT keep the next SFPU instruction clear of them.
 #endif
 }
 
@@ -153,7 +153,8 @@ inline void calculate_typecast_int32_to_fp16b() {
     TTI_SFPLOADI(p_sfpu::LREG0, sfpi::SFPLOADI_MOD0_USHORT, 0);
     TTI_SFPLOADI(p_sfpu::LREG1, sfpi::SFPLOADI_MOD0_FLOATB, 0xcf00);  // -2**31
 
-#pragma GCC unroll 8
+    // Fully unrolled, as in calculate_typecast_fp32_to_uint16.
+#pragma GCC unroll 32
     for (int d = 0; d + 1 < ITERATIONS; d += 2) {
         TTI_SFPLOADMACRO((0 << 2) | (p_sfpu::LREG2 & 3), InstrModLoadStore::INT32, ADDR_MOD_6, p_sfpu::LREG2 >> 2);
         TTI_SFPABS(0, p_sfpu::LREG2, t, 0);
@@ -246,7 +247,8 @@ inline void calculate_typecast_fp32_to_fp16b() {
     // low 16 bits (&0xFFFF0000), and store FP32 for 32-bit-Dest correctness. The historical
     // macro relied on a FP16B store to truncate and does not reproduce the masked-FP32 result,
     // so it is not equivalent and is not restored here. See #46751.
-#pragma GCC unroll 8
+    // Fully unrolled, as in calculate_typecast_fp32_to_uint16.
+#pragma GCC unroll 32
     for (int d = 0; d < ITERATIONS; d++) {
         TTI_SFPLOAD(p_sfpu::LREG1, InstrModLoadStore::DEFAULT, ADDR_MOD_7, 0);
         TTI_SFPSHFT((-16) & 0xFFF, p_sfpu::LREG1, p_sfpu::LREG0, 5);                // lreg[0] = lreg[1] >> 16
@@ -427,7 +429,8 @@ inline void calculate_typecast_uint32_to_fp16b() {
     TTI_SFPLOADI(p_sfpu::LREG0, sfpi::SFPLOADI_MOD0_USHORT, 0);
     TTI_SFPLOADI(p_sfpu::LREG1, sfpi::SFPLOADI_MOD0_FLOATB, 0x4f00);  // 2**31
 
-#pragma GCC unroll 8
+    // Fully unrolled, as in calculate_typecast_fp32_to_uint16.
+#pragma GCC unroll 32
     for (int d = 0; d + 1 < ITERATIONS; d += 2) {
         TTI_SFPLOADMACRO((0 << 2) | (p_sfpu::LREG2 & 3), InstrModLoadStore::INT32, ADDR_MOD_6, p_sfpu::LREG2 >> 2);
         TTI_SFPSHFT2(p_sfpu::LREG2, p_sfpu::LREG12, p_sfpu::LREG7, sfpi::SFPSHFT2_MOD1_SHFT_LREG);
@@ -603,7 +606,8 @@ inline void calculate_typecast_int32_to_uint16() {
     // values to 0.0. L16 = rnd(a); finally, we use SFPSTOCHRND to clamp large values to 65535, using VD=16. The macro
     // Store uses SFPSTORE_MODE_SWAP_HI_LO16, matching the plain-loop store that lands the uint16 in the high 16 bits.
 
-#pragma GCC unroll 8
+    // Fully unrolled, as in calculate_typecast_fp32_to_uint16.
+#pragma GCC unroll 32
     for (int d = 0; d + 1 < ITERATIONS; d += 2) {
         TTI_SFPLOADMACRO((0 << 2) | (p_sfpu::LREG0 & 3), InstrModLoadStore::INT32, ADDR_MOD_6, p_sfpu::LREG0 >> 2);
         TTI_SFPCAST(p_sfpu::LREG0, p_sfpu::LREG0, 0);
