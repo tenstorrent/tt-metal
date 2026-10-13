@@ -121,7 +121,8 @@ def _run_conv(
         activation=ttnn.UnaryWithParam(ttnn.UnaryOpType.RELU) if relu else None,
         act_block_h_override=act_block_h,
         transpose_shards=shard == BS,
-        reshard_if_not_optimal=True,
+        # reshard_if_not_optimal and override_sharding_config are mutually exclusive.
+        reshard_if_not_optimal=core_grid is None,
         deallocate_activation=False,
         config_tensors_in_dram=False,
     )

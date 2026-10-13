@@ -67,5 +67,10 @@ def test_fill(ttnn_mesh_device, reset_seeds, shape):
     x = U.to_tt_mem(U.torch_rand(shape), mesh, "l1")
     out = ttnn.fill(x, 1e-5)
     got = U.from_tt(out, mesh)
-    expected = torch.tensor(1e-5, dtype=torch.bfloat16).float()
-    assert torch.all(got == expected), f"fill produced values other than {expected.item()}"
+    # The kernel fills the fp32 bit pattern 0x3727c5ac and the packer truncates it to bf16
+    # (0x3727 = 9.954e-6), while torch rounds to nearest (0x3728 = 1.0014e-5). Accept either.
+    fp32_bits = torch.tensor([1e-5], dtype=torch.float32).view(torch.int32)
+    truncated = (fp32_bits & ~0xFFFF).view(torch.float32)[0]
+    rounded = torch.tensor(1e-5, dtype=torch.bfloat16).float()
+    ok = torch.all(got == truncated) or torch.all(got == rounded)
+    assert ok, f"fill produced values other than {truncated.item()} (truncated) / {rounded.item()} (rounded)"

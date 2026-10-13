@@ -28,7 +28,8 @@ CASES = [
     pytest.param((1, Q, 8, 32), (1, Q, E), TILE, "l1", id="R2-merge-heads-l1"),
     pytest.param((1, Q, 8, 8), (1, Q, 64), TILE, "dram", id="R3-merge-8x8"),
     pytest.param((1, Q, 8, 4, 2), (1, Q, 8, 8), TILE, "dram", id="R6-points-xy-dram"),
-    pytest.param((1, Q, 8, 4, 2), (1, Q, 8, 8), TILE, "l1", id="R7-points-xy-l1"),
+    # No L1 variant of R6: TILE pads the last two dims (4, 2) to 32x32, so the input is
+    # 80000 tiles = 164 MB, far beyond total L1. The model can only have held it in DRAM.
     pytest.param((1, Q, E), (1, Q, 8, 32), RM, "l1", id="R9-rm-split-heads-l1"),
     pytest.param((1, 100, 2, 8), (1, 100, 16), RM, "dram", id="R10-rm-16B-to-32B-rows"),
 ]
