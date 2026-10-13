@@ -3,6 +3,8 @@
 // SPDX-License-Identifier: Apache-2.0
 
 #pragma once
+#define LLK_EXP_BH_S2_(x) #x
+#define LLK_EXP_BH_S_(x)  LLK_EXP_BH_S2_(x)
 
 #include <sys/_stdint.h>
 
@@ -106,6 +108,9 @@ inline void _llk_unpack_AB_reduce_mop_config_(const ckernel::TensorShape tensor_
 template <PoolType pool_type, ReduceDim reduce_dim>
 inline void _llk_unpack_AB_reduce_init_(const ckernel::TensorShape tensor_shape)
 {
+#if defined(LLK_EXP_NOP_UNPACK_INIT) && defined(COMPILE_FOR_TRISC) && COMPILE_FOR_TRISC == 0
+    asm volatile(".rept " LLK_EXP_BH_S_(LLK_EXP_NOP_UNPACK_INIT) "\n\tnop\n\t.endr"); // experiment hook (integ4)
+#endif
     // The partial-face clear picks CLR_SRC_NEGINF only for MAX, so MIN would pad SrcA with zero where it needs +inf.
     static_assert(
         pool_type != PoolType::MIN,
