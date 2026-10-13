@@ -111,11 +111,21 @@ def decode_forward(
         xqkv_fused = ttnn.matmul(hidden_states, weights.wqkv, dtype=ttnn.bfloat16, memory_config=qkv_memory_config)
         ttnn.add(xqkv_fused, weights.wqkv_bias, output_tensor=xqkv_fused)
 
+        # One user per core, row-wise on the 8x8 grid: the grid the decode RoPE rows and transformation matrix
+        # (tt_transformers RotarySetup), the KV update (get_kv_memory_config) and the decode SDPA use. With the
+        # default (the device's whole grid, 11 wide on Blackhole) users 8-10, 19-21, 30-31 and 24-31 read another
+        # core's RoPE rows / Q from batch 9 up.
         tt_q, tt_k, tt_v = ttnn.experimental.nlp_create_qkv_heads_decode(
             xqkv_fused,
             num_heads=num_local_heads,
             num_kv_heads=num_local_kv_heads,
-            memory_config=ttnn.L1_HEIGHT_SHARDED_MEMORY_CONFIG,
+            memory_config=ttnn.create_sharded_memory_config(
+                shape=(ttnn.TILE_SIZE, head_dim),
+                core_grid=ttnn.CoreGrid(y=8, x=8),
+                strategy=ttnn.ShardStrategy.HEIGHT,
+                orientation=ttnn.ShardOrientation.ROW_MAJOR,
+                use_height_and_width_as_shard_shape=True,
+            ),
         )
 
         xqkv_fused.deallocate(True)

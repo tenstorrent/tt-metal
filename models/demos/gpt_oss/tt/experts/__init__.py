@@ -172,8 +172,10 @@ class Experts:
                 stream=self.decode_stream,
                 send=self.ccl_manager.decode_boundary_send(self.config.hidden_size, "moe"),
             )
-        # Determine mode based on sequence length
-        if is_decode:
+        # Determine mode based on sequence length. Decode with several tokens per device (batch > 1 without expert
+        # parallelism) takes the prefill path: each token's experts are the same computation either way, and the
+        # one-token decode ops below only accept a single token.
+        if is_decode and hidden_states.shape[2] == 1:
             return decode_forward(
                 hidden_states=hidden_states,
                 routing_weights=topk_expert_weights,
