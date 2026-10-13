@@ -88,3 +88,19 @@ logs "T466 summary: ring_joint_sdpa gain X%, layer gain Y%" and PCC between arms
 - Options: (a) lint exception for this read-only weka path, accepting the D-state hang risk; (b) raise the
   exception to ~310 GB total / ~260 GB free floor and copy the 137 GB with ionice -c3 nice rsync --bwlimit=100M
   (~25 min), delete all of it at the end; (c) wait for blx03 (weights and cache already there, back by 10-17).
+
+## 2026-10-13 12:50 UTC (05:50 PDT, #468): space gate for a local weights copy fails -> nothing copied, blocked
+- Branch already pushed: origin ttp/t466-... = 92caf8f61ff.
+- Loader needs (test_pipeline_turbo_minimax_h3.py:171 weights_dir("transformer","text_encoder","vae","audio_vae"),
+  plus processor/tokenizer/scheduler/json). Measured on weka (du --apparent-size): text_encoder 63G, transformer 62G,
+  vae 9.8G, audio_vae 0.58G, processor+tokenizer 22M -> ~135.4 GiB. transformer_ref (62G) not needed.
+- Cache, measured from the weka fl2va cache of the same model: 115G (transformer_resident_adaln 63G, text_encoder 47G,
+  vae decoder 4.6G, audio 0.5G, vae encoder 0.1G); JIT ~17G (t460 on blx03), 0.6G already in t466/jit.
+- blx01 now: / 536G free, /var/tmp/fasth3 36G.
+- Gate: free after = 536 - 135.4 - 115 - 16.4 = ~269 GiB < 300 floor (short ~31 GiB). Total 36 + 267 = ~303 GB <= 320 ok.
+  Deleting every other FastH3 leftover on blx01 (~20 GB usable) still leaves < 300 free.
+- Options for the coordinator: (a) lower the free floor to ~260 GB for #466 only (blx01 / would be ~70% used);
+  (b) copy the weka text_encoder cache (47G, adapter-independent) plus the small text_encoder config/tokenizer files
+  instead of its 63G shards: peak ~204G, ~332G free; needs a waiver of "do not reuse weka tt-shield caches", and a
+  v0.22.0 cache-key mismatch would fail the cold job (no /mnt write: cache dir is local);
+  (c) wait for blx03 (weights and cache already there; back by ~10-17).
