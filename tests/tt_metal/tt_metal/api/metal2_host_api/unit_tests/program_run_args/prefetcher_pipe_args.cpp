@@ -22,10 +22,10 @@
 
 #include "impl/dataflow_buffer/dataflow_buffer_impl.hpp"
 #include "impl/dataflow_buffer/prefetcher_pipe.hpp"
-#include "impl/program/dispatch.hpp"
 #include "impl/program/program_impl.hpp"
 #include "metal2_host_api/test_helpers/test_helpers.hpp"
 #include "metal2_host_api/test_helpers/prefetcher_pipe_test_helpers.hpp"
+#include "tests/tt_metal/tt_metal/api/prefetcher_pipe_test_utils.hpp"
 
 namespace tt::tt_metal::experimental {
 namespace {
@@ -243,52 +243,46 @@ uint8_t SlotFor(const Program& program, const PrefetcherPipeParamName& name, boo
     TT_THROW("PrefetcherPipeParameter '{}' has no {} slot", name.get(), sender_role ? "sender" : "receiver");
 }
 
-// Every core of `cores` carries the same slot entries, which dispatch writes as one multicast rectangle.
-void ExpectOneMulticastRectangle(const Program& program, const CoreRange& cores) {
-    const auto groups =
-        program_dispatch::partition_cores_by_prefetcher_pipe_payload(program.impl(), CoreRangeSet(cores));
-    ASSERT_EQ(groups.size(), 1u);
-    EXPECT_EQ(groups[0].cores.ranges().size(), 1u);
-    EXPECT_EQ(groups[0].cores.num_cores(), CoreRangeSet(cores).num_cores());
-}
-
 TEST_F(PrefetcherPipeSpecTestQuasar, CPU_ReceiverKernelExtraNodesGetTheReceiversEntry) {
-    // The receiver kernel and its relay also run on (1,1)..(1,3), which are not receivers of the pipe. Once the pipe
-    // is bound those nodes carry the receivers' slot entry, relay included.
+    // The receiver kernel and its relay also run on extra nodes (1,1)..(1,3), which are not receivers of the pipe.
+    // Once the pipe is bound those nodes carry the receivers' slot entry, relay included.
     PrefetcherPipe pipe = MakeWeightsPipe(*mesh_device_);
     ProgramSpec spec = MakeFullPipeSpec();
     const CoreRange receiver_kernel_cores({0, 1}, {1, 3});
+    const CoreRangeSet extra_nodes(CoreRange({1, 1}, {1, 3}));
     spec.work_units[1].target_nodes = NodeRange{NodeCoord{0, 1}, NodeCoord{1, 3}};
+    KernelNamed(spec, "receiver").advanced_options.prefetcher_pipe_bindings[0].extra_nodes = extra_nodes;
     Program program = MakeProgramFromSpec(*mesh_device_, spec);
     const uint8_t slot_id = SlotFor(program, pipe_param_name, /*sender_role=*/false);
     const auto& slot = program.impl().get_prefetcher_pipe_slot(slot_id);
     EXPECT_EQ(slot.cores.num_cores(), 6u);
     EXPECT_EQ(slot.receiver_cores.num_cores(), 3u);
+    EXPECT_EQ(slot.extra_cores, extra_nodes);
     EXPECT_EQ(ParticipantOn(program, CoreCoord(1, 1), slot_id)->pipe, nullptr);
 
     SetProgramRunArgs(program, PipeArgs({{pipe_param_name, &pipe}}));
 
     const auto* receiver = ParticipantOn(program, CoreCoord(0, 1), slot_id);
     ASSERT_NE(receiver, nullptr);
-    EXPECT_FALSE(receiver->extra_node);
     EXPECT_NE(receiver->relay_dfb_id, std::numeric_limits<uint8_t>::max());
-    for (const CoreCoord& core : corerange_to_cores(CoreRangeSet(CoreRange({1, 1}, {1, 3})))) {
+    for (const CoreCoord& core : corerange_to_cores(extra_nodes)) {
         const auto* extra = ParticipantOn(program, core, slot_id);
         ASSERT_NE(extra, nullptr);
-        EXPECT_TRUE(extra->extra_node);
         EXPECT_EQ(extra->pipe, &pipe.impl());
         EXPECT_EQ(extra->config_page_addr, receiver->config_page_addr);
         EXPECT_EQ(extra->entry_size, receiver->entry_size);
         EXPECT_EQ(extra->relay_dfb_id, receiver->relay_dfb_id);
     }
-    ExpectOneMulticastRectangle(program, receiver_kernel_cores);
+    prefetcher_pipe_test::expect_one_multicast_rectangle(program, receiver_kernel_cores);
 }
 
 TEST_F(PrefetcherPipeSpecTestQuasar, CPU_SenderKernelExtraNodeGetsTheSendersEntry) {
-    // The sender kernel also runs on (1,0), which is not the pipe's sender.
+    // The sender kernel also runs on extra node (1,0), which is not the pipe's sender.
     ProgramSpec spec = MakeSenderOnlySpec();
     const CoreRange sender_kernel_cores({0, 0}, {1, 0});
     spec.work_units[0].target_nodes = NodeRange{NodeCoord{0, 0}, NodeCoord{1, 0}};
+    KernelNamed(spec, "sender").advanced_options.prefetcher_pipe_bindings[0].extra_nodes =
+        NodeRangeSet(NodeRange{NodeCoord{1, 0}, NodeCoord{1, 0}});
     Program program = MakeProgramFromSpec(*mesh_device_, spec);
     PrefetcherPipe pipe = MakeWeightsPipe(*mesh_device_);
     SetProgramRunArgs(program, PipeArgs({{pipe_param_name, &pipe}}));
@@ -298,11 +292,48 @@ TEST_F(PrefetcherPipeSpecTestQuasar, CPU_SenderKernelExtraNodeGetsTheSendersEntr
     const auto* extra = ParticipantOn(program, CoreCoord(1, 0), slot_id);
     ASSERT_NE(sender, nullptr);
     ASSERT_NE(extra, nullptr);
-    EXPECT_FALSE(sender->extra_node);
-    EXPECT_TRUE(extra->extra_node);
     EXPECT_EQ(extra->pipe, &pipe.impl());
     EXPECT_EQ(extra->config_page_addr, sender->config_page_addr);
-    ExpectOneMulticastRectangle(program, sender_kernel_cores);
+    prefetcher_pipe_test::expect_one_multicast_rectangle(program, sender_kernel_cores);
+}
+
+TEST_F(PrefetcherPipeSpecTestQuasar, CPU_ReceiverKernelExtraNodeOnPipeSenderFails) {
+    // The receiver kernel also runs on (0,0) as an extra node. The spec cannot know that (0,0) is the pipe's sender,
+    // but the bind does: one kernel may not run on both ends of a pipe. Nothing is bound, and a pipe from another
+    // sender then binds normally.
+    PrefetcherPipe sender_on_extra_node = MakeWeightsPipe(*mesh_device_);
+    PrefetcherPipe sender_elsewhere = MakePipeFor(*mesh_device_, MakePipeParameter(), CoreCoord{2, 0});
+    ProgramSpec spec = MakeFullPipeSpec();
+    spec.kernels.erase(spec.kernels.begin());  // drop "sender"
+    spec.work_units.erase(spec.work_units.begin());
+    spec.work_units[0].target_nodes = NodeRange{pipe_sender_node, NodeCoord{0, 3}};
+    KernelNamed(spec, "receiver").advanced_options.prefetcher_pipe_bindings[0].extra_nodes =
+        NodeRangeSet(NodeRange{pipe_sender_node, pipe_sender_node});
+    Program program = MakeProgramFromSpec(*mesh_device_, spec);
+    const uint8_t slot_id = SlotFor(program, pipe_param_name, /*sender_role=*/false);
+
+    EXPECT_THROWS_WITH(
+        SetProgramRunArgs(program, PipeArgs({{pipe_param_name, &sender_on_extra_node}})),
+        "PrefetcherPipeParameter 'weights': the supplied pipe's sender {[0-0 - 0-0]} is one of the extra_nodes");
+    EXPECT_EQ(program.impl().get_prefetcher_pipe_parameter(pipe_param_name.get())->bound_pipe, nullptr);
+    EXPECT_EQ(ParticipantOn(program, pipe_sender_node, slot_id)->pipe, nullptr);
+
+    SetProgramRunArgs(program, PipeArgs({{pipe_param_name, &sender_elsewhere}}));
+    EXPECT_EQ(ParticipantOn(program, pipe_sender_node, slot_id)->pipe, &sender_elsewhere.impl());
+}
+
+TEST_F(PrefetcherPipeSpecTestQuasar, CPU_SenderKernelExtraNodeIsPipeSenderFails) {
+    // The sender kernel lists the pipe's sender (0,0) among its extra nodes, so it would never drive the pipe.
+    ProgramSpec spec = MakeSenderOnlySpec();
+    spec.work_units[0].target_nodes = NodeRange{NodeCoord{0, 0}, NodeCoord{1, 0}};
+    KernelNamed(spec, "sender").advanced_options.prefetcher_pipe_bindings[0].extra_nodes =
+        NodeRangeSet(NodeRange{pipe_sender_node, pipe_sender_node});
+    Program program = MakeProgramFromSpec(*mesh_device_, spec);
+    PrefetcherPipe pipe = MakeWeightsPipe(*mesh_device_);
+    EXPECT_THROWS_WITH(
+        SetProgramRunArgs(program, PipeArgs({{pipe_param_name, &pipe}})),
+        "PrefetcherPipeParameter 'weights': the supplied pipe's sender {[0-0 - 0-0]} is one of the extra_nodes");
+    EXPECT_EQ(program.impl().get_prefetcher_pipe_parameter(pipe_param_name.get())->bound_pipe, nullptr);
 }
 
 TEST_F(PrefetcherPipeSpecTestQuasar, CPU_MultiPipeAccessorTwoPipesOneSenderNodeFails) {
