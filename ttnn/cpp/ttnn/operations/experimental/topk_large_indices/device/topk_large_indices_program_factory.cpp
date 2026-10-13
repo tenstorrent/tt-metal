@@ -152,6 +152,15 @@ void set_runtime_args(
             assignment.core,
             shared.cores[i],
             i);
+        if (!shared.tree) {
+            // Programs that cannot split a row read only their row range.
+            tt::tt_metal::SetRuntimeArgs(
+                program, shared.reader_kernel_id, assignment.core, {assignment.start_row, assignment.num_rows});
+            tt::tt_metal::SetRuntimeArgs(program, shared.compute_kernel_id, assignment.core, {assignment.num_rows});
+            tt::tt_metal::SetRuntimeArgs(
+                program, shared.writer_kernel_id, assignment.core, {assignment.start_row, assignment.num_rows});
+            continue;
+        }
         const auto position = tree_position(assignments, i, shared.max_tree_rounds, *device);
         const uint32_t num_recv_rounds = position.num_recv_rounds;
         const uint32_t sends_survivor = position.sends_survivor ? 1u : 0u;
@@ -465,7 +474,8 @@ TopkLargeIndicesProgramFactory::cached_program_t TopkLargeIndicesProgramFactory:
         .input_shape = input.logical_shape(),
         .valid_length = operation_attributes.valid_length,
         .llk_k = llk_k,
-        .max_tree_rounds = max_tree_rounds_for(static_cast<uint32_t>(cores.size()))};
+        .max_tree_rounds = max_tree_rounds_for(static_cast<uint32_t>(cores.size())),
+        .tree = tree != 0};
     const uint32_t meta_addr =
         tensor_args.has_valid_length_metadata() ? tensor_args.valid_length_tensor->buffer()->address() : 0u;
     const uint32_t valid_end_addr =

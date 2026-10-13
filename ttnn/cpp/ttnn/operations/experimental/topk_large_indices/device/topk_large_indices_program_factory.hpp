@@ -44,6 +44,7 @@ struct TopkLargeIndicesSharedVariables {
     std::optional<uint32_t> valid_length;
     uint32_t llk_k = 0;
     uint32_t max_tree_rounds = 0;
+    bool tree = false;
     uint32_t num_rows = 0;
     uint32_t num_chunks = 0;
 };
