@@ -69,8 +69,11 @@ build() {  # build <side> <build> <ids> <run types|-> [asserts]
   else TT_LLK_DISABLE_ASSERTS=1 harness $1 $2 $3 $T/prod_$2.log --compile-producer -n ${LLKAB_NPROD:-16}; fi
   echo "== build $2 ($1, $(basename $3)) rc=$? $(date -u +%T): $(grep -aE '[0-9]+ (passed|failed|error)' $T/prod_$2.log | tail -n 1)"
 }
-elfid() {  # elfid <build a> <build b>: loaded-image identity (alloc PROGBITS sections) of the ELFs paired by variant
-  echo "== ELF identity $1 against $2: $($PY $S/elfload.py $T/b_$1 $T/b_$2 | tail -n 1)"
+elfid() {  # elfid <build a> <build b>: loaded-image identity of the ELFs paired by variant; the job stops if no ELF differs
+  local r; r=$($PY $S/elfload.py $T/b_$1 $T/b_$2 | tail -n 1)
+  echo "== ELF identity $1 against $2: $r"
+  if [[ $r != *" 0 differ"* ]] && [[ $r == *differ* ]]; then return 0; fi
+  echo "== GUARD: $1 and $2 load identical images, the A/B would be void; stopping"; exit 3
 }
 run() {  # run <side> <build> <ids> <tag> <run types|-> <limit>
   [[ -n ${LLKAB_DRY:-} ]] && return
@@ -97,6 +100,13 @@ if [[ $JOB == A ]]; then
   elfid c12h c12m; elfid c12h hnn
   seqrun $S/c12.txt A $R4 900 main:c12m head:c12h head:c12h main:c12m main:c12m head:c12h head:c12h main:c12m
   seqrun $S/hn.txt N $R4 300 head:c12h hn:hnn hn:hnn head:c12h head:c12h hn:hnn hn:hnn head:c12h
+elif [[ $JOB == C ]]; then
+  mkside main; mkside hf1; mkside ht0; mkside ht1
+  build main dcm $S/dc.txt $R4; build hf1 dcf $S/dc.txt $R4
+  for v in main:g2m hf1:g2f ht0:g2t0 ht1:g2t1; do build ${v%%:*} ${v##*:} $S/g2.txt $R4; done
+  elfid dcf dcm; elfid g2f g2m; elfid g2f g2t0; elfid g2f g2t1
+  seqrun $S/dc.txt D $R4 900 main:dcm hf1:dcf hf1:dcf main:dcm main:dcm hf1:dcf hf1:dcf main:dcm
+  seqrun $S/g2.txt G $R4 600 main:g2m hf1:g2f ht0:g2t0 ht1:g2t1 ht1:g2t1 ht0:g2t0 hf1:g2f main:g2m hf1:g2f main:g2m ht1:g2t1 ht0:g2t0 ht0:g2t0 ht1:g2t1 main:g2m hf1:g2f
 else
   mkside head; mkside main; mkside hf1; mkside pair
   build main f1m $S/f1.txt $R4; build head f1h $S/f1.txt $R4; build hf1 f1f $S/f1.txt $R4
