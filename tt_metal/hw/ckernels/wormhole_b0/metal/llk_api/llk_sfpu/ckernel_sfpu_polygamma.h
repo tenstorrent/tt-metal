@@ -61,10 +61,13 @@ inline void calculate_polygamma(std::uint32_t n_packed, std::uint32_t scale_pack
     float n4 = static_cast<float>(n + 4);
     float n5 = static_cast<float>(n + 5);
     float nf = static_cast<float>(n);
-    float inv_nf = 1.0f / nf;
-    float c_b2 = n1 / 12.0f;                           // B_2 term coefficient
-    float c_b4 = -(n1 * n2 * n3) / 720.0f;             // B_4 term coefficient
-    float c_b6 = (n1 * n2 * n3 * n4 * n5) / 30240.0f;  // B_6 term coefficient
+    // Every tail coefficient carries the scale so the tail is produced already
+    // scaled. These are host-side compile-time constants: no extra SFPU work.
+    float inv_nf = scale / nf;
+    float half_scale = 0.5f * scale;
+    float c_b2 = scale * n1 / 12.0f;                     // B_2 term coefficient
+    float c_b4 = -scale * (n1 * n2 * n3) / 720.0f;       // B_4 term coefficient
+    float c_b6 = scale * (n1 * n2 * n3 * n4 * n5) / 30240.0f;  // B_6 term coefficient
 
 #pragma GCC unroll 8
     for (int d = 0; d < ITERATIONS; d++) {
@@ -86,7 +89,9 @@ inline void calculate_polygamma(std::uint32_t n_packed, std::uint32_t scale_pack
                 inv_xi = sfpu_reciprocal_iter<1>(xi);
             }
 
-            sfpi::vFloat inv_power = inv_xi;
+            // Seed carries the scale so each exact term already has the magnitude
+            // of the answer instead of sitting n! below it.
+            sfpi::vFloat inv_power = inv_xi * scale;
             for (int j = 1; j < n_plus_1; j++) {
                 inv_power = inv_power * inv_xi;
             }
@@ -119,12 +124,12 @@ inline void calculate_polygamma(std::uint32_t n_packed, std::uint32_t scale_pack
         // Use PolynomialEvaluator for the Bernoulli polynomial in the tail:
         // E = inv_nf + c_b2*inv_z2 + c_b4*inv_z2^2 + c_b6*inv_z2^3
         sfpi::vFloat E = PolynomialEvaluator::eval(inv_z2, inv_nf, c_b2, c_b4, c_b6);
-        sfpi::vFloat tail = inv_z_n * (E + 0.5f * inv_z);
+        sfpi::vFloat tail = inv_z_n * (E + half_scale * inv_z);
 
         sum = sum + tail;
 
-        // Apply scale: (-1)^(n+1) * n!
-        sfpi::vFloat result = sum * scale;
+        // Scale was folded into every accumulated term above.
+        sfpi::vFloat result = sum;
 
         if constexpr (!is_fp32_dest_acc_en) {
             result = sfpi::convert<sfpi::vFloat16b>(result, sfpi::RoundMode::Nearest);
