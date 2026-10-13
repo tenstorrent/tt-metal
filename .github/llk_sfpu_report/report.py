@@ -593,13 +593,17 @@ def header(summaries):
             f"> [!WARNING]\n> The merge-base is {age} days old. Main may have changed these kernels since: "
             "rebase, or re-run with `/llk-sfpu-test --base main`."
         )
-    ops = s["ops"]
-    lines += [
-        "",
-        f"**Ops measured:** {', '.join(f'`{o}`' for o in ops['measured']) or 'none'} ({ops['why']}).",
-    ]
-    if ops.get("not_covered"):
-        lines.append(f"**Changed but not measured:** {', '.join(f'`{o}`' for o in ops['not_covered'])}.")
+    # Each arch measures what changed on it: a Blackhole-only PR measures nothing on Wormhole.
+    measured = list(dict.fromkeys(o for x in summaries for o in x["ops"]["measured"]))
+    not_covered = list(dict.fromkeys(o for x in summaries for o in x["ops"].get("not_covered", [])))
+    if measured:
+        lines += ["", f"**Ops measured:** {', '.join(f'`{o}`' for o in measured)} ({s['ops']['why']})."]
+    elif any(x.get("detection") is not None for x in summaries):
+        lines += ["", "**Ops measured:** none. No op this report covers compiles to different code on the two sides."]
+    else:
+        lines += ["", "**Ops measured:** none."]
+    if not_covered:
+        lines.append(f"**Changed but not measured:** {', '.join(f'`{o}`' for o in not_covered)}.")
     lines += [""]
     return lines
 
@@ -612,13 +616,21 @@ def notes_section(summaries, not_measured=()):
             "Files this PR changes that the measurement does not use (host-side test code runs from main): "
             + ", ".join(f"`{p}`" for p in s["not_applied"][:10])
         )
-    for n in s.get("notes", []):
-        notes.append(n)
+    # A note every arch wrote is shown once; one only some archs wrote names them.
+    per_arch = [x.get("notes", []) for x in summaries]
+    for n in dict.fromkeys(n for arch_notes in per_arch for n in arch_notes):
+        archs = [_ARCH[x["arch"]] for x, arch_notes in zip(summaries, per_arch) if n in arch_notes]
+        notes.append(n if len(archs) == len(summaries) else f"{', '.join(archs)}: {n}")
     for x in not_measured:
         notes.append(f"{_ARCH[x['arch']]} was not measured. {x['not_measured']}")
     if not notes:
         return []
     return ["### Notes for reviewers", "", *[f"- {n}" for n in notes], ""]
+
+
+def _runs(summaries):
+    """Where each summary was measured: the CI run (one for all archs), else the host."""
+    return ", ".join(dict.fromkeys(x.get("run_url") or x["host"] for x in summaries))
 
 
 def not_measured_report(summaries):
@@ -641,7 +653,7 @@ def not_measured_report(summaries):
         lines += ["Conflicting files:", "", *[f"- `{f}`" for f in conflicts], ""]
     lines.append(
         f"PR head `{s['head_sha'][:10]}`, merge-base `{s['base_sha'][:10]}`, main `{s['tool_sha'][:10]}`. Runs: "
-        + ", ".join(x.get("run_url") or x["host"] for x in summaries)
+        + _runs(summaries)
         + "."
     )
     return lines
@@ -684,9 +696,7 @@ def footer(summaries):
     lines += [
         "```",
         "",
-        f"Tool `{tool[:10]}`, mode `{s['mode']}`. Runs: "
-        + ", ".join(x.get("run_url") or x["host"] for x in summaries)
-        + ".",
+        f"Tool `{tool[:10]}`, mode `{s['mode']}`. Runs: " + _runs(summaries) + ".",
         "",
         "</details>",
     ]
@@ -699,6 +709,9 @@ def render(summaries):
     summaries = [s for s in summaries if not s.get("not_measured")]
     if not summaries:
         return _fit("\n".join(not_measured_report(not_measured)) + "\n")
+    if not any(s["ops"]["measured"] for s in summaries):
+        # Empty tables and "no regressions" say nothing here; the notes say why.
+        return _fit("\n".join(header(summaries) + notes_section(summaries, not_measured) + footer(summaries)) + "\n")
     parts = header(summaries)
     parts += glance_section(summaries)
     parts += perf_section(summaries)

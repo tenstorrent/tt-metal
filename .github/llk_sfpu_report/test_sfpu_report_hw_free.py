@@ -304,6 +304,46 @@ def test_a_run_that_cannot_measure_writes_a_report_that_says_why(monkeypatch, tm
     assert "No regressions" not in text
 
 
+def _nothing_measured(arch, *notes):
+    return dict(
+        _summary(),
+        arch=arch,
+        ops={"measured": [], "not_covered": [], "why": "auto"},
+        perf={},
+        accuracy=[],
+        detection={},
+        notes=list(notes),
+    )
+
+
+def test_a_run_that_measured_nothing_says_why_without_empty_tables():
+    fell_back = "The merge-base does not build with today's test harness, so ..."
+    text = report.render(
+        [
+            _nothing_measured("wormhole", fell_back, "This PR changes SFPU kernels of other architectures only."),
+            _nothing_measured("blackhole", fell_back, "The changed kernels may be ternary or structural SFPU ops."),
+        ]
+    )
+    assert "**Ops measured:** none. No op this report covers compiles to different code" in text
+    assert "No regressions" not in text and "### Performance" not in text and "### Accuracy" not in text
+    assert f"- {fell_back}" in text  # both archs wrote it: once, unprefixed
+    assert "- Wormhole: This PR changes SFPU kernels of other architectures only." in text
+    assert "- Blackhole: The changed kernels may be ternary or structural SFPU ops." in text
+
+
+def test_a_blackhole_only_change_lists_what_blackhole_measured():
+    blackhole = dict(_summary(), arch="blackhole")
+    text = report.render([_nothing_measured("wormhole"), blackhole])
+    assert "**Ops measured:** `Square`" in text
+    assert "⚠️ 479" in text
+
+
+def test_one_ci_run_is_linked_once():
+    wormhole = dict(_summary(), run_url="https://github.com/tenstorrent/tt-metal/actions/runs/1")
+    blackhole = dict(wormhole, arch="blackhole")
+    assert report.render([wormhole, blackhole]).count("actions/runs/1") == 1
+
+
 def test_an_arch_that_was_not_measured_is_a_note_beside_the_one_that_was():
     blackhole = dict(_summary(), arch="blackhole", not_measured="This PR's kernel changes do not apply.")
     text = report.render([_summary(), blackhole])
