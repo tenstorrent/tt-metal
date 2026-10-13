@@ -3,7 +3,8 @@
 // SPDX-License-Identifier: Apache-2.0
 
 // Local invariant of WorkUnitSpec::kernels on Gen1 data-movement placement (program_spec.hpp): its DM
-// kernels use distinct processors, share noc_mode, and DM_DEDICATED_NOC kernels use distinct NOCs.
+// kernels use distinct processors, share noc_mode, and DM_DEDICATED_NOC kernels use distinct NOCs unless
+// both opt in to sharing one (DedicatedNocSharing::SHARED_DISJOINT_TRAFFIC).
 
 #include <gtest/gtest.h>
 #include <gmock/gmock.h>
@@ -97,6 +98,50 @@ TEST_F(ProgramSpecTestGen1, CPU_TwoDMKernelsSameNocDedicatedFails) {
     // Force both onto NOC_0 (the helper would otherwise assign complementary NOCs). noc_mode
     // defaults to DM_DEDICATED_NOC.
     (*std::get<DataMovementHardwareConfig>(k0.hw_config).config_1xx).noc = NOC::NOC_0;
+    (*std::get<DataMovementHardwareConfig>(k1.hw_config).config_1xx).noc = NOC::NOC_0;
+
+    spec.kernels = {k0, k1};
+    spec.work_units = std::vector<WorkUnitSpec>{MakeMinimalWorkUnit("work_unit", node, {"k0", "k1"})};
+
+    EXPECT_THAT(
+        [&] { MakeProgramFromSpec(*mesh_device_, spec); },
+        ::testing::ThrowsMessage<std::runtime_error>(::testing::HasSubstr("pinned to NOC_0")));
+}
+
+TEST_F(ProgramSpecTestGen1, CPU_TwoDMKernelsSameNocDedicatedBothSharingSucceeds) {
+    // Two dedicated-NOC DM kernels may name the same NOC when both declare their traffic disjoint.
+    NodeCoord node{0, 0};
+
+    ProgramSpec spec;
+    spec.name = "test_program";
+
+    auto k0 = MakeMinimalGen1DMKernel("k0", DataMovementProcessor::RISCV_0);
+    auto k1 = MakeMinimalGen1DMKernel("k1", DataMovementProcessor::RISCV_1);
+    for (auto* k : {&k0, &k1}) {
+        auto& cfg = (*std::get<DataMovementHardwareConfig>(k->hw_config).config_1xx);
+        cfg.noc = NOC::NOC_0;
+        cfg.dedicated_noc_sharing = DedicatedNocSharing::SHARED_DISJOINT_TRAFFIC;
+    }
+
+    spec.kernels = {k0, k1};
+    spec.work_units = std::vector<WorkUnitSpec>{MakeMinimalWorkUnit("work_unit", node, {"k0", "k1"})};
+
+    EXPECT_NO_THROW(MakeProgramFromSpec(*mesh_device_, spec));
+}
+
+TEST_F(ProgramSpecTestGen1, CPU_TwoDMKernelsSameNocDedicatedOneSharingFails) {
+    // Sharing a dedicated NOC takes both kernels' opt-in: the second kernel's traffic is what the first
+    // kernel's declaration cannot vouch for.
+    NodeCoord node{0, 0};
+
+    ProgramSpec spec;
+    spec.name = "test_program";
+
+    auto k0 = MakeMinimalGen1DMKernel("k0", DataMovementProcessor::RISCV_0);
+    auto k1 = MakeMinimalGen1DMKernel("k1", DataMovementProcessor::RISCV_1);
+    auto& cfg0 = (*std::get<DataMovementHardwareConfig>(k0.hw_config).config_1xx);
+    cfg0.noc = NOC::NOC_0;
+    cfg0.dedicated_noc_sharing = DedicatedNocSharing::SHARED_DISJOINT_TRAFFIC;
     (*std::get<DataMovementHardwareConfig>(k1.hw_config).config_1xx).noc = NOC::NOC_0;
 
     spec.kernels = {k0, k1};
