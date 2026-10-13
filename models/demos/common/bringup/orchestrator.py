@@ -677,7 +677,7 @@ class Orchestrator:
         # The knowledge-use report: validated and cross-checked against what the step touched; a missing or malformed
         # one is recorded (the dashboard shows it), not a failed attempt.
         report = kusage.report_path(self.spec.bringup_dir, tid, role, attempt)
-        touched, _ = kusage.transcript_touches(log, self.spec.repo)
+        touched, _, visible = kusage.transcript_touches(log, self.spec.repo)
         knowledge_report = kusage.finalize(
             report,
             {
@@ -692,9 +692,14 @@ class Orchestrator:
             sorted(set(touched) | set(self.last_changed)),
             info["commands"],
             CODE_ROOT,
+            visible,
         )
         for w in knowledge_report:
             self.echo(f"  [{tid}] knowledge report: {w}")
+        # An entry an agent found wrong is the owner's to know now, not at the run-end tally.
+        contradicted = json.loads(report.read_text()).get("contradicted") or []
+        for c in contradicted:
+            self.echo(f"  [{tid}] KNOWLEDGE CONTRADICTED {c['id']}: {c.get('evidence', '')}")
         # Agent definitions and brief templates live in the framework checkout (which may not be the model's repo).
         defs = (
             [AGENT_DEF, HERE / "briefs" / "brief.md", HERE / "briefs" / "roles.yaml"]
@@ -714,6 +719,7 @@ class Orchestrator:
             "log": str(log),
             "problems": problems,
             "knowledge_report": knowledge_report or "ok",
+            "knowledge_contradicted": [c["id"] for c in contradicted],
             "defs": agent_hashes(CODE_ROOT, defs),
             "t": now(),
         }

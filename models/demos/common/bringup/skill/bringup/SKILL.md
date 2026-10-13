@@ -195,8 +195,10 @@ A run takes hours and dozens of gates; the supervising session must not fill its
   `python -c` or `grep`, and `tail -n` the orchestrator log. Never `cat` a gate log, an agent transcript
   (`runs/<run>/agents/*.jsonl`), a golden or a dashboard page.
 - Filter the monitor to the events you act on (gate PASS/FAIL/HANG, attempts, STOPPED, WAITING, paused, problems,
-  exit); do not stream step starts or freezes.
+  `KNOWLEDGE CONTRADICTED`, exit); do not stream step starts or freezes.
 - One line per routine gate ("C.x passed, 29/56, commit abc123"); detail only for failures, stops and decisions.
+- A `KNOWLEDGE CONTRADICTED <id>: <evidence>` line: tell the owner at once (the entry, what the agent says is wrong,
+  the evidence); the entry is re-checked at the run end (contradicted, below), or sooner if the owner asks.
 - Keep checks short: the box test takes seconds; never give a device check a long timeout.
 - Hand-off: everything that matters is on disk (tasks.yaml, state.json, results/, BREADCRUMBS.md, supervision.md,
   git). When the context passes about 75%, pause the run, append a "hand-off" entry to supervision.md (where the run
