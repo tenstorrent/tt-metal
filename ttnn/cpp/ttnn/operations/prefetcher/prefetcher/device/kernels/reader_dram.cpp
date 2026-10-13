@@ -9,13 +9,10 @@
 
 #include "api/debug/dprint.h"
 
-// Zeroes [l1_addr, l1_addr + size) with loopback NoC reads of the zeroed local L1 range [zeros_addr,
-// zeros_addr + zeros_size), in chunks of min(size, zeros_size) bytes. The last chunk ends at the end of the range and
-// may overlap the one before it, so one chunk size covers any size > 0. Sets the read cmd buf state (source, length).
-// The packets carry the transaction id set by the last noc_async_read_set_trid; the trid argument only feeds the
-// per-trid outstanding-request throttle on the issue path, so pass that same id. The caller's
-// noc_async_read_barrier_with_trid on it then also covers these reads. l1_addr and size must be multiples of
-// NOC_L1_READ_ALIGNMENT_BYTES.
+// Zeroes [l1_addr, l1_addr + size) with loopback NoC reads of the zeroed L1 range [zeros_addr, +zeros_size), in
+// chunks of min(size, zeros_size); the last chunk is end-aligned and may overlap the previous one. Sets the read cmd
+// buf state. The reads carry the trid of the last noc_async_read_set_trid (the trid argument only feeds the issue
+// throttle), so the caller's trid barrier covers them. l1_addr, size: multiples of NOC_L1_READ_ALIGNMENT_BYTES.
 template <bool skip_ptr_update, uint32_t zeros_size>
 FORCE_INLINE void zero_fill_with_trid(
     uint32_t zeros_addr, uint32_t l1_addr, uint32_t size, uint32_t vc, uint32_t trid) {
@@ -42,8 +39,6 @@ void kernel_main() {
     constexpr uint32_t addrs_cb_id = get_compile_time_arg_val(7);
     constexpr uint32_t sync_cb_id = get_compile_time_arg_val(8);
     constexpr bool skip_ptr_update = get_compile_time_arg_val(9);
-    // Zero source for the pad rows (see the padding contract below): a CB of zero_cb_size bytes. zero_cb_size is 0,
-    // and the CB absent, when no tensor is padded; the padded-block path is then compiled out.
     constexpr uint32_t zero_cb_id = get_compile_time_arg_val(10);
     constexpr uint32_t zero_cb_size = get_compile_time_arg_val(11);
     constexpr bool any_tensor_padded = zero_cb_size != 0;
