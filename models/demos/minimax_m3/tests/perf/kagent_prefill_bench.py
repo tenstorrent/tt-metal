@@ -52,6 +52,8 @@ Env (defaults = the deployed 16p16d prefill config):
                       ids per token -> <dir>/routing.pt (MoE balance analysis, utils/expert_placement.py)  [unset]
   M3_KA_EXPERT_PLACEMENT per-layer expert placement file (utils/expert_placement.py), applied at model build [unset]
   EXPERT_DTYPE        bf4 | bf8                                                      [bf4]
+  BENCH_OVERLAP_SHARED 0 -> MoE shared expert before dispatch on the full grid instead of on its own sub-device
+                      concurrently with dispatch (TtPrefillRuntimeConfig.overlap_shared_expert)            [1]
   BENCH_TRACE         1 -> E1 (20-prefill-megakernel.md section 2.6): after the timed request, interleaved eager
                       rounds of the request with ack sync / event / none (host-enqueue-return H and wall), then a
                       fixed-offset trace of the single request chunk (BENCH_NEW == BENCH_CHUNK): capture once,
@@ -299,6 +301,7 @@ def main():
             weight_cache_path=cache_path,
             layer_indices=layer_ids,
             topology=ccl_topology_from_env(),
+            overlap_shared_expert=os.getenv("BENCH_OVERLAP_SHARED", "1") == "1",
         )
         t0 = time.perf_counter()
         runtime = TtPrefillRuntime(mesh, hf_config, {}, cfg)
@@ -747,6 +750,9 @@ def main():
         log("RESULT " + json.dumps({k: v for k, v in result.items() if k != "per_layer"}))
         log("DONE")
     finally:
+        from models.demos.minimax_m3.tt.moe import shared_overlap
+
+        shared_overlap.release_all()
         ttnn.close_mesh_device(mesh)
     return 0
 
