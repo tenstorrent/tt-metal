@@ -17,6 +17,7 @@ pip install -q -r $L/tests/requirements.txt > /tmp/pip.log 2>&1; echo "== pip rc
 echo "== sfpi $($L/tests/sfpi/compiler/bin/riscv-tt-elf-g++ --version 2>&1 | head -1)"
 export CHIP_ARCH=blackhole LLK_HOME=$L TT_LLK_DISABLE_ASSERTS=1 LLK_PERF_L1_MUX_GROUP=0 PERF_KEEP_RUNS=1000 BITS_OUT=/tmp/bits
 [[ -f $S/bits_rope.py ]] && cp $S/bits_rope.py $L/tests/python_tests/
+[[ -f $S/perf_rope_diag.py ]] && cp $S/perf_rope_diag.py $L/tests/python_tests/
 rm -rf /tmp/bits
 place() {
   while read -r rel; do [[ -n $rel ]] && { if [[ -f "$S/variants/$1/$rel" ]]; then cp "$S/variants/$1/$rel" "$R/$rel"; else git -C $R show HEAD:"$rel" > "$R/$rel"; fi; }; done < $S/files.txt
@@ -81,6 +82,7 @@ for v in ${FUNC:-h}; do
   python $S/tools/elfhash.py /tmp/llkb_func_$v > $OUT/elfs_func_$v.txt
 done
 for f in $OUT/prod_*.log $OUT/run_*.log; do grep -q -E "[0-9]+ (failed|error)" $f && { echo "== tail $f"; grep -a -E "^(FAILED|ERROR)" $f | head -3 | cut -c1-240; }; done
+[[ -n ${GTEST:-} ]] && bash $S/run_gtest.sh $GTEST
 tar -czf /tmp/llkab.tgz -C $OUT csv $(cd $OUT && ls elfs_*.txt 2>/dev/null) 2>/dev/null
 echo "@@RESULTS_BEGIN"; base64 -w 200 /tmp/llkab.tgz; echo "@@RESULTS_END"
 echo "== done $(date -u +%T)"

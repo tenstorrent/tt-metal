@@ -1,0 +1,2 @@
+perf_rope_diag.py::test_perf_rope_diag[variant:(2, 2, 64, True, False, 0, 32, False)]
+perf_rope_diag.py::test_perf_rope_diag[variant:(2, 2, 64, True, False, 1, 32, False)]

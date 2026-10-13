@@ -1,0 +1,20 @@
+# job 5: final (f: load-macro body, eight-face gate) against the pushed head (h) and main's header (m); counters; bits; gtests
+p h ids/rope.txt -
+p f ids/rope.txt -
+p m ids/rope.txt -
+p m ids/rope.txt -
+p f ids/rope.txt -
+p h ids/rope.txt -
+p h ids/rope.txt -
+p f ids/rope.txt -
+p m ids/rope.txt -
+p m ids/rope.txt -
+p f ids/rope.txt -
+p h ids/rope.txt -
+c h ids/rope.txt - wc
+c f ids/rope.txt - wc
+c m ids/rope.txt - wc
+c f ids/diag.txt - wc
+c h ids/diag.txt - wc
+b h ids/bits.txt -
+b f ids/bits.txt -

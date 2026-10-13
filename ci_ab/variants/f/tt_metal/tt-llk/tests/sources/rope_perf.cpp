@@ -166,12 +166,6 @@ void run_kernel(RUNTIME_PARAMETERS params)
     }
 }
 
-// Ends this file's code on a fixed 1024-byte offset, so the firmware and library code linked after it (memset in main,
-// the init's _apply_src_zero_flag_) keeps its alignment whatever the size of the rope body.
-__attribute__((noinline, used, aligned(1024))) void math_code_end()
-{
-}
-
 #endif
 
 #ifdef LLK_TRISC_PACK

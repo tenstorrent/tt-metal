@@ -379,7 +379,7 @@ inline void sfpu_rope_all_rows(const std::uint32_t scale_fp32)
     constexpr std::uint32_t head_stride = Wt * x_stride;
 
 #ifndef DISABLE_SFPLOADMACRO
-    if constexpr (Ht * Wt * 2 >= 4)
+    if constexpr (Ht * Wt * 2 >= 8)
     {
         sfpu_rope_all_rows_macro<Ht, Wt, x_base, x_stride, cos_base, sin_base, cs_stride, has_scale>(scale_fp32);
         return;
@@ -460,8 +460,8 @@ inline void sfpu_rope_fused_all_rows(const std::uint32_t scale_fp32)
     constexpr std::uint32_t num_row_groups     = (live_rows_per_half + 3) / 4;
 
 #ifndef DISABLE_SFPLOADMACRO
-    // The macro setup costs 12 issue slots per call and each face saves 4.
-    if constexpr (Ht * Wt * 2 * num_row_halves * num_row_groups >= 4)
+    // Setup and drain cost 12 issue slots per call and each face saves 4, so from eight faces a call saves 20 or more.
+    if constexpr (Ht * Wt * 2 * num_row_halves * num_row_groups >= 8)
     {
         sfpu_rope_fused_all_rows_macro<Ht, Wt, x_base, x_stride, cs_base, cs_stride, has_scale, tile_h, cos_sin_per_row, is_fp32_dest_acc_en>(scale_fp32);
         return;
