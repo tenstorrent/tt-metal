@@ -34,5 +34,10 @@ units of 32 rows × `chunk` tiles. `nt_h` = tile-rows, `n_w` = units per tile-ro
 ## Reading
 
 - `stagger` is 1.32× / 1.19× at 256 B reads and 1.16× / 1.13× at 1024 B for 8 / 16 blocks per core.
-- The saving grows with the work (24 → 31 µs and 26 → 41 µs): without the switch the grid sits on one
-  bank for every block, not only at launch start.
+- Relative gains decrease when work doubles from 8 to 16 blocks per core. Runtime reduction falls
+  from 24.0% to 15.8% at 256 B reads, and from 14.1% to 11.5% at 1024 B reads.
+- Total time saved increases (24 → 31 µs and 26 → 41 µs), but savings per unit of work decrease.
+  The benefit is stronger for the shorter workloads tested; the 8-block speedups should not be
+  extrapolated to workloads with many blocks per core.
+- These two workload sizes do not establish the cause of the declining relative gain or whether
+  the benefit eventually disappears.

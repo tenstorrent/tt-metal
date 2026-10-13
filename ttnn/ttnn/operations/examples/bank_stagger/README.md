@@ -46,8 +46,12 @@ The op is a real tilize (`ROW_MAJOR` width-sharded DRAM → `TILE` interleaved D
   7040x4096     1024      16         357802     316582    1.13x     41 µs
 ```
 
-The saving grows with the work, because the grid piles onto one bank for every block, not only at
-launch start. The ratio shrinks slowly as the run gets longer, and is larger for small reads.
+The **relative gain decreases as blocks per core increase** in these measurements: doubling from
+8 to 16 blocks reduces speedup from 1.32× to 1.19× at 256 B reads, and from 1.16× to 1.13× at
+1024 B reads. Total time saved increases (24 → 31 µs and 26 → 41 µs), but the workload doubles,
+so savings per unit of work decrease. The benefit is stronger for the shorter workloads tested;
+do not extrapolate the 8-block speedups to workloads with many blocks per core. These measurements
+do not establish why the relative gain weakens or whether it eventually disappears.
 
 ## Where else it applies
 The same fix — start each core at a different index — applies wherever the cores' data lines up on

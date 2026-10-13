@@ -95,7 +95,11 @@ a **width-sharded DRAM source** with one shard per bank, where each column block
 also width blocking of an interleaved source, height blocking on Blackhole, and writes into
 width-sharded or bank-aligned outputs (see the README).
 **Measured win (Blackhole, 110 cores):** starting each core at block `core % n_w` is **1.32×** at
-256 B reads and 1.16× at 1024 B with 8 blocks per core; the saving grows with the work (24–41 µs).
+256 B reads and 1.16× at 1024 B with 8 blocks per core: bf16 tensors of shape **3520×1024** and
+**3520×4096** (H×W), respectively. Doubling H to **7040** gives 16 blocks per core; speedups fall to
+**1.19× and 1.13×**, respectively: relative gains and savings per unit of work decrease, even though
+total time saved increases. The measured benefit is stronger for the shorter workloads; do not
+extrapolate the 8-block speedups to workloads with many blocks per core.
 **Gist:** start each core's walk at a different index and wrap. `stagger_blocks` is a compile-time
 switch, so flip it per call to check whether it pays on your shape.
 
