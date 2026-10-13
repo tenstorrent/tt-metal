@@ -118,6 +118,50 @@ extern "C"
     __attribute__((used)) volatile std::uint32_t llk_release_gaps[2];
 }
 
+// experiment hook (nikola, 644c094a879): LLK_RELEASE_GAP nops between the plain TILE_LOOP release stores
+#if defined(LLK_RELEASE_GAP)
+#define LLK_GAP_XSTR_(x) #x
+#define LLK_GAP_XSTR(x)  LLK_GAP_XSTR_(x)
+#define LLK_GAP_ASM      ".rept " LLK_GAP_XSTR(LLK_RELEASE_GAP) "\n\tnop\n\t.endr\n\t"
+#else
+#define LLK_GAP_ASM ""
+#endif
+// experiment hook (holdall): LLK_RELEASE_GAP_SCHED nops in the scheduled releases' gap path (the schedule's analog of F)
+#if defined(LLK_RELEASE_GAP_SCHED)
+#define LLK_GAPS_XSTR_(x)  #x
+#define LLK_GAPS_XSTR(x)   LLK_GAPS_XSTR_(x)
+#define LLK_GAP_SCHED_ASM ".rept " LLK_GAPS_XSTR(LLK_RELEASE_GAP_SCHED) "\n\tnop\n\t.endr\n\t"
+#else
+#define LLK_GAP_SCHED_ASM ""
+#endif
+// experiment hooks (brphase): synthetic BRISC image growth, never executed: LLK_EXP_BR_PAD_INIT / _TEXT bytes of NOPs in
+// .init (after _start) / in .text ahead of serve(); LLK_EXP_BR_PAD_DATA bytes of local data memory
+#define LLK_BP_STR_(x) #x
+#define LLK_BP_STR(x)  LLK_BP_STR_(x)
+#if defined(LLK_EXP_BR_PAD_INIT)
+asm(".pushsection .init, \"ax\"\n.rept " LLK_BP_STR(LLK_EXP_BR_PAD_INIT) " / 4\nnop\n.endr\n.popsection");
+#endif
+#if defined(LLK_EXP_BR_PAD_TEXT)
+asm(".pushsection .text.llk_exp_pad, \"ax\"\n.globl llk_exp_text_pad\nllk_exp_text_pad:\n.rept " LLK_BP_STR(LLK_EXP_BR_PAD_TEXT) " / 4\nnop\n.endr\n.popsection");
+#endif
+#if defined(LLK_EXP_BR_PAD_DATA)
+__attribute__((used)) volatile std::uint8_t llk_exp_data_pad[LLK_EXP_BR_PAD_DATA] = {1};
+#endif
+// experiment hook (brphase) -DLLK_EXP_NREC: each timed pass stores 4 x its sled NOP count in STREAM_SCRATCH_2 of overlay
+// stream <thread> (perf/core.py LLK_EXP_NREC_READ reads it)
+#if defined(LLK_EXP_NREC)
+#define LLK_EXP_NREC_ASM "andi  a2, s4, 3\n\tslli  a2, a2, 12\n\tli    a3, 0xFFB403E8\n\tadd   a2, a2, a3\n\tsw    a4, 0(a2)\n\t"
+#else
+#define LLK_EXP_NREC_ASM ""
+#endif
+
+#if defined(LLK_EXP_SCRATCH_READS)
+#define LLK_EXP_SR_XSTR_(x) #x
+#define LLK_EXP_SR_XSTR(x)  LLK_EXP_SR_XSTR_(x)
+#define LLK_EXP_SCRATCH_ASM "li    a3, " LLK_EXP_SR_XSTR(LLK_EXP_SCRATCH_READS) "\n97:\n\tlw    a4, %[scratch](s0)\n\taddi  a3, a3, -1\n\tbnez  a3, 97b\n\t"
+#else
+#define LLK_EXP_SCRATCH_ASM ""
+#endif
 // Serve loop, one rendezvous per pass: wait until all TRISCs park, let them halt, flush them and release them together.
 // Pinned in assembly (GCC's code for the C version) in its own 1 KiB section, so no other BRISC change moves its timing.
 // PHASES (serve_phases) adds the .if blocks, which assemble to nothing in serve().
@@ -205,7 +249,7 @@ __attribute__((always_inline)) inline void serve_loop()
         "srli  a4, s5, 2\n\tli    a3, %[nphases]\n\tbleu  a4, a3, 80f\n"
         "79:\n\t"
         ".endif\n\t"
-        "sw    zero, 0(t1)\n\tsw    zero, 0(a7)\n\tsw    zero, 0(a6)\n\t" // release: unpack, math, pack back to back
+        "sw    zero, 0(t1)\n\t" LLK_GAP_ASM "sw    zero, 0(a7)\n\t" LLK_GAP_ASM "sw    zero, 0(a6)\n\t" // release: unpack, math, pack back to back
         "j     1b\n"
         ".if %[phases]\n"
         "80:\n\t" // a4 = k + 1: the three release stores in phase k's order with its spins (s3, s4 are free here)
@@ -250,6 +294,7 @@ __attribute__((always_inline)) inline void serve_loop()
         "li    a4, 512\n"
         "46:\n\t"
         "nop\n\taddi  a4, a4, -1\n\tbnez  a4, 46b\n\t"
+        LLK_EXP_SCRATCH_ASM // experiment hook (initx): host-shared register reads before the first INIT release
         "sw    zero, 0(t1)\n\t"
         "li    a4, %[stagger]\n"
         "47:\n\t"
@@ -309,7 +354,7 @@ __attribute__((always_inline)) inline void serve_loop()
         ".rept .Lrel_m\n\tnop\n\t.endr\n"
         "72:\n\t"
         "sw    a3, %[cntl0](a5)\n\t"
-        "bnez  t0, 76f\n"
+        "bnez  t0, 76f\n\t" LLK_EXP_NREC_ASM // experiment hook (brphase)
         "52:\n\t"
         "lw    a4, %[status0](a5)\n\tbgez  a4, 52b\n\t"
         "sw    s3, %[cntl0](a5)\n"
@@ -321,7 +366,7 @@ __attribute__((always_inline)) inline void serve_loop()
         "srli  s4, s4, 2\n\tli    a4, %[sched_end]\n\tbne   s4, a4, 73f\n\t"
         "lw    a4, 0(t1)\n\t"
         "and   a4, a4, a4\n\tli    a0, %[tstep]\n\tj     65b\n"
-        "73:\n\t"
+        "73:\n\t" LLK_GAP_SCHED_ASM // experiment hook (holdall)
         "lui   a3, %%hi(llk_release_gaps)\n\tlw    a4, %%lo(llk_release_gaps + 4)(a3)\n\tli    a2, 0x40\n\tbltu  s4, a2, 74f\n\t"
         "lw    a4, %%lo(llk_release_gaps)(a3)\n"
         "74:\n\t"
@@ -400,6 +445,12 @@ void reset_state(std::uint32_t& counter)
 int main()
 {
     disable_branch_prediction();
+#if defined(LLK_EXP_NOBP) // experiment hook (l1fast): TRISC 0-2 branch prediction off, to test the branch table LFSR as a hidden phase
+    {
+        volatile std::uint32_t tt_reg_ptr* cfg_ptr = ckernel::get_cfg_pointer();
+        cfg_ptr[DISABLE_RISC_BP_Disable_trisc_ADDR32] |= DISABLE_RISC_BP_Disable_trisc_MASK;
+    }
+#endif
 
     std::uint32_t counter = 0;
 
