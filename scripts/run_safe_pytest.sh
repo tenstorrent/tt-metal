@@ -192,7 +192,10 @@ if [[ "$SIM_MODE" == false ]]; then
     # --llm-output-path also writes the triage report as CSV to a persistent file,
     # so machine-readers can consume it directly instead of scraping the log.
     mkdir -p "${TRIAGE_LLM_DIR}"
-    export TT_METAL_DISPATCH_TIMEOUT_COMMAND_TO_EXECUTE="python3 ${TRIAGE_SCRIPT} --disable-progress --skip-version-check --llm-output-path=${TRIAGE_LLM} > ${TRIAGE_LOG} 2>&1"
+    # tt-exalens reads the chips over NOC1 by default and its topology discovery does not fail over: a hang that
+    # wedges NOC1 itself makes that first read time out and triage report nothing. Retry over NOC0 then.
+    # TRIAGE_NOC=<0|1|2> pins the first attempt's NOC.
+    export TT_METAL_DISPATCH_TIMEOUT_COMMAND_TO_EXECUTE="python3 ${TRIAGE_SCRIPT} --disable-progress --skip-version-check ${TRIAGE_NOC:+--noc-id=$TRIAGE_NOC} --llm-output-path=${TRIAGE_LLM} > ${TRIAGE_LOG} 2>&1 || { echo '=== triage failed over the default NOC, retrying over NOC0 ===' >> ${TRIAGE_LOG}; python3 ${TRIAGE_SCRIPT} --disable-progress --skip-version-check --noc-id=0 --llm-output-path=${TRIAGE_LLM} >> ${TRIAGE_LOG} 2>&1; }"
 fi
 
 if [[ "$DEV_MODE" == true ]]; then
