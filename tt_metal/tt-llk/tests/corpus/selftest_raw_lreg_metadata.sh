@@ -13,7 +13,7 @@ if [[ ${1:-} == --target-cxx ]]; then
     }
     target_cxx=$2
     scratch=$(mktemp -d)
-    trap 'rm -f "$scratch/WH.s" "$scratch/BH.s" "$scratch/QSR.s" "$scratch/gap.s" "$scratch/mul-int.s" "$scratch/baseline.s"; rmdir "$scratch"' EXIT
+    trap 'rm -f "$scratch/WH.s" "$scratch/BH.s" "$scratch/QSR.s" "$scratch/gap.s" "$scratch/mul-int.s" "$scratch/baseline.s" "$scratch/pressure.s" "$scratch/pressure.log"; rmdir "$scratch"' EXIT
     for arch in WH BH QSR; do
         case $arch in
             WH) cpu=tt-wh-tensix ;;
@@ -93,6 +93,29 @@ if [[ ${1:-} == --target-cxx ]]; then
                 }
                 echo "PASS: $issue $scheduling public LRegFile threaded lifetime, pass disabled (assembly check)"
             fi
+            # Register-pressure gate: compile-only, never a correctness pass.
+            for live in 2 4 7 8; do
+                for scheme in 2 3; do
+                    pass_flags=()
+                    [[ $scheme == 3 ]] && pass_flags+=(-fdisable-rtl-rvtt_lreg_livein)
+                    if "$target_cxx" -std=c++17 -O2 -mcpu=tt-bh-tensix \
+                        "${issue_flags[@]}" "${schedule_flags[@]}" "${pass_flags[@]}" \
+                        "-DSCHEME=$scheme" "-DLIVE_REGS=$live" \
+                        -S "$here/raw_lreg_threading_pressure.cpp" -o "$scratch/pressure.s" \
+                        > "$scratch/pressure.log" 2>&1; then
+                        if [[ $live == 8 ]]; then
+                            echo "FAIL: $issue $scheduling scheme=$scheme accepted eight preserved raw values plus a temporary" >&2
+                            exit 1
+                        fi
+                        echo "OBSERVED: $issue $scheduling scheme=$scheme $live raw values + temporary compiled (not a device result)"
+                    elif [[ $live == 8 ]] && grep -Eq 'too few lregs|lreg-pressure-exceeded' "$scratch/pressure.log"; then
+                        echo "OBSERVED: $issue $scheduling scheme=$scheme register-capacity rejection (not a correctness pass)"
+                    else
+                        cat "$scratch/pressure.log" >&2
+                        exit 1
+                    fi
+                done
+            done
         done
     done
     if [[ $# == 4 ]]; then
