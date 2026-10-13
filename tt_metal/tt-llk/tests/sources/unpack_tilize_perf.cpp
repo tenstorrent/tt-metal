@@ -16,6 +16,11 @@
 #include "perf.h"
 #include "profiler.h"
 
+// UNPACK_BLOCK (driver template): one block call per block row instead of one call per tile
+#ifndef UNPACK_BLOCK
+#define UNPACK_BLOCK 0
+#endif
+
 // Globals
 std::uint32_t unp_cfg_context          = 0;
 std::uint32_t pack_sync_tile_dst_ptr   = 0;
@@ -59,7 +64,7 @@ void run_kernel(RUNTIME_PARAMETERS params)
             FACE_R_DIM,
             4 /* num_faces */,
             4 /* num_faces */);
-        _llk_unpack_tilize_init_wrapper_(formats.unpack_A_src, formats.unpack_A_dst, BLOCK_CT_DIM, FACE_R_DIM, false /* narrow_tile */);
+        _llk_unpack_tilize_init_wrapper_(formats.unpack_A_src, formats.unpack_A_dst, BLOCK_CT_DIM, FACE_R_DIM, false /* narrow_tile */, 4, UNPACK_BLOCK);
         PROFILER_SYNC();
     }
 
@@ -72,6 +77,18 @@ void run_kernel(RUNTIME_PARAMETERS params)
                 for (std::uint32_t i = 0; i < BLOCK_RT_DIM; i++)
                 {
                     const std::uint32_t tile_row_addr = L1_ADDRESS(src + (i % 8) * 0x1000); // TODO SS<-LP use PERF_ADDRESS here
+#if UNPACK_BLOCK
+                    _llk_unpack_tilize_block_wrapper_(
+                        tile_row_addr,
+                        0 /* first tile */,
+                        BLOCK_CT_DIM,
+                        formats.unpack_A_src,
+                        formats.unpack_A_dst,
+                        0 /* block_ct_dim */,
+                        FACE_R_DIM,
+                        4 /* num_faces */,
+                        false /* narrow_tile */);
+#else
                     for (std::uint32_t j = 0; j < BLOCK_CT_DIM; j++)
                     {
                         _llk_unpack_tilize_wrapper_(
@@ -84,6 +101,7 @@ void run_kernel(RUNTIME_PARAMETERS params)
                             4 /* num_faces */,
                             false /* narrow_tile */);
                     }
+#endif
                 }
             }
         }
