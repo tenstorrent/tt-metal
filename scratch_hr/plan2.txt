@@ -1,0 +1,12 @@
+q main test_hr_fu_prof2.py
+q head test_hr_fu_prof2.py
+q fp test_hr_fu_prof2.py
+q fp test_hr_fu_prof2.py
+q head test_hr_fu_prof2.py
+q main test_hr_fu_prof2.py
+q main test_hr_fu_prof2.py
+q head test_hr_fu_prof2.py
+q fp test_hr_fu_prof2.py
+q fp test_hr_fu_prof2.py
+q head test_hr_fu_prof2.py
+q main test_hr_fu_prof2.py
