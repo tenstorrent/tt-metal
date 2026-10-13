@@ -54,14 +54,14 @@ namespace tt::tt_metal::experimental {
 //
 // ROLE: A kernel's role (sender or receiver) is DERIVED from the node coverage of
 //   the WorkUnitSpecs that place it, compared against the receiver sets of the pipes
-//   in the accessor group. The kernel's node set must include EITHER the whole disjoint
-//   union of the group's receiver sets (it is a receiver of every pipe in the group) OR
-//   none of them and at least one node per pipe (it is the sender of every pipe in the
-//   group; which node hosts which pipe is settled when the pipes are supplied, from each
-//   pipe's sender). The kernel's other nodes are extra nodes: they get the same slot
-//   entry as the participants, so one multicast configures them all, and the kernel
-//   must not construct the pipe there. Covering only part of the receiver side is
-//   rejected. Per pipe, at most one kernel plays each role, so
+//   in the accessor group. The kernel's node set, less the binding's extra_nodes, must
+//   equal EITHER the disjoint union of the group's receiver sets (it is a receiver of
+//   every pipe in the group) OR be disjoint from all of them with exactly one node per
+//   pipe (it is the sender of every pipe in the group; which node hosts which pipe is
+//   settled when the pipes are supplied, from each pipe's sender). Partial coverage of
+//   the receiver side, or a mix of the two, is rejected. Extra nodes take no part in the
+//   group's pipes (see KernelAdvancedOptions::PrefetcherPipeBinding::extra_nodes). Per
+//   pipe, at most one kernel plays each role, so
 //   exactly one kernel instance owns the credit counters on each node. Roles may be
 //   split across Programs (e.g. a prefetcher op and a consumer op) that share one pipe
 //   through their run args.
