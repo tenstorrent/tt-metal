@@ -33,7 +33,6 @@
 
 #include <tt-metalium/device.hpp>
 #include <tt-metalium/face_geometry.hpp>
-#include <tt-metalium/hal.hpp>
 #include <tt-metalium/hal_types.hpp>
 #include <tt-metalium/program.hpp>
 #include <tt-metalium/tile.hpp>
@@ -124,9 +123,9 @@ SocView build_soc_view(IDevice* device, Program& program) {
         v.l1_banks.push_back(bank);
     }
 
-    v.dram_alignment = tt::tt_metal::hal::get_dram_alignment();
-    v.l1_alignment = tt::tt_metal::hal::get_l1_alignment();
-    v.arch_num_circular_buffers = tt::tt_metal::hal::get_arch_num_circular_buffers();
+    v.dram_alignment = hw.get_alignment(tt::tt_metal::HalMemType::DRAM);
+    v.l1_alignment = hw.get_alignment(tt::tt_metal::HalMemType::L1);
+    v.arch_num_circular_buffers = hw.get_num_dataflow_buffers();
     v.num_semaphores = tt::tt_metal::NUM_SEMAPHORES;
     v.has_tile_counter_registers = hw.has_tile_counter_registers();
 
