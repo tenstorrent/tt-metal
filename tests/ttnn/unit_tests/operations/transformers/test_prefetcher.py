@@ -109,13 +109,10 @@ def test_run_prefetcher_post_commit_multi_device(
 
 
 # ttnn.dram_prefetcher with weights whose K is not a multiple of the prefetch ring.
-#
 # The prefetcher pads a DRAM weight shard of H tile rows to round_up(H, num_readers * receivers_per_reader) rows;
 # the pad rows must reach the receivers as zeros and never be read from DRAM (the next allocation lies past H).
-#
 # Each tensor_addrs entry points at one DRAM tensor [W ; NaN rows] (the op takes only shapes from the K-row tensors
 # it is passed) and an unpadded all-NaN tensor is prefetched first, so unread or unzeroed pad rows show up as NaN.
-#
 # Consume mode runs the matmul over the padded K, so compute multiplies the pad rows and must still give
 # in0[:, :K] @ W; production mode (activation K == weight K, as the models run it) guards the production path.
 
