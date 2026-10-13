@@ -1,0 +1,6 @@
+# MoE gate (#60154 head): timing twice, then counters on the head (G) and on its no-swap probe (Gp)
+r G ids/g.txt -
+r G ids/g.txt -
+c G_wc ids/g.txt - wc
+c Gp_wc ids/g.txt - wc
+c G_wc ids/g.txt - wc
