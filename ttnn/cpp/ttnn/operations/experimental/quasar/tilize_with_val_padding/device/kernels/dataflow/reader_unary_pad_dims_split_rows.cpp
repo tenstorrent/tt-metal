@@ -50,7 +50,7 @@ void kernel_main() {
             cb_in0.reserve_back(num_tiles_block_c);
             uint32_t l1_write_addr = cb_in0.get_write_ptr();
             // pad the tile by reading values from zero buffer in L1
-            volatile tt_l1_ptr std::uint32_t* dst = (volatile tt_l1_ptr uint32_t*)(l1_write_addr);
+            volatile tt_l1_ptr std::uint32_t* dst = (volatile tt_l1_ptr uint32_t*)(uintptr_t)(l1_write_addr);
             // 8 = tile_height / 4
             for (uint32_t z = 0; z < block_row_size * 8; z++) {
                 dst[z] = pad_value;
@@ -72,8 +72,17 @@ void kernel_main() {
                 {.offset_bytes = k * block_row_size});
 
             if (block_row_size > block_size) {
-                volatile tt_l1_ptr std::uint32_t* dst = (volatile tt_l1_ptr uint32_t*)(l1_write_addr + block_size);
-                for (uint32_t z = 0; z < (block_row_size - block_size) / 4; z++) {
+                uint32_t pad_addr = l1_write_addr + block_size;
+                uint32_t pad_bytes = block_row_size - block_size;
+                // A row of an odd number of 2-byte elements ends halfway through a word; pad that
+                // half with one element first, as an unaligned word store faults on Quasar.
+                if (pad_addr & 2) {
+                    *(volatile tt_l1_ptr uint16_t*)(uintptr_t)pad_addr = pad_value;
+                    pad_addr += 2;
+                    pad_bytes -= 2;
+                }
+                volatile tt_l1_ptr std::uint32_t* dst = (volatile tt_l1_ptr uint32_t*)(uintptr_t)pad_addr;
+                for (uint32_t z = 0; z < pad_bytes / 4; z++) {
                     dst[z] = pad_value;
                 }
             }
@@ -83,7 +92,7 @@ void kernel_main() {
             l1_write_addr += block_row_size;
         }
         if (num_rows < tile_height) {
-            volatile tt_l1_ptr std::uint32_t* dst = (volatile tt_l1_ptr uint32_t*)(l1_write_addr);
+            volatile tt_l1_ptr std::uint32_t* dst = (volatile tt_l1_ptr uint32_t*)(uintptr_t)(l1_write_addr);
 
             for (uint32_t z = 0; z < (block_row_size) / 4 * (tile_height - num_rows); z++) {
                 dst[z] = pad_value;
