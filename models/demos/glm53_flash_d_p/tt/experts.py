@@ -376,11 +376,17 @@ class TtExperts:
         return out
 
 
+AG_MAX_EXPERTS_PER_CHIP = 64
+
+
 def build_experts(mesh, loader, cfg, layer: int, max_chunk: int, weights_dtype=ttnn.bfloat8_b) -> TtExperts:
     """TtExperts for one MoE layer (288 / chips experts per chip; bfp8 by default, bfp4 for the whole model on a
-    LoudBox). GLM_EXPERTS_MODE: ag (default) the MiMo all-gather MoE ops (tt/experts_ag.py), unified / loop TtExperts.
+    LoudBox). GLM_EXPERTS_MODE: ag the MiMo all-gather MoE ops (tt/experts_ag.py), unified / loop TtExperts; unset: ag
+    up to AG_MAX_EXPERTS_PER_CHIP local experts (flat_routed_expert's limit), else unified (a 2x2 holds 72).
     """
-    if os.environ.get("GLM_EXPERTS_MODE", "ag") == "ag":
+    per_chip = cfg.n_routed_experts // mesh.get_num_devices()
+    mode = os.environ.get("GLM_EXPERTS_MODE") or ("ag" if per_chip <= AG_MAX_EXPERTS_PER_CHIP else "unified")
+    if mode == "ag":
         from models.demos.glm53_flash_d_p.tt.experts_ag import build_experts_ag
 
         return build_experts_ag(mesh, loader, cfg, layer, max_chunk, weights_dtype=weights_dtype)
@@ -397,5 +403,5 @@ def build_experts(mesh, loader, cfg, layer: int, max_chunk: int, weights_dtype=t
         weights_dtype=weights_dtype,
         num_links=int(os.environ.get("GLM_MOE_LINKS", "1")),  # dispatch / combine / offset_cumsum fabric links
         cache=os.environ.get("GLM_EXPERTS_CACHE", "1") != "0",  # 0: convert straight to the device, no tensorbins
-        mode=os.environ.get("GLM_EXPERTS_MODE", "unified"),
+        mode=mode,
     )
