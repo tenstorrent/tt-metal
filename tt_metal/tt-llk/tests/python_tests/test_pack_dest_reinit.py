@@ -36,7 +36,7 @@ from helpers.stimuli_generator import generate_stimuli
 from helpers.test_config import TestConfig
 from helpers.test_variant_parameters import (
     DEST_INDEX,
-    LOOP_FACTOR,
+    DEST_SYNC,
     NUM_BLOCKS,
     NUM_FACES,
     NUM_TILES_IN_BLOCK,
@@ -57,13 +57,11 @@ class REINIT_DELAY(TemplateParameter):
         return f"constexpr std::uint32_t REINIT_DELAY = {self.delay}u;"
 
 
-REINIT_FORMATS = [
-    fmt
-    for fmt in input_output_formats(
-        [DataFormat.Float16_b, DataFormat.Float32, DataFormat.Bfp8_b]
-    )
-    if fmt.input_format == fmt.output_format
-]
+REINIT_FORMATS = input_output_formats(
+    [DataFormat.Float16_b, DataFormat.Float32, DataFormat.Bfp8_b], same=True
+)
+
+DEST_SYNC_MODE = DestSync.Half
 
 
 @parametrize(
@@ -84,7 +82,11 @@ def test_pack_dest_reinit(formats, dest_acc, reinit_delay, input_dimensions):
 
     generate_golden = get_golden_generator(DataCopyGolden)
     golden_tensor = generate_golden(
-        src_A, formats.output_format, num_faces, input_dimensions
+        src_A,
+        formats.output_format,
+        num_faces,
+        input_dimensions,
+        input_format=formats.input_format,
     )
 
     unpack_to_dest = (
@@ -92,7 +94,7 @@ def test_pack_dest_reinit(formats, dest_acc, reinit_delay, input_dimensions):
     )
 
     num_blocks, num_tiles_in_block = get_num_blocks_and_num_tiles_in_block(
-        DestSync.Half,
+        DEST_SYNC_MODE,
         dest_acc,
         formats,
         input_dimensions,
@@ -107,14 +109,15 @@ def test_pack_dest_reinit(formats, dest_acc, reinit_delay, input_dimensions):
         templates=[
             generate_input_dim(input_dimensions, input_dimensions),
             REINIT_DELAY(reinit_delay),
+            # Single-valued across the sweep: emitted as constexprs the kernel reads directly.
+            DEST_SYNC(DEST_SYNC_MODE),
+            DEST_INDEX(0),
+            NUM_FACES(num_faces),
         ],
         runtimes=[
-            DEST_INDEX(0),
             TILE_COUNT(tile_cnt_A),
-            NUM_FACES(num_faces),
             NUM_BLOCKS(num_blocks),
             NUM_TILES_IN_BLOCK(num_tiles_in_block),
-            LOOP_FACTOR(1),
         ],
         variant_stimuli=StimuliConfig(
             src_A,
@@ -132,7 +135,9 @@ def test_pack_dest_reinit(formats, dest_acc, reinit_delay, input_dimensions):
     )
 
     res_from_L1 = configuration.run().result
-    assert len(res_from_L1) == len(golden_tensor)
+    assert len(res_from_L1) == len(
+        golden_tensor
+    ), f"result has {len(res_from_L1)} datums, golden has {len(golden_tensor)}"
 
     res_tensor = torch.tensor(res_from_L1, dtype=format_dict[formats.output_format])
     assert passed_test(golden_tensor, res_tensor, formats.output_format)
