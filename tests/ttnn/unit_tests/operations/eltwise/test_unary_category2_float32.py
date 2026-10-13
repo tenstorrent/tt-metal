@@ -5,7 +5,13 @@
 import torch
 import pytest
 import ttnn
-from tests.ttnn.utils_for_testing import assert_allclose, assert_equal, assert_with_ulp, assert_with_pcc
+from mpmath import mp, mpf, tanh as mp_tanh
+from tests.ttnn.utils_for_testing import (
+    assert_allclose,
+    assert_equal,
+    assert_with_ulp,
+    generate_all_bfloat16_bitpatterns,
+)
 from tests.ttnn.unit_tests.operations.eltwise.eltwise_test_utils import (
     generate_float32_bits,
     generate_float32_bits_in_range,
@@ -47,7 +53,9 @@ Accuracy criteria (FTZ = flush-to-zero, SNB = smallest normal bfloat16)
 | Op           | Input range            | Check                    | Reason                                     |
 |--------------|------------------------|--------------------------|--------------------------------------------|
 | relu, relu6  | all                    | exact                    | comparison + select, no rounding           |
-| hardmish     | all                    | ULP ≤ 1                  | golden emulates SFPSTORE truncation        |
+| hardmish     | all                    | ULP ≤ 1                  | same fp32 formula as golden (measured 0)   |
+|              | ±inf, NaN, ±0          | matches golden by value  | -0 returns +0 (sign dropped)               |
+|              | subnormals             | exactly 0                | device flushes subnormal inputs            |
 | hardsigmoid  | -3 < x < -2.25         | abs ≤ 2^-24              | x*(1/6) + 0.5 cancels near x = -3          |
 |              | elsewhere              | ULP ≤ 1                  |                                            |
 | hardswish    | x > ~5.65e37           | device returns x         | torch golden overflows to inf              |
@@ -60,10 +68,14 @@ Accuracy criteria (FTZ = flush-to-zero, SNB = smallest normal bfloat16)
 | softsign     | |x| > 1/SNB - 1        | exactly 0                | reciprocal(1 + |x|) FTZ                    |
 |              | |x| == 1/SNB - 1       | 0 or golden ±1           | arch-dependent rounding                    |
 |              | elsewhere              | ULP ≤ 2                  |                                            |
-| log_sigmoid  | x <= -13               | ULP ≤ 2                  | kernel returns x; exact here               |
-|              | -13 < x <= 0           | abs ≤ 0.02               | x-identity tail + polynomial               |
-|              | 0 < x <= 170           | PCC ≥ 0.999, abs ≤ 0.005 | output -> 0, ULP not meaningful            |
-| tanhshrink   | |x| < 1                | PCC ≥ 0.999              | golden loses precision to cancellation     |
+| log_sigmoid  | x <= -4                | device returns x         | identity branch                            |
+|              | x <= -13               | ULP ≤ 2                  | identity within 2 ULP of golden            |
+|              | -4 < x <= 0            | abs ≤ 0.02               | degree-8 polynomial                        |
+|              | 0 < x <= 4             | abs ≤ 0.005              | degree-8 polynomial                        |
+|              | x > 4, golden normal   | rel ≤ 0.04               | fast-approx exp                            |
+|              | golden < SNB           | exactly 0                | -exp(-x) underflow FTZ                     |
+| tanhshrink   | |x| < 1, result < SNB  | exactly 0                | x^3/3 underflow FTZ (mpmath reference)     |
+|              | |x| < 1, elsewhere     | ULP ≤ 3 vs mpmath        | torch golden cancels; mpmath doesn't       |
 |              | 1 <= |x| < 1.625       | ULP ≤ 8                  | partial cancellation in x - tanh(x)        |
 |              | |x| >= 1.625           | ULP ≤ 3                  | tanh via 2*sigmoid - 1 (BH max 3, WH 2)    |
 
@@ -135,10 +147,11 @@ def hardsigmoid_cancellation_band(input_tensor):
 def test_hardmish(device):
     """Exhaustive normal bfloat16 coverage for hardmish.
 
-    | Input range | Check   | Reason                                                      |
-    |-------------|---------|-------------------------------------------------------------|
-    | all         | ULP ≤ 1 | golden emulates SFPSTORE truncation (torch_hardmish in      |
-    |             |         | ttnn/ttnn/operations/unary.py); residual SFPU rounding only |
+    | Input range | Check   | Reason                                                        |
+    |-------------|---------|---------------------------------------------------------------|
+    | all         | ULP ≤ 1 | for fp32 input the golden is plain x * clamp(x/2 + 1, 0, 1)   |
+    |             |         | (torch_hardmish only emulates SFPSTORE truncation for         |
+    |             |         | bfloat16), which the fp32 SFPU path matches (measured 0 ULP)  |
     """
     input_tensor = generate_float32_bits()
 
@@ -150,6 +163,40 @@ def test_hardmish(device):
     result = ttnn.to_torch(ttnn.hardmish(tt_in))
 
     assert_with_ulp(expected_result=golden, actual_result=result, ulp_threshold=1)
+
+
+def test_hardmish_special_values(device):
+    """hardmish on the inputs the exhaustive sweep replaces with 0: ±inf, NaN, ±0 and subnormals.
+
+    | Input               | Device returns | Golden returns | Check                                 |
+    |---------------------|----------------|----------------|---------------------------------------|
+    | +inf                | +inf           | +inf           | equal to golden                       |
+    | -inf                | NaN            | NaN            | both NaN (-inf * clamp(...) = -inf*0) |
+    | NaN                 | NaN            | NaN            | both NaN                              |
+    | +0, -0              | +0             | +0, -0         | equal by value; device drops -0 sign  |
+    | 254 bf16 subnormals | 0              | x              | exactly 0 (device flushes the input)  |
+    """
+    special = torch.tensor([float("inf"), float("-inf"), float("nan"), 0.0, -0.0])
+    all_bf16 = generate_all_bfloat16_bitpatterns(torch.float32).flatten()
+    subnormals = all_bf16[(all_bf16 != 0) & (all_bf16.abs() < SMALLEST_NORMAL_BF16)]
+    input_tensor = torch.cat([special, subnormals]).reshape(1, -1)
+
+    tt_in = to_float32_tt_tensor(input_tensor, device)
+
+    golden_function = ttnn.get_golden_function(ttnn.hardmish)
+    golden = golden_function(input_tensor, device=device).flatten()
+
+    result = ttnn.to_torch(ttnn.hardmish(tt_in)).flatten()
+
+    n_special = special.numel()
+    golden_special, result_special = golden[:n_special], result[:n_special]
+    assert torch.equal(torch.isnan(result_special), torch.isnan(golden_special)), f"NaN mismatch: {result_special}"
+    not_nan = ~torch.isnan(golden_special)
+    assert torch.equal(result_special[not_nan], golden_special[not_nan]), f"special-value mismatch: {result_special}"
+
+    result_subnormal = result[n_special:]
+    assert subnormals.numel() == 254, "expected all 254 non-zero bf16 subnormals"
+    assert (result_subnormal == 0).all(), "device must flush subnormal inputs to 0"
 
 
 def test_hardsigmoid(device):
@@ -226,7 +273,7 @@ def test_hardswish(device):
 
 
 # ─────────────────────────────────────────────────────────────────────────────
-# silu, swish — x * sigmoid(x), PCC (SFPU FTZ for large negative inputs)
+# silu, swish — x * sigmoid(x), ULP ≤ 3 (SFPU FTZ for large negative inputs)
 # ─────────────────────────────────────────────────────────────────────────────
 
 
@@ -276,7 +323,7 @@ def test_silu_swish_ops(device, ttnn_op):
 
 
 # ─────────────────────────────────────────────────────────────────────────────
-# softsign — x / (1 + |x|), PCC (division/reciprocal approximation path)
+# softsign — x / (1 + |x|), ULP ≤ 2 (division/reciprocal approximation path)
 # ─────────────────────────────────────────────────────────────────────────────
 
 
@@ -324,28 +371,33 @@ def test_softsign(device):
 
 
 # ─────────────────────────────────────────────────────────────────────────────
-# log_sigmoid — log(sigmoid(x)), PCC, restricted domain
+# log_sigmoid — log(sigmoid(x)), per-branch checks, restricted domain
 # ─────────────────────────────────────────────────────────────────────────────
 
 
 def test_log_sigmoid(device):
     """Exhaustive normal bfloat16 coverage for log_sigmoid = log(sigmoid(x)).
 
-    Kernel branches:
+    Kernel branches (ckernel_sfpu_logsigmoid.h branches on -x):
 
-    | Input range | Kernel computes                   | Error                                 |
-    |-------------|-----------------------------------|---------------------------------------|
-    | x < -4      | x                                 | drops -log1p(exp(x)): 0.018 at x = -4 |
-    | -4 <= x < 4 | degree-8 polynomial, softplus(-x) | max abs ~0.016 (at x ≈ -0.54)         |
-    | x >= 4      | -exp(-x), fast-approx exp         |                                       |
+    | Input range | Kernel computes                   | Error vs golden                         |
+    |-------------|-----------------------------------|-----------------------------------------|
+    | x <= -4     | x                                 | log1p(exp(x)): 0.018 at x = -4,         |
+    |             |                                   | 2.5e-3 at -6, 4.6e-5 at -10             |
+    | -4 < x <= 4 | degree-8 polynomial, softplus(-x) | max abs 0.016 (at x ≈ -0.54)            |
+    | x > 4       | -exp(-x), fast-approx exp         | max rel 3.6% (at x = 4.5)               |
 
     Checks:
 
-    | Input range  | Check                    | Reason                                       |
-    |--------------|--------------------------|----------------------------------------------|
-    | x <= -13     | ULP ≤ 2                  | exp(x) falls under 2 fp32 ULP of x           |
-    | -13 < x <= 0 | abs ≤ 0.02               | x-identity tail + polynomial (max 0.0181)    |
-    | 0 < x <= 170 | PCC ≥ 0.999, abs ≤ 0.005 | output -> 0, ULP not meaningful (max ~0.002) |
+    | Input range          | Check            | Reason                                          |
+    |----------------------|------------------|-------------------------------------------------|
+    | x <= -4              | device returns x | pins the identity branch exactly                |
+    | x <= -13             | ULP ≤ 2          | identity is within 2 ULP of golden from here on |
+    | -4 < x <= 0          | abs ≤ 0.02       | polynomial (max 0.0163)                         |
+    | 0 < x <= 4           | abs ≤ 0.005      | polynomial (max 0.0020)                         |
+    | x > 4, golden normal | rel ≤ 0.04       | fast-approx exp; abs is vacuous once            |
+    |                      |                  | |golden| < 0.005 (x > ~5.3)                     |
+    | golden < SNB         | exactly 0        | -exp(-x) underflows; device FTZs (x >= 87.5)    |
 
     Known kernel bug (#55457): for x > ~172 the
     large-positive branch diverges and eventually returns -inf (e.g. x=266
@@ -364,18 +416,29 @@ def test_log_sigmoid(device):
     result_neg = ttnn.to_torch(ttnn.log_sigmoid(tt_neg))
     result_pos = ttnn.to_torch(ttnn.log_sigmoid(tt_pos))
 
-    identity_exact = negative_domain.float() <= -13.0
-    assert_with_ulp(
-        expected_result=golden_neg[identity_exact], actual_result=result_neg[identity_exact], ulp_threshold=2
-    )
-    assert_allclose(golden_neg[~identity_exact], result_neg[~identity_exact], rtol=0, atol=0.02)
+    identity_branch = negative_domain <= -4.0
+    assert_equal(negative_domain[identity_branch], result_neg[identity_branch])
 
-    assert_with_pcc(golden_pos, result_pos, pcc=0.999)
-    assert_allclose(golden_pos, result_pos, rtol=0, atol=0.005)
+    identity_within_ulp = negative_domain <= -13.0
+    assert_with_ulp(
+        expected_result=golden_neg[identity_within_ulp],
+        actual_result=result_neg[identity_within_ulp],
+        ulp_threshold=2,
+    )
+    assert_allclose(golden_neg[~identity_branch], result_neg[~identity_branch], rtol=0, atol=0.02)
+
+    polynomial_pos = positive_domain <= 4.0
+    assert_allclose(golden_pos[polynomial_pos], result_pos[polynomial_pos], rtol=0, atol=0.005)
+
+    exp_underflow = ~polynomial_pos & (golden_pos.abs() < SMALLEST_NORMAL_BF16)
+    assert_ftz_band(result_pos, exp_underflow, "exp-branch underflow band")
+
+    exp_branch = ~polynomial_pos & ~exp_underflow
+    assert_allclose(golden_pos[exp_branch], result_pos[exp_branch], rtol=0.04, atol=0)
 
 
 # ─────────────────────────────────────────────────────────────────────────────
-# tanhshrink — x - tanh(x), PCC
+# tanhshrink — x - tanh(x), mpmath reference for |x| < 1
 # ─────────────────────────────────────────────────────────────────────────────
 
 
@@ -384,19 +447,19 @@ def test_tanhshrink(device):
 
     For |x| <= 1 the kernel uses x^3 * Q(x^2); for |x| > 1, |x| - tanh(|x|).
 
-    | Input range      | Check       | Reason                                                    |
-    |------------------|-------------|-----------------------------------------------------------|
-    | |x| < 1          | PCC ≥ 0.999 | torch's fp32 golden itself loses precision to x - tanh(x) |
-    |                  |             | cancellation (mpmath ULP check: issue #45520,             |
-    |                  |             | test_activation.py::test_tanhshrink_ulp)                  |
-    | 1 <= |x| < 1.625 | ULP ≤ 8     | partial cancellation magnifies tanh's ~1 ULP error        |
-    |                  |             | (x = 1.0078: tanh ≈ 0.765, result ≈ 0.243)                |
-    | |x| >= 1.625     | ULP ≤ 3     | tanh = 2*sigmoid(2|x|) - 1 doubles the sigmoid's rounding |
-    |                  |             | (max: WH 2 ULP, BH 3 ULP at x ≈ 1.80)                     |
+    | Input range        | Reference | Check     | Reason                                             |
+    |--------------------|-----------|-----------|----------------------------------------------------|
+    | |x| < 1, reference | mpmath    | exactly 0 | true result x^3/3 is below SNB                     |
+    | below SNB          |           |           | (|x| < ~3.3e-13); device FTZs                      |
+    | |x| < 1, elsewhere | mpmath    | ULP ≤ 3   | x^3 * Q(x^2) has no cancellation (max 2.1 ULP)     |
+    | 1 <= |x| < 1.625   | golden    | ULP ≤ 8   | partial cancellation magnifies tanh's ~1 ULP       |
+    |                    |           |           | error (x = 1.0078: tanh ≈ 0.765, result ≈ 0.243)   |
+    | |x| >= 1.625       | golden    | ULP ≤ 3   | tanh = 2*sigmoid(2|x|) - 1 doubles the sigmoid's   |
+    |                    |           |           | rounding (max: WH 2 ULP, BH 3 ULP at x ≈ 1.80)     |
 
-    Why not one PCC check over all inputs: tanh(x) never exceeds 1, so for
-    most inputs the output is almost exactly x. A broken kernel that just
-    returned x would still pass a whole-range PCC check.
+    For |x| < 1 the torch fp32 golden x - tanh(x) cancels (up to ~1.7e7 ULP
+    off), and so does float64 for |x| < ~1.7e-8, so the reference there is
+    computed with mpmath at 200-bit precision.
     """
     input_tensor = generate_float32_bits()
 
@@ -409,12 +472,23 @@ def test_tanhshrink(device):
     result = ttnn.to_torch(tt_result)
 
     abs_input = input_tensor.abs().float()
-    cancellation_band = abs_input < 1.0
+    small = abs_input < 1.0
     partial_cancellation = (abs_input >= 1.0) & (abs_input < 1.625)
     remaining = abs_input >= 1.625
+
+    with mp.workprec(200):
+        reference_small = torch.tensor(
+            [float(mpf(v) - mp_tanh(mpf(v))) for v in input_tensor[small].double().tolist()], dtype=torch.float64
+        ).float()
+    result_small = result[small]
+
+    underflow = reference_small.abs() < SMALLEST_NORMAL_BF16
+    assert_ftz_band(result_small, underflow, "small-|x| underflow band")
+    assert_with_ulp(
+        expected_result=reference_small[~underflow], actual_result=result_small[~underflow], ulp_threshold=3
+    )
 
     assert_with_ulp(
         expected_result=golden[partial_cancellation], actual_result=result[partial_cancellation], ulp_threshold=8
     )
     assert_with_ulp(expected_result=golden[remaining], actual_result=result[remaining], ulp_threshold=3)
-    assert_with_pcc(golden[cancellation_band], result[cancellation_band], pcc=0.999)
