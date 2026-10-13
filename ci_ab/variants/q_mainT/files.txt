@@ -1,0 +1,9 @@
+tt_metal/tt-llk/tests/helpers/include/sfpu_quant_scalar.h
+tt_metal/tt-llk/tests/python_tests/helpers/perf/test_schemas.py
+tt_metal/tt-llk/tests/python_tests/helpers/perf/wide_schema.py
+tt_metal/tt-llk/tests/python_tests/helpers/test_variant_parameters.py
+tt_metal/tt-llk/tests/python_tests/perf_sfpu_quant_scalar.py
+tt_metal/tt-llk/tests/python_tests/test_ra2_qprobe.py
+tt_metal/tt-llk/tests/python_tests/test_sfpu_quant_scalar.py
+tt_metal/tt-llk/tests/sources/sfpu_quant_scalar_perf.cpp
+tt_metal/tt-llk/tests/sources/sfpu_quant_scalar_test.cpp
