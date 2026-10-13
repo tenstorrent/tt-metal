@@ -128,14 +128,18 @@ constexpr bool _welford_recip_before_load_()
  *
  * @note The reciprocal is written to ckernel::p_sfpu::LREG7; without a table it also overwrites LREG0 and LREG6.
  */
+sfpi_inline void _load_recip_value_(const std::uint32_t reciprocal)
+{
+    TT_SFPLOADI(ckernel::p_sfpu::LREG7, sfpi::SFPLOADI_MOD0_UPPER, reciprocal >> 16);
+    TT_SFPLOADI(ckernel::p_sfpu::LREG7, sfpi::SFPLOADI_MOD0_LOWER, reciprocal & 0xFFFF);
+}
+
 template <std::size_t reciprocal_size>
 sfpi_inline void _load_recip_of_idx_(const std::uint32_t idx, const std::array<std::uint32_t, reciprocal_size>& reciprocal_lut)
 {
     if constexpr (reciprocal_size > 0)
     {
-        const auto reciprocal = reciprocal_lut[idx];
-        TT_SFPLOADI(ckernel::p_sfpu::LREG7, sfpi::SFPLOADI_MOD0_UPPER, reciprocal >> 16);
-        TT_SFPLOADI(ckernel::p_sfpu::LREG7, sfpi::SFPLOADI_MOD0_LOWER, reciprocal & 0xFFFF);
+        _load_recip_value_(reciprocal_lut[idx]);
         return;
     }
 
@@ -284,6 +288,38 @@ template <std::uint32_t input_lreg>
 sfpi_inline void _execute_welfords_row_replay_buffer_()
 {
     lltt::replay(WELFORD_INSTR_PER_ROW * input_lreg, WELFORD_INSTR_PER_ROW);
+}
+
+// Reads a table entry ahead of its use, so its L1 latency passes while earlier rows issue.
+template <std::size_t reciprocal_size>
+sfpi_inline std::uint32_t _read_recip_ahead_(const std::array<std::uint32_t, reciprocal_size>& reciprocal_lut, const std::uint32_t idx)
+{
+    std::uint32_t reciprocal = reciprocal_lut[idx];
+    asm volatile("" : "+r"(reciprocal));
+    return reciprocal;
+}
+
+// A table block after a tile's first: row 0's reciprocal, read from L1 one block ahead, is loaded before the block load,
+// where its two loads fill the first transpose's wait on the previous row's M2; rows 1 to 3 are read at the block's start.
+template <std::size_t reciprocal_size, std::uint32_t I, std::uint32_t J>
+sfpi_inline void _calculate_welfords_table_block_(
+    std::uint32_t start_idx, const std::array<std::uint32_t, reciprocal_size>& reciprocal_lut, const std::uint32_t row0_reciprocal)
+{
+    const std::uint32_t row1_reciprocal = _read_recip_ahead_(reciprocal_lut, start_idx + 1);
+    const std::uint32_t row2_reciprocal = _read_recip_ahead_(reciprocal_lut, start_idx + 2);
+    const std::uint32_t row3_reciprocal = _read_recip_ahead_(reciprocal_lut, start_idx + 3);
+    _load_recip_value_(row0_reciprocal);
+    _welfords_load_block_<I, J>();
+    _execute_welfords_row_replay_buffer_<ckernel::p_sfpu::LREG0>();
+
+    _load_recip_value_(row1_reciprocal);
+    _execute_welfords_row_replay_buffer_<ckernel::p_sfpu::LREG1>();
+
+    _load_recip_value_(row2_reciprocal);
+    _execute_welfords_row_replay_buffer_<ckernel::p_sfpu::LREG2>();
+
+    _load_recip_value_(row3_reciprocal);
+    _execute_welfords_row_replay_buffer_<ckernel::p_sfpu::LREG3>();
 }
 
 /**
@@ -1280,6 +1316,32 @@ sfpi_inline void _calculate_welfords_tile_(std::uint32_t start_idx, const std::a
     // We load 4 rows of a tile (with 32 columns each) at a time and process them.
     // To finish the entire tile, we need to repeat this process 8 times.
 
+#ifdef WELFORD_SFPU_EXACT_RECIP
+    if constexpr (reciprocal_size > 0)
+    {
+        std::uint32_t row0 = _read_recip_ahead_(reciprocal_lut, start_idx + 4);
+        _calculate_welfords_block_<reciprocal_size, 0, 0>(start_idx, reciprocal_lut);
+        std::uint32_t next = _read_recip_ahead_(reciprocal_lut, start_idx + 8);
+        _calculate_welfords_table_block_<reciprocal_size, 0, 1>(start_idx + 4, reciprocal_lut, row0);
+        row0 = next;
+        next = _read_recip_ahead_(reciprocal_lut, start_idx + 12);
+        _calculate_welfords_table_block_<reciprocal_size, 0, 2>(start_idx + 8, reciprocal_lut, row0);
+        row0 = next;
+        next = _read_recip_ahead_(reciprocal_lut, start_idx + 16);
+        _calculate_welfords_table_block_<reciprocal_size, 0, 3>(start_idx + 12, reciprocal_lut, row0);
+        row0 = next;
+        next = _read_recip_ahead_(reciprocal_lut, start_idx + 20);
+        _calculate_welfords_table_block_<reciprocal_size, 1, 0>(start_idx + 16, reciprocal_lut, row0);
+        row0 = next;
+        next = _read_recip_ahead_(reciprocal_lut, start_idx + 24);
+        _calculate_welfords_table_block_<reciprocal_size, 1, 1>(start_idx + 20, reciprocal_lut, row0);
+        row0 = next;
+        next = _read_recip_ahead_(reciprocal_lut, start_idx + 28);
+        _calculate_welfords_table_block_<reciprocal_size, 1, 2>(start_idx + 24, reciprocal_lut, row0);
+        _calculate_welfords_table_block_<reciprocal_size, 1, 3>(start_idx + 28, reciprocal_lut, next);
+        return;
+    }
+#endif
     // Process the first block (4 rows of 32 columns)
     _calculate_welfords_block_<reciprocal_size, 0, 0>(start_idx, reciprocal_lut);
 
