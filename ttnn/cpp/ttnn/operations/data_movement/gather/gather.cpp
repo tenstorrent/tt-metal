@@ -49,13 +49,73 @@ namespace {
 namespace CMAKE_UNIQUE_NAMESPACE {
 
 /**
+ * @brief Slices the dims that the rank > 4 fold merges down to the index tensor's extents.
+ *
+ * For rank > 4, transform_to_4d_tensor merges the leading rank - 3 dims into one, each tensor with its own extents.
+ * Once the index is smaller than the input on one of those dims, the merged dim no longer names the same element in
+ * both tensors, and the 4D slice in pre_gather_transform_tensor cannot repair that. Slicing those dims while they are
+ * still separate makes input and index fold identically. The last three dims are left to the 4D slice.
+ *
+ * @param transposed_input The input tensor after the gather dimension has been transposed to the last position
+ * @param dim The non-negative dimension along which the gather operation will be performed
+ * @param is_dim_last_idx Flag indicating if the gather dimension is the last dimension
+ * @param index_tensor_lshape Logical shape of the index tensor before any transformation
+ *
+ * @return Tensor The input tensor with its merged dims sliced to the index tensor's extents
+ *
+ * @throws TT_FATAL if the ranks differ or the index is larger than the input on a merged dim
+ */
+Tensor slice_merged_dims_to_index(
+    const Tensor& transposed_input,
+    const int8_t dim,
+    const bool is_dim_last_idx,
+    const ttnn::Shape& index_tensor_lshape) {
+    const auto& input_lshape = transposed_input.logical_shape();
+    const auto rank = input_lshape.rank();
+    TT_FATAL(
+        index_tensor_lshape.rank() == rank,
+        "Input and index tensor must have the same number of dimensions. Got input dim: {} and index dim: {}",
+        rank,
+        index_tensor_lshape.rank());
+
+    // The index tensor's extents in the input's transposed layout
+    ttsl::SmallVector<uint32_t> index_extents(index_tensor_lshape.cbegin(), index_tensor_lshape.cend());
+    if (!is_dim_last_idx) {
+        std::swap(index_extents[dim], index_extents[rank - 1]);
+    }
+
+    ttsl::SmallVector<uint32_t> end_index(input_lshape.cbegin(), input_lshape.cend());
+    for (size_t i = 0; i < rank - 3; ++i) {
+        // The transposed tensor holds the caller's last dimension at position dim
+        const size_t caller_dim = (!is_dim_last_idx && i == static_cast<size_t>(dim)) ? rank - 1 : i;
+        TT_FATAL(
+            index_extents[i] <= input_lshape[i],
+            "gather: index tensor size {} on dimension {} exceeds the input tensor size {}; only dimension {} may be "
+            "larger",
+            index_extents[i],
+            caller_dim,
+            input_lshape[i],
+            dim);
+        end_index[i] = index_extents[i];
+    }
+    if (ttnn::Shape{end_index} == input_lshape) {
+        return transposed_input;
+    }
+
+    const ttsl::SmallVector<uint32_t> start_index(rank, 0);
+    const ttsl::SmallVector<uint32_t> step(rank, 1);
+    return ttnn::slice(transposed_input, start_index, end_index, step);
+}
+
+/**
  * @brief Transforms an input tensor for gather operation by applying necessary preprocessing steps.
  *
  * This function prepares the input tensor for gather operations by performing several transformations:
  * 1. Transposes the tensor if the gather dimension is not the last dimension
  * 2. Transforms the tensor to 4D if it has rank <= 4
  * 3. For index tensors: applies implicit tile padding with zeros
- * 4. For input tensors: slices to match index tensor shape and applies padding with minimum float values
+ * 4. For input tensors: slices to match index tensor shape and applies padding with minimum float values. For rank > 4
+ *    the dims the 4D fold merges are sliced before the fold, see slice_merged_dims_to_index
  *
  * @param input_tensor The tensor to be transformed
  * @param dim The dimension along which the gather operation will be performed
@@ -63,6 +123,8 @@ namespace CMAKE_UNIQUE_NAMESPACE {
  * @param is_rank_le_4d Flag indicating if the tensor rank is less than or equal to 4
  * @param padding_index_tensor Optional flag to indicate if this is an index tensor requiring padding (default: false)
  * @param index_tensor_padded_shape Optional shape of the padded index tensor used for slicing (default: empty)
+ * @param index_tensor_lshape Optional logical shape of the index tensor before any transformation, used for slicing
+ * input tensors of rank > 4 (default: empty)
  *
  * @return Tensor The transformed tensor ready for gather operation
  *
@@ -76,14 +138,18 @@ Tensor pre_gather_transform_tensor(
     const bool is_dim_last_idx,
     const bool is_rank_le_4d,
     const bool padding_index_tensor = false,
-    const ttnn::Shape& index_tensor_padded_shape = {}) {
+    const ttnn::Shape& index_tensor_padded_shape = {},
+    const ttnn::Shape& index_tensor_lshape = {}) {
     if (input_tensor.logical_shape() == ttnn::Shape{1}) {
         // Early exit for scalar tensors, return the same tensor
         return input_tensor;
     }
 
     // If dim is not last dimension transpose it
-    const Tensor transposed_tensor = reduction_common::perform_transpose(input_tensor, is_dim_last_idx, dim, -1);
+    Tensor transposed_tensor = reduction_common::perform_transpose(input_tensor, is_dim_last_idx, dim, -1);
+    if (!padding_index_tensor && !is_rank_le_4d) {
+        transposed_tensor = slice_merged_dims_to_index(transposed_tensor, dim, is_dim_last_idx, index_tensor_lshape);
+    }
     // If input is not rank 4 transform it to 4D
     const Tensor transformed_tensor = reduction_common::transform_to_4d_tensor(transposed_tensor, is_rank_le_4d);
 
@@ -122,8 +188,8 @@ Tensor pre_gather_transform_tensor(
  * The transformation process handles two main scenarios:
  * 1. For tensors with rank <= 4: Squeezes the tensor from 4D representation back to original rank,
  *    and optionally transposes if the gather dimension wasn't the last index.
- * 2. For tensors with rank > 4: Performs transpose operations with adjusted dimension indices to account
- *    for rank differences, then reshapes to match the original input shape.
+ * 2. For tensors with rank > 4: Reshapes back to the transposed rank > 4 shape, then transposes the gather
+ *    dimension back from the last position if it wasn't the last index.
  *
  * @param index_tensor The original index tensor used in the gather operation (used for shape reference and memory
  * config)
@@ -157,14 +223,17 @@ Tensor post_gather_transform_tensor(
         }
     } else if (orig_rank > 4) {
         // For tensors above rank 4: reverse the order of pre_gather_transform_tensor
-        // First transpose while still in 4D, then reshape to original higher-dimensional form
+        // First reshape back to the transposed higher-dimensional form, then transpose at that rank. The 4D fold
+        // merged the leading dims, so a dim before rank - 3 has no 4D axis of its own to transpose.
+        ttsl::SmallVector<uint32_t> transposed_shape(input_shape.cbegin(), input_shape.cend());
         if (!is_dim_last_idx) {
             const auto index_dim = (dim < 0) ? (orig_rank + dim) : dim;
-            const auto dim_adj = index_dim + (output_tensor.padded_shape().rank() - orig_rank);
-            output_tensor = ttnn::transpose(output_tensor, dim_adj, -1, index_tensor.memory_config());
+            std::swap(transposed_shape[index_dim], transposed_shape[orig_rank - 1]);
         }
-        ttsl::SmallVector<uint32_t> result_shape(input_shape.cbegin(), input_shape.cend());
-        output_tensor = ttnn::reshape(output_tensor, ttnn::Shape{result_shape});
+        output_tensor = ttnn::reshape(output_tensor, ttnn::Shape{transposed_shape});
+        if (!is_dim_last_idx) {
+            output_tensor = ttnn::transpose(output_tensor, dim, -1, index_tensor.memory_config());
+        }
     }
 
     TT_FATAL(
@@ -315,7 +384,8 @@ Tensor gather_dispatch(
         input_tensor_is_dim_last_idx,
         input_tensor_is_rank_le_4d,
         false,
-        padded_index_tensor.padded_shape());
+        padded_index_tensor.padded_shape(),
+        original_index_tensor_lshape);
 
     std::optional<Tensor> optional_output_tensor_value = std::nullopt;
     if (optional_output_tensor.has_value()) {

@@ -568,3 +568,74 @@ def test_gather_codegen_invalid_index_public_reproduction(device):
     expected = torch.gather(x, 0, index.masked_fill(~valid, 0))
     assert actual.shape == expected.shape, f"Public gather reproduction returned shape {actual.shape}"
     assert torch.equal(actual[valid], expected[valid]), "Invalid index corrupted valid BF16 gather positions"
+
+
+# --- Rank > 4 ---
+#
+# Above rank 4 the gathered dim is transposed to the last position and the leading rank - 3 dims are
+# merged into one, and that has to be undone on the way out. Two ways it went wrong (#56880):
+#   - dim < rank - 3 puts the gathered axis inside the merged dim, where the inverse transposed the
+#     wrong axis (item 18 of #58402);
+#   - an index smaller than the input on an inner merged dim folds the two tensors with different
+#     extents, so the merged dim named a different element in each.
+# Only `tile` routes to codegen; `tile_native` pins the native prim on the same TILE tensors.
+_RANK_GT_4_CASES = [
+    # (input_shape, index_shape, dim)
+    # Gathered axis inside the merged dim.
+    ([2, 2, 32, 32, 64], [2, 2, 32, 32, 64], 1),
+    ([2, 3, 1, 1, 32], [2, 3, 1, 1, 32], 0),
+    ([2, 3, 1, 1, 32], [2, 3, 1, 1, 32], 1),
+    ([2, 3, 4, 5, 64], [2, 3, 4, 5, 64], 0),
+    ([2, 3, 2, 4, 5, 32], [2, 3, 2, 4, 5, 32], 0),
+    ([2, 3, 2, 4, 5, 32], [2, 3, 2, 4, 5, 32], 1),
+    ([2, 3, 2, 4, 5, 32], [2, 3, 2, 4, 5, 32], 2),
+    # Index smaller than the input on an inner merged dim.
+    ([2, 3, 4, 5, 64], [2, 2, 4, 5, 64], -1),
+    ([2, 3, 4, 5, 64], [2, 2, 3, 5, 64], -1),
+    ([2, 3, 4, 5, 6, 64], [2, 3, 2, 5, 6, 64], -1),
+    ([2, 3, 4, 5, 64], [2, 2, 4, 5, 64], 2),
+    # Both at once.
+    ([2, 3, 4, 5, 64], [2, 2, 4, 5, 32], 0),
+    ([2, 3, 4, 5, 64], [2, 2, 4, 5, 32], 1),
+    # Already correct: the gathered axis stays outside the merged dim, the merged dim is only the
+    # leading 1s plus the gathered axis, or only the outermost dim differs.
+    ([2, 3, 1, 1, 32], [2, 3, 1, 1, 32], 2),
+    ([2, 3, 2, 4, 5, 32], [2, 3, 2, 4, 5, 32], 3),
+    ([1, 2, 3, 4, 64], [1, 2, 3, 4, 64], 1),
+    ([2, 3, 4, 5, 64], [1, 3, 4, 5, 64], -1),
+]
+
+
+@pytest.mark.parametrize("route", ["tile", "tile_native", "row_major"])
+@pytest.mark.parametrize("input_shape, index_shape, dim", _RANK_GT_4_CASES)
+def test_gather_rank_gt_4(input_shape, index_shape, dim, route, device):
+    torch.manual_seed(0)
+
+    input = torch.randn(input_shape, dtype=torch.bfloat16)
+    index = torch.randint(0, input_shape[dim], index_shape, dtype=torch.int64)
+    torch_gather = torch.gather(input, dim, index)
+
+    layout = ttnn.ROW_MAJOR_LAYOUT if route == "row_major" else ttnn.TILE_LAYOUT
+    ttnn_input = ttnn.from_torch(input, ttnn.bfloat16, layout=layout, device=device)
+    ttnn_index = ttnn.from_torch(index, ttnn.uint16, layout=layout, device=device)
+
+    if route == "tile_native":
+        ttnn_gather = _force_native(ttnn_input, dim, ttnn_index)
+    else:
+        ttnn_gather = ttnn.gather(ttnn_input, dim, index=ttnn_index)
+
+    assert ttnn_gather.shape == index.shape
+    assert_equal(torch_gather, ttnn.to_torch(ttnn_gather))
+
+
+def test_gather_rank_gt_4_index_larger_on_merged_dim(device, expect_error):
+    # [2, 3] and [3, 2] merge to the same extent, so only a per-dim check sees the index running past
+    # the input on dim 0. torch.gather rejects it too.
+    input_shape, index_shape, dim = [2, 3, 4, 5, 64], [3, 2, 4, 5, 64], -1
+    input = torch.randn(input_shape, dtype=torch.bfloat16)
+    index = torch.randint(0, input_shape[dim], index_shape, dtype=torch.int64)
+
+    ttnn_input = ttnn.from_torch(input, ttnn.bfloat16, layout=ttnn.TILE_LAYOUT, device=device)
+    ttnn_index = ttnn.from_torch(index, ttnn.uint16, layout=ttnn.TILE_LAYOUT, device=device)
+    with expect_error(RuntimeError, "exceeds the input tensor size"):
+        ttnn.gather(ttnn_input, dim, index=ttnn_index)
