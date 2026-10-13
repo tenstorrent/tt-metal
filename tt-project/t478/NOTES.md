@@ -59,3 +59,17 @@ MiniMax-H3 weights are on blx01 (/var/tmp/fasth3/models/lightx2v-h3-turbo-sla). 
 - build478.sh now skips extraction of an already-extracted tree and sets CMAKE_BUILD_PARALLEL_LEVEL=24.
   Restarted 19:01 UTC (ninja resumed at ~130/310). chain478 restarted (run 1805; log state/runs/1805/chain478.log,
   rc state/runs/1805/chain478.rc, state worktrees/t481/tmp/chain478/{job,marker}).
+
+## Gate 1 result (blx01 broker job 204, 2026-10-13 12:09-12:12 PDT, exit 0, runtime 138 s)
+AICLK clamped at 900 MHz. Relative numbers only (bundle/base, best of 10 rounds):
+```
+T478 layer: bundle/base best 1.0045 (-0.45% faster)
+T478 ring_joint_sdpa: bundle/base best 1.0044 (-0.44% faster)
+T478 bit-identical shards: 32/32
+```
+- Bit-identical: yes (32/32 device shards). No pick breaks bit-identity.
+- Speed: none; bundle is 0.45% slower, within run-to-run noise. Gate 2 (>=1% faster) NOT met, so the 10 s e2e
+  A/B was not run.
+- Measured device time for this job: 138 s (each arm process 60 s, compare 15 s). Next job of this shape: -t 210.
+- No drops. Log: out/job204_run.log, summary out/job204_summary.txt.
+- Cleanup: /var/tmp/fasth3/t478 on blx01 removed (7.0 GB: both trees, builds, JIT caches, dumps).

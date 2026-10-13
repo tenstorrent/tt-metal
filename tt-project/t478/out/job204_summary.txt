@@ -1,0 +1,24 @@
+267:2026-10-13 19:10:28.552 | INFO     | models.tt_dit.tests.models.minimax_h3.test_sdpa_fidelity_timing_minimax_h3:test_attention_layer_dump_10s:188 - T478 arm: sdpa_matmul_fidelity=MathFidelity.LoFi
+395:2026-10-13 19:10:39.325 | INFO     | models.tt_dit.tests.models.minimax_h3.test_sdpa_fidelity_timing_minimax_h3:test_attention_layer_dump_10s:223 - T478 arm: layer best 40.35 ms mean 40.60; ring_joint_sdpa best 32.70 ms mean 33.16 (10 rounds)
+692:2026-10-13 19:11:29.023 | INFO     | models.tt_dit.tests.models.minimax_h3.test_sdpa_fidelity_timing_minimax_h3:test_attention_layer_dump_10s:188 - T478 arm: sdpa_matmul_fidelity=MathFidelity.LoFi
+820:2026-10-13 19:11:39.975 | INFO     | models.tt_dit.tests.models.minimax_h3.test_sdpa_fidelity_timing_minimax_h3:test_attention_layer_dump_10s:223 - T478 arm: layer best 40.54 ms mean 40.76; ring_joint_sdpa best 32.85 ms mean 33.33 (10 rounds)
+872:2026-10-13 19:12:01.727 | INFO     | models.tt_dit.tests.models.minimax_h3.test_sdpa_fidelity_timing_minimax_h3:test_attention_layer_dumps_bit_identical:238 - T478 layer: bundle/base best 1.0045 (-0.45% faster)
+873:2026-10-13 19:12:01.728 | INFO     | models.tt_dit.tests.models.minimax_h3.test_sdpa_fidelity_timing_minimax_h3:test_attention_layer_dumps_bit_identical:238 - T478 ring_joint_sdpa: bundle/base best 1.0044 (-0.44% faster)
+874:2026-10-13 19:12:01.728 | INFO     | models.tt_dit.tests.models.minimax_h3.test_sdpa_fidelity_timing_minimax_h3:test_attention_layer_dumps_bit_identical:240 - T478 bit-identical shards: 32/32
+2026-10-13 19:10:28.552 | INFO     | models.tt_dit.tests.models.minimax_h3.test_sdpa_fidelity_timing_minimax_h3:test_attention_layer_dump_10s:188 - T478 arm: sdpa_matmul_fidelity=MathFidelity.LoFi
+2026-10-13 19:10:39.325 | INFO     | models.tt_dit.tests.models.minimax_h3.test_sdpa_fidelity_timing_minimax_h3:test_attention_layer_dump_10s:223 - T478 arm: layer best 40.35 ms mean 40.60; ring_joint_sdpa best 32.70 ms mean 33.16 (10 rounds)
+category             seconds   %wall   count   notes
+TOTAL (wall)            20.7  100.0%
+[t478] base process wall 60 s rc=0
+2026-10-13 19:11:29.023 | INFO     | models.tt_dit.tests.models.minimax_h3.test_sdpa_fidelity_timing_minimax_h3:test_attention_layer_dump_10s:188 - T478 arm: sdpa_matmul_fidelity=MathFidelity.LoFi
+2026-10-13 19:11:39.975 | INFO     | models.tt_dit.tests.models.minimax_h3.test_sdpa_fidelity_timing_minimax_h3:test_attention_layer_dump_10s:223 - T478 arm: layer best 40.54 ms mean 40.76; ring_joint_sdpa best 32.85 ms mean 33.33 (10 rounds)
+category             seconds   %wall   count   notes
+TOTAL (wall)            20.9  100.0%
+[t478] bundle process wall 60 s rc=0
+2026-10-13 19:12:01.727 | INFO     | models.tt_dit.tests.models.minimax_h3.test_sdpa_fidelity_timing_minimax_h3:test_attention_layer_dumps_bit_identical:238 - T478 layer: bundle/base best 1.0045 (-0.45% faster)
+2026-10-13 19:12:01.728 | INFO     | models.tt_dit.tests.models.minimax_h3.test_sdpa_fidelity_timing_minimax_h3:test_attention_layer_dumps_bit_identical:238 - T478 ring_joint_sdpa: bundle/base best 1.0044 (-0.44% faster)
+2026-10-13 19:12:01.728 | INFO     | models.tt_dit.tests.models.minimax_h3.test_sdpa_fidelity_timing_minimax_h3:test_attention_layer_dumps_bit_identical:240 - T478 bit-identical shards: 32/32
+category             seconds   %wall   count   notes
+TOTAL (wall)             0.0  100.0%
+[t478] compare process wall 15 s rc=0
+T478_EXIT=0 base=0 bundle=0
