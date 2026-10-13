@@ -14,6 +14,7 @@
 #include <optional>
 #include <thread>
 #include <unordered_map>
+#include <unordered_set>
 #include <utility>
 #include <vector>
 
@@ -63,6 +64,19 @@ public:
     // Requests the receiver to run a finish-path sync and blocks until it completes or times out; throttled to one
     // request per 60s and a no-op when no devices are active.
     void trigger_sync_check();
+
+    // Delivers records to `callback` on its own thread until remove_consumer() or shutdown(); shutdown() drains the
+    // remaining records into it first. With `chip_filter`, only records from those chips are delivered. A no-op when
+    // no device is active or after shutdown(). Must not be called from a callback.
+    void add_consumer(
+        tt::ProgramRealtimeProfilerCallbackHandle handle,
+        tt::ProgramRealtimeProfilerCallback callback,
+        std::optional<std::unordered_set<uint32_t>> chip_filter = std::nullopt);
+    // Blocks until an in-flight invocation of the callback returns. A no-op for an unknown handle. Must not be called
+    // from a callback.
+    void remove_consumer(tt::ProgramRealtimeProfilerCallbackHandle handle);
+    // True if any device (restricted to `chip_filter` when given) has a running profiler.
+    bool is_active(const std::optional<std::unordered_set<uint32_t>>& chip_filter = std::nullopt) const;
 
     // RT-profiler diagnostics
     uint32_t peak_fifo_pages() const { return peak_fifo_pages_.load(std::memory_order_relaxed); }
@@ -140,11 +154,16 @@ private:
         Consumer(
             RecordRing::Reader reader,
             tt::ProgramRealtimeProfilerCallback callback,
-            tt::ProgramRealtimeProfilerCallbackHandle handle) :
-            reader(std::move(reader)), callback(std::move(callback)), handle(handle) {}
+            tt::ProgramRealtimeProfilerCallbackHandle handle,
+            std::optional<std::unordered_set<uint32_t>> chip_filter) :
+            reader(std::move(reader)),
+            callback(std::move(callback)),
+            handle(handle),
+            chip_filter(std::move(chip_filter)) {}
         RecordRing::Reader reader;
         tt::ProgramRealtimeProfilerCallback callback;
         tt::ProgramRealtimeProfilerCallbackHandle handle;
+        std::optional<std::unordered_set<uint32_t>> chip_filter;
         std::atomic<ConsumerStopMode> stop_mode{ConsumerStopMode::Running};
         uint64_t dropped = 0;
         std::thread thread;
@@ -224,6 +243,7 @@ private:
     std::optional<RecordRing> ring_;
     std::mutex consumers_mutex_;
     std::unordered_map<tt::ProgramRealtimeProfilerCallbackHandle, std::unique_ptr<Consumer>> consumers_;
+    bool consumers_shut_down_ = false;  // guarded by consumers_mutex_
 };
 
 }  // namespace distributed

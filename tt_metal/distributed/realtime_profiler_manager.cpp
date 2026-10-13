@@ -906,6 +906,11 @@ void RealtimeProfilerManager::run_init_sync() {
     });
 
     tracy_handler_ = std::make_unique<RealtimeProfilerTracyHandler>();
+#if defined(TRACY_ENABLE)
+    add_consumer(
+        tt::AllocateProgramRealtimeProfilerCallbackHandle(),
+        [handler = tracy_handler_.get()](const tt::ProgramRealtimeRecordBatch& batch) { handler->HandleBatch(batch); });
+#endif
     for (const auto& dev_state : devices_) {
         tracy_handler_->AddDevice(
             dev_state.chip_id,
@@ -1182,7 +1187,15 @@ void RealtimeProfilerManager::run_consumer(Consumer& consumer) {
             break;
         }
         if (!batch.empty()) {
-            deliver_batch(batch, dropped_total);
+            if (consumer.chip_filter.has_value()) {
+                const auto kept_end = std::remove_if(batch.begin(), batch.end(), [&](const auto& record) {
+                    return !consumer.chip_filter->contains(record.chip_id);
+                });
+                batch = batch.first(static_cast<size_t>(kept_end - batch.begin()));
+            }
+            if (!batch.empty()) {
+                deliver_batch(batch, dropped_total);
+            }
         } else if (stop_mode == ConsumerStopMode::DrainThenStop) {
             break;
         } else {
@@ -1203,18 +1216,33 @@ void RealtimeProfilerManager::stop_consumer(Consumer& consumer, ConsumerStopMode
 
 void RealtimeProfilerManager::on_callback_registered(
     tt::ProgramRealtimeProfilerCallbackHandle handle, const tt::ProgramRealtimeProfilerCallback& callback) {
-    auto consumer = std::make_unique<Consumer>(ring_->make_reader(), callback, handle);
-    Consumer* raw = consumer.get();
+    add_consumer(handle, callback);
+}
+
+void RealtimeProfilerManager::on_callback_unregistered(tt::ProgramRealtimeProfilerCallbackHandle handle) {
+    remove_consumer(handle);
+}
+
+void RealtimeProfilerManager::add_consumer(
+    tt::ProgramRealtimeProfilerCallbackHandle handle,
+    tt::ProgramRealtimeProfilerCallback callback,
+    std::optional<std::unordered_set<uint32_t>> chip_filter) {
     std::lock_guard<std::mutex> lock(consumers_mutex_);
     const auto caller = std::this_thread::get_id();
     const bool from_callback_thread =
         std::ranges::any_of(consumers_, [caller](const auto& kv) { return kv.second->thread.get_id() == caller; });
     TT_FATAL(!from_callback_thread, "A real-time profiler callback must not register callbacks");
+    if (!ring_.has_value() || consumers_shut_down_) {
+        return;
+    }
+    auto consumer =
+        std::make_unique<Consumer>(ring_->make_reader(), std::move(callback), handle, std::move(chip_filter));
+    Consumer* raw = consumer.get();
     consumers_.emplace(handle, std::move(consumer));
     raw->thread = std::thread([this, raw]() { run_consumer(*raw); });
 }
 
-void RealtimeProfilerManager::on_callback_unregistered(tt::ProgramRealtimeProfilerCallbackHandle handle) {
+void RealtimeProfilerManager::remove_consumer(tt::ProgramRealtimeProfilerCallbackHandle handle) {
     std::unique_ptr<Consumer> consumer;
     {
         std::lock_guard<std::mutex> lock(consumers_mutex_);
@@ -1234,6 +1262,12 @@ void RealtimeProfilerManager::on_callback_unregistered(tt::ProgramRealtimeProfil
     if (dropped > 0) {
         log_warning(tt::LogMetal, "[Real-time profiler] Callback {} dropped {} record(s)", handle, dropped);
     }
+}
+
+bool RealtimeProfilerManager::is_active(const std::optional<std::unordered_set<uint32_t>>& chip_filter) const {
+    return std::ranges::any_of(devices_, [&](const DeviceState& dev_state) {
+        return !chip_filter.has_value() || chip_filter->contains(dev_state.chip_id);
+    });
 }
 
 RealtimeProfilerManager::~RealtimeProfilerManager() { shutdown(); }
@@ -1377,6 +1411,7 @@ void RealtimeProfilerManager::shutdown() {
 
     {
         std::lock_guard<std::mutex> lock(consumers_mutex_);
+        consumers_shut_down_ = true;
         for (auto& [handle, consumer] : consumers_) {
             stop_consumer(*consumer, ConsumerStopMode::DrainThenStop);
         }
@@ -1618,3 +1653,21 @@ void RealtimeProfilerManager::trigger_sync_check() {
 }
 
 }  // namespace tt::tt_metal::distributed
+
+namespace tt::tt_metal::experimental {
+
+ProgramRealtimeProfilerCallbackHandle RegisterProgramRealtimeProfilerCallback(
+    distributed::MeshDevice& mesh_device, ProgramRealtimeProfilerCallback callback) {
+    return mesh_device.impl().register_realtime_profiler_callback(std::move(callback));
+}
+
+void UnregisterProgramRealtimeProfilerCallback(
+    distributed::MeshDevice& mesh_device, ProgramRealtimeProfilerCallbackHandle handle) {
+    mesh_device.impl().unregister_realtime_profiler_callback(handle);
+}
+
+bool IsProgramRealtimeProfilerActive(const distributed::MeshDevice& mesh_device) {
+    return mesh_device.impl().is_realtime_profiler_active();
+}
+
+}  // namespace tt::tt_metal::experimental

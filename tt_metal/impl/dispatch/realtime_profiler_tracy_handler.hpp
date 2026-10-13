@@ -14,8 +14,7 @@
 namespace tt::tt_metal {
 
 // Manages Tracy contexts for real-time profiler.
-// Registers itself as a ProgramRealtimeProfilerCallback and routes records to the correct
-// Tracy context based on chip_id. Thread-safe for AddDevice/RemoveDevice.
+// Routes records to the correct Tracy context based on chip_id. Thread-safe for AddDevice/RemoveDevice.
 class RealtimeProfilerTracyHandler {
 public:
     RealtimeProfilerTracyHandler();
@@ -29,6 +28,9 @@ public:
 
     // Remove and destroy the Tracy context for the given device.
     void RemoveDevice(uint32_t chip_id);
+
+    // Pushes a batch of program records to Tracy; does nothing while no Tracy client is connected.
+    void HandleBatch(const tt::ProgramRealtimeRecordBatch& batch);
 
     // Callback handler invoked by the real-time profiler system for each program record.
     void HandleRecord(const tt::ProgramRealtimeRecord& record);
@@ -76,9 +78,6 @@ private:
     std::unordered_map<uint32_t, TracyTTCtx> tracy_contexts_;
     std::unordered_map<uint32_t, DispatchStallMessageState> dispatch_stall_messages_;
     SkippedEndBeforeStartStats skipped_end_before_start_stats_;
-#if defined(TRACY_ENABLE)
-    tt::ProgramRealtimeProfilerCallbackHandle callback_handle_;
-#endif
 };
 
 }  // namespace tt::tt_metal
