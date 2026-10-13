@@ -174,3 +174,6 @@
 - Needed by: rebase onto origin/llk_helper_library @ `bdc576fa652` (2026-10-12)
 - Files: `device/mcast_wire.hpp`, `device/rms_norm_ttnn_program_factory.cpp`, `rms_norm_ttnn_program_descriptor.py`,
   `kernels/rms_norm_ttnn_writer.cpp` (comment only)
+
+### Tests: glm53_flash_d_p kv_a_layernorm case re-captured (O.1, 2026-10-13)
+- GLM's [1, 1, 5120, 512] fp32 case (no longer called) replaced by the striped-latent [1, 1, 1280, 512] fp32 call (`tests/cases.py`). No op change.

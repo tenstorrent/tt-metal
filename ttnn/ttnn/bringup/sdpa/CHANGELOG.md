@@ -211,3 +211,6 @@ Build fixes after fork_op.py (no behaviour change):
   five such cases in `tests/cases.py` (mimo_v2_6_d_p x2, mimo_v2_6_d_p_2x2 x2, xing40_a4b_d_p ring_mla) and the
   models' `results/fork_calls.json` are re-keyed (same call, recomputed sig; checked against a fresh mimo_v2_6_d_p_2x2
   capture). Unit suite 28 passed / 10 skipped (the 8-device Xing cases), model cases 5 passed / 1 skipped (Xing).
+
+### Tests: glm53_flash_d_p sparse_sdpa case re-captured (O.1, 2026-10-13)
+- GLM's replicated-cache sparse_sdpa case replaced by its block-cyclic striped-latent call (kv [1, 1, 81920, 512], block_cyclic_sp_axis 0 / chunk_local 2560 / cache_tp_sharded, natural ids); `tests/test_sdpa.py` lays kv out striped and passes the block_cyclic_* arguments, `tests/reference.py` gains the natural <- physical map. No op change.

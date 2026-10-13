@@ -61,3 +61,19 @@ def sparse_sdpa(q, kv, idx, *, scale, v_dim, rows=64):
         s = s.masked_fill(~valid[None], float("-inf"))
         out[0, :, r0 : r0 + rows] = torch.einsum("hrw,rwv->hrv", s.softmax(-1), sel[..., :v_dim])
     return out
+
+
+def block_cyclic_natural_of_physical(t: int, stripes: int, stripe_chunk: int) -> torch.Tensor:
+    """[t] int64: the natural token held by each physical row of a block-cyclic striped cache (the sparse_sdpa
+    block_cyclic_* layout; kernels/dataflow/block_cyclic_remap.hpp). Natural n = slab * stripes * stripe_chunk +
+    stripe * stripe_chunk + w sits at physical stripe * (t / stripes) + slab * stripe_chunk + w (stripe L = linear
+    chip sp_coord * tp + tp_coord for a TP-sharded cache)."""
+    slab_len = stripes * stripe_chunk
+    assert t % slab_len == 0
+    n = torch.arange(t)
+    slab, stripe, w = n // slab_len, (n % slab_len) // stripe_chunk, n % stripe_chunk
+    phys = stripe * (t // stripes) + slab * stripe_chunk + w
+    out = torch.empty(t, dtype=torch.int64)
+    out[phys] = n
+    assert torch.equal(out.sort().values, n)
+    return out

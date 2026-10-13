@@ -40,3 +40,6 @@ Tests: `tests/unit/` (the source branch's `tests/ttnn/unit_tests/operations/ccl/
   LoudBox row (no wrap cable): its closing hop was routed back through the line and the call deadlocked.
 - Needed by: glm53_flash_d_p_lb (fabric_reduce_scatter ring / full mesh, which plans with this module)
 - Files: fabric_all_gather_py.py; ttnn/cpp/ttnn-nanobind/fabric.cpp + ttnn/ttnn/__init__.py (the binding)
+
+### Tests: fork test suite with glm53_flash_d_p cases (O.1, 2026-10-13)
+- Model-case suite `tests/cases.py`, `tests/reference.py`, `tests/test_fabric_all_gather_ttnn.py`: GLM's four calls (axis 0 / axis 1 TILE row gathers, the full-mesh ROW_MAJOR striped-latent prefix gather with gathered_dim_size), bit-exact incl. the untouched fill, plus determinism. No op change.

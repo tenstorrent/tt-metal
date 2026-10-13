@@ -39,3 +39,6 @@ Mechanical fork changes (fork_op.py): namespace `ttnn::operations::bringup`, CMa
   device/prepare_chunk_recurrence_device_operation.{hpp,cpp}, device/prepare_chunk_recurrence_program_factory.cpp
   (masks, define, -O2), device/kernels/compute/prepare_chunk_recurrence.cpp, device/kernels/dataflow/
   reader_prepare_chunk_recurrence.cpp; sources.cmake (dropped the source family's kda_nanobind.cpp)
+
+### Tests: fork test suite with a glm53_flash_d_p case (O.1, 2026-10-13)
+- Model-case suite `tests/cases.py`, `tests/reference.py`, `tests/test_prepare_chunk_recurrence.py` (+ `tests/__init__.py`): GLM's call (2x2, SP axis 0, 2560 rows, 32 heads x 128, gate_scale -5, beta logits at column 16512, precise_gate_factors), seven outputs vs a float64 reference, plus determinism. No op change.
