@@ -1,0 +1,2 @@
+tt_metal/tt-llk/tests/sfpi-info.sh
+tt_metal/tt-llk/tests/sfpi-version
