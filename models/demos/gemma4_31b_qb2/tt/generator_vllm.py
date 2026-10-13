@@ -229,6 +229,7 @@ class Gemma4ForCausalLM:
         reload_page_table=False,
         reload_sampling_params=True,
         reset_sampling_state=True,
+        slot_remap=None,
         **kwargs,
     ):
         if "reset_batch" in kwargs:
@@ -243,9 +244,11 @@ class Gemma4ForCausalLM:
         if reload_inputs:
             tables = self._tables(kv_cache, page_tables_per_layer)
             # A row entering decode no longer needs its private prefill tail.
-            # Page IDs can be shared and do not identify the request history.
-            for slot, position in enumerate(start_pos):
+            # The plugin notifies slot moves after submission succeeds, so
+            # histories still use source slots when a decode row is gathered.
+            for row, position in enumerate(start_pos):
                 if int(position) >= 0:
+                    slot = row if slot_remap is None else int(slot_remap[row])
                     self.release_request(slot)
             self.entry = self.generator.prepare_decode(tokens, start_pos, page_table=tables, kv_cache=kv_cache)
         elif self.entry is None or self.generator.traces.get(id(kv_cache)) is not self.entry:

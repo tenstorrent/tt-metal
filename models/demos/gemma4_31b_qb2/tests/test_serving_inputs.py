@@ -184,7 +184,8 @@ def test_concurrent_shared_prefixes_keep_private_history_and_follow_moves():
     assert submitted[-1][0] not in (first, second)
 
 
-def test_decode_releases_only_its_slot_history_despite_page_id_collision():
+@pytest.mark.parametrize("remap", [None, [1, 0, 2, 3]])
+def test_decode_releases_only_its_slot_history_despite_page_id_collision(remap):
     model = adapter()
     model.max_batch_size = 4
     model.prefill_slot_keys = {0: 1, 1: 2}
@@ -204,6 +205,11 @@ def test_decode_releases_only_its_slot_history_despite_page_id_collision():
         None,
         model.cache,
         page_tables_per_layer=[tables, tables],
+        slot_remap=None if remap is None else torch.tensor(remap),
     )
-    assert model.prefill_slot_keys == {1: 2}
-    assert set(model.cache.prefill_history) == {2}
+    remaining_slot = 1 if remap is None else 0
+    assert model.prefill_slot_keys == {remaining_slot: remaining_slot + 1}
+    assert set(model.cache.prefill_history) == {remaining_slot + 1}
+    if remap is not None:
+        model.note_state_slots_moved({source: dest for dest, source in enumerate(remap)})
+        assert model.prefill_slot_keys == {1: 1}
