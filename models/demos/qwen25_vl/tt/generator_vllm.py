@@ -203,11 +203,10 @@ class Qwen2_5_VLForConditionalGeneration(QwenVLGenerator, SupportsMultiModal):
         # 72B on a 1x8 Wormhole cache: the bfp8 KV cache costs 22 KB per token per chip, and the DRAM left after
         # the text weights (~7.9 GB of the 12 GB: text 7.0, embedding/LM head 0.6, rope/misc 0.3) is shared between
         # this pool, the vision tower and its activation peak at the largest image the processor accepts
-        # (3344x3344, ~14k tokens). With the tensor-parallel tower (heads and MLP split over the 8 chips, the
-        # default here) the tower holds 0.15 GB of weights and peaks at 0.67 GB of activations per chip, so the
-        # full 128k context (2.8 GB) fits with ~0.5 GB of margin; with the replicated tower (0.76 GB of weights,
-        # 0.99 GB activation peak with the row-chunked MLP/QKV) a 96k pool (2.0 GB) is the most that leaves
-        # ~0.4 GB of margin.
+        # (3344x3344, ~14k tokens). With the replicated tower (0.65 GB of weights, 0.84 GB activation peak with
+        # the row-chunked MLP/QKV) a 96k pool (2.0 GB) is the most that leaves ~0.4 GB of margin. The opt-in
+        # tensor-parallel tower (0.15 GB of weights, 0.67 GB peak per chip) fits the full 128k context (2.8 GB)
+        # with ~0.5 GB to spare; see vision_tower_tensor_parallel() for why it is not the default yet.
         if "Qwen2.5-VL-72B" in model_name and devices_per_dp_cache == 8 and is_wormhole_b0():
             return 135_168 if vision_tower_tensor_parallel("Qwen2.5-VL-72B", 8, False) else 98_304
         # 32B on a 1x8 Wormhole cache: ~4.5 GB of the 12 GB DRAM holds weights (bfp4 MLPs / bfp8 attention), the

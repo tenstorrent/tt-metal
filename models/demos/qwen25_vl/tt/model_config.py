@@ -124,12 +124,18 @@ class ModelOptimizations:
 
 
 def vision_tower_tensor_parallel(base_model_name: str, num_devices: int, is_galaxy: bool) -> bool:
-    """Whether the vision tower is split over the chips of the mesh (see VisionModelArgs.vision_tp). On by default
-    for 72B on a 1x8 mesh only; QWEN25_VL_VISION_TP=0/1 overrides (tests, experiments)."""
+    """Whether the vision tower is split over the chips of the mesh (see VisionModelArgs.vision_tp).
+
+    Opt-in through QWEN25_VL_VISION_TP=1 (any multi-chip non-Galaxy mesh). It is meant for 72B on a 1x8 mesh,
+    where it makes room for the full 128k KV pool, but it is not the default yet: under vLLM with host-side
+    sampling (the release server configuration) the split tower hangs the device after a few image
+    requests, while the same server with on-device sampling and async scheduling serves ChartQA correctly.
+    Until that is understood the 72B default is the replicated tower with a 96k pool.
+    """
     tp_env = os.environ.get("QWEN25_VL_VISION_TP")
     if tp_env in ("0", "1"):
         return tp_env == "1" and num_devices > 1 and not is_galaxy
-    return base_model_name == "Qwen2.5-VL-72B" and num_devices == 8 and not is_galaxy
+    return False
 
 
 class VisionModelArgs(ModelArgs):
@@ -164,9 +170,9 @@ class VisionModelArgs(ModelArgs):
 
         # Tensor-parallel vision tower: attention heads and the MLP hidden dim are split over every chip
         # of the mesh and each image goes through all chips (residual stream replicated, reduce-scatter +
-        # all-gather after the two output projections). Used for 72B on a 1x8 Wormhole mesh, where the
+        # all-gather after the two output projections). Intended for 72B on a 1x8 Wormhole mesh, where the
         # replicated tower (one image per chip) leaves no DRAM for the 128k KV pool next to the weights;
-        # the other sizes keep the image-parallel tower. QWEN25_VL_VISION_TP=0/1 overrides (tests).
+        # opt-in for now, see vision_tower_tensor_parallel().
         self.vision_tp = vision_tower_tensor_parallel(self.base_model_name, self.num_devices, self.is_galaxy)
         self.vision_tp_devices = self.num_devices if self.vision_tp else 1
         self.tt_ccl = None  # created on first use by get_tt_ccl() when vision_tp
