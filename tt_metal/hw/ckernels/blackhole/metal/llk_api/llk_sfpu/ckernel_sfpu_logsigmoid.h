@@ -19,6 +19,15 @@ inline void calculate_logsigmoid(
     const uint dst_index_in1,  // Index for exp(-x)
     const uint dst_index_out)  // Index for output
 {
+    // The four highest polynomial coefficients, loaded once and kept in the four LRegs the row leaves free
+    // (sfpi (through 7.84.0) never lifts a literal out of a loop by itself, so each otherwise costs an SFPLOADI pair
+    // per row). LRegs only, no programmable constants: ttnn's logsigmoid_tile_init is the bare binary
+    // init, and the fast exp that produces exp(-x) right before this op owns the Prgm registers.
+    sfpi::vFloat c5 = -0.00028794066747650504f;
+    sfpi::vFloat c6 = 5.3185409342404455e-05f;
+    sfpi::vFloat c7 = 7.1853546614875086e-06f;
+    sfpi::vFloat c8 = 7.4961114648886e-08f;
+
     // logsigmoid(x) = -softplus(-x)
     for (int d = 0; d < ITERATIONS; d++) {
         constexpr uint dst_tile_size_sfpi = 32;
@@ -35,7 +44,11 @@ inline void calculate_logsigmoid(
             // For very negative: use exp
             result = -exp_neg_x;
         }
-        v_elseif(x >= -4.0f && x < 4.0f) {
+        // x >= -4 is implied here: v_elseif runs only where the v_if above was false, and Blackhole float
+        // compares are a sign-magnitude total order (-NaN < -Inf < ... < +Inf < +NaN, see
+        // ckernel_sfpu_relu.h), so `not (x < -4)` already means x >= -4 for every bit pattern, NaN included.
+        // (The explicit `x >= -4.0f &&` it replaces cost an SFPLOADI and an SFPLE per row.)
+        v_elseif(x < 4.0f) {
             // Polynomial approximation for softplus(-x) in the mid-range
             result = PolynomialEvaluator::eval(
                 x,
@@ -44,10 +57,10 @@ inline void calculate_logsigmoid(
                 0.12142381817102432f,
                 0.0031102809589356184f,
                 -0.00330807245336473f,
-                -0.00028794066747650504f,
-                5.3185409342404455e-05f,
-                7.1853546614875086e-06f,
-                7.4961114648886e-08f);
+                c5,
+                c6,
+                c7,
+                c8);
             result = -result;
         }
         v_endif;
