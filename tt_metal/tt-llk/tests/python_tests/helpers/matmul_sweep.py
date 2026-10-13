@@ -12,6 +12,7 @@ from helpers.golden_generators import TILE_DIM
 from helpers.llk_params import (
     DestAccumulation,
     DestSync,
+    MathFidelity,
     StochasticRounding,
     Transpose,
 )
@@ -101,6 +102,26 @@ def mid_fill_rt_ct_pairs(max_tiles: int) -> List[tuple]:
     return [
         (rt, ct) for rt, ct in pairs if rt >= 1 and ct >= 1 and rt * ct <= max_tiles
     ]
+
+
+def matmul_pack_block(
+    formats: FormatConfig,
+    dest_sync: DestSync,
+    math_fidelity: MathFidelity,
+    rt_dim: int,
+    ct_dim: int,
+    kt_dim: int,
+) -> bool:
+    """Whether the Blackhole matmul perf kernel packs its dest block with one block pack run.
+
+    Block-float outputs and one-tile blocks keep the per-tile pack. Under SyncHalf the pack overlaps math, so only a
+    pack-bound loop (LoFi, kt 1) gains from the block run.
+    """
+    if rt_dim * ct_dim < 2 or formats.output_format.is_block_float():
+        return False
+    return dest_sync == DestSync.Full or (
+        math_fidelity == MathFidelity.LoFi and kt_dim == 1
+    )
 
 
 def unpack_matmul_fits_perf_ring(

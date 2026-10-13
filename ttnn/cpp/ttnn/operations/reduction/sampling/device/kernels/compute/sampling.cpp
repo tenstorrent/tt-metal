@@ -205,7 +205,6 @@ void reduce_c() {
         compute_kernel_lib::ReduceInputPolicy::WaitUpfrontNoPop,
         compute_kernel_lib::ReduceDataFormatReconfigMode::INPUT>(
         compute_kernel_lib::ReduceInputBlockShape::of(rows, cols));
-    UNPACK(tensix_sync());  // Workaround for issue #9370
 }
 
 template <
@@ -285,13 +284,21 @@ void top_k() {
             tile_regs_wait();
             // pack value tiles into cb_intermed0
             pack_reconfig_data_format(input_transposed_dfb_index);
+#ifdef ARCH_BLACKHOLE
+            pack_block_mop(0, input_transposed_dfb_index, 2);
+#else
             pack_tile(0, input_transposed_dfb_index);
             pack_tile(1, input_transposed_dfb_index);
+#endif
 
             // pack index tiles into cb_intermed1
             pack_reconfig_data_format(index_transposed_dfb_index);
+#ifdef ARCH_BLACKHOLE
+            pack_block_mop(2, index_transposed_dfb_index, 2);
+#else
             pack_tile(2, index_transposed_dfb_index);
             pack_tile(3, index_transposed_dfb_index);
+#endif
             tile_regs_release();
         }
 

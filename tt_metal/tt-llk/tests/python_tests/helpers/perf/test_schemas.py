@@ -508,7 +508,7 @@ PERF_TEST_SCHEMAS = {
         "test_name_aliases": {"perf_pack_dest_bank": "perf_pack_dest_bank"},
     },
     "perf_pack": {
-        "version": 2,
+        "version": 3,
         "columns": [
             "block_ct_dim",
             "block_rt_dim",
@@ -535,6 +535,7 @@ PERF_TEST_SCHEMAS = {
             "num_tiles_in_block",
             "output_num_blocks",
             "output_num_tiles_in_block",
+            "pack_block",
             "relu_config",
             "tile_cnt",
             "tilize",
