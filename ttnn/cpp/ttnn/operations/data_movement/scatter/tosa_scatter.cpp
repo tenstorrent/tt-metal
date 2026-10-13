@@ -76,13 +76,13 @@ void validate_tensors(const Shape& input_shape, const Shape& index_shape, const 
         index_shape.rank() == INDEX_RANK_CONSTRAINT,
         "According to TOSA specification, index tensor must be of rank {}, it is {} instead.",
         INDEX_RANK_CONSTRAINT,
-        input_shape.rank());
+        index_shape.rank());
 
     TT_FATAL(
         source_shape.rank() == SOURCE_RANK_CONSTRAINT,
         "According to TOSA specification, source tensor must be of rank {}, it is {} instead.",
         SOURCE_RANK_CONSTRAINT,
-        input_shape.rank());
+        source_shape.rank());
 
     TT_FATAL(
         input_shape[0] == source_shape[0],
@@ -98,7 +98,7 @@ void validate_tensors(const Shape& input_shape, const Shape& index_shape, const 
 
     TT_FATAL(
         input_shape[0] == index_shape[0],
-        "Input shape has a different dimension C than index shape (input shape: {}, index shape: {}).",
+        "Input shape has a different dimension N than index shape (input shape: {}, index shape: {}).",
         input_shape,
         index_shape);
 
