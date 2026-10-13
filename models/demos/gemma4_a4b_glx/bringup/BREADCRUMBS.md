@@ -36,3 +36,26 @@ ffn_residual).
 source /data/dgolubovic/repos/tt-agentic-bringup-sc-gemma-glx/.bringup/runs/prefill-stepwise/20261013-011638-gemma4-glx-setup3/artifacts/setup/prepare/env.sh
 bfw tasks run R.1 R.2 R.3
 ```
+
+## C.sliding.attn_norm
+
+Implemented `TtRMSNorm` in `tt/rms_norm.py` for the Gemma-4 RMSNorm (`x * w * rsqrt(mean(x^2) + eps)`,
+weight is plain `w`, not `1 + w`). Weight from `model.language_model.layers.{layer}.input_layernorm.weight`,
+replicated across all 32 chips. TILE layout weight, HiFi4 + fp32 accumulation.
+
+`hooks.py` dispatches all norm steps through `_NORM_WEIGHTS` dict and shared `_norm_module`/`_host_fn`
+helpers. The same module handles all 7 norm step types.
+
+### Decisions
+
+- **Disabled fast_runtime_mode in device_component.** `ttnn.CONFIG.enable_fast_runtime_mode = True` (default)
+  makes `FastOperation.__call__` skip `PRE_OPERATION_HOOKS`. `DeviceProof` uses `register_pre_operation_hook`,
+  which only fires in the slow `Operation` path. Without this fix, `device_ops_attn_norm = 0` despite the op
+  running correctly on device (PCC 0.999996).
+
+### Re-run
+
+```bash
+source /data/dgolubovic/repos/tt-agentic-bringup-sc-gemma-glx/.bringup/runs/prefill-stepwise/20261013-011638-gemma4-glx-setup3/artifacts/setup/prepare/env.sh
+bfw job check --task C.sliding.attn_norm
+```
