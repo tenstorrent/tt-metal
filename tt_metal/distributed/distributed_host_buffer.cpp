@@ -20,11 +20,13 @@
 namespace tt::tt_metal {
 
 DistributedHostBuffer DistributedHostBuffer::create(const distributed::MeshShape& shape) {
+    // The global and local shapes are the same, so this host owns every shard and the buffer has no
+    // distributed context. A null context means single-host (see host_ccl::all_gather).
     return DistributedHostBuffer::create(
         shape,
         shape,
         distributed::MeshCoordinate::zero_coordinate(shape.dims()),
-        tt::tt_metal::MetalContext::instance().get_control_plane().get_host_local_context());
+        /*context=*/nullptr);
 }
 
 DistributedHostBuffer DistributedHostBuffer::create(

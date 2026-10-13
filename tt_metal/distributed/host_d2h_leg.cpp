@@ -11,10 +11,11 @@
 #include <tt-metalium/experimental/sockets/d2h_socket.hpp>
 #include "tt_metal/distributed/host_ring_alias.hpp"
 #include "hostdevcommon/uva_layout.h"
-#include <tt-metalium/hal.hpp>
+#include <tt-metalium/hal_types.hpp>
 #include <tt-metalium/mesh_coord.hpp>
 #include <tt-metalium/mesh_device.hpp>
 #include "tt_metal/distributed/mesh_device_impl.hpp"
+#include "impl/context/metal_env_impl.hpp"
 #include <internal/cluster_noc_helpers.hpp>
 #include "impl/context/metal_context.hpp"
 #include "tt_metal/llrt/tt_cluster.hpp"
@@ -107,7 +108,8 @@ std::unique_ptr<D2HLeg> D2HLeg::create(
     }
 
     const uint32_t page = tt_uva_frame_page_size(cfg.payload_bytes);
-    const uint32_t align = tt::tt_metal::hal::get_pcie_alignment();
+    // PCIe alignment of the HAL belonging to this mesh's MetalEnv.
+    const uint32_t align = mesh->impl().metal_env().get_hal().get_alignment(HalMemType::HOST);
     if (page % align != 0) {
         err = fmt::format(
             "D2HLeg::create: page {} B (payload {} + trailer {}) is not a multiple of the {} B PCIe alignment",
