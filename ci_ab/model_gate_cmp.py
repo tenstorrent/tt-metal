@@ -73,6 +73,10 @@ for c, s in groups:
             same_set += set(ra["di"][t].tolist()) == set(rb["di"][t].tolist())
             same_ord += torch.equal(ra["di"][t], rb["di"][t]) and torch.equal(ra["ds"][t], rb["ds"][t])
     m, nn = st["M"], st["N"]
+    import statistics as stt
+    dl = [b2 - a2 for a2, b2 in zip(m["lp"], nn["lp"])]
+    dw = [b2 - a2 for a2, b2 in zip(m["wp"], nn["wp"])]
+    print(f"GATESTAT {c} {s} | layer mean M {stt.mean(m['lp']):.5f} sd {stt.pstdev(m['lp']):.5f} N {stt.mean(nn['lp']):.5f} sd {stt.pstdev(nn['lp']):.5f} | paired N-M mean {stt.mean(dl):+.5f} sd {stt.pstdev(dl):.5f} N<M in {sum(d < 0 for d in dl)}/{len(dl)} | weights paired N-M mean {stt.mean(dw):+.5f}", flush=True)
     nseeds = len(m["wp"])
     f = lambda v: f"{min(v):.5f}"
     sp = lambda v: f"{max(v) - min(v):.5f}"
