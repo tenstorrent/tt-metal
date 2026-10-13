@@ -120,11 +120,12 @@ def test_kv_head_chains_ratios(device, nh, nkv, s, grid):
     assert_with_pcc(_torch_ref(q, k, v), _sdpa(device, q, k, v, grid, 128, 256).float(), 0.99)
 
 
-@pytest.mark.parametrize("nkv, nvh", [(1, 32), (2, 8), (8, 2)])
+# (24, 4, 3): 6 and 8 Q heads per K / V head do not nest, so the chain key falls back to one Q head
+@pytest.mark.parametrize("nh, nkv, nvh", [(32, 1, 32), (32, 2, 8), (32, 8, 2), (24, 4, 3)])
 @pytest.mark.timeout(600)
-def test_kv_head_chains_mla_distinct_kv_heads(device, nkv, nvh):
+def test_kv_head_chains_mla_distinct_kv_heads(device, nh, nkv, nvh):
     """flash_mla_prefill with a separate V: NKH != NVH. Chains must share both the K and the V head."""
-    b, nh, sq, sk, dk, dv = 1, 32, 512, 1024, 576, 128
+    b, sq, sk, dk, dv = 1, 512, 1024, 576, 128
     torch.manual_seed(0)
     q = torch.randn(b, nh, sq, dk)
     k = torch.randn(b, nkv, sk, dk)

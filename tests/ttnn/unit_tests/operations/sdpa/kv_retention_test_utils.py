@@ -14,8 +14,11 @@ import ttnn
 from tests.ttnn.utils_for_testing import assert_with_pcc
 
 
-def _run(device, q, k, v, grid, q_chunk, k_chunk, concat, **kwargs):
-    tq, tk, tv = (ttnn.from_torch(t, dtype=ttnn.bfloat8_b, layout=ttnn.TILE_LAYOUT, device=device) for t in (q, k, v))
+def run_sdpa(device, q, k, v, grid, q_chunk, k_chunk, concat=False, memory_config=None, is_causal=False, **kwargs):
+    tq, tk, tv = (
+        ttnn.from_torch(t, dtype=ttnn.bfloat8_b, layout=ttnn.TILE_LAYOUT, device=device, memory_config=memory_config)
+        for t in (q, k, v)
+    )
     pc = ttnn.SDPAProgramConfig(
         compute_with_storage_grid_size=ttnn.CoreCoord(*grid), q_chunk_size=q_chunk, k_chunk_size=k_chunk
     )
@@ -23,7 +26,15 @@ def _run(device, q, k, v, grid, q_chunk, k_chunk, concat, **kwargs):
         math_fidelity=ttnn.MathFidelity.LoFi, math_approx_mode=False, fp32_dest_acc_en=False, packer_l1_acc=True
     )
     out = ttnn.transformer.scaled_dot_product_attention(
-        tq, tk, tv, is_causal=False, program_config=pc, compute_kernel_config=ck, output_concat_heads=concat, **kwargs
+        tq,
+        tk,
+        tv,
+        is_causal=is_causal,
+        program_config=pc,
+        compute_kernel_config=ck,
+        output_concat_heads=concat,
+        memory_config=memory_config,
+        **kwargs,
     )
     return ttnn.to_torch(out)
 
@@ -36,11 +47,11 @@ def check_kv_retention(device, b, nh, nkv, s, d, grid, q_chunk, concat, torch_re
         pytest.skip("q chunk larger than the sequence")
     torch.manual_seed(0)
     q, k, v = (torch.randn(b, n, s, d) for n in (nh, nkv, nkv))
-    got = _run(device, q, k, v, grid, q_chunk, s, concat)  # k_chunk = s: one K chunk, so K/V is retained
+    got = run_sdpa(device, q, k, v, grid, q_chunk, s, concat)  # k_chunk = s: one K chunk, so K/V is retained
     if s % q_chunk == 0:
         # Q-head crossing is off at every batch size here, so only where K/V come from differs between the calls
         for i in range(b):
-            row = _run(device, q[i : i + 1], k[i : i + 1], v[i : i + 1], grid, q_chunk, s, concat)
+            row = run_sdpa(device, q[i : i + 1], k[i : i + 1], v[i : i + 1], grid, q_chunk, s, concat)
             assert torch.equal(row, got[i : i + 1]), f"batch row {i} differs from the same row run alone"
     if torch_reference:
         assert not concat, "the torch reference is for the head-major layout"

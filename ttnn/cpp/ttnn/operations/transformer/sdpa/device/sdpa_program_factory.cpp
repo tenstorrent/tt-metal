@@ -308,8 +308,9 @@ uint32_t kv_chain_key_q_heads(uint32_t nqh, uint32_t nkh, uint32_t nvh) {
 // K/V retention: with one K chunk, a core keeps K/V in its CBs across its consecutive Q chunks of one retention key
 // (batch, nq / group) instead of re-reading them; a chain member takes its copy on the first Q chunk of its segment and
 // forwards it once. The group is the finer of the K and V head groupings when one nests in the other (the K/V chain
-// key), so consecutive chunks of a key share both heads. Off for causal / chunked / windowed calls (their K range
-// varies per Q chunk), MLA and the non-streaming kernel (which keeps no K/V). Returns Q heads per key, 0 = off.
+// key), so consecutive chunks of a key share both heads. With one K chunk every Q chunk reads that whole chunk, so
+// causal, sliding-window and windowed calls retain too (every Q row sees at least itself, so no Q chunk skips K). Off
+// for chunked (paged) calls, MLA and the non-streaming kernel (which keeps no K/V). Returns Q heads per key, 0 = off.
 uint32_t kv_retain_group(bool eligible, uint32_t k_num_chunks, uint32_t nqh, uint32_t nkh, uint32_t nvh) {
     return eligible && k_num_chunks == 1 ? kv_chain_key_q_heads(nqh, nkh, nvh) : 0;
 }
@@ -1202,12 +1203,8 @@ ProgramDescriptor SDPAOperation::SDPAProgramFactory::create_descriptor(
 
     const bool use_zigzag_balancing = use_causal_kernel;
 
-    const uint32_t kv_retain = kv_retain_group(
-        use_streaming_compute && !use_causal_kernel && !is_chunked && !has_sliding_window && !is_windowed && !use_mla,
-        k_num_chunks,
-        NQH,
-        NKH,
-        NVH);
+    const uint32_t kv_retain =
+        kv_retain_group(use_streaming_compute && !is_chunked && !use_mla, k_num_chunks, NQH, NKH, NVH);
     const WriterGqaPackArgs writer_gqa_pack =
         writer_gqa_pack_args(operation_attributes.output_concat_heads, gqa_pack, q_shape[2] / TILE_HEIGHT);
 
