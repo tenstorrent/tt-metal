@@ -11,11 +11,15 @@ Every agent step writes `<bringup_dir>/results/knowledge_use/<task>.<role>.<atte
 
 After the step the orchestrator adds `meta` (model, run, task, role, attempt, time, HEAD, the files the step read or
 changed) and marks each use `traced`: the step touched the entry's `Applies to:` code (read, searched, edited, or named
-it in a command); null for an entry without code anchors (method knowledge), which cannot be cross-checked.
+it in a command); null for an entry without code anchors (method knowledge), which cannot be cross-checked. Agents
+name an entry's id where it decides something (agent rule 11): a use or contradiction whose id appears in the step's
+visible text (its messages, the files it wrote) is `cited`; ids cited there but missing from the report are kept as
+`cited_only` (uses the agent forgot to report).
 
     python -m models.demos.common.bringup.knowledge.usage [--out DIR] [--unused-runs 5]
 
-tallies every committed report: per entry its uses (traced / untraced / unchecked), last use, contradictions, and the
+tallies every committed report: per entry its uses (traced / untraced / unchecked; cited; unreported = cited only),
+last use, contradictions, and the
 runs it was relevant to (a run of its model whose steps touched its code; every run of its model for an entry without
 anchors; every run of any model for a shared entry without anchors) but not used. An entry unused over its last
 `--unused-runs` relevant runs is flagged for the run-end curation (cut or move); a model entry used in two or more
@@ -85,9 +89,10 @@ def anchors(e: dict, res) -> list[str]:
     return [p for p in paths if not p.endswith(KNOWLEDGE_FILES)]
 
 
-def transcript_touches(log: Path, repo: Path) -> tuple[list[str], list[str]]:
-    """(repo-relative paths the agent read, edited or searched; its Bash commands) from a stream-json log."""
-    paths, commands = set(), []
+def transcript_touches(log: Path, repo: Path) -> tuple[list[str], list[str], str]:
+    """(repo-relative paths the agent read, edited or searched; its Bash commands; its visible text: messages and the
+    text it wrote into files) from a stream-json log. Thinking is not in the log."""
+    paths, commands, text = set(), [], []
     for line in log.read_text(errors="replace").splitlines() if log.exists() else []:
         try:
             ev = json.loads(line)
@@ -96,12 +101,16 @@ def transcript_touches(log: Path, repo: Path) -> tuple[list[str], list[str]]:
         if ev.get("type") != "assistant":
             continue
         for c in (ev.get("message") or {}).get("content") or []:
+            if c.get("type") == "text":
+                text.append(c.get("text") or "")
             if c.get("type") != "tool_use":
                 continue
             inp = c.get("input") or {}
             if c.get("name") == "Bash":
                 commands.append(inp.get("command", ""))
                 continue
+            text += [str(inp.get(k) or "") for k in ("new_string", "content")]
+            text += [str(e.get("new_string") or "") for e in inp.get("edits") or [] if isinstance(e, dict)]
             key = FILE_TOOLS.get(c.get("name")) or SEARCH_TOOLS.get(c.get("name"))
             p = inp.get(key) if key else None
             if p:
@@ -110,7 +119,7 @@ def transcript_touches(log: Path, repo: Path) -> tuple[list[str], list[str]]:
                     paths.add(str(p.resolve().relative_to(repo)) if p.is_absolute() else str(p))
                 except ValueError:
                     pass
-    return sorted(paths), commands
+    return sorted(paths), commands, "\n".join(text)
 
 
 def touches(anchor_paths: list[str], touched: list[str], commands: list[str]) -> bool:
@@ -122,9 +131,21 @@ def touches(anchor_paths: list[str], touched: list[str], commands: list[str]) ->
     return False
 
 
-def finalize(path: Path, meta: dict, touched: list[str], commands: list[str], root: Path = CODE_ROOT) -> list[str]:
-    """Validate the agent's report, add meta and the traced flags, write it back. Returns what is wrong with it (empty:
-    fine); a missing report is one problem, and a stub with the meta is written so the run is still counted."""
+def cited_ids(text: str, known) -> set[str]:
+    return {i for i in re.findall(r"\b[A-Z][A-Z0-9]*-\d+\b", text) if i in known}
+
+
+def finalize(
+    path: Path,
+    meta: dict,
+    touched: list[str],
+    commands: list[str],
+    root: Path = CODE_ROOT,
+    text: str = "",
+) -> list[str]:
+    """Validate the agent's report, add meta and the traced / cited flags, write it back. Returns what is wrong with it
+    (empty: fine); a missing report is one problem, and a stub with the meta is written so the run is still counted.
+    text: the step's visible text (transcript_touches), where cited ids are looked for."""
     from models.demos.common.bringup.knowledge.stale import Resolver, git
 
     known = entries(root)
@@ -154,9 +175,15 @@ def finalize(path: Path, meta: dict, touched: list[str], commands: list[str], ro
     )
     head = git("rev-parse", "--short=11", "HEAD", root=root).strip()
     res = Resolver(root, head) if rep["used"] else None
+    cited = cited_ids(text, known)
     for item in rep["used"]:
         anc = anchors(known[item["id"]], res)
         item["traced"] = touches(anc, touched, commands) if anc else None
+        item["cited"] = item["id"] in cited
+    for item in rep["contradicted"]:
+        item["cited"] = item["id"] in cited
+    reported = {i["id"] for i in rep["used"] + rep["contradicted"]}
+    rep["cited_only"] = sorted(cited - reported)
     rep["meta"] = {**meta, "head": head, "touched": touched}
     path.parent.mkdir(parents=True, exist_ok=True)
     path.write_text(json.dumps(rep, indent=1) + "\n")
@@ -190,6 +217,8 @@ def tally(known: dict[str, dict], reports: list[dict], anchor_of: dict[str, list
             "traced": 0,
             "untraced": 0,
             "unchecked": 0,
+            "cited": 0,
+            "unreported": 0,
             "last_used": None,
             "used_in_runs": [],
             "contradictions": [],
@@ -212,8 +241,17 @@ def tally(known: dict[str, dict], reports: list[dict], anchor_of: dict[str, list
                     continue
                 s["uses"] += 1
                 s[{True: "traced", False: "untraced", None: "unchecked"}[u.get("traced")]] += 1
+                s["cited"] += bool(u.get("cited"))
                 s["last_used"] = {"model": model, "run": run, "task": r["meta"].get("task"), "t": r["meta"].get("t")}
                 used_here.add(s["id"])
+            for i in r.get("cited_only") or []:  # named while working, left out of the report: still a use
+                s = stats.get(i)
+                if s is None:
+                    continue
+                s["uses"] += 1
+                s["unreported"] += 1
+                s["last_used"] = {"model": model, "run": run, "task": r["meta"].get("task"), "t": r["meta"].get("t")}
+                used_here.add(i)
             for c in r.get("contradicted") or []:
                 s = stats.get(c.get("id"))
                 if s is None:
@@ -302,15 +340,16 @@ def markdown(t: dict) -> str:
             "",
             "## All entries",
             "",
-            "| Id | Uses (traced / untraced / unchecked) | Relevant runs | Unused streak | Last used |",
-            "|---|---|---|---|---|",
+            "| Id | Uses (traced / untraced / unchecked) | Cited / unreported | Relevant runs | Unused streak | Last used |",
+            "|---|---|---|---|---|---|",
         ]
     )
     for s in sorted(t["entries"], key=lambda s: (-s["uses"], s["id"])):
         last = s["last_used"] or {}
         md.append(
             f"| `{s['id']}` {s['title'][:60]} | {s['uses']} ({s['traced']} / {s['untraced']} / {s['unchecked']}) | "
-            f"{s['relevant_runs']} | {s['unused_streak']} | {last.get('model', '')} {last.get('task', '')} |"
+            f"{s['cited']} / {s['unreported']} | {s['relevant_runs']} | {s['unused_streak']} | "
+            f"{last.get('model', '')} {last.get('task', '')} |"
         )
     if t["unknown_ids"]:
         md.extend(["", f"Reports name ids that no longer exist: {t['unknown_ids']}"])
