@@ -1287,6 +1287,116 @@
   budget_type: demo
   sp_config: sc1
 
+- name: "(DeepSeek-V4-Flash) depth probe: layer 40 selection flip, device vs reference input, chunk 0"
+  fabric_profile: torus_xy
+  cmd: |
+    titles=(
+      "(DeepSeek-V4-Flash) depth probe: layer 40 selection flip, device vs reference input, chunk 0"
+    )
+    summary=""
+    section_start() {
+      sec_n=$1
+      sec_title=${titles[$((sec_n - 1))]}
+      sec_t0=$SECONDS
+      echo "::group::[$sec_n/${#titles[@]}] $sec_title"
+    }
+    section_end() {
+      local rc=$1 s=$((SECONDS - sec_t0)) st=PASS note=""
+      echo "::endgroup::"
+      if [ "$rc" -ne 0 ]; then st=FAIL; fi
+      if [ "$rc" -eq 124 ]; then note=", timed out"; fi
+      if [ "$rc" -eq 137 ]; then note=", killed"; fi
+      local line="[$sec_n/${#titles[@]}] $st (exit $rc$note, $((s / 60)).$((s % 60 * 10 / 60)) min) $sec_title"
+      echo "$line"
+      summary+="$line"$'\n'
+    }
+    finish() {
+      local j
+      for ((j = sec_n + 1; j <= ${#titles[@]}; j++)); do
+        summary+="[$j/${#titles[@]}] NOT RUN ${titles[$((j - 1))]}"$'\n'
+      done
+      echo "===== DeepSeek-V4 depth probe summary ====="
+      printf '%s' "$summary"
+    }
+
+    section_start 1
+    (
+      timeout -k 2m 85m mpirun --bind-to none --pernode --tag-output bash -lc '
+        export OMP_NUM_THREADS=$(nproc)
+        python3 -m pytest models/demos/deepseek_v3_d_p/tests/v4/test_transformer_depth_probe.py::test_v4_flash_selection_flip -vvv --tb=short
+      '
+    ) || { rc=$?; section_end "$rc"; finish; exit "$rc"; }
+    section_end 0
+
+    finish
+  test_type: dsv4_selection_flip
+  test_group: dsv4_depth_probe
+  skus:
+    bh_sc1:
+      # Not measured yet: 38 min build of layers 0-39, ~21 min for 40 reference layers, ~5 min of layer-40 reruns, x 1.25 + 1, charged to models/demo/bh_sc1.
+      timeout: 85
+      tier: 2
+      release_ready: false
+  owner_id: U08SXRPCTJ5  # Janko Mitrovic
+  team: models
+  budget_type: demo
+  sp_config: sc1
+
+- name: "(DeepSeek-V4-Flash) depth probe: device top-k replaced by host top-k, chunk 0"
+  fabric_profile: torus_xy
+  cmd: |
+    titles=(
+      "(DeepSeek-V4-Flash) depth probe: device top-k replaced by host top-k, chunk 0"
+    )
+    summary=""
+    section_start() {
+      sec_n=$1
+      sec_title=${titles[$((sec_n - 1))]}
+      sec_t0=$SECONDS
+      echo "::group::[$sec_n/${#titles[@]}] $sec_title"
+    }
+    section_end() {
+      local rc=$1 s=$((SECONDS - sec_t0)) st=PASS note=""
+      echo "::endgroup::"
+      if [ "$rc" -ne 0 ]; then st=FAIL; fi
+      if [ "$rc" -eq 124 ]; then note=", timed out"; fi
+      if [ "$rc" -eq 137 ]; then note=", killed"; fi
+      local line="[$sec_n/${#titles[@]}] $st (exit $rc$note, $((s / 60)).$((s % 60 * 10 / 60)) min) $sec_title"
+      echo "$line"
+      summary+="$line"$'\n'
+    }
+    finish() {
+      local j
+      for ((j = sec_n + 1; j <= ${#titles[@]}; j++)); do
+        summary+="[$j/${#titles[@]}] NOT RUN ${titles[$((j - 1))]}"$'\n'
+      done
+      echo "===== DeepSeek-V4 depth probe summary ====="
+      printf '%s' "$summary"
+    }
+
+    section_start 1
+    (
+      timeout -k 2m 62m mpirun --bind-to none --pernode --tag-output bash -lc '
+        export OMP_NUM_THREADS=$(nproc)
+        python3 -m pytest models/demos/deepseek_v3_d_p/tests/v4/test_transformer_depth_probe.py::test_v4_flash_forced_topk -vvv --tb=short
+      '
+    ) || { rc=$?; section_end "$rc"; finish; exit "$rc"; }
+    section_end 0
+
+    finish
+  test_type: dsv4_forced_topk
+  test_group: dsv4_depth_probe
+  skus:
+    bh_sc1:
+      # Not measured yet: the 41 min full-depth build plus three chunk-0 passes at ~2 min, x 1.25 + 1, charged to models/demo/bh_sc1.
+      timeout: 62
+      tier: 2
+      release_ready: false
+  owner_id: U08SXRPCTJ5  # Janko Mitrovic
+  team: models
+  budget_type: demo
+  sp_config: sc1
+
 # ===== Gemma4-31B D_P =================================================================================
 
 # Sanity gate for the standalone disaggregated-prefill implementation: the
