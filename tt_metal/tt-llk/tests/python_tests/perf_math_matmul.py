@@ -14,12 +14,10 @@ from helpers.llk_params import (
     StochasticRounding,
 )
 from helpers.matmul_sweep import (
-    DEST_HALF_BFP_PACK_HANG_REASON,
     DEST_RT_CT_BLOCKS,
     MatmulConfig,
     generate_face_layout_config_sweep,
     generate_tile_dims,
-    is_dest_half_bfp_pack_hang,
     mid_fill_rt_ct_pairs,
     skip_matmul_combination,
     sweep_tiny_tiles_matmul,
@@ -228,11 +226,6 @@ def test_perf_math_matmul(
 
     if is_dest_acc_needed(formats) and matmul_config.dest_acc == DestAccumulation.No:
         pytest.skip("Dest accumulation must be enabled for this format")
-
-    if is_dest_half_bfp_pack_hang(
-        matmul_config.dest_sync, matmul_config.dest_acc, formats
-    ):
-        pytest.skip(DEST_HALF_BFP_PACK_HANG_REASON)
 
     run_types = [
         PerfRunType.L1_TO_L1,
