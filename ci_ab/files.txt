@@ -1,2 +1,3 @@
 tt_metal/tt-llk/tt_llk_blackhole/common/inc/sfpu/experimental/ckernel_sfpu_rope.h
 tt_metal/tt-llk/tests/sources/rope_perf.cpp
+tt_metal/tt-llk/tests/python_tests/test_rope.py

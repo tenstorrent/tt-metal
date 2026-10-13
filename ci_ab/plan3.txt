@@ -1,0 +1,13 @@
+# job 3: load-macro body v2 with the separate path (w) against the merged head (h); counters; bits sweep; test_rope.py on both
+p h ids/rope.txt -
+p w ids/rope.txt -
+p w ids/rope.txt -
+p h ids/rope.txt -
+p h ids/rope.txt -
+p w ids/rope.txt -
+p w ids/rope.txt -
+p h ids/rope.txt -
+c h ids/rope.txt - wc
+c w ids/rope.txt - wc
+b h ids/bits.txt -
+b w ids/bits.txt -
