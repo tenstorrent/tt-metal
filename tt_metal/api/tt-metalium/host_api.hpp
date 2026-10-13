@@ -86,7 +86,7 @@ size_t GetNumAvailableDevices();
  *
  * Return value: bool
  */
-[[deprecated("This API always returns false and will be removed.")]]
+[[deprecated("This API always returns false and will be removed after 2026-11-13.")]]
 bool IsGalaxyCluster();
 
 /**
