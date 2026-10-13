@@ -73,7 +73,8 @@ void kernel_main() {
         get_named_compile_time_arg_val("moe_gate_cb_tilize"),
         get_named_compile_time_arg_val("moe_gate_cb_tilize_idx"),
         get_named_compile_time_arg_val("moe_gate_topk"),
-        get_named_compile_time_arg_val("moe_gate_softmax")>;
+        get_named_compile_time_arg_val("moe_gate_softmax"),
+        get_named_compile_time_arg_val("moe_gate_identity_indices")>;
     deepseek_compute_kernel_init<false /* enable_math_reconfig_remap */>();
 #endif
 

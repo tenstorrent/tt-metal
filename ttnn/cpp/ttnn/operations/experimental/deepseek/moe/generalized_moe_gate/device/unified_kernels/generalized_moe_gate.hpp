@@ -78,7 +78,8 @@ struct GeneralizedMoeGate {
         std::uint32_t cb_tilize_ = 8,
         std::uint32_t cb_tilize_idx_ = 9,
         std::uint32_t topk_ = 8,
-        std::uint32_t output_softmax_ = 0>
+        std::uint32_t output_softmax_ = 0,
+        std::uint32_t identity_indices_ = 0>
     struct ComputeCTArgs {
         static constexpr std::uint32_t input_cb = input_cb_;
         static constexpr std::uint32_t bias_cb = bias_cb_;
@@ -108,6 +109,8 @@ struct GeneralizedMoeGate {
 #else
         static constexpr bool sfpu_sort = false;
 #endif
+        // The input indices are 0-255 in the op's layout, so the SFPU-only sort writes them instead of a copy.
+        static constexpr bool identity_indices = sfpu_sort && identity_indices_ == 1;
     };
 
     // ========================================================================
@@ -211,7 +214,11 @@ struct GeneralizedMoeGate {
             // ================================================================
 
             // Input indices CB should have the same tile shape as the input CB
-            reconfig_full_operand(CTArgs::input_indices_cb, CTArgs::bias_cb);
+            if constexpr (CTArgs::identity_indices) {
+                reconfig_full_operand(CTArgs::input_cb, CTArgs::bias_cb);
+            } else {
+                reconfig_full_operand(CTArgs::input_indices_cb, CTArgs::bias_cb);
+            }
             // Output indices CB should have the same tile shape as the output CB
             pack_reconfig_data_format<true>(CTArgs::output_cb);
 
@@ -228,10 +235,14 @@ struct GeneralizedMoeGate {
                 CircularBuffer output_indices_cb(CTArgs::output_indices_cb);
                 // ============ single ≤256-block path: the proven fused single-op gate (128/256 top-8) ============
                 bias_cb.wait_front(1);
-                copy_init(CTArgs::input_indices_cb);
-                tile_regs_acquire();
-                copy_tile(CTArgs::input_indices_cb, 0, 1);  // indices (arange 0-255) -> idx region
-                reconfig_data_format_srca(CTArgs::input_cb);
+                if constexpr (CTArgs::identity_indices) {
+                    tile_regs_acquire();
+                } else {
+                    copy_init(CTArgs::input_indices_cb);
+                    tile_regs_acquire();
+                    copy_tile(CTArgs::input_indices_cb, 0, 1);  // indices (arange 0-255) -> idx region
+                    reconfig_data_format_srca(CTArgs::input_cb);
+                }
                 generalized_moe_gate_init<CTArgs::enable_sigmoid>(CTArgs::input_cb, CTArgs::bias_cb);
                 input_cb.wait_front(1);
                 generalized_moe_gate<
@@ -247,7 +258,8 @@ struct GeneralizedMoeGate {
                     DST_ACCUM_MODE,
                     false,
                     3,
-                    CTArgs::sfpu_sort>(CTArgs::input_cb, CTArgs::bias_cb, CTArgs::eps, CTArgs::scaling_factor);
+                    CTArgs::sfpu_sort,
+                    CTArgs::identity_indices>(CTArgs::input_cb, CTArgs::bias_cb, CTArgs::eps, CTArgs::scaling_factor);
                 input_cb.pop_front(1);
                 tile_regs_commit();
 

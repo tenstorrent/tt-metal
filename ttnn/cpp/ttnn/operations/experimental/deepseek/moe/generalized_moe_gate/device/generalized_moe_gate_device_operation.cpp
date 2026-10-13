@@ -165,7 +165,8 @@ GeneralizedMoeGateDeviceOperation::invoke(
     bool enable_sigmoid,
     uint32_t topk,
     bool output_softmax,
-    bool grouped) {
+    bool grouped,
+    bool identity_indices) {
     return {
         operation_attributes_t{
             .eps = eps,
@@ -173,7 +174,8 @@ GeneralizedMoeGateDeviceOperation::invoke(
             .enable_sigmoid = enable_sigmoid,
             .topk = topk,
             .output_softmax = output_softmax,
-            .grouped = grouped},
+            .grouped = grouped,
+            .identity_indices = identity_indices},
         tensor_args_t{
             .input_tensor = input_tensor,
             .bias_tensor = bias_tensor,

@@ -1037,6 +1037,7 @@ class GENERALIZED_MOE_GATE(TemplateParameter):
     extra_scale: int = 0x3F800000
     output_tiles: int = 3
     sfpu_sort: bool = False
+    identity_indices: bool = False
 
     def convert_to_cpp(self) -> str:
         lines: list[str] = [
@@ -1073,6 +1074,7 @@ class GENERALIZED_MOE_GATE(TemplateParameter):
             f"constexpr std::uint32_t GMG_EXTRA_SCALE = {self.extra_scale};",
             f"constexpr std::uint32_t GMG_OUTPUT_TILES = {self.output_tiles};",
             f"constexpr bool GMG_SFPU_SORT = {str(self.sfpu_sort).lower()};",
+            f"constexpr bool GMG_IDENTITY_INDICES = {str(self.identity_indices).lower()};",
         ]
         return "\n".join(lines)
 
@@ -2218,8 +2220,9 @@ class CLAMPED_SILU_PARAMS(TemplateParameter):
 @dataclass
 class GENERALIZED_MOE_GATE_PERF_PATH(TemplateParameter):
     """The gate path the generalized MoE gate perf kernel runs, ``ungrouped`` (the ttnn op's merge tree),
-    ``ungrouped_sfpu_sort`` (the op's Blackhole one-block route) or ``grouped`` (the DeepSeek gate); the token
-    geometry is fixed and emitted here."""
+    ``ungrouped_sfpu_sort`` (the op's Blackhole one-block route), ``ungrouped_sfpu_sort_identity`` (that route with
+    the ids written on the SFPU, no id tile copied) or ``grouped`` (the DeepSeek gate); the token geometry is fixed
+    and emitted here."""
 
     gmg_path: str = "ungrouped"
 
@@ -2228,7 +2231,8 @@ class GENERALIZED_MOE_GATE_PERF_PATH(TemplateParameter):
         return "\n".join(
             [
                 f"constexpr bool GMG_GROUPED = {str(grouped).lower()};",
-                f"constexpr bool GMG_SFPU_SORT = {str(self.gmg_path == 'ungrouped_sfpu_sort').lower()};",
+                f"constexpr bool GMG_SFPU_SORT = {str(self.gmg_path.startswith('ungrouped_sfpu_sort')).lower()};",
+                f"constexpr bool GMG_IDENTITY_INDICES = {str(self.gmg_path == 'ungrouped_sfpu_sort_identity').lower()};",
                 "constexpr std::uint32_t GMG_TOPK = 8;",
                 "constexpr bool GMG_SOFTMAX = false;",
                 "constexpr bool GMG_RELOAD = false;",

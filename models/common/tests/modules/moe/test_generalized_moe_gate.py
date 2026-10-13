@@ -186,6 +186,39 @@ def test_generalized_moe_gate(device, batch_size, enable_sigmoid, seed, topk, ou
         output_softmax=output_softmax,
     )
 
+    # identity_indices=True writes these same 0..255 ids on device: the outputs must match bit for bit.
+    id_output = ttnn.from_torch(
+        torch.zeros(output_shape, dtype=torch.bfloat16),
+        dtype=ttnn.bfloat16,
+        layout=ttnn.TILE_LAYOUT,
+        device=device,
+        memory_config=output_mem_config,
+        tile=output_tile,
+    )
+    id_output_indices = ttnn.from_torch(
+        torch.zeros(output_shape, dtype=torch.uint16),
+        dtype=ttnn.uint16,
+        layout=ttnn.TILE_LAYOUT,
+        device=device,
+        memory_config=output_mem_config,
+        tile=output_tile,
+    )
+    id_result, id_result_indices = ttnn.experimental.deepseek.moe.generalized_moe_gate(
+        ttnn_input,
+        bias_tensor=ttnn_bias,
+        input_indices_tensor=ttnn_input_indices,
+        output_tensor=id_output,
+        output_indices_tensor=id_output_indices,
+        eps=eps,
+        scaling_factor=scaling_factor,
+        enable_sigmoid=enable_sigmoid,
+        topk=topk,
+        output_softmax=output_softmax,
+        identity_indices=True,
+    )
+    assert torch.equal(ttnn.to_torch(id_result), ttnn.to_torch(ttnn_result))
+    assert torch.equal(ttnn.to_torch(id_result_indices), ttnn.to_torch(ttnn_result_indices))
+
     # Convert back to torch and keep the top-`topk` slots (ranks 0..topk-1 sit in the first topk cols;
     # the dropped ranks topk..7 are zeroed by the kernel).
     output_torch = ttnn.to_torch(ttnn_result)[:, 0, :topk]

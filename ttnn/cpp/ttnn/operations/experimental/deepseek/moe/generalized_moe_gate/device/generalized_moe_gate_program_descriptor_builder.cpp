@@ -136,6 +136,7 @@ tt::tt_metal::ProgramDescriptor build_moe_gate_program_descriptor(
         {"moe_gate_enable_sigmoid", operation_attrs.enable_sigmoid ? 1u : 0u},
         {"moe_gate_topk", operation_attrs.topk},
         {"moe_gate_softmax", operation_attrs.output_softmax ? 1u : 0u},
+        {"moe_gate_identity_indices", operation_attrs.identity_indices ? 1u : 0u},
         {"moe_gate_ungrouped_top8", operation_attrs.grouped ? 0u : 1u},
         {"moe_gate_num_blocks", num_blocks},
         {"moe_gate_run_scores_cb", run_scores_cb},

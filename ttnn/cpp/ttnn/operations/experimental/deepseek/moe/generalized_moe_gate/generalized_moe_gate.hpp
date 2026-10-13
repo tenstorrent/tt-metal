@@ -24,6 +24,7 @@ std::tuple<ttnn::Tensor, ttnn::Tensor> generalized_moe_gate(
     bool enable_sigmoid,
     uint32_t topk = 8,
     bool output_softmax = false,
-    bool grouped = false);
+    bool grouped = false,
+    bool identity_indices = false);
 
 }  // namespace ttnn::experimental::deepseek::moe

@@ -577,6 +577,8 @@ class TTMoEGate:
                     enable_sigmoid=self.enable_sigmoid,
                     topk=self.k,
                     output_softmax=self.output_softmax,
+                    # one block's indices buffer is arange(256), which the op can write itself
+                    identity_indices=self.num_blocks == 1,
                 )
             weights_chunks.append(ttnn.to_memory_config(w, memory_config=ttnn.L1_MEMORY_CONFIG))
             indices_chunks.append(ttnn.to_memory_config(idx, memory_config=ttnn.L1_MEMORY_CONFIG))
