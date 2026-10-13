@@ -298,6 +298,13 @@ Tensor gather_dispatch(
     const auto& original_index_tensor_lshape = input_index_tensor.logical_shape();
     const auto index_tensor_rank = input_index_tensor.logical_shape().rank();
 
+    // Checked before the early exits and transforms: the device op only ever sees 4D operands.
+    TT_FATAL(
+        input_tensor_rank == index_tensor_rank,
+        "Input and index tensor must have the same number of dimensions. Got input dim: {} and index dim: {}",
+        input_tensor_rank,
+        index_tensor_rank);
+
     // Check for early exit for empty tensors tensors
     if (original_input_tensor_lshape == ttnn::Shape{}) {
         return input_tensor;
@@ -305,13 +312,6 @@ Tensor gather_dispatch(
     if (original_index_tensor_lshape == ttnn::Shape{}) {
         return input_index_tensor;
     }
-
-    // Checked before any transform: both operands are 4D by the time the device op validates ranks.
-    TT_FATAL(
-        input_tensor_rank == index_tensor_rank,
-        "Input and index tensor must have the same number of dimensions. Got input dim: {} and index dim: {}",
-        input_tensor_rank,
-        index_tensor_rank);
 
     // Narrow composite hop for RM B/W-sharded inputs with non-tile-aligned W. Retire when #47299 lands.
     if (ttnn::detail::needs_rm_irregular_composite(input_tensor, input_index_tensor)) {
