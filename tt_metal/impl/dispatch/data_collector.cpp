@@ -178,7 +178,7 @@ std::optional<tt::ProgramSubDeviceInfo> DataCollector::GetProgramSubDevice(
 tt::ProgramRealtimeProfilerCallbackHandle DataCollector::RegisterProgramRealtimeProfilerCallback(
     tt::ProgramRealtimeProfilerCallback callback) {
     std::lock_guard<std::mutex> lock(program_realtime_profiler_callbacks_mutex_);
-    auto handle = next_callback_handle_++;
+    auto handle = tt::AllocateProgramRealtimeProfilerCallbackHandle();
     program_realtime_profiler_callbacks_.push_back({handle, std::move(callback)});
     const auto& stored_callback = program_realtime_profiler_callbacks_.back().callback;
     for (auto* listener : realtime_callback_listeners_) {

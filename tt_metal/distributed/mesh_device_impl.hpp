@@ -14,6 +14,7 @@
 #include <optional>
 #include <ostream>
 #include <set>
+#include <shared_mutex>
 #include <string>
 #include <tuple>
 #include <unordered_map>
@@ -27,6 +28,7 @@
 #include <tt-metalium/core_coord.hpp>
 #include <tt-metalium/device.hpp>
 #include <tt-metalium/dispatch_core_common.hpp>
+#include <tt-metalium/experimental/realtime_profiler.hpp>
 #include <tt-metalium/hal_types.hpp>
 #include <tt-metalium/mesh_config.hpp>
 #include <tt-metalium/mesh_coord.hpp>
@@ -197,6 +199,14 @@ private:
     // handler). Constructed by init_realtime_profiler_socket() and torn down in close_impl()
     // before the rest of the mesh shutdown so its receiver thread observes a live device.
     std::unique_ptr<RealtimeProfilerManager> realtime_profiler_;
+    // Shared by callback (un)registration and activity queries; exclusive only to install or detach
+    // realtime_profiler_, so close_impl() can shut it down without holding the lock.
+    mutable std::shared_mutex realtime_profiler_mutex_;
+
+    // Runs f(manager, chip_filter) with the real-time profiler serving this mesh: its own, or for a submesh without
+    // one the nearest ancestor's, with chip_filter restricting delivery to this mesh's chips. Returns false if none.
+    template <typename F>
+    bool with_realtime_profiler(F&& f) const;
 
     // Constructed by init_streaming_profiler() when TT_METAL_STREAMING_PROFILER is set; torn down in
     // close_impl().
@@ -384,6 +394,13 @@ public:
     void init_streaming_profiler(const std::shared_ptr<MeshDevice>& mesh_device);
     void trigger_realtime_profiler_sync_check();
     RealtimeProfilerManager* get_realtime_profiler() const;
+
+    // Real-time profiler callbacks scoped to this mesh's chips; see experimental/realtime_profiler.hpp.
+    tt::tt_metal::experimental::ProgramRealtimeProfilerCallbackHandle register_realtime_profiler_callback(
+        tt::tt_metal::experimental::ProgramRealtimeProfilerCallback callback);
+    void unregister_realtime_profiler_callback(
+        tt::tt_metal::experimental::ProgramRealtimeProfilerCallbackHandle handle);
+    bool is_realtime_profiler_active() const;
 
     // DRISC L1 arena. Consumed by the DRAM-sender GlobalCircularBuffer ctor for
     // pages_sent allocations. Constructed eagerly in initialize_impl() when the

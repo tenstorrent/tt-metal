@@ -1103,9 +1103,14 @@ bool MeshDeviceImpl::close_impl(MeshDevice* pimpl_wrapper) {
 
     // Tear down RT profiler after the CQ has shut down (so dispatch_s has already issued
     // the final TERMINATE) but before the rest of the device teardown.
-    if (realtime_profiler_) {
-        realtime_profiler_->shutdown();
-        realtime_profiler_.reset();
+    std::unique_ptr<RealtimeProfilerManager> realtime_profiler;
+    {
+        std::unique_lock lock(realtime_profiler_mutex_);
+        realtime_profiler = std::move(realtime_profiler_);
+    }
+    if (realtime_profiler) {
+        realtime_profiler->shutdown();
+        realtime_profiler.reset();
     }
     streaming_profiler_.reset();
 
@@ -1783,6 +1788,7 @@ bool MeshDeviceImpl::initialize_impl(
 }
 
 void MeshDeviceImpl::init_realtime_profiler_socket(const std::shared_ptr<MeshDevice>& mesh_device) {
+    std::unique_lock lock(realtime_profiler_mutex_);
     if (realtime_profiler_) {
         return;
     }
@@ -1813,6 +1819,50 @@ void MeshDeviceImpl::trigger_realtime_profiler_sync_check() {
 }
 
 RealtimeProfilerManager* MeshDeviceImpl::get_realtime_profiler() const { return realtime_profiler_.get(); }
+
+template <typename F>
+bool MeshDeviceImpl::with_realtime_profiler(F&& f) const {
+    for (const MeshDeviceImpl* owner = this; owner != nullptr;
+         owner = owner->parent_mesh_ ? &owner->parent_mesh_->impl() : nullptr) {
+        std::shared_lock lock(owner->realtime_profiler_mutex_);
+        if (!owner->realtime_profiler_) {
+            continue;
+        }
+        std::optional<std::unordered_set<uint32_t>> chip_filter;
+        if (owner != this) {
+            chip_filter.emplace();
+            for (const auto* device : view_->get_devices()) {
+                chip_filter->insert(static_cast<uint32_t>(device->id()));
+            }
+        }
+        f(*owner->realtime_profiler_, chip_filter);
+        return true;
+    }
+    return false;
+}
+
+tt::tt_metal::experimental::ProgramRealtimeProfilerCallbackHandle MeshDeviceImpl::register_realtime_profiler_callback(
+    tt::tt_metal::experimental::ProgramRealtimeProfilerCallback callback) {
+    const auto handle = tt::AllocateProgramRealtimeProfilerCallbackHandle();
+    with_realtime_profiler([&](RealtimeProfilerManager& realtime_profiler, const auto& chip_filter) {
+        realtime_profiler.add_consumer(handle, std::move(callback), chip_filter);
+    });
+    return handle;
+}
+
+void MeshDeviceImpl::unregister_realtime_profiler_callback(
+    tt::tt_metal::experimental::ProgramRealtimeProfilerCallbackHandle handle) {
+    with_realtime_profiler(
+        [&](RealtimeProfilerManager& realtime_profiler, const auto&) { realtime_profiler.remove_consumer(handle); });
+}
+
+bool MeshDeviceImpl::is_realtime_profiler_active() const {
+    bool active = false;
+    with_realtime_profiler([&](const RealtimeProfilerManager& realtime_profiler, const auto& chip_filter) {
+        active = realtime_profiler.is_active(chip_filter);
+    });
+    return active;
+}
 
 ::tt::tt_metal::DriscL1Arena& MeshDeviceImpl::drisc_l1_arena() const {
     TT_FATAL(

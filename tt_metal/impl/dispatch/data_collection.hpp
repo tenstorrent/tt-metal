@@ -101,6 +101,9 @@ ProgramRealtimeProfilerCallbackHandle RegisterProgramRealtimeProfilerCallback(Pr
 // Unregister a previously registered callback by its handle.
 void UnregisterProgramRealtimeProfilerCallback(ProgramRealtimeProfilerCallbackHandle handle);
 
+// Returns a callback handle that is unique across every MeshDevice and MetalContext in the process.
+ProgramRealtimeProfilerCallbackHandle AllocateProgramRealtimeProfilerCallbackHandle();
+
 class RealtimeProfilerCallbackListener {
 public:
     virtual ~RealtimeProfilerCallbackListener() = default;

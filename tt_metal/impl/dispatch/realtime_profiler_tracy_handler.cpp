@@ -81,23 +81,10 @@ std::string FormatTopCounts(const std::unordered_map<Key, uint64_t>& counts) {
 
 }  // namespace
 
-RealtimeProfilerTracyHandler::RealtimeProfilerTracyHandler() {
-#if defined(TRACY_ENABLE)
-    callback_handle_ = tt::RegisterProgramRealtimeProfilerCallback([this](const tt::ProgramRealtimeRecordBatch& batch) {
-        if (!tracy::GetProfiler().IsConnected()) {
-            return;
-        }
-        for (const auto& record : batch.records) {
-            HandleRecord(record);
-        }
-    });
-#endif
-}
+RealtimeProfilerTracyHandler::RealtimeProfilerTracyHandler() = default;
 
 RealtimeProfilerTracyHandler::~RealtimeProfilerTracyHandler() {
 #if defined(TRACY_ENABLE)
-    tt::UnregisterProgramRealtimeProfilerCallback(callback_handle_);
-
     std::lock_guard<std::mutex> lock(mutex_);
     MaybeEmitSkippedZoneSummaryLocked();
 
@@ -207,6 +194,17 @@ void RealtimeProfilerTracyHandler::MaybeEmitSkippedZoneSummaryLocked() {
     stats.count_by_runtime_id.clear();
     stats.count_by_chip_id.clear();
     stats.last_summary_time = std::chrono::steady_clock::now();
+}
+
+void RealtimeProfilerTracyHandler::HandleBatch([[maybe_unused]] const tt::ProgramRealtimeRecordBatch& batch) {
+#if defined(TRACY_ENABLE)
+    if (!tracy::GetProfiler().IsConnected()) {
+        return;
+    }
+    for (const auto& record : batch.records) {
+        HandleRecord(record);
+    }
+#endif
 }
 
 void RealtimeProfilerTracyHandler::HandleRecord(const tt::ProgramRealtimeRecord& record) {

@@ -130,7 +130,6 @@ private:
     mutable std::mutex program_realtime_profiler_callbacks_mutex_;
     std::vector<RealtimeCallbackRegistration> program_realtime_profiler_callbacks_;
     std::vector<tt::RealtimeProfilerCallbackListener*> realtime_callback_listeners_;
-    tt::ProgramRealtimeProfilerCallbackHandle next_callback_handle_{0};
 
     mutable std::mutex realtime_profiler_active_chips_mutex_;
     std::unordered_set<uint32_t> realtime_profiler_active_chips_;
