@@ -24,6 +24,13 @@ static_assert(PERF_RUN_TYPE != PerfRunType::L1_CONGESTION, "L1 congestion not su
 
 static constexpr std::uint32_t MAX_TILES_DEST = is_fp32_dest_acc_en ? 4 : 8;
 
+#ifdef UNPACK_TRANSPOSE_BLOCK
+// The driver sets it for uncompressed formats, whose back to back tiles the block walks through
+#ifndef TRANSPOSE_BLOCK_BACK_TO_BACK
+#define TRANSPOSE_BLOCK_BACK_TO_BACK false
+#endif
+#endif
+
 #ifdef LLK_TRISC_UNPACK
 
 #include "llk_unpack_A.h"
@@ -65,7 +72,7 @@ void run_kernel(RUNTIME_PARAMETERS params)
             const std::uint32_t tile_stride = GET_L1_HEADERLESS_TILE_SIZE(formats.unpack_A_src);
             for (std::uint32_t block_start = 0; block_start < TILE_CNT; block_start += MAX_TILES_DEST)
             {
-                _llk_unpack_A_transpose_block_(
+                _llk_unpack_A_transpose_block_<TRANSPOSE_BLOCK_BACK_TO_BACK>(
                     PERF_ADDRESS(PERF_INPUT_A, 0) + block_start * tile_stride, std::min(TILE_CNT - block_start, MAX_TILES_DEST), tile_stride);
             }
 #else

@@ -42,7 +42,7 @@ class UNPACK_FORM(TemplateParameter):
 @parametrize(
     formats=input_output_formats([DataFormat.Float16_b, DataFormat.Float16], same=True),
     dest_acc=[DestAccumulation.No, DestAccumulation.Yes],
-    unpack_form=[1, 2],
+    unpack_form=[1, 2, 3, 4],
 )
 def test_unpack_transpose_block(formats, dest_acc, unpack_form):
     unpack_transpose_block(formats, dest_acc, unpack_form, [256, 128])
@@ -53,7 +53,7 @@ def test_unpack_transpose_block(formats, dest_acc, unpack_form):
 @parametrize(
     formats=input_output_formats([DataFormat.Int8], same=True),
     dest_acc=[DestAccumulation.Yes],
-    unpack_form=[1, 2],
+    unpack_form=[1, 2, 3, 4],
 )
 def test_unpack_transpose_block_int8(formats, dest_acc, unpack_form):
     unpack_transpose_block(formats, dest_acc, unpack_form, [128, 128])

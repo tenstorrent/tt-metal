@@ -302,6 +302,12 @@ inline void llk_unpack_A_transpose_block(
         StateDiscard<std::uint32_t>(ntiles)));
 
     WAYPOINT("UPAW");
-    _llk_unpack_A_transpose_block_(address, ntiles, tile_stride);
+    // A CB page holds one tile, so the tiles of an uncompressed block lie back to back
+    if (!IS_BFP_FORMAT(unpack_src_format[operand_id])) {
+        LLK_ASSERT(tile_stride == 64 * datum_size_in_bytes(unpack_src_format[operand_id]), "Back to back 32x32 tiles");
+        _llk_unpack_A_transpose_block_<true>(address, ntiles, tile_stride);
+    } else {
+        _llk_unpack_A_transpose_block_(address, ntiles, tile_stride);
+    }
     WAYPOINT("UPAD");
 }

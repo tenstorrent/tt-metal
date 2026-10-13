@@ -422,6 +422,21 @@ inline void transpose_block_tiles(const std::uint32_t num_tiles)
         ckernel::ckernel_template::run();
     }
 }
+
+// The input address counts W in whole tiles of the tile descriptor, so back to back tiles need no address write.
+inline void transpose_block_tiles_w(const std::uint32_t num_tiles)
+{
+    TTI_SETADCZW(0b011, 0, 0, 0, 0, 0b1111);
+    for (std::uint32_t tile = 0; tile < num_tiles; ++tile)
+    {
+        // The MOP leaves Z at 1
+        TTI_SETADCZW(p_setadc::UNP_A, 0, 0, 0, 0, 0b0001);
+        ckernel::ckernel_template::run();
+        TTI_INCADCZW(p_setadc::UNP_A, 0, 0, 1, 0);
+    }
+    // Not every unpack call clears W
+    TTI_SETADCZW(p_setadc::UNP_A, 0, 0, 0, 0, 0b0010);
+}
 } // namespace llk_unpack_a_detail
 
 /**
@@ -432,34 +447,45 @@ inline void transpose_block_tiles(const std::uint32_t num_tiles)
  *
  * @param address: L1 address of the first tile.
  * @param num_tiles: Number of tiles, at least one.
+ * @tparam tiles_back_to_back: The tiles are uncompressed and tile_stride_16B is their size; the unpacker's W counter walks
+ *         from one tile into the next instead of a CFGSHIFTMASK per tile.
  * @param tile_stride_16B: L1 distance between consecutive tiles of the block, in 16-byte words.
  * @note Call @ref _llk_unpack_A_init_ with transpose_of_faces set, no broadcast and no unpack to dest before this function.
  */
+template <bool tiles_back_to_back = false>
 inline void _llk_unpack_A_transpose_block_(const std::uint32_t address, const std::uint32_t num_tiles, const std::uint32_t tile_stride_16B)
 {
     LLK_ASSERT(num_tiles > 0, "A block has at least one tile");
     LLK_ASSERT(is_valid_L1_address(address), "L1 address must be in valid L1 memory region");
     LLK_ASSERT(is_valid_L1_address(address + (num_tiles - 1) * tile_stride_16B), "L1 address of the last tile must be in valid L1 memory region");
 
-    // Through the stream, so the write lands behind the CFGSHIFTMASKs of an earlier block
-    TT_SETDMAREG(0, LOWER_HALFWORD(tile_stride_16B), 0, LO_16(p_gpr_unpack::TMP0));
-    TT_SETDMAREG(0, UPPER_HALFWORD(tile_stride_16B), 0, HI_16(p_gpr_unpack::TMP0));
-    TTI_STALLWAIT(p_stall::STALL_CFG, p_stall::THCON);
-    TTI_WRCFG(p_gpr_unpack::TMP0, p_cfg::WRCFG_32b, SCRATCH_SEC0_val_ADDR32);
+    if constexpr (!tiles_back_to_back)
+    {
+        // Through the stream, so the write lands behind the CFGSHIFTMASKs of an earlier block
+        TT_SETDMAREG(0, LOWER_HALFWORD(tile_stride_16B), 0, LO_16(p_gpr_unpack::TMP0));
+        TT_SETDMAREG(0, UPPER_HALFWORD(tile_stride_16B), 0, HI_16(p_gpr_unpack::TMP0));
+        TTI_STALLWAIT(p_stall::STALL_CFG, p_stall::THCON);
+        TTI_WRCFG(p_gpr_unpack::TMP0, p_cfg::WRCFG_32b, SCRATCH_SEC0_val_ADDR32);
+    }
 
     const bool context_0                   = unp_cfg_context == 0;
     volatile std::uint32_t tt_reg_ptr *cfg = get_cfg_pointer();
     wait_for_next_context(2);
 
-    // Every tile adds the stride first
-    cfg[context_0 ? THCON_SEC0_REG3_Base_address_ADDR32 : THCON_SEC0_REG3_Base_cntx1_address_ADDR32] = address - tile_stride_16B;
+    // Every tile of the CFGSHIFTMASK form adds the stride first
+    cfg[context_0 ? THCON_SEC0_REG3_Base_address_ADDR32 : THCON_SEC0_REG3_Base_cntx1_address_ADDR32] =
+        tiles_back_to_back ? address : address - tile_stride_16B;
 
     semaphore_post(semaphore::UNPACK_SYNC);
 
     // The CFGSHIFTMASKs and UNPACRs wait for the base address store
     TTI_STALLWAIT(p_stall::STALL_UNPACK | p_stall::STALL_CFG, p_stall::TRISC_CFG);
 
-    if (context_0)
+    if constexpr (tiles_back_to_back)
+    {
+        llk_unpack_a_detail::transpose_block_tiles_w(num_tiles);
+    }
+    else if (context_0)
     {
         llk_unpack_a_detail::transpose_block_tiles<THCON_SEC0_REG3_Base_address_ADDR32>(num_tiles);
     }
