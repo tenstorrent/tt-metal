@@ -91,6 +91,13 @@ constexpr bool PERF_PACK_SECTION_RELEASE = false;
 #else
 #define LLK_INIT_CONST const
 #endif
+// A constexpr local INIT passes by value is still captured (the copy odr-uses it) and read at run time; the INIT
+// measurement build makes it static, so it folds as production's operand arrays do; every other build is unchanged
+#if defined(LLK_DBG_BARRIER) && defined(LLK_PERF_INIT_ONLY)
+#define LLK_INIT_STATIC static
+#else
+#define LLK_INIT_STATIC
+#endif
 // The code after the measured loop (uninit): placed like INIT, but never timed as INIT in the INIT measurement build.
 #if defined(LLK_DBG_BARRIER) && defined(LLK_PERF_OOL)
 #define LLK_UNINIT_BEGIN [=]() __attribute__((noipa, section(".llk_init_text"), aligned(512)))
@@ -105,7 +112,11 @@ constexpr bool PERF_PACK_SECTION_RELEASE = false;
 #if defined(LLK_DBG_BARRIER)
 #define LLK_POST_LOOP_BEGIN [=]() __attribute__((noipa, section(".llk_init_text"), aligned(512)))
 #define LLK_POST_LOOP_END   ()
-#define LLK_PERF_OPAQUE(v)  asm volatile("" : "+r"(v))
+#if defined(LLK_PERF_INIT_ONLY) // INIT's own noipa body cannot change the loop's registers: its copies fold as in production
+#define LLK_PERF_OPAQUE(v)
+#else
+#define LLK_PERF_OPAQUE(v) asm volatile("" : "+r"(v))
+#endif
 #else
 #define LLK_POST_LOOP_BEGIN
 #define LLK_POST_LOOP_END
