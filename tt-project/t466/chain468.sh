@@ -1,6 +1,6 @@
 #!/bin/bash
-# #468 chain (g15blx02): wait for cp466 on blx01, then the cold job (c10s0, up to 3 tries while the cache builds),
-# then the 10 s seed-0 A/B (up to 2 tries). One broker job at a time, each through blx01-submit.sh (health + lint).
+# #468 chain (g15blx02): wait for cp466 on blx01, then the cold base job (c10s0, up to 5 tries while the JIT cache
+# builds; each try gets further), the cold lofi job (up to 3 tries), then the 10 s seed-0 A/B (up to 2 tries). One broker job at a time, each through blx01-submit.sh (health + lint).
 # Writes the first failing step's code to $M ("0" when all done).
 set -eo pipefail
 D=$(cd "$(dirname "$0")" && pwd); SUB=/home/smarton/fasth3/tt-metal/tt-project/t288/blx01-submit.sh
@@ -30,8 +30,10 @@ run() {
   log "job $id: $($SSH "tt-device-mcp status -j $id" 2>/dev/null | grep -iE '^(Status|Exit)' | tr '\n' ' ')"
 }
 pass() { $SSH "test -e /var/tmp/fasth3/t466/out_$1/PASS"; }
-for t in 1 2 3; do run $D/spec_c10s0.txt; pass c10s0_base && break; done
+for t in 1 2 3 4 5; do pass c10s0_base && break; run $D/spec_c10s0.txt; done
 pass c10s0_base || exit 12
+for t in 1 2 3; do pass c10s0_lofi && break; run $D/spec_c10s0l.txt; done
+pass c10s0_lofi || exit 14
 for t in 1 2; do run $D/spec_ab10s0.txt; pass ab10s0_base && pass ab10s0_lofi && break; done
 pass ab10s0_base && pass ab10s0_lofi || exit 13
 log "all done"

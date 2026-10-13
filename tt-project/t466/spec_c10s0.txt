@@ -4,5 +4,5 @@ CONFIG=t466-turbo-c10s0
 TIMEOUT=600
 WORKDIR=/var/tmp/fasth3/t466/b
 ENV=/var/tmp/fasth3/t466/env466.yaml
-CMD=env T466_PY_TIMEOUT=560 bash /var/tmp/fasth3/t466/run466.sh c10s0 10 0 base
+CMD=env T466_PY_TIMEOUT=560 T286_WARM_DEADLINE_S=520 T286_WARM_LATE_S=520 bash /var/tmp/fasth3/t466/run466.sh c10s0 10 0 base
 NEEDS=/var/tmp/fasth3/t466/b/build_Release

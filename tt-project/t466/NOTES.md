@@ -119,3 +119,12 @@ logs "T466 summary: ring_joint_sdpa gain X%, layer gain Y%" and PCC between arms
 - blx01 drop seen (not ours): 2026-10-13 10:57 UTC, ltx-host job 130 broker-killed, chips 5,13,18,23,29 left PCIe;
   recovered by 11:02 UTC (pci-rescan, glx_reset, fabric-check, hold ended).
 - Next: on chain468.done = 0, read out_ab10s0_{base,lofi}/run.log timing sections; then 6 s seed 0 A/B, seeds 1-4, VBench.
+
+## 2026-10-13 13:45 UTC (06:45 PDT, #468 attempt 2 wake): cold job needs more tries
+- cp466 rc=0 (weights 135G local). Cold c10s0 base: blx01 jobs 146, 148, 150 all exit 1 on the t286 400 s warm deadline,
+  each further than the last (JIT persists): 146 built the weight caches (3 MISS) and died in VAE canvases (JIT 17% hit);
+  148 in audio lengths (12%); 150 at audio 11/12 (52% hit, 4/4 weight HIT). Cache 115G, JIT 5.6G, / 283G free.
+  Not a drop, not a bug: the cold JIT build of the warmup set takes more than one 600 s job.
+- Change: cold specs now pass T286_WARM_DEADLINE_S=520 (py timeout 560, -t 600) to get more compile per job; added a cold
+  lofi job (spec_c10s0l: the lofi SDPA kernels are new compiles, would blow the A/B's 280 s arm timeout).
+  chain468.sh: cold base <= 5 tries, cold lofi <= 3, then ab10s0 <= 2. Relaunched from run 1777.
