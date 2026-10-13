@@ -1,0 +1,15 @@
+o2 head
+o2 f6
+o2 x1
+o2 x2
+o2 x3
+o2 x3
+o2 x2
+o2 x1
+o2 f6
+o2 head
+o2 head
+o2 f6
+o2 x1
+o2 x2
+o2 x3

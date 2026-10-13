@@ -1,0 +1,5 @@
+test_group_norm_sharded_sdxl
+test_group_norm_sharded_welford
+test_layer_norm_interleaved[whisper_dec]
+test_bng_sharded[bfp8-add-hs_1024x1024_8c]
+test_bng_sharded[bf16-mul-hs_1024x1024_8c]

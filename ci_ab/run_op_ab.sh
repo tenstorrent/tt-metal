@@ -10,7 +10,7 @@ R=$(git rev-parse --show-toplevel); S=$R/ci_ab; cd $R
 PLAN=$S/${1:-opplan.txt}
 SP=$(python -c "import ttnn, os; print(os.path.dirname(os.path.dirname(os.path.abspath(ttnn.__file__))))")
 echo "== start $(date -u +%T) checkout $R package root $SP"
-export PYTHONPATH="$S/ops:$R${PYTHONPATH:+:$PYTHONPATH}" SEL_FILE=$S/ops/sel.txt EB_REPS=${EB_REPS:-4}
+export PYTHONPATH="$S/ops:$R${PYTHONPATH:+:$PYTHONPATH}" SEL_FILE=${OPSEL:-$S/ops/sel.txt} EB_REPS=${EB_REPS:-4}
 OBJ=$(find / -name riscv-tt-elf-objcopy -type f 2>/dev/null | head -1)
 place() {
   while read -r rel; do
