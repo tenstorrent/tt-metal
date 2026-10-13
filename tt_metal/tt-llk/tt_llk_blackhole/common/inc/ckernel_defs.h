@@ -372,6 +372,8 @@ enum class BinaryOp : std::uint8_t
     LOGADDEXP2 = 46,
     // The test harness times calculate_sfpu_binary_pow, the body power_binary_tile runs, under this name.
     POW_TILE = 47,
+    // The test harness times calculate_sfpu_binary_mul, the body mul_binary_tile runs, under this name.
+    MUL_TILE = 48,
 };
 
 enum class PackMode : std::uint8_t

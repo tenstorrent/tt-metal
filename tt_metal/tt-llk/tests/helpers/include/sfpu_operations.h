@@ -1692,6 +1692,10 @@ void call_binary_sfpu_operation_init()
     {
         SFPU_BINARY_INIT_FN(power, sfpu_binary_pow_init, (APPROXIMATION_MODE));
     }
+    else if constexpr (BINOP == BinaryOp::MUL_TILE)
+    {
+        SFPU_BINARY_INIT_FN(add1, sfpu_binary_init, (APPROXIMATION_MODE, BinaryOp::MUL));
+    }
 #endif
     else if constexpr (BINOP == BinaryOp::ADD_TOP_ROW)
     {
@@ -1905,7 +1909,8 @@ void call_binary_sfpu_operation(
     constexpr bool is_int32 = MATH_FORMAT == static_cast<std::uint32_t>(DataFormat::Int32);
     constexpr bool one_call =
         ITERATIONS == 32 &&
-        (BINOP == BinaryOp::DIV || BINOP == BinaryOp::RSUB || BINOP == BinaryOp::POW_TILE || BINOP == BinaryOp::XLOGY ||
+        (BINOP == BinaryOp::DIV || BINOP == BinaryOp::RSUB || BINOP == BinaryOp::POW_TILE || BINOP == BinaryOp::MUL_TILE ||
+         BINOP == BinaryOp::XLOGY ||
          ((BINOP == BinaryOp::ADD || BINOP == BinaryOp::SUB || BINOP == BinaryOp::MUL) && !is_int32) ||
          ((BINOP == BinaryOp::LT || BINOP == BinaryOp::GT || BINOP == BinaryOp::LE || BINOP == BinaryOp::GE || BINOP == BinaryOp::EQ || BINOP == BinaryOp::NE) &&
           !is_int32) ||
@@ -1992,24 +1997,23 @@ void call_binary_sfpu_operation(
             dst_index_out,
             vector_mode);
     }
-#endif
-    else if constexpr (BINOP == BinaryOp::MUL && !math_is_int32)
+    else if constexpr (BINOP == BinaryOp::MUL_TILE)
     {
-        // Float MUL runs the production kernel (calculate_sfpu_binary_mul, what mul_binary_tile()
-        // dispatches) on WH and BH: on a bf16 Dest it rounds to nearest even and forces
-        // 0 * x = 0, which the generic arm below does not. Int32 MUL is MUL_INT32, so MUL with
-        // an Int32 format has no arm and falls through to the LLK_ASSERT.
+        // The body mul_binary_tile runs; MUL keeps the generic loop's arm.
         SFPU_BINARY_CALL(
             DST_SYNC_MODE,
             DST_ACCUM_MODE,
             calculate_sfpu_binary_mul,
-            (APPROXIMATION_MODE, BINOP, PER_FACE_ITERATIONS, DST_ACCUM_MODE),
+            (APPROXIMATION_MODE, BinaryOp::MUL, PER_FACE_ITERATIONS, DST_ACCUM_MODE),
             dst_index_in0,
             dst_index_in1,
             dst_index_out,
             vector_mode);
     }
-    else if constexpr (BINOP == BinaryOp::ADD || BINOP == BinaryOp::SUB || BINOP == BinaryOp::RSUB || BINOP == BinaryOp::XLOGY || BINOP == BinaryOp::POW)
+#endif
+    else if constexpr (
+        BINOP == BinaryOp::ADD || BINOP == BinaryOp::SUB || BINOP == BinaryOp::MUL || BINOP == BinaryOp::RSUB || BINOP == BinaryOp::XLOGY ||
+        BINOP == BinaryOp::POW)
     {
         if constexpr (BINOP == BinaryOp::ADD && math_is_int32)
         {
