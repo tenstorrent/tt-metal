@@ -297,6 +297,77 @@ def test_sort_single_core_pad_value_ties_index_correctness(ttnn_dtype, descendin
     assert_equal(input.reshape(-1)[indices], values)
 
 
+def _sort_factory_name(device, n, ttnn_dtype):
+    """Mirror of SortDeviceOperation::select_program_factory for a TILE row of width n."""
+    wt = max(_next_pow2(n), 2 * TILE_WIDTH) // TILE_WIDTH
+    if wt <= 64:
+        return "SingleCore"
+    if ttnn_dtype != ttnn.uint16 and _crosscore_serves(device, wt * TILE_WIDTH):
+        return "CrossCore"
+    return "MultiCore DRAM"
+
+
+def _assert_indices_in_range(indices, n, factory):
+    leaked = indices >= n
+    assert not leaked.any(), (
+        f"{factory} factory: {int(leaked.sum())} padding indices (>= n={n}) in the output, "
+        f"max index {int(indices.max())}"
+    )
+
+
+# #53326 asks for indices in [0, n) whatever the input holds. Masked logits (a few finite values in a
+# row of the padding value) pass on CrossCore (n=3000) and on MultiCore DRAM (n=300000), but every
+# SingleCore width (padded width <= 2048: n=100, n=2000) still leaks padding indices, bfloat16 included.
+@pytest.mark.parametrize(
+    "descending, fill", [(True, float("-inf")), (False, float("inf"))], ids=["desc_neg_inf", "asc_pos_inf"]
+)
+@pytest.mark.parametrize("ttnn_dtype", [ttnn.bfloat16, ttnn.float32], ids=["bf16", "fp32"])
+@pytest.mark.parametrize("n", [100, 2000, 3000, 300000])
+def test_sort_pad_value_ties_index_range_every_factory(n, ttnn_dtype, descending, fill, device):
+    torch.manual_seed(0)
+    torch_dtype = torch.bfloat16 if ttnn_dtype == ttnn.bfloat16 else torch.float32
+    num_finite = n // 4
+
+    input = torch.full((1, n), fill, dtype=torch_dtype)
+    input[0, torch.randperm(n)[:num_finite]] = (torch.randn(num_finite) * 8.0).to(torch_dtype)
+
+    ttnn_input = ttnn.from_torch(input, ttnn_dtype, layout=ttnn.Layout.TILE, device=device)
+    ttnn_values, ttnn_indices = ttnn.sort(ttnn_input, dim=-1, descending=descending)
+
+    indices = ttnn.to_torch(ttnn_indices).to(torch.int64)
+    _assert_indices_in_range(indices, n, _sort_factory_name(device, n, ttnn_dtype))
+    _assert_unstable_sort_invariants(input, ttnn_values, ttnn_indices, descending)
+
+
+# fp32 NaN leaks padding indices on every factory, with either stability. The SFPU orders values by sign
+# and magnitude, so +NaN sorts above the +inf padding (ascending) and -NaN below the -inf padding
+# (descending). The NaN never ties with the padding, so the index-aware comparator never fires: the NaN
+# lands past the cut, and the slice back to n drops it and keeps a padding element instead.
+# (bfloat16 NaN reaches the comparator as ±inf, so it only leaks where ±inf does.)
+@pytest.mark.parametrize("stable", [False, True], ids=["unstable", "stable"])
+@pytest.mark.parametrize(
+    "descending, nan_bits",
+    [(False, 0x7FC00000), (True, 0xFFC00000 - (1 << 32))],  # +NaN / -NaN as int32 bit patterns
+    ids=["asc_pos_nan", "desc_neg_nan"],
+)
+@pytest.mark.parametrize("n", [1000, 3000, 300000])
+def test_sort_fp32_nan_index_range_every_factory(n, descending, nan_bits, stable, device):
+    torch.manual_seed(0)
+    num_nan = 4
+
+    input = torch.randn(1, n) * 8.0
+    input.view(torch.int32)[0, torch.randperm(n)[:num_nan]] = nan_bits
+
+    ttnn_input = ttnn.from_torch(input, ttnn.float32, layout=ttnn.Layout.TILE, device=device)
+    ttnn_values, ttnn_indices = ttnn.sort(ttnn_input, dim=-1, descending=descending, stable=stable)
+
+    indices = ttnn.to_torch(ttnn_indices).to(torch.int64)
+    _assert_indices_in_range(indices, n, _sort_factory_name(device, n, ttnn.float32))
+    assert torch.equal(torch.sort(indices, dim=-1).values, torch.arange(n).unsqueeze(0)), "indices not a permutation"
+    gathered = torch.gather(input, -1, indices)
+    torch.testing.assert_close(ttnn.to_torch(ttnn_values), gathered, rtol=0, atol=0, equal_nan=True)
+
+
 @pytest.mark.parametrize(
     "shape, dim, descending",
     [
