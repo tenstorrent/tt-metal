@@ -12,10 +12,12 @@
 // load order.
 #pragma once
 
+#include <cstddef>
 #include <cstdint>
 #include <functional>
 #include <span>
 #include <string>
+#include <vector>
 
 #include "hostdev/debug_event_meta.h"
 
@@ -32,6 +34,16 @@ struct ObservabilityEventMetaEntry {
     uint32_t line = 0;
     tt::debug_event::SiteMeta meta;  // the site's metadata struct, unmarshalled; see SiteMeta::as<T>()
 };
+
+// One image's .tt_observability_event_meta records, read against its .tt_observability_event_str (which the device sees
+// at STR_VMA). Pure: the signature and string fields point into STR, and nothing is registered or checked against an id
+// block. The walk stops at the first record it cannot size or whose strings it cannot resolve, since nothing after it
+// can be found either; a record it can size but that has no name is returned with an empty name.
+struct ParsedMetaRecords {
+    std::vector<ObservabilityEventMetaEntry> entries;
+    bool stopped_early = false;  // a layout this reader does not know (a stale JIT cache) or a damaged section
+};
+ParsedMetaRecords parse_meta_records(std::span<const std::byte> meta, std::span<const std::byte> str, uint64_t str_vma);
 
 class ObservabilityEventMetaRegistry {
 public:

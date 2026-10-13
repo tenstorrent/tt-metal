@@ -3,6 +3,7 @@
 
 set(UNIT_TESTS_DEBUG_TOOLS_SRC
     debug_event/test_debug_event_meta.cpp
+    debug_event/test_debug_event_meta_loader.cpp
     device_print/test_compilation_failures.cpp
     device_print/test_multi_kernel_print.cpp
     device_print/test_dram_print_output.cpp
