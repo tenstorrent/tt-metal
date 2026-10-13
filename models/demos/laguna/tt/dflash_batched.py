@@ -65,8 +65,8 @@ class BatchedDFlash:
             raise ValueError(f"batched draft: K={self.K} needs {self.Q} rows per user; U must be a multiple of {TILE // self.Q}")
         self.G = TILE // self.Q
         self.P = self.U // self.G  # user groups: group c holds users c * G .. in rows of Q each
-        # ring of group c: [nkv, G * RING, hd], its users' slots one after another (dest u * RING + slot)
-        zeros = torch.zeros((self.P, self.nkv, self.G * self.RING, self.hd), dtype=torch.bfloat16)
+        # per-user context rings [U, nkv, RING, hd] (the draft's attention runs per user: dflash_query_forward_users)
+        zeros = torch.zeros((self.U, self.nkv, self.RING, self.hd), dtype=torch.bfloat16)
         self.rings = {i: (self._dev(zeros, ttnn.TILE_LAYOUT), self._dev(zeros, ttnn.TILE_LAYOUT)) for i in core.layers}
         self.base = [0] * self.U
         self.slot_pos = torch.full((self.U, self.RING), -1, dtype=torch.int64)
@@ -76,7 +76,7 @@ class BatchedDFlash:
         self.stats = []
         self._traced = False
         self._gqa = int(layer0.cfg.num_heads) // self.nkv
-        self._gqa_fold = os.environ.get("TT_LAGUNA_DFLASH_DRAFT_GQA_FOLD", "1") == "1" and self._gqa > 1
+        self._rp = -(-self._gqa * self.Q // TILE) * TILE  # per-user query block rows (dflash_q_users.to_users)
         # the draft's U * 16-row norms width-sharded over the grid (the interleaved norm used 16 cores)
         for layer in core.layers.values():
             layer._norm_max_rows = int(os.environ.get("TT_LAGUNA_DFLASH_DRAFT_NORM_ROWS", str(max(TILE, self.U * self.Q))))
@@ -154,19 +154,19 @@ class BatchedDFlash:
 
     # ---- one round ---------------------------------------------------------------------------------------------- #
     def _draft_inputs(self):
-        """Host inputs of a draft with G users per 32-row tile, Q rows each: token ids [1, U * Q] (user u: its bonus,
-        then Q - 1 mask tokens), (cos, sin) [P, 1, 32, hd] at each row's position, the ring slots [1, U * Q] the rows'
-        keys/values are written to (user * RING + slot), and the attention mask [P, 1, 32, G * RING] over the group's
-        ring slots: a row sees its own user's slots holding a position in its causal sliding window -- committed
-        context, and its own block's earlier rows (written there by the draft layers)."""
-        U, P, R, Q, G = self.U, self.P, self.RING, self.Q, self.G
+        """Host inputs of a draft with Q rows per user: token ids [1, U * Q] (user u: its bonus, then Q - 1 mask
+        tokens), (cos, sin) [1, 1, U * Q, hd] at each row's position, the ring slots [1, U * Q] the rows' keys/values
+        are written to (user * RING + slot), and the attention mask [U, 1, RP, RING] for each user's query block
+        (rows (h % G) * Q + i: row i of every query head): a row sees its user's slots holding a position in its
+        causal sliding window -- committed context, and its block's earlier rows (written there by the draft layers).
+        The block's padding rows see every slot (their outputs are dropped)."""
+        U, R, Q, G, RP = self.U, self.RING, self.Q, self._gqa, self._rp
         ids = torch.full((1, U * Q), self.mask_id, dtype=torch.int32)
         for u in range(U):
             ids[0, u * Q] = self.bonus[u]
         p0 = torch.tensor([self.ctx_start[u] + self.ctx_rows[u] for u in range(U)], dtype=torch.int64)
         base = torch.tensor(self.base, dtype=torch.int64)
-        qi = torch.arange(Q)
-        qpos = p0[:, None] + qi[None, :]  # [U, Q]
+        qpos = p0[:, None] + torch.arange(Q)[None, :]  # [U, Q]
         cos, sin = self._rope_rows(qpos.reshape(-1))
         slots = (qpos - base[:, None]) % R  # [U, Q]
         dests = (torch.arange(U)[:, None] * R + slots).reshape(1, U * Q).to(torch.int32)
@@ -175,22 +175,19 @@ class BatchedDFlash:
         pos = pos[:, None, :]  # [U, 1, R]
         start = torch.tensor(self.ctx_start, dtype=torch.int64)[:, None, None]
         q = qpos[:, :, None]
-        own = ((pos >= start) & (pos <= q) & (pos >= q - self.window)).reshape(P, G, Q, R)
-        allowed = torch.zeros((P, G, Q, G, R), dtype=torch.bool)
-        for j in range(G):
-            allowed[:, j, :, j] = own[:, j]
-        mask = torch.where(allowed, 0.0, -1e9).to(torch.bfloat16).reshape(P, 1, TILE, G * R)
-        return (ids, cos.reshape(P, 1, TILE, self.hd), sin.reshape(P, 1, TILE, self.hd), mask, dests)
+        own = (pos >= start) & (pos <= q) & (pos >= q - self.window)  # [U, Q, R]
+        allowed = torch.ones((U, RP, R), dtype=torch.bool)
+        allowed[:, : G * Q] = own[:, None].expand(U, G, Q, R).reshape(U, G * Q, R)
+        mask = torch.where(allowed, 0.0, -1e9).to(torch.bfloat16).reshape(U, 1, RP, R)
+        return (ids, cos.reshape(1, 1, U * Q, self.hd), sin.reshape(1, 1, U * Q, self.hd), mask, dests)
 
     def _draft_body(self, ids_tt, rope, mask_tt, bufs, dests_tt=None):
         """Device work of a draft (traceable): proposal blocks through the draft layers, rows 1..K of each block
         through the target LM head, greedy picks into ``bufs`` (one [1, 1, 1, 32] uint32 per 32 picks)."""
         m = self.model
-        if self._gqa_fold:  # the 32-row mask repeated once per query head of a KV group (dflash_query_forward_batched)
-            mask_tt = ttnn.repeat(mask_tt, ttnn.Shape((1, 1, self._gqa, 1)))
-        x = m.embed_prefill(ids_tt)  # [1, U * Q, H]: G users per 32-row tile
+        x = m.embed_prefill(ids_tt)  # [1, U * Q, H]
         for i in sorted(self.core.layers):
-            x = self.core.layers[i].dflash_query_forward_batched(x, *self.rings[i], rope, mask_tt, dests_tt)
+            x = self.core.layers[i].dflash_query_forward_users(x, *self.rings[i], rope, mask_tt, dests_tt, self.Q)
         x = self.core.apply_final_norm(x)  # [1, U * Q, H]
         # the target LM head over every row (the host takes rows 1..K of each user's Q)
         shards = m.lm_head_shards_dflash(x, enable_experimental=True)

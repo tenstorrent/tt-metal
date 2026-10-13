@@ -1983,6 +1983,58 @@ class MultichipDecoder(OptimizedDecoder):
         ln2 = self._rms(h, self.w["post_ln"])
         return ttnn.add(h, ttnn.reshape(self._mlp(ln2, T, sharded=False), (1, T, cfg.hidden)))
 
+    def dflash_query_forward_users(self, x_q, k_ring, v_ring, rope_rows, mask, ring_dests, Q):
+        """The batched draft layer with Q rows per user: x_q [1, U * Q, H] (user u's rows at u * Q ..); k_ring /
+        v_ring [U, nkv, RING, hd] the users' context rings; rope_rows (cos, sin) [1, 1, U * Q, hd] at each row's
+        position; mask [U, 1, RP, RING] over the user's ring slots for its per-user query block (rows (h % G) * Q + i,
+        dflash_q_users.to_users); ring_dests uint32 [1, U * Q]: the slots the rows' keys/values are written to.
+        Matmuls, norms, RoPE, gate, O projection, all-reduce and MLP run once over all rows; attention runs per
+        user (its G query heads of a KV head and its Q rows as one block) over that user's ring only."""
+        from .dflash_q_users import from_users, to_users
+        from .ring_write import ring_write_batched
+
+        cfg = self.cfg
+        U = int(k_ring.shape[0])
+        T = U * Q
+        ln_q = self._rms(x_q, self.w["input_ln"])
+        qkv = self._prefill_linear(ln_q, self.w["wqkv"], self._ck_qkv)  # [1, T, qkv_w]
+        q, k, v = ttnn.experimental.nlp_create_qkv_heads(
+            ttnn.reshape(qkv, (1, 1, T, self.meta["qkv_w"])), num_heads=cfg.num_heads,
+            num_kv_heads=cfg.num_kv_heads, transpose_k_heads=False, memory_config=ttnn.DRAM_MEMORY_CONFIG,
+        )  # fmt: skip
+        if "q_norm_scaled" not in self.w:  # the attention scale folded into the q norm (SDPA then runs at scale 1)
+            self.w["q_norm_scaled"] = ttnn.multiply(self.w["q_norm"], float(cfg.scaling))
+        q = self._apply_rope(self._per_head_norm(q, self.w["q_norm_scaled"]), *rope_rows)
+        k = self._apply_rope(self._per_head_norm(k, self.w["k_norm"]), *rope_rows)
+        ring_write_batched([k_ring, v_ring], [k, v], ring_dests, rows_per_user=Q)
+        qu = to_users(q, U, Q, cfg.num_kv_heads)  # [U, nkv, RP, hd]
+        RP, S = int(qu.shape[2]), int(k_ring.shape[2])
+        kc = next(c for c in (128, 64, 32) if S % c == 0)
+        key = ("users", RP, kc)
+        if getattr(self, "_dflash_q_pc", {}).get(key) is None:
+            grid = self.device.compute_with_storage_grid_size()
+            self.__dict__.setdefault("_dflash_q_pc", {})[key] = ttnn.SDPAProgramConfig(
+                compute_with_storage_grid_size=ttnn.CoreCoord(grid.x, grid.y), q_chunk_size=RP, k_chunk_size=kc,
+                exp_approx_mode=False,
+            )  # fmt: skip
+        sdpa_ck = getattr(self, "_sdpa_compute_sliding", self._sdpa_compute) if cfg.is_sliding else self._sdpa_compute
+        attn = ttnn.transformer.scaled_dot_product_attention(
+            qu, k_ring, v_ring, is_causal=False, attn_mask=mask, scale=1.0, program_config=self._dflash_q_pc[key],
+            compute_kernel_config=sdpa_ck,
+        )  # fmt: skip
+        attn = from_users(attn, U, Q, cfg.num_heads)  # [1, nh, T, hd]
+        attn = ttnn.experimental.nlp_concat_heads(attn, memory_config=ttnn.DRAM_MEMORY_CONFIG)  # [1, 1, T, nh * hd]
+        attn = ttnn.reshape(attn, (1, T, cfg.num_heads * cfg.head_dim))
+        g = ttnn.linear(ln_q, self.w["wg"], compute_kernel_config=self._ck_gate)
+        if self._gate_expand is not None:
+            attn = ttnn.mul(attn, ttnn.matmul(ttnn.softplus(g), self._gate_expand, compute_kernel_config=self._ck_hifi4,
+                                              dtype=ttnn.bfloat16))  # fmt: skip
+        else:
+            attn = self._gate(attn, ln_q, g=g)
+        h = ttnn.add(x_q, self._reduce(self._prefill_linear(attn, self.w["wo"], self._ck_o)))
+        ln2 = self._rms(h, self.w["post_ln"])
+        return ttnn.add(h, ttnn.reshape(self._mlp(ln2, T, sharded=False), (1, T, cfg.hidden)))
+
     def _dflash_query_tail(self, x_q, ln_q, q, k, v, mask, g=None):
         """Masked attention of the 32 query rows over keys k / values v, gate, O projection + all-reduce, MLP. g: the
         gate logits [1, 32, num_heads] when already computed (else g_proj(ln_q))."""
