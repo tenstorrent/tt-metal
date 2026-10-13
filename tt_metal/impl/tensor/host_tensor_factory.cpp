@@ -5,6 +5,7 @@
 #include <tt-metalium/bfloat16.hpp>
 #include <tt-metalium/bfloat4.hpp>
 #include <tt-metalium/bfloat8.hpp>
+#include <tt-metalium/bfp_fast_pack.hpp>
 #include <tt-metalium/distributed_host_buffer.hpp>
 #include <tt-metalium/tensor/host_tensor.hpp>
 #include <tt-metalium/tensor/tensor_apis.hpp>
@@ -20,11 +21,41 @@
 #include <tt_stl/fmt.hpp>
 
 #include <algorithm>
+#include <cstdlib>
+#include <cstring>
+#include <optional>
+#include <type_traits>
 
 namespace tt::tt_metal {
 
 namespace {
 namespace CMAKE_UNIQUE_NAMESPACE {
+
+// Row-major bf16 -> Bfp8_b/Bfp4_b with the standard 32x32 tile in one multithreaded pass (bfp_fast_pack),
+// byte-identical to encode_tensor_data + to_dtype below and ~30x faster. Returns nullopt whenever the spec needs the
+// generic path. TT_METAL_DISABLE_FAST_BFP_PACK=1 forces the generic path.
+template <typename T>
+std::optional<HostTensor> try_fast_bfp_pack(std::span<const T> buffer, const TensorSpec& spec, T pad_value) {
+    if constexpr (!std::is_same_v<T, bfloat16>) {
+        return std::nullopt;
+    } else {
+        uint16_t pad_bits = 0;
+        std::memcpy(&pad_bits, &pad_value, sizeof(pad_bits));
+        const auto bits = bfp_fast_pack::fast_bfp_bits(spec);
+        if (!bits || pad_bits != 0) {
+            return std::nullopt;
+        }
+        const Shape& logical = spec.logical_shape();
+        bfp_fast_pack::Geometry g;
+        g.rows = logical[logical.rank() - 2];
+        g.cols = logical[logical.rank() - 1];
+        for (size_t d = 0; d + 2 < logical.rank(); ++d) {
+            g.batch *= logical[d];
+        }
+        return HostTensor::from_buffer(
+            bfp_fast_pack::pack_bf16_to_host_buffer(g, reinterpret_cast<const uint16_t*>(buffer.data()), *bits), spec);
+    }
+}
 
 template <typename T>
 HostTensor from_span_impl(std::span<const T> buffer, const TensorSpec& spec, T pad_value) {
@@ -43,6 +74,10 @@ HostTensor from_span_impl(std::span<const T> buffer, const TensorSpec& spec, T p
         buffer.size() == volume, "Current buffer size is {} different from shape volume {}", buffer.size(), volume);
     if (spec.data_type() == DataType::BFLOAT8_B || spec.data_type() == DataType::BFLOAT4_B) {
         TT_FATAL(spec.layout() == Layout::TILE, "Block float types are only supported in TILE layout");
+    }
+
+    if (auto fast = try_fast_bfp_pack(buffer, spec, pad_value)) {
+        return std::move(*fast);
     }
 
     auto host_buffer = HostBuffer(tensor_impl::encode_tensor_data(ttsl::make_const_span(buffer), spec, pad_value));
@@ -96,6 +131,10 @@ HostTensor host_tensor_from_vector_with_pad_value(std::vector<T>&& buffer, Tenso
 
     if (spec.data_type() == DataType::BFLOAT8_B || spec.data_type() == DataType::BFLOAT4_B) {
         TT_FATAL(spec.layout() == Layout::TILE, "Block float types only supported in TILE layout");
+    }
+
+    if (auto fast = CMAKE_UNIQUE_NAMESPACE::try_fast_bfp_pack(std::span<const T>(buffer), spec, pad_value)) {
+        return std::move(*fast);
     }
 
     auto buffer_dtype = convert_to_data_type<T>();

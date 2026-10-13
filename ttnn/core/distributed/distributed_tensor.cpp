@@ -8,6 +8,8 @@
 #include <tt-metalium/shape.hpp>
 #include <tt-metalium/mesh_coord.hpp>
 #include <tt-metalium/tilize_utils.hpp>
+#include <tt-metalium/bfp_fast_pack.hpp>
+#include <tt-metalium/bfloat16.hpp>
 #include <tt-metalium/tensor/tensor_apis.hpp>
 
 #include <tt_stl/small_vector.hpp>
@@ -16,6 +18,9 @@
 #include "tensor/storage.hpp"
 #include "tensor/tensor_impl.hpp"
 #include <algorithm>
+#include <cstring>
+#include <sys/mman.h>
+#include <thread>
 #include <optional>
 #include "ttnn/core.hpp"
 #include "ttnn/distributed/api.hpp"
@@ -137,6 +142,125 @@ tt::tt_metal::TensorSpec compute_tensor_spec_for_shards(
     }
     TT_FATAL(shard_shape.has_value(), "No shards were produced");
     return tt::tt_metal::TensorSpec(*shard_shape, global_layout);
+}
+
+// Large host staging buffers are written once right after allocation; with 4 KB pages the first-touch faults (~30k per
+// 117 MB weight, serialized in the kernel) dominated the copy. Ask for transparent huge pages (THP is in madvise mode
+// on typical hosts). Contents are unaffected; a no-op for small buffers or when THP is off.
+inline void advise_huge_pages(void* p, size_t bytes) {
+    constexpr uintptr_t kHuge = uintptr_t{2} << 20;
+    if (p == nullptr || bytes < (size_t{8} << 20)) {
+        return;
+    }
+    const uintptr_t begin = (reinterpret_cast<uintptr_t>(p) + kHuge - 1) & ~(kHuge - 1);
+    const uintptr_t end = (reinterpret_cast<uintptr_t>(p) + bytes) & ~(kHuge - 1);
+    if (end > begin) {
+        madvise(reinterpret_cast<void*>(begin), end - begin, MADV_HUGEPAGE);
+    }
+}
+
+// For a bf16 shard view that will be stored as Bfp8_b/Bfp4_b with the plain tile layout, packs it directly from the
+// source tensor (row/batch strides) into a new host buffer. nullopt when the view or spec needs the generic path.
+template <typename View, typename T>
+std::optional<tt::tt_metal::HostBuffer> try_fast_bfp_shard(
+    const View& view, const tt::tt_metal::TensorSpec& spec, T pad_value) {
+    if constexpr (!std::is_same_v<std::remove_const_t<T>, bfloat16>) {
+        return std::nullopt;
+    } else {
+        uint16_t pad_bits = 0;
+        std::memcpy(&pad_bits, &pad_value, sizeof(pad_bits));
+        const auto bits = tt::tt_metal::bfp_fast_pack::fast_bfp_bits(spec);
+        const size_t rank = view.dimension();
+        if (!bits || pad_bits != 0 || rank < 2 || view.size() == 0) {
+            return std::nullopt;
+        }
+        const auto& shape = view.shape();
+        const auto& strides = view.strides();
+        if (shape[rank - 1] > 1 && strides[rank - 1] != 1) {
+            return std::nullopt;
+        }
+        tt::tt_metal::bfp_fast_pack::Geometry g;
+        g.rows = shape[rank - 2];
+        g.cols = shape[rank - 1];
+        g.row_stride = g.rows > 1 ? static_cast<size_t>(strides[rank - 2]) : g.cols;
+        if (g.row_stride < g.cols) {
+            return std::nullopt;
+        }
+        // Leading dims must collapse into one uniformly strided batch dimension.
+        size_t batch = 1;
+        ptrdiff_t batch_stride = 0;
+        for (size_t d = rank - 2; d-- > 0;) {
+            if (shape[d] == 1) {
+                continue;
+            }
+            const ptrdiff_t expected =
+                batch == 1 ? static_cast<ptrdiff_t>(strides[d]) : batch_stride * static_cast<ptrdiff_t>(batch);
+            if (strides[d] != expected || strides[d] <= 0) {
+                return std::nullopt;
+            }
+            if (batch == 1) {
+                batch_stride = strides[d];
+            }
+            batch *= shape[d];
+        }
+        g.batch = batch;
+        g.batch_stride = batch > 1 ? static_cast<size_t>(batch_stride) : 0;
+        if (batch > 1 && g.batch_stride < g.rows * g.row_stride) {
+            return std::nullopt;
+        }
+        const auto* src = reinterpret_cast<const uint16_t*>(view.data() + view.data_offset());
+        return tt::tt_metal::bfp_fast_pack::pack_bf16_to_host_buffer(g, src, *bits);
+    }
+}
+
+// Copies a strided xtensor view (a chunk of a row-major tensor) into a dense vector. When the innermost dimension is
+// contiguous the view is a set of contiguous runs, copied with memcpy across threads; xtensor's element iterator does
+// index arithmetic per element and was the main cost of sharding large weights over a mesh (~0.25 GB/s).
+template <typename U, typename View>
+std::vector<U> copy_view_to_vector(const View& view) {
+    const size_t rank = view.dimension();
+    const size_t total = view.size();
+    if (rank == 0 || total == 0 || (view.shape()[rank - 1] > 1 && view.strides()[rank - 1] != 1)) {
+        return std::vector<U>(view.begin(), view.end());
+    }
+    const size_t inner = view.shape()[rank - 1];
+    const size_t outer = total / inner;
+    const U* base = view.data() + view.data_offset();
+    std::vector<U> out;
+    out.reserve(total);
+    advise_huge_pages(out.data(), total * sizeof(U));
+    out.resize(total);
+    auto copy_rows = [&](size_t o0, size_t o1) {
+        for (size_t o = o0; o < o1; ++o) {
+            // offset of row `o` (multi-index over the leading rank - 1 dims, row-major order)
+            size_t rem = o;
+            ptrdiff_t offset = 0;
+            for (size_t d = rank - 1; d-- > 0;) {
+                const size_t idx = rem % view.shape()[d];
+                rem /= view.shape()[d];
+                offset += static_cast<ptrdiff_t>(idx) * view.strides()[d];
+            }
+            std::memcpy(out.data() + o * inner, base + offset, inner * sizeof(U));
+        }
+    };
+    const size_t bytes = total * sizeof(U);
+    const unsigned nthreads = static_cast<unsigned>(std::min<size_t>(
+        {outer,
+         std::max<size_t>(1, bytes / (8u << 20)),
+         std::max(1u, std::min(16u, std::thread::hardware_concurrency()))}));
+    if (nthreads <= 1) {
+        copy_rows(0, outer);
+        return out;
+    }
+    std::vector<std::thread> pool;
+    pool.reserve(nthreads);
+    for (unsigned i = 0; i < nthreads; ++i) {
+        pool.emplace_back(copy_rows, outer * i / nthreads, outer * (i + 1) / nthreads);
+    }
+    for (auto& th : pool) {
+        th.join();
+    }
+    return out;
 }
 
 // Creates a host buffer from a span, with the following optimizations:
@@ -422,6 +546,12 @@ private:
                         return it->second;
                     }
 
+                    // bf16 -> Bfp8_b/Bfp4_b: pack straight from the strided view (no shard copy, no zero-fill).
+                    if (auto packed = try_fast_bfp_shard(xtensor_view->get(), shard_spec, pad_value)) {
+                        converted_buffers.emplace(&xtensor_view->get(), *packed);
+                        return *packed;
+                    }
+
                     Tensor shard_tensor;
                     if (can_borrow) {
                         auto& view = xtensor_view->get();
@@ -431,8 +561,8 @@ private:
                             shard_spec.logical_shape(),
                             buffer_pin);
                     } else {
-                        std::vector<std::remove_const_t<T>> data_vec(
-                            xtensor_view->get().begin(), xtensor_view->get().end());
+                        std::vector<std::remove_const_t<T>> data_vec =
+                            copy_view_to_vector<std::remove_const_t<T>>(xtensor_view->get());
                         shard_tensor = Tensor::from_vector(
                             std::move(data_vec),
                             shard_spec,

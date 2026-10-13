@@ -15,6 +15,9 @@
 #include <utility>
 #include <variant>
 #include <vector>
+#include <thread>
+#include <cstdlib>
+#include <sys/mman.h>
 
 #include <fmt/format.h>
 #include <nanobind/nanobind.h>
@@ -30,6 +33,7 @@
 
 #include "tools/profiler/op_profiler.hpp"
 #include "ttnn-nanobind/bfloat_dtype_traits.hpp"
+#include "ttnn-nanobind/fast_bfp.hpp"
 #include "ttnn-nanobind/small_vector_caster.hpp"
 #include "ttnn-nanobind/ttnn_dtype_traits.hpp"
 #include "ttnn/common/queue_id.hpp"
@@ -130,6 +134,34 @@ struct PreprocessedPyTensor {
     DataType data_type = DataType::INVALID;
 };
 
+// A dense CPU tensor whose last two dims are swapped (torch.transpose(w, -2, -1) of a contiguous w) is materialized
+// with fast_bfp's blocked multithreaded transpose instead of the element-wise c_contig import (~0.7 GB/s for bf16
+// weights, which dominated cold weight-cache builds). Pure copy, identical result. nullopt for any other layout.
+std::optional<nb::ndarray<nb::array_api>> try_fast_transposed_import(
+    const nb::ndarray<nb::array_api>& t, nb::dlpack::dtype wanted) {
+    const size_t nd = t.ndim();
+    if (nd < 2 || t.device_type() != nb::device::cpu::value || t.dtype() != wanted ||
+        (t.dtype().bits != 16 && t.dtype().bits != 32) || t.dtype().lanes != 1) {
+        return std::nullopt;
+    }
+    const size_t rows = t.shape(nd - 2);
+    const size_t cols = t.shape(nd - 1);
+    if (rows < 2 || cols < 2 || rows * cols < (1u << 16)) {
+        return std::nullopt;  // small tensors: the generic import is fine
+    }
+    if (t.stride(nd - 2) != 1 || t.stride(nd - 1) != static_cast<int64_t>(rows)) {
+        return std::nullopt;
+    }
+    int64_t expected = static_cast<int64_t>(rows * cols);
+    for (size_t d = nd - 2; d-- > 0;) {
+        if (t.shape(d) > 1 && t.stride(d) != expected) {
+            return std::nullopt;
+        }
+        expected *= static_cast<int64_t>(t.shape(d));
+    }
+    return ttnn::fast_bfp::transposed_copy_of_view(t);
+}
+
 PreprocessedPyTensor parse_py_tensor(nb::ndarray<nb::array_api> py_tensor, std::optional<DataType> optional_data_type) {
     auto py_tensor_dtype = py_tensor.dtype();
     // handle bool types by changing them to uint8
@@ -159,6 +191,10 @@ PreprocessedPyTensor parse_py_tensor(nb::ndarray<nb::array_api> py_tensor, std::
         optional_data_type.value_or(DataType::INVALID),
         config.dtype.code,
         config.dtype.bits);
+
+    if (auto fast = try_fast_transposed_import(py_tensor, config.dtype)) {
+        py_tensor = std::move(*fast);
+    }
 
     nb::detail::ndarray_handle* converted_tensor_handle = nanobind::detail::ndarray_import(
         py_tensor.cast(nb::rv_policy::automatic).ptr(), &config, true /*convert*/, nullptr /*cleanup*/);

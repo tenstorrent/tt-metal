@@ -121,6 +121,8 @@ set(TTNN_SRC_PYBIND
     cpp/ttnn-nanobind/hd_socket.cpp
     cpp/ttnn-nanobind/d2d_stream_service.cpp
     cpp/ttnn-nanobind/h2d_stream_service.cpp
+    cpp/ttnn-nanobind/dram_image.cpp
+    cpp/ttnn-nanobind/fast_bfp.cpp
     cpp/ttnn-nanobind/d2h_stream_service.cpp
     cpp/ttnn-nanobind/counter_channel.cpp
     cpp/ttnn-nanobind/layer_ack_service.cpp

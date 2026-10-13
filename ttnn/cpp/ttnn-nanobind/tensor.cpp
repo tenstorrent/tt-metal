@@ -679,6 +679,7 @@ void tensor_mem_config_module(nb::module_& m_tensor) {
             nb::arg("filename"),
             nb::arg("tensor"),
             nb::arg("mode") = DumpTensorMode::DISTRIBUTED_GATHER,
+            nb::call_guard<nb::gil_scoped_release>(),  // pure C++ file I/O: lets cache writes overlap Python work
             R"doc(
                 Dump tensor to file using FlatBuffer format with inline file storage.
             )doc")

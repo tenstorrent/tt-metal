@@ -26,6 +26,7 @@ set(PERF_MICROBENCH_TESTS_SRCS
     pcie_p2p/test_pcie_p2p.cpp
     pcie_p2p/test_pcie_p2p_allgather.cpp
     pcie_p2p/test_fabric_allgather.cpp
+    dram_image/test_dram_image_load.cpp
     2_noc_rtor/test_noc_rtor.cpp
     3_pcie_transfer/test_rw_buffer.cpp
     6_dram_offchip/test_dram_offchip.cpp

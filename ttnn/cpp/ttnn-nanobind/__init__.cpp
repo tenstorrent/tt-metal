@@ -24,6 +24,8 @@
 #include "ttnn-nanobind/d2d_stream_service.hpp"
 #include "ttnn-nanobind/counter_channel.hpp"
 #include "ttnn-nanobind/h2d_stream_service.hpp"
+#include "ttnn-nanobind/dram_image.hpp"
+#include "ttnn-nanobind/fast_bfp.hpp"
 #include "ttnn-nanobind/d2h_stream_service.hpp"
 #include "ttnn-nanobind/layer_ack_service.hpp"
 #include "ttnn-nanobind/mesh_socket.hpp"
@@ -255,6 +257,8 @@ NB_MODULE(_ttnn, mod) {
     auto m_global_semaphore = mod.def_submodule("global_semaphore", "ttnn global semaphore");
     auto m_prefetcher_pipe = mod.def_submodule("prefetcher_pipe", "ttnn prefetcher pipe (experimental)");
     auto m_hd_socket = mod.def_submodule("hd_socket", "ttnn host-device sockets");
+    auto m_dram_image = mod.def_submodule("dram_image", "prototype DRAM-image weight loading");
+    auto m_fast_bfp = mod.def_submodule("fast_bfp", "fast host bf16 -> bfp8/bfp4 tile packing");
     auto m_h2d_stream_service =
         mod.def_submodule("h2d_stream_service", "ttnn persistent host-to-device streaming service");
     auto m_d2h_stream_service =
@@ -337,6 +341,8 @@ NB_MODULE(_ttnn, mod) {
     ttnn::prefetcher_pipe::py_module(m_prefetcher_pipe);
     ttnn::hd_socket::py_module(m_hd_socket);
     ttnn::h2d_stream_service::py_module(m_h2d_stream_service);
+    ttnn::dram_image::py_module(m_dram_image);
+    ttnn::fast_bfp::py_module(m_fast_bfp);
     ttnn::d2h_stream_service::py_module(m_d2h_stream_service);
     ttnn::d2d_stream_service::py_module(m_d2d_stream_service);
     ttnn::counter_channel::py_module(m_counter_channel);
