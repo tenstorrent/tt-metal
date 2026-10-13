@@ -456,9 +456,7 @@ class TtMoEGatePrefill(LightweightModule):
         if not pattern_exists(f"{cache_name_prefix}.weight*.tensorbin", "MoEGate"):
             logger.debug(f"TTNN cache missing: {cache_name_prefix}.weight")
             return False
-        # The bias must be the fp32 one: a load with no weights in hand rebuilds anything missing from
-        # empty tensors, so a bf16 file passing this check would leave the fp32 bias uninitialised.
-        if not pattern_exists(f"{cache_name_prefix}.e_score_correction_bias_dtype_FLOAT32*.tensorbin", "MoEGate"):
+        if not pattern_exists(f"{cache_name_prefix}.e_score_correction_bias*.tensorbin", "MoEGate"):
             logger.debug(f"TTNN cache missing: {cache_name_prefix}.e_score_correction_bias")
             return False
         return True
@@ -518,12 +516,11 @@ class TtMoEGatePrefill(LightweightModule):
             cache_file_name=_cache_name("weight"),
         )
 
-        # Cache bias unbroadcasted (required by moe_grouped_topk). fp32: the bias is added to scores
-        # whose top-k gaps are below its bf16 rounding.
+        # Cache bias unbroadcasted (required by moe_grouped_topk)
         bias_tt = ttnn.as_tensor(
             torch_bias,
             device=None,  # Always load to host first
-            dtype=ttnn.float32,
+            dtype=ttnn.bfloat16,
             layout=ttnn.TILE_LAYOUT,
             cache_file_name=_cache_name("e_score_correction_bias"),
         )
@@ -645,7 +642,7 @@ class TtMoEGatePrefill(LightweightModule):
         self.bias = ttnn.from_torch(
             bias_broadcasted,
             device=mesh_device,
-            dtype=ttnn.float32,
+            dtype=ttnn.bfloat16,
             memory_config=ttnn.DRAM_MEMORY_CONFIG,
             layout=ttnn.TILE_LAYOUT,
         )
@@ -1049,8 +1046,8 @@ class TtMoEGatePrefill(LightweightModule):
     ) -> tuple[ttnn.Tensor, ttnn.Tensor]:
         """Run moe_grouped_topk on device.
 
-        The bf16 logits and fp32 bias are fed directly to the op, which upcasts the logits to fp32
-        inside the kernel; no host-side fp32 typecast is needed (the method name is kept for the DEVICE_FP32
+        The (bf16) logits and bias are fed directly to the op, which upcasts them to fp32 inside
+        the kernel; no host-side fp32 typecast is needed (the method name is kept for the DEVICE_FP32
         gate mode it serves).
 
         When actual_isl is set, padded token rows get sentinel expert
@@ -1069,7 +1066,7 @@ class TtMoEGatePrefill(LightweightModule):
                 self.build_padding_config(actual_isl, padding_side, actual_start) if actual_isl is not None else None
             )
 
-        # moe_grouped_topk upcasts the bf16 logits to fp32 inside the kernel, so the
+        # moe_grouped_topk upcasts the (bf16) logits and bias to fp32 inside the kernel, so the
         # previous host-side ttnn.typecast ops are gone. They were very short (2-5us) and created
         # op-to-op gaps that fast-dispatch could not hide.
         ttnn_scores, ttnn_top_k_experts_indices = ttnn.experimental.deepseek_prefill.moe_grouped_topk(
