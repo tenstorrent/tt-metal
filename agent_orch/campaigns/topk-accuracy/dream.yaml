@@ -1,0 +1,35 @@
+# Dream-RSI campaign: top-k selection accuracy of topk_large_indices (sparse-SDPA indexer) on one Blackhole chip.
+name: topk-accuracy
+description: topk_large_indices selection accuracy vs an FP32 reference on DSA-indexer-like logits, device time held within 5% of baseline, one Blackhole chip
+machine: local          # 4x BH p300c visible; the test uses 1 chip
+
+editable:
+  - ttnn/cpp/ttnn/operations/experimental/topk_large_indices/*
+  - tt_metal/hw/inc/api/compute/experimental/topk_xl.h
+  - tt_metal/hw/ckernels/blackhole/metal/llk_api/experimental/*topk_xl*
+  - tt_metal/tt-llk/tt_llk_blackhole/common/inc/sfpu/experimental/ckernel_sfpu_topk_xl.h
+  - tt_metal/tt-llk/tt_llk_blackhole/llk_lib/experimental/*topk_xl*
+brief: brief.md
+rules:
+  - "The objective is accuracy: fewer returned indices whose FP32 score is below the FP32 k-th score. Device kernel time must stay within 5% of the baseline on every case (gate slowdown <= 1.05)."
+  - "The accuracy test offers the op an FP32 ROW_MAJOR input and falls back to BF16 when the op rejects it. Accepting FP32 input (and ranking at higher precision) is in scope; the BF16 input path must keep working exactly as before."
+  - "The output contract is fixed: UINT32 ROW_MAJOR indices [.., k], sorted by descending score, distinct, the 0xFFFFFFFF sentinel for -inf/invalid columns, all existing arguments (valid_length, valid_length_tensor/offset, valid_end_tensor, subdevice_id, sub_core_grids) with unchanged semantics."
+  - "The existing correctness suite tests/ttnn/nightly/unit_tests/operations/experimental/test_topk_large_indices.py must pass; the eval runs it."
+  - "Do not special-case the test's shapes, seeds or data; the improvement must hold for any input."
+forbidden_patterns: []
+
+eval:
+  # Writes per case: value = miss_pct + 0.001 (minimized), duration_us, slowdown vs perf_baseline.json.
+  command: python agent_orch/campaigns/topk-accuracy/eval.py
+  direction: minimize
+  unit: "% missed"
+  gates: ["slowdown <= 1.05"]   # baseline device time is reproducible to ~0.02%
+  timeout_s: 2400
+
+budget: {max_attempts: 60, max_hours: 8, max_usd: 300}
+search:
+  policy: fresh
+  W: 4
+  R: 4
+  max_rounds: 6
+  round_root: origin
