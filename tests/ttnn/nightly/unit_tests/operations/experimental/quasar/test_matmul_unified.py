@@ -821,6 +821,19 @@ def test_K_chunks_across_reader_threads(device, name, K, K_chunk_tiles):
     _check(out, _golden(a, b))
 
 
+def test_two_reader_threads_when_four_do_not_fit(device):
+    """A 32x4-tile C slice with four 4-tile K chunks on one core: four reader threads would need four A slices,
+    over the DFB extent cap, so on Quasar two reader threads take two K chunks each."""
+    M, K, N = 32 * TILE, 16 * TILE, 4 * TILE
+    torch.manual_seed(28)
+    a, b = _randn(1, 1, M, K), _randn(1, 1, K, N)
+    config = qsr.MatmulUnifiedProgramConfig(
+        cores=_rect(0, 0, 0, 0), C_slice_M_tiles=32, C_slice_N_tiles=4, K_chunk_tiles=4
+    )
+    out = _run(device, a, b, config)
+    _check(out, _golden(a, b))
+
+
 def test_C_slice_too_large_to_double_buffer(device):
     """Two 16x16-tile C slices on one core: a second C slice in flight would exceed the DFB extent cap, so the
     core keeps one in flight instead of failing."""

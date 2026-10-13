@@ -538,24 +538,38 @@ UnifiedMatmulPlan plan_unified_matmul(
         plan = std::move(*best);
     }
 
-    // ---- Reader threads and C slices in flight, in the L1 the C slice, subblock and K chunk leave ----
+    // ---- Reader threads, then C slices in flight, each in the L1 the C slice, subblock and K chunk leave ----
     // Several reader threads each own part of the A and B DFBs, which a borrowed shard cannot be split into, and
-    // reader threads beyond the K chunks of a C slice would only carry padding.
-    UnifiedMatmulPlan buffered = plan;
-    buffered.num_reader_threads = is_quasar && !plan.borrow_A && !plan.borrow_B
-                                      ? std::min(QUASAR_NUM_READER_THREADS, plan.K_chunks_per_C_slice)
-                                      : 1;
-    buffered.C_buffer_depth = (uint64_t)plan.batch_size * plan.max_C_slices_per_core > 1 ? C_BUFFER_DEPTH : 1;
-    buffered = size_dfbs(
-        std::move(buffered),
-        plan.K_chunk_tiles,
-        fp32_dest_acc_en,
-        packer_l1_acc,
-        plan.borrow_A,
-        plan.borrow_B,
-        plan.borrow_C);
-    if (dfbs_fit(buffered, l1_budget)) {
-        plan = std::move(buffered);
+    // reader threads beyond the K chunks of a C slice would only carry padding. Four are tried, then two, which take no
+    // more L1 than one: an operand DFB holds at least MIN_OPERAND_BUFFER_DEPTH (two) slices.
+    const auto resized = [&](UnifiedMatmulPlan candidate) {
+        return size_dfbs(
+            std::move(candidate),
+            plan.K_chunk_tiles,
+            fp32_dest_acc_en,
+            packer_l1_acc,
+            plan.borrow_A,
+            plan.borrow_B,
+            plan.borrow_C);
+    };
+    if (is_quasar && !plan.borrow_A && !plan.borrow_B) {
+        for (uint32_t num_reader_threads : {QUASAR_NUM_READER_THREADS, MIN_OPERAND_BUFFER_DEPTH}) {
+            UnifiedMatmulPlan candidate = plan;
+            candidate.num_reader_threads = std::min(num_reader_threads, plan.K_chunks_per_C_slice);
+            candidate = resized(std::move(candidate));
+            if (dfbs_fit(candidate, l1_budget)) {
+                plan = std::move(candidate);
+                break;
+            }
+        }
+    }
+    if ((uint64_t)plan.batch_size * plan.max_C_slices_per_core > 1) {
+        UnifiedMatmulPlan candidate = plan;
+        candidate.C_buffer_depth = C_BUFFER_DEPTH;
+        candidate = resized(std::move(candidate));
+        if (dfbs_fit(candidate, l1_budget)) {
+            plan = std::move(candidate);
+        }
     }
 
     // ---- Sharded output: one C slice per core, batch 1, and a grid the accessor maps the same way ----
