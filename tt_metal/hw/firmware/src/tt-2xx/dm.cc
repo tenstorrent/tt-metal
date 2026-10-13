@@ -13,6 +13,7 @@
 #include "internal/debug/stack_usage.h"
 #include "internal/debug/sanitize.h"
 #include "internal/tt-2xx/dataflow_buffer/dataflow_buffer_init.h"
+#include "internal/tt-2xx/quasar/overlay/rocc_instructions.hpp"
 #include "hostdev/dev_msgs.h"
 #include "api/debug/kernel_profiler.hpp"
 #include "internal/profiler/perf_counters.hpp"
@@ -352,6 +353,12 @@ extern "C" uint32_t _start1() {
                 }
             }
 
+            // GO can become visible before earlier inbound writes have committed to L1.
+            // Order the observed signal, then wait for flits already in the local NIU
+            // before consuming the launch message.
+            asm volatile("fence" ::: "memory");
+            NOC_FENCE();
+            asm volatile("fence" ::: "memory");
             WAYPOINT("GD");
 
             uint32_t launch_msg_rd_ptr = mailboxes->launch_msg_rd_ptr;
