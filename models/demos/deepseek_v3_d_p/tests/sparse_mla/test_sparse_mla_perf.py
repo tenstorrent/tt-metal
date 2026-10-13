@@ -28,7 +28,7 @@ Profiler — realtime (lightweight), in-process (replaces Tracy)
 Timing comes from the in-process realtime device profiler
 (``tests/ttnn/profiling/realtime_profiler_utils.profile_realtime_program``), not Tracy. It is
 auto-enabled by device open on eligible hardware (real Blackhole, WORKER dispatch, fabric-tensix
-datamover off); the test gates on ``ttnn.device.IsProgramRealtimeProfilerActive()``. This removes the
+datamover off); the test gates on ``ttnn.device.IsProgramRealtimeProfilerActive(mesh_device)``. This removes the
 Tracy subprocess, signposts, and ops-CSV re-parse — the same swap PR #49840 made for the sparse-MLA
 CCL benchmarks (LoudBox: ~11× faster wall-clock). Two semantic notes versus the Tracy harness:
 
@@ -464,11 +464,11 @@ def _require_perf(request):
 # ============================================================================
 # Realtime-profiler helpers (mirror PR #49840 CCL harness + SDPA nightly suite)
 # ============================================================================
-def _require_rt_profiler() -> None:
+def _require_rt_profiler(mesh_device) -> None:
     """The realtime profiler is auto-enabled on eligible hardware; a False here means the current
     dispatch/fabric config disabled it (see realtime_profiler_manager eligibility) — fail loudly rather
     than silently mis-measure with an empty record set."""
-    if not ttnn.device.IsProgramRealtimeProfilerActive():
+    if not ttnn.device.IsProgramRealtimeProfilerActive(mesh_device):
         pytest.fail("Real-time profiler must be active for sparse MLA perf checks (eligible Blackhole HW required)")
 
 
@@ -728,7 +728,7 @@ def test_mla_chunked_perf(mesh_device, variant, scenario, attn_mode, kv_cache_fo
         pytest.skip(skip_reason)
     # Assert profiler activation only after skip checks pass: an unsupported system should skip with the
     # informative reason above, not hard-fail here.
-    _require_rt_profiler()
+    _require_rt_profiler(mesh_device)
 
     scenario_cfg = SCENARIOS[scenario]
     is_cold = scenario_cfg["loop"]

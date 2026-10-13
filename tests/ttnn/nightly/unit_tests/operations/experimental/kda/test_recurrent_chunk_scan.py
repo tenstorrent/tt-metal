@@ -379,7 +379,7 @@ def test_recurrent_chunk_scan_rejects_unsupported_compute_config(
 @skip_with_watcher("Watcher perturbs kernel timing; perf checks are not meaningful with it enabled.")
 def test_recurrent_chunk_scan_regression_performance(zero_actual_start, device: ttnn.Device) -> None:
     case = _REGRESSION_CASE
-    if not ttnn.device.IsProgramRealtimeProfilerActive():
+    if not ttnn.device.IsProgramRealtimeProfilerActive(device):
         pytest.fail("Real-time profiler must be active for recurrent chunk-scan performance checks")
     _, _, inputs, state = _regression_inputs(device, protocol_seed=117, state_seed=117)
 
@@ -422,7 +422,7 @@ def test_recurrent_chunk_scan_regression_performance(zero_actual_start, device: 
 @skip_with_watcher("Watcher perturbs kernel timing; perf checks are not meaningful with it enabled.")
 def test_recurrent_chunk_scan_production_performance(zero_actual_start, device: ttnn.Device) -> None:
     case = _PRODUCTION_CASE
-    if not ttnn.device.IsProgramRealtimeProfilerActive():
+    if not ttnn.device.IsProgramRealtimeProfilerActive(device):
         pytest.fail("Real-time profiler must be active for recurrent chunk-scan performance checks")
     _, _, inputs, state = _production_inputs(device, protocol_seed=117, state_seed=117)
     compute_config = _production_compute_config(device)

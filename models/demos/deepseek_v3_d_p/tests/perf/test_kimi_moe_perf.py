@@ -179,7 +179,7 @@ _CASES = [
 @pytest.mark.parametrize("variant, case", _CASES, indirect=["variant"])
 def test_kimi_moe_perf_galaxy(variant, case, config_only, mesh_device, device_params, num_links, request):
     """Device time of one MoE forward at the 5k production chunk, per Kimi generation."""
-    require_realtime_profiler(f"the {case.label} MoE perf gate")
+    require_realtime_profiler(mesh_device, f"the {case.label} MoE perf gate")
     topology = per_axis_topology(device_params["fabric_config"])
 
     per_program = {}

@@ -375,7 +375,7 @@ def test_summarize_chunk_recurrence_rejects_unsupported_compute_config(
 @skip_with_watcher("Watcher perturbs kernel timing; perf checks are not meaningful with it enabled.")
 def test_summarize_chunk_recurrence_regression_performance(zero_actual_start, device: ttnn.Device) -> None:
     case = _REGRESSION_CASE
-    if not ttnn.device.IsProgramRealtimeProfilerActive():
+    if not ttnn.device.IsProgramRealtimeProfilerActive(device):
         pytest.fail("Real-time profiler must be active for recurrence-summary performance checks")
     _, inputs = _regression_protocol(device, seed=117)
 
@@ -412,7 +412,7 @@ def test_summarize_chunk_recurrence_regression_performance(zero_actual_start, de
 @skip_with_watcher("Watcher perturbs kernel timing; perf checks are not meaningful with it enabled.")
 def test_summarize_chunk_recurrence_production_performance(zero_actual_start, device: ttnn.Device) -> None:
     case = _PRODUCTION_CASE
-    if not ttnn.device.IsProgramRealtimeProfilerActive():
+    if not ttnn.device.IsProgramRealtimeProfilerActive(device):
         pytest.fail("Real-time profiler must be active for recurrence-summary performance checks")
     _, inputs = _production_protocol(device, seed=117)
     output_memory = group_summary_height_sharded(device, case.batch_heads, case.dim)

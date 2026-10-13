@@ -473,7 +473,7 @@ def test_affine_exclusive_scan_rejects_unsupported_compute_config(
 def test_affine_exclusive_scan_production_performance(
     zero_actual_start, device: ttnn.Device, case: _ProductionCase
 ) -> None:
-    if not ttnn.device.IsProgramRealtimeProfilerActive():
+    if not ttnn.device.IsProgramRealtimeProfilerActive(device):
         pytest.fail("Real-time profiler must be active for affine exclusive-scan performance checks")
 
     host = _host_inputs(case.batch_heads, case.groups_per_head, case.key_dim, case.value_dim, seed=117)

@@ -183,7 +183,7 @@ def test_moe_fused_swiglu_perf(
     margin: float,
     weights_dram_sharded: bool,
 ):
-    require_realtime_profiler("moe_fused_swiglu perf checks")
+    require_realtime_profiler(device, "moe_fused_swiglu perf checks")
 
     table = _NDSHARD_EXPECTED_NS if weights_dram_sharded else _EXPECTED_NS
     placement = "w_ndshard" if weights_dram_sharded else "w_interleaved"
@@ -224,7 +224,7 @@ def test_moe_fused_swiglu_perf(
 @skip_with_watcher("Watcher perturbs kernel timing; perf checks are not meaningful with it enabled.")
 def test_moe_fused_swiglu_k3_perf(device, active_tokens: int, margin: float, weights_dram_sharded: bool):
     """Kimi K3 (SiTU-GLU) device duration over the same ISL sweep as above."""
-    require_realtime_profiler("moe_fused_swiglu perf checks")
+    require_realtime_profiler(device, "moe_fused_swiglu perf checks")
 
     table = _K3_SITU_NDSHARD_EXPECTED_NS if weights_dram_sharded else _K3_SITU_EXPECTED_NS
     placement = "w_ndshard" if weights_dram_sharded else "w_interleaved"

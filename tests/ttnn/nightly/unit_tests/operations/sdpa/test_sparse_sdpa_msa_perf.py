@@ -37,7 +37,7 @@ MSA_PERF_MARGIN = 0.05
 def _assert_msa_duration(device, run_fn, expected_ms, label):
     """Profile one dispatch of the op with the real-time device profiler and assert its device kernel duration
     is within +/- MSA_PERF_MARGIN of expected_ms. Returns the op output for the shape check."""
-    if not ttnn.device.IsProgramRealtimeProfilerActive():
+    if not ttnn.device.IsProgramRealtimeProfilerActive(device):
         # This runs only on the IOMMU-pinned sku (the broad non-IOMMU sdpa glob excludes it by marker), so an
         # inactive profiler means it regressed on a sku that should have it -- fail (not skip), matching the
         # sprint / ring-joint perf checks.

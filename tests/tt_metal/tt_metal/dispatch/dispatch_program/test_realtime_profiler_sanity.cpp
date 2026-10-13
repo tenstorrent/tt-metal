@@ -134,7 +134,7 @@ TEST(RealtimeProfilerSanity, FiveProgramsBackToBack) {
     // returns false the RT profiler was disabled for this dispatch config
     // (ETH dispatch, non-MMIO chip, kernels nullified, no valid RT core) —
     // treat that as a graceful skip rather than a failure.
-    if (!IsProgramRealtimeProfilerActive()) {
+    if (!IsProgramRealtimeProfilerActive(*mesh_device)) {
         mesh_device->close();
         GTEST_SKIP() << "Real-time profiler is not active on this dispatch config";
     }
@@ -142,8 +142,8 @@ TEST(RealtimeProfilerSanity, FiveProgramsBackToBack) {
     std::vector<ProgramRealtimeRecord> records;
     uint64_t dropped = 0;
 
-    ProgramRealtimeProfilerCallbackHandle handle =
-        RegisterProgramRealtimeProfilerCallback([&records, &dropped](const ProgramRealtimeRecordBatch& batch) {
+    ProgramRealtimeProfilerCallbackHandle handle = RegisterProgramRealtimeProfilerCallback(
+        *mesh_device, [&records, &dropped](const ProgramRealtimeRecordBatch& batch) {
             dropped += batch.dropped;
             records.insert(records.end(), batch.records.begin(), batch.records.end());
         });
@@ -163,7 +163,7 @@ TEST(RealtimeProfilerSanity, FiveProgramsBackToBack) {
     // for small workloads on WH/BH single-chip.
     std::this_thread::sleep_for(std::chrono::milliseconds(500));
 
-    UnregisterProgramRealtimeProfilerCallback(handle);
+    UnregisterProgramRealtimeProfilerCallback(*mesh_device, handle);
 
     ASSERT_GE(records.size(), kNumPrograms)
         << "Expected at least " << kNumPrograms << " RT profiler records (one per program), got " << records.size();
@@ -214,14 +214,14 @@ TEST(RealtimeProfilerSanity, CloseDrainsRegisteredCallback) {
         kDeviceId, DEFAULT_L1_SMALL_SIZE, DEFAULT_TRACE_REGION_SIZE, 1, DispatchCoreConfig{DispatchCoreType::WORKER});
     ASSERT_NE(mesh_device, nullptr);
 
-    if (!IsProgramRealtimeProfilerActive()) {
+    if (!IsProgramRealtimeProfilerActive(*mesh_device)) {
         mesh_device->close();
         GTEST_SKIP() << "Real-time profiler is not active on this dispatch config";
     }
 
     std::vector<ProgramRealtimeRecord> records;
     ProgramRealtimeProfilerCallbackHandle handle =
-        RegisterProgramRealtimeProfilerCallback([&records](const ProgramRealtimeRecordBatch& batch) {
+        RegisterProgramRealtimeProfilerCallback(*mesh_device, [&records](const ProgramRealtimeRecordBatch& batch) {
             records.insert(records.end(), batch.records.begin(), batch.records.end());
         });
 
@@ -234,7 +234,7 @@ TEST(RealtimeProfilerSanity, CloseDrainsRegisteredCallback) {
     mesh_device->quiesce_devices();
     EXPECT_TRUE(mesh_device->close());
 
-    UnregisterProgramRealtimeProfilerCallback(handle);
+    UnregisterProgramRealtimeProfilerCallback(*mesh_device, handle);
 
     std::set<uint32_t> observed_runtime_ids;
     for (const auto& rec : records) {
@@ -253,20 +253,20 @@ TEST(RealtimeProfilerSanity, ThrowingCallbackIsIsolated) {
         kDeviceId, DEFAULT_L1_SMALL_SIZE, DEFAULT_TRACE_REGION_SIZE, 1, DispatchCoreConfig{DispatchCoreType::WORKER});
     ASSERT_NE(mesh_device, nullptr);
 
-    if (!IsProgramRealtimeProfilerActive()) {
+    if (!IsProgramRealtimeProfilerActive(*mesh_device)) {
         mesh_device->close();
         GTEST_SKIP() << "Real-time profiler is not active on this dispatch config";
     }
 
     uint64_t throwing_invocations = 0;
     std::vector<ProgramRealtimeRecord> records;
-    ProgramRealtimeProfilerCallbackHandle throwing_handle =
-        RegisterProgramRealtimeProfilerCallback([&throwing_invocations](const ProgramRealtimeRecordBatch&) {
+    ProgramRealtimeProfilerCallbackHandle throwing_handle = RegisterProgramRealtimeProfilerCallback(
+        *mesh_device, [&throwing_invocations](const ProgramRealtimeRecordBatch&) {
             ++throwing_invocations;
             throw std::runtime_error("intentional callback failure");
         });
     ProgramRealtimeProfilerCallbackHandle good_handle =
-        RegisterProgramRealtimeProfilerCallback([&records](const ProgramRealtimeRecordBatch& batch) {
+        RegisterProgramRealtimeProfilerCallback(*mesh_device, [&records](const ProgramRealtimeRecordBatch& batch) {
             records.insert(records.end(), batch.records.begin(), batch.records.end());
         });
 
@@ -279,8 +279,8 @@ TEST(RealtimeProfilerSanity, ThrowingCallbackIsIsolated) {
     mesh_device->quiesce_devices();
     std::this_thread::sleep_for(std::chrono::milliseconds(500));
 
-    UnregisterProgramRealtimeProfilerCallback(throwing_handle);
-    UnregisterProgramRealtimeProfilerCallback(good_handle);
+    UnregisterProgramRealtimeProfilerCallback(*mesh_device, throwing_handle);
+    UnregisterProgramRealtimeProfilerCallback(*mesh_device, good_handle);
 
     std::set<uint32_t> observed_runtime_ids;
     for (const auto& rec : records) {
@@ -300,15 +300,15 @@ TEST(RealtimeProfilerSanity, LastProgramRecordDeliveredOnFinish) {
         kDeviceId, DEFAULT_L1_SMALL_SIZE, DEFAULT_TRACE_REGION_SIZE, 1, DispatchCoreConfig{DispatchCoreType::WORKER});
     ASSERT_NE(mesh_device, nullptr);
 
-    if (!IsProgramRealtimeProfilerActive()) {
+    if (!IsProgramRealtimeProfilerActive(*mesh_device)) {
         mesh_device->close();
         GTEST_SKIP() << "Real-time profiler is not active on this dispatch config";
     }
 
     std::mutex records_mu;
     std::vector<ProgramRealtimeRecord> records;
-    ProgramRealtimeProfilerCallbackHandle handle =
-        RegisterProgramRealtimeProfilerCallback([&records_mu, &records](const ProgramRealtimeRecordBatch& batch) {
+    ProgramRealtimeProfilerCallbackHandle handle = RegisterProgramRealtimeProfilerCallback(
+        *mesh_device, [&records_mu, &records](const ProgramRealtimeRecordBatch& batch) {
             std::lock_guard<std::mutex> lk(records_mu);
             records.insert(records.end(), batch.records.begin(), batch.records.end());
         });
@@ -322,7 +322,7 @@ TEST(RealtimeProfilerSanity, LastProgramRecordDeliveredOnFinish) {
 
     distributed::Finish(mesh_device->mesh_command_queue());
     std::this_thread::sleep_for(std::chrono::milliseconds(500));
-    UnregisterProgramRealtimeProfilerCallback(handle);
+    UnregisterProgramRealtimeProfilerCallback(*mesh_device, handle);
 
     constexpr uint32_t last_runtime_id = kNumPrograms;
     bool last_record_seen = false;
@@ -352,14 +352,14 @@ TEST(RealtimeProfilerSanity, TraceReplayResolvesKernelSources) {
         kDeviceId, DEFAULT_L1_SMALL_SIZE, kTraceRegionSize, 1, DispatchCoreConfig{DispatchCoreType::WORKER});
     ASSERT_NE(mesh_device, nullptr);
 
-    if (!IsProgramRealtimeProfilerActive()) {
+    if (!IsProgramRealtimeProfilerActive(*mesh_device)) {
         mesh_device->close();
         GTEST_SKIP() << "Real-time profiler is not active on this dispatch config";
     }
 
     std::vector<ProgramRealtimeRecord> records;
     ProgramRealtimeProfilerCallbackHandle handle =
-        RegisterProgramRealtimeProfilerCallback([&records](const ProgramRealtimeRecordBatch& batch) {
+        RegisterProgramRealtimeProfilerCallback(*mesh_device, [&records](const ProgramRealtimeRecordBatch& batch) {
             records.insert(records.end(), batch.records.begin(), batch.records.end());
         });
 
@@ -399,7 +399,7 @@ TEST(RealtimeProfilerSanity, TraceReplayResolvesKernelSources) {
 
     mesh_device->quiesce_devices();
     std::this_thread::sleep_for(std::chrono::milliseconds(500));
-    UnregisterProgramRealtimeProfilerCallback(handle);
+    UnregisterProgramRealtimeProfilerCallback(*mesh_device, handle);
     mesh_device->release_mesh_trace(trace_id);
 
     const std::string expected_marker = kSourceMarkerPrefix + std::to_string(kTraceRuntimeId);

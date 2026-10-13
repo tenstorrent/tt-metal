@@ -339,7 +339,7 @@ def test_routed_expert_crossover_perf(
     margin: float,
     weights_dram_sharded: bool,
 ):
-    require_realtime_profiler("routed expert crossover perf checks")
+    require_realtime_profiler(mesh_device, "routed expert crossover perf checks")
 
     table = _NDSHARD_EXPECTED_NS if weights_dram_sharded else _EXPECTED_NS
     placement = "w_ndshard" if weights_dram_sharded else "w_interleaved"

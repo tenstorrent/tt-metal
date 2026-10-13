@@ -1225,7 +1225,7 @@ def test_indexer_score_math_util(device, case_id, run_fn, mm_flops_thunk, expect
     with the real-time device profiler and compares the achieved math_util to the expected value (measured on
     a BH dev board). Marked requires_host_iommu so the marker-selected IOMMU job runs it and broad non-IOMMU
     jobs exclude it; an inactive profiler here is therefore a regression -> fail."""
-    if not ttnn.device.IsProgramRealtimeProfilerActive():
+    if not ttnn.device.IsProgramRealtimeProfilerActive(device):
         # This runs only on the IOMMU-pinned sku (the broad non-IOMMU globs exclude it by marker), so an inactive
         # profiler means it regressed on a sku that should have it -- fail (not skip), matching the sprint /
         # ring-joint perf checks.

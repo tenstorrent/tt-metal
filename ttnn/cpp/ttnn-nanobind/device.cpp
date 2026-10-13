@@ -796,7 +796,7 @@ void device_module(nb::module_& m_device) {
 
     m_device.def(
         "RegisterProgramRealtimeProfilerCallback",
-        [](const nb::callable& callback) -> uint64_t {
+        [](tt::tt_metal::distributed::MeshDevice* device, const nb::callable& callback) -> uint64_t {
             PyObject* raw_cb = callback.ptr();
             Py_INCREF(raw_cb);
 
@@ -804,7 +804,7 @@ void device_module(nb::module_& m_device) {
             {
                 nb::gil_scoped_release release;
                 handle = tt::tt_metal::experimental::RegisterProgramRealtimeProfilerCallback(
-                    [raw_cb](const tt::tt_metal::experimental::ProgramRealtimeRecordBatch& batch) {
+                    *device, [raw_cb](const tt::tt_metal::experimental::ProgramRealtimeRecordBatch& batch) {
                         PythonProgramRealtimeRecordBatch py_batch{
                             .records = std::vector<tt::tt_metal::experimental::ProgramRealtimeRecord>(
                                 batch.records.begin(), batch.records.end()),
@@ -818,16 +818,19 @@ void device_module(nb::module_& m_device) {
             python_realtime_callback_refs[handle] = raw_cb;
             return handle;
         },
+        nb::arg("device"),
         nb::arg("callback"),
         R"doc(
-            Register a callback to be invoked when real-time profiler data arrives from a device.
-            The callback receives a ProgramRealtimeRecordBatch and is called from its own thread.
-            Callbacks that are too slow to keep up with incoming profiler data may miss records;
-            this is reported by ProgramRealtimeRecordBatch.dropped.
+            Register a callback to be invoked with real-time profiler records for programs that ran
+            on the given device's local chips. The callback receives a ProgramRealtimeRecordBatch and
+            is called from its own thread. Callbacks that are too slow to keep up with incoming
+            profiler data may miss records; this is reported by ProgramRealtimeRecordBatch.dropped.
 
-            Multiple callbacks can be registered.
+            Multiple callbacks can be registered. A callback stays registered until it is unregistered
+            or the device is closed; closing first delivers the records still in flight.
 
             Args:
+                device (ttnn.MeshDevice): The device whose records the callback receives.
                 callback: A callable that accepts a single ProgramRealtimeRecordBatch argument.
 
             Returns:
@@ -837,15 +840,15 @@ void device_module(nb::module_& m_device) {
                 >>> def my_callback(batch):
                 ...     for record in batch.records:
                 ...         print(f"runtime_id={record.runtime_id} on chip {record.chip_id}")
-                >>> handle = ttnn.device.RegisterProgramRealtimeProfilerCallback(my_callback)
+                >>> handle = ttnn.device.RegisterProgramRealtimeProfilerCallback(mesh_device, my_callback)
         )doc");
 
     m_device.def(
         "UnregisterProgramRealtimeProfilerCallback",
-        [](uint64_t handle) {
+        [](tt::tt_metal::distributed::MeshDevice* device, uint64_t handle) {
             {
                 nb::gil_scoped_release release;
-                tt::tt_metal::experimental::UnregisterProgramRealtimeProfilerCallback(handle);
+                tt::tt_metal::experimental::UnregisterProgramRealtimeProfilerCallback(*device, handle);
             }
             auto it = python_realtime_callback_refs.find(handle);
             if (it != python_realtime_callback_refs.end()) {
@@ -853,30 +856,36 @@ void device_module(nb::module_& m_device) {
                 python_realtime_callback_refs.erase(it);
             }
         },
+        nb::arg("device"),
         nb::arg("handle"),
         R"doc(
-            Unregister a previously registered real-time profiler callback.
-            This call waits for any in-flight invocations of the callback to finish.
+            Unregister a real-time profiler callback previously registered on the given device.
+            This call waits for any in-flight invocations of the callback to finish. It is safe to
+            call after the device has been closed.
 
             Args:
+                device (ttnn.MeshDevice): The device the callback was registered on.
                 handle (int): The handle returned by RegisterProgramRealtimeProfilerCallback.
         )doc");
 
     m_device.def(
         "IsProgramRealtimeProfilerActive",
-        []() { return tt::tt_metal::experimental::IsProgramRealtimeProfilerActive(); },
+        [](const tt::tt_metal::distributed::MeshDevice* device) {
+            return tt::tt_metal::experimental::IsProgramRealtimeProfilerActive(*device);
+        },
+        nb::arg("device"),
         R"doc(
-            Returns True if the real-time profiler is currently running on at least one chip.
+            Returns True if the real-time profiler is running on at least one of the device's local chips.
 
             Returns False when the profiler was silently disabled for the current run
             (for example, ETH dispatch, remote-only mesh, or a platform that can't reserve
-            a tensix dispatch core). Tests that want to collect RT records should call this
-            after opening the device and skip their verification when it returns False —
-            registered callbacks will simply never fire in that case.
+            a tensix dispatch core), or once the device has been closed. Tests that want to
+            collect RT records should check this and skip their verification when it returns
+            False — registered callbacks will simply never fire in that case.
 
             Example:
                 >>> mesh_device = ttnn.open_mesh_device(...)
-                >>> if not ttnn.device.IsProgramRealtimeProfilerActive():
+                >>> if not ttnn.device.IsProgramRealtimeProfilerActive(mesh_device):
                 ...     pytest.skip("Real-time profiler not active on this configuration")
         )doc");
 }

@@ -136,14 +136,15 @@ int main(int argc, char** argv) {
                    << "kernel_sources\n";
 
         tt::tt_metal::experimental::ProgramRealtimeProfilerCallbackHandle callback_handle =
-            tt::tt_metal::experimental::RegisterProgramRealtimeProfilerCallback(WriteRealtimeRecordsToCsv);
+            tt::tt_metal::experimental::RegisterProgramRealtimeProfilerCallback(
+                *mesh_device, WriteRealtimeRecordsToCsv);
 
         RunPrograms(mesh_device, num_programs);
         mesh_device->quiesce_devices();
 
         std::this_thread::sleep_for(std::chrono::milliseconds(500));
 
-        tt::tt_metal::experimental::UnregisterProgramRealtimeProfilerCallback(callback_handle);
+        tt::tt_metal::experimental::UnregisterProgramRealtimeProfilerCallback(*mesh_device, callback_handle);
 
         g_csv_file.close();
 

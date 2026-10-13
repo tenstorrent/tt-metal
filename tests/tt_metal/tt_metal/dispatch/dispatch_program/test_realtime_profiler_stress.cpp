@@ -147,7 +147,7 @@ TEST(RealtimeProfilerStress, PeakLoadPreservesRecords) {
     // chip, kernels nullified, no valid RT core, worker_l1_size shrunk
     // below the ring size, ...) leaves RT profiler off; the test has
     // nothing to assert in that case so it skips cleanly.
-    if (!IsProgramRealtimeProfilerActive()) {
+    if (!IsProgramRealtimeProfilerActive(*mesh_device)) {
         mesh_device->close();
         GTEST_SKIP() << "Real-time profiler is not active on this dispatch config";
     }
@@ -163,7 +163,7 @@ TEST(RealtimeProfilerStress, PeakLoadPreservesRecords) {
     int64_t worst_negative_delta = 0;
     uint64_t max_callback_batch = 0;
     ProgramRealtimeProfilerCallbackHandle handle =
-        RegisterProgramRealtimeProfilerCallback([&](const ProgramRealtimeRecordBatch& batch) {
+        RegisterProgramRealtimeProfilerCallback(*mesh_device, [&](const ProgramRealtimeRecordBatch& batch) {
             max_callback_batch = std::max<uint64_t>(max_callback_batch, batch.records.size());
             for (const auto& rec : batch.records) {
                 if (rec.runtime_id != kStressRuntimeId) {
@@ -230,7 +230,7 @@ TEST(RealtimeProfilerStress, PeakLoadPreservesRecords) {
     const uint64_t published_batches = rt->num_published_batches();
     const double mean_publish_batch =
         published_batches ? static_cast<double>(rt->num_published_records()) / published_batches : 0.0;
-    UnregisterProgramRealtimeProfilerCallback(handle);
+    UnregisterProgramRealtimeProfilerCallback(*mesh_device, handle);
     mesh_device->release_mesh_trace(trace_id);
 
     const uint64_t expected_stress_records =
@@ -304,7 +304,7 @@ TEST(RealtimeProfilerStress, DispatchStallIsReportedAndLossless) {
 
     auto mesh_device = open_full_mesh();
     ASSERT_NE(mesh_device, nullptr);
-    if (!IsProgramRealtimeProfilerActive()) {
+    if (!IsProgramRealtimeProfilerActive(*mesh_device)) {
         mesh_device->close();
         GTEST_SKIP() << "Real-time profiler is not active on this dispatch config";
     }
@@ -315,7 +315,7 @@ TEST(RealtimeProfilerStress, DispatchStallIsReportedAndLossless) {
     std::atomic<uint64_t> stress_records{0};
     std::atomic<double> frequency{0.0};  // device cycles per ns
     ProgramRealtimeProfilerCallbackHandle handle =
-        RegisterProgramRealtimeProfilerCallback([&](const ProgramRealtimeRecordBatch& batch) {
+        RegisterProgramRealtimeProfilerCallback(*mesh_device, [&](const ProgramRealtimeRecordBatch& batch) {
             for (const auto& rec : batch.records) {
                 if (rec.runtime_id == kStressRuntimeId) {
                     stress_records.fetch_add(1, std::memory_order_relaxed);
@@ -357,7 +357,7 @@ TEST(RealtimeProfilerStress, DispatchStallIsReportedAndLossless) {
     const uint64_t host_stalls = rt->dispatch_stall_events();
     const uint64_t host_stall_cycles = rt->dispatch_stall_cycles();
     const uint32_t device_waits = rt->record_ring_full_wait_count();
-    UnregisterProgramRealtimeProfilerCallback(handle);
+    UnregisterProgramRealtimeProfilerCallback(*mesh_device, handle);
     mesh_device->release_mesh_trace(trace_id);
 
     const double freq = frequency.load();
@@ -395,7 +395,7 @@ TEST(RealtimeProfilerStress, ConsumerDropAccountingUnderLoad) {
 
     auto mesh_device = open_full_mesh();
     ASSERT_NE(mesh_device, nullptr);
-    if (!IsProgramRealtimeProfilerActive()) {
+    if (!IsProgramRealtimeProfilerActive(*mesh_device)) {
         mesh_device->close();
         GTEST_SKIP() << "Real-time profiler is not active on this dispatch config";
     }
@@ -467,12 +467,12 @@ TEST(RealtimeProfilerStress, ConsumerDropAccountingUnderLoad) {
         };
     };
 
-    ProgramRealtimeProfilerCallbackHandle h_keeps_up =
-        RegisterProgramRealtimeProfilerCallback(make_consumer(keeps_up, std::chrono::nanoseconds::zero()));
+    ProgramRealtimeProfilerCallbackHandle h_keeps_up = RegisterProgramRealtimeProfilerCallback(
+        *mesh_device, make_consumer(keeps_up, std::chrono::nanoseconds::zero()));
     ProgramRealtimeProfilerCallbackHandle h_borderline =
-        RegisterProgramRealtimeProfilerCallback(make_consumer(borderline, borderline_per_record));
+        RegisterProgramRealtimeProfilerCallback(*mesh_device, make_consumer(borderline, borderline_per_record));
     ProgramRealtimeProfilerCallbackHandle h_slow =
-        RegisterProgramRealtimeProfilerCallback(make_consumer(slow, slow_per_record));
+        RegisterProgramRealtimeProfilerCallback(*mesh_device, make_consumer(slow, slow_per_record));
 
     const auto run_deadline = std::chrono::steady_clock::now() + run_window;
     while (std::chrono::steady_clock::now() < run_deadline) {
@@ -528,9 +528,9 @@ TEST(RealtimeProfilerStress, ConsumerDropAccountingUnderLoad) {
         slow_dropped,
         slow_total);
 
-    UnregisterProgramRealtimeProfilerCallback(h_keeps_up);
-    UnregisterProgramRealtimeProfilerCallback(h_borderline);
-    UnregisterProgramRealtimeProfilerCallback(h_slow);
+    UnregisterProgramRealtimeProfilerCallback(*mesh_device, h_keeps_up);
+    UnregisterProgramRealtimeProfilerCallback(*mesh_device, h_borderline);
+    UnregisterProgramRealtimeProfilerCallback(*mesh_device, h_slow);
     mesh_device->release_mesh_trace(trace_id);
 
     EXPECT_LT(peak_fifo_pages, fifo_capacity_pages)

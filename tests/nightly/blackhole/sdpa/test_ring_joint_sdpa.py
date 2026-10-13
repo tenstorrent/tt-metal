@@ -756,7 +756,7 @@ def create_global_semaphores(mesh_device, cores, initial_value, *, count=2):
 
 
 def profile_ring_joint_runtime_duration_ns(mesh_device, run_fn):
-    if not ttnn.device.IsProgramRealtimeProfilerActive():
+    if not ttnn.device.IsProgramRealtimeProfilerActive(mesh_device):
         pytest.fail("Real-time profiler must be active for SDPA perf checks")
 
     _, records = profile_realtime_program(

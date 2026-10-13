@@ -296,7 +296,7 @@ def test_ring_indexer_score_dsa_perf(mesh_device, kv_len, bounds_source):
     utilization and a +/-2% relative CI band, matching the existing
     single-chip indexer perf gate.
     """
-    require_realtime_profiler("ring_indexer_score_dsa perf checks")
+    require_realtime_profiler(mesh_device, "ring_indexer_score_dsa perf checks")
 
     sp, tp = mesh_device.shape
     assert (sp, tp) in RING_PERF_MESHES

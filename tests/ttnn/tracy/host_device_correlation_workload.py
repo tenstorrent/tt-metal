@@ -56,14 +56,14 @@ def main():
     # Use the platform default dispatch config: the workload must not pick a
     # dispatch type just to keep the real-time profiler alive. On platforms
     # whose default is ETH dispatch the RT profiler silently bows out (see
-    # mesh_device.cpp); IsProgramRealtimeProfilerActive() tells us whether
+    # mesh_device.cpp); IsProgramRealtimeProfilerActive(mesh_device) tells us whether
     # that happened so the outer pytest test can pytest.skip cleanly.
     mesh_device = ttnn.open_mesh_device(
         ttnn.MeshShape(1, 1),
         l1_small_size=24576,
     )
 
-    if not ttnn.device.IsProgramRealtimeProfilerActive():
+    if not ttnn.device.IsProgramRealtimeProfilerActive(mesh_device):
         print(
             "SKIP: Real-time profiler is not active on this configuration "
             "(typically ETH dispatch on WH N300). Nothing to correlate.",
@@ -73,7 +73,7 @@ def main():
         sys.exit(5)
 
     # Register callback to capture device-side program records
-    handle = ttnn.device.RegisterProgramRealtimeProfilerCallback(collect_records)
+    handle = ttnn.device.RegisterProgramRealtimeProfilerCallback(mesh_device, collect_records)
 
     try:
         from models.demos.vision.classification.resnet50.ttnn_resnet.demo.demo import run_resnet_inference
@@ -99,7 +99,7 @@ def main():
             post_close_count = len(records)
         print(f"Records after close: {post_close_count} (delta={post_close_count - pre_close_count})", flush=True)
 
-        ttnn.device.UnregisterProgramRealtimeProfilerCallback(handle)
+        ttnn.device.UnregisterProgramRealtimeProfilerCallback(mesh_device, handle)
 
         with lock:
             snapshot = list(records)

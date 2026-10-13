@@ -174,7 +174,7 @@ def test_hybrid_routed_expert_perf(
     margin: float,
     weights_dram_sharded: bool,
 ):
-    require_realtime_profiler("hybrid routed expert perf checks")
+    require_realtime_profiler(device, "hybrid routed expert perf checks")
     assert threshold is not None, f"{model_name} ships no hybrid threshold; this op needs one"
 
     table = _NDSHARD_EXPECTED_NS if weights_dram_sharded else _EXPECTED_NS

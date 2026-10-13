@@ -458,7 +458,7 @@ def test_reduce_affine_transforms_rejects_unsupported_compute_config(
 @skip_with_watcher("Watcher perturbs kernel timing; perf checks are not meaningful with it enabled.")
 def test_reduce_affine_transforms_production_performance(zero_actual_start, device: ttnn.Device) -> None:
     case = _PRODUCTION_PERF_CASE
-    if not ttnn.device.IsProgramRealtimeProfilerActive():
+    if not ttnn.device.IsProgramRealtimeProfilerActive(device):
         pytest.fail("Real-time profiler must be active for affine-transform reduction performance checks")
 
     host = _host_inputs(case.batch_heads, case.groups_per_head, case.key_dim, case.value_dim, seed=117)

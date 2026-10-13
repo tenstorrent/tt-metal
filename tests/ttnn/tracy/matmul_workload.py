@@ -88,7 +88,7 @@ def main():
                 }
             )
 
-    handle = ttnn.device.RegisterProgramRealtimeProfilerCallback(collect_records)
+    handle = ttnn.device.RegisterProgramRealtimeProfilerCallback(device, collect_records)
 
     try:
         if mode == "simple":
@@ -113,7 +113,7 @@ def main():
             ttnn.synchronize_device(device)
     finally:
         ttnn.close_mesh_device(device)
-        ttnn.device.UnregisterProgramRealtimeProfilerCallback(handle)
+        ttnn.device.UnregisterProgramRealtimeProfilerCallback(device, handle)
 
     snapshot = list(records)
     with open(rt_path, "w") as f:

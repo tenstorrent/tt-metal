@@ -25,7 +25,7 @@ def main():
         l1_small_size=24576,
         dispatch_core_config=ttnn.DispatchCoreConfig(ttnn.DispatchCoreType.WORKER),
     )
-    h = ttnn.device.RegisterProgramRealtimeProfilerCallback(collect_records)
+    h = ttnn.device.RegisterProgramRealtimeProfilerCallback(dev, collect_records)
     try:
         torch.manual_seed(0)
         a = ttnn.to_layout(
@@ -52,7 +52,7 @@ def main():
         ttnn.synchronize_device(dev)
     finally:
         ttnn.close_mesh_device(dev)
-        ttnn.device.UnregisterProgramRealtimeProfilerCallback(h)
+        ttnn.device.UnregisterProgramRealtimeProfilerCallback(dev, h)
 
     snap = list(records)
     print(f"Total records from callback: {len(snap)}")

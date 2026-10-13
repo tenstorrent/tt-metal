@@ -575,7 +575,7 @@ def _run_chunked_prefill(
     # Same exclusion, same reason: a reference run pays a CPU torch pass this measurement does not want.
     if profile and reference is not None:
         pytest.skip("profile needs reference=None (func) -- accuracy is the cpu/trace path's job")
-    if profile and not ttnn.device.IsProgramRealtimeProfilerActive():
+    if profile and not ttnn.device.IsProgramRealtimeProfilerActive(mesh_device):
         pytest.fail("realtime profiler inactive (needs Blackhole, WORKER dispatch, fabric-tensix DM off)")
     sp_axis, tp_axis = 0, 1
     if topology is None:

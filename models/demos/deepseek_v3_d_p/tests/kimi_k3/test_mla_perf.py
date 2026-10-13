@@ -201,8 +201,8 @@ def _shape_normalized_config_and_weights(fixture_config, fixture_weights, tp: in
     return config, weights
 
 
-def _require_rt_profiler() -> None:
-    if not ttnn.device.IsProgramRealtimeProfilerActive():
+def _require_rt_profiler(mesh_device) -> None:
+    if not ttnn.device.IsProgramRealtimeProfilerActive(mesh_device):
         pytest.fail("realtime profiler is inactive (K3 MLA perf requires eligible Blackhole hardware)")
 
 
@@ -466,7 +466,7 @@ def _write_outputs(*, scenario: str, cache: int, chunk: int, forwards: list[dict
 def test_mla_chunked_perf(mesh_device, device_params, scenario, variant, random_weights):
     if PERF_SKIP_REASON:
         pytest.skip(PERF_SKIP_REASON)
-    _require_rt_profiler()
+    _require_rt_profiler(mesh_device)
 
     sp_axis, tp_axis = 0, 1
     sp, tp = tuple(mesh_device.shape)

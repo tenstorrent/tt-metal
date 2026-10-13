@@ -620,7 +620,7 @@ def test_prepare_chunk_recurrence_rejects_unsupported_compute_config(
 @skip_with_watcher("Watcher perturbs kernel timing; perf checks are not meaningful with it enabled.")
 def test_prepare_chunk_recurrence_production_performance(device: ttnn.Device) -> None:
     case = _PRODUCTION_CASE
-    if not ttnn.device.IsProgramRealtimeProfilerActive():
+    if not ttnn.device.IsProgramRealtimeProfilerActive(device):
         pytest.fail("Real-time profiler must be active for chunk-recurrence preparation performance checks")
 
     host_inputs = _case_host_inputs(case, seed=117)

@@ -280,7 +280,7 @@ def test_sparse_sdpa_perf(device, S, T, TOPK, kc, nv, expected_ms):
     nv_fn = _NV[nv]
     q, kv, indices = make_inputs(H, S, T, TOPK, K_DIM, lambda s: nv_fn(s, T, TOPK))
 
-    if not ttnn.device.IsProgramRealtimeProfilerActive():
+    if not ttnn.device.IsProgramRealtimeProfilerActive(device):
         # This runs only on the IOMMU-pinned sku (the broad non-IOMMU sdpa glob excludes it by marker), so an
         # inactive profiler means it regressed on a sku that should have it -- fail (not skip), matching the
         # sprint / ring-joint perf checks.
@@ -411,7 +411,7 @@ _ATTENTION_SINK_EXPECTED_MS = {
 @skip_with_llk_assert("No need to verify LLK asserts for performance tests.")
 @skip_with_watcher("Watcher perturbs kernel timing; perf checks are not meaningful with it enabled.")
 def test_sparse_sdpa_attention_sink_perf(device, H, S, TOPK, dim, kc):
-    if not ttnn.device.IsProgramRealtimeProfilerActive():
+    if not ttnn.device.IsProgramRealtimeProfilerActive(device):
         pytest.fail("Real-time profiler must be active for attention sink perf checks (needs IOMMU)")
     run = _attention_sink_op(device, H, S, TOPK, dim, kc)
     run()  # Compile and warm the program cache before measuring device execution.
