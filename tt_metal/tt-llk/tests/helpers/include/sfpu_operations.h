@@ -1685,12 +1685,14 @@ void call_binary_sfpu_operation_init()
     }
     else if constexpr (BINOP == BinaryOp::POW)
     {
-#if defined(ARCH_BLACKHOLE)
-        SFPU_BINARY_INIT_FN(power, sfpu_binary_pow_init, (APPROXIMATION_MODE));
-#else
         SFPU_BINARY_INIT_FN(power, sfpu_binary_init, (APPROXIMATION_MODE, BINOP));
-#endif
     }
+#if defined(ARCH_BLACKHOLE)
+    else if constexpr (BINOP == BinaryOp::POW_TILE)
+    {
+        SFPU_BINARY_INIT_FN(power, sfpu_binary_pow_init, (APPROXIMATION_MODE));
+    }
+#endif
     else if constexpr (BINOP == BinaryOp::ADD_TOP_ROW)
     {
         SFPU_BINARY_INIT_FN_NO_ARGS(add1, init_add_top_row);
@@ -1893,7 +1895,7 @@ void call_binary_sfpu_operation(
     constexpr bool is_int32 = MATH_FORMAT == static_cast<std::uint32_t>(DataFormat::Int32);
     constexpr bool one_call =
         ITERATIONS == 32 &&
-        (BINOP == BinaryOp::DIV || BINOP == BinaryOp::RSUB || BINOP == BinaryOp::POW || BINOP == BinaryOp::XLOGY ||
+        (BINOP == BinaryOp::DIV || BINOP == BinaryOp::RSUB || BINOP == BinaryOp::POW_TILE || BINOP == BinaryOp::XLOGY ||
          ((BINOP == BinaryOp::ADD || BINOP == BinaryOp::SUB || BINOP == BinaryOp::MUL) && !is_int32) || BINOP == BinaryOp::LT || BINOP == BinaryOp::GT ||
          BINOP == BinaryOp::LE || BINOP == BinaryOp::GE || BINOP == BinaryOp::EQ || BINOP == BinaryOp::NE || BINOP == BinaryOp::MAX ||
          BINOP == BinaryOp::MIN || BINOP == BinaryOp::FMOD || BINOP == BinaryOp::REMAINDER || BINOP == BinaryOp::ATAN2 || BINOP == BinaryOp::ISCLOSE ||
@@ -1965,9 +1967,9 @@ void call_binary_sfpu_operation(
             vector_mode);
     }
 #if defined(ARCH_BLACKHOLE)
-    else if constexpr (BINOP == BinaryOp::POW)
+    else if constexpr (BINOP == BinaryOp::POW_TILE)
     {
-        // The body power_binary_tile runs; the generic loop's POW arm has no compute API caller.
+        // The body power_binary_tile runs; POW keeps the generic loop's arm.
         SFPU_BINARY_CALL(
             DST_SYNC_MODE,
             DST_ACCUM_MODE,

@@ -8,6 +8,7 @@
 #include <limits>
 
 #include "ckernel.h"
+#include "ckernel_addrmod.h"
 #include "ckernel_defs.h"
 #include "sfpi.h"
 #include "ckernel_sfpu_recip.h"
@@ -120,6 +121,12 @@ inline void calculate_sfpu_binary(
         log_c = LogPoly::C;
         log_d = LogPoly::D;
     }
+    // MUL and POW keep the dst_reg++ walk: no compute API entry point runs them here. Every other op stores through
+    // ADDR_MOD_6, which steps Dest instead; an op that reads ADDR_MOD_6 after this one runs its own init first.
+    constexpr bool store_steps_dest = BINOP != BinaryOp::MUL && BINOP != BinaryOp::POW;
+    if constexpr (store_steps_dest) {
+        addr_mod_t{.srca = {.incr = 0}, .srcb = {.incr = 0}, .dest = {.incr = 2}}.set(ADDR_MOD_6);
+    }
     // SFPU microcode
     auto row = [&]() __attribute__((always_inline)) {
         // size of each tile in Dest is 64/SFP_DESTREG_STRIDE = 32 rows when using sfpi to load/store
@@ -208,11 +215,15 @@ inline void calculate_sfpu_binary(
             result = float32_to_bf16_rne(result);
         }
 
-        sfpi::dst_reg[dst_index_out * dst_tile_size_sfpi] = result;
-        sfpi::dst_reg++;
+        if constexpr (store_steps_dest) {
+            sfpi::dst_reg[dst_index_out * dst_tile_size_sfpi].mode(ADDR_MOD_6) = result;
+        } else {
+            sfpi::dst_reg[dst_index_out * dst_tile_size_sfpi] = result;
+            sfpi::dst_reg++;
+        }
     };
 
-    if constexpr (BINOP == BinaryOp::XLOGY && is_fp32_dest_acc_en) {
+    if constexpr ((BINOP == BinaryOp::XLOGY && is_fp32_dest_acc_en) || BINOP == BinaryOp::POW) {
         for (int d = 0; d < ITERATIONS; d++) {
             row();
         }
