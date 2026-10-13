@@ -161,18 +161,16 @@ def test_ff1_swiglu_pack_block_10s(
         out, _ = _synced_ms(mesh_device, run_block)
         mode["capture"] = False
         block_out = [_device0(out)]
-        ttnn.deallocate(out)
         captured = list(ff1_outs)
         assert captured, "ff1 did not go through all_gather_minimal_matmul_async with fuse_swiglu"
 
         block_ms, ff1_round_ms = [], []
         for _ in range(ROUNDS):
-            out, ms = _synced_ms(mesh_device, run_block)
-            ttnn.deallocate(out)
+            _, ms = _synced_ms(mesh_device, run_block)
             block_ms.append(ms)
             ff1_ms.clear()
             mode["time"] = True
-            ttnn.deallocate(run_block())
+            run_block()
             mode["time"] = False
             ff1_round_ms.append(sum(ff1_ms))
         logger.info(
