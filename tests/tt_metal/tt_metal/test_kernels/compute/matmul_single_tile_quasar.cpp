@@ -9,7 +9,8 @@
 #include "api/compute/pack.h"
 #include "api/dataflow/dataflow_buffer.h"
 
-// One-tile matmul, in0 x in1 -> out, at the kernel's MATH_FIDELITY.
+// One-tile matmul, in0 x in1 -> out. Float operands run at the kernel's MATH_FIDELITY; with Int8 operands the
+// Quasar LLK runs one phase whatever MATH_FIDELITY asks for, which the HiFi4 case checks.
 void kernel_main() {
     DataflowBuffer dfb_in0(dfb::in0);
     DataflowBuffer dfb_in1(dfb::in1);
