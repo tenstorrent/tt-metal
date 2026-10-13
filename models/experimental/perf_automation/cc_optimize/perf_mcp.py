@@ -686,6 +686,144 @@ _KNOB_REASON = {
     "shard": lambda g, f, w: "shard this op's weights/activations into L1 (height/width shard) to cut DRAM "
     "reads; record_kernel_attempt(...,'shard',...) to mark it tried (even on a no-gain)",
 }
+# A KNOB THAT FAILED PCC ON THE WHOLE STACK WAS NEVER TRIED ON PART OF IT. A repeated block is one
+# shared definition, so a fidelity or dtype edit on it lowers every instance at once -- and the
+# image-edit port on the 32-chip mesh (2026-10-13) recorded 19 such tries, every one reverted at PCC
+# 0.9443-0.9470 against a 0.95 bar, none of them on fewer layers. A miss that small says the error
+# budget is spent by SOME of the instances, not that none can carry the lower setting. So a knob
+# whose whole-stack try came back pcc_low is offered again on a subset of the instances, bounded,
+# with every earlier subset and its PCC handed back so each try narrows or widens the last one.
+_MAX_PARTIAL_TRIES = int(os.environ.get("PERF_MCP_MAX_PARTIAL_TRIES", "3"))
+# How a subset try's reason opens. The handed-out target keeps its reason, so a try that wedges or
+# diverges before the agent could state its blocks is still known to be one (_partial_marker).
+_PARTIAL_LEAD = "PCC-BOUNDED PARTIAL"
+# applied_blocks for such a try: a subset was tried, which instances is not known.
+_BLOCKS_UNSTATED = "unstated"
+
+
+def _parse_blocks(spec) -> list | None:
+    """Block indices from '0-11,14,20-23' or a JSON list -> sorted unique ints; [] for empty, None if
+    unparseable (a subset the caller cannot state is not one the tools can check)."""
+    if spec is None or spec == "" or spec == []:
+        return []
+    try:
+        if isinstance(spec, str) and spec.strip().startswith("["):
+            spec = json.loads(spec)
+        if isinstance(spec, (list, tuple)):
+            vals = [int(x) for x in spec]
+        else:
+            vals = []
+            for part in str(spec).split(","):
+                part = part.strip()
+                if not part:
+                    continue
+                lo, _, hi = part.partition("-")
+                vals += list(range(int(lo), int(hi) + 1)) if hi else [int(lo)]
+    except (TypeError, ValueError):
+        return None
+    return sorted(set(vals)) if all(v >= 0 for v in vals) else None
+
+
+def _is_partial(a: dict) -> bool:
+    return bool(a.get("applied_blocks"))
+
+
+def _partial_marker(target: dict) -> dict:
+    """The applied_blocks field for a row minted from the handed-out target alone (a wedge or a
+    diverged reading): {} unless that target was a subset try."""
+    return (
+        {"applied_blocks": _BLOCKS_UNSTATED}
+        if str((target or {}).get("reason") or "").startswith(_PARTIAL_LEAD)
+        else {}
+    )
+
+
+# The knobs that change the ARITHMETIC. A grid or shard edit that fails PCC broke the program, not
+# the precision budget, so a subset of instances is no answer to it.
+_PRECISION_KNOBS = frozenset({"fidelity", "dtype"})
+
+
+def _partial_knob_state(op_code: str, knob: str, attempts: list, count=None) -> dict | None:
+    """The subset retries this (op, knob) is owed, or None when it is owed none.
+
+    Owed only after a WHOLE-stack try of a precision knob on this op came back pcc_low: a knob that
+    was slower, or never reached the accuracy gate, has said nothing about which instances carry the
+    error. Subset tries count wherever they ended -- measured, wedged or diverged -- so the walk is
+    bounded by _MAX_PARTIAL_TRIES however each one went.
+
+    SIZED BY THE HEADROOM, NOT BY HALVES. The tree's last passing PCC (p_ok) minus the bar is what a
+    subset may spend; p_ok minus the whole-stack reading is what lowering every instance cost. Small
+    independent errors add, so about headroom/loss of the instances fit -- an estimate the walk then
+    corrects. With no headroom, or so little that not one of the op's `count` instances fits, the
+    walk is not owed: the image-edit port above sits at 0.9501 against 0.95, and a whole-stack miss
+    of 0.004 leaves room for ~2.5% of the instances."""
+    if knob not in _PRECISION_KNOBS:
+        return None
+    rows = [
+        a
+        for a in attempts
+        if _op_match(op_code, a)
+        and _normalise_rung(a.get("kernel_kind")) == knob
+        and not a.get("measurement_failed")
+        and not a.get("commit_record")
+    ]
+    failed = [a for a in rows if not _is_partial(a) and a.get("pcc_status") == "pcc_low"]
+    if not failed:
+        return None
+    f = failed[-1]
+    _ok = [a["pcc"] for a in attempts if a.get("pcc_status") == "ok" and isinstance(a.get("pcc"), (int, float))]
+    fraction = None
+    if _ok and isinstance(f.get("pcc"), (int, float)) and isinstance(f.get("pcc_threshold"), (int, float)):
+        headroom, loss = _ok[-1] - f["pcc_threshold"], _ok[-1] - f["pcc"]
+        if headroom <= 0 or loss <= 0:
+            return None
+        fraction = min(1.0, headroom / loss)
+        if count and fraction * int(count) < 1:
+            return None
+    return {
+        "failed": f,
+        "partials": [a for a in rows if _is_partial(a)],
+        "allowed": _MAX_PARTIAL_TRIES,
+        "fraction": fraction,
+    }
+
+
+def _partial_reason(knob: str, st: dict) -> str:
+    f = st["failed"]
+    tried = "; ".join(
+        "blocks %s -> %s%s"
+        % (
+            a.get("applied_blocks"),
+            a.get("pcc_status") or ("wedged" if a.get("wedged") else "diverged" if a.get("diverged") else "no pcc"),
+            " %.4f" % a["pcc"] if isinstance(a.get("pcc"), (int, float)) else "",
+        )
+        for a in st["partials"]
+    )
+    return (
+        _PARTIAL_LEAD + " (%d of %d): the whole-stack %s try on this op failed accuracy (pcc %s < %s), "
+        "so apply the SAME lowered setting to a SUBSET of the repeated stack's instances (the stack this "
+        "op's shared definition is instantiated in -- the pipeline's own `stacks`) and keep the rest at the "
+        "current setting. Earlier subsets: %s. With none, lower %s of the instances; after a pass widen the "
+        "subset, after a fail narrow it. record_kernel_attempt(...,'%s',..., applied_blocks='<the instance "
+        "indices you lowered, e.g. 0-29>'), and for a signature-visible lever "
+        "check_lever_coverage(..., intended_blocks=<same>) must say as_intended"
+        % (
+            len(st["partials"]) + 1,
+            st["allowed"],
+            knob,
+            f.get("pcc", "?"),
+            f.get("pcc_threshold", "?"),
+            tried or "none",
+            (
+                "about %.1f%% (the PCC headroom over the whole-stack loss, an estimate)" % (100 * st["fraction"])
+                if st.get("fraction") is not None
+                else "half"
+            ),
+            knob,
+        )
+    )
+
+
 _MAX_KERNEL_WEDGES = int(os.environ.get("PERF_MCP_MAX_KERNEL_WEDGES", "3"))
 
 
@@ -1154,6 +1292,7 @@ def _autorecord_wedge(reason: str, killed_by_watchdog: bool = False) -> None:
         "needs_device_recovery": kind == FAULT_KIND_WEDGED,
         "evidence": {},
         "diff": "",
+        **_partial_marker(t),
     }
     try:
         _append_attempt(rec)
@@ -1161,7 +1300,7 @@ def _autorecord_wedge(reason: str, killed_by_watchdog: bool = False) -> None:
         pass
 
 
-def _autorecord_diverged(op_signature: str, kernel_kind: str, note: str, fp: dict) -> None:
+def _autorecord_diverged(op_signature: str, kernel_kind: str, note: str, fp: dict, blocks=None) -> None:
     """Give a diverged attempt a ledger row, so the rung it was tried on can eventually close.
 
     record_kernel_attempt refuses to bank a diverged reading as a win or a loss -- correctly, since
@@ -1213,6 +1352,7 @@ def _autorecord_diverged(op_signature: str, kernel_kind: str, note: str, fp: dic
         "needs_device_recovery": False,
         "evidence": {},
         "diff": "",
+        **({"applied_blocks": blocks} if blocks else _partial_marker(_load_target())),
     }
     try:
         _append_attempt(rec)
@@ -1641,10 +1781,12 @@ def _op_ladder_status(open_op: dict, op_code: str, attempts: list) -> tuple[bool
     # Counted straight off _KNOBS, so a rung added to the ladder cannot be left uncounted here -- the
     # four hand-written sums this replaces were one copy per knob, and a fifth would have been a knob
     # that is offered forever because its tries never saturate.
+    # Subset tries of a knob are counted by _partial_knob_state, against their own allowance, so they
+    # neither spend the whole-stack retries nor close the rung on the whole stack.
     _rung_tries = collections.Counter(
         _normalise_rung(a.get("kernel_kind"))
         for a in matches
-        if not a.get("measurement_failed") and not a.get("commit_record")
+        if not a.get("measurement_failed") and not a.get("commit_record") and not _is_partial(a)
     )
     # A RUNG THAT CANNOT SUCCEED MUST STOP BEING OFFERED, the same rule host_overhead already applies
     # a few lines below ("an attempt that wedged the device may never have got far enough to have
@@ -1660,7 +1802,7 @@ def _op_ladder_status(open_op: dict, op_code: str, attempts: list) -> tuple[bool
     # the lever, and it deserves another go) or absent (two pre-existing records predate this field;
     # treating an unknown as non-retryable would exclude them on a missing value, not a judgement).
     for _a in _load_attempts_all():
-        if _a.get("wedged") and _a.get("retryable") is False and _op_match(op_code, _a):
+        if _a.get("wedged") and _a.get("retryable") is False and _op_match(op_code, _a) and not _is_partial(_a):
             _rung_tries[_normalise_rung(_a.get("kernel_kind"))] += 1
     # SAME BLIND SPOT, SAME FIX, for a diverged reading instead of a wedge: record_kernel_attempt
     # refuses to bank a >8% full-pipeline blowup as a win or a loss, so _rung_tries above cannot see
@@ -1668,7 +1810,7 @@ def _op_ladder_status(open_op: dict, op_code: str, attempts: list) -> tuple[bool
     # truthy for the same reason as _rung_allowance: a hot board making a reading look bad is not the
     # rung being genuinely tried.
     for _a in _load_attempts_all():
-        if _a.get("diverged") and not _a.get("board_clamped") and _op_match(op_code, _a):
+        if _a.get("diverged") and not _a.get("board_clamped") and _op_match(op_code, _a) and not _is_partial(_a):
             _rung_tries[_normalise_rung(_a.get("kernel_kind"))] += 1
     grid = (open_op.get("grid") or "").lower()
     wdtype = (open_op.get("weight_dtype") or "").lower()
@@ -1802,6 +1944,17 @@ def _op_ladder_status(open_op: dict, op_code: str, attempts: list) -> tuple[bool
                 continue
             lead = "" if want_preferred else "LOW-PRIORITY SWEEP (bound_by=%s): " % (bound or "unknown")
             return (False, "knob:" + knob, lead + _KNOB_REASON[knob](grid, fidelity, wdtype))
+    # Only an op the profile saw more than once has instances to take a subset of.
+    if int(open_op.get("count") or 0) > 1:
+        # Subset rows from the FULL log: one that wedged or diverged is absent from the caller's
+        # `attempts` (see above) and must still count against the bound.
+        _partial_pool = [a for a in attempts if not _is_partial(a)] + [
+            a for a in _load_attempts_all() if _is_partial(a)
+        ]
+        for knob in order:
+            st = applicable[knob] and _partial_knob_state(op_code, knob, _partial_pool, open_op.get("count"))
+            if st and len(st["partials"]) < st["allowed"]:
+                return (False, "knob:" + knob, _partial_reason(knob, st))
 
     if _tp_candidate(open_op, op_code) and "tp-fracture" not in kinds:
         return (
@@ -5207,7 +5360,7 @@ def _block_of(pos: int, starts: list) -> int:
 
 
 def compute_lever_coverage(
-    counts: dict, sequence: list, op_match: str, stale_dtype: str = "", new_dtype: str = ""
+    counts: dict, sequence: list, op_match: str, stale_dtype: str = "", new_dtype: str = "", intended_blocks=None
 ) -> dict:
     matching = {s: n for s, n in (counts or {}).items() if op_match and op_match in s}
     if not matching:
@@ -5228,7 +5381,21 @@ def compute_lever_coverage(
                     seen.add(b)
                     missed_blocks.append(b)
     fully = (stale == 0 and fresh > 0) if (stale_dtype and new_dtype) else None
-    if fully:
+    # A SUBSET TRY IS JUDGED AGAINST THE SUBSET IT MEANT. Partial is the goal there, so fully_applied
+    # cannot be its bar; the bar is that exactly the intended instances carry the new signature.
+    as_intended, fresh_blocks = None, []
+    if intended_blocks and stale_dtype and new_dtype:
+        fresh_sigs = {s for s in matching if new_dtype in s}
+        fresh_blocks = sorted({_block_of(i, starts) for i, s in enumerate(sequence or []) if s in fresh_sigs} - {-1})
+        as_intended = fresh_blocks == sorted(set(intended_blocks)) and not (set(missed_blocks) & set(intended_blocks))
+    if as_intended is not None:
+        note = (
+            "subset applied AS INTENDED: blocks %s carry the new signature, the rest the old" % fresh_blocks
+            if as_intended
+            else "subset NOT as intended: new signature on blocks %s, intended %s"
+            % (fresh_blocks, sorted(set(intended_blocks)))
+        )
+    elif fully:
         note = "lever reached ALL %d instances of this op" % total
     elif fully is False:
         note = (
@@ -5248,6 +5415,7 @@ def compute_lever_coverage(
         "n_blocks": n_blocks,
         "block_source": block_source,
         "missed_blocks": sorted(missed_blocks),
+        **({"as_intended": as_intended, "applied_blocks": fresh_blocks} if as_intended is not None else {}),
         "note": note,
     }
 
@@ -5289,7 +5457,7 @@ def _full_depth_op_probe():
 
 
 @mcp.tool()
-def check_lever_coverage(op_match: str, stale_dtype: str = "", new_dtype: str = "") -> dict:
+def check_lever_coverage(op_match: str, stale_dtype: str = "", new_dtype: str = "", intended_blocks: str = "") -> dict:
     """After applying a lever (dtype knob / kernel swap) to an op, VERIFY it reached EVERY layer instance,
     not just the profiled representative slice. Runs an ALL-LAYERS op-signature probe (TT_PERF_LAYERS=0,
     NO tracy -> no marker buffer -> overflow-safe) and checks whether the op still appears with its OLD
@@ -5298,7 +5466,17 @@ def check_lever_coverage(op_match: str, stale_dtype: str = "", new_dtype: str = 
     supply both for a dtype lever so coverage is exact. Returns fully_applied + missed_blocks: if PARTIAL,
     the edit is on an instance-specific path (e.g. layers[0]) — move it to the SHARED block definition and
     reapply so all N layers change. A repeated block is ONE class instantiated N times, so a lever on the
-    shared definition propagates to every instance; this catches the case where it did not."""
+    shared definition propagates to every instance; this catches the case where it did not.
+    intended_blocks: for a PCC-BOUNDED PARTIAL try only -- the instance indices meant to carry the lever
+    (same form as record_kernel_attempt's applied_blocks); the answer is then as_intended, not
+    fully_applied."""
+    _intended = _parse_blocks(intended_blocks)
+    if _intended is None:
+        return {
+            "status": "error",
+            "fully_applied": None,
+            "note": "intended_blocks %r is not a list of indices" % (intended_blocks,),
+        }
     counts, seq = _full_depth_op_probe()
     if not counts:
         return {
@@ -5309,7 +5487,7 @@ def check_lever_coverage(op_match: str, stale_dtype: str = "", new_dtype: str = 
                 "counts (%s). This is NOT a pass: do not treat the lever as fully applied." % (seq or "no output")
             ),
         }
-    return compute_lever_coverage(counts, seq, op_match, stale_dtype, new_dtype)
+    return compute_lever_coverage(counts, seq, op_match, stale_dtype, new_dtype, _intended)
 
 
 def _tokens_env() -> str:
@@ -6071,16 +6249,21 @@ def _gate_rung_allowance(rung: str) -> int | None:
     return None
 
 
-def _rung_allowance(op_signature: str, kernel_kind: str, attempts: list) -> tuple[int, int]:
+def _rung_allowance(op_signature: str, kernel_kind: str, attempts: list, partial: bool = False) -> tuple[int, int]:
     """(attempts already made, how many are permitted) for this (op, rung).
 
     Mirrors the policy _op_ladder_status already applies when handing rungs out, so the two cannot
     drift: knob rungs get _MAX_KNOB_RETRIES, deep rungs get one, and a knob is capped to one once the
     op has gone deep (perf_mcp.py:1338 -- a second knob search is not worth it after a structural or
     kernel rung exists). Failed measurements do not count against the allowance; nothing was learned.
+    partial: a subset try (applied_blocks given), counted against _partial_knob_state's allowance --
+    none at all until a whole-stack try of the knob came back pcc_low.
     """
     rung = _normalise_rung(kernel_kind)
-    matches = [a for a in attempts if _op_match(op_signature, a)]
+    if partial:
+        st = _partial_knob_state(op_signature, rung, attempts)
+        return (len(st["partials"]), st["allowed"]) if st else (0, 0)
+    matches = [a for a in attempts if _op_match(op_signature, a) and not _is_partial(a)]
     tries = sum(
         1
         for a in matches
@@ -6145,7 +6328,13 @@ _KNOB_RUNG_NAMES = frozenset(_KNOBS)
 
 @mcp.tool()
 def record_kernel_attempt(
-    op_signature: str, kernel_kind: str, measured_ms: float, beat_baseline: bool, note: str = "", stages_json: str = ""
+    op_signature: str,
+    kernel_kind: str,
+    measured_ms: float,
+    beat_baseline: bool,
+    note: str = "",
+    stages_json: str = "",
+    applied_blocks: str = "",
 ) -> dict:
     """Record that you AUTHORED and MEASURED a real custom kernel for an open op (tt-lang or C++).
 
@@ -6160,7 +6349,9 @@ def record_kernel_attempt(
     kernel actually exists in the model source — a record with no kernel present is flagged and will
     NOT clear the op. stages_json: OPTIONAL per-stage trace timings for this lever (the same
     JSON list of {"name","ms","dominant?"} you would pass hitl_gate) — rendered as the block-level
-    timing table in RUN_REPORT.md so BOTH hitl and non-hitl runs surface where device time went."""
+    timing table in RUN_REPORT.md so BOTH hitl and non-hitl runs surface where device time went.
+    applied_blocks: ONLY for a PCC-BOUNDED PARTIAL knob try (the ladder says so in its reason) -- the
+    repeated-stack instance indices the lowered setting was applied to, e.g. '0-29' or '[0, 2, 4]'."""
     # CONFIG/STRUCTURAL kinds — changes with NO custom-kernel source marker: program-config knobs
     # (grid/dtype), trace/2-CQ host-loop transforms, and dataflow restructures (gather/fusion/cache).
     # Accepted as detected; the re-profile + PCC verify the real effect. Only true kernel kinds
@@ -6227,9 +6418,16 @@ def record_kernel_attempt(
     # and the trace replay it had already paid minutes for was gone -- the next, legitimate kind on
     # the same op then refused too, for "owns no end-to-end measurement". Order matters because one
     # of these two refusals is free to retry and the other is not.
+    _blocks = _parse_blocks(applied_blocks)
+    if _blocks is None:
+        return {
+            "recorded": False,
+            "refused": "applied_blocks %r is not a list of instance indices (e.g. '0-29' or '[0, 2]')"
+            % (applied_blocks,),
+        }
     if os.environ.get("PERF_MCP_ALLOW_RETRIED_RUNG") != "1":
         _all = [a for a in _load_attempts_all() if not a.get("measurement_failed")]
-        _tries, _allowed = _rung_allowance(op_signature, kernel_kind, _all)
+        _tries, _allowed = _rung_allowance(op_signature, kernel_kind, _all, partial=bool(_blocks))
         if _tries >= _allowed:
             _done_kinds = sorted(
                 {
@@ -6244,6 +6442,11 @@ def record_kernel_attempt(
                 "refused": (
                     "rung %r on %r is CLOSED: %d of %d permitted attempt(s) already recorded"
                     % (_normalise_rung(kernel_kind), op_signature, _tries, _allowed)
+                    + (
+                        " (subset tries; they are owed only after a whole-stack try of this knob failed PCC)"
+                        if _blocks
+                        else ""
+                    )
                 ),
                 "already_tried": _done_kinds,
                 "rungs_still_open": _left,
@@ -6279,7 +6482,7 @@ def record_kernel_attempt(
         # it. See _autorecord_diverged.
         _fp_now = gate_verdicts().get("full_pipeline") or {}
         if str(_fp_now.get("status")) == "diverged":
-            _autorecord_diverged(op_signature, kernel_kind, note, _fp_now)
+            _autorecord_diverged(op_signature, kernel_kind, note, _fp_now, _blocks)
         return {
             "recorded": False,
             "refused": (
@@ -6340,6 +6543,7 @@ def record_kernel_attempt(
         "fullpipe_measured_here": _fpv["own"],
         "note": note,
         "stages": stages,
+        **({"applied_blocks": _blocks} if _blocks else {}),
         "kernel_detected_in_source": detected,
         # WHICH LIBRARY GRADED THIS. A hand-written kernel only ever beat the stock op of its day, and
         # without the version of that day there is no way to notice when ttnn has moved past it --
