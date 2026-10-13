@@ -281,7 +281,8 @@ class LagunaGenerator(ReadinessGenerator):
         return torch.as_tensor(self._read_token(tok_buf, batch), dtype=torch.int64)
 
     def _greedy_sample(self, logit_shards, batch, tt_out_tok):
-        if _GREEDY_PICK and logit_shards.layout == ttnn.TILE_LAYOUT and int(logit_shards.shape[-2]) <= 32:
+        rows = int(logit_shards.shape[-2])
+        if _GREEDY_PICK and logit_shards.layout == ttnn.TILE_LAYOUT and (rows <= 32 or rows % 32 == 0):
             # the greedy pick kernels (greedy_pick.py): the argmax over every chip's vocabulary shard (~78 vs ~170 us
             # for the sampler's top-k + sampling at 32 rows), same ids
             from .greedy_pick import chip_offsets, greedy_pick

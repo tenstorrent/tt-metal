@@ -72,12 +72,13 @@ def greedy_pick(shards, out_tok, offsets, rows_out=None, cluster_axis=1, topolog
     ttnn.generic_op([shards, parts], ttnn.ProgramDescriptor(
         kernels=kernels, semaphores=[], cbs=[_cb(grid, 0, 4096 + 128, 1, ttnn.bfloat16), _cb(grid, 1, 4096 + 128, 1, ttnn.bfloat16)]))  # fmt: skip
     one = ttnn.num_cores_to_corerangeset(1, gs, True)
-    rows_grid = ttnn.num_cores_to_corerangeset(R, gs, True)
+    n_final = min(R, gs.x * gs.y)  # stage-2 cores (each reduces rows c, c + n_final, ...)
+    rows_grid = ttnn.num_cores_to_corerangeset(n_final, gs, True)
     k2 = ttnn.KernelDescriptor(
         kernel_source=str(_KDIR / "argmax_final.cpp"),
         source_type=ttnn.KernelDescriptor.SourceType.FILE_PATH,
         core_ranges=rows_grid,
-        compile_time_args=[R, S, W, gs.x] + list(ttnn.TensorAccessorArgs(parts).get_compile_time_args())
+        compile_time_args=[R, S, W, gs.x, n_final] + list(ttnn.TensorAccessorArgs(parts).get_compile_time_args())
         + list(ttnn.TensorAccessorArgs(cand).get_compile_time_args())
         + list(ttnn.TensorAccessorArgs(offsets).get_compile_time_args()),
         common_runtime_args=[parts.buffer_address(), cand.buffer_address(), offsets.buffer_address()],

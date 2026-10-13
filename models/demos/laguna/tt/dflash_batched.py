@@ -94,6 +94,25 @@ class BatchedDFlash:
         phase = torch.cat((phase, phase), dim=-1)
         return phase.cos().to(torch.bfloat16), phase.sin().to(torch.bfloat16)
 
+    def _rope_tables(self):
+        """Device (cos, sin) tables [max_seq_len, head_dim] (bf16, row major; the same values as _rope_rows): a draft or
+        verify gathers its rows' entries by position on device instead of uploading them every round."""
+        if getattr(self, "_rope_tab", None) is None:  # made at the first (eager) pass, before any trace capture
+            cos, sin = self._rope_rows(torch.arange(int(self.gen.max_seq_len)))
+            self._rope_tab = (self._dev(cos), self._dev(sin))
+        return self._rope_tab
+
+    def _rope_gather(self, pos_tt, n):
+        """(cos, sin) [1, 1, n, hd] TILE at the positions pos_tt ([1, n] uint32, row major)."""
+        return tuple(ttnn.reshape(ttnn.embedding(pos_tt, tab, layout=ttnn.TILE_LAYOUT), (1, 1, n, self.hd))
+                     for tab in self._rope_tables())  # fmt: skip
+
+    @staticmethod
+    def _unpack(pk_tt, n):
+        """The three rows of a packed per-round input [1, 1, 3, n] uint32 (row major) as [1, n] uint32 tensors (one
+        upload instead of three; ~0.2 ms per upload in a round)."""
+        return [ttnn.reshape(ttnn.slice(pk_tt, [0, 0, i, 0], [1, 1, i + 1, n]), (1, n)) for i in range(3)]
+
     def _greedy(self, shards, rows):
         """On-device greedy picks of logit shards [1, 1, rows, V/D] (rows a multiple of 32) -> host list."""
         out = []
@@ -154,20 +173,20 @@ class BatchedDFlash:
 
     # ---- one round ---------------------------------------------------------------------------------------------- #
     def _draft_inputs(self):
-        """Host inputs of a draft with Q rows per user: token ids [1, U * Q] (user u: its bonus, then Q - 1 mask
-        tokens), (cos, sin) [1, 1, U * Q, hd] at each row's position, the ring slots [1, U * Q] the rows' keys/values
-        are written to (user * RING + slot), and the attention mask [U, 1, RP, RING] for each user's query block
-        (rows (h % G) * Q + i: row i of every query head): a row sees its user's slots holding a position in its
-        causal sliding window -- committed context, and its block's earlier rows (written there by the draft layers).
-        The block's padding rows see every slot (their outputs are dropped)."""
-        U, R, Q, G, RP = self.U, self.RING, self.Q, self._gqa, self._rp
+        """Host inputs of a draft with Q rows per user: [1, 1, 3, U * Q] int32 rows = token ids (user u: its bonus, then
+        Q - 1 mask tokens), each row's position (its RoPE is gathered on device), the ring slots the rows' keys/values
+        are written to (user * RING + slot); and the attention mask rows [U, 1, Q, RING] of each user's Q queries (row
+        major; _mask_rows expands them on device to the query block's [U, 1, RP, RING], rows (h % G) * Q + i: row i of
+        every query head): a row sees its user's slots holding a position in its causal sliding window -- committed
+        context, and its block's earlier rows (written there by the draft layers). The block's padding rows see every
+        slot (their outputs are dropped)."""
+        U, R, Q = self.U, self.RING, self.Q
         ids = torch.full((1, U * Q), self.mask_id, dtype=torch.int32)
         for u in range(U):
             ids[0, u * Q] = self.bonus[u]
         p0 = torch.tensor([self.ctx_start[u] + self.ctx_rows[u] for u in range(U)], dtype=torch.int64)
         base = torch.tensor(self.base, dtype=torch.int64)
         qpos = p0[:, None] + torch.arange(Q)[None, :]  # [U, Q]
-        cos, sin = self._rope_rows(qpos.reshape(-1))
         slots = (qpos - base[:, None]) % R  # [U, Q]
         dests = (torch.arange(U)[:, None] * R + slots).reshape(1, U * Q).to(torch.int32)
         pos = self.slot_pos.clone()
@@ -176,16 +195,29 @@ class BatchedDFlash:
         start = torch.tensor(self.ctx_start, dtype=torch.int64)[:, None, None]
         q = qpos[:, :, None]
         own = (pos >= start) & (pos <= q) & (pos >= q - self.window)  # [U, Q, R]
-        allowed = torch.ones((U, RP, R), dtype=torch.bool)
-        allowed[:, : G * Q] = own[:, None].expand(U, G, Q, R).reshape(U, G * Q, R)
-        mask = torch.where(allowed, 0.0, -1e9).to(torch.bfloat16).reshape(U, 1, RP, R)
-        return (ids, cos.reshape(1, 1, U * Q, self.hd), sin.reshape(1, 1, U * Q, self.hd), mask, dests)
+        mask = torch.where(own, 0.0, -1e9).to(torch.bfloat16).reshape(U, 1, Q, R)
+        pk = torch.stack([ids[0], qpos.reshape(-1).to(torch.int32), dests[0]]).reshape(1, 1, 3, U * Q)
+        return pk, mask
 
-    def _draft_body(self, ids_tt, rope, mask_tt, bufs, dests_tt=None):
+    def _mask_rows(self, rows_tt):
+        """[U, 1, Q, RING] mask rows (row major) -> the query blocks' [U, 1, RP, RING] TILE mask: the Q rows repeated
+        for the G query heads of a KV head, padding rows 0 (see every slot). ~1.2 MB per chip uploaded every round
+        before; now 1/8 of it, and no host tilize."""
+        G, Q, RP = self._gqa, self.Q, self._rp
+        m = ttnn.repeat(rows_tt, ttnn.Shape([1, 1, G, 1])) if G > 1 else rows_tt
+        if RP > G * Q:
+            m = ttnn.pad(m, [(0, 0), (0, 0), (0, RP - G * Q), (0, 0)], 0.0)
+        return ttnn.to_layout(m, ttnn.TILE_LAYOUT)
+
+    def _draft_body(self, pk_tt, mask_tt, bufs):
         """Device work of a draft (traceable): proposal blocks through the draft layers, rows 1..K of each block
-        through the target LM head, greedy picks into ``bufs`` (one [1, 1, 1, 32] uint32 per 32 picks)."""
+        through the target LM head, greedy picks into ``bufs`` (one [1, 1, 1, U * Q] uint32). pk_tt / mask_tt: the
+        uploaded _draft_inputs."""
         m = self.model
+        ids_tt, qpos_tt, dests_tt = self._unpack(pk_tt, self.U * self.Q)
+        rope = self._rope_gather(qpos_tt, self.U * self.Q)
         x = m.embed_prefill(ids_tt)  # [1, U * Q, H]
+        mask_tt = self._mask_rows(mask_tt)
         for i in sorted(self.core.layers):
             x = self.core.layers[i].dflash_query_forward_users(x, *self.rings[i], rope, mask_tt, dests_tt, self.Q)
         x = self.core.apply_final_norm(x)  # [1, U * Q, H]
@@ -243,15 +275,23 @@ class BatchedDFlash:
 
     def _greedy_into(self, shards, bufs):
         rows = int(shards.shape[-2])
+        if len(bufs) == 1 and int(bufs[0].shape[-1]) == rows:  # every row's pick in one buffer (one read)
+            self.gen._greedy_sample(shards, rows, bufs[0])
+            return
         for c, buf in enumerate(bufs):
             r0 = c * TILE
             part = shards if rows == TILE else ttnn.slice(shards, [0, 0, r0, 0], [1, 1, r0 + TILE, shards.shape[-1]])
             self.gen._greedy_sample(part, TILE, buf)
 
-    def _verify_body(self, tok_tt, cur_tt, ridx_tt, pt_tt, rope_rows, dests_tt, bufs):
+    def _verify_body(self, pk_tt, pt_tt, bufs):
         """Device work of a verify + ring update (traceable): the target over every checked row, greedy picks into
-        ``bufs``, then the checked rows' target states -> draft fusion -> K/V of each draft layer -> the rings."""
+        ``bufs``, then the checked rows' target states -> draft fusion -> K/V of each draft layer -> the rings.
+        pk_tt / pt_tt: the uploaded _verify_host inputs (tokens, positions, ring destinations; page-table rows)."""
         m, gen = self.model, self.gen
+        T = self.T
+        tok_tt, ridx_tt, dests_tt = self._unpack(pk_tt, T)
+        cur_tt = ttnn.typecast(ttnn.reshape(ridx_tt, (T,)), ttnn.int32)
+        rope_rows = self._rope_gather(ridx_tt, T)
         h = m.embed_decode(tok_tt)
         h, aux = m.verify_layers_batched(h, m.verify_inputs_batched(cur_tt, ridx_tt, pt_tt), gen._kv_cache, capture=True)
         self._greedy_into(m.lm_head_shards_decode(h), bufs)
@@ -265,8 +305,8 @@ class BatchedDFlash:
 
     def _verify_host(self, drafts, n=None):
         """Host inputs of a verify where user u checks n[u] drafts (rows: its bonus, then the drafts; users in
-        order): tokens [1, T], positions [T], page-table rows [T, blocks], ring rope (cos, sin) [1, 1, T, hd] and
-        destinations [1, T] (every checked row is written into its user's ring)."""
+        order): [1, 1, 3, T] int32 rows = tokens, positions, ring destinations (every checked row is written into its
+        user's ring); page-table rows [T, blocks]."""
         U, T = self.U, self.T
         n = [self.K] * U if n is None else n
         assert sum(n) + U == T, (sum(n), U, T)
@@ -284,9 +324,8 @@ class BatchedDFlash:
                 dests[0, r] = u * self.RING + (p0 + i - self.base[u]) % self.RING
                 user[r] = u
                 r += 1
-        cos, sin = self._rope_rows(pos)
         pt_rows = self._pt_host()[user].to(torch.int32)
-        return toks, pos, pt_rows, cos.reshape(1, 1, T, self.hd), sin.reshape(1, 1, T, self.hd), dests.to(torch.int32)
+        return torch.stack([toks[0], pos, dests[0].to(torch.int32)]).reshape(1, 1, 3, T), pt_rows
 
     def capture_traces(self):
         """Persistent inputs and two traces: the draft, and the verify with its ring update. Call after prefill (the
@@ -294,28 +333,21 @@ class BatchedDFlash:
         U, K = self.U, self.K
         T = self.T
         g = self.gen
-        ids, cos, sin, mask, dd = self._draft_inputs()
-        self._d_in = (self._dev(ids, dtype=ttnn.uint32), self._dev(cos, ttnn.TILE_LAYOUT),
-                      self._dev(sin, ttnn.TILE_LAYOUT), self._dev(mask, ttnn.TILE_LAYOUT),
-                      self._dev(dd, dtype=ttnn.uint32))  # fmt: skip
-        self._d_out = [g._rep(torch.zeros([1, 1, 1, TILE], dtype=torch.int32), ttnn.uint32) for _ in range(U * self.Q // TILE)]
-        toks, pos, pt_rows, rc, rs, dests = self._verify_host([[0] * K for _ in range(U)], self._uniform_n())
-        self._v_in = (g._rep(toks, ttnn.uint32), g._rep(pos, ttnn.int32), g._rep(pos.reshape(1, T), ttnn.uint32),
-                      g._rep(pt_rows, ttnn.int32), self._dev(rc, ttnn.TILE_LAYOUT), self._dev(rs, ttnn.TILE_LAYOUT),
-                      self._dev(dests, dtype=ttnn.uint32))  # fmt: skip
-        self._v_out = [g._rep(torch.zeros([1, 1, 1, TILE], dtype=torch.int32), ttnn.uint32) for _ in range(T // TILE)]
-        # the ring update of the warm-up / capture passes writes zero-token rows: keep the rings intact by
-        # pointing every destination at "skip"
-        skip = torch.full((1, T), -1, dtype=torch.int32)
-        ttnn.copy_host_to_device_tensor(self._host(skip, ttnn.uint32), self._v_in[6])
+        pk, mask = self._draft_inputs()
+        self._d_in = (self._dev(pk, dtype=ttnn.uint32), self._dev(mask))
+        self._d_out = [g._rep(torch.zeros([1, 1, 1, U * self.Q], dtype=torch.int32), ttnn.uint32)]
+        pk, pt_rows = self._verify_host([[0] * K for _ in range(U)], self._uniform_n())
+        # the ring update of the warm-up / capture passes writes zero-token rows: keep the rings intact by pointing
+        # every destination at "skip"
+        pk[0, 0, 2] = -1
+        self._v_in = (self._dev(pk, dtype=ttnn.uint32), g._rep(pt_rows, ttnn.int32))
+        self._v_out = [g._rep(torch.zeros([1, 1, 1, T], dtype=torch.int32), ttnn.uint32)]
 
         def draft():
-            ids_tt, c, s_, mk, dd_tt = self._d_in
-            self._draft_body(ids_tt, (c, s_), mk, self._d_out, dd_tt)
+            self._draft_body(*self._d_in, self._d_out)
 
         def verify():
-            t, p, r, pt, c, s_, d = self._v_in
-            self._verify_body(t, p, r, pt, (c, s_), d, self._v_out)
+            self._verify_body(*self._v_in, self._v_out)
 
         mesh = self.mesh
         draft()
@@ -341,29 +373,23 @@ class BatchedDFlash:
         return ttnn.from_torch(t, dtype=dtype, layout=layout, mesh_mapper=ttnn.ReplicateTensorToMesh(self.mesh))
 
     def _read(self, bufs, n):
+        """The picks of n rows (replicated on every chip: chip 0's copy)."""
         out = []
         for buf in bufs:
-            out += self.gen._read_token(buf, TILE)
+            out += ttnn.to_torch(ttnn.get_device_tensors(buf)[0]).flatten().to(torch.int64).tolist()
         return out[:n]
 
     def draft(self):
         """U x K draft tokens (host lists)."""
-        ids, cos, sin, mask, dd = self._draft_inputs()
+        pk, mask = self._draft_inputs()
         if self._traced:
-            for dst, (t, dt, lay) in zip(self._d_in, ((ids, ttnn.uint32, ttnn.ROW_MAJOR_LAYOUT),
-                                                      (cos, ttnn.bfloat16, ttnn.TILE_LAYOUT),
-                                                      (sin, ttnn.bfloat16, ttnn.TILE_LAYOUT),
-                                                      (mask, ttnn.bfloat16, ttnn.TILE_LAYOUT),
-                                                      (dd, ttnn.uint32, ttnn.ROW_MAJOR_LAYOUT))):  # fmt: skip
-                ttnn.copy_host_to_device_tensor(self._host(t, dt, lay), dst)
+            ttnn.copy_host_to_device_tensor(self._host(pk, ttnn.uint32), self._d_in[0])
+            ttnn.copy_host_to_device_tensor(self._host(mask, ttnn.bfloat16), self._d_in[1])
             ttnn.execute_trace(self.mesh, self._tid_d, cq_id=0, blocking=False)
             picks = self._read(self._d_out, self.U * self.Q)
         else:
-            bufs = [self.gen._rep(torch.zeros([1, 1, 1, TILE], dtype=torch.int32), ttnn.uint32)
-                    for _ in range(self.U * self.Q // TILE)]  # fmt: skip
-            self._draft_body(self._dev(ids, dtype=ttnn.uint32),
-                             (self._dev(cos, ttnn.TILE_LAYOUT), self._dev(sin, ttnn.TILE_LAYOUT)),
-                             self._dev(mask, ttnn.TILE_LAYOUT), bufs, self._dev(dd, dtype=ttnn.uint32))  # fmt: skip
+            bufs = [self.gen._rep(torch.zeros([1, 1, 1, self.U * self.Q], dtype=torch.int32), ttnn.uint32)]
+            self._draft_body(self._dev(pk, dtype=ttnn.uint32), self._dev(mask), bufs)
             picks = self._read(bufs, self.U * self.Q)
         drafts = [picks[u * self.Q + 1 : u * self.Q + 1 + self.K] for u in range(self.U)]
         self._last_n = self._allocate(self._read_conf()) if self.alloc else None
@@ -373,25 +399,17 @@ class BatchedDFlash:
         """Target picks for every checked row (host list, rows in _verify_host order); the ring update runs in the
         same pass."""
         T = self.T
-        toks, pos, pt_rows, rc, rs, dests = self._verify_host(drafts, n)
+        pk, pt_rows = self._verify_host(drafts, n)
         if self._traced:
-            srcs = ((toks, ttnn.uint32, ttnn.ROW_MAJOR_LAYOUT), (pos, ttnn.int32, ttnn.ROW_MAJOR_LAYOUT),
-                    (pos.reshape(1, T), ttnn.uint32, ttnn.ROW_MAJOR_LAYOUT), (pt_rows, ttnn.int32, ttnn.ROW_MAJOR_LAYOUT),
-                    (rc, ttnn.bfloat16, ttnn.TILE_LAYOUT), (rs, ttnn.bfloat16, ttnn.TILE_LAYOUT),
-                    (dests, ttnn.uint32, ttnn.ROW_MAJOR_LAYOUT))  # fmt: skip
-            for i, (t, dt, lay) in enumerate(srcs):
-                if i == 3 and not self.alloc and getattr(self, "_pt_uploaded", False):
-                    continue  # uniform rows: the page-table rows never change
-                ttnn.copy_host_to_device_tensor(self._host(t, dt, lay), self._v_in[i])
+            ttnn.copy_host_to_device_tensor(self._host(pk, ttnn.uint32), self._v_in[0])
+            if self.alloc or not getattr(self, "_pt_uploaded", False):  # uniform rows: the page-table rows never change
+                ttnn.copy_host_to_device_tensor(self._host(pt_rows, ttnn.int32), self._v_in[1])
             self._pt_uploaded = True
             ttnn.execute_trace(self.mesh, self._tid_v, cq_id=0, blocking=False)
             return self._read(self._v_out, T)
         g = self.gen
-        bufs = [g._rep(torch.zeros([1, 1, 1, TILE], dtype=torch.int32), ttnn.uint32) for _ in range(T // TILE)]
-        self._verify_body(g._rep(toks, ttnn.uint32), g._rep(pos, ttnn.int32), g._rep(pos.reshape(1, T), ttnn.uint32),
-                          g._rep(pt_rows, ttnn.int32),
-                          (self._dev(rc, ttnn.TILE_LAYOUT), self._dev(rs, ttnn.TILE_LAYOUT)),
-                          self._dev(dests, dtype=ttnn.uint32), bufs)  # fmt: skip
+        bufs = [g._rep(torch.zeros([1, 1, 1, T], dtype=torch.int32), ttnn.uint32)]
+        self._verify_body(self._dev(pk, dtype=ttnn.uint32), g._rep(pt_rows, ttnn.int32), bufs)
         return self._read(bufs, T)
 
     def _pt_host(self):
