@@ -57,3 +57,8 @@ def test_sharding_on_bh_20_cores(device):
 
     output_tensor = ttnn.to_torch(ttnn_input_tensor_hs)
     assert_with_pcc(output_tensor, torch_input_tensor, 1.0)
+
+
+def test_gate_probe_sharding_noop():
+    """Small probe edit to exercise verify-changed-tests source scoping."""
+    assert True

@@ -31,16 +31,13 @@ permissions:
 
 env:
   # Logical SKUs this gate must never dispatch: hardware too scarce to spend on a
-  # gate run. Those legs are dropped, and an entry left with no runnable SKU of its
-  # own is dropped whole. Nothing is reported -- CODEOWNERS gates the edit.
-  #
-  # Add a SKU     -> those legs stop running here.
-  # Remove a SKU  -> the gate runs them itself and merge waits on them.
+  # gate run. Those legs are dropped and an entry left with none goes entirely;
+  # nothing is reported, CODEOWNERS gates the edit.
   #
   # Names are validated against .github/sku_config.yaml, so a typo fails the gate
   # rather than silently letting a galaxy leg auto-run. The sim_* galaxy SKUs are
   # absent on purpose: they run on CPU under ttsim and cost nothing scarce.
-  REVIEW_ONLY_SKUS: >-
+  UNSUPPORTED_SKUS: >-
     wh_galaxy
     wh_galaxy_perf
     bh_galaxy
@@ -130,8 +127,7 @@ env:
   # gtest binaries from build/test and their impl works out of /work.
   #
   # llk_ttnop_tests.yaml and llk_perf_merge_gate_tests.yaml are workdir-relative too,
-  # but sit in UNSUPPORTED_YAMLS, so they never produce a runnable leg. Move them here
-  # as well if they ever leave that list.
+  # but sit in UNSUPPORTED_YAMLS. Add them here if they ever leave that list.
   LLK_WORKDIR_YAMLS: >-
     llk_pr_gate_tests.yaml
     llk_e2e_tests.yaml
@@ -146,6 +142,7 @@ jobs:
     outputs:
       status: ${{ steps.gate.outputs.status }}
       expected-leg-count: ${{ steps.gate.outputs.expected-leg-count }}
+      dropped-leg-count: ${{ steps.gate.outputs.dropped-leg-count }}
       leg-digest: ${{ steps.gate.outputs.leg-digest }}
       needs-default: ${{ steps.gate.outputs.needs-default }}
       needs-profiler: ${{ steps.gate.outputs.needs-profiler }}
@@ -173,7 +170,7 @@ jobs:
         id: gate
         # Pinned to @main: a PR branch runs the current gate, not whatever
         # copy (or lack of one) happens to sit at its own head.
-        uses: tenstorrent/tt-metal/.github/actions/verify-changed-tests@main
+        uses: tenstorrent/tt-metal/.github/actions/verify-changed-tests
         with:
           event: ${{ github.event_name }}
           base: ${{ github.event.pull_request.base.sha || github.event.merge_group.base_sha }}
@@ -187,6 +184,7 @@ jobs:
             echo
             echo "Status: \`${{ steps.gate.outputs.status }}\`"
             echo "Legs to prove: \`${{ steps.gate.outputs.expected-leg-count }}\`"
+            echo "Legs dropped (SKUs this gate does not dispatch): \`${{ steps.gate.outputs.dropped-leg-count }}\`"
             echo "Leg digest: \`${{ steps.gate.outputs.leg-digest }}\`"
           } >> "$GITHUB_STEP_SUMMARY"
 
@@ -473,6 +471,11 @@ jobs:
         if: ${{ !cancelled() }}
         with:
           prefix: "test_reports_"
+          # LLK legs write their junit xml beside the tests they run, not into
+          # generated/test_reports, so collect both. A path matching nothing warns.
+          path: |
+            /work/generated/test_reports/
+            /work/tt_metal/tt-llk/tests/python_tests/pytest-report-*.xml
 
       - name: Generate gtest annotations on failure
         uses: tenstorrent/tt-metal/.github/actions/generate-gtest-failure-message@main
@@ -522,10 +525,17 @@ jobs:
 
           case '${{ needs.scope.outputs.status }}' in
             no_op)
-              echo "No behaviour-affecting test-entry changes. Nothing to prove."
+              if [[ '${{ needs.scope.outputs.dropped-leg-count || 0 }}' != '0' ]]; then
+                echo "::notice::${{ needs.scope.outputs.dropped-leg-count }} leg(s) were dropped: their SKUs are ones this gate does not dispatch. Nothing ran here; CODEOWNERS gates the edit. See the scope job for which entries."
+              else
+                echo "No behaviour-affecting test-entry changes. Nothing to prove."
+              fi
               ;;
             run)
               echo "All ${{ needs.scope.outputs.leg-count }} leg(s) passed."
+              if [[ '${{ needs.scope.outputs.dropped-leg-count || 0 }}' != '0' ]]; then
+                echo "::notice::${{ needs.scope.outputs.dropped-leg-count }} further leg(s) were dropped on SKUs this gate does not dispatch."
+              fi
               ;;
             *)
               fail "unrecognised scope status '${{ needs.scope.outputs.status }}'."

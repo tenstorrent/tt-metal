@@ -56,7 +56,7 @@ skus:
   wh_galaxy: {}
 """
 
-DEFAULT_REVIEW_SKUS = "wh_galaxy"
+DEFAULT_UNSUPPORTED_SKUS = "wh_galaxy"
 DEFAULT_NON_MATRIX = "ttsim-skip-list.yaml"
 
 
@@ -91,7 +91,7 @@ class Repo:
 
     def scope(
         self,
-        review_skus: str = DEFAULT_REVIEW_SKUS,
+        unsupported_skus: str = DEFAULT_UNSUPPORTED_SKUS,
         files: list[str] | None = None,
         non_matrix_files: str = DEFAULT_NON_MATRIX,
         llk_workdir_files: str = "",
@@ -112,8 +112,8 @@ class Repo:
             self.base,
             "--sku-config",
             ".github/sku_config.yaml",
-            "--review-skus",
-            review_skus,
+            "--unsupported-skus",
+            unsupported_skus,
             "--non-matrix-files",
             non_matrix_files,
             "--llk-workdir-files",
@@ -308,7 +308,7 @@ def test_per_sku_tier_change_runs(repo: Repo):
     assert payload["status"] == "run"
 
 
-def test_review_only_legs_do_not_pull_in_a_build(repo: Repo):
+def test_unsupported_sku_legs_do_not_pull_in_a_build(repo: Repo):
     """A dropped galaxy leg is never dispatched, so its build flavour is not needed."""
     repo.write("tests/pipeline_reorg/sample_galaxy_tests.yaml", BASE_GALAXY_YAML.replace("test_alpha", "test_beta"))
     code, payload, _ = repo.scope()
@@ -365,8 +365,8 @@ def test_listed_yaml_selects_the_tracy_profile(repo: Repo):
         repo.base,
         "--sku-config",
         ".github/sku_config.yaml",
-        "--review-skus",
-        DEFAULT_REVIEW_SKUS,
+        "--unsupported-skus",
+        DEFAULT_UNSUPPORTED_SKUS,
         "--tracy-files",
         "sample_unit_tests.yaml",
     ]
@@ -375,7 +375,7 @@ def test_listed_yaml_selects_the_tracy_profile(repo: Repo):
     assert json.loads((repo.root / "result.json").read_text())["profiles"] == ["profiler"]
 
 
-# --- review-only skus --------------------------------------------------------
+# --- unsupported skus --------------------------------------------------------
 
 
 def test_galaxy_leg_is_dropped_instead_of_running(repo: Repo):
@@ -386,9 +386,9 @@ def test_galaxy_leg_is_dropped_instead_of_running(repo: Repo):
     assert payload["run_legs"] == []
 
 
-def test_removing_a_sku_from_the_review_list_makes_it_runnable(repo: Repo):
+def test_removing_a_sku_from_the_unsupported_list_makes_it_runnable(repo: Repo):
     repo.write("tests/pipeline_reorg/sample_galaxy_tests.yaml", BASE_GALAXY_YAML.replace("test_alpha", "test_beta"))
-    code, payload, _ = repo.scope(review_skus="")
+    code, payload, _ = repo.scope(unsupported_skus="")
     assert code == 0
     assert payload["status"] == "run"
     assert len(payload["run_legs"]) == 1
@@ -499,8 +499,8 @@ def test_entry_without_skus_fails_closed(repo: Repo):
     assert "no skus mapping" in stderr
 
 
-def test_unknown_review_sku_name_fails_closed(repo: Repo):
-    code, _, stderr = repo.scope(review_skus="wh_galaxyy")
+def test_unknown_unsupported_sku_name_fails_closed(repo: Repo):
+    code, _, stderr = repo.scope(unsupported_skus="wh_galaxyy")
     assert code == 1
     assert "not present in" in stderr
 
@@ -543,7 +543,7 @@ def test_shard_and_arch_disambiguate_same_name(repo: Repo):
 
 
 def run_with_matrices(
-    repo: Repo, matrices: dict[str, list], review_skus: str = DEFAULT_REVIEW_SKUS, llk_workdir_files: str = ""
+    repo: Repo, matrices: dict[str, list], unsupported_skus: str = DEFAULT_UNSUPPORTED_SKUS, llk_workdir_files: str = ""
 ):
     """Invoke the gate with prepare_test_matrix output stubbed out."""
     matrix_dir = repo.root / "matrices"
@@ -558,8 +558,8 @@ def run_with_matrices(
             repo.base,
             "--sku-config",
             ".github/sku_config.yaml",
-            "--review-skus",
-            review_skus,
+            "--unsupported-skus",
+            unsupported_skus,
             "--matrix-dir",
             str(matrix_dir),
             "--llk-workdir-files",
@@ -1138,8 +1138,8 @@ def unsupported_scope(repo: Repo):
         repo.base,
         "--sku-config",
         ".github/sku_config.yaml",
-        "--review-skus",
-        DEFAULT_REVIEW_SKUS,
+        "--unsupported-skus",
+        DEFAULT_UNSUPPORTED_SKUS,
         "--unsupported-files",
         "sample_vllm_tests.yaml",
         "--output",
@@ -1151,8 +1151,7 @@ def unsupported_scope(repo: Repo):
 
 
 def test_unsupported_yaml_is_dropped_not_reported(repo: Repo):
-    """vllm entries carry no cmd. The gate cannot run them and says nothing about
-    them -- CODEOWNERS gates the edit."""
+    """vllm entries carry no cmd, so the gate drops them and says nothing."""
     repo.write("tests/pipeline_reorg/sample_vllm_tests.yaml", BASE_GALAXY_YAML.replace("wh_galaxy", "bh_p150"))
     code, payload, stderr = unsupported_scope(repo)
     assert code == 0, stderr
@@ -1168,7 +1167,7 @@ def test_unsupported_yaml_is_never_parsed(repo: Repo):
     assert payload["status"] == "no_op"
 
 
-def test_entry_with_only_review_only_skus_is_dropped_whole(repo: Repo):
+def test_entry_with_only_unsupported_skus_is_dropped_whole(repo: Repo):
     """galaxy alpha is wh_galaxy only, so nothing is left for the gate to run."""
     repo.write("tests/pipeline_reorg/sample_galaxy_tests.yaml", BASE_GALAXY_YAML.replace("U003", "U999x"))
     code, payload, _ = repo.scope()
@@ -1177,7 +1176,7 @@ def test_entry_with_only_review_only_skus_is_dropped_whole(repo: Repo):
     assert payload["run_legs"] == []
 
 
-def test_review_only_skus_are_dropped_but_runnable_ones_survive(repo: Repo):
+def test_unsupported_skus_are_dropped_but_runnable_ones_survive(repo: Repo):
     """A mixed entry keeps its runnable legs and silently loses the rest."""
     mixed = BASE_GALAXY_YAML.replace(
         "    wh_galaxy:\n      timeout: 30\n",
@@ -1286,7 +1285,7 @@ def run_with_skips(repo: Repo, matrices: dict[str, list]):
             repo.base,
             "--sku-config",
             ".github/sku_config.yaml",
-            "--review-skus",
+            "--unsupported-skus",
             "",
             "--non-matrix-files",
             DEFAULT_NON_MATRIX,
@@ -1376,7 +1375,7 @@ CMDLESS_VLLM_YAML = """\
 """
 
 
-def run_building_matrices(repo: Repo, unsupported: str, review_skus: str = DEFAULT_REVIEW_SKUS):
+def run_building_matrices(repo: Repo, unsupported: str, unsupported_skus: str = DEFAULT_UNSUPPORTED_SKUS):
     """Invoke the real build_matrices path -- prepare script runs, no --matrix-dir stub."""
     argv = [
         sys.executable,
@@ -1385,8 +1384,8 @@ def run_building_matrices(repo: Repo, unsupported: str, review_skus: str = DEFAU
         repo.base,
         "--sku-config",
         ".github/sku_config.yaml",
-        "--review-skus",
-        review_skus,
+        "--unsupported-skus",
+        unsupported_skus,
         "--unsupported-files",
         unsupported,
         "--prepare-script",
@@ -1499,3 +1498,79 @@ def test_git_show_many_is_a_single_subprocess(src_repo: Repo, monkeypatch):
 def test_git_show_many_with_no_paths_does_not_call_git(src_repo: Repo):
     mod = gate_module()
     assert mod.git_show_many(src_repo.base, []) == {}
+
+
+# --- dropped legs are surfaced -----------------------------------------------
+
+
+def test_dropped_legs_are_reported_not_silent(repo: Repo):
+    """A galaxy-only edit runs nothing, but must not read as "nothing to prove"."""
+    repo.write("tests/pipeline_reorg/sample_galaxy_tests.yaml", BASE_GALAXY_YAML.replace("test_alpha", "test_beta"))
+    code, payload, _ = repo.scope()
+    assert code == 0
+    assert payload["status"] == "no_op"
+    assert payload["run_legs"] == []
+    assert [(d["sku"], d["name"]) for d in payload["dropped_legs"]] == [("wh_galaxy", "galaxy alpha")]
+
+
+def test_mixed_entry_reports_the_dropped_half(repo: Repo):
+    mixed = BASE_GALAXY_YAML.replace(
+        "    wh_galaxy:\n      timeout: 30\n",
+        "    wh_galaxy:\n      timeout: 30\n    bh_p150:\n      timeout: 30\n",
+    )
+    repo.write("tests/pipeline_reorg/sample_galaxy_tests.yaml", mixed)
+    code, payload, _ = repo.scope()
+    assert code == 0
+    assert [leg["sku"] for leg in payload["run_legs"]] == ["bh_p150"]
+    assert [d["sku"] for d in payload["dropped_legs"]] == ["wh_galaxy"]
+
+
+def test_nothing_touched_drops_nothing(repo: Repo):
+    code, payload, _ = repo.scope()
+    assert code == 0
+    assert payload["dropped_legs"] == []
+
+
+# --- submodules, suffixes and bare directories -------------------------------
+
+
+def test_submodule_paths_charge_the_gitlink(src_repo: Repo):
+    """A path inside a submodule never resolves alone; the pointer bump is the change."""
+    mod = gate_module()
+    tracked = {"tt_metal/third_party/umd", "tests/a.py"}
+    dirs = mod.tracked_dirs(tracked)
+    got = mod.cmd_referenced_paths(
+        "./run tt_metal/third_party/umd/tests/api/foo.cpp", tracked, dirs, gitlinks={"tt_metal/third_party/umd"}
+    )
+    assert got == {"tt_metal/third_party/umd"}
+
+
+def test_a_regular_file_is_never_mistaken_for_a_gitlink(src_repo: Repo):
+    mod = gate_module()
+    tracked = {"tests/a.py"}
+    dirs = mod.tracked_dirs(tracked)
+    assert mod.cmd_referenced_paths("./run tests/a.py/nested/thing.cpp", tracked, dirs) == set()
+
+
+def test_bare_trailing_slash_directory_resolves(src_repo: Repo):
+    """`pytest tests/` names a directory; `pytest` and `-v` name nothing."""
+    mod = gate_module()
+    tracked = {"tests/a.py"}
+    dirs = mod.tracked_dirs(tracked)
+    assert mod.cmd_referenced_paths("pytest tests/ -v", tracked, dirs) == {"tests/"}
+    assert mod.cmd_referenced_paths("pytest -v --timeout 60", tracked, dirs) == set()
+
+
+def test_all_test_yamls_finds_yml_and_nested(src_repo: Repo):
+    """changed_files() accepts .yaml and .yml, so the full sweep must agree."""
+    mod = gate_module()
+    src_repo.write("tests/pipeline_reorg/nested/deep_tests.yaml", SOURCE_YAML)
+    src_repo.write("tests/pipeline_reorg/short_suffix_tests.yml", SOURCE_YAML)
+    cwd = os.getcwd()
+    os.chdir(src_repo.root)
+    try:
+        found = mod.all_test_yamls()
+    finally:
+        os.chdir(cwd)
+    assert "tests/pipeline_reorg/nested/deep_tests.yaml" in found
+    assert "tests/pipeline_reorg/short_suffix_tests.yml" in found

@@ -16,19 +16,10 @@ run green, and nothing more. One invocation does two things:
 With --event merge_group only step 1 runs: those legs already ran on the PR head,
 and the queue only needs the scope to resolve.
 
-What this gate does NOT do
---------------------------
-It decides what to run, and says nothing about who may merge it. Anything it
-cannot or must not dispatch is dropped, not reported:
-
-  * UNSUPPORTED_YAMLS  excluded before the file is read -- not parsed, not diffed,
-                       not scanned.
-  * REVIEW_ONLY_SKUS   dropped per entry; an entry left with no runnable SKU of its
-                       own is dropped whole.
-
-No approval is looked up and no owner is notified. CODEOWNERS and the branch
-ruleset already gate edits to these files, and duplicating that here only produced
-a second, weaker copy of a rule GitHub enforces properly.
+It decides what to run and says nothing about who may merge it. Anything it cannot
+dispatch is dropped, not reported: UNSUPPORTED_YAMLS before the file is read, and
+UNSUPPORTED_SKUS per entry (an entry left with no runnable SKU is dropped whole).
+No approval is looked up -- CODEOWNERS already gates edits to these files.
 
 Design notes
 ------------
@@ -141,15 +132,11 @@ def write_github_output(pairs):
 def git_show_many(ref, paths):
     """{path: contents at ref}, with a path missing from ref mapped to None.
 
-    One `git cat-file --batch` rather than a `git show` per file: the gate used to
-    spawn a subprocess for every yaml it looked at, which on a wide PR was the bulk
-    of its runtime. cat-file reads the whole request list on stdin and streams every
-    blob back in one go.
-
-    The wire format per object is a header line -- `<sha> blob <size>` on success,
-    `<request> missing` otherwise -- followed by exactly <size> bytes and a newline.
-    Reading by the declared size rather than splitting on newlines is what keeps a
-    yaml containing a `missing` line from being mistaken for a header.
+    One `git cat-file --batch` rather than a `git show` per file. Each object comes
+    back as a header -- `<sha> blob <size>`, or `<request> missing` -- then exactly
+    <size> bytes and a newline. Reading by that size rather than splitting on
+    newlines is what stops a yaml containing a `missing` line from being read as a
+    header.
     """
     paths = list(dict.fromkeys(paths))
     if not paths:
@@ -174,8 +161,7 @@ def git_show_many(ref, paths):
         if header.endswith(" missing"):
             contents[path] = None
             continue
-        # "<sha> <type> <size>". Anything but a blob means the path names a tree or
-        # a tag, whose bytes are not a tests yaml and must not be parsed as one.
+        # Anything but a blob names a tree or tag, whose bytes are not a tests yaml.
         fields = header.rsplit(" ", 2)
         if len(fields) != 3 or fields[1] != "blob" or not fields[2].isdigit():
             raise GateError(f"unexpected git cat-file header for {ref}:{path}: {header!r}")
@@ -227,7 +213,10 @@ def changed_files(base):
 
 def all_test_yamls():
     """Every tests yaml at HEAD; the source pass needs all of them, not just edited ones."""
-    return sorted(str(p) for p in Path(TESTS_DIR).glob("*.yaml")) if os.path.isdir(TESTS_DIR) else []
+    if not os.path.isdir(TESTS_DIR):
+        return []
+    root = Path(TESTS_DIR)
+    return sorted(str(p) for suffix in ("*.yaml", "*.yml") for p in root.rglob(suffix))
 
 
 def tracked_paths(base):
@@ -298,23 +287,49 @@ def tracked_dirs(tracked):
 CMD_TOKEN_SPLIT = re.compile(r"[\s;|&()<>{}\"'`=]+")
 
 
-def cmd_referenced_paths(cmd, tracked, dirs, workdir=""):
+def submodule_paths():
+    """Tracked gitlinks, by mode 160000.
+
+    A tracked ancestor is not enough: a cmd can name a bogus path under a regular
+    file, and charging that to the file would be wrong.
+    """
+    result = subprocess.run(["git", "ls-files", "--stage"], capture_output=True, text=True)
+    if result.returncode != 0:
+        raise GateError(f"git ls-files --stage failed: {result.stderr.strip()}")
+    links = set()
+    for line in result.stdout.splitlines():
+        meta, _, path = line.partition("\t")
+        if meta.startswith("160000") and path:
+            links.add(path)
+    return links
+
+
+def gitlink_ancestor(path, gitlinks):
+    """The submodule root path sits inside, or None."""
+    head = path
+    while "/" in head:
+        head = head.rsplit("/", 1)[0]
+        if head in gitlinks:
+            return head
+    return None
+
+
+def cmd_referenced_paths(cmd, tracked, dirs, workdir="", gitlinks=frozenset()):
     """Repo paths a cmd names outright.
 
     A token counts only if it is a tracked file or a directory tracked files sit
     under, so `-k some_filter` and untracked `./build/test/...` never match.
 
-    workdir is the leg's working directory (see resolve_workdir). The LLK yamls'
-    cmds are relative to it, so `cd tests/python_tests` means tt_metal/tt-llk/tests/
-    python_tests, not a repo-root path that does not exist. Tokens are resolved
-    workdir-first, then from the root, since a cmd can legitimately name both.
+    workdir is the leg's working directory (see resolve_workdir): the LLK yamls'
+    cmds are relative to it. Tokens resolve workdir-first then from the root, since
+    a cmd can legitimately name both.
     """
     prefixes = ([workdir] if workdir else []) + [""]
     paths = set()
     for raw in CMD_TOKEN_SPLIT.split(cmd or ""):
-        token = raw.split("::", 1)[0].strip().removeprefix("./").rstrip("/")
-        # A bare word cannot be a repo path.
-        if not token or "/" not in token:
+        stripped = raw.split("::", 1)[0].strip().removeprefix("./")
+        token = stripped.rstrip("/")
+        if not token or ("/" not in token and not stripped.endswith("/")):
             continue
         for prefix in prefixes:
             candidate = f"{prefix}/{token}" if prefix else token
@@ -324,13 +339,19 @@ def cmd_referenced_paths(cmd, tracked, dirs, workdir=""):
             if candidate in dirs:
                 paths.add(candidate + "/")
                 break
+            # A submodule's contents are one gitlink, so a path inside it resolves
+            # to nothing. Charge the gitlink: bumping it is what changes those tests.
+            gitlink = gitlink_ancestor(candidate, gitlinks)
+            if gitlink:
+                paths.add(gitlink)
+                break
     return paths
 
 
-def sources_touching(cmd, tracked, dirs, changed, workdir=""):
+def sources_touching(cmd, tracked, dirs, changed, workdir="", gitlinks=frozenset()):
     """The changed files a cmd names, directly or via a directory it points at."""
     hits = set()
-    for path in cmd_referenced_paths(cmd, tracked, dirs, workdir):
+    for path in cmd_referenced_paths(cmd, tracked, dirs, workdir, gitlinks):
         if path.endswith("/"):
             hits |= {name for name in changed if name.startswith(path)}
         elif path in changed:
@@ -373,7 +394,7 @@ def rename_sources(base):
     return sources
 
 
-def load_review_only_skus(raw, sku_config_path):
+def load_unsupported_skus(raw, sku_config_path):
     """
     Parse the list of SKUs this gate must never dispatch.
 
@@ -390,8 +411,8 @@ def load_review_only_skus(raw, sku_config_path):
     unknown = sorted(names - known)
     if unknown:
         raise GateError(
-            f"review-only SKUs not present in {sku_config_path}: {', '.join(unknown)}. "
-            "Fix REVIEW_ONLY_SKUS in .github/workflows/verify-changed-tests.yaml."
+            f"unsupported SKUs not present in {sku_config_path}: {', '.join(unknown)}. "
+            "Fix UNSUPPORTED_SKUS in .github/workflows/verify-changed-tests.yaml."
         )
     return names
 
@@ -556,7 +577,7 @@ def resolve_workdir(path, llk_workdir_files):
 def scope_file(
     path,
     base,
-    review_only,
+    unsupported_skus,
     tracy_files,
     non_matrix_files,
     unsupported_files,
@@ -564,6 +585,7 @@ def scope_file(
     base_path=None,
     tracked=None,
     dirs=None,
+    gitlinks=None,
     changed_src=None,
     edited=True,
     base_blobs=None,
@@ -582,14 +604,10 @@ def scope_file(
     way it can be broken, not just a reshaped matrix: bad YAML syntax, entries that
     are not mappings and duplicate keys all raise too.
     """
-    skip = {"no_entries": True, "run_legs": []}
+    skip = {"no_entries": True, "run_legs": [], "dropped_legs": []}
 
-    # Excluded before anything is read. A yaml this gate does not support is not
-    # parsed, diffed or scanned -- whatever it holds is somebody else's problem,
-    # and CODEOWNERS already gates edits to it.
-    #   non_matrix   declared as holding no test matrix (ttsim-skip-list.yaml).
-    #   unsupported  a real matrix the gate cannot dispatch (no cmd, or an impl
-    #                that rewrites the cmd before running it).
+    # Excluded before anything is read: not parsed, diffed or scanned. non_matrix
+    # holds no test matrix at all; unsupported holds one the gate cannot dispatch.
     if os.path.basename(path) in non_matrix_files or os.path.basename(path) in unsupported_files:
         return skip
 
@@ -628,9 +646,8 @@ def scope_file(
             touched.append((key, entry, "added"))
         elif canonical(behavioural_view(previous)) != canonical(behavioural_view(entry)):
             touched.append((key, entry, "changed"))
-    # Removed entries are intentionally ignored: there is no test left to prove.
-    # Metadata-only edits fall out here too -- behavioural_view() already said they
-    # cannot change how the test executes.
+    # Removed entries are ignored: no test left to prove. Metadata-only edits fall
+    # out here too, since behavioural_view() excludes them.
 
     workdir = resolve_workdir(path, llk_workdir_files)
 
@@ -640,20 +657,22 @@ def scope_file(
         for key, entry in new_index.items():
             if key in already:
                 continue
-            hits = sources_touching(entry.get("cmd") or "", tracked or set(), dirs or set(), changed_src, workdir)
+            hits = sources_touching(
+                entry.get("cmd") or "", tracked or set(), dirs or set(), changed_src, workdir, gitlinks or frozenset()
+            )
             if hits:
                 touched.append((key, entry, "source:" + ",".join(hits)))
 
-    run_legs = []
+    run_legs, dropped = [], []
     for key, entry, reason in touched:
         skus = entry.get("skus")
         if not isinstance(skus, dict) or not skus:
             raise GateError(f"{path}: entry '{key_str(key)}' has no skus mapping; cannot resolve any leg to run")
 
-        # Review-only SKUs are dropped, not reported. An entry left with none of its
-        # own SKUs is dropped whole -- there is nothing this gate can run for it, and
-        # CODEOWNERS decides whether the edit is allowed.
-        runnable = [sku for sku in skus if sku not in review_only]
+        # Counted, never gated on, so a touched galaxy entry does not read as
+        # "nothing to prove". Who may merge it stays CODEOWNERS' business.
+        runnable = [sku for sku in skus if sku not in unsupported_skus]
+        dropped.extend({"file": path, "name": entry.get("name"), "sku": sku} for sku in skus if sku in unsupported_skus)
         if not runnable:
             continue
 
@@ -673,13 +692,13 @@ def scope_file(
                 }
             )
 
-    return {"no_entries": False, "run_legs": run_legs}
+    return {"no_entries": False, "run_legs": run_legs, "dropped_legs": dropped}
 
 
 def build_scope(
     base,
     files,
-    review_only,
+    unsupported_skus,
     tracy_files,
     non_matrix_files,
     unsupported_files,
@@ -687,16 +706,17 @@ def build_scope(
     renames=None,
     changed_src=None,
 ):
-    run_legs, skipped = [], []
+    run_legs, dropped_legs, skipped = [], [], []
     renames = renames or {}
 
     # The source pass must read every yaml; without it the scan is just the diff.
     tracked = tracked_paths(base) if changed_src else set()
     dirs = tracked_dirs(tracked) if changed_src else set()
+    gitlinks = submodule_paths() if changed_src else frozenset()
     scanned = sorted(set(files) | (set(all_test_yamls()) if changed_src else set()))
 
-    # Every base revision the diff needs, in one call. Only edited yamls have a base
-    # worth reading, and excluded ones are never parsed, so neither is requested.
+    # Every base revision the diff needs, in one call. Unedited and excluded yamls
+    # are never parsed, so neither is requested.
     excluded = non_matrix_files | unsupported_files
     base_blobs = git_show_many(
         base, [renames.get(path, path) for path in files if os.path.basename(path) not in excluded]
@@ -706,7 +726,7 @@ def build_scope(
         scoped = scope_file(
             path,
             base,
-            review_only,
+            unsupported_skus,
             tracy_files,
             non_matrix_files,
             unsupported_files,
@@ -714,6 +734,7 @@ def build_scope(
             base_path=renames.get(path),
             tracked=tracked,
             dirs=dirs,
+            gitlinks=gitlinks,
             changed_src=changed_src,
             edited=path in files,
             base_blobs=base_blobs,
@@ -724,6 +745,7 @@ def build_scope(
                 skipped.append(path)
             continue
         run_legs.extend(scoped["run_legs"])
+        dropped_legs.extend(scoped["dropped_legs"])
 
     status = "run" if run_legs else "no_op"
 
@@ -741,6 +763,7 @@ def build_scope(
         "changed_sources": sorted(changed_src or []),
         "skipped_files": skipped,
         "run_legs": run_legs,
+        "dropped_legs": dropped_legs,
         "expected_leg_count": len(run_legs),
         "profiles": profiles,
         "leg_digest": digest,
@@ -921,7 +944,7 @@ def filter_matrix(scope, matrices, skips):
         raise GateError(
             "these legs need multi-host runners, which the gate must not dispatch: "
             + "; ".join(describe_row(row_key(row)) for row in multihost)
-            + ". Add their SKUs to REVIEW_ONLY_SKUS in verify-changed-tests.yaml."
+            + ". Add their SKUs to UNSUPPORTED_SKUS in verify-changed-tests.yaml."
         )
 
     # One matrix, not two: the workflow runs every leg from a single job and picks
@@ -948,7 +971,7 @@ def filter_matrix(scope, matrices, skips):
 
 def run(args):
     """One pass: scope the diff, then narrow the matrix to what it found."""
-    review_only = load_review_only_skus(args.review_skus, args.sku_config)
+    unsupported_skus = load_unsupported_skus(args.unsupported_skus, args.sku_config)
     tracy_files = set(split_list(args.tracy_files))
     non_matrix_files = set(split_list(args.non_matrix_files))
     unsupported_files = set(split_list(args.unsupported_files))
@@ -972,7 +995,7 @@ def run(args):
     scope = build_scope(
         base,
         files,
-        review_only,
+        unsupported_skus,
         tracy_files,
         non_matrix_files,
         unsupported_files,
@@ -1008,6 +1031,7 @@ def run(args):
         [
             ("status", scope["status"]),
             ("expected-leg-count", scope["expected_leg_count"]),
+            ("dropped-leg-count", len(scope["dropped_legs"])),
             ("leg-digest", scope["leg_digest"]),
             ("changed-file-count", len(scope["changed_files"])),
             ("needs-default", str("default" in profiles).lower()),
@@ -1017,6 +1041,11 @@ def run(args):
             ("leg-count", len(legs)),
         ]
     )
+
+    if scope["dropped_legs"]:
+        print(f"\nDropped {len(scope['dropped_legs'])} leg(s) on SKUs this gate does not dispatch:")
+        for leg in scope["dropped_legs"]:
+            print(f"  - {leg['name']} | sku={leg['sku']}  [{leg['file']}]")
 
     if legs:
         print(f"\nWill run {len(legs)} leg(s):")
@@ -1039,9 +1068,9 @@ def main(argv=None):
     parser.add_argument("--files", nargs="*", default=None, help="Changed yamls; omit to derive from the diff")
     parser.add_argument("--sku-config", default=DEFAULT_SKU_CONFIG)
     parser.add_argument(
-        "--review-skus",
-        default=os.environ.get("REVIEW_ONLY_SKUS", ""),
-        help="SKUs the gate must not dispatch (default: $REVIEW_ONLY_SKUS)",
+        "--unsupported-skus",
+        default=os.environ.get("UNSUPPORTED_SKUS", ""),
+        help="SKUs the gate must not dispatch (default: $UNSUPPORTED_SKUS)",
     )
     parser.add_argument(
         "--tracy-files",

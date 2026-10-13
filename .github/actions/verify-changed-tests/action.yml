@@ -25,6 +25,9 @@ outputs:
     value: ${{ steps.gate.outputs.status }}
   expected-leg-count:
     value: ${{ steps.gate.outputs.expected-leg-count }}
+  dropped-leg-count:
+    description: "Legs skipped because their SKU is in UNSUPPORTED_SKUS"
+    value: ${{ steps.gate.outputs.dropped-leg-count }}
   leg-digest:
     value: ${{ steps.gate.outputs.leg-digest }}
   needs-default:
