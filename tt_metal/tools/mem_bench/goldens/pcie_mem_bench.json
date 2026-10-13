@@ -1,9 +1,9 @@
 {
   "schema_version": 1,
   "suite": "pcie_mem_bench",
-  "metrics": {"dev_bw": {"aggregate": "max", "better": "higher", "unit": "B/s"}},
   "environments": {
     "bh_p150b_civ2_viommu": {
+      "metrics": {"dev_bw": {"aggregate": "max", "better": "higher", "unit": "B/s"}},
       "repetitions": 1,
       "provenance": {"commit": "5d845af94990a909397597683cd715ed147d630a", "date": "2026-10-06", "source": "CI run 37395653300"},
       "context": {"aiclk_mhz": "1350"},
