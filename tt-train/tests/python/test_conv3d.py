@@ -216,8 +216,27 @@ def test_conv3d_patch_embed_kernel(dtype):
 
 
 def test_conv3d_patch_embed_wide_output():
-    # production-like width: 1536 output channels is 96 blocks of 16 in the dX transposed conv
+    # Wan2.1 1.3B width: 1536 output channels is 96 blocks of 16 in the dX transposed conv
     _run_case(C_in=16, C_out=1536, spatial=(2, 4, 4), kernel=(1, 2, 2), stride=(1, 2, 2))
+
+
+WAN_A14B_DIM = 5120
+
+
+def test_conv3d_patch_embed_wan_a14b_width():
+    # the latent never needs a gradient, so forward, dW and db run without the dX transposed conv
+    _run_case(
+        C_in=16, C_out=WAN_A14B_DIM, spatial=(2, 4, 4), kernel=(1, 2, 2), stride=(1, 2, 2), input_requires_grad=False
+    )
+
+
+def test_conv3d_patch_embed_wan_a14b_width_rejects_input_grad(expect_error):
+    # dX would run the transposed conv over 5120 / 16 = 320 channel blocks, more than any grid has cores
+    x = _zeros((1, 2, 4, 4, 16))
+    x.set_requires_grad(True)
+    w = _zeros((WAN_A14B_DIM, 16, 1, 2, 2))
+    with expect_error(ValueError, "transposed conv .* channel blocks"):
+        ttml.ops.conv.conv3d(x, w, stride=(1, 2, 2))
 
 
 def test_conv3d_asymmetric_odd_kernel():
