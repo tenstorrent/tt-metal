@@ -257,6 +257,15 @@ def mark_weight_cache_complete(
     to a ``.host_weights.pt`` sidecar so a later warm run can serve them for real (hybrid).
 
     Call this only AFTER the model has been constructed, so the tensorbins exist to be recorded."""
+    # as_tensor writes cache files in the background; the manifest below must see every one of them.
+    try:
+        import ttnn
+
+        wait = getattr(ttnn, "wait_for_cache_dumps", None)
+    except ImportError:
+        wait = None
+    if wait is not None:
+        wait()
     if _variant_unverifiable(build_variant):
         # Never certify a cache under an identity we could not compute -- a later run computing
         # the same error string would otherwise warm-match it. (#45400 review, finding R3)

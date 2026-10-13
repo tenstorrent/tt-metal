@@ -3,8 +3,11 @@
 # SPDX-License-Identifier: Apache-2.0
 
 import math
+import atexit
+import concurrent.futures
 import os
 import pathlib
+import threading
 from typing import Callable, Dict, List, Optional, Tuple, Union
 
 import ttnn.decorators
@@ -413,6 +416,46 @@ def _golden_function(tensor, *, torch_rank=None, **kwargs):
             raise RuntimeError("ttnn: Unable to squeeze to desired rank!")
         tensor = tensor.squeeze(0)
     return tensor
+
+
+# Weight-cache files are written by a small thread pool so a cold build keeps converting and uploading the next
+# weights while earlier ones are flushed (a single synchronous dump runs at ~1 GB/s and was ~25% of a cold Llama-8B
+# build). Each file is written under a temporary name and renamed when complete, so an interrupted run never leaves a
+# truncated file that looks valid. TTNN_SYNC_CACHE_DUMP=1 restores synchronous writes.
+_cache_dump_pool = None
+_cache_dump_futures = []
+_cache_dump_lock = threading.Lock()
+
+
+def _dump_cache_file(cache_file_name, tensor):
+    def job():
+        tmp_name = f"{cache_file_name}.tmp{os.getpid()}"
+        ttnn._ttnn.tensor.dump_tensor_flatbuffer(tmp_name, tensor)
+        os.replace(tmp_name, cache_file_name)
+
+    if os.environ.get("TTNN_SYNC_CACHE_DUMP", "0") == "1":
+        job()
+        return
+    global _cache_dump_pool
+    with _cache_dump_lock:
+        if _cache_dump_pool is None:
+            _cache_dump_pool = concurrent.futures.ThreadPoolExecutor(
+                max_workers=4, thread_name_prefix="ttnn-cache-dump"
+            )
+            atexit.register(wait_for_cache_dumps)
+        _cache_dump_futures.append(_cache_dump_pool.submit(job))
+
+
+def wait_for_cache_dumps():
+    """Block until every weight-cache file queued by as_tensor has been written (re-raises the first write error)."""
+    with _cache_dump_lock:
+        pending = list(_cache_dump_futures)
+        _cache_dump_futures.clear()
+    for future in pending:
+        future.result()
+
+
+ttnn.wait_for_cache_dumps = wait_for_cache_dumps
 
 
 @ttnn.register_python_operation(name="ttnn.to_torch", golden_function=_golden_function)
@@ -889,7 +932,7 @@ def as_tensor(
             f"Generating cache for {cache_file_name} of shape {tensor.shape}, dtype {dtype_name}, layout {layout_name}"
         )
         pathlib.Path(cache_file_name).parent.mkdir(parents=True, exist_ok=True)
-        ttnn._ttnn.tensor.dump_tensor_flatbuffer(cache_file_name, tensor)
+        _dump_cache_file(cache_file_name, tensor)
         if device is not None:
             tensor = tensor.to(device, memory_config)
         return tensor

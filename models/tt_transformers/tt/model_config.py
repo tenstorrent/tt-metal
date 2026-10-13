@@ -800,7 +800,10 @@ class ModelArgs:
         self.model_config.update({f"{key}_TILE": ttnn.TILE_LAYOUT for key in self.OP_KEYS if "LAYOUT" in key})
 
         self.tokenizer = None if dummy_weights else self.create_tokenizer()
-        self.processor = None if dummy_weights else self.create_processor()
+        # The HF processor (image/video preprocessing + a second tokenizer) costs seconds to build and text-only runs
+        # never use it; it is created on first access of `self.processor` instead.
+        self._processor = None
+        self._processor_ready = dummy_weights
 
         # Flag to indicate whether we use fused version of QK ops (rotary embedding + page cached update)
         # We currently disable this fusion of ops for vision-capable or multimodal models
@@ -4309,6 +4312,18 @@ class ModelArgs:
             if "phi-3-mini" in self.base_model_name.lower():
                 tokenizer.stop_tokens.append(tokenizer.encode("<|end|>")[0])
         return tokenizer
+
+    @property
+    def processor(self):
+        if not self._processor_ready:
+            self._processor = self.create_processor()
+            self._processor_ready = True
+        return self._processor
+
+    @processor.setter
+    def processor(self, value):
+        self._processor = value
+        self._processor_ready = True
 
     def create_processor(self):
         from transformers import AutoProcessor
