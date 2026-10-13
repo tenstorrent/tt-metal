@@ -17,7 +17,6 @@ from models.demos.deepseek_v3_d_p.tests.kda.utils import (
     reconstruct_state_at_sp_rank,
 )
 from models.demos.deepseek_v3_d_p.tt.kda import recurrence
-from models.demos.deepseek_v3_d_p.tt.kda.chronological_selections import ChronologicalSelections
 from models.demos.deepseek_v3_d_p.tt.kda.config import KDARecurrenceProgramConfig
 from tests.ttnn.unit_tests.operations.experimental.kda.kda_test_utils import (
     assert_accurate,
@@ -65,7 +64,9 @@ def _run_recurrence(
         batch=beta.shape[0],
     )
     actual_start = make_actual_start(device, 0)
-    result = executor(q=q, k=k, v=v, gate=gate, beta=beta, initial_state=state, actual_start=actual_start)
+    result = executor(
+        q=q, k=k, v=v, gate=gate, beta=beta, beta_logits_column_offset=0, initial_state=state, actual_start=actual_start
+    )
     ttnn.deallocate(actual_start)
     return result.final_state, result.output
 
@@ -98,7 +99,8 @@ def test_recurrence_matches_reference_and_is_deterministic(
     k = torch.randn(*shape, key_dim, generator=generator)
     v = torch.randn(*shape, value_dim, generator=generator)
     gate = -0.02 * torch.rand(*shape, key_dim, generator=generator)
-    beta = torch.sigmoid(torch.randn(*shape, generator=generator))
+    beta_logits = torch.randn(*shape, generator=generator).to(torch.bfloat16)
+    beta = torch.sigmoid(beta_logits.float())
     state = 0.02 * torch.randn(1, heads, key_dim, value_dim, generator=generator)
     print("KDA_CPU_REFERENCE_CACHE=disabled; computing deterministic operation oracle", flush=True)
     reference_start = time.perf_counter()
@@ -110,7 +112,7 @@ def test_recurrence_matches_reference_and_is_deterministic(
     k_tt = _to_device(k.reshape(1, sequence, heads * key_dim), device, ttnn.bfloat16)
     v_tt = _to_device(v.reshape(1, sequence, heads * value_dim), device, ttnn.bfloat16)
     gate_tt = _to_device(gate.reshape(1, sequence, heads * key_dim), device, ttnn.bfloat16)
-    beta_tt = _to_device(beta, device, ttnn.float32)
+    beta_tt = _to_device(beta_logits, device, ttnn.bfloat16)
     state_tt = _to_device(state, device, ttnn.float32)
 
     def run() -> tuple[ttnn.Tensor, ttnn.Tensor]:
@@ -163,7 +165,8 @@ def test_grouped_scan_preserves_weak_decay_across_group_sizes(device: ttnn.Devic
     k = torch.randn(*shape, generator=generator)
     v = torch.randn(*shape, generator=generator)
     gate = torch.full(shape, -1e-5)
-    beta = torch.sigmoid(torch.randn(1, sequence, heads, generator=generator))
+    beta_logits = torch.randn(1, sequence, heads, generator=generator).to(torch.bfloat16)
+    beta = torch.sigmoid(beta_logits.float())
     state = 0.02 * torch.randn(1, heads, dim, dim, generator=generator)
     golden_output, golden_state = kda_recurrent_reference(q, k, v, gate, beta, state)
     golden_output = golden_output.to(torch.bfloat16)
@@ -175,7 +178,7 @@ def test_grouped_scan_preserves_weak_decay_across_group_sizes(device: ttnn.Devic
             _to_device(k.reshape(1, sequence, heads * dim), device, ttnn.bfloat16),
             _to_device(v.reshape(1, sequence, heads * dim), device, ttnn.bfloat16),
             _to_device(gate.reshape(1, sequence, heads * dim), device, ttnn.bfloat16),
-            _to_device(beta, device, ttnn.float32),
+            _to_device(beta_logits, device, ttnn.bfloat16),
             _to_device(state, device, ttnn.float32),
             summary_group_chunks=8,
             local_scan_strategy="grouped",
@@ -190,7 +193,7 @@ def test_grouped_scan_preserves_weak_decay_across_group_sizes(device: ttnn.Devic
             _to_device(k.reshape(1, sequence, heads * dim), device, ttnn.bfloat16),
             _to_device(v.reshape(1, sequence, heads * dim), device, ttnn.bfloat16),
             _to_device(gate.reshape(1, sequence, heads * dim), device, ttnn.bfloat16),
-            _to_device(beta, device, ttnn.float32),
+            _to_device(beta_logits, device, ttnn.bfloat16),
             _to_device(state, device, ttnn.float32),
             summary_group_chunks=2,
             local_scan_strategy="grouped",
@@ -260,7 +263,6 @@ def _distributed_recurrence_case(
     torch.Tensor,
     torch.Tensor,
     int,
-    ChronologicalSelections,
     ttnn.Tensor,
 ]:
     sp_axis = 1 - tensor_parallel_axis
@@ -271,7 +273,8 @@ def _distributed_recurrence_case(
     k = torch.randn(*shape, dim, generator=generator)
     v = torch.randn(*shape, dim, generator=generator)
     gate = -0.02 * torch.rand(*shape, dim, generator=generator)
-    beta = torch.sigmoid(torch.randn(*shape, generator=generator))
+    beta_logits = torch.randn(*shape, generator=generator).to(torch.bfloat16)
+    beta = torch.sigmoid(beta_logits.float())
     initial_state = 0.02 * torch.randn(1, heads, dim, dim, generator=generator)
     expected_output, expected_state = kda_recurrent_reference(q, k, v, gate, beta, initial_state)
 
@@ -285,7 +288,7 @@ def _distributed_recurrence_case(
         _to_mesh(k.reshape(1, sequence, heads * dim), mesh_device, tuple(activation_dims), ttnn.bfloat16),
         _to_mesh(v.reshape(1, sequence, heads * dim), mesh_device, tuple(activation_dims), ttnn.bfloat16),
         _to_mesh(gate.reshape(1, sequence, heads * dim), mesh_device, tuple(activation_dims), ttnn.bfloat16),
-        _to_mesh(beta, mesh_device, tuple(activation_dims), ttnn.float32),
+        _to_mesh(beta_logits, mesh_device, tuple(activation_dims), ttnn.bfloat16),
         _to_mesh(initial_state, mesh_device, tuple(state_dims), ttnn.float32),
     )
     executor = recurrence.KDARecurrence(
@@ -297,25 +300,13 @@ def _distributed_recurrence_case(
         key_dim=dim,
         value_dim=dim,
     )
-    sp_size = tuple(mesh_device.shape)[sp_axis]
     actual_start = make_actual_start(mesh_device)
-    selections = ChronologicalSelections(
-        ttnn.experimental.kda.chronological_selections(
-            actual_start,
-            sp_axis,
-            sequence // sp_size,
-            heads // tuple(mesh_device.shape)[tensor_parallel_axis],
-            dim,
-            dim,
-        ),
-    )
-    return executor, inputs, expected_output.to(torch.bfloat16), expected_state, sp_axis, selections, actual_start
+    return executor, inputs, expected_output.to(torch.bfloat16), expected_state, sp_axis, actual_start
 
 
 def _run_distributed_recurrence(
     executor: recurrence.KDARecurrence,
     inputs: tuple[ttnn.Tensor, ttnn.Tensor, ttnn.Tensor, ttnn.Tensor, ttnn.Tensor, ttnn.Tensor],
-    selections: ChronologicalSelections,
     actual_start: ttnn.Tensor,
 ) -> tuple[ttnn.Tensor, ttnn.Tensor]:
     q, k, v, gate, beta, initial_state = inputs
@@ -326,8 +317,8 @@ def _run_distributed_recurrence(
             v=v,
             gate=gate,
             beta=beta,
+            beta_logits_column_offset=0,
             initial_state=initial_state,
-            selections=selections,
             actual_start=actual_start,
         )
     return result.output, result.final_state
@@ -344,16 +335,16 @@ def test_distributed_recurrence_matches_serial_and_is_deterministic(
     mesh_device: ttnn.MeshDevice,
     tensor_parallel_axis: int,
 ) -> None:
-    executor, inputs, expected_output, expected_state, sp_axis, selections, actual_start = _distributed_recurrence_case(
+    executor, inputs, expected_output, expected_state, sp_axis, actual_start = _distributed_recurrence_case(
         mesh_device, tensor_parallel_axis
     )
 
     (output_tt, state_tt), mismatch_markers = collect_mesh_accuracy_and_determinism_results(
-        lambda: _run_distributed_recurrence(executor, inputs, selections, actual_start)
+        lambda: _run_distributed_recurrence(executor, inputs, actual_start)
     )
     ttnn.synchronize_device(mesh_device)
     cache_entries = mesh_device.num_program_cache_entries()
-    repeated_output, repeated_state = _run_distributed_recurrence(executor, inputs, selections, actual_start)
+    repeated_output, repeated_state = _run_distributed_recurrence(executor, inputs, actual_start)
     ttnn.synchronize_device(mesh_device)
     assert mesh_device.num_program_cache_entries() == cache_entries
     ttnn.deallocate(repeated_output)
@@ -380,13 +371,11 @@ def test_distributed_recurrence_trace_replay_matches_eager(
     mesh_device: ttnn.MeshDevice,
     tensor_parallel_axis: int,
 ) -> None:
-    executor, inputs, _, _, sp_axis, selections, actual_start = _distributed_recurrence_case(
-        mesh_device, tensor_parallel_axis
-    )
-    eager_output_tt, eager_state_tt = _run_distributed_recurrence(executor, inputs, selections, actual_start)
+    executor, inputs, _, _, sp_axis, actual_start = _distributed_recurrence_case(mesh_device, tensor_parallel_axis)
+    eager_output_tt, eager_state_tt = _run_distributed_recurrence(executor, inputs, actual_start)
 
     trace_id = ttnn.begin_trace_capture(mesh_device, cq_id=0)
-    traced_output_tt, traced_state_tt = _run_distributed_recurrence(executor, inputs, selections, actual_start)
+    traced_output_tt, traced_state_tt = _run_distributed_recurrence(executor, inputs, actual_start)
     ttnn.end_trace_capture(mesh_device, trace_id, cq_id=0)
     for _ in range(3):
         ttnn.execute_trace(mesh_device, trace_id, cq_id=0, blocking=False)
@@ -425,8 +414,8 @@ def test_distributed_prefix_preserves_noncommuting_order_and_tp_lines(
         )
         return ttnn.reshape(tensor, (1, 32, 32))
 
-    entry, final = recurrence._distributed_prefix(
-        recurrence._AffineTransform(to_mesh(a, (0, 1)), to_mesh(b, (0, 1))),
+    entry, final = recurrence.distributed_prefix(
+        recurrence.pack_transform(recurrence.AffineTransform(to_mesh(a, (0, 1)), to_mesh(b, (0, 1)))),
         to_mesh(initial, (None, 1)),
         sequence_parallel_axis=0,
         compute_config=ttnn.init_device_compute_kernel_config(
