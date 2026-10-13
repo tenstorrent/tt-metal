@@ -5,6 +5,7 @@
 #include <tt_stl/fmt.hpp>
 #include "data_collection.hpp"
 
+#include <atomic>
 #include <cstdint>
 #include "impl/context/metal_context.hpp"
 #include "impl/kernels/kernel.hpp"
@@ -99,6 +100,11 @@ ProgramRealtimeProfilerCallbackHandle RegisterProgramRealtimeProfilerCallback(
 
 void UnregisterProgramRealtimeProfilerCallback(ProgramRealtimeProfilerCallbackHandle handle) {
     tt::tt_metal::MetalContext::instance().data_collector()->UnregisterProgramRealtimeProfilerCallback(handle);
+}
+
+ProgramRealtimeProfilerCallbackHandle AllocateProgramRealtimeProfilerCallbackHandle() {
+    static std::atomic<ProgramRealtimeProfilerCallbackHandle> next_handle{0};
+    return next_handle.fetch_add(1, std::memory_order_relaxed);
 }
 
 bool IsProgramRealtimeProfilerActive() {
