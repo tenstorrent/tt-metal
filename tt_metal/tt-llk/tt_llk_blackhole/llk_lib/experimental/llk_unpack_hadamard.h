@@ -6,8 +6,9 @@
 //
 // Operand layout (matches hadamard.h):
 //   h16   ([16, 16], 1 face): H_16 fills face (0, 0). -> srcB face 0.
-//   input: 128 contiguous datums at the tile address, in any tile shape
-//          (e.g. the top 8 rows of a [16, 16] tile, or 4x[1, 32] pages).
+//   input: 128 contiguous datums at the tile address, from a single-face
+//          tile or one with one-row faces (e.g. the top 8 rows of a
+//          [16, 16] tile, or 4x[1, 32] pages).
 //          Read as rows 0..7 of srcA face 0; the unpack zeros rows 8..15.
 //
 // Single-face unpack: the unpackers are configured for one 16x16 face

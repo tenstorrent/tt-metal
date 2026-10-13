@@ -9,8 +9,8 @@
 // See llk_math_hadamard.h for the algorithmic derivation.
 //
 // The unpackers run on a single-face [16, 16] config; h16 and out are
-// 1-face [16, 16] tiles, and the input is 128 contiguous datums in any
-// tile shape (see in_cb below). The inputs are bfloat16 and the result is
+// 1-face [16, 16] tiles, and the input is 128 contiguous datums (see
+// in_cb below). The inputs are bfloat16 and the result is
 // packed out as bfp8 (bfloat8_b). The math is a custom
 // narrow MOP: one (LoFi) or two (high-fidelity) MVMULs per matmul pass
 // with a MOVD2B bridge, then an SFPU element-wise scale when normalize
@@ -25,7 +25,10 @@
 //
 //   in_cb  : bfloat16. 128 real input values contiguous at the tile
 //            address, read as rows [0..8), cols [0..16) of srcA face (0, 0).
-//            Tile shape is ignored. The unpack path zeroes rows
+//            The input tile must be a single face (e.g. [16, 16], data in
+//            the top 8 rows) or have one-row faces (e.g. 4x[1, 32] pages);
+//            taller multi-face tiles are stored face-major and would
+//            permute the vector. The unpack path zeroes rows
 //            [8..16) itself (ZEROSRC over the full srcA span, see
 //            llk_unpack_hadamard.h), so callers need not pad them.
 //
@@ -70,7 +73,7 @@ namespace ckernel {
  *
  * | Argument         | Description                                                            | Type     | Valid Range            | Required              |
  * |------------------|------------------------------------------------------------------------|----------|------------------------|-----------------------|
- * | in_cb_id         | The 1x128 input vector (128 contiguous bf16; any tile shape)           | uint32_t | 0 to 31                | True                  |
+ * | in_cb_id         | The 1x128 input vector (128 contiguous bf16; see in_cb above)          | uint32_t | 0 to 31                | True                  |
  * | h16_cb_id        | The H_16 weight tile ([16, 16], H_16 fills the single face)            | uint32_t | 0 to 31                | True                  |
  * | out_cb_id        | The 1x128 output vector tile ([16, 16], result in rows 0..7)           | uint32_t | 0 to 31                | True                  |
  * | fp32_dest_acc_en | Whether to enable fp32 accumulation in dest                            | bool     | true/false             | False (default off)   |
@@ -84,7 +87,8 @@ ALWI void hadamard_h128_init(const uint32_t in_cb_id, const uint32_t h16_cb_id, 
     // unpacker config is INDEPENDENT of the input CB's tile shape: srcA reads
     // the input data with h16's [16,16] config (a 4x[1,32] feed is read as 8
     // rows of 16), srcB reads h16. Both operands are bf16. in_cb_id is passed
-    // to the init only to check its format matches h16's.
+    // to the init only to check its tile layout and that its format matches
+    // h16's.
     UNPACK((llk_unpack_hw_configure<fp32_dest_acc_en>(h16_cb_id, h16_cb_id)));
     UNPACK((llk_unpack_hadamard_h128_init(h16_cb_id, in_cb_id, /*h16_tile_index=*/0)));
 
