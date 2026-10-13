@@ -24,7 +24,7 @@ from dataclasses import dataclass, replace
 
 import ttnn
 from models.common.lightweightmodule import LightweightModule
-from models.demos.pplx_decider_v1_27b.tt.common import prefill_linear, resolve
+from models.demos.pplx_decider_v1_27b.tt.common import concat_owned, prefill_linear, resolve
 from models.demos.pplx_decider_v1_27b.tt.model_config import PplxDeciderArgs
 from models.demos.pplx_decider_v1_27b.tt.optimizations import Optimizations
 from models.demos.pplx_decider_v1_27b.tt.weight_adapter import AttentionWeights
@@ -112,11 +112,22 @@ class PplxGatedAttention(LightweightModule):
         )
 
     def _rope(self, x, cos, sin):
-        """Partial RoPE on x [1, H, t, 256] in one full-width op.
+        """Partial RoPE on x [B, H, t, 256] in one full-width op.
 
         The head dims are pre-permuted (see ``rope.rope_head_permutation``) so the 64 rotary dims are
-        adjacent pairs; cos/sin [1, 1, t, 256] are 1/0 on the other 192 dims.
+        adjacent pairs; cos/sin [1, 1, t, 256] are 1/0 on the other 192 dims. One table pair applies to
+        every row of the batch. Lists of B pairs (rows with their own 3D-mRoPE tables, a batch holding an
+        image request) run one op per row: the op broadcasts cos/sin over the batch only.
         """
+        if isinstance(cos, (list, tuple)):
+            b, h, t, d = x.shape
+            rows = []
+            for i, (cos_i, sin_i) in enumerate(zip(cos, sin)):
+                x_i = ttnn.slice(x, [i, 0, 0, 0], [i + 1, h, t, d])
+                rows.append(self._rope(x_i, cos_i, sin_i))
+                if b > 1:
+                    ttnn.deallocate(x_i)  # a full-range slice (b == 1) may be x itself
+            return concat_owned(rows, dim=0)
         return ttnn.experimental.rotary_embedding_llama(
             x,
             cos,
@@ -137,16 +148,19 @@ class PplxGatedAttention(LightweightModule):
     def forward(
         self, x: ttnn.Tensor, *, start_pos: int, cos: ttnn.Tensor, sin: ttnn.Tensor, last_chunk: bool = False
     ) -> ttnn.Tensor:
-        """One prefill chunk. x: [1, t, 5120] (input-normed), positions start_pos..start_pos+t-1.
+        """One prefill chunk. x: [B, t, 5120] (input-normed), positions start_pos..start_pos+t-1.
 
         ``start_pos`` must be a multiple of the page size; chunks of one request arrive in order.
         ``last_chunk``: no later chunk of this request follows (a single-chunk request skips the cache write).
+        A batch (B > 1) runs as one chunk (``start_pos == 0``, ``last_chunk``, the default whole-request
+        chunk): projections over all rows, causal SDPA per (row, head) in one op, no paged cache.
+        ``cos`` / ``sin`` are one table pair for every row, or lists with one pair per row.
         """
         self.load_device_weights()
         a, opts = self.config.args, self.config.optimizations
         b, t, _ = x.shape
-        if b != 1:
-            raise ValueError("Prefill attention takes one request at a time")
+        if b != 1 and not (start_pos == 0 and last_chunk and opts.attention.sdpa_plain_first_chunk):
+            raise ValueError("A batched prefill attention runs as one whole-request chunk (plain causal SDPA)")
         if start_pos % self.page_size or start_pos + t > self.num_pages * self.page_size:
             raise ValueError(f"Chunk at {start_pos} (+{t}) is not page aligned or exceeds the cache")
 
@@ -187,7 +201,7 @@ class PplxGatedAttention(LightweightModule):
                 compute_kernel_config=att.compute_kernel_cfg,
                 output_concat_heads=True,
             )
-            attn = ttnn.reshape(attn, [b, t, a.num_attention_heads * a.head_dim])  # [1, 1, t, H*D] -> view
+            attn = ttnn.reshape(attn, [b, t, a.num_attention_heads * a.head_dim])  # [B, 1, t, H*D] -> view
         else:
             # Later chunks: cache write for this chunk's pages, then causal SDPA over the whole prefix.
             self._fill_cache(k, v, start_pos, t)

@@ -21,7 +21,7 @@ from dataclasses import dataclass, replace
 
 import ttnn
 from models.common.lightweightmodule import LightweightModule
-from models.demos.pplx_decider_v1_27b.tt.common import prefill_linear, resolve
+from models.demos.pplx_decider_v1_27b.tt.common import concat_owned, prefill_linear, resolve
 from models.demos.pplx_decider_v1_27b.tt.model_config import PplxDeciderArgs
 from models.demos.pplx_decider_v1_27b.tt.optimizations import Optimizations
 from models.demos.pplx_decider_v1_27b.tt.weight_adapter import TILE, GatedDeltaNetWeights
@@ -116,21 +116,51 @@ class PplxGatedDeltaNet(LightweightModule):
         self.norm = w.norm.get_device_weight()
         self._loaded = True
 
-    def forward(self, x: ttnn.Tensor, state: DeltaState | None = None) -> tuple[ttnn.Tensor, DeltaState]:
-        """One prefill chunk. x: [1, t, 5120] (input-normed). ``state=None`` starts a fresh request."""
-        self.load_device_weights()
-        state = state or self.zero_state
-        a, opts = self.config.args, self.config.optimizations
-        b, t, _ = x.shape
-        if b != 1:
-            raise ValueError("Prefill GDN takes one request at a time")
-        h, hv, dk = a.linear_num_key_heads, a.linear_num_value_heads, a.linear_key_head_dim
-        gate_width = (hv + TILE - 1) // TILE * TILE
+    def forward(
+        self, x: ttnn.Tensor, state: DeltaState | list | None = None
+    ) -> tuple[ttnn.Tensor, DeltaState | list[DeltaState]]:
+        """One prefill chunk. x: [B, t, 5120] (input-normed). ``state=None`` starts a fresh request.
 
+        Batch 1: ``state`` is a ``DeltaState``. Batch B > 1: ``state`` is None or a list of B
+        ``DeltaState`` (one per row) and a list is returned. The in/out projections run once over the
+        whole batch; the causal conv, the chunked scan and the gated norm run per row (the conv op takes
+        one sequence; per row the scan keeps its fused 48-head program), each row with its own state.
+        """
+        self.load_device_weights()
+        opts = self.config.optimizations
+        b, t, _ = x.shape
         # Two matmuls on the same input (qkv, and packed z|b|a) instead of one packed [qkv|z|b|a]
         # output: slicing the wide qkv column block back out of a packed output cost a full copy per chunk.
         qkv = prefill_linear(x, self.in_qkv, "delta_in", opts.linear)
         zba = prefill_linear(x, self.in_zba, "delta_in", opts.linear)
+        if b == 1:
+            output, new_state = self._core(qkv, zba, state or self.zero_state, t)
+            return prefill_linear(output, self.out_proj, "delta_out", opts.linear), new_state
+        if t % TILE:
+            raise ValueError(f"A batched GDN chunk must be tile aligned, got {t} tokens")
+        states = list(state) if state is not None else [None] * b
+        if len(states) != b:
+            raise ValueError(f"{len(states)} states for a batch of {b}")
+        outputs, new_states = [], []
+        for i in range(b):
+            qkv_i = ttnn.slice(qkv, [i, 0, 0], [i + 1, t, qkv.shape[-1]])
+            zba_i = ttnn.slice(zba, [i, 0, 0], [i + 1, t, zba.shape[-1]])
+            out_i, state_i = self._core(qkv_i, zba_i, states[i] or self.zero_state, t)
+            ttnn.deallocate(qkv_i)
+            ttnn.deallocate(zba_i)
+            outputs.append(out_i)
+            new_states.append(state_i)
+        ttnn.deallocate(qkv)
+        ttnn.deallocate(zba)
+        output = concat_owned(outputs, dim=0)
+        return prefill_linear(output, self.out_proj, "delta_out", opts.linear), new_states
+
+    def _core(self, qkv: ttnn.Tensor, zba: ttnn.Tensor, state: DeltaState, t: int) -> tuple[ttnn.Tensor, DeltaState]:
+        """One sequence: conv + SiLU -> chunked gated delta rule -> gated RMSNorm. -> ([1, t, 6144], new state)."""
+        a, opts = self.config.args, self.config.optimizations
+        b = 1
+        h, hv, dk = a.linear_num_key_heads, a.linear_num_value_heads, a.linear_key_head_dim
+        gate_width = (hv + TILE - 1) // TILE * TILE
         z_width = a.linear_value_dim
         z = zba[:, :, :z_width]
         beta = ttnn.sigmoid(zba[:, :, z_width : z_width + hv])
@@ -187,7 +217,7 @@ class PplxGatedDeltaNet(LightweightModule):
         output = ttnn.mul(output, z)  # norm(o) * w * sigmoid(z) * z == w * norm(o) * silu(z)
         # Hide trailing padded rows; projections and norms act per row.
         output = ttnn.reshape(output, [b, t, hv * dk], output.padded_shape)
-        return prefill_linear(output, self.out_proj, "delta_out", opts.linear), DeltaState(new_recurrent, conv_tail)
+        return output, DeltaState(new_recurrent, conv_tail)
 
 
 def _resolve(config: GatedDeltaNetConfig) -> GatedDeltaNetConfig:

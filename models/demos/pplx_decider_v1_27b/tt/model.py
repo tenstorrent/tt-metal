@@ -60,7 +60,7 @@ from models.demos.pplx_decider_v1_27b.tt.embedding import EmbeddingConfig, PplxE
 from models.demos.pplx_decider_v1_27b.tt.head import PADDED_OPTIONS, DecisionHeadConfig, PplxDecisionHead
 from models.demos.pplx_decider_v1_27b.tt.model_config import APP_MAX_LENGTH, PplxDeciderArgs
 from models.demos.pplx_decider_v1_27b.tt.optimizations import Optimizations, PrecisionPolicy
-from models.demos.pplx_decider_v1_27b.tt.rope import PplxRequestRotary, PplxRotary, get_rope_index
+from models.demos.pplx_decider_v1_27b.tt.rope import PplxBatchRotary, PplxRequestRotary, PplxRotary, get_rope_index
 from models.demos.pplx_decider_v1_27b.tt.weight_adapter import (
     build_decoder_layer_weights,
     build_embedding_weight,
@@ -72,6 +72,29 @@ BUCKETS = (128, 1024, 2048, 4096, 8192)
 TEXT_PREFIX = "language_model."
 IMAGE_TOKEN_ID = 248056  # config.image_token_id (<|image_pad|>), checked against the config at load
 _ST_DTYPES = {"BF16": torch.bfloat16, "F32": torch.float32, "F16": torch.float16}
+
+
+# Largest batch per prefill bucket that runs with the whole model and the vision tower resident on
+# one p150a (measured by tests/e2e/test_batch.py::test_batch_dram_limit, doc/full_model/README.md "Batch").
+# A batch only needs transient activation DRAM (no per-request cache persists), so these caps are a
+# scheduling limit: ``TTDecider`` splits every bucket's requests into batches of
+# min(max_batch_size, BATCH_CAPS[bucket]).
+BATCH_CAPS = {128: 32, 1024: 32, 2048: 16, 4096: 8, 8192: 4}
+
+
+def batch_cap(bucket: int, max_batch_size: int) -> int:
+    """Rows per forward at ``bucket``: ``max_batch_size`` clamped to the measured DRAM cap."""
+    return max(1, min(max_batch_size, BATCH_CAPS[bucket]))
+
+
+def validate_max_batch_size(max_batch_size: int) -> int:
+    largest = max(BATCH_CAPS.values())
+    if not isinstance(max_batch_size, int) or not 1 <= max_batch_size <= largest:
+        raise ValueError(
+            f"max_batch_size must be an int in 1..{largest} (the largest batch that fits device DRAM at any "
+            f"bucket; per-bucket caps {BATCH_CAPS}), got {max_batch_size!r}"
+        )
+    return max_batch_size
 
 
 def buckets_up_to(max_seq_len: int = APP_MAX_LENGTH) -> tuple[int, ...]:
@@ -250,20 +273,23 @@ class ModelConfig:
     layer_ids: tuple[int, ...]
     cache_dir: Path | None
     max_seq_len: int = APP_MAX_LENGTH  # largest prefill bucket accepted (see ``buckets_up_to``)
+    max_batch_size: int = 1  # most requests per forward (clamped per bucket by ``batch_cap``)
 
 
 @dataclass
 class ImageInputs:
-    """Device inputs of the image part of one request (built by ``PplxDeciderModel.prepare_images``).
+    """Device inputs of the image part of one request or batch (``PplxDeciderModel.prepare_images`` /
+    ``prepare_batch``).
 
-    ``splice_index[0, s]`` is the row of ``[text embeddings (bucket rows) ; image features]`` that
-    token ``s`` takes: ``s`` for text and padding tokens, ``bucket + k`` for the k-th image token.
+    ``splice_index[0, b * bucket + s]`` is the row of ``[text embeddings (B * bucket rows) ; image
+    features]`` that token ``s`` of request ``b`` takes: ``b * bucket + s`` for text and padding tokens,
+    ``B * bucket + k`` for the k-th image token of the batch (image features in request, then prompt order).
     """
 
-    vision: list  # VisionInputs per image, prompt order
-    splice_index: ttnn.Tensor  # [1, bucket] uint32 ROW_MAJOR
-    rotary: PplxRequestRotary  # 3D mRoPE cos/sin, [1, 1, bucket, 256] each
-    position_ids: torch.Tensor  # host [3, real_len] int64 (HF get_rope_index), for tests / logs
+    vision: list  # VisionInputs per image, request then prompt order
+    splice_index: ttnn.Tensor  # [1, B * bucket] uint32 ROW_MAJOR
+    rotary: object  # PplxRequestRotary (one request) or PplxBatchRotary (a batch): 3D mRoPE cos/sin
+    position_ids: object  # host [3, real_len] int64 (HF get_rope_index); a batch: list, None for text rows
     num_image_tokens: int
 
     def deallocate(self) -> None:
@@ -302,12 +328,14 @@ class PplxDeciderModel(LightweightModule):
         prefill_chunk: int = 2048,
         vision: bool = False,
         max_seq_len: int = APP_MAX_LENGTH,
+        max_batch_size: int = 1,
     ) -> "PplxDeciderModel":
         """Build and upload every weight. ``layer_ids`` (default: all 64) allows a reduced stack for debugging.
 
         ``vision=True`` also loads the BF16 vision tower (``PplxVisionTower``, ~0.96 GiB) for image requests.
         ``max_seq_len`` (one of ``BUCKETS``) is the largest prefill bucket ``upload_tokens`` accepts; it
-        does not change what is built.
+        does not change what is built. ``max_batch_size`` (1..max(BATCH_CAPS)) is the most requests a
+        scheduler puts in one forward; it allocates nothing (a batch needs transient activations only).
 
         ``policy`` defaults to ``PrecisionPolicy.default()`` (the stage-8 selected precision config).
         ``cache_dir="default"`` uses ``paths.resolve_model_cache_path(reader.path)`` (``$TT_CACHE_PATH``,
@@ -318,6 +346,7 @@ class PplxDeciderModel(LightweightModule):
         from models.demos.pplx_decider_v1_27b.reference.hf_reference import SnapshotReader
 
         buckets_up_to(max_seq_len)  # validate before the long load
+        validate_max_batch_size(max_batch_size)
         reader = reader or SnapshotReader()
         args = PplxDeciderArgs.from_hf_config(reader.text_config)
         opts = Optimizations.build(
@@ -428,6 +457,7 @@ class PplxDeciderModel(LightweightModule):
             layer_ids=layer_ids,
             cache_dir=cache_dir,
             max_seq_len=max_seq_len,
+            max_batch_size=max_batch_size,
         )
         hits = sum(report.cache_hits.values())
         logger.info(
@@ -459,7 +489,126 @@ class PplxDeciderModel(LightweightModule):
         )
         return tokens, len(ids) - 1
 
+    def upload_batch(self, ids_list, bucket: int | None = None) -> tuple[ttnn.Tensor, list[int]]:
+        """Right-pad B prompts to one bucket (default: the bucket of the longest) and upload [B, bucket] uint32.
+
+        Returns the device tensor and each row's last real token index. Every row is validated before
+        the upload; a row longer than ``max_seq_len`` (or than ``bucket``) rejects the whole batch.
+        """
+        rows = [[int(t) for t in ids] for ids in ids_list]
+        if not rows:
+            raise ValueError("An empty batch")
+        if min(len(r) for r in rows) < 1:
+            raise ValueError("A prompt needs at least one token")
+        buckets = buckets_up_to(self.config.max_seq_len)
+        bucket = bucket or bucket_for(max(len(r) for r in rows), self.config.max_seq_len)
+        if bucket not in buckets or max(len(r) for r in rows) > bucket:
+            raise ValueError(f"{max(len(r) for r in rows)} tokens do not fit bucket {bucket} (buckets {buckets})")
+        padded = torch.full((len(rows), bucket), self.config.pad_token_id, dtype=torch.int32)
+        for b, r in enumerate(rows):
+            padded[b, : len(r)] = torch.tensor(r, dtype=torch.int32)
+        tokens = ttnn.from_torch(
+            padded,
+            device=self.mesh_device,
+            dtype=ttnn.uint32,
+            layout=ttnn.ROW_MAJOR_LAYOUT,
+            memory_config=ttnn.DRAM_MEMORY_CONFIG,
+        )
+        return tokens, [len(r) - 1 for r in rows]
+
     # -- image requests ---------------------------------------------------------------------------
+    def _parse_encoded(self, encoded: dict) -> dict:
+        """Validated host view of one processor output; ``grids`` is None for a prompt without images."""
+        ids = torch.as_tensor(encoded["input_ids"]).reshape(-1)
+        if "pixel_values" not in encoded or encoded.get("image_grid_thw") is None:
+            if bool((ids == IMAGE_TOKEN_ID).any()):
+                raise ValueError("Prompt has image tokens but no pixel_values / image_grid_thw")
+            return dict(ids=ids, grids=None)
+        if self.vision is None:
+            raise ValueError("Image request on a model built without the vision tower (from_snapshot(vision=True))")
+        types = torch.as_tensor(encoded["mm_token_type_ids"]).reshape(-1)
+        is_image = ids == IMAGE_TOKEN_ID
+        if not torch.equal(is_image, types == 1) or bool((types > 1).any()):
+            raise ValueError("mm_token_type_ids must mark exactly the image tokens (no video)")
+        grids = torch.as_tensor(encoded["image_grid_thw"]).reshape(-1, 3)
+        patches = [int(t * h * w) for t, h, w in grids.tolist()]
+        pixel_values = torch.as_tensor(encoded["pixel_values"])
+        if pixel_values.shape[0] != sum(patches):
+            raise ValueError(f"pixel_values has {pixel_values.shape[0]} rows, grids need {sum(patches)}")
+        merge = self.vision.config.args.merge_unit
+        num_image_tokens = int(is_image.sum())
+        if num_image_tokens != sum(p // merge for p in patches):
+            raise ValueError(f"{num_image_tokens} image tokens for {sum(patches) // merge} image features")
+        return dict(
+            ids=ids,
+            types=types,
+            is_image=is_image,
+            grids=grids,
+            patches=patches,
+            pixel_values=pixel_values,
+            num_image_tokens=num_image_tokens,
+        )
+
+    def prepare_batch(
+        self, encoded_list: list[dict], bucket: int | None = None
+    ) -> tuple[ttnn.Tensor, list[int], ImageInputs | None]:
+        """``prepare_images`` for B requests in one forward: text rows (``{"input_ids": ...}``) and image
+        rows (processor outputs) may be mixed. Returns ``(tokens [B, bucket], last_indices, images)``;
+        ``images`` is None when no row has images (the text-only path).
+
+        Image rows get their own 3D-mRoPE tables (text rows use the shared 1D table) and their image
+        features are spliced into their own rows through one batch-wide splice index.
+        """
+        rows = [self._parse_encoded(e) for e in encoded_list]
+        tokens, last_indices = self.upload_batch([r["ids"].tolist() for r in rows], bucket)
+        if all(r["grids"] is None for r in rows):
+            return tokens, last_indices, None
+        bucket, batch = tokens.shape[-1], tokens.shape[0]
+        a, merge_size = self.config.args, self.vision.config.args.spatial_merge_size
+        index = torch.arange(batch * bucket, dtype=torch.int32)
+        vision, rotaries, position_ids, offset = [], [], [], batch * bucket
+        for b, r in enumerate(rows):
+            if r["grids"] is None:
+                rotaries.append(self.rotary)
+                position_ids.append(None)
+                continue
+            pos = get_rope_index(r["ids"], r["types"], r["grids"], spatial_merge_size=merge_size)
+            rotaries.append(
+                PplxRequestRotary.from_position_ids(
+                    pos,
+                    bucket,
+                    rotary_dim=a.rotary_dim,
+                    theta=a.rope_theta,
+                    head_dim=a.head_dim,
+                    mesh_device=self.mesh_device,
+                )
+            )
+            position_ids.append(pos)
+            vision += [
+                self.vision.prepare_inputs(pv, grid)
+                for pv, grid in zip(torch.split(r["pixel_values"], r["patches"], dim=0), r["grids"])
+            ]
+            n = r["num_image_tokens"]
+            index[b * bucket : b * bucket + r["ids"].shape[0]][r["is_image"]] = offset + torch.arange(
+                n, dtype=torch.int32
+            )
+            offset += n
+        splice_index = ttnn.from_torch(
+            index.reshape(1, batch * bucket),
+            device=self.mesh_device,
+            dtype=ttnn.uint32,
+            layout=ttnn.ROW_MAJOR_LAYOUT,
+            memory_config=ttnn.DRAM_MEMORY_CONFIG,
+        )
+        images = ImageInputs(
+            vision=vision,
+            splice_index=splice_index,
+            rotary=PplxBatchRotary(rotaries),
+            position_ids=position_ids,
+            num_image_tokens=offset - batch * bucket,
+        )
+        return tokens, last_indices, images
+
     def prepare_images(self, encoded: dict, bucket: int | None = None) -> tuple[ttnn.Tensor, int, ImageInputs | None]:
         """Per-request input prep for a processor output (``input_ids``, ``mm_token_type_ids``,
         ``pixel_values``, ``image_grid_thw``; batch 1, unpadded) and its upload.
@@ -532,15 +681,15 @@ class PplxDeciderModel(LightweightModule):
         """Text embeddings with the image-token rows replaced by the image features, on device.
 
         ``table = [embedding(tokens) ; features...]`` (ROW_MAJOR, bucket + N rows) and one
-        ``ttnn.embedding`` gather over ``splice_index`` -> [1, bucket, 5120] BF16 TILE. Both steps
+        ``ttnn.embedding`` gather over ``splice_index`` -> [B, bucket, 5120] BF16 TILE. Both steps
         copy rows only, so text rows equal the text-only embedding bit for bit and image rows equal
         the vision features. Frees ``features``.
         """
         self.embedding.load_device_weights()
         weight = self.embedding.weight
-        hidden, bucket = weight.shape[-1], tokens.shape[-1]
+        hidden, bucket, batch = weight.shape[-1], tokens.shape[-1], tokens.shape[0]
         text = ttnn.embedding(tokens, weight, layout=ttnn.ROW_MAJOR_LAYOUT, memory_config=ttnn.DRAM_MEMORY_CONFIG)
-        parts = [ttnn.reshape(text, [bucket, hidden])]
+        parts = [ttnn.reshape(text, [batch * bucket, hidden])]
         for f in features:
             rows = ttnn.to_layout(f, ttnn.ROW_MAJOR_LAYOUT, memory_config=ttnn.DRAM_MEMORY_CONFIG)
             ttnn.deallocate(f)
@@ -550,7 +699,7 @@ class PplxDeciderModel(LightweightModule):
             ttnn.deallocate(p)
         x = ttnn.embedding(images.splice_index, table, layout=ttnn.TILE_LAYOUT, memory_config=ttnn.DRAM_MEMORY_CONFIG)
         ttnn.deallocate(table)
-        return ttnn.reshape(x, [1, bucket, hidden])
+        return ttnn.reshape(x, [batch, bucket, hidden])
 
     def embed_with_images(self, tokens: ttnn.Tensor, images: ImageInputs) -> ttnn.Tensor:
         """Vision tower -> splice: the ``inputs_embeds`` of an image request [1, bucket, 5120] BF16 TILE."""
@@ -578,7 +727,14 @@ class PplxDeciderModel(LightweightModule):
         embeddings and use the request's 3D-mRoPE tables. ``embeds``: an already spliced
         ``embed_with_images`` output to start from (consumed; for per-phase timing and tests).
         Without either, this is the text-only path.
+
+        A batch: ``tokens`` [B, bucket] (``upload_batch`` / ``prepare_batch``), ``last_index`` and ``count``
+        lists of B. Every op runs on the B rows at once (matmuls and norms on B * bucket rows) except
+        the per-row DeltaNet conv / scan / gated norm, the per-row rope of image rows and the per-row
+        last-token gather. probs / logits are then [1, B, 256], row b = request b.
         """
+        if isinstance(last_index, (list, tuple)) and collect_layer_hidden:
+            raise ValueError("collect_layer_hidden is a batch-1 debugging aid")
         hidden_size = self.config.args.hidden_size
         if images is None:
             x = self.embedding(tokens)
@@ -621,6 +777,21 @@ class PplxDeciderModel(LightweightModule):
         if images is not None:
             images.deallocate()
         return out
+
+    def decide_batch(self, encoded_list: list[dict], counts: list[int], *, bucket: int | None = None) -> list[list]:
+        """One forward over B requests (text ``{"input_ids": ...}`` and/or processor outputs with images):
+        input prep -> one upload per input tensor -> device forward -> one readback of [B, 256] probs.
+        Returns B probability lists (``counts[b]`` long), in input order."""
+        if len(encoded_list) != len(counts):
+            raise ValueError(f"{len(encoded_list)} requests, {len(counts)} option counts")
+        tokens, last_indices, images = self.prepare_batch(encoded_list, bucket)
+        probs, logits, _ = self(tokens, last_indices, list(counts), images=images)
+        host = ttnn.to_torch(probs).float().reshape(len(counts), -1)
+        for t in (tokens, probs, logits):
+            ttnn.deallocate(t)
+        if images is not None:
+            images.deallocate()
+        return [host[b, :n].tolist() for b, n in enumerate(counts)]
 
 
 def _loadable(module) -> list:

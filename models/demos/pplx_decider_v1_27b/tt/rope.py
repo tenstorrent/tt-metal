@@ -223,3 +223,25 @@ class PplxRequestRotary(LightweightModule):
     def deallocate(self) -> None:
         ttnn.deallocate(self.cos_table)
         ttnn.deallocate(self.sin_table)
+
+
+class PplxBatchRotary(LightweightModule):
+    """Per-row rotary of a batch holding image requests: row b uses ``rows[b]`` (the shared 1D
+    ``PplxRotary`` for a text row, its own ``PplxRequestRotary`` for an image row).
+
+    Returns lists of B cos / B sin slices; the attention applies them one row at a time.
+    """
+
+    def __init__(self, rows: list):
+        super().__init__()
+        self.rows = list(rows)
+
+    def forward(self, start: int, length: int) -> tuple[list, list]:
+        pairs = [row(start, length) for row in self.rows]
+        return [c for c, _ in pairs], [s for _, s in pairs]
+
+    def deallocate(self) -> None:
+        """Frees the per-request tables only (the shared 1D tables belong to the model)."""
+        for row in self.rows:
+            if isinstance(row, PplxRequestRotary):
+                row.deallocate()

@@ -22,6 +22,13 @@ separately. Usage::
 
     python -m models.demos.pplx_decider_v1_27b.benchmark.run_benchmark \
         --subsets $STAGE11/subsets --out $STAGE11/run
+
+``--batch-size N`` (N > 1) runs phases 2 and 3 through ``TTDecider.predict_batch`` with
+``max_batch_size=N``: all examples of a pass in one call, grouped by bucket and split into batches of
+up to N (``TTDecider.plan_batches``). Prompts over 8192 tokens are recorded as rejected before the call.
+Per-request latency is then the latency of the request's batch. ``--compare PREDICTIONS.jsonl`` (an
+earlier ``predictions_accuracy.jsonl``) reports every example whose choice changed and the largest
+probability difference.
 """
 
 from __future__ import annotations
@@ -36,6 +43,7 @@ from pathlib import Path
 import ttnn
 from models.demos.pplx_decider_v1_27b.benchmark.datasets import SEED, load_subsets
 from models.demos.pplx_decider_v1_27b.demo.decider import TTDecider
+from models.demos.pplx_decider_v1_27b.tt.model import batch_cap
 from models.demos.pplx_decider_v1_27b.tt.paths import IMAGE_GOLDEN_DIR, require
 
 IDLE_S = 10.0
@@ -83,6 +91,57 @@ def run_example(decider: TTDecider, ex: dict) -> dict:
     return rec
 
 
+def run_examples_batched(decider: TTDecider, examples: list[dict]) -> list[dict]:
+    """The examples through ``predict_batch`` (one call); records as ``run_example``. ``latency_ms`` is the
+    wall time of the batch that served the example."""
+    from models.demos.pplx_decider_v1_27b.tt.model import bucket_for
+
+    records, served = [], []
+    for ex in examples:
+        rec = {k: ex[k] for k in ("id", "benchmark", "seq_len", "bucket", "count", "label")}
+        try:
+            bucket_for(len(decider.tokenizer.input_ids(decider.row(ex["state"], ex["question"]))))
+        except ValueError as err:  # > 8192 tokens: rejected like the app, never truncated
+            rec.update(rejected=True, error=str(err), correct=False, prediction=None)
+        else:
+            served.append((rec, ex))
+        records.append(rec)
+    rows = [{"state": ex["state"], "question": ex["question"]} for _, ex in served]
+    encoded, counts, batches = decider.plan_batches(rows)
+    for batch in batches:
+        start = time.perf_counter()
+        probs = decider.model.decide_batch([encoded[i] for i in batch], [counts[i] for i in batch])
+        ms = (time.perf_counter() - start) * 1e3
+        for i, p in zip(batch, probs):
+            rec, ex = served[i]
+            answer = decider.tokenizer.autojev.answer(ex["question"], p)
+            rec.update(
+                rejected=False,
+                latency_ms=ms,
+                batch_rows=len(batch),
+                prediction=answer["choice"],
+                probabilities=answer["probabilities"],
+                confidence=answer["confidence"],
+                correct=answer["choice"] == ex["label"],
+            )
+    return records
+
+
+def compare_predictions(reference: Path, records: list[dict]) -> dict:
+    ref = {r["id"]: r for r in map(json.loads, reference.read_text().splitlines())}
+    changed, max_diff = [], 0.0
+    for r in records:
+        if r["rejected"] or ref[r["id"]]["rejected"]:
+            if r["rejected"] != ref[r["id"]]["rejected"]:
+                changed.append({"id": r["id"], "rejected": r["rejected"]})
+            continue
+        a, b = r["probabilities"], ref[r["id"]]["probabilities"]
+        max_diff = max(max_diff, max(abs(a[k] - b[k]) for k in a))
+        if r["prediction"] != ref[r["id"]]["prediction"]:
+            changed.append({"id": r["id"], "prediction": r["prediction"], "reference": ref[r["id"]]["prediction"]})
+    return {"reference": str(reference), "rows": len(records), "changed": changed, "max_abs_prob_diff": max_diff}
+
+
 def write_jsonl(path: Path, rows: list[dict]) -> None:
     path.write_text("".join(json.dumps(r, ensure_ascii=False) + "\n" for r in rows))
 
@@ -93,6 +152,8 @@ def main() -> None:
     parser.add_argument("--out", type=Path, required=True)
     parser.add_argument("--model-path", help="checkpoint directory or HF repo id (default: TTDecider resolution)")
     parser.add_argument("--device-id", type=int, default=0)
+    parser.add_argument("--batch-size", type=int, default=1, help="max_batch_size; > 1 runs passes 2-3 batched")
+    parser.add_argument("--compare", type=Path, help="earlier predictions_accuracy.jsonl to diff choices against")
     args = parser.parse_args()
     args.out.mkdir(parents=True, exist_ok=True)
     examples = load_subsets(args.subsets)
@@ -103,9 +164,13 @@ def main() -> None:
     summary = {"time_start": time.strftime("%Y-%m-%d %H:%M:%S")}
     try:
         t = time.perf_counter()
-        decider = TTDecider.from_pretrained(device, model_path=args.model_path, vision=True)
+        decider = TTDecider.from_pretrained(
+            device, model_path=args.model_path, max_batch_size=args.batch_size, vision=True
+        )
         summary["load_s"] = time.perf_counter() - t
         summary["policy"] = decider.model.config.optimizations.policy.name
+        summary["batch_size"] = args.batch_size
+        batched = args.batch_size > 1
         print(f"STAGE11 loaded in {summary['load_s']:.1f} s, policy {summary['policy']}", flush=True)
 
         # 1. warm-up: every bucket present + every image row
@@ -114,6 +179,14 @@ def main() -> None:
             ex = next(e for e in examples if e["bucket"] == bucket)
             for _ in range(WARMUP):
                 decider.predict(ex["state"], ex["question"])
+            if batched:  # compile the batch shapes too: a full batch and every remainder size of the bucket
+                same = [e for e in examples if e["bucket"] == bucket]
+                sizes = {
+                    min(len(same), batch_cap(bucket, args.batch_size)),
+                    len(same) % batch_cap(bucket, args.batch_size),
+                }
+                for n in sorted(s for s in sizes if s > 1):
+                    decider.predict_batch([{"state": e["state"], "question": e["question"]} for e in same[:n]])
         for r in image_rows.values():
             for _ in range(WARMUP):
                 decider.predict(r["row"]["state"], r["row"]["question"], images=r["row"]["images"])
@@ -122,11 +195,21 @@ def main() -> None:
         # 2. accuracy pass, file order, back to back
         t = time.perf_counter()
         acc = []
-        for i, ex in enumerate(examples):
+        if batched:
+            acc = run_examples_batched(decider, examples)
+        for i, ex in enumerate(examples if not batched else []):
             acc.append(run_example(decider, ex))
             if (i + 1) % 100 == 0:
                 print(f"STAGE11 accuracy {i + 1}/{len(examples)}", flush=True)
         summary["accuracy_wall_s"] = time.perf_counter() - t
+        if args.compare:
+            summary["compare"] = compare_predictions(args.compare, acc)
+            c = summary["compare"]
+            print(
+                f"STAGE11 vs {args.compare}: {len(c['changed'])} changed choices {c['changed']}, "
+                f"max |dp| {c['max_abs_prob_diff']:.2e}",
+                flush=True,
+            )
         write_jsonl(args.out / "predictions_accuracy.jsonl", acc)
         for name in dict.fromkeys(e["benchmark"] for e in acc):
             rows = [r for r in acc if r["benchmark"] == name]
@@ -137,7 +220,10 @@ def main() -> None:
         random.Random(SEED).shuffle(order)
         time.sleep(IDLE_S)
         t = time.perf_counter()
-        thr = [run_example(decider, examples[i]) for i in order]
+        if batched:
+            thr = run_examples_batched(decider, [examples[i] for i in order])
+        else:
+            thr = [run_example(decider, examples[i]) for i in order]
         wall = time.perf_counter() - t
         write_jsonl(args.out / "predictions_throughput.jsonl", thr)
         first = {r["id"]: r for r in acc}

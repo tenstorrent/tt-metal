@@ -29,7 +29,7 @@ from typing import Sequence
 from loguru import logger
 
 from models.demos.pplx_decider_v1_27b.reference.decision_prompts import AppTokenizer
-from models.demos.pplx_decider_v1_27b.tt.model import PplxDeciderModel
+from models.demos.pplx_decider_v1_27b.tt.model import PplxDeciderModel, batch_cap, bucket_for, buckets_up_to
 from models.demos.pplx_decider_v1_27b.tt.paths import resolve_model_path
 
 # The text example of the snapshot inference.py (main()).
@@ -76,6 +76,7 @@ class TTDecider:
         cls,
         mesh_device,
         model_path: Path | str | None = None,
+        max_batch_size: int = 1,
         max_seq_len: int = 8192,
         vision: bool = True,
         *,
@@ -94,9 +95,11 @@ class TTDecider:
         resolve_model_cache_path``): ``$TT_CACHE_PATH``, else next to the weights
         (``<model dir>/tt_weight_cache/<key>``). The first load fills it (27 GB, ~160 s).
 
+        ``max_batch_size``: the most requests ``predict_batch`` runs in one forward, 1..32. Per bucket it
+        is clamped to the measured DRAM cap (``tt/model.py: BATCH_CAPS``). ``predict`` is always batch 1.
+
         ``max_seq_len``: the largest prefill bucket used, one of 128 / 1024 / 2048 / 4096 / 8192.
         Prompts longer than it are rejected (nothing is truncated); smaller buckets are unchanged.
-        Batch is always 1 (one request per forward), so there is no ``max_batch_size``.
 
         ``vision=False`` skips the vision tower (text-only use, ~0.96 GiB less DRAM).
         ``snapshot=`` is a deprecated alias of ``model_path``.
@@ -107,10 +110,20 @@ class TTDecider:
             logger.warning("TTDecider.from_pretrained(snapshot=...) is deprecated; use model_path=")
             model_path = model_path or snapshot
         model_dir, source = resolve_model_path(model_path)
-        logger.info(f"TTDecider: model path {model_dir} (from {source}), max_seq_len {max_seq_len}, vision {vision}")
-        model = PplxDeciderModel.from_snapshot(
-            mesh_device, SnapshotReader(model_dir), vision=vision, max_seq_len=max_seq_len, **model_kwargs
+        logger.info(
+            f"TTDecider: model path {model_dir} (from {source}), max_batch_size {max_batch_size}, "
+            f"max_seq_len {max_seq_len}, vision {vision}"
         )
+        model = PplxDeciderModel.from_snapshot(
+            mesh_device,
+            SnapshotReader(model_dir),
+            vision=vision,
+            max_seq_len=max_seq_len,
+            max_batch_size=max_batch_size,
+            **model_kwargs,
+        )
+        caps = {b: batch_cap(b, max_batch_size) for b in buckets_up_to(max_seq_len)}
+        logger.info(f"TTDecider: rows per forward by bucket {caps}")
         return cls(model, AppTokenizer(model_dir))
 
     def row(self, state: str, question, images: Sequence = ()) -> dict:
@@ -140,3 +153,55 @@ class TTDecider:
     def predict(self, state: str, question, *, images: Sequence = ()):
         """Return a choice, yes/no probability, or score using the saved temperature (``Decider.predict``)."""
         return self.tokenizer.autojev.answer(question, self.predict_probabilities(state, question, images=images))
+
+    # -- batches ----------------------------------------------------------------------------------
+    def plan_batches(self, rows: Sequence[dict]) -> tuple[list[dict], list[int], list[list[int]]]:
+        """Input prep and scheduling of ``predict_batch``, without the device.
+
+        Returns ``(encoded, counts, batches)``: per row its model input (``{"input_ids"}`` for text, the
+        processor output for an image row) and option count, and the batches as lists of row indices.
+        Rows are grouped by prefill bucket (a row runs at its own bucket, so batching pads no row further
+        than batch 1 does), in input order within a bucket, and each bucket's rows are split into
+        batches of ``batch_cap(bucket, max_batch_size)``. Text and image rows of one bucket share batches.
+        Every row is validated first: a row over ``max_seq_len`` tokens rejects the whole call.
+        """
+        import torch
+
+        encoded, counts, by_bucket = [], [], {}
+        for i, row in enumerate(rows):
+            row = self.row(row["state"], row["question"], row.get("images", ()))
+            if "images" in row:
+                enc = self.encode(row)
+            else:
+                enc = {"input_ids": torch.tensor([self.tokenizer.input_ids(row)], dtype=torch.int64)}
+            length = int(torch.as_tensor(enc["input_ids"]).numel())
+            bucket = bucket_for(length, self.model.config.max_seq_len)
+            encoded.append(enc)
+            counts.append(self.tokenizer.count(row))
+            by_bucket.setdefault(bucket, []).append(i)
+        batches = []
+        for bucket in sorted(by_bucket):
+            cap = batch_cap(bucket, self.model.config.max_batch_size)
+            members = by_bucket[bucket]
+            batches += [members[s : s + cap] for s in range(0, len(members), cap)]
+        return encoded, counts, batches
+
+    def predict_probabilities_batch(self, rows: Sequence[dict]) -> list[list[float]]:
+        """Probabilities per row (``{"state", "question", "images"?}``), in input order. See ``plan_batches``."""
+        encoded, counts, batches = self.plan_batches(rows)
+        out = [None] * len(encoded)
+        for batch in batches:
+            probs = self.model.decide_batch([encoded[i] for i in batch], [counts[i] for i in batch])
+            for i, p in zip(batch, probs):
+                out[i] = p
+        return out
+
+    def predict_batch(self, rows: Sequence[dict]) -> list:
+        """``predict`` for many rows: one answer per row, in input order.
+
+        ``rows``: dicts with ``state``, ``question`` and optional ``images`` (as ``predict``). Up to
+        ``max_batch_size`` rows of one prefill bucket share a forward (``plan_batches``); each row reads its
+        own last real token and applies its own option count and mask, with the checkpoint's temperature.
+        """
+        probs = self.predict_probabilities_batch(rows)
+        return [self.tokenizer.autojev.answer(r["question"], p) for r, p in zip(rows, probs)]

@@ -9,7 +9,7 @@ from dataclasses import dataclass, replace
 import ttnn
 from models.common.lightweightmodule import LightweightModule
 from models.common.modules.lazy_weight import LazyWeight
-from models.demos.pplx_decider_v1_27b.tt.common import resolve
+from models.demos.pplx_decider_v1_27b.tt.common import concat_owned, resolve
 from models.demos.pplx_decider_v1_27b.tt.optimizations import NormOptimizations
 
 
@@ -37,19 +37,22 @@ class PplxRMSNorm(LightweightModule):
         self.norm_opts = optimizations
         self._sharded_cache = {}
 
-    def _sharded_configs(self, x: ttnn.Tensor):
-        """(block-sharded L1 memory config, sharded program config) for short inputs, else None."""
+    def _sharded_configs(self, x: ttnn.Tensor, row_blocks: int = 1):
+        """(block-sharded L1 memory config, sharded program config) for short inputs, else None.
+
+        ``row_blocks`` > 1: x holds that many requests of equal length, one per core row (grid
+        ``sharded_grid_x`` x ``row_blocks``), so every core gets the block of a batch-1 request."""
         opts = getattr(self, "norm_opts", None)
         if opts is None or not opts.sharded_max_rows or len(x.shape) != 3 or x.shape[0] != 1:
             return None
-        rows, width = x.shape[-2], x.shape[-1]
+        rows, width = x.shape[-2] // row_blocks, x.shape[-1]
         m_tiles, w_tiles = x.padded_shape[-2] // 32, x.padded_shape[-1] // 32
         if rows > opts.sharded_max_rows or width != x.padded_shape[-1] or w_tiles % opts.sharded_grid_x:
             return None
-        key = (m_tiles, w_tiles, opts.sharded_grid_x, opts.sharded_grid_y)
+        key = (m_tiles, w_tiles, opts.sharded_grid_x, opts.sharded_grid_y, row_blocks)
         if key not in self._sharded_cache:
             gx = opts.sharded_grid_x
-            gy = max(d for d in range(1, opts.sharded_grid_y + 1) if m_tiles % d == 0)
+            gy = row_blocks if row_blocks > 1 else max(d for d in range(1, opts.sharded_grid_y + 1) if m_tiles % d == 0)
             block_h, block_w = m_tiles // gy, w_tiles // gx
             memcfg = ttnn.create_sharded_memory_config(
                 shape=(block_h * 32, block_w * 32),
@@ -84,7 +87,35 @@ class PplxRMSNorm(LightweightModule):
 
     def forward(self, x: ttnn.Tensor) -> ttnn.Tensor:
         self.load_device_weights()
-        sharded = self._sharded_configs(x)
+        if len(x.shape) == 3 and x.shape[0] > 1:
+            return self._forward_batch(x)
+        return self._forward_one(x, self._sharded_configs(x))
+
+    def _forward_batch(self, x: ttnn.Tensor) -> ttnn.Tensor:
+        """A batch [B, S, D]. The norm is row-wise. Long rows: one interleaved norm on the [1, B*S, D] view
+        (as batch 1). Short rows (batch 1 runs the block-sharded norm): groups of up to the grid height of
+        requests, one request per core row, so each core runs batch 1's block."""
+        b, s, d = x.shape
+        flat = ttnn.reshape(x, [1, b * s, d])
+        opts = getattr(self, "norm_opts", None)
+        short = opts is not None and opts.sharded_max_rows and s <= opts.sharded_max_rows
+        if not short:
+            out = self._forward_one(flat, None)
+            return ttnn.reshape(out, [b, s, out.shape[-1]])
+        group = max(1, min(b, self.config.mesh_device.compute_with_storage_grid_size().y))
+        outs = []
+        for start in range(0, b, group):
+            g = min(group, b - start)
+            part = flat if g == b else ttnn.slice(flat, [0, start * s, 0], [1, (start + g) * s, d])
+            out = self._forward_one(
+                part, self._sharded_configs(part, row_blocks=g) if g > 1 else self._sharded_configs(part)
+            )
+            if part is not flat:
+                ttnn.deallocate(part)
+            outs.append(ttnn.reshape(out, [g, s, out.shape[-1]]))
+        return concat_owned(outs, dim=0)
+
+    def _forward_one(self, x: ttnn.Tensor, sharded) -> ttnn.Tensor:
         if sharded is not None:
             memcfg, program_config = sharded
             x_l1 = ttnn.to_memory_config(x, memcfg)

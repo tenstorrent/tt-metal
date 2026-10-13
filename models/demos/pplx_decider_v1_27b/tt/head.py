@@ -23,7 +23,7 @@ from dataclasses import dataclass, replace
 import ttnn
 from models.common.lightweightmodule import LightweightModule
 from models.common.modules.lazy_weight import LazyWeight
-from models.demos.pplx_decider_v1_27b.tt.common import prefill_linear, resolve
+from models.demos.pplx_decider_v1_27b.tt.common import concat_owned, prefill_linear, resolve
 from models.demos.pplx_decider_v1_27b.tt.optimizations import LinearOptimizations, NormOptimizations
 
 NUM_OPTIONS = 255
@@ -88,10 +88,19 @@ class PplxDecisionHead(LightweightModule):
         hidden [1, 1, 5120] (for tests); otherwise it is freed and None is returned.
         """
         self.load_device_weights()
-        if not 1 <= count <= NUM_OPTIONS:
-            raise ValueError(f"Option count {count} outside 1..{NUM_OPTIONS}")
-        if not 0 <= last_index < hidden.shape[1]:
-            raise ValueError(f"last_index {last_index} outside the {hidden.shape[1]}-token input")
+        batched = isinstance(last_index, (list, tuple))
+        last_indices = list(last_index) if batched else [last_index]
+        counts = list(count) if isinstance(count, (list, tuple)) else [count] * len(last_indices)
+        if len(counts) != len(last_indices) or len(last_indices) != hidden.shape[0]:
+            raise ValueError(f"{len(last_indices)} last indices / {len(counts)} counts for {hidden.shape[0]} rows")
+        for n in counts:
+            if not 1 <= n <= NUM_OPTIONS:
+                raise ValueError(f"Option count {n} outside 1..{NUM_OPTIONS}")
+        for i in last_indices:
+            if not 0 <= i < hidden.shape[1]:
+                raise ValueError(f"last_index {i} outside the {hidden.shape[1]}-token input")
+        if batched:
+            return self._forward_rows(hidden, last_indices, counts, return_hidden)
         c = self.config
         last = ttnn.slice(hidden, [0, last_index, 0], [1, last_index + 1, hidden.shape[-1]])
         normed = ttnn.rms_norm(
@@ -111,6 +120,42 @@ class PplxDecisionHead(LightweightModule):
         ttnn.deallocate(masked)
         # Softmax composed from fp32 eltwise ops: ttnn.softmax on this fp32 [1, 1, 256] row measured
         # 2e-3 relative error (probs summed to 0.9989); max/exp/sum/divide measured 4e-7.
+        shifted = ttnn.subtract(scaled, ttnn.max(scaled, dim=-1, keepdim=True))
+        ttnn.deallocate(scaled)
+        exp = ttnn.exp(shifted)
+        ttnn.deallocate(shifted)
+        total = ttnn.sum(exp, dim=-1, keepdim=True, compute_kernel_config=self.softmax_compute_cfg)
+        probs = ttnn.divide(exp, total)
+        ttnn.deallocate(exp)
+        ttnn.deallocate(total)
+        return probs, logits, normed
+
+    def _forward_rows(self, hidden: ttnn.Tensor, last_indices: list[int], counts: list[int], return_hidden: bool):
+        """Batch head. hidden [B, S, 5120]; row b reads its own last real token ``last_indices[b]`` and masks
+        from its own option count ``counts[b]``. -> probs, logits [1, B, 256] fp32 (row b = request b) and
+        the final-normed rows [1, B, 5120] or None. Same op sequence as the batch-1 head, on B rows: the
+        final norm, the readout, the scale and the softmax are row-wise."""
+        c = self.config
+        width = hidden.shape[-1]
+        rows = [ttnn.slice(hidden, [b, i, 0], [b + 1, i + 1, width]) for b, i in enumerate(last_indices)]
+        last = concat_owned(rows, dim=1)  # [1, B, 5120]
+        normed = ttnn.rms_norm(
+            last,
+            weight=self.norm_weight,
+            epsilon=c.eps,
+            compute_kernel_config=c.norm.compute_kernel_cfg,
+            memory_config=ttnn.DRAM_MEMORY_CONFIG,
+        )
+        ttnn.deallocate(last)
+        logits = ttnn.typecast(prefill_linear(normed, self.readout_weight, "readout", c.linear), ttnn.float32)
+        if not return_hidden:
+            ttnn.deallocate(normed)
+            normed = None
+        mask = concat_owned([ttnn.ge(self.option_index, float(n)) for n in counts], dim=1)  # [1, B, 256]
+        masked = ttnn.where(mask, MASK_VALUE, logits)
+        ttnn.deallocate(mask)
+        scaled = ttnn.multiply(masked, 1.0 / c.temperature)
+        ttnn.deallocate(masked)
         shifted = ttnn.subtract(scaled, ttnn.max(scaled, dim=-1, keepdim=True))
         ttnn.deallocate(scaled)
         exp = ttnn.exp(shifted)
