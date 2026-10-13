@@ -128,12 +128,11 @@ void kernel_main() {
     constexpr uint32_t source_width_tiles = Cfg::w2_tiles_per_expert_w;
     const uint32_t output_width_tiles_core = w2_shard_tiles_lut[ring_core_id];
     const uint32_t width_tile_base = w2_offset_lut[ring_core_id];
-    // Combine columns [combine_col_begin, combine_col_end) overlapped by this core's w2 width slice.
-    // The ring size need not be a multiple of width_shard_dim, so a slice may straddle columns.
+    // Combine columns this core's w2 width slice feeds; empty when the slice is (moe_ring_common.h).
     // Must match the per-combine-core contributor lists built by the program factory.
-    // output_width_tiles_core >= 1 (validated hidden_tiles >= ring size).
-    const uint32_t combine_col_begin = width_tile_base / combine_shard_width_tiles;
-    const uint32_t combine_col_end = (width_tile_base + output_width_tiles_core - 1) / combine_shard_width_tiles + 1;
+    const uint32_t combine_col_begin = moe_ring::w2_combine_col_begin(width_tile_base, combine_shard_width_tiles);
+    const uint32_t combine_col_end =
+        moe_ring::w2_combine_col_end(width_tile_base, output_width_tiles_core, combine_shard_width_tiles);
     const uint32_t num_combine_cols = combine_col_end - combine_col_begin;
     Semaphore<> combine_sem(matmul_combine_sync_semaphore_id);
     // Device 2.0 migration: legacy primitive retained: raw L1 semaphore address used as the

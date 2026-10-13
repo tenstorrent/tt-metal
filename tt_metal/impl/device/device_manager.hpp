@@ -57,8 +57,6 @@ public:
     // re-enable fast dispatch after it was disabled at runtime.
     void initialize_dispatch_firmware(bool force_recreate_topology);
     void reset_dispatch_topology();
-    // API needed due to Issue #19729
-    std::size_t get_max_num_eth_cores_across_all_devices() const;
     const std::unordered_set<CoreCoord>& get_virtual_dispatch_cores(ChipId dev_id) const;
     const std::unordered_set<CoreCoord>& get_virtual_dispatch_routing_cores(ChipId dev_id) const;
 
