@@ -20,6 +20,7 @@ import tempfile
 from pathlib import Path
 
 from tests.perf import compare as cmp
+from tests.perf import golden as golden_io
 from tests.perf import report, session, update
 from tests.perf.golden import Environment, Golden
 from tests.perf.registry import load as load_registry
@@ -43,17 +44,28 @@ def cmd_update(args) -> int:
     if not records:
         print(f"run {args.from_run} has no perf records" + (f" for suite {args.suite}" if args.suite else ""))
         return 1
-    status = 0
+    # All records are applied to in-memory goldens first, so one refusal leaves every golden file untouched.
+    goldens: dict[str, Golden] = {}
+    refused_any = False
     for record in records:
         suite = suites[record.suite]
-        golden, comparison = session.evaluate(record, suite)
+        golden, comparison = session.evaluate(record, suite, goldens.get(suite.name))
+        goldens[suite.name] = golden
         session.publish(record, suite, golden, comparison, show_all=False)
         try:
-            session.update_golden(record, suite, golden, comparison, force=args.force, source=f"CI run {args.from_run}")
+            session.update_golden(
+                record, suite, golden, comparison, force=args.force, source=f"CI run {args.from_run}", save=False
+            )
         except update.UpdateRefused as refused:
-            print(f"{record.suite}/{record.environment}: golden not modified: {refused}. Pass --force to accept.")
-            status = 1
-    return status
+            print(f"{record.suite}/{record.environment}: refused: {refused}")
+            refused_any = True
+    if refused_any:
+        print("No golden files were written. Fix the refusals above, or pass --force to accept them.")
+        return 1
+    for name, golden in goldens.items():
+        golden_io.save(golden, suites[name].golden)
+    print(f"Saved {len(goldens)} golden files.")
+    return 0
 
 
 def cmd_report(args) -> int:

@@ -12,7 +12,8 @@ import pytest
 
 from tests.perf import compare as cmp
 from tests.perf import golden as golden_io
-from tests.perf import registry, runner, session, update
+from tests.perf import contract, registry, runner, session, update
+from tests.perf import __main__ as cli
 from tests.perf.registry import Suite
 from tests.perf.unit.expect import expect_error  # noqa: F401
 
@@ -193,3 +194,64 @@ def test_suites_must_run_at_least_one_repetition(expect_error, tmp_path, field):
     )
     with expect_error(registry.RegistryError, "at least one repetition"):
         registry.load(path)
+
+
+def test_stale_output_from_an_earlier_run_is_not_reused(setup, expect_error, tmp_path):
+    make, plan = setup
+    suite = make([{"BM/a/k:1/manual_time": 1e-6}])
+    session.execute(suite, ENV)
+    # The benchmark now exits cleanly without writing output; the old run.json must not be picked up.
+    (tmp_path / "bench").write_text("#!/bin/sh\nexit 0\n")
+    with expect_error(runner.RunError, "wrote no output"):
+        session.execute(suite, ENV)
+
+
+def test_malformed_env_template_is_a_clear_error(expect_error, tmp_path, monkeypatch):
+    monkeypatch.setattr(session, "OUTPUT_ROOT", tmp_path / "generated")
+    monkeypatch.setattr(runner, "BINARY_ROOT", tmp_path)
+    binary = tmp_path / "bench"
+    binary.write_text("#!/bin/sh\nexit 0\n")
+    binary.chmod(0o755)
+    suite = Suite(
+        name="c",
+        binary=binary,
+        golden=tmp_path / "g.json",
+        policy=cmp.Policy(5, 5),
+        kind="contract",
+        env={"X": "{env[A][0]"},
+    )
+    with expect_error(runner.RunError, "malformed template"):
+        session.execute(suite, ENV)
+
+
+def test_a_declared_metric_no_case_reports_is_rejected(setup, expect_error):
+    make, plan = setup
+    suite = make([{"BM/a/k:1/manual_time": 1e-6}])
+    plan.write_text(
+        json.dumps({"metric": METRIC, "runs": [{"BM/a/k:1/manual_time": 1e-6}], "unreported_metric": "Other"})
+    )
+    with expect_error(contract.ContractError, "reported by no case"):
+        session.execute(suite, ENV)
+
+
+def test_update_from_run_writes_nothing_when_any_record_is_refused(monkeypatch, tmp_path):
+    monkeypatch.delenv("CI", raising=False)
+    monkeypatch.delenv("GITHUB_ACTIONS", raising=False)
+    metrics = {"t": session.MetricSpec("s", "lower", "min")}
+    suites = {}
+    records = []
+    for name, value in (("ok", 0.5), ("bad", 2.0)):
+        golden_path = tmp_path / f"{name}.json"
+        golden = golden_io.Golden(name)
+        golden.environments[ENV] = golden_io.Environment(metrics=metrics, repetitions=2, cases={"a": {"t": 1.0}})
+        golden_io.save(golden, golden_path)
+        suites[name] = Suite(name=name, binary=tmp_path / "b", golden=golden_path, policy=cmp.Policy(5, 5))
+        record = session.Record(name, ENV, "abc", metrics, {"a": {"t": value}}, repetitions=2)
+        record.save(tmp_path / f"{name}_measurements.json")
+        records.append(tmp_path / f"{name}_measurements.json")
+    before = {name: suites[name].golden.read_text() for name in suites}
+    monkeypatch.setattr(cli, "load_registry", lambda: suites)
+    monkeypatch.setattr(cli, "_download_run", lambda run_id, dest: records)
+    monkeypatch.setattr(session, "OUTPUT_ROOT", tmp_path / "generated")
+    assert cli.main(["update", "--from-run", "1"]) == 1
+    assert {name: suites[name].golden.read_text() for name in suites} == before

@@ -88,6 +88,9 @@ def execute(suite: Suite, environment: str, case_filter: str | None = None) -> R
     # Without this, a filter that matches nothing compares an empty run against an empty selection and passes.
     if not raw.samples and not raw.aggregated and not raw.errors:
         raise runner.RunError(f"suite {suite.name} ran no cases; check its filter and repetitions")
+    # Only an unfiltered run without errored cases is expected to cover every declared metric.
+    if case_filter is None and not raw.errors and contract.unreported_metrics(raw):
+        raise contract.ContractError(f"declared metrics {contract.unreported_metrics(raw)} are reported by no case")
     record = Record(
         suite=suite.name,
         environment=environment,
@@ -123,8 +126,11 @@ def execute(suite: Suite, environment: str, case_filter: str | None = None) -> R
     return record
 
 
-def evaluate(record: Record, suite: Suite) -> tuple[golden_io.Golden, cmp.Comparison]:
-    golden = golden_io.load(suite.golden, suite.name)
+def evaluate(
+    record: Record, suite: Suite, golden: golden_io.Golden | None = None
+) -> tuple[golden_io.Golden, cmp.Comparison]:
+    """Compares a record with the suite's golden, loaded from disk unless an in-memory one is passed."""
+    golden = golden or golden_io.load(suite.golden, suite.name)
     comparison = cmp.compare(
         record.cases,
         golden,
@@ -185,8 +191,16 @@ def publish(record: Record, suite: Suite, golden: golden_io.Golden, comparison: 
 
 
 def update_golden(
-    record: Record, suite: Suite, golden: golden_io.Golden, comparison: cmp.Comparison, *, force: bool, source: str
+    record: Record,
+    suite: Suite,
+    golden: golden_io.Golden,
+    comparison: cmp.Comparison,
+    *,
+    force: bool,
+    source: str,
+    save: bool = True,
 ) -> update.UpdatePlan:
+    """Applies an update to ``golden`` and writes it to disk unless the caller saves a batch itself."""
     plan = update.apply(
         golden,
         record.environment,
@@ -202,13 +216,15 @@ def update_golden(
     if plan.empty():
         print(f"{suite.name}/{record.environment}: golden already matches; nothing to update")
         return plan
-    golden_io.save(golden, suite.golden)
+    if save:
+        golden_io.save(golden, suite.golden)
     if plan.replaced_environment:
         print(f"{suite.name}/{record.environment}: recorded {len(record.cases)} cases afresh")
     else:
         golden_path = suite.golden.relative_to(REPO_ROOT) if REPO_ROOT in suite.golden.parents else suite.golden
+        verb = "wrote" if save else "will write"
         print(
-            f"{suite.name}/{record.environment}: wrote {len(plan.written)} values, "
+            f"{suite.name}/{record.environment}: {verb} {len(plan.written)} values, "
             f"removed {len(plan.removed)}; review `git diff {golden_path}`"
         )
     return plan
