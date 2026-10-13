@@ -1,0 +1,49 @@
+name: "LLK perf nightly health"
+
+on:
+  schedule:
+    - cron: '0 9 * * *'
+  workflow_dispatch:
+    inputs:
+      date:
+        description: "Day to check, YYYY-MM-DD (blank = today, UTC)"
+        required: false
+        type: string
+
+permissions:
+  actions: read
+  contents: read
+
+jobs:
+  health:
+    name: "Check the nightlies and message the owner"
+    runs-on: ubuntu-slim
+    steps:
+      - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
+        timeout-minutes: 20
+        with:
+          fetch-depth: 1
+          sparse-checkout: |
+            tt_metal/tt-llk/perf
+            tests/pipeline_reorg
+      - uses: actions/setup-python@a309ff8b426b58ec0e2a45f0f869d46889d02405
+        with:
+          python-version: '3.10'
+      - run: pip install pyyaml
+      - name: Check and send
+        env:
+          GH_TOKEN: ${{ github.token }}
+          SLACK_BOT_TOKEN: ${{ secrets.LLK_SLACK_REPORTING_BOT_TOKEN }}
+          OWNER_SLACK_ID: U0BCPNHUF43
+          DAY: ${{ inputs.date }}
+        run: |
+          python3 tt_metal/tt-llk/perf/nightly_health.py \
+            --repo "$GITHUB_REPOSITORY" --channel "$OWNER_SLACK_ID" ${DAY:+--date "$DAY"}
+          RESPONSE=$(curl -sS -X POST https://slack.com/api/chat.postMessage \
+            -H "Authorization: Bearer ${SLACK_BOT_TOKEN}" \
+            -H "Content-type: application/json; charset=utf-8" \
+            --data @health_payload.json)
+          case "$RESPONSE" in
+            *'"ok":true'*) echo "Sent the health message." ;;
+            *) echo "::error::Slack rejected the health message: ${RESPONSE}"; exit 1 ;;
+          esac
