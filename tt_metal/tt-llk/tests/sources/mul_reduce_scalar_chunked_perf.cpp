@@ -122,7 +122,7 @@ void run_kernel(RUNTIME_PARAMETERS params)
 static constexpr float REDUCE_SCALER = 1.0f;
 static constexpr std::uint32_t DST_INDEX = 0;
 
-inline void row_math(const std::uint32_t tile_cnt, const std::uint32_t batch_size, const ckernel::TensorShape& tensor_shape)
+__attribute__((always_inline)) inline void row_math(const std::uint32_t tile_cnt, const std::uint32_t batch_size, const ckernel::TensorShape& tensor_shape)
 {
     constexpr std::uint32_t max_dst_tiles = get_dest_max_tiles<DST_SYNC, is_fp32_dest_acc_en, DstTileShape::Tile32x32>();
     const std::uint32_t accumulator       = batch_size;

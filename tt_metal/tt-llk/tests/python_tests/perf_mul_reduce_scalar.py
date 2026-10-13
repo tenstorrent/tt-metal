@@ -54,7 +54,10 @@ def test_perf_mul_reduce_scalar(perf_report, variant):
             PerfRunType.MATH_ISOLATE,
             PerfRunType.PACK_ISOLATE,
         ],
-        templates=[MATH_FIDELITY(fidelity), ROW_TILES(row_tiles)],
+        templates=[
+            MATH_FIDELITY(fidelity),
+            ROW_TILES(row_tiles, tile_shape.num_faces_r_dim),
+        ],
         runtimes=[
             TILE_COUNT(num_tiles),
             NUM_FACES_R_DIM(tile_shape.num_faces_r_dim, tile_shape.num_faces_r_dim),

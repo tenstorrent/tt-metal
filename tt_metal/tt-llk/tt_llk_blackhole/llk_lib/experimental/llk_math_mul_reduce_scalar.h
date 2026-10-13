@@ -26,23 +26,18 @@ using namespace ckernel;
 #define MOVD2A_4_ROWS(base_offset, row_offset) \
     TTI_MOVD2A(0, p_mova2d::MATH_HALO_ROWS + (row_offset) * 4, ADDR_MOD_0, p_movd2a::MOV_4_ROWS, (base_offset) + (row_offset) * 4);
 
+#define MOVD2A_8_ROWS(base_offset, row_offset) \
+    TTI_MOVD2A(0, p_mova2d::MATH_HALO_ROWS + (row_offset) * 8, ADDR_MOD_0, p_movd2a::MOV_8_ROWS, (base_offset) + (row_offset) * 8);
+
 #define MOVD2A_16_ROWS(base_offset) \
-    MOVD2A_4_ROWS(base_offset, 0)   \
-    MOVD2A_4_ROWS(base_offset, 1)   \
-    MOVD2A_4_ROWS(base_offset, 2)   \
-    MOVD2A_4_ROWS(base_offset, 3)   \
-    MOVD2A_4_ROWS(base_offset, 4)   \
-    MOVD2A_4_ROWS(base_offset, 5)   \
-    MOVD2A_4_ROWS(base_offset, 6)   \
-    MOVD2A_4_ROWS(base_offset, 7)   \
-    MOVD2A_4_ROWS(base_offset, 8)   \
-    MOVD2A_4_ROWS(base_offset, 9)   \
-    MOVD2A_4_ROWS(base_offset, 10)  \
-    MOVD2A_4_ROWS(base_offset, 11)  \
-    MOVD2A_4_ROWS(base_offset, 12)  \
-    MOVD2A_4_ROWS(base_offset, 13)  \
-    MOVD2A_4_ROWS(base_offset, 14)  \
-    MOVD2A_4_ROWS(base_offset, 15)
+    MOVD2A_8_ROWS(base_offset, 0)   \
+    MOVD2A_8_ROWS(base_offset, 1)   \
+    MOVD2A_8_ROWS(base_offset, 2)   \
+    MOVD2A_8_ROWS(base_offset, 3)   \
+    MOVD2A_8_ROWS(base_offset, 4)   \
+    MOVD2A_8_ROWS(base_offset, 5)   \
+    MOVD2A_8_ROWS(base_offset, 6)   \
+    MOVD2A_8_ROWS(base_offset, 7)
 
 #define MOVD2A_FACE(base_offset, face)         \
     MOVD2A_4_ROWS(base_offset, (face) * 4 + 0) \
@@ -50,16 +45,19 @@ using namespace ckernel;
     MOVD2A_4_ROWS(base_offset, (face) * 4 + 2) \
     MOVD2A_4_ROWS(base_offset, (face) * 4 + 3)
 
+// A whole slot moves in eight-row steps; a one- or two-face tile keeps four-row moves, which read faster there.
 #define MOVD2A_FACES(base_offset, num_faces) \
-    MOVD2A_FACE(base_offset, 0)              \
-    if ((num_faces) > 1)                     \
-    {                                        \
-        MOVD2A_FACE(base_offset, 1)          \
-    }                                        \
     if ((num_faces) > 2)                     \
     {                                        \
-        MOVD2A_FACE(base_offset, 2)          \
-        MOVD2A_FACE(base_offset, 3)          \
+        MOVD2A_16_ROWS(base_offset)          \
+    }                                        \
+    else                                     \
+    {                                        \
+        MOVD2A_FACE(base_offset, 0)          \
+        if ((num_faces) > 1)                 \
+        {                                    \
+            MOVD2A_FACE(base_offset, 1)      \
+        }                                    \
     }
 
 /**
@@ -71,7 +69,7 @@ using namespace ckernel;
  *
  * @tparam math_fidelity: MathFidelity value LoFi, HiFi2, HiFi3, HiFi4
  */
-template <MathFidelity math_fidelity>
+template <MathFidelity math_fidelity, std::uint32_t last_addr_mod = ADDR_MOD_0>
 inline void execute_high_fidelity_gapool()
 {
     if constexpr (math_fidelity >= MathFidelity::HiFi2)
@@ -87,7 +85,7 @@ inline void execute_high_fidelity_gapool()
         TTI_GAPOOL(p_setrwc::CLR_NONE, p_gpool::DIM_16X16, ADDR_MOD_2, p_gpool::INDEX_DIS, 0);
     }
 
-    TTI_GAPOOL(p_setrwc::CLR_NONE, p_gpool::DIM_16X16, ADDR_MOD_0, p_gpool::INDEX_DIS, 0);
+    TTI_GAPOOL(p_setrwc::CLR_NONE, p_gpool::DIM_16X16, last_addr_mod, p_gpool::INDEX_DIS, 0);
 }
 
 /**
@@ -159,13 +157,13 @@ inline void _llk_math_mul_reduce_scalar_move_dest_to_src_([[maybe_unused]] std::
 
 inline void _llk_math_mul_reduce_scalar_move_faces_to_srca_(const std::uint32_t idst, const ckernel::TensorShape tensor_shape)
 {
+    // Later moves find the bank still valid, and MOVD2A itself waits for pending DEST writes.
     if (idst == 0)
     {
         TT_SETC16(DEST_TARGET_REG_CFG_MATH_Offset_ADDR32, get_dest_buffer_base());
         TTI_SETRWC(p_setrwc::CLR_NONE, 0, 0, 0, 0, p_setrwc::SET_D);
+        math::srca_bank_wait();
     }
-
-    math::srca_bank_wait();
 
     const std::uint32_t num_faces = tensor_shape.total_num_faces();
     switch (idst)
@@ -300,8 +298,6 @@ inline void _llk_math_mul_reduce_column_(const std::uint32_t dst_index, const ck
 {
     LLK_ASSERT(validate_tensor_shape_tile_dependent_ops_(tensor_shape), "Invalid tensor shape for tile-dependent op");
 
-    // A 32x16 narrow tile has fewer face-columns than face-rows; mirror generic llk_math_reduce.h.
-    const bool is_narrow_tile         = tensor_shape.num_faces_c_dim < tensor_shape.num_faces_r_dim;
     const std::uint32_t num_row_tiles = tensor_shape.num_faces_r_dim;
 
     // dst[dst_index] may have just been zeroed through the SFPU; GAPOOL accumulates into it, so drain first.
@@ -312,28 +308,20 @@ inline void _llk_math_mul_reduce_column_(const std::uint32_t dst_index, const ck
         TTI_SETRWC(p_setrwc::CLR_NONE, 0, 0, 0, 0, p_setrwc::SET_D);
     }
 
-    for (std::uint32_t row_tile = 0; row_tile < num_row_tiles; row_tile++)
+    // ADDR_MOD_1 steps SrcA to the next face after the last fidelity pass, in face order.
+    const std::uint32_t num_faces = tensor_shape.total_num_faces();
+#pragma GCC unroll 4
+    for (std::uint32_t face = 0; face < num_faces; face++)
     {
-        execute_high_fidelity_gapool<math_fidelity>();
-
-        if ((!is_narrow_tile) && (tensor_shape.total_num_faces() > 1))
-        {
-            TTI_SETRWC(p_setrwc::CLR_NONE, p_setrwc::CR_A, 0, 0, 8, p_setrwc::SET_A);
-            TTI_SETRWC(p_setrwc::CLR_NONE, p_setrwc::CR_A, 0, 0, 8, p_setrwc::SET_A);
-
-            execute_high_fidelity_gapool<math_fidelity>();
-        }
-
-        if (row_tile == 0)
-        {
-            TTI_SETRWC(p_setrwc::CLR_NONE, p_setrwc::CR_A, 0, 0, 8, p_setrwc::SET_A);
-            TTI_SETRWC(p_setrwc::CLR_NONE, p_setrwc::CR_A, 0, 0, 8, p_setrwc::SET_A);
-            TTI_SETRWC(p_setrwc::CLR_NONE, 0, 0, 0, 0, p_setrwc::SET_D);
-        }
-        else
-        {
-            TTI_SETRWC(p_setrwc::CLR_NONE, 0, 0, 0, 0, p_setrwc::SET_AD);
-        }
+        execute_high_fidelity_gapool<math_fidelity, ADDR_MOD_1>();
+    }
+    if (num_row_tiles > 1)
+    {
+        TTI_SETRWC(p_setrwc::CLR_NONE, 0, 0, 0, 0, p_setrwc::SET_AD);
+    }
+    else
+    {
+        TTI_SETRWC(p_setrwc::CLR_NONE, 0, 0, 0, 0, p_setrwc::SET_D);
     }
 }
 
