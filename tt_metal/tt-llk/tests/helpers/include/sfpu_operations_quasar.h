@@ -29,6 +29,7 @@
 #include "llk_sfpu/ckernel_sfpu_cumsum.h"
 #include "llk_sfpu/ckernel_sfpu_digamma.h"
 #include "llk_sfpu/ckernel_sfpu_elu.h"
+#include "llk_sfpu/ckernel_sfpu_ema.h"
 #include "llk_sfpu/ckernel_sfpu_erf.h"
 #include "llk_sfpu/ckernel_sfpu_erfc.h"
 #include "llk_sfpu/ckernel_sfpu_erfinv.h"
@@ -150,6 +151,10 @@ using namespace ckernel::sfpu;
 
 template <auto>
 inline constexpr bool unhandled_op = false;
+
+// Mirrored by EMA_ALPHA_BITS / EMA_BETA_BITS in helpers/sfpu_dispatch_constants.py.
+inline constexpr std::uint32_t kEmaAlphaBits = 0x3F19999Au; // 0.6f
+inline constexpr std::uint32_t kEmaBetaBits  = 0x3ECCCCCDu; // 0.4f
 
 /**
  * @brief Whether OPERATION is one of the six comparison-to-zero modes.
@@ -477,6 +482,12 @@ void init_unary_sfpu_operation_quasar()
     {
         init_rand<APPROX>(static_cast<std::uint32_t>(RAND_SEED));
     }
+    else if constexpr (OPERATION == SfpuType::ema)
+    {
+        // In place: the harness packs the tile it hands the functor (dst + 1 is in test_sfpu_ema_quasar.py).
+        init_ema<0 /*OUT_TILE_DELTA*/>();
+        ema_load_alpha_beta(kEmaAlphaBits, kEmaBetaBits);
+    }
     // rsub_scalar_int32 is stateless: its compute API init is SFPU_UNARY_INIT(unused).
 }
 
@@ -605,7 +616,7 @@ void call_signbit_operation_quasar(std::uint32_t dst_index, DataFormat sfpu_form
  * @param dst_index Destination tile index operated on (already offset by DST_INDEX).
  * @param sfpu_format SFPU math format used by format-dependent ops such as comp, signbit and fill.
  * @param first Whether this tile starts a fresh top-to-bottom accumulation chain; only cumsum
- *        reads it. Defaults to true so each tile is independent.
+ *        and ema read it. Defaults to true so each tile is independent.
  * @param fill_const_value Constant written by fill; other operations ignore it.
  * @note Must be preceded by @ref init_unary_sfpu_operation_quasar for the same op.
  */
@@ -817,6 +828,15 @@ void call_unary_sfpu_operation_quasar(
         // Whole-tile op: the accumulation chain spans all 32 tile rows and crosses the face-pair
         // boundary, so it runs once per tile (RC_custom), not once per face.
         SFPU_UNARY_CALL(DST_SYNC, is_fp32_dest_acc_en, calculate_cumsum, (APPROX, ITERATIONS), dst_index, VectorMode::RC_custom, first);
+    }
+    else if constexpr (OPERATION == SfpuType::ema)
+    {
+        // Once per tile (RC_custom); first = true (the default) starts a new chain every tile.
+        if (first)
+        {
+            ema_clear_previous_output();
+        }
+        SFPU_UNARY_CALL_NO_TEMPLATE_ARGS(DST_SYNC, is_fp32_dest_acc_en, calculate_ema, dst_index, VectorMode::RC_custom);
     }
     else if constexpr (OPERATION == SfpuType::floor)
     {
