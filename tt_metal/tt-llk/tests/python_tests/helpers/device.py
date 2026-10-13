@@ -288,13 +288,13 @@ def host_signal_address(slot: int) -> int | None:
     return 0xFFB40000 + slot * 0x1000 + index * 4
 
 
-# The zones a perf launch counts (counters.h counted_zones), a register the host writes before every launch:
-# STREAM_SCRATCH_1 of overlay stream 0 on Wormhole and Blackhole, TT_CLUSTER_CTRL_SCRATCH_27 on Quasar.
+# The zones a perf launch counts (counters.h counted_zones), a word the host writes before every launch:
+# STREAM_SCRATCH_1 of overlay stream 0 on Wormhole and Blackhole, an L1 word after the counter layout on Quasar.
 _COUNTED_ZONES_SCRATCH_INDEX = {
     ChipArchitecture.WORMHOLE: 249,
     ChipArchitecture.BLACKHOLE: 37,
 }
-_QUASAR_COUNTED_ZONES = 0x030000AC
+_QUASAR_COUNTED_ZONES = 0x16AE28  # counters.h PERF_COUNTERS_LAYOUT_END
 
 
 def counted_zones_address() -> int | None:
