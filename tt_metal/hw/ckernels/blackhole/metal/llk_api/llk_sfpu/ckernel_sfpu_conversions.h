@@ -29,26 +29,26 @@ sfpi_inline sfpi::vInt _float_to_int32_positive_(sfpi::vFloat in) {
     return result;
 }
 
-// Convert float32 to bfloat16 using IEEE 754 Round-to-Nearest-Even (RNE)
-// This implements the "add 0x7fff + LSB" algorithm for correct tie-breaking
-sfpi_inline sfpi::vFloat float32_to_bf16_rne(sfpi::vFloat in) {
-    // Get the float32 bits as unsigned integer
+// The 0x7fff addend of float32_to_bf16_rne_for_store(). Materialise it once, before the row
+// loop: sfpi re-issues an SFPLOADI per row for a literal used inside the loop. Binding it
+// unconditionally is free for an instantiation that never rounds: the compiler drops a pre-loop
+// constant nothing reads (every non-rounding arm of the six call sites is instruction-identical
+// to a build without it, sfpi 7.83.0 and 7.84.0).
+sfpi_inline sfpi::vUInt bf16_rne_bias() { return sfpi::vUInt(0x7fffU); }
+
+// fp32 -> bf16 round-to-nearest-even, 4 SFPU instructions: bits + 0x7fff + lsb, where lsb is
+// the bf16 LSB (fp32 bit 16), so a tie (low half exactly 0x8000) carries only when that LSB is
+// 1 and rounds to even. A carry out of the mantissa bumps the exponent; only the largest finite
+// binade rounds up to +/-inf. Canonical NaN (0x7FC00000, what SFPMAD emits) and a bf16-sourced
+// NaN (zero low half) stay NaN; other fp32 NaN payloads are not preserved (0x7F800001 rounds to
+// +inf, 0x7FFFFFFF wraps to -0); none of the call sites can produce one.
+// The low 16 bits are left unspecified: store the result straight to a 16-bit Float16_b Dest,
+// whose SFPSTORE keeps only the high half. Never read it back or store it as fp32.
+// SFPSTOCHRND is not a substitute: on Blackhole silicon it rounds ties away from zero, maps
+// NaN to +/-inf and flushes denormals to +0.
+sfpi_inline sfpi::vFloat float32_to_bf16_rne_for_store(sfpi::vFloat in, const sfpi::vUInt bias) {
+    constexpr int bf16_lsb_bit = 16;
     sfpi::vUInt bits = sfpi::as<sfpi::vUInt>(in);
-
-    // Extract the LSB of what will become the bf16 mantissa (bit 16 of float32)
-    // This is needed for the tie-breaker: round to even
-    sfpi::vUInt lsb = (bits >> 16) & 1;
-
-    // Add 0x7fff + lsb to implement RNE:
-    // - If lower 16 bits > 0x8000: overflow → rounds up
-    // - If lower 16 bits < 0x8000: no overflow → rounds down
-    // - If lower 16 bits = 0x8000 (tie) and lsb=0: 0x7fff+0=0xffff, no overflow → stays even
-    // - If lower 16 bits = 0x8000 (tie) and lsb=1: 0x7fff+1=0x8000, overflow → rounds up to even
-    bits = bits + 0x7fffU + lsb;
-
-    // Clear the lower 16 bits to get bf16 in upper 16 bits (bf16 format in float32)
-    bits = bits & 0xFFFF0000U;
-
-    // Reinterpret back as float
-    return sfpi::as<sfpi::vFloat>(bits);
+    sfpi::vUInt lsb = (bits << (31 - bf16_lsb_bit)) >> 31;
+    return sfpi::as<sfpi::vFloat>(bits + bias + lsb);
 }
