@@ -167,9 +167,11 @@ class TTTRolloutSampler(RolloutSampler):
             # new top-K LogProbsResult path. _generate_impl still expects a plain
             # torch.Tensor of scalars.
             num_logprobs=[0] * n,
+            log_probs_enable_temperature=[True] * n,
         )
         print(
-            f"[TTTRolloutSampler] log-probs come from the raw logits; top_k={top_k} and top_p={top_p} are not applied"
+            f"[TTTRolloutSampler] log-probs come from logits / temperature (temperature={temperature}); "
+            f"top_k={top_k} and top_p={top_p} are not applied"
         )
         self._sampling_warmed_up = False
 
@@ -223,12 +225,13 @@ class TTTRolloutSampler(RolloutSampler):
         stop_at_eos: bool = True,
     ) -> Tuple[List[List[int]], List[List[float]]]:
         """Same as :meth:`generate_tokens`, but also returns per-token sampled log-probs
-        (log_softmax of the raw logits, without temperature/top_k/top_p) aligned 1:1 with completion tokens.
+        (log_softmax of logits / temperature, unscaled at temperature 0, without top_k/top_p)
+        aligned 1:1 with completion tokens.
 
         Returns:
             ``(completions, logprobs)`` where ``completions[u][t]`` is the ``t``-th
             emitted token for user ``u`` and ``logprobs[u][t]`` is the log-probability
-            of that token under the full-vocab softmax of the raw logits.
+            of that token under the full-vocab softmax of logits / temperature.
         """
         completions, logprobs = self._generate_impl(
             prompts,
