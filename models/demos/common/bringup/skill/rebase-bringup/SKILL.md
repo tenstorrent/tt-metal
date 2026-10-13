@@ -27,13 +27,22 @@ branch, `git fetch` it, and check that no agent session is working in it.
 - Partial clone (`remote.origin.partialclonefilter` set): prefetch the blobs once, or every commit fetches on its own
   (measured 7 vs 280 commits/min):
   `$G rev-list --objects --missing=print <old base>..<branch> | grep '^?' | cut -c2- | $G -c fetch.negotiationAlgorithm=noop fetch origin --no-tags --no-write-fetch-head --recurse-submodules=no --filter=blob:none --stdin`
+- Before rebasing, list the branch's carried changes: commits that edit code outside the bring-up folders
+  (`$G log --format='%h %an %s' <old base>..<branch> -- ttnn tt_metal tests ':!ttnn/ttnn/bringup'`). Each is one of:
+  a cherry-pick of a PR merged in main (the new base may already have it), a cherry-pick of an open upstream PR, or a
+  fix of our own headed for main (the owner accepts these as direct edits). Note each one's PR and whether the new
+  base contains it (`$G log --grep='#<PR>' <new base>`; a patch-id match drops it on its own).
 - `$G rebase --onto <new base> <old base>` in tmux (in a scratch worktree if the main tree is busy building or
-  testing). Conflict policy: a file under `ttnn/cpp/ttnn/operations` takes the new base's side (`checkout --ours`):
-  the branch never keeps edits to original ops (old edits were moved into forks and the originals restored).
+  testing). Conflict policy under `ttnn/cpp/ttnn/operations` (and `tt_metal/`):
+  - in a commit that edited an original op and a later branch commit restored it (the history before the ops were
+    forked): take the new base's side (`checkout --ours`);
+  - in a carried change: if the new base already contains it, take the new base's side; if not, keep the carried
+    change re-applied on the new base's code, and list it for the owner (it changed under us and needs a re-check).
   Any other conflict: stop and show the owner.
 - Verify: branch-owned paths (`git diff --name-only <old base> <old branch>`) equal the old branch except files both
-  sides changed; every other path equals the new base; `ttnn/cpp/ttnn/operations` equals the new base; for the files
-  both sides changed, the branch's diff carried over unchanged.
+  sides changed; every other path equals the new base; under `ttnn/cpp/ttnn/operations` and `tt_metal/` the only
+  differences from the new base are the carried changes the new base does not have; for the files both sides changed,
+  the branch's diff carried over unchanged.
 
 ## 3. Sync the forks to their sources
 For each fork with an upstream source (its CHANGELOG names `Source:`; `Source SHA:` plus any "Upstream sync" entries):
@@ -69,6 +78,7 @@ One commit per concern (fork syncs; API ports; test updates; baselines), formatt
 clean), with the attribution lines.
 
 ## 7. Verify every model of this box
+Also after a pull that brings new carried changes (an LLK or a shared op change reaches every model that runs it).
 Per model (`models/demos/<model>/bringup/spec.yaml` box = this box), with `BRINGUP_SPEC`, `BRINGUP_RESULTS_DIR=<scratch>`
 and `BRINGUP_TASK=<task>` set: each ladder rung (`BRINGUP_RUNG=<rung> scripts/run_safe_pytest.sh --run-all
 models/demos/common/bringup/tests/test_ladder.py`), the contract test (`tests/test_contract.py`), and the fork-call
