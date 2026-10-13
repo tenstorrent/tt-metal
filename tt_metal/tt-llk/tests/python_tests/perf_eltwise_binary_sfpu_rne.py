@@ -19,12 +19,14 @@ from helpers.format_config import DataFormat
 from helpers.golden_generators import TILE_DIMENSIONS
 from helpers.llk_params import (
     ApproximationMode,
+)
+from helpers.llk_params import BroadcastType as LlkBroadcastType
+from helpers.llk_params import (
     DestAccumulation,
     DestSync,
     DstRoundingMode,
     MathOperation,
 )
-from helpers.llk_params import BroadcastType as LlkBroadcastType
 from helpers.param_config import (
     get_num_blocks_and_num_tiles_in_block,
     input_output_formats,
