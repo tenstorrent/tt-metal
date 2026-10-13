@@ -653,7 +653,7 @@ class TtLlamaAttention(LightweightModule):
         ###
         if self.is_olmo and self.qk_norm:
             # OLMo QK-norm: keep fused reduce+heads, apply norm post-split.
-            # llama_rs_create_heads → Q[1,8,32,128], K[1,1,32,128], V[1,1,32,128]
+            # llama_rs_create_heads → Q/K/V [1, 8, 8, 128]; K/V carry one valid (kv) row per user
             (
                 q_heads_pre_rot_1BQD,
                 k_heads_pre_rot_1BKD,
@@ -668,9 +668,19 @@ class TtLlamaAttention(LightweightModule):
             )
             ttnn.deallocate(xqkv_fused_sharded)
 
-            # Save original non-overlapping memory configs (from llama_rs_create_heads)
+            # Save original non-overlapping memory configs (from llama_rs_create_heads).
+            # create_heads sizes K/V like Q ([1, q_batch, 8, head_dim], which Llama/Qwen's fused RoPE
+            # relies on) but only fills row 0 per user (num_kv_heads=1); K is restored to one row per user.
             q_mem_cfg = q_heads_pre_rot_1BQD.memory_config()
-            k_mem_cfg = k_heads_pre_rot_1BKD.memory_config()
+            k_mem_cfg = ttnn.MemoryConfig(
+                ttnn.TensorMemoryLayout.HEIGHT_SHARDED,
+                ttnn.BufferType.L1,
+                ttnn.ShardSpec(
+                    k_heads_pre_rot_1BKD.memory_config().shard_spec.grid,
+                    [1, self.head_dim],
+                    ttnn.ShardOrientation.ROW_MAJOR,
+                ),
+            )
 
             self._capture_attn("q_pre_norm", q_heads_pre_rot_1BQD)
             self._capture_attn("k_pre_norm", k_heads_pre_rot_1BKD)
@@ -684,6 +694,7 @@ class TtLlamaAttention(LightweightModule):
             k_heads_pre_rot_1BKD = ttnn.to_memory_config(
                 k_heads_pre_rot_1BKD, self.model_config["OLMO_K_NORM_L1_MEMCFG"]
             )
+            k_heads_pre_rot_1BKD = ttnn.slice(k_heads_pre_rot_1BKD, [0, 0, 0, 0], [1, q_batch, 1, self.head_dim])
             k_heads_pre_rot_1BKD = ttnn.reshape(k_heads_pre_rot_1BKD, [1, 1, q_batch, self.head_dim])
             if q_batch < 32:
                 k_heads_pre_rot_1BKD = ttnn.pad(
@@ -836,6 +847,8 @@ class TtLlamaAttention(LightweightModule):
             # Move K to DRAM (interleaved) to allow repeat without sharding constraints
             k_interleaved = ttnn.to_memory_config(k_heads_pre_rot_1BKD, ttnn.DRAM_MEMORY_CONFIG)
             ttnn.deallocate(k_heads_pre_rot_1BKD)
+            if k_interleaved.shape[2] != 1:  # create_heads output: only the kv row is valid
+                k_interleaved = ttnn.slice(k_interleaved, [0, 0, 0, 0], [1, k_shape[1], 1, self.head_dim])
 
             # Expand K: [1, 8, 1, 128] -> [1, 8, 8, 128] (8 copies of 1 KV head)
             k_expanded = ttnn.repeat(k_interleaved, ttnn.Shape([1, 1, 8, 1]))
@@ -865,6 +878,8 @@ class TtLlamaAttention(LightweightModule):
             # Expand V: [1, 8, 1, 128] -> [1, 8, 8, 128] to match K for paged_fused_update_cache
             v_interleaved = ttnn.to_memory_config(v_heads_1BKD, ttnn.DRAM_MEMORY_CONFIG)
             ttnn.deallocate(v_heads_1BKD)
+            if v_interleaved.shape[2] != 1:  # create_heads output: only the kv row is valid
+                v_interleaved = ttnn.slice(v_interleaved, [0, 0, 0, 0], [1, k_shape[1], 1, self.head_dim])
             v_expanded = ttnn.repeat(v_interleaved, ttnn.Shape([1, 1, 8, 1]))
             ttnn.deallocate(v_interleaved)
             v_expanded_mem_config = ttnn.MemoryConfig(
