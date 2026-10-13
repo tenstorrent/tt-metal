@@ -73,7 +73,7 @@ void kernel_main() {
     constexpr uint32_t kv_stripe_split = get_named_compile_time_arg_val("kv_stripe_split");
     static_assert(
         kv_stripe_split > 0 && q_local_padded_Nt % kv_stripe_split == 0, "Q slab must split into whole KV regions");
-    constexpr uint32_t kv_region_Nt = q_local_padded_Nt / kv_stripe_split;
+    constexpr uint32_t kv_region_Nt = chunk_size_t / ring_size;
     static_assert(kv_region_Nt * ring_size == chunk_size_t, "chunk_size_t must span one KV region per ring rank");
     constexpr bool kv_pad_rotation_enabled = get_compile_time_arg_val(35) == 1;
     constexpr bool v_shares_k_buffer = get_compile_time_arg_val(36) == 1;
@@ -460,7 +460,7 @@ void kernel_main() {
                     chunked_enabled,
                     kv_local_padded_Nt,
                     chunk_size_t,
-                    q_local_padded_Nt,
+                    kv_region_Nt,
                     Sk_chunk_t>(num_local_k_chunks, ring_id, logical_nt, ksplit_causal_end_nt);
                 ksplit_k_range = ring_joint::ksplit_range(num_valid, ksplit_idx, ksplit_count);
                 if (ksplit_active) {

@@ -3,6 +3,7 @@
 // SPDX-License-Identifier: Apache-2.0
 
 #include "experimental_nanobind.hpp"
+#include "ttnn/operations/experimental/gemma4/rjsdpa_nanobind.hpp"
 
 #include <nanobind/nanobind.h>
 
@@ -191,6 +192,8 @@ void py_module(nb::module_& mod) {
 
     plusone::detail::bind_experimental_plusone_operation(mod);
     fft_binding::detail::bind_experimental_fft_operation(mod);
+
+    ttnn::experimental::gemma4::bind_rjsdpa(mod);
 
     // Quasar (metal 2.0) ops — creates the ttnn.experimental.quasar submodule.
     quasar::bind_quasar(mod);
