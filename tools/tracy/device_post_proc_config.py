@@ -228,6 +228,10 @@ class test_timestamped_events(default_setup):
     detectOps = False
 
 
+class test_active_eth_slow_dispatch(test_timestamped_events):
+    pass
+
+
 class test_multi_op(default_setup):
     timerAnalysis = {
         "BRISC KERNEL_START->KERNEL_END": {

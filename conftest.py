@@ -87,6 +87,16 @@ def is_6u():
     return ttnn.cluster.get_cluster_type() == ttnn.cluster.ClusterType.GALAXY
 
 
+def is_single_card_without_eth_links():
+    import ttnn
+
+    return ttnn.cluster.get_cluster_type() in [
+        ttnn.cluster.ClusterType.N150,
+        ttnn.cluster.ClusterType.P100,
+        ttnn.cluster.ClusterType.P150,
+    ]
+
+
 # TODO: Remove this when TG clusters are deprecated.
 def is_tg_cluster():
     import ttnn

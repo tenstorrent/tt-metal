@@ -11,7 +11,7 @@ import subprocess
 import ast
 import yaml
 from loguru import logger
-from conftest import is_6u
+from conftest import is_6u, is_single_card_without_eth_links
 
 import pandas as pd
 import numpy as np
@@ -38,6 +38,15 @@ def is_6u_wrapper():
     ctx = mp.get_context("spawn")
     with ctx.Pool() as pool:
         result = pool.apply(is_6u)
+        pool.close()
+        pool.join()
+    return result
+
+
+def is_single_card_without_eth_links_wrapper():
+    ctx = mp.get_context("spawn")
+    with ctx.Pool() as pool:
+        result = pool.apply(is_single_card_without_eth_links)
         pool.close()
         pool.join()
     return result
@@ -1160,6 +1169,39 @@ def test_timestamped_events():
             devicesData["data"]["devices"]["0"]["cores"]["DEVICE"]["riscs"]["TENSIX"]["events"]["all_events"]
         )
         assert eventCount in REF_COUNT_DICT[ENV_VAR_ARCH_NAME], "Wrong event count"
+
+
+def test_active_eth_slow_dispatch():
+    # Fast dispatch to active ethernet has been removed, so active ethernet kernels are only profiled here, under slow
+    # dispatch. Same kernel and loop count as test_timestamped_events, but nothing runs on Tensix.
+    OP_COUNT = 2
+    ZONE_COUNT = 100
+    ERISC_COUNTS = {
+        "wormhole_b0": [3, 6, 16],  # N300, T3K, 6U
+        "blackhole": [1, 6, 8],
+    }
+
+    ENV_VAR_ARCH_NAME = os.getenv("ARCH_NAME")
+    if ENV_VAR_ARCH_NAME not in ERISC_COUNTS:
+        pytest.skip(f"No active ethernet cores on {ENV_VAR_ARCH_NAME}")
+
+    devicesData = run_device_profiler_test(
+        testName="build/test/tt_metal/tools/profiler/test_active_eth_slow_dispatch",
+        setupAutoExtract=True,
+        slowDispatch=True,
+    )
+
+    # Device 0 has no profiler data at all when it has no active ethernet cores to program
+    device = devicesData["data"]["devices"].get("0")
+    events = device["cores"]["DEVICE"]["riscs"]["TENSIX"]["events"] if device else {}
+    eriscEventCount = len(events.get("erisc_events", []))
+    if eriscEventCount == 0 and is_single_card_without_eth_links_wrapper():
+        pytest.skip("Device 0 has no active ethernet cores")
+
+    assert eriscEventCount in [
+        C * OP_COUNT * ZONE_COUNT for C in ERISC_COUNTS[ENV_VAR_ARCH_NAME]
+    ], f"Wrong erisc event count {eriscEventCount}"
+    assert len(events.get("all_events", [])) == eriscEventCount, "Events recorded outside the active ethernet cores"
 
 
 def test_noc_event_profiler_linked_multicast_hang():
