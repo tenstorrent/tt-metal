@@ -296,7 +296,7 @@ Tensor repeat_interleave(
     namespace detail = operations::data_movement::detail;
     namespace repeat_interleave_codegen = operations::data_movement::repeat_interleave_codegen;
 
-    if (operations::data_movement::codegen_supported_on_arch() &&
+    if (operations::data_movement::codegen_supported_on_arch(input_a) &&
         repeat_interleave_codegen::supported_by_codegen(input_a, repeats, dim, output_mem_config) &&
         !repeat_interleave_codegen::is_demoted(input_a, repeats, dim, output_mem_config)) {
         return detail::repeat_interleave_via_codegen(input_a, repeats, dim, output_mem_config);

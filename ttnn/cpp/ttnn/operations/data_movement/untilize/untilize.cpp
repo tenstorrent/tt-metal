@@ -207,7 +207,7 @@ ttnn::Tensor untilize(
     auto dispatch = [=](const ttnn::Tensor& normalized_input) -> ttnn::Tensor {
         const auto output_mem_config = memory_config.value_or(normalized_input.memory_config());
 
-        if (operations::data_movement::codegen_supported_on_arch() && controls_ok &&
+        if (operations::data_movement::codegen_supported_on_arch(normalized_input) && controls_ok &&
             supported_by_codegen(normalized_input, output_mem_config) &&
             !is_demoted(normalized_input, output_mem_config) &&
             codegen_cb_plan_fits_live_l1(normalized_input, output_mem_config)) {

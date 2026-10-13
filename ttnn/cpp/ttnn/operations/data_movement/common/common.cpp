@@ -1044,8 +1044,9 @@ const BlockBufferSet& buffer_set_for_core(const BlockPlan& plan, const tt::tt_me
     return in_cliffrow ? plan.cliffrow : plan.full;
 }
 
-bool codegen_supported_on_arch() {
-    const auto arch = tt::tt_metal::hal::get_arch();
+bool codegen_supported_on_arch(const ttnn::Tensor& input) {
+    const auto* device = input.device();
+    const auto arch = device != nullptr ? device->arch() : tt::tt_metal::hal::get_arch();
     return arch == tt::ARCH::WORMHOLE_B0 || arch == tt::ARCH::BLACKHOLE;
 }
 
