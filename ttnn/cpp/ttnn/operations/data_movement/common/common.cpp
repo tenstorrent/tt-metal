@@ -1044,4 +1044,9 @@ const BlockBufferSet& buffer_set_for_core(const BlockPlan& plan, const tt::tt_me
     return in_cliffrow ? plan.cliffrow : plan.full;
 }
 
+bool codegen_runs_on_device(const ttnn::Tensor& tensor) {
+    const auto* device = tensor.device();
+    return device == nullptr || device->arch() != tt::ARCH::QUASAR;
+}
+
 }  // namespace ttnn::operations::data_movement

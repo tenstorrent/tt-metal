@@ -437,4 +437,9 @@ uint32_t get_num_pages(const ttnn::Tensor& tensor);
 // B/W-sh → shard_W*E (feeds split branch); other sharded → buffer->aligned_page_size() (16-aligned L1 stride).
 uint32_t per_shard_page_size_bytes(const ttnn::Tensor& tensor, uint32_t row_bytes);
 
+// Whether an op's codegen path may run on this tensor's device. Codegen programs build Gen1
+// DataMovementKernels, which Quasar rejects, so routed calls on Quasar always take native. A tensor
+// with no device answers true, leaving the native op's own validation to reject it.
+bool codegen_runs_on_device(const ttnn::Tensor& tensor);
+
 }  // namespace ttnn::operations::data_movement
