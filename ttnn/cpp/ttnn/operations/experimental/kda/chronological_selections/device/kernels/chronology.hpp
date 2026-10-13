@@ -5,17 +5,8 @@
 #include <cstdint>
 #include <tt-metalium/constants.hpp>
 namespace kda_chronology {
-namespace selection {
-constexpr uint32_t record_width = 8;  // One aligned 32-byte UINT32 record.
-constexpr uint32_t history_rows = 3;  // Four-tap convolution retains three preceding tokens.
-constexpr uint32_t slice_rank = 4;
-constexpr uint32_t outgoing_history = 0;
-constexpr uint32_t predecessor_history = outgoing_history + 1;
-constexpr uint32_t final_history = predecessor_history + 1;
-constexpr uint32_t final_state = final_history + 1;
-constexpr uint32_t local_final_history = final_state + 2;
-constexpr uint32_t record_count = local_final_history + 1;
-}  // namespace selection
+// The four-tap convolution retains three preceding tokens.
+constexpr uint32_t history_rows = 3;
 
 struct Topology {
     uint32_t first_rank;
@@ -60,6 +51,16 @@ struct Topology {
         const uint32_t group_rows = local_rows / groups;
         return (rows + group_rows - 1) / group_rows;
     }
+    // Convolution histories. The next physical rank's segment continues from the last history_rows rows of this
+    // rank's head; on the final segment's owner, the replacement carry ends with the last carried_rows() valid rows,
+    // preceded by the layer's incoming history or the predecessor's outgoing rows when the segment is shorter.
+    uint32_t outgoing_rows_begin() const { return (local_split ? head_rows : local_rows) - history_rows; }
+    uint32_t carried_rows() const {
+        const uint32_t final_segment_rows = valid_rows - (has_valid_tail() ? head_rows : 0);
+        return final_segment_rows < history_rows ? final_segment_rows : history_rows;
+    }
+    uint32_t carried_rows_begin() const { return valid_rows - carried_rows(); }
+    bool carry_continues_layer_history() const { return rank == first_rank && !has_valid_tail(); }
 };
 inline Topology load(const volatile uint32_t* words) {
     return {words[0], words[1], words[2], words[3], words[4], words[5], words[6], words[7]};
@@ -132,5 +133,13 @@ inline Topology derive_interval(uint32_t start, uint32_t end, uint32_t rank, uin
     // This flag chooses a final state after a separated tail, not merely a physical split.
     t.split = length > tail_begin;
     return t;
+}
+template <bool has_end>
+inline Topology derive_bounds(uint32_t start, uint32_t end, uint32_t rank, uint32_t partitions, uint32_t rows) {
+    if constexpr (has_end) {
+        return derive_interval(start, end, rank, partitions, rows);
+    } else {
+        return derive(start, rank, partitions, rows);
+    }
 }
 }  // namespace kda_chronology

@@ -12,29 +12,22 @@ import torch
 
 import ttnn
 from models.demos.deepseek_v3_d_p.reference.kda.config import KDA_SOFTPLUS_BETA, KDA_SOFTPLUS_THRESHOLD, KDAConfig
-from models.demos.deepseek_v3_d_p.tt.kda.chronological_selections import ChronologicalSelections
 from models.demos.deepseek_v3_d_p.tt.kda.config import (
     KDA_CHUNK_SIZE,
     KDA_DECAY_L1_BYTES_PER_CORE,
+    KDA_HISTORY_EXCHANGE_ROWS,
+    KDA_HISTORY_EXCHANGE_SEMAPHORES,
     KDA_OUTPUT_MEMORY_CONFIG,
+    KDA_QKV_L1_BYTES_PER_CORE,
     KDA_RECURRENT_STATE_DTYPE,
     KDAProgramConfig,
     decay_projection_program_config,
     l1_when_it_fits,
     tuned_projection_matmul_configs,
 )
-from models.demos.deepseek_v3_d_p.tt.kda.convolution import exchange_convolution_carry
 from models.demos.deepseek_v3_d_p.tt.kda.recurrence import KDARecurrence
 from models.demos.deepseek_v3_d_p.tt.kda.weights import KDAWeights, load_kda_weights
 from models.tt_transformers.tt.ccl import TT_CCL
-
-
-def _slice_width(tensor: ttnn.Tensor, start: int, end: int) -> ttnn.Tensor:
-    stop = list(tensor.shape)
-    begin = [0] * len(stop)
-    begin[-1] = start
-    stop[-1] = end
-    return ttnn.slice(tensor, tuple(begin), tuple(stop), memory_config=ttnn.DRAM_MEMORY_CONFIG)
 
 
 def _largest_divisor_at_most(value: int, limit: int) -> int:
@@ -56,10 +49,40 @@ class _ProjectedInputs:
     # The fused input projection. The decay's low-rank activations, the output gate and beta's pre-sigmoid logits
     # are read in place from their column offsets, so it stays allocated until the gated norm.
     projected: ttnn.Tensor
-    qkv: ttnn.Tensor
     decay_rank_offset: int
     output_gate_offset: int
     beta_offset: int
+
+
+@dataclass(frozen=True)
+class _HistoryExchange:
+    """Persistent state of the convolution's fabric history exchange.
+
+    Peers write this rank's buffer and bump its semaphores, possibly before this rank's call starts, so both outlive
+    every call. The semaphores live on the exchange core, the compute grid's last core.
+    """
+
+    buffer: ttnn.Tensor
+    semaphores: list[ttnn.GlobalSemaphore]
+
+    @classmethod
+    def allocate(cls, mesh_device: ttnn.MeshDevice, width: int) -> _HistoryExchange:
+        grid = mesh_device.compute_with_storage_grid_size()
+        exchange_core = ttnn.CoreCoord(grid.x - 1, grid.y - 1)
+        exchange_cores = ttnn.CoreRangeSet({ttnn.CoreRange(exchange_core, exchange_core)})
+        return cls(
+            buffer=ttnn.zeros(
+                (1, KDA_HISTORY_EXCHANGE_ROWS, width),
+                dtype=ttnn.bfloat16,
+                layout=ttnn.ROW_MAJOR_LAYOUT,
+                device=mesh_device,
+                memory_config=ttnn.DRAM_MEMORY_CONFIG,
+            ),
+            semaphores=[
+                ttnn.create_global_semaphore(mesh_device, exchange_cores, 0)
+                for _ in range(KDA_HISTORY_EXCHANGE_SEMAPHORES)
+            ],
+        )
 
 
 @dataclass(frozen=True)
@@ -159,6 +182,9 @@ class ttKDA:
         self.qkv_convolution_program_config = ttnn.QkvCausalConv1dSiluProgramConfig(
             channel_chunk_size=qkv_channel_chunk_size
         )
+        self.qkv_memory_config = l1_when_it_fits(
+            mesh_device, self.active_seq_len_local * self._convolution_width * 2, KDA_QKV_L1_BYTES_PER_CORE
+        )
         if self.tensor_parallel_size > 1 and tt_ccl is None:
             raise ValueError("tt_ccl is required for tensor-parallel KDA")
         self.tt_ccl = tt_ccl
@@ -225,6 +251,7 @@ class ttKDA:
             fp32_dest_acc_en=True,
             packer_l1_acc=True,
         )
+        self._history_exchange = _HistoryExchange.allocate(mesh_device, self._convolution_width)
 
     @property
     def _convolution_width(self) -> int:
@@ -297,41 +324,6 @@ class ttKDA:
         if state.convolution.dtype != ttnn.bfloat16 or state.convolution.layout != ttnn.ROW_MAJOR_LAYOUT:
             raise ValueError("convolution state must be BF16 row-major")
 
-    def _convolve_qkv(
-        self,
-        qkv: ttnn.Tensor,
-        incoming_layer_carry: ttnn.Tensor,
-        selections: ChronologicalSelections | None,
-        actual_start: ttnn.Tensor,
-    ) -> tuple[ttnn.Tensor, ttnn.Tensor, ttnn.Tensor, ttnn.Tensor]:
-        config = self.config
-        if not self._is_sequence_parallel:
-            batch, rows, width = qkv.shape
-            new_state = (
-                selections.select_local_final_history(qkv, incoming_layer_carry)
-                if selections is not None
-                else ttnn.slice(qkv, (0, rows - (config.conv_kernel_size - 1), 0), (batch, rows, width))
-            )
-            predecessor = incoming_layer_carry
-        else:
-            predecessor, new_state = exchange_convolution_carry(
-                qkv, incoming_layer_carry, sequence_parallel_axis=self.sequence_parallel_axis, selections=selections
-            )
-        q, k, v = ttnn.experimental.kda.qkv_causal_conv1d_silu(
-            qkv,
-            incoming_layer_carry,
-            *self.weights.convolution_taps,
-            config.q_dim,
-            config.k_dim,
-            config.v_dim,
-            program_config=self.qkv_convolution_program_config,
-            actual_start=actual_start,
-            sequence_parallel_axis=self.sequence_parallel_axis,
-            predecessor_carry=predecessor,
-            memory_config=ttnn.DRAM_MEMORY_CONFIG,
-        )
-        return q, k, v, new_state
-
     def _project_inputs(
         self,
         hidden_states: ttnn.Tensor,
@@ -339,9 +331,9 @@ class ttKDA:
         """Run the fused input projection and split its semantic outputs."""
         config = self.config
         weights = self.weights
-        # The tuned schedule writes the projection to L1: it is only read back by this layer (the QKV slice,
-        # and the decay, beta and output-gate columns in place), and its DRAM write would otherwise sit after
-        # the last K block, outside the compute.
+        # The tuned schedule writes the projection to L1: it is only read back by this layer (the QKV, decay, beta
+        # and output-gate columns, all in place), and its DRAM write would otherwise sit after the last K block,
+        # outside the compute.
         projected = ttnn.linear(
             hidden_states,
             weights.input_projection,
@@ -354,7 +346,6 @@ class ttKDA:
         auxiliary_start = self._convolution_width
         return _ProjectedInputs(
             projected=projected,
-            qkv=_slice_width(projected, 0, auxiliary_start),
             decay_rank_offset=auxiliary_start,
             output_gate_offset=auxiliary_start + config.head_k_dim,
             beta_offset=auxiliary_start + config.head_k_dim + config.v_dim,
@@ -435,31 +426,12 @@ class ttKDA:
             )
         return output
 
-    def selections(self, actual_start: ttnn.Tensor, actual_end: ttnn.Tensor | None = None) -> ChronologicalSelections:
-        """The chronological selection table for one call's bounds.
-
-        It depends only on the bounds and on the SP geometry, so layers that share both can share one table; see
-        ``forward``'s ``selections``.
-        """
-        return ChronologicalSelections(
-            ttnn.experimental.kda.chronological_selections(
-                actual_start,
-                self.sequence_parallel_axis,
-                self.active_seq_len_local,
-                self.config.num_heads,
-                self.config.head_k_dim,
-                self.config.head_v_dim,
-                actual_end=actual_end,
-            ),
-        )
-
     def forward(
         self,
         hidden_states: ttnn.Tensor,
         state: KdaState,
         actual_start: ttnn.Tensor,
         actual_end: ttnn.Tensor | None = None,
-        selections: ChronologicalSelections | None = None,
     ) -> tuple[ttnn.Tensor, KdaState]:
         """Run prefill KDA and return replacement logical carries.
 
@@ -482,23 +454,28 @@ class ttKDA:
         ``ttnn.copy`` destination or retained on this layer. The returned output
         is sequence-partitioned along SP and, when TP > 1, reduce-scattered on
         the hidden dimension; TP == 1 returns the full hidden dimension.
-
-        Optional ``selections`` is a table from ``selections()`` for these same
-        bounds, built by a layer with the same SP geometry; it is built here
-        when omitted.
         """
         self._validate_forward(hidden_states, state, actual_start)
         if actual_end is not None:
             self._validate_runtime_bound(actual_end, "actual_end")
-        # All geometries use the same selection graph for full and padded calls.
-        if selections is None:
-            selections = self.selections(actual_start, actual_end)
         inputs = self._project_inputs(hidden_states)
-        qkv = ttnn.to_layout(inputs.qkv, ttnn.ROW_MAJOR_LAYOUT, memory_config=ttnn.DRAM_MEMORY_CONFIG)
-        convolution_state = ttnn.to_layout(
-            state.convolution, ttnn.ROW_MAJOR_LAYOUT, memory_config=ttnn.DRAM_MEMORY_CONFIG
+        # The convolution reads its columns of the projection in place, exchanges the three-row histories between
+        # sequence-parallel ranks and returns the replacement carry.
+        q, k, v, new_convolution = ttnn.experimental.kda.qkv_causal_conv1d_silu_with_carry(
+            inputs.projected,
+            state.convolution,
+            *self.weights.convolution_taps,
+            self.config.q_dim,
+            self.config.k_dim,
+            self.config.v_dim,
+            program_config=self.qkv_convolution_program_config,
+            actual_start=actual_start,
+            exchange_buffer=self._history_exchange.buffer,
+            exchange_semaphores=self._history_exchange.semaphores,
+            actual_end=actual_end,
+            sequence_parallel_axis=self.sequence_parallel_axis,
+            memory_config=self.qkv_memory_config,
         )
-        q, k, v, new_convolution = self._convolve_qkv(qkv, convolution_state, selections, actual_start)
         gate = self._compute_decay(inputs.projected, inputs.decay_rank_offset)
         result = self.recurrence(
             q=q,

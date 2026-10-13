@@ -15,7 +15,7 @@ from loguru import logger
 import ttnn
 from models.common.utility_functions import run_for_blackhole, skip_with_llk_assert, skip_with_watcher
 from tests.ttnn.nightly.unit_tests.operations.experimental.kda import kda_performance_model_test_utils as perf_model
-from tests.ttnn.profiling.realtime_profiler_utils import profile_realtime_program
+from tests.ttnn.profiling.realtime_profiler_utils import profile_realtime_program_merged
 from tests.ttnn.unit_tests.operations.experimental.kda.kda_test_utils import (
     assert_accurate,
     assert_bit_identical,
@@ -49,9 +49,9 @@ class _BenchmarkCase:
 _PRODUCTION_PERF_MARGIN = 0.05
 
 _PRODUCTION_CASES = (
-    _BenchmarkCase("single-block", widths=(512, 512, 512), channel_chunk_size=1536, expected_duration_ns=83_401),
-    _BenchmarkCase("multiple-blocks", widths=(1024, 1024, 1024), channel_chunk_size=768, expected_duration_ns=46_345),
-    _BenchmarkCase("asymmetric-split", widths=(512, 256, 128), channel_chunk_size=896, expected_duration_ns=50_579),
+    _BenchmarkCase("single-block", widths=(512, 512, 512), channel_chunk_size=1536, expected_duration_ns=69_800),
+    _BenchmarkCase("multiple-blocks", widths=(1024, 1024, 1024), channel_chunk_size=768, expected_duration_ns=39_500),
+    _BenchmarkCase("asymmetric-split", widths=(512, 256, 128), channel_chunk_size=896, expected_duration_ns=43_300),
 )
 
 
@@ -413,7 +413,13 @@ def test_qkv_causal_conv1d_silu_production_performance(
             actual_start=zero_actual_start,
         )
 
-    outputs, perf_record = profile_realtime_program(device, run)
+    outputs, programs = profile_realtime_program_merged(device, run)
+    (runtime_id, perf_record), *others = [
+        (runtime_id, program)
+        for runtime_id, program in programs.items()
+        if any("reader_qkv_causal_conv1d_silu.cpp" in source for source in program["kernel_sources"])
+    ]
+    assert not others, "expected one convolution program in the profiled region"
     duration_ns = perf_record["duration_ns"]
     assert tuple(tuple(output.shape) for output in outputs) == tuple((1, _SEQUENCE, width) for width in case.widths)
     performance = _qkv_causal_conv1d_silu_performance(
@@ -426,7 +432,7 @@ def test_qkv_causal_conv1d_silu_production_performance(
     )
     logger.info(
         f"QKV causal Conv1D plus SiLU {case.case_id}: measured_ns={duration_ns:.0f}, "
-        f"runtime_id={perf_record['runtime_id']}, work={performance.work}, "
+        f"runtime_id={runtime_id}, work={performance.work}, "
         f"ideal_fpu_ns={performance.ideal_fpu_ns:.2f}, ideal_dram_ns={performance.ideal_dram_ns:.2f}, "
         f"ideal_ns={performance.ideal_ns:.2f}, "
         f"fpu_utilization_pct={performance.fpu_utilization_pct:.2f}, "
@@ -512,11 +518,10 @@ def test_qkv_causal_conv1d_silu_rejects_channel_chunk_size_over_l1(
     ("case", "message"),
     [
         ("host_input", "allocated device tensor"),
-        ("batch", r"input must be \[1,T,Q\+K\+V\]"),
+        ("batch", r"input must be \[1,T,W\]"),
         ("history_shape", r"history must be \[1,3,Q\+K\+V\]"),
         ("tap_last_dimension", r"tap2 last dimension must equal Q\+K\+V"),
         ("tap_volume", "tap2 logical volume must equal"),
-        ("input_layout", "input must use ROW_MAJOR layout, got Layout::TILE"),
         ("history_layout", "history must use ROW_MAJOR layout, got Layout::TILE"),
         ("tap_layout", "tap1 must use TILE layout, got Layout::ROW_MAJOR"),
         ("input_dtype", "input must be BFLOAT16"),
@@ -550,8 +555,6 @@ def test_qkv_causal_conv1d_silu_rejects_invalid_tensors(
         taps_list[2] = qkv_to_device(taps[2].reshape(-1, 1), device, layout=ttnn.TILE_LAYOUT)
     elif case == "tap_volume":
         taps_list[2] = qkv_to_device(torch.cat((taps[2], taps[2]), dim=0), device, layout=ttnn.TILE_LAYOUT)
-    elif case == "input_layout":
-        input_tt = qkv_to_device(inputs, device, layout=ttnn.TILE_LAYOUT)
     elif case == "history_layout":
         history_tt = qkv_to_device(history, device, layout=ttnn.TILE_LAYOUT)
     elif case == "tap_layout":
@@ -587,7 +590,7 @@ def test_qkv_causal_conv1d_silu_rejects_invalid_tensors(
     [
         ((0, 128, 256), "Q/K/V widths must be positive"),
         ((100, 128, 156), "Q/K/V widths must be tile aligned"),
-        ((128, 128, 64), r"input must be \[1,T,Q\+K\+V\]"),
+        ((128, 128, 256), r"input must be \[1,T,W\]"),
     ],
 )
 def test_qkv_causal_conv1d_silu_rejects_invalid_widths(
@@ -620,3 +623,75 @@ def test_qkv_causal_conv1d_silu_rejects_sharded_output(
             memory_config=sharded_config,
             actual_start=zero_actual_start,
         )
+
+
+@pytest.mark.parametrize(
+    ("widths", "channel_chunk_size", "column_offset", "trailing_columns", "sequence"),
+    [
+        pytest.param((512, 512, 512), 64, 0, 0, 64, id="exact-width"),
+        pytest.param((256, 128, 128), 128, 32, 96, 96, id="column-window"),
+        pytest.param((128, 128, 128), 384, 64, 32, 32, id="one-tile-row"),
+    ],
+)
+def test_qkv_causal_conv1d_silu_tiled_input(
+    zero_actual_start,
+    device: ttnn.Device,
+    widths: tuple[int, int, int],
+    channel_chunk_size: int,
+    column_offset: int,
+    trailing_columns: int,
+    sequence: int,
+) -> None:
+    """A TILE input read in place from a wider tensor matches the reference; the exchanging variant, on a single rank,
+    also returns the replacement carry."""
+    host, device_inputs = qkv_device_inputs(device, widths=widths, sequence=sequence)
+    inputs, history, taps = host
+    _, history_tt, taps_tt = device_inputs
+    rows = inputs.shape[1]
+    channels = sum(widths)
+    torch.manual_seed(17)
+    wide = torch.cat(
+        (
+            torch.randn(1, rows, column_offset, dtype=inputs.dtype),
+            inputs,
+            torch.randn(1, rows, trailing_columns, dtype=inputs.dtype),
+        ),
+        dim=-1,
+    )
+    wide_tt = qkv_to_device(wide, device, layout=ttnn.TILE_LAYOUT)
+    program_config = ttnn.QkvCausalConv1dSiluProgramConfig(channel_chunk_size=channel_chunk_size)
+    expected = qkv_reference(inputs, history, taps, widths)
+
+    q, k, v = ttnn.experimental.kda.qkv_causal_conv1d_silu(
+        wide_tt,
+        history_tt,
+        *taps_tt,
+        *widths,
+        program_config=program_config,
+        actual_start=zero_actual_start,
+        predecessor_carry=history_tt,
+        input_column_offset=column_offset,
+    )
+    for name, golden, output in zip(("q", "k", "v"), expected, (q, k, v), strict=True):
+        assert_accurate(golden, ttnn.to_torch(output), name=f"tiled {name}", pcc_threshold=0.999)
+
+    grid = device.compute_with_storage_grid_size()
+    exchange_core = ttnn.CoreCoord(grid.x - 1, grid.y - 1)
+    exchange_cores = ttnn.CoreRangeSet({ttnn.CoreRange(exchange_core, exchange_core)})
+    exchange_buffer = ttnn.zeros((1, 12, channels), dtype=ttnn.bfloat16, layout=ttnn.ROW_MAJOR_LAYOUT, device=device)
+    q, k, v, carry = ttnn.experimental.kda.qkv_causal_conv1d_silu_with_carry(
+        wide_tt,
+        history_tt,
+        *taps_tt,
+        *widths,
+        program_config=program_config,
+        actual_start=zero_actual_start,
+        exchange_buffer=exchange_buffer,
+        exchange_semaphores=[ttnn.create_global_semaphore(device, exchange_cores, 0) for _ in range(3)],
+        input_column_offset=column_offset,
+    )
+    for name, golden, output in zip(("q", "k", "v"), expected, (q, k, v), strict=True):
+        assert_accurate(golden, ttnn.to_torch(output), name=f"with-carry {name}", pcc_threshold=0.999)
+    # One rank: the carry is the last three tokens.
+    last_rows = inputs[:, -3:, :]
+    assert_bit_identical(last_rows, ttnn.to_torch(carry), name="replacement carry")
