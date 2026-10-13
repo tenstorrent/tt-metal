@@ -16,7 +16,9 @@ cd $W || exit 3
 D=models/tt_dit/tests/models/minimax_h3
 K="4x8sp1tp0nl2_ring_is_fsdp0 and not WH"
 if [ "$MODE" = prof ]; then
-  PY="python -u -m tracy -p -r -v -m pytest -sv -p no:cacheprovider $D/test_transformer_minimax_h3.py::test_minimax_h3_transformer_block_perf -k '$K and 10s_768p and test_prompt_text_tokens and sp_sim1'"
+  # tracy re-splits its wrapped command on spaces, so the -k expression goes in through PYTEST_ADDOPTS
+  export PYTEST_ADDOPTS="-k '$K and 10s_768p and test_prompt_text_tokens and sp_sim1'"
+  PY="python -u -m tracy -p -r -v -m pytest -sv -p no:cacheprovider $D/test_transformer_minimax_h3.py::test_minimax_h3_transformer_block_perf"
   IDLE=240
 else
   PY="python -u -m pytest -sv -p no:cacheprovider $D/test_ff1_swiglu_pack_minimax_h3.py::test_ff1_swiglu_pack_block_10s -k '$K'"
@@ -58,5 +60,6 @@ else
   r=$(ls -td $W/generated/profiler/reports/*/ 2>/dev/null | head -1); echo "[t477] report dir: $r" | tee -a $L
   [ -n "$r" ] && cp $r/ops_perf_results_*.csv $OUT/ 2>/dev/null
 fi
+[ "$rc" = 0 ] && ! grep -qE "[^0-9]1 passed" $L && { echo "[t477] exit 0 but no '1 passed' line" | tee -a $L; rc=6; }
 echo "T477_EXIT=$rc" | tee -a $L
 exit $rc

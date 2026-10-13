@@ -53,3 +53,11 @@ Branch ttp/t477-turbo-per-op-profile-of-one-10-s-block-t, base ae9534f5fb2 (t473
   job PYTHONPATH now adds /var/tmp/fasth3/t409/pydeps (MiniMax-H3 diffusers); collect then found 2/52.
 - Chain restarted as chain477b (run 1801 dir: /home/smarton/fasth3/tt-metal/tt-project/state/runs/1801/chain477.log,
   marker chain477.done, rc chain477b.rc). Profile job = blx01 broker job 195 (submitted 18:57 UTC).
+- 19:00 UTC job 195 (prof): exit 0 in 23 s but ran no test: tracy re-split the quoted -k ("file or directory
+  not found: and"). Fixed: -k via PYTEST_ADDOPTS; run477.sh now sets rc 6 when there is no "1 passed" line.
+- 19:01 UTC job 196 (A/B): failed after 75 s (cold JIT ok, 0 SWIGLU_PACK_THREAD files: the new arm never ran).
+  First error: TT_FATAL device_operation.hpp:518 input_tensor.is_allocated() in ff2 forward_fused_addcmul
+  (linear.py:748), from the timed round's run_block. Cause: the test deallocated the block output, which is a
+  persistent CCL buffer reused by the next call. Fixed in code commit (no deallocs). Job 198 = chain's retry of the
+  old test (expected to fail the same way); chain477b stopped by me after that.
+- Fixed run477.sh + test file copied to blx01 (/var/tmp/fasth3/t477, b/models/...); chain restarted as chain477c.
