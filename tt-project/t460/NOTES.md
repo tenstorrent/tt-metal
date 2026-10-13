@@ -54,3 +54,15 @@ bicubic of base 768p yuv: Y PSNR 55.23-55.33 dB, PCC 0.99995; YUV PSNR 54.43-54.
 Stills: tt-project/state/t460/still_<tag>_f79_base-bicubic_vs_int.png (left base+bicubic, right int): identical.
 Videos: tt-project/state/t460/mp4/{base,int}-6s-s{0..4}.mp4, {base,int}-10s-s0.mp4.
 VBench: vb460.sh (detached run 1745 vb460b), int vs base1080 (ffmpeg bicubic crf 8) -> state/t460/vbench.
+VBench result (run 1745 vb460b, rc 1 = harness BATCH FAIL on one metric, s3):
+| seed | PSNR dB (mp4) | PCC | subj | bg (ref) | imaging | motion |
+| s0 | 37.33 | 0.99780 | 0.9505 | 0.9579 | 0.6649 | 0.9897 |
+| s1 | 37.28 | 0.99783 | 0.9509 | 0.9623 | 0.6907 | 0.9888 |
+| s2 | 37.49 | 0.99785 | 0.9539 | 0.9444 | 0.6726 | 0.9905 |
+| s3 | 37.43 | 0.99795 | 0.9509 | 0.9405 (0.9585) FAIL | 0.6922 | 0.9895 |
+| s4 | 37.49 | 0.99783 | 0.9491 | 0.9609 | 0.6849 | 0.9852 |
+| mean int | | | 0.9511 | 0.9532 | 0.6810 | 0.9887 |
+| mean ref | | | 0.9514 | 0.9485 | 0.6772 | 0.9889 |
+Judgement: neutral. Latents are bit-identical, raw-tensor Y PSNR is 55 dB; the 37 dB here is two mp4 encodes
+(int crf + base ffmpeg bicubic crf 8). The s3 background flag is metric noise between two upscalers of identical
+content (int beats ref on the bg mean); s3_cmp_f079.png shows identical frames, diff is edge-only noise.
