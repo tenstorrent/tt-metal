@@ -188,6 +188,7 @@ class Glm53FlashPrefillRuntime:
             max_seq=params.max_seq_len,
             chunks=[params.chunk_size],
             layers=self.layers,
+            serving=True,
             **kw,
         )
         self.cfg = self.model.cfg

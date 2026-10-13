@@ -131,7 +131,16 @@ class TtGlmBlock:
     """One decoder block: the validated step modules keyed by the reference block graph, run through run_block."""
 
     def __init__(
-        self, mesh, cfg, loader, layer: int, max_seq: int, chunks, layout: str = "replicated", experts_dtype=None
+        self,
+        mesh,
+        cfg,
+        loader,
+        layer: int,
+        max_seq: int,
+        chunks,
+        layout: str = "replicated",
+        experts_dtype=None,
+        serving: bool = False,
     ):
         from models.demos.glm53_flash_d_p.tt.collapse import build_collapse
         from models.demos.glm53_flash_d_p.tt.common import gather_half, gather_rows, local_rows
@@ -184,12 +193,14 @@ class TtGlmBlock:
             from models.demos.glm53_flash_d_p.tt.q_a import build_q_a
 
             self.q_a = build_q_a(mesh, loader, cfg, layer)
-            self.indexer = build_indexer(mesh, loader, cfg, layer, max_seq, chunks, ring=split and DSA_LOCAL)
+            # serving binds one replicated cache per slot (bind_cache): no ring indexer, no striped latent
+            ring = split and DSA_LOCAL and not serving
+            self.indexer = build_indexer(mesh, loader, cfg, layer, max_seq, chunks, ring=ring)
             from models.demos.glm53_flash_d_p.tt.indexer import RING as INDEXER_RING
 
             # the striped latent cache goes with the ring indexer (serving runs both replicated: GLM_INDEXER_RING=0)
             self.attn = build_mla(
-                mesh, loader, cfg, layer, max_seq, tp=split and DSA_LOCAL, striped=split and DSA_LOCAL and INDEXER_RING
+                mesh, loader, cfg, layer, max_seq, tp=split and DSA_LOCAL, striped=ring and INDEXER_RING
             )
             self.stateful += [self.indexer, self.attn]
             if split and DSA_LOCAL:
@@ -396,9 +407,17 @@ class TtGlmModel:
     and returns the last block's residual [1, 1, S, 4 H]."""
 
     def __init__(
-        self, mesh, model_path: str, max_seq: int, chunks, layers: list[int] | None = None, experts_dtype=None
+        self,
+        mesh,
+        model_path: str,
+        max_seq: int,
+        chunks,
+        layers: list[int] | None = None,
+        experts_dtype=None,
+        serving: bool = False,
     ):
-        """experts_dtype: routed-expert weight dtype (default bfp8; bfp4 fits all 45 layers on a LoudBox)."""
+        """experts_dtype: routed-expert weight dtype (default bfp8; bfp4 fits all 45 layers on a LoudBox). serving: per-slot
+        caches (the prefill-runner adapter), so the indexer and the MLA keep their replicated caches."""
         from models.demos.glm53_flash_d_p.reference.glm_ref import GlmConfig
         from models.demos.glm53_flash_d_p.reference.weights import WeightLoader
         from models.demos.glm53_flash_d_p.tt.common import residual_layout
@@ -412,7 +431,17 @@ class TtGlmModel:
         split = self.layout == "split"
         self.embed = TtEmbedding(mesh, loader.get(PREFIX + "embed_tokens.weight"), cfg.hc_mult, split=split)
         self.blocks = [
-            TtGlmBlock(mesh, cfg, loader, i, self.max_seq, self.chunks, layout=self.layout, experts_dtype=experts_dtype)
+            TtGlmBlock(
+                mesh,
+                cfg,
+                loader,
+                i,
+                self.max_seq,
+                self.chunks,
+                layout=self.layout,
+                experts_dtype=experts_dtype,
+                serving=serving,
+            )
             for i in self.layer_ids
         ]
         self.final_norm = TtFinalNorm(mesh, loader.get(PREFIX + "norm.weight"), cfg.hc_mult, cfg.rms_norm_eps)
