@@ -12,7 +12,7 @@ for i in $(seq 240); do
   rc=$($SSH cat $T/build.rc 2>/dev/null || true); [ -n "$rc" ] && break; sleep 30
 done
 log "build rc=${rc:-none}"; [ "$rc" = 0 ] || exit 10
-col=$($SSH "cd $T/b && source /var/tmp/fasth3/t460/python_env/bin/activate && export HOME=/var/tmp/fasth3/home TMPDIR=/var/tmp/fasth3/tmp TT_METAL_HOME=$T/b PYTHONPATH=$T/b:$T/b/ttnn:$T/b/tools && D=models/tt_dit/tests/models/minimax_h3 && timeout 300 python -m pytest --collect-only -q -p no:cacheprovider \$D/test_transformer_minimax_h3.py::test_minimax_h3_transformer_block_perf \$D/test_ff1_swiglu_pack_minimax_h3.py::test_ff1_swiglu_pack_block_10s -k '4x8sp1tp0nl2_ring_is_fsdp0 and not WH and ((10s_768p and test_prompt_text_tokens and sp_sim1) or block_10s)' 2>&1 | tail -6" || true)
+col=$($SSH "cd $T/b && source /var/tmp/fasth3/t460/python_env/bin/activate && export HOME=/var/tmp/fasth3/home TMPDIR=/var/tmp/fasth3/tmp TT_METAL_HOME=$T/b PYTHONPATH=$T/b:$T/b/ttnn:$T/b/tools:/var/tmp/fasth3/t409/pydeps && D=models/tt_dit/tests/models/minimax_h3 && timeout 300 python -m pytest --collect-only -q -p no:cacheprovider \$D/test_transformer_minimax_h3.py::test_minimax_h3_transformer_block_perf \$D/test_ff1_swiglu_pack_minimax_h3.py::test_ff1_swiglu_pack_block_10s -k '4x8sp1tp0nl2_ring_is_fsdp0 and not WH and ((10s_768p and test_prompt_text_tokens and sp_sim1) or block_10s)' 2>&1 | tail -6" || true)
 log "collect: $(echo "$col" | tr '\n' '|')"
 echo "$col" | grep -q '^2 tests\? collected\|2/[0-9]* tests collected' || exit 15
 run() {

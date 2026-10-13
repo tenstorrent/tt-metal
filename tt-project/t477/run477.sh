@@ -10,7 +10,7 @@ use=$(df --output=pcent / | tail -1 | tr -dc 0-9); [ "$use" -le 88 ] || { echo "
 gb=$(timeout 120 du -sxBG $F 2>/dev/null | cut -f1 | tr -dc 0-9); [ "${gb:-0}" -le 450 ] || { echo "[t477] footprint ${gb}G"; exit 5; }
 mkdir -p $OUT $F/tmp $T/jit
 export HOME=$F/home XDG_CACHE_HOME=$F/home/.cache TMPDIR=$F/tmp HF_HUB_OFFLINE=1
-export TT_METAL_CACHE=$T/jit TT_METAL_HOME=$W PYTHONPATH=$W:$W/ttnn:$W/tools
+export TT_METAL_CACHE=$T/jit TT_METAL_HOME=$W PYTHONPATH=$W:$W/ttnn:$W/tools:$F/t409/pydeps
 source $F/t460/python_env/bin/activate || exit 3
 cd $W || exit 3
 D=models/tt_dit/tests/models/minimax_h3
