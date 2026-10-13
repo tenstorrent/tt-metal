@@ -1003,7 +1003,7 @@ tt::tt_metal::ProgramDescriptor build_program_descriptor(
     generate a mask
             - compute attention
         - write the output Q chunk
-        - if this is not the first ring iteration, do the LSE update.
+        - if this is not the first ring iteration, restore and update the deferred-normalization state (O, max, sum).
     */
 
     log_debug(tt::LogOp, "RingJointSDPA create_descriptor");
@@ -1402,12 +1402,7 @@ tt::tt_metal::ProgramDescriptor build_program_descriptor(
     // now for out0
     const uint32_t out_in0_block_w = Sk_chunk_t;
 
-    // The ring joint kernel accumulates in BF16 DEST only (it supports single-Q-subblock shapes); ttnn.transformer
-    // runs FP32-DEST calls on the ACCURATE ring recipe, whose variant keeps its own state.
-    TT_FATAL(
-        variant.resident_ring_state() || !fp32_dest_acc_en,
-        "Ring joint SDPA without a precision recipe requires fp32_dest_acc_en=false (FP32 DEST runs "
-        "SDPAPrecision.ACCURATE)");
+    TT_ASSERT(variant.resident_ring_state() || !fp32_dest_acc_en);  // validate_on_program_cache_miss rejects it
 
     // K split: when the (head, Q chunk) units leave the grid idle, the rows are divided into bands that each hold
     // every unit once and attend to a slice of every ring iteration's K chunks; the last band merges. Bands are whole
@@ -1534,24 +1529,6 @@ tt::tt_metal::ProgramDescriptor build_program_descriptor(
     log_debug(tt::LogOp, "out_out_subblock_h: {}", out_out_subblock_h);
     log_debug(tt::LogOp, "out_in0_num_subblocks: {}", out_in0_num_subblocks);
     log_debug(tt::LogOp, "out_in1_num_subblocks: {}", out_in1_num_subblocks);
-
-    // Determine granularity for statistics computation
-    // Each granularity must evenly divide its tile count to avoid dropping tiles
-    const uint32_t stats_granularity = detail::find_valid_granularity(Sq_chunk_t, dst_size);
-    const uint32_t sub_exp_granularity = detail::find_valid_granularity(Sk_chunk_t, dst_size);
-    // DHT_GRANULARITY is used in the kernel with both DHt and vDHt as the cols parameter,
-    // so the granularity must evenly divide both to avoid dropping tiles.
-    uint32_t dht_granularity = std::min({DHt, vDHt, dst_size});
-    while (dht_granularity > 1 && (DHt % dht_granularity != 0 || vDHt % dht_granularity != 0)) {
-        dht_granularity--;
-    }
-    const uint32_t reduce_granularity = detail::find_valid_granularity(Sq_chunk_t, dst_size / 2);
-
-    // Log these
-    log_debug(tt::LogOp, "stats_granularity: {}", stats_granularity);
-    log_debug(tt::LogOp, "sub_exp_granularity: {}", sub_exp_granularity);
-    log_debug(tt::LogOp, "dht_granularity: {}", dht_granularity);
-    log_debug(tt::LogOp, "reduce_granularity: {}", reduce_granularity);
 
     // Reduce ops need to multiply by a scalar. We always want to multiply by 1.0f
     class bfloat16 bfloat_identity_scalar(1.0f);
@@ -1917,10 +1894,6 @@ tt::tt_metal::ProgramDescriptor build_program_descriptor(
         active_ring_iter_mask,
         Sq_chunk_t * tt::constants::TILE_HEIGHT,
         kt_inplace_v ? "in-place" : (v_shares_k_buffer ? "materialized" : "separate"));
-    defines["STATS_GRANULARITY"] = std::to_string(stats_granularity);
-    defines["SUB_EXP_GRANULARITY"] = std::to_string(sub_exp_granularity);
-    defines["DHT_GRANULARITY"] = std::to_string(dht_granularity);
-    defines["REDUCE_GRANULARITY"] = std::to_string(reduce_granularity);
     defines["EXP_APPROX_MODE"] = std::to_string(exp_approx_mode);
     if (args.program_config.has_value() && args.program_config->matmul_math_fidelity.has_value()) {
         defines["SDPA_MATMUL_FIDELITY"] =
@@ -2059,7 +2032,8 @@ tt::tt_metal::ProgramDescriptor build_program_descriptor(
     // These CBs carry accumulator state between passes: DRAM save/restore across ring iterations, or the K-split
     // reducer's partial results from the other bands. Unsplit sliding attention folds every K/V range into one pass per
     // Q and uses neither, so it aliases them to existing CBs to keep the compile-time ABI without reserving L1.
-    // A resident ring state never saves or restores accumulators through the LSE staging path either.
+    // A resident ring state never saves or restores accumulators through the deferred-normalization staging path
+    // either.
     const bool needs_accumulator_staging_cbs =
         (!has_sliding_window || ksplit_count > 1) && !variant.resident_ring_state();
     const uint32_t cb_stats_in =
@@ -3721,7 +3695,7 @@ namespace ttnn::prim {
 
 namespace {
 
-// Legacy ring joint compute (precision unset): host-chosen subblocks, LSE / deferred-normalization
+// Legacy ring joint compute (precision unset): host-chosen subblocks, deferred-normalization (O, max, sum)
 // accumulator staging, CBs allocated from index 0.
 class LegacyRingJointCompute final : public ring_joint_sdpa::ComputeVariant {
 public:

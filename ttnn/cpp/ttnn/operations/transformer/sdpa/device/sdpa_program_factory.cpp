@@ -61,14 +61,6 @@ struct CoreChainInfo {
 
 namespace {
 
-// Select the mask data format: user-provided mask dtype, or Float16_b (avoids Bfp4_b precision loss).
-tt::DataFormat select_mask_dataformat(const std::optional<Tensor>& attn_mask) {
-    if (attn_mask.has_value()) {
-        return tt::tt_metal::datatype_to_dataformat_converter(attn_mask.value().dtype());
-    }
-    return tt::DataFormat::Float16_b;
-}
-
 uint32_t lightweight_mask_tile_count(bool is_causal, bool has_sliding_window, bool has_k_partial_mask) {
     uint32_t tiles = 1;  // neginf
     if (has_sliding_window) {
@@ -80,15 +72,6 @@ uint32_t lightweight_mask_tile_count(bool is_causal, bool has_sliding_window, bo
         tiles++;  // partial K tile
     }
     return tiles;
-}
-
-// Compute the largest granularity that evenly divides both DHt and vDHt (up to dst_size).
-uint32_t compute_dht_granularity(uint32_t DHt, uint32_t vDHt, uint32_t dst_size) {
-    uint32_t g = std::min({DHt, vDHt, dst_size});
-    while (g > 1 && (DHt % g != 0 || vDHt % g != 0)) {
-        g--;
-    }
-    return g;
 }
 
 // Resolve exp_approx_mode from program config, defaulting to true.
@@ -404,7 +387,7 @@ ProgramDescriptor SDPAOperation::SDPAProgramFactory::create_descriptor(
 
     auto [math_fidelity, math_approx_mode, fp32_dest_acc_en, packer_l1_acc, dst_full_sync_en] =
         get_compute_kernel_config_args(device->arch(), compute_kernel_config);
-    TT_FATAL(!fp32_dest_acc_en, "The SDPA streaming kernel requires BF16 DEST (fp32_dest_acc_en=false)");
+    TT_ASSERT(!fp32_dest_acc_en);  // validate_on_program_cache_miss rejects FP32 DEST
 
     auto* q_buffer = input_tensor_q.buffer();
     auto* k_buffer = input_tensor_k.buffer();
@@ -508,7 +491,7 @@ ProgramDescriptor SDPAOperation::SDPAProgramFactory::create_descriptor(
     const uint32_t out_in0_block_w = Sk_chunk_t;
 
     auto [out_out_subblock_h, out_out_subblock_w] =
-        detail::determine_largest_subblock_size(Sq_chunk_t, vDHt, dst_size, 2);
+        detail::determine_largest_subblock_size(Sq_chunk_t, vDHt, dst_size, /*max_subblock_h=*/2);
 
     const uint32_t out_in0_num_subblocks = Sq_chunk_t / out_out_subblock_h;
     const uint32_t out_in1_num_subblocks = vDHt / out_out_subblock_w;
@@ -534,21 +517,6 @@ ProgramDescriptor SDPAOperation::SDPAProgramFactory::create_descriptor(
     log_debug(tt::LogOp, "out_out_subblock_h: {}", out_out_subblock_h);
     log_debug(tt::LogOp, "out_in0_num_subblocks: {}", out_in0_num_subblocks);
     log_debug(tt::LogOp, "out_in1_num_subblocks: {}", out_in1_num_subblocks);
-
-    // Determine granularity for statistics computation
-    // Each granularity must evenly divide its tile count to avoid dropping tiles
-    const uint32_t stats_granularity = detail::find_valid_granularity(Sq_chunk_t, dst_size);
-    const uint32_t sub_exp_granularity = detail::find_valid_granularity(Sk_chunk_t, dst_size);
-    // DHT_GRANULARITY is used in the kernel with both DHt and vDHt as the cols parameter,
-    // so the granularity must evenly divide both to avoid dropping tiles.
-    const uint32_t dht_granularity = compute_dht_granularity(DHt, vDHt, dst_size);
-    const uint32_t reduce_granularity = detail::find_valid_granularity(Sq_chunk_t, dst_size / 2);
-
-    // Log these
-    log_debug(tt::LogOp, "stats_granularity: {}", stats_granularity);
-    log_debug(tt::LogOp, "sub_exp_granularity: {}", sub_exp_granularity);
-    log_debug(tt::LogOp, "dht_granularity: {}", dht_granularity);
-    log_debug(tt::LogOp, "reduce_granularity: {}", reduce_granularity);
 
     // Reduce ops need to multiply by a scalar. We always want to multiply by 1.0f
     class bfloat16 bfloat_identity_scalar(1.0f);
@@ -708,10 +676,6 @@ ProgramDescriptor SDPAOperation::SDPAProgramFactory::create_descriptor(
     };
 
     std::map<std::string, std::string> defines_map;
-    defines_map["STATS_GRANULARITY"] = std::to_string(stats_granularity);
-    defines_map["SUB_EXP_GRANULARITY"] = std::to_string(sub_exp_granularity);
-    defines_map["DHT_GRANULARITY"] = std::to_string(dht_granularity);
-    defines_map["REDUCE_GRANULARITY"] = std::to_string(reduce_granularity);
     defines_map["EXP_APPROX_MODE"] = std::to_string(exp_approx_mode);
     log_debug(tt::LogOp, "use_zigzag_balancing: {}", use_zigzag_balancing);
 
@@ -727,18 +691,18 @@ ProgramDescriptor SDPAOperation::SDPAProgramFactory::create_descriptor(
     tt::DataFormat q_df = tt::tt_metal::datatype_to_dataformat_converter(input_tensor_q.dtype());
     tt::DataFormat k_df = tt::tt_metal::datatype_to_dataformat_converter(input_tensor_k.dtype());
     tt::DataFormat v_df = tt::tt_metal::datatype_to_dataformat_converter(input_tensor_v.dtype());
-    // Windowed mask is generated on-device in Float16_b (the streaming compute does not decode block-float masks).
-    tt::DataFormat mask_df = is_windowed ? tt::DataFormat::Float16_b : select_mask_dataformat(attn_mask);
+    // A provided mask keeps its dtype; generated masks (windowed, lightweight) are Float16_b (the streaming compute
+    // does not decode block-float masks it generates).
+    const tt::DataFormat mask_df = attn_mask && !is_windowed
+                                       ? tt::tt_metal::datatype_to_dataformat_converter(attn_mask->dtype())
+                                       : tt::DataFormat::Float16_b;
     tt::DataFormat out_df = tt::tt_metal::datatype_to_dataformat_converter(output_tensor.dtype());
     tt::DataFormat scalar_df =
         (input_tensor_q.dtype() == DataType::FLOAT32) ? tt::DataFormat::Float32 : tt::DataFormat::Float16_b;
-    tt::DataFormat im_df =
-        tt::DataFormat::Float16_b;  // Keep most intermediates in bf16 to save L1; opt-in fp32 per-CB below.
+    // Intermediates (scores, sums, outputs) in bf16 to save L1. salad_correct_fused inits mul_bcast_cols with the
+    // out CB and applies it to the sum CB too, so both must share this format for the unpack config to be correct.
+    tt::DataFormat im_df = tt::DataFormat::Float16_b;
     tt::DataFormat stats_df = im_df;
-    tt::DataFormat qk_im_df = im_df;
-    // salad_correct_fused inits mul_bcast_cols with out CB and applies it to sum CB too —
-    // both must share the same data format for the unpack config to be correct.
-    tt::DataFormat sum_df = im_df;
 
     uint32_t q_tile_size = tt::tile_size(q_df);
     uint32_t k_tile_size = tt::tile_size(k_df);
@@ -747,8 +711,6 @@ ProgramDescriptor SDPAOperation::SDPAProgramFactory::create_descriptor(
     uint32_t scalar_tile_size = tt::tile_size(scalar_df);
     uint32_t im_tile_size = tt::tile_size(im_df);
     uint32_t stats_tile_size = tt::tile_size(stats_df);
-    uint32_t qk_im_tile_size = tt::tile_size(qk_im_df);
-    uint32_t sum_tile_size = tt::tile_size(sum_df);
 
     log_debug(tt::LogOp, "q_data_format: {}", q_df);
     log_debug(tt::LogOp, "k_data_format: {}", k_df);
@@ -758,8 +720,6 @@ ProgramDescriptor SDPAOperation::SDPAProgramFactory::create_descriptor(
     log_debug(tt::LogOp, "scalar_data_format: {}", scalar_df);
     log_debug(tt::LogOp, "intermediate_data_format: {}", im_df);
     log_debug(tt::LogOp, "statistics_data_format: {}", stats_df);
-    log_debug(tt::LogOp, "qk_im_data_format: {}", qk_im_df);
-    log_debug(tt::LogOp, "sum_data_format: {}", sum_df);
 
     sdpa_cb::CBIds cb_ids;
     uint32_t next_cb_index = 0;
@@ -788,11 +748,9 @@ ProgramDescriptor SDPAOperation::SDPAProgramFactory::create_descriptor(
                                sliding_window_size.value_or(0) > 0 || is_windowed;
     // Only create mask buffer if it's going to be used.
     if (needs_mask_cb) {
-        // Lightweight mask: Float16_b, mask_tiles already computed (1 for padding, 2 for causal).
-        // Otherwise the full Sq×Sk double-buffered provided (or windowed) mask.
-        tt::DataFormat actual_mask_df = lightweight_mask ? tt::DataFormat::Float16_b : mask_df;
-        uint32_t actual_mask_tile_size = tt::tile_size(actual_mask_df);
-        cb_ids.mask_in = allocate_tile_cb(mask_tiles, actual_mask_tile_size, actual_mask_df);
+        // Lightweight mask: mask_tiles already computed (1 for padding, 2 for causal). Otherwise the full Sq×Sk
+        // double-buffered provided (or windowed) mask.
+        cb_ids.mask_in = allocate_tile_cb(mask_tiles, tt::tile_size(mask_df), mask_df);
     }
 
     // Windowed (block-diagonal) CBs and runtime values; see setup_windowed_cbs above.
@@ -828,13 +786,13 @@ ProgramDescriptor SDPAOperation::SDPAProgramFactory::create_descriptor(
     // No row buffers needed — cb_push_back_hold_wr_ptr writes directly to cb_qkt_im.
     cb_ids.recip_scratch = allocate_tile_cb(1, im_tile_size, im_df);
 
-    cb_ids.qk_im = allocate_tile_cb(qk_tiles, qk_im_tile_size, qk_im_df);
+    cb_ids.qk_im = allocate_tile_cb(qk_tiles, im_tile_size, im_df);
     cb_ids.out_im_A = allocate_tile_cb(out_im_tiles, im_tile_size, im_df);
     cb_ids.out_im_B = allocate_tile_cb(out_im_tiles, im_tile_size, im_df);
     cb_ids.max_A = allocate_tile_cb(statistics_tiles, stats_tile_size, stats_df);
     cb_ids.max_B = allocate_tile_cb(statistics_tiles, stats_tile_size, stats_df);
-    cb_ids.sum_A = allocate_tile_cb(statistics_tiles, sum_tile_size, sum_df);
-    cb_ids.sum_B = allocate_tile_cb(statistics_tiles, sum_tile_size, sum_df);
+    cb_ids.sum_A = allocate_tile_cb(statistics_tiles, im_tile_size, im_df);
+    cb_ids.sum_B = allocate_tile_cb(statistics_tiles, im_tile_size, im_df);
     cb_ids.exp_max_diff = allocate_tile_cb(statistics_tiles, stats_tile_size, stats_df);
     cb_ids.out = allocate_tile_cb(out0_t, out_tile_size, out_df);
 
@@ -872,15 +830,8 @@ ProgramDescriptor SDPAOperation::SDPAProgramFactory::create_descriptor(
         });
     }
 
-    uint32_t num_phases = 1;
     uint32_t read_offset = 0;
     uint32_t write_offset = 0;
-
-    // Defense-in-depth: kernels place global_q runtime args past the max phase_2 slot,
-    // but the host-side compute/writer arg packing only zeros the phase_2 slots when
-    // num_phases==1. Any future change that raises num_phases on this path must rethink
-    // the layout — assert early so the failure is loud rather than a slot reinterpretation.
-    TT_FATAL(num_phases == 1, "Single-chip SDPA assumes num_phases == 1 under global Q scheduling");
 
     // Build chain topology for KV forwarding (non-causal only)
     std::vector<CoreWork> core_work(num_cores);
@@ -1428,7 +1379,7 @@ ProgramDescriptor SDPAOperation::SDPAProgramFactory::create_descriptor(
         reader_args.push_back(page_table_buffer);
         reader_args.push_back(attention_sink_buffer);
         reader_args.push_back(chunk_start_idx_buffer);
-        reader_args.push_back(num_phases);
+        reader_args.push_back(1u);  // Q phases (always 1)
         reader_args.push_back(chunked_q_chunk_offset);
         reader_args.push_back(read_offset);  // read_offset
 
@@ -1464,7 +1415,7 @@ ProgramDescriptor SDPAOperation::SDPAProgramFactory::create_descriptor(
         writer_desc.emplace_runtime_args(
             core,
             {out0_buffer,
-             num_phases,                                       // 1
+             1u,                                               // 1: Q phases (always 1)
              static_cast<uint32_t>(flexible_chunked ? 1 : 0),  // 2
              chunked_q_chunk_offset,                           // 3: phase_1
              write_offset,                                     // 4
@@ -1479,7 +1430,7 @@ ProgramDescriptor SDPAOperation::SDPAProgramFactory::create_descriptor(
 
         compute_desc.emplace_runtime_args(
             core,
-            {num_phases,                                       // 0
+            {1u,                                               // 0: Q phases (always 1)
              static_cast<uint32_t>(flexible_chunked ? 1 : 0),  // 1
              chunked_q_chunk_offset,                           // 2: phase_1
              0u,                                               // 3: phase_2 chunked offset (unused, num_phases==1)

@@ -70,9 +70,7 @@ void kernel_main() {
     const uint32_t cu_window_seqlens_eles = get_arg_val<uint32_t>(10);
     // Global row index of this tensor's first Q row. Non-zero when Q is a sequence-parallel shard:
     // Q/output are addressed locally, but cu_window_seqlens and K/V are global, so the mask generator
-    // needs the shard's global origin. Windowed builds only: the ring-distributed factory shares this
-    // kernel, never sets use_windowed_mask, and supplies runtime args only through slot 10 — so slots
-    // 11/12 must not be read there (mirrors the reader's guarded windowed tail).
+    // needs the shard's global origin. Windowed builds only (mirrors the reader's guarded windowed tail).
     uint32_t q_tok_offset = 0;
     // Per-device form: when a tensor was supplied its value wins, read below once cb_cu_window_in is
     // available. Zero address means the caller used the scalar above.
