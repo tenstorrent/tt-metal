@@ -12,6 +12,8 @@ Usage::
     python models/demos/pplx_decider_v1_27b/demo/demo.py
     # the inference.py image example on a local image
     python models/demos/pplx_decider_v1_27b/demo/demo.py --image photo.png
+    # another checkpoint: a local directory or an HF repo id (default: $HF_MODEL, else the pinned snapshot)
+    python models/demos/pplx_decider_v1_27b/demo/demo.py --model-path /path/to/checkpoint
     # an image row of the stage-12 HF golden (its PNG and question), compared with the HF answer
     python models/demos/pplx_decider_v1_27b/demo/demo.py --golden-row v02_count_circles
     # optional: compare the text example with the HF bf16 answers (reference/hf_demo_reference.py)
@@ -66,6 +68,11 @@ def main() -> None:
     parser.add_argument("--golden-row", help="run one row of the stage-12 HF image golden and compare")
     parser.add_argument("--golden-dir", type=Path, default=IMAGE_GOLDEN)
     parser.add_argument("--compare-hf", type=Path, help="HF answers JSON from reference/hf_demo_reference.py")
+    parser.add_argument(
+        "--model-path",
+        help="local checkpoint directory or HF repo id (default: $HF_MODEL, $PPLX_DECIDER_SNAPSHOT, "
+        "then the HF cache at the pinned revision)",
+    )
     parser.add_argument("--device-id", type=int, default=0)
     args = parser.parse_args()
     if args.image is not None and not args.image.is_file():
@@ -88,7 +95,7 @@ def main() -> None:
     device = ttnn.open_device(device_id=args.device_id, l1_small_size=24576)
     try:
         start = time.perf_counter()
-        decider = TTDecider.from_pretrained(device, vision=bool(images))
+        decider = TTDecider.from_pretrained(device, model_path=args.model_path, vision=bool(images))
         load_s = time.perf_counter() - start
         results, timings = {}, {}
         for name, question in questions.items():

@@ -26,9 +26,11 @@ from __future__ import annotations
 from pathlib import Path
 from typing import Sequence
 
+from loguru import logger
+
 from models.demos.pplx_decider_v1_27b.reference.decision_prompts import AppTokenizer
 from models.demos.pplx_decider_v1_27b.tt.model import PplxDeciderModel
-from models.demos.pplx_decider_v1_27b.tt.paths import snapshot_path
+from models.demos.pplx_decider_v1_27b.tt.paths import resolve_model_path
 
 # The text example of the snapshot inference.py (main()).
 DEMO_STATE = "My Stripe integration keeps failing. I'm losing sales. Please help ASAP."
@@ -71,17 +73,45 @@ class TTDecider:
 
     @classmethod
     def from_pretrained(
-        cls, device, snapshot: Path | str | None = None, *, vision: bool = True, **model_kwargs
+        cls,
+        mesh_device,
+        model_path: Path | str | None = None,
+        max_seq_len: int = 8192,
+        vision: bool = True,
+        *,
+        snapshot: Path | str | None = None,
+        **model_kwargs,
     ) -> "TTDecider":
-        """``vision=False`` skips the vision tower (text-only use, ~0.96 GiB less DRAM).
+        """Load the model on ``mesh_device`` (one device), the ``models/demos/gemma4`` way.
 
-        ``snapshot=None`` resolves the HF snapshot from the HF cache (``tt/paths.py``).
+        ``model_path``: a local checkpoint directory or an HF repo id. ``None`` resolves, in order,
+        ``$HF_MODEL``, ``$PPLX_DECIDER_SNAPSHOT`` (legacy), then the HF cache at the pinned revision
+        (``tt/paths.py: resolve_model_path``). An HF repo id is looked up in the HF cache only
+        (``perplexity-ai/pplx-decider-v1-27b`` at the pinned revision); a missing one raises with the
+        ``hf download`` command.
+
+        The device weight cache is located from ``model_path`` (``tt/paths.py:
+        resolve_model_cache_path``): ``$TT_CACHE_PATH``, else next to the weights
+        (``<model dir>/tt_weight_cache/<key>``). The first load fills it (27 GB, ~160 s).
+
+        ``max_seq_len``: the largest prefill bucket used, one of 128 / 1024 / 2048 / 4096 / 8192.
+        Prompts longer than it are rejected (nothing is truncated); smaller buckets are unchanged.
+        Batch is always 1 (one request per forward), so there is no ``max_batch_size``.
+
+        ``vision=False`` skips the vision tower (text-only use, ~0.96 GiB less DRAM).
+        ``snapshot=`` is a deprecated alias of ``model_path``.
         """
         from models.demos.pplx_decider_v1_27b.reference.hf_reference import SnapshotReader
 
-        snapshot = snapshot or snapshot_path()
-        model = PplxDeciderModel.from_snapshot(device, SnapshotReader(snapshot), vision=vision, **model_kwargs)
-        return cls(model, AppTokenizer(Path(snapshot)))
+        if snapshot is not None:
+            logger.warning("TTDecider.from_pretrained(snapshot=...) is deprecated; use model_path=")
+            model_path = model_path or snapshot
+        model_dir, source = resolve_model_path(model_path)
+        logger.info(f"TTDecider: model path {model_dir} (from {source}), max_seq_len {max_seq_len}, vision {vision}")
+        model = PplxDeciderModel.from_snapshot(
+            mesh_device, SnapshotReader(model_dir), vision=vision, max_seq_len=max_seq_len, **model_kwargs
+        )
+        return cls(model, AppTokenizer(model_dir))
 
     def row(self, state: str, question, images: Sequence = ()) -> dict:
         row = {"state": state, "question": question}

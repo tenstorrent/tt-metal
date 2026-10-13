@@ -4,12 +4,21 @@
 
 Nothing here is machine specific. Locations come from, in order of precedence:
 
-1. a specific ``PPLX_DECIDER_*`` variable (for example ``PPLX_DECIDER_WEIGHT_CACHE``);
+1. a specific ``PPLX_DECIDER_*`` variable (for example ``PPLX_DECIDER_DECISION_GOLDEN``);
 2. ``$PPLX_DECIDER_ARTIFACTS``, the root of all generated files;
 3. the default root ``<tt-metal>/generated/pplx_decider`` (tt-metal's ``generated/`` is gitignored).
 
-The HF snapshot is resolved through the HF cache (``$HF_HOME``) at the pinned revision, or taken from
-``$PPLX_DECIDER_SNAPSHOT``.
+The model path and the device weight cache follow ``models/demos/gemma4`` instead:
+
+- ``resolve_model_path(model_path)``: the argument, else ``$HF_MODEL``, else ``$PPLX_DECIDER_SNAPSHOT``
+  (legacy), else the HF cache at the pinned ``REVISION``. A local directory is used as is; an HF repo id
+  is looked up in the HF cache (``$HF_HOME``, ``local_files_only``).
+- ``resolve_model_cache_path(model_path)``: the root is ``$TT_CACHE_PATH``, else
+  ``$PPLX_DECIDER_WEIGHT_CACHE`` (legacy), else the local model directory itself (the cache sits next to
+  the weights), else ``$HF_HOME/tt_cache/<repo id with / -> -->``. The cache is
+  ``<root>/tt_weight_cache/<key>``; ``<key>`` is the snapshot revision for an HF-cache snapshot directory,
+  else ``local-<sha256[:12]>`` of the checkpoint's ``config.json`` and ``model.safetensors.index.json``
+  bytes and the size and mtime of ``readout.safetensors``, so two checkpoints never share a cache.
 
 Layout below ``ARTIFACTS``::
 
@@ -17,7 +26,6 @@ Layout below ``ARTIFACTS``::
     goldens/decisions/        25-row text decision golden              reference/hf_decision_golden.py
     goldens/vision/           vision tower golden (inputs/, tower/, images/)  reference/hf_vision_reference.py
     goldens/vision/e2e/       8-row image decision golden              reference/hf_image_decision_golden.py
-    weight_cache/             ttnn disk weight cache (~27 GB)
     logs/                     pcc_results.jsonl, context_probe.jsonl
     perf/                     prefill_perf.jsonl
     e2e/                      text e2e results, full-model perf, precision-config check
@@ -32,6 +40,8 @@ Print the resolved locations (CPU only, needs no device and no snapshot)::
 
 from __future__ import annotations
 
+import errno
+import hashlib
 import os
 from pathlib import Path
 
@@ -57,8 +67,7 @@ VISION_GOLDEN_DIR = _env_path("PPLX_DECIDER_VISION_GOLDEN", GOLDENS_ROOT / "visi
 IMAGE_GOLDEN_DIR = _env_path("PPLX_DECIDER_IMAGE_GOLDEN", VISION_GOLDEN_DIR / "e2e")
 GOLDEN_IMAGE_DIR = VISION_GOLDEN_DIR / "images"  # the 8 synthetic PNGs of the image prompt set
 
-# Device weight cache and logs.
-WEIGHT_CACHE = _env_path("PPLX_DECIDER_WEIGHT_CACHE", ARTIFACTS / "weight_cache")
+# Logs. (The device weight cache is located from the model path: resolve_model_cache_path below.)
 PCC_LOG = _env_path("PPLX_DECIDER_PCC_LOG", ARTIFACTS / "logs" / "pcc_results.jsonl")
 PROBE_LOG = _env_path("PPLX_DECIDER_PROBE_LOG", ARTIFACTS / "logs" / "context_probe.jsonl")
 PERF_LOG = _env_path("PPLX_DECIDER_PERF_LOG", ARTIFACTS / "perf" / "prefill_perf.jsonl")
@@ -102,27 +111,133 @@ def require(path: Path | str, golden: str) -> Path:
     raise FileNotFoundError(message)
 
 
-def snapshot_path() -> Path:
-    """The immutable snapshot directory: ``$PPLX_DECIDER_SNAPSHOT``, else the HF cache at ``REVISION``."""
-    override = os.environ.get("PPLX_DECIDER_SNAPSHOT")
-    if override:
-        return Path(override)
+# ----------------------------------------------------------------------------------------------
+# Model path and device weight cache (models/demos/gemma4 convention)
+# ----------------------------------------------------------------------------------------------
+
+CACHE_SUBDIR = "tt_weight_cache"
+_RO_ERRNOS = (errno.EROFS, errno.EACCES, errno.EPERM)
+
+
+def _hf_snapshot(repo_id: str, revision: str | None) -> Path:
+    """Snapshot directory of ``repo_id`` in the HF cache (``local_files_only``), or a FileNotFoundError
+    that names the ``hf download`` command."""
     from huggingface_hub import snapshot_download
 
     try:
-        return Path(snapshot_download(MODEL_ID, revision=REVISION, local_files_only=True))
+        return Path(snapshot_download(repo_id, revision=revision, local_files_only=True))
     except Exception as e:  # LocalEntryNotFoundError and friends
+        at = f"@{revision}" if revision else ""
+        flag = f" --revision {revision}" if revision else ""
         raise FileNotFoundError(
-            f"{MODEL_ID}@{REVISION} is not in the HF cache (HF_HOME={os.environ.get('HF_HOME', '<default>')}). "
-            f"Download it with: hf download {MODEL_ID} --revision {REVISION}  (or set PPLX_DECIDER_SNAPSHOT)"
+            f"{repo_id}{at} is not in the HF cache (HF_HOME={os.environ.get('HF_HOME', '<default>')}). "
+            f"Download it with: hf download {repo_id}{flag}  (or pass a local checkpoint directory)"
         ) from e
+
+
+def _model_dir(value: Path | str) -> Path:
+    """A local checkpoint directory as is; an HF repo id through the HF cache (``MODEL_ID`` at ``REVISION``)."""
+    path = Path(value).expanduser()
+    if path.is_dir():
+        return path
+    repo_id = str(value)
+    if path.is_absolute() or repo_id.startswith(".") or repo_id.count("/") != 1:
+        raise FileNotFoundError(f"model path {value!r} is neither a local directory nor an HF repo id")
+    return _hf_snapshot(repo_id, REVISION if repo_id == MODEL_ID else None)
+
+
+def resolve_model_path(model_path: Path | str | None = None) -> tuple[Path, str]:
+    """``(checkpoint directory, source)``: the argument, else ``$HF_MODEL``, else ``$PPLX_DECIDER_SNAPSHOT``
+    (legacy), else the HF cache at the pinned ``REVISION``. Each value is a local directory or an HF repo id."""
+    candidates = (
+        (model_path, "argument"),
+        (os.environ.get("HF_MODEL"), "$HF_MODEL"),
+        (os.environ.get("PPLX_DECIDER_SNAPSHOT"), "$PPLX_DECIDER_SNAPSHOT (legacy)"),
+    )
+    for value, source in candidates:
+        if value:
+            return _model_dir(value), source
+    return _hf_snapshot(MODEL_ID, REVISION), f"HF cache {MODEL_ID}@{REVISION[:12]}"
+
+
+def snapshot_path() -> Path:
+    """The checkpoint directory of ``resolve_model_path()`` (no argument)."""
+    return resolve_model_path()[0]
+
+
+def cache_key(model_dir: Path | str) -> str:
+    """Weight cache key of a checkpoint directory.
+
+    An HF-cache snapshot (``.../models--<org>--<name>/snapshots/<revision>``) is keyed by its revision.
+    Any other directory gets ``local-`` + sha256[:12] of its ``config.json`` and
+    ``model.safetensors.index.json`` bytes and the size and mtime of ``readout.safetensors``.
+    """
+    model_dir = Path(model_dir).absolute()
+    if model_dir.parent.name == "snapshots" and model_dir.parent.parent.name.startswith("models--"):
+        return model_dir.name
+    digest = hashlib.sha256()
+    for name in ("config.json", "model.safetensors.index.json"):
+        digest.update(name.encode() + b"\0" + (model_dir / name).read_bytes() + b"\0")
+    stat = (model_dir / "readout.safetensors").stat()
+    digest.update(f"readout.safetensors {stat.st_size} {stat.st_mtime_ns}".encode())
+    return "local-" + digest.hexdigest()[:12]
+
+
+def _writable_cache_mirror(preferred: Path) -> Path:
+    """Writable mirror of a cache dir on a read-only mount (gemma4 ``_writable_cache_mirror``)."""
+    root = Path(os.environ.get("TT_METAL_HOME") or os.environ.get("HOME") or "/tmp")
+    suffix = Path(*preferred.parts[-2:]) if len(preferred.parts) >= 2 else Path(preferred.name)
+    return root / "generated" / "pplx_decider_tt_cache" / suffix
+
+
+def _ensure_cache_dir(path: Path) -> Path:
+    """Return ``path``, creating it when possible; on a read-only mount use a writable mirror (gemma4)."""
+    if path.is_dir():
+        return path
+    try:
+        path.mkdir(parents=True, exist_ok=True)
+        return path
+    except OSError as e:
+        if e.errno not in _RO_ERRNOS:
+            raise
+        if path.is_dir():
+            return path
+        alt = _writable_cache_mirror(path)
+        from loguru import logger
+
+        logger.warning(f"pplx-decider weight cache: {path} is not writable ({e}); using {alt}")
+        alt.mkdir(parents=True, exist_ok=True)
+        return alt
+
+
+def resolve_model_cache_path(model_path: Path | str, *, create: bool = True) -> tuple[Path, str]:
+    """``(weight cache directory, source of its root)`` for a checkpoint (gemma4 ``resolve_model_cache_path``).
+
+    Root: ``$TT_CACHE_PATH``, else ``$PPLX_DECIDER_WEIGHT_CACHE`` (legacy), else the local ``model_path``
+    directory (the cache sits next to the weights), else ``$HF_HOME/tt_cache/<repo id, / -> -->``. The cache
+    is ``<root>/tt_weight_cache/<cache_key>``. Every policy shares it: a cache file name carries the
+    weight's dtype, shape and layout. ``create=False`` only computes the path.
+    """
+    for env in ("TT_CACHE_PATH", "PPLX_DECIDER_WEIGHT_CACHE"):
+        if os.environ.get(env):
+            root, source = Path(os.environ[env]), f"${env}"
+            break
+    else:
+        if Path(model_path).is_dir():
+            root, source = Path(model_path), "model directory"
+        else:
+            # An HF repo id: caching under Path(model_path) would create it as a relative dir in cwd.
+            hf_home = os.environ.get("HF_HOME") or os.path.expanduser("~/.cache/huggingface")
+            root, source = Path(hf_home) / "tt_cache" / str(model_path).replace("/", "--"), "$HF_HOME/tt_cache"
+    path = root / CACHE_SUBDIR / cache_key(_model_dir(model_path))
+    return (_ensure_cache_dir(path) if create else path), source
 
 
 def resolved() -> dict[str, Path]:
     """Every default location, by name."""
     names = (
         "MODEL_ROOT TT_METAL_ROOT ARTIFACTS GOLDENS_ROOT LAYER_GOLDEN_DIR DECISION_GOLDEN_DIR VISION_GOLDEN_DIR "
-        "IMAGE_GOLDEN_DIR GOLDEN_IMAGE_DIR WEIGHT_CACHE PCC_LOG PROBE_LOG PERF_LOG E2E_DIR IMAGE_PERF_DIR "
+        "IMAGE_GOLDEN_DIR GOLDEN_IMAGE_DIR PCC_LOG PROBE_LOG PERF_LOG E2E_DIR IMAGE_PERF_DIR "
         "IMAGE_E2E_DIR VISION_DIR VISION_PCC_LOG DATATYPE_SWEEP_DIR"
     ).split()
     return {n: globals()[n] for n in names}
@@ -132,6 +247,9 @@ if __name__ == "__main__":
     for name, path in resolved().items():
         print(f"{name:<20} {path}")
     try:
-        print(f"{'SNAPSHOT':<20} {snapshot_path()}")
+        model_dir, model_source = resolve_model_path()
+        print(f"{'MODEL_PATH':<20} {model_dir}  (from {model_source})")
+        cache_dir, cache_source = resolve_model_cache_path(model_dir, create=False)
+        print(f"{'WEIGHT_CACHE':<20} {cache_dir}  (root from {cache_source})")
     except FileNotFoundError as e:
-        print(f"{'SNAPSHOT':<20} not found: {e}")
+        print(f"{'MODEL_PATH':<20} not found: {e}")

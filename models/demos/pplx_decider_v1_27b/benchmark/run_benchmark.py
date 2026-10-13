@@ -91,6 +91,7 @@ def main() -> None:
     parser = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
     parser.add_argument("--subsets", type=Path, required=True)
     parser.add_argument("--out", type=Path, required=True)
+    parser.add_argument("--model-path", help="checkpoint directory or HF repo id (default: TTDecider resolution)")
     parser.add_argument("--device-id", type=int, default=0)
     args = parser.parse_args()
     args.out.mkdir(parents=True, exist_ok=True)
@@ -102,7 +103,7 @@ def main() -> None:
     summary = {"time_start": time.strftime("%Y-%m-%d %H:%M:%S")}
     try:
         t = time.perf_counter()
-        decider = TTDecider.from_pretrained(device, vision=True)
+        decider = TTDecider.from_pretrained(device, model_path=args.model_path, vision=True)
         summary["load_s"] = time.perf_counter() - t
         summary["policy"] = decider.model.config.optimizations.policy.name
         print(f"STAGE11 loaded in {summary['load_s']:.1f} s, policy {summary['policy']}", flush=True)

@@ -69,20 +69,26 @@ from models.demos.pplx_decider_v1_27b.tt.weight_adapter import (
 )
 
 BUCKETS = (128, 1024, 2048, 4096, 8192)
-DEFAULT_CACHE_ROOT = paths.WEIGHT_CACHE  # $PPLX_DECIDER_WEIGHT_CACHE, default $PPLX_DECIDER_ARTIFACTS/weight_cache
 TEXT_PREFIX = "language_model."
 IMAGE_TOKEN_ID = 248056  # config.image_token_id (<|image_pad|>), checked against the config at load
 _ST_DTYPES = {"BF16": torch.bfloat16, "F32": torch.float32, "F16": torch.float16}
 
 
-def bucket_for(length: int) -> int:
-    """Smallest prefill bucket holding ``length`` tokens; longer prompts are rejected like the app."""
+def buckets_up_to(max_seq_len: int = APP_MAX_LENGTH) -> tuple[int, ...]:
+    """The prefill buckets a model built with ``max_seq_len`` (one of ``BUCKETS``) accepts."""
+    if max_seq_len not in BUCKETS:
+        raise ValueError(f"max_seq_len must be one of the prefill buckets {BUCKETS}, got {max_seq_len}")
+    return tuple(b for b in BUCKETS if b <= max_seq_len)
+
+
+def bucket_for(length: int, max_seq_len: int = APP_MAX_LENGTH) -> int:
+    """Smallest prefill bucket holding ``length`` tokens; prompts over ``max_seq_len`` are rejected like the app."""
     if length < 1:
         raise ValueError("A prompt needs at least one token")
-    for bucket in BUCKETS:
+    for bucket in buckets_up_to(max_seq_len):
         if length <= bucket:
             return bucket
-    raise ValueError(f"Question branch exceeds the {APP_MAX_LENGTH}-token limit; no input was truncated.")
+    raise ValueError(f"Question branch exceeds the {max_seq_len}-token limit; no input was truncated.")
 
 
 def dram_view(device) -> dict:
@@ -243,6 +249,7 @@ class ModelConfig:
     pad_token_id: int
     layer_ids: tuple[int, ...]
     cache_dir: Path | None
+    max_seq_len: int = APP_MAX_LENGTH  # largest prefill bucket accepted (see ``buckets_up_to``)
 
 
 @dataclass
@@ -294,18 +301,23 @@ class PplxDeciderModel(LightweightModule):
         cache_dir: Path | str | None = "default",
         prefill_chunk: int = 2048,
         vision: bool = False,
+        max_seq_len: int = APP_MAX_LENGTH,
     ) -> "PplxDeciderModel":
         """Build and upload every weight. ``layer_ids`` (default: all 64) allows a reduced stack for debugging.
 
         ``vision=True`` also loads the BF16 vision tower (``PplxVisionTower``, ~0.96 GiB) for image requests.
+        ``max_seq_len`` (one of ``BUCKETS``) is the largest prefill bucket ``upload_tokens`` accepts; it
+        does not change what is built.
 
         ``policy`` defaults to ``PrecisionPolicy.default()`` (the stage-8 selected precision config).
-        ``cache_dir="default"`` uses ``DEFAULT_CACHE_ROOT/<revision>/weights``, shared by every policy:
-        each cache file name carries the weight's dtype, shape and layout (``LazyWeight`` fingerprint),
-        so a policy reuses the files of the groups whose dtype it shares. ``None`` disables the cache.
+        ``cache_dir="default"`` uses ``paths.resolve_model_cache_path(reader.path)`` (``$TT_CACHE_PATH``,
+        else next to the weights, ``<model dir>/tt_weight_cache/<key>``), shared by every policy: each
+        cache file name carries the weight's dtype, shape and layout (``LazyWeight`` fingerprint), so a
+        policy reuses the files of the groups whose dtype it shares. ``None`` disables the cache.
         """
-        from models.demos.pplx_decider_v1_27b.reference.hf_reference import REVISION, SnapshotReader
+        from models.demos.pplx_decider_v1_27b.reference.hf_reference import SnapshotReader
 
+        buckets_up_to(max_seq_len)  # validate before the long load
         reader = reader or SnapshotReader()
         args = PplxDeciderArgs.from_hf_config(reader.text_config)
         opts = Optimizations.build(
@@ -315,9 +327,11 @@ class PplxDeciderModel(LightweightModule):
             prefill_chunk=prefill_chunk,
         )
         logger.info(f"precision policy {opts.policy.name}: {json.dumps(opts.policy.describe())}")
+        cache_source = "argument"
         if cache_dir == "default":
-            cache_dir = DEFAULT_CACHE_ROOT / REVISION[:12] / "weights"
+            cache_dir, cache_source = paths.resolve_model_cache_path(reader.path)
         cache_dir = Path(cache_dir) if cache_dir is not None else None
+        logger.info(f"model path {reader.path}; weight cache {cache_dir} (root from {cache_source})")
         layer_ids = tuple(range(args.num_hidden_layers) if layer_ids is None else layer_ids)
         source = _SnapshotWeights(reader)
         report = LoadReport()
@@ -413,6 +427,12 @@ class PplxDeciderModel(LightweightModule):
             pad_token_id=_pad_token_id(reader),
             layer_ids=layer_ids,
             cache_dir=cache_dir,
+            max_seq_len=max_seq_len,
+        )
+        hits = sum(report.cache_hits.values())
+        logger.info(
+            f"model loaded in {report.seconds['total']:.1f} s from {reader.path}; weight cache {cache_dir}: "
+            f"full hit {hits == len(report.cache_hits)} ({hits}/{len(report.cache_hits)} groups)"
         )
         logger.info(f"model loaded: {json.dumps(report.seconds)}; DRAM {report.dram['after_load']}")
         return cls(config, embedding, layers, rotary, head, report, vision=tower)
@@ -424,9 +444,10 @@ class PplxDeciderModel(LightweightModule):
         Returns the device tensor and the index of the last real token.
         """
         ids = [int(t) for t in input_ids]
-        bucket = bucket or bucket_for(len(ids))
-        if bucket not in BUCKETS or len(ids) > bucket:
-            raise ValueError(f"{len(ids)} tokens do not fit bucket {bucket} (buckets {BUCKETS})")
+        buckets = buckets_up_to(self.config.max_seq_len)
+        bucket = bucket or bucket_for(len(ids), self.config.max_seq_len)
+        if bucket not in buckets or len(ids) > bucket:
+            raise ValueError(f"{len(ids)} tokens do not fit bucket {bucket} (buckets {buckets})")
         padded = torch.full((1, bucket), self.config.pad_token_id, dtype=torch.int32)
         padded[0, : len(ids)] = torch.tensor(ids, dtype=torch.int32)
         tokens = ttnn.from_torch(
