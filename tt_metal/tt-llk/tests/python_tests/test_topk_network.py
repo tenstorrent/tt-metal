@@ -89,23 +89,23 @@ def _parse_network(network: str):
 @dataclass
 class TOPK_NETWORK(TemplateParameter):
     network_op: int = 0  # 0 = local sort, 1 = local sort + merge + rebuild
-    k: int = 32
+    network_k: int = 32
     idir: int = 0
-    stable_sort: bool = False
+    network_stable_sort: bool = False
     fused_stable: bool = False
     rank_stamped: bool = False
     rebuild_skip_second: int = 0
     raw_fp32: bool = False
 
     def convert_to_cpp(self) -> str:
-        logk = self.k.bit_length() - 1
+        logk = self.network_k.bit_length() - 1
         return "\n".join(
             [
                 f"constexpr int TOPK_NETWORK_OP = {self.network_op};",
-                f"constexpr int TOPK_K = {self.k};",
+                f"constexpr int TOPK_K = {self.network_k};",
                 f"constexpr int TOPK_LOGK = {logk};",
                 f"constexpr int TOPK_IDIR = {self.idir};",
-                f"constexpr bool TOPK_STABLE_SORT = {str(self.stable_sort).lower()};",
+                f"constexpr bool TOPK_STABLE_SORT = {str(self.network_stable_sort).lower()};",
                 f"constexpr bool TOPK_FUSED_STABLE = {str(self.fused_stable).lower()};",
                 f"constexpr bool TOPK_RANK_STAMPED = {str(self.rank_stamped).lower()};",
                 f"constexpr int TOPK_REBUILD_SKIP_SECOND = {self.rebuild_skip_second};",
@@ -181,9 +181,9 @@ def test_topk_network(formats, mode_dest, network, idir, population):
             DEST_SYNC(),
             TOPK_NETWORK(
                 network_op=network_op,
-                k=K,
+                network_k=K,
                 idir=idir,
-                stable_sort=sort_mode == "stable",
+                network_stable_sort=sort_mode == "stable",
                 fused_stable=sort_mode == "fused",
                 rank_stamped=sort_mode == "rank_stamped",
                 rebuild_skip_second=skip_second,
@@ -351,9 +351,9 @@ def test_topk_network_fp32_raw(formats, sort_mode, network, idir, population):
             DEST_SYNC(),
             TOPK_NETWORK(
                 network_op=network_op,
-                k=K,
+                network_k=K,
                 idir=idir,
-                stable_sort=sort_mode == "stable",
+                network_stable_sort=sort_mode == "stable",
                 rebuild_skip_second=skip_second,
                 raw_fp32=True,
             ),
