@@ -1,0 +1,8 @@
+ID=t480-prof
+TASK=t480
+CONFIG=t477-prof
+TIMEOUT=600
+WORKDIR=/var/tmp/fasth3/t477/b
+ENV=/var/tmp/fasth3/t477/env477.yaml
+CMD=bash /var/tmp/fasth3/t477/run477.sh prof
+NEEDS=/var/tmp/fasth3/t477/b/build_Release

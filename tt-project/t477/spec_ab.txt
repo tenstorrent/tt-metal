@@ -1,0 +1,8 @@
+ID=t480-ab
+TASK=t480
+CONFIG=t477-ab
+TIMEOUT=600
+WORKDIR=/var/tmp/fasth3/t477/b
+ENV=/var/tmp/fasth3/t477/env477.yaml
+CMD=bash /var/tmp/fasth3/t477/run477.sh ab
+NEEDS=/var/tmp/fasth3/t477/b/build_Release

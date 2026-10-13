@@ -37,3 +37,15 @@ Branch ttp/t477-turbo-per-op-profile-of-one-10-s-block-t, base ae9534f5fb2 (t473
 ## Drops seen
 - 2026-10-13 18:28 UTC, blx01, broker job 183 (smarton ltx-rt live service, not this task): broker-kill
   "chips left PCIe"; chips 16-23 bridge reset failed, power-cycled; startup + fabric check OK 18:38 UTC.
+
+## t480 (run 1801, 2026-10-13)
+- Build: /var/tmp/fasth3/t477/b on blx01 from git-archive tarballs of 63329812d9f + tracy/tt-cluster-descriptors/umd
+  at the pinned SHAs (t422/b and t466/b no longer exist). Driver build477.sh, started 18:52 UTC with
+  `ttp detach --remote g15blx01 --dir /var/tmp/fasth3/t477/detach build477`; exit code in /var/tmp/fasth3/t477/build.rc.
+- Job script run477.sh (MODE prof | ab), env477.yaml, specs spec_prof.txt / spec_ab.txt (TIMEOUT 600, unmeasured).
+  Both tests use random weights: no MiniMax-H3 weights or h3hf cache are read.
+- chain477.sh (g15blx02, ttp detach): waits for build.rc, collect-only check (2 ids), profile job (<= 3 tries),
+  A/B job (<= 3 tries), each through t288/blx01-submit.sh (health + lint + no other smarton job on blx01).
+  Marker chain477.done in the run dir (CHAIN_OUT), log chain477.log.
+- Next: read out_prof/run.log + ops_perf_results CSV (tt-perf-report), out_ab/run.log (T477 lines + JIT grep),
+  fill the tables below, rm -rf /var/tmp/fasth3/t477 on blx01, ttp push --own --detach.
