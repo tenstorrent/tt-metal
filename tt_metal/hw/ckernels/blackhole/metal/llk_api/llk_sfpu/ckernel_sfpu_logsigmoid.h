@@ -24,8 +24,6 @@ inline void calculate_logsigmoid(
     sfpi::vConstFloatPrgm0 = 0.6924354434013367f;
     sfpi::vConstFloatPrgm1 = 0.49275708198547363f;
     sfpi::vConstFloatPrgm2 = 0.12142381817102432f;
-    // Both range tests read one register: x < -4 is the input above 4.
-    const sfpi::vFloat four = 4.0f;
     // The four highest coefficients stay in the LRegs the row leaves free.
     sfpi::vFloat c5 = -0.00028794066747650504f;
     sfpi::vFloat c6 = 5.3185409342404455e-05f;
@@ -45,12 +43,12 @@ inline void calculate_logsigmoid(
         sfpi::vFloat result = in;
         sfpi::vFloat x = -in;
 
-        v_if(in > four) {
+        v_if(in > 4.0f) {
             // For very negative: use exp
             result = -exp_neg_x;
         }
         // in <= 4 is implied: Blackhole float compares are a sign-magnitude total order, NaN included.
-        v_elseif(x < four) {
+        v_elseif(x < 4.0f) {
             // Polynomial approximation for softplus(-x) in the mid-range
             result = PolynomialEvaluator::eval(
                 x,
