@@ -17,7 +17,8 @@ class StartupWarmupTests(unittest.TestCase):
         adapter.batch_size = batch
         adapter.context = 128
         adapter.prefill_startup_warmup = True
-        adapter.cache = SimpleNamespace(num_pages=64)
+        adapter.cache = SimpleNamespace(num_pages=64, capacity=128)
+        adapter.prefill_warmup_buckets = [32, 64, 96, 128]
         adapter.generator = MagicMock()
         adapter.generator.cache = adapter.cache
         adapter.generator.batched_prefill = True
@@ -25,12 +26,21 @@ class StartupWarmupTests(unittest.TestCase):
         adapter._decode_bound = True
         return adapter
 
-    def test_default_off_and_b1_do_not_change_state(self):
-        for batch, enabled in ((4, False), (1, True)):
-            adapter = self.make_adapter(batch)
-            adapter.prefill_startup_warmup = enabled
-            adapter.warmup_model_prefill(kv_cache=adapter.cache)
-            self.assertEqual(adapter.generator.mock_calls, [])
+    def test_disabled_warmup_touches_nothing(self):
+        adapter = self.make_adapter()
+        adapter.prefill_startup_warmup = False
+        adapter.warmup_model_prefill(kv_cache=adapter.cache)
+        self.assertEqual(adapter.generator.mock_calls, [])
+
+    def test_a_single_capacity_server_still_warms_its_serving_buckets(self):
+        # The occupancy sweep has nothing to do at capacity one, but a lone request still takes
+        # the slot-zero path, and that path is the whole reason short prompts were slow.
+        adapter = self.make_adapter(1)
+        adapter.warmup_model_prefill(kv_cache=adapter.cache)
+        self.assertEqual(adapter.generator.prefill_forward.call_count, 0)
+        warmed = [call.kwargs["prompt_lens"][0] for call in adapter.generator.serving_prefill_tokens.call_args_list]
+        self.assertEqual(warmed, [32, 64, 96, 128])
+        self.assertTrue(adapter._prefill_startup_warmed)
 
     @patch("models.demos.qwen38_27b_t3k.tt.generator_vllm.ttnn.synchronize_device")
     def test_all_occupancies_then_reset_and_restore_table(self, synchronize):
@@ -42,7 +52,15 @@ class StartupWarmupTests(unittest.TestCase):
             self.assertEqual(tuple(call.args[0].shape), (batch, 128))
             self.assertEqual(call.kwargs["slots"], list(range(batch)))
             self.assertIs(call.kwargs["kv_cache"], adapter.cache)
-        adapter.generator.reset.assert_called_once()
+        # A lone request takes the slot-zero serving path, whose programs the occupancy sweep
+        # above never builds, so each bucket is compiled through the call that will replay it.
+        warmed = [call.kwargs["prompt_lens"][0] for call in adapter.generator.serving_prefill_tokens.call_args_list]
+        self.assertEqual(warmed, [32, 64, 96, 128])
+        for call in adapter.generator.serving_prefill_tokens.call_args_list:
+            self.assertEqual(call.kwargs["slots"], [0])
+            self.assertEqual(call.kwargs["start_pos"], [0])
+        # One reset ends the occupancy sweep, the other ends the bucket warmup.
+        self.assertEqual(adapter.generator.reset.call_count, 2)
         self.assertTrue(torch.equal(adapter.generator._refresh_table.call_args.args[0], table))
         self.assertFalse(adapter._decode_bound)
         self.assertTrue(adapter._prefill_startup_warmed)

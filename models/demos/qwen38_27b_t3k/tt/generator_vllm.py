@@ -40,6 +40,23 @@ def _shared_pool_ceiling():
 MIN_SNAPSHOT_TOKENS = 4096
 
 
+def parse_warmup_buckets(setting, context):
+    """Prompt lengths to compile before the first request, as whole pages.
+
+    Serving compiles the stack per bucket, and a bucket first seen under load costs seconds of
+    TTFT. The default ladder covers a chat turn; everything above it is rare enough, and slow
+    enough already, that paying on first sight is the better trade.
+    """
+    if setting is None:
+        wanted = [32, 64, 96, 128, 160, 192, 224, 256, 512, 1024, 2048, 4096]
+    elif not setting.strip():
+        return []
+    else:
+        wanted = [int(piece) for piece in setting.replace(",", " ").split()]
+    ceiling = min(context, 4096)
+    return sorted({size for size in wanted if 0 < size <= ceiling and size % 32 == 0})
+
+
 class Qwen38ForCausalLM:
     _MAX_CONTEXT = 262144
     # Leave room for every output position and the final traced increment.
@@ -97,6 +114,7 @@ class Qwen38ForCausalLM:
         self._prefix_snapshots = {}
         self._last_device_sampling = None
         self.prefill_startup_warmup = os.getenv("QWEN_PREFILL_STARTUP_WARMUP", "0") == "1"
+        self.prefill_warmup_buckets = parse_warmup_buckets(os.getenv("QWEN_PREFILL_WARMUP_BUCKETS"), context)
         # A served step costs more than this entry point does. Timing decode_forward from the
         # inside is the only way to split that: the difference against the harness's reported
         # TPOT is the work the plugin and vLLM do around the call.
@@ -443,19 +461,36 @@ class Qwen38ForCausalLM:
     def warmup_model_prefill(self, **kwargs):
         # Optional deployment warmup, independent of any benchmark's request list.
         # Compile the model's native stack chunk at every supported occupancy.
-        if (
-            not getattr(self, "prefill_startup_warmup", False)
-            or not self.generator.batched_prefill
-            or self.batch_size == 1
-            or getattr(self, "_prefill_startup_warmed", False)
-        ):
+        if not getattr(self, "prefill_startup_warmup", False) or getattr(self, "_prefill_startup_warmed", False):
             return
         cache = kwargs["kv_cache"]
         self._cache(cache)
+        begin = time.perf_counter()
+        chunk = self._warm_occupancies(cache)
+        buckets = self._warm_serving_buckets(cache)
+        if chunk is None and not buckets:
+            return
+        self._prefill_startup_warmed = True
+        logger.info(
+            "Qwen3.8 prefill startup warmup: {}",
+            json.dumps(
+                dict(
+                    chunk=chunk,
+                    occupancies=list(range(1, self.batch_size + 1)),
+                    buckets=buckets,
+                    seconds=time.perf_counter() - begin,
+                    cache_reset=True,
+                )
+            ),
+        )
+
+    def _warm_occupancies(self, cache):
+        """Compile the batched prefill chunk at every occupancy the server can schedule."""
+        if not self.generator.batched_prefill or self.batch_size == 1:
+            return None
         chunk = min(4096, self.context // 32 * 32, (cache.num_pages // self.batch_size - 1) * 32)
         if chunk < 32:
-            return
-        begin = time.perf_counter()
+            return None
         original_table = self.generator.page_host.clone()
         pages = min(chunk // 32 + 1, original_table.shape[1])
         table = torch.zeros_like(original_table)
@@ -479,18 +514,35 @@ class Qwen38ForCausalLM:
             self.generator.reset()
             self.generator._refresh_table(original_table)
             self._decode_bound = False
-        self._prefill_startup_warmed = True
-        logger.info(
-            "Qwen3.8 prefill startup warmup: {}",
-            json.dumps(
-                dict(
-                    chunk=chunk,
-                    occupancies=list(range(1, self.batch_size + 1)),
-                    seconds=time.perf_counter() - begin,
-                    cache_reset=True,
-                )
-            ),
-        )
+        return chunk
+
+    def _warm_serving_buckets(self, cache):
+        """Compile the single-request serving path at each bucket a chat turn is likely to land in.
+
+        This goes through serving_prefill_tokens rather than prefill_forward because a lone
+        request takes the slot-zero path, whose programs and persistent buffers are its own.
+        """
+        generator = self.generator
+        warmed = []
+        for bucket in self.prefill_warmup_buckets:
+            if bucket > cache.capacity:
+                break
+            generator.reset_recurrent_slots([0])
+            generator.serving_prefill_tokens(
+                torch.zeros(1, bucket, dtype=torch.int64),
+                page_table=generator.page_host,
+                kv_cache=cache,
+                prompt_lens=[bucket],
+                start_pos=[0],
+                slots=[0],
+            )
+            warmed.append(bucket)
+        if warmed:
+            # Warmup must leave no request behind it: the sampler, the positions and both caches
+            # are what the first real request reads.
+            generator.reset()
+            self._decode_bound = False
+        return warmed
 
     def warmup_model_decode(self, **kwargs):
         # Warmup/capture restores request state; first decode uses that same path.
