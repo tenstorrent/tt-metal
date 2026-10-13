@@ -5882,7 +5882,7 @@
    }
   },
   {
-   "sig": "c30d4661c3",
+   "sig": "f47242da7f",
    "count": 38,
    "op": "ttnn.bringup.unified_routed_expert_moe",
    "args": [
@@ -5959,7 +5959,7 @@
       "dtype": "BFLOAT8_B",
       "layout": "TILE",
       "buffer": "DRAM",
-      "memory_layout": "INTERLEAVED",
+      "memory_layout": "ND_SHARDED",
       "mesh": [
        4,
        2
@@ -5975,7 +5975,7 @@
       "dtype": "BFLOAT8_B",
       "layout": "TILE",
       "buffer": "DRAM",
-      "memory_layout": "INTERLEAVED",
+      "memory_layout": "ND_SHARDED",
       "mesh": [
        4,
        2
@@ -5991,7 +5991,7 @@
       "dtype": "BFLOAT8_B",
       "layout": "TILE",
       "buffer": "DRAM",
-      "memory_layout": "INTERLEAVED",
+      "memory_layout": "ND_SHARDED",
       "mesh": [
        4,
        2
@@ -6007,7 +6007,7 @@
       "dtype": "BFLOAT8_B",
       "layout": "TILE",
       "buffer": "DRAM",
-      "memory_layout": "INTERLEAVED",
+      "memory_layout": "ND_SHARDED",
       "mesh": [
        4,
        2
@@ -6023,7 +6023,7 @@
       "dtype": "BFLOAT8_B",
       "layout": "TILE",
       "buffer": "DRAM",
-      "memory_layout": "INTERLEAVED",
+      "memory_layout": "ND_SHARDED",
       "mesh": [
        4,
        2
@@ -6039,7 +6039,7 @@
       "dtype": "BFLOAT8_B",
       "layout": "TILE",
       "buffer": "DRAM",
-      "memory_layout": "INTERLEAVED",
+      "memory_layout": "ND_SHARDED",
       "mesh": [
        4,
        2
@@ -6055,7 +6055,7 @@
       "dtype": "BFLOAT8_B",
       "layout": "TILE",
       "buffer": "DRAM",
-      "memory_layout": "INTERLEAVED",
+      "memory_layout": "ND_SHARDED",
       "mesh": [
        4,
        2
@@ -6071,7 +6071,7 @@
       "dtype": "BFLOAT8_B",
       "layout": "TILE",
       "buffer": "DRAM",
-      "memory_layout": "INTERLEAVED",
+      "memory_layout": "ND_SHARDED",
       "mesh": [
        4,
        2
@@ -6089,7 +6089,7 @@
       "dtype": "BFLOAT8_B",
       "layout": "TILE",
       "buffer": "DRAM",
-      "memory_layout": "INTERLEAVED",
+      "memory_layout": "ND_SHARDED",
       "mesh": [
        4,
        2
@@ -6105,7 +6105,7 @@
       "dtype": "BFLOAT8_B",
       "layout": "TILE",
       "buffer": "DRAM",
-      "memory_layout": "INTERLEAVED",
+      "memory_layout": "ND_SHARDED",
       "mesh": [
        4,
        2
@@ -6121,7 +6121,7 @@
       "dtype": "BFLOAT8_B",
       "layout": "TILE",
       "buffer": "DRAM",
-      "memory_layout": "INTERLEAVED",
+      "memory_layout": "ND_SHARDED",
       "mesh": [
        4,
        2
@@ -6137,7 +6137,7 @@
       "dtype": "BFLOAT8_B",
       "layout": "TILE",
       "buffer": "DRAM",
-      "memory_layout": "INTERLEAVED",
+      "memory_layout": "ND_SHARDED",
       "mesh": [
        4,
        2
@@ -6153,7 +6153,7 @@
       "dtype": "BFLOAT8_B",
       "layout": "TILE",
       "buffer": "DRAM",
-      "memory_layout": "INTERLEAVED",
+      "memory_layout": "ND_SHARDED",
       "mesh": [
        4,
        2
@@ -6169,7 +6169,7 @@
       "dtype": "BFLOAT8_B",
       "layout": "TILE",
       "buffer": "DRAM",
-      "memory_layout": "INTERLEAVED",
+      "memory_layout": "ND_SHARDED",
       "mesh": [
        4,
        2
@@ -6185,7 +6185,7 @@
       "dtype": "BFLOAT8_B",
       "layout": "TILE",
       "buffer": "DRAM",
-      "memory_layout": "INTERLEAVED",
+      "memory_layout": "ND_SHARDED",
       "mesh": [
        4,
        2
@@ -6201,7 +6201,7 @@
       "dtype": "BFLOAT8_B",
       "layout": "TILE",
       "buffer": "DRAM",
-      "memory_layout": "INTERLEAVED",
+      "memory_layout": "ND_SHARDED",
       "mesh": [
        4,
        2
@@ -6219,7 +6219,7 @@
       "dtype": "BFLOAT8_B",
       "layout": "TILE",
       "buffer": "DRAM",
-      "memory_layout": "INTERLEAVED",
+      "memory_layout": "ND_SHARDED",
       "mesh": [
        4,
        2
@@ -6235,7 +6235,7 @@
       "dtype": "BFLOAT8_B",
       "layout": "TILE",
       "buffer": "DRAM",
-      "memory_layout": "INTERLEAVED",
+      "memory_layout": "ND_SHARDED",
       "mesh": [
        4,
        2
@@ -6251,7 +6251,7 @@
       "dtype": "BFLOAT8_B",
       "layout": "TILE",
       "buffer": "DRAM",
-      "memory_layout": "INTERLEAVED",
+      "memory_layout": "ND_SHARDED",
       "mesh": [
        4,
        2
@@ -6267,7 +6267,7 @@
       "dtype": "BFLOAT8_B",
       "layout": "TILE",
       "buffer": "DRAM",
-      "memory_layout": "INTERLEAVED",
+      "memory_layout": "ND_SHARDED",
       "mesh": [
        4,
        2
@@ -6283,7 +6283,7 @@
       "dtype": "BFLOAT8_B",
       "layout": "TILE",
       "buffer": "DRAM",
-      "memory_layout": "INTERLEAVED",
+      "memory_layout": "ND_SHARDED",
       "mesh": [
        4,
        2
@@ -6299,7 +6299,7 @@
       "dtype": "BFLOAT8_B",
       "layout": "TILE",
       "buffer": "DRAM",
-      "memory_layout": "INTERLEAVED",
+      "memory_layout": "ND_SHARDED",
       "mesh": [
        4,
        2
@@ -6315,7 +6315,7 @@
       "dtype": "BFLOAT8_B",
       "layout": "TILE",
       "buffer": "DRAM",
-      "memory_layout": "INTERLEAVED",
+      "memory_layout": "ND_SHARDED",
       "mesh": [
        4,
        2
@@ -6331,7 +6331,7 @@
       "dtype": "BFLOAT8_B",
       "layout": "TILE",
       "buffer": "DRAM",
-      "memory_layout": "INTERLEAVED",
+      "memory_layout": "ND_SHARDED",
       "mesh": [
        4,
        2

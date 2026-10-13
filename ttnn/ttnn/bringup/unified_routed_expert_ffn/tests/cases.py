@@ -10,11 +10,11 @@ CASES = [
         "id": "mimo_v2_6_d_p-1x4-silu-hp-hifi4-h4096-i2048-epc64",
         "model": "mimo_v2_6_d_p",
         "task": "O.1",
-        "sig": "31daae9fc6",
+        "sig": "20199b7d97",
         "mesh": [1, 4],
         "device_params": {"fabric_config": "FABRIC_2D", "l1_small_size": 24576},
         # dispatched buffer [42976, 4096] BFLOAT16 ROW_MAJOR; regions / counts [1, 256] UINT32 ROW_MAJOR;
-        # global_expert_idx_table [64] UINT32 ROW_MAJOR; all DRAM interleaved
+        # global_expert_idx_table [64] UINT32 ROW_MAJOR; DRAM interleaved, the expert weights DRAM ND-sharded
         "buffer_rows": 42976,
         "emb_dim": 4096,
         "hidden_dim": 2048,
@@ -24,7 +24,12 @@ CASES = [
         "seq_len_per_chip": 5120,
         "num_experts_per_tok": 8,
         "buffer": {"dtype": "BFLOAT16", "layout": "ROW_MAJOR"},
-        "weights": {"dtype": "BFLOAT8_B", "layout": "TILE"},  # gate/up [4096, 2048], down [2048, 4096] per expert
+        "weights": {
+            "dtype": "BFLOAT8_B",
+            "layout": "TILE",
+            "memory": "DRAM_ND_SHARDED",
+            "shard_width": {"gate": 192, "up": 192, "down": 384},
+        },  # gate/up [4096, 2048], down [2048, 4096] per expert
         "max_dispatched_tokens_per_expert": 8192,
         "compute_kernel_config": {
             "math_fidelity": "HiFi4",
@@ -48,11 +53,11 @@ CASES = [
         "id": "gemma4_a4b_d_p-1x4-gelutanh-hifi2-h2816-i704-epc32",
         "model": "gemma4_a4b_d_p",
         "task": "O.1",
-        "sig": "befc6cf758",
+        "sig": "1c94598792",
         "mesh": [1, 4],
         "device_params": {"fabric_config": "FABRIC_2D", "l1_small_size": 24576},
         # dispatched buffer [41952, 2816] BFLOAT16 ROW_MAJOR; regions / counts [1, 128] UINT32 ROW_MAJOR;
-        # global_expert_idx_table [32] UINT32 ROW_MAJOR; all DRAM interleaved
+        # global_expert_idx_table [32] UINT32 ROW_MAJOR; DRAM interleaved, the expert weights DRAM ND-sharded
         "buffer_rows": 41952,
         "emb_dim": 2816,
         "hidden_dim": 704,
@@ -62,7 +67,12 @@ CASES = [
         "seq_len_per_chip": 5120,
         "num_experts_per_tok": 8,
         "buffer": {"dtype": "BFLOAT16", "layout": "ROW_MAJOR"},
-        "weights": {"dtype": "BFLOAT16", "layout": "TILE"},  # gate/up [2816, 704], down [704, 2816] per expert
+        "weights": {
+            "dtype": "BFLOAT16",
+            "layout": "TILE",
+            "memory": "DRAM_ND_SHARDED",
+            "shard_width": {"gate": 64, "up": 64, "down": 256},
+        },  # gate/up [2816, 704], down [704, 2816] per expert
         "max_dispatched_tokens_per_expert": 8192,
         "compute_kernel_config": {
             "math_fidelity": "HiFi2",
@@ -87,11 +97,11 @@ CASES = [
         "id": "mimo_v2_6_d_p_2x2-2x2-silu-hp-hifi4-h4096-i2048-epc64",
         "model": "mimo_v2_6_d_p_2x2",
         "task": "O.1",
-        "sig": "86afb6a289",
+        "sig": "ca682039d3",
         "mesh": [2, 2],
         "device_params": {"fabric_config": "FABRIC_2D", "l1_small_size": 24576},
         # dispatched buffer [42976, 4096] BFLOAT16 ROW_MAJOR; regions / counts [1, 256] UINT32 ROW_MAJOR;
-        # global_expert_idx_table [64] UINT32 ROW_MAJOR; all DRAM interleaved
+        # global_expert_idx_table [64] UINT32 ROW_MAJOR; DRAM interleaved, the expert weights DRAM ND-sharded
         "buffer_rows": 42976,
         "emb_dim": 4096,
         "hidden_dim": 2048,
@@ -101,7 +111,12 @@ CASES = [
         "seq_len_per_chip": 5120,
         "num_experts_per_tok": 8,
         "buffer": {"dtype": "BFLOAT16", "layout": "ROW_MAJOR"},
-        "weights": {"dtype": "BFLOAT8_B", "layout": "TILE"},  # gate/up [4096, 2048], down [2048, 4096] per expert
+        "weights": {
+            "dtype": "BFLOAT8_B",
+            "layout": "TILE",
+            "memory": "DRAM_ND_SHARDED",
+            "shard_width": {"gate": 192, "up": 192, "down": 384},
+        },  # gate/up [4096, 2048], down [2048, 4096] per expert
         "max_dispatched_tokens_per_expert": 8192,
         "compute_kernel_config": {
             "math_fidelity": "HiFi4",
@@ -125,11 +140,11 @@ CASES = [
         "id": "glm53_flash_d_p-2x2-clampedsiluglu-hp-hifi4-h4096-i2048-epc72",
         "model": "glm53_flash_d_p",
         "task": "O.1",
-        "sig": "820d12513b",
+        "sig": "158f169eb9",
         "mesh": [2, 2],
         "device_params": {"fabric_config": "FABRIC_2D", "l1_small_size": 24576},
         # dispatched buffer [43232, 4096] BFLOAT16 ROW_MAJOR; regions / counts [1, 288] UINT32 ROW_MAJOR;
-        # global_expert_idx_table [72] UINT32 ROW_MAJOR; all DRAM interleaved
+        # global_expert_idx_table [72] UINT32 ROW_MAJOR; DRAM interleaved, the expert weights DRAM ND-sharded
         "buffer_rows": 43232,
         "emb_dim": 4096,
         "hidden_dim": 2048,
@@ -139,7 +154,12 @@ CASES = [
         "seq_len_per_chip": 5120,
         "num_experts_per_tok": 8,
         "buffer": {"dtype": "BFLOAT16", "layout": "ROW_MAJOR"},
-        "weights": {"dtype": "BFLOAT8_B", "layout": "TILE"},  # gate/up [4096, 2048], down [2048, 4096] per expert
+        "weights": {
+            "dtype": "BFLOAT8_B",
+            "layout": "TILE",
+            "memory": "DRAM_ND_SHARDED",
+            "shard_width": {"gate": 192, "up": 192, "down": 384},
+        },  # gate/up [4096, 2048], down [2048, 4096] per expert
         "max_dispatched_tokens_per_expert": 8192,
         "compute_kernel_config": {
             "math_fidelity": "HiFi4",
@@ -166,11 +186,11 @@ CASES = [
         "id": "hy4_preview_d_p-2x2-clampedsiluglu-hp-hifi4-h6144-i2048-epc64",
         "model": "hy4_preview_d_p",
         "task": "O.1",
-        "sig": "4fe753a443",
+        "sig": "4951d1e192",
         "mesh": [2, 2],
         "device_params": {"fabric_config": "FABRIC_2D", "l1_small_size": 24576},
         # dispatched buffer [42976, 6144] BFLOAT16 ROW_MAJOR; regions / counts [1, 256] UINT32 ROW_MAJOR;
-        # global_expert_idx_table [64] UINT32 ROW_MAJOR; all DRAM interleaved
+        # global_expert_idx_table [64] UINT32 ROW_MAJOR; DRAM interleaved, the expert weights DRAM ND-sharded
         "buffer_rows": 42976,
         "emb_dim": 6144,
         "hidden_dim": 2048,
@@ -180,7 +200,12 @@ CASES = [
         "seq_len_per_chip": 5120,
         "num_experts_per_tok": 8,
         "buffer": {"dtype": "BFLOAT16", "layout": "ROW_MAJOR"},
-        "weights": {"dtype": "BFLOAT8_B", "layout": "TILE"},  # gate/up [6144, 2048], down [2048, 6144] per expert
+        "weights": {
+            "dtype": "BFLOAT8_B",
+            "layout": "TILE",
+            "memory": "DRAM_ND_SHARDED",
+            "shard_width": {"gate": 192, "up": 192, "down": 576},
+        },  # gate/up [6144, 2048], down [2048, 6144] per expert
         "max_dispatched_tokens_per_expert": 8192,
         "compute_kernel_config": {
             "math_fidelity": "HiFi4",
@@ -204,12 +229,12 @@ CASES = [
         # Xing4.0 routed experts (tt/experts.py) on the 4x2 mesh: 8 experts per chip, SwiGLU (Silu), hidden 3584,
         # moe intermediate 1024, high_precision, HiFi4 + fp32 dest + packer_l1_acc. Captured per device: buffer
         # [20704, 3584] bf16 RM, regions / counts [1, 64] uint32 RM, global ids [8] uint32 RM, 8 x gate / up
-        # [3584, 1024] and 8 x down [1024, 3584] bfp8 TILE (the model's bfp8 weights). seq_len_per_chip here is the
+        # [3584, 1024] and 8 x down [1024, 3584] bfp8 TILE DRAM ND-sharded (the model's bfp8 weights). seq_len_per_chip here is the
         # dispatch group's token count (4 chips x 1280), so the counts are as loaded as the model's.
         "id": "xing40_a4b_d_p-4x2-silu-hp-hifi4-h3584-i1024-epc8",
         "model": "xing40_a4b_d_p",
         "task": "O.1",
-        "sig": "c30d4661c3",
+        "sig": "f47242da7f",
         "mesh": [4, 2],
         "device_params": {"fabric_config": "FABRIC_2D", "l1_small_size": 24576},
         "buffer_rows": 20704,
@@ -220,7 +245,12 @@ CASES = [
         "seq_len_per_chip": 5120,
         "num_experts_per_tok": 4,
         "buffer": {"dtype": "BFLOAT16", "layout": "ROW_MAJOR"},
-        "weights": {"dtype": "BFLOAT8_B", "layout": "TILE"},
+        "weights": {
+            "dtype": "BFLOAT8_B",
+            "layout": "TILE",
+            "memory": "DRAM_ND_SHARDED",
+            "shard_width": {"gate": 96, "up": 96, "down": 352},
+        },
         "max_dispatched_tokens_per_expert": 8192,
         "compute_kernel_config": {
             "math_fidelity": "HiFi4",
