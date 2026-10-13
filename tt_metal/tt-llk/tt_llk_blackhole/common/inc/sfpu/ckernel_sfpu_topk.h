@@ -1518,7 +1518,9 @@ inline void _bitonic_topk_phases_steps(const int idir, const int i_end_phase, co
                         break;
                     }
                     case 3:
+                    {
                         // Fused into case 0 or case 2 unless the sort starts here or the passes stay split.
+                        bool init_rev = true;
                         for (int d = 0; d < 4; d++)
                         {
                             if (tile1_only && (d < 2))
@@ -1527,17 +1529,37 @@ inline void _bitonic_topk_phases_steps(const int idir, const int i_end_phase, co
                             }
                             if constexpr (first_swaps)
                             {
-                                bitonic_topk_ph3_group_first_swaps<is_fp32_dest_acc_en, FUSED, RANK_STAMPED>(dir, init_phase, 16);
+                                if (dir == static_cast<bool>(SortDir::ArgMin))
+                                {
+                                    if (init_load)
+                                    {
+                                        load_replay_buf<NoExec>(0, ldst_count, [] { bitonic_topk_load16<is_fp32_dest_acc_en, FUSED, RANK_STAMPED>(4, 8); });
+                                        init_load = false;
+                                    }
+                                    lltt::replay(0, ldst_count);
+                                    if (init_rev)
+                                    {
+                                        load_replay_buf<NoExec>(24, 5, [] { bitonic_topk_ph3_half_body<true, false>(); });
+                                        init_rev = false;
+                                    }
+                                    lltt::replay(24, 5);
+                                    lltt::replay(24, 5);
+                                }
+                                else
+                                {
+                                    bitonic_topk_ph3_group_first_swaps<is_fp32_dest_acc_en, FUSED, RANK_STAMPED>(dir, init_phase, 16);
+                                }
                             }
                             else
                             {
                                 lltt::replay(0, ldst_count);
-                                bitonic_topk_ph3_st4_to_1<STABLE_SORT, TIE_ORDER>(dir, init_phase, 16);
+                                bitonic_topk_ph3_st4_to_1<STABLE_SORT, TIE_ORDER>(dir, init_phase, 16, STABLE_SORT ? -1 : 21);
                             }
                             lltt::replay(8, ldst_count);
                             dir = !dir;
                         }
                         break;
+                    }
                     default:
                         std::uint32_t num_steps               = ph + 1;
                         std::uint32_t start_step              = (i_start_phase == i_end_phase) ? i_start_step : num_steps;
@@ -1621,16 +1643,36 @@ inline void _bitonic_topk_phases_steps(const int idir, const int i_end_phase, co
                         dir = pass_dir;
                         TTI_SETRWC(p_setrwc::CLR_NONE, 0, 0, 0, 0, p_setrwc::SET_D);
                         datums_compared = 0;
+                        bool init_rev   = true;
                         while (datums_compared < total_datums_to_compare)
                         {
                             if constexpr (first_swaps)
                             {
-                                bitonic_topk_ph3_group_first_swaps<is_fp32_dest_acc_en, FUSED, RANK_STAMPED>(dir, init_phase, 16);
+                                if (dir == static_cast<bool>(SortDir::ArgMin))
+                                {
+                                    if (init_load)
+                                    {
+                                        load_replay_buf<NoExec>(0, ldst_count, [] { bitonic_topk_load16<is_fp32_dest_acc_en, FUSED, RANK_STAMPED>(4, 8); });
+                                        init_load = false;
+                                    }
+                                    lltt::replay(0, ldst_count);
+                                    if (init_rev)
+                                    {
+                                        load_replay_buf<NoExec>(24, 5, [] { bitonic_topk_ph3_half_body<true, false>(); });
+                                        init_rev = false;
+                                    }
+                                    lltt::replay(24, 5);
+                                    lltt::replay(24, 5);
+                                }
+                                else
+                                {
+                                    bitonic_topk_ph3_group_first_swaps<is_fp32_dest_acc_en, FUSED, RANK_STAMPED>(dir, init_phase, 16);
+                                }
                             }
                             else
                             {
                                 lltt::replay(0, ldst_count);
-                                bitonic_topk_ph3_st4_to_1<STABLE_SORT, TIE_ORDER>(dir, init_phase, 16);
+                                bitonic_topk_ph3_st4_to_1<STABLE_SORT, TIE_ORDER>(dir, init_phase, 16, STABLE_SORT ? -1 : 21);
                             }
                             lltt::replay(8, ldst_count);
                             datums_compared += 16;
