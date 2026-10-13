@@ -117,7 +117,9 @@ inline void token_math(RUNTIME_PARAMETERS params)
     }
 }
 
-void run_kernel(RUNTIME_PARAMETERS params)
+// Values live across the INIT calls go to callee-saved registers saved before the zone, so INIT does not depend on
+// how many registers the rope body leaves free.
+__attribute__((optimize("no-caller-saves"))) void run_kernel(RUNTIME_PARAMETERS params)
 {
 #if defined(RUNTIME_FORMATS) && !defined(SPEED_OF_LIGHT)
     const FormatConfig& formats = params.formats;
