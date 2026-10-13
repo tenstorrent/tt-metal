@@ -1,1 +1,2 @@
-# none
+M0 bits.txt
+V4 bits.txt
