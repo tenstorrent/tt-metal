@@ -635,7 +635,7 @@ ttnn::Tensor repeat(
     detail::validate_optional_output(
         input_tensor, working_tensor, working_repetition_vector, memory_config, optional_output_tensor);
 
-    if (operations::data_movement::codegen_runs_on_device(working_tensor) &&
+    if (operations::data_movement::codegen_supported_on_arch() &&
         detail::codegen_can_serve(working_tensor, working_repetition_vector, output_mem_config) &&
         !repeat_codegen::is_demoted(working_tensor, working_repetition_vector)) {
         // The codegen path writes an interleaved output in the input's buffer type and adds no layout

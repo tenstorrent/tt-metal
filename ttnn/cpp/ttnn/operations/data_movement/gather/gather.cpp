@@ -435,7 +435,7 @@ Tensor gather(
     namespace gather_ns = operations::data_movement::gather;
 
     const bool use_codegen =
-        operations::data_movement::codegen_runs_on_device(input_tensor) &&
+        operations::data_movement::codegen_supported_on_arch() &&
         detail::codegen_can_serve(input_tensor, dim, input_index_tensor, memory_config, optional_output_tensor) &&
         !gather_ns::is_demoted(input_tensor, dim, input_index_tensor);
 
