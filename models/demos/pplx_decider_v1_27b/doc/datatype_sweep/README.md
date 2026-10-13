@@ -66,7 +66,8 @@ Findings (measured unless labelled):
   `artifacts/pplx_decider/stage8/default_path/pytest.log`.
 - The weight cache moved to one directory for all policies, `weight_cache/<revision>/weights`. A cache file
   name carries the dtype, so a candidate adds only the files for its new dtypes. The BFP4 files from C1/C2
-  (9.0 GB) were deleted after the sweep. The 27 GB BFP8 cache (819 files) remains.
+  (9.0 GB) were deleted after the sweep. The 27 GB BFP8 cache (819 files) remains. (Later moved, unchanged,
+  to `<model dir>/tt_weight_cache/<revision>/`; see the top-level README, "Where the weight cache goes".)
 
 ## Not done (person decision: wrap up with C0)
 

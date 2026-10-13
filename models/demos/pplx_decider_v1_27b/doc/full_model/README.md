@@ -58,7 +58,8 @@ goes back to the host.
 
 - The cache is `artifacts/pplx_decider/weight_cache/<revision[:12]>/<policy name>/` (27 GB, 819 files).
   Stage 8 moved it to `<revision[:12]>/weights/`, one directory for every policy, because the file names
-  carry the dtype.
+  carry the dtype. It now sits next to the weights, `<model dir>/tt_weight_cache/<revision>/`, or under
+  `$TT_CACHE_PATH` (gemma4 convention; see the top-level README, "Where the weight cache goes").
 - A cached load builds the weight bundles from `meta` tensors (shapes from the safetensors headers),
   so it reads no HF weight bytes. The model checks that every weight hits before it skips the real
   tensors.

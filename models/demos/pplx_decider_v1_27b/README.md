@@ -32,17 +32,17 @@ export PPLX_DECIDER_ARTIFACTS=/path/to/artifacts       # optional; default <tt-m
 ```
 
 The code finds the snapshot in the HF cache at that revision (`local_files_only=True`); set
-`PPLX_DECIDER_SNAPSHOT=<dir>` to use a snapshot directory directly. Everything the code writes (goldens,
-weight cache, logs, test results) goes under `$PPLX_DECIDER_ARTIFACTS`. To print every resolved
-location (CPU only):
+`HF_MODEL=<dir or repo id>` (or pass `model_path`) to use another checkpoint. Goldens, logs and test
+results go under `$PPLX_DECIDER_ARTIFACTS`; the device weight cache goes next to the weights (see
+[Where the weight cache goes](#where-the-weight-cache-goes)). To print every resolved location, with the
+model path, the weight cache and where each came from (CPU only):
 
 ```bash
 python -m models.demos.pplx_decider_v1_27b.tt.paths
 ```
 
-The first model load converts the weights from the snapshot into the weight cache
-(`$PPLX_DECIDER_ARTIFACTS/weight_cache/b01a5cbaca53/weights`, 27 GB, about 160 s). Later loads read the
-cache: about 37 s with a cold page cache, about 5 s with a warm one.
+The first model load converts the weights from the snapshot into the weight cache (27 GB, about 160 s).
+Later loads read the cache: about 37 s with a cold page cache, about 5 s with a warm one.
 
 ## How to run the model
 
@@ -55,16 +55,17 @@ python models/demos/pplx_decider_v1_27b/demo/demo.py --image photo.png   # image
 python models/demos/pplx_decider_v1_27b/demo/demo.py --state "Refund my order" \
   --question '{"type": "noul", "instructions": "Is this a refund request?"}'
 python models/demos/pplx_decider_v1_27b/demo/demo.py --golden-row v02_count_circles   # image golden row vs HF (needs the image golden)
+python models/demos/pplx_decider_v1_27b/demo/demo.py --model-path /path/to/checkpoint  # a local dir or an HF repo id
 ```
 
-In Python:
+In Python, with the same call shape as `models/demos/gemma4`:
 
 ```python
 import ttnn
 from models.demos.pplx_decider_v1_27b.demo.decider import TTDecider
 
 device = ttnn.open_device(device_id=0, l1_small_size=24576)
-decider = TTDecider.from_pretrained(device)          # vision=False: text only, 0.96 GiB less DRAM
+decider = TTDecider.from_pretrained(device, model_path=None, max_seq_len=8192, vision=True)
 print(decider.predict("My Stripe integration keeps failing.", {"type": "noul", "instructions": "Is it urgent?"}))
 question = {"type": "choice", "instructions": "What is the dominant color?",
             "criteria": {"red": "Red", "green": "Green", "blue": "Blue", "other": "Another color"}}
@@ -72,8 +73,39 @@ print(decider.predict("Look at the supplied image.", question, images=["photo.pn
 ttnn.close_device(device)
 ```
 
+- `model_path`: a local checkpoint directory or an HF repo id. `None` means `$HF_MODEL`, else
+  `$PPLX_DECIDER_SNAPSHOT` (legacy), else the HF cache at the pinned revision. A repo id is looked up in the
+  HF cache only; if it is missing, the error gives the `hf download` command.
+- `max_seq_len`: the largest prefill bucket, one of 128, 1024, 2048, 4096 or 8192. Longer prompts are
+  rejected, never truncated. Batch is always 1.
+- `vision=False` skips the vision tower: text only, 0.96 GiB less DRAM.
+
 `images` takes what the app's `open_image` takes: file paths, `data:image/...` URLs or PIL images. Each
-image adds 64 to 256 prompt tokens, which count toward the 8192-token limit. Longer prompts are rejected.
+image adds 64 to 256 prompt tokens, which count toward the `max_seq_len` limit.
+
+### Where the weight cache goes
+
+The device weight cache (27 GB) is located from the model path, as in `models/demos/gemma4`:
+
+1. `$TT_CACHE_PATH`, if set;
+2. else `$PPLX_DECIDER_WEIGHT_CACHE` (legacy), if set;
+3. else the model directory itself, next to the weights. For the HF-cache snapshot that is
+   `$HF_HOME/hub/models--perplexity-ai--pplx-decider-v1-27b/snapshots/<revision>/`.
+
+The cache is the `tt_weight_cache/<key>/` directory under that root. `<key>` is the revision for an HF-cache
+snapshot, else `local-` plus a hash of the checkpoint's `config.json`, `model.safetensors.index.json` and
+`readout.safetensors` size and mtime, so two checkpoints never share a cache. The load log names the model
+path and the cache directory, and says whether the cache was a full hit.
+
+To keep the cache somewhere else, for example on another disk, move the directory and point
+`TT_CACHE_PATH` at the new root:
+
+```bash
+export TT_CACHE_PATH=/data/tt_cache
+mkdir -p $TT_CACHE_PATH/tt_weight_cache
+mv $HF_HOME/hub/models--perplexity-ai--pplx-decider-v1-27b/snapshots/<revision>/tt_weight_cache/<revision> \
+   $TT_CACHE_PATH/tt_weight_cache/
+```
 
 ## Generate the HF reference goldens (CPU, once)
 
@@ -105,6 +137,7 @@ Times are wall clock with the weight cache built and in the page cache.
 | 3D mRoPE vs HF (CPU, bit exact) and layer 3 on an image row | `tests/pcc/test_mrope.py` | `pytest models/demos/pplx_decider_v1_27b/tests/pcc/test_mrope.py -q` | ~12 s |
 | a prefill pass issues no host round trips or torch ops | `tests/pcc/test_runtime_audit.py` | `pytest models/demos/pplx_decider_v1_27b/tests/pcc/test_runtime_audit.py -q` | ~10 s |
 | default path loads the dtypes and fidelities of the precision JSON | `tests/e2e/test_precision_config.py` | `pytest models/demos/pplx_decider_v1_27b/tests/e2e/test_precision_config.py -q -s` | ~5 s |
+| model path and weight cache resolution order, cache keys (CPU, no device) | `tests/test_paths.py` | `pytest models/demos/pplx_decider_v1_27b/tests/test_paths.py -q` | ~1 s |
 
 Tables from the logs: `python models/demos/pplx_decider_v1_27b/tests/pcc_report.py` (PCC suite),
 `python models/demos/pplx_decider_v1_27b/tests/vision/vision_pcc_report.py` (vision) and
@@ -182,9 +215,11 @@ python -m models.demos.pplx_decider_v1_27b.benchmark.report --stage11 $B --doc m
 | variable | default | used for |
 |---|---|---|
 | `HF_HOME` | HF default | HF cache with the snapshot (and the benchmark datasets) |
-| `PPLX_DECIDER_SNAPSHOT` | HF cache at the pinned revision | snapshot directory, overrides the cache lookup |
+| `HF_MODEL` | HF cache at the pinned revision | model path (local directory or HF repo id) when `model_path` / `--model-path` is not given |
+| `TT_CACHE_PATH` | the model directory | root of the device weight cache (27 GB), `<root>/tt_weight_cache/<key>/` |
+| `PPLX_DECIDER_SNAPSHOT` | unset | legacy: model path, used after `HF_MODEL` |
+| `PPLX_DECIDER_WEIGHT_CACHE` | unset | legacy: weight cache root, used after `TT_CACHE_PATH` |
 | `PPLX_DECIDER_ARTIFACTS` | `<tt-metal>/generated/pplx_decider` | root of every default below |
-| `PPLX_DECIDER_WEIGHT_CACHE` | `$ARTIFACTS/weight_cache` | ttnn device weight cache (27 GB) |
 | `PPLX_DECIDER_GOLDEN_DIR` | `$ARTIFACTS/goldens` | HF layer inputs (`S8192/`, `S16384/`) |
 | `PPLX_DECIDER_DECISION_GOLDEN` | `$ARTIFACTS/goldens/decisions` | 25-row text decision golden |
 | `PPLX_DECIDER_VISION_GOLDEN` | `$ARTIFACTS/goldens/vision` | vision tower golden and the 8 PNGs |
@@ -211,7 +246,7 @@ tt/                  TTNN model
   rope.py            1D tables, 3D mRoPE (get_rope_index port), per-request rotary
   embedding.py, readout.py, head.py   embedding; final norm -> readout -> mask -> / T -> softmax
   weight_adapter.py  HF -> TT weight transforms; optimizations.py: dtypes and op configs (one place)
-  paths.py           every filesystem location (see Environment variables)
+  paths.py           every filesystem location, model path and weight cache resolution (tests/test_paths.py, CPU)
   vision/            vision tower: patch embed, 27 blocks, merger (tower.py)
 demo/                decider.py (TTDecider, the app's Decider.predict) and demo.py (CLI)
 reference/           CPU HF goldens, built one layer at a time; prompt sets (decision_prompts.py, image_decision_prompts.py)
