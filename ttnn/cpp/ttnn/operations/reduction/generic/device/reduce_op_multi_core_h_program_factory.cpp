@@ -2,6 +2,7 @@
 //
 // SPDX-License-Identifier: Apache-2.0
 
+#include <cstdlib>
 #include "reduce_op_device_operation.hpp"
 #include "ttnn/operations/reduction/generic/device/reduce_op.hpp"
 #include "ttnn/operations/core/compute_kernel/compute_kernel_config.hpp"
@@ -175,7 +176,8 @@ ReduceDeviceOperation::ReduceMultiCoreHProgramFactory::create_program_artifacts(
         !rm_path && !use_width_sharding && !tile_h_split && !is_sfpu_reduce && !use_fpu_negate &&
         operation_attributes.output_layout == Layout::TILE && !output.memory_config().is_sharded() &&
         tile_height == 32u && tile_width == 32u && output.tensor_spec().tile().get_height() == 32u &&
-        (dst_cb_data_format == tt::DataFormat::Float16_b || dst_cb_data_format == tt::DataFormat::Float32);
+        (dst_cb_data_format == tt::DataFormat::Float16_b || dst_cb_data_format == tt::DataFormat::Float32) &&
+        std::getenv("TT_HR_NO_H_ROW") == nullptr;
 
     auto compute_with_storage_grid_size = device.compute_with_storage_grid_size();
     // One output tile column per (nc, slice, wt) of the (N, C, num_h_slices, W) result.

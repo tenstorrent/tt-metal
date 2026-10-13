@@ -2,6 +2,7 @@
 //
 // SPDX-License-Identifier: Apache-2.0
 
+#include <cstdlib>
 #include "reduce_op_device_operation.hpp"
 #include "ttnn/operations/reduction/generic/device/reduce_op.hpp"
 #include "ttnn/operations/core/compute_kernel/compute_kernel_config.hpp"
@@ -449,10 +450,15 @@ ReduceDeviceOperation::ReduceMultiCoreWProgramFactory::create_program_artifacts(
         writer_rta_names = {"num_units"};
         // No tensor binding: the output is written in place through the borrowed OUT_DFB.
     } else {
-        writer_source = col_face_output ? "ttnn/cpp/ttnn/operations/reduction/generic/device/kernels/dataflow/"
-                                          "writer_reduce_w_col_interleaved.cpp"
-                                        : "ttnn/cpp/ttnn/operations/eltwise/unary/device/kernels/dataflow/"
-                                          "writer_unary_interleaved_start_id_metal2.cpp";
+        // scratch A/B: TT_HR_W_FACES=2 faces 0 and 2, =3 faces 0 to 2 in one write, unset main's writer
+        const char* hr_w = std::getenv("TT_HR_W_FACES");
+        const int hr_w_mode = (col_face_output && hr_w) ? std::atoi(hr_w) : 0;
+        writer_source = hr_w_mode == 2 ? "ttnn/cpp/ttnn/operations/reduction/generic/device/kernels/dataflow/"
+                                         "writer_reduce_w_col_interleaved.cpp"
+                        : hr_w_mode == 3 ? "ttnn/cpp/ttnn/operations/reduction/generic/device/kernels/dataflow/"
+                                           "writer_reduce_w_col3_interleaved.cpp"
+                                         : "ttnn/cpp/ttnn/operations/eltwise/unary/device/kernels/dataflow/"
+                                           "writer_unary_interleaved_start_id_metal2.cpp";
         writer_rta_names = {"num_pages", "start_id"};
         writer_tensor_bindings = {TensorBinding{.tensor_parameter_name = OUTPUT_TENSOR, .accessor_name = "dst"}};
     }
