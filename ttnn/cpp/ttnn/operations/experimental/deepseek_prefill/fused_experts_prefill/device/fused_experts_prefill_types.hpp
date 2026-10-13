@@ -13,13 +13,17 @@
 
 namespace ttnn::operations::experimental::deepseek_prefill::fused_experts_prefill {
 
-// Core geometry: a 12x10 worker rectangle cut into 4x2 groups of 8 cores -> 3 x 5 = 15 groups.
+// Core geometry: a 12x10 worker rectangle cut into groups that each run one expert at a time. The group shape is
+// chosen per call (see the program factory): 4x2 groups of 8 cores (3 x 5 = 15 groups), or 3x2 groups of 6
+// (4 x 5 = 20 groups) when the expert's I tiles split evenly over 6 cores but not over 8.
 inline constexpr uint32_t kGridX = 12;
 inline constexpr uint32_t kGridY = 10;
-inline constexpr uint32_t kGroupCoresX = 4;
-inline constexpr uint32_t kGroupCoresY = 2;
-inline constexpr uint32_t kCoresPerGroup = kGroupCoresX * kGroupCoresY;                    // 8
-inline constexpr uint32_t kNumGroups = (kGridX / kGroupCoresX) * (kGridY / kGroupCoresY);  // 15
+struct GroupShape {
+    uint32_t x;
+    uint32_t y;
+};
+inline constexpr GroupShape kGroupShapes[] = {{4, 2}, {3, 2}};
+inline constexpr uint32_t kMaxCoresPerGroup = 8;
 
 // Tile rows of one expert processed per chunk. Bounded by L1 (the gathered SwiGLU activations scale
 // with it); an expert with more rows runs as several chunks, re-reading its weights per chunk.

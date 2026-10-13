@@ -224,9 +224,9 @@ def _is_device_tensor(value) -> bool:
 
 def _gcb_holders(root, match: Callable = _is_gcb, skip: Sequence = (), replaceable: bool = True) -> dict[int, tuple]:
     """``id(value) -> (value, [holder])`` for every ``match``-ing value (GCBs by default) reachable from
-    ``root`` through this package's objects (``__dict__`` or ``__slots__``), dicts, lists and tuples; a holder is
-    ``(container, key, is_attribute)``. Objects in ``skip`` are not entered. With ``replaceable`` (the holders
-    will be reassigned) a match held in a tuple raises."""
+    ``root`` through objects of this package's classes or their subclasses (e.g. V4.1's; ``__dict__`` or every
+    class's ``__slots__``), dicts, lists and tuples; a holder is ``(container, key, is_attribute)``. Objects in
+    ``skip`` are not entered. With ``replaceable`` (the holders will be reassigned) a match held in a tuple raises."""
     found: dict[int, tuple] = {}
     seen: set[int] = {id(obj) for obj in skip}
     stack = [root]
@@ -239,10 +239,12 @@ def _gcb_holders(root, match: Callable = _is_gcb, skip: Sequence = (), replaceab
             items, is_attr = list(obj.items()), False
         elif isinstance(obj, (list, tuple)):
             items, is_attr = list(enumerate(obj)), False
-        elif type(obj).__module__.startswith(_PACKAGE) and hasattr(obj, "__dict__"):
-            items, is_attr = list(vars(obj).items()), True
-        elif type(obj).__module__.startswith(_PACKAGE) and hasattr(type(obj), "__slots__"):
-            items = [(name, getattr(obj, name)) for name in type(obj).__slots__ if hasattr(obj, name)]
+        elif any(cls.__module__.startswith(_PACKAGE) for cls in type(obj).__mro__):
+            if hasattr(obj, "__dict__"):
+                items = list(vars(obj).items())
+            else:
+                slots = dict.fromkeys(name for cls in type(obj).__mro__ for name in getattr(cls, "__slots__", ()))
+                items = [(name, getattr(obj, name)) for name in slots if hasattr(obj, name)]
             is_attr = True
         else:
             continue
