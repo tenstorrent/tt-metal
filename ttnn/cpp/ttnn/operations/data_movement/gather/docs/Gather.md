@@ -127,7 +127,7 @@ The implementation ensures proper tensor alignment through:
 - **Index Tensor**: Padded with zeros using `ttnn::fill_implicit_tile_padding(transformed_tensor, 0)`
 - **Input Tensor**: Sliced to match index tensor dimensions and padded with minimum float values
 - **Shape Matching**: Input tensor is sliced to align with index tensor shape for efficient cell mapping
-- **Rank > 4**: The 4D transform merges the leading `rank - 3` dimensions into one, so the input is sliced to the index tensor's extents on those dimensions before the merge; otherwise the two tensors would merge with different extents
+- **Rank > 4**: Input is sliced to the index tensor's extents on the leading `rank - 3` dimensions before they are merged to 4D
 
 #### 3. **Post-Processing Reconstruction**
 
