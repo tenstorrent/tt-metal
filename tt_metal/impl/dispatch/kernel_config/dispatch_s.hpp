@@ -20,12 +20,10 @@ struct dispatch_s_static_config_t {
     std::optional<uint32_t> dispatch_s_sync_sem_base_addr;
 
     std::optional<uint32_t> mcast_go_signal_addr;
-    std::optional<uint32_t> unicast_go_signal_addr;
     std::optional<uint32_t> distributed_dispatcher;
     std::optional<uint32_t> first_stream_used;
     std::optional<uint32_t> completion_counter_offset;
     std::optional<uint32_t> max_num_worker_sems;
-    std::optional<uint32_t> max_num_go_signal_noc_data_entries;
 
     // Dispatch-core-local L1 address of the realtime_profiler_msg_t block (includes the
     // program-id handoff FIFO consumed by this kernel). Assigned by DispatchMemMap via
@@ -72,7 +70,6 @@ public:
         dispatch_core_manager& dispatch_core_manager,
         const GetControlPlaneFn& get_control_plane = {},
         const GetDispatchQueryManagerFn& get_dispatch_query_manager = {},
-        const GetMaxNumEthCoresFn& get_max_num_eth_cores = {},
         const GetReadsDispatchCoresFn& get_reads_dispatch_cores = {});
 
     void CreateKernel() override;

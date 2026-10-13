@@ -15,8 +15,8 @@
 #include "internal/hw_thread.h"
 #include "hostdev/dev_msgs.h"
 #include "api/dataflow/dataflow_api.h"
-#include "tools/profiler/kernel_profiler.hpp"
-#include "tools/profiler/noc_debugging_profiler.hpp"  // RECORD_DFB_REGION_CLEAR
+#include "api/debug/kernel_profiler.hpp"
+#include "internal/profiler/noc_debugging_profiler.hpp"  // RECORD_DFB_REGION_CLEAR
 #include "internal/debug/stack_usage.h"
 #include "internal/tt-2xx/quasar/semaphore_cached_pool.h"
 #include <kernel_includes.hpp>
