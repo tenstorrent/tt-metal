@@ -3356,6 +3356,794 @@ inline void _topk_xl_separate_indices_row_major_global_base_(std::uint32_t seg_b
     }
 }
 
+// FP32-input variants. A row whose fused segments hold at most 2^chunk_bits
+// chunks needs only chunk_bits chunk-id bits (chunk_bits in 0..5), so the fused
+// word becomes
+//   [ key bits 31:(11+chunk_bits) | chunk_id | within-chunk coordinate 10:0 ]
+// and the key keeps 12 - chunk_bits mantissa bits instead of BF16's 7.
+
+// Stamp: key = fp32(x + neg_shift) with its low 11 + chunk_bits bits cleared,
+// then OR the index in. Adding a per-row constant is monotone, so the key ranks
+// like the value, while its resolution near -neg_shift (an estimate of the
+// row's k-th score) is far finer than the value's own. neg_shift = -0.0 keeps
+// x unchanged; -inf stays -inf. LREG13 = neg_shift and LREG14 = value mask
+// (config path); every stamp reloads them, the global split init restores
+// them, and RestoreSplitConstants puts back the classic split's 0xF / 0x1.
+// LiveShift: neg_shift is ignored and LREG13 keeps the row's -T that
+// `_topk_xl_load_row_shift_` derived on the SFPU; only the mask is loaded.
+// SrcRows: the raw chunk is read SrcRows DEST rows past the stamped words (a
+// staging slot it was unpacked to ahead of time); 0 stamps in place.
+template <std::uint32_t K, bool RestoreSplitConstants = false, bool LiveShift = false, std::uint32_t SrcRows = 0>
+inline void _topk_xl_add_lsb_indices_rt_shifted_(const std::uint32_t chunk_id, const std::uint32_t chunk_bits, const std::uint32_t neg_shift)
+{
+    static_assert(K == 512 || K == 1024 || K == 2048, "K must be 512, 1024, or 2048");
+    const std::uint32_t value_mask = ~((1u << (11 + chunk_bits)) - 1u);
+    if constexpr (!LiveShift)
+    {
+        TT_SFPLOADI(p_sfpu::LREG0, sfpi::SFPLOADI_MOD0_LOWER, neg_shift & 0xFFFF);
+        TT_SFPLOADI(p_sfpu::LREG0, sfpi::SFPLOADI_MOD0_UPPER, (neg_shift >> 16) & 0xFFFF);
+        TTI_SFPCONFIG(0, p_sfpu::LREG13, 0);
+    }
+    TT_SFPLOADI(p_sfpu::LREG0, sfpi::SFPLOADI_MOD0_LOWER, value_mask & 0xFFFF);
+    TT_SFPLOADI(p_sfpu::LREG0, sfpi::SFPLOADI_MOD0_UPPER, (value_mask >> 16) & 0xFFFF);
+    TTI_SFPCONFIG(0, p_sfpu::LREG14, 0);
+
+    TTI_SETRWC(p_setrwc::CLR_NONE, 0, 0, 0, 0, p_setrwc::SET_D);
+
+    TTI_SFPMOV(0, p_sfpu::LTILEID, p_sfpu::LREG0, 0);
+
+    TTI_SFPIADD(1, p_sfpu::LREG0, p_sfpu::LREG1, sfpi::SFPIADD_MOD1_ARG_IMM | sfpi::SFPIADD_MOD1_CC_NONE);
+    TTI_SFPIADD(16, p_sfpu::LREG0, p_sfpu::LREG2, sfpi::SFPIADD_MOD1_ARG_IMM | sfpi::SFPIADD_MOD1_CC_NONE);
+    TTI_SFPIADD(17, p_sfpu::LREG0, p_sfpu::LREG3, sfpi::SFPIADD_MOD1_ARG_IMM | sfpi::SFPIADD_MOD1_CC_NONE);
+
+    TTI_SFPTRANSP(0, 0, 0, 0);
+
+    TTI_SFPSHFT(6, 0, p_sfpu::LREG0, 1);
+
+    // chunk_id lands in bits [10 + chunk_bits : 11], below the kept key bits.
+    TT_SFPLOADI(p_sfpu::LREG1, sfpi::SFPLOADI_MOD0_USHORT, chunk_id & ((1u << chunk_bits) - 1u) & 0x1Fu);
+    TTI_SFPSHFT(11, 0, p_sfpu::LREG1, 1);
+
+    TTI_SFPIADD(0, p_sfpu::LREG1, p_sfpu::LREG0, sfpi::SFPIADD_MOD1_ARG_LREG_DST | sfpi::SFPIADD_MOD1_CC_NONE);
+    TTI_SFPIADD(1, p_sfpu::LREG0, p_sfpu::LREG1, sfpi::SFPIADD_MOD1_ARG_IMM | sfpi::SFPIADD_MOD1_CC_NONE);
+    TTI_SFPIADD(2, p_sfpu::LREG0, p_sfpu::LREG2, sfpi::SFPIADD_MOD1_ARG_IMM | sfpi::SFPIADD_MOD1_CC_NONE);
+    TTI_SFPIADD(3, p_sfpu::LREG0, p_sfpu::LREG3, sfpi::SFPIADD_MOD1_ARG_IMM | sfpi::SFPIADD_MOD1_CC_NONE);
+
+    TTI_SFPTRANSP(0, 0, 0, 0);
+
+    lltt::record<lltt::Exec>(0, 24);
+    TTI_SFPLOAD(p_sfpu::LREG4, InstrModLoadStore::INT32, ADDR_MOD_7, SrcRows + 0);
+    TTI_SFPLOAD(p_sfpu::LREG5, InstrModLoadStore::INT32, ADDR_MOD_7, SrcRows + 2);
+    TTI_SFPLOAD(p_sfpu::LREG6, InstrModLoadStore::INT32, ADDR_MOD_7, SrcRows + 16 + 0);
+    TTI_SFPLOAD(p_sfpu::LREG7, InstrModLoadStore::INT32, ADDR_MOD_7, SrcRows + 16 + 2);
+
+    TTI_SFPMAD(p_sfpu::LREG4, p_sfpu::LCONST_1, p_sfpu::LREG13, p_sfpu::LREG4, 0);
+    TTI_SFPMAD(p_sfpu::LREG5, p_sfpu::LCONST_1, p_sfpu::LREG13, p_sfpu::LREG5, 0);
+    TTI_SFPMAD(p_sfpu::LREG6, p_sfpu::LCONST_1, p_sfpu::LREG13, p_sfpu::LREG6, 0);
+    TTI_SFPMAD(p_sfpu::LREG7, p_sfpu::LCONST_1, p_sfpu::LREG13, p_sfpu::LREG7, 0);
+
+    TTI_SFPAND(0, p_sfpu::LREG14, p_sfpu::LREG4, 0);
+    TTI_SFPAND(0, p_sfpu::LREG14, p_sfpu::LREG5, 0);
+    TTI_SFPAND(0, p_sfpu::LREG14, p_sfpu::LREG6, 0);
+    TTI_SFPAND(0, p_sfpu::LREG14, p_sfpu::LREG7, 0);
+
+    TTI_SFPOR(0, p_sfpu::LREG0, p_sfpu::LREG4, 0);
+    TTI_SFPOR(0, p_sfpu::LREG1, p_sfpu::LREG5, 0);
+    TTI_SFPOR(0, p_sfpu::LREG2, p_sfpu::LREG6, 0);
+    TTI_SFPOR(0, p_sfpu::LREG3, p_sfpu::LREG7, 0);
+
+    TTI_SFPIADD(4, p_sfpu::LREG0, p_sfpu::LREG0, sfpi::SFPIADD_MOD1_ARG_IMM | sfpi::SFPIADD_MOD1_CC_NONE);
+    TTI_SFPIADD(4, p_sfpu::LREG1, p_sfpu::LREG1, sfpi::SFPIADD_MOD1_ARG_IMM | sfpi::SFPIADD_MOD1_CC_NONE);
+    TTI_SFPIADD(4, p_sfpu::LREG2, p_sfpu::LREG2, sfpi::SFPIADD_MOD1_ARG_IMM | sfpi::SFPIADD_MOD1_CC_NONE);
+    TTI_SFPIADD(4, p_sfpu::LREG3, p_sfpu::LREG3, sfpi::SFPIADD_MOD1_ARG_IMM | sfpi::SFPIADD_MOD1_CC_NONE);
+
+    TTI_SFPSTORE(p_sfpu::LREG4, InstrModLoadStore::INT32, ADDR_MOD_7, 0);
+    TTI_SFPSTORE(p_sfpu::LREG5, InstrModLoadStore::INT32, ADDR_MOD_7, 2);
+    TTI_SFPSTORE(p_sfpu::LREG6, InstrModLoadStore::INT32, ADDR_MOD_7, 16 + 0);
+    TTI_SFPSTORE(p_sfpu::LREG7, InstrModLoadStore::INT32, ADDR_MOD_6, 16 + 2);
+
+    for (int i = 1; i < 4; i++)
+    {
+        lltt::replay(0, 24);
+    }
+
+    constexpr int row_scale_factor = K == 512 ? 1 : K == 1024 ? 2 : 4;
+    for (int j = 1; j < row_scale_factor; j++)
+    {
+        TTI_SFPLOAD(p_sfpu::LCONST_0, InstrModLoadStore::INT32, ADDR_MOD_4, 0);
+
+        for (int i = 0; i < 4; i++)
+        {
+            lltt::replay(0, 24);
+        }
+    }
+
+    if constexpr (RestoreSplitConstants)
+    {
+        _sfpu_load_config32_(p_sfpu::LREG13, /*upper16=*/0, /*lower16=*/0x000F);
+        _sfpu_load_config32_(p_sfpu::LREG14, /*upper16=*/0, /*lower16=*/0x0001);
+    }
+}
+
+// `_topk_xl_decode_row_major_index_` with its 0xF constant in LREG12 instead of
+// LREG13, so a live row shift (-T in LREG13) survives the per-segment split.
+template <std::uint32_t K>
+inline void _topk_xl_decode_row_major_index_live_shift_()
+{
+    static_assert(K == 512 || K == 1024 || K == 2048, "K must be 512, 1024, or 2048");
+
+    TTI_SFPMOV(0, p_sfpu::LREG0, p_sfpu::LREG2, 0);
+    TTI_SFPSHFT((-6) & 0xFFF, p_sfpu::LREG2, p_sfpu::LREG2, 1);
+    TTI_SFPAND(0, p_sfpu::LREG12, p_sfpu::LREG2, 0);
+
+    TTI_SFPMOV(0, p_sfpu::LREG0, p_sfpu::LREG3, 0);
+    TTI_SFPAND(0, p_sfpu::LREG12, p_sfpu::LREG3, 0);
+    TTI_SFPSHFT(4, p_sfpu::LREG3, p_sfpu::LREG3, 1);
+    TTI_SFPOR(0, p_sfpu::LREG3, p_sfpu::LREG2, 0);
+
+    TTI_SFPMOV(0, p_sfpu::LREG0, p_sfpu::LREG3, 0);
+    TTI_SFPSHFT((-10) & 0xFFF, p_sfpu::LREG3, p_sfpu::LREG3, 1);
+    TTI_SFPAND(0, p_sfpu::LREG14, p_sfpu::LREG3, 0);
+    TTI_SFPSHFT(8, p_sfpu::LREG3, p_sfpu::LREG3, 1);
+    TTI_SFPOR(0, p_sfpu::LREG3, p_sfpu::LREG2, 0);
+
+    TTI_SFPMOV(0, p_sfpu::LREG0, p_sfpu::LREG3, 0);
+    TTI_SFPSHFT((-4) & 0xFFF, p_sfpu::LREG3, p_sfpu::LREG3, 1);
+    TTI_SFPAND(0, p_sfpu::LREG14, p_sfpu::LREG3, 0);
+    TTI_SFPSHFT(9, p_sfpu::LREG3, p_sfpu::LREG3, 1);
+    TTI_SFPOR(0, p_sfpu::LREG3, p_sfpu::LREG2, 0);
+
+    if constexpr (K == 2048)
+    {
+        TTI_SFPMOV(0, p_sfpu::LREG0, p_sfpu::LREG3, 0);
+        TTI_SFPSHFT((-5) & 0xFFF, p_sfpu::LREG3, p_sfpu::LREG3, 1);
+        TTI_SFPAND(0, p_sfpu::LREG14, p_sfpu::LREG3, 0);
+        TTI_SFPSHFT(10, p_sfpu::LREG3, p_sfpu::LREG3, 1);
+        TTI_SFPOR(0, p_sfpu::LREG3, p_sfpu::LREG2, 0);
+    }
+
+    TTI_SFPMOV(0, p_sfpu::LREG2, p_sfpu::LREG0, 0);
+}
+
+// Split init for live-shift rows: ADDR_MOD_0 as the global init, decode
+// constants in LREG12 (0xF) and LREG14 (0x1); LREG13 (-T) is left alone.
+inline void _topk_xl_separate_indices_row_major_global_init_live_shift_()
+{
+    addr_mod_t {
+        .srca = {.incr = 0},
+        .srcb = {.incr = 0},
+        .dest = {.incr = 2},
+    }
+        .set(ADDR_MOD_0);
+
+    _sfpu_load_config32_(p_sfpu::LREG12, /*upper16=*/0, /*lower16=*/0x000F);
+    _sfpu_load_config32_(p_sfpu::LREG14, /*upper16=*/0, /*lower16=*/0x0001);
+}
+
+// Segment split for the masked stamp: the value word keeps bits above
+// 11 + chunk_bits, the chunk field is chunk_bits wide. Requires
+// `_topk_xl_separate_indices_row_major_global_init_` (ADDR_MOD_0), or with LiveShift
+// `_topk_xl_separate_indices_row_major_global_init_live_shift_`; LREG13 (a live -T) is not touched.
+// The coordinate decode is the bit permutation of `_topk_xl_decode_row_major_index_`:
+// idx = code[9:6] | code[3:0] << 4 | code[10] << 8 | code[5:4] << 9 (code[5] only for K = 2048).
+// Fields that move by the same distance are taken in one group (shift from the low word + AND + OR),
+// so a word costs 21 instructions, recorded once and replayed.
+// LREG4/7/12/14 = group masks, LREG5 = seg_base, LREG6 = value mask; the body uses LREG0..3.
+template <std::uint32_t K, bool LiveShift = false>
+inline void _topk_xl_separate_indices_row_major_global_base_masked_(const std::uint32_t seg_base, const std::uint32_t chunk_bits)
+{
+    static_assert(K == 512 || K == 1024 || K == 2048, "K must be 512, 1024, or 2048");
+    constexpr int row_scale_factor       = K == 512 ? 1 : K == 1024 ? 2 : 4;
+    constexpr int num_tiles_per_sequence = K == 512 ? 1 : K == 1024 ? 1 : 2;
+    constexpr int indices_offset         = num_tiles_per_sequence * 64;
+    constexpr int chunk_field_shift      = K == 2048 ? 0 : K == 1024 ? -1 : -2;
+    constexpr std::uint32_t high_mask    = K == 2048 ? 0x600 : 0x200;
+
+    const std::uint32_t value_mask = ~((1u << (11 + chunk_bits)) - 1u);
+
+    TT_SFPLOADI(p_sfpu::LREG5, sfpi::SFPLOADI_MOD0_UPPER, (seg_base >> 16) & 0xFFFF);
+    TT_SFPLOADI(p_sfpu::LREG5, sfpi::SFPLOADI_MOD0_LOWER, seg_base & 0xFFFF);
+    TT_SFPLOADI(p_sfpu::LREG6, sfpi::SFPLOADI_MOD0_UPPER, (value_mask >> 16) & 0xFFFF);
+    TT_SFPLOADI(p_sfpu::LREG6, sfpi::SFPLOADI_MOD0_LOWER, value_mask & 0xFFFF);
+    TTI_SFPLOADI(p_sfpu::LREG4, sfpi::SFPLOADI_MOD0_USHORT, 0x000F);
+    TTI_SFPLOADI(p_sfpu::LREG7, sfpi::SFPLOADI_MOD0_USHORT, 0x00F0);
+    _sfpu_load_config32_(p_sfpu::LREG12, /*upper16=*/0, /*lower16=*/0x0100);
+    _sfpu_load_config32_(p_sfpu::LREG14, /*upper16=*/0, /*lower16=*/high_mask);
+
+    lltt::record<lltt::Exec>(0, 21);
+    TTI_SFPLOAD(p_sfpu::LREG0, InstrModLoadStore::INT32, ADDR_MOD_7, 0);
+
+    // LREG1 = value word, LREG0 = chunk id | coordinate.
+    TTI_SFPMOV(0, p_sfpu::LREG0, p_sfpu::LREG1, 0);
+    TTI_SFPAND(0, p_sfpu::LREG6, p_sfpu::LREG1, 0);
+    TTI_SFPXOR(0, p_sfpu::LREG1, p_sfpu::LREG0, 0);
+
+    // LREG2 = seg_base | chunk id << (11 + chunk_field_shift).
+    TTI_SFPSHFT((-11) & 0xFFF, p_sfpu::LREG0, p_sfpu::LREG2, 5);
+    TTI_SFPSHFT((11 + chunk_field_shift) & 0xFFF, 0, p_sfpu::LREG2, 1);
+    TTI_SFPOR(0, p_sfpu::LREG5, p_sfpu::LREG2, 0);
+
+    // code[9:6] -> [3:0], code[3:0] -> [7:4], code[10] -> [8], code[5:4] -> [10:9].
+    TTI_SFPSHFT((-6) & 0xFFF, p_sfpu::LREG0, p_sfpu::LREG3, 5);
+    TTI_SFPAND(0, p_sfpu::LREG4, p_sfpu::LREG3, 0);
+    TTI_SFPOR(0, p_sfpu::LREG3, p_sfpu::LREG2, 0);
+    TTI_SFPSHFT(4, p_sfpu::LREG0, p_sfpu::LREG3, 5);
+    TTI_SFPAND(0, p_sfpu::LREG7, p_sfpu::LREG3, 0);
+    TTI_SFPOR(0, p_sfpu::LREG3, p_sfpu::LREG2, 0);
+    TTI_SFPSHFT((-2) & 0xFFF, p_sfpu::LREG0, p_sfpu::LREG3, 5);
+    TTI_SFPAND(0, p_sfpu::LREG12, p_sfpu::LREG3, 0);
+    TTI_SFPOR(0, p_sfpu::LREG3, p_sfpu::LREG2, 0);
+    TTI_SFPSHFT(5, p_sfpu::LREG0, p_sfpu::LREG3, 5);
+    TTI_SFPAND(0, p_sfpu::LREG14, p_sfpu::LREG3, 0);
+    TTI_SFPOR(0, p_sfpu::LREG3, p_sfpu::LREG2, 0);
+
+    TTI_SFPSTORE(p_sfpu::LREG1, InstrModLoadStore::INT32, ADDR_MOD_7, 0);
+    TTI_SFPSTORE(p_sfpu::LREG2, InstrModLoadStore::INT32, ADDR_MOD_0, indices_offset);
+
+    for (int i = 1; i < row_scale_factor * 16; i++)
+    {
+        lltt::replay(0, 21);
+    }
+}
+
+// Reads the word of a sorted fused run at stamp position `target_pos`, keeps
+// its bits under `value_mask`, and leaves that value in every lane of LREG0.
+// The value is 0 if its magnitude is >= 2^100, inf or NaN, so no finite x - T
+// overflows into the -inf sentinel. The stamp numbers the lanes of body b
+// (loads at 32*(b/4) + 4*(b%4) + {0, 2, 16, 18}) as P_s + 4*b, so only the one
+// body holding target_pos is read. Uses LREG0..7.
+template <std::uint32_t K>
+inline void _topk_xl_read_run_word_(const std::uint32_t target_pos, const std::uint32_t value_mask)
+{
+    static_assert(K == 1024 || K == 2048, "row shift needs K = 1024 or 2048");
+    const std::uint32_t body     = (target_pos & 63u) >> 2;
+    const std::uint32_t row_base = 32 * (body >> 2) + 4 * (body & 3);
+
+    TTI_SFPENCC(sfpi::SFPENCC_IMM12_BOTH, 0, 0, sfpi::SFPENCC_MOD1_EI_RI);
+    TTI_SETRWC(p_setrwc::CLR_NONE, 0, 0, 0, 0, p_setrwc::SET_D);
+
+    // Stamp positions of this body (chunk id 0) in LREG0..3.
+    TTI_SFPMOV(0, p_sfpu::LTILEID, p_sfpu::LREG0, 0);
+    TTI_SFPIADD(1, p_sfpu::LREG0, p_sfpu::LREG1, sfpi::SFPIADD_MOD1_ARG_IMM | sfpi::SFPIADD_MOD1_CC_NONE);
+    TTI_SFPIADD(16, p_sfpu::LREG0, p_sfpu::LREG2, sfpi::SFPIADD_MOD1_ARG_IMM | sfpi::SFPIADD_MOD1_CC_NONE);
+    TTI_SFPIADD(17, p_sfpu::LREG0, p_sfpu::LREG3, sfpi::SFPIADD_MOD1_ARG_IMM | sfpi::SFPIADD_MOD1_CC_NONE);
+    TTI_SFPTRANSP(0, 0, 0, 0);
+    TTI_SFPSHFT(6, 0, p_sfpu::LREG0, 1);
+    TT_SFPIADD(4 * body, p_sfpu::LREG0, p_sfpu::LREG0, sfpi::SFPIADD_MOD1_ARG_IMM | sfpi::SFPIADD_MOD1_CC_NONE);
+    TTI_SFPIADD(1, p_sfpu::LREG0, p_sfpu::LREG1, sfpi::SFPIADD_MOD1_ARG_IMM | sfpi::SFPIADD_MOD1_CC_NONE);
+    TTI_SFPIADD(2, p_sfpu::LREG0, p_sfpu::LREG2, sfpi::SFPIADD_MOD1_ARG_IMM | sfpi::SFPIADD_MOD1_CC_NONE);
+    TTI_SFPIADD(3, p_sfpu::LREG0, p_sfpu::LREG3, sfpi::SFPIADD_MOD1_ARG_IMM | sfpi::SFPIADD_MOD1_CC_NONE);
+    TTI_SFPTRANSP(0, 0, 0, 0);
+
+    // LREG7 = the word at target_pos in its own lane, 0 elsewhere.
+    TT_SFPLOADI(p_sfpu::LREG6, sfpi::SFPLOADI_MOD0_USHORT, target_pos & 0xFFFF);
+    TTI_SFPLOADI(p_sfpu::LREG7, sfpi::SFPLOADI_MOD0_USHORT, 0);
+    constexpr std::uint32_t offsets[4] = {0, 2, 16, 18};
+#pragma GCC unroll 4
+    for (std::uint32_t s = 0; s < 4; ++s)
+    {
+        TT_SFPLOAD(p_sfpu::LREG4, InstrModLoadStore::INT32, ADDR_MOD_7, row_base + offsets[s]);
+        TT_SFPMOV(0, s, p_sfpu::LREG5, 0);
+        TTI_SFPXOR(0, p_sfpu::LREG6, p_sfpu::LREG5, 0);
+        TTI_SFPSETCC(0, p_sfpu::LREG5, 0, sfpi::SFPSETCC_MOD1_LREG_EQ0);
+        TTI_SFPOR(0, p_sfpu::LREG4, p_sfpu::LREG7, 0);
+        TTI_SFPENCC(sfpi::SFPENCC_IMM12_BOTH, 0, 0, sfpi::SFPENCC_MOD1_EI_RI);
+    }
+
+    // Keep the value bits above the index field.
+    TT_SFPLOADI(p_sfpu::LREG4, sfpi::SFPLOADI_MOD0_LOWER, value_mask & 0xFFFF);
+    TT_SFPLOADI(p_sfpu::LREG4, sfpi::SFPLOADI_MOD0_UPPER, (value_mask >> 16) & 0xFFFF);
+    TTI_SFPAND(0, p_sfpu::LREG4, p_sfpu::LREG7, 0);
+
+    // Broadcast by integer sum (one nonzero lane): rows via transpose + sum
+    // twice, columns via a 4/2/1 rotate butterfly.
+    TTI_SFPMOV(0, p_sfpu::LREG7, p_sfpu::LREG0, 0);
+    TTI_SFPLOADI(p_sfpu::LREG1, sfpi::SFPLOADI_MOD0_USHORT, 0);
+    TTI_SFPLOADI(p_sfpu::LREG2, sfpi::SFPLOADI_MOD0_USHORT, 0);
+    TTI_SFPLOADI(p_sfpu::LREG3, sfpi::SFPLOADI_MOD0_USHORT, 0);
+    TTI_SFPTRANSP(0, 0, 0, 0);
+    TTI_SFPIADD(0, p_sfpu::LREG1, p_sfpu::LREG0, sfpi::SFPIADD_MOD1_ARG_LREG_DST | sfpi::SFPIADD_MOD1_CC_NONE);
+    TTI_SFPIADD(0, p_sfpu::LREG2, p_sfpu::LREG0, sfpi::SFPIADD_MOD1_ARG_LREG_DST | sfpi::SFPIADD_MOD1_CC_NONE);
+    TTI_SFPIADD(0, p_sfpu::LREG3, p_sfpu::LREG0, sfpi::SFPIADD_MOD1_ARG_LREG_DST | sfpi::SFPIADD_MOD1_CC_NONE);
+    TTI_SFPMOV(0, p_sfpu::LREG0, p_sfpu::LREG1, 0);
+    TTI_SFPMOV(0, p_sfpu::LREG0, p_sfpu::LREG2, 0);
+    TTI_SFPMOV(0, p_sfpu::LREG0, p_sfpu::LREG3, 0);
+    TTI_SFPTRANSP(0, 0, 0, 0);
+    TTI_SFPIADD(0, p_sfpu::LREG1, p_sfpu::LREG0, sfpi::SFPIADD_MOD1_ARG_LREG_DST | sfpi::SFPIADD_MOD1_CC_NONE);
+    TTI_SFPIADD(0, p_sfpu::LREG2, p_sfpu::LREG0, sfpi::SFPIADD_MOD1_ARG_LREG_DST | sfpi::SFPIADD_MOD1_CC_NONE);
+    TTI_SFPIADD(0, p_sfpu::LREG3, p_sfpu::LREG0, sfpi::SFPIADD_MOD1_ARG_LREG_DST | sfpi::SFPIADD_MOD1_CC_NONE);
+
+    TTI_SFPSHFT2(0, p_sfpu::LREG0, p_sfpu::LREG1, sfpi::SFPSHFT2_MOD1_SUBVEC_SHFLROR1);
+    TTI_SFPSHFT2(0, p_sfpu::LREG1, p_sfpu::LREG1, sfpi::SFPSHFT2_MOD1_SUBVEC_SHFLROR1);
+    TTI_SFPSHFT2(0, p_sfpu::LREG1, p_sfpu::LREG1, sfpi::SFPSHFT2_MOD1_SUBVEC_SHFLROR1);
+    TTI_SFPSHFT2(0, p_sfpu::LREG1, p_sfpu::LREG1, sfpi::SFPSHFT2_MOD1_SUBVEC_SHFLROR1);
+    TTI_SFPIADD(0, p_sfpu::LREG1, p_sfpu::LREG0, sfpi::SFPIADD_MOD1_ARG_LREG_DST | sfpi::SFPIADD_MOD1_CC_NONE);
+    TTI_SFPSHFT2(0, p_sfpu::LREG0, p_sfpu::LREG1, sfpi::SFPSHFT2_MOD1_SUBVEC_SHFLROR1);
+    TTI_SFPSHFT2(0, p_sfpu::LREG1, p_sfpu::LREG1, sfpi::SFPSHFT2_MOD1_SUBVEC_SHFLROR1);
+    TTI_SFPIADD(0, p_sfpu::LREG1, p_sfpu::LREG0, sfpi::SFPIADD_MOD1_ARG_LREG_DST | sfpi::SFPIADD_MOD1_CC_NONE);
+    TTI_SFPSHFT2(0, p_sfpu::LREG0, p_sfpu::LREG1, sfpi::SFPSHFT2_MOD1_SUBVEC_SHFLROR1);
+    TTI_SFPIADD(0, p_sfpu::LREG1, p_sfpu::LREG0, sfpi::SFPIADD_MOD1_ARG_LREG_DST | sfpi::SFPIADD_MOD1_CC_NONE);
+
+    // T = 0 when |T| >= 2^100, inf or NaN: |T| + (-2^100) >= 0.
+    TTI_SFPMOV(0, p_sfpu::LREG0, p_sfpu::LREG1, 0);
+    TTI_SFPLOADI(p_sfpu::LREG2, sfpi::SFPLOADI_MOD0_LOWER, 0xFFFF);
+    TTI_SFPLOADI(p_sfpu::LREG2, sfpi::SFPLOADI_MOD0_UPPER, 0x7FFF);
+    TTI_SFPAND(0, p_sfpu::LREG2, p_sfpu::LREG1, 0);
+    TTI_SFPLOADI(p_sfpu::LREG2, sfpi::SFPLOADI_MOD0_LOWER, 0x0000);
+    TTI_SFPLOADI(p_sfpu::LREG2, sfpi::SFPLOADI_MOD0_UPPER, 0xF180);
+    TTI_SFPMAD(p_sfpu::LREG1, p_sfpu::LCONST_1, p_sfpu::LREG2, p_sfpu::LREG1, 0);
+    TTI_SFPNOP;
+    TTI_SFPNOP;
+    TTI_SFPSETCC(0, p_sfpu::LREG1, 0, sfpi::SFPSETCC_MOD1_LREG_GTE0);
+    TTI_SFPXOR(0, p_sfpu::LREG0, p_sfpu::LREG0, 0);
+    TTI_SFPENCC(sfpi::SFPENCC_IMM12_BOTH, 0, 0, sfpi::SFPENCC_MOD1_EI_RI);
+}
+
+// Row shift found on the SFPU. After chunk 0 of a row has been stamped with
+// an 11-bit coordinate field (chunk_bits = 0, shift -0.0) and sorted
+// descending, rank r of the run sits at the stamp position whose (row, tile,
+// column) lane maps to sort position r (the caller converts the rank, see
+// compute.cpp). This reads the word at `target_pos`, keeps its value bits as
+// T (the row's estimated k-th score), and loads -T into LREG13 in every lane.
+template <std::uint32_t K>
+inline void _topk_xl_load_row_shift_(const std::uint32_t target_pos)
+{
+    _topk_xl_read_run_word_<K>(target_pos, 0xFFFFF800u);
+
+    // LREG13 = -T.
+    TTI_SFPLOADI(p_sfpu::LREG2, sfpi::SFPLOADI_MOD0_LOWER, 0x0000);
+    TTI_SFPLOADI(p_sfpu::LREG2, sfpi::SFPLOADI_MOD0_UPPER, 0x8000);
+    TTI_SFPXOR(0, p_sfpu::LREG2, p_sfpu::LREG0, 0);
+    TTI_SFPCONFIG(0, p_sfpu::LREG13, 0);
+}
+
+// L0 = (L0 + L1) + L2 in every lane after the MADs settle (2 NOPs).
+inline void _topk_xl_sum3_to_l0_()
+{
+    TTI_SFPMAD(p_sfpu::LREG0, p_sfpu::LCONST_1, p_sfpu::LREG1, p_sfpu::LREG0, 0);
+    TTI_SFPMAD(p_sfpu::LREG2, p_sfpu::LCONST_1, p_sfpu::LREG3, p_sfpu::LREG2, 0);
+    TTI_SFPNOP;
+    TTI_SFPNOP;
+    TTI_SFPMAD(p_sfpu::LREG0, p_sfpu::LCONST_1, p_sfpu::LREG2, p_sfpu::LREG0, 0);
+    TTI_SFPNOP;
+    TTI_SFPNOP;
+}
+
+// Float sum of the 32 lanes of LREG0 (4 rows x 8 columns), left in every lane:
+// rows by transpose + sum (as `_topk_xl_read_run_word_`), columns by a 4/2/1
+// rotate butterfly. Each butterfly stage adds a lane pair in both orders, and
+// IEEE addition commutes, so every lane holds the identical sum. Uses LREG0..7.
+inline void _topk_xl_lane_sum_()
+{
+    TTI_SFPLOADI(p_sfpu::LREG1, sfpi::SFPLOADI_MOD0_USHORT, 0);
+    TTI_SFPLOADI(p_sfpu::LREG2, sfpi::SFPLOADI_MOD0_USHORT, 0);
+    TTI_SFPLOADI(p_sfpu::LREG3, sfpi::SFPLOADI_MOD0_USHORT, 0);
+    TTI_SFPTRANSP(0, 0, 0, 0);
+    _topk_xl_sum3_to_l0_();
+    TTI_SFPMOV(0, p_sfpu::LREG0, p_sfpu::LREG1, 0);
+    TTI_SFPMOV(0, p_sfpu::LREG0, p_sfpu::LREG2, 0);
+    TTI_SFPMOV(0, p_sfpu::LREG0, p_sfpu::LREG3, 0);
+    TTI_SFPTRANSP(0, 0, 0, 0);
+    _topk_xl_sum3_to_l0_();
+
+    TTI_SFPSHFT2(0, p_sfpu::LREG0, p_sfpu::LREG1, sfpi::SFPSHFT2_MOD1_SUBVEC_SHFLROR1);
+    TTI_SFPSHFT2(0, p_sfpu::LREG1, p_sfpu::LREG1, sfpi::SFPSHFT2_MOD1_SUBVEC_SHFLROR1);
+    TTI_SFPSHFT2(0, p_sfpu::LREG1, p_sfpu::LREG1, sfpi::SFPSHFT2_MOD1_SUBVEC_SHFLROR1);
+    TTI_SFPSHFT2(0, p_sfpu::LREG1, p_sfpu::LREG1, sfpi::SFPSHFT2_MOD1_SUBVEC_SHFLROR1);
+    TTI_SFPMAD(p_sfpu::LREG0, p_sfpu::LCONST_1, p_sfpu::LREG1, p_sfpu::LREG0, 0);
+    TTI_SFPNOP;
+    TTI_SFPNOP;
+    TTI_SFPSHFT2(0, p_sfpu::LREG0, p_sfpu::LREG1, sfpi::SFPSHFT2_MOD1_SUBVEC_SHFLROR1);
+    TTI_SFPSHFT2(0, p_sfpu::LREG1, p_sfpu::LREG1, sfpi::SFPSHFT2_MOD1_SUBVEC_SHFLROR1);
+    TTI_SFPMAD(p_sfpu::LREG0, p_sfpu::LCONST_1, p_sfpu::LREG1, p_sfpu::LREG0, 0);
+    TTI_SFPNOP;
+    TTI_SFPNOP;
+    TTI_SFPSHFT2(0, p_sfpu::LREG0, p_sfpu::LREG1, sfpi::SFPSHFT2_MOD1_SUBVEC_SHFLROR1);
+    TTI_SFPMAD(p_sfpu::LREG0, p_sfpu::LCONST_1, p_sfpu::LREG1, p_sfpu::LREG0, 0);
+    TTI_SFPNOP;
+    TTI_SFPNOP;
+}
+
+// Pre-shift for the first chunk's exact key. Before T is known the first chunk
+// is keyed on trunc(x - S) instead of trunc(x): with S near the row's k-th score
+// its 12 kept mantissa bits resolve |x - S| rather than |x| near the threshold.
+// From the raw FP32 chunk in DEST, over a strided quarter (every 4th load group,
+// K / 4 values): m = mean, S = m + dev_scale * sum|x - m|, where the caller folds
+// 1 / (K / 4) and z' = sqrt(pi / 2) * Phi^-1(1 - k / searched) into dev_scale.
+// S := 0 when |S| >= 2^100, inf or NaN (e.g. -inf values). Leaves LREG13 = -S in
+// every lane (the live stamp's shift); LREG12/14 are scratch. Uses ADDR_MOD_0.
+template <std::uint32_t K>
+inline void _topk_xl_row_preshift_(const std::uint32_t dev_scale)
+{
+    static_assert(K == 1024 || K == 2048, "row shift needs K = 1024 or 2048");
+    // K / 128 strided loads of 32 values, 4 per recorded body.
+    constexpr std::uint32_t bodies   = K / 512;
+    constexpr std::uint32_t inv_n_hi = K == 2048 ? 0x3B00 : 0x3B80; // 2^-9 / 2^-8
+
+    addr_mod_t {
+        .srca = {.incr = 0},
+        .srcb = {.incr = 0},
+        .dest = {.incr = 8},
+    }
+        .set(ADDR_MOD_0);
+
+    // Pass 1: per-lane sums in LREG4..7.
+    TTI_SFPLOADI(p_sfpu::LREG4, sfpi::SFPLOADI_MOD0_USHORT, 0);
+    TTI_SFPLOADI(p_sfpu::LREG5, sfpi::SFPLOADI_MOD0_USHORT, 0);
+    TTI_SFPLOADI(p_sfpu::LREG6, sfpi::SFPLOADI_MOD0_USHORT, 0);
+    TTI_SFPLOADI(p_sfpu::LREG7, sfpi::SFPLOADI_MOD0_USHORT, 0);
+    TTI_SETRWC(p_setrwc::CLR_NONE, 0, 0, 0, 0, p_setrwc::SET_D);
+    lltt::record<lltt::Exec>(0, 8);
+    {
+        TTI_SFPLOAD(p_sfpu::LREG0, InstrModLoadStore::INT32, ADDR_MOD_0, 0);
+        TTI_SFPLOAD(p_sfpu::LREG1, InstrModLoadStore::INT32, ADDR_MOD_0, 0);
+        TTI_SFPLOAD(p_sfpu::LREG2, InstrModLoadStore::INT32, ADDR_MOD_0, 0);
+        TTI_SFPLOAD(p_sfpu::LREG3, InstrModLoadStore::INT32, ADDR_MOD_0, 0);
+        TTI_SFPMAD(p_sfpu::LREG0, p_sfpu::LCONST_1, p_sfpu::LREG4, p_sfpu::LREG4, 0);
+        TTI_SFPMAD(p_sfpu::LREG1, p_sfpu::LCONST_1, p_sfpu::LREG5, p_sfpu::LREG5, 0);
+        TTI_SFPMAD(p_sfpu::LREG2, p_sfpu::LCONST_1, p_sfpu::LREG6, p_sfpu::LREG6, 0);
+        TTI_SFPMAD(p_sfpu::LREG3, p_sfpu::LCONST_1, p_sfpu::LREG7, p_sfpu::LREG7, 0);
+    }
+    for (std::uint32_t i = 1; i < bodies; ++i)
+    {
+        lltt::replay(0, 8);
+    }
+    TTI_SFPNOP;
+    TTI_SFPNOP;
+    TTI_SFPMAD(p_sfpu::LREG4, p_sfpu::LCONST_1, p_sfpu::LREG5, p_sfpu::LREG0, 0);
+    TTI_SFPMAD(p_sfpu::LREG6, p_sfpu::LCONST_1, p_sfpu::LREG7, p_sfpu::LREG1, 0);
+    TTI_SFPLOADI(p_sfpu::LREG2, sfpi::SFPLOADI_MOD0_USHORT, 0);
+    TTI_SFPLOADI(p_sfpu::LREG3, sfpi::SFPLOADI_MOD0_USHORT, 0);
+    TTI_SFPNOP;
+    _topk_xl_sum3_to_l0_();
+    _topk_xl_lane_sum_();
+
+    // LREG12 = -m, LREG14 = |.| mask.
+    TTI_SFPLOADI(p_sfpu::LREG1, sfpi::SFPLOADI_MOD0_LOWER, 0x0000);
+    TTI_SFPLOADI(p_sfpu::LREG1, sfpi::SFPLOADI_MOD0_UPPER, inv_n_hi);
+    TTI_SFPLOADI(p_sfpu::LREG2, sfpi::SFPLOADI_MOD0_USHORT, 0);
+    TTI_SFPMAD(p_sfpu::LREG0, p_sfpu::LREG1, p_sfpu::LREG2, p_sfpu::LREG0, 0);
+    TTI_SFPLOADI(p_sfpu::LREG2, sfpi::SFPLOADI_MOD0_LOWER, 0x0000);
+    TTI_SFPLOADI(p_sfpu::LREG2, sfpi::SFPLOADI_MOD0_UPPER, 0x8000);
+    TTI_SFPNOP;
+    TTI_SFPXOR(0, p_sfpu::LREG2, p_sfpu::LREG0, 0);
+    TTI_SFPCONFIG(0, p_sfpu::LREG12, 0);
+    TTI_SFPLOADI(p_sfpu::LREG0, sfpi::SFPLOADI_MOD0_LOWER, 0xFFFF);
+    TTI_SFPLOADI(p_sfpu::LREG0, sfpi::SFPLOADI_MOD0_UPPER, 0x7FFF);
+    TTI_SFPCONFIG(0, p_sfpu::LREG14, 0);
+
+    // Pass 2: per-lane sums of |x - m| in LREG4..7.
+    TTI_SFPLOADI(p_sfpu::LREG4, sfpi::SFPLOADI_MOD0_USHORT, 0);
+    TTI_SFPLOADI(p_sfpu::LREG5, sfpi::SFPLOADI_MOD0_USHORT, 0);
+    TTI_SFPLOADI(p_sfpu::LREG6, sfpi::SFPLOADI_MOD0_USHORT, 0);
+    TTI_SFPLOADI(p_sfpu::LREG7, sfpi::SFPLOADI_MOD0_USHORT, 0);
+    TTI_SETRWC(p_setrwc::CLR_NONE, 0, 0, 0, 0, p_setrwc::SET_D);
+    lltt::record<lltt::Exec>(0, 16);
+    {
+        TTI_SFPLOAD(p_sfpu::LREG0, InstrModLoadStore::INT32, ADDR_MOD_0, 0);
+        TTI_SFPLOAD(p_sfpu::LREG1, InstrModLoadStore::INT32, ADDR_MOD_0, 0);
+        TTI_SFPLOAD(p_sfpu::LREG2, InstrModLoadStore::INT32, ADDR_MOD_0, 0);
+        TTI_SFPLOAD(p_sfpu::LREG3, InstrModLoadStore::INT32, ADDR_MOD_0, 0);
+        TTI_SFPMAD(p_sfpu::LREG0, p_sfpu::LCONST_1, p_sfpu::LREG12, p_sfpu::LREG0, 0);
+        TTI_SFPMAD(p_sfpu::LREG1, p_sfpu::LCONST_1, p_sfpu::LREG12, p_sfpu::LREG1, 0);
+        TTI_SFPMAD(p_sfpu::LREG2, p_sfpu::LCONST_1, p_sfpu::LREG12, p_sfpu::LREG2, 0);
+        TTI_SFPMAD(p_sfpu::LREG3, p_sfpu::LCONST_1, p_sfpu::LREG12, p_sfpu::LREG3, 0);
+        TTI_SFPAND(0, p_sfpu::LREG14, p_sfpu::LREG0, 0);
+        TTI_SFPAND(0, p_sfpu::LREG14, p_sfpu::LREG1, 0);
+        TTI_SFPAND(0, p_sfpu::LREG14, p_sfpu::LREG2, 0);
+        TTI_SFPAND(0, p_sfpu::LREG14, p_sfpu::LREG3, 0);
+        TTI_SFPMAD(p_sfpu::LREG0, p_sfpu::LCONST_1, p_sfpu::LREG4, p_sfpu::LREG4, 0);
+        TTI_SFPMAD(p_sfpu::LREG1, p_sfpu::LCONST_1, p_sfpu::LREG5, p_sfpu::LREG5, 0);
+        TTI_SFPMAD(p_sfpu::LREG2, p_sfpu::LCONST_1, p_sfpu::LREG6, p_sfpu::LREG6, 0);
+        TTI_SFPMAD(p_sfpu::LREG3, p_sfpu::LCONST_1, p_sfpu::LREG7, p_sfpu::LREG7, 0);
+    }
+    for (std::uint32_t i = 1; i < bodies; ++i)
+    {
+        lltt::replay(0, 16);
+    }
+    TTI_SFPNOP;
+    TTI_SFPNOP;
+    TTI_SFPMAD(p_sfpu::LREG4, p_sfpu::LCONST_1, p_sfpu::LREG5, p_sfpu::LREG0, 0);
+    TTI_SFPMAD(p_sfpu::LREG6, p_sfpu::LCONST_1, p_sfpu::LREG7, p_sfpu::LREG1, 0);
+    TTI_SFPLOADI(p_sfpu::LREG2, sfpi::SFPLOADI_MOD0_USHORT, 0);
+    TTI_SFPLOADI(p_sfpu::LREG3, sfpi::SFPLOADI_MOD0_USHORT, 0);
+    TTI_SFPNOP;
+    _topk_xl_sum3_to_l0_();
+    _topk_xl_lane_sum_();
+
+    // LREG0 = -S = -(m + dev_scale * sum|x - m|); LREG1 = sign bit.
+    TT_SFPLOADI(p_sfpu::LREG2, sfpi::SFPLOADI_MOD0_LOWER, dev_scale & 0xFFFF);
+    TT_SFPLOADI(p_sfpu::LREG2, sfpi::SFPLOADI_MOD0_UPPER, (dev_scale >> 16) & 0xFFFF);
+    TTI_SFPLOADI(p_sfpu::LREG1, sfpi::SFPLOADI_MOD0_LOWER, 0x0000);
+    TTI_SFPLOADI(p_sfpu::LREG1, sfpi::SFPLOADI_MOD0_UPPER, 0x8000);
+    TTI_SFPMOV(0, p_sfpu::LREG12, p_sfpu::LREG3, 0);
+    TTI_SFPXOR(0, p_sfpu::LREG1, p_sfpu::LREG3, 0);
+    TTI_SFPMAD(p_sfpu::LREG0, p_sfpu::LREG2, p_sfpu::LREG3, p_sfpu::LREG0, 0);
+    TTI_SFPNOP;
+    TTI_SFPNOP;
+    TTI_SFPXOR(0, p_sfpu::LREG1, p_sfpu::LREG0, 0);
+
+    // Guard on the magnitude bits: |S| bits - bits(2^100) >= 0 (also inf / NaN) -> -0.0.
+    TTI_SFPMOV(0, p_sfpu::LREG0, p_sfpu::LREG2, 0);
+    TTI_SFPAND(0, p_sfpu::LREG14, p_sfpu::LREG2, 0);
+    TTI_SFPLOADI(p_sfpu::LREG3, sfpi::SFPLOADI_MOD0_LOWER, 0x0000);
+    TTI_SFPLOADI(p_sfpu::LREG3, sfpi::SFPLOADI_MOD0_UPPER, 0x8E80);
+    TTI_SFPIADD(0, p_sfpu::LREG3, p_sfpu::LREG2, sfpi::SFPIADD_MOD1_ARG_LREG_DST | sfpi::SFPIADD_MOD1_CC_NONE);
+    TTI_SFPENCC(sfpi::SFPENCC_IMM12_BOTH, 0, 0, sfpi::SFPENCC_MOD1_EI_RI);
+    TTI_SFPSETCC(0, p_sfpu::LREG2, 0, sfpi::SFPSETCC_MOD1_LREG_GTE0);
+    TTI_SFPMOV(0, p_sfpu::LREG1, p_sfpu::LREG0, 0);
+    TTI_SFPENCC(sfpi::SFPENCC_IMM12_BOTH, 0, 0, sfpi::SFPENCC_MOD1_EI_RI);
+    TTI_SFPCONFIG(0, p_sfpu::LREG13, 0);
+}
+
+// Row shift for a first chunk keyed on trunc(x - S) (`_topk_xl_row_preshift_`,
+// LREG13 = -S): d = the sorted pre-key at `target_pos`, T = S + d. Leaves
+// LREG12 = -T (kept by the Preshift re-key, which then moves it to LREG13) and
+// LREG13 = -d (the re-key's shift: the pre-key is already x - S).
+template <std::uint32_t K>
+inline void _topk_xl_load_row_shift_preshifted_(const std::uint32_t target_pos)
+{
+    _topk_xl_read_run_word_<K>(target_pos, 0xFFFFF800u);
+
+    TTI_SFPLOADI(p_sfpu::LREG2, sfpi::SFPLOADI_MOD0_LOWER, 0x0000);
+    TTI_SFPLOADI(p_sfpu::LREG2, sfpi::SFPLOADI_MOD0_UPPER, 0x8000);
+    TTI_SFPXOR(0, p_sfpu::LREG2, p_sfpu::LREG0, 0);
+    TTI_SFPMAD(p_sfpu::LREG0, p_sfpu::LCONST_1, p_sfpu::LREG13, p_sfpu::LREG1, 0);
+    TTI_SFPNOP;
+    TTI_SFPNOP;
+    TTI_SFPCONFIG(0, p_sfpu::LREG13, 0);
+    TTI_SFPMOV(0, p_sfpu::LREG1, p_sfpu::LREG0, 0);
+    TTI_SFPCONFIG(0, p_sfpu::LREG12, 0);
+}
+
+// Re-keys the sorted first chunk (11-bit coordinate, chunk id 0, value = FP32
+// x truncated to 12 mantissa bits) in place with the live shift (LREG13 = -T):
+// word -> (fp32(v - T) & value mask) | coordinate, v = word without the
+// coordinate. The map is monotone in v, so the run stays sorted by key and
+// remains a valid merge operand. LREG12/14 are scratch (the next stamp and
+// the split init reload them).
+// Preshift: the run was keyed on trunc(x - S) and `_topk_xl_load_row_shift_preshifted_`
+// left LREG13 = -d and LREG12 = -T. Value and coordinate are split by a shift pair
+// (no 0x7FF mask, so LREG12 survives, same 32 instructions), and LREG13 = -T after.
+template <std::uint32_t K, bool Preshift = false>
+inline void _topk_xl_shift_sorted_chunk_(const std::uint32_t chunk_bits)
+{
+    static_assert(K == 1024 || K == 2048, "row shift needs K = 1024 or 2048");
+    const std::uint32_t value_mask = ~((1u << (11 + chunk_bits)) - 1u);
+    addr_mod_t {
+        .srca = {.incr = 0},
+        .srcb = {.incr = 0},
+        .dest = {.incr = 8},
+    }
+        .set(ADDR_MOD_0);
+    if constexpr (!Preshift)
+    {
+        _sfpu_load_config32_(p_sfpu::LREG12, /*upper16=*/0, /*lower16=*/0x07FF);
+    }
+    // Runtime mask: staged through LREG0 (the _sfpu_load_config32_ path needs immediates).
+    TT_SFPLOADI(p_sfpu::LREG0, sfpi::SFPLOADI_MOD0_LOWER, value_mask & 0xFFFF);
+    TT_SFPLOADI(p_sfpu::LREG0, sfpi::SFPLOADI_MOD0_UPPER, (value_mask >> 16) & 0xFFFF);
+    TTI_SFPCONFIG(0, p_sfpu::LREG14, 0);
+
+    TTI_SETRWC(p_setrwc::CLR_NONE, 0, 0, 0, 0, p_setrwc::SET_D);
+    // The 32-instruction body is recorded (and executed) once and replayed K / 128 - 1 times, so the
+    // math RISC does not issue every instruction. Every later LLK phase records its own replay body.
+    lltt::record<lltt::Exec>(0, 32);
+    if constexpr (Preshift)
+    {
+        TTI_SFPLOAD(p_sfpu::LREG0, InstrModLoadStore::INT32, ADDR_MOD_7, 0);
+        TTI_SFPLOAD(p_sfpu::LREG1, InstrModLoadStore::INT32, ADDR_MOD_7, 2);
+        TTI_SFPLOAD(p_sfpu::LREG2, InstrModLoadStore::INT32, ADDR_MOD_7, 4);
+        TTI_SFPLOAD(p_sfpu::LREG3, InstrModLoadStore::INT32, ADDR_MOD_7, 6);
+
+        // LREG4..7 = value bits (>> 11 << 11), LREG0..3 = coordinate.
+        TTI_SFPSHFT((-11) & 0xFFF, p_sfpu::LREG0, p_sfpu::LREG4, 5);
+        TTI_SFPSHFT((-11) & 0xFFF, p_sfpu::LREG1, p_sfpu::LREG5, 5);
+        TTI_SFPSHFT((-11) & 0xFFF, p_sfpu::LREG2, p_sfpu::LREG6, 5);
+        TTI_SFPSHFT((-11) & 0xFFF, p_sfpu::LREG3, p_sfpu::LREG7, 5);
+
+        TTI_SFPSHFT(11, 0, p_sfpu::LREG4, 1);
+        TTI_SFPSHFT(11, 0, p_sfpu::LREG5, 1);
+        TTI_SFPSHFT(11, 0, p_sfpu::LREG6, 1);
+        TTI_SFPSHFT(11, 0, p_sfpu::LREG7, 1);
+
+        TTI_SFPXOR(0, p_sfpu::LREG4, p_sfpu::LREG0, 0);
+        TTI_SFPXOR(0, p_sfpu::LREG5, p_sfpu::LREG1, 0);
+        TTI_SFPXOR(0, p_sfpu::LREG6, p_sfpu::LREG2, 0);
+        TTI_SFPXOR(0, p_sfpu::LREG7, p_sfpu::LREG3, 0);
+
+        TTI_SFPMAD(p_sfpu::LREG4, p_sfpu::LCONST_1, p_sfpu::LREG13, p_sfpu::LREG4, 0);
+        TTI_SFPMAD(p_sfpu::LREG5, p_sfpu::LCONST_1, p_sfpu::LREG13, p_sfpu::LREG5, 0);
+        TTI_SFPMAD(p_sfpu::LREG6, p_sfpu::LCONST_1, p_sfpu::LREG13, p_sfpu::LREG6, 0);
+        TTI_SFPMAD(p_sfpu::LREG7, p_sfpu::LCONST_1, p_sfpu::LREG13, p_sfpu::LREG7, 0);
+
+        TTI_SFPAND(0, p_sfpu::LREG14, p_sfpu::LREG4, 0);
+        TTI_SFPAND(0, p_sfpu::LREG14, p_sfpu::LREG5, 0);
+        TTI_SFPAND(0, p_sfpu::LREG14, p_sfpu::LREG6, 0);
+        TTI_SFPAND(0, p_sfpu::LREG14, p_sfpu::LREG7, 0);
+
+        TTI_SFPOR(0, p_sfpu::LREG0, p_sfpu::LREG4, 0);
+        TTI_SFPOR(0, p_sfpu::LREG1, p_sfpu::LREG5, 0);
+        TTI_SFPOR(0, p_sfpu::LREG2, p_sfpu::LREG6, 0);
+        TTI_SFPOR(0, p_sfpu::LREG3, p_sfpu::LREG7, 0);
+
+        TTI_SFPSTORE(p_sfpu::LREG4, InstrModLoadStore::INT32, ADDR_MOD_7, 0);
+        TTI_SFPSTORE(p_sfpu::LREG5, InstrModLoadStore::INT32, ADDR_MOD_7, 2);
+        TTI_SFPSTORE(p_sfpu::LREG6, InstrModLoadStore::INT32, ADDR_MOD_7, 4);
+        TTI_SFPSTORE(p_sfpu::LREG7, InstrModLoadStore::INT32, ADDR_MOD_0, 6);
+    }
+    else
+    {
+        TTI_SFPLOAD(p_sfpu::LREG0, InstrModLoadStore::INT32, ADDR_MOD_7, 0);
+        TTI_SFPLOAD(p_sfpu::LREG1, InstrModLoadStore::INT32, ADDR_MOD_7, 2);
+        TTI_SFPLOAD(p_sfpu::LREG2, InstrModLoadStore::INT32, ADDR_MOD_7, 4);
+        TTI_SFPLOAD(p_sfpu::LREG3, InstrModLoadStore::INT32, ADDR_MOD_7, 6);
+
+        TTI_SFPMOV(0, p_sfpu::LREG0, p_sfpu::LREG4, 0);
+        TTI_SFPMOV(0, p_sfpu::LREG1, p_sfpu::LREG5, 0);
+        TTI_SFPMOV(0, p_sfpu::LREG2, p_sfpu::LREG6, 0);
+        TTI_SFPMOV(0, p_sfpu::LREG3, p_sfpu::LREG7, 0);
+
+        TTI_SFPAND(0, p_sfpu::LREG12, p_sfpu::LREG4, 0);
+        TTI_SFPAND(0, p_sfpu::LREG12, p_sfpu::LREG5, 0);
+        TTI_SFPAND(0, p_sfpu::LREG12, p_sfpu::LREG6, 0);
+        TTI_SFPAND(0, p_sfpu::LREG12, p_sfpu::LREG7, 0);
+
+        TTI_SFPXOR(0, p_sfpu::LREG4, p_sfpu::LREG0, 0);
+        TTI_SFPXOR(0, p_sfpu::LREG5, p_sfpu::LREG1, 0);
+        TTI_SFPXOR(0, p_sfpu::LREG6, p_sfpu::LREG2, 0);
+        TTI_SFPXOR(0, p_sfpu::LREG7, p_sfpu::LREG3, 0);
+
+        TTI_SFPMAD(p_sfpu::LREG0, p_sfpu::LCONST_1, p_sfpu::LREG13, p_sfpu::LREG0, 0);
+        TTI_SFPMAD(p_sfpu::LREG1, p_sfpu::LCONST_1, p_sfpu::LREG13, p_sfpu::LREG1, 0);
+        TTI_SFPMAD(p_sfpu::LREG2, p_sfpu::LCONST_1, p_sfpu::LREG13, p_sfpu::LREG2, 0);
+        TTI_SFPMAD(p_sfpu::LREG3, p_sfpu::LCONST_1, p_sfpu::LREG13, p_sfpu::LREG3, 0);
+
+        TTI_SFPAND(0, p_sfpu::LREG14, p_sfpu::LREG0, 0);
+        TTI_SFPAND(0, p_sfpu::LREG14, p_sfpu::LREG1, 0);
+        TTI_SFPAND(0, p_sfpu::LREG14, p_sfpu::LREG2, 0);
+        TTI_SFPAND(0, p_sfpu::LREG14, p_sfpu::LREG3, 0);
+
+        TTI_SFPOR(0, p_sfpu::LREG4, p_sfpu::LREG0, 0);
+        TTI_SFPOR(0, p_sfpu::LREG5, p_sfpu::LREG1, 0);
+        TTI_SFPOR(0, p_sfpu::LREG6, p_sfpu::LREG2, 0);
+        TTI_SFPOR(0, p_sfpu::LREG7, p_sfpu::LREG3, 0);
+
+        TTI_SFPSTORE(p_sfpu::LREG0, InstrModLoadStore::INT32, ADDR_MOD_7, 0);
+        TTI_SFPSTORE(p_sfpu::LREG1, InstrModLoadStore::INT32, ADDR_MOD_7, 2);
+        TTI_SFPSTORE(p_sfpu::LREG2, InstrModLoadStore::INT32, ADDR_MOD_7, 4);
+        TTI_SFPSTORE(p_sfpu::LREG3, InstrModLoadStore::INT32, ADDR_MOD_0, 6);
+    }
+    for (std::uint32_t i = 1; i < K / 128; ++i)
+    {
+        lltt::replay(0, 32);
+    }
+    if constexpr (Preshift)
+    {
+        TTI_SFPMOV(0, p_sfpu::LREG12, p_sfpu::LREG0, 0);
+        TTI_SFPCONFIG(0, p_sfpu::LREG13, 0);
+    }
+}
+
+// Refines a live row shift from a rebuilt descending fused survivor. Rebuild
+// repeats the local sort's final build phase, and the next merge pairs survivor
+// lane i with lane i of an ascending local sort, so the survivor holds rank r
+// at the same lane as a local sort does. The key d at `target_pos` (the rank
+// matching k / searched length of the values merged so far) is the survivor's
+// estimate of t - T0 (LREG13 = -T0). Every survivor word is re-keyed in place to
+// (fp32(hi - d) & value_mask) | (chunk id + coordinate), which is monotone in
+// hi, so the run stays a sorted merge operand. Then LREG13 = -T1 = -T0 - d for
+// the stamps of later chunks. LREG12/14 are left as scratch (the next stamp and
+// the split init reload them).
+// EarlyField: the survivor's chunks (ids 0..3) were keyed on a 2-bit chunk
+// field (13-bit index field, finer keys than the row's), so the key is read
+// and taken above bit 13, and the re-keyed word keeps the row's chunk_bits
+// field: chunk ids 0..3 are valid there, so the word is in the final layout.
+template <std::uint32_t K, bool EarlyField = false>
+inline void _topk_xl_refine_row_shift_(const std::uint32_t target_pos, const std::uint32_t chunk_bits)
+{
+    static_assert(K == 1024 || K == 2048, "row shift needs K = 1024 or 2048");
+    constexpr std::uint32_t early_index_bits = 13;
+    const std::uint32_t value_mask = ~((1u << (11 + chunk_bits)) - 1u);
+
+    _topk_xl_read_run_word_<K>(target_pos, EarlyField ? ~((1u << early_index_bits) - 1u) : value_mask);
+
+    // LREG1 = -d, LREG2 = -d + (-T0) = -T1.
+    TTI_SFPLOADI(p_sfpu::LREG2, sfpi::SFPLOADI_MOD0_LOWER, 0x0000);
+    TTI_SFPLOADI(p_sfpu::LREG2, sfpi::SFPLOADI_MOD0_UPPER, 0x8000);
+    TTI_SFPMOV(0, p_sfpu::LREG0, p_sfpu::LREG1, 0);
+    TTI_SFPXOR(0, p_sfpu::LREG2, p_sfpu::LREG1, 0);
+    TTI_SFPMAD(p_sfpu::LREG1, p_sfpu::LCONST_1, p_sfpu::LREG13, p_sfpu::LREG2, 0);
+    TTI_SFPNOP;
+    TTI_SFPNOP;
+
+    // LREG12 = -T1 (kept across the re-key), LREG13 = -d, LREG14 = value mask.
+    TTI_SFPMOV(0, p_sfpu::LREG2, p_sfpu::LREG0, 0);
+    TTI_SFPCONFIG(0, p_sfpu::LREG12, 0);
+    TTI_SFPMOV(0, p_sfpu::LREG1, p_sfpu::LREG0, 0);
+    TTI_SFPCONFIG(0, p_sfpu::LREG13, 0);
+    TT_SFPLOADI(p_sfpu::LREG0, sfpi::SFPLOADI_MOD0_LOWER, value_mask & 0xFFFF);
+    TT_SFPLOADI(p_sfpu::LREG0, sfpi::SFPLOADI_MOD0_UPPER, (value_mask >> 16) & 0xFFFF);
+    TTI_SFPCONFIG(0, p_sfpu::LREG14, 0);
+
+    addr_mod_t {
+        .srca = {.incr = 0},
+        .srcb = {.incr = 0},
+        .dest = {.incr = 8},
+    }
+        .set(ADDR_MOD_0);
+    TTI_SETRWC(p_setrwc::CLR_NONE, 0, 0, 0, 0, p_setrwc::SET_D);
+    // 32-instruction body: recorded (and executed) once, replayed K / 128 - 1 times.
+    lltt::record<lltt::Exec>(0, 32);
+    {
+        TTI_SFPLOAD(p_sfpu::LREG0, InstrModLoadStore::INT32, ADDR_MOD_7, 0);
+        TTI_SFPLOAD(p_sfpu::LREG1, InstrModLoadStore::INT32, ADDR_MOD_7, 2);
+        TTI_SFPLOAD(p_sfpu::LREG2, InstrModLoadStore::INT32, ADDR_MOD_7, 4);
+        TTI_SFPLOAD(p_sfpu::LREG3, InstrModLoadStore::INT32, ADDR_MOD_7, 6);
+
+        // LREG4..7 = value bits, LREG0..3 = index bits.
+        if constexpr (EarlyField)
+        {
+            // Key above the 13-bit early index field (source-to-destination shift pair; LREG14
+            // holds the row's final mask for the re-keyed value).
+            TTI_SFPSHFT((-early_index_bits) & 0xFFF, p_sfpu::LREG0, p_sfpu::LREG4, 5);
+            TTI_SFPSHFT((-early_index_bits) & 0xFFF, p_sfpu::LREG1, p_sfpu::LREG5, 5);
+            TTI_SFPSHFT((-early_index_bits) & 0xFFF, p_sfpu::LREG2, p_sfpu::LREG6, 5);
+            TTI_SFPSHFT((-early_index_bits) & 0xFFF, p_sfpu::LREG3, p_sfpu::LREG7, 5);
+
+            TTI_SFPSHFT(early_index_bits, 0, p_sfpu::LREG4, 1);
+            TTI_SFPSHFT(early_index_bits, 0, p_sfpu::LREG5, 1);
+            TTI_SFPSHFT(early_index_bits, 0, p_sfpu::LREG6, 1);
+            TTI_SFPSHFT(early_index_bits, 0, p_sfpu::LREG7, 1);
+        }
+        else
+        {
+            TTI_SFPMOV(0, p_sfpu::LREG0, p_sfpu::LREG4, 0);
+            TTI_SFPMOV(0, p_sfpu::LREG1, p_sfpu::LREG5, 0);
+            TTI_SFPMOV(0, p_sfpu::LREG2, p_sfpu::LREG6, 0);
+            TTI_SFPMOV(0, p_sfpu::LREG3, p_sfpu::LREG7, 0);
+
+            TTI_SFPAND(0, p_sfpu::LREG14, p_sfpu::LREG4, 0);
+            TTI_SFPAND(0, p_sfpu::LREG14, p_sfpu::LREG5, 0);
+            TTI_SFPAND(0, p_sfpu::LREG14, p_sfpu::LREG6, 0);
+            TTI_SFPAND(0, p_sfpu::LREG14, p_sfpu::LREG7, 0);
+        }
+
+        TTI_SFPXOR(0, p_sfpu::LREG4, p_sfpu::LREG0, 0);
+        TTI_SFPXOR(0, p_sfpu::LREG5, p_sfpu::LREG1, 0);
+        TTI_SFPXOR(0, p_sfpu::LREG6, p_sfpu::LREG2, 0);
+        TTI_SFPXOR(0, p_sfpu::LREG7, p_sfpu::LREG3, 0);
+
+        TTI_SFPMAD(p_sfpu::LREG4, p_sfpu::LCONST_1, p_sfpu::LREG13, p_sfpu::LREG4, 0);
+        TTI_SFPMAD(p_sfpu::LREG5, p_sfpu::LCONST_1, p_sfpu::LREG13, p_sfpu::LREG5, 0);
+        TTI_SFPMAD(p_sfpu::LREG6, p_sfpu::LCONST_1, p_sfpu::LREG13, p_sfpu::LREG6, 0);
+        TTI_SFPMAD(p_sfpu::LREG7, p_sfpu::LCONST_1, p_sfpu::LREG13, p_sfpu::LREG7, 0);
+
+        TTI_SFPAND(0, p_sfpu::LREG14, p_sfpu::LREG4, 0);
+        TTI_SFPAND(0, p_sfpu::LREG14, p_sfpu::LREG5, 0);
+        TTI_SFPAND(0, p_sfpu::LREG14, p_sfpu::LREG6, 0);
+        TTI_SFPAND(0, p_sfpu::LREG14, p_sfpu::LREG7, 0);
+
+        TTI_SFPOR(0, p_sfpu::LREG0, p_sfpu::LREG4, 0);
+        TTI_SFPOR(0, p_sfpu::LREG1, p_sfpu::LREG5, 0);
+        TTI_SFPOR(0, p_sfpu::LREG2, p_sfpu::LREG6, 0);
+        TTI_SFPOR(0, p_sfpu::LREG3, p_sfpu::LREG7, 0);
+
+        TTI_SFPSTORE(p_sfpu::LREG4, InstrModLoadStore::INT32, ADDR_MOD_7, 0);
+        TTI_SFPSTORE(p_sfpu::LREG5, InstrModLoadStore::INT32, ADDR_MOD_7, 2);
+        TTI_SFPSTORE(p_sfpu::LREG6, InstrModLoadStore::INT32, ADDR_MOD_7, 4);
+        TTI_SFPSTORE(p_sfpu::LREG7, InstrModLoadStore::INT32, ADDR_MOD_0, 6);
+    }
+    for (std::uint32_t i = 1; i < K / 128; ++i)
+    {
+        lltt::replay(0, 32);
+    }
+
+    // LREG13 = -T1.
+    TTI_SFPMOV(0, p_sfpu::LREG12, p_sfpu::LREG0, 0);
+    TTI_SFPCONFIG(0, p_sfpu::LREG13, 0);
+}
+
 // ============================================================================
 // END TOPK_LARGE_INDICES ADDITION: row-major UINT32 index split support
 // ============================================================================

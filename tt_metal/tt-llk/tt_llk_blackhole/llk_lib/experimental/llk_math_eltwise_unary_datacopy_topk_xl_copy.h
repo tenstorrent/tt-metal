@@ -84,4 +84,29 @@ inline void _llk_math_topk_xl_copy_(const std::uint32_t dst_index, const std::ui
     }
 }
 
+// Split form of the full-tile 32-bit unpack-to-dest path above, so the math thread can run SFPU-only work
+// while the unpacker writes the tile: issue hands the unpacker the DEST tile, complete waits for it and
+// clears its zero flags. Between the two the math thread must not move data through SrcA/SrcB.
+inline void _llk_math_topk_xl_copy_to_dest_issue_(const std::uint32_t dst_index)
+{
+    math_unpack_to_dest_math_ready();
+    math::set_dst_write_addr<DstTileShape::Tile32x32, UnpackDestination::DestReg>(dst_index);
+}
+
+inline void _llk_math_topk_xl_copy_to_dest_complete_(const std::uint32_t dst_index, const std::uint32_t dst_format)
+{
+    math::math_unpack_to_dest_tile_ready();
+    const std::uint32_t dst_format_masked = masked_data_format(dst_format);
+    const int clear_fp32                  = static_cast<int>(
+        dst_format_masked == (std::uint32_t)DataFormat::Float32 || dst_format_masked == (std::uint32_t)DataFormat::Int32 ||
+        dst_format_masked == (std::uint32_t)DataFormat::UInt32);
+    const std::uint32_t tiles_per_bank = clear_fp32 ? 4 : 8;
+    const std::uint32_t local_tile     = dst_index & (tiles_per_bank - 1);
+#pragma GCC unroll 0
+    for (std::uint32_t i = 0; i < 4; i++)
+    {
+        TT_ZEROACC(p_zeroacc::CLR_16, clear_fp32, 1 /*clear zero flags*/, ADDR_MOD_3, get_dest_index_in_faces(local_tile, i));
+    }
+}
+
 } // namespace ckernel

@@ -26,3 +26,16 @@ inline void llk_math_topk_xl_copy_one_tile_math(
     const std::uint32_t dst_format = get_operand_dst_format(operand_id);
     ckernel::_llk_math_topk_xl_copy_(dst_tile_index, dst_format, elements_this_tile);
 }
+
+// Full FP32 tile unpacked straight to DEST, split so SFPU-only work can overlap the unpack.
+inline void llk_math_topk_xl_copy_to_dest_issue(const std::uint32_t dst_tile_index) {
+    SAN_HOOK(unsupported());
+    ckernel::_llk_math_topk_xl_copy_to_dest_issue_(dst_tile_index);
+}
+
+inline void llk_math_topk_xl_copy_to_dest_complete(const std::uint32_t operand, const std::uint32_t dst_tile_index) {
+    SAN_HOOK(unsupported());
+    const std::uint32_t operand_id = get_operand_id(operand);
+    const std::uint32_t dst_format = get_operand_dst_format(operand_id);
+    ckernel::_llk_math_topk_xl_copy_to_dest_complete_(dst_tile_index, dst_format);
+}

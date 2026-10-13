@@ -32,6 +32,8 @@ struct TopkLargeIndicesSharedVariables {
     ttnn::Shape input_shape;
     std::optional<uint32_t> valid_length;
     uint32_t num_rows = 0;
+    // FP32 k == K: the writer rescans rows exactly in idle time (compute's spare-time keys are off).
+    bool writer_rescan = false;
 };
 
 struct TopkLargeIndicesProgramFactory {
@@ -51,5 +53,8 @@ struct TopkLargeIndicesProgramFactory {
 };
 
 ComputeBodyMode compute_body_mode(uint32_t k, uint32_t input_last_dim);
+
+// Sort-key mode of the compute kernel (None for BF16 input). Depends only on hashed attributes.
+Fp32Key fp32_key_mode(uint32_t k, uint32_t input_last_dim, bool fp32_input);
 
 }  // namespace ttnn::operations::experimental::topk_large_indices::program
