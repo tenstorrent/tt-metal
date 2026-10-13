@@ -29,7 +29,11 @@ void kernel_main() {
     constexpr uint32_t KS = get_compile_time_arg_val(11);
     constexpr uint32_t Kq = Kt / KS;
     constexpr uint32_t Mt = get_compile_time_arg_val(12);
-    constexpr auto x_args = TensorAccessorArgs<13>();
+    // sparse_x (Mt > 1): a routed expert's activation rows are zero for every token not routed to it (gate_up32
+    // applies the routing weight), so a unit zero-fills its Mt x Kq activation tiles and copies in only the routed
+    // tokens' rows (two 32-byte face rows per tile) instead of reading every tile whole
+    constexpr bool sparse_x = get_compile_time_arg_val(13) == 1 && Mt > 1;
+    constexpr auto x_args = TensorAccessorArgs<14>();
     constexpr auto w_args = TensorAccessorArgs<x_args.next_compile_time_args_offset()>();
     constexpr auto sp_args = TensorAccessorArgs<w_args.next_compile_time_args_offset()>();
     constexpr auto xs_args = TensorAccessorArgs<sp_args.next_compile_time_args_offset()>();
@@ -51,10 +55,23 @@ void kernel_main() {
     }
     noc_async_read_barrier();
     invalidate_l1_cache();
-    volatile tt_l1_ptr uint16_t* spv = reinterpret_cast<volatile tt_l1_ptr uint16_t*>(sp_l1);
-    for (uint32_t r = 1; r < sp_rows; ++r) {
+    volatile tt_l1_ptr uint16_t* rowsv = reinterpret_cast<volatile tt_l1_ptr uint16_t*>(sp_l1);
+    volatile tt_l1_ptr uint16_t* spv = rowsv;
+    if constexpr (sparse_x) {
+        // the union in the page after the rows (the rows stay intact: they tell which tokens an expert has)
+        spv = rowsv + sp_rows * (sp_page / 2);
         for (uint32_t e = 0; e < E; ++e) {
-            spv[e] |= spv[r * (sp_page / 2) + e];
+            uint16_t any = 0;
+            for (uint32_t r = 0; r < sp_rows; ++r) {
+                any |= rowsv[r * (sp_page / 2) + e];
+            }
+            spv[e] = any;
+        }
+    } else {
+        for (uint32_t r = 1; r < sp_rows; ++r) {
+            for (uint32_t e = 0; e < E; ++e) {
+                spv[e] |= spv[r * (sp_page / 2) + e];
+            }
         }
     }
     uint32_t na = 0, seen = 0;  // seen counts units (active experts x KS)
@@ -90,6 +107,30 @@ void kernel_main() {
             }
             cb_reserve_back(cb_x, Mt * Kq);
             const uint32_t x_l1 = get_write_ptr(cb_x);
+            if constexpr (sparse_x) {
+                const uint64_t zeros = get_noc_addr(MEM_ZEROS_BASE);
+                for (uint32_t off = 0; off < Mt * Kq * x_page; off += MEM_ZEROS_SIZE) {
+                    noc_async_read(zeros, x_l1 + off, MEM_ZEROS_SIZE);
+                }
+                noc_async_read_barrier();  // the zeros land before the routed rows
+                for (uint32_t t = 0; t < sp_rows; ++t) {
+                    if (rowsv[t * (sp_page / 2) + e] == 0) {
+                        continue;
+                    }
+                    const uint32_t m = t / 32, r = t % 32;
+                    const uint32_t ro = (r / 16) * 1024 + (r % 16) * 32;
+                    for (uint32_t k = 0; k < Kq; ++k) {
+                        const uint64_t src = x.get_noc_addr((e * Mt + m) * Kt + kb + k) + ro;
+                        const uint32_t dst = x_l1 + (m * Kq + k) * x_page + ro;
+                        noc_async_read(src, dst, 32);
+                        noc_async_read(src + 512, dst + 512, 32);
+                    }
+                }
+                noc_async_read_barrier();
+                cb_push_back(cb_x, Mt * Kq);
+                cb_push_back(cb_w, CPC * Kq);
+                continue;
+            }
             for (uint32_t m = 0; m < Mt; ++m) {
                 for (uint32_t k = 0; k < Kq; ++k) {
                     const uint32_t dst = x_l1 + (m * Kq + k) * x_page;

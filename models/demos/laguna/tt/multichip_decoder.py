@@ -1941,7 +1941,8 @@ class MultichipDecoder(OptimizedDecoder):
             # are outside every window); attention reads the rings as they are (no ring + rows concat per layer)
             from .ring_write import ring_write_batched
 
-            ring_write_batched([k_ring, v_ring], [k, v], ring_dests, rows_per_user=16)
+            ring_write_batched([k_ring, v_ring], [k, v], ring_dests,
+                               rows_per_user=getattr(self, "_dflash_rows_per_user", 16))  # fmt: skip
             k, v = k_ring, v_ring
         else:
             k = ttnn.concat([k_ring, k], dim=2)

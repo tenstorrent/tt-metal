@@ -20,6 +20,9 @@ void kernel_main() {
     constexpr uint32_t Kt = get_compile_time_arg_val(0);
     constexpr uint32_t chunk = get_compile_time_arg_val(1);
     constexpr uint32_t Mt = get_compile_time_arg_val(2);  // 32-row token tiles (gate in DST 0..Mt-1, then up)
+    // Mt > 1: one matmul_block per weight tile (rt_dim = Mt, ct_dim = 1) unpacks the weight tile once for every
+    // token tile instead of once per token tile (matmul_tiles)
+    constexpr bool block = get_compile_time_arg_val(3) == 1 && Mt > 1;
     constexpr uint32_t cb_x = 0, cb_w = 1, cb_wv = 2, cb_meta = 3, cb_g = 5, cb_u = 6, cb_out = 16;
 
     compute_kernel_hw_startup<SrcOrder::Reverse>(cb_x, cb_w, cb_out);
@@ -34,13 +37,21 @@ void kernel_main() {
         for (uint32_t half = 0; half < 2; ++half) {
             // one weight chunk feeds every token tile: DST m = x_m @ W[:, n] (gate column, then up column)
             reconfig_data_format(cb_w, cb_x);
-            matmul_init(cb_x, cb_w);
+            if constexpr (block) {
+                matmul_block_init(cb_x, cb_w, false, 1, Mt, Kt);
+            } else {
+                matmul_init(cb_x, cb_w);
+            }
             tile_regs_acquire();
             for (uint32_t k0 = 0; k0 < Kt; k0 += chunk) {
                 cb_wait_front(cb_w, chunk);
                 for (uint32_t i = 0; i < chunk; ++i) {
-                    for (uint32_t m = 0; m < Mt; ++m) {
-                        matmul_tiles(cb_x, cb_w, m * Kt + k0 + i, i, m);
+                    if constexpr (block) {
+                        matmul_block(cb_x, cb_w, k0 + i, i, 0, false, 1, Mt, Kt);
+                    } else {
+                        for (uint32_t m = 0; m < Mt; ++m) {
+                            matmul_tiles(cb_x, cb_w, m * Kt + k0 + i, i, m);
+                        }
                     }
                 }
                 cb_pop_front(cb_w, chunk);

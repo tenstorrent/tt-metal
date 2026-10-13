@@ -383,7 +383,7 @@ def _gate_up32_parts(x, gu_cols, wv, sparsity, out, grid, core_base, groups, chu
         kernel_source=str(_KDIR / "gu32_compute.cpp"),
         source_type=ttnn.KernelDescriptor.SourceType.FILE_PATH,
         core_ranges=grid,
-        compile_time_args=[Kt, chunk, Mt],
+        compile_time_args=[Kt, chunk, Mt, int(os.environ.get("TT_LAGUNA_MOE_MMBLOCK", "0") == "1")],
         config=cfg,
     )
     return [reader, writer, compute], cbs
@@ -433,10 +433,23 @@ def down32(glu, d_cols, sparsity, cols_per_core=8, expert_groups=8, memory_confi
     device = glu.device()
     E, Kt, Nh = d_cols.E, d_cols.Kt, d_cols.Ct
     Mt = -(-int(glu.shape[-2]) // TILE)
-    if Mt > 1:
-        # more than 32 tokens: DST holds cols_per_core x Mt fp32 tiles (at most 8), same core count
+    full_sync = Mt > 1 and os.environ.get("TT_LAGUNA_DN32_FULL_SYNC", "0") == "1"
+    # more than 32 tokens: L1 accumulation in the compute kernel (CPC unchanged); TT_LAGUNA_DN32_L1ACC=0 instead
+    # narrows the columns per core so CPC x Mt tiles fit DST
+    l1acc = Mt > 1 and os.environ.get("TT_LAGUNA_DN32_L1ACC", "1") == "1"
+    if Mt > 1 and l1acc:
+        # columns per core with L1 accumulation (TT_LAGUNA_DN32_CPC): more columns -> fewer column groups re-reading
+        # every active expert's activation rows; the expert groups grow so the core count stays the same
+        cpc = int(os.environ.get("TT_LAGUNA_DN32_CPC", str(cols_per_core)))
+        if cpc != cols_per_core and Nh % cpc == 0:
+            cores0 = Nh // cols_per_core * expert_groups
+            cols_per_core = cpc
+            expert_groups = max(1, cores0 // (Nh // cols_per_core))
+    if Mt > 1 and not l1acc:
+        # more than 32 tokens: DST holds cols_per_core x Mt fp32 tiles -- 16 in full-sync mode (8 otherwise), so 2
+        # token tiles keep 8 columns per core: fewer column groups re-reading every expert's activation rows
         cores0 = Nh // cols_per_core * expert_groups
-        cols_per_core = max(1, 8 // Mt)
+        cols_per_core = min(cols_per_core, max(1, (16 if full_sync else 8) // Mt))
         while Nh % cols_per_core:
             cols_per_core -= 1
         expert_groups = max(1, cores0 // (Nh // cols_per_core))
@@ -452,28 +465,34 @@ def down32(glu, d_cols, sparsity, cols_per_core=8, expert_groups=8, memory_confi
     sp_rows = int(sparsity.shape[-2])
     sh_glu, sh_cols = shared if shared is not None else (glu, d_cols)
     # each expert as ks quarter-K units dealt over the expert groups (balance: 13 experts on 8 groups -> 2 vs 1.6)
-    ks = int(os.environ.get("TT_LAGUNA_DN32_KSPLIT", "4"))
+    # more than 32 tokens: 8 units per expert (96 rows: 560 -> 508 us for all 64 experts; 1 / 2 / 16 slower)
+    ks = int(os.environ.get("TT_LAGUNA_DN32_KSPLIT", "8" if Mt > 1 else "4"))
     assert Kt % ks == 0, (Kt, ks)
     kt_sh = sh_cols.Kt if shared is not None else 0
     w_sh = _tile_bytes(sh_cols.buf.dtype)
     T = int(glu.shape[-2])
     x_rows = T if T <= 8 and _DN32_ROW_READS else 32  # <= 8: the packed-rows all-reduce reads rows < T only
+    if os.environ.get("TT_LAGUNA_DN32_XROWS_DEBUG"):  # timing experiment only (wrong results): 1-row activation reads
+        x_rows = int(os.environ["TT_LAGUNA_DN32_XROWS_DEBUG"])
     cbs = [
         _cb(grid, 0, ttnn.bfloat16, page, 2 * Kt * Mt),
         _cb(grid, 1, ttnn.bfloat4_b, wt, 2 * cols_per_core * Kt),
         _cb(grid, 2, ttnn.uint32, 64, 1),
-        _cb(grid, 3, ttnn.bfloat16, sp_page, sp_rows),
+        _cb(grid, 3, ttnn.bfloat16, sp_page, sp_rows + 1),
         _cb(grid, 4, ttnn.bfloat16, sp_page, sp_rows),
         _cb(grid, 5, ttnn.bfloat16, page, 1),
         _cb(grid, 16, ttnn.bfloat16, page, cols_per_core * Mt),
     ]
     if kt_sh:
         cbs.append(_cb(grid, 6, sh_cols.buf.dtype, w_sh, cols_per_core * kt_sh))
+    if Mt > 1 and l1acc:
+        cbs.append(_cb(grid, 7, ttnn.float32, 4096, cols_per_core * Mt))
     reader = ttnn.KernelDescriptor(
         kernel_source=str(_KDIR / "dn32_reader.cpp"),
         source_type=ttnn.KernelDescriptor.SourceType.FILE_PATH,
         core_ranges=grid,
-        compile_time_args=[Kt, Nh, E, page, wt, sp_page, gs.x, cols_per_core, expert_groups, kt_sh, w_sh, ks, Mt]
+        compile_time_args=[Kt, Nh, E, page, wt, sp_page, gs.x, cols_per_core, expert_groups, kt_sh, w_sh, ks, Mt,
+                           int(os.environ.get("TT_LAGUNA_DN32_SPARSE_X", "1") == "1")]
         + _accessor_args(glu, d_cols.buf, sparsity, sh_glu, sh_cols.buf),
         # up to 8 token rows (DFlash verify): read only those rows of each activation tile; the output rows past them
         # are not used (the packed-rows all-reduce reads rows < T)
@@ -494,11 +513,12 @@ def down32(glu, d_cols, sparsity, cols_per_core=8, expert_groups=8, memory_confi
     cfg.math_fidelity = ttnn.MathFidelity.LoFi
     cfg.fp32_dest_acc_en = True
     cfg.math_approx_mode = False
+    cfg.dst_full_sync_en = full_sync
     compute = ttnn.KernelDescriptor(
         kernel_source=str(_KDIR / "dn32_compute.cpp"),
         source_type=ttnn.KernelDescriptor.SourceType.FILE_PATH,
         core_ranges=grid,
-        compile_time_args=[Kt, cols_per_core, kt_sh, ks, Mt],
+        compile_time_args=[Kt, cols_per_core, kt_sh, ks, Mt, int(os.environ.get("TT_LAGUNA_MOE_MMBLOCK", "0") == "1")],
         config=cfg,
     )
     io = [glu, d_cols.buf, sparsity, out] if shared is None else [glu, d_cols.buf, sparsity, sh_glu, sh_cols.buf, out]
