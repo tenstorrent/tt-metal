@@ -203,13 +203,25 @@ def ttft_batch32(gen, mesh, length, batch):
 DFLASH_MAX_MODEL_LEN = 1048512  # serve_vllm.sh config with TT_LAGUNA_DFLASH=1
 
 
+_REPORT_TOKENS = {}
+
+
+def _report_tokens(tokenizer):
+    """tech_reports/*.md tokenized once per tokenizer (re-tokenizing it per prompt cost ~0.4 s per prompt: over a
+    minute for the batch-32 DFlash prompts)."""
+    key = id(tokenizer)
+    if key not in _REPORT_TOKENS:
+        docs = sorted((REPO_ROOT / "tech_reports").rglob("*.md"))
+        text = "\n\n".join(d.read_text(errors="ignore") for d in docs)
+        _REPORT_TOKENS[key] = tokenizer(text, add_special_tokens=False)["input_ids"]
+    return _REPORT_TOKENS[key]
+
+
 def text_prompt(tokenizer, length, offset=0):
     """A real request of exactly ``length`` tokens: the chat template around "Summarize this document." and the
     repository's tech_reports/*.md from token ``offset`` on. DFlash's speed depends on how predictable the answer is;
     random tokens make Laguna repeat one token, which the draft predicts perfectly."""
-    docs = sorted((REPO_ROOT / "tech_reports").rglob("*.md"))
-    text = "\n\n".join(d.read_text(errors="ignore") for d in docs)
-    doc = tokenizer(text, add_special_tokens=False)["input_ids"]
+    doc = _report_tokens(tokenizer)
 
     def build(n):
         msg = [{"role": "user", "content": "Summarize this document.\n\n" + tokenizer.decode(doc[offset : offset + n])}]

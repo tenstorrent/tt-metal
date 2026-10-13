@@ -20,7 +20,7 @@ with this tree's tt-metal build). DFlash numbers: decode over the first 256 gene
 | Batch-32 decode, 128 / 8K-token input | 12.3 / 11.1 tok/s/user | 32.6 / 25.1 tok/s/user | 2.7x / 2.3x |
 | Batch-32 TTFT (last of 32 users), 128 / 8K-token prompts | 6.41 / 350 s | 0.42 / 23.4 s | 15x / 15x |
 | Batch-1 DFlash, AIME24 / real text 128-8K | 28.4 / 17.8-20.6 tok/s | 172.4 / 117.4-126.5 tok/s | 6.1x / 6.1-6.7x |
-| Batch-32 DFlash, real text 128-8K | - (batch 1 only) | 25.2-33.8 tok/s/user | |
+| Batch-32 DFlash, real text 128-8K | - (batch 1 only) | 25.6-34.9 tok/s/user | |
 
 The first version prefilled a batch-32 request one prompt at a time (no packed prefill); the test does the same for
 it.
@@ -43,11 +43,12 @@ Against the targets (50% of speed of light, measured without vLLM, tables below)
   is acceptance, because near-tie token flips change the answer between runs: 2K accepted 1.9 drafts per round here
   vs 3.2 on 2026-10-10, when all five 2048-token cells were above target (188 / 200 / 194 / 202 / 160 tok/s). Over
   only the first 256 tokens the draft accepts 1.2-1.5 per round on real text, under target at every length.
-- Batch-32 DFlash (new; in the model, not yet in the server) is no faster than plain batch-32 decode: 25.2-33.8 vs
-  25.1-32.6 tok/s/user. Batch-32 decode already reads each expert's weights once for all 32 users, so checking
-  several tokens per user saves little: checking 96 rows (3 per user) touches more of each chip's 64 experts
-  (~62 vs ~46 if tokens routed at random), does 3x the per-row attention work and costs 65-80 ms, about 2x a decode
-  step (31-40 ms), while a round commits 2.2-2.5 tokens per user (1.2-1.5 drafts accepted early in an answer).
+- Batch-32 DFlash (new; in the model, not yet in the server) is only slightly ahead of plain batch-32 decode: 34.9
+  vs 32.6 tok/s/user at 128 tokens (+7%), within 3% either way at 1K-8K (25.6-30.8 vs 25.1-30.5). Batch-32 decode
+  already reads each expert's weights once for all 32 users, so checking several tokens per user saves little:
+  checking 96 rows (3 per user) touches more of each chip's 64 experts (~62 vs ~46 if tokens routed at random), does
+  3x the per-row attention work and costs 63-78 ms, about 2x a decode step (31-40 ms), while a round commits 2.2-2.5
+  tokens per user (1.2-1.5 drafts accepted early in an answer).
 
 ## Results
 
@@ -118,11 +119,11 @@ over the first 256 tokens (the users' average), next to plain batch-32 decode:
 
 | Input tokens | Batch-32 DFlash | Plain batch-32 decode | ms per round (draft + check) | Drafts accepted per round |
 |---:|---:|---:|---:|---:|
-| 128 | 33.8 | 32.6 | 74.2 (9.1 + 64.9) | 1.51 |
-| 1,024 | 30.3 | 30.5 | 76.8 (9.1 + 67.5) | 1.32 |
-| 2,048 | 28.9 | 29.5 | 78.0 (8.9 + 68.8) | 1.26 |
-| 4,096 | 27.5 | 28.6 | 81.9 (9.3 + 72.4) | 1.25 |
-| 8,192 | 25.2 | 25.1 | 89.0 (9.2 + 79.5) | 1.24 |
+| 128 | 34.9 | 32.6 | 71.9 (9.0 + 62.6) | 1.51 |
+| 1,024 | 30.8 | 30.5 | 75.6 (9.5 + 65.8) | 1.32 |
+| 2,048 | 28.7 | 29.5 | 78.6 (10.1 + 68.2) | 1.26 |
+| 4,096 | 28.1 | 28.6 | 80.3 (9.4 + 70.6) | 1.25 |
+| 8,192 | 25.6 | 25.1 | 87.3 (9.4 + 77.7) | 1.24 |
 
 Real text = a "summarize this document" request over a technical report. With the AIME24 answer fed in, the device
 draft accepts 2.6-2.7 drafts per round, as the draft model does on CPU (2.64): the acceptance rate is the draft
