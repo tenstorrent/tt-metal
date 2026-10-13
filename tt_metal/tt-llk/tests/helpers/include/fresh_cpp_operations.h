@@ -134,7 +134,6 @@ __attribute__((noinline)) void calculate_sigmoid_appx_tree_cpp()
     for (int row = 0; row < ITERATIONS; ++row)
     {
         const sfpi::vFloat input = sfpi::dst_reg[0];
-        const sfpi::vUInt input_bits = sfpi::as<sfpi::vUInt>(input);
         const sfpi::vFloat mag   = sfpi::abs(input);
         // A literal tail is equivalent for every finite input and avoids the
         // otherwise-observable 0*inf NaN at the saturated endpoints.
@@ -149,15 +148,12 @@ __attribute__((noinline)) void calculate_sigmoid_appx_tree_cpp()
         }
         v_endif;
         sfpi::vFloat result = sfpi::copysgn(g, input) + 0.5f;
-        // Saturate infinities, but propagate either-sign NaNs.  FP compares
-        // cannot reliably classify a NaN, so use its exponent/fraction bits.
-        v_if ((input_bits & 0x7F800000u) == 0x7F800000u)
+        // Saturate infinities, but propagate either-sign NaNs. Clear the sign
+        // before comparing encodings so every NaN sorts above positive infinity.
+        const sfpi::vFloat infinity = std::numeric_limits<float>::infinity();
+        v_if (sfpi::as<sfpi::vInt>(sfpi::setsgn(input, 0)) > sfpi::as<sfpi::vInt>(infinity))
         {
-            v_if ((input_bits & 0x007FFFFFu) != 0u)
-            {
-                result = input;
-            }
-            v_endif;
+            result = input;
         }
         v_endif;
         sfpi::dst_reg[0] = result;

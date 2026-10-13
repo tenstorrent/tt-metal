@@ -1369,6 +1369,38 @@ def test_sigmoid_appx_fresh_cpp(fresh_cpp_impl):
     )
 
 
+def test_sigmoid_appx_tree_specials():
+    """Exercise the LUT tree's NaN guard and saturated endpoints on silicon."""
+    eltwise_unary_sfpu(
+        "sources/eltwise_unary_sfpu_test.cpp",
+        InputOutputFormat(DataFormat.Float16_b, DataFormat.Float16_b),
+        DestAccumulation.No,
+        ApproximationMode.No,
+        MathOperation.SigmoidAppx,
+        FastMode.No,
+        [32, 32],
+        spec_A=StimuliSpec.custom(
+            values=[
+                0.0,
+                -0.0,
+                2.0**-133,
+                -(2.0**-133),
+                1.0,
+                -1.0,
+                2.0,
+                -2.0,
+                float("inf"),
+                -float("inf"),
+                float("nan"),
+                -float("nan"),
+            ]
+        ),
+        custom_atol=0.13,
+        custom_rtol=0.05,
+        fresh_cpp_impl=2,
+    )
+
+
 @pytest.mark.parametrize("fresh_cpp_impl", [0, 1], ids=["production", "fresh_cpp"])
 @pytest.mark.parametrize(
     "mathop",
