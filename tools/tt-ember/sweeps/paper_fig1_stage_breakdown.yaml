@@ -8,6 +8,8 @@
 # writer stand-in, before case 5 existed; energy_per_flop_by_engine uses case 5 instead.
 name: paper_fig1_stage_breakdown
 workload: long_matmul
+# legacy reproduces how the published Fig. 1 and Tables 2-3 were measured; drop it (or set updated) for new data.
+mode: legacy
 app_args: [1024, 2048, 2048, 160]
 # 20000 Hz = a 50 us polling period (telemetry -f 50), what the paper's captures used; telemetry
 # tops out near 9.7 kHz. Writes about 1.5 MB of telemetry.txt per second of run.

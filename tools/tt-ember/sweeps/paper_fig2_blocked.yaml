@@ -7,6 +7,8 @@
 # matmul/regular and matmul/regular_b2x4.
 name: paper_fig2_blocked
 workload: long_matmul
+# legacy reproduces how the published Fig. 2 was measured; drop it (or set updated) for new data.
+mode: legacy
 app_args: [1024, 2048, 2048, 160]
 # 20000 Hz = a 50 us polling period (telemetry -f 50), what the paper's captures used; telemetry
 # tops out near 9.7 kHz. Writes about 1.5 MB of telemetry.txt per second of run.

@@ -22,6 +22,8 @@ Config keys:
     workload:          long_matmul | ttnn_ops
     app_args:          positional args for the workload (M N K iters [fixed_blocks_per_core] for
                        long_matmul; the ttnn_ops_workload.py flags for ttnn_ops)
+    mode:              long_matmul only: updated (default) or legacy, exported as
+                       LONG_MATMUL_MODE; legacy reproduces how the published results were measured
     telemetry_freq_hz: sampling rate, default 50
     trim_ms, slot_ms:  passed to parser.py, defaults 1.0 and 1
     aiclk_mhz:         optional; pin AICLK to this after every reset (Blackhole, via aiclk/set_aiclk.py)
@@ -122,6 +124,10 @@ def load_sweep(path: Path) -> Sweep:
     ops: List[str] = []
     cases: List[Tuple[str, str]] = []
 
+    mode = str(raw.get("mode", "updated"))
+    if mode not in ("updated", "legacy"):
+        raise SystemExit(f"{path}: mode must be 'updated' or 'legacy', got {mode!r}")
+
     if workload == "long_matmul":
         power_cases = [int(c) for c in runs_cfg.get("power_cases", [0])]
         for c in power_cases:
@@ -141,7 +147,7 @@ def load_sweep(path: Path) -> Sweep:
                 case_name, _label = pc.POWER_CASE_SPECS[c]
                 for bm, bn in blocks:
                     suffix = "" if (bm, bn) == (1, 1) else f"_b{bm}x{bn}"
-                    env = {"POWER_CASE": str(c), "LONG_MATMUL_OP": op}
+                    env = {"POWER_CASE": str(c), "LONG_MATMUL_OP": op, "LONG_MATMUL_MODE": mode}
                     if (bm, bn) != (1, 1):
                         env["LONG_MATMUL_BLOCK_M"] = str(bm)
                         env["LONG_MATMUL_BLOCK_N"] = str(bn)

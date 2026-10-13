@@ -153,16 +153,21 @@ A config is a YAML mapping:
 ```yaml
 name: paper_fig1_stage_breakdown
 workload: long_matmul        # or ttnn_ops
+mode: legacy                 # LONG_MATMUL_MODE; legacy reproduces the published data, default updated
 app_args: [1024, 2048, 2048, 160]  # M N K iters [fixed_blocks_per_core]
-telemetry_freq_hz: 50
+telemetry_freq_hz: 20000           # a 50 us polling period, as the published captures used
 trim_ms: 1.0
 aiclk_mhz: null                    # e.g. 1000 for an iso-clock Blackhole sweep
 runs:
-  power_cases: [1, 2, 4, 5]        # one run per (op, case, block) combination
+  power_cases: [0, 1, 2, 4, 5]     # one run per (op, case, block) combination
   ops: [matmul]
   blocks: [[1, 1]]
-analyses: [compare_runs2, energy_by_engine, energy_per_flop_by_engine, pj_per_flop]
+analyses: [compare_runs2, energy_by_engine, energy_per_flop_by_engine, pj_per_flop_by_engine, pj_per_flop]
 ```
+
+The four `long_matmul` configs under `sweeps/` set `mode: legacy` so they recreate the published
+results; see `long_matmul`'s README for what `updated` changes. Leave `mode` out for new
+measurements.
 
 Analysis steps: `compare_runs2` (grouped bar charts per case), `energy_by_engine` and
 `energy_per_flop_by_engine` (reader/writer/compute ablation against `writer_amp`, average
