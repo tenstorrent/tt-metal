@@ -64,10 +64,10 @@ class CT_DIM(TemplateParameter):
 class PRESERVE_SRC_ZERO_FLAG(TemplateParameter):
     """Math sets the Src zero flag to keep before the custom init, as a preceding copy_tile_init does."""
 
-    preserve: bool = False
+    bcast_preserve: bool = False
 
     def convert_to_cpp(self) -> str:
-        return f"constexpr bool PRESERVE_SRC_ZERO_FLAG = {str(self.preserve).lower()};"
+        return f"constexpr bool PRESERVE_SRC_ZERO_FLAG = {str(self.bcast_preserve).lower()};"
 
 
 # Row height of the srcA operand. 32 -> full 32x32 tiles (num_faces=4);
