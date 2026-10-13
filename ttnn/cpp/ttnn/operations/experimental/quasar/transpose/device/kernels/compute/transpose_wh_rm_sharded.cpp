@@ -121,10 +121,14 @@ ALWI void transpose_with_pack_untilize(uint32_t cb_tilize, DFB& cb_out_buf) {
         }
         cb_out_buf.push_back(Ht);
 
-        // Producer-side barrier on the just-pushed column (reads the received-tiles counter this
-        // kernel bumped; returns immediately).
-        cb_out_buf.wait_front(Ht);
-        release_out_column(cb_out_buf, Ht);
+        if constexpr (get_arg(args::out_is_self_loop) == 1) {
+            // Self-loop (ht<=8): wait for, then pop, the column this kernel just pushed.
+            release_out_column(cb_out_buf, Ht);
+        } else {
+            // Producer-side barrier on the just-pushed column (reads the received-tiles counter this
+            // kernel bumped; returns immediately).
+            cb_out_buf.wait_front(Ht);
+        }
         tile_idx = tile_idx - HtWt + 1;
     }
     pack_untilize_uninit(cb_out);
