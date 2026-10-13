@@ -42,6 +42,7 @@ ttnn::Tensor paged_scaled_dot_product_attention_decode(
     std::optional<DeviceComputeKernelConfig> compute_kernel_config = std::nullopt,
     std::optional<operations::transformer::PagedCacheGeometryOverride> paged_cache_geometry = std::nullopt,
     std::optional<uint32_t> cache_position_modulo = std::nullopt,
+    uint32_t spec_multi_pos_tiles = 0,
     const std::optional<const Tensor>& k_new = std::nullopt,
     const std::optional<const Tensor>& v_new = std::nullopt);
 

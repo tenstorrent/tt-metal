@@ -8,7 +8,7 @@ Scripts for validating Blackhole Galaxy Exabox clusters before running workloads
 
 **Last Known-Good Docker Image:**
 ```
-ghcr.io/tenstorrent/tt-metal/upstream-tests-bh-glx:v0.80.0-dev20260925-49-g78b5458946e
+ghcr.io/tenstorrent/tt-metal/upstream-tests-bh-glx:v0.80.0-dev20261006-45-g1d758e27faf
 ```
 
 ## Full Hardware Qualification
@@ -85,6 +85,18 @@ Options for `<tag>`:
 - **Last known-good version** - the tag in [Quick Reference](#quick-reference) at the top. `run_validation.sh` and `recover.sh` use it automatically when you omit `--image`; `run_fabric_tests.sh` and `run_dispatch_tests.sh` require it to be passed explicitly.
 
 To build an image from a custom branch (your own branch or one requested from a Metal developer), run the [upstream-tests workflow](https://github.com/tenstorrent/tt-metal/actions/workflows/upstream-tests.yaml). The workflow summary shows the image tag once complete.
+
+**`exabox-tools` image**
+
+The [exabox-tools-image workflow](https://github.com/tenstorrent/tt-metal/actions/workflows/exabox-tools-image.yaml) publishes `ghcr.io/tenstorrent/tt-metal/exabox-tools` from [`dockerfile/exabox_tools/Dockerfile`](../../../dockerfile/exabox_tools/Dockerfile): the `upstream-tests-bh-glx` content plus the health-check requirements, without the test-script entrypoint. It is meant to be the one image `recover.sh`, the health check and the k8s jobs share.
+
+Tags:
+- `exabox-tools:<git describe>` (e.g. `v0.80.0-dev20260925-49-g78b5458946e`) - one per commit. Rebuilding the same commit re-pushes it with a new digest; pin the digest if that matters.
+- `exabox-tools:latest` - moved only when the workflow is dispatched with "Make latest" ticked. Gated only by the smoke test in the Dockerfile, not by hardware tests.
+
+To build: dispatch the workflow on `main` (or any branch); the run summary lists the tags.
+
+To pin a run, pass `--image ghcr.io/tenstorrent/tt-metal/exabox-tools:<tag>`. To find which commit a running container came from: `docker inspect --format '{{index .Config.Labels "org.opencontainers.image.revision"}}' <image>`.
 
 ### Physical Validation
 

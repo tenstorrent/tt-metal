@@ -42,8 +42,10 @@ These models use the [weekly Agentic Research pipeline](#agentic-research-model-
 
 | Model implementation | System | Tier | Weekly coverage |
 |----------------------|--------|------|-----------------|
+| Qwen Image 2.1 | BH P150 | 3 | Full 40-step image API: one text image against a CUDA reference, one two-image edit regression, repeated requests and prompt eviction |
 | Llama3.1-8B QB2 TP4 | BH QuietBox 2 | 3 | Decoder PCC and trace replay; scored IFEval serving |
 | Gemma4 31B QB2 TP4 | BH QuietBox 2 | 3 | Decoder PCC, trace and API tests; GPQA 10/198 subset; fixed-length serving performance |
+| Qwen3.8-27B QB2 TP4 | BH QuietBox 2 | 3 | Full decoder serving; linear-attention convolution PCC; GPQA 10/198 subset; API and fixed-length performance |
 
 ## Daily Model Pipelines
 
@@ -73,8 +75,8 @@ it is classified differently on different systems.
 | Flux.1-schnell | BH QuietBox 2 |
 | Flux.1-dev | BH QuietBox 2, BH Single Galaxy |
 | Flux.2-dev | BH QuietBox 2, BH Single Galaxy |
-| Wan2.2-T2V-A14B | WH Galaxy, BH SC4 |
-| Wan2.2-I2V-A14B | WH Galaxy, BH SC4 |
+| Wan2.2-T2V-A14B | WH Galaxy, BH QuietBox 2, BH SC1, BH SC4 |
+| Wan2.2-I2V-A14B | WH Galaxy, BH SC1, BH SC4 |
 | Z-Image-Turbo | BH QuietBox 2 |
 | TT-DiT (shared) | WH N150, BH QuietBox 2 |
 | TT-DiT encoders (shared) | WH LLMBox |
@@ -105,6 +107,8 @@ it is classified differently on different systems.
 | ViT | WH N150, WH N300 |
 | Motif-Image-6B | WH LLMBox |
 | BGE-M3 | WH N150 |
+| Qwen3-TTS-1.7B | WH N150, BH P150 |
+| Qwen3-TTS-0.6B | WH N150, BH P150 |
 ## Tier 3 Models
 | Model | Systems |
 |-------|---------|
@@ -122,6 +126,7 @@ it is classified differently on different systems.
 | Qwen3-0.6B | WH N150, BH P150 |
 | Qwen3-1.7B | WH N150, BH P150 |
 | Gemma-4-E2B | WH N150, BH P150 |
+| PaddleOCR-VL-1.6 | BH P150 |
 | Gemma-4-E4B | BH P300, BH QuietBox 2 |
 | Mamba-2.8B | WH N150 |
 | Phi-3-mini | WH N150 |
@@ -148,6 +153,7 @@ it is classified differently on different systems.
 | VAD v2 | WH N150 |
 | OpenPDN-MNIST | WH N150 |
 | YuNet | WH N150 |
+| VibeVoice-1.5B | BH P150 |
 
 
 # Pipelines
@@ -253,10 +259,10 @@ and hardware pair has its own tier, test coverage, and time budget.
 | Time budgets | [time_budget.yaml](../.github/time_budget.yaml) |
 | Shared runner | [models-e2e-tests-impl.yaml](../.github/workflows/models-e2e-tests-impl.yaml) |
 
-Each test entry contains an explicit `cmd: |` block with its environment, setup,
-test, and cleanup commands. Keep those commands in the YAML so reviewers and
-dashboards can read the full procedure in one place. To reproduce a test locally,
-run its block from the checkout with the required hardware and model weights.
+Each test entry contains a `cmd`, either as an inline block or as a model-owned
+runner under its demo directory. Keep the complete procedure in one of those
+locations so reviewers can inspect it and developers can run the same command
+locally with the required hardware and model weights.
 
 Before each single-host model test, **Check device readiness (tt-check)** installs
 the latest tt-check release and runs `tt-check --json` with the installed TTNN
@@ -286,15 +292,26 @@ To add a model:
 2. For each SKU, set `tier` and `timeout` in minutes.
 3. Set the total budget under `models.agentic_research_tier<N>.<sku>` in
    `time_budget.yaml`. The sum of test timeouts for that tier and SKU must fit
-   the budget. The QB2 Tier 3 total is **52 minutes**: 12 for Llama3.1-8B
-   and 40 for Gemma4 31B, including setup, model tests, serving, and reporting.
+   the budget. The QB2 Tier 3 budget is:
+
+   - **Llama3.1-8B:** 12 minutes
+   - **Gemma4 31B:** 40 minutes
+   - **Qwen3.8-27B:** 50 minutes
+   - **Total:** 12 + 40 + 50 = 102 minutes
+
+   The initial Llama allowance came from the following measurement. The [10-minute validation run](https://github.com/tenstorrent/tt-metal/actions/runs/34480800119)
+   passed all 24 model tests and completed 54 of 56 serving requests before its
+   timeout; the budget includes room for completion and runner variance.
+
    Gemma allows up to 20 minutes for each server startup within its total allowance;
    periodic metadata snapshots distinguish slow loading from stopped progress.
    Gemma's allowance covers the measured 15½-minute CI setup/checks, about 5½ minutes
    for GPQA, the remaining performance/reporting work, and runner variance.
-   The initial Llama allowance came from the following measurement. The [10-minute validation run](https://github.com/tenstorrent/tt-metal/actions/runs/34480800119)
-   passed all 24 model tests and completed 54 of 56 serving requests before its
-   timeout; the budget includes room for completion and runner variance.
+
+   Qwen's allowance covers model tests, three server startups, GPQA, API checks,
+   and fixed-length performance. Measured CI runs completed in 42–44 minutes,
+   leaving 6–8 minutes for runner variance.
+
 4. Add any new model or SKU to the workflow's manual choices. Add the required
    targets to [model_targets.yaml](model_targets.yaml).
 

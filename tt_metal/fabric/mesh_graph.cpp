@@ -31,6 +31,7 @@
 #include <numeric>
 #include <set>
 #include <cmath>
+#include <utility>
 
 // Implementation of hash function for port_id_t
 std::size_t std::hash<tt::tt_fabric::port_id_t>::operator()(const tt::tt_fabric::port_id_t& p) const {
@@ -98,9 +99,10 @@ RoutingDirection routing_direction_to_port_direction(const proto::RoutingDirecti
         case proto::RoutingDirection::W: return RoutingDirection::W;
         case proto::RoutingDirection::C: return RoutingDirection::C;
         case proto::RoutingDirection::NONE: return RoutingDirection::NONE;
-        default: TT_THROW(
-            "Invalid routing direction: {}",
-            static_cast<std::underlying_type_t<proto::RoutingDirection>>(routing_direction));
+        default:
+            TT_THROW(
+                "Invalid routing direction: {}",
+                static_cast<std::underlying_type_t<proto::RoutingDirection>>(routing_direction));
     }
 }
 
@@ -268,11 +270,46 @@ std::unordered_map<ChipId, RouterEdge> MeshGraph::get_valid_connections(
     return valid_connections;
 }
 
+// Expand a ExpressLink pattern into intra-mesh endpoint chip-id pairs (linearized row-major).
+// Tiles the chosen axis into `step`-wide blocks starting at `start`, connecting each block's
+// endpoints (block_start <-> block_start + step - 1) and skipping the interior nodes. The
+// pattern is replicated across every line in the orthogonal axis. `ring_wrap` wraps the final
+// block past the boundary (RING); LINE drops blocks that would wrap. Caller validates step >= 2
+// and axis_len % step == 0.
+static std::vector<std::pair<ChipId, ChipId>> expand_express_link_edges(
+    const MeshShape& mesh_shape, bool along_rows, uint32_t start, uint32_t step, bool ring_wrap) {
+    std::vector<std::pair<ChipId, ChipId>> edges;
+    const uint32_t rows = mesh_shape[0];  // device_topology dim 0
+    const uint32_t cols = mesh_shape[1];  // device_topology dim 1
+    const uint32_t axis_len = along_rows ? rows : cols;
+    const uint32_t ortho_len = along_rows ? cols : rows;
+    if (step < 2 || axis_len < step) {
+        return edges;
+    }
+    const uint32_t num_blocks = axis_len / step;
+    for (uint32_t ortho = 0; ortho < ortho_len; ++ortho) {
+        for (uint32_t b = 0; b < num_blocks; ++b) {
+            const uint32_t a_coord = (start + b * step) % axis_len;
+            const uint32_t raw_end = start + b * step + step - 1;
+            if (!ring_wrap && raw_end >= axis_len) {
+                continue;  // LINE axis: no wrap, so a block straddling the boundary is dropped
+            }
+            const uint32_t b_coord = raw_end % axis_len;
+            // Map (axis coord, orthogonal coord) -> linearized chip id (row-major: row * cols + col).
+            const ChipId src = along_rows ? (a_coord * cols + ortho) : (ortho * cols + a_coord);
+            const ChipId dst = along_rows ? (b_coord * cols + ortho) : (ortho * cols + b_coord);
+            edges.emplace_back(src, dst);
+        }
+    }
+    return edges;
+}
+
 void MeshGraph::initialize_from_mgd(
     const MeshGraphDescriptor& mgd, std::optional<FabricConfig> fabric_config, bool is_ubb_galaxy) {
     static const std::unordered_map<const proto::Architecture, tt::ARCH> proto_arch_to_arch = {
         {proto::Architecture::WORMHOLE_B0, tt::ARCH::WORMHOLE_B0},
         {proto::Architecture::BLACKHOLE, tt::ARCH::BLACKHOLE},
+        {proto::Architecture::QUASAR, tt::ARCH::QUASAR},
     };
 
     // TODO: need to fix
@@ -374,28 +411,8 @@ void MeshGraph::initialize_from_mgd(
         this->mesh_host_ranks_.emplace_back(MeshShape{1, 1}, MeshHostRankId{0});
     }
 
-    // Determine inter-mesh policy from connections or graph topology
-    // Priority: 1) Check individual connections (if any), 2) Check graph_topology, 3) Unspecified
-    // (inter_mesh_policy_specified_ false — do not treat as STRICT vs a sibling MGD that does specify)
-    this->inter_mesh_policy_specified_ = false;
-    const auto& fabric_connections = mgd.connections_by_type("FABRIC");
-    if (!fabric_connections.empty()) {
-        // Check policy from the first connection (all connections have the same policy due to validation)
-        const auto& first_connection_data = mgd.get_connection(fabric_connections[0]);
-        this->inter_mesh_relaxed_policy_ = (first_connection_data.policy == proto::Policy::RELAXED);
-        this->inter_mesh_policy_specified_ = true;
-    } else {
-        // No individual connections, check graph_topology
-        const auto& top_level_instance = mgd.top_level();
-        if (top_level_instance.kind == NodeKind::Graph) {
-            const auto* graph_desc = std::get<const proto::GraphDescriptor*>(top_level_instance.desc);
-            if (graph_desc && graph_desc->has_graph_topology() && graph_desc->graph_topology().has_channels()) {
-                this->inter_mesh_relaxed_policy_ =
-                    (graph_desc->graph_topology().channels().policy() == proto::Policy::RELAXED);
-                this->inter_mesh_policy_specified_ = true;
-            }
-        }
-    }
+    this->inter_mesh_policy_specified_ = mgd.is_inter_mesh_policy_specified();
+    this->inter_mesh_relaxed_policy_ = mgd.is_inter_mesh_policy_relaxed();
 
     // Set up the mesh_edge_ports_to_chip_id_ with empty containers for all meshes
     mesh_edge_ports_to_chip_id_.resize(all_meshes.size() + all_switches.size());
@@ -467,6 +484,46 @@ void MeshGraph::initialize_from_mgd(
                 this->get_valid_connections(src_mesh_coord, mesh_coord_range, effective_fabric_type);
         }
 
+        // A FabricConfig override selects the routing family as well as the base-grid shape. Patterned
+        // express links belong to the 2D torus configurations; explicit plain FABRIC_2D (and non-2D
+        // configurations) deliberately downgrades an express-capable MGD to its N/S/E/W mesh.
+        const bool enable_patterned_express_links =
+            !fabric_config.has_value() || *fabric_config == FabricConfig::FABRIC_2D_TORUS_X ||
+            *fabric_config == FabricConfig::FABRIC_2D_TORUS_Y || *fabric_config == FabricConfig::FABRIC_2D_TORUS_XY;
+        if (enable_patterned_express_links) {
+            // Layer declared express links on top of the fully-populated base grid. Each pattern expands to
+            // intra-mesh endpoint pairs, added as bidirectional edges with RoutingDirection::Z (so their
+            // physical channels occupy a bucket separate from the N/S/E/W grid and escape its plane
+            // trimming). Tiling wrap comes from the pattern, defaulting to the dimension's torus-ness in
+            // effective_fabric_type (TORUS_Y wraps dim 0, TORUS_X dim 1).
+            for (const auto& express : mesh_desc->express_links()) {
+                const uint32_t dim = express.dim_idx();
+                TT_FATAL(
+                    dim < 2, "MeshGraph: ExpressLink dim_idx {} out of range for 2D mesh (mesh M{})", dim, *mesh_id);
+                const bool along_rows = (dim == 0);
+                const uint32_t dim_len = mesh_shape[dim];
+                const uint32_t step = express.pattern().step();
+                TT_FATAL(step >= 2, "MeshGraph: ExpressLink step must be >= 2 (mesh M{})", *mesh_id);
+                TT_FATAL(
+                    dim_len % step == 0,
+                    "MeshGraph: ExpressLink step {} must divide dim {} length {} for uniform tiling (mesh M{})",
+                    step,
+                    dim,
+                    dim_len,
+                    *mesh_id);
+                const bool axis_wraps = along_rows ? has_flag(effective_fabric_type, FabricType::TORUS_Y)
+                                                   : has_flag(effective_fabric_type, FabricType::TORUS_X);
+                const bool ring_wrap = express.wrap() != proto::TorusTopology::INVALID_TYPE
+                                           ? express.wrap() == proto::TorusTopology::RING
+                                           : axis_wraps;
+                for (const auto& [a, b] :
+                     expand_express_link_edges(mesh_shape, along_rows, express.pattern().start(), step, ring_wrap)) {
+                    this->add_to_connectivity(mesh_id, a, mesh_id, b, RoutingDirection::Z);
+                    this->add_to_connectivity(mesh_id, b, mesh_id, a, RoutingDirection::Z);
+                }
+            }
+        }
+
         MeshShape host_shape(mesh_desc->host_topology().dims().at(0), mesh_desc->host_topology().dims().at(1));
 
         // Validate that mesh shape is divisible by host shape before processing
@@ -497,7 +554,8 @@ void MeshGraph::initialize_from_mgd(
         }
 
         // Populate mesh_host_ranks_
-        this->mesh_host_ranks_[*mesh_id] = tt_metal::distributed::MeshContainer<MeshHostRankId>(host_shape, mesh_host_ranks_values);
+        this->mesh_host_ranks_[*mesh_id] =
+            tt_metal::distributed::MeshContainer<MeshHostRankId>(host_shape, mesh_host_ranks_values);
 
         // Populate mesh_to_chip_ids
         std::vector<ChipId> chip_ids(mesh_shape[0] * mesh_shape[1]);
@@ -952,137 +1010,40 @@ bool MeshGraph::is_inter_mesh_policy_specified() const { return inter_mesh_polic
  *         followed by 1D shapes. Each shape appears only once.
  */
 
+namespace {
+
+FabricConfig fabric_config_matching_type(FabricType fabric_type) {
+    if (has_flag(fabric_type, FabricType::TORUS_XY)) {
+        return FabricConfig::FABRIC_2D_TORUS_XY;
+    }
+    if (has_flag(fabric_type, FabricType::TORUS_Y)) {
+        return FabricConfig::FABRIC_2D_TORUS_Y;
+    }
+    if (has_flag(fabric_type, FabricType::TORUS_X)) {
+        return FabricConfig::FABRIC_2D_TORUS_X;
+    }
+    return FabricConfig::FABRIC_2D;
+}
+
+}  // namespace
+
+MeshGraph::MeshGraph(
+    const MeshGraphDescriptor& mesh_graph_descriptor, std::optional<FabricConfig> fabric_config, bool is_ubb_galaxy) :
+    mesh_graph_descriptor_(mesh_graph_descriptor) {
+    initialize_from_mgd(*mesh_graph_descriptor_, fabric_config, is_ubb_galaxy);
+}
+
 MeshGraph MeshGraph::generate_mesh_graph_of_shape(
     MeshShape mesh_shape,
     tt::tt_fabric::FabricType fabric_type,
     tt::tt_fabric::FabricReliabilityMode reliability_mode,
     tt::ARCH arch,
     std::uint32_t num_connections_per_direction) {
-    MeshGraph mesh_graph;
-
-    // Use the provided num_connections_per_direction
-    std::uint32_t num_eth_ports_per_direction = num_connections_per_direction;
-
-    // Set chip spec
-    mesh_graph.chip_spec_ = ChipSpec{
-        .arch = arch,
-        .num_eth_ports_per_direction = num_eth_ports_per_direction,
-        .num_z_ports = (arch == tt::ARCH::BLACKHOLE) ? num_eth_ports_per_direction : 0,
-    };
-
-    // Validate mesh shape dimensions
-    TT_FATAL(
-        mesh_shape[0] > 0 && mesh_shape[1] > 0,
-        "MeshGraph: Mesh shape dimensions must be positive, got {}x{}",
-        mesh_shape[0],
-        mesh_shape[1]);
-
-    // For WORMHOLE_B0 architecture, if both dimensions are odd, they must both be 1
-    if (arch == tt::ARCH::WORMHOLE_B0) {
-        bool both_odd = (mesh_shape[0] % 2 != 0) && (mesh_shape[1] % 2 != 0);
-        if (both_odd) {
-            TT_FATAL(
-                mesh_shape[0] == 1 && mesh_shape[1] == 1,
-                "MeshGraph: For WORMHOLE_B0 architecture, if both mesh dimensions are odd, they must both be 1, "
-                "got {}x{}",
-                mesh_shape[0],
-                mesh_shape[1]);
-        }
-    }
-
-    // Initialize for a single mesh (mesh_id = 0)
-    MeshId mesh_id(0);
-    uint32_t total_mesh_count = 1;
-
-    // Resize intra-mesh and inter-mesh connectivity (inter-mesh will remain empty)
-    mesh_graph.intra_mesh_connectivity_.resize(total_mesh_count);
-    mesh_graph.inter_mesh_connectivity_.resize(total_mesh_count);
-    mesh_graph.inter_mesh_connectivity_[0].resize(mesh_shape[0] * mesh_shape[1]);
-
-    // Set intra-mesh relaxed policy based on reliability mode
-    // RELAXED_SYSTEM_HEALTH_SETUP_MODE -> relaxed = true
-    // STRICT_SYSTEM_HEALTH_SETUP_MODE -> relaxed = false
-    bool is_relaxed = (reliability_mode == FabricReliabilityMode::RELAXED_SYSTEM_HEALTH_SETUP_MODE);
-    mesh_graph.intra_mesh_relaxed_policy_[mesh_id] = is_relaxed;
-
-    // Build intra-mesh connectivity using fabric_type
-    MeshCoordinateRange mesh_coord_range(mesh_shape);
-    uint32_t mesh_size = mesh_shape[0] * mesh_shape[1];
-    mesh_graph.intra_mesh_connectivity_[*mesh_id].resize(mesh_size);
-    for (const auto& src_mesh_coord : mesh_coord_range) {
-        ChipId src_chip_id = (src_mesh_coord[0] * mesh_shape[1]) + src_mesh_coord[1];
-        mesh_graph.intra_mesh_connectivity_[*mesh_id][src_chip_id] =
-            mesh_graph.get_valid_connections(src_mesh_coord, mesh_coord_range, fabric_type);
-    }
-
-    // TODO: Enable this for multi-host meshes
-
-    // For auto-generated meshes, assume single host (host_shape = [1, 1])
-    MeshShape host_shape(1, 1);
-
-    // Populate mesh_host_ranks_ (single host)
-    std::vector<MeshHostRankId> mesh_host_ranks_values;
-    mesh_host_ranks_values.push_back(MeshHostRankId{0});
-
-    // Populate mesh_host_rank_coord_ranges_ (entire mesh belongs to host rank 0)
-    mesh_graph.mesh_host_rank_coord_ranges_.emplace(
-        std::make_pair(*mesh_id, MeshHostRankId{0}),
-        MeshCoordinateRange(MeshCoordinate(0, 0), MeshCoordinate(mesh_shape[0] - 1, mesh_shape[1] - 1)));
-
-    // Populate mesh_host_ranks_
-    mesh_graph.mesh_host_ranks_.clear();
-    mesh_graph.mesh_host_ranks_.emplace_back(host_shape, mesh_host_ranks_values);
-
-    // Populate mesh_to_chip_ids
-    std::vector<ChipId> chip_ids(mesh_shape[0] * mesh_shape[1]);
-    std::iota(chip_ids.begin(), chip_ids.end(), 0);
-    mesh_graph.mesh_to_chip_ids_.emplace(*mesh_id, tt_metal::distributed::MeshContainer<ChipId>(mesh_shape, chip_ids));
-
-    // Set up mesh_edge_ports_to_chip_id_ with empty container
-    mesh_graph.mesh_edge_ports_to_chip_id_.resize(total_mesh_count);
-
-    // Get the edge ports of the mesh. A generated graph's torus axes always come from the fabric
-    // config (there is no MGD declaring them), so their edge ports are reserved for the torus on
-    // the bare flag, whatever the extent — on a genuine axis the wrap cables consume them anyway,
-    // and on a smaller extent leaving them open would let inter-mesh links land on a direction
-    // whose deadlock-avoidance label can mismatch the peer mesh (issue #54650).
-    std::uint32_t chan_id = 0;
-    if (!has_flag(fabric_type, torus_flag_for_axis(0))) {
-        // North, start from NW corner
-        for (std::uint32_t chip_id = 0; chip_id < mesh_shape[1]; chip_id++) {
-            for (std::uint32_t i = 0; i < mesh_graph.chip_spec_.num_eth_ports_per_direction; i++) {
-                mesh_graph.mesh_edge_ports_to_chip_id_[*mesh_id][{RoutingDirection::N, chan_id++}] = chip_id;
-            }
-        }
-        // South, start from SW corner
-        chan_id = 0;
-        for (std::uint32_t chip_id = ((mesh_shape[0] * mesh_shape[1]) - mesh_shape[1]);
-             chip_id < (mesh_shape[0] * mesh_shape[1]);
-             chip_id++) {
-            for (std::uint32_t i = 0; i < mesh_graph.chip_spec_.num_eth_ports_per_direction; i++) {
-                mesh_graph.mesh_edge_ports_to_chip_id_[*mesh_id][{RoutingDirection::S, chan_id++}] = chip_id;
-            }
-        }
-    }
-    if (!has_flag(fabric_type, torus_flag_for_axis(1))) {
-        // East, start from NE corner
-        chan_id = 0;
-        for (std::uint32_t chip_id = (mesh_shape[1] - 1); chip_id < (mesh_shape[0] * mesh_shape[1]);
-             chip_id += mesh_shape[1]) {
-            for (std::uint32_t i = 0; i < mesh_graph.chip_spec_.num_eth_ports_per_direction; i++) {
-                mesh_graph.mesh_edge_ports_to_chip_id_[*mesh_id][{RoutingDirection::E, chan_id++}] = chip_id;
-            }
-        }
-        // West, start from NW corner
-        chan_id = 0;
-        for (std::uint32_t chip_id = 0; chip_id < (mesh_shape[0] * mesh_shape[1]); chip_id += mesh_shape[1]) {
-            for (std::uint32_t i = 0; i < mesh_graph.chip_spec_.num_eth_ports_per_direction; i++) {
-                mesh_graph.mesh_edge_ports_to_chip_id_[*mesh_id][{RoutingDirection::W, chan_id++}] = chip_id;
-            }
-        }
-    }
-
-    return mesh_graph;
+    return MeshGraph(
+        MeshGraphDescriptor::generate_mesh_graph_descriptor_of_shape(
+            std::move(mesh_shape), fabric_type, reliability_mode, arch, num_connections_per_direction),
+        fabric_config_matching_type(fabric_type),
+        /*is_ubb_galaxy=*/false);
 }
 
 std::filesystem::path MeshGraph::get_mesh_graph_descriptor_path_for_cluster_type(

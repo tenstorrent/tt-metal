@@ -19,6 +19,7 @@
 #include "ttnn/operations/functions.hpp"
 #include "ttnn/operations/data_movement/reshape_view/reshape.hpp"
 #include "ttnn/operations/data_movement/pad/pad.hpp"
+#include "ttnn/operations/data_movement/slice/device/slice_device_operation.hpp"
 #include "ttnn/operations/reduction/generic/generic_reductions.hpp"
 #include "ttnn/operations/experimental/reshape/view.hpp"
 #include <tt-metalium/bfloat16.hpp>
@@ -1101,12 +1102,32 @@ static std::vector<Tensor> pool2d(
             input = ttnn::to_layout(input, Layout::ROW_MAJOR);
         }
 
+        // pad_to_tile pads W on every H row, which the fold below would sum as data.
+        // Slice to the logical shape unless the padding is already a trailing suffix.
+        if (input.layout() == Layout::ROW_MAJOR) {
+            const auto& logical = input.logical_shape();
+            const auto& padded = input.padded_shape();
+            const bool tight_w = padded[2] == logical[2];
+            const bool tight_h = padded[1] == logical[1];
+            const bool readable_suffix =
+                (tight_w && (tight_h || batch_size == 1)) || (batch_size == 1 && logical[1] == 1);
+            if (!readable_suffix) {
+                const auto rank = logical.rank();
+                // slice end is exclusive.
+                input = ttnn::prim::slice(
+                    input,
+                    ttnn::Shape(ttsl::SmallVector<uint32_t>(rank, 0)),
+                    logical,
+                    ttnn::Shape(ttsl::SmallVector<uint32_t>(rank, 1)),
+                    input.memory_config(),
+                    /*use_tensor_args=*/false);
+            }
+        }
+
         // Canonicalize to (batch_size, 1, H*W, C) form using an explicit logical+padded reshape.
-        // This is format-agnostic: it accepts both flat (1, 1, N*H*W, C) input from direct
-        // avg_pool2d callers and NHWC (N, H, W, C) input from the global_avg_pool2d Python
-        // wrapper, and it preserves any pre-existing padding (e.g., legacy callers that
-        // pad_to_tile zero-pad the spatial dim) by carrying padded_shape through. The gate
-        // above ensures total_padded_spatial divides cleanly by batch_size.
+        // This accepts both flat (1, 1, N*H*W, C) input from direct avg_pool2d callers and NHWC
+        // (N, H, W, C) input from the global_avg_pool2d Python wrapper. The gate above ensures
+        // total_padded_spatial divides cleanly by batch_size.
         const auto& post_padded = input.padded_shape();
         uint32_t total_padded_spatial = post_padded[0] * post_padded[1] * post_padded[2];
         uint32_t channels_padded = post_padded[3];

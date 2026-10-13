@@ -143,10 +143,39 @@ class Gemma4PrefillRuntime:
         if metadata_msg is not None:
             ttnn.deallocate(metadata_msg)
 
-    def build_kv_chunk_table(self, kv_cache, path):
+    def kv_migration_stages(self, kv_cache, first_layer_idx, num_my_layers):
+        from models.demos.common.prefill.runners.migration import KvCacheStage
+
+        self._check_cache(kv_cache)
+        if first_layer_idx != 0 or num_my_layers != self.config.num_layers:
+            raise ValueError("Gemma4 migration requires all layers on one rank")
+        stages = []
+        for layer_idx, cache in enumerate(kv_cache.layers):
+            tensors = (cache.kv,) if hasattr(cache, "kv") else (cache.k, cache.v)
+            stages.extend(KvCacheStage(int(tensor.buffer_address()), layer_idx, 1) for tensor in tensors)
+        return stages
+
+    def build_kv_chunk_table(self, kv_cache, path, *, first_layer_idx=0, num_my_layers=None, stage_layouts=None):
         from models.demos.gemma4_d_p.tt.runners.kv_chunk_table import build_and_serialize_kv_chunk_table
 
         self._check_cache(kv_cache)
+        stages = self.kv_migration_stages(
+            kv_cache, first_layer_idx, self.config.num_layers if num_my_layers is None else num_my_layers
+        )
+        if stage_layouts is not None:
+            if len(stage_layouts) != len(stages):
+                raise ValueError("Gemma4 migration requires one stage per cache tensor")
+            for gathered, stage in zip(stage_layouts, stages):
+                if len(gathered) != 1 or any(
+                    gathered[0][key] != value
+                    for key, value in (
+                        ("rank", 0),
+                        ("base_addr", stage.base_addr),
+                        ("first_layer", stage.first_layer),
+                        ("count", stage.count),
+                    )
+                ):
+                    raise ValueError("Gemma4 migration stage does not match its single-rank cache")
         return build_and_serialize_kv_chunk_table(
             path=path,
             mesh_device=self.mesh_device,

@@ -136,8 +136,10 @@ inline std::uint32_t _llk_pack_output_addr_offset_words_(
 /**
  * @brief Configure the packer address-modification (ADDR_MOD) slots for the selected pack mode.
  *
- * Programs ADDR_MOD_0/1/2 with the src/dest Y and Z increment/clear patterns the pack MOP relies
+ * Programs ADDR_MOD_0/1/2 with the src Y and Z increment/clear patterns the pack MOP relies
  * on to traverse the destination register and step through faces for the given layout.
+ * The dest (channel-1) counters are left alone: output placement comes from L1_Dest_addr and
+ * the packers' own write pointers, and no Wormhole code programs a channel-1 stride.
  *
  * @tparam pack_mode: Packing layout, values = <Default/Untilize>
  */
@@ -146,7 +148,6 @@ inline void _llk_pack_configure_addrmod_()
 {
     addr_mod_pack_t {
         .y_src = {.incr = 15}, // 4-bit value so max is 15. incadcxy will increment it by 1
-        .y_dst = {.incr = 1},
     }
         .set(ADDR_MOD_0);
 
@@ -154,7 +155,6 @@ inline void _llk_pack_configure_addrmod_()
     {
         addr_mod_pack_t {
             .y_src = {.incr = 1, .clr = 0, .cr = 1},
-            .y_dst = {.incr = 1, .clr = 0, .cr = 0},
         }
             .set(ADDR_MOD_1);
     }
@@ -162,16 +162,13 @@ inline void _llk_pack_configure_addrmod_()
     {
         addr_mod_pack_t {
             .y_src = {.incr = 0, .clr = 1, .cr = 0},
-            .y_dst = {.incr = 0, .clr = 1, .cr = 0},
             .z_src = {.incr = 0, .clr = 0},
-            .z_dst = {.incr = 0, .clr = 0},
         }
             .set(ADDR_MOD_1);
     }
 
     addr_mod_pack_t {
         .y_src = {.incr = 0, .clr = 1, .cr = 0},
-        .y_dst = {.incr = 0, .clr = 0, .cr = 0},
     }
         .set(ADDR_MOD_2);
 }

@@ -18,7 +18,7 @@ import ttnn
 from models.demos.deepseek_v3_d_p.reference.deepseek_v3_config import DeepSeekV3Config
 from models.demos.deepseek_v3_d_p.reference.deepseek_v4_flash_config import DeepSeekV4FlashConfig
 from models.demos.deepseek_v3_d_p.reference.deepseek_v4_pro_config import DeepSeekV4ProConfig
-from models.demos.deepseek_v3_d_p.reference.glm_5_1_config import GLM51Config
+from models.demos.deepseek_v3_d_p.reference.glm_5_3_config import GLM53Config
 from models.demos.deepseek_v3_d_p.reference.gpt_oss_120b_config import GptOss120BConfig
 from models.demos.deepseek_v3_d_p.reference.kimi_k2_7_config import KimiK27Config
 from models.demos.deepseek_v3_d_p.reference.minimax_m2_7_config import MiniMaxM27Config
@@ -425,7 +425,7 @@ def run_dispatch(
 # @pytest.mark.extended_model.
 DISPATCH_MODELS = [
     ("dsv3", DeepSeekV3Config, False),
-    ("glm_51", GLM51Config, True),
+    ("glm_53", GLM53Config, True),
     ("kimi_k2_7", KimiK27Config, True),
     ("minimax_m27", MiniMaxM27Config, True),
     ("dsv4_pro", DeepSeekV4ProConfig, True),

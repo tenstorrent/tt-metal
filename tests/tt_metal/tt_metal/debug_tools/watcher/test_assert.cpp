@@ -251,7 +251,7 @@ static void RunTest(
 
     // Run the kernel, expect an exit due to the assert.
     log_info(LogTest, "Running args that should assert...");
-    fixture->RunProgram(mesh_device, workload);
+    fixture->RunProgramExpectingWatcherError(mesh_device, workload);
 
     // Wait for watcher to catch the assert with a timeout of 5s
     std::string exception;
@@ -431,6 +431,10 @@ TEST_P(WatcherAssertTest, TestWatcherAssert) {
             is_dram ? "DRAM" : (is_dispatch ? "DISPATCH" : "IDLE_ETH"));
         GTEST_SKIP();
     }
+    bool is_active_eth = (params.processor.core_type == HalProgrammableCoreType::ACTIVE_ETH);
+    if (is_active_eth && !using_slow_dispatch) {
+        GTEST_SKIP() << "fast dispatch to active ethernet has been removed";
+    }
     if (using_slow_dispatch && !is_quasar && !is_idle_eth && !is_dram && !is_dispatch) {
         GTEST_SKIP() << "Slow Dispatch tests only run on Quasar, IDLE_ETH, DRAM, or DISPATCH cores";
     }
@@ -479,6 +483,7 @@ INSTANTIATE_TEST_SUITE_P(
         WatcherTestParams{"Brisc", {TENSIX, DM, 0}, dev_msgs::DebugAssertTripped},
         WatcherTestParams{"NCrisc", {TENSIX, DM, 1}, dev_msgs::DebugAssertNCriscNOCNonpostedAtomicsFlushedTripped},
         WatcherTestParams{"NCriscPacketTag", {TENSIX, DM, 1}, dev_msgs::DebugAssertNCriscNOCPacketTagClearedTripped},
+        WatcherTestParams{"NCriscNocMid", {TENSIX, DM, 1}, dev_msgs::DebugAssertNocMidNotClearedTripped},
         // DM2 to DM7 only run on Quasar
         WatcherTestParams{"DM2", {TENSIX, DM, 2}, dev_msgs::DebugAssertTripped},
         WatcherTestParams{"DM3", {TENSIX, DM, 3}, dev_msgs::DebugAssertNCriscNOCReadsFlushedTripped},

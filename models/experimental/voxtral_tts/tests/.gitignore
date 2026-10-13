@@ -1,0 +1,4 @@
+# The root .gitignore excludes *.pt globally; these test fixtures are small, committed inputs
+# (a few hundred KB) that the suite loads at COLLECTION time, so a missing one is a collection
+# error, not a skip. Deeper rules win, so re-include them here.
+!*.pt

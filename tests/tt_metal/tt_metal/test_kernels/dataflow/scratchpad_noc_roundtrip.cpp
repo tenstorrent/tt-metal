@@ -27,7 +27,7 @@
 #include "api/dataflow/endpoints.h"
 #include "experimental/kernel_args.h"
 
-// Must match the host-side constants in test_scratchpad_hw.cpp.
+// Must match the host-side constants in metal2_host_api/integration_tests/scratchpad_fast_dispatch.cpp.
 constexpr uint32_t kOffsetBytes = 32;
 constexpr uint32_t kTransferBytes = 64;
 

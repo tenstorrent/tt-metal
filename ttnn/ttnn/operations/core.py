@@ -8,12 +8,14 @@ import concurrent.futures
 import os
 import pathlib
 import threading
+import uuid
 from typing import Callable, Dict, List, Optional, Tuple, Union
 
 import ttnn.decorators
 from loguru import logger
 
 import ttnn
+from ttnn.operations.golden_common import golden_to_output_dtype
 
 
 def _validate_file_extension(file_name: pathlib.Path):
@@ -247,11 +249,15 @@ ttnn.register_python_operation(name="ttnn.unsqueeze_to_4D")(ttnn._ttnn.operation
 ttnn.attach_golden_function(ttnn.unsqueeze_to_4D, golden_function=_golden_function_unsqueeze_to_4d)
 
 
-def _golden_function_from_torch(input_tensor, dtype=None, *, spec=None, layout=None, **_):
+def _golden_function_from_torch(input_tensor, dtype=None, *, spec=None, layout=None, col_tilize=False, **_):
     if input_tensor is None:
         return None
 
     import torch
+
+    if col_tilize:
+        # Column tilization stores the transposed matrix, so the result has its last two dimensions swapped.
+        input_tensor = input_tensor.transpose(-2, -1).contiguous()
 
     target_dtype = spec.dtype if spec is not None else dtype
     if target_dtype is None:
@@ -407,33 +413,44 @@ def from_torch(
     )
 
 
-def _golden_function(tensor, *, torch_rank=None, **kwargs):
-    if torch_rank is None:
-        return tensor
-
-    while len(tensor.shape) > torch_rank:
-        if tensor.shape[0] != 1:
-            raise RuntimeError("ttnn: Unable to squeeze to desired rank!")
-        tensor = tensor.squeeze(0)
-    return tensor
+def _golden_function(tensor, dtype=None, *, torch_rank=None, **kwargs):
+    if torch_rank is not None:
+        while len(tensor.shape) > torch_rank:
+            if tensor.shape[0] != 1:
+                raise RuntimeError("ttnn: Unable to squeeze to desired rank!")
+            tensor = tensor.squeeze(0)
+    return tensor.to(dtype) if dtype is not None else tensor
 
 
 # Weight-cache files are written by a small thread pool so a cold build keeps converting and uploading the next
 # weights while earlier ones are flushed (a single synchronous dump runs at ~1 GB/s and was ~25% of a cold Llama-8B
-# build). Each file is written under a temporary name and renamed when complete, so an interrupted run never leaves a
-# truncated file that looks valid. TTNN_SYNC_CACHE_DUMP=1 restores synchronous writes.
+# build). Each file is written under a name unique to this fill and renamed when complete, so a concurrent reader never
+# sees a partial file and a failed dump leaves nothing behind. DISTRIBUTED_GATHER dumps are a world collective, so with
+# more than one rank they stay synchronous to keep every rank's collectives in program order.
+# TTNN_SYNC_CACHE_DUMP=1 makes every write synchronous.
 _cache_dump_pool = None
 _cache_dump_futures = []
 _cache_dump_lock = threading.Lock()
 
 
-def _dump_cache_file(cache_file_name, tensor):
-    def job():
-        tmp_name = f"{cache_file_name}.tmp{os.getpid()}"
-        ttnn._ttnn.tensor.dump_tensor_flatbuffer(tmp_name, tensor)
-        os.replace(tmp_name, cache_file_name)
+def _single_rank():
+    return not ttnn.distributed_context_is_initialized() or int(ttnn.distributed_context_get_size()) == 1
 
-    if os.environ.get("TTNN_SYNC_CACHE_DUMP", "0") == "1":
+
+def _dump_cache_file(cache_file_name, tensor, cache_dump_mode):
+    def job():
+        tmp_file_name = f"{cache_file_name}.{os.getpid()}.{uuid.uuid4().hex}.tmp"
+        try:
+            ttnn._ttnn.tensor.dump_tensor_flatbuffer(tmp_file_name, tensor, cache_dump_mode)
+            if pathlib.Path(tmp_file_name).exists():  # DISTRIBUTED_GATHER: only rank 0 writes
+                os.replace(tmp_file_name, cache_file_name)
+        except BaseException:
+            pathlib.Path(tmp_file_name).unlink(missing_ok=True)
+            raise
+
+    if os.environ.get("TTNN_SYNC_CACHE_DUMP", "0") == "1" or (
+        cache_dump_mode != ttnn.DumpTensorMode.LOCAL and not _single_rank()
+    ):
         job()
         return
     global _cache_dump_pool
@@ -655,8 +672,8 @@ def _golden_function(tensor, *args, **kwargs):
 ttnn.attach_golden_function(ttnn.to_layout, golden_function=_golden_function)
 
 
-def _golden_function(tensor, *args, **kwargs):
-    return tensor
+def _golden_function(tensor, dtype, *args, **kwargs):
+    return golden_to_output_dtype(tensor, dtype)
 
 
 ttnn.attach_golden_function(ttnn.to_dtype, golden_function=_golden_function)
@@ -768,8 +785,8 @@ ttnn.attach_golden_function(
 )
 
 
-def _golden_function(tensor, *args, **kwargs):
-    return tensor
+def _golden_function(tensor, *args, dtype=None, **kwargs):
+    return golden_to_output_dtype(tensor, dtype)
 
 
 ttnn.attach_golden_function(ttnn.clone, golden_function=_golden_function)
@@ -848,7 +865,14 @@ def dump_tensor(
     ttnn._ttnn.tensor.dump_tensor_flatbuffer(str(file_name), tensor, mode)
 
 
-@ttnn.register_python_operation(name="ttnn.as_tensor", golden_function=_golden_function_from_torch)
+def _golden_function_as_tensor(tensor, dtype=None, *, preprocess=None, **kwargs):
+    # as_tensor applies the caller's preprocess callback to the Torch input before conversion.
+    if preprocess is not None:
+        tensor = preprocess(tensor)
+    return _golden_function_from_torch(tensor, dtype, **kwargs)
+
+
+@ttnn.register_python_operation(name="ttnn.as_tensor", golden_function=_golden_function_as_tensor)
 def as_tensor(
     tensor: Union["torch.Tensor"],  # TODO: add support for numpy.ndarray and other tensor types
     dtype: Optional[ttnn.DataType] = None,
@@ -859,6 +883,7 @@ def as_tensor(
     cache_file_name: Optional[Union[str, pathlib.Path]] = None,
     preprocess: Optional[Callable[[ttnn.Tensor], ttnn.Tensor]] = None,
     mesh_mapper: Optional[ttnn.CppTensorToMesh | ttnn.ReplicateTensorToMeshWrapper] = None,
+    cache_dump_mode: ttnn.DumpTensorMode = ttnn.DumpTensorMode.DISTRIBUTED_GATHER,
 ) -> ttnn.Tensor:
     """
     Converts the `torch.Tensor` tensor into a `ttnn.Tensor`.
@@ -877,6 +902,11 @@ def as_tensor(
 
             - For Grayskull, the on-device tilizer will truncate mantissa bits for bfp* formats.
             - For Wormhole, the on-device tilizer will raise a runtime error (RTE) for bfp8 but will truncate for bfp4/2 formats.
+        cache_dump_mode (ttnn.DumpTensorMode, optional): How a cache miss writes ``cache_file_name``. Defaults to
+            ``ttnn.DumpTensorMode.DISTRIBUTED_GATHER``, a collective that every rank must reach with the same tensor.
+            Use ``ttnn.DumpTensorMode.LOCAL`` when ranks own different tensors (e.g. one pipeline stage per rank):
+            with ``DISTRIBUTED_GATHER`` their cache misses never pair up and a cold fill deadlocks. ``LOCAL`` writes
+            each rank's host-local tensor, so cache files must not be shared between ranks.
 
     Returns:
         ttnn.Tensor: The resulting `ttnn` tensor.
@@ -932,7 +962,7 @@ def as_tensor(
             f"Generating cache for {cache_file_name} of shape {tensor.shape}, dtype {dtype_name}, layout {layout_name}"
         )
         pathlib.Path(cache_file_name).parent.mkdir(parents=True, exist_ok=True)
-        _dump_cache_file(cache_file_name, tensor)
+        _dump_cache_file(cache_file_name, tensor, cache_dump_mode)
         if device is not None:
             tensor = tensor.to(device, memory_config)
         return tensor

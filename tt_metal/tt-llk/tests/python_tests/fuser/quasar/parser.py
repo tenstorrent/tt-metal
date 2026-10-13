@@ -13,6 +13,8 @@ SubBcastColCustom.
 
 from typing import Annotated, ClassVar, List, Union
 
+from fuser.fpu_node import FpuNode
+from fuser.fuser_config import GlobalConfig
 from fuser.validator import (
     ELTWISE_DIMS,
     IN0_REQUIRED,
@@ -38,6 +40,8 @@ from fuser.validator import (
     FpuMathSchemaBase,
     OperationSchemaBase,
     PackSchema,
+    TernarySfpuMathSchema,
+    TopKSfpuMathSchema,
     UnarySfpuMathSchema,
     eltwise_unpacker_rules,
     forced_unpackers,
@@ -45,8 +49,11 @@ from fuser.validator import (
     require_dest_tiles,
     require_src_a_tiles,
 )
+from helpers.chip_architecture import ChipArchitecture
+from helpers.format_config import DataFormat
 from helpers.llk_params import (
     BroadcastType,
+    DestAccumulation,
     MathFidelity,
     MathOperation,
     ReduceDimension,
@@ -64,6 +71,8 @@ from .packer.matmul import MatmulPacker
 from .packer.packer import Packer
 from .packer.untilize import PackUntilize
 from .sfpu.binary import BinarySfpu
+from .sfpu.ternary import TernarySfpu
+from .sfpu.topk import TopKSfpu
 from .sfpu.unary import UnarySfpu
 from .unpacker.matmul import MatmulUnpacker
 from .unpacker.reduce import ReduceUnpacker
@@ -73,6 +82,39 @@ from .unpacker.transpose_dest import TransposeDestUnpacker
 from .unpacker.unary_broadcast import UnaryBroadcastUnpacker
 from .unpacker.unpack_a import UnpackerA
 from .unpacker.unpack_ab import UnpackerAB
+
+
+def _validate_math_fidelities(operation, config):
+    wide_formats = {DataFormat.Float16, DataFormat.Tf32}
+    config.sentinel.prepare_operation(config, operation)
+    output_format = operation._get_pack_nodes()[0].output.data_format
+    errors = []
+    for index, node in enumerate(operation.math_nodes, start=1):
+        if not isinstance(node, FpuNode) or node.math_fidelity == MathFidelity.LoFi:
+            continue
+        if not isinstance(node.fpu, (EltwiseFpu, MatmulFpu, ReduceFpu)):
+            continue
+        formats = config.sentinel._infer_node_formats(
+            config, node, output_format, operation
+        )
+        src_a, src_b = formats[1], formats[3]
+        if node.unpacker is not None:
+            src_a, src_b = node.unpacker.physical_order(src_a, src_b)
+        allowed = [MathFidelity.LoFi]
+        if src_a in wide_formats:
+            allowed.append(MathFidelity.HiFi2)
+        if src_a in wide_formats and src_b in wide_formats:
+            allowed.extend((MathFidelity.HiFi3, MathFidelity.HiFi4))
+        if node.math_fidelity not in allowed:
+            errors.append(
+                f"Math node {index} (Fpu)\n    Quasar "
+                f"{node.math_fidelity.name} has redundant fidelity phases for "
+                f"SrcA={src_a.name}, SrcB={src_b.name}; "
+                f"allowed fidelities: {', '.join(f.name for f in allowed)}"
+            )
+    if errors:
+        raise ValueError("\n".join(errors))
+
 
 _broadcast_required = reject(
     lambda s, a, b: s.broadcast_type == BroadcastType.None_,
@@ -136,7 +178,12 @@ UNPACKER_MAP = {
             IN0_REQUIRED,
             IN1_REQUIRED,
             NO_TRANSPOSE,
-            require_src_a_tiles((32, 32), (16, 16)),
+            require_src_a_tiles((32, 32), (16, 16), (32, 16), (16, 32), (1, 32)),
+            reject(
+                lambda s, a, b: a.tile_shape.tile_dims not in ((32, 32), (16, 16))
+                and s.broadcast_type != BroadcastType.None_,
+                "Quasar binary broadcast requires 32x32 or 16x16 tiles",
+            ),
             reject(
                 lambda s, a, b: a.tile_shape.tile_dims != (32, 32)
                 and s.broadcast_type in (BroadcastType.Row, BroadcastType.Column),
@@ -216,6 +263,11 @@ FPU_MAP = {
             REDUCE_PARAMS_REQUIRED,
             forced_unpackers("ReduceUnpacker", "UnpackReduceTilize"),
             reject(
+                lambda s, a, b: s.reduce_pool == ReducePool.Max
+                and s.math_fidelity != MathFidelity.LoFi,
+                "Quasar MAX Reduce requires LoFi fidelity",
+            ),
+            reject(
                 lambda s, a, b: a.data_format.is_integer()
                 and a.tile_shape.tile_dims != (32, 32),
                 "Quasar integer Reduce requires 32x32 tiles",
@@ -283,6 +335,9 @@ OUTPUT_DIMS = {
 
 UNARY_SFPU_OPS = {
     MathOperation.Abs,
+    MathOperation.AbsInt32,
+    MathOperation.Fill,
+    MathOperation.Rand,
     MathOperation.Exp,
     MathOperation.Gelu,
     MathOperation.Reciprocal,
@@ -299,6 +354,83 @@ UNARY_SFPU_OPS = {
     MathOperation.GreaterThanZero,
     MathOperation.LessThanEqualZero,
     MathOperation.GreaterThanEqualZero,
+    MathOperation.Signbit,
+    MathOperation.Hardsigmoid,
+    MathOperation.Celu,
+    MathOperation.Elu,
+    MathOperation.Hardmish,
+    MathOperation.Mish,
+    MathOperation.Hardshrink,
+    MathOperation.Hardtanh,
+    MathOperation.Heaviside,
+    MathOperation.Prelu,
+    MathOperation.Selu,
+    MathOperation.Softshrink,
+    MathOperation.Softsign,
+    MathOperation.Threshold,
+    MathOperation.SigmoidAppx,
+    MathOperation.Tanhshrink,
+    MathOperation.Xielu,
+    MathOperation.Neg,
+    MathOperation.Add1,
+    MathOperation.Cbrt,
+    MathOperation.Exp2,
+    MathOperation.Expm1,
+    MathOperation.Rpow,
+    MathOperation.Sign,
+    MathOperation.UnaryPower,
+    MathOperation.UnaryPowerIterative,
+    MathOperation.Log,
+    MathOperation.Digamma,
+    MathOperation.Erf,
+    MathOperation.Erfc,
+    MathOperation.Erfinv,
+    MathOperation.I0,
+    MathOperation.I1,
+    MathOperation.Lgamma,
+    MathOperation.Polygamma,
+    MathOperation.Isinf,
+    MathOperation.Isposinf,
+    MathOperation.Isneginf,
+    MathOperation.Isnan,
+    MathOperation.Isfinite,
+    MathOperation.LogicalNotUnary,
+    MathOperation.UnaryGt,
+    MathOperation.UnaryLt,
+    MathOperation.UnaryGe,
+    MathOperation.UnaryLe,
+    MathOperation.UnaryEq,
+    MathOperation.UnaryNe,
+    MathOperation.BitwiseNot,
+    MathOperation.LeftShift,
+    MathOperation.RightShift,
+    MathOperation.UnaryBitwiseAnd,
+    MathOperation.UnaryBitwiseOr,
+    MathOperation.UnaryBitwiseXor,
+    MathOperation.RsubScalarInt32,
+    MathOperation.SumIntCol,
+    MathOperation.SumIntRow,
+    MathOperation.Fmod,
+    MathOperation.Remainder,
+    MathOperation.RemainderUint32,
+    MathOperation.Rdiv,
+    MathOperation.TiledProd,
+    MathOperation.Identity,
+    MathOperation.CastFp32ToFp16a,
+    MathOperation.AltComplexRotate90,
+    MathOperation.Softcap,
+    MathOperation.TanhDerivative,
+    MathOperation.Sin,
+    MathOperation.Cos,
+    MathOperation.Tan,
+    MathOperation.Atan,
+    MathOperation.Asin,
+    MathOperation.Acos,
+    MathOperation.Sinh,
+    MathOperation.Cosh,
+    MathOperation.Asinh,
+    MathOperation.Acosh,
+    MathOperation.Atanh,
 }
 
 BINARY_SFPU_OPS = {
@@ -309,6 +441,37 @@ BINARY_SFPU_OPS = {
     MathOperation.SfpuElwLt,
     MathOperation.SfpuElwLe,
     MathOperation.SfpuElwGe,
+    MathOperation.SfpuLogsigmoid,
+    MathOperation.SfpuIsclose,
+    MathOperation.SfpuMask,
+    MathOperation.SfpuMaskPosinf,
+    MathOperation.SfpuIntMask,
+    MathOperation.SfpuBinaryFmod,
+    MathOperation.SfpuBinaryRemainder,
+    MathOperation.SfpuElwpow,
+    MathOperation.SfpuBitwiseAnd,
+    MathOperation.SfpuBitwiseOr,
+    MathOperation.SfpuBitwiseXor,
+    MathOperation.SfpuFmodInt32,
+    MathOperation.SfpuRemainderInt32,
+    MathOperation.SfpuRemainderUint32,
+    MathOperation.SfpuLgammaStirlingFp32,
+    MathOperation.SfpuRsubInt32,
+    MathOperation.SfpuDivInt32,
+    MathOperation.SfpuDivInt32Floor,
+    MathOperation.SfpuIntSumAdd,
+    MathOperation.SfpuClampedSiluGlu,
+    MathOperation.SfpuSituGlu,
+    MathOperation.SfpuLogaddexp,
+    MathOperation.SfpuLogaddexp2,
+    MathOperation.SfpuElwRightShift,
+    MathOperation.SfpuElwLeftShift,
+    MathOperation.SfpuElwLogicalRightShift,
+}
+
+
+TERNARY_SFPU_OPS = {
+    MathOperation.SfpuWhere,
 }
 
 
@@ -328,8 +491,23 @@ class QuasarBinarySfpuMathSchema(BinarySfpuMathSchema):
     _sfpu_ops: ClassVar = BINARY_SFPU_OPS
 
 
+class QuasarTernarySfpuMathSchema(TernarySfpuMathSchema):
+    _sfpu_cls: ClassVar = TernarySfpu
+    _sfpu_ops: ClassVar = TERNARY_SFPU_OPS
+
+
+class QuasarTopKSfpuMathSchema(TopKSfpuMathSchema):
+    _sfpu_cls: ClassVar = TopKSfpu
+
+
 MathSchema = Annotated[
-    Union[FpuMathSchema, QuasarUnarySfpuMathSchema, QuasarBinarySfpuMathSchema],
+    Union[
+        FpuMathSchema,
+        QuasarUnarySfpuMathSchema,
+        QuasarBinarySfpuMathSchema,
+        QuasarTernarySfpuMathSchema,
+        QuasarTopKSfpuMathSchema,
+    ],
     Field(discriminator="type"),
 ]
 
@@ -339,7 +517,11 @@ class QuasarPackSchema(PackSchema):
 
 
 PackEntrySchema = Union[
-    QuasarUnarySfpuMathSchema, QuasarBinarySfpuMathSchema, QuasarPackSchema
+    QuasarUnarySfpuMathSchema,
+    QuasarBinarySfpuMathSchema,
+    QuasarTernarySfpuMathSchema,
+    QuasarTopKSfpuMathSchema,
+    QuasarPackSchema,
 ]
 
 
@@ -348,3 +530,12 @@ class OperationSchema(OperationSchemaBase):
 
     math: List[MathSchema] = Field(..., min_length=1)
     pack: List[PackEntrySchema] = Field(..., min_length=1)
+
+    def to_l1_operation(self, operands, dest_acc=False):
+        operation = super().to_l1_operation(operands, dest_acc)
+        config = GlobalConfig(
+            architecture=ChipArchitecture.QUASAR,
+            dest_acc=DestAccumulation(dest_acc),
+        )
+        _validate_math_fidelities(operation, config)
+        return operation

@@ -10,6 +10,7 @@
 #include <tt-metalium/host_api.hpp>
 #include <tt-metalium/experimental/metal2_host_api/program_spec.hpp>
 #include <tt-metalium/experimental/metal2_host_api/program_run_args.hpp>
+#include <tt_stl/fmt.hpp>
 #include "ttnn/operations/math.hpp"
 #include "ttnn/operations/core/compute_kernel/compute_kernel_config.hpp"
 #include "ttnn/operations/core/data_movement_kernel/datamovement_kernel_config.hpp"
@@ -90,7 +91,7 @@ ttnn::device_operation::ProgramArtifacts LayerNormPostAllGatherWelfordProgramFac
 
     uint32_t num_tile_rows = NC * Ht;
 
-    log_debug(tt::LogOp, "device_id: {}", gamma.value().device()->get_device_ids());
+    log_debug(tt::LogOp, "device_id: {}", a.device()->get_device_ids());
     log_debug(tt::LogOp, "is_rmsnorm: {}", is_rmsnorm);
     log_debug(tt::LogOp, "W: {}", W);
     log_debug(tt::LogOp, "H: {}", H);

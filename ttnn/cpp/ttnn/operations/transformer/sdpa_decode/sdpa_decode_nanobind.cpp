@@ -28,6 +28,11 @@ void bind_sdpa_decode(nb::module_& mod) {
         Accepts a `SDPAMultiCoreProgramConfig` which specifies the grid size and chunk tiles in the K/V/Mask sequence lengths (Q chunk tiles is not used). The op parallelizes over `b` and K/V/Mask's `s` dimension.
 
 
+        Shape identifiers used below: `b` is the batch size, `nh` the number of Q heads on this device
+        (`pnh` the same count padded up to the tile height), `nkv` the number of KV heads, `s` the KV
+        sequence length and `dh` the head dimension.
+
+
         Args:
             input_tensor_q (ttnn.Tensor): the input tensor [1 x b x nh x dh]
             input_tensor_k (ttnn.Tensor): the input tensor [b x nkv x   s x dh]
@@ -36,7 +41,11 @@ void bind_sdpa_decode(nb::module_& mod) {
 
         Keyword args:
             is_causal (bool): whether the attention is is_causal. Defaults to `True`.
-            attn_mask (ttnn.Tensor, optional): the input tensor [b x 1 x s x s]. Defaults to `None`.
+            attn_mask (ttnn.Tensor, optional): the input tensor [1 x b x nh x s]; `nh` must match Q's.
+                `s` must be a multiple of `k_chunk_size`: unpaged decode defaults it to
+                `min(512, largest power-of-two divisor of s)`. Paged decode uses 32 when `program_config`
+                is omitted; a custom config for paged non-causal attention must set a positive
+                `k_chunk_size`. Only valid with `is_causal=False`. Defaults to `None`.
             cur_pos (List of int, optional): list of integers of length b. Defaults to `None`.
             memory_config (ttnn.MemoryConfig, optional): Memory configuration for the operation. Defaults to `None`.
             cur_pos_tensor (ttnn.Tensor, optional): [b] tensor of integers of length b. Defaults to `None`.
@@ -104,6 +113,15 @@ void bind_sdpa_decode(nb::module_& mod) {
         // onto physical block 0 and silently corrupt the cache. Must be a multiple of
         // (effective) block_size and >= sliding_window_size. Paged-mode only.
         nb::arg("cache_position_modulo") = nb::none(),
+        // spec_multi_pos_tiles = Tg (0 = off) folds Tg speculative-decode candidates that
+        // share one KV cache onto a single batch row, so that row's KV is read from DRAM
+        // once instead of Tg times. Q is [1, B, Tg*32, DH] (batch b's row-tile j is
+        // candidate b*Tg + j, its valid q-heads in rows j*32..), page_table has B rows, and
+        // cur_pos_tensor holds B*Tg positions, ascending within each group of Tg; candidate
+        // b*Tg+j attends to [0, cur_pos[b*Tg+j]] inclusive. Output is [1, B, Tg*32, DH] —
+        // byte-identical to the legacy B*Tg-row output [1, B*Tg, 32, DH]. Requires causal +
+        // paged + num_kv_heads==1, unsharded bf16 TILE Q, no sliding window, no MLA.
+        nb::arg("spec_multi_pos_tiles") = 0u,
         // Fused KV append: the current token's K/V heads ([1, B, n_kv_heads, D] bf16, height sharded one
         // user per core, as paged_update_cache takes them). The kernel inserts them into the cache tile at
         // cur_pos before attending and writes the tile back, replacing the separate cache-update op.

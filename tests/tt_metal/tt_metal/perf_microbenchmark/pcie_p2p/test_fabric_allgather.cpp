@@ -222,7 +222,8 @@ int main(int argc, char** argv) {
                 auto links = tt::tt_fabric::get_forwarding_link_indices(nodes[i], nodes[p]);
                 TT_FATAL(!links.empty(), "no fabric link from chip {} to chip {}", opt.chips[i], opt.chips[p]);
                 const uint32_t link = links[0];
-                const CoreCoord eth = tt::tt_fabric::get_forwarding_eth_core(nodes[i], nodes[p], link);
+                const CoreCoord eth =
+                    tt::tt_fabric::get_forwarding_eth_core(*meshes.at(opt.chips[i]), nodes[i], nodes[p], link);
                 uint32_t ci = 0;
                 for (; ci < conn_eth.size(); ++ci) {
                     if (conn_eth[ci] == eth) {

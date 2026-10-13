@@ -53,7 +53,7 @@ struct AllGatherFusedOpSignaler {
         tt::tt_metal::Program& program,
         const tt::tt_metal::IDevice* device,
 
-        const CoreRangeSet& all_gather_workers,
+        const tt::tt_metal::CoreRangeSet& all_gather_workers,
         std::vector<tt::tt_metal::CoreCoord>& all_gather_worker_cores);
 
     void push_all_gather_fused_op_rt_args(
@@ -88,7 +88,7 @@ struct StridedAllGatherFusedOpSignaler {
         tt::tt_metal::Program& program,
         const tt::tt_metal::IDevice* device,
 
-        const CoreRangeSet& all_gather_workers,
+        const tt::tt_metal::CoreRangeSet& all_gather_workers,
         std::vector<tt::tt_metal::CoreCoord>& all_gather_worker_cores);
 
     void push_all_gather_fused_op_rt_args(
@@ -112,7 +112,7 @@ struct ReduceScatterFusedOpSignaler {
     void init_reduce_scatter(
         tt::tt_metal::Program& program,
         const tt::tt_metal::IDevice* device,
-        const std::variant<CoreRange, CoreRangeSet>& core_range_to_signal);
+        const std::variant<tt::tt_metal::CoreRange, tt::tt_metal::CoreRangeSet>& core_range_to_signal);
 
     void init_fused_op();
 
@@ -156,7 +156,7 @@ struct MatmulFusedOpSignaler {
     uint32_t matmul_privilaged_semaphore = 0;
     uint32_t rs_semaphore = 0;
     uint32_t matmul_semaphore_target = 0;
-    CoreRangeSet rs_cores;
+    tt::tt_metal::CoreRangeSet rs_cores;
     tt::tt_metal::CoreCoord privilaged_core;
     tt::tt_metal::CoreCoord privilaged_core_physical;
 
@@ -196,16 +196,17 @@ struct MatmulFusedOpSignaler {
         const std::vector<uint32_t>& fused_op_receiver_signal_semaphores,
         FusedOpSignalerMode fused_op_signaler_mode);
 
-    void init_llama_rs_cores_rs(const CoreRangeSet& rs_cores, tt::tt_metal::Program& program);
+    void init_llama_rs_cores_rs(const tt::tt_metal::CoreRangeSet& rs_cores, tt::tt_metal::Program& program);
     void init_llama_rs_cores_mm(
-        const CoreRangeSet& matmul_cores,
+        const tt::tt_metal::CoreRangeSet& matmul_cores,
         tt::tt_metal::Program& program,
         const tt::tt_metal::IDevice* device,
         int privilaged_index = 0);
     // Get the rt values
     // Write the semaphore ID
     void push_llama_rs_rt_args_for_rs(std::vector<uint32_t>& out_rt_args) const;
-    // Is_privilaged, if yes: target_value, num_cores_to_signal, array_of_cores, if no: core_xy of signaler
+    // Privileged core xy + its semaphore id, then is_privileged. If privileged: target value, rs semaphore id,
+    // number of RS core rectangles, then per rectangle: noc start xy, noc end xy, num cores.
     // First core to run this is the privileged core
     void push_llama_rs_rt_args_for_mm(
         std::vector<uint32_t>& out_rt_args,
@@ -216,13 +217,13 @@ struct MatmulFusedOpSignaler {
     void init_fused_op(
         tt::tt_metal::Program& program,
         const tt::tt_metal::IDevice* device,
-        const CoreRange& matmul_workers,
+        const tt::tt_metal::CoreRange& matmul_workers,
         const std::vector<tt::tt_metal::CoreCoord>& matmul_worker_cores);
 
     void init_fused_op(
         tt::tt_metal::Program& program,
         const tt::tt_metal::IDevice* device,
-        const std::variant<CoreRange, CoreRangeSet>& core_range_to_signal,
+        const std::variant<tt::tt_metal::CoreRange, tt::tt_metal::CoreRangeSet>& core_range_to_signal,
         FusedOpSignalerMode fused_op_signaler_mode = FusedOpSignalerMode::MULTI);
 
     bool is_all_gather() const;
@@ -271,7 +272,7 @@ struct MinimalMatmulFusedOpSignaler {
     void init_fused_op(
         tt::tt_metal::Program& program,
         const tt::tt_metal::IDevice* device,
-        const std::variant<CoreRange, CoreRangeSet>& core_range_to_signal,
+        const std::variant<tt::tt_metal::CoreRange, tt::tt_metal::CoreRangeSet>& core_range_to_signal,
         FusedOpSignalerMode fused_op_signaler_mode = FusedOpSignalerMode::MULTI);
 
     void push_matmul_fused_op_rt_args(
@@ -306,7 +307,7 @@ struct StridedReduceScatterFusedOpSignaler {
     void init_strided_reduce_scatter(
         tt::tt_metal::Program& program,
         const tt::tt_metal::IDevice* device,
-        const std::variant<CoreRange, CoreRangeSet>& core_range_to_signal);
+        const std::variant<tt::tt_metal::CoreRange, tt::tt_metal::CoreRangeSet>& core_range_to_signal);
 
     void push_strided_reduce_scatter_fused_op_rt_args(std::vector<uint32_t>& out_rt_args) const;
 };

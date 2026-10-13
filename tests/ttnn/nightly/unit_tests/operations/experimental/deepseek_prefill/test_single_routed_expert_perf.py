@@ -54,15 +54,15 @@ _EXPECTED_NS: dict[tuple[str, int], int] = {
     ("kimi_k2_7", 2048): 579_644,
     ("kimi_k2_7", 4096): 1_151_677,
     ("kimi_k2_7", 5120): 1_435_744,
-    ("glm_51", 0): 3_093,
-    ("glm_51", 128): 105_461,
-    ("glm_51", 256): 108_710,
-    ("glm_51", 512): 143_111,
-    ("glm_51", 768): 197_479,
-    ("glm_51", 1024): 258_010,
-    ("glm_51", 2048): 507_291,
-    ("glm_51", 4096): 1_010_650,
-    ("glm_51", 5120): 1_257_824,
+    ("glm_53", 0): 3_093,
+    ("glm_53", 128): 105_461,
+    ("glm_53", 256): 108_710,
+    ("glm_53", 512): 143_111,
+    ("glm_53", 768): 197_479,
+    ("glm_53", 1024): 258_010,
+    ("glm_53", 2048): 507_291,
+    ("glm_53", 4096): 1_010_650,
+    ("glm_53", 5120): 1_257_824,
 }
 
 # Same measurement and key as _EXPECTED_NS, with the weights DRAM ND-sharded: a core fetches its
@@ -83,15 +83,15 @@ _NDSHARD_EXPECTED_NS: dict[tuple[str, int], int] = {
     ("kimi_k2_7", 2048): 579_130,
     ("kimi_k2_7", 4096): 1_148_860,
     ("kimi_k2_7", 5120): 1_437_110,
-    ("glm_51", 0): 3_076,
-    ("glm_51", 128): 91_694,
-    ("glm_51", 256): 98_510,
-    ("glm_51", 512): 138_469,
-    ("glm_51", 768): 197_873,
-    ("glm_51", 1024): 258_023,
-    ("glm_51", 2048): 506_622,
-    ("glm_51", 4096): 1_003_975,
-    ("glm_51", 5120): 1_257_886,
+    ("glm_53", 0): 3_076,
+    ("glm_53", 128): 91_694,
+    ("glm_53", 256): 98_510,
+    ("glm_53", 512): 138_469,
+    ("glm_53", 768): 197_873,
+    ("glm_53", 1024): 258_023,
+    ("glm_53", 2048): 506_622,
+    ("glm_53", 4096): 1_003_975,
+    ("glm_53", 5120): 1_257_886,
 }
 
 
@@ -128,7 +128,7 @@ _K3_SITU_NDSHARD_EXPECTED_NS: dict[int, int] = {
 }
 
 # K3's DRAM weight read is 18.58 MB against a ~117 us floor, so its knee sits a token count later
-# than kimi_k2_7's or glm_51's: 512 is the first case where compute starts to cover the read, and it
+# than kimi_k2_7's or glm_53's: 512 is the first case where compute starts to cover the read, and it
 # keeps _LOW_ISL_MARGIN because the long right tail that margin exists for is a run-to-run effect,
 # not one three consecutive sweeps expose. Everything past the knee holds inside the usual 3%.
 _K3_KNEE_TOKENS = 512

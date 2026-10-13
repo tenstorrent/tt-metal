@@ -7,6 +7,7 @@
 #include <enchantum/enchantum.hpp>
 #include <tt-metalium/constants.hpp>
 #include <tt-metalium/hal.hpp>
+#include <tt-metalium/math.hpp>
 
 #include "moe_group_program_factory.hpp"
 #include "ttnn/device_operation.hpp"

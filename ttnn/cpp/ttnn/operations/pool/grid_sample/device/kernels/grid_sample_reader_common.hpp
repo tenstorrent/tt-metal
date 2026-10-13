@@ -27,10 +27,19 @@ ALWI bool is_coordinate_valid(int32_t coord, uint32_t max_size) {
     return (coord >= 0) && (coord < static_cast<int32_t>(max_size));
 }
 
+template <uint32_t scalar_cb_index>
 ALWI void fill_four_val(uint32_t begin_addr, uint16_t val, uint16_t val1, uint16_t val2, uint16_t val3) {
     volatile tt_l1_ptr uint32_t* ptr = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(begin_addr);
-    ptr[0] = (val | (val1 << 16));
-    ptr[1] = (val2 | (val3 << 16));
+    if constexpr (get_dataformat(scalar_cb_index) == DataFormat::Float32) {
+        // BFLOAT16 bits are the high 16 bits of the equivalent FLOAT32 value.
+        ptr[0] = static_cast<uint32_t>(val) << 16;
+        ptr[1] = static_cast<uint32_t>(val1) << 16;
+        ptr[2] = static_cast<uint32_t>(val2) << 16;
+        ptr[3] = static_cast<uint32_t>(val3) << 16;
+    } else {
+        ptr[0] = (val | (val1 << 16));
+        ptr[1] = (val2 | (val3 << 16));
+    }
 }
 
 // Grid coordinate reading functions
@@ -369,7 +378,7 @@ ALWI void process_grid_point(
     // channel chunk, so we push the scalar CB only once.
     scalar_dfb.reserve_back(1);
     const uint32_t l1_write_scalar_addr = scalar_dfb.get_write_ptr();
-    fill_four_val(l1_write_scalar_addr, weight_nw_bf, weight_ne_bf, weight_sw_bf, weight_se_bf);
+    fill_four_val<scalar_cb_index>(l1_write_scalar_addr, weight_nw_bf, weight_ne_bf, weight_sw_bf, weight_se_bf);
     scalar_dfb.push_back(1);
 
     // Iterate over channel chunks. For the common case in_nblocks_c == 1 the loop runs once and the

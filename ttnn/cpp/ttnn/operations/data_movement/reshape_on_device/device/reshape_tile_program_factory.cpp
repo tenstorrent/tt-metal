@@ -60,7 +60,7 @@ ProgramDescriptor ReshapeTileProgramFactory::create_descriptor(
     bool src0_is_dram = src0_buffer->buffer_type() == BufferType::DRAM;
     uint32_t alignment = src0_is_dram ? hal::get_dram_alignment() : hal::get_l1_alignment();
 
-    std::vector<uint32_t> reader_compile_time_args = {alignment};
+    std::vector<uint32_t> reader_compile_time_args = {alignment, input_tensor.element_size()};
     TensorAccessorArgs(*src0_buffer).append_to(reader_compile_time_args);
 
     std::vector<uint32_t> writer_compile_time_args = {static_cast<uint32_t>(src0_cb_index)};

@@ -30,8 +30,14 @@
 #include "ttnn/operations/ccl/kernel_common/worker_sync_utils.hpp"
 #endif
 #include "ttnn/operations/kernel_helper_functions/pad_tile.hpp"
+#ifndef ARCH_QUASAR
+// ckernel.h / ckernel_defs.h are compute(TRISC)-only: they pull in ckernel_addrmod.h -> ckernel_trisc_id.h,
+// which #errors without COMPILE_FOR_TRISC on a DM build. They are needed here only for the BRISC->compute
+// batch-valid mailbox handoff (ckernel::mailbox_write below), which has no Quasar equivalent. Guard both
+// out on Quasar (matches the DM-side handoff guard for the other matmul readers).
 #include "ckernel.h"
 #include "ckernel_defs.h"
+#endif
 #include "api/dataflow/noc.h"
 #include "api/dataflow/dataflow_buffer.h"
 #include "api/dataflow/noc_semaphore.h"
@@ -241,9 +247,13 @@ void kernel_main() {
 #endif  // SKIP_MCAST
 
                     // We need to pass the value to compute cores regardless of the value of is_batch_valid
+#ifndef ARCH_QUASAR
+                    // No BRISC->compute mailbox on Quasar; the compute kernel treats every batch as valid
+                    // there (see bmm_large_block_zm_fused_bias_activation_metal2.cpp ARCH_QUASAR guard).
                     ckernel::mailbox_write(ckernel::ThreadId::UnpackThreadId, static_cast<uint32_t>(is_batch_valid));
                     ckernel::mailbox_write(ckernel::ThreadId::MathThreadId, static_cast<uint32_t>(is_batch_valid));
                     ckernel::mailbox_write(ckernel::ThreadId::PackThreadId, static_cast<uint32_t>(is_batch_valid));
+#endif
                 }
 
                 if (!is_batch_valid) {

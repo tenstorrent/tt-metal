@@ -4,6 +4,7 @@
 
 from __future__ import annotations
 
+import math
 from dataclasses import dataclass, field
 from typing import Literal
 
@@ -52,6 +53,9 @@ class KDAProgramConfig:
     tp_ccl_topology: ttnn.Topology = ttnn.Topology.Linear
     gated_rms_output_dtype: ttnn.DataType = ttnn.float32
     output_projection_math_fidelity: ttnn.MathFidelity = ttnn.MathFidelity.HiFi4
+    # Use the projection matmul schedules tuned at _TUNED_PROJECTION_ROWS; False keeps the
+    # auto-selected ttnn.linear configs.
+    tuned_projection_matmuls: bool = False
 
     def __post_init__(self) -> None:
         if self.qkv_channel_chunk_size <= 0 or self.qkv_channel_chunk_size % ttnn.TILE_SIZE:
@@ -61,6 +65,48 @@ class KDAProgramConfig:
             )
         if self.gated_rms_output_dtype not in (ttnn.float32, ttnn.bfloat16):
             raise ValueError("gated_rms_output_dtype must be ttnn.float32 or ttnn.bfloat16")
+
+
+# Rows per device the projection schedules were tuned at: Galaxy SP8xTP4 at T=5120.
+_TUNED_PROJECTION_ROWS = 640
+
+
+def tuned_projection_matmul_configs(
+    grid: ttnn.CoreCoord, rows: int, output_k: int, output_n: int
+) -> tuple[ttnn.MinimalMatmulConfig | None, ttnn.MatmulMultiCoreReuseMultiCastProgramConfig | None]:
+    """Return the tuned input and output projection schedules laid out on ``grid``.
+
+    Tuned on the 12x10 Blackhole worker grid at 640 rows per device with the production numerics
+    (bf16, FP32 destination accumulation); subblocks stay within the 4-tile FP32 destination limit.
+    Returns (None, None) when the blocking does not fit, keeping the auto-selected ttnn.linear configs.
+    """
+    row_tiles = rows // ttnn.TILE_SIZE
+    per_core_m = math.ceil(row_tiles / grid.y)
+    per_core_n = math.ceil(output_n // ttnn.TILE_SIZE / grid.x)
+    if per_core_m % 2 or (output_k // ttnn.TILE_SIZE) % 8:
+        return None, None
+    input_projection = ttnn.MinimalMatmulConfig(
+        M_block_size=2,
+        K_block_size=8,
+        N_block_size=3,
+        subblock_h=1,
+        subblock_w=3,
+        compute_with_storage_grid_size=grid,
+    )
+    output_projection = ttnn.MatmulMultiCoreReuseMultiCastProgramConfig(
+        compute_with_storage_grid_size=grid,
+        in0_block_w=8,
+        out_subblock_h=2,
+        out_subblock_w=1,
+        out_block_h=per_core_m,
+        out_block_w=per_core_n,
+        per_core_M=per_core_m,
+        per_core_N=per_core_n,
+        transpose_mcast=False,
+        fused_activation=None,
+        fuse_batch=True,
+    )
+    return input_projection, output_projection
 
 
 def kimi_k3_program_config(*, active_seq_len_local: int, tp_ccl_topology: ttnn.Topology) -> KDAProgramConfig:
@@ -81,4 +127,6 @@ def kimi_k3_program_config(*, active_seq_len_local: int, tp_ccl_topology: ttnn.T
         tp_ccl_topology=tp_ccl_topology,
         gated_rms_output_dtype=ttnn.bfloat16,
         output_projection_math_fidelity=ttnn.MathFidelity.HiFi2,
+        # Galaxy SP8xTP4 at T=5120; other geometries keep the auto-selected projection configs.
+        tuned_projection_matmuls=active_seq_len_local == _TUNED_PROJECTION_ROWS,
     )

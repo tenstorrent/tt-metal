@@ -77,6 +77,12 @@ class DataFormat(Enum):
     MxFp4_2x_B = DataFormatInfo(
         "MxFp4_2x_B", Fraction(1, 2)
     )  # QSR specific - 2x-packed FP4 in Src Reg, 8-bit exp (FP16_b family) - 10 bits per element in one double-datumed element in src reg.
+    Int8_2x = DataFormatInfo(
+        "Int8_2x", 1
+    )  # 4row_arch specific - 2x-packed INT8 in Src Reg (two sign+magnitude int8 per datum). Src-reg-only.
+    UInt8_2x = DataFormatInfo(
+        "UInt8_2x", 1
+    )  # 4row_arch specific - 2x-packed UINT8 in Src Reg. Src-reg-only.
     MxInt8 = DataFormatInfo("MxInt8", 1)  # QSR specific - S1.6, 8 bits per element
     MxInt4 = DataFormatInfo(
         "MxInt4", Fraction(1, 2)
@@ -496,14 +502,23 @@ class FormatConfig:
             self.unpack_S_dst = DataFormat.Float16
         elif self.unpack_A_dst == DataFormat.MxFp4_2x_B:
             self.unpack_S_dst = DataFormat.Float16_b
+        elif self.unpack_A_dst == DataFormat.Int8_2x:
+            self.unpack_S_dst = DataFormat.Int8
+        elif self.unpack_A_dst == DataFormat.UInt8_2x:
+            self.unpack_S_dst = DataFormat.UInt8
         else:
             self.unpack_S_dst = self.unpack_A_dst
         self.pack_S_src = pack_S_src if pack_S_src is not None else self.pack_src
         self.pack_S_dst = pack_S_dst if pack_S_dst is not None else self.pack_dst
 
-        # MxFp4_2x_A/B are 2x-packed Src Register formats. They have no L1, math, or pack
-        # representation — only unpack_A_dst / unpack_B_dst (the in-register format) may use them.
-        srcab_only = {DataFormat.MxFp4_2x_A, DataFormat.MxFp4_2x_B}
+        # MxFp4_2x_A/B and Int8_2x/UInt8_2x are 2x-packed Src Register formats. They have no L1,
+        # math, or pack representation — only unpack_A_dst / unpack_B_dst (the in-register format) may use them.
+        srcab_only = {
+            DataFormat.MxFp4_2x_A,
+            DataFormat.MxFp4_2x_B,
+            DataFormat.Int8_2x,
+            DataFormat.UInt8_2x,
+        }
         for field_name, value in (
             ("unpack_A_src", self.unpack_A_src),
             ("unpack_B_src", self.unpack_B_src),
@@ -655,6 +670,8 @@ QUASAR_DATA_FORMAT_ENUM_VALUES = {
     DataFormat.MxInt2: 11,
     DataFormat.MxFp4_2x_A: 27,
     DataFormat.MxFp4_2x_B: 24,
+    DataFormat.Int8_2x: 26,
+    DataFormat.UInt8_2x: 28,
     DataFormat.Int32: 8,
     DataFormat.Int8: 14,
     DataFormat.UInt8: 17,

@@ -4,13 +4,13 @@
 
 #pragma once
 
+#include <initializer_list>
 #include <tt_stl/span.hpp>
 #include <cstddef>
 #include <cstdint>
 #include <functional>
 #include <map>
 #include <memory>
-#include <mutex>
 #include <optional>
 #include <ostream>
 #include <set>
@@ -18,7 +18,6 @@
 #include <tuple>
 #include <unordered_map>
 #include <unordered_set>
-#include <utility>
 #include <vector>
 
 #include <hostdevcommon/common_values.hpp>
@@ -30,7 +29,6 @@
 #include <tt-metalium/mesh_coord.hpp>
 #include <tt-metalium/mesh_device_view.hpp>
 #include <tt-metalium/mesh_trace_id.hpp>
-#include <tt_stl/small_vector.hpp>
 #include <tt-metalium/sub_device_types.hpp>
 // UMD: re-exports tt::ARCH (used in MeshDevice::arch return type).
 #include <umd/device/types/arch.hpp>
@@ -119,7 +117,7 @@ public:
     [[deprecated(
         "Returns only the reference device's assignment, which is incorrect on heterogeneously-harvested "
         "meshes. Use get_optimal_dram_bank_to_logical_worker_assignment(noc, coord) instead.")]]
-    std::vector<CoreCoord> get_optimal_dram_bank_to_logical_worker_assignment(NOC noc) override;
+    std::vector<CoreCoord> get_optimal_dram_bank_to_logical_worker_assignment(NOC noc) const override;
 
     // Returns the optimal DRAM-bank-to-logical-worker assignment for the device at `coord` as a map from
     // DRAM bank id to the logical worker core that should service it. The assignment is a device-local
@@ -128,7 +126,7 @@ public:
     // arbitrary local device's assignment (best-effort, exact only on homogeneous meshes); it throws only
     // when the mesh has no local device to fall back to.
     std::unordered_map<uint32_t, CoreCoord> get_optimal_dram_bank_to_logical_worker_assignment(
-        NOC noc, const MeshCoordinate& coord);
+        NOC noc, const MeshCoordinate& coord) const;
 
     CoreCoord virtual_core_from_logical_core(const CoreCoord& logical_coord, const CoreType& core_type) const override;
     CoreCoord worker_core_from_logical_core(const CoreCoord& logical_core) const override;

@@ -429,16 +429,13 @@ def test_distributed_prefix_preserves_noncommuting_order_and_tp_lines(
         recurrence._AffineTransform(to_mesh(a, (0, 1)), to_mesh(b, (0, 1))),
         to_mesh(initial, (None, 1)),
         sequence_parallel_axis=0,
-        selections=ChronologicalSelections(
-            ttnn.experimental.kda.chronological_selections(
-                make_actual_start(mesh_device, order[0] * 32), 0, 32, 1, 32, 32
-            ),
-        ),
         compute_config=ttnn.init_device_compute_kernel_config(
             mesh_device.arch(),
             math_fidelity=ttnn.MathFidelity.HiFi4,
             fp32_dest_acc_en=True,
         ),
+        actual_start=make_actual_start(mesh_device, order[0] * 32),
+        local_rows=32,
     )
     carry = initial[0]
     entries = {}

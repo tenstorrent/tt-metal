@@ -6,8 +6,10 @@
 
 #include <memory>
 #include <optional>
+#include <vector>
 #include <tt-metalium/global_circular_buffer.hpp>
 #include "ttnn/operations/matmul/device/config/matmul_program_config_types.hpp"
+#include "ttnn/prefetcher_pipe.hpp"
 #include "ttnn/tensor/tensor.hpp"
 #include "ttnn/types.hpp"
 
@@ -104,5 +106,16 @@ uint32_t tensor_prefetcher_block_count_for_matmul_1d(
     const ttnn::operations::matmul::MatmulMultiCoreReuseMultiCast1DProgramConfig& program_config,
     const ttnn::Tensor& weight,
     const GlobalCircularBuffer& gcb);
+
+// PrefetcherPipe-delivery counterpart of the overload above, for a matmul reading in1 from
+// DRAM-sender PrefetcherPipes instead of a GCB. It lives beside the GCB overload because the
+// weight <-> matmul contract it enforces is the same one, shared verbatim; only the transport
+// object that names the receivers differs. Receiver-contiguous weights only: pipe delivery cannot
+// slice a bank's shard across receivers, so a legacy K-row-major weight is rejected here rather
+// than silently delivering the wrong pages.
+uint32_t tensor_prefetcher_block_count_for_matmul_1d(
+    const ttnn::operations::matmul::MatmulMultiCoreReuseMultiCast1DProgramConfig& program_config,
+    const ttnn::Tensor& weight,
+    const ttnn::PrefetcherPipeList& prefetcher_pipes);
 
 }  // namespace ttnn::global_circular_buffer

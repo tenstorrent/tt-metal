@@ -149,8 +149,7 @@ jobs:
 
       # Installs <root>/sim/libttsim.so + soc_descriptor.yaml and exports TT_METAL_SIMULATOR.
       # run_ttsim_regression.sh trusts a pre-exported TT_METAL_SIMULATOR and skips its own
-      # download, so the simulator comes from tt_metal/ttsim-version like every other sim
-      # pipeline rather than from tt_metal/tt-llk/tests/ttsim-version.
+      # download; both read the same tt_metal/ttsim-version pin.
       - name: ⬇️  Setup TTSim
         uses: ./.github/actions/setup-ttsim
         timeout-minutes: 5
