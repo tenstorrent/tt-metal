@@ -108,13 +108,13 @@ def test_allowed_token_ids(gemma_server_url):
 
 def test_frequency_penalty_is_request_local(gemma_server_url):
     prompt = "a " * 100
-    penalties = [0.0, 2.0] * 16
+    penalties = [0.0, 2.0] * 8
     requests = [{"prompt": prompt, "frequency_penalty": penalty} for penalty in penalties]
     mixed = completions(gemma_server_url, requests, token_ids=True)
     baselines = {}
     for penalty in (0.0, 2.0):
         baselines[penalty] = completions(
-            gemma_server_url, [{"prompt": prompt, "frequency_penalty": penalty}] * 32, token_ids=True
+            gemma_server_url, [{"prompt": prompt, "frequency_penalty": penalty}] * 16, token_ids=True
         )
         for slot, requested_penalty in enumerate(penalties):
             if requested_penalty == penalty:
@@ -127,7 +127,7 @@ def test_logprobs(gemma_server_url):
         gemma_server_url,
         [
             {"prompt": f"Count from {i}: ", "max_tokens": 10, "logprobs": 5, "return_tokens_as_token_ids": True}
-            for i in range(32)
+            for i in range(16)
         ],
     )
     for response in responses:

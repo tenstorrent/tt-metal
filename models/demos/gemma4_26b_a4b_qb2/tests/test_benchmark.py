@@ -26,6 +26,16 @@ def run_stream(events):
     return asyncio.run(run())
 
 
+def run_nonstream(payload):
+    async def run():
+        response = httpx.Response(200, json=payload)
+        transport = httpx.MockTransport(lambda request: response)
+        async with httpx.AsyncClient(base_url="http://test", transport=transport) as client:
+            return await benchmark.complete_nonstreaming(client, {}, chat=True)
+
+    return asyncio.run(run())
+
+
 def test_reasoning_and_final_answer_share_timing_but_keep_distinct_text(monkeypatch):
     ticks = iter([0.0, 1.0, 2.0, 3.0])
     monkeypatch.setattr(benchmark, "time", SimpleNamespace(perf_counter=lambda: next(ticks)))
@@ -68,6 +78,23 @@ def test_stream_error_is_not_scored_as_a_model_answer(expect_error):
         run_stream([{"error": "engine stopped"}])
 
 
+def test_nonstreaming_keeps_reasoning_separate_from_scored_text():
+    row = run_nonstream(
+        {
+            "choices": [
+                {
+                    "message": {"content": "Answer: (B)", "reasoning_content": "Private reasoning"},
+                    "finish_reason": "stop",
+                }
+            ],
+            "usage": {"prompt_tokens": 100, "completion_tokens": 4},
+        }
+    )
+    assert row["text"] == "Answer: (B)"
+    assert row["reasoning"] == "Private reasoning"
+    assert row["ttft_ms"] is row["decode_tokens_per_s"] is None
+
+
 def test_single_user_performance_never_submits_a_batch(monkeypatch, tmp_path):
     """Capacity-one results contain four measured requests and two separate warmups."""
     from transformers import AutoTokenizer
@@ -108,7 +135,7 @@ def gpqa_args(output_dir, *, prepare_only=False):
     return SimpleNamespace(
         output_dir=output_dir,
         mode="gpqa",
-        server_capacity=32,
+        server_capacity=16,
         performance_input_lengths=(128,),
         prepare_only=prepare_only,
         base_url="http://test",
@@ -128,11 +155,12 @@ def test_gpqa_artifacts_and_logs_contain_only_metadata(monkeypatch, tmp_path, ca
         scored.append(doc)
         return {"exact_match": 1}
 
-    async def complete(client, payload, *, chat):
+    async def complete_nonstreaming(client, payload, *, chat):
         nonlocal active, max_active
         assert chat and payload["messages"][0]["content"] == prompt
         assert payload["seed"] == benchmark.GPQA_SEED
-        assert payload["repetition_detection"] == benchmark.GPQA_REPETITION_DETECTION
+        assert payload["chat_template_kwargs"] == {"enable_thinking": False}
+        assert "repetition_detection" not in payload
         active += 1
         max_active = max(max_active, active)
         await asyncio.sleep(0)
@@ -149,7 +177,7 @@ def test_gpqa_artifacts_and_logs_contain_only_metadata(monkeypatch, tmp_path, ca
         }
 
     monkeypatch.setattr(benchmark, "load_gpqa", lambda: (SimpleNamespace(process_results=score), cases))
-    monkeypatch.setattr(benchmark, "complete", complete)
+    monkeypatch.setattr(benchmark, "complete_nonstreaming", complete_nonstreaming)
     assert benchmark.run(gpqa_args(tmp_path, prepare_only=True)) == 0
     manifest = [json.loads(line) for line in (tmp_path / "inputs.jsonl").read_text().splitlines()]
     assert manifest == [
@@ -167,7 +195,7 @@ def test_gpqa_artifacts_and_logs_contain_only_metadata(monkeypatch, tmp_path, ca
     assert summary["gpqa_result"]["concurrency"] == 1
     assert summary["gpqa_result"]["mean_decode_tokens_per_s"] == 40
     assert summary["gpqa"]["seed"] == benchmark.GPQA_SEED
-    assert summary["gpqa"]["repetition_detection"] == benchmark.GPQA_REPETITION_DETECTION
+    assert summary["gpqa"]["thinking"] is False
     capture = capsys.readouterr()
     public_output = capture.out + capture.err + "".join(p.read_text() for p in tmp_path.iterdir())
     assert all(secret not in public_output for secret in (prompt, answer, reasoning))
@@ -257,17 +285,17 @@ def test_report_preserves_run_start_and_every_shape(monkeypatch, tmp_path):
     )
     report.report(summary)
     summary.update(
-        server_capacity=32,
+        server_capacity=16,
         gpqa_result={**row, "concurrency": 1, "requests": 10, "accuracy": 0.9},
-        performance_results=[row, {**row, "concurrency": 32, "requests": 64}],
+        performance_results=[row, {**row, "concurrency": 16, "requests": 32}],
     )
     report.report(summary)
     files = list((tmp_path / "generated/benchmark_data").glob("partial_run_*.pkl"))
     assert len(files) == 4, "Shapes sharing a run start must not overwrite each other"
     records = [PartialBenchmarkRun.model_validate_json(path.read_text()) for path in files]
-    assert {r.batch_size for r in records} == {1, 32}
+    assert {r.batch_size for r in records} == {1, 16}
     for record in records:
         assert record.run_start_ts.isoformat() == summary["run_start"]
         assert record.run_end_ts.isoformat() == row["measurement_end"]
         assert all(m.step_start_ts.isoformat() == row["measurement_start"] for m in record.measurements)
-        assert record.config_params["server_capacity"] in (1, 32)
+        assert record.config_params["server_capacity"] in (1, 16)

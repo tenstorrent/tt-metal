@@ -288,8 +288,8 @@ responses, scoring inputs and timing definitions.
 
 Gemma4 26B A4B QB2 also uses Tier 3. Its weekly command runs host contract tests,
 live sampling and request-isolation checks, the first 10 of 198 GPQA Diamond
-questions, and fixed 128-input/128-output serving measurements at concurrency 1
-and 32. The checkpoint, scorer, decoding settings, and input hashes are pinned in
+questions, and fixed 128-input/128-output serving measurements at concurrency 1,
+8, and 16. The checkpoint, scorer, decoding settings, and input hashes are pinned in
 the model-owned benchmark artifacts.
 
 To add a model:

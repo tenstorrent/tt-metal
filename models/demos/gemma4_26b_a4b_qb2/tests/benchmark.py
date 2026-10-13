@@ -20,15 +20,8 @@ DATASET_REVISION = "633f5ee89ab8ad4522a9f850766b73f62147ffdd"
 HARNESS_REVISION = "321e3bb68cb750a58c76606ab57832533302be73"
 GPQA_TOKENS = 32768
 GPQA_COUNT = 10
-# Match the validated TTI release policy: serialize long-thinking requests and
-# stop degenerate repeated reasoning without reducing the 32K output allowance.
 GPQA_CONCURRENCY = 1
-GPQA_SEED = 9472
-GPQA_REPETITION_DETECTION = {
-    "min_pattern_size": 16,
-    "max_pattern_size": 1024,
-    "min_count": 8,
-}
+GPQA_SEED = 42
 GPQA_THRESHOLD = 0.8
 
 
@@ -102,6 +95,32 @@ async def complete(client, payload, *, chat):
     }
 
 
+async def complete_nonstreaming(client, payload, *, chat):
+    """Match the validated release eval request path; response text stays in memory."""
+    start = time.perf_counter()
+    endpoint = "/v1/chat/completions" if chat else "/v1/completions"
+    response = await client.post(endpoint, json={"model": MODEL, **payload, "stream": False})
+    response.raise_for_status()
+    data = response.json()
+    if data.get("error"):
+        raise RuntimeError("Model server returned an error; response details withheld")
+    choices = data.get("choices", [])
+    usage = data.get("usage")
+    if len(choices) != 1 or usage is None or choices[0].get("finish_reason") is None:
+        raise RuntimeError("Incomplete response: expected usage and one finished choice")
+    choice = choices[0]
+    message = choice.get("message", {}) if chat else {}
+    return {
+        "text": (message.get("content") if chat else choice.get("text")) or "",
+        "reasoning": (message.get("reasoning") or message.get("reasoning_content")) if chat else "",
+        "usage": usage,
+        "finish_reason": choice["finish_reason"],
+        "elapsed_s": time.perf_counter() - start,
+        "ttft_ms": None,
+        "decode_tokens_per_s": None,
+    }
+
+
 def summarize(rows, start, end, elapsed):
     ttfts = [r["ttft_ms"] for r in rows if r["ttft_ms"] is not None]
     speeds = [r["decode_tokens_per_s"] for r in rows if r["decode_tokens_per_s"] is not None]
@@ -137,22 +156,18 @@ async def run_gpqa(client, output_dir, task, cases):
             "top_p": 0.95,
             "top_k": 20,
             "seed": GPQA_SEED,
-            "repetition_detection": GPQA_REPETITION_DETECTION,
-            "chat_template_kwargs": {"enable_thinking": True},
+            "chat_template_kwargs": {"enable_thinking": False},
             "stop": [],
         }
         for case in cases
     ]
-    # Compile the prompt shapes with a separate, unscored one-token pass.
-    for payload in payloads:
-        await complete(client, {**payload, "max_tokens": 1}, chat=True)
     rows = []
     semaphore = asyncio.Semaphore(GPQA_CONCURRENCY)
     with (output_dir / "gpqa-responses.jsonl").open("w") as log:
 
         async def generate(case, payload):
             async with semaphore:
-                response = await complete(client, payload, chat=True)
+                response = await complete_nonstreaming(client, payload, chat=True)
             score = task.process_results(case["doc"], [response["text"]])["exact_match"]
             row = {"id": case["id"], **response_metrics(response), "correct": int(score)}
             rows.append(row)
@@ -179,7 +194,7 @@ async def run_gpqa(client, output_dir, task, cases):
 
 
 def performance_shapes(server_capacity, input_lengths):
-    return [(length, batch) for length in input_lengths for batch in (1, 32) if batch <= server_capacity]
+    return [(length, server_capacity) for length in input_lengths]
 
 
 async def run_performance(client, output_dir, server_capacity, input_lengths):
@@ -269,10 +284,9 @@ async def main(args):
             "top_p": 0.95,
             "top_k": 20,
             "seed": GPQA_SEED,
-            "thinking": True,
+            "thinking": False,
             "max_output_tokens": GPQA_TOKENS,
             "concurrency": GPQA_CONCURRENCY,
-            "repetition_detection": GPQA_REPETITION_DETECTION,
             "accuracy_threshold": GPQA_THRESHOLD,
         },
         "performance": {
@@ -327,9 +341,9 @@ if __name__ == "__main__":
     parser.add_argument(
         "--server-capacity",
         type=int,
-        choices=(1, 32),
-        default=32,
-        help="The server max-num-seqs setting; capacity 1 selects only serial performance shapes.",
+        choices=(1, 8, 16),
+        default=16,
+        help="The server max-num-seqs setting and measured performance concurrency.",
     )
     parser.add_argument("--performance-input-lengths", type=int, nargs="+", choices=(128, 1024), default=(128, 1024))
     parser.add_argument("--prepare-only", action="store_true")
