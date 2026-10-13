@@ -86,6 +86,14 @@ def test_quasar_tilize_with_val_padding(device, use_multicore, input_shape, outp
     assert tuple(got.shape) == tuple(input_shape)
     assert_with_pcc(x, got, 0.9999)
 
+    # Also inspect the padded storage: every element outside the input region must equal pad_value.
+    # (to_torch above only returns the logical region, so stale bytes in the pad columns would go unnoticed.)
+    got_padded = ttnn.from_device(out).to_torch_with_padded_shape().to(torch.bfloat16)
+    assert tuple(got_padded.shape) == tuple(output_shape)
+    expected = torch.full(output_shape, pad_value, dtype=torch.bfloat16)
+    expected[tuple(slice(0, d) for d in input_shape)] = x
+    assert torch.equal(got_padded, expected), "padded region does not match pad_value"
+
 
 # tilize_with_zero_padding routes through the same device op / factories (output padded to the
 # nearest tile, pad value 0), so it re-exercises the same bindings via its own pybind entry point.
