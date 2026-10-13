@@ -30,10 +30,10 @@ inline void llk_unpack_hadamard_h128_init(
         "Hadamard H128 unpack requires a single-face or one-row-face input operand");
     // The math path (fidelity phases, FP16B normalize) is bf16-only.
     LLK_ASSERT(
-        unpack_src_format[operandA_id] == (std::uint32_t)DataFormat::Float16_b,
+        get_operand_src_format(operandA_id) == (std::uint32_t)DataFormat::Float16_b,
         "Hadamard H128 requires a bfloat16 h16 operand");
     LLK_ASSERT(
-        unpack_src_format[operandB_id] == unpack_src_format[operandA_id],
+        get_operand_src_format(operandB_id) == get_operand_src_format(operandA_id),
         "Hadamard H128 unpack requires the input format to match h16");
 
     const std::uint32_t base_address = get_local_cb_interface(operandA_id).fifo_rd_ptr - 1;
@@ -62,7 +62,7 @@ inline void llk_unpack_hadamard_h128(
     // The input unpack reads 128 datums from the tile address.
     LLK_ASSERT(
         get_local_cb_interface(operandB_id).fifo_rd_ptr + tile_size_b * tile_index_b +
-                (SCALE_DATUM_SIZE(unpack_src_format[operandB_id], 128) >> cb_addr_shift) <=
+                (SCALE_DATUM_SIZE(get_operand_src_format(operandB_id), 128) >> cb_addr_shift) <=
             get_local_cb_interface(operandB_id).fifo_limit,
         "Hadamard H128 input read exceeds CB boundary");
 
