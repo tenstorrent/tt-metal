@@ -450,7 +450,7 @@ inline void matmul_configure_mop(
     tmp.program();
 }
 
-// Block the row MOP was programmed for (ct_dim << 16 | rt_dim); zero when its init fell back to the tile MOP.
+// Block the row MOP was programmed for (ct_dim << 16 | rt_dim); zero when the last matmul init programmed the tile MOP.
 inline std::uint32_t matmul_row_mop_dims = 0;
 
 constexpr std::uint32_t matmul_block_dims(const std::uint32_t ct_dim, const std::uint32_t rt_dim)
@@ -819,6 +819,7 @@ inline void _llk_math_matmul_init_(
 
     if constexpr (THROTTLE_LEVEL > 0)
     {
+        matmul_row_mop_dims = 0;
         matmul_configure_mop_throttled<math_fidelity, THROTTLE_LEVEL>(
             ct_dim, rt_dim, in0_tile_r_dim, in0_tile_c_dim, in1_tile_r_dim, in1_tile_c_dim, partial_face);
     }
@@ -828,6 +829,7 @@ inline void _llk_math_matmul_init_(
     }
     else
     {
+        matmul_row_mop_dims = 0;
         matmul_configure_mop<math_fidelity>(ct_dim, rt_dim, in0_tile_r_dim, in0_tile_c_dim, in1_tile_r_dim, in1_tile_c_dim, partial_face);
     }
     LLK_ASSERT_BLOCK(math_matmul_init_reuse_a = (ct_dim >= rt_dim));
