@@ -99,10 +99,11 @@ void kernel_main() {
     // cu_window_seqlens, streams only that range, and feeds it to compute over a ctrl CB.
     constexpr auto windowed_mode = static_cast<WindowedMode>(get_compile_time_arg_val(33));
     constexpr bool use_windowed_narrowing = is_windowed_mode(windowed_mode);
-    // K/V reuse: a Q chunk with the same (batch, K head) as the previous one on this core finds K and V still at the
-    // front of their CBs (compute keeps them), so they are not read or pushed again. Host-gated to non-causal, one K
-    // chunk, no mask, no chains.
-    constexpr bool reuse_kv = get_compile_time_arg_val(34) == 1;
+    // K/V retention: Q heads per retention key (0 = off). A Q chunk with the same (batch, nq / kv_retain_group) as the
+    // previous one on this core finds K and V still at the front of their CBs (compute keeps them), so they are not
+    // read, received or pushed again. Host-gated to non-causal calls with one K chunk. A chain member gets its copy on
+    // the first Q chunk of its segment and forwards it once.
+    constexpr uint32_t kv_retain_group = get_compile_time_arg_val(34);
 
     constexpr auto q_args = TensorAccessorArgs<35>();
     constexpr auto k_args = TensorAccessorArgs<q_args.next_compile_time_args_offset()>();
@@ -344,7 +345,7 @@ void kernel_main() {
         uint32_t prev_chain_key = static_cast<uint32_t>(-1);
         uint32_t per_head_q_iter = 0;
         uint32_t mask_batch_offset = 0;
-        uint32_t reuse_prev_nb = static_cast<uint32_t>(-1), reuse_prev_k_head = static_cast<uint32_t>(-1);
+        uint32_t retain_prev_nb = static_cast<uint32_t>(-1), retain_prev_key = static_cast<uint32_t>(-1);
         for (uint32_t global_q_iter = 0; global_q_iter < global_q_count; ++global_q_iter) {
             const auto decoded =
                 decompose_global_q_index(global_q_start + global_q_iter, q_num_chunks, NQH, use_zigzag_balancing);
@@ -475,20 +476,22 @@ void kernel_main() {
 
             const uint32_t k_head = nq / q_heads_per_k;
             const uint32_t v_head = nq / q_heads_per_v;
-            bool reuse_kv_unit = false;
-            if constexpr (reuse_kv) {
-                reuse_kv_unit = nb == reuse_prev_nb && k_head == reuse_prev_k_head;
-                reuse_prev_nb = nb;
-                reuse_prev_k_head = k_head;
+            bool kv_retained = false;
+            if constexpr (kv_retain_group != 0) {
+                const uint32_t retain_key = nq / kv_retain_group;
+                kv_retained = nb == retain_prev_nb && retain_key == retain_prev_key;
+                retain_prev_nb = nb;
+                retain_prev_key = retain_key;
             }
 
-            // Chain forwarding conditions are loop-invariant — compute once
+            // Chain forwarding conditions are loop-invariant — compute once. A retained K/V needs no transfer.
             bool should_forward = false;
             bool should_receive = false;
             if constexpr (!is_causal) {
-                should_forward = is_chain_participant && !is_sink && (nb == chain_batch && chain_key == chain_head) &&
-                                 (q_iter < next_core_q_chunks);
-                should_receive = is_chain_participant && !is_injector && (nb == chain_batch && chain_key == chain_head);
+                should_forward = is_chain_participant && !is_sink && !kv_retained &&
+                                 (nb == chain_batch && chain_key == chain_head) && (q_iter < next_core_q_chunks);
+                should_receive = is_chain_participant && !is_injector && !kv_retained &&
+                                 (nb == chain_batch && chain_key == chain_head);
             }
 
             // loop while k_low < q_high
@@ -502,8 +505,8 @@ void kernel_main() {
                 // K: either read locally (injector or not participant) or receive from previous core
                 uint32_t cb_k_start_address = 0;
 
-                if (reuse_kv_unit) {
-                    // K still at the front of cb_k (reuse_kv)
+                if (kv_retained) {
+                    // K still at the front of cb_k (retained)
                 } else if (should_receive) {
                     // Receive forwarded K chunk from previous core
                     cb_k.reserve_back(k_chunk_tiles);
@@ -697,8 +700,8 @@ void kernel_main() {
                 // V: either read locally (injector or not participant) or receive from previous core
                 uint32_t cb_v_start_address = 0;
 
-                if (reuse_kv_unit) {
-                    // V still at the front of cb_v (reuse_kv)
+                if (kv_retained) {
+                    // V still at the front of cb_v (retained)
                 } else if (should_receive) {
                     // Receive forwarded V chunk from previous core
                     cb_v.reserve_back(v_chunk_tiles);

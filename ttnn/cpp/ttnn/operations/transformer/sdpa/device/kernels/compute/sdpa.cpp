@@ -49,7 +49,7 @@ void kernel_main() {
     // Compute is mode-agnostic: windowed causal lives entirely in that range and the generated mask.
     constexpr auto windowed_mode = static_cast<WindowedMode>(get_compile_time_arg_val(28));
     constexpr bool use_windowed_narrowing = is_windowed_mode(windowed_mode);
-    // reuse_kv: Q heads per KV head, to tell whether consecutive Q chunks of a core share K/V. 0 = off.
+    // K/V retention: Q heads per retention key, to tell whether consecutive Q chunks of a core share K/V. 0 = off.
     constexpr uint32_t kv_reuse_group = get_compile_time_arg_val(29);
 
     const uint32_t num_phases = get_arg_val<uint32_t>(0);

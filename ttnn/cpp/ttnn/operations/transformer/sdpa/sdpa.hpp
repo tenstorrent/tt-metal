@@ -40,10 +40,7 @@ ttnn::Tensor scaled_dot_product_attention(
     /// tensor, read at runtime rather than baked into the program. Shard it on the sequence-parallel axis
     /// so every device runs the SAME program yet sees its own origin. Overrides the scalar when set.
     const std::optional<ttnn::Tensor>& windowed_q_token_offset_tensor = std::nullopt,
-    bool output_concat_heads = false,
-    /// Keep K/V in the CBs across a core's consecutive Q chunks of the same (batch, KV head) instead of re-reading
-    /// them (single K chunk, non-causal, unmasked; the K/V chains between cores are not built).
-    bool reuse_kv = false);
+    bool output_concat_heads = false);
 
 /// Chunked SDPA over paged K/V: one Q chunk per call, K/V in paged layout.
 /// Two overloads: legacy (chunk_start_idx as int) or flexible (chunk_start_idx_tensor on device).

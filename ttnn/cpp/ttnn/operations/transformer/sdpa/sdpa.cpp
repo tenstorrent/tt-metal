@@ -47,8 +47,7 @@ ttnn::Tensor scaled_dot_product_attention(
     const std::optional<ttnn::Tensor>& cu_window_seqlens,
     uint32_t windowed_q_token_offset,
     const std::optional<ttnn::Tensor>& windowed_q_token_offset_tensor,
-    bool output_concat_heads,
-    bool reuse_kv) {
+    bool output_concat_heads) {
     auto kernel_config_val = init_device_compute_kernel_config(
         input_tensor_q.device()->arch(), compute_kernel_config, tt::tt_metal::MathFidelity::HiFi2, true, false, false);
 
@@ -97,8 +96,7 @@ ttnn::Tensor scaled_dot_product_attention(
         windowed_q_token_offset,
         windowed_q_token_offset_tensor,
         std::nullopt,
-        output_concat_heads,
-        reuse_kv);
+        output_concat_heads);
 }
 
 // Legacy: chunk_start_idx as scalar (part of program cache key).

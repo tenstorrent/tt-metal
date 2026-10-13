@@ -295,7 +295,7 @@ ProgramDescriptor build_ring_distributed_sdpa_program_descriptor(
         0,                                            // arg 31: mcast_enabled
         static_cast<uint32_t>(use_zigzag_balancing),  // arg 32
         static_cast<uint32_t>(WindowedMode::None),    // arg 33: windowed mode — ring is never windowed
-        0,                                            // arg 34: reuse_kv — ring keeps the K/V chains
+        0,                                            // arg 34: K/V retention off — ring is causal
     };
 
     TensorAccessorArgs(input_tensor_q.buffer()).append_to(reader_compile_time_args);
@@ -374,7 +374,7 @@ ProgramDescriptor build_ring_distributed_sdpa_program_descriptor(
         0u,         // arg 26: k_partial_col - unused on ring's non-streaming path
         static_cast<uint32_t>(use_zigzag_balancing),  // arg 27: unified zigzag remap
         static_cast<uint32_t>(WindowedMode::None),    // arg 28: windowed mode — ring is never windowed
-        0u,                                           // arg 29: kv_reuse_group — ring keeps the K/V chains
+        0u,                                           // arg 29: K/V retention off — ring is causal
     };
     std::map<std::string, std::string> defines_map;
     defines_map["STATS_GRANULARITY"] = std::to_string(stats_granularity);

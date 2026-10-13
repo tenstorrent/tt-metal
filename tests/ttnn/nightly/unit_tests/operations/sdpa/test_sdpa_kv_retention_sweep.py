@@ -1,11 +1,12 @@
 # SPDX-FileCopyrightText: © 2026 Tenstorrent AI ULC
 # SPDX-License-Identifier: Apache-2.0
-"""Full ``reuse_kv`` sweep: every schedule regime, head-major and heads-concat output, each
-bit-identical to ``reuse_kv=False``. Grids larger than the device are skipped, so Wormhole runs everything but 12x10."""
+"""Full K/V retention sweep: every schedule regime, head-major and heads-concat output. Each batched call must be
+bit-identical row by row to the same rows run alone (a different chain and retention layout). Grids larger than the
+device are skipped, so Wormhole runs everything but 12x10."""
 
 import pytest
 
-from tests.ttnn.unit_tests.operations.sdpa.reuse_kv_test_utils import check_reuse_kv
+from tests.ttnn.unit_tests.operations.sdpa.kv_retention_test_utils import check_kv_retention
 
 
 # (b, nh, nkv, s, d): the pplx-embed-4b bs16 attention, a smaller batch, a group of 8 at a smaller head dim
@@ -14,9 +15,9 @@ from tests.ttnn.unit_tests.operations.sdpa.reuse_kv_test_utils import check_reus
 @pytest.mark.parametrize("grid", [(12, 10), (8, 8), (8, 7), (8, 4)])
 @pytest.mark.parametrize("q_chunk", [512, 256, 128])
 @pytest.mark.parametrize("concat", [False, True])
-@pytest.mark.timeout(600)
-def test_sdpa_reuse_kv_sweep(device, b, nh, nkv, s, d, grid, q_chunk, concat):
-    check_reuse_kv(
+@pytest.mark.timeout(900)
+def test_sdpa_kv_retention_sweep(device, b, nh, nkv, s, d, grid, q_chunk, concat):
+    check_kv_retention(
         device,
         b,
         nh,

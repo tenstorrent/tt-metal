@@ -345,15 +345,15 @@ void bind_sdpa(nb::module_& mod) {
             windowed_q_token_offset (int): Defaults to `0`. Windowed mode only. Global row index of Q row 0, for a Q holding a contiguous slice of a longer sequence: Q and the output are indexed locally while `cu_window_seqlens` and K/V stay global, so this locates the slice among the windows. Must be a multiple of TILE_HEIGHT, and `offset + Sq` must not exceed `Sk`. Use it to split the Q dimension across devices under sequence parallelism.
             windowed_q_token_offset_tensor (ttnn.Tensor, optional): Defaults to `None`. Windowed mode only. The per-device form of `windowed_q_token_offset`: a 1-element int32/uint32 ROW_MAJOR on-device tensor holding the same global row index; when provided it overrides the scalar. Every device runs the same cached program, so a scalar cannot differ across a mesh -- shard this tensor on the sequence-parallel mesh axis (e.g. `arange(sp) * local_seq_len`) so each device reads its own shard's origin. The scalar's constraints apply to each device's value (a multiple of TILE_HEIGHT; `offset + Sq <= Sk`) but cannot be validated host-side -- they are the caller's responsibility.
             output_concat_heads (bool): Defaults to `False`. Write the heads side by side as [b x 1 x s x nqh*dh] (what `nlp_concat_heads` produces from the default layout) without that op. Plain SDPA only.
-            reuse_kv (bool): Defaults to `False`. Keep K and V in the core's buffers across its consecutive query chunks of the same (batch, KV head) instead of re-reading them, so each core reads a KV head's K/V once; the K/V chains between cores are not built. Non-causal, no `attn_mask`, a single K chunk (`k_chunk_size >= s`), `fp32_dest_acc_en=False` (streaming kernel). Useful for batched calls where each core gets several consecutive query chunks of the same (batch, KV head), i.e. `b * nqh * ceil(s / q_chunk_size)` well above the core count: K/V is then read once per core instead of once per query chunk, and smaller `q_chunk_size` becomes affordable for load balance (32/8 heads, s=512, d=128, Blackhole, batch 8 / 16 / 32: 5-32% faster per call). Leave it off when cores get about one query chunk each (e.g. batch 1): there is nothing to reuse, and every core reads K/V from DRAM itself instead of sharing one read along a chain. Output is bit-identical either way.
 
 
-        Grouped-query attention (non-causal, `nqh > nkh`) is scheduled automatically: cores working on the query
-        heads of one KV head share its K/V (read once, then forwarded core to core) at batch <= 4, and when
-        `q_chunk_size` does not divide `s`, a query chunk may run on into the next query head of its group if that
-        lowers the most query chunks any core runs (no `attn_mask`, no `attention_sink`, tile-aligned unpadded `s`,
-        `nkh == nvh`). Neither changes the output layout. Head crossing can change the rounding of some rows with
-        `fp32_dest_acc_en=False`, not the accuracy.
+        Grouped-query attention (non-causal, `nqh > nkh`) is scheduled automatically. Cores working on the query
+        heads of one KV head can share its K/V (read once, then forwarded core to core). With a single K chunk
+        (`k_chunk_size >= s`, `fp32_dest_acc_en=False`), each core also keeps a KV head's K/V across its consecutive
+        query chunks instead of re-reading it. When `q_chunk_size` does not divide `s`, a query chunk may run on into
+        the next query head of its group if that lowers the most query chunks any core runs (no `attn_mask`, no
+        `attention_sink`, tile-aligned unpadded `s`, `nkh == nvh`). None of this changes the output layout. Head
+        crossing can change the rounding of some rows with `fp32_dest_acc_en=False`, not the accuracy.
 
         Returns:
             ttnn.Tensor: the output tensor [b x nqh x s x dh] (or [b x 1 x s x nqh*dh] with output_concat_heads).
@@ -379,8 +379,7 @@ void bind_sdpa(nb::module_& mod) {
         nb::arg("cu_window_seqlens") = nb::none(),
         nb::arg("windowed_q_token_offset") = 0,
         nb::arg("windowed_q_token_offset_tensor") = nb::none(),
-        nb::arg("output_concat_heads") = false,
-        nb::arg("reuse_kv") = false);
+        nb::arg("output_concat_heads") = false);
 
     ttnn::bind_function<"sparse_sdpa", "ttnn.transformer.">(
         mod,

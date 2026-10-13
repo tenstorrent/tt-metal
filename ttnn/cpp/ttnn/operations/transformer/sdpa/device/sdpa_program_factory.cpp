@@ -280,25 +280,6 @@ WriterGqaPackArgs writer_gqa_pack_args(bool output_concat_heads, uint32_t gqa_pa
     return {};
 }
 
-// reuse_kv: a core keeps K/V in its CBs across consecutive Q chunks of the same (batch, KV head), so it needs the whole
-// K sequence in one chunk and the streaming kernel; the K/V chains between cores are not built.
-void validate_reuse_kv(
-    bool reuse_kv, uint32_t k_num_chunks, std::size_t k_chunk_size, uint32_t Sk, bool use_streaming_compute) {
-    if (!reuse_kv) {
-        return;
-    }
-    TT_FATAL(
-        k_num_chunks == 1,
-        "SDPA reuse_kv needs a single K chunk (k_chunk_size {} >= Sk {}), got {} chunks",
-        k_chunk_size,
-        Sk,
-        k_num_chunks);
-    TT_FATAL(use_streaming_compute, "SDPA reuse_kv needs the streaming compute kernel (fp32_dest_acc_en=False)");
-}
-
-// Compute arg 29: the scheduled Q heads per KV head, which the kernel keys K/V reuse on; 0 = reuse_kv off.
-uint32_t kv_reuse_group(bool reuse_kv, uint32_t nqh, uint32_t nkh) { return reuse_kv ? nqh / nkh : 0; }
-
 // K/V forwarding chains (non-causal, unchunked, unwindowed): cores whose Q chunks share a chain key read each K/V chunk
 // once (the injector) and pass it along. The key is (batch, nq / key_q_heads).
 struct KvChains {
@@ -324,6 +305,15 @@ uint32_t kv_chain_key_q_heads(uint32_t nqh, uint32_t nkh, uint32_t nvh) {
     return hi % lo == 0 ? lo : 1;
 }
 
+// K/V retention: with one K chunk, a core keeps K/V in its CBs across its consecutive Q chunks of one retention key
+// (batch, nq / group) instead of re-reading them; a chain member takes its copy on the first Q chunk of its segment and
+// forwards it once. The group is the finer of the K and V head groupings when one nests in the other (the K/V chain
+// key), so consecutive chunks of a key share both heads. Off for causal / chunked / windowed calls (their K range
+// varies per Q chunk), MLA and the non-streaming kernel (which keeps no K/V). Returns Q heads per key, 0 = off.
+uint32_t kv_retain_group(bool eligible, uint32_t k_num_chunks, uint32_t nqh, uint32_t nkh, uint32_t nvh) {
+    return eligible && k_num_chunks == 1 ? kv_chain_key_q_heads(nqh, nkh, nvh) : 0;
+}
+
 KvChains build_kv_chains(
     MeshDevice* device,
     CoreCoord grid_size,
@@ -332,6 +322,7 @@ KvChains build_kv_chains(
     uint32_t key_q_heads,
     uint32_t q_num_chunks,
     uint32_t k_num_chunks,
+    bool retain_kv,
     uint32_t global_q_base_chunks_per_core,
     uint32_t global_q_cores_doing_extra,
     uint32_t global_q_extra_chunks_per_core) {
@@ -482,11 +473,15 @@ KvChains build_kv_chains(
 
         // A sender writes K/V to its own cb_k / cb_v write address on the receiver, so every chain core must
         // start the head in the same slot of the two-chunk K/V CBs. Each Q chunk pushes k_num_chunks K/V chunks,
-        // so with an odd k_num_chunks the slot is the parity of the Q chunks done before the head; a core that
-        // starts in the other slot reads K/V from DRAM instead of joining (it would get the chunk in the wrong
+        // so with an odd k_num_chunks the slot is the parity of the Q chunks done before the head; with K/V
+        // retention a core pushes once per segment, so it is the parity of the segments before this one. A core
+        // that starts in the other slot reads K/V from DRAM instead of joining (it would get the chunk in the wrong
         // slot, corrupting the one compute is reading).
         const auto start_slot = [&](std::size_t idx) {
             const auto& seg = segments[idx];
+            if (retain_kv) {
+                return seg.head_work_index % 2;
+            }
             return (core_work[seg.core_idx].head_work[seg.head_work_index].q_chunks_before * k_num_chunks) % 2;
         };
         const uint32_t chain_slot = start_slot(chain_order[0]);
@@ -841,8 +836,9 @@ KvChains build_kv_chains(
             const auto& chain = core_chain_info[seg.core_idx];
             const bool receives = chain.participates && !chain.is_injector && chain.batch == head_id / num_keys &&
                                   chain.head == head_id % num_keys;
-            if (!receives) {
-                result.kv_dram_q_chunks += core_work[seg.core_idx].head_work[seg.head_work_index].q_chunk_count;
+            if (!receives) {  // a retained K/V is read once per segment
+                result.kv_dram_q_chunks +=
+                    retain_kv ? 1 : core_work[seg.core_idx].head_work[seg.head_work_index].q_chunk_count;
             }
         }
     }
@@ -1206,8 +1202,12 @@ ProgramDescriptor SDPAOperation::SDPAProgramFactory::create_descriptor(
 
     const bool use_zigzag_balancing = use_causal_kernel;
 
-    const bool reuse_kv = operation_attributes.reuse_kv;  // the K/V chains are not built (below)
-    validate_reuse_kv(reuse_kv, k_num_chunks, k_chunk_size, Sk, use_streaming_compute);
+    const uint32_t kv_retain = kv_retain_group(
+        use_streaming_compute && !use_causal_kernel && !is_chunked && !has_sliding_window && !is_windowed && !use_mla,
+        k_num_chunks,
+        NQH,
+        NKH,
+        NVH);
     const WriterGqaPackArgs writer_gqa_pack =
         writer_gqa_pack_args(operation_attributes.output_concat_heads, gqa_pack, q_shape[2] / TILE_HEIGHT);
 
@@ -1250,7 +1250,7 @@ ProgramDescriptor SDPAOperation::SDPAProgramFactory::create_descriptor(
     reader_compile_time_args.push_back(0);  // mcast_enabled placeholder
     reader_compile_time_args.push_back(static_cast<uint32_t>(use_zigzag_balancing));  // arg 32
     reader_compile_time_args.push_back(static_cast<uint32_t>(windowed_mode));         // arg 33: K-range narrowing
-    reader_compile_time_args.push_back(static_cast<uint32_t>(reuse_kv));              // arg 34: K/V reuse
+    reader_compile_time_args.push_back(kv_retain);  // arg 34: K/V retention, Q heads per retention key (0 = off)
 
     TensorAccessorArgs(input_tensor_q.buffer()).append_to(reader_compile_time_args);
     TensorAccessorArgs(input_tensor_k.buffer()).append_to(reader_compile_time_args);
@@ -1361,7 +1361,7 @@ ProgramDescriptor SDPAOperation::SDPAProgramFactory::create_descriptor(
         k_partial_col,                                // arg 28: K partial-tile col (0 = no partial)
         static_cast<uint32_t>(use_zigzag_balancing),  // arg 29: unified zigzag remap
         static_cast<uint32_t>(windowed_mode),         // arg 28: K-range narrowing (bounds from the ctrl CB)
-        kv_reuse_group(reuse_kv, NQH, NKH),           // arg 29: K/V reuse, scheduled Q heads per KV head (0 = off)
+        kv_retain,                                    // arg 29: K/V retention, Q heads per retention key (0 = off)
     };
 
     std::map<std::string, std::string> defines_map;
@@ -1555,11 +1555,20 @@ ProgramDescriptor SDPAOperation::SDPAProgramFactory::create_descriptor(
     // lock-step-forward K between cores whose Q chunks now need DIFFERENT K ranges — the semaphore
     // handshake counts diverge and the cores deadlock. Narrowing saves far more K reads than
     // forwarding did.
-    if (!use_causal_kernel && !is_chunked && !has_sliding_window && !is_windowed && !reuse_kv) {
-        // Key the chains by KV head at B <= 4, so one DRAM read of a KV head's K/V serves its whole GQA group (11-46%
-        // faster at bs2-4, Blackhole). From B = 8 the KV-head key gains nothing at q128/q256 and loses at q512
-        // (+23-27% at bs8-32), where it only adds short unicast chains, so keep the Q-head key there.
-        const uint32_t key_q_heads = B <= 4 ? kv_chain_key_q_heads(NQH, NKH, NVH) : 1;
+    // With K/V retention (one K chunk) a unicast chain cannot pipeline: each core takes the whole K/V before passing it
+    // on, and the members reach the key at different points in their work, so they wait on each other. Chains then pay
+    // only for the DRAM reads they save (K/V in DRAM) or when they multicast, and stop paying once a core holds many
+    // Q chunks of a key. Blackhole 32/8 S=512 k512: chains win 1-14% at bs2-4 (DRAM), tie at bs8, and lose up to
+    // 40% at bs16-32 (11x8, 12x10) and 13-14% at bs1 with L1-resident K/V and unicast chains.
+    const bool kv_in_l1 = input_tensor_k.buffer()->buffer_type() == tt::tt_metal::BufferType::L1 &&
+                          input_tensor_v.buffer()->buffer_type() == tt::tt_metal::BufferType::L1;
+    const bool retain_skips_chains = kv_retain != 0 && B > 8;
+    if (!use_causal_kernel && !is_chunked && !has_sliding_window && !is_windowed && !retain_skips_chains) {
+        // With K/V retention the chains share its key, so a core's run of one key is one chain segment. Otherwise key
+        // them by KV head at B <= 4, so one DRAM read of a KV head's K/V serves its whole GQA group (11-46% faster at
+        // bs2-4, Blackhole). From B = 8 the KV-head key gains nothing at q128/q256 and loses at q512 (+23-27% at
+        // bs8-32), where it only adds short unicast chains, so keep the Q-head key there.
+        const uint32_t key_q_heads = kv_retain != 0 ? kv_retain : (B <= 4 ? kv_chain_key_q_heads(NQH, NKH, NVH) : 1);
         KvChains chains = build_kv_chains(
             device,
             grid_size,
@@ -1568,6 +1577,7 @@ ProgramDescriptor SDPAOperation::SDPAProgramFactory::create_descriptor(
             key_q_heads,
             q_num_chunks,
             k_num_chunks,
+            kv_retain != 0,
             global_q_base_chunks_per_core,
             global_q_cores_doing_extra,
             global_q_extra_chunks_per_core);
@@ -1588,9 +1598,12 @@ ProgramDescriptor SDPAOperation::SDPAProgramFactory::create_descriptor(
                 chains.chains_built,
                 chains.kv_dram_q_chunks);
         }
-        core_chain_info = std::move(chains.core_chain_info);
-        mcast_chains = chains.mcast_chains;
-        chain_key_q_heads = chains.key_q_heads;
+        const bool drop_chains = kv_retain != 0 && kv_in_l1 && chains.mcast_chains == 0;
+        if (!drop_chains) {
+            core_chain_info = std::move(chains.core_chain_info);
+            mcast_chains = chains.mcast_chains;
+            chain_key_q_heads = chains.key_q_heads;
+        }
     }
 
     // Update mcast_enabled compile-time arg now that chain construction is complete
