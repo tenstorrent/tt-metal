@@ -1,7 +1,8 @@
 #!/usr/bin/env python3
 """elf_guard.py <objcopy> <builds root> <out>: per harness variant (build.h) and build, the sha of each TRISC ELF's
-loadable sections; checks the A/A pair (m, ma) is identical, and that the new side (n) differs from the head (h) on the
-UInt32 and four-tile row variants (else the A/B is void). Exits 1 when a check fails."""
+loadable sections; checks the A/A pair (m, ma) is identical, and that the new side (n) differs from the head (h) on every
+UInt32 and four-tile row math ELF it changes (all but Int32 MAX/MIN and PACK_ISOLATE), and nowhere else. Exits 1 when a
+check fails."""
 import glob, hashlib, os, re, subprocess, sys, tempfile
 OBJ, ROOT, OUT = sys.argv[1:4]
 def key(bh):
@@ -36,12 +37,13 @@ for a, b in (('ra_m', 'ra_ma'),):
     print(f'ELF A/A {a} vs {b}: {len(ks) - len(d)} of {len(ks)} identical'); ok &= bool(ks) and not d
 for a, b in (('ra_h', 'ra_n'), ('ra_m', 'ra_n'), ('ra_m', 'ra_h')):
     ks, d = cmp(a, b)
-    tgt = [k for k in ks if 'math.elf' in k and ('UInt32' in k or ('ROW' in k and 'ct4' in k))]
+    tgt = [k for k in ks if 'math.elf' in k and 'PACK_ISOLATE' not in k and
+           ('UInt32' in k or ('ROW' in k and 'ct4' in k and not ('Int32' in k and ('MAX' in k or 'MIN' in k))))]
     td = [k for k in tgt if k in d]
     print(f'ELF {a} vs {b}: {len(d)} of {len(ks)} differ; UInt32 and four-tile row math ELFs differing {len(td)} of {len(tgt)}')
     if (a, b) == ('ra_h', 'ra_n'):
-        ok &= bool(tgt) and len(td) == len(tgt)
         other = [k for k in d if k not in tgt]
+        ok &= bool(tgt) and len(td) == len(tgt) and not other
         print(f'  differing outside the targets: {len(other)}')
         for k in other[:20]:
             print('   ', k)
