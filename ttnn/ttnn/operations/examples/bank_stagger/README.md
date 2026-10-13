@@ -53,15 +53,30 @@ so savings per unit of work decrease. The benefit is stronger for the shorter wo
 do not extrapolate the 8-block speedups to workloads with many blocks per core. These measurements
 do not establish why the relative gain weakens or whether it eventually disappears.
 
+## Interleaved source — row stagger (`stagger_rows`)
+Interleaved DRAM puts row `r` in bank `r % num_banks`. Two splits start every core on the same bank:
+
+- **Width blocking:** cores read the same 32 rows at different width offsets.
+- **Height blocking on Blackhole:** each core's rows start at `32·k`, and `32·k % 8 == 0`.
+
+`stagger_rows` starts core k at row `k % 32` inside each block and wraps (`variant rows`).
+
+```
+  shape       split   read B  blocks/core  none ns  rows ns  speedup  saved
+  32x7040     width     128       1          7447     7157   1.04x    0.3 µs
+  32x56320    width    1024       1         19017    17749   1.07x    1.3 µs
+  3520x512    height   1024       1         18534    17589   1.05x    0.9 µs
+  128x56320   width    1024       4         66462    66040   1.01x    0.4 µs
+```
+
+The gain shrinks as the work per core grows: the time saved stays roughly flat (~0.3–1.3 µs)
+while the total time grows. These measurements do not establish why. Full table in
+[`report.md`](report.md).
+
 ## Where else it applies
 The same fix — start each core at a different index — applies wherever the cores' data lines up on
 the banks and they walk it in the same order:
 
-- **Width blocking of an interleaved source:** interleaved DRAM puts row `r` in bank `r % num_banks`;
-  cores that read the same 32 rows at different width offsets hit the same bank at each row step.
-  Rotate the row order inside the block.
-- **Height blocking on Blackhole:** each core's rows start at `32·k`, and `32·k % 8 == 0`, so every
-  core reads the same bank at each row step. Rotate the row order inside the block.
 - **Writes** into a width-sharded DRAM output, or of consecutive tile pages whose count is a multiple
   of the bank count: every core starts writing on the same bank. Rotate the write order.
 
@@ -72,9 +87,12 @@ python -m ttnn.operations.examples.bank_stagger
 
 # your shape: HxWxCHUNK, split into one shard per DRAM bank
 python -m ttnn.operations.examples.bank_stagger --cases 14080x1024x4
+
+# interleaved source: add the il suffix
+python -m ttnn.operations.examples.bank_stagger --variant none,rows --cases 32x56320x16il,3520x512x16il
 ```
 
-Other flags: `--variant` (`none`, `stagger`), `--trials` (default 5, median reported), `--launches`
+Other flags: `--variant` (`none`, `stagger`, `rows`), `--trials` (default 5, median reported), `--launches`
 (10 per trial), `--kernel-iters K` (repeat the work K times inside one launch), `--report PATH`.
 
 ```bash

@@ -4,17 +4,22 @@
 // bank_stagger example reader (NCRISC / NoC0).
 //
 // For each of this core's work units (one 32-row x chunk_wt-tile block) it reads
-// the block's 32 row slices ("sticks") of a width-sharded ROW_MAJOR DRAM tensor
-// into the reader->compute CB, then one barrier. With one shard per DRAM bank, a
-// row is `pages_per_row` pages (one per shard) and every column block lives in
-// exactly one bank.
+// the block's 32 row slices ("sticks") of a ROW_MAJOR DRAM tensor into the
+// reader->compute CB, then one barrier. A row is `pages_per_row` pages: 1 for an
+// interleaved tensor (row r in bank r % num_banks), one per shard for a
+// width-sharded one with one shard per bank (each column block in one bank).
 //
-// `stagger_blocks` (compile-time) is the ONLY difference between variants. Off,
-// the core walks its units in order, so every core starts on the same column
-// block -- the same bank -- and the grid moves from bank to bank together. On,
-// it starts at unit `blk_rot` and wraps, so the cores start on different banks.
-// Same reads, same sizes, same count, same L1 -- only the order moves. The
-// writer walks the units in the same order, so the CB stays in sync.
+// Two compile-time switches; only the issue order moves -- same reads, sizes,
+// count and L1 addresses either way.
+// `stagger_blocks`: off, the core walks its units in order, so with a
+// width-sharded source every core starts on the same column block -- the same
+// bank. On, it starts at unit `blk_rot` and wraps. The writer walks the units in
+// the same order, so the CB stays in sync.
+// `stagger_rows`: off, the 32 reads of a block go in order 0..31, so with an
+// interleaved source cores that read the same rows (width blocking), or rows
+// starting at 32*k with 32 % num_banks == 0 (height blocking), hit one bank per
+// step. On, they start at row `row_rot` and wrap; each read still lands at the L1
+// offset of its own row.
 
 #include "api/dataflow/dataflow_api.h"
 
@@ -26,14 +31,16 @@ void kernel_main() {
     constexpr uint32_t chunk_row_bytes = get_compile_time_arg_val(2);
     constexpr uint32_t kernel_iters = get_compile_time_arg_val(3);
     constexpr bool stagger_blocks = get_compile_time_arg_val(4) != 0;
-    constexpr uint32_t pages_per_row = get_compile_time_arg_val(5);
-    constexpr auto in_args = TensorAccessorArgs<6>();
+    constexpr bool stagger_rows = get_compile_time_arg_val(5) != 0;
+    constexpr uint32_t pages_per_row = get_compile_time_arg_val(6);
+    constexpr auto in_args = TensorAccessorArgs<7>();
 
     const uint32_t src_addr = get_arg_val<uint32_t>(0);
     const uint32_t unit_start = get_arg_val<uint32_t>(1);
     const uint32_t unit_count = get_arg_val<uint32_t>(2);
     const uint32_t n_w = get_arg_val<uint32_t>(3);      // chunks per tile-row
     const uint32_t blk_rot = get_arg_val<uint32_t>(4);  // < unit_count; used only when stagger_blocks
+    const uint32_t row_rot = get_arg_val<uint32_t>(5);  // < 32; used only when stagger_rows
 
     const auto in_acc = TensorAccessor(in_args, src_addr, page_bytes);
 
@@ -51,7 +58,11 @@ void kernel_main() {
 
             cb_reserve_back(cb_in, chunk_wt);
             const uint32_t l1_addr = get_write_ptr(cb_in);
-            for (uint32_t r = 0; r < tile_rows; ++r) {
+            for (uint32_t i = 0; i < tile_rows; ++i) {
+                uint32_t r = i;
+                if constexpr (stagger_rows) {
+                    r = (i + row_rot) < tile_rows ? (i + row_rot) : (i + row_rot - tile_rows);
+                }
                 noc_async_read(
                     in_acc.get_noc_addr((row0 + r) * pages_per_row + page_in_row, byte_offset),
                     l1_addr + r * chunk_row_bytes,

@@ -4,10 +4,11 @@
 """CLI: measure the bank-de-clustered issue order on YOUR shapes.
 
     python -m ttnn.operations.examples.bank_stagger [--cases 3520x1024x4,7040x4096x16]
-                                                     [--variant all|none,stagger]
+                                                     [--variant all|none,stagger,rows]
                                                      [--kernel-iters K] [--trials N] [--report PATH]
 
-Each case is HxWxCHUNK: a bf16 ROW_MAJOR [H, W] tensor tilized with CHUNK tile-columns
+Each case is HxWxCHUNK (width-sharded DRAM, one shard per bank) or HxWxCHUNKil (DRAM
+interleaved): a bf16 ROW_MAJOR [H, W] tensor tilized with CHUNK tile-columns
 per work unit (read size = CHUNK * 64 B per row). Runs the device-perf test through
 scripts/run_safe_pytest.sh (device lock, in-process profiler, post-run reset) and
 prints ns per variant plus the ratio vs `none`. Run from the repo root with the
@@ -28,12 +29,13 @@ def main():
     ap.add_argument(
         "--cases",
         default="auto",
-        help="comma list of HxWxCHUNK (width-sharded DRAM, one shard per bank), or auto (default): cases sized to the grid.",
+        help="comma list of HxWxCHUNK (width-sharded DRAM, one shard per bank) or HxWxCHUNKil (DRAM interleaved), "
+        "or auto (default): cases sized to the grid.",
     )
     ap.add_argument(
         "--variant",
         default="all",
-        help="all, or a comma list of none,stagger. Default all.",
+        help="all, or a comma list of none,stagger,rows. Default all.",
     )
     ap.add_argument("--kernel-iters", type=int, default=1, help="in-kernel repeat. 1 = per-launch latency. Default 1.")
     ap.add_argument("--trials", type=int, default=5, help="trials per variant (median reported). Default 5.")
