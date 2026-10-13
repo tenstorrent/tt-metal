@@ -16,7 +16,6 @@ import ttnn
 from models.common.utility_functions import comp_pcc
 from models.demos.olmo_galaxy.tt.generator import Generator, SamplingParams
 from models.demos.olmo_galaxy.tt.model_config import LlamaOptimizations
-from models.demos.t3000.llama2_70b.reference.llama.llama31_8b.tokenizer import Tokenizer
 from models.perf.benchmarking_utils import BenchmarkData, BenchmarkProfiler
 from models.tt_transformers.tt.common import PagedAttentionConfig, preprocess_inputs_prefill
 
@@ -750,7 +749,7 @@ def test_demo_text(
         prefill_profile=prefill_profile,
     )
 
-    model_args.tokenizer = Tokenizer(model_args.tokenizer_path)
+    model_args.tokenizer = model_args.create_tokenizer()
     tokenizer = model_args.tokenizer
     generator = Generator(model, model_args, mesh_device, tokenizer=tokenizer)
 

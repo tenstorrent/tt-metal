@@ -21,7 +21,6 @@ from models.demos.olmo_galaxy.tt.load_checkpoints import (
     load_meta_state_dict,
     standardize_hf_keys,
 )
-from models.demos.t3000.llama2_70b.reference.llama.llama31_8b.model import Transformer
 from models.tt_transformers.tt.common import (
     calculate_hidden_dim,
     encode_prompt_hf,
@@ -2256,10 +2255,9 @@ class TtModelArgs:
     def load_state_dict(self):
         """Generate or load state_dict for n_layers of the model"""
         if self.dummy_weights:
-            reference_model = Transformer(self)
-            state_dict = reference_model.state_dict()
-            state_dict_prefix = self.get_state_dict_prefix("", None)
-            state_dict = {f"{state_dict_prefix}{k}": torch.randn_like(v) for k, v in state_dict.items()}
+            # The legacy Meta Llama reference (models/demos/t3000/llama2_70b) was removed from main;
+            # TtOlmoModelArgs overrides load_state_dict, so only the leftover Llama path lands here.
+            raise NotImplementedError("dummy_weights requires a model-specific load_state_dict override")
         elif self.checkpoint_type == CheckpointType.Meta:
             state_dict = load_meta_state_dict(self.CKPT_DIR, self.n_layers)
         else:
@@ -2692,22 +2690,15 @@ class TtModelArgs:
         )
 
     def create_tokenizer(self):
-        """Create and return a Tokenizer instance based on the checkpoint type."""
-        if self.checkpoint_type == CheckpointType.Meta:
-            # Use the Meta Tokenizer
-            from models.demos.t3000.llama2_70b.reference.llama.llama31_8b.tokenizer import Tokenizer
+        """Create and return a HuggingFace tokenizer."""
+        from transformers import AutoTokenizer
 
-            return Tokenizer(self.tokenizer_path)
-        else:
-            # Create a HuggingFace AutoTokenizer
-            from transformers import AutoTokenizer
+        tokenizer = AutoTokenizer.from_pretrained(self.TOKENIZER_PATH)
 
-            tokenizer = AutoTokenizer.from_pretrained(self.TOKENIZER_PATH)
-
-            # Add meta-compatible stop token list to the HF tokenizer
-            if not "stop_tokens" in tokenizer.__dict__:
-                tokenizer.stop_tokens = [tokenizer.eos_token_id]
-            return tokenizer
+        # Add meta-compatible stop token list to the HF tokenizer
+        if not "stop_tokens" in tokenizer.__dict__:
+            tokenizer.stop_tokens = [tokenizer.eos_token_id]
+        return tokenizer
 
     def encode_prompt(self, prompt_text, system_prompt_text=None, instruct=True):
         if self.checkpoint_type == CheckpointType.Meta:

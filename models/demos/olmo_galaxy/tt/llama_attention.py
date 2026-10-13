@@ -1444,7 +1444,8 @@ class TtLlamaAttention(LightweightModule):
                 scale=self.scale,
                 compute_kernel_config=self.compute_kernel_config_hifi3,
                 program_config=self.model_config["SDPA_PROGCFG"](seq_len),
-                sliding_window_size=self.sliding_window_size,  # OLMo: 4096 or None for full attention
+                # ring_distributed SDPA has no sliding_window_size on main (see
+                # tests/RING_SDPA_SLIDING_WINDOW_BUG.md); OLMo never takes this path.
             )
             _dbg_sync("sdpa_done")
 

@@ -20,7 +20,6 @@ from models.demos.olmo_galaxy.tt.llama_common import PagedAttentionConfig
 from models.demos.olmo_galaxy.tt.llama_embedding import TtLlamaEmbedding
 from models.demos.olmo_galaxy.tt.llama_model import TtTransformer
 from models.demos.olmo_galaxy.tt.model_config import LlamaOptimizations, TtModelArgs
-from models.demos.t3000.llama2_70b.reference.llama.llama31_8b.tokenizer import Tokenizer
 from models.perf.benchmarking_utils import BenchmarkData, BenchmarkProfiler
 
 # Maximum number of times `tokens_per_second_per_user` is allowed to be outside the `tsu_range`
@@ -178,7 +177,7 @@ def run_llama3_demo(
     )
     model_args.n_layers = layers
 
-    tokenizer = Tokenizer(model_args.tokenizer_path)
+    tokenizer = model_args.create_tokenizer()
 
     # Check max sequence length compatibility with model and architecture. Refer to README for more information
     llama_model_name = model_args.model_name  # ["3.2-1B", "3.2-3B", "3.1-8B", "3.2-11B", "3.1-70B"]

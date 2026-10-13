@@ -554,7 +554,7 @@ class TtTransformer(LightweightModule):
                 logits_saved = ttnn.to_torch(ttnn.get_device_tensors(tt_logits)[0]).float()[0, 0, 0, :]
                 tt_out_logits_saved[i].copy_(logits_saved)
 
-            tt_out = ttnn.argmax(tt_logits, dim=3, keepdim=True, use_multicore=True)
+            tt_out = ttnn.argmax(tt_logits, dim=3, keepdim=True)
             if isinstance(tt_out, list):
                 tt_out = tt_out[0]
 

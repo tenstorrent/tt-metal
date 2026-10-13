@@ -1411,6 +1411,11 @@ class TT_CCL:
         # Ethernet completion signals across many sequential CCL ops. Sync CCL keeps
         # all devices lockstep; warmup (generator.py) primes the fabric first.
         if self.is_olmo and self.mode == "prefill":
+            # ttnn.reduce_scatter routes inputs <= 512KB/device to the "direct" one-shot op, whose
+            # static CBs clash with OLMo's persistent L1 buffers on core (0,0). An explicit tuning
+            # knob keeps it on the ring op; 2 workers/link is the ring default for that size range.
+            # Larger inputs never take the direct path, so leave the ring op's own heuristic there.
+            small_input = input_tensor_mesh.volume() * 2 <= 1024 * 1024
             ttnn_tensor_out = ttnn.reduce_scatter(
                 input_tensor_mesh,
                 dim,
@@ -1419,6 +1424,7 @@ class TT_CCL:
                 topology=ttnn.Topology.Ring,
                 num_links=1,
                 subdevice_id=None,
+                num_workers_per_link=2 if small_input else None,
             )
         else:
             barrier_semaphore = None

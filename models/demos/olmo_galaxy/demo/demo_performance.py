@@ -16,7 +16,6 @@ from models.demos.olmo_galaxy.tt.llama_common import PagedAttentionConfig
 from models.demos.olmo_galaxy.tt.llama_embedding import TtLlamaEmbedding
 from models.demos.olmo_galaxy.tt.llama_model import TtTransformer
 from models.demos.olmo_galaxy.tt.model_config import LlamaOptimizations, TtModelArgs
-from models.demos.t3000.llama2_70b.reference.llama.llama31_8b.tokenizer import Tokenizer
 from models.perf.benchmarking_utils import BenchmarkProfiler
 
 from .demo_decode import load_inputs
@@ -88,7 +87,7 @@ def run_llama3_decode_performance(
     )
     model_args.n_layers = layers
 
-    tokenizer = Tokenizer(model_args.tokenizer_path)
+    tokenizer = model_args.create_tokenizer()
 
     # Check max sequence length compatibility with model and architecture. Refer to README for more information
     llama_model_name = model_args.model_name  # ["3.2-1B", "3.2-3B", "3.1-8B", "3.2-11B", "3.1-70B"]
@@ -239,7 +238,7 @@ def run_llama3_decode_performance(
         tt_out_rm = ttnn.untilize(tt_out_gathered, use_multicore=True, sub_core_grids=sub_core_grids)
         ttnn.deallocate(tt_out_gathered)
         tt_out_tok = ttnn.argmax(
-            tt_out_rm, dim=3, keepdim=True, use_multicore=True, output_tensor=tt_out_tok, sub_core_grids=sub_core_grids
+            tt_out_rm, dim=3, keepdim=True, output_tensor=tt_out_tok, sub_core_grids=sub_core_grids
         )
         logger.info(f"sampling done")
 
@@ -272,9 +271,7 @@ def run_llama3_decode_performance(
     )
     tt_out_rm = ttnn.untilize(tt_out_gathered, use_multicore=True, sub_core_grids=sub_core_grids)
     ttnn.deallocate(tt_out_gathered)
-    tt_out_tok = ttnn.argmax(
-        tt_out_rm, dim=3, keepdim=True, use_multicore=True, output_tensor=tt_out_tok, sub_core_grids=sub_core_grids
-    )
+    tt_out_tok = ttnn.argmax(tt_out_rm, dim=3, keepdim=True, output_tensor=tt_out_tok, sub_core_grids=sub_core_grids)
 
     ttnn.plus_one(
         current_pos_tensor,
