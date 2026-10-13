@@ -4,7 +4,7 @@
 # Writes the first failing step's code to $M ("0" when all done).
 set -eo pipefail
 D=$(cd "$(dirname "$0")" && pwd); SUB=/home/smarton/fasth3/tt-metal/tt-project/t288/blx01-submit.sh
-M=$D/chain468.done; LOG=$D/chain468.log; rm -f $M
+O=${CHAIN_OUT:-$D}; M=$O/chain468.done; LOG=$O/chain468.log; rm -f $M
 SSH="ssh -o BatchMode=yes -o ConnectTimeout=20 g15blx01"
 trap 'echo $? > "$M"' EXIT
 log() { echo "[chain468] $(date -u '+%F %T') $*" | tee -a $LOG; }
