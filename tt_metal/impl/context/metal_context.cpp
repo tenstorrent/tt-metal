@@ -302,6 +302,9 @@ void MetalContext::initialize(
     // Set internal routing for active ethernet cores, this is required for our FW to run
     if (has_flag(get_fabric_manager(), tt_fabric::FabricManagerMode::INIT_FABRIC) &&
         !get_cluster().is_mock_or_emulated()) {
+        if (tt_fabric::is_tt_fabric_config(get_fabric_config())) {
+            tt_fabric::pin_remote_transfer_cores_to_dispatch_links(this->get_control_plane(), get_cluster());
+        }
         get_cluster().set_internal_routing_info_for_ethernet_cores(this->get_control_plane(), true);
     }
 
