@@ -1232,6 +1232,61 @@
   budget_type: demo
   sp_config: sc1
 
+- name: "(DeepSeek-V4-Flash) depth probe: CPU reference full depth, chunk 0 vs vLLM golden"
+  fabric_profile: torus_xy
+  cmd: |
+    titles=(
+      "(DeepSeek-V4-Flash) depth probe: CPU reference full depth, chunk 0 vs vLLM golden"
+    )
+    summary=""
+    section_start() {
+      sec_n=$1
+      sec_title=${titles[$((sec_n - 1))]}
+      sec_t0=$SECONDS
+      echo "::group::[$sec_n/${#titles[@]}] $sec_title"
+    }
+    section_end() {
+      local rc=$1 s=$((SECONDS - sec_t0)) st=PASS note=""
+      echo "::endgroup::"
+      if [ "$rc" -ne 0 ]; then st=FAIL; fi
+      if [ "$rc" -eq 124 ]; then note=", timed out"; fi
+      if [ "$rc" -eq 137 ]; then note=", killed"; fi
+      local line="[$sec_n/${#titles[@]}] $st (exit $rc$note, $((s / 60)).$((s % 60 * 10 / 60)) min) $sec_title"
+      echo "$line"
+      summary+="$line"$'\n'
+    }
+    finish() {
+      local j
+      for ((j = sec_n + 1; j <= ${#titles[@]}; j++)); do
+        summary+="[$j/${#titles[@]}] NOT RUN ${titles[$((j - 1))]}"$'\n'
+      done
+      echo "===== DeepSeek-V4 depth probe summary ====="
+      printf '%s' "$summary"
+    }
+
+    section_start 1
+    (
+      timeout -k 2m 85m mpirun --bind-to none --pernode --tag-output bash -lc '
+        export OMP_NUM_THREADS=$(nproc)
+        python3 -m pytest models/demos/deepseek_v3_d_p/tests/v4/test_transformer_depth_probe.py::test_v4_flash_reference_depth -vvv --tb=short
+      '
+    ) || { rc=$?; section_end "$rc"; finish; exit "$rc"; }
+    section_end 0
+
+    finish
+  test_type: dsv4_reference_depth
+  test_group: dsv4_depth_probe
+  skus:
+    bh_sc1:
+      # Not measured yet: 43 reference layers at ~1.5 min to load and run, x 1.4, charged to models/demo/bh_sc1.
+      timeout: 90
+      tier: 2
+      release_ready: false
+  owner_id: U08SXRPCTJ5  # Janko Mitrovic
+  team: models
+  budget_type: demo
+  sp_config: sc1
+
 # ===== Gemma4-31B D_P =================================================================================
 
 # Sanity gate for the standalone disaggregated-prefill implementation: the
