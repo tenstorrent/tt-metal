@@ -13,4 +13,4 @@ python -m models.demos.common.prefill.runners.prefill_runner
 
 The two-layer adapter narrows a copy of the Hugging Face layer configuration before model construction. Full-model configuration is unchanged. Sliding gather storage reserves two compact halos because a reused prefix can rotate Q across a ring-group boundary.
 
-Validation: real two-layer chat requests at reused-prefix offsets 64 and 96 passed after the halo fix; before the fix the first reused prefix hit the RingJointSDPA two-halo assertion. Full-model readiness and output checks are tracked separately.
+Validation: real two-layer chat requests at reused-prefix offsets 64 and 96 passed after the halo fix; before the fix the first reused prefix hit the RingJointSDPA two-halo assertion.
