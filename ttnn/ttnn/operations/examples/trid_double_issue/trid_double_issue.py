@@ -63,6 +63,12 @@ VARIANTS = ("full_barrier", "trid_double_issue")
 # the hardware limit -- the point is only to never let the NoC go empty.
 MAX_TRIDS = 15
 
+# Each block's reads all carry one id, and the NoC counts reads still pending per id
+# in an 8-bit counter (0..255). Past 255 it wraps and the barrier on that id can
+# return before the block has landed. One page is one read, so a block is capped at
+# 255 pages.
+MAX_BLOCK = 255
+
 # Tile formats = bytes per NoC transaction (bfloat8_b ~1088 B, bfloat16 2048 B,
 # float32 4096 B). The kernels are dtype-agnostic; the CB page size is queried
 # from the tensor and never hard-coded.
@@ -243,6 +249,11 @@ def trid_double_issue(
     if variant == "trid_double_issue":
         if not (2 <= num_trids <= MAX_TRIDS):
             raise ValueError(f"trid_double_issue example: num_trids must be in [2, {MAX_TRIDS}], got {num_trids}")
+        if block > MAX_BLOCK:
+            raise ValueError(
+                f"trid_double_issue example: block must be <= {MAX_BLOCK} for the trid variant "
+                f"(reads pending per transaction id), got {block}"
+            )
         if cb_blocks < num_trids:
             raise ValueError(
                 f"trid_double_issue example: cb_blocks ({cb_blocks}) must be >= num_trids ({num_trids}) "

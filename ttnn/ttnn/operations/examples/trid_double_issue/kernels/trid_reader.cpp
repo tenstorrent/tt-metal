@@ -63,6 +63,14 @@ void kernel_main() {
     constexpr uint32_t ahead = get_compile_time_arg_val(5);      // baseline: blocks issued per barrier
     constexpr auto in_args = TensorAccessorArgs<6>();
 
+    // Ids are 1..num_trids and must fit the NoC's id field (0 = untagged). Every read
+    // of a block carries the same id, and the per-id pending-read counter tops out at
+    // NOC_MAX_TRANSACTION_ID_COUNT, so a block may not exceed it.
+    static_assert(
+        num_trids == 0 || num_trids <= NOC_MAX_TRANSACTION_ID, "num_trids exceeds the NoC transaction id range");
+    static_assert(
+        num_trids == 0 || block <= NOC_MAX_TRANSACTION_ID_COUNT, "block exceeds the per-id pending-read counter");
+
     // Blocks kept outstanding. The two variants agree on this number and on all the
     // buffer machinery below; they differ ONLY in how a block is RETIRED, which is
     // what forces the two loop shapes:
