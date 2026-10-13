@@ -220,10 +220,13 @@ bool is_llk_bcast(
     const ttnn::operations::ternary::TernaryBroadcastType broadcast_type,
     const ttnn::DataType a_dtype,
     const ttnn::DataType b_dtype,
-    const ttnn::DataType c_dtype) {
+    const ttnn::DataType c_dtype,
+    const ttnn::DataType output_dtype) {
+    // The LLK row broadcast (MOVB2D) corrupts bf16 sources in an fp32 DEST, so a non-bf16
+    // output (which enables fp32 DEST) uses the reader-side row broadcast instead.
     if (broadcast_type == TernaryBroadcastType::ROW_BCAST) {
         if (a_dtype == ttnn::DataType::BFLOAT16 && b_dtype == ttnn::DataType::BFLOAT16 &&
-            c_dtype == ttnn::DataType::BFLOAT16) {
+            c_dtype == ttnn::DataType::BFLOAT16 && output_dtype == ttnn::DataType::BFLOAT16) {
             return true;
         }
     }
@@ -1254,7 +1257,8 @@ tt::tt_metal::ProgramDescriptor TernaryDeviceOperation::TernaryProgramFactory::c
                 broadcast_type,
                 predicate_tensor.dtype(),
                 value_true_tensor.value().dtype(),
-                value_false_tensor.value().dtype())) {
+                value_false_tensor.value().dtype(),
+                output.dtype())) {
             CMAKE_UNIQUE_NAMESPACE::overwrite_compute_kernel_name_and_defines(
                 compute_kernel, broadcast_type, operation_attributes.ternary_op_type);
             reader_defines["BCAST_LLK"] = "1";
