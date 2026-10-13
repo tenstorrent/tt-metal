@@ -534,13 +534,16 @@ inline void _llk_unpack_A_(const std::uint32_t address, const std::uint32_t unpa
 }
 
 // A block of four-face 32-bit tiles on unpack to dest takes one DEST slot handshake, which the math thread's block call must match.
+// tiles_back_to_back: the caller's tiles are uncompressed and tile_stride_16B is their size, so the unpacker's Z counter walks
+// from one tile into the next with no address write per tile.
 // The init is _llk_unpack_A_init_ with the same template args and transpose_of_faces 0.
 template <
     BroadcastType BType                          = BroadcastType::NONE,
     bool acc_to_dest                             = false,
     EltwiseBinaryReuseDestType binary_reuse_dest = EltwiseBinaryReuseDestType::NONE,
     bool unpack_to_dest                          = false,
-    bool is_fp32_dest_acc_en                     = false>
+    bool is_fp32_dest_acc_en                     = false,
+    bool tiles_back_to_back                      = false>
 inline void _llk_unpack_A_block_(
     const std::uint32_t address,
     const std::uint32_t num_tiles,
@@ -587,6 +590,32 @@ inline void _llk_unpack_A_block_(
         t6_semaphore_get(semaphore::UNPACK_SYNC);
         unpack_to_dest_tile_done(unp_cfg_context);
         switch_config_context(unp_cfg_context);
+        return;
+    }
+
+    if constexpr (tiles_back_to_back)
+    {
+        LLK_ASSERT(
+            !IS_BFP_FORMAT(unpack_src_format) && tile_stride_16B == num_faces * face_r_dim * datum_size_in_bytes(unpack_src_format),
+            "Back to back tiles are uncompressed and tile_stride_16B apart");
+        std::uint32_t contexts_in_use = semaphore_read(semaphore::UNPACK_SYNC);
+        TTI_SETADCZW(0b011, 0, 0, 0, 0, 0b1111); // Clear z/w start counters
+        volatile std::uint32_t tt_reg_ptr *cfg = get_cfg_pointer();
+        const std::uint32_t context            = unp_cfg_context;
+        while (contexts_in_use >= 2)
+        {
+            contexts_in_use = semaphore_read(semaphore::UNPACK_SYNC);
+        }
+        cfg[(context == 0) ? THCON_SEC0_REG3_Base_address_ADDR32 : THCON_SEC0_REG3_Base_cntx1_address_ADDR32] = address;
+        semaphore_post(semaphore::UNPACK_SYNC);
+        TTI_STALLWAIT(p_stall::STALL_UNPACK, p_stall::TRISC_CFG);
+#pragma GCC unroll 0
+        for (std::uint32_t tile = 0; tile < num_tiles; ++tile)
+        {
+            ckernel::ckernel_template::run();
+        }
+        t6_semaphore_get(semaphore::UNPACK_SYNC);
+        switch_config_context_from(context);
         return;
     }
 
