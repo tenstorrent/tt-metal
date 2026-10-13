@@ -139,6 +139,9 @@ class Qwen36Model:
             # bucketing is made compatible with the in-trace sampler by namespacing the sampling
             # trace per bucket width (SamplingGenerator.set_trace_bucket, driven from
             # qwen36_vllm.decode_forward) — see generator._validate_trace_inputs.
+            # vLLM v1 already gives each n>1 child its own seed (seed + i), so concurrent requests that share a seed are
+            # independent requests that must produce the same stream; per-slot salting would make them diverge.
+            args.salt_duplicate_seeds = False
             self.sampling = SamplingGenerator(args=args, mesh_device=mesh_device, tt_ccl=self.tt_ccl)
         else:
             self.sampling = None
@@ -269,6 +272,11 @@ class Qwen36Model:
         self._chunked_trace_id = None
         self._chunked_prepared_key = None
         self._gdn_slot_ops_warmed = False
+        # Per-slot traces of the whole GDN slot write (capture_gdn_slot_write_traces): slot -> trace id.
+        self._gdn_slot_write_traces = {}
+        self._gdn_slot_write_fp = None
+        self._gdn_slot_write_warned = False
+        self._gdn_slot_write_replayed = False
         self._chunked_trace_output = None
         self._chunked_chunk_size = None
         self._chunk_token_buf = None
@@ -4049,9 +4057,114 @@ class Qwen36Model:
     def _write_gdn_slot_from_scratch(self, slot):
         """Write the persistent B=1 prefill scratch state (device tensors, left intact) into decode `slot` of the
         batched GDN buffers via TPGatedDeltaNet.write_slot(consume=False). The batched buffers must be bound."""
+        tid = self._gdn_slot_write_traces.get(slot)
+        if tid is not None and self._gdn_slot_write_replayable():
+            for dn, rec, _conv, _carry, _zero0 in self._gdn_prefill_scratch:
+                assert dn.rec_state is not rec, "write_slot_from_scratch needs the batched decode buffers bound"
+                dn.sync_conv_taps()  # eager and a no-op unless taps are stale (write_slot does this before its writes)
+            ttnn.execute_trace(self.mesh_device, tid, cq_id=0, blocking=False)
+            if not self._gdn_slot_write_replayed:
+                self._gdn_slot_write_replayed = True
+                logger.info(f"GDN slot-write trace replay in use (first replay: slot {slot})")
+            # Host-side state write_slot would have left behind (packed format: no conv_states / RM history writes).
+            for dn, _rec, _conv, _carry, _zero0 in self._gdn_prefill_scratch:
+                dn._conv_win_stale = True
+            return
+        self._write_gdn_slot_eager(slot)
+
+    def _write_gdn_slot_eager(self, slot):
         for dn, rec, conv, _carry, _zero0 in self._gdn_prefill_scratch:
             assert dn.rec_state is not rec, "write_slot_from_scratch needs the batched decode buffers bound"
             dn.write_slot(slot, rec, conv, consume=False)
+
+    def _gdn_slot_write_fingerprint(self):
+        """Every device address a slot-write trace bakes: per GDN layer the batched rec_state, the packed history and
+        the B=1 scratch rec + conv taps, plus the shared pack tables."""
+        fp = []
+        for dn, rec, conv, _carry, _zero0 in self._gdn_prefill_scratch:
+            tab = dn._pack_tables()
+            fp.append(
+                (
+                    dn.rec_state.buffer_address(),
+                    dn._conv_hist_packed.buffer_address(),
+                    rec.buffer_address(),
+                    tuple(c.buffer_address() for c in conv),
+                    tuple(
+                        t.buffer_address()
+                        for t in (tab["slot_to_packed"][0], tab["slot_to_packed"][1], tab["zero_row"])
+                    ),
+                )
+            )
+        return fp
+
+    def _gdn_slot_write_replayable(self):
+        """A captured slot-write trace is valid only while every layer is still in the packed format the capture ran under
+        and none of the baked addresses moved (checked per replay; a mismatch warns once and the caller goes eager)."""
+        if any(dn._conv_fmt != "packed" for dn, *_ in self._gdn_prefill_scratch):
+            return False
+        fp = self._gdn_slot_write_fingerprint()
+        if fp == self._gdn_slot_write_fp:
+            return True
+        if not self._gdn_slot_write_warned:
+            self._gdn_slot_write_warned = True
+            bad = next((i for i, (a, b) in enumerate(zip(fp, self._gdn_slot_write_fp)) if a != b), None)
+            logger.warning(f"GDN slot-write trace invalidated: baked addresses moved (first at GDN layer {bad}); eager")
+        return False
+
+    def release_gdn_slot_write_traces(self):
+        for tid in self._gdn_slot_write_traces.values():
+            try:
+                ttnn.release_trace(self.mesh_device, tid)
+            except Exception as e:  # noqa: BLE001
+                logger.warning(f"release_trace failed for a slot-write trace: {e}")
+        self._gdn_slot_write_traces = {}
+
+    def capture_gdn_slot_write_traces(self):
+        """Capture one trace per decode slot of the whole GDN slot write (every layer's in-place packed-history + rec_state
+        write from the persistent B=1 scratch): ~15 host-dispatched ops per layer collapse into one execute_trace. Call
+        after the decode traces are captured. No-op (logged once) unless the in-place packed path applies; any capture
+        failure releases the partial traces and leaves the eager path in charge."""
+        import time
+
+        if self._gdn_slot_write_traces or os.environ.get("QWEN36_GDN_SLOT_WRITE_TRACE", "1") != "1":
+            return
+        why = None
+        if os.environ.get("QWEN36_GDN_INPLACE_SLOT_WRITE", "1") != "1":
+            why = "QWEN36_GDN_INPLACE_SLOT_WRITE=0"
+        elif not (self.num_devices > 1 and self.args.max_batch_size > 1):
+            why = "not batched"
+        elif self._gdn_prefill_scratch is None:
+            why = "no B=1 prefill scratch"
+        elif any(
+            not (dn._conv_fmt == "packed" and dn._hist_hook_active() and dn._decode_B > 1)
+            for dn, *_ in self._gdn_prefill_scratch
+        ):
+            why = "GDN layers are not all in the packed conv format"
+        if why is not None:
+            logger.info(f"GDN slot-write trace capture skipped: {why}")
+            return
+        t0 = time.perf_counter()
+        try:
+            for dn, *_ in self._gdn_prefill_scratch:
+                dn.sync_conv_taps()  # so the captured write_slot bodies contain no tap-sync ops
+            for slot in range(self.args.max_batch_size):
+                self._write_gdn_slot_eager(slot)  # warm: compiles + allocates everything before capture
+                ttnn.synchronize_device(self.mesh_device)
+                tid = ttnn.begin_trace_capture(self.mesh_device, cq_id=0)
+                try:
+                    self._write_gdn_slot_eager(slot)
+                finally:
+                    ttnn.end_trace_capture(self.mesh_device, tid, cq_id=0)
+                self._gdn_slot_write_traces[slot] = tid
+            ttnn.synchronize_device(self.mesh_device)
+            self._gdn_slot_write_fp = self._gdn_slot_write_fingerprint()
+        except Exception as e:  # noqa: BLE001
+            logger.error(f"GDN slot-write trace capture failed ({e!r}); falling back to eager slot writes")
+            self.release_gdn_slot_write_traces()
+            return
+        logger.info(
+            f"Captured {len(self._gdn_slot_write_traces)} GDN slot-write traces in {time.perf_counter() - t0:.2f}s"
+        )
 
     def _prefill_paged_slots_host(self, token_ids_list, page_table, empty_slots, valid_lens=None):
         """vLLM continuous-batching TP prefill: prefill each new request into ITS decode slot.
@@ -4220,14 +4333,15 @@ class Qwen36Model:
             return self._slot_rope_delta[:B]
         return self.rope.rope_delta
 
-    def _remap_gdn_slots(self, remap):
+    def _remap_gdn_slots(self, remap, live=None):
         """Apply a vLLM batch-condense slot_remap to every GDN layer's batched decode state
         (device-side; slot i takes the state at slot remap[i]). Mirrors seed_manager.apply_slot_remap
         for GDN's per-slot recurrent+conv state, which the plugin's slot_remap does not itself move.
-        No-op for an identity remap."""
+        No-op for an identity remap. `live` (optional list of bools, True = row holds a live request after the
+        remap) lets the recurrent-state move skip writes into dead rows."""
         for layer in self.layers:
             if not layer.is_full_attention:
-                layer.attention.remap_slots(remap)
+                layer.attention.remap_slots(remap, live=live)
 
     def set_gdn_fused_decode(self, enabled: bool) -> None:
         """Select the GDN decode recurrence for EVERY GDN layer: the single fused device op

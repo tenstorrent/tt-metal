@@ -993,11 +993,54 @@ class TPGatedDeltaNet:
         rows = self._rows_to_rm([convs[m] for m in range(1, self.K)])  # [1, K-1, C] RM bf16
         w = ttnn.reshape(rows, ((self.K - 1) * tab["cpr"], 32))
         w = ttnn.concat([w, tab["zero_row"]], dim=0, memory_config=ttnn.DRAM_MEMORY_CONFIG)
+        if self._inplace_slot_write():
+            # A DRAM-interleaved TILE source makes slice_write untilize/retilize the whole destination and re-seat it
+            # (new address: baked decode traces then read a stale buffer); an L1-sharded source writes tiles in place.
+            out = ttnn.embedding(
+                tab["slot_to_packed"][slot & 1],
+                w,
+                layout=ttnn.TILE_LAYOUT,
+                memory_config=self._packed_row_shard_memcfg(),
+            )  # [1, Nv*4*32, 32]
+            ttnn.deallocate(w)
+            nr = self.Nv * 4
+            out = ttnn.reshape(out, (1, nr, 32, 32))
+            # The 5D TILE buffer viewed as [Bm, Nv*4, 32, 32] is the same buffer (a true view).
+            ttnn.experimental.slice_write(
+                out,
+                ttnn.reshape(packed, (self._decode_B, nr, 32, 32)),
+                [slot, 0, 0, 0],
+                [slot + 1, nr, 32, 32],
+                [1, 1, 1, 1],
+            )
+            ttnn.deallocate(out)
+            return
         out = ttnn.embedding(tab["slot_to_packed"][slot & 1], w, layout=ttnn.TILE_LAYOUT)  # [1, Nv*4*32, 32]
         ttnn.deallocate(w)
         out = ttnn.reshape(out, (1, self.Nv, 4, 32, 32))
         ttnn.experimental.slice_write(out, packed, [slot, 0, 0, 0, 0], [slot + 1, self.Nv, 4, 32, 32], [1, 1, 1, 1, 1])
         ttnn.deallocate(out)
+
+    @staticmethod
+    def _inplace_slot_write():
+        return os.environ.get("QWEN36_GDN_INPLACE_SLOT_WRITE", "1") == "1"
+
+    def _packed_row_shard_memcfg(self):
+        """L1 height-sharded TILE config for ONE packed-history row [1, Nv*4, 32, 32] (the sharded source of the in-place
+        packed slot write)."""
+        cfg = getattr(self, "_packed_row_shard_cfg", None)
+        if cfg is None:
+            grid_size = self.mesh.compute_with_storage_grid_size()
+            n_tiles = self.Nv * 4
+            num_cores = max(c for c in range(1, min(48, grid_size.x * grid_size.y) + 1) if n_tiles % c == 0)
+            grid = ttnn.num_cores_to_corerangeset(num_cores, grid_size, row_wise=True)
+            cfg = ttnn.MemoryConfig(
+                ttnn.TensorMemoryLayout.HEIGHT_SHARDED,
+                ttnn.BufferType.L1,
+                ttnn.ShardSpec(grid, (n_tiles * 32 // num_cores, 32), ttnn.ShardOrientation.ROW_MAJOR),
+            )
+            self._packed_row_shard_cfg = cfg
+        return cfg
 
     def _remap_packed(self, idx):
         """remap_slots under "packed": ONE gather per layer over the packed tensor viewed as [Bm*Nv*4*32, 32] RM rows.
@@ -2080,7 +2123,21 @@ class TPGatedDeltaNet:
         rec_src = rec if rec.dtype == self.rec_state.dtype else ttnn.typecast(rec, self.rec_state.dtype)
         if rec_src is not rec and consume:
             ttnn.deallocate(rec)
-        if self.rec_state.shape[0] > 1:
+        if self.rec_state.shape[0] > 1 and self._inplace_slot_write() and self._rec_row_layout_ok():
+            # A DRAM-interleaved TILE source makes slice_write re-tilize and re-seat rec_state (new address, stale for
+            # baked traces); the L1-sharded copy of the row is written tile-for-tile in place.
+            src = ttnn.slice(rec_src, (0, 0, 0, 0), tuple(rec_src.shape), memory_config=self._rec_row_shard_memcfg())
+            ttnn.experimental.slice_write(
+                src,
+                self.rec_state,
+                [slot, 0, 0, 0],
+                [slot + 1] + list(self.rec_state.shape)[1:],
+                [1, 1, 1, 1],
+            )
+            ttnn.deallocate(src)
+            if consume or rec_src is not rec:
+                ttnn.deallocate(rec_src)
+        elif self.rec_state.shape[0] > 1:
             # In-place row write (no slice + concat + copy of the whole [B, Nv, Dk, Dv] state; bit-identical).
             ttnn.experimental.slice_write(
                 rec_src,
@@ -2111,7 +2168,7 @@ class TPGatedDeltaNet:
             # Fused single-user decode reads its conv history from the RM buffer, not conv_states.
             self._sync_conv_hist_from_states()
 
-    def remap_slots(self, remap):
+    def remap_slots(self, remap, live=None):
         """Reindex the batched decode state after a vLLM batch condense: slot i takes the state
         previously at slot remap[i] (identity entries are no-ops). Mirrors
         seed_manager.apply_slot_remap for GDN's per-slot recurrent+conv state, which the plugin's
@@ -2127,7 +2184,10 @@ class TPGatedDeltaNet:
         if all(idx[i] == i for i in range(self.B)):
             return
         self.sync_conv_taps()  # read-modify-write of the taps: they must be current first
-        self._gather_indices(self.rec_state, idx, dim=0)
+        if self._rec_row_remap_ok():
+            self._remap_rec_rows(idx, live)
+        else:
+            self._gather_indices(self.rec_state, idx, dim=0)
         if self._conv_fmt == "packed" and self._hist_hook_active() and self._decode_B > 1:
             # Parity-aware single gather over the packed rows; RM history / conv_states are stale and stay so.
             self._remap_packed(idx)
@@ -2147,6 +2207,85 @@ class TPGatedDeltaNet:
                 self._gather_indices(self.conv_states[m], idx, dim=1)
             self._gather_indices(self._conv_hist_rm, idx, dim=0)
         self._conv_win_stale = True
+
+    def _rec_row_shard_memcfg(self):
+        """L1 height-sharded config for ONE rec_state row [1, Nv, Dk, Dv] (same core choice as the prefix-state write)."""
+        cfg = getattr(self, "_rec_row_shard_cfg", None)
+        if cfg is None:
+            grid_size = self.mesh.compute_with_storage_grid_size()
+            nhw = self.Nv * self.Dk
+            n_tiles = nhw // ttnn.TILE_SIZE
+            num_cores = max(c for c in range(1, min(48, grid_size.x * grid_size.y) + 1) if n_tiles % c == 0)
+            grid = ttnn.num_cores_to_corerangeset(num_cores, grid_size, row_wise=True)
+            cfg = ttnn.MemoryConfig(
+                ttnn.TensorMemoryLayout.HEIGHT_SHARDED,
+                ttnn.BufferType.L1,
+                ttnn.ShardSpec(grid, (nhw // num_cores, self.Dv), ttnn.ShardOrientation.ROW_MAJOR),
+            )
+            self._rec_row_shard_cfg = cfg
+        return cfg
+
+    def _remap_rec_rows(self, idx, live=None):
+        """In place: rec_state row d becomes old row idx[d] (idx is a permutation). Moves only the changed rows, one
+        permutation cycle at a time: each row is sliced straight into an L1 height-sharded tile buffer and written back
+        with the sharded-input slice_write, which writes tiles into rec_state's own buffer (no full-state concat + copy,
+        no layout round trip, address unchanged). SHAPE-STABLE: only 1-row slices at offset s and 1-row writes at
+        offset d, all compiled by the full-reversal remap in warmup_gdn_slot_ops (a reversal is all 2-cycles, so it
+        reads every row and writes every row). With `live`, rows whose destination holds no live request are left as
+        is."""
+        buf = self.rec_state
+        cfg = self._rec_row_shard_memcfg()
+        tail = list(buf.shape)[1:]
+
+        def read(s):
+            return ttnn.slice(buf, (s, 0, 0, 0), (s + 1, *tail), memory_config=cfg)
+
+        def write(row, d):
+            ttnn.experimental.slice_write(row, buf, [d, 0, 0, 0], [d + 1, *tail], [1, 1, 1, 1])
+            ttnn.deallocate(row)
+
+        seen = [False] * len(idx)
+        for start in range(len(idx)):
+            if seen[start] or idx[start] == start:
+                seen[start] = True
+                continue
+            cyc = []
+            d = start
+            while not seen[d]:
+                seen[d] = True
+                cyc.append(d)
+                d = idx[d]
+            if live is not None:
+                if not any(live[c] for c in cyc):
+                    continue
+                dead = next((j for j, c in enumerate(cyc) if not live[c]), None)
+                if dead is not None:
+                    # Rows without a live request are don't-care (a prefill rewrites the whole slot before reuse), so
+                    # skip writes into them. Rotating a dead row to the head means its old content is still in place
+                    # for the cycle's last write, so no temporary is needed (a condense is one read + write per move).
+                    cyc = cyc[dead:] + cyc[:dead]
+                    for j in range(len(cyc) - 1):
+                        if live[cyc[j]]:
+                            write(read(cyc[j + 1]), cyc[j])
+                    if live[cyc[-1]]:
+                        write(read(cyc[0]), cyc[-1])
+                    continue
+            # cyc[j] <- old cyc[j + 1]; read each source just before its own row is overwritten, the head via tmp.
+            tmp = read(cyc[0])
+            for j in range(len(cyc) - 1):
+                write(read(cyc[j + 1]), cyc[j])
+            write(tmp, cyc[-1])
+
+    def _rec_row_remap_ok(self):
+        return os.environ.get("QWEN36_GDN_REC_ROW_REMAP", "1") == "1" and self._rec_row_layout_ok()
+
+    def _rec_row_layout_ok(self):
+        return (
+            len(self.rec_state.shape) == 4
+            and self.rec_state.layout == ttnn.TILE_LAYOUT
+            and not self.rec_state.is_sharded()
+            and (self.Nv * self.Dk) % ttnn.TILE_SIZE == 0
+        )
 
     def _gather_indices(self, buf, idx, dim):
         """In place: slice i along `dim` becomes old slice idx[i] (idx is a permutation; identity rows untouched,

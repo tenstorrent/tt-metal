@@ -109,7 +109,7 @@ def test_positional_slot_remap_moves_gdn_state_and_keeps_full_width(monkeypatch)
         num_devices=2,
         args=SimpleNamespace(max_batch_size=4),
         sampling=None,
-        _remap_gdn_slots=remaps.append,
+        _remap_gdn_slots=lambda remap, live=None: remaps.append(remap),
         remap_slot_rope_delta=lambda r: None,
     )
     wrapper = Qwen36ForCausalLM.__new__(Qwen36ForCausalLM)
@@ -161,7 +161,7 @@ def test_condense_remaps_gdn_before_decode_in_both_sampling_modes(monkeypatch, s
         num_devices=4,
         args=SimpleNamespace(max_batch_size=8),
         sampling=None,
-        _remap_gdn_slots=lambda remap: events.append(("remap", list(remap))),
+        _remap_gdn_slots=lambda remap, live=None: events.append(("remap", list(remap))),
         remap_slot_rope_delta=lambda r: None,
     )
     wrapper = Qwen36ForCausalLM.__new__(Qwen36ForCausalLM)

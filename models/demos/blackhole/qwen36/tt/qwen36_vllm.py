@@ -55,6 +55,14 @@ _RELOAD_COMMAND_DEFAULTS = {
 }
 
 
+def _live_rows(start_pos, n):
+    """Rows holding a live request (vLLM pads idle decode rows with position -1), or None if unknown / disabled."""
+    if os.environ.get("QWEN36_GDN_REMAP_LIVE_ONLY", "1") != "1" or start_pos is None:
+        return None
+    pos = start_pos.flatten().tolist() if hasattr(start_pos, "flatten") else list(start_pos)
+    return [int(p) != -1 for p in pos] if len(pos) == n else None
+
+
 def _build_model_capabilities():
     """The plugin-visible capabilities. QWEN36_SERVE_DEVICE_DECODE=0 returns exactly the pre-1.6S dict."""
     caps = {
@@ -544,7 +552,8 @@ class Qwen36ForCausalLM(Generator, SupportsMultiModal):
         # decode trace reads it (the plugin remaps its own buffers; the sampler's seed/penalty state is remapped by
         # Generator.decode_forward; GDN state is model-internal, so mirror the reindex here). Exactly once.
         if slot_remap is not None and model.num_devices > 1 and model.args.max_batch_size > 1:
-            model._remap_gdn_slots(slot_remap)
+            live = _live_rows(start_pos, model.args.max_batch_size)
+            model._remap_gdn_slots(slot_remap, live=live)
             model.remap_slot_rope_delta(slot_remap)
 
         if bucket < width:
@@ -590,6 +599,7 @@ class Qwen36ForCausalLM(Generator, SupportsMultiModal):
         gdn_remap = None
         if model.num_devices > 1 and model.args.max_batch_size > 1:
             gdn_remap = _read("slot_remap", 9)
+            gdn_live = _live_rows(_read("start_pos", 1), model.args.max_batch_size) if gdn_remap is not None else None
         # Decode bucketing (default on; TT_DECODE_BUCKETING=0 off): slice host inputs to the
         # smallest power-of-2 width >= active prefix [0:num_active) before the base forward.
         # No runner edit / output re-pad — plugin reads unpadded_batch_size in slot order.
@@ -639,7 +649,7 @@ class Qwen36ForCausalLM(Generator, SupportsMultiModal):
             if hasattr(model, "prepare_gdn_decode_width"):
                 model.prepare_gdn_decode_width(B)
         if gdn_remap is not None:
-            model._remap_gdn_slots(gdn_remap)
+            model._remap_gdn_slots(gdn_remap, live=gdn_live)
             model.remap_slot_rope_delta(gdn_remap)
         return super().decode_forward(*args, **kwargs)
 
@@ -764,4 +774,26 @@ class Qwen36ForCausalLM(Generator, SupportsMultiModal):
         kwargs.pop("non_greedy_decoding_on_device", None)
         self._decode_bucket_last = None  # warmup replays leave the resident decode inputs at warmup values
         self._validate_device_sampling_request(kwargs.get("can_sample_on_device", False))
-        return warmup_decode_buckets(self, super().warmup_model_decode, *args, **kwargs)
+        result = warmup_decode_buckets(self, super().warmup_model_decode, *args, **kwargs)
+        if kwargs.get("enable_trace"):
+            self._capture_gdn_slot_write_traces()
+        if kwargs.get("enable_trace") and os.environ.get("QWEN36_FORBID_POST_CAPTURE_COMPILE") == "1":
+            self.mesh_device.set_program_cache_misses_allowed(False)
+            logger.info("post-capture program compiles are now forbidden")
+        return result
+
+    def _capture_gdn_slot_write_traces(self):
+        """After the decode traces, before the post-capture compile guard: capture the per-slot GDN slot-write traces. The
+        layers normally sit in the packed conv format here (decode ran); otherwise enter it for the capture only. Replay
+        is re-validated per call (packed format + baked-address fingerprint), so a later format change just goes eager.
+        """
+        model = self.model[0]
+        if not (model.num_devices > 1 and model.args.max_batch_size > 1) or model._gdn_prefill_scratch is None:
+            return
+        dn_states = [layer.attention for layer in model.layers if not layer.is_full_attention]
+        prevs = [dn.warmup_enter_packed() if dn._conv_fmt != "packed" else None for dn in dn_states]
+        try:
+            model.capture_gdn_slot_write_traces()
+        finally:
+            for dn, p in zip(dn_states, prevs):
+                dn.warmup_exit_packed(p)

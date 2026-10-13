@@ -233,6 +233,10 @@ class Qwen36ModelArgs(ModelArgs):
         self.mlp_1d_decode = True
         # gate/up: num_cores=44 -> 11x4 on BH, the fastest measured config (wide1d_11x4c, 42.8us vs
         # 43.9us for the old 8x4=forced1d_32c). On WH (decode_grid_w=8) this falls back to 8x6.
+        # in0_block_w=16 (vs the helper's cap of 8) is ~10-12% faster on gate/up (K=5120 -> 160 k-tiles,
+        # divisible by 16) in the single-chip trace microbench; larger is slower. QWEN36_MLP_DECODE_IBW=8
+        # restores the old value. Gate/up only.
+        mlp_decode_ibw = int(os.environ.get("QWEN36_MLP_DECODE_IBW", "16"))
         self.mlp_w1_decode_1d_progcfg = tpc.create_matmul_1d_decode_progcfg(
             M,
             self.dim,
@@ -240,9 +244,15 @@ class Qwen36ModelArgs(ModelArgs):
             num_cores=44,
             fused_activation=ttnn.UnaryOpType.SILU,
             grid_w=self.decode_grid_w,
+            max_in0_block_w=mlp_decode_ibw,
         )
         self.mlp_w3_decode_1d_progcfg = tpc.create_matmul_1d_decode_progcfg(
-            M, self.dim, self.hidden_dim // tp, num_cores=44, grid_w=self.decode_grid_w
+            M,
+            self.dim,
+            self.hidden_dim // tp,
+            num_cores=44,
+            grid_w=self.decode_grid_w,
+            max_in0_block_w=mlp_decode_ibw,
         )
         # down: num_cores=33 -> 11x3 on BH, the fastest measured config (wide1d_11x3c, ~63us, +28% vs
         # the old 8x2). On WH (decode_grid_w=8) this falls back to 8x5.

@@ -227,6 +227,51 @@ def test_gdn_packed_write_slot_exact(mesh_device, reset_seeds, ensure_gc, monkey
 
 @torch.no_grad()
 @parametrize_mesh_tp()
+def test_gdn_write_slot_inplace_keeps_addresses(mesh_device, reset_seeds, ensure_gc, monkeypatch):
+    """The in-place write_slot (L1-sharded sources) never re-seats rec_state / the packed history (decode traces bake
+    their addresses) and is bit-exact vs a host reference of the slot write, for every slot, written twice."""
+    mesh, Bmax = mesh_device, 32
+    args, go, _ = _build(mesh, Bmax, monkeypatch)
+    monkeypatch.setenv("QWEN36_GDN_INPLACE_SLOT_WRITE", "1")
+    Nv, Dk, Dv, C = go.Nv, go.Dk, go.Dv, go.qkv_dim_tp
+    go.reset_state()
+    _random_packed_state(mesh, go, Bmax, C)
+    go._conv_fmt = "packed"
+    rec_addr, pk_addr = go.rec_state.buffer_address(), go._conv_hist_packed.buffer_address()
+    ref_rec = ttnn.to_torch(ttnn.get_device_tensors(go.rec_state)[0]).clone()
+    for rep in range(2):
+        for slot in range(Bmax):
+            convs = [replicate_to_device(mesh, torch.randn(1, 1, C, dtype=torch.bfloat16)) for _ in range(4)]
+            rec_h = 0.1 * torch.randn(1, Nv, Dk, Dv)
+            rec = ttnn.from_torch(
+                rec_h,
+                dtype=ttnn.float32,
+                layout=ttnn.TILE_LAYOUT,
+                device=mesh,
+                mesh_mapper=ttnn.ReplicateTensorToMesh(mesh),
+            )
+            pre = _packed_host(go)
+            go.write_slot(slot, rec, convs, consume=False)
+            ref_rec[slot] = rec_h[0].float()
+            assert go.rec_state.buffer_address() == rec_addr, f"rep {rep} slot {slot}: rec_state moved"
+            assert go._conv_hist_packed.buffer_address() == pk_addr, f"rep {rep} slot {slot}: packed history moved"
+            new = _packed_host(go)
+            # reference: the same slot through the old unpack -> RM slot write -> re-pack path, from the pre-write state
+            _set_packed(mesh, go, pre)
+            go._unpack_conv_hist()
+            go._conv_fmt = "hist"
+            go._write_conv_hist_slot(slot, convs)
+            go._pack_conv_hist()
+            go._conv_fmt = "packed"
+            assert torch.equal(new, _packed_host(go)), f"rep {rep} slot {slot}: packed write differs from reference"
+    got_rec = ttnn.to_torch(ttnn.get_device_tensors(go.rec_state)[0])
+    assert torch.equal(got_rec, ref_rec), "rec_state differs from the host reference"
+    for t in ttnn.get_device_tensors(go.rec_state)[1:]:
+        assert torch.equal(ttnn.to_torch(t), got_rec)
+
+
+@torch.no_grad()
+@parametrize_mesh_tp()
 def test_gdn_packed_remap_exact(mesh_device, reset_seeds, ensure_gc, monkeypatch):
     """remap_slots under 'packed' (one parity-aware gather) is bit-identical to unpack -> RM gather -> re-pack:
     odd<->even swaps, identity entries, shifts (condense) and duplicated sources."""
@@ -253,3 +298,68 @@ def test_gdn_packed_remap_exact(mesh_device, reset_seeds, ensure_gc, monkeypatch
         go._pack_conv_hist()
         old = _packed_host(go)
         assert torch.equal(new, old), f"remap {name}: packed gather differs from unpack/gather/repack"
+
+
+@torch.no_grad()
+@parametrize_mesh_tp()
+def test_gdn_rec_row_remap_live_only(mesh_device, reset_seeds, ensure_gc, monkeypatch):
+    """In-place rec_state row remap: bit-exact on live rows for vLLM-style condense permutations (dead rows are
+    don't-care), bit-exact on every row for random full permutations (live=None), buffer address stable, and no new
+    programs after the first full-reversal warm call."""
+    import random
+
+    mesh, Bmax = mesh_device, 32
+    args, go, _ = _build(mesh, Bmax, monkeypatch)
+    nd = mesh.get_num_devices()
+    Nv, Dk, Dv, C = go.Nv, go.Dk, go.Dv, go.qkv_dim_tp
+    rec0 = [torch.randn(1, Nv, Dk, Dv) for _ in range(Bmax)]
+    hist0 = [torch.randn(1, 3, C, dtype=torch.bfloat16) for _ in range(Bmax)]
+    _seed(mesh, args, go, rec0, hist0)
+    assert go._rec_row_remap_ok()
+    addr = go.rec_state.buffer_address()
+
+    def host():
+        return _cat0(mesh, go.rec_state).reshape(nd, Bmax, Nv, Dk, Dv)
+
+    ref = host().clone()
+    # warm: full reversal compiles every 1-row read / write (all 2-cycles)
+    rev = list(range(Bmax - 1, -1, -1))
+    go.remap_slots(rev)
+    ref = ref[:, rev]
+    assert torch.equal(host(), ref), "reversal"
+    entries = mesh.num_program_cache_entries()
+
+    rng = random.Random(1234)
+    for it in range(20):
+        k = rng.randint(1, 8)
+        finished = set(rng.sample(range(Bmax), k))
+        n_live = Bmax - k
+        survivors = [r for r in range(Bmax) if r not in finished]
+        # vLLM condense: move the highest live rows into the lowest holes
+        row_slots = list(range(Bmax))
+        holes = sorted(finished)
+        live_rows = set(survivors)
+        high = sorted((r for r in live_rows if r >= n_live), reverse=True)
+        low_holes = [h for h in holes if h < n_live]
+        for h, r in zip(low_holes, high):
+            row_slots[h] = r
+        free = sorted(set(range(Bmax)) - set(row_slots[:n_live]))
+        remap = row_slots[:n_live] + free
+        assert sorted(remap) == list(range(Bmax))
+        live = [d < n_live for d in range(Bmax)]
+        go.remap_slots(remap, live=live)
+        ref = ref[:, remap]
+        new = host()
+        assert torch.equal(new[:, :n_live], ref[:, :n_live]), f"condense {it} (k={k}): live rows differ"
+        # dead rows are don't-care: resync the reference to the device so later iterations compare real content
+        ref = new.clone()
+        assert go.rec_state.buffer_address() == addr
+
+    for it in range(5):
+        perm = torch.randperm(Bmax).tolist()
+        go.remap_slots(perm)
+        ref = ref[:, perm]
+        assert torch.equal(host(), ref), f"random perm {it}: rows differ"
+        assert go.rec_state.buffer_address() == addr
+
+    assert mesh.num_program_cache_entries() == entries, "remap compiled new programs after the warm reversal"

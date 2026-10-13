@@ -283,21 +283,25 @@ def create_dram_sharded_matmul_program_config(m, k, n, num_cores=None):
     )
 
 
-def create_matmul_1d_decode_progcfg(m, k, n, num_cores, fused_activation=None, fp32_acc=True, grid_w=8):
+def create_matmul_1d_decode_progcfg(
+    m, k, n, num_cores, fused_activation=None, fp32_acc=True, grid_w=8, max_in0_block_w=8
+):
     """Explicit-grid 1D (mcast_in0) decode matmul progcfg on ~`num_cores` cores — small grids beat
     the ~80-core DRAM-sharded grid on the bandwidth-bound skinny decode matmuls. Weight must be interleaved.
 
     Grid is shaped WIDE-first (cols up to `grid_w`, the device worker-grid width — 11 on BH P150, 8 on
     WH): for a fixed core budget a wide-short grid shortens the in0 multicast column and beats a
     tall-narrow one (~2% on this matmul; see test_mlp_matmul_sweep wide1d_* vs forced1d_*). Default
-    grid_w=8 preserves the legacy shaping for callers that don't pass the device width."""
+    grid_w=8 preserves the legacy shaping for callers that don't pass the device width.
+
+    `max_in0_block_w` caps in0_block_w (largest divisor of k_tiles <= cap); default 8 = legacy."""
     cols = min(grid_w, num_cores)
     rows = math.ceil(num_cores / cols)
     m_tiles = math.ceil(m / TILE_SIZE)
     k_tiles = math.ceil(k / TILE_SIZE)
     n_tiles = math.ceil(n / TILE_SIZE)
     # mcast_in0: every core streams the full K, so in0_block_w must divide the full k_tiles.
-    per_core_k = _find_largest_divisor(k_tiles)
+    per_core_k = _find_largest_divisor(k_tiles, max_in0_block_w)
     per_core_n = math.ceil(n_tiles / (cols * rows))
     cap = 4 if fp32_acc else 8  # fp32_dest_acc caps subblock area at 4
     sub_w = max(i for i in range(1, cap + 1) if per_core_n % i == 0)

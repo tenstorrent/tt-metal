@@ -44,7 +44,7 @@ def harness(monkeypatch):
 
     monkeypatch.setattr(Generator, "decode_forward", fake_decode_forward)
 
-    def remap(r):
+    def remap(r, live=None):
         rec.remaps.append(list(r))
         rec.events.append("remap")
 
