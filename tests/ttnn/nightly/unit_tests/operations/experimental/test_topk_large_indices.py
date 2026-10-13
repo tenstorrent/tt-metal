@@ -1241,6 +1241,22 @@ def test_topk_large_indices_column_split_tail_segment(device, k, n):
     assert int(indices[0, 0]) == n - 1
 
 
+@pytest.mark.parametrize("extra_rows", [1, 3])
+@pytest.mark.parametrize("k,n", [(32, 16384), (1024, 32768 + 100), (2048, 65536)])
+def test_topk_large_indices_leftover_rows_split(device, k, n, extra_rows):
+    # Whole rows on every core, then the rows left over split into segments over the core pairs.
+    grid = device.compute_with_storage_grid_size()
+    num_rows = grid.x * grid.y + extra_rows
+    torch.manual_seed(3)
+    torch_input = torch.randn(num_rows, n, dtype=torch.bfloat16)
+    torch_input[-extra_rows:, n // 2 + 1] = 250.0  # a winner in the second segment of each split row
+    tt_indices = ttnn.experimental.topk_large_indices(_to_device(torch_input, device), k=k)
+
+    _assert_topk_values_match_torch(torch_input, tt_indices, k)
+    indices = ttnn.to_torch(tt_indices, dtype=torch.uint32).to(torch.int64)
+    assert (indices[-extra_rows:, 0] == n // 2 + 1).all()
+
+
 @pytest.mark.parametrize(
     "k,num_rows,n,valid_length",
     [
@@ -1295,7 +1311,7 @@ def test_topk_large_indices_column_split_matches_single_core(device, k, n):
 
 
 # ---------------------------------------------------------------------------
-# Column body: k <= 64, each column of a K 1024 chunk keeps its own top 64; 160 rows keep each row on one core.
+# Column body: k <= 64, each column of a K 1024 chunk keeps its own top 64.
 # ---------------------------------------------------------------------------
 
 

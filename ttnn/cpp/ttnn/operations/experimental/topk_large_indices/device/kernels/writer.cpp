@@ -114,6 +114,8 @@ void kernel_main() {
     const bool sends_survivor = tree && get_arg_val<uint32_t>(topk_core_args::writer_sends_survivor) != 0;
     const uint32_t parent_noc_x = get_arg_val<uint32_t>(topk_core_args::writer_parent_noc_x);
     const uint32_t parent_noc_y = get_arg_val<uint32_t>(topk_core_args::writer_parent_noc_y);
+    const uint32_t split_row = get_arg_val<uint32_t>(topk_core_args::writer_split_row);
+    const bool has_split = tree && get_arg_val<uint32_t>(topk_core_args::writer_has_split) != 0;
 
     constexpr uint32_t cb_indices = get_compile_time_arg_val(0);
     constexpr uint32_t cb_indices_scratch = get_compile_time_arg_val(1);
@@ -142,11 +144,13 @@ void kernel_main() {
     // The landing CB is one survivor slot cycled whole, so its base is the same address on every core.
     const uint32_t landing_base = landing_cb.get_write_ptr();
 
-    uint32_t landed = 0;  // Child deliveries so far; data_sem counts them monotonically across rounds and rows.
+    const uint32_t num_whole_rows = has_split ? num_rows - 1 : num_rows;
     for (uint32_t local_row = 0; local_row < num_rows; ++local_row) {
-        const uint32_t row = start_row + local_row;
+        const bool is_split = has_split && local_row == num_whole_rows;
+        const uint32_t row = is_split ? split_row : start_row + local_row;
+        const uint32_t row_recv_rounds = is_split ? num_recv_rounds : 0;
 
-        for (uint32_t round = 0; round < num_recv_rounds; ++round) {
+        for (uint32_t round = 0; round < row_recv_rounds; ++round) {
             const uint32_t child_noc_x = get_arg_val<uint32_t>(topk_core_args::writer_child_coords_base + 2 * round);
             const uint32_t child_noc_y =
                 get_arg_val<uint32_t>(topk_core_args::writer_child_coords_base + 2 * round + 1);
@@ -156,13 +160,12 @@ void kernel_main() {
             credit_sem.up(noc, child_noc_x, child_noc_y, 1);
 
             // The child increments data_sem only after its write is drained, so the slot is complete here.
-            ++landed;
-            data_sem.wait_min(landed);
+            data_sem.wait_min(round + 1);
             landing_cb.push_back(survivor_tiles);
         }
 
-        if (sends_survivor) {
-            credit_sem.wait_min(local_row + 1);
+        if (is_split && sends_survivor) {
+            credit_sem.wait_min(1);
             send_cb.wait_front(survivor_tiles);
             noc.async_write(
                 send_cb,

@@ -19,16 +19,25 @@ enum Compute { compute_search_length = 0 };
 enum Writer { output_address = 0 };
 }  // namespace topk_common_args
 
-// Per-core args. A row splits into segments of whole K chunks; tree round r merges segment i + 2^r into i.
+// Per-core args. A core reduces num_rows rows: whole rows from start_row, and with has_split last one segment of
+// whole K chunks of split_row. Tree round r merges segment i + 2^r into i.
 namespace topk_core_args {
-enum Reader { reader_start_row = 0, reader_num_rows = 1, reader_seg_first_chunk = 2, reader_seg_end_chunk = 3 };
+enum Reader {
+    reader_start_row = 0,
+    reader_num_rows = 1,
+    reader_seg_first_chunk = 2,
+    reader_seg_end_chunk = 3,
+    reader_split_row = 4,
+    reader_has_split = 5,
+};
 enum Compute {
     compute_num_rows = 0,
     compute_seg_first_chunk = 1,
     compute_seg_end_chunk = 2,
     compute_num_recv_rounds = 3,
     compute_sends_survivor = 4,
-    compute_num_args = 5,
+    compute_has_split = 5,
+    compute_num_args = 6,
 };
 enum Writer {
     writer_start_row = 0,
@@ -37,7 +46,9 @@ enum Writer {
     writer_sends_survivor = 3,
     writer_parent_noc_x = 4,
     writer_parent_noc_y = 5,
+    writer_split_row = 6,
+    writer_has_split = 7,
     // (x, y) of the round r child at writer_child_coords_base + 2r; zero for rounds this core does not receive in.
-    writer_child_coords_base = 6,
+    writer_child_coords_base = 8,
 };
 }  // namespace topk_core_args

@@ -103,7 +103,7 @@ TreePosition tree_position(
     TreePosition position;
     position.child_physical.assign(max_tree_rounds, CoreCoord{0, 0});
     const auto& assignment = assignments[core_index];
-    if (assignment.num_rows == 0 || assignment.num_segments == 1) {
+    if (!assignment.has_split || assignment.num_segments == 1) {
         return position;
     }
     const uint32_t rounds = static_cast<uint32_t>(std::countr_zero(assignment.num_segments));
@@ -155,11 +155,17 @@ void set_runtime_args(
         const auto position = tree_position(assignments, i, shared.max_tree_rounds, *device);
         const uint32_t num_recv_rounds = position.num_recv_rounds;
         const uint32_t sends_survivor = position.sends_survivor ? 1u : 0u;
+        const uint32_t has_split = assignment.has_split ? 1u : 0u;
         tt::tt_metal::SetRuntimeArgs(
             program,
             shared.reader_kernel_id,
             assignment.core,
-            {assignment.start_row, assignment.num_rows, assignment.seg_first_chunk, assignment.seg_end_chunk});
+            {assignment.start_row,
+             assignment.num_rows,
+             assignment.seg_first_chunk,
+             assignment.seg_end_chunk,
+             assignment.split_row,
+             has_split});
         tt::tt_metal::SetRuntimeArgs(
             program,
             shared.compute_kernel_id,
@@ -168,7 +174,8 @@ void set_runtime_args(
              assignment.seg_first_chunk,
              assignment.seg_end_chunk,
              num_recv_rounds,
-             sends_survivor});
+             sends_survivor,
+             has_split});
         // Fixed length: runtime argument counts cannot change between launches of a cached program.
         std::vector<uint32_t> writer_args = {
             assignment.start_row,
@@ -176,7 +183,9 @@ void set_runtime_args(
             num_recv_rounds,
             sends_survivor,
             static_cast<uint32_t>(position.parent_physical.x),
-            static_cast<uint32_t>(position.parent_physical.y)};
+            static_cast<uint32_t>(position.parent_physical.y),
+            assignment.split_row,
+            has_split};
         for (const auto& child : position.child_physical) {
             writer_args.push_back(static_cast<uint32_t>(child.x));
             writer_args.push_back(static_cast<uint32_t>(child.y));
@@ -227,29 +236,31 @@ std::vector<CoreRowAssignment> derive_core_row_assignments(
     const auto cores = corerange_to_cores(core_grid, std::nullopt, true);
     const uint64_t num_cores = cores.size();
 
-    const uint32_t num_segments = column_segments_for(num_rows, num_chunks, num_cores);
+    // Every core takes the same number of whole rows; the rows left over split into column segments when two cores
+    // per row are free, so no core works a whole row more than the others.
+    const uint32_t whole_rounds = static_cast<uint32_t>(num_rows / num_cores);
+    const uint32_t split_rows = static_cast<uint32_t>(num_rows % num_cores);
+    const uint32_t num_segments = split_rows == 0 ? 1 : column_segments_for(split_rows, num_chunks, num_cores);
 
     std::vector<CoreRowAssignment> assignments;
     assignments.reserve(cores.size());
     if (num_segments > 1) {
-        const uint64_t num_units = static_cast<uint64_t>(num_rows) * num_segments;
+        const uint64_t num_units = static_cast<uint64_t>(split_rows) * num_segments;
         for (uint64_t unit = 0; unit < cores.size(); ++unit) {
-            if (unit >= num_units) {
-                assignments.push_back(CoreRowAssignment{.core = cores[unit]});
-                continue;
+            CoreRowAssignment assignment{
+                .core = cores[unit], .start_row = static_cast<uint32_t>(unit * whole_rounds), .num_rows = whole_rounds};
+            if (unit < num_units) {
+                const uint32_t segment = static_cast<uint32_t>(unit % num_segments);
+                // The last segment's last chunk carries the row tail.
+                assignment.num_rows += 1;
+                assignment.seg_first_chunk = static_cast<uint32_t>(uint64_t{segment} * num_chunks / num_segments);
+                assignment.seg_end_chunk = static_cast<uint32_t>(uint64_t{segment + 1} * num_chunks / num_segments);
+                assignment.segment_index = segment;
+                assignment.num_segments = num_segments;
+                assignment.split_row = static_cast<uint32_t>(uint64_t{whole_rounds} * num_cores + unit / num_segments);
+                assignment.has_split = true;
             }
-            const uint32_t segment = static_cast<uint32_t>(unit % num_segments);
-            // The last segment's last chunk carries the row tail.
-            const uint64_t seg_first_chunk = static_cast<uint64_t>(segment) * num_chunks / num_segments;
-            const uint64_t seg_end_chunk = static_cast<uint64_t>(segment + 1) * num_chunks / num_segments;
-            assignments.push_back(CoreRowAssignment{
-                .core = cores[unit],
-                .start_row = static_cast<uint32_t>(unit / num_segments),
-                .num_rows = 1,
-                .seg_first_chunk = static_cast<uint32_t>(seg_first_chunk),
-                .seg_end_chunk = static_cast<uint32_t>(seg_end_chunk),
-                .segment_index = segment,
-                .num_segments = num_segments});
+            assignments.push_back(assignment);
         }
         return assignments;
     }

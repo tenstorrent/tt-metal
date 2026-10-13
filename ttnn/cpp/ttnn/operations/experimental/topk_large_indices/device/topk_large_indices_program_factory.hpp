@@ -13,16 +13,19 @@
 
 namespace ttnn::operations::experimental::topk_large_indices::program {
 
-// One core's work: a block of rows or, with fewer rows than cores, one column segment of whole K chunks of one row.
+// One core's work: num_rows rows, whole rows from start_row and, with has_split, last one column segment of whole K
+// chunks of split_row.
 struct CoreRowAssignment {
     CoreCoord core;
     uint32_t start_row{};
     uint32_t num_rows{};
-    // Chunk range of each assigned row; the kernels clip seg_end_chunk (UINT32_MAX for whole rows) to the valid length.
+    // Chunk range of the split row; the kernels clip seg_end_chunk to the valid length.
     uint32_t seg_first_chunk{};
     uint32_t seg_end_chunk{};
     uint32_t segment_index{};
     uint32_t num_segments{1};
+    uint32_t split_row{};
+    bool has_split{};
 };
 
 // This is the canonical mapping used to populate reader/writer runtime arguments. Keeping it visible
@@ -61,9 +64,11 @@ struct TopkLargeIndicesProgramFactory {
         tensor_return_value_t& tensor_return_value);
 };
 
-// A row splits across cores only when two cores per row are free, so other programs carry no tree code.
+// Rows split across cores only when two cores per split row are free (all rows, or the rows left after whole
+// rounds), so other programs carry no tree code.
 inline bool row_split_possible(uint32_t num_rows, uint32_t num_cores) {
-    return 2ull * num_rows <= num_cores;
+    const uint32_t split_rows = num_rows < num_cores ? num_rows : num_rows % num_cores;
+    return split_rows != 0 && 2ull * split_rows <= num_cores;
 }
 
 ComputeBodyMode compute_body_mode(
