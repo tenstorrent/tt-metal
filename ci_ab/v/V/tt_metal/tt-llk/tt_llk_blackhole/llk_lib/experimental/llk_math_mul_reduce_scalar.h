@@ -42,19 +42,24 @@ namespace ckernel { struct p_movd2a_x { static constexpr std::uint32_t MOV_8_ROW
     MOVD2A_8_ROWS(base_offset, 7)
 
 #define MOVD2A_FACE(base_offset, face)         \
-    MOVD2A_8_ROWS(base_offset, (face) * 2 + 0) \
-    MOVD2A_8_ROWS(base_offset, (face) * 2 + 1)
+    MOVD2A_4_ROWS(base_offset, (face) * 4 + 0) \
+    MOVD2A_4_ROWS(base_offset, (face) * 4 + 1) \
+    MOVD2A_4_ROWS(base_offset, (face) * 4 + 2) \
+    MOVD2A_4_ROWS(base_offset, (face) * 4 + 3)
 
+// A whole slot moves in eight-row steps; a one- or two-face tile keeps four-row moves, which read faster there.
 #define MOVD2A_FACES(base_offset, num_faces) \
-    MOVD2A_FACE(base_offset, 0)              \
-    if ((num_faces) > 1)                     \
-    {                                        \
-        MOVD2A_FACE(base_offset, 1)          \
-    }                                        \
     if ((num_faces) > 2)                     \
     {                                        \
-        MOVD2A_FACE(base_offset, 2)          \
-        MOVD2A_FACE(base_offset, 3)          \
+        MOVD2A_16_ROWS(base_offset)          \
+    }                                        \
+    else                                     \
+    {                                        \
+        MOVD2A_FACE(base_offset, 0)          \
+        if ((num_faces) > 1)                 \
+        {                                    \
+            MOVD2A_FACE(base_offset, 1)      \
+        }                                    \
     }
 
 /**
