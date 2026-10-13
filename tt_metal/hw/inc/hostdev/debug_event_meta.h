@@ -97,11 +97,24 @@ constexpr size_t count_braced_fields() {
     }
 }
 
-// True when the field walker can decompose T: no array members and 1..kMaxFields fields.
+// Converts only to a proper base class of T. A base is T's first initializer element, so T{any_base<T>{}} compiles
+// exactly when T has one; a structured binding cannot see fields through it.
+template <class T>
+struct any_base {
+    template <class B, class = std::enable_if_t<std::is_base_of_v<B, T> && !std::is_same_v<B, T>>>
+    constexpr operator B() const;  // never defined: only used to detect a base
+};
+
+template <class T>
+constexpr bool has_direct_base() {
+    return brace_ok<T, void, any_base<T>>::value;
+}
+
+// True when the field walker can decompose T: no base class, no array members and 1..kMaxFields fields.
 template <class T>
 constexpr bool shape_ok() {
     constexpr size_t n = count_fields<T>();
-    return n == count_braced_fields<T>() && n >= 1 && n <= kMaxFields;
+    return !has_direct_base<T>() && n == count_braced_fields<T>() && n >= 1 && n <= kMaxFields;
 }
 
 // Calls f on each direct field of T. Does nothing for a T that check_type rejects, so a bad type reports its rule
@@ -157,10 +170,30 @@ using field_t = std::remove_cv_t<std::remove_reference_t<V>>;
 template <class T>
 inline constexpr bool is_simple_aggregate_v = std::is_class_v<T> && std::is_aggregate_v<T>;
 
+// No base classes, at any depth.
+template <class T>
+constexpr bool has_no_bases() {
+    if constexpr (!is_simple_aggregate_v<T>) {
+        return true;
+    } else {
+        if (has_direct_base<T>()) {
+            return false;
+        }
+        bool ok = true;
+        T probe{};
+        for_each_field(probe, [&](auto& v) {
+            if constexpr (is_simple_aggregate_v<field_t<decltype(v)>>) {
+                ok = ok && has_no_bases<field_t<decltype(v)>>();
+            }
+        });
+        return ok;
+    }
+}
+
 // No C array members, at any depth.
 template <class T>
 constexpr bool has_no_arrays() {
-    if constexpr (!is_simple_aggregate_v<T>) {
+    if constexpr (!is_simple_aggregate_v<T> || has_direct_base<T>()) {
         return true;
     } else {
         if (count_fields<T>() != count_braced_fields<T>()) {
@@ -180,7 +213,7 @@ constexpr bool has_no_arrays() {
 // 1..kMaxFields direct fields, in this struct and every nested one.
 template <class T>
 constexpr bool field_count_ok() {
-    if constexpr (!is_simple_aggregate_v<T>) {
+    if constexpr (!is_simple_aggregate_v<T> || has_direct_base<T>()) {
         return true;
     } else {
         constexpr size_t n = count_braced_fields<T>();  // the true count even with arrays
@@ -235,8 +268,8 @@ constexpr bool fields_supported() {
 
 template <class T>
 constexpr bool is_valid_meta_type() {
-    return is_simple_aggregate_v<T> && has_no_arrays<T>() && field_count_ok<T>() && has_no_const_members<T>() &&
-           fields_supported<T>();
+    return is_simple_aggregate_v<T> && has_no_bases<T>() && has_no_arrays<T>() && field_count_ok<T>() &&
+           has_no_const_members<T>() && fields_supported<T>();
 }
 
 // One readable compile error for each rule T breaks; true when T is usable.
@@ -245,6 +278,7 @@ constexpr bool check_type() {
     static_assert(
         is_simple_aggregate_v<T>,
         "a debug event metadata type must be a simple aggregate: a struct with public data members only");
+    static_assert(has_no_bases<T>(), "a debug event metadata type and each struct in it cannot have a base class");
     static_assert(has_no_arrays<T>(), "a debug event metadata type cannot have C array members");
     static_assert(field_count_ok<T>(), "a debug event metadata type and each struct in it need 1..kMaxFields fields");
     static_assert(has_no_const_members<T>(), "a debug event metadata type cannot have const members");
