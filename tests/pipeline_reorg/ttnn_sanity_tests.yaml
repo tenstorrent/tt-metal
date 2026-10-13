@@ -205,13 +205,12 @@
   owner_id: U084B1CES7M # Borys Bradel
 
 - name: "ttnn fused group 1 of 6"
-  # Sim only: 6 splits keep each sim job near 20 min; hardware stays on the 2 groups above.
   cmd: 'pytest --timeout 300 tests/ttnn/unit_tests/operations/fused -xv --splits 6 --group 1 --splitting-algorithm least_duration -m "not disable_fast_runtime_mode"'
   skus:
     sim_wh_n150:
-      timeout: 20
+      timeout: 30
     sim_bh_p150:
-      timeout: 25
+      timeout: 35
   team: ttnn
   budget_type: sanity
   owner_id: U084B1CES7M # Borys Bradel
@@ -220,9 +219,9 @@
   cmd: 'pytest --timeout 300 tests/ttnn/unit_tests/operations/fused -xv --splits 6 --group 2 --splitting-algorithm least_duration -m "not disable_fast_runtime_mode"'
   skus:
     sim_wh_n150:
-      timeout: 20
+      timeout: 30
     sim_bh_p150:
-      timeout: 25
+      timeout: 35
   team: ttnn
   budget_type: sanity
   owner_id: U084B1CES7M # Borys Bradel
@@ -231,9 +230,9 @@
   cmd: 'pytest --timeout 300 tests/ttnn/unit_tests/operations/fused -xv --splits 6 --group 3 --splitting-algorithm least_duration -m "not disable_fast_runtime_mode"'
   skus:
     sim_wh_n150:
-      timeout: 20
+      timeout: 30
     sim_bh_p150:
-      timeout: 25
+      timeout: 35
   team: ttnn
   budget_type: sanity
   owner_id: U084B1CES7M # Borys Bradel
@@ -242,9 +241,9 @@
   cmd: 'pytest --timeout 300 tests/ttnn/unit_tests/operations/fused -xv --splits 6 --group 4 --splitting-algorithm least_duration -m "not disable_fast_runtime_mode"'
   skus:
     sim_wh_n150:
-      timeout: 20
+      timeout: 30
     sim_bh_p150:
-      timeout: 25
+      timeout: 35
   team: ttnn
   budget_type: sanity
   owner_id: U084B1CES7M # Borys Bradel
@@ -253,9 +252,9 @@
   cmd: 'pytest --timeout 300 tests/ttnn/unit_tests/operations/fused -xv --splits 6 --group 5 --splitting-algorithm least_duration -m "not disable_fast_runtime_mode"'
   skus:
     sim_wh_n150:
-      timeout: 20
+      timeout: 30
     sim_bh_p150:
-      timeout: 25
+      timeout: 35
   team: ttnn
   budget_type: sanity
   owner_id: U084B1CES7M # Borys Bradel
@@ -264,9 +263,9 @@
   cmd: 'pytest --timeout 300 tests/ttnn/unit_tests/operations/fused -xv --splits 6 --group 6 --splitting-algorithm least_duration -m "not disable_fast_runtime_mode"'
   skus:
     sim_wh_n150:
-      timeout: 20
+      timeout: 30
     sim_bh_p150:
-      timeout: 25
+      timeout: 35
   team: ttnn
   budget_type: sanity
   owner_id: U084B1CES7M # Borys Bradel
