@@ -27,10 +27,10 @@ static_assert(hm::FlushTdma {}.operation() == 0x46000000u);
 static_assert(hm::FlushTdma {hm::FlushScope::Packer | hm::FlushScope::Unpacker0}.operation() == 0x4600000au);
 static_assert(hm::ResetTdma {}.operation() == 0x44000000u);
 static_assert(hm::TbufCommand {}.operation() == 0x4b000000u);
-static_assert(hm::ResourceDeclaration {15, 511, 2047}.operation() == 0x05ffffffu);
+static_assert(hm::ResourceDeclaration {15, 511, 15}.operation() == 0x0501ffffu);
 
 // Existing accessors and execution forms remain usable.
-static_assert(hm::ResourceDeclaration {15, 511, 2047}.get_operation() == 0x05ffffffu);
+static_assert(hm::ResourceDeclaration {15, 511, 15}.get_operation() == 0x0501ffffu);
 static_assert(hm::flush_tdma_operation<hm::FlushScope::All>() == 0x46000000u);
 
 //--- invalid.cpp
@@ -43,5 +43,5 @@ constexpr auto invalid = hm::ResourceDeclaration {16, 0, 1}.operation();
 #elif INVALID_CASE == 3
 constexpr auto invalid = hm::ResourceDeclaration {0, 512, 1}.operation();
 #elif INVALID_CASE == 4
-constexpr auto invalid = hm::ResourceDeclaration {0, 0, 2048}.operation();
+constexpr auto invalid = hm::ResourceDeclaration {0, 0, 16}.operation();
 #endif
