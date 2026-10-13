@@ -65,3 +65,26 @@ logs "T466 summary: ring_joint_sdpa gain X%, layer gain Y%" and PCC between arms
   (b) wait for blx03 (data already there; g14blx03-device paused until 2026-10-17T07:01Z at the latest).
   Then: run466.sh = run460.sh pattern, one build t466/b for both arms (knob unset vs lofi) in ONE broker job,
   10 s seed 0 first; cold first job builds the cache, so give it its own warm-up job.
+
+## 2026-10-13 ~12:55 UTC (05:55 PDT): coordinator go-ahead on blx01; stopped at the device lint -> blocked
+- Step 0: branch pushed (ttp push --own) at 75abbc8379f.
+- Step 1: deleted finished-task build dirs on blx01 (all FastH3-created, branches kept as bundles next to them):
+  /var/tmp/fasth3/{t409,t422,t420,t284,t408}/b (~3 GB each, ~13 GB). Total now 36 GB. Kept t466/b, t460 (venv,
+  run460.sh), t286 (pytest plugin), t408 (keyframe), models/ (adapter), home/, *_keep.
+- Step 2: / has 536 GB free; after ~132 GB -> ~404 GB (>=300 ok); total 36+132 = 168 GB (<=200 ok).
+- Step 3: tt-project/t466/run466.sh written and copied to blx01 (/var/tmp/fasth3/t466/run466.sh): one job runs
+  arms in order (base = knob unset, lofi = MINIMAX_H3_SDPA_MM_FIDELITY=lofi), build t466/b, caches t466/jit and
+  t466/cache/dit-h3hf, /mnt guard on every write path, space guards, 90 s watchdog, 2-hang stop, 400 s warm deadline.
+  Planned cold job: run466.sh c10s0 10 0 base (-t 600, T466_PY_TIMEOUT 560 needed for cold).
+- Step 4 refused by device-lint.sh (exit 2): "run466.sh reads /mnt ... device jobs never read from /mnt or other
+  network fs" and, with a /var/tmp/fasth3 symlink, "resolves to /mnt/MLPerf/...: copy it to local first".
+  The lint rule exists because job 086 hung in D state reading /mnt/MLPerf weights after opening the mesh; on
+  blx01 that would also stall the live LTX service (ltx-host runs ~15 min jobs back to back). Not routed around.
+  Symlink removed. No device job submitted, no drops.
+- weka MiniMax-H3 sizes (apparent): text_encoder 63 GB, transformer 62 GB, vae 10 GB, rest ~2 GB
+  (transformer_ref 62 GB not needed): a local copy is ~137 GB.
+  Local copy totals: 36 + 137 + 115 (dit-h3hf) + 17 (JIT) = ~305 GB in /var/tmp/fasth3; / free after ~267 GB.
+  Breaks both the 200 GB and the 300 GB-free limits of the exception.
+- Options: (a) lint exception for this read-only weka path, accepting the D-state hang risk; (b) raise the
+  exception to ~310 GB total / ~260 GB free floor and copy the 137 GB with ionice -c3 nice rsync --bwlimit=100M
+  (~25 min), delete all of it at the end; (c) wait for blx03 (weights and cache already there, back by 10-17).
