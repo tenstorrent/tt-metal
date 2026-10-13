@@ -42,7 +42,8 @@ payload = " ".join(argv)
 
 if os.environ.get("STUB_LAUNCHES"):
     with open(os.environ["STUB_LAUNCHES"], "a") as handle:
-        handle.write(json.dumps(argv) + "\\n")
+        inherited = {k: v for k, v in os.environ.items() if k.startswith("OMPI_MCA_btl_tcp_if_")}
+        handle.write(json.dumps({"argv": argv, "env": inherited}) + "\\n")
 
 trace = os.environ["STUB_TRACE"]
 state = os.environ["STUB_STATE"]
@@ -121,7 +122,10 @@ class RecoverRetrainRoundsTest(unittest.TestCase):
     def run_recover(
         self, *extra_args, faulty=FAULTY_HOSTS, pass_after_resets=2, retrain_summary=False, mpi_if=True, env_extra=None
     ):
-        """Runs recover.sh against the stub; returns (exit code, trace lines). Keeps each mpirun's args in self.launches."""
+        """Runs recover.sh against the stub; returns (exit code, trace lines).
+
+        Keeps each mpirun's args and inherited OMPI_MCA_btl_tcp_if_* in self.launches.
+        """
         with tempfile.TemporaryDirectory() as tmp:
             tmp_path = Path(tmp)
             bin_dir = tmp_path / "bin"
@@ -167,7 +171,9 @@ class RecoverRetrainRoundsTest(unittest.TestCase):
                 command, cwd=REPO_ROOT, env=env, capture_output=True, text=True, check=False, timeout=300
             )
             lines = trace.read_text().splitlines() if trace.exists() else []
-            self.launches = [json.loads(line) for line in launches.read_text().splitlines()] if launches.exists() else []
+            self.launches = (
+                [json.loads(line) for line in launches.read_text().splitlines()] if launches.exists() else []
+            )
             return result.returncode, lines
 
     def test_escalation_resets_only_the_unretrainable_hosts(self):
@@ -249,12 +255,17 @@ class RecoverRetrainRoundsTest(unittest.TestCase):
 
     def test_glx_reset_cmd_replaces_the_reset_command(self):
         code, trace = self.run_recover(
-            "--max-retrains", "4", "--reset-every", "4", pass_after_resets=1, env_extra={"GLX_RESET_CMD": "site-glx-reset"}
+            "--max-retrains",
+            "4",
+            "--reset-every",
+            "4",
+            pass_after_resets=1,
+            env_extra={"GLX_RESET_CMD": "site-glx-reset"},
         )
 
         self.assertEqual(trace, [f"RESET {','.join(ALL_HOSTS)}", "VALIDATION budget=4"])
         self.assertEqual(code, 0)
-        resets = [argv for argv in self.launches if any("script -qefc" in arg for arg in argv)]
+        resets = [launch["argv"] for launch in self.launches if any("script -qefc" in arg for arg in launch["argv"])]
         self.assertTrue(resets)
         for argv in resets:
             self.assertEqual(argv[-2:], ["_", "site-glx-reset"])
@@ -275,9 +286,27 @@ class RecoverRetrainRoundsTest(unittest.TestCase):
         self.assertEqual(trace, [f"RESET {','.join(ALL_HOSTS)}", "VALIDATION budget=4"])
         self.assertEqual(code, 0)
         self.assertTrue(self.launches)
-        for argv in self.launches:
-            self.assertNotIn("btl_tcp_if_include", argv)
-            self.assertNotIn("oob_tcp_if_include", argv)
+        for launch in self.launches:
+            self.assertNotIn("btl_tcp_if_include", launch["argv"])
+            self.assertNotIn("oob_tcp_if_include", launch["argv"])
+
+    def test_explicit_mpi_if_drops_the_inherited_interface_selection(self):
+        # --mpi-if pins an interface, so an exclude from the environment must not reach mpirun with it.
+        code, trace = self.run_recover(
+            "--max-retrains",
+            "4",
+            "--reset-every",
+            "4",
+            pass_after_resets=1,
+            env_extra={"OMPI_MCA_btl_tcp_if_exclude": "lo,docker0"},
+        )
+
+        self.assertEqual(trace, [f"RESET {','.join(ALL_HOSTS)}", "VALIDATION budget=4"])
+        self.assertEqual(code, 0)
+        self.assertTrue(self.launches)
+        for launch in self.launches:
+            self.assertIn("btl_tcp_if_include", launch["argv"])
+            self.assertEqual(launch["env"], {})
 
 
 if __name__ == "__main__":

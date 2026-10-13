@@ -227,6 +227,8 @@ fi
 
 FIRST_HOST="${HOST_LIST[0]}"
 if [[ "$MPI_IF_EXPLICIT" == "true" ]]; then
+    # Pinned with btl_tcp_if_include, which Open MPI refuses alongside an inherited one.
+    unset OMPI_MCA_btl_tcp_if_include OMPI_MCA_btl_tcp_if_exclude
     # Given an interface, only check it exists here. The usual probe mpiruns to the first
     # host, and this script is called after the failures that leave a host down; the
     # pre-flight below handles reachability host by host.
