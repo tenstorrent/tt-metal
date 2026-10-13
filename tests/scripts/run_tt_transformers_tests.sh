@@ -14,7 +14,8 @@
 # to use an existing checkout instead (it must be clean and at that revision; it is
 # never replaced).
 #
-# With TT_TRANSFORMERS_REQUIRE_PASS=1, a run in which no test passed fails.
+# With TT_TRANSFORMERS_REQUIRE_PASS=1, a run in which no test passed fails. The check
+# (tests/scripts/check_tt_transformers_junit.py) reads this run's JUnit report.
 set -euo pipefail
 
 tt_metal_home="${TT_METAL_HOME:-$(git -C "$(dirname "${BASH_SOURCE[0]}")" rev-parse --show-toplevel)}"
@@ -70,21 +71,16 @@ trap collect_benchmark_data EXIT
 # checkout first on sys.path and keep conftest discovery inside it.
 cd "$checkout"
 export PYTHONPATH="$checkout${PYTHONPATH:+:$PYTHONPATH}"
-report="$reports/tt_transformers_$(date +%Y%m%d_%H%M%S_%N).xml"
+report_stem="$reports/tt_transformers_$(date +%Y%m%d_%H%M%S_%N)"
 python -m pytest \
     --rootdir "$checkout" -c "$checkout/pyproject.toml" --confcutdir "$checkout" \
-    -o timeout=300 --junitxml "$report" \
+    -o timeout=300 --junitxml "$report_stem.xml" \
     "$@"
 
 # A skipped e2e case writes no benchmark data, so the e2e workflow also skips its
 # perf and accuracy check. The e2e legs set TT_TRANSFORMERS_REQUIRE_PASS=1 to fail instead.
+# Under CI=true, tt-transformers' conftest appends _<timestamp> to the --junitxml name,
+# so the check finds the report by its unique stem.
 if [ "${TT_TRANSFORMERS_REQUIRE_PASS:-0}" = 1 ]; then
-    python - "$report" <<'PY'
-import sys
-import xml.etree.ElementTree as ET
-
-cases = ET.parse(sys.argv[1]).iter("testcase")
-if not any(all(case.find(tag) is None for tag in ("skipped", "failure", "error")) for case in cases):
-    sys.exit(f"No tt-transformers test passed (report: {sys.argv[1]})")
-PY
+    python "$tt_metal_home/tests/scripts/check_tt_transformers_junit.py" "$report_stem"
 fi
