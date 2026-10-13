@@ -32,6 +32,7 @@ def load(p):
     return d
 H, N = load(sys.argv[1]), load(sys.argv[2])
 for k in sorted(set(H) | set(N)):
-    print("IDENT", k, "same" if H.get(k) == N.get(k) else "DIFF", len(H.get(k, ())), len(N.get(k, ())))
+    h, n = H.get(k, set()), N.get(k, set())
+    print("IDENT", k, "same" if h == n else "DIFF", "H", len(h), "N", len(n), "common", len(h & n))
 PY
 echo "== done"
