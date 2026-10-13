@@ -7,7 +7,7 @@ import ttnn
 import pytest
 
 from models.experimental.bevformer.reference.ms_deformable_attention import MSDeformableAttention
-from models.experimental.bevformer.tt.tt_ms_deformable_attention import TTMSDeformableAttention, fp32_grid_sample_config
+from models.experimental.bevformer.tt.tt_ms_deformable_attention import TTMSDeformableAttention
 
 from models.experimental.bevformer.model_config import DeformableAttentionConfig
 
@@ -43,19 +43,13 @@ pytestmark = pytest.mark.use_module_device({"l1_small_size": 10 * 1024})
         ("carla_base", 1, 12000, 0.999, 0.02, 0.15, 0.18),  # CARLA base model
     ],
 )
-@pytest.mark.parametrize(
-    # (grid_dtype, reference-point dtype, fp32-accumulating grid_sample): the encoder's default,
-    # the decoder's float32 grid, and a float32 grid built from bfloat16 reference points.
-    "grid_dtype, reference_points_dtype, fp32_grid_sample",
-    [(None, ttnn.bfloat16, False), (ttnn.float32, ttnn.float32, True), (ttnn.float32, ttnn.bfloat16, False)],
-    ids=["default", "fp32-grid", "fp32-grid-bf16-refs"],
-)
+# The module hands the reference points to the fused op unconverted; the encoder and decoder
+# pass float32 ones.
+@pytest.mark.parametrize("reference_points_dtype", [ttnn.bfloat16, ttnn.float32], ids=["bf16-refs", "fp32-refs"])
 @pytest.mark.parametrize("seed", [0])
 def test_ms_deformable_attention_forward(
     device,
-    grid_dtype,
     reference_points_dtype,
-    fp32_grid_sample,
     config_name,
     batch_size,
     num_queries,
@@ -121,8 +115,6 @@ def test_ms_deformable_attention_forward(
         device=device,
         params=tt_parameters,
         spatial_shapes=spatial_shapes,
-        grid_dtype=grid_dtype,
-        grid_sample_compute_config=(fp32_grid_sample_config(device) if fp32_grid_sample else None),
     )
 
     # --------------------------------------------------------------------------- #

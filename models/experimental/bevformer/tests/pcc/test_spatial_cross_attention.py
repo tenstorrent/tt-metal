@@ -6,7 +6,7 @@ import pytest
 import torch
 
 import ttnn
-from models.experimental.bevformer.model_config import GRID_DTYPE, NUM_CAMS, SPATIAL_SHAPES
+from models.experimental.bevformer.model_config import NUM_CAMS, SPATIAL_SHAPES
 from models.experimental.bevformer.reference.point_sampling_3d_2d import camera_geometry
 from models.experimental.bevformer.tests.common import (
     BEV_SHAPES,
@@ -19,7 +19,6 @@ from models.experimental.bevformer.tests.common import (
     random_encoder_inputs,
 )
 from models.experimental.bevformer.tt.model_preprocessing import create_spatial_cross_attention_parameters
-from models.experimental.bevformer.tt.tt_ms_deformable_attention import fp32_grid_sample_config
 from models.experimental.bevformer.tt.tt_spatial_cross_attention import (
     TTSpatialCrossAttention,
     build_rebatch_plan,
@@ -75,8 +74,6 @@ def _tt_model(torch_model, device):
         create_spatial_cross_attention_parameters(torch_model, device),
         device,
         spatial_shapes=SPATIAL_SHAPES,
-        grid_dtype=GRID_DTYPE,
-        grid_sample_compute_config=fp32_grid_sample_config(device),
     )
 
 
@@ -94,7 +91,7 @@ def test_spatial_cross_attention(device, reset_seeds, name, bev_shape, batch_siz
     torch_output = torch_model(query, inputs["value"], reference_points_cam, bev_mask, torch.tensor(SPATIAL_SHAPES))
 
     tt_model = _tt_model(torch_model, device)
-    plan = build_rebatch_plan(reference_points_cam, bev_mask, tt_model.embed_dims, device, GRID_DTYPE)
+    plan = build_rebatch_plan(reference_points_cam, bev_mask, tt_model.embed_dims, device)
     if geometry == "full-plan":
         assert plan.capacity == FULL_PLAN_ROWS
     tt_output = tt_model(
@@ -121,9 +118,7 @@ def test_rebatch_plan_update(device, reset_seeds):
     second = camera_geometry(img_metas(2, yaw_step_deg=25.0)[1:], *bev_shape, 4, pc_range())
 
     tt_model = _tt_model(torch_model, device)
-    plan = build_rebatch_plan(
-        *first, tt_model.embed_dims, device, GRID_DTYPE, full_capacity(bev_shape[0] * bev_shape[1])
-    )
+    plan = build_rebatch_plan(*first, tt_model.embed_dims, device, full_capacity(bev_shape[0] * bev_shape[1]))
     update_rebatch_plan(plan, *second)
 
     torch_output = torch_model(query, inputs["value"], *second, torch.tensor(SPATIAL_SHAPES))
