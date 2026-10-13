@@ -780,11 +780,34 @@ class _Prefiller:
         logger.info(f"decode compile: {time.perf_counter() - t0:.1f}s")
         # Stops the prefetcher and frees the GCBs; allowed because no decode trace exists yet.
         model.release_prefetch_buffers()
-        indexer = os.environ.get("DEEPSEEK_V4_PREFILL_INDEXER", "1") == "1"
         t0 = time.perf_counter()
-        self.model = model.build_prefill(
+        self.model = self._build_model(engine)
+        self.model.synchronize("uploads")
+        logger.info(f"prefill model built in {time.perf_counter() - t0:.1f}s")
+        t0 = time.perf_counter()
+        self.model.compile_traced_prefill(self.max_len, self.chunk_size)
+        logger.info(
+            f"traced prefill compiled in {time.perf_counter() - t0:.1f}s: prompts of up to {self.max_len} "
+            f"tokens in chunks of {self.chunk_size}, {self.num_stages} pipelined stage(s)"
+        )
+        # Unwinds before the decode model's shutdown (LIFO).
+        prefetcher.callback(self.model.release_traced_prefill)
+        self.bias_slots = self._bias_slots()
+        # Captured before decode: stopping the prefetcher once the decode traces exist would drop the
+        # prefetch requests they replay.
+        t0 = time.perf_counter()
+        self.model.capture_traced_prefill()
+        logger.info(f"traced prefill captured in {time.perf_counter() - t0:.1f}s")
+        # The GCBs and L1 tensors come back under prefill's buffers; the prefetcher then runs until teardown.
+        model.restore_prefetch_buffers()
+
+    def _build_model(self, engine: ChatEngine):
+        """The prefill model on the decode stages (decode's GCBs and L1 tensors already released)."""
+        indexer = os.environ.get("DEEPSEEK_V4_PREFILL_INDEXER", "1") == "1"
+        logger.info(f"prefill lightning indexer {'on' if indexer else 'off'}")
+        return engine.model.build_prefill(
             engine.rope,
-            checkpoint_weights(engine.loader, engine.config, model.num_layers),
+            checkpoint_weights(engine.loader, engine.config, engine.model.num_layers),
             lm_head=engine.lm_head,
             cache=engine.weight_cache,
             weight_dtype=_ATTENTION_WEIGHT_DTYPE,
@@ -794,24 +817,10 @@ class _Prefiller:
             maskless=True,
             progress=self._note,
         )
-        self.model.synchronize("uploads")
-        logger.info(f"prefill model built in {time.perf_counter() - t0:.1f}s (lightning indexer {indexer})")
-        t0 = time.perf_counter()
-        self.model.compile_traced_prefill(self.max_len, self.chunk_size)
-        logger.info(
-            f"traced prefill compiled in {time.perf_counter() - t0:.1f}s: prompts of up to {self.max_len} "
-            f"tokens in chunks of {self.chunk_size}, {self.num_stages} pipelined stage(s)"
-        )
-        # Unwinds before the decode model's shutdown (LIFO).
-        prefetcher.callback(self.model.release_traced_prefill)
-        self.bias_slots = prefill_bias_slots(self.model)
-        # Captured before decode: stopping the prefetcher once the decode traces exist would drop the
-        # prefetch requests they replay.
-        t0 = time.perf_counter()
-        self.model.capture_traced_prefill()
-        logger.info(f"traced prefill captured in {time.perf_counter() - t0:.1f}s")
-        # The GCBs and L1 tensors come back under prefill's buffers; the prefetcher then runs until teardown.
-        model.restore_prefetch_buffers()
+
+    def _bias_slots(self):
+        """What :meth:`run` hands ``commit_prefill_state`` as ``bias_slots``."""
+        return prefill_bias_slots(self.model)
 
     def _note(self, message: str, important: bool = False) -> None:
         if important:
@@ -2378,7 +2387,12 @@ def _add_model_args(p: argparse.ArgumentParser, sys_cfg) -> None:
     p.add_argument("--quiet", action="store_true", help="only warnings and above from the model logs")
 
 
-def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
+def build_parser(argv: list[str] | None = None, description: str = __doc__):
+    """The server's argument parser and the system profile its defaults come from.
+
+    A model variant's server (``deepseek_v41_flash/demo/server.py``) changes the defaults on it with
+    ``set_defaults`` before parsing, then validates with :func:`check_args`.
+    """
     # See ``chat_cli.parse_args``: the profile has to be resolved before the parser is
     # built, since it supplies the sizing defaults. ``variant="server"`` picks the
     # server flavour of whichever machine profile applies.
@@ -2388,7 +2402,7 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
     pre_args, _ = pre.parse_known_args(argv)
     sys_cfg = load_system_config(profile=pre_args.system_profile, path=pre_args.system_config_file, variant="server")
 
-    p = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
+    p = argparse.ArgumentParser(description=description, formatter_class=argparse.RawDescriptionHelpFormatter)
     p.add_argument(
         "--system-profile",
         default=pre_args.system_profile,
@@ -2484,7 +2498,11 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
         help="plain line-by-line logging instead of the live split console (implied when "
         "stdout is not a terminal, e.g. under nohup or in CI)",
     )
-    args = p.parse_args(argv)
+    return p, sys_cfg
+
+
+def check_args(p: argparse.ArgumentParser, args: argparse.Namespace, sys_cfg) -> argparse.Namespace:
+    """Validate and complete the parsed ``args`` (``p.error`` on a bad combination)."""
     args.system_config = sys_cfg
     # ``ChatEngine`` re-resolves the profile once the mesh is open; keep it on the
     # server flavour when it does.
@@ -2517,9 +2535,19 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
     return args
 
 
-@torch.no_grad()
+def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
+    p, sys_cfg = build_parser(argv)
+    return check_args(p, p.parse_args(argv), sys_cfg)
+
+
 def main(argv: list[str] | None = None) -> int:
-    args = parse_args(argv)
+    return serve(parse_args(argv))
+
+
+@torch.no_grad()
+def serve(args: argparse.Namespace, engine_cls=ChatEngine, prefiller_cls=_Prefiller) -> int:
+    """Build the engine (``engine_cls``, a :class:`ChatEngine`) and the prefill (``prefiller_cls``, a
+    :class:`_Prefiller`) on the opened mesh and serve until interrupted."""
     # The model emits plenty of non-ASCII (CJK, emoji, typographic punctuation), which
     # an ASCII/POSIX locale would turn into a UnicodeEncodeError mid-reply.
     for stream in (sys.stdout, sys.stderr):
@@ -2567,10 +2595,10 @@ def main(argv: list[str] | None = None) -> int:
         # turn, so it is opened inside ``ChatEngine`` (once the model exists) against
         # this stack, and the senders are stopped before the mesh device is closed.
         with contextlib.ExitStack() as prefetcher:
-            engine = ChatEngine(mesh_device, args, prefetcher)
+            engine = engine_cls(mesh_device, args, prefetcher)
             # Decode compile, then prefill build, compile and capture (decode's GCBs and L1 released).
             # The warmup then captures decode, and the snapshot copies decode's resident tensors.
-            prefiller = _Prefiller(engine, args, prefetcher) if args.prefill else None
+            prefiller = prefiller_cls(engine, args, prefetcher) if args.prefill else None
             engine.warmup()
             if prefiller is not None:
                 prefiller.snapshot()
