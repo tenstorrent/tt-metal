@@ -87,6 +87,28 @@ role. The example shrinks the NoC transaction size only to *create* that bottlen
 effect (up to ~1.7×, Wormhole B0; see [`report.md`](split_reader/report.md)) — transaction size is
 the knob, not the point.
 
+## ⭐⭐ T2 — [`bank_stagger`](bank_stagger/README.md)
+**Concept:** DRAM bank contention — rotate each core's **issue order** so the grid's requests at any
+moment land on different banks instead of all on one.
+**Situation:** every core walks its data in the same order and the data lines up on the banks — e.g.
+a **width-sharded DRAM source** with one shard per bank, where each column block is one bank; or an
+**interleaved DRAM source** split by width (cores share rows) or by height on Blackhole (rows start at
+`32·k`, `32·k % 8 == 0`), where every core starts on the same bank (both measured). Writes into
+width-sharded or bank-aligned outputs are the same pattern (see the README).
+**Measured win (Blackhole, 110 cores):** starting each core at block `core % n_w` is **1.32×** at
+256 B reads and 1.16× at 1024 B with 8 blocks per core: bf16 tensors of shape **3520×1024** and
+**3520×4096** (H×W), respectively. Doubling H to **7040** gives 16 blocks per core; speedups fall to
+**1.19× and 1.13×**, respectively: relative gains and savings per unit of work decrease, even though
+total time saved increases. The measured benefit is stronger for the shorter workloads; do not
+extrapolate the 8-block speedups to workloads with many blocks per core.
+On an interleaved source, starting each core at row `core % 32` (`stagger_rows`), with one block per
+core: width blocking is **1.04×** at 128 B reads (**32×7040**) and **1.07×** at 1024 B (**32×56320**);
+height blocking is **1.05×** at 1024 B (**3520×512**). With four blocks per core (**128×56320**) it
+is 1.01×. The time saved stays at ~0.3–1.3 µs, so the ratio shrinks
+as the work per core grows.
+**Gist:** start each core's walk at a different index and wrap. `stagger_blocks` and `stagger_rows`
+are compile-time switches, so flip them per call to check whether they pay on your shape.
+
 ## ⭐⭐ T2 — [`matmul_output_subblock`](matmul_output_subblock/README.md)
 **Concept:** matmul output-subblock shape → SRC-register operand reuse (via the `matmul_block` helper).
 **Situation:** you wrote a tiled matmul that produces **one output tile per block-matmul** (a `1×1` subblock), so every output tile re-loads both its A and B operand into the SRC registers; you wonder whether a bigger output subblock is worth it.
