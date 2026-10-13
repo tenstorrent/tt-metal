@@ -846,3 +846,15 @@ first A/B then measured HiFi4 twice (the agent had put the default back on the o
   exact); MiMo streaming SDPA (re-timed with V 128: q256/k256 56.5 ms, q512/k128 44.9 ms, q512/k256 still over L1;
   k128 accuracy cost confirmed, 0.99842 vs 0.99962); as_tensor cache spin (not reproduced on 1x4 / 2x2, left open for
   the 4x2 LoudBox with the two Xing ring_mla entries).
+
+## F62 (2026-10-13): short per-model known issues, full text in known_issues_detail.md
+
+- Per-model files were what an agent still read in bulk after F59: GLM 70 KB, Hy4 55 KB (median ~1000 chars per
+  entry). Every bullet over 600 chars is now short (claim, the number that is the lesson, fix, pointer; GLM 65 ->
+  30 KB, Hy4 52 -> 25 KB, MiMo 14 -> 8 KB, Xing 5 -> 2.4 KB), its original text kept byte for byte under
+  `## <title>` in the model's `known_issues_detail.md`, the bullet ending its Fix with `Detail: known_issues_detail.md.`
+  An agent now reads ~13-21k tokens of knowledge per step (was ~58k).
+- check.py: model entries <= MODEL_MAX_CHARS (600); a Detail pointer needs its section. Engineer rule 11 and
+  staleness.md say so; orchestrator / gate let agents write and commit the detail file.
+- stale.py: knowledge files are never anchors (the Detail pointer); a shortened entry keeps its age through its
+  detail section's original title. Ages and statuses identical before and after the trim (211 entries).

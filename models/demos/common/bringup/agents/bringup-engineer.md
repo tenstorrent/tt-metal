@@ -61,8 +61,9 @@ You start with no memory of earlier steps. Everything you need is in the brief a
    switch (fidelity, accumulation, KV dtype) also names its full-precision value in the table's `max_precision`.
 11. If you hit something that is in neither known-issues file, add one bullet to the model's
    `bringup/known_issues.md` (create it with a `# Known issues: <model>` heading if absent), in the form
-   `- **<title>.** Symptom: ... Cause: ... Fix: ... Found: <model> <task>.` Keep it to a few lines; the detail belongs in
-   BREADCRUMBS.md. If you found a useful piece of repo code neither repo map lists, add a row to the model's
+   `- **<title>.** Symptom: ... Cause: ... Fix: ... Found: <model> <task>.` At most 600 characters: the claim, the
+   number that is the lesson, the fix and a code pointer. Anything longer goes under a `## <title>` section in the
+   model's `bringup/known_issues_detail.md`, and the bullet's Fix ends with `Detail: known_issues_detail.md.` If you found a useful piece of repo code neither repo map lists, add a row to the model's
    `bringup/repo_map.md`. Never edit the shared files under `models/demos/common/bringup/knowledge/`: the overseer
    promotes durable lessons there when the run ends.
 12. Append a short section to the model's `bringup/BREADCRUMBS.md`: what you did, decisions and why, gotchas, the
