@@ -6,6 +6,8 @@
 import argparse
 import os
 import subprocess
+import shutil
+from pathlib import Path
 import tempfile
 import sys
 
@@ -42,21 +44,28 @@ def main():
     # pytest captures the logger, so the table always goes through a file and is printed here.
     if args.trials < 1 or args.launches < 1 or args.kernel_iters < 1:
         ap.error("trials, launches and kernel-iters must be positive")
-    if args.report:
-        report = os.path.abspath(args.report)
-    else:
-        fd, report = tempfile.mkstemp(prefix="read_coalescing_", suffix=".txt")
-        os.close(fd)
-    env["RC_REPORT"] = report
     cmd = ["scripts/run_safe_pytest.sh", "--run-all", _TEST]
     print(f"[read_coalescing] cases={args.cases} variant={args.variant} kernel_iters={args.kernel_iters}")
     print(f"[read_coalescing] {' '.join(cmd)}")
-    rc = subprocess.call(cmd, env=env, stdout=subprocess.DEVNULL)
-    if os.path.exists(report):
-        print(open(report).read())
-        if not args.report:
-            os.remove(report)
-    return rc
+    # Always use a fresh report: a failed run must never display or overwrite an older result.
+    with tempfile.TemporaryDirectory(prefix="read_coalescing_") as tmp_dir:
+        report = Path(tmp_dir) / "report.txt"
+        env["RC_REPORT"] = str(report)
+        with tempfile.TemporaryFile(mode="w+") as log:
+            result = subprocess.run(cmd, env=env, stdout=log, stderr=subprocess.STDOUT)
+            if result.returncode != 0 or not report.is_file() or report.stat().st_size == 0:
+                log.seek(0)
+                shutil.copyfileobj(log, sys.stderr)
+                if result.returncode != 0:
+                    print(f"[read_coalescing] benchmark failed (exit {result.returncode})", file=sys.stderr)
+                    return result.returncode
+                print("[read_coalescing] benchmark produced no report", file=sys.stderr)
+                return 1
+        text = report.read_text()
+        if args.report:
+            Path(args.report).write_text(text)
+        print(text)
+    return 0
 
 
 if __name__ == "__main__":
