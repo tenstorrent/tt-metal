@@ -1,0 +1,8 @@
+ID=t478-mb-ab-r1
+TASK=t478
+CONFIG=attn-layer-dump-ab
+TIMEOUT=600
+WORKDIR=/var/tmp/fasth3/t478
+ENV=/var/tmp/fasth3/t478/env478.yaml
+CMD=bash /var/tmp/fasth3/t478/run478mb.sh
+NEEDS=/var/tmp/fasth3/t478/base,/var/tmp/fasth3/t478/bundle,/var/tmp/fasth3/t460/python_env
