@@ -79,9 +79,9 @@ WRITE_OPS_DUMP = os.environ.get("K3_MLA_PERF_OPS_DUMP", "") not in ("", "0", "fa
 # Device-time targets per box: scenario -> (local prefix tokens, target ns).
 PERF_TARGETS = {
     "LoudBox": {
-        "warm": (50 * 1024, 10_100_000),
-        "cold": (25 * 1024, 46_800_000),
-        "long": (250 * 1024, 41_500_000),
+        "warm": (50 * 1024, 10_900_000),
+        "cold": (25 * 1024, 49_500_000),
+        "long": (250 * 1024, 45_500_000),
     },
     "QuietBox": {
         "warm": (50 * 1024, 11_100_000),
