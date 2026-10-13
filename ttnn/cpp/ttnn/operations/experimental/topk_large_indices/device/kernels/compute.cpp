@@ -258,9 +258,9 @@ FORCE_INLINE void materialize_index_rank_order(uint32_t dst, uint32_t indices_cb
 
 void kernel_main() {
     const uint32_t num_rows = get_arg_val<uint32_t>(topk_core_args::compute_num_rows);
-    const uint32_t seg_first_chunk = get_arg_val<uint32_t>(topk_core_args::compute_seg_first_chunk);
-    const uint32_t seg_end_chunk = get_arg_val<uint32_t>(topk_core_args::compute_seg_end_chunk);
     constexpr bool tree = get_named_compile_time_arg_val("tree") != 0;
+    const uint32_t seg_first_chunk = tree ? get_arg_val<uint32_t>(topk_core_args::compute_seg_first_chunk) : 0;
+    const uint32_t seg_end_chunk = tree ? get_arg_val<uint32_t>(topk_core_args::compute_seg_end_chunk) : 0;
     const uint32_t num_recv_rounds = tree ? get_arg_val<uint32_t>(topk_core_args::compute_num_recv_rounds) : 0;
     const bool sends_survivor = tree && get_arg_val<uint32_t>(topk_core_args::compute_sends_survivor) != 0;
     const bool has_split = tree && get_arg_val<uint32_t>(topk_core_args::compute_has_split) != 0;
@@ -313,6 +313,12 @@ void kernel_main() {
             split_tail_elements = tail_elements;
         }
         meta_cb_obj.pop_front(1);
+    } else if constexpr (!tree) {
+        const auto bounds = calculate_topk_bounds(search_len, K);
+        num_chunks = bounds.num_chunks;
+        tail_elements = bounds.tail_elements;
+        split_num_chunks = num_chunks;
+        split_tail_elements = tail_elements;
     } else {
         const auto row = calculate_topk_bounds(search_len, K);
         const auto whole = calculate_topk_segment_bounds(row, K, whole_first_chunk, whole_end_chunk);
