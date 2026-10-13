@@ -120,12 +120,12 @@ def test_single_user_performance_never_submits_a_batch(monkeypatch, tmp_path):
         }
 
     monkeypatch.setattr(benchmark, "complete", complete)
-    rows = asyncio.run(benchmark.run_performance(None, tmp_path, 1, (128, 1024)))
+    rows = asyncio.run(benchmark.run_performance(None, tmp_path, 16, 1, (128, 1024)))
     assert calls == 6
     assert [(r["input_tokens"], r["concurrency"], r["requests"]) for r in rows] == [(128, 1, 2), (1024, 1, 2)]
-    assert all(r["server_capacity"] == 1 for r in rows)
+    assert all(r["server_capacity"] == 16 for r in rows)
     raw = [json.loads(line) for line in (tmp_path / "performance-responses.jsonl").read_text().splitlines()]
-    assert len(raw) == 4 and all(r["server_capacity"] == r["batch"] == 1 for r in raw)
+    assert len(raw) == 4 and all(r["server_capacity"] == 16 and r["batch"] == 1 for r in raw)
     inputs = json.loads((tmp_path / "performance-inputs.json").read_text())
     assert [len(row["prompt"]) for row in inputs] == [128, 1024]
     assert [r["prompt_sha256"] for r in rows] == [row["sha256"] for row in inputs]
@@ -136,6 +136,7 @@ def gpqa_args(output_dir, *, prepare_only=False):
         output_dir=output_dir,
         mode="gpqa",
         server_capacity=16,
+        performance_concurrency=None,
         performance_input_lengths=(128,),
         prepare_only=prepare_only,
         base_url="http://test",

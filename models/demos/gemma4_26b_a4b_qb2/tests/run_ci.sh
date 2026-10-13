@@ -90,56 +90,55 @@ mark_phase prepare_dataset
 evaluate --prepare-only --server-capacity 16 --output-dir "$results/gpqa"
 
 tt_config='{"tt":{"fabric_config":"FABRIC_1D","trace_region_size":1000000000,"sample_on_device_mode":"all","trace_mode":"decode_only","enable_model_warmup":false}}'
-for capacity in 1 8 16; do
-    startup_log="$work/server_${capacity}.log"
-    mark_phase "start_server_$capacity"
-    setsid python -u -m vllm.entrypoints.openai.api_server \
-        --model google/gemma-4-26B-A4B-it \
-        --seed 9472 \
-        --revision 4d7ae4984b7db7de8f8457170b3f1a419ee76d52 \
-        --tokenizer-revision 4d7ae4984b7db7de8f8457170b3f1a419ee76d52 \
-        --served-model-name google/gemma-4-26B-A4B-it \
-        --hf-overrides '{"architectures":["TTGemma4A4BForCausalLM"]}' \
-        --host 127.0.0.1 --port 8000 --block-size 32 --max-num-seqs "$capacity" \
-        --max-model-len 262144 --max-num-batched-tokens 262144 --max-logprobs -1 \
-        --async-scheduling --no-enable-prefix-caching --no-enable-chunked-prefill \
-        --enable-auto-tool-choice --tool-call-parser gemma4 \
-        --reasoning-parser gemma4 --default-chat-template-kwargs '{"enable_thinking":true}' \
-        --no-enable-log-requests --no-enable-log-outputs \
-        --additional-config "$tt_config" > "$startup_log" 2>&1 &
-    server_pid=$!
+capacity=16
+startup_log="$work/server_${capacity}.log"
+mark_phase "start_server_$capacity"
+setsid python -u -m vllm.entrypoints.openai.api_server \
+    --model google/gemma-4-26B-A4B-it \
+    --seed 9472 \
+    --revision 4d7ae4984b7db7de8f8457170b3f1a419ee76d52 \
+    --tokenizer-revision 4d7ae4984b7db7de8f8457170b3f1a419ee76d52 \
+    --served-model-name google/gemma-4-26B-A4B-it \
+    --hf-overrides '{"architectures":["TTGemma4A4BForCausalLM"]}' \
+    --host 127.0.0.1 --port 8000 --block-size 32 --max-num-seqs "$capacity" \
+    --max-model-len 262144 --max-num-batched-tokens 262144 --max-logprobs -1 \
+    --async-scheduling --no-enable-prefix-caching --no-enable-chunked-prefill \
+    --enable-auto-tool-choice --tool-call-parser gemma4 \
+    --reasoning-parser gemma4 --default-chat-template-kwargs '{"enable_thinking":true}' \
+    --no-enable-log-requests --no-enable-log-outputs \
+    --additional-config "$tt_config" > "$startup_log" 2>&1 &
+server_pid=$!
 
-    wait_started=$SECONDS
-    for ((attempt = 0; SECONDS - wait_started < 1200; attempt++)); do
-        if curl --max-time 2 -fsS http://127.0.0.1:8000/health >/dev/null 2>&1; then break; fi
-        if ! kill -0 "$server_pid" 2>/dev/null; then
-            python -m models.demos.gemma4_26b_a4b_qb2.tests.startup_status \
-                "$startup_log" "$results/server-startup-$capacity.json"
-            cat "$results/server-startup-$capacity.json"
-            echo "Gemma4 26B server exited before readiness at capacity=$capacity" >&2
-            exit 1
-        fi
-        if (( attempt % 15 == 0 )); then
-            python -m models.demos.gemma4_26b_a4b_qb2.tests.startup_status \
-                "$startup_log" "$results/server-startup-$capacity.json"
-            cat "$results/server-startup-$capacity.json"
-        fi
-        sleep 4
-    done
-    curl --max-time 2 -fsS http://127.0.0.1:8000/health
-    mark_phase "server_ready_$capacity"
-
-    evaluate --mode performance --server-capacity "$capacity" --performance-input-lengths 128 \
-        --output-dir "$results/capacity_$capacity"
-    mark_phase "performance_complete_$capacity"
-
-    if [ "$capacity" = 16 ]; then
-        python -m pytest "$model_dir/tests/test_api.py" \
-            --gemma-server-url http://127.0.0.1:8000 --junitxml "$results/api.xml"
-        mark_phase api_tests_complete
-        echo "GPQA coverage: 10/198 Diamond questions for CI regression within the time budget."
-        evaluate --mode gpqa --server-capacity 16 --output-dir "$results/gpqa"
-        mark_phase gpqa_complete
+wait_started=$SECONDS
+for ((attempt = 0; SECONDS - wait_started < 1200; attempt++)); do
+    if curl --max-time 2 -fsS http://127.0.0.1:8000/health >/dev/null 2>&1; then break; fi
+    if ! kill -0 "$server_pid" 2>/dev/null; then
+        python -m models.demos.gemma4_26b_a4b_qb2.tests.startup_status \
+            "$startup_log" "$results/server-startup-$capacity.json"
+        cat "$results/server-startup-$capacity.json"
+        echo "Gemma4 26B server exited before readiness at capacity=$capacity" >&2
+        exit 1
     fi
-    stop_server
+    if (( attempt % 15 == 0 )); then
+        python -m models.demos.gemma4_26b_a4b_qb2.tests.startup_status \
+            "$startup_log" "$results/server-startup-$capacity.json"
+        cat "$results/server-startup-$capacity.json"
+    fi
+    sleep 4
 done
+curl --max-time 2 -fsS http://127.0.0.1:8000/health
+mark_phase "server_ready_$capacity"
+
+python -m pytest "$model_dir/tests/test_api.py" \
+    --gemma-server-url http://127.0.0.1:8000 --junitxml "$results/api.xml"
+mark_phase api_tests_complete
+
+for request_concurrency in 1 8 16; do
+    evaluate --mode performance --server-capacity 16 --performance-concurrency "$request_concurrency" \
+        --performance-input-lengths 128 --output-dir "$results/concurrency_$request_concurrency"
+    mark_phase "performance_complete_$request_concurrency"
+done
+
+echo "GPQA coverage: 10/198 Diamond questions for CI regression within the time budget."
+evaluate --mode gpqa --server-capacity 16 --output-dir "$results/gpqa"
+mark_phase gpqa_complete

@@ -193,18 +193,18 @@ async def run_gpqa(client, output_dir, task, cases):
     }
 
 
-def performance_shapes(server_capacity, input_lengths):
-    return [(length, server_capacity) for length in input_lengths]
+def performance_shapes(request_concurrency, input_lengths):
+    return [(length, request_concurrency) for length in input_lengths]
 
 
-async def run_performance(client, output_dir, server_capacity, input_lengths):
+async def run_performance(client, output_dir, server_capacity, request_concurrency, input_lengths):
     from transformers import AutoTokenizer
 
     tokenizer = AutoTokenizer.from_pretrained(MODEL, revision=MODEL_REVISION, local_files_only=True)
     passage = "The scientific method tests explanations against observations. Describe an experiment and its controls. "
     source = tokenizer.encode(passage, add_special_tokens=False)
     rows, summaries, inputs = [], [], []
-    for length, batch in performance_shapes(server_capacity, input_lengths):
+    for length, batch in performance_shapes(request_concurrency, input_lengths):
         prompt = [tokenizer.bos_token_id] + (source * (length // len(source) + 1))[: length - 1]
         prompt_sha256 = hashlib.sha256(json.dumps(prompt).encode()).hexdigest()
         inputs.append({"input_tokens": length, "concurrency": batch, "prompt": prompt, "sha256": prompt_sha256})
@@ -258,6 +258,7 @@ async def run_performance(client, output_dir, server_capacity, input_lengths):
 
 async def main(args):
     args.output_dir.mkdir(parents=True, exist_ok=True)
+    request_concurrency = args.performance_concurrency or args.server_capacity
     task, cases = load_gpqa() if args.mode != "performance" else (None, [])
     inputs = "".join(json.dumps(c, sort_keys=True) + "\n" for c in cases)
     # GPQA terms prohibit publishing examples. Keep reproducibility hashes,
@@ -292,7 +293,7 @@ async def main(args):
         "performance": {
             "shapes": [
                 [length, 128, batch]
-                for length, batch in performance_shapes(args.server_capacity, args.performance_input_lengths)
+                for length, batch in performance_shapes(request_concurrency, args.performance_input_lengths)
             ],
             "warmup": "one burst per shape",
             "repeats": 2,
@@ -312,7 +313,11 @@ async def main(args):
             (args.output_dir / "summary.json").write_text(json.dumps(summary, indent=2) + "\n")
         if args.mode != "gpqa":
             summary["performance_results"] = await run_performance(
-                client, args.output_dir, args.server_capacity, args.performance_input_lengths
+                client,
+                args.output_dir,
+                args.server_capacity,
+                request_concurrency,
+                args.performance_input_lengths,
             )
     (args.output_dir / "summary.json").write_text(json.dumps(summary, indent=2) + "\n")
     if "gpqa_result" in summary and not summary["gpqa_result"]["passed"]:
@@ -343,7 +348,13 @@ if __name__ == "__main__":
         type=int,
         choices=(1, 8, 16),
         default=16,
-        help="The server max-num-seqs setting and measured performance concurrency.",
+        help="The server max-num-seqs setting.",
+    )
+    parser.add_argument(
+        "--performance-concurrency",
+        type=int,
+        choices=(1, 8, 16),
+        help="Measured request concurrency; defaults to --server-capacity.",
     )
     parser.add_argument("--performance-input-lengths", type=int, nargs="+", choices=(128, 1024), default=(128, 1024))
     parser.add_argument("--prepare-only", action="store_true")
