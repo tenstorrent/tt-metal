@@ -11,8 +11,13 @@ For every entry of the shared knowledge/known_issues.md and of each model's brin
 - anchors: what its `Applies to:` (else its text) names, resolved to repo paths at HEAD: paths as written ({a,b}
   expanded) or partial ones by suffix (`testing/profiler.py`), and op names (`unified_routed_expert_moe`,
   `ttnn.bringup.mhc_pre`) to the folder that registers them (`bind_function<"name">`) or the fork of that name;
-- status: `changed` (an anchored path has commits in since..HEAD, listed), `anchor-missing` (a path that existed at
-  `since` is gone), `unchanged`, or `unanchored` (nothing resolved: a person or agent judges it from the text).
+- status: `needs-probe` (it carries `Unverified since:`: a device check is still open), `anchor-missing` (a path that
+  existed at `since` is gone), `changed` (an anchored path has commits in since..HEAD, listed), `method`
+  (`Applies to: method ...`: testing / process knowledge, never stale with the code), `unanchored` (nothing resolved: a
+  person or agent judges it from the text), or `unchanged`.
+Partial paths in a model's entries resolve inside that model's folder first; arch copies (`quasar`) of an op are not
+anchors. After a rebase, since..HEAD can list commits older than the entry (history was reordered): those whose author
+date is before `since`'s are dropped (counted in `older_commits`).
 Repo-map rows are checked for paths that no longer exist. Writes stale.json and stale.md to --out (default: the
 current directory) and prints a summary. Read-only.
 """
@@ -30,6 +35,7 @@ from models.demos.common.bringup.core.spec import CODE_ROOT
 
 HERE = Path(__file__).resolve().parent
 PATH_RE = re.compile(r"(?:models|ttnn|tt_metal|tests|scripts)/[A-Za-z0-9_./{},*-]+")
+ARCH_COPIES = ("/quasar/",)  # per-arch copies of an op: not where a lesson about the op lives
 
 
 def git(*args: str, root: Path = CODE_ROOT) -> str:
@@ -62,7 +68,7 @@ class Resolver:
         )
         for line in grep.splitlines():
             m = re.match(r"[^:]+:([^:]+):bind_function<\"([a-z_0-9]+)\"", line)
-            if m:
+            if m and not any(a in m.group(1) for a in ARCH_COPIES):
                 self.ops.setdefault(m.group(2), set()).add(self.op_dir(m.group(1)))
         for f in self.files:
             parts = f.split("/")
@@ -76,16 +82,21 @@ class Resolver:
             return "/".join(parts[:4])
         return "/".join(parts[: parts.index("device")]) if "device" in parts else str(Path(f).parent)
 
-    def path(self, p: str) -> list[str]:
-        """A repo path as written, or a partial one (`testing/profiler.py`, `sdpa_program_factory.cpp`) by suffix."""
+    def path(self, p: str, prefer: str = "") -> list[str]:
+        """A repo path as written, or a partial one (`testing/profiler.py`, `sdpa_program_factory.cpp`) by suffix;
+        `prefer` (a model's folder): a partial path that exists there means that one (`tt/mhc.py` of this model)."""
         if p in self.fileset:
             return [p]
         if p in self.dirs:
             return [p] if p.count("/") >= 2 else []  # `models/demos`, `ttnn/cpp`: too broad to anchor anything
         hits = [f for f in self.files if f.endswith("/" + p)] or [d for d in self.dirs if d.endswith("/" + p)]
+        hits = [h for h in hits if not any(a in h for a in ARCH_COPIES)]
+        own = [h for h in hits if prefer and h.startswith(prefer + "/")]
+        if own:
+            return own
         return hits if 0 < len(hits) <= 3 else []
 
-    def anchors(self, text: str) -> tuple[list[str], list[str]]:
+    def anchors(self, text: str, prefer: str = "") -> tuple[list[str], list[str]]:
         """(paths, written paths that resolve to nothing at head: maybe gone)."""
         out, gone = [], []
         for raw in re.findall(r"[A-Za-z0-9_./{},*-]*[/.][A-Za-z0-9_./{},*-]*", text):
@@ -93,7 +104,7 @@ class Resolver:
                 p = p.split(":")[0].rstrip("/.")
                 if "*" in p or "/" not in p and not re.search(r"\.(py|cpp|hpp|h|md|yaml)$", p):
                     continue
-                hit = self.path(p)
+                hit = self.path(p, prefer)
                 out += hit
                 if not hit and PATH_RE.fullmatch(p) and p not in self.fileset and p not in self.dirs:
                     gone.append(p)
@@ -157,18 +168,35 @@ def entries_of(path: Path, root: Path) -> list[dict]:
     return out
 
 
+FIELD_END = r"(?: Seen at:| Check:| Unverified since:| Found:|$)"
+
+
 def check_entry(e: dict, res: Resolver, head: str) -> dict:
     m = re.search(r"Seen at: ([0-9a-f]{7,40})", e["text"])
     since = m.group(1) if m else e["blame"]
-    a = re.search(r"Applies to: (.*?)(?: Seen at:| Check:| Found:|$)", e["text"])
-    anchors, gone = res.anchors(a.group(1) if a else e["text"])
+    a = re.search(r"Applies to: (.*?)" + FIELD_END, e["text"])
+    applies = a.group(1).strip().rstrip(".") if a else ""
+    prefer = str(Path(e["file"]).parent.parent) if not e["file"].startswith("models/demos/common/") else ""
+    method = applies.startswith("method")  # `Applies to: method (component tests)`: never stale with the code
+    anchors, gone = res.anchors(applies or e["text"], prefer) if not method else ([], [])
     missing = [p for p in gone if since and res.exists(p, since)]
     e = {**e, "since": since, "seen_at_field": bool(m), "anchors": anchors, "commits": [], "missing": missing}
+    e["older_commits"] = 0
     if anchors and since:
-        log = git("log", "--format=%h %ad %s", "--date=short", f"{since}..{head}", "--", *anchors, root=res.root)
-        e["commits"] = [c for c in log.splitlines() if c.strip()]
-    if missing:
+        floor = git("show", "-s", "--format=%at", since, root=res.root).strip()
+        log = git("log", "--format=%h %at %ad %s", "--date=short", f"{since}..{head}", "--", *anchors, root=res.root)
+        for c in (c for c in log.splitlines() if c.strip()):
+            sha, at, rest = c.split(" ", 2)
+            if floor and int(at) < int(floor):
+                e["older_commits"] += 1  # reordered by a rebase: written before the entry was last checked
+            else:
+                e["commits"].append(f"{sha} {rest}")
+    if "Unverified since:" in e["text"]:
+        e["status"] = "needs-probe"
+    elif missing:
         e["status"] = "anchor-missing"
+    elif method:
+        e["status"] = "method"
     elif not anchors:
         e["status"] = "unanchored"
     else:
@@ -215,7 +243,7 @@ def main(argv=None) -> int:
     out = Path(a.out)
     out.mkdir(parents=True, exist_ok=True)
     (out / "stale.json").write_text(json.dumps({"head": head, "entries": results, "repo_map": rm}, indent=1) + "\n")
-    order = {"anchor-missing": 0, "changed": 1, "unanchored": 2, "unchanged": 3}
+    order = {"needs-probe": 0, "anchor-missing": 1, "changed": 2, "unanchored": 3, "method": 4, "unchanged": 5}
     md = [
         f"# Knowledge staleness at {head}",
         "",

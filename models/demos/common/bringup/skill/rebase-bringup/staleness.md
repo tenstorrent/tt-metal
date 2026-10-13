@@ -7,21 +7,24 @@ the branch's origin moved under work you depend on. It is self-contained: this f
 ## What is checked
 
 - The shared files, read by every bring-up agent: `models/demos/common/bringup/knowledge/known_issues.md` (sections,
-  one bullet per lesson: `Symptom:`, `Cause:`, `Fix:`, `Applies to:`, `Seen at:`, optional `Check:`, `Found:`) and
-  `repo_map.md` (a `| Need | Where |` table).
-- Each model's own files, read by that model's agents: `models/demos/<model>/bringup/known_issues.md` (bullets with
-  `Symptom:`, `Cause:`, `Fix:`, `Found:`; `Applies to:` / `Seen at:` optional) and `bringup/repo_map.md`.
-- `Applies to:` names the code an entry is about (ops, forks, repo paths); `Seen at:` is the commit at which it was
-  last known true. An entry whose `Applies to:` code has commits after `Seen at:` may be stale.
+  one bullet per lesson) and `repo_map.md` (a `| Need | Where |` table).
+- Each model's own files, read by that model's agents: `models/demos/<model>/bringup/known_issues.md` (bullets, no
+  sections) and `bringup/repo_map.md`.
+- An entry is one bullet with these fields, in this order: `Symptom:`, `Cause:`, `Fix:`, `Applies to:` (the code it is
+  about: repo paths, partial paths such as `tt/mhc.py`, op names such as `unified_routed_expert_moe`; or the word
+  `method` for testing / process knowledge that cannot go stale with the code), `Seen at:` (the commit at which it was
+  last known true), optionally one `Check:` (the probe that settles it on a device), optionally
+  `Unverified since: <commit>.` (a device check is still open), `Found:` (who found it, in which task; never changed).
+  Shared entries require `Applies to:` and `Seen at:` and stay within 800 characters; model entries get them when you
+  verify them.
 
 ## Rules
 
-- No device runs (no pytest on device, no `scripts/run_safe_pytest.sh`, no `scripts/tt-probe.sh`). You decide by
-  reading code and git history. What only a device run can settle is marked, not guessed.
 - Change only the knowledge files above. Do not commit unless the person who started you said so.
-- Every change needs evidence you can cite: a commit (`git log`) or a `file:line` in the current tree.
+- Every change needs evidence you can cite: a commit (`git log`), a `file:line` in the current tree, or a device result.
 - Do not touch entries whose code did not change, and do not add new lessons from unrelated reading.
-- Keep each entry's `Found:` (who found it, in which task). Keep the format: run the checker (step 5) before finishing.
+- Device runs only in step 4, and only through `scripts/tt-probe.sh` or `scripts/run_safe_pytest.sh`, in the
+  foreground, one at a time. If the person said no device runs, skip step 4 and leave its entries marked.
 
 ## 1. List the candidates
 
@@ -32,59 +35,87 @@ python -m models.demos.common.bringup.knowledge.stale --out <scratch dir>
 ```
 
 It writes `stale.md` (one row per entry, sorted by status) and `stale.json` (per entry: `file`, `line`, `title`,
-`text`, `since` (its `Seen at:`, else the commit that last touched it), `anchors` (the repo paths its `Applies to:`
-resolved to), `commits` (since..HEAD on those paths), `missing`, `status`). Statuses:
+`text`, `since`, `anchors` (the repo paths its `Applies to:` resolved to), `commits` (since..HEAD on those paths),
+`older_commits`, `missing`, `status`). A rebase reorders history, so commits written before `since` can show up after
+it; the lister drops them (`older_commits`) and keeps the rest.
 
-| Status | Meaning | What you do |
+| Status | Meaning | Step |
 |---|---|---|
-| `changed` | its anchored code has commits after `since` | verify it (step 2) |
-| `anchor-missing` | a path it names existed at `since` and is gone | find where the code went (step 2) |
-| `unanchored` | nothing it names resolved to a path | judge it from its text (step 3) |
+| `needs-probe` | carries `Unverified since:`: a device check is open | 4 |
+| `anchor-missing` | a path it names existed at `since` and is gone | 2 |
+| `changed` | its anchored code has commits after `since` | 2 |
+| `unanchored` | nothing it names resolved to a path | 3 |
+| `method` | `Applies to: method` | nothing |
 | `unchanged` | no commits on its code since `since` | nothing |
 
-It also lists repo-map rows naming paths that no longer exist: fix the path or drop the row.
+It also lists repo-map rows naming paths that no longer exist (step 5).
+
+More than ~30 candidates: split them by file (shared, then one model per worker), each worker editing only its own
+files, and merge; two workers never edit the same file.
 
 ## 2. Verify each `changed` / `anchor-missing` entry
 
-1. Read the entry. Name the one claim it makes (an op refuses X, an option defaults to Y, a workaround is needed
-   because Z).
-2. Look only at the commits listed for it: `git log --stat <since>..HEAD -- <anchors>`, then
-   `git show <commit> -- <file>` for the commits whose subject or files touch the claim. Most listed commits are
-   unrelated (cleanups, other features): skip them after reading the subject and stat.
-3. Read the current code where the claim lives (the validation, the default, the kernel path) and decide:
+1. Name the one claim the entry makes (an op refuses X, an option defaults to Y, a workaround is needed because Z, a
+   measured number).
+2. Look only at its listed commits: `git log --stat <since>..HEAD -- <anchors>`, then `git show <commit> -- <file>` for
+   those whose subject or files touch the claim. Most are unrelated (cleanups, other features): skip them after the
+   subject and stat.
+3. Read the current code where the claim lives and decide:
 
 | Verdict | When | Edit |
 |---|---|---|
-| still true | the claim holds in the current code | set `Seen at:` to the current HEAD (short sha); nothing else |
-| changed | the claim holds partly, or the fix / workaround changed (a new option, a renamed path, a fork now covers it) | rewrite the smallest part that changed; `Seen at:` = HEAD |
-| fixed | the problem is gone (the op accepts X now, the default changed) and the lesson has no general value left | delete the entry |
-| moved | `anchor-missing`: the code moved (`git log --follow`, `git log -S '<symbol>'`) | update `Applies to:` (and the text if it names the path); then judge it as above |
-| needs a device run | the claim is about numbers or behaviour the code does not settle (precision, a hang, a perf figure) | keep the text; add or keep a `Check:` describing the probe that would settle it; add "unverified since `<HEAD>`" before `Found:` |
+| still true | the claim holds in the current code | `Seen at:` = HEAD (short sha); nothing else |
+| changed | any part changed: a detail is wrong, a path moved, a fork or a new option now gives a better fix | rewrite the smallest part (a new option goes first in `Fix:`); `Seen at:` = HEAD |
+| fixed | the problem is gone and the lesson has no general value left | delete the entry |
+| moved | `anchor-missing`: the code moved (`git log --follow`, `git log -S '<symbol>'`) | update `Applies to:` (and the text); then judge it as above |
+| needs a device run | the claim is a measured number or a behaviour the code does not settle (precision, a hang, a timing), and the commits touch what produces it (the kernel, the precision, the chunking, the collective), or the claim was measured on a configuration that has since changed | keep the text; one `Check:` naming the probe and the mesh it needs; `Unverified since: <HEAD>.`; keep `Seen at:` (step 4 settles it) |
 
-For a model's file, also add `Applies to:` / `Seen at:` to an entry you verified, so the next re-check can follow it.
+Unchanged code around a measured number is enough to keep it (still true) only when no listed commit touches what
+produces the number. When the fix is a model setting, `Applies to:` names the file that reads it (the model's
+`tt/settings.py`, `tt/model.py`, ...), so the next re-check follows it. A model entry you verify gets `Applies to:` and
+`Seen at:` before `Found:`.
 
 ## 3. Judge each `unanchored` entry
 
-Read its text. If it is about code, find that code (grep the symbol, the op, the test helper), add an `Applies to:`
-that resolves (a repo path, or an op's Python name such as `unified_routed_expert_moe`), and verify it as in step 2.
-If it is method or process knowledge (how to test, how to read a metric), it cannot go stale with the code: leave it.
+If it is about code, find that code (grep the symbol, the op, the test helper), give it an `Applies to:` that resolves
+(a repo path, or an op's Python name), and verify it as in step 2. If it is testing or process knowledge, set
+`Applies to: method` and leave the rest.
 
-## 4. Repo maps
+## 4. Device checks
 
-For each row of the shared and per-model `repo_map.md`: a path that no longer exists is fixed (where did it go?) or
-the row is dropped; a row pointing at an original op that now has a `ttnn.bringup` fork the models use names the fork
-too. Do not restructure rows that are still right.
+For every entry marked "needs a device run" (in step 2, or already `needs-probe`):
+1. Read its `Check:`. If this box cannot open the mesh it needs (`ls /dev/tenstorrent | wc -l`, the model spec's
+   `box.mesh`), leave the entry as it is and list it in the report with the box it needs.
+2. Write the smallest probe that answers the claim: a standalone script (random inputs, the op or the model test with
+   the switch the entry names) run with `scripts/tt-probe.sh <name> < probe.py`, or an existing test / profile through
+   `scripts/run_safe_pytest.sh` with the entry's settings. Bound it in time (a watchdog for a claimed hang). Print the
+   numbers the entry states, next to the reference they are measured against.
+3. Record the result:
+   - confirmed: put the measured numbers in the text if they changed, `Seen at:` = HEAD, drop `Unverified since:`;
+     keep `Check:` (the next re-check can rerun it);
+   - refuted (the problem is gone): delete the entry, or rewrite it if part still holds;
+   - inconclusive: keep `Unverified since:`, and say in the report what the probe showed.
+4. Keep the probe in `models/demos/common/bringup/knowledge/probes/<name>.py` (with the SPDX header and its run
+   line) and name it in the entry's `Check:`, so the next re-check reruns the same probe. tt-probe's own copy under
+   `tests/ttnn/unit_tests/operations/<name>/probes/` is scratch: delete it.
 
-## 5. Check and report
+## 5. Repo maps
+
+For each row of the shared and per-model `repo_map.md`: a path that no longer exists is fixed (where did it go?) or the
+row is dropped. When you rewrite an entry about an op or option, grep both repo maps for that op and update rows that
+now say something wrong about it (a fork that now covers it, a new option). Do not restructure rows that are still
+right.
+
+## 6. Check and report
 
 ```
-python -m models.demos.common.bringup.knowledge.check                         # the shared files
+python -m models.demos.common.bringup.knowledge.check                                  # the shared files
 python -m models.demos.common.bringup.knowledge.check --model-dir models/demos/<model>   # each model you touched
 ```
 
-Both must exit 0 (sections, fields, anchors and the shared length cap of 800 characters per entry). Then report, in a
-file next to `stale.md` (`report.md`) and briefly in your final message:
-- counts: entries checked, still true, changed, fixed (deleted), moved, needs a device run, unanchored judged;
-- one line per edited or deleted entry: `file:line`, title, verdict, the evidence (commit or `file:line`);
-- the "needs a device run" list with the probe for each;
+Both must exit 0. Then rerun step 1: what is left `changed` must be entries you decided on with a reason. Report, in
+`report.md` next to `stale.md` and briefly in your final message:
+- counts: entries checked, still true, changed, fixed (deleted), moved, device checks run (confirmed / refuted /
+  inconclusive), device checks left open (with the box each needs), unanchored judged;
+- one line per edited or deleted entry: `file:line`, title, verdict, the evidence (commit, `file:line`, or probe);
 - anything you could not decide.

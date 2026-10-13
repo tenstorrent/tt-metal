@@ -830,3 +830,19 @@ first A/B then measured HiFi4 twice (the agent had put the default back on the o
   shared file's age), `Applies to:` resolved to repo paths (paths, partial paths by suffix, op names through
   `bind_function<"name">` and the fork folders), the commits since on them; status changed / anchor-missing /
   unanchored / unchanged; repo-map rows naming missing paths. At a6b2f86ab9a: 211 entries, 42 changed, 18 unanchored.
+
+## F61 (2026-10-13): staleness re-check: device checks in the procedure, the first run's gaps closed
+
+- First agent run of `staleness.md` (alone, at 864ec8b0891): 60 candidates, 37 still true, 9 rewritten, 5 left for a
+  device, 13 procedure gaps. The procedure forbade device runs, so those 5 stayed open; step 4 "Device checks" now runs
+  them (probe from `Check:`, safe runners, one at a time, bounded; confirmed / refuted / inconclusive; probes kept in
+  `knowledge/probes/`; an entry whose mesh this box cannot open names the box and stays `Unverified since:`).
+- Fields fixed: one `Check:`; `Unverified since: <sha>.` before `Found:`; `Applies to: method (...)` for testing /
+  process knowledge; model entries get anchors when verified; rules for measured numbers, new options, repo-map rows,
+  splitting a large pass.
+- `knowledge/stale.py`: statuses needs-probe and method; partial paths resolve in the entry's own model first; arch
+  copies (quasar) are not anchors; commits older than `since` (reordered by a rebase) are dropped.
+- Device checks run at 864ec8b0891: FPU fp32 (confirmed: matmul rel 1.2e-3 vs fp64, all_reduce ~2 TF32 ulps, SFPU adds
+  exact); MiMo streaming SDPA (re-timed with V 128: q256/k256 56.5 ms, q512/k128 44.9 ms, q512/k256 still over L1;
+  k128 accuracy cost confirmed, 0.99842 vs 0.99962); as_tensor cache spin (not reproduced on 1x4 / 2x2, left open for
+  the 4x2 LoudBox with the two Xing ring_mla entries).
