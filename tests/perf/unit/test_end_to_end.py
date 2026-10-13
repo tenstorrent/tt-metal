@@ -164,3 +164,15 @@ def test_unsafe_case_filters_are_refused(setup, expect_error, case_filter, messa
     suite = make([{"BM/a/k:1/manual_time": 1e-6}])
     with expect_error(runner.RunError, message):
         session.execute(suite, ENV, case_filter=case_filter)
+
+
+def test_crashed_rerun_keeps_the_first_run_results(setup):
+    make, _ = setup
+    golden = {"BM/a/k:1/manual_time": {"IterationTime": 1e-6}}
+    suite = make([{"BM/a/k:1/manual_time": 1.2e-6}, "crash"], golden)
+    record = session.execute(suite, ENV)
+    assert record.retry == {} and "exited with 3" in record.retry_error
+    saved = session.Record.load(session.output_dir("fake", ENV) / "measurements.json")
+    assert saved.cases == record.cases and saved.retry_error == record.retry_error
+    golden_doc, comparison = session.evaluate(record, suite)
+    assert session.failures(record, suite, golden_doc, comparison) == ["1 REGRESSION"]
