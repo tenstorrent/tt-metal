@@ -396,9 +396,7 @@
 <li><p><span class="tt-api-param-name"><strong>memory_config</strong> (<em>ttnn.MemoryConfig</em><em>, </em><em>optional</em>)</span><span class="tt-api-param-desc">Memory configuration for the operation. Defaults to <cite>None</cite>.</span></p></li>
 <li><p><span class="tt-api-param-name"><strong>output_mapping_tensor</strong> (<em>ttnn.Tensor</em><em>, </em><em>optional</em>)</span><span class="tt-api-param-desc">Preallocated output mapping tensor. Defaults to <cite>None</cite>.</span></p></li>
 <li><p><span class="tt-api-param-name"><strong>output_reduced_tensor</strong> (<em>ttnn.Tensor</em><em>, </em><em>optional</em>)</span><span class="tt-api-param-desc">Preallocated output reduced tensor. Defaults to <cite>None</cite>.</span></p></li>
-<li><p><span class="tt-api-param-name"><strong>reduction_size</strong> (<em>int</em><em>, </em><em>optional</em>)</span><span class="tt-api-param-desc">reduction chunk size. Must be positive, and must divide
-<cite>batch * seq</cite> exactly - the writer emits one reduced page per chunk and does not flush a
-partial trailing group.</span></p></li>
+<li><p><span class="tt-api-param-name"><strong>reduction_size</strong> (<em>int</em><em>, </em><em>optional</em>)</span><span class="tt-api-param-desc">reduction chunk size</span></p></li>
 </ul>
 </dd>
 <dt class="field-odd">Returns<span class="colon">:</span>
