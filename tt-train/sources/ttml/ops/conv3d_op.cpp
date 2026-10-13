@@ -37,9 +37,9 @@ namespace ttml::ops {
 
 namespace {
 
-// Activation channel counts must be divisible by the kernel's C_in block (16 or 32), so C_in and C_out are padded
-// to TILE_WIDTH; C_out because dY becomes the transposed convolution's activation in the backward pass.
-constexpr uint32_t kChannelAlignment = tt::constants::TILE_WIDTH;
+// Output channels are padded to the kernel's C_out block; activation channels only to its C_in block (16 or 32),
+// since padding a 16-channel activation to a tile doubles its copy and its MACs for the same math.
+constexpr uint32_t kCOutBlock = tt::constants::TILE_WIDTH;
 
 struct Conv3dGeometry {
     uint32_t N = 0;
@@ -75,12 +75,14 @@ struct Conv3dGeometry {
 };
 
 // Per-group channel counts; a distinct type so per-group helpers cannot be handed the whole-op geometry.
+// C_in is the activation in the forward pass and C_out in the backward pass, where dY feeds the transposed
+// convolution, so each channel count is padded by role rather than by name.
 struct GroupGeometry : Conv3dGeometry {
-    [[nodiscard]] uint32_t c_in_padded() const {
-        return tt::round_up(C_in, kChannelAlignment);
+    [[nodiscard]] uint32_t padded_activation(uint32_t channels) const {
+        return tt::round_up(channels, c_in_block());
     }
-    [[nodiscard]] uint32_t c_out_padded() const {
-        return tt::round_up(C_out, kChannelAlignment);
+    [[nodiscard]] static uint32_t padded_output(uint32_t channels) {
+        return tt::round_up(channels, kCOutBlock);
     }
 };
 
@@ -167,7 +169,7 @@ PreparedWeight prepare_weight(const ttnn::Tensor& raw_layout_weight) {
     const uint32_t c_in_block =
         ttnn::operations::experimental::conv3d::default_c_in_block(shape[2] * shape[3] * shape[4]);
     auto prepared = ttnn::operations::experimental::conv3d::prepare_conv3d_weights(
-        raw_layout_weight, /*groups=*/1U, c_in_block, kChannelAlignment, raw_layout_weight.device());
+        raw_layout_weight, /*groups=*/1U, c_in_block, /*alignment=*/c_in_block, raw_layout_weight.device());
     // The kernel accepts only the rank-2 prepared form from device.
     if (prepared.logical_shape().rank() != 2U) {
         throw std::logic_error(fmt::format(
@@ -341,10 +343,10 @@ ttnn::Tensor run_ttnn_conv3d(
         /*T_out_block=*/1U,
         /*W_out_block=*/1U,
         /*H_out_block=*/1U,
-        /*C_out_block=*/tt::constants::TILE_WIDTH,
+        /*C_out_block=*/kCOutBlock,
         prepared_weight.c_in_block,
         dilation,
-        kChannelAlignment,
+        /*alignment=*/prepared_weight.c_in_block,
         input_row_major.device()->compute_with_storage_grid_size());
     return ttnn::experimental::conv3d(
         input_row_major,
@@ -366,8 +368,8 @@ ttnn::Tensor run_ttnn_conv3d(
 
 ttnn::Tensor conv3d_input_grad(
     const ttnn::Tensor& grad_output, const PreparedWeight& transposed_weight, const GroupGeometry& geometry) {
-    const uint32_t c_in_padded = geometry.c_in_padded();
-    const uint32_t c_out_padded = geometry.c_out_padded();
+    const uint32_t c_in_padded = geometry.padded_output(geometry.C_in);
+    const uint32_t c_out_padded = geometry.padded_activation(geometry.C_out);
 
     auto grad = to_row_major(grad_output);
     grad = pad_after(grad, /*dim=*/4, c_out_padded - geometry.C_out);
@@ -562,21 +564,21 @@ Conv3dGeometry validate_and_build_geometry(
     const auto grid = input_value.device()->compute_with_storage_grid_size();
     const uint32_t cores = static_cast<uint32_t>(grid.x * grid.y);
     const uint32_t c_in_block = geometry.c_in_block();
-    if (group.c_in_padded() / c_in_block > cores) {
+    if (group.padded_activation(group.C_in) / c_in_block > cores) {
         throw std::invalid_argument(fmt::format(
             "conv3d: {} input channels per group need {} channel blocks of {} but the device has {} cores",
             group.C_in,
-            group.c_in_padded() / c_in_block,
+            group.padded_activation(group.C_in) / c_in_block,
             c_in_block,
             cores));
     }
-    if (input->get_requires_grad() && group.c_out_padded() / c_in_block > cores) {
+    if (input->get_requires_grad() && group.padded_activation(group.C_out) / c_in_block > cores) {
         throw std::invalid_argument(fmt::format(
             "conv3d: the input gradient runs a transposed conv over {} output channels per group, needing {} "
             "channel blocks of {} but the device has {} cores; reduce C_out per group or set input requires_grad "
             "to false",
             group.C_out,
-            group.c_out_padded() / c_in_block,
+            group.padded_activation(group.C_out) / c_in_block,
             c_in_block,
             cores));
     }
@@ -591,15 +593,14 @@ struct GroupWeights {
 std::vector<PreparedWeight> prepare_group_weights(
     const ttnn::Tensor& weight_row_major, const Conv3dGeometry& geometry, bool transposed) {
     const GroupGeometry group = geometry.per_group();
-    const uint32_t c_in_padded = group.c_in_padded();
-    const uint32_t c_out_padded = group.c_out_padded();
     std::vector<PreparedWeight> result;
     result.reserve(geometry.groups);
     for (uint32_t g = 0; g < geometry.groups; ++g) {
         auto group_weight = slice_weight_group(weight_row_major, geometry, g);
         result.push_back(
-            transposed ? prepare_transposed_weight(group_weight, c_in_padded, c_out_padded)
-                       : prepare_forward_weight(group_weight, c_out_padded));
+            transposed ? prepare_transposed_weight(
+                             group_weight, group.padded_output(group.C_in), group.padded_activation(group.C_out))
+                       : prepare_forward_weight(group_weight, group.padded_output(group.C_out)));
     }
     return result;
 }
@@ -657,10 +658,20 @@ void validate_prepared_weight(
         }
     };
     for (size_t g = 0; g < prepared.forward.size(); ++g) {
-        check_form(prepared.forward[g], kvol * group.c_in_padded(), group.c_out_padded(), "forward", g);
+        check_form(
+            prepared.forward[g],
+            kvol * group.padded_activation(group.C_in),
+            group.padded_output(group.C_out),
+            "forward",
+            g);
     }
     for (size_t g = 0; g < prepared.transposed.size(); ++g) {
-        check_form(prepared.transposed[g], kvol * group.c_out_padded(), group.c_in_padded(), "transposed", g);
+        check_form(
+            prepared.transposed[g],
+            kvol * group.padded_activation(group.C_out),
+            group.padded_output(group.C_in),
+            "transposed",
+            g);
     }
 }
 
@@ -672,8 +683,8 @@ autograd::TensorPtr conv3d_impl(
     const Conv3dGeometry& geometry) {
     const auto& input_value = input->get_value();
     const GroupGeometry group = geometry.per_group();
-    const uint32_t c_in_padded = group.c_in_padded();
-    const uint32_t c_out_padded = group.c_out_padded();
+    const uint32_t c_in_padded = group.padded_activation(group.C_in);
+    const uint32_t c_out_padded = group.padded_output(group.C_out);
 
     auto input_row_major = to_row_major(input_value);
     std::optional<ttnn::Tensor> bias_row;

@@ -431,7 +431,8 @@ TEST_F(Conv3dOpTest, PointwiseKernelWithStride) {
     run_case(c);
 }
 
-// Even kernel volume: C_in block 16, so the padded channels span two blocks and re-blocking runs.
+// Even kernel volume: C_in block 16. The 16-channel input runs unpadded; C_out 40 pads to 48 as the dX
+// activation, so re-blocking runs there.
 TEST_F(Conv3dOpTest, PatchEmbedKernel) {
     Conv3dCase c;
     c.C_in = 16;
