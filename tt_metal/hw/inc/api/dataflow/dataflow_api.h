@@ -2209,6 +2209,9 @@ void noc_semaphore_set(volatile tt_l1_ptr uint32_t* sem_addr, uint32_t val) {
  * ensuring no outstanding inline write uses that address before issuing another write.
  */
 // clang-format on
+
+// Raw NoC address, not attributable to a bound accessor: conservatively OPAQUE
+// (api/dataflow/buf_rw_note.h).
 template <InlineWriteDst dst_type = InlineWriteDst::DEFAULT, bool posted = false, bool flush = true>
 FORCE_INLINE void noc_inline_dw_write(
     uint64_t addr,
@@ -2217,34 +2220,8 @@ FORCE_INLINE void noc_inline_dw_write(
     uint8_t noc = noc_index,
     uint8_t vc = NOC_UNICAST_WRITE_VC,
     uint32_t customized_src_addr = 0) {
-    WAYPOINT("NWIW");
-    // Inline dword write: 4-byte immediate value.
-    RECORD_NOC_EVENT_WITH_ADDR(NocEventType::WRITE_INLINE, 0, addr, 4, vc, posted, noc);
-    DEBUG_SANITIZE_NOC_ADDR(noc, addr, 4);
-    DEBUG_SANITIZE_NO_DRAM_ADDR(noc, addr, 4);
-#if defined(ARCH_BLACKHOLE) && defined(WATCHER_ENABLED)
-    if constexpr (dst_type == InlineWriteDst::L1) {
-        if constexpr (!flush) {
-            ASSERT(customized_src_addr != 0);
-            DEBUG_SANITIZE_NOC_WRITE_TRANSACTION(noc, addr, customized_src_addr, 4);
-        } else {
-            uint32_t src_addr = noc_get_interim_inline_value_addr(noc, addr);
-            DEBUG_SANITIZE_NOC_WRITE_TRANSACTION(noc, addr, src_addr, 4);
-        }
-    }
-#endif
-
-    noc_fast_write_dw_inline<noc_mode, dst_type, flush>(
-        noc,
-        write_at_cmd_buf,
-        val,
-        addr,
-        be,  // byte-enable
-        vc,
-        false,   // mcast
-        posted,  // posted
-        customized_src_addr);
-    WAYPOINT("NWID");
+    tt_buf_rw::note_opaque();
+    noc_inline_dw_write_impl<dst_type, posted, flush>(addr, val, be, noc, vc, customized_src_addr);
 }
 
 // clang-format off
@@ -2280,6 +2257,9 @@ FORCE_INLINE void noc_inline_dw_write(
  * ensuring no outstanding inline write uses that address before issuing another write.
  */
 // clang-format on
+
+// Raw NoC address, not attributable to a bound accessor: conservatively OPAQUE
+// (api/dataflow/buf_rw_note.h).
 template <InlineWriteDst dst_type = InlineWriteDst::DEFAULT, bool posted = false, bool flush = true>
 FORCE_INLINE void noc_inline_mcast_dw_write(
     uint64_t addr,
@@ -2289,34 +2269,8 @@ FORCE_INLINE void noc_inline_mcast_dw_write(
     uint8_t vc = NOC_MULTICAST_WRITE_VC,
     uint32_t customized_src_addr = 0,
     uint32_t num_dest = 1) {
-    WAYPOINT("NWIW");
-    DEBUG_SANITIZE_NOC_MULTI_ADDR(noc, addr, 4);
-    DEBUG_SANITIZE_NO_DRAM_ADDR(noc, addr, 4);
-#if defined(ARCH_BLACKHOLE) && defined(WATCHER_ENABLED)
-    if constexpr (dst_type == InlineWriteDst::L1) {
-        if constexpr (!flush) {
-            ASSERT(customized_src_addr != 0);
-            DEBUG_SANITIZE_NOC_WRITE_TRANSACTION(noc, addr, customized_src_addr, 4);
-        } else {
-            uint32_t src_addr = noc_get_interim_inline_value_addr(noc, addr);
-            DEBUG_SANITIZE_NOC_WRITE_TRANSACTION(noc, addr, src_addr, 4);
-        }
-    }
-#endif
-
-    noc_fast_write_dw_inline_multicast<noc_mode, dst_type, flush>(
-        noc,
-        write_at_cmd_buf,
-        val,
-        addr,
-        be,  // byte-enable
-        vc,
-        true,    // mcast
-        posted,  // posted
-        customized_src_addr,
-        num_dest);
-
-    WAYPOINT("NWID");
+    tt_buf_rw::note_opaque();
+    noc_inline_mcast_dw_write_impl<dst_type, posted, flush>(addr, val, be, noc, vc, customized_src_addr, num_dest);
 }
 
 // clang-format off
@@ -2346,6 +2300,9 @@ FORCE_INLINE void noc_inline_mcast_dw_write(
  * | set_val (template parameter) | Whether to set the value for the write here                | bool     | true or false                    | False    |
  */
 // clang-format on
+
+// Raw NoC address, not attributable to a bound accessor: conservatively OPAQUE
+// (api/dataflow/buf_rw_note.h).
 template <bool posted = false, bool set_val = false>
 FORCE_INLINE void noc_inline_dw_write_set_state(
     uint64_t addr,
@@ -2354,9 +2311,8 @@ FORCE_INLINE void noc_inline_dw_write_set_state(
     uint8_t cmd_buf = write_at_cmd_buf,
     uint8_t noc = noc_index,
     uint8_t vc = NOC_UNICAST_WRITE_VC) {
-    WAYPOINT("NWIW");
-    noc_fast_write_dw_inline_set_state<posted, set_val>(noc, cmd_buf, addr, be, vc, val);
-    WAYPOINT("NWID");
+    tt_buf_rw::note_opaque();
+    noc_inline_dw_write_set_state_impl<posted, set_val>(addr, val, be, cmd_buf, noc, vc);
 }
 
 // clang-format off

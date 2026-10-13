@@ -26,8 +26,12 @@ class ElfFile;
 // (tt_buf_rw::kOpaqueSlot) live in hostdev/buf_rw_common.h, shared directly with the device-side
 // emitter (api/dataflow/buf_rw_note.h, which reopens that namespace) rather than duplicated here.
 //
-// kOpaque is 0 so that a zero-filled / truncated / missing record degrades to the conservative
-// "un-analyzable" state rather than being mistaken for a plain read.
+// kOpaque is 0 so that a zero-filled record degrades to the conservative "un-analyzable" state
+// rather than being mistaken for a plain read; malformed record sizes are rejected separately by
+// the parser (parse_buf_rw, binary_metadata.cpp). Neither covers a record that was never emitted at
+// all: an un-instrumented call site produces no bytes here, so a genuinely missing note is invisible
+// to this parser and does NOT set opaque. Omission is a correctness bug in the emitting API, not
+// something this format can detect -- see api/dataflow/dataflow_api.h's note_opaque() coverage.
 //
 // The device emitter's on-ELF record: two little-endian u32s. `slot` identifies the bound object -- for
 // now a tensor binding (KernelSpec tensor_bindings order), later possibly a buffer/shard/etc.; it is a

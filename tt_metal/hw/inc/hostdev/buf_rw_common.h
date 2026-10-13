@@ -13,8 +13,10 @@
 // read/write the same values directly instead of hand-duplicating them under a "must match" comment.
 namespace tt_buf_rw {
 
-// kOpaque is 0 so a zero-filled/truncated record degrades to the conservative "un-analyzable" state
-// rather than being mistaken for a plain read.
+// kOpaque is 0 so a zero-filled record degrades to the conservative "un-analyzable" state rather
+// than being mistaken for a plain read; malformed section sizes are rejected separately by the
+// parser. Neither covers a record that was never emitted: an un-instrumented raw-address call site
+// produces no bytes at all, so a missing note does NOT set opaque
 constexpr uint32_t kOpaque = 0;
 constexpr uint32_t kRead = 1;
 constexpr uint32_t kWrite = 2;

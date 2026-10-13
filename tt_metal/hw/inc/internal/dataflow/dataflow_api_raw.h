@@ -356,3 +356,93 @@ FORCE_INLINE void noc_async_write_one_packet_with_trid_set_state_impl(
     ncrisc_noc_write_set_state<posted, false /* one_packet */>(noc, cmd_buf, dst_noc_addr, 0 /* len_bytes */, vc);
     WAYPOINT("NAWD");
 }
+
+template <InlineWriteDst dst_type = InlineWriteDst::DEFAULT, bool posted = false, bool flush = true>
+FORCE_INLINE void noc_inline_dw_write_impl(
+    uint64_t addr,
+    uint32_t val,
+    uint8_t be = 0xF,
+    uint8_t noc = noc_index,
+    uint8_t vc = NOC_UNICAST_WRITE_VC,
+    uint32_t customized_src_addr = 0) {
+    WAYPOINT("NWIW");
+    // Inline dword write: 4-byte immediate value.
+    RECORD_NOC_EVENT_WITH_ADDR(NocEventType::WRITE_INLINE, 0, addr, 4, vc, posted, noc);
+    DEBUG_SANITIZE_NOC_ADDR(noc, addr, 4);
+    DEBUG_SANITIZE_NO_DRAM_ADDR(noc, addr, 4);
+#if defined(ARCH_BLACKHOLE) && defined(WATCHER_ENABLED)
+    if constexpr (dst_type == InlineWriteDst::L1) {
+        if constexpr (!flush) {
+            ASSERT(customized_src_addr != 0);
+            DEBUG_SANITIZE_NOC_WRITE_TRANSACTION(noc, addr, customized_src_addr, 4);
+        } else {
+            uint32_t src_addr = noc_get_interim_inline_value_addr(noc, addr);
+            DEBUG_SANITIZE_NOC_WRITE_TRANSACTION(noc, addr, src_addr, 4);
+        }
+    }
+#endif
+
+    noc_fast_write_dw_inline<noc_mode, dst_type, flush>(
+        noc,
+        write_at_cmd_buf,
+        val,
+        addr,
+        be,  // byte-enable
+        vc,
+        false,   // mcast
+        posted,  // posted
+        customized_src_addr);
+    WAYPOINT("NWID");
+}
+
+template <InlineWriteDst dst_type = InlineWriteDst::DEFAULT, bool posted = false, bool flush = true>
+FORCE_INLINE void noc_inline_mcast_dw_write_impl(
+    uint64_t addr,
+    uint32_t val,
+    uint8_t be = 0xF,
+    uint8_t noc = noc_index,
+    uint8_t vc = NOC_MULTICAST_WRITE_VC,
+    uint32_t customized_src_addr = 0,
+    uint32_t num_dest = 1) {
+    WAYPOINT("NWIW");
+    DEBUG_SANITIZE_NOC_MULTI_ADDR(noc, addr, 4);
+    DEBUG_SANITIZE_NO_DRAM_ADDR(noc, addr, 4);
+#if defined(ARCH_BLACKHOLE) && defined(WATCHER_ENABLED)
+    if constexpr (dst_type == InlineWriteDst::L1) {
+        if constexpr (!flush) {
+            ASSERT(customized_src_addr != 0);
+            DEBUG_SANITIZE_NOC_WRITE_TRANSACTION(noc, addr, customized_src_addr, 4);
+        } else {
+            uint32_t src_addr = noc_get_interim_inline_value_addr(noc, addr);
+            DEBUG_SANITIZE_NOC_WRITE_TRANSACTION(noc, addr, src_addr, 4);
+        }
+    }
+#endif
+
+    noc_fast_write_dw_inline_multicast<noc_mode, dst_type, flush>(
+        noc,
+        write_at_cmd_buf,
+        val,
+        addr,
+        be,  // byte-enable
+        vc,
+        true,    // mcast
+        posted,  // posted
+        customized_src_addr,
+        num_dest);
+
+    WAYPOINT("NWID");
+}
+
+template <bool posted = false, bool set_val = false>
+FORCE_INLINE void noc_inline_dw_write_set_state_impl(
+    uint64_t addr,
+    uint32_t val = 0,
+    uint8_t be = 0xF,
+    uint8_t cmd_buf = write_at_cmd_buf,
+    uint8_t noc = noc_index,
+    uint8_t vc = NOC_UNICAST_WRITE_VC) {
+    WAYPOINT("NWIW");
+    noc_fast_write_dw_inline_set_state<posted, set_val>(noc, cmd_buf, addr, be, vc, val);
+    WAYPOINT("NWID");
+}
