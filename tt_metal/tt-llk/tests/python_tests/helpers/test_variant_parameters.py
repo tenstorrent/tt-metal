@@ -874,12 +874,16 @@ class VECTOR_MODE(TemplateParameter):
 
 @dataclass
 class ROW_TILES(TemplateParameter):
-    """A row length compiled into the kernel; 0 keeps the runtime TILE_CNT."""
+    """A row length compiled into the kernel, with its tiles' face rows; 0 keeps the runtime TILE_CNT and shape."""
 
     row_tiles: int = 0
+    row_faces_r_dim: int = 2
 
     def convert_to_cpp(self) -> str:
-        return f"constexpr std::uint32_t ROW_TILES = {self.row_tiles};"
+        return (
+            f"constexpr std::uint32_t ROW_TILES = {self.row_tiles};\n"
+            f"constexpr std::uint8_t ROW_FACES_R_DIM = {self.row_faces_r_dim};"
+        )
 
 
 @dataclass

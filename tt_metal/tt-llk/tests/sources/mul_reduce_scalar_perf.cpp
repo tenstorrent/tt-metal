@@ -172,12 +172,15 @@ void run_kernel(RUNTIME_PARAMETERS params)
     const auto& num_faces_r_dim_A   = params.num_faces_r_dim_A;
     const auto& num_faces_c_dim_A   = params.num_faces_c_dim_A;
 #endif
-    const std::uint32_t tile_cnt            = TILE_CNT;
-    const ckernel::TensorShape tensor_shape = {
-        static_cast<std::uint8_t>(FACE_R_DIM),
-        static_cast<std::uint8_t>(FACE_C_DIM),
-        static_cast<std::uint8_t>(num_faces_r_dim_A),
-        static_cast<std::uint8_t>(num_faces_c_dim_A)};
+    const std::uint32_t tile_cnt = TILE_CNT;
+    // A compiled row length compiles its tile shape in too, as the API's operand shape is a constant.
+    const ckernel::TensorShape tensor_shape =
+        ROW_TILES > 0 ? ckernel::TensorShape {static_cast<std::uint8_t>(FACE_R_DIM), static_cast<std::uint8_t>(FACE_C_DIM), ROW_FACES_R_DIM, 2}
+                      : ckernel::TensorShape {
+                            static_cast<std::uint8_t>(FACE_R_DIM),
+                            static_cast<std::uint8_t>(FACE_C_DIM),
+                            static_cast<std::uint8_t>(num_faces_r_dim_A),
+                            static_cast<std::uint8_t>(num_faces_c_dim_A)};
     const std::uint32_t num_faces = tensor_shape.total_num_faces();
     {
         START_PERF_MEASURE("INIT")
