@@ -651,13 +651,16 @@ saves is that cost paid back. Combine adds ~110-160 us of exposed time on top of
 tracking); that part does not get easier with free cores.
 
 Can GLM / K2.7 get there on the LoudBox? Flat alone on rows 1-9 (galaxy branch planner, 12 experts, us per expert at
-M 128 / 512 / 2048): GLM 43.1 / 114.5 / 436.9 vs full grid 43.2 / 76.8 / 278.6; K2.7 74.9 / 218.3 / 845.3 vs 72.6 /
+M 128 / 512 / 2048): GLM-5.3-Flash (H 4096) 43.1 / 114.5 / 436.9 vs full grid 43.2 / 76.8 / 278.6; K2.7 74.9 / 218.3 / 845.3 vs 72.6 /
 124.6 / 443.9 (np 2, 32 gate/up cores); K3 52.1 / 101.6 / 384.5 vs 50.7 / 101.3 / 384.2. Free at small M (Kimi
 balanced, ~107 rows per expert), +57-90% at M 2048 (the hot expert). The only split between 32 and 64 cores for
 It = 64 is np 4 g 3 (48 cores, less gate/up work per core than K3's): rejected on L1 (4 pairs of whole-K weights
 double buffered, ~1.18 MB at GLM; K2.7's 28 K-blocks exceed the 24-slot x ring); it needs K-streamed gate/up
 weights plus tiny tiles or a full-sync DST. A Galaxy chip (12 x 10) is the realistic path: rows 1-9 hold 69 gate/up
 cells, so np 1 stays next to combine (host-side plan in 6.18; not run).
+
+(Naming: the overlap test's `glm-53` case is full GLM 5.3, H 6144 / 256 experts (GLM53Config); the single-op
+sweeps in this section that say GLM-5.3-Flash are H 4096 / 288 experts.)
 
 **12 x 10 on the LoudBox (2026-10-12).** Slow dispatch (`TT_METAL_SLOW_DISPATCH_MODE=1`) is the only way: ETH
 dispatch (`device_params={"dispatch_core_type": ETH}` -> blackhole_140_arch_eth_dispatch.yaml, 12 x 10) fails with
@@ -667,10 +670,10 @@ cores ~0.9-1.4 ms apart; reliable at M 2048, it under-reads small M where early 
 
 | M 512 / 2048 | 11 cols, full | 12 cols, full | 12 cols, rows 1-9 | rows 1-9 + 5 row-0 cells (XDOWN) |
 |---|---|---|---|---|
-| GLM | 70.8 / 273.0 | 67.5 / 267.0 | 79.6 / 322.4 (24 down, 6 cols) | **67.3 / 270.2** (29 down) |
+| GLM-5.3-Flash (H 4096) | 70.8 / 273.0 | 67.5 / 267.0 | 79.6 / 322.4 (24 down, 6 cols) | **67.3 / 270.2** (29 down) |
 | K2.7 | 118.3 / 438.1 | 113.9 / 448.9 | **111.6 / 431.3** (24 down) | 127.1 / 514.7 |
 
-Rows 1-9 keep np 1 (64 gate/up) on 12 columns, so combine's row 0 costs flat nothing: GLM with the row-0 cells
+Rows 1-9 keep np 1 (64 gate/up) on 12 columns, so combine's row 0 costs flat nothing: GLM-5.3-Flash with the row-0 cells
 combine leaves ((1,0) (4,0) (9,0) (10,0) (11,0); same cells as on 11 x 10), K2.7 without (its readers do down work).
 The overlap itself runs under slow dispatch (`FLAT_CMB_EAGER=1`, `--profile`; fabric and combine work), but its
 timing is not usable: chips launch one after another and their cycle counters are not synchronized, so the fabric
