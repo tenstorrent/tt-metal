@@ -863,6 +863,19 @@ FlatRoutedExpertPlan make_flat_routed_expert_plan(tt::tt_metal::IDevice* device,
     p.vstride = 1 + p.nh;
     p.region_bytes = p.E * p.nk_gu * p.rg * p.slot * p.w_tile;
     p.wd_region = p.E * p.It * pcd * p.w_tile;
+    // The down cores' weight reads rotate over the DRAM banks instead of one bank per core (bank-pinned streams ran
+    // at 55% of DRAM peak alone, rotating 65%; worklog 8d). Bit-identical. Kimi K2.7 / GLM 5.3 us per expert at
+    // M 32 / 128: 62.3 / 72.3 -> 58.2 / 68.7, 54.3 / 63.9 -> 51.2 / 61.4; none at M >= 512. MIMO_FL_DW_ROT=0: one
+    // bank per core (the weight cache keys the two layouts apart)
+    if (const char* dr = std::getenv("MIMO_FL_DW_ROT"); !dr || std::atoi(dr) != 0) {
+        p.dw_rot = true;
+        uint32_t sub = 0;  // tiles: a core's share of one bank, the widest core's
+        for (uint32_t d = 0; d < p.down.size(); ++d) {
+            const uint32_t kd = FlatRoutedExpertPlan::kd_of(p.pcds[d], p.It), nb = p.E * (p.It / kd);
+            sub = std::max(sub, (nb + p.banks - 1) / p.banks * kd * p.pcds[d]);
+        }
+        p.wd_rot_region = sub * p.w_tile;
+    }
     p.wr_region = p.rdown ? p.E * p.It * p.pcd_r * p.w_tile : 0;
     for (uint32_t k = 0; k < p.nsg; ++k) {
         p.coords.push_back(p.down[k * p.nd_sg]);
