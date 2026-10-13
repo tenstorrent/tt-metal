@@ -317,9 +317,12 @@ def _run_eltwise_binary_test(
 ):
     if per_face_handoff is None:
         # Functional variants take the per-tile hand-off; perf variants where the opted-in kernels do: a multiply above LoFi on a tile the LLK runs per tile.
+        # A one-face tile is one hand-off either way, so its perf variant keeps the per-face program.
+        _, faces_r, faces_c = get_tile_params(tile_dimensions)
         per_face_handoff = is_perf and not (
             math_op == MathOperation.Elwmul
             and math_fidelity != MathFidelity.LoFi
+            and faces_r * faces_c > 1
             and _runs_per_tile(tile_dimensions, broadcast_type, dest_reuse=False)
         )
     # A transposed SrcA is handed over per face on both threads.

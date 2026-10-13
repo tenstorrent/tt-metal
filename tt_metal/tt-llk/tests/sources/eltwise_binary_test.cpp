@@ -42,11 +42,7 @@ inline bool tile_handoff(const bool per_tile, const std::uint32_t face_r_dim, co
 
 template <bool Produce, ckernel::BroadcastType BType>
 inline void perf_binary_source_handshakes(
-    const std::uint32_t loop_factor,
-    const std::uint32_t num_tiles,
-    const std::uint32_t num_faces_r,
-    const std::uint32_t num_faces_c,
-    const bool per_tile_handoff = false)
+    const std::uint32_t loop_factor, const std::uint32_t num_tiles, const std::uint32_t num_faces_r, const std::uint32_t num_faces_c)
 {
     const std::uint32_t num_faces = num_faces_r * num_faces_c;
 
@@ -54,18 +50,7 @@ inline void perf_binary_source_handshakes(
     {
         for (std::uint32_t tile = 0; tile < num_tiles; ++tile)
         {
-            if (per_tile_handoff)
-            {
-                if constexpr (Produce)
-                {
-                    _perf_unpack_loop_set_valid<true /*set_a*/, true /*set_b*/>(1);
-                }
-                else
-                {
-                    _perf_math_loop_clear_valid<true /*clear_a*/, true /*clear_b*/>(1);
-                }
-            }
-            else if constexpr (BType == ckernel::BroadcastType::COL)
+            if constexpr (BType == ckernel::BroadcastType::COL)
             {
                 // The COL MOP loads B once per face row, then consumes A once
                 // per face column while retaining B until the row completes.
@@ -114,6 +99,28 @@ inline void perf_binary_source_handshakes(
 }
 
 #if defined(ARCH_BLACKHOLE)
+// The per-tile variant's mock: one hand-off per tile where the LLK runs the tile per tile, the per-face mock elsewhere.
+template <bool Produce, ckernel::BroadcastType BType>
+inline void perf_binary_tile_handshakes(const std::uint32_t loop_factor, const std::uint32_t num_tiles, const ckernel::TensorShape& shape)
+{
+    if (!tile_handoff<BType>(true, shape.face_r_dim, shape.num_faces_r_dim, shape.num_faces_c_dim))
+    {
+        perf_binary_source_handshakes<Produce, BType>(loop_factor, num_tiles, shape.num_faces_r_dim, shape.num_faces_c_dim);
+        return;
+    }
+    for (std::uint32_t i = 0; i < loop_factor * num_tiles; ++i)
+    {
+        if constexpr (Produce)
+        {
+            _perf_unpack_loop_set_valid<true /*set_a*/, true /*set_b*/>(1);
+        }
+        else
+        {
+            _perf_math_loop_clear_valid<true /*clear_a*/, true /*clear_b*/>(1);
+        }
+    }
+}
+
 inline bool reuse_tile_handoff(const bool per_tile, const std::uint32_t face_r_dim, const std::uint32_t num_faces)
 {
     return per_tile && face_r_dim == ckernel::FACE_R_DIM && num_faces > 1;
@@ -149,10 +156,12 @@ inline void perf_dest_reuse_source_handshakes(
 
 #ifdef LLK_TRISC_UNPACK
 
-#include "llk_unpack_A.h"
 #include "llk_unpack_AB.h"
 #include "llk_unpack_common.h"
 #include "params.h"
+#if defined(ARCH_BLACKHOLE) && defined(EN_DEST_REUSE) && defined(DEST_REUSE_UNPACK_A)
+#include "llk_unpack_A.h"
+#endif
 
 void run_kernel(RUNTIME_PARAMETERS params)
 {
@@ -232,8 +241,16 @@ void run_kernel(RUNTIME_PARAMETERS params)
                 PER_TILE_MOCK(tensor_shape),
                 reuse_tile_handoff(SRC_DVALID == ckernel::SrcDvalid::PerTile, tensor_shape.face_r_dim, tensor_shape.total_num_faces()));
 #else
-            perf_binary_source_handshakes<true, BROADCAST_TYPE>(
-                LOOP_FACTOR, num_total_tiles, tensor_shape.num_faces_r_dim, tensor_shape.num_faces_c_dim, PER_TILE_MOCK(tensor_shape));
+#if defined(ARCH_BLACKHOLE)
+            if constexpr (!per_face_handoff)
+            {
+                perf_binary_tile_handshakes<true, BROADCAST_TYPE>(LOOP_FACTOR, num_total_tiles, tensor_shape);
+            }
+            else
+#endif
+            {
+                perf_binary_source_handshakes<true, BROADCAST_TYPE>(LOOP_FACTOR, num_total_tiles, tensor_shape.num_faces_r_dim, tensor_shape.num_faces_c_dim);
+            }
 #endif
         }
         else
@@ -372,8 +389,16 @@ void run_kernel(RUNTIME_PARAMETERS params)
                 PER_TILE_MOCK(tensor_shape),
                 reuse_tile_handoff(SRC_DVALID == ckernel::SrcDvalid::PerTile, tensor_shape.face_r_dim, tensor_shape.total_num_faces()));
 #else
-            perf_binary_source_handshakes<false, BROADCAST_TYPE>(
-                LOOP_FACTOR, num_input_tiles, tensor_shape.num_faces_r_dim, tensor_shape.num_faces_c_dim, PER_TILE_MOCK(tensor_shape));
+#if defined(ARCH_BLACKHOLE)
+            if constexpr (!per_face_handoff)
+            {
+                perf_binary_tile_handshakes<false, BROADCAST_TYPE>(LOOP_FACTOR, num_input_tiles, tensor_shape);
+            }
+            else
+#endif
+            {
+                perf_binary_source_handshakes<false, BROADCAST_TYPE>(LOOP_FACTOR, num_input_tiles, tensor_shape.num_faces_r_dim, tensor_shape.num_faces_c_dim);
+            }
 #endif
         }
         else
@@ -440,8 +465,16 @@ void run_kernel(RUNTIME_PARAMETERS params)
         }
         else if constexpr (PERF_RUN_TYPE == PerfRunType::UNPACK_ISOLATE || PERF_RUN_TYPE == PerfRunType::L1_CONGESTION)
         {
-            perf_binary_source_handshakes<false, BROADCAST_TYPE>(
-                LOOP_FACTOR, num_input_tiles, tensor_shape.num_faces_r_dim, tensor_shape.num_faces_c_dim, PER_TILE_MOCK(tensor_shape));
+#if defined(ARCH_BLACKHOLE)
+            if constexpr (!per_face_handoff)
+            {
+                perf_binary_tile_handshakes<false, BROADCAST_TYPE>(LOOP_FACTOR, num_input_tiles, tensor_shape);
+            }
+            else
+#endif
+            {
+                perf_binary_source_handshakes<false, BROADCAST_TYPE>(LOOP_FACTOR, num_input_tiles, tensor_shape.num_faces_r_dim, tensor_shape.num_faces_c_dim);
+            }
         }
         else
         {
