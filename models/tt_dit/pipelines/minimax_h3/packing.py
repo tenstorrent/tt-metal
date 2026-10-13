@@ -40,7 +40,7 @@ MINIMAX_H3_MAX_PIXELS = 768 * 1344
 MINIMAX_H3_CANVAS_MULTIPLE = 32
 MINIMAX_H3_MIN_ASPECT_RATIO = 1 / 4
 MINIMAX_H3_MAX_ASPECT_RATIO = 4
-MINIMAX_H3_MIN_DURATION = 5.0
+MINIMAX_H3_MIN_DURATION = 4.0
 MINIMAX_H3_MAX_DURATION = 15.0
 
 # The video VAE encodes 17 pixel frames per chunk and drops the 3 trailing
@@ -127,15 +127,6 @@ def resolve_canvas_size(aspect_width: float, aspect_height: float) -> tuple[int,
 
     multiple = MINIMAX_H3_CANVAS_MULTIPLE
     return max(multiple, round(height / multiple) * multiple), max(multiple, round(width / multiple) * multiple)
-
-
-def align_num_frames(num_frames: int) -> int:
-    """Snap a frame count up to the next ``17n + 5`` the video VAE can encode."""
-    if num_frames < 1:
-        raise ValueError(f"num_frames must be positive, got {num_frames}")
-    while num_frames % MINIMAX_H3_FRAMES_PER_CHUNK != MINIMAX_H3_LATENTS_PER_CHUNK:
-        num_frames += 1
-    return num_frames
 
 
 def video_latent_num_frames(num_frames: int) -> int:

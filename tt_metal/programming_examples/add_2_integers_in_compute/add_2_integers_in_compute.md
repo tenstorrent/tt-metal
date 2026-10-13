@@ -85,7 +85,7 @@ KernelHandle eltwise_binary_kernel_id = CreateKernel(
     program,
     "tt_metal/programming_examples/add_2_integers_in_compute/kernels/compute/add_2_tiles.cpp",
     core,
-    ComputeConfig{.math_fidelity = MathFidelity::HiFi4, .fp32_dest_acc_en = false, .math_approx_mode = false});
+    ComputeConfig{.math_fidelity = tt::tt_metal::MathFidelity::HiFi4, .fp32_dest_acc_en = false, .math_approx_mode = false});
 ```
 
 In addition to the data movement kernels, we need to create a compute kernel for the addition operation. We use the kernel code for adding 2 tiles as specified in the above code block. The kernel function will use the data provided in the circular buffers for the computation.

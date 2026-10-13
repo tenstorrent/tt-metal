@@ -13,6 +13,7 @@
 #include <span>
 
 #include <internal/disaggregation/kv_chunk_address_table.hpp>
+#include <internal/disaggregation/kv_chunk_table_cache.hpp>
 #include <tt-metalium/experimental/fabric/fabric_types.hpp>
 
 #include "ttnn/experimental/disaggregation/tensor_helpers.hpp"
@@ -360,6 +361,30 @@ void bind_disaggregation_api(nb::module_& mod) {
         &import_from_protobuf,
         nb::arg("data"),
         "Deserialize a KvChunkAddressTable from a serialized protobuf byte string.");
+
+    mod.def(
+        "get_or_build_kv_chunk_table",
+        [](const std::string& seed, const nb::handle& key, const nb::callable& build, const std::string& out_path) {
+            nb::object dumps = nb::module_::import_("json").attr("dumps");
+            return get_or_build_kv_chunk_table(
+                default_kv_chunk_table_cache_dir(),
+                seed,
+                nb::cast<std::string>(dumps(key, nb::arg("sort_keys") = true)),
+                [&build](const std::string& path) {
+                    export_to_protobuf_file(nb::cast<const KvChunkAddressTable&>(build()), path);
+                },
+                out_path);
+        },
+        nb::arg("seed"),
+        nb::arg("key").none(),
+        nb::arg("build"),
+        nb::arg("out_path"),
+        R"(
+        Write the KV chunk table for (seed, key) to `out_path`, reusing the tt-metal cache on a hit.
+        `build()` returns the KvChunkAddressTable and runs only on a miss. `seed` is the commit of the repo
+        that owns the table layout ("" skips the cache); `key` is JSON-serializable and must cover every
+        table input, including DRAM bases and fabric node ids. Returns True on a hit.
+        )");
 
     // UMD-backed read: reads a KV chunk's DRAM bytes over a bare tt::umd::Cluster. The mechanism
     // the migration worker uses (disaggregation/migration/src/worker/device_io.cpp). The chip is

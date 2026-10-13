@@ -30,7 +30,7 @@ import pytest
 import ttnn
 from models.experimental.ops.quasar.tests.qwen3_vl_ops import graph_case as G
 
-_OP = ttnn.transformer.paged_scaled_dot_product_attention_decode
+_OP = ttnn.experimental.quasar.transformer.paged_scaled_dot_product_attention_decode
 
 CASES = [
     {
@@ -52,14 +52,14 @@ CASES = [
             {
                 "k": "t",
                 "shape": [1024, 8, 32, 128],
-                "dtype": "BFLOAT8_B",
+                "dtype": "BFLOAT16",
                 "layout": "TILE",
                 "mem": {"layout": "INTERLEAVED", "buffer": "DRAM", "shard": None},
             },
             {
                 "k": "t",
                 "shape": [1024, 8, 32, 128],
-                "dtype": "BFLOAT8_B",
+                "dtype": "BFLOAT16",
                 "layout": "TILE",
                 "mem": {"layout": "INTERLEAVED", "buffer": "DRAM", "shard": None},
             },
@@ -84,7 +84,7 @@ CASES = [
             "program_config": {
                 "kind": "SDPAProgramConfig",
                 "fields": {
-                    "compute_with_storage_grid_size": [8, 8],
+                    "compute_with_storage_grid_size": [8, 4],
                     "sub_core_grids": None,
                     "q_chunk_size": 0,
                     "k_chunk_size": 0,

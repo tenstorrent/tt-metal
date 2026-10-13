@@ -41,36 +41,37 @@ void kernel_main() {
     // Pages are rows (or batches of the last dimension). TensorAccessor handles
     // any underlying buffer layout (interleaved or sharded) transparently.
     uint32_t num_pages = get_arg_val<uint32_t>(4);
-    // Physical elements per page; padded_shape==logical_shape is enforced by
-    // validate_on_program_cache_miss, so this is safe to use as both the
-    // iteration bound and the column-index stride.
-    uint32_t last_dim = get_arg_val<uint32_t>(5);
+    // Elements per page: the shard width for WIDTH/BLOCK_SHARDED, the full row width
+    // otherwise. Not the tensor's last dim — for [1,1,8,16] with shard [2,8] it is 8.
+    // padded_shape==logical_shape is enforced by validate_on_program_cache_miss, so this
+    // is safe to use as the page loop bound, the page-byte count and the column stride.
+    uint32_t elements_per_page = get_arg_val<uint32_t>(5);
     uint32_t aligned_page_size = get_arg_val<uint32_t>(6);
-    uint32_t grid_w = get_arg_val<uint32_t>(8);
-    uint32_t logical_N = get_arg_val<uint32_t>(9);
-    uint32_t logical_H = get_arg_val<uint32_t>(10);
+    uint32_t shards_per_row = get_arg_val<uint32_t>(7);
+    uint32_t logical_N = get_arg_val<uint32_t>(8);
+    uint32_t logical_H = get_arg_val<uint32_t>(9);
 
     // TensorAccessor computes a page's NOC address as: bank_base + bank_page_id * page_size_bytes.
     // Buffers are addressed with allocator-aligned page spacing, even when only the
-    // first last_dim * NUM_BYTES bytes of a row-major shard page are valid payload.
+    // first elements_per_page * NUM_BYTES bytes of a row-major shard page are valid payload.
     constexpr bool input_is_sharded = src0_args.is_sharded;
-    const uint32_t input_page_bytes = last_dim * NUM_BYTES;
+    const uint32_t input_page_bytes = elements_per_page * NUM_BYTES;
     const auto s0 = TensorAccessor(src0_args, input_addr, aligned_page_size);
 
     // Iterate in logical row-major order so that (b,n,h,c) index tuples are emitted in
     // strictly increasing order, matching torch.nonzero() output. Row r decomposes as:
     //   h = r % logical_H, n = (r / logical_H) % logical_N, b = r / (logical_H * logical_N)
-    // For WIDTH/BLOCK_SHARDED (grid_w>1), each logical row r is split across grid_w
-    // column shards. TensorAccessor maps logical page_ids to the correct physical
-    // shard bank and offset.
-    const uint32_t total_rows = num_pages / grid_w;
+    // For WIDTH/BLOCK_SHARDED (shards_per_row>1), each logical row r is split across
+    // that many column shards, which are consecutive logical page ids. TensorAccessor
+    // maps those to the correct physical shard bank and offset.
+    const uint32_t total_rows = num_pages / shards_per_row;
     for (uint32_t r = 0; r < total_rows; ++r) {
         const uint32_t h = r % logical_H;
         const uint32_t n = (r / logical_H) % logical_N;
         const uint32_t b = r / (logical_H * logical_N);
 
-        for (uint32_t core_col = 0; core_col < grid_w; ++core_col) {
-            const uint32_t page_id = r * grid_w + core_col;
+        for (uint32_t shard_col = 0; shard_col < shards_per_row; ++shard_col) {
+            const uint32_t page_id = r * shards_per_row + shard_col;
 
             input_cb.reserve_back(1);
             uint32_t input_l1_offset = 0;
@@ -110,12 +111,12 @@ void kernel_main() {
             constexpr uint8_t nonzero_mask = 0xFFu;
 #endif
 #endif
-            for (uint32_t i = 0; i < last_dim; ++i) {
+            for (uint32_t i = 0; i < elements_per_page; ++i) {
                 if ((input_ptr[i] & nonzero_mask) != 0u) {
                     indices_ptr[num_non_zero * 4 + 0] = b;
                     indices_ptr[num_non_zero * 4 + 1] = n;
                     indices_ptr[num_non_zero * 4 + 2] = h;
-                    indices_ptr[num_non_zero * 4 + 3] = core_col * last_dim + i;
+                    indices_ptr[num_non_zero * 4 + 3] = shard_col * elements_per_page + i;
                     ++num_non_zero;
                 }
             }

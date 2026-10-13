@@ -172,6 +172,7 @@ class TtRoutedExpert(LightweightModule):
         emb_dim: int | None = None,
         hidden_dim: int | None = None,
         weights_dram_nd_sharded: bool = False,
+        cache_dump_mode: ttnn.DumpTensorMode = ttnn.DumpTensorMode.DISTRIBUTED_GATHER,
     ):
         """
         Shared logic for converting expert weights to ttnn with caching.
@@ -255,6 +256,7 @@ class TtRoutedExpert(LightweightModule):
                 layout=ttnn.TILE_LAYOUT,
                 dtype=weights_dtype,
                 cache_file_name=_cache_name(f"local_{local_expert_idx}_gate"),
+                cache_dump_mode=cache_dump_mode,
             )
             up_tt = ttnn.as_tensor(
                 stacked_up,
@@ -262,6 +264,7 @@ class TtRoutedExpert(LightweightModule):
                 layout=ttnn.TILE_LAYOUT,
                 dtype=weights_dtype,
                 cache_file_name=_cache_name(f"local_{local_expert_idx}_up"),
+                cache_dump_mode=cache_dump_mode,
             )
             down_tt = ttnn.as_tensor(
                 stacked_down,
@@ -269,6 +272,7 @@ class TtRoutedExpert(LightweightModule):
                 layout=ttnn.TILE_LAYOUT,
                 dtype=weights_dtype,
                 cache_file_name=_cache_name(f"local_{local_expert_idx}_down"),
+                cache_dump_mode=cache_dump_mode,
             )
 
             if device is None:
@@ -339,10 +343,18 @@ class TtRoutedExpert(LightweightModule):
         weights_dtype: ttnn.DataType,
         cache_path: Path,
         cache_name_prefix: str,
+        cache_dump_mode: ttnn.DumpTensorMode = ttnn.DumpTensorMode.DISTRIBUTED_GATHER,
     ):
         """Build TTNN cache for routed experts without device copy."""
         TtRoutedExpert._convert_and_cache_expert_weights(
-            torch_weights, experts_per_chip, mesh_device, weights_dtype, cache_path, cache_name_prefix, device=None
+            torch_weights,
+            experts_per_chip,
+            mesh_device,
+            weights_dtype,
+            cache_path,
+            cache_name_prefix,
+            device=None,
+            cache_dump_mode=cache_dump_mode,
         )
 
     """
@@ -386,6 +398,7 @@ class TtRoutedExpert(LightweightModule):
         activation: "ttnn.RoutedExpertActivation",
         hybrid_token_threshold: Optional[int] = None,
         weights_dram_nd_sharded: Optional[bool] = None,
+        cache_dump_mode: ttnn.DumpTensorMode = ttnn.DumpTensorMode.DISTRIBUTED_GATHER,
     ):
         """
         Initialize TtRoutedExpert module.
@@ -421,6 +434,9 @@ class TtRoutedExpert(LightweightModule):
                           the arch default: ND-sharded on Blackhole, interleaved elsewhere. True
                           forces ND-sharded (Blackhole only), False forces interleaved. See
                           routed_expert_weight_memory_config for the placement itself.
+            cache_dump_mode: How a weight-cache miss is written (see ttnn.as_tensor). Pass
+                          ttnn.DumpTensorMode.LOCAL when each rank builds different layers
+                          (pipeline parallel).
         """
         super().__init__()
         self.mesh_device = mesh_device
@@ -435,6 +451,7 @@ class TtRoutedExpert(LightweightModule):
         self.compute_kernel_config = compute_kernel_config
         self.weight_cache_path = weight_cache_path
         self.cache_name_prefix = cache_name_prefix
+        self.cache_dump_mode = cache_dump_mode
         self.global_expert_idx_table = global_expert_idx_table
         # Activation variant for the fused unified_routed_expert_moe kernel.
         # Required RoutedExpertActivation, chosen explicitly by the caller (no
@@ -531,6 +548,7 @@ class TtRoutedExpert(LightweightModule):
                 self.cache_name_prefix,
                 device=self.mesh_device,
                 weights_dram_nd_sharded=self.weights_dram_nd_sharded,
+                cache_dump_mode=self.cache_dump_mode,
             )
         elif weight_cache_path is not None:
             logger.debug(f"Loading weights from cache ({experts_per_chip} local experts)")
@@ -543,6 +561,7 @@ class TtRoutedExpert(LightweightModule):
                 self.cache_name_prefix,
                 device=self.mesh_device,
                 weights_dram_nd_sharded=self.weights_dram_nd_sharded,
+                cache_dump_mode=self.cache_dump_mode,
                 emb_dim=emb_dim,
                 hidden_dim=hidden_dim,
             )
@@ -566,6 +585,7 @@ class TtRoutedExpert(LightweightModule):
                 None,
                 device=self.mesh_device,
                 weights_dram_nd_sharded=self.weights_dram_nd_sharded,
+                cache_dump_mode=self.cache_dump_mode,
             )
 
         assert result is not None, "Expected weight tensors to be returned when device is provided"

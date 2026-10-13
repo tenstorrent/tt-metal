@@ -251,8 +251,6 @@ def test_unary_broadcast_quasar(
     torch_format = format_dict[formats.output_format]
     res_tensor = torch.tensor(res_from_L1, dtype=torch_format)
 
-    test_passed = passed_test(
-        golden_tensor, res_tensor, formats.output_format, print_errors=True
-    )
-
-    assert test_passed, "Assert against golden failed"
+    assert passed_test(
+        golden_tensor, res_tensor, formats.output_format
+    ), "Result tensor and golden tensor do not match"

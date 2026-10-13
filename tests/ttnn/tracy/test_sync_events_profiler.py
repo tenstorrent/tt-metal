@@ -11,7 +11,7 @@ Single parameterized test that verifies, for each instrumented API:
 3. The blocking wait actually blocked for at least the producer's delay.
 
 The remote-payload checks mirror SYNC_SIGNAL_NOC_ADDR in
-tt_metal/tools/profiler/synchronization_event_profiler.hpp; if that encoding moves, the
+tt_metal/hw/inc/internal/profiler/synchronization_event_profiler.hpp; if that encoding moves, the
 decoder below has to move with it.
 """
 
@@ -45,7 +45,7 @@ NONBLOCKING_CYCLES = 1000
 
 L1_MAX = 0x200000
 
-# Legacy timer_id -> event name mapping (kSyncNames in streaming_profiler_zone_csv.cpp)
+# Legacy timer_id -> event name mapping (kSyncNames in zone_csv.cpp)
 SYNC_LEGACY_IDS = {
     1000: "SYNC-CB-PUSH",
     1003: "SYNC-SEM-SET",

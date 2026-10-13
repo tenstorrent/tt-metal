@@ -22,6 +22,8 @@
 #include "tests/tt_metal/tt_metal/perf_microbenchmark/dispatch/common.h"
 #include <impl/dispatch/dispatch_query_manager.hpp>
 #include "tt_metal/impl/dispatch/memcpy.hpp"
+#include "tt_metal/impl/dispatch/slow_dispatch.hpp"
+#include "tt_metal/impl/dispatch/host_device_transfer.hpp"
 
 #include <umd/device/io_window/io_window.hpp>
 
@@ -730,7 +732,7 @@ public:
             const uint32_t addr = exec_buf_base_addr + bank_offset;
             std::vector<uint8_t> page_data(
                 exec_buf_data.begin() + data_idx, exec_buf_data.begin() + data_idx + page_size);
-            detail::WriteToDeviceDRAMChannel(device_, bank_id, addr, page_data);
+            tt::tt_metal::slow_dispatch::WriteToDeviceDRAMChannel(*device_, bank_id, addr, page_data);
             data_idx += page_size;
         }
         MetalContext::instance().get_cluster().dram_barrier(device_->id());
@@ -1817,7 +1819,7 @@ public:
         constexpr uint32_t sentinel_pattern = 0x99999999;
         const uint32_t dram_size_words = DEVICE_DATA_SIZE_LARGE / sizeof(uint32_t);
         std::vector<uint32_t> sentinel_data(dram_size_words, sentinel_pattern);
-        tt::tt_metal::detail::WriteToDeviceDRAMChannel(device_, dest_bank_id, dram_base_, sentinel_data);
+        tt::tt_metal::slow_dispatch::WriteToDeviceDRAMChannel(*device_, dest_bank_id, dram_base_, sentinel_data);
         MetalContext::instance().get_cluster().dram_barrier(device_->id());
 
         // Initialize DeviceData tracking (do not pre-populate DRAM since we're writing to it)
@@ -2846,8 +2848,8 @@ public:
                 TT_FATAL(
                     dram_write_offset + cmd_size_bytes <= this->sd_issue_queue_size(),
                     "SD prefetch: command stream exceeds DRAM-backed issue queue");
-                tt::tt_metal::detail::WriteToDeviceDRAMChannel(
-                    this->device_,
+                tt::tt_metal::slow_dispatch::WriteToDRAMChannel(
+                    *this->mesh_device_,
                     0,
                     Common::QUASAR_SIMULATION_ISSUE_QUEUE_BASE + dram_write_offset,
                     std::span<const uint8_t>(reinterpret_cast<const uint8_t*>(src), cmd_size_bytes));
@@ -2906,8 +2908,8 @@ public:
             std::vector<uint32_t> chunk(kChunkBytes / sizeof(uint32_t), this->HOST_DATA_DIRTY_PATTERN);
             for (uint32_t offset = 0; offset < this->sd_completion_queue_size(); offset += kChunkBytes) {
                 const uint32_t chunk_bytes = std::min(kChunkBytes, this->sd_completion_queue_size() - offset);
-                tt::tt_metal::detail::WriteToDeviceDRAMChannel(
-                    this->device_,
+                tt::tt_metal::slow_dispatch::WriteToDRAMChannel(
+                    *this->mesh_device_,
                     0,
                     Common::QUASAR_SIMULATION_COMPLETION_QUEUE_BASE + offset,
                     std::span<const uint8_t>(reinterpret_cast<const uint8_t*>(chunk.data()), chunk_bytes));
@@ -3115,8 +3117,8 @@ public:
                 bytes_written,
                 this->sd_completion_queue_size());
 
-            tt::tt_metal::detail::ReadFromDeviceDRAMChannel(
-                this->device_,
+            tt::tt_metal::slow_dispatch::ReadFromDRAMChannel(
+                *this->mesh_device_,
                 0,
                 Common::QUASAR_SIMULATION_COMPLETION_QUEUE_BASE,
                 std::span<uint8_t>(quasar_completion_buf_.data(), bytes_written));
@@ -3204,8 +3206,8 @@ private:
     // Copy dst.size() bytes out of the completion region, starting region_offset bytes past its base.
     void read_completion_region(uint32_t region_offset, std::span<uint8_t> dst) {
         if (mgr_->is_dram_backed()) {
-            tt::tt_metal::detail::ReadFromDeviceDRAMChannel(
-                this->device_, completion_dram_channel(), completion_dram_addr() + region_offset, dst);
+            tt::tt_metal::slow_dispatch::ReadFromDeviceDRAMChannel(
+                *this->device_, completion_dram_channel(), completion_dram_addr() + region_offset, dst);
             return;
         }
         std::memcpy(dst.data(), completion_region_host_ptr() + region_offset, dst.size());
@@ -3836,7 +3838,8 @@ TEST_P(PrefetchRelayLinearHTestFixture, RelayLinearHTest) {
         const uint32_t num_banks = remote_device_->allocator_impl()->get_num_banks(BufferType::DRAM);
 
         for (uint32_t bank_id = 0; bank_id < num_banks; bank_id++) {
-            tt::tt_metal::detail::WriteToDeviceDRAMChannel(remote_device_, bank_id, remote_dram_base, dirty_data);
+            tt::tt_metal::slow_dispatch::WriteToDeviceDRAMChannel(
+                *remote_device_, bank_id, remote_dram_base, dirty_data);
         }
         MetalContext::instance().get_cluster().dram_barrier(remote_device_->id());
     }
@@ -3898,7 +3901,8 @@ TEST_P(PrefetcherLinearPackedHTestFixture, RelayLinearPackedHTest) {
         const uint32_t num_banks = remote_device_->allocator_impl()->get_num_banks(BufferType::DRAM);
 
         for (uint32_t bank_id = 0; bank_id < num_banks; bank_id++) {
-            tt::tt_metal::detail::WriteToDeviceDRAMChannel(remote_device_, bank_id, remote_dram_base, dirty_data);
+            tt::tt_metal::slow_dispatch::WriteToDeviceDRAMChannel(
+                *remote_device_, bank_id, remote_dram_base, dirty_data);
         }
         MetalContext::instance().get_cluster().dram_barrier(remote_device_->id());
     }

@@ -36,7 +36,7 @@ struct RingSDPAFusedOpSignaler {
     void init_fused_op(
         tt::tt_metal::Program& program,
         const tt::tt_metal::IDevice* device,
-        const std::variant<CoreRange, CoreRangeSet>& core_range_to_signal,
+        const std::variant<tt::tt_metal::CoreRange, tt::tt_metal::CoreRangeSet>& core_range_to_signal,
         ttnn::experimental::ccl::FusedOpSignalerMode fused_op_signaler_mode =
             ttnn::experimental::ccl::FusedOpSignalerMode::MULTI);
 

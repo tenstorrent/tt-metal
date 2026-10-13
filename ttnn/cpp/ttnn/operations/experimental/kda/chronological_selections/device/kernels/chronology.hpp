@@ -12,12 +12,9 @@ constexpr uint32_t slice_rank = 4;
 constexpr uint32_t outgoing_history = 0;
 constexpr uint32_t predecessor_history = outgoing_history + 1;
 constexpr uint32_t final_history = predecessor_history + 1;
-constexpr uint32_t local_entry_state = final_history + 1;
-constexpr uint32_t final_state = local_entry_state + 2;
-constexpr uint32_t affine_transforms = final_state + 2;
-constexpr uint32_t affine_transform(uint32_t step) { return affine_transforms + 2 * step; }
-constexpr uint32_t local_final_history(uint32_t sp_size) { return affine_transform(sp_size); }
-constexpr uint32_t record_count(uint32_t sp_size) { return local_final_history(sp_size) + 1; }
+constexpr uint32_t final_state = final_history + 1;
+constexpr uint32_t local_final_history = final_state + 2;
+constexpr uint32_t record_count = local_final_history + 1;
 }  // namespace selection
 
 struct Topology {
@@ -33,10 +30,15 @@ struct Topology {
         const uint32_t rows_per_group = local_rows / groups;
         return (valid_rows + rows_per_group - 1) / rows_per_group;
     }
+    // Chunks holding any valid row. Only the last can be partial: its rows from
+    // partial_rows() on are padding, and kernels make them identity steps.
+    uint32_t chunk_count() const { return (valid_rows + tt::constants::TILE_HEIGHT - 1) / tt::constants::TILE_HEIGHT; }
+    uint32_t partial_chunk() const { return valid_rows / tt::constants::TILE_HEIGHT; }
+    uint32_t partial_rows() const { return valid_rows % tt::constants::TILE_HEIGHT; }
     uint32_t valid_chunks(uint32_t group, uint32_t groups) const {
         const uint32_t chunks = group_chunks(groups);
         const uint32_t begin = group * chunks;
-        const uint32_t end = valid_rows / tt::constants::TILE_HEIGHT;
+        const uint32_t end = chunk_count();
         return end <= begin ? 0 : (end - begin < chunks ? end - begin : chunks);
     }
     bool has_valid_tail() const { return local_split && valid_rows > head_rows; }

@@ -8,18 +8,6 @@
 
 #include <fstream>
 
-std::atomic_bool g_stop_requested = false;
-std::atomic_bool g_stop_message_printed = false;
-
-void handle_sigint(int) {
-    g_stop_requested.store(true);
-
-    if (!g_stop_message_printed.exchange(true)) {
-        const char msg[] = "\nSIGINT received, waiting to finish current test...\n";
-        [[maybe_unused]] ssize_t written = write(STDERR_FILENO, msg, sizeof msg - 1); /* NOLINT */
-    }
-}
-
 static std::map<uint32_t, std::string> id_to_bdf;
 static void init_id_to_bdf() {
     if (id_to_bdf.empty()) {
@@ -42,7 +30,7 @@ std::string pci_bdf_for_device_id(uint32_t device_id) {
     return id_to_bdf[device_id];
 }
 
-std::string trim_copy(std::string s) {
+static std::string trim_copy(std::string s) {
     while (!s.empty() && std::isspace(s.front())) {
         s.erase(s.begin());
     }

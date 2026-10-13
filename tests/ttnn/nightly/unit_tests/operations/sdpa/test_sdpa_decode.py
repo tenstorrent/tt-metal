@@ -3,6 +3,7 @@
 
 import pytest
 import numpy as np
+import torch
 import ttnn
 
 from tests.ttnn.unit_tests.operations.sdpa.sdpa_test_utils import (
@@ -744,3 +745,39 @@ def test_sdpa_decode_sliding_window(
 def test_sdpa_decode_broadcast_mask_batch(device, b, nh, nkv, s, d, grid_size, mask_dtype):
     """Regression test for issue #39910: mask batch-broadcast reads OOB DRAM."""
     run_test_sdpa_decode_broadcast_mask_batch(device, b, nh, nkv, s, d, ttnn.bfloat16, grid_size, mask_dtype)
+
+
+@pytest.mark.timeout(120)
+def test_sdpa_decode_row_major_q_interleaved_rejected(device, expect_error):
+    """#58698: ROW_MAJOR Q in interleaved DRAM used to deadlock the kernels (reader fills the tiled Q CB,
+    compute waits on the row-major Q CB) and hang the device. Validation must reject it instead.
+    The identical Q in TILE layout is the control and must run."""
+    torch.manual_seed(0)
+    b, nh, s, d = 8, 8, 256, 128
+    program_config = ttnn.SDPAProgramConfig(
+        compute_with_storage_grid_size=device.compute_with_storage_grid_size(),
+        q_chunk_size=32,
+        k_chunk_size=128,
+    )
+    k = ttnn.from_torch(torch.randn(b, 1, s, d), dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT, device=device)
+    v = ttnn.from_torch(torch.randn(b, 1, s, d), dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT, device=device)
+    q_torch = torch.randn(1, b, nh, d)
+
+    def run(q_layout):
+        q = ttnn.from_torch(
+            q_torch,
+            dtype=ttnn.bfloat16,
+            layout=q_layout,
+            device=device,
+            memory_config=ttnn.DRAM_MEMORY_CONFIG,
+        )
+        return ttnn.transformer.scaled_dot_product_attention_decode(
+            q, k, v, cur_pos=[100] * b, scale=d**-0.5, program_config=program_config
+        )
+
+    out = run(ttnn.TILE_LAYOUT)
+    assert tuple(out.shape) == (1, b, nh, d)
+    ttnn.deallocate(out)
+
+    with expect_error(RuntimeError, "ROW_MAJOR Q is only supported when Q is HEIGHT_SHARDED"):
+        run(ttnn.ROW_MAJOR_LAYOUT)

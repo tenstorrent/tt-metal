@@ -300,7 +300,11 @@ jobs:
           echo "Building prerequisite targets (will not be analyzed): ${{ inputs.prereq-targets }}"
           for target in ${{ inputs.prereq-targets }}; do
             echo "Building target: $target"
-            cmake --build --preset clang-tidy-fix-parallel --target "$target"
+            .github/scripts/utils/host-load-sidecar.sh \
+              --interval 2 \
+              --label "clang-tidy prereq build ($target)" \
+              --output "$GITHUB_STEP_SUMMARY" \
+              -- cmake --build --preset clang-tidy-fix-parallel --target "$target"
           done
 
       - name: 🔍 Analyze code with clang-tidy
@@ -318,7 +322,11 @@ jobs:
           done
           echo "Scanning ${{ inputs.scan-targets || 'all targets' }}"
           build_exit=0
-          cmake --build --preset clang-tidy-fix-parallel "${targets[@]}" || build_exit=$?
+          .github/scripts/utils/host-load-sidecar.sh \
+            --interval 2 \
+            --label "clang-tidy analysis (${{ inputs.scan-targets || 'all targets' }})" \
+            --output "$GITHUB_STEP_SUMMARY" \
+            -- cmake --build --preset clang-tidy-fix-parallel "${targets[@]}" || build_exit=$?
           echo "cmake --build exited with code ${build_exit}"
           echo "CLANG_TIDY_BUILD_EXIT=${build_exit}" >> "$GITHUB_ENV"
 

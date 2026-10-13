@@ -111,10 +111,9 @@
   budget_type: e2e
 
 - id: bh-galaxy-socket-pipeline
-  name: BH Galaxy Socket Pipeline Single Galaxy
+  name: BH Galaxy Socket Pipeline Single Galaxy Cross-Tray
   cmd: |
-    python tests/tt_metal/tt_fabric/utils/generate_rank_bindings.py
-    tt-run --rank-binding bh_galaxy_split_4x2_multi_mesh_rank_binding.yaml --mpi-args "--allow-run-as-root --tag-output" ./build/test/tt_metal/multihost/socket_pipeline/multiprocess/unit_tests_pipeline
+    tt-run --bare --mesh-graph-descriptor tests/tt_metal/tt_fabric/custom_mesh_descriptors/fabric_cpu_only_blitz_single_galaxy_4x2_ring_4stage_ring_mesh_graph_descriptor.textproto --hosts "$(hostname)" --mpi-args "--allow-run-as-root" ./build/test/tt_metal/multihost/socket_pipeline/multiprocess/unit_tests_pipeline
   skus:
     bh_galaxy:
       timeout: 10
@@ -134,5 +133,18 @@
     bh_galaxy:
       timeout: 8
   owner_id: U07R05K4WGJ # John Bauman
+  team: ttnn
+  budget_type: e2e
+
+# Full and offset distributions exercise uniform and nonuniform uploads with remote host shards.
+- id: bh-galaxy-complete-host-tensor-dual-rank
+  name: BH Galaxy complete host tensor uploads on dual-rank meshes
+  cmd: >-
+    tt-run --mesh-graph-descriptor tests/ttnn/distributed/config/bh_1x2_dual_rank_mesh_graph_descriptor.textproto --hosts "$(hostname)" --mpi-args "--allow-run-as-root --tag-output" pytest -x tests/ttnn/distributed/test_complete_host_tensor_dual_rank.py
+    && tt-run --mesh-graph-descriptor tests/ttnn/distributed/config/bh_1x4_dual_rank_mesh_graph_descriptor.textproto --hosts "$(hostname)" --mpi-args "--allow-run-as-root --tag-output" pytest -x tests/ttnn/distributed/test_complete_host_tensor_nonuniform_dual_rank.py
+  skus:
+    bh_galaxy:
+      timeout: 15
+  owner_id: U088DBNUKGR # Evan Smal
   team: ttnn
   budget_type: e2e

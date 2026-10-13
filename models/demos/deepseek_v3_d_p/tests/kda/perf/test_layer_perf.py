@@ -18,7 +18,11 @@ import torch
 import ttnn
 from models.common.utility_functions import run_for_blackhole
 from models.demos.deepseek_v3_d_p.reference.kda import KDAReferenceState
-from models.demos.deepseek_v3_d_p.tests.fabric_profiles import fabric_1d_device_params, torus_xy_device_params
+from models.demos.deepseek_v3_d_p.tests.fabric_profiles import (
+    fabric_1d_device_params,
+    torus_xy_device_params,
+    tp_axis_is_wrapped,
+)
 from models.demos.deepseek_v3_d_p.tests.kda.reference_cache import load_or_compute_cpu_reference
 from models.demos.deepseek_v3_d_p.tests.kda.utils import (
     KimiK3TestCase,
@@ -43,14 +47,17 @@ _TIMING_SAMPLES = 5
 _PCC_THRESHOLD = 0.9995
 _PERF_SKU = "bh_loudbox"
 _PERF_MARGIN = 0.03
-# LoudBox calibration at 350413d7a98e (2026-08-31): median across five independent
-# sessions, each using the median of five warm synchronized 10-replay samples.
+# LoudBox targets.
 _PERF_REFERENCE_MS = {
-    "SP1xTP8": 9.597,
-    "SP2xTP4": 9.539,
-    "SP4xTP2": 9.991,
+    "SP1xTP8": 7.379,
+    "SP2xTP4": 7.436,
+    "SP4xTP2": 6.755,
 }
-_GALAXY_PERF_REFERENCE_MS = 4.195
+_GALAXY_PERF_REFERENCE_MS = 2.024
+# Like the model's prefill tests, give CCL semaphores their own L1_SMALL region: allocated in L1 on the first call,
+# they would land between the chunk terms and fragment L1, so the traced call would plan ops on less free L1 than
+# the warm-up compiled for.
+_L1_SMALL_SIZE = 1152
 
 
 @pytest.fixture(scope="session")
@@ -180,6 +187,7 @@ def _trace_wall_samples_ms(
         pytest.param(
             {
                 "fabric_config": ttnn.FabricConfig.FABRIC_1D,
+                "l1_small_size": _L1_SMALL_SIZE,
             },
             id="fabric_1d",
         ),
@@ -283,11 +291,11 @@ def test_kimi_k3_layer_1_perf(
 @pytest.mark.parametrize(
     "mesh_device,tensor_parallel_axis,device_params",
     [
-        pytest.param((2, 4), 1, fabric_1d_device_params(), id="SP2xTP4-fabric-1d"),
+        pytest.param((2, 4), 1, fabric_1d_device_params(l1_small_size=_L1_SMALL_SIZE), id="SP2xTP4-fabric-1d"),
         pytest.param(
             (8, 4),
             1,
-            torus_xy_device_params(),
+            torus_xy_device_params(l1_small_size=_L1_SMALL_SIZE),
             marks=pytest.mark.requires_mesh_topology(mesh_shape=(8, 4), topology="mesh-8x4"),
             id="SP8xTP4-torus-xy",
         ),
@@ -326,4 +334,9 @@ def test_synthetic_kimi_k3_perf(
         "perf_margin_pct": _PERF_MARGIN * 100.0,
     }
     print("KDA_SYNTHETIC_PERF=" + json.dumps(result, sort_keys=True))
+    if layout == "SP8xTP4" and not tp_axis_is_wrapped(mesh_device):
+        pytest.skip(
+            f"TP axis not wrapped: measured {median_wall_ms:.3f} ms on Linear TP; "
+            "the Galaxy reference assumes the TP ring"
+        )
     _assert_synthetic_performance(layout, median_wall_ms)

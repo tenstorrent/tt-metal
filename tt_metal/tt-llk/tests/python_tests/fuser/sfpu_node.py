@@ -43,6 +43,7 @@ class SfpuNode:
             return ""
         block.dest_src0 = call.src0
         block.dest_src1 = call.src1
+        block.dest_src2 = call.src2
         block.tile_id_dest = call.dest
         return self.sfpu.calculate(operation, config, self, block)
 
