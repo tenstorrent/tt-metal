@@ -437,4 +437,6 @@ uint32_t get_num_pages(const ttnn::Tensor& tensor);
 // B/W-sh → shard_W*E (feeds split branch); other sharded → buffer->aligned_page_size() (16-aligned L1 stride).
 uint32_t per_shard_page_size_bytes(const ttnn::Tensor& tensor, uint32_t row_bytes);
 
+bool codegen_supported_on_arch(const ttnn::Tensor& input);
+
 }  // namespace ttnn::operations::data_movement
