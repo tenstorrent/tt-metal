@@ -7,7 +7,7 @@
 # Results go to the log as base64 of a tar.gz between @@RESULTS markers.
 set +e +o pipefail
 R=$(git rev-parse --show-toplevel); S=$R/ci_ab; L=$R/tt_metal/tt-llk
-PLAN=$S/${1:-plan.txt}
+PLAN=$S/${1:-plan.txt}; FL=$S/${FILES:-files.txt}
 echo "== start $(date -u +%T) checkout $R $(git -C $R log -1 --format=%h) plan $PLAN"
 python3 -m venv /tmp/llkvenv && . /tmp/llkvenv/bin/activate
 pip install -q -r $L/tests/requirements.txt > /tmp/pip.log 2>&1; echo "== pip rc=$? $(tail -1 /tmp/pip.log)"
@@ -17,8 +17,8 @@ export PYTHONPATH="$S/plug${PYTHONPATH:+:$PYTHONPATH}"
 OBJ=$(find $L/tests/sfpi/ -name riscv-tt-elf-objcopy -type f 2>/dev/null | head -1); echo "== objcopy $OBJ"
 place() {
   local d=${1%_wc}
-  while read -r rel; do [[ -n $rel ]] && cp "$S/variants/$d/$rel" "$R/$rel"; done < $S/files.txt
-  echo "== place $1: $(while read -r rel; do [[ -n $rel ]] && md5sum < "$R/$rel" | cut -c1-8; done < $S/files.txt | tr '\n' ' ')"
+  while read -r rel; do [[ -n $rel ]] && cp "$S/variants/$d/$rel" "$R/$rel"; done < $FL
+  echo "== place $1: $(while read -r rel; do [[ -n $rel ]] && md5sum < "$R/$rel" | cut -c1-8; done < $FL | tr '\n' ' ')"
 }
 texthash() { (cd $1 && find . -name "*.elf" -path "*/elf/*" | sort | while read -r e; do echo "$($OBJ -O binary -j .text "$e" /dev/stdout 2>/dev/null | md5sum | cut -c1-12) ${e#./}"; done); }
 OUT=/tmp/llkab_out; rm -rf $OUT; mkdir -p $OUT

@@ -1,0 +1,15 @@
+# H3: topk_xl split diagnosis with counters: XB baseline, XP no-swap probe, S<s> stage s skipped, T no face transposes, TP both
+c XB_wc ids/xl.txt - wc
+c XP_wc ids/xl.txt - wc
+c S0_wc ids/xl.txt - wc
+c S1_wc ids/xl.txt - wc
+c S2_wc ids/xl.txt - wc
+c S3_wc ids/xl.txt - wc
+c S4_wc ids/xl.txt - wc
+c S5_wc ids/xl.txt - wc
+c S6_wc ids/xl.txt - wc
+c S7_wc ids/xl.txt - wc
+c S8_wc ids/xl.txt - wc
+c T_wc ids/xl.txt - wc
+c TP_wc ids/xl.txt - wc
+c XB_wc ids/xl.txt - wc

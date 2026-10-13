@@ -1,0 +1,4 @@
+perf_topk_xl_split.py::test_perf_topk_xl_split[k2048-chunks32-split]
+perf_topk_xl_split.py::test_perf_topk_xl_split[k2048-chunks8-split]
+perf_topk_xl_split.py::test_perf_topk_xl_split[k1024-chunks32-split]
+perf_topk_xl.py::test_perf_topk_xl[k2048-chunks32-fused]
