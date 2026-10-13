@@ -3,11 +3,9 @@
 // SPDX-License-Identifier: Apache-2.0
 
 // Legacy SDPA loops: sdpa_inner_loop and its wrappers sdpa_standard, sdpa_joint and sdpa_ring, with the helpers
-// only they use (lightweight causal stamp, per-chunk mask resolution, sigmoid / logsigmoid LSE merge). Callers
-// without `precision` on Wormhole and the ring-joint FP32 calls the ring recipe does not cover yet
-// (ring_recipe_gap in sdpa.cpp) still reach them; every other call runs a recipe or compute_streaming.hpp.
-// TODO(SDPA recipes on Wormhole): delete this header with its last callers (sdpa.cpp without streaming
-// compute, joint_sdpa.cpp, the FP32 branch of ring_joint_sdpa.cpp).
+// only they use (lightweight causal stamp, per-chunk mask resolution, sigmoid / logsigmoid LSE merge). Reached only
+// by ring-joint FP32 calls the ring recipe does not cover (ring_recipe_gap in sdpa.cpp) and by architectures other
+// than Blackhole and Wormhole B0.
 
 #pragma once
 

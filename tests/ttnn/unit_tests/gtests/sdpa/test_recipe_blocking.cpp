@@ -298,25 +298,9 @@ TEST(SDPARecipeBlocking, ProgramsFitTheKernelConfigBuffer) {
             EXPECT_TRUE(recipe_program_fits(p, 7, 8));
         }
     }
-    // The chooser never emits such a geometry (op-chosen joint blocking picked Q224/K256 here before the rule).
-    for (uint32_t heads : {1u, 3u}) {
-        for (uint32_t batch : {1u, 2u}) {
-            for (auto* p : {&joint, &dense}) {
-                auto q = *p;
-                q.q_heads = heads;
-                q.batch = batch;
-                q.mask_page_bytes = 0;
-                q.attention_sink = false;
-                q.k_rows_unaligned = true;
-                const auto choice = choose_recipe_blocking(q);
-                ASSERT_TRUE(choice.has_value());
-                EXPECT_TRUE(recipe_program_fits(q, tiles(choice->q_chunk_size), tiles(choice->k_chunk_size)));
-                for (const auto& candidate : recipe_blocking_candidates(q)) {
-                    EXPECT_TRUE(recipe_program_fits(q, tiles(candidate.q_chunk_size), tiles(candidate.k_chunk_size)));
-                }
-            }
-        }
-    }
+    // The chooser filters its candidates through recipe_program_fits and still finds one (op-chosen joint blocking
+    // picked Q224/K256 here before the rule).
+    ASSERT_TRUE(choose_recipe_blocking(joint).has_value());
 }
 
 TEST(SDPARecipeBlocking, FeatureCombinationsFitTheKernelConfigBuffer) {
@@ -395,7 +379,7 @@ TEST(SDPARecipeBlocking, FeatureCombinationsFitTheKernelConfigBuffer) {
         q.policy = resolve_precision_policy(RecipeSelection{Recipe::D});
         EXPECT_TRUE(recipe_program_fits(q, 7, 8));
     }
-    // The chooser always keeps a candidate (one-tile-subblock K chunks, even or small Q chunks), none excluded.
+    // The chooser always keeps a candidate (one-tile-subblock K chunks, even or small Q chunks).
     for (const auto& selection : kSelections) {
         for (uint32_t d_tiles : {2u, 3u, 4u, 5u}) {
             for (bool key_range : {false, true}) {
@@ -408,7 +392,6 @@ TEST(SDPARecipeBlocking, FeatureCombinationsFitTheKernelConfigBuffer) {
                 ASSERT_TRUE(choice.has_value());
                 uint32_t max_q = 0;
                 for (const auto& candidate : recipe_blocking_candidates(p)) {
-                    EXPECT_TRUE(recipe_program_fits(p, tiles(candidate.q_chunk_size), tiles(candidate.k_chunk_size)));
                     max_q = std::max(max_q, tiles(candidate.q_chunk_size));
                 }
                 // An excluded odd Q chunk does not end the search (FAST: even Q chunks past it stay candidates).

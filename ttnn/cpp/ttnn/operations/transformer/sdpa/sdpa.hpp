@@ -15,9 +15,8 @@
 
 namespace ttnn::transformer {
 
-// Explicit numerical recipes. Without precision, a call that would reach a legacy loop (sdpa_legacy_loops.hpp) runs a
-// recipe on Blackhole: FP32 DEST -> ACCURATE, non-ring joint and the exp ring fallback -> STANDARD (sdpa.cpp,
-// "Precision routing"); BF16-DEST calls keep the streaming kernels.
+// Explicit numerical recipes. Without precision, a call that would reach a legacy loop runs a recipe instead (Blackhole
+// and Wormhole B0; sdpa.cpp, "Precision routing"); BF16-DEST calls keep the streaming kernels.
 enum class SDPAPrecision : uint8_t { STANDARD, BALANCED, ACCURATE, FAST };
 
 // Out-of-place rounding for FAST inputs: Q to 7 significant bits, K/V to 5 (BF16/BFP8) or onto

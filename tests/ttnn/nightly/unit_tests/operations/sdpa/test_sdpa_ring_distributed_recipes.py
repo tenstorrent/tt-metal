@@ -16,11 +16,13 @@ import ttnn
 from tests.ttnn.unit_tests.operations.sdpa.sdpa_recipe_test_utils import (
     L2_PCT_BOUND,
     VARIANTS,
-    recipe_hardware,
+    fp32_dest_config,
     inputs_for,
     key_mask,
     l2_pct,
+    program_config,
     randn,
+    recipe_hardware,
     reference,
     stored,
     to_device,
@@ -39,26 +41,6 @@ def slabs(ring_size, ring_id, s):
 def causal_reference(q, k, v, scale=None):
     s = q.shape[2]
     return reference(q, k, v, key_mask(s, s, causal=True), scale)
-
-
-def config(device, q_chunk, k_chunk, exp_approx_mode=None):
-    return ttnn.SDPAProgramConfig(
-        compute_with_storage_grid_size=device.compute_with_storage_grid_size(),
-        q_chunk_size=q_chunk,
-        k_chunk_size=k_chunk,
-        exp_approx_mode=exp_approx_mode,
-    )
-
-
-def fp32_dest_config(device):
-    """The production caller's compute config (Galaxy Llama: HiFi4-class, FP32 dest); the recipe ignores it."""
-    return ttnn.init_device_compute_kernel_config(
-        device.arch(),
-        math_fidelity=ttnn.MathFidelity.HiFi4,
-        math_approx_mode=False,
-        fp32_dest_acc_en=True,
-        packer_l1_acc=False,
-    )
 
 
 # b, nh, nkv, s, d, ring_size, q_chunk, k_chunk (0 = op-chosen). Slabs (s / (2 * ring_size) rows) hold whole Q
@@ -86,7 +68,7 @@ def run_ring_positions(device, variant, case, *, scale=None, q_dtype=None, kv_dt
     else:
         q, k, v = stored(q, q_dtype), stored(k, kv_dtype), stored(v, kv_dtype)
         tq, tk, tv = to_device(device, q, q_dtype), to_device(device, k, kv_dtype), to_device(device, v, kv_dtype)
-    program_config = config(device, q_chunk, k_chunk) if q_chunk else None
+    cfg = program_config(device, q_chunk, k_chunk) if q_chunk else None
     actual = torch.zeros(b, nh, s, d)
     for ring_id in range(ring_size):
         out = ttnn.transformer.ring_distributed_scaled_dot_product_attention(
@@ -96,7 +78,7 @@ def run_ring_positions(device, variant, case, *, scale=None, q_dtype=None, kv_dt
             ring_size=ring_size,
             ring_id=ring_id,
             scale=scale,
-            program_config=program_config,
+            program_config=cfg,
             precision=precision,
             **kwargs,
         )
@@ -155,8 +137,8 @@ def test_ring_distributed_sdpa_routing(device, fp32_dest):
             )
         )
         extra = dict(compute_kernel_config=fp32_dest_config(device)) if fp32_dest else {}
-        routed = run(config(device, 64, 64), **extra)
-        assert torch.equal(routed, run(config(device, 0, 0), precision=precision))
+        routed = run(program_config(device, 64, 64), **extra)
+        assert torch.equal(routed, run(program_config(device, 0, 0), precision=precision))
         actual[:, :, slabs(4, ring_id, 4096)] = routed.float()
     assert l2_pct(actual, causal_reference(q, k, v)) < L2_PCT_BOUND[variant]
 
@@ -172,7 +154,7 @@ def test_ring_distributed_sdpa_recipe_rejects_partial_chunks(device, expect_erro
             tk,
             ring_size=4,
             ring_id=0,
-            program_config=config(device, 384, 512),
+            program_config=program_config(device, 384, 512),
             precision=ttnn.SDPAPrecision.STANDARD,
         )
 
@@ -207,7 +189,7 @@ def test_ring_distributed_sdpa_recipe_paged_prefix(device, variant):
             pv,
             ring_size=ring_size,
             ring_id=ring_id,
-            program_config=config(device, 128, 256),
+            program_config=program_config(device, 128, 256),
             page_table=page_table,
             chunk_start_idx=prefix,
             precision=precision,
@@ -240,7 +222,7 @@ def test_ring_distributed_sdpa_recipe_mesh(mesh_device, variant):
         tk,
         tv,
         ring_size=ring_size,
-        program_config=config(mesh_device, q_chunk, k_chunk),
+        program_config=program_config(mesh_device, q_chunk, k_chunk),
         precision=precision,
     )
     expected = causal_reference(q, k, v)

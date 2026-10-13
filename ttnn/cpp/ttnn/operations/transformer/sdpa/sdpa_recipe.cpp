@@ -307,7 +307,8 @@ void validate_ring_recipe_inputs(
     require_recipe_sfploadmacro();
     // Ring recipes run on Blackhole and Wormhole B0; exp ring (fabric MUX) on Blackhole.
     TT_FATAL(
-        q.device()->arch() == tt::ARCH::BLACKHOLE || (op == RecipeOp::Ring && q.device()->arch() == tt::ARCH::WORMHOLE_B0),
+        q.device()->arch() == tt::ARCH::BLACKHOLE ||
+            (op == RecipeOp::Ring && q.device()->arch() == tt::ARCH::WORMHOLE_B0),
         "Named {} recipes require {}",
         name,
         op == RecipeOp::Ring ? "Blackhole or Wormhole B0" : "Blackhole");
@@ -366,7 +367,7 @@ void validate_recipe_mask(const Tensor& q, const Tensor& k, const Tensor& mask, 
         "SDPA recipe attn_mask only supports minimal tile padding");
 }
 
-// CB 15 is free in the dense recipe layout (0-14 and 16 are recipe-owned; ring uses 17/18).
+// CB 15: the dense mask (0-14, 16 recipe; 17-20 key range and sink; ring 17/18).
 constexpr uint8_t kRecipeMaskCb = 15;
 // Key-range calls (RecipeKeyRange): the reader's control page per Q chunk (compute: recipe_read_key_range), the
 // all-masked template tile, and a scratch page for the Q offset / page-table row (64 B slots) and cu_window_seqlens.
@@ -858,13 +859,11 @@ static ProgramDescriptor recipe_program(
             kernel->defines.emplace_back("SDPA_RECIPE_WINDOW", std::to_string(key_range.sliding_window));
             kernel->defines.emplace_back("SDPA_RECIPE_SEGMENTS", segment_bounds);
             kernel->defines.emplace_back("SDPA_RECIPE_SCRATCH_CB", std::to_string(kRecipeKeyScratchCb));
+            kernel->defines.emplace_back("SDPA_RECIPE_CORES", std::to_string(cores));
+            kernel->defines.emplace_back("SDPA_RECIPE_BATCH_HEADS", std::to_string(batch_heads));
         }
         if (kv_share) {
             reader.defines.emplace_back("SDPA_RECIPE_KV_SHARE", "1");
-        }
-        for (auto* kernel : {&reader, &writer}) {
-            kernel->defines.emplace_back("SDPA_RECIPE_CORES", std::to_string(cores));
-            kernel->defines.emplace_back("SDPA_RECIPE_BATCH_HEADS", std::to_string(batch_heads));
         }
         writer.defines.emplace_back("SDPA_RECIPE_Q_JOBS", std::to_string(jobs_per_head));
         if (key_range.q_slab_rows) {
@@ -927,7 +926,9 @@ static ProgramDescriptor recipe_program(
         reader.defines.emplace_back("SDPA_RECIPE_SINK_CB", std::to_string(kRecipeSinkCb));
         reader.defines.emplace_back("SDPA_RECIPE_SINK_HEADS", std::to_string(qs[1]));
         reader.defines.emplace_back("SDPA_RECIPE_SINK_CTA", std::to_string(reader.compile_time_args.size()));
-        reader.defines.emplace_back("SDPA_RECIPE_SINK_ARG", std::to_string(keyed ? 16 : (attn_mask ? 13 : 12)));
+        reader.defines.emplace_back(
+            "SDPA_RECIPE_SINK_ARG",
+            std::to_string(keyed ? kReaderKeyedTensorArg + 3 : kReaderTensorArg + (attn_mask ? 1 : 0)));
         TensorAccessorArgs(options.attention_sink->buffer()).append_to(reader.compile_time_args);
     }
     const uint32_t sink_address = options.attention_sink ? options.attention_sink->buffer()->address() : 0;
@@ -1346,7 +1347,6 @@ static std::vector<Tensor> run_recipe_segments(
     const RecipeKeyRange& key_range = {},
     const RecipeDenseOptions& options = {}) {
     const auto& [q, k, v] = segments.front();
-    TT_FATAL(q.storage_type() == StorageType::DEVICE, "SDPA recipes require device inputs");
     SDPARecipeInputs inputs{
         .q = q,
         .k = k,

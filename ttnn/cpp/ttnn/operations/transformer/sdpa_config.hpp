@@ -12,14 +12,17 @@
 
 namespace ttnn::operations::transformer {
 
+// Decode: cores sharing one batch/head's K/V when SDPAProgramConfig::max_cores_per_head_batch is unset.
+inline constexpr uint32_t kDefaultDecodeMaxCoresPerHeadBatch = 16;
+
 struct SDPAProgramConfig {
     tt::tt_metal::CoreCoord compute_with_storage_grid_size;
     std::optional<tt::tt_metal::CoreRangeSet> sub_core_grids;
     std::size_t q_chunk_size;
     std::size_t k_chunk_size;
     std::optional<bool> exp_approx_mode;
-    // Decode only: up to this many cores share one batch/head's K/V (unset: 16). Prefill SDPA uses the whole grid
-    // and rejects it.
+    // Decode only: up to this many cores share one batch/head's K/V (unset: kDefaultDecodeMaxCoresPerHeadBatch).
+    // Prefill SDPA uses the whole grid and rejects it.
     std::optional<uint32_t> max_cores_per_head_batch;
     // Ring joint chunked prefill only: up to this many cores may share one (head, Q chunk) unit along K when the
     // units leave the grid idle. 1 disables the split.
