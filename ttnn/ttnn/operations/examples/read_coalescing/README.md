@@ -7,8 +7,10 @@ shape, layout, and values. Each input shard spans the full height and lives in
 one DRAM bank.
 
 The program has only a reader and writer, connected by one double-buffered
-circular buffer. After demonstrating coalescing, it shows how assigning each
-core to one source bank can improve the copy further.
+circular buffer. It compares two approaches to the same read bottleneck:
+larger transactions through coalescing, and different core-to-bank assignments
+through affinity. The four-way A/B measures them separately and together;
+their benefits can overlap, compound, or interfere.
 
 ## Measured copy result
 
@@ -91,7 +93,7 @@ It uses the same transfer sizes and counts in every arm. Each output byte has
 exactly one owner. The copy's overall gain can be limited by this fixed write
 stage even when the reader becomes faster.
 
-## Additional improvement: bank affinity
+## Alternative assignment to compare: bank affinity
 
 Without affinity, cores receive contiguous ranges of the row-major
 `(32-row block, bank)` work grid. With it, core `k` handles bank `k % banks`,

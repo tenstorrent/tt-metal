@@ -132,7 +132,8 @@ are compile-time switches, so flip them per call to check whether they pay on yo
 
 ## ⭐⭐ T2 — [`read_coalescing`](read_coalescing/README.md)
 **Concept:** replace many small reads with one wide call over physically contiguous shard rows;
-then measure bank-affine work assignment as an additional improvement. A plain ROW_MAJOR
+compare bank-affine work assignment as another approach to the read bottleneck, both alone
+and combined. Gains can overlap or interfere. A plain ROW_MAJOR
 DRAM copy, two data-movement kernels, one double-buffered CB, no compute kernel.
 **Situation:** a width-sharded DRAM source has one full-height shard per bank, but the reader
 issues 32 small calls per row block even though those rows are contiguous in that bank.
