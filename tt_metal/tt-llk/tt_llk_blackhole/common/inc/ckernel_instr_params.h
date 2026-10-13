@@ -239,6 +239,7 @@ struct p_movd2a
 {
     constexpr static std::uint32_t MOV_1_ROW  = 0x0;
     constexpr static std::uint32_t MOV_4_ROWS = 0x2;
+    constexpr static std::uint32_t MOV_8_ROWS = 0x3;
 };
 
 struct p_movb2d

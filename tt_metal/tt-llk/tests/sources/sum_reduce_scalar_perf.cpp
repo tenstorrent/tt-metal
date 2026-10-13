@@ -109,7 +109,7 @@ void run_kernel(RUNTIME_PARAMETERS params)
 
 static constexpr float REDUCE_SCALER = 1.0f;
 
-inline void row_math(const std::uint32_t tile_cnt, const ckernel::TensorShape& tensor_shape, const std::uint32_t math_format)
+__attribute__((always_inline)) inline void row_math(const std::uint32_t tile_cnt, const ckernel::TensorShape& tensor_shape, const std::uint32_t math_format)
 {
     const std::uint32_t num_faces = tensor_shape.total_num_faces();
     _llk_math_eltwise_unary_datacopy_init_<DataCopyType::A2D, is_fp32_dest_acc_en, BroadcastType::NONE>(num_faces, math_format);
