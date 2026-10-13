@@ -66,7 +66,6 @@ SECTIONS
     . = DEFINED(llk_init_region_at) ? llk_init_region_at : .; /* inside the section: an offset from its start */
     *(.text.llk_init_callee .text.llk_init_callee.*)
     *(.llk_init_body)
-    PROVIDE (__llk_init_body_end = .); /* counters.h: math's TRISC_END_PC */
     *(.llk_init_tramp)
     KEEP (*(SORT_NONE(.init)))
     . = ALIGN(256);
