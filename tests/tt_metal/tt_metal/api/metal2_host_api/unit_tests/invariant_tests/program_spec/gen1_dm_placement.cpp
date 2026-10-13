@@ -4,7 +4,7 @@
 
 // Local invariant of WorkUnitSpec::kernels on Gen1 data-movement placement (program_spec.hpp): its DM
 // kernels use distinct processors, share noc_mode, and DM_DEDICATED_NOC kernels use distinct NOCs unless
-// both opt in to sharing one (DedicatedNocSharing::SHARED_DISJOINT_TRAFFIC).
+// both opt in to sharing one (KernelAdvancedOptions::dedicated_noc_sharing).
 
 #include <gtest/gtest.h>
 #include <gmock/gmock.h>
@@ -118,9 +118,8 @@ TEST_F(ProgramSpecTestGen1, CPU_TwoDMKernelsSameNocDedicatedBothSharingSucceeds)
     auto k0 = MakeMinimalGen1DMKernel("k0", DataMovementProcessor::RISCV_0);
     auto k1 = MakeMinimalGen1DMKernel("k1", DataMovementProcessor::RISCV_1);
     for (auto* k : {&k0, &k1}) {
-        auto& cfg = (*std::get<DataMovementHardwareConfig>(k->hw_config).config_1xx);
-        cfg.noc = NOC::NOC_0;
-        cfg.dedicated_noc_sharing = DedicatedNocSharing::SHARED_DISJOINT_TRAFFIC;
+        (*std::get<DataMovementHardwareConfig>(k->hw_config).config_1xx).noc = NOC::NOC_0;
+        k->advanced_options.dedicated_noc_sharing = DedicatedNocSharing::SHARED_DISJOINT_TRAFFIC;
     }
 
     spec.kernels = {k0, k1};
@@ -139,9 +138,8 @@ TEST_F(ProgramSpecTestGen1, CPU_TwoDMKernelsSameNocDedicatedOneSharingFails) {
 
     auto k0 = MakeMinimalGen1DMKernel("k0", DataMovementProcessor::RISCV_0);
     auto k1 = MakeMinimalGen1DMKernel("k1", DataMovementProcessor::RISCV_1);
-    auto& cfg0 = (*std::get<DataMovementHardwareConfig>(k0.hw_config).config_1xx);
-    cfg0.noc = NOC::NOC_0;
-    cfg0.dedicated_noc_sharing = DedicatedNocSharing::SHARED_DISJOINT_TRAFFIC;
+    (*std::get<DataMovementHardwareConfig>(k0.hw_config).config_1xx).noc = NOC::NOC_0;
+    k0.advanced_options.dedicated_noc_sharing = DedicatedNocSharing::SHARED_DISJOINT_TRAFFIC;
     (*std::get<DataMovementHardwareConfig>(k1.hw_config).config_1xx).noc = NOC::NOC_0;
 
     spec.kernels = {k0, k1};

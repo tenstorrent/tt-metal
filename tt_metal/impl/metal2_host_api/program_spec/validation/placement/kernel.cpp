@@ -25,10 +25,10 @@ namespace tt::tt_metal::experimental {
 //      and in dedicated mode the two RISCs use the same command-buffer indices and each counts
 //      its own transactions against the NOC's shared NIU counters. Two kernels on one NOC that
 //      issue the same kind of transaction therefore corrupt each other's command buffers and
-//      barriers. Kernels that set DedicatedNocSharing::SHARED_DISJOINT_TRAFFIC promise no kind is
-//      issued by both; KernelGroup finalize then takes brisc_noc_id from BRISC's kernel. The
-//      legacy CheckDataMovementConfig intended this check but did not reliably enforce it for
-//      the common reader+writer pair (it runs before the second DM kernel is registered).
+//      barriers. Kernels whose advanced_options.dedicated_noc_sharing is SHARED_DISJOINT_TRAFFIC
+//      promise no kind is issued by both; KernelGroup finalize then takes brisc_noc_id from BRISC's
+//      kernel. The legacy CheckDataMovementConfig intended this check but did not reliably enforce
+//      it for the common reader+writer pair (it runs before the second DM kernel is registered).
 //      DM_DYNAMIC_NOC kernels are exempt: they may intentionally share a NOC, freeing the other
 //      NOC for fabric.
 // (Each kernel's effective node set is derived from WorkUnitSpec membership.)
@@ -84,15 +84,17 @@ void ValidateGen1DMPlacement(const ValidationContext& ctx, tt::ARCH arch) {
 
                 // NOC-distinctness applies only to statically-pinned (dedicated-NOC) kernels.
                 if (gen1.noc_mode == NOC_MODE::DM_DEDICATED_NOC) {
-                    auto [noc_it, noc_inserted] = claimed_noc.try_emplace(
-                        std::make_pair(node, gen1.noc), kernel.unique_id, gen1.dedicated_noc_sharing);
+                    const DedicatedNocSharing sharing = kernel.advanced_options.dedicated_noc_sharing;
+                    auto [noc_it, noc_inserted] =
+                        claimed_noc.try_emplace(std::make_pair(node, gen1.noc), kernel.unique_id, sharing);
                     constexpr auto kShared = DedicatedNocSharing::SHARED_DISJOINT_TRAFFIC;
                     TT_FATAL(
-                        noc_inserted || (noc_it->second.second == kShared && gen1.dedicated_noc_sharing == kShared),
+                        noc_inserted || (noc_it->second.second == kShared && sharing == kShared),
                         "KernelSpec '{}' conflicts with '{}' on node ({}, {}): both are dedicated-NOC data "
                         "movement kernels pinned to NOC_{}, which hangs the device. Give them distinct NOCs, use "
                         "DM_DYNAMIC_NOC mode to intentionally share a NOC, or, if no kind of NoC transaction is "
-                        "issued by both kernels, set dedicated_noc_sharing = SHARED_DISJOINT_TRAFFIC on both.",
+                        "issued by both kernels, set advanced_options.dedicated_noc_sharing = "
+                        "SHARED_DISJOINT_TRAFFIC on both.",
                         kernel.unique_id,
                         noc_it->second.first,
                         node.x,
