@@ -47,7 +47,8 @@ def pytest_configure(config):
             h, n = f"error {e}", -1
         _state["n"] += 1
         with open(out, "a") as fh:
-            fh.write(json.dumps({"node": _state["id"], "i": _state["n"], "addr": addr, "n": n, "sha1": h}) + "\n")
+            tiles = [hashlib.sha1(b[o : o + 2048]).hexdigest()[:12] for o in range(0, n, 2048)] if n % 2048 == 0 else []
+            fh.write(json.dumps({"node": _state["id"], "i": _state["n"], "addr": addr, "n": n, "sha1": h, "tiles": tiles}) + "\n")
         return data
 
     read_from_device._topkbits = True

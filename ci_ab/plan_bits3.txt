@@ -1,0 +1,6 @@
+# tt-llk functional bits with LLK asserts on, one worker, per-tile hashes: main's header, the stack before the round (A),
+# the round's head (B10) and its A/A copy (B11)
+b main ids/bits_main.txt - bits
+b A ids/bits_all.txt - bits
+b B10 ids/bits_all.txt - bits
+b B11 ids/bits_all.txt - bits
