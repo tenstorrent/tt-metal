@@ -18,8 +18,10 @@
 // nullified, IOMMU-off on BH, etc.) the test skips gracefully via
 // IsProgramRealtimeProfilerActive(mesh_device).
 
+#include <atomic>
 #include <chrono>
 #include <cstdint>
+#include <memory>
 #include <mutex>
 #include <set>
 #include <stdexcept>
@@ -46,6 +48,7 @@ namespace tt::tt_metal {
 namespace {
 
 using tt::tt_metal::experimental::IsProgramRealtimeProfilerActive;
+using tt::tt_metal::experimental::ProgramRealtimeProfilerCallback;
 using tt::tt_metal::experimental::ProgramRealtimeProfilerCallbackHandle;
 using tt::tt_metal::experimental::ProgramRealtimeRecord;
 using tt::tt_metal::experimental::ProgramRealtimeRecordBatch;
@@ -117,6 +120,67 @@ void enqueue_sanity_program(
     workload.add_program(distributed::MeshCoordinateRange(mesh_device->shape()), std::move(program));
     distributed::EnqueueMeshWorkload(mesh_device->mesh_command_queue(), workload, /*blocking=*/false);
 }
+
+void enqueue_sanity_programs(
+    const std::shared_ptr<distributed::MeshDevice>& mesh_device, uint32_t first_runtime_id, uint32_t count) {
+    CoreCoord compute_grid = mesh_device->compute_with_storage_grid_size();
+    CoreRange all_cores(CoreCoord{0, 0}, CoreCoord{compute_grid.x - 1, compute_grid.y - 1});
+    for (uint32_t i = 0; i < count; ++i) {
+        enqueue_sanity_program(mesh_device, first_runtime_id + i, all_cores);
+    }
+}
+
+std::set<uint32_t> runtime_id_range(uint32_t first, uint32_t count) {
+    std::set<uint32_t> ids;
+    for (uint32_t i = 0; i < count; ++i) {
+        ids.insert(first + i);
+    }
+    return ids;
+}
+
+std::set<uint32_t> chip_ids_of(const distributed::MeshDevice& mesh_device) {
+    std::set<uint32_t> ids;
+    for (const auto* device : mesh_device.get_devices()) {
+        ids.insert(static_cast<uint32_t>(device->id()));
+    }
+    return ids;
+}
+
+// Collects the records delivered to one callback.
+class RecordSink {
+public:
+    ProgramRealtimeProfilerCallback callback() {
+        return [this](const ProgramRealtimeRecordBatch& batch) {
+            std::lock_guard<std::mutex> lk(mu_);
+            records_.insert(records_.end(), batch.records.begin(), batch.records.end());
+        };
+    }
+
+    std::set<uint32_t> chip_ids() {
+        std::lock_guard<std::mutex> lk(mu_);
+        std::set<uint32_t> ids;
+        for (const auto& rec : records_) {
+            ids.insert(rec.chip_id);
+        }
+        return ids;
+    }
+
+    // Runtime ids seen in [first, first + count).
+    std::set<uint32_t> runtime_ids_in(uint32_t first, uint32_t count) {
+        std::lock_guard<std::mutex> lk(mu_);
+        std::set<uint32_t> ids;
+        for (const auto& rec : records_) {
+            if (rec.runtime_id >= first && rec.runtime_id < first + count) {
+                ids.insert(rec.runtime_id);
+            }
+        }
+        return ids;
+    }
+
+private:
+    std::mutex mu_;
+    std::vector<ProgramRealtimeRecord> records_;
+};
 
 TEST(RealtimeProfilerSanity, FiveProgramsBackToBack) {
     constexpr int kDeviceId = 0;
@@ -419,6 +483,146 @@ TEST(RealtimeProfilerSanity, TraceReplayResolvesKernelSources) {
     }
     EXPECT_GT(trace_records, 0u) << "No records observed for the trace-replayed program (runtime_id=" << kTraceRuntimeId
                                  << ")";
+
+    EXPECT_TRUE(mesh_device->close());
+}
+
+TEST(RealtimeProfilerSanity, SubmeshCallbackUsesParentProfiler) {
+    constexpr int kDeviceId = 0;
+
+    auto mesh_device = distributed::MeshDevice::create_unit_mesh(
+        kDeviceId, DEFAULT_L1_SMALL_SIZE, DEFAULT_TRACE_REGION_SIZE, 1, DispatchCoreConfig{DispatchCoreType::WORKER});
+    ASSERT_NE(mesh_device, nullptr);
+
+    if (!IsProgramRealtimeProfilerActive(*mesh_device)) {
+        mesh_device->close();
+        GTEST_SKIP() << "Real-time profiler is not active on this dispatch config";
+    }
+
+    // A submesh runs no profiler of its own; registration through it attaches to the parent's.
+    auto submesh = mesh_device->create_submesh(mesh_device->shape());
+    EXPECT_TRUE(IsProgramRealtimeProfilerActive(*submesh));
+
+    RecordSink sink;
+    ProgramRealtimeProfilerCallbackHandle handle = RegisterProgramRealtimeProfilerCallback(*submesh, sink.callback());
+    enqueue_sanity_programs(submesh, /*first_runtime_id=*/1, kNumPrograms);
+    mesh_device->quiesce_devices();
+    std::this_thread::sleep_for(std::chrono::milliseconds(500));
+
+    // Unregistering through the submesh must remove the parent's consumer, so these programs go undelivered.
+    UnregisterProgramRealtimeProfilerCallback(*submesh, handle);
+    enqueue_sanity_programs(submesh, /*first_runtime_id=*/kNumPrograms + 1, kNumPrograms);
+    mesh_device->quiesce_devices();
+    std::this_thread::sleep_for(std::chrono::milliseconds(500));
+
+    EXPECT_EQ(sink.runtime_ids_in(1, 2 * kNumPrograms), runtime_id_range(1, kNumPrograms));
+    EXPECT_EQ(sink.chip_ids(), chip_ids_of(*submesh));
+
+    EXPECT_TRUE(mesh_device->close());
+}
+
+TEST(RealtimeProfilerSanity, ClosedMeshIgnoresCallbacks) {
+    constexpr int kDeviceId = 0;
+
+    auto mesh_device = distributed::MeshDevice::create_unit_mesh(
+        kDeviceId, DEFAULT_L1_SMALL_SIZE, DEFAULT_TRACE_REGION_SIZE, 1, DispatchCoreConfig{DispatchCoreType::WORKER});
+    ASSERT_NE(mesh_device, nullptr);
+
+    if (!IsProgramRealtimeProfilerActive(*mesh_device)) {
+        mesh_device->close();
+        GTEST_SKIP() << "Real-time profiler is not active on this dispatch config";
+    }
+
+    EXPECT_TRUE(mesh_device->close());
+    EXPECT_FALSE(IsProgramRealtimeProfilerActive(*mesh_device));
+
+    std::atomic<bool> invoked{false};
+    ProgramRealtimeProfilerCallbackHandle handle = RegisterProgramRealtimeProfilerCallback(
+        *mesh_device, [&invoked](const ProgramRealtimeRecordBatch&) { invoked = true; });
+    UnregisterProgramRealtimeProfilerCallback(*mesh_device, handle);
+    EXPECT_FALSE(invoked.load());
+}
+
+TEST(RealtimeProfilerSanity, UnitMeshCallbacksSeeOnlyTheirOwnChip) {
+    if (GetNumAvailableDevices() < 2) {
+        GTEST_SKIP() << "Requires at least two devices";
+    }
+
+    auto meshes = distributed::MeshDevice::create_unit_meshes(
+        {0, 1}, DEFAULT_L1_SMALL_SIZE, DEFAULT_TRACE_REGION_SIZE, 1, DispatchCoreConfig{DispatchCoreType::WORKER});
+    const auto& mesh0 = meshes.at(0);
+    const auto& mesh1 = meshes.at(1);
+    auto close_all = [&meshes]() {
+        for (auto& [_, mesh] : meshes) {
+            EXPECT_TRUE(mesh->close());
+        }
+    };
+
+    if (!IsProgramRealtimeProfilerActive(*mesh0) || !IsProgramRealtimeProfilerActive(*mesh1)) {
+        close_all();
+        GTEST_SKIP() << "Real-time profiler is not active on both devices";
+    }
+
+    // Each unit mesh runs its own profiler, so a callback only sees its own mesh's programs.
+    RecordSink sink0;
+    RecordSink sink1;
+    ProgramRealtimeProfilerCallbackHandle handle0 = RegisterProgramRealtimeProfilerCallback(*mesh0, sink0.callback());
+    ProgramRealtimeProfilerCallbackHandle handle1 = RegisterProgramRealtimeProfilerCallback(*mesh1, sink1.callback());
+
+    enqueue_sanity_programs(mesh0, /*first_runtime_id=*/1, kNumPrograms);
+    enqueue_sanity_programs(mesh1, /*first_runtime_id=*/kNumPrograms + 1, kNumPrograms);
+    mesh0->quiesce_devices();
+    mesh1->quiesce_devices();
+    std::this_thread::sleep_for(std::chrono::milliseconds(500));
+
+    UnregisterProgramRealtimeProfilerCallback(*mesh0, handle0);
+    UnregisterProgramRealtimeProfilerCallback(*mesh1, handle1);
+
+    EXPECT_EQ(sink0.chip_ids(), chip_ids_of(*mesh0));
+    EXPECT_EQ(sink0.runtime_ids_in(1, 2 * kNumPrograms), runtime_id_range(1, kNumPrograms));
+    EXPECT_EQ(sink1.chip_ids(), chip_ids_of(*mesh1));
+    EXPECT_EQ(sink1.runtime_ids_in(1, 2 * kNumPrograms), runtime_id_range(kNumPrograms + 1, kNumPrograms));
+
+    close_all();
+}
+
+TEST(RealtimeProfilerSanity, SubmeshCallbackSeesOnlySubmeshChips) {
+    if (GetNumAvailableDevices() < 2) {
+        GTEST_SKIP() << "Requires at least two devices";
+    }
+
+    auto mesh_device = distributed::MeshDevice::create(
+        distributed::MeshDeviceConfig(distributed::MeshShape{1, 2}),
+        DEFAULT_L1_SMALL_SIZE,
+        DEFAULT_TRACE_REGION_SIZE,
+        1,
+        DispatchCoreConfig{DispatchCoreType::WORKER});
+    ASSERT_NE(mesh_device, nullptr);
+
+    auto left = mesh_device->create_submesh(distributed::MeshShape{1, 1}, distributed::MeshCoordinate{0, 0});
+    auto right = mesh_device->create_submesh(distributed::MeshShape{1, 1}, distributed::MeshCoordinate{0, 1});
+    if (!IsProgramRealtimeProfilerActive(*left) || !IsProgramRealtimeProfilerActive(*right)) {
+        mesh_device->close();
+        GTEST_SKIP() << "Real-time profiler is not active on both devices of the mesh";
+    }
+
+    RecordSink parent_sink;
+    RecordSink right_sink;
+    ProgramRealtimeProfilerCallbackHandle parent_handle =
+        RegisterProgramRealtimeProfilerCallback(*mesh_device, parent_sink.callback());
+    ProgramRealtimeProfilerCallbackHandle right_handle =
+        RegisterProgramRealtimeProfilerCallback(*right, right_sink.callback());
+
+    enqueue_sanity_programs(mesh_device, /*first_runtime_id=*/1, kNumPrograms);
+    mesh_device->quiesce_devices();
+    std::this_thread::sleep_for(std::chrono::milliseconds(500));
+
+    UnregisterProgramRealtimeProfilerCallback(*mesh_device, parent_handle);
+    UnregisterProgramRealtimeProfilerCallback(*right, right_handle);
+
+    EXPECT_EQ(parent_sink.chip_ids(), chip_ids_of(*mesh_device));
+    EXPECT_EQ(right_sink.chip_ids(), chip_ids_of(*right));
+    EXPECT_EQ(right_sink.runtime_ids_in(1, kNumPrograms), runtime_id_range(1, kNumPrograms));
 
     EXPECT_TRUE(mesh_device->close());
 }

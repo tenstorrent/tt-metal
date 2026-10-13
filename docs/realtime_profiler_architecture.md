@@ -216,4 +216,4 @@ Layout: `tt_metal/hw/inc/hostdev/realtime_profiler_msgs.h`. HAL: `tt::tt_metal::
 | Real-time profiler kernel | `tt_metal/impl/dispatch/kernels/cq_realtime_profiler.cpp` |
 | Host init, sync, receiver thread | `mesh_device.cpp`, `realtime_profiler_manager.cpp` |
 | Shared struct + HAL accessors | `realtime_profiler_msgs.h` → `realtime_profiler_msgs` (generated) |
-| Callbacks (Tracy, user) | `tt_metal/impl/dispatch/data_collector.cpp`, `realtime_profiler_tracy_handler.cpp` |
+| Callbacks (Tracy, user) | `realtime_profiler_manager.cpp` (per-MeshDevice consumers), `mesh_device.cpp` (submesh resolution), `realtime_profiler_tracy_handler.cpp` |
