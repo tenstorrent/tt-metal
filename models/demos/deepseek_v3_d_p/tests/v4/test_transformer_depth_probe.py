@@ -10,11 +10,15 @@ output and the reference's is the error that layer adds, separate from what it i
 enough: prefill is causal, so its tokens depend on nothing later, and the golden's largest-norm
 tokens all sit in it.
 
+``test_v4_flash_reference_depth`` runs chunk 0 through every layer on the CPU reference alone, from
+the golden's layer-0 input, and grades it against the golden the way the device is graded. It is the
+floor the device can be held to: how far an fp32 run of the same weights lands from vLLM's.
+
 ``test_v4_flash_layer3_routing`` feeds layer 3, the first top-k MoE layer, the golden's layer-2 output
 over the whole prompt and splits the device's expert choice against the golden's into the gate
 top-k, the gate matmul, and the gate's input.
 
-Both log and assert nothing about accuracy.
+All three log and assert nothing about accuracy.
 """
 
 import os
@@ -39,6 +43,9 @@ from models.demos.deepseek_v3_d_p.tests.v4.test_transformer_depth import (
     N_CHUNKS,
     SEQ_CACHE,
     _log_compressed_kv,
+    _log_layer_breakdown,
+    _norm_stats,
+    _stream_layers,
     _topk_agreement,
     _upload_streams,
 )
@@ -136,8 +143,8 @@ def _gate_breakdown(dev, ref_gate, config, k, label, truth_ids=None, truth_logit
     """Log where the device's top-k sets part from the others'.
 
     ``dev`` holds the device gate's input ``x``, ``logits`` and ``ids``. The chain is: device ids vs a
-    host top-k on the device's logits with the bias rounded to bf16 as the device holds it (the top-k
-    op), that vs the same with the fp32 bias (the bias rounding), that vs a host top-k on fp32 logits
+    host top-k on the device's logits with the bias in bf16 and in fp32 (the top-k op, whichever bias
+    the device holds), the two host choices against each other (the bias rounding), that vs a host top-k on fp32 logits
     from the device's ``x`` (the bf16 matmul), and the fp32 host choice vs the golden's or the
     reference's (the gate's input). ``truth_*`` are the golden's ids and pre-activation logits for the same tokens, ``ref`` the
     reference gate's capture.
@@ -157,6 +164,7 @@ def _gate_breakdown(dev, ref_gate, config, k, label, truth_ids=None, truth_logit
     _, logits_pcc = comp_pcc(host_logits, dev["logits"])
     msg = (
         f"dev~topk(dev logits, bf16 bias) {agree(dev['ids'], on_dev_bf16):.4f} "
+        f"dev~topk(dev logits, fp32 bias) {agree(dev['ids'], on_dev_logits):.4f} "
         f"bf16 bias~fp32 bias {agree(on_dev_bf16, on_dev_logits):.4f} "
         f"topk(dev logits)~topk(host fp32 logits) {agree(on_dev_logits, on_host_logits):.4f} "
         f"logits dev vs host fp32 PCC {logits_pcc:.6f} max|d| {(host_logits - dev['logits']).abs().max():.3e}"
@@ -265,6 +273,47 @@ def test_v4_flash_depth_local_error(mesh_device, device_params, num_links):
             )
         del ref, ref_out
         logger.info(f"  layer {i} reference done in {time.monotonic() - t0:.0f} s")
+
+    hidden = config.hidden_size
+    for i in sorted(set(probes) & set(trace.kept_layers)):
+        truth = trace.decoder_output(i, 0, CHUNK).reshape(1, CHUNK, n, hidden)
+        _, pcc = comp_pcc(truth, streams[i])
+        logger.info(f"[{label}] layer {i} chunk-0 device PCC vs golden: {pcc:.6f}")
+        _log_layer_breakdown(truth, streams[i], f"[{label}] layer {i} chunk-0 device")
+
+
+@pytest.mark.timeout(0)
+def test_v4_flash_reference_depth():
+    trace, checkpoint = _inputs(_FLASH)
+    label = f"v4 reference depth {_FLASH.__name__}"
+    config = v4_hf_config(_FLASH, _FLASH.NUM_LAYERS, max_seq_len=SEQ_CACHE)
+    n, hidden = config.hc_mult, config.hidden_size
+    outliers = _OUTLIERS[_FLASH]
+    token_ids = trace.token_ids(CHUNK, 0)
+    routed = set(_stream_layers(trace, "routing", "expert_ids_layer_"))
+
+    h = trace.layer_input(0, 0, CHUNK).reshape(1, CHUNK, n, hidden).float()
+    for i in range(_FLASH.NUM_LAYERS):
+        t0 = time.monotonic()
+        ref = v4_layer_from_checkpoint(config, i, checkpoint)
+        topk = config.mlp_layer_types[i] != "hash_moe"
+        ref_gate = _capture_ref_gate(ref) if topk else None
+        h = v4_block_forward(ref, config, h, token_ids).float()
+        logger.info(f"[{label}] layer {i} chunk-0 reference norms: {_norm_stats(h, outliers)}")
+        if topk and i in routed:
+            exact, overlap = _topk_agreement(ref_gate["ids"], trace.expert_ids(i, 0, CHUNK))
+            logger.info(
+                f"[{label}] layer {i} chunk-0 reference routing vs golden: exact {exact.float().mean():.4f} "
+                f"overlap {overlap.mean():.4f}"
+            )
+        if i in trace.kept_layers:
+            truth = trace.decoder_output(i, 0, CHUNK).reshape(1, CHUNK, n, hidden)
+            _, pcc = comp_pcc(truth, h)
+            logger.info(f"[{label}] layer {i} chunk-0 reference PCC vs golden: {pcc:.6f}")
+            _log_layer_breakdown(truth, h, f"[{label}] layer {i} chunk-0 reference")
+            del truth
+        del ref
+        logger.info(f"  layer {i} in {time.monotonic() - t0:.0f} s")
 
 
 @pytest.mark.parametrize("mesh_device, device_params, num_links", _GALAXY, indirect=["mesh_device", "device_params"])
