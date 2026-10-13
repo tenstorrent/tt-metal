@@ -11,6 +11,8 @@
 #include "ttnn/operations/ccl/ccl_op_fusion.hpp"
 #include "ttnn/operations/ccl/ccl_common.hpp"
 #include <algorithm>
+#include <cstdlib>
+#include <string_view>
 #include <tt-metalium/tensor_accessor_args.hpp>
 #include <tuple>
 #include <utility>
@@ -1067,6 +1069,14 @@ all_gather_minimal_matmul_async_factory_helper(
     auto compute_defines = defines;
     if (topology == ttnn::ccl::Topology::Linear) {
         compute_defines["IS_LINEAR"] = "1";
+    }
+    // Opt-in: SwiGLU on the pack thread in the last K block. The partial sums are added with the FPU instead of
+    // the packer's L1 accumulation, so rounding can differ from the epilogue path. Not in the program
+    // hash: change it only between processes or after clearing the program cache.
+    const char* swiglu_pack_env = std::getenv("TT_AGMM_SWIGLU_PACK");
+    if (fuse_swiglu && !use_bias && subblock_w % 2 == 0 && swiglu_pack_env != nullptr &&
+        std::string_view(swiglu_pack_env) == "1") {
+        compute_defines["SWIGLU_PACK_THREAD"] = "1";
     }
     std::map<std::string, std::string> compute_activation_defines;
     if (fused_activation.has_value()) {

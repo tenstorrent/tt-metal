@@ -14,6 +14,9 @@
 #include "api/compute/eltwise_unary/binop_with_scalar.h"
 #include "api/compute/eltwise_binary_sfpu.h"
 #include "api/dataflow/circular_buffer.h"
+#ifdef SWIGLU_PACK_THREAD
+#include "swiglu_sfpu.hpp"
+#endif
 
 #ifdef FUSE_SWIGLU
 // Fused SwiGLU output stage. The matmul produced an interleaved gate/up block in `in_cb`:
@@ -395,6 +398,86 @@ void matmul_blocks(
     }
 }
 
+#ifdef SWIGLU_PACK_THREAD
+// Last K block of a SwiGLU output block: matmul into a fresh DST, add the partial sums of the earlier K blocks
+// from `interm_cb` with the FPU, then apply silu(gate) * up on the PACK thread and pack the half-width result.
+// Gate / up pairs are adjacent DST tiles, so subblock_w must be even.
+void matmul_blocks_swiglu(
+    CircularBuffer& in0_cb,
+    CircularBuffer& in1_cb,
+    CircularBuffer& interm_cb,
+    CircularBuffer& out_cb,
+    const uint32_t M_block_tiles,
+    const uint32_t N_block_tiles,
+    const uint32_t full_N_block_tiles,
+    const uint32_t K_block_tiles,
+    const uint32_t subblock_h,
+    const uint32_t subblock_w,
+    const bool add_partials) {
+    const uint32_t in0_cb_id = in0_cb.get_cb_id();
+    const uint32_t in1_cb_id = in1_cb.get_cb_id();
+    const uint32_t interm_cb_id = interm_cb.get_cb_id();
+    const uint32_t out_cb_id = out_cb.get_cb_id();
+    const uint32_t out_full_N_block_tiles = full_N_block_tiles >> 1;
+    uint32_t in0_index_offset = 0;
+
+    for (uint32_t M_start = 0; M_start < M_block_tiles; M_start += subblock_h) {
+        uint32_t in1_index_offset = 0;
+        for (uint32_t N_start = 0; N_start < N_block_tiles; N_start += subblock_w) {
+            tile_regs_acquire();
+
+            uint32_t in0_index = in0_index_offset;
+            uint32_t in1_index = in1_index_offset;
+            for (uint32_t inner_dim = 0; inner_dim < K_block_tiles; inner_dim++) {
+                matmul_block(
+                    in0_cb_id, in1_cb_id, in0_index, in1_index, 0, false, subblock_w, subblock_h, K_block_tiles);
+                in0_index++;
+                in1_index += full_N_block_tiles;
+            }
+
+            if (add_partials) {
+                reconfig_data_format_srca(in1_cb_id, interm_cb_id);
+                add_reuse_dest_init<EltwiseBinaryReuseDestType::DEST_TO_SRCB>(interm_cb_id);
+                uint32_t dst_index = 0;
+                for (uint32_t h = 0; h < subblock_h; h++) {
+                    for (uint32_t w = 0; w < subblock_w; w++) {
+                        add_reuse_dest_tiles<EltwiseBinaryReuseDestType::DEST_TO_SRCB>(
+                            interm_cb_id, (M_start + h) * full_N_block_tiles + N_start + w, dst_index++);
+                    }
+                }
+                reconfig_data_format_srca(interm_cb_id, in1_cb_id);
+                matmul_block_init(in0_cb_id, in1_cb_id, false, subblock_w, subblock_h, K_block_tiles);
+            }
+            tile_regs_commit();
+
+            // tile_regs_wait() without its dest-offset reset: the SFPU below addresses DST from the packer's side.
+            PACK(TTI_SEMWAIT(
+                p_stall::STALL_TDMA | p_stall::STALL_CFG,
+                semaphore::t6_sem(semaphore::MATH_PACK),
+                p_stall::STALL_ON_ZERO));
+            PACK(TT_SETC16(DEST_TARGET_REG_CFG_MATH_Offset_ADDR32, ckernel::packer::get_packer_dest_offset()));
+            for (uint32_t h = 0; h < subblock_h; h++) {
+                for (uint32_t w = 0; w < subblock_w; w += 2) {
+                    const uint32_t gate = h * subblock_w + w;
+                    PACK((agmm_swiglu_tile(gate, gate + 1, gate)));
+                }
+            }
+            PACK(TTI_STALLWAIT(p_stall::STALL_PACK, p_stall::WAIT_SFPU));
+            for (uint32_t h = 0; h < subblock_h; h++) {
+                for (uint32_t w = 0; w < subblock_w; w += 2) {
+                    pack_tile<true>(
+                        h * subblock_w + w, out_cb_id, (M_start + h) * out_full_N_block_tiles + ((N_start + w) >> 1));
+                }
+            }
+            tile_regs_release();
+
+            in1_index_offset += subblock_w;
+        }
+        in0_index_offset += subblock_h * K_block_tiles;
+    }
+}
+#endif  // SWIGLU_PACK_THREAD
+
 void kernel_main() {
     constexpr uint32_t K_num_blocks = get_compile_time_arg_val(0);
     constexpr uint32_t M_block_tiles = get_compile_time_arg_val(1);
@@ -442,6 +525,9 @@ void kernel_main() {
 
     compute_kernel_hw_startup<SrcOrder::Reverse>(in0_cb_id, in1_cb_id, intermediate_cb_id);
     matmul_init(in0_cb_id, in1_cb_id);
+#ifdef SWIGLU_PACK_THREAD
+    PACK((agmm_swiglu_tile_init()));  // once: nothing else on the pack thread reprograms the SFPU
+#endif
 
     constexpr uint32_t in0_block_num_tiles = M_block_tiles * K_block_tiles;
     constexpr uint32_t in1_block_num_tiles = K_block_tiles * N_block_tiles;
@@ -484,16 +570,46 @@ void kernel_main() {
                 in0_cb.wait_front(in0_block_num_tiles);
                 in1_cb.wait_front(in1_block_num_tiles);
 
-                matmul_blocks(
-                    in0_cb,
-                    in1_cb,
-                    intermediate_cb,
-                    current_M_block_tiles,
-                    current_N_block_tiles,
-                    N_block_tiles,
-                    K_block_tiles,
-                    current_subblock_h,
-                    current_subblock_w);
+#ifdef SWIGLU_PACK_THREAD
+                if (k_block == K_num_blocks - 1) {
+                    if constexpr (K_num_blocks > 1) {  // publish the partial sums of K blocks 0..K-2 for the add
+                        intermediate_cb.push_back(out_block_num_tiles);
+                        intermediate_cb.wait_front(out_block_num_tiles);
+                    }
+                    PACK((llk_pack_reconfig_l1_acc(0)));
+                    pack_reconfig_data_format(out_cb_id);
+                    // SwiGLU collapses the interleaved gate/up block to half its N width.
+                    out_cb.reserve_back(out_block_num_tiles >> 1);
+                    matmul_blocks_swiglu(
+                        in0_cb,
+                        in1_cb,
+                        intermediate_cb,
+                        out_cb,
+                        current_M_block_tiles,
+                        current_N_block_tiles,
+                        N_block_tiles,
+                        K_block_tiles,
+                        current_subblock_h,
+                        current_subblock_w,
+                        K_num_blocks > 1);
+                    out_cb.push_back(out_block_num_tiles >> 1);
+                    if constexpr (K_num_blocks > 1) {
+                        intermediate_cb.pop_front(out_block_num_tiles);
+                    }
+                } else
+#endif
+                {
+                    matmul_blocks(
+                        in0_cb,
+                        in1_cb,
+                        intermediate_cb,
+                        current_M_block_tiles,
+                        current_N_block_tiles,
+                        N_block_tiles,
+                        K_block_tiles,
+                        current_subblock_h,
+                        current_subblock_w);
+                }
 
                 if (k_block == K_num_blocks - 1) {
                     /**
@@ -520,10 +636,16 @@ void kernel_main() {
                 }
             }
 
+#ifdef SWIGLU_PACK_THREAD
+            // SwiGLU was applied in the last K block (matmul_blocks_swiglu).
+            PACK((llk_pack_reconfig_l1_acc(0)));
+#else
             intermediate_cb.push_back(out_block_num_tiles);
             PACK((llk_pack_reconfig_l1_acc(0)));
+#endif
 
-#ifdef FUSE_SWIGLU
+#if defined(SWIGLU_PACK_THREAD)
+#elif defined(FUSE_SWIGLU)
             // SwiGLU collapses the interleaved gate/up block to half its N width.
             out_cb.reserve_back(out_block_num_tiles >> 1);
             intermediate_cb.wait_front(out_block_num_tiles);
