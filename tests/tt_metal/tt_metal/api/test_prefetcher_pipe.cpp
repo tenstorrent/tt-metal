@@ -185,9 +185,13 @@ m2::PrefetcherPipeParameter pipe_parameter(
     return pipe_parameter(name, pipe.receiver_cores(), pipe.ring_size(), entry_size);
 }
 
-void bind_pipe(m2::KernelSpec& kernel, std::vector<m2::PrefetcherPipeParamName> pipes, const std::string& accessor) {
-    kernel.advanced_options.prefetcher_pipe_bindings.push_back(
-        m2::PrefetcherPipeBinding{.pipe_parameter_names = std::move(pipes), .accessor_name = accessor});
+void bind_pipe(
+    m2::KernelSpec& kernel,
+    std::vector<m2::PrefetcherPipeParamName> pipes,
+    const std::string& accessor,
+    const CoreRangeSet& extra_nodes = {}) {
+    kernel.advanced_options.prefetcher_pipe_bindings.push_back(m2::PrefetcherPipeBinding{
+        .pipe_parameter_names = std::move(pipes), .accessor_name = accessor, .extra_nodes = extra_nodes});
 }
 
 struct SenderKernelParams {
@@ -2672,15 +2676,6 @@ constexpr const char* receiver_or_idle_kernel_path =
 constexpr const char* sender_or_idle_kernel_path =
     "tests/tt_metal/tt_metal/test_kernels/dataflow/prefetcher_pipe_sender_or_idle.cpp";
 
-// Every node of `cores` carries the same pipe slot entries, which dispatch writes as one multicast rectangle.
-void expect_one_multicast_rectangle(const Program& program, const CoreRange& cores) {
-    const auto groups =
-        program_dispatch::partition_cores_by_prefetcher_pipe_payload(program.impl(), CoreRangeSet(cores));
-    ASSERT_EQ(groups.size(), 1u);
-    EXPECT_EQ(groups[0].cores.ranges().size(), 1u);
-    EXPECT_EQ(groups[0].cores.num_cores(), CoreRangeSet(cores).num_cores());
-}
-
 void expect_receivers_got_every_entry(
     distributed::MeshDevice& device, m2::PrefetcherPipe& pipe, uint32_t entry_size, uint32_t num_entries) {
     const auto receivers = corerange_to_cores(pipe.receiver_cores());
@@ -2700,7 +2695,7 @@ TEST_F(PrefetcherPipeFixture, PrefetcherPipe_ReceiverKernelOnExtraNodes) {
     if (const auto reason = insufficient_worker_grid_reason(3, 2); !reason.empty()) {
         GTEST_SKIP() << reason;
     }
-    // Receivers (1,0) and (1,1). The receiver kernel covers (1,0)..(2,1), so (2,0) and (2,1) are extra nodes: they get
+    // Receivers (1,0) and (1,1). The receiver kernel covers (1,0)..(2,1) with (2,0) and (2,1) as extra nodes: they get
     // the receivers' slot entry and return without constructing the pipe.
     auto mesh_device = devices_[0];
     distributed::MeshDevice& device = *mesh_device;
@@ -2708,6 +2703,7 @@ TEST_F(PrefetcherPipeFixture, PrefetcherPipe_ReceiverKernelOnExtraNodes) {
     constexpr uint32_t num_entries = 4;
     const CoreRangeSet receiver_cores(CoreRange({1, 0}, {1, 1}));
     const CoreRange kernel_cores({1, 0}, {2, 1});
+    const CoreRangeSet extra_nodes(CoreRange({2, 0}, {2, 1}));
     auto pipe = make_pipe(mesh_device.get(), CoreCoord(0, 0), receiver_cores, entry_size * num_entries);
     prefetcher_pipe_test::zero_receiver_rings(device, pipe);
 
@@ -2715,7 +2711,7 @@ TEST_F(PrefetcherPipeFixture, PrefetcherPipe_ReceiverKernelOnExtraNodes) {
         make_sender_program(device, pipe, {.entry_size = entry_size, .num_entries = num_entries, .write_primitive = 0});
 
     m2::KernelSpec receiver = make_dm_kernel("receiver", receiver_or_idle_kernel_path);
-    bind_pipe(receiver, {pipe_param}, "in");
+    bind_pipe(receiver, {pipe_param}, "in", extra_nodes);
     receiver.compile_time_args = {{"num_entries", num_entries}};
     receiver.runtime_arg_schema.runtime_arg_names = {"is_receiver"};
     m2::ProgramSpec spec{
@@ -2731,7 +2727,7 @@ TEST_F(PrefetcherPipeFixture, PrefetcherPipe_ReceiverKernelOnExtraNodes) {
             receiver_args.runtime_arg_values, core, {{"is_receiver", receiver_cores.contains(core) ? 1u : 0u}});
     }
     m2::SetProgramRunArgs(receiver_program, pipe_run_args(pipe, {receiver_args}));
-    expect_one_multicast_rectangle(receiver_program, kernel_cores);
+    prefetcher_pipe_test::expect_one_multicast_rectangle(receiver_program, kernel_cores);
 
     persistent_run_overlapping_programs(mesh_device, std::move(sender_program), std::move(receiver_program));
     expect_receivers_got_every_entry(device, pipe, entry_size, num_entries);
@@ -2741,7 +2737,7 @@ TEST_F(PrefetcherPipeFixture, PrefetcherPipe_SenderKernelOnExtraNode) {
     if (const auto reason = insufficient_worker_grid_reason(2, 2); !reason.empty()) {
         GTEST_SKIP() << reason;
     }
-    // The pipe's sender is (0,0). The sender kernel covers (0,0)..(0,1), so (0,1) is an extra node: it gets the
+    // The pipe's sender is (0,0). The sender kernel covers (0,0)..(0,1) with (0,1) as an extra node: it gets the
     // sender's slot entry and returns without constructing the pipe.
     auto mesh_device = devices_[0];
     distributed::MeshDevice& device = *mesh_device;
@@ -2754,7 +2750,7 @@ TEST_F(PrefetcherPipeFixture, PrefetcherPipe_SenderKernelOnExtraNode) {
     prefetcher_pipe_test::zero_receiver_rings(device, pipe);
 
     m2::KernelSpec sender = make_dm_kernel("sender", sender_or_idle_kernel_path);
-    bind_pipe(sender, {pipe_param}, "out");
+    bind_pipe(sender, {pipe_param}, "out", CoreRangeSet(CoreRange({0, 1})));
     sender.compile_time_args = {{"entry_size", entry_size}, {"num_entries", num_entries}};
     sender.runtime_arg_schema.runtime_arg_names = {"is_sender", "staging_addr"};
     m2::ProgramSpec spec{
@@ -2775,7 +2771,7 @@ TEST_F(PrefetcherPipeFixture, PrefetcherPipe_SenderKernelOnExtraNode) {
              {"staging_addr", prefetcher_pipe_test::sender_l1_staging_address(pipe)}});
     }
     m2::SetProgramRunArgs(sender_program, pipe_run_args(pipe, {sender_args}));
-    expect_one_multicast_rectangle(sender_program, kernel_cores);
+    prefetcher_pipe_test::expect_one_multicast_rectangle(sender_program, kernel_cores);
 
     Program receiver_program = make_receiver_program(device, pipe, entry_size, num_entries);
     persistent_run_overlapping_programs(mesh_device, std::move(sender_program), std::move(receiver_program));
