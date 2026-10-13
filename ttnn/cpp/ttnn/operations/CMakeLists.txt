@@ -44,6 +44,7 @@ add_subdirectory(loss)
 add_subdirectory(prefetcher)
 add_subdirectory(rand)
 add_subdirectory(randn)
+add_subdirectory(toy_scaled_add)
 add_subdirectory(uniform)
 
 # Umbrella target for everything migrated into this file: ttnncpp links this
