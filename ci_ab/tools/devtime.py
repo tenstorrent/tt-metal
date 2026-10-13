@@ -5,6 +5,8 @@ from collections import defaultdict
 
 O = sys.argv[1]
 VS = sys.argv[2].split(",") if len(sys.argv) > 2 else ["V1", "V2"]
+import os
+B, AA = os.environ.get("DT_BASE", "H"), os.environ.get("DT_AA", "H2")
 per = defaultdict(lambda: defaultdict(dict))  # case -> side -> run -> ns
 names = []
 for d in sorted(glob.glob(f"{O}/prof_*_*")):
@@ -39,17 +41,17 @@ print("| case | H ns (runs) | H2 A/A % | " + " | ".join(f"{v} ns | {v} % | {v} b
 print("|---|---|---|" + "---|---|---|" * len(VS))
 for n in names:
     s = per[n]
-    if "H" not in s:
+    if B not in s:
         continue
-    mh = statistics.median(s["H"].values())
-    cells = [f"{mh:.0f} ({', '.join(f'{v:.0f}' for _, v in sorted(s['H'].items()))})"]
-    cells.append(f"{100 * (statistics.median(s['H2'].values()) - mh) / mh:+.2f}" if "H2" in s else "")
+    mh = statistics.median(s[B].values())
+    cells = [f"{mh:.0f} ({', '.join(f'{v:.0f}' for _, v in sorted(s[B].items()))})"]
+    cells.append(f"{100 * (statistics.median(s[AA].values()) - mh) / mh:+.2f}" if AA in s else "")
     for v in VS:
         if v not in s:
             cells += ["", "", ""]
             continue
         mv = statistics.median(s[v].values())
-        hs, vs = sorted(s["H"].items()), sorted(s[v].items())
+        hs, vs = sorted(s[B].items()), sorted(s[v].items())
         # block b holds runs 2b-1 and 2b of every side
         signs = []
         for b in sorted({(k + 1) // 2 for k, _ in hs}):
