@@ -120,15 +120,25 @@ void kernel_main() {
     const auto out = TensorAccessor(out_args, out_addr, page_bytes);
     volatile tt_l1_ptr uint32_t* arrived = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(arrival_addr);
 
-    uint32_t batch = 0, wptr = 0;
+    // A batch ends at the next multiple of `group` chunks in the CB (2 x group chunks, so a reservation never wraps)
+    // or at the end of an entry: a relay waits for its upstream's shard, and an unpushed tail of my own shard would
+    // keep my sender, and around a ring every sender, from sending it (a short shard would deadlock).
+    uint32_t batch = 0, need = 0, pos = 0, wptr = 0;
     for (uint32_t k = 0; k < num_shards; ++k) {
         const uint32_t entry = get_arg_val<uint32_t>(shards_idx + k);
         const uint32_t out_base = (entry & 0xFFFF) * shard_pages;
-        // relay entry k is (part of) upstream entry k - 1; every upstream entry before it is a whole shard
+        // relay entry k is (part of) upstream entry k - 1; every upstream entry before it is a whole shard. Upstream
+        // increments once per inc_every chunks and at the end of every entry, so chunk up_base + idx is covered by
+        // increment (up_base + idx) / inc_every + 1, plus one per earlier entry end that is not a multiple of inc_every
         const uint32_t up_base = k > 0 ? (k - 1) * full : 0;
+        uint32_t ends = 0;
+        for (uint32_t e = 1; e < k; ++e) {
+            ends += (e * full) % inc_every != 0;
+        }
         for_each_chunk(shard_pages, first_bank, bank_stride, num_banks, run_pages, rot, entry >> 16, [&](uint32_t page, uint32_t n, uint32_t idx) {
             if (batch == 0) {
-                cb_reserve_back(cb, run_pages * group);
+                need = group - pos % group;
+                cb_reserve_back(cb, run_pages * need);
                 wptr = get_write_ptr(cb);
             }
             uint64_t src;
@@ -136,17 +146,24 @@ void kernel_main() {
                 src = in.get_noc_addr(page);  // my own shard, from the input
             } else {
                 // upstream increments my counter once per inc_every chunks it sends; this is its chunk up_base + idx
-                noc_semaphore_wait_min(arrived, (up_base + idx) / inc_every + 1);  // landed in my output
+                noc_semaphore_wait_min(arrived, (up_base + idx) / inc_every + ends + 1);  // landed in my output
                 src = out.get_noc_addr(out_base + page);
             }
             noc_async_read(src, wptr + batch * chunk_bytes, n * page_bytes);
             --chunks_left;
-            if (++batch == group || chunks_left == 0) {
+            if (++batch == need || chunks_left == 0) {
                 noc_async_read_barrier();
                 cb_push_back(cb, run_pages * batch);
+                pos += batch;
                 batch = 0;
             }
         });
+        if (batch > 0) {
+            noc_async_read_barrier();
+            cb_push_back(cb, run_pages * batch);
+            pos += batch;
+            batch = 0;
+        }
     }
 }
 """
@@ -197,6 +214,10 @@ void kernel_main() {
     const uint32_t arrival_addr = get_arg_val<uint32_t>(a++);  // my counter; the downstream port's is at the same address
     const uint32_t expect_in = get_arg_val<uint32_t>(a++);     // increments I receive from upstream
     const uint32_t total = get_arg_val<uint32_t>(a++);         // chunks I send (host-counted)
+    uint32_t entry_chunks[3];                                    // chunks of one entry: whole shard, first half, second half
+    entry_chunks[0] = get_arg_val<uint32_t>(a++);
+    entry_chunks[1] = get_arg_val<uint32_t>(a++);
+    entry_chunks[2] = get_arg_val<uint32_t>(a++);
     const uint32_t ready_addr = get_arg_val<uint32_t>(a++);    // my ready counter; the peer's is at the same address
     const uint32_t send_ready = get_arg_val<uint32_t>(a++);    // 1 = tell the peer's port that sends to me I've started
     const uint32_t ready_x = get_arg_val<uint32_t>(a++);       // that port core (NoC coords)
@@ -240,6 +261,8 @@ void kernel_main() {
         for (uint32_t k = 0; k < num_shards; ++k) {
             const uint32_t entry = get_arg_val<uint32_t>(shards_idx + k);
             const uint32_t out_base = (entry & 0xFFFF) * shard_pages;
+            const uint32_t entry_total = entry_chunks[entry >> 16];
+            uint32_t entry_sent = 0;
             for_each_chunk(shard_pages, first_bank, bank_stride, num_banks, run_pages, rot, entry >> 16, [&](uint32_t page, uint32_t n, uint32_t) {
                 cb_wait_front(cb, run_pages * (unflushed + 1));
                 const uint32_t src = get_read_ptr(cb) + unflushed * chunk_bytes;
@@ -248,8 +271,10 @@ void kernel_main() {
                 volatile tt_l1_ptr PACKET_HEADER_TYPE* hdr = hdrs[h];
                 h = (h + 1 == num_headers) ? 0 : h + 1;
                 // The increment is issued only after its write has landed (flush), which stalls the receiving
-                // router, so only every inc_every-th chunk (and the last) carries one.
-                if ((++sent % inc_every) == 0 || sent == total) {
+                // router, so only every inc_every-th chunk carries one, and the last of each entry: a relay of a
+                // short shard must not wait for chunks its upstream sends only after relaying (a ring would deadlock).
+                ++entry_sent;
+                if ((++sent % inc_every) == 0 || entry_sent == entry_total) {
                     hdr->to_noc_fused_unicast_write_atomic_inc(
                         NocUnicastAtomicIncFusedCommandHeader{dst, arrival_noc, 1, true}, bytes);
                 } else {
@@ -792,6 +817,16 @@ def link_load(chips):
     return load
 
 
+def _incs(entry_chunks, inc_every):
+    """Increments a sender issues for entries of these chunk counts: every inc_every-th chunk and each entry's last."""
+    sent, n = 0, 0
+    for c in entry_chunks:
+        for i in range(1, c + 1):
+            sent += 1
+            n += sent % inc_every == 0 or i == c
+    return n
+
+
 def create_mesh_program_descriptor(
     mesh_device,
     input_tensor,
@@ -856,9 +891,14 @@ def create_mesh_program_descriptor(
             packed = [out | (part << 16) for out, part in sends]
             full = _chunks_per_shard(shard_pages, first, stride, num_banks, run_pages)
             mine = sum(_chunks_per_shard(shard_pages, first, stride, num_banks, run_pages, part) for _, part in sends)
+            per_part = [_chunks_per_shard(shard_pages, first, stride, num_banks, run_pages, part) for part in (0, 1, 2)]
+            up_parts = [
+                _chunks_per_shard(shard_pages, first, stride, num_banks, run_pages, part) for _, part in up_sends
+            ]
             head = [in_addr, out_addr, shard_pages, first, stride, rot, arrival_addr, full, mine]
             reader_rt[core.x][core.y] = head + [len(sends)] + packed
-            args = [out_addr, shard_pages, first, stride, rot, arrival_addr, -(-recv // inc_every), mine, ready_addr]
+            args = [out_addr, shard_pages, first, stride, rot, arrival_addr, _incs(up_parts, inc_every), mine]
+            args += per_part + [ready_addr]
             # the peer's port that sends to me waits for my ready (see _needs_ready)
             send_ready = _needs_ready(chips, coord, j, d)
             rc = virt(chips[peer]["ports"][(j, _OPP[d], l)]) if send_ready else None
@@ -969,6 +1009,8 @@ def fabric_all_gather(
     sub_core_grid=None,
     ready_semaphore=None,
     data_valid_semaphore=None,
+    inc_every=8,
+    cb_bytes=112 * 1024,
 ):
     """All-gather `input_tensor` (TILE or ROW_MAJOR, any dtype, DRAM interleaved, one shard per chip) over each group;
     returns the output.
@@ -1037,5 +1079,7 @@ def fabric_all_gather(
         num_links=num_links,
         ready_addr=ready_addr,
         desync=desync,
+        cb_bytes=cb_bytes,
+        inc_every=inc_every,
     )
     return ttnn.generic_op([input_tensor, output], desc)
