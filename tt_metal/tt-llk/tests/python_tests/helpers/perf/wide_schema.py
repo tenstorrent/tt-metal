@@ -140,6 +140,7 @@ DB_SCHEMA = [
     Column("rmsnorm_shadow_sfpu", "bool", True, "configuration"),
     Column("rmsnorm_whole_tile", "bool", True, "configuration"),
     Column("reuse_dest_type", "string", True, "configuration"),
+    Column("row_faces_r_dim", "int64", True, "configuration"),
     Column("row_tiles", "int64", True, "configuration"),
     Column("sfpu_bcast_dim", "string", True, "configuration"),
     Column("srca_reuse_count", "int64", True, "configuration"),
