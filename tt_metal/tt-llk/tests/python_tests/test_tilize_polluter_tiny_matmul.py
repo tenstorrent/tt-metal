@@ -21,8 +21,9 @@ correct result; `do_restore=False` is the negative control.
 
 from dataclasses import dataclass
 
+import pytest
 import torch
-from conftest import skip_for_blackhole
+from helpers.chip_architecture import ChipArchitecture
 from helpers.format_config import DataFormat
 from helpers.golden_generators import MatmulGolden, get_golden_generator
 from helpers.llk_params import (
@@ -99,7 +100,6 @@ def _tiny_matmul_layout(in0_tile_r_dim: int):
     return tile_dims, face
 
 
-@skip_for_blackhole
 @parametrize(
     formats=input_output_formats(
         [
@@ -126,6 +126,17 @@ def test_tilize_polluter_tiny_matmul(
     in0_tile_r_dim,
     do_restore,
 ):
+    if (
+        TestConfig.CHIP_ARCH == ChipArchitecture.BLACKHOLE
+        and dest_acc == DestAccumulation.Yes
+        and formats.input_format.is_32_bit() != formats.output_format.is_32_bit()
+    ):
+        # Hangs on Blackhole for these combinations even with do_restore=False, while the standalone
+        # tiny matmul (test_unpack_matmul) passes them, so the polluter sequence is implicated. Not root-caused.
+        pytest.skip(
+            "Blackhole hangs for a 32-bit DEST with mixed 16/32-bit input and output formats"
+        )
+
     tile_dims, face = _tiny_matmul_layout(in0_tile_r_dim)
     in0_dimensions = tile_dims.in0_dimensions
     in1_dimensions = tile_dims.in1_dimensions

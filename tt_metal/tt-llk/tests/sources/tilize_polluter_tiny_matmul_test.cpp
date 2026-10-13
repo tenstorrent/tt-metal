@@ -87,11 +87,7 @@ void run_kernel(RUNTIME_PARAMETERS params)
     if constexpr (DO_RESTORE)
     {
         // Restore the canonical SrcA baseline mutated by the regular tilize.
-#ifdef ARCH_WORMHOLE
         _llk_unpack_tilize_uninit_wrapper_(formats_array[1].unpack_A_dst, POLLUTER_NUM_FACES, POLLUTER_FACE_R_DIM);
-#else
-        _llk_unpack_tilize_uninit_wrapper_(formats_array[1].unpack_A_dst, POLLUTER_NUM_FACES);
-#endif
     }
 
     // ---- Run 1: TINY matmul on independent pre-tilized operands (verbatim) ----

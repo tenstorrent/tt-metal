@@ -107,11 +107,7 @@ void run_kernel(RUNTIME_PARAMETERS params)
         // idiomatic full reconfigure for a geometry change is `_llk_unpack_hw_configure_`
         // (configure_unpack_AB), which reprograms both descriptors to the regular baseline.
         // (For a geometry-matched polluter, face_r_dim==16, uninit alone already suffices.)
-#ifdef ARCH_WORMHOLE
         _llk_unpack_tilize_uninit_wrapper_(formats_array[run].unpack_A_dst, pol_num_faces, pol_face_r_dim);
-#else
-        _llk_unpack_tilize_uninit_wrapper_(formats_array[run].unpack_A_dst, pol_num_faces);
-#endif
         _llk_unpack_hw_configure_<is_fp32_dest_acc_en>(
             formats_array[run].unpack_A_src,
             formats_array[run].unpack_B_src,
