@@ -11,6 +11,7 @@
 #pragma once
 
 #include <cstdint>
+#include "../chunked_q_mapping.hpp"
 
 struct KVPadRotationContext {
     // Maps the fixed-size Q slab used by KV-pad rotation back to absolute sequence tiles.
@@ -217,6 +218,14 @@ inline uint32_t chunked_q_global_end_tile(
     uint32_t q_pre_wrap_tile_count,
     uint32_t q_post_wrap_start_tile,
     uint32_t q_valid_tile_count) {
+#ifdef RING_JOINT_STRIPE_TILES
+    static_assert(kv_pad_rotation_enabled, "Explicit stripes require the absolute-position mask path");
+    return q_valid_tile_count == 0
+               ? 0
+               : ttnn::operations::transformer::sdpa::ring_joint::striped_q_global_tile(
+                     q_pre_wrap_start_tile, q_valid_tile_count - 1, RING_JOINT_STRIPE_TILES, ring_size) +
+                     1;
+#else
     if constexpr (kv_pad_rotation_enabled) {
         if (q_valid_tile_count > q_pre_wrap_tile_count) {
             return q_post_wrap_start_tile + (q_valid_tile_count - q_pre_wrap_tile_count);
@@ -225,6 +234,7 @@ inline uint32_t chunked_q_global_end_tile(
     } else {
         return logical_nt - q_local_padded_Nt * ring_size + (ring_index + 1) * q_local_padded_Nt;
     }
+#endif
 }
 
 // Whether a dense chunked K chunk has any visible key for this device's Q rows. The causal skip never drops chunk 0,
@@ -254,6 +264,15 @@ inline uint32_t q_global_tile_for_mask_row(
     uint32_t q_tile, uint32_t q_start_tile, const KVPadRotationContext& kv_pad_rotation = {}) {
     if constexpr (kv_pad_rotation_enabled) {
         const uint32_t kv_pad_q_tile = q_start_tile + q_tile;
+#ifdef RING_JOINT_STRIPE_TILES
+        return kv_pad_q_tile < kv_pad_rotation.q_valid_tile_count
+                   ? ttnn::operations::transformer::sdpa::ring_joint::striped_q_global_tile(
+                         kv_pad_rotation.q_pre_wrap_start_tile,
+                         kv_pad_q_tile,
+                         RING_JOINT_STRIPE_TILES,
+                         RING_JOINT_STRIPE_RING_SIZE)
+                   : KV_PAD_ROTATION_INVALID_TILE;
+#else
         if (kv_pad_q_tile < kv_pad_rotation.q_pre_wrap_tile_count) {
             return kv_pad_rotation.q_pre_wrap_start_tile + kv_pad_q_tile;
         }
@@ -261,6 +280,7 @@ inline uint32_t q_global_tile_for_mask_row(
             return kv_pad_rotation.q_post_wrap_start_tile + (kv_pad_q_tile - kv_pad_rotation.q_pre_wrap_tile_count);
         }
         return KV_PAD_ROTATION_INVALID_TILE;
+#endif
     } else {
         return q_start_tile + q_tile;
     }

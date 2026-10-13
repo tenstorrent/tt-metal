@@ -2729,7 +2729,7 @@ void sdpa_ring_v2(
                 chunked_enabled,
                 local_padded_Nt,
                 chunk_size_t,
-                q_local_padded_Nt>(source_ring_id, k_chunk, Sk_chunk_t, logical_nt, causal_end_nt);
+                kv_region_Nt>(source_ring_id, k_chunk, Sk_chunk_t, logical_nt, causal_end_nt);
         }
         return !kv_chunk_starts_before_logical_end<
             kv_pad_rotation_enabled,
