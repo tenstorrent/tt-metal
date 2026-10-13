@@ -216,6 +216,7 @@ def stage_paths(spec: Spec, ledger: Ledger, task: dict) -> list[str]:
         "supervision.md",
         "serving_contract.md",  # F58: the serving contract (SC.1) and its test list
         "contract_tests.yaml",
+        "results/knowledge_use",  # the agents' knowledge-use reports (knowledge/usage.py)
     ):
         if (ledger.dir / extra).exists():
             paths.append(rel(ledger.dir / extra))

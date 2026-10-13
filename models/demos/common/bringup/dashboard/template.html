@@ -303,6 +303,12 @@ section[hidden]{display:none}
     <div class="kv" id="final-lines"></div>
   </section>
 
+  <section aria-labelledby="s-know" id="know-sec" hidden>
+    <div class="sec-head"><h2 id="s-know">Knowledge use</h2><p id="know-sub"></p></div>
+    <div class="tbl-wrap"><table id="know"><thead><tr><th>Entry</th><th class="num">Uses</th><th>Traced / untraced / unchecked</th></tr></thead><tbody></tbody></table></div>
+    <div class="kv" id="know-lines"></div>
+  </section>
+
   <footer id="foot"></footer>
 </div>
 <div id="tip" hidden></div>
@@ -762,7 +768,20 @@ function finalTests(){
   else lines.push(["Contract tests", NR]);
   $("#final-lines").innerHTML = lines.map(([k, v]) => `<span>${k}</span><span>${v}</span>`).join("");
 }
-function render(){ header(); deferred(); profile(); prior(); ladder(); dag(); ops(); timing(); positionsChart(); sharding(); pccChart(); finalTests();
+function knowledge(){
+  const K = D.knowledge;
+  $("#know-sec").hidden = !K;
+  if (!K) return;
+  $("#know-sub").textContent = `What the agents' steps say they used from the shared and this model's known issues (knowledge/usage.py): ${K.with_report} of ${K.reports} steps reported, over ${K.runs} run${K.runs === 1 ? "" : "s"}; ${K.used} of ${K.entries} entries used.`;
+  $("#know tbody").innerHTML = K.top.map(e => `<tr><td><span class="mono">${esc(e.id)}</span> ${esc(e.title)}</td><td class="num">${e.uses}</td><td class="mono">${e.traced} / ${e.untraced} / ${e.unchecked}</td></tr>`).join("") || `<tr><td colspan="3" class="sub">no entry used yet</td></tr>`;
+  const list = (xs, f) => xs.length ? xs.map(f).join("<br>") : `<span class="sub">none</span>`;
+  $("#know-lines").innerHTML = [
+    ["Contradicted", list(K.contradicted, c => `<span class="mono metric-bad">${esc(c.id)}</span> ${esc(c.title)}: <span class="sub">${esc(c.evidence)}</span>`)],
+    ["Unused over 5 relevant runs", list(K.unused, u => `<span class="mono">${esc(u.id)}</span> ${esc(u.title)} <span class="sub">(${u.runs} runs)</span>`)],
+    ["Missing topics", list(K.missing, ([m, n]) => `${n}× ${esc(m)}`)],
+  ].map(([k, v]) => `<span>${k}</span><span>${v}</span>`).join("");
+}
+function render(){ header(); deferred(); profile(); prior(); ladder(); dag(); ops(); timing(); positionsChart(); sharding(); pccChart(); finalTests(); knowledge();
   $("#foot").textContent = `Generated from ${D.source} (tasks.yaml, state.json, results/, components.yaml, plan.yaml) by models/demos/common/bringup/dashboard/export.py.`; }
 if (D) render();
 matchMedia("(prefers-color-scheme: dark)").addEventListener?.("change", () => D && render());
