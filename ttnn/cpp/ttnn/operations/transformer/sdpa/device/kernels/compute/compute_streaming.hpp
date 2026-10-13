@@ -3,7 +3,7 @@
 // SPDX-License-Identifier: Apache-2.0
 
 // Streaming SDPA compute helpers.
-// Included only by sdpa.cpp when use_streaming_compute is true.
+// Included by the dense, ring joint, exp ring and sparse SDPA compute kernels.
 // Depends on primitives from sdpa_block_ops.hpp (must be included first).
 
 #pragma once
