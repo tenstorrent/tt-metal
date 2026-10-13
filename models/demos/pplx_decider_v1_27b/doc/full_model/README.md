@@ -239,14 +239,139 @@ Stage-7 candidates: the sustained-load slowdown, matmul program configs (67 % me
 utilisation), the GDN prep/scan kernels, and per-chunk reshapes/untilize. Trace is low value, as
 measured above.
 
+## Batches
+
+`TTDecider.from_pretrained(mesh_device, model_path=None, max_batch_size=1, max_seq_len=8192, vision=True)`
+(the `models/demos/gemma4` argument order) and `predict_batch(rows)` / `predict_probabilities_batch(rows)`
+run several requests per forward. `predict` and the batch-1 low-level calls are unchanged: their outputs are
+bit-identical to the review_3b dumps (100/100 text tensors, 26/26 image tensors, measured with
+`tests/e2e/compare_outputs.py`).
+
+### Contract
+
+- **Padding.** The rows of one forward are right-padded to one bucket, the bucket of the longest row.
+  Both mixers are causal, so padding cannot change a row's real-token hidden states. The head reads each
+  row's own last real token and applies each row's own option count and mask. The temperature is the
+  checkpoint's single value (`decision_config.json`), the same for every row.
+- **Scheduling** (`TTDecider.plan_batches`). Requests are grouped by their own bucket, in input order
+  within a bucket, and each group is split into batches of `batch_cap(bucket, max_batch_size)`. A row is
+  therefore never padded beyond the bucket it gets at batch 1. Answers come back in input order. Text and
+  image rows of one bucket share a forward. If any row is over `max_seq_len`, the whole call is rejected
+  before any device work.
+- **Low level.** `PplxDeciderModel.upload_batch(ids_list)` / `prepare_batch(encoded_list)` give
+  `tokens [B, bucket]`, the per-row last indices and, for image rows, the inputs of one batch-wide splice.
+  `model(tokens, last_indices, counts, images=...)` then returns `probs` / `logits` `[1, B, 256]`.
+  `decide_batch` is input prep, one forward and one readback.
+
+### Device implementation
+
+The forward stays on device: 0 host calls inside a B=4 forward at bucket 1024 (measured,
+`test_batch_forward_stays_on_device_and_deterministic`), and two runs of the same batch are
+bit-identical.
+
+| part | batched how |
+|---|---|
+| embedding, splice | `[B, bucket]` tokens; image features spliced through one gather over `B * bucket` text rows plus all features |
+| matmuls (all 7 shapes) | `[B, S, K]` runs as `[1, g*S, K]` calls over groups of g rows (`common.batch_rows_per_call`) |
+| RMSNorms | interleaved norm on the `[1, B*S, D]` view; at bucket 128, block-sharded with one request per core row |
+| gated full attention | projections batched; q/k norm, rope and causal SDPA on `[B, H, S, D]` in one op each; image rows rope per row (their own 3D-mRoPE tables) |
+| Gated DeltaNet | projections batched; causal conv, chunked scan (fused 48-head program) and gated norm per row, each row with its own conv and recurrent state |
+| head | per-row last-token slice, then final norm, readout, mask (per-row count), / T and softmax on `[1, B, 256]` |
+
+**Why row groups.** A row's matmul output depends on the program that the call gets. When a call keeps
+batch 1's K blocking and core-grid orientation, every row of the call is bit-identical to batch 1. In a
+micro test (measured), the attention q|k|v shape (5120 x 8192) changed in two cases:
+- when the row count crossed into a different path: the short 1D config with `in0_block_w` 4 against
+  `minimal_matmul` with `K_block` 8;
+- when `minimal_matmul` transposed its core grid, which it does for `M > N`.
+
+The first full-model run without row groups gave the same 25/25 decisions but logit PCC down to
+0.99709 against batch 1 at bucket 4096. Row groups therefore keep both properties:
+- `minimal_matmul` calls get as many rows as keep `M > N` equal to batch 1's;
+- 128-bucket calls use the batch-1 short config with up to 16 M tiles (4 requests);
+- shapes that batch 1 runs with `ttnn.linear` auto (the GDN q|k|v projection at bucket 128) run one
+  request per call;
+- fused SwiGLU runs the whole batch.
+
+All 7 shapes are bit-identical per row at buckets 128 to 4096 and B up to 32 (64 cases, measured). The
+RMSNorm needed the same care: at bucket 128 an interleaved norm on the flattened batch differed from batch
+1's sharded norm (PCC 0.9928).
+
+### DRAM limit (measured, full model + vision tower resident, 3.55 GiB free after load)
+
+| bucket | largest batch that runs | next power of two | `BATCH_CAPS` |
+|---:|---:|---|---:|
+| 128 | 32 (largest probed) | not probed | 32 |
+| 1024 | 32 (largest probed) | not probed | 32 |
+| 2048 | 16 | 32: allocator TT_FATAL | 16 |
+| 4096 | 8 | 16: allocator TT_FATAL | 8 |
+| 8192 | 4 | 8: allocator TT_FATAL | 4 |
+
+The limit is about 32768 tokens per forward. A batch holds only transient activations: weights and the
+persistent state are allocated at load, and the free DRAM after each cap run equals the free DRAM after
+load. The failing sizes were probed before the row groups. `test_batch_caps_fit` runs every cap with
+the final code. `max_batch_size` must be 1..32; per bucket it is clamped to `BATCH_CAPS`.
+
+### Equivalence (measured, `tests/e2e/test_batch.py`, 14 passed)
+
+| case | decisions vs batch 1 | bit-identical vs batch 1 | logit PCC vs batch 1 (min) | vs HF |
+|---|---|---|---|---|
+| 25 text rows, B = 2, 4, 8 (batches by bucket) | 25/25 | 25/25 | 1.0 | 25/25, logit PCC min 0.99721 |
+| 8 image rows, B = 2, 4, 8 (B=8: one forward) | 8/8 | 8/8 | 1.0 | 8/8, logit PCC min 0.99923 |
+| bucket 128, 8 seeded rows of 20-128 tokens, B = 8 | 8/8 | 8/8 | 1.0 | no golden |
+| mixed batch, 2 text + 2 image rows | 4/4 | 4/4 | 1.0 | |
+| x04 (7928 tokens) + s01 + s05 in one 8192 batch | 3/3 | x04 yes; s01, s05 no (padded to 8192, not 1024) | 0.99993 (s05) | |
+| single-row batch (list path) | equal | yes | | |
+
+Also passed: `predict_batch` on 19 shuffled rows (16 text, 3 image) with `max_batch_size=4`. It gave
+batches of 4+4+4+1 at bucket 1024 and 4+2 at 2048 and answers in input order. It rejected a row over
+8192 tokens and `max_batch_size` outside 1..32, and every cap in the table above ran.
+
+### Performance
+
+Measured with `tests/perf/test_batch_perf.py`, eager. The rows are the decision golden prompts of the
+bucket, cycled to B, and B = 1 is the batch-1 path. "Request" is `predict_probabilities_batch`: tokenize,
+pad, upload, forward and one readback. Sustained is the median of 5 back to back; burst is the median of
+3, each after 10 s idle. Every request of a batch waits for the whole batch, so per-request latency is the
+batch latency, and decisions/s = B / latency.
+
+| bucket | B | device forward, sustained (ms) | request, sustained (ms) | request, burst (ms) | decisions/s sustained | decisions/s burst |
+|---:|---:|---:|---:|---:|---:|---:|
+| 1024 | 1 | 395 | 415 | 315 | 2.41 | 3.17 |
+| 1024 | 2 | 756 | 760 | 591 | 2.63 | 3.38 |
+| 1024 | 4 | 1462 | 1478 | 1202 | 2.71 | 3.33 |
+| 1024 | 8 | 3007 | 3040 | 2734 | 2.63 | 2.93 |
+| 1024 | 32 (cap) | 12212 | 12242 | 11844 | 2.61 | 2.70 |
+| 2048 | 1 | 813 | 821 | 563 | 1.22 | 1.78 |
+| 2048 | 2 | 1519 | 1548 | 1214 | 1.29 | 1.65 |
+| 2048 | 4 | 3165 | 3221 | 2846 | 1.24 | 1.41 |
+| 2048 | 8 | 6487 | 6540 | 6138 | 1.22 | 1.30 |
+| 2048 | 16 (cap) | 12983 | 13062 | 12591 | 1.22 | 1.27 |
+
+Batching buys little at these buckets. The best sustained gain is +12 % (B = 4 at 1024) and +6 % (B = 2
+at 2048), while latency grows about linearly with B. One request of 1024 or 2048 tokens already keeps the
+matmuls compute-bound, so a batch adds work without saving weight reads. Two things work against a burst
+batch. A longer pass runs longer at the lower sustained clock. The row groups also re-read the weights
+of the N = 5120 to 6272 projections once per group. Batching should pay more at the 128 bucket, where one
+request is weight-read bound (not measured here; see the benchmark below).
+
+**600-prompt benchmark at `--batch-size 4`** (measured, `benchmark/run_benchmark.py`, 200 rows at bucket
+128 and 400 at 1024, compared with the batch-1 refresh run `stage11_refresh/run/predictions_accuracy.jsonl`):
+- 0 of 600 choices changed, and the largest probability difference is 0 (bit-identical);
+- accuracy unchanged: WinoGrande 174/200, FinancialPhraseBank 168/200, Belebele 193/200;
+- mixed throughput 3.65 decisions/s (600 in 164.3 s) against 3.10 at batch 1 (+18 %);
+- latency, which is the batch latency: p50 1487 ms overall, 286 ms at bucket 128, 1490 ms at bucket 1024.
+
+The 128 bucket gains most: 4 requests in 286 ms against 114 ms for one at batch 1.
+
 ## Notes and deviations
 
 - **Softmax in the head.** It is composed from fp32 `max / subtract / exp / sum / divide`, not
   `ttnn.softmax`. On a random fp32 [1, 1, 256] row, `ttnn.softmax` (HiFi4, fp32 acc) measured 2.1e-3
   relative error, and its probabilities summed to 0.9989. The composition measured 4e-7 (scratch
   probe; see the work log).
-- **Batch** is 1, as the person-approved contract and the app's `inference.py` specify. The
-  low-level API (`upload_tokens` / `forward`) is single-request. Larger batches are not implemented.
+- **Batch.** `TTDecider.predict` is batch 1, as the app's `inference.py` is. `predict_batch` runs up to
+  `max_batch_size` requests per forward and gives the same answers bit for bit: see [Batches](#batches).
 - **Images** (vision tower) are a later stage. `TTDecider` is text only.
 
 ## Reproduce

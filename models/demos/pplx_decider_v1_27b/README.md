@@ -4,7 +4,8 @@
 `b01a5cbaca5391f73bd55103d4f27e8982cd5e60`) is a 255-way decision classifier. It runs a Qwen3.5 hybrid
 backbone (48 Gated DeltaNet + 16 gated full-attention layers) over a prompt, reads the last token's
 hidden state through a 5120x255 `readout` and returns a softmax over the options. It does prefill only:
-no decode, no KV cache across requests. This directory runs text and image requests on one p150a, batch 1.
+no decode, no KV cache across requests. This directory runs text and image requests on one p150a, one at a
+time or in batches.
 
 | what | result |
 |---|---|
@@ -14,8 +15,11 @@ no decode, no KV cache across requests. This directory runs text and image reque
 | Request latency, sustained (ms) | 114 / 414 / 821 / 1679 / 3510 |
 | Image request, 1024 bucket | 336-354 ms burst |
 | Mixed throughput | 3.10 decisions/s (buckets 128 + 1024) |
+| Batched, sustained (decisions/s) | 1024 bucket: 2.41 / 2.63 / 2.71 / 2.63 / 2.61 at B = 1 / 2 / 4 / 8 / 32; 2048 bucket: 1.22 / 1.29 / 1.24 / 1.22 / 1.22 at B = 1 / 2 / 4 / 8 / 16 |
+| Batched request latency, sustained (ms) | 1024 bucket: 415 / 760 / 1478 / 3040 / 12242 at B = 1 / 2 / 4 / 8 / 32 |
+| Batched mixed throughput | 3.65 decisions/s at `--batch-size 4` (buckets 128 + 1024), the same 600 choices as batch 1 |
 
-All numbers are measured. The full report is in [`doc/benchmark/REPORT.md`](doc/benchmark/REPORT.md).
+All numbers are measured. Batched answers are bit-identical to batch 1 ([Batches](doc/full_model/README.md#batches)). The full report is in [`doc/benchmark/REPORT.md`](doc/benchmark/REPORT.md).
 
 ## Setup
 
@@ -65,20 +69,37 @@ import ttnn
 from models.demos.pplx_decider_v1_27b.demo.decider import TTDecider
 
 device = ttnn.open_device(device_id=0, l1_small_size=24576)
-decider = TTDecider.from_pretrained(device, model_path=None, max_seq_len=8192, vision=True)
-print(decider.predict("My Stripe integration keeps failing.", {"type": "noul", "instructions": "Is it urgent?"}))
+decider = TTDecider.from_pretrained(device, model_path=None, max_batch_size=8, max_seq_len=8192, vision=True)
+urgent = {"type": "noul", "instructions": "Is it urgent?"}
+print(decider.predict("My Stripe integration keeps failing.", urgent))
 question = {"type": "choice", "instructions": "What is the dominant color?",
             "criteria": {"red": "Red", "green": "Green", "blue": "Blue", "other": "Another color"}}
 print(decider.predict("Look at the supplied image.", question, images=["photo.png"]))
+# Many requests: one answer per row, in input order. Text and image rows can be mixed.
+print(decider.predict_batch([
+    {"state": "My Stripe integration keeps failing.", "question": urgent},
+    {"state": "Thanks, all good now.", "question": urgent},
+    {"state": "Look at the supplied image.", "question": question, "images": ["photo.png"]},
+]))
 ttnn.close_device(device)
 ```
 
 - `model_path`: a local checkpoint directory or an HF repo id. `None` means `$HF_MODEL`, else
   `$PPLX_DECIDER_SNAPSHOT` (legacy), else the HF cache at the pinned revision. A repo id is looked up in the
   HF cache only; if it is missing, the error gives the `hf download` command.
+- `max_batch_size`: the most requests `predict_batch` puts in one forward, 1 to 32. For each bucket it is
+  clamped to the DRAM cap in [Precision and limits](#precision-and-limits). It allocates nothing: a batch
+  needs only transient activation memory. `predict` is always one request.
 - `max_seq_len`: the largest prefill bucket, one of 128, 1024, 2048, 4096 or 8192. Longer prompts are
-  rejected, never truncated. Batch is always 1.
+  rejected, never truncated.
 - `vision=False` skips the vision tower: text only, 0.96 GiB less DRAM.
+
+`predict_batch(rows)` takes dicts with `state`, `question` and optional `images`. It groups the rows by
+prefill bucket, so each row runs at its own bucket as in `predict`. It then splits each group into
+batches of up to `max_batch_size` rows. Each row reads its own last real token and applies its own option
+count, with the checkpoint's temperature. If any row is longer than `max_seq_len`, the whole call is
+rejected before the device runs. The answers equal the `predict` answers: see
+[Batches](doc/full_model/README.md#batches).
 
 `images` takes what the app's `open_image` takes: file paths, `data:image/...` URLs or PIL images. Each
 image adds 64 to 256 prompt tokens, which count toward the `max_seq_len` limit.
@@ -135,6 +156,7 @@ Times are wall clock with the weight cache built and in the page cache.
 | one layer kind at one length | `tests/pcc/test_decoder_layer.py` | `pytest models/demos/pplx_decider_v1_27b/tests/pcc/test_decoder_layer.py -q -k "L3 and S2048"` | ~20 s |
 | text decisions vs HF (>= 24/25, logit PCC >= 0.99), padding, determinism, on-device audit | `tests/e2e/test_model.py` | `pytest models/demos/pplx_decider_v1_27b/tests/e2e/test_model.py -q` | ~50 s |
 | image decisions vs HF (>= 7/8), splice, 3D positions, `TTDecider` images | `tests/e2e/test_image_model.py` | `pytest models/demos/pplx_decider_v1_27b/tests/e2e/test_image_model.py -q` | ~20 s |
+| batches (B = 2, 4, 8) equal batch 1, text and image; mixed, order, split, rejections, audit, DRAM caps | `tests/e2e/test_batch.py` | `pytest models/demos/pplx_decider_v1_27b/tests/e2e/test_batch.py -q` | ~4 min |
 | vision tower: host tables, per-block and tower PCC, key mask, audit, latency, DRAM | `tests/vision/` | `pytest models/demos/pplx_decider_v1_27b/tests/vision -q` | ~25 s |
 | 3D mRoPE vs HF (CPU, bit exact) and layer 3 on an image row | `tests/pcc/test_mrope.py` | `pytest models/demos/pplx_decider_v1_27b/tests/pcc/test_mrope.py -q` | ~12 s |
 | a prefill pass issues no host round trips or torch ops | `tests/pcc/test_runtime_audit.py` | `pytest models/demos/pplx_decider_v1_27b/tests/pcc/test_runtime_audit.py -q` | ~10 s |
@@ -160,6 +182,7 @@ pass runs after 10 s idle; "sustained" means back to back. The device is slower 
 |---|---|---|---:|
 | wall clock per layer kind and module (layer, mixer, MLP, embedding, head), 5 buckets | `tests/perf/test_prefill_perf.py` | `pytest models/demos/pplx_decider_v1_27b/tests/perf/test_prefill_perf.py -q -s -k "test_layer_and_module_perf or test_embedding_and_head_perf"` | ~15 s |
 | wall clock of a full request per bucket, burst and sustained; device forward, tokenize, upload | `tests/perf/test_model_perf.py` | `pytest models/demos/pplx_decider_v1_27b/tests/perf/test_model_perf.py -q -s -k "test_model_perf and not traced and not profile"` | ~12 min |
+| request latency and decisions/s vs batch size (1, 2, 4, 8, cap) at buckets 1024 and 2048 | `tests/perf/test_batch_perf.py` | `pytest models/demos/pplx_decider_v1_27b/tests/perf/test_batch_perf.py -q -s` | ~16 min |
 | traced vs eager full forward (128 / 1024 / 2048) | `tests/perf/test_model_perf.py` | `pytest models/demos/pplx_decider_v1_27b/tests/perf/test_model_perf.py -q -s -k test_traced_forward` | ~35 s |
 | image request per golden row, with a phase breakdown | `tests/perf/test_image_perf.py` | `pytest models/demos/pplx_decider_v1_27b/tests/perf/test_image_perf.py -q -s` | ~17 min |
 | vision tower per patch bucket; DRAM next to the text model | `tests/vision/test_vision_perf.py` | `pytest models/demos/pplx_decider_v1_27b/tests/vision/test_vision_perf.py -q -s` | <25 s |
@@ -209,6 +232,9 @@ python -m models.demos.pplx_decider_v1_27b.benchmark.run_benchmark --subsets $B/
 python -m models.demos.pplx_decider_v1_27b.benchmark.report --stage11 $B --doc models/demos/pplx_decider_v1_27b/doc/benchmark
 ```
 
+To run the accuracy and throughput passes batched, add `--batch-size 4`. To list the choices that differ
+from an earlier run, add `--compare $B/run/predictions_accuracy.jsonl`.
+
 `run_benchmark` needs the image golden (it times two golden image rows). `report` rewrites
 `doc/benchmark/results.json` and `predictions.csv`. `REPORT.md` is written by hand from those files.
 
@@ -243,7 +269,7 @@ not want to overwrite an earlier run's JSON.
 
 ```
 tt/                  TTNN model
-  model.py           PplxDeciderModel: weight cache, bucket padding, image input prep, on-device splice
+  model.py           PplxDeciderModel: weight cache, bucket padding, batches, image input prep, on-device splice
   decoder.py         one decoder layer (both kinds); attention.py, gated_deltanet.py, mlp.py, norm.py
   rope.py            1D tables, 3D mRoPE (get_rope_index port), per-request rotary
   embedding.py, readout.py, head.py   embedding; final norm -> readout -> mask -> / T -> softmax
@@ -265,8 +291,12 @@ doc/                 per-stage READMEs, work logs and perf reports
   weights for every projection and the readout, HiFi2 matmuls with fp32 accumulation, BF16
   activations, fp32 DeltaNet state and fp32 head. The vision tower runs in BF16. BFP4 MLP weights
   were 17 % faster at 2048 but failed the per-row logit-PCC bar; see the datatype sweep.
-- Batch 1 only. Prompts are right-padded to buckets 128 / 1024 / 2048 / 4096 / 8192; prompts over
-  8192 tokens are rejected, as in the app.
+- Prompts are right-padded to buckets 128 / 1024 / 2048 / 4096 / 8192; prompts over 8192 tokens are
+  rejected, as in the app.
+- Batch caps, measured with the whole model and the vision tower resident: 32 rows at buckets 128 and
+  1024 (the largest size probed), 16 at 2048, 8 at 4096 and 4 at 8192. The next power of two fails to
+  allocate at each of 2048, 4096 and 8192, so the limit is about 32768 tokens per forward. `predict_batch`
+  never exceeds these caps (`BATCH_CAPS` in `tt/model.py`).
 - Tested with one image per request. Several images per request go through the same code but are
   untested.
 - Weights and state take 27.3 GiB of the 31.8 GiB DRAM; with the vision tower, 3.6 GiB stay free.
