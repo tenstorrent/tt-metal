@@ -11,28 +11,50 @@
 #include "api/tensor/noc_traits.h"
 #include "experimental/kernel_args.h"
 
+// Reads rows x columns tiles of a tile-interleaved tensor into the buffer in row-major order. Tile (row, column) is
+// page first_page + row * row_stride + column.
 template <typename Accessor>
 FORCE_INLINE void issue_tensor_block_read(
-    Noc& noc, const Accessor& accessor, DataflowBuffer& buffer, uint32_t page, uint32_t tiles) {
-    for (uint32_t tile = 0; tile < tiles; tile++) {
-        noc.async_read(
-            accessor,
-            buffer,
-            buffer.get_entry_size(),
-            {.page_id = page + tile},
-            {.offset_bytes = tile * buffer.get_entry_size()});
+    Noc& noc,
+    const Accessor& accessor,
+    DataflowBuffer& buffer,
+    uint32_t first_page,
+    uint32_t row_stride,
+    uint32_t rows,
+    uint32_t columns) {
+    const uint32_t tile_bytes = buffer.get_entry_size();
+    for (uint32_t row = 0; row < rows; row++) {
+        for (uint32_t column = 0; column < columns; column++) {
+            noc.async_read(
+                accessor,
+                buffer,
+                tile_bytes,
+                {.page_id = first_page + row * row_stride + column},
+                {.offset_bytes = (row * columns + column) * tile_bytes});
+        }
     }
 }
 
-// One worker owns one head's state: it streams each chronological step's [A | B] rows to compute and writes the
-// entry state and final carry that compute publishes.
-template <uint32_t Kt, uint32_t Vt, uint32_t BH, uint32_t sp_rank, uint32_t sp_size, uint32_t local_rows>
-TT_KERNEL void dataflow(uint32_t head) {
+// One worker owns the Vt_local state columns [v_block * Vt_local, (v_block + 1) * Vt_local) of one head: it streams
+// each chronological step's A rows and the matching B columns of the packed [A | B] rows to compute, and writes the
+// entry state and final carry columns that compute publishes.
+template <
+    uint32_t Kt,
+    uint32_t Vt,
+    uint32_t Vt_local,
+    uint32_t BH,
+    uint32_t sp_rank,
+    uint32_t sp_size,
+    uint32_t local_rows>
+TT_KERNEL void dataflow(uint32_t head, uint32_t v_block) {
     constexpr uint32_t a_tiles = Kt * Kt;
-    constexpr uint32_t state_tiles = Kt * Vt;
+    constexpr uint32_t state_tiles = Kt * Vt_local;
     constexpr uint32_t row_tiles = Kt + Vt;
-    // A head's [K, V] state is one contiguous page range, stored in the DFB in page order.
-    const uint32_t state_page = head * state_tiles;
+    // The head's [K, V] state is Kt * Vt contiguous pages; this worker's [Kt, Vt_local] slice starts at its first
+    // column, advances Vt pages per row, and is stored in the DFB row-major.
+    const uint32_t state_page = head * Kt * Vt + v_block * Vt_local;
+    // First B column of this worker within a packed [A | B] row.
+    const uint32_t b_column = Kt + v_block * Vt_local;
 
     const auto transforms_accessor = TensorAccessor(tensor::transforms);
     const auto initial_state_accessor = TensorAccessor(tensor::initial_state);
@@ -46,16 +68,22 @@ TT_KERNEL void dataflow(uint32_t head) {
 
     const auto write_state = [&](DataflowBuffer& source, const auto& destination) {
         const uint32_t tile_bytes = source.get_entry_size();
-        for (uint32_t tile = 0; tile < state_tiles; ++tile) {
-            noc.async_write(
-                source, destination, tile_bytes, {.offset_bytes = tile * tile_bytes}, {.page_id = state_page + tile});
+        for (uint32_t row = 0; row < Kt; ++row) {
+            for (uint32_t column = 0; column < Vt_local; ++column) {
+                noc.async_write(
+                    source,
+                    destination,
+                    tile_bytes,
+                    {.offset_bytes = (row * Vt_local + column) * tile_bytes},
+                    {.page_id = state_page + row * Vt + column});
+            }
         }
         noc.async_write_barrier();
     };
 
     // The initial state does not depend on the chronology, so its reads share one barrier with actual_start.
     initial.reserve_back(state_tiles);
-    issue_tensor_block_read(noc, initial_state_accessor, initial, state_page, state_tiles);
+    issue_tensor_block_read(noc, initial_state_accessor, initial, state_page, Vt, Kt, Vt_local);
     kda_chronology::Topology topology{};
     {
         DataflowBuffer chronology(dfb::chronology_compute);
@@ -95,13 +123,13 @@ TT_KERNEL void dataflow(uint32_t head) {
                     {.page_id = row_page + column},
                     {.offset_bytes = (row * Kt + column) * a_bytes});
             }
-            for (uint32_t column = 0; column < Vt; ++column) {
+            for (uint32_t column = 0; column < Vt_local; ++column) {
                 noc.async_read(
                     transforms_accessor,
                     b,
                     b_bytes,
-                    {.page_id = row_page + Kt + column},
-                    {.offset_bytes = (row * Vt + column) * b_bytes});
+                    {.page_id = row_page + b_column + column},
+                    {.offset_bytes = (row * Vt_local + column) * b_bytes});
             }
         }
         noc.async_read_barrier();

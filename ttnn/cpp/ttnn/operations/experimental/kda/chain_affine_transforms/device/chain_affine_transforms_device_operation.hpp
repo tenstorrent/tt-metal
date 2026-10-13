@@ -3,6 +3,7 @@
 
 #pragma once
 
+#include <optional>
 #include <variant>
 
 #include "ttnn/operation.hpp"
@@ -31,6 +32,7 @@ std::pair<Tensor, Tensor> chain_affine_transforms(
     const DeviceComputeKernelConfig&,
     const Tensor& actual_start,
     uint32_t sequence_parallel_axis,
-    uint32_t local_rows);
+    uint32_t local_rows,
+    std::optional<uint32_t> v_split);
 
 }  // namespace ttnn::experimental::prim

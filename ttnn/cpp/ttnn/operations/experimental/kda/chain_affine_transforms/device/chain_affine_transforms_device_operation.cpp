@@ -4,6 +4,8 @@
 #include "chain_affine_transforms_device_operation.hpp"
 
 #include <array>
+#include <cstdint>
+#include <cstdlib>
 
 #include <tt-metalium/allocator.hpp>
 #include <tt-metalium/constants.hpp>
@@ -13,6 +15,30 @@
 #include "ttnn/operations/experimental/kda/kda_performance_model.hpp"
 
 namespace ttnn::experimental::prim {
+
+namespace {
+
+// Columns of a head's state are independent, so each head's value tiles can split across v_split cores with no change
+// to any output tile's accumulation order. The split is opt-in: the v_split argument, else TT_KDA_CHAIN_V_SPLIT (for
+// experiments), else 1 (one core per head). Validation checks divisibility and the core count.
+uint32_t resolve_v_split(std::optional<uint32_t> v_split) {
+    if (v_split.has_value()) {
+        TT_FATAL(*v_split > 0, "chain_affine_transforms: v_split must be positive, got {}", *v_split);
+        return *v_split;
+    }
+    if (const char* override_value = std::getenv("TT_KDA_CHAIN_V_SPLIT")) {
+        char* end = nullptr;
+        const unsigned long parsed = std::strtoul(override_value, &end, 10);
+        TT_FATAL(
+            end != override_value && *end == '\0' && parsed > 0 && parsed <= UINT32_MAX,
+            "chain_affine_transforms: TT_KDA_CHAIN_V_SPLIT must be a positive integer, got '{}'",
+            override_value);
+        return static_cast<uint32_t>(parsed);
+    }
+    return 1;
+}
+
+}  // namespace
 
 ChainAffineTransformsOperation::program_factory_t ChainAffineTransformsOperation::select_program_factory(
     const operation_attributes_t&, const tensor_args_t&) {
@@ -68,16 +94,31 @@ void ChainAffineTransformsOperation::validate_on_program_cache_miss(
         t_shape[0] == mesh->shape()[attrs.sequence_parallel_axis],
         "{}: transforms must hold one transition per sequence-parallel rank",
         operation_name);
-    // One core per head.
     const auto grid = mesh->compute_with_storage_grid_size();
+    const uint64_t num_cores = static_cast<uint64_t>(grid.x) * grid.y;
     TT_FATAL(
-        attrs.batch_heads <= grid.x * grid.y,
+        attrs.batch_heads <= num_cores,
         "{}: supports at most {} batch-heads on this device, got {}",
         operation_name,
-        grid.x * grid.y,
+        num_cores,
         attrs.batch_heads);
-    const uint64_t dfb_bytes = chain_affine_transforms_l1_bytes(
-        attrs.key_dim / tt::constants::TILE_WIDTH, attrs.value_dim / tt::constants::TILE_WIDTH);
+    const uint32_t value_tiles = attrs.value_dim / tt::constants::TILE_WIDTH;
+    TT_FATAL(
+        attrs.v_split > 0 && value_tiles % attrs.v_split == 0,
+        "{}: v_split = {} must be positive and divide the {} value tiles",
+        operation_name,
+        attrs.v_split,
+        value_tiles);
+    // One core per (head, value block).
+    TT_FATAL(
+        static_cast<uint64_t>(attrs.batch_heads) * attrs.v_split <= num_cores,
+        "{}: {} batch-heads x v_split {} exceeds the {} worker cores on this device",
+        operation_name,
+        attrs.batch_heads,
+        attrs.v_split,
+        num_cores);
+    const uint64_t dfb_bytes =
+        chain_affine_transforms_l1_bytes(attrs.key_dim / tt::constants::TILE_WIDTH, value_tiles / attrs.v_split);
     const uint64_t l1_bytes =
         mesh->l1_size_per_core() - mesh->allocator()->get_base_allocator_addr(tt::tt_metal::HalMemType::L1);
     TT_FATAL(
@@ -130,7 +171,8 @@ std::pair<Tensor, Tensor> chain_affine_transforms(
     const DeviceComputeKernelConfig& compute_kernel_config,
     const Tensor& actual_start,
     uint32_t sequence_parallel_axis,
-    uint32_t local_rows) {
+    uint32_t local_rows,
+    std::optional<uint32_t> v_split) {
     // Cache-miss validation cannot protect attribute construction on cache hits. Keep these guards here because the
     // launcher indexes both shapes before dispatching validation.
     const auto& t_shape = transforms.logical_shape();
@@ -143,6 +185,7 @@ std::pair<Tensor, Tensor> chain_affine_transforms(
             .batch_heads = static_cast<uint32_t>(s_shape[0]),
             .key_dim = static_cast<uint32_t>(s_shape[1]),
             .value_dim = static_cast<uint32_t>(s_shape[2]),
+            .v_split = resolve_v_split(v_split),
             .sequence_parallel_axis = sequence_parallel_axis,
             .local_rows = local_rows,
             .output_mem_config = memory_config,

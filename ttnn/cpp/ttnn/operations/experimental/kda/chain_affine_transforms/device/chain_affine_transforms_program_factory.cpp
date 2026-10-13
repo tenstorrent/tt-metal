@@ -36,11 +36,16 @@ ttnn::device_operation::MeshWorkloadArtifacts ChainAffineTransformsProgramFactor
     const uint32_t Kt = attrs.key_dim / tt::constants::TILE_WIDTH;
     const uint32_t Vt = attrs.value_dim / tt::constants::TILE_WIDTH;
 
-    // One core per head. Splitting a head's value columns across cores re-reads the whole A block per core
-    // (DRAM-bound at 4 blocks: 137 us vs 78 us at 1 block for Galaxy SP8xTP4); at 1 or 2 blocks the kernel is
-    // bound by the step-to-step dependency chain instead.
+    // One core per (head, value block): a head's state columns are independent, so each core applies the whole chain
+    // to Vt_local = Vt / v_split of them. Every core still streams the head's full A block. The split is chosen in
+    // the launcher and is part of the cached attributes.
+    const uint32_t v_split = attrs.v_split;
+    TT_FATAL(v_split > 0 && Vt % v_split == 0, "chain_affine_transforms: v_split {} must divide Vt {}", v_split, Vt);
+    const uint32_t Vt_local = Vt / v_split;
+    const uint32_t work_units = BH * v_split;
     const auto grid = device.compute_with_storage_grid_size();
-    const auto dist = kda_factory_detail::distribute_prep(grid, BH, BH);
+    const auto dist = kda_factory_detail::distribute_prep(grid, work_units, work_units);
+    TT_FATAL(dist.cores.size() == work_units, "chain_affine_transforms: {} work units do not fit the grid", work_units);
 
     const m2::KernelSpecName dataflow_kernel_name{"dataflow"};
     const m2::KernelSpecName compute_kernel_name{"compute"};
@@ -66,8 +71,9 @@ ttnn::device_operation::MeshWorkloadArtifacts ChainAffineTransformsProgramFactor
     const auto transform_format = tt::tt_metal::datatype_to_dataformat_converter(in.transforms.dtype());
     constexpr auto fp32 = tt::DataFormat::Float32;
     const uint32_t a_tiles = Kt * Kt;
-    const uint32_t state_tiles = Kt * Vt;
-    // 384 KiB per core at the production K = V = 128; validation checks chain_affine_transforms_l1_bytes against L1.
+    const uint32_t state_tiles = Kt * Vt_local;
+    // 384 KiB per core at the production K = V = 128 without a split; validation checks
+    // chain_affine_transforms_l1_bytes against L1.
     m2::Group<m2::DataflowBufferSpec> dfbs = {
         make_dfb(initial_dfb, state_tiles, fp32),
         make_dfb(a_dfb, chain_affine_transforms_transform_buffers * a_tiles, transform_format),
@@ -96,8 +102,8 @@ ttnn::device_operation::MeshWorkloadArtifacts ChainAffineTransformsProgramFactor
                 m2::TensorBinding{entry_state_name, "entry_state"},
                 m2::TensorBinding{final_state_name, "final_state"},
             },
-        .compile_time_args = {{"Kt", Kt}, {"Vt", Vt}, {"BH", BH}},
-        .runtime_arg_schema = {.runtime_arg_names = {"head"}},
+        .compile_time_args = {{"Kt", Kt}, {"Vt", Vt}, {"Vt_local", Vt_local}, {"BH", BH}},
+        .runtime_arg_schema = {.runtime_arg_names = {"head", "v_block"}},
         // The kernel manages every DFB credit explicitly, including the 4-byte actual_start read.
         .hw_config = ttnn::create_reader_datamovement_config(/*disable_dfb_implicit_sync_for_all=*/true),
     };
@@ -124,13 +130,18 @@ ttnn::device_operation::MeshWorkloadArtifacts ChainAffineTransformsProgramFactor
                 m2::ConsumerOf(state_dfb, "state"),
                 m2::ProducerOf(out_dfb, "out"),
             },
-        .compile_time_args = {{"Kt", Kt}, {"Vt", Vt}, {"steps", attrs.steps}},
+        .compile_time_args = {{"Kt", Kt}, {"Vt_local", Vt_local}, {"steps", attrs.steps}},
         .hw_config = std::move(compute_hw),
     };
 
     m2::KernelRunArgs dataflow_run{.kernel = dataflow_kernel_name};
     for (uint32_t head = 0; head < BH; ++head) {
-        m2::AddRuntimeArgsForNode(dataflow_run.runtime_arg_values, dist.cores[head], {{"head", head}});
+        for (uint32_t v_block = 0; v_block < v_split; ++v_block) {
+            m2::AddRuntimeArgsForNode(
+                dataflow_run.runtime_arg_values,
+                dist.cores[head * v_split + v_block],
+                {{"head", head}, {"v_block", v_block}});
+        }
     }
     m2::KernelRunArgs compute_run{.kernel = compute_kernel_name};
 

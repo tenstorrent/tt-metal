@@ -105,11 +105,12 @@ FORCE_INLINE void add(DataflowBuffer& product, DataflowBuffer& b, DataflowBuffer
     }
 }
 
-template <uint32_t Kt, uint32_t Vt, uint32_t steps>
+// Vt_local is this core's share of one head's value columns; every output tile still accumulates all Kt key tiles.
+template <uint32_t Kt, uint32_t Vt_local, uint32_t steps>
 TT_KERNEL void compute() {
     compute_kernel_hw_startup<SrcOrder::Reverse>(dfb::a, dfb::initial, dfb::product);
     constexpr uint32_t a_tiles = Kt * Kt;
-    constexpr uint32_t state_tiles = Kt * Vt;
+    constexpr uint32_t state_tiles = Kt * Vt_local;
     DataflowBuffer initial(dfb::initial);
     DataflowBuffer a(dfb::a);
     DataflowBuffer b(dfb::b);
@@ -128,7 +129,7 @@ TT_KERNEL void compute() {
         DataflowBuffer& current = step == 0 ? initial : state;
         current.wait_front(state_tiles);
         a.wait_front(a_tiles);
-        multiply<Kt, Vt>(a, current, product);
+        multiply<Kt, Vt_local>(a, current, product);
         current.pop_front(state_tiles);
         a.pop_front(a_tiles);
         // b is only needed by the add, so its reads may land while the matmul runs.

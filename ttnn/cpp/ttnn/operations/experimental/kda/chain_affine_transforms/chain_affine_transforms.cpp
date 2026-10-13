@@ -14,7 +14,8 @@ std::pair<ttnn::Tensor, ttnn::Tensor> chain_affine_transforms(
     uint32_t local_rows,
     const std::optional<ttnn::MemoryConfig>& memory_config,
     const std::optional<ttnn::DeviceComputeKernelConfig>& compute_kernel_config,
-    uint32_t sequence_parallel_axis) {
+    uint32_t sequence_parallel_axis,
+    std::optional<uint32_t> v_split) {
     TT_FATAL(
         transforms.storage_type() == StorageType::DEVICE && transforms.buffer() != nullptr,
         "chain_affine_transforms: transforms must be an allocated device tensor");
@@ -36,7 +37,8 @@ std::pair<ttnn::Tensor, ttnn::Tensor> chain_affine_transforms(
         kernel_config,
         actual_start,
         sequence_parallel_axis,
-        local_rows);
+        local_rows,
+        v_split);
 }
 
 }  // namespace ttnn::experimental::kda

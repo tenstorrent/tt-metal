@@ -44,14 +44,17 @@ void bind_chain_affine_transforms(nb::module_& mod) {
                 Defaults to HiFi2 with FP32 destination accumulation, which is required.
             sequence_parallel_axis (int, optional): Mesh axis partitioning the sequence. Native mesh
                 coordinates supply each device's rank.
+            v_split (int, optional): Value-column blocks per head, one core per ``(head, block)``. Must
+                divide ``V / 32`` with ``B*H * v_split`` within the worker grid. Defaults to the environment
+                variable ``TT_KDA_CHAIN_V_SPLIT`` when set, else 1 (one core per head). The result is
+                bit-identical for every split; each block re-reads the head's full ``A``.
 
         Returns:
             tuple[ttnn.Tensor, ttnn.Tensor]: FLOAT32 TILE-layout ``[B*H, K, V]`` entry state
                 and final carry.
 
         Note:
-            K and V must be positive and tile-aligned, with one core per ``B*H`` head. Inputs are
-            not modified.
+            K and V must be positive and tile-aligned. Inputs are not modified.
         )doc",
         &ttnn::experimental::kda::chain_affine_transforms,
         nb::arg("transforms").noconvert(),
@@ -61,7 +64,8 @@ void bind_chain_affine_transforms(nb::module_& mod) {
         nb::arg("local_rows"),
         nb::arg("memory_config") = nb::none(),
         nb::arg("compute_kernel_config") = nb::none(),
-        nb::arg("sequence_parallel_axis") = 0);
+        nb::arg("sequence_parallel_axis") = 0,
+        nb::arg("v_split") = nb::none());
 }
 
 }  // namespace ttnn::operations::experimental::kda::chain_affine_transforms::detail

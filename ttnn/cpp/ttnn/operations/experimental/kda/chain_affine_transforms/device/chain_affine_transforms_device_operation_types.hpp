@@ -15,6 +15,9 @@ struct ChainAffineTransformsParams {
     uint32_t batch_heads;
     uint32_t key_dim;
     uint32_t value_dim;
+    // Cores per head. Each owns value_dim / 32 / v_split columns of that head's state. Part of the attributes so the
+    // program cache distinguishes splits.
+    uint32_t v_split;
     uint32_t sequence_parallel_axis;
     uint32_t local_rows;
     tt::tt_metal::MemoryConfig output_mem_config;
