@@ -1,9 +1,9 @@
 {
   "schema_version": 1,
   "suite": "pgm_dispatch_no_trace",
-  "metrics": {"IterationTime": {"aggregate": "min", "better": "lower", "unit": "s"}},
   "environments": {
     "wh_n300_perf": {
+      "metrics": {"IterationTime": {"aggregate": "min", "better": "lower", "unit": "s"}},
       "repetitions": 2,
       "provenance": {"commit": "8bf2e54e65723b6ffd99817b3c64ce571657d5e9", "date": "2026-10-08", "source": "CI run 37817354021"},
       "context": {"aiclk_mhz": "1000"},
