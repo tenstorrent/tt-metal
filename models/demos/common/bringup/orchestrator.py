@@ -144,11 +144,18 @@ CONTRACT_SHARED = "models/demos/common/prefill"
 # files each brief lists (relative to the prior's model dir; a folder means its contents), and what to do with them.
 PRIOR_READS = {
     "reference": ["bringup/hooks.py", "reference/"],
-    "plan": ["bringup/plan.md", "bringup/plan.yaml", "bringup/components.yaml", "bringup/findings.yaml"],
+    "plan": [
+        "bringup/plan.md",
+        "bringup/plan.yaml",
+        "bringup/components.yaml",
+        "bringup/findings.yaml",
+        "bringup/known_issues.md",
+        "bringup/repo_map.md",
+    ],
     "test": ["tests/bringup/"],
-    "implement": ["tt/", "bringup/BREADCRUMBS.md"],
+    "implement": ["tt/", "bringup/BREADCRUMBS.md", "bringup/known_issues.md", "bringup/repo_map.md"],
     "assemble": ["tt/model.py", "bringup/hooks.py"],
-    "fix": ["tt/", "bringup/BREADCRUMBS.md"],
+    "fix": ["tt/", "bringup/BREADCRUMBS.md", "bringup/known_issues.md"],
     "contract": ["tt/runners/"],
     "perf": ["bringup/opportunities.md", "bringup/tasks.yaml", "bringup/results/X.3_profile.json"],
     "optests": ["bringup/results/fork_calls.json"],
@@ -399,9 +406,11 @@ class Orchestrator:
     # ---- policy
     def common_paths(self) -> list[str]:
         b = rel(self.spec, self.spec.bringup_dir)
+        # The shared knowledge files are read-only for agents: lessons go to the model's own files, and the overseer
+        # promotes the durable ones when the run ends.
         return [
-            "models/demos/common/bringup/knowledge/known_issues.md",
-            "models/demos/common/bringup/knowledge/repo_map.md",
+            f"{b}/known_issues.md",
+            f"{b}/repo_map.md",
             f"{b}/BREADCRUMBS.md",
             f"{b}/findings.yaml",
         ]
@@ -657,6 +666,8 @@ class Orchestrator:
         ]
         ki, _ = kcheck.check_known_issues(kcheck.HERE / "known_issues.md")
         problems += [f"known_issues.md: {e}" for e in ki]
+        mki, _ = kcheck.check_model_known_issues(self.spec.bringup_dir / "known_issues.md")
+        problems += [f"{rel(self.spec, self.spec.bringup_dir)}/known_issues.md: {e}" for e in mki]
         # Agent definitions and brief templates live in the framework checkout (which may not be the model's repo).
         defs = (
             [AGENT_DEF, HERE / "briefs" / "brief.md", HERE / "briefs" / "roles.yaml"]

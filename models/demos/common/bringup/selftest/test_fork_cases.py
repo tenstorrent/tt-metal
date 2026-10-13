@@ -136,8 +136,9 @@ def test_source_outcomes_from_junit(tmp_path):
 
 
 def test_gate_commit_stages_changed_forks_and_knowledge_only(fx):
-    """F48: a fork the agent made (or changed) and its knowledge-file entries are committed with the gate; other
-    forks' files are not staged (the formatting pass must not touch them)."""
+    """F48: a fork the agent made (or changed) is committed with the gate; other forks' files are not staged (the
+    formatting pass must not touch them). The shared knowledge files are not agent-writable, so an edit there is never
+    swept into a task's commit; the model's own known_issues.md is."""
     import subprocess
 
     from models.demos.common.bringup.core.gate import stage_paths
@@ -167,17 +168,17 @@ def test_gate_commit_stages_changed_forks_and_knowledge_only(fx):
     (new / "__pycache__" / "x.pyc").write_text("")
     (repo / "ttnn/ttnn/bringup/INDEX.md").write_text("| Fork |\n| new_fork |\n")
     (kn / "known_issues.md").write_text("# issues\n- new entry\n")
-    got = [p for p in stage_paths(s, led, task) if p.startswith(("ttnn/", "models/demos/common/"))]
-    assert got == [
-        "models/demos/common/bringup/knowledge/known_issues.md",
-        "ttnn/ttnn/bringup/INDEX.md",
-        "ttnn/ttnn/bringup/new_fork/op.cpp",
-    ]
+    s.bringup_dir.mkdir(parents=True, exist_ok=True)
+    (s.bringup_dir / "known_issues.md").write_text("# Known issues: m\n- new entry\n")
+    staged = stage_paths(s, led, task)
+    got = [p for p in staged if p.startswith(("ttnn/", "models/demos/common/"))]
+    assert got == ["ttnn/ttnn/bringup/INDEX.md", "ttnn/ttnn/bringup/new_fork/op.cpp"]
+    assert str((s.bringup_dir / "known_issues.md").relative_to(repo)) in staged
 
 
 def test_gate_commit_carries_new_fork_files_and_knowledge(fx):
     """glm53 F49 (now F51), adapted to F48: in a repo with no commit yet, a fork the agent created (new files) and the
-    knowledge files are staged file by file and end up in the gate commit."""
+    model's own knowledge files are staged file by file and end up in the gate commit."""
     from models.demos.common.bringup.core.gate import git_commit, stage_paths
     from models.demos.common.bringup.core.ledger import Ledger
     from models.demos.common.bringup.core.spec import Spec
@@ -193,23 +194,17 @@ def test_gate_commit_carries_new_fork_files_and_knowledge(fx):
     (fork / "tests/unit").mkdir(parents=True)
     (fork / "CHANGELOG.md").write_text("- option\n")
     (fork / "tests/unit/test_new.py").write_text("def test_x():\n    pass\n")
-    know = repo / "models/demos/common/bringup/knowledge"
-    know.mkdir(parents=True)
-    (know / "known_issues.md").write_text("# Known issues\n")
-    (know / "repo_map.md").write_text("# Repo map\n")
+    (s.bringup_dir / "known_issues.md").write_text("# Known issues: m\n")
+    (s.bringup_dir / "repo_map.md").write_text("# Repo map: m\n")
+    ki, rm = (str((s.bringup_dir / f).relative_to(repo)) for f in ("known_issues.md", "repo_map.md"))
     got = stage_paths(s, led, {"id": "C.x", "step": "implement"})
     assert "ttnn/ttnn/bringup" not in got  # F48: changed files, never the whole directory
-    assert {
-        "ttnn/ttnn/bringup/sdpa/CHANGELOG.md",
-        "ttnn/ttnn/bringup/sdpa/tests/unit/test_new.py",
-        "models/demos/common/bringup/knowledge/known_issues.md",
-        "models/demos/common/bringup/knowledge/repo_map.md",
-    } <= set(got)
+    assert {"ttnn/ttnn/bringup/sdpa/CHANGELOG.md", "ttnn/ttnn/bringup/sdpa/tests/unit/test_new.py", ki, rm} <= set(got)
     assert git_commit(s, got, "gate", "")
     tracked = subprocess.check_output(["git", "ls-files"], cwd=repo, text=True).split()
     assert "ttnn/ttnn/bringup/sdpa/tests/unit/test_new.py" in tracked
     assert "ttnn/ttnn/bringup/sdpa/CHANGELOG.md" in tracked
-    assert "models/demos/common/bringup/knowledge/known_issues.md" in tracked
+    assert ki in tracked
 
 
 def test_gate_commit_skips_shared_paths_that_do_not_exist(fx):
