@@ -132,6 +132,11 @@ while IFS= read -r FILE; do
         tt_metal/tt-llk/tests/**)
             LLK_TESTS_CHANGED=true
             ;;
+        # The PR-gate pytest matrix. llk-smoke-tests is the only consumer of this flag,
+        # and it runs the matrix on every SKU, so an edit to the matrix proves itself.
+        tests/pipeline_reorg/llk_pr_gate_tests.yaml)
+            LLK_TESTS_CHANGED=true
+            ;;
         .github/workflows/llk-*.yaml|.github/workflows/build-quasar-perf.yml|.github/scripts/llk-*.sh|tests/pipeline_reorg/llk_unit_tests.yaml|tests/pipeline_reorg/llk_merge_gate_tests.yaml)
             LLK_CI_CHANGED=true
             ;;
