@@ -73,17 +73,19 @@ void kernel_main() {
 
             if (block_row_size > block_size) {
                 uint32_t pad_addr = l1_write_addr + block_size;
-                uint32_t pad_bytes = block_row_size - block_size;
-                // A row of an odd number of 2-byte elements ends halfway through a word; pad that
-                // half with one element first, as an unaligned word store faults on Quasar.
-                if (pad_addr & 2) {
-                    *(volatile tt_l1_ptr uint16_t*)(uintptr_t)pad_addr = pad_value;
-                    pad_addr += 2;
-                    pad_bytes -= 2;
+                const uint32_t pad_end = l1_write_addr + block_row_size;
+                // A row of 1- or 2-byte elements can end partway through a word, and an unaligned word
+                // store faults on Quasar, so store bytes up to the next word boundary first. The packed
+                // pad value repeats the element, so each byte is the one at its offset in the word.
+                while ((pad_addr & 3) && pad_addr < pad_end) {
+                    *(volatile tt_l1_ptr uint8_t*)(uintptr_t)pad_addr = pad_value >> (8 * (pad_addr & 3));
+                    pad_addr++;
                 }
-                volatile tt_l1_ptr std::uint32_t* dst = (volatile tt_l1_ptr uint32_t*)(uintptr_t)pad_addr;
-                for (uint32_t z = 0; z < pad_bytes / 4; z++) {
-                    dst[z] = pad_value;
+                for (; pad_addr + 4 <= pad_end; pad_addr += 4) {
+                    *(volatile tt_l1_ptr uint32_t*)(uintptr_t)pad_addr = pad_value;
+                }
+                for (; pad_addr < pad_end; pad_addr++) {
+                    *(volatile tt_l1_ptr uint8_t*)(uintptr_t)pad_addr = pad_value >> (8 * (pad_addr & 3));
                 }
             }
 
