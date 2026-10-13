@@ -102,12 +102,14 @@ constexpr uint32_t DM_COMPUTE_BARRIER_ARRIVED_SEM_IDX = 28;
 constexpr uint32_t DM_COMPUTE_BARRIER_GENERATION_SEM_IDX = 27;
 constexpr uint32_t TENSIX_GLOBAL_SEM_USER_COUNT = 27;
 constexpr uint32_t TENSIX_GLOBAL_SEM_VALUE_MASK = 0xFFFFu;
+// Largest inc/dec one fetch_add/fetch_sub access can take; larger values reach other aliases or semaphores.
+constexpr uint32_t TENSIX_GLOBAL_SEM_MAX_STEP = 7;
 
 inline volatile uint32_t* tensix_global_sem(uint32_t idx) {
     return reinterpret_cast<volatile uint32_t*>(TENSIX_GLOBAL_SEM_BASE + idx * TENSIX_GLOBAL_SEM_STRIDE);
 }
 
-// INIT sets the count and clears sticky semaphore errors. POST on an uninitialized slot raises an error.
+// INIT sets the count and marks the semaphore initialized. POST on an uninitialized slot raises an error.
 inline void tensix_global_sem_init(uint32_t idx, uint32_t value) { *tensix_global_sem(idx) = value; }
 
 inline uint32_t tensix_global_sem_read(uint32_t idx) { return *tensix_global_sem(idx); }
@@ -167,7 +169,7 @@ inline void thread_sync_init() {
     }
     // Hardware faults a post to an uninitialized semaphore, so these must be set before any barrier
     // runs. ttsim does not model these registers and aborts on the write, so compute
-    // sync_threads() and sync_dm_compute_threads() are unsupported there.
+    // sync_threads(), sync_dm_compute_threads(), and ClusterSemaphore are unsupported there.
 #if !defined(TT_METAL_TTSIM)
     tensix_global_sem_init(COMPUTE_BARRIER_ARRIVED_SEM_IDX, 0);
     tensix_global_sem_init(COMPUTE_BARRIER_GENERATION_SEM_IDX, 0);
@@ -176,7 +178,7 @@ inline void thread_sync_init() {
     // A post to an uninitialized semaphore raises an error, so ClusterSemaphore's semaphores start at 0 here
     // and kernels leave them at 0.
     for (uint32_t i = 0; i < TENSIX_GLOBAL_SEM_USER_COUNT; i++) {
-        tensix_global_sem_init(i, 0);
+        tensix_global_sem_init(i, 0 /*value*/);
     }
 #endif
 #endif

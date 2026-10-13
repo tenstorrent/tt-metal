@@ -104,7 +104,7 @@ void kernel_main() {
             // Read from the previous NEO's ring slot, or from this NEO's input tiles.
             const std::uint32_t src =
                 consumes_ring ? ring_start + (i % depth) * num_neos + previous : input_start + i % max_tiles;
-            copy_tile(input.get_id(), src - neo, 0);
+            copy_tile(input.get_id(), src - neo, 0 /*dst_tile_index*/);
 #ifdef TRISC_UNPACK
             // At the end of each batch, give the slots back to the producer.
             if constexpr (!nosync) {
@@ -131,7 +131,7 @@ void kernel_main() {
             // Write to this NEO's ring slot, or to the output tiles if this NEO ends the chain.
             const std::uint32_t dst =
                 (produces_ring ? ring_start + (i % depth) * num_neos : output_start + (i % max_tiles) * num_neos) + neo;
-            pack_tile<true>(0, output.get_id(), (dst - neo) / num_neos);
+            pack_tile<true /*out_of_order_output*/>(0 /*ifrom_dst*/, output.get_id(), (dst - neo) / num_neos);
             tile_regs_release();
 #ifdef TRISC_PACK
             // At the end of each batch, publish the packed slots to the next NEO.

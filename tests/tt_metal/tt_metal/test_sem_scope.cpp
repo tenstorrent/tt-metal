@@ -1553,8 +1553,8 @@ TEST_F(SemScopeFixture, TestComputeAtomicBoundedProducerNoWaitControl) {
 
 // ---- ClusterSemaphore: public Metal compute APIs, Quasar PACK -> UNPACK across NEOs ----
 // Host setup and DFBs use Metal 2.0; the kernel uses ID-based startup/copy/pack until Quasar supports LLKOperand.
-// TODO: Move these tests to metal2_host_api/integration_tests when that suite supports Quasar execution
-// and the kernel can use Quasar LLKOperand APIs.
+// TODO @RT: Move these tests to metal2_host_api/integration_tests when that suite supports Quasar execution
+// and the kernel can use Quasar LLKOperand APIs. https://github.com/tenstorrent/tt-metal/issues/60164
 
 // NEO 0 packs a four-slot ring and NEO 1 unpacks it. The DFB is used only for storage/metadata;
 // ClusterSemaphore must order both publication and slot reuse; delay PACK to exercise the ready wait.
@@ -1597,7 +1597,6 @@ TEST_F(SemScopeFixture, TestClusterSemaphoreChain) {
         }
     }
 }
-
 // Closed rings start full and return to depth four. Exercise one through four active NEOs while all
 // four NEOs participate in initialization and completion barriers.
 TEST_F(SemScopeFixture, TestClusterSemaphoreClosedRing) {

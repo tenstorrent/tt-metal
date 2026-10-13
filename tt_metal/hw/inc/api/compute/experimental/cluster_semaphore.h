@@ -21,11 +21,13 @@ namespace ckernel {
  *
  * Backed by cluster semaphore register `index`, a 16-bit counter. The kernel picks the index
  * (0..TENSIX_GLOBAL_SEM_USER_COUNT - 1; 27-31 are reserved); the host does not allocate it.
+ * Unsupported on ttsim, which does not model these registers.
  *
- *  - One decrementer (consumer) per semaphore; several producers may share it. up() is one atomic add,
- *    so concurrent posts are exact. down() checks the count and then subtracts in two steps, so a second
- *    consumer could win the count in between. The hardware does not stall a subtract larger than the count:
- *    it leaves the count unchanged and raises a semaphore error, which is fatal on TRISC.
+ *  - One producer and one consumer per semaphore. The waits are reads, then up() or down() is a separate
+ *    access, so a second producer or consumer could act in between. Each register access is atomic; up(n) with
+ *    n > 7 takes several accesses, so a waiter can see part of it.
+ *    The hardware does not stall a subtract larger than the count: it leaves the count unchanged and raises a
+ *    semaphore error, and the thread keeps running.
  *  - Firmware sets every one of these semaphores to 0 at boot and nothing resets them between kernels,
  *    so a kernel must leave each semaphore it uses at 0. A prefilled ring must initialize its count
  *    before any participant uses it, and reset it after all participants finish.
@@ -95,7 +97,7 @@ public:
         WAYPOINT("CSMD");
     }
 
-    ALWI void wait_not_full(std::uint32_t n = 1) {
+    ALWI void wait_not_full(std::uint32_t n = 1) const {
         ASSERT(n <= capacity_);
         WAYPOINT("CSFW");
         while (value() > capacity_ - n) {
@@ -114,7 +116,7 @@ public:
 
 private:
     // The read aliases move the count by at most 7 per access.
-    static constexpr std::uint32_t kMaxStep = 7;
+    static constexpr std::uint32_t kMaxStep = TENSIX_GLOBAL_SEM_MAX_STEP;
 
     static ALWI void fence() { asm volatile("fence rw, rw" ::: "memory"); }
 
@@ -129,15 +131,19 @@ private:
 #else
         mine.unpack = 1;
 #endif
+        // As wait_bstatus_low(), but one fence before the poll instead of one per read.
         fence();
-        while ((csr_read<CSR::tensix_busy_status, false>() & mine.val) != 0) {
+        WAYPOINT("CSEW");
+        while ((csr_read<CSR::tensix_busy_status, false /*fence*/>() & mine.val) != 0) {
         }
+        WAYPOINT("CSED");
     }
 
     std::uint32_t index_;
     std::uint32_t capacity_;
-    // Lower bound on the count.
+    // Set by down(); lets wait_min() return early from the cached bound.
     bool decrementer_ = false;
+    // Lower bound on the count.
     std::uint32_t min_seen_ = 0;
 };
 
