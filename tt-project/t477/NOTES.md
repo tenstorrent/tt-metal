@@ -61,3 +61,43 @@ Branch ttp/t477-turbo-per-op-profile-of-one-10-s-block-t, base ae9534f5fb2 (t473
   persistent CCL buffer reused by the next call. Fixed in code commit (no deallocs). Job 198 = chain's retry of the
   old test (expected to fail the same way); chain477b stopped by me after that.
 - Fixed run477.sh + test file copied to blx01 (/var/tmp/fasth3/t477, b/models/...); chain restarted as chain477c.
+- 19:03-19:07 UTC (chain477c, rc 0): profile = blx01 job 200 (exit 0, 1 passed), A/B = blx01 job 201 (exit 0, 1 passed).
+  No drops. AICLK clamped at 900 MHz on all chips (UMD warnings): all numbers are relative only.
+
+## Step 1 result: per-op profile, one 10 s block (job 200)
+test_minimax_h3_transformer_block_perf [10s_768p, test_prompt_text_tokens, sp_sim1, 4x8 ring], random weights,
+tracy signposts start..stop, tt-perf-report 49 ops, 32 devices merged. Device time 51.03 ms + op-to-op gaps 3.64 ms.
+Labels for the 9184x32x1344 matmuls and the pre-block ops are inferred from shapes.
+
+| op group | ops | device ms | share |
+|---|---|---|---|
+| ring SDPA (RingJointSDPA, K/V all-gather fused in it) | 1 | 31.01 | 60.8% |
+| ff1 AG+MM SwiGLU (9184x1344x7168, HiFi2) | 1 | 6.23 | 12.2% |
+| qkv AG+MM (9184x1344x5376, HiFi2) | 1 | 4.39 | 8.6% |
+| out-proj AG+MM (9184x1792x1344, HiFi2) | 1 | 2.79 | 5.5% |
+| ff2 MM+RS (9184x3584x5376, **HiFi4**, FLOP-bound) | 1 | 2.52 | 4.9% |
+| norms (DitFusedDistributedRmsnorm) | 4 | 1.37 | 2.7% |
+| 9184x32x1344 matmuls (AdaLN modulate/gate, inferred) | 6 | 1.14 | 2.2% |
+| AdaLN projection (32x2688x24192) | 1 | 0.85 | 1.7% |
+| create/concat heads | 2 | 0.42 | 0.8% |
+| rope (embedding lookup + tilize) | 4 | 0.17 | 0.3% |
+| misc pre-block tilize/untilize/slice/binary | 27 | 0.13 | 0.3% |
+
+There is no separate K/V all-gather op: it runs inside ring SDPA. Next levers by size: ring SDPA (61%), then the
+matmuls (ff1+qkv+out+ff2 = 31%). ff2 is the only HiFi4 matmul; HiFi2 there is a candidate (quality check needed).
+
+## Step 3 result: pack-thread SwiGLU A/B (job 201, one job, arms old,new,old, 3 rounds each)
+| arm | ff1 best / mean ms | block best / mean ms |
+|---|---|---|
+| old | 7.03 / 7.10 | 54.61 / 55.00 |
+| new (TT_AGMM_SWIGLU_PACK=1) | 6.75 / 6.78 | 52.97 / 53.96 |
+| old | 6.82 / 6.88 | 52.98 / 53.39 |
+- Against the second (warm) old arm: ff1 new/old 0.990 (best), 0.985 (mean); block 1.000 (best), 1.011 (mean).
+  Against the mean of both old arms: ff1 0.975 (best). The gain is about 1-2.5% of ff1 (0.07-0.17 ms per block),
+  below block-level noise.
+- Not bit-identical: new-vs-old ff1 equal-frac 0.757, max|diff| 0.0312; block equal-frac 0.945, max|diff| 0.0312.
+  old-vs-old is bit-identical (ff1 and block), so the difference comes from the new kernel.
+- JIT cache: 1 compute defines_generated.h names SWIGLU_PACK_THREAD, so the new arm built the new kernel.
+  No kernel JIT compile errors.
+- Verdict: keep TT_AGMM_SWIGLU_PACK opt-in (off by default). Not worth turning on: ~1% of ff1, not bit-identical.
+- /var/tmp/fasth3/t477 on blx01 deleted after the runs (7.8 GB; / now 417 GB free).
