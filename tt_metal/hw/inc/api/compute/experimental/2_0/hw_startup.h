@@ -7,6 +7,7 @@
 #include "api/compute/common.h"                        // ALWI, UNPACK/MATH/PACK, DST_ACCUM_MODE, PackMode
 #include "api/compute/src_order.h"                     // SrcOrder
 #include "api/compute/experimental/2_0/llk_operand.h"  // LLKOperand
+#include "experimental/2_0/llk_config.h"               // config trackers
 #include "experimental/2_0/llk_hw_configure.h"  // id-free llk_{unpack,math,pack}_hw_configure (+ pack_dest_init / math_pack_sync_init per TRISC)
 #include "api/compute/experimental/semaphore_compute_impl.h"  // compute_semaphore_hw_startup (Blackhole compute semaphore seed)
 
@@ -94,6 +95,10 @@ ALWI void compute_kernel_hw_startup(
     // capacity. PACK is its producer, so this needs no handshake with UNPACK; see
     // compute_semaphore_hw_startup().
     PACK((compute_semaphore_hw_startup()));
+    // Reprograms every tracked config outside the config bodies; next init must reconfigure.
+    UNPACK((experimental::detail::unpack_config_state = nullptr));
+    MATH((experimental::detail::math_config_state = nullptr));
+    PACK((experimental::detail::pack_config_state = nullptr));
 }
 
 // clang-format off

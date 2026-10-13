@@ -3,7 +3,9 @@
 
 #pragma once
 
+#include <cstdint>
 #include "api/compute/experimental/compressed_custom_mm.h"
+#include "experimental/2_0/llk_config.h"  // config trackers
 #include "api/compute/experimental/2_0/llk_operand.h"
 #include "sanitizer/api.h"
 
@@ -48,6 +50,8 @@ ALWI void compressed_custom_mm_block_init_short(
     UNPACK((_llk_unpack_AB_compressed_custom_mm_init_<transpose, clear_src>(S0.face_r_dim)));
     MATH((_llk_math_compressed_custom_mm_init_<transpose, false, dense_packing>(S0.face_r_dim)));
     PACK((_llk_pack_custom_mm_init_<dense_packing>()));
+    // The custom_mm pack setup replaces the tracked pack config.
+    PACK((experimental::detail::pack_config_state = nullptr));
 }
 
 template <
@@ -72,6 +76,8 @@ ALWI void compressed_custom_mm_block_init_short(
         _llk_math_compressed_custom_mm_init_<transpose, false, dense_packing>(get_operand_face_r_dim(in0_id));
     }));
     PACK((_llk_pack_custom_mm_init_<dense_packing>()));
+    // The custom_mm pack setup replaces the tracked pack config.
+    PACK((experimental::detail::pack_config_state = nullptr));
 }
 
 template <bool finalize = true, DataFormat F0, TensorShape S0, DataFormat F1, TensorShape S1>

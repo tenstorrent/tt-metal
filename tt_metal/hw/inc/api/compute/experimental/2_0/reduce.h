@@ -63,9 +63,7 @@ ALWI void reduce_init(LLKOperand<DF, DS> /*data*/, LLKOperand<OF, OS> /*out*/) {
     UNPACK((llk_unpack_AB_reduce_init_impl<reduce_type, reduce_dim>(DS)));
     MATH((llk_math_config<is_fp32_dest_acc_en, data, data>()));
     MATH((llk_math_reduce_init_impl<reduce_type, reduce_dim, is_fp32_dest_acc_en, MATH_FIDELITY>(DS)));
-    // Mask after pack_config so the clear inside pack_config does not stick.
-    PACK((llk_pack_config<is_fp32_dest_acc_en, out>()));
-    PACK((llk_pack_reduce_mask_config_impl<reduce_dim, PackMode::Default>(OS.face_r_dim)));
+    PACK((llk_pack_reduce_config<is_fp32_dest_acc_en, out, reduce_dim>()));
 }
 
 // clang-format off
@@ -197,6 +195,7 @@ ALWI void reduce_uninit() {
     SAN_HOOK(unsupported());
     MATH((llk_math_reduce_uninit()));
     PACK((llk_pack_reduce_mask_clear()));
+    PACK((detail::pack_config_state = nullptr));
 }
 
 }  // namespace experimental

@@ -74,8 +74,7 @@ ALWI void pack_untilize_init(LLKOperand<InFormat, InShape> /*in*/, LLKOperand<Ou
 
     // PACK: clear the reduce mask and program formats, then DEST remap and untilize strides.
     MATH((llk_math_reconfig_remap(true /*remap_enable*/)));
-    PACK((llk_pack_config<is_fp32_dest_acc_en, out_desc>()));
-    PACK((llk_pack_untilize_init<out_desc, is_fp32_dest_acc_en, block_ct_dim, full_ct_dim>()));
+    PACK((llk_pack_untilize_config<is_fp32_dest_acc_en, out_desc, block_ct_dim, full_ct_dim>()));
     PACK((_llk_init_packer_dest_offset_registers_<DST_SYNC_MODE>()));
 }
 
@@ -186,10 +185,9 @@ ALWI void pack_untilize_dest_init(LLKOperand<OutFormat, OutShape> /*out*/) {
         block_ct_dim > 0 && full_ct_dim % block_ct_dim == 0,
         "pack_untilize_dest_init: full_ct_dim must be a positive multiple of block_ct_dim.");
     MATH((llk_math_reconfig_remap(true /*remap_enable*/)));
-    PACK((llk_pack_config<is_fp32_dest_acc_en, LLKOperand<OutFormat, OutShape>::descriptor>()));
-    PACK((llk_pack_untilize_init<
-          LLKOperand<OutFormat, OutShape>::descriptor,
+    PACK((llk_pack_untilize_config<
           is_fp32_dest_acc_en,
+          LLKOperand<OutFormat, OutShape>::descriptor,
           block_ct_dim,
           full_ct_dim,
           narrow_row,
@@ -270,6 +268,7 @@ ALWI void pack_untilize_uninit(LLKOperand<OutFormat, OutShape> /*out*/) {
     PACK((_llk_init_packer_dest_offset_registers_<DST_SYNC_MODE>()));
     PACK((llk_pack_reconfig_data_format<LLKOperand<OutFormat, OutShape>::descriptor, is_fp32_dest_acc_en>()));
     PACK((llk_pack_init<LLKOperand<OutFormat, OutShape>::descriptor, is_fp32_dest_acc_en, PackMode::Default>()));
+    PACK((detail::pack_config_state = nullptr));
 }
 
 }  // namespace experimental

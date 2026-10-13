@@ -3,11 +3,13 @@
 
 #pragma once
 
+#include <cstdint>
 #include "api/compute/experimental/custom_mm.h"
 #include "api/compute/experimental/2_0/llk_operand.h"
 #include "sanitizer/api.h"
 #include "data_format_derive.h"
 #include "experimental/2_0/llk_hw_configure.h"
+#include "experimental/2_0/llk_config.h"  // config trackers
 
 // LLKOperand overloads live in this opt-in header, like 2_0/hw_startup.h:
 // pulling ckernel::experimental into legacy kernels can collide with the
@@ -69,6 +71,10 @@ ALWI void custom_mm_block_init(
     PACK((llk_pack_hw_configure<fp32_dest_acc_en>(out_cb_id)));
     PACK((llk_pack_init<ckernel::PackMode::Default, false>(out_cb_id)));
     PACK((_llk_pack_custom_mm_init_<dense_packing>()));
+    // Reprograms every tracked config outside the config bodies; next init must reconfigure.
+    UNPACK((experimental::detail::unpack_config_state = nullptr));
+    MATH((experimental::detail::math_config_state = nullptr));
+    PACK((experimental::detail::pack_config_state = nullptr));
 }
 
 template <
@@ -119,6 +125,10 @@ ALWI void custom_mm_block_init(
     PACK((llk_pack_hw_configure<fp32_dest_acc_en>(out_cb_id)));
     PACK((llk_pack_init<ckernel::PackMode::Default, false>(out_cb_id)));
     PACK((_llk_pack_custom_mm_init_<dense_packing>()));
+    // Reprograms every tracked config outside the config bodies; next init must reconfigure.
+    UNPACK((experimental::detail::unpack_config_state = nullptr));
+    MATH((experimental::detail::math_config_state = nullptr));
+    PACK((experimental::detail::pack_config_state = nullptr));
 }
 
 template <
@@ -151,6 +161,8 @@ ALWI void custom_mm_block_init_short(
     MATH((_llk_math_custom_mm_init_<transpose, split_acc, dense_packing>(S0.face_r_dim, ct_dim)));
 
     PACK((_llk_pack_custom_mm_init_<dense_packing>()));
+    // The custom_mm pack setup replaces the tracked pack config.
+    PACK((experimental::detail::pack_config_state = nullptr));
 }
 
 template <
@@ -178,6 +190,8 @@ ALWI void custom_mm_block_init_short(
     }));
 
     PACK((_llk_pack_custom_mm_init_<dense_packing>()));
+    // The custom_mm pack setup replaces the tracked pack config.
+    PACK((experimental::detail::pack_config_state = nullptr));
 }
 
 template <
