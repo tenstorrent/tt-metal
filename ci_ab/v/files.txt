@@ -1,0 +1,3 @@
+tt_metal/tt-llk/tt_llk_blackhole/llk_lib/llk_math_common.h
+tt_metal/tt-llk/tt_llk_blackhole/llk_lib/llk_pack_common.h
+tt_metal/hw/ckernels/blackhole/metal/llk_api/llk_math_common_api.h

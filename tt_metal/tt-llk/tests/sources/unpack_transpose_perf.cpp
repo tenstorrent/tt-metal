@@ -178,6 +178,14 @@ void run_kernel(RUNTIME_PARAMETERS params)
                 std::uint32_t block_tiles = std::min(TILE_CNT - block_start, MAX_TILES_DEST);
 
                 _llk_packer_wait_for_math_done_();
+#if defined(UNPACK_TRANSPOSE_BLOCK) && defined(ARCH_BLACKHOLE)
+                if (block_tiles > 1)
+                {
+                    _llk_pack_block_<DstSync::SyncHalf, is_fp32_dest_acc_en, ckernel::PackMode::Default>(
+                        0, PERF_ADDRESS(PERF_OUTPUT, block_start), block_tiles);
+                }
+                else
+#endif
                 for (std::uint32_t block_tile = 0; block_tile < block_tiles; block_tile++)
                 {
                     LLK_ASSERT(

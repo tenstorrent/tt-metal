@@ -83,7 +83,22 @@ def test_perf_eltwise_binary(
         loop_factor=loop_factor,
         is_perf=is_perf,
         perf_report=perf_report,
+        **_dh_block(dest_acc, formats, math_op, math_fidelity, transpose_srca, input_dimensions, acc_to_dest),
     )
+
+
+def _dh_block(dest_acc, formats, math_op, math_fidelity, transpose_srca, input_dimensions, acc_to_dest):
+    prod = (
+        dest_acc == DestAccumulation.No
+        and "Float16_b" in str(formats.input_format)
+        and "Float16_b" in str(formats.output_format)
+        and "Elwadd" in str(math_op)
+        and "LoFi" in str(math_fidelity)
+        and transpose_srca == Transpose.No
+        and list(input_dimensions) == [32, 256]
+        and not acc_to_dest
+    )
+    return dict(unpack_ab_block=1, per_face_handoff=False) if prod else {}
 
 
 @pytest.mark.perf

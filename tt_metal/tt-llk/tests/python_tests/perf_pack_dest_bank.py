@@ -115,6 +115,7 @@ def test_perf_pack_dest_bank(
         "sources/pack_dest_bank_perf.cpp",
         formats,
         run_types=[
+            PerfRunType.L1_TO_L1,
             PerfRunType.PACK_ISOLATE,
         ],
         templates=[

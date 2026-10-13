@@ -318,6 +318,14 @@ void run_kernel(RUNTIME_PARAMETERS params)
             {
                 for (int block_num = 0; block_num < NUM_BLOCKS; ++block_num)
                 {
+#if UNPACK_BLOCK && defined(ARCH_BLACKHOLE)
+                    if (num_faces == 4 && !tilize_en && NUM_TILES_IN_BLOCK > 1)
+                    {
+                        _llk_pack_block_<DstSync::SyncHalf, is_fp32_dest_acc_en, ckernel::PackMode::Default>(
+                            DST_INDEX, L1_ADDRESS(buffer_Res[block_num * NUM_TILES_IN_BLOCK]), NUM_TILES_IN_BLOCK);
+                    }
+                    else
+#endif
                     for (std::uint32_t tile_num = 0; tile_num < NUM_TILES_IN_BLOCK; ++tile_num)
                     {
                         LLK_ASSERT(
@@ -336,6 +344,14 @@ void run_kernel(RUNTIME_PARAMETERS params)
                 for (int block_num = 0; block_num < NUM_BLOCKS; ++block_num)
                 {
                     _llk_packer_wait_for_math_done_();
+#if UNPACK_BLOCK && defined(ARCH_BLACKHOLE)
+                    if (num_faces == 4 && !tilize_en && NUM_TILES_IN_BLOCK > 1)
+                    {
+                        _llk_pack_block_<DstSync::SyncHalf, is_fp32_dest_acc_en, ckernel::PackMode::Default>(
+                            DST_INDEX, L1_ADDRESS(buffer_Res[block_num * NUM_TILES_IN_BLOCK]), NUM_TILES_IN_BLOCK);
+                    }
+                    else
+#endif
                     for (std::uint32_t tile_num = 0; tile_num < NUM_TILES_IN_BLOCK; ++tile_num)
                     {
                         LLK_ASSERT(
