@@ -19,7 +19,9 @@ time or in batches.
 | Batched request latency, sustained (ms) | 1024 bucket: 415 / 760 / 1478 / 3040 / 12242 at B = 1 / 2 / 4 / 8 / 32 |
 | Batched mixed throughput | 3.65 decisions/s at `--batch-size 4` (buckets 128 + 1024), the same 600 choices as batch 1 |
 
-All numbers are measured. Batched answers are bit-identical to batch 1 ([Batches](doc/full_model/README.md#batches)). The full report is in [`doc/benchmark/REPORT.md`](doc/benchmark/REPORT.md).
+All numbers are measured. Batched answers are bit-identical to batch 1 ([Batches](doc/full_model/README.md#batches)).
+Batching barely raises throughput at buckets 1024 and above, because one row at those lengths already
+keeps the matmuls compute-bound. Most of the gain comes from short prompts in the 128 bucket. The full report is in [`doc/benchmark/REPORT.md`](doc/benchmark/REPORT.md).
 
 ## Setup
 

@@ -240,7 +240,7 @@ show **0 host ops**.
 | No torch or host calls in a pass | Met: counter = 0 (`test_runtime_audit.py`); 0 host ops in Tracy |
 | Watcher-clean run with `TT_METAL_WATCHER=10` | Met: 10 s and 1 s runs, no errors |
 | Real-weight test passing per layer kind | Met: every test uses real weights |
-| Batch > 1 correctness | Not done: batch 1 only (Limitations) |
+| Batch > 1 correctness | Not done in this stage (batch 1). Added later: batched requests are bit-identical to batch 1, see `../full_model/README.md#batches` |
 | MoE | N/A (dense SwiGLU MLP) |
 | Sliding window | N/A (no sliding-window layers) |
 | README and work_log with commands, PCC, perf, limitations | Met: this file and `work_log.md` |

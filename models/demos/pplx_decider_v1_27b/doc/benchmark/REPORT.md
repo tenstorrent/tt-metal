@@ -140,8 +140,10 @@ Return only the letter code of the best option.
 
 ## Limitations
 
-- Batch 1 only. Batched requests with left padding are not implemented (DeltaNet would need the HF
-  padding-mask zeroing).
+- The accuracy and latency numbers in this report were measured at batch 1. Batched requests
+  (`max_batch_size`, `predict_batch`) were added later. They right-pad each row to its own bucket and
+  give answers bit-identical to batch 1; see [`../full_model/README.md#batches`](../full_model/README.md#batches).
+  Left-padded batching as in the HF app is not implemented (DeltaNet would need the HF padding-mask zeroing).
 - Sustained back-to-back requests at buckets 1024 and above run 1.22–1.46× slower than burst. The
   suspected cause is clock or power throttling (inferred; device clocks were not read).
 - The card's prompt protocol is unknown, so accuracy deltas against the card are indicative.
