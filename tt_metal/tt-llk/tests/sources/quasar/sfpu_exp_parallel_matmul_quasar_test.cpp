@@ -165,17 +165,17 @@ using namespace ckernel;
 using namespace ckernel::math;
 using namespace ckernel::sfpu;
 
-// SFPU_ISSUE_LOADMACRO comes from the test's SfpuIssue parameter.
-constexpr SfpuIssue EXP_ISSUE = SFPU_ISSUE_LOADMACRO ? SfpuIssue::LoadMacro : SfpuIssue::Sfpi;
+// SFPU_IMPL_LOADMACRO comes from the test's SfpuImpl parameter.
+constexpr SfpuImpl EXP_IMPL = SFPU_IMPL_LOADMACRO ? SfpuImpl::LoadMacro : SfpuImpl::Sfpi;
 
 #ifdef DISABLE_SFPLOADMACRO
-// resolve_sfpu_issue would quietly build Sfpi here; fail instead so a LoadMacro variant never reports Sfpi results.
-static_assert(!SFPU_ISSUE_LOADMACRO, "SFPLOADMACRO is disabled; only the Sfpi variant can be built");
+// resolve_sfpu_impl would quietly build Sfpi here; fail instead so a LoadMacro variant never reports Sfpi results.
+static_assert(!SFPU_IMPL_LOADMACRO, "SFPLOADMACRO is disabled; only the Sfpi variant can be built");
 #endif
 
 // The SrcS layout is known only at runtime, so init and the tile loop each dispatch once.
 template <typename Layout>
-using ExpOp = ExpSrcs<APPROX_MODE, Layout::layout, EXP_ISSUE>;
+using ExpOp = ExpSrcs<APPROX_MODE, Layout::layout, EXP_IMPL>;
 
 void run_kernel(RUNTIME_PARAMETERS params)
 {

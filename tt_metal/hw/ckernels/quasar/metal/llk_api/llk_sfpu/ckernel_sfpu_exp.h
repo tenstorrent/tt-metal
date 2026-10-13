@@ -383,8 +383,8 @@ inline void _exp_init_loadmacro_(
 /// SrcS EXP via SFPLOADMACRO, ExpHwLut only (bit-identical to Sfpi). Owns EXP_LOADMACRO_REPLAY_SLOT and macro sequence
 /// 0.
 template <sfpi::DataLayout LAYOUT>
-struct SrcsUnary<ExpHwLut, LAYOUT, SfpuIssue::LoadMacro>
-    : SfpuSrcsUnaryOp<SrcsUnary<ExpHwLut, LAYOUT, SfpuIssue::LoadMacro>> {
+struct SrcsUnary<ExpHwLut, LAYOUT, SfpuImpl::LoadMacro>
+    : SfpuSrcsUnaryOp<SrcsUnary<ExpHwLut, LAYOUT, SfpuImpl::LoadMacro>> {
     using Layout = SrcsLayout<LAYOUT>;
     static_assert(Layout::ops <= 4, "Replay cycles LREG0-3 (d & 3); >4 in-flight macros would reuse a live LREG");
 
@@ -419,11 +419,11 @@ template <bool APPROXIMATION_MODE, sfpi::DataLayout LAYOUT>
 using ExpSrcsAlgo = ExpAlgo<APPROXIMATION_MODE, LAYOUT == sfpi::DataLayout::F32>;
 
 /// SrcS EXP op type. LoadMacro needs the LUT path (APPROXIMATION_MODE or a 16-bit layout).
-template <bool APPROXIMATION_MODE, sfpi::DataLayout LAYOUT, SfpuIssue ISSUE = SfpuIssue::Sfpi>
+template <bool APPROXIMATION_MODE, sfpi::DataLayout LAYOUT, SfpuImpl IMPL = SfpuImpl::Sfpi>
 using ExpSrcs = SrcsUnary<
     ExpSrcsAlgo<APPROXIMATION_MODE, LAYOUT>,
     LAYOUT,
-    resolve_sfpu_issue<ISSUE, std::is_same_v<ExpSrcsAlgo<APPROXIMATION_MODE, LAYOUT>, ExpHwLut>>()>;
+    resolve_sfpu_impl<IMPL, std::is_same_v<ExpSrcsAlgo<APPROXIMATION_MODE, LAYOUT>, ExpHwLut>>()>;
 
 }  // namespace sfpu
 }  // namespace ckernel

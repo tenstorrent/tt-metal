@@ -12,7 +12,7 @@
 #include "llk_assert.h"
 #include "sfpi.h"
 #include "sfpu/ckernel_sfpu_operand.h"
-#include "sfpu_issue.h"
+#include "sfpu_impl.h"
 
 namespace ckernel::sfpu {
 
@@ -68,13 +68,13 @@ struct SfpuSrcsUnaryOp {
 };
 
 /// Unary SrcS op. Sfpi serves every MATH; LoadMacro versions are specialized next to the op.
-template <typename MATH, sfpi::DataLayout LAYOUT, SfpuIssue ISSUE>
+template <typename MATH, sfpi::DataLayout LAYOUT, SfpuImpl IMPL>
 struct SrcsUnary {
-    static_assert(sizeof(MATH) == 0, "This SFPU op has no SrcS implementation for the requested SfpuIssue");
+    static_assert(sizeof(MATH) == 0, "This SFPU op has no SrcS implementation for the requested SfpuImpl");
 };
 
 template <typename MATH, sfpi::DataLayout LAYOUT>
-struct SrcsUnary<MATH, LAYOUT, SfpuIssue::Sfpi> : SfpuSrcsUnaryOp<SrcsUnary<MATH, LAYOUT, SfpuIssue::Sfpi>> {
+struct SrcsUnary<MATH, LAYOUT, SfpuImpl::Sfpi> : SfpuSrcsUnaryOp<SrcsUnary<MATH, LAYOUT, SfpuImpl::Sfpi>> {
     using Layout = SrcsLayout<LAYOUT>;
 
     sfpi_inline static void calculate() {
@@ -104,13 +104,13 @@ struct SfpuSrcsBinaryOp {
 };
 
 /// Binary SrcS op. Only Sfpi exists.
-template <typename MATH, sfpi::DataLayout LAYOUT, SfpuIssue ISSUE>
+template <typename MATH, sfpi::DataLayout LAYOUT, SfpuImpl IMPL>
 struct SrcsBinary {
-    static_assert(sizeof(MATH) == 0, "This SFPU op has no SrcS implementation for the requested SfpuIssue");
+    static_assert(sizeof(MATH) == 0, "This SFPU op has no SrcS implementation for the requested SfpuImpl");
 };
 
 template <typename MATH, sfpi::DataLayout LAYOUT>
-struct SrcsBinary<MATH, LAYOUT, SfpuIssue::Sfpi> : SfpuSrcsBinaryOp<SrcsBinary<MATH, LAYOUT, SfpuIssue::Sfpi>> {
+struct SrcsBinary<MATH, LAYOUT, SfpuImpl::Sfpi> : SfpuSrcsBinaryOp<SrcsBinary<MATH, LAYOUT, SfpuImpl::Sfpi>> {
     using Layout = SrcsLayout<LAYOUT>;
 
     sfpi_inline static void calculate() {

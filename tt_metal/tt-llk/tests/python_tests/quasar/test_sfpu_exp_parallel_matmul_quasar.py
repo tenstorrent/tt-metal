@@ -28,7 +28,7 @@ from helpers.llk_params import (
     MathFidelity,
     MathOperation,
     PerfRunType,
-    SfpuIssue,
+    SfpuImpl,
     Transpose,
     format_dict,
 )
@@ -53,7 +53,7 @@ from helpers.test_variant_parameters import (
     LOOP_FACTOR,
     MATH_FIDELITY,
     NUM_FACES,
-    SFPU_ISSUE,
+    SFPU_IMPL,
     TILE_COUNT,
     UNPACK_TRANS_FACES,
 )
@@ -75,7 +75,7 @@ PERF_DIMENSION_PROFILE = DIMENSION_PROFILES[1]
 
 # ttsim has no SFPLOADMACRO, so under --disable-sfploadmacro only the SFPI implementation is built.
 LOADMACRO_AVAILABLE = os.environ.get("TT_METAL_DISABLE_SFPLOADMACRO") != "1"
-ALL_SFPU_ISSUES = tuple(SfpuIssue) if LOADMACRO_AVAILABLE else (SfpuIssue.Sfpi,)
+ALL_SFPU_IMPLS = tuple(SfpuImpl) if LOADMACRO_AVAILABLE else (SfpuImpl.Sfpi,)
 
 
 def _matmul_output_fits_dest(
@@ -94,7 +94,7 @@ def generate_parallel_matmul_exp_combinations(
     formats_list: list[FormatConfig],
     *,
     is_perf: bool = False,
-    impls: tuple[SfpuIssue, ...] = (SfpuIssue.Sfpi,),
+    impls: tuple[SfpuImpl, ...] = (SfpuImpl.Sfpi,),
 ):
     combinations = []
     for fmt, dest_acc in generate_quasar_srcs_format_dest_acc_combinations(
@@ -123,12 +123,12 @@ def generate_parallel_matmul_exp_combinations(
                         dest_sync,
                     ):
                         continue
-                    for sfpu_issue in impls:
+                    for sfpu_impl in impls:
                         # Accurate exp only differs for a Float32 SrcS layout with Sfpi; LoadMacro is LUT-only.
                         approx_modes = (
                             (ApproximationMode.Yes, ApproximationMode.No)
                             if not is_perf
-                            and sfpu_issue == SfpuIssue.Sfpi
+                            and sfpu_impl == SfpuImpl.Sfpi
                             and fmt.input_format == DataFormat.Float32
                             and fmt.output_format == DataFormat.Float32
                             else (ApproximationMode.Yes,)
@@ -140,7 +140,7 @@ def generate_parallel_matmul_exp_combinations(
                                     dest_acc,
                                     dest_sync,
                                     implied_math_format,
-                                    sfpu_issue,
+                                    sfpu_impl,
                                     approx_mode,
                                     runtime(exp_input_dimensions),
                                     runtime(input_A_dimensions),
@@ -153,10 +153,10 @@ def generate_parallel_matmul_exp_combinations(
 # Regular run: SFPI only. The SFPLOADMACRO variant is nightly-marked; no repo CI job runs it on
 # Quasar yet (ttsim has no SFPLOADMACRO), so it runs only in manual hardware/emulator sessions.
 PARALLEL_MATMUL_EXP_COMBINATIONS = generate_parallel_matmul_exp_combinations(
-    SFPU_UNARY_FORMATS, impls=(SfpuIssue.Sfpi,)
+    SFPU_UNARY_FORMATS, impls=(SfpuImpl.Sfpi,)
 )
 PARALLEL_MATMUL_EXP_LOADMACRO_COMBINATIONS = generate_parallel_matmul_exp_combinations(
-    SFPU_UNARY_FORMATS, impls=(SfpuIssue.LoadMacro,)
+    SFPU_UNARY_FORMATS, impls=(SfpuImpl.LoadMacro,)
 )
 
 
@@ -176,7 +176,7 @@ def test_sfpu_exp_parallel_matmul_quasar(
         dest_acc,
         dest_sync,
         implied_math_format,
-        sfpu_issue,
+        sfpu_impl,
         approx_mode,
         exp_input_dimensions,
         input_A_dimensions,
@@ -291,7 +291,7 @@ def test_sfpu_exp_parallel_matmul_quasar(
             ENABLE_DIRECT_INDEXING(False),
             DEST_SYNC(dest_sync),
             UNPACK_TRANS_FACES(Transpose.No),
-            SFPU_ISSUE(sfpu_issue),
+            SFPU_IMPL(sfpu_impl),
             APPROX_MODE(approx_mode),
         ],
         "runtimes": [

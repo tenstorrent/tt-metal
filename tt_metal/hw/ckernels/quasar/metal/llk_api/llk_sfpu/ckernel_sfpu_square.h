@@ -47,8 +47,8 @@ inline void calculate_square() {
 }
 
 /// SrcS square op type, Sfpi only.
-template <sfpi::DataLayout LAYOUT, SfpuIssue ISSUE = SfpuIssue::Sfpi>
-using SquareSrcs = SrcsUnary<SquareMath, LAYOUT, resolve_sfpu_issue<ISSUE, false /*HAS_LOADMACRO*/>()>;
+template <sfpi::DataLayout LAYOUT, SfpuImpl IMPL = SfpuImpl::Sfpi>
+using SquareSrcs = SrcsUnary<SquareMath, LAYOUT, resolve_sfpu_impl<IMPL, false /*HAS_LOADMACRO*/>()>;
 
 }  // namespace sfpu
 }  // namespace ckernel

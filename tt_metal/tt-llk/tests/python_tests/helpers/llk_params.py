@@ -512,8 +512,8 @@ class ApproximationMode(Enum):
         return str(self.value).lower()
 
 
-class SfpuIssue(Enum):
-    """How an SFPU op's instructions are issued (ckernel::sfpu::SfpuIssue); never changes the math."""
+class SfpuImpl(Enum):
+    """Which implementation runs an SFPU op (ckernel::sfpu::SfpuImpl); never changes the math."""
 
     Sfpi = "Sfpi"
     LoadMacro = "LoadMacro"
