@@ -158,16 +158,6 @@ TTRUN_PY="${TT_METAL_HOME}/ttnn/ttnn/distributed/ttrun.py"
 MPIRUN=$(command -v mpirun-ulfm || command -v mpirun)
 
 RESOLVED_HOSTS=$(awk 'NF && $1 !~ /^#/ {printf "%s,", $1}' "${TTRUN_DIR}/hostfile" | sed 's/,$//')
-
-PERF_BASELINE=""
-if [ -n "${EXPECTED_TPS}" ]; then
-  PERF_BASELINE="{\"metrics\": {\"throughput_tok_s\": [${EXPECTED_TPS}, 0.15]}}"
-elif [ -f "${PERF_BASELINES}" ]; then
-  PERF_BASELINE=$(
-    python3 "${TT_METAL_HOME}/models/demos/common/prefill/runners/ci/perf_baseline.py" \
-      "${PERF_BASELINES}" "${MODEL}" "${CONFIG}" "${RESOLVED_HOSTS}"
-  ) || true
-fi
 TTRUN_CWD="${PIPELINE_DIR}/ttrun-cwd"
 mkdir -p "${TTRUN_CWD}"
 
@@ -361,69 +351,15 @@ if [ "${PROD_RC}" -eq 0 ]; then
 fi
 
 PERF_GATE_RC=0
-if [ "${REQUIRE_TPS}" = 1 ] || [ -n "${PERF_BASELINE}" ]; then
+if [ "${REQUIRE_TPS}" = 1 ] || [ -n "${EXPECTED_TPS}" ] || [ -f "${PERF_BASELINES}" ]; then
   # The summary normally runs in the EXIT trap, after this point; force it early so the gate has
   # a file to read. The trap's own call is a no-op once this one has run.
   emit_summary
-  python3 - "${PREFILL_SUMMARIES}/perf_json/${MODEL}_${CONFIG}.json" "${PERF_BASELINE}" \
-    "${PREFILL_PERF_MARGIN:-}" <<'PERFPY' || PERF_GATE_RC=$?
-import json, sys
-
-path, baseline, margin_override = sys.argv[1], sys.argv[2], sys.argv[3]
-try:
-    rec = json.load(open(path))
-except Exception as e:
-    print(f"TPS GATE FAIL: no perf metrics at {path}: {type(e).__name__}: {e}", file=sys.stderr)
-    sys.exit(1)
-
-probes, index = rec.get("throughput_tok_s") or {}, rec.get("chunk_index") or {}
-# Gate the deepest probe: throughput falls as the KV cache grows, so it is the worst case and the
-# one a full-context user sees.
-label = max(probes, key=lambda k: index.get(k, -1), default=None)
-if label is None:
-    print(f"TPS GATE FAIL: {path} has no throughput probes; the run measured nothing", file=sys.stderr)
-    sys.exit(1)
-
-if not baseline:
-    print(f"TPS: {probes[label]:,.0f} tok/s {label} (no PREFILL_EXPECTED_TPS set -- reporting, not gating)")
-    sys.exit(0)
-
-baseline = json.loads(baseline)
-expected_probe = baseline.get("probe")
-if expected_probe and label != expected_probe:
-    print(f"TPS GATE FAIL: baseline is for {expected_probe} but the deepest probe is {label}; "
-          f"the context length changed, so re-measure and update perf_baselines.json", file=sys.stderr)
-    sys.exit(1)
-
-METRICS = {
-    "throughput_tok_s": ("TPS", "tok/s", ",.0f", True),
-    "ttft_s": ("TTFT", "s", ",.2f", False),
-    "chunk_time_ms": ("CHUNK TIME", "ms", ",.0f", False),
-}
-failed = False
-for metric, (expected, margin) in baseline["metrics"].items():
-    name, unit, fmt, higher_is_better = METRICS[metric]
-    margin = float(margin_override or margin)
-    value = (rec.get(metric) or {}).get(label)
-    if value is None:
-        print(f"{name} GATE FAIL: {path} has no {metric} at {label}", file=sys.stderr)
-        failed = True
-        continue
-    lo, hi = expected * (1 - margin), expected * (1 + margin)
-    print(f"{name} GATE {label}: {value:{fmt}} {unit} vs {expected:{fmt}} +/- {margin * 100:.0f}% "
-          f"[{lo:{fmt}}, {hi:{fmt}}]")
-    slow, fast = (value < lo, value > hi) if higher_is_better else (value > hi, value < lo)
-    if slow:
-        side, bound = ("below", lo) if higher_is_better else ("above", hi)
-        print(f"{name} GATE FAIL: {value:{fmt}} {side} {bound:{fmt}}", file=sys.stderr)
-        failed = True
-        continue
-    if fast:
-        side, bound = ("above", hi) if higher_is_better else ("below", lo)
-        print(f"{name} GATE WARN: {value:{fmt}} {side} {bound:{fmt}}; update the baseline if this holds")
-    print(f"{name} GATE PASS")
-sys.exit(1 if failed else 0)
-PERFPY
+  python3 "${TT_METAL_HOME}/models/demos/common/prefill/runners/ci/perf_gate.py" \
+    "${PREFILL_SUMMARIES}/perf_json/${MODEL}_${CONFIG}.json" \
+    --table "${PERF_BASELINES}" --model "${MODEL}" --config "${CONFIG}" --hosts "${RESOLVED_HOSTS}" \
+    --expected-tps "${EXPECTED_TPS}" --margin "${PREFILL_PERF_MARGIN:-}" \
+    --require "${REQUIRE_TPS}" || PERF_GATE_RC=$?
 fi
 
 PCC_GATE_RC=0
