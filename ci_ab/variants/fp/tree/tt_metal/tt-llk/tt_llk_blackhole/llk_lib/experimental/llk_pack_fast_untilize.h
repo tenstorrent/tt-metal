@@ -1,0 +1,579 @@
+// SPDX-FileCopyrightText: © 2026 Tenstorrent USA, Inc.
+//
+// SPDX-License-Identifier: Apache-2.0
+
+// BH Fast-Untilize Pack (tt-metal#42048 + #42049).
+//
+// Read math DEST layout (4 tiles, ct=4; 16-bit or native fp32 DEST) emitted by
+// `_llk_math_fast_untilize_*`:
+//   Dst rows   0..63:  t0.F0 | t0.F1 | t1.F0 | t1.F1
+//   Dst rows  64..127: t2.F0 | t2.F1 | t3.F0 | t3.F1
+//   Dst rows 128..191: t0.F2 | t0.F3 | t1.F2 | t1.F3
+//   Dst rows 192..255: t2.F2 | t2.F3 | t3.F2 | t3.F3
+//
+// Full-width PACRs use ALL_INTF_ACTIVE + STRIDED_MODE to read 4 face-rows at
+// Dst rows R, R+16, R+32, R+48 (the 16-row interface stride), concatenating
+// them into 64 contiguous L1 datums. For unit_dim=3, the tail PACR uses
+// TWO_INTFS_ACTIVE and emits the remaining tile's 32 datums. Regular
+// pack_untilize uses two interfaces for the common 4-face layout, so this wider
+// DEST layout is the pack-side bandwidth win for fast-untilize.
+//
+// Contiguous PACR sequence per block call:
+//   unit_dim=2: 16 rows x 1 PACR x 2 phases = 32 PACRs.
+//   unit_dim=3/4: 16 rows x 2 PACRs x 2 phases = 64 PACRs.
+// For unit_dim=4, regular pack_untilize needs 16 rows x 4 tile slots x
+// 2 phases = 128 two-interface PACRs. The fast DEST layout reduces that to
+// 16 rows x 2 block groups x 2 phases = 64 four-interface PACRs.
+//   Phase 1 emits top strip rows with Last=0.
+//   Phase 2 emits bottom strip rows with Last=1, closing one contiguous L1 stream.
+//
+// L1 writes are contiguous via PACR's internal datum counter; no per-PACR
+// L1_Dest_addr cfg update needed. Single L1 cfg slot (SEC0_REG1). This is only
+// valid when the chunk spans the full output row.
+//
+// Wider rows use a row-strided stream: each chunk row closes with Last=1. The
+// MOP path advances L1_Dest_addr by incrementing the destination Y counter
+// programmed with one full output-row stride.
+//
+// Source ADC strides (bytes; x-stride is not used by this PACR shape):
+//   y_stride = FACE_C_DIM * bpe     (1 face-row = 16 datums per y+=1)
+//   z_stride = FAST_UNTILIZE_BLOCK_STRIDE_ROWS * y_stride
+//   w_stride = FAST_UNTILIZE_PHASE_PAIR_STRIDE_ROWS * y_stride
+//
+// AddrMod scheme:
+//   ADDR_MOD_0: z_src.incr=1                       (post-PACR_pair_0: go to second block)
+//   ADDR_MOD_1: y_src.incr=1, z_src.clr=1          (post-PACR_pair_1: advance row, reset block)
+//   ADDR_MOD_1: y_dst.incr=1 when using the ch1 output-counter row advance
+//
+// The contiguous path uses two MOP runs per call (phase 1 and phase 2).
+// L1_Dest_addr is programmed once at the base address; phase 1 intentionally
+// leaves the pack stream open so phase 2 naturally continues at row 16. The
+// phase source half is selected by reprogramming the active pack DEST target
+// offset: active_half + FAST_UNTILIZE_PACK_TOP_STRIP_DEST_TARGET_OFFSET for
+// top rows, then active_half + FAST_UNTILIZE_PACK_BOTTOM_STRIP_DEST_TARGET_OFFSET
+// for bottom rows. These are BH remapped DEST-target offsets, not literal row
+// numbers from the layout table above.
+//
+// With a 16-bit DEST, block_ct_dim=8 selects chunks of up to 8 tiles: 3 or 4 PACRs per row (the last on two
+// interfaces for an odd unit_dim) over 256-row strips (fast_untilize_strip_rows).
+//
+// DOMAIN: unit_dim=2/3/4, num_faces=4, private SyncHalf DEST buffering, and
+// Float16_b or Float32 output from supported fast-untilize math layouts. Callers should
+// route ct=1, non-4-face shapes, and unsupported formats to standard untilize.
+
+#pragma once
+
+#include <cstdint>
+
+#include "experimental/llk_fast_untilize_common.h"
+#include "llk_pack.h"
+
+namespace ckernel
+{
+
+constexpr std::uint32_t FAST_UNTILIZE_MOP_LAST_OUTER_CFG_INDEX = 7;
+
+// Chunk width the pack init was programmed for (0 after the uninit); written and read only under LLK asserts.
+inline std::uint32_t pack_fast_untilize_init_block_ct_dim = 0;
+
+template <bool is_strided_row>
+inline void _llk_pack_fast_untilize_configure_addrmod_()
+{
+    // ADDR_MOD_0: after PACR reading block A, advance z to read block A+1.
+    addr_mod_pack_t {.z_src = {.incr = 1}}.set(ADDR_MOD_0);
+
+    // ADDR_MOD_1: after PACR reading block A+1, advance to next row in block A
+    // (y+=1) and reset z to 0 (back to block A).
+    if constexpr (is_strided_row)
+    {
+        addr_mod_pack_t {.y_src = {.incr = 1}, .y_dst = {.incr = 1}, .z_src = {.clr = 1}}.set(ADDR_MOD_1);
+    }
+    else
+    {
+        addr_mod_pack_t {.y_src = {.incr = 1}, .z_src = {.clr = 1}}.set(ADDR_MOD_1);
+    }
+}
+
+// MOP body: 16 outer iterations x 2 inner PACRs.
+// Inner PACR pair: PACR(AM0) writes 64 datums from block A, then PACR(AM1)
+// writes 64 datums from block A+1.
+//
+// MOP runs once per phase (top/bottom). For unit_dim=4 this is exactly
+// 2 phases x 16 rows x 2 PACRs = 64 PACRs.
+inline std::uint32_t _llk_pack_fast_untilize_row_pacr_(
+    const std::uint32_t addr_mod, const std::uint32_t read_intf_sel, const std::uint32_t last, const std::uint32_t concat)
+{
+    return TT_OP_PACR(
+        p_pacr::CFG_CTXT_0,
+        p_pacr::NO_ROW_PAD_ZERO,
+        p_pacr::DST_ACCESS_STRIDED_MODE,
+        addr_mod,
+        p_pacr::ADDR_CNT_CTXT_0,
+        0,
+        read_intf_sel,
+        0,
+        concat,
+        p_pacr::NO_CTXT_CTRL,
+        0,
+        last);
+}
+
+template <std::uint32_t max_unit_dim = FAST_UNTILIZE_MAX_UNIT_DIM>
+inline std::uint32_t _llk_pack_fast_untilize_tail_read_intf_(const std::uint32_t unit_dim)
+{
+    if constexpr (max_unit_dim > FAST_UNTILIZE_MAX_UNIT_DIM)
+    {
+        return (unit_dim & 1) ? p_pacr::TWO_INTFS_ACTIVE : p_pacr::ALL_INTF_ACTIVE;
+    }
+    return unit_dim == 3 ? p_pacr::TWO_INTFS_ACTIVE : p_pacr::ALL_INTF_ACTIVE;
+}
+
+template <std::uint32_t max_unit_dim = FAST_UNTILIZE_MAX_UNIT_DIM>
+inline std::uint32_t _llk_pack_fast_untilize_last_outer_pacr_(const std::uint32_t unit_dim, const bool last)
+{
+    return _llk_pack_fast_untilize_row_pacr_(ADDR_MOD_1, _llk_pack_fast_untilize_tail_read_intf_<max_unit_dim>(unit_dim), last ? 1 : 0, 0);
+}
+
+// Rows of 5 to 8 tiles: 3 PACRs per row (START_OP, OP0, then OP1 on the tail) or 4 (two inner iterations, the last OP1
+// on the tail). Every PACR but the tail steps z to the next tile pair. last_pacr is the tail of the MOP's last row.
+inline void _llk_pack_fast_untilize_wide_mop_config_(
+    const std::uint32_t unit_dim, const std::uint32_t rows, const std::uint32_t pair_pacr, const std::uint32_t tail_pacr, const std::uint32_t last_pacr)
+{
+    if (unit_dim <= 6)
+    {
+        ckernel_template tmp(rows, 1, pair_pacr, tail_pacr);
+        tmp.set_start_op(pair_pacr);
+        tmp.set_last_outer_loop_instr(last_pacr);
+        tmp.program();
+    }
+    else
+    {
+        ckernel_template tmp(rows, 2, pair_pacr, pair_pacr);
+        tmp.set_last_inner_loop_instr(tail_pacr);
+        tmp.set_last_outer_loop_instr(last_pacr);
+        tmp.program();
+    }
+}
+
+template <std::uint32_t max_unit_dim = FAST_UNTILIZE_MAX_UNIT_DIM>
+inline void _llk_pack_fast_untilize_mop_config_(const std::uint32_t unit_dim, const bool last)
+{
+    LLK_ASSERT(unit_dim >= 2 && unit_dim <= max_unit_dim, "fast_untilize pack supports unit_dim 2 to max_unit_dim");
+
+    constexpr std::uint32_t MOP_OUTER_LOOP = FAST_UNTILIZE_PHASE_ROWS;
+    constexpr std::uint32_t MOP_INNER_LOOP = 1; // one PACR pair per strip row
+
+    if constexpr (max_unit_dim > FAST_UNTILIZE_MAX_UNIT_DIM)
+    {
+        if (unit_dim > FAST_UNTILIZE_MAX_UNIT_DIM)
+        {
+            _llk_pack_fast_untilize_wide_mop_config_(
+                unit_dim,
+                MOP_OUTER_LOOP,
+                _llk_pack_fast_untilize_row_pacr_(ADDR_MOD_0, p_pacr::ALL_INTF_ACTIVE, 0, 0),
+                _llk_pack_fast_untilize_row_pacr_(ADDR_MOD_1, _llk_pack_fast_untilize_tail_read_intf_<max_unit_dim>(unit_dim), 0, 0),
+                _llk_pack_fast_untilize_last_outer_pacr_<max_unit_dim>(unit_dim, last));
+            return;
+        }
+    }
+
+    if (unit_dim == 2)
+    {
+        ckernel_template tmp(MOP_OUTER_LOOP, MOP_INNER_LOOP, _llk_pack_fast_untilize_last_outer_pacr_(unit_dim, false));
+        tmp.set_last_outer_loop_instr(_llk_pack_fast_untilize_last_outer_pacr_(unit_dim, last));
+        tmp.program();
+    }
+    else
+    {
+        const std::uint32_t tail_intf = _llk_pack_fast_untilize_tail_read_intf_<max_unit_dim>(unit_dim);
+        // unit_dim=4 has no tail: both PACRs read all four interfaces. unit_dim=3
+        // keeps the first full-width PACR and narrows only the second/tail PACR.
+        ckernel_template tmp(
+            MOP_OUTER_LOOP,
+            MOP_INNER_LOOP,
+            _llk_pack_fast_untilize_row_pacr_(ADDR_MOD_0, p_pacr::ALL_INTF_ACTIVE, 0, 0),
+            _llk_pack_fast_untilize_row_pacr_(ADDR_MOD_1, tail_intf, 0, 0));
+        tmp.set_last_outer_loop_instr(_llk_pack_fast_untilize_last_outer_pacr_<max_unit_dim>(unit_dim, last));
+        tmp.program();
+    }
+}
+
+template <std::uint32_t max_unit_dim = FAST_UNTILIZE_MAX_UNIT_DIM>
+inline void _llk_pack_fast_untilize_mop_patch_last_(const std::uint32_t unit_dim, const bool last)
+{
+    LLK_ASSERT(unit_dim >= 2 && unit_dim <= max_unit_dim, "fast_untilize pack supports unit_dim 2 to max_unit_dim");
+
+    const std::uint32_t last_outer_pacr = _llk_pack_fast_untilize_last_outer_pacr_<max_unit_dim>(unit_dim, last);
+
+    // MOP config slot 7 is loop0_last_instr: the instruction used for the last
+    // inner iteration of the last outer iteration. The MOP body is otherwise
+    // unchanged between phase 1 and phase 2, so patch only the final PACR's
+    // Last bit instead of rebuilding the whole template.
+    volatile std::uint32_t* mop_cfg = reinterpret_cast<volatile std::uint32_t*>(TENSIX_MOP_CFG_BASE);
+    ckernel::mop_sync();
+    mop_cfg[FAST_UNTILIZE_MOP_LAST_OUTER_CFG_INDEX] = last_outer_pacr;
+}
+
+inline void _llk_pack_fast_untilize_reset_src_counters_()
+{
+    // Source counters select the row within a block group and the block group
+    // itself. Reset before each phase so phase selection is controlled only by
+    // DEST target offset, not leftover PAC address-generator state.
+    TTI_SETADCXY(p_setadc::PAC, 0, 0, 0, 0, 0b0011);
+    TTI_SETADCZW(p_setadc::PAC, 0, 0, 0, 0, 0b0101);
+}
+
+inline void _llk_pack_fast_untilize_reset_output_row_counter_()
+{
+    TTI_SETADCXY(p_setadc::PAC, 0, 0, 0, 0, 0b1000);
+}
+
+template <std::uint32_t max_unit_dim = FAST_UNTILIZE_MAX_UNIT_DIM>
+inline void _llk_pack_fast_untilize_strided_mop_config_(const std::uint32_t unit_dim, const std::uint32_t rows_per_run)
+{
+    LLK_ASSERT(unit_dim >= 2 && unit_dim <= max_unit_dim, "fast_untilize strided pack supports unit_dim 2 to max_unit_dim");
+
+    // One MOP run emits rows_per_run output rows. A phase is split into
+    // FAST_UNTILIZE_PHASE_ROWS / rows_per_run runs so the carried output-Y
+    // offset stays inside the packer window (see _llk_pack_fast_untilize_block_strided_).
+    const std::uint32_t MOP_OUTER_LOOP     = rows_per_run;
+    constexpr std::uint32_t MOP_INNER_LOOP = 1;
+
+    if constexpr (max_unit_dim > FAST_UNTILIZE_MAX_UNIT_DIM)
+    {
+        if (unit_dim > FAST_UNTILIZE_MAX_UNIT_DIM)
+        {
+            const std::uint32_t tail_pacr =
+                _llk_pack_fast_untilize_row_pacr_(ADDR_MOD_1, _llk_pack_fast_untilize_tail_read_intf_<max_unit_dim>(unit_dim), 1, 0);
+            _llk_pack_fast_untilize_wide_mop_config_(
+                unit_dim, MOP_OUTER_LOOP, _llk_pack_fast_untilize_row_pacr_(ADDR_MOD_0, p_pacr::ALL_INTF_ACTIVE, 0, 1), tail_pacr, tail_pacr);
+            return;
+        }
+    }
+
+    if (unit_dim == 2)
+    {
+        ckernel_template tmp(MOP_OUTER_LOOP, MOP_INNER_LOOP, _llk_pack_fast_untilize_row_pacr_(ADDR_MOD_1, p_pacr::ALL_INTF_ACTIVE, 1, 0));
+        tmp.program();
+    }
+    else
+    {
+        const std::uint32_t tail_intf = _llk_pack_fast_untilize_tail_read_intf_<max_unit_dim>(unit_dim);
+        ckernel_template tmp(
+            MOP_OUTER_LOOP,
+            MOP_INNER_LOOP,
+            _llk_pack_fast_untilize_row_pacr_(ADDR_MOD_0, p_pacr::ALL_INTF_ACTIVE, 0, 1),
+            _llk_pack_fast_untilize_row_pacr_(ADDR_MOD_1, tail_intf, 1, 0));
+        tmp.program();
+    }
+}
+
+inline void _llk_pack_fast_untilize_program_output_row_stride_(const std::uint32_t output_row_stride_bytes)
+{
+    // Wider rows close the pack stream after each chunk row. Program the PAC
+    // output Y stride to one full row of the row-major tensor so the ch1 output
+    // counter lands at the same column in the next output row. set_packer_strides
+    // owns the zero baseline, so hw_configure and the uninit below clear it.
+    TT_SETDMAREG(0, LOWER_HALFWORD(output_row_stride_bytes << PCK0_ADDR_CTRL_XY_REG_1_Ystride_SHAMT), 0, LO_16(p_gpr_pack::TMP0));
+    TT_SETDMAREG(0, UPPER_HALFWORD(output_row_stride_bytes << PCK0_ADDR_CTRL_XY_REG_1_Ystride_SHAMT), 0, HI_16(p_gpr_pack::TMP0));
+    TTI_STALLWAIT(p_stall::STALL_CFG, p_stall::THCON);
+    TTI_WRCFG(p_gpr_pack::TMP0, p_cfg::WRCFG_32b, PCK0_ADDR_CTRL_XY_REG_1_Xstride_ADDR32);
+    TTI_NOP; // WRCFG needs a one-instruction bubble before a consuming PACR
+}
+
+template <std::uint32_t block_ct_dim, std::uint32_t full_ct_dim>
+inline void _llk_pack_fast_untilize_init_(const std::uint32_t pack_src_format, const std::uint32_t pack_dst_format)
+{
+    static_assert(
+        (block_ct_dim >= 2 && block_ct_dim <= FAST_UNTILIZE_MAX_UNIT_DIM) || block_ct_dim == FAST_UNTILIZE_MAX_UNIT_DIM_16BIT_DEST ||
+            block_ct_dim == FAST_UNTILIZE_MAX_PASS_UNIT_DIM,
+        "BH fast untilize supports block_ct_dim 2, 3, 4, 8 or 16 (16-bit DEST)");
+    LLK_ASSERT_BLOCK(pack_fast_untilize_init_block_ct_dim = block_ct_dim);
+
+    TTI_SETDMAREG(0, 0x000, 0, LO_16(p_gpr_pack::DEST_OFFSET_LO + 0));
+    TTI_SETDMAREG(0, DEST_REGISTER_HALF_SIZE, 0, LO_16(p_gpr_pack::DEST_OFFSET_HI + 0));
+    select_packer_dest_registers<FAST_UNTILIZE_INTERNAL_DST_SYNC_MODE>();
+
+    TTI_SETADCXX(p_setadc::PAC, FACE_C_DIM - 1, 0x0);
+
+    // Strides for our row/block/phase advance scheme.
+    const std::uint32_t bytes_per_datum = (pack_src_format & 0x3) == ckernel::to_underlying(DataFormat::Float32)   ? 4
+                                          : (pack_src_format & 0x3) == ckernel::to_underlying(DataFormat::Float16) ? 2
+                                                                                                                   : 1;
+    // y_stride: 1 face-row of 16 datums per y+=1
+    const std::uint32_t y_stride = FACE_C_DIM * bytes_per_datum;
+    // z_stride: one block of four face-tile-groups per z+=1.
+    const std::uint32_t z_stride = FAST_UNTILIZE_BLOCK_STRIDE_ROWS * y_stride;
+    // w_stride: retained for consistency with the pack address generator setup.
+    const std::uint32_t w_stride = FAST_UNTILIZE_PHASE_PAIR_STRIDE_ROWS * y_stride;
+
+    TT_SETDMAREG(0, LOWER_HALFWORD(y_stride << PCK0_ADDR_CTRL_XY_REG_0_Ystride_SHAMT), 0, LO_16(p_gpr_pack::TMP0));
+    TT_SETDMAREG(0, UPPER_HALFWORD(y_stride << PCK0_ADDR_CTRL_XY_REG_0_Ystride_SHAMT), 0, HI_16(p_gpr_pack::TMP0));
+    TT_SETDMAREG(0, LOWER_HALFWORD(z_stride << PCK0_ADDR_CTRL_ZW_REG_0_Zstride_SHAMT), 0, LO_16(p_gpr_pack::TMP1));
+    TT_SETDMAREG(0, UPPER_HALFWORD(w_stride << PCK0_ADDR_CTRL_ZW_REG_0_Wstride_SHAMT), 0, HI_16(p_gpr_pack::TMP1));
+    // Serialize the TMP GPR setup before WRCFG copies those stride values into
+    // packer address-generator config. This is the same LLK SETDMAREG->WRCFG
+    // barrier pattern used elsewhere; ISA documents WRCFG's GPR source and
+    // STALLWAIT's Wait Gate blocking.
+    TTI_STALLWAIT(p_stall::STALL_CFG, p_stall::THCON);
+    TTI_WRCFG(p_gpr_pack::TMP0, p_cfg::WRCFG_32b, PCK0_ADDR_CTRL_XY_REG_0_Xstride_ADDR32);
+    TTI_WRCFG(p_gpr_pack::TMP1, p_cfg::WRCFG_32b, PCK0_ADDR_CTRL_ZW_REG_0_Zstride_ADDR32);
+
+    constexpr bool is_strided_row = full_ct_dim > block_ct_dim;
+    _llk_pack_fast_untilize_configure_addrmod_<is_strided_row>();
+    if constexpr (full_ct_dim > block_ct_dim)
+    {
+        const std::uint32_t output_row_stride = SCALE_DATUM_SIZE(pack_dst_format, full_ct_dim * TILE_C_DIM);
+        _llk_pack_fast_untilize_reset_src_counters_();
+        _llk_pack_fast_untilize_program_output_row_stride_(output_row_stride);
+        _llk_pack_fast_untilize_reset_output_row_counter_();
+    }
+}
+
+template <std::uint32_t phase_offset>
+inline void _llk_pack_fast_untilize_select_phase_()
+{
+    // Phase selection is implemented by moving the active DEST target window,
+    // not by changing the PAC source strides. The phase_offset values are named
+    // in llk_fast_untilize_common.h because they are part of the shared
+    // math/pack layout contract.
+    TTI_SETDMAREG(0, phase_offset, 0, LO_16(p_gpr_pack::DEST_OFFSET_LO + 0));
+    TTI_SETDMAREG(0, DEST_REGISTER_HALF_SIZE + phase_offset, 0, LO_16(p_gpr_pack::DEST_OFFSET_HI + 0));
+
+    select_packer_dest_registers<FAST_UNTILIZE_INTERNAL_DST_SYNC_MODE>();
+}
+
+template <bool reset_output_row_counter>
+inline void _llk_pack_fast_untilize_restore_pack_counters_()
+{
+    // Leave the standard pack counter postcondition for the next LLK in fused
+    // kernels. The regular untilize path also restores PAC Z/W after packing.
+    _llk_pack_fast_untilize_reset_src_counters_();
+    if constexpr (reset_output_row_counter)
+    {
+        _llk_pack_fast_untilize_reset_output_row_counter_();
+    }
+    set_dst_write_addr(0);
+}
+
+// One call processes one 2/3/4-tile chunk.
+// Output: one chunk's worth of RM strip starting at `address` (in 16B units).
+template <std::uint32_t block_ct_dim>
+inline void _llk_pack_fast_untilize_block_(const std::uint32_t address, const std::uint32_t unit_dim, std::uint32_t& prev_unit_dim)
+{
+    static_assert(
+        (block_ct_dim >= 2 && block_ct_dim <= FAST_UNTILIZE_MAX_UNIT_DIM) || block_ct_dim == FAST_UNTILIZE_MAX_UNIT_DIM_16BIT_DEST,
+        "BH fast untilize supports block_ct_dim 2, 3, 4, or 8 (16-bit DEST)");
+    LLK_ASSERT(unit_dim >= 2 && unit_dim <= block_ct_dim, "fast_untilize pack unit_dim must be in [2, block_ct_dim]");
+    LLK_ASSERT(block_ct_dim == pack_fast_untilize_init_block_ct_dim, "fast_untilize: the block's chunk width differs from the init's");
+
+    program_packer_destination(address);
+
+    // Phase 1 emits top strip rows and keeps the pack stream open.
+    if (unit_dim != prev_unit_dim)
+    {
+        _llk_pack_fast_untilize_mop_config_<block_ct_dim>(unit_dim, false);
+        prev_unit_dim = unit_dim;
+    }
+    else
+    {
+        _llk_pack_fast_untilize_mop_patch_last_<block_ct_dim>(unit_dim, false);
+    }
+    _llk_pack_fast_untilize_select_phase_<fast_untilize_strip_rows(block_ct_dim)>();
+    _llk_pack_fast_untilize_reset_src_counters_();
+    ckernel_template::run();
+
+    // Phase 2 emits bottom strip rows and closes the stream. Phase 1 already
+    // programmed the MOP body; only the final PACR's Last bit changes.
+    _llk_pack_fast_untilize_mop_patch_last_<block_ct_dim>(unit_dim, true);
+    _llk_pack_fast_untilize_select_phase_<FAST_UNTILIZE_PACK_BOTTOM_STRIP_DEST_TARGET_OFFSET>();
+    _llk_pack_fast_untilize_reset_src_counters_();
+    ckernel_template::run();
+    _llk_pack_fast_untilize_restore_pack_counters_<false>();
+}
+
+// The packer carries the destination Y offset (ADC.Y * Ystride) relative to the
+// last-programmed L1 base. On BH silicon that carried offset is only reliably
+// preserved inside a ~256 KiB window; beyond it the high address bits are
+// dropped and rows overwrite each other (verified on silicon: BF16 full_ct_dim
+// 133/256 corrupt without a rebase, FP32 corrupts from ~ct 137). The window is
+// not in the public BH ISA docs; 256 KiB is the silicon-characterized bound
+// used here.
+constexpr std::uint32_t PACKER_CARRIED_OUTPUT_Y_OFFSET_WINDOW_16B = 256 * 1024 / 16;
+
+// Emit one phase (16 output rows) as `runs_per_phase` runs of `rows_per_run`
+// rows. Each run reprograms the L1 base and resets the destination Y counter so
+// the carried offset within a run never leaves the window, while the source
+// counters advance continuously across runs (only the dst Y counter is reset).
+template <std::uint32_t phase_offset>
+inline void _llk_pack_fast_untilize_emit_phase_(
+    const std::uint32_t address,
+    const std::uint32_t phase_base_row,
+    const std::uint32_t runs_per_phase,
+    const std::uint32_t rows_per_run,
+    const std::uint32_t output_row_stride_16B)
+{
+    _llk_pack_fast_untilize_select_phase_<phase_offset>();
+    _llk_pack_fast_untilize_reset_src_counters_();
+    for (std::uint32_t run = 0; run < runs_per_phase; run++)
+    {
+        const std::uint32_t out_row = phase_base_row + run * rows_per_run;
+        _llk_pack_fast_untilize_reset_output_row_counter_();
+        program_packer_destination(address + out_row * output_row_stride_16B);
+        ckernel_template::run();
+    }
+}
+
+// One call processes one 2/3/4-tile chunk inside a wider row.
+// Output address points at this chunk's row-0 column in the row-major tensor.
+template <std::uint32_t block_ct_dim, std::uint32_t full_ct_dim>
+inline void _llk_pack_fast_untilize_block_strided_(
+    const std::uint32_t address, const std::uint32_t unit_dim, std::uint32_t& prev_unit_dim, const std::uint32_t output_row_stride_16B = 0)
+{
+    static_assert(
+        (block_ct_dim >= 2 && block_ct_dim <= FAST_UNTILIZE_MAX_UNIT_DIM) || block_ct_dim == FAST_UNTILIZE_MAX_UNIT_DIM_16BIT_DEST,
+        "BH fast untilize strided path supports block_ct_dim 2, 3, 4, or 8 (16-bit DEST)");
+    static_assert(full_ct_dim > block_ct_dim, "Use the contiguous fast_untilize block when the chunk is the full row");
+    LLK_ASSERT(unit_dim >= 2 && unit_dim <= block_ct_dim, "fast_untilize pack unit_dim must be in [2, block_ct_dim]");
+    LLK_ASSERT(block_ct_dim == pack_fast_untilize_init_block_ct_dim, "fast_untilize: the block's chunk width differs from the init's");
+
+    constexpr std::uint32_t MAX_CARRIED_OUTPUT_Y_ROW = 2 * FAST_UNTILIZE_PHASE_ROWS - 1;
+
+    // Fast path: the packer can carry y_dst across all 32 rows of the chunk from
+    // a single base without leaving the window. output_row_stride_16B == 0 means
+    // a legacy caller that did not supply the stride; keep the old carry behavior.
+    const bool carry_full_chunk = output_row_stride_16B == 0 || MAX_CARRIED_OUTPUT_Y_ROW * output_row_stride_16B < PACKER_CARRIED_OUTPUT_Y_OFFSET_WINDOW_16B;
+
+    // Otherwise rebase every rows_per_run rows. rows_per_run is the largest
+    // power-of-two divisor of FAST_UNTILIZE_PHASE_ROWS whose top row stays inside
+    // the window: (rows_per_run - 1) * stride < window. It bottoms out at 1 (one
+    // base reprogram per row), so arbitrarily wide rows / FP32 are handled.
+    std::uint32_t rows_per_run = FAST_UNTILIZE_PHASE_ROWS;
+    if (!carry_full_chunk)
+    {
+        while (rows_per_run > 1 && (rows_per_run - 1) * output_row_stride_16B >= PACKER_CARRIED_OUTPUT_Y_OFFSET_WINDOW_16B)
+        {
+            rows_per_run >>= 1;
+        }
+    }
+
+    if (unit_dim != prev_unit_dim)
+    {
+        _llk_pack_fast_untilize_strided_mop_config_<block_ct_dim>(unit_dim, carry_full_chunk ? FAST_UNTILIZE_PHASE_ROWS : rows_per_run);
+        prev_unit_dim = unit_dim;
+    }
+
+    if (carry_full_chunk)
+    {
+        // Single base; phase 1 leaves the stream open and phase 2 continues the
+        // y_dst carry into output rows 16..31. Matches the original strided path.
+        program_packer_destination(address);
+        _llk_pack_fast_untilize_select_phase_<fast_untilize_strip_rows(block_ct_dim)>();
+        ckernel_template::run();
+        _llk_pack_fast_untilize_select_phase_<FAST_UNTILIZE_PACK_BOTTOM_STRIP_DEST_TARGET_OFFSET>();
+        _llk_pack_fast_untilize_reset_src_counters_();
+        ckernel_template::run();
+        _llk_pack_fast_untilize_restore_pack_counters_<true>();
+        return;
+    }
+
+    const std::uint32_t runs_per_phase = FAST_UNTILIZE_PHASE_ROWS / rows_per_run;
+    _llk_pack_fast_untilize_emit_phase_<fast_untilize_strip_rows(block_ct_dim)>(address, 0, runs_per_phase, rows_per_run, output_row_stride_16B);
+    _llk_pack_fast_untilize_emit_phase_<FAST_UNTILIZE_PACK_BOTTOM_STRIP_DEST_TARGET_OFFSET>(
+        address, FAST_UNTILIZE_PHASE_ROWS, runs_per_phase, rows_per_run, output_row_stride_16B);
+    _llk_pack_fast_untilize_restore_pack_counters_<true>();
+}
+
+// Face-pair passes: one MOP run packs rows_per_run output rows of a pass, ceil(unit_dim / 2) PACRs per row (the last on
+// two interfaces for an odd unit_dim). A unit that is the whole row is one L1 stream per pass; inside a wider row each
+// row closes with Last and ADDR_MOD_1 steps the output row.
+inline void _llk_pack_fast_untilize_pass_mop_config_(const std::uint32_t unit_dim, const std::uint32_t rows_per_run, const bool strided)
+{
+    LLK_ASSERT(unit_dim >= 2 && unit_dim <= FAST_UNTILIZE_MAX_PASS_UNIT_DIM, "fast_untilize face passes support unit_dim 2 to 16");
+
+    const std::uint32_t tail_intf      = (unit_dim & 1) ? p_pacr::TWO_INTFS_ACTIVE : p_pacr::ALL_INTF_ACTIVE;
+    const std::uint32_t pair_pacr      = _llk_pack_fast_untilize_row_pacr_(ADDR_MOD_0, p_pacr::ALL_INTF_ACTIVE, 0, strided ? 1 : 0);
+    const std::uint32_t tail_pacr      = _llk_pack_fast_untilize_row_pacr_(ADDR_MOD_1, tail_intf, strided ? 1 : 0, 0);
+    const std::uint32_t last_pacr      = _llk_pack_fast_untilize_row_pacr_(ADDR_MOD_1, tail_intf, 1, 0);
+    const std::uint32_t pacrs_per_row  = (unit_dim + 1) / 2;
+    if (pacrs_per_row == 1)
+    {
+        ckernel_template tmp(rows_per_run, 1, tail_pacr);
+        tmp.set_last_outer_loop_instr(last_pacr);
+        tmp.program();
+        return;
+    }
+
+    ckernel_template tmp(rows_per_run, pacrs_per_row / 2, pair_pacr, pair_pacr);
+    if (pacrs_per_row & 1)
+    {
+        tmp.set_start_op(pair_pacr);
+    }
+    tmp.set_last_inner_loop_instr(tail_pacr);
+    tmp.set_last_outer_loop_instr(last_pacr);
+    tmp.program();
+}
+
+// One face-pair pass of a unit that is the whole row: output rows 16 * pass to 16 * pass + 15 from `address`, the row's
+// start (16B units); output_row_stride_16B is the row's size.
+inline void _llk_pack_fast_untilize_pass_block_(
+    const std::uint32_t address, const std::uint32_t unit_dim, const std::uint32_t pass, std::uint32_t& prev_unit_dim, const std::uint32_t output_row_stride_16B)
+{
+    LLK_ASSERT(unit_dim >= 2 && unit_dim <= FAST_UNTILIZE_MAX_PASS_UNIT_DIM, "fast_untilize face passes support unit_dim 2 to 16");
+    LLK_ASSERT(pass < 2, "fast_untilize has two face-pair passes");
+    LLK_ASSERT(pack_fast_untilize_init_block_ct_dim == FAST_UNTILIZE_MAX_PASS_UNIT_DIM, "fast_untilize: the init did not program face-pair passes");
+
+    if (unit_dim != prev_unit_dim)
+    {
+        _llk_pack_fast_untilize_pass_mop_config_(unit_dim, FAST_UNTILIZE_PHASE_ROWS, false);
+        prev_unit_dim = unit_dim;
+    }
+    program_packer_destination(address + pass * FAST_UNTILIZE_PHASE_ROWS * output_row_stride_16B);
+    _llk_pack_fast_untilize_select_phase_<FAST_UNTILIZE_PACK_BOTTOM_STRIP_DEST_TARGET_OFFSET>();
+    _llk_pack_fast_untilize_reset_src_counters_();
+    ckernel_template::run();
+    _llk_pack_fast_untilize_restore_pack_counters_<false>();
+}
+
+// One face-pair pass of a unit inside a wider row; `address` is the unit's column in output row 0.
+inline void _llk_pack_fast_untilize_pass_block_strided_(
+    const std::uint32_t address, const std::uint32_t unit_dim, const std::uint32_t pass, std::uint32_t& prev_unit_dim, const std::uint32_t output_row_stride_16B)
+{
+    LLK_ASSERT(unit_dim >= 2 && unit_dim <= FAST_UNTILIZE_MAX_PASS_UNIT_DIM, "fast_untilize face passes support unit_dim 2 to 16");
+    LLK_ASSERT(pass < 2, "fast_untilize has two face-pair passes");
+    LLK_ASSERT(pack_fast_untilize_init_block_ct_dim == FAST_UNTILIZE_MAX_PASS_UNIT_DIM, "fast_untilize: the init did not program face-pair passes");
+
+    // A run carries the output Y offset from one base; keep its last row inside the packer's carried-offset window.
+    std::uint32_t rows_per_run = FAST_UNTILIZE_PHASE_ROWS;
+    while (rows_per_run > 1 && (rows_per_run - 1) * output_row_stride_16B >= PACKER_CARRIED_OUTPUT_Y_OFFSET_WINDOW_16B)
+    {
+        rows_per_run >>= 1;
+    }
+
+    if (unit_dim != prev_unit_dim)
+    {
+        _llk_pack_fast_untilize_pass_mop_config_(unit_dim, rows_per_run, true);
+        prev_unit_dim = unit_dim;
+    }
+    _llk_pack_fast_untilize_select_phase_<FAST_UNTILIZE_PACK_BOTTOM_STRIP_DEST_TARGET_OFFSET>();
+    _llk_pack_fast_untilize_reset_src_counters_();
+    for (std::uint32_t row = 0; row < FAST_UNTILIZE_PHASE_ROWS; row += rows_per_run)
+    {
+        _llk_pack_fast_untilize_reset_output_row_counter_();
+        program_packer_destination(address + (pass * FAST_UNTILIZE_PHASE_ROWS + row) * output_row_stride_16B);
+        ckernel_template::run();
+    }
+    _llk_pack_fast_untilize_restore_pack_counters_<true>();
+}
+
+inline void _llk_pack_fast_untilize_uninit_(const std::uint32_t pack_src_format)
+{
+    LLK_ASSERT_BLOCK(pack_fast_untilize_init_block_ct_dim = 0);
+    // set_packer_strides also zeroes the channel-1 Y stride the strided path programs.
+    set_packer_strides<PackMode::Default>(pack_src_format, TILE_C_DIM);
+    // init owns the X counter and sets it itself; strides are restored just above, so skip them in init.
+    _llk_pack_init_<PackMode::Default, false /* zero_output */, false /* skip_addrmod_config */, true /* skip_packer_strides */>(
+        pack_src_format, FACE_R_DIM, TILE_C_DIM, FAST_UNTILIZE_NUM_FACES, 1 /* num_tiles */, false /* skip_bh_tilize_workaround */);
+}
+
+} // namespace ckernel
