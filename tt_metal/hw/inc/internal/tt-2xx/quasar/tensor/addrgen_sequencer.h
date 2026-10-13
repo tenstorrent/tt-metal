@@ -2,7 +2,7 @@
 //
 // SPDX-License-Identifier: Apache-2.0
 
-// tensor_accessor::generated_noc_addr() asks this header for the NoC address of a tensor used to issue a NoC
+// tensor_accessor::detail::generated_noc_addr() asks this header for the NoC address of a tensor used to issue a NoC
 // transaction. Instead of computing it in software (TensorAccessor::get_noc_addr()), a sequence serves it. A sequence
 // is an address-generator side programmed with the tensor's layout, which produces the next page's address on each pop.
 // A request the hardware can't serve returns false, and the caller uses the software address.
@@ -111,7 +111,7 @@ inline constexpr uint32_t sequence_shift = interleaved_window<Accessor::DSpec::i
 //   - Reads use the two source sides and writes the two destination sides, each direction trying its push side first.
 //   - The two sides of one generator share its MISC register, so they must agree on the bank shift (shift_fits).
 
-using tensor_accessor::TransferDir;
+using tensor_accessor::detail::TransferDir;
 
 // Numbered so each direction's two sides are adjacent, push side first.
 //   kReadPushSide   addrgen_1 source:       reads; pushes into command buffer 1's SRC_ADDR

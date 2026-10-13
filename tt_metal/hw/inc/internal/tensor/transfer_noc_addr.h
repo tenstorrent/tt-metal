@@ -11,8 +11,23 @@
 
 template <typename DSpecT>
 struct TensorAccessor;
+class AbstractTensorAccessorWrapper;
 
 namespace tensor_accessor::detail {
+// Whether a NoC transfer reads or writes the tensor. The HW address generator has a source and a destination side;
+// reads use the source side, writes the destination side.
+enum class TransferDir : uint8_t { Read = 0, Write = 1 };
+
+// The transfer address of a page: from the hardware address generator where it serves the accessor, else the software
+// address. Defined in internal/tensor/generated_noc_addr.h; declared here so AbstractTensorAccessorWrapper
+// (api/tensor/tensor_accessor.h) can erase it alongside get_noc_addr, and the wrapper's overload can reach the erased
+// function.
+template <TransferDir Dir, bool MayPush = false, typename Accessor>
+inline uint64_t generated_noc_addr(const Accessor& accessor, uint32_t page_id, uint32_t offset, uint8_t noc);
+template <TransferDir Dir, bool MayPush = false>
+inline uint64_t generated_noc_addr(
+    const AbstractTensorAccessorWrapper& wrapper, uint32_t page_id, uint32_t offset, uint8_t noc);
+
 // The only way in to TensorAccessor's private, un-noted address members (it befriends this).
 struct TransferAccess {
     template <typename Accessor>
@@ -48,7 +63,10 @@ inline uint64_t transfer_shard_noc_addr(
     return TransferAccess::shard(accessor, shard_id, offset, noc);
 }
 
-// Whether the page iterators may leave a page's software address uncomputed (AccessorPage::kLazyNocAddr): when the
+// The address an iterator page holds while its software address is uncomputed (see lazy_page_addr_v).
+inline constexpr uint64_t kLazyNocAddr = ~0ull;
+
+// Whether the page iterators may leave a page's software address uncomputed (kLazyNocAddr): when the
 // Quasar address generator serves the accessor's transfers (a bound accessor, in a Quasar DM build with the ATT
 // backend), the transfer doesn't need it, and AccessorPage::noc_addr() computes it if anything asks.
 // Same condition as TT_TA_ADDRGEN_ACTIVE (internal/tensor/generated_noc_addr.h); TT_TA_ADDRGEN_DISABLE only forces the

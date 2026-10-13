@@ -16,8 +16,8 @@
 // Tensor-side kernels use DFB implicit sync (async_read/async_write<NocOptions::TXN_ID>) by default;
 // a few *_Explicit rows keep the reserve/push/wait/pop path covered.
 //
-// Every NoC transfer address comes from tensor_accessor::generated_noc_addr (via noc_traits_t), which uses the HW
-// AddrGen for layouts with a recipe on ATT builds and software otherwise. Tensor-side kernels report how each
+// Every NoC transfer address comes from tensor_accessor::detail::generated_noc_addr (via noc_traits_t), which uses the
+// HW AddrGen for layouts with a recipe on ATT builds and software otherwise. Tensor-side kernels report how each
 // address was produced (TT_TA_ADDRGEN_STATS) and run_case checks that against the layout, so a row can't silently
 // pass on the software path. Without TT_METAL_NOC_ATT every row is software and the rows are the golden.
 //

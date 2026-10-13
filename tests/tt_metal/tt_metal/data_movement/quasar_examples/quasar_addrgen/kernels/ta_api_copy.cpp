@@ -4,7 +4,7 @@
 
 // TensorAccessor API coverage (TensorAccessorAddrgenApi): copies tensor src to tensor dst through a scratchpad that
 // holds one slot per page, using one NoC/TensorAccessor API per mode, so each API's transfer address goes through
-// tensor_accessor::generated_noc_addr (on Quasar, the address-generator sequencer).
+// tensor_accessor::detail::generated_noc_addr (on Quasar, the address-generator sequencer).
 //   mode 0  pages() with no range (sharded: the whole tensor) / pages(0, num_pages) (interleaved)
 //   mode 1  shard_pages(shard, start, end) in two halves per shard (sharded only)
 //   mode 2  async_read / async_write<NocOptions::TXN_ID> to and from L1 (the generic paths, not the DFB overloads)

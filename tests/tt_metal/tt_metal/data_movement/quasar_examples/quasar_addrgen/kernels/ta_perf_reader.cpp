@@ -5,7 +5,7 @@
 // TensorAccessor transfer-address microbenchmark (TensorAccessorAddrgenPerf). Walks num_tensors bound tensors in one
 // page-id order, round-robin per page, and times four sections with rdcycle (this DM hart's own cycle counter):
 //   0 ids     - generate the page ids only (the pattern's own cost, subtracted from the others on the host)
-//   1 addr    - tensor_accessor::generated_noc_addr() per page, no NoC transfer
+//   1 addr    - tensor_accessor::detail::generated_noc_addr() per page, no NoC transfer
 //   2 read    - Noc::async_read() of each page into a scratchpad, with a barrier after every read (the usual op
 //               kernel shape)
 //   3 batched - the same reads, one barrier at the end
@@ -119,8 +119,8 @@ void kernel_main() {
             const uint32_t id = page_id(i, lcg);
             for (uint32_t t = 0; t < kNumTensors; ++t) {
                 with_tensor(t, [&](const auto& ta) {
-                    sink +=
-                        tensor_accessor::generated_noc_addr<tensor_accessor::TransferDir::Read>(ta, id, 0, noc_index);
+                    sink += tensor_accessor::detail::generated_noc_addr<tensor_accessor::detail::TransferDir::Read>(
+                        ta, id, 0, noc_index);
                     TA_PERF_KEEP(sink);
                 });
             }

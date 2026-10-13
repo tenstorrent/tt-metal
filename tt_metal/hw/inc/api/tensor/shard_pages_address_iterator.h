@@ -57,7 +57,7 @@ public:
 
         // Calculate NOC address for the final position
         if constexpr (kLazy) {
-            current_noc_addr = ShardPage<Accessor>::kLazyNocAddr;
+            current_noc_addr = detail::kLazyNocAddr;
         } else {
             const auto bank_shard = accessor.shard_to_bank(shard_id);
             PageMapping current_page_mapping{

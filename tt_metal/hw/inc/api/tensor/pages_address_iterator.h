@@ -152,8 +152,8 @@ private:
     uint32_t bank_shard_id = 0;                  // Which shard within the bank this page belongs to
 
     void update_current_page() {
-        current_page = AccessorPage<Accessor>(
-            kLazy ? AccessorPage<Accessor>::kLazyNocAddr : current_noc_addr, current_page_id, &accessor, noc);
+        current_page =
+            AccessorPage<Accessor>(kLazy ? detail::kLazyNocAddr : current_noc_addr, current_page_id, &accessor, noc);
     }
 
     // Initialize all state from a page_id (used in constructor and operator+=)
@@ -388,8 +388,7 @@ private:
     void update_current_page() {
         if constexpr (detail::lazy_page_addr_v<Accessor>) {
             // The address generator serves the transfer; the page computes its software address only if asked.
-            current_page =
-                AccessorPage<Accessor>(AccessorPage<Accessor>::kLazyNocAddr, current_page_id, &accessor, noc);
+            current_page = AccessorPage<Accessor>(detail::kLazyNocAddr, current_page_id, &accessor, noc);
         } else {
             auto current_noc_addr = detail::transfer_noc_addr(accessor, current_page_id, 0, noc);
             current_page = AccessorPage<Accessor>(current_noc_addr, current_page_id, &accessor, noc);

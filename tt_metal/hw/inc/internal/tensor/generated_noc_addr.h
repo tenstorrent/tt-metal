@@ -47,10 +47,6 @@ inline thread_local TransferStats transfer_stats{};
 #define TT_TA_ADDRGEN_COUNT_HW(addr) ((void)0)
 #endif
 
-}  // namespace tensor_accessor::detail
-
-namespace tensor_accessor {
-
 // Transfer address of page at page_id (+ offset bytes) of accessor. Accessor may be any type with
 // get_noc_addr(page_id, offset, noc) - e.g. something wrapped by AbstractTensorAccessorWrapper.
 //
@@ -68,7 +64,7 @@ generated_noc_addr(const Accessor& accessor, uint32_t page_id, uint32_t offset, 
         }
     }
 #endif
-    return detail::transfer_noc_addr(accessor, page_id, offset, noc);
+    return transfer_noc_addr(accessor, page_id, offset, noc);
 }
 
 // Transfer address of an iterator page. Same decision as above; the software fallback is the page's own address.
@@ -84,7 +80,7 @@ generated_noc_addr(const AccessorPage<Accessor>& page, uint32_t offset, uint8_t 
         }
     }
 #endif
-    return page.sw_noc_addr() + offset;
+    return PageAccess::sw_noc_addr(page) + offset;
 }
 
 // Transfer address of a shard_pages() page: the sequence follows the shard's storage order (page_in_shard), which is
@@ -102,7 +98,7 @@ generated_noc_addr(const ShardPage<Accessor>& page, uint32_t offset, uint8_t noc
         }
     }
 #endif
-    return page.sw_noc_addr() + offset;
+    return PageAccess::sw_noc_addr(page) + offset;
 }
 
 // Transfer address of a whole shard, or `offset` bytes into it (ShardView). Consecutive transfers into the same shard
@@ -119,7 +115,15 @@ generated_shard_noc_addr(const Accessor& accessor, uint32_t shard_id, uint32_t o
         }
     }
 #endif
-    return detail::transfer_shard_noc_addr(accessor, shard_id, offset, noc);
+    return transfer_shard_noc_addr(accessor, shard_id, offset, noc);
 }
 
-}  // namespace tensor_accessor
+// Transfer address through the type-erased wrapper: the wrapped accessor's own generated_noc_addr.
+template <TransferDir Dir, bool MayPush>
+inline uint64_t generated_noc_addr(
+    const AbstractTensorAccessorWrapper& wrapper, uint32_t page_id, uint32_t offset, uint8_t noc) {
+    return wrapper.generated_noc_addr_fn(
+        wrapper.accessor_ptr, Dir == TransferDir::Write, MayPush, page_id, offset, noc);
+}
+
+}  // namespace tensor_accessor::detail

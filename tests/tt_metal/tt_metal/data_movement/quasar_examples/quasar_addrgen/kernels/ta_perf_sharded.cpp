@@ -82,14 +82,14 @@ void kernel_main() {
     // The transfer address alone, as the NoC traits ask for it.
     auto address = [&](const auto& endpoint, const auto& args) __attribute__((always_inline)) -> uint64_t {
         using E = std::decay_t<decltype(endpoint)>;
-        using tensor_accessor::TransferDir;
+        using tensor_accessor::detail::TransferDir;
         if constexpr (std::is_same_v<E, TA>) {
-            return tensor_accessor::generated_noc_addr<TransferDir::Read>(ta, args.page_id, 0, noc_index);
+            return tensor_accessor::detail::generated_noc_addr<TransferDir::Read>(ta, args.page_id, 0, noc_index);
         } else if constexpr (std::is_same_v<E, ShardView<TA>>) {
-            return tensor_accessor::generated_shard_noc_addr<TransferDir::Read>(
+            return tensor_accessor::detail::generated_shard_noc_addr<TransferDir::Read>(
                 ta, args.shard_id, args.offset_bytes, noc_index);
         } else {
-            return tensor_accessor::generated_noc_addr<TransferDir::Read>(endpoint, 0, noc_index);
+            return tensor_accessor::detail::generated_noc_addr<TransferDir::Read>(endpoint, 0, noc_index);
         }
     };
 
