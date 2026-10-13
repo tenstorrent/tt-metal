@@ -119,3 +119,17 @@ I re-applied the attempt above unchanged; it had passed under an older framework
 - Check: PASS. pcc 0.999996, auto_margin_min 1.95, 1 device op, 0 host FLOPs. The attn_norm, attention and
   post_attn_norm regressions also passed.
 - Re-run: `bfw job check --task C.sliding.attn_residual`
+
+## C.sliding.mlp (run 20261013-175448-gemma4-glx-14)
+- `tt/mlp.py`: `TtMLP` is the dense GeGLU MLP, `down(gelu_tanh(gate(x)) * up(x))`, with TP=4 over the mesh columns
+  (the plan's layout). The rows are replicated, as in attention.
+  - gate and up are column-parallel and down is row-parallel, all bfp8 weights. Each chip's 528-wide intermediate
+    slice is zero-padded to 544. The padded gate/up columns give gelu(0)*0 = 0, and the padded down rows are zero.
+  - The ops: two `ttnn.linear` (bf16 out), `ttnn.gelu(variant=Tanh)`, `ttnn.mul`, `ttnn.linear` down, then
+    `all_reduce(cluster_axis=1)`.
+- `tt/settings.py`: MLP_MATMUL_FIDELITY=HiFi4 and MLP_MATMUL_FP32_ACC=True (both in MAX_PRECISION), and
+  MLP_GELU_VARIANT=Tanh (choices Tanh/Accurate; the reference uses tanh).
+- `hooks.py`: `device_component("mlp")` loads `mlp.{gate,up,down}_proj.weight` of the layer and wraps it with
+  `_host_fn`. The global block's mlp has the same shape, so it takes the same path.
+- Frozen test: pcc 0.999982, rel 0.0059 against the calibrated 0.0110, auto_margin_min 1.74, 6 device ops, 0 host FLOPs.
+- Re-run: `bfw job check --task C.sliding.mlp`

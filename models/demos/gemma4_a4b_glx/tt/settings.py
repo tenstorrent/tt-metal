@@ -22,6 +22,13 @@ TABLE = {
     "SDPA_FP32_ACC": Setting(True, (True, False), "2026-10-13 C.sliding.attention: SDPA fp32 accumulation"),
     "SDPA_Q_CHUNK": Setting(256, (32, 64, 128, 256, 512), "2026-10-13 C.sliding.attention: SDPA q chunk size"),
     "SDPA_K_CHUNK": Setting(128, (32, 64, 128, 256, 512), "2026-10-13 C.sliding.attention: SDPA k chunk size"),
+    "MLP_MATMUL_FIDELITY": Setting(
+        "HiFi4", ("HiFi4", "HiFi2", "LoFi"), "2026-10-13 C.sliding.mlp: gate/up/down math fidelity"
+    ),
+    "MLP_MATMUL_FP32_ACC": Setting(True, (True, False), "2026-10-13 C.sliding.mlp: fp32 accumulation for MLP matmuls"),
+    "MLP_GELU_VARIANT": Setting(
+        "Tanh", ("Tanh", "Accurate"), "2026-10-13 C.sliding.mlp: ttnn.gelu variant (reference is gelu tanh)"
+    ),
 }
 
 MAX_PRECISION = {
@@ -29,6 +36,8 @@ MAX_PRECISION = {
     "ATTN_MATMUL_FP32_ACC": True,
     "SDPA_FIDELITY": "HiFi4",
     "SDPA_FP32_ACC": True,
+    "MLP_MATMUL_FIDELITY": "HiFi4",
+    "MLP_MATMUL_FP32_ACC": True,
 }
 
 settings = Settings("GEMMA4_A4B_GLX_", TABLE, max_precision=MAX_PRECISION)

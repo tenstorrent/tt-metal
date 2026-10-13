@@ -136,6 +136,13 @@ def device_component(mesh, spec, layer, step):
         return _host_fn(mesh, _norm_module(mesh, spec, layer, step))
     if step == "attention":
         return _attention_fn(mesh, _attention_module(mesh, spec, layer))
+    if step == "mlp":
+        from models.demos.gemma4_a4b_glx.tt.mlp import TtMLP
+
+        loader = _weight_loader(spec)
+        p = f"{PREFIX}layers.{layer}.mlp."
+        mlp = TtMLP(mesh, *(loader.get(p + f"{n}_proj.weight") for n in ("gate", "up", "down")))
+        return _host_fn(mesh, mlp)
     if step == "attn_residual":
         from models.demos.gemma4_a4b_glx.tt.residual import TtResidualAdd
 
