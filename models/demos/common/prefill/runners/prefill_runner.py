@@ -967,6 +967,19 @@ def _serve_request(runtime, kv_caches, mesh_device, hf_config, rank: int, num_ra
                 logger.info(f"[migration] drained {n_warm} D2H warm-up ack records from the trace capture")
             layer_ack_service.start()
 
+    if os.environ.get("M3_LOG_DRAM") == "1":
+        try:
+            mv = ttnn.get_memory_view(mesh_device, ttnn.BufferType.DRAM)
+            gib = 1024**3
+            logger.info(
+                f"[pp rank {rank}] DRAM per bank x{mv.num_banks}: total {mv.total_bytes_per_bank / gib:.3f} GiB, "
+                f"allocated {mv.total_bytes_allocated_per_bank / gib:.3f} GiB, free {mv.total_bytes_free_per_bank / gib:.3f} GiB, "
+                f"largest free {mv.largest_contiguous_bytes_free_per_bank / gib:.3f} GiB "
+                f"(per chip: allocated {mv.num_banks * mv.total_bytes_allocated_per_bank / gib:.2f} GiB, "
+                f"free {mv.num_banks * mv.total_bytes_free_per_bank / gib:.2f} GiB)"
+            )
+        except Exception as e:  # diagnostics only
+            logger.warning(f"[pp rank {rank}] DRAM report failed: {e!r}")
     logger.info(f"[pp rank {rank}] setup complete, entering request loop")
 
     try:

@@ -113,7 +113,7 @@ def allocate_kv_caches(
         # here. Allocated zeroed + ReplicateTensorToMesh: every chip gets the same empty buffer; content
         # diverges on the first update_padded_kv_cache write.
         return ttnn.from_torch(
-            torch.zeros(num_users * num_layers, 1, rows, head_dim),
+            torch.zeros(num_users * num_layers, 1, rows, head_dim, dtype=torch.bfloat16),  # tier1011: bf16 halves the host peak (fp32 OOM-killed ranks)
             dtype=dtype,
             device=mesh_device,
             layout=ttnn.TILE_LAYOUT,
