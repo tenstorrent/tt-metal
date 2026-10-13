@@ -171,6 +171,8 @@ class _FakeLayer:
 
 class _FakeModel:
     __module__ = "models.fake.model"
+    # gemma4 sets this with device PLI; the enhancer still needs LTX_ENHANCER_FEEDBACK, a trace and device sampling.
+    _tt_supports_decode_token_feedback = True
 
     def __init__(self):
         self.layers = [_FakeLayer(), _FakeLayer()]
@@ -206,6 +208,8 @@ class _FakeGenerator:
         self.model_args = ["args"]
         self.prefill_calls = []
         self.decode_calls = []
+        self.fed = []  # (token, position) each decode step actually ran on
+        self.device_tok = self.device_pos = None
         self.released = 0
 
     def _logits(self, step):
@@ -221,12 +225,31 @@ class _FakeGenerator:
         return self._logits(0)
 
     def decode_forward(self, out_tok, current_pos, **kwargs):
+        if not kwargs["reload_inputs"] and not kwargs.get("enable_trace", True):
+            raise ValueError("Non-traced decode rebuilds all forward inputs and requires reload_inputs=True")
         self.decode_calls.append((int(out_tok.reshape(-1)[0]), int(current_pos.reshape(-1)[0]), dict(kwargs)))
+        if kwargs["reload_inputs"]:
+            self.device_tok, self.device_pos = int(out_tok.reshape(-1)[0]), int(current_pos.reshape(-1)[0])
+        else:
+            # Token feedback: the trace runs on its own buffers (the last sampled token, the advanced position),
+            # never on the host's.
+            self.device_pos += 1
+        self.fed.append((self.device_tok, self.device_pos))
         logits = self._logits(len(self.decode_calls))
         if kwargs.get("sampling_params") is not None:
             # Device sampling returns the token id, not logits (argmax stands in for the device sampler).
+            self.device_tok = int(logits.argmax(dim=-1).reshape(-1)[0])
+            if not kwargs.get("read_from_device", True):
+                return [(logits.argmax(dim=-1), None)]
             return logits.argmax(dim=-1), None
         return logits, None
+
+    def read_decode_output(self, tt_out):
+        return tt_out
+
+    def process_decode_output_host(self, host_out, is_tokens=False):
+        assert is_tokens
+        return host_out[0]
 
     def release_persistent_capture(self):
         self.released += 1
@@ -235,6 +258,14 @@ class _FakeGenerator:
 def _device_enhancer(
     monkeypatch, script, *, peaked=True, tokenizer=None, real_tokenize=False, device_sampling=False, **kwargs
 ):
+    for knob in (
+        "LTX_ENHANCER_DEVICE_PLI",
+        "LTX_ENHANCER_FEEDBACK",
+        "LTX_ENHANCER_FEEDBACK_POISON",
+        "LTX_ENHANCER_STEP_TIMING",
+        "LTX_ENHANCER_WARM_SAMPLED",
+    ):
+        monkeypatch.delenv(knob, raising=False)
     # The fake has no device sampler: default to the host path unless a test exercises device sampling.
     if device_sampling:
         monkeypatch.delenv("LTX_ENHANCER_HOST_SAMPLE", raising=False)
@@ -334,6 +365,68 @@ def test_device_enhancer_device_sampling_feeds_back_sampled_ids(monkeypatch):
     assert [kwargs["reset_sampling_state"] for _, _, kwargs in gen.decode_calls] == [True, False]
 
 
+@pytest.mark.parametrize("knob", [False, True], ids=["knob_off", "knob_on"])
+@pytest.mark.parametrize("traced", [False, True], ids=["eager", "traced"])
+@pytest.mark.parametrize("device_sampling", [False, True], ids=["host_sample", "device_sample"])
+@pytest.mark.parametrize("temperature", [0.0, 0.7], ids=["greedy", "sampled"])
+def test_device_enhancer_feedback_reloads_inputs_only_at_step_zero(
+    monkeypatch, knob, traced, device_sampling, temperature
+):
+    enhancer, gen = _device_enhancer(
+        monkeypatch,
+        [7, 8, 9, 10, 11],
+        temperature=temperature,
+        max_new_tokens=5,
+        device_sampling=device_sampling,
+        enable_trace=traced,
+    )
+    if knob:
+        monkeypatch.setenv("LTX_ENHANCER_FEEDBACK", "1")
+    assert enhancer.enhance("a cat") == "t7 t8 t9 t10 t11"
+    feedback = knob and traced and device_sampling
+    assert [kwargs["reload_inputs"] for _, _, kwargs in gen.decode_calls] == [True] + [not feedback] * 3
+    assert enhancer.last_stats["feedback"] is feedback
+    # The host keeps passing the true token and position; feedback steps run on the device's own, which match.
+    assert [(tok, pos) for tok, pos, _ in gen.decode_calls] == [(7 + k, len(PROMPT_IDS) + k) for k in range(4)]
+    assert gen.fed == [(7 + k, len(PROMPT_IDS) + k) for k in range(4)]
+
+
+def test_device_enhancer_feedback_poison_only_touches_feedback_steps(monkeypatch):
+    enhancer, gen = _device_enhancer(
+        monkeypatch, [7, 8, 9, 10], temperature=0.0, max_new_tokens=4, device_sampling=True, enable_trace=True
+    )
+    monkeypatch.setenv("LTX_ENHANCER_FEEDBACK", "1")
+    monkeypatch.setenv("LTX_ENHANCER_FEEDBACK_POISON", "1")
+    assert enhancer.enhance("a cat") == "t7 t8 t9 t10"
+    # Step 0 restages the real prefill token; the rest pass a dummy token and a frozen (still >= 0) position.
+    assert [(tok, pos) for tok, pos, _ in gen.decode_calls] == [(7, len(PROMPT_IDS))] + [(0, len(PROMPT_IDS))] * 2
+    assert gen.fed == [(7 + k, len(PROMPT_IDS) + k) for k in range(3)]
+
+
+@pytest.mark.parametrize("timing", [False, True], ids=["off", "on"])
+def test_device_enhancer_step_timing_keeps_the_stream(monkeypatch, timing):
+    enhancer, gen = _device_enhancer(monkeypatch, [7, 8, 9], temperature=0.0, max_new_tokens=3, device_sampling=True)
+    if timing:
+        monkeypatch.setenv("LTX_ENHANCER_STEP_TIMING", "1")
+    assert enhancer.enhance("a cat") == "t7 t8 t9"
+    assert enhancer.last_stats["decode_steps"] == 2
+    if timing:
+        # Dispatch without the read, then the generator's own read and parse: the same calls in the same order.
+        assert [kwargs["read_from_device"] for _, _, kwargs in gen.decode_calls] == [False, False]
+        assert enhancer.last_stats["dispatch_ms_median"] >= 0 and enhancer.last_stats["read_ms_median"] >= 0
+    else:
+        assert all("read_from_device" not in kwargs for _, _, kwargs in gen.decode_calls)
+        assert "dispatch_ms_median" not in enhancer.last_stats
+
+
+@pytest.mark.parametrize("ignore_stop", [False, True], ids=["stop", "ignore_stop"])
+def test_device_enhancer_ignore_stop_decodes_the_full_budget(monkeypatch, ignore_stop):
+    enhancer, _ = _device_enhancer(monkeypatch, [7, EOS, 9], temperature=0.0, max_new_tokens=4)
+    enhancer.ignore_stop = ignore_stop
+    enhancer.enhance("a cat")
+    assert enhancer.last_token_ids == ([7, EOS, 9, 9] if ignore_stop else [7])
+
+
 def test_device_enhancer_warmup_is_short_greedy_per_bucket_and_once(monkeypatch):
     enhancer, gen = _device_enhancer(monkeypatch, [7], temperature=0.9, max_new_tokens=100)
     temperatures = []
@@ -351,6 +444,33 @@ def test_device_enhancer_warmup_is_short_greedy_per_bucket_and_once(monkeypatch)
     assert torch.equal(rng_before, torch.get_rng_state())
     enhancer.warmup()
     assert len(gen.prefill_calls) == len(pe.WARMUP_PROMPTS)
+
+
+def test_device_enhancer_warm_sampled_adds_one_serving_temperature_rewrite(monkeypatch):
+    enhancer, gen = _device_enhancer(
+        monkeypatch, [7], temperature=0.9, max_new_tokens=100, device_sampling=True, enable_trace=True
+    )
+    monkeypatch.setenv("LTX_ENHANCER_WARM_SAMPLED", "1")
+    steps = pe.WARMUP_NEW_TOKENS - 1
+    n = len(pe.WARMUP_PROMPTS)
+    rng_before = torch.get_rng_state()
+
+    def decode_temps(calls):
+        return [(kwargs["sampling_params"].temperature, kwargs["enable_trace"]) for _, _, kwargs in calls]
+
+    # Eager warmup: the greedy per-bucket rewrites, then one short rewrite at the serving temperature.
+    enhancer.warmup(capture=False)
+    assert len(gen.prefill_calls) == n + 1
+    assert decode_temps(gen.decode_calls) == [(0.0, False)] * (n * steps) + [(0.9, False)] * steps
+    # Capture: the greedy capture rewrite, then a traced one at the serving temperature.
+    enhancer.capture_trace()
+    assert len(gen.prefill_calls) == n + 3
+    assert decode_temps(gen.decode_calls[(n + 1) * steps :]) == [(0.0, True)] * steps + [(0.9, True)] * steps
+    # _generate seeds torch at temperature > 0; the warm rewrites must leave the global RNG as they found it.
+    assert torch.equal(rng_before, torch.get_rng_state())
+    enhancer.warmup()
+    enhancer.capture_trace()
+    assert len(gen.prefill_calls) == n + 3
 
 
 def test_device_enhancer_unload_is_idempotent_and_frees_tensors(monkeypatch):
@@ -431,33 +551,47 @@ def test_gemma4_env_is_scoped_to_the_load(monkeypatch, tmp_path):
         def recording_build(self):
             seen["cache"] = os.environ.get("TT_CACHE_PATH")
             seen["topology"] = os.environ.get("GEMMA4_CCL_TOPOLOGY")
+            seen["device_pli"] = os.environ.get("GEMMA4_DEVICE_PLI")
             return fake_build(self)
 
         monkeypatch.setattr(DevicePromptEnhancer, "_build_generator", recording_build)
 
-    # Unset before: both variables exist only while gemma4 builds the model.
+    # Unset before: the variables exist only while gemma4 builds the model; device PLI is pinned off.
     monkeypatch.delenv("TT_CACHE_PATH", raising=False)
     monkeypatch.delenv("GEMMA4_CCL_TOPOLOGY", raising=False)
+    monkeypatch.delenv("GEMMA4_DEVICE_PLI", raising=False)
     enhancer, _ = _device_enhancer(
         monkeypatch, [7], temperature=0.0, max_new_tokens=2, cache_dir=str(tmp_path / "a"), ccl_topology="Linear"
     )
     record_build_env(monkeypatch)
     enhancer.ensure_loaded()
-    assert seen == {"cache": str(tmp_path / "a"), "topology": "linear"}
+    assert seen == {"cache": str(tmp_path / "a"), "topology": "linear", "device_pli": "0"}
     assert "TT_CACHE_PATH" not in os.environ and "GEMMA4_CCL_TOPOLOGY" not in os.environ
+    assert "GEMMA4_DEVICE_PLI" not in os.environ
 
     # Preset before: the rewriter's own cache dir still wins for the load, an explicit gemma4 topology is
-    # kept, and both are restored afterwards.
+    # kept, a process-level GEMMA4_DEVICE_PLI does not leak into the rewriter, and all are restored afterwards.
     monkeypatch.setenv("TT_CACHE_PATH", str(tmp_path / "other-model"))
     monkeypatch.setenv("GEMMA4_CCL_TOPOLOGY", "ring")
+    monkeypatch.setenv("GEMMA4_DEVICE_PLI", "1")
     other, _ = _device_enhancer(
         monkeypatch, [7], temperature=0.0, max_new_tokens=2, cache_dir=str(tmp_path / "b"), ccl_topology="Linear"
     )
     record_build_env(monkeypatch)
     other.ensure_loaded()
-    assert seen == {"cache": str(tmp_path / "b"), "topology": "ring"}
+    assert seen == {"cache": str(tmp_path / "b"), "topology": "ring", "device_pli": "0"}
     assert os.environ["TT_CACHE_PATH"] == str(tmp_path / "other-model")
     assert os.environ["GEMMA4_CCL_TOPOLOGY"] == "ring"
+    assert os.environ["GEMMA4_DEVICE_PLI"] == "1"
+
+    # LTX_ENHANCER_DEVICE_PLI=1 selects gemma4's device PLI for the load only.
+    monkeypatch.delenv("GEMMA4_DEVICE_PLI")
+    third, _ = _device_enhancer(monkeypatch, [7], temperature=0.0, max_new_tokens=2, cache_dir=str(tmp_path / "c"))
+    monkeypatch.setenv("LTX_ENHANCER_DEVICE_PLI", "1")
+    record_build_env(monkeypatch)
+    third.ensure_loaded()
+    assert seen["device_pli"] == "1"
+    assert "GEMMA4_DEVICE_PLI" not in os.environ
 
 
 def test_resolve_model_dir(monkeypatch, tmp_path):

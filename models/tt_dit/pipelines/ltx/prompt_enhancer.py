@@ -17,6 +17,7 @@ import gc
 import json
 import math
 import os
+import statistics
 import time
 from abc import ABC, abstractmethod
 from typing import Literal
@@ -43,6 +44,11 @@ def _host_sampling() -> bool:
     """LTX_ENHANCER_HOST_SAMPLE=1 keeps the old host sampling path (full-logits
     gather to the host every decode step) instead of the device sampler."""
     return os.environ.get("LTX_ENHANCER_HOST_SAMPLE", "0").lower() in ("1", "true", "yes")
+
+
+def _env_flag(name: str) -> bool:
+    """An off-by-default boolean knob."""
+    return os.environ.get(name, "0").strip().lower() in ("1", "true", "yes")
 
 
 def late_trace_capture() -> bool:
@@ -568,6 +574,8 @@ class DevicePromptEnhancer(PromptEnhancer):
         self._warm = False
         self._trace_captured = False
         self._warned_image = False
+        # Bench only: decode the full token budget past any stop id (fixed-length latency runs).
+        self.ignore_stop = False
 
     @property
     def name(self) -> str:
@@ -613,6 +621,10 @@ class DevicePromptEnhancer(PromptEnhancer):
                         f"prompt enhancer: GEMMA4_CCL_TOPOLOGY={preset_topology!r} disagrees with the pipeline's "
                         f"{wanted} fabric; keeping the explicit setting"
                     )
+            # LTX_ENHANCER_DEVICE_PLI=1 computes E2B's per-layer inputs inside the decode trace from the device
+            # token (and enables on-device token feedback). Pinned either way so a process-level export of
+            # gemma4's own knob cannot change the rewriter.
+            env.enter_context(_scoped_env("GEMMA4_DEVICE_PLI", "1" if _env_flag("LTX_ENHANCER_DEVICE_PLI") else "0"))
             self._generator, self._kv_cache, self._tokenizer = self._build_generator()
         self._page_table = _identity_page_table(self.num_page_blocks)
         self._stop_tokens = resolve_stop_tokens(self._model_dir, self._tokenizer)
@@ -691,6 +703,8 @@ class DevicePromptEnhancer(PromptEnhancer):
                 f"prompt enhancer warmup compiled prefill buckets {sorted(warmed)} but not {production_bucket}; "
                 "the first full-length request pays that compile"
             )
+        if _env_flag("LTX_ENHANCER_WARM_SAMPLED"):
+            self._warm_sampled(enable_trace=self.enable_trace and capture)
         self._warm = True
         logger.info(f"prompt enhancer warm ({time.time() - t0:.1f}s)")
 
@@ -705,7 +719,25 @@ class DevicePromptEnhancer(PromptEnhancer):
         self._generate(
             build_messages(WARMUP_PROMPTS[0], "t2v"), seed=0, max_new_tokens=WARMUP_NEW_TOKENS, temperature=0.0
         )
+        if _env_flag("LTX_ENHANCER_WARM_SAMPLED"):
+            self._warm_sampled(enable_trace=True)
         logger.info(f"prompt enhancer decode trace captured ({time.time() - t0:.1f}s)")
+
+    def _warm_sampled(self, *, enable_trace: bool) -> None:
+        """LTX_ENHANCER_WARM_SAMPLED=1: one short rewrite at the serving temperature, so the sampler's
+        top-k/top-p/seed programs (and, traced, the feedback step-0/step-1 pair) compile here rather than on
+        the first served request after the pipeline's own traces exist. ``_generate`` seeds the global torch
+        RNG at temperature > 0, so it runs on a forked RNG."""
+        if self.temperature <= 0:
+            return
+        with torch.random.fork_rng(devices=[]):
+            self._generate(
+                build_messages(WARMUP_PROMPTS[0], "t2v"),
+                seed=0,
+                max_new_tokens=WARMUP_NEW_TOKENS,
+                temperature=self.temperature,
+                enable_trace=enable_trace,
+            )
 
     def unload(self) -> None:
         """Drop the generator and force-free the device tensors it owns. Idempotent."""
@@ -760,8 +792,10 @@ class DevicePromptEnhancer(PromptEnhancer):
         enable_trace: bool | None = None,
     ) -> str:
         traced = self.enable_trace if enable_trace is None else enable_trace
+        t0 = time.time()
         text = self._tokenizer.apply_chat_template(messages, tokenize=False, add_generation_prompt=True)
         prompt_ids = self._tokenize_prompt(text, max_new_tokens)
+        tokenize_s = time.time() - t0
         prompt_len = len(prompt_ids)
         assert (
             prompt_len + max_new_tokens <= self.max_seq_len
@@ -796,30 +830,63 @@ class DevicePromptEnhancer(PromptEnhancer):
             else:
                 sampling_params = SamplingParams(temperature=0.0, top_k=1, top_p=1.0)
 
+        # On-device token feedback (LTX_ENHANCER_FEEDBACK=1): only decode step 0 restages the token, positions
+        # and page table from the host; later steps replay the trace on the token the device sampler wrote into
+        # the trace's own input buffer, with positions advanced inside the trace. gemma4 offers this only with
+        # device PLI, only traced, and only when the sampler (not the host) produces the token.
+        model0 = self._generator.model[0]
+        feedback_capable = bool(getattr(model0, "_tt_supports_decode_token_feedback", False))
+        use_feedback = (
+            _env_flag("LTX_ENHANCER_FEEDBACK") and traced and sampling_params is not None and feedback_capable
+        )
+        # Test only: feed garbage host inputs on feedback steps; the trace must not read them.
+        poison = use_feedback and _env_flag("LTX_ENHANCER_FEEDBACK_POISON")
+        # Debug: split each device-sampled step into dispatch and readback (same calls, same order as
+        # decode_forward's own read_from_device=True path).
+        step_timing = _env_flag("LTX_ENHANCER_STEP_TIMING") and sampling_params is not None
+        dispatch_ms: list[float] = []
+        read_ms: list[float] = []
+        stop_tokens = () if self.ignore_stop else self._stop_tokens
+
         # The prefill's token is the first new token; each decode step feeds the previous token back and
         # advances the position by one. Positions are not advanced by the generator itself.
         new_ids: list[int] = []
         current_pos = torch.tensor([prompt_len])
         decode_steps = 0
         t0 = time.time()
-        while tok not in self._stop_tokens and len(new_ids) < max_new_tokens:
+        while tok not in stop_tokens and len(new_ids) < max_new_tokens:
             new_ids.append(tok)
             if len(new_ids) >= max_new_tokens:
                 break
-            # reload_inputs=True: E2B's per-layer inputs are computed on the host for every token.
-            out, _ = self._generator.decode_forward(
-                torch.tensor([[tok]]),
-                current_pos,
+            # reload_inputs=True: E2B's per-layer inputs are computed on the host for every token (host PLI),
+            # or the feedback path is off. A feedback step ignores the host token and position for its inputs;
+            # the position still marks the request's seed slot active (start_pos >= 0), and the seed counter,
+            # anchored to it at step 0, self-advances once per step.
+            reload_inputs = decode_steps == 0 or not use_feedback
+            step_tok, step_pos = torch.tensor([[tok]]), current_pos
+            if poison and not reload_inputs:
+                step_tok, step_pos = torch.tensor([[0]]), torch.tensor([prompt_len])
+            t_step = time.perf_counter()
+            out = self._generator.decode_forward(
+                step_tok,
+                step_pos,
                 enable_trace=traced,
                 page_table=self._page_table,
                 kv_cache=self._kv_cache,
                 sampling_params=sampling_params,
-                reload_inputs=True,
+                reload_inputs=reload_inputs,
                 reload_page_table=False,
                 # Prefill sampled on host, so the device sampler gets its params at decode step 0.
                 reload_sampling_params=sampling_params is not None and decode_steps == 0,
                 reset_sampling_state=sampling_params is not None and decode_steps == 0,
+                **({"read_from_device": False} if step_timing else {}),
             )
+            if step_timing:
+                t_read = time.perf_counter()
+                out = self._generator.process_decode_output_host(
+                    self._generator.read_decode_output(out), is_tokens=True
+                )
+            out, _ = out
             current_pos += 1
             decode_steps += 1
             self._trace_captured |= traced
@@ -827,18 +894,35 @@ class DevicePromptEnhancer(PromptEnhancer):
                 tok = int(out.reshape(-1)[0].item())
             else:
                 tok = self._sample(out, temperature)
+            if step_timing:
+                t_done = time.perf_counter()
+                dispatch_ms.append(1000 * (t_read - t_step))
+                read_ms.append(1000 * (t_done - t_read))
         decode_s = time.time() - t0
+
+        t0 = time.time()
+        rewrite = self._tokenizer.decode(new_ids, skip_special_tokens=True).strip()
+        detok_s = time.time() - t0
 
         self.last_stats = {
             "sampling": "host" if sampling_params is None else "device",
             "prompt_tokens": prompt_len,
             "new_tokens": len(new_ids),
+            "decode_steps": decode_steps,
+            "tokenize_s": round(tokenize_s, 4),
             "prefill_s": round(prefill_s, 3),
             "decode_s": round(decode_s, 3),
+            "detok_s": round(detok_s, 4),
             "tok_s": round(decode_steps / decode_s, 3) if decode_steps and decode_s > 0 else None,
+            "device_pli": bool(getattr(model0, "_device_pli", False)),
+            "decode_token_feedback": feedback_capable,
+            "feedback": use_feedback,
         }
+        if step_timing and dispatch_ms:
+            self.last_stats["dispatch_ms_median"] = round(statistics.median(dispatch_ms), 3)
+            self.last_stats["read_ms_median"] = round(statistics.median(read_ms), 3)
         self.last_token_ids = list(new_ids)
-        return self._tokenizer.decode(new_ids, skip_special_tokens=True).strip()
+        return rewrite
 
     def _tokenize_prompt(self, text: str, max_new_tokens: int) -> list[int]:
         """Seam: templated text -> prompt ids through the generator's own prefill preprocessing (instruct=False:

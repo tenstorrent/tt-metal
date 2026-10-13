@@ -7,14 +7,21 @@
 Same mesh params, fabric topology and enhancer class as the traced LTX distilled pipeline, but no DiT,
 VAE or encoder: load, eager warmup, decode-trace capture, then a fixed prompt set rewritten at each
 temperature. Each request records its timings, host staging counts and the generated token ids, so two
-runs with different knobs can be compared token for token (BENCH_REF) as well as on latency.
+runs with different knobs can be compared token for token (BENCH_REF / BENCH_REF_TAG) as well as on latency.
 
     BENCH_TEMPS        comma list of temperatures (default "0.0,0.7")
     BENCH_REPEATS      passes over the prompt set per temperature (default 2; pass 0 is reported as cold)
     BENCH_MAX_NEW      token budget (default: the enhancer's own, 512)
+    BENCH_IGNORE_STOP  1: decode the full budget past stop ids (fixed-length latency; warmup/capture unaffected)
     BENCH_TAG          output name (default "bench")
     BENCH_REF          path of an earlier bench JSON: report token equality per (prompt, temperature, repeat)
+    BENCH_REF_TAG      the same by tag: <out dir>/<tag>.json (BENCH_REF wins when both are set)
+    BENCH_ROW_CHECK    1: after each request, read element 0 of the decode token-feedback buffer on the first
+                       device of every mesh row and record whether the rows agree
     LTX_ENHANCER_EXP_DIR  output root (JSON lands under <root>/enhancer_bench/)
+
+Each request's ``calls`` counts host touch points (H2D copies, trace launches, host PLI, decode restages, eager
+sampler runs, seed uploads); the summary also gives them per decode step.
 """
 
 import json
@@ -46,19 +53,61 @@ BENCH_PROMPTS = (
     "between the lamp posts. She pauses at the railing and takes a slow sip as a gull lands on the post beside her",
 )
 
+# Host PLI itself: compute_host_pli wraps it per decode token, and prefill calls it once per request.
+MODEL_COUNTERS = (
+    "prepare_decode_inputs_host",
+    "compute_host_pli",
+    "_compute_per_layer_inputs",
+    "prepare_inputs_prefill",
+)
 
-def _counting(obj, name: str, counts: dict) -> None:
-    """Wrap ``obj.name`` so every call bumps ``counts[name]``."""
-    orig = getattr(obj, name, None)
+
+def _env_flag(name):
+    return os.environ.get(name, "0").strip().lower() in ("1", "true", "yes")
+
+
+def _counting(obj, name, counts, key=None, restores=None):
+    """Wrap ``obj.name`` so every call bumps ``counts[key or name]``; skipped when ``obj`` has no ``name``."""
+    orig = getattr(obj, name, None) if obj is not None else None
     if orig is None:
         return
-    counts.setdefault(name, 0)
+    key = key or name
+    counts.setdefault(key, 0)
 
     def wrapped(*args, **kwargs):
-        counts[name] += 1
+        counts[key] += 1
         return orig(*args, **kwargs)
 
     setattr(obj, name, wrapped)
+    if restores is not None:
+        restores.append((obj, name, orig))
+
+
+def _row_tokens(generator, mesh_shape):
+    """Element 0 of the decode token-feedback buffer (the trace's token input, which the device sampler writes)
+    on the first device of each mesh row. None when the generator keeps no such buffer (host PLI restage)."""
+    feedback_buffer = getattr(generator, "_gemma4_eager_token_feedback_buffer", None)
+    if feedback_buffer is None:
+        return None
+    fb = feedback_buffer(0)
+    # Before a decode trace exists gemma4 hands out a pre-capture dummy instead; that is not the live buffer.
+    if fb is None or fb is getattr(generator, "_g4_warmup_token_feedback_dummy", None):
+        return None
+    shards = ttnn.get_device_tensors(fb)
+    rows, cols = int(mesh_shape[0]), int(mesh_shape[1])
+    return [int(ttnn.to_torch(shards[r * cols]).reshape(-1)[0].item()) for r in range(rows)]
+
+
+def _first_divergence(a, b):
+    div = next((j for j, (x, y) in enumerate(zip(a, b)) if x != y), None)
+    if div is None and len(a) != len(b):
+        div = min(len(a), len(b))
+    return div
+
+
+def _mean(values):
+    values = [v for v in values if v is not None]
+    return round(sum(values) / len(values), 3) if values else None
 
 
 @pytest.mark.parametrize(
@@ -72,6 +121,7 @@ def test_enhancer_bench(mesh_device, device_params, sp_axis, tp_axis, num_links,
     temps = [float(t) for t in os.environ.get("BENCH_TEMPS", "0.0,0.7").split(",") if t.strip()]
     repeats = int(os.environ.get("BENCH_REPEATS", "2"))
     tag = os.environ.get("BENCH_TAG", "bench")
+    row_check = _env_flag("BENCH_ROW_CHECK")
 
     # The pipeline runs the enhancer on its own full-mesh submesh with the pipeline's fabric topology.
     submesh = mesh_device.create_submesh(ttnn.MeshShape(*tuple(mesh_device.shape)))
@@ -99,75 +149,121 @@ def test_enhancer_bench(mesh_device, device_params, sp_axis, tp_axis, num_links,
     enhancer.capture_trace()
     results["lifecycle"]["capture_s"] = round(time.time() - t0, 1)
     dump()
+    # Only the measured requests run past stop ids; warmup and capture above keep their natural length.
+    enhancer.ignore_stop = _env_flag("BENCH_IGNORE_STOP")
 
     counts: dict = {}
+    restores: list = []
     generator = enhancer._generator
     model0 = generator.model[0] if isinstance(getattr(generator, "model", None), (list, tuple)) else None
     if model0 is not None:
-        for name in ("prepare_decode_inputs_host", "compute_host_pli", "prepare_inputs_prefill"):
+        for name in MODEL_COUNTERS:
             _counting(model0, name, counts)
+        sampling_module = getattr(model0, "sampling", None)
+        _counting(sampling_module, "_run_sampling", counts)
+        _counting(getattr(sampling_module, "seed_manager", None), "write_device_seed_values", counts)
         results["device_pli"] = bool(getattr(model0, "_device_pli", False))
         results["decode_token_feedback"] = bool(getattr(model0, "_tt_supports_decode_token_feedback", False))
     for name in ("decode_forward", "prefill_forward_text"):
         _counting(generator, name, counts)
+    # Module attributes: every caller looks these up on ttnn at call time. Restored after the requests.
+    for name in ("copy_host_to_device_tensor", "execute_trace"):
+        _counting(ttnn, name, counts, key=f"ttnn.{name}", restores=restores)
 
     ref = None
-    if os.environ.get("BENCH_REF"):
-        with open(os.environ["BENCH_REF"]) as f:
-            ref = {(r["prompt_idx"], r["temperature"], r["repeat"]): r for r in json.load(f)["requests"]}
+    ref_path = os.environ.get("BENCH_REF") or (
+        os.path.join(OUT_DIR, f"{os.environ['BENCH_REF_TAG']}.json") if os.environ.get("BENCH_REF_TAG") else None
+    )
+    if ref_path:
+        if os.path.isfile(ref_path):
+            with open(ref_path) as f:
+                ref = {(r["prompt_idx"], r["temperature"], r["repeat"]): r for r in json.load(f)["requests"]}
+            results["ref"] = ref_path
+        else:
+            logger.warning(f"bench: reference {ref_path} not found; no ref comparison")
 
-    for temperature in temps:
-        enhancer.temperature = temperature
-        for repeat in range(repeats):
-            for i, prompt in enumerate(BENCH_PROMPTS):
-                before = dict(counts)
-                t0 = time.time()
-                text = enhancer.enhance(prompt, mode="t2v", seed=ENHANCER_SEED + i)
-                wall = time.time() - t0
-                stats = dict(enhancer.last_stats or {})
-                ids = list(getattr(enhancer, "last_token_ids", []) or [])
-                rec = {
-                    "prompt_idx": i,
-                    "temperature": temperature,
-                    "repeat": repeat,
-                    "wall_s": round(wall, 3),
-                    "ms_per_token": round(1000 * stats["decode_s"] / max(1, stats["new_tokens"] - 1), 2)
-                    if stats.get("new_tokens")
-                    else None,
-                    "calls": {k: counts[k] - before.get(k, 0) for k in counts},
-                    **stats,
-                    "token_ids": ids,
-                    "text": text,
-                }
-                if ref is not None:
-                    other = ref.get((i, temperature, repeat))
-                    if other is not None and other.get("token_ids"):
-                        a, b = ids, other["token_ids"]
-                        div = next((j for j, (x, y) in enumerate(zip(a, b)) if x != y), None)
-                        if div is None and len(a) != len(b):
-                            div = min(len(a), len(b))
-                        rec["ref_equal"] = div is None
-                        rec["ref_first_divergence"] = div
-                results["requests"].append(rec)
-                logger.info(
-                    f"bench t={temperature} r={repeat} p={i}: {stats.get('prompt_tokens')}+{stats.get('new_tokens')} tok, "
-                    f"prefill {stats.get('prefill_s')}s decode {stats.get('decode_s')}s ({rec['ms_per_token']} ms/tok) "
-                    f"wall {wall:.2f}s calls={rec['calls']} ref_equal={rec.get('ref_equal')}"
-                )
-                dump()
+    try:
+        for temperature in temps:
+            enhancer.temperature = temperature
+            for repeat in range(repeats):
+                for i, prompt in enumerate(BENCH_PROMPTS):
+                    before = dict(counts)
+                    t0 = time.time()
+                    text = enhancer.enhance(prompt, mode="t2v", seed=ENHANCER_SEED + i)
+                    wall = time.time() - t0
+                    stats = dict(enhancer.last_stats or {})
+                    ids = list(getattr(enhancer, "last_token_ids", []) or [])
+                    steps = stats.get("decode_steps")
+                    rec = {
+                        "prompt_idx": i,
+                        "temperature": temperature,
+                        "repeat": repeat,
+                        "wall_s": round(wall, 3),
+                        "ms_per_token": round(1000 * stats["decode_s"] / steps, 2) if steps else None,
+                        "calls": {k: counts[k] - before.get(k, 0) for k in counts},
+                        **stats,
+                        "token_ids": ids,
+                        "text": text,
+                    }
+                    if row_check:
+                        rows = _row_tokens(generator, tuple(submesh.shape))
+                        rec["row_tokens"] = rows
+                        rec["rows_equal"] = None if rows is None else len(set(rows)) == 1
+                    if repeat > 0:
+                        first = next(
+                            r
+                            for r in results["requests"]
+                            if (r["prompt_idx"], r["temperature"], r["repeat"]) == (i, temperature, 0)
+                        )
+                        rec["self_equal"] = _first_divergence(ids, first["token_ids"]) is None
+                    if ref is not None:
+                        other = ref.get((i, temperature, repeat))
+                        if other is not None and other.get("token_ids"):
+                            div = _first_divergence(ids, other["token_ids"])
+                            rec["ref_equal"] = div is None
+                            rec["ref_first_divergence"] = div
+                    results["requests"].append(rec)
+                    logger.info(
+                        f"bench t={temperature} r={repeat} p={i}: {stats.get('prompt_tokens')}+"
+                        f"{stats.get('new_tokens')} tok, prefill {stats.get('prefill_s')}s decode "
+                        f"{stats.get('decode_s')}s ({rec['ms_per_token']} ms/tok) wall {wall:.2f}s "
+                        f"calls={rec['calls']} self_equal={rec.get('self_equal')} "
+                        f"ref_equal={rec.get('ref_equal')} rows_equal={rec.get('rows_equal')}"
+                    )
+                    dump()
+    finally:
+        for obj, name, orig in restores:
+            setattr(obj, name, orig)
 
     # Steady state: every repeat after the first.
     for temperature in temps:
         warm = [r for r in results["requests"] if r["temperature"] == temperature and r["repeat"] > 0]
-        if warm:
-            results.setdefault("summary", {})[str(temperature)] = {
-                "mean_wall_s": round(sum(r["wall_s"] for r in warm) / len(warm), 3),
-                "mean_new_tokens": round(sum(r["new_tokens"] for r in warm) / len(warm), 1),
-                "mean_ms_per_token": round(sum(r["ms_per_token"] for r in warm) / len(warm), 2),
-                "mean_prefill_s": round(sum(r["prefill_s"] for r in warm) / len(warm), 3),
-                "ref_equal": None if ref is None else sum(bool(r.get("ref_equal")) for r in warm),
-                "n": len(warm),
-            }
+        if not warm:
+            continue
+        summary = {
+            "mean_wall_s": _mean(r["wall_s"] for r in warm),
+            "mean_new_tokens": _mean(r["new_tokens"] for r in warm),
+            "mean_decode_steps": _mean(r.get("decode_steps") for r in warm),
+            "mean_ms_per_token": _mean(r["ms_per_token"] for r in warm),
+            "mean_prefill_s": _mean(r["prefill_s"] for r in warm),
+            "self_equal": sum(bool(r.get("self_equal")) for r in warm),
+            "ref_equal": None if ref is None else sum(bool(r.get("ref_equal")) for r in warm),
+            "n": len(warm),
+            "calls_per_request": {k: _mean(r["calls"].get(k, 0) for r in warm) for k in counts},
+            "calls_per_step": {
+                k: _mean(r["calls"].get(k, 0) / r["decode_steps"] for r in warm if r.get("decode_steps"))
+                for k in counts
+            },
+        }
+        if any("dispatch_ms_median" in r for r in warm):
+            summary["mean_dispatch_ms"] = _mean(r.get("dispatch_ms_median") for r in warm)
+            summary["mean_read_ms"] = _mean(r.get("read_ms_median") for r in warm)
+        if row_check:
+            # Over every repeat: a cold request's rows diverge as readily as a warm one's.
+            every = [r for r in results["requests"] if r["temperature"] == temperature]
+            summary["rows_equal"] = sum(bool(r.get("rows_equal")) for r in every)
+            summary["rows_checked"] = sum(r.get("rows_equal") is not None for r in every)
+        results.setdefault("summary", {})[str(temperature)] = summary
     dump()
     logger.info(f"bench summary {tag}: {json.dumps(results.get('summary'))}")
     enhancer.unload()

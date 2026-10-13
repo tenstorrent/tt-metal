@@ -1262,8 +1262,15 @@ class ChunkedPrefillPageTableGuardMixin:
 
         Opt into host-roundtrip commit with ``GEMMA4_HOST_COMMIT_FEEDBACK=1``
         for async force-argmax shape mismatches (``[1,1,B]`` ↛ ``[1,1,1,32]``).
+
+        ``GEMMA4_SEED_ALL_ROWS=1`` (batch 1, ``sampling_dp > 1``): the single
+        active seed slot's value is replicated to every lane, so each mesh row
+        seeds its lane 0 identically instead of free-running from SKIP. Rows
+        then sample the same token under on-device token feedback; row 0's
+        slot-0 seed (the one read back) is unchanged.
         """
         restores = []
+        seed_restores = []
         wrote_feedback = False
         host_commit = os.environ.get("GEMMA4_HOST_COMMIT_FEEDBACK", "0").strip().lower() in (
             "1",
@@ -1271,7 +1278,29 @@ class ChunkedPrefillPageTableGuardMixin:
             "yes",
             "on",
         )
+        seed_all_rows = os.environ.get("GEMMA4_SEED_ALL_ROWS", "0").strip().lower() in ("1", "true", "yes", "on")
         try:
+            for i in range(self.data_parallel if seed_all_rows else 0):
+                sampling_module = getattr(self.model[i], "sampling", None)
+                seed_manager = getattr(sampling_module, "seed_manager", None)
+                if seed_manager is None or getattr(self.model[i], "sampling_dp", 1) <= 1:
+                    continue
+                if start_pos is None or start_pos[i] is None or torch.as_tensor(start_pos[i]).numel() != 1:
+                    continue
+                orig_get = seed_manager.get_new_values
+
+                def _make_get_new_values(orig):
+                    def _get_new_values(empty_slots=None, replicate_seeds=False):
+                        # replicate_seeds requires exactly one active slot; anything else keeps the base call.
+                        if empty_slots is not None and len(list(empty_slots)) == 1:
+                            replicate_seeds = True
+                        return orig(empty_slots, replicate_seeds=replicate_seeds)
+
+                    return _get_new_values
+
+                seed_restores.append((seed_manager, seed_manager.__dict__.get("get_new_values")))
+                seed_manager.get_new_values = _make_get_new_values(orig_get)
+
             for i in range(self.data_parallel):
                 sampling_module = getattr(self.model[i], "sampling", None)
                 if sampling_module is None:
@@ -1343,6 +1372,11 @@ class ChunkedPrefillPageTableGuardMixin:
         finally:
             for sampling_module, orig_sample in restores:
                 sampling_module.sample = orig_sample
+            for seed_manager, prior in seed_restores:
+                if prior is None:
+                    del seed_manager.get_new_values
+                else:
+                    seed_manager.get_new_values = prior
 
     def decode_forward(
         self,
