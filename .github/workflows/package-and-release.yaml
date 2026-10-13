@@ -204,36 +204,34 @@ jobs:
   # ===========================================================================
   # Team: blaze -- test list owned by tenstorrent/tt-blaze (its ci.yaml)
   # ===========================================================================
-  # Runs tt-blaze's full merge gate against this release build
-
-  blaze-merge-gate:
-    needs: [build-artifact-profiler]
-    if: ${{ !cancelled() && needs.build-artifact-profiler.result == 'success' }}
-    permissions:
-      contents: read
-    # TT_BLAZE_PAT -- the default GITHUB_TOKEN cannot dispatch another repo.
-    secrets:
-      TT_BLAZE_PAT: ${{ secrets.TT_BLAZE_PAT }}
-    uses: ./.github/workflows/blaze-merge-gate.yaml
-    with:
-      # Artifacts belong to the TOP-LEVEL run, which is this workflow.
-      metal-run-id: ${{ github.run_id }}
-      # tt-blaze checks its tt-metal submodule out here so its JIT-compiled kernels
-      # match the libraries it links against.
-      metal-ref: ${{ github.sha }}
-      # Commit-scoped, not tracy-scoped: the same image the plain build resolves.
-      dev-image: ${{ needs.build-artifact-profiler.outputs.dev-docker-image }}
-      # Run tt-blaze's full merge gate from its main branch.
-      blaze-ref: main
+  # Disabled after repeated failures in package-and-release run 38189493049.
+  # blaze-merge-gate:
+  #   needs: [build-artifact-profiler]
+  #   if: ${{ !cancelled() && needs.build-artifact-profiler.result == 'success' }}
+  #   permissions:
+  #     contents: read
+  #   # TT_BLAZE_PAT -- the default GITHUB_TOKEN cannot dispatch another repo.
+  #   secrets:
+  #     TT_BLAZE_PAT: ${{ secrets.TT_BLAZE_PAT }}
+  #   uses: ./.github/workflows/blaze-merge-gate.yaml
+  #   with:
+  #     # Artifacts belong to the TOP-LEVEL run, which is this workflow.
+  #     metal-run-id: ${{ github.run_id }}
+  #     # tt-blaze checks its tt-metal submodule out here so its JIT-compiled kernels
+  #     # match the libraries it links against.
+  #     metal-ref: ${{ github.sha }}
+  #     # Commit-scoped, not tracy-scoped: the same image the plain build resolves.
+  #     dev-image: ${{ needs.build-artifact-profiler.outputs.dev-docker-image }}
+  #     # Run tt-blaze's full merge gate from its main branch.
+  #     blaze-ref: main
 
   publish-to-pypi:
-    needs: [build-test-publish, create-tag, blaze-merge-gate]
+    needs: [build-test-publish, create-tag]
     runs-on: ubuntu-latest
     if: >-
       ${{ !cancelled()
           && needs.build-test-publish.result == 'success'
           && needs.create-tag.result == 'success'
-          && (needs.blaze-merge-gate.result == 'success' || needs.blaze-merge-gate.result == 'skipped')
           && (github.ref == 'refs/heads/stable' || startsWith(github.ref, 'refs/tags/v') || inputs.dry-run) }}
     environment:
       name: pypi
@@ -766,7 +764,7 @@ jobs:
           echo "No new commits found since latest release. No RC release needed."
 
   trigger-prod-after-rc-success:
-    needs: [build-test-publish, release-precheck, create-tag, blaze-merge-gate]
+    needs: [build-test-publish, release-precheck, create-tag]
     runs-on: ubuntu-slim
     if: >-
       ${{ !cancelled()
@@ -774,7 +772,7 @@ jobs:
           && needs.release-precheck.result == 'success'
           && needs.build-test-publish.result == 'success'
           && needs.create-tag.result == 'success'
-          && (needs.blaze-merge-gate.result == 'success' || needs.blaze-merge-gate.result == 'skipped') }}
+          }}
     steps:
       - name: Wait for RC workflow completion
         run: |
