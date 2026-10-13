@@ -71,6 +71,39 @@ def test_sampling_precompile_preserves_logits_and_request_state(monkeypatch, all
     assert log_probs.num_logprobs == [0]
 
 
+@pytest.mark.parametrize("use_topk_logprobs", [False, True])
+def test_reset_params_scale_logprobs_per_row(monkeypatch, expect_error, use_topk_logprobs):
+    """log_probs_enable_temperature fills _scale_logprobs per row with temp (1/T) or 1.0; top-k log-probs rejects it."""
+    copies = {}
+    monkeypatch.setattr(ttnn, "from_torch", lambda tensor, **kwargs: tensor)
+    monkeypatch.setattr(ttnn, "copy_host_to_device_tensor", lambda host, device: copies.__setitem__(device, host))
+    sampling = TTSampling.__new__(TTSampling)
+    sampling.max_top_k = 32
+    sampling._allow_force_argmax_sampling = False
+    sampling._sampling_dp = 1
+    for name in ("k_tensor", "p_tensor", "temp_tensor", "_greedy_col", "_scale_logprobs"):
+        setattr(sampling, name, name)
+    sampling.log_probs_calculator = SimpleNamespace(
+        _use_topk_logprobs=use_topk_logprobs, enable_log_probs=True, set_log_probs_mode=lambda *args, **kwargs: None
+    )
+    params = dict(
+        k=[32, 32, 32, 32],
+        p=[1.0, 1.0, 1.0, 1.0],
+        temp=[1 / 0.7, 1 / 0.7, 1.0, 1 / 0.5],
+        enable_log_probs=True,
+        log_probs_enable_temperature=[True, False, True, False],
+    )
+
+    if use_topk_logprobs:
+        with expect_error(ValueError, "not supported with top-k log-probs"):
+            sampling.reset_params(**params)
+        return
+
+    sampling.reset_params(**params)
+    expected = torch.tensor([1 / 0.7, 1.0, 1.0, 1.0]).reshape(1, 1, -1, 1).to(torch.bfloat16)
+    torch.testing.assert_close(copies["_scale_logprobs"], expected, rtol=0, atol=0)
+
+
 def test_sampling_trace_buffer_reuse_is_bucket_only(monkeypatch):
     marked = []
     monkeypatch.setattr(trace_allocation_tracker, "acknowledge_corruptible", marked.append)
@@ -1421,6 +1454,77 @@ def test_log_probs_calculation(shape, mesh_device):
     print(f"pcc={pcc}")
 
     assert passing, f"Assertion failed, PCC={pcc}"
+
+
+@pytest.mark.parametrize(
+    "shape",
+    [
+        [1, 1, 32, 8 * 18992],  # Qwen3 on T3K
+    ],
+)
+@pytest.mark.parametrize(
+    "device_params",
+    [
+        ({"fabric_config": ttnn.FabricConfig.FABRIC_1D}),
+    ],
+    indirect=["device_params"],
+    ids=["fabric_linear"],
+)
+def test_log_probs_calculation_scale_logprobs(shape, mesh_device):
+    """Rows scaled by 1/T give log_softmax(logits / T); rows scaled by 1.0 match calling without scale_logprobs."""
+    torch.manual_seed(1234)
+    batch_size = shape[-2]
+    log_probs_calculator = LogProbsCalculator(mesh_device)
+    if not log_probs_calculator._is_supported():
+        pytest.skip(f"log-probs unsupported on {mesh_device.get_num_devices()} devices")
+
+    torch_tensor = torch.randn(shape)
+    argmax_tensor = torch.argmax(torch_tensor, dim=-1, keepdim=True)
+    indices_tensor = argmax_tensor.reshape(1, 1, 1, batch_size)
+    logits_tensor = ttnn.from_torch(
+        torch_tensor,
+        device=mesh_device,
+        dtype=ttnn.bfloat16,
+        layout=ttnn.TILE_LAYOUT,
+        mesh_mapper=ttnn.ShardTensorToMesh(mesh_device, dim=-1),
+        memory_config=ttnn.DRAM_MEMORY_CONFIG,
+    )
+    ttnn_indices_tensor = ttnn.from_torch(
+        indices_tensor,
+        device=mesh_device,
+        dtype=ttnn.int32,
+        layout=ttnn.TILE_LAYOUT,
+        mesh_mapper=ttnn.ReplicateTensorToMesh(mesh_device),
+        memory_config=ttnn.DRAM_MEMORY_CONFIG,
+    )
+    scale = torch.ones(1, 1, batch_size, 1)
+    scale[:, :, ::2, :] = 1 / 0.7
+    scale = scale.to(torch.bfloat16)
+    scale_tensor = ttnn.from_torch(
+        scale,
+        device=mesh_device,
+        dtype=ttnn.bfloat16,
+        layout=ttnn.TILE_LAYOUT,
+        mesh_mapper=ttnn.ReplicateTensorToMesh(mesh_device),
+        memory_config=ttnn.DRAM_MEMORY_CONFIG,
+    )
+
+    def to_host(log_probs):
+        host = ttnn.to_torch(log_probs, mesh_composer=ttnn.ConcatMeshToTensor(mesh_device, dim=3))
+        return host[:, :, :1, :batch_size].reshape(batch_size)
+
+    log_probs_calculator.set_log_probs_mode(True)
+    raw = to_host(log_probs_calculator.calculate_log_probs(logits_tensor, ttnn_indices_tensor))
+    scaled = to_host(
+        log_probs_calculator.calculate_log_probs(logits_tensor, ttnn_indices_tensor, scale_logprobs=scale_tensor)
+    )
+
+    log_probs_torch = F.log_softmax(torch_tensor.float() * scale.float(), dim=-1)
+    log_probs_torch = torch.gather(log_probs_torch, dim=-1, index=argmax_tensor).reshape(batch_size)
+
+    passing, pcc = comp_pcc(log_probs_torch[::2], scaled[::2], pcc=0.99)
+    assert passing, f"scaled rows PCC below threshold: {pcc}"
+    assert torch.equal(scaled[1::2], raw[1::2]), "rows scaled by 1.0 must match calling without scale_logprobs"
 
 
 @pytest.mark.parametrize(
