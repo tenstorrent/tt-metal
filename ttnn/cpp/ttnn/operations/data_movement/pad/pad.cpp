@@ -494,7 +494,8 @@ std::optional<ttnn::Tensor> pad_tile_codegen(
     const ttnn::Tensor input_4d = to_4d(input_tensor);
     const auto [front, after] = trailing_4d_padding(padding_vec, rank);
 
-    if (route != PadRoute::Codegen && !pc::supported_execution_controls(use_multicore, sub_core_grids)) {
+    if (route != PadRoute::Codegen && (!ttnn::operations::data_movement::codegen_supported_on_arch(input_4d) ||
+                                       !pc::supported_execution_controls(use_multicore, sub_core_grids))) {
         return std::nullopt;
     }
     const auto planned =
@@ -521,7 +522,11 @@ std::optional<ttnn::Tensor> pad_tile_codegen(
     // wrapper adds just a rank-3 view; fill_pad folds every leading dim into its slice count, so rank 4 is equivalent.
     ttnn::Tensor source = input_4d;
     if (pc::has_partial_tile(input_4d)) {
-        source = ttnn::prim::fill_pad(input_4d, value, memory_config_arg.value_or(input_tensor.memory_config()));
+        // fill_pad casts a float straight to a 32-bit integer, which is undefined out of range; the packed word is
+        // the clamped value the pad kernel writes, so border lanes and padding hold the same bits.
+        const bool int32_input = input_4d.dtype() == DataType::INT32 || input_4d.dtype() == DataType::UINT32;
+        const ttnn::PadValue fill_value = int32_input ? ttnn::PadValue{params.packed_pad_value} : ttnn::PadValue{value};
+        source = ttnn::prim::fill_pad(input_4d, fill_value, memory_config_arg.value_or(input_tensor.memory_config()));
     }
     auto output = ttnn::prim::pad_codegen(source, params);
     return ttnn::experimental::view(output, requested_logical_shape, requested_padded_shape);

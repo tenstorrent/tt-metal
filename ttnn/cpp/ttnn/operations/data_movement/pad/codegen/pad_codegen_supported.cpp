@@ -86,10 +86,8 @@ bool output_matches(const Tensor& input, const ttnn::prim::PadCodegenParams& att
 // different moments of one dispatch, and the output allocation between them would flip the answer. What is free
 // right now is the program factory's concern (plan_batches_live).
 uint64_t static_l1_ceiling(const Tensor& input) {
-    auto* device = input.device();
-    const uint64_t size = device->l1_size_per_core();
-    const uint64_t base = device->allocator()->get_base_allocator_addr(tt::tt_metal::HalMemType::L1);
-    return size > base ? size - base : 0;
+    // The L1 bank excludes the reserved L1_SMALL region, which circular buffers cannot use.
+    return input.device()->allocator()->get_bank_size(tt::tt_metal::BufferType::L1);
 }
 
 uint64_t l1_output_reservation(const Tensor& input, const ttnn::prim::PadCodegenParams& attrs) {

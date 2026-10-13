@@ -1940,6 +1940,23 @@ def test_pad_codegen_program_cache(device):
         )
 
 
+@pytest.mark.parametrize(
+    "dtype, value",
+    [pytest.param(ttnn.int32, 3.0e9, id="int32_above_range"), pytest.param(ttnn.uint32, -1.0, id="uint32_negative")],
+)
+def test_pad_codegen_out_of_range_integer_value(device, dtype, value):
+    # The partial-tile lanes and the new tiles must hold one word: the value truncated and wrapped to 32 bits.
+    shape = [1, 1, 45, 70]
+    padding = [[0, 0], [0, 0], [0, 30], [0, 30]]
+    x = torch.randint(0, 100, shape, dtype=torch.int32)
+    xt = ttnn.from_torch(x, dtype=dtype, layout=ttnn.TILE_LAYOUT, device=device)
+    output = ttnn.to_torch(_pad_force_codegen(xt, padding, value)).view(torch.int32)
+    word = (int(value) & 0xFFFFFFFF) - (1 << 32 if int(value) & 0x80000000 else 0)
+    expected = torch.full(list(output.shape), word, dtype=torch.int32)
+    expected[..., : shape[-2], : shape[-1]] = x
+    assert_tensors_equal(expected, output)
+
+
 def test_pad_codegen_matches_native_bitwise_for_unrepresentable_value(device):
     # 0.1 has no exact bfloat16 form, so both routes must round it the same way in the input's partial-tile lanes
     # and in the new tiles. Each route fills its input's partial tiles in place, hence one input per route.
