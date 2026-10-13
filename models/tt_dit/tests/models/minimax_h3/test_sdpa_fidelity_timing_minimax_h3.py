@@ -7,8 +7,13 @@
 Not a correctness test. Both arms run in one process on one mesh, interleaved, each timed as a whole
 forward and as the ring SDPA op alone, with a device sync around each. Random weights and inputs; the
 output PCC between the arms is a first look at the LoFi error, not a quality verdict.
+
+The dump and compare tests check two tt-metal builds for bit-identical output: run the dump test once
+per build (each in its own process, with T478_DUMP set to a file per build), then the compare test on
+the host with T478_BASE_DUMP and T478_BUNDLE_DUMP pointing at the two files.
 """
 
+import hashlib
 import math
 import os
 import time
@@ -72,6 +77,25 @@ def _model(mesh_device, sp_axis, tp_axis, num_links, topology, is_fsdp, state):
     return model
 
 
+def _inputs(mesh_device, sp_axis, tp_axis):
+    pad = BUCKET_10S - SEQ_LEN_10S
+    x = torch.randn(SEQ_LEN_10S, HIDDEN_SIZE)
+    x = torch.cat([x, x.new_zeros(pad, HIDDEN_SIZE)]).reshape(1, 1, BUCKET_10S, HIDDEN_SIZE)
+    angles = torch.rand(SEQ_LEN_10S, 2 * 3 * ROPE_FREQ_DIM) * 2 * math.pi
+    cos, sin = am.prepare_rope_tables(torch.cos(angles), torch.sin(angles), HEAD_DIM)
+    cos, sin = torch.cat([cos, cos[:pad]]), torch.cat([sin, sin[:pad]])
+    tt_cos, tt_sin = upload_rope(cos, sin, mesh_device=mesh_device, sp_axis=sp_axis)
+    tt_x = bf16_tensor_2dshard(x, device=mesh_device, shard_mapping={sp_axis: 2, tp_axis: 3})
+    logical_n = from_torch(
+        torch.tensor([SEQ_LEN_10S], dtype=torch.int64).reshape(1, 1, 1, 1),
+        device=mesh_device,
+        dtype=ttnn.uint32,
+        layout=ttnn.Layout.ROW_MAJOR,
+        mesh_axes=[..., None, None],
+    )
+    return tt_x, logical_n, tt_cos, tt_sin
+
+
 def _synced_ms(mesh_device, fn):
     ttnn.synchronize_device(mesh_device)
     t0 = time.perf_counter()
@@ -89,21 +113,7 @@ def test_ring_sdpa_matmul_fidelity_timing_10s(
         pytest.skip("timed at the production 4x8 sharding")
 
     state = _attention_state()
-    pad = BUCKET_10S - SEQ_LEN_10S
-    x = torch.randn(SEQ_LEN_10S, HIDDEN_SIZE)
-    x = torch.cat([x, x.new_zeros(pad, HIDDEN_SIZE)]).reshape(1, 1, BUCKET_10S, HIDDEN_SIZE)
-    angles = torch.rand(SEQ_LEN_10S, 2 * 3 * ROPE_FREQ_DIM) * 2 * math.pi
-    cos, sin = am.prepare_rope_tables(torch.cos(angles), torch.sin(angles), HEAD_DIM)
-    cos, sin = torch.cat([cos, cos[:pad]]), torch.cat([sin, sin[:pad]])
-    tt_cos, tt_sin = upload_rope(cos, sin, mesh_device=mesh_device, sp_axis=sp_axis)
-    tt_x = bf16_tensor_2dshard(x, device=mesh_device, shard_mapping={sp_axis: 2, tp_axis: 3})
-    logical_n = from_torch(
-        torch.tensor([SEQ_LEN_10S], dtype=torch.int64).reshape(1, 1, 1, 1),
-        device=mesh_device,
-        dtype=ttnn.uint32,
-        layout=ttnn.Layout.ROW_MAJOR,
-        mesh_axes=[..., None, None],
-    )
+    tt_x, logical_n, tt_cos, tt_sin = _inputs(mesh_device, sp_axis, tp_axis)
 
     arms = {}
     for name, fidelity in (("hifi2", ttnn.MathFidelity.HiFi2), ("lofi", ttnn.MathFidelity.LoFi)):
@@ -151,3 +161,83 @@ def test_ring_sdpa_matmul_fidelity_timing_10s(
     layer_gain = 1 - min(totals["lofi"]) / min(totals["hifi2"])
     logger.info(f"T466 summary: ring_joint_sdpa gain {100 * gain:.1f}%, layer gain {100 * layer_gain:.1f}%")
     assert_quality(outputs["hifi2"], outputs["lofi"], pcc=0.0)
+
+
+def _shard_digests(out) -> list[str]:
+    return [
+        hashlib.sha256(ttnn.to_torch(t).contiguous().view(torch.int16).numpy().tobytes()).hexdigest()
+        for t in ttnn.get_device_tensors(out)
+    ]
+
+
+@GALAXY_RING
+def test_attention_layer_dump_10s(
+    mesh_device, sp_axis, tp_axis, num_links, is_fsdp, topology, monkeypatch, reset_seeds
+) -> None:
+    skip_if_unsupported_num_links(mesh_device, num_links)
+    dump = os.environ.get("T478_DUMP")
+    if not dump:
+        pytest.skip("set T478_DUMP to the output file of this build's arm")
+    if tuple(mesh_device.shape)[sp_axis] != 8:
+        pytest.skip("timed at the production 4x8 sharding")
+
+    state = _attention_state()
+    tt_x, logical_n, tt_cos, tt_sin = _inputs(mesh_device, sp_axis, tp_axis)
+    monkeypatch.delenv(am.SDPA_MM_FIDELITY_ENV, raising=False)
+    model = _model(mesh_device, sp_axis, tp_axis, num_links, topology, is_fsdp, state)
+    logger.info(f"T478 arm: sdpa_matmul_fidelity={model.sdpa_matmul_fidelity}")
+
+    def forward():
+        return model(tt_x, logical_n=logical_n, rope_cos=tt_cos, rope_sin=tt_sin)
+
+    out = forward()
+    first_digests = _shard_digests(out)
+    dev0 = ttnn.to_torch(ttnn.get_device_tensors(out)[0])
+    ttnn.deallocate(out)
+
+    sdpa_ms = []
+    ring_sdpa = ttnn.transformer.ring_joint_scaled_dot_product_attention
+
+    def timed_sdpa(*args, **kwargs):
+        out, ms = _synced_ms(mesh_device, lambda: ring_sdpa(*args, **kwargs))
+        sdpa_ms.append(ms)
+        return out
+
+    totals, sdpas = [], []
+    for _ in range(ROUNDS):
+        out, ms = _synced_ms(mesh_device, forward)
+        ttnn.deallocate(out)
+        totals.append(ms)
+        with monkeypatch.context() as m:
+            m.setattr(ttnn.transformer, "ring_joint_scaled_dot_product_attention", timed_sdpa)
+            sdpa_ms.clear()
+            ttnn.deallocate(forward())
+        sdpas.append(sum(sdpa_ms))
+
+    # A rerun on the same build must match too, else a cross-build mismatch says nothing about the change.
+    out = forward()
+    last_digests = _shard_digests(out)
+    ttnn.deallocate(out)
+    assert last_digests == first_digests, "output differs between runs on one build"
+
+    logger.info(
+        f"T478 arm: layer best {min(totals):.2f} ms mean {sum(totals) / ROUNDS:.2f}; "
+        f"ring_joint_sdpa best {min(sdpas):.2f} ms mean {sum(sdpas) / ROUNDS:.2f} ({ROUNDS} rounds)"
+    )
+    torch.save({"digests": first_digests, "dev0": dev0, "layer_ms": totals, "sdpa_ms": sdpas}, dump)
+
+
+def test_attention_layer_dumps_bit_identical() -> None:
+    paths = {arm: os.environ.get(f"T478_{arm.upper()}_DUMP") for arm in ("base", "bundle")}
+    if not all(paths.values()):
+        pytest.skip("set T478_BASE_DUMP and T478_BUNDLE_DUMP to the dump test's files")
+    dumps = {arm: torch.load(path) for arm, path in paths.items()}
+
+    for name, key in (("layer", "layer_ms"), ("ring_joint_sdpa", "sdpa_ms")):
+        base, bundle = min(dumps["base"][key]), min(dumps["bundle"][key])
+        logger.info(f"T478 {name}: bundle/base best {bundle / base:.4f} ({100 * (1 - bundle / base):+.2f}% faster)")
+    same = [a == b for a, b in zip(dumps["base"]["digests"], dumps["bundle"]["digests"], strict=True)]
+    logger.info(f"T478 bit-identical shards: {sum(same)}/{len(same)}")
+    if not all(same):
+        assert_quality(dumps["base"]["dev0"], dumps["bundle"]["dev0"], pcc=0.0)
+    assert all(same), "bundle output differs from base"
