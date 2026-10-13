@@ -172,7 +172,7 @@ ttnn::device_operation::ProgramArtifacts UpdateCacheMultiCoreProgramFactory::cre
     std::uint32_t B = input_tensor.padded_shape()[-2];
     std::uint32_t Bcache = cache_tensor.padded_shape()[0];
     // Kernels visit u_count * granularity users per head; that product must equal
-    // min(32, Bcache). 2 is faster but only when it divides (odd Bcache >= 3).
+    // min(32, Bcache). 2 is faster but only divides an even u_range, so odd Bcache < 32 uses 1.
     const std::uint32_t u_range = std::min(static_cast<std::uint32_t>(32), Bcache);
     const std::uint32_t granularity = (u_range % 2 == 0) ? 2u : 1u;
     const std::uint32_t u_count = u_range / granularity;
