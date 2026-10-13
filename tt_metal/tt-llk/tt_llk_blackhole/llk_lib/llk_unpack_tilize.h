@@ -3,6 +3,8 @@
 // SPDX-License-Identifier: Apache-2.0
 
 #pragma once
+#define LLK_EXP_BH_S2_(x) #x
+#define LLK_EXP_BH_S_(x)  LLK_EXP_BH_S2_(x)
 
 #include <cstdint>
 
@@ -78,6 +80,9 @@ inline void _llk_unpack_tilize_init_(
     const bool narrow_tile                = false,
     const std::uint32_t num_faces         = 4)
 {
+#if defined(LLK_EXP_NOP_UNPACK_INIT) && defined(COMPILE_FOR_TRISC) && COMPILE_FOR_TRISC == 0
+    asm volatile(".rept " LLK_EXP_BH_S_(LLK_EXP_NOP_UNPACK_INIT) "\n\tnop\n\t.endr"); // experiment hook (integ4)
+#endif
     LLK_ASSERT(face_r_dim == 1 || face_r_dim == 2 || face_r_dim == 4 || face_r_dim == 8 || face_r_dim == 16, "face_r_dim must be 1, 2, 4, 8, or 16 for tilize");
     LLK_ASSERT(num_faces == 2 || num_faces == 4, "num_faces must be 2 or 4 for tilize");
     cfg_reg_rmw_tensix<THCON_SEC0_REG2_Haloize_mode_RMW>(0);
