@@ -44,6 +44,24 @@ constexpr std::uint32_t schedule(std::uint32_t first, std::uint32_t second, std:
 }
 #endif
 
+// value when bit is set, else 0. Quasar has no park to restart from, so there a branch on launch data would move the
+// thread's next rendezvous: no branch.
+__attribute__((always_inline)) inline std::uint32_t when(bool bit, std::uint32_t value)
+{
+#if defined(ARCH_QUASAR)
+    return value & (0u - static_cast<std::uint32_t>(bit));
+#else
+    return bit ? value : 0;
+#endif
+}
+
+#if !defined(ARCH_QUASAR)
+constexpr bool prepare_launch() // device_setup initializes the semaphores; BRISC configures the counters
+{
+    return false;
+}
+#endif
+
 #if defined(LLK_BARRIER_ON_TRISC)
 
 // Lives here, not in profiler.h, because the barrier needs it first; profiler.h aliases TRISC_ID onto it.
@@ -138,6 +156,22 @@ __attribute__((always_inline)) inline void flip(std::uint8_t sem)
     }
 }
 } // namespace detail
+
+#if defined(ARCH_QUASAR)
+// device_setup initializes none of the barrier semaphores, so a launch would start from the levels its predecessors
+// left: unpack clears them before it releases the others. True: the host configures the counters (counters.py).
+inline bool prepare_launch()
+{
+    for (std::uint8_t sem = ARRIVE_SEM; sem <= release_sem_of(NUM_THREADS - 2); ++sem)
+    {
+        while (detail::settled(ckernel::semaphore_read(sem)) != 0)
+        {
+            ckernel::semaphore_get(sem);
+        }
+    }
+    return true;
+}
+#endif
 
 // Park kinds (Wormhole perf builds): 1 KiB in run_kernel, aligned TILE_LOOP restart, unfilled in main.
 constexpr int PARK_SIZED = 0;
