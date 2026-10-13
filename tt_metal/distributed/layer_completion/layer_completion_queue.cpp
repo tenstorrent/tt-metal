@@ -4,6 +4,7 @@
 
 #include <internal/disaggregation/layer_completion_queue.hpp>
 
+#include <algorithm>
 #include <chrono>
 #include <cstring>
 #include <new>
@@ -21,10 +22,13 @@ namespace tt::tt_metal::internal {
 using tt::tt_metal::distributed::NamedShm;
 
 namespace {
+constexpr std::chrono::milliseconds kConnectInitGrace{2000};
+
 bool shm_path_exists(const std::string& shm_name) {
     struct stat st{};
     return ::stat(("/dev/shm" + shm_name).c_str(), &st) == 0;
 }
+
 }  // namespace
 
 LayerCompletionQueue::LayerCompletionQueue(std::unique_ptr<NamedShm> shm, std::string shm_name, Role role) :
@@ -37,21 +41,25 @@ LayerCompletionRingHeader* LayerCompletionQueue::header() const noexcept {
 }
 
 LayerCompletionCell* LayerCompletionQueue::cells() const noexcept {
-    return reinterpret_cast<LayerCompletionCell*>(
-        static_cast<std::byte*>(shm_->ptr()) + layer_completion_cells_offset());
+    return reinterpret_cast<LayerCompletionCell*>(static_cast<std::byte*>(shm_->ptr()) + kLayerCompletionCellsOffset);
 }
 
-std::unique_ptr<LayerCompletionQueue> LayerCompletionQueue::create(const std::string& shm_name) {
+std::unique_ptr<LayerCompletionQueue> LayerCompletionQueue::create(
+    const std::string& shm_name, uint32_t completions_per_chunk) {
+    if (completions_per_chunk == 0) {
+        throw std::invalid_argument(
+            fmt::format("LayerCompletionQueue::create: {} needs a non-zero completions_per_chunk", shm_name));
+    }
     auto shm = std::make_unique<NamedShm>(NamedShm::create(shm_name, kLayerCompletionRingBytes));
     auto* base = static_cast<std::byte*>(shm->ptr());
 
-    // NamedShm zero-inits the region. Placement-construct the atomics so
-    // their lifetime is well-defined, then publish `magic` last.
+    // Placement-construct the atomics; publish `magic` last.
     auto* hdr = reinterpret_cast<LayerCompletionRingHeader*>(base);
     new (&hdr->enqueue_pos) std::atomic<uint64_t>(0);
     new (&hdr->dequeue_pos) std::atomic<uint64_t>(0);
     hdr->capacity = kLayerCompletionRingCapacity;
-    auto* cell_arr = reinterpret_cast<LayerCompletionCell*>(base + layer_completion_cells_offset());
+    hdr->completions_per_chunk = completions_per_chunk;
+    auto* cell_arr = reinterpret_cast<LayerCompletionCell*>(base + kLayerCompletionCellsOffset);
     for (uint32_t i = 0; i < kLayerCompletionRingCapacity; ++i) {
         new (&cell_arr[i].sequence) std::atomic<uint64_t>(i);
     }
@@ -71,17 +79,42 @@ std::unique_ptr<LayerCompletionQueue> LayerCompletionQueue::connect(
         std::this_thread::sleep_for(std::chrono::milliseconds(5));
     }
 
-    auto shm = std::make_unique<NamedShm>(NamedShm::open(shm_name, kLayerCompletionRingBytes));
-    auto* hdr = static_cast<LayerCompletionRingHeader*>(shm->ptr());
-    if (hdr->magic != kLayerCompletionRingMagic || hdr->capacity != kLayerCompletionRingCapacity) {
-        throw std::runtime_error(fmt::format(
-            "LayerCompletionQueue::connect: {} is not a valid ring (magic={:#x} capacity={})",
-            shm_name,
-            hdr->magic,
-            hdr->capacity));
+    // The owner writes `magic` last, so a connector can see a short or unmagicked segment for microseconds.
+    // Past the grace it is some other segment at this name: fail now, not after the whole budget.
+    const auto init_grace = std::min(deadline, std::chrono::steady_clock::now() + kConnectInitGrace);
+    for (;;) {
+        std::unique_ptr<NamedShm> shm;
+        try {
+            shm = std::make_unique<NamedShm>(NamedShm::open(shm_name, kLayerCompletionRingBytes));
+        } catch (const std::exception& e) {
+            if (std::chrono::steady_clock::now() >= init_grace) {
+                throw std::runtime_error(fmt::format(
+                    "LayerCompletionQueue::connect: {} is not a valid layer-completion ring ({})", shm_name, e.what()));
+            }
+            std::this_thread::sleep_for(std::chrono::milliseconds(5));
+            continue;
+        }
+        auto* hdr = static_cast<LayerCompletionRingHeader*>(shm->ptr());
+        if (hdr->magic == 0 && std::chrono::steady_clock::now() < init_grace) {
+            std::this_thread::sleep_for(std::chrono::milliseconds(5));
+            continue;
+        }
+        if (hdr->magic != kLayerCompletionRingMagic || hdr->capacity != kLayerCompletionRingCapacity ||
+            hdr->completions_per_chunk == 0) {
+            throw std::runtime_error(fmt::format(
+                "LayerCompletionQueue::connect: {} is not a valid layer-completion ring "
+                "(magic={:#x} capacity={} completions_per_chunk={})",
+                shm_name,
+                hdr->magic,
+                hdr->capacity,
+                hdr->completions_per_chunk));
+        }
+        return std::unique_ptr<LayerCompletionQueue>(
+            new LayerCompletionQueue(std::move(shm), shm_name, Role::Connector));
     }
-    return std::unique_ptr<LayerCompletionQueue>(new LayerCompletionQueue(std::move(shm), shm_name, Role::Connector));
 }
+
+uint32_t LayerCompletionQueue::completions_per_chunk() const noexcept { return header()->completions_per_chunk; }
 
 bool LayerCompletionQueue::try_push(const LayerCompletionMessage& msg) {
     auto* hdr = header();

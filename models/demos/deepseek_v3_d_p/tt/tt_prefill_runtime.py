@@ -13,6 +13,7 @@ from loguru import logger
 from transformers.configuration_utils import PretrainedConfig
 
 import ttnn
+from models.demos.common.prefill.runners.layer_completion_ring_writer import NullLayerCompletionSink
 from models.demos.common.prefill.runners.runner_utils import (
     d2d_activation_rows,
     d2d_activation_width,
@@ -146,10 +147,7 @@ class TtPrefillRuntime:
         self.config = config
         assert config.model_cfg is not None, "TtPrefillRuntimeConfig.model_cfg must be set by the model adapter"
         self._on_layer_complete = None
-        # Per-layer completion sink (pipelined mode), set by set_layer_completion_sink().
-        # Signature: sink(layer_idx, request_id). prefill() binds the current request_id into
-        # a fresh per-call closure, so there is no shared mutable chunk-index for the callback
-        # to race on (immune even if the threading model changes).
+        # Completion sink for pipelined mode (set_layer_completion_sink), fired from prefill_chunk's per-call closure.
         self._layer_completion_sink = None
         # DFlash drafter, built in _build_model when config.dflash_enabled (else all None and prefill_chunk's
         # dflash branches are inert). Its tap closure + last-rank K/V caches are set there.
@@ -180,10 +178,9 @@ class TtPrefillRuntime:
         #   _trace_output     — persistent output activation (non-last rank only; read by the D2D send)
         #   _trace_captured   — flips True once capture_trace() records the segmented capture (single-shot)
         #   _kv_cache         — the engine cache handle from compile(), used by capture_trace()
-        #   _trace_request_id — the request/chunk id of the replay in flight. The controller's per-layer
-        #                       callback is fixed at capture time, so a traced run cannot bind request_id
-        #                       into a fresh closure per call (the eager path does); prefill_chunk()
-        #                       publishes it here and set_layer_completion_sink()'s callback reads it.
+        #   _trace_slot_id / _trace_pos_* — the chunk of the replay in flight. The controller's callback is
+        #                       fixed at capture time, so prefill_chunk() publishes the fields here and the
+        #                       captured callback reads them.
         self._controller = None
         self._trace_input = None
         self._trace_metadata = None
@@ -194,10 +191,12 @@ class TtPrefillRuntime:
         self._send_warmup_activation = None
         self._trace_captured = False
         self._kv_cache = None
-        self._trace_request_id = 0
         #   _llama4_scale_by_offset — Mistral only: one pre-built query-scale buffer per chunk offset,
         #                       device-to-device copied into _trace_metadata's buffer each chunk
         self._llama4_scale_by_offset: dict[int, ttnn.Tensor] = {}
+        self._trace_slot_id = 0
+        self._trace_pos_start = 0
+        self._trace_pos_end = 0
 
         self._build_model(state_dict)
 
@@ -626,7 +625,7 @@ class TtPrefillRuntime:
             # KV-writing layer on every model. That is bounded, once per process, and buys back
             # the 5.8 s above.
             prev_sink = self._layer_completion_sink
-            self._layer_completion_sink = lambda *_args, **_kwargs: None
+            self._layer_completion_sink = NullLayerCompletionSink()
             try:
                 self.prefill_chunk(
                     tt_input, kv_caches, slot_id=0, actual_start=0, actual_end=chunk, mtp_tokens=tt_mtp_tokens
@@ -894,13 +893,14 @@ class TtPrefillRuntime:
         self._send_warmup_activation = self._forward_traced(kv_caches)
         ttnn.synchronize_device(self.mesh_device)
 
-    def _layer_complete_cb(self, request_id: int):
+    def _layer_complete_cb(self, slot_id, actual_start, actual_end):
+        """Fresh per-call closure so the synchronously fired sink reads no shared state; this model fires per layer."""
         if self._layer_completion_sink is None:
             return self._on_layer_complete
         sink = self._layer_completion_sink
 
         def on_layer_complete(layer_idx: int) -> None:
-            sink(layer_idx, request_id)
+            sink.layers_completed(layer_idx, layer_idx + 1, slot_id, actual_start, actual_end)
 
         return on_layer_complete
 
@@ -953,8 +953,7 @@ class TtPrefillRuntime:
             actual_start: absolute KV pos of the chunk's first real token (the cache write offset). None
                 on the traced path.
             actual_end: absolute KV pos past the chunk's last real token. None on the traced path.
-            request_id: this chunk's request/chunk id. Only the pipelined layer-completion sink uses it
-                (to build the globally-dense ordering key); the single-host layer-ack paths ignore it.
+            request_id: the engine's chunk counter, part of the runner's call contract; unused here.
             d2h_service: optional service used to send a layer-ack completion signal back to host once
                 each layer's KV cache has been populated on device. When set, each block zeros the cache
                 pad window and enqueues the ack via the outbound_socket_service_sync device op on the same
@@ -1013,22 +1012,20 @@ class TtPrefillRuntime:
                 "use_trace: pass the D2H layer-ack service to set_d2h_ack_service() before capture_trace(); "
                 "the per-call argument cannot reach a recorded device op"
             )
-            # Per-layer completion callbacks live on the CONTROLLER, registered once at capture time (a
-            # host-side callback cannot execute inside a trace, so the capture splits at each ack point).
-            # That means the pipelined sink's request_id cannot be re-bound per call the way the eager
-            # path does below — publish this chunk's id instead; the captured callback built by
-            # set_layer_completion_sink() reads it at replay time.
+            # Under trace the completion callback is registered on the controller at capture time, so the
+            # per-chunk fields are published for it here instead of bound per call as the eager path does.
             assert mtp_tokens is None and not self.config.mtp_levels, (
                 "use_trace does not support MTP: the union is built per chunk (fresh addresses) and the "
                 "levels run after the captured segment, neither of which survives a capture; run with "
                 "PREFILL_USE_TRACE=0"
             )
-            self._trace_request_id = request_id
             assert metadata_msg is not None, (
                 "use_trace: prefill_chunk needs the packed metadata_msg to populate the per-chunk metadata "
                 "on-device (the traced serving loop always carries it; the eager warm-up passes host ints)"
             )
-
+            self._trace_slot_id = slot_id
+            self._trace_pos_start = actual_start
+            self._trace_pos_end = actual_end
             # The scalars are consumed on-device from metadata_msg; the host ints are not read for
             # the softmax bound.
             if self._trace_metadata.llama4_scale is not None:
@@ -1063,7 +1060,7 @@ class TtPrefillRuntime:
             # driver to forward downstream over D2D. Last/single rank: the populated KV cache is the output.
             return None if self.config.is_last_rank else self._trace_output
 
-        on_layer_complete = self._layer_complete_cb(request_id)
+        on_layer_complete = self._layer_complete_cb(slot_id, actual_start, actual_end)
 
         model_input = input_tensor
         mtp_union = None
@@ -1546,31 +1543,19 @@ class TtPrefillRuntime:
         )
 
     def set_layer_completion_sink(self, sink) -> None:
-        """Register a per-layer completion sink for pipelined prefill.
-
-        `sink` is called once per layer as `sink(layer_idx, request_id)` — the
-        global layer index plus the current request/chunk id, which prefill()
-        binds per call (so the sink need not read any mutable runtime state). It
-        replaces the direct counter-channel inject used in single-host mode:
-        instead of bumping a counter, the runner pushes a full completion
-        {seq, source_rank, layer_idx, request_id} into the host-local
-        LayerCompletionQueue, and the LayerCompletionRouter routes it to the
-        master host and re-emits it (in seq order) into the scheduler-facing
-        counter channel (see ttnn._experimental.layer_completion).
-
-        use_trace: the callback must be known at CAPTURE time (a host push cannot live inside a
-        trace), so it is registered on the controller and the eager capture is re-recorded to split at
-        each ack point. The per-call request_id closure the eager path uses is not available there, so
-        the captured callback reads _trace_request_id, which prefill_chunk() publishes before each
-        replay.
-        """
+        """Register the completion sink for pipelined prefill. Once per completion event the runtime fires
+        `sink.layers_completed(layer_start, layer_end, slot_id, actual_start, actual_end)`, one
+        layer at a time here, with the chunk's fields bound per prefill_chunk() call. Under trace the captured
+        callback reads the published `_trace_*` fields instead."""
         assert self.compiled or self.config.use_trace, "Call compile() before set_layer_completion_sink()"
         self._layer_completion_sink = sink
         if not self.config.use_trace:
             return
 
         def on_layer_complete(layer_idx: int) -> None:
-            sink(layer_idx, self._trace_request_id)
+            sink.layers_completed(
+                layer_idx, layer_idx + 1, self._trace_slot_id, self._trace_pos_start, self._trace_pos_end
+            )
 
         # Route the traced path through the same controller hook the LayerAck channel uses, so the
         # capture is segmented at every completion point.
