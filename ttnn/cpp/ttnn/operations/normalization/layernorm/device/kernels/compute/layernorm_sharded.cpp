@@ -437,7 +437,7 @@ void kernel_main() {
     dfb_xmm2.wait_front(num_tiles_per_block);
 #endif
 
-#if defined RMSNORM and not defined FUSED_PRE_ADD
+#if defined RMSNORM and not defined FUSE_PRE_ADD
     reconfig_data_format(dfb_xmm_id, dfb_xmm2_id, dfb_xmm_id, dfb_scaler_id);
 #else
     if constexpr (FLOAT32_DTYPE) {
