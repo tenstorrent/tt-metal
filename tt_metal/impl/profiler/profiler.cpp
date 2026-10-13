@@ -1979,8 +1979,8 @@ void DeviceProfiler::readDeviceMarkerData(
     uint64_t data,
     uint32_t timer_id,
     uint64_t timestamp) {
-    ZoneScoped;
-
+    // No ZoneScoped: this runs once per device marker (~10^8 per full-model capture), and a host zone per call
+    // made the host Tracy log ~30x larger than the ops it describes.
     nlohmann::json meta_data;
     if (const auto sub_device_meta_data = getProgramSubDeviceMetaData(run_host_id)) {
         meta_data["sub_device_id"] = sub_device_meta_data->sub_device_id;
@@ -2054,8 +2054,7 @@ void DeviceProfiler::readTsData16BMarkerData(
     const std::vector<uint64_t>& trailer_data,
     uint32_t timer_id,
     uint64_t timestamp) {
-    ZoneScoped;
-
+    // No ZoneScoped: once per device marker, as readDeviceMarkerData.
     nlohmann::json meta_data;
     [[maybe_unused]] std::optional<NOCDebugEvent> noc_debug_event;
 #if defined(TRACY_ENABLE)
