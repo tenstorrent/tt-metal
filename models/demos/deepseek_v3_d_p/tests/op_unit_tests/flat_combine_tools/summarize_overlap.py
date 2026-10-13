@@ -65,8 +65,8 @@ def main():
         out.append(f"| {m} | {t} | {cell.get('serial', '-')} | {cell.get('rows', '-')} | {cell.get('xdown', '-')} | {tail} |")
     for lay in ("acc_rows", "acc_xdown"):
         if lay in logs:
-            res = [(a or d, b or c) for a, b, c, d in parse(logs[lay], ACC)]
-            out.append(f"\n{lay}: " + (", ".join(f"{case} {v}" for v, case in res) or "no results (see the log)"))
+            res = {b or c: a or d for a, b, c, d in parse(logs[lay], ACC)}  # (inline and -rA lines: once per case)
+            out.append(f"\n{lay}: " + (", ".join(f"{case} {v}" for case, v in res.items()) or "no results (see the log)"))
     print("\n".join(out))
 
 

@@ -715,3 +715,7 @@ saving, combine hidden; then the accuracy verdicts). Steps and knobs are in the 
   K2.7 nothing without them; full GLM 5.3 (H 6144) is between the two and was not measured.
 - The planner is the galaxy branch's (east readers in column 7 on a Galaxy chip, rectangles sized after the readers;
   K3 auto-shape). Plans on the LoudBox's 11 x 10 are unchanged by it except K3's full grid (26 -> 28 down).
+- Dry run of the whole script on the LoudBox ring (`FLAT_CMB_MESH=ring-8x1 FLAT_CMB_MODELS=kimi-k3`, 2026-10-13):
+  all steps pass, both layouts accurate. K3's serial baseline is faster with the auto-shaped full grid (flat 725.2 ->
+  632.0 balanced, 836.1 -> 773.3 hot), so against it the overlap saves 22.2 / 24.3 % (759.6 / 957.1 us, rows 1-9;
+  + row-0 cells 772.2 / 977.3). The 8b table's 23.4 / 25.9 % were against the older baseline.
