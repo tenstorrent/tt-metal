@@ -70,33 +70,47 @@ def _host_fn2(mesh, module):
 
 
 def _attention_module(mesh, spec, layer):
-    """Sliding attention of `layer`; loads only that layer's six self_attn tensors."""
+    """Sliding or global attention of `layer`; loads only that layer's self_attn tensors."""
     import os
 
     from models.demos.gemma4_a4b_glx.reference.gemma4_ref import Gemma4TextConfig, rope_inv_freq
-    from models.demos.gemma4_a4b_glx.tt.attention import TtSlidingAttention
+    from models.demos.gemma4_a4b_glx.tt.attention import TtGlobalAttention, TtSlidingAttention
 
     cfg = Gemma4TextConfig.from_json(os.path.join(str(spec.hf_dir), "config.json"))
-    if not cfg.is_sliding(layer):
-        raise NotImplementedError(f"implement stage: no device module for global attention (layer {layer}) yet")
+    sliding = cfg.is_sliding(layer)
     loader = _weight_loader(spec)
     p = f"{PREFIX}layers.{layer}.self_attn."
-    inv_freq, _ = rope_inv_freq(cfg, sliding=True)
+    inv_freq, _ = rope_inv_freq(cfg, sliding=sliding)
+    common = dict(rope_inv_freq=inv_freq, eps=cfg.rms_norm_eps, scale=1.0)
+    w = {n: loader.get(p + f"{n}.weight") for n in ("q_proj", "k_proj", "o_proj", "q_norm", "k_norm")}
+    if not sliding:
+        assert cfg.attention_k_eq_v and not loader.has(p + "v_proj.weight"), "global layer expected without v_proj"
+        hkv, d = cfg.attn_dims(layer)
+        return TtGlobalAttention(
+            mesh,
+            w["q_proj"],
+            w["k_proj"],
+            w["o_proj"],
+            w["q_norm"],
+            w["k_norm"],
+            num_heads=cfg.num_attention_heads,
+            num_kv_heads=hkv,
+            head_dim=d,
+            **common,
+        )
     return TtSlidingAttention(
         mesh,
-        loader.get(p + "q_proj.weight"),
-        loader.get(p + "k_proj.weight"),
+        w["q_proj"],
+        w["k_proj"],
         loader.get(p + "v_proj.weight"),
-        loader.get(p + "o_proj.weight"),
-        loader.get(p + "q_norm.weight"),
-        loader.get(p + "k_norm.weight"),
+        w["o_proj"],
+        w["q_norm"],
+        w["k_norm"],
         num_heads=cfg.num_attention_heads,
         num_kv_heads=cfg.num_key_value_heads,
         head_dim=cfg.head_dim,
         window=cfg.sliding_window,
-        rope_inv_freq=inv_freq,
-        eps=cfg.rms_norm_eps,
-        scale=1.0,
+        **common,
     )
 
 
@@ -104,7 +118,6 @@ def _attention_fn(mesh, module):
     """fn(ctx, x_host [S, H]) -> host attn_out [S, H]. The K/V prefix comes from ctx.extra["state_prefix"]; a fresh
     device cache is built from it on each call (the component harness gives the state as host tensors)."""
     import ttnn
-    from models.demos.gemma4_a4b_glx.tt.attention import TtKVCache
     from models.demos.gemma4_a4b_glx.tt.rms_norm import replicated_to_host, to_device_replicated
 
     def fn(ctx, x):
@@ -115,7 +128,7 @@ def _attention_fn(mesh, module):
         assert n == ctx.start, f"prefix_len {n} != chunk start {ctx.start}"
         k_pre, v_pre = (prefix[name][:, :n] if name in prefix else None for name in ("key", "value"))
         module.ensure_rope(max_seq)
-        cache = TtKVCache(mesh, module.nkv * mesh.shape[1], module.d, max_seq, k_pre, v_pre)
+        cache = module.make_cache(max_seq, k_pre, v_pre)
         xd = to_device_replicated(mesh, x)
         yd = module(xd, cache, ctx.start)
         y = replicated_to_host(yd)

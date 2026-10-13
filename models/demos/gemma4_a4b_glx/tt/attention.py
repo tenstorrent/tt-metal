@@ -70,6 +70,8 @@ class TtKVCache:
 
 
 class TtSlidingAttention:
+    kv_repeat = 1  # chips per KV head along the TP columns
+
     def __init__(
         self,
         mesh,
@@ -146,6 +148,14 @@ class TtSlidingAttention:
         self.cos = self._replicated(emb.cos().reshape(1, 1, max_seq, -1), ttnn.float32)
         self.sin = self._replicated(emb.sin().reshape(1, 1, max_seq, -1), ttnn.float32)
         self.rope_len = max_seq
+
+    def make_cache(self, max_seq: int, k_prefix=None, v_prefix=None) -> TtKVCache:
+        """Device cache for this layer from host prefixes [Hkv, n, D] (each KV head on kv_repeat adjacent columns)."""
+        r = self.kv_repeat
+        k_prefix, v_prefix = (
+            p.repeat_interleave(r, dim=0) if p is not None and r > 1 else p for p in (k_prefix, v_prefix)
+        )
+        return TtKVCache(self.mesh, self.nkv * self.mesh.shape[TP_AXIS], self.d, max_seq, k_prefix, v_prefix)
 
     def _head_norm(self, t, weight):
         shape = t.shape
@@ -237,6 +247,132 @@ class TtSlidingAttention:
             full = attn
             attn = ttnn.slice(full, [0, 0, hist, 0], [1, nh, n, d])
             ttnn.deallocate(full)
+
+        concat = ttnn.experimental.nlp_concat_heads(attn, memory_config=ttnn.DRAM_MEMORY_CONFIG)
+        ttnn.deallocate(attn)
+        partial = ttnn.linear(concat, self.wo, dtype=ttnn.bfloat16, compute_kernel_config=self.mm_cfg)
+        ttnn.deallocate(concat)
+        out = ttnn.all_reduce(partial, cluster_axis=TP_AXIS, memory_config=ttnn.DRAM_MEMORY_CONFIG)
+        ttnn.deallocate(partial)
+        return out
+
+
+class TtGlobalAttention(TtSlidingAttention):
+    """Gemma-4 global (full causal) attention: 16 Q heads x 512, 2 KV heads x 512, no v_proj.
+
+    Column c holds Q heads 4c..4c+3 and KV head c // 2 (each KV head lives on 2 adjacent columns), so attention stays
+    local to each chip (GQA 4:1). The per-chip fused weight is [Wq_c | Wk_{c//2}] and `nlp_create_qkv_heads(kv_tied)`
+    reads raw K twice: K = rope(k_norm(k_raw)), V = rms(k_raw) without a weight. RoPE is the rotate-half op with the
+    proportional inv_freq (zeros past 25 %: cos 1, sin 0 there). SDPA is chunked causal SDPA over the whole cache seen as
+    pages of KV_BLOCK rows with an identity page table (one head per chip, so the paged view is a zero-cost reshape of
+    the contiguous [1, 1, max_seq, D] cache).
+    """
+
+    kv_repeat = 2
+    KV_BLOCK = 64
+
+    def __init__(
+        self, mesh, wq, wk, wo, q_norm, k_norm, *, num_heads, num_kv_heads, head_dim, rope_inv_freq, eps=1e-6, scale=1.0
+    ):
+        self.mesh = mesh
+        tp = mesh.shape[TP_AXIS]
+        assert num_heads % tp == 0 and num_kv_heads * self.kv_repeat == tp, (num_heads, num_kv_heads, tp)
+        self.nh, self.nkv, self.d = num_heads // tp, 1, head_dim
+        self.window, self.eps, self.scale = None, eps, scale
+        self.inv_freq = rope_inv_freq.float()
+
+        qd = self.nh * head_dim
+        blocks = []
+        for c in range(tp):
+            h = c // self.kv_repeat
+            blocks += [wq[c * qd : (c + 1) * qd], wk[h * head_dim : (h + 1) * head_dim]]
+        self.wqkv = self._weight(torch.cat(blocks, dim=0).t().contiguous(), dim=-1)  # [hidden, tp * (qd + D)]
+        self.wo = self._weight(wo.t().contiguous(), dim=-2)  # [nh*D, hidden], rows split by Q head
+        self.q_norm = self._replicated(q_norm.float().reshape(1, 1, 1, -1))
+        self.k_norm = self._replicated(k_norm.float().reshape(1, 1, 1, -1))
+
+        self.mm_cfg = _kernel_config(mesh, settings.get("ATTN_MATMUL_FIDELITY"), settings.get("ATTN_MATMUL_FP32_ACC"))
+        self.norm_cfg = _kernel_config(mesh, "HiFi4", True)
+        self.sdpa_cfg = _kernel_config(mesh, settings.get("SDPA_FIDELITY"), settings.get("SDPA_FP32_ACC"))
+        self.q_chunk, self.k_chunk = settings.get("GLOBAL_SDPA_Q_CHUNK"), settings.get("GLOBAL_SDPA_K_CHUNK")
+        self.cos = self.sin = None
+        self.rope_len = 0
+        self.page_table = None
+
+    def ensure_rope(self, max_seq: int):
+        """RoPE tables and the identity page table for max_seq, built once (load time)."""
+        grow = max_seq > self.rope_len
+        super().ensure_rope(max_seq)
+        if grow or self.page_table is None:
+            assert max_seq % self.KV_BLOCK == 0, f"max_seq {max_seq} not a multiple of {self.KV_BLOCK}"
+            if self.page_table is not None:
+                ttnn.deallocate(self.page_table)
+            self.page_table = ttnn.from_torch(
+                torch.arange(max_seq // self.KV_BLOCK, dtype=torch.int32).reshape(1, -1),
+                dtype=ttnn.int32,
+                layout=ttnn.ROW_MAJOR_LAYOUT,
+                device=self.mesh,
+                memory_config=ttnn.DRAM_MEMORY_CONFIG,
+                mesh_mapper=ttnn.ReplicateTensorToMesh(self.mesh),
+            )
+
+    def __call__(self, x, cache: TtKVCache, start: int):
+        """x: [1, 1, S, hidden] bf16 replicated; positions [start, start+S). Returns [1, 1, S, hidden] replicated."""
+        s = x.shape[-2]
+        end = start + s
+        assert start % TILE == 0 and s % TILE == 0, f"start {start} and S {s} must be tile aligned"
+        assert end <= cache.max_seq <= self.rope_len, f"chunk end {end} / cache {cache.max_seq} / rope {self.rope_len}"
+        nh, d = self.nh, self.d
+
+        xqkv = ttnn.linear(x, self.wqkv, dtype=ttnn.bfloat16, compute_kernel_config=self.mm_cfg)
+        q, k, v = ttnn.experimental.nlp_create_qkv_heads(
+            xqkv,
+            num_heads=nh,
+            num_kv_heads=1,
+            transpose_k_heads=False,
+            kv_tied=True,
+            memory_config=ttnn.DRAM_MEMORY_CONFIG,
+        )
+        ttnn.deallocate(xqkv)
+
+        # fp32 norms + RoPE; K/V reach bfp8 from fp32 (see TtSlidingAttention.__call__).
+        q, k, v = (self._fp32(t) for t in (q, k, v))
+        cos = ttnn.slice(self.cos, [0, 0, start, 0], [1, 1, end, d])
+        sin = ttnn.slice(self.sin, [0, 0, start, 0], [1, 1, end, d])
+        q = self._norm_rope(q, self.q_norm, cos, sin, ttnn.bfloat16)
+        k8 = self._norm_rope(k, self.k_norm, cos, sin, ttnn.bfloat8_b)
+        ttnn.deallocate(cos)
+        ttnn.deallocate(sin)
+        vn = self._head_norm(v, None)
+        ttnn.deallocate(v)
+        v8 = ttnn.typecast(vn, ttnn.bfloat8_b)
+        ttnn.deallocate(vn)
+
+        ttnn.fill_cache(cache.k, k8, batch_idx=0, update_idx=start)
+        ttnn.fill_cache(cache.v, v8, batch_idx=0, update_idx=start)
+        ttnn.deallocate(k8)
+        ttnn.deallocate(v8)
+
+        pages = (cache.max_seq // self.KV_BLOCK, 1, self.KV_BLOCK, d)  # zero-cost view of the contiguous cache
+        k_paged = ttnn.reshape(cache.k, pages)
+        v_paged = ttnn.reshape(cache.v, pages)
+        program_config = ttnn.SDPAProgramConfig(
+            compute_with_storage_grid_size=self.mesh.compute_with_storage_grid_size(),
+            q_chunk_size=min(self.q_chunk, s),
+            k_chunk_size=min(self.k_chunk, s),
+            exp_approx_mode=False,
+        )
+        attn = ttnn.transformer.chunked_scaled_dot_product_attention(
+            input_tensor_q=q,
+            input_tensor_k=k_paged,
+            input_tensor_v=v_paged,
+            page_table_tensor=self.page_table,
+            chunk_start_idx=start,
+            scale=self.scale,
+            program_config=program_config,
+            compute_kernel_config=self.sdpa_cfg,
+        )
+        ttnn.deallocate(q)
 
         concat = ttnn.experimental.nlp_concat_heads(attn, memory_config=ttnn.DRAM_MEMORY_CONFIG)
         ttnn.deallocate(attn)

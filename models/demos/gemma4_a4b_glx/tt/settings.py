@@ -22,6 +22,12 @@ TABLE = {
     "SDPA_FP32_ACC": Setting(True, (True, False), "2026-10-13 C.sliding.attention: SDPA fp32 accumulation"),
     "SDPA_Q_CHUNK": Setting(256, (32, 64, 128, 256, 512), "2026-10-13 C.sliding.attention: SDPA q chunk size"),
     "SDPA_K_CHUNK": Setting(128, (32, 64, 128, 256, 512), "2026-10-13 C.sliding.attention: SDPA k chunk size"),
+    "GLOBAL_SDPA_Q_CHUNK": Setting(
+        128, (32, 64, 128, 256), "2026-10-13 C.global.attention: chunked SDPA q chunk size (head dim 512)"
+    ),
+    "GLOBAL_SDPA_K_CHUNK": Setting(
+        128, (64, 128, 256), "2026-10-13 C.global.attention: chunked SDPA k chunk size (head dim 512)"
+    ),
     "MLP_MATMUL_FIDELITY": Setting(
         "HiFi4", ("HiFi4", "HiFi2", "LoFi"), "2026-10-13 C.sliding.mlp: gate/up/down math fidelity"
     ),

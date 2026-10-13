@@ -204,3 +204,35 @@ I re-applied the attempt above unchanged; it had passed under an older framework
 - No new setting.
 - Frozen test results: pcc 0.9999965, auto_margin_min 2.74, 0 host FLOPs. All 13 earlier sliding components still pass.
 - Re-run: `bfw job check --task C.sliding.ffn_residual`
+
+## C.global.attention (run 20261013-175448-gemma4-glx-14)
+- `tt/attention.py:TtGlobalAttention` subclasses `TtSlidingAttention`. It reuses `_weight`, `_replicated`, `_head_norm`,
+  `_norm_rope`, `_fp32` and `ensure_rope`.
+  - Column c holds Q heads 4c..4c+3 and KV head c // 2, so each of the 2 KV heads lives on 2 adjacent columns
+    (`kv_repeat = 2`). Attention is local per chip (GQA 4:1).
+  - The fused per-chip weight is [Wq_c | Wk_{c//2}], [2816, 2560] bfp8. `nlp_create_qkv_heads(num_heads=4, num_kv_heads=1,
+    kv_tied=True)` returns raw K as both k and v, so the k_proj columns are not duplicated.
+  - K = rope(k_norm(k_raw)) and V = rms(k_raw) with no weight. Both are computed in fp32 and go fp32 -> bfp8, as on the
+    sliding layers.
+  - RoPE is the same rotate-half `rotary_embedding` with the proportional inv_freq. Past 25 % the frequencies are zero
+    (cos 1, sin 0), which matches the reference exactly.
+  - Cache: the same `TtKVCache`, [1, 1, max_seq, 512] bfp8 per chip, written with `fill_cache(update_idx=start)`.
+  - SDPA: `chunked_scaled_dot_product_attention(chunk_start_idx=start, scale=1.0)` over the whole cache. The cache is
+    viewed as pages [max_seq/64, 1, 64, 512] (a zero-cost reshape, since there is one head per chip) with an identity
+    page table [1, max_seq/64] int32, built once in `ensure_rope`. Chunk 0 takes the same op with start 0, which the
+    chunk0 second input covers.
+  - o_proj is row-parallel [2048, 2816] bfp8 per chip, followed by `all_reduce(cluster_axis=1)`.
+- `TtSlidingAttention.make_cache(max_seq, k_prefix, v_prefix)`: builds the device cache from host [Hkv, n, D] prefixes
+  and repeat_interleaves the KV heads by `kv_repeat` for global layers. `hooks._attention_fn` uses it for both types.
+- `tt/settings.py`: GLOBAL_SDPA_Q_CHUNK=128 and GLOBAL_SDPA_K_CHUNK=128 (head dim 512; the prior used q128/k128).
+  Fidelity and fp32 acc reuse ATTN_MATMUL_* and SDPA_*.
+- `hooks.py`: `_attention_module` builds the global module for non-sliding layers. It asserts `attention_k_eq_v` and
+  that the layer has no v_proj.
+- Frozen test results:
+  - pcc 0.999941, rel 0.0109 vs golden (limit 0.0215), auto_margin_min 1.10, 29 device ops, 0 host FLOPs.
+  - The tightest check is column 507's rel L2: 0.0698 against a 0.0861 limit vs golden, and 0.0680 against 0.0748 vs CPU.
+  - All second inputs (chunk0, layer29, mixed, small, big) pass with rel <= 0.0143.
+  - All 15 regressions passed: every sliding component and C.global.attn_norm.
+- Not done (performance): no ring SDPA. All 8 rows compute the same chunk, as in sliding attention. Larger SDPA chunks
+  were not tried.
+- Re-run: `bfw job check --task C.global.attention`
