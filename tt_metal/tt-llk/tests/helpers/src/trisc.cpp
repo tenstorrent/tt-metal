@@ -80,7 +80,7 @@ int main(void)
 #endif
     device_setup();
 #if defined(ARCH_QUASAR)
-    // No BRISC on Quasar: unpack configures and arms the counters while the other TRISCs are still held in reset.
+    // No BRISC on Quasar: unpack scrubs the debug features and resets the barrier while the others are held in reset.
     llk_perf::configure_and_arm();
 #endif
     clear_trisc_soft_reset(); // Release the rest of the triscs

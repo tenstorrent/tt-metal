@@ -60,7 +60,7 @@ constexpr std::uint32_t PERF_COUNTERS_VALID_COUNT_ADDR  = PERF_COUNTERS_BANK_MAS
 constexpr std::uint32_t PERF_COUNTERS_LAYOUT_END        = PERF_COUNTERS_VALID_COUNT_ADDR + PERF_COUNTERS_MAX_ZONES * 4;
 
 // A literal because BRISC has no llk_profiler namespace; the LLK_PROFILER section asserts it symbolically.
-static_assert(PERF_COUNTERS_LAYOUT_END <= 0x16AFF0u, "Perf counter L1 layout overflows into the profiler region");
+static_assert(PERF_COUNTERS_LAYOUT_END + 4 <= 0x16AFF0u, "Perf counter L1 layout (and Quasar's counted zones word) overflows into the profiler region");
 
 // On-wire bank IDs are llk::perf::Bank; the order is a contract with the host.
 constexpr std::uint32_t COUNTER_BANK_COUNT = llk::perf::NUM_BANKS;
@@ -183,7 +183,7 @@ static_assert(BUILTIN_COUNTER_COUNT <= COUNTER_SLOT_COUNT, "Counter inventory ov
 // The zones a launch counts, a bit per zone id, written by the host before every launch (test_config.py counted_zones):
 // 0 with counters off. A register outside L1, so neither side's access touches the memory the kernel uses.
 #if defined(ARCH_QUASAR)
-constexpr std::uint32_t COUNTED_ZONES_REG = 0x030000AC; // TT_CLUSTER_CTRL_SCRATCH_27, unused elsewhere
+constexpr std::uint32_t COUNTED_ZONES_REG = PERF_COUNTERS_LAYOUT_END; // L1: a cluster control read would wait for the host's polls
 #elif defined(ARCH_WORMHOLE)
 constexpr std::uint32_t COUNTED_ZONES_REG = 0xFFB40000 + 249 * 4; // STREAM_SCRATCH_1 of overlay stream 0
 #else
@@ -222,10 +222,10 @@ inline void load_counted_zones()
     detail::counted = counted_zones();
     for (std::uint32_t zone = 0; zone < PERF_COUNTERS_MAX_ZONES; ++zone)
     {
-        detail::arm_cmds[zone] = counts(zone) ? llk::perf::START : 0;
+        detail::arm_cmds[zone] = llk_barrier::when(counts(zone), llk::perf::START);
 #if defined(ARCH_QUASAR)
         const std::uint32_t word     = llk::perf::l1_client_ctrl_word(static_cast<std::uint32_t>(L1_CLIENT_SEL));
-        detail::l1_client_cmds[zone] = counts(zone) ? word : (word & ~llk::perf::L1_CLIENT_ENABLE);
+        detail::l1_client_cmds[zone] = (word & ~llk::perf::L1_CLIENT_ENABLE) | llk_barrier::when(counts(zone), llk::perf::L1_CLIENT_ENABLE);
 #endif
     }
 }
@@ -357,7 +357,7 @@ inline void configure_and_arm()
 #if !defined(TT_METAL_TTSIM)
     llk::perf::clear_debug_feature_disable();
 #endif
-    if (counted_zones() == 0)
+    if (llk_barrier::prepare_launch() || counted_zones() == 0) // Quasar: the host configures (counters.py)
     {
         return;
     }

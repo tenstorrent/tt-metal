@@ -11,7 +11,7 @@ from tt_llk_perf.headers import bank_tables
 from tt_llk_perf.metrics import quasar_l1_client_label
 
 from .chip_architecture import ChipArchitecture, get_chip_architecture
-from .device_io import read_words_from_device
+from .device_io import read_words_from_device, write_words_to_device
 from .test_config import TestConfig
 
 COUNTER_SLOT_COUNT = TestConfig._PERF_COUNTERS_CONFIG_WORDS
@@ -268,3 +268,61 @@ def read_counters(location: str = "0,0") -> pd.DataFrame:
         all_results.extend(zone_results)
 
     return pd.DataFrame(all_results)
+
+
+# Quasar has no BRISC: the host does counters.h configure_and_arm's work for a counting launch, so no TRISC runs counter
+# code before the windows. Bank (ref_period, mode) offsets in NEO0's register window: perf_counters/registers.h.
+_QUASAR_NEO0_WINDOW = 0x01800000
+_QUASAR_BANK_REGS = {0: (0x0, 0x4), 1: (0x18, 0x1C), 2: (0xC, 0x10), 4: (0x8C, 0x90)}
+_REF_PERIOD_MAX = 0xFFFFFFFF
+
+
+def builtin_counter_config() -> list:
+    """counters.h BUILTIN_COUNTER_CONFIG: the INSTRN, FPU, TDMA_UNPACK and TDMA_PACK tables, then the l1_client selection."""
+    tables = bank_tables(get_chip_architecture())
+    words = [
+        PERF_CFG_VALID_BIT
+        | ((entry.select & PERF_CFG_COUNTER_MASK) << PERF_CFG_COUNTER_SHIFT)
+        | bank
+        for bank, key in (
+            (0, "INSTRN"),
+            (1, "FPU"),
+            (2, "TDMA_UNPACK"),
+            (4, "TDMA_PACK"),
+        )
+        for entry in tables[key]
+    ]
+    if TestConfig.PERF_L1_CLIENT_SEL >= 0:
+        sel = TestConfig.PERF_L1_CLIENT_SEL & PERF_CFG_COUNTER_MASK
+        words.append(PERF_CFG_VALID_BIT | (sel << PERF_CFG_COUNTER_SHIFT) | 3)
+    return words
+
+
+def configure_quasar_counters(location: str) -> None:
+    """Before a counting Quasar launch: the readout's config, cleared zones and the bank modes. Nothing starts here
+    and the l1_client stays off: the zone arms route, enable and start them, the same instructions as counters off.
+    """
+    config = builtin_counter_config()
+    zones = TestConfig.PERF_COUNTERS_MAX_ZONES
+    bank_mask = 0
+    for word in config:
+        bank_mask |= 1 << (word & PERF_CFG_BANK_MASK)
+    write_words_to_device(
+        location,
+        TestConfig.PERF_COUNTERS_CONFIG_ADDR,
+        config + [0] * (COUNTER_SLOT_COUNT - len(config)),
+    )
+    # every zone's data and sync words, then ENABLED_FLAG, BANK_MASK and the valid counts after them
+    write_words_to_device(
+        location,
+        TestConfig.PERF_COUNTERS_ZONES_BASE,
+        [0] * (TestConfig.PERF_COUNTERS_ZONE_SIZE // 4 * zones)
+        + [1, bank_mask]
+        + [len(config)] * zones,
+    )
+    for bank, (ref_period, mode) in _QUASAR_BANK_REGS.items():
+        if bank_mask >> bank & 1:
+            for offset, value in ((ref_period, _REF_PERIOD_MAX), (mode, 0)):
+                write_words_to_device(
+                    location, _QUASAR_NEO0_WINDOW + offset, [value], safe_mode=False
+                )
