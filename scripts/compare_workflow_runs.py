@@ -32,7 +32,7 @@ Workflows checked (by category):
     - t3000: demo, e2e, fast, integration, perf, perplexity, profiler, unit tests
     - galaxy: deepseek, deepseek-prefill, demo, e2e, health, integration, model-perf,
               multi-user, profiler, sanity, stress, unit tests
-    - blackhole: demo, e2e, post-commit tests
+    - blackhole: e2e tests
 
 Usage examples:
     # Compare all workflows (default)
@@ -50,7 +50,7 @@ Usage examples:
     # Compare a specific branch
     python scripts/compare_workflow_runs.py --branch my-feature-branch
 
-    # Output as JSON for scripting
+    # Output as JSON for scripting (stdout is the JSON array only; progress lines go to stderr)
     python scripts/compare_workflow_runs.py --json
 
 Prerequisites:
@@ -575,7 +575,6 @@ def run():
         "galaxy-profiler-tests.yaml",
         "galaxy-stress-tests.yaml",
         # Blackhole
-        "blackhole-demo-tests.yaml",
         "blackhole-e2e-tests.yaml",
     ]
 
@@ -591,19 +590,21 @@ def run():
         prefixes = category_filters.get(args.category, [])
         workflows = [w for w in workflows if any(w.startswith(p) for p in prefixes)]
 
-    print(f"🔍 Comparing workflow runs: {branch} vs main\n")
+    # With --json, stdout must be only the JSON array; progress lines go to stderr.
+    progress_out = sys.stderr if args.json else sys.stdout
+    print(f"🔍 Comparing workflow runs: {branch} vs main\n", file=progress_out)
 
     comparisons = []
     skipped_workflows = []
     for workflow in workflows:
-        print(f"Fetching {workflow}...", end=" ", flush=True)
+        print(f"Fetching {workflow}...", end=" ", flush=True, file=progress_out)
 
         if args.branch_run_id is not None:
             branch_run = branch_run_by_id
         else:
             branch_run = get_latest_run(workflow, branch)
             if not branch_run:
-                print("skipped (no run on branch)")
+                print("skipped (no run on branch)", file=progress_out)
                 skipped_workflows.append(workflow)
                 continue
 
@@ -615,9 +616,10 @@ def run():
                 f"{len(comparison['unmatched_failures'])} failed job(s) not in main's latest run, scanning older main runs...",
                 end=" ",
                 flush=True,
+                file=progress_out,
             )
             resolve_unmatched_failures(comparison, iter_main_history(workflow, main_run.id if main_run else None))
-        print("done")
+        print("done", file=progress_out)
         comparisons.append(comparison)
 
     if args.json:
