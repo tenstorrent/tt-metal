@@ -1,0 +1,1 @@
+tt_metal/tt-llk/tests/python_tests/perf_sfpu_ternary.py

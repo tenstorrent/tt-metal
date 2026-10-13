@@ -1,0 +1,4 @@
+tt_metal/tt-llk/tests/python_tests/helpers/llk_params.py
+tt_metal/tt-llk/tests/python_tests/helpers/sfpu_domains.py
+tt_metal/tt-llk/tests/python_tests/perf_eltwise_binary_sfpu.py
+tt_metal/tt-llk/tests/python_tests/test_eltwise_binary_sfpu.py
