@@ -80,6 +80,7 @@ target_link_libraries(
         TTNN::Ops::Randn
         TTNN::Ops::Reduction
         TTNN::Ops::SlidingWindow
+        TTNN::Ops::ToyScaledAdd
         TTNN::Ops::Uniform
 )
 
@@ -121,5 +122,6 @@ target_sources(
         $<TARGET_OBJECTS:TTNN::Ops::Randn>
         $<TARGET_OBJECTS:TTNN::Ops::Reduction>
         $<TARGET_OBJECTS:TTNN::Ops::SlidingWindow>
+        $<TARGET_OBJECTS:TTNN::Ops::ToyScaledAdd>
         $<TARGET_OBJECTS:TTNN::Ops::Uniform>
 )
