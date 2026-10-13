@@ -8,25 +8,22 @@ operations/sdpa/test_sdpa_recipes.py under tests/ttnn/unit_tests/ (fast subset) 
 scalars or device tensors). Exp ring: test_exp_ring_joint_sdpa_recipes.py.
 """
 
-import os
-
 import pytest
 import torch
 import ttnn
 
-from models.common.utility_functions import is_blackhole
-from tests.ttnn.unit_tests.operations.sdpa.sdpa_recipe_test_utils import L2_PCT_BOUND, VARIANTS, l2_pct, reference
+from tests.ttnn.unit_tests.operations.sdpa.sdpa_recipe_test_utils import (
+    L2_PCT_BOUND,
+    VARIANTS,
+    blackhole_only,
+    l2_pct,
+    randn,
+    reference,
+)
 
 RING = 2
 
-pytestmark = pytest.mark.skipif(
-    not is_blackhole() or os.environ.get("TT_METAL_SIMULATOR") is not None,
-    reason="SDPA precision recipes run on Blackhole hardware",
-)
-
-
-def randn(*shape, seed):
-    return torch.randn(shape, generator=torch.Generator().manual_seed(seed)).bfloat16()
+pytestmark = blackhole_only
 
 
 def precision_inputs(mesh, variant, values, mapper):
@@ -57,6 +54,35 @@ def host_length(mesh, value):
 
 def length_tensor(mesh, value):
     return ttnn.to_device(host_length(mesh, value), mesh)
+
+
+def assert_per_chip(out, expected, variant, chips, has_joint):
+    """Each chip's output (followed by its joint output when has_joint) against expected(chip)."""
+    outputs = per_chip(out[0])
+    joint_outputs = per_chip(out[1]) if has_joint else None
+    for chip in range(chips):
+        got = torch.cat([outputs[chip], joint_outputs[chip]], dim=2) if has_joint else outputs[chip]
+        assert l2_pct(got, expected(chip)) < L2_PCT_BOUND[variant], f"chip {chip}"
+
+
+def check_device_length_trace(mesh, call, lengths):
+    """logical_n as a device tensor: one trace, replayed as the length changes, matches the host-scalar path."""
+    scalar = [per_chip(call(n)[0]) for n in lengths]
+    n_tensor = length_tensor(mesh, lengths[0])
+    # The device-tensor path is its own program (worst-case placeholders); compile it before capture.
+    assert all(torch.equal(a, b) for a, b in zip(per_chip(call(n_tensor)[0]), scalar[0]))
+    trace = ttnn.begin_trace_capture(mesh, cq_id=0)
+    try:
+        traced = call(n_tensor)
+    finally:
+        ttnn.end_trace_capture(mesh, trace, cq_id=0)
+    try:
+        for i in [0, 1, 2, 0]:
+            ttnn.copy_host_to_device_tensor(host_length(mesh, lengths[i]), n_tensor)
+            ttnn.execute_trace(mesh, trace, cq_id=0, blocking=True)
+            assert all(torch.equal(a, b) for a, b in zip(per_chip(traced[0]), scalar[i])), f"logical_n={lengths[i]}"
+    finally:
+        ttnn.release_trace(mesh, trace)
 
 
 def open_ring_mesh(fabric, ring=RING, **mesh_options):
@@ -205,7 +231,6 @@ def ring_case(mesh, variant, case):
 @pytest.mark.parametrize("variant", VARIANTS)
 def test_ring_joint_sdpa_recipe(ring_mesh, variant, case):
     mesh, semaphores, ccl_column = ring_mesh
-    _, _, _, _, _, d, q_chunk, k_chunk, _, _, _ = RING_CASES[case]
     inputs, joints, backing, logical_n, kwargs, expected, has_joint = ring_case(mesh, variant, case)
     out = run_ring(
         mesh,
@@ -218,11 +243,7 @@ def test_ring_joint_sdpa_recipe(ring_mesh, variant, case):
         precision=VARIANTS[variant][0],
         **kwargs,
     )
-    for chip in range(RING):
-        got = per_chip(out[0])[chip]
-        if has_joint:
-            got = torch.cat([got, per_chip(out[1])[chip]], dim=2)
-        assert l2_pct(got, expected(chip)) < L2_PCT_BOUND[variant], f"chip {chip}"
+    assert_per_chip(out, expected, variant, RING, has_joint)
 
 
 @pytest.mark.parametrize("variant", ["standard", "accurate", "fast_bfp8"])
@@ -233,23 +254,7 @@ def test_ring_joint_sdpa_recipe_device_lengths(ring_mesh, variant):
     call = lambda n: run_ring(
         mesh, semaphores, ccl_column, inputs, joints, backing, logical_n=n, precision=VARIANTS[variant][0], **kwargs
     )
-    lengths = [1300, 2048, 777]
-    scalar = [per_chip(call(n)[0]) for n in lengths]
-    n_tensor = length_tensor(mesh, lengths[0])
-    # The device-tensor path is its own program (worst-case placeholders); compile it before capture.
-    assert all(torch.equal(a, b) for a, b in zip(per_chip(call(n_tensor)[0]), scalar[0]))
-    trace = ttnn.begin_trace_capture(mesh, cq_id=0)
-    try:
-        traced = call(n_tensor)
-    finally:
-        ttnn.end_trace_capture(mesh, trace, cq_id=0)
-    try:
-        for i in [0, 1, 2, 0]:
-            ttnn.copy_host_to_device_tensor(host_length(mesh, lengths[i]), n_tensor)
-            ttnn.execute_trace(mesh, trace, cq_id=0, blocking=True)
-            assert all(torch.equal(a, b) for a, b in zip(per_chip(traced[0]), scalar[i])), f"logical_n={lengths[i]}"
-    finally:
-        ttnn.release_trace(mesh, trace)
+    check_device_length_trace(mesh, call, [1300, 2048, 777])
 
 
 @pytest.mark.parametrize("variant", ["standard", "accurate", "fast_bfp8"])
@@ -269,6 +274,4 @@ def test_ring_joint_sdpa_recipe_op_selected_blocking(ring_mesh, variant):
         precision=VARIANTS[variant][0],
         **kwargs,
     )
-    for chip in range(RING):
-        got = torch.cat([per_chip(out[0])[chip], per_chip(out[1])[chip]], dim=2)
-        assert l2_pct(got, expected(chip)) < L2_PCT_BOUND[variant], f"chip {chip}"
+    assert_per_chip(out, expected, variant, RING, has_joint)

@@ -10,11 +10,9 @@
 // validated as before. Blocking never changes a recipe's arithmetic; it can change the rounding
 // order.
 //
-// Layering: `recipe_geometry_rejection` is the only place that knows which (op, recipe, Q, K, D)
-// geometries the kernels support, and `recipe_l1_bytes` the only place that sizes their circular
-// buffers (the recipe part is `recipe_compute_program`, the program factories' own layout). The
-// chooser consults nothing else, so widening the supported geometry needs no chooser change.
+// Supported geometry is `recipe_geometry_rejection` and CB sizing `recipe_l1_bytes`; the chooser consults nothing else.
 
+#include <compare>
 #include <cstdint>
 #include <optional>
 #include <string>
@@ -40,18 +38,15 @@ inline constexpr uint32_t kRecipeSearchMaxQTiles = 32;
 inline constexpr uint32_t kRecipeSearchMinKTiles = 8;
 inline constexpr uint32_t kRecipeSearchMaxKTiles = 16;
 
-// Why (op, recipe, q_tiles, k_tiles, d_tiles) is not a supported recipe geometry, or nullopt if it is.
-// This is shape support only; L1 fit is `recipe_l1_bytes`.
-std::optional<std::string> recipe_geometry_rejection(
-    RecipeOp op, const PrecisionPolicy& policy, uint32_t q_tiles, uint32_t k_tiles, uint32_t d_tiles);
+// Why (q_tiles, k_tiles, d_tiles) is not a supported recipe geometry (the same for every op and recipe), or
+// nullopt if it is. This is shape support only; L1 fit is `recipe_l1_bytes`.
+std::optional<std::string> recipe_geometry_rejection(uint32_t q_tiles, uint32_t k_tiles, uint32_t d_tiles);
 
 // TT_FATAL unless the chunk sizes and head dim are tile-aligned and recipe_geometry_rejection accepts them.
-void validate_recipe_geometry(
-    RecipeOp op, const PrecisionPolicy& policy, uint32_t q_chunk_size, uint32_t k_chunk_size, uint32_t head_dim);
+void validate_recipe_geometry(RecipeOp op, uint32_t q_chunk_size, uint32_t k_chunk_size, uint32_t head_dim);
 
-inline bool recipe_geometry_supported(
-    RecipeOp op, const PrecisionPolicy& policy, uint32_t q_tiles, uint32_t k_tiles, uint32_t d_tiles) {
-    return !recipe_geometry_rejection(op, policy, q_tiles, k_tiles, d_tiles).has_value();
+inline bool recipe_geometry_supported(uint32_t q_tiles, uint32_t k_tiles, uint32_t d_tiles) {
+    return !recipe_geometry_rejection(q_tiles, k_tiles, d_tiles).has_value();
 }
 
 // Schedule facts that change the circular-buffer layout.
@@ -61,7 +56,7 @@ struct RecipeL1Context {
 
 // Dense attn_mask circular buffer: one QK row group of mask tiles per buffer slot (the factory
 // double-buffers when L1 allows, else single). Mirrors run_recipe_segments in sdpa_recipe.cpp.
-uint32_t recipe_mask_group_rows(const PrecisionPolicy& policy, uint32_t q_tiles);
+uint32_t recipe_mask_group_rows(const PrecisionPolicy& policy);
 
 // Circular-buffer bytes per core. `preferred` is the op's first-choice layout; `minimum` is the
 // smallest layout the op falls back to when `preferred` does not fit (ring: single-slot Q, without the fused
@@ -105,6 +100,8 @@ struct RecipeBlockingProblem {
     uint32_t fixed_q_tiles = 0;
     uint32_t fixed_k_tiles = 0;
     bool exp_mux_on_bottom_row = false;
+    // Orders problems for the chooser's memo.
+    std::strong_ordering operator<=>(const RecipeBlockingProblem&) const = default;
 };
 
 struct RecipeBlocking {

@@ -5,14 +5,12 @@
 // Exp ring joint SDPA reader for the named precision recipes B/C/D/E (compute:
 // exp_ring_joint_sdpa_recipe.cpp).
 
-// Size-optimized: the recipe compute kernels (fused FAST in particular) leave little of the
-// kernel config buffer, and this kernel mostly issues NOC/fabric transfers and waits on them.
-#pragma GCC optimize("Os")
+#pragma GCC optimize("Os")  // leaves kernel config buffer for the recipe compute
 
 #include "ttnn/operations/transformer/sdpa/device/kernels/exp_ring_recipe_cbs.hpp"
 
 struct ExpRingJointReaderPolicy {
-    // The recipe CB layout owns 0-16 (c_14 is its exp_max_diff); the MUX-writer aliases move above it.
+    // See exp_ring_recipe_cbs.hpp.
     static constexpr uint32_t kKWriterAliasCb = ttnn::operations::transformer::sdpa::exp_ring::kRecipeKWriterAliasCb;
     static constexpr uint32_t kVWriterAliasCb = ttnn::operations::transformer::sdpa::exp_ring::kRecipeVWriterAliasCb;
     // Odd Q tile counts with the recipe's 2-row QK subblock.

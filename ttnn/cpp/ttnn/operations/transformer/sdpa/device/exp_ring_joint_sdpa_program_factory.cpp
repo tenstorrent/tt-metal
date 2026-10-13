@@ -211,22 +211,6 @@ tt::tt_metal::ProgramDescriptor build_exp_ring_joint_sdpa_program_descriptor(
         args.topology,
         args.cluster_axis);
 
-    // A two-device ring axis has no wraparound (ccl::get_boundary_mode is NONE for extent 2), so each
-    // device sees only one neighbor -- which is both its ring predecessor and successor. Route the
-    // missing direction's rows to that same device over the next num_links fabric links, so the
-    // backward and forward MUX kernels never share an ethernet channel. Rings of 3+ are unchanged.
-    uint32_t backward_link_offset = 0;
-    uint32_t forward_link_offset = 0;
-    if (args.ring_size == 2) {
-        if (!backward_coord.has_value() && forward_coord.has_value()) {
-            backward_coord = forward_coord;
-            backward_link_offset = args.num_links;
-        } else if (!forward_coord.has_value() && backward_coord.has_value()) {
-            forward_coord = backward_coord;
-            forward_link_offset = args.num_links;
-        }
-    }
-
     auto scale = args.scale;
     if (not scale.has_value()) {
         scale = 1.0f / std::sqrt(static_cast<float>(input_tensor_q.logical_shape()[-1]));
@@ -1915,7 +1899,7 @@ tt::tt_metal::ProgramDescriptor build_exp_ring_joint_sdpa_program_descriptor(
             if (backward_coord.has_value()) {
                 const auto dst_node_id = mesh_device->get_fabric_node_id(backward_coord.value());
                 auto mux_rt_args = mux_kernel_config.get_fabric_mux_run_time_args(
-                    src_node_id, dst_node_id, link + backward_link_offset, desc, mux_backward_logical_cores[link]);
+                    src_node_id, dst_node_id, link, desc, mux_backward_logical_cores[link]);
                 KernelDescriptor::RTArgList mux_args;
                 mux_args.append(mux_rt_args);
                 mux_kernel.emplace_runtime_args(mux_backward_logical_cores[link], mux_args);
@@ -1923,7 +1907,7 @@ tt::tt_metal::ProgramDescriptor build_exp_ring_joint_sdpa_program_descriptor(
             if (forward_coord.has_value()) {
                 const auto dst_node_id = mesh_device->get_fabric_node_id(forward_coord.value());
                 auto mux_rt_args = mux_kernel_config.get_fabric_mux_run_time_args(
-                    src_node_id, dst_node_id, link + forward_link_offset, desc, mux_forward_logical_cores[link]);
+                    src_node_id, dst_node_id, link, desc, mux_forward_logical_cores[link]);
                 KernelDescriptor::RTArgList mux_args;
                 mux_args.append(mux_rt_args);
                 mux_kernel.emplace_runtime_args(mux_forward_logical_cores[link], mux_args);
@@ -2017,10 +2001,6 @@ void apply_semaphore_runtime_args(
 }
 
 }  // namespace exp_ring_joint_sdpa
-
-}  // namespace ttnn::prim
-
-namespace ttnn::prim {
 
 namespace {
 

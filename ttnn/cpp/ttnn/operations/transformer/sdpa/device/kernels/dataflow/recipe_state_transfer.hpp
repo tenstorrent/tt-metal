@@ -12,11 +12,11 @@ void transfer_recipe_state(Noc& noc, const Accessor& backing) {
     ack.reserve_back(1);
     const auto* words = reinterpret_cast<const volatile uint32_t*>(request.get_read_ptr());
     const bool restore = words[Transfer::Operation] == Transfer::Restore;
-    const uint32_t base = words[Transfer::Slot] * (Transfer::pages<fp32, q_tiles, d_tiles> + 1);
+    const uint32_t base = words[Transfer::Slot] * (Transfer::pages<q_tiles, d_tiles> + 1);
     uint32_t page = base + 1;
     for (uint32_t plane = 0; plane < 3; ++plane) {
         const uint32_t cb = words[Transfer::Numerator + plane];
-        const uint32_t bytes = Transfer::plane_bytes<fp32, q_tiles, d_tiles>(plane);
+        const uint32_t bytes = Transfer::plane_bytes<q_tiles, d_tiles>(plane);
         // These full-capacity state banks are at their allocation origin at
         // every segment boundary. Dataflow never advances their CB pointers.
         const uint32_t address = CircularBuffer(cb).get_read_ptr();
@@ -29,7 +29,7 @@ void transfer_recipe_state(Noc& noc, const Accessor& backing) {
             const uint32_t tile = offset / Transfer::page_bytes;
             return ((tile / d_tiles) * 2 * d_tiles + tile % d_tiles) * Transfer::page_bytes + offset % Transfer::page_bytes;
         };
-        if constexpr (Transfer::page_aligned<fp32, q_tiles, d_tiles>) {
+        if constexpr (Transfer::page_aligned<q_tiles, d_tiles>) {
             for (uint32_t offset = 0; offset < bytes; offset += Transfer::page_bytes, ++page) {
                 if (restore) {
                     noc.async_read(
@@ -107,7 +107,7 @@ void stream_recipe_state(Noc& noc, const Accessor& backing) {
         uint32_t page_id = base + 1 + o_pages;
         for (uint32_t plane = 1; plane < 3; ++plane) {
             const uint32_t address = CircularBuffer(words[Transfer::Numerator + plane]).get_read_ptr();
-            const uint32_t bytes = Transfer::plane_bytes<false, q_tiles, d_tiles>(plane);
+            const uint32_t bytes = Transfer::plane_bytes<q_tiles, d_tiles>(plane);
             for (uint32_t offset = 0; offset < bytes; offset += page, ++page_id) {
                 const uint32_t size = bytes - offset < page ? bytes - offset : page;
                 if (restore) {
@@ -118,7 +118,7 @@ void stream_recipe_state(Noc& noc, const Accessor& backing) {
             }
         }
     };
-    const uint32_t base = words[Transfer::Slot] * (Transfer::pages<false, q_tiles, d_tiles> + 1);
+    const uint32_t base = words[Transfer::Slot] * (Transfer::pages<q_tiles, d_tiles> + 1);
     const uint32_t o_address = CircularBuffer(words[Transfer::Numerator]).get_read_ptr();
     if (op == Transfer::Restore || op == Transfer::RestoreStream) {
         const bool whole = op == Transfer::Restore;

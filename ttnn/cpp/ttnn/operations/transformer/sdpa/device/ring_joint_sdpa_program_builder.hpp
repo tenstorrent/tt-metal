@@ -70,8 +70,8 @@ public:
     // row group; nullopt lets the host choose (Sq must then divide by it).
     virtual std::optional<uint32_t> fixed_subblock_h(bool /*fp32_dest_acc_en*/) const { return std::nullopt; }
     // Matmul subblock width of a fixed compute schedule for a QK (K chunk) or PV (head dim) product of `tiles`
-    // output columns; only consulted when fixed_subblock_h is set.
-    virtual uint32_t fixed_subblock_w(uint32_t tiles) const { return tiles < 4 ? tiles : 4; }
+    // output columns; only consulted when fixed_subblock_h is set, so a variant that sets it overrides this.
+    virtual uint32_t fixed_subblock_w(uint32_t /*tiles*/) const { return 0; }
 
     // Compute continues one recurrent state across every active ring iteration and normalizes only on the
     // last: streaming compute, no LSE / accumulator DRAM staging.

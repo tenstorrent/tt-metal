@@ -18,20 +18,20 @@ struct StateTransfer {
     // Raw bytes of one Q block's state planes, for q_tiles query tile rows: the FP32 numerator (the BF16
     // recipes' CB also holds per-chunk scratch beside it, which is not transferred), BF16 maxima, and the
     // FP32 denominator.
-    template <bool fp32, uint32_t q_tiles, uint32_t d_tiles = 4>
+    template <uint32_t q_tiles, uint32_t d_tiles = 4>
     static constexpr uint32_t plane_bytes(uint32_t plane) {
         return plane == 0 ? q_tiles * d_tiles * 4096 : plane == 1 ? q_tiles * 2048 : q_tiles * 4096;
     }
 
     // Transfer pages per plane. An odd Q tile count leaves the BF16 maxima plane half a page long; its
     // last page is transferred partially (plane_bytes % page_bytes bytes), never past the plane.
-    template <bool fp32, uint32_t q_tiles, uint32_t d_tiles = 4>
+    template <uint32_t q_tiles, uint32_t d_tiles = 4>
     static constexpr uint32_t plane_pages(uint32_t plane) {
-        return (plane_bytes<fp32, q_tiles, d_tiles>(plane) + page_bytes - 1) / page_bytes;
+        return (plane_bytes<q_tiles, d_tiles>(plane) + page_bytes - 1) / page_bytes;
     }
 
-    // Host-side page count for a runtime Q chunk; matches pages<fp32, q_tiles>.
-    static constexpr uint32_t page_count(bool /*fp32*/, uint32_t q_tiles, uint32_t d_tiles = 4) {
+    // Host-side page count for a runtime Q chunk; matches pages<q_tiles, d_tiles>.
+    static constexpr uint32_t page_count(uint32_t q_tiles, uint32_t d_tiles = 4) {
         const uint32_t numerator = q_tiles * d_tiles * 4096;
         const uint32_t maxima = q_tiles * 2048;
         const uint32_t denominator = q_tiles * 4096;
@@ -39,14 +39,14 @@ struct StateTransfer {
         return ceil_pages(numerator) + ceil_pages(maxima) + ceil_pages(denominator);
     }
 
-    template <bool fp32, uint32_t q_tiles, uint32_t d_tiles = 4>
-    static constexpr uint32_t pages = plane_pages<fp32, q_tiles, d_tiles>(0) +
-                                      plane_pages<fp32, q_tiles, d_tiles>(1) + plane_pages<fp32, q_tiles, d_tiles>(2);
+    template <uint32_t q_tiles, uint32_t d_tiles = 4>
+    static constexpr uint32_t pages =
+        plane_pages<q_tiles, d_tiles>(0) + plane_pages<q_tiles, d_tiles>(1) + plane_pages<q_tiles, d_tiles>(2);
 
-    template <bool fp32, uint32_t q_tiles, uint32_t d_tiles = 4>
-    static constexpr bool page_aligned = plane_bytes<fp32, q_tiles, d_tiles>(0) % page_bytes == 0 &&
-                                         plane_bytes<fp32, q_tiles, d_tiles>(1) % page_bytes == 0 &&
-                                         plane_bytes<fp32, q_tiles, d_tiles>(2) % page_bytes == 0;
+    template <uint32_t q_tiles, uint32_t d_tiles = 4>
+    static constexpr bool page_aligned =
+        plane_bytes<q_tiles, d_tiles>(0) % page_bytes == 0 && plane_bytes<q_tiles, d_tiles>(1) % page_bytes == 0 &&
+        plane_bytes<q_tiles, d_tiles>(2) % page_bytes == 0;
 };
 
 }  // namespace sdpa::streaming

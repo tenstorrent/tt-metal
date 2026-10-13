@@ -4,7 +4,7 @@
 // Dense and joint SDPA precision recipes (host: sdpa_recipe.cpp): STANDARD, BALANCED, ACCURATE and FAST
 // (B-E) run recipe_streaming.hpp. The host selects the recipe with SDPA_RECIPE_FP32 / _ACCURATE / _LOFI.
 //
-// Optimization: the default level (-O3), except ACCURATE at -O2 (2% faster, measured). The host disables the
+// Optimization: the default level (-O3), except ACCURATE at -O2. The host disables the
 // SFPI compiler's replay optimization (tenstorrent/tt-metal#58433). Watcher builds are size-optimized.
 #if defined(WATCHER_ENABLED)
 #define SDPA_RECIPE_OPTIMIZE_PUSHED
