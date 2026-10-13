@@ -709,8 +709,6 @@ void kernel_main() {
         }
     }
 
-    // cb_sum_in exists only on the streaming path; alias a live CB so the other modes still compile.
-    [[maybe_unused]] constexpr uint32_t ksplit_cb_sum_in = ksplit_enabled ? cb_sum_in : cb_out;
     // K split epilogue: acc_state.prev holds this core's unnormalized state. Only primitives the K loop already
     // instantiates are used, since the program is at the kernel config buffer limit.
     if constexpr (ksplit_enabled) {
@@ -737,13 +735,13 @@ void kernel_main() {
                 // Reducer: its slice holds the diagonal chunk, so its own state always exists.
                 ASSERT(seen_active_iter);
                 constexpr uint32_t dst_size = compute_kernel_lib::DEST_AUTO_LIMIT;
-                const AccumulatorHalf incoming = {ksplit_cb_sum_in, cb_max_in, cb_prev_out};
+                const AccumulatorHalf incoming = {cb_sum_in, cb_max_in, cb_prev_out};
                 for (uint32_t sender = 0; sender + 1 < ksplit_count; ++sender) {
                     const auto sender_range = has_sliding_window
                                                   ? ring_joint::sliding_ksplit_range(ksplit_max_valid, sender, ksplit_count)
                                                   : ring_joint::ksplit_range(ksplit_max_valid, sender, ksplit_count);
                     if (sender_range.empty()) {
-                        for (uint32_t cb : {cb_max_in, ksplit_cb_sum_in}) {
+                        for (uint32_t cb : {cb_max_in, cb_sum_in}) {
                             CircularBuffer(cb).wait_front(Sq_chunk_t);
                             sdpa_cb_pop_front_out_of_line(cb, Sq_chunk_t);
                         }

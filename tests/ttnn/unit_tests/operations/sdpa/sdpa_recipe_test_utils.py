@@ -653,7 +653,7 @@ def fp32_dest_config(device):
 
 
 def check_routing(device, case):
-    """Precision routing: a call without `precision` that would reach a legacy loop runs a recipe (FP32 dest ->
+    """Precision routing: a call the BF16-DEST streaming kernels do not serve runs a recipe (FP32 dest ->
     ACCURATE; non-ring joint -> STANDARD, or ACCURATE with FP32 dest), bitwise the explicit recipe at op-chosen
     blocking (the caller's chunk sizes were tuned for the legacy kernels). The output meets the recipe's FP64 bound."""
     chosen = lambda: program_config(device, 0, 0)

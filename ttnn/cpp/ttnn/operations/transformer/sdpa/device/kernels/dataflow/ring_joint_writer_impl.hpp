@@ -13,7 +13,7 @@
 //                               Policy::state_backing<args_offset>() and
 //                               Policy::transfer_state<Sq_chunk_t, vDHt>(noc, backing) (only
 //                               instantiated for such policies).
-//                               Otherwise the legacy LSE / deferred-normalization protocol runs.
+//                               Otherwise the deferred-normalization protocol runs.
 //   Policy::kCommonArgCount     Common runtime args the policy owns at the front (the host variant's
 //                               append_writer_common_runtime_args); the op's metadata / logical-length
 //                               common args follow them.
@@ -562,7 +562,6 @@ void kernel_main() {
         false, /* wait_for_op_signal */
         argidx);
 
-    // The stats CB is aliased by role: cb_max_* for deferred norm, cb_lse_* for eager norm.
     // Declared here rather than with the other CB args below because the rotated-Q-split sizes are
     // compile-time args off this offset, and the runtime-arg block underneath needs them.
     constexpr uint32_t cb_arg_offset =
@@ -601,26 +600,22 @@ void kernel_main() {
     constexpr uint32_t cb_mask_in = get_compile_time_arg_val(cb_arg_offset + 3);
     constexpr uint32_t cb_scale_in = get_compile_time_arg_val(cb_arg_offset + 4);
     constexpr uint32_t cb_identity_scale_in = get_compile_time_arg_val(cb_arg_offset + 5);
-    constexpr uint32_t cb_max_in = get_compile_time_arg_val(cb_arg_offset + 6);  // deferred norm: DRAM -> compute
-    constexpr uint32_t cb_lse_in = cb_max_in;                                    // eager norm: DRAM -> compute
+    constexpr uint32_t cb_max_in = get_compile_time_arg_val(cb_arg_offset + 6);  // DRAM -> compute
     constexpr uint32_t cb_prev_out = get_compile_time_arg_val(cb_arg_offset + 7);
     constexpr uint32_t cb_col_identity = get_compile_time_arg_val(cb_arg_offset + 8);
     constexpr uint32_t cb_sum_out = get_compile_time_arg_val(cb_arg_offset + 10);
     constexpr uint32_t cb_sum_in = get_compile_time_arg_val(cb_arg_offset + 11);
     constexpr uint32_t cb_signal = get_compile_time_arg_val(cb_arg_offset + 12);
     constexpr uint32_t cb_out = get_compile_time_arg_val(cb_arg_offset + 13);
-    constexpr uint32_t cb_max_out = get_compile_time_arg_val(cb_arg_offset + 14);  // deferred norm: compute -> DRAM
-    constexpr uint32_t cb_lse_out = cb_max_out;                                    // eager norm: compute -> DRAM
+    constexpr uint32_t cb_max_out = get_compile_time_arg_val(cb_arg_offset + 14);  // compute -> DRAM
 
     constexpr uint32_t tile_bytes = get_tile_size(cb_out);
     constexpr uint32_t stats_tile_bytes = get_tile_size(cb_max_in);
     // A K-split sender leaves its state in accumulator half A. Those CBs hold one entry and sit at the same L1 offset
-    // on every core, so the reducer reads a sender's state at its own CB bases. cb_sum_in exists only on the streaming
-    // path; alias a live CB so the other modes still compile.
+    // on every core, so the reducer reads a sender's state at its own CB bases.
     constexpr uint32_t cb_out_im_A = get_compile_time_arg_val(cb_arg_offset + 16);
     constexpr uint32_t cb_max_A = get_compile_time_arg_val(cb_arg_offset + 18);
     constexpr uint32_t cb_sum_A = get_compile_time_arg_val(cb_arg_offset + 20);
-    constexpr uint32_t ksplit_cb_sum_in = ksplit_enabled ? cb_sum_in : cb_out;
 
     Noc noc;
 
@@ -730,8 +725,7 @@ void kernel_main() {
 
     const auto output_tile_logical = OutputTileShape(B, NH, q_local_padded_Nt, vDHt);
     const auto joint_tile_logical = TensorTileShape(B, NH, Lt, vDHt);
-    // stats tensor is 2× the sequence length: first half stores max (used by both eager and
-    // deferred-norm paths), second half stores sum (deferred-norm only).
+    // stats tensor is 2× the sequence length: first half max, second half sum.
     const auto stats_tile_logical = StaticTensorTileShape<B, NH, (q_local_padded_Nt + Lt) * 2, 1>();
 
     const auto out_generator = PaddedAddrGenerator(out_writer, output_tile_logical);
@@ -1335,7 +1329,7 @@ void kernel_main() {
                         {});
                 };
                 CircularBuffer in_max(cb_max_in);
-                CircularBuffer in_sum(ksplit_cb_sum_in);
+                CircularBuffer in_sum(cb_sum_in);
                 CircularBuffer in_out(cb_prev_out);
                 pull(in_max, cb_max_A, Sq_chunk_t);
                 pull(in_sum, cb_sum_A, Sq_chunk_t);
