@@ -46,7 +46,11 @@ struct ResourceDeclaration
 
 // ---------------- TDMA engine ----------------
 
-/** @brief Select which TDMA component a flush drains. */
+/**
+ * @brief Select which TDMA component a flush drains.
+ *
+ * @note Use All on its own; only component selections may be combined with operator|.
+ */
 enum class FlushScope : std::uint8_t
 {
     All              = 0x0,
@@ -56,10 +60,13 @@ enum class FlushScope : std::uint8_t
     Packer           = 0x8
 };
 
-constexpr FlushScope operator|(const FlushScope lhs, const FlushScope rhs)
-{
-    return static_cast<FlushScope>(static_cast<std::uint8_t>(lhs) | static_cast<std::uint8_t>(rhs));
-}
+/**
+ * @brief Combine TDMA component selections.
+ *
+ * @param lhs: Component selection; must not be All.
+ * @param rhs: Component selection; must not be All.
+ */
+constexpr FlushScope operator|(const FlushScope lhs, const FlushScope rhs);
 
 /** @brief Encode FLUSHDMA without draining the TDMA engine. */
 struct FlushTdma
@@ -187,9 +194,26 @@ inline __attribute__((always_inline)) void assert_valid(const FlushTdma flush)
 {
     LLK_ASSERT(is_valid(flush), "TDMA flush selection is 4 bits");
 }
+
+inline __attribute__((always_inline)) void assert_combinable(const FlushScope lhs, const FlushScope rhs)
+{
+    LLK_ASSERT(lhs != FlushScope::All && rhs != FlushScope::All, "FlushScope::All must be used on its own");
+}
 #endif
 
 } // namespace detail
+
+constexpr FlushScope operator|(const FlushScope lhs, const FlushScope rhs)
+{
+    detail::reject_invalid_constant(lhs != FlushScope::All && rhs != FlushScope::All);
+#ifdef ENABLE_LLK_ASSERT
+    if (!__builtin_is_constant_evaluated())
+    {
+        detail::assert_combinable(lhs, rhs);
+    }
+#endif
+    return static_cast<FlushScope>(static_cast<std::uint8_t>(lhs) | static_cast<std::uint8_t>(rhs));
+}
 
 /** @brief Return whether a resource declaration is encodable. */
 constexpr bool is_valid(const ResourceDeclaration declaration)
