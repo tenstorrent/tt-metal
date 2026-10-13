@@ -116,6 +116,16 @@ EMU_MAX_ELEMS = 48 * 48 * 256  # ~0.6M elements — fallback for shape-tuple par
 VAD_L1_SMALL_SIZE = 32768
 
 
+def is_quasar() -> bool:
+    return "quasar" in ttnn.get_arch_name()
+
+
+def xfail_on_quasar(reason: str) -> None:
+    """Mark the running case xfail on Quasar for a known, tracked Quasar limitation."""
+    if is_quasar():
+        pytest.xfail(reason)
+
+
 # =============================================================================
 # Memory-config helpers for the model's 20-core grid
 # =============================================================================

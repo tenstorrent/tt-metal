@@ -99,8 +99,9 @@ def _input_space_cases() -> list[ReduceCase]:
         rows, cols, batches = _shape_for_dim(dim)
         for policy in POLICIES:
             # The helper's debug contract requires a BulkWaitBulkPop REDUCE_COL
-            # CB capacity to be a multiple of Ht * DEST chunk. Eight columns are
-            # two exact four-tile chunks; the other policies retain a 4+1 tail.
+            # CB capacity to be a multiple of Ht * min(Wt, DEST chunk). Eight columns
+            # are two exact four-tile chunks; the other policies retain a 4+1 tail.
+            # Narrow (Wt < DEST chunk) BulkWait inputs are covered by _regression_cases().
             policy_cols = 8 if dim == "REDUCE_COL" and policy == "BulkWaitBulkPop" else cols
             layouts = ("contiguous", "strided") if policy in INDEXED_POLICIES else ("contiguous",)
             for layout in layouts:
@@ -156,6 +157,26 @@ def _regression_cases() -> list[ReduceCase]:
             input_dtype="bf16",
             output_dtype="fp32",
         ),
+        # Narrow BulkWaitBulkPop REDUCE_COL (Wt < DEST chunk): the bulk is Ht * Wt, so the
+        # capacity check must not demand Ht * DEST chunk pages (moreh softmax h_large, Wt == 1).
+        # The input CB holds rows * cols * batches tiles: 6 for Wt=1, 18 for Wt=3; both fail
+        # the old Ht * DEST_LIMIT = 12 check (6 < 12, 18 % 12 != 0).
+        *[
+            ReduceCase(
+                name=f"regression-col-bulkwait-narrow-3x{cols}-two-batches",
+                family="regression",
+                dim="REDUCE_COL",
+                rows=3,
+                cols=cols,
+                batches=2,
+                pool="SUM",
+                policy="BulkWaitBulkPop",
+                layout="contiguous",
+                input_dtype="bf16",
+                output_dtype="fp32",
+            )
+            for cols in (1, 3)
+        ],
     ]
 
 

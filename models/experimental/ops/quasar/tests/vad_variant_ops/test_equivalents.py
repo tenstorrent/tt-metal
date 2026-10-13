@@ -96,6 +96,7 @@ def test_multi_scale_deformable_attn(ttnn_mesh_device, reset_seeds, batch, num_q
 @pytest.mark.parametrize("num_hits", [3680, 3072, 1376, 992], ids=lambda h: f"hits{h}")
 def test_nonzero(ttnn_mesh_device, reset_seeds, num_hits):
     """Per-camera BEV hit indices: nonzero over the (1, 1, 1, 10000) hit-count row."""
+    U.xfail_on_quasar("ttnn.nonzero has no Quasar port yet (see module docstring)")
     mesh = ttnn_mesh_device
     row = torch.zeros(1, 1, 1, Q, dtype=torch.bfloat16)
     hit_idx = torch.randperm(Q)[:num_hits]
@@ -116,6 +117,7 @@ def test_nonzero(ttnn_mesh_device, reset_seeds, num_hits):
 # =============================================================================
 
 
+@pytest.mark.blackhole_scale  # (1, 10000, 256) source allocated in-body: too big for the emulator
 @U.with_default_mesh()
 @pytest.mark.parametrize("num_idx", [3680, 992], ids=lambda n: f"idx{n}")
 def test_embedding_query_gather(ttnn_mesh_device, reset_seeds, num_idx):
@@ -130,6 +132,7 @@ def test_embedding_query_gather(ttnn_mesh_device, reset_seeds, num_idx):
     U.assert_lossless(table[idx.long()].reshape(1, num_idx, E), out, mesh_device=mesh)
 
 
+@pytest.mark.blackhole_scale  # (1, 10000, 256) source allocated in-body: too big for the emulator
 @U.with_default_mesh()
 @pytest.mark.parametrize("num_idx", [3680, 992], ids=lambda n: f"idx{n}")
 def test_moreh_getitem_query_gather(ttnn_mesh_device, reset_seeds, num_idx):

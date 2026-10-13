@@ -81,9 +81,10 @@ pytest models/experimental/ops/quasar/tests/vad_variant_ops/ -m emulator -v
 ```
 
 - `blackhole_scale`: cases that reproduce the model's 20-core sharded state, program configs
-  pinned to the 5×4 grid, or very large tensors. Excluded from `-m emulator`.
-- `conftest.py` classifies everything else from a `shape` / `in_shape` / `a_shape` tuple or an
-  `hw` int, using the thresholds in `op_utils.py` (`EMU_MAX_HW`, `EMU_MAX_ELEMS`; heuristic,
+  pinned to the 5×4 grid, or very large tensors (including tensors allocated in the test body
+  that conftest cannot see, e.g. the (10000, 256) query-gather tables). Excluded from `-m emulator`.
+- `conftest.py` classifies everything else from a `shape` / `in_shape` / `a_shape` tuple, an
+  `hw` int, or a conv/pool input volume (`n * h * hw * in_ch`), using the thresholds in `op_utils.py` (`EMU_MAX_HW`, `EMU_MAX_ELEMS`; heuristic,
   tune on the emulator).
 
 ## Conventions
@@ -103,13 +104,15 @@ These mirror `tests/yolo_ops/`:
 
 ## Status
 
-Authored from static analysis only: **never run** (no device available at authoring).
-
-Expect first-run touch-ups:
-
-- sharded cases with uneven last shards (M = 10000 over 512-row shards)
-- program-config validation on the 5×4 grid
-- fp32 `slice_write`
+- **Wormhole:** the full suite (including `blackhole_scale` cases, which fit the 8×8 grid)
+  passes locally.
+- **Blackhole:** not yet run.
+- **Quasar emulator (`-m emulator`):** not yet run. Known expected failures, marked
+  `xfail` on Quasar via `U.xfail_on_quasar`:
+  - `test_max_pool2d*` with TILE output: the tiled-output pool path is broken on Quasar
+    (pre-existing; see `tests/ttnn/nightly/unit_tests/operations/experimental/quasar/test_pool2d.py`,
+    `tiled_out_*`). `test_max_pool2d_small[rm-out]` keeps ROW_MAJOR pool coverage.
+  - `test_nonzero`: no Quasar port of `ttnn.nonzero` yet.
 
 Known low-confidence areas:
 

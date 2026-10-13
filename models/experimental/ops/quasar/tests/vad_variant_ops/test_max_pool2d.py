@@ -27,7 +27,17 @@ from models.experimental.ops.quasar.tests.vad_variant_ops import op_utils as U
 _KERNEL, _STRIDE, _PADDING, _DILATION = [3, 3], [2, 2], [1, 1], [1, 1]
 
 
-def _run_pool(mesh, n, c, h, w):
+# TILE output is what the model ran, but the tiled-output pool path is broken on Quasar:
+# unimplemented in craq-sim (pacr_stride) and PCC ~0 for C=64 on RTL, identically on main.
+# See tests/ttnn/nightly/unit_tests/operations/experimental/quasar/test_pool2d.py (tiled_out_*).
+_QUASAR_TILED_POOL_XFAIL = (
+    "Quasar max_pool2d tiled-output path is broken (pre-existing; see test_pool2d.py tiled_out_*)"
+)
+
+
+def _run_pool(mesh, n, c, h, w, output_layout=ttnn.TILE_LAYOUT):
+    if output_layout == ttnn.TILE_LAYOUT:
+        U.xfail_on_quasar(_QUASAR_TILED_POOL_XFAIL)
     x_nchw = U.torch_rand((n, c, h, w))
     x_flat = x_nchw.permute(0, 2, 3, 1).reshape(1, 1, n * h * w, c).contiguous()
     x = U.to_tt(x_flat, mesh, layout=ttnn.TILE_LAYOUT)
@@ -44,7 +54,7 @@ def _run_pool(mesh, n, c, h, w):
         dilation=_DILATION,
         ceil_mode=False,
         applied_shard_scheme=ttnn.TensorMemoryLayout.HEIGHT_SHARDED,
-        output_layout=ttnn.TILE_LAYOUT,
+        output_layout=output_layout,
         dtype=ttnn.bfloat16,
     )
 
@@ -65,5 +75,10 @@ def test_max_pool2d(ttnn_mesh_device, reset_seeds, n, c, hw, h):
     # Emulator-sized proxy: same op config, 1/8-scale spatial extent.
     [pytest.param(1, 64, 40, 24, id="stem-maxpool-proxy-24x40x64")],
 )
-def test_max_pool2d_small(ttnn_mesh_device, reset_seeds, n, c, hw, h):
-    _run_pool(ttnn_mesh_device, n, c, h, hw)
+# ROW_MAJOR keeps pool coverage on Quasar while the tiled-output path is xfail there.
+@pytest.mark.parametrize(
+    "output_layout",
+    [pytest.param(ttnn.TILE_LAYOUT, id="tile-out"), pytest.param(ttnn.ROW_MAJOR_LAYOUT, id="rm-out")],
+)
+def test_max_pool2d_small(ttnn_mesh_device, reset_seeds, n, c, hw, h, output_layout):
+    _run_pool(ttnn_mesh_device, n, c, h, hw, output_layout)
