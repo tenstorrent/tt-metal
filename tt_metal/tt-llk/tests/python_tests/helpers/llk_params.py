@@ -886,6 +886,7 @@ class TopKXLSortMode(Enum):
     Dispatch = 0
     Generic = 1
     EarlyExitK64 = 2
+    Columns = 3
 
 
 class VectorMode(Enum):
