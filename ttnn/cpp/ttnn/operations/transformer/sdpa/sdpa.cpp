@@ -113,10 +113,8 @@ void drop_unsupported_routed_chunks(
     }
 }
 
-// Why ring_joint_scaled_dot_product_attention with FP32 DEST cannot run the ring recipe (nullopt: it can). The
-// streaming kernel (BF16 DEST) serves these features; with FP32 DEST they are an error, as they were on the deleted
-// legacy FP32 loop (attention sinks, sliding windows, KV-pad rotation: kv_actual_isl or the metadata tensors on chunked
-// prefill, circular caches), except a V wider than Q, which no caller passes.
+// Why ring_joint_scaled_dot_product_attention cannot run the ring recipe (nullopt: it can): FP32 DEST with these
+// features is an error.
 std::optional<std::string_view> ring_recipe_gap(
     const ttnn::Tensor& q,
     const ttnn::Tensor& k,

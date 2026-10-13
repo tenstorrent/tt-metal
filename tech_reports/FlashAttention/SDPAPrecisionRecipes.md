@@ -167,16 +167,14 @@ removing them. The rule is: **the recipe owns the numerics.**
 ## Routing
 
 Without `precision`, a call that the BF16-DEST streaming kernels (`compute_streaming.hpp`) do not serve runs a recipe
-(Blackhole and Wormhole B0; `sdpa.cpp`, "Precision routing"); the legacy FP32 loops these calls used to reach are
-deleted. The block primitives they shared with the streaming kernels, decode and `reduce_to_root` live in
-`kernels/compute/sdpa_block_ops.hpp`.
+(Blackhole and Wormhole B0; `sdpa.cpp`, "Precision routing").
 The DEST mode is read from `compute_kernel_config` as before (`fp32_dest_acc_en`, default off).
 
 | Entry point | BF16 DEST (default) | `fp32_dest_acc_en=True` |
 |---|---|---|
 | `scaled_dot_product_attention` (any mask / causal / sliding window / windowed / sink / concat heads), `chunked_scaled_dot_product_attention`, `flash_mla_prefill`, `chunked_flash_mla_prefill` | streaming kernel | ACCURATE |
 | `joint_scaled_dot_product_attention` | STANDARD | ACCURATE |
-| `ring_joint_scaled_dot_product_attention` | streaming kernel | ACCURATE; an error with a sink, sliding window, KV-pad rotation or circular cache (rejected by the deleted legacy FP32 loop too) or a V wider than Q |
+| `ring_joint_scaled_dot_product_attention` | streaming kernel | ACCURATE; an error with a sink, sliding window, KV-pad rotation or circular cache or a V wider than Q |
 | `exp_ring_joint_scaled_dot_product_attention` | streaming kernel; STANDARD for a blocking the streaming kernel cannot build (QK subblock taller than two tiles, K chunk not a multiple of the subblock row, one Q subblock), which failed to compile before | ACCURATE (failed to compile before) |
 | `ring_distributed_scaled_dot_product_attention` | STANDARD | ACCURATE |
 
@@ -404,7 +402,7 @@ grid 7x10, Q256/K512, mean of ring positions 0 and 3):
 | 8192 | 1.82 ms | 0.66 ms | 2.75 ms | 1.34 ms |
 | 32768 | 6.79 ms | 4.73 ms | 10.43 ms | 11.66 ms |
 
-The legacy op walks both slabs on the same cores (two phases); the recipe spreads both slabs' chunks over the grid,
+The deleted legacy op walked both slabs on the same cores (two phases); the recipe spreads both slabs' chunks over the grid,
 which wins at short sequences. Without a K/V chain each core reads its own K/V; with GQA (8 Q heads per K/V head)
 BF16 K/V then becomes read-bound at 32k (STANDARD 6.66 ms), BFP8 K/V halves the traffic.
 
@@ -433,7 +431,7 @@ rounding differs from the round-to-nearest-even with saturation in `prepare_bfp4
 | `streaming/recipe_sfpu.hpp`, `recipe_tail.hpp` | Exp variants, key-tail masking |
 | `dataflow/recipe_key_range.hpp` | K-range model: per-row key intervals, chunk classes and order, edge mask tiles, snake Q deal |
 | `streaming/recipe_checkpoint.hpp`, `dataflow/recipe_state_transfer.hpp` | Ring multi-Q state checkpoints (compute side, writer side) |
-| `dataflow/reader_recipe.cpp`, `ring_joint_*_impl.hpp`, `exp_ring_joint_*_impl.hpp` | Readers / writers; the ring and exp ring bodies are shared with the legacy kernels through a `Policy` struct (the legacy kernels compile unchanged) |
+| `dataflow/reader_recipe.cpp`, `ring_joint_*_impl.hpp`, `exp_ring_joint_*_impl.hpp` | Readers / writers; the ring and exp ring bodies are shared with the non-recipe streaming kernels through a `Policy` struct |
 | `sdpa_recipe.cpp`, `sdpa_recipe_blocking.cpp` | Host: recipe → CB layout and compile-time arguments; chunk chooser |
 
 Named compile-time arguments set by the host (kernel side: `streaming/recipe_config.hpp`; the kernels branch on
