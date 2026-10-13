@@ -15,20 +15,16 @@
 
 #include <tt-metalium/buffer.hpp>
 #include <tt-metalium/circular_buffer.hpp>
-#include <tt-metalium/dispatch_core_common.hpp>
 #include <tt-metalium/runtime_args_data.hpp>
 #include <tt-metalium/program.hpp>
 #include <tt-metalium/device.hpp>
-#include <tt-metalium/sub_device_types.hpp>
 #include <tt_stl/span.hpp>
 #include <tt-metalium/profiler_types.hpp>
 #include <tt-metalium/profiler_optional_metadata.hpp>
 #include <tt-metalium/kernel_types.hpp>
 #include <tt-metalium/circular_buffer_config.hpp>
-#include <hostdevcommon/common_values.hpp>
 #include <tt-metalium/core_coord.hpp>
 #include <tt-metalium/device_types.hpp>
-#include <tt-metalium/hal_types.hpp>
 
 /** @file */
 
