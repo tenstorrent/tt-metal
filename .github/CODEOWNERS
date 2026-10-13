@@ -297,6 +297,7 @@ tt_metal/tt-llk/tt_llk_wormhole_b0/common/inc/sfpu/experimental/ @amahmudTT @fvr
 tt_metal/tt-llk/tt_llk_wormhole_b0/llk_lib/experimental/ @amahmudTT @fvranicTT @ldjurovicTT @lpremovicTT @ncvetkovicTT @ndivnicTT @nvelickovicTT @rtawfik01 @atatuzunerTT
 
 # metal tests
+tests/perf/ @anirudhsathiyaTT @tenstorrent/metalium-runtime-performance
 tests/tt_metal/distributed/ @tenstorrent/metalium-developers-metal-distributed @tenstorrent/metalium-runtime-performance
 tests/tt_metal/distributed/**/CMakeLists.txt @cfjchu @tt-asaigal @tenstorrent/metalium-runtime-performance @tenstorrent/metalium-developers-infra
 tests/tt_metal/microbenchmarks/ethernet/ @ubcheema @aliuTT @aagarwalTT @tt-aho @SeanNijjar @yugaoTT
