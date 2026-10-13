@@ -287,9 +287,9 @@ tt::tt_metal::ProgramDescriptor MoeGroupedTopkDeviceOperation::ProgramFactory::c
             unpack_to_dest_mode[static_cast<uint32_t>(cb)] = tt::tt_metal::UnpackToDestMode::UnpackToDestFp32;
         }
     }
-    compute_named_compile_time_args["precise"] = static_cast<uint32_t>(precise);
-    compute_named_compile_time_args["packed_epsilon"] = std::bit_cast<uint32_t>(operation_attributes.epsilon);
-    compute_named_compile_time_args["packed_route_scale"] = std::bit_cast<uint32_t>(operation_attributes.route_scale);
+    compute_named_compile_time_args.emplace_back("precise", static_cast<uint32_t>(precise));
+    compute_named_compile_time_args.emplace_back("packed_epsilon", std::bit_cast<uint32_t>(operation_attributes.epsilon));
+    compute_named_compile_time_args.emplace_back("packed_route_scale", std::bit_cast<uint32_t>(operation_attributes.route_scale));
     const auto default_unpack = [&](tt::CBIndex cb) {
         return unpack_to_dest_mode[static_cast<uint32_t>(cb)] == tt::tt_metal::UnpackToDestMode::Default;
     };
