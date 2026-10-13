@@ -24,7 +24,7 @@
 #include <tt_stl/span.hpp>
 #include <tt-logger/tt-logger.hpp>
 
-#include "device_fixture.hpp"
+#include "llk_device_fixture.hpp"
 #include "tt_metal/test_utils/comparison.hpp"
 #include "tt_metal/test_utils/float8_utils.hpp"
 #include "tt_metal/test_utils/mx_utils.hpp"
@@ -191,23 +191,23 @@ static vector<uint32_t> run_mxfp4_typecast(
 // Data generators follow the fp8_typecast tests' convention: generate
 // row-major floats in U(0, rand_max_float) + offset, then pack into tiles.
 static vector<uint32_t> create_random_vector_of_mxfp4(
-	uint32_t num_bytes, int rand_max_float, int seed, float offset = 0.0f) {
-	uint32_t single_tile_size = tt::tile_size(tt::DataFormat::MxFp4);
-	TT_FATAL(
-		num_bytes % single_tile_size == 0,
-		"num_bytes {} must be divisible by MXFP4 tile_size {}",
-		num_bytes,
-		single_tile_size);
-	uint32_t num_tiles = num_bytes / single_tile_size;
+    uint32_t num_bytes, int rand_max_float, int seed, float offset = 0.0f) {
+    uint32_t single_tile_size = tt::tile_size(tt::DataFormat::MxFp4);
+    TT_FATAL(
+        num_bytes % single_tile_size == 0,
+        "num_bytes {} must be divisible by MXFP4 tile_size {}",
+        num_bytes,
+        single_tile_size);
+    uint32_t num_tiles = num_bytes / single_tile_size;
 
-	std::mt19937 rng(seed);
-	std::uniform_real_distribution<float> dist(0.0f, static_cast<float>(rand_max_float));
+    std::mt19937 rng(seed);
+    std::uniform_real_distribution<float> dist(0.0f, static_cast<float>(rand_max_float));
 
-	constexpr uint32_t kNumFloatsPerTile = 1024;
-	vector<float> fp32_vec(num_tiles * kNumFloatsPerTile);
-	for (float& v : fp32_vec) {
-		v = dist(rng) + offset;
-	}
+    constexpr uint32_t kNumFloatsPerTile = 1024;
+    vector<float> fp32_vec(num_tiles * kNumFloatsPerTile);
+    for (float& v : fp32_vec) {
+        v = dist(rng) + offset;
+    }
 
     vector<uint32_t> packed =
         pack_as_mx_tiles(tt::DataFormat::MxFp4, ttsl::make_const_span(fp32_vec), /*row_major_input=*/true);
@@ -319,7 +319,7 @@ namespace mxfp4_tc = unit_tests::llk::mxfp4_typecast;
 // Expected: no precision loss → rtol=0.0, atol=0.0.
 // ============================================================================
 
-TEST_F(QuasarMeshDeviceSingleCardFixture, TensixMxFp4ToFloat16b) {
+TEST_F(LLKQuasarMeshDeviceSingleCardFixture, TensixMxFp4ToFloat16b) {
     constexpr uint32_t num_tiles = 64;
     auto src_vec = mxfp4_tc::create_random_vector_of_mxfp4(
         tt::tile_size(tt::DataFormat::MxFp4) * num_tiles, /*rand_max_float=*/20, /*seed=*/42, /*offset=*/-10.0f);
@@ -338,7 +338,7 @@ TEST_F(QuasarMeshDeviceSingleCardFixture, TensixMxFp4ToFloat16b) {
     EXPECT_TRUE(mxfp4_tc::check_pcc(src_floats, dst_floats, /*min_pcc=*/1.0));
 }
 
-TEST_F(QuasarMeshDeviceSingleCardFixture, TensixMxFp4ToFloat16bFp32Dest) {
+TEST_F(LLKQuasarMeshDeviceSingleCardFixture, TensixMxFp4ToFloat16bFp32Dest) {
     constexpr uint32_t num_tiles = 64;
     auto src_vec = mxfp4_tc::create_random_vector_of_mxfp4(
         tt::tile_size(tt::DataFormat::MxFp4) * num_tiles, /*rand_max_float=*/20, /*seed=*/42, /*offset=*/-10.0f);
@@ -363,7 +363,7 @@ TEST_F(QuasarMeshDeviceSingleCardFixture, TensixMxFp4ToFloat16bFp32Dest) {
 // Tolerances are intentionally loose to account for block-scaling behavior.
 // ============================================================================
 
-TEST_F(QuasarMeshDeviceSingleCardFixture, TensixFloat16bToMxFp4) {
+TEST_F(LLKQuasarMeshDeviceSingleCardFixture, TensixFloat16bToMxFp4) {
     constexpr uint32_t num_tiles = 64;
     auto src_vec = create_random_vector_of_bfloat16(
         tt::tile_size(tt::DataFormat::Float16_b) * num_tiles, /*rand_max_float=*/20, /*seed=*/42, /*offset=*/-10.0f);
@@ -382,7 +382,7 @@ TEST_F(QuasarMeshDeviceSingleCardFixture, TensixFloat16bToMxFp4) {
     EXPECT_TRUE(mxfp4_tc::check_pcc(src_floats, dst_floats, /*min_pcc=*/0.98));
 }
 
-TEST_F(QuasarMeshDeviceSingleCardFixture, TensixFloat16bToMxFp4Fp32Dest) {
+TEST_F(LLKQuasarMeshDeviceSingleCardFixture, TensixFloat16bToMxFp4Fp32Dest) {
     constexpr uint32_t num_tiles = 64;
     auto src_vec = create_random_vector_of_bfloat16(
         tt::tile_size(tt::DataFormat::Float16_b) * num_tiles, /*rand_max_float=*/20, /*seed=*/42, /*offset=*/-10.0f);
@@ -406,7 +406,7 @@ TEST_F(QuasarMeshDeviceSingleCardFixture, TensixFloat16bToMxFp4Fp32Dest) {
 // Same format on both sides. The round-trip should be lossless.
 // ============================================================================
 
-TEST_F(QuasarMeshDeviceSingleCardFixture, TensixMxFp4ToMxFp4) {
+TEST_F(LLKQuasarMeshDeviceSingleCardFixture, TensixMxFp4ToMxFp4) {
     constexpr uint32_t num_tiles = 64;
     auto src_vec = mxfp4_tc::create_random_vector_of_mxfp4(
         tt::tile_size(tt::DataFormat::MxFp4) * num_tiles, /*rand_max_float=*/20, /*seed=*/42, /*offset=*/-10.0f);
@@ -420,7 +420,7 @@ TEST_F(QuasarMeshDeviceSingleCardFixture, TensixMxFp4ToMxFp4) {
     EXPECT_TRUE(mxfp4_tc::check_pcc(src_floats, dst_floats, /*min_pcc=*/1.0));
 }
 
-TEST_F(QuasarMeshDeviceSingleCardFixture, TensixMxFp4ToMxFp4Fp32Dest) {
+TEST_F(LLKQuasarMeshDeviceSingleCardFixture, TensixMxFp4ToMxFp4Fp32Dest) {
     constexpr uint32_t num_tiles = 64;
     auto src_vec = mxfp4_tc::create_random_vector_of_mxfp4(
         tt::tile_size(tt::DataFormat::MxFp4) * num_tiles, /*rand_max_float=*/20, /*seed=*/42, /*offset=*/-10.0f);
@@ -454,7 +454,7 @@ TEST_F(QuasarMeshDeviceSingleCardFixture, TensixMxFp4ToMxFp4Fp32Dest) {
 //   0xF = -6.0
 // ============================================================================
 
-TEST_F(QuasarMeshDeviceSingleCardFixture, TensixMxFp4ToBf16SpecialCases) {
+TEST_F(LLKQuasarMeshDeviceSingleCardFixture, TensixMxFp4ToBf16SpecialCases) {
     auto layout = mxfp4_tc::get_mxfp4_tile_layout();
 
     // Block 0: scale = 0xFF → all 32 elements should be NaN (rule 1).
