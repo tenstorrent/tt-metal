@@ -1,0 +1,44 @@
+# SPDX-FileCopyrightText: © 2026 Tenstorrent AI ULC
+#
+# SPDX-License-Identifier: Apache-2.0
+
+# Runtime-configured (unpack and math) variant of fpu_reduce_block_max_tiny:
+# 16x32 tiny-tile (num_faces=2, one face-row) fpu_reduce_block_max.
+# Exercises the num_faces=2 unpack + math (2-face MOP/replay) path for
+# reduce_block_max_row. Source B is all ones as the identity scale; source A spans a wide
+# range so the row maxima differ between tiles and rows (with near-uniform input, a tile read
+# from the wrong L1 offset still yields about the same maxima).
+
+supported_archs: ["wormhole", "blackhole"]
+
+dest_acc: false
+
+operands:
+  - name: "input_A"
+    dims: [256, 256]
+    tile_dims: [16, 32]
+    format: "Float16_b"
+    stimuli: [-1000.0, 1000.0]
+  - name: "input_B"
+    dims: [256, 256]
+    tile_dims: [16, 32]
+    format: "Float16_b"
+    stimuli: 1.0
+  - name: "reduce_block_max_tiny_runtime_out"
+    dims: [256, 256]
+    tile_dims: [16, 32]
+    format: "Float16_b"
+
+operations:
+  - math:
+      - type: "Fpu"
+        block_size: [16, 128]
+        in0: "input_A"
+        in1: "input_B"
+        operation: "ReduceBlockMaxRuntime"
+        unpacker: "ReduceBlockMaxRuntimeUnpacker"
+        math_fidelity: "HiFi2"
+    pack:
+      - output: "reduce_block_max_tiny_runtime_out"
+        block_size: [16, 128]
+        packer: "Packer"

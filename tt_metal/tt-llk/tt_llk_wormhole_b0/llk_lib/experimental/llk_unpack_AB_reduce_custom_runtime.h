@@ -65,7 +65,7 @@ inline void _llk_unpack_AB_reduce_block_max_row_mop_config_runtime_(std::uint32_
 template <bool is_fp32_dest_acc_en = false>
 inline void _llk_unpack_AB_reduce_block_max_row_init_runtime_(std::uint32_t block_ct_dim, bool respect_trigger, const ckernel::TensorShape tensor_shape)
 {
-    LLK_ASSERT(validate_tensor_shape_tile_dependent_ops_(tensor_shape), "Invalid tensor shape for tile-dependent op");
+    LLK_ASSERT(validate_tensor_shape_reduce_block_max_row_(tensor_shape), "block reduce_max_row supports 32x32 and 16x32 tiles only");
 
     // REDUCE_ROW requires transpose itself; additionally, within_face_16x16_transpose flag could require transpose;
     // if we have the flag set with REDUCE_ROW, we don't need to do anything
@@ -78,7 +78,16 @@ inline void _llk_unpack_AB_reduce_block_max_row_init_runtime_(std::uint32_t bloc
     // tile y and z dims for both unpackers
     TTI_RDCFG(p_gpr_unpack::SR_UNPACK_UNTILIZER_STATE_1, THCON_SEC0_REG0_TileDescriptor_ADDR32 + 1);
 
-    TTI_SETDMAREG(0, 4 /* y_dim */, 0, LO_16(p_gpr_unpack::TMP0));
+    // y_dim = number of faces (4 for a 32x32 tile, 2 for a 16x32 tiny tile). The Z increment between block
+    // tiles strides y_dim faces, so hardcoding 4 makes a 16x32 operand read every other tile.
+    if (tensor_shape.num_faces_r_dim == 1)
+    {
+        TTI_SETDMAREG(0, 2 /* y_dim: 2 faces (16x32 tiny tile) */, 0, LO_16(p_gpr_unpack::TMP0));
+    }
+    else
+    {
+        TTI_SETDMAREG(0, 4 /* y_dim: 4 faces (32x32 tile) */, 0, LO_16(p_gpr_unpack::TMP0));
+    }
     TTI_SETDMAREG(0, 1 /* z_dim */, 0, HI_16(p_gpr_unpack::TMP0));
     TTI_WRCFG(p_gpr_unpack::TMP0, p_cfg::WRCFG_32b, THCON_SEC0_REG0_TileDescriptor_ADDR32 + 1);
 

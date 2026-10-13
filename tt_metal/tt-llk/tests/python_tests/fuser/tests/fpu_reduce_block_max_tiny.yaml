@@ -4,7 +4,9 @@
 
 # 16x32 tiny-tile (num_faces=2, one face-row) variant of fpu_reduce_block_max.
 # Exercises the num_faces=2 unpack + math (2-face MOP/replay) path for
-# reduce_block_max_row. Source B is all ones as the identity scale.
+# reduce_block_max_row. Source B is all ones as the identity scale; source A spans a wide
+# range so the row maxima differ between tiles and rows (with near-uniform input, a tile read
+# from the wrong L1 offset still yields about the same maxima).
 
 supported_archs: ["wormhole", "blackhole"]
 
@@ -15,6 +17,7 @@ operands:
     dims: [256, 256]
     tile_dims: [16, 32]
     format: "Float16_b"
+    stimuli: [-1000.0, 1000.0]
   - name: "input_B"
     dims: [256, 256]
     tile_dims: [16, 32]
