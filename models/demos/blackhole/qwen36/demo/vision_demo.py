@@ -315,6 +315,7 @@ def test_demo_vision(mesh_device, prompt_file, use_trace, max_generated_tokens, 
         device,
         max_batch_size=1,
         max_seq_len=max_seq_len,
+        enable_mtp=False,  # vision demo never runs spec decode
         # n_layers=4,  # uncomment for fast iteration; default uses the full config
     )
     logger.info(f"Text model load: {time.time() - t0:.1f}s")

@@ -53,7 +53,11 @@ void run_kernel(RUNTIME_PARAMETERS params)
     const FormatConfig& formats = params.formats;
 #endif
 #ifndef SPEED_OF_LIGHT
-    const std::uint32_t LOOP_FACTOR = params.LOOP_FACTOR;
+    const std::uint32_t LOOP_FACTOR     = params.LOOP_FACTOR;
+    const std::uint32_t TEST_FACE_R_DIM = params.TEST_FACE_R_DIM;
+    const std::uint32_t num_faces       = params.num_faces;
+    const Operand& buffer_A             = params.buffer_A;
+    const std::uint32_t TILE_CNT        = params.TILE_CNT;
 #endif
 
     {
@@ -61,13 +65,12 @@ void run_kernel(RUNTIME_PARAMETERS params)
 
         // Where to read from: buffer_A in L1, holding unpack_A_src, with the harness's face geometry.
         // unpack_A_dst below is what it converts to on the way into Dest.
-        ckernel::trisc::bfd_alloc_and_program<ckernel::trisc::BfdResource::Unp0>(
-            ckernel::tensor_shape_from_num_faces(params.TEST_FACE_R_DIM, params.num_faces), L1_ADDRESS(params.buffer_A[0]), formats.unpack_A_src);
+        const auto bfd_unpack = ckernel::trisc::bfd_alloc_and_program<ckernel::trisc::BfdResource::Unp0>(
+            ckernel::tensor_shape_from_num_faces(TEST_FACE_R_DIM, num_faces), L1_ADDRESS(buffer_A[0]), formats.unpack_A_src);
 
         // Configure the unpacker, set it up for TILE_CNT tiles, then pull the whole bank into Dest.
         _llk_unpack_configure_unary_<UNPACKER_ENGINE_SEL>(static_cast<DataFormat>(formats.unpack_A_dst));
-        _llk_unpack_unary_operand_init_<UNPACKER_ENGINE_SEL, false /*transpose*/, is_fp32_dest_acc_en>(
-            ckernel::trisc::bfd_current<ckernel::trisc::BfdResource::Unp0>(), ckernel::DEFAULT_TENSOR_SHAPE, params.TILE_CNT);
+        _llk_unpack_unary_operand_init_<UNPACKER_ENGINE_SEL, false /*transpose*/, is_fp32_dest_acc_en>(bfd_unpack, ckernel::DEFAULT_TENSOR_SHAPE, TILE_CNT);
 
         // UNPACK is the producer in the chain.
         if constexpr (PERF_RUN_TYPE == PerfRunType::L1_TO_L1)
@@ -127,22 +130,15 @@ void run_kernel(RUNTIME_PARAMETERS params)
 #endif
 #ifndef SPEED_OF_LIGHT
     const std::uint32_t LOOP_FACTOR = params.LOOP_FACTOR;
+    const std::uint32_t TILE_CNT    = params.TILE_CNT;
+    const std::uint32_t DST_INDEX   = params.DST_INDEX;
 #endif
 
     {
         START_PERF_MEASURE("INIT")
 
         const DataFormat math_format = static_cast<DataFormat>(formats.math);
-        constexpr bool is_int_reduce = (REDUCE_MATH_FORMAT == DataFormat::Int32);
-
-        if constexpr (is_int_reduce)
-        {
-            _llk_math_srcAB_hw_configure_<IMPLIED_MATH_FORMAT, false /*fp32_dest*/, true /*int32_dest*/>(math_format, math_format);
-        }
-        else
-        {
-            _llk_math_srcAB_hw_configure_<IMPLIED_MATH_FORMAT, is_fp32_dest_acc_en, false /*int32_dest*/>(math_format, math_format);
-        }
+        _llk_math_srcAB_hw_configure_<IMPLIED_MATH_FORMAT, is_fp32_dest_acc_en>(math_format, math_format);
 
         _llk_math_eltwise_sfpu_init_();
         ckernel::sfpu::init_reduce<POOL_TYPE, REDUCE_MATH_FORMAT, is_fp32_dest_acc_en>();
@@ -168,14 +164,14 @@ void run_kernel(RUNTIME_PARAMETERS params)
                 if constexpr (REDUCE_DIM == ckernel::ReduceDim::REDUCE_COL)
                 {
                     // A column lives inside one tile, so each tile reduces onto its own row 0.
-                    for (std::uint32_t tile = 0; tile < params.TILE_CNT; ++tile)
+                    for (std::uint32_t tile = 0; tile < TILE_CNT; ++tile)
                     {
                         SFPU_UNARY_CALL(
                             dest_sync,
                             is_fp32_dest_acc_en,
                             calculate_reduce,
                             (POOL_TYPE, REDUCE_DIM, REDUCE_MATH_FORMAT, is_fp32_dest_acc_en, dest_sync),
-                            params.DST_INDEX + tile,
+                            DST_INDEX + tile,
                             VectorMode::RC_custom,
                             1 /*block_ct_dim: unused by the column reduce*/,
                             1 /*block_rt_dim: unused by the column reduce*/);
@@ -190,7 +186,7 @@ void run_kernel(RUNTIME_PARAMETERS params)
                         is_fp32_dest_acc_en,
                         calculate_reduce,
                         (POOL_TYPE, REDUCE_DIM, REDUCE_MATH_FORMAT, is_fp32_dest_acc_en, dest_sync),
-                        params.DST_INDEX,
+                        DST_INDEX,
                         VectorMode::RC_custom,
                         BLOCK_CT_DIM,
                         BLOCK_RT_DIM);
@@ -228,7 +224,12 @@ void run_kernel(RUNTIME_PARAMETERS params)
     const FormatConfig& formats = params.formats;
 #endif
 #ifndef SPEED_OF_LIGHT
-    const std::uint32_t LOOP_FACTOR = params.LOOP_FACTOR;
+    const std::uint32_t LOOP_FACTOR     = params.LOOP_FACTOR;
+    const std::uint32_t TEST_FACE_R_DIM = params.TEST_FACE_R_DIM;
+    const std::uint32_t num_faces       = params.num_faces;
+    const Operand& buffer_Res           = params.buffer_Res;
+    const std::uint32_t TILE_CNT        = params.TILE_CNT;
+    const std::uint32_t DST_INDEX       = params.DST_INDEX;
 #endif
 
     {
@@ -236,12 +237,12 @@ void run_kernel(RUNTIME_PARAMETERS params)
 
         // Where to write to: buffer_Res in L1, holding pack_dst, with the harness's face geometry.
         // pack_src below is the Dest-side format the packer reads.
-        ckernel::trisc::bfd_alloc_and_program<ckernel::trisc::BfdResource::Pack0>(
-            ckernel::tensor_shape_from_num_faces(params.TEST_FACE_R_DIM, params.num_faces), L1_ADDRESS(params.buffer_Res[0]), formats.pack_dst);
+        const auto bfd_pack = ckernel::trisc::bfd_alloc_and_program<ckernel::trisc::BfdResource::Pack0>(
+            ckernel::tensor_shape_from_num_faces(TEST_FACE_R_DIM, num_faces), L1_ADDRESS(buffer_Res[0]), formats.pack_dst);
 
         // Configure pack engine 0 and set it up for TILE_CNT tiles.
         _llk_pack_hw_configure_<p_pacr::PACK0, is_fp32_dest_acc_en>(static_cast<DataFormat>(formats.pack_src), ckernel::ReluConfig::none());
-        _llk_pack_init_(ckernel::trisc::bfd_current<ckernel::trisc::BfdResource::Pack0>(), ckernel::DEFAULT_TENSOR_SHAPE, params.TILE_CNT);
+        _llk_pack_init_(bfd_pack, ckernel::DEFAULT_TENSOR_SHAPE, TILE_CNT);
 
         // PACK is the consumer at the end of the chain.
         if constexpr (PERF_RUN_TYPE == PerfRunType::L1_TO_L1)
@@ -260,7 +261,7 @@ void run_kernel(RUNTIME_PARAMETERS params)
         {
             for (std::uint32_t loop = 0; loop < LOOP_FACTOR; ++loop)
             {
-                _llk_pack_(params.DST_INDEX, 0 /*start_l1_tile_idx*/, ckernel::DEFAULT_TENSOR_SHAPE);
+                _llk_pack_(DST_INDEX, 0 /*start_l1_tile_idx*/, ckernel::DEFAULT_TENSOR_SHAPE);
                 if constexpr (PERF_RUN_TYPE == PerfRunType::L1_TO_L1)
                 {
                     _llk_pack_dest_dvalid_section_done_<dest_sync, is_fp32_dest_acc_en>();

@@ -14,29 +14,32 @@ set(FABRIC_JIT_API_HEADERS
     hw/inc/edm_fabric/fabric_router_eth_handshake.hpp
     hw/inc/edm_fabric/fabric_txq_setup.h
     hw/inc/edm_fabric/fabric_erisc_datamover_channels.hpp
-    hw/inc/fabric_direction_table_interface.h
-    fabric_edm_packet_header.hpp
 )
 
 set(FABRIC_SOURCES
     control_plane.cpp
     mesh_graph_descriptor.cpp
     routing_table_generator.cpp
+    axis_route_topology.cpp
+    mcast_reverse_tree.cpp
     mesh_graph.cpp
     erisc_datamover_builder.cpp
-    fabric_router_channel_mapping.cpp
     fabric_router_builder.cpp
     compute_mesh_router_builder.cpp
     fabric_builder.cpp
     builder/fabric_builder_config.cpp
     builder/fabric_builder_helpers.cpp
+    builder/fabric_edge_capability.cpp
+    builder/protected_domain_effect.cpp
+    builder/injection_policy.cpp
+    builder/fabric_stream_assignment.cpp
     builder/fabric_core_placement.cpp
     builder/fabric_channel_allocator.cpp
     builder/fabric_static_sized_channels_allocator.cpp
     builder/fabric_remote_channels_allocator.cpp
     builder/static_sized_channel_connection_writer_adapter.cpp
     builder/connection_registry.cpp
-    builder/router_connection_mapping.cpp
+    builder/router_wiring_rules.cpp
     channel_trimming_export.cpp
     channel_trimming_import.cpp
     channel_trimming_io.cpp

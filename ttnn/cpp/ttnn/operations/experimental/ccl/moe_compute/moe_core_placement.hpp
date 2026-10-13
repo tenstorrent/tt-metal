@@ -15,15 +15,15 @@ namespace ttnn::operations::ccl::common {
 struct MoEComputeCoreSelection {
     std::vector<tt::tt_metal::CoreCoord> tilize_cores;
     std::vector<tt::tt_metal::CoreCoord> matmul_cores;
-    CoreRangeSet tilize_core_range_set;
-    CoreRangeSet matmul_core_range_set;
-    CoreRangeSet tilize_matmul_core_range_set;
-    CoreRangeSet combine_core_range_set;
-    CoreRangeSet combine_matmul_core_range_set;
-    CoreRangeSet all_worker_cores_range_set;
+    tt::tt_metal::CoreRangeSet tilize_core_range_set;
+    tt::tt_metal::CoreRangeSet matmul_core_range_set;
+    tt::tt_metal::CoreRangeSet tilize_matmul_core_range_set;
+    tt::tt_metal::CoreRangeSet combine_core_range_set;
+    tt::tt_metal::CoreRangeSet combine_matmul_core_range_set;
+    tt::tt_metal::CoreRangeSet all_worker_cores_range_set;
     std::vector<tt::tt_metal::CoreCoord> combine_cores;
-    CoreRange tilize_bounding_box;
-    CoreRange matmul_bounding_box;
+    tt::tt_metal::CoreRange tilize_bounding_box;
+    tt::tt_metal::CoreRange matmul_bounding_box;
 };
 
 MoEComputeCoreSelection select_moe_compute_cores(
@@ -31,7 +31,7 @@ MoEComputeCoreSelection select_moe_compute_cores(
     uint32_t combine_token_parallel_cores,
     uint32_t combine_data_parallel_cores,
     uint32_t hidden_size,
-    const CoreRangeSet& mux_core_range_set,
+    const tt::tt_metal::CoreRangeSet& mux_core_range_set,
     uint32_t bh_ring_size);
 
 }  // namespace ttnn::operations::ccl::common

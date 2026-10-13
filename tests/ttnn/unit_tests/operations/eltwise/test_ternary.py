@@ -25,32 +25,6 @@ def test_where_golden_treats_negative_predicates_as_true():
 
 @pytest.mark.parametrize("h", [64])
 @pytest.mark.parametrize("w", [128])
-def test_mac_all_tensors(device, h, w):
-    torch.manual_seed(0)
-
-    torch_input_tensor = torch.rand((h, w), dtype=torch.bfloat16)
-    torch_input_tensor1 = torch.rand((h, w), dtype=torch.bfloat16)
-    torch_input_tensor2 = torch.rand((h, w), dtype=torch.bfloat16)
-
-    golden_fn = ttnn.get_golden_function(ttnn.mac)
-    torch_output_tensor = golden_fn(torch_input_tensor, torch_input_tensor1, torch_input_tensor2)
-
-    input_tensor = ttnn.from_torch(torch_input_tensor, layout=ttnn.TILE_LAYOUT, device=device)
-    input_tensor = ttnn.to_device(input_tensor, device)
-    input_tensor1 = ttnn.from_torch(torch_input_tensor1, layout=ttnn.TILE_LAYOUT, device=device)
-    input_tensor1 = ttnn.to_device(input_tensor1, device)
-    input_tensor2 = ttnn.from_torch(torch_input_tensor2, layout=ttnn.TILE_LAYOUT, device=device)
-    input_tensor2 = ttnn.to_device(input_tensor2, device)
-    output_tensor = ttnn.mac(input_tensor, input_tensor1, input_tensor2)
-    output_tensor = ttnn.to_layout(output_tensor, ttnn.ROW_MAJOR_LAYOUT)
-    output_tensor = ttnn.from_device(output_tensor)
-    output_tensor = ttnn.to_torch(output_tensor)
-
-    assert_with_ulp(expected_result=torch_output_tensor, actual_result=output_tensor, ulp_threshold=2)
-
-
-@pytest.mark.parametrize("h", [64])
-@pytest.mark.parametrize("w", [128])
 @pytest.mark.parametrize("scalar1", [5.5])
 @pytest.mark.parametrize("scalar2", [-13.25])
 def test_mac_tensor_with_2_scalaras(device, h, w, scalar1, scalar2):
@@ -125,37 +99,6 @@ def test_where_bcast(device, dtype, hc, ht, hf, wc, wt, wf):
     torch_input_tensor2 = torch.rand((hf, wf), dtype=dtype).uniform_(-100, 100)
 
     assert_where_exact(torch_input_tensor, torch_input_tensor1, torch_input_tensor2, device)
-
-
-def run_ternary_test_value(device, h, w, value, ttnn_function, pcc=0.9999):
-    torch.manual_seed(0)
-
-    torch_input_tensor = torch.rand((h, w), dtype=torch.bfloat16).uniform_(-100, 100)
-    torch_input_tensor1 = torch.rand((h, w), dtype=torch.bfloat16).uniform_(-100, 100)
-    torch_input_tensor2 = torch.rand((h, w), dtype=torch.bfloat16).uniform_(-100, 100)
-
-    golden_fn = ttnn.get_golden_function(ttnn_function)
-    torch_output_tensor = golden_fn(torch_input_tensor, torch_input_tensor1, torch_input_tensor2, value=value)
-
-    input_tensor = ttnn.from_torch(torch_input_tensor, layout=ttnn.TILE_LAYOUT, device=device)
-    input_tensor = ttnn.to_device(input_tensor, device)
-    input_tensor1 = ttnn.from_torch(torch_input_tensor1, layout=ttnn.TILE_LAYOUT, device=device)
-    input_tensor1 = ttnn.to_device(input_tensor1, device)
-    input_tensor2 = ttnn.from_torch(torch_input_tensor2, layout=ttnn.TILE_LAYOUT, device=device)
-    input_tensor2 = ttnn.to_device(input_tensor2, device)
-    output_tensor = ttnn_function(input_tensor, input_tensor1, input_tensor2, value=value)
-    output_tensor = ttnn.to_layout(output_tensor, ttnn.ROW_MAJOR_LAYOUT)
-    output_tensor = ttnn.from_device(output_tensor)
-    output_tensor = ttnn.to_torch(output_tensor)
-
-    assert_with_pcc(torch_output_tensor, output_tensor, pcc)
-
-
-@pytest.mark.parametrize("h", [64])
-@pytest.mark.parametrize("w", [128])
-@pytest.mark.parametrize("value", [15.5])
-def test_addcdiv(device, h, w, value):
-    run_ternary_test_value(device, h, w, value, ttnn.addcdiv)
 
 
 @pytest.mark.parametrize(

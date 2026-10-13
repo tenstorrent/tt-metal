@@ -35,7 +35,7 @@ from .chip_architecture import (
     get_chip_architecture,
     quasar_arch_variant,
 )
-from .data_format_inference import data_formats, is_format_combination_outlier
+from .data_format_inference import data_formats, effective_dest_acc
 from .device import (
     CHIP_DEFAULT_BOOT_MODES,
     KERNEL_COMPLETE,
@@ -130,6 +130,9 @@ class TestConfig:
     ARCH_DEFINE: ClassVar[str]
     ARCH_LLK_ROOT: ClassVar[str]
     ARCH: ClassVar[str]
+    QUASAR_VECTOR_MARCH: ClassVar[str] = (
+        "-march=rv32im_zmmul_zaamo_zve32x_zvl128b_xtttensixqsr_xttzbkb"
+    )
     CHIP_ARCH: ClassVar[ChipArchitecture]
     DATA_FORMAT_ENUM: ClassVar[dict]
 
@@ -221,6 +224,10 @@ class TestConfig:
     ENABLE_PERF_COUNTERS: ClassVar[bool] = False
     # One run observes one group of 8 L1 interfaces; sweep this to cover all of them.
     PERF_L1_MUX_GROUP: ClassVar[int] = int(os.environ.get("LLK_PERF_L1_MUX_GROUP", "0"))
+    # Quasar has no L1 counter bank; one l1_client event (subport*8 + event, -1 = none) rides in its slot.
+    PERF_L1_CLIENT_SEL: ClassVar[int] = int(
+        os.environ.get("LLK_PERF_L1_CLIENT_SEL", "-1")
+    )
     DUMP_PERF_COUNTERS: ClassVar[bool] = False
 
     # === Addresses ===
@@ -577,8 +584,6 @@ class TestConfig:
                 "-Ifirmware/riscv/common",
                 "-Ihelpers/include",
                 "-I../../hostdevcommon/api",
-                # perf_counters.hpp: the PerfCounterType enum that hw_counters.h needs
-                "-I../../tools/profiler",
             ]
             + hw_specific_includes
             + [
@@ -927,6 +932,7 @@ class TestConfig:
         skip_build_header: bool = False,
         compile_time_formats: bool = False,
         requires_device_print: bool = False,
+        requires_vector_ext: bool = False,
         expected_nondeterministic: bool = False,
         include_dirs: list = None,
         src_include_dirs: list = None,
@@ -982,6 +988,7 @@ class TestConfig:
         self.compile_time_formats = compile_time_formats
         self.dest_acc = dest_acc
         self.requires_device_print = requires_device_print
+        self.requires_vector_ext = requires_vector_ext
         self.expected_nondeterministic = expected_nondeterministic
         # Per-variant header ``-I`` dirs land in ``local_options_compile`` (last
         # ``-I`` group), so they win over ``add_include_dirs`` and in-tree
@@ -1004,17 +1011,14 @@ class TestConfig:
         }
 
         if formats:
-            # Check if this is an outlier format combination that requires dest_acc to be enabled
-            # Automatically enable dest_acc for outlier combinations
-            if (
-                is_format_combination_outlier(
-                    formats.input_format,
-                    formats.output_format,
-                    dest_acc,
-                )
-                and TestConfig.CHIP_ARCH != ChipArchitecture.QUASAR
-            ):
-                self.dest_acc = DestAccumulation.Yes
+            # An outlier format combination needs a 32-bit Dest; promote dest_acc for it.
+            # The rule lives in effective_dest_acc so its other readers cannot drift.
+            self.dest_acc = effective_dest_acc(
+                formats.input_format,
+                formats.output_format,
+                dest_acc,
+                TestConfig.CHIP_ARCH,
+            )
 
             self.formats_config = data_formats(
                 input_format=formats.input_format,
@@ -1093,6 +1097,11 @@ class TestConfig:
         ):
             raise RuntimeError(
                 "You can't build profiler and coverage build at the same time, profiling tests will fail."
+            )
+
+        if self.requires_vector_ext and TestConfig.CHIP_ARCH != ChipArchitecture.QUASAR:
+            raise RuntimeError(
+                "requires_vector_ext=True is currently supported for Quasar-only"
             )
 
     def generate_runtime_args_struct(self):
@@ -1367,6 +1376,14 @@ class TestConfig:
             if TestConfig.CHIP_ARCH == ChipArchitecture.QUASAR
             else "-DLLK_BOOT_MODE_BRISC "
         )
+        # ttsim models no counter or overlay registers; the RTL emulator does, so it keeps them.
+        sim_path = (
+            os.environ.get("TT_METAL_SIMULATOR")
+            or os.environ.get("TT_UMD_SIMULATOR_PATH")
+            or ""
+        )
+        if TestConfig.TEST_TARGET.run_simulator and sim_path.endswith(".so"):
+            OPTIONS_COMPILE += "-DTT_METAL_TTSIM "
 
         NON_COVERAGE_OPTIONS_COMPILE = OPTIONS_COMPILE
 
@@ -1381,6 +1398,10 @@ class TestConfig:
 
         if self.profiler_build == ProfilerBuild.Yes:
             OPTIONS_COMPILE += "-DLLK_PROFILER "
+            # Marker ids hash __FILE__; strip the checkout location so they do not depend on it.
+            llk_roots = {TestConfig.LLK_ROOT, TestConfig.LLK_ROOT.resolve()}
+            for root in sorted(llk_roots):
+                OPTIONS_COMPILE += f"{shlex.quote(f'-fmacro-prefix-map={root}/=')} "
 
         if os.environ.get("TT_METAL_DISABLE_SFPLOADMACRO") == "1":
             OPTIONS_COMPILE += "-DDISABLE_SFPLOADMACRO "
@@ -1424,13 +1445,13 @@ class TestConfig:
                 run_shell_command(compile_command, TestConfig.TESTS_WORKING_DIR)
 
             if TestConfig.CHIP_ARCH != ChipArchitecture.QUASAR:
-                # BRISC only gets counter support when counters are enabled: the NC build
-                # then contains no counter code at all, so its codegen is unaffected.
+                # Both builds get the mux group: BRISC writes the counter config and runs the startup
+                # sequence either way (see counters.h); only PERF_COUNTERS_COMPILED tells them apart.
                 perf_cnt_flag = (
-                    f"-DPERF_COUNTERS_COMPILED -DLLK_PERF_L1_MUX_GROUP={TestConfig.PERF_L1_MUX_GROUP} "
-                    if TestConfig.ENABLE_PERF_COUNTERS
-                    else ""
+                    f"-DLLK_PERF_L1_MUX_GROUP={TestConfig.PERF_L1_MUX_GROUP} "
                 )
+                if TestConfig.ENABLE_PERF_COUNTERS:
+                    perf_cnt_flag += "-DPERF_COUNTERS_COMPILED "
                 compile_command = (  # brisc.elf : brisc.cpp
                     f"{TestConfig.GXX} {TestConfig.ARCH_NON_COMPUTE} {TestConfig.OPTIONS_ALL} {TestConfig.OPTIONS_LINK} {local_non_coverage} "
                     f'{"-DCOVERAGE " if TestConfig.WITH_COVERAGE else ""}'
@@ -1668,6 +1689,9 @@ class TestConfig:
                 f"Failed to parse text size from riscv-tt-elf-size output for {elf_path}:\n{result.stdout}"
             ) from e
 
+    def _compile_kernel_part(self, name, compile_command, source):
+        run_shell_command(compile_command, TestConfig.TESTS_WORKING_DIR, source)
+
     def build_elfs(self):
 
         VARIANT_DIR = TestConfig.ARTEFACTS_DIR / self.test_name / self.variant_id
@@ -1729,18 +1753,23 @@ class TestConfig:
                 if not self.compile_time_formats:
                     optional_kernel_flags += " -DRUNTIME_FORMATS"
 
-                # EXPERIMENT: enable -DPERF_COUNTERS_COMPILED on TRISC.
-                # Quasar is intentionally excluded: it adds a 4th compute thread
-                # (SFPU) and the entry/exit barrier in `counters.h` posts a fixed
-                # number of tokens for 3 threads, so enabling perf counters on
-                # Quasar would deadlock the SFPU thread (it would spinwait on a
-                # semaphore that never gets the extra post). A static_assert in
-                # `counters.h` enforces this at compile time as a safety net.
-                if (
-                    TestConfig.ENABLE_PERF_COUNTERS
-                    and TestConfig.CHIP_ARCH != ChipArchitecture.QUASAR
-                ):
-                    optional_kernel_flags += f" -DPERF_COUNTERS_COMPILED -DLLK_PERF_L1_MUX_GROUP={TestConfig.PERF_L1_MUX_GROUP}"
+                # Only TRISC0 has the vector unit on Quasar. The flag is after
+                # ARCH_COMPUTE so it overrides the march implied by -mcpu.
+                if self.requires_vector_ext and name == "unpack":
+                    optional_kernel_flags += f" {TestConfig.QUASAR_VECTOR_MARCH}"
+
+                # Both builds get the L1 selection (mux group on tt-1xx, l1_client event on Quasar): the
+                # counters off build compiles the same zone code with the counters stopped (counters.h).
+                if TestConfig.CHIP_ARCH == ChipArchitecture.QUASAR:
+                    optional_kernel_flags += (
+                        f" -DLLK_PERF_L1_CLIENT_SEL={TestConfig.PERF_L1_CLIENT_SEL}"
+                    )
+                else:
+                    optional_kernel_flags += (
+                        f" -DLLK_PERF_L1_MUX_GROUP={TestConfig.PERF_L1_MUX_GROUP}"
+                    )
+                if TestConfig.ENABLE_PERF_COUNTERS:
+                    optional_kernel_flags += " -DPERF_COUNTERS_COMPILED"
 
                 coverage_args = (
                     [
@@ -1797,9 +1826,9 @@ class TestConfig:
 
                 logger.trace(" ".join(shlex.quote(part) for part in compile_command))
 
-                run_shell_command(  # %.elf : path/to/kernel/test.cpp trisc.cpp [coverage.o libgcov.a]
+                self._compile_kernel_part(
+                    name,
                     compile_command,
-                    TestConfig.TESTS_WORKING_DIR,
                     (
                         f"{self._barrier_reservation_include()}"
                         f"{self._kernel_source_include()}#include  <trisc.cpp>\n"

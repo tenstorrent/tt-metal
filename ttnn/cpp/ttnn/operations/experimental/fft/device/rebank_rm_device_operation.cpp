@@ -51,7 +51,7 @@ RebankRmDeviceOperation::spec_return_value_t RebankRmDeviceOperation::compute_ou
     }
 
     // Output is always 2D: (B_total * N/chunk, chunk).
-    const ttnn::Shape out_shape{ttnn::SmallVector<uint32_t>{B_total * (N / chunk), chunk}};
+    const ttnn::Shape out_shape{ttsl::SmallVector<uint32_t>{B_total * (N / chunk), chunk}};
 
     TensorLayout layout(in.dtype(), PageConfig(in.layout()), in.memory_config());
     return tt::tt_metal::TensorSpec(out_shape, std::move(layout));
@@ -62,7 +62,7 @@ RebankRmDeviceOperation::tensor_return_value_t RebankRmDeviceOperation::create_o
     return create_device_tensor(compute_output_specs(attrs, args), args.input.device());
 }
 
-tt::stl::hash::hash_t RebankRmDeviceOperation::compute_program_hash(
+ttsl::hash::hash_t RebankRmDeviceOperation::compute_program_hash(
     const operation_attributes_t& attrs, const tensor_args_t& args) {
     return tt::tt_metal::operation::hash_operation<RebankRmDeviceOperation>(
         attrs.chunk_size, args.input.dtype(), args.input.memory_config(), args.input.padded_shape());

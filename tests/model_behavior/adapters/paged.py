@@ -131,9 +131,17 @@ class PagedAdapter:
                 enable_trace=self.enable_trace,
                 read_from_device=True,
                 async_read=False,
-                reset_batch=reset_batch,
-                # As in serving, a layout change hands the generator complete active
-                # histories. Steady decode advances its resident state itself.
+                # Version-1 decode update contract (models/common/sampling/README.md). This
+                # adapter is host-authoritative like the SGLang bridge: it rebuilds tokens and
+                # positions every step, so every step reloads the forward inputs (which include
+                # the page table; eager decode requires it anyway). Sampling parameters and the
+                # mutable penalty/RNG state are rebuilt only on a layout change, when, as in
+                # serving, the generator is handed the complete active histories. Steady decode
+                # keeps its resident sampling state so penalties and seeded streams carry over.
+                reload_inputs=True,
+                reload_page_table=False,
+                reload_sampling_params=reset_batch,
+                reset_sampling_state=reset_batch,
                 prompt_tokens=self._history(active, "prompt_tokens") if reset_batch else None,
                 output_tokens=self._history(active, "output_tokens") if reset_batch else None,
             )

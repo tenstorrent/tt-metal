@@ -2273,7 +2273,7 @@ void append_to_descriptor(
         .defines = {compute_defines.begin(), compute_defines.end()},
         .config =
             tt::tt_metal::ComputeConfigDescriptor{
-                .math_fidelity = MathFidelity::LoFi,
+                .math_fidelity = tt::tt_metal::MathFidelity::LoFi,
                 .fp32_dest_acc_en = kFp32DestAccEn,
                 .math_approx_mode = false,
             },

@@ -2,7 +2,7 @@
 //
 // SPDX-License-Identifier: Apache-2.0
 
-#include "tt_metal/distributed/h2d_stream_service_descriptor.hpp"
+#include <tt-metalium/experimental/sockets/h2d_stream_service_descriptor.hpp>
 
 #include "h2d_stream_service_descriptor_generated.h"
 #include "hd_socket_descriptor_generated.h"
