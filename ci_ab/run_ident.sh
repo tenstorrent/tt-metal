@@ -22,7 +22,16 @@ for a in H N; do
   echo "== $a test_deepseek_moe_gate rc=$? $(grep -aE '[0-9]+ (passed|failed)' $OUT/ut2_$a.log | tail -1)"
   (cd $TT_METAL_CACHE && find . -path '*/kernels/*' -name 'trisc*.elf' ! -name '*.xip.elf' | while read -r e; do k=$(echo "$e" | sed 's|.*/kernels/||; s|/.*||'); echo "$k $($OBJ -O binary -j .text "$e" /dev/stdout 2>/dev/null | md5sum | cut -c1-12)"; done | sort -u) > $OUT/elf_$a.txt
 done
-join -a1 -a2 -e none -o 0,1.2,2.2 <(awk '{h[$1]=h[$1]" "$2} END {for (k in h) print k, h[k]}' $OUT/elf_H.txt | awk '{k=$1; $1=""; n=split($0,a," "); asort(a); s=""; for(i=1;i<=n;i++) s=s a[i] ","; print k, s}' | sort) \
-  <(awk '{h[$1]=h[$1]" "$2} END {for (k in h) print k, h[k]}' $OUT/elf_N.txt | awk '{k=$1; $1=""; n=split($0,a," "); asort(a); s=""; for(i=1;i<=n;i++) s=s a[i] ","; print k, s}' | sort) | \
-  awk '{print "IDENT", $1, ($2==$3 ? "same" : "DIFF"), split($2,x,",")-1, split($3,y,",")-1}'
+python3 - $OUT/elf_H.txt $OUT/elf_N.txt <<'PY'
+import sys, collections
+def load(p):
+    d = collections.defaultdict(set)
+    for l in open(p):
+        k, h = l.split()
+        d[k].add(h)
+    return d
+H, N = load(sys.argv[1]), load(sys.argv[2])
+for k in sorted(set(H) | set(N)):
+    print("IDENT", k, "same" if H.get(k) == N.get(k) else "DIFF", len(H.get(k, ())), len(N.get(k, ())))
+PY
 echo "== done"
