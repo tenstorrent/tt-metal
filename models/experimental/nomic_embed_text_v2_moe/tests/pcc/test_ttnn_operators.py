@@ -278,7 +278,8 @@ def test_token_axis_reshape_round_trip_is_exact(device, config, batch, seqlen):
 
 
 def test_typecast(device, config):
-    """aten._to_copy -> ttnn.typecast, the router's fp32-to-bf16 step after the selection."""
+    """aten._to_copy -> ttnn.typecast, fp32 to bf16. The router writes its bf16 gate from the fp32
+    product directly; test_one_hot_reproduces_the_scatter pins that rounding."""
     x = torch.randn(1, 1, 512, config.hidden_size)
 
     out = ttnn.typecast(to_device(x, device, dtype=ttnn.float32), ttnn.bfloat16)

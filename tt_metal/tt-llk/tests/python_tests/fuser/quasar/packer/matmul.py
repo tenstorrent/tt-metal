@@ -9,7 +9,7 @@ from fuser.fuser_config import GlobalConfig
 from fuser.golden.pack.matmul import pack_matmul_golden
 from fuser.indexing import InvocationGranularity
 from fuser.l1_operation import L1Operation
-from fuser.operand import BfdResource, bfd_current
+from fuser.operand import BfdResource
 from fuser.pack_node import PackNode
 
 from .packer import Packer
@@ -42,9 +42,13 @@ class MatmulPacker(Packer):
         num_subblocks_c_dim = 1 if row_wise else tile_count_x // subblock_c_dim
         tensor_shape = pack_node.output.tile_shape.cpp_value
         return (
-            pack_node.output.bfd_alloc_and_program(BfdResource.PACK0)
-            + f"_llk_pack_matmul_init_({bfd_current(BfdResource.PACK0)}, "
+            "{\n"
+            + pack_node.output.bfd_alloc_and_program(
+                BfdResource.PACK0, result_name="bfd_id"
+            )
+            + "_llk_pack_matmul_init_(bfd_id, "
             f"{subblock_r_dim}, {subblock_c_dim}, {num_subblocks_c_dim}, {tensor_shape});\n"
+            "}\n"
         )
 
     def pack(

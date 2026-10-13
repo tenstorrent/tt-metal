@@ -9,6 +9,7 @@
 #include <cstdio>
 #include <map>
 #include <string>
+#include <utility>
 #include <vector>
 
 #include <umd/device/soc_descriptor.hpp>
@@ -53,6 +54,8 @@ private:
     const std::vector<std::string>& kernel_names;
     std::map<CoreCoord, uint32_t> logical_core_to_eth_link_retraining_count;
     std::map<HalProgrammableCoreType, EnableSymbolsInfo> symbols_info_cache_;
+    // Consecutive polls that saw a partially written NOC sanitize record, per (core, noc).
+    mutable std::map<std::pair<CoreCoord, int>, uint32_t> partial_sanitize_polls_;
 };
 
 }  // namespace tt::tt_metal

@@ -11,7 +11,7 @@ from fuser.fuser_config import GlobalConfig
 from fuser.golden.unpack.tilize_a import tilize_a_golden
 from fuser.indexing import InvocationGranularity
 from fuser.l1_operation import L1Operation
-from fuser.operand import BfdResource, bfd_current
+from fuser.operand import BfdResource
 from helpers.llk_params import DestAccumulation
 
 
@@ -54,15 +54,20 @@ class UnpackerTilizeA(Unpacker):
         compute_unit: FpuNode,
         block: BlockData,
     ) -> str:
-        bfd_program = compute_unit.src_a.bfd_alloc_and_program(BfdResource.UNP0)
+        bfd_program = compute_unit.src_a.bfd_alloc_and_program(
+            BfdResource.UNP0, result_name="bfd_id"
+        )
         tensor_shape = compute_unit.src_a.tile_shape.cpp_value
         en_32bit_dest = config.dest_acc.cpp_enum_value
         full_ct_dim = compute_unit.src_a.tile_count_x
         block_ct_dim = block.block_cols
 
         return (
-            bfd_program + f"_llk_unpack_tilize_init_<p_unpacr::UNP_A, {en_32bit_dest}>"
-            f"({bfd_current(BfdResource.UNP0)}, {full_ct_dim}, {block_ct_dim}, {tensor_shape});\n"
+            "{\n"
+            + bfd_program
+            + f"_llk_unpack_tilize_init_<p_unpacr::UNP_A, {en_32bit_dest}>"
+            f"(bfd_id, {full_ct_dim}, {block_ct_dim}, {tensor_shape});\n"
+            "}\n"
         )
 
     def unpack(

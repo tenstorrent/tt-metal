@@ -276,6 +276,11 @@ def main(argv=None):
         "--trigger", default="nightly", help="what started a run with no PR"
     )
     ap.add_argument("--note", default="", help="one extra line, e.g. a stale baseline")
+    ap.add_argument(
+        "--post-pass",
+        default="true",
+        help="false: post nothing when the gate passes; regressions and skips still post",
+    )
     ap.add_argument("--out", default="slack_payload.json")
     a = ap.parse_args(argv)
 
@@ -294,7 +299,7 @@ def main(argv=None):
     )
     rows = read_regressions(a.regressions) if status == "regressed" else []
 
-    should_post = True
+    should_post = status != "clean" or a.post_pass.strip().lower() != "false"
 
     ctx = {
         "pr_number": a.pr_number,
