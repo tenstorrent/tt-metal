@@ -4,6 +4,7 @@
 
 #include "api/dataflow/dataflow_api.h"
 #include "../profile_markers.h"
+#include "../mode.h"
 
 // See kernels/compute/compute.cpp. Output arrives one BLOCK_M x BLOCK_N block at a time, in
 // row-major order within the block.
@@ -61,8 +62,17 @@ void kernel_main() {
             for (uint32_t m = 0; m < kBlockM; m++) {
                 for (uint32_t n = 0; n < kBlockN; n++) {
                     const uint32_t out_tile = (row0 + m) * Nt + (col0 + n);
+                    // Legacy mode waits for every re-write before issuing the next, which makes the
+                    // writer, not the reader, set the pace at 100% amplification. Updated mode issues
+                    // the re-writes back to back and waits once per tile. With one write per tile
+                    // (no amplification) the two are the same.
                     for (uint32_t rep = 0; rep < write_repeats; rep++) {
                         noc_async_write_page(out_tile, c, l1_read_addr);
+                        if constexpr (kLegacyMode) {
+                            noc_async_write_barrier();
+                        }
+                    }
+                    if constexpr (!kLegacyMode) {
                         noc_async_write_barrier();
                     }
                     l1_read_addr += tile_bytes;

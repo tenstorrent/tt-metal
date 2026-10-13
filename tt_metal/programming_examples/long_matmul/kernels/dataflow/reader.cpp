@@ -5,6 +5,7 @@
 #include <stdint.h>
 #include "api/dataflow/dataflow_api.h"
 #include "../profile_markers.h"
+#include "../mode.h"
 
 // See kernels/compute/compute.cpp. With a BLOCK_M x BLOCK_N output block, one column slice of
 // A and one row slice of B feed BLOCK_M * BLOCK_N multiplies, so per multiply this reads
@@ -18,6 +19,12 @@
 
 constexpr uint32_t kBlockM = BLOCK_M;
 constexpr uint32_t kBlockN = BLOCK_N;
+
+#if defined(LONG_MATMUL_DISABLE_READER)
+constexpr bool kReaderIdle = true;
+#else
+constexpr bool kReaderIdle = false;
+#endif
 
 void kernel_main() {
     uint32_t src0_addr = get_arg_val<uint32_t>(0);
@@ -59,24 +66,25 @@ void kernel_main() {
             for (uint32_t k = 0; k < Kt; k++) {
                 // When LONG_MATMUL_DISABLE_READER is set the reader keeps its full CB handshake --
                 // so compute still gets its tiles "delivered" every step and never deadlocks --
-                // but issues no DRAM traffic. Compute then runs on whatever the L1 buffer already
-                // holds (zeros or an earlier run's data), so its operand values, and with them
-                // the math's switching power, depend on what ran before. See the README.
+                // but issues no DRAM traffic. In updated mode the first kRealStepsWhenIdle slices
+                // are still read for real, so compute works on real operands; in legacy mode it
+                // works on whatever L1 already held. With the reader not idle, read is always true.
+                const bool read = !kReaderIdle || (iter == 0 && blk == 0 && k < kRealStepsWhenIdle);
                 {
                     // Column slice of A: rows row0..row0+kBlockM-1 at inner index k.
                     uint32_t t = prof::now();
                     cb_reserve_back(cb_id_in0, kBlockM);
                     prof::add_since(wait_cycles, t);
                     uint32_t l1_addr = get_write_ptr(cb_id_in0);
-#ifndef LONG_MATMUL_DISABLE_READER
-                    t = prof::now();
-                    for (uint32_t m = 0; m < kBlockM; m++) {
-                        noc_async_read_page((row0 + m) * Kt + k, a, l1_addr);
-                        l1_addr += in0_tile_bytes;
+                    if (read) {
+                        t = prof::now();
+                        for (uint32_t m = 0; m < kBlockM; m++) {
+                            noc_async_read_page((row0 + m) * Kt + k, a, l1_addr);
+                            l1_addr += in0_tile_bytes;
+                        }
+                        noc_async_read_barrier();
+                        prof::add_since(transfer_cycles, t);
                     }
-                    noc_async_read_barrier();
-                    prof::add_since(transfer_cycles, t);
-#endif
                     cb_push_back(cb_id_in0, kBlockM);
                 }
                 {
@@ -85,15 +93,15 @@ void kernel_main() {
                     cb_reserve_back(cb_id_in1, kBlockN);
                     prof::add_since(wait_cycles, t);
                     uint32_t l1_addr = get_write_ptr(cb_id_in1);
-#ifndef LONG_MATMUL_DISABLE_READER
-                    t = prof::now();
-                    for (uint32_t n = 0; n < kBlockN; n++) {
-                        noc_async_read_page(k * Nt + (col0 + n), b, l1_addr);
-                        l1_addr += in1_tile_bytes;
+                    if (read) {
+                        t = prof::now();
+                        for (uint32_t n = 0; n < kBlockN; n++) {
+                            noc_async_read_page(k * Nt + (col0 + n), b, l1_addr);
+                            l1_addr += in1_tile_bytes;
+                        }
+                        noc_async_read_barrier();
+                        prof::add_since(transfer_cycles, t);
                     }
-                    noc_async_read_barrier();
-                    prof::add_since(transfer_cycles, t);
-#endif
                     cb_push_back(cb_id_in1, kBlockN);
                 }
             }

@@ -100,21 +100,49 @@ transfer or FPU work.
 
 Two side effects to keep in mind when comparing cases:
 
-- **Data.** With the reader idle, compute works on whatever the input buffers already hold in
-  L1; with compute idle, the writer sends output buffers that were never packed. That is zeros
-  or an earlier run's data, so the operand values (and with them switching power) depend on what
-  ran before. `TT_METAL_CLEAR_L1=1` zeroes L1 when the device opens, so a run starts from zeros
-  (its later grids still see the earlier grids' data).
+- **Data.** In the default `updated` mode an idle reader still reads its first two slices for
+  real and idle compute still computes its first two blocks, so both halves of each
+  double-buffered circular buffer hold real data, which the idle loop then recycles. In `legacy`
+  mode (see below) compute works on whatever the input buffers already hold in L1 and the writer
+  sends output buffers that were never packed: zeros or an earlier run's data, so operand values
+  (and with them switching power) depend on what ran before.
 - **Pacing.** Idling one kernel can change how the other two pace each other. Measured on n150
-  at `1024 2048 2048`, 1x1: compute idle (case 2) against case 1 changes the per-iteration time
-  by about 1% and the writer's busy time by 4%, because the writer sets the pace in both.
+  at `1024 2048 2048`, 1x1, 8x8: compute idle (case 2) is 1% faster per iteration than case 1 in
+  `legacy` mode and 5% faster in `updated` mode.
 
 | Env var | Effect |
 |---|---|
-| `LONG_MATMUL_DISABLE_READER=1` | Reader keeps `cb_reserve_back`/`cb_push_back` on both input CBs but skips `noc_async_read_tile` + barrier. Input tiles hold stale L1 data. |
-| `LONG_MATMUL_DISABLE_COMPUTE=1` | Compute keeps its CB and tile-register handshake but skips the math + `pack_tile`. Output tiles hold garbage. |
-| `LONG_MATMUL_DISABLE_WRITER=1` | Writer keeps `cb_wait_front`/`cb_pop_front` but skips `noc_async_write_tile` + barrier. Output DRAM stays stale. |
+| `LONG_MATMUL_DISABLE_READER=1` | Reader keeps `cb_reserve_back`/`cb_push_back` on both input CBs but skips `noc_async_read_page` + barrier (after the first two slices, in `updated` mode). |
+| `LONG_MATMUL_DISABLE_COMPUTE=1` | Compute keeps its CB and tile-register handshake but skips the math + `pack_tile` (after the first two blocks, in `updated` mode). |
+| `LONG_MATMUL_DISABLE_WRITER=1` | Writer keeps `cb_wait_front`/`cb_pop_front` but skips `noc_async_write_page` + barrier. Output DRAM stays stale. |
 | `LONG_MATMUL_WRITE_AMPLIFICATION_PCT=<pct>` | The reader issues `Kt * (BLOCK_M + BLOCK_N) / (BLOCK_M * BLOCK_N)` NoC reads per output tile (`2*Kt` at the default 1x1 block) while the writer issues only 1. This re-writes each output tile `round((pct/100) * reads)` times (min 1) to load the write path symmetrically; `100` matches the reader's read volume. Unset/0 = normal. |
+
+### `LONG_MATMUL_MODE` — `updated` (default) or `legacy`
+
+`legacy` reproduces how the published tt-ember results (#57900) were measured; use it to recreate
+those figures. `updated` fixes the effects found since. With amplification off and no idle
+kernel (`POWER_CASE=0`, the default flags) the two modes run the same kernels, apart from where
+the clock starts.
+
+| | `legacy` | `updated` |
+|---|---|---|
+| Amplified writes | every re-write waits for its own NoC barrier, so at 100% amplification the writer sets the pace | re-writes go out back to back, one barrier per tile |
+| Amplification count with blocking | `2*Kt` per tile whatever the block | matches the blocked reader rate |
+| Idle reader / idle compute data | whatever L1 already holds | the first two slices / blocks are real |
+| Timed interval | starts before the input uploads and the kernel JIT compile | starts after `EnqueueMeshWorkload` returns |
+
+Measured on Wormhole n150, `1024 2048 2048 20`, 8x8, per-iteration time:
+
+| | case 0, 1x1 | case 1, 1x1 | case 0, 2x4 | case 1, 2x4 |
+|---|---|---|---|---|
+| `legacy` | 7.87 ms | 11.75 ms | 3.03 ms | 11.60 ms |
+| `updated` | 7.79 ms | 11.90 ms | 2.95 ms | 4.28 ms |
+
+In case 1 at 1x1 the writer is busy 94% of its lifetime in `legacy` and 56% in `updated`, so
+`updated` no longer makes the writer look like the bottleneck. The iteration is just as slow in
+both: the extra writes compete with the reads for DRAM and NoC bandwidth, so case 1 stays about
+50% slower than case 0. With 2x4 blocking, `legacy` still writes `2*Kt` times per tile, 2.7x the
+reader's volume, which is why its case 1 is almost 4x slower than case 0.
 
 ### `POWER_CASE` — the six canonical scenarios
 
@@ -122,9 +150,7 @@ Two side effects to keep in mind when comparing cases:
 amplification so that turning exactly one of reader / compute / writer off compares against
 case 1 with the other two unchanged.
 
-At 100% amplification the writer, not the reader, sets the pace: each re-write waits for its own
-NoC write barrier. Measured on n150 at `1024 2048 2048`, case 1 takes about 50% longer per
-iteration than case 0, at both 1x1 and 2x4 blocking.
+How much the writer's extra traffic slows the pipeline depends on `LONG_MATMUL_MODE` (below).
 
 | `POWER_CASE` | Reader | Compute | Writer | Write amplification | Conventional subdir |
 |---|---|---|---|---|---|

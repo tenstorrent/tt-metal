@@ -14,6 +14,7 @@
 #include "api/compute/compute_kernel_api.h"
 #include "api/debug/dprint.h"
 #include "../profile_markers.h"
+#include "../mode.h"
 
 using std::uint32_t;
 
@@ -55,6 +56,12 @@ using std::uint32_t;
 constexpr uint32_t kBlockM = BLOCK_M;
 constexpr uint32_t kBlockN = BLOCK_N;
 constexpr uint32_t kBlockTiles = kBlockM * kBlockN;
+
+#if defined(LONG_MATMUL_DISABLE_COMPUTE)
+constexpr bool kComputeIdle = true;
+#else
+constexpr bool kComputeIdle = false;
+#endif
 
 void kernel_main() {
     uint32_t num_output_blocks = get_arg_val<uint32_t>(0);
@@ -108,6 +115,10 @@ void kernel_main() {
             DPRINT_UNPACK("Iteration {} of {}\n", iter, num_iterations);
         }
         for (uint32_t blk = 0; blk < num_output_blocks; blk++) {
+            // With compute idle, updated mode still computes and packs the first
+            // kRealStepsWhenIdle blocks, so the output buffer the writer keeps sending holds real
+            // results; legacy mode never does. With compute not idle this is always true.
+            const bool compute = !kComputeIdle || (iter == 0 && blk < kRealStepsWhenIdle);
             // TRISC1 acquires the tile registers -- kBlockTiles of them, one accumulator per
             // output tile in the block.
             uint32_t t_block = prof::now();
@@ -127,14 +138,13 @@ void kernel_main() {
                 // LONG_MATMUL_DISABLE_COMPUTE skips the real math while keeping every CB and
                 // tile-register handshake, so the reader and writer move the same data and
                 // neither deadlocks. Without the math, unpack no longer feeds math, so the reader
-                // and writer pace each other a little differently (writer-bound case 2 vs case 1
-                // on n150: within 4%). Output tiles then contain garbage, which is harmless: the
-                // app never verifies its output.
-#ifndef LONG_MATMUL_DISABLE_COMPUTE
-                t = prof::now();
-                for (uint32_t m = 0; m < kBlockM; m++) {
-                    for (uint32_t n = 0; n < kBlockN; n++) {
-                        const uint32_t idst = m * kBlockN + n;
+                // and writer pace each other a little differently (case 2 vs case 1 on n150: a
+                // few percent per iteration; see the README).
+                if (compute) {
+                    t = prof::now();
+                    for (uint32_t m = 0; m < kBlockM; m++) {
+                        for (uint32_t n = 0; n < kBlockN; n++) {
+                            const uint32_t idst = m * kBlockN + n;
 #if defined(LONG_MATMUL_OP_MATMUL)
                         matmul_tiles(cb_in0, cb_in1, m, n, idst);
 #elif defined(LONG_MATMUL_OP_ADD)
@@ -155,10 +165,10 @@ void kernel_main() {
                         recip_tile(idst);
 #endif
 #endif
+                        }
                     }
-                }
                 prof::add_since(compute_cycles, t);
-#endif
+                }
                 cb_pop_front(cb_in0, kBlockM);
                 cb_pop_front(cb_in1, kBlockN);
             }
@@ -170,13 +180,13 @@ void kernel_main() {
             tile_regs_wait();
             cb_reserve_back(cb_out, kBlockTiles);
             prof::add_since(wait_cycles, t_block);
-#ifndef LONG_MATMUL_DISABLE_COMPUTE
-            const uint32_t t = prof::now();
-            for (uint32_t i = 0; i < kBlockTiles; i++) {
-                pack_tile(i, cb_out);
+            if (compute) {
+                const uint32_t t = prof::now();
+                for (uint32_t i = 0; i < kBlockTiles; i++) {
+                    pack_tile(i, cb_out);
+                }
+                prof::add_since(compute_cycles, t);
             }
-            prof::add_since(compute_cycles, t);
-#endif
             // TRISC2 marks the result tiles as used by pushing them to the back of the output
             // circular buffer (writer kernel can read them now)
             cb_push_back(cb_out, kBlockTiles);

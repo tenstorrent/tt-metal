@@ -193,6 +193,17 @@ static std::string resolve_compute_op() {
     return op;
 }
 
+// LONG_MATMUL_MODE: "updated" (default) or "legacy". Legacy reproduces how the published tt-ember
+// results were measured; the README lists every difference.
+static bool resolve_legacy_mode() {
+    const char* v = std::getenv("LONG_MATMUL_MODE");
+    if (v == nullptr || *v == '\0' || std::string_view(v) == "updated") {
+        return false;
+    }
+    TT_FATAL(std::string_view(v) == "legacy", "LONG_MATMUL_MODE must be 'updated' or 'legacy', got '{}'", v);
+    return true;
+}
+
 static PowerExperimentConfig resolve_power_experiment() {
     PowerExperimentConfig cfg;
     const std::string op = resolve_compute_op();
@@ -305,6 +316,7 @@ int main(int argc, char* argv[]) {
     fmt::print("Expected FLOPs per full run: {:.2e}\n\n", total_flops);
 
     const PowerExperimentConfig power_cfg = resolve_power_experiment();
+    const bool legacy_mode = resolve_legacy_mode();
 
     // Output blocking. Each core accumulates a BLOCK_M x BLOCK_N patch of output tiles in the
     // destination registers at once, so one column slice of A and one row slice of B feed
@@ -336,7 +348,7 @@ int main(int argc, char* argv[]) {
         const char* pc = std::getenv("POWER_CASE");
         fmt::print(
             "Effective knobs: POWER_CASE={} reader={} compute={} writer={} write_amplification_pct={} "
-            "op={} block={}x{} mode={} shape={}x{}x{} iterations={}\n",
+            "op={} block={}x{} mode={} shape={}x{}x{} iterations={} LONG_MATMUL_MODE={}\n",
             (pc != nullptr && *pc != '\0') ? pc : "unset",
             power_cfg.disable_reader ? "idle" : "real",
             power_cfg.disable_compute ? "idle" : "real",
@@ -349,15 +361,17 @@ int main(int argc, char* argv[]) {
             M,
             N,
             K,
-            num_iterations);
+            num_iterations,
+            legacy_mode ? "legacy" : "updated");
     }
 
     // The writer normally issues 1 NoC write per output tile, while the reader issues
     // Kt * (block_m + block_n) / (block_m * block_n) reads per output tile (2*Kt at 1x1).
     // Amplification re-writes the same tile to the same address to load the write-side NoC path
-    // symmetrically; 100% matches the reader's read volume. Correctness is unaffected (the app
-    // never verifies its output).
-    const double reads_per_output_tile = static_cast<double>(Kt) * reads_per_multiply;
+    // symmetrically; 100% matches the reader's read volume. Legacy mode always uses the 1x1 rate.
+    // Correctness is unaffected (the app never verifies its output).
+    const double reads_per_output_tile =
+        legacy_mode ? 2.0 * static_cast<double>(Kt) : static_cast<double>(Kt) * reads_per_multiply;
     const uint32_t write_repeats =
         (power_cfg.write_amplification_pct == 0)
             ? 1u
@@ -506,6 +520,11 @@ int main(int argc, char* argv[]) {
             if (power_cfg.disable_writer) {
                 writer_defines["LONG_MATMUL_DISABLE_WRITER"] = "1";
             }
+            if (legacy_mode) {
+                for (auto* defines : {&reader_defines, &compute_defines, &writer_defines}) {
+                    (*defines)["LONG_MATMUL_LEGACY"] = "1";
+                }
+            }
 
             std::vector<uint32_t> reader_ct_args;
             TensorAccessorArgs(*src0_dram).append_to(reader_ct_args);
@@ -619,12 +638,18 @@ int main(int argc, char* argv[]) {
 
             // With a cold kernel cache the kernels are JIT-compiled inside EnqueueMeshWorkload
             // (0.75 s for the first grid on n150), before any of the program's commands reach the
-            // device. Starting the clock after it returns keeps the compile, and the input uploads
-            // queued above, out of the measured interval.
-            distributed::EnqueueMeshWorkload(cq, workload, /*blocking=*/false);
-
+            // device. Updated mode starts the clock after it returns, which keeps the compile and
+            // the input uploads queued above out of the measured interval; legacy mode starts it
+            // before, as the published measurements did.
             auto sys_start = std::chrono::system_clock::now();
             auto t_start = std::chrono::high_resolution_clock::now();
+
+            distributed::EnqueueMeshWorkload(cq, workload, /*blocking=*/false);
+
+            if (!legacy_mode) {
+                sys_start = std::chrono::system_clock::now();
+                t_start = std::chrono::high_resolution_clock::now();
+            }
 
             std::vector<bfloat16> result_vec(Mt * Nt * TILE_HW);
             distributed::EnqueueReadMeshBuffer(cq, result_vec, dst_dram, /*blocking=*/true);
