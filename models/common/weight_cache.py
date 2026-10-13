@@ -72,6 +72,116 @@ def checkpoint_name(model_path):
     return os.path.basename(path)
 
 
+CHECKPOINT_KEY_ENV = "TT_CHECKPOINT_CACHE_KEY"
+_CKPT_KEY_MODES = ("fast", "full", "off")
+_WEIGHT_SUFFIXES = (".safetensors", ".bin", ".pth", ".pt")
+_SMALL_JSON_MAX = 16 << 20  # config / index / producer manifests; never a weight file
+# Top-level JSON that cannot change converted weights; leaving it out avoids a full re-conversion
+# for a tokenizer or chat-template edit (and re-reading a ~10 MB tokenizer.json per load).
+_NON_WEIGHT_JSON = frozenset(
+    (
+        "tokenizer.json",
+        "tokenizer_config.json",
+        "special_tokens_map.json",
+        "added_tokens.json",
+        "generation_config.json",
+        "chat_template.json",
+    )
+)
+_SAMPLE_COUNT = 8
+_SAMPLE_BYTES = 4096
+# full-mode file digests, keyed by the file's stat identity. Each data-parallel replica builds its own
+# ModelArgs, so without this a `full` key would re-read the whole checkpoint once per replica. Any
+# write changes st_ctime_ns, so a modified file never reuses a stale digest.
+_FULL_DIGESTS = {}
+
+
+def _safetensors_header(f):
+    """The raw safetensors header (8-byte LE length + JSON): every tensor's name, dtype, shape
+    and data offsets. Empty bytes if the file does not look like safetensors."""
+    head = f.read(8)
+    if len(head) < 8:
+        return b""
+    n = int.from_bytes(head, "little")
+    if n > 100 << 20:
+        return b""
+    return head + f.read(n)
+
+
+def _full_file_digest(p, st):
+    """SHA-256 of a whole file, memoized on its stat identity (see _FULL_DIGESTS)."""
+    path, ident = str(p.resolve()), (st.st_dev, st.st_ino, st.st_size, st.st_mtime_ns, st.st_ctime_ns)
+    cached = _FULL_DIGESTS.get(path)
+    if cached is None or cached[0] != ident:
+        fh = hashlib.sha256()
+        with p.open("rb") as f:
+            while chunk := f.read(1 << 24):
+                fh.update(chunk)
+        cached = _FULL_DIGESTS[path] = (ident, fh.digest())
+    return cached[1]
+
+
+def checkpoint_cache_key(ckpt_dir, mode=None):
+    """Short content key for a LOCAL checkpoint directory, or None.
+
+    ``ttnn.as_tensor(cache_file_name=...)`` returns the cached tensorbin on a hit and never looks
+    at the torch tensor it was handed, and the cache filename carries only tensor name, dtype and
+    layout. So a cache dir keyed by HF_MODEL alone silently serves converted weights from whatever
+    checkpoint first populated it -- even on a full cold load -- when the checkpoint at that path
+    is replaced or modified (re-export, fine-tune, requantization to the same shapes). Mixing this
+    key into the cache directory gives each checkpoint content its own tensorbins.
+
+    Modes (``mode`` or ``$TT_CHECKPOINT_CACHE_KEY``):
+      * ``off`` (default): None -- legacy behaviour, cache identity ignores checkpoint content.
+        Opt in with ``fast`` or ``full`` until existing caches (CI, serving images) are re-seeded.
+      * ``fast``: per top-level weight file its name, size, mtime_ns, safetensors header
+        (names/dtypes/shapes/offsets) and a few 4 KiB samples spread over the file, plus the bytes
+        of every other top-level ``*.json`` (config, index, producer manifests such as a recorded
+        content hash; tokenizer/generation JSON is skipped). Reads a few hundred KiB per shard regardless of checkpoint size.
+        Blind spot: an edit that keeps a file's size, header and mtime and misses every sample.
+        The mtime makes the key machine-local unless copies preserve it (cp -p, rsync -t).
+      * ``full``: SHA-256 of every weight file's full contents plus the top-level JSON (reads the
+        whole checkpoint once per process: ~45 s per 100 GB when SHA-256 bound, slower from network
+        storage). Portable across machines and copies.
+
+    Only top-level files count. Returns None for ``off`` and for anything that is not a local
+    directory (an HF hub id: those keep the legacy layout). Errors also return None (legacy
+    behaviour) with a warning: this must never block a model load."""
+    mode = (mode or os.getenv(CHECKPOINT_KEY_ENV) or "off").strip().lower()
+    if mode not in _CKPT_KEY_MODES:
+        raise ValueError(f"{CHECKPOINT_KEY_ENV}={mode!r}; expected one of {_CKPT_KEY_MODES}")
+    if mode == "off" or ckpt_dir is None or not os.path.isdir(ckpt_dir):
+        return None
+    try:
+        h = hashlib.sha256(f"ckpt-key-v1:{mode}".encode())
+        files = sorted(p for p in Path(ckpt_dir).iterdir() if p.is_file() and not p.name.startswith("."))
+        for p in files:
+            is_weight = p.suffix in _WEIGHT_SUFFIXES
+            st = p.stat()  # follows hub-snapshot symlinks to the blob
+            if p.suffix == ".json" and p.name not in _NON_WEIGHT_JSON and st.st_size <= _SMALL_JSON_MAX:
+                h.update(f"\0json\0{p.name}\0".encode())
+                h.update(p.read_bytes())
+            if not is_weight:
+                continue
+            h.update(f"\0weight\0{p.name}\0{st.st_size}\0".encode())
+            if mode == "full":
+                h.update(_full_file_digest(p, st))
+                continue
+            with p.open("rb") as f:
+                h.update(str(st.st_mtime_ns).encode())
+                if p.suffix == ".safetensors":
+                    h.update(_safetensors_header(f))
+                for i in range(_SAMPLE_COUNT):
+                    f.seek(st.st_size * i // _SAMPLE_COUNT)
+                    h.update(f.read(_SAMPLE_BYTES))
+                f.seek(max(0, st.st_size - _SAMPLE_BYTES))
+                h.update(f.read(_SAMPLE_BYTES))
+        return h.hexdigest()[:16]
+    except OSError as e:
+        logger.warning(f"Could not compute checkpoint cache key for {ckpt_dir} ({e!r}); cache is not content-keyed.")
+        return None
+
+
 def _variant_digest(build_variant):
     """Stable short digest of a build_variant dict ("none" for None)."""
     if build_variant is None:
