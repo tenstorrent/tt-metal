@@ -456,6 +456,15 @@ TEST_F(Conv3dOpTest, NIGHTLY_EvenCubicKernelWithStride) {
     run_case(c);
 }
 
+// dW and db reduce over M = 2 * 8 * 48 * 48 = 36864 output positions, the accumulation length of a video layer.
+TEST_F(Conv3dOpTest, NIGHTLY_VideoSizedReduction) {
+    Conv3dCase c;
+    c.N = 2;
+    c.in_size = {8, 48, 48};
+    c.padding = {1, 1, 1};
+    run_case(c);
+}
+
 TEST_F(Conv3dOpTest, NIGHTLY_Groups) {
     Conv3dCase c;
     c.C_in = 64;
