@@ -86,6 +86,7 @@ def test_needs_probe_method_and_own_model_paths(tmp_path):
         "# Known issues: a\n\n"
         + _entry("Own file", "tt/mhc.py", base)
         + _entry("Method", "method (component tests)", base)
+        + "- **Detail only.** Symptom: s. Cause: c. Fix: f. Detail: known_issues_detail.md. Found: a T.1.\n"
         + f"- **Open.** Symptom: s. Cause: c. Fix: f. Applies to: tt/mhc.py. Seen at: {base}. Check: p. "
         f"Unverified since: {base}. Found: a T.1.\n"
     )
@@ -99,3 +100,43 @@ def test_needs_probe_method_and_own_model_paths(tmp_path):
     assert got["Own file."]["status"] == "unchanged"
     assert got["Method."]["status"] == "method"
     assert got["Open."]["status"] == "needs-probe"
+    assert got["Detail only."]["anchors"] == []  # the pointer to the detail file is not the entry's code
+
+
+def test_model_entries_are_short_and_detail_sections_exist(tmp_path):
+    from models.demos.common.bringup.knowledge.check import MODEL_MAX_CHARS, check_model_known_issues
+
+    ki = tmp_path / "known_issues.md"
+    ok = "- **Short.** Symptom: s. Cause: c. Fix: f. Detail: known_issues_detail.md. Found: m T.1."
+    long = "- **Long.** Symptom: " + "x" * MODEL_MAX_CHARS + ". Cause: c. Fix: f. Found: m T.1."
+    ki.write_text(f"# Known issues: m\n\n{ok}\n")
+    errs, n = check_model_known_issues(ki)
+    assert n == 1 and any("no '## Short' section" in e for e in errs)
+    (tmp_path / "known_issues_detail.md").write_text("# Known issues, full text: m\n\n## Short\n- full text\n")
+    assert check_model_known_issues(ki) == ([], 1)
+    ki.write_text(f"# Known issues: m\n\n{ok}\n{long}\n")
+    errs, _ = check_model_known_issues(ki)
+    assert len(errs) == 1 and "chars (max" in errs[0]
+
+
+def test_a_shortened_entry_keeps_its_age_through_the_detail_file(tmp_path):
+    repo = tmp_path
+    _git(repo, "init", "-q")
+    shared = repo / SHARED
+    shared.parent.mkdir(parents=True)
+    long_title = "A long original title that the trim shortened"
+    shared.write_text("# Known issues\n\n## API behavior\n" + _entry(long_title, "component tests") + "\n")
+    base = _commit(repo, "base")
+    shared.write_text("# Known issues\n\n## API behavior\n")
+    bdir = repo / "models/demos/m/bringup"
+    bdir.mkdir(parents=True)
+    (bdir / "known_issues.md").write_text(
+        "# Known issues: m\n\n- **Short title.** Symptom: s. Cause: c. Fix: f. Detail: known_issues_detail.md. "
+        "Found: m T.1.\n"
+    )
+    (bdir / "known_issues_detail.md").write_text(
+        "# Known issues, full text: m\n\n## Short title\n" + _entry(long_title, "component tests")
+    )
+    _commit(repo, "split and trim")
+    (entry,) = entries_of(bdir / "known_issues.md", repo)
+    assert entry["blame"] == base

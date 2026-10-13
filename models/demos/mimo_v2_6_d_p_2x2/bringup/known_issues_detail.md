@@ -1,0 +1,7 @@
+# Known issues, full text: mimo_v2_6_d_p_2x2
+
+`known_issues.md` holds the short form of each entry and points here for the full text.
+
+## Contract cache on a 2x2 mesh with no sequence parallelism
+
+- **Contract cache on a 2x2 mesh with no sequence parallelism.** Symptom: the gpt_oss_d_p `allocate_kv_cache` / `build_kv_chunk_address_table` (used by the 1x4 MiMo and Gemma contracts) would give a half-length cache per chip on 2x2 and map config c to `MeshCoordinate(row, c)` with c up to 3; `update_padded_kv_cache` always derives a block-cyclic offset along `cluster_axis` (extent 2 on either axis). Cause: that substrate assumes the sequence is sharded over the sp rows and heads over the columns; with TP over all 4 chips and the whole chunk on every chip, there is no size-1 axis to name. Fix: allocate the full-length cache yourself (same NdShard [1, 1, 32, W] ROUND_ROBIN_1D), walk the table with one-chip device groups, and write with `cluster_axis=0, kv_actual_global=2 * start` for a chunk-aligned start (every chip on the axis then writes its whole chunk at local row `start`). Also, the engine's input is `[sp=2, 1, chunk/2]` sharded over axis 0: `ttnn.minimum` then `ttnn.all_gather(dim=-1, cluster_axis=0)` on the uint32 TILE ids gives every chip the whole chunk, exact (probed) (`mimo_v2_6_d_p_2x2/tt/runners/`). Found: mimo_v2_6_d_p_2x2 K.1.
