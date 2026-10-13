@@ -73,7 +73,7 @@ std::optional<UnaryShardSpecs> get_shard_specs(
     }
 
     // For ROW_MAJOR layout, shard element count must be a multiple of tile_hw
-    // for the sharded CB-aliasing path to work (it requires whole-tile pages).
+    // for the sharded borrowed-DFB path to work (it requires whole-tile pages).
     // Fall back to the interleaved path otherwise.
     if (input_spec.layout() == tt::tt_metal::Layout::ROW_MAJOR) {
         auto is_shard_tile_aligned = [](const tt::tt_metal::TensorSpec& spec) {
@@ -230,6 +230,39 @@ tt::tt_metal::ShardSpec generate_output_shard_spec(
     }
     log_debug(tt::LogOp, "Unary: Generated shard spec over {} populated cores", spec.grid.num_cores());
     return spec;
+}
+
+void require_buffer_distribution_matches_spec(
+    const Tensor& tensor,
+    const std::optional<tt::tt_metal::BufferDistributionSpec>& spec_distribution,
+    const char* slot) {
+    const auto& buffer_distribution = tensor.buffer()->buffer_distribution_spec();
+    if (buffer_distribution.has_value() && spec_distribution.has_value() &&
+        buffer_distribution->shard_shape_in_pages() == spec_distribution->shard_shape_in_pages() &&
+        buffer_distribution->cores() == spec_distribution->cores()) {
+        return;
+    }
+    const auto describe = [](const std::optional<tt::tt_metal::BufferDistributionSpec>& distribution) {
+        if (!distribution.has_value()) {
+            return std::string("no distribution");
+        }
+        std::string banks;
+        for (const auto& core : distribution->cores()) {
+            banks += (banks.empty() ? "" : ", ") + fmt::format("{}", core);
+        }
+        return fmt::format("shard shape in pages {}, banks [{}]", distribution->shard_shape_in_pages(), banks);
+    };
+    TT_THROW(
+        "Unary: the sharded {} tensor's buffer distribution ({}) differs from its TensorSpec distribution ({}); "
+        "Use a tensor whose buffer was allocated for its own spec.",
+        slot,
+        describe(buffer_distribution),
+        describe(spec_distribution));
+}
+
+void require_buffer_distribution_matches_spec(const Tensor& tensor, const char* slot) {
+    const auto sharding_args = tensor.tensor_spec().compute_buffer_sharding_args();
+    require_buffer_distribution_matches_spec(tensor, sharding_args.buffer_distribution_spec(), slot);
 }
 
 }  // namespace ttnn::operations::unary
