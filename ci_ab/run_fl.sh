@@ -55,7 +55,7 @@ run() {  # run <slot> <build> <ids> <tag> [pytest args]; RTS, ASSERTS and EXTRA 
 }
 STOP=0
 mkslot slot
-if [[ $JOB == f1 || $JOB == f2 || $JOB == f3 ]]; then
+if [[ $JOB == f1 || $JOB == f2 || $JOB == f3 || $JOB == f4 ]]; then
   build slot main ra_m sweep; build slot main ra_ma sweep; build slot head ra_h sweep; build slot n ra_n sweep
   RTS=MATH_ISOLATE build slot head wc_h wc --dump-perf-counters; RTS=MATH_ISOLATE build slot n wc_n wc --dump-perf-counters
   ASSERTS=1 build slot main rb_m rowb; ASSERTS=1 build slot n rb_n rowb

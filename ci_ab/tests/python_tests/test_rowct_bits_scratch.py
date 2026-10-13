@@ -1,7 +1,7 @@
 # Scratch (fl round, not committed): row SUM/AVG/MAX/MIN over one row of several tiles, the result words of column 0,
 # for the head-against-main identity of the tile-stepped row paths. Float16_b inputs hold every bf16 pattern over 16
 # cases of four tiles (both Dest widths); Float32 inputs mix the fp32 special words with bf16-high and random words;
-# Int32 inputs mix random words with the extremes. Writes $ROWB_OUT/<case>.pt (raw column-0 words of tile 0).
+# both float formats also get finite-only cases; Int32 inputs mix random words with the extremes. Writes $ROWB_OUT/<case>.pt (raw column-0 words of tile 0).
 import os
 
 import numpy as np
@@ -56,6 +56,13 @@ def fp32_case(k, n):
     return x[torch.randperm(n, generator=g)].view(torch.float32)
 
 
+def finite_case(fmt, k, n):
+    """Finite values only (no inf or NaN), magnitudes over about 2^-20 to 2^20, so every sum exercises the rounding."""
+    g = torch.Generator().manual_seed(400 + k)
+    x = torch.randn(n, generator=g) * torch.exp2(torch.randint(-20, 21, (n,), generator=g).float())
+    return x.to(torch.bfloat16) if fmt == DataFormat.Float16_b else x.to(torch.float32)
+
+
 def int32_case(k, n):
     g = torch.Generator().manual_seed(300 + k)
     ex = torch.tensor(IE, dtype=torch.int64).to(torch.int32).repeat(16)
@@ -73,6 +80,11 @@ for ct, ks in ((4, range(4)), (2, range(1))):
     for k in ks:
         CASES.append((DataFormat.Float32, DestAccumulation.Yes, ct, k))
         CASES.append((DataFormat.Int32, DestAccumulation.Yes, ct, k))
+# finite inputs (case index 100+): Float16_b in both Dest widths and Float32
+for k in range(100, 104):
+    CASES.append((DataFormat.Float16_b, DestAccumulation.No, 4, k))
+    CASES.append((DataFormat.Float16_b, DestAccumulation.Yes, 4, k))
+    CASES.append((DataFormat.Float32, DestAccumulation.Yes, 4, k))
 POOLS = [ReducePool.Sum, ReducePool.Average, ReducePool.Max, ReducePool.Min]
 
 
@@ -84,7 +96,9 @@ def test_rowct_bits(case, pool):
         pytest.skip("integer row AVG is not implemented")
     formats = InputOutputFormat(fmt, fmt)
     n = ct * 1024
-    if fmt == DataFormat.Float16_b:
+    if k >= 100:
+        src = finite_case(fmt, k, n)
+    elif fmt == DataFormat.Float16_b:
         src = bf16_case(k, n)
     elif fmt == DataFormat.Float32:
         src = fp32_case(k, n)
