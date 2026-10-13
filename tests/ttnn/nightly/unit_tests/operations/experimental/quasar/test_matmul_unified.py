@@ -14,9 +14,11 @@ Compute threads: on Quasar the compute kernel runs on all four NEOs of a cluster
 Wormhole / Blackhole have one compute engine per core, so there every test runs with one thread and the
 tests that set num_compute_threads > 1 are skipped.
 
-DM threads and buffering: on Quasar four reader threads take each C slice's K chunks round-robin (padded
-to a multiple of four with credit-only K chunks) and two writer threads take the compute threads' shares of C;
-Wormhole / Blackhole have one reader and one writer. Cores with several C slices keep two in flight. When each
+DM threads and buffering: on Quasar up to four reader threads, no more than a C slice's K chunks, take each C
+slice's K chunks round-robin (padded to a multiple of the reader threads with credit-only K chunks) and two writer
+threads take the compute threads' shares of C; Wormhole / Blackhole have one reader and one writer. Cores with
+several C slices keep two in flight. Extra reader threads and the second C slice in flight only use L1 that the
+C slice, subblock and K chunk leave. When each
 core produces one C slice on a rectangle laid out like the C slices, A is multicast along rows of cores and B down
 columns, each reader thread multicasting its own K chunks.
 
@@ -788,13 +790,14 @@ def test_compute_threads_rejections(device, expect_error):
 
 
 # ----------------------------------------------------------------------------------------------------
-# DM threads and buffering: on Quasar four reader threads take each C slice's K chunks round-robin, padded
-# with credit-only K chunks to a multiple of four, and two writer threads take the compute threads' shares
+# DM threads and buffering: on Quasar up to four reader threads take each C slice's K chunks round-robin, padded
+# with credit-only K chunks to a multiple of the reader threads, and two writer threads take the compute threads'
+# shares
 # ----------------------------------------------------------------------------------------------------
 
 K_CHUNK_SPLITS = [
-    # name, K in elements, K_chunk_tiles: 1, 2, 3, 4 and 6 K chunks per C slice (padded to 4, 4, 4, 4 and 8 on
-    # Quasar); a ragged K zeroes A's padding columns in the last real K chunk.
+    # name, K in elements, K_chunk_tiles: 1, 2, 3, 4 and 6 K chunks per C slice (1, 2, 3, 4 and 4 reader threads
+    # on Quasar, six padded to 8); a ragged K zeroes A's padding columns in the last real K chunk.
     ("one_K_chunk", 3 * TILE, 3),
     ("two_K_chunks", 4 * TILE, 2),
     ("three_K_chunks_ragged_K", 2 * TILE + 20, 1),
@@ -806,14 +809,25 @@ K_CHUNK_SPLITS = [
 @pytest.mark.parametrize("name,K,K_chunk_tiles", K_CHUNK_SPLITS, ids=[s[0] for s in K_CHUNK_SPLITS])
 def test_K_chunks_across_reader_threads(device, name, K, K_chunk_tiles):
     """Batch 2, M = 4, N = 2 tiles on one core: two 2x2-tile C slices per batch, four in all (two in flight). On
-    Quasar reader thread t reads K chunks t, t + 4, ... of every C slice and the padding K chunks carry credits only,
-    so every C slice starts at reader thread 0 again; elsewhere one reader reads them all."""
+    Quasar reader thread t reads K chunks t, t + num_reader_threads, ... of every C slice and the padding K chunks
+    carry credits only, so every C slice starts at reader thread 0 again; elsewhere one reader reads them all."""
     B, M, N = 2, 4 * TILE, 2 * TILE
     torch.manual_seed(23)
     a, b = _randn(1, B, M, K), _randn(1, B, K, N)
     config = qsr.MatmulUnifiedProgramConfig(
         cores=_rect(0, 0, 0, 0), C_slice_M_tiles=2, C_slice_N_tiles=2, K_chunk_tiles=K_chunk_tiles
     )
+    out = _run(device, a, b, config)
+    _check(out, _golden(a, b))
+
+
+def test_C_slice_too_large_to_double_buffer(device):
+    """Two 16x16-tile C slices on one core: a second C slice in flight would exceed the DFB extent cap, so the
+    core keeps one in flight instead of failing."""
+    M, K, N = 32 * TILE, TILE, 16 * TILE
+    torch.manual_seed(27)
+    a, b = _randn(1, 1, M, K), _randn(1, 1, K, N)
+    config = qsr.MatmulUnifiedProgramConfig(cores=_rect(0, 0, 0, 0), C_slice_M_tiles=16, C_slice_N_tiles=16)
     out = _run(device, a, b, config)
     _check(out, _golden(a, b))
 

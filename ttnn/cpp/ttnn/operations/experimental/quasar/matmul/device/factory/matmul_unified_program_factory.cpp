@@ -40,7 +40,8 @@ const DFBSpecName C_SLICE_DFB{"C_slice"};
 const DFBSpecName C_PARTIALS_DFB{"C_partials"};
 
 // Multicast handshake semaphores. Each reader thread t has its own set, "<name>_<t>"; all
-// QUASAR_NUM_READER_THREADS sets are bound on every arch because the reader names them all.
+// QUASAR_NUM_READER_THREADS sets are bound on every arch because the reader names them all, which takes the
+// whole per-core semaphore budget (16).
 constexpr std::array<const char*, 4> MCAST_SEMAPHORES = {
     "A_receivers_ready", "A_data_ready", "B_receivers_ready", "B_data_ready"};
 
@@ -62,14 +63,17 @@ constexpr uint64_t MAX_DFB_EXTENT_BYTES = 65535ull * 16ull;
 // so a long K chunk saves partial-sum round trips). Tuning points, not hardware limits.
 constexpr uint32_t MAX_AUTO_K_CHUNK_TILES = 8;
 constexpr uint32_t SMALL_C_SLICE_TILES = 4;
-// DM threads and buffering per core. Quasar runs four reader and two writer threads (its six DM cores); Wormhole /
-// Blackhole one of each. A and B slices in flight: one per reader thread, at least two; C slices in flight on cores
-// that produce several.
+// DM threads and buffering per core. Quasar runs up to four reader and two writer threads (its six user DM cores);
+// Wormhole / Blackhole one of each. A and B slices in flight: one per reader thread, at least two; C slices in flight
+// on cores that produce several.
+constexpr uint32_t QUASAR_NUM_USER_DM_CORES = 6;
 constexpr uint32_t QUASAR_NUM_READER_THREADS = 4;
 constexpr uint32_t QUASAR_NUM_WRITER_THREADS = 2;
 constexpr uint32_t MIN_OPERAND_BUFFER_DEPTH = 2;
 constexpr uint32_t C_BUFFER_DEPTH = 2;
-static_assert(QUASAR_NUM_READER_THREADS + QUASAR_NUM_WRITER_THREADS <= 6, "a Quasar cluster has six DM cores");
+static_assert(
+    QUASAR_NUM_READER_THREADS + QUASAR_NUM_WRITER_THREADS <= QUASAR_NUM_USER_DM_CORES,
+    "a Quasar cluster has six user DM cores");
 static_assert(
     std::max(MIN_OPERAND_BUFFER_DEPTH, QUASAR_NUM_READER_THREADS) % QUASAR_NUM_READER_THREADS == 0,
     "each reader thread owns whole A and B slices");
@@ -241,6 +245,10 @@ UnifiedMatmulPlan plan_unified_matmul(
     // ---- Writer threads: thread t writes the shares of compute threads t, t + num_writer_threads, ... ----
     base.num_writer_threads =
         is_quasar && base.num_compute_threads % QUASAR_NUM_WRITER_THREADS == 0 ? QUASAR_NUM_WRITER_THREADS : 1;
+    // The C slice, subblock and K chunk are chosen with one reader thread and one C slice in flight; more are added
+    // at the end only where they fit.
+    base.num_reader_threads = 1;
+    base.C_buffer_depth = 1;
 
     // ---- Accumulation mode, formats, L1 budget ----
     const bool fp32_dest_acc_en = get_fp32_dest_acc_en(attributes.compute_kernel_config);
@@ -326,7 +334,7 @@ UnifiedMatmulPlan plan_unified_matmul(
         const bool C_shard_borrowable =
             C_shard_matches && one_C_slice_per_core_no_batch && plan.num_compute_threads == 1;
 
-        // ---- Multicast, reader threads and C slices in flight ----
+        // ---- Multicast ----
         // One C slice per core on a rectangle laid out as the C slices tile C (walked row-major): the cores of a row
         // then need the same A slice at the same time, and the cores of a column the same B slice.
         const std::vector<CoreRange>& core_ranges = config.cores.ranges();
@@ -336,10 +344,6 @@ UnifiedMatmulPlan plan_unified_matmul(
             (config.orientation == ShardOrientation::ROW_MAJOR || C_slices_across_N == 1 || C_slices_down_M == 1);
         plan.A_mcast_num_dests = cores_tile_C && !A_shard_borrowable ? C_slices_across_N - 1 : 0;
         plan.B_mcast_num_dests = cores_tile_C && !B_shard_borrowable ? C_slices_down_M - 1 : 0;
-        // Several reader threads each own part of the A and B DFBs, which a borrowed shard cannot be split into.
-        plan.num_reader_threads =
-            is_quasar && !A_shard_borrowable && !B_shard_borrowable ? QUASAR_NUM_READER_THREADS : 1;
-        plan.C_buffer_depth = (uint64_t)plan.batch_size * plan.max_C_slices_per_core > 1 ? C_BUFFER_DEPTH : 1;
 
         // ---- Subblock: the C slice's tiles accumulated in DST at once ----
         // A candidate is viable when it voids no achievable borrow and its DFBs fit L1, sized at the K
@@ -532,6 +536,26 @@ UnifiedMatmulPlan plan_unified_matmul(
             l1_budget,
             MAX_DFB_EXTENT_BYTES);
         plan = std::move(*best);
+    }
+
+    // ---- Reader threads and C slices in flight, in the L1 the C slice, subblock and K chunk leave ----
+    // Several reader threads each own part of the A and B DFBs, which a borrowed shard cannot be split into, and
+    // reader threads beyond the K chunks of a C slice would only carry padding.
+    UnifiedMatmulPlan buffered = plan;
+    buffered.num_reader_threads = is_quasar && !plan.borrow_A && !plan.borrow_B
+                                      ? std::min(QUASAR_NUM_READER_THREADS, plan.K_chunks_per_C_slice)
+                                      : 1;
+    buffered.C_buffer_depth = (uint64_t)plan.batch_size * plan.max_C_slices_per_core > 1 ? C_BUFFER_DEPTH : 1;
+    buffered = size_dfbs(
+        std::move(buffered),
+        plan.K_chunk_tiles,
+        fp32_dest_acc_en,
+        packer_l1_acc,
+        plan.borrow_A,
+        plan.borrow_B,
+        plan.borrow_C);
+    if (dfbs_fit(buffered, l1_budget)) {
+        plan = std::move(buffered);
     }
 
     // ---- Sharded output: one C slice per core, batch 1, and a grid the accessor maps the same way ----

@@ -177,7 +177,7 @@ inline void llk_unpack_A(const std::uint32_t operand, const std::uint32_t tile_i
 }
 
 /**
- * @brief Unpacks a contiguous block of tiles for unary and unary-broadcast paths.
+ * @brief Unpacks a block of tiles for unary and unary-broadcast paths.
  *
  * @tparam BType: Broadcast type; BroadcastType::NONE selects the plain unary path
  * @tparam acc_to_dest: Unused on Quasar; kept for API parity with Blackhole / other arches
