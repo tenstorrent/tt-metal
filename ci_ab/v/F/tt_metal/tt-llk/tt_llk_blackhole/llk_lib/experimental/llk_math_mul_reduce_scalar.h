@@ -160,7 +160,8 @@ inline void _llk_math_mul_reduce_scalar_move_faces_to_srca_(const std::uint32_t 
     // Later moves find the bank still valid, and MOVD2A itself waits for pending DEST writes.
     if (idst == 0)
     {
-        TT_SETC16(DEST_TARGET_REG_CFG_MATH_Offset_ADDR32, get_dest_buffer_base());
+        // dest_offset_id is 0 or 1 and flips every section: a shift, not a select, keeps it off the branch predictor.
+        TT_SETC16(DEST_TARGET_REG_CFG_MATH_Offset_ADDR32, dest_offset_id * DEST_REGISTER_HALF_SIZE);
         TTI_SETRWC(p_setrwc::CLR_NONE, 0, 0, 0, 0, p_setrwc::SET_D);
         math::srca_bank_wait();
     }
