@@ -291,6 +291,7 @@ void run_kernel(RUNTIME_PARAMETERS params)
 
     std::uint32_t unit_dims[MAX_UNITS_PER_ROW];
     std::uint32_t units_per_row = decompose_row(BLOCK_CT_DIM, unit_dims);
+    const bool input_32b        = static_cast<std::uint32_t>(formats.unpack_A_src) == static_cast<std::uint32_t>(DataFormat::Float32);
 
     constexpr bool pack_free_runs = (PERF_RUN_TYPE == PerfRunType::L1_CONGESTION || PERF_RUN_TYPE == PerfRunType::PACK_ISOLATE);
 
@@ -349,7 +350,7 @@ void run_kernel(RUNTIME_PARAMETERS params)
             _llk_pack_hw_configure_<is_fp32_dest_acc_en, ckernel::PackMode::Default>(
                 formats.pack_src, formats.pack_dst, SCALE_DATUM_SIZE(formats.pack_dst, TILE_C_DIM * TILE_R_DIM));
             _llk_pack_fast_tilize_init_<DstSync::SyncHalf, is_fp32_dest_acc_en>(
-                0 /* use_32bit_dest */, formats.pack_dst, unit_dims[0], 4 /* num_faces */, formats.pack_src);
+                0 /* use_32bit_dest */, formats.pack_dst, unit_dims[0], 4 /* num_faces */, formats.pack_src, input_32b);
         }
         {
             START_PERF_MEASURE("TILE_LOOP")
@@ -379,7 +380,7 @@ void run_kernel(RUNTIME_PARAMETERS params)
 
                         if (udim != prev_udim)
                         {
-                            _llk_pack_fast_tilize_reinit_unit_dim_(formats.pack_dst, udim);
+                            _llk_pack_fast_tilize_reinit_unit_dim_<is_fp32_dest_acc_en>(formats.pack_dst, udim, input_32b);
                             prev_udim = udim;
                         }
 
