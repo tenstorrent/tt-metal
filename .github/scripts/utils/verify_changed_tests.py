@@ -142,6 +142,7 @@ def git_show_many(ref, paths):
     if not paths:
         return {}
 
+    ref = checked_revision(ref)
     request = "".join(f"{ref}:{path}\n" for path in paths)
     result = subprocess.run(
         ["git", "cat-file", "--batch"],
@@ -173,6 +174,17 @@ def git_show_many(ref, paths):
     return contents
 
 
+# What a git ref or object id may contain, and it must open with an alphanumeric.
+SAFE_REVISION = re.compile(r"\A[0-9A-Za-z][0-9A-Za-z._/@^~-]*\Z")
+
+
+def checked_revision(revision):
+    """A git revision that cannot be read as an option, or GateError."""
+    if not isinstance(revision, str) or not SAFE_REVISION.match(revision):
+        raise GateError(f"refusing to use {revision!r} as a git revision: not a well-formed ref or object id")
+    return revision
+
+
 def merge_base(base):
     """
     Resolve base to its merge base with HEAD.
@@ -180,11 +192,13 @@ def merge_base(base):
     Diffing against the merge base rather than the base tip keeps commits that
     landed on main after the branch point out of scope, and makes the working
     tree visible -- which is what makes this runnable locally before pushing.
+
+    Checks the revision here so every later call inherits a validated one.
     """
-    result = subprocess.run(["git", "merge-base", base, "HEAD"], capture_output=True, text=True)
+    result = subprocess.run(["git", "merge-base", checked_revision(base), "HEAD"], capture_output=True, text=True)
     if result.returncode != 0:
         return base
-    return result.stdout.strip() or base
+    return checked_revision(result.stdout.strip()) if result.stdout.strip() else base
 
 
 def changed_files(base):
@@ -195,7 +209,9 @@ def changed_files(base):
     must not slip past the gate, and it is still untracked when this is run
     locally before committing.
     """
-    diff = subprocess.run(["git", "diff", "--name-only", base, "--", TESTS_DIR], capture_output=True, text=True)
+    diff = subprocess.run(
+        ["git", "diff", "--name-only", checked_revision(base), "--", TESTS_DIR], capture_output=True, text=True
+    )
     if diff.returncode != 0:
         raise GateError(f"git diff against {base} failed: {diff.stderr.strip()}")
 
@@ -227,7 +243,9 @@ def tracked_paths(base):
     output is tracked in neither, so generated paths still never match.
     """
     paths = set()
-    tree = subprocess.run(["git", "ls-tree", "-r", "--name-only", base], capture_output=True, text=True)
+    tree = subprocess.run(
+        ["git", "ls-tree", "-r", "--name-only", checked_revision(base), "--"], capture_output=True, text=True
+    )
     if tree.returncode != 0:
         raise GateError(f"git ls-tree at {base} failed: {tree.stderr.strip()}")
     paths |= set(tree.stdout.splitlines())
@@ -253,7 +271,9 @@ def changed_sources(base):
     so a cmd naming the old one would match nothing. Unlike rename_sources(), which
     wants the pairing, both sides matter here: the cmd is broken either way.
     """
-    diff = subprocess.run(["git", "diff", "--name-only", "--no-renames", base], capture_output=True, text=True)
+    diff = subprocess.run(
+        ["git", "diff", "--name-only", "--no-renames", checked_revision(base), "--"], capture_output=True, text=True
+    )
     if diff.returncode != 0:
         raise GateError(f"git diff against {base} failed: {diff.stderr.strip()}")
 
@@ -377,7 +397,7 @@ def rename_sources(base):
     never saw it before, so its entries are genuinely new to the gate's scope.
     """
     diff = subprocess.run(
-        ["git", "diff", "--name-status", "-M", base, "--", TESTS_DIR],
+        ["git", "diff", "--name-status", "-M", checked_revision(base), "--", TESTS_DIR],
         capture_output=True,
         text=True,
     )

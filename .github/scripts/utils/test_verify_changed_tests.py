@@ -1574,3 +1574,69 @@ def test_all_test_yamls_finds_yml_and_nested(src_repo: Repo):
         os.chdir(cwd)
     assert "tests/pipeline_reorg/nested/deep_tests.yaml" in found
     assert "tests/pipeline_reorg/short_suffix_tests.yml" in found
+
+
+# --- git revision sanitising -------------------------------------------------
+
+
+@pytest.mark.parametrize(
+    "revision",
+    [
+        "origin/main",
+        "HEAD",
+        "a1b2c3d4e5f6a7b8c9d0e1f2a3b4c5d6e7f8a9b0",
+        "release/v1.2.3",
+        "HEAD^",
+        "main~2",
+        "origin/feature_branch-1",
+    ],
+)
+def test_checked_revision_accepts_real_revisions(revision: str):
+    mod = gate_module()
+    assert mod.checked_revision(revision) == revision
+
+
+@pytest.mark.parametrize(
+    "revision",
+    [
+        "--output=/tmp/pwned",
+        "-x",
+        "--upload-pack=touch /tmp/pwned",
+        "main; rm -rf /",
+        "main$(whoami)",
+        "main`id`",
+        "main with space",
+        "main|tee",
+        "",
+        None,
+    ],
+)
+def test_checked_revision_rejects_anything_option_shaped_or_odd(revision):
+    """A leading dash is the live risk: git reads it as a flag wherever a revision
+    goes. The rest cannot reach a shell, but none of them are valid revisions."""
+    mod = gate_module()
+    with pytest.raises(Exception) as excinfo:
+        mod.checked_revision(revision)
+    assert "git revision" in str(excinfo.value)
+
+
+def test_a_dash_leading_base_fails_the_gate_rather_than_reaching_git(repo: Repo, tmp_path: Path):
+    """End to end: the gate refuses before any subprocess runs.
+
+    Written as --base=<value>, because the space-separated form never gets that
+    far -- argparse reads a dash-leading token as the next option and exits 2.
+    """
+    target = tmp_path / "should-never-be-written"
+    argv = [
+        sys.executable,
+        str(SCRIPT),
+        "--event",
+        "merge_group",
+        f"--base=--output={target}",
+        "--sku-config",
+        ".github/sku_config.yaml",
+    ]
+    result = subprocess.run(argv, cwd=repo.root, capture_output=True, text=True)
+    assert result.returncode == 1
+    assert "git revision" in result.stderr
+    assert not target.exists()
