@@ -9,6 +9,7 @@
   is hashed by eb_bits_plugin.
 Not for merge."""
 import gc
+import os
 import os as _os_guard, sys as _sys_guard
 
 if not (_os_guard.environ.get("HWLOCK_HELD") or _os_guard.environ.get("GITHUB_ACTIONS")):
@@ -230,3 +231,59 @@ def test_bits_bng_block(device, case):
             out = ttnn.subtract(a, b, memory_config=mem)
         ttnn.to_torch(out)
         ttnn.deallocate(out)
+
+
+# ---------------------------------------------------------------- bits, in-process repeat (determinism) and cross-variant hashes
+
+DET = {
+    "geglu_4096x2560_mul": ((1, 1, 4096, 2560), "mul"),
+    "geglu_1024x5120_mul": ((1, 1, 1024, 5120), "mul"),
+    "geglu_1024x6144_mul": ((1, 1, 1024, 6144), "mul"),
+    "tadd_1024x1280_add": ((1, 1, 1024, 1280), "add"),
+    "resadd_16384x320_add": ((1, 1, 16384, 320), "add"),
+    "tadd_1024x1280_sub": ((1, 1, 1024, 1280), "sub"),
+}
+
+
+def _plain_operand(shape, seed, special):
+    g = torch.Generator().manual_seed(seed)
+    t = torch.randn(shape, generator=g) * 4
+    if special:
+        flat = t.view(-1)
+        idx = torch.randint(0, flat.numel(), (flat.numel() // 16,), generator=g)
+        flat[idx] = _SPECIAL[torch.randint(0, len(_SPECIAL), (idx.numel(),), generator=g)]
+    return t.to(torch.bfloat16)
+
+
+@pytest.mark.parametrize("special", [False, True], ids=["normal", "special"])
+@pytest.mark.parametrize("case", list(DET))
+def test_det(device, case, special):
+    import hashlib, json
+
+    shape, op = DET[case]
+    if shape[-1] % 10 or (shape[-1] // 10) % 32:
+        grid = (8, 8)
+    else:
+        grid = (8, 10)
+    mem = ttnn.create_sharded_memory_config(shape, core_grid=ttnn.CoreGrid(y=grid[0], x=grid[1]), strategy=ttnn.ShardStrategy.BLOCK)
+    ta, tb = _plain_operand(shape, 1, special), _plain_operand(shape, 2, special)
+    outs = []
+    for _ in range(3):
+        a = ttnn.from_torch(ta, dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT, device=device, memory_config=mem)
+        b = ttnn.from_torch(tb, dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT, device=device, memory_config=mem)
+        if op == "mul":
+            o = ttnn.multiply(a, b, fast_and_approximate_mode=True, memory_config=mem)
+        elif op == "add":
+            o = ttnn.add(a, b, memory_config=mem)
+        else:
+            o = ttnn.subtract(a, b, memory_config=mem)
+        outs.append(ttnn.to_torch(o).contiguous().view(torch.int16).clone())
+        for t in (a, b, o):
+            ttnn.deallocate(t)
+    rec = {
+        "case": f"{case}-{'special' if special else 'normal'}",
+        "hashes": [hashlib.sha1(x.numpy().tobytes()).hexdigest()[:16] for x in outs],
+        "in_process_diffs": [int((outs[0] != x).sum()) for x in outs[1:]],
+    }
+    with open(os.environ.get("EB_DET_OUT", "/tmp/eb_det.jsonl"), "a") as fh:
+        fh.write(json.dumps(rec) + "\n")

@@ -43,11 +43,19 @@ while read -r tag v; do
   mkdir -p $TT_METAL_CACHE
   OUT=$OUTD/out_${tag}_${i}_$v
   echo "== $tag $v ($i) $(date -u +%T)"
-  EB_HASH_OUT=$OUTD/hash_${i}_$v.json timeout -s INT -k 60 ${CI_LIMIT:-1500} python -m tracy -r -p --no-web-server -o $OUT -m pytest -p eb_prof_plugin -p eb_bits_plugin -p no:cacheprovider -o timeout_method=thread -q -rfE $S/ops/test_eb_hr_ops.py > $OUTD/log_${tag}_${i}_$v.txt 2>&1
+  EB_DET_OUT=$OUTD/det_${i}_$v.jsonl EB_HASH_OUT=$OUTD/hash_${i}_$v.json timeout -s INT -k 60 ${CI_LIMIT:-1500} python -m tracy -r -p --no-web-server -o $OUT -m pytest -p eb_prof_plugin -p eb_bits_plugin -p no:cacheprovider -o timeout_method=thread -q -rfE $S/ops/test_eb_hr_ops.py > $OUTD/log_${tag}_${i}_$v.txt 2>&1
   rc=$?; echo "== $tag $v ($i) rc=$rc $(date -u +%T): $(grep -E 'passed|failed' $OUTD/log_${tag}_${i}_$v.txt | tail -1)"
   [[ $rc != 0 ]] && grep -a -E "^(FAILED|ERROR)" $OUTD/log_${tag}_${i}_$v.txt | head -8 | cut -c1-220
   elfsum $TT_METAL_CACHE > $OUTD/elfsum_$v.txt
+  for e in $(ls $TT_METAL_CACHE/*/kernels/*/*/trisc[012]/trisc[012].elf 2>/dev/null); do
+    k=$(echo $e | awk -F/ '{print $(NF-3)"/"$(NF-1)}'); [[ -n $OBJ ]] && $OBJ -O binary -j .text "$e" /tmp/elf1.bin 2>/dev/null && echo "$k $(md5sum < /tmp/elf1.bin | cut -c1-12)"
+  done | sort -u > $OUTD/elfeach_$v.txt
 done < $PLAN
+for v in $(awk '!/^#/ && NF {print $2}' $PLAN | sort -u | grep -vx ${PROF_BASE:-head}); do
+  echo "== per-ELF: $v ELFs whose .text is not among ${PROF_BASE:-head}'s, by kernel/thread (of the kernel/thread's count):"
+  awk 'NR==FNR {h[$2]=1; next} {n[$1]++; if (!($2 in h)) d[$1]++} END {for (k in n) if (d[k]) print "   " k, d[k], "of", n[k]}' $OUTD/elfeach_${PROF_BASE:-head}.txt $OUTD/elfeach_$v.txt
+  echo "   total $(wc -l < $OUTD/elfeach_$v.txt) distinct (kernel/thread, .text) pairs"
+done
 echo "== compute ELF sums per variant"; for f in $OUTD/elfsum_*.txt; do echo "   $(basename $f): $(wc -l < $f) kernel threads, set $(md5sum < $f | cut -c1-12)"; done
 B=${PROF_BASE:-head}
 for v in $(awk '!/^#/ && NF {print $2}' $PLAN | sort -u | grep -vx $B); do
@@ -57,4 +65,5 @@ done
 for a in ${GUARD_PAIRS:-}; do x=${a%%-*}; y=${a##*-}; echo "== kernel threads whose compute ELFs differ, $y against $x:"; join <(sort $OUTD/elfsum_$x.txt) <(sort $OUTD/elfsum_$y.txt) | awk '$2 != $3 {print "   " $1}'; done
 for tag in $(awk '!/^#/ && NF {print $1}' $PLAN | sort -u); do echo "== reduce $tag (base $B)"; PROF_BASE=$B python $S/ops/prof_reduce_cfg.py $OUTD $tag 2>&1; done
 echo "== bits"; python $S/ops/bits_cmp.py $OUTD $B 2>&1 | tail -40
+echo "== det"; python $S/ops/det_cmp.py $OUTD $B 2>&1 | tail -40
 echo "== done $(date -u +%T)"
