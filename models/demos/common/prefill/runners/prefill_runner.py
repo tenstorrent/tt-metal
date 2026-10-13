@@ -113,6 +113,9 @@ CHUNK_METADATA_SIZE_BYTES = METADATA_SIZE_BYTES
 D2D_METADATA_SIZE_BYTES = METADATA_SIZE_BYTES + (4 if MTP_LEVELS else 0)
 SYNC_PER_CHUNK = os.environ.get("PREFILL_SYNC_PER_CHUNK", "0") == "1"
 TIMING_DIR = os.environ.get("PREFILL_TIMING_DIR", "")
+# Chunk counters (warmup included) after which the device profiler is read. Full profiler buffers drop the
+# newest markers, so a window needs one read just before it to drain, then one after each of its chunks.
+PROFILE_READ_AFTER = {int(c) for c in os.environ.get("PREFILL_TEST_PROFILE_READ_AFTER", "").split(",") if c}
 # Env-overridable so re-bisecting does not need a rebuild. #54834's fix removed the AttnRes floor
 # that used to make this a narrow band; what is left is MLA's chunked-attention ceiling.
 _L1_SMALL_SIZE = int(os.environ.get("PREFILL_L1_SMALL_SIZE", ADAPTER.l1_small_size))
@@ -460,7 +463,20 @@ def _compute_and_send(
         )
     if d2d_out is not None:
         d2d_out.release_fabric_links()
+    if c in PROFILE_READ_AFTER:
+        _read_profiler(runtime, rank, c)
     return t_start
+
+
+def _read_profiler(runtime, rank: int, c: int) -> None:
+    # Each read appends its ops to the report; the row count after it is what ties rows back to a chunk.
+    ttnn.ReadDeviceProfiler(runtime.mesh_device)
+    out_dir = os.environ.get("TT_METAL_PROFILER_DIR", "")
+    report = os.path.join(out_dir, ".logs", "cpp_device_perf_report.csv")
+    rows = sum(1 for _ in open(report)) if os.path.exists(report) else -1
+    logger.info(f"[pp rank {rank}] PROFILE_READ c={c} report_rows={rows}")
+    with open(os.path.join(out_dir, "profile_reads.csv"), "a") as f:
+        f.write(f"{c},{rows}\n")
 
 
 def _drain_and_log_e2e(runtime, rank: int, d2d_out, first_compute_start, n_done: int, t0: float) -> None:

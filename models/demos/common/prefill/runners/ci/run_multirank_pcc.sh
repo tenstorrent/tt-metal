@@ -117,6 +117,8 @@ case "${MODEL}" in
     exit 2
     ;;
 esac
+# Ranks run on other hosts and see only RUNNER_ENV, so a matrix entry's A/B knobs have to ride in it.
+RUNNER_ENV+=" ${PREFILL_TEST_RUNNER_ENV:-}"
 
 # A PP model carries its descriptor in its rank binding, so only the discovery path needs one.
 if [ "${PP_RANKS}" -eq 0 ]; then
@@ -188,6 +190,10 @@ cleanup() {
     timeout 10 tail --pid="${RUNNER_PID}" -f /dev/null 2>/dev/null || kill -KILL -- "-${RUNNER_PID}" 2>/dev/null || true
     wait "${RUNNER_PID}" 2>/dev/null || true
   fi
+  # The artifact upload skips hidden paths, and the device profiler writes its report under .logs/.
+  for d in "${PREFILL_SUMMARIES}"/layer_perf/rank*/.logs; do
+    [ -f "${d}/cpp_device_perf_report.csv" ] && cp "${d}/cpp_device_perf_report.csv" "${d%/.logs}/" || true
+  done
   echo "==================== per-cache PCC verdicts (PROD_RC=${PROD_RC:-<unset>}) ===================="
   for f in "${PCC_DIR}"/rank*.json; do
     [ -e "$f" ] || { echo "no PCC verdict files under ${PCC_DIR}"; break; }

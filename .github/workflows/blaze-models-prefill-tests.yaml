@@ -87,8 +87,8 @@ jobs:
       harbor-prefix: ${{ needs.check-harbor.outputs.harbor-prefix }}
       build-type: ${{ inputs.build-type || 'Release' }}
       build-inplace-wheel: true
-      # Only the layer-perf stage needs a Tracy build.
-      tracy: ${{ contains(needs.validate-test-type.outputs.test-type, 'gemma4_d_p_layer_perf') }}
+      # Testing branch: the fabric payload A/B reads device profiler data, which needs a Tracy build.
+      tracy: true
       platform: ${{ inputs.platform || 'Ubuntu 22.04' }}
       enable-lto: ${{ inputs.enable-lto || false }}
 

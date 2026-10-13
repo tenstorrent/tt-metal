@@ -12,6 +12,7 @@ This module provides shared helper functions used across MoE tests including:
 - Fabric configuration helpers (create_fabric_router_config)
 """
 
+import os
 from dataclasses import dataclass
 
 import torch
@@ -46,9 +47,11 @@ def moe_fabric_payload_size(model_cfg) -> int:
     the model's own FABRIC_PAYLOAD_SIZE stands. TtMoe reads the payload back to decide whether to overlap, so a
     mesh opened any other way simply runs without it. Deferred to avoid probing hardware at import time.
     """
+    # A/B knob: a floor on the fabric payload, to measure what a larger one costs.
+    floor = int(os.environ.get("PREFILL_TEST_FABRIC_PAYLOAD", "0"))
     if is_blackhole():
-        return max(model_cfg.FABRIC_PAYLOAD_SIZE, combine_overlap_payload_size(model_cfg.EMB_SIZE))
-    return model_cfg.FABRIC_PAYLOAD_SIZE
+        return max(model_cfg.FABRIC_PAYLOAD_SIZE, combine_overlap_payload_size(model_cfg.EMB_SIZE), floor)
+    return max(model_cfg.FABRIC_PAYLOAD_SIZE, floor)
 
 
 @dataclass

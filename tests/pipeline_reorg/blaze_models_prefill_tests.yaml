@@ -1644,6 +1644,68 @@
   sp_config: sc4
 
 
+# Testing only: GLM-5.3 SC4 1M with the device profiler on, A/B on the fabric max payload. Per-op device
+# durations are read at measured chunks 1-3 and 200-203 (runner chunk = 10 warmup + measured).
+- name: "(GLM-5.3-744B) disaggregated prefill 1M@5k, device profile, fabric payload 6208, SC4"
+  cmd: |
+    set -euo pipefail
+    export TT_METAL_HOME="${TT_METAL_HOME:-/home/user/tt-metal}"
+    if [ ! -f "${TT_METAL_HOME}/ttnn/ttnn/distributed/ttrun.py" ]; then
+      cp -rn /ci/tt-metal/. "${TT_METAL_HOME}/"
+    fi
+    cd "${TT_METAL_HOME}"
+    PROF_DIR="${PREFILL_SUMMARIES}/layer_perf/rank\${OMPI_COMM_WORLD_RANK}"
+    export PREFILL_TEST_RUNNER_ENV="export PREFILL_TEST_FABRIC_PAYLOAD=6208; \
+      export TT_METAL_DEVICE_PROFILER=1; export TT_METAL_PROFILER_MID_RUN_DUMP=1; \
+      export TT_METAL_PROFILER_CPP_POST_PROCESS=1; export TT_METAL_PROFILER_DISABLE_DUMP_TO_FILES=1; \
+      export TT_METAL_PROFILER_DISABLE_PUSH_TO_TRACY=1; export TTNN_OP_PROFILER=1; \
+      export TT_METAL_PROFILER_PROGRAM_SUPPORT_COUNT=3000; \
+      export TT_METAL_PROFILER_DIR=${PROF_DIR}; mkdir -p \${TT_METAL_PROFILER_DIR}; \
+      export PREFILL_TEST_PROFILE_READ_AFTER=10,11,12,13,209,210,211,212,213;"
+    exec bash models/demos/common/prefill/runners/ci/run_multirank_pcc.sh glm53
+  test_type: payload_profile_ab
+  test_tags: [payload_profile_ab]
+  test_group: payload_profile_ab
+  skus:
+    bh_sc4:
+      timeout: 120
+      tier: 1
+      release_ready: false
+  owner_id: U0AC4LTJH1P # Jaksa Jovicic
+  team: shield
+  budget_type: demo
+  sp_config: sc4
+- name: "(GLM-5.3-744B) disaggregated prefill 1M@5k, device profile, fabric payload 12352, SC4"
+  cmd: |
+    set -euo pipefail
+    export TT_METAL_HOME="${TT_METAL_HOME:-/home/user/tt-metal}"
+    if [ ! -f "${TT_METAL_HOME}/ttnn/ttnn/distributed/ttrun.py" ]; then
+      cp -rn /ci/tt-metal/. "${TT_METAL_HOME}/"
+    fi
+    cd "${TT_METAL_HOME}"
+    PROF_DIR="${PREFILL_SUMMARIES}/layer_perf/rank\${OMPI_COMM_WORLD_RANK}"
+    export PREFILL_TEST_RUNNER_ENV="export PREFILL_TEST_FABRIC_PAYLOAD=12352; \
+      export TT_METAL_DEVICE_PROFILER=1; export TT_METAL_PROFILER_MID_RUN_DUMP=1; \
+      export TT_METAL_PROFILER_CPP_POST_PROCESS=1; export TT_METAL_PROFILER_DISABLE_DUMP_TO_FILES=1; \
+      export TT_METAL_PROFILER_DISABLE_PUSH_TO_TRACY=1; export TTNN_OP_PROFILER=1; \
+      export TT_METAL_PROFILER_PROGRAM_SUPPORT_COUNT=3000; \
+      export TT_METAL_PROFILER_DIR=${PROF_DIR}; mkdir -p \${TT_METAL_PROFILER_DIR}; \
+      export PREFILL_TEST_PROFILE_READ_AFTER=10,11,12,13,209,210,211,212,213;"
+    exec bash models/demos/common/prefill/runners/ci/run_multirank_pcc.sh glm53
+  test_type: payload_profile_ab
+  test_tags: [payload_profile_ab]
+  test_group: payload_profile_ab
+  skus:
+    bh_sc4:
+      timeout: 120
+      tier: 1
+      release_ready: false
+  owner_id: U0AC4LTJH1P # Jaksa Jovicic
+  team: shield
+  budget_type: demo
+  sp_config: sc4
+
+
 # Separate launcher from the verifier legs above: the drafter path is not trace-captured, so this one runs
 # PREFILL_USE_TRACE=0 and its 250k timing is not comparable to theirs. PCC stops at 55k, where the golden does.
 - name: "(Kimi-K2.7-1T) DFlash drafter KV accuracy 55k@5k + perf 250k@5k, SC4"
