@@ -347,7 +347,15 @@ uint32_t SparseSDPAMsaOperation::resolve_kv_cache_slots(
     const uint64_t free_l1 = l1_top > l1_base + base_bytes ? l1_top - l1_base - base_bytes : 0;
     const uint32_t n_fit =
         static_cast<uint32_t>(std::min<uint64_t>(free_l1 / block_bytes, sparse_sdpa_msa::KV_CACHE_SLOTS_MAX));
-    return n_fit < std::max(sparse_sdpa_msa::KV_CACHE_SLOTS_MIN, g.topk) ? 0 : n_fit;
+    const uint32_t slots = n_fit < std::max(sparse_sdpa_msa::KV_CACHE_SLOTS_MIN, g.topk) ? 0 : n_fit;
+    // Logged per call, not at program creation: zero slots reuses the cached cache-off program.
+    log_debug(
+        tt::LogOp,
+        "sparse_sdpa_msa: KV block cache {} slots ({} B free L1){}",
+        slots,
+        free_l1,
+        slots == 0 ? ", fewer than topk fit, running the streamed kernels" : "");
+    return slots;
 }
 
 ttsl::hash::hash_t SparseSDPAMsaOperation::compute_program_hash(
