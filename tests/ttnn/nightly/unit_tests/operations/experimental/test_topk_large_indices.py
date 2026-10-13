@@ -383,8 +383,10 @@ def test_topk_large_indices_metadata_trace_production_perf(device):
 
 
 def test_topk_large_indices_program_cache_ignores_row_count_and_array_size(device):
+    # Row counts whose rows can split across cores share one program, the others share a second one.
     k = 1536
-    cases = [(2, 3000), (640, 51200), (5, 4097)]
+    num_cores = device.compute_with_storage_grid_size().x * device.compute_with_storage_grid_size().y
+    cases = [(2, 3000), (5, 4097), (2, 51200), (num_cores, 3000), (2 * num_cores, 51200), (num_cores, 4097)]
     tt_inputs = []
     for num_rows, n in cases:
         torch_input = _make_large_index_input(num_rows=num_rows, n=n, k=k)
@@ -400,7 +402,8 @@ def test_topk_large_indices_program_cache_ignores_row_count_and_array_size(devic
             _assert_index_metadata(tt_indices, [num_rows, k])
 
         assert cache_entries[0] > 0
-        assert max(cache_entries) == min(cache_entries)
+        assert cache_entries[:3] == [cache_entries[0]] * 3
+        assert cache_entries[3:] == [cache_entries[0] + 1] * 3
     finally:
         device.clear_program_cache()
 
