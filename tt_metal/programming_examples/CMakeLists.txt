@@ -55,6 +55,7 @@ install(
         sfpu_eltwise_chain
         custom_sfpi_add
         custom_sfpi_smoothstep
+        long_matmul
         tests
     # DESTINATION ${CMAKE_INSTALL_DOCDIR}/examples
     # FIXME(afuller): Something funky is happening when installing files into
@@ -83,6 +84,7 @@ install(
         sfpu_eltwise_chain
         custom_sfpi_add
         custom_sfpi_smoothstep
+        long_matmul
     DESTINATION "${CMAKE_INSTALL_DATADIR}/tenstorrent/kernels"
     COMPONENT metalium-examples
     FILES_MATCHING

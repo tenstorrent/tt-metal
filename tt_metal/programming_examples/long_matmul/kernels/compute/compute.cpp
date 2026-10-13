@@ -12,6 +12,7 @@
 #include "api/compute/eltwise_unary/gelu.h"
 #include "api/compute/eltwise_unary/recip.h"
 #include "api/compute/compute_kernel_api.h"
+#include "api/debug/dprint.h"
 #include "../profile_markers.h"
 
 using std::uint32_t;

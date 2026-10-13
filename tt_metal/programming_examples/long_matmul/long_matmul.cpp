@@ -229,6 +229,8 @@ int main(int argc, char* argv[]) {
         fixed_blocks_per_core = std::stoul(argv[5]);
     }
 
+    TT_FATAL(M > 0 && N > 0 && K > 0, "M, N and K must be positive, got {}x{}x{}", M, N, K);
+    TT_FATAL(num_iterations > 0, "iterations must be positive");
     TT_FATAL(M % TILE_HEIGHT == 0, "M ({}) must be divisible by TILE_HEIGHT ({})", M, TILE_HEIGHT);
     TT_FATAL(N % TILE_WIDTH == 0, "N ({}) must be divisible by TILE_WIDTH ({})", N, TILE_WIDTH);
     TT_FATAL(K % TILE_WIDTH == 0, "K ({}) must be divisible by TILE_WIDTH ({})", K, TILE_WIDTH);
@@ -306,17 +308,19 @@ int main(int argc, char* argv[]) {
             num_iterations);
     }
 
-    // The writer normally issues 1 NoC write per output tile while the reader issues 2*Kt reads.
+    // The writer normally issues 1 NoC write per output tile, while the reader issues
+    // Kt * (block_m + block_n) / (block_m * block_n) reads per output tile (2*Kt at 1x1).
     // Amplification re-writes the same tile to the same address to load the write-side NoC path
-    // symmetrically; 100% matches the reader's read volume exactly. Correctness is unaffected
-    // (the app never verifies its output).
-    const uint32_t write_repeats = (power_cfg.write_amplification_pct == 0)
-        ? 1u
-        : std::max<uint32_t>(
-              1u,
-              static_cast<uint32_t>(std::lround(
-                  (static_cast<double>(power_cfg.write_amplification_pct) / 100.0) * 2.0 *
-                  static_cast<double>(Kt))));
+    // symmetrically; 100% matches the reader's read volume. Correctness is unaffected (the app
+    // never verifies its output).
+    const double reads_per_output_tile = static_cast<double>(Kt) * reads_per_multiply;
+    const uint32_t write_repeats =
+        (power_cfg.write_amplification_pct == 0)
+            ? 1u
+            : std::max<uint32_t>(
+                  1u,
+                  static_cast<uint32_t>(std::lround(
+                      (static_cast<double>(power_cfg.write_amplification_pct) / 100.0) * reads_per_output_tile)));
 
     try {
         constexpr int device_id = 0;
@@ -601,7 +605,7 @@ int main(int argc, char* argv[]) {
             // In fixed mode, actual FLOPs scale with num_cores (each core does the same work).
             // The unit of work per core is an output block of block_m * block_n tiles.
             const double run_flops = (fixed_blocks_per_core > 0)
-                                         ? 2.0 * fixed_blocks_per_core * block_m * block_n * num_cores * Kt *
+                                         ? 2.0 * fixed_blocks_per_core * block_m * block_n * num_cores * K *
                                                TILE_HEIGHT * TILE_WIDTH * num_iterations
                                          : total_flops;
             const double tflops = run_flops / elapsed_s / 1e12;

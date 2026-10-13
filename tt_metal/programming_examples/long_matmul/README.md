@@ -102,7 +102,7 @@ real NoC transfer or FPU work.
 | `LONG_MATMUL_DISABLE_READER=1` | Reader keeps `cb_reserve_back`/`cb_push_back` on both input CBs but skips `noc_async_read_tile` + barrier. Input tiles hold stale L1 data. |
 | `LONG_MATMUL_DISABLE_COMPUTE=1` | Compute keeps its CB and tile-register handshake but skips the math + `pack_tile`. Output tiles hold garbage. |
 | `LONG_MATMUL_DISABLE_WRITER=1` | Writer keeps `cb_wait_front`/`cb_pop_front` but skips `noc_async_write_tile` + barrier. Output DRAM stays stale. |
-| `LONG_MATMUL_WRITE_AMPLIFICATION_PCT=<pct>` | The reader issues `2*Kt` NoC reads per output tile while the writer issues only 1. This re-writes each output tile `round((pct/100) * 2*Kt)` times (min 1) to load the write path symmetrically; `100` matches the reader's read volume. Unset/0 = normal. |
+| `LONG_MATMUL_WRITE_AMPLIFICATION_PCT=<pct>` | The reader issues `Kt * (BLOCK_M + BLOCK_N) / (BLOCK_M * BLOCK_N)` NoC reads per output tile (`2*Kt` at the default 1x1 block) while the writer issues only 1. This re-writes each output tile `round((pct/100) * reads)` times (min 1) to load the write path symmetrically; `100` matches the reader's read volume. Unset/0 = normal. |
 
 ### `POWER_CASE` — the six canonical scenarios
 
