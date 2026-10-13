@@ -10,6 +10,8 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 
+from loguru import logger
+
 import ttnn
 from models.demos.deepseek_v3_d_p.tt.kda.config import (
     KDA_AFFINE_SUMMARY_DTYPE,
@@ -19,8 +21,10 @@ from models.demos.deepseek_v3_d_p.tt.kda.config import (
     KDA_LOCAL_PREFIX_MEMORY_CONFIG,
     KDA_OUTPUT_MEMORY_CONFIG,
     KDA_PREP_OUTPUT_BF16_MASK,
-    KDA_PREPARATION_MEMORY_CONFIG,
+    KDA_PREPARATION_L1_BYTES_PER_CORE,
     KDARecurrenceProgramConfig,
+    l1_when_it_fits,
+    preparation_bytes,
 )
 
 
@@ -109,25 +113,26 @@ def _prepare_chunk_terms(
     actual_start: ttnn.Tensor,
     actual_end: ttnn.Tensor | None,
     sequence_parallel_axis: int,
+    gate_scale: float,
+    beta_logits_column_offset: int,
+    memory_config: ttnn.MemoryConfig,
 ) -> _PreparedChunks:
-    beta_by_head = ttnn.permute(beta, (0, 2, 1))
-    beta_by_chunk = ttnn.reshape(
-        beta_by_head,
-        (geometry.batch_heads, geometry.num_chunks, geometry.chunk_size, 1),
-    )
+    # Chunk preparation reads each head's logit column in place from the token-major projection and activates it.
     outputs = ttnn.experimental.kda.prepare_chunk_recurrence(
         q,
         k,
         v,
         gate,
-        beta_by_chunk,
+        beta,
         geometry.heads,
-        memory_config=KDA_PREPARATION_MEMORY_CONFIG,
+        memory_config=memory_config,
         compute_kernel_config=compute_config.preparation,
         output_bf16_mask=KDA_PREP_OUTPUT_BF16_MASK,
         actual_start=actual_start,
         actual_end=actual_end,
         sequence_parallel_axis=sequence_parallel_axis,
+        gate_scale=gate_scale,
+        beta_logits_column_offset=beta_logits_column_offset,
     )
     return _PreparedChunks(*outputs)
 
@@ -510,7 +515,10 @@ class KDARecurrence:
         key_dim: int,
         value_dim: int,
         batch: int = 1,
+        gate_scale: float = 1.0,
     ) -> None:
+        # Preparation multiplies the gate by gate_scale before its cumulative sum.
+        self._gate_scale = gate_scale
         preparation = ttnn.init_device_compute_kernel_config(
             device.arch(),
             math_fidelity=ttnn.MathFidelity.HiFi4,
@@ -542,6 +550,17 @@ class KDARecurrence:
         self._geometry = _RecurrenceGeometry(
             batch, local_rows, heads, key_dim, value_dim, KDA_CHUNK_SIZE, local_rows // KDA_CHUNK_SIZE
         )
+        # Both scans read the chunk terms chunk by chunk; keeping them in L1 when they fit spares those DRAM reads
+        # and chunk preparation's DRAM writes.
+        preparation_size = preparation_bytes(batch * heads, local_rows // KDA_CHUNK_SIZE, key_dim, value_dim)
+        self._preparation_memory = l1_when_it_fits(device, preparation_size, KDA_PREPARATION_L1_BYTES_PER_CORE)
+        if self._preparation_memory.buffer_type != ttnn.BufferType.L1:
+            grid = device.compute_with_storage_grid_size()
+            logger.warning(
+                f"KDA chunk terms need {preparation_size // (grid.x * grid.y) // 1024} KiB per core, over the "
+                f"{KDA_PREPARATION_L1_BYTES_PER_CORE // 1024} KiB L1 budget; keeping them in DRAM, so chunk "
+                f"preparation and the scan run slower ({heads} heads, {local_rows} rows per device)."
+            )
         self._sequence_parallel_axis = sequence_parallel_axis
         self._sequence_parallel = (
             isinstance(device, ttnn.MeshDevice) and tuple(device.shape)[sequence_parallel_axis] > 1
@@ -573,9 +592,15 @@ class KDARecurrence:
         gate: ttnn.Tensor,
         beta: ttnn.Tensor,
         initial_state: ttnn.Tensor,
+        beta_logits_column_offset: int,
+        release_gate: bool,
     ) -> tuple[_PreparedChunks, ttnn.Tensor, _RecurrenceGeometry]:
         geometry = self._geometry
-        if tuple(beta.shape) != (geometry.batch, geometry.local_rows, geometry.heads):
+        # Beta's logits are a column window of a wider projection.
+        if (
+            tuple(beta.shape)[:2] != (geometry.batch, geometry.local_rows)
+            or beta.shape[-1] < beta_logits_column_offset + geometry.heads
+        ):
             raise ValueError("recurrence beta shape does not match constructed geometry")
         for name, tensor, width in (
             ("q", q, geometry.heads * geometry.key_dim),
@@ -601,7 +626,13 @@ class KDARecurrence:
             actual_start=actual_start,
             actual_end=actual_end,
             sequence_parallel_axis=self._sequence_parallel_axis,
+            gate_scale=self._gate_scale,
+            beta_logits_column_offset=beta_logits_column_offset,
+            memory_config=self._preparation_memory,
         )
+        if release_gate:
+            # Only chunk preparation reads the gate; freeing it here lowers L1 use during the scans.
+            ttnn.deallocate(gate)
         return prepared, state, geometry
 
     @staticmethod
@@ -623,8 +654,16 @@ class KDARecurrence:
         gate: ttnn.Tensor,
         beta: ttnn.Tensor,
         initial_state: ttnn.Tensor,
+        beta_logits_column_offset: int,
+        release_gate: bool = False,
     ) -> RecurrenceResult:
-        """Execute the constructed graph using caller-owned state and chronology."""
+        """Execute the constructed graph using caller-owned state and chronology.
+
+        ``beta`` is a token-major BF16 tensor whose ``heads`` columns from ``beta_logits_column_offset`` hold beta's
+        pre-sigmoid logits, such as the fused input projection; chunk preparation applies the sigmoid.
+        With ``release_gate`` the recurrence takes ownership of ``gate`` and frees it once chunk preparation has
+        read it.
+        """
         prepared, state, geometry = self._prepare(
             q=q,
             k=k,
@@ -634,6 +673,8 @@ class KDARecurrence:
             initial_state=initial_state,
             actual_start=actual_start,
             actual_end=actual_end,
+            beta_logits_column_offset=beta_logits_column_offset,
+            release_gate=release_gate,
         )
         result = self._execute(prepared, state, actual_start, actual_end)
         # Release the chunk terms as soon as the scan consumed them, so every call sees the same free memory.
