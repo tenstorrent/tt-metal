@@ -172,6 +172,11 @@ void run_kernel(RUNTIME_PARAMETERS params)
 
 #ifdef LLK_TRISC_PACK
 
+#ifndef PACK_UNTILIZE_SRC_DATUM_SIZE
+#define PACK_UNTILIZE_SRC_DATUM_SIZE 0
+#define PACK_UNTILIZE_DST_DATUM_SIZE 0
+#endif
+
 #include "llk_lib_pack_wrappers.h"
 #include "llk_pack_common.h"
 
@@ -193,7 +198,16 @@ void run_kernel(RUNTIME_PARAMETERS params)
         _llk_pack_hw_configure_wrapper_<is_fp32_dest_acc_en, llk_test_pack_mode_v<UNTILIZE, false>>(
             formats.pack_src, formats.pack_dst, 16 * 16 * 4 /* tile_size */);
         _llk_pack_dest_init_wrapper_<DstSync::SyncHalf, is_fp32_dest_acc_en, llk_test_pack_mode_v<UNTILIZE, false>>();
-        _llk_pack_untilize_init_wrapper_<BLOCK_CT_DIM, FULL_CT_DIM>(formats.pack_src, formats.pack_dst, FACE_R_DIM, 4 /* num_faces */);
+        _llk_pack_untilize_init_wrapper_<
+            BLOCK_CT_DIM,
+            FULL_CT_DIM,
+            false /* diagonal */,
+            false /* narrow_row */,
+            TILE_C_DIM,
+            false /* dense */,
+            unpack_to_dest,
+            PACK_UNTILIZE_SRC_DATUM_SIZE,
+            PACK_UNTILIZE_DST_DATUM_SIZE>(formats.pack_src, formats.pack_dst, FACE_R_DIM, 4 /* num_faces */);
         PROFILER_SYNC();
     }
 
@@ -206,7 +220,16 @@ void run_kernel(RUNTIME_PARAMETERS params)
             {
                 for (std::uint32_t tile = 0; tile < TILE_CNT; tile += BLOCK_CT_DIM)
                 {
-                    _llk_pack_untilize_wrapper_<BLOCK_CT_DIM, FULL_CT_DIM>(
+                    _llk_pack_untilize_wrapper_<
+                        BLOCK_CT_DIM,
+                        FULL_CT_DIM,
+                        false,
+                        false,
+                        TILE_C_DIM,
+                        0,
+                        false,
+                        PACK_UNTILIZE_SRC_DATUM_SIZE,
+                        PACK_UNTILIZE_DST_DATUM_SIZE>(
                         PERF_ADDRESS(PERF_OUTPUT, tile), formats.pack_dst, FACE_R_DIM, 4 /* num_faces */, 0 /* tile_dst_rt_offset */);
                 }
             }
@@ -218,7 +241,16 @@ void run_kernel(RUNTIME_PARAMETERS params)
                 for (std::uint32_t i = 0; i < TILE_CNT; i += BLOCK_CT_DIM)
                 {
                     _llk_packer_wait_for_math_done_();
-                    _llk_pack_untilize_wrapper_<BLOCK_CT_DIM, FULL_CT_DIM>(
+                    _llk_pack_untilize_wrapper_<
+                        BLOCK_CT_DIM,
+                        FULL_CT_DIM,
+                        false,
+                        false,
+                        TILE_C_DIM,
+                        0,
+                        false,
+                        PACK_UNTILIZE_SRC_DATUM_SIZE,
+                        PACK_UNTILIZE_DST_DATUM_SIZE>(
                         PERF_ADDRESS(PERF_OUTPUT, i), formats.pack_dst, FACE_R_DIM, 4 /* num_faces */, 0 /* tile_dst_rt_offset */);
                     _llk_pack_dest_section_done_<DstSync::SyncHalf, is_fp32_dest_acc_en>();
                 }

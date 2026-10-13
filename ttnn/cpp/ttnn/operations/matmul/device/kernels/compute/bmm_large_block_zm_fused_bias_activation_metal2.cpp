@@ -703,7 +703,16 @@ void kernel_main() {
                     PACK((llk_pack_reconfig_l1_acc(0)));
 #endif
 #endif  // FUSE_BIAS
-                    pack_untilize_dest_init<out_subblock_w, out_block_w>(out_dfb_id);
+                    // Unpaced: with an fp32 output in blocks of three the pace read 0.75 percent slower per matmul.
+                    pack_untilize_dest_init<
+                        out_subblock_w,
+                        out_block_w,
+                        false /*narrow_row*/,
+                        TILE_C_DIM,
+                        false /*dense*/,
+                        true /*configure_remap*/,
+                        DST_ACCUM_MODE,
+                        false /*pace_32bit_rows*/>(out_dfb_id);
                     copy_init(mm_partials_dfb_id);
                     for (uint32_t in0_subblock_i = 0; in0_subblock_i < in0_num_subblocks; ++in0_subblock_i) {
                         reblock_and_untilize<out_subblock_w, out_block_w>(

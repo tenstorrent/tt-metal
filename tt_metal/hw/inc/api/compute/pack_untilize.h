@@ -27,7 +27,7 @@ template <
     bool narrow_row,
     std::uint32_t row_num_datums,
     bool dense,
-    bool configure_remap, bool is_fp32_dest_acc_en = DST_ACCUM_MODE>
+    bool configure_remap, bool is_fp32_dest_acc_en = DST_ACCUM_MODE, bool pace_32bit_rows = true>
 ALWI void pack_untilize_dest_init_impl(uint32_t ocb, uint32_t call_line = __builtin_LINE()) {
 #ifndef ARCH_QUASAR
     state_configure<Operand::PACK>(ocb, call_line);
@@ -39,8 +39,19 @@ ALWI void pack_untilize_dest_init_impl(uint32_t ocb, uint32_t call_line = __buil
     }
 #endif
     PACK((llk_pack_reconfig_data_format<is_fp32_dest_acc_en>(ocb)));
+#ifdef ARCH_BLACKHOLE
+    PACK((llk_pack_untilize_init<
+          block_ct_dim,
+          full_ct_dim,
+          false /*diagonal*/,
+          narrow_row,
+          row_num_datums,
+          dense,
+          pace_32bit_rows>(ocb)));
+#else
     PACK((
         llk_pack_untilize_init<block_ct_dim, full_ct_dim, false /*diagonal*/, narrow_row, row_num_datums, dense>(ocb)));
+#endif
     PACK((llk_init_packer_dest_offset_registers<PackMode::Untilize, false /*diagonal*/>(ocb)));
 #else
     static_assert(narrow_row == false, "non-default narrow_row not supported on Quasar");
@@ -117,6 +128,7 @@ ALWI void pack_untilize_init_impl(uint32_t icb, uint32_t ocb, uint32_t call_line
  * | Template   | dense           | Packs two 2 face tiles in a single 4 face region    | bool      | true/false                | False (default false) |
  * | Template   | configure_remap      | Whether to (re)configure BH DEST remap (BH only)    | bool      | true/false                | False (default true)  |
  * | Template   | is_fp32_dest_acc_en  | DEST accumulation mode                              | bool      | true/false                | False                 |
+ * | Template   | pace_32bit_rows      | Pace 32-bit rows in blocks of three (BH only)       | bool      | true/false                | False (default true)  |
  * | Function   | ocb                  | Output circular buffer identifier                   | uint32_t  | 0 to 31                   | True                  |
  *
  * NOTE: When a row is processed in multiple blocks, every block must use the same block_ct_dim;
@@ -131,7 +143,8 @@ template <
     std::uint32_t row_num_datums = TILE_C_DIM,
     bool dense = false,
     bool configure_remap = true,
-    bool is_fp32_dest_acc_en = DST_ACCUM_MODE>
+    bool is_fp32_dest_acc_en = DST_ACCUM_MODE,
+    bool pace_32bit_rows = true>
 ALWI void pack_untilize_dest_init(uint32_t ocb, uint32_t call_line = __builtin_LINE()) {
     LLK_SAN_FUNCTION();
     pack_untilize_detail::pack_untilize_dest_init_impl<
@@ -141,7 +154,8 @@ ALWI void pack_untilize_dest_init(uint32_t ocb, uint32_t call_line = __builtin_L
         row_num_datums,
         dense,
         configure_remap,
-        is_fp32_dest_acc_en>(ocb, call_line);
+        is_fp32_dest_acc_en,
+        pace_32bit_rows>(ocb, call_line);
 }
 
 // clang-format off
