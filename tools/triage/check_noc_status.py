@@ -44,6 +44,7 @@ def check_noc_status(
     """
     risc_name = risc_debug.risc_location.risc_name
     location = risc_debug.risc_location.location
+    available_noc_ids = [noc.value for noc in location.device.available_nocs]
 
     dispatcher_core_data = dispatcher_data.get_cached_core_data(risc_debug.risc_location)
 
@@ -69,8 +70,13 @@ def check_noc_status(
             return
 
         # Also validate that BRISC's runtime-selected NOC matches the NOC being checked.
-        active_noc_index = to_noc_id(int(fw_elf.get_global("noc_index", loc_mem_access).read_value()))
-        if active_noc_index != noc_id:
+        noc_index = int(fw_elf.get_global("noc_index", loc_mem_access).read_value())
+        if noc_index not in available_noc_ids:
+            log_check_location(
+                location, False, f"{message}Read invalid noc_index {noc_index} from core, expected {available_noc_ids}"
+            )
+            return
+        if to_noc_id(noc_index) != noc_id:
             return
     elif kernel_elf is not None:
         # On erisc, the firmware doesn't necessarily select a NOC, so we need to check the kernel ELF.
@@ -79,8 +85,13 @@ def check_noc_status(
             message += "    Skipping NOC status check: noc_mode != DM_DEDICATED_NOC\n"
             log_check_location(location, True, message)
             return
-        noc_index = to_noc_id(int(kernel_elf.get_global("noc_index", loc_mem_access).read_value()))
-        if noc_index != noc_id:
+        noc_index = int(kernel_elf.get_global("noc_index", loc_mem_access).read_value())
+        if noc_index not in available_noc_ids:
+            log_check_location(
+                location, False, f"{message}Read invalid noc_index {noc_index} from core, expected {available_noc_ids}"
+            )
+            return
+        if to_noc_id(noc_index) != noc_id:
             return
 
     # Check if variables match with corresponding register
