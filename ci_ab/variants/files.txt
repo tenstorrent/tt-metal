@@ -1,0 +1,15 @@
+tt_metal/hw/ckernels/blackhole/metal/llk_api/llk_math_common_api.h
+tt_metal/hw/ckernels/blackhole/metal/llk_api/llk_pack_common_api.h
+tt_metal/hw/ckernels/blackhole/metal/llk_api/llk_dest_clear_api.h
+tt_metal/hw/inc/api/compute/experimental/reg_api.h
+tt_metal/hw/inc/api/compute/tilize.h
+ttnn/cpp/ttnn/kernel_lib/tilize_helpers.hpp
+ttnn/cpp/ttnn/kernel_lib/tilize_helpers.inl
+ttnn/cpp/ttnn/kernel/compute/tilize.cpp
+ttnn/cpp/ttnn/kernel/compute/tilize_metal2.cpp
+ttnn/cpp/ttnn/operations/data_movement/tilize/device/kernels/compute/tilize.cpp
+ttnn/cpp/ttnn/operations/data_movement/tilize/device/kernels/compute/tilize_wh.cpp
+ttnn/cpp/ttnn/operations/eltwise/binary_ng/device/kernels/compute/eltwise_binary_no_bcast.cpp
+tt_metal/tt-llk/tests/sources/fast_tilize_bh_test.cpp
+tt_metal/tt-llk/tests/sources/fast_tilize_metal_api_test.cpp
+tt_metal/tt-llk/tt_llk_blackhole/llk_lib/llk_math_common.h
