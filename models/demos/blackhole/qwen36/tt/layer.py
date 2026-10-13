@@ -32,7 +32,7 @@ class _FusedDistRMSNorm(RMSNorm):
             layout=ttnn.TILE_LAYOUT,
             memory_config=ttnn.DRAM_MEMORY_CONFIG,
             cache_file_name=None if cache is None else cache / (name + "_fused_tile"),
-            mesh_mapper=ttnn.ShardTensorToMesh(device, dim=2),
+            mesh_mapper=tpc.tp_shard_mapper(device, 2),
         )
 
     def _distributed_rmsnorm(
@@ -227,6 +227,8 @@ class Qwen36DecoderLayer:
         spec_verify_mode=False,
         spec_page_table=None,
         gdn_capture_state=True,
+        gdn_carry_state=True,
+        sp=None,
     ):
         # Validate up front: attention/norm treat non-"prefill" as decode while the MoE experts
         # treat non-"decode" as prefill, so an unsupported mode would split the two down opposite
@@ -285,6 +287,7 @@ class Qwen36DecoderLayer:
                             chunk_start_idx_tensor=chunk_start_idx_tensor,
                             exact_kv_pos=exact_kv_pos,
                             exact_kv_pt=exact_kv_pt,
+                            sp=sp,
                         )
                     else:
                         attn_output = self.attention.forward_prefill(attn_input, cos, sin)
@@ -325,6 +328,8 @@ class Qwen36DecoderLayer:
                             chunk_size=chunk_size,
                             valid_len=valid_len,
                             capture_state=gdn_capture_state,
+                            carry_state=gdn_carry_state,
+                            sp=sp,
                         )
                 else:
                     attn_output = self.attention.forward_decode(attn_input)

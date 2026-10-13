@@ -1,9 +1,17 @@
 # SPDX-FileCopyrightText: © 2026 Tenstorrent USA, Inc.
 # SPDX-License-Identifier: Apache-2.0
 
-"""Device accuracy of PplxDecider against the CPU fp32 reference."""
+"""Device accuracy of PplxDecider against the CPU fp32 reference.
+
+Env vars:
+    PPLX_TEST_PATHS  comma list of the prefill paths to run, default "chunked,oracle,traced,traced_chunk"; the
+                     bit-identity repeat check of a path (chunked, traced, traced_chunk) runs only with its path.
+                     The trace capture runs only when traced or traced_chunk is listed. On a 2D mesh use "traced":
+                     the chunk and oracle paths are 1xN-only.
+"""
 
 import json
+import os
 import time
 from pathlib import Path
 
@@ -28,6 +36,7 @@ EXAMPLES_PATH = TESTS_DIR / "examples.json"
 # End to end through 64 bfp8-weight layers; measured PCC is 0.998-0.999, so 0.999 would be too tight.
 PCC_THRESHOLD = 0.99
 PROB_MAX_DIFF = 0.02
+ALL_PATHS = ("chunked", "oracle", "traced", "traced_chunk")
 
 
 def _oracle_logits(decider, input_ids):
@@ -72,10 +81,15 @@ def test_pplx_decider_matches_reference(mesh_device):
         )
         prompts.append((example["name"], input_ids, ref))
 
+    paths = {p.strip() for p in os.environ.get("PPLX_TEST_PATHS", ",".join(ALL_PATHS)).split(",") if p.strip()}
+    unknown = paths - set(ALL_PATHS)
+    assert paths and not unknown, f"PPLX_TEST_PATHS is a comma list of {ALL_PATHS}, got unknown {sorted(unknown)}"
     rows, failures = [], []
 
-    def run_paths(paths):
-        for path, run in paths:
+    def run_paths(candidates):
+        for path, run in candidates:
+            if path not in paths:
+                continue
             for name, input_ids, ref in prompts:
                 start = time.perf_counter()
                 tt_logits = run(input_ids)
@@ -88,11 +102,14 @@ def test_pplx_decider_matches_reference(mesh_device):
     run_paths((("chunked", decider.readout_logits), ("oracle", lambda ids: _oracle_logits(decider, ids))))
 
     first_ids = prompts[0][1]
-    first = decider.readout_logits(first_ids)
-    second = decider.readout_logits(first_ids)
-    chunked_repeat_ok = torch.equal(first, second)
+    chunked_repeat_ok = None  # None: the path is filtered out, its repeat check is skipped
+    if "chunked" in paths:
+        first = decider.readout_logits(first_ids)
+        second = decider.readout_logits(first_ids)
+        chunked_repeat_ok = torch.equal(first, second)
 
-    decider.capture_prefill_trace()
+    if paths & {"traced", "traced_chunk"}:
+        decider.capture_prefill_trace()
     # "traced" is the per-bucket trace (all prompts fit the largest bucket); "traced_chunk" is the 2048-token chunk
     # trace that serves longer prompts.
     run_paths(
@@ -104,12 +121,15 @@ def test_pplx_decider_matches_reference(mesh_device):
 
     # long_license spans one traced chunk plus an eager tail on the chunk path.
     long_ids = next(ids for name, ids, _ in prompts if name == "long_license")
-    first = decider.readout_logits(long_ids)
-    second = decider.readout_logits(long_ids)
-    traced_repeat_ok = torch.equal(first, second)
-    first = decider.readout_logits(long_ids, use_bucket_trace=False)
-    second = decider.readout_logits(long_ids, use_bucket_trace=False)
-    chunk_repeat_ok = torch.equal(first, second)
+    traced_repeat_ok = chunk_repeat_ok = None
+    if "traced" in paths:
+        first = decider.readout_logits(long_ids)
+        second = decider.readout_logits(long_ids)
+        traced_repeat_ok = torch.equal(first, second)
+    if "traced_chunk" in paths:
+        first = decider.readout_logits(long_ids, use_bucket_trace=False)
+        second = decider.readout_logits(long_ids, use_bucket_trace=False)
+        chunk_repeat_ok = torch.equal(first, second)
 
     logger.info(f"{'example':<14} {'path':<8} {'T':>6} {'top1':>6} {'PCC':>8} {'prob diff':>10} {'ms':>9}")
     for name, path, num_tokens, top1_ok, pcc, prob_diff, elapsed_ms in rows:
@@ -117,6 +137,6 @@ def test_pplx_decider_matches_reference(mesh_device):
             f"{name:<14} {path:<8} {num_tokens:>6} {top1_ok!s:>6} {pcc:>8.5f} {prob_diff:>10.5f} {elapsed_ms:>9.1f}"
         )
     assert not failures, "; ".join(failures)
-    assert chunked_repeat_ok, f"{prompts[0][0]}: repeated chunked prefill is not bit-identical"
-    assert traced_repeat_ok, "long_license: repeated traced prefill is not bit-identical"
-    assert chunk_repeat_ok, "long_license: repeated chunk-traced prefill is not bit-identical"
+    assert chunked_repeat_ok in (None, True), f"{prompts[0][0]}: repeated chunked prefill is not bit-identical"
+    assert traced_repeat_ok in (None, True), "long_license: repeated traced prefill is not bit-identical"
+    assert chunk_repeat_ok in (None, True), "long_license: repeated chunk-traced prefill is not bit-identical"

@@ -12,6 +12,7 @@ import torch
 
 import ttnn
 from models.common.utility_functions import is_blackhole
+from models.tt_transformers.tt.ccl import tt_all_reduce
 
 # Hardware constants
 TILE_SIZE = 32
@@ -48,6 +49,79 @@ PREFILL_L1_MAX_SEQ = 2048
 def prefill_act_mem(seq_len, l1_cfg=ttnn.L1_MEMORY_CONFIG):
     """Placement of a prefill activation whose size scales with S: `l1_cfg` up to PREFILL_L1_MAX_SEQ rows, else DRAM."""
     return l1_cfg if seq_len <= PREFILL_L1_MAX_SEQ else ttnn.DRAM_MEMORY_CONFIG
+
+
+def is_2d_mesh(mesh):
+    """True on a (rows, tp) mesh with both dims > 1: TP along axis 1, rows (axis 0) replicate or split the sequence."""
+    return all(d > 1 for d in tuple(mesh.shape))
+
+
+def tp_shard_mapper(mesh, dim):
+    """Mesh mapper sharding `dim` over the TP axis, replicated over rows on a 2D mesh."""
+    if not is_2d_mesh(mesh):
+        return ttnn.ShardTensorToMesh(mesh, dim=dim)
+    return ttnn.ShardTensor2dMesh(mesh, dims=(None, dim), mesh_shape=tuple(mesh.shape))
+
+
+def tp_reduce_scatter(partial, mesh, tt_ccl, args, dim=3, memory_config=ttnn.DRAM_MEMORY_CONFIG):
+    """Row-parallel output reduce-scatter over the TP axis (prefill).
+
+    1xN: tt_all_reduce (its reduce_scatter branch). 2D mesh: the same reduce_scatter_minimal_async on cluster_axis=1,
+    so each row reduce-scatters among its own TP devices and the rows stay independent.
+
+    args.prefill_rs_bf8 (default off): the partial is cast to bfloat8_b before the reduce-scatter (half the fabric bytes)
+    and the result is cast back to the partial's dtype in `memory_config`. Numerics change: the partials and the ring's
+    running sums are held in bf8, so validate accuracy before enabling."""
+    if not getattr(args, "prefill_rs_bf8", False) or partial.dtype == ttnn.bfloat8_b:
+        return _tp_reduce_scatter(partial, mesh, tt_ccl, args, dim, memory_config)
+    orig = partial.dtype
+    p8 = ttnn.typecast(partial, ttnn.bfloat8_b, memory_config=partial.memory_config())
+    partial.deallocate(True)
+    reduced = _tp_reduce_scatter(p8, mesh, tt_ccl, args, dim, memory_config)  # consumes p8
+    out = ttnn.typecast(reduced, orig, memory_config=memory_config)
+    reduced.deallocate(True)
+    return out
+
+
+def _tp_reduce_scatter(partial, mesh, tt_ccl, args, dim, memory_config):
+    """tp_reduce_scatter without the bf8 option; consumes `partial`."""
+    if not is_2d_mesh(mesh):
+        return tt_all_reduce(
+            partial,
+            mesh,
+            tt_ccl,
+            cluster_axis=0,
+            dim=dim,
+            topology=args.ccl_topology(),
+            memory_config=memory_config,
+            **prefill_rs_kwargs(args),
+        )
+    # tt_all_reduce wants dims 0 and 1 to be 1
+    shape = partial.shape
+    if shape[0] != 1 or shape[1] != 1:
+        partial = ttnn.reshape(partial, (1, 1, shape[-4] * shape[-3] * shape[-2], shape[-1]))
+    if partial.is_sharded():
+        partial_sharded = partial
+        partial = ttnn.sharded_to_interleaved(partial_sharded, ttnn.L1_MEMORY_CONFIG)
+        partial_sharded.deallocate(True)
+    rs = prefill_rs_kwargs(args)  # tt_all_reduce defaults when a key is absent
+    reduced = ttnn.experimental.reduce_scatter_minimal_async(
+        partial,
+        persistent_output_buffers=None,
+        dim=dim,
+        multi_device_global_semaphore=tt_ccl.get_and_cycle_rs_semaphore_handles(1),
+        barrier_semaphore=tt_ccl.get_and_cycle_barrier_semaphore_handle(1),
+        num_links=tt_ccl.get_num_links(1),
+        cluster_axis=1,
+        memory_config=memory_config,
+        intermediate_memory_config=ttnn.DRAM_MEMORY_CONFIG,
+        topology=args.ccl_topology(),
+        chunks_per_sync=rs.get("chunks_per_sync", 10),
+        num_workers_per_link=rs.get("num_workers_per_link", 2),
+        num_buffers_per_channel=rs.get("num_buffers_per_channel", 2),
+    )
+    partial.deallocate(True)
+    return reduced
 
 
 # Why TP=8 wants different values (measured at S=2048, 27B, 1x8 Ring):
@@ -364,7 +438,7 @@ def shard_w(torch_tensor, mesh, dim, memory_config, cache_path, dtype=ttnn.bfloa
         preprocess=lambda t: t.to(torch.bfloat16).T.contiguous(),
         dtype=dtype,
         device=mesh,
-        mesh_mapper=ttnn.ShardTensorToMesh(mesh, dim=dim),
+        mesh_mapper=tp_shard_mapper(mesh, dim),
         layout=ttnn.TILE_LAYOUT,
         memory_config=memory_config,
         cache_file_name=cache_path,
@@ -643,6 +717,71 @@ def all_gather_swiglu_prefill(
     return out
 
 
+def use_small_m(args, S):
+    """True when a prefill projection of S tokens/device takes the separate all-gather + 1D-multicast matmul instead of
+    the fused all-gather-matmul: args.prefill_small_m_max > 0 and S <= it (default 0 = off, also when the attribute is
+    absent)."""
+    return 0 < getattr(args, "prefill_small_m_max", 0) and S <= args.prefill_small_m_max
+
+
+def tp_all_gather(x, tt_ccl, dim=3, memory_config=ttnn.DRAM_MEMORY_CONFIG, topology=ttnn.Topology.Ring):
+    """All-gather x along `dim` over the TP axis (cluster_axis=1): [.., K/tp] -> [.., K], same dtype as x.
+
+    The direct ttnn.experimental.all_gather_async call of tests/test_small_m_bench.py (chunks_per_sync=10, 2 workers per
+    link, 2 buffers per channel, all the TP axis' links up to 4, the TT_CCL ag + barrier semaphores). Unlike
+    tt_all_gather it takes no dtype / DRAM-copy detour and does not skip the gather on a (1, N) mesh, so it works on 1xN
+    and on 2D meshes alike. x is not deallocated and keeps its dtype and layout; `memory_config` places the result."""
+    links = tt_ccl.__dict__.get("_tp_ag_num_links")
+    if links is None:
+        links = tt_ccl.__dict__["_tp_ag_num_links"] = max(1, min(4, int(tt_ccl.get_num_links(1))))
+    return ttnn.experimental.all_gather_async(
+        x,
+        persistent_output_buffer=None,
+        dim=dim,
+        multi_device_global_semaphore=tt_ccl.get_and_cycle_ag_semaphore_handles(1),
+        num_links=links,
+        cluster_axis=1,
+        topology=topology,
+        memory_config=memory_config,
+        barrier_semaphore=tt_ccl.get_and_cycle_barrier_semaphore_handle(1),
+        chunks_per_sync=10,
+        num_workers_per_link=2,
+        num_buffers_per_channel=2,
+        subdevice_id=None,
+    )
+
+
+def small_m_matmul(
+    x_full,
+    weight,
+    S,
+    K,
+    N,
+    num_cores,
+    compute_cfg,
+    grid_w=8,
+    fused_activation=None,
+    memory_config=ttnn.DRAM_MEMORY_CONFIG,
+    dtype=ttnn.bfloat16,
+):
+    """Short-S prefill matmul: x_full [.., S, K] (gathered activation) @ weight [K, N] (DRAM-interleaved) on the 1D
+    multicast program config of the model's decode matmuls (create_matmul_1d_decode_progcfg, ~`num_cores` cores on a
+    grid up to `grid_w` wide, per_core_M = S/32). Below ~128 tokens/device it beats the fused all-gather-matmul's ~100 us
+    floor (all-gather + this matmul, tests/test_small_m_bench.py variant E). The program config's fp32 subblock cap
+    follows compute_cfg.fp32_dest_acc_en (True for every qwen36 compute config, as the bench's default)."""
+    fp32_acc = bool(getattr(compute_cfg, "fp32_dest_acc_en", True))
+    return ttnn.linear(
+        x_full,
+        weight,
+        compute_kernel_config=compute_cfg,
+        program_config=create_matmul_1d_decode_progcfg(
+            S, K, N, num_cores=num_cores, fused_activation=fused_activation, fp32_acc=fp32_acc, grid_w=grid_w
+        ),
+        memory_config=memory_config,
+        dtype=dtype,
+    )
+
+
 def build_mmrs_decode_state(mesh_device, M, K_local, N, nd, dtype=ttnn.bfloat16):
     """Build (progcfg, intermediate_buffer, output_buffer) for a decode matmul_reduce_scatter out-proj.
 
@@ -848,7 +987,7 @@ def shard_small(torch_tensor, mesh, cache_path, dim=-1, dtype=ttnn.bfloat16):
         torch_tensor.to(torch.bfloat16),
         dtype=dtype,
         device=mesh,
-        mesh_mapper=ttnn.ShardTensorToMesh(mesh, dim=dim),
+        mesh_mapper=tp_shard_mapper(mesh, dim),
         layout=ttnn.TILE_LAYOUT,
         memory_config=ttnn.DRAM_MEMORY_CONFIG,
         cache_file_name=cache_path,

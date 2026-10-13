@@ -174,7 +174,42 @@ class TPAttention:
             )
         # Prefill: x is K-sharded (norm skipped its AG) -> fused all-gather + QKV matmul. Output stays
         # DRAM: L1 clashes with a downstream matmul's CBs (verified; full-attn has more L1 pressure here).
-        if self._fuse_agmm and x.shape[-2] > tpc.TILE_SIZE:
+        if (
+            self._fuse_agmm
+            and x.shape[-2] > tpc.TILE_SIZE
+            and tpc.use_small_m(self.args, x.shape[-2])
+            and getattr(self.args, "proj_1d_decode", False)
+        ):
+            # Short S (args.prefill_small_m_max): the fused AGMM has a ~100 us floor, a separate all-gather + 1D-mcast
+            # matmul (as the decode QKV; needs the interleaved weight = proj_1d_decode) is faster. The gather runs
+            # with the semaphore + barrier of all_gather_async, so it needs no persistent gather buffer. x stays the
+            # caller's (as in the AGMM helper): only the bf8 cast and the gather are freed here. Output DRAM, as AGMM.
+            S = x.shape[-2]
+            x4 = ttnn.reshape(x, (1, 1, S, x.shape[-1]))
+            x8 = x4
+            if getattr(self.args, "prefill_agmm_bf8", False) and x4.dtype != ttnn.bfloat8_b:
+                x8 = ttnn.typecast(x4, ttnn.bfloat8_b, memory_config=x4.memory_config())
+            xg = tpc.tp_all_gather(
+                x8,
+                self.tt_ccl,
+                dim=3,
+                memory_config=tpc.prefill_act_mem(S, ttnn.L1_MEMORY_CONFIG),
+                topology=self.args.ccl_topology(),
+            )
+            if x8 is not x4:
+                ttnn.deallocate(x8)
+            qkv = tpc.small_m_matmul(
+                xg,
+                tw["wqkv_fused"],
+                S,
+                self.args.dim,
+                tw["wqkv_fused"].shape[-1],
+                num_cores=64,
+                compute_cfg=self.compute_cfg,
+                memory_config=ttnn.DRAM_MEMORY_CONFIG,
+            )
+            ttnn.deallocate(xg)
+        elif self._fuse_agmm and x.shape[-2] > tpc.TILE_SIZE:
             # Persistent gather buffer: the op has no receiver-ready handshake, so a per-call buffer carved out
             # of memory a lagging peer is still using can be overwritten by an early device's K-slices
             # (same race as the GDN out-projection; intermittent user-0 PCC drop in test_attention_tp_paged_peruser).
@@ -513,15 +548,8 @@ class TPAttention:
         ttnn.deallocate(gate_flat)
         partial = self._wo_proj(gated, tw["wo"])
         ttnn.deallocate(gated)
-        return tt_all_reduce(
-            partial,
-            self.mesh,
-            self.tt_ccl,
-            cluster_axis=0,
-            dim=3,
-            topology=self.args.ccl_topology(),
-            memory_config=ttnn.DRAM_MEMORY_CONFIG,
-            **tpc.prefill_rs_kwargs(self.args),
+        return tpc.tp_reduce_scatter(
+            partial, self.mesh, self.tt_ccl, self.args, dim=3, memory_config=ttnn.DRAM_MEMORY_CONFIG
         )
 
     def _kv_shard_cfg(self, B):
@@ -892,6 +920,7 @@ class TPAttention:
         user_id=0,
         exact_kv_pos=None,
         exact_kv_pt=None,
+        sp=None,
     ):
         """Paged-KV prefill for one chunk: fill cache + chunked SDPA over prior chunks.
 
@@ -903,6 +932,12 @@ class TPAttention:
         x is K-sharded when the fused in-proj path is active (same contract as ``forward_prefill``).
         chunk_start_idx_tensor: optional device offset for FLEXIBLE chunked SDPA (one program
         per trace/bucket). chunk_start_idx (int) still sizes the page table host-side.
+        sp: tt/sp.py SeqParallel: x holds this mesh row's S of the R*S tokens of a from-zero-state sequence split over
+        the rows. K/V are all-gathered over the rows so the cache fill writes all R*S tokens (chunk_page_table must
+        cover them) and the chunked SDPA runs this row's queries; chunk_start_idx_tensor holds this row's offset r*S.
+        With args.prefill_sdpa_sp_config_fn returning a dict with variant "windowed" the paged fill is skipped and the
+        plain windowed-causal SDPA runs on the gathered non-paged K/V instead: the paged cache is then NOT written
+        (a from-zero single-pass prefill that is never decoded from).
         """
         assert self.use_paged and self.paged_k is not None, "forward_prefill_paged requires a bound paged KV cache"
         tw, NH, NKV, HD = self.tw, self.NH, self.NKV, self.HD
@@ -927,6 +962,28 @@ class TPAttention:
         )
         q = apply_partial_rope_prefill(q, cos_tt, sin_tt, NH, self.rope_dim)
         k = apply_partial_rope_prefill(k, cos_tt, sin_tt, NKV, self.rope_dim)
+
+        S_kv = S  # K/V rows this call writes to the cache
+        sp_cfg, sp_windowed = None, False
+        if sp is not None:
+            assert exact_kv_pos is None and chunk_start_idx_tensor is not None, "sp: from-zero-state paged fill + SDPA"
+            # args.prefill_sdpa_sp_config_fn(S_total, rows) -> None | (q_chunk, k_chunk, exp_approx) (paged SDPA, full
+            # grid) | dict(q=, k=, exp=[, grid=(x, y)][, variant="paged" | "windowed"]) (default None). A None result
+            # falls back to the per-S prefill_sdpa_config_fn path (paged).
+            sp_fn = getattr(self.args, "prefill_sdpa_sp_config_fn", None)
+            sp_cfg = sp_fn(sp.rows * S, sp.rows) if sp_fn else None
+            # Windowed: plain windowed-causal SDPA over the gathered K/V, no paged fill. bf8 SDPA stays paged.
+            sp_windowed = (
+                isinstance(sp_cfg, dict) and sp_cfg.get("variant", "paged") == "windowed" and not self._sdpa_bf8
+            )
+            if not sp_windowed:
+                assert chunk_page_table is not None, "sp: the cache fill needs chunk_page_table"
+                assert (
+                    chunk_page_table.shape[1] * self.paged_k.shape[2] >= sp.rows * S
+                ), "sp: chunk_page_table too short"
+            k = sp.gather_rows(k, dim=2)  # [1, NKV, R*S, HD]
+            v = sp.gather_rows(v, dim=2)
+            S_kv = k.shape[2]
 
         k_paged, v_paged = self.paged_k, self.paged_v
         block_size = k_paged.shape[2]
@@ -983,7 +1040,7 @@ class TPAttention:
                     ttnn.deallocate(pt_i)
             ttnn.deallocate(k_p)
             ttnn.deallocate(v_p)
-        else:
+        elif not sp_windowed:  # windowed: k/v stay as gathered, the SDPA reads them directly (no cache fill)
             # bf8 SDPA: paged_fill_cache doesn't cast — cast K/V to cache dtype before fill
             if self._sdpa_bf8:
                 _k8 = ttnn.typecast(k, ttnn.bfloat8_b)
@@ -996,14 +1053,14 @@ class TPAttention:
             # Fill this chunk into the paged cache
             fill_page_table = chunk_page_table if chunk_page_table is not None else page_table
             page_len = fill_page_table.shape[1] * block_size
-            if page_len < S:
+            if page_len < S_kv:
                 k_fill = ttnn.slice(k, (0, 0, 0, 0), (1, NKV, page_len, HD))
                 v_fill = ttnn.slice(v, (0, 0, 0, 0), (1, NKV, page_len, HD))
             else:
                 k_fill, v_fill = k, v
             ttnn.experimental.paged_fill_cache(k_paged, k_fill, fill_page_table, batch_idx=user_id)
             ttnn.experimental.paged_fill_cache(v_paged, v_fill, fill_page_table, batch_idx=user_id)
-            if page_len < S:
+            if page_len < S_kv:
                 ttnn.deallocate(k_fill)
                 ttnn.deallocate(v_fill)
             ttnn.deallocate(k)
@@ -1032,10 +1089,28 @@ class TPAttention:
         # args.prefill_sdpa_config_fn (per-S tuning, default None) may pick other q/k chunks + exp_approx; the int
         # chunk_start_idx must stay a multiple of both (the tensor path's offsets are multiples of 2048).
         csi_cap = chunk_start_idx & -chunk_start_idx if chunk_start_idx and chunk_start_idx_tensor is None else None
-        q_chunk, k_chunk, exp_approx = tpc.prefill_sdpa_chunks(self.args, S, qk_chunk, max_chunk=csi_cap)
-        # Full BH grid for SDPA perf (bit-identical to 8×8; see test_tp_chunked_prefill_pcc_sweep)
+        # Full BH grid for SDPA perf (bit-identical to 8×8; see test_tp_chunked_prefill_pcc_sweep) unless the SP config
+        # names a smaller one.
+        sdpa_grid = self.mesh.compute_with_storage_grid_size()
+        if sp is None:
+            q_chunk, k_chunk, exp_approx = tpc.prefill_sdpa_chunks(self.args, S, qk_chunk, max_chunk=csi_cap)
+        else:
+            # SP chunks follow the key length R*S (the last row attends over all R*S keys; the default is the
+            # tensor-path 128, capped by the query length S). Row r starts at r*S, so both chunks must divide S:
+            # largest power of two <= chunk dividing S (both SDPA variants). sp_cfg: see the SP branch above.
+            if isinstance(sp_cfg, dict):
+                q_chunk, k_chunk, exp_approx = sp_cfg["q"], sp_cfg["k"], sp_cfg["exp"]
+                if sp_cfg.get("grid") is not None:
+                    sdpa_grid = ttnn.CoreCoord(*sp_cfg["grid"])
+            elif sp_cfg is not None:
+                q_chunk, k_chunk, exp_approx = sp_cfg
+            else:
+                q_chunk, k_chunk, exp_approx = tpc.prefill_sdpa_chunks(
+                    self.args, sp.rows * S, min(qk_chunk, S), max_chunk=csi_cap
+                )
+            q_chunk, k_chunk = (min(1 << (c.bit_length() - 1), S & -S) for c in (q_chunk, k_chunk))
         sdpa_cfg = ttnn.SDPAProgramConfig(
-            compute_with_storage_grid_size=self.mesh.compute_with_storage_grid_size(),
+            compute_with_storage_grid_size=sdpa_grid,
             exp_approx_mode=exp_approx,
             q_chunk_size=q_chunk,
             k_chunk_size=k_chunk,
@@ -1043,21 +1118,38 @@ class TPAttention:
 
         # Pad page table to cover Q+offset and satisfy stick-size % 32 (extra blocks masked by causality)
         sdpa_page_table = page_table
-        needed_blocks = (S + chunk_start_idx + block_size - 1) // block_size
-        target_blocks = max(needed_blocks, page_table.shape[-1])
-        target_blocks = ((target_blocks + 31) // 32) * 32
-        if page_table.shape[-1] < target_blocks:
-            zeros_pad = ttnn.zeros(
-                (page_table.shape[0], target_blocks - page_table.shape[-1]),
-                dtype=ttnn.int32,
-                layout=ttnn.ROW_MAJOR_LAYOUT,
-                device=self.mesh,
-                memory_config=ttnn.DRAM_MEMORY_CONFIG,
-            )
-            sdpa_page_table = ttnn.concat([page_table, zeros_pad], dim=-1)
-            ttnn.deallocate(zeros_pad)
+        if not sp_windowed:
+            needed_blocks = (S + chunk_start_idx + block_size - 1) // block_size
+            target_blocks = max(needed_blocks, page_table.shape[-1])
+            target_blocks = ((target_blocks + 31) // 32) * 32
+            if page_table.shape[-1] < target_blocks:
+                zeros_pad = ttnn.zeros(
+                    (page_table.shape[0], target_blocks - page_table.shape[-1]),
+                    dtype=ttnn.int32,
+                    layout=ttnn.ROW_MAJOR_LAYOUT,
+                    device=self.mesh,
+                    memory_config=ttnn.DRAM_MEMORY_CONFIG,
+                )
+                sdpa_page_table = ttnn.concat([page_table, zeros_pad], dim=-1)
+                ttnn.deallocate(zeros_pad)
 
-        if chunk_start_idx_tensor is not None:
+        if sp_windowed:
+            # Windowed-causal plain SDPA: one window [0, R*S) over the gathered K/V [1, NKV, R*S, HD]; this row's
+            # queries start at global token r*S (chunk_start_idx_tensor: per-row int32 [1] ROW_MAJOR, accepted as is).
+            # The output is [1, NH, S, HD], like the paged op's. No scale / memory_config, as the paged call.
+            attn = ttnn.transformer.scaled_dot_product_attention(
+                q8,
+                k,
+                v,
+                is_causal=True,
+                cu_window_seqlens=sp.cu_window(S),
+                windowed_q_token_offset_tensor=chunk_start_idx_tensor,
+                program_config=sdpa_cfg,
+                compute_kernel_config=self.compute_cfg,
+            )
+            ttnn.deallocate(k)
+            ttnn.deallocate(v)
+        elif chunk_start_idx_tensor is not None:
             attn = ttnn.transformer.chunked_scaled_dot_product_attention(
                 input_tensor_q=q8,
                 input_tensor_k=k_paged,
@@ -1094,13 +1186,6 @@ class TPAttention:
         ttnn.deallocate(gate_flat)
         partial = self._wo_proj(gated, tw["wo"])
         ttnn.deallocate(gated)
-        return tt_all_reduce(
-            partial,
-            self.mesh,
-            self.tt_ccl,
-            cluster_axis=0,
-            dim=3,
-            topology=self.args.ccl_topology(),
-            memory_config=ttnn.DRAM_MEMORY_CONFIG,
-            **tpc.prefill_rs_kwargs(self.args),
+        return tpc.tp_reduce_scatter(
+            partial, self.mesh, self.tt_ccl, self.args, dim=3, memory_config=ttnn.DRAM_MEMORY_CONFIG
         )

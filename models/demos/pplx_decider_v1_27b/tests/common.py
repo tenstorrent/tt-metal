@@ -65,6 +65,9 @@ def model_mesh(mesh_device):
     import ttnn
 
     sub_shape = _parse_shape(os.environ.get("PPLX_SUBMESH", "1x8"))
+    if sub_shape == tuple(mesh_device.shape):
+        logger.info(f"PPLX_SUBMESH {sub_shape[0]}x{sub_shape[1]} is the parent mesh: running on it, no submesh")
+        return mesh_device
     sub = mesh_device.create_submeshes(ttnn.MeshShape(*sub_shape))[0]
     logger.info(f"parent mesh {tuple(mesh_device.shape)} device ids: {list(mesh_device.get_device_ids())}")
     logger.info(f"submesh shape: {tuple(sub.shape)} num_devices={sub.get_num_devices()}")

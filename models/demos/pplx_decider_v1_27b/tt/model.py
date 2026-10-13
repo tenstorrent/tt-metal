@@ -5,8 +5,10 @@ import math
 import os
 
 import torch
+from loguru import logger
 
 import ttnn
+from models.demos.blackhole.qwen36.tt import tp_common as tpc
 from models.demos.blackhole.qwen36.tt.model import Qwen36Model
 from models.demos.pplx_decider_v1_27b.tt.bucket_trace import BucketPrefillTraces
 from models.demos.pplx_decider_v1_27b.tt.decision import answer, decision_probabilities, options, render_input_ids
@@ -54,8 +56,12 @@ class PplxDecider:
         # Nothing may be allocated or compiled once a trace is parked: prepare everything, then capture.
         self.bucket_traces = BucketPrefillTraces()
         self.bucket_traces.prepare(self.model, self.mesh_device, self._page_table)
-        self.model.prepare_prefill_trace_chunked(self.mesh_device, self._page_table)
-        self.model.record_prefill_trace_chunked(self.mesh_device)
+        if tpc.is_2d_mesh(self.mesh_device):
+            # The chunk path's LM head and norms are not 2D-ready: bucket traces only.
+            logger.info("2D mesh: capturing only the bucket prefill traces (the chunk trace path is 1xN-only)")
+        else:
+            self.model.prepare_prefill_trace_chunked(self.mesh_device, self._page_table)
+            self.model.record_prefill_trace_chunked(self.mesh_device)
         self.bucket_traces.record(self.model, self.mesh_device)
 
     def input_ids(self, state, question):
@@ -70,6 +76,8 @@ class PplxDecider:
             logits = self.bucket_traces.run(self.model, input_ids)
             if logits is not None:
                 return logits
+        if tpc.is_2d_mesh(self.mesh_device):
+            raise NotImplementedError("prompts above the largest bucket need the chunk path, which is 1xN-only")
         tokens = torch.tensor([input_ids], dtype=torch.long)
         logits_dev = self.model.prefill_traced_chunked(tokens, self._page_table, actual_len=length)
         vocab = self.args.vocab_size

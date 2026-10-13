@@ -5,8 +5,12 @@
 
 A prompt is padded with token 0 up to the smallest bucket that holds it. The padding sits after the real tokens, so
 the causal attention and GDN outputs at the last real token are unaffected and no GDN mask is needed. The GDN
-recurrent state and conv carry are zeroed inside the trace, and each replay overwrites the KV blocks it uses, so
-requests need no other device work than staging the tokens and the one-hot row select.
+recurrent state and conv carry are never read or written (the GDN layers start from zero and drop their final state;
+PPLX_GDN_NO_CARRY=0 zeroes the persistent state inside the trace instead), and each replay overwrites the KV blocks it
+uses, so requests need no other device work than staging the tokens and the one-hot row select. On a 2D mesh,
+sequence parallelism (PPLX_SP, default on; PPLX_SP=0 turns it off) splits each bucket's tokens over the mesh rows instead
+of replicating them on every row; only buckets of at least PPLX_SP_MIN (default 256, so every bucket) tokens use it, the
+smaller ones stay replicated.
 """
 
 import os
@@ -18,7 +22,9 @@ from loguru import logger
 from ttnn.tools import trace_allocation_tracker
 
 import ttnn
+from models.demos.blackhole.qwen36.tt import tp_common as tpc
 from models.demos.pplx_decider_v1_27b.tt.weight_mapping import load_readout
+from models.tt_transformers.tt.ccl import tt_all_gather
 from models.tt_transformers.tt.common import Mode, get_block_size
 
 # 4096 is the largest bucket: longer prompts use the 2048-chunk trace path.
@@ -28,6 +34,26 @@ READOUT_PAD = 256
 PAD_TOKEN_ID = 0
 # Passes per bucket before capture: the first compiles every program, the second takes the steady-state path.
 WARM_PASSES = 2
+
+
+def _gdn_no_carry():
+    """True (default): the prefill trace skips the GDN state zeroing and writeback; PPLX_GDN_NO_CARRY=0 restores them."""
+    return os.environ.get("PPLX_GDN_NO_CARRY", "1") == "1"
+
+
+def _sp_enabled(mesh):
+    """On a 2D mesh PPLX_SP (default "1") splits each bucket's tokens over the mesh rows; PPLX_SP=0 turns it off.
+
+    Default on: replicated rows only waste the extra rows. 1xN meshes are unaffected (tpc.is_2d_mesh is False)."""
+    return tpc.is_2d_mesh(mesh) and os.environ.get("PPLX_SP", "1") == "1"
+
+
+def _sp_min():
+    """PPLX_SP_MIN (default 256): with PPLX_SP=1 only buckets of at least this many tokens use sequence parallelism.
+
+    Measured on Galaxy with the short-length projection path (PPLX_SMALL_M_MAX=128): SP is faster from 256 up
+    (256: 39.2 vs 43.1 ms replicated; 512: 45.2 vs 54.8 ms), so by default every bucket splits over the rows."""
+    return int(os.environ.get("PPLX_SP_MIN", "256"))
 
 
 def bucket_sizes():
@@ -47,6 +73,7 @@ class _Bucket:
     cos: ttnn.Tensor
     sin: ttnn.Tensor
     sel: ttnn.Tensor
+    sp: bool = False
     trace_id: int = None
     out: ttnn.Tensor = None
 
@@ -59,6 +86,8 @@ class BucketPrefillTraces:
         self.readout_w = None
         self.compute_cfg = None
         self.prepared = False
+        self.sp = None
+        self.rows = 1
 
     @property
     def max_bucket(self):
@@ -85,6 +114,23 @@ class BucketPrefillTraces:
             assert page_table.shape[-1] >= size // block_size, f"page table too short for bucket {size}"
         args = model.args
         rep = ttnn.ReplicateTensorToMesh(mesh)
+
+        sp_on = _sp_enabled(mesh)
+        sp_sizes = [s for s in self.sizes if s >= _sp_min()] if sp_on else []
+        if sp_sizes:
+            # Imported here: the module is only needed (and may only exist) when sequence parallelism is on.
+            from models.demos.blackhole.qwen36.tt.sp import SeqParallel
+
+            self.sp = SeqParallel(mesh, args, model.tt_ccl)
+            self.rows = mesh.shape[0]
+            for size in sp_sizes:
+                assert size % (self.rows * 32) == 0, f"bucket {size} must split into 32-aligned row slices"
+            # Per-local-length constants, built before any warm pass or capture.
+            self.sp.prepare([s // self.rows for s in sp_sizes])
+            rep_sizes = [s for s in self.sizes if s not in sp_sizes]
+            logger.info(f"Sequence parallel over {self.rows} rows for buckets {sp_sizes}; replicated for {rep_sizes}")
+        elif sp_on:
+            logger.info(f"PPLX_SP=1 but no bucket reaches PPLX_SP_MIN={_sp_min()}; all buckets replicated")
 
         # The vision-splice buffers are allocated once, at the first size asked for, and every consumer slices them
         # down: allocate them for the largest bucket (or chunk) before anything else does.
@@ -113,22 +159,34 @@ class BucketPrefillTraces:
         model._build_request_rope(torch.zeros(1, 1, dtype=torch.long), None)
         pt = page_table.to(torch.int32)
 
-        def upload(t, dtype, layout):
-            return ttnn.from_torch(t, dtype=dtype, layout=layout, device=mesh, mesh_mapper=rep)
+        def upload(t, dtype, layout, mapper=rep):
+            return ttnn.from_torch(t, dtype=dtype, layout=layout, device=mesh, mesh_mapper=mapper)
 
         # Every bucket's inputs exist before the first warm pass, so no later allocation can land in memory a parked
         # trace writes. Tokens and sel are rewritten per request, the rest are constant.
         for size in self.sizes:
             cos_t, sin_t = model._rope_tp_cos_sin_torch(0, size)
+            bucket_sp = self.sp is not None and size >= _sp_min()
+            if not bucket_sp:
+                tok_map = cos_map = sel_map = rep
+                start_t, start_map = torch.zeros(1, dtype=torch.int32), rep
+            else:
+                # Each mesh row gets its own contiguous size/rows slice of the tokens, RoPE rows and select; its
+                # chunk_start_idx is the slice's first position. The page tables stay replicated: every row fills
+                # the whole sequence's KV.
+                tok_map, cos_map, sel_map = self.sp.rows_mapper(1), self.sp.rows_mapper(2), self.sp.rows_mapper(3)
+                start_t = torch.arange(self.rows, dtype=torch.int32) * (size // self.rows)
+                start_map = self.sp.rows_mapper(0)
             self.buckets[size] = _Bucket(
                 size=size,
-                tokens=upload(torch.zeros(1, size, dtype=torch.int32), ttnn.uint32, ttnn.ROW_MAJOR_LAYOUT),
-                chunk_start_idx=upload(torch.zeros(1, dtype=torch.int32), ttnn.int32, ttnn.ROW_MAJOR_LAYOUT),
+                tokens=upload(torch.zeros(1, size, dtype=torch.int32), ttnn.uint32, ttnn.ROW_MAJOR_LAYOUT, tok_map),
+                chunk_start_idx=upload(start_t, ttnn.int32, ttnn.ROW_MAJOR_LAYOUT, start_map),
                 full_page_table=upload(pt, ttnn.int32, ttnn.ROW_MAJOR_LAYOUT),
                 chunk_page_table=upload(pt[:, : size // block_size].contiguous(), ttnn.int32, ttnn.ROW_MAJOR_LAYOUT),
-                cos=upload(cos_t, ttnn.bfloat16, ttnn.TILE_LAYOUT),
-                sin=upload(sin_t, ttnn.bfloat16, ttnn.TILE_LAYOUT),
-                sel=upload(torch.zeros(1, 1, 1, size, dtype=torch.bfloat16), ttnn.bfloat16, ttnn.TILE_LAYOUT),
+                cos=upload(cos_t, ttnn.bfloat16, ttnn.TILE_LAYOUT, cos_map),
+                sin=upload(sin_t, ttnn.bfloat16, ttnn.TILE_LAYOUT, cos_map),
+                sel=upload(torch.zeros(1, 1, 1, size, dtype=torch.bfloat16), ttnn.bfloat16, ttnn.TILE_LAYOUT, sel_map),
+                sp=bucket_sp,
             )
 
         # Warm every bucket before the first capture: later buckets' programs and lazily allocated buffers must not
@@ -165,13 +223,22 @@ class BucketPrefillTraces:
 
     def _body(self, model, mesh, bucket):
         """GDN state reset, prefill, last-token select, final norm and readout. Returns [1, 1, 32, READOUT_PAD]."""
-        # Zero what the forward reads: the recurrent state and the cross-chunk conv carry. conv_states are the
-        # decode state, which this prefill does not feed (gdn_capture_state=False).
-        for layer in model.layers:
-            if not layer.is_full_attention:
-                gdn = layer.attention
-                ttnn.copy(gdn._zero_rec, gdn.rec_state)
-                ttnn.copy(gdn._zero_conv_carry, gdn.conv_carry)
+        no_carry = _gdn_no_carry()
+        if not no_carry:
+            # Zero what the forward reads: the recurrent state and the cross-chunk conv carry. conv_states are the
+            # decode state, which this prefill does not feed (gdn_capture_state=False).
+            for layer in model.layers:
+                if not layer.is_full_attention:
+                    gdn = layer.attention
+                    ttnn.copy(gdn._zero_rec, gdn.rec_state)
+                    ttnn.copy(gdn._zero_conv_carry, gdn.conv_carry)
+        # no_carry: the GDN layers start from zero state and drop their final state, so none of the above is needed.
+        if not bucket.sp:
+            seq_len, sp_kwargs = bucket.size, {}
+        else:
+            # Sequence parallel: each mesh row runs its own size/rows tokens and needs the zero-state GDN start.
+            assert no_carry, "PPLX_SP=1 requires PPLX_GDN_NO_CARRY=1"
+            seq_len, sp_kwargs = bucket.size // self.rows, {"sp": self.sp}
         hidden = model._forward_prefill_chunk_tp(
             bucket.tokens,
             bucket.cos,
@@ -179,15 +246,33 @@ class BucketPrefillTraces:
             bucket.chunk_start_idx,
             bucket.full_page_table,
             bucket.chunk_page_table,
-            seq_len=bucket.size,
+            seq_len=seq_len,
             gdn_capture_state=False,
+            gdn_carry_state=not no_carry,
+            **sp_kwargs,
         )
         assert hidden.dtype == bucket.sel.dtype, f"hidden is {hidden.dtype}, one-hot select is {bucket.sel.dtype}"
         # Same select + norm as Qwen36Model._masked_bucket_logits_tp; the norm output is the gathered full-dim row.
         x = ttnn.matmul(bucket.sel, hidden)  # [1, 1, 1, dim/tp]
         ttnn.deallocate(hidden)
         x = ttnn.to_memory_config(x, ttnn.DRAM_MEMORY_CONFIG)
-        x = model.norm(x, mode=Mode.PREFILL)  # [1, 1, 1, dim]
+        if tpc.is_2d_mesh(mesh):
+            # The distributed final norm gathers over the whole mesh on 2D; gather the TP axis and norm the full row.
+            x = tt_all_gather(
+                x,
+                mesh,
+                model.tt_ccl,
+                cluster_axis=1,
+                dim=3,
+                topology=model.args.ccl_topology(),
+                memory_config=ttnn.DRAM_MEMORY_CONFIG,
+            )
+            norm = model.norm.norm
+            x = ttnn.rms_norm(
+                x, epsilon=norm.eps, weight=norm.weight, compute_kernel_config=norm.compute_kernel_config_hifi2
+            )
+        else:
+            x = model.norm(x, mode=Mode.PREFILL)  # [1, 1, 1, dim]
         out = ttnn.matmul(x, self.readout_w, compute_kernel_config=self.compute_cfg, dtype=ttnn.float32)
         ttnn.deallocate(x)
         return out
@@ -205,27 +290,32 @@ class BucketPrefillTraces:
         assert eager or bucket.trace_id is not None, "Call record first"
         mesh = self.mesh
         rep = ttnn.ReplicateTensorToMesh(mesh)
+        tokens_map, sel_map = (self.sp.rows_mapper(1), self.sp.rows_mapper(3)) if bucket.sp else (rep, rep)
         tokens = torch.full((1, size), PAD_TOKEN_ID, dtype=torch.int32)
         tokens[0, :length] = torch.tensor(input_ids, dtype=torch.int32)
         sel = torch.zeros(1, 1, 1, size, dtype=torch.bfloat16)
         sel[0, 0, 0, length - 1] = 1.0
         tokens_host = ttnn.from_torch(
-            tokens, dtype=ttnn.uint32, layout=ttnn.ROW_MAJOR_LAYOUT, device=None, mesh_mapper=rep
+            tokens, dtype=ttnn.uint32, layout=ttnn.ROW_MAJOR_LAYOUT, device=None, mesh_mapper=tokens_map
         )
-        sel_host = ttnn.from_torch(sel, dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT, device=None, mesh_mapper=rep)
+        sel_host = ttnn.from_torch(sel, dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT, device=None, mesh_mapper=sel_map)
         ttnn.copy_host_to_device_tensor(tokens_host, bucket.tokens)
         ttnn.copy_host_to_device_tensor(sel_host, bucket.sel)
+        # The readout is replicated, so device 0's copy is enough. Under SP only the mesh row holding the last real
+        # token has a meaningful readout (the others select nothing); device order is row-major, index row * cols.
+        read_idx = 0
+        if bucket.sp:
+            read_idx = ((length - 1) // (size // self.rows)) * mesh.shape[1]
         if eager:
             # Same as a warm pass: the body allocates a fresh output, which is freed after the read.
             eager_out = self._body(model, mesh, bucket)
             ttnn.synchronize_device(mesh)
-            out = ttnn.to_torch(ttnn.get_device_tensors(eager_out)[0])
+            out = ttnn.to_torch(ttnn.get_device_tensors(eager_out)[read_idx])
             ttnn.deallocate(eager_out)
         else:
             ttnn.execute_trace(mesh, bucket.trace_id, cq_id=0, blocking=False)
-            # The readout is replicated; device 0's copy is enough. The blocking read also keeps the host inputs
-            # alive until the replay is done.
-            out = ttnn.to_torch(ttnn.get_device_tensors(bucket.out)[0])
+            # The blocking read also keeps the host inputs alive until the replay is done.
+            out = ttnn.to_torch(ttnn.get_device_tensors(bucket.out)[read_idx])
         n = len(model.args.decision_config.token_ids)
         return out.reshape(-1)[:n].float()
 
@@ -236,6 +326,8 @@ class BucketPrefillTraces:
                 bucket.trace_id = None
         self.buckets.clear()
         self.prepared = False
+        self.sp = None
+        self.rows = 1
 
 
 def _trace_region(mesh):
