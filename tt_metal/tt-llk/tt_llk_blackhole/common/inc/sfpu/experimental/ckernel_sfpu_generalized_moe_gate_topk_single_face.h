@@ -638,6 +638,8 @@ inline void _gmg_merge16_to_run()
  * @tparam topk: number of experts to keep (<= 8); ranks >= topk are zeroed before normalize. 8 = full top-8.
  * @tparam output_softmax: true = softmax over the selected top-k (exp before the mask, max-subtracted);
  *         false = linear renormalize (score / Σ).
+ * @tparam presorted: the top-8 already sits in descending order down column 0 of rows 0-7 (an SFPU sort
+ *         such as the generic gate's left it there); skip the merge and keep the tail.
  * @param eps: denominator stabilization added to the normalization sum.
  * @param scale: routed scaling factor applied to the normalized scores.
  * @note Calls @ref _gmg_merge16_core (which resets the Dst RWC counter and enables index tracking) and reads
@@ -645,7 +647,7 @@ inline void _gmg_merge16_to_run()
  *       normalize tails. Clobbers LREG0-7 (and LREG14). TERMINAL variant — it normalizes and writes the
  *       output; @ref _gmg_merge16_to_run is the non-normalizing run-producing variant.
  */
-template <bool APPROXIMATION_MODE, bool is_fp32_dest_acc_en, std::uint32_t topk = 8, bool output_softmax = false>
+template <bool APPROXIMATION_MODE, bool is_fp32_dest_acc_en, std::uint32_t topk = 8, bool output_softmax = false, bool presorted = false>
 inline void _generalized_moe_gate_finalize_ungrouped(std::uint32_t eps, std::uint32_t scale)
 {
     // topk is restricted to {4, 6, 8}: the rank-mask below is correct only for these. topk 1-3 fall into the
@@ -655,10 +657,17 @@ inline void _generalized_moe_gate_finalize_ungrouped(std::uint32_t eps, std::uin
     // fail loudly here too rather than emit silently-wrong output.
     static_assert(topk == 4 || topk == 6 || topk == 8, "topk must be one of {4, 6, 8} (rank-mask is correct only for these)");
 
-    // Final combine: merge the two runs at {0,2}+{4,6} -> global top-8 (sorted DESCENDING), then normalize.
-    // (For 256 the two runs are topA/topB; for >256 they are the last two block/subtree runs of the tree.)
-    _gmg_merge16_core<APPROXIMATION_MODE, is_fp32_dest_acc_en>();
-    bitonic_topk_store8_even_cols_split_indices_single_face<is_fp32_dest_acc_en>();
+    if constexpr (presorted)
+    {
+        TTI_SETRWC(p_setrwc::CLR_NONE, 0, 0, 0, 0, p_setrwc::SET_D);
+    }
+    else
+    {
+        // Final combine: merge the two runs at {0,2}+{4,6} -> global top-8 (sorted DESCENDING), then normalize.
+        // (For 256 the two runs are topA/topB; for >256 they are the last two block/subtree runs of the tree.)
+        _gmg_merge16_core<APPROXIMATION_MODE, is_fp32_dest_acc_en>();
+        bitonic_topk_store8_even_cols_split_indices_single_face<is_fp32_dest_acc_en>();
+    }
 
     // SOFTMAX OUTPUT (over the selected top-k): exp the sorted scores in place, BEFORE the top-n mask and
     // the normalize. linear-normalize(exp(s-M)) = exp(s_i)/Σexp(s) = softmax (the exp(M) factor cancels), so

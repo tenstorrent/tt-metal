@@ -3,6 +3,7 @@
 
 // Perf kernel of the gate path of the Blackhole generalized MoE gate, one token per iteration. PERF_STAGE 0 runs the
 // binary front end only, 1 adds sum_top2 and step0, 2 the whole gate; MATH_ISOLATE keeps the real unpack, drops the pack.
+// The SFPU-sort path (the op's Blackhole one-block route) runs the generic sort at stage 1, then finalize and step2.
 
 #include <cstdint>
 
@@ -87,15 +88,32 @@ using namespace ckernel;
 #include "experimental/llk_math_generalized_moe_gate_transpose_dest_single_face.h"
 #include "experimental/llk_sfpu/ckernel_sfpu_generalized_moe_gate_topk_single_face.h"
 #include "llk_sfpu/llk_math_eltwise_unary_sfpu_macros.h"
+#include "sfpu/experimental/ckernel_sfpu_generic_moe_gate_topk.h"
 
 constexpr GeneralizedMoeGateEltwiseBinaryMode BINARY_MODE =
     GMG_RELOAD ? GeneralizedMoeGateEltwiseBinaryMode::RELOAD : GeneralizedMoeGateEltwiseBinaryMode::COPY;
 
+// The SFPU-only route starts its passes as the op does, through the standard SFPU call.
+#define GMG_SFPU_CALL(FN, TEMPLATES, ...) \
+    SFPU_UNARY_CALL(dest_sync, is_fp32_dest_acc_en, FN, TEMPLATES, 0 /* dst_index */, VectorMode::RC_custom, ##__VA_ARGS__)
 #define GMG_SFPU_PASS(FN, TEMPLATES, ...) \
     GMG_SFPU_UNARY_CALL(dest_sync, is_fp32_dest_acc_en, FN, TEMPLATES, 0 /* dst_index */, VectorMode::RC_custom, ##__VA_ARGS__)
 
 static inline void run_gate()
 {
+    if constexpr (GMG_SFPU_SORT)
+    {
+        GMG_SFPU_CALL(_generic_moe_gate_topk_, (false, 8, 256, false, true, false), 0u, 0u, 0u);
+        if constexpr (PERF_STAGE == 1)
+        {
+            return;
+        }
+        GMG_SFPU_CALL(generalized_moe_gate_finalize_sorted, (APPROX_MODE, is_fp32_dest_acc_en, GMG_TOPK, GMG_SOFTMAX), GMG_EPS, GMG_SCALE);
+        _llk_math_generalized_moe_gate_transpose_dest_single_face_step2_init_<false, 2, true>();
+        _llk_math_generalized_moe_gate_transpose_dest_single_face_step2_<is_fp32_dest_acc_en, false>();
+        return;
+    }
+
     GMG_SFPU_PASS(generalized_moe_gate_sum_top2, (APPROX_MODE, is_fp32_dest_acc_en));
 
     _llk_math_generalized_moe_gate_transpose_dest_single_face_step0_direct_<is_fp32_dest_acc_en>();

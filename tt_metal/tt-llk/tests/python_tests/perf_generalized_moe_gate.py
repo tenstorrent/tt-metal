@@ -34,12 +34,14 @@ pytestmark = [skip_for_wormhole, skip_for_quasar]
 
 FORMATS = InputOutputFormat(DataFormat.Float16_b, DataFormat.UInt16)
 
+# (grouped, stage, approximate reciprocal); "sfpu_sort" in place of grouped is the op's Blackhole one-block route
 VARIANTS = [
     (grouped, stage, ApproximationMode.No)
     for grouped in (False, True)
     for stage in (2, 1, 0)
 ]
 VARIANTS.append((False, 2, ApproximationMode.Yes))
+VARIANTS += [("sfpu_sort", stage, ApproximationMode.No) for stage in (2, 1)]
 
 
 @pytest.mark.perf
@@ -48,12 +50,17 @@ def test_perf_generalized_moe_gate(perf_report, variant):
     if len(variant) == 1:  # parametrize hands a single axis as a one-element tuple
         (variant,) = variant
     grouped, stage, approx = variant
+    path = (
+        "ungrouped_sfpu_sort"
+        if grouped == "sfpu_sort"
+        else ("grouped" if grouped else "ungrouped")
+    )
     configuration = PerfConfig(
         "sources/generalized_moe_gate_perf.cpp",
         FORMATS,
         run_types=[PerfRunType.L1_TO_L1, PerfRunType.MATH_ISOLATE],
         templates=[
-            GENERALIZED_MOE_GATE_PERF_PATH("grouped" if grouped else "ungrouped"),
+            GENERALIZED_MOE_GATE_PERF_PATH(path),
             MATH_OP(mathop=MathOperation.Elwadd),
             MATH_FIDELITY(MathFidelity.HiFi4),
             APPROX_MODE(approx),

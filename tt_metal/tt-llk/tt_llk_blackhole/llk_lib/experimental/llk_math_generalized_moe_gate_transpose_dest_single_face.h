@@ -200,7 +200,7 @@ inline void _llk_math_generalized_moe_gate_transpose_dest_single_face_step1_init
 }
 
 // Initialize for single face transpose
-template <bool is_32bit = false, std::uint32_t num_tiles = 3>
+template <bool is_32bit = false, std::uint32_t num_tiles = 3, bool keep_zero_flag = false>
 inline void _llk_math_generalized_moe_gate_transpose_dest_single_face_step2_init_()
 {
     // num_tiles=3: transpose scores(0) + idx(1) + BIAS(2). The bias (tile 2) MUST be math->standard'd too,
@@ -208,6 +208,11 @@ inline void _llk_math_generalized_moe_gate_transpose_dest_single_face_step2_init
     // output path never reads bias, so num_tiles=2 was enough there; the >256 combine merge sorts by bias).
     static_assert(num_tiles == 2 || num_tiles == 3, "step2 transposes scores/indices and optionally bias");
     generalized_moe_gate_transpose_dest_single_face_step2_configure_mop<num_tiles, is_32bit>();
+    if constexpr (keep_zero_flag)
+    {
+        // For a caller that runs no step0, whose init otherwise sets this data-movement state.
+        math::_configure_preserve_zero_flag_state_();
+    }
 }
 
 // copy4rows init/runner.
