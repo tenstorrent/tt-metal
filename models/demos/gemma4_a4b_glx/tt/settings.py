@@ -38,6 +38,17 @@ TABLE = {
         ("float32", "bfloat16", "bfloat8_b"),
         "2026-10-13 C.sliding.router: router proj weight (scale folded in); bfp8 fails the selection checks",
     ),
+    "EXPERTS_MATMUL_FIDELITY": Setting(
+        "HiFi4", ("HiFi4", "HiFi2", "LoFi"), "2026-10-13 C.sliding.experts: expert gate/up/down/selector math fidelity"
+    ),
+    "EXPERTS_MATMUL_FP32_ACC": Setting(
+        True, (True, False), "2026-10-13 C.sliding.experts: fp32 accumulation for expert matmuls"
+    ),
+    "EXPERTS_SPLIT_TOKENS": Setting(
+        True,
+        (True, False),
+        "2026-10-13 C.sliding.experts: each mesh row runs the experts on its S/8 tokens, then all_gather over the rows",
+    ),
 }
 
 MAX_PRECISION = {
@@ -50,6 +61,8 @@ MAX_PRECISION = {
     "ROUTER_FIDELITY": "HiFi4",
     "ROUTER_FP32_ACC": True,
     "ROUTER_WEIGHT_DTYPE": "float32",
+    "EXPERTS_MATMUL_FIDELITY": "HiFi4",
+    "EXPERTS_MATMUL_FP32_ACC": True,
 }
 
 settings = Settings("GEMMA4_A4B_GLX_", TABLE, max_precision=MAX_PRECISION)

@@ -158,3 +158,34 @@ I re-applied the attempt above unchanged; it had passed under an older framework
   - pcc 0.999816, overlap 0.99841 vs golden (0.99854 vs CPU), matched rel 0.0024 vs golden, row sums 0.0023.
   - auto_margin_min 2.12, 13 device ops, 0 host FLOPs, deterministic.
 - Re-run: `bfw job check --task C.sliding.router`
+
+## C.sliding.experts (run 20261013-175448-gemma4-glx-14)
+- `tt/experts.py`: `TtExperts(x, routing)` is composed from stock TTNN ops. The plan's `ttnn.bringup` dispatch/combine
+  and `unified_routed_expert_moe` GeluTanh fork are not on this tt-metal.
+  - Each mesh row takes its S/8 tokens with `mesh_partition(dim=2, cluster_axis=0)`, a local slice.
+  - Column c holds experts 32c..32c+31 (EP=4) and takes its 32 columns of the dense routing with
+    `mesh_partition(dim=3, cluster_axis=1)`.
+  - Per chip, dense over its 32 experts:
+    - gate = x @ Wg [2816, 32*704] and up = x @ Wu, both bfp8 with expert-major 704-wide blocks.
+    - h = gelu_tanh(gate) * up, output fp32.
+    - h is multiplied by w_local @ M, where M is a 0/1 bf16 selector [32, 32*704] that spreads w[t, e] over expert e's
+      block. The product is bf16.
+    - One down matmul with Wd [32*704, 2816] (bfp8) does the sum over the 32 experts as its K reduction.
+  - Then `all_reduce(cluster_axis=1)` sums the 128 experts and `all_gather(dim=2, cluster_axis=0)` puts the tokens
+    back, so the output is replicated.
+  - An unselected expert has w = 0 exactly and so adds exactly 0. The module takes the router's dense [S, 128] fp32
+    matrix directly, so it does not need topk or ids.
+- `tt/settings.py`:
+  - EXPERTS_MATMUL_FIDELITY=HiFi4 and EXPERTS_MATMUL_FP32_ACC=True, both in MAX_PRECISION.
+  - EXPERTS_SPLIT_TOKENS=True. False runs every row on all S tokens with no all_gather.
+  - The gelu reuses MLP_GELU_VARIANT.
+- `hooks.py`: `_experts_fn` loads `experts.{gate_up_proj, down_proj}` of the layer and uploads the routing as fp32.
+  `device_component("experts")` returns it. The global block's experts have the same shape and take the same path.
+- Frozen test results:
+  - pcc 0.999970, rel 0.0078 vs golden against the 0.137 limit (low-precision kind), auto_margin_min 4.25.
+  - 12 device ops, 0 host FLOPs, deterministic.
+  - All the second inputs (layer29, mixed, small, big) passed.
+- Decision: the module is dense. Every local expert runs for every token, 16x the top-8 work, about 0.39 TFLOP per
+  chip for 1024 tokens. That was the simplest correct composition. A token-sorted dispatch/combine (or sparse_matmul
+  with real per-group sparsity) is the performance follow-up, and the `(x, routing)` interface stays the same.
+- Re-run: `bfw job check --task C.sliding.experts`

@@ -164,6 +164,36 @@ def _router_fn(mesh, module):
     return fn
 
 
+def _experts_fn(mesh, spec, layer):
+    """fn(ctx, moe_norm_host [S, H], router_host [S, E]) -> host experts_out [S, H]. Loads only the layer's
+    experts.{gate_up_proj, down_proj}; the dense routing goes up as fp32, as the device router produces it."""
+    import ttnn
+    from models.demos.gemma4_a4b_glx.tt.experts import TtExperts
+    from models.demos.gemma4_a4b_glx.tt.rms_norm import replicated_to_host, to_device_replicated
+
+    loader = _weight_loader(spec)
+    p = f"{PREFIX}layers.{layer}.experts."
+    module = TtExperts(mesh, loader.get(p + "gate_up_proj"), loader.get(p + "down_proj"))
+
+    def fn(ctx, x, router):
+        xd = to_device_replicated(mesh, x)
+        rd = ttnn.from_torch(
+            router.float().reshape(1, 1, *router.shape[-2:]),
+            dtype=ttnn.float32,
+            layout=ttnn.TILE_LAYOUT,
+            device=mesh,
+            memory_config=ttnn.DRAM_MEMORY_CONFIG,
+            mesh_mapper=ttnn.ReplicateTensorToMesh(mesh),
+        )
+        yd = module(xd, rd)
+        y = replicated_to_host(yd)
+        for t in (xd, rd, yd):
+            ttnn.deallocate(t)
+        return y.to(x.dtype)
+
+    return fn
+
+
 def device_component(mesh, spec, layer, step):
     import ttnn
 
@@ -186,6 +216,8 @@ def device_component(mesh, spec, layer, step):
         return _host_fn2(mesh, TtResidualAdd(mesh))
     if step == "router":
         return _router_fn(mesh, _router_module(mesh, spec, layer))
+    if step == "experts":
+        return _experts_fn(mesh, spec, layer)
     raise NotImplementedError(f"implement stage: no device module for {step} yet")
 
 
