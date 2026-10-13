@@ -125,9 +125,8 @@ uint64_t recipe_output_l1_bytes(
     const Tensor& q, uint64_t pages, uint32_t page_bytes, const tt::tt_metal::MemoryConfig& memory_config);
 
 // Ring and exp ring device operations: the recipe checks both ops share. Blackhole (ring: or Wormhole B0); BF16 Q
-// and joint Q; K, V, the
-// gathered K/V buffers and the joint K/V share one BF16, BFP8 or BFP4 type; supported geometry; a finite positive
-// scale.
+// and joint Q; K, V, the gathered K/V buffers and the joint K/V share one BF16, BFP8 or BFP4 type; supported
+// geometry; a finite positive scale.
 void validate_ring_recipe_inputs(
     RecipeOp op,
     ttnn::transformer::SDPAPrecision precision,

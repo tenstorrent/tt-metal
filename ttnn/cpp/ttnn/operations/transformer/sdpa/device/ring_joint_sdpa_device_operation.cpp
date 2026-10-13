@@ -634,7 +634,8 @@ void RingJointSDPADeviceOperation::validate_on_program_cache_miss(
             args.get_k_chunk_size(),
             args.scale);
         TT_FATAL(
-            tensor_args.input_k.logical_shape()[3] == q_shape[3] && tensor_args.input_v->logical_shape()[3] <= q_shape[3] &&
+            tensor_args.input_k.logical_shape()[3] == q_shape[3] &&
+                tensor_args.input_v->logical_shape()[3] <= q_shape[3] &&
                 tensor_args.input_v->logical_shape()[3] % tt::constants::TILE_WIDTH == 0,
             "Named ring recipes require K's head dim to be Q's and a tile-aligned V head dim of at most Q's");
         TT_FATAL(

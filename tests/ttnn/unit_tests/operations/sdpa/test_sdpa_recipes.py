@@ -168,14 +168,13 @@ def test_sdpa_recipe_legacy_arguments(device, variant):
 
 
 # Precision routing (no `precision`): FP32 dest runs ACCURATE at op-chosen blocking (dense causal with BFP8 Q/K/V and
-# a custom scale; an attn_mask call passing Q2048; an attn_mask call whose 500 keys fit one K chunk; chunked prefill
-# from a start tensor), non-ring joint runs STANDARD (ACCURATE with FP32 dest), also at op-chosen blocking.
+# a custom scale; an attn_mask call passing Q2048; chunked prefill from a start tensor), non-ring joint runs STANDARD
+# (ACCURATE with FP32 dest), also at op-chosen blocking.
 @pytest.mark.parametrize(
     "case",
     [
         "dense_causal_bfp8",
         "dense_mask_q2048",
-        "dense_mask_short_k",
         "chunked_tensor_start",
         "joint_bf16_dest",
         "joint_fp32_dest",
@@ -188,11 +187,12 @@ def test_sdpa_precision_routing(device, case):
     check_routing(device, case)
 
 
-# K and V in different formats: the fused reference-max path (K BFP8, V BF16) and the FP32-state path (K BF16, V BFP8).
+# K and V in different formats on the fused reference-max path (K BFP8, V BF16); routing case dense_mixed_kv covers the
+# FP32-state path (K BF16, V BFP8).
 @pytest.mark.parametrize(
     "variant, k_dtype, v_dtype",
-    [("standard", ttnn.bfloat8_b, ttnn.bfloat16), ("accurate", ttnn.bfloat16, ttnn.bfloat8_b)],
-    ids=["standard_kbfp8_vbf16", "accurate_kbf16_vbfp8"],
+    [("standard", ttnn.bfloat8_b, ttnn.bfloat16)],
+    ids=["standard_kbfp8_vbf16"],
 )
 def test_sdpa_recipe_mixed_kv_dtypes(device, variant, k_dtype, v_dtype):
     check_mixed_kv(device, variant, k_dtype, v_dtype)

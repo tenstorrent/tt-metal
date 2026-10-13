@@ -183,6 +183,15 @@ RecipeBuild recipe_build(
 // unconditionally, so this can only over-estimate.
 constexpr uint64_t kRingRecipeExtraBytes = 3 * kBf16Tile + kBf16Tile + 2 * 4096 + 16 + 64;
 
+// The dense / joint circular-buffer facts of a problem.
+RecipeL1Context dense_l1_context(const RecipeBlockingProblem& p) {
+    return {
+        .mask_page_bytes = p.mask_page_bytes,
+        .extra_bytes = p.extra_l1_bytes,
+        .vd_tiles = p.vd_tiles,
+        .v_storage = p.v_storage};
+}
+
 std::vector<uint32_t> tile_range(uint32_t fixed, uint32_t lo, uint32_t hi) {
     if (fixed != 0) {
         return {fixed};
@@ -282,28 +291,8 @@ RecipeL1Estimate recipe_l1_bytes(
 
 bool recipe_program_fits(const RecipeBlockingProblem& p, uint32_t q_tiles, uint32_t k_tiles) {
     // A program's RISC images, runtime args, semaphores and CB configs share one 70656 B kernel config buffer per core.
-    // Measured on one P150b (program bytes; BF16, BFP8, BFP4 and mixed K/V; D32-D256; Q32-Q512; K256-K1024; single
-    // features and their pairs and triples: joint segment, attention sink, K tail, attn_mask, causal / sliding-window /
-    // paged key range). A K tail of unaligned rows is the largest (aligned rows ~0.8 KB less). Excluded, as measured
-    // over or within 20 B of the limit (a "feature" is a joint segment, a sink or a K tail; "narrow" a PV head dim of
-    // odd tile count, one-tile PV subblocks; mixed K/V builds within ~0.4 KB of packed and counts as packed):
-    // STANDARD fused kernel (an attn_mask or a one-tile QK subblock runs the unfused kernel, far smaller):
-    // - an odd Q chunk of 7+ tiles with a feature, or narrow (BFP8 Q224/K256 joint: D96 73504 B, D64 72576 B);
-    // - packed K/V, narrow, with a feature or a paged sliding window (BFP8 D96 Q256/K256: sink + K tail 73184 B, sink
-    //   72272 B, joint 71840 B, K tail 70656 B, paged window 70768 B);
-    // - a sink with a K tail outside a key range at Q256+/K256, narrow or with packed D64 (BFP8 D64 Q256 71120 B, Q320
-    //   70736 B, Q448 70656 B, Q384 and Q512 within 0.3 KB; BF16 D96 Q256 70976 B).
-    // FAST, outside a key range (which pads an odd Q chunk to even): an odd Q chunk of 3+ tiles, narrow with a feature
-    // (BFP8 D96 Q224/K256 sink + K tail 73728 B, joint 72320 B, K tail 71200 B), or with packed K/V and a sink plus
-    // a K tail or an attn_mask (BFP8 Q224/K256 sink + K tail: D64 71424 B, D128 70928 B; D128 sink + attn_mask
-    // Q224/K512 70704 B).
-    // BALANCED, Q chunks of 5+ tiles (D96 Q160 and up add ~14 KB): D96 with a feature, an attn_mask or a key range
-    // (BFP8 Q256/K512 causal + window + sink + K tail 78016 B, attn_mask 72048 B, K tail 71504 B; BF16 joint 70720 B),
-    // D64 with a key range and a sink (BFP8 Q224/K384 causal + window + sink + K tail 72048 B, causal + sink 71776 B).
-    // The tightest admitted: STANDARD BFP8 D256 Q256/K256 sink + K tail 70464 B, D128 Q256/K384 70384 B, D64 Q256/K256
-    // causal + window + sink + K tail 70384 B and sink 70368 B; FAST BFP8 D64 Q224/K256 joint + K tail 70400 B (even Q
-    // chunks 69648 B); BALANCED BFP8 D96 Q160/K512 dense 70384 B. ACCURATE peaks at 64.9 KB. Ring and exp ring programs
-    // are not covered.
+    // Measured exclusions on one P150b; the per-case program sizes are in test_recipe_blocking.cpp (ProgramsFit*,
+    // FeatureCombinations*). Ring and exp ring programs are not covered.
     if (p.op != RecipeOp::Dense && p.op != RecipeOp::Joint) {
         return true;
     }
@@ -469,7 +458,6 @@ std::vector<RecipeBlocking> blocking_candidates(const RecipeBlockingProblem& p, 
             const double block = block_cost(p.policy, qt, kt, p.d_tiles, build, dense, p.key_range);
             // K tiles of a Q chunk's first K/V block: the chunk, or the whole (primary) sequence when shorter.
             const uint32_t first_k_tiles = std::min(kt, std::max(1u, div_up(p.k_rows, kTile)));
-            // `blocks`: the busiest core's (Q chunk, K chunk) blocks (jobs x K chunks unless a key range says less).
             // `blocks`: the busiest core's (Q chunk, K chunk) blocks (jobs x K chunks unless a key range says less);
             // `extra`: key-range work outside the blocks.
             auto admit = [&](uint32_t jobs,
@@ -510,17 +498,7 @@ std::vector<RecipeBlocking> blocking_candidates(const RecipeBlockingProblem& p, 
                                 ? key_range_makespan(p, qt, kt, used, block, c)
                                 : jobs * (k_blocks * (block + kKeyRangeStream * c * kt * p.d_tiles / 4.0) +
                                           kKeyRangeJob * c);
-                        admit(
-                            jobs,
-                            k_blocks,
-                            p.grid,
-                            RecipeL1Context{
-                                .mask_page_bytes = p.mask_page_bytes,
-                                .extra_bytes = p.extra_l1_bytes,
-                                .vd_tiles = p.vd_tiles,
-                                .v_storage = p.v_storage},
-                            0.0,
-                            work);
+                        admit(jobs, k_blocks, p.grid, dense_l1_context(p), 0.0, work);
                         break;
                     }
                     const uint32_t k_blocks = div_up(p.k_rows + p.joint_k_rows, k_chunk);
@@ -532,11 +510,7 @@ std::vector<RecipeBlocking> blocking_candidates(const RecipeBlockingProblem& p, 
                         chain == 0 ? div_up(batch_heads * jobs_per_head, cores) : div_up(jobs_per_head, chain),
                         k_blocks,
                         p.grid,
-                        RecipeL1Context{
-                            .mask_page_bytes = p.mask_page_bytes,
-                            .extra_bytes = p.extra_l1_bytes,
-                            .vd_tiles = p.vd_tiles,
-                            .v_storage = p.v_storage},
+                        dense_l1_context(p),
                         std::nullopt,
                         reread);
                     break;
@@ -779,17 +753,17 @@ std::optional<SDPAProgramConfig> resolve_dense_recipe_blocking(
     if (options) {
         problem.extra_l1_bytes += recipe_dense_options_extra_bytes(*options);
     }
+    if (chunks_are_hints) {
+        // Routed calls choose their chunks (ring-distributed on one P150, 8/1 heads D128 BFP8, 131072 rows, STANDARD:
+        // the caller's Q64/K64 143 ms, the choice 43 ms; Q256/K512 43 ms).
+        problem.fixed_q_tiles = 0;
+        problem.fixed_k_tiles = 0;
+        config.q_chunk_size = 0;
+        config.k_chunk_size = 0;
+    }
     if (key_range && key_range->q_slab_rows) {
-        // Ring-distributed SDPA: two Q slabs, each of whole Q chunks.
+        // Ring-distributed SDPA: two Q slabs, each of whole Q chunks, on the caller's grid.
         problem.q_rows = 2 * key_range->q_slab_rows;
-        if (chunks_are_hints) {
-            // Routed calls choose their chunks on the caller's grid (one P150, 8/1 heads D128 BFP8, 131072 rows,
-            // STANDARD: the caller's Q64/K64 143 ms, the choice 43 ms; Q256/K512 43 ms).
-            problem.fixed_q_tiles = 0;
-            problem.fixed_k_tiles = 0;
-            config.q_chunk_size = 0;
-            config.k_chunk_size = 0;
-        }
         std::optional<RecipeBlocking> choice;
         if (!invalid_fixed(config)) {
             for (const auto& candidate : recipe_blocking_candidates(problem)) {
@@ -808,11 +782,6 @@ std::optional<SDPAProgramConfig> resolve_dense_recipe_blocking(
         // 7.77 vs 14.49 ms, Qwen3-VL vision 2.03 vs 3.50; Flux-style joint 1.52 vs 1.58, qwen_image joint equal).
         config.compute_with_storage_grid_size = device->compute_with_storage_grid_size();
         problem.grid = config.compute_with_storage_grid_size;
-        problem.fixed_q_tiles = 0;
-        problem.fixed_k_tiles = 0;
-        config.q_chunk_size = 0;
-        config.k_chunk_size = 0;
-        return apply_choice(config, choose_recipe_blocking(problem), problem, op_name);
     }
     const auto choice = invalid_fixed(config) ? std::nullopt : choose_recipe_blocking(problem);
     return apply_choice(config, choice, problem, op_name);
