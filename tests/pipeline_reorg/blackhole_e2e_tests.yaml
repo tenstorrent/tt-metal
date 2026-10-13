@@ -245,6 +245,20 @@
   team: models
   budget_type: e2e
 
+- id: bh-qb2-disaggregated-prefill-perf
+  name: Disaggregated prefill Kimi-K3 MLA perf tests
+  model-name: disaggregated_prefill
+  cmd: |
+    exit_code=0
+    pytest models/demos/deepseek_v3_d_p/tests/kimi_k3/test_mla_perf.py -m perf -vvv --tb=short || exit_code=$?
+    exit $exit_code
+  skus:
+    bh_quietbox_2:
+      timeout: 10
+  owner_id: U04S2UV6L8N # Sofija Jovic
+  team: models
+  budget_type: e2e
+
 - id: bh-qb2-disaggregated-prefill-d2d-socket-sync
   name: Disaggregated prefill D2D socket sync op tests
   model-name: disaggregated_prefill

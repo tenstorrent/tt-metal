@@ -10,12 +10,12 @@ contract is intentionally identical:
 * ``cold`` profiles every chunk from an empty cache through that same warm step; and
 * ``long`` profiles one chunk with a 500K-token Galaxy prefix.
 
-On smaller boxes the chunk scales with SP/8. The LoudBox warm case keeps the full 50K-token
-Galaxy prefix with a 2,560-token chunk on SP=4 x TP=2; its cold and long cases retain the
-SP-scaled 25.6K and 256K prefixes. QuietBox retains SP-scaled prefixes on SP=4 x TP=1.
-The synthetic perf config scales the global head count with TP, preserving Galaxy's 24 heads
-and 640 query tokens per chip. LoudBox warm therefore matches Galaxy's total attention
-arithmetic per chip, while each ring step sees twice as many KV rows.
+On smaller boxes the chunk scales with SP/8: 2,560 tokens on LoudBox (SP=4 x TP=2) and 1,280 on
+QuietBox (SP=2 x TP=2). Their warm cases keep the full 50K-token Galaxy prefix; cold and long retain
+the SP-scaled prefixes (25.6K and 256K on LoudBox, 12.8K and 128K on QuietBox). The synthetic perf
+config scales the global head count with TP, preserving Galaxy's 24 heads and 640 query tokens per
+chip. LoudBox and QuietBox warm therefore match Galaxy's total attention arithmetic per chip, while
+each ring step sees 8/SP times as many KV rows.
 
 K3 is deliberately not another variant in the sparse harness.  It has no DSA indexer, uses the dense
 tiled BFP8 KV cache, has NoPE, and adds the output ``g_proj`` gate.  Keeping those facts structural
@@ -71,16 +71,25 @@ pytestmark = pytest.mark.perf
 GALAXY_SP = 8
 GALAXY_TP = 4
 CACHE_TOKENS = int(os.environ.get("K3_MLA_PERF_CACHE", 50 * 1024))
-CHUNK_TOKENS = int(os.environ.get("K3_MLA_PERF_CHUNK", 5 * 1024))
+DEFAULT_CHUNK_TOKENS = 5 * 1024
+CHUNK_TOKENS = int(os.environ.get("K3_MLA_PERF_CHUNK", DEFAULT_CHUNK_TOKENS))
 LONG_CACHE_TOKENS = int(os.environ.get("K3_MLA_PERF_LONG_CACHE", 500 * 1024))
 RT_RECORD_TIMEOUT_S = float(os.environ.get("K3_MLA_PERF_RT_TIMEOUT", 30.0))
 WRITE_OPS_DUMP = os.environ.get("K3_MLA_PERF_OPS_DUMP", "") not in ("", "0", "false")
-LOUDBOX_TARGETS = {
-    "warm": (50 * 1024, 10_100_000),
-    "cold": (25 * 1024, 46_800_000),
-    "long": (250 * 1024, 41_500_000),
+# Device-time targets per box: scenario -> (local prefix tokens, target ns).
+PERF_TARGETS = {
+    "LoudBox": {
+        "warm": (50 * 1024, 10_100_000),
+        "cold": (25 * 1024, 46_800_000),
+        "long": (250 * 1024, 41_500_000),
+    },
+    "QuietBox": {
+        "warm": (50 * 1024, 11_100_000),
+        "cold": (12_800, 35_500_000),
+        "long": (128_000, 24_400_000),
+    },
 }
-LOUDBOX_PERF_MARGIN = 0.03
+PERF_MARGIN = 0.03
 
 SCENARIOS = {
     "warm": {"cache": CACHE_TOKENS, "loop": False},
@@ -118,7 +127,7 @@ class PerfWorkload:
 
 
 _SYSTEM_BY_DEVICE_COUNT = {
-    4: ("QuietBox", (4, 1)),
+    4: ("QuietBox", (2, 2)),
     8: ("LoudBox", (4, 2)),
     32: ("Galaxy", (8, 4)),
 }
@@ -481,7 +490,7 @@ def test_mla_chunked_perf(mesh_device, device_params, scenario, variant, random_
 
     cache = (
         SCENARIOS[scenario]["cache"]
-        if scenario == "warm" and PERF_WORKLOAD.system_name == "LoudBox"
+        if scenario == "warm" and PERF_WORKLOAD.system_name in PERF_TARGETS
         else _local_tokens(SCENARIOS[scenario]["cache"], sp)
     )
     chunk = PERF_WORKLOAD.chunk_tokens
@@ -575,12 +584,13 @@ def test_mla_chunked_perf(mesh_device, device_params, scenario, variant, random_
         logger.info("cold per-iteration traced host ms: " + " ".join(f"{value:.3f}" for value in per_iteration))
 
     _write_outputs(scenario=scenario, cache=cache, chunk=chunk, forwards=forwards, by_op=by_op)
-    if PERF_WORKLOAD.system_name == "LoudBox" and chunk == 2560:
-        expected_cache, target_ns = LOUDBOX_TARGETS[scenario]
+    box = PERF_WORKLOAD.system_name
+    if box in PERF_TARGETS and CHUNK_TOKENS == DEFAULT_CHUNK_TOKENS:
+        expected_cache, target_ns = PERF_TARGETS[box][scenario]
         if cache == expected_cache:
             measured_ns = by_op["inclusive_ns"].sum()
-            limit_ns = target_ns * (1 + LOUDBOX_PERF_MARGIN)
-            logger.info(f"LoudBox {scenario} device time: {measured_ns:,.0f} ns; limit: {limit_ns:,.0f} ns")
+            limit_ns = target_ns * (1 + PERF_MARGIN)
+            logger.info(f"{box} {scenario} device time: {measured_ns:,.0f} ns; limit: {limit_ns:,.0f} ns")
             assert (
                 measured_ns <= limit_ns
-            ), f"LoudBox {scenario} device time {measured_ns:,.0f} ns exceeds {limit_ns:,.0f} ns"
+            ), f"{box} {scenario} device time {measured_ns:,.0f} ns exceeds {limit_ns:,.0f} ns"
