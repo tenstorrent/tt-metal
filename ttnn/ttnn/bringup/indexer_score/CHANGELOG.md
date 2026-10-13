@@ -4,7 +4,7 @@
 - Source SHA: `2761111778f18601772ccce3a8e03b8c0fe8ea8d`
 - Python: `ttnn.bringup.*` (was `ttnn.experimental.*`)
 - Forked for: hy4_preview_d_p C.dense_full.indexer
-- Used by: hy4_preview_d_p
+- Used by: hy4_preview_d_p, glm53_flash_d_p
 
 Mechanical fork changes (fork_op.py): namespace `ttnn::operations::bringup`, CMake target `ttnn_op_bringup_indexer_score`, kernel paths and includes pointing at this folder, Python prefix `ttnn.bringup.`.
 
@@ -95,3 +95,6 @@ Mechanical fork changes (fork_op.py): namespace `ttnn::operations::bringup`, CMa
   kept; the new source modes are opt-in.
 - Needed by: rebase onto origin/llk_helper_library @ `bdc576fa652` (2026-10-12)
 - Files: 12 merged files under `device/` and `indexer_score_nanobind.cpp`
+
+### Tests: glm53_flash_d_p ring case (O.1, 2026-10-13)
+- GLM's captured ring_indexer_score_dsa call (2x2 full-mesh snake ring, key_compression_ratio 4, chunk start 51200, kv_len 14080) replaces its planned 2x4 sig-None case, with a new `test_ring_indexer_score_dsa_key_stride` model-case test; the 2x4 config moved inline into `tests/unit/test_key_stride_ring.py`. No op change.

@@ -66,7 +66,8 @@ def _sparse_sdpa(mesh_device, c):
     [1, 1, S, W] uint32 ROW_MAJOR, per device. Query row s sits at position q_pos + d * S + s (chip d holds rows d S ..
     of the chunk, as the model splits it); its ids are distinct, causal (<= its position) and random, the first
     n_valid slots, then the 0xFFFFFFFF sentinel. Every n_short_every-th row has fewer valid ids (partly and wholly
-    masked k_chunks). Checked per device vs the float32 reference on the same bf16 inputs: PCC, rel L2 and the per
+    masked k_chunks). A block-cyclic case (block_cyclic_*) holds kv striped on device and natural ids, the reference
+    the natural kv. Checked per device vs the float32 reference on the same bf16 inputs: PCC, rel L2 and the per
     (head, row) output norm ratio."""
     rows, cols = c["mesh"]
     n_dev = rows * cols
@@ -104,11 +105,12 @@ def _sparse_inputs(mesh_device, c, seed):
     q = (torch.randn(n_dev, nh, sq, kd, generator=g) * c.get("q_scale", 1.0)).to(torch.bfloat16)
     kv = torch.randn(n_dev, 1, t_kv, kd, generator=g).to(torch.bfloat16)
     idx = torch.full((n_dev, 1, sq, w), -1, dtype=torch.int64)
+    t_pick = c.get("kv_populated", t_kv)  # ids are drawn below this
     for d in range(n_dev):
         pos = c["q_pos"] + d * sq + torch.arange(sq)
-        assert int(pos.max()) < t_kv
-        r = torch.rand(sq, t_kv, generator=g)
-        r[torch.arange(t_kv)[None, :] > pos[:, None]] = -1.0  # never pick a future row
+        assert int(pos.max()) < t_pick <= t_kv
+        r = torch.rand(sq, t_pick, generator=g)
+        r[torch.arange(t_pick)[None, :] > pos[:, None]] = -1.0  # never pick a future row
         nv = torch.full((sq,), c["n_valid"], dtype=torch.int64)
         short = torch.arange(sq) % c["n_short_every"] == 0
         nv[short] = torch.randint(1, c["n_valid"] + 1, (int(short.sum()),), generator=g)
@@ -125,7 +127,22 @@ def _sparse_inputs(mesh_device, c, seed):
         dst_full_sync_en=ck["dst_full_sync_en"],
     )
     rm = ttnn.ROW_MAJOR_LAYOUT
-    tq, tkv = _shard(mesh_device, q, layout=rm), _shard(mesh_device, kv, layout=rm)
+    kv_dev = kv
+    if c.get("block_cyclic_sp_axis") is not None:
+        # kv is natural order on the host (the reference's); the device holds it block-cyclic striped (the
+        # model's gathered scratch), and the op remaps the natural ids.
+        sp = c["mesh"][c["block_cyclic_sp_axis"]]
+        tp = n_dev // sp
+        stripes, chunk = (
+            (n_dev, c["block_cyclic_chunk_local"] // tp)
+            if c["block_cyclic_cache_tp_sharded"]
+            else (
+                sp,
+                c["block_cyclic_chunk_local"],
+            )
+        )
+        kv_dev = kv[:, :, ref.block_cyclic_natural_of_physical(t_kv, stripes, chunk)]
+    tq, tkv = _shard(mesh_device, q, layout=rm), _shard(mesh_device, kv_dev, layout=rm)
     ti = _shard(mesh_device, idx.to(torch.int32), dtype=ttnn.uint32, layout=rm)
     assert list(tq.shape) == c["q"] and list(tkv.shape) == c["kv"] and list(ti.shape) == c["indices"]
     return (q, kv, idx), (tq, tkv, ti, ckc)
@@ -143,7 +160,11 @@ def _sparse_call(c, dev):
         k_chunk_size=c["k_chunk_size"],
         compute_kernel_config=ckc,
         high_precision=c["high_precision"],
+        **{k: c[k] for k in _BLOCK_CYCLIC if c.get(k) is not None},
     )
+
+
+_BLOCK_CYCLIC = ("block_cyclic_sp_axis", "block_cyclic_chunk_local", "block_cyclic_cache_tp_sharded")
 
 
 def _ring_mla(mesh_device, c):
