@@ -1,0 +1,20 @@
+# H3: the final head. A = #60287 before this round, B = the final header, B2 = A/A; TopK perf modules A B B2 B2 B A twice,
+# then the unary TopK rows (local sort, rebuild) A B B A twice, then counters on A and B.
+r A ids/h1.txt -
+r B ids/h1.txt -
+r B2 ids/h1.txt -
+r B2 ids/h1.txt -
+r B ids/h1.txt -
+r A ids/h1.txt -
+r A ids/h1.txt -
+r B ids/h1.txt -
+r B2 ids/h1.txt -
+r B2 ids/h1.txt -
+r B ids/h1.txt -
+r A ids/h1.txt -
+r A ids/u_sort_rb.txt MATH_ISOLATE,L1_TO_L1
+r B ids/u_sort_rb.txt MATH_ISOLATE,L1_TO_L1
+r B ids/u_sort_rb.txt MATH_ISOLATE,L1_TO_L1
+r A ids/u_sort_rb.txt MATH_ISOLATE,L1_TO_L1
+c A_wc ids/cnt.txt - wc
+c B_wc ids/cnt.txt - wc
