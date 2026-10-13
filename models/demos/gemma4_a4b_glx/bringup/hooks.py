@@ -210,7 +210,7 @@ def device_component(mesh, spec, layer, step):
         p = f"{PREFIX}layers.{layer}.mlp."
         mlp = TtMLP(mesh, *(loader.get(p + f"{n}_proj.weight") for n in ("gate", "up", "down")))
         return _host_fn(mesh, mlp)
-    if step == "attn_residual":
+    if step in ("attn_residual", "ffn_combine"):
         from models.demos.gemma4_a4b_glx.tt.residual import TtResidualAdd
 
         return _host_fn2(mesh, TtResidualAdd(mesh))

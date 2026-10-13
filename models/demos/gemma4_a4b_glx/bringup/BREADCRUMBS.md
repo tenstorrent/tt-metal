@@ -189,3 +189,9 @@ I re-applied the attempt above unchanged; it had passed under an older framework
   chip for 1024 tokens. That was the simplest correct composition. A token-sorted dispatch/combine (or sparse_matmul
   with real per-group sparsity) is the performance follow-up, and the `(x, routing)` interface stays the same.
 - Re-run: `bfw job check --task C.sliding.experts`
+
+## C.sliding.ffn_combine (run 20261013-175448-gemma4-glx-14)
+- ffn_sum = mlp_post_norm + moe_post_norm is a plain add of two replicated [S, 2816] bf16 tensors, the same as
+  attn_residual. `device_component("ffn_combine")` returns the existing `TtResidualAdd` through `_host_fn2`; no new
+  module or setting.
+- Re-run: `bfw job check --task C.sliding.ffn_combine`
