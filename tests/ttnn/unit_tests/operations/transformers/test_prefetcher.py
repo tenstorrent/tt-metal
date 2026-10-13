@@ -110,22 +110,14 @@ def test_run_prefetcher_post_commit_multi_device(
 
 # ttnn.dram_prefetcher with weights whose K is not a multiple of the prefetch ring.
 #
-# The prefetcher splits each DRAM weight shard (K x N / num_readers) into num_blocks =
-# num_readers * receivers_per_reader K-blocks of equal height, so a shard of H tile rows is padded
-# to round_up(H, num_blocks) rows. The pad rows must reach the receivers as zeros and must never be
-# read from DRAM: rows past H belong to whatever is allocated after the weight in the same bank.
+# The prefetcher pads a DRAM weight shard of H tile rows to round_up(H, num_readers * receivers_per_reader) rows;
+# the pad rows must reach the receivers as zeros and never be read from DRAM (the next allocation lies past H).
 #
-# The test does not rely on what the allocator puts there. The prefetcher reads from the addresses
-# in its tensor_addrs tensor and takes only shapes and dtypes from the tensors it is passed, so each
-# address points at one DRAM tensor holding [W ; NaN rows] while the tensor passed in has K rows.
-# Every row past the end of the weight shard is NaN by construction. An unpadded all-NaN tensor is
-# prefetched first in every layer, so the reader's staging slots never hold leftover zeros: pad rows
-# that are not zero-filled deliver NaN or an earlier block's weights.
+# Each tensor_addrs entry points at one DRAM tensor [W ; NaN rows] (the op takes only shapes from the K-row tensors
+# it is passed) and an unpadded all-NaN tensor is prefetched first, so unread or unzeroed pad rows show up as NaN.
 #
-# The matmuls run with the padded K (consume) so that compute multiplies the pad rows; the output
-# must still be in0[:, :K] @ W. With activation K == weight K (production, as the models run it)
-# compute stops at the weight's K and passes even when the pad rows are garbage; that case is a
-# guard for the production path only.
+# Consume mode runs the matmul over the padded K, so compute multiplies the pad rows and must still give
+# in0[:, :K] @ W; production mode (activation K == weight K, as the models run it) guards the production path.
 
 
 class _PaddedKRing:
