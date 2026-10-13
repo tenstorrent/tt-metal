@@ -697,9 +697,30 @@ class DeepSeekV41Model(DeepSeekV4Model):
             raise RuntimeError(f"position {pos} is past max_seq {self._decode_max_seq}")
 
     def session_usage(self) -> dict:
+        """``"ratio r" -> (index blocks used, index blocks total)`` of the session's ``comp_kv`` /
+        ``idx_key_cache`` pools, V4's per-group ``(blocks used, pool size)`` shape. The pools are allocated
+        whole for ``max_seq``, so "used" is the blocks the session's position has reached."""
         if self._decode_max_seq is None:
             raise RuntimeError("call prepare_static_decode() before using sessions")
-        return {"sessions": (len(self._session_pos), 1), "max_seq": self._decode_max_seq}
+        pos = max(self._session_pos.values(), default=0)
+        ratios = sorted({int(r) for r in self.config.compress_ratios[: self.num_layers] if int(r)})
+        return {
+            f"ratio {r}": (
+                -(-(pos // r) // CSA_INDEX_BLOCK_SIZE),
+                -(-(self._decode_max_seq // r) // CSA_INDEX_BLOCK_SIZE),
+            )
+            for r in ratios
+        }
+
+    def session_tokens_left(self) -> int:
+        """Tokens the one session can still take before ``max_seq``."""
+        if self._decode_max_seq is None:
+            raise RuntimeError("call prepare_static_decode() before using sessions")
+        return self._decode_max_seq - max(self._session_pos.values(), default=0)
+
+    def reset_static_caches(self) -> None:
+        """No-op: as :meth:`reset_session` explains, a fresh sequence reads only rows it wrote itself."""
+        return
 
     def reset_session(self, sid: int) -> None:
         """Rewind session ``sid`` to position 0.
@@ -984,8 +1005,11 @@ class DeepSeekV41Model(DeepSeekV4Model):
         states: list[PrefillAttentionState],
         session_id: int,
         progress: Optional[Callable[[str], None]] = None,
+        bias_slots: Optional[dict] = None,
     ) -> int:
         """Write a prefill's per-layer ``states`` into the decode caches of ``session_id``; returns ``T``.
+
+        ``bias_slots`` is accepted so V4's callers work and must be ``None``: V4.1 has no CSA position bias.
 
         For a prompt of ``T`` tokens (a multiple of ``sliding_window``, so ring slot ``j`` holds token
         ``T - W + j``, and of every compress ratio, so no compressor window is half full):
@@ -999,6 +1023,8 @@ class DeepSeekV41Model(DeepSeekV4Model):
         writes them before it reads them. The caches are written in place, so captured traces stay valid.
         """
         note = progress or (lambda message: None)
+        if bias_slots:
+            raise ValueError("V4.1 has no CSA position bias: commit_prefill_state takes no bias_slots")
         if not self.paged:
             raise RuntimeError("call prepare_static_decode() first")
         if session_id not in self._session_pos:
