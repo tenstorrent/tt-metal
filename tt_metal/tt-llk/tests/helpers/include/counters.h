@@ -765,10 +765,6 @@ inline void read_last_zone()
 #if defined(LLK_PROFILER) && defined(LLK_PERF_INIT_ONLY) && defined(LLK_DBG_BARRIER)
 namespace llk_perf
 {
-#if defined(LLK_TRISC_MATH)
-extern "C" char __llk_init_body_end[]; // sections.ld
-#endif
-
 // INIT ends inside its body, read at the end of the body (init_measurement_no_zone), so the trampoline's return is not
 // timed: the prefetch stream's run past the body cannot meet the return line in the icache
 inline std::uint32_t init_end_ts[2] = {0, 0};
@@ -798,10 +794,6 @@ __attribute__((always_inline)) inline void init_zone_end()
 template <PerfRunType RUN_TYPE, typename F, bool ZONE_END = false>
 __attribute__((noipa, section(".llk_init_tramp"))) void init_zone(const F& body)
 {
-#if defined(LLK_TRISC_MATH)
-    // math's prefetch stops one line past INIT's body, so the wrong-path fetches after its ret do not hold both MSHRs
-    reinterpret_cast<volatile std::uint32_t*>(TENSIX_CFG_BASE)[TRISC_END_PC_SEC1_PC_ADDR32] = reinterpret_cast<std::uint32_t>(__llk_init_body_end) + 15;
-#endif
     const bool opened = !llk_profiler::is_buffer_full();
     if (opened)
     {
@@ -836,9 +828,6 @@ __attribute__((noipa, section(".llk_init_tramp"))) void init_zone(const F& body)
         llk_barrier::rendezvous<llk_barrier::PARK_PLAIN>(llk_barrier::is_action_thread(), [] {});
     }
     ckernel::icache_prefetch_init_end(); // trisc.cpp turned it on; the loop runs without it, as after tt-metal's first wait
-#if defined(LLK_TRISC_MATH)
-    reinterpret_cast<volatile std::uint32_t*>(TENSIX_CFG_BASE)[TRISC_END_PC_SEC1_PC_ADDR32] = 0;
-#endif
 }
 } // namespace llk_perf
 
