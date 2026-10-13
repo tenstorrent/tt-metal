@@ -7,6 +7,7 @@
 
 #include <gtest/gtest.h>
 #include <gmock/gmock.h>
+#include <limits>
 #include <memory>
 #include <optional>
 #include <stdexcept>
@@ -21,6 +22,7 @@
 
 #include "impl/dataflow_buffer/dataflow_buffer_impl.hpp"
 #include "impl/dataflow_buffer/prefetcher_pipe.hpp"
+#include "impl/program/dispatch.hpp"
 #include "impl/program/program_impl.hpp"
 #include "metal2_host_api/test_helpers/test_helpers.hpp"
 #include "metal2_host_api/test_helpers/prefetcher_pipe_test_helpers.hpp"
@@ -227,6 +229,80 @@ TEST_F(PrefetcherPipeSpecTestQuasar, CPU_MultiPipeAccessorResolvesOnePipePerNode
     EXPECT_EQ(on_other_sender->pipe, &other.impl());
     EXPECT_EQ(on_weights_sender->config_page_addr, weights.config_address());
     EXPECT_EQ(on_other_sender->config_page_addr, other.config_address());
+}
+
+// The slot of the parameter's placement in the given role.
+uint8_t SlotFor(const Program& program, const PrefetcherPipeParamName& name, bool sender_role) {
+    const auto* binding = program.impl().get_prefetcher_pipe_parameter(name.get());
+    TT_FATAL(binding != nullptr, "no PrefetcherPipeParameter '{}'", name.get());
+    for (const auto& slot_cores : binding->slots) {
+        if (slot_cores.sender_role == sender_role) {
+            return slot_cores.prefetcher_pipe_id;
+        }
+    }
+    TT_THROW("PrefetcherPipeParameter '{}' has no {} slot", name.get(), sender_role ? "sender" : "receiver");
+}
+
+// Every core of `cores` carries the same slot entries, which dispatch writes as one multicast rectangle.
+void ExpectOneMulticastRectangle(const Program& program, const CoreRange& cores) {
+    const auto groups =
+        program_dispatch::partition_cores_by_prefetcher_pipe_payload(program.impl(), CoreRangeSet(cores));
+    ASSERT_EQ(groups.size(), 1u);
+    EXPECT_EQ(groups[0].cores.ranges().size(), 1u);
+    EXPECT_EQ(groups[0].cores.num_cores(), CoreRangeSet(cores).num_cores());
+}
+
+TEST_F(PrefetcherPipeSpecTestQuasar, CPU_ReceiverKernelExtraNodesGetTheReceiversEntry) {
+    // The receiver kernel and its relay also run on (1,1)..(1,3), which are not receivers of the pipe. Once the pipe
+    // is bound those nodes carry the receivers' slot entry, relay included.
+    PrefetcherPipe pipe = MakeWeightsPipe(*mesh_device_);
+    ProgramSpec spec = MakeFullPipeSpec();
+    const CoreRange receiver_kernel_cores({0, 1}, {1, 3});
+    spec.work_units[1].target_nodes = NodeRange{NodeCoord{0, 1}, NodeCoord{1, 3}};
+    Program program = MakeProgramFromSpec(*mesh_device_, spec);
+    const uint8_t slot_id = SlotFor(program, pipe_param_name, /*sender_role=*/false);
+    const auto& slot = program.impl().get_prefetcher_pipe_slot(slot_id);
+    EXPECT_EQ(slot.cores.num_cores(), 6u);
+    EXPECT_EQ(slot.receiver_cores.num_cores(), 3u);
+    EXPECT_EQ(ParticipantOn(program, CoreCoord(1, 1), slot_id)->pipe, nullptr);
+
+    SetProgramRunArgs(program, PipeArgs({{pipe_param_name, &pipe}}));
+
+    const auto* receiver = ParticipantOn(program, CoreCoord(0, 1), slot_id);
+    ASSERT_NE(receiver, nullptr);
+    EXPECT_FALSE(receiver->extra_node);
+    EXPECT_NE(receiver->relay_dfb_id, std::numeric_limits<uint8_t>::max());
+    for (const CoreCoord& core : corerange_to_cores(CoreRangeSet(CoreRange({1, 1}, {1, 3})))) {
+        const auto* extra = ParticipantOn(program, core, slot_id);
+        ASSERT_NE(extra, nullptr);
+        EXPECT_TRUE(extra->extra_node);
+        EXPECT_EQ(extra->pipe, &pipe.impl());
+        EXPECT_EQ(extra->config_page_addr, receiver->config_page_addr);
+        EXPECT_EQ(extra->entry_size, receiver->entry_size);
+        EXPECT_EQ(extra->relay_dfb_id, receiver->relay_dfb_id);
+    }
+    ExpectOneMulticastRectangle(program, receiver_kernel_cores);
+}
+
+TEST_F(PrefetcherPipeSpecTestQuasar, CPU_SenderKernelExtraNodeGetsTheSendersEntry) {
+    // The sender kernel also runs on (1,0), which is not the pipe's sender.
+    ProgramSpec spec = MakeSenderOnlySpec();
+    const CoreRange sender_kernel_cores({0, 0}, {1, 0});
+    spec.work_units[0].target_nodes = NodeRange{NodeCoord{0, 0}, NodeCoord{1, 0}};
+    Program program = MakeProgramFromSpec(*mesh_device_, spec);
+    PrefetcherPipe pipe = MakeWeightsPipe(*mesh_device_);
+    SetProgramRunArgs(program, PipeArgs({{pipe_param_name, &pipe}}));
+
+    const uint8_t slot_id = SlotFor(program, pipe_param_name, /*sender_role=*/true);
+    const auto* sender = ParticipantOn(program, pipe_sender_node, slot_id);
+    const auto* extra = ParticipantOn(program, CoreCoord(1, 0), slot_id);
+    ASSERT_NE(sender, nullptr);
+    ASSERT_NE(extra, nullptr);
+    EXPECT_FALSE(sender->extra_node);
+    EXPECT_TRUE(extra->extra_node);
+    EXPECT_EQ(extra->pipe, &pipe.impl());
+    EXPECT_EQ(extra->config_page_addr, sender->config_page_addr);
+    ExpectOneMulticastRectangle(program, sender_kernel_cores);
 }
 
 TEST_F(PrefetcherPipeSpecTestQuasar, CPU_MultiPipeAccessorTwoPipesOneSenderNodeFails) {
