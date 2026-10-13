@@ -294,7 +294,7 @@ def test_image_bucket_padding(model, golden):
     """
     from models.demos.pplx_decider_v1_27b.tt.model import dram_view
 
-    rid = "v04_tallest_bar"  # largest image (1024 patches, 256 image tokens); v02 is a TT tie, see README
+    rid = "v04_tallest_bar"  # largest image (1024 patches, 256 image tokens); v02 is the closest row (TT gap 0.131), see README
     g = golden.row(rid)
     enc = encode_row(golden, rid)
     out = {}
