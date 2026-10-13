@@ -30,7 +30,7 @@ const std::optional<tt::tt_metal::ShardSpec>& get_shard_spec(const tt::tt_metal:
 
 bool is_uneven(const tt::tt_metal::TensorSpec& t);
 
-// How a DRAM height- or width-sharded unary op reads its pages; the flow is part of the program hash.
+// How a unary op on a DRAM sharded or interleaved tensor reads its pages; the flow is part of the program hash.
 enum class DramShardFlow : uint8_t {
     None,           // main's path
     StaticBurst,    // even split, rotated order, several pages per barrier

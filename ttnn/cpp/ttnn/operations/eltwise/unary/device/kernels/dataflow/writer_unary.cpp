@@ -62,7 +62,7 @@ void kernel_main() {
 #else
     const uint32_t page_bytes = get_local_cb_interface(cb_id_dst).fifo_page_size;
 #if SHARD_ROTATE
-    // DRAM-sharded: the reader's page order, WRITE_BURST pages per flush.
+    // DRAM flows: the reader's page order, WRITE_BURST pages per flush.
     auto order = dram_shard::RotatedPages::from_args();
     dram_shard::CbGroups groups{.depth = get_local_cb_interface(cb_id_dst).fifo_num_pages};
 #if WORK_QUEUE

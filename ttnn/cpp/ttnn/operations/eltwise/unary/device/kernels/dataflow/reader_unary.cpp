@@ -59,7 +59,7 @@ void kernel_main() {
 #else
     const uint32_t page_bytes = get_local_cb_interface(cb_id_src).fifo_page_size;
 #if SHARD_ROTATE
-    // DRAM-sharded: rotated order, bursts ramping 1, 1, 2, 4, ... up to READ_BURST pages per barrier.
+    // DRAM flows: rotated order (the page order on interleaved), bursts ramping 1, 1, 2, 4, ... up to READ_BURST.
     auto order = dram_shard::RotatedPages::from_args();
     dram_shard::CbGroups groups{.depth = get_local_cb_interface(cb_id_src).fifo_num_pages};
     uint32_t burst = 1, next_burst = 1;
