@@ -29,6 +29,15 @@ using namespace ckernel::math;
 template <bool is_fp32_dest_acc_en = false>
 inline void _llk_math_hw_configure_(const std::uint32_t srca_data_format, const std::uint32_t srcb_data_format)
 {
+#if defined(LLK_EXP_NOP_MATH) && defined(LLK_EXP_HWC_EMPTY)
+    asm volatile(""); // experiment (initx): the INIT NOP's asm without the NOP, the base of the pure nop3 leg
+#elif defined(LLK_EXP_NOP_MATH) && defined(LLK_EXP_HWC_SKIP0)
+    asm volatile(".skip 0"); // experiment (initx): one asm statement of no bytes, as GCC sizes the NOP
+#elif defined(LLK_EXP_NOP_MATH) && defined(LLK_EXP_HWC_K)
+    asm volatile(".rept " LLK_EXP_MSTR_(LLK_EXP_HWC_K) "\n\tnop\n\t.endr"); // experiment (initx): k NOPs
+#elif defined(LLK_EXP_NOP_MATH)
+    asm volatile("nop"); // experiment: INIT NOP
+#endif
     TTI_STALLWAIT(p_stall::STALL_CFG, p_stall::MATH | p_stall::WAIT_SFPU);
     std::uint32_t int8_math_enabled = is_int8_or_int32_format(srca_data_format) || is_int8_or_int32_format(srcb_data_format);
     std::uint32_t config_data       = (srca_data_format << ALU_FORMAT_SPEC_REG0_SrcA_SHAMT) | (srcb_data_format << ALU_FORMAT_SPEC_REG1_SrcB_SHAMT) |
