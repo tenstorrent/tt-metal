@@ -590,6 +590,30 @@ inline void _llk_unpack_A_block_(
         return;
     }
 
+    // Uncompressed tiles back to back in L1: the Z counter walks on into the next tile, so no tile needs an address write.
+    if (!IS_BFP_FORMAT(unpack_src_format) && tile_stride_16B == num_faces * face_r_dim * datum_size_in_bytes(unpack_src_format))
+    {
+        std::uint32_t contexts_in_use = semaphore_read(semaphore::UNPACK_SYNC);
+        TTI_SETADCZW(0b011, 0, 0, 0, 0, 0b1111); // Clear z/w start counters
+        volatile std::uint32_t tt_reg_ptr *cfg = get_cfg_pointer();
+        const std::uint32_t context            = unp_cfg_context;
+        while (contexts_in_use >= 2)
+        {
+            contexts_in_use = semaphore_read(semaphore::UNPACK_SYNC);
+        }
+        cfg[(context == 0) ? THCON_SEC0_REG3_Base_address_ADDR32 : THCON_SEC0_REG3_Base_cntx1_address_ADDR32] = address;
+        semaphore_post(semaphore::UNPACK_SYNC);
+        TTI_STALLWAIT(p_stall::STALL_UNPACK, p_stall::TRISC_CFG);
+#pragma GCC unroll 0
+        for (std::uint32_t tile = 0; tile < num_tiles; ++tile)
+        {
+            ckernel::ckernel_template::run();
+        }
+        t6_semaphore_get(semaphore::UNPACK_SYNC);
+        switch_config_context_from(context);
+        return;
+    }
+
     // Tile stride into SCRATCH_SEC0 from the instruction stream, so the write is ordered behind the CFGSHIFTMASKs of an earlier block
     TT_SETDMAREG(0, LOWER_HALFWORD(tile_stride_16B), 0, LO_16(p_gpr_unpack::TMP0));
     TT_SETDMAREG(0, UPPER_HALFWORD(tile_stride_16B), 0, HI_16(p_gpr_unpack::TMP0));
