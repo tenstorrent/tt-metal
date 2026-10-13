@@ -1912,6 +1912,9 @@
   cmd: |
     # Stop at the first failed command: the devices are not reset between commands (#57706).
     pytest --timeout 300 models/common/tests/test_sampling.py -k "ttsampling or num_single_device_vocab_splits or untilize_chunk_count or seed or slot_remap or topk_authoritative_route_decision"
+    # Shared-generator behaviour rather than a model's, so it rides along here instead
+    # of reserving its own leg: the legacy decode-command mapping runs on host stubs only.
+    pytest --timeout 300 models/tt_transformers/tests/test_decode_legacy_commands.py
   model: tt-model-sampling
   skus:
     wh_n150:
