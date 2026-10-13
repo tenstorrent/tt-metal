@@ -1,0 +1,12 @@
+# H3a: #60287's head against main's TopK headers (tt-llk and llk_api) at one tree path: the unary TopK rows (local sort,
+# rebuild) main B B main twice, then counters on main and B.
+r main ids/u_sort_rb.txt MATH_ISOLATE,L1_TO_L1
+r B ids/u_sort_rb.txt MATH_ISOLATE,L1_TO_L1
+r B ids/u_sort_rb.txt MATH_ISOLATE,L1_TO_L1
+r main ids/u_sort_rb.txt MATH_ISOLATE,L1_TO_L1
+r main ids/u_sort_rb.txt MATH_ISOLATE,L1_TO_L1
+r B ids/u_sort_rb.txt MATH_ISOLATE,L1_TO_L1
+r B ids/u_sort_rb.txt MATH_ISOLATE,L1_TO_L1
+r main ids/u_sort_rb.txt MATH_ISOLATE,L1_TO_L1
+c main_wc ids/cnt.txt - wc
+c B_wc ids/cnt.txt - wc
