@@ -2,7 +2,7 @@
 """Scratch, not for merge. Device time of the production ops that run the bitonic TopK network (ttnn.topk single-core and
 tree merge, sampling, sort, moe, the DeepSeek grouped gates, the GPT-OSS router) under the device profiler: per case a
 signpost, N_MEAS measured calls after N_WARM warm-up calls, then an "end" signpost. Cases from $OPS_CASES (all if empty);
-OPS_ROW_DISPATCH=1 opens the device with row dispatch (the GPT-OSS router needs eight DRAM-aligned workers)."""
+Blackhole runs the GPT-OSS router with column dispatch (tests/scripts/common.py forces it)."""
 import gc
 import os
 
@@ -183,15 +183,14 @@ for name, g in (("n2", (2, 1)), ("n4", (4, 1)), ("n8", (4, 2)), ("n32", (8, 4)))
     for k in (32, 64):
         for st in (False, True):
             CASES[f"tree_{name}_k{k}" + ("_stable" if st else "")] = case_topk((1, 1, 64, 16384), k, stable=st, grid=g)
-ROW_CASES = {"router_gpt_32x2880x128_k4": case_router_gpt(32, 2880, 128, 4)}
+CASES["router_gpt_32x2880x128_k4"] = case_router_gpt(32, 2880, 128, 4)
+CASES["router_gpt_1x2880x128_k4"] = case_router_gpt(1, 2880, 128, 4)
 
 
 def main():
-    row = os.environ.get("OPS_ROW_DISPATCH") == "1"
-    table = ROW_CASES if row else CASES
+    table = CASES
     names = os.environ.get("OPS_CASES", "").split() or list(table)
-    kw = {"dispatch_core_config": ttnn.DispatchCoreConfig(axis=ttnn.DispatchCoreAxis.ROW)} if row else {}
-    dev = ttnn.open_device(device_id=0, **kw)
+    dev = ttnn.open_device(device_id=0)
     try:
         for name in names:
             setup, run = table[name]

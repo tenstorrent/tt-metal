@@ -25,7 +25,7 @@ elfsum() { for e in $(find $1 -path '*/kernels/*' -name 'trisc*.elf' ! -name '*.
   $OBJ -O binary -j .text "$e" /tmp/e.bin 2>/dev/null && md5sum < /tmp/e.bin | cut -c1-12; done | sort | md5sum | cut -c1-12; }
 declare -A ELF
 r=0; fail=0
-for blk in 1 2; do for a in A B M B2 B2 M B A; do
+for blk in 1 2; do for a in ${ARMS:-A B M B2 B2 M B A}; do
   r=$((r+1)); use $a $a
   o=$OUT/${a}_r$r; mkdir -p $o; t0=$(date +%s)
   timeout -s INT -k 60 1800 python3 -m tracy -r -p --no-web-server -o $o $S/prof_ops.py > $o.log 2>&1
@@ -34,14 +34,16 @@ for blk in 1 2; do for a in A B M B2 B2 M B A; do
   [[ $rc -ne 0 ]] && { fail=1; grep -a -m5 -E 'FAILED|Error' $o.log | cut -c1-240; }
   grep -a 'CASE .* FAILED' $o.log | head -5 | cut -c1-240
   python3 $S/sum_ops.py $o $a $r
-  o2=$OUT/${a}_r${r}_row; mkdir -p $o2
-  OPS_ROW_DISPATCH=1 timeout -s INT -k 60 600 python3 -m tracy -r -p --no-web-server -o $o2 $S/prof_ops.py > $o2.log 2>&1
-  echo "== run $r $a row rc=$? $(grep -c 'CASE .* ok' $o2.log) ok, $(grep -c 'CASE .* FAILED' $o2.log) failed"
-  grep -a 'CASE .* FAILED' $o2.log | head -2 | cut -c1-240
-  python3 $S/sum_ops.py $o2 $a $r
   if [[ -z ${ELF[$a]:-} ]]; then ELF[$a]=$(elfsum $TT_METAL_CACHE)
     echo "OPS ELF $a ${ELF[$a]} $(find $TT_METAL_CACHE -path '*/kernels/*' -name 'trisc*.elf' ! -name '*.xip.elf' | wc -l) compute ELFs"; fi
 done; done
+# The noisiest row again: OPS_FOCUS cases, OPS_NMEAS 32, A B B A four times.
+if [[ -n ${OPS_FOCUS:-} ]]; then for blk in 1 2 3 4; do for a in A B B A; do
+  r=$((r+1)); use $a $a; o=$OUT/${a}_f$r; mkdir -p $o
+  OPS_CASES="$OPS_FOCUS" OPS_NMEAS=32 timeout -s INT -k 60 900 python3 -m tracy -r -p --no-web-server -o $o $S/prof_ops.py > $o.log 2>&1
+  echo "== focus $r $a rc=$? $(grep -c 'CASE .* ok' $o.log) ok"
+  GATE_NMEAS=32 OPS_NMEAS=32 python3 $S/sum_ops.py $o ${a}f $r
+done; done; fi
 use B B
 echo "OPS GUARD A=${ELF[A]} M=${ELF[M]} B=${ELF[B]} B2=${ELF[B2]}"
 [[ ${ELF[A]} == "${ELF[B]}" ]] && { echo "OPS GUARD FAIL: A and B built the same kernels"; fail=1; }

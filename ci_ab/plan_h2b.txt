@@ -1,0 +1,21 @@
+# H2b: the reversed-group variants. A = stack before, M = #58254 merged, B3 = four-phase pass with mode 9 reversed groups,
+# B4 = four-phase pass, reversed groups as #58254, B5 = B4 with the rebuild's reversed window recorded on first use,
+# B6 = B3 with that. Two mirrored blocks over the TopK perf modules; the unary TopK rows on A, B5 and B6.
+r A ids/h1.txt -
+r B3 ids/h1.txt -
+r B4 ids/h1.txt -
+r B5 ids/h1.txt -
+r B6 ids/h1.txt -
+r M ids/h1.txt -
+r M ids/h1.txt -
+r B6 ids/h1.txt -
+r B5 ids/h1.txt -
+r B4 ids/h1.txt -
+r B3 ids/h1.txt -
+r A ids/h1.txt -
+r A ids/u_sort_rb.txt MATH_ISOLATE,L1_TO_L1
+r B5 ids/u_sort_rb.txt MATH_ISOLATE,L1_TO_L1
+r B6 ids/u_sort_rb.txt MATH_ISOLATE,L1_TO_L1
+r B6 ids/u_sort_rb.txt MATH_ISOLATE,L1_TO_L1
+r B5 ids/u_sort_rb.txt MATH_ISOLATE,L1_TO_L1
+r A ids/u_sort_rb.txt MATH_ISOLATE,L1_TO_L1
