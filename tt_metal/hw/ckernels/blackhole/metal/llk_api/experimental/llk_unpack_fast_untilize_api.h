@@ -106,17 +106,19 @@ inline void llk_unpack_fast_untilize_restore_unit_dim(
     }
 }
 
-// Face-pair passes take dense (not block-float) input only.
+// block_float_input is the caller's compile-time view of the input format; the passes step block-float tiles one by one.
+template <bool block_float_input = false>
 inline void llk_unpack_fast_untilize_pass_init(const std::uint32_t operand, const std::uint32_t init_unit_dim) {
     SAN_HOOK(unsupported());
     const std::uint32_t operand_id = get_operand_id(operand);
     LLK_ASSERT(
-        !llk_unpack_fast_untilize_is_bfp_b_input_format(unpack_src_format[operand_id]),
-        "fast_untilize face passes need a dense input format");
+        llk_unpack_fast_untilize_is_bfp_b_input_format(unpack_src_format[operand_id]) == block_float_input,
+        "fast_untilize face passes: the input format differs from the caller's");
     ckernel::_llk_unpack_fast_untilize_pass_init_(
         unpack_src_format[operand_id], unpack_dst_format[operand_id], init_unit_dim);
 }
 
+template <bool block_float_input = false>
 inline void llk_unpack_fast_untilize_pass_block(
     const std::uint32_t operand,
     const std::uint32_t tile_index,
@@ -125,6 +127,14 @@ inline void llk_unpack_fast_untilize_pass_block(
     std::uint32_t& prev_unit_dim) {
     SAN_HOOK(unsupported());
     const std::uint32_t operand_id = get_operand_id(operand);
+    if constexpr (block_float_input) {
+        ckernel::_llk_unpack_fast_untilize_bfp_pass_block_(
+            llk_unpack_fast_untilize_tile_address(operand_id, tile_index),
+            get_local_cb_interface(operand_id).fifo_page_size,
+            unit_dim,
+            pass);
+        return;
+    }
     if ((unit_dim | ckernel::FAST_UNTILIZE_PASS_MOP_KEY) != prev_unit_dim) {
         ckernel::_llk_unpack_fast_untilize_pass_mop_config_(unit_dim);
         prev_unit_dim = unit_dim | ckernel::FAST_UNTILIZE_PASS_MOP_KEY;
@@ -133,10 +143,18 @@ inline void llk_unpack_fast_untilize_pass_block(
         llk_unpack_fast_untilize_tile_address(operand_id, tile_index), unit_dim, pass);
 }
 
+template <bool block_float_input = false>
 inline void llk_unpack_fast_untilize_rest_block(
     const std::uint32_t operand, const std::uint32_t tile_index, const std::uint32_t unit_dim) {
     SAN_HOOK(unsupported());
     const std::uint32_t operand_id = get_operand_id(operand);
+    if constexpr (block_float_input) {
+        ckernel::_llk_unpack_fast_untilize_bfp_rest_block_(
+            llk_unpack_fast_untilize_tile_address(operand_id, tile_index),
+            get_local_cb_interface(operand_id).fifo_page_size,
+            unit_dim);
+        return;
+    }
     ckernel::_llk_unpack_fast_untilize_rest_block_(
         llk_unpack_fast_untilize_tile_address(operand_id, tile_index), unit_dim);
 }

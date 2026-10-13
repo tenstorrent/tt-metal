@@ -231,9 +231,13 @@ def test_fast_untilize_eight_tile_chunks(formats, dimensions, dest_sync):
     )
 
 
-# Dense rows over sixteen tiles: sixteen-tile face-pair units, then a rest of 9 to 15 as a unit or of 2 to 8 as a chunk.
+# Rows over sixteen tiles: sixteen-tile face-pair units, then a rest of 9 to 15 as a unit or of 2 to 8 as a chunk.
 @parametrize(
-    formats=[InputOutputFormat(DataFormat.Float16_b, DataFormat.Float16_b)],
+    formats=[
+        InputOutputFormat(DataFormat.Float16_b, DataFormat.Float16_b),
+        InputOutputFormat(DataFormat.Bfp8_b, DataFormat.Float16_b),
+        InputOutputFormat(DataFormat.Bfp4_b, DataFormat.Float16_b),
+    ],
     dimensions=[(rt, ct) for rt in [1, 2] for ct in [18, 20, 25, 33, 40, 48]],
     dest_sync=FAST_UNTILIZE_DEST_SYNC_MODES,
 )

@@ -29,8 +29,8 @@ static constexpr bool DST_ACCUM_MODE = is_fp32_dest_acc_en;
 #endif
 constexpr bool FAST_UNTILIZE_BFP_B_INPUT =
     UNPACK_A_IN == ckernel::to_underlying(DataFormat::Bfp8_b) || UNPACK_A_IN == ckernel::to_underlying(DataFormat::Bfp4_b);
-// Production takes face-pair passes for dense input only (fast_untilize_dense_input).
-constexpr bool FAST_UNTILIZE_FACE_PASSES = !FAST_UNTILIZE_BFP_B_INPUT && ckernel::fast_untilize_face_passes<FULL_CT_DIM, DST_ACCUM_MODE>();
+// Production takes face-pair passes for dense and block-float input (the untilize helper's input format flags).
+constexpr bool FAST_UNTILIZE_FACE_PASSES = ckernel::fast_untilize_face_passes<FULL_CT_DIM, DST_ACCUM_MODE>();
 constexpr std::uint32_t FAST_UNTILIZE_UNIT_DIM =
     FAST_UNTILIZE_FACE_PASSES ? ckernel::FAST_UNTILIZE_MAX_PASS_UNIT_DIM : ckernel::fast_untilize_max_unit_dim<FULL_CT_DIM, DST_ACCUM_MODE>();
 constexpr bool FAST_UNTILIZE_SINGLE_UNIT             = FULL_CT_DIM <= FAST_UNTILIZE_UNIT_DIM;
@@ -93,7 +93,22 @@ void run_kernel(RUNTIME_PARAMETERS params)
                     {
                         const std::uint32_t unit_dim = ckernel::fast_untilize_next_pass_row_unit(FULL_CT_DIM - chunk_col);
                         const std::uint32_t address  = L1_ADDRESS(buffer_A[rt * FULL_CT_DIM + chunk_col]);
-                        if (ckernel::fast_untilize_unit_uses_passes(unit_dim))
+                        if constexpr (FAST_UNTILIZE_BFP_B_INPUT)
+                        {
+                            const std::uint32_t tile_stride_16B = L1_ADDRESS(buffer_A[rt * FULL_CT_DIM + chunk_col + 1]) - address;
+                            if (ckernel::fast_untilize_unit_uses_passes(unit_dim))
+                            {
+                                for (std::uint32_t pass = 0; pass < 2; pass++)
+                                {
+                                    ckernel::_llk_unpack_fast_untilize_bfp_pass_block_(address, tile_stride_16B, unit_dim, pass);
+                                }
+                            }
+                            else
+                            {
+                                ckernel::_llk_unpack_fast_untilize_bfp_rest_block_(address, tile_stride_16B, unit_dim);
+                            }
+                        }
+                        else if (ckernel::fast_untilize_unit_uses_passes(unit_dim))
                         {
                             if ((unit_dim | ckernel::FAST_UNTILIZE_PASS_MOP_KEY) != prev_unit_dim)
                             {

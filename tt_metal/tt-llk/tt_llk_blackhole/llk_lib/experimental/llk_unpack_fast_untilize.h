@@ -245,6 +245,90 @@ inline void _llk_unpack_fast_untilize_rest_block_(const std::uint32_t address, c
     switch_config_context(unp_cfg_context);
 }
 
+// Block-float tiles each carry their own exponent section, so the unpacker steps its base address per tile: a pass issues
+// two UNPACRs per tile, the rest of a row four.
+inline void _llk_unpack_fast_untilize_bfp_set_stride_(const std::uint32_t address, const std::uint32_t tile_stride_16B)
+{
+    volatile std::uint32_t tt_reg_ptr* cfg = get_cfg_pointer();
+    wait_for_next_context(2);
+
+    const std::uint32_t upk0_reg = (unp_cfg_context == 0) ? THCON_SEC0_REG3_Base_address_ADDR32 : THCON_SEC0_REG3_Base_cntx1_address_ADDR32;
+    cfg[upk0_reg]                = address;
+
+    TT_SETDMAREG(0, LOWER_HALFWORD(tile_stride_16B), 0, LO_16(p_gpr_unpack::TMP0));
+    TT_SETDMAREG(0, UPPER_HALFWORD(tile_stride_16B), 0, HI_16(p_gpr_unpack::TMP0));
+    TTI_STALLWAIT(p_stall::STALL_CFG, p_stall::THCON);
+    TTI_WRCFG(p_gpr_unpack::TMP0, 0, SCRATCH_SEC0_val_ADDR32);
+
+    semaphore_post(semaphore::UNPACK_SYNC);
+    TTI_STALLWAIT(p_stall::STALL_UNPACK, p_stall::TRISC_CFG);
+}
+
+inline void _llk_unpack_fast_untilize_bfp_next_tile_(const bool use_context_0)
+{
+    if (use_context_0)
+    {
+        TTI_CFGSHIFTMASK(1, 0b011, 32 - 1, 0, 0b11, THCON_SEC0_REG3_Base_address_ADDR32);
+    }
+    else
+    {
+        TTI_CFGSHIFTMASK(1, 0b011, 32 - 1, 0, 0b11, THCON_SEC0_REG3_Base_cntx1_address_ADDR32);
+    }
+    TTI_NOP;
+}
+
+inline void _llk_unpack_fast_untilize_bfp_pass_block_(
+    const std::uint32_t address, const std::uint32_t tile_stride_16B, const std::uint32_t unit_dim, const std::uint32_t pass)
+{
+    LLK_ASSERT(is_valid_L1_address(address), "L1 address must be in valid L1 memory region");
+    LLK_ASSERT(is_valid_L1_address(address + tile_stride_16B * (unit_dim - 1)), "L1 address must be in valid L1 memory region");
+    LLK_ASSERT(tile_stride_16B > 0, "fast_untilize BFP tile stride must be greater than zero");
+    LLK_ASSERT(unit_dim >= 2 && unit_dim <= FAST_UNTILIZE_MAX_PASS_UNIT_DIM, "fast_untilize face passes support unit_dim 2 to 16");
+    LLK_ASSERT(pass < 2, "fast_untilize has two face-pair passes");
+
+    _llk_unpack_fast_untilize_bfp_set_stride_(address, tile_stride_16B);
+    const bool use_context_0 = unp_cfg_context == 0;
+    for (std::uint32_t tile = 0; tile < unit_dim; tile++)
+    {
+        _llk_unpack_fast_untilize_set_pass_face_(pass);
+        TTI_UNPACR(SrcA, 0b01, 0, 0, 0, 1, 1, p_unpacr::RAREFYB_DISABLE, 0, 0, 0, 0, 1);
+        TTI_UNPACR(SrcA, 0b01, 0, 0, 0, 1, 1, p_unpacr::RAREFYB_DISABLE, 0, 0, 0, 0, 1);
+        if (tile + 1 < unit_dim)
+        {
+            _llk_unpack_fast_untilize_bfp_next_tile_(use_context_0);
+        }
+    }
+
+    t6_semaphore_get(semaphore::UNPACK_SYNC);
+    switch_config_context(unp_cfg_context);
+}
+
+inline void _llk_unpack_fast_untilize_bfp_rest_block_(const std::uint32_t address, const std::uint32_t tile_stride_16B, const std::uint32_t unit_dim)
+{
+    LLK_ASSERT(is_valid_L1_address(address), "L1 address must be in valid L1 memory region");
+    LLK_ASSERT(is_valid_L1_address(address + tile_stride_16B * (unit_dim - 1)), "L1 address must be in valid L1 memory region");
+    LLK_ASSERT(tile_stride_16B > 0, "fast_untilize BFP tile stride must be greater than zero");
+    LLK_ASSERT(unit_dim >= 2 && unit_dim <= FAST_UNTILIZE_MAX_UNIT_DIM_16BIT_DEST, "fast_untilize row rest supports unit_dim 2 to 8");
+
+    _llk_unpack_fast_untilize_bfp_set_stride_(address, tile_stride_16B);
+    const bool use_context_0 = unp_cfg_context == 0;
+    for (std::uint32_t tile = 0; tile < unit_dim; tile++)
+    {
+        TTI_SETADCZW(0b011, 0, 0, 0, 0, 0b1111);
+        TTI_UNPACR(SrcA, 0b1, 0, 0, 0, 1, 1, p_unpacr::RAREFYB_DISABLE, 0, 0, 0, 0, 1);
+        TTI_UNPACR(SrcA, 0b1, 0, 0, 0, 1, 1, p_unpacr::RAREFYB_DISABLE, 0, 0, 0, 0, 1);
+        TTI_UNPACR(SrcA, 0b1, 0, 0, 0, 1, 1, p_unpacr::RAREFYB_DISABLE, 0, 0, 0, 0, 1);
+        TTI_UNPACR(SrcA, 0b1, 0, 0, 0, 1, 1, p_unpacr::RAREFYB_DISABLE, 0, 0, 0, 0, 1);
+        if (tile + 1 < unit_dim)
+        {
+            _llk_unpack_fast_untilize_bfp_next_tile_(use_context_0);
+        }
+    }
+
+    t6_semaphore_get(semaphore::UNPACK_SYNC);
+    switch_config_context(unp_cfg_context);
+}
+
 inline void _llk_unpack_fast_untilize_uninit_()
 {
 }

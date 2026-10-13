@@ -39,14 +39,15 @@ namespace ckernel {
 // exception on the unpack side because each tile must still be addressed around
 // its exponent section.
 
-// four_tile_chunks keeps the four-tile chunks with a 16-bit DEST too; dense_input (not block-float) lets rows wider
-// than eight tiles take face-pair passes. Init and block must agree on both.
+// four_tile_chunks keeps the four-tile chunks with a 16-bit DEST too; dense_input or block_float_input (the input
+// format) lets rows wider than eight tiles take face-pair passes. Init and block must agree on all three.
 template <
     std::uint32_t full_ct_dim,
     bool configure_remap,
     bool is_fp32_dest_acc_en = DST_ACCUM_MODE,
     bool four_tile_chunks = false,
-    bool dense_input = false>
+    bool dense_input = false,
+    bool block_float_input = false>
 ALWI void fast_untilize_init_impl(uint32_t icb, uint32_t ocb, uint32_t call_line = __builtin_LINE()) {
     static_assert(full_ct_dim > 0, "fast_untilize full_ct_dim must be greater than 0");
 
@@ -62,8 +63,9 @@ ALWI void fast_untilize_init_impl(uint32_t icb, uint32_t ocb, uint32_t call_line
 
     state_configure<Operand::SRCA, Operand::PACK>(icb, ocb, call_line);
 
-    constexpr bool face_passes =
-        dense_input && !four_tile_chunks && fast_untilize_face_passes<full_ct_dim, is_fp32_dest_acc_en>();
+    static_assert(!(dense_input && block_float_input), "fast_untilize input is dense or block-float, not both");
+    constexpr bool face_passes = (dense_input || block_float_input) && !four_tile_chunks &&
+                                 fast_untilize_face_passes<full_ct_dim, is_fp32_dest_acc_en>();
     constexpr std::uint32_t max_unit_dim = face_passes ? FAST_UNTILIZE_MAX_PASS_UNIT_DIM
                                            : four_tile_chunks
                                                ? FAST_UNTILIZE_MAX_UNIT_DIM
@@ -78,7 +80,7 @@ ALWI void fast_untilize_init_impl(uint32_t icb, uint32_t ocb, uint32_t call_line
     MATH((_llk_math_pack_sync_init_<FAST_UNTILIZE_INTERNAL_DST_SYNC_MODE, is_fp32_dest_acc_en>()));
     PACK((_llk_pack_dest_init_<FAST_UNTILIZE_INTERNAL_DST_SYNC_MODE, is_fp32_dest_acc_en>()));
     if constexpr (face_passes) {
-        UNPACK((llk_unpack_fast_untilize_pass_init(icb, first_unit_dim)));
+        UNPACK((llk_unpack_fast_untilize_pass_init<block_float_input>(icb, first_unit_dim)));
     } else {
         UNPACK((llk_unpack_fast_untilize_init<is_fp32_dest_acc_en>(icb, first_unit_dim)));
     }
@@ -105,18 +107,10 @@ template <
     std::uint32_t full_ct_dim,
     bool is_fp32_dest_acc_en = DST_ACCUM_MODE,
     bool four_tile_chunks = false,
-    bool dense_input = false>
+    bool dense_input = false,
+    bool block_float_input = false>
 ALWI void fast_untilize_init(uint32_t icb, uint32_t ocb, uint32_t call_line = __builtin_LINE()) {
-    fast_untilize_init_impl<full_ct_dim, true, is_fp32_dest_acc_en, four_tile_chunks, dense_input>(icb, ocb, call_line);
-}
-
-template <
-    std::uint32_t full_ct_dim,
-    bool is_fp32_dest_acc_en = DST_ACCUM_MODE,
-    bool four_tile_chunks = false,
-    bool dense_input = false>
-ALWI void fast_untilize_init_skip_remap(uint32_t icb, uint32_t ocb, uint32_t call_line = __builtin_LINE()) {
-    fast_untilize_init_impl<full_ct_dim, false, is_fp32_dest_acc_en, four_tile_chunks, dense_input>(
+    fast_untilize_init_impl<full_ct_dim, true, is_fp32_dest_acc_en, four_tile_chunks, dense_input, block_float_input>(
         icb, ocb, call_line);
 }
 
@@ -124,7 +118,19 @@ template <
     std::uint32_t full_ct_dim,
     bool is_fp32_dest_acc_en = DST_ACCUM_MODE,
     bool four_tile_chunks = false,
-    bool dense_input = false>
+    bool dense_input = false,
+    bool block_float_input = false>
+ALWI void fast_untilize_init_skip_remap(uint32_t icb, uint32_t ocb, uint32_t call_line = __builtin_LINE()) {
+    fast_untilize_init_impl<full_ct_dim, false, is_fp32_dest_acc_en, four_tile_chunks, dense_input, block_float_input>(
+        icb, ocb, call_line);
+}
+
+template <
+    std::uint32_t full_ct_dim,
+    bool is_fp32_dest_acc_en = DST_ACCUM_MODE,
+    bool four_tile_chunks = false,
+    bool dense_input = false,
+    bool block_float_input = false>
 ALWI void fast_untilize_block(
     uint32_t icb, uint32_t ocb, uint32_t input_tile_index = 0, uint32_t output_tile_index = 0) {
     static_assert(full_ct_dim > 0, "fast_untilize full_ct_dim must be greater than 0");
@@ -138,7 +144,9 @@ ALWI void fast_untilize_block(
     constexpr std::uint32_t max_unit_dim =
         four_tile_chunks ? FAST_UNTILIZE_MAX_UNIT_DIM : fast_untilize_max_unit_dim<full_ct_dim, is_fp32_dest_acc_en>();
 
-    if constexpr (dense_input && !four_tile_chunks && fast_untilize_face_passes<full_ct_dim, is_fp32_dest_acc_en>()) {
+    if constexpr (
+        (dense_input || block_float_input) && !four_tile_chunks &&
+        fast_untilize_face_passes<full_ct_dim, is_fp32_dest_acc_en>()) {
         constexpr std::uint32_t first_unit_dim = fast_untilize_first_pass_unit(full_ct_dim);
         [[maybe_unused]] std::uint32_t prev_unpack_unit_dim = first_unit_dim | FAST_UNTILIZE_PASS_MOP_KEY;
         [[maybe_unused]] std::uint32_t prev_pack_unit_dim = 0;
@@ -148,7 +156,7 @@ ALWI void fast_untilize_block(
             if (fast_untilize_unit_uses_passes(unit_dim)) {
                 for (std::uint32_t pass = 0; pass < 2; ++pass) {
                     MATH((_llk_math_wait_for_dest_available_<FAST_UNTILIZE_INTERNAL_DST_SYNC_MODE>()));
-                    UNPACK((llk_unpack_fast_untilize_pass_block(
+                    UNPACK((llk_unpack_fast_untilize_pass_block<block_float_input>(
                         icb, input_tile_index + tiles_done, unit_dim, pass, prev_unpack_unit_dim)));
                     MATH((llk_math_fast_untilize_pass_block(0, unit_dim)));
                     MATH((_llk_math_dest_section_done_<FAST_UNTILIZE_INTERNAL_DST_SYNC_MODE, is_fp32_dest_acc_en>()));
@@ -160,7 +168,8 @@ ALWI void fast_untilize_block(
                 }
             } else if constexpr (full_ct_dim > FAST_UNTILIZE_MAX_PASS_UNIT_DIM) {
                 MATH((_llk_math_wait_for_dest_available_<FAST_UNTILIZE_INTERNAL_DST_SYNC_MODE>()));
-                UNPACK((llk_unpack_fast_untilize_rest_block(icb, input_tile_index + tiles_done, unit_dim)));
+                UNPACK((llk_unpack_fast_untilize_rest_block<block_float_input>(
+                    icb, input_tile_index + tiles_done, unit_dim)));
                 MATH((llk_math_fast_untilize_block<is_fp32_dest_acc_en, FAST_UNTILIZE_MAX_UNIT_DIM_16BIT_DEST>(
                     0, unit_dim)));
                 MATH((_llk_math_dest_section_done_<FAST_UNTILIZE_INTERNAL_DST_SYNC_MODE, is_fp32_dest_acc_en>()));
@@ -173,7 +182,9 @@ ALWI void fast_untilize_block(
             tiles_done += unit_dim;
         }
 
-        UNPACK((llk_unpack_fast_untilize_pass_restore_unit_dim(first_unit_dim, prev_unpack_unit_dim)));
+        if constexpr (!block_float_input) {
+            UNPACK((llk_unpack_fast_untilize_pass_restore_unit_dim(first_unit_dim, prev_unpack_unit_dim)));
+        }
         return;
     }
 
