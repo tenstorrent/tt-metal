@@ -9,6 +9,7 @@
 #include <tt-metalium/experimental/fabric/control_plane.hpp>
 #include <tt-metalium/program_descriptors.hpp>
 #include "impl/context/metal_context.hpp"
+#include "tt_metal/fabric/fabric_connection.hpp"
 #include "tt_metal/fabric/fabric_context.hpp"
 #include "tt_metal/fabric/fabric_builder_context.hpp"
 #include <umd/device/types/core_coordinates.hpp>
@@ -90,6 +91,27 @@ FabricMuxConfig::FabricMuxConfig(
     size_t base_l1_address,
     CoreType core_type,
     size_t usable_l1_end_address) :
+    FabricMuxConfig(
+        tt::tt_metal::MetalContext::instance().get_control_plane(),
+        num_full_size_channels,
+        num_header_only_channels,
+        num_buffers_full_size_channel,
+        num_buffers_header_only_channel,
+        buffer_size_bytes_full_size_channel,
+        base_l1_address,
+        core_type,
+        usable_l1_end_address) {}
+
+FabricMuxConfig::FabricMuxConfig(
+    const ControlPlane& control_plane,
+    uint8_t num_full_size_channels,
+    uint8_t num_header_only_channels,
+    uint8_t num_buffers_full_size_channel,
+    uint8_t num_buffers_header_only_channel,
+    size_t buffer_size_bytes_full_size_channel,
+    size_t base_l1_address,
+    CoreType core_type,
+    size_t usable_l1_end_address) :
     core_type_(core_type),
     num_full_size_channels_(num_full_size_channels),
     num_header_only_channels_(num_header_only_channels),
@@ -103,17 +125,19 @@ FabricMuxConfig::FabricMuxConfig(
         num_full_size_channels_ > 0 || num_header_only_channels_ > 0,
         "At least one type of channel must be configured");
 
-    size_t max_buffer_size_bytes_full_size_channel = tt::tt_fabric::get_tt_fabric_channel_buffer_size_bytes();
+    const auto& fabric_context = control_plane.get_fabric_context();
+    const auto& hal = fabric_context.get_hal();
+
+    size_t max_buffer_size_bytes_full_size_channel = fabric_context.get_fabric_channel_buffer_size_bytes();
     TT_FATAL(
         buffer_size_bytes_full_size_channel <= max_buffer_size_bytes_full_size_channel,
         "Buffer size bytes for full size channel should be less than or equal to: {}, but got: {}",
         max_buffer_size_bytes_full_size_channel,
         buffer_size_bytes_full_size_channel);
 
-    noc_aligned_address_size_bytes_ =
-        tt::tt_metal::MetalContext::instance().hal().get_alignment(tt::tt_metal::HalMemType::L1);
+    noc_aligned_address_size_bytes_ = hal.get_alignment(tt::tt_metal::HalMemType::L1);
 
-    buffer_size_bytes_header_only_channel_ = tt::tt_fabric::get_tt_fabric_packet_header_size_bytes();
+    buffer_size_bytes_header_only_channel_ = fabric_context.get_fabric_packet_header_size_bytes();
 
     full_size_channel_size_bytes_ = num_buffers_full_size_channel_ * buffer_size_bytes_full_size_channel_;
     header_only_channel_size_bytes_ = num_buffers_header_only_channel_ * buffer_size_bytes_header_only_channel_;
@@ -168,7 +192,6 @@ FabricMuxConfig::FabricMuxConfig(
 
     memory_map_end_address_ = header_only_channels_region_.get_end_address();
 
-    const auto& hal = tt_metal::MetalContext::instance().hal();
     tt_metal::HalProgrammableCoreType hal_core_type;
     if (core_type_ == CoreType::WORKER) {
         hal_core_type = tt_metal::HalProgrammableCoreType::TENSIX;
@@ -274,6 +297,37 @@ std::vector<uint32_t> FabricMuxConfig::get_fabric_mux_run_time_args(
     uint32_t link_idx,
     ProgramOrDescriptor& mux_program_or_desc,
     const tt::tt_metal::CoreCoord& mux_logical_core) const {
+    auto args = get_regions_to_clear_rt_args();
+
+    tt::tt_fabric::append_fabric_connection_rt_args<ProgramOrDescriptor>(
+        src_fabric_node_id, dst_fabric_node_id, link_idx, mux_program_or_desc, mux_logical_core, args, core_type_);
+
+    return args;
+}
+
+std::vector<uint32_t> FabricMuxConfig::get_fabric_mux_run_time_args_for_relay_mux(
+    const ControlPlane& control_plane,
+    const FabricNodeId& src_fabric_node_id,
+    const FabricNodeId& dst_fabric_node_id,
+    uint32_t link_idx,
+    tt::tt_metal::Program& mux_program,
+    const tt::tt_metal::CoreCoord& mux_logical_core) const {
+    auto args = get_regions_to_clear_rt_args();
+
+    tt::tt_fabric::append_fabric_connection_rt_args_in_context<tt::tt_metal::Program>(
+        control_plane.get_fabric_context(),
+        src_fabric_node_id,
+        dst_fabric_node_id,
+        link_idx,
+        mux_program,
+        mux_logical_core,
+        args,
+        core_type_);
+
+    return args;
+}
+
+std::vector<uint32_t> FabricMuxConfig::get_regions_to_clear_rt_args() const {
     std::vector<uint32_t> args;
 
     auto regions_to_clear = get_memory_regions_to_clear();
@@ -284,10 +338,6 @@ std::vector<uint32_t> FabricMuxConfig::get_fabric_mux_run_time_args(
         args.push_back(static_cast<uint32_t>(address));
         args.push_back(static_cast<uint32_t>(size));
     }
-
-    tt::tt_fabric::append_fabric_connection_rt_args<ProgramOrDescriptor>(
-        src_fabric_node_id, dst_fabric_node_id, link_idx, mux_program_or_desc, mux_logical_core, args, core_type_);
-
     return args;
 }
 

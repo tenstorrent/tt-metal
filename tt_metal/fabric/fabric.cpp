@@ -30,6 +30,7 @@
 #include <umd/device/types/xy_pair.hpp>
 #include "distributed/mesh_device_impl.hpp"
 
+#include "fabric_connection.hpp"
 #include "fabric_host_utils.hpp"
 #include "fabric_context.hpp"
 #include "fabric_builder_context.hpp"
@@ -96,7 +97,8 @@ extern "C" int __emule_gchip_for_node(uint32_t mesh_id, uint32_t chip_id);
 #endif
 
 template <typename ProgramOrDescriptor>
-void append_fabric_connection_rt_args(
+void append_fabric_connection_rt_args_in_context(
+    const FabricContext& fabric_context,
     const FabricNodeId& src_fabric_node_id,
     const FabricNodeId& dst_fabric_node_id,
     const uint32_t link_idx,
@@ -110,8 +112,7 @@ void append_fabric_connection_rt_args(
         src_fabric_node_id,
         dst_fabric_node_id);
 
-    const auto& control_plane = tt::tt_metal::MetalContext::instance().get_control_plane();
-    const auto& fabric_context = control_plane.get_fabric_context();
+    const auto& control_plane = fabric_context.get_control_plane();
     const bool is_2d_fabric = fabric_context.is_2D_routing_enabled();
 
     if (!is_2d_fabric) {
@@ -235,8 +236,7 @@ void append_fabric_connection_rt_args(
         ChipId src_chip_id = control_plane.get_physical_chip_id_from_fabric_node_id(src_fabric_node_id);
 
         tt::tt_metal::CoreCoord fabric_router_virtual_core =
-            tt::tt_metal::MetalContext::instance().get_cluster().get_virtual_eth_core_from_channel(
-                src_chip_id, fabric_router_channel);
+            fabric_context.get_cluster().get_virtual_eth_core_from_channel(src_chip_id, fabric_router_channel);
 
         const auto& edm_config = fabric_context.get_builder_context().get_fabric_router_config();
         auto* channel_allocator = edm_config.channel_allocator.get();
@@ -280,6 +280,27 @@ void append_fabric_connection_rt_args(
             worker_buffer_index_semaphore_id,
             worker_args);
     }
+}
+
+template <typename ProgramOrDescriptor>
+void append_fabric_connection_rt_args(
+    const FabricNodeId& src_fabric_node_id,
+    const FabricNodeId& dst_fabric_node_id,
+    const uint32_t link_idx,
+    ProgramOrDescriptor& worker_program_or_desc,
+    const tt::tt_metal::CoreCoord& worker_core,
+    std::vector<uint32_t>& worker_args,
+    CoreType core_type) {
+    const auto& fabric_context = tt::tt_metal::MetalContext::instance().get_control_plane().get_fabric_context();
+    append_fabric_connection_rt_args_in_context<ProgramOrDescriptor>(
+        fabric_context,
+        src_fabric_node_id,
+        dst_fabric_node_id,
+        link_idx,
+        worker_program_or_desc,
+        worker_core,
+        worker_args,
+        core_type);
 }
 
 bool are_intra_mesh_neighbors(
@@ -495,16 +516,8 @@ void append_routing_plane_connection_manager_rt_args(
 
 std::vector<uint32_t> get_forwarding_link_indices(
     const FabricNodeId& src_fabric_node_id, const FabricNodeId& dst_fabric_node_id) {
-    const auto& control_plane = tt::tt_metal::MetalContext::instance().get_control_plane();
-
-    // find the forwarding direction b/w src and dest chip
-    const auto& forwarding_direction = control_plane.get_forwarding_direction(src_fabric_node_id, dst_fabric_node_id);
-    if (!forwarding_direction.has_value()) {
-        return {};
-    }
-
-    return get_forwarding_link_indices_in_direction(
-        control_plane, src_fabric_node_id, dst_fabric_node_id, forwarding_direction.value());
+    return get_forwarding_link_indices(
+        tt::tt_metal::MetalContext::instance().get_control_plane(), src_fabric_node_id, dst_fabric_node_id);
 }
 
 tt::tt_metal::CoreCoord get_forwarding_eth_core(
@@ -630,6 +643,26 @@ size_t get_number_of_available_routing_planes(
 }
 
 }  // namespace experimental
+
+template void append_fabric_connection_rt_args_in_context<tt::tt_metal::Program>(
+    const FabricContext&,
+    const FabricNodeId&,
+    const FabricNodeId&,
+    const uint32_t,
+    tt::tt_metal::Program&,
+    const tt::tt_metal::CoreCoord&,
+    std::vector<uint32_t>&,
+    CoreType);
+
+template void append_fabric_connection_rt_args_in_context<tt::tt_metal::ProgramDescriptor>(
+    const FabricContext&,
+    const FabricNodeId&,
+    const FabricNodeId&,
+    const uint32_t,
+    tt::tt_metal::ProgramDescriptor&,
+    const tt::tt_metal::CoreCoord&,
+    std::vector<uint32_t>&,
+    CoreType);
 
 template void append_fabric_connection_rt_args<tt::tt_metal::Program>(
     const FabricNodeId&,

@@ -71,14 +71,18 @@ void RelayMux::GenerateStaticConfigs() {
 
     // FabricMuxConfig only accepts Worker or Idle Eth. Eth is not accepted.
     CoreType mux_config_core = GetCoreType() == CoreType::WORKER ? CoreType::WORKER : CoreType::IDLE_ETH;
-    mux_kernel_config_ = std::make_shared<tt::tt_fabric::FabricMuxConfig>(
+    // Built against this relay mux's own control plane (not the default MetalContext's), through the private
+    // constructor RelayMux is a friend of.
+    mux_kernel_config_ = std::make_shared<tt::tt_fabric::FabricMuxConfig>(tt::tt_fabric::FabricMuxConfig(
+        control_plane,
         static_config_.num_full_size_channels.value(),
         static_config_.num_header_only_channels.value(),
         num_slots,
         num_slots,
         static_config_.buffer_size_bytes.value(),
         static_config_.buffer_base_address.value(),
-        mux_config_core);
+        mux_config_core,
+        /*usable_l1_end_address=*/0));
 
     mux_ct_args_ = mux_kernel_config_->get_fabric_mux_compile_time_args_for_relay_mux(control_plane);
 
@@ -117,8 +121,8 @@ void RelayMux::GenerateStaticConfigs() {
         dst_fabric_node_id,
         link_index);
 
-    mux_rt_args_ = mux_kernel_config_->get_fabric_mux_run_time_args(
-        src_fabric_node_id, dst_fabric_node_id, link_index, *program_, {logical_core_});
+    mux_rt_args_ = mux_kernel_config_->get_fabric_mux_run_time_args_for_relay_mux(
+        control_plane, src_fabric_node_id, dst_fabric_node_id, link_index, *program_, {logical_core_});
 }
 
 void RelayMux::GenerateDependentConfigs() {}
@@ -222,7 +226,8 @@ uint32_t RelayMux::get_dispatch_link_index(
             }
         }
     } else {
-        const auto& available_links = tt_fabric::get_forwarding_link_indices(src_fabric_node_id, dst_fabric_node_id);
+        const auto& available_links =
+            tt_fabric::get_forwarding_link_indices(control_plane, src_fabric_node_id, dst_fabric_node_id);
         TT_FATAL(!available_links.empty(), "No links available from {} to {}", src_fabric_node_id, dst_fabric_node_id);
         return available_links.back();
     }
