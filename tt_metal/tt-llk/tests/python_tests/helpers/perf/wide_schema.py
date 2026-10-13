@@ -94,6 +94,7 @@ DB_SCHEMA = [
     Column("ct_dim", "int64", True, "configuration"),
     Column("dest_sync", "string", True, "configuration"),
     Column("dst_index", "int64", True, "configuration"),
+    Column("dst_rounding", "string", True, "configuration"),
     Column("face_c_dim", "int64", True, "configuration"),
     Column("face_r_dim", "int64", True, "configuration"),
     Column("fast_mode", "string", True, "configuration"),
