@@ -169,7 +169,7 @@ inline T load_blocking(volatile T *ptr)
         asm volatile(
             "lhu %[raw], (%[ptr])\n\t"
             "and %[raw], %[raw], %[raw]"
-            : [raw] "=r"(raw)
+            : [raw] "=&r"(raw)
             : [ptr] "r"(ptr)
             : "memory");
     }
