@@ -1,3 +1,18 @@
+> **Status: fixed** (branch `ssinghal/olmo3-galaxy-main`). Two separate causes:
+>
+> 1. **Row-major Q + sharded output (dominant).** Upstream #39539 (Mar 2026) stopped padding the
+>    output head dim to a tile, so a row-major `[1, 8, 8, 128]` output sharded `[32, 128]` logically
+>    packed 4 batches per shard while the kernel still writes one tile-height block per batch per
+>    shard. Every batch except the first of each shard read back garbage — exactly the "only K%8==0
+>    coherent" symptom. `compute_output_specs` now keeps the head dim tile-padded for this case.
+> 2. **Shard-grid / reducer mismatch.** The program factory assumed Q and output shards live on the
+>    first B cores of the compute grid. It now places each batch's reducer on its output shard core
+>    and reads Q from its own shard core (and errors if an output shard is outside the op's grid).
+>    OLMo's `SCORES_BATCHED_MM_OUTPUT_MEMCFG` is now carved from `PAGED_SDPA_DECODE_PROGCFG`'s grid.
+>
+> Regression tests: `tests/ttnn/nightly/unit_tests/operations/sdpa/test_paged_sdpa_decode_batch_collapse.py`
+> (all pass). The diagnosis below is kept for history.
+
 # Bug: `paged_scaled_dot_product_attention_decode` produces incorrect per-batch output for OLMo on TG
 
 ## Summary

@@ -1237,14 +1237,12 @@ class TtOlmoModelArgs(TtModelArgs):
         # region is contiguous cols 0-6; we use cols 1-6 here for SDPA
         # compute. 60 cores gives ~1.4x more K-reduction parallelism than
         # the previous 42-core config — pure throughput gain at batch=1.
-        #
-        # The kernel's known batch=32 slot-N%8∈{6,7} corruption (see
-        # test_paged_sdpa_decode_olmo_progcfg_sweep.py) depends on
-        # grid_cols, not core count, so this widening does not affect the
-        # batch=32 failure shape.
+        # SCORES_BATCHED_MM_OUTPUT_MEMCFG must shard inside this grid (each
+        # batch's output is written in place on its reducer core).
         paged_sdpa_decode_subcore_grids = ttnn.CoreRangeSet(
             [ttnn.CoreRange(ttnn.CoreCoord(1, 0), ttnn.CoreCoord(6, 9))]
         )
+        self.paged_sdpa_decode_subcore_grids = paged_sdpa_decode_subcore_grids
         self.model_config["PAGED_SDPA_DECODE_PROGCFG"] = ttnn.SDPAProgramConfig(
             compute_with_storage_grid_size=(6, 10),
             sub_core_grids=paged_sdpa_decode_subcore_grids,
@@ -1277,12 +1275,16 @@ class TtOlmoModelArgs(TtModelArgs):
 
         # SDPA output memory config (sharded by batch)
         # OLMo has 5 local Q heads, pad to tile size (32)
+        # Paged SDPA decode writes each batch's output in place on that batch's reducer core, so the
+        # output shards must sit inside PAGED_SDPA_DECODE_PROGCFG's sub_core_grids (cols 1-6). Carving
+        # them from self.sub_core_grids (cols 0-6) put batches 6/7 on (0,1)/(1,1) — outside that grid —
+        # which corrupted every batch=32 user except slot 0 of each column.
         self.model_config[
             "SCORES_BATCHED_MM_OUTPUT_MEMCFG"
         ] = lambda batch_size_per_device_group: ttnn.create_sharded_memory_config(
             shape=(math.ceil(self.n_local_heads / 32) * 32, self.head_dim),  # (32, 128) padded
             core_grid=ttnn.num_cores_to_corerangeset_in_subcoregrids(
-                self.start_core, batch_size_per_device_group, self.sub_core_grids, row_wise=True
+                self.start_core, batch_size_per_device_group, self.paged_sdpa_decode_subcore_grids, row_wise=True
             ),
             strategy=ttnn.ShardStrategy.HEIGHT,
             orientation=ttnn.ShardOrientation.ROW_MAJOR,
