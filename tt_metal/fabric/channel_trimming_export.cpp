@@ -4,7 +4,12 @@
 
 // Exports per-router channel trimming capture data as YAML.
 //
-// Output schema:
+// Output is per-rank: each process exports only its local meshes and writes
+//   <logs_dir>/generated/reports/channel_trimming_capture/rank_<world_rank>.yaml
+// so that ranks sharing a filesystem (same-host multi-rank, NFS multi-host) do not clobber
+// each other. See channel_trimming_io.hpp for the path conventions.
+//
+// Output schema (per rank file):
 //
 //   channel_trimming_capture:
 //     chip_<id>:
@@ -43,6 +48,7 @@
 #include "tt_metal/api/tt-metalium/experimental/fabric/control_plane.hpp"
 #include <tt-metalium/experimental/fabric/mesh_graph.hpp>
 #include "tt_metal/fabric/builder/fabric_builder_config.hpp"
+#include "tt_metal/fabric/channel_trimming_io.hpp"
 #include "tt_metal/fabric/fabric_builder_context.hpp"
 #include "tt_metal/fabric/fabric_context.hpp"
 #include "tt_metal/fabric/fabric_edm_packet_header.hpp"
@@ -253,9 +259,8 @@ void export_channel_trimming_capture(tt::tt_metal::MetalEnvImpl& env) {
     emitter << YAML::EndMap;
     emitter << YAML::EndMap;
 
-    // Write to file
-    std::filesystem::path output_path =
-        std::filesystem::path(rtoptions.get_logs_dir()) / "generated" / "reports" / "channel_trimming_capture.yaml";
+    // Write to file (per-rank filename — ranks may share a filesystem, see header comment)
+    std::filesystem::path output_path = get_channel_trimming_capture_path(rtoptions.get_logs_dir());
     std::filesystem::create_directories(output_path.parent_path());
 
     std::ofstream out_file(output_path);
