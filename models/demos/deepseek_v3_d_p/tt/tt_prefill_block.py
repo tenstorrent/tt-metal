@@ -530,6 +530,10 @@ class TtPrefillBlock(LightweightModule):
             overlap_shared_expert_with_dispatch=overlap_shared_expert_with_dispatch,
             routing_use_l1_small_for_semaphores=routing_use_l1_small_for_semaphores,
             is_balanced=is_balanced,
+            # Same env vars as test_ttnn_moe.py, so model-level tests can run the fp8 wire (K3 fp8 plan).
+            dispatch_wire=os.environ.get("MOE_DISPATCH_WIRE", "bf16"),
+            fp8_scale_block=int(os.environ.get("MOE_FP8_SCALE_BLOCK", "0")),
+            combine_wire=os.environ.get("MOE_COMBINE_WIRE", "bf16"),
         )
 
     def set_trace_controller(self, controller):

@@ -265,8 +265,9 @@ void JitBuildEnv::init(
     // Tools
     const static bool use_ccache = std::getenv("TT_METAL_CCACHE_KERNEL_SUPPORT") != nullptr;
     if (use_ccache) {
-        // ccache requires sloppiness settings for both PCH creation and consumption
-        this->gpp_ = "ccache sloppiness=pch_defines,time_macros ";
+        // ccache requires sloppiness settings for both PCH creation and consumption.
+        // Set via env rather than ccache's `key=value` argument form, which needs ccache >= 4.8.
+        this->gpp_ = "env CCACHE_SLOPPINESS=pch_defines,time_macros ccache ";
     } else {
         this->gpp_ = "";
     }

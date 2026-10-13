@@ -666,6 +666,14 @@ class TtRoutedExpert(LightweightModule):
 
         return tt_weight
 
+    @property
+    def copies_tiled_input(self) -> bool:
+        """True when a TILE_LAYOUT input is cloned every forward: a hybrid split with both bands live
+        clones it so the composite's in-place output does not alias the fused band's input. A caller
+        choosing the input layout (fp8 DQ1) should then hand over ROW_MAJOR rows, which need no copy."""
+        threshold = self.hybrid_token_threshold
+        return threshold is not None and threshold < self.max_tokens
+
     def forward(
         self,
         dispatched_buffer: ttnn.Tensor,

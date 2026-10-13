@@ -48,14 +48,15 @@ _MOE_FUSED_DQ2 = os.environ.get("MOE_FUSED_DQ2", "1") == "1"
 # projection + reduce-scatter run beside combine, in a second sub-device window. Default on for the fp8 dispatch
 # wire, whose dispatch (~325 us) is shorter than the whole shared expert (~520 us); the bf16 dispatch (~580 us) is
 # longer, so there the split only adds a window. MOE_SPLIT_SHARED=1 / 0 forces it.
-# Combine output (the post_combine_reduce source) in L1: PCR 132 -> 101 us. Q2's packed rows in L1 save ~20 us
-# more, but both L1 buffers together overlap the shared expert's CBs (it runs beside combine), so Q2 defaults to
-# DRAM whenever combine's output is in L1.
-_MOE_COMBINE_L1 = os.environ.get("MOE_COMBINE_L1", "1") == "1"
+# Opt-in L1 placements (MoE-only perf work). Combine output (the post_combine_reduce source) in L1: PCR 132 -> 101 us
+# on the LB; Q2's packed rows in L1: ~20 us more. Both default to DRAM: in the full K3 model the combine buffer
+# clashes with AttnRes's static CBs at trace compile (24-layer runner on the 8x4 Galaxy), and the two together
+# overlap the shared expert's CBs (it runs beside combine), so never set both.
+_MOE_COMBINE_L1 = os.environ.get("MOE_COMBINE_L1", "0") == "1"
 # Round-to-nearest-even e4m3 in Q1 / Q2 (an SFPU pass) instead of packer truncation. "auto": on for 1x128 scales,
 # where truncation cost GLM 5.3 ~0.0019 final PCC vs bf16 (RNE: 0.0004) for ~3 us per Q.
 _MOE_FP8_RNE = os.environ.get("MOE_FP8_RNE", "auto")
-_MOE_Q2_L1 = os.environ.get("MOE_Q2_L1", "0" if _MOE_COMBINE_L1 else "1") == "1"
+_MOE_Q2_L1 = os.environ.get("MOE_Q2_L1", "0") == "1"
 _MOE_SPLIT_SHARED = os.environ.get("MOE_SPLIT_SHARED")
 # 1x32 fp8 dispatch under LatentMoE: Q1 on each chip's to_latent slice before the all-gather (MOE_Q1_PRE_GATHER=0:
 # gather bf16, then quantize the full latent).
@@ -1005,10 +1006,16 @@ class TtMoe(LightweightModule):
             scales=dispatch_scales,
         )
         mem_mark("after_dispatch")
+        # The fp8 dispatch inputs are freed only after the sub-device clear below. Under the shared-expert
+        # overlap, dispatch is still reading them when the host returns here, and the shared expert running
+        # beside it would be allocated into the freed range. Under q1_pre_gather the input is to_latent's
+        # persistent gather buffer, reused next forward, so it is never freed.
+        fp8_dispatch_inputs = []
         if self.dispatch_fp8:
-            ttnn.deallocate(dispatch_input)
+            if not q1_pre_gather:
+                fp8_dispatch_inputs.append(dispatch_input)
             if dispatch_scales is not None:
-                ttnn.deallocate(dispatch_scales)
+                fp8_dispatch_inputs.append(dispatch_scales)
         dispatch_input = dispatch_scales = None
         if DEBUG_LOGGING_ENABLED:
             logger.debug(
@@ -1039,6 +1046,9 @@ class TtMoe(LightweightModule):
                 self._trace_controller.sub_device_clear()
             else:
                 self.mesh_device.clear_loaded_sub_device_manager()
+        for t in fp8_dispatch_inputs:
+            ttnn.deallocate(t)
+        fp8_dispatch_inputs = None
         # NOTE: padding_config is memoized + owned by the gate (build_padding_config caches it per
         # actual_isl so a captured trace's replay reuses the same device tensor instead of re-issuing a
         # host from_torch). Do NOT deallocate it here — it is reused across forwards/replays; freeing it
@@ -1089,7 +1099,11 @@ class TtMoe(LightweightModule):
             # DQ1 (block scales): unpack the valid prefix of [H e4m3 | H/block fp32] rows, reading each row's scales
             # from its own tail. 1x32: straight to bf8_b tiles (the expert's tiled-x path, written in place: no
             # untilize here, no per-core tilize there); otherwise bf16 rows for the expert's fast tilize.
-            dq1_tile = _MOE_DQ1_TILE and self.fp8_scale_block in (32, 64, 128)
+            # Not under a hybrid routed expert: it would clone a tiled buffer every forward (GLM 5.3 on
+            # Galaxy: 1.42 ms for a 41184 x 6144 buffer), far more than the tile path saves.
+            dq1_tile = (
+                _MOE_DQ1_TILE and self.fp8_scale_block in (32, 64, 128) and not self.routed_expert.copies_tiled_input
+            )
             dispatched_fp8 = dispatched_buffer
             dispatched_buffer = ttnn.experimental.deepseek_prefill.per_token_cast_back(
                 dispatched_fp8,

@@ -60,8 +60,8 @@ Feature flags (defaults are the shipped configuration; flip one only to bisect):
 
 | Flag | Default | Meaning |
 |---|---|---|
-| `MOE_COMBINE_L1` | 1 | combine output (PCR source) in L1 interleaved |
-| `MOE_Q2_L1` | opposite of `MOE_COMBINE_L1` | Q2 packed rows in L1 (both together do not fit beside the shared expert) |
+| `MOE_COMBINE_L1` | 0 | combine output (PCR source) in L1 interleaved; MoE-only: clashes with AttnRes CBs in the full K3 model |
+| `MOE_Q2_L1` | 0 | Q2 packed rows in L1 (never together with `MOE_COMBINE_L1`: they do not fit beside the shared expert) |
 | `MOE_SPLIT_SHARED` | on with fp8 dispatch | shared expert split: gate/up beside dispatch, down + RS beside combine |
 | `MOE_Q1_PRE_GATHER` | 1 | Q1 before the latent all-gather (segmented rows) |
 | `MOE_DQ1_TILE` | 1 | DQ1 writes bf8_b tiles for the expert |

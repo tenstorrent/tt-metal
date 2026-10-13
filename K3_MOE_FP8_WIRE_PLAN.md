@@ -45,7 +45,44 @@ The wire now saves ~200 µs and the three standalone passes cost ~154 µs.
 | **G3** Q1 before the latent all-gather | Q1 on each chip's slice; fp8 gather | done: Q1 27 → 14 µs, gather 87 → 67 µs |
 | **G4** DQ1 | ≤ 90 µs; full fusion only with a shared-tilize expert | met: 73 µs (multicast valid rows, fast scale staging); 49 µs with an L1 output, which overlaps the expert's CBs by ~9 KB |
 | **G5** quick wins | NoC reassignment where the top grid rows congest | DQ1 110 → 90, Q2 125 → 104 µs |
-| **G6** docs and Galaxy | this doc current; then the 8×4 Galaxy run (§5 P5) | LB only so far |
+| **G6** docs and Galaxy | this doc current; then the 8×4 Galaxy run (§5 P5) | **met on 8×4 (2026-10-13):** fp8 5.570 ms vs bf16 6.515 ms traced (−0.945 ms, −14.5%), PCC 0.968628 vs 0.969588; see below |
+
+**G6: 8×4 Galaxy (bh-glx-120-b07u02, 2026-10-13, FABRIC_2D_TORUS_XY, all 896 experts = 28 per chip).**
+Traced = `test_scratch_k3_moe_perf_lb.py` with `K3_MESH=8x4 K3_FABRIC=torus_xy K3_TRACE=1 K3_TRACE_ITERS=20`;
+per-op = one profiled forward, device time per chip; PCC = `test_kimi_k3_moe -k "torus-xy-8x4 and pcc"`.
+
+| | bf16 wire | fp8 1×32 | Δ |
+|---|---|---|---|
+| **T_moe (traced p50)** | **6.515 ms** (min 6.383) | **5.570 ms** (min 5.501) | **−0.945 ms (−14.5%)** |
+| dispatch | 1199 µs | 701 µs | −497 |
+| combine | 1001 µs | 560 µs | −441 |
+| post_combine_reduce | 133 µs | 105 µs | −28 |
+| routed expert | 2590 µs | 2592 µs | +2 |
+| DQ1 / Q2 | — | 75 / 74 µs | +149 |
+| final_output PCC (bar 0.965) | 0.969588 | 0.968628 | −0.0010 |
+| routed_output PCC (bar 0.96) | 0.969557 | 0.968595 | −0.0010 |
+| final_output norm drift vs reference | −0.02% | **−2.3%** | |
+
+- The wire saving is ~3× the LB's (dispatch and combine each −45% on 8×4 vs −30% on the LB): sp = 8 means more hops.
+  The Q/DQ passes cost the same per chip as on the LB. No L1 clash; no flag had to change.
+- **Open: fp8 output norm drift.** fp8 shifts the MoE output norm by −2.3% where bf16 drifts −0.02%; GLM's 1×128
+  wire (RNE on) adds no drift over its bf16 run. Likely the truncating 1×32 quantizes (RNE is off for 1×32). PCC
+  does not see a scale bias; check whether it compounds across layers in a model-level run before shipping, and
+  try `MOE_FP8_RNE=1` for 1×32.
+- The 8×4 PCC case scores ~0.97 for both wires (its seeded weights); the LB's 0.994 is a different case.
+- **`MOE_COMBINE_L1` broke the full model; both L1 placements now default to DRAM.** The K3 24-layer runner
+  (`run_multirank_pcc.sh kimi_k3 sc1`, CI `k3_prefill_runner_24l`) failed at trace compile: the combine output in L1
+  clashed with AttnRes's static CBs (`attn_res.merge`, "static circular buffer region ends at 984192", L1 buffer at
+  948864). With combine's output in DRAM the job passes: KV PCC 0.993837 on the 55k golden, 20,670 tok/s at 5k,
+  18,738 at 50k. `MOE_COMBINE_L1` and `MOE_Q2_L1` are now opt-in (default 0). Traced T_moe with both in DRAM:
+  bf16 6.504 ms, fp8 5.631 ms (**−0.873 ms, −13.4%**); the L1 placements were worth only 30–100 µs here.
+- **Full model, fp8 wire.** CI's `k3_transformer_traced` (`test_kimi_k3_prefill_transformer_chunked -k "L24 and
+  chunks_eleven and traced and iters1 and no_determinism"`, 24 layers, 11 chunks of 5120, traced, KV PCC vs the
+  golden; the wire selected by `MOE_DISPATCH_WIRE` / `MOE_COMBINE_WIRE` / `MOE_FP8_SCALE_BLOCK` through
+  `TtPrefillBlock`): traced forward 3147 ms bf16 → **2811 ms fp8 (−10.7%)**; KV PCC min 0.993796 → 0.993736, every
+  layer within 0.0001. The MoE-level norm drift does not show in the KV cache at 24 layers and 55k tokens; keep it
+  open for the 93-layer and long-context runs. The 4-rank runner cannot select the fp8 wire yet: `tt-run` forwards
+  only `TT_*` / `TTNN_*` / `DEEPSEEK_*` / ... variables, not `MOE_*`.
 
 Out of scope until G1 is decided: e8m0 (1-byte) scales, 1×128 comparisons, the 1D-fabric sparse-mcast
 dispatch (measured in §1.3a, not the shipped topology).

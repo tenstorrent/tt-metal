@@ -53,6 +53,31 @@ Open:
   packets per 12 KB row either way). The migration code that shares this value lives outside this repo — keep it in sync.
 - Galaxy-equivalent load cannot be emulated on the LB (gate needs 256 experts → 32/chip vs 8/chip on 8×4); G6 on Galaxy.
 
+## G6: 8×4 Galaxy (bh-glx-120-b07u02, 2026-10-13, FABRIC_2D_TORUS_XY, 256 experts = 8 per chip, hybrid 320)
+
+Traced = `test_scratch_glm_moe_perf_lb.py` with `K3_MESH=8x4 K3_FABRIC=torus_xy K3_TRACE=1 K3_TRACE_ITERS=20
+MOE_HYBRID_THRESHOLD=320`; PCC = `test_glm_moe -k "torus-xy-8x4 and pad0 and pcc"` with the same threshold.
+
+| | bf16 wire | fp8 1×128, DQ1 tiles (before fix) | fp8 1×128 (fix: DQ1 rows under the hybrid) |
+|---|---|---|---|
+| **T_moe (traced p50)** | **3.227 ms** | 3.962 ms (+0.735) | **2.669 ms (−0.558, −17%)** |
+| final_output PCC (bar 0.982) | 0.988126 | 0.987742 | 0.987742 |
+| routed_output PCC (bar 0.96) | 0.973787 | 0.972749 | 0.972749 |
+
+Per forward per chip (profile, before the fix): dispatch 766 → 400 µs, combine 782 → 335 µs, PCR 99 → 72 µs, fused
+SwiGLU 781 → 722 µs, Q1 + DQ1 + Q2 +169 µs, and a **1419 µs `CloneOperation`** that bf16 does not have.
+
+**The clone.** With the hybrid routed expert (GLM's production `ROUTED_EXPERT_HYBRID_TOKEN_THRESHOLD = 320`) a
+TILE_LAYOUT input is cloned every forward (`TtRoutedExpert.forward`): the composite band writes a tiled input in place,
+and the fused band rejects an output that aliases its input. DQ1's tile output made the dispatched buffer tiled, so fp8
+paid a 41184 × 6144 bf8 copy (~260 MB) that bf16's ROW_MAJOR buffer never needed. Why the LB numbers did not show
+it has not been checked. Fix: DQ1 writes bf16 rows whenever
+`TtRoutedExpert.copies_tiled_input` (a hybrid with both bands live); K3 (no hybrid) keeps the tile path (5.592 ms
+after the fix, within noise of 5.570). fp8 norm drift matches bf16 (+4.9% vs +5.3%, the test's reference mismatch).
+
+With the combine output back in DRAM by default (it clashed with K3's AttnRes CBs in the full model; see the K3
+plan): bf16 3.330 ms, fp8 2.702 ms traced (**−0.628 ms, −18.9%**).
+
 ## 1. Where the code stands for block = 128 today (from a code survey; not run)
 
 - Op validation already accepts `scale_block_w = 128` in `per_token_cast_to_fp8` and `per_token_cast_back`; TtMoe
@@ -80,7 +105,7 @@ Open:
 | **G3** DQ1 | bf8_b tile output for 1×128 (no bf16 round trip); ≤ K3-equivalent per byte |
 | **G4** DQ2 | fused into post_combine_reduce for 1×128; PCR fp8 ≤ PCR bf16 |
 | **G5** correctness | GLM variant with the 320 hybrid threshold on, fp8 wire, PCC passes |
-| **G6** Galaxy | 8×4 numbers (PCC + traced), as for K3 |
+| **G6** Galaxy | 8×4 numbers (PCC + traced), as for K3 — **met 2026-10-13:** fp8 2.669 ms vs bf16 3.227 ms traced (−17%) after the DQ1 hybrid fix; PCC 0.987742 vs 0.988126 |
 
 ## 3. Work items (in order)
 
