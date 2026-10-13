@@ -104,3 +104,18 @@ logs "T466 summary: ring_joint_sdpa gain X%, layer gain Y%" and PCC between arms
   instead of its 63G shards: peak ~204G, ~332G free; needs a waiver of "do not reuse weka tt-shield caches", and a
   v0.22.0 cache-key mismatch would fail the cold job (no /mnt write: cache dir is local);
   (c) wait for blx03 (weights and cache already there; back by ~10-17).
+
+## 2026-10-13 12:46 UTC (05:46 PDT, #468 attempt 2): floor lowered to 250 GiB -> gate passes, copy running
+- Gate: / 536G free, /var/tmp/fasth3 36G. After weights 136 + h3hf 115 + JIT 16: ~269 GiB free (>= 250), total ~303 GB (<= 320).
+- cp466.sh (on blx01 /var/tmp/fasth3/t466): nice -n19 ionice -c3 rsync -a --bwlimit=100M of MiniMax-H3 minus
+  transformer_ref/.cache/README/LICENSE to /var/tmp/fasth3/models/MiniMax-H3; re-checks the projection every 20 s and
+  deletes the copy if it would break the 250 GiB floor. Started via ttp detach --remote (pid 3972908),
+  log /var/tmp/fasth3/t466/cp466.log, rc /var/tmp/fasth3/t466/detach/cp466.rc. ~65-90 MB/s, ~30 min.
+- run466.sh now reads $F/models/MiniMax-H3 (refuses non-local), guards 250 + 131 cold / footprint 320 - 131 cold,
+  and stops an arm if / drops under 250G mid-run. device-lint.sh exit 0 for both the cold and the A/B commands.
+- chain468.sh (g15blx02, ttp detach): waits for cp466.rc, then spec_c10s0 (cold, <= 3 tries while cache builds),
+  then spec_ab10s0 (<= 2 tries), each via tt-project/t288/blx01-submit.sh (health, no other smarton job, lint).
+  Marker chain468.done (0 = both done), log chain468.log.
+- blx01 drop seen (not ours): 2026-10-13 10:57 UTC, ltx-host job 130 broker-killed, chips 5,13,18,23,29 left PCIe;
+  recovered by 11:02 UTC (pci-rescan, glx_reset, fabric-check, hold ended).
+- Next: on chain468.done = 0, read out_ab10s0_{base,lofi}/run.log timing sections; then 6 s seed 0 A/B, seeds 1-4, VBench.

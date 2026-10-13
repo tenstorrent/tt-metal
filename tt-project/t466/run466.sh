@@ -4,8 +4,9 @@
 # Args: <tag> <dur s> <seed> <arms...>; arms run one after another in this job, each its own pytest:
 #   base = MINIMAX_H3_SDPA_MM_FIDELITY unset, lofi = MINIMAX_H3_SDPA_MM_FIDELITY=lofi. Same build for both:
 #   /var/tmp/fasth3/t466/b (e02052af0ee: t460 dbd6d66048f + #57979/#58032/#58223 + the knob).
-# Weights are read in place from the read-only weka copy; every cache and output stays under /var/tmp/fasth3/t466.
-# The first (cold) job builds the dit-h3hf cache (~115 GB) and needs >=432 GB free on / before it starts.
+# Weights are read from the local copy /var/tmp/fasth3/models/MiniMax-H3 (cp466.sh); never from /mnt.
+# Every cache and output stays under /var/tmp/fasth3/t466. The first (cold) job builds the dit-h3hf cache (~115 GB)
+# plus JIT (~16 GB) and needs >=381 GB free on / before it starts.
 # pytest runs in the broker's process group under timeout --foreground -k 10 (no setsid); a 90 s no-progress
 # watchdog (log output or new cache files) ends an arm early; two watchdog hangs end the job.
 set -o pipefail
@@ -18,12 +19,13 @@ mkdir -p $T/cache $TT_METAL_CACHE $TT_DIT_CACHE_DIR $TMPDIR
 for p in $T $TT_METAL_CACHE $TT_DIT_CACHE_DIR $HOME $TMPDIR; do
   case "$(readlink -f "$p")" in /mnt/*|"") echo "[t466] $p resolves under /mnt or nowhere"; exit 4;; esac
 done
-# Space: / keeps >=300 GB free after a cold cache build (~132 GB); our total stays <=200 GB (#466 exception).
+# Space: / keeps >=250 GB free after a cold cache build (~131 GB); our total stays <=320 GB (#466/#468 exception).
 cold=0; [ -n "$(ls -A $TT_DIT_CACHE_DIR 2>/dev/null)" ] || cold=1
-free=$(df -BG --output=avail / | tail -1 | tr -dc 0-9); need=$((300 + cold * 132))
+free=$(df -BG --output=avail / | tail -1 | tr -dc 0-9); need=$((250 + cold * 131))
 [ "$free" -ge $need ] || { echo "[t466] / has ${free}G free, need ${need}G (cold=$cold)"; exit 5; }
-gb=$(timeout 120 du -sxBG $F 2>/dev/null | cut -f1 | tr -dc 0-9); [ "${gb:-0}" -le $((200 - cold * 132)) ] || { echo "[t466] footprint ${gb}G (cold=$cold)"; exit 5; }
-export MINIMAX_H3_MODEL_PATH=$F/models/MiniMax-H3-weka  # symlink to the read-only weka copy (coordinator, 10-13)
+gb=$(timeout 120 du -sxBG $F 2>/dev/null | cut -f1 | tr -dc 0-9); [ "${gb:-0}" -le $((320 - cold * 131)) ] || { echo "[t466] footprint ${gb}G (cold=$cold)"; exit 5; }
+export MINIMAX_H3_MODEL_PATH=$F/models/MiniMax-H3
+case "$(readlink -f $MINIMAX_H3_MODEL_PATH)" in $F/*) ;; *) echo "[t466] weights not local"; exit 4;; esac
 [ -r $MINIMAX_H3_MODEL_PATH/transformer/config.json ] || { echo "[t466] weights unreadable at $MINIMAX_H3_MODEL_PATH"; exit 4; }
 export MINIMAX_H3_TURBO_LORA_PATH=$F/models/lightx2v-h3-turbo/minimax_h3_fl2v_turbo_4step_v1.0_768p_bf16.safetensors
 [ -r $MINIMAX_H3_TURBO_LORA_PATH ] || { echo "[t466] no adapter $MINIMAX_H3_TURBO_LORA_PATH"; exit 4; }
@@ -46,7 +48,7 @@ stop() {
 }
 trap 'stop 5' EXIT
 trap 'exit 143' TERM; trap 'exit 130' INT
-hangs=0; rc=0
+hangs=0; rc=0; lowdisk=
 for ARM in $ARMS; do
   OUT=$T/out_${TAG}_$ARM; L=$OUT/run.log
   [ -e $OUT/PASS ] && { echo "[t466] $TAG $ARM already passed"; continue; }
@@ -63,6 +65,9 @@ for ARM in $ARMS; do
   STAMP=$T/.wd_$TAG; touch $STAMP; last=$(stat -c %s $L); idle=0
   while kill -0 $PG 2>/dev/null; do
     sleep 15
+    if [ "$(df -BG --output=avail / | tail -1 | tr -dc 0-9)" -lt 250 ]; then
+      echo "[t466] / under 250G free, ending $ARM (space floor)" | tee -a $L; lowdisk=1; stop 10; break
+    fi
     now=$(stat -c %s $L)
     if [ "$now" != "$last" ]; then last=$now; idle=0; touch $STAMP; continue; fi
     # Silent cold compiles and cache conversion still write files.
@@ -80,5 +85,6 @@ for ARM in $ARMS; do
   echo "T466_EXIT_$ARM=$arc" | tee -a $L
   if [ $arc = 0 ]; then touch $OUT/PASS; else rc=$arc; fi
   [ $hangs -ge 2 ] && { echo "[t466] 2 hangs, stopping"; break; }
+  [ -n "$lowdisk" ] && { echo "[t466] space floor hit, stopping"; rc=5; break; }
 done
 exit $rc
