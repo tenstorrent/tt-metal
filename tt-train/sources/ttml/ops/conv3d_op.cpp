@@ -9,13 +9,11 @@
 #include <algorithm>
 #include <array>
 #include <cstdint>
-#include <memory>
 #include <optional>
 #include <stdexcept>
 #include <string>
 #include <tt-metalium/constants.hpp>
 #include <tt-metalium/math.hpp>
-#include <ttnn/operations/copy/typecast/typecast.hpp>
 #include <ttnn/operations/core/to_layout/to_layout_op.hpp>
 #include <ttnn/operations/data_movement/concat/concat.hpp>
 #include <ttnn/operations/data_movement/pad/pad.hpp>
@@ -488,60 +486,15 @@ Conv3dGeometry validate_and_build_geometry(
     return geometry;
 }
 
-struct Weights {
-    PreparedWeight forward;
-    std::optional<PreparedWeight> transposed;  // empty until needed
-};
+}  // namespace
 
-void validate_prepared_weight(
-    const Conv3dPreparedWeight& prepared, const ttnn::Tensor& weight_value, const Conv3dGeometry& geometry) {
-    if (prepared.weight_shape != weight_value.logical_shape()) {
-        throw std::invalid_argument(fmt::format(
-            "conv3d: prepared weight was built for shape {}, but the call has shape {}",
-            prepared.weight_shape,
-            weight_value.logical_shape()));
-    }
-    const uint32_t expected_c_in_block = geometry.c_in_block();
-    if (prepared.c_in_block != expected_c_in_block) {
-        throw std::invalid_argument(fmt::format(
-            "conv3d: prepared weight has C_in block {}, expected {} for this kernel",
-            prepared.c_in_block,
-            expected_c_in_block));
-    }
-    const uint32_t kvol = geometry.kernel_volume();
-    auto check_form = [&](const ttnn::Tensor& tensor, uint32_t rows, uint32_t cols, const char* form) {
-        require_device_tensor_like(tensor, fmt::format("prepared {} weight", form), weight_value, "weight");
-        const auto& shape = tensor.logical_shape();
-        if (tensor.layout() != ttnn::Layout::TILE || shape.rank() != 2U || shape[0] != rows || shape[1] != cols) {
-            throw std::invalid_argument(fmt::format(
-                "conv3d: prepared {} weight must be a TILE tensor of shape [{}, {}], got shape {} layout {}",
-                form,
-                rows,
-                cols,
-                shape,
-                tensor.layout()));
-        }
-    };
-    check_form(
-        prepared.forward,
-        kvol * geometry.padded_activation(geometry.C_in),
-        geometry.padded_output(geometry.C_out),
-        "forward");
-    if (prepared.transposed.has_value()) {
-        check_form(
-            prepared.transposed.value(),
-            kvol * geometry.padded_activation(geometry.C_out),
-            geometry.padded_output(geometry.C_in),
-            "transposed");
-    }
-}
-
-autograd::TensorPtr conv3d_impl(
+autograd::TensorPtr conv3d(
     const autograd::TensorPtr& input,
     const autograd::TensorPtr& weight,
     const autograd::TensorPtr& bias,
-    Weights weights,
-    const Conv3dGeometry& geometry) {
+    const Conv3dDims& stride,
+    const Conv3dDims& dilation) {
+    const Conv3dGeometry geometry = validate_and_build_geometry(input, weight, bias, stride, dilation);
     const auto& input_value = input->get_value();
     const uint32_t c_in_padded = geometry.padded_activation(geometry.C_in);
     const uint32_t c_out_padded = geometry.padded_output(geometry.C_out);
@@ -555,7 +508,7 @@ autograd::TensorPtr conv3d_impl(
 
     auto output = run_ttnn_conv3d(
         input_row_major,
-        weights.forward,
+        prepare_forward_weight(weight->get_value(), c_out_padded),
         bias_tile,
         c_out_padded,
         geometry.kernel,
@@ -566,10 +519,7 @@ autograd::TensorPtr conv3d_impl(
 
     auto out = autograd::create_tensor(to_layout_of(output, input_value));
 
-    // Only a caller-supplied transposed form is kept across backward calls; its validity is the caller's contract.
-    auto caller_transposed = std::make_shared<const std::optional<PreparedWeight>>(std::move(weights.transposed));
-
-    autograd::GradFunction grad = [input, weight, bias, out, geometry, caller_transposed]() {
+    autograd::GradFunction grad = [input, weight, bias, out, geometry]() {
         const auto& grad_output = out->get_grad();
         const auto& input_value = input->get_value();
         const auto& weight_value = weight->get_value();
@@ -578,16 +528,9 @@ autograd::TensorPtr conv3d_impl(
         if (input->get_requires_grad()) {
             // Built from the weight's current value on every call, like every other op's closure reads its
             // parameters at backward time, so a retained graph never computes dX from a stale weight.
-            std::optional<PreparedWeight> built;
-            const PreparedWeight* transposed = caller_transposed->has_value() ? &caller_transposed->value() : nullptr;
-            if (transposed == nullptr) {
-                built = prepare_transposed_weight(
-                    to_row_major(weight_value),
-                    geometry.padded_output(geometry.C_in),
-                    geometry.padded_activation(geometry.C_out));
-                transposed = &built.value();
-            }
-            input->add_grad(to_layout_of(conv3d_input_grad(grad_output_row_major, *transposed, geometry), input_value));
+            const auto transposed = prepare_transposed_weight(
+                weight_value, geometry.padded_output(geometry.C_in), geometry.padded_activation(geometry.C_out));
+            input->add_grad(to_layout_of(conv3d_input_grad(grad_output_row_major, transposed, geometry), input_value));
         }
 
         const bool needs_weight_grad = weight->get_requires_grad();
@@ -613,65 +556,6 @@ autograd::TensorPtr conv3d_impl(
 
     out->set_node(autograd::add_backward_node(std::move(grad), out, input, weight, bias));
     return out;
-}
-
-}  // namespace
-
-Conv3dPreparedWeight prepare_conv3d_weight(const ttnn::Tensor& weight, bool with_transposed) {
-    const auto& shape = weight.logical_shape();
-    if (shape.rank() != 5U) {
-        throw std::invalid_argument(
-            fmt::format("conv3d: weight must have rank 5 with layout [C_out, C_in, kD, kH, kW], got shape {}", shape));
-    }
-    require_device_tensor(weight, "weight");
-    Conv3dGeometry geometry;
-    geometry.C_in = shape[1];
-    geometry.C_out = shape[0];
-    geometry.kernel = {shape[2], shape[3], shape[4]};
-
-    // conv3d reads the autograd weight at bf16, so fp32 storage is cast the same way the autocast view is.
-    auto weight_row_major = to_row_major(
-        weight.dtype() == ttnn::DataType::FLOAT32 ? ttnn::typecast(weight, ttnn::DataType::BFLOAT16) : weight);
-    Conv3dPreparedWeight prepared;
-    prepared.weight_shape = shape;
-    prepared.c_in_block = geometry.c_in_block();
-    prepared.forward = prepare_forward_weight(weight_row_major, geometry.padded_output(geometry.C_out)).tensor;
-    if (with_transposed) {
-        prepared.transposed =
-            prepare_transposed_weight(
-                weight_row_major, geometry.padded_output(geometry.C_in), geometry.padded_activation(geometry.C_out))
-                .tensor;
-    }
-    return prepared;
-}
-
-autograd::TensorPtr conv3d(
-    const autograd::TensorPtr& input,
-    const autograd::TensorPtr& weight,
-    const autograd::TensorPtr& bias,
-    const Conv3dDims& stride,
-    const Conv3dDims& dilation) {
-    const Conv3dGeometry geometry = validate_and_build_geometry(input, weight, bias, stride, dilation);
-    Weights weights;
-    weights.forward = prepare_forward_weight(to_row_major(weight->get_value()), geometry.padded_output(geometry.C_out));
-    return conv3d_impl(input, weight, bias, std::move(weights), geometry);
-}
-
-autograd::TensorPtr conv3d(
-    const autograd::TensorPtr& input,
-    const autograd::TensorPtr& weight,
-    const autograd::TensorPtr& bias,
-    const Conv3dPreparedWeight& prepared,
-    const Conv3dDims& stride,
-    const Conv3dDims& dilation) {
-    const Conv3dGeometry geometry = validate_and_build_geometry(input, weight, bias, stride, dilation);
-    validate_prepared_weight(prepared, weight->get_value(), geometry);
-    Weights weights;
-    weights.forward = {prepared.forward, prepared.c_in_block};
-    if (prepared.transposed.has_value()) {
-        weights.transposed = PreparedWeight{prepared.transposed.value(), prepared.c_in_block};
-    }
-    return conv3d_impl(input, weight, bias, std::move(weights), geometry);
 }
 
 }  // namespace ttml::ops

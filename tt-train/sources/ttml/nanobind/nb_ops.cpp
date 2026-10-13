@@ -58,10 +58,7 @@ void py_module_types(nb::module_& m) {
     ttml::nanobind::util::export_enum<ReduceType>(m);
 
     m.def_submodule("binary");
-    {
-        auto py_conv = m.def_submodule("conv");
-        nb::class_<ttml::ops::Conv3dPreparedWeight>(py_conv, "Conv3dPreparedWeight");
-    }
+    m.def_submodule("conv");
     m.def_submodule("distributed");
     m.def_submodule("dropout");
     m.def_submodule("embedding");
@@ -147,11 +144,7 @@ void py_module(nb::module_& m) {
                const autograd::TensorPtr& weight,
                std::optional<autograd::TensorPtr> bias,
                const ttml::ops::Conv3dDims& stride,
-               const ttml::ops::Conv3dDims& dilation,
-               std::optional<ttml::ops::Conv3dPreparedWeight> prepared) -> autograd::TensorPtr {
-                if (prepared.has_value()) {
-                    return ttml::ops::conv3d(input, weight, bias.value_or(nullptr), prepared.value(), stride, dilation);
-                }
+               const ttml::ops::Conv3dDims& dilation) -> autograd::TensorPtr {
                 return ttml::ops::conv3d(input, weight, bias.value_or(nullptr), stride, dilation);
             },
             nb::arg("input"),
@@ -159,8 +152,6 @@ void py_module(nb::module_& m) {
             nb::arg("bias") = nb::none(),
             nb::arg("stride") = ttml::ops::Conv3dDims{1, 1, 1},
             nb::arg("dilation") = ttml::ops::Conv3dDims{1, 1, 1},
-            nb::kw_only(),
-            nb::arg("prepared") = nb::none(),
             "Unpadded, dense 3D convolution with autograd for input, weight and optional bias.\n"
             "input:  [N, D, H, W, C_in] channels-last (not PyTorch's NCDHW); float, on device. Float tensors are\n"
             "        read at autograd's bf16 precision, so float32 parameters are computed in bf16.\n"
@@ -169,26 +160,7 @@ void py_module(nb::module_& m) {
             "Returns [N, D_out, H_out, W_out, C_out] in the input's layout; gradients come back in the layout of\n"
             "the tensor they belong to.\n"
             "Constraints (ValueError): stride, dilation >= 1; input >= effective kernel on every spatial axis.\n"
-            "C_in and C_out are zero padded to the kernel's channel blocks on device and sliced back.\n"
-            "prepared (keyword-only): caller-prepared weights from prepare_conv3d_weight. `weight` is still the\n"
-            "autograd parameter that receives the weight gradient; the prepared forms must match its shape.");
-
-        auto py_prepared =
-            static_cast<nb::class_<ttml::ops::Conv3dPreparedWeight>>(py_conv.attr("Conv3dPreparedWeight"));
-        py_prepared.def_ro("weight_shape", &ttml::ops::Conv3dPreparedWeight::weight_shape);
-        py_prepared.def_ro("c_in_block", &ttml::ops::Conv3dPreparedWeight::c_in_block);
-        py_prepared.def_ro("forward", &ttml::ops::Conv3dPreparedWeight::forward);
-        py_prepared.def_ro("transposed", &ttml::ops::Conv3dPreparedWeight::transposed);
-
-        py_conv.def(
-            "prepare_conv3d_weight",
-            &ttml::ops::prepare_conv3d_weight,
-            nb::arg("weight"),
-            nb::arg("with_transposed") = true,
-            "Build the kernel-layout forms of a [C_out, C_in, kD, kH, kW] device weight once: a forward form\n"
-            "[kD*kH*kW*C_in_pad, C_out_pad] (TILE) and, unless with_transposed=False, the flipped and transposed\n"
-            "form used for the input gradient. Valid only while the weight's values do not change; pass the\n"
-            "result to conv3d(..., prepared=...).");
+            "C_in and C_out are zero padded to the kernel's channel blocks on device and sliced back.");
     }
 
     {
