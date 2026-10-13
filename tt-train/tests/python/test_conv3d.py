@@ -4,8 +4,9 @@
 
 """``ttml.ops.conv.conv3d`` against ``torch.nn.functional.conv3d``.
 
-ttml takes channels-last activations ``[N, D, H, W, C]``; PyTorch uses ``[N, C, D, H, W]``. Weights are in the
-PyTorch layout ``[C_out, C_in, kD, kH, kW]`` in both.
+A few cases against the torch reference; the full case matrix lives in the C++ test. ttml takes channels-last
+activations ``[N, D, H, W, C]``; PyTorch uses ``[N, C, D, H, W]``. Weights are in the PyTorch layout
+``[C_out, C_in, kD, kH, kW]`` in both.
 """
 
 import numpy as np
@@ -33,14 +34,12 @@ def _reset_graph():
     ttml.autograd.AutoContext.get_instance().reset_graph()
 
 
-def _round_to(array, dtype):
+def _round_to_bf16(array):
     """Round host data to the precision the op computes in (bf16 for every float storage dtype)."""
-    del dtype
     return torch.from_numpy(array).to(torch.bfloat16).to(torch.float32)
 
 
-def _assert_close(actual, expected, what, dtype):
-    del dtype
+def _assert_close(actual, expected, what):
     tolerance = ABS_FLOOR + REL_OF_MAX * np.abs(expected).max()
     max_err = np.abs(actual - expected).max()
     assert max_err <= tolerance, f"{what}: max abs err {max_err} > {tolerance}"
@@ -62,11 +61,7 @@ def _run_case(
     kernel=(3, 3, 3),
     stride=(1, 1, 1),
     dilation=(1, 1, 1),
-    with_bias=True,
-    bias_rank1=False,
     input_requires_grad=True,
-    weight_requires_grad=True,
-    bias_requires_grad=True,
     layout=ttnn.Layout.ROW_MAJOR,
     dtype=BF16,
 ):
@@ -74,108 +69,46 @@ def _run_case(
     np.random.seed(0)
     D, H, W = spatial
 
-    x_torch = _round_to(np.random.uniform(-1, 1, (N, C_in, D, H, W)).astype(np.float32), dtype)
-    w_torch = _round_to(np.random.uniform(-0.5, 0.5, (C_out, C_in, *kernel)).astype(np.float32), dtype)
-    b_torch = _round_to(np.random.uniform(-1, 1, (C_out,)).astype(np.float32), dtype) if with_bias else None
+    x_torch = _round_to_bf16(np.random.uniform(-1, 1, (N, C_in, D, H, W)).astype(np.float32))
+    w_torch = _round_to_bf16(np.random.uniform(-0.5, 0.5, (C_out, C_in, *kernel)).astype(np.float32))
+    b_torch = _round_to_bf16(np.random.uniform(-1, 1, (C_out,)).astype(np.float32))
     x_torch.requires_grad_(input_requires_grad)
-    w_torch.requires_grad_(weight_requires_grad)
-    if with_bias:
-        b_torch.requires_grad_(bias_requires_grad)
+    w_torch.requires_grad_(True)
+    b_torch.requires_grad_(True)
 
     out_torch = torch.nn.functional.conv3d(x_torch, w_torch, b_torch, stride=stride, dilation=dilation)
-    grad_out_torch = _round_to(np.random.uniform(-1, 1, tuple(out_torch.shape)).astype(np.float32), dtype)
-    any_grad = input_requires_grad or weight_requires_grad or (with_bias and bias_requires_grad)
-    if any_grad:
-        out_torch.backward(grad_out_torch)
+    grad_out_torch = _round_to_bf16(np.random.uniform(-1, 1, tuple(out_torch.shape)).astype(np.float32))
+    out_torch.backward(grad_out_torch)
 
     x_ttml = _to_ttml(x_torch.detach().numpy().transpose(0, 2, 3, 4, 1), layout, dtype, input_requires_grad)
-    w_ttml = _to_ttml(w_torch.detach().numpy(), layout, dtype, weight_requires_grad)
-    b_ttml = None
-    if with_bias:
-        bias_np = b_torch.detach().numpy()
-        # A rank-1 bias cannot be tilized on its own; the op accepts it in ROW_MAJOR.
-        b_ttml = (
-            _to_ttml(bias_np, ttnn.Layout.ROW_MAJOR, dtype, bias_requires_grad)
-            if bias_rank1
-            else _to_ttml(bias_np.reshape(1, 1, 1, C_out), layout, dtype, bias_requires_grad)
-        )
+    w_ttml = _to_ttml(w_torch.detach().numpy(), layout, dtype, True)
+    b_ttml = _to_ttml(b_torch.detach().numpy().reshape(1, 1, 1, C_out), layout, dtype, True)
 
     out_ttml = ttml.ops.conv.conv3d(x_ttml, w_ttml, b_ttml, stride=stride, dilation=dilation)
 
     expected_out = out_torch.detach().numpy().transpose(0, 2, 3, 4, 1)
     assert out_ttml.shape() == list(expected_out.shape)
-    _assert_close(out_ttml.to_numpy(FP32), expected_out, "forward", dtype)
-
-    if not any_grad:
-        assert not out_ttml.get_requires_grad()
-        return
+    _assert_close(out_ttml.to_numpy(FP32), expected_out, "forward")
 
     out_ttml.set_grad_from_tensor(_to_ttml(grad_out_torch.numpy().transpose(0, 2, 3, 4, 1), layout, dtype, False))
     out_ttml.backward(False)
 
     if input_requires_grad:
         _assert_close(
-            x_ttml.get_grad_tensor().to_numpy(FP32), x_torch.grad.numpy().transpose(0, 2, 3, 4, 1), "grad_input", dtype
+            x_ttml.get_grad_tensor().to_numpy(FP32), x_torch.grad.numpy().transpose(0, 2, 3, 4, 1), "grad_input"
         )
     else:
         assert not x_ttml.is_grad_initialized(), "frozen input received a gradient"
-    if weight_requires_grad:
-        _assert_close(w_ttml.get_grad_tensor().to_numpy(FP32), w_torch.grad.numpy(), "grad_weight", dtype)
-    else:
-        assert not w_ttml.is_grad_initialized(), "frozen weight received a gradient"
-    if with_bias:
-        if bias_requires_grad:
-            _assert_close(
-                b_ttml.get_grad_tensor().to_numpy(FP32).reshape(C_out), b_torch.grad.numpy(), "grad_bias", dtype
-            )
-        else:
-            assert not b_ttml.is_grad_initialized(), "frozen bias received a gradient"
-
-
-# fp32 storage exercises the autocast path (parameters held in float32, computed in bf16), not fp32 compute.
-@pytest.mark.parametrize("dtype", [BF16, FP32], ids=["bf16", "fp32_storage"])
-def test_conv3d_forward_backward_with_bias(dtype):
-    _run_case(dtype=dtype)
-
-
-def test_conv3d_without_bias():
-    _run_case(with_bias=False)
-
-
-def test_conv3d_one_dimensional_bias():
-    _run_case(bias_rank1=True)
+    _assert_close(w_ttml.get_grad_tensor().to_numpy(FP32), w_torch.grad.numpy(), "grad_weight")
+    _assert_close(b_ttml.get_grad_tensor().to_numpy(FP32).reshape(C_out), b_torch.grad.numpy(), "grad_bias")
 
 
 def test_conv3d_batch_and_stride():
     _run_case(N=2, spatial=(5, 6, 7), stride=(2, 2, 2))
 
 
-def test_conv3d_asymmetric_stride():
-    _run_case(spatial=(6, 7, 8), stride=(1, 2, 3))
-
-
-def test_conv3d_dilation():
-    _run_case(spatial=(6, 7, 8), dilation=(2, 2, 2))
-
-
 def test_conv3d_dilation_with_stride_and_batch():
     _run_case(N=2, spatial=(7, 8, 9), dilation=(2, 1, 2), stride=(1, 2, 1))
-
-
-def test_conv3d_per_axis_dilation():
-    _run_case(spatial=(6, 8, 10), dilation=(1, 2, 3))
-
-
-def test_conv3d_output_channels_not_tile_aligned():
-    _run_case(C_out=40)
-
-
-def test_conv3d_input_channels_not_tile_aligned():
-    _run_case(C_in=12)
-
-
-def test_conv3d_rgb_like_input():
-    _run_case(N=2, C_in=3, C_out=40, stride=(2, 1, 2))
 
 
 @pytest.mark.parametrize("layout", [ttnn.Layout.ROW_MAJOR, ttnn.Layout.TILE], ids=["row_major", "tile"])
@@ -183,6 +116,7 @@ def test_conv3d_unaligned_channels_with_batch(layout):
     _run_case(N=2, C_in=24, C_out=40, layout=layout)
 
 
+# fp32 storage exercises the autocast path (parameters held in float32, computed in bf16), not fp32 compute.
 @pytest.mark.parametrize("dtype", [BF16, FP32], ids=["bf16", "fp32_storage"])
 def test_conv3d_patch_embed_kernel(dtype):
     # even kernel volume: channel block drops to 16, so the 16-channel input runs unpadded
@@ -211,34 +145,6 @@ def test_conv3d_patch_embed_wan_a14b_width_rejects_input_grad(expect_error):
     w = _zeros((WAN_A14B_DIM, 16, 1, 2, 2))
     with expect_error(ValueError, "transposed conv .* channel blocks"):
         ttml.ops.conv.conv3d(x, w, stride=(1, 2, 2))
-
-
-def test_conv3d_asymmetric_odd_kernel():
-    _run_case(kernel=(1, 3, 3))
-
-
-def test_conv3d_even_cubic_kernel_with_stride():
-    _run_case(kernel=(2, 2, 2), stride=(2, 2, 2))
-
-
-def test_conv3d_larger_channel_counts():
-    _run_case(C_in=128, C_out=128)
-
-
-def test_conv3d_tile_layout_tensors():
-    _run_case(layout=ttnn.Layout.TILE)
-
-
-def test_conv3d_frozen_weight_and_bias():
-    _run_case(weight_requires_grad=False, bias_requires_grad=False)
-
-
-def test_conv3d_frozen_input():
-    _run_case(input_requires_grad=False)
-
-
-def test_conv3d_frozen_weight_trainable_bias():
-    _run_case(input_requires_grad=False, weight_requires_grad=False)
 
 
 def _zeros(shape, dtype=np.float32, layout=ttnn.Layout.ROW_MAJOR, new_type=BF16):
