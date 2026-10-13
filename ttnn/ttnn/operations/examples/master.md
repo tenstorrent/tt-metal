@@ -130,6 +130,31 @@ as the work per core grows.
 **Gist:** start each core's walk at a different index and wrap. `stagger_blocks` and `stagger_rows`
 are compile-time switches, so flip them per call to check whether they pay on your shape.
 
+## ⭐⭐ T2 — [`read_coalescing`](read_coalescing/README.md)
+**Concept:** replace many small reads with one wide call over physically contiguous shard rows;
+then measure bank-affine work assignment as an additional improvement. A plain ROW_MAJOR
+DRAM copy, two data-movement kernels, one double-buffered CB, no compute kernel.
+**Situation:** a width-sharded DRAM source has one full-height shard per bank, but the reader
+issues 32 small calls per row block even though those rows are contiguous in that bank.
+**Measured win (Blackhole, 104 cores):** for bf16 **3328×512** with 128 B rows per shard,
+coalescing alone gives **3.24×** (**88.308 → 27.256 µs**). Adding bank affinity gives another
+**1.20×**, reaching **3.90×** combined (**22.657 µs**). Across six cases coalescing wins
+**1.11–3.66×**. Affinity added after coalescing ranges **0.91–1.28×**: two longer cases
+regress, so enabling both is not universally best. Coalescing alone is the default.
+These use maximum within-timer-cluster spans because the measured board has mismatched core
+timer bases; see the report. Same cores, CB capacity, bytes and output transfers in all arms;
+equal work per core on the benchmark shapes. Baseline has no bank staggering.
+**Gist:** combine all 32 adjacent full shard rows into one wide read API call (`coalesce_reads`);
+the API splits hardware bursts as needed. This requires physical contiguity, no alignment gaps,
+and a read wholly inside the shard and reserved CB window — invalid across interleaved pages.
+Then try assigning each core one bank's column block and splitting that bank's height among its
+cores (`bank_affinity`). Two independent compile-time switches measure all four combinations.
+**Concrete layout:** the 3328×512 bf16 input is eight 3328×64 DRAM shards (one per bank),
+with consecutive 128 B rows. Coalescing turns each 32-row block into one **4 KiB** read call.
+Without affinity a core reads **8 banks × 1 block**; with affinity it reads **1 bank × 8 blocks**
+(13 cores per bank). Both copy **32 KiB/core**, with unchanged storage. Coalescing controls a
+transfer; affinity controls the bank used across transfers. Neither is a subset of the other.
+
 ## ⭐⭐ T2 — [`matmul_output_subblock`](matmul_output_subblock/README.md)
 **Concept:** matmul output-subblock shape → SRC-register operand reuse (via the `matmul_block` helper).
 **Situation:** you wrote a tiled matmul that produces **one output tile per block-matmul** (a `1×1` subblock), so every output tile re-loads both its A and B operand into the SRC registers; you wonder whether a bigger output subblock is worth it.
