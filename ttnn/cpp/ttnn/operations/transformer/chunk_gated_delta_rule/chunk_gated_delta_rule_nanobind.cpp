@@ -52,7 +52,8 @@ std::tuple<ttnn::Tensor, std::optional<ttnn::Tensor>> chunk_gated_delta_rule_lau
     const std::optional<ttnn::Tensor>& eye,
     const std::optional<ttnn::Tensor>& tril,
     const std::optional<ttnn::Tensor>& ones,
-    const std::optional<ttnn::Tensor>& masks) {
+    const std::optional<ttnn::Tensor>& masks,
+    std::optional<uint32_t> num_key_heads) {
     return ttnn::transformer::chunk_gated_delta_rule(
         q,
         k,
@@ -72,7 +73,8 @@ std::tuple<ttnn::Tensor, std::optional<ttnn::Tensor>> chunk_gated_delta_rule_lau
         eye,
         tril,
         ones,
-        masks);
+        masks,
+        num_key_heads);
 }
 
 std::vector<ttnn::Tensor> chunk_gdn_prep_launch(
@@ -350,12 +352,14 @@ void bind_chunk_gated_delta_rule(nb::module_& mod) {
             Rank 3, flat token-major: q/k/v are the per-head concatenations a projection or the causal
                 conv emits, passed RAW (unnormalized, unscaled). No host relayout: the prep reader
                 tile-addresses each head's chunk out of the flat grid, maps value heads to key heads for
-                GQA at read time, and applies the L2 norm over K and `scale` in the kernel. Requires
-                K == V (assumed, not verifiable from a flat width: K = V, H = flat q width / V, HV =
-                beta's last dim), chunk_size == 32 and T a multiple of chunk_size; fused and phased paths
-                only (mono rejects it). The rank of q/k and of v is checked independently, but pass all
-                three the same way. g, beta and initial_state keep the shapes above on both paths. This is
-                the zero-relayout entry point for callers whose q/k/v are already token-major.
+                GQA at read time, and applies the L2 norm over K and `scale` in the kernel. K == V is
+                assumed unless `num_key_heads` is given (not verifiable from a flat width: K = V,
+                H = flat q width / V, HV = beta's last dim; with `num_key_heads`: H = num_key_heads and
+                K = flat q width / H, so K != V works), chunk_size == 32 and T a multiple of chunk_size;
+                fused and phased paths only (mono rejects it). The rank of q/k and of v is checked
+                independently, but pass all three the same way. g, beta and initial_state keep the shapes
+                above on both paths. This is the zero-relayout entry point for callers whose q/k/v are
+                already token-major.
 
         Keyword Args:
             scale (float, optional): defaults to K**-0.5; multiplied into q on the host (rank 4) or in
@@ -392,6 +396,10 @@ void bind_chunk_gated_delta_rule(nb::module_& mod) {
                 chunk_size.
             masks (ttnn.Tensor, optional): [1,1,32,96] fp32 TILE quadrant masks; supplied with eye/
                 tril/ones.
+            num_key_heads (int, optional): number of key heads H of flat (rank-3) q/k, which lets the
+                flat path run with K != V: H = num_key_heads, K = flat q width / H (must divide). Without
+                it the flat path assumes K == V. For rank-4 q/k it is redundant and, if given, must
+                equal q's head count.
 
         Returns:
             tuple[ttnn.Tensor, Optional[ttnn.Tensor]]:
@@ -423,7 +431,8 @@ void bind_chunk_gated_delta_rule(nb::module_& mod) {
         nb::arg("eye") = nb::none(),
         nb::arg("tril") = nb::none(),
         nb::arg("ones") = nb::none(),
-        nb::arg("masks") = nb::none());
+        nb::arg("masks") = nb::none(),
+        nb::arg("num_key_heads") = nb::none());
 
     const auto* prep_doc =
         R"doc(

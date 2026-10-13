@@ -32,6 +32,10 @@ void kernel_main() {
     // OPT-A: trailing compile args (after all TensorAccessorArgs). 1 => read that tensor FLAT token-major.
     constexpr uint32_t V_FLAT = get_compile_time_arg_val(mask_a.next_compile_time_args_offset());
     constexpr uint32_t QK_FLAT = get_compile_time_arg_val(mask_a.next_compile_time_args_offset() + 1);
+    // 1 => g / beta are token-major [B,T,HV] fp32 (Ct == 1): head hv's column of the chunk's tile is moved
+    // to column 0, where the compute reads its [C,1] vector (the other columns hold other heads' finite
+    // values, which no column-0 result depends on).
+    constexpr uint32_t G_FLAT = get_compile_time_arg_val(mask_a.next_compile_time_args_offset() + 2);
 
     // Chunk-parallel: this core handles the contiguous work-item slice [wi_start, wi_start+wi_count).
     // A work-item is a flat (head, chunk) index; it is exactly the DRAM tile-group index (h*NC + c).
@@ -137,6 +141,29 @@ void kernel_main() {
         cb.push_back(ck);
     };
 
+    // Flat g / beta token-major read (G_FLAT): work-item hc = (b*HV + hv)*NC + c. The gate is a flat
+    // [B,T,HV] fp32 TILE tensor, so head hv of chunk c (Ct == 1, T = NC*32) is column hv%32 of tile
+    // page (b*NC + c)*HVt + hv/32 (HVt = ceil(HV/32) tiles per token-row; HV < 32 -> HVt == 1).
+    auto read_gate_flat = [&](const auto& acc, uint32_t cb_id, uint32_t hc) {
+        const uint32_t bh = hc / NC;
+        const uint32_t c = hc % NC;
+        const uint32_t hv = bh % HV;
+        const uint32_t b = bh / HV;
+        const uint32_t HVt = (HV + 31) / 32;
+        CircularBuffer cb(cb_id);
+        cb.reserve_back(1);
+        noc.async_read(acc, cb, tb_f, {.page_id = (b * NC + c) * HVt + hv / 32}, {.offset_bytes = 0});
+        noc.async_read_barrier();
+        // fp32 tile of 16x16 faces: (r, col) lives at face (r / 16) * 2 + col / 16, offset (r % 16) * 16 + col % 16
+        volatile tt_l1_ptr uint32_t* t = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(cb.get_write_ptr());
+        const uint32_t col = hv % 32;
+        for (uint32_t r = 0; r < 32; r++) {
+            const uint32_t row = (r / 16) * 2 * 256 + (r % 16) * 16;
+            t[row] = t[row + (col / 16) * 256 + col % 16];
+        }
+        cb.push_back(1);
+    };
+
     for (uint32_t i = 0; i < wi_count; i++) {
         const uint32_t hc = wi_start + i * wi_stride;  // flat (head, chunk) index
         if constexpr (QK_FLAT) {
@@ -151,7 +178,12 @@ void kernel_main() {
         } else {
             read_into(v_acc, cb_v, hc * cv, cv, tb_io);
         }
-        read_into(g_acc, cb_g, hc * Ct, Ct, tb_f);
-        read_into(b_acc, cb_beta, hc * Ct, Ct, tb_f);
+        if constexpr (G_FLAT) {
+            read_gate_flat(g_acc, cb_g, hc);
+            read_gate_flat(b_acc, cb_beta, hc);
+        } else {
+            read_into(g_acc, cb_g, hc * Ct, Ct, tb_f);
+            read_into(b_acc, cb_beta, hc * Ct, Ct, tb_f);
+        }
     }
 }
