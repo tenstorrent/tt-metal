@@ -32,9 +32,6 @@ public:
 
     void configure(
         const ExpRingJointSDPAParams& args, const ExpRingJointSDPAInputs& tensor_args, bool fp32_dest_acc_en) override {
-        TT_FATAL(
-            args.precision.has_value(),
-            "The exp ring recipe program factory serves the named recipes");
         policy_ = exp_recipes::resolve_precision_policy(
             exp_recipes::select_recipe(*args.precision, tensor_args.input_k.dtype()));
         TT_FATAL(
@@ -57,9 +54,8 @@ public:
         uint32_t Sq_chunk_t,
         uint32_t DHt,
         std::map<std::string, std::string>& defines) override {
-        // Adopt the recipe CB layout (fixed indices 0-16) in place of the exp-ring CBs. Only K/V gain second
-        // handles for the MUX writer (the recipe's c_14 is exp_max_diff, so the exp aliases move to
-        // exp_ring::kRecipe{K,V}WriterAliasCb). Q is single-slot: recipes run pass-outer, so each pass's Q
+        // Adopt the recipe CB layout (fixed indices 0-16) in place of the exp-ring CBs; K/V gain second handles for
+        // the MUX writer (see exp_ring_recipe_cbs.hpp). Q is single-slot: recipes run pass-outer, so each pass's Q
         // chunk is read once, stays resident across its ring iterations and is popped before the next pass
         // reads its own; the recipe's second Q slot would be dead L1.
         auto recipe_program = exp_recipes::recipe_compute_program(*policy_, sdpa_grid, 1, Sq_chunk_t, k_chunk_tiles_, DHt);

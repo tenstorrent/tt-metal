@@ -20,7 +20,7 @@
 #if defined(WATCHER_ENABLED)
 #pragma GCC optimize("Os")
 #elif defined(TRISC_MATH) || defined(SDPA_RECIPE_FUSED) || defined(SDPA_RECIPE_ACCURATE)
-// Fused FAST chunks (and ACCURATE's FP32 paths) overflow the kernel config buffer at -O3 unpack/pack.
+// Fused chunks (STANDARD, FAST) and ACCURATE's FP32 paths overflow the kernel config buffer at -O3 unpack/pack.
 #pragma GCC optimize("O2")
 #else
 #pragma GCC optimize("O3")
