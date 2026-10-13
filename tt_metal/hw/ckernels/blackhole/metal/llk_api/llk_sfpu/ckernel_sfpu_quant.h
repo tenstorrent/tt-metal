@@ -38,7 +38,7 @@ namespace ckernel::sfpu {
 //   QUANT   (int8-out, 6 ) : SFPMAD, <5-instr offset-128 pack: SFPSETCC,
 //                             SFPMOV, SFPENCC, STOCH_RND, SFPXOR>
 //   REQUANT ( 2s-comp, 6 ) : SFPCAST+SFPSETSGN(in), SFPCAST(int->fp32), SFPMAD,
-//                             STOCH_RND, SFPCAST(out)
+//                             STOCH_RND, SFPCAST(out) (rounding into LREG5)
 //   REQUANT (sign-magn, 3) : SFPCAST(int->fp32), SFPMAD, STOCH_RND
 //   REQUANT (int8-in,  4 ) : SFPCAST(int->fp32), SFPMAD, STOCH_RND, SFPCAST(out)
 //   REQUANT (int8-out, 7 ) : SFPCAST(int->fp32), SFPMAD, <5-instr pack>             (int8 input)
@@ -262,6 +262,7 @@ void requant_init(const uint zero_point) {
         INT8_INPUT ? REQUANT_REPLAY_LEN_INT8_IN
                    : (SIGN_MAGNITUDE_FORMAT ? REQUANT_REPLAY_LEN_SIGN_MAGN : REQUANT_REPLAY_LEN_2S_COMP);
 
+    // The rounding writes LREG5, which calculate_requant_int32 stores one row later.
     lltt::record<lltt::NoExec>(REQUANT_REPLAY_SLOT, REPLAY_LEN);
     {
         if constexpr (!SIGN_MAGNITUDE_FORMAT && !INT8_INPUT) {
@@ -293,7 +294,7 @@ void requant_init(const uint zero_point) {
                 0 /*imm8*/,
                 p_sfpu::LCONST_0,
                 p_sfpu::LREG0,
-                p_sfpu::LREG0,
+                p_sfpu::LREG5,
                 sfpi::SFPSTOCHRND_MOD1_FP32_TO_UINT8);
         } else {
             TTI_SFP_STOCH_RND(
@@ -301,13 +302,13 @@ void requant_init(const uint zero_point) {
                 0 /*imm8*/,
                 p_sfpu::LCONST_0,
                 p_sfpu::LREG0,
-                p_sfpu::LREG0,
+                p_sfpu::LREG5,
                 sfpi::SFPSTOCHRND_MOD1_FP32_TO_INT8);
         }
         if constexpr (!SIGN_MAGNITUDE_FORMAT) {
             // Sign-magnitude to 2's complement for the INT32_2S_COMP store (a no-op on the uint8 range). The cast alone
             // is exact on every value SFP_STOCH_RND returns, so the output side needs no SETSGN fixup.
-            TTI_SFPCAST(p_sfpu::LREG0, p_sfpu::LREG0, INT_REPR_SWAP_CAST);
+            TTI_SFPCAST(p_sfpu::LREG5, p_sfpu::LREG5, INT_REPR_SWAP_CAST);
         }
     }
 }
@@ -342,11 +343,9 @@ void dequant_init(const uint zero_point) {
         // to A + LREG2 (= A + zero_point as loaded by the caller). BH SFPU
         // implicitly stalls SFPMUL below until SFPADD's LREG0 write retires.
         TTI_SFPADD(p_sfpu::LREG0, p_sfpu::LCONST_1, p_sfpu::LREG2, p_sfpu::LREG0, 0 /*mod1*/);
-        // SFPMUL with LCONST_0 (LREG9 = 0.0) ignored as +C :
-        // LREG0 = (A + LREG2) * LREG1. The TT_SFPSTORE outside the replay
-        // (which reads LREG0) is similarly handled by the SFPU's implicit
-        // RAW stall, so no trailing TTI_SFPNOP is required.
-        TTI_SFPMUL(p_sfpu::LREG0, p_sfpu::LREG1, p_sfpu::LCONST_0, p_sfpu::LREG0, 0 /*mod1*/);
+        // SFPMUL with LCONST_0 (LREG9 = 0.0) ignored as +C: LREG5 = (A + LREG2) * LREG1, which
+        // calculate_dequant_int32 stores one row later.
+        TTI_SFPMUL(p_sfpu::LREG0, p_sfpu::LREG1, p_sfpu::LCONST_0, p_sfpu::LREG5, 0 /*mod1*/);
     }
 }
 
@@ -445,22 +444,32 @@ inline void calculate_requant_int32(const uint dst_index_in0, const uint dst_ind
     [[maybe_unused]] const std::uint32_t in1_off = dst_index_in1 * dst_tile_size;
     const std::uint32_t out_off = dst_index_out * dst_tile_size;
 
-    // Per iteration: hoist the TT_SFPLOADs ahead of the recorded compute
-    // (the input cast doesn't touch LREG1 so reordering is safe), replay the
-    // recorded body, then SFPSTORE under ADDR_MOD_6 which auto-advances
-    // dst_reg by 2 for the next iteration.
+    // The recorded body ends with the rounding (and the output cast); each row's SFPSTORE writes the previous row's
+    // LREG5 between the SFPMAD and the rounding, in the SFPMAD's latency. The stores advance dst_reg by 2 (ADDR_MOD_6),
+    // so the loads of rows 1 on read one row ahead of it.
+    constexpr std::uint32_t TAIL = SIGN_MAGNITUDE_FORMAT ? 1 : 2;
+    TT_SFPLOAD(p_sfpu::LREG0, InstrModLoadStore::INT32_2S_COMP, ADDR_MOD_7, in0_off);
+    if constexpr (!SCALAR_SCALE) {
+        TT_SFPLOAD(p_sfpu::LREG1, InstrModLoadStore::FP32, ADDR_MOD_7, in1_off);
+    }
+    if constexpr (INT8_INPUT) {
+        _int8_input_unbias_();  // byte ^ 0x80
+    }
+    lltt::replay(REQUANT_REPLAY_SLOT, REPLAY_LEN);
 #pragma GCC unroll 8
-    for (int d = 0; d < ITERATIONS; d++) {
-        TT_SFPLOAD(p_sfpu::LREG0, InstrModLoadStore::INT32_2S_COMP, ADDR_MOD_7, in0_off);  // operand A (int32/byte)
+    for (int d = 1; d < ITERATIONS; d++) {
+        TT_SFPLOAD(p_sfpu::LREG0, InstrModLoadStore::INT32_2S_COMP, ADDR_MOD_7, in0_off + sfpi::SFP_DESTREG_STRIDE);
         if constexpr (!SCALAR_SCALE) {
-            TT_SFPLOAD(p_sfpu::LREG1, InstrModLoadStore::FP32, ADDR_MOD_7, in1_off);  // operand B (fp32 scaler)
+            TT_SFPLOAD(p_sfpu::LREG1, InstrModLoadStore::FP32, ADDR_MOD_7, in1_off + sfpi::SFP_DESTREG_STRIDE);
         }
         if constexpr (INT8_INPUT) {
             _int8_input_unbias_();  // byte ^ 0x80
         }
-        lltt::replay(REQUANT_REPLAY_SLOT, REPLAY_LEN);
-        TT_SFPSTORE(p_sfpu::LREG0, InstrModLoadStore::INT32_2S_COMP, ADDR_MOD_6, out_off);  // store + dst_reg += 2
+        lltt::replay(REQUANT_REPLAY_SLOT, REPLAY_LEN - TAIL);
+        TT_SFPSTORE(p_sfpu::LREG5, InstrModLoadStore::INT32_2S_COMP, ADDR_MOD_6, out_off);
+        lltt::replay(REQUANT_REPLAY_SLOT + REPLAY_LEN - TAIL, TAIL);
     }
+    TT_SFPSTORE(p_sfpu::LREG5, InstrModLoadStore::INT32_2S_COMP, ADDR_MOD_6, out_off);
 }
 
 template <bool APPROXIMATION_MODE, int ITERATIONS = 8, bool SCALAR_SCALE = false>
@@ -535,21 +544,31 @@ inline void calculate_dequant_int32(const uint dst_index_in0, const uint dst_ind
     [[maybe_unused]] const std::uint32_t in1_off = dst_index_in1 * dst_tile_size;
     const std::uint32_t out_off = dst_index_out * dst_tile_size;
 
-    // Per iteration: hoist the TT_SFPLOADs ahead of the recorded compute,
-    // replay the body, then SFPSTORE under ADDR_MOD_6 which auto-advances
-    // dst_reg by 2 for the next iteration.
+    // The recorded body ends with the SFPMUL into LREG5; each row's SFPSTORE writes the previous row's LREG5 between
+    // the SFPADD and the SFPMUL, in the SFPADD's latency, and a row later than the SFPMUL. The stores advance dst_reg
+    // by 2 (ADDR_MOD_6), so the loads of rows 1 on read one row ahead of it.
+    TT_SFPLOAD(p_sfpu::LREG0, InstrModLoadStore::INT32_2S_COMP, ADDR_MOD_7, in0_off);
+    if constexpr (!SCALAR_SCALE) {
+        TT_SFPLOAD(p_sfpu::LREG1, InstrModLoadStore::FP32, ADDR_MOD_7, in1_off);
+    }
+    if constexpr (INT8_INPUT) {
+        _int8_input_unbias_();  // byte ^ 0x80
+    }
+    lltt::replay(DEQUANT_REPLAY_SLOT, REPLAY_LEN);
 #pragma GCC unroll 8
-    for (int d = 0; d < ITERATIONS; d++) {
-        TT_SFPLOAD(p_sfpu::LREG0, InstrModLoadStore::INT32_2S_COMP, ADDR_MOD_7, in0_off);  // operand A (int32/byte)
+    for (int d = 1; d < ITERATIONS; d++) {
+        TT_SFPLOAD(p_sfpu::LREG0, InstrModLoadStore::INT32_2S_COMP, ADDR_MOD_7, in0_off + sfpi::SFP_DESTREG_STRIDE);
         if constexpr (!SCALAR_SCALE) {
-            TT_SFPLOAD(p_sfpu::LREG1, InstrModLoadStore::FP32, ADDR_MOD_7, in1_off);  // operand B (fp32 scaler)
+            TT_SFPLOAD(p_sfpu::LREG1, InstrModLoadStore::FP32, ADDR_MOD_7, in1_off + sfpi::SFP_DESTREG_STRIDE);
         }
         if constexpr (INT8_INPUT) {
             _int8_input_unbias_();  // byte ^ 0x80
         }
-        lltt::replay(DEQUANT_REPLAY_SLOT, REPLAY_LEN);
-        TT_SFPSTORE(p_sfpu::LREG0, InstrModLoadStore::FP32, ADDR_MOD_6, out_off);  // store fp32 + dst_reg += 2
+        lltt::replay(DEQUANT_REPLAY_SLOT, REPLAY_LEN - 1);
+        TT_SFPSTORE(p_sfpu::LREG5, InstrModLoadStore::FP32, ADDR_MOD_6, out_off);
+        lltt::replay(DEQUANT_REPLAY_SLOT + REPLAY_LEN - 1, 1);
     }
+    TT_SFPSTORE(p_sfpu::LREG5, InstrModLoadStore::FP32, ADDR_MOD_6, out_off);
 }
 
 }  // namespace ckernel::sfpu
