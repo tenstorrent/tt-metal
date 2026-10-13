@@ -10,11 +10,12 @@ contract is intentionally identical:
 * ``cold`` profiles every chunk from an empty cache through that same warm step; and
 * ``long`` profiles one chunk with a 500K-token Galaxy prefix.
 
-On smaller boxes both the chunk and cache scale with SP/8.  A LoudBox therefore runs a 2,560-token
-chunk at 25.6K (warm/cold) or 256K (long) on SP=4 x TP=2; a QuietBox uses the same sequence geometry
-on SP=4 x TP=1.  The synthetic perf config also scales the global head count with TP, preserving the
-Galaxy shape of 24 attention heads per chip.  Each ring iteration therefore has the same query, KV,
-and head shapes per chip on every box.
+On smaller boxes the chunk scales with SP/8. The LoudBox warm case keeps the full 50K-token
+Galaxy prefix with a 2,560-token chunk on SP=4 x TP=2; its cold and long cases retain the
+SP-scaled 25.6K and 256K prefixes. QuietBox retains SP-scaled prefixes on SP=4 x TP=1.
+The synthetic perf config scales the global head count with TP, preserving Galaxy's 24 heads
+and 640 query tokens per chip. LoudBox warm therefore matches Galaxy's total attention
+arithmetic per chip, while each ring step sees twice as many KV rows.
 
 K3 is deliberately not another variant in the sparse harness.  It has no DSA indexer, uses the dense
 tiled BFP8 KV cache, has NoPE, and adds the output ``g_proj`` gate.  Keeping those facts structural
@@ -74,6 +75,12 @@ CHUNK_TOKENS = int(os.environ.get("K3_MLA_PERF_CHUNK", 5 * 1024))
 LONG_CACHE_TOKENS = int(os.environ.get("K3_MLA_PERF_LONG_CACHE", 500 * 1024))
 RT_RECORD_TIMEOUT_S = float(os.environ.get("K3_MLA_PERF_RT_TIMEOUT", 30.0))
 WRITE_OPS_DUMP = os.environ.get("K3_MLA_PERF_OPS_DUMP", "") not in ("", "0", "false")
+LOUDBOX_TARGETS = {
+    "warm": (50 * 1024, 10_100_000),
+    "cold": (25 * 1024, 46_800_000),
+    "long": (250 * 1024, 41_500_000),
+}
+LOUDBOX_PERF_MARGIN = 0.03
 
 SCENARIOS = {
     "warm": {"cache": CACHE_TOKENS, "loop": False},
@@ -460,7 +467,6 @@ def _write_outputs(*, scenario: str, cache: int, chunk: int, forwards: list[dict
 @pytest.mark.parametrize("variant", ["kimi_k3"], ids=["k3"], indirect=True)
 @skip_with_llk_assert("LLK assertions perturb kernel timing; K3 MLA perf measurements require them disabled")
 @skip_with_watcher("Watcher perturbs kernel timing; K3 MLA perf measurements require it disabled")
-@pytest.mark.skipif(os.environ.get("CI") == "true", reason="K3 MLA perf requires dedicated Blackhole hardware")
 @pytest.mark.skipif(not is_blackhole(), reason="K3 MLA and the realtime profiler require Blackhole")
 @pytest.mark.timeout(0)
 def test_mla_chunked_perf(mesh_device, device_params, scenario, variant, random_weights):
@@ -473,7 +479,11 @@ def test_mla_chunked_perf(mesh_device, device_params, scenario, variant, random_
     assert (sp, tp) == PERF_WORKLOAD.mesh_shape
     assert PERF_WORKLOAD.num_attention_heads % tp == 0
 
-    cache = _local_tokens(SCENARIOS[scenario]["cache"], sp)
+    cache = (
+        SCENARIOS[scenario]["cache"]
+        if scenario == "warm" and PERF_WORKLOAD.system_name == "LoudBox"
+        else _local_tokens(SCENARIOS[scenario]["cache"], sp)
+    )
     chunk = PERF_WORKLOAD.chunk_tokens
     total = cache + chunk
     assert cache % chunk == 0, f"cache {cache} must be a whole number of {chunk}-token chunks"
@@ -565,3 +575,12 @@ def test_mla_chunked_perf(mesh_device, device_params, scenario, variant, random_
         logger.info("cold per-iteration traced host ms: " + " ".join(f"{value:.3f}" for value in per_iteration))
 
     _write_outputs(scenario=scenario, cache=cache, chunk=chunk, forwards=forwards, by_op=by_op)
+    if PERF_WORKLOAD.system_name == "LoudBox" and chunk == 2560:
+        expected_cache, target_ns = LOUDBOX_TARGETS[scenario]
+        if cache == expected_cache:
+            measured_ns = by_op["inclusive_ns"].sum()
+            limit_ns = target_ns * (1 + LOUDBOX_PERF_MARGIN)
+            logger.info(f"LoudBox {scenario} device time: {measured_ns:,.0f} ns; limit: {limit_ns:,.0f} ns")
+            assert (
+                measured_ns <= limit_ns
+            ), f"LoudBox {scenario} device time {measured_ns:,.0f} ns exceeds {limit_ns:,.0f} ns"
