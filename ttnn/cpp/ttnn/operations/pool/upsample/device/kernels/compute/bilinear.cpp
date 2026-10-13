@@ -105,7 +105,18 @@ void kernel_main() {
             reduce_h_fused<max_tiles_per_iter>(cur_in_dfb, cur_scalar_dfb, out_dfb);
             cur_scalar_dfb.pop_front(1);
         }
+#ifdef ARCH_BLACKHOLE
+        // A pack untilize runs the MOP of its init, so a narrower last chunk needs its own init or it writes past its pages.
+        if constexpr (partial_iter_output_tiles != max_tiles_per_iter) {
+            PACK((llk_pack_untilize_init<partial_iter_output_tiles>(out_cb_id)));
+        }
+#endif
         reduce_h_fused<partial_iter_output_tiles>(cur_in_dfb, cur_scalar_dfb, out_dfb);
+#ifdef ARCH_BLACKHOLE
+        if constexpr (partial_iter_output_tiles != max_tiles_per_iter) {
+            PACK((llk_pack_untilize_init<max_tiles_per_iter>(out_cb_id)));
+        }
+#endif
         cur_scalar_dfb.pop_front(1);
     }
 }  // void kernel_main()

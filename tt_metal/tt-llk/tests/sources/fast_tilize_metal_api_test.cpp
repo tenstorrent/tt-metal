@@ -22,6 +22,17 @@ std::uint32_t math_sync_tile_dst_index = 0;
 
 constexpr std::uint32_t MAX_UNITS = 16;
 
+// As fast_tilize_block: two units share a DEST section, paired from the row's end, except for a 32-bit input and rows
+// of 4+4+4 or 4+2+3 tiles.
+inline bool pair_units(const std::uint32_t ct_dim, const std::uint32_t units)
+{
+    return static_cast<std::uint32_t>(formats.unpack_A_src) != static_cast<std::uint32_t>(DataFormat::Float32) && units > 1 &&
+           !(units == 3 && (ct_dim & 3) < 2);
+}
+
+// As the `ttnn.tilize` kernels: with no 32-bit source the math thread clears each DEST section at acquire.
+constexpr bool clear_on_acquire = static_cast<std::uint32_t>(formats.unpack_A_src) != static_cast<std::uint32_t>(DataFormat::Float32);
+
 inline std::uint32_t decompose_row(const std::uint32_t ct_dim, std::uint32_t unit_dims[MAX_UNITS])
 {
     std::uint32_t n4 = ct_dim / 4, rem = ct_dim % 4, idx = 0;
@@ -134,11 +145,21 @@ void run_kernel(RUNTIME_PARAMETERS params)
     {
         for (std::uint32_t row = 0; row < BLOCK_RT_DIM; row++)
         {
-            for (std::uint32_t u = 0; u < units_per_row; u++)
+            const bool pair = pair_units(BLOCK_CT_DIM, units_per_row);
+            for (std::uint32_t u = 0; u < units_per_row;)
             {
+                const std::uint32_t units = (pair && ((units_per_row - u) & 1) == 0) ? 2 : 1;
                 _llk_math_wait_for_dest_available_<DstSync::SyncHalf>();
-                _llk_math_fast_tilize_block_<is_fp32_dest_acc_en>(0, formats.math, 4);
+                if constexpr (clear_on_acquire)
+                {
+                    _llk_math_clear_dest_section_<DstSync::SyncHalf, is_fp32_dest_acc_en>();
+                }
+                for (std::uint32_t s = 0; s < units; s++)
+                {
+                    _llk_math_fast_tilize_block_<is_fp32_dest_acc_en>(0, formats.math, 4, 4, s != 0);
+                }
                 _llk_math_dest_section_done_<DstSync::SyncHalf, is_fp32_dest_acc_en>();
+                u += units;
             }
         }
     }
@@ -172,7 +193,8 @@ void run_kernel(RUNTIME_PARAMETERS params)
         formats.pack_src, formats.pack_dst, SCALE_DATUM_SIZE(formats.pack_dst, TILE_C_DIM * TILE_R_DIM));
 
     // fast_tilize_init
-    _llk_pack_fast_tilize_init_<DstSync::SyncHalf, is_fp32_dest_acc_en>(0, formats.pack_dst, unit_dims[0], 4);
+    const bool input_32b = static_cast<std::uint32_t>(formats.unpack_A_src) == static_cast<std::uint32_t>(DataFormat::Float32);
+    _llk_pack_fast_tilize_init_<DstSync::SyncHalf, is_fp32_dest_acc_en>(0, formats.pack_dst, unit_dims[0], 4, formats.pack_src, input_32b);
 
     // Row-scoped pack: destination programmed once per row, chunks streamed through.
     std::uint32_t prev_udim = unit_dims[0];
@@ -182,17 +204,22 @@ void run_kernel(RUNTIME_PARAMETERS params)
         {
             _llk_pack_fast_tilize_row_begin_(L1_ADDRESS(buffer_Res[row * BLOCK_CT_DIM]));
 
-            for (std::uint32_t u = 0; u < units_per_row; u++)
+            const bool pair = pair_units(BLOCK_CT_DIM, units_per_row);
+            for (std::uint32_t u = 0; u < units_per_row;)
             {
-                std::uint32_t udim = unit_dims[u];
-                if (udim != prev_udim)
-                {
-                    _llk_pack_fast_tilize_reinit_unit_dim_(formats.pack_dst, udim);
-                    prev_udim = udim;
-                }
+                const std::uint32_t units = (pair && ((units_per_row - u) & 1) == 0) ? 2 : 1;
                 _llk_packer_wait_for_math_done_();
-                _llk_pack_fast_tilize_row_chunk_(0, udim, 4);
-                _llk_pack_dest_section_done_<DstSync::SyncHalf, is_fp32_dest_acc_en>();
+                for (std::uint32_t s = 0; s < units; s++, u++)
+                {
+                    std::uint32_t udim = unit_dims[u];
+                    if (udim != prev_udim)
+                    {
+                        _llk_pack_fast_tilize_reinit_unit_dim_<is_fp32_dest_acc_en>(formats.pack_dst, udim, input_32b);
+                        prev_udim = udim;
+                    }
+                    _llk_pack_fast_tilize_row_chunk_(0, udim, 4, s != 0);
+                }
+                _llk_pack_dest_section_done_<DstSync::SyncHalf, is_fp32_dest_acc_en, !clear_on_acquire>();
             }
 
             _llk_pack_fast_tilize_row_end_();

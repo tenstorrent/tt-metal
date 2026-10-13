@@ -153,14 +153,20 @@ ALWI void tilize_init_short_with_dt(uint32_t old_icb, uint32_t new_icb, uint32_t
  * | Function   | output_tile_index| Index of the output tile in the ocb      | uint32_t | >= 0        | False    |
  */
 // clang-format on
-template <bool is_fp32_dest_acc_en = DST_ACCUM_MODE>
+// math_clears_dest (Blackhole): the math thread clears each section and the pack release does not
+// (llk_pack_common_api.h).
+template <bool is_fp32_dest_acc_en = DST_ACCUM_MODE, bool math_clears_dest = false>
 ALWI void tilize_block(
     uint32_t icb, uint32_t block, uint32_t ocb, uint32_t input_tile_index = 0, uint32_t output_tile_index = 0) {
     UNPACK((llk_unpack_tilize_block(icb, block, input_tile_index)));
 
     for (uint32_t t = 0; t < block; t++) {
         // Acquire dst
+#ifdef ARCH_BLACKHOLE
+        MATH((llk_math_wait_for_dest_available<math_clears_dest>()));
+#else
         MATH((llk_math_wait_for_dest_available()));
+#endif
         PACK((llk_packer_wait_for_math_done()));
 
 #ifndef ARCH_QUASAR
@@ -174,7 +180,11 @@ ALWI void tilize_block(
 #endif
         // Release dest
         MATH((llk_math_dest_section_done<is_fp32_dest_acc_en>()));
+#ifdef ARCH_BLACKHOLE
+        PACK((llk_pack_dest_section_done<is_fp32_dest_acc_en, math_clears_dest>()));
+#else
         PACK((llk_pack_dest_section_done<is_fp32_dest_acc_en>()));
+#endif
     }
 }
 
@@ -256,7 +266,15 @@ ALWI void fast_tilize_init_impl(uint32_t icb, uint32_t full_dim, uint32_t ocb, u
     } else {
         MATH((llk_math_fast_tilize_init_skip_remap<is_fp32_dest_acc_en>(icb)));
     }
-    PACK((llk_pack_fast_tilize_init<is_fp32_dest_acc_en>(icb, ocb, first_chunk)));
+    if constexpr (!is_fp32_dest_acc_en) {
+        if (full_dim == 2) {
+            PACK((llk_pack_fast_tilize_init_two_tile_row<is_fp32_dest_acc_en>(icb, ocb)));
+        } else {
+            PACK((llk_pack_fast_tilize_init<is_fp32_dest_acc_en>(icb, ocb, first_chunk)));
+        }
+    } else {
+        PACK((llk_pack_fast_tilize_init<is_fp32_dest_acc_en>(icb, ocb, first_chunk)));
+    }
 #else
     UNPACK((llk_unpack_fast_tilize_init(icb, full_dim)));
     MATH((llk_math_fast_tilize_init(icb, full_dim == 1 ? 1 : 2)));
@@ -316,12 +334,13 @@ ALWI void fast_tilize_uninit(uint32_t icb, uint32_t ocb, uint32_t full_dim) {
     PACK((llk_pack_fast_tilize_uninit<is_fp32_dest_acc_en>(ocb)));
 }
 
-template <bool is_fp32_dest_acc_en = DST_ACCUM_MODE>
+// pair_chunks (Blackhole): two chunks share a DEST section and its hand-off, the second in the first one's gap rows.
+template <bool is_fp32_dest_acc_en = DST_ACCUM_MODE, bool pair_chunks = false, bool math_clears_dest = false>
 ALWI void fast_tilize_block(
     uint32_t icb, uint32_t block, uint32_t ocb, uint32_t input_tile_index = 0, uint32_t output_tile_index = 0) {
 #ifdef ARCH_BLACKHOLE
     if (block == 1) {
-        tilize_block<is_fp32_dest_acc_en>(icb, block, ocb, input_tile_index, output_tile_index);
+        tilize_block<is_fp32_dest_acc_en, math_clears_dest>(icb, block, ocb, input_tile_index, output_tile_index);
         return;
     }
     ASSERT(block > 1);
@@ -337,29 +356,61 @@ ALWI void fast_tilize_block(
 
         PACK((llk_pack_fast_tilize_row_begin(ocb, output_tile_index)));
 
-        while (tiles_done < block) {
-            // BH fast-tilize MOP supports unit_dim 2, 3, 4 (not 1).
-            // Avoid chunk=1 by splitting: remaining=5 → 2+3 instead of 4+1.
-            // Matches LLK decompose_row order.
-            uint32_t remaining = block - tiles_done;
-            uint32_t chunk = (remaining > 5) ? 4 : (remaining == 5) ? 2 : remaining;
+        if constexpr (!pair_chunks) {
+            while (tiles_done < block) {
+                // BH fast-tilize MOP supports unit_dim 2, 3, 4 (not 1).
+                // Avoid chunk=1 by splitting: remaining=5 → 2+3 instead of 4+1.
+                // Matches LLK decompose_row order.
+                uint32_t remaining = block - tiles_done;
+                uint32_t chunk = (remaining > 5) ? 4 : (remaining == 5) ? 2 : remaining;
 
-            MATH((llk_math_wait_for_dest_available()));
-            PACK((llk_packer_wait_for_math_done()));
+                MATH((llk_math_wait_for_dest_available<math_clears_dest>()));
+                PACK((llk_packer_wait_for_math_done()));
 
-            if (chunk != prev_chunk) {
-                UNPACK((llk_unpack_fast_tilize_reinit_xdim(chunk)));
-                PACK((llk_pack_fast_tilize_reinit_unit_dim(ocb, chunk)));
-                prev_chunk = chunk;
+                if (chunk != prev_chunk) {
+                    UNPACK((llk_unpack_fast_tilize_reinit_xdim(chunk)));
+                    PACK((llk_pack_fast_tilize_reinit_unit_dim<is_fp32_dest_acc_en>(icb, ocb, chunk)));
+                    prev_chunk = chunk;
+                }
+                UNPACK((llk_unpack_fast_tilize_block(icb, input_tile_index, chunk, tiles_done)));
+                MATH((llk_math_fast_tilize_block_<is_fp32_dest_acc_en>(0, icb, 4)));
+                PACK((llk_pack_fast_tilize_row_chunk(0, ocb, chunk)));
+
+                MATH((llk_math_dest_section_done<is_fp32_dest_acc_en>()));
+                PACK((llk_pack_dest_section_done<is_fp32_dest_acc_en, math_clears_dest>()));
+
+                tiles_done += chunk;
             }
-            UNPACK((llk_unpack_fast_tilize_block(icb, input_tile_index, chunk, tiles_done)));
-            MATH((llk_math_fast_tilize_block_<is_fp32_dest_acc_en>(0, icb, 4)));
-            PACK((llk_pack_fast_tilize_row_chunk(0, ocb, chunk)));
-
-            MATH((llk_math_dest_section_done<is_fp32_dest_acc_en>()));
-            PACK((llk_pack_dest_section_done<is_fp32_dest_acc_en>()));
-
-            tiles_done += chunk;
+        } else {
+            // Pairs are taken from the row's end. A 32-bit input binds the unpacker, and rows of 4+4+4 or 4+2+3 tiles
+            // read slower paired: those keep one chunk per section.
+            const uint32_t num_chunks = (block + 3) / 4;
+            bool pair = num_chunks > 1 && !(num_chunks == 3 && (block & 3) < 2);
+#if defined(TRISC_UNPACK) || defined(TRISC_MATH) || defined(TRISC_PACK)
+            pair = pair && unpack_src_format[icb] != (uint32_t)DataFormat::Float32;
+#endif
+            uint32_t chunks_left = num_chunks;
+            while (tiles_done < block) {
+                const uint32_t slots = (pair && (chunks_left & 1) == 0) ? 2 : 1;
+                MATH((llk_math_wait_for_dest_available<math_clears_dest>()));
+                PACK((llk_packer_wait_for_math_done()));
+                for (uint32_t slot = 0; slot < slots; slot++) {
+                    const uint32_t remaining = block - tiles_done;
+                    const uint32_t chunk = (remaining > 5) ? 4 : (remaining == 5) ? 2 : remaining;
+                    if (chunk != prev_chunk) {
+                        UNPACK((llk_unpack_fast_tilize_reinit_xdim(chunk)));
+                        PACK((llk_pack_fast_tilize_reinit_unit_dim<is_fp32_dest_acc_en>(icb, ocb, chunk)));
+                        prev_chunk = chunk;
+                    }
+                    UNPACK((llk_unpack_fast_tilize_block(icb, input_tile_index, chunk, tiles_done)));
+                    MATH((llk_math_fast_tilize_block_<is_fp32_dest_acc_en>(0, icb, 4, slot != 0)));
+                    PACK((llk_pack_fast_tilize_row_chunk(0, ocb, chunk, slot != 0)));
+                    tiles_done += chunk;
+                }
+                chunks_left -= slots;
+                MATH((llk_math_dest_section_done<is_fp32_dest_acc_en>()));
+                PACK((llk_pack_dest_section_done<is_fp32_dest_acc_en, math_clears_dest>()));
+            }
         }
 
         PACK((llk_pack_fast_tilize_row_end()));
@@ -465,7 +516,7 @@ ALWI void fast_tilize_uninit(uint32_t icb, uint32_t ocb, [[maybe_unused]] uint32
     tilize_uninit(icb, ocb);
 }
 
-template <bool is_fp32_dest_acc_en = DST_ACCUM_MODE>
+template <bool is_fp32_dest_acc_en = DST_ACCUM_MODE, bool pair_chunks = false, bool math_clears_dest = false>
 ALWI void fast_tilize_block(
     uint32_t icb, uint32_t block, uint32_t ocb, uint32_t input_tile_index = 0, uint32_t output_tile_index = 0) {
     tilize_block<is_fp32_dest_acc_en>(icb, block, ocb, input_tile_index, output_tile_index);
@@ -475,7 +526,7 @@ ALWI void fast_tilize_block(
 // clang-format off
 /**
  * Uninitializes the unpack tilizeA_B configuration and restores unpacker state
- * modified by _llk_unpack_tilizeA_B_init_.
+ * modified by llk_unpack_tilizeA_B_init.
  *
  * Return value: None
  *
@@ -490,8 +541,9 @@ ALWI void fast_tilize_block(
  * | Field / Setting           | Scope      | Description                                           | Restored value / behavior                                                                  |
  * |---------------------------|------------|-------------------------------------------------------|--------------------------------------------------------------------------------------------|
  * | Out_data_format/config[0] | THCON_SEC0 | Unpack config[0]: out format, throttle, tilize, shift | out_data_format = unpack_dst_format; throttle_mode = 2; tileize_mode = 0; shift_amount = 0 |
- * | Tile_x_dim (cntx0)        | THCON_SEC0 | Tile X dimension per context for unpacker             | Wormhole: face_r_dim * FACE_C_DIM in both halfwords, from the operand's CB metadata. Blackhole: not written, its init never programs it |
- * | ZW address counters       | UNP_A/B    | Z/W counters stepped by the tilize MOP                | Wormhole only: CH0/CH1 Z and W counters zeroed on both unpackers                           |
+ * | Tile_x_dim (cntx0)        | THCON_SEC0 | Tile X dimension per context for unpacker             | face_r_dim * FACE_C_DIM in both halfwords, from the operand's CB metadata                 |
+ * | Tile Y/Z dims             | THCON_SEC0 | Tile descriptor Y and Z dims of unpacker 0            | Blackhole only: Y dim 1, Z dim num_faces, from the operand's CB metadata                   |
+ * | ZW address counters       | UNP_A/B    | Z/W counters stepped by the tilize MOP                | CH0/CH1 Z and W counters zeroed on both unpackers                                          |
  * | XY address counters       | UNP_A/B    | Y counters stepped by the tilizeA_B row pattern       | Blackhole only: CH0/CH1 Y counters zeroed on both unpackers                                |
  * | SrcA Y stride (CH1)       | UNP0       | Per-row SrcA write stride used by the row-at-a-time tilize | Blackhole only: restored to the canonical stride for unpack_dst_format                 |
  *

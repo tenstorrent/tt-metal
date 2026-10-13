@@ -62,7 +62,9 @@ template <
     tilize_config::WaitMode wait_mode,
     tilize_config::ReconfigureRegisterDatatypeMode reconfig_mode,
     tilize_config::Fp32Mode fp32_mode,
-    tilize_config::RemapMode remap_mode>
+    tilize_config::RemapMode remap_mode,
+    tilize_config::ChunkPairing chunk_pairing,
+    tilize_config::DestClear dest_clear>
 ALWI void tilize(uint32_t num_blocks, std::optional<uint32_t> total_input_pages) {
     // Compile-time validation
     static_assert(block_width_tiles > 0, "block_width_tiles must be greater than 0");
@@ -165,6 +167,13 @@ ALWI void tilize(uint32_t num_blocks, std::optional<uint32_t> total_input_pages)
         in_dfb.wait_front(total_wait);
     }
 
+#if defined(ARCH_BLACKHOLE) && (defined(TRISC_MATH) || defined(TRISC_PACK))
+    constexpr bool math_clears_dest =
+        dest_clear == tilize_config::DestClear::OnMathAcquire && !llk_unpack_may_write_dest();
+#else
+    constexpr bool math_clears_dest = false;
+#endif
+
     // Main loop
     uint32_t pages_left = total_input_pages.value_or(0);
     uint32_t input_pages = block_width_tiles;
@@ -182,9 +191,10 @@ ALWI void tilize(uint32_t num_blocks, std::optional<uint32_t> total_input_pages)
         out_dfb.reserve_back(block_width_tiles);
 
         if constexpr (use_fast) {
-            fast_tilize_block(input_dfb, block_width_tiles, output_dfb);
+            fast_tilize_block<DST_ACCUM_MODE, chunk_pairing == tilize_config::ChunkPairing::Paired, math_clears_dest>(
+                input_dfb, block_width_tiles, output_dfb);
         } else {
-            tilize_block(input_dfb, block_width_tiles, output_dfb);
+            tilize_block<DST_ACCUM_MODE, math_clears_dest>(input_dfb, block_width_tiles, output_dfb);
         }
 
         out_dfb.push_back(block_width_tiles);
@@ -194,6 +204,11 @@ ALWI void tilize(uint32_t num_blocks, std::optional<uint32_t> total_input_pages)
             pages_left -= input_pages;
         }
     }
+#ifdef ARCH_BLACKHOLE
+    if constexpr (math_clears_dest) {
+        MATH((llk_math_dest_clear_region_end()));
+    }
+#endif
 
     // Compile-time cleanup based on InitUninitMode
     if constexpr (
