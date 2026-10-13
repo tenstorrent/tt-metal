@@ -1,0 +1,18 @@
+{
+  "name": "topk-accuracy-v1",
+  "description": "Learned on topk-accuracy (an accuracy target). v0 (parallel-refine) with one fewer parallel branch (W-1) when beta < 0.8; refines every branch to R=4 and never closes on failures, since branches converged by porting each other's ideas.",
+  "origin": {
+    "kind": "dreamed",
+    "campaign": "topk-accuracy",
+    "version": "v1",
+    "machine": "local",
+    "rounds_replayed": [
+      1
+    ],
+    "replay_V": 19.5876,
+    "default_beta": 0.6,
+    "round_root": "origin"
+  },
+  "notes": "# v1 (= v1-cand1, from v0): W - 1 below beta 0.8\n\n**Change:** plan W = default W - 1 (4 -> 3) when beta < 0.8; everything else as v0 (refine every open branch to R=4, never close).\n\n**Evidence (r01):** all four branches converged to the same score 5.5519 at attempt 3; b01, b02 and b04 got there by porting b03's work (tags `port`), after two accuracy_fails each. Two branches then hit the same best 19.6176 at attempt 4. The 4th branch added no new mechanism. W=3 keeps b03 (the source of the ported idea), so the counterfactual stays inside the recorded dependencies. W=2 would not: b01/b02's a03 ported b03, so its replay credit would be an artifact. That's why the width cut stops at 1.\n\n**Kept from v0 on purpose:** no failure-based closing. Closing after 2 accuracy_fails would have lost the round best. Depth stays at R=4 because the best came at attempt 4.\n\n**Result:** V 19.5776 -> 19.5876 (12 attempts instead of 16, same best). That gain is 2 attempts' cost. Beta 0.8 and 1.0 keep W=4 (V = v0).\n\n**Risk:** one round of evidence. Under round_root=origin, next round's branches can port r01's history, so convergence is likely again, but breadth for new ideas drops by one branch.\n",
+  "exported_at": "2026-10-13"
+}
