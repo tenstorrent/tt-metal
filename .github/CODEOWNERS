@@ -368,6 +368,8 @@ ttnn/cpp/ttnn/operations/point_to_point/ @tenstorrent/metalium-developers-ops-da
 ttnn/cpp/ttnn/operations/point_to_point/**/CMakeLists.txt @tenstorrent/metalium-developers-ops-data-movement @tenstorrent/metalium-developers-infra
 ttnn/cpp/ttnn/operations/pool/ @tenstorrent/metalium-developers-convolutions
 ttnn/cpp/ttnn/operations/pool/**/CMakeLists.txt @tenstorrent/metalium-developers-convolutions @tenstorrent/metalium-developers-infra
+ttnn/cpp/ttnn/operations/prefetcher/ @tenstorrent/metalium-developers-ops-leads @jbaumanTT
+ttnn/cpp/ttnn/operations/prefetcher/**/CMakeLists.txt @tenstorrent/metalium-developers-ops-leads @tenstorrent/metalium-developers-infra @jbaumanTT
 ttnn/cpp/ttnn/operations/sliding_window/ @tenstorrent/metalium-developers-convolutions
 ttnn/cpp/ttnn/operations/sliding_window/**/CMakeLists.txt @tenstorrent/metalium-developers-convolutions @tenstorrent/metalium-developers-infra
 # experimental/ is physically shared by many teams. Its top-level
