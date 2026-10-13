@@ -4,6 +4,8 @@
 
 #define ELTWISE_BINARY_PER_TILE_HANDOFF true
 #define ELTWISE_BINARY_PER_TILE_HANDOFF_BCAST true
+#define CKL_ELTWISE_CHAIN_PACK_BLOCK
+
 #include <cstdint>
 
 #define BCAST_LLKOP EltwiseBinaryType::ELWMUL

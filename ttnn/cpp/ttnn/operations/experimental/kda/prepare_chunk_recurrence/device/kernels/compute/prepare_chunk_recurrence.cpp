@@ -64,11 +64,15 @@ inline void matmul_blocks(DataflowBuffer& a, DataflowBuffer& b, DataflowBuffer& 
             }
             tile_regs_commit();
             tile_regs_wait();
+#ifdef ARCH_BLACKHOLE
+            pack_block_mop(0, o_id, subblock_rows * subblock_columns);
+#else
             for (uint32_t row = 0; row < subblock_rows; row++) {
                 for (uint32_t column = 0; column < subblock_columns; column++) {
                     pack_tile(row * subblock_columns + column, o_id, (mi + row) * Nt + ni + column);
                 }
             }
+#endif
             tile_regs_release();
         }
     }
@@ -103,9 +107,13 @@ inline void elementwise_binary(DataflowBuffer& a, DataflowBuffer& b, DataflowBuf
         }
         tile_regs_commit();
         tile_regs_wait();
+#ifdef ARCH_BLACKHOLE
+        pack_block_mop(0, o_id, block_tiles);
+#else
         for (uint32_t tile = 0; tile < block_tiles; ++tile) {
             pack_tile(tile, o_id, block_start + tile);
         }
+#endif
         tile_regs_release();
     }
     o.push_back(n);
@@ -147,9 +155,13 @@ inline void square_tiles(DataflowBuffer& in, DataflowBuffer& o, uint32_t n) {
         }
         tile_regs_commit();
         tile_regs_wait();
+#ifdef ARCH_BLACKHOLE
+        pack_block_mop(0, o_id, block_tiles);
+#else
         for (uint32_t tile = 0; tile < block_tiles; ++tile) {
             pack_tile(tile, o_id, block_start + tile);
         }
+#endif
         tile_regs_release();
     }
     o.push_back(n);
@@ -176,9 +188,13 @@ inline void exponential_tiles(DataflowBuffer& in, DataflowBuffer& o, uint32_t n)
         }
         tile_regs_commit();
         tile_regs_wait();
+#ifdef ARCH_BLACKHOLE
+        pack_block_mop(0, o_id, block_tiles);
+#else
         for (uint32_t tile = 0; tile < block_tiles; ++tile) {
             pack_tile(tile, o_id, block_start + tile);
         }
+#endif
         tile_regs_release();
     }
     o.push_back(n);
@@ -202,9 +218,13 @@ inline void multiply_by_half(DataflowBuffer& in, DataflowBuffer& o, uint32_t n) 
         }
         tile_regs_commit();
         tile_regs_wait();
+#ifdef ARCH_BLACKHOLE
+        pack_block_mop(0, o_id, block_tiles);
+#else
         for (uint32_t tile = 0; tile < block_tiles; ++tile) {
             pack_tile(tile, o_id, block_start + tile);
         }
+#endif
         tile_regs_release();
     }
     o.push_back(n);
@@ -229,9 +249,13 @@ inline void reciprocal_tiles(DataflowBuffer& in, DataflowBuffer& o, uint32_t n) 
         }
         tile_regs_commit();
         tile_regs_wait();
+#ifdef ARCH_BLACKHOLE
+        pack_block_mop(0, o_id, block_tiles);
+#else
         for (uint32_t tile = 0; tile < block_tiles; ++tile) {
             pack_tile(tile, o_id, block_start + tile);
         }
+#endif
         tile_regs_release();
     }
     o.push_back(n);
@@ -257,9 +281,13 @@ inline void multiply_by_column(DataflowBuffer& a, DataflowBuffer& col, DataflowB
         }
         tile_regs_commit();
         tile_regs_wait();
+#ifdef ARCH_BLACKHOLE
+        pack_block_mop(0, o_id, block_tiles);
+#else
         for (uint32_t tile = 0; tile < block_tiles; ++tile) {
             pack_tile(tile, o_id, block_start + tile);
         }
+#endif
         tile_regs_release();
     }
     o.push_back(Mt * Nt);
@@ -376,9 +404,13 @@ inline void transpose_tile_row_to_column(DataflowBuffer& in, DataflowBuffer& o, 
         }
         tile_regs_commit();
         tile_regs_wait();
+#ifdef ARCH_BLACKHOLE
+        pack_block_mop(0, o_id, block_tiles);
+#else
         for (uint32_t tile = 0; tile < block_tiles; ++tile) {
             pack_tile(tile, o_id, block_start + tile);
         }
+#endif
         tile_regs_release();
     }
     o.push_back(row_tiles);
