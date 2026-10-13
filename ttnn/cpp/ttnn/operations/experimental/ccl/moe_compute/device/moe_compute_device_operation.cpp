@@ -19,7 +19,9 @@
 
 #include <umd/device/types/arch.hpp>
 
+#include <algorithm>
 #include <array>
+#include <limits>
 #include <utility>
 
 namespace ttnn::experimental::prim {
@@ -139,6 +141,23 @@ void MoEComputeDeviceOperation::validate_on_program_cache_miss(
             "moe_compute over a mesh axis of extent 1 packs the k slot into {} bits; got k = {}",
             32 - moe_ring::token_list::TOKEN_BITS,
             select_experts_k);
+        // The packed page and the pair lists (two RISC halves of div_up(T, 2) x k pairs, staged together on the
+        // drain) are sized in 32 bits. Bound them in 64 bits so that a token count times k too large to represent
+        // is refused here instead of wrapping into an undersized buffer.
+        const uint32_t experts_per_device = tensor_args.matmul_w0_w1_tensor.logical_shape()[2];
+        const uint64_t num_pairs = uint64_t{total_tokens} * select_experts_k;
+        const uint64_t page_bytes = (uint64_t{moe_ring::token_list::header_words(experts_per_device)} + num_pairs +
+                                     uint64_t{moe_ring::token_list::SEGMENT_ALIGN_ENTRIES} * (experts_per_device + 1) +
+                                     moe_ring::TOKENS_PER_CHUNK) *
+                                    moe_ring::token_list::ENTRY_BYTES;
+        const uint64_t staged_pair_lists_bytes = (num_pairs + select_experts_k) * moe_ring::token_list::PAIR_BYTES +
+                                                 2 * tt::tt_metal::hal::get_l1_alignment();
+        TT_FATAL(
+            std::max(page_bytes, staged_pair_lists_bytes) <= std::numeric_limits<uint32_t>::max(),
+            "moe_compute over a mesh axis of extent 1 keeps {} tokens x k = {} as packed (token, k) lists, which would "
+            "need more than 4 GiB",
+            total_tokens,
+            select_experts_k);
     } else {
         // make sure the shared L1 buffer is sufficiently large enough to contain all output tokens
         const auto max_tokens = detail::TOKEN_SIZE * combine_data_parallel_cores * combine_token_parallel_cores;
@@ -186,7 +205,8 @@ void MoEComputeDeviceOperation::validate_on_program_cache_miss(
                 args.combine_params->local_combine,
                 "path=SingleDevice requires combine_params->local_combine to be true");
         } else if (args.path == MoEComputePath::SingleCluster) {
-            // The CCL knobs are accepted and unused on this path; num_links keeps its range check.
+            // No fabric runs on this path. The CCL knobs keep their checks (num_links > 0, Linear or Ring), and
+            // the worker placement still avoids mux_core_range_set.
             TT_FATAL(args.combine_params->num_links > 0, "num_links must be greater than 0");
             TT_FATAL(
                 mesh_shape[args.combine_params->axis] == 1,
@@ -711,8 +731,8 @@ std::vector<ttnn::Tensor> moe_compute(
     } else if (!compute_only) {
         // An axis of extent 1 has nothing to combine (SingleCluster: dm1 writes the final output), so
         // skip link discovery and the fabric topology lookup, both of which need an initialized
-        // fabric context that a mesh opened without a fabric config lacks. Explicit CCL options are
-        // accepted and unused there; num_links is still checked > 0 below.
+        // fabric context that a mesh opened without a fabric config lacks. Explicit CCL options keep
+        // their checks there (num_links > 0, Linear or Ring) and the placement still avoids the mux range.
         const bool axis_has_neighbours = !single_cluster;
         // The local output leaves one partial per mesh coordinate that the caller sums, so a
         // shared expert would be counted once per coordinate.
@@ -720,6 +740,19 @@ std::vector<ttnn::Tensor> moe_compute(
             axis_has_neighbours || num_shared_experts_per_device.value_or(0) == 0,
             "moe_compute over a mesh axis of extent 1 writes a local output and does not support shared experts; "
             "run them separately and add their partial before the cross-device reduction");
+        // Every coordinate writes its partial into a whole [k, T, H] output, and the outputs take the inputs'
+        // replicated topology (compute_output_topologies), so a caller's output must be replicated too. Checked
+        // here, before launch: by the time the device op validates, a sharded tensor already carries the
+        // replicated label.
+        if (single_cluster && optional_output_tensor.has_value() && mesh_device->num_devices() > 1) {
+            for (const auto& placement : optional_output_tensor->tensor_topology().placements()) {
+                TT_FATAL(
+                    std::holds_alternative<tt::tt_metal::distributed::MeshMapperConfig::Replicate>(placement),
+                    "moe_compute over a mesh axis of extent 1 on a multi-device mesh requires a fully replicated "
+                    "optional_output_tensor topology (every coordinate writes its partial into a whole [k, tokens, "
+                    "hidden] buffer)");
+            }
+        }
         // see #27196 for potential limitations
         const uint32_t resolved_num_links = num_links.value_or(
             axis_has_neighbours ? ttnn::operations::ccl::common::get_num_links(*mesh_device, *cluster_axis) : 1);

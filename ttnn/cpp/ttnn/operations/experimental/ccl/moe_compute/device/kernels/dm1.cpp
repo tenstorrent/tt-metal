@@ -7,6 +7,7 @@
 #include "api/dataflow/circular_buffer.h"
 #include "api/dataflow/noc.h"
 #include "api/dataflow/noc_semaphore.h"
+#include "api/core_local_mem.h"
 #include "tt_metal/fabric/hw/inc/noc_addr.h"
 #include "moe_ring_common.h"
 
@@ -325,11 +326,12 @@ void kernel_main() {
                     const auto e_t_accessor = TensorAccessor(LoArgs::e_t_args, e_t_addr);
                     const uint32_t chunk_entry =
                         token_list_header_words + token_list_segment_start + chunk * tile_height;
-                    noc_async_read(
-                        e_t_accessor.get_noc_addr(0, chunk_entry * moe_ring::token_list::ENTRY_BYTES, /*noc=*/1),
-                        local_output_map_addr,
+                    noc1_obj.async_read(
+                        e_t_accessor,
+                        CoreLocalMem<uint32_t>(local_output_map_addr),
                         token_list_chunk_bytes,
-                        /*noc=*/1);
+                        {.page_id = 0, .offset_bytes = chunk_entry * moe_ring::token_list::ENTRY_BYTES},
+                        {});
                 }
             }
 
@@ -442,7 +444,7 @@ void kernel_main() {
                 // page; this core's slice of it lands in page k * T + t of [k, T, H] at the core's
                 // column offset. Non-posted writes; the flush before pop_front below frees the source.
                 if (output_width_tiles_core > 0) {
-                    noc_async_read_barrier(/*noc=*/1);
+                    noc1_obj.async_read_barrier();
                     volatile tt_l1_ptr uint32_t* map =
                         reinterpret_cast<volatile tt_l1_ptr uint32_t*>(local_output_map_addr);
                     const auto output_accessor = TensorAccessor(LoArgs::out_args, local_output_addr);
@@ -450,13 +452,14 @@ void kernel_main() {
                         const uint32_t entry = map[bt];
                         const uint32_t token_id = moe_ring::token_list::entry_token(entry);
                         const uint32_t k_slot = moe_ring::token_list::entry_k_slot(entry);
-                        const uint64_t dst_noc_addr = output_accessor.get_noc_addr(
-                            k_slot * total_tokens + token_id, local_output_col_offset_bytes, /*noc=*/1);
-                        noc_async_write(
-                            source_base_l1_addr + bt * source_width_tiles * tile_width_size_bytes,
-                            dst_noc_addr,
+                        noc1_obj.async_write(
+                            CoreLocalMem<uint8_t>(
+                                source_base_l1_addr + bt * source_width_tiles * tile_width_size_bytes),
+                            output_accessor,
                             local_output_row_bytes,
-                            /*noc=*/1);
+                            {},
+                            {.page_id = k_slot * total_tokens + token_id,
+                             .offset_bytes = local_output_col_offset_bytes});
                     }
                 }
             } else {

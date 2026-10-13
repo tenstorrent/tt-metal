@@ -168,8 +168,10 @@ void bind_moe_compute(nb::module_& mod) {
           expert-parallel mesh, or either axis of a 1x1 mesh). There is nothing to combine, so no
           combine kernels run: the op's own writer puts each expert's token rows straight into the
           final output. No fabric, mux cores, links or cross-device semaphore are used (the mesh
-          may be opened without a fabric config); ``topology``, ``num_links``,
-          ``mux_core_range_set`` and ``optional_cross_device_semaphore`` are accepted and unused.
+          may be opened without a fabric config), but the CCL options keep their checks: an
+          explicit ``topology`` must be ``Linear`` or ``Ring`` and ``num_links`` must be positive.
+          The worker placement still avoids ``mux_core_range_set``, so a range that leaves too
+          little room fails placement; ``optional_cross_device_semaphore`` is ignored.
           On a multi-device mesh every coordinate must receive the same replicated token set and
           routing metadata (expert indices, scores and mapping) and returns the partial of its own
           experts: only the rows its experts own are written, as with the combine, and the other

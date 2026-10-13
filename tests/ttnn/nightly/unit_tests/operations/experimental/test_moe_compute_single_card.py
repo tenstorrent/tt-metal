@@ -995,6 +995,18 @@ def _run_moe_compute_single_card_test(
             with expect_error(RuntimeError, r"fully replicated input topology"):
                 run_moe_compute_once(create_combine_output_tensor(), tilize_input_tensor=tt_sharded_input)
             ttnn.deallocate(tt_sharded_input)
+            # So is a sharded output, even one whose per-device shard is a whole [k, T, H] buffer: the outputs
+            # take the replicated input topology, so it would come back relabeled.
+            tt_sharded_output = ttnn.from_torch(
+                torch.zeros([selected_experts_k * num_devices, total_tokens, hidden_size], dtype=torch.bfloat16),
+                device=mesh_device,
+                layout=ttnn.ROW_MAJOR_LAYOUT,
+                dtype=ttnn.bfloat16,
+                mesh_mapper=ttnn.ShardTensorToMesh(mesh_device, dim=0),
+            )
+            with expect_error(RuntimeError, r"fully replicated optional_output_tensor topology"):
+                run_moe_compute_once(tt_sharded_output)
+            ttnn.deallocate(tt_sharded_output)
 
 
 # DeepSeek-shaped workload mirrored on a single WH card so kernels see the same dims.
@@ -1688,8 +1700,8 @@ def test_moe_compute_multi_device_local_axis(mesh_device, mesh_shape, expect_err
     output at every device, on a mesh opened without a fabric config. The replicated token set
     and identical routing metadata go to every device, each device computes its own expert
     shard, every device's partial matches the golden rows its experts own, all outputs keep the
-    replicated input topology, and a dim-0-sharded input is rejected. With ccl_knobs the Galaxy-style topology / num_links / mux
-    range / cross-device semaphore are passed too and must be accepted and unused. The
+    replicated input topology, and a dim-0-sharded input or output is rejected. With ccl_knobs the Galaxy-style topology / num_links / mux
+    range / cross-device semaphore are passed too and must be accepted (no link, mux worker or semaphore is used). The
     mesh_device fixture skips this on machines with fewer than four devices."""
     if mesh_device.get_num_devices() < 2:
         pytest.skip("multi-device local combine needs at least two devices")
