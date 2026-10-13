@@ -8,6 +8,7 @@
 #include <cstdint>
 
 #include "ckernel.h"
+#include "counters.h"
 #include "llk_defs.h"
 #include "llk_memory_checks.h"
 #include "perf.h"
@@ -42,7 +43,7 @@ void run_kernel(RUNTIME_PARAMETERS params)
 #endif
 
     {
-        ZONE_SCOPED("INIT")
+        START_PERF_MEASURE("INIT")
         set_ttsync_enables<TRACK_ALL>(ckernel::TRISC_ID);
 
         const ckernel::TensorShape tensor_shape_A = ckernel::tensor_shape_from_num_faces(FACE_R_DIM, num_faces_A);
@@ -59,7 +60,7 @@ void run_kernel(RUNTIME_PARAMETERS params)
         PROFILER_SYNC();
     }
     {
-        ZONE_SCOPED("TILE_LOOP")
+        START_PERF_MEASURE("TILE_LOOP")
         if constexpr (PERF_RUN_TYPE == PerfRunType::PACK_ISOLATE || PERF_RUN_TYPE == PerfRunType::SFPU_ISOLATE)
         {
         }
@@ -102,7 +103,7 @@ void run_kernel(RUNTIME_PARAMETERS params)
 #endif
 
     {
-        ZONE_SCOPED("INIT")
+        START_PERF_MEASURE("INIT")
         if constexpr (PERF_RUN_TYPE == PerfRunType::L1_TO_L1 || PERF_RUN_TYPE == PerfRunType::MATH_ISOLATE)
         {
             set_up_dest_dvalid_per_thread<dest_dvalid_client::FPU>({dest_dvalid_client::FPU, dest_dvalid_client::PACK});
@@ -113,7 +114,7 @@ void run_kernel(RUNTIME_PARAMETERS params)
         PROFILER_SYNC();
     }
     {
-        ZONE_SCOPED("TILE_LOOP")
+        START_PERF_MEASURE("TILE_LOOP")
         if constexpr (PERF_RUN_TYPE == PerfRunType::PACK_ISOLATE || PERF_RUN_TYPE == PerfRunType::SFPU_ISOLATE)
         {
         }
@@ -155,15 +156,18 @@ void run_kernel(RUNTIME_PARAMETERS params)
 #include "llk_bfd_alloc.h"
 #include "llk_math_common.h"
 #include "llk_math_eltwise_unary_sfpu.h"
+#include "llk_sfpu/ckernel_sfpu_exp.h"
+#include "llk_sfpu/ckernel_sfpu_srcs.h"
+#include "llk_sfpu_srcs_api.h"
 #include "llk_srcs.h"
 #include "params.h"
-#include "sfpu/ckernel_sfpu_exp.h"
 
 using namespace ckernel;
 using namespace ckernel::math;
 using namespace ckernel::sfpu;
 
-void run_kernel(RUNTIME_PARAMETERS params)
+#ifndef DISABLE_SFPLOADMACRO
+void run_exp_loadmacro(RUNTIME_PARAMETERS params)
 {
 #if defined(RUNTIME_FORMATS) && !defined(SPEED_OF_LIGHT)
     const FormatConfig& formats = params.formats;
@@ -197,7 +201,7 @@ void run_kernel(RUNTIME_PARAMETERS params)
     ckernel_template mop(PARAM_SRCS_SLICE_COUNT, 1 /*inner_loop_len*/, _exp_loadmacro_op_(num_sfpu_iterations));
 
     {
-        ZONE_SCOPED("INIT")
+        START_PERF_MEASURE("INIT")
         const ckernel::TensorShape srcs_shape = tensor_shape_from_dimensions(PARAM_SRCS_YDIM, PARAM_SRCS_XDIM, PARAM_SRCS_ZDIM, PARAM_SRCS_ZDIM);
         ckernel::trisc::bfd_alloc_and_program<ckernel::trisc::BfdResource::Unp2_Slice0>(srcs_shape, L1_ADDRESS(buffer_S[0]), formats.unpack_S_src);
         _llk_unpack_configure_unary_<p_unpacr::UNP_S>(static_cast<DataFormat>(formats.unpack_S_dst));
@@ -225,7 +229,7 @@ void run_kernel(RUNTIME_PARAMETERS params)
         PROFILER_SYNC();
     }
     {
-        ZONE_SCOPED("TILE_LOOP")
+        START_PERF_MEASURE("TILE_LOOP")
         if constexpr (PERF_RUN_TYPE == PerfRunType::L1_TO_L1 || PERF_RUN_TYPE == PerfRunType::SFPU_ISOLATE)
         {
             const std::uint8_t bfd_unpack = ckernel::trisc::bfd_current<ckernel::trisc::BfdResource::Unp2_Slice0>();
@@ -246,6 +250,73 @@ void run_kernel(RUNTIME_PARAMETERS params)
         wait_pack_idle();
         PROFILER_SYNC();
     }
+}
+#endif
+
+void run_exp_sfpi(RUNTIME_PARAMETERS params)
+{
+#if defined(RUNTIME_FORMATS) && !defined(SPEED_OF_LIGHT)
+    const FormatConfig& formats = params.formats;
+#endif
+#ifndef SPEED_OF_LIGHT
+    const std::uint32_t TILE_CNT    = params.TILE_CNT;
+    const std::uint32_t LOOP_FACTOR = params.LOOP_FACTOR;
+    const Operand& buffer_S         = params.buffer_S;
+    const Operand& buffer_Res       = params.buffer_Res;
+#endif
+    const std::uint32_t num_tiles = TILE_CNT;
+    const DataFormat srcs_format  = static_cast<DataFormat>(formats.unpack_S_dst);
+
+    {
+        ZONE_SCOPED("INIT")
+        LLK_ASSERT(srcs_format == static_cast<DataFormat>(formats.pack_S_src), "SrcS EXP requires matching unpack destination and pack source formats");
+        llk_sfpu_srcs_unary_init(
+            L1_ADDRESS(buffer_S[0]),
+            static_cast<DataFormat>(formats.unpack_S_src),
+            srcs_format,
+            L1_ADDRESS(buffer_Res[0]),
+            static_cast<DataFormat>(formats.pack_S_src),
+            static_cast<DataFormat>(formats.pack_S_dst),
+            IMPLIED_MATH_FORMAT);
+        PROFILER_SYNC();
+    }
+    {
+        ZONE_SCOPED("TILE_LOOP")
+        if constexpr (PERF_RUN_TYPE == PerfRunType::L1_TO_L1 || PERF_RUN_TYPE == PerfRunType::SFPU_ISOLATE)
+        {
+            dispatch_sfpu_srcs_format(
+                srcs_format,
+                [&](auto layout)
+                {
+                    using Layout = decltype(layout);
+                    for (std::uint32_t loop = 0; loop < LOOP_FACTOR; ++loop)
+                    {
+                        llk_sfpu_srcs_unary(num_tiles, srcs_format, [](int, int, int) { calculate_exponential_srcs<true, Layout::layout>(); });
+                    }
+                });
+        }
+        wait_unpack_idle();
+        wait_sfpu_idle();
+        wait_pack_idle();
+        PROFILER_SYNC();
+    }
+}
+
+void run_kernel(RUNTIME_PARAMETERS params)
+{
+#ifdef DISABLE_SFPLOADMACRO
+    static_assert(!SFPU_SRCS_LOADMACRO, "SFPLOADMACRO is disabled; only the SFPI implementation can be built");
+    run_exp_sfpi(params);
+#else
+    if constexpr (SFPU_SRCS_LOADMACRO)
+    {
+        run_exp_loadmacro(params);
+    }
+    else
+    {
+        run_exp_sfpi(params);
+    }
+#endif
 }
 
 #endif
@@ -271,7 +342,7 @@ void run_kernel(RUNTIME_PARAMETERS params)
 #endif
 
     {
-        ZONE_SCOPED("INIT")
+        START_PERF_MEASURE("INIT")
         // PACK_ISOLATE and L1_CONGESTION pack without a math↔pack handshake.
         // Explicitly clear wait_mask because CFG state can persist across run types.
         if constexpr (PERF_RUN_TYPE == PerfRunType::PACK_ISOLATE || PERF_RUN_TYPE == PerfRunType::L1_CONGESTION)
@@ -291,7 +362,7 @@ void run_kernel(RUNTIME_PARAMETERS params)
         PROFILER_SYNC();
     }
     {
-        ZONE_SCOPED("TILE_LOOP")
+        START_PERF_MEASURE("TILE_LOOP")
         if constexpr (PERF_RUN_TYPE == PerfRunType::MATH_ISOLATE || PERF_RUN_TYPE == PerfRunType::UNPACK_ISOLATE || PERF_RUN_TYPE == PerfRunType::SFPU_ISOLATE)
         {
         }

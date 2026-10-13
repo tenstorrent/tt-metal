@@ -14,6 +14,7 @@ from helpers.format_config import DataFormat
 from helpers.llk_params import (
     BroadcastType,
     DestAccumulation,
+    GatedReduceScale,
     MathFidelity,
     MathOperation,
     PackerReluType,
@@ -41,6 +42,8 @@ from helpers.sfpu_dispatch_constants import (
     INT_MAXMIN_SCALAR,
     LRELU_NEGATIVE_SLOPE,
     PRELU_SLOPE,
+    RAND_FROM,
+    RAND_SCALE,
     RELU_MAX_THRESHOLD,
     RELU_MIN_THRESHOLD,
     REMAINDER_UINT32_SCALAR,
@@ -2355,6 +2358,7 @@ class UnarySFPUGolden:
             MathOperation.Neg: self._neg,
             MathOperation.Tanh: self._tanh,
             MathOperation.Fill: self._fill,
+            MathOperation.Rand: self._rand,
             MathOperation.Elu: self._elu,
             MathOperation.Exp: self._exp,
             MathOperation.Exp2: self._exp2,
@@ -3334,6 +3338,11 @@ class UnarySFPUGolden:
         phi = math.exp(-0.5 * x * x) / math.sqrt(2.0 * math.pi)
         cdf = 0.5 * (1.0 + math.erf(x / math.sqrt(2.0)))
         return cdf + x * phi
+
+    def _rand(self, x):
+        # No element-wise golden exists: the midpoint is only valid ahead of a downstream op whose
+        # result is the same for every draw. test_rand_quasar checks rand statistically.
+        return RAND_FROM + RAND_SCALE / 2
 
     def _fill(self, x, const_value=5):
         input_tensor = (
@@ -5940,6 +5949,42 @@ class SdpaExpUnclampedGolden:
         return round_to_dest_width(result, DestAccumulation.No).to(
             format_dict[data_format]
         )
+
+
+@register_golden
+class GatedReduceGolden:
+    """Adjacent gate/up fusion: scale and activate in FP32, round only the result."""
+
+    def __call__(
+        self,
+        gate,
+        up,
+        gate_mode,
+        up_mode,
+        scale_flags,
+        scale,
+        out_scale,
+        limit,
+        alpha,
+        dest_acc,
+    ):
+        gate = gate.float()
+        up = up.float()
+        if scale_flags & GatedReduceScale.Gate:
+            gate = gate * scale
+        if scale_flags & GatedReduceScale.Up:
+            up = up * scale
+        if gate_mode == "ClampedSilu":
+            gate = gate.clamp(max=limit)
+            activated = gate * torch.sigmoid(alpha * gate)
+        else:
+            activated = torch.nn.functional.silu(gate)
+        if up_mode == "Clamp":
+            up = up.clamp(-limit, limit)
+        result = activated * up
+        if scale_flags & GatedReduceScale.Out:
+            result = result * out_scale
+        return round_to_dest_width(result, dest_acc)
 
 
 @register_golden

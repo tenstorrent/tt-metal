@@ -4,6 +4,11 @@
 
 #pragma once
 
+#include <cstddef>
+#include <cstdint>
+#include <functional>
+#include <set>
+#include <string>
 #include <array>
 #include <unordered_set>
 
@@ -11,10 +16,12 @@
 // get_physical_chip_id_from_eth_coord(). No tt-metalium equivalent exists yet.
 #include <tt-metalium/experimental/fabric/routing_table_generator.hpp>
 #include <tt-metalium/core_coord.hpp>
-#include <tt-metalium/mesh_coord.hpp>
 #include <tt-metalium/experimental/fabric/fabric_types.hpp>
 #include <hostdevcommon/fabric_common.h>
 #include <tt-metalium/distributed_context.hpp>
+#include <tt-metalium/device_types.hpp>
+#include <tt-metalium/experimental/fabric/mesh_graph.hpp>
+#include <tt_stl/span.hpp>
 
 #include <map>
 #include <memory>
@@ -315,9 +322,6 @@ public:
     std::map<std::string, std::string> get_fabric_kernel_defines() const;
 
     void clear_fabric_context();
-
-    // Initialize fabric tensix config (call after routing tables are configured)
-    void initialize_fabric_tensix_datamover_config();
 
     // Check if the provided chip and channel is a cross-host eth link
     bool is_cross_host_eth_link(ChipId chip_id, chan_id_t chan_id) const;

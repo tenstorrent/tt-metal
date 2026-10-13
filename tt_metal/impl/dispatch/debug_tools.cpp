@@ -149,7 +149,7 @@ void wait_for_program_vector_to_arrive_and_compare_to_host_program_vector(
 
                 match_device_program_data_with_host_program_data(
                     DISPATCH_MAP_DUMP, device_dispatch_dump_file_name.c_str());
-                MetalContext::instance().device_manager()->close_device(device->id());
+                MetalContext::instance(extract_context_id(device)).device_manager()->close_device(device->id());
                 exit(0);
             }
         }
@@ -249,9 +249,6 @@ uint32_t dump_dispatch_cmd(MetalContext& metal_ctx, CQDispatchCmd* cmd, uint32_t
                 stride = ((stride + alignment - 1) / alignment) * alignment;
                 break;
             }
-            case CQ_DISPATCH_SET_GO_SIGNAL_NOC_DATA:
-                cq_file << fmt::format(" (num_words={})", val(cmd->set_go_signal_noc_data.num_words));
-                break;
             // These commands don't have any additional data to dump.
             case CQ_DISPATCH_CMD_ILLEGAL:
             case CQ_DISPATCH_CMD_SINK:
