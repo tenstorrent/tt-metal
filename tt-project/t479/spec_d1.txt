@@ -1,0 +1,8 @@
+ID=t479-d1
+TASK=t479
+CONFIG=t479-d1
+TIMEOUT=600
+WORKDIR=/var/tmp/fasth3/t479/b
+ENV=/var/tmp/fasth3/t479/env479.yaml
+CMD=bash /var/tmp/fasth3/t479/run479.sh d1 sla0.85
+NEEDS=/var/tmp/fasth3/t479/b/build_Release

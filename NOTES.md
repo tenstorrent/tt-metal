@@ -52,3 +52,18 @@ device run is a cold cache build. Venv: reuse /var/tmp/fasth3/t460/python_env (e
 
 Next: when stage479.rc = 0, adapt t452/run452.sh (W=$F/t479/b, VENV=t460, T409_* knobs) plus t456/plug + replay456.py
 for layers 0/49, steps 1/4; device-lint; submit via blx01 broker (t288/blx01-submit.sh). Leave MiniMax-H3 staged.
+
+# t479 run 1810
+- Staging: MiniMax-H3 copy done (19:16 UTC). Build failed once at 1136/1446: ld.lld `pthread_create has failed:
+  Resource temporarily unavailable` linking tracy-capture (transient; limits are huge, #482 started a build at the
+  same time). Resumed with t479/rb479.sh (no re-extract), detached on blx01, log t479/detach/rb479.log.
+- SLA LoRA v0.1 holds only to_q/k/v/out + ff LoRA (no proj_l / linear-branch weights), so no SLA linear branch to port.
+- Step 3 set up: tt-project/t479/{run479.sh, plug/t479_dump.py, replay479.py, env479.yaml, spec_d1.txt, chain479.sh}.
+  chain479.sh (detached on g15blx02) waits for rb479.rc, collect-only, submits d1 (sla0.85, dumps real vsa_sdpa
+  calls 0/49/150/199 = step 1 L0/L49, step 4 L0/L49, heads 0-3 of device 0) via t288/blx01-submit.sh, up to 3 tries
+  (first run is cold h3hf cache), then runs replay479.py on each dump on blx01 CPU -> replay479.txt.
+  Replay per call: (a) device out vs CPU sparse on device ids, (b) device ids vs LightX2V ids overlap, (c) vs dense,
+  mass kept by device ids and by LightX2V ids.
+- Read: if (a) and (b) hold at all four calls, our SLA path is faithful to LightX2V's selection math and the garbage
+  is not a device bug (then check LightX2V's real sparse kernel semantics: sage2 SLA, block sizes, k rounding).
+  If (b) drops at L49/step 4: stale or mis-staged selection inputs; if (a) drops: vsa_sdpa kernel at that call.
