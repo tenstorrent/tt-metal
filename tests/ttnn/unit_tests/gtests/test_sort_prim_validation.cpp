@@ -3,6 +3,8 @@
 // SPDX-License-Identifier: Apache-2.0
 
 #include <gtest/gtest.h>
+#include <algorithm>
+#include <cstdint>
 #include <exception>
 #include <optional>
 #include <vector>
@@ -53,6 +55,24 @@ TEST_F(SortPrimValidationFixture, AcceptsPowerOfTwoWidth) {
         input.memory_config(),
         std::vector<std::optional<Tensor>>{},
         /*sort_dim_padded=*/false));
+}
+
+// Padded control: a logical width of 4090 is tile-padded to 4096 with 0, the descending uint16 padding value,
+// so every value ties with the padding (MultiCore DRAM factory). No padding index may reach the output.
+TEST_F(SortPrimValidationFixture, PaddedSortDimKeepsPaddingIndicesOut) {
+    auto& device = *device_;
+    const auto input = ttnn::zeros(ttnn::Shape({1, 1, 32, 4090}), DataType::UINT16, ttnn::TILE_LAYOUT, device);
+    const auto outputs = ttnn::prim::sort(
+        input,
+        /*dim=*/-1,
+        /*descending=*/true,
+        /*stable=*/false,
+        input.memory_config(),
+        std::vector<std::optional<Tensor>>{},
+        /*sort_dim_padded=*/true);
+    const auto indices = outputs[1].to_vector<uint32_t>();
+    const uint32_t n = input.logical_shape()[-1];
+    EXPECT_LT(*std::max_element(indices.begin(), indices.end()), n);
 }
 
 }  // namespace ttnn::prim::test
