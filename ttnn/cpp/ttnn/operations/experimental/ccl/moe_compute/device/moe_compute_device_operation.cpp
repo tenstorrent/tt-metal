@@ -124,10 +124,30 @@ void MoEComputeDeviceOperation::validate_on_program_cache_miss(
     const auto combine_token_parallel_cores = args.num_token_parallel_cores;
     const auto combine_data_parallel_cores = args.num_data_parallel_cores;
 
-    // make sure the shared L1 buffer is sufficiently large enough to contain all output tokens
-    const auto max_tokens = detail::TOKEN_SIZE * combine_data_parallel_cores * combine_token_parallel_cores;
-    TT_FATAL(
-        max_tokens >= total_tokens, "Too many tokens in input, got: {} but expected max: {}", total_tokens, max_tokens);
+    if (args.path == MoEComputePath::SingleCluster) {
+        // Nothing is staged in the combine cores' L1 on this path and the tilize cores keep the routing as packed
+        // (token, k slot) lists (moe_ring::token_list), so the token count is bounded by the entry format, not by
+        // the shared buffer.
+        const auto select_experts_k = tensor_args.tilize_expert_indices_tensor.logical_shape()[-1];
+        TT_FATAL(
+            total_tokens <= moe_ring::token_list::TOKEN_MASK + 1,
+            "moe_compute over a mesh axis of extent 1 packs the token id into {} bits; got {} tokens",
+            moe_ring::token_list::TOKEN_BITS,
+            total_tokens);
+        TT_FATAL(
+            select_experts_k <= moe_ring::token_list::MAX_K_SLOTS,
+            "moe_compute over a mesh axis of extent 1 packs the k slot into {} bits; got k = {}",
+            32 - moe_ring::token_list::TOKEN_BITS,
+            select_experts_k);
+    } else {
+        // make sure the shared L1 buffer is sufficiently large enough to contain all output tokens
+        const auto max_tokens = detail::TOKEN_SIZE * combine_data_parallel_cores * combine_token_parallel_cores;
+        TT_FATAL(
+            max_tokens >= total_tokens,
+            "Too many tokens in input, got: {} but expected max: {}",
+            total_tokens,
+            max_tokens);
+    }
 
     // Mode-specific validation of combine_params and optional_output_tensor.
     // - ComputeOnly: no combine_params, no optional_output_tensor (5 outputs).
@@ -462,6 +482,29 @@ MoEComputeDeviceOperation::spec_return_value_t MoEComputeDeviceOperation::comput
     };
     const auto output_spec = ttnn::experimental::prim::SelectiveReduceCombineDeviceOperation::compute_output_specs(
         args.combine_params.value(), combine_tensor_args);
+
+    if (args.path == MoEComputePath::SingleCluster) {
+        // No combine reads the routing on this path: output 1 is a one-page placeholder and output 2 the packed
+        // token-list page (moe_ring::token_list) dm1 fetches one chunk at a time; neither scales L1 with the tokens.
+        const auto placeholder_row_words = l1_alignment / sizeof(uint32_t);
+        const auto tilize_expert_activation_placeholder_spec = TensorSpec(
+            ttnn::Shape({1, placeholder_row_words}),
+            TensorLayout(DataType::UINT32, PageConfig(Layout::ROW_MAJOR), ttnn::DRAM_MEMORY_CONFIG));
+        const auto select_experts_k = tensor_args.tilize_expert_indices_tensor.logical_shape()[-1];
+        const auto packed_token_list_spec = TensorSpec(
+            ttnn::Shape(
+                {1,
+                 moe_ring::token_list::page_words(
+                     total_tokens, select_experts_k, experts_per_device, moe_ring::TOKENS_PER_CHUNK)}),
+            TensorLayout(DataType::UINT32, PageConfig(Layout::ROW_MAJOR), ttnn::DRAM_MEMORY_CONFIG));
+        return {
+            tilize_per_expert_total_tokens_spec,
+            tilize_expert_activation_placeholder_spec,
+            packed_token_list_spec,
+            tilize_output_spec,
+            matmul_output_spec,
+            output_spec};
+    }
 
     return {
         tilize_per_expert_total_tokens_spec,
