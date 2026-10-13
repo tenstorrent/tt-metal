@@ -40,6 +40,7 @@ from agent import integrity as _integrity  # noqa: E402
 from agent.probes import PYTEST_NO_TIMEOUT  # noqa: E402
 from agent.probes import tt_smi_bin as _tt_smi_bin  # noqa: E402
 from agent.layer_depth import set_depth as _set_depth  # noqa: E402
+from agent.stage_seams import parse_unmeasured as _parse_unmeasured  # noqa: E402
 
 _DEPTH_GUARD = "models.experimental.perf_automation.agent.depth_guard_plugin"
 from agent.handlers import remeasure as _rm  # noqa: E402
@@ -3474,6 +3475,8 @@ def _run_full_pipeline_ms():
     # The marker is printed BEFORE the raise for exactly that reason: it survives the swallow, and
     # this is what reads it.
     decode_stuck = ""
+    # {stage: why} the run stated it could not time (stage_seams.UNMEASURED_MARK).
+    unmeasured = {}
     stage_ms = {}
     # EVERY SAMPLE, NOT THE LAST ONE. The headline is the median of _FULLPIPE_SAMPLES readings
     # (`dec` below) precisely because one reading is noise; the per-stage split was a plain
@@ -3742,6 +3745,9 @@ def _run_full_pipeline_ms():
             # Printed by trace_replay._check_advance; keep the name verbatim on both sides.
             if _DECODE_STUCK_MARKER in line:
                 decode_stuck = line.strip()
+            _um = _parse_unmeasured(line)
+            if _um:
+                unmeasured[_um[0]] = _um[1]
             if "TRACE_PER_TOKEN_MS=" in line:
                 try:
                     per_tokens.append(float(line.split("TRACE_PER_TOKEN_MS=", 1)[1].split()[0]))
@@ -3796,6 +3802,22 @@ def _run_full_pipeline_ms():
         # that genuinely stalls -- so ask the recovery, which knows the difference.
         _recover_if_board_is_dead(decode_stuck, _BASELINE_WHERE)
         return None, None, "decode did not advance between iterations: %s" % decode_stuck, None
+    # A READING MISSING A STAGE THE COMMITTED BEST MEASURED IS NOT A FULL-PIPELINE READING. The run
+    # gives an untimed stage no row (stage_seams.UNMEASURED_MARK), so its headline covers only what
+    # ran; differenced against a bar that covered every stage, a crash reads as a win. Like with like:
+    # a stage the bar never had (a model that has never timed it) does not refuse the reading.
+    _lost = sorted(set(unmeasured) & set(_bar_stages()))
+    if _lost:
+        _why = "; ".join("%s: %s" % (s, unmeasured[s]) for s in _lost)
+        _recover_if_board_is_dead(_why, _BASELINE_WHERE)
+        return (
+            None,
+            None,
+            "stage(s) %s ran in the committed best but were NOT measured in this run (%s). The headline "
+            "would cover only the stages that ran, so this is no full-pipeline reading: fix or revert "
+            "the edit." % (", ".join(_lost), _why),
+            None,
+        )
     dec = statistics.median(per_tokens) if per_tokens else None
     pf = statistics.median(prefills) if prefills else None
     if dec is not None or pf is not None:

@@ -775,6 +775,8 @@ def measure_adapter(adapter, device) -> float:
         stages = [_LegacyStage(adapter)]
 
     results = []
+    # {stage: why} for every declared stage without a row: the adapter's, then the ones below.
+    _unmeasured = dict(getattr(adapter, "unmeasured", None) or {})
     # EACH STAGE GETS ITS SHARE, not the whole budget: they run in sequence, so a stage that spends
     # everything leaves the ones after it nothing and the capture dies with rows missing.
     _stage_budget = _measurement_budget_s(len(stages))
@@ -823,6 +825,7 @@ def measure_adapter(adapter, device) -> float:
                     file=sys.stderr,
                     flush=True,
                 )
+                _unmeasured[st.name] = "%s: %s" % (type(exc).__name__, str(exc)[:120])
                 continue
             results.append((st.name, ms, path))
             print("TRACE_STAGE_MS[%s]=%.4f path=%s" % (st.name, ms, path), flush=True)
@@ -855,6 +858,13 @@ def measure_adapter(adapter, device) -> float:
                 path,
                 [ln for ln in _said.lines if ln.startswith(_MARK_PREFIX) and not ln.startswith(_HEARTBEAT_MARK)],
             )
+
+    # A STAGE WITHOUT A ROW IS STATED, so the whole-pipeline sum below is never read as the whole
+    # pipeline when it is not (stage_seams.UNMEASURED_MARK).
+    from .stage_seams import unmeasured_line as _unmeasured_line
+
+    for _un, _uw in _unmeasured.items():
+        print(_unmeasured_line(_un, _uw), flush=True)
 
     # WHICH MODULES EACH STAGE RUNS, read from the pipeline's own code (stage_marks.stage_module_paths)
     # so perf_mcp can price each stage's compute from the weights it actually multiplies instead of

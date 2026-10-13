@@ -58,6 +58,33 @@ TP_ATTR = "tp"
 SP_ATTR = "sp"
 
 
+# A DECLARED STAGE THE MEASUREMENT COULD NOT TIME SAYS SO, on a line of its own:
+# TRACE_STAGE_UNMEASURED[<stage>]=<why>. The adapter and trace_replay give such a stage no row so the
+# others keep theirs -- and a whole-pipeline headline is then the sum of the stages that RAN. On a
+# 32-chip port (2026-10-13) an edit crashed three of five stages, the sum of the two left (170 ms)
+# was read as the full pipeline (12332 ms), banked as a -98.6% win and promoted to
+# the committed best, after which every real reading was refused as +7136% diverged. The gate reads
+# this line to know the reading is partial; printed and parsed only through the two helpers below.
+UNMEASURED_MARK = "TRACE_STAGE_UNMEASURED"
+
+
+def unmeasured_line(stage: str, why: str) -> str:
+    """The marker line for `stage`. `why` is folded onto one line so a reader can split on `]=`."""
+    return "%s[%s]=%s" % (UNMEASURED_MARK, stage, " ".join(str(why).split()) or "unknown")
+
+
+def parse_unmeasured(line: str):
+    """(stage, why) when `line` carries the marker, else None."""
+    if UNMEASURED_MARK + "[" not in line:
+        return None
+    rest = line.split(UNMEASURED_MARK + "[", 1)[1]
+    if "]=" not in rest:
+        return None
+    stage, why = rest.split("]=", 1)
+    stage = stage.strip()
+    return (stage, why.strip()) if stage else None
+
+
 def hook(stage: str, seam: str) -> str:
     """The attribute a model exposes for `seam` on `stage`. The stage name comes from the model."""
     return "%s%s" % (stage, seam)

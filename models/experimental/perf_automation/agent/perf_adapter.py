@@ -480,6 +480,9 @@ class PipelineStageAdapter:
         self.batch = max(1, self._requested_batch)
         self._pipe = None
         self.stages = []
+        # {stage: why} for every declared stage that got no stage here; trace_replay states them
+        # (stage_seams.UNMEASURED_MARK) so a reading missing one is not taken for the whole pipeline.
+        self.unmeasured = {}
 
     def _inputs_dict(self):
         """The prompt, REPLICATED to `batch` rows -- every user gets the FULL sequence.
@@ -546,6 +549,7 @@ class PipelineStageAdapter:
                     file=sys.stderr,
                     flush=True,
                 )
+                self.unmeasured[name] = "%s is missing" % _seams.hook(name, _seams.STEP)
                 continue
             setup = getattr(p, _seams.hook(name, _seams.SETUP), None)
             if callable(setup):
@@ -574,6 +578,7 @@ class PipelineStageAdapter:
                         file=sys.stderr,
                         flush=True,
                     )
+                    self.unmeasured[name] = "cannot prepare its inputs (%s: %s)" % (type(exc).__name__, str(exc)[:120])
                     continue
             # Propagate self_traced: a pipeline that OWNS its capture must be timed natively, never
             # wrapped in a second begin_trace_capture. The decode fallback below already does this;
