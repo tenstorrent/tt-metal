@@ -17,8 +17,16 @@ pytest --disable-warnings models/demos/yolov11l/tests/pcc/test_ttnn_yolov11.py::
 ```
 
 ### Model performant running with Trace+2CQ
+
+Measured end-to-end throughput (single device, batch=1, trace + 2 CQ):
+
+| Device | Resolution | FPS |
+|---|---|---|
+| Blackhole (single Galaxy chip) | 640×640 | **53** |
+| Blackhole (single Galaxy chip) | 1280×1280 | **20** |
+
 #### Single Device (BS=1):
-- Runs for both `640x640` and `1280x1280`:
+- Runs for both `640x640` and `1280x1280`; select one with `-k 640` or `-k 1280`:
 ```
 pytest --disable-warnings models/demos/yolov11l/tests/perf/test_e2e_performant.py::test_e2e_performant
 ```

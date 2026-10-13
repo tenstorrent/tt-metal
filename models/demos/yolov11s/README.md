@@ -17,6 +17,13 @@ pytest --disable-warnings models/demos/yolov11s/tests/pcc/test_ttnn_yolov11s.py:
 ```
 
 ### Model performant running with Trace+2CQ
+
+Measured end-to-end throughput (single device, batch=1, trace + 2 CQ):
+
+| Device | Resolution | FPS |
+|---|---|---|
+| Blackhole (single Galaxy chip) | 640×640 | **278** |
+
 #### Single Device (BS=1):
 
 - For `640x640`, end-2-end perf is `234` FPS (**On N150**), _On N300 single device, the FPS will be low as it uses ethernet dispatch_
