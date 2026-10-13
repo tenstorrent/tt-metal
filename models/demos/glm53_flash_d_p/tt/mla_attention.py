@@ -20,6 +20,7 @@ latent and the head-to-sequence reshard (all 64 heads stay on every chip; the se
 
 from __future__ import annotations
 
+import math
 import os
 
 import torch
@@ -87,9 +88,11 @@ W_DTYPE = {"bf16": ttnn.bfloat16, "bfp8": ttnn.bfloat8_b}[os.environ.get("GLM_ML
 # is all-gathered (one full-mesh snake, ttnn.bringup.fabric_all_gather) into one scratch shared by every layer; sparse_sdpa reads
 # it in place with the natural -> block-cyclic index remap. The chunk size is fixed per sequence.
 STRIPED = os.environ.get("GLM_MLA_STRIPED", "1") == "1"
-# local stripe rows: a multiple of every chunk's per-chip stripe (2048/5120/8192 -> 256/640/1024 rows), so the
-# cache splits into whole stripes for any chunk size (sparse_sdpa requires T/sp % chunk_local == 0)
+# local stripe rows: a multiple of every chunk's per-chip stripe (chunks 2048/5120/8192: 256/640/1024 rows on 8 chips,
+# 512/1280/2048 on 4), so the cache splits into whole stripes for any chunk size (sparse_sdpa requires
+# T/sp % chunk_local == 0); never below 5120
 LATENT_LOCAL_ROWS_ALIGN = 5120
+LATENT_CHUNKS = (2048, 5120, 8192)
 _SCRATCH = {}  # (mesh id, rows) -> the replicated [1, 1, rows, 512] gather scratch, shared by the DSA layers
 
 
@@ -140,7 +143,8 @@ class TtMLA:
         self.qb_cfg = minimal_config(mesh, 2, 8, 8, 1, 4)
         self.striped = striped and STRIPED and self.ndev > 1
         if self.striped:
-            self.local_rows = -(-max_seq // self.ndev // LATENT_LOCAL_ROWS_ALIGN) * LATENT_LOCAL_ROWS_ALIGN
+            align = math.lcm(LATENT_LOCAL_ROWS_ALIGN, *(c // self.ndev for c in LATENT_CHUNKS))
+            self.local_rows = -(-max_seq // self.ndev // align) * align
             self.cache = striped_latent_cache(mesh, cfg, self.local_rows)
             self.chunk = None  # the sequence's chunk size, fixed by its first chunk
             self._pending = None  # natural-order prefix from load_state, striped once the chunk size is known
@@ -166,7 +170,9 @@ class TtMLA:
         if self.chunk is None or start == 0:
             assert s % (32 * self.ndev) == 0, f"chunk {s}: {self.ndev} tile-aligned stripes"
             self.chunk = s
-        assert s == self.chunk and start % s == 0, f"striped latent: chunk {s} at {start}, the sequence's is {self.chunk}"
+        assert (
+            s == self.chunk and start % s == 0
+        ), f"striped latent: chunk {s} at {start}, the sequence's is {self.chunk}"
         if self._pending is not None:  # a loaded prefix, striped now that the chunk size is known
             lat, n_rows = self._pending
             self._pending = None
@@ -191,7 +197,11 @@ class TtMLA:
         key = (id(self.mesh), rows)
         if key not in _SCRATCH:
             _SCRATCH[key] = ttnn.zeros(
-                (1, 1, rows, self.r), dtype=ttnn.bfloat16, layout=ttnn.ROW_MAJOR_LAYOUT, device=self.mesh, memory_config=MC
+                (1, 1, rows, self.r),
+                dtype=ttnn.bfloat16,
+                layout=ttnn.ROW_MAJOR_LAYOUT,
+                device=self.mesh,
+                memory_config=MC,
             )
         stamp_seq_sharded(self.cache, self.mesh)
         return ttnn.bringup.fabric_all_gather(
@@ -542,7 +552,11 @@ def striped_latent_cache(mesh, cfg, local_rows: int) -> ttnn.Tensor:
     """This chip's stripe of the latent cache [1, 1, local_rows, 512] bf16 ROW_MAJOR, zeroed, declared sharded on the
     sequence dim over both mesh axes in row-major chip order (what the full-mesh gather checks)."""
     t = ttnn.zeros(
-        (1, 1, local_rows, cfg.kv_lora_rank), dtype=ttnn.bfloat16, layout=ttnn.ROW_MAJOR_LAYOUT, device=mesh, memory_config=MC
+        (1, 1, local_rows, cfg.kv_lora_rank),
+        dtype=ttnn.bfloat16,
+        layout=ttnn.ROW_MAJOR_LAYOUT,
+        device=mesh,
+        memory_config=MC,
     )
     stamp_seq_sharded(t, mesh)
     return t
