@@ -68,3 +68,18 @@ Mechanical fork changes (fork_op.py): namespace `ttnn::operations::bringup`, CMa
 - Default behaviour: the fork's own changes are kept; the kernels, their arguments and the CBs are the source's.
 - Needed by: rebase onto origin/llk_helper_library @ `bdc576fa652` (2026-10-12)
 - Files: `device/unified_routed_expert_ffn_program_factory.{cpp,hpp}`
+
+### Tests: model cases on DRAM ND-sharded expert weights
+- What: every model case's expert weights are now DRAM ND-sharded, the placement the models pass since #57850
+  (`TtRoutedExpert` defaults `weights_dram_nd_sharded` to True on Blackhole): one tile-row tall, `per_core_N` =
+  ceil(N tiles / UNIFIED_ROUTED_EXPERT_CORE_GRID.x) tiles wide, round-robin over every DRAM bank. Each case carries
+  the shard widths literally (`weights.memory`, `weights.shard_width`); the test builds the placement and checks the
+  widths are the op's per_core_N. Signatures re-keyed (the weights' memory layout is part of them), as is each model's
+  `results/fork_calls.json`; mimo_v2_6_d_p, mimo_v2_6_d_p_2x2, hy4_preview_d_p, glm53_flash_d_p and gemma4_a4b_d_p
+  checked against a fresh capture (identical apart from the weights' layout), xing40_a4b_d_p derived the same way
+  (not capturable on a 4-card box). Interleaved weights stay covered by the carried source tests
+  (`test_single_routed_expert_isl_sweep`, w_interleaved / w_ndshard).
+- Why: the cases still built interleaved weights, so no model's actual call had a case (fork_calls_uncovered 1 per
+  model since the 2026-10-01 rebase).
+- Needed by: every model using the fork (task O.1)
+- Files: `tests/cases.py`, `tests/test_unified_routed_expert_ffn.py`
