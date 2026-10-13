@@ -11,7 +11,7 @@ import subprocess
 import ast
 import yaml
 from loguru import logger
-from conftest import is_6u, is_single_card_without_eth_links
+from conftest import is_6u
 
 import pandas as pd
 import numpy as np
@@ -28,7 +28,7 @@ from tracy.common import (
     clear_profiler_runtime_artifacts,
 )
 
-from models.common.utility_functions import skip_for_blackhole
+from models.common.utility_functions import is_single_chip, skip_for_blackhole
 
 PROG_EXMP_DIR = "programming_examples/profiler"
 TRACY_TESTS_DIR = "./tests/ttnn/tracy"
@@ -43,10 +43,10 @@ def is_6u_wrapper():
     return result
 
 
-def is_single_card_without_eth_links_wrapper():
+def is_single_chip_wrapper():
     ctx = mp.get_context("spawn")
     with ctx.Pool() as pool:
-        result = pool.apply(is_single_card_without_eth_links)
+        result = pool.apply(is_single_chip)
         pool.close()
         pool.join()
     return result
@@ -1195,8 +1195,8 @@ def test_active_eth_slow_dispatch():
     device = devicesData["data"]["devices"].get("0")
     events = device["cores"]["DEVICE"]["riscs"]["TENSIX"]["events"] if device else {}
     eriscEventCount = len(events.get("erisc_events", []))
-    if eriscEventCount == 0 and is_single_card_without_eth_links_wrapper():
-        pytest.skip("Device 0 has no active ethernet cores")
+    if eriscEventCount == 0 and is_single_chip_wrapper():
+        pytest.skip("Single chip, no active ethernet cores")
 
     assert eriscEventCount in [
         C * OP_COUNT * ZONE_COUNT for C in ERISC_COUNTS[ENV_VAR_ARCH_NAME]
