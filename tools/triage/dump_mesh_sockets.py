@@ -151,12 +151,13 @@ def read_interface(core: SocketCore, callstack_provider: CallstackProvider) -> d
     """The kernel's Socket{Sender,Receiver}Interface local, found by matching its config_addr."""
     fields = ("bytes_sent", "write_ptr") if core.role == "sender" else ("bytes_acked", "read_ptr")
     dispatcher_data = callstack_provider.dispatcher_data
-    for risc_name in core.location.noc_block.risc_names:
+    for risc_debug in core.location.noc_block.all_riscs:
+        risc_name = risc_debug.risc_location.risc_name
         try:
-            if dispatcher_data.is_idle_in_default_view(core.location, risc_name):
+            if dispatcher_data.is_idle_in_default_view(risc_debug.risc_location):
                 continue
             frames = callstack_provider.get_cached_callstacks(
-                core.location, risc_name, use_full_callstack=True
+                risc_debug, use_full_callstack=True
             ).kernel_callstack_with_message.callstack
         except TimeoutDeviceRegisterError:
             raise

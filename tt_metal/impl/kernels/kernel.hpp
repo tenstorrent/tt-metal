@@ -349,8 +349,8 @@ public:
 
     void validate_runtime_args_size(
         size_t num_unique_rt_args, size_t num_common_rt_args, const CoreCoord& logical_core) const;
-    void set_runtime_args(const CoreCoord& logical_core, stl::Span<const uint32_t> runtime_args);
-    void set_common_runtime_args(stl::Span<const uint32_t> runtime_args);
+    void set_runtime_args(const CoreCoord& logical_core, ttsl::Span<const uint32_t> runtime_args);
+    void set_common_runtime_args(ttsl::Span<const uint32_t> runtime_args);
 
     int get_watcher_kernel_id() const { return watcher_kernel_id_; }
 

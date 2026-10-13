@@ -12,11 +12,14 @@
 
 namespace tt::tt_fabric {
 
+class FabricContext;
+
 // Private VC2 connection API -- Metal-layer only, not published under public fabric API.
 // Uses VC2 sender channel (last flat index) instead of channel 0.
 // Only supports CoreType::WORKER (VC2 is for worker injection only).
 template <typename ProgramOrDescriptor = tt::tt_metal::Program>
 void append_fabric_vc2_connection_rt_args(
+    const FabricContext& fabric_context,
     const FabricNodeId& src_fabric_node_id,
     const FabricNodeId& dst_fabric_node_id,
     uint32_t link_idx,

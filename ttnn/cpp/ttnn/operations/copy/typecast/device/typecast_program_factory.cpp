@@ -4,9 +4,12 @@
 
 #include "typecast_program_factory.hpp"
 
+#include <string>
+
 #include <tt-metalium/work_split.hpp>
 #include <tt-metalium/constants.hpp>
 #include <tt-metalium/host_api.hpp>
+#include <tt-metalium/math.hpp>
 #include <tt-metalium/tt_align.hpp>
 
 #include "ttnn/operations/core/data_movement_kernel/datamovement_kernel_config.hpp"
@@ -94,11 +97,26 @@ ttnn::device_operation::ProgramArtifacts TypecastProgramFactory::create_program_
     // Get number of pages (tiles for TILE layout, rows for ROW_MAJOR layout)
     const uint32_t num_pages = input.buffer()->num_pages();
 
-    // Set DFB entry size correctly based on layout
-    // - For TILE layout: entry = one 32x32 tile
-    // - For ROW_MAJOR layout: entry = one full row including padding
+    // Each DFB entry holds one tile, because the compute kernel unpacks and packs whole tiles.
+    // A ROW_MAJOR page can be shorter or longer than a tile, so it takes as many entries as it needs.
     const uint32_t input_page_size = is_row_major ? input.buffer()->page_size() : single_tile_size_input;
     const uint32_t output_page_size = is_row_major ? output.buffer()->page_size() : single_tile_size_output;
+    // Each input page is written to the output page at the same index.
+    if (is_row_major) {
+        const uint32_t input_elements_per_page = input_page_size / tt::datum_size(cb_data_format_input);
+        const uint32_t output_elements_per_page = output_page_size / tt::datum_size(cb_data_format_output);
+        TT_FATAL(
+            input.buffer()->num_pages() == output.buffer()->num_pages() &&
+                input_elements_per_page == output_elements_per_page,
+            "Row-major typecast requires matching page geometry, got input {} pages of {} elements and output {} "
+            "pages of {} elements",
+            input.buffer()->num_pages(),
+            input_elements_per_page,
+            output.buffer()->num_pages(),
+            output_elements_per_page);
+    }
+    const uint32_t entries_per_page =
+        is_row_major ? tt::div_up(input_page_size / tt::datum_size(cb_data_format_input), TILE_HW) : 1u;
 
     const CoreCoord compute_with_storage_grid_size = device->compute_with_storage_grid_size();
     auto [num_cores, all_cores, core_group_1, core_group_2, num_items_per_core_group_1, num_items_per_core_group_2] =
@@ -119,14 +137,14 @@ ttnn::device_operation::ProgramArtifacts TypecastProgramFactory::create_program_
     constexpr uint32_t num_output_pages = 2;
     const DataflowBufferSpec in_dfb{
         .unique_id = IN_DFB,
-        .entry_size = input_page_size,
-        .num_entries = num_input_pages,
+        .entry_size = single_tile_size_input,
+        .num_entries = num_input_pages * entries_per_page,
         .data_format_metadata = cb_data_format_input,
     };
     const DataflowBufferSpec out_dfb{
         .unique_id = OUT_DFB,
-        .entry_size = output_page_size,
-        .num_entries = num_output_pages,
+        .entry_size = single_tile_size_output,
+        .num_entries = num_output_pages * entries_per_page,
         .data_format_metadata = cb_data_format_output,
     };
 
@@ -136,6 +154,10 @@ ttnn::device_operation::ProgramArtifacts TypecastProgramFactory::create_program_
     const KernelSpec reader{
         .unique_id = READER,
         .source = kReaderSource,
+        .compiler_options =
+            {.defines =
+                 {{"ENTRIES_PER_PAGE", std::to_string(entries_per_page)},
+                  {"PAGE_BYTES", std::to_string(input_page_size)}}},
         .dfb_bindings = {DFBBinding{
             .dfb_spec_name = IN_DFB, .accessor_name = "in", .endpoint_type = DFBEndpointType::PRODUCER}},
         .tensor_bindings = {TensorBinding{.tensor_parameter_name = INPUT, .accessor_name = "src"}},
@@ -146,6 +168,10 @@ ttnn::device_operation::ProgramArtifacts TypecastProgramFactory::create_program_
     const KernelSpec writer{
         .unique_id = WRITER,
         .source = kWriterSource,
+        .compiler_options =
+            {.defines =
+                 {{"ENTRIES_PER_PAGE", std::to_string(entries_per_page)},
+                  {"PAGE_BYTES", std::to_string(output_page_size)}}},
         .dfb_bindings = {DFBBinding{
             .dfb_spec_name = OUT_DFB, .accessor_name = "out", .endpoint_type = DFBEndpointType::CONSUMER}},
         .tensor_bindings = {TensorBinding{.tensor_parameter_name = OUTPUT, .accessor_name = "dst"}},
@@ -164,8 +190,7 @@ ttnn::device_operation::ProgramArtifacts TypecastProgramFactory::create_program_
                      .dfb_spec_name = OUT_DFB, .accessor_name = "out", .endpoint_type = DFBEndpointType::PRODUCER}},
             .compile_time_args =
                 {{"per_core_block_cnt", per_core_block_cnt},
-                 // per_core_block_dim is always 1 (works for both tiled and row-major)
-                 {"per_core_block_dim", 1u},
+                 {"per_core_block_dim", entries_per_page},
                  {"in_data_format", static_cast<uint32_t>(datatype_to_dataformat_converter(input.dtype()))},
                  {"out_data_format", static_cast<uint32_t>(datatype_to_dataformat_converter(output.dtype()))}},
             .hw_config =
