@@ -13,31 +13,6 @@ using namespace tt::tt_metal;
 
 namespace {
 
-// Lowest semaphore id free on every core of the range, matching CreateSemaphore.
-uint32_t allocate_worker_semaphore(ProgramDescriptor& desc, const CoreRangeSet& cores, uint32_t initial_value) {
-    constexpr uint32_t kMaxSemaphores = 16;
-    for (uint32_t id = 0; id < kMaxSemaphores; ++id) {
-        bool used = false;
-        for (const auto& sem : desc.semaphores) {
-            if (sem.core_type == tt::CoreType::WORKER && sem.id == id && sem.core_ranges.intersects(cores)) {
-                used = true;
-                break;
-            }
-        }
-        if (!used) {
-            desc.semaphores.push_back(SemaphoreDescriptor{
-                .id = id,
-                .core_type = tt::CoreType::WORKER,
-                .core_ranges = cores,
-                .initial_value = initial_value,
-            });
-            return id;
-        }
-    }
-    TT_FATAL(false, "Unable to initialize semaphore on CoreRangeSet {}: all semaphore IDs are in use", cores.str());
-    return 0;
-}
-
 CoreRangeSet to_core_range_set(const std::variant<CoreRange, CoreRangeSet>& spec) {
     if (const auto* range = std::get_if<CoreRange>(&spec)) {
         return CoreRangeSet(*range);
@@ -315,7 +290,7 @@ void StridedReduceScatterFusedOpSignaler::init_strided_reduce_scatter(
         core_range_to_signal);
 
     this->fused_op_receiver_signal_semaphore =
-        allocate_worker_semaphore(program, to_core_range_set(core_range_to_signal), 0);
+        add_semaphore_descriptor(program, to_core_range_set(core_range_to_signal), 0);
     this->num_fused_op_cores_to_signal = this->fused_op_receiver_cores_noc.size();
     this->initialized = true;
 }
@@ -728,7 +703,7 @@ void MinimalMatmulFusedOpSignaler::init_fused_op(
     const uint32_t num_signal_semaphores = 2 * this->num_ag_workers + 1;
     for (uint32_t i = 0; i < num_signal_semaphores; i++) {
         this->fused_op_receiver_signal_semaphores.push_back(
-            allocate_worker_semaphore(program, to_core_range_set(core_range_to_signal), 0));
+            add_semaphore_descriptor(program, to_core_range_set(core_range_to_signal), 0));
     }
 
     this->num_fused_op_cores_to_signal = this->fused_op_receiver_cores_noc.size();
