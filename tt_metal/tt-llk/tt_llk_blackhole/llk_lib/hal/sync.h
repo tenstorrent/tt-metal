@@ -73,7 +73,17 @@ enum class StallTarget : std::uint16_t
     All             = 0x1ffu
 };
 
-/** @brief Select Blackhole STALLWAIT completion conditions. */
+/**
+ * @brief Select Blackhole STALLWAIT completion conditions.
+ *
+ * All selected conditions must hold simultaneously. All includes both source-cleared
+ * conditions for the unpackers' banks and source-valid conditions for the matrix unit's banks.
+ *
+ * @note Ensure the selected conditions can become true together. If the unpacker and matrix
+ *       unit select the same source bank, its cleared and valid conditions cannot both hold
+ *       until a bank selection changes. Use All only when the source-bank ownership and
+ *       selections allow every condition to hold; select the required Idle flags to drain work.
+ */
 enum class StallCondition : std::uint16_t
 {
     HardwareDefault      = 0,
