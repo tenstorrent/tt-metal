@@ -222,10 +222,8 @@ AllocatorConfig L1BankingAllocator::generate_config(
     // Tensix/Eth <-> Tensix/Eth src and dst addrs must be L1_ALIGNMENT aligned
     const auto& logical_size = soc_desc.get_grid_size(CoreType::TENSIX);
     const auto& compute_size = tt::get_compute_grid_size(env, device_id, num_hw_cqs, dispatch_core_config);
-    // On Quasar a DRAM bank may only use the local-address field of the selected ATT map's DRAM window
-    // (qa_att_windows.hpp). The listed emulator models' real DRAM size is already in the soc descriptor
-    // (qa_emulator_models.hpp), so on quasar_aether_2x3 this changes nothing; the horizon image is not
-    // listed, so on horizon_2x3 the window is what limits the bank.
+    // Under Quasar ATT a DRAM bank cannot be larger than the map's DRAM window, so take the
+    // smaller of the descriptor's size and the window (qa_att_windows.hpp).
     uint64_t dram_bank_size = soc_desc.dram_view_size;
     if (hal.get_arch() == tt::ARCH::QUASAR) {
         if (const auto att_map = env.get_rtoptions().get_noc_att_map(); att_map.has_value()) {

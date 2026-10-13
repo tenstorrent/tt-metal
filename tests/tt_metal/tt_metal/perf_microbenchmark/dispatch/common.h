@@ -1030,9 +1030,7 @@ inline tt_metal::KernelHandle create_sd_cq_kernel(
 static constexpr uint32_t QUASAR_SIMULATION_PHYSICAL_DRAM_SIZE = 1u << 26;  // 64 MiB
 
 // DRAM addresses and sizes for the command queue on the Quasar simulator. Issue queue (8 MiB) and completion queue
-// (8 MiB) sit at [48, 56) and [56, 64) MiB, ending at the top of the emulator's 64 MiB DRAM channel. On these models
-// the allocator's DRAM bank also ends at 64 MiB, so the queues occupy its top 16 MiB; the slow-dispatch cq tests
-// allocate no DRAM buffers, and test_prefetcher.cpp checks the queue base against the allocator base.
+// (8 MiB) sit at [48, 56) and [56, 64) MiB, ending at the top of the emulator's 64 MiB DRAM channel.
 static constexpr uint32_t QUASAR_SIMULATION_ISSUE_QUEUE_BASE = 0x3000000u;  // 48 MiB
 static constexpr uint32_t QUASAR_SIMULATION_ISSUE_QUEUE_SIZE = 0x800000;    // 8 MiB
 static constexpr uint32_t QUASAR_SIMULATION_COMPLETION_QUEUE_BASE =

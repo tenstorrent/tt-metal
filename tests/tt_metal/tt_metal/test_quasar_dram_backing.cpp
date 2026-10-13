@@ -15,7 +15,7 @@ using namespace tt;
 using namespace tt::tt_metal;
 
 // The 1x3, 2x3 and 2x3_DISPATCH emulator models back 64 MiB of DRAM per channel although their soc
-// descriptor declares 1 GiB. A DRAM buffer inside the backing must work; one above it must be refused.
+// descriptor declares 1 GiB.
 TEST_F(QuasarMeshDeviceSingleCardFixture, DramStaysInsideTheEmulatorBacking) {
     if (std::getenv("TT_METAL_SIMULATOR") == nullptr) {
         GTEST_SKIP() << "This test can only be run using a simulator. Set TT_METAL_SIMULATOR environment variable.";
@@ -29,7 +29,6 @@ TEST_F(QuasarMeshDeviceSingleCardFixture, DramStaysInsideTheEmulatorBacking) {
     auto mesh_device = devices_[0];
     EXPECT_EQ(mesh_device->dram_size_per_channel(), model->dram_size_per_channel);
 
-    // Below the backing: the highest page the allocator hands out is still inside it and reads back.
     constexpr uint32_t page_size = 4096;
     distributed::DeviceLocalBufferConfig local_cfg{
         .page_size = page_size,
@@ -48,7 +47,7 @@ TEST_F(QuasarMeshDeviceSingleCardFixture, DramStaysInsideTheEmulatorBacking) {
     distributed::EnqueueReadMeshBuffer(cq, dst, buf, /*blocking=*/true);
     EXPECT_EQ(dst, src);
 
-    // Above the backing: one page larger than the backing cannot fit in any DRAM bank.
+    // Above the backing storage: one page larger than the backing cannot fit in any DRAM bank.
     const DeviceAddr too_big = model->dram_size_per_channel + page_size;
     distributed::DeviceLocalBufferConfig too_big_cfg{.page_size = too_big, .buffer_type = BufferType::DRAM};
     distributed::ReplicatedBufferConfig too_big_global{.size = too_big};

@@ -4,11 +4,9 @@
 
 #pragma once
 
-// The Quasar emulator models whose soc descriptor declares more DRAM than the model backs.
-// Each listed model has 64 MiB of DRAM per channel; its descriptor declares 1 GiB, and an offset at
-// or above 64 MiB wraps onto the low 64 MiB. tt-metal clamps the descriptor's DRAM size to this table
-// when the TT_METAL_SIMULATOR directory has one of these names (Cluster::get_metal_desc_from_tt_desc).
-// Models that are not listed keep their descriptor's value.
+// Quasar emulator models that back less DRAM than their soc descriptor declares, with the DRAM they
+// really have per channel. tt-metal clamps the descriptor's DRAM size to this when the TT_METAL_SIMULATOR
+// directory has one of these names. Models that are not listed keep their descriptor's value.
 
 #include <cstdint>
 #include <string_view>

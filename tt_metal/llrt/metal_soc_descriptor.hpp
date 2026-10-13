@@ -37,15 +37,10 @@ public:
     std::vector<std::vector<tt::tt_metal::CoreCoord>> dram_bank_endpoint_coords;
 
     uint64_t dram_core_size{};
-    // Bytes per DRAM view. On the Quasar emulator models in qa_emulator_models.hpp it is clamped to
-    // the DRAM the model backs.
     uint64_t dram_view_size{};
 
     std::map<tt::tt_metal::CoreCoord, int> logical_eth_core_to_chan_map;
 
-    // dram_view_size_limit: the DRAM the device really backs per view when that is less than the
-    // descriptor declares (the Quasar emulator models in qa_emulator_models.hpp). dram_view_size and
-    // dram_core_size are clamped to it.
     metal_SocDescriptor(
         const SocDescriptor& other,
         const tt::BoardType& board_type,

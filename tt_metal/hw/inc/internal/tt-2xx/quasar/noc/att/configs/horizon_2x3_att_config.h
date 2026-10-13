@@ -36,9 +36,6 @@ constexpr std::uint32_t ATT_WORKER_GRID_Y = 1;
 // Selectors: 0-1 Tensix (0,0),(1,0); 2-3 Dispatch (0,1),(1,1); 4-5 NOC2AXI
 // (0,2),(1,2), which are also DRAM banks 0 and 1. Endpoint words are
 // (y << 6) | x in the device's frame.
-// The remote window's 26-bit local-address field gives each DRAM bank 64 MiB of
-// address. The allocator never hands out DRAM above a map's window
-// (l1_banking_allocator.cpp).
 constexpr std::uint8_t ATT_WORKER_SELECTORS[] = {0, 1};
 constexpr std::uint16_t ATT_WORKER_ENDPOINT_WORDS[] = {0x000, 0x001};
 constexpr std::uint16_t ATT_FULL_TILE_ENDPOINT_WORDS[] = {0x000, 0x001, 0x040, 0x041, 0x080, 0x081};

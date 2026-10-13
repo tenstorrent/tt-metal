@@ -840,7 +840,6 @@ public:
         }
         return std::filesystem::path(simulator).filename().string();
     }
-    // The qsr.s1 (Grendel) emulation model, recognised by its simulator directory name (emu-qsr-s1-*).
     bool is_qsr_s1_simulator() const { return get_simulator_name().starts_with("emu-qsr-s1"); }
 
     bool get_erisc_iram_enabled() const {

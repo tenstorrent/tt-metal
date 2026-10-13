@@ -39,10 +39,6 @@
 // Top 64K is reserved for syseng but host reads/writes from that region
 #define MEM_ETH_SIZE (512 * 1024)
 
-// Copied from Blackhole; only sizes the HAL's DRAM UNRESERVED region. Not a Quasar DRAM capacity:
-// the DRAM size comes from the soc descriptor, clamped on the emulator models to the DRAM they back
-// (64 MiB per channel on 1x3 and 2x3; qa_emulator_models.hpp).
-// The HAL's UNRESERVED size derived from it is not clamped; it is not the emulator's capacity.
 #define MEM_DRAM_SIZE (4177920 * 1024U)
 #define MEM_LOCAL_BASE 0x0802000
 
