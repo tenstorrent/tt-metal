@@ -352,7 +352,7 @@ void validate_runtime_patched_scalars(const RingJointSDPAParams& args, const Rin
             chunk_capacity);
     }
 
-    if (args.has_sliding_window() && tensor_args.is_chunked(args.kv_stripe_split) &&
+    if (args.has_sliding_window() && tensor_args.is_chunked(args.kv_stripe_split, args.stripe_size) &&
         (!kv_pad_rotation_active(args, tensor_args) || args.circular_kv_cache)) {
         const auto q_group_size = tensor_args.input_q.logical_shape()[2] * args.ring_size;
         // One complete group is enough: at logical_n == q_group_size device 0 clips its
@@ -397,6 +397,18 @@ void RingJointSDPADeviceOperation::validate_on_program_cache_miss(
     const auto& gathered_input_tensor_k = tensor_args.gathered_k;
 
     validate_metadata_tensors(tensor_args);
+    if (args.stripe_size != 0) {
+        const auto q_rows = input_tensor_q.logical_shape()[2];
+        TT_FATAL(
+            args.stripe_size % tt::constants::TILE_HEIGHT == 0 && q_rows % args.stripe_size == 0 &&
+                tensor_args.local_kv_seq_len() % args.stripe_size == 0,
+            "rjsdpa stripe_size must be tile-aligned and divide both local Q and KV lengths");
+        TT_FATAL(
+            args.kv_stripe_split == 1 && args.is_causal && !args.is_balanced && !args.is_cross &&
+                !args.has_sliding_window() && !args.circular_kv_cache && !tensor_args.joint_q.has_value(),
+            "rjsdpa explicit stripes require unbalanced dense causal attention with matching Q/KV distributions");
+        TT_FATAL(kv_pad_rotation_active(args, tensor_args), "rjsdpa explicit stripes require a host or device prefix");
+    }
 
     // The sliding-window halo and the per-device slab checks below divide by the chunk sizes.
     TT_FATAL(
@@ -503,7 +515,7 @@ void RingJointSDPADeviceOperation::validate_on_program_cache_miss(
             "which derives logical_n itself");
         TT_FATAL(!args.has_sliding_window(), "logical_n as a tensor is incompatible with sliding-window attention");
         TT_FATAL(
-            !tensor_args.is_chunked(args.kv_stripe_split),
+            !tensor_args.is_chunked(args.kv_stripe_split, args.stripe_size),
             "logical_n as a tensor is incompatible with chunked-shaped prefill (Q.seq < K.seq); use the "
             "kv_actual_isl metadata path there");
     }
@@ -599,10 +611,10 @@ void RingJointSDPADeviceOperation::validate_on_program_cache_miss(
     const uint32_t NVH = tensor_args.v_num_heads();
     const uint32_t VDH = tensor_args.v_head_dim(args.latent_v_head_dim);
 
-    // Chunked-prefill (`tensor_args.is_chunked(args.kv_stripe_split)`): Q is shorter than the per-device K shard
-    // (latest slab against a growing K cache). Chunk 0 has equal shapes and uses the regular
+    // Chunked-prefill (`tensor_args.is_chunked(args.kv_stripe_split, args.stripe_size)`): Q is shorter than the
+    // per-device K shard (latest slab against a growing K cache). Chunk 0 has equal shapes and uses the regular
     // is_causal=True path.
-    const bool is_chunked = tensor_args.is_chunked(args.kv_stripe_split);
+    const bool is_chunked = tensor_args.is_chunked(args.kv_stripe_split, args.stripe_size);
 
     const auto dtype = input_tensor_q.dtype();
     if ((!args.is_causal && !is_chunked) || args.is_cross) {
@@ -846,7 +858,7 @@ void RingJointSDPADeviceOperation::validate_on_program_cache_miss(
             "KV-pad-aware rotation currently supports ring attention without joint tokens. Got joint length L={}",
             L);
         TT_FATAL(
-            N_local_kv % (N_local_q / args.kv_stripe_split) == 0,
+            N_local_kv % (args.stripe_size ? args.stripe_size : N_local_q / args.kv_stripe_split) == 0,
             "KV-pad-aware rotation expects K/V local sequence length to be an integer number of KV regions (Q slab / "
             "stripe split). "
             "Got N_local_kv={}, N_local_q={}, kv_stripe_split={}",
@@ -1197,6 +1209,7 @@ ttsl::hash::hash_t RingJointSDPADeviceOperation::compute_program_hash(
         tensor_args.joint_is_sharded(),
         args.ring_size,
         args.kv_stripe_split,
+        args.stripe_size,
         args.compute_kernel_config,
         args.program_config,
         args.ccl_core_grid_offset,
@@ -1356,7 +1369,8 @@ RingJointSDPAResult ring_joint_scaled_dot_product_attention(
     const std::optional<uint32_t> sliding_window_size,
     const bool circular_kv_cache,
     const std::optional<ttnn::Tensor>& logical_n_tensor,
-    const std::optional<ttnn::Tensor>& logical_l_tensor) {
+    const std::optional<ttnn::Tensor>& logical_l_tensor,
+    const uint32_t stripe_size) {
     using OperationType = ttnn::prim::RingJointSDPADeviceOperation;
 
     auto kernel_config_val = init_device_compute_kernel_config(
@@ -1580,7 +1594,8 @@ RingJointSDPAResult ring_joint_scaled_dot_product_attention(
         kv_cache_layer_idx,
         sliding_window_size,
         circular_kv_cache,
-        resolved_kv_stripe_split);
+        resolved_kv_stripe_split,
+        stripe_size);
 
     auto tensor_args = OperationType::tensor_args_t{
         .input_q = input_tensor_q,

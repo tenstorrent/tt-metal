@@ -387,12 +387,13 @@ ring_joint::ChunkedQMapping build_kv_pad_q_mapping(
     uint32_t logical_tile_count,
     uint32_t ring_size,
     uint32_t q_local_padded_tile_count,
-    uint32_t device_index) {
+    uint32_t device_index,
+    uint32_t stripe_tile_rows) {
     const uint32_t q_chunk_group_tile_count = ring_size * q_local_padded_tile_count;
     const uint32_t first_group = kv_actual_tile_count / q_chunk_group_tile_count;
     const uint32_t last_group = (logical_tile_count - 1) / q_chunk_group_tile_count;
     TT_FATAL(
-        last_group <= first_group + 1,
+        stripe_tile_rows != 0 || last_group <= first_group + 1,
         "KV-pad-aware rotation expects the current valid Q to fit in one fixed global chunk. "
         "Got kv_actual_tile_count={}, new_actual_tile_count={}, q_chunk_group_tile_count={}",
         kv_actual_tile_count,
@@ -400,7 +401,7 @@ ring_joint::ChunkedQMapping build_kv_pad_q_mapping(
         q_chunk_group_tile_count);
 
     const auto mapping = ring_joint::build_chunked_q_mapping(
-        kv_actual_tile_count, logical_tile_count, q_local_padded_tile_count, ring_size, device_index);
+        kv_actual_tile_count, logical_tile_count, q_local_padded_tile_count, ring_size, device_index, stripe_tile_rows);
     TT_FATAL(
         mapping.q_valid_tile_count <= q_local_padded_tile_count,
         "KV-pad-aware rotation mapped more valid Q tiles to this device than its local Q slab can hold. "
@@ -437,7 +438,7 @@ RingWritePlan build_ring_write_plan(
     // Chunked sliding consumes the local slab followed by its cyclic
     // predecessor. Keep that dependency on direction 1 for every device,
     // independent of the dense ring's parity-based split.
-    if (args.has_sliding_window() && tensor_args.is_chunked(args.kv_stripe_split) && !args.is_cross) {
+    if (args.has_sliding_window() && tensor_args.is_chunked(args.kv_stripe_split, args.stripe_size) && !args.is_cross) {
         plan.forward_writes_expected = 1;
         plan.backward_writes_expected = 0;
         return plan;
@@ -479,7 +480,8 @@ RingJointRuntimeDerivation build_runtime_derivation(
     derivation.ring_size = static_cast<uint32_t>(args.all_gather_operation_attributes.ring_size);
     derivation.q_local_padded_Nt = q_local_padded_N / tt::constants::TILE_HEIGHT;
     derivation.kv_local_padded_Nt = kv_local_padded_N / tt::constants::TILE_HEIGHT;
-    derivation.kv_region_Nt = derivation.q_local_padded_Nt / args.kv_stripe_split;
+    derivation.kv_region_Nt = args.stripe_size ? args.stripe_size / tt::constants::TILE_HEIGHT
+                                               : derivation.q_local_padded_Nt / args.kv_stripe_split;
     derivation.q_chunk_group_tile_count = derivation.kv_region_Nt * derivation.ring_size;
     derivation.num_local_k_chunks = tt::div_up(kv_local_padded_N, k_chunk_size);
     derivation.k_chunk_tile_count = k_chunk_size / tt::constants::TILE_HEIGHT;
@@ -492,7 +494,7 @@ RingJointRuntimeDerivation build_runtime_derivation(
     derivation.logical_lt = tt::div_up(joint_input_params.logical_l, tt::constants::TILE_HEIGHT);
     // Cross is non-causal on chunked-shaped tensors, so kernels and the work planner use the
     // non-chunked path.
-    derivation.kernel_chunked = tensor_args.is_chunked(args.kv_stripe_split) && !args.is_cross;
+    derivation.kernel_chunked = tensor_args.is_chunked(args.kv_stripe_split, args.stripe_size) && !args.is_cross;
     derivation.kv_pad_rotation_enabled = ttnn::prim::kv_pad_rotation_active(args, tensor_args);
     derivation.kernel_is_causal = args.is_causal && !derivation.kernel_chunked;
 
@@ -521,7 +523,8 @@ RingJointRuntimePlan build_runtime_plan(
             derivation.logical_nt,
             args.q_ring_size(),
             derivation.q_local_padded_Nt,
-            ring_write_plan.tensor_rank / args.kv_stripe_split);
+            ring_write_plan.tensor_rank / args.kv_stripe_split,
+            args.stripe_size / tt::constants::TILE_HEIGHT);
     }
 
     if (args.has_sliding_window()) {
@@ -1122,7 +1125,7 @@ tt::tt_metal::ProgramDescriptor build_ring_joint_sdpa_program_descriptor(
     const uint32_t logical_lt = tt::div_up(logical_l, tt::constants::TILE_HEIGHT);
     const uint32_t DHt = DH / tt::constants::TILE_WIDTH;
     const uint32_t vDHt = vDH / tt::constants::TILE_WIDTH;
-    const bool kv_pad_from_metadata = tensor_args.kv_pad_from_metadata(args.kv_stripe_split);
+    const bool kv_pad_from_metadata = tensor_args.kv_pad_from_metadata(args.kv_stripe_split, args.stripe_size);
     const bool kv_pad_rotation_enabled = ttnn::prim::kv_pad_rotation_active(args, tensor_args);
     const RingJointRuntimePlan runtime_plan = build_runtime_plan(args, tensor_args, ring_write_plan);
     const RingJointRuntimeArgLayout runtime_arg_layout = get_runtime_arg_layout(args, tensor_args);
@@ -1141,7 +1144,9 @@ tt::tt_metal::ProgramDescriptor build_ring_joint_sdpa_program_descriptor(
 
     // Global chunk has S Q slabs and R KV regions, with R/S extra KV stripes.
     // Kernels recover the region from this width divided by transport ring size.
-    const uint32_t q_chunk_group_tile_count = q_local_padded_Nt * args.q_ring_size();
+    const uint32_t q_chunk_group_tile_count = args.stripe_size
+                                                  ? (args.stripe_size / tt::constants::TILE_HEIGHT) * ring_size
+                                                  : q_local_padded_Nt * args.q_ring_size();
     // kernel_chunked drives the chunked-prefill math in the kernels and the host ring-work planner.
     // Cross runs the non-causal full-prefill path on chunked-shaped tensors, so it is excluded; the
     // kernel-level is_causal flag carries the legacy local-frame causal-stamp semantics (chunked
@@ -1913,6 +1918,10 @@ tt::tt_metal::ProgramDescriptor build_ring_joint_sdpa_program_descriptor(
     defines["DHT_GRANULARITY"] = std::to_string(dht_granularity);
     defines["REDUCE_GRANULARITY"] = std::to_string(reduce_granularity);
     defines["EXP_APPROX_MODE"] = std::to_string(exp_approx_mode);
+    if (args.stripe_size != 0) {
+        defines["RING_JOINT_STRIPE_TILES"] = std::to_string(args.stripe_size / tt::constants::TILE_HEIGHT);
+        defines["RING_JOINT_STRIPE_RING_SIZE"] = std::to_string(ring_size);
+    }
     if (args.program_config.has_value() && args.program_config->matmul_math_fidelity.has_value()) {
         TT_FATAL(use_streaming_compute, "matmul_math_fidelity needs the streaming compute path (fp32_dest_acc_en=false)");
         defines["SDPA_MATMUL_FIDELITY"] =
@@ -3638,6 +3647,9 @@ tt::tt_metal::ProgramDescriptor build_ring_joint_sdpa_program_descriptor(
             tensor_args.slot_id,
             tensor_args.kv_actual_isl,
             // The gather has R sources: its slab is the KV region, not the Q slab.
+            // Explicit stripes keep this query-window extent for metadata's end-position
+            // derivation. Since stripe_size divides Q.local_seq, rounding the transfer up
+            // to Q-sized groups covers every live stripe (possibly fetching an extra tail).
             tensor_args.input_q.padded_shape()[2] / (tt::constants::TILE_HEIGHT * args.kv_stripe_split),
             // (user, layer)-major KV-cache batch factor: the all-gather reader computes the gathered slot as
             // slot_id[0] * kv_cache_num_layers + kv_cache_layer_idx. Defaults (1, 0) keep callers unaffected.

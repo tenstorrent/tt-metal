@@ -258,7 +258,7 @@ void kernel_main() {
     constexpr uint32_t kv_stripe_split = get_named_compile_time_arg_val("kv_stripe_split");
     static_assert(
         kv_stripe_split > 0 && q_local_padded_Nt % kv_stripe_split == 0, "Q slab must split into whole KV regions");
-    constexpr uint32_t kv_region_Nt = q_local_padded_Nt / kv_stripe_split;
+    constexpr uint32_t kv_region_Nt = chunk_size_t / ring_size;
     static_assert(kv_region_Nt * ring_size == chunk_size_t, "chunk_size_t must span one KV region per ring rank");
     constexpr uint32_t q_ring_size = ring_size / kv_stripe_split;
     constexpr bool indexed_kv_cache = get_compile_time_arg_val(24) == 1;
@@ -552,17 +552,26 @@ void kernel_main() {
                 kv_actual_isl = trace_metadata::bounded_sliding_kv_actual_isl(
                     kv_actual_isl, q_local_padded_Nt, ring_size, kv_local_padded_Nt, SLIDING_HALO_SLOT_COUNT);
             } else {
-                kv_actual_isl =
-                    trace_metadata::bounded_kv_actual_isl(kv_actual_isl, chunk_size_t, kv_local_padded_Nt * ring_size);
+                kv_actual_isl = trace_metadata::bounded_kv_actual_isl(
+                    kv_actual_isl, q_local_padded_Nt * (ring_size / kv_stripe_split), kv_local_padded_Nt * ring_size);
             }
             const uint32_t kv_actual_tile_count = kv_actual_isl / 32;
             logical_nt = trace_metadata::logical_tile_rows_clamped_to_cache(
-                kv_actual_isl, chunk_size_t, kv_local_padded_Nt * ring_size);
+                kv_actual_isl, q_local_padded_Nt * (ring_size / kv_stripe_split), kv_local_padded_Nt * ring_size);
             const uint32_t tensor_rank =
                 ttnn::ring_attention_all_gather::tensor_rank_from_transport_rank<full_mesh_rank_mapping>(
                     fused_op_receiver.seq.ring_index, mesh_rows, mesh_cols, snake_orientation);
             qmap = ring_joint::build_chunked_q_mapping(
-                kv_actual_tile_count, logical_nt, q_local_padded_Nt, q_ring_size, tensor_rank / kv_stripe_split);
+                kv_actual_tile_count,
+                logical_nt,
+                q_local_padded_Nt,
+                q_ring_size,
+                tensor_rank / kv_stripe_split
+#ifdef RING_JOINT_STRIPE_TILES
+                ,
+                RING_JOINT_STRIPE_TILES
+#endif
+            );
             // Joint trio stays defaulted: KV-pad rotation is validated incompatible with a sharded joint.
             const auto masks = ring_joint::build_ring_work_masks_device<full_mesh_rank_mapping>({
                 .transport_rank = fused_op_receiver.seq.ring_index,
@@ -912,7 +921,7 @@ void kernel_main() {
                 chunked_enabled,
                 kv_local_padded_Nt,
                 chunk_size_t,
-                q_local_padded_Nt,
+                kv_region_Nt,
                 Sk_chunk_t>(num_local_k_chunks, ring_id, logical_nt, causal_end_nt);
             ksplit_k_range = ring_joint::ksplit_range(num_valid, ksplit_idx, ksplit_count);
         }
