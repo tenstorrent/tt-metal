@@ -18,10 +18,12 @@ from models.demos.gpt_oss.tt.ccl import CCLManager
 from .optimized_decoder import OptimizedDecoder
 
 DRAM = ttnn.DRAM_MEMORY_CONFIG
-# Experiment (tt-agentic-bringup-qb2#75): route batched decode (B > 1) through the
-# token-grouped dispatch/fused-SwiGLU/combine expert path that prefill already uses,
-# instead of the dense 384-expert sparse-matmul path.
-GROUPED_DECODE = os.environ.get("KOLIBRI_GROUPED_DECODE", "0") == "1"
+# Batched decode (B > 1) goes through the token-grouped dispatch/fused-SwiGLU/combine
+# expert path that prefill already uses, instead of the dense 384-expert sparse-matmul
+# path (tt-agentic-bringup-qb2#75: 2x single-user decode, 1.5-2.8x 32-user throughput;
+# top-1 identical and PCC >= 0.998 against the dense path). KOLIBRI_GROUPED_DECODE=0
+# restores the dense path.
+GROUPED_DECODE = os.environ.get("KOLIBRI_GROUPED_DECODE", "1") == "1"
 
 
 def _env_grid(name):
@@ -34,13 +36,14 @@ def _env_grid(name):
 GROUPED_DECODE_GRID = _env_grid("KOLIBRI_GROUPED_DECODE_GRID")
 DECODE_TOPK_WIDTH = int(os.environ.get("KOLIBRI_DECODE_TOPK_WIDTH", "0"))
 GROUPED_DECODE_REDUCE = os.environ.get("KOLIBRI_GROUPED_DECODE_REDUCE", "fused")
-# Experiment: expert-parallel layout for the grouped (dispatch/fused-SwiGLU/combine) path.
+# Expert-parallel layout for the grouped (dispatch/fused-SwiGLU/combine) path (default on;
+# KOLIBRI_EP_EXPERTS=0 keeps the TP4 128-wide expert slices).
 # Rank r holds the FULL-width experts 96r..96r+95 instead of a 128-wide slice of all 384.
 # The residual is replicated and the MoE output is already all-reduced, so no new collectives:
 # every rank routes all tokens, computes only its local experts, and the all-reduce sums the
 # per-rank partial routed outputs. The fused SwiGLU then sees 512-wide experts (16 tiles), which
 # lifts its 4x4 core-grid cap (columns must divide the expert width).
-EP_EXPERTS = os.environ.get("KOLIBRI_EP_EXPERTS", "0") == "1"
+EP_EXPERTS = os.environ.get("KOLIBRI_EP_EXPERTS", "1") == "1"
 EP_GRID = _env_grid("KOLIBRI_EP_GRID") or (8, 8)
 EP_RANKS = 4
 EP_LOCAL = 384 // EP_RANKS

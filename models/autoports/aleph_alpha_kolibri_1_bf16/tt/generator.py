@@ -9,10 +9,11 @@ from dataclasses import dataclass
 
 import torch
 
-# Experiment (tt-agentic-bringup-qb2#75): vLLM hands over one page table per layer, but layers of
-# the same KV-cache group carry identical tables. Upload each distinct table once per refresh and
-# fill the other layers' device tables with device-to-device copies instead of host uploads.
-PAGE_TABLE_DEDUPE = os.environ.get("KOLIBRI_PAGE_TABLE_DEDUPE", "0") == "1"
+# vLLM hands over one page table per layer, but layers of the same KV-cache group carry identical
+# tables. Upload each distinct table once per refresh and fill the other layers' device tables with
+# device-to-device copies instead of host uploads (tt-agentic-bringup-qb2#75; default on,
+# KOLIBRI_PAGE_TABLE_DEDUPE=0 uploads every table).
+PAGE_TABLE_DEDUPE = os.environ.get("KOLIBRI_PAGE_TABLE_DEDUPE", "1") == "1"
 
 try:
     from readiness_check.contract import Generator
