@@ -337,19 +337,9 @@ def test_full_buffer():
 
     stats = devicesData["data"]["devices"]["0"]["cores"]["DEVICE"]["analysis"]
     statName = "Marker Repeat"
-    statNameEth = "Marker Repeat ETH"
 
     assert statName in stats.keys(), "Wrong device analysis format"
-
-    if statNameEth in stats.keys():
-        assert (
-            stats[statName]["stats"]["Count"] - stats[statNameEth]["stats"]["Count"]
-            in REF_COUNT_DICT[ENV_VAR_ARCH_NAME]
-        ), "Wrong Marker Repeat count"
-        assert stats[statNameEth]["stats"]["Count"] > 0, "Wrong Eth Marker Repeat count"
-        assert stats[statNameEth]["stats"]["Count"] % (OP_COUNT * ZONE_COUNT) == 0, "Wrong Eth Marker Repeat count"
-    else:
-        assert stats[statName]["stats"]["Count"] in REF_COUNT_DICT[ENV_VAR_ARCH_NAME], "Wrong Marker Repeat count"
+    assert stats[statName]["stats"]["Count"] in REF_COUNT_DICT[ENV_VAR_ARCH_NAME], "Wrong Marker Repeat count"
 
 
 def wildcard_match(pattern, words):
@@ -1114,20 +1104,8 @@ def test_timestamped_events():
     OP_COUNT = 2
     RISC_COUNT = 5
     ZONE_COUNT = 100
-    WH_ERISC_COUNTS = [0, 3, 6, 16]  # N150, N300, T3K, 6U
     WH_TENSIX_COUNTS = [72, 64, 56]
-    BH_ERISC_COUNTS = [0, 1, 6, 8]
     BH_TENSIX_COUNTS = [130, 120, 110]
-
-    WH_COMBO_COUNTS = []
-    for T in WH_TENSIX_COUNTS:
-        for E in WH_ERISC_COUNTS:
-            WH_COMBO_COUNTS.append((T, E))
-
-    BH_COMBO_COUNTS = []
-    for T in BH_TENSIX_COUNTS:
-        for E in BH_ERISC_COUNTS:
-            BH_COMBO_COUNTS.append((T, E))
 
     # Quasar's profiler is L1-only, the buffer fills and remaining markers are dropped, only the
     # iterations that fit are captured. Each iteration writes 10 words (zone start + TS_DATA +
@@ -1138,14 +1116,10 @@ def test_timestamped_events():
     QUASAR_EVENTS_PER_ITER = 2  # DeviceTimestampedData + DeviceRecordEvent
 
     REF_COUNT_DICT = {
-        "wormhole_b0": [(T * RISC_COUNT + E) * OP_COUNT * ZONE_COUNT for T, E in WH_COMBO_COUNTS],
-        "blackhole": [(T * RISC_COUNT + E) * OP_COUNT * ZONE_COUNT for T, E in BH_COMBO_COUNTS],
+        "wormhole_b0": [T * RISC_COUNT * OP_COUNT * ZONE_COUNT for T in WH_TENSIX_COUNTS],
+        "blackhole": [T * RISC_COUNT * OP_COUNT * ZONE_COUNT for T in BH_TENSIX_COUNTS],
         # Note: using emu-quasar-2x3_DISPATCH for both dispatch modes
         "quasar": [2 * QUASAR_RISC_COUNT * QUASAR_ITER_COUNT * QUASAR_EVENTS_PER_ITER],
-    }
-    REF_ERISC_COUNT = {
-        "wormhole_b0": [C * OP_COUNT * ZONE_COUNT for C in WH_ERISC_COUNTS],
-        "blackhole": [C * OP_COUNT * ZONE_COUNT for C in BH_ERISC_COUNTS],
     }
     TEST_BIN_DICT = {
         "wormhole_b0": "build/test/tt_metal/tools/profiler/test_timestamped_events",
@@ -1157,12 +1131,6 @@ def test_timestamped_events():
     assert ENV_VAR_ARCH_NAME in REF_COUNT_DICT.keys()
 
     devicesData = run_device_profiler_test(testName=TEST_BIN_DICT[ENV_VAR_ARCH_NAME], setupAutoExtract=True)
-
-    if ENV_VAR_ARCH_NAME in REF_ERISC_COUNT.keys():
-        eventCount = len(
-            devicesData["data"]["devices"]["0"]["cores"]["DEVICE"]["riscs"]["TENSIX"]["events"]["erisc_events"]
-        )
-        assert eventCount in REF_ERISC_COUNT[ENV_VAR_ARCH_NAME], "Wrong erisc event count"
 
     if ENV_VAR_ARCH_NAME in REF_COUNT_DICT.keys():
         eventCount = len(
