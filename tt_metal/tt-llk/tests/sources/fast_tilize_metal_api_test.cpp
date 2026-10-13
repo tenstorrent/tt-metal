@@ -30,6 +30,9 @@ inline bool pair_units(const std::uint32_t ct_dim, const std::uint32_t units)
            !(units == 3 && (ct_dim & 3) < 2);
 }
 
+// As the `ttnn.tilize` kernels: with no 32-bit source the math thread clears each DEST section at acquire.
+constexpr bool clear_on_acquire = static_cast<std::uint32_t>(formats.unpack_A_src) != static_cast<std::uint32_t>(DataFormat::Float32);
+
 inline std::uint32_t decompose_row(const std::uint32_t ct_dim, std::uint32_t unit_dims[MAX_UNITS])
 {
     std::uint32_t n4 = ct_dim / 4, rem = ct_dim % 4, idx = 0;
@@ -147,6 +150,10 @@ void run_kernel(RUNTIME_PARAMETERS params)
             {
                 const std::uint32_t units = (pair && ((units_per_row - u) & 1) == 0) ? 2 : 1;
                 _llk_math_wait_for_dest_available_<DstSync::SyncHalf>();
+                if constexpr (clear_on_acquire)
+                {
+                    _llk_math_clear_dest_section_<DstSync::SyncHalf, is_fp32_dest_acc_en>();
+                }
                 for (std::uint32_t s = 0; s < units; s++)
                 {
                     _llk_math_fast_tilize_block_<is_fp32_dest_acc_en>(0, formats.math, 4, 4, s != 0);
@@ -212,7 +219,7 @@ void run_kernel(RUNTIME_PARAMETERS params)
                     }
                     _llk_pack_fast_tilize_row_chunk_(0, udim, 4, s != 0);
                 }
-                _llk_pack_dest_section_done_<DstSync::SyncHalf, is_fp32_dest_acc_en>();
+                _llk_pack_dest_section_done_<DstSync::SyncHalf, is_fp32_dest_acc_en, !clear_on_acquire>();
             }
 
             _llk_pack_fast_tilize_row_end_();

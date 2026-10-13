@@ -33,5 +33,6 @@ void kernel_main() {
         compute_kernel_lib::tilize_config::ReconfigureRegisterDatatypeMode::NoReconfigure,
         fp32_mode,
         compute_kernel_lib::tilize_config::RemapMode::Configure,
-        compute_kernel_lib::tilize_config::ChunkPairing::Paired>(block_size_col * third_dim);
+        compute_kernel_lib::tilize_config::ChunkPairing::Paired,
+        compute_kernel_lib::tilize_config::DestClear::OnMathAcquire>(block_size_col * third_dim);
 }

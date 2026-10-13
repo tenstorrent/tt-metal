@@ -65,6 +65,13 @@ enum class ChunkPairing : uint8_t {
     Paired  // Two chunks per DEST section where the row allows it
 };
 
+// Where BH clears each DEST section. OnMathAcquire takes the clear off the pack-bound release; a build with a 32-bit
+// unpack source (the unpacker may write DEST) keeps OnRelease.
+enum class DestClear : uint8_t {
+    OnRelease,     // Default: the pack release clears the section
+    OnMathAcquire  // The math thread clears it when it acquires it
+};
+
 }  // namespace tilize_config
 
 /**
@@ -166,7 +173,8 @@ template <
         tilize_config::ReconfigureRegisterDatatypeMode::UnpackAndPackReconfigure,
     tilize_config::Fp32Mode fp32_mode = tilize_config::Fp32Mode::Fast,
     tilize_config::RemapMode remap_mode = tilize_config::RemapMode::Configure,
-    tilize_config::ChunkPairing chunk_pairing = tilize_config::ChunkPairing::Off>
+    tilize_config::ChunkPairing chunk_pairing = tilize_config::ChunkPairing::Off,
+    tilize_config::DestClear dest_clear = tilize_config::DestClear::OnRelease>
 ALWI void tilize(uint32_t num_blocks, std::optional<uint32_t> total_input_pages = std::nullopt);
 
 }  // namespace compute_kernel_lib

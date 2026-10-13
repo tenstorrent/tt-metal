@@ -32,6 +32,9 @@ inline bool pair_units(const std::uint32_t ct_dim, const std::uint32_t units)
            !(units == 3 && (ct_dim & 3) < 2);
 }
 
+// As the `ttnn.tilize` kernels: with no 32-bit source the math thread clears each DEST section at acquire.
+constexpr bool clear_on_acquire = static_cast<std::uint32_t>(formats.unpack_A_src) != static_cast<std::uint32_t>(DataFormat::Float32);
+
 inline std::uint32_t section_units(const bool pair, const std::uint32_t units_left)
 {
     return (pair && (units_left & 1) == 0) ? 2 : 1;
@@ -235,6 +238,10 @@ void run_kernel(RUNTIME_PARAMETERS params)
             for (std::uint32_t loop = 0; loop < LOOP_FACTOR; loop++)
             {
                 _llk_math_wait_for_dest_available_<DstSync::SyncHalf>();
+                if constexpr (clear_on_acquire)
+                {
+                    _llk_math_clear_dest_section_<DstSync::SyncHalf, is_fp32_dest_acc_en>();
+                }
                 _llk_math_eltwise_unary_datacopy_<DataCopyType::A2D, DstSync::SyncHalf, is_fp32_dest_acc_en>(
                     0 /* dst_index */, formats.math, formats.math, 4 /* num_faces */);
                 _llk_math_dest_section_done_<DstSync::SyncHalf, is_fp32_dest_acc_en>();
@@ -274,6 +281,10 @@ void run_kernel(RUNTIME_PARAMETERS params)
                     for (std::uint32_t u = 0; u < units_per_row; u++)
                     {
                         _llk_math_wait_for_dest_available_<DstSync::SyncHalf>();
+                        if constexpr (clear_on_acquire)
+                        {
+                            _llk_math_clear_dest_section_<DstSync::SyncHalf, is_fp32_dest_acc_en>();
+                        }
                         _llk_math_fast_tilize_block_<is_fp32_dest_acc_en>(0, formats.math, unit_dim);
                         _llk_math_dest_section_done_<DstSync::SyncHalf, is_fp32_dest_acc_en>();
                     }
@@ -287,6 +298,10 @@ void run_kernel(RUNTIME_PARAMETERS params)
                     {
                         const std::uint32_t units = section_units(true, units_per_row - u);
                         _llk_math_wait_for_dest_available_<DstSync::SyncHalf>();
+                        if constexpr (clear_on_acquire)
+                        {
+                            _llk_math_clear_dest_section_<DstSync::SyncHalf, is_fp32_dest_acc_en>();
+                        }
                         for (std::uint32_t s = 0; s < units; s++)
                         {
                             _llk_math_fast_tilize_block_<is_fp32_dest_acc_en>(0, formats.math, unit_dim, 4, s != 0);
@@ -368,7 +383,7 @@ void run_kernel(RUNTIME_PARAMETERS params)
             {
                 _llk_packer_wait_for_math_done_();
                 _llk_pack_<DstSync::SyncHalf, is_fp32_dest_acc_en, ckernel::PackMode::Default>(0, L1_ADDRESS(buffer_Res[0]));
-                _llk_pack_dest_section_done_<DstSync::SyncHalf, is_fp32_dest_acc_en>();
+                _llk_pack_dest_section_done_<DstSync::SyncHalf, is_fp32_dest_acc_en, !clear_on_acquire>();
             }
         }
         {
@@ -397,7 +412,7 @@ void run_kernel(RUNTIME_PARAMETERS params)
                 for (std::uint32_t i = 0; i < sections_per_row * LOOP_FACTOR; i++)
                 {
                     _llk_packer_wait_for_math_done_();
-                    _llk_pack_dest_section_done_<DstSync::SyncHalf, is_fp32_dest_acc_en>();
+                    _llk_pack_dest_section_done_<DstSync::SyncHalf, is_fp32_dest_acc_en, !clear_on_acquire>();
                 }
             }
             else
@@ -428,7 +443,7 @@ void run_kernel(RUNTIME_PARAMETERS params)
                             _llk_pack_fast_tilize_row_chunk_(0 /* tile_index */, udim, 4 /* num_faces */);
                             if constexpr (!pack_free_runs)
                             {
-                                _llk_pack_dest_section_done_<DstSync::SyncHalf, is_fp32_dest_acc_en>();
+                                _llk_pack_dest_section_done_<DstSync::SyncHalf, is_fp32_dest_acc_en, !clear_on_acquire>();
                             }
                         }
 
@@ -461,7 +476,7 @@ void run_kernel(RUNTIME_PARAMETERS params)
                             }
                             if constexpr (!pack_free_runs)
                             {
-                                _llk_pack_dest_section_done_<DstSync::SyncHalf, is_fp32_dest_acc_en>();
+                                _llk_pack_dest_section_done_<DstSync::SyncHalf, is_fp32_dest_acc_en, !clear_on_acquire>();
                             }
                         }
 

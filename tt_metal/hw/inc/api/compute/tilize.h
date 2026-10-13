@@ -153,14 +153,20 @@ ALWI void tilize_init_short_with_dt(uint32_t old_icb, uint32_t new_icb, uint32_t
  * | Function   | output_tile_index| Index of the output tile in the ocb      | uint32_t | >= 0        | False    |
  */
 // clang-format on
-template <bool is_fp32_dest_acc_en = DST_ACCUM_MODE>
+// math_clears_dest (Blackhole): the math thread clears each section and the pack release does not
+// (llk_pack_common_api.h).
+template <bool is_fp32_dest_acc_en = DST_ACCUM_MODE, bool math_clears_dest = false>
 ALWI void tilize_block(
     uint32_t icb, uint32_t block, uint32_t ocb, uint32_t input_tile_index = 0, uint32_t output_tile_index = 0) {
     UNPACK((llk_unpack_tilize_block(icb, block, input_tile_index)));
 
     for (uint32_t t = 0; t < block; t++) {
         // Acquire dst
+#ifdef ARCH_BLACKHOLE
+        MATH((llk_math_wait_for_dest_available<math_clears_dest>()));
+#else
         MATH((llk_math_wait_for_dest_available()));
+#endif
         PACK((llk_packer_wait_for_math_done()));
 
 #ifndef ARCH_QUASAR
@@ -174,7 +180,11 @@ ALWI void tilize_block(
 #endif
         // Release dest
         MATH((llk_math_dest_section_done<is_fp32_dest_acc_en>()));
+#ifdef ARCH_BLACKHOLE
+        PACK((llk_pack_dest_section_done<is_fp32_dest_acc_en, math_clears_dest>()));
+#else
         PACK((llk_pack_dest_section_done<is_fp32_dest_acc_en>()));
+#endif
     }
 }
 
@@ -325,12 +335,12 @@ ALWI void fast_tilize_uninit(uint32_t icb, uint32_t ocb, uint32_t full_dim) {
 }
 
 // pair_chunks (Blackhole): two chunks share a DEST section and its hand-off, the second in the first one's gap rows.
-template <bool is_fp32_dest_acc_en = DST_ACCUM_MODE, bool pair_chunks = false>
+template <bool is_fp32_dest_acc_en = DST_ACCUM_MODE, bool pair_chunks = false, bool math_clears_dest = false>
 ALWI void fast_tilize_block(
     uint32_t icb, uint32_t block, uint32_t ocb, uint32_t input_tile_index = 0, uint32_t output_tile_index = 0) {
 #ifdef ARCH_BLACKHOLE
     if (block == 1) {
-        tilize_block<is_fp32_dest_acc_en>(icb, block, ocb, input_tile_index, output_tile_index);
+        tilize_block<is_fp32_dest_acc_en, math_clears_dest>(icb, block, ocb, input_tile_index, output_tile_index);
         return;
     }
     ASSERT(block > 1);
@@ -354,7 +364,7 @@ ALWI void fast_tilize_block(
                 uint32_t remaining = block - tiles_done;
                 uint32_t chunk = (remaining > 5) ? 4 : (remaining == 5) ? 2 : remaining;
 
-                MATH((llk_math_wait_for_dest_available()));
+                MATH((llk_math_wait_for_dest_available<math_clears_dest>()));
                 PACK((llk_packer_wait_for_math_done()));
 
                 if (chunk != prev_chunk) {
@@ -367,7 +377,7 @@ ALWI void fast_tilize_block(
                 PACK((llk_pack_fast_tilize_row_chunk(0, ocb, chunk)));
 
                 MATH((llk_math_dest_section_done<is_fp32_dest_acc_en>()));
-                PACK((llk_pack_dest_section_done<is_fp32_dest_acc_en>()));
+                PACK((llk_pack_dest_section_done<is_fp32_dest_acc_en, math_clears_dest>()));
 
                 tiles_done += chunk;
             }
@@ -382,7 +392,7 @@ ALWI void fast_tilize_block(
             uint32_t chunks_left = num_chunks;
             while (tiles_done < block) {
                 const uint32_t slots = (pair && (chunks_left & 1) == 0) ? 2 : 1;
-                MATH((llk_math_wait_for_dest_available()));
+                MATH((llk_math_wait_for_dest_available<math_clears_dest>()));
                 PACK((llk_packer_wait_for_math_done()));
                 for (uint32_t slot = 0; slot < slots; slot++) {
                     const uint32_t remaining = block - tiles_done;
@@ -399,7 +409,7 @@ ALWI void fast_tilize_block(
                 }
                 chunks_left -= slots;
                 MATH((llk_math_dest_section_done<is_fp32_dest_acc_en>()));
-                PACK((llk_pack_dest_section_done<is_fp32_dest_acc_en>()));
+                PACK((llk_pack_dest_section_done<is_fp32_dest_acc_en, math_clears_dest>()));
             }
         }
 
@@ -506,7 +516,7 @@ ALWI void fast_tilize_uninit(uint32_t icb, uint32_t ocb, [[maybe_unused]] uint32
     tilize_uninit(icb, ocb);
 }
 
-template <bool is_fp32_dest_acc_en = DST_ACCUM_MODE, bool pair_chunks = false>
+template <bool is_fp32_dest_acc_en = DST_ACCUM_MODE, bool pair_chunks = false, bool math_clears_dest = false>
 ALWI void fast_tilize_block(
     uint32_t icb, uint32_t block, uint32_t ocb, uint32_t input_tile_index = 0, uint32_t output_tile_index = 0) {
     tilize_block<is_fp32_dest_acc_en>(icb, block, ocb, input_tile_index, output_tile_index);

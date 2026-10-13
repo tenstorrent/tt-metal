@@ -50,5 +50,6 @@ void kernel_main() {
         compute_kernel_lib::tilize_config::ReconfigureRegisterDatatypeMode::NoReconfigure,
         fp32_mode,
         compute_kernel_lib::tilize_config::RemapMode::Configure,
-        compute_kernel_lib::tilize_config::ChunkPairing::Paired>(per_core_block_cnt);
+        compute_kernel_lib::tilize_config::ChunkPairing::Paired,
+        compute_kernel_lib::tilize_config::DestClear::OnMathAcquire>(per_core_block_cnt);
 }
