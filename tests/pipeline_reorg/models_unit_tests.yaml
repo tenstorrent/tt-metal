@@ -2187,3 +2187,19 @@
   owner_id: U087HGJ455E # Sudhanshu Singhal
   team: shield
   budget_type: unit
+
+# ESM-2 650M protein language model (facebook/esm2_t33_650M_UR50D).
+# 10 tests in ~66 s warm on bh_p150 (run 38277387590); the checkpoint
+# resolves from the shared HF cache. 5 min covers first-run JIT compilation.
+- name: esm2 unit tests
+  cmd: |
+    pytest models/experimental/esm2/tests --timeout=300
+  model: esm2-650m
+  model_family: ESM
+  skus:
+    bh_p150:
+      timeout: 5
+      tier: 3
+  owner_id: U09B1UE301K # Abror Shopulatov
+  team: models
+  budget_type: unit
