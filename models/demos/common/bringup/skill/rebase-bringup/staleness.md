@@ -9,7 +9,9 @@ the branch's origin moved under work you depend on. It is self-contained: this f
 - The shared files, read by every bring-up agent: `models/demos/common/bringup/knowledge/known_issues.md` (sections,
   one bullet per lesson) and `repo_map.md` (a `| Need | Where |` table).
 - Each model's own files, read by that model's agents: `models/demos/<model>/bringup/known_issues.md` (bullets, no
-  sections) and `bringup/repo_map.md`.
+  sections, at most 600 characters each) and `bringup/repo_map.md`. A bullet whose Fix ends with
+  `Detail: known_issues_detail.md.` has its full text in that file under `## <title>`: when you rewrite or delete the
+  bullet, update or delete that section too.
 - An entry is one bullet with these fields, in this order: `Symptom:`, `Cause:`, `Fix:`, `Applies to:` (the code it is
   about: repo paths, partial paths such as `tt/mhc.py`, op names such as `unified_routed_expert_moe`; or the word
   `method` for testing / process knowledge that cannot go stale with the code), `Seen at:` (the commit at which it was

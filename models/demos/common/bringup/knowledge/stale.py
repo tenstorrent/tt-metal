@@ -35,7 +35,12 @@ from models.demos.common.bringup.core.spec import CODE_ROOT
 
 HERE = Path(__file__).resolve().parent
 PATH_RE = re.compile(r"(?:models|ttnn|tt_metal|tests|scripts)/[A-Za-z0-9_./{},*-]+")
-ARCH_COPIES = ("/quasar/",)  # per-arch copies of an op: not where a lesson about the op lives
+ARCH_COPIES = ("/quasar/",)
+KNOWLEDGE_FILES = (
+    "known_issues.md",
+    "known_issues_detail.md",
+    "repo_map.md",
+)  # per-arch copies of an op: not where a lesson about the op lives
 
 
 def git(*args: str, root: Path = CODE_ROOT) -> str:
@@ -148,6 +153,20 @@ def entries_of(path: Path, root: Path) -> list[dict]:
         if m:
             line_commit[int(m.group(2))] = m.group(1)[:11]
     ages = moved_ages(root, rel) if not rel.startswith("models/demos/common/") else {}
+    # A shortened entry's original title is in its known_issues_detail.md section: `## <short title>` then the
+    # original bullet. Its age follows the original title.
+    original: dict[str, str] = {}
+    detail = path.with_name("known_issues_detail.md")
+    if detail.exists():
+        heading = None
+        for line in detail.read_text().splitlines():
+            if line.startswith("## "):
+                heading = line[3:].strip().rstrip(".")
+            elif heading and line.startswith("- **"):
+                t = re.match(r"- \*\*(.+?)\*\*", line)
+                if t:
+                    original[heading] = t.group(1)
+                heading = None
     out, section = [], ""
     for i, line in enumerate(path.read_text().splitlines(), 1):
         if line.startswith("## "):
@@ -162,7 +181,7 @@ def entries_of(path: Path, root: Path) -> list[dict]:
                     "section": section,
                     "title": title,
                     "text": line,
-                    "blame": ages.get(title) or line_commit.get(i, ""),
+                    "blame": ages.get(title) or ages.get(original.get(title.rstrip("."), "")) or line_commit.get(i, ""),
                 }
             )
     return out
@@ -178,7 +197,10 @@ def check_entry(e: dict, res: Resolver, head: str) -> dict:
     applies = a.group(1).strip().rstrip(".") if a else ""
     prefer = str(Path(e["file"]).parent.parent) if not e["file"].startswith("models/demos/common/") else ""
     method = applies.startswith("method")  # `Applies to: method (component tests)`: never stale with the code
-    anchors, gone = res.anchors(applies or e["text"], prefer) if not method else ([], [])
+    # The knowledge files themselves (a `Detail: known_issues_detail.md.` pointer) are never an entry's code.
+    text = re.sub(r"Detail: \S+\.", "", e["text"])
+    anchors, gone = res.anchors(applies or text, prefer) if not method else ([], [])
+    anchors = [p for p in anchors if not p.endswith(KNOWLEDGE_FILES)]
     missing = [p for p in gone if since and res.exists(p, since)]
     e = {**e, "since": since, "seen_at_field": bool(m), "anchors": anchors, "commits": [], "missing": missing}
     e["older_commits"] = 0
