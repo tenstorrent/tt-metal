@@ -30,10 +30,10 @@ H == W) and/or a ``shape`` tuple so the conftest can classify them.
 
 from __future__ import annotations
 
+import os
+
 import pytest  # noqa: F401  (re-exported convenience for op files)
 import torch
-
-import os
 
 import ttnn
 
