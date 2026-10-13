@@ -27,11 +27,10 @@ import pytest
 from tools.tracy.common import PROFILER_ARTIFACTS_DIR, PROFILER_BIN_DIR, TT_METAL_HOME
 
 
-def _workload_bin() -> Path:
+def _built(rel: Path) -> Path:
     """CI builds into ``build`` (build-artifact.yaml passes ``--build-dir build``); a local build_metal.sh run
     leaves ``build`` as a symlink to ``build_Release``. Try both so one path works in either layout -- naming
     only ``build_Release`` made this test silently skip in CI."""
-    rel = Path("programming_examples") / "test_streaming_profiler_zones"
     for d in ("build", "build_Release"):
         cand = Path(TT_METAL_HOME) / d / rel
         if cand.exists():
@@ -39,7 +38,8 @@ def _workload_bin() -> Path:
     return Path(TT_METAL_HOME) / "build" / rel
 
 
-WORKLOAD_BIN = _workload_bin()
+WORKLOAD_BIN = _built(Path("programming_examples") / "test_streaming_profiler_zones")
+DEBUG_TOOLS_BIN = _built(Path("test") / "tt_metal" / "unit_tests_debug_tools")
 
 # Every external program this module runs is named here, and commands are built from this table rather than
 # assembled from data: an unknown key raises instead of executing anything.
@@ -47,6 +47,7 @@ TOOLS = {
     "capture": PROFILER_BIN_DIR / "tracy-capture",
     "csvexport": PROFILER_BIN_DIR / "tracy-csvexport",
     "workload": WORKLOAD_BIN,
+    "debug_tools": DEBUG_TOOLS_BIN,
 }
 RISCS_PER_CORE = 5
 DM_RISCS_PER_CORE = 2  # only BRISC/NCRISC emit the point-marker trio
@@ -87,6 +88,9 @@ COMMANDS = {
         "--markers",
         "1",
     ],
+    # The debug event metadata round trip (tests/tt_metal/tt_metal/debug_tools/debug_event/), which needs the
+    # profiler armed for its whole process.
+    "debug-event-meta": [str(TOOLS["debug_tools"]), "--gtest_filter=DebugEventMetaSilicon.*"],
 }
 
 
@@ -263,3 +267,16 @@ def test_streaming_profiler_zones_capture(gx, gy, iters):
     assert points == _expected_points(
         gx, gy, iters
     ), f"point records (events + timestamped data) lost: got {points}, want {_expected_points(gx, gy, iters)}"
+
+
+def test_debug_event_metadata_round_trip():
+    """Every per-site metadata shape (nested structs, every integer width and sign, defaults, strings, a template
+    site) survives device compile, ELF and host decode on every RISC, read back through Zone::site().meta."""
+    assert DEBUG_TOOLS_BIN.exists(), f"unit_tests_debug_tools not built: {DEBUG_TOOLS_BIN} (--build-metal-tests)"
+
+    rc, log = _run_workload("debug-event-meta", {})
+    _skip_unless_streaming_started(log)
+    if "[  SKIPPED ]" in log:
+        pytest.skip(f"the gtest skipped itself:\n{log[-1000:]}")
+    assert rc == 0, f"metadata round trip failed (rc={rc}):\n{log[-4000:]}"
+    assert "[  PASSED  ] 1 test." in log, f"the metadata round trip did not run:\n{log[-2000:]}"
