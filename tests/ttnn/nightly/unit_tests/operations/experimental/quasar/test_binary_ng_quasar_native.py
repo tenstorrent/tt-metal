@@ -16,15 +16,17 @@ process per state -- see the run commands in debug/run_targeted_matrix.sh.
 
 Every TTNN_QSR_* tuning knob left unset takes the rule's value (resolve_native_config in
 binary_ng_utils.cpp): 4 compute threads; where the operands move over the NoC, a reader thread per compute
-thread and the writer threads that the 6 DM cores leave, and one of each where they are borrowed; batches
-of 8 tiles in the DM kernels, and in the compute where each compute thread owns one tile counter of each
-ring; rings of 16 entries per thread. Above ring stride 1 a compute batch packs wrong until the pack path
-applies the ring stride per tile, so each test predicts its output from its configuration: the tests in
-this process from the invocation's knobs, the arms from their own. A test that predicts wrong output is a
-strict expected failure, and it passes only on exactly the predicted wrong tiles.
+thread and the writer threads that the 6 DM cores leave, and one of each where they are borrowed. With every
+operand in L1: batches of 8 tiles in the DM kernels, and in the compute where each compute thread owns one
+tile counter of each ring, in rings of 16 entries per thread. Beside a DRAM operand: batches of 1, in rings of
+2 entries per thread. The tests in this process use DRAM tensors. Above ring stride 1 only one tile of
+each compute batch comes out right, so each test predicts its output from its configuration: the tests in this
+process from the invocation's knobs, the arms from their own. A test that predicts wrong output is a strict
+expected failure, and it passes only on exactly the predicted wrong tiles.
 """
 
 import json
+import math
 import os
 import pathlib
 import re
@@ -71,39 +73,65 @@ _USER_DM_CORES = 6
 _CLUSTERS = 32
 
 
-def _resolve(knobs, moves):
+# Where a program's operands are, as (an input moves over the NoC, the output moves over the NoC, an operand is
+# in DRAM): all of them over the NoC and in L1, all of them over the NoC beside a DRAM operand, or all of them
+# borrowed in place. _path gives the others.
+_NOC_L1 = (True, True, False)
+_NOC_DRAM = (True, True, True)
+_BORROWED = (False, False, False)
+
+
+def _resolve(knobs, path):
     """(R, C, W, compute batch) of a program run with `knobs`, a mapping of TTNN_QSR_* names to values.
 
-    `moves` is True on the NoC path and False when every operand is borrowed. A borrowed program runs one
-    reader and one writer thread whatever is set. An empty value counts as unset, as in native_tuning().
+    `path` is _NOC_L1, _NOC_DRAM, _BORROWED or one from _path. A borrowed pair of inputs or a borrowed output
+    runs one reader or writer thread whatever is set. Beside a DRAM operand the rule batches nothing. An empty
+    value counts as unset, as in native_tuning().
     """
+    inputs_move, output_moves, dram = path
 
     def knob(name, rule):
         value = knobs.get(name, "")
         return int(value) if value else rule
 
     c = knob("TTNN_QSR_COMPUTE_THREADS", _RULE_COMPUTE_THREADS)
-    r = knob("TTNN_QSR_READER_THREADS", c) if moves else 1
-    w = knob("TTNN_QSR_WRITER_THREADS", min(c, max(1, _USER_DM_CORES - r))) if moves else 1
-    batch = knob("TTNN_QSR_TILES_PER_CYCLE", _RULE_TILES_PER_CYCLE if r <= c and w <= c else 1)
+    r = knob("TTNN_QSR_READER_THREADS", c) if inputs_move else 1
+    w = knob("TTNN_QSR_WRITER_THREADS", min(c, max(1, _USER_DM_CORES - r))) if output_moves else 1
+    rule_batch = 1 if dram else _RULE_TILES_PER_CYCLE
+    batch = knob("TTNN_QSR_TILES_PER_CYCLE", rule_batch if r <= c and w <= c else 1)
     return r, c, w, batch
 
 
-def _pack_stride_wrong_tiles(tiles_per_cluster, knobs, moves):
-    """The output tiles that the pack-stride defect leaves wrong.
+def _path(borrowed, dram):
+    """The path of a program that borrows `borrowed`, a string of the operands "a", "b" and "c" it holds in place."""
+    return ("a" not in borrowed or "b" not in borrowed, "c" not in borrowed, dram)
 
-    tiles_per_cluster lists each cluster's tile count. A compute batch of n tiles at output ring stride s =
-    max(C, W) lands only ceil(n/s) of them. Each compute thread's share runs in full batches and one short
-    batch, and thread t takes one extra tile while t < tiles % C. The tests compare the count tile for tile.
+
+def _route(case, knobs):
+    """(DM cores, clusters) that run the program of `case` under `knobs`: R + W, and the clusters of its split."""
+    _, path, split = case
+    r, _, w, _ = _resolve(knobs, path)
+    return r + w, len(split)
+
+
+def _batched_wrong_tiles(tiles_per_cluster, knobs, path):
+    """The output tiles that compute batching leaves wrong.
+
+    tiles_per_cluster lists each cluster's tile count. Above output ring stride 1 (stride max(C, W)), only one
+    tile of each compute batch comes out right, in a full batch and in a short one. Each compute thread's share
+    runs in full batches and one short batch, and thread t takes one extra tile while t < tiles % C. The tests
+    compare the count tile for tile. A borrowed shard that the compute threads do not divide sends its last
+    tiles through the tail rings, which this does not model; test_native_prediction_tables_cover_their_cases
+    keeps such shards out of the predicted cases.
     """
-    _, c, w, batch = _resolve(knobs, moves)
-    stride = max(c, w)
+    _, c, w, batch = _resolve(knobs, path)
+    if max(c, w) == 1:
+        return 0
     landed = 0
     for tiles in tiles_per_cluster:
         for thread in range(c):
             share = tiles // c + (thread < tiles % c)
-            full, tail = divmod(share, batch)
-            landed += full * -(-batch // stride) - (-tail // stride)
+            landed += -(-share // batch)
     return sum(tiles_per_cluster) - landed
 
 
@@ -140,16 +168,15 @@ class _WrongOutput(Exception):
     """An op ran to completion on the expected factory, and its output differs from the bf16 oracle."""
 
 
-# Above output ring stride 1 compute batching runs but loses most of each batch, because the pack path spaces
-# the tiles of a batch by one entry rather than by the ring stride. strict=True: once the pack path is fixed
-# these tests pass, and the run fails until the predictions change.
-_PACK_STRIDE_REASON = "compute batching above ring stride 1: the pack path does not apply the ring stride per tile"
-_PACK_STRIDE_XFAIL = pytest.mark.xfail(raises=_WrongOutput, strict=True, reason=_PACK_STRIDE_REASON)
+# Above output ring stride 1 compute batching runs, but only one tile of each batch comes out right.
+# strict=True: when the batched output changes, the counts move, and the run fails until the predictions follow.
+_BATCHED_REASON = "compute batching above ring stride 1: only one tile of each batch is right"
+_BATCHED_XFAIL = pytest.mark.xfail(raises=_WrongOutput, strict=True, reason=_BATCHED_REASON)
 
 
 def _expectation_marks(expected_wrong):
     """A test that predicts wrong output is a strict expected failure."""
-    return [_PACK_STRIDE_XFAIL] if expected_wrong > 0 else []
+    return [_BATCHED_XFAIL] if expected_wrong > 0 else []
 
 
 def _matches_prediction(got, golden, expected_wrong, what):
@@ -205,18 +232,18 @@ def _add_returning_operands(device, h_tiles=32, w_tiles=40, seed=0):
 
 
 # The benchmark shape under the invocation's knobs: 40 tiles per cluster on the NoC path.
-_BENCHMARK_WRONG = _pack_stride_wrong_tiles(_noc_split(32 * 40), _PARENT_KNOBS, moves=True)
+_BENCHMARK_WRONG = _batched_wrong_tiles(_noc_split(32 * 40), _PARENT_KNOBS, _NOC_DRAM)
 
 
 @pytest.mark.skipif(not _native_enabled(), reason="native factory not enabled (TTNN_QSR_NATIVE)")
-@pytest.mark.xfail(_BENCHMARK_WRONG > 0, raises=_WrongOutput, strict=True, reason=_PACK_STRIDE_REASON)
+@pytest.mark.xfail(_BENCHMARK_WRONG > 0, raises=_WrongOutput, strict=True, reason=_BATCHED_REASON)
 def test_native_output_matches_the_prediction(device):
     """bf16 add on this slice is EXACT, so compare bits rather than PCC.
 
     fp32_dest_acc_en is false for bf16 and HiFi4 is fidelity-inert for FPU add, so the device result
     equals torch's bf16 add bit-for-bit. The int16 view is required, not cosmetic: torch.equal on
     floats reports False for NaN vs itself. randn produces no NaN/Inf, so that path stays unexercised.
-    Under the rule's compute batch of 8 at ring stride 4, exactly the predicted tiles are wrong.
+    The rule batches nothing beside a DRAM operand, so the output is exact unless the invocation sets a batch.
     """
     out, ta, tb = _add_returning_operands(device)
     golden = (ttnn.to_torch(ta).float() + ttnn.to_torch(tb).float()).to(torch.bfloat16)
@@ -228,8 +255,7 @@ def test_native_output_matches_the_prediction(device):
 def test_native_factory_is_engaged(device):
     """The benchmark add binds the three kernels_qsr sources and no kernels_dfb source.
 
-    Routing only, with no value check: under the rule's compute batching the predicted tiles are wrong,
-    which test_native_output_matches_the_prediction checks on the same shape.
+    Routing only: test_native_output_matches_the_prediction checks the values of the same add.
     """
     _add_returning_operands(device)
     sources = bound_kernel_sources()
@@ -403,7 +429,7 @@ def _add_one_row(device, tiles, seed):
 
 
 def _parent_prediction(tiles):
-    return _pack_stride_wrong_tiles(_noc_split(tiles), _PARENT_KNOBS, moves=True)
+    return _batched_wrong_tiles(_noc_split(tiles), _PARENT_KNOBS, _NOC_DRAM)
 
 
 @pytest.mark.skipif(not _native_enabled(), reason="native factory not enabled (TTNN_QSR_NATIVE)")
@@ -429,14 +455,14 @@ def test_native_uneven_tile_counts_match_the_prediction(device, tiles):
         raise _WrongOutput(f"{tiles} tiles: wrong as predicted")
 
 
-# Even, ragged across clusters, and ragged across threads. Under the rule each thread gets at most one tile,
-# a batch of one, so the output is exact and a wrong tile can only come from the program cache.
+# Even, ragged across clusters, and ragged across threads. Under the rule the output is exact, so a wrong tile
+# can only come from the program cache.
 _CACHE_SEQUENCE = (128, 33, 128, 32, 128)
 _CACHE_WRONG = max(_parent_prediction(t) for t in _CACHE_SEQUENCE)
 
 
 @pytest.mark.skipif(not _native_enabled(), reason="native factory not enabled (TTNN_QSR_NATIVE)")
-@pytest.mark.xfail(_CACHE_WRONG > 0, raises=_WrongOutput, strict=True, reason=_PACK_STRIDE_REASON)
+@pytest.mark.xfail(_CACHE_WRONG > 0, raises=_WrongOutput, strict=True, reason=_BATCHED_REASON)
 def test_native_even_and_uneven_share_a_process(device):
     """Even and ragged shapes must not poison each other through the program cache.
 
@@ -456,9 +482,11 @@ def test_native_even_and_uneven_share_a_process(device):
 
 
 # How the DM kernels and the compute move tiles in an arm. per-tile runs one tile per transfer and per batch
-# in two-entry rings, so the rings wrap at the low tile counts. batched keeps the rule's DM batch of 8 in
-# 16-entry rings, with the compute batch at 1 so the output stays exact at every thread count.
-_BATCHING = {"per-tile": _PER_TILE, "batched": _COMPUTE_BATCH_1}
+# in two-entry rings, so the rings wrap at the low tile counts. batched sets a DM batch of 8, which the rule
+# does not take beside these DRAM tensors, in the 16-entry rings that the rule derives for it, with the
+# compute batch at 1 so the output stays exact at every thread count.
+_DM_BATCH_8 = {"TTNN_QSR_DM_BATCH": "8"}
+_BATCHING = {"per-tile": _PER_TILE, "batched": {**_DM_BATCH_8, **_COMPUTE_BATCH_1}}
 
 
 @pytest.mark.skipif(not _native_enabled(), reason="native factory not enabled (TTNN_QSR_NATIVE)")
@@ -501,25 +529,25 @@ _DM_BATCH_ARMS = [(4, 4, 2), (1, 4, 1)]
 @pytest.mark.skipif(not _native_enabled(), reason="native factory not enabled (TTNN_QSR_NATIVE)")
 @pytest.mark.parametrize("rcw", _DM_BATCH_ARMS, ids=lambda t: "R{}C{}W{}".format(*t))
 def test_native_dm_batch_above_one_counter_is_bit_exact(rcw):
-    """The rule's DM batch of 8 on a role that owns more than one tile counter must stay bit-exact.
+    """A DM batch of 8 on a role that owns more than one tile counter must stay bit-exact.
 
-    The rule's depth of 16 is the smallest legal depth for it: a batch occupies n consecutive slots and the
-    ring wraps only afterwards, so the factory demands entries_per_thread >= 2n and entries_per_thread % n
-    == 0. The compute batch is 1, so the output stays exact at ring stride 4.
+    The batch is set: the rule does not batch beside these DRAM tensors. The rule's depth for it, 16, is the
+    smallest legal one: a batch occupies n consecutive slots and the ring wraps only afterwards, so the
+    factory demands entries_per_thread >= 2n and entries_per_thread % n == 0. The compute batch is 1, so the
+    output stays exact at ring stride 4.
 
     One process per arm, as above. The timeout is the failure detector for a broken pairing: a counter
     asked for more tiles than it receives hangs rather than corrupts.
     """
-    p = _run_arm(_DM_BATCH_TILE_COUNTS, knobs={**_threads(*rcw), **_COMPUTE_BATCH_1}, timeout=600)
+    p = _run_arm(_DM_BATCH_TILE_COUNTS, knobs={**_threads(*rcw), **_DM_BATCH_8, **_COMPUTE_BATCH_1}, timeout=600)
     _check_arm(p, f"dm_batch=8 arm R={rcw[0]} C={rcw[1]} W={rcw[2]}")
 
 
 # --- Compute batching --------------------------------------------------------------------------------
 #
-# The rule's compute batch of 8 runs eight tiles per tile_regs_acquire. The pack path spaces a batch by
-# one entry rather than by the ring stride, so the output is right only at output ring stride 1 -- C = W
-# = 1 -- until the pack path applies the stride per tile. The factory runs any stride; the tests above
-# stride 1 expect the wrong output. Per-cluster tile counts on the 32-cluster grid: 1 runs a single
+# The rule's compute batch of 8 runs eight tiles per tile_regs_acquire. The output is right only at output ring
+# stride 1 -- C = W = 1; above it only one tile of each batch is right. The factory runs any stride; the tests
+# above stride 1 expect the wrong output. Per-cluster tile counts on the 32-cluster grid: 1 runs a single
 # short batch and no full one; 9 runs one full batch of 8 then a tail of 1; 64 runs eight full batches,
 # wrapping the 16-deep ring three times, and no tail; 65 adds a tail of 1 that starts exactly on a wrap
 # boundary.
@@ -529,38 +557,51 @@ _TILES_PER_CYCLE_TILE_COUNTS = [32, 288, 2048, 2080]
 @pytest.mark.skipif(not _native_enabled(), reason="native factory not enabled (TTNN_QSR_NATIVE)")
 @pytest.mark.parametrize("dm_batch", [1, 8], ids=["compute-batch-only", "both-batches"])
 def test_native_tiles_per_cycle_is_bit_exact(dm_batch):
-    """The rule's compute batch at 1,1,1 must stay bit-exact, alone and together with its DM batch.
+    """A compute batch of 8 at 1,1,1 must stay bit-exact, alone and together with a DM batch of 8.
 
     The compute kernel splits a thread's share into full chunks of num_tiles_per_cycle and one remainder
     chunk; a truncating divide there once dropped the tail and hung. The tile counts above reach every
-    branch of that split. both-batches measured 1.81x the throughput of no batching at 1,1,1 on craq-sim
-    (marginal cycles per tile).
+    branch of that split. Both batches are set: the rule does not batch beside these DRAM tensors.
+    both-batches measured 1.81x the throughput of no batching at 1,1,1 on craq-sim (marginal cycles per
+    tile), which models no DRAM time.
     """
-    knobs = {**_threads(1, 1, 1), **({"TTNN_QSR_DM_BATCH": "1"} if dm_batch == 1 else {})}
+    knobs = {**_threads(1, 1, 1), "TTNN_QSR_TILES_PER_CYCLE": "8", "TTNN_QSR_DM_BATCH": str(dm_batch)}
     p = _run_arm(_TILES_PER_CYCLE_TILE_COUNTS, knobs=knobs, timeout=600)
     _check_arm(p, f"tiles_per_cycle=8 dm_batch={dm_batch}")
 
 
 @pytest.mark.skipif(not _native_enabled(), reason="native factory not enabled (TTNN_QSR_NATIVE)")
-@_PACK_STRIDE_XFAIL
+@_BATCHED_XFAIL
 def test_native_tiles_per_cycle_above_stride_one():
-    """With every knob unset the NoC path runs the rule's 4,4,2 and both batches of 8, and its output is
-    wrong until the pack path is fixed.
+    """With every knob unset and every operand in L1, the NoC path runs the rule's 4,4,2 and both batches of
+    8, and its output is wrong until compute batching above ring stride 1 is fixed.
 
-    The ring stride is 4 on every DFB. 288 tiles give each compute thread two or three tiles, one short
-    batch; 2080 give it sixteen or seventeen, two full batches of 8 and a tail. A refusal, a hang, a
-    fallback or wrong output without the pack defect's signature fails this test instead of passing as
-    an expected failure, and so does an exact output: the rule then does not batch.
+    L1-interleaved tensors of 288 and 2080 tiles hold 9 and 65 tiles per bank, which 4 does not divide, so they
+    take the NoC path. The ring stride is 4 on every DFB. 288 tiles give each compute thread two or three
+    tiles, one short batch; 2080 give it sixteen or seventeen, two full batches of 8 and a tail. A refusal, a
+    hang, a fallback or wrong output without the predicted count fails this test instead of passing
+    as an expected failure, and so does an exact output: the rule then does not batch.
     """
-    tile_counts = [288, 2080]
-    p = _run_arm(tile_counts, knobs={}, timeout=900)
-    expect_wrong = {f"{t} tiles": _pack_stride_wrong_tiles(_noc_split(t), {}, moves=True) for t in tile_counts}
-    _check_arm(p, "the rule on the NoC path", expect_wrong=expect_wrong)
+    cases = [_anchored((f"l1_{t}", "l1", None, None, (32, t * 32)), None, "") for t in (288, 2080)]
+    p = _run_shard_arm([case[0] for case in cases], expect="qsr", timeout=900, knobs={})
+    _check_arm(p, "the rule on the L1 NoC path", expect_wrong=_expect_wrong(cases, {}))
 
 
-# Each guard, the knob values that trip it, and the text its TT_FATAL carries. A batch needs a ring at least
-# twice as deep (double buffering) and a depth that is a multiple of the batch (a batch occupies consecutive
-# slots and the ring wraps only after it). A compute batch also needs each compute thread to own one tile
+@pytest.mark.skipif(not _native_enabled(), reason="native factory not enabled (TTNN_QSR_NATIVE)")
+def test_native_rule_does_not_batch_beside_dram():
+    """With every knob unset and an operand in DRAM, the rule batches nothing, so the output is exact.
+
+    The rule keeps the legacy reader's one tile per barrier beside DRAM, and at compute batch 1 the batching
+    defect cannot occur. The shapes are the ones the L1 test above loses tiles on at the rule's batch of 8.
+    """
+    p = _run_arm([288, 2080], knobs={}, timeout=900)
+    _check_arm(p, "the rule beside DRAM")
+
+
+# Each guard, the knob values that trip it, the text its TT_FATAL carries, and optionally the _SHARD_ARM_SRC
+# entries to run it on instead of a DRAM add. A batch needs a ring at least twice as deep (double buffering)
+# and a depth that is a multiple of the batch (a batch occupies consecutive slots and the ring wraps only after
+# it). A compute batch also needs each compute thread to own one tile
 # counter of each ring, so R <= C and W <= C. The reader and writer threads must fit the 6 user DM cores.
 # Each value is named with its source, the knob or the rule. The compute batch is checked first, so the
 # DM-batch arms set it to 1. Compute batching above ring stride 1 is not refused;
@@ -589,10 +630,13 @@ _GUARD_ARMS = [
         "dm_batch=8 (TTNN_QSR_DM_BATCH) must divide entries_per_thread=20 (TTNN_QSR_ENTRIES_PER_THREAD)",
     ),
     (
+        # The rule batches only when every operand is in L1: an L1-interleaved tensor of 5 tiles per bank
+        # takes the NoC path at the rule's 4 compute threads.
         "rule-batch-depth",
-        {**_threads(1, 1, 1), "TTNN_QSR_ENTRIES_PER_THREAD": "8"},
+        {"TTNN_QSR_ENTRIES_PER_THREAD": "8"},
         "tiles_per_cycle=8 (rule) needs entries_per_thread >= 16 for double buffering, "
         "got entries_per_thread=8 (TTNN_QSR_ENTRIES_PER_THREAD)",
+        [("l1_160", "l1", None, None, (5 * 32, 32 * 32))],
     ),
     (
         "batch-beside-more-readers",
@@ -623,8 +667,11 @@ def test_native_knob_guards_refuse(arm):
     The message is asserted, not only a non-zero exit: an arm that died for another reason -- no
     simulator, a build break -- would otherwise pass as a refusal.
     """
-    _, knobs, message = arm
-    p = _run_arm([32], knobs=knobs, timeout=300)
+    _, knobs, message, *cases = arm
+    if cases:
+        p = _run_shard_arm(cases[0], expect="qsr", timeout=300, knobs=knobs)
+    else:
+        p = _run_arm([32], knobs=knobs, timeout=300)
     assert p.returncode != 0, f"{arm[0]}: the factory ran instead of refusing:\n{p.stdout}"
     assert message in p.stdout + p.stderr, f"{arm[0]}: refused for another reason:\n{p.stdout}\n{p.stderr[-2000:]}"
 
@@ -669,7 +716,7 @@ _UNEVEN_SHARDS = [
 # thread. A shard of 1-3 tiles has no borrowed part, so all of it goes through the rings.
 # height1 is one tile per core. uneven2 is a column three tiles tall over shards of two, so the boundary
 # core holds a partial shard and processes its full rounded-up count anyway. idle_clusters spreads the
-# same column over four clusters, so two of them hold no real tile at all and compute only padding.
+# same column over a grid of four clusters, two of which hold no shard, and the program does not run there.
 # width_10_uneven leaves the second cluster 5 real tiles of 10. 5, 6, 7, 9, 10 and 67 tiles leave 1, 2, 3,
 # 1, 2 and 3 tiles for the rings. block_6_in_place adds into a, so a's shard receives the copied-out
 # tail; block_6_again repeats block_6's spec while its tensors are alive, a cache hit that must rebind.
@@ -728,9 +775,9 @@ def _shard_tiles(entry):
 
 
 def _tensor_tiles(entry):
-    """Tiles in the tensor of a _SHARD_ARM_SRC entry."""
-    height, width = entry[4]
-    return (height // 32) * (width // 32)
+    """Tiles in the tensor of a _SHARD_ARM_SRC entry, of any rank. A partial tile counts as a whole one."""
+    *outer, height, width = entry[4]
+    return math.prod(outer) * math.ceil(height / 32) * math.ceil(width / 32)
 
 
 def _shard_cores(entry):
@@ -742,11 +789,11 @@ def _shard_cores(entry):
 def _expect_wrong(cases, knobs):
     """The prediction of each case that `knobs` leaves wrong: {name: wrong output tiles}.
 
-    A case is (entry, moves, tiles per cluster): moves is True on the NoC path and False when every operand
-    is borrowed. The tile counts must cover the whole output, with no pad slot;
-    test_native_prediction_tables_cover_their_cases checks that.
+    A case is (entry, path, tiles per cluster), with path as in _resolve. The tile counts must cover the whole
+    output; a case with pad slots must predict no wrong tile in any configuration.
+    test_native_prediction_tables_cover_their_cases checks both.
     """
-    predicted = {entry[0]: _pack_stride_wrong_tiles(split, knobs, moves) for entry, moves, split in cases}
+    predicted = {entry[0]: _batched_wrong_tiles(split, knobs, path) for entry, path, split in cases}
     return {name: wrong for name, wrong in predicted.items() if wrong > 0}
 
 
@@ -762,10 +809,15 @@ def _config_params(configs, cases):
 # the factory every op in the child must have bound: "qsr" for native, "dfb" for the fallback. The
 # strategy "l1" or "dram" places a tensor interleaved, and then the shard shape and range are None. The
 # strategies "dram_height", "dram_width" and "dram_block" shard it over all DRAM banks, and then the range
-# is None. A shard entry may carry a sixth element, a dict of options: "out" gives the output its own placement
-# (otherwise it takes the inputs'), "b" does the same for b, "in_place" adds b into a with add_, and
-# "grid" (x0, y0, x1, y1) runs the op on that sub-core grid. Every tensor stays alive to the end, so an
-# entry that repeats an earlier spec lands at new addresses and must hit the program cache. With
+# is None. A shard entry may carry a sixth element, a dict of options: "out" gives the output its own
+# placement (otherwise it takes the inputs'), "b" does the same for b, "output_tensor" supplies a
+# preallocated output with its own placement, "in_place" adds b into a with add_, and "grid" (x0, y0, x1, y1)
+# runs the op on that sub-core grid. "out" may also be None, so that the op derives the output's memory config,
+# or "height_specless", an L1 height-sharded config without a shard spec, which the op completes; then
+# "resolved_out" names the placement the output must take. A placement in an option may add a fourth element,
+# "col", for column-major shard order. An entry's tensors stay alive to the end when a later entry repeats its spec, so
+# the repeat lands at new addresses and must hit the program cache; the other entries' tensors are freed, so
+# that many cases fit in L1 one after another. With
 # ARM_EXPECT_NEOS or ARM_EXPECT_DMS (and the device profiler on), every core must show that many Neos
 # running the compute, or DM cores running a reader or writer thread; ARM_EXPECT_CORES names how many
 # cores must report.
@@ -780,6 +832,8 @@ EXPECT_DMS = int(os.environ.get("ARM_EXPECT_DMS", "0"))
 EXPECT_CORES = int(os.environ.get("ARM_EXPECT_CORES", "0"))
 STRATEGY = {"height": ttnn.ShardStrategy.HEIGHT, "block": ttnn.ShardStrategy.BLOCK,
             "width": ttnn.ShardStrategy.WIDTH}
+LAYOUT = {"height": ttnn.TensorMemoryLayout.HEIGHT_SHARDED, "block": ttnn.TensorMemoryLayout.BLOCK_SHARDED,
+          "width": ttnn.TensorMemoryLayout.WIDTH_SHARDED}
 INTERLEAVED = {"l1": ttnn.L1_MEMORY_CONFIG, "dram": ttnn.DRAM_MEMORY_CONFIG}
 DRAM_SHARDED = {"dram_height": ttnn.TensorMemoryLayout.HEIGHT_SHARDED,
                 "dram_width": ttnn.TensorMemoryLayout.WIDTH_SHARDED,
@@ -790,7 +844,7 @@ if (EXPECT_NEOS or EXPECT_DMS) and profile_csv.exists():
     profile_csv.unlink()
 
 
-def memory_config(strategy, shard_shape, rng):
+def memory_config(strategy, shard_shape, rng, orientation="row"):
     if strategy in INTERLEAVED:
         return INTERLEAVED[strategy]
     if strategy in DRAM_SHARDED:
@@ -800,16 +854,19 @@ def memory_config(strategy, shard_shape, rng):
         spec = ttnn.ShardSpec(banks, shard_shape, ttnn.ShardOrientation.ROW_MAJOR)
         return ttnn.MemoryConfig(DRAM_SHARDED[strategy], ttnn.BufferType.DRAM, spec)
     x0, y0, x1, y1 = rng
+    grid = ttnn.CoreRangeSet({ttnn.CoreRange((x0, y0), (x1, y1))})
+    if orientation == "col":
+        # From a ShardSpec: create_sharded_memory_config transposes the shard shape for column-major.
+        spec = ttnn.ShardSpec(grid, shard_shape, ttnn.ShardOrientation.COL_MAJOR)
+        return ttnn.MemoryConfig(LAYOUT[strategy], ttnn.BufferType.L1, spec)
     return ttnn.create_sharded_memory_config(
-        shard_shape,
-        core_grid=ttnn.CoreRangeSet({ttnn.CoreRange((x0, y0), (x1, y1))}),
-        strategy=STRATEGY[strategy],
-        use_height_and_width_as_shard_shape=True,
+        shard_shape, core_grid=grid, strategy=STRATEGY[strategy], use_height_and_width_as_shard_shape=True
     )
 
 
 mismatches, failures = [], []
 keep, seen = [], set()
+specs = [json.dumps(entry[1:]) for entry in SHARDS]
 device = ttnn.open_device(device_id=0)
 try:
     for i, entry in enumerate(SHARDS):
@@ -817,32 +874,49 @@ try:
         opts = entry[5] if len(entry) > 5 else {}
         torch.manual_seed(i)
         mem = memory_config(strategy, shard_shape, rng)
-        out_mem = memory_config(*opts["out"]) if "out" in opts else mem
+        if "out" in opts and opts["out"] is None:
+            out_mem = None
+        elif opts.get("out") == "height_specless":
+            out_mem = ttnn.L1_HEIGHT_SHARDED_MEMORY_CONFIG
+        else:
+            out_mem = memory_config(*opts["out"]) if "out" in opts else mem
         b_mem = memory_config(*opts["b"]) if "b" in opts else mem
         cfg = dict(dtype=ttnn.bfloat16, device=device, layout=ttnn.TILE_LAYOUT)
         ta = ttnn.from_torch(torch.randn(shape, dtype=torch.float32), memory_config=mem, **cfg)
         tb = ttnn.from_torch(torch.randn(shape, dtype=torch.float32), memory_config=b_mem, **cfg)
         golden = (ttnn.to_torch(ta).float() + ttnn.to_torch(tb).float()).to(torch.bfloat16)
         cached = device.num_program_cache_entries()
-        grid = {}
+        op_kwargs = {}
         if "grid" in opts:
             x0, y0, x1, y1 = opts["grid"]
-            grid = {"sub_core_grids": ttnn.CoreRangeSet({ttnn.CoreRange((x0, y0), (x1, y1))})}
+            op_kwargs["sub_core_grids"] = ttnn.CoreRangeSet({ttnn.CoreRange((x0, y0), (x1, y1))})
         if opts.get("in_place"):
             out = ttnn.experimental.quasar.add_(ta, tb)
         else:
-            out = ttnn.experimental.quasar.add(ta, tb, memory_config=out_mem, dtype=ttnn.bfloat16, **grid)
+            if "output_tensor" in opts:
+                op_kwargs["output_tensor"] = ttnn.from_torch(
+                    torch.zeros(shape), memory_config=memory_config(*opts["output_tensor"]), **cfg)
+            if out_mem is not None:
+                op_kwargs["memory_config"] = out_mem
+            out = ttnn.experimental.quasar.add(ta, tb, dtype=ttnn.bfloat16, **op_kwargs)
+        if "resolved_out" in opts and out.memory_config() != memory_config(*opts["resolved_out"]):
+            failures.append("{}: the output took {}".format(name, out.memory_config()))
         spec = json.dumps(entry[1:])
         if spec in seen and device.num_program_cache_entries() != cached:
             failures.append("{}: repeats an earlier spec but missed the program cache".format(name))
         seen.add(spec)
-        keep.extend([ta, tb, out])
+        if spec in specs[i + 1:]:
+            keep.extend([ta, tb, out])
         got = ttnn.to_torch(out)
         differ = got.contiguous().view(torch.int16) != golden.contiguous().view(torch.int16)
         if differ.any():
+            # Pad a partial last tile row or column with matches, so that the mask holds whole tiles.
+            differ = torch.nn.functional.pad(differ, (0, -differ.shape[-1] % 32, 0, -differ.shape[-2] % 32))
             h, w = differ.shape[-2:]
             wrong = int(differ.reshape(-1, h // 32, 32, w // 32, 32).any(dim=4).any(dim=2).sum())
             mismatches.append("{}: {} of {} tiles differ".format(name, wrong, differ.numel() // 1024))
+        # Free this entry's tensors before the next entry allocates its own; `keep` holds the ones a repeat needs.
+        del ta, tb, out, op_kwargs
 finally:
     ttnn.close_device(device)
 
@@ -917,7 +991,7 @@ def _run_shard_arm(shards, expect, timeout, knobs=None):
 
 # Every borrowed shard above is even: each core computes one whole shard, and 4 divides it. So the rule's own
 # configuration runs them too, and its compute batch of 8 at ring stride 4 leaves the predicted tiles wrong.
-_BORROWED_SHARD_CASES = [(entry, False, [_shard_tiles(entry)] * _shard_cores(entry)) for entry in _BORROWED_SHARDS]
+_BORROWED_SHARD_CASES = [(entry, _BORROWED, [_shard_tiles(entry)] * _shard_cores(entry)) for entry in _BORROWED_SHARDS]
 
 
 @pytest.mark.skipif(not _native_enabled(), reason="native factory not enabled (TTNN_QSR_NATIVE)")
@@ -977,14 +1051,27 @@ def test_native_borrowed_indivisible_shards_use_every_compute_thread(shard):
 
 
 @pytest.mark.skipif(not _native_enabled(), reason="native factory not enabled (TTNN_QSR_NATIVE)")
-def test_native_borrowed_mismatched_shard_specs_fall_back():
-    """Inputs and output on one grid with different shard specs must not be borrowed, and must be right.
+def test_native_borrowed_mismatched_output_borrows_only_the_inputs():
+    """An output on the inputs' grid with another shard spec must not be borrowed, and must be right.
 
-    A predicate that compares grids alone borrows the shards in place and fails the bit comparison. The
-    fallback reshards over the NoC, so both checks hold only when the predicate compares the full spec.
+    A predicate that compares grids alone borrows the output in place and fails the bit comparison. The
+    inputs' anchor borrows them, and the output moves over the NoC in their order: one reader thread and the
+    rule's 4 writer threads on each of the 4 clusters, which the device profiler shows. An op that borrowed
+    the output too would run 1 and 1.
     """
-    p = _run_shard_arm(_MISMATCHED_SHARDS, expect="dfb", timeout=900)
-    _check_arm(p, "mismatched shard specs")
+    p = _run_shard_arm(
+        _MISMATCHED_SHARDS,
+        expect="qsr",
+        timeout=900,
+        knobs={
+            **_COMPUTE_BATCH_1,
+            "TT_METAL_DEVICE_PROFILER": "1",
+            "ARM_EXPECT_DMS": "5",
+            "ARM_EXPECT_NEOS": "4",
+            "ARM_EXPECT_CORES": "4",
+        },
+    )
+    _check_arm(p, "an output shard spec unlike the inputs'")
 
 
 # 64 tiles per core: at the rule's 1,4,1 each compute thread takes 16, two full batches of 8 at ring stride 4.
@@ -992,15 +1079,15 @@ _BATCHED_BORROWED_SHARDS = [
     ("block64", "block", [8 * 32, 8 * 32], (0, 0, 1, 1), (2 * 8 * 32, 2 * 8 * 32)),
 ]
 _BATCHED_BORROWED_CASES = [
-    (entry, False, [_shard_tiles(entry)] * _shard_cores(entry)) for entry in _BATCHED_BORROWED_SHARDS
+    (entry, _BORROWED, [_shard_tiles(entry)] * _shard_cores(entry)) for entry in _BATCHED_BORROWED_SHARDS
 ]
 
 
 @pytest.mark.skipif(not _native_enabled(), reason="native factory not enabled (TTNN_QSR_NATIVE)")
-@_PACK_STRIDE_XFAIL
+@_BATCHED_XFAIL
 def test_native_borrowed_tiles_per_cycle_above_stride_one():
     """With every knob unset a borrowed shard runs the rule's 1,4,1 at a compute batch of 8, and its output
-    is wrong until the pack path is fixed.
+    is wrong until compute batching above ring stride 1 is fixed.
 
     This is the test that becomes a plain pass when that fix lands. An exact output fails it too: the rule
     then does not batch.
@@ -1023,17 +1110,23 @@ _L1_INTERLEAVED = [
 ]
 
 # Cases that keep the NoC path at C = 4: 160, 64 and 8 tiles leave 5, 2 and 1 per bank, which 4 does not
-# divide; l1_128_sub_grid runs on 16 of the 32 bank cores; the others place an operand in DRAM. At C = 1
-# the first three borrow, and l1_8_idle leaves 24 clusters with a pad slot only.
+# divide; l1_128_sub_grid runs on 16 of the 32 bank cores. At C = 1 the first three borrow, and l1_8_idle
+# leaves 24 clusters with a pad slot only.
 _L1_INTERLEAVED_NOC = [
     ("l1_160", "l1", None, None, (5 * 32, 32 * 32)),
     ("l1_64", "l1", None, None, (2 * 32, 32 * 32)),
     ("l1_8_idle", "l1", None, None, (2 * 32, 4 * 32)),
     ("l1_128_sub_grid", "l1", None, None, (4 * 32, 32 * 32), {"grid": (0, 0, 3, 3)}),
+]
+
+# Slices beside a DRAM operand: each cluster borrows its banks' slices, and the DRAM operand moves in bank
+# order. l1_b_in_dram reads b, l1_out_in_dram writes the output and dram_a reads a.
+_L1_INTERLEAVED_PARTIAL = [
     ("l1_b_in_dram", "l1", None, None, (4 * 32, 32 * 32), {"b": ("dram", None, None)}),
     ("l1_out_in_dram", "l1", None, None, (4 * 32, 32 * 32), {"out": ("dram", None, None)}),
     ("dram_a", "dram", None, None, (4 * 32, 32 * 32), {"b": ("l1", None, None), "out": ("l1", None, None)}),
 ]
+_L1_INTERLEAVED_PARTIAL_BORROWED = {"l1_b_in_dram": "ac", "l1_out_in_dram": "ab", "dram_a": "bc"}
 
 # One case per child: the profiler CSV has no dispatch key, so two ops in one process would blend per core.
 # Each case carries the number of cores that must run it. height16 is a borrowed F3 shard on 4 cores: a
@@ -1047,21 +1140,19 @@ _L1_INTERLEAVED_DM_NOC = [(s, {"l1_8_idle": 8, "l1_128_sub_grid": 16}.get(s[0], 
 # when 4 divides its tiles per bank, else every operand moves over the NoC. The pad cases are left out: a
 # pad slot takes a batch position but is not in the output.
 _L1_INTERLEAVED_RULE_SPLITS = {
-    "l1_128": (False, [4] * 32),
-    "l1_256": (False, [8] * 32),
-    "l1_128_again": (False, [4] * 32),
-    "l1_128_in_place": (False, [4] * 32),
-    "l1_160": (True, _noc_split(160)),
-    "l1_64": (True, _noc_split(64)),
-    "l1_8_idle": (True, _noc_split(8)),
-    "l1_128_sub_grid": (True, _noc_split(128, clusters=16)),
-    "l1_b_in_dram": (True, _noc_split(128)),
-    "l1_out_in_dram": (True, _noc_split(128)),
-    "dram_a": (True, _noc_split(128)),
+    "l1_128": (_BORROWED, [4] * 32),
+    "l1_256": (_BORROWED, [8] * 32),
+    "l1_128_again": (_BORROWED, [4] * 32),
+    "l1_128_in_place": (_BORROWED, [4] * 32),
+    "l1_160": (_NOC_L1, _noc_split(160)),
+    "l1_64": (_NOC_L1, _noc_split(64)),
+    "l1_8_idle": (_NOC_L1, _noc_split(8)),
+    "l1_128_sub_grid": (_NOC_L1, _noc_split(128, clusters=16)),
+    **{name: (_path(borrowed, True), [4] * 32) for name, borrowed in _L1_INTERLEAVED_PARTIAL_BORROWED.items()},
 }
 _L1_INTERLEAVED_RULE_CASES = [
     (entry, *_L1_INTERLEAVED_RULE_SPLITS[entry[0]])
-    for entry in _L1_INTERLEAVED + _L1_INTERLEAVED_NOC
+    for entry in _L1_INTERLEAVED + _L1_INTERLEAVED_NOC + _L1_INTERLEAVED_PARTIAL
     if entry[0] in _L1_INTERLEAVED_RULE_SPLITS
 ]
 
@@ -1074,7 +1165,9 @@ def test_native_l1_interleaved_is_bit_exact(name, knobs):
     Credits on the wrong counter or a slice read at the wrong offset fail the bit comparison, and a cached
     program that keeps the first call's slice addresses fails the repeat.
     """
-    p = _run_shard_arm(_L1_INTERLEAVED + _L1_INTERLEAVED_NOC, expect="qsr", timeout=900, knobs=knobs)
+    p = _run_shard_arm(
+        _L1_INTERLEAVED + _L1_INTERLEAVED_NOC + _L1_INTERLEAVED_PARTIAL, expect="qsr", timeout=900, knobs=knobs
+    )
     _check_arm(p, f"L1-interleaved, {name}")
 
 
@@ -1121,13 +1214,12 @@ def test_native_l1_interleaved_borrows_in_place(case, cores, threads):
 @pytest.mark.skipif(not _native_enabled(), reason="native factory not enabled (TTNN_QSR_NATIVE)")
 @pytest.mark.parametrize("case, cores", _L1_INTERLEAVED_DM_NOC, ids=[c[0][0] for c in _L1_INTERLEAVED_DM_NOC])
 def test_native_l1_interleaved_keeps_the_noc_path(case, cores):
-    """An indivisible tile count per cluster, a partial grid, or an operand outside L1 must keep the NoC path,
-    and run the rule's 4,4,2 there.
+    """An indivisible tile count per cluster or a partial grid must keep the NoC path, and run the rule's 4,4,2
+    there.
 
     A borrowed ring must divide by the compute count, and the L1-interleaved path has no tail rings, so a
     borrowed ring of 5, 2 or 1 tiles at C = 4 dies on the DFB host assertion. On a grid that is not the
-    bank cores, the pages of the banks outside it would never be computed. A DRAM operand has no slice in
-    the cluster's L1 to borrow.
+    bank cores, the pages of the banks outside it would never be computed.
     """
     p = _run_shard_arm(
         [case],
@@ -1144,11 +1236,42 @@ def test_native_l1_interleaved_keeps_the_noc_path(case, cores):
     _check_arm(p, f"{case[0]} on the NoC path at the rule's 4,4,2")
 
 
+_L1_INTERLEAVED_PARTIAL_ROUTES = [
+    (entry, *_route((entry, _path(_L1_INTERLEAVED_PARTIAL_BORROWED[entry[0]], True), [4] * 32), _COMPUTE_BATCH_1))
+    for entry in _L1_INTERLEAVED_PARTIAL
+]
+
+
+@pytest.mark.skipif(not _native_enabled(), reason="native factory not enabled (TTNN_QSR_NATIVE)")
+@pytest.mark.parametrize(
+    "case, dms, cores", _L1_INTERLEAVED_PARTIAL_ROUTES, ids=[r[0][0] for r in _L1_INTERLEAVED_PARTIAL_ROUTES]
+)
+def test_native_l1_interleaved_borrows_beside_dram(case, dms, cores):
+    """Slices beside a DRAM operand must be borrowed, and the DRAM operand must move in bank order.
+
+    A program that borrows them runs one reader thread where both inputs are borrowed, and one writer thread
+    where the output is; the NoC path runs four and two. The child reads them from the device profiler.
+    """
+    p = _run_shard_arm(
+        [case],
+        expect="qsr",
+        timeout=900,
+        knobs={
+            **_COMPUTE_BATCH_1,
+            "TT_METAL_DEVICE_PROFILER": "1",
+            "ARM_EXPECT_DMS": str(dms),
+            "ARM_EXPECT_NEOS": "4",
+            "ARM_EXPECT_CORES": str(cores),
+        },
+    )
+    _check_arm(p, f"{case[0]} with its slices borrowed")
+
+
 # DRAM-sharded operands, alone and beside interleaved ones. The shapes need at least two DRAM banks; the
 # simulator has two, so each case makes two shards, and the uneven ones leave the second shard partial. A
 # wrong page-to-bank map that a, b and the output share would still give c = a + b, so every layout also
 # appears beside an operand with another placement. dram_width_1024 holds 32 tiles per cluster, enough for
-# full DM batches of 8 at every arm. dram_width_again repeats dram_width while its tensors are alive, a
+# full DM batches of 8 at the batched arms. dram_width_again repeats dram_width while its tensors are alive, a
 # cache hit that must rebind.
 _DRAM_SHARDED = [
     ("dram_width", "dram_width", [4 * 32, 8 * 32], None, (4 * 32, 16 * 32)),
@@ -1196,17 +1319,19 @@ _DRAM_SHARDED = [
     ("dram_width_again", "dram_width", [4 * 32, 8 * 32], None, (4 * 32, 16 * 32)),
     ("dram_width_in_place", "dram_width", [4 * 32, 8 * 32], None, (4 * 32, 16 * 32), {"in_place": True}),
 ]
-# Every DRAM-sharded op takes the NoC path, which splits its tiles over the 32 worker clusters. The per-tile
-# configurations read one page per transfer; the others keep the rule's DM batch of 8. Under the rule only
-# dram_width_1024 gives a compute thread more than one tile.
+# A DRAM-sharded operand always moves over the NoC. dram_a_l1_b_dram_out borrows b's slices on the 32 bank
+# clusters; every other case here splits its tiles over the 32 worker clusters, with 4 tiles each. Beside DRAM
+# the rule's program is the per-tile one: one page per transfer, a compute batch of 1, rings of 2 entries per
+# thread. So the per-tile arms run the rule at other thread counts, and the batched arms set a DM batch of 8,
+# which keeps the batched walk tested over DRAM-sharded accessors.
 _DRAM_SHARDED_CONFIGS = {
-    **{f"R{r}C{c}W{w}-per-tile": {**_threads(r, c, w), **_PER_TILE} for r, c, w in [(1, 1, 1), (1, 4, 1), (4, 4, 2)]},
-    "R1C1W1": _threads(1, 1, 1),
-    "R1C4W1-n1": {**_threads(1, 4, 1), **_COMPUTE_BATCH_1},
-    "rule-n1": _COMPUTE_BATCH_1,
+    **{f"R{r}C{c}W{w}-per-tile": {**_threads(r, c, w), **_PER_TILE} for r, c, w in [(1, 1, 1), (1, 4, 1)]},
+    "R1C1W1-batched": {**_threads(1, 1, 1), **_DM_BATCH_8, "TTNN_QSR_TILES_PER_CYCLE": "8"},
+    "R1C4W1-dm8-n1": {**_threads(1, 4, 1), **_DM_BATCH_8, **_COMPUTE_BATCH_1},
+    "rule-dm8-n1": {**_DM_BATCH_8, **_COMPUTE_BATCH_1},
     "rule": {},
 }
-_DRAM_SHARDED_CASES = [(entry, True, _noc_split(_tensor_tiles(entry))) for entry in _DRAM_SHARDED]
+_DRAM_SHARDED_CASES = [(entry, _NOC_DRAM, _noc_split(_tensor_tiles(entry))) for entry in _DRAM_SHARDED]
 
 
 @pytest.mark.skipif(not _native_enabled(), reason="native factory not enabled (TTNN_QSR_NATIVE)")
@@ -1254,6 +1379,383 @@ def test_native_dram_sharded_spreads_over_the_worker_grid(case):
     _check_arm(p, f"{case[0]} on the worker grid at the rule's 4,4,2")
 
 
+# --- Mixed layouts ---------------------------------------------------------------------------------------
+#
+# Each operand may be interleaved (L1 or DRAM), L1-sharded or DRAM-sharded, on its own. The factory picks an anchor, a
+# placement in which some operands already sit, and borrows them in place. A shard anchor is the memory config of an
+# L1-sharded operand: it borrows every operand with exactly that memory config, and cluster i computes shard i. The
+# slice anchor is the L1 banks: it borrows every L1-interleaved operand, and cluster i computes the pages of bank i. An
+# anchor must run on at least as many clusters as the legacy binary_ng uses for the op: the clusters that hold the
+# output's shards where the legacy binary_ng borrows the output, else its split of the output tiles over the 32
+# clusters. Among those, the factory takes the anchor that borrows the most operands; on a tie, the one that borrows the
+# output, then the one on more clusters, then a's before b's. Under the rule a borrowed ring must divide by 4, and a
+# shard anchor's clusters must lie in the worker grid. Every operand that is not borrowed moves over the NoC in the
+# anchor's tile order, and skips the anchor's pad slots. A placement is (strategy, shard shape, core range[, "col"]), as
+# in _SHARD_ARM_SRC.
+# The legacy binary_ng is the op in eltwise/binary_ng, not the descriptor or the fallback factory of this op.
+_IL1 = ("l1", None, None)
+_IDRAM = ("dram", None, None)
+_H16 = ("height", [4 * 32, 16 * 32], (0, 0, 0, 3))  # on 16x16 tiles: 64 tiles per core down column 0
+_B16 = ("block", [4 * 32, 4 * 32], (0, 0, 3, 3))  # 16 tiles per core on a 4x4 grid
+_W16 = ("width", [16 * 32, 4 * 32], (0, 0, 3, 0))  # 64 tiles per core across row 0
+_B16_COL = ("block", [4 * 32, 4 * 32], (0, 0, 3, 1), "col")  # on 16x8 tiles: column-major core order
+_B16_SLABS = ("block", [4 * 32, 4 * 32], (0, 0, 3, 1))  # on (2, 2, 64, 512): each shard spans two (N, C) slabs
+_H16_IDLE = ("height", [4 * 32, 16 * 32], (0, 0, 1, 3))  # 4 shards on 8 cores
+_B10_UNEVEN = ("block", [4 * 32, 4 * 32], (0, 0, 2, 2))  # on 10x10 tiles: 3x3 shards, the last row and column short
+_H32 = ("height", [32, 40 * 32], (0, 0, 7, 3))  # on 32x40 tiles: one tile row per cluster, on all 32 clusters
+_B32 = ("block", [4 * 32, 4 * 32], (0, 0, 7, 3))  # on 16x32 tiles: 16 tiles per cluster, on all 32 clusters
+_W32 = ("width", [4 * 32, 2 * 32], (0, 0, 7, 3))  # on 4x64 tiles: 8 tiles per cluster, on all 32 clusters
+_B12 = ("block", [4 * 32, 4 * 32], (0, 0, 3, 2))  # on 12x16 tiles: 16 tiles per core on a 4x3 grid
+_B32_COL = ("block", [4 * 32, 4 * 32], (0, 0, 7, 3), "col")  # on 32x16 tiles: column-major order on all 32 clusters
+_SQUARE16 = (16 * 32, 16 * 32)
+_PARTIAL16 = (16 * 32 - 7, 16 * 32 - 13)  # 16x16 tiles, the last tile row and column partial
+
+
+def _mixed(name, a, b, out, shape=_SQUARE16, **opts):
+    """A _SHARD_ARM_SRC entry for c = a + b with one placement per operand, and any further options."""
+    return (name, *a, shape, {"b": b, "out": out, **opts})
+
+
+def _placement(entry, operand):
+    """The placement of operand "a", "b" or "c" of a _SHARD_ARM_SRC entry. A supplied output tensor's decides,
+    and an in-place add writes into a, whatever "out" says. Where the op resolves the output, "resolved_out"
+    names the result."""
+    opts = entry[5] if len(entry) > 5 else {}
+    if operand == "b":
+        return opts.get("b", entry[1:4])
+    if operand == "c" and not opts.get("in_place"):
+        return opts.get("resolved_out", opts.get("output_tensor", opts.get("out", entry[1:4])))
+    return entry[1:4]
+
+
+def _has_dram(entry):
+    """True when a, b or the output of a _SHARD_ARM_SRC entry is in DRAM, interleaved or sharded."""
+    return any(_placement(entry, operand)[0].startswith("dram") for operand in "abc")
+
+
+def _anchor_split(entry, anchor):
+    """Tiles per cluster under `anchor`, pad slots included: "a", "b" or "c" puts one shard of that operand's
+    placement on each core that holds one, "slice" puts each L1 bank's reservation on its cluster, and None
+    splits the tiles over the worker clusters as the NoC path does."""
+    tiles = _tensor_tiles(entry)
+    if anchor is None:
+        x0, y0, x1, y1 = entry[5].get("grid", (0, 0, 7, 3)) if len(entry) > 5 else (0, 0, 7, 3)
+        return _noc_split(tiles, clusters=(x1 - x0 + 1) * (y1 - y0 + 1))
+    if anchor == "slice":
+        return [math.ceil(tiles / _CLUSTERS)] * _CLUSTERS
+    _, (height, width), *_ = _placement(entry, anchor)
+    *outer, rows, cols = entry[4]
+    shard_rows, shard_cols = height // 32, width // 32
+    # Each (N, C) slab rounds its rows up to whole tiles on its own.
+    height_tiles = math.prod(outer) * math.ceil(rows / 32)
+    shards = math.ceil(height_tiles / shard_rows) * math.ceil(math.ceil(cols / 32) / shard_cols)
+    return [shard_rows * shard_cols] * shards
+
+
+def _anchored(entry, anchor, borrowed):
+    """(entry, path, tiles per cluster) of a case whose anchor borrows the operands named in `borrowed`."""
+    return (entry, _path(borrowed, _has_dram(entry)), _anchor_split(entry, anchor))
+
+
+# (entry, anchor, the operands it borrows), as the rule picks them at its compute count of 4; a set count can
+# pick another anchor. The anchor is "a", "b" or "c" (that operand's shard placement), "slice" (the L1 banks) or
+# None (the NoC path).
+_MIXED = [
+    # Two L1-interleaved inputs beside an L1-sharded output. The legacy binary_ng borrows the output on its shard grid.
+    # The slices borrow two operands on all 32 clusters, which is not fewer, so they win, and the output moves in bank
+    # order. IL1.IL1.B_again repeats IL1.IL1.B while its tensors are alive, a cache hit that must rebind.
+    # IL1.IL1.Bsupplied asks for an L1-interleaved output but supplies a block-sharded tensor, whose own placement
+    # decides. In IL1.IL1.B12 a bank holds 6 pages, which 4 does not divide, so the output's anchor borrows it on its 12
+    # clusters, as the legacy binary_ng does, and the inputs move in its block order.
+    (_mixed("IL1.IL1.H", _IL1, _IL1, _H16), "slice", "ab"),
+    (_mixed("IL1.IL1.B", _IL1, _IL1, _B16), "slice", "ab"),
+    (_mixed("IL1.IL1.W", _IL1, _IL1, _W16), "slice", "ab"),
+    (_mixed("IL1.IL1.B_again", _IL1, _IL1, _B16), "slice", "ab"),
+    (_mixed("IL1.IL1.Bcol", _IL1, _IL1, _B16_COL, shape=(16 * 32, 8 * 32)), "slice", "ab"),
+    (_mixed("IL1.IL1.Hidle", _IL1, _IL1, _H16_IDLE), "slice", "ab"),
+    (_mixed("IL1.IL1.Bsupplied", _IL1, _IL1, _IL1, output_tensor=_B16), "slice", "ab"),
+    (_mixed("IL1.IL1.B12", _IL1, _IL1, _B12, shape=(12 * 32, 16 * 32)), "c", "c"),
+    # An output shard beside DRAM inputs. The legacy binary_ng borrows nothing, so it uses all 32 clusters, and an
+    # anchor on the output's fewer cores is not taken: every operand moves over the NoC, the output through its
+    # sharding-aware accessor. I.I.B4dx crosses (N, C) slabs; I.I.Hidle's grid holds 4 shards on 8 cores. An output
+    # shard on all 32 clusters stays the anchor, and the inputs move in its order: a width walk, a block walk across
+    # (N, C) slabs, a block walk in column-major core order, and a block walk that skips pad slots.
+    (_mixed("I.I.H", _IDRAM, _IDRAM, _H16), None, ""),
+    (_mixed("I.I.B", _IDRAM, _IDRAM, _B16), None, ""),
+    (_mixed("I.I.W", _IDRAM, _IDRAM, _W16), None, ""),
+    (_mixed("I.I.Bcol", _IDRAM, _IDRAM, _B16_COL, shape=(16 * 32, 8 * 32)), None, ""),
+    (_mixed("I.I.B4d", _IDRAM, _IDRAM, _B16, shape=(2, 2, 4 * 32, 16 * 32)), None, ""),
+    (_mixed("I.I.B4dx", _IDRAM, _IDRAM, _B16_SLABS, shape=(2, 2, 2 * 32, 16 * 32)), None, ""),
+    (_mixed("I.I.Hidle", _IDRAM, _IDRAM, _H16_IDLE), None, ""),
+    (_mixed("I.I.W32", _IDRAM, _IDRAM, _W32, shape=(4 * 32, 64 * 32)), "c", "c"),
+    (_mixed("I.I.B32x4d", _IDRAM, _IDRAM, _B32, shape=(2, 4, 2 * 32, 32 * 32)), "c", "c"),
+    (_mixed("I.I.B32col", _IDRAM, _IDRAM, _B32_COL, shape=(32 * 32, 16 * 32)), "c", "c"),
+    (_mixed("I.I.B32u", _IDRAM, _IDRAM, _B32, shape=(14 * 32, 30 * 32)), "c", "c"),
+    # One input shares the output's shard config. The legacy binary_ng borrows nothing, as a and b differ, so the
+    # program keeps all 32 clusters: an L1-interleaved input's slices are borrowed, and every other operand moves over
+    # the NoC. H.I.H is an L1-sharded a beside a DRAM b, whose default output takes a's memory config. Halt.H.H holds
+    # a's shards on another column; Dw.H.H reads a DRAM shard; I.H.H_again repeats I.H.H; H.I.H_in_place adds into a. On
+    # all 32 clusters the shared config stays the anchor: H32.I.H32 borrows a and the output.
+    (_mixed("I.H.H", _IDRAM, _H16, _H16), None, ""),
+    (_mixed("H.I.H", _H16, _IDRAM, _H16), None, ""),
+    (_mixed("IL1.H.H", _IL1, _H16, _H16), "slice", "a"),
+    (_mixed("IL1.B.B", _IL1, _B16, _B16), "slice", "a"),
+    (_mixed("Halt.H.H", ("height", [4 * 32, 16 * 32], (1, 0, 1, 3)), _H16, _H16), None, ""),
+    (_mixed("I.W.W", _IDRAM, _W16, _W16), None, ""),
+    (_mixed("Dw.H.H", ("dram_width", [16 * 32, 8 * 32], None), _H16, _H16), None, ""),
+    (_mixed("I.H.H_again", _IDRAM, _H16, _H16), None, ""),
+    (_mixed("H.I.H_in_place", _H16, _IDRAM, _H16, in_place=True), None, ""),
+    (_mixed("H32.I.H32", _H32, _IDRAM, _H32, shape=(32 * 32, 40 * 32)), "c", "ac"),
+    # The inputs share a shard config. Where the output is sharded on their grid, the legacy binary_ng runs there, and
+    # the inputs' anchor borrows them while the output moves in their order. In H.H.B@same-spec one ShardSpec places the
+    # height inputs and the block output on other cores. Elsewhere the legacy binary_ng uses all 32 clusters: W.W.I
+    # moves all three, and H.H.IL1 borrows the output's slices. On all 32 clusters the inputs stay the anchor, and the
+    # output moves in their order: a block walk, and a block walk that skips pad slots.
+    (_mixed("H.H.W@same-grid", _H16, _H16, ("width", [16 * 32, 4 * 32], (0, 0, 0, 3))), "a", "ab"),
+    (
+        _mixed(
+            "H.H.B@same-spec",
+            ("height", [8 * 32, 16 * 32], (0, 0, 1, 1)),
+            ("height", [8 * 32, 16 * 32], (0, 0, 1, 1)),
+            ("block", [8 * 32, 16 * 32], (0, 0, 1, 1)),
+        ),
+        "a",
+        "ab",
+    ),
+    (_mixed("W.W.I", _W16, _W16, _IDRAM), None, ""),
+    (_mixed("H.H.IL1", _H16, _H16, _IL1), "slice", "c"),
+    (_mixed("B32.B32.I", _B32, _B32, _IDRAM, shape=(16 * 32, 32 * 32)), "a", "ab"),
+    (_mixed("B32u.B32u.I", _B32, _B32, _IDRAM, shape=(14 * 32, 30 * 32)), "a", "ab"),
+    # Three placements: the legacy binary_ng borrows nothing, so all three move over the NoC on 32 clusters.
+    (_mixed("H.W.B", _H16, _W16, _B16), None, ""),
+    (_mixed("W.B.H", _W16, _B16, _H16), None, ""),
+    (_mixed("B.H.W", _B16, _H16, _W16), None, ""),
+    (
+        _mixed(
+            "H@g0.W@g1.B@g2",
+            _H16,
+            ("width", [16 * 32, 4 * 32], (0, 1, 3, 1)),
+            ("block", [8 * 32, 8 * 32], (2, 2, 3, 3)),
+        ),
+        None,
+        "",
+    ),
+    # An L1-interleaved output beside inputs that are not slices: the output's slices are borrowed on all 32
+    # clusters, and both inputs move in bank order.
+    (_mixed("I.I.IL1", _IDRAM, _IDRAM, _IL1), "slice", "c"),
+    # A sharded input beside an interleaved output. The legacy binary_ng borrows nothing, so a shard on fewer than 32
+    # clusters is not an anchor, and all three move over the NoC: H.I.I, W.I.I, and H.H'.I, whose inputs hold their
+    # shards on two columns. In H.I.I@sub-grid a's shards lie outside the requested grid, so the op takes the NoC path
+    # on that grid.
+    (_mixed("H.I.I", ("height", [8 * 32, 40 * 32], (0, 0, 0, 3)), _IDRAM, _IDRAM, shape=(32 * 32, 40 * 32)), None, ""),
+    (_mixed("W.I.I", ("width", [32 * 32, 10 * 32], (0, 0, 3, 0)), _IDRAM, _IDRAM, shape=(32 * 32, 40 * 32)), None, ""),
+    (
+        _mixed(
+            "H.H'.I",
+            ("height", [8 * 32, 32 * 32], (0, 0, 0, 3)),
+            ("height", [8 * 32, 32 * 32], (1, 0, 1, 3)),
+            _IDRAM,
+            shape=(32 * 32, 32 * 32),
+        ),
+        None,
+        "",
+    ),
+    (
+        _mixed(
+            "H.I.I@sub-grid",
+            ("height", [8 * 32, 40 * 32], (4, 0, 4, 3)),
+            _IDRAM,
+            _IDRAM,
+            shape=(32 * 32, 40 * 32),
+            grid=(0, 0, 3, 3),
+        ),
+        None,
+        "",
+    ),
+    # No memory_config: the op derives the output's, as the legacy binary_ng does. It takes a's config (adjusted to the
+    # output shape), or b's where a is in DRAM and b is sharded, or where b's shard grid has more cores. A
+    # height-sharded config without a shard spec takes a's shard spec, or, beside interleaved inputs, a generated one.
+    # The anchor rule then applies as with an explicit config.
+    (_mixed("H.I.derived", _H16, _IDRAM, None, resolved_out=_H16), None, ""),
+    (_mixed("I.H.derived", _IDRAM, _H16, None, resolved_out=_H16), None, ""),
+    (_mixed("IL1.H.derived", _IL1, _H16, None, resolved_out=_IL1), "slice", "ac"),
+    (_mixed("H.B.derived", _H16, _B16, None, resolved_out=_B16), None, ""),
+    (_mixed("IL1.IL1.derived", _IL1, _IL1, None, resolved_out=_IL1), "slice", "abc"),
+    (
+        _mixed("I.I.specless", _IDRAM, _IDRAM, "height_specless", resolved_out=("height", [32, 16 * 32], (0, 0, 7, 1))),
+        None,
+        "",
+    ),
+    (_mixed("H.I.specless", _H16, _IDRAM, "height_specless", resolved_out=_H16), None, ""),
+    # IL1.IL1.B9: the legacy binary_ng borrows the output on its 9 clusters, but 4 divides neither its 9 tiles per
+    # cluster nor the 3 per bank. The DFB cannot borrow such a ring beside operands that move, so all three move over
+    # the NoC, on 32 clusters.
+    (_mixed("IL1.IL1.B9", _IL1, _IL1, ("block", [3 * 32, 3 * 32], (0, 0, 2, 2)), shape=(9 * 32, 9 * 32)), None, ""),
+    # Pad slots beside operands that move, which the walks must skip. A pad row maps to a page past the tensor,
+    # and a pad column of a block or width shard to a REAL page of the next row, so a write there would replace
+    # a right tile. B32u.B32u.I and I.I.B32u, above, skip the pad rows and pad columns of a block shard on all 32
+    # clusters, in the writer and in the reader. IL1.IL1.Bu leaves 28 of its banks one page short, beside a block
+    # output with short corner shards. In the _short cases 28 banks hold 3 pages of 4, beside a DRAM operand that
+    # moves. Hu.I.I, Bu.I.I, I.I.Bu and Wu.I.I hold their uneven shards on fewer than 32 clusters, so all three
+    # operands move over the NoC.
+    (_mixed("IL1.IL1.Bu", _IL1, _IL1, _B10_UNEVEN, shape=(10 * 32, 10 * 32)), "slice", "ab"),
+    (_mixed("Hu.I.I", _H16, _IDRAM, _IDRAM, shape=(14 * 32, 16 * 32)), None, ""),
+    (_mixed("Bu.I.I", _B10_UNEVEN, _IDRAM, _IDRAM, shape=(10 * 32, 10 * 32)), None, ""),
+    (_mixed("I.I.Bu", _IDRAM, _IDRAM, _B10_UNEVEN, shape=(10 * 32, 10 * 32)), None, ""),
+    (_mixed("Wu.I.I", ("width", [4 * 32, 4 * 32], (0, 0, 2, 0)), _IDRAM, _IDRAM, shape=(4 * 32, 10 * 32)), None, ""),
+    (_mixed("IL1.I.IL1_short", _IL1, _IDRAM, _IL1, shape=(10 * 32, 10 * 32)), "slice", "ac"),
+    (_mixed("IL1.IL1.I_short", _IL1, _IL1, _IDRAM, shape=(10 * 32, 10 * 32)), "slice", "ab"),
+    (_mixed("I.I.IL1_short", _IDRAM, _IDRAM, _IL1, shape=(10 * 32, 10 * 32)), "slice", "c"),
+    # Shapes that are not a multiple of 32, so the last tile row or tile column is partial. The op counts, places
+    # and walks the tiles of the padded shape, and derives the output config from it, so each case takes the
+    # anchor of its padded shape. The cases cover each anchor kind and each walk, in the reader and in the writer.
+    # In I.I.B4d_partial every (N, C) slab ends in a partial tile row, inside the tensor. B32u.B32u.I_partial also
+    # has pad slots.
+    (_mixed("I.I.I_partial", _IDRAM, _IDRAM, _IDRAM, shape=_PARTIAL16), None, ""),
+    (_mixed("IL1.IL1.IL1_partial", _IL1, _IL1, _IL1, shape=(16 * 32 - 1, 16 * 32 - 1)), "slice", "abc"),
+    (_mixed("IL1.IL1.I_partial", _IL1, _IL1, _IDRAM, shape=_PARTIAL16), "slice", "ab"),
+    (_mixed("I.I.IL1_partial", _IDRAM, _IDRAM, _IL1, shape=_PARTIAL16), "slice", "c"),
+    (_mixed("B.B.B_partial", _B16, _B16, _B16, shape=_PARTIAL16), "c", "abc"),
+    (_mixed("B32.B32.I_partial", _B32, _B32, _IDRAM, shape=(16 * 32, 32 * 32 - 31)), "a", "ab"),
+    (_mixed("I.I.W32_partial", _IDRAM, _IDRAM, _W32, shape=(4 * 32 - 31, 64 * 32)), "c", "c"),
+    (_mixed("I.I.B4d_partial", _IDRAM, _IDRAM, _B16, shape=(2, 2, 4 * 32 - 5, 16 * 32 - 9)), None, ""),
+    (_mixed("B32u.B32u.I_partial", _B32, _B32, _IDRAM, shape=(14 * 32 - 5, 30 * 32 - 9)), "a", "ab"),
+    (_mixed("H.I.derived_partial", _H16, _IDRAM, None, shape=_PARTIAL16, resolved_out=_H16), None, ""),
+    (
+        _mixed(
+            "I.I.specless_partial",
+            _IDRAM,
+            _IDRAM,
+            "height_specless",
+            shape=_PARTIAL16,
+            resolved_out=("height", [32, 16 * 32], (0, 0, 7, 1)),
+        ),
+        None,
+        "",
+    ),
+]
+_MIXED_CASES = [_anchored(entry, anchor, borrowed) for entry, anchor, borrowed in _MIXED]
+
+# The mixed cases with pad slots: an uneven shard or a short bank in the anchor. The split of every other case must
+# hold exactly its output tiles.
+_MIXED_PAD_SLOTS = {
+    "I.I.B32u",
+    "B32u.B32u.I",
+    "IL1.IL1.Bu",
+    "IL1.I.IL1_short",
+    "IL1.IL1.I_short",
+    "I.I.IL1_short",
+    "B32u.B32u.I_partial",
+}
+
+# R1C4W1-n1 puts one reader thread on four tile counters, so the shard walk takes the counter-major steps.
+# Beside DRAM the rule batches nothing, so rule-dm8-n1 sets a DM batch of 8 for the cases with a DRAM operand.
+_MIXED_CONFIGS = {
+    "rule-n1": _COMPUTE_BATCH_1,
+    "rule-dm8-n1": {**_DM_BATCH_8, **_COMPUTE_BATCH_1},
+    "R1C1W1": _threads(1, 1, 1),
+    "R1C4W1-n1": {**_threads(1, 4, 1), **_COMPUTE_BATCH_1},
+    "R4C4W2-per-tile": {**_threads(4, 4, 2), **_PER_TILE},
+    "rule": {},
+}
+
+
+@pytest.mark.skipif(not _native_enabled(), reason="native factory not enabled (TTNN_QSR_NATIVE)")
+@pytest.mark.parametrize("name, knobs", _config_params(_MIXED_CONFIGS, _MIXED_CASES))
+def test_native_mixed_layouts_match_the_prediction(name, knobs):
+    """Every mix of placements must run native and give the predicted output.
+
+    The fallback binds kernels_dfb, so a refusing gate fails the routing check. A tile read or written in
+    the wrong order, or a borrowed ring paired with a NoC ring of another size in the wrong order, fails the
+    comparison, which is exact. A cached program that keeps the first call's addresses fails the repeat.
+    """
+    p = _run_shard_arm([case[0] for case in _MIXED_CASES], expect="qsr", timeout=1800, knobs=knobs)
+    _check_arm(p, f"mixed layouts, {name}", expect_wrong=_expect_wrong(_MIXED_CASES, knobs))
+
+
+# One case per child, as above, and one case of each kind of anchor and walk. The thread counts tell the
+# programs apart where the clusters do not, as both bind the same kernel sources.
+_MIXED_ROUTED = (
+    "IL1.IL1.H",
+    "IL1.IL1.Hidle",
+    "I.I.H",
+    "I.I.B",
+    "I.I.Hidle",
+    "I.H.H",
+    "H.I.H",
+    "IL1.B.B",
+    "H.H.W@same-grid",
+    "H.H.B@same-spec",
+    "W.W.I",
+    "H.W.B",
+    "H.I.I",
+    "W.I.I",
+    "H.H'.I",
+    "IL1.IL1.B9",
+    "IL1.IL1.Bu",
+    "Hu.I.I",
+    "Bu.I.I",
+    "I.I.Bu",
+    "IL1.IL1.I_short",
+    "I.I.IL1",
+    "H.I.I@sub-grid",
+    "H.I.derived",
+    "I.H.derived",
+    "IL1.H.derived",
+    "H.B.derived",
+    "IL1.IL1.derived",
+    "I.I.specless",
+    "H.I.specless",
+    "I.I.I_partial",
+    "IL1.IL1.IL1_partial",
+    "IL1.IL1.I_partial",
+    "I.I.IL1_partial",
+    "B.B.B_partial",
+    "B32.B32.I_partial",
+    "I.I.W32_partial",
+    "I.I.B4d_partial",
+    "B32u.B32u.I_partial",
+    "H.I.derived_partial",
+    "I.I.specless_partial",
+    "IL1.IL1.B12",
+    "I.I.W32",
+    "I.I.B32x4d",
+    "I.I.B32col",
+    "I.I.B32u",
+    "H32.I.H32",
+    "B32.B32.I",
+    "B32u.B32u.I",
+    "IL1.H.H",
+    "H.H.IL1",
+)
+_MIXED_ROUTES = [(case[0], *_route(case, _COMPUTE_BATCH_1)) for case in _MIXED_CASES if case[0][0] in _MIXED_ROUTED]
+
+
+@pytest.mark.skipif(not _native_enabled(), reason="native factory not enabled (TTNN_QSR_NATIVE)")
+@pytest.mark.parametrize("case, dms, cores", _MIXED_ROUTES, ids=[r[0][0] for r in _MIXED_ROUTES])
+def test_native_mixed_layouts_route_by_the_anchor(case, dms, cores):
+    """Each mix must run where its anchor puts it, with the threads of what it moves.
+
+    A program on other clusters than the anchor's fails, and so does one that borrows fewer operands than the
+    anchor allows where that adds reader or writer threads. A borrowed input beside one that moves adds none, so
+    there only the clusters show. The child reads the DM cores and the Neos per cluster, and the number of
+    clusters, from the device profiler.
+    """
+    p = _run_shard_arm(
+        [case],
+        expect="qsr",
+        timeout=900,
+        knobs={
+            **_COMPUTE_BATCH_1,
+            "TT_METAL_DEVICE_PROFILER": "1",
+            "ARM_EXPECT_DMS": str(dms),
+            "ARM_EXPECT_NEOS": "4",
+            "ARM_EXPECT_CORES": str(cores),
+        },
+    )
+    _check_arm(p, f"{case[0]} with {dms} DM cores on {cores} clusters")
+
+
 # --- The rule and its overrides ----------------------------------------------------------------------------
 
 _DRAM_128 = ("dram_128", "dram", None, None, (4 * 32, 32 * 32))
@@ -1283,32 +1785,63 @@ def test_native_rule_follows_a_set_compute_count():
     _check_arm(p, "C = 2 on the NoC path")
 
 
-# Each case: the knobs, the values the settings line must name with their sources, and whether the output
-# must be exact. C = 1 alone gives 1,1,1 by the rule. R = 2 beside C = 1 makes each compute thread own two
-# tile counters of the input rings, so the rule's compute batch drops to 1. That case
-# checks the line only: its output is exact only on craq-sim builds without the defect that corrupts a run
-# whose DM side outnumbers its Tensix side. A hang still fails it.
+# Each case: the knobs, the values each program shape's part of the settings line must name with their
+# sources, and whether the output must be exact. The line gives five shapes: every operand over the NoC and in
+# L1, the same beside a DRAM operand (where the rule batches nothing), the output borrowed beside an input that
+# moves, the inputs borrowed beside an output that moves, all of them borrowed. C = 1 alone gives 1,1,1 by the
+# rule. R = 2 beside C = 1 makes each compute thread own two tile counters of the input rings, so the rule's
+# compute batch drops to 1 where the inputs move. That case checks the line only: its output is exact only on
+# craq-sim builds without the defect that corrupts a run whose DM side outnumbers its Tensix side. A hang still
+# fails it.
+_NOC_SHAPE = "the operands move over the NoC, all in L1"
+_DRAM_SHAPE = "an operand is in DRAM"
+_OUTPUT_SHAPE = "the output is borrowed and an input moves"
+_INPUTS_SHAPE = "the inputs are borrowed and the output moves"
+_ALL_SHAPE = "all of them are borrowed"
 _LOG_CASES = {
     "W1-n1": (
         {"TTNN_QSR_WRITER_THREADS": "1", **_COMPUTE_BATCH_1},
-        [
-            "R=4 (rule)",
-            "C=4 (rule)",
-            "W=1 (TTNN_QSR_WRITER_THREADS)",
-            "entries_per_thread=16 (rule)",
-            "dm_batch=8 (rule)",
-            "tiles_per_cycle=1 (TTNN_QSR_TILES_PER_CYCLE)",
-        ],
+        {
+            _NOC_SHAPE: [
+                "R=4 (rule)",
+                "C=4 (rule)",
+                "W=1 (TTNN_QSR_WRITER_THREADS)",
+                "entries_per_thread=16 (rule)",
+                "dm_batch=8 (rule)",
+                "tiles_per_cycle=1 (TTNN_QSR_TILES_PER_CYCLE)",
+            ],
+            _DRAM_SHAPE: ["entries_per_thread=2 (rule) dm_batch=1 (rule) tiles_per_cycle=1 (TTNN_QSR_TILES_PER_CYCLE)"],
+            _OUTPUT_SHAPE: ["R=4 (rule) W=1 tiles_per_cycle=1 (TTNN_QSR_TILES_PER_CYCLE)"],
+            _INPUTS_SHAPE: ["R=1 W=1 (TTNN_QSR_WRITER_THREADS) tiles_per_cycle=1 (TTNN_QSR_TILES_PER_CYCLE)"],
+            _ALL_SHAPE: ["R=1 W=1 tiles_per_cycle=1 (TTNN_QSR_TILES_PER_CYCLE)"],
+        },
         True,
     ),
     "C1": (
         {"TTNN_QSR_COMPUTE_THREADS": "1"},
-        ["R=1 (rule)", "C=1 (TTNN_QSR_COMPUTE_THREADS)", "W=1 (rule)", "tiles_per_cycle=8 (rule)"],
+        {
+            _NOC_SHAPE: ["R=1 (rule)", "C=1 (TTNN_QSR_COMPUTE_THREADS)", "W=1 (rule)", "tiles_per_cycle=8 (rule)"],
+            _DRAM_SHAPE: ["entries_per_thread=2 (rule) dm_batch=1 (rule) tiles_per_cycle=1 (rule)"],
+            _OUTPUT_SHAPE: ["R=1 (rule) W=1 tiles_per_cycle=8 (rule)"],
+            _INPUTS_SHAPE: ["R=1 W=1 (rule) tiles_per_cycle=8 (rule)"],
+            _ALL_SHAPE: ["R=1 W=1 tiles_per_cycle=8 (rule)"],
+        },
         True,
     ),
     "R2C1": (
         {"TTNN_QSR_READER_THREADS": "2", "TTNN_QSR_COMPUTE_THREADS": "1"},
-        ["R=2 (TTNN_QSR_READER_THREADS)", "C=1 (TTNN_QSR_COMPUTE_THREADS)", "W=1 (rule)", "tiles_per_cycle=1 (rule)"],
+        {
+            _NOC_SHAPE: [
+                "R=2 (TTNN_QSR_READER_THREADS)",
+                "C=1 (TTNN_QSR_COMPUTE_THREADS)",
+                "W=1 (rule)",
+                "tiles_per_cycle=1 (rule)",
+            ],
+            _DRAM_SHAPE: ["entries_per_thread=2 (rule) dm_batch=1 (rule) tiles_per_cycle=1 (rule)"],
+            _OUTPUT_SHAPE: ["R=2 (TTNN_QSR_READER_THREADS) W=1 tiles_per_cycle=1 (rule)"],
+            _INPUTS_SHAPE: ["R=1 W=1 (rule) tiles_per_cycle=8 (rule)"],
+            _ALL_SHAPE: ["R=1 W=1 tiles_per_cycle=8 (rule)"],
+        },
         False,
     ),
 }
@@ -1319,8 +1852,9 @@ _LOG_CASES = {
 def test_native_tuning_log_names_each_source(name):
     """The line that reports the native settings must name the source of each value, the knob or the rule.
 
-    An A/B log is then self-describing: a value the rule chose cannot be read as a value someone set. The
-    line is an info message, so the arm sets the logger to info.
+    An A/B log is then self-describing: a value the rule chose cannot be read as a value someone set. Each
+    program shape's values are checked in its own part of the line, so one shape cannot satisfy another's.
+    The line is an info message, so the arm sets the logger to info.
     """
     knobs, expected, exact = _LOG_CASES[name]
     p = _run_arm([32], knobs={**knobs, "TT_LOGGER_LEVEL": "info"}, timeout=300)
@@ -1329,8 +1863,12 @@ def test_native_tuning_log_names_each_source(name):
     else:
         assert p.returncode in (0, 2), f"{name} failed:\n{p.stdout}\n{p.stderr[-2000:]}"
     log = p.stdout + p.stderr
-    missing = [token for token in expected if token not in log]
-    assert not missing, f"the native settings line lacks {missing}:\n{log[-3000:]}"
+    line = next((ln for ln in log.splitlines() if "Quasar-native ENABLED" in ln), "")
+    parts = {part.split(":", 1)[0]: part for part in line.split("Where ")[1:]}
+    missing = [
+        (shape, token) for shape, tokens in expected.items() for token in tokens if token not in parts.get(shape, "")
+    ]
+    assert not missing, f"the native settings line lacks {missing}:\n{line}"
 
 
 @pytest.mark.skipif(not _native_enabled(), reason="native factory not enabled (TTNN_QSR_NATIVE)")
@@ -1353,9 +1891,43 @@ def test_native_prediction_tables_cover_their_cases():
     silently leave a case out of the rule column.
     """
     cases = _BORROWED_SHARD_CASES + _BATCHED_BORROWED_CASES + _L1_INTERLEAVED_RULE_CASES + _DRAM_SHARDED_CASES
+    # A pad slot takes a batch position but is not in the output, so a mixed case with pad slots must be exact in
+    # every configuration: at most one tile per compute thread, or a DRAM operand.
+    padded = [case for case in _MIXED_CASES if case[0][0] in _MIXED_PAD_SLOTS]
+    unknown = _MIXED_PAD_SLOTS - {case[0][0] for case in _MIXED_CASES}
+    assert not unknown, f"these cases with pad slots are not in the mixed table: {unknown}"
+    no_pads = [case[0][0] for case in padded if sum(case[2]) == _tensor_tiles(case[0])]
+    assert not no_pads, f"these cases are listed with pad slots, but their split has none: {no_pads}"
+    cases += [case for case in _MIXED_CASES if case not in padded]
+    inexact = [case[0][0] for case in padded for knobs in _MIXED_CONFIGS.values() if _expect_wrong([case], knobs)]
+    assert not inexact, f"these cases with pad slots have a wrong-tile prediction: {inexact}"
+    # In place, a wrong-tile prediction is not verified above a batch of 1: a batch may read other threads'
+    # slots, which in place hold their results, not their inputs.
+    in_place = [case for case in _MIXED_CASES if len(case[0]) > 5 and case[0][5].get("in_place")]
+    racy = [case[0][0] for case in in_place for knobs in _MIXED_CONFIGS.values() if _expect_wrong([case], knobs)]
+    assert not racy, f"these in-place cases have a wrong-tile prediction: {racy}"
     uncovered = [entry[0] for entry, _, split in cases if sum(split) != _tensor_tiles(entry)]
     assert not uncovered, f"these splits do not cover their output: {uncovered}"
-    indivisible = [entry[0] for entry in _BORROWED_SHARDS if _shard_tiles(entry) % _RULE_COMPUTE_THREADS]
+    misplaced = [entry[0] for entry, path, _ in cases if path[2] != _has_dram(entry)]
+    assert not misplaced, f"these paths name the wrong DRAM placement: {misplaced}"
+    indivisible = [entry[0] for entry in _BORROWED_SHARDS if _shard_tiles(entry) % _RULE_COMPUTE_THREADS] + [
+        entry[0]
+        for (entry, anchor, _), (_, _, split) in zip(_MIXED, _MIXED_CASES)
+        if anchor and split[0] % _RULE_COMPUTE_THREADS
+    ]
     assert not indivisible, f"these borrowed shards leave tail tiles under the rule: {indivisible}"
-    left_out = {entry[0] for entry in _L1_INTERLEAVED + _L1_INTERLEAVED_NOC} - set(_L1_INTERLEAVED_RULE_SPLITS)
+    # A shard anchor borrows the operands placed exactly as it is, and the slice anchor the L1-interleaved ones.
+    unlike = [
+        entry[0]
+        for entry, anchor, borrowed in _MIXED
+        if anchor is not None
+        and any(
+            _placement(entry, operand) != (_IL1 if anchor == "slice" else _placement(entry, anchor))
+            for operand in borrowed
+        )
+    ]
+    assert not unlike, f"these cases borrow an operand that their anchor does not hold: {unlike}"
+    left_out = {entry[0] for entry in _L1_INTERLEAVED + _L1_INTERLEAVED_NOC + _L1_INTERLEAVED_PARTIAL} - set(
+        _L1_INTERLEAVED_RULE_SPLITS
+    )
     assert left_out == {"l1_100_pad", "l1_250_pad"}, f"L1-interleaved cases in no prediction table: {left_out}"

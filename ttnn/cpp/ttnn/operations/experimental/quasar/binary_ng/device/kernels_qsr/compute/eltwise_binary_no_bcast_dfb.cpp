@@ -29,7 +29,8 @@
 #include "experimental/kernel_args.h"
 #include "eltwise_utils_common.hpp"
 #if HAS_MAIN_RING
-// Its preprocess helper names dfb::pre_lhs, which a program with no borrowed ring does not have.
+// Its preprocess helper names dfb::pre_lhs, which a program with no borrowed ring does not have. Its helpers
+// also build a DataflowBuffer per call, which drains on return: rework them before the gate admits activations.
 #include "eltwise_utils_dfb.hpp"
 #endif
 

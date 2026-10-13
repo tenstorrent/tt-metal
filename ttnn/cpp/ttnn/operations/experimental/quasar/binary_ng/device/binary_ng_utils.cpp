@@ -5,6 +5,7 @@
 #include "binary_ng_utils.hpp"
 #include "ttnn/operations/eltwise/unary/common/unary_op_utils.hpp"
 #include <tt-metalium/hal.hpp>
+#include <tt-metalium/math.hpp>
 #include <tt_stl/assert.hpp>
 // log_info / log_warning in native_tuning(). Included explicitly rather than left to arrive
 // transitively: this target is a unity build, so a missing include here still compiles.
@@ -12,6 +13,7 @@
 
 #include <algorithm>
 #include <cstdlib>
+#include <numeric>
 
 #include <fmt/core.h>
 #include <fmt/format.h>
@@ -907,11 +909,13 @@ uint32_t native_compute_threads(const NativeTuning& tuning) {
 NativeConfig resolve_native_config(const NativeTuning& tuning, NativeMoves moves) {
     // The rule: where an input moves, a reader thread per compute thread; where the output moves, a writer
     // thread per compute thread, within the 6 user DM cores that the readers leave. A borrowed operand moves
-    // nothing, so its reader or writer runs one thread. Both kinds of batch are 8 tiles, as many as the DST
-    // holds in bf16, in rings of 16 entries per thread, so two batches fit.
-    constexpr uint32_t kRuleEntriesPerThread = 16;
+    // nothing, so its reader or writer runs one thread. The DM batch is 8 tiles per barrier, and the compute
+    // batch 8, as many tiles as the DST holds in bf16. Beside a DRAM operand both are 1, as in the legacy binary_ng:
+    // the batching gains are craq-sim numbers, with no DRAM time.
     constexpr uint32_t kRuleDmBatch = 8;
     constexpr uint32_t kRuleTilesPerCycle = 8;
+    const uint32_t rule_dm_batch = moves.dram ? 1u : kRuleDmBatch;
+    const uint32_t rule_tiles_per_cycle = moves.dram ? 1u : kRuleTilesPerCycle;
     NativeConfig config;
     config.compute_threads = native_compute_threads(tuning);
     config.reader_threads = moves.inputs ? tuning.reader_threads.env.value_or(config.compute_threads) : 1u;
@@ -921,15 +925,19 @@ NativeConfig resolve_native_config(const NativeTuning& tuning, NativeMoves moves
         config.reader_threads < kNativeUserDmCores ? kNativeUserDmCores - config.reader_threads : 1u;
     config.writer_threads =
         moves.output ? tuning.writer_threads.env.value_or(std::min(config.compute_threads, writer_room)) : 1u;
-    config.entries_per_thread = tuning.entries_per_thread.env.value_or(kRuleEntriesPerThread);
-    config.dm_batch = tuning.dm_batch.env.value_or(kRuleDmBatch);
+    config.dm_batch = tuning.dm_batch.env.value_or(rule_dm_batch);
     // A compute thread beside more reader or writer threads owns several tile counters of that ring, and a
     // batch reads or fills one counter, not the thread's own tile sequence. So the rule batches only where
     // each compute thread owns one counter of each ring.
     const bool one_counter_per_compute_thread =
         config.reader_threads <= config.compute_threads && config.writer_threads <= config.compute_threads;
     config.tiles_per_cycle =
-        tuning.tiles_per_cycle.env.value_or(one_counter_per_compute_thread ? kRuleTilesPerCycle : 1u);
+        tuning.tiles_per_cycle.env.value_or(one_counter_per_compute_thread ? rule_tiles_per_cycle : 1u);
+    // Two batches of either kind per thread, so a batch is double-buffered, and a multiple of each, so no batch
+    // straddles the ring end: 16 at the rule's batches of 8, 2 beside DRAM.
+    const uint32_t batch_lcm = std::lcm(config.dm_batch, config.tiles_per_cycle);
+    const uint32_t two_batches = 2 * std::max(config.dm_batch, config.tiles_per_cycle);
+    config.entries_per_thread = tuning.entries_per_thread.env.value_or(tt::round_up(two_batches, batch_lcm));
     return config;
 }
 
@@ -1002,7 +1010,7 @@ const NativeTuning& native_tuning() {
             !t.implicit_sync,
             "TTNN_QSR_IMPLICIT_SYNC is parsed but not consumed. Enabling it requires restoring the "
             "guarantee that no thread draws zero tiles, which the uneven-tile-count support removed.");
-        // The NoC path runs the most DM threads; a borrowed program runs one reader and one writer.
+        // The NoC path runs the most DM threads; a borrowed input or output runs one reader or writer thread.
         const NativeConfig noc = resolve_native_config(t, {.inputs = true, .output = true});
         // Also enforced in program_spec.cpp, but a throw here names the knob. The rule's value, 4, passes.
         TT_FATAL(
@@ -1017,17 +1025,33 @@ const NativeTuning& native_tuning() {
         // Once, so an A/B log is self-describing: each value names its source, the knob or the rule.
         // num_entries is DERIVED (entries_per_thread x the endpoint's max(producers, consumers)), so the
         // depth reaching the credit register is not this number.
+        // The program shapes can differ in their threads, batches and depth, so each gives its own. A DRAM
+        // operand changes only the batches and the depth, the same in every shape, so the DRAM part names those.
+        const NativeConfig noc_dram = resolve_native_config(t, {.inputs = true, .output = true, .dram = true});
+        const NativeConfig output_borrowed = resolve_native_config(t, {.inputs = true, .output = false});
+        const NativeConfig inputs_borrowed = resolve_native_config(t, {.inputs = false, .output = true});
+        const NativeConfig all_borrowed = resolve_native_config(t, {});
         log_info(
             tt::LogOp,
-            "binary_ng Quasar-native ENABLED. Where the operands move over the NoC: R={} C={} W={} "
-            "entries_per_thread={} dm_batch={} tiles_per_cycle={}. Where all of them are borrowed: R=1 W=1. "
-            "Sync is EXPLICIT.",
+            "binary_ng Quasar-native ENABLED. Where the operands move over the NoC, all in L1: R={} C={} W={} "
+            "entries_per_thread={} dm_batch={} tiles_per_cycle={}. Where an operand is in DRAM: "
+            "entries_per_thread={} dm_batch={} tiles_per_cycle={}. Where the output is borrowed and an input moves: "
+            "R={} W=1 tiles_per_cycle={}. Where the inputs are borrowed and the output moves: R=1 W={} "
+            "tiles_per_cycle={}. Where all of them are borrowed: R=1 W=1 tiles_per_cycle={}. Sync is EXPLICIT.",
             describe_native_value(t.reader_threads, noc.reader_threads),
             describe_native_value(t.compute_threads, noc.compute_threads),
             describe_native_value(t.writer_threads, noc.writer_threads),
             describe_native_value(t.entries_per_thread, noc.entries_per_thread),
             describe_native_value(t.dm_batch, noc.dm_batch),
-            describe_native_value(t.tiles_per_cycle, noc.tiles_per_cycle));
+            describe_native_value(t.tiles_per_cycle, noc.tiles_per_cycle),
+            describe_native_value(t.entries_per_thread, noc_dram.entries_per_thread),
+            describe_native_value(t.dm_batch, noc_dram.dm_batch),
+            describe_native_value(t.tiles_per_cycle, noc_dram.tiles_per_cycle),
+            describe_native_value(t.reader_threads, output_borrowed.reader_threads),
+            describe_native_value(t.tiles_per_cycle, output_borrowed.tiles_per_cycle),
+            describe_native_value(t.writer_threads, inputs_borrowed.writer_threads),
+            describe_native_value(t.tiles_per_cycle, inputs_borrowed.tiles_per_cycle),
+            describe_native_value(t.tiles_per_cycle, all_borrowed.tiles_per_cycle));
         return t;
     }();
     return tuning;

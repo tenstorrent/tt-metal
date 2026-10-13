@@ -161,9 +161,9 @@ struct NativeKnob {
 // num_threads. They do not restrict which shapes are admitted: each kernel derives its own share from
 // thread_id and num_threads, so any tile count works and a thread may draw zero tiles. The one R/C/W
 // admission rule is the per-DFB STRIDED ratio, max(p,c) % min(p,c) == 0, which the rule's values always meet.
-// A borrowed shard or slice runs one reader and one writer thread at the compute count; a shard's tiles past
-// the largest multiple of that count go through small owned rings, and a slice is borrowed only when that
-// count divides it.
+// A borrowed input runs one reader thread and a borrowed output one writer thread, beside the compute count; a
+// shard's tiles past the largest multiple of that count go through small owned rings, and a slice is borrowed
+// only when that count divides it.
 struct NativeTuning {
     bool enabled = false;        // TTNN_QSR_NATIVE; 0 and unset both mean OFF
     bool implicit_sync = false;  // NOT consumed, and native_tuning() throws if set: enabling it needs the
@@ -173,6 +173,7 @@ struct NativeTuning {
     NativeKnob writer_threads{"TTNN_QSR_WRITER_THREADS"};    // W
     // Per-thread ring depth; num_entries = this x max(producers, consumers). It must hold two batches of
     // either kind, for double buffering, and be a multiple of each, so that no batch straddles the ring end.
+    // Unset, it follows the batches; set it to hold the depth fixed in a batch A/B.
     NativeKnob entries_per_thread{"TTNN_QSR_ENTRIES_PER_THREAD"};
     // Tiles per barrier in the reader and the writer. Independent of tiles_per_cycle: a ring lets producer
     // and consumer transact at different granularities.
@@ -183,10 +184,11 @@ struct NativeTuning {
 // The user DM cores of a Quasar cluster, which the reader and the writer threads share.
 inline constexpr uint32_t kNativeUserDmCores = 6;
 
-// What a program moves over the NoC. A borrowed operand moves nothing.
+// What a program moves over the NoC, and from where. A borrowed operand moves nothing.
 struct NativeMoves {
     bool inputs = false;  // a or b is read over the NoC
     bool output = false;  // c is written over the NoC
+    bool dram = false;    // a, b or c is in DRAM, interleaved or sharded
 };
 
 // The values one program runs with.
@@ -202,11 +204,12 @@ struct NativeConfig {
 // The compute count of every program: the knob, else the rule's 4.
 uint32_t native_compute_threads(const NativeTuning& tuning);
 
-// Each set knob, else the rule's value for what the program moves. The rule takes the most threads and the
-// largest batches the hardware allows: C = 4; R = C when an input moves, else 1; W = min(C, 6 - R) when the
-// output moves, else 1, so R + W fits the 6 user DM cores; 16 ring entries per thread; DM batch 8; compute
-// batch 8 where R <= C and W <= C, else 1. A borrowed program runs R = W = 1 whatever is set. Above ring
-// stride 1 a compute batch packs wrong until the pack path applies the ring stride per tile.
+// Each set knob, else the rule's value for what the program moves. The rule takes the most threads and, with
+// every operand in L1, the largest batches the hardware allows: C = 4; R = C when an input moves, else 1;
+// W = min(C, 6 - R) when the output moves, else 1, so R + W fits the 6 user DM cores; DM batch 8; compute batch
+// 8 where R <= C and W <= C, else 1; both batches 1 beside a DRAM operand; ring depth two batches per thread, a
+// multiple of each. A borrowed input runs R = 1 and a borrowed output W = 1, whatever is set. Above ring
+// stride 1 only one tile of each compute batch comes out right.
 NativeConfig resolve_native_config(const NativeTuning& tuning, NativeMoves moves);
 
 // "8 (rule)" or "8 (TTNN_QSR_DM_BATCH)": a value the knob or the rule gave, with its source, for messages.
