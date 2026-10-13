@@ -4,6 +4,8 @@ import hashlib
 import json
 import os
 
+import torch
+
 _node = {"id": None}
 
 
@@ -18,8 +20,8 @@ def _wrap(mod):
 
     def passed_test(golden_tensor, res_tensor, *a, **k):
         try:
-            b = res_tensor.contiguous().view(-1).cpu().numpy().tobytes()
-            g = golden_tensor.contiguous().view(-1).cpu().numpy().tobytes()
+            b = res_tensor.detach().cpu().contiguous().view(-1).view(torch.uint8).numpy().tobytes()
+            g = golden_tensor.detach().cpu().contiguous().view(-1).view(torch.uint8).numpy().tobytes()
             with open(os.environ["RESBITS_OUT"], "a") as fh:
                 fh.write(json.dumps({"node": _node["id"], "res": hashlib.sha1(b).hexdigest(), "golden": hashlib.sha1(g).hexdigest(), "n": len(b)}) + "\n")
         except Exception as e:

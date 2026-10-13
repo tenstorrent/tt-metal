@@ -1,0 +1,3 @@
+bits2 main bits.txt - bitsel
+bits2 head bits.txt - bitsel
+bits2 f7 bits.txt - bitsel
