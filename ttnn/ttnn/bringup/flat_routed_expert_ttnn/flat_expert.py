@@ -332,15 +332,16 @@ WEIGHT_LAYOUT_KEYS = (
 )  # fmt: skip
 
 
-def _adopt_legacy(cache_prefix, wdtype, files):
+def _adopt_legacy(cache_prefix, wdtype, files, lay):
     """Caches written before the layout-only key were keyed on the whole plan (capacity, h buffers, ...), so any
     plan change re-packed every layer (~1 h for 42 layers on the CPU). When the layout-keyed files are missing, hard
     link the newest whole-plan-keyed set of this layer (same weights, dtype and mesh directory): the packing depends
-    on the shape and the grid only, and no packing change was made while those keys were in use. Set
-    FLAT_CACHE_NO_ADOPT=1 to repack instead."""
+    on the shape and the grid only, and no packing change was made while those keys were in use. Never for a rotated
+    down layout (dw_rot): every whole-plan-keyed set predates it and packs the down weights one bank per core, so
+    adopting one loads them in the wrong banks (garbage y). Set FLAT_CACHE_NO_ADOPT=1 to repack instead."""
     import os
 
-    if os.environ.get("FLAT_CACHE_NO_ADOPT") or all(Path(f).is_file() for f in files.values()):
+    if lay.get("dw_rot") or os.environ.get("FLAT_CACHE_NO_ADOPT") or all(Path(f).is_file() for f in files.values()):
         return
     stem = Path(cache_prefix)
     sets = {}
@@ -1854,7 +1855,7 @@ class FlatRoutedExpert:
             layout = {k: lay[k] for k in WEIGHT_LAYOUT_KEYS if k in lay and (k != "dw_rot" or lay[k])}
             key = hashlib.sha1(repr((sorted(layout.items()), gids, n_dev)).encode()).hexdigest()[:12]
             files = {n: f"{cache_prefix}.flat.{wdtype}.lay{key}.{n}.tensorbin" for n in names}
-            _adopt_legacy(cache_prefix, wdtype, files)
+            _adopt_legacy(cache_prefix, wdtype, files, lay)
         if isinstance(weights, str):
             assert weights == "fake", weights
             shapes = flat_weight_shapes(H, I, E, lay)
