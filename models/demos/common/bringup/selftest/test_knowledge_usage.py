@@ -77,15 +77,21 @@ def test_finalize_validates_and_traces(tmp_path):
         )
     )
     meta = {"model": "m", "run": "r1", "task": "C.x", "role": "implement", "attempt": 1, "t": "2026-10-13T10:00:00"}
-    problems = usage.finalize(p, meta, [f"{OP}/device/my_op_device_operation.cpp"], ["ls"], repo)
+    visible = "K-1: the op returns its input, so copy first. M-2 is not an entry; M-1 too."
+    problems = usage.finalize(p, meta, [f"{OP}/device/my_op_device_operation.cpp"], ["ls"], repo, visible)
     assert len(problems) == 1 and "Z-9" in problems[0]
     rep = json.loads(p.read_text())
     traced = {u["id"]: u["traced"] for u in rep["used"]}
     assert traced == {"K-1": True, "M-1": False, "K-2": None}  # touched / not touched / method: unchecked
+    assert {u["id"]: u["cited"] for u in rep["used"]} == {"K-1": True, "M-1": True, "K-2": False}
+    assert rep["contradicted"][0]["cited"] is True and rep["cited_only"] == []
     assert rep["missing"] == ["how to X"] and rep["meta"]["task"] == "C.x" and rep["meta"]["head"]
     gone = usage.report_path(repo / "models/demos/m/bringup", "C.y", "implement", 1)
-    assert usage.finalize(gone, {**meta, "task": "C.y"}, [], [], repo) == [f"no knowledge report {gone.name}"]
-    assert json.loads(gone.read_text())["used"] == []  # the stub still counts the step
+    assert usage.finalize(gone, {**meta, "task": "C.y"}, [], [], repo, "per K-2") == [
+        f"no knowledge report {gone.name}"
+    ]
+    stub = json.loads(gone.read_text())
+    assert stub["used"] == [] and stub["cited_only"] == ["K-2"]  # named while working, not reported: still counted
 
 
 def test_tally_flags_contradicts_promotes(tmp_path):
@@ -111,6 +117,7 @@ def test_tally_flags_contradicts_promotes(tmp_path):
     reports += [rep(f"r{n}", touched=[OP + "/x.cpp"]) for n in range(2, 7)]  # K-1 relevant, unused 5 runs
     reports += [rep("r7", used=["M-1"], contradicted=["K-2"])]
     reports += [rep("r8", touched=[OP + "/x.cpp"], model="other")]  # another model: not M-1's run
+    reports[-1]["cited_only"] = ["K-2"]
     t = usage.tally(known, reports, anchors, 5)
     by = {s["id"]: s for s in t["entries"]}
     # a shared entry's runs are every model's: r1-r6 and r8 touched its op (r7 did not)
@@ -118,6 +125,7 @@ def test_tally_flags_contradicts_promotes(tmp_path):
     assert by["M-1"]["uses"] == 2 and "M-1" in t["promote"] and by["M-1"]["relevant_runs"] == 2
     assert t["contradicted"] == ["K-2"] and by["K-2"]["contradictions"][0]["run"] == "r7"
     assert by["K-2"]["relevant_runs"] == 8  # a shared entry without anchors is relevant to every run
+    assert by["K-2"]["uses"] == 1 and by["K-2"]["unreported"] == 1
     assert t["missing_topics"] == [("topic", 8)]
     assert "## Contradicted" in usage.markdown(t)
 
@@ -133,9 +141,11 @@ def test_transcript_touches(tmp_path):
                 ev("Read", {"file_path": str(tmp_path / "models/demos/m/tt/mhc.py")}),
                 ev("Grep", {"pattern": "x", "path": "ttnn/ttnn/bringup/sdpa"}),
                 ev("Bash", {"command": "pytest x"}),
+                ev("Edit", {"file_path": "BREADCRUMBS.md", "new_string": "per K-7"}),
                 "not json",
             ]
         )
     )
-    paths, cmds = usage.transcript_touches(log, tmp_path)
-    assert paths == ["models/demos/m/tt/mhc.py", "ttnn/ttnn/bringup/sdpa"] and cmds == ["pytest x"]
+    paths, cmds, text = usage.transcript_touches(log, tmp_path)
+    assert paths == ["BREADCRUMBS.md", "models/demos/m/tt/mhc.py", "ttnn/ttnn/bringup/sdpa"] and cmds == ["pytest x"]
+    assert "per K-7" in text

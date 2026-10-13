@@ -875,3 +875,9 @@ first A/B then measured HiFi4 twice (the agent had put the default back on the o
   and the unused streak; flagged at 5 (owner), model entries used in 2+ runs are promotion candidates, missing topics
   grouped. stale.py gets a `contradicted` status (a report's contradiction after the entry's Seen at), staleness.md
   verifies it first. The run-end curation (skill/bringup) acts on usage.md; both dashboards get a knowledge panel.
+- Cite at use (owner): agents name an entry's id where it decides something (their reasoning, messages, BREADCRUMBS)
+  and write a contradiction into the report as soon as they find it. Thinking is not in the transcript, but naming the
+  id there makes the end-of-step report's recall better; ids in the visible text (messages, text written to files)
+  mark the reported use `cited`, and cited ids missing from the report are kept as `cited_only` (counted as uses,
+  `unreported`). The orchestrator prints `KNOWLEDGE CONTRADICTED <id>: <evidence>` when the step ends and records
+  the ids on the agent run; the supervisor relays it to the owner at once.
