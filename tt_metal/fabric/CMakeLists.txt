@@ -159,11 +159,7 @@ set_source_files_properties(
 
 # --- fabric: remaining runtime protos + link the topology lib -------
 add_custom_target(fabric_generated_protos DEPENDS ${FABRIC_GENERATED_PROTO_SRCS})
-add_dependencies(
-    fabric
-    fabric_generated_protos
-    scaleout_topology
-)
+add_dependencies(fabric fabric_generated_protos)
 if(TARGET all_generated_files)
     add_dependencies(all_generated_files fabric_generated_protos)
 endif()
