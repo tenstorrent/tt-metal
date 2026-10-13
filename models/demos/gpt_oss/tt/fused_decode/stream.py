@@ -12,8 +12,9 @@ These ttnn.generic_op ops (kernels/stream_*.cpp) stream the weights per DRAM ban
   in large NOC packets (transaction-id pipelined, one column in flight ahead of compute). Expert weights are stored
   expert-major, so the columns of one routed expert are contiguous too.
 * Bias: every column carries one extra K tile whose first NBIAS rows hold the BF16 bias as a sum of residual terms
-  rounded to the weight format (q1 = q(b), q2 = q(b - q1), ...); the activation's extra 1x32 tile holds the matching
-  multipliers (ones, or the routing score for the expert down projection), so the matmul adds the bias.
+  rounded to BFP4 (q1 = q(b), q2 = q(b - q1), ...), stored exactly in either weight format (bias_tiles); the
+  activation's extra 1x32 tile holds the matching multipliers (ones, or the routing score for the expert down
+  projection), so the matmul adds the bias.
 * Compute: worker cores next to each DRAM bank run custom_mm with 1x32 activation tiles (LoFi, FP32 accumulation).
   The activation is the flat normed hidden of the layer boundary (fused_decode/boundary.py: value h at byte 2 h, so its
   32-value groups are the 1x32 tiles, read in one piece), or for o_proj the SDPA output gathered head by head.
@@ -34,7 +35,7 @@ import ttnn
 from .config import DECODE_BOUNDARY_PREFETCH_ALL
 
 KERNEL_DIR = Path(__file__).parent / "kernels"
-NBIAS = 4  # residual terms carrying a bias (BFP4: relative error ~ 8^-NBIAS of the 16-value group maximum)
+NBIAS = 4  # residual terms carrying a bias (BFP4 terms: relative error ~ 8^-NBIAS of the 16-value group maximum)
 TILE = ttnn.TILE_SIZE
 BFP4_TILE_BYTES = 576
 BFP8_TILE_BYTES = 1088
@@ -54,7 +55,14 @@ def _bfp4_round(tiles):
 
 
 def bias_tiles(bias):
-    """[..., 32] BF16 bias rows -> [..., 32, 32] tiles whose first NBIAS rows sum (in BFP4) to the bias."""
+    """[..., 32] BF16 bias rows -> [..., 32, 32] tiles whose first NBIAS rows sum (in BFP4) to the bias.
+
+    The terms are rounded to BFP4 whatever the weight format (BFP4 or BFP8) that stores them:
+    * a BFP4 value (3-bit block mantissa, one exponent per 16-value row half) is exact in BFP8 (7-bit block
+      mantissa, same grouping), so the stored terms are the same in both formats;
+    * custom_mm runs at LoFi only and unpacks the weights (in1) into SrcA, whose LoFi multiplier keeps 1 hidden + 4
+      mantissa bits: a BFP4 term (<= 3 significant bits) passes exactly, a BFP8-rounded term (up to 7) would be
+      truncated, breaking the residual chain. NBIAS does not change the cost (the bias is one K tile either way)."""
     lead = bias.shape[:-1]
     b = bias.reshape(-1, TILE).float()
     out = torch.zeros(b.shape[0], TILE, TILE)
@@ -159,6 +167,16 @@ def _page_bytes(tiles, tile_bytes):
     return max(d for d in range(1, tiles + 1) if tiles % d == 0 and d * tile_bytes <= MAX_PACKET_BYTES) * tile_bytes
 
 
+def _segment_packets(tiles, tile_bytes):
+    """A `tiles`-tile block read as few NOC packets as possible, of whole tiles and near-equal size:
+    (packet bytes, full packets, tail bytes), tail < packet (0: every packet is full)."""
+    n = -(-tiles * tile_bytes // MAX_PACKET_BYTES)
+    while -(-tiles // n) * tile_bytes > MAX_PACKET_BYTES:
+        n += 1
+    pk = -(-tiles // n)
+    return pk * tile_bytes, tiles // pk, (tiles % pk) * tile_bytes
+
+
 class _BankStreamOp:
     """Worker placement shared by the streaming ops: `readers` cores per DRAM bank (the first `active_banks` banks),
     starting at the bank's optimal NOC0 reader core and growing along its row, each with a NOC virtual channel
@@ -240,10 +258,16 @@ class _BankStreamOp:
 class ExpertGateUpStream(_BankStreamOp):
     """(x, ids, scores, weights, act) -> act. x: the flat BF16 normed hidden (fused_decode/boundary.py); ids / scores:
     UINT16 / BF16 row-major buffers whose first k entries are the routed experts and their softmax weights; act: [k,
-    I_pad] BF16 row-major L1, receives w_e * SwiGLU(gate_e, up_e) per routed expert e."""
+    I_pad] BF16 row-major L1, receives w_e * SwiGLU(gate_e, up_e) per routed expert e. weight_dtype: BFP4 or BFP8
+    (the dtype of the stream_gate_up_layout weight tensor)."""
 
-    def __init__(self, mesh_device, hidden, inter_pad, num_sel, swiglu_limit, alpha, readers):
+    def __init__(
+        self, mesh_device, hidden, inter_pad, num_sel, swiglu_limit, alpha, readers, weight_dtype=ttnn.bfloat4_b
+    ):
         super().__init__(mesh_device, readers)
+        assert weight_dtype in (ttnn.bfloat4_b, ttnn.bfloat8_b), f"expert weight dtype {weight_dtype}"
+        self.weight_dtype = weight_dtype
+        self.tile_bytes = TILE_BYTES[weight_dtype]
         self.kx = hidden // TILE
         self.kt = self.kx + 1
         self.num_sel = num_sel
@@ -252,9 +276,10 @@ class ExpertGateUpStream(_BankStreamOp):
         assert self.P % readers == 0, f"{self.P} pairs per bank do not split over {readers} readers"
         self.pairs = self.P // readers
         self.limit, self.alpha = swiglu_limit, alpha
-        self.col_bytes = self.kt * BFP4_TILE_BYTES
+        self.col_bytes = self.kt * self.tile_bytes
         self.expert_stride = 2 * self.P * self.col_bytes
-        self.page_bytes = _page_bytes(self.kt, BFP4_TILE_BYTES)
+        # Whole-tile NOC packets dividing a column (kt = 91: 13 tiles, 7488 B in BFP4 / 14144 B in BFP8, 7 per column).
+        self.page_bytes = _page_bytes(self.kt, self.tile_bytes)
 
     def weight_rows(self, num_experts):
         return num_experts * 2 * self.P * self.kt * TILE
@@ -263,7 +288,8 @@ class ExpertGateUpStream(_BankStreamOp):
         cb_x, cb_w, cb_idx, cb_scr, cb_act = 0, 1, 2, 3, 16
         cbs = [
             self._cb(cb_x, ttnn.bfloat16, TINY_BYTES, self.kt, tiny=True),
-            self._cb(cb_w, ttnn.bfloat4_b, BFP4_TILE_BYTES, 3 * self.kt),
+            # Triple-buffered weight columns: 3 * 91 tiles = 157 KB (BFP4) / 297 KB (BFP8) of L1 per core.
+            self._cb(cb_w, self.weight_dtype, self.tile_bytes, 3 * self.kt),
             self._cb(cb_idx, ttnn.uint16, 64, 1),
             self._cb(cb_scr, ttnn.bfloat16, 64, 1),
             self._cb(cb_act, ttnn.bfloat16, TINY_BYTES, 4, tiny=True),
@@ -283,7 +309,7 @@ class ExpertGateUpStream(_BankStreamOp):
                 bank * self.P + r * self.pairs,
                 scores.buffer_address(),
             ]
-        reader_ct = [cb_w, cb_idx, self.kt, 2 * self.pairs, self.num_sel, self.expert_stride, BFP4_TILE_BYTES]
+        reader_ct = [cb_w, cb_idx, self.kt, 2 * self.pairs, self.num_sel, self.expert_stride, self.tile_bytes]
         reader_ct += [self.page_bytes, 64] + ttnn.TensorAccessorArgs(ids).get_compile_time_args()
         writer_ct = [
             cb_x,
@@ -308,10 +334,13 @@ class ExpertDownStream(_BankStreamOp):
     """(act, ids, scores, weights, out) -> out. act: [k, I_pad] BF16 row-major (score-weighted SwiGLU outputs);
     out: the flat BF16 partial sum (fused_decode/boundary.py: value h at byte 2 h) receives
     sum_e w_e * (act_e @ Wd_e + bd_e) (one matmul per output column over the K = k segments [w_e * act_e | w_e] of
-    the routed experts)."""
+    the routed experts). weight_dtype: BFP4 or BFP8 (the dtype of the stream_down_layout weight tensor)."""
 
-    def __init__(self, mesh_device, hidden, inter_pad, num_sel, readers):
+    def __init__(self, mesh_device, hidden, inter_pad, num_sel, readers, weight_dtype=ttnn.bfloat4_b):
         super().__init__(mesh_device, readers)
+        assert weight_dtype in (ttnn.bfloat4_b, ttnn.bfloat8_b), f"expert weight dtype {weight_dtype}"
+        self.weight_dtype = weight_dtype
+        self.tile_bytes = TILE_BYTES[weight_dtype]
         self.hidden = hidden
         self.num_sel = num_sel
         self.inter_pad = inter_pad
@@ -319,8 +348,11 @@ class ExpertDownStream(_BankStreamOp):
         self.C = columns_per_bank(hidden, self.banks)
         assert self.C % readers == 0, f"{self.C} columns per bank do not split over {readers} readers"
         self.cols = self.C // readers
-        self.seg_bytes = self.seg_tiles * BFP4_TILE_BYTES
-        assert self.seg_bytes <= MAX_PACKET_BYTES, "one expert column segment must fit one NOC packet"
+        self.seg_bytes = self.seg_tiles * self.tile_bytes
+        # NOC packets per (expert, column) segment (seg_tiles = 25): one of 14400 B in BFP4; in BFP8 (27200 B, over
+        # the 16 KB burst) one of 13 tiles (14144 B) + a 12-tile tail (13056 B).
+        self.packet_bytes, self.full_packets, self.tail_bytes = _segment_packets(self.seg_tiles, self.tile_bytes)
+        assert self.full_packets * self.packet_bytes + self.tail_bytes == self.seg_bytes
         self.expert_stride = self.C * self.seg_bytes
 
     def weight_rows(self, num_experts):
@@ -333,7 +365,8 @@ class ExpertDownStream(_BankStreamOp):
         kt = self.num_sel * self.seg_tiles
         cbs = [
             self._cb(cb_in0, ttnn.bfloat16, TINY_BYTES, kt, tiny=True),
-            self._cb(cb_w, ttnn.bfloat4_b, BFP4_TILE_BYTES, 3 * kt),
+            # Triple-buffered column blocks: 3 * 100 tiles = 173 KB (BFP4) / 326 KB (BFP8) of L1 per core.
+            self._cb(cb_w, self.weight_dtype, self.tile_bytes, 3 * kt),
             self._cb(cb_idx, ttnn.uint16, 64, 1),
             self._cb(cb_scr, ttnn.bfloat16, 128, 1),
             self._cb(cb_out, ttnn.bfloat16, TINY_BYTES, 4, tiny=True),
@@ -353,8 +386,9 @@ class ExpertDownStream(_BankStreamOp):
                 out.buffer_address(),
                 bank * self.C + r * self.cols,
             ]
-        reader_ct = [cb_w, cb_idx, self.seg_tiles, self.cols, self.num_sel, self.expert_stride, BFP4_TILE_BYTES]
+        reader_ct = [cb_w, cb_idx, self.seg_tiles, self.cols, self.num_sel, self.expert_stride, self.tile_bytes]
         reader_ct += ttnn.TensorAccessorArgs(ids).get_compile_time_args()
+        reader_ct += [self.packet_bytes, self.tail_bytes]
         writer_ct = [cb_in0, cb_out, cb_scr, self.seg_tiles, self.num_sel, NBIAS, self.cols, self.hidden // TILE]
         writer_ct += [self.inter_pad * 2]
         for t in (act, scores, out):

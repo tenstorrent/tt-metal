@@ -108,19 +108,29 @@ class CCLManager:
             return (self.get_decode_boundary(hidden_size), site)
         return None
 
-    def get_decode_expert_stream(self, hidden, inter_pad, top_k, swiglu_limit, alpha):
-        """Routed-expert stream ops (fused_decode/stream.py) and their persistent buffers, shared by every decoder
-        layer's decode path: the [k, I_pad] BF16 row-major activation and the flat partial sum (get_decode_partial)."""
-        key = (hidden, inter_pad, top_k)
+    def get_decode_expert_stream(self, hidden, inter_pad, top_k, swiglu_limit, alpha, weight_dtype=ttnn.bfloat4_b):
+        """Routed-expert stream ops (fused_decode/stream.py) for expert weights of weight_dtype (BFP4 / BFP8) and their
+        persistent buffers, shared by every decoder layer's decode path: the [k, I_pad] BF16 row-major activation and
+        the flat partial sum (get_decode_partial)."""
+        key = (hidden, inter_pad, top_k, weight_dtype)
         if key not in self._decode_expert_stream:
             from .fused_decode.config import DOWN_STREAM_READERS, GATE_UP_STREAM_READERS
             from .fused_decode.stream import ExpertDownStream, ExpertGateUpStream
 
             self._decode_expert_stream[key] = {
                 "gate_up": ExpertGateUpStream(
-                    self.mesh_device, hidden, inter_pad, top_k, swiglu_limit, alpha, readers=GATE_UP_STREAM_READERS
+                    self.mesh_device,
+                    hidden,
+                    inter_pad,
+                    top_k,
+                    swiglu_limit,
+                    alpha,
+                    readers=GATE_UP_STREAM_READERS,
+                    weight_dtype=weight_dtype,
                 ),
-                "down": ExpertDownStream(self.mesh_device, hidden, inter_pad, top_k, readers=DOWN_STREAM_READERS),
+                "down": ExpertDownStream(
+                    self.mesh_device, hidden, inter_pad, top_k, readers=DOWN_STREAM_READERS, weight_dtype=weight_dtype
+                ),
                 "act": self._persistent_zeros((top_k, inter_pad), ttnn.bfloat16, ttnn.L1_MEMORY_CONFIG),
                 "partial": self.get_decode_partial(hidden),
             }

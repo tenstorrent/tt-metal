@@ -98,12 +98,17 @@ class Experts:
         self.decode_stream = None
         if indexed_decode:
             assert mesh_config.decode.tp > 1 and mesh_config.decode.ep == 1, "fused decode needs TP > 1, EP == 1"
+            from ..fused_decode.config import expert_decode_weight_dtype
+
+            # The decode copy has its own dtype (fused_decode/config.py: GPT_OSS_FUSED_EXPERT_DTYPE, BFP4 by default);
+            # prefill keeps weight_dtype.
+            decode_weight_dtype = expert_decode_weight_dtype()
             self.decode_weights = load_decode_expert_weights(
                 mesh_device=mesh_device,
                 config=config,
                 state_dict=state_dict,
                 mesh_config=mesh_config,
-                weight_dtype=weight_dtype,
+                weight_dtype=decode_weight_dtype,
                 tensor_cache_path=tensor_cache_path,
             )
             self.decode_stream = ccl_manager.get_decode_expert_stream(
@@ -112,6 +117,7 @@ class Experts:
                 config.num_experts_per_tok,
                 config.swiglu_limit,
                 config.alpha,
+                weight_dtype=decode_weight_dtype,
             )
 
         # For backward compatibility

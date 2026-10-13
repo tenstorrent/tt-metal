@@ -46,7 +46,9 @@ on every device; `boundary.py` documents this contract.
 ## Weights
 
 The streamed ops read decode-only copies of the QKV, o_proj, router, expert and LM-head weights (about +3.2 GB
-of DRAM per device), stored per DRAM bank. They are written to the ttnn weight cache on the first build with HF
+of DRAM per device), stored per DRAM bank. The routed-expert copies are BFP4 by default; `GPT_OSS_FUSED_EXPERT_DTYPE=bfp8`
+stores and streams them as BFP8 instead (exact for the checkpoint's MXFP4 experts; about +2.7 GB more per device and
+~0.7 ms per token more on a QuietBox 2), cached under their own names. They are written to the ttnn weight cache on the first build with HF
 weights. `ModelArgs.mark_weight_cache_complete` records `fused_decode_weights` so a cache built without them
 is reloaded (or set `GPT_OSS_FORCE_MODEL_LOAD=1`).
 

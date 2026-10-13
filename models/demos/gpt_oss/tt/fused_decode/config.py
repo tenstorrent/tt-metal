@@ -10,6 +10,8 @@ projections are the DRAM-streaming ops of fused_decode/stream.py, which read the
 their results straight into the next op's layout (Q/K/V heads, the flat partial sum, the routed ids / scores).
 """
 
+import os
+
 import ttnn
 
 # Smallest compute grid the fused decode layout was validated on (residual / all-reduce 10x3, SDPA 8x8, the stream ops'
@@ -67,10 +69,32 @@ def fused_decode_supported(mesh_device, mesh_config, hf_config, use_throughput_e
 # Decode precision policy (decode-only weight copies; prefill keeps its own weights). The streamed matmuls run
 # custom_mm at LoFi with FP32 accumulation. Measured against HF reference logits with real weights: BFP4 QKV fails the
 # accuracy check, BFP4 o_proj passes it but costs 7 points of top-1; BFP8 / BF16 router weights rank alike; experts
-# are BFP4.
+# are BFP4 by default (expert_decode_weight_dtype).
 QKV_DECODE_WEIGHT_DTYPE = ttnn.bfloat8_b
 OPROJ_DECODE_WEIGHT_DTYPE = ttnn.bfloat8_b
 ROUTER_DECODE_WEIGHT_DTYPE = ttnn.bfloat8_b
+
+# Routed-expert decode weights (the decode-only copies streamed by ExpertGateUpStream / ExpertDownStream):
+# GPT_OSS_FUSED_EXPERT_DTYPE = "bfp4" (default) or "bfp8". The checkpoint's MXFP4 experts are exact in BFP8 (BFP4
+# rounds them) at 1.9x the streamed expert bytes. Each dtype's copies are cached under their own names.
+ENV_FUSED_EXPERT_DTYPE = "GPT_OSS_FUSED_EXPERT_DTYPE"
+EXPERT_DECODE_WEIGHT_DTYPES = {"bfp4": ttnn.bfloat4_b, "bfp8": ttnn.bfloat8_b}
+EXPERT_DECODE_WEIGHT_DTYPE_DEFAULT = "bfp4"
+
+
+def expert_decode_weight_dtype_name(name=None):
+    """The expert decode weight dtype name: `name` if given, else GPT_OSS_FUSED_EXPERT_DTYPE, else the default."""
+    if name is None:
+        name = os.environ.get(ENV_FUSED_EXPERT_DTYPE, "").strip().lower() or EXPERT_DECODE_WEIGHT_DTYPE_DEFAULT
+    if name not in EXPERT_DECODE_WEIGHT_DTYPES:
+        raise ValueError(f"{ENV_FUSED_EXPERT_DTYPE}={name!r}: expected one of {sorted(EXPERT_DECODE_WEIGHT_DTYPES)}")
+    return name
+
+
+def expert_decode_weight_dtype(name=None):
+    """The ttnn dtype of the routed-expert decode weights (see expert_decode_weight_dtype_name)."""
+    return EXPERT_DECODE_WEIGHT_DTYPES[expert_decode_weight_dtype_name(name)]
+
 
 # Streamed-op worker cores per DRAM bank (swept on the full model): dense projections are bank-bandwidth bound
 # at 1; the routed gate|up (3 column pairs per bank) and down (12 columns per bank) gain from 3 and 2.

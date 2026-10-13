@@ -7,6 +7,7 @@ A 2-layer model (layer 0 sliding-window, layer 1 full attention) with random wei
 token at a time through the fused decode path: decode inputs op, layer boundaries (fabric all-reduce + residual add +
 RMSNorm), streamed QKV / o_proj / router / routed experts, and the streamed LM head with folded logits. Every step's
 logits, unfolded on the host by Model.process_output_decode, are compared with the reference logits at that position.
+Runs once per routed-expert decode weight format (GPT_OSS_FUSED_EXPERT_DTYPE: BFP4, the default, and BFP8).
 
 Run on a QuietBox 2 (Blackhole 1x4):
     HF_MODEL=models/demos/gpt_oss/configs/gpt-oss-20b pytest models/demos/gpt_oss/tests/unit/test_fused_decode.py
@@ -36,8 +37,9 @@ PCC_THRESHOLD = 0.95
     os.environ.get("CI") == "true",
     reason="~45 s on a QuietBox 2; the CI gpt-oss-20b unit job has a 5-minute budget. Run locally on Blackhole 1x4.",
 )
+@pytest.mark.parametrize("expert_dtype", ["bfp4", "bfp8"])
 @parametrize_mesh_with_fabric([(1, 4)])
-def test_fused_decode_matches_reference(mesh_device, device_params, reset_seeds):
+def test_fused_decode_matches_reference(mesh_device, device_params, reset_seeds, expert_dtype, monkeypatch):
     from transformers.models.gpt_oss.modeling_gpt_oss import GptOssForCausalLM
 
     from models.demos.gpt_oss.config import MeshConfig, ModeConfig
@@ -47,6 +49,7 @@ def test_fused_decode_matches_reference(mesh_device, device_params, reset_seeds)
 
     if not is_blackhole():
         pytest.skip("The fused decode path runs on Blackhole only")
+    monkeypatch.setenv("GPT_OSS_FUSED_EXPERT_DTYPE", expert_dtype)
 
     setup = TestFactory.setup_test(mesh_device, use_real_weights=False)
     config = setup["config"]
@@ -73,6 +76,13 @@ def test_fused_decode_matches_reference(mesh_device, device_params, reset_seeds)
     )
     if not model.fused_decode:
         pytest.skip(f"The fused decode path is not supported on this device / mesh {mesh_shape}")
+    want_dtype = {"bfp4": ttnn.bfloat4_b, "bfp8": ttnn.bfloat8_b}[expert_dtype]
+    for layer in model.layers:
+        experts = layer.mlp.experts
+        assert experts.decode_weights.gate_up_stream.dtype == want_dtype
+        assert experts.decode_weights.down_stream.dtype == want_dtype
+        assert experts.decode_stream["gate_up"].weight_dtype == want_dtype
+        assert experts.decode_stream["down"].weight_dtype == want_dtype
 
     input_ids = torch.randint(0, config.vocab_size, (1, DECODE_STEPS))
     with torch.no_grad():
@@ -92,5 +102,5 @@ def test_fused_decode_matches_reference(mesh_device, device_params, reset_seeds)
         logits = model.process_output_decode(tt_logits.cpu(), B=1).reshape(-1)
         assert logits.shape[-1] == config.vocab_size
         passing, pcc = comp_pcc(reference_logits[pos], logits.float(), PCC_THRESHOLD)
-        logger.info(f"position {pos}: logits PCC {pcc}")
+        logger.info(f"{expert_dtype} experts, position {pos}: logits PCC {pcc}")
         assert passing, f"position {pos}: logits PCC {pcc} < {PCC_THRESHOLD}"

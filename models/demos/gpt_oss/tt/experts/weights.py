@@ -236,7 +236,9 @@ def load_decode_expert_weights(
             for w, b in zip(torch.chunk(down, tp, -2), torch.chunk(down_bias, tp, -1))
         ]
 
-    suffix = f"decode_i{inter_pad}_b{banks}_nb{NBIAS}"
+    # BFP4 copies keep their original cache names; other dtypes get their own.
+    dtype_tag = {ttnn.bfloat4_b: "", ttnn.bfloat8_b: "_bfp8"}[weight_dtype]
+    suffix = f"decode_i{inter_pad}_b{banks}_nb{NBIAS}{dtype_tag}"
     rows = {
         "gate_up": E * 2 * inter_pad // tile // banks * (H // tile + 1) * tile,
         "down": E * columns_per_bank(H, banks) * (inter_pad // tile + 1) * tile,

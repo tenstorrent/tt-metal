@@ -335,7 +335,8 @@ class ModelArgs:
 
         fused_decode: the model about to be built uses the fused decode layers (fused_decode/), whose
         decode-only weights are only written by a fused build; a marker from a non-fused build of the same
-        model (e.g. batch > 1 on the same mesh) does not cover them."""
+        model (e.g. batch > 1 on the same mesh) does not cover them, nor does one whose decode-only expert copies have
+        another dtype (fused_decode/config.py: GPT_OSS_FUSED_EXPERT_DTYPE)."""
         if os.getenv("GPT_OSS_FORCE_MODEL_LOAD") == "1":
             return False
         cache_path = self.weight_cache_path(dtype)
@@ -356,8 +357,16 @@ class ModelArgs:
             return False
         if fused_decode and meta.get("fused_decode_weights") != self.FUSED_DECODE_WEIGHTS_VERSION:
             return False
+        if fused_decode and meta.get("fused_decode_expert_dtype", "bfp4") != self._fused_decode_expert_dtype():
+            return False
         # Belt-and-suspenders: the cache dir must still actually hold tensor files.
         return any(cache_path.glob("*.tensorbin"))
+
+    @staticmethod
+    def _fused_decode_expert_dtype():
+        from models.demos.gpt_oss.tt.fused_decode.config import expert_decode_weight_dtype_name
+
+        return expert_decode_weight_dtype_name()
 
     def mark_weight_cache_complete(self, dtype, fused_decode=False):
         """Record that the ttnn weight cache for this (model, dtype, mesh shape) was fully
@@ -373,6 +382,7 @@ class ModelArgs:
                         "n_layers": self.n_layers,
                         "dtype": str(dtype),
                         "fused_decode_weights": self.FUSED_DECODE_WEIGHTS_VERSION if fused_decode else False,
+                        "fused_decode_expert_dtype": self._fused_decode_expert_dtype() if fused_decode else None,
                     }
                 )
             )
