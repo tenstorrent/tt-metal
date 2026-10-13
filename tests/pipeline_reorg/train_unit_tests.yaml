@@ -58,12 +58,12 @@
   cmd: |
     mkdir -p generated/test_reports
     rc=0
-    TT_MESH_GRAPH_DESC_PATH=${TT_METAL_RUNTIME_ROOT}/tt-train/configs/mgd/bh_1_2_line_line.textproto build/tt-train/tests/ttml_tests --gtest_output=xml:generated/test_reports/ctest_report.xml --gtest_filter="-Galaxy*" || rc=$?
+    TT_METAL_WATCHER=2 TT_METAL_WATCHER_APPEND=1 TT_METAL_WATCHER_NOINLINE=1 TT_METAL_WATCHER_DISABLE_ETH=1 TT_MESH_GRAPH_DESC_PATH=${TT_METAL_RUNTIME_ROOT}/tt-train/configs/mgd/bh_1_2_line_line.textproto build/tt-train/tests/ttml_tests --gtest_output=xml:generated/test_reports/ctest_report.xml --gtest_filter="-Galaxy*" || rc=$?
     # TT_MESH_GRAPH_DESC_PATH=${TT_METAL_RUNTIME_ROOT}/tt-train/configs/mgd/bh_galaxy_8_4_torus_x.textproto build/tt-train/tests/ttml_tests --gtest_output=xml:generated/test_reports/ctest_report_galaxy.xml --gtest_filter="Galaxy*" || rc=$?
     exit $rc
   skus:
     bh_galaxy:
-      timeout: 45
+      timeout: 70
   owner_id: U07K00A281X # Kevin Wu
   team: train
   budget_type: unit

@@ -223,6 +223,13 @@ jobs:
           path: /work/generated/test_reports
           prefix: "test_reports_"
 
+      - uses: tenstorrent/tt-metal/.github/actions/upload-artifact-with-job-uuid@main
+        timeout-minutes: 10
+        if: always() && hashFiles('docker-job/generated/watcher/**') != ''
+        with:
+          path: /work/generated/watcher
+          prefix: "watcher_"
+
       - name: 🤖 AI job summary
         if: ${{ !cancelled() }}
         continue-on-error: true
