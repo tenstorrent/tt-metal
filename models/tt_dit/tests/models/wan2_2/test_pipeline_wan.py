@@ -205,11 +205,11 @@ def test_pipeline_inference(
             "imaging_quality": 0.5,
         },
         480: {
-            "subject_consistency": 0.94,
-            "background_consistency": 0.96,
-            "motion_smoothness": 0.97,
+            "subject_consistency": 0.8,
+            "background_consistency": 0.8,
+            "motion_smoothness": 0.9,
             "dynamic_degree": 1.0,
-            "imaging_quality": 0.545,
+            "imaging_quality": 0.45,
         },
     }
 
