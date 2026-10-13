@@ -503,6 +503,8 @@ class TPGatedDeltaNet:
                     self.cfg,
                     self.args.ccl_topology(),
                     out_memory_config=_proj_mc,
+                    act_bf8=getattr(self.args, "prefill_agmm_bf8", False),
+                    config_override=tpc.agmm_config_override(self.args, x.shape[-2], "gdn_in"),
                 )
                 qkvzab = ttnn.reshape(qkvzab, (1, S, qkvzab.shape[-1]))
             elif getattr(self.args, "proj_1d_decode", False) and S <= tpc.TILE_SIZE:
@@ -572,8 +574,9 @@ class TPGatedDeltaNet:
         if carry and self.conv_carry is None:
             self.reset_state()
 
-        # Prefill qkvzab in L1: keeps proj + q/k/v/z/a/b resident for conv+gate prep.
-        qkv, z, a, b = self._project_qkvzab(x, T, out_mc=ttnn.L1_MEMORY_CONFIG)
+        # Prefill qkvzab in L1 (DRAM above S=2048): keeps proj + q/k/v/z/a/b resident for conv+gate prep.
+        _L1 = tpc.prefill_act_mem(T, ttnn.L1_MEMORY_CONFIG)
+        qkv, z, a, b = self._project_qkvzab(x, T, out_mc=_L1)
 
         # Causal conv + SiLU; conv_state = previous chunk's last K-1 inputs (None/zero from scratch).
         # q/k/v/beta/g stay DRAM — alive across chunk kernel; L1 crashes it.
@@ -600,7 +603,7 @@ class TPGatedDeltaNet:
                 self.K,
                 self.mesh,
                 # Conv in L1 (output freed before chunk kernel; new_state lands in DRAM internally)
-                memory_config=ttnn.L1_MEMORY_CONFIG,
+                memory_config=_L1,
                 conv_state=_cstate,
                 weight_taps=tw["conv_taps"],
                 bias_dev=None,
@@ -700,7 +703,6 @@ class TPGatedDeltaNet:
                 self._conv_win_stale = True
             ttnn.deallocate(conv_new_state)
         # Gated RMSNorm + SiLU(z); norm/flatten in L1, gated output in DRAM for out-proj
-        _L1 = ttnn.L1_MEMORY_CONFIG
         if self._gdn_fuse_out:
             # Fuse adapter relayout with per-head rms_norm + head-flatten.
             # TILE-native head->token relayout (transpose + fold), dropping the
@@ -724,6 +726,7 @@ class TPGatedDeltaNet:
             ttnn.deallocate(out_f)
             ttnn.deallocate(z)
             # TODO(#57458): switch to the op's barrier_semaphore once it is wired up (see tpc.agmm_gather_buffer).
+            _bf8 = getattr(self.args, "prefill_agmm_bf8", False)
             out = tpc.all_gather_matmul_prefill(
                 gated,
                 tw["out_colpar"],
@@ -731,7 +734,9 @@ class TPGatedDeltaNet:
                 self.cfg,
                 self.args.ccl_topology(),
                 out_memory_config=_L1,
-                persistent_output_buffer=tpc.agmm_gather_buffer(self.tt_ccl, gated),
+                persistent_output_buffer=tpc.agmm_gather_buffer(self.tt_ccl, gated, act_bf8=_bf8),
+                act_bf8=_bf8,
+                config_override=tpc.agmm_config_override(self.args, gated.shape[-2], "gdn_out"),
             )
             ttnn.deallocate(gated)
             if return_state:
@@ -763,6 +768,7 @@ class TPGatedDeltaNet:
             dim=3,
             topology=self.args.ccl_topology(),
             memory_config=ttnn.DRAM_MEMORY_CONFIG,
+            **tpc.prefill_rs_kwargs(self.args),
         )
         if return_state:
             return out, captured[0], captured[1]
@@ -1151,6 +1157,7 @@ class TPGatedDeltaNet:
             dim=3,
             topology=self.args.ccl_topology(),
             memory_config=ttnn.DRAM_MEMORY_CONFIG,
+            **tpc.prefill_rs_kwargs(self.args),
         )
 
     def forward_decode(self, x):

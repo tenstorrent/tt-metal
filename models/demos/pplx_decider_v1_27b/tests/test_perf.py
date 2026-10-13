@@ -12,7 +12,7 @@ import torch
 from loguru import logger
 
 from models.common.utility_functions import comp_pcc, run_for_blackhole
-from models.demos.pplx_decider_v1_27b.tests.common import parametrize_mesh_traced
+from models.demos.pplx_decider_v1_27b.tests.common import model_mesh, parametrize_mesh_traced
 from models.demos.pplx_decider_v1_27b.tt.model import PplxDecider
 
 PROMPT_LENGTHS = (512, 1024, 2048, 3072, 4096)
@@ -54,7 +54,7 @@ def _time_ms(decider, input_ids):
 @pytest.mark.timeout(1800)
 @parametrize_mesh_traced()
 def test_pplx_decider_latency(mesh_device):
-    decider = PplxDecider.from_pretrained(mesh_device)
+    decider = PplxDecider.from_pretrained(model_mesh(mesh_device))
     inputs = {t: _build_input_ids(decider, t) for t in PROMPT_LENGTHS}
 
     eager, eager_logits = {}, {}

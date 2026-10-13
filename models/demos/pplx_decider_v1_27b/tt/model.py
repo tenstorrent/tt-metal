@@ -8,6 +8,7 @@ import torch
 
 import ttnn
 from models.demos.blackhole.qwen36.tt.model import Qwen36Model
+from models.demos.pplx_decider_v1_27b.tt.bucket_trace import BucketPrefillTraces
 from models.demos.pplx_decider_v1_27b.tt.decision import answer, decision_probabilities, options, render_input_ids
 from models.demos.pplx_decider_v1_27b.tt.model_config import PplxDeciderModelArgs
 
@@ -24,6 +25,7 @@ class PplxDecider:
         self.tokenizer = args.tokenizer
         self.decision_config = args.decision_config
         self.max_seq_len = max_seq_len
+        self.bucket_traces = None
 
         # 32-aligned block count is required by the flexible SDPA.
         num_blocks = math.ceil(((max_seq_len // KV_BLOCK_SIZE) + 8) / 32) * 32
@@ -42,17 +44,32 @@ class PplxDecider:
         return cls(mesh_device, args, model, max_seq_len)
 
     def capture_prefill_trace(self):
-        """Trace full 2048-token chunks and precompile all masked buckets; prompts under 2048 tokens and the tail run eagerly."""
-        self.model.capture_prefill_trace_chunked(self.mesh_device, self._page_table)
+        """Trace full 2048-token chunks and precompile all masked buckets; prompts under 2048 tokens and the tail run eagerly.
+
+        Unless PPLX_BUCKET_TRACE=0, also one fused prefill + readout trace per length bucket (bucket_trace.py), which
+        serves every prompt up to the largest bucket; the chunk trace then only serves longer ones."""
+        if os.environ.get("PPLX_BUCKET_TRACE", "1") == "0":
+            self.model.capture_prefill_trace_chunked(self.mesh_device, self._page_table)
+            return
+        # Nothing may be allocated or compiled once a trace is parked: prepare everything, then capture.
+        self.bucket_traces = BucketPrefillTraces()
+        self.bucket_traces.prepare(self.model, self.mesh_device, self._page_table)
+        self.model.prepare_prefill_trace_chunked(self.mesh_device, self._page_table)
+        self.model.record_prefill_trace_chunked(self.mesh_device)
+        self.bucket_traces.record(self.model, self.mesh_device)
 
     def input_ids(self, state, question):
         return render_input_ids(self.tokenizer, state, question, self.decision_config.codes)
 
-    def readout_logits(self, input_ids):
+    def readout_logits(self, input_ids, use_bucket_trace=True):
         """Readout logits for the last prompt token, fp32 [len(token_ids)]."""
         length = len(input_ids)
         if length == 0 or length > self.max_seq_len:
             raise ValueError(f"Prompt has {length} tokens; supported range is 1..{self.max_seq_len}.")
+        if use_bucket_trace and self.bucket_traces is not None:
+            logits = self.bucket_traces.run(self.model, input_ids)
+            if logits is not None:
+                return logits
         tokens = torch.tensor([input_ids], dtype=torch.long)
         logits_dev = self.model.prefill_traced_chunked(tokens, self._page_table, actual_len=length)
         vocab = self.args.vocab_size

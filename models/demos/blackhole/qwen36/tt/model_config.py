@@ -137,6 +137,20 @@ class Qwen36ModelArgs(ModelArgs):
             self.weight_dtype = None
             self.act_dtype = None
 
+        # Prefill CCL experiments (default = env, off). A subclass may flip them after super().__init__ (before layers build).
+        # prefill_fused_dist_norm: prefill distributed norm = one fused dit_fused_distributed_rmsnorm op (QWEN36_FUSED_DIST_NORM=1).
+        # prefill_agmm_bf8: prefill AGMM gathers its activation as bf8, half the fabric bytes (QWEN36_AGMM_BF8=1).
+        self.prefill_fused_dist_norm = os.environ.get("QWEN36_FUSED_DIST_NORM", "0") == "1"
+        self.prefill_agmm_bf8 = os.environ.get("QWEN36_AGMM_BF8", "0") == "1"
+        # Per-S prefill tuning hooks (None = the built-in configs). prefill_sdpa_config_fn(S) -> (q_chunk, k_chunk,
+        # exp_approx) for the prefill SDPA; prefill_agmm_config_fn(S, shape_name) -> dict | None for the prefill AGMM
+        # (shape_name: mlp_gateup | gdn_in | attn_qkv | gdn_out; keys: see tp_common._agmm_launch_config).
+        self.prefill_sdpa_config_fn = None
+        self.prefill_agmm_config_fn = None
+        # prefill_rs_hparams = (chunks_per_sync, num_workers_per_link, num_buffers_per_channel) for the prefill
+        # reduce-scatters (tt_all_reduce after attention wo / MLP down / GDN out); None = the tt_all_reduce defaults.
+        self.prefill_rs_hparams = None
+
         # TP config (num_devices>1 only). 27B (1,4) sharded dims + DRAM matmul cfgs; see tp_common.py.
         self.num_devices = mesh_device.get_num_devices() if mesh_device is not None else 1
         if mesh_device is not None and self.num_devices > 1:

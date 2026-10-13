@@ -12,7 +12,12 @@ import torch
 from loguru import logger
 
 from models.common.utility_functions import comp_pcc, run_for_blackhole
-from models.demos.pplx_decider_v1_27b.tests.common import ids_sha256, load_example_state, parametrize_mesh_traced
+from models.demos.pplx_decider_v1_27b.tests.common import (
+    ids_sha256,
+    load_example_state,
+    model_mesh,
+    parametrize_mesh_traced,
+)
 from models.demos.pplx_decider_v1_27b.tt.decision import decision_probabilities
 from models.demos.pplx_decider_v1_27b.tt.model import PplxDecider
 
@@ -53,7 +58,7 @@ def test_pplx_decider_matches_reference(mesh_device):
     references = {e["name"]: e for e in json.loads(REFERENCE_PATH.read_text())["examples"]}
     examples = json.loads(EXAMPLES_PATH.read_text())
 
-    decider = PplxDecider.from_pretrained(mesh_device)
+    decider = PplxDecider.from_pretrained(model_mesh(mesh_device))
     temperature = decider.decision_config.temperature
 
     prompts = []
@@ -88,13 +93,23 @@ def test_pplx_decider_matches_reference(mesh_device):
     chunked_repeat_ok = torch.equal(first, second)
 
     decider.capture_prefill_trace()
-    run_paths((("traced", decider.readout_logits),))
+    # "traced" is the per-bucket trace (all prompts fit the largest bucket); "traced_chunk" is the 2048-token chunk
+    # trace that serves longer prompts.
+    run_paths(
+        (
+            ("traced", decider.readout_logits),
+            ("traced_chunk", lambda ids: decider.readout_logits(ids, use_bucket_trace=False)),
+        )
+    )
 
-    # long_license spans one traced chunk plus an eager tail.
+    # long_license spans one traced chunk plus an eager tail on the chunk path.
     long_ids = next(ids for name, ids, _ in prompts if name == "long_license")
     first = decider.readout_logits(long_ids)
     second = decider.readout_logits(long_ids)
     traced_repeat_ok = torch.equal(first, second)
+    first = decider.readout_logits(long_ids, use_bucket_trace=False)
+    second = decider.readout_logits(long_ids, use_bucket_trace=False)
+    chunk_repeat_ok = torch.equal(first, second)
 
     logger.info(f"{'example':<14} {'path':<8} {'T':>6} {'top1':>6} {'PCC':>8} {'prob diff':>10} {'ms':>9}")
     for name, path, num_tokens, top1_ok, pcc, prob_diff, elapsed_ms in rows:
@@ -104,3 +119,4 @@ def test_pplx_decider_matches_reference(mesh_device):
     assert not failures, "; ".join(failures)
     assert chunked_repeat_ok, f"{prompts[0][0]}: repeated chunked prefill is not bit-identical"
     assert traced_repeat_ok, "long_license: repeated traced prefill is not bit-identical"
+    assert chunk_repeat_ok, "long_license: repeated chunk-traced prefill is not bit-identical"

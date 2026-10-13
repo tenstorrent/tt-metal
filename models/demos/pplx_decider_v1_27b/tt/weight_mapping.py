@@ -26,6 +26,15 @@ def resolve_checkpoint(hf_model=None) -> Path:
     return Path(snapshot_download(hf_model, local_files_only=offline))
 
 
+def load_readout(ckpt_dir, num_tokens: int, dim: int) -> torch.Tensor:
+    """The readout matrix [num_tokens, dim]; row i scores token_ids[i]."""
+    with safe_open(str(Path(ckpt_dir) / "readout.safetensors"), framework="pt") as sf:
+        readout = sf.get_tensor("weight")
+    if tuple(readout.shape) != (num_tokens, dim):
+        raise ValueError(f"readout shape {tuple(readout.shape)} != {(num_tokens, dim)}")
+    return readout
+
+
 def load_pplx_state_dict(ckpt_dir, token_ids: Sequence[int], vocab_size: int, dim: int) -> Dict[str, torch.Tensor]:
     ckpt_dir = Path(ckpt_dir)
     with open(ckpt_dir / "model.safetensors.index.json") as f:
@@ -47,10 +56,7 @@ def load_pplx_state_dict(ckpt_dir, token_ids: Sequence[int], vocab_size: int, di
             for key in keys:
                 state_dict["model." + key] = sf.get_tensor(key)
 
-    with safe_open(str(ckpt_dir / "readout.safetensors"), framework="pt") as sf:
-        readout = sf.get_tensor("weight")
-    if tuple(readout.shape) != (len(token_ids), dim):
-        raise ValueError(f"readout shape {tuple(readout.shape)} != {(len(token_ids), dim)}")
+    readout = load_readout(ckpt_dir, len(token_ids), dim)
     if min(token_ids) < 0 or max(token_ids) >= vocab_size:
         raise ValueError(f"token_ids must be in [0, {vocab_size})")
 
