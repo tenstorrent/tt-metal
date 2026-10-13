@@ -10,6 +10,7 @@
 #include <tt-metalium/tensor_accessor_args.hpp>
 #include <tt-metalium/work_split.hpp>
 
+#include <algorithm>
 #include <optional>
 #include <tuple>
 
@@ -83,6 +84,9 @@ void set_runtime_args(
     auto& reader_args = tt::tt_metal::GetCommonRuntimeArgs(program, shared.reader_kernel_id);
     reader_args[topk_common_args::search_length] = runtime_args.search_len;
     reader_args[topk_common_args::input_row_bytes] = runtime_args.input_row_bytes;
+    auto& writer_common_args = tt::tt_metal::GetCommonRuntimeArgs(program, shared.writer_kernel_id);
+    writer_common_args[topk_common_args::writer_input_row_bytes] = runtime_args.input_row_bytes;
+    writer_common_args[topk_common_args::writer_search_length] = runtime_args.search_len;
     tt::tt_metal::GetCommonRuntimeArgs(program, shared.compute_kernel_id)[topk_common_args::compute_search_length] =
         runtime_args.search_len;
     // Width and prefix changes do not change the row assignment.
@@ -95,6 +99,13 @@ void set_runtime_args(
         "topk_large_indices runtime assignment core count {} differs from compiled core count {}",
         assignments.size(),
         shared.cores.size());
+    // Compute also gets the busiest core's row count: cores with idle time left spend it on finer keys. With the
+    // writer's exact rescan that idle time goes to the rescan instead, so compute sees its own row count.
+    // The writer gets it too: its rescan deadlines end before the busiest core does.
+    uint32_t max_rows = 0;
+    for (const auto& assignment : assignments) {
+        max_rows = std::max(max_rows, assignment.num_rows);
+    }
     for (uint32_t i = 0; i < assignments.size(); ++i) {
         const auto& [core, start_row, rows] = assignments[i];
         TT_FATAL(
@@ -104,8 +115,9 @@ void set_runtime_args(
             shared.cores[i],
             i);
         tt::tt_metal::SetRuntimeArgs(program, shared.reader_kernel_id, core, {start_row, rows});
-        tt::tt_metal::SetRuntimeArgs(program, shared.compute_kernel_id, core, {rows});
-        tt::tt_metal::SetRuntimeArgs(program, shared.writer_kernel_id, core, {start_row, rows});
+        tt::tt_metal::SetRuntimeArgs(
+            program, shared.compute_kernel_id, core, {rows, shared.writer_rescan ? rows : max_rows});
+        tt::tt_metal::SetRuntimeArgs(program, shared.writer_kernel_id, core, {start_row, rows, max_rows});
     }
     shared.num_rows = runtime_args.num_rows;
 }
@@ -125,6 +137,23 @@ ComputeBodyMode compute_body_mode(uint32_t k, uint32_t input_last_dim) {
 
     const uint32_t physical_chunks = tt::div_up(input_last_dim, llk_k);
     return physical_chunks <= 32 ? ComputeBodyMode::FusedEndToEnd : ComputeBodyMode::Classic;
+}
+
+Fp32Key fp32_key_mode(uint32_t k, uint32_t input_last_dim, bool fp32_input) {
+    if (!fp32_input) {
+        return Fp32Key::None;
+    }
+    // Rows unpack full FP32 and key on trunc(x - T), with T a per-row threshold estimate read on the SFPU
+    // from the sorted first window (K >= 1024; K = 512 rows have no live shift). That also holds for rows
+    // of only 2-4 windows: their 2-bit chunk field leaves 10 mantissa bits of x - T, far finer near the
+    // k-th score than 10 bits of x. Only K = 512 rows of at most 4 windows keep the cheap TF32 path (SrcA
+    // unpack, unchanged stamp), whose <= 2-bit chunk field already keeps every mantissa bit DEST holds.
+    constexpr uint32_t tf32_max_chunks = 4;
+    const uint32_t llk_k = to_uint32(snap_to_llk_target_k(k));
+    if (llk_k >= to_uint32(LlkTargetK::K1024)) {
+        return Fp32Key::Shifted;
+    }
+    return tt::div_up(input_last_dim, llk_k) <= tf32_max_chunks ? Fp32Key::Tf32 : Fp32Key::Shifted;
 }
 
 std::vector<CoreRowAssignment> derive_core_row_assignments(const CoreRangeSet& core_grid, uint32_t num_rows) {
@@ -180,6 +209,11 @@ TopkLargeIndicesProgramFactory::cached_program_t TopkLargeIndicesProgramFactory:
     constexpr uint32_t cb_indices_scratch = tt::CBIndex::c_2;
     // Reader-to-compute mailbox for the derived chunk count and tail length. It also receives the metadata read.
     constexpr uint32_t cb_meta = tt::CBIndex::c_3;
+    // Writer landing slots for the exact FP32 values of the boundary candidates (FP32 input).
+    constexpr uint32_t cb_boundary_values = tt::CBIndex::c_4;
+    // Exact row rescan (FP32 input, k == K): the writer's and the reader's double-buffered row blocks, their
+    // mailbox and the reader's hit list (topk_rescan_layout).
+    constexpr uint32_t cb_rescan = tt::CBIndex::c_5;
 
     const uint32_t input_chunk_bytes = llk_k * input.element_size();
     const uint32_t input_tile_bytes = tt::constants::TILE_HW * input.element_size();
@@ -190,10 +224,15 @@ TopkLargeIndicesProgramFactory::cached_program_t TopkLargeIndicesProgramFactory:
     const uint32_t indices_row_bytes = k * indices.element_size();
     const uint32_t indices_cb_row_bytes = llk_k * indices.element_size();
 
+    const bool fp32_input = input.dtype() == DataType::FLOAT32;
+    const Fp32Key key_mode = fp32_key_mode(k, input.logical_shape()[-1], fp32_input);
+    const bool key_shift = key_mode == Fp32Key::Shifted;
+    const tt::DataFormat input_cb_format = fp32_input ? tt::DataFormat::Float32 : tt::DataFormat::Float16_b;
+
     const uint32_t cb_depth = 2;
     const auto input_cb_config =
         tt::tt_metal::CircularBufferConfig(
-            cb_depth * tiles_per_sequence * input_tile_bytes, {{cb_in, tt::DataFormat::Float16_b}})
+            cb_depth * tiles_per_sequence * input_tile_bytes, {{cb_in, input_cb_format}})
             .set_page_size(cb_in, input_tile_bytes);
     tt::tt_metal::CreateCircularBuffer(program, all_cores, input_cb_config);
 
@@ -212,7 +251,30 @@ TopkLargeIndicesProgramFactory::cached_program_t TopkLargeIndicesProgramFactory:
         tt::tt_metal::CreateCircularBuffer(program, all_cores, indices_scratch_cb_config);
     }
 
+    // FP32 input with k < K: the writer re-ranks survivor ranks [k - W, k + W) (W <= 16) by their exact input
+    // values, one 64 B aligned read each into a 64 B slot (+64 B to align the base).
+    const bool rerank_boundary = fp32_input && llk_target_k != LlkTargetK::K512 && k < llk_k;
+    // FP32 input with k == K (no spare survivor ranks): the writer rescans the row's exact values for elements in
+    // the band between the survivor's last 32 ranks and rank K - 33. Needs the scalar search length, so
+    // metadata-bounded programs skip it.
     const bool has_meta = tensor_args.has_valid_length_metadata();
+    const bool rescan_rows = fp32_input && llk_target_k != LlkTargetK::K512 && k == llk_k && !has_meta;
+    if (rescan_rows) {
+        constexpr uint32_t rescan_bytes = topk_rescan_layout::cb_bytes;
+        const auto rescan_cb_config =
+            tt::tt_metal::CircularBufferConfig(rescan_bytes, {{cb_rescan, tt::DataFormat::Float32}})
+                .set_page_size(cb_rescan, rescan_bytes);
+        tt::tt_metal::CreateCircularBuffer(program, all_cores, rescan_cb_config);
+    }
+    if (rerank_boundary || rescan_rows) {
+        // Up to 33 64 B slots, +64 B to align the base.
+        constexpr uint32_t boundary_values_bytes = (2 * 16 + 2) * 64;
+        const auto values_cb_config =
+            tt::tt_metal::CircularBufferConfig(boundary_values_bytes, {{cb_boundary_values, tt::DataFormat::Float32}})
+                .set_page_size(cb_boundary_values, boundary_values_bytes);
+        tt::tt_metal::CreateCircularBuffer(program, all_cores, values_cb_config);
+    }
+
     if (has_meta) {
         auto meta_cb_config =
             tt::tt_metal::CircularBufferConfig(64, {{cb_meta, tt::DataFormat::UInt32}}).set_page_size(cb_meta, 64);
@@ -231,6 +293,9 @@ TopkLargeIndicesProgramFactory::cached_program_t TopkLargeIndicesProgramFactory:
     // one flag now, and the kernel reads presence from the common arg's VALUE (0 = uncapped).
     const bool has_vend = tensor_args.has_valid_end_metadata();
     interleaved_accessor_args(has_vend ? *tensor_args.valid_end_tensor : input).append_to(reader_compile_args);
+    // The reader scans the second half of each core's last row for the writer's exact rescan.
+    reader_compile_args.push_back(rescan_rows ? 1u : 0u);
+    reader_compile_args.push_back(rescan_rows ? cb_rescan : 0u);
 
     auto reader_kernel = tt::tt_metal::CreateKernel(
         program,
@@ -242,6 +307,16 @@ TopkLargeIndicesProgramFactory::cached_program_t TopkLargeIndicesProgramFactory:
     std::vector<uint32_t> compute_compile_args = {cb_in, cb_indices, llk_k, static_cast<uint32_t>(body_mode)};
     compute_compile_args.push_back(has_meta ? 1u : 0u);
     compute_compile_args.push_back(has_meta ? cb_meta : 0u);
+    compute_compile_args.push_back(static_cast<uint32_t>(key_mode));
+    // Shifted keys: compute reads T from its sorted first chunk at the rank matching k / search length.
+    compute_compile_args.push_back(k);
+    // Shifted keys need every FP32 bit in DEST (SrcA would truncate to TF32). TF32 keys and BF16
+    // keep the default (empty) per-CB mode list, i.e. the SrcA path.
+    std::vector<tt::tt_metal::UnpackToDestMode> unpack_to_dest_mode;
+    if (key_shift) {
+        unpack_to_dest_mode.assign(NUM_CIRCULAR_BUFFERS, tt::tt_metal::UnpackToDestMode::Default);
+        unpack_to_dest_mode[cb_in] = tt::tt_metal::UnpackToDestMode::UnpackToDestFp32;
+    }
     auto compute_kernel = tt::tt_metal::CreateKernel(
         program,
         "ttnn/cpp/ttnn/operations/experimental/topk_large_indices/device/kernels/compute.cpp",
@@ -251,6 +326,7 @@ TopkLargeIndicesProgramFactory::cached_program_t TopkLargeIndicesProgramFactory:
             .fp32_dest_acc_en = true,
             // K=2048 multi-chunk merge uses DEST slots 0..7; FP32 half-sync mode exposes only 4 tiles.
             .dst_full_sync_en = true,
+            .unpack_to_dest_mode = std::move(unpack_to_dest_mode),
             .compile_args = compute_compile_args});
 
     std::vector<uint32_t> writer_compile_args = {
@@ -261,6 +337,11 @@ TopkLargeIndicesProgramFactory::cached_program_t TopkLargeIndicesProgramFactory:
         output_slices_per_row,
         indices_slice_bytes};
     interleaved_accessor_args(indices).append_to(writer_compile_args);
+    writer_compile_args.push_back(rerank_boundary ? 1u : 0u);
+    writer_compile_args.push_back(rerank_boundary || rescan_rows ? cb_boundary_values : 0u);
+    interleaved_accessor_args(input).append_to(writer_compile_args);
+    writer_compile_args.push_back(rescan_rows ? 1u : 0u);
+    writer_compile_args.push_back(rescan_rows ? cb_rescan : 0u);
 
     auto writer_kernel = tt::tt_metal::CreateKernel(
         program,
@@ -275,7 +356,8 @@ TopkLargeIndicesProgramFactory::cached_program_t TopkLargeIndicesProgramFactory:
         .core_grid = all_cores,
         .cores = cores,
         .input_shape = input.logical_shape(),
-        .valid_length = operation_attributes.valid_length};
+        .valid_length = operation_attributes.valid_length,
+        .writer_rescan = rescan_rows};
     const uint32_t meta_addr =
         tensor_args.has_valid_length_metadata() ? tensor_args.valid_length_tensor->buffer()->address() : 0u;
     const uint32_t valid_end_addr =
@@ -283,7 +365,8 @@ TopkLargeIndicesProgramFactory::cached_program_t TopkLargeIndicesProgramFactory:
     tt::tt_metal::SetCommonRuntimeArgs(
         program, reader_kernel, {input.buffer()->address(), meta_addr, 0, 0, valid_end_addr});
     tt::tt_metal::SetCommonRuntimeArgs(program, compute_kernel, {0});
-    tt::tt_metal::SetCommonRuntimeArgs(program, writer_kernel, {indices.buffer()->address()});
+    tt::tt_metal::SetCommonRuntimeArgs(
+        program, writer_kernel, {indices.buffer()->address(), input.buffer()->address(), 0, 0});
     set_runtime_args(program, shared, input, operation_attributes.valid_length);
 
     return cached_program_t{std::move(program), std::move(shared)};
@@ -311,6 +394,7 @@ void TopkLargeIndicesProgramFactory::override_runtime_arguments(
     reader_args[topk_common_args::valid_end_address] =
         tensor_args.has_valid_end_metadata() ? tensor_args.valid_end_tensor->buffer()->address() : 0u;
     writer_args[topk_common_args::output_address] = tensor_return_value.buffer()->address();
+    writer_args[topk_common_args::writer_input_address] = input.buffer()->address();
 
     // The cache key fixes k, dtype, grid and compute body mode. Shape and valid_length
     // are runtime controls: update their common arguments when either changes, and

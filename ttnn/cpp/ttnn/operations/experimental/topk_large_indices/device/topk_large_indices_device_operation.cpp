@@ -31,7 +31,9 @@ void validate_static_args(const operation_attributes_t& attrs, const tensor_args
     TT_FATAL(
         arch == tt::ARCH::BLACKHOLE, "topk_large_indices is only supported on Blackhole architecture, got {}", arch);
     TT_FATAL(input.layout() == Layout::ROW_MAJOR, "topk_large_indices input must be ROW_MAJOR");
-    TT_FATAL(input.dtype() == DataType::BFLOAT16, "topk_large_indices input must be BFLOAT16");
+    TT_FATAL(
+        input.dtype() == DataType::BFLOAT16 || input.dtype() == DataType::FLOAT32,
+        "topk_large_indices input must be BFLOAT16 or FLOAT32");
     TT_FATAL(!input.is_sharded(), "topk_large_indices input must use interleaved memory");
 }
 
@@ -190,7 +192,9 @@ ttsl::hash::hash_t TopkLargeIndicesDeviceOperation::compute_program_hash(
         input.layout(),
         input.memory_config().memory_layout(),
         input.memory_config().buffer_type(),
-        static_cast<uint32_t>(program::compute_body_mode(attrs.k, input.logical_shape()[-1])));
+        static_cast<uint32_t>(program::compute_body_mode(attrs.k, input.logical_shape()[-1])),
+        static_cast<uint32_t>(program::fp32_key_mode(
+            attrs.k, input.logical_shape()[-1], input.dtype() == DataType::FLOAT32)));
 }
 
 spec_return_value_t TopkLargeIndicesDeviceOperation::compute_output_specs(

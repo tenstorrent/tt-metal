@@ -16,7 +16,7 @@ void bind_topk_large_indices(nb::module_& mod) {
     ttnn::bind_function<"topk_large_indices", "ttnn.experimental.">(
         mod,
         R"doc(
-        Experimental Top-K over the last dimension of a row-major BFLOAT16 tensor.
+        Experimental Top-K over the last dimension of a row-major BFLOAT16 or FLOAT32 tensor.
         This op is Blackhole-only.
 
         Returns a ROW_MAJOR UINT32 tensor containing sorted descending top-k indices.
@@ -55,7 +55,11 @@ void bind_topk_large_indices(nb::module_& mod) {
             * kernels and circular buffers are created only on the resolved grid.
 
         Args:
-            input_tensor: device tensor with ROW_MAJOR layout and BFLOAT16 dtype.
+            input_tensor: device tensor with ROW_MAJOR layout and BFLOAT16 or FLOAT32 dtype. FLOAT32 is ranked at
+                more than BF16 precision: for k > 512, rows of 2 or more chunks (a chunk is k rounded up to
+                1024/2048 columns) on 12 - ceil(log2(min(chunks, 32))) bits of x - T, with T a per-row estimate
+                of the k-th score read from the row's sorted first chunk; for k <= 512 (512-column chunks),
+                rows of at most 4 chunks on all 10 TF32 mantissa bits.
             k: required number of indices to return.
             valid_length: optional number of leading columns to search (default: full width).
             valid_length_tensor: optional 1-element UINT32 row-major DRAM tensor read on-device. Use for
