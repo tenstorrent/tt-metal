@@ -7,7 +7,8 @@
 #include <stdint.h>
 #include "api/debug/kernel_profiler.hpp"
 
-// Kernel-level timing for tools/tt-ember (parser.py's RE_KERNEL_ZONE and RE_KERNEL_CYCLES).
+// Kernel-level timing for the tt-ember parser (tools/tt-ember/parser.py, added in #58134; its
+// RE_KERNEL_ZONE and RE_KERNEL_CYCLES match these names).
 //
 // With the device profiler on (TT_METAL_DEVICE_PROFILER=1, which makes the JIT build define
 // PROFILE_KERNEL), each kernel records <KERNEL>_KERNEL_START and <KERNEL>_KERNEL_END once per

@@ -29,7 +29,8 @@ You can put printing statements inside the kernels to debug/instrument the code,
 ./build/programming_examples/metal_example_long_matmul [M] [N] [K] [iterations] [fixed_blocks_per_core]
 ```
 
-*Defaults*: 256×256×512 (datums, not tiles), HiFi4, 100000 iterations, split mode.
+*Defaults*: 256×256×512 (datums, not tiles), HiFi4, 100000 iterations, split mode. With no
+arguments at all it does a quick smoke run instead: the full grid only, 10 iterations, no pauses.
 
 | Positional arg | Meaning |
 |---|---|
@@ -85,7 +86,7 @@ nobody writes keep whatever DRAM held before.
 ## Power-experiment knobs
 
 All of these are read from the environment at startup and passed to the kernels as JIT defines,
-so changing one only recompiles the kernels — the host binary never needs rebuilding. None of
+so each kernel is compiled with only the selected path in it. None of
 them need a correctness check beyond the checksum: the workload never verifies its output, so
 stale or garbage data is harmless. Do not use the idle modes for anything but power comparison.
 
@@ -94,8 +95,19 @@ stale or garbage data is harmless. Do not use the idle modes for anything but po
 To isolate *which* part of the pipeline actually costs power — NoC read, FPU compute, or NoC
 write — rather than just keeping a core alive and cycling its circular-buffer handshake, any
 kernel can be switched to "idle" mode. An idle kernel still performs its full CB handshake, so
-the other kernels are stimulated exactly as before and none of them deadlock; it just skips its
-real NoC transfer or FPU work.
+the other kernels move the same data and none of them deadlock; it just skips its real NoC
+transfer or FPU work.
+
+Two side effects to keep in mind when comparing cases:
+
+- **Data.** With the reader idle, compute works on whatever the input buffers already hold in
+  L1; with compute idle, the writer sends output buffers that were never packed. That is zeros
+  or an earlier run's data, so the operand values (and with them switching power) depend on what
+  ran before. `TT_METAL_CLEAR_L1=1` zeroes L1 when the device opens, so a run starts from zeros
+  (its later grids still see the earlier grids' data).
+- **Pacing.** Idling one kernel can change how the other two pace each other. Measured on n150
+  at `1024 2048 2048`, 1x1: compute idle (case 2) against case 1 changes the per-iteration time
+  by about 1% and the writer's busy time by 4%, because the writer sets the pace in both.
 
 | Env var | Effect |
 |---|---|
@@ -107,8 +119,12 @@ real NoC transfer or FPU work.
 ### `POWER_CASE` — the six canonical scenarios
 
 `POWER_CASE` overrides the four flags above at once. Cases 1–5 hold the writer at 100%
-amplification so that turning exactly one of reader / compute / writer off is a clean
-single-variable comparison against case 1.
+amplification so that turning exactly one of reader / compute / writer off compares against
+case 1 with the other two unchanged.
+
+At 100% amplification the writer, not the reader, sets the pace: each re-write waits for its own
+NoC write barrier. Measured on n150 at `1024 2048 2048`, case 1 takes about 50% longer per
+iteration than case 0, at both 1x1 and 2x4 blocking.
 
 | `POWER_CASE` | Reader | Compute | Writer | Write amplification | Conventional subdir |
 |---|---|---|---|---|---|
@@ -119,9 +135,9 @@ single-variable comparison against case 1.
 | `4` | **idle** | real | real | 100% | `reader_idle2` |
 | `5` | real | real | **idle** | 100% | `writer_idle` |
 
-Case 0 was used as a stand-in for "writer idle" before case 5 existed, but it answers a
-different question: turning amplification off measures the marginal cost of the extra writes,
-not the writer's full contribution.
+Case 0 and case 5 answer different questions: case 0 turns write amplification off, so against
+case 1 it measures the cost of the extra writes; case 5 idles the writer, so it measures the
+writer's whole contribution.
 
 ```bash
 POWER_CASE=2 ./build/programming_examples/metal_example_long_matmul 1024 2048 2048 160
@@ -158,10 +174,13 @@ The checksum must not change with the block size; if it does, the tile indexing 
 | `exp`, `gelu`, `recip`, `silu`, `sigmoid` | `copy_tile` from A, then the SFPU op in place | SFPU |
 
 The reader and writer are identical for every value, so every op streams byte-identical DRAM
-traffic through the same circular buffers at the same rate; the only thing that varies is what
-the math unit does with each tile pair. The difference in dynamic energy between two ops is
-therefore attributable to the instruction, not to data movement. The unary SFPU ops still wait
-on and pop the second input CB so the reader's traffic and back-pressure are unchanged.
+traffic through the same circular buffers; the only thing that varies is what the math unit does
+with each tile pair. The unary SFPU ops still wait on and pop the second input CB so the
+reader's traffic is unchanged. The ops also run at the same rate as long as the reader sets the
+pace: on n150 at `1024 2048 2048`, matmul, add and exp have the same reader time and
+per-iteration time at 1x1 and 2x4. With a compute-bound shape the cheaper ops (add runs at LoFi,
+the unary ones are a copy plus one SFPU op) would drain the buffers faster, and the energy
+difference would no longer be the instruction alone.
 
 FLOP counts printed by the program assume matmul (`2*M*N*K` per iteration); for the other ops
 they are a placeholder and the meaningful unit is energy per tile, or per byte moved.
@@ -173,8 +192,9 @@ LONG_MATMUL_OP=exp POWER_CASE=1 ./build/programming_examples/metal_example_long_
 ## Profiling the kernels
 
 With the device profiler on, each kernel records when it starts and ends and how its time splits
-between waiting on circular buffers and doing real work. `tools/tt-ember/parser.py` turns these
-into a per-core wait / active / overhead breakdown for every grid.
+between waiting on circular buffers and doing real work. The tt-ember parser
+(`tools/tt-ember/parser.py`, added in #58134) turns these into a per-core wait / active /
+overhead breakdown for every grid.
 
 ```bash
 TT_METAL_DEVICE_PROFILER=1 ./build/programming_examples/metal_example_long_matmul 1024 2048 2048 160
@@ -185,7 +205,7 @@ The markers land in `generated/profiler/.logs/profile_log_device.csv`, read back
 | Kernel | Markers | Wait = blocked in | Active = time in |
 |---|---|---|---|
 | Reader | `READER_KERNEL_START/END`, `READER_WAIT_CYCLES`, `READER_TRANSFER_CYCLES` | `cb_reserve_back` | `noc_async_read_tile` + barrier |
-| Compute | `COMPUTE_KERNEL_START/END`, `COMPUTE_WAIT_CYCLES`, `COMPUTE_COMPUTE_CYCLES` | `cb_wait_front` | the math loop and `pack_tile` |
+| Compute | `COMPUTE_KERNEL_START/END`, `COMPUTE_WAIT_CYCLES`, `COMPUTE_COMPUTE_CYCLES` | `cb_wait_front` (TRISC0), `tile_regs_acquire` (TRISC1), `tile_regs_wait` + `cb_reserve_back` (TRISC2) | the math loop (TRISC1), `pack_tile` (TRISC2) |
 | Writer | `WRITER_KERNEL_START/END`, `WRITER_WAIT_CYCLES`, `WRITER_TRANSFER_CYCLES` | `cb_wait_front` | `noc_async_write_tile` + barrier |
 
 Each kernel records these once per run, not per tile. The compute markers appear three times per

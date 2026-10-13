@@ -3,6 +3,7 @@
 // SPDX-License-Identifier: Apache-2.0
 
 #include <algorithm>
+#include <charconv>
 #include <chrono>
 #include <cmath>
 #include <cstdio>
@@ -11,6 +12,8 @@
 #include <map>
 #include <random>
 #include <string>
+#include <string_view>
+#include <system_error>
 #include <thread>
 #include <vector>
 
@@ -83,24 +86,24 @@ static std::string format_time(std::chrono::system_clock::time_point tp) {
 // meaningful, and the first interval's idle baseline is one-sided anyway.
 static constexpr uint32_t kMinGridX = 3;
 
+// Idle time between grids. tt-ember measures the board's idle current in these pauses.
+static constexpr std::chrono::seconds kPauseBetweenGrids{5};
+
+// Output tiles one core can hold in the destination registers at once (half of DEST, 16-bit).
+static constexpr uint32_t kDestTileBudget = 8;
+
 // The sweep walks the near-square band of the core array: for each width x, it runs the three
 // heights x-1, x and x+1, clipped to the device. That gives a dense ascending core-count series
 // while also pairing grids of equal core count but different aspect ratio (3x4 vs 4x3, 6x7 vs
-// 7x6, 8x7 vs 7x8), which is what separates a core-count effect from a NoC-shape one.
-//
-// Generated rather than listed so the band continues to whatever the device provides instead of
-// stopping where the smaller generation did. On a Wormhole n300 (8x7) this reproduces the
-// original fifteen-grid list exactly; on Blackhole's 11x10 it carries the same three-per-width
-// pattern up to the full array, where a hard-coded list previously jumped along the x,x-1
-// diagonal alone (7x7 -> 8x7 -> 9x8 -> 10x9 -> 11x10) and skipped every grid beside it.
+// 7x6, 8x7 vs 7x8), which is what separates a core-count effect from a NoC-shape one. The full
+// device grid is always the last one: 15 grids on a Wormhole n300 (8x7), 17 on an n150 (8x8),
+// 24 on a Blackhole p100a (11x10).
 static std::vector<GridCandidate> build_test_grids(uint32_t max_x, uint32_t max_y) {
     std::vector<GridCandidate> result;
 
     for (uint32_t x = kMinGridX; x <= max_x; ++x) {
-        for (uint32_t y = x - 1; y <= x + 1; ++y) {
-            if (y >= 2 && y <= max_y) {
-                result.push_back({x, y});
-            }
+        for (uint32_t y = x - 1; y <= x + 1 && y <= max_y; ++y) {
+            result.push_back({x, y});
         }
     }
 
@@ -139,6 +142,30 @@ static bool env_flag(const char* name) {
     return v != nullptr && std::string(v) == "1";
 }
 
+// Parses the whole string as a non-negative decimal number. Unlike std::stoul this rejects a sign,
+// trailing characters and values that do not fit, so a typo fails loudly instead of turning into
+// a huge or truncated knob value.
+static uint32_t parse_u32(const char* what, std::string_view text) {
+    uint32_t value = 0;
+    const auto [end, ec] = std::from_chars(text.data(), text.data() + text.size(), value);
+    TT_FATAL(
+        !text.empty() && ec == std::errc() && end == text.data() + text.size(),
+        "{} must be a non-negative integer, got '{}'",
+        what,
+        text);
+    return value;
+}
+
+// Reads an optional numeric env var; returns fallback when it is unset or empty.
+static uint32_t env_u32(const char* name, uint32_t fallback) {
+    const char* v = std::getenv(name);
+    return (v == nullptr || *v == '\0') ? fallback : parse_u32(name, v);
+}
+
+// Write amplification that matches the reader's NoC read volume.
+static constexpr uint32_t kFullAmplificationPct = 100;
+static constexpr uint32_t kMaxAmplificationPct = 1000;
+
 // LONG_MATMUL_OP value -> the JIT define the compute kernel branches on.
 static const std::map<std::string, std::string> kComputeOps = {
     {"matmul", "LONG_MATMUL_OP_MATMUL"},
@@ -172,22 +199,25 @@ static PowerExperimentConfig resolve_power_experiment() {
 
     // POWER_CASE, when set, overrides all four individual flags with one of the canonical
     // scenarios. Cases 1-5 all hold the writer at 100% amplification so that turning exactly one
-    // of reader / compute / writer off gives a clean single-variable comparison against case 1.
+    // of reader / compute / writer off compares against case 1 with the other two unchanged.
     if (const char* pc = std::getenv("POWER_CASE"); pc != nullptr && *pc != '\0') {
-        const int c = std::stoi(pc);
+        const uint32_t c = parse_u32("POWER_CASE", pc);
+        constexpr uint32_t full = kFullAmplificationPct;
         switch (c) {
-            case 0: cfg = {false, false, false, 0};    break;  // regular (baseline)
-            case 1: cfg = {false, false, false, 100};  break;  // writer_amp
-            case 2: cfg = {false, true,  false, 100};  break;  // compute_idle
-            case 3: cfg = {true,  true,  false, 100};  break;  // reader_compute_idle
-            case 4: cfg = {true,  false, false, 100};  break;  // reader_idle2
-            // Case 5 is the writer's own idle case, symmetric with cases 2 and 4. Case 0 was the
-            // stand-in for it before this existed, but case 0 only turns write amplification
-            // off, which measures the marginal cost of the extra writes rather than the
-            // writer's full contribution.
-            case 5: cfg = {false, false, true,  100};  break;  // writer_idle
-            default:
-                TT_THROW("POWER_CASE must be in [0, 5], got {}", c);
+            // regular: everything real, no write amplification
+            case 0: cfg = {.write_amplification_pct = 0}; break;
+            // writer_amp: everything real, the reference for cases 2-5
+            case 1: cfg = {.write_amplification_pct = full}; break;
+            // compute_idle
+            case 2: cfg = {.disable_compute = true, .write_amplification_pct = full}; break;
+            // reader_compute_idle
+            case 3: cfg = {.disable_reader = true, .disable_compute = true, .write_amplification_pct = full}; break;
+            // reader_idle2
+            case 4: cfg = {.disable_reader = true, .write_amplification_pct = full}; break;
+            // writer_idle. Case 0 only turns write amplification off, so it measures the cost of
+            // the extra writes; case 5 idles the writer, symmetric with cases 2 and 4.
+            case 5: cfg = {.disable_writer = true, .write_amplification_pct = full}; break;
+            default: TT_THROW("POWER_CASE must be in [0, 5], got {}", c);
         }
         cfg.op = op;
         fmt::print(
@@ -205,10 +235,12 @@ static PowerExperimentConfig resolve_power_experiment() {
     cfg.disable_reader = env_flag("LONG_MATMUL_DISABLE_READER");
     cfg.disable_compute = env_flag("LONG_MATMUL_DISABLE_COMPUTE");
     cfg.disable_writer = env_flag("LONG_MATMUL_DISABLE_WRITER");
-    if (const char* amp = std::getenv("LONG_MATMUL_WRITE_AMPLIFICATION_PCT");
-        amp != nullptr && *amp != '\0') {
-        cfg.write_amplification_pct = static_cast<uint32_t>(std::stoul(amp));
-    }
+    cfg.write_amplification_pct = env_u32("LONG_MATMUL_WRITE_AMPLIFICATION_PCT", 0);
+    TT_FATAL(
+        cfg.write_amplification_pct <= kMaxAmplificationPct,
+        "LONG_MATMUL_WRITE_AMPLIFICATION_PCT must be at most {}, got {}",
+        kMaxAmplificationPct,
+        cfg.write_amplification_pct);
     cfg.op = op;
     return cfg;
 }
@@ -221,12 +253,28 @@ int main(int argc, char* argv[]) {
     // 0 = split total work (default), >0 = each core does exactly this many output blocks
     uint32_t fixed_blocks_per_core = 0;
 
-    if (argc >= 2) { M = std::stoul(argv[1]); }
-    if (argc >= 3) { N = std::stoul(argv[2]); }
-    if (argc >= 4) { K = std::stoul(argv[3]); }
-    if (argc >= 5) { num_iterations = std::stoul(argv[4]); }
+    // With no arguments (as tests/scripts/run_sdk_examples.sh runs every installed example) do a
+    // quick smoke run: the full grid only, a few iterations, no pauses. Measurements always pass
+    // at least the shape and the iteration count.
+    const bool smoke_run = argc == 1;
+    if (smoke_run) {
+        num_iterations = 10;
+    }
+
+    if (argc >= 2) {
+        M = parse_u32("M", argv[1]);
+    }
+    if (argc >= 3) {
+        N = parse_u32("N", argv[2]);
+    }
+    if (argc >= 4) {
+        K = parse_u32("K", argv[3]);
+    }
+    if (argc >= 5) {
+        num_iterations = parse_u32("iterations", argv[4]);
+    }
     if (argc >= 6) {
-        fixed_blocks_per_core = std::stoul(argv[5]);
+        fixed_blocks_per_core = parse_u32("fixed_blocks_per_core", argv[5]);
     }
 
     TT_FATAL(M > 0 && N > 0 && K > 0, "M, N and K must be positive, got {}x{}x{}", M, N, K);
@@ -262,19 +310,15 @@ int main(int argc, char* argv[]) {
     // destination registers at once, so one column slice of A and one row slice of B feed
     // BLOCK_M*BLOCK_N multiplies. DRAM tile reads per multiply fall from 2 to
     // (BLOCK_M + BLOCK_N) / (BLOCK_M * BLOCK_N). 1x1 is the original tile-at-a-time behaviour.
-    uint32_t block_m = 1, block_n = 1;
-    if (const char* v = std::getenv("LONG_MATMUL_BLOCK_M"); v != nullptr && *v != '\0') {
-        block_m = static_cast<uint32_t>(std::stoul(v));
-    }
-    if (const char* v = std::getenv("LONG_MATMUL_BLOCK_N"); v != nullptr && *v != '\0') {
-        block_n = static_cast<uint32_t>(std::stoul(v));
-    }
+    const uint32_t block_m = env_u32("LONG_MATMUL_BLOCK_M", 1);
+    const uint32_t block_n = env_u32("LONG_MATMUL_BLOCK_N", 1);
     TT_FATAL(block_m >= 1 && block_n >= 1, "LONG_MATMUL_BLOCK_M/N must be >= 1");
     // The whole block lives in the destination registers simultaneously.
     TT_FATAL(
-        block_m * block_n <= 8,
-        "LONG_MATMUL_BLOCK_M * LONG_MATMUL_BLOCK_N ({}) exceeds the 8-tile destination register budget",
-        block_m * block_n);
+        block_m * block_n <= kDestTileBudget,
+        "LONG_MATMUL_BLOCK_M * LONG_MATMUL_BLOCK_N ({}) exceeds the {}-tile destination register budget",
+        block_m * block_n,
+        kDestTileBudget);
     TT_FATAL(Mt % block_m == 0, "Mt ({}) must be divisible by LONG_MATMUL_BLOCK_M ({})", Mt, block_m);
     TT_FATAL(Nt % block_n == 0, "Nt ({}) must be divisible by LONG_MATMUL_BLOCK_N ({})", Nt, block_n);
 
@@ -333,7 +377,10 @@ int main(int argc, char* argv[]) {
 
         fmt::print("Detected max compute grid: {}x{} ({} cores)\n", max_x, max_y, max_x * max_y);
 
-        const auto test_grids = build_test_grids(max_x, max_y);
+        const auto test_grids = smoke_run ? std::vector<GridCandidate>{{max_x, max_y}} : build_test_grids(max_x, max_y);
+        if (smoke_run) {
+            fmt::print("No arguments: smoke run on the full grid only, {} iterations.\n", num_iterations);
+        }
 
         fmt::print("Selected test grids:\n");
         for (const auto& g : test_grids) {
@@ -362,8 +409,8 @@ int main(int argc, char* argv[]) {
 
         for (size_t grid_idx = 0; grid_idx < test_grids.size(); ++grid_idx) {
             if (grid_idx > 0) {
-                fmt::print("\nWaiting 5 seconds before next run...\n");
-                std::this_thread::sleep_for(std::chrono::seconds(5));
+                fmt::print("\nWaiting {} seconds before next run...\n", kPauseBetweenGrids.count());
+                std::this_thread::sleep_for(kPauseBetweenGrids);
             }
 
             CoreCoord core_grid{};
@@ -407,20 +454,16 @@ int main(int argc, char* argv[]) {
                 .page_size = single_tile_size,
                 .buffer_type = BufferType::DRAM};
 
+            // Sizes in 64 bits: a 32-bit product would wrap for operands of 4 GiB or more.
+            const DeviceAddr tile_bytes = single_tile_size;
             auto src0_dram = distributed::MeshBuffer::create(
-                distributed::ReplicatedBufferConfig{.size = single_tile_size * Mt * Kt},
-                dram_config,
-                mesh_device.get());
+                distributed::ReplicatedBufferConfig{.size = tile_bytes * Mt * Kt}, dram_config, mesh_device.get());
 
             auto src1_dram = distributed::MeshBuffer::create(
-                distributed::ReplicatedBufferConfig{.size = single_tile_size * Kt * Nt},
-                dram_config,
-                mesh_device.get());
+                distributed::ReplicatedBufferConfig{.size = tile_bytes * Kt * Nt}, dram_config, mesh_device.get());
 
             auto dst_dram = distributed::MeshBuffer::create(
-                distributed::ReplicatedBufferConfig{.size = single_tile_size * Mt * Nt},
-                dram_config,
-                mesh_device.get());
+                distributed::ReplicatedBufferConfig{.size = tile_bytes * Mt * Nt}, dram_config, mesh_device.get());
 
             const auto cb_fmt = tt::DataFormat::Float16_b;
             // Each CB must hold one whole slice (in0/in1) or one whole output block, doubled so
@@ -447,9 +490,8 @@ int main(int argc, char* argv[]) {
                 CircularBufferConfig(cb_out_tiles * single_tile_size, {{CBIndex::c_16, cb_fmt}})
                     .set_page_size(CBIndex::c_16, single_tile_size));
 
-            // Passed as JIT defines rather than compile-time args so that changing POWER_CASE or
-            // the block size only triggers a kernel recompile -- the host binary never needs
-            // rebuilding.
+            // Passed as JIT defines so the kernels can #if out every path that is not selected: the
+            // measured instruction stream contains only the chosen variant.
             const std::string bm = std::to_string(block_m), bn = std::to_string(block_n);
             std::map<std::string, std::string> reader_defines{{"BLOCK_M", bm}, {"BLOCK_N", bn}};
             if (power_cfg.disable_reader) {
@@ -508,19 +550,27 @@ int main(int argc, char* argv[]) {
             for (const auto& [ranges, work_per_core] : work_groups) {
                 for (const auto& range : ranges.ranges()) {
                     for (const auto& core : range) {
-                        // In fixed mode each core starts at a different offset so cores hit
-                        // different DRAM addresses and don't serialise on the same bank. Both the
-                        // offset and the reader/writer block index wrap at total_output_blocks.
+                        // In fixed mode the cores' start blocks are spread evenly over the output
+                        // so they hit different DRAM addresses and don't serialise on the same
+                        // bank, whatever fixed_blocks_per_core is. The reader and writer wrap the
+                        // block index at total_output_blocks.
                         const uint32_t effective_offset =
                             (fixed_blocks_per_core > 0)
-                                ? (core_linear_idx * fixed_blocks_per_core) % total_output_blocks
+                                ? static_cast<uint32_t>(uint64_t{core_linear_idx} * total_output_blocks / num_cores)
                                 : work_offset;
 
                         tt_metal::SetRuntimeArgs(
-                            program, reader_id, core,
-                            {src0_dram->address(), src1_dram->address(),
-                             Mt, Kt, Nt,
-                             effective_offset, work_per_core, num_iterations, blocks_per_row,
+                            program,
+                            reader_id,
+                            core,
+                            {src0_dram->address(),
+                             src1_dram->address(),
+                             Kt,
+                             Nt,
+                             effective_offset,
+                             work_per_core,
+                             num_iterations,
+                             blocks_per_row,
                              total_output_blocks});
 
                         tt_metal::SetRuntimeArgs(
@@ -540,8 +590,8 @@ int main(int argc, char* argv[]) {
                 }
             }
 
-            distributed::EnqueueWriteMeshBuffer(cq, src0_dram, src0_vec, false);
-            distributed::EnqueueWriteMeshBuffer(cq, src1_dram, src1_vec, false);
+            distributed::EnqueueWriteMeshBuffer(cq, src0_dram, src0_vec, /*blocking=*/false);
+            distributed::EnqueueWriteMeshBuffer(cq, src1_dram, src1_vec, /*blocking=*/false);
 
             std::string blocks_per_core_str;
             if (fixed_blocks_per_core > 0) {
@@ -567,13 +617,17 @@ int main(int argc, char* argv[]) {
             distributed::MeshCoordinateRange device_range(mesh_device->shape());
             workload.add_program(device_range, std::move(program));
 
+            // With a cold kernel cache the kernels are JIT-compiled inside EnqueueMeshWorkload
+            // (0.75 s for the first grid on n150), before any of the program's commands reach the
+            // device. Starting the clock after it returns keeps the compile, and the input uploads
+            // queued above, out of the measured interval.
+            distributed::EnqueueMeshWorkload(cq, workload, /*blocking=*/false);
+
             auto sys_start = std::chrono::system_clock::now();
             auto t_start = std::chrono::high_resolution_clock::now();
 
-            distributed::EnqueueMeshWorkload(cq, workload, false);
-
             std::vector<bfloat16> result_vec(Mt * Nt * TILE_HW);
-            distributed::EnqueueReadMeshBuffer(cq, result_vec, dst_dram, true);
+            distributed::EnqueueReadMeshBuffer(cq, result_vec, dst_dram, /*blocking=*/true);
 
             auto t_end = std::chrono::high_resolution_clock::now();
             auto sys_end = std::chrono::system_clock::now();

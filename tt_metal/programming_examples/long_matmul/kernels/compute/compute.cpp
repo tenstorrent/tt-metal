@@ -31,14 +31,16 @@ using std::uint32_t;
 // Exactly one LONG_MATMUL_OP_* is defined; matmul is the default when the host passes none.
 //
 // The point of the switch is a controlled comparison: the reader and writer kernels are
-// untouched, so every op streams byte-identical DRAM traffic through the same circular buffers
-// at the same rate, and the only thing that varies is what the math unit does with each tile
-// pair. The difference in dynamic energy between two ops is therefore attributable to the
-// instruction rather than to data movement.
+// untouched, so every op streams byte-identical DRAM traffic through the same circular buffers,
+// and the only thing that varies is what the math unit does with each tile pair. Every variant
+// issues kBlockTiles math operations per step of the shared dimension and pops both input CBs.
+// The rate is the same only while the reader sets the pace, which it does for the shapes tt-ember
+// uses (on n150 at 1024x2048x2048, 1x1 and 2x4, matmul/add/exp have the same reader time and
+// per-iteration time). A compute-bound shape would let the cheaper ops (add runs at LoFi, the
+// unary ones are a copy plus one SFPU op) drain the CBs faster, and then the energy difference
+// is no longer only the instruction.
 //
-// To keep that true, every variant issues exactly kBlockTiles math operations per step of the
-// shared dimension and pops both input CBs, matching matmul's rate. The binary ops (matmul,
-// add) consume a tile from each CB the way matmul does. The unary SFPU ops have no second
+// The binary ops (matmul, add) consume a tile from each CB. The unary SFPU ops have no second
 // operand, so they copy from cb_in0 into the destination register and operate in place; cb_in1
 // is still waited on and popped, so the reader's traffic and the pipeline's back-pressure are
 // unchanged. Unary variants overwrite the destination register each step rather than
@@ -90,21 +92,27 @@ void kernel_main() {
 #endif
 
     // All three TRISCs run this code, so every marker below is recorded three times per core, once
-    // per TRISC. Only TRISC1 does the math and only TRISC2 packs.
+    // per TRISC. Each TRISC times only the calls it actually executes: wait is cb_wait_front on
+    // TRISC0 (unpack), tile_regs_acquire on TRISC1 (math), and tile_regs_wait plus
+    // cb_reserve_back(cb_out) on TRISC2 (pack); compute is the math loop on TRISC1 and pack_tile on
+    // TRISC2. TRISC0's compute time is the unpacker blocking inside matmul_tiles / copy_tile.
     namespace prof = long_matmul_profile;
-    DeviceTimestampedData("COMPUTE_KERNEL_START", 0);
+    DeviceTimestampedData("COMPUTE_KERNEL_START", /*data=*/0);
     uint64_t wait_cycles = 0;
     uint64_t compute_cycles = 0;
 
+    constexpr uint32_t kProgressPrintInterval = 10;
     for (uint32_t iter = 0; iter < num_iterations; iter++) {
-        if (iter % 10 == 0) {
+        if (iter % kProgressPrintInterval == 0) {
             // Only print from TRISC0, otherwise we'll get three identical prints
             DPRINT_UNPACK("Iteration {} of {}\n", iter, num_iterations);
         }
         for (uint32_t blk = 0; blk < num_output_blocks; blk++) {
             // TRISC1 acquires the tile registers -- kBlockTiles of them, one accumulator per
             // output tile in the block.
+            uint32_t t_block = prof::now();
             tile_regs_acquire();
+            prof::add_since(wait_cycles, t_block);
             for (uint32_t kt = 0; kt < Kt; kt++) {
                 // The reader delivers a column slice of A (kBlockM tiles) and a row slice of B
                 // (kBlockN tiles) for this step of the shared dimension.
@@ -112,13 +120,16 @@ void kernel_main() {
                 cb_wait_front(cb_in0, kBlockM);
                 cb_wait_front(cb_in1, kBlockN);
                 prof::add_since(wait_cycles, t);
-                // Every A tile is combined with every B tile in the slice, so the two slices
-                // are reused kBlockN and kBlockM times respectively before being popped. This
-                // is where the DRAM traffic reduction comes from.
+                // For matmul and add every A tile is combined with every B tile in the slice, so
+                // the two slices are reused kBlockN and kBlockM times respectively before being
+                // popped; this is where the DRAM traffic reduction comes from. The unary ops only
+                // read A and pop B unread.
                 // LONG_MATMUL_DISABLE_COMPUTE skips the real math while keeping every CB and
-                // tile-register handshake intact, so reader and writer are stimulated exactly as
-                // before and neither deadlocks. Output tiles then contain garbage, which is
-                // harmless: the app never verifies its output.
+                // tile-register handshake, so the reader and writer move the same data and
+                // neither deadlocks. Without the math, unpack no longer feeds math, so the reader
+                // and writer pace each other a little differently (writer-bound case 2 vs case 1
+                // on n150: within 4%). Output tiles then contain garbage, which is harmless: the
+                // app never verifies its output.
 #ifndef LONG_MATMUL_DISABLE_COMPUTE
                 t = prof::now();
                 for (uint32_t m = 0; m < kBlockM; m++) {
@@ -153,10 +164,12 @@ void kernel_main() {
             }
             // TRISC1 commits the results, transferring ownership of the tile registers to the packer (TRISC2)
             tile_regs_commit();
-            // TRISC2 waits for the FPU (TRISC1) to be ready
+            // TRISC2 waits for the FPU (TRISC1) to be ready, then reserves space in the output
+            // circular buffer for the whole block. Both are where the writer's back-pressure shows.
+            t_block = prof::now();
             tile_regs_wait();
-            // TRISC2 reserves space in the output circular buffer for the whole block
             cb_reserve_back(cb_out, kBlockTiles);
+            prof::add_since(wait_cycles, t_block);
 #ifndef LONG_MATMUL_DISABLE_COMPUTE
             const uint32_t t = prof::now();
             for (uint32_t i = 0; i < kBlockTiles; i++) {
@@ -175,5 +188,5 @@ void kernel_main() {
     // The totals go out before KERNEL_END so they fall inside this run's marker window.
     DeviceTimestampedData("COMPUTE_WAIT_CYCLES", wait_cycles);
     DeviceTimestampedData("COMPUTE_COMPUTE_CYCLES", compute_cycles);
-    DeviceTimestampedData("COMPUTE_KERNEL_END", 0);
+    DeviceTimestampedData("COMPUTE_KERNEL_END", /*data=*/0);
 }

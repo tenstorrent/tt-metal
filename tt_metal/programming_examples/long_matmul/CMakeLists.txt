@@ -1,3 +1,6 @@
+cmake_minimum_required(VERSION 3.22...4.2)
+project(metal_example_long_matmul)
+
 add_executable(metal_example_long_matmul)
 target_sources(metal_example_long_matmul PRIVATE long_matmul.cpp)
 

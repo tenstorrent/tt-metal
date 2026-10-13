@@ -4,7 +4,6 @@
 
 #include <stdint.h>
 #include "api/dataflow/dataflow_api.h"
-#include "api/debug/dprint.h"
 #include "../profile_markers.h"
 
 // See kernels/compute/compute.cpp. With a BLOCK_M x BLOCK_N output block, one column slice of
@@ -23,14 +22,13 @@ constexpr uint32_t kBlockN = BLOCK_N;
 void kernel_main() {
     uint32_t src0_addr = get_arg_val<uint32_t>(0);
     uint32_t src1_addr = get_arg_val<uint32_t>(1);
-    uint32_t Mt = get_arg_val<uint32_t>(2);
-    uint32_t Kt = get_arg_val<uint32_t>(3);
-    uint32_t Nt = get_arg_val<uint32_t>(4);
-    uint32_t block_start_id = get_arg_val<uint32_t>(5);
-    uint32_t num_output_blocks = get_arg_val<uint32_t>(6);
-    uint32_t num_iterations = get_arg_val<uint32_t>(7);
-    uint32_t blocks_per_row = get_arg_val<uint32_t>(8);  // Nt / kBlockN
-    uint32_t total_output_blocks = get_arg_val<uint32_t>(9);
+    uint32_t Kt = get_arg_val<uint32_t>(2);
+    uint32_t Nt = get_arg_val<uint32_t>(3);
+    uint32_t block_start_id = get_arg_val<uint32_t>(4);
+    uint32_t num_output_blocks = get_arg_val<uint32_t>(5);
+    uint32_t num_iterations = get_arg_val<uint32_t>(6);
+    uint32_t blocks_per_row = get_arg_val<uint32_t>(7);  // Nt / kBlockN
+    uint32_t total_output_blocks = get_arg_val<uint32_t>(8);
 
     constexpr uint32_t cb_id_in0 = tt::CBIndex::c_0;
     constexpr uint32_t cb_id_in1 = tt::CBIndex::c_1;
@@ -44,7 +42,7 @@ void kernel_main() {
     const auto b = TensorAccessor(b_args, src1_addr, in1_tile_bytes);
 
     namespace prof = long_matmul_profile;
-    DeviceTimestampedData("READER_KERNEL_START", 0);
+    DeviceTimestampedData("READER_KERNEL_START", /*data=*/0);
     uint64_t wait_cycles = 0;
     uint64_t transfer_cycles = 0;
 
@@ -61,8 +59,9 @@ void kernel_main() {
             for (uint32_t k = 0; k < Kt; k++) {
                 // When LONG_MATMUL_DISABLE_READER is set the reader keeps its full CB handshake --
                 // so compute still gets its tiles "delivered" every step and never deadlocks --
-                // but issues no DRAM traffic. Compute then runs on whatever stale data is already
-                // sitting in that L1 buffer, which is harmless: the app never verifies its output.
+                // but issues no DRAM traffic. Compute then runs on whatever the L1 buffer already
+                // holds (zeros or an earlier run's data), so its operand values, and with them
+                // the math's switching power, depend on what ran before. See the README.
                 {
                     // Column slice of A: rows row0..row0+kBlockM-1 at inner index k.
                     uint32_t t = prof::now();
@@ -72,7 +71,7 @@ void kernel_main() {
 #ifndef LONG_MATMUL_DISABLE_READER
                     t = prof::now();
                     for (uint32_t m = 0; m < kBlockM; m++) {
-                        noc_async_read_tile((row0 + m) * Kt + k, a, l1_addr);
+                        noc_async_read_page((row0 + m) * Kt + k, a, l1_addr);
                         l1_addr += in0_tile_bytes;
                     }
                     noc_async_read_barrier();
@@ -89,7 +88,7 @@ void kernel_main() {
 #ifndef LONG_MATMUL_DISABLE_READER
                     t = prof::now();
                     for (uint32_t n = 0; n < kBlockN; n++) {
-                        noc_async_read_tile(k * Nt + (col0 + n), b, l1_addr);
+                        noc_async_read_page(k * Nt + (col0 + n), b, l1_addr);
                         l1_addr += in1_tile_bytes;
                     }
                     noc_async_read_barrier();
@@ -104,5 +103,5 @@ void kernel_main() {
     // The totals go out before KERNEL_END so they fall inside this run's marker window.
     DeviceTimestampedData("READER_WAIT_CYCLES", wait_cycles);
     DeviceTimestampedData("READER_TRANSFER_CYCLES", transfer_cycles);
-    DeviceTimestampedData("READER_KERNEL_END", 0);
+    DeviceTimestampedData("READER_KERNEL_END", /*data=*/0);
 }

@@ -38,7 +38,7 @@ void kernel_main() {
     const auto c = TensorAccessor(c_args, dst_addr, tile_bytes);
 
     namespace prof = long_matmul_profile;
-    DeviceTimestampedData("WRITER_KERNEL_START", 0);
+    DeviceTimestampedData("WRITER_KERNEL_START", /*data=*/0);
     uint64_t wait_cycles = 0;
     uint64_t transfer_cycles = 0;
 
@@ -62,7 +62,7 @@ void kernel_main() {
                 for (uint32_t n = 0; n < kBlockN; n++) {
                     const uint32_t out_tile = (row0 + m) * Nt + (col0 + n);
                     for (uint32_t rep = 0; rep < write_repeats; rep++) {
-                        noc_async_write_tile(out_tile, c, l1_read_addr);
+                        noc_async_write_page(out_tile, c, l1_read_addr);
                         noc_async_write_barrier();
                     }
                     l1_read_addr += tile_bytes;
@@ -77,5 +77,5 @@ void kernel_main() {
     // The totals go out before KERNEL_END so they fall inside this run's marker window.
     DeviceTimestampedData("WRITER_WAIT_CYCLES", wait_cycles);
     DeviceTimestampedData("WRITER_TRANSFER_CYCLES", transfer_cycles);
-    DeviceTimestampedData("WRITER_KERNEL_END", 0);
+    DeviceTimestampedData("WRITER_KERNEL_END", /*data=*/0);
 }
