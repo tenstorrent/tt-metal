@@ -72,10 +72,11 @@ namespace experimental {
 // commit() / dtor store ptr back when the epoch (word[2] fifo_start, word[5]
 // applied_entry_size) matches the iface.
 //
-// A kernel binding a pipe may also run on extra nodes that are none of the pipe's senders or
-// receivers (PrefetcherPipeBinding::extra_nodes; the host gives them the slot entry of the
-// binding's first pipe). It must not construct a PrefetcherPipe there, nor a relay DataflowBuffer
-// for it.
+// A kernel binding a pipe may also run on nodes that are not the pipe's sender or receivers
+// (PrefetcherPipeBinding::extra_nodes). The pipe token there does not describe a pipe endpoint:
+// don't construct a PrefetcherPipe on those nodes, and don't construct its relay DataflowBuffer
+// in any kernel (the relay's compute consumers run on the extra nodes too). Doing so can corrupt
+// another pipe's state. Use a runtime argument to tell extra nodes apart.
 //
 // Same push/pop/write API as CrossNodeDFB. Mid-flight page-size changes use
 // set_entry_size / set_receiver_entry_size after that endpoint's E1 operations.
