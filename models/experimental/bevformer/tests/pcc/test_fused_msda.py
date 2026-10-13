@@ -22,9 +22,9 @@ import torch
 import ttnn
 from loguru import logger
 
-from models.experimental.bevformer.config import DeformableAttentionConfig
-from models.experimental.bevformer.config.encoder_config import get_preset_config
+from models.experimental.bevformer.model_config import DeformableAttentionConfig
 from models.experimental.bevformer.reference.ms_deformable_attention import MSDeformableAttention
+from models.experimental.bevformer.tests.common import PRESETS
 from models.experimental.bevformer.tests.test_utils import check_with_pcc
 from models.experimental.bevformer.tt.model_preprocessing import create_ms_deformable_attention_parameters
 from models.experimental.bevformer.tt.tt_ms_deformable_attention import TTMSDeformableAttention
@@ -37,20 +37,16 @@ def _build(device, config_name, batch_size, num_queries, seed):
     """Shared setup: reference module, preprocessed TT params, and the inputs."""
     torch.manual_seed(seed)
 
-    preset_config = get_preset_config(config_name)
-    if preset_config is None:
-        pytest.fail(f"Configuration '{config_name}' not found")
-
-    model_config = preset_config.model_config
-    num_levels = model_config.num_levels
-    spatial_shapes = torch.tensor(preset_config.dataset_config.spatial_shapes[:num_levels], dtype=torch.long)
+    preset = PRESETS[config_name]
+    num_levels = preset.num_levels
+    spatial_shapes = torch.tensor(preset.spatial_shapes, dtype=torch.long)
     num_keys = int(spatial_shapes.prod(dim=1).sum().item())
 
     config = DeformableAttentionConfig(
-        embed_dims=model_config.embed_dims,
-        num_heads=model_config.num_heads,
+        embed_dims=preset.embed_dims,
+        num_heads=preset.num_heads,
         num_levels=num_levels,
-        num_points=model_config.num_points,
+        num_points=preset.num_points,
     )
 
     query = torch.randn(batch_size, num_queries, config.embed_dims, dtype=torch.float32)
@@ -60,9 +56,7 @@ def _build(device, config_name, batch_size, num_queries, seed):
     ref_model = MSDeformableAttention(config)
     ref_model.eval()
 
-    tt_parameters = create_ms_deformable_attention_parameters(
-        torch_model=ref_model, device=device, config=config, dtype=ttnn.float32
-    )
+    tt_parameters = create_ms_deformable_attention_parameters(ref_model, device=device, dtype=ttnn.float32)
 
     torch_inputs = (query, value, reference_points, spatial_shapes)
     return config, ref_model, tt_parameters, torch_inputs

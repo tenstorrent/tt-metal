@@ -52,9 +52,9 @@ class SCARebatchPlan:
             for; a refill must match it.
         query_index: ``[1, 1, 1, bs * num_cams * capacity]`` uint32, the stacked query row each
             rebatched row gathers.
-        reference_points: ``[bs * num_cams, capacity, num_points_in_pillar, 2]`` ROW_MAJOR, in the
-            ``grid_dtype`` the plan was built with (float32 in the encoder),
-            the rebatched rows' pillar points in their camera's normalized image coordinates.
+        reference_points: ``[bs * num_cams, capacity, num_points_in_pillar, 2]`` ``GRID_DTYPE``
+            ROW_MAJOR, the rebatched rows' pillar points in their camera's normalized image
+            coordinates.
         scatter_ids: ``[bs, num_cams * capacity, 1]`` ROW_MAJOR, the query each row adds into, or the
             sink row ``num_queries``.
         inverse_count: ``[bs, num_queries, 1]``, one over the number of cameras that see each query
@@ -90,6 +90,9 @@ def _host_plan(reference_points_cam, bev_mask, capacity):
         ), f"camera {i} sees {index.numel()} queries, over the plan's capacity {capacity}"
         scatter_ids[:, i, : index.numel()] = index.to(torch.int32)
         reference_points[:, i, : index.numel()] = reference_points_cam[i][:, index]
+    # A pillar point at or behind a camera projects arbitrarily far; the fused op floors it to an
+    # int32 pixel. Clamped, it stays as far out of the image for any sampling offset.
+    reference_points = reference_points.clamp(-10.0, 10.0)
     gather_ids = scatter_ids.clamp(max=num_queries - 1) + (torch.arange(bs, dtype=torch.int32) * num_queries).view(
         bs, 1, 1
     )
@@ -102,12 +105,12 @@ def _host_plan(reference_points_cam, bev_mask, capacity):
     )
 
 
-def _plan_dtypes(num_queries, grid_dtype):
+def _plan_dtypes(num_queries):
     """Each host-built plan buffer's device dtype and layout, shared by the build and the refill so
     ``copy_host_to_device_tensor`` sees matching tensors."""
     return dict(
         query_index=(ttnn.uint32, ttnn.ROW_MAJOR_LAYOUT),
-        reference_points=(grid_dtype, ttnn.ROW_MAJOR_LAYOUT),
+        reference_points=(GRID_DTYPE, ttnn.ROW_MAJOR_LAYOUT),
         scatter_ids=(_index_dtype(num_queries + 1), ttnn.ROW_MAJOR_LAYOUT),
         inverse_count=(ttnn.bfloat16, ttnn.TILE_LAYOUT),
     )
@@ -121,9 +124,7 @@ def full_capacity(num_queries):
     return -(-num_queries // ttnn.TILE_SIZE) * ttnn.TILE_SIZE
 
 
-def build_rebatch_plan(
-    reference_points_cam, bev_mask, embed_dims, device, grid_dtype=GRID_DTYPE, capacity=None
-) -> SCARebatchPlan:
+def build_rebatch_plan(reference_points_cam, bev_mask, embed_dims, device, capacity=None) -> SCARebatchPlan:
     """A plan for one frame, on device.
 
     Args:
@@ -131,9 +132,9 @@ def build_rebatch_plan(
             (``point_sampling_3d_2d.camera_geometry``).
         bev_mask: Bool torch tensor ``[num_cams, bs, num_queries, num_points_in_pillar]``.
         embed_dims: Query width, for the scatter base.
-        device: Device the plan's buffers live on.
-        grid_dtype: Dtype of the rebatched reference points. In bfloat16 a point near the image's
-            right edge moves in steps of 2^-8, 0.8 px on the 200-wide first FPN level.
+        device: Device the plan's buffers live on. The rebatched reference points are
+            ``GRID_DTYPE``: in bfloat16 a point near the image's right edge moves in steps of
+            2^-8, 0.8 px on the 200-wide first FPN level.
         capacity: Rows per camera. By default the most queries any camera sees in this frame,
             tile-aligned, which fits this frame only: a plan refilled by :func:`update_rebatch_plan`
             needs a capacity that covers every later frame: a bound for the rig, or
@@ -147,7 +148,7 @@ def build_rebatch_plan(
     host = _host_plan(reference_points_cam, bev_mask, capacity)
     tensors = {
         name: ttnn.from_torch(getattr(host, name), dtype=dtype, layout=layout, device=device)
-        for name, (dtype, layout) in _plan_dtypes(num_queries, grid_dtype).items()
+        for name, (dtype, layout) in _plan_dtypes(num_queries).items()
     }
     return SCARebatchPlan(
         capacity=capacity,
@@ -173,18 +174,14 @@ def update_rebatch_plan(plan: SCARebatchPlan, reference_points_cam, bev_mask):
         f"{tuple(bev_mask.shape)}; build a new plan"
     )
     host = _host_plan(reference_points_cam, bev_mask, plan.capacity)
-    for name, (dtype, layout) in _plan_dtypes(plan.num_queries, plan.reference_points.dtype).items():
+    for name, (dtype, layout) in _plan_dtypes(plan.num_queries).items():
         ttnn.copy_host_to_device_tensor(
             ttnn.from_torch(getattr(host, name), dtype=dtype, layout=layout), getattr(plan, name)
         )
 
 
 class TTSpatialCrossAttention:
-    """Spatial cross-attention over a frame's :class:`SCARebatchPlan`.
-
-    ``MSDeformableAttention3D`` folds ``spatial_shapes`` into its sampling-offset Linear, which
-    consumes ``params.deformable_attention.sampling_offsets``: each instance needs its own params.
-    """
+    """Spatial cross-attention over a frame's :class:`SCARebatchPlan`."""
 
     def __init__(
         self,
@@ -197,8 +194,6 @@ class TTSpatialCrossAttention:
         num_heads=NUM_HEADS,
         num_levels=NUM_LEVELS,
         num_points=SCA_NUM_POINTS,
-        grid_dtype=GRID_DTYPE,
-        grid_sample_compute_config=None,
     ):
         """``params`` from ``model_preprocessing.create_spatial_cross_attention_parameters``;
         ``spatial_shapes`` the camera feature levels as (h, w); ``num_points`` sampling points per
@@ -217,19 +212,13 @@ class TTSpatialCrossAttention:
             device,
             params.deformable_attention,
             spatial_shapes=spatial_shapes,
-            grid_dtype=grid_dtype,
-            grid_sample_compute_config=grid_sample_compute_config,
             residual=False,
-            output_proj=False,
         )
 
     def frame_inputs(self, plan):
         """The device tensors every layer of a frame shares, derived from ``plan`` on device: the
-        full-width scatter index and the deformable attention's grid bias. They are derived in the
-        forward, not stored in the plan, so a refilled plan reaches them under trace replay."""
-        assert (
-            plan.reference_points.dtype == self.deformable_attention.grid_dtype
-        ), f"plan points {plan.reference_points.dtype}, attention grid {self.deformable_attention.grid_dtype}"
+        full-width scatter index. It is derived in the forward, not stored in the plan, so a
+        refilled plan reaches it under trace replay."""
         depth = plan.num_points_in_pillar
         assert (
             self.deformable_attention.num_points % depth == 0
@@ -237,7 +226,6 @@ class TTSpatialCrossAttention:
         return SimpleNamespace(
             plan=plan,
             scatter_index=ttnn.repeat(plan.scatter_ids, ttnn.Shape((1, 1, self.embed_dims))),
-            grid_bias=self.deformable_attention.grid_bias_for(plan.reference_points, depth),
         )
 
     def __call__(self, query, value, frame):
@@ -262,14 +250,11 @@ class TTSpatialCrossAttention:
             ttnn.embedding(plan.query_index, query_rows, layout=ttnn.TILE_LAYOUT), (rows, plan.capacity, embed_dims)
         )
         assert value.shape[0] == rows, f"value has {value.shape[0]} camera rows, expected bs * num_cams = {rows}"
-        attended = self.deformable_attention(
-            query=queries, value=value, reference_points=plan.reference_points, grid_bias=frame.grid_bias
-        )
+        # Without an output projection the fused attention's ROW_MAJOR output feeds scatter_add as is.
+        attended = self.deformable_attention(query=queries, value=value, reference_points=plan.reference_points)
 
         # Unused rows add into the sink row past the last query, which the slice drops.
-        attended = ttnn.to_layout(
-            ttnn.reshape(attended, (bs, self.num_cams * plan.capacity, embed_dims)), ttnn.ROW_MAJOR_LAYOUT
-        )
+        attended = ttnn.reshape(attended, (bs, self.num_cams * plan.capacity, embed_dims))
         slots = ttnn.scatter_add(plan.scatter_base, dim=1, index=frame.scatter_index, src=attended)
         slots = ttnn.to_layout(ttnn.slice(slots, (0, 0, 0), (bs, num_queries, embed_dims)), ttnn.TILE_LAYOUT)
         slots = ttnn.mul(slots, plan.inverse_count)

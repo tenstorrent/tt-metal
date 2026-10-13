@@ -74,8 +74,10 @@ def test_encoder_layer_perf(device, reset_seeds):
     value = _to_device(camera_rows(inputs["value"]), device)
     bev_pos = _to_device(inputs["bev_pos"].permute(1, 0, 2), device)
 
+    ref_2d = encoder.reference_points(1)
+
     def run():
-        return layer(query, value, bev_pos, None, encoder.tsa_grid_base, sca_frame)
+        return layer(query, value, bev_pos, None, ref_2d, sca_frame)
 
     def check(tt_output):
         assert_pcc(torch_output, ttnn.to_torch(tt_output).float().reshape(torch_output.shape), 0.997)
