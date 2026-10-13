@@ -1,0 +1,13 @@
+# job 1: merged head (h) against main's rope header with the same kernel (m); counters; sinkhorn module on the merge
+p h ids/rope.txt -
+p m ids/rope.txt -
+p m ids/rope.txt -
+p h ids/rope.txt -
+p h ids/rope.txt -
+p m ids/rope.txt -
+p m ids/rope.txt -
+p h ids/rope.txt -
+c h ids/rope.txt - wc
+c m ids/rope.txt - wc
+c h ids/rope.txt - wc
+s h ids/sk.txt -
