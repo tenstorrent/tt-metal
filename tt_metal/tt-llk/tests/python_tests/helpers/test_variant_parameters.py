@@ -833,6 +833,22 @@ class UNPACK_BLOCK(TemplateParameter):
         return f"#define UNPACK_BLOCK {1 if self.unpack_block else 0}"
 
 
+class DATACOPY_PACK_BLOCK(TemplateParameter):
+    """Block pack under the datacopy block unpack (Blackhole), picked from columns the test already reports, so it adds no column."""
+
+    def __repr__(self) -> str:
+        return "DATACOPY_PACK_BLOCK()"
+
+    def __eq__(self, other) -> bool:
+        return isinstance(other, DATACOPY_PACK_BLOCK)
+
+    def __hash__(self) -> int:
+        return hash("DATACOPY_PACK_BLOCK")
+
+    def convert_to_cpp(self) -> str:
+        return "#define DATACOPY_PACK_BLOCK 1"
+
+
 @dataclass
 class PACK_BLOCK(TemplateParameter):
     """Pack every dest block with one _llk_pack_block_ run (Blackhole)."""
