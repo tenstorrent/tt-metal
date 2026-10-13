@@ -124,6 +124,11 @@ struct FlatRoutedExpertPlan {
     uint32_t rd_slots = 2;
     // weight regions (bytes per core region)
     uint32_t region_bytes = 0, wd_region = 0, wr_region = 0;
+    // the down cores' weight blocks rotate over the banks (default; MIMO_FL_DW_ROT=0: one bank per core): block k of
+    // down core d in bank (d + k) % banks, at d * wd_rot_region + (k / banks) blocks, like unified_routed_expert_ffn's
+    // one-tile-row ND shards
+    bool dw_rot = false;
+    uint32_t wd_rot_region = 0;
     // role cores (logical)
     std::vector<Core> readers, gu, gu_idle, relays, down, coords;
     std::vector<std::tuple<uint32_t, uint32_t, uint32_t, uint32_t>> rects;  // x0, x1, y0, y1
