@@ -539,4 +539,13 @@ void kernel_main() {
                 indexes_32_bit>(ind, in_l1_read_base_addr);
         }
     }
+
+    // Reader 0 loads the reader indices from DRAM and pushes them; reader 1 waits on them and
+    // reads them in place through a raw pointer for the whole kernel, so it releases them here.
+    // The pop keeps the condition that its wait_front carries.
+    if constexpr (reader_id == 1) {
+        if constexpr (config_in_dram) {
+            in_reader_indices_dfb.pop_front(1);
+        }
+    }
 }  // kernel_main()

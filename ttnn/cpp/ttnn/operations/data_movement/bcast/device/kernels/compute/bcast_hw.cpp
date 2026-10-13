@@ -24,8 +24,11 @@ void kernel_main() {
     compute_kernel_hw_startup(dfb_lhs_id, dfb_rhs_id, dfb_out_id);
 
 #ifdef BCAST_SCALAR
+    // The scalar is a single tile reused by every iteration, so it is waited once up front
+    // rather than per tile. AtEnd pops the same count that Upfront waited, which leaves the
+    // buffer balanced without popping the tile while later iterations still read it.
     constexpr auto rhs_wait = ckl::WaitPolicy::Upfront;
-    constexpr auto rhs_pop = ckl::PopPolicy::None;
+    constexpr auto rhs_pop = ckl::PopPolicy::AtEnd;
 #else
     constexpr auto rhs_wait = ckl::WaitPolicy::PerTile;
     constexpr auto rhs_pop = ckl::PopPolicy::PerTile;
