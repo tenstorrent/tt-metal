@@ -343,6 +343,8 @@ class TTMLRolloutSampler(RolloutSampler):
             bl = int(shape[0])
             s = int(shape[2])
             tokens_2d = ttml.ops.reshape.reshape(tokens_t, [bl, s])
+            if temperature > 0 and temperature != 1.0:
+                logits_t = logits_t * (1.0 / temperature)
             nlog = ttml.ops.loss.cross_entropy_loss(logits_t, tokens_2d, ttml.ops.ReduceType.NONE)
             return ttml.ops.reshape.reshape(nlog, [bl, s])
 

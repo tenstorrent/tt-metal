@@ -60,8 +60,8 @@ class RolloutBatch:
         completions: B ragged completion token IDs (one per prompt in
             single-generation mode; per prompt-completion pair otherwise).
         logprobs: [B, max_completion_length] float32. Per-generated-token
-            log pi_old(a_t | s_t): the full-vocab log_softmax of the raw logits,
-            without temperature/top_k/top_p. Padding positions are don't-care; the
+            log pi_old(a_t | s_t): the full-vocab log_softmax of logits / temperature
+            (unscaled at temperature 0), without top_k/top_p. Padding positions are don't-care; the
             trainer masks them out.
     """
 
@@ -1470,6 +1470,9 @@ class GRPOTrainer:
         # Per-device row count after sharding: correct for DDP, FSDP and single device alike.
         B_local = int(x.shape()[0])
         logits = self.model(x, None)
+        temperature = self.config.temperature
+        if temperature > 0 and temperature != 1.0:
+            logits = logits * (1.0 / temperature)
         tgt = ttml.autograd.Tensor.from_numpy(
             targets, ttnn.Layout.ROW_MAJOR, ttnn.DataType.UINT32, self._batch_layout.mapper
         )
