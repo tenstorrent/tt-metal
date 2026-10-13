@@ -14,6 +14,7 @@ moe/activation.apply_swiglu); anchor: transformers minimax_m3_vl MLP.
 from types import SimpleNamespace
 
 import ttnn
+from models.demos.minimax_m3.tt.weight_cache import CACHE_DUMP_MODE
 from models.demos.minimax_m3.utils.general_utils import get_cache_file_name
 from models.demos.minimax_m3.utils.profiler_utils import FINE, zone
 from models.demos.minimax_m3.utils.substate import substate
@@ -70,6 +71,7 @@ class DenseMLP:
                 mesh_mapper=mapper,
                 cache_file_name=get_cache_file_name(tensor_cache_path, name),
                 memory_config=ttnn.DRAM_MEMORY_CONFIG,
+                cache_dump_mode=CACHE_DUMP_MODE,
             )
 
         if state_dict:

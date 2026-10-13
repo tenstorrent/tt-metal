@@ -1062,13 +1062,34 @@ def test_layernorm_pre_all_gather_welford_fp32_precision(device, inp_shape, offs
     )
 
 
-@pytest.mark.parametrize("variant", ["layer_norm", "rms_norm", "rms_norm_2d"])
+# Shapes that give a core of the 2D core grid more than one tile row. The 2D grid splits the tile rows over the
+# largest divisor of their count that is at most grid.y, so a tile-row count only gives several rows per core if
+# that divisor is smaller than the count. 14 and 21 tile rows have 7 as that divisor on grids with 7 to 13 rows,
+# and 32 tile rows have 8 on grids with 8 to 15 rows, so on grids with 7 to 13 rows these shapes give every core
+# 2, 3 or 4 tile rows, except 32 tile rows on a 7-row grid, which gives 8. The widths split each tile row over
+# 2, 4 or 8 cores, or over 1 core, in which case the merge core has no other cores in its column.
+PRE_ALL_GATHER_2D_MULTI_ROW_SHAPES = [
+    (1, 1, 448, 64),
+    (1, 1, 672, 256),
+    (1, 1, 1024, 1024),
+    (1, 1, 448, 32),
+]
+
+
+@pytest.mark.parametrize(
+    "variant, shape",
+    [
+        ("layer_norm", (1, 1, 32, 128)),
+        ("rms_norm", (1, 1, 32, 128)),
+        ("rms_norm_2d", (1, 1, 32, 128)),
+    ]
+    + [("rms_norm_2d", shape) for shape in PRE_ALL_GATHER_2D_MULTI_ROW_SHAPES],
+)
 @pytest.mark.parametrize("use_residual", [False, True])
 @pytest.mark.parametrize("fast_and_approximate_mode", [False, True], ids=["sfpu_accurate", "fpu_fast_approx"])
-def test_pre_all_gather_non_welford_fp32_precision(device, variant, use_residual, fast_and_approximate_mode):
+def test_pre_all_gather_non_welford_fp32_precision(device, variant, shape, use_residual, fast_and_approximate_mode):
     """Float32 non-Welford pre_all_gather stats vs an fp64 reference."""
     torch.manual_seed(0)
-    shape = (1, 1, 32, 128)
     torch_input = torch.randn(shape, dtype=torch.float32)
     torch_residual = torch.randn(shape, dtype=torch.float32) if use_residual else None
     golden = torch_input + torch_residual if use_residual else torch_input
@@ -1143,6 +1164,58 @@ def test_pre_all_gather_non_welford_fp32_precision(device, variant, use_residual
             frobenius_threshold=frob,
             pcc_threshold=0.99999,
         )
+
+
+@pytest.mark.parametrize("shape", PRE_ALL_GATHER_2D_MULTI_ROW_SHAPES)
+@pytest.mark.parametrize("use_residual", [False, True])
+def test_rms_norm_pre_all_gather_2d_bfloat16_multiple_tile_rows(device, shape, use_residual):
+    """bfloat16 2D core grid sum(x^2) vs an fp64 reference, with more than one tile row per core.
+
+    With fp32_dest_acc_en the x^2 intermediate is Float32 and the output is bfloat16, so the merge of one tile
+    row and the statistics pass of the next pack into different data formats.
+    """
+    torch.manual_seed(0)
+    torch_input = torch.randn(shape, dtype=torch.bfloat16)
+    torch_residual = torch.randn(shape, dtype=torch.bfloat16) if use_residual else None
+    golden = torch_input.to(torch.float64)
+    if use_residual:
+        golden = golden + torch_residual.to(torch.float64)
+
+    kernel_config = ttnn.init_device_compute_kernel_config(
+        device.arch(),
+        math_fidelity=ttnn.MathFidelity.HiFi4,
+        fp32_dest_acc_en=True,
+        packer_l1_acc=True,
+    )
+
+    def to_device(t):
+        return ttnn.from_torch(
+            t, dtype=ttnn.bfloat16, device=device, layout=ttnn.TILE_LAYOUT, memory_config=ttnn.DRAM_MEMORY_CONFIG
+        )
+
+    tt_out = ttnn_rms_norm_pre_all_gather(
+        to_device(torch_input),
+        dtype=ttnn.bfloat16,
+        compute_kernel_config=kernel_config,
+        residual_input_tensor=to_device(torch_residual) if use_residual else None,
+        use_2d_core_grid=True,
+    )
+    actual = ttnn.to_torch(tt_out)
+
+    # col 0 = sum(x^2). bfloat16 has 8 significant bits, so the output alone is off by up to 2^-8 relative
+    # with round-to-nearest, or 2^-7 with truncation. Smaller errors come before that: with bfloat16 input
+    # the kernel reads its Float32 intermediates (the residual sum, x^2 and the per-core partial sums)
+    # through SrcA/SrcB, which rounds each to TF32, with 11 significant bits, about 2^-11 relative.
+    ref_sumx2 = golden.pow(2).sum(dim=-1)
+    tt_sumx2 = actual[..., 0].to(torch.float64)
+    assert_numeric_metrics(
+        ref_sumx2,
+        tt_sumx2,
+        rtol=1e-2,
+        atol=1e-1,
+        frobenius_threshold=1e-2,
+        pcc_threshold=0.999,
+    )
 
 
 @pytest.mark.parametrize(

@@ -4,11 +4,12 @@ Every SFPU op declares how closely its output must match its golden, in
 `python_tests/helpers/sfpu_accuracy_budget.yaml`. For most ops that declaration is a
 tolerance. For the ops enrolled here it is a **step budget**: "every element is within
 N representable values of the reference". Most unary budgets come from the exhaustive
-sweep, which checks an op against *every distinct finite value of the input format* --
-`±inf` and NaN are never fed, and `-0.0` is the same value as `+0.0`. The exceptions are
-the `Signbit`, isinf/isnan and threshold-family rows, measured on their functional
-drivers' hand-built stimuli (`MEASURED_ON_SWEEP`; see "Float32" below). The isinf/isnan
-sweep feeds `±inf` and NaN on purpose.
+sweep, which checks an op against *every distinct finite value of a 16-bit input format*
+-- `±inf` and NaN are never fed, and `-0.0` is the same value as `+0.0` -- or, for
+`Float32`, a strided sample of 65,280 across the whole range (`ulp_sweep.is_exhaustive`
+tells the two apart). The exceptions are the `Signbit`, isinf/isnan and threshold-family
+rows, measured on their functional drivers' hand-built stimuli (`MEASURED_ON_SWEEP`, after
+the format table below). The isinf/isnan sweep feeds `±inf` and NaN on purpose.
 
 This document is how you add an op to that second group.
 
@@ -17,7 +18,7 @@ This document is how you add an op to that second group.
 ```bash
 cd tests/python_tests
 
-# What the hardware measures for your op, over the whole format.
+# What the hardware measures for your op, over the whole format (a stride of Float32).
 CHIP_ARCH=wormhole pytest test_unary_sfpu_ulp.py --op MyOp --ulp-emit \
   --compile-producer -n 8
 CHIP_ARCH=wormhole pytest test_unary_sfpu_ulp.py --op MyOp --ulp-emit \
@@ -29,7 +30,7 @@ CHIP_ARCH=wormhole pytest test_unary_sfpu_ulp.py --op MyOp --compile-consumer
 ```
 
 `--op` matches the op name exactly. `-k MyOp` is a substring match: `-k Exp` also runs
-`Exp2`, and rewrites its block too.
+`Exp2`, `ExpWithBase`, `Expm1` and `Expm1Cw`, and rewrites their blocks too.
 
 `--ulp-emit` **writes the checked-in table**, once, at the end of the session; under
 `-n` the controller merges every worker's measurements first. It refuses to write unless
@@ -61,24 +62,27 @@ is the format's.
 | `Float16_b` | yes | yes | all 65,279 finite values |
 | `Float16` | yes | yes | all 63,487 finite values |
 | `Bfp8_b` | yes | yes | swept in bfloat16, packed on the way in |
+| `Bfp4_b` | yes | **no** | swept in bfloat16, packed on the way in |
+| `Float32` | yes | yes | **strided**, not exhaustive — see below |
 
-A budget keyed on a format the sweep does not drive is declared but never measured, so
-it holds only as far as whatever sampled it. `Float32` is the one that bites: it has
-2^32 values and one device run holds 2^16, so it cannot be enumerated the way the
-16-bit formats are. **The default unary path reads no unary `Float32` row** -- the sweep
-does not drive it, and the unary functional driver takes only the tolerance arm of a
-contract -- so for most ops those rows are a record of a sampled measurement until
-#57520 sweeps a strided `Float32` input. The exceptions gate on the whole contract,
-`Float32` included: the binary and ternary drivers, whose own sweeps measured their
-rows, and the unary signbit, isinf/isnan and threshold sweeps, whose hand-built stimuli
-are what those predicates' rows were measured on (`MEASURED_ON_SWEEP` in
-`test_sfpu_accuracy_budget.py`). The isinf/isnan and threshold predicates have no
-registered domain, so those sweeps are their only gate; `Signbit`, `ReluMin` and
-`ReluMax` are driven by the exhaustive sweep on its 16-bit cells as well.
+`Bfp4_b` is input-only: it keeps 2 fractional bits, so a bfloat16 step count would read
+every legal quantization of a `Bfp4_b` *output* as a 32-step error.
 
-On Wormhole and Blackhole an exponent-B input (`Float16_b`, `Bfp8_b`) packed to `Float16`
-needs a 32-bit Dest, so the sweep runs those cells with `dest_acc=Yes` only: asked for
-`No`, the harness would run the `Yes` kernel anyway.
+Binary, ternary and scalar rows are measured over those drivers' own sweeps, and those
+drivers gate on the whole contract, `Float32` included. So do the unary signbit, isinf/isnan
+and threshold sweeps, whose hand-built stimuli are what the predicates' rows were
+measured on (`MEASURED_ON_SWEEP` in `test_sfpu_accuracy_budget.py`). The isinf/isnan
+and threshold predicates have no registered domain, so those sweeps are their only gate;
+`Signbit`, `ReluMin` and `ReluMax` are driven by the exhaustive sweep as well.
+
+`Float32` has 2^32 values and one device run holds 2^16, so it cannot be enumerated. The
+sweep strides the format's total order instead. Every binade holds the same number of
+representable values, so each gets an equal share: one run reaches 261 binades from 0 to
+3.4e38. Ask `ulp_sweep.is_exhaustive(input_format)` if you need to know which you got.
+
+On Wormhole and Blackhole an exponent-B input (`Float16_b`, `Bfp8_b`, `Bfp4_b`) packed to
+`Float16` needs a 32-bit Dest, so the sweep runs those cells with `dest_acc=Yes` only:
+asked for `No`, the harness would run the `Yes` kernel anyway.
 
 The domain is deliberately **not** clipped to the op's safe range. Undefined inputs are
 swept and then masked out of the statistics, so they still reach hardware.
@@ -90,7 +94,12 @@ swept and then masked out of the statistics, so they still reach hardware.
 - **either side NaN** — an op undefined at an input lands here on its own;
 - **the two sides disagreeing about being non-finite** — a reciprocal overflowing where
   the golden is still finite; one such lane ranks at ~48,000 steps;
-- **subnormal inputs** — the hardware flushes them and the golden does not, so
+- **inputs the unpack does not deliver as fed** — below the smallest normal of the input
+  format *and* of the format the unpacker writes, or past the latter's largest value
+  where its exponent range is narrower: a Float32 input into a `Float16` output at
+  `dest_acc=No` lands in a `Float16` Dest, which flushes below 2**-14 and saturates past
+  65504 (about 44% of the strided lanes). Subnormal inputs are the first case: the
+  hardware flushes them and the golden does not, so
   `ceil(5.69e-39)` is 1 in the model and 0 on silicon: 16,129 bfloat16 steps. Measured,
   that class alone was the whole of `Ceil`'s, `Floor`'s and `Sqrt`'s apparent error.
   Judged on the input as generated *and* as the block-float quantizer hands it to the
@@ -108,8 +117,10 @@ which ends at 65504 and is reduced correctly throughout). Not the functional dri
 sampling window, which is where points are drawn rather than where an op stops being
 defined, and not `_SFPU_UNDEFINED_RANGES`, whose holes are guard bands around those
 points rather than the points themselves. A golden past the output format's range is
-excused only where the store saturated -- NaN, or an infinity of the golden's sign; a
-finite answer to an infinite golden is a failure.
+excused only where the store saturated -- NaN, an infinity of the golden's sign, or on a
+`Float16` output the pack's clamp to ±65504 of that sign (an out-of-range value from a
+wider Dest packs to the format's largest magnitude). Any other finite answer to an
+infinite golden is a failure.
 
 One more exclusion is a defect already on the books rather than the sweep's doing.
 `ulp_sweep._KNOWN_NONFINITE_LANES` names, per op and per cell, the inputs on which the
@@ -153,15 +164,15 @@ replacing it.
 ### 3. Measure it
 
 Run the two commands under **Quick start**. The emitter rewrites your op's block with
-what the hardware reported, and preserves anything it did not measure — a `Float32` row
-from an older run, or an `arch:`-keyed entry. It writes only whole `(in, out)` grids: a
+what the hardware reported, and preserves anything it did not measure — a sampled row
+for a cell the sweep does not drive, or an `arch:`-keyed entry. It writes only whole `(in, out)` grids: a
 run narrowed inside one (`-k` on a single approx mode, `--maxfail`, an interrupt)
 writes nothing.
 
 ### 4. Read what it wrote
 
 ```yaml
-MyOp:  # measured by: exhaustive Float16_b/Float16/Bfp8_b sweep, wormhole, 2026-09-23, except where a row says otherwise
+MyOp:  # measured by: exhaustive Float16_b/Float16/Bfp8_b/Bfp4_b + strided Float32 sweep, wormhole, 2026-09-23, except where a row says otherwise
   - {in: Float16_b, out: Float16_b, max_ulp: 2}  # max 1 ULP
   - {in: Float16, out: Float16_b, metric: tolerance}  # max 14337 ULP, budget would be 15771 > 6-step ceiling
   - {in: Float16_b, out: Bfp8_b, metric: tolerance}  # max 393 ULP, block-quantized, so tolerance
@@ -169,11 +180,13 @@ MyOp:  # measured by: exhaustive Float16_b/Float16/Bfp8_b sweep, wormhole, 2026-
 
 Four verdicts:
 
-- **`max_ulp: N`** — enrolled. `N` is the measurement plus 1.1x headroom, rounded up
-  (a measured 1 becomes 2), except that a measured 0 stays 0.
-- **`metric: tolerance`, "budget would be N > C-step ceiling"** — past
+- **`max_ulp: N`** — enrolled. `N` is the measurement plus 1.1x headroom, capped at the
+  output's usable ceiling when the measurement itself fits under it. A measured 0 stays
+  0 on a 16-bit input the sweep enumerates, and on an op exact by construction; on the
+  strided `Float32` input it is written as 1, since a sample cannot assert exactness.
+- **`metric: tolerance`, "budget N > ceiling C"** — the measurement itself is past
   `usable_budget_ceiling`, so a step budget would no longer be *tighter* than the
-  tolerance it replaces. The op keeps tolerance + PCC on that cell and the number is
+  tolerance it replaces; `N` is the budget it would have needed. The op keeps tolerance + PCC on that cell and the number is
   recorded so nobody re-derives it.
 - **`metric: tolerance`, "block-quantized"** — a block float output. The sweep
   enumerates a format in value order, so sixteen adjacent values share a `Bfp8_b` block
@@ -182,7 +195,8 @@ Four verdicts:
   blocks (the table's `Bfp8_b` note) and **393** from the sorted sweep of a bfloat16
   input, so neither number is enrollable.
 - **`metric: tolerance`, "not measurable: …"** — the cell had no lane a step count could
-  describe, or answered inf/NaN where the op claims a finite result. No budget buys that;
+  describe, or disagreed with the golden about being finite where the op claims an
+  answer (inf/NaN against a finite golden, or a finite answer to an infinite one). No budget buys that;
   the row says why instead of leaving a hole the next emit would paper over, and it still
   records `max N ULP` over the lanes that *were* measurable, so the rest of the cell is
   not thrown away with the demotion. On a
@@ -193,8 +207,8 @@ Four verdicts:
 
 ### 5. Gate on it
 
-Re-run without `--ulp-emit`. Green means the budgets in the table hold over the whole
-format. Then run the host guards, which check things the sweep cannot:
+Re-run without `--ulp-emit`. Green means the budgets in the table hold over every value
+of a 16-bit input and over the `Float32` stride. Then run the host guards, which check things the sweep cannot:
 
 ```bash
 pytest test_sfpu_accuracy_budget.py test_ulp_sweep.py -q
