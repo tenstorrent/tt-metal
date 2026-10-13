@@ -55,7 +55,7 @@ SECTIONS
   PROVIDE (__executable_start = __firmware_start);
   /* The harness code goes ahead of the kernel, so it cannot move it (zone helpers in fixed slots, then main). The
      loader writes only .init and .text (ElfLoader.SECTIONS_TO_LOAD), so this stays in .init. Wormhole perf TILE_LOOP
-     builds keep only a jump to _start and the zone helpers here; the rest of the harness goes last (.llk_harness). */
+     builds keep only a jump to _start and the zone helpers here; the rest of the harness goes to .llk_spill. */
   .init __firmware_start :
   {
     /* Wormhole perf builds: the loader starts the core at .init's first word, a jump to _start (kernel_placement.h).
@@ -90,19 +90,21 @@ SECTIONS
     *(SORT_BY_NAME(.text.llk_loop_callee.*))
     *(.text.hot .text.hot.*)
     *(.text .stub .text.* .gnu.linkonce.t.*)
-    *(.llk_text_rest) /* Wormhole perf builds: the kernel's other functions, after the libraries (test_config.py) */
     *(.gnu.warning)
-    *(.llk_init_text) /* out of line INIT blocks (perf.h), last so they move nothing */
     . = ALIGN(DEFINED(llk_quiet_align) ? llk_quiet_align : 1); /* quiet_wait sets it: the hold on a fixed line */
     *(.llk_quiet_text) /* the PACK_ISOLATE peers' hold (profiler.h quiet_wait), after them for the same reason */
-    /* Wormhole perf TILE_LOOP builds: _start, main and the rest of the harness (test_config.py), last, in a fixed
-       llk_harness_reserve bytes (kernel_placement.h), so the code's end, and so the pads perf/layout.py finds room for,
-       do not depend on the harness's size */
-    PROVIDE (__llk_harness_start = .);
-    *(.llk_harness)
-    ASSERT(. - __llk_harness_start <= (DEFINED(llk_harness_reserve) ? llk_harness_reserve : .), "harness exceeds llk_harness_reserve");
-    . = MAX(., __llk_harness_start + (DEFINED(llk_harness_reserve) ? llk_harness_reserve : 0));
   } > REGION_CODE
+  /* Wormhole perf builds: the code no TILE_LOOP window runs (the kernel's other functions, after the libraries; INIT's
+     out of line blocks, perf.h; _start, main and the rest of the harness, test_config.py). The TILE_LOOP build puts it
+     at llk_spill_at, an L1 area of its own (kernel_placement.h; test_config.py loads it), so neither its size nor its
+     content moves a window or takes room from the pads perf/layout.py picks; other builds keep it after .text. */
+  .llk_spill (DEFINED(llk_spill_at) ? llk_spill_at : .) :
+  {
+    *(.llk_text_rest)
+    *(.llk_init_text)
+    *(.llk_harness)
+  }
+  ASSERT(DEFINED(llk_spill_at) ? SIZEOF(.llk_spill) <= llk_spill_size : ADDR(.llk_spill) + SIZEOF(.llk_spill) <= ORIGIN(REGION_CODE) + LENGTH(REGION_CODE), "the code outside the windows does not fit its area")
   .fini :
   {
     KEEP (*(SORT_NONE(.fini)))

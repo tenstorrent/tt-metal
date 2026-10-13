@@ -48,7 +48,7 @@ ZONE_RECORD = "_ZN12llk_profiler11zone_recordEtyy"
 RUN_KERNEL = "_Z10run_kernelRK13RuntimeParams"
 PARAMS, STACK, RETURN = 0x70000000, 0x7FFF0000, 0x7EEE0000
 M32 = 0xFFFFFFFF
-MAP_VERSION = 12
+MAP_VERSION = 13
 ALIGNS = (8, 16, 32, 64, 128, 256, 512, 1024, 2048, 4096)
 
 
@@ -88,7 +88,12 @@ class Elf:
                 for off in range(h[4], h[4] + h[5], 16):
                     st_name, st_value, st_size = struct.unpack_from("<III", data, off)
                     self.symbols[name(st_name, heads[h[6]])] = (st_value, st_size)
-        self.text_end = max(a + len(d) for a, d in self.code)
+        # the code region's end of the code: a Wormhole TILE_LOOP build's .llk_spill (sections.ld) lies above the region
+        self.text_end = max(
+            a + len(d)
+            for a, d in self.code
+            if self.region_end is None or a < self.region_end
+        )
 
     def word(self, addr):
         for a, d in self.sections.values():
@@ -97,9 +102,12 @@ class Elf:
         return None
 
     def instructions(self):
-        """(addresses, words) of every code word that is not fill, in address order"""
+        """(addresses, words) of every code word in the code region that is not fill, in address order (a Wormhole
+        TILE_LOOP build's .llk_spill sits apart, sections.ld, and pads never move it)"""
         addrs, words = [], []
         for a, d in sorted(self.code):
+            if self.region_end is not None and a >= self.region_end:
+                continue
             w = np.frombuffer(d[: len(d) & ~3], dtype="<u4").astype(np.int64)
             keep = (w != FILL[0]) & (w != FILL[1])
             addrs.append(a + 4 * np.flatnonzero(keep))
