@@ -31,7 +31,8 @@ inline void llk_unpack_tilize_init_impl(
         StateVal<Operand<Exu::Unpack>::FaceHeightA>(face_r_dim),
         StateVal<Operand<Exu::Unpack>::NumFacesA>(num_faces)));
 
-    _llk_unpack_tilize_init_(src_format, dst_format, ct_dim, face_r_dim, narrow_tile, num_faces);
+    // llk_unpack_tilize_block takes the block call from two tiles
+    _llk_unpack_tilize_init_(src_format, dst_format, ct_dim, face_r_dim, narrow_tile, num_faces, ct_dim > 1);
 }
 
 inline void llk_unpack_tilize_impl(

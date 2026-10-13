@@ -202,7 +202,8 @@ inline void switch_config_context_from(const std::uint32_t context_used)
     }
 }
 
-// Which block body the replay buffer holds: the inits clear it, the tilize and unpack A block calls record theirs.
+// Which block body the replay buffer holds: the inits clear it; the unpack A block call records its own, the tilize body is recorded
+// by the tilize init when block calls follow, else by the first tilize block call.
 // An unpack A value is the face count, with a half bit while only that half is held.
 enum class BlockReplayBody : std::uint8_t
 {
@@ -211,7 +212,7 @@ enum class BlockReplayBody : std::uint8_t
     UnpackA_2 = 2,
     UnpackA_4 = 4,
     Tilize    = 8,
-    // The tilize init ran; the first tilize block call records the body.
+    // The tilize init ran without recording the body
     TilizeInit = 0x40,
 };
 constexpr std::uint8_t BLOCK_REPLAY_HALF_0 = 0x10;
