@@ -8,18 +8,6 @@
 #include "llk_unpack_reduce.h"
 #include "llk_reduce_common_api.h"
 
-namespace ckernel::trisc {
-// The scaler DFB whose unpacker (UNP_B) llk_unpack_AB_reduce_init moved to MxFp4_2x_B for a 2x column
-// reduce, stored as operand id + 1 so that 0 (REDUCE_2X_SCALER_NONE) means none: the firmware definition
-// stays zero-initialized in .tbss. llk_unpack_AB_reduce_uninit is only given the data operand, so it
-// restores UNP_B from this. thread_local because each Neo has its own UNP_B and runs its own
-// init/uninit: a shared global would let one Neo's uninit clear another's record (tt-llk#1678).
-// Defined in tt_metal/hw/firmware/src/tt-2xx/trisc.cc.
-extern thread_local std::uint32_t reduce_2x_scaler_operand_plus_one;
-}  // namespace ckernel::trisc
-
-constexpr std::uint32_t REDUCE_2X_SCALER_NONE = 0;
-
 /*************************************************************************
  * LLK UNPACK AB REDUCE
  *************************************************************************/
