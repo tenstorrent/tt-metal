@@ -661,6 +661,7 @@ FORCE_INLINE
 void process_go_signal_mcast_cmd() {
     volatile CQDispatchCmd tt_l1_ptr* cmd = reinterpret_cast<volatile CQDispatchCmd tt_l1_ptr*>(cmd_ptr);
     uint32_t sync_index = load_aligned<uint32_t>(&cmd->mcast.wait_stream) - first_stream_used;
+    ASSERT(sync_index < max_num_worker_sems);
     // Get semaphore that will be update by dispatch_d, signalling that it's safe to send a go signal
 
     volatile tt_l1_ptr uint32_t* sync_sem_addr =

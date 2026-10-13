@@ -1214,6 +1214,7 @@ void process_go_signal_mcast_cmd() {
     // go_count = 1 (paired with the host zeroing go_processed), which the worker always detects (1 != 0).
     const bool go_count_reset = (go_signal_value & 0xFFu) == RUN_MSG_RESET_READ_PTR;
     const uint32_t sync_index = stream - first_stream_used;
+    ASSERT(sync_index < max_num_worker_sems);
     if (multicast_go_offset != CQ_DISPATCH_CMD_GO_NO_MULTICAST_OFFSET) {
         // Setup registers before waiting for workers so only the NOC_CMD_CTRL register needs to be touched after.
         // The per-go write targets word 0 ({signal, go_count}) of the 8-byte go_msg_t slot; word 1 (the done-return
