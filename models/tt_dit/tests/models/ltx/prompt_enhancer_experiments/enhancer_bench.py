@@ -18,6 +18,12 @@ runs with different knobs can be compared token for token (BENCH_REF / BENCH_REF
     BENCH_REF_TAG      the same by tag: <out dir>/<tag>.json (BENCH_REF wins when both are set)
     BENCH_ROW_CHECK    1: after each request, read element 0 of the decode token-feedback buffer on the first
                        device of every mesh row and record whether the rows agree
+    BENCH_PROFILE_STEPS  K > 0: profile run for Tracy (``python -m tracy -p -r -v -m pytest ...``). Replaces the
+                       measured requests with one request per temperature that decodes past stop ids, and wraps
+                       decode steps BENCH_PROFILE_SKIP (default 2) .. +K-1 in ``start``/``stop`` signposts. The
+                       device profiler is drained just before ``start`` and just after ``stop``, so the window
+                       must fit TT_METAL_PROFILER_PROGRAM_SUPPORT_COUNT programs per core (~1.3k per step)
+    LTX_DRAM_REPORT    1: record per-chip DRAM and trace-region use after load, warmup and capture
     LTX_ENHANCER_EXP_DIR  output root (JSON lands under <root>/enhancer_bench/)
 
 Each request's ``calls`` counts host touch points (H2D copies, trace launches, host PLI, decode restages, eager
@@ -34,6 +40,7 @@ from loguru import logger
 import ttnn
 from models.tt_dit.pipelines.ltx.prompt_enhancer import ENHANCER_SEED, DevicePromptEnhancer, default_ltx_enhancer
 from models.tt_dit.tests.models.ltx.ltx_mesh_params import LTX_DISTILLED_MESH_PARAMS_DL
+from models.tt_dit.utils.ltx import log_dram
 from models.tt_dit.utils.test import skip_if_unsupported_num_links
 
 OUT_DIR = os.path.join(
@@ -110,6 +117,53 @@ def _mean(values):
     return round(sum(values) / len(values), 3) if values else None
 
 
+def _profile_decode(enhancer, mesh, temps, steps, results):
+    """One request per temperature with decode steps [skip, skip + steps) inside start/stop signposts. Each
+    step reads its token back, so the device has finished the step (trace replay and the eager sampler) when
+    decode_forward returns; the drains bound the window so it alone has to fit the profiler buffer."""
+    from tracy import signpost
+
+    skip = int(os.environ.get("BENCH_PROFILE_SKIP", "2"))
+    generator = enhancer._generator
+    orig = generator.decode_forward
+    state = {"step": 0}
+
+    def drain():
+        ttnn.synchronize_device(mesh)
+        ttnn.ReadDeviceProfiler(mesh)
+
+    def wrapped(*args, **kwargs):
+        step = state["step"]
+        if step == skip:
+            drain()
+            signpost("start")
+        out = orig(*args, **kwargs)
+        if step == skip + steps - 1:
+            ttnn.synchronize_device(mesh)
+            signpost("stop")
+            drain()
+        state["step"] += 1
+        return out
+
+    enhancer.ignore_stop = True
+    max_new = enhancer.max_new_tokens
+    enhancer.max_new_tokens = skip + steps + 2
+    generator.decode_forward = wrapped
+    windows = []
+    try:
+        for temperature in temps:
+            state["step"] = 0
+            enhancer.temperature = temperature
+            enhancer.enhance(BENCH_PROMPTS[0], mode="t2v", seed=ENHANCER_SEED)
+            windows.append({"temperature": temperature, "first_step": skip, "steps": steps})
+            logger.info(f"bench profile: T={temperature} window steps {skip}..{skip + steps - 1}")
+    finally:
+        generator.decode_forward = orig
+        enhancer.max_new_tokens = max_new
+        enhancer.ignore_stop = False
+    results["profile_windows"] = windows
+
+
 @pytest.mark.parametrize(
     "mesh_device, sp_axis, tp_axis, num_links, device_params, topology, is_fsdp, dynamic_load",
     GALAXY_RING_TRACED,
@@ -139,16 +193,28 @@ def test_enhancer_bench(mesh_device, device_params, sp_axis, tp_axis, num_links,
         with open(out_path, "w") as f:
             json.dump(results, f, indent=1)
 
+    dram = [log_dram(submesh, "before load")]
     t0 = time.time()
     enhancer.ensure_loaded()
     results["lifecycle"]["load_s"] = round(time.time() - t0, 1)
+    dram.append(log_dram(submesh, "after load"))
     t0 = time.time()
     enhancer.warmup(capture=False)
     results["lifecycle"]["warmup_s"] = round(time.time() - t0, 1)
+    dram.append(log_dram(submesh, "after warmup"))
     t0 = time.time()
     enhancer.capture_trace()
     results["lifecycle"]["capture_s"] = round(time.time() - t0, 1)
+    dram.append(log_dram(submesh, "after capture"))
+    if any(dram):
+        results["dram"] = [d for d in dram if d]
     dump()
+    profile_steps = int(os.environ.get("BENCH_PROFILE_STEPS", "0"))
+    if profile_steps > 0:
+        _profile_decode(enhancer, submesh, temps, profile_steps, results)
+        dump()
+        enhancer.unload()
+        return
     # Only the measured requests run past stop ids; warmup and capture above keep their natural length.
     enhancer.ignore_stop = _env_flag("BENCH_IGNORE_STOP")
 

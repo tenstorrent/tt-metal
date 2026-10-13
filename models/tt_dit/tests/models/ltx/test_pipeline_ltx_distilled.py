@@ -27,6 +27,7 @@ from models.tt_dit.utils.ltx import (
     STEADY_STATE_REPLAY_LTX_PROMPT,
     default_ltx_checkpoint,
     default_ltx_gemma,
+    log_dram,
     print_ltx_timing_table,
     traced_default,
 )
@@ -183,6 +184,10 @@ def test_pipeline_distilled(
         enhanced = pipeline.last_enhanced_prompt
         if enhanced is not None:
             logger.info(f"Enhanced prompt: {enhanced!r}")
+        enhancer = getattr(pipeline, "prompt_enhancer", None)
+        if getattr(enhancer, "last_stats", None):
+            logger.info(f"Enhancer stats (gen {number}): {enhancer.last_stats}")
+        log_dram(pipeline.mesh_device, f"after gen {number}")
         print_ltx_timing_table(
             pipeline,
             label="LTX DISTILLED",

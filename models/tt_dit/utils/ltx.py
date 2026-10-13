@@ -90,6 +90,33 @@ def default_ltx_gemma() -> str:
     return os.environ.get("GEMMA_PATH") or "google/gemma-3-12b-it-qat-q4_0-unquantized"
 
 
+def log_dram(mesh_device, label: str) -> dict | None:
+    """LTX_DRAM_REPORT=1: log per-chip DRAM use and the trace region's use, and return them in GiB. The mesh
+    allocator is lock-step, so the per-bank figures times the bank count are every chip's numbers."""
+    if os.environ.get("LTX_DRAM_REPORT", "0").strip().lower() not in ("1", "true", "yes"):
+        return None
+    import ttnn
+    from loguru import logger
+
+    gib = 1024**3
+    view = ttnn.get_memory_view(mesh_device, ttnn.BufferType.DRAM)
+    report = {
+        "label": label,
+        "dram_total_gib": round(view.total_bytes_per_bank * view.num_banks / gib, 3),
+        "dram_allocated_gib": round(view.total_bytes_allocated_per_bank * view.num_banks / gib, 3),
+        "dram_free_gib": round(view.total_bytes_free_per_bank * view.num_banks / gib, 3),
+        "dram_largest_free_gib": round(view.largest_contiguous_bytes_free_per_bank * view.num_banks / gib, 3),
+    }
+    try:
+        trace = ttnn.get_memory_view(mesh_device, ttnn.BufferType.TRACE)
+        report["trace_allocated_gib"] = round(trace.total_bytes_allocated_per_bank * trace.num_banks / gib, 3)
+        report["trace_free_gib"] = round(trace.total_bytes_free_per_bank * trace.num_banks / gib, 3)
+    except Exception as e:  # no trace region on this device
+        logger.debug(f"DRAM[{label}]: no trace view ({e})")
+    logger.info(f"DRAM[{label}] " + " ".join(f"{k}={v}" for k, v in report.items() if k != "label"))
+    return report
+
+
 def print_ltx_timing_table(
     pipeline, *, label, num_frames, height, width, mesh_shape, sp_axis, tp_axis, topology, output_path, prompt
 ):

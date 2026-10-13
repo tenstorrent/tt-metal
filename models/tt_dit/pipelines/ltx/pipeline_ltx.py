@@ -39,7 +39,7 @@ from ...parallel.config import DiTParallelConfig, EncoderParallelConfig, Paralle
 from ...parallel.manager import CCLManager
 from ...utils.fuse_loras import LoraSpec
 from ...utils.host_affinity import pin_one_thread_per_core
-from ...utils.ltx import SPATIAL_COMPRESSION, TEMPORAL_COMPRESSION, ceil_to, latent_grid
+from ...utils.ltx import SPATIAL_COMPRESSION, TEMPORAL_COMPRESSION, ceil_to, latent_grid, log_dram
 from ...utils.mochi import get_rot_transformation_mat
 from ...utils.patchifiers import AudioLatentShape, VideoPixelShape
 from ...utils.progress import Watchdog
@@ -846,16 +846,20 @@ class LTXPipeline:
             return
         t0 = time.time()
         logger.info(f"warmup prompt enhancer: {self.prompt_enhancer.name} (capture={capture})")
+        log_dram(self.mesh_device, "before enhancer warmup")
         self.prompt_enhancer.warmup(capture=capture)
         logger.info(f"warmup prompt enhancer done in {time.time() - t0:.1f}s")
+        log_dram(self.mesh_device, "after enhancer warmup")
 
     def _capture_prompt_enhancer_trace(self) -> None:
         """Capture the enhancer's trace once every persistent pipeline buffer exists (LTX_ENHANCER_LATE_CAPTURE)."""
         if self.prompt_enhancer is None:
             return
+        log_dram(self.mesh_device, "before enhancer capture")
         t0 = time.time()
         self.prompt_enhancer.capture_trace()
         logger.info(f"prompt enhancer trace capture done in {time.time() - t0:.1f}s")
+        log_dram(self.mesh_device, "after enhancer capture")
 
     def encode_prompts(
         self, prompts: list[str], *, use_cache: bool = True
