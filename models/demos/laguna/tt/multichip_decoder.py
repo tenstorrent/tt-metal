@@ -1107,13 +1107,16 @@ class MultichipDecoder(OptimizedDecoder):
         blocks_per_user = int(math.ceil(max_seq_len / block_size))
         max_num_blocks = blocks_per_user * max_users
         shape = (max_num_blocks, self.cfg.num_kv_heads, block_size, self.cfg.head_dim)  # local KV heads
-        # zero-filled on device (the host zeros were converted to the cache format on the CPU and uploaded per layer:
-        # minutes for a batch-32, 10K-token cache)
+        # allocated and zero-filled on device (ttnn.fill in place): host zeros -- ttnn.from_torch, and ttnn.zeros too
+        # for bfloat8_b (it builds a host vector) -- were converted to the cache format on the CPU and uploaded per
+        # layer: ~45 s for a batch-32, 8K-token cache
         k, v = (
-            ttnn.zeros(shape, dtype=dtype, layout=ttnn.TILE_LAYOUT, device=self.device,
-                       memory_config=ttnn.DRAM_MEMORY_CONFIG)
+            ttnn.allocate_tensor_on_device(ttnn.Shape(shape), dtype, ttnn.TILE_LAYOUT, self.device,
+                                           ttnn.DRAM_MEMORY_CONFIG)
             for _ in range(2)
         )  # fmt: skip
+        for t in (k, v):
+            ttnn.fill(t, 0.0, output_tensor=t)
         return {"k": k, "v": v, "block_size": block_size, "blocks_per_user": blocks_per_user, "dtype": dtype}
 
     def make_page_table(self, num_users, blocks_per_user):
