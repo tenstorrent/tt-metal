@@ -742,6 +742,45 @@ inline void bitonic_topk_ph3_st4_to_1(bool dir, bool &init_replay, int replay_st
     }
 }
 
+// Main's unstable steps 4 to 1 group, kept for the K 16 rebuild so that no K 16 row reads slower than main.
+template <bool FUSED>
+inline void bitonic_topk_ph3_st4_to_1_bracketed(bool dir, bool &init_replay, int replay_start)
+{
+    if (dir == static_cast<bool>(SortDir::ArgMin))
+    {
+        TTI_SFPCONFIG(FUSED ? 0x100 : 0x104, 0xF, 1);
+        TTI_SFPNOP;
+        TTI_SFPNOP;
+    }
+    constexpr int replay_count = 5;
+    if (init_replay)
+    {
+        load_replay_buf<Exec>(
+            replay_start,
+            replay_count,
+            []
+            {
+                TTI_SFPSWAP(0, p_sfpu::LREG0, p_sfpu::LREG2, p_sfpswap::ALL_ROWS_MAX);
+                TTI_SFPSWAP(0, p_sfpu::LREG1, p_sfpu::LREG3, p_sfpswap::ALL_ROWS_MAX);
+                TTI_SFPSWAP(0, p_sfpu::LREG0, p_sfpu::LREG1, p_sfpswap::ALL_ROWS_MAX);
+                TTI_SFPSWAP(0, p_sfpu::LREG2, p_sfpu::LREG3, p_sfpswap::ALL_ROWS_MAX);
+                TTI_SFPTRANSP(0, 0, 0, 0);
+            });
+        init_replay = false;
+    }
+    else
+    {
+        lltt::replay(replay_start, replay_count);
+    }
+    lltt::replay(replay_start, replay_count);
+    if (dir == static_cast<bool>(SortDir::ArgMin))
+    {
+        TTI_SFPCONFIG(FUSED ? 0x000 : 0x004, 0xF, 1);
+        TTI_SFPNOP;
+        TTI_SFPNOP;
+    }
+}
+
 template <bool STABLE_SORT, TopkTieOrder TIE_ORDER = TopkTieOrder::Unset>
 inline void bitonic_topk_ph2_st3_to_1()
 {
@@ -2167,7 +2206,7 @@ inline void _bitonic_topk_rebuild_impl_(const bool idir, const int m_iter, const
                             if (init_rebuild)
                             {
                                 load_replay_buf<Exec>(0, ldst_count, [] { bitonic_topk_load16<is_fp32_dest_acc_en, FUSED, RANK_STAMPED>(4, 8); });
-                                bitonic_topk_ph3_st4_to_1<STABLE_SORT, TIE_ORDER>(dir, init_rebuild, 8, TOPK_REBUILD_PH3_REV_REPLAY_START);
+                                bitonic_topk_ph3_st4_to_1_bracketed<FUSED>(dir, init_rebuild, 8);
                                 load_replay_buf<Exec>(
                                     13,
                                     rebuild_win_st12,
@@ -2183,7 +2222,7 @@ inline void _bitonic_topk_rebuild_impl_(const bool idir, const int m_iter, const
                             else
                             {
                                 lltt::replay(0, ldst_count);
-                                bitonic_topk_ph3_st4_to_1<STABLE_SORT, TIE_ORDER>(dir, init_rebuild, 8, TOPK_REBUILD_PH3_REV_REPLAY_START);
+                                bitonic_topk_ph3_st4_to_1_bracketed<FUSED>(dir, init_rebuild, 8);
                                 lltt::replay(13, rebuild_win_st12);
                             }
                         }
