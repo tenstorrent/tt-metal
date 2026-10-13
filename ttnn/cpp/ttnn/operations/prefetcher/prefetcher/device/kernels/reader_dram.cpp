@@ -121,9 +121,7 @@ void kernel_main() {
                     }
                 } else {
                     // Block reaches past the end of the DRAM shard (see the padding contract above). Only the first
-                    // such block can hold real rows. Re-setting the read state while earlier reads are in flight is
-                    // safe: set_state waits for the cmd buf to be free, and issued requests do not depend on it. The
-                    // next tensor sets the DRAM read state again.
+                    // such block can hold real rows.
                     if (block == curr_num_full_blocks) {
                         const uint32_t curr_partial_block_num_pages = partial_block_num_pages[t];
                         if (curr_partial_block_num_pages != 0) {
