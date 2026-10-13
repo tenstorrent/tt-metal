@@ -8,14 +8,16 @@
 set +e +o pipefail
 R=$(git rev-parse --show-toplevel); S=$R/ci_ab; L=$R/tt_metal/tt-llk
 PLAN=$S/${1:-plan.txt}
-[[ -f $S/env.sh ]] && . $S/env.sh
+[[ -f ${PLAN%.txt}.env ]] && . ${PLAN%.txt}.env
 echo "== start $(date -u +%T) checkout $R $(git -C $R rev-parse HEAD) plan $PLAN host $(hostname)"
 rm -rf /tmp/llkb_* /tmp/llkvenv
 python3 -m venv /tmp/llkvenv && . /tmp/llkvenv/bin/activate
 pip install -q -r $L/tests/requirements.txt > /tmp/pip.log 2>&1; echo "== pip rc=$? $(tail -1 /tmp/pip.log)"
 (cd $L/tests && ./setup_testing_env.sh > /tmp/setup.log 2>&1); echo "== setup rc=$? $(tail -2 /tmp/setup.log | tr '\n' ' ')"
 echo "== sfpi $($L/tests/sfpi/compiler/bin/riscv-tt-elf-g++ --version 2>&1 | head -1)"
-export CHIP_ARCH=blackhole LLK_HOME=$L TT_LLK_DISABLE_ASSERTS=1 LLK_PERF_L1_MUX_GROUP=0 PERF_KEEP_RUNS=1000
+export CHIP_ARCH=blackhole LLK_HOME=$L TT_LLK_DISABLE_ASSERTS=1 LLK_PERF_L1_MUX_GROUP=0 PERF_KEEP_RUNS=1000 BITS_OUT=/tmp/bits
+[[ -f $S/bits_rope.py ]] && cp $S/bits_rope.py $L/tests/python_tests/
+rm -rf /tmp/bits
 place() {
   while read -r rel; do [[ -n $rel ]] && { if [[ -f "$S/variants/$1/$rel" ]]; then cp "$S/variants/$1/$rel" "$R/$rel"; else git -C $R show HEAD:"$rel" > "$R/$rel"; fi; }; done < $S/files.txt
   echo "   placed $1: $(while read -r rel; do [[ -n $rel ]] && md5sum < "$R/$rel" | cut -c1-8; done < $S/files.txt | paste -sd' ')"
@@ -55,7 +57,7 @@ while read -r tag v ids rts wc; do
   [[ -z ${tag:-} || $tag == \#* ]] && continue
   i=$((i + 1)); b=$v; wcf=""; [[ $wc == wc ]] && { b=${v}wc; wcf=--dump-perf-counters; }
   t=${tag}_${i}_$b
-  place $v
+  place $v; export BITS_TAG=$v
   mapfile -t NODES < $S/$ids
   if [[ $rts != - ]]; then export LLK_PERF_RUN_TYPES=$rts; else unset LLK_PERF_RUN_TYPES; fi
   echo "== run $t ${#NODES[@]} nodes rts=$rts $(date -u +%T)"
@@ -66,6 +68,7 @@ while read -r tag v ids rts wc; do
   if grep -q "TIMED OUT" $OUT/run_$t.log; then echo "== TENSIX TIMED OUT in $t, stopping"; break; fi
   [[ -d $L/perf_data/runs/$t ]] && mkdir -p $OUT/csv/$t && find $L/perf_data/runs/$t -name "*.csv" -exec cp {} $OUT/csv/$t/ \;
 done < $PLAN
+for p in ${BITS_PAIRS:-}; do python $S/bits_cmp.py /tmp/bits ${p%%-*} ${p##*-}; done
 # functional: test_rope.py with the LLK asserts on (fresh build dir per variant)
 unset LLK_PERF_RUN_TYPES TT_LLK_DISABLE_ASSERTS
 for v in ${FUNC:-h}; do
