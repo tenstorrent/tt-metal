@@ -6857,3 +6857,58 @@ class TestReportModesDuringTraceCapture:
                 ttnn.end_trace_capture(device, trace_id, cq_id=0)
                 ttnn.release_trace(device, trace_id)
         ttnn.synchronize_device(device)
+
+
+def test_multihost_graph_report(request):
+    """
+    Smoke test for graph reports in a multi-process (multi-host) run: every rank captures its own graph and rank 0
+    merges all of them into one db.sqlite, with each rank's rows tagged by rank.
+
+    Skipped unless launched with tt-run on at least two ranks, e.g. on a T3K:
+        tt-run --rank-binding tests/tt_metal/distributed/config/2x4_multiprocess_rank_bindings.yaml \\
+            pytest tests/ttnn/unit_tests/base_functionality/test_graph_report.py::test_multihost_graph_report
+    """
+    if not ttnn.using_distributed_env():
+        pytest.skip("needs a multi-process run launched with tt-run")
+    if ttnn.graph.is_graph_capture_active():
+        pytest.skip("graph reporting is already on for this run, so the nested fixture would join that capture")
+    # Requested here rather than as an argument so a single-process run skips without opening the mesh.
+    mesh_device = request.getfixturevalue("mesh_device")
+    rank = int(ttnn.distributed_context_get_rank())
+    world_size = int(ttnn.distributed_context_get_size())
+
+    with ttnn.manage_config("enable_fast_runtime_mode", False), ttnn.manage_config(
+        "enable_logging", True
+    ), ttnn.manage_config("enable_graph_report", True), ttnn.manage_config("report_name", None):
+        # The report directory is stamped with the current minute, so start every rank together.
+        ttnn.distributed_context_barrier()
+        with contextlib.contextmanager(graph_report.run_pytest_graph_report_fixture)(request):
+            report_path = Path(ttnn.CONFIG.report_path)
+            # Build on host and then move to device: from_torch(device=...) would touch the other ranks' chips.
+            x = ttnn.from_torch(
+                torch.rand((32, 32), dtype=torch.bfloat16),
+                layout=ttnn.TILE_LAYOUT,
+                mesh_mapper=ttnn.ReplicateTensorToMesh(mesh_device),
+            )
+            ttnn.relu(ttnn.to_device(x, mesh_device))
+            ttnn.synchronize_device(mesh_device)
+
+    config_path = report_path / f"config_{rank + 1}_of_{world_size}.json"
+    assert config_path.exists(), f"rank {rank} wrote no {config_path.name} under {report_path}"
+    if rank != 0:
+        return
+
+    db_path = report_path / "db.sqlite"
+    assert db_path.exists(), f"no db.sqlite written under {report_path}"
+    conn = sqlite3.connect(db_path)
+    try:
+        cursor = conn.cursor()
+        cursor.execute("SELECT DISTINCT rank FROM operations WHERE name LIKE '%relu%' ORDER BY rank")
+        relu_ranks = [row[0] for row in cursor.fetchall()]
+        cursor.execute("SELECT DISTINCT rank FROM devices ORDER BY rank")
+        device_ranks = [row[0] for row in cursor.fetchall()]
+    finally:
+        conn.close()
+    all_ranks = list(range(world_size))
+    assert relu_ranks == all_ranks, f"relu recorded for ranks {relu_ranks}, expected {all_ranks}"
+    assert device_ranks == all_ranks, f"devices recorded for ranks {device_ranks}, expected {all_ranks}"
