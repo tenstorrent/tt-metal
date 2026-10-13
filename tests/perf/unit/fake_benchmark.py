@@ -7,7 +7,8 @@
 """Stands in for a Google Benchmark binary in unit tests.
 
 $FAKE_BENCH_PLAN names a JSON file: {"metric": {...decl...}, "runs": [{case: value, ...}, ...]}. Each invocation
-consumes the next entry of "runs", so a test can give the retry different values from the first run.
+consumes the next entry of "runs", so a test can give the retry different values from the first run. An entry of
+"crash" makes that invocation exit with an error.
 """
 
 import json
@@ -24,6 +25,8 @@ calls = json.loads(call_path.read_text()) if call_path.exists() else []
 values = plan["runs"][min(len(calls), len(plan["runs"]) - 1)]
 calls.append(sys.argv[1:])
 call_path.write_text(json.dumps(calls))
+if values == "crash":
+    sys.exit(3)
 
 repetitions = int(args.get("--benchmark_repetitions", 1))
 case_filter = args.get("--benchmark_filter")
