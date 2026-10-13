@@ -1,0 +1,20 @@
+# H5: B (round head before the rebuild change), B8 (rebuild's reversed groups by mode 9 up to K 32), B12 (B8 with the
+# bracketed group on a replay cache miss); B B8 B12 B12 B8 B twice on the perf modules, then unary rows B B8 B12 B12 B8 B.
+r B ids/h1.txt -
+r B8 ids/h1.txt -
+r B12 ids/h1.txt -
+r B12 ids/h1.txt -
+r B8 ids/h1.txt -
+r B ids/h1.txt -
+r B ids/h1.txt -
+r B8 ids/h1.txt -
+r B12 ids/h1.txt -
+r B12 ids/h1.txt -
+r B8 ids/h1.txt -
+r B ids/h1.txt -
+r B ids/u_sort_rb.txt MATH_ISOLATE,L1_TO_L1
+r B8 ids/u_sort_rb.txt MATH_ISOLATE,L1_TO_L1
+r B12 ids/u_sort_rb.txt MATH_ISOLATE,L1_TO_L1
+r B12 ids/u_sort_rb.txt MATH_ISOLATE,L1_TO_L1
+r B8 ids/u_sort_rb.txt MATH_ISOLATE,L1_TO_L1
+r B ids/u_sort_rb.txt MATH_ISOLATE,L1_TO_L1
