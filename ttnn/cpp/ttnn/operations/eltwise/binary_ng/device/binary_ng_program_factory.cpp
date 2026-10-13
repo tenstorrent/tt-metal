@@ -1390,7 +1390,7 @@ tt::tt_metal::ProgramDescriptor BinaryNgDeviceOperation::ProgramFactory::create_
 
     // Blackhole sharded FPU sections without operand activations or broadcast unpack and pack a DEST section with one
     // call: add and sub at any size, mul from 16 tiles per core.
-    const bool block_kernel = tt::tt_metal::hal::get_arch() == tt::ARCH::BLACKHOLE && !is_sfpu_op && !is_where_op &&
+    const bool block_kernel = arch == tt::ARCH::BLACKHOLE && !is_sfpu_op && !is_where_op &&
                               std::holds_alternative<OpConfig::FpuBinaryOp>(op_config.binary_op) &&
                               !has_operand_activations && num_tiles_per_cycle > 1 &&
                               compute_kernel == CMAKE_UNIQUE_NAMESPACE::KernelName::ComputeNoBcast &&
@@ -1401,7 +1401,7 @@ tt::tt_metal::ProgramDescriptor BinaryNgDeviceOperation::ProgramFactory::create_
         block_kernel &&
         (block_tiles >= 16 || std::get<OpConfig::FpuBinaryOp>(op_config.binary_op) != OpConfig::FpuBinaryOp::MUL);
     const bool block_unpack_mixed =
-        tt::tt_metal::hal::get_arch() == tt::ARCH::BLACKHOLE && !is_sfpu_op && !is_where_op &&
+        arch == tt::ARCH::BLACKHOLE && !is_sfpu_op && !is_where_op &&
         std::holds_alternative<OpConfig::FpuBinaryOp>(op_config.binary_op) &&
         std::get<OpConfig::FpuBinaryOp>(op_config.binary_op) != OpConfig::FpuBinaryOp::MUL &&
         !has_operand_activations && !has_post_activations && num_tiles_per_cycle > 1 &&
@@ -1416,15 +1416,14 @@ tt::tt_metal::ProgramDescriptor BinaryNgDeviceOperation::ProgramFactory::create_
         compute_kernel_defines["BINARY_NG_BLOCK_PACK"] = "1";
     }
     // Blackhole sharded sections are compute bound, so they keep the binary init across a post activation.
-    if (tt::tt_metal::hal::get_arch() == tt::ARCH::BLACKHOLE && !is_sfpu_op && has_post_activations &&
-        num_tiles_per_cycle > 1 && compute_kernel == CMAKE_UNIQUE_NAMESPACE::KernelName::ComputeNoBcast) {
+    if (arch == tt::ARCH::BLACKHOLE && !is_sfpu_op && has_post_activations && num_tiles_per_cycle > 1 &&
+        compute_kernel == CMAKE_UNIQUE_NAMESPACE::KernelName::ComputeNoBcast) {
         compute_kernel_defines["BINARY_NG_POST_KEEPS_INIT"] = "1";
     }
     // Interleaved ops keep it only on a core with at most one DEST section of tiles; the kernel checks its runtime tile
     // count, as one program serves every tensor volume.
-    if (tt::tt_metal::hal::get_arch() == tt::ARCH::BLACKHOLE && !is_sfpu_op && has_post_activations &&
-        !has_operand_activations && num_tiles_per_cycle == 1 &&
-        compute_kernel == CMAKE_UNIQUE_NAMESPACE::KernelName::ComputeNoBcast) {
+    if (arch == tt::ARCH::BLACKHOLE && !is_sfpu_op && has_post_activations && !has_operand_activations &&
+        num_tiles_per_cycle == 1 && compute_kernel == CMAKE_UNIQUE_NAMESPACE::KernelName::ComputeNoBcast) {
         compute_kernel_defines["BINARY_NG_POST_KEEPS_INIT_UP_TO"] = "8";
     }
 
