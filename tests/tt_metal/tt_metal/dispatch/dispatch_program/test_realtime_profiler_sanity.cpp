@@ -16,7 +16,7 @@
 // job executes on both N150 (WH) and P150b (BH). On configs where RT
 // profiler cannot be enabled (ETH dispatch, non-MMIO chip, kernels
 // nullified, IOMMU-off on BH, etc.) the test skips gracefully via
-// IsProgramRealtimeProfilerActive().
+// IsProgramRealtimeProfilerActive(mesh_device).
 
 #include <chrono>
 #include <cstdint>

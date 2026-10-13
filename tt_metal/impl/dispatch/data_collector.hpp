@@ -71,15 +71,6 @@ public:
         const auto* sources = runtime_id_to_kernel_sources_[runtime_id].load(std::memory_order_acquire);
         return sources != nullptr ? std::span<const std::string_view>(*sources) : std::span<const std::string_view>{};
     }
-    // Register a callback to be invoked when real-time profiler data arrives.
-    // Returns a handle that can be used to unregister the callback.
-    tt::ProgramRealtimeProfilerCallbackHandle RegisterProgramRealtimeProfilerCallback(
-        tt::ProgramRealtimeProfilerCallback callback);
-    // Unregister a previously registered callback by its handle.
-    void UnregisterProgramRealtimeProfilerCallback(tt::ProgramRealtimeProfilerCallbackHandle handle);
-    void AttachRealtimeProfilerCallbackListener(tt::RealtimeProfilerCallbackListener* listener);
-    void DetachRealtimeProfilerCallbackListener(tt::RealtimeProfilerCallbackListener* listener);
-
     // Real-time profiler liveness tracking. MeshDevice notifies activation after a
     // successful init+sync handshake and deactivation at close; IsRealtimeProfilerActive()
     // returns true while at least one chip is active.
@@ -100,11 +91,6 @@ public:
 
 private:
     static constexpr size_t kRuntimeIdSlots = 1u << 16;
-
-    struct RealtimeCallbackRegistration {
-        tt::ProgramRealtimeProfilerCallbackHandle handle;
-        tt::ProgramRealtimeProfilerCallback callback;
-    };
 
     struct KernelData {
         int watcher_kernel_id;
@@ -127,9 +113,6 @@ private:
     std::array<std::atomic<const std::vector<std::string_view>*>, kRuntimeIdSlots> runtime_id_to_kernel_sources_{};
     std::map<std::pair<tt::ChipId, uint64_t>, tt::ProgramSubDeviceInfo> runtime_id_to_sub_device;
     mutable std::mutex runtime_id_to_sub_device_mutex_;
-    mutable std::mutex program_realtime_profiler_callbacks_mutex_;
-    std::vector<RealtimeCallbackRegistration> program_realtime_profiler_callbacks_;
-    std::vector<tt::RealtimeProfilerCallbackListener*> realtime_callback_listeners_;
 
     mutable std::mutex realtime_profiler_active_chips_mutex_;
     std::unordered_set<uint32_t> realtime_profiler_active_chips_;

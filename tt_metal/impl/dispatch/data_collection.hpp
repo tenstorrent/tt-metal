@@ -93,35 +93,9 @@ std::optional<ProgramSubDeviceInfo> GetProgramSubDevice(
 // The returned span is valid until MetalContext teardown or reinitialization.
 std::span<const std::string_view> GetKernelSourcesForRuntimeId(tt::tt_metal::ContextId context_id, uint16_t runtime_id);
 
-// Register a callback to be invoked when real-time profiler data arrives.
-// Multiple callbacks can be registered; each callback is called from its own thread.
-// Returns a handle that can be used to unregister the callback.
-ProgramRealtimeProfilerCallbackHandle RegisterProgramRealtimeProfilerCallback(ProgramRealtimeProfilerCallback callback);
-
-// Unregister a previously registered callback by its handle.
-void UnregisterProgramRealtimeProfilerCallback(ProgramRealtimeProfilerCallbackHandle handle);
-
-// Returns a callback handle that is unique across every MeshDevice and MetalContext in the process.
-ProgramRealtimeProfilerCallbackHandle AllocateProgramRealtimeProfilerCallbackHandle();
-
-class RealtimeProfilerCallbackListener {
-public:
-    virtual ~RealtimeProfilerCallbackListener() = default;
-    virtual void on_callback_registered(
-        ProgramRealtimeProfilerCallbackHandle handle, const ProgramRealtimeProfilerCallback& callback) = 0;
-    virtual void on_callback_unregistered(ProgramRealtimeProfilerCallbackHandle handle) = 0;
-};
-
-// Returns true if the real-time profiler is currently active on at least one chip,
-// i.e. at least one MeshDevice finished the init+sync handshake and has a receiver
-// thread delivering records. Callers can use this to distinguish "RT profiler is
-// disabled on this configuration" (e.g. ETH dispatch) from "RT profiler is on but
-// has not produced records yet".
-bool IsProgramRealtimeProfilerActive();
-
-// As above, for the collector owning `context_id`. Activation state lives per MetalContext, so a
-// caller that knows which context its devices belong to reads it from there; the no-argument form
-// answers for the default context.
+// Returns true if the real-time profiler is currently active on at least one chip of `context_id`,
+// i.e. at least one MeshDevice in that context finished the init+sync handshake and has a receiver
+// thread delivering records.
 bool IsProgramRealtimeProfilerActive(tt::tt_metal::ContextId context_id);
 
 // Internal lifecycle hooks wired by MeshDevice (not for end-user calls). `context_id` is the owning
