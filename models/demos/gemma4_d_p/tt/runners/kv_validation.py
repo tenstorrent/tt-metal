@@ -347,7 +347,11 @@ def compare_head(config_id, expected, actual):
     return {"sliding_k" if config_id < 20 else "sliding_v": cache_metrics(expected, actual)}
 
 
-def compare_slot_cache(read_heads, slot_id, real_len, trace_dir):
+def compare_slot_cache(read_heads, slot_id, real_len, trace_dir, summary_dir=None):
+    """Compare every head of one slot with the GPU trace; write the report to ``summary_dir`` if given.
+
+    ``summary_dir`` defaults to ``PREFILL_PCC_SUMMARY_DIR``.
+    """
     started = time.perf_counter()
     timings = dict(reference_seconds=0.0, readback_seconds=0.0, comparison_seconds=0.0, wait_seconds=0.0)
     minima = {"global_k_rotary": 1.0, "global_v": 1.0, "sliding_k": 1.0, "sliding_v": 1.0}
@@ -431,7 +435,7 @@ def compare_slot_cache(read_heads, slot_id, real_len, trace_dir):
     )
     overall_metrics = summarize_metrics(all_comparisons)
     timings["total_seconds"] = time.perf_counter() - started
-    if summary_dir := os.getenv("PREFILL_PCC_SUMMARY_DIR"):
+    if summary_dir := summary_dir or os.getenv("PREFILL_PCC_SUMMARY_DIR"):
         directory = Path(summary_dir)
         directory.mkdir(parents=True, exist_ok=True)
         result = dict(
