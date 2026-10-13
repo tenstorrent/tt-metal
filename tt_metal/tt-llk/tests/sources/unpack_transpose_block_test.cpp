@@ -5,6 +5,7 @@
 // transpose_tile's 16-bit and 8-bit path (the unpacker transposes faces and within faces, as transpose_init programs it,
 // then the A2D datacopy) with the unpack of each DEST section as one _llk_unpack_A_transpose_block_ call.
 // UNPACK_FORM 1: every section is a block. UNPACK_FORM 2: blocks and per tile calls alternate by section.
+// UNPACK_FORM 3 and 4: forms 1 and 2 with the back to back block, whose W counter walks through the tiles.
 
 #include <cstdint>
 
@@ -39,9 +40,9 @@ void run_kernel(RUNTIME_PARAMETERS params)
     for (std::uint32_t block = 0; block < num_blocks; ++block)
     {
         const std::uint32_t first = block * num_tiles_in_block;
-        if (UNPACK_FORM == 1 || block % 2 == 0)
+        if (UNPACK_FORM % 2 == 1 || block % 2 == 0)
         {
-            _llk_unpack_A_transpose_block_(L1_ADDRESS(params.buffer_A[first]), num_tiles_in_block, tile_stride);
+            _llk_unpack_A_transpose_block_<(UNPACK_FORM >= 3)>(L1_ADDRESS(params.buffer_A[first]), num_tiles_in_block, tile_stride);
         }
         else
         {

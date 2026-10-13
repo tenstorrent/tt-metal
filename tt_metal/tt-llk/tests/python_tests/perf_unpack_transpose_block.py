@@ -25,6 +25,12 @@ class UNPACK_TRANSPOSE_BLOCK(TemplateParameter):
         return "#define UNPACK_TRANSPOSE_BLOCK"
 
 
+@dataclass
+class TRANSPOSE_BLOCK_BACK_TO_BACK(TemplateParameter):
+    def convert_to_cpp(self) -> str:
+        return "#define TRANSPOSE_BLOCK_BACK_TO_BACK true"
+
+
 # perf_unpack_transpose.py's faces and within face rows with each DEST section unpacked by one block call
 @skip_for_wormhole
 @skip_for_quasar
@@ -46,7 +52,15 @@ def test_perf_unpack_transpose_block(
         "sources/unpack_transpose_perf.cpp",
         formats,
         run_types=[PerfRunType.L1_TO_L1, PerfRunType.UNPACK_ISOLATE],
-        templates=[UNPACK_TRANSPOSE_BLOCK()],
+        templates=[
+            UNPACK_TRANSPOSE_BLOCK(),
+            # uncompressed tiles lie back to back, as in a CB
+            *(
+                []
+                if formats.input_format.is_block_float()
+                else [TRANSPOSE_BLOCK_BACK_TO_BACK()]
+            ),
+        ],
         runtimes=[
             TILE_COUNT(tile_count),
             UNPACK_TRANS_FACES(unpack_transpose_faces),
