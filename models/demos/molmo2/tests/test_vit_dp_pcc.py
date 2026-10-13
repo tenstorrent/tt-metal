@@ -20,7 +20,6 @@ Does NOT modify any model code.
 """
 
 import os
-import sys
 from pathlib import Path
 
 import pytest
@@ -29,11 +28,6 @@ import torch
 import ttnn
 
 GOLDEN_DIR = Path(__file__).parent.parent / "reference" / "golden"
-HF_PATH = Path(
-    os.path.expanduser(
-        "~/.cache/huggingface/hub/models--allenai--Molmo2-8B/snapshots/e28fa28597e5ec5e0cca2201dd8ab33d48bc4a1b"
-    )
-)
 
 _MESH_SHAPE = {"N150": (1, 1), "N300": (1, 2), "T3K": (1, 8), "TG": (8, 4)}.get(os.environ.get("MESH_DEVICE"), (1, 8))
 
@@ -58,15 +52,9 @@ def mesh_device():
 
 @pytest.fixture(scope="module")
 def state_dict():
-    sys.path.insert(0, str(HF_PATH))
-    from transformers import AutoModelForImageTextToText
+    from models.demos.molmo2.tt.hf_loading import load_molmo2_state_dict
 
-    hf = AutoModelForImageTextToText.from_pretrained(
-        str(HF_PATH), trust_remote_code=True, torch_dtype=torch.bfloat16, device_map="cpu"
-    )
-    sd = hf.state_dict()
-    del hf
-    return sd
+    return load_molmo2_state_dict(dtype=torch.bfloat16)
 
 
 @pytest.fixture(scope="module")

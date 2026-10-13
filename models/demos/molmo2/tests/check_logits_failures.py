@@ -7,22 +7,14 @@ model and show the logit values for every answer choice.
 Identifies whether the failure is a clear TTNN error or a narrow margin case.
 """
 import json
-import os
-import sys
 from pathlib import Path
 
 import torch
 
-HF_PATH = Path(
-    os.path.expanduser(
-        "~/.cache/huggingface/hub/models--allenai--Molmo2-8B/snapshots/e28fa28597e5ec5e0cca2201dd8ab33d48bc4a1b"
-    )
-)
 VERIF = Path("/home/ttuser/ssinghal/PR-fix/tt-metal/models/demos/molmo2/verification")
 VIDEO_DIR = VERIF / "videos"
 WEIGHT_CACHE = Path("/tmp/molmo2_weight_cache")
 
-sys.path.insert(0, str(HF_PATH))
 
 # Token IDs: A=32, B=33, C=34, D=35
 ANSWER_TOKS = {"A": 32, "B": 33, "C": 34, "D": 35}
@@ -37,10 +29,9 @@ FAILING = [
 with open(VERIF / "test.jsonl") as f:
     all_tests = [json.loads(l) for l in f]
 
-from transformers import AutoModelForImageTextToText, AutoProcessor
-
 # ---- Load TTNN model ----
 import ttnn
+from models.demos.molmo2.tt.hf_loading import load_molmo2_processor, load_molmo2_state_dict
 from models.demos.molmo2.tt.model import TtMolmo2Model
 from models.demos.molmo2.tt.model_config import Molmo2Config
 from models.tt_transformers.tt.ccl import TT_CCL
@@ -52,18 +43,14 @@ ccl = TT_CCL(mesh)
 WEIGHT_CACHE.mkdir(parents=True, exist_ok=True)
 
 print("Loading weights...")
-hf_tmp = AutoModelForImageTextToText.from_pretrained(
-    str(HF_PATH), trust_remote_code=True, torch_dtype=torch.bfloat16, device_map="cpu"
-)
-sd = hf_tmp.state_dict()
-del hf_tmp
+sd = load_molmo2_state_dict(dtype=torch.bfloat16)
 
 model = TtMolmo2Model(
     mesh_device=mesh, tt_ccl=ccl, state_dict=sd, weight_cache_path=WEIGHT_CACHE, dtype=ttnn.bfloat16, configuration=cfg
 )
 del sd
 
-processor = AutoProcessor.from_pretrained(str(HF_PATH), trust_remote_code=True)
+processor = load_molmo2_processor()
 print("Model ready\n")
 
 # ---- Run each failing test ----

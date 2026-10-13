@@ -15,14 +15,15 @@ from typing import List, Mapping, Optional
 
 import torch
 from loguru import logger
+from vllm.model_executor.models.interfaces import SupportsMultiModal
+from vllm.multimodal import MULTIMODAL_REGISTRY
 
 import ttnn
 from models.common.warmup import WarmupForwardMixin
 from models.demos.molmo2.tt.model_config import Molmo2Config
+from models.demos.molmo2.tt.vision_inputs import concat_image_inputs, offset_image_token_pooling
 from models.tt_transformers.tt.ccl import TT_CCL
 from models.tt_transformers.tt.generator import create_submeshes
-from vllm.model_executor.models.interfaces import SupportsMultiModal
-from vllm.multimodal import MULTIMODAL_REGISTRY
 
 # New vllm fork has molmo2.py; reference fork does not.
 try:
@@ -151,8 +152,7 @@ class Molmo2ForConditionalGeneration(WarmupForwardMixin, SupportsMultiModal):
         """Called by TTModelLoader after vLLM resolves TTMolmo2ForConditionalGeneration."""
         import os
 
-        from transformers import AutoModelForImageTextToText, AutoProcessor
-
+        from models.demos.molmo2.tt.hf_loading import load_molmo2_processor, load_molmo2_state_dict
         from models.demos.molmo2.tt.model import TtMolmo2Model
 
         hf_model_id = getattr(hf_config, "_name_or_path", None) or getattr(hf_config, "name_or_path", "")
@@ -161,14 +161,9 @@ class Molmo2ForConditionalGeneration(WarmupForwardMixin, SupportsMultiModal):
         hf_path = os.environ.get("HF_MODEL", hf_model_id)
         logger.info(f"Initializing Molmo2 TT model from {hf_path}")
 
-        logger.info("Loading HF state dict (bfloat16)...")
-        hf = AutoModelForImageTextToText.from_pretrained(
-            hf_path, trust_remote_code=True, torch_dtype=torch.bfloat16, device_map="cpu"
-        )
-        state_dict = hf.state_dict()
-        del hf
-
-        processor = AutoProcessor.from_pretrained(hf_path, trust_remote_code=True)
+        logger.info("Loading checkpoint state dict (bfloat16)...")
+        state_dict = load_molmo2_state_dict(hf_path, dtype=torch.bfloat16)
+        processor = load_molmo2_processor(hf_path)
 
         # Detect Galaxy (8,4) and split into 4 (1,8) submeshes for DP=4 inside one
         # EngineCore. We override the loader-provided tt_data_parallel because in
@@ -263,6 +258,50 @@ class Molmo2ForConditionalGeneration(WarmupForwardMixin, SupportsMultiModal):
         """Map a user/batch index to a DP replica index."""
         return min(user_id // self.batch_per_dp, self.dp - 1)
 
+    @staticmethod
+    def _flatten(val, idx=0) -> list:
+        """List of tensors for user ``idx``, using the same nesting rules as ``_unwrap``."""
+        if val is None:
+            return []
+        if not isinstance(val, list):
+            return [val]
+        if idx != 0 and idx < len(val):
+            val = val[idx]
+            return list(val) if isinstance(val, list) else [val]
+        flat = []
+        for item in val:
+            flat.extend(item if isinstance(item, list) else [item])
+        return flat
+
+    def _image_inputs(self, kwargs, idx):
+        """(pixel_values [n_crops, 729, 588], image_token_pooling) for user ``idx``.
+
+        Pooling indices from the processor are relative to each image's crops; shift them so
+        that they index the concatenated crops (see vision_inputs.py).
+        """
+        pvs = [
+            _raw_frames_to_patches(t.float()) if t.dim() == 4 and t.shape[1] == 3 else t.float()
+            for t in self._flatten(kwargs.get("pixel_values"), idx)
+        ]
+        pools = self._flatten(kwargs.get("image_token_pooling"), idx)
+        if not pvs:
+            return None, None
+        if not pools:
+            return torch.cat(pvs, dim=0), None
+        num_crops = self._flatten(kwargs.get("image_num_crops"), idx)
+        grids = self._flatten(kwargs.get("image_grids"), idx)
+        if num_crops and grids:
+            # Per-image metadata available: offsets follow HF build_batched_images exactly.
+            pv, pool = torch.cat(pvs, dim=0), torch.cat(pools, dim=0)
+            num_crops = torch.cat([c.reshape(-1) for c in num_crops])
+            grids = torch.cat([g.reshape(-1, 4) for g in grids])
+            return pv, offset_image_token_pooling(pool, num_crops, grids, pv.shape[1])
+        if len(pvs) == len(pools):
+            # One (pixel_values, pooling) pair per image.
+            return concat_image_inputs(pvs, pools)
+        logger.warning(f"Cannot align {len(pvs)} pixel_values with {len(pools)} poolings; using indices as-is")
+        return torch.cat(pvs, dim=0), torch.cat(pools, dim=0)
+
     def _unwrap(self, val, idx=0):
         """Unwrap list nesting, concatenating tensors for multi-image requests.
 
@@ -316,8 +355,6 @@ class Molmo2ForConditionalGeneration(WarmupForwardMixin, SupportsMultiModal):
         token_type_ids_all = kwargs.get("token_type_ids")
         pixel_values_videos_all = kwargs.get("pixel_values_videos")
         video_token_pooling_all = kwargs.get("video_token_pooling")
-        pixel_values_all = kwargs.get("pixel_values")
-        image_token_pooling_all = kwargs.get("image_token_pooling")
 
         batch_size = tokens.shape[0]
         out_logits = []
@@ -329,8 +366,7 @@ class Molmo2ForConditionalGeneration(WarmupForwardMixin, SupportsMultiModal):
             token_type_ids = self._unwrap(token_type_ids_all, idx=u)
             pixel_values_videos = self._unwrap(pixel_values_videos_all, idx=u)
             video_token_pooling = self._unwrap(video_token_pooling_all, idx=u)
-            pixel_values = self._unwrap(pixel_values_all, idx=u)
-            image_token_pooling = self._unwrap(image_token_pooling_all, idx=u)
+            pixel_values, image_token_pooling = self._image_inputs(kwargs, idx=u)
 
             pv = None
             pool_idx = None
@@ -343,10 +379,7 @@ class Molmo2ForConditionalGeneration(WarmupForwardMixin, SupportsMultiModal):
                 if video_token_pooling is not None:
                     pool_idx = video_token_pooling.unsqueeze(0)
             elif pixel_values is not None:
-                t = pixel_values.float()
-                if t.dim() == 4 and t.shape[1] == 3:
-                    t = _raw_frames_to_patches(t)
-                pv = t.unsqueeze(0)
+                pv = pixel_values.unsqueeze(0)
                 if image_token_pooling is not None:
                     pool_idx = image_token_pooling.unsqueeze(0)
 

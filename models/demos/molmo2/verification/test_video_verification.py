@@ -38,15 +38,19 @@ import sys
 import time
 from pathlib import Path
 
+import transformers
+from huggingface_hub import snapshot_download
+
 # ---------------------------------------------------------------------------
 # Paths
 # ---------------------------------------------------------------------------
 
-HF_PATH = Path(
-    os.path.expanduser(
-        "~/.cache/huggingface/hub/models--allenai--Molmo2-8B/snapshots/" "e28fa28597e5ec5e0cca2201dd8ab33d48bc4a1b"
-    )
-)
+# HF reference script: the Molmo2 remote code needs transformers==4.57.1 (see
+# reference/test_functional.py for setting up that env).
+if transformers.__version__ != "4.57.1":
+    sys.exit(f"Molmo2 HF reference needs transformers==4.57.1 (found {transformers.__version__}).")
+
+HF_PATH = Path(snapshot_download("allenai/Molmo2-8B", revision="e28fa28597e5ec5e0cca2201dd8ab33d48bc4a1b"))
 
 _default_verif_dir = Path(
     os.environ.get(

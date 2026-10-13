@@ -1,28 +1,36 @@
 """Verify reference functional.py against HuggingFace Molmo2-8B outputs.
 
-Run with:
-    cd /home/ttuser/ssinghal/PR-fix/molmo2/tt-metal
-    export TT_METAL_HOME=$(pwd) && export PYTHONPATH=$(pwd) && source python_env/bin/activate
-    python models/demos/molmo2/reference/test_functional.py
+The HF remote code requires transformers==4.57.1 (see the allenai/Molmo2-8B model card); it does
+not run on the transformers 5.x pinned by tt-metal, so use a separate CPU-only env:
+    python3 -m venv molmo2_hf_env
+    molmo2_hf_env/bin/pip install torch --index-url https://download.pytorch.org/whl/cpu
+    molmo2_hf_env/bin/pip install transformers==4.57.1 pillow einops torchvision accelerate decord2 molmo_utils
+    molmo2_hf_env/bin/python models/demos/molmo2/reference/test_functional.py
 
 Golden outputs are saved to models/demos/molmo2/reference/golden/.
 PCC > 0.99 is required for all blocks.
 """
 
-import os
 import sys
 from pathlib import Path
 
 import torch
+import transformers
+from huggingface_hub import snapshot_download
 from PIL import Image
 
 # --------------------------------------------------------------------------
 # Paths and imports
 # --------------------------------------------------------------------------
 
-HF_MODEL_PATH = os.path.expanduser(
-    "~/.cache/huggingface/hub/models--allenai--Molmo2-8B/snapshots/" "e28fa28597e5ec5e0cca2201dd8ab33d48bc4a1b"
-)
+
+if transformers.__version__ != "4.57.1":
+    sys.exit(
+        f"Molmo2 HF reference needs transformers==4.57.1 (found {transformers.__version__}); see module docstring."
+    )
+
+# Revision the TT implementation was validated against (tt/hf_loading.py: MOLMO2_HF_REVISION).
+HF_MODEL_PATH = snapshot_download("allenai/Molmo2-8B", revision="e28fa28597e5ec5e0cca2201dd8ab33d48bc4a1b")
 
 GOLDEN_DIR = Path(__file__).parent / "golden"
 GOLDEN_DIR.mkdir(exist_ok=True)

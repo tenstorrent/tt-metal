@@ -23,7 +23,6 @@ Environment:
 
 import json
 import os
-import sys
 import time
 from pathlib import Path
 
@@ -37,11 +36,6 @@ import ttnn
 # Paths
 # ---------------------------------------------------------------------------
 
-HF_PATH = Path(
-    os.path.expanduser(
-        "~/.cache/huggingface/hub/models--allenai--Molmo2-8B/snapshots/e28fa28597e5ec5e0cca2201dd8ab33d48bc4a1b"
-    )
-)
 
 VERIF_DIR = Path(
     os.environ.get(
@@ -146,19 +140,13 @@ def mesh_device():
 @pytest.fixture(scope="module")
 def tt_model(mesh_device):
     """Load TTNN Molmo2 model (once per module)."""
-    from transformers import AutoModelForImageTextToText
-
+    from models.demos.molmo2.tt.hf_loading import load_molmo2_state_dict
     from models.demos.molmo2.tt.model import TtMolmo2Model
     from models.demos.molmo2.tt.model_config import Molmo2Config
     from models.tt_transformers.tt.ccl import TT_CCL
 
-    sys.path.insert(0, str(HF_PATH))
     logger.info("Loading HF weights (bfloat16)...")
-    hf_model = AutoModelForImageTextToText.from_pretrained(
-        str(HF_PATH), trust_remote_code=True, torch_dtype=torch.bfloat16, device_map="cpu"
-    )
-    state_dict = hf_model.state_dict()
-    del hf_model
+    state_dict = load_molmo2_state_dict(dtype=torch.bfloat16)
 
     cfg = Molmo2Config(mesh_device=mesh_device)
     ccl = TT_CCL(mesh_device)
@@ -196,10 +184,9 @@ def tt_model(mesh_device):
 
 @pytest.fixture(scope="module")
 def processor():
-    sys.path.insert(0, str(HF_PATH))
-    from transformers import AutoProcessor
+    from models.demos.molmo2.tt.hf_loading import load_molmo2_processor
 
-    return AutoProcessor.from_pretrained(str(HF_PATH), trust_remote_code=True)
+    return load_molmo2_processor()
 
 
 # ---------------------------------------------------------------------------

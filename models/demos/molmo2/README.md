@@ -7,11 +7,11 @@ Based on [allenai/Molmo2-8B](https://huggingface.co/allenai/Molmo2-8B).
 
 | Metric | Result |
 |--------|--------|
-| PCC (all 8 sub-block tests) | ≥ 0.999 |
+| PCC (all 8 sub-block tests) | ≥ 0.998 |
 | 105-video accuracy — direct demo | **98/100 = 98%** |
 | 105-video accuracy — tt-inference-server (OpenAI API) | **98/100 = 98%** |
 | Prefill latency (S≈2700, 30 frames, T3K) | ~5–6 s |
-| Decode throughput | ~35 tok/s |
+| Decode throughput (demo, untraced) | ~14.5 tok/s |
 | Hardware | T3K (8 × Wormhole WH-B0) |
 
 ## Model Architecture
@@ -48,6 +48,27 @@ export TT_METAL_HOME=$(pwd)
 export PYTHONPATH=$(pwd)
 source python_env/bin/activate
 ```
+
+On a 32-chip Galaxy, run on one 1×8 slice (`SLICE` = 0..3) with the T3K mesh descriptor.
+Opening a bare `MeshShape(1, 8)` on the full Galaxy without these can leave the fabric
+links in a bad state (`Fabric Router Sync: Timeout`) until `tt-smi -glx_reset`.
+
+```bash
+SLICE=0
+export TT_VISIBLE_DEVICES=$(seq -s, $((SLICE * 8)) $((SLICE * 8 + 7)))
+export TT_MESH_GRAPH_DESC_PATH=$TT_METAL_HOME/tt_metal/fabric/mesh_graph_descriptors/t3k_mesh_graph_descriptor.textproto
+export MESH_DEVICE=T3K
+```
+
+### transformers version
+
+tt-metal pins transformers 5.x, while the allenai/Molmo2-8B remote code targets
+transformers==4.57.1. The TT model does not use the HF modeling code: `tt/hf_loading.py`
+reads the weights directly from safetensors and loads the HF processor through a small
+compatibility shim (outputs verified bit-exact against 4.57.1 for text / image / multi-image /
+video). Only the HF reference scripts (`reference/test_functional.py`, which generates the
+PCC goldens, and `verification/test_video_verification.py`) need a separate CPU-only
+transformers==4.57.1 env — see the docstring of `reference/test_functional.py`.
 
 ## Demo
 
@@ -197,22 +218,25 @@ python models/demos/molmo2/verification/run_dp4_concurrent.py \
 
 ### PCC sub-block tests (8 tests, ~2 min)
 
+The goldens in `reference/golden/` are not checked in; generate them first with
+`reference/test_functional.py` (transformers==4.57.1 env, CPU, ~2 min).
+
 ```bash
 pytest models/demos/molmo2/tests/test_tt_text_decoder.py -v
 ```
 
-Expected results:
+Expected results (Galaxy 1×8 slice):
 
 | Test | PCC |
 |------|-----|
 | test_prefill_mask | PASS |
-| test_text_attention_pcc | 0.999832 |
+| test_text_attention_pcc | 0.999838 |
 | test_text_mlp_pcc | 0.999970 |
-| test_decoder_block_pcc | 0.999905 |
-| test_vit_encoder_pcc | 0.999270 |
-| test_image_projector_pcc | 0.999775 |
-| test_vision_adapter_pcc | 0.999807 |
-| test_decoder_block_with_image_pcc | 0.999999 |
+| test_decoder_block_pcc | 0.999926 |
+| test_vit_encoder_pcc | 0.998176 |
+| test_image_projector_pcc | 0.999777 |
+| test_vision_adapter_pcc | 0.999948 |
+| test_decoder_block_with_image_pcc | 0.999998 |
 
 ### TP MLP test
 
@@ -329,12 +353,15 @@ models/demos/molmo2/
 
 ## Known Limitations
 
-1. **Batch size = 1** — multi-user concurrent inference not yet implemented.
+1. **Batch size = 1** — multi-user concurrent inference not yet implemented
+   (`forward_decode_step` decodes KV-cache slot 0; the demo runs users back to back).
 2. **Decode trace** — disabled in server path; trace captured at first request's S
    does not scale to requests with different sequence lengths (different SDPA
    program config). Each decode step uses `forward_decode_step` (TTNN, no trace).
 3. **ViT AllBroadcast** — 68% of ViT device time is CCL (all_reduce after each of
    25 blocks). Target for async/pipelined CCL optimization.
-4. **5 remaining failures** (idx 22, 26, 55, 56, 76 in the 105-video suite) —
+4. **Very long multi-image prompts** — the 20-image stress test (S≈25K) starts
+   correctly but degenerates into repetition after ~50 tokens (HF reference stays fluent).
+5. **5 remaining failures** (idx 22, 26, 55, 56, 76 in the 105-video suite) —
    all have logit margins < 1.2; likely genuine model uncertainty on ambiguous
    video content.

@@ -16,16 +16,13 @@ import argparse
 import pathlib
 
 import torch
-from transformers import AutoModelForImageTextToText
 
 import ttnn
+from models.demos.molmo2.tt.hf_loading import load_molmo2_state_dict
 from models.demos.molmo2.tt.model_config import Molmo2Config
 from models.tt_transformers.tt.ccl import TT_CCL
 from models.tt_transformers.tt.common import Mode, get_rot_transformation_mat, precompute_freqs
 
-HF_PATH = (
-    "/home/ttuser/.cache/huggingface/hub/models--allenai--Molmo2-8B/snapshots/e28fa28597e5ec5e0cca2201dd8ab33d48bc4a1b"
-)
 WEIGHT_CACHE = pathlib.Path("/tmp/molmo2_weight_cache")
 
 BLOCKS = [
@@ -58,11 +55,7 @@ cfg.max_batch_size = 1
 cfg.max_seq_len = 4096
 
 print(f"Loading weights for block={args.block}...")
-hf = AutoModelForImageTextToText.from_pretrained(
-    HF_PATH, trust_remote_code=True, torch_dtype=torch.bfloat16, device_map="cpu"
-)
-sd = hf.state_dict()
-del hf
+sd = load_molmo2_state_dict(dtype=torch.bfloat16)
 ccl = TT_CCL(mesh)
 
 

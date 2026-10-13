@@ -12,7 +12,6 @@ Run:
 """
 
 import os
-import sys
 from pathlib import Path
 
 import pytest
@@ -23,11 +22,6 @@ import ttnn
 from models.demos.molmo2.tt.mlp import TtMolmo2TextMLP
 from models.tt_transformers.tt.common import Mode
 
-HF_PATH = Path(
-    os.path.expanduser(
-        "~/.cache/huggingface/hub/models--allenai--Molmo2-8B/snapshots/e28fa28597e5ec5e0cca2201dd8ab33d48bc4a1b"
-    )
-)
 WEIGHT_CACHE = Path("/tmp/molmo2_weight_cache")
 _MESH_SHAPE = {"T3K": (1, 8)}.get(os.environ.get("MESH_DEVICE"), (1, 8))
 
@@ -49,16 +43,10 @@ def mesh_device():
 
 @pytest.fixture(scope="module")
 def state_dict_and_cfg(mesh_device):
-    from transformers import AutoModelForImageTextToText
-
+    from models.demos.molmo2.tt.hf_loading import load_molmo2_state_dict
     from models.demos.molmo2.tt.model_config import Molmo2Config
 
-    sys.path.insert(0, str(HF_PATH))
-    hf = AutoModelForImageTextToText.from_pretrained(
-        str(HF_PATH), trust_remote_code=True, torch_dtype=torch.bfloat16, device_map="cpu"
-    )
-    sd = hf.state_dict()
-    del hf
+    sd = load_molmo2_state_dict(dtype=torch.bfloat16)
     cfg = Molmo2Config(mesh_device=mesh_device)
     WEIGHT_CACHE.mkdir(parents=True, exist_ok=True)
     return sd, cfg

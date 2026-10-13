@@ -34,7 +34,6 @@ CLI overrides (passed via pytest addopts or --flag):
 
 import json
 import os
-import sys
 import time
 from pathlib import Path
 
@@ -44,28 +43,13 @@ from loguru import logger
 from PIL import Image
 
 import ttnn
+from models.demos.molmo2.tt.vision_inputs import vision_inputs_from_processor
 
 # ---------------------------------------------------------------------------
 # Paths
 # ---------------------------------------------------------------------------
 
-HF_PATH = Path(
-    os.path.expanduser(
-        "~/.cache/huggingface/hub/models--allenai--Molmo2-8B/snapshots/" "e28fa28597e5ec5e0cca2201dd8ab33d48bc4a1b"
-    )
-)
 SAMPLE_DIR = Path(__file__).parent / "sample_inputs"
-
-# ---------------------------------------------------------------------------
-# Pytest CLI options
-# ---------------------------------------------------------------------------
-
-
-def pytest_addoption(parser):
-    parser.addoption("--input_prompts", default=None, help="JSON prompt file override")
-    parser.addoption("--max_new_tokens", default=None, type=int)
-    parser.addoption("--batch_size", default=None, type=int)
-
 
 # ---------------------------------------------------------------------------
 # Helpers
@@ -89,8 +73,6 @@ def build_inputs(processor, prompts: list):
     Handles text-only, image, and video prompts by inspecting content type.
     Images / videos are loaded from local paths or URLs using PIL / decord.
     """
-    sys.path.insert(0, str(HF_PATH))
-
     texts = processor.apply_chat_template(
         [p for p in prompts],  # list of message-lists
         tokenize=False,
@@ -135,17 +117,6 @@ def _load_image(src: str) -> Image.Image:
     return Image.open(src).convert("RGB")
 
 
-def batch_vision_inputs(proc_out):
-    """Return (pv_batched, pool_idx) or (None, None) for text-only inputs."""
-    pv = proc_out.get("pixel_values")
-    if pv is not None:
-        return pv.float().unsqueeze(0), proc_out["image_token_pooling"].unsqueeze(0)
-    pv_vid = proc_out.get("pixel_values_videos")
-    if pv_vid is not None:
-        return pv_vid.float().unsqueeze(0), proc_out["video_token_pooling"].unsqueeze(0)
-    return None, None
-
-
 # ---------------------------------------------------------------------------
 # Model / mesh fixtures (module-scoped — loaded once per test)
 # ---------------------------------------------------------------------------
@@ -175,22 +146,13 @@ def mesh_device():
 @pytest.fixture(scope="module")
 def tt_model(mesh_device):
     """Load full Molmo2 TTNN model (weights + config)."""
-    from transformers import AutoModelForImageTextToText
-
+    from models.demos.molmo2.tt.hf_loading import load_molmo2_state_dict
     from models.demos.molmo2.tt.model import TtMolmo2Model
     from models.demos.molmo2.tt.model_config import Molmo2Config
     from models.tt_transformers.tt.ccl import TT_CCL
 
-    sys.path.insert(0, str(HF_PATH))
     logger.info("Loading Molmo2-8B weights (bfloat16)...")
-    hf_model = AutoModelForImageTextToText.from_pretrained(
-        str(HF_PATH),
-        trust_remote_code=True,
-        torch_dtype=torch.bfloat16,
-        device_map="cpu",
-    )
-    state_dict = hf_model.state_dict()
-    del hf_model
+    state_dict = load_molmo2_state_dict(dtype=torch.bfloat16)
 
     cfg = Molmo2Config(mesh_device=mesh_device)
     ccl = TT_CCL(mesh_device)
@@ -213,10 +175,9 @@ def tt_model(mesh_device):
 
 @pytest.fixture(scope="module")
 def processor():
-    sys.path.insert(0, str(HF_PATH))
-    from transformers import AutoProcessor
+    from models.demos.molmo2.tt.hf_loading import load_molmo2_processor
 
-    return AutoProcessor.from_pretrained(str(HF_PATH), trust_remote_code=True)
+    return load_molmo2_processor()
 
 
 # ---------------------------------------------------------------------------
@@ -246,127 +207,82 @@ def run_demo(
     logger.info(f"Loading prompts from {input_prompts_path} (batch={batch_size})")
     prompts = load_inputs(input_prompts_path, batch_size)
 
-    logger.info("Preprocessing inputs...")
-    t0 = time.time()
-    proc_out = build_inputs(processor, prompts)
-    input_ids = proc_out["input_ids"]  # [B, S]
-    token_type_ids = proc_out.get("token_type_ids")
-    pv_batched, pool_idx = batch_vision_inputs(proc_out)
-    S = input_ids.shape[1]
-    logger.info(f"  Inputs ready: batch={batch_size} seq_len={S}  preprocess={time.time()-t0:.2f}s")
+    # TtMolmo2Model decodes a single sequence (KV-cache slot 0), so users run back to back.
+    responses = []
+    total_tokens, decode_elapsed = 0, 0.0
+    for u, prompt in enumerate(prompts):
+        t0 = time.time()
+        proc_out = build_inputs(processor, [prompt])
+        input_ids = proc_out["input_ids"]  # [1, S]
+        token_type_ids = proc_out.get("token_type_ids")
+        pixel_values, pool_idx = vision_inputs_from_processor(proc_out)
+        S = input_ids.shape[1]
+        logger.info(f"User {u}: seq_len={S}  preprocess={time.time()-t0:.2f}s")
 
-    # ---- Warm-up (compile) pass — not timed ----
-    # Run a minimal text-only prefill to trigger TTNN JIT compilation before measuring.
-    # This avoids counting first-run kernel compile time in the benchmark.
-    if not getattr(model, "_demo_warmed_up", False):
-        logger.info("Warm-up compile pass (not timed)...")
-        t_warmup = time.time()
-        warmup_ids = input_ids[:1, :32]  # first 32 tokens, text path only
-        _ = model.forward_prefill(input_ids=warmup_ids, pixel_values=None, user_id=0)
-        # One decode step to compile the decode kernels
-        warmup_tok = int(warmup_ids[0, -1].item())
-        _ = model.forward_decode_step(warmup_tok, 32)
-        model._demo_warmed_up = True
-        logger.info(f"  Warm-up done in {time.time()-t_warmup:.2f}s (not counted in timing)")
+        # ---- Warm-up (compile) pass — not timed ----
+        # Run a minimal text-only prefill to trigger TTNN JIT compilation before measuring.
+        if not getattr(model, "_demo_warmed_up", False):
+            logger.info("Warm-up compile pass (not timed)...")
+            t_warmup = time.time()
+            warmup_ids = input_ids[:1, :32]  # first 32 tokens, text path only
+            _ = model.forward_prefill(input_ids=warmup_ids, pixel_values=None, user_id=0)
+            # One decode step to compile the decode kernels
+            _ = model.forward_decode_step(int(warmup_ids[0, -1].item()), warmup_ids.shape[1])
+            model._demo_warmed_up = True
+            logger.info(f"  Warm-up done in {time.time()-t_warmup:.2f}s (not counted in timing)")
 
-    # ---- Timed prefill ----
-    logger.info("Prefill (filling KV cache)...")
-    t_prefill = time.time()
-    logits = model.forward_prefill(
-        input_ids=input_ids[:1],
-        pixel_values=pv_batched[:1] if pv_batched is not None else None,
-        pooled_patches_idx=pool_idx[:1] if pool_idx is not None else None,
-        token_type_ids=token_type_ids[:1] if token_type_ids is not None else None,
-        user_id=0,
-    )
-    prefill_ms = (time.time() - t_prefill) * 1000
-    logger.info(f"  Prefill: {prefill_ms:.0f}ms  ({S} tokens, {S / (prefill_ms / 1000):.0f} tok/s)")
-
-    # Additional users (batch > 1)
-    for user_id in range(1, batch_size):
-        model.forward_prefill(
-            input_ids=input_ids[user_id : user_id + 1],
-            pixel_values=pv_batched[user_id : user_id + 1] if pv_batched is not None else None,
-            pooled_patches_idx=pool_idx[user_id : user_id + 1] if pool_idx is not None else None,
-            token_type_ids=token_type_ids[user_id : user_id + 1] if token_type_ids is not None else None,
-            user_id=user_id,
+        # ---- Timed prefill ----
+        t_prefill = time.time()
+        logits = model.forward_prefill(
+            input_ids=input_ids,
+            pixel_values=pixel_values,
+            pooled_patches_idx=pool_idx,
+            token_type_ids=token_type_ids,
+            user_id=0,
         )
+        prefill_ms = (time.time() - t_prefill) * 1000
+        logger.info(f"  Prefill: {prefill_ms:.0f}ms  ({S} tokens, {S / (prefill_ms / 1000):.0f} tok/s)")
 
-    # ---- Timed decode loop ----
-    logger.info("Starting decode loop (TTNN)...")
-    all_outputs = [[] for _ in range(batch_size)]
-    user_done = [False] * batch_size
-
-    # First token from prefill logits (user 0)
-    next_tokens = torch.argmax(logits[:, -1:], dim=-1).squeeze(-1)  # [1]
-    next_tokens = next_tokens.expand(batch_size)
-    for u in range(batch_size):
-        all_outputs[u].append(int(next_tokens[u].item()))
-
-    current_pos = S
-
-    t_decode_start = time.time()
-    for iteration in range(max_new_tokens - 1):
-        if all(user_done):
-            break
-
-        t_iter = time.time()
-
-        new_logits_list = []
-        for u in range(batch_size):
-            tok = int(next_tokens[u].item())
-            if not user_done[u]:
-                logits_u = model.forward_decode_step(tok, current_pos)
-                new_logits_list.append(logits_u)
-            else:
-                new_logits_list.append(None)
-
-        new_next = []
-        for u, lg in enumerate(new_logits_list):
-            if user_done[u] or lg is None:
-                new_next.append(eos)
-            elif temperature == 0:
-                new_next.append(int(lg[0].argmax().item()))
+        # ---- Timed decode loop ----
+        next_token = int(torch.argmax(logits[0, -1]).item())
+        output_ids = []
+        current_pos = S
+        t_decode_start = time.time()
+        for iteration in range(max_new_tokens):
+            if stop_at_eos and next_token == eos:
+                break
+            output_ids.append(next_token)
+            if iteration == max_new_tokens - 1:
+                break
+            t_iter = time.time()
+            lg = model.forward_decode_step(next_token, current_pos)
+            current_pos += 1
+            if temperature == 0:
+                next_token = int(lg[0].argmax().item())
             else:
                 probs = torch.softmax(lg[0].float() / temperature, dim=-1)
-                new_next.append(int(torch.multinomial(probs, 1).item()))
+                next_token = int(torch.multinomial(probs, 1).item())
+            if iteration < 3 or iteration % 10 == 0:
+                iter_ms = (time.time() - t_iter) * 1000
+                logger.info(f"  iter {iteration+1}: {iter_ms:.0f}ms  {1000 / iter_ms:.1f} tok/s/user")
+        user_decode_s = time.time() - t_decode_start
+        decode_elapsed += user_decode_s
+        total_tokens += len(output_ids)
 
-        next_tokens = torch.tensor(new_next)
-        current_pos += 1
-        iter_ms = (time.time() - t_iter) * 1000
-        tps = 1000 / iter_ms
-
-        for u in range(batch_size):
-            tok = int(next_tokens[u].item())
-            if not user_done[u]:
-                if stop_at_eos and tok == eos:
-                    user_done[u] = True
-                else:
-                    all_outputs[u].append(tok)
-
-        if iteration < 3 or iteration % 10 == 0:
-            logger.info(f"  iter {iteration+1}: {iter_ms:.0f}ms  {tps:.1f} tok/s/user")
-
-    decode_elapsed = time.time() - t_decode_start
-    total_tokens = sum(len(o) for o in all_outputs)
-    overall_tps = total_tokens / decode_elapsed if decode_elapsed > 0 else 0
-
-    # ---- Print outputs ----
-    logger.info(
-        f"\nDecode complete: {total_tokens} tokens in {decode_elapsed:.1f}s " f"({overall_tps:.1f} tok/s aggregate)\n"
-    )
-
-    responses = []
-    for u, output_ids in enumerate(all_outputs):
         text = processor.tokenizer.decode(output_ids, skip_special_tokens=True)
         responses.append(text)
         prompt_text = (
-            prompts[u][-1]["content"]
-            if isinstance(prompts[u][-1]["content"], str)
-            else next((c["text"] for c in prompts[u][-1]["content"] if c.get("type") == "text"), "")
+            prompt[-1]["content"]
+            if isinstance(prompt[-1]["content"], str)
+            else next((c["text"] for c in prompt[-1]["content"] if c.get("type") == "text"), "")
         )
-        logger.info(f"\n=== USER {u} ===\nPROMPT:   {prompt_text[:120]}\nRESPONSE: {text.strip()}\n")
+        logger.info(
+            f"\n=== USER {u} ===\nPROMPT:   {prompt_text[:120]}\nRESPONSE: {text.strip()}\n"
+            f"({len(output_ids)} tokens, {len(output_ids) / max(user_decode_s, 1e-9):.1f} tok/s)\n"
+        )
 
+    overall_tps = total_tokens / decode_elapsed if decode_elapsed > 0 else 0
+    logger.info(f"Decode complete: {total_tokens} tokens in {decode_elapsed:.1f}s ({overall_tps:.1f} tok/s)")
     return responses
 
 

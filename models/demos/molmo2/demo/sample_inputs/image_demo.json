@@ -5,7 +5,7 @@
             "content": [
                 {
                     "type": "image",
-                    "image": "https://storage.googleapis.com/oe-training-public/molmo2-eval-media/molmo_2_logo_RGB.png"
+                    "image": "https://huggingface.co/allenai/Molmo2-8B/resolve/main/molmo_2_logo_RGB.png"
                 },
                 {
                     "type": "text",

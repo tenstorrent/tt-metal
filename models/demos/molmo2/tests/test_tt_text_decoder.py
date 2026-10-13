@@ -27,9 +27,6 @@ import torch
 import ttnn
 
 GOLDEN_DIR = Path(__file__).parent.parent / "reference" / "golden"
-HF_MODEL_PATH = os.path.expanduser(
-    "~/.cache/huggingface/hub/models--allenai--Molmo2-8B/snapshots/" "e28fa28597e5ec5e0cca2201dd8ab33d48bc4a1b"
-)
 PCC_THRESHOLD = 0.99
 
 _MESH_SHAPE = {
@@ -75,16 +72,10 @@ def mesh_device():
 
 @pytest.fixture(scope="module")
 def state_dict():
-    sys.path.insert(0, HF_MODEL_PATH)
-    from transformers import AutoModelForImageTextToText
+    from models.demos.molmo2.tt.hf_loading import load_molmo2_state_dict
 
     print("\nLoading Molmo2-8B state dict (fp32)...")
-    model = AutoModelForImageTextToText.from_pretrained(
-        HF_MODEL_PATH, trust_remote_code=True, torch_dtype=torch.float32, device_map="cpu"
-    )
-    sd = model.state_dict()
-    del model
-    return sd
+    return load_molmo2_state_dict(dtype=torch.float32)
 
 
 @pytest.fixture(scope="module")
