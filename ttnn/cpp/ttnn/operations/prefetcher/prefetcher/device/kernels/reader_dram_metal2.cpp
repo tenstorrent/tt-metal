@@ -126,6 +126,10 @@ void kernel_main() {
         }
     }
 
+    // Leave the read command buffer untagged. Nothing clears packet tags between programs, and a later
+    // dynamic-NOC program on this core uses this command buffer as BRISC's atomic buffer.
+    noc_async_read_set_trid(0, noc.get_noc_id());
+
     // In performance mode the reads skipped the NoC counters; re-sync them before exit. The writer's traffic
     // on this NOC lands in the same hardware counters, so wait until it has none in flight.
     sync.wait_front(1);
