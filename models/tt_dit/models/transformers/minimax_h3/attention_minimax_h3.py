@@ -67,10 +67,10 @@ SDPA_MM_FIDELITY_ENV = "MINIMAX_H3_SDPA_MM_FIDELITY"
 
 
 def sdpa_matmul_fidelity() -> ttnn.MathFidelity | None:
-    """Ring SDPA QK^T / softmax @ V fidelity from `MINIMAX_H3_SDPA_MM_FIDELITY`; unset keeps the compute config's."""
+    """Ring SDPA QK^T / softmax @ V fidelity from `MINIMAX_H3_SDPA_MM_FIDELITY`; unset means LoFi, `hifi2` restores the old default."""
     raw = os.environ.get(SDPA_MM_FIDELITY_ENV, "").strip().lower()
     if not raw:
-        return None
+        return ttnn.MathFidelity.LoFi
     names = {"lofi": "LoFi", "hifi2": "HiFi2", "hifi3": "HiFi3", "hifi4": "HiFi4"}
     if raw not in names:
         raise ValueError(f"{SDPA_MM_FIDELITY_ENV}={raw!r}: expected one of {sorted(names)}")

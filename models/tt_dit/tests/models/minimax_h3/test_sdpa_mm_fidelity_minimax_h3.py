@@ -15,7 +15,7 @@ from ....models.transformers.minimax_h3 import attention_minimax_h3 as am
 
 @pytest.mark.parametrize(
     ("raw", "expected"),
-    [(None, None), ("", None), ("lofi", "LoFi"), (" LoFi ", "LoFi"), ("hifi2", "HiFi2"), ("hifi4", "HiFi4")],
+    [(None, "LoFi"), ("", "LoFi"), ("lofi", "LoFi"), (" LoFi ", "LoFi"), ("hifi2", "HiFi2"), ("hifi4", "HiFi4")],
 )
 def test_sdpa_matmul_fidelity_parses(monkeypatch, raw, expected):
     if raw is None:
@@ -23,7 +23,7 @@ def test_sdpa_matmul_fidelity_parses(monkeypatch, raw, expected):
     else:
         monkeypatch.setenv(am.SDPA_MM_FIDELITY_ENV, raw)
     got = am.sdpa_matmul_fidelity()
-    assert got == (None if expected is None else getattr(ttnn.MathFidelity, expected))
+    assert got == getattr(ttnn.MathFidelity, expected)
 
 
 def test_sdpa_matmul_fidelity_rejects_unknown(monkeypatch, expect_error):
