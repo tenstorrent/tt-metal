@@ -63,7 +63,6 @@ from tests.ttnn.unit_tests.operations.prefetcher_common import (
     require_tensor_prefetcher,
 )
 
-
 pytestmark = run_for_blackhole("Tensor prefetcher requires Blackhole")
 
 
@@ -715,10 +714,15 @@ def test_bench_dram_core_repeats_recv_contig(device, op_name, shape, distributio
     indirect=True,
 )
 @pytest.mark.parametrize("op_name,shape", LLAMA_SHAPES)
-def test_bench_workercore_repeats(device, op_name, shape):
+@pytest.mark.parametrize("transport", ["gcb", "pipe"])
+def test_bench_workercore_repeats(device, op_name, shape, transport):
     """A/B baseline: same shape under trace replay with the worker-core prefetcher
     (BRISC+NCRISC senders on worker cores instead of DRISC on DRAM cores). Both the
     prefetcher op and the matmuls execute under FD inside the trace.
+
+    `transport` delivers through a GlobalCircularBuffer or through one worker-sender PrefetcherPipe
+    per sender, the pipes' rings as deep as the GlobalCircularBuffer. Over pipes the gather_in0
+    matmul reads its K-blocks in place from the ring rather than copying them into its own in1 buffer.
 
     Parametrized over the same Llama shapes as the DRAM-core test. FF2 skipped because
     it exceeds the worker prefetcher's L1 budget (matches production behavior — the
@@ -788,7 +792,18 @@ def test_bench_workercore_repeats(device, op_name, shape):
     # Per-sender, per-block bytes (each sender pushes its share of the weight).
     block_size_bytes = int((_K * (_N // num_senders) // _NUM_RECV_PER_BANK) * _DTYPE_BYTES)
     gcb_size = _ring_size_capped(block_size_bytes, k=_K, ring_size=ring_size)
-    gcb = ttnn.create_global_circular_buffer(device, sender_receiver_mapping, gcb_size)
+    if transport == "gcb":
+        gcb = ttnn.create_global_circular_buffer(device, sender_receiver_mapping, gcb_size)
+        target = dict(global_cb=gcb)
+    else:
+        pipe_space = ttnn.experimental.create_prefetcher_pipe_space(
+            device,
+            sender_cores=sender_core_range_set,
+            receiver_domain=receiver_core_range_set,
+            ring_size=gcb_size,
+            max_receivers_per_pipe=_NUM_RECV_PER_BANK,
+        )
+        target = dict(prefetcher_pipes=pipe_space.create_pipes(sender_receiver_mapping))
 
     torch.manual_seed(0xBE8)
     pt_weight = torch.randn(1, 1, _K, _N)
@@ -868,23 +883,23 @@ def test_bench_workercore_repeats(device, op_name, shape):
             memory_config=output_mem_config,
             compute_kernel_config=compute_kernel_config,
             dtype=ttnn.bfloat16,
-            global_cb=gcb,
             sub_device_id=receiver_sub_device_id,
+            **target,
         )
 
     # One bulk dram_prefetcher dispatch before the trace, mirroring the DRAM-core path's
     # start_tensor_prefetcher call. The kernel runs async on device and pushes
     # num_prefetch_layers worth of pages; the warmup matmul + N traced matmul launches
     # drain them as they arrive (GCB credit gates the producer/consumer pipeline).
-    ttnn.dram_prefetcher([tt_weight, tt_addrs], num_layers=num_prefetch_layers, global_cb=gcb)
+    ttnn.dram_prefetcher([tt_weight, tt_addrs], num_layers=num_prefetch_layers, **target)
 
     # Correctness + program-cache warmup: one real one-matmul launch.
     cc_out = single_linear()
     cc_torch = ttnn.to_torch(cc_out)
     expected = pt_act.float() @ pt_weight.float()
     passing, output_str = comp_pcc(expected, cc_torch, 0.99)
-    logger.info(f"[workercore] PCC: {output_str}")
-    assert passing, f"[workercore] PCC failed: {output_str}"
+    logger.info(f"[workercore][{transport}] PCC: {output_str}")
+    assert passing, f"[workercore][{transport}] PCC failed: {output_str}"
 
     # Capture a trace of `trace_repeats` cached single-matmul dispatches and replay it once.
     bench_trace = ttnn.begin_trace_capture(device, cq_id=0)
@@ -903,7 +918,7 @@ def test_bench_workercore_repeats(device, op_name, shape):
     per_matmul_us = elapsed / trace_repeats * 1e6
     tflops = _flops_per_matmul(_K) * trace_repeats / elapsed / 1e12
     logger.info(
-        f"[workercore][{op_name}] trace_elapsed={elapsed * 1e3:.2f}ms repeats={trace_repeats} "
+        f"[workercore][{transport}][{op_name}] trace_elapsed={elapsed * 1e3:.2f}ms repeats={trace_repeats} "
         f"per_matmul={per_matmul_us:.2f}us -> {tflops:.4f} TFLOP/s"
     )
 
