@@ -119,7 +119,8 @@ thread_local std::uint32_t dest_register_offset __attribute__((used)) = 0;
 thread_local BfdAllocatorState bfd_state __attribute__((used)) = {.next = 0, .current = {}, .initialized = false};
 // Scaler DFB of an in-flight 2x column reduce, as operand id + 1 (0 = none), so the reduce uninit can restore
 // its unpacker format. thread_local because each Neo has its own UNP_B (tt-llk#1678); declared extern in
-// llk_unpack_AB_reduce_api.h. Zero-initialized so it stays in .tbss.
+// llk_unpack_common_api.h, whose llk_unpack_hw_configure clears it at kernel start. Zero-initialized so it
+// stays in .tbss.
 thread_local std::uint32_t reduce_2x_scaler_operand_plus_one __attribute__((used)) = 0;
 }  // namespace trisc
 namespace pack {
