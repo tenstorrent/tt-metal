@@ -64,6 +64,27 @@ and size each CB to `2 * block` tiles (double-buffered). Small sweet spot (~4–
 Use the smallest dtype your accuracy allows. Skip all of it if you're already bandwidth-bound (enough
 cores) or compute-bound.
 
+## ⭐⭐ T2 — [`trid_double_issue`](trid_double_issue/README.md)
+**Concept:** barrier **granularity** on a DRAM read stream — a drain-everything
+`noc_async_read_barrier()` vs. a wait scoped to one **transaction id**, so reads stay on the wire
+across the wait.
+**Situation:** your reader batches reads (a block, then ONE barrier) and you cannot widen the block
+— a shard size, a wide tensor, co-resident buffers cap it — but the NoC still goes idle at every
+barrier.
+**Measured win:** **1.11–1.63×** over a properly tuned non-trid reader at equal CB (Blackhole,
+1 core, bf16 interleaved-DRAM copy): 1.54× at block=1 falling to 1.11× at block=16. **Batch your
+barriers first — that is the bigger win:** issuing several blocks before the one barrier takes
+block=8 from 52.1 to 85.1 GB/s, and its optimum is `cb_blocks/2` (a 1/2/4 sweep straddles it). What
+trids add on top is **L1, not peak bandwidth** — everything converges to the same ~122 GB/s
+single-core ceiling, and trids just reach a given bandwidth with ~1.5–2× less L1. At a large CB the
+trivial one-block loop is within 3% of the best number in the study, so don't bother.
+**Gist:** `dataflow_kernel_lib::set_read_trid(noc, id)` before each block, then retire the OLDEST id
+with `::async_read_barrier_with_trid(noc, id)` once `T` are outstanding. Block `k` and `k-T` share an
+id, so one barrier both retires the old block and frees the id — the ring needs no counters. Depth
+3–4 is where it pays; `trid ×2` can merely tie a tuned baseline. **Read the README before writing
+it:** the CB write pointer lags the in-flight blocks, and getting the landing slot wrong silently
+overwrites data still in flight.
+
 ## ⭐⭐ T2 — [`tile_reorder`](tile_reorder/README.md)
 **Concept:** transfer coalescing on a DRAM-bandwidth-bound move.
 **Situation:** a whole-tile relocation (permute / transpose-of-tiles) written the generic way —
