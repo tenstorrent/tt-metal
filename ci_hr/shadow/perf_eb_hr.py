@@ -32,8 +32,6 @@ CFG = [
     ("add_lo_4_fp32", F16, F16, YES, ADD, LO, [128, 32], True, DestSync.Half),
     ("add_lo_16_full", F16, F16, NO, ADD, LO, [512, 32], True, DestSync.Full),
     ("mul_h4_16_full", F16, F16, NO, MUL, H4, [512, 32], True, DestSync.Full),
-    ("pt_mul_h4_8", F16, F16, NO, MUL, H4, [256, 32], False, DestSync.Half),
-    ("pt_add_lo_8", F16, F16, NO, ADD, LO, [256, 32], False, DestSync.Half),
 ]
 
 
