@@ -34,7 +34,7 @@ void kernel_main() {
     constexpr uint32_t value_half_bytes = get_compile_time_arg_val(6);  // 1024
     constexpr uint32_t index_half_bytes = get_compile_time_arg_val(7);  // 1024 (u16) / 2048 (u32)
     constexpr bool index_is_u32 = get_compile_time_arg_val(8) == 1;
-    constexpr uint32_t units_per_tile = get_compile_time_arg_val(9);
+    static_assert(get_compile_time_arg_val(9) == 4, "the face kernels run four units per tile");
     constexpr auto values_args = TensorAccessorArgs<10>();
     constexpr auto indices_args = TensorAccessorArgs<decltype(values_args)::next_compile_time_args_offset()>();
     constexpr auto src_args = TensorAccessorArgs<decltype(indices_args)::next_compile_time_args_offset()>();
@@ -60,7 +60,7 @@ void kernel_main() {
     volatile tt_l1_ptr uint32_t* const stick_l1 = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(stick_base);
 
     for (uint32_t u = start_unit; u < start_unit + num_units; ++u) {
-        const auto [row_tile, kt, half, col0, ncols] = decode_unit(u, k_tiles, units_per_tile);
+        const auto [row_tile, kt, half, col0, ncols] = decode_unit(u, k_tiles);
         const uint32_t page = row_tile * k_tiles + kt;
 
         // Same clamps as the reader; this RISC owns rows [8, 16) of the unit.

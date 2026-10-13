@@ -60,8 +60,8 @@ constexpr uint32_t writer_bounce_cb_index = tt::CBIndex::c_3;  // writer-private
 constexpr uint32_t values_cb_index = tt::CBIndex::c_16;        // staged value face-pairs, reader -> writer
 constexpr uint32_t indices_cb_index = tt::CBIndex::c_17;       // staged index face-pairs, reader -> writer
 
-// The sizing constants below must mirror topk_route_finish_gather_common.hpp — keep the
-// two files in sync.
+// The sizing constants below must mirror topk_route_finish_gather_common.hpp and its _faces copy;
+// keep the three files in sync.
 //
 // Gather bounce buffers (one per RISC — each is that RISC's private scratch): 64 slots of
 // 64 B. 64 B slot size (not the elements' 2 B) because Blackhole's NoC requires 64 B
@@ -168,7 +168,7 @@ uint32_t finish_units_per_tile(const Tensor& input, const Tensor& indices, uint3
     const uint32_t reader_rows = rows / 16 * 8 + std::min(rows % 16, 8u);
     const uint32_t batches = input.physical_volume() / (padded[-2] * padded[-1]);
     const uint32_t noc_gathers = batches * std::max(reader_rows, rows - reader_rows) * k_rounded;
-    // Measured on p100a: face units win up to 6144 gathers on the busier NoC, past that only from 40 half units.
+    // Doubling the units pays until the busier NoC saturates near 6144 gathers, and again from 40 half units.
     const bool faces_fit = 2 * half_units <= num_cores;
     return faces_fit && (noc_gathers <= 6144 || half_units >= 40) ? 4 : 2;
 }
