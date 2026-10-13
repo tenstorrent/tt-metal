@@ -182,3 +182,28 @@ def test_concurrent_shared_prefixes_keep_private_history_and_follow_moves():
         tokens[:1], None, model.cache, [256], page_tables_per_layer=[shared, shared], start_pos=[128], empty_slots=[0]
     )
     assert submitted[-1][0] not in (first, second)
+
+
+def test_decode_releases_only_its_slot_history_despite_page_id_collision():
+    model = adapter()
+    model.max_batch_size = 4
+    model.prefill_slot_keys = {0: 1, 1: 2}
+    model.cache.prefill_history = {1: object(), 2: object()}
+    model.generator = SimpleNamespace(
+        model=SimpleNamespace(layers=[SimpleNamespace(sliding=False)]),
+        prepare_decode=lambda *args, **kwargs: {"logits": torch.zeros(1, 1, 4, 10)},
+        replay=lambda *args, **kwargs: None,
+        _host_logits=lambda tensor: tensor,
+    )
+    # Physical page 2 belongs to decoding row 0. Private history key 2 belongs
+    # to row 1, whose prefill is still in progress and must remain live.
+    tables = torch.tensor([[2, 3], [2, 4], [0, 0], [0, 0]])
+    model.decode_forward(
+        torch.zeros(4, 1, dtype=torch.int32),
+        torch.tensor([256, -1, -1, -1]),
+        None,
+        model.cache,
+        page_tables_per_layer=[tables, tables],
+    )
+    assert model.prefill_slot_keys == {1: 2}
+    assert set(model.cache.prefill_history) == {2}

@@ -242,11 +242,11 @@ class Gemma4ForCausalLM:
         sample = sampling_params is not None
         if reload_inputs:
             tables = self._tables(kv_cache, page_tables_per_layer)
-            full_layer = next(i for i, layer in enumerate(self.generator.model.layers) if not layer.sliding)
-            done = {int(tables[full_layer][row, 0]) for row, position in enumerate(start_pos) if int(position) >= 0}
-            for key in done:
-                kv_cache.prefill_history.pop(key, None)
-            self.prefill_slot_keys = {slot: key for slot, key in self.prefill_slot_keys.items() if key not in done}
+            # A row entering decode no longer needs its private prefill tail.
+            # Page IDs can be shared and do not identify the request history.
+            for slot, position in enumerate(start_pos):
+                if int(position) >= 0:
+                    self.release_request(slot)
             self.entry = self.generator.prepare_decode(tokens, start_pos, page_table=tables, kv_cache=kv_cache)
         elif self.entry is None or self.generator.traces.get(id(kv_cache)) is not self.entry:
             raise ValueError("A retired decode trace requires current scheduler inputs")
