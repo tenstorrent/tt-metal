@@ -634,8 +634,8 @@ def test_bw_workercore_prefetcher(device, op_name, shape, transport):
     # per-receiver tensor (= pages_per_layer * page_size). The pipes' rings match it.
     gcb_size = pages_per_layer * page_size
     if transport == "gcb":
-        gcb = ttnn.create_global_circular_buffer(device, sender_receiver_mapping, gcb_size)
-        target = dict(global_cb=gcb)
+        target = dict(global_cb=ttnn.create_global_circular_buffer(device, sender_receiver_mapping, gcb_size))
+        consume_layer = ttnn.experimental.test_dram_prefetcher_consumer
     else:
         pipe_space = ttnn.experimental.create_prefetcher_pipe_space(
             device,
@@ -645,11 +645,7 @@ def test_bw_workercore_prefetcher(device, op_name, shape, transport):
             max_receivers_per_pipe=_NUM_RECV_PER_BANK,
         )
         target = dict(prefetcher_pipes=pipe_space.create_pipes(sender_receiver_mapping))
-    consume_layer = (
-        ttnn.experimental.test_dram_prefetcher_consumer
-        if transport == "gcb"
-        else ttnn.experimental.test_tensor_prefetcher_pipe_consumer
-    )
+        consume_layer = ttnn.experimental.test_tensor_prefetcher_pipe_consumer
 
     tt_weight = _build_weight(device, num_senders)
 
