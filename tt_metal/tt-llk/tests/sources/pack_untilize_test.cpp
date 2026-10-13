@@ -39,6 +39,13 @@ constexpr static std::uint32_t format_size_in_bytes(std::uint32_t data_format)
 #include "llk_unpack_common.h"
 #include "params.h"
 
+#ifdef ARCH_BLACKHOLE
+// As pack_untilize_block: one _llk_unpack_A_block_ per block row of three or more tiles, except on 32-bit unpack to DEST
+constexpr bool UNPACK_BLOCK = !unpack_to_dest && BLOCK_CT_DIM > 2;
+#else
+constexpr bool UNPACK_BLOCK = false;
+#endif
+
 void run_kernel(RUNTIME_PARAMETERS params)
 {
 #if defined(RUNTIME_FORMATS) && !defined(SPEED_OF_LIGHT)
@@ -59,6 +66,23 @@ void run_kernel(RUNTIME_PARAMETERS params)
     {
         for (std::uint32_t block_num = 0; block_num < num_blocks_per_col; ++block_num) // Loop over blocks in the tile-row.
         {
+            if constexpr (UNPACK_BLOCK)
+            {
+                const std::uint32_t first      = rt * FULL_CT_DIM + block_num * BLOCK_CT_DIM;
+                const std::uint32_t address    = L1_ADDRESS(params.buffer_A[first]);
+                const std::uint32_t stride_16B = L1_ADDRESS(params.buffer_A[first + 1]) - address;
+                if (!IS_BFP_FORMAT(formats.unpack_A_src) && stride_16B == params.num_faces * FACE_R_DIM * datum_size_in_bytes(formats.unpack_A_src))
+                {
+                    _llk_unpack_A_block_<BroadcastType::NONE, false, EltwiseBinaryReuseDestType::NONE, false, is_fp32_dest_acc_en, true>(
+                        address, BLOCK_CT_DIM, stride_16B, formats.unpack_A_src, formats.unpack_A_dst, params.num_faces);
+                }
+                else
+                {
+                    _llk_unpack_A_block_<BroadcastType::NONE, false, EltwiseBinaryReuseDestType::NONE, false, is_fp32_dest_acc_en>(
+                        address, BLOCK_CT_DIM, stride_16B, formats.unpack_A_src, formats.unpack_A_dst, params.num_faces);
+                }
+                continue;
+            }
             for (std::uint32_t tile_index_within_block = 0; tile_index_within_block < BLOCK_CT_DIM; ++tile_index_within_block) // Loop over tiles in the block
             {
                 std::uint32_t tile_index_in_memory = rt * FULL_CT_DIM + block_num * BLOCK_CT_DIM + tile_index_within_block;

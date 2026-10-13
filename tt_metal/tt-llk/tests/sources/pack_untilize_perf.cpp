@@ -36,6 +36,13 @@ static_assert(FULL_CT_DIM % BLOCK_CT_DIM == 0, "FULL_CT_DIM must be divisible by
 #include "llk_unpack_A.h"
 #include "llk_unpack_common.h"
 
+#ifdef ARCH_BLACKHOLE
+// As pack_untilize_block: one _llk_unpack_A_block_ per block row of three or more tiles, except on 32-bit unpack to DEST
+constexpr bool UNPACK_BLOCK = !unpack_to_dest && BLOCK_CT_DIM > 2;
+#else
+constexpr bool UNPACK_BLOCK = false;
+#endif
+
 void run_kernel(RUNTIME_PARAMETERS params)
 {
 #if defined(RUNTIME_FORMATS) && !defined(SPEED_OF_LIGHT)
@@ -71,10 +78,33 @@ void run_kernel(RUNTIME_PARAMETERS params)
 
         for (std::uint32_t loop = 0; loop < LOOP_FACTOR; loop++)
         {
-            for (std::uint32_t i = 0; i < TILE_CNT; ++i)
+            if constexpr (UNPACK_BLOCK)
             {
-                _llk_unpack_A_<BroadcastType::NONE, false, EltwiseBinaryReuseDestType::NONE, unpack_to_dest>(
-                    PERF_ADDRESS(PERF_INPUT_A, i), formats.unpack_A_src, formats.unpack_A_dst);
+                // Production's CB pages lie back to back: a dense block walks them with the Z counter
+                const bool dense = !IS_BFP_FORMAT(formats.unpack_A_src);
+                const std::uint32_t stride_16B =
+                    dense ? 4 * FACE_R_DIM * datum_size_in_bytes(formats.unpack_A_src) : PERF_ADDRESS(PERF_INPUT_A, 1) - PERF_ADDRESS(PERF_INPUT_A, 0);
+                for (std::uint32_t i = 0; i < TILE_CNT; i += BLOCK_CT_DIM)
+                {
+                    if (dense)
+                    {
+                        _llk_unpack_A_block_<BroadcastType::NONE, false, EltwiseBinaryReuseDestType::NONE, false, is_fp32_dest_acc_en, true>(
+                            PERF_ADDRESS(PERF_INPUT_A, i), BLOCK_CT_DIM, stride_16B, formats.unpack_A_src, formats.unpack_A_dst);
+                    }
+                    else
+                    {
+                        _llk_unpack_A_block_<BroadcastType::NONE, false, EltwiseBinaryReuseDestType::NONE, false, is_fp32_dest_acc_en>(
+                            PERF_ADDRESS(PERF_INPUT_A, i), BLOCK_CT_DIM, stride_16B, formats.unpack_A_src, formats.unpack_A_dst);
+                    }
+                }
+            }
+            else
+            {
+                for (std::uint32_t i = 0; i < TILE_CNT; ++i)
+                {
+                    _llk_unpack_A_<BroadcastType::NONE, false, EltwiseBinaryReuseDestType::NONE, unpack_to_dest>(
+                        PERF_ADDRESS(PERF_INPUT_A, i), formats.unpack_A_src, formats.unpack_A_dst);
+                }
             }
         }
         PROFILER_SYNC();
