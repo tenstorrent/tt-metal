@@ -52,6 +52,23 @@ def _host_fn(mesh, module):
     return fn
 
 
+def _host_fn2(mesh, module):
+    """Wrap a two-input device module as fn(ctx, a_host [S, H], b_host [S, H]) -> host [S, H]."""
+    import ttnn
+    from models.demos.gemma4_a4b_glx.tt.rms_norm import replicated_to_host, to_device_replicated
+
+    def fn(ctx, a, b):
+        ad = to_device_replicated(mesh, a)
+        bd = to_device_replicated(mesh, b)
+        yd = module(ad, bd)
+        y = replicated_to_host(yd)
+        for t in (ad, bd, yd):
+            ttnn.deallocate(t)
+        return y.to(a.dtype)
+
+    return fn
+
+
 def _attention_module(mesh, spec, layer):
     """Sliding attention of `layer`; loads only that layer's six self_attn tensors."""
     import os
@@ -119,6 +136,10 @@ def device_component(mesh, spec, layer, step):
         return _host_fn(mesh, _norm_module(mesh, spec, layer, step))
     if step == "attention":
         return _attention_fn(mesh, _attention_module(mesh, spec, layer))
+    if step == "attn_residual":
+        from models.demos.gemma4_a4b_glx.tt.residual import TtResidualAdd
+
+        return _host_fn2(mesh, TtResidualAdd(mesh))
     raise NotImplementedError(f"implement stage: no device module for {step} yet")
 
 

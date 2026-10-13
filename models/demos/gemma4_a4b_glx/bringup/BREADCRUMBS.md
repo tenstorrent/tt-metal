@@ -111,3 +111,11 @@ I re-applied the attempt above unchanged; it had passed under an older framework
   SDPA_Q_CHUNK=256 and SDPA_K_CHUNK=128.
 - `bfw job check --task C.sliding.attention`: PASS. pcc 0.999968, margin 1.52, 32 device ops, 0 host FLOPs.
   The C.sliding.attn_norm regression also passed.
+
+## C.sliding.attn_residual (run 20261013-175448-gemma4-glx-14)
+- `tt/residual.py`: `TtResidualAdd(a, b)` = one `ttnn.add` (bf16, DRAM). Inputs are replicated, so no CCL is needed.
+- `hooks.py`: `_host_fn2` wraps a two-input device module for the component harness. `device_component` returns it
+  for `attn_residual`. The global block's attn_residual is the same add, so it takes the same path.
+- Check: PASS. pcc 0.999996, auto_margin_min 1.95, 1 device op, 0 host FLOPs. The attn_norm, attention and
+  post_attn_norm regressions also passed.
+- Re-run: `bfw job check --task C.sliding.attn_residual`
