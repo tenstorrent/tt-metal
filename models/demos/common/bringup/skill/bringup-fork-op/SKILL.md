@@ -149,6 +149,7 @@ the fork and relinks ttnn. If a build dies halfway, run it again before reading 
 |---|---|---|
 | `'ttnn/operations/...' file not found` | the target lost the source's `ttnn/cpp` include dir | `target_include_directories(<target> PRIVATE ${FixmeOpAPIDir})` (fork_op.py adds it) |
 | `use of undeclared identifier 'ccl'` (or another sibling namespace) | an unqualified lookup relied on the source's namespace | the fork must stay inside `ttnn::operations`; qualify the name fully |
+| `no member named 'ccl' in namespace '...::bringup'` (a shared sibling namespace) | the nesting rewrote `N::X` inside the fork's `namespace N {}` for a namespace the fork shares with the source (e.g. `ttnn::experimental::ccl`) | restore the original qualification by hand and note it in the CHANGELOG |
 | `duplicate symbol` at link | the copy declares a namespace fork_op.py did not nest | nest it as `N::bringup` and qualify the references to its symbols |
 | `no member named 'X' in namespace 'ttnn::prim'` (or another nested namespace) | a relative qualification (`prim::X`, `transformer::X` from a sibling namespace) that the nesting did not rewrite | add the `::bringup` (`prim::bringup::X`); a type the fork shares with a sibling op (e.g. `SDPAProgramConfig`) goes back to the source's namespace |
 | `undefined symbol ... bringup::<op>` on `import ttnn` | a host `.cpp` is not in the fork's target | add it with `target_sources(<target> PRIVATE <file>)` |

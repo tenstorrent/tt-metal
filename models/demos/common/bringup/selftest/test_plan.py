@@ -203,7 +203,7 @@ def test_opportunities():
     assert n == 3
     rows = [line for line in text.splitlines() if line.startswith("| [ ]")]
     assert "`attn.sdpa`" in rows[0] and "66.7%" in rows[0] and "2.0 ms" in rows[0]
-    assert "fp32 accumulate disables streaming SDPA" in rows[0] and "Chunked causal attention" in rows[0]
+    assert "fp32 DEST disables streaming SDPA" in rows[0] and "Chunked causal attention" in rows[0]
     assert "Collectives on 1xN" in rows[2]
 
 
