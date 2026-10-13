@@ -124,4 +124,7 @@ def test_pack_dest_reinit(formats, dest_acc, input_dimensions):
     ), f"result has {len(res_from_L1)} datums, golden has {len(golden_tensor)}"
 
     res_tensor = torch.tensor(res_from_L1, dtype=format_dict[formats.output_format])
-    assert passed_test(golden_tensor, res_tensor, formats.output_format)
+    assert passed_test(golden_tensor, res_tensor, formats.output_format), (
+        "datacopy output differs from its input after the per-block _llk_pack_dest_init_ / "
+        "_llk_math_pack_sync_init_ re-init"
+    )
