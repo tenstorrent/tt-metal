@@ -44,6 +44,12 @@ std::size_t geometry_fingerprint(const H2HSocket::Config& cfg) {
     return std::hash<std::string>{}(geometry_text(cfg));
 }
 
+}  // namespace
+
+// Types of H2HSocket::Impl members: Impl has external linkage, so these must too
+// (-Wsubobject-linkage). Named rather than anonymous for that reason alone.
+namespace h2h_detail {
+
 // One flat allocation per container, sized at create() and never grown: every queue here is
 // bounded by ring_pages, so a deque's chunk churn buys nothing and costs a pointer chase.
 template <typename T>
@@ -217,6 +223,10 @@ private:
     uint32_t cores_ = 0;
 };
 
+}  // namespace h2h_detail
+
+namespace {
+
 // A load the compiler may not hoist out of a poll loop; acquire orders the trailer's other
 // fields after the guard that vouches for them.
 uint64_t load_acquire(const volatile uint64_t* p) {
@@ -251,12 +261,12 @@ struct H2HSocket::Impl {
     };
     // 1 tx_queue per core. A shared tx_queue lets a core waiting on credit park every other
     // core's sends behind it, which is the stall the previous design fixed the same way.
-    CoreRings<SendTask> tx_queue;
+    h2h_detail::CoreRings<SendTask> tx_queue;
     // Three stages per frame: payload put (tx_payload), then -- once a flush has made it
     // remotely visible -- the trailer put (tx_flight), then retire on its completion.
-    CoreRings<InFlight> tx_payload;
-    CoreRings<InFlight> tx_trailer;
-    CoreRings<InFlight> tx_flight;
+    h2h_detail::CoreRings<InFlight> tx_payload;
+    h2h_detail::CoreRings<InFlight> tx_trailer;
+    h2h_detail::CoreRings<InFlight> tx_flight;
     uint64_t in_flight = 0;
     uint64_t tx_queued = 0;
     uint32_t rr = 0;
@@ -272,9 +282,9 @@ struct H2HSocket::Impl {
         uint32_t origin = 0;  // sender's full selector: its host AND its core
         uint32_t slot = 0;    // the RX slot it landed in, so consumed() can disarm its guard
     };
-    CoreRings<Delivered> rx_pending;
+    h2h_detail::CoreRings<Delivered> rx_pending;
     // Owns both backward counters and the coalesced puts that publish them.
-    CreditPublisher credits;
+    h2h_detail::CreditPublisher credits;
     RdmaWindow::Op credit_op{};  // MPI_Put takes no request; kept only to satisfy put()
     std::vector<uint32_t> next_slot;   // next RX slot to inspect, per core
     // The origin's ring position this ring expects next, in the origin socket's cumulative bytes
