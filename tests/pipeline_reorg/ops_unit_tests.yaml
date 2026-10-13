@@ -541,7 +541,7 @@
     args=""
     for cell in kimi-k27-8x1-balanced glm-53-8x1-balanced kimi-k27-8x1-hot-expert glm-53-8x1-hot-expert; do
       for payload in half full; do
-        d=/tmp/reab/$payload/$cell
+        d=$PWD/generated/test_reports/reab/$payload/$cell
         rm -rf $d && mkdir -p $d
         echo "=== $cell payload=$payload"
         RE_COMBINE_PAYLOAD=$payload TT_METAL_PROFILER_DIR=$d pytest $T/test_hybrid_routed_expert_combine.py -vvv --tb=short -k "test_hybrid_routed_expert_combine_overlap_perf and $cell" || echo "FAILED $cell payload=$payload"

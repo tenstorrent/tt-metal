@@ -8,8 +8,10 @@ Reads the raw device profiler log of one test_hybrid_routed_expert_combine_overl
 captures three traces in order: the routed expert alone, combine alone, then the overlap. Per chip and per
 replay, a program spans the first kernel start to the last kernel end on any Tensix core. In the overlap,
 the routed expert owns logical rows 2-9, which are NOC0 rows 4-11 on Blackhole (rows are never harvested),
-so its span ends at the last kernel end on those rows; everything after is combine's tail. Each replay is
-reported on its slowest chip, and the table takes the median replay.
+so its span ends at the last kernel end on those rows. Each span is taken on its own slowest chip, as the
+mesh waits for that chip: the hot expert's chip sets the routed expert's span, and combine's last receiver can be
+another chip. The tail is the overlap's span past the routed expert's. The table takes the median of the timed
+replays.
 
 usage: re_combine_tail.py LABEL=profile_log_device.csv [LABEL=...]
 """
@@ -60,17 +62,15 @@ def _spans(path):
     return out
 
 
-def _slowest(per_replay, skip_first=True):
-    """Per replay, the slowest chip's (total, re_end, re_cores); skips the untimed warm-up replay."""
+def _timed(per_replay):
+    """Replays in order, without the untimed warm-up replay."""
     replays = sorted(per_replay)
-    if skip_first and len(replays) > 1:
-        replays = replays[1:]
-    return [max(per_replay[r].values(), key=lambda v: v[0]) for r in replays]
+    return replays[1:] if len(replays) > 1 else replays
 
 
-def _median_replay(samples):
-    totals = sorted(samples, key=lambda v: v[0])
-    return totals[len(totals) // 2]
+def _span(per_replay, field):
+    """Median over the timed replays of the slowest chip's `field` (0: whole program, 1: routed expert)."""
+    return statistics.median(max(v[field] for v in per_replay[r].values()) for r in _timed(per_replay))
 
 
 def main(argv):
@@ -79,6 +79,7 @@ def main(argv):
         "| Overlap total | RE cores |"
     )
     print("|---|---|---|---|---|---|---|---|---|---|")
+    details = []
     for arg in argv:
         label, path = arg.split("=", 1)
         spans = _spans(path)
@@ -87,17 +88,24 @@ def main(argv):
             print(f"| {label} | expected 3 traces, found {traces} |")
             continue
         re_tr, cmb_tr, ovl_tr = traces
-        re_alone = statistics.median(v[0] for v in _slowest(spans[re_tr]))
-        cmb_alone = statistics.median(v[0] for v in _slowest(spans[cmb_tr]))
-        total, re_ovl, cores = _median_replay(_slowest(spans[ovl_tr]))
+        re_alone = _span(spans[re_tr], 0)
+        cmb_alone = _span(spans[cmb_tr], 0)
+        re_ovl = _span(spans[ovl_tr], 1)
+        total = _span(spans[ovl_tr], 0)
         tail = total - re_ovl
+        cores = min(v[2] for r in spans[ovl_tr] for v in spans[ovl_tr][r].values())
         print(
             f"| {label} | {re_alone:.1f} us | {re_ovl:.1f} us | {re_ovl - re_alone:.1f} us | {cmb_alone:.1f} us "
             f"| {tail:.1f} us | {tail / cmb_alone:.1%} | {1 - tail / cmb_alone:.1%} | {total:.1f} us | {cores} |"
         )
         for name, tr in (("re", re_tr), ("combine", cmb_tr), ("overlap", ovl_tr)):
-            per = [f"{v[0]:.1f}/{v[1] if v[1] is None else round(v[1], 1)}" for v in _slowest(spans[tr], False)]
-            print(f"  {label} {name} trace {tr} replays (total/re_end, slowest chip): {' '.join(per)}")
+            for r in _timed(spans[tr]):
+                chips = " ".join(
+                    f"{c}:{v[0]:.0f}" + ("" if name != "overlap" else f"/{v[1]:.0f}")
+                    for c, v in sorted(spans[tr][r].items())
+                )
+                details.append(f"{label} {name} replay {r} chip:total[/re_end] {chips}")
+    print("\n".join(details))
 
 
 if __name__ == "__main__":
