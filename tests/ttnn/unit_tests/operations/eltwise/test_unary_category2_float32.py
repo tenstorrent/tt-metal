@@ -394,9 +394,9 @@ def test_tanhshrink(device):
     | |x| >= 1.625     | ULP ≤ 3     | tanh = 2*sigmoid(2|x|) - 1 doubles the sigmoid's rounding |
     |                  |             | (max: WH 2 ULP, BH 3 ULP at x ≈ 1.80)                     |
 
-    Splitting by magnitude matters: a single full-range PCC ≥ 0.999 would
-    pass a kernel that returned x unchanged, since tanh(x) is bounded by 1
-    and barely perturbs the correlation once x spans up to ~3.4e38.
+    Why not one PCC check over all inputs: tanh(x) never exceeds 1, so for
+    most inputs the output is almost exactly x. A broken kernel that just
+    returned x would still pass a whole-range PCC check.
     """
     input_tensor = generate_float32_bits()
 
