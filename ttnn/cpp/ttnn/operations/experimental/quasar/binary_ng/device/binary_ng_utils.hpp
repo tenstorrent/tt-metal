@@ -91,13 +91,19 @@ struct OpConfig {
     };
 
     template <class EnumT>
-    OpConfig(BinaryOpType binary_op_type, std::in_place_type_t<EnumT>, std::optional<DataType> dtype = std::nullopt);
+    OpConfig(
+        BinaryOpType binary_op_type,
+        std::in_place_type_t<EnumT>,
+        std::optional<DataType> dtype = std::nullopt,
+        const std::optional<binary::BinaryOpParams>& op_params = std::nullopt);
 
     std::map<std::string, std::string> as_defines(DataType dtype) const;
 
     std::optional<unary::UnaryOpType> process_lhs;
     std::optional<unary::UnaryOpType> process_rhs;
-    std::optional<unary::UnaryOpType> postprocess;
+    // Carries a parameter: a bare UnaryOpType reaches get_op_init_and_func_default, which emits the
+    // paramless form and so inherits the compute API's default template argument.
+    std::optional<unary::EltwiseUnaryWithParam> postprocess;
     std::variant<FpuBinaryOp, SfpuBinaryOp> binary_op;
     bool is_sfpu_op() const;
 };
@@ -145,9 +151,11 @@ ttnn::Shape compute_broadcasted_output(const ttnn::Shape& shape_a, const ttnn::S
 MemoryConfig compute_mem_config_actual(const ttnn::Tensor& input_tensor_a, const ttnn::Shape& shape_b);
 
 // Env-driven tuning for ProgramFactoryQuasarNative, read once per process. R/C/W set KernelSpec
-// num_threads. They no longer restrict which shapes are admitted: each kernel derives its own share
-// from thread_id and num_threads, so any tile count works and a thread may draw zero tiles. The only
-// R/C/W admission rule left is the per-DFB STRIDED ratio, max(p,c) % min(p,c) == 0.
+// num_threads. They do not restrict which shapes are admitted: each kernel derives its own share from
+// thread_id and num_threads, so any tile count works and a thread may draw zero tiles. The one R/C/W
+// admission rule is the per-DFB STRIDED ratio, max(p,c) % min(p,c) == 0. A borrowed shard or slice runs one
+// reader and one writer thread at the tuned compute count; a shard's tiles past the largest multiple of that
+// count go through small owned rings, and a slice is borrowed only when that count divides it.
 struct NativeTuning {
     bool implicit_sync = false;       // NOT consumed, and native_tuning() throws if set: enabling it
                                       // needs the guarantee that no thread draws zero tiles, which

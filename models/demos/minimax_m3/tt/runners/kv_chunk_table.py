@@ -15,6 +15,17 @@ so each (tensor, head) needs its OWN config with a single-member device group; `
     config N..2N-1  -> v head 0..N-1   (single-member group)
     config 2N       -> index_k         (replica group: all TP columns of the SP row)
 
+Configs are named by zero-padded position ("00".."08"), the names blaze's decode table uses: the KV manager
+pairs the two tables by config name and id, so both must match. The worker copies raw bytes and the decode peer
+stores index_k in bf8, so migration requires a bf8 index_k (``M3_INDEX_CACHE_BF16`` unset).
+
+With index_k TP-deduped (``kv_cache.index_k_tp_axis``, ``M3_INDEX_K_TP_SHARD=1``) config 2N stays the one
+index_k config, but each chip holds a DISTINCT stripe of its SP row's slab, so its entries use single-chip
+groups: chip (row, col) owns tokens ``[n*chunk + row*chunk_local + col*chunk_local/tp, +chunk_local/tp)``, and
+walks the DRAM banks over its own rows only (the same layout as DeepSeek's ``tp_axis`` table). The config
+list and order are unchanged, so the destination side keeps its own layout (a replicated destination still
+receives every stripe on all its columns).
+
 The per-chip DRAM addressing (32-token blocks round-robin across the DRAM banks, block-cyclic positions,
 user-major ``slot*num_layers+layer`` fold) matches DeepSeek's ``create_kv_chunk_address_table_block_cyclic``, just
 repeated per config with each tensor's own ``buffer_address()`` / ``chunk_size_bytes`` and column set.
@@ -42,6 +53,13 @@ def _chunk_size_bytes(dtype, head_dim: int) -> int:
     return (head_dim // 32) * tile_bytes
 
 
+def config_name(config_id: int, num_configs: int) -> str:
+    """Zero-padded positional config name, as blaze's ``kv_chunk_migration_helpers`` names its decode configs
+    (at least two digits). Sorted names keep ids in position order."""
+    width = max(2, len(str(num_configs - 1)))
+    return f"{config_id:0{width}d}"
+
+
 def _make_config(*, num_layers, max_seq_len, num_users, chunk_size_bytes):
     cfg = ttnn.experimental.disaggregation.KvChunkAddressTableConfig()
     cfg.num_layers = num_layers
@@ -66,6 +84,7 @@ def build_and_serialize_kv_chunk_table(
     head_dim,
     path,
     stage_layouts=None,
+    index_k_layers=None,
 ) -> str:
     """Build the M3 multi-config block-cyclic KV chunk address table and serialize it to ``path`` for the
     inference server's SET_TABLE. Returns the path on success.
@@ -80,6 +99,11 @@ def build_and_serialize_kv_chunk_table(
     mesh at ITS cache's base address, written at the GLOBAL layer index. With stage_layouts None the
     table covers this rank's mesh alone via local ``buffer_address()`` / fabric-node lookups — the
     single-rank path.
+
+    ``index_k_layers`` (global layer ids that carry an index_k, i.e. the MSA layers) limits the index_k
+    config's rows to those layers. The cache allocates index_k for every layer but dense layers never write
+    it, and the decode peer has no index_k on dense layers; a row published on one side only makes the KV
+    Manager reject the whole migration ("covered by only one side"). None publishes every layer.
     """
     tp_axis = 1 - sp_axis
     sp = mesh_shape[sp_axis]
@@ -99,7 +123,15 @@ def build_and_serialize_kv_chunk_table(
     )
     # Only THIS rank's cache is inspectable; in a pipeline every stage allocates the same way (same
     # model/env), so its dtypes and the slot fold generalize to the gathered stages.
-    for name, t in (("k", kv_cache.k), ("v", kv_cache.v), ("index_k", kv_cache.index_k)):
+    # The migration worker copies raw chunk bytes and blaze's decode index_k is bfp8 (DsaIndexerDirectKCacheUpdate
+    # only supports bfp8 tiles): a bf16 source would overrun its rows.
+    if kv_cache.index_k.dtype != ttnn.bfloat8_b:
+        raise ValueError(
+            f"KV migration needs a bfloat8_b index_k (the decode peer's dtype), got {kv_cache.index_k.dtype}; "
+            "unset M3_INDEX_CACHE_BF16 for migrating runs"
+        )
+    index_k = kv_cache.index_k
+    for name, t in (("k", kv_cache.k), ("v", kv_cache.v), ("index_k", index_k)):
         assert (
             t.shape[0] == num_users * num_layers
         ), f"{name} cache batch dim {t.shape[0]} != num_users({num_users}) * num_layers({num_layers})"
@@ -107,13 +139,22 @@ def build_and_serialize_kv_chunk_table(
     num_chunks_per_seq_len = seq_len // chunk_size
 
     # Config layout (id order is the src<->dst migration contract): k_h0..k_hN-1, v_h0..v_hN-1, index_k.
-    # Each entry: (label, cache index into stage_layouts, TP columns forming its device group, dtype).
+    # Each entry: (label, cache index into stage_layouts, device groups per SP row as lists of TP columns,
+    # dtype). A TP-replicated tensor has one group (its replicas); a TP-deduped index_k has one single-chip
+    # group per column, each owning its 1/tp stripe of the row's slab.
+    index_k_tp_sharded = getattr(kv_cache, "index_k_tp_axis", None) is not None
     specs = []
     for h in range(num_kv_heads):
-        specs.append((f"k_h{h}", 0, [h], kv_cache.k.dtype))
+        specs.append((f"k_h{h}", 0, [[h]], kv_cache.k.dtype))
     for h in range(num_kv_heads):
-        specs.append((f"v_h{h}", 1, [h], kv_cache.v.dtype))
-    specs.append(("index_k", 2, list(range(cols)), kv_cache.index_k.dtype))
+        specs.append((f"v_h{h}", 1, [[h]], kv_cache.v.dtype))
+    index_k_groups = [[c] for c in range(cols)] if index_k_tp_sharded else [list(range(cols))]
+    specs.append(("index_k", 2, index_k_groups, index_k.dtype))
+    if index_k_tp_sharded:
+        assert tokens_per_chunk_local % (cols * NUM_CONTIGUOUS_TOKENS_IN_DRAM_BANK) == 0, (
+            f"TP-deduped index_k needs chunk_local {tokens_per_chunk_local} split into {cols} stripes of whole "
+            f"{NUM_CONTIGUOUS_TOKENS_IN_DRAM_BANK}-token chunks"
+        )
 
     if stage_layouts is None:
         # Single-rank: synthesize one one-stage layout per cache from the local mesh so both paths
@@ -133,7 +174,7 @@ def build_and_serialize_kv_chunk_table(
                     "fnids": local_fnids,
                 }
             ]
-            for t in (kv_cache.k, kv_cache.v, kv_cache.index_k)
+            for t in (kv_cache.k, kv_cache.v, index_k)
         ]
 
     from models.demos.common.prefill.runners.migration import validate_stage_layout_contiguous
@@ -156,21 +197,25 @@ def build_and_serialize_kv_chunk_table(
                 f"space, so kv_migration_stages must report the same range for all three."
             )
 
-    configs = [
-        _make_config(
-            num_layers=total_layers,
-            max_seq_len=seq_len,
-            num_users=num_users,
-            chunk_size_bytes=_chunk_size_bytes(dtype, head_dim),
-        )
-        for (_, _, _, dtype) in specs
-    ]
-    table = ttnn.experimental.disaggregation.KvChunkAddressTable(configs)
+    table = ttnn.experimental.disaggregation.KvChunkAddressTable(
+        {
+            config_name(i, len(specs)): _make_config(
+                num_layers=total_layers,
+                max_seq_len=seq_len,
+                num_users=num_users,
+                chunk_size_bytes=_chunk_size_bytes(dtype, head_dim),
+            )
+            for i, (_, _, _, dtype) in enumerate(specs)
+        }
+    )
 
     hosts_set = set()
 
-    for config_id, (label, tensor_idx, group_cols, dtype) in enumerate(specs):
+    for config_id, (label, tensor_idx, row_groups, dtype) in enumerate(specs):
         chunk_bytes = _chunk_size_bytes(dtype, head_dim)
+        # Each group of a row owns an equal stripe of the row's per-chunk slab (the whole slab when the
+        # row has a single group).
+        tokens_per_group = tokens_per_chunk_local // len(row_groups)
         for stage in stage_layouts[tensor_idx]:
             base_addr = stage["base_addr"]
             num_banks = stage["num_banks"]
@@ -178,47 +223,58 @@ def build_and_serialize_kv_chunk_table(
             # single-rank synthesized stage carries the real local hostname instead.
             host_name = stage.get("host_name") or f"host-{stage['host_tag']:08x}"
             first = stage["first_layer"]
+            filter_layers = label == "index_k" and index_k_layers is not None
             for global_row in range(sp):
-                fabric_node_ids = [stage["fnids"][global_row][c] for c in group_cols]
-                group_idx = table.add_device_group(fabric_node_ids)
-                for fid in fabric_node_ids:
-                    key = (int(fid.mesh_id), int(fid.chip_id))
-                    if key not in hosts_set:
-                        table.set_fabric_node_host(fid, host_name=host_name)
-                        hosts_set.add(key)
+                for stripe, group_cols in enumerate(row_groups):
+                    fabric_node_ids = [stage["fnids"][global_row][c] for c in group_cols]
+                    group_idx = table.add_device_group(fabric_node_ids)
+                    for fid in fabric_node_ids:
+                        key = (int(fid.mesh_id), int(fid.chip_id))
+                        if key not in hosts_set:
+                            table.set_fabric_node_host(fid, host_name=host_name)
+                            hosts_set.add(key)
 
-                # Replay the ND-shard ROUND_ROBIN_1D walk: 32-token blocks round-robin across the DRAM
-                # banks (per chip / per tensor), advancing the per-bank offset after each full bank
-                # sweep. The addresses are identical on every column of a row (the tensor is allocated
-                # identically everywhere); only the device group's column differs. Each stage restarts
-                # the walk from ITS base address and writes at the GLOBAL layer index; the slot fold on
-                # device is per-stage (slot * stage_count + local_layer), which this slot ->
-                # local-layer order replays.
-                curr_bank_id = 0
-                curr_bank_offset = 0
-                for slot in range(num_users):
-                    for local_layer in range(stage["count"]):
-                        global_layer = first + local_layer
-                        for seq_chunk in range(num_chunks_per_seq_len):
-                            chunk_token_start = seq_chunk * chunk_size + global_row * tokens_per_chunk_local
-                            chunk_token_end = chunk_token_start + tokens_per_chunk_local
-                            for position in range(
-                                chunk_token_start, chunk_token_end, NUM_CONTIGUOUS_TOKENS_IN_DRAM_BANK
-                            ):
-                                location = ttnn.experimental.disaggregation.KvCacheLocation()
-                                location.noc_addr = (curr_bank_id << 32) | (base_addr + curr_bank_offset)
-                                location.size_bytes = chunk_bytes
-                                location.device_group_index = group_idx
-                                table.set(global_layer, position, slot, location, config_id)
+                    # Replay the ND-shard ROUND_ROBIN_1D walk: 32-token blocks round-robin across the DRAM
+                    # banks (per chip / per tensor), advancing the per-bank offset after each full bank
+                    # sweep. The base address is identical on every chip (the tensor is allocated
+                    # identically everywhere), and each group's chips hold the same rows, so one walk per
+                    # group covers them. Each stage restarts the walk from ITS base address and writes at
+                    # the GLOBAL layer index; the slot fold on device is per-stage (slot * stage_count +
+                    # local_layer), which this slot -> local-layer order replays.
+                    curr_bank_id = 0
+                    curr_bank_offset = 0
+                    for slot in range(num_users):
+                        for local_layer in range(stage["count"]):
+                            global_layer = first + local_layer
+                            # A layer without index_k gets no rows, but still walks its region so later
+                            # layers keep their real addresses.
+                            publish = not filter_layers or global_layer in index_k_layers
+                            for seq_chunk in range(num_chunks_per_seq_len):
+                                chunk_token_start = (
+                                    seq_chunk * chunk_size
+                                    + global_row * tokens_per_chunk_local
+                                    + stripe * tokens_per_group
+                                )
+                                chunk_token_end = chunk_token_start + tokens_per_group
+                                for position in range(
+                                    chunk_token_start, chunk_token_end, NUM_CONTIGUOUS_TOKENS_IN_DRAM_BANK
+                                ):
+                                    if publish:
+                                        location = ttnn.experimental.disaggregation.KvCacheLocation()
+                                        location.noc_addr = (curr_bank_id << 32) | (base_addr + curr_bank_offset)
+                                        location.size_bytes = chunk_bytes
+                                        location.device_group_index = group_idx
+                                        table.set(global_layer, position, slot, location, config_id)
 
-                                curr_bank_id = (curr_bank_id + 1) % num_banks
-                                if curr_bank_id == 0:
-                                    curr_bank_offset += chunk_bytes
+                                    curr_bank_id = (curr_bank_id + 1) % num_banks
+                                    if curr_bank_id == 0:
+                                        curr_bank_offset += chunk_bytes
 
     ttnn.experimental.disaggregation.export_to_protobuf_file(table, path)
     logger.info(
         f"[migration] M3 KV chunk address table serialized to {path} "
         f"(configs={len(specs)} [{', '.join(s[0] for s in specs)}], stages={len(stage_layouts[0])}, "
-        f"layers={total_layers}, entries={table.total_entries()})"
+        f"layers={total_layers}, entries={table.total_entries()}, index_k="
+        f"{'TP-deduped (single-chip groups)' if index_k_tp_sharded else f'TP-replicated ({cols}-chip groups)'})"
     )
     return path

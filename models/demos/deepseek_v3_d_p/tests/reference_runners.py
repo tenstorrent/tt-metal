@@ -61,7 +61,7 @@ def run_reference_moe(
     if variant.reference_moe_cls is None:
         return None
     # Test params can override the variant's default MoE dims (expert count, hidden/intermediate size —
-    # e.g. GLM-5.1's 256 experts / 6144 hidden vs the deepseek_v3 variant's 7168), so patch the reference
+    # e.g. GLM-5.3's 256 experts / 6144 hidden vs the deepseek_v3 variant's 7168), so patch the reference
     # config from the actual generated weight shapes: gate.weight is [n_experts, hidden], each expert's
     # gate_proj is [moe_intermediate, hidden]. Without this the reference is built at the variant default
     # and load_state_dict fails with a size mismatch.

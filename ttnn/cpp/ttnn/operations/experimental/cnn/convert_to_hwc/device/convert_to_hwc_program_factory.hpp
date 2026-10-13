@@ -4,41 +4,11 @@
 
 #pragma once
 
-#include "ttnn/operation.hpp"
-#include "ttnn/device_operation.hpp"
 #include "convert_to_hwc_device_operation_types.hpp"
-#include "ttnn/operations/data_movement/sharded/sharded_common.hpp"
+
+#include <tt-metalium/program_descriptors.hpp>
 
 namespace ttnn::experimental::prim {
-
-struct ConvertToHWCSharedVariables {
-    tt::tt_metal::CBHandle cb_in{};
-    tt::tt_metal::CBHandle cb_out{};
-    bool is_input_in_dram = false;
-    // Destination/output cores where kernels execute
-    std::vector<tt::tt_metal::CoreCoord> output_cores;
-    // Serialized per-core runtime args for gather-based writer kernels
-    std::vector<std::vector<uint32_t>> per_core_serialized_transfers;
-    tt::tt_metal::KernelHandle writer_kernel_id0{};
-    tt::tt_metal::KernelHandle writer_kernel_id1{};
-    uint32_t remote_address = 0;
-};
-
-struct ConvertToHWCProgramFactory {
-    using shared_variables_t = ConvertToHWCSharedVariables;
-    using cached_program_t = ttnn::device_operation::CachedProgram<shared_variables_t>;
-
-    static cached_program_t create(
-        const ConvertToHwcParams& operation_attributes,
-        const ConvertToHwcInputs& tensor_args,
-        Tensor& tensor_return_value);
-
-    static void override_runtime_arguments(
-        cached_program_t& cached_program,
-        const ConvertToHwcParams& operation_attributes,
-        const ConvertToHwcInputs& tensor_args,
-        Tensor& tensor_return_value);
-};
 
 // Named constants for circular buffer indices
 namespace CBIndex {
@@ -70,15 +40,14 @@ struct ConvertToHwcConfig {
     uint32_t gather_l1_output_shard_width{};
 
     // Core information
-    std::vector<CoreCoord> l1_input_cores;
-    std::vector<CoreCoord> dram_input_cores;
-    CoreRangeSet l1_input_core_grid;
-    std::vector<CoreCoord> output_cores;
-    CoreRangeSet output_core_grid;
+    std::vector<tt::tt_metal::CoreCoord> l1_input_cores;
+    std::vector<tt::tt_metal::CoreCoord> dram_input_cores;
+    tt::tt_metal::CoreRangeSet l1_input_core_grid;
+    std::vector<tt::tt_metal::CoreCoord> output_cores;
+    tt::tt_metal::CoreRangeSet output_core_grid;
 
     // DRAM/L1 configuration
     bool is_input_in_dram{};
-    uint32_t remote_address{};
     tt::tt_metal::BufferType remote_buffer_type{};
     tt::CoreType remote_core_type{};
 
@@ -87,6 +56,13 @@ struct ConvertToHwcConfig {
 
     static ConvertToHwcConfig create_from_tensors(const Tensor& input, const Tensor& output);
     void validate() const;
+};
+
+struct ConvertToHWCProgramFactory {
+    static tt::tt_metal::ProgramDescriptor create_descriptor(
+        const ConvertToHwcParams& operation_attributes,
+        const ConvertToHwcInputs& tensor_args,
+        Tensor& tensor_return_value);
 };
 
 uint32_t compute_alignment_requirement_in_elements(const Tensor& input_tensor);

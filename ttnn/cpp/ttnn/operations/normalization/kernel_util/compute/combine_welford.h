@@ -15,7 +15,6 @@
 #include "api/compute/eltwise_binary_sfpu.h"
 #include "api/compute/eltwise_unary/binop_with_scalar.h"
 #include "api/compute/tile_move_copy.h"
-#include "api/compute/copy_dest_values.h"
 #include "api/compute/eltwise_unary/fill.h"
 #include "api/compute/eltwise_unary/eltwise_unary.h"
 #include "api/compute/reg_api.h"

@@ -27,14 +27,17 @@ from models.common.utility_functions import is_blackhole, skip_for_slow_dispatch
 
 CHUNK_SIZE = 5120
 NUM_LAYERS = int(os.environ.get("PREFILL_NUM_LAYERS", "2"))
-# GLM-5.2 golden trace carrying BOTH the 78 kv_cache layers and the 21 dsa/indexer_k_layer_* dirs, at
-# 56320 rows (= 11 x CHUNK_SIZE). The adapter's own prefill_trace_default omits dsa/, which would leave
-# the merged table's index config with no golden to PCC against.
-GLM52_TRACE = "/mnt/models/deepseek-prefill-cache/glm-traces/vllm-glm52-indexer-kcache-55k"
-GLM52_MTP_TRACE = os.environ.get("GLM52_MTP_TRACE", "/mnt/models/deepseek-prefill-cache/glm-traces/mtp-glm52-55k")
-GLM52_HF_MODEL = os.environ.get("GLM52_HF_MODEL", "/mnt/models/deepseek-prefill-cache/GLM-5.2-FP8")
-GLM52_MTP_TTNN_CACHE = os.environ.get(
-    "TT_GLM52_MTP_TTNN_CACHE", "/mnt/models/deepseek-prefill-cache/glm52_mtp_ttnn_cache"
+# GLM-5.3 golden trace carrying BOTH the 78 kv_cache layers and the 21 dsa/indexer_k_layer_* dirs, at
+# 56320 rows (= 11 x CHUNK_SIZE). Pinned here (same path as the adapter's prefill_trace_default) because a
+# trace without dsa/ would leave the merged table's index config with no golden to PCC against.
+GLM53_TRACE = "/mnt/weka/model-cache/scratch/zai-org/GLM-5.3-Cache/golden_traces/vllm-glm53-indexer-kcache-55k"
+GLM53_MTP_TRACE = os.environ.get(
+    "GLM53_MTP_TRACE",
+    "/mnt/weka/model-cache/scratch/zai-org/GLM-5.3-Cache/golden_traces/mtp-tail-802cad1b-56320tok-L7-nozeropos0",
+)
+GLM53_HF_MODEL = os.environ.get("GLM53_HF_MODEL", "/mnt/weka/model-weights/llm/zai-org/GLM-5.3-fp8-aca966e4")
+GLM53_MTP_TTNN_CACHE = os.environ.get(
+    "TT_GLM53_MTP_TTNN_CACHE", "/mnt/weka/model-cache/scratch/zai-org/GLM-5.3-Cache/glm53_mtp_ttnn_cache"
 )
 SERVICE_ID = "ci_ds_prefill"
 TABLE_PATH = "/tmp/ci_prefill_kv_table.pb"  # IPC rendezvous files; cleaned up around each scenario
@@ -141,46 +144,50 @@ SCENARIOS = {
             "PREFILL_PRODUCER_P_BURST": "0.2",
         },
     },
-    # 4) GLM-5.2 (sparse / DSA) full-depth single user over ALL 78 layers. This is the gate for the
+    # 4) GLM-5.3 (sparse / DSA) full-depth single user over ALL 78 layers. This is the gate for the
     #    MERGED two-config KV chunk address table: config 0 = the bf16 ROW_MAJOR MLA KVPE cache (all 78
     #    layers), config 1 = the bfp8 lightning-indexer KEY cache (only the 21 `full` layers, compacted).
-    #    The runner builds that single merged table under PREFILL_MOCK_MIGRATION and the producer reads
-    #    BOTH configs back through it over UMD, so a wrong address in either config shows up as a PCC
-    #    failure. 11 x 5120 = 56320 is exactly the trace depth.
+    #    The runner builds that single merged table and the producer reads BOTH configs back through it
+    #    over UMD, so a wrong address in either config shows up as a PCC failure. 11 x 5120 = 56320 is
+    #    exactly the trace depth.
     #
     #    ALL layers is mandatory here, not a preference: the index cache is sized from the model's whole
     #    indexer_types map (21 full layers), so a truncated run leaves the upper index ranks unwritten —
     #    the producer asserts on exactly that mismatch rather than PCC'ing untouched memory.
-    "glm52_full_depth_kv_table": {
+    "glm53_full_depth_kv_table": {
         "users": 1,
         "layers": 78,
         "max_seq_len": 56320,
         "env": {
-            "PREFILL_MODEL": "glm_5_2",
-            "PREFILL_TRACE_DIR": GLM52_TRACE,
-            # GLM-5.2's calibrated KVPE floor. The 0.88 default is above what this model reaches
+            "PREFILL_MODEL": "glm_5_3",
+            "PREFILL_TRACE_DIR": GLM53_TRACE,
+            # GLM-5.3's calibrated KVPE floor. The 0.88 default is above what this model reaches
             # (~0.857 min per-layer), so it has to be set explicitly here.
             "PREFILL_STANDALONE_CHUNKED_PCC": "0.85",
         },
-        # 78 layers of GLM-5.2 weights + kernel JIT, then a two-config PCC sweep of ~174k sequential
+        # 78 layers of GLM-5.3 weights + kernel JIT, then a two-config PCC sweep of ~174k sequential
         # read_dram_umd block reads (78 x 1760 for KVPE + 21 x 1760 for the index cache). Both phases
         # are far past the Kimi-sized defaults.
         "ready_timeout_s": 3600,
         "producer_timeout_s": 7200,
         "producer": {"PREFILL_PRODUCER_CHUNKS": "11", "PREFILL_PRODUCER_MAX_REQUESTS": "1"},
     },
-    "glm52_mtp4": {
+    "glm53_mtp4": {
         "users": 1,
         "layers": 78,
         "max_seq_len": 56320,
         "env": {
-            "PREFILL_MODEL": "glm_5_2",
-            "PREFILL_TRACE_DIR": GLM52_TRACE,
-            "PREFILL_MTP_TRACE_DIR": GLM52_MTP_TRACE,
+            "PREFILL_MODEL": "glm_5_3",
+            "PREFILL_TRACE_DIR": GLM53_TRACE,
+            "PREFILL_MTP_TRACE_DIR": GLM53_MTP_TRACE,
             "PREFILL_MTP_LEVELS": "4",
-            "TT_GLM52_MTP_TTNN_CACHE": GLM52_MTP_TTNN_CACHE,
-            "PREFILL_HF_MODEL": GLM52_HF_MODEL,
+            "TT_GLM53_MTP_TTNN_CACHE": GLM53_MTP_TTNN_CACHE,
+            "PREFILL_HF_MODEL": GLM53_HF_MODEL,
             "PREFILL_STANDALONE_CHUNKED_PCC": "0.85",
+            # The MTP levels chain off the trunk output, so they inherit its error and add ~0.03/level on
+            # GLM-5.3 (test_mtp.py L4: KVPE 0.874 vs GLM-5.2 0.903): 7 levels land near 0.83 while the
+            # trunk still scores 0.855. Gate them separately so the trunk keeps its own 0.85 floor.
+            "PREFILL_MTP_PCC": "0.80",
         },
         "ready_timeout_s": 3600,
         "producer_timeout_s": 7200,
@@ -188,9 +195,9 @@ SCENARIOS = {
     },
 }
 
-SCENARIOS["glm52_mtp7"] = copy.deepcopy(SCENARIOS["glm52_mtp4"])
-SCENARIOS["glm52_mtp7"]["env"]["PREFILL_MTP_LEVELS"] = "7"
-SCENARIOS["glm52_mtp7"]["producer_timeout_s"] = 8400
+SCENARIOS["glm53_mtp7"] = copy.deepcopy(SCENARIOS["glm53_mtp4"])
+SCENARIOS["glm53_mtp7"]["env"]["PREFILL_MTP_LEVELS"] = "7"
+SCENARIOS["glm53_mtp7"]["producer_timeout_s"] = 8400
 
 # Keep the Llama golden prerequisite out of the existing Kimi/GLM CI scenarios.
 # Select the Llama acceptance case explicitly with PREFILL_MODEL=llama_3p1_8b.
@@ -222,7 +229,7 @@ if _PROMPT_FILE:
 
 def _transport_env(num_users: int, max_seq_len: int, num_layers: int = NUM_LAYERS, **extra) -> dict:
     """Inherit the CI/dev env (weights cache, HF, golden trace) and add the shared orchestration knobs
-    for this scenario's runner+producer. `extra` layers on the runner (MOCK_MIGRATION) or producer
+    for this scenario's runner+producer. `extra` layers on the runner (layer-ack transport) or producer
     (schedule + CHECK_PCC) knobs.
 
     In the CI (mpirun) launch path the launcher's MPI/PMIx session variables are stripped from the
@@ -250,8 +257,8 @@ def _transport_env(num_users: int, max_seq_len: int, num_layers: int = NUM_LAYER
 def _scenario_env(sc: dict, **extra) -> dict:
     """Child environment for one scenario's runner or producer: the shared transport knobs, the
     scenario's own layer count, its model-specific `env` (model, trace dir, ...), then the role-specific
-    `extra` (MOCK_MIGRATION for the runner; the schedule + CHECK_PCC for the producer). Both roles must
-    agree on model/layers/seq_len or the producer would validate against a differently-shaped cache."""
+    `extra` (the layer-ack transport for the runner; the schedule + CHECK_PCC for the producer). Both
+    roles must agree on model/layers/seq_len or the producer would validate against a differently-shaped cache."""
     return _transport_env(
         sc["users"],
         sc["max_seq_len"],
@@ -426,8 +433,12 @@ def _running_runner(tag: str, sc: dict, **extra):
     _cleanup_ipc()  # a stale table/descriptor from a prior scenario would make the readiness poll pass early
     env = _scenario_env(
         sc,
-        PREFILL_MOCK_MIGRATION="1",
-        PREFILL_LAYER_ACK_D2H=sc.get("env", {}).get("PREFILL_LAYER_ACK_D2H", "1"),
+        PREFILL_ENABLE_MIGRATION="0",
+        # The scenario's own setting wins; otherwise the caller's environment, so a model whose runtime
+        # reports layer completion through the host callback only can run a shared scenario.
+        PREFILL_LAYER_ACK_D2H=sc.get("env", {}).get(
+            "PREFILL_LAYER_ACK_D2H", os.environ.get("PREFILL_LAYER_ACK_D2H", "1")
+        ),
         **extra,
     )
     ready_timeout_s = int(sc.get("ready_timeout_s", _READY_TIMEOUT_S))

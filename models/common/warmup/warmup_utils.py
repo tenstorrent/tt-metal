@@ -101,6 +101,7 @@ class WarmupForwardMixin:
         max_batch_size,
         num_blocks,
         can_sample_on_device,
+        can_sample_device_grammar: bool = False,
         read_from_device=True,
         greedy_only: bool = False,
         skip_trace_precompile: bool = False,
@@ -134,9 +135,13 @@ class WarmupForwardMixin:
                 enable_trace=enable_trace,
                 read_from_device=read_from_device,
                 sampling_params=param,
-                # Each configuration is a new batch and must reload decode parameters.
-                reset_batch=True,
-                prompt_tokens=tokens,
+                reload_inputs=True,
+                reload_page_table=False,
+                reload_sampling_params=param is not None,
+                # Warmup has no request-owned prompt/output history. The old
+                # reset_batch=False path compiled each sampling configuration
+                # without rebuilding penalty state; preserve that behavior.
+                reset_sampling_state=False,
             )
             if skip_trace_precompile:
                 decode_kwargs["skip_trace_precompile"] = True
@@ -145,5 +150,17 @@ class WarmupForwardMixin:
                 # is active while staging.
                 decode_kwargs["prepare_trace"] = True
             self.decode_forward(**decode_kwargs)
+            enable_log_probs = getattr(param, "enable_log_probs", False) if param is not None else False
+            has_logprobs = (
+                bool(enable_log_probs.any())
+                if isinstance(enable_log_probs, torch.Tensor)
+                else (any(enable_log_probs) if isinstance(enable_log_probs, (list, tuple)) else bool(enable_log_probs))
+            )
+            if param is not None and can_sample_device_grammar and not has_logprobs:
+                grammar_kwargs = dict(
+                    decode_kwargs,
+                    grammar_bitmask=self._create_warmup_grammar_bitmask(max_batch_size),
+                )
+                self.decode_forward(**grammar_kwargs)
 
         logger.info("Decode warmup completed")

@@ -37,10 +37,15 @@ from dataclasses import dataclass
 from pathlib import Path
 
 import torch
+from loguru import logger
 from safetensors import safe_open
 
 # The 5-layer module-level trace and the full-model depth trace.
-GOLDEN_ROOT = Path("/mnt/models/deepseek-prefill-cache/golden")
+#
+# `model-cache/stable/`, not `model-cache/scratch/` -- the scratch tree holds a K3 copy that is
+# filenames without bytes. Get this root wrong and a *missing* directory makes `resolve_trace`
+# return None, which makes the tests skip rather than fail, so it shows up as a green run.
+GOLDEN_ROOT = Path("/mnt/weka/model-cache/stable/deepseek-prefill-cache/golden")
 TRACE_100K = GOLDEN_ROOT / "structured_traces" / "kimi_k3_100k_vllm"
 TRACE_1M = GOLDEN_ROOT / "k3_vllm_code_debug_1M"
 
@@ -136,11 +141,22 @@ def resolve_trace(default: Path) -> GoldenTrace | None:
 
 
 def resolve_checkpoint() -> Path | None:
-    """The Kimi-K3 checkpoint named by `$KIMI_K3_HF_MODEL` / `$KIMI_K3_CKPT`, if it has an index."""
-    for var in ("KIMI_K3_HF_MODEL", "KIMI_K3_CKPT"):
+    """The Kimi-K3 checkpoint named by `$KIMI_K3_CKPT` / `$KIMI_K3_HF_MODEL`, if it has an index.
+
+    `$KIMI_K3_CKPT` first, and the order matters: `$KIMI_K3_HF_MODEL` is the published MXFP4
+    checkpoint, whose index holds no dequantized `experts.N.w{1,2,3}` keys, so preferring it breaks
+    every caller here -- they all read tensors. The MoE gate wants the MXFP4 router and reads
+    `$KIMI_K3_HF_MODEL` directly, so it is unaffected.
+    """
+    for var in ("KIMI_K3_CKPT", "KIMI_K3_HF_MODEL"):
         value = os.getenv(var)
-        if value and (Path(value) / "model.safetensors.index.json").is_file():
+        if not value:
+            continue
+        if (Path(value) / "model.safetensors.index.json").is_file():
             return Path(value)
+        # Worth a line: falling through silently substitutes the other checkpoint, and the failure
+        # then surfaces as a missing-keys error naming that one instead of the missing index here.
+        logger.warning(f"${var}={value} has no model.safetensors.index.json; skipping it")
     return None
 
 

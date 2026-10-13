@@ -101,5 +101,7 @@ HTTP clients against an already-running vLLM server (`python -m ...
 --served-model-name PaddlePaddle/PaddleOCR-VL-1.6` etc.) rather than pytest
 cases; each exits non-zero on a gate miss.
 
-CI pipeline registration (`tests/pipeline_reorg/*.yaml`, tiering, time budget) is
-a deliberate follow-up, not part of this bring-up -- see the PR description.
+Tiered CI runs this model at Tier 3 on BH P150 (`models/model_ci_tiers.md`): the
+e2e job is `test_ocr_mean_cer_vs_ground_truth`, which renders the corpus itself
+and so needs no staged goldens; the unit job is `test_text_decoder_pcc.py` plus
+`test_vision_permutation.py`.

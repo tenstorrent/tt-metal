@@ -3,7 +3,7 @@
 mesh_descriptors {
   name: "M0"
   arch: BLACKHOLE
-  device_topology { dims: [ 4, 2 ] }
+  device_topology { dims: [ 4, 2 ] dim_types: [ RING, LINE ] }
   host_topology   { dims: [ 1, 1 ] }
   channels {
     count: 2

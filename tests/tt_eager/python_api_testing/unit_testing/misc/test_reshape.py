@@ -113,6 +113,25 @@ def test_tile_major_reshape_var(device):
     assert eq
 
 
+@pytest.mark.parametrize("dtype", [ttnn.bfloat16, ttnn.float32], ids=["bfloat16", "float32"])
+@pytest.mark.parametrize("memory_config", [ttnn.DRAM_MEMORY_CONFIG, ttnn.L1_MEMORY_CONFIG], ids=["dram", "l1"])
+@pytest.mark.parametrize(
+    "input_shape, output_shape",
+    [((1, 1, 64, 96), (1, 1, 96, 64)), ((2, 3, 32, 64), (3, 2, 64, 32))],
+)
+def test_tile_major_reshape_dtypes(device, dtype, memory_config, input_shape, output_shape):
+    # Regression: the tile reader's byte offsets assumed 2-byte values, so FLOAT32 came back scrambled.
+    torch.manual_seed(0)
+    x = torch.randn(input_shape, dtype=torch.float32)
+    xtt = ttnn.from_torch(x, layout=ttnn.TILE_LAYOUT, device=device, dtype=dtype, memory_config=memory_config)
+    expected = ttnn.to_torch(xtt).reshape(output_shape)
+
+    xtt = ttnn.reshape_on_device(xtt, *output_shape)
+
+    assert list(xtt.padded_shape) == list(output_shape)
+    assert torch.equal(ttnn.to_torch(xtt), expected)
+
+
 # Tile reshapes whose input and output have different tile padding used to hang: the writer's tile
 # count (from the input) disagreed with the reader's (from the output), and the reader indexed input
 # pages that do not exist (out-of-bounds NoC reads).

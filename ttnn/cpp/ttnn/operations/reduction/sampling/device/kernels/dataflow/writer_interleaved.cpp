@@ -109,7 +109,22 @@ void kernel_main() {
     // get random number
     dfb_rand.wait_front(1);
     const CoreLocalMem<volatile uint16_t> rand_values(dfb_rand.get_read_ptr());
-    const uint16_t rand = rand_values[0];
+    // Two elements of the random tile are independent integer digits in [0, 256] (floored on the
+    // SFPU; exact in BF16). A draw of exactly 256 (the inclusive upper endpoint, probability ~0)
+    // is clamped to 255 so both digits are 8-bit. The threshold is the lattice point
+    // (hi * 256 + lo) / 65536 in [0, 1 - 2^-16], uniform over 65536 equiprobable values.
+    // The low digit is read from element 2, not 1: on Wormhole only the even columns of face 0
+    // of this kernel's random tile carry draws (element 1 reads back as 0 in 63969 of 64000
+    // draws, which would collapse the threshold to hi / 256 and bring the 1/256 tail cutoff
+    // back); element 2 is the next lane's draw on every arch (Blackhole fills every element).
+    constexpr uint32_t RAND_HI_ELEMENT = 0;
+    constexpr uint32_t RAND_LO_ELEMENT = 2;
+    constexpr float RAND_DIGIT_MAX = 255.0f;
+    constexpr float RAND_LATTICE_SCALE = 1.0f / 65536.0f;
+    float rand_hi = bf16_to_f32(rand_values[RAND_HI_ELEMENT]);
+    float rand_lo = bf16_to_f32(rand_values[RAND_LO_ELEMENT]);
+    rand_hi = rand_hi > RAND_DIGIT_MAX ? RAND_DIGIT_MAX : rand_hi;
+    rand_lo = rand_lo > RAND_DIGIT_MAX ? RAND_DIGIT_MAX : rand_lo;
     // wait for compute kernel
     dfb_final_indices.wait_front(num_users);
     dfb_local_values.wait_front(1);
@@ -185,7 +200,7 @@ void kernel_main() {
     }
 
     // Stochastic sampling in float32
-    const float rand_f = bf16_to_f32(rand);
+    const float rand_f = (rand_hi * 256.0f + rand_lo) * RAND_LATTICE_SCALE;
     float cum_sum_f = 0.0f;
     index_out[core_id] = final_indices[local_indices[start_id_local_phase_0]];
     bool index_found = false;

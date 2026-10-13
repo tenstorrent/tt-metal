@@ -5,17 +5,21 @@
 #include "semaphore.hpp"
 #include <cstdint>
 
-#include "hal_types.hpp"
-#include "impl/context/metal_context.hpp"
 #include <umd/device/types/core_coordinates.hpp>
 
 namespace tt::tt_metal {
 
-Semaphore::Semaphore(const CoreRangeSet& core_range_set, uint32_t id, uint32_t initial_value) :
-    core_range_set_(core_range_set), id_(id), initial_value_(initial_value), core_type_(CoreType::WORKER) {}
-
-Semaphore::Semaphore(const CoreRangeSet& core_range_set, uint32_t id, uint32_t initial_value, CoreType core_type) :
-    core_range_set_(core_range_set), id_(id), initial_value_(initial_value), core_type_(core_type) {}
+Semaphore::Semaphore(
+    const CoreRangeSet& core_range_set,
+    uint32_t id,
+    uint32_t initial_value,
+    uint32_t l1_alignment,
+    CoreType core_type) :
+    core_range_set_(core_range_set),
+    id_(id),
+    initial_value_(initial_value),
+    core_type_(core_type),
+    l1_alignment_(l1_alignment) {}
 
 Semaphore::Semaphore(const Semaphore& other) = default;
 
@@ -29,9 +33,6 @@ bool Semaphore::initialized_on_logical_core(const CoreCoord& logical_core) const
     return this->core_range_set_.contains(logical_core);
 }
 
-uint32_t Semaphore::offset() const {
-    uint32_t offset = MetalContext::instance().hal().get_alignment(HalMemType::L1) * id_;
-    return offset;
-}
+uint32_t Semaphore::offset() const { return l1_alignment_ * id_; }
 
 }  // namespace tt::tt_metal

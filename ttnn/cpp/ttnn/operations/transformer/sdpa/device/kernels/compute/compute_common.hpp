@@ -12,6 +12,7 @@
 #include "api/debug/assert.h"
 #include "api/compute/compute_kernel_api.h"
 #include "api/compute/binary_max_min.h"
+#include "api/compute/eltwise_binary_sfpu.h"
 #include "api/compute/eltwise_binary.h"
 #include "api/compute/eltwise_unary/exp.h"
 #include "api/compute/eltwise_unary/recip.h"
@@ -71,6 +72,62 @@ void max_block_inplace(uint32_t in0, uint32_t in1) {
     cb_in0.pop_front(num_tiles);
     cb_in0.reserve_back(num_tiles);
     cb_in0.push_back(num_tiles);
+}
+
+#ifdef TRISC_MATH
+inline void sdpa_max_sfpi(const std::uint32_t in0, const std::uint32_t in1, const std::uint32_t out) {
+    constexpr std::uint32_t dst_tile_size_sfpi = 32;
+#pragma GCC unroll 8
+    for (int d = 0; d < 8; d++) {
+        sfpi::vFloat a = sfpi::dst_reg[in0 * dst_tile_size_sfpi];
+        const sfpi::vFloat b = sfpi::dst_reg[in1 * dst_tile_size_sfpi];
+        v_if(b > a) { a = b; }
+        v_endif;
+        sfpi::dst_reg[out * dst_tile_size_sfpi] = a;
+        sfpi::dst_reg++;
+    }
+}
+#endif
+
+// max_block without SFPLOADMACRO, whose state races the pack thread's exp when a merge follows the K loop.
+void max_block_sfpi(uint32_t in0, uint32_t in1, uint32_t out_cb, uint32_t num_tiles) {
+    CircularBuffer cb_in0(in0);
+    CircularBuffer cb_in1(in1);
+    CircularBuffer cb_out(out_cb);
+    copy_init(in0);
+    add_binary_tile_init();
+    cb_in0.wait_front(num_tiles);
+    cb_in1.wait_front(num_tiles);
+    cb_out.reserve_back(num_tiles);
+    for (uint32_t i = 0; i < num_tiles; ++i) {
+        tile_regs_acquire();
+        copy_tile(in0, i, 0);
+        copy_tile(in1, i, 1);
+        MATH((_llk_math_eltwise_binary_sfpu_params_(sdpa_max_sfpi, 0, 1, 0, VectorMode::RC)));
+        tile_regs_commit();
+        tile_regs_wait();
+        pack_tile(0, out_cb, i);
+        tile_regs_release();
+    }
+    cb_out.push_back(num_tiles);
+}
+
+// Pushes num_tiles zero tiles to out_cb, made as x - x from the front tile of like_cb (which stays).
+void zero_block(uint32_t like_cb, uint32_t out_cb, uint32_t num_tiles) {
+    CircularBuffer cb_like(like_cb);
+    CircularBuffer cb_out(out_cb);
+    sub_init(like_cb, like_cb);
+    cb_like.wait_front(1);
+    cb_out.reserve_back(num_tiles);
+    tile_regs_acquire();
+    sub_tiles(like_cb, like_cb, 0, 0, 0);
+    tile_regs_commit();
+    tile_regs_wait();
+    for (uint32_t i = 0; i < num_tiles; ++i) {
+        pack_tile(0, out_cb);
+    }
+    tile_regs_release();
+    cb_out.push_back(num_tiles);
 }
 
 /**
