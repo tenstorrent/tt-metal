@@ -12,7 +12,7 @@ export PYTHONPATH=/work:/work/tools:$S/tools
 RT=$(cd /tmp && env -u PYTHONPATH python3 -c "import ttnn, os; print(os.path.dirname(ttnn.__file__))" 2>/dev/null)
 echo "== ol start $(date -u +%T) $(git -C /work rev-parse HEAD 2>/dev/null) RT=$RT"
 FILES=$(cd $S/olvar/head && find . -type f | sed 's#^\./##')
-for f in $FILES; do echo "== file $f work=$( [ -f /work/$f ] && echo y) rt=$( [ -f $RT/$f ] && echo y || echo n) $(md5sum $S/olvar/head/$f | cut -c1-10) $(md5sum $S/olvar/hf1/$f | cut -c1-10)"; done
+for f in $FILES; do echo "== file $f work=$( [ -f /work/$f ] && echo y) rt=$( [ -f $RT/$f ] && echo y || echo n) $(for v in $(ls $S/olvar); do [ -f $S/olvar/$v/$f ] && echo -n "$v:$(md5sum $S/olvar/$v/$f | cut -c1-10) "; done)"; done
 CUR=""
 use() {  # use <variant>: its files into /work and the runtime root, its own kernel cache
   local v=$1 src=$1; [[ $v == head2 ]] && src=head
@@ -36,7 +36,7 @@ for op, vals in sorted(agg.items()):
 PYEOF
 CASES=${OL_CASES:-"transpose_rm_1024x1024 transpose_rm_8x256x128 permute_rm_nchw_nhwc_64x128x128 conv2d_bf16_64x128_32x32 conv2d_fp32acc_64x128_32x32 tilize_int32_32x128256"}
 ROUNDS=${OL_ROUNDS:-4}
-VL=(head hf1 head2)
+read -ra VL <<< "${OL_VARS:-head hf1 head2}"
 for r in $(seq 1 $ROUNDS); do
   k=$(( (r - 1) % 3 )); VS=("${VL[@]:$k}" "${VL[@]:0:$k}")
   for c in $CASES; do
@@ -53,7 +53,7 @@ for r in $(seq 1 $ROUNDS); do
 done
 use head
 echo "== trisc0 identity, kernels of head against hf1 and head2 (same kernel dir in each cache)"
-for other in hf1 head2; do
+for other in "${VL[@]:1}"; do
   (cd $G/cache_head && find . -path '*trisc0*' -name '*.elf' | sort) | while read f; do
     [[ -f $G/cache_$other/$f ]] && echo "$G/cache_head/$f $G/cache_$other/$f"; done > $G/pairs_$other.txt
   paste -d' ' <(awk '{print $1}' $G/pairs_$other.txt | awk -F/ '{for(i=1;i<=NF;i++) if($i=="kernels") print $(i+1)}') <(python3 $S/elfsec.py $G/pairs_$other.txt) | sort | uniq -c | sed "s/^/== kid $other /"

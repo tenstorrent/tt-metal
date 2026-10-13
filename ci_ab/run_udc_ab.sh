@@ -100,6 +100,27 @@ if [[ $JOB == A ]]; then
   elfid c12h c12m; elfid c12h hnn
   seqrun $S/c12.txt A $R4 900 main:c12m head:c12h head:c12h main:c12m main:c12m head:c12h head:c12h main:c12m
   seqrun $S/hn.txt N $R4 300 head:c12h hn:hnn hn:hnn head:c12h head:c12h hn:hnn hn:hnn head:c12h
+elif [[ $JOB == E ]]; then
+  mkside main; mkside head; mkside hf3
+  for v in main:f1m head:f1h hf3:f1x; do build ${v%%:*} ${v##*:} $S/f1.txt $R4; done
+  elfid f1h f1m; elfid f1h f1x
+  seqrun $S/f1.txt E $R4 600 main:f1m head:f1h hf3:f1x hf3:f1x head:f1h main:f1m hf3:f1x main:f1m head:f1h head:f1h main:f1m hf3:f1x
+  if [[ -z ${PERF_ONLY:-} ]]; then
+    mkside mainf
+    for v in mainf:bdmf hf3:bdmx; do build ${v%%:*} ${v##*:} $S/bitdump_merge.txt -; done
+    for v in mainf:bdmf hf3:bdmx; do
+      D=$T/bits_${v%%:*}; mkdir -p $D
+      BITDUMP_DIR=$D TT_LLK_DISABLE_ASSERTS=1 LIM=600 harness ${v%%:*} ${v##*:} $S/bitdump_merge.txt $T/cons_bits_${v%%:*}.log --compile-consumer -o timeout_method=thread --timeout 120
+      echo "== bits ${v%%:*} rc=$? $(date -u +%T): $(grep -aE '[0-9]+ (passed|failed|error)' $T/cons_bits_${v%%:*}.log | tail -n 1), $(ls $D | wc -l) dumps"
+      (cd $D && sha256sum * | sed "s/^/LLKAB_SHA ${v%%:*} /")
+    done
+    echo "== bits mainf against hf3: $(cd $T/bits_mainf && for f in *; do cmp -s $f $T/bits_hf3/$f && echo equal || echo differ; done | sort | uniq -c | tr '\n' ' ')"
+    build hf3 fax $S/func_f1.txt - asserts
+    unset LLK_PERF_RUN_TYPES
+    LIM=1500 harness hf3 fax $S/func_f1.txt $T/cons_func.log --compile-consumer -o timeout_method=thread --timeout 120
+    echo "== functional hf3, LLK asserts on, rc=$? $(date -u +%T): $(grep -aE '[0-9]+ (passed|failed|error)' $T/cons_func.log | tail -n 1)"
+    grep -aE '^(FAILED|ERROR) ' $T/cons_func.log | cut -c1-400 | sed -n 1,40p
+  fi
 elif [[ $JOB == C ]]; then
   mkside main; mkside hf1; mkside ht0; mkside ht1
   build main dcm $S/dc.txt $R4; build hf1 dcf $S/dc.txt $R4
