@@ -393,7 +393,7 @@ _KW = (
     "topology",
     "kv_len",
     "chunk_start_idx",
-    "key_stride",
+    "key_compression_ratio",
     "k_chunk_size",
     "v_dim",
     "block_cyclic_chunk_local",
