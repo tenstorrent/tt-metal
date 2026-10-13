@@ -722,6 +722,9 @@ ttnn::device_operation::ProgramArtifacts UnaryDeviceOperation::ProgramFactory::c
             unary_defines["SFPU_START_AFTER_COPY"] = "1";
         }
     }
+    if (!src_sharded && input.device()->arch() == tt::ARCH::BLACKHOLE) {
+        unary_defines["SFPU_UNARY_LITERAL_CONSTANTS"] = "1";
+    }
 
     DataFormat dfb_data_format_for_input =
         (ops_chain[0].type() == unary::UnaryOpType::BITCAST) ? dfb_data_format_output : dfb_data_format;

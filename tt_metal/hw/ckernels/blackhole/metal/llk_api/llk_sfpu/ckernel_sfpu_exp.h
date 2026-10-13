@@ -122,6 +122,14 @@ constexpr float EXP_21F_C2 = EXP_21F_BF16_C2;
 template <bool COND>
 using HoistedIf = std::conditional_t<COND, sfpi::vFloat, float>;
 
+// The unary kernel on an interleaved input defines SFPU_UNARY_LITERAL_CONSTANTS: there the shorter rows of sigmoid,
+// silu, softplus and tanhshrink with registered constants make the DRAM-bound op slower, so they keep literals.
+#ifdef SFPU_UNARY_LITERAL_CONSTANTS
+constexpr bool sfpu_unary_registered_constants = false;
+#else
+constexpr bool sfpu_unary_registered_constants = true;
+#endif
+
 // Programs vConstFloatPrgm1 = 1/ln2 for the hoisted-constant exp callers (sigmoid, silu, mish), which read
 // it on every row. 1/ln2 is the same fp32 (0x3FB8AA3B) as the Juffa fp32 exp's log2(e),
 // so one register serves a kernel's bf16 and fp32 arms. Prgm0 is left alone (sfpu_reciprocal_init's 2.0f,

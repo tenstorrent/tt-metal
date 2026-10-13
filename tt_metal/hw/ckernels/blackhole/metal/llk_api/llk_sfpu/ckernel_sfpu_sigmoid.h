@@ -56,7 +56,11 @@ sfpi_inline sfpi::vFloat _sfpu_sigmoid_core_(
 // must have run), the other exp constants from the caller (see _sfpu_sigmoid_core_).
 template <bool is_fp32_acc_to_dest_mode, typename C0, typename C1, typename C2, typename H, typename P0, typename P1>
 sfpi_inline sfpi::vFloat _sfpu_sigmoid_prgm_(sfpi::vFloat x, C0 c0, C1 c1, C2 c2, H neg_ln2_hi, P0 p0, P1 p1) {
-    return _sfpu_sigmoid_core_<is_fp32_acc_to_dest_mode>(x, sfpi::vConstFloatPrgm1, c0, c1, c2, neg_ln2_hi, p0, p1);
+    if constexpr (sfpu_unary_registered_constants) {
+        return _sfpu_sigmoid_core_<is_fp32_acc_to_dest_mode>(x, sfpi::vConstFloatPrgm1, c0, c1, c2, neg_ln2_hi, p0, p1);
+    } else {
+        return _sfpu_sigmoid_core_<is_fp32_acc_to_dest_mode>(x, EXP_21F_ONE_LN2, c0, c1, c2, neg_ln2_hi, p0, p1);
+    }
 }
 
 // Self-contained form: every constant is a literal, so it needs only sfpu_reciprocal_init's Prgm0 = 2.0f.
@@ -85,7 +89,8 @@ inline void calculate_sigmoid() {
     if constexpr (!APPROXIMATION_MODE) {
         // The exp's constants, loaded once and kept in LRegs for the whole loop; only the arm's own set is
         // hoisted (the other stays a float). Nothing but the row is live, so every constant fits.
-        HoistedIf<!is_fp32_dest_acc_en> c0 = EXP_21F_C0, c1 = EXP_21F_C1, c2 = EXP_21F_C2;
+        HoistedIf<sfpu_unary_registered_constants && !is_fp32_dest_acc_en> c0 = EXP_21F_C0, c1 = EXP_21F_C1,
+                                                                           c2 = EXP_21F_C2;
         HoistedIf<is_fp32_dest_acc_en> neg_ln2_hi = EXP_FP32_NEG_LN2_HI, p0 = EXP_FP32_P0, p1 = EXP_FP32_P1;
         if constexpr (is_fp32_dest_acc_en && ITERATIONS == 32) {
 #pragma GCC unroll 4
@@ -118,7 +123,9 @@ inline void sigmoid_init() {
     math::reset_counters(p_setrwc::SET_ABD_F);
     if constexpr (!APPROXIMATION_MODE) {
         sfpu_reciprocal_init<false>();
-        _init_exp_hoisted_prgm_consts_();
+        if constexpr (sfpu_unary_registered_constants) {
+            _init_exp_hoisted_prgm_consts_();
+        }
     } else {
         sigmoid_appx_init();
     }
