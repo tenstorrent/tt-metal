@@ -1,22 +1,20 @@
 # SPDX-FileCopyrightText: © 2026 Tenstorrent AI ULC
 # SPDX-License-Identifier: Apache-2.0
 
-"""Mixed-tile transition test for `tilize_uninit` + the C2 reconfig retarget.
+"""Mixed-tile transition test: tilize uninit followed by the FACE_ROW_MAJOR reconfig.
 
-Closes the last open `tilize_uninit` (C1) cell: "normal->tiny / tiny->normal with
-reconfig" (axis F = tile-size transition, axis E = with-reconfig). A real
-`unpack_tilize` at geometry G0 leaves the SrcA baseline in the G0 tilize state;
-the transition under test re-establishes a DIFFERENT geometry G1 using
-`_llk_unpack_tilize_uninit_(G0)` (PR C1) followed by
-`_llk_unpack_reconfig_data_format_srca_impl_<FACE_ROW_MAJOR>(G1)` (PR C2) — the
-only restore path that both re-commits the canonical SrcA Y-stride AND retargets
-the geometry (Tile_x_dim_cntx0 from G1.face_r_dim, descriptor Z-dim from
-G1.num_faces).
+Covers the normal->tiny and tiny->normal tile-size transitions that go through a
+reconfig. A real `unpack_tilize` at geometry G0 leaves the SrcA baseline in the G0
+tilize state; the transition under test re-establishes a DIFFERENT geometry G1 using
+`_llk_unpack_tilize_uninit_(G0)` followed by
+`_llk_unpack_reconfig_data_format_srca_impl_<FACE_ROW_MAJOR>(G1)`, the only restore
+path that both re-commits the canonical SrcA Y-stride AND retargets the geometry
+(Tile_x_dim_cntx0 from G1.face_r_dim, descriptor Z-dim from G1.num_faces).
 
 The kernel reads the four canonical SrcA registers back and LLK_ASSERTs them
 against the expected G1 baseline on-device. Because a SrcA datacopy victim's
-correctness is *entirely* a function of these registers — and Phases 1/2 already
-prove "correct registers => correct data" behaviourally — checking them directly
+correctness is *entirely* a function of these registers, and the single-geometry
+tilize tests already show "correct registers => correct data", checking them directly
 verifies the transition for BOTH directions without needing a second operand /
 golden (a single-geometry stimuli harness can't lay out two tile shapes cleanly).
 
@@ -24,8 +22,8 @@ golden (a single-geometry stimuli harness can't lay out two tile shapes cleanly)
 in the G0 tilize state, so the kernel asserts the G1 baseline is NOT reproduced
 (Tile_x_dim / Z-dim differ), proving the transition is load-bearing.
 
-Exercises tiny `face_r_dim < 16` geometry. The end state is set by the C2 reconfig, which rewrites every
-register read back here, so this checks the retarget, not the face_r_dim the C1 uninit restores (the
+Exercises tiny `face_r_dim < 16` geometry. The end state is set by the reconfig, which rewrites every
+register read back here, so this checks the retarget, not the face_r_dim the uninit restores (the
 uninit restore is checked by test_unpack_tilize_uninit_restore_tiny and test_unpack_tilize_uninit_descriptor).
 """
 

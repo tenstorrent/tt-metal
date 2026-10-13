@@ -4,22 +4,23 @@
 
 // Cross-op MIXED-TILE transition test (register-state design): a real `unpack_tilize`
 // at one tile geometry G0 (the "polluter") followed by the transition under test —
-// `_llk_unpack_tilize_uninit_` (PR C1) + `_llk_unpack_reconfig_data_format_srca_impl_`
-// `<.. FACE_ROW_MAJOR>` (PR C2) — that retargets the SrcA baseline to a DIFFERENT
+// `_llk_unpack_tilize_uninit_` + `_llk_unpack_reconfig_data_format_srca_impl_`
+// `<.. FACE_ROW_MAJOR>` — that retargets the SrcA baseline to a DIFFERENT
 // geometry G1. The test then reads the SrcA config registers back and verifies they
 // are the canonical G1 baseline.
 //
-// This closes the last open `tilize_uninit` cell: "normal->tiny / tiny->normal with
-// reconfig" (axis F = tile-size transition, axis E = with-reconfig). Phase 3b covers
-// tilize->matmul geometry changes via a full `_llk_unpack_hw_configure_`; here the
-// re-establishment uses the lightweight C2 reconfig path, the ONLY mechanism that both
-// (a) re-commits the canonical SrcA Y-stride (the PR's new write) and (b) RETARGETS the
+// This covers the normal->tiny and tiny->normal tile-size transitions that go through
+// a reconfig. The polluter-matmul tests cover tilize->matmul geometry changes via a
+// full `_llk_unpack_hw_configure_`; here the re-establishment uses the lightweight
+// reconfig path, the ONLY mechanism that both (a) re-commits the canonical SrcA
+// Y-stride and (b) RETARGETS the
 // geometry — it rewrites `Tile_x_dim_cntx0 = canonical_unpA_tile_x_dim_cntx(G1.face_r_dim)`
 // and the tile-descriptor Z-dim = G1.num_faces (llk_unpack_common.h:170-174).
 //
 // Why a register-state check (not a 2nd data op): the run-1 victim of such a transition
 // is a SrcA datacopy whose correctness is *entirely* a function of these four SrcA
-// registers, and Phases 1/2 already prove "correct registers => correct data". Reading
+// registers, and the single-geometry tilize tests already show "correct registers =>
+// correct data". Reading
 // the registers directly verifies the transition for BOTH directions with no second
 // operand / golden (which a single-geometry stimuli harness can't lay out cleanly for
 // two different tile shapes).
@@ -100,13 +101,13 @@ void run_kernel(RUNTIME_PARAMETERS params)
     t6_semaphore_wait_on_zero<p_stall::STALL_SYNC>(semaphore::PACK_DONE);
     t6_semaphore_get<>(semaphore::PACK_DONE);
 
-    // ---- Transition under test: uninit (C1) + reconfig (C2) retarget G0 -> G1 ----
+    // ---- Transition under test: tilize uninit + FACE_ROW_MAJOR reconfig retarget G0 -> G1 ----
     if constexpr (DO_RESTORE)
     {
-        // C1: tear down the tilize-mutated SrcA baseline at the G0 geometry. C2 below rewrites every
-        // register read back afterwards, so C1's own restore is not observed by this test.
+        // Tear down the tilize-mutated SrcA baseline at the G0 geometry. The reconfig below rewrites
+        // every register read back afterwards, so the uninit's own restore is not observed here.
         _llk_unpack_tilize_uninit_wrapper_(formats_array[0].unpack_A_dst, g0_num_faces, g0_face_r_dim);
-        // C2: the FACE_ROW_MAJOR reconfig re-commits the canonical SrcA Y/Z-stride AND
+        // The FACE_ROW_MAJOR reconfig re-commits the canonical SrcA Y/Z-stride AND
         // retargets the geometry to G1 (Tile_x_dim_cntx0 from g1_face_r_dim, descriptor
         // Z-dim from g1_num_faces). Same format both runs, so this is purely the
         // geometry/stride retarget (no data-format change).
