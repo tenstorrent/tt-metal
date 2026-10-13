@@ -29,6 +29,7 @@ driver that lives outside ``tests/sources/``.
 """
 
 import atexit
+import collections
 import datetime
 import json
 import logging
@@ -39,6 +40,8 @@ import sys
 from dataclasses import asdict
 from pathlib import Path
 from typing import NoReturn, Optional
+
+from ttsim_error import parse_ttsim_error
 
 # ttsim runs in-process (no SimulationServer). Its init must complete before the
 # skip_for_* markers in this plugin call get_chip_architecture() (which reaches
@@ -326,6 +329,19 @@ def pytest_addoption(parser):
         const="_USE_DEFAULT_PATH",  # Value when flag is used without argument
         default=None,  # Value when flag is not used at all
         help="Path to where the test order, per runner should be stored to, default path is the same folder as LLK repo",
+    )
+
+    parser.addoption(
+        "--perf-splits",
+        type=int,
+        default=None,
+        help="Number of perf shards.",
+    )
+    parser.addoption(
+        "--perf-group",
+        type=int,
+        default=None,
+        help="1-based perf shard to run.",
     )
 
     parser.addoption(
@@ -715,6 +731,54 @@ def _select_tests_by_op(config, items):
     )
 
 
+def _split_by_cost(config, items):
+    """Cut the tests, in collection order, into --perf-splits chunks of equal estimated time.
+
+    A test weighs its module's cost from perf_split_costs.json divided by the module's test
+    count. The chunks are contiguous, so a module's tests, and the ELFs they share, stay in one
+    shard except at a cut point. This runs before _collapse_runtime_only_variants, so the
+    compile and run passes cut the same list.
+    """
+    splits = config.getoption("--perf-splits")
+    group = config.getoption("--perf-group")
+    if splits is None and group is None:
+        return
+    if not splits or not group or not 1 <= group <= splits:
+        raise pytest.UsageError(
+            "--perf-splits N and --perf-group G go together, with 1 <= G <= N"
+        )
+
+    arch = TestConfig.CHIP_ARCH.value
+    table = json.loads(
+        (Path(__file__).resolve().parents[2] / "perf_split_costs.json").read_text()
+    )
+    module_cost = table.get(arch)
+    if module_cost is None:
+        raise pytest.UsageError(f"perf_split_costs.json has no costs for {arch}")
+
+    modules = [item.path.stem for item in items]
+    unknown = sorted(set(modules) - module_cost.keys())
+    if unknown:
+        logger.warning(
+            f"--perf-splits: no cost for {', '.join(unknown)}; each counts as 1 s"
+        )
+    tests_in = collections.Counter(modules)
+    weights = [module_cost.get(m, 1.0) / tests_in[m] for m in modules]
+    total = sum(weights)
+    if total == 0:
+        weights, total = [1.0] * len(items), float(len(items))
+
+    # A test goes to the chunk that holds the midpoint of its weight.
+    chunk = total / splits
+    selected, deselected, before = [], [], 0.0
+    for item, weight in zip(items, weights):
+        shard = min(int((before + weight / 2) / chunk), splits - 1) + 1
+        (selected if shard == group else deselected).append(item)
+        before += weight
+    config.hook.pytest_deselected(items=deselected)
+    items[:] = selected
+
+
 def _restore_test_order(config, items):
     test_order_file = config.getoption("--test-order-file")
 
@@ -757,6 +821,7 @@ def pytest_collection_modifyitems(config, items):
     # Choose compile representatives only after other plugins apply selection filters.
     result = yield
     _select_tests_by_op(config, items)
+    _split_by_cost(config, items)
     _restore_test_order(config, items)
 
     if TestConfig.BUILD_MODE == BuildMode.PRODUCE and not TestConfig.SPEED_OF_LIGHT:
@@ -794,11 +859,6 @@ def _stringify_params(params):
             parts.append(f"{name}={str(value)}")
 
     return f"[{' | '.join(parts)}]"
-
-
-# Match the ttsim error preamble printed by ttsim_error() before _Exit(1):
-#   [<clk>] ERROR: <Category>: <function>: <details>
-_TTSIM_ERR_RE = re.compile(r"^\[\d+\] ERROR: (\w+): (\w+): (.*)$", re.MULTILINE)
 
 
 @pytest.hookimpl(tryfirst=True)
@@ -842,10 +902,12 @@ def pytest_runtest_logreport(report):
         report.longrepr or ""
     ):
         report.when = "call"
-        m = _TTSIM_ERR_RE.search(report.capstdout or "")
-        if m:
-            cat, func, msg = m.group(1), m.group(2), m.group(3).strip()
-            report.longrepr = f"[ttsim:{cat}] {func}: {msg}"
+        parsed = parse_ttsim_error(report.capstdout or "")
+        if parsed:
+            cat, func, msg = parsed
+            report.longrepr = (
+                f"[ttsim:{cat}] {func}: {msg}" if msg else f"[ttsim:{cat}] {func}"
+            )
             props = list(getattr(report, "user_properties", []))
             props.append(("ttsim_category", cat))
             props.append(("ttsim_func", func))
