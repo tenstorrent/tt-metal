@@ -117,32 +117,6 @@ tt::tt_metal::KernelDescriptor::Defines kernel_defines(const std::map<std::strin
     return {defines.begin(), defines.end()};
 }
 
-// Lowest semaphore id free on every core of the range, matching CreateSemaphore.
-uint32_t allocate_worker_semaphore(
-    tt::tt_metal::ProgramDescriptor& desc, const tt::tt_metal::CoreRangeSet& cores, uint32_t initial_value) {
-    constexpr uint32_t kMaxSemaphores = 16;
-    for (uint32_t id = 0; id < kMaxSemaphores; ++id) {
-        bool used = false;
-        for (const auto& sem : desc.semaphores) {
-            if (sem.core_type == tt::CoreType::WORKER && sem.id == id && sem.core_ranges.intersects(cores)) {
-                used = true;
-                break;
-            }
-        }
-        if (!used) {
-            desc.semaphores.push_back(tt::tt_metal::SemaphoreDescriptor{
-                .id = id,
-                .core_type = tt::CoreType::WORKER,
-                .core_ranges = cores,
-                .initial_value = initial_value,
-            });
-            return id;
-        }
-    }
-    TT_FATAL(false, "Unable to initialize semaphore on CoreRangeSet {}: all semaphore IDs are in use", cores.str());
-    return 0;
-}
-
 void push_cb(
     tt::tt_metal::ProgramDescriptor& program,
     const tt::tt_metal::CoreRange& cores,
@@ -403,12 +377,14 @@ MinimalMatmulProgramFactory::shared_variables_t minimal_matmul_factory_helper_co
     auto in1_receiver_cores = CoreRange(transpose_core_grid ? core_1_0 : core_0_1, core_endx_endy);
 
     const auto semaphore_cores = tt::tt_metal::CoreRangeSet(core_grid);
-    auto in0_sender_semaphore_id = allocate_worker_semaphore(program, semaphore_cores, INVALID);
-    auto in0_receiver_semaphore_id = allocate_worker_semaphore(program, semaphore_cores, INVALID);
-    auto in0_valid_semaphore_id = allocate_worker_semaphore(program, semaphore_cores, VALID);
-    auto in1_sender_semaphore_id = allocate_worker_semaphore(program, semaphore_cores, INVALID);
-    auto in1_receiver_semaphore_id = allocate_worker_semaphore(program, semaphore_cores, INVALID);
-    auto in1_valid_semaphore_id = allocate_worker_semaphore(program, semaphore_cores, VALID);
+    auto in0_sender_semaphore_id = ttnn::experimental::ccl::add_semaphore_descriptor(program, semaphore_cores, INVALID);
+    auto in0_receiver_semaphore_id =
+        ttnn::experimental::ccl::add_semaphore_descriptor(program, semaphore_cores, INVALID);
+    auto in0_valid_semaphore_id = ttnn::experimental::ccl::add_semaphore_descriptor(program, semaphore_cores, VALID);
+    auto in1_sender_semaphore_id = ttnn::experimental::ccl::add_semaphore_descriptor(program, semaphore_cores, INVALID);
+    auto in1_receiver_semaphore_id =
+        ttnn::experimental::ccl::add_semaphore_descriptor(program, semaphore_cores, INVALID);
+    auto in1_valid_semaphore_id = ttnn::experimental::ccl::add_semaphore_descriptor(program, semaphore_cores, VALID);
 
     uint32_t in0_cb_id = tt::CBIndex::c_0;
     push_cb(program, core_grid, in0_cb_id, static_cast<uint32_t>(in0_tile_size), in0_cb_num_tiles, in0_data_format);
@@ -533,7 +509,8 @@ MinimalMatmulProgramFactory::shared_variables_t minimal_matmul_factory_helper_co
     uint32_t srs_fuse_signaler_sync_semaphore_id = 0;
     if (fuse_srs) {
         defines["SRS_FUSE_OP_SIGNALER"] = "1";
-        srs_fuse_signaler_sync_semaphore_id = allocate_worker_semaphore(program, semaphore_cores, 0);
+        srs_fuse_signaler_sync_semaphore_id =
+            ttnn::experimental::ccl::add_semaphore_descriptor(program, semaphore_cores, 0);
         if (srs_fused_op_signaler->mm_window_blocks > 0) {
             // The RS keeps only this many M blocks of our output resident, so we write into slot
             // m % W and must wait for the RS readers to release a slot before recycling it.
