@@ -682,10 +682,19 @@ void call_unary_sfpu_operation_init(std::uint32_t math_format)
         // Typecast selects its concrete init from the (IN, OUT) format pair.
         call_unary_typecast_operation_init<TYPECAST_IN, TYPECAST_OUT, APPROX_MODE, is_fp32_dest_acc_en>();
     }
+#ifdef ARCH_BLACKHOLE
+    else if constexpr (OPERATION == SfpuType::identity)
+    {
+        llk_math_eltwise_unary_sfpu_init<SfpuType::unused>(sfpu::identity_init<APPROX_MODE>);
+    }
+#endif
     else if constexpr (
         OPERATION == SfpuType::floor || OPERATION == SfpuType::ceil || OPERATION == SfpuType::trunc || OPERATION == SfpuType::frac ||
         OPERATION == SfpuType::round || OPERATION == SfpuType::add1 || OPERATION == SfpuType::relu_max || OPERATION == SfpuType::relu_min ||
-        OPERATION == SfpuType::lrelu || OPERATION == SfpuType::hardtanh || OPERATION == SfpuType::clamp || OPERATION == SfpuType::identity ||
+        OPERATION == SfpuType::lrelu || OPERATION == SfpuType::hardtanh || OPERATION == SfpuType::clamp ||
+#ifndef ARCH_BLACKHOLE
+        OPERATION == SfpuType::identity ||
+#endif
         OPERATION == SfpuType::cast_fp32_to_fp16a || OPERATION == SfpuType::sqrt_custom || OPERATION == SfpuType::expm1_cw)
     {
         // These ops need only the generic per-op init (SFPU config reg + ADDR_MOD_7 from

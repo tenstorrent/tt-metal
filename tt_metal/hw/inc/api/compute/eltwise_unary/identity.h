@@ -36,7 +36,13 @@ ALWI void identity_tile(uint32_t idst) {
 /**
  * Please refer to documentation for any_init.
  */
-ALWI void identity_tile_init() { MATH(SFPU_UNARY_INIT(unused)); }
+ALWI void identity_tile_init() {
+#ifdef ARCH_BLACKHOLE
+    MATH(SFPU_UNARY_INIT_FN(unused, sfpu::identity_init, (APPROX)));
+#else
+    MATH(SFPU_UNARY_INIT(unused));
+#endif
+}
 
 // clang-format off
 /**
