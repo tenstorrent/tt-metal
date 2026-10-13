@@ -2,9 +2,10 @@
 // SPDX-License-Identifier: Apache-2.0
 
 // Decode attention prologue (1..32 rows), reader (Laguna). Role 0 = q, role 1 = k (+ v); each core handles one
-// token row b (and, for q, one part of its heads). The fused qkv matmul output is [32, W] bf16 TILE with rows 0..B-1 real; head h's
-// 128 values are row b of tiles off + 4h .. off + 4h + 3 (16 values in face (b / 16) * 2 at byte (b % 16) * 32, 16 in
-// the next face). They become row h of a [32, 128] head-major block of 4 tiles (rows 0-15 in faces 0/1, rows 16-31
+// token row b (and, for q, one part of its heads). The fused qkv matmul output is [R, W] bf16 TILE (Wt tiles wide);
+// this call's rows are row0 .. row0 + B - 1 (the batched verify: one 32-row chunk of all its rows). Head h's 128 values
+// of row s = row0 + b are row s % 32 of tiles (s / 32) * Wt + off + 4h .. + 3 (16 values in face ((s % 32) / 16) * 2
+// at byte (s % 16) * 32, 16 in the next face). They become row h of a [32, 128] head-major block of 4 tiles (rows 0-15 in faces 0/1, rows 16-31
 // in faces 2/3), zero elsewhere. Also pushes the norm weight row (4 tiles), row b's cos / sin (tiles b * rd / 32 ..,
 // value row 0; the tables are [1, B, 1, rd]) and a reduce scaler tile (all 1 / head_dim).
 
@@ -15,6 +16,7 @@ constexpr uint32_t cb_x = 0, cb_w = 1, cb_cos = 2, cb_sin = 3, cb_scaler = 4, cb
 
 template <typename Acc>
 void gather_heads(const Acc& src, uint32_t off_tiles, uint32_t h0, uint32_t nheads, uint32_t dst, uint32_t row) {
+    // row: the source row's index within its tile row; off_tiles includes that tile row's first tile
     const uint32_t src_off = ((row / 16) * 2) * 512 + (row % 16) * 32;
     const uint64_t zeros = get_noc_addr(MEM_ZEROS_BASE);
     for (uint32_t b = 0; b < 4 * 2048; b += MEM_ZEROS_SIZE) {
@@ -46,7 +48,9 @@ void kernel_main() {
     constexpr uint32_t grid_x = get_compile_time_arg_val(8);
     constexpr uint32_t base = get_compile_time_arg_val(9);
     constexpr uint32_t parts = get_compile_time_arg_val(10);
-    constexpr auto qkv_args = TensorAccessorArgs<11>();
+    constexpr uint32_t row0 = get_compile_time_arg_val(11);  // first source row of this call
+    constexpr uint32_t Wt = get_compile_time_arg_val(12);    // qkv width in tiles
+    constexpr auto qkv_args = TensorAccessorArgs<13>();
     constexpr auto w_args = TensorAccessorArgs<qkv_args.next_compile_time_args_offset()>();
     constexpr auto cos_args = TensorAccessorArgs<w_args.next_compile_time_args_offset()>();
     constexpr auto sin_args = TensorAccessorArgs<cos_args.next_compile_time_args_offset()>();
@@ -76,7 +80,8 @@ void kernel_main() {
     }
     noc_async_read_page(0, sc, get_write_ptr(cb_scaler));
     cb_reserve_back(cb_x, 4);
-    gather_heads(qkv, off_tiles, h0, n, get_write_ptr(cb_x), row);  // its barriers also cover the reads above
+    const uint32_t s = row0 + row, s_tiles = (s / 32) * Wt;
+    gather_heads(qkv, s_tiles + off_tiles, h0, n, get_write_ptr(cb_x), s % 32);  // its barriers also cover the reads above
     cb_push_back(cb_w, 4);
     cb_push_back(cb_cos, rd_tiles);
     cb_push_back(cb_sin, rd_tiles);
@@ -84,7 +89,7 @@ void kernel_main() {
     cb_push_back(cb_x, 4);
     if constexpr (role == 1) {
         cb_reserve_back(cb_v, 4);
-        gather_heads(qkv, v_off_tiles, 0, nheads, get_write_ptr(cb_v), row);
+        gather_heads(qkv, s_tiles + v_off_tiles, 0, nheads, get_write_ptr(cb_v), s % 32);
         cb_push_back(cb_v, 4);
     }
 }

@@ -306,6 +306,9 @@ class MultichipDecoder(OptimizedDecoder):
         # ... and at 32 rows (one row per core: q over 2 cores, k / v over 1; replaces the head-split op, the q / k
         # norms, the two RoPEs and ~8 layout moves)
         self._ap1_32 = _parse_binary_env("TT_LAGUNA_AP1_32", True)
+        # ... and attn_epilogue1 at 32 rows: batch-32 decode, and the batched verify's chunks writing into one shared
+        # WO input (replaces the gate slice, reshape, gated multiply, reshard, head concat and unshard per chunk)
+        self._ae32 = _parse_binary_env("TT_LAGUNA_AE32", True)
         # DFlash context K/V (dflash_kv_rows) from a K/V-only slice of the fused QKV weight
         self._dflash_kv_only = _parse_binary_env("TT_LAGUNA_DFLASH_KV_ONLY", True)
         # 32-row draft head split / join as one multi-core tile copy (tile_regroup) instead of nlp_create_qkv_heads /
@@ -2299,12 +2302,16 @@ class MultichipDecoder(OptimizedDecoder):
         rope_mats=None,
         next_norm_cores=None,
         qkv_pre=None,
+        qkv_row0=None,
+        ae_out=None,
     ):
         """qkv_pre (verify_rows_forward): this 32-row chunk's fused QKV + gate projection, computed once over every
         chunk (x_1BH is then unused); with self._stop_pre_wo the attention output (heads joined, interleaved L1
-        [1, 1, B, heads * head_dim]) is returned before the WO projection."""
+        [1, 1, B, heads * head_dim]) is returned before the WO projection. qkv_row0 / ae_out: qkv_pre holds every
+        chunk's rows, this chunk's are qkv_row0 .. + 31 (read in place by the prologue and epilogue), and the epilogue
+        writes the chunk's attention output into those rows of ae_out (returned with self._stop_pre_wo)."""
         cfg = self.cfg
-        B = (x_1BH if qkv_pre is None else qkv_pre).shape[-2]
+        B = TILE if qkv_row0 is not None else (x_1BH if qkv_pre is None else qkv_pre).shape[-2]
         residual = x_1BH
         fold_g = self.use_dram_sharded and self.meta.get("qkvg_pad")
         if qkv_pre is None:
@@ -2329,7 +2336,7 @@ class MultichipDecoder(OptimizedDecoder):
             qkv_w = self.meta["qkv_w"]
             ae1 = (
                 self._ae1
-                and (B == 1 or (1 < B <= 8 and sequential_kv_write and self._ap1_rows))
+                and (B == 1 or (1 < B <= 8 and sequential_kv_write and self._ap1_rows) or (B == TILE and self._ae32))
                 and self._reshape_to_shard
                 and qkv.dtype == ttnn.bfloat16
             )
@@ -2376,8 +2383,10 @@ class MultichipDecoder(OptimizedDecoder):
                 self._kv_shard_memcfg(B),
                 self._kv_shard_memcfg(B, y0=4 if fused_kv else 0),
                 rows=B,
+                row0=qkv_row0 or 0,
             )
         else:
+            assert qkv_row0 is None, "qkv_row0 needs the attention prologue (attn_prologue1)"
             if fold_g and B <= TILE and getattr(self, "_decode_heads_op", False):
                 # one fused head split (q/k/v height-sharded, one user per core) instead of 3 slices + 3 tile-relayout
                 # reshapes (the q reshape alone ~20 us at B = 32)
@@ -2476,9 +2485,14 @@ class MultichipDecoder(OptimizedDecoder):
         )
         q_w = self.meta["q_w"]
         if fold_g and ae1:
-            # batch 1: gate slice + softplus(g) * attn + flatten into WO's width-sharded input in one op
+            # gate slice + softplus(g) * attn + flatten into WO's width-sharded input in one op
             from .attn_epilogue1 import attn_epilogue1
 
+            if ae_out is not None:  # a batched verify chunk: its rows of the shared WO input
+                attn_epilogue1(attn, qkv, self.meta["qkv_w"], cfg.num_heads, None, rows=B, row_in=qkv_row0,
+                               out=ae_out, row_out=qkv_row0)  # fmt: skip
+                assert getattr(self, "_stop_pre_wo", False)
+                return ae_out
             wo_in = _width_sharded_l1(TILE, q_w, _decode_shard_cores(q_w, cfg.hidden))
             attn = attn_epilogue1(attn, qkv, self.meta["qkv_w"], cfg.num_heads, wo_in, rows=B)
             o = self._dram_mm(attn, self.w["wo"], self.w["wo_ds"], q_w, cfg.hidden, self._ck_o)
@@ -2538,16 +2552,28 @@ class MultichipDecoder(OptimizedDecoder):
         qkvg = self._prefill_linear(ln, self.w["dflash_wqkvg"], self._ck_qkv, memory_config=ttnn.L1_MEMORY_CONFIG)
         pad = int(qkvg.shape[-1])
         parts = []
+        # every chunk's prologue / epilogue read their rows of qkvg in place and the epilogues write one shared WO
+        # input (no per-chunk slices, gate ops, head joins or concat)
+        shared = self._ap1 and self._ap1_32 and self._ae1 and self._ae32 and self._reshape_to_shard
+        shared = shared and qkvg.dtype == ttnn.bfloat16 and cfg.head_dim == 128 and cfg.rotary_dim in (64, 128)
+        ae_out = None
+        if shared:
+            ae_out = ttnn.allocate_tensor_on_device(ttnn.Shape([1, 1, T, self.meta["q_w"]]), ttnn.bfloat16,
+                                                    ttnn.TILE_LAYOUT, self.device, ttnn.L1_MEMORY_CONFIG)  # fmt: skip
         self._stop_pre_wo = True
         try:
             for c, (cur_c, rope_c, pt_c) in enumerate(chunks):
+                if shared:
+                    self.decode_forward(None, cur_c, None, pt_c, kv_cache, sequential_kv_write=True, rope_mats=rope_c,
+                                        qkv_pre=qkvg, qkv_row0=c * TILE, ae_out=ae_out)  # fmt: skip
+                    continue
                 q_c = ttnn.slice(qkvg, [0, 0, c * TILE, 0], [1, 1, (c + 1) * TILE, pad],
                                  memory_config=ttnn.L1_MEMORY_CONFIG) if n > 1 else qkvg  # fmt: skip
                 parts.append(self.decode_forward(None, cur_c, None, pt_c, kv_cache, sequential_kv_write=True,
                                                  rope_mats=rope_c, qkv_pre=q_c))  # fmt: skip
         finally:
             self._stop_pre_wo = False
-        attn = ttnn.concat(parts, dim=2) if n > 1 else parts[0]
+        attn = ae_out if shared else (ttnn.concat(parts, dim=2) if n > 1 else parts[0])
         o = self._reduce(self._prefill_linear(attn, self.w["wo"], self._ck_o, memory_config=ttnn.L1_MEMORY_CONFIG))
         h = ttnn.add(x, o)
         ln2 = self._rms(h, self.w["post_ln"])

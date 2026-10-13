@@ -49,15 +49,17 @@ def reduce_scaler(device, head_dim, mesh_mapper=None):
     )
 
 
-def attn_prologue1(qkv, cos, sin, q_norm, k_norm, scaler, nq, nkv, rd, eps, k_mem, v_mem, rows=1):
-    """qkv: [.., 32, W] bf16 TILE (rows 0..rows-1 real; [q heads | k heads | v heads | ...], head_dim 128); cos / sin:
+def attn_prologue1(qkv, cos, sin, q_norm, k_norm, scaler, nq, nkv, rd, eps, k_mem, v_mem, rows=1, row0=0):
+    """qkv: [.., R, W] bf16 TILE (this call's rows: row0 .. row0 + rows - 1, row0 + rows <= R; [q heads | k heads |
+    v heads | ...], head_dim 128; the batched verify passes all its rows once, one 32-row chunk per call); cos / sin:
     [1, rows, 1, rd] bf16 TILE (one row per token); q_norm / k_norm: [1, 1, 1, 128] TILE weight rows. Returns q
     [1, rows, nq, 128] (DRAM), k [1, rows, nkv, 128] in k_mem and v in v_mem (the KV-update height shards)."""
     device = qkv.device()
     hd = 128
     assert qkv.dtype == ttnn.bfloat16 and qkv.padded_shape[-1] >= (nq + 2 * nkv) * hd and nq <= 32 and nkv <= 32
     assert rd in (64, 128), rd
-    assert 1 <= rows <= 32, rows
+    assert 1 <= rows <= 32 and row0 + rows <= qkv.padded_shape[-2], (rows, row0, qkv.padded_shape)
+    wt_qkv = int(qkv.padded_shape[-1]) // 32
     q = ttnn.allocate_tensor_on_device(ttnn.Shape([1, rows, nq, hd]), ttnn.bfloat16, ttnn.TILE_LAYOUT, device,
                                        ttnn.DRAM_MEMORY_CONFIG)
     k = ttnn.allocate_tensor_on_device(ttnn.Shape([1, rows, nkv, hd]), ttnn.bfloat16, ttnn.TILE_LAYOUT, device, k_mem)
@@ -86,7 +88,8 @@ def attn_prologue1(qkv, cos, sin, q_norm, k_norm, scaler, nq, nkv, rd, eps, k_me
             kernel_source=str(_KDIR / "ap1_reader.cpp"),
             source_type=ttnn.KernelDescriptor.SourceType.FILE_PATH,
             core_ranges=grid,
-            compile_time_args=[role, per_part, off, (nq + nkv) * 4, rd_tiles, w_page, cs_page, nq, gs.x, base, parts]
+            compile_time_args=[role, per_part, off, (nq + nkv) * 4, rd_tiles, w_page, cs_page, nq, gs.x, base, parts,
+                               row0, wt_qkv]
             + acc,
             common_runtime_args=[qkv.buffer_address(), cos.buffer_address(), sin.buffer_address(),
                                  scaler.buffer_address(), w.buffer_address()],
