@@ -152,7 +152,7 @@ with ``create_descriptor`` and put them in a variant:
        {"cb_intermed0", tt::CBIndex::c_5},
    };
    compute_desc.config = ComputeConfigDescriptor{
-       .math_fidelity = MathFidelity::HiFi4,
+       .math_fidelity = tt::tt_metal::MathFidelity::HiFi4,
        .fp32_dest_acc_en = false,
        .math_approx_mode = false,
    };

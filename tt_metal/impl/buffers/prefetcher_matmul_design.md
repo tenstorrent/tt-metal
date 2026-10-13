@@ -416,6 +416,48 @@ the one exception — a per-receiver rotation is receiver-contiguous only — so
 consumer is always batched, whereas K-row-major mcast is not (its natural FIFO order needs no
 rotation).
 
+#### Mcast-in0 over PrefetcherPipes
+
+Mcast-in0 can also drain PrefetcherPipes (`ttnn.linear(..., prefetcher_pipes=pipes)`), through the
+Metal 2.0 factory (`create_program_mcast_in0_artifacts`): either the DRAM-sender pipes from
+`CreatePrefetcherPipesForTensorPrefetcher`, or worker-sender pipes fed by another producer.
+
+- Every pipe is a `PrefetcherPipeParameter` of the ProgramSpec, and the in1 reader binds them all
+  under one accessor (`pipe::in1`); exactly one is present on each worker. The pipe objects arrive in
+  the run args, so a cached program keeps the pipes it was built against (their identity is in the
+  cache key).
+- The pipes carry one K-block (`in0_block_w * per_core_N` tiles) per entry, which is what the
+  producer writes. The in1 buffer is a relay DFB over the pipes' rings paged by tile, so nothing is
+  copied and compute consumes in1 exactly as it does from DRAM (`wait_front` / `matmul_block` /
+  `pop_front` of a block's tiles). A relay may page each pipe entry as a whole number of its own
+  entries (`DFBAdvancedOptions::prefetcher_pipe_relays`; on Quasar only with a single-threaded relay
+  producer). The ring may be any size
+  that holds at least two K-blocks (the reader publishes a block while the previous one drains): the
+  pipe re-grids it to whole K-blocks and skips any trailing gap at the wrap, and the relay covers
+  those whole K-blocks, so a block's tiles never wrap.
+- `transpose_b=false`, and the pipes' receivers must be exactly the workers that compute an output
+  block: the receiver at row-major position `i` computes output column block `i` and must be sent that
+  block's K-blocks in K order.
+- Tensor prefetcher (DRAM-sender) pipes add the prefetcher's contract: a receiver-contiguous weight
+  and a bank pairing that sends worker `i` weight shard `i`. The matmul cannot check what a
+  worker-sender pipe's producer sends, so there that contract is the producer's.
+
+#### Streaming gather-in0 over PrefetcherPipes
+
+Gather-in0 drains PrefetcherPipes the same way, through the Metal 2.0 factory
+(`create_program_gather_in0_artifacts`), which builds only this transport; every other gather-in0
+in1 source stays on the legacy MeshWorkload builder.
+
+- Streaming only (`stream_in1=true`): each worker's pipe delivers its K-blocks in ring order, its own
+  K-block first (the identity rotation `prefetch_and_linear` queues), and the in1 reader publishes
+  each to compute as it lands with one block of lookahead, as mcast-in0 does. A pipe ring is never
+  read as a resident layer, so the batched gather has no pipe form.
+- One pipe entry is one K-block, an in0 shard wide (`K_tiles / ring_size`) by `per_core_N`, and the
+  relay pages it by tile. The in0 shards must cover K exactly (no padded shards); the ring holds at
+  least two K-blocks and may leave a trailing gap.
+- The pipes' receivers are exactly the ring workers, with the bank pairing that sends worker `i`
+  weight shard `i`. No hop cores, one weight.
+
 #### Fit ladder (receiver-contiguous)
 
 The receiver-contiguous path rotates through three stage slots
@@ -511,6 +553,16 @@ Whoever changes prefetcher or receiver code must preserve these:
   `ttnn/cpp/ttnn/operations/matmul/device/kernels/dataflow/reader_bmm_tile_layout_in1_ring_all_gather.cpp`
 - Receiver matmul compute:
   `ttnn/cpp/ttnn/operations/matmul/device/kernels/compute/bmm_large_block_zm_fused_bias_activation_gathered.cpp`
+- Mcast-in0 over PrefetcherPipes: `create_program_mcast_in0_artifacts` in
+  `ttnn/cpp/ttnn/operations/matmul/device/factory/matmul_multicore_reuse_mcast_1d_program_factory.cpp`,
+  with the `_metal2` in1 reader under `ENABLE_PREFETCHER_PIPE`; the relay's pages-per-entry
+  alignment is in `tt_metal/hw/inc/internal/prefetcher_pipe_init.h`.
+- Gather-in0 over PrefetcherPipes: `create_program_gather_in0_artifacts` in the same factory file,
+  with the `_metal2` forks of the ring kernels (`reader_bmm_tile_layout_in0_ring_all_gather_metal2.cpp`,
+  `bmm_large_block_zm_fused_bias_activation_gathered_metal2.cpp`) and the pipe-only in1 reader
+  `reader_bmm_tile_layout_in1_prefetcher_pipe_metal2.cpp`.
+- Both in1 readers drain the pipes through `kernels/dataflow/prefetcher_pipe_in1_window.hpp`, which
+  holds the one-block lookahead window the host sizes the ring for.
 - Worker-core prefetcher:
   `ttnn/cpp/ttnn/operations/prefetcher/prefetcher/device/dram_prefetcher_program_factory.cpp`,
   `kernels/reader_dram.cpp`, `kernels/writer_l1.cpp`.

@@ -39,7 +39,10 @@ void kernel_main() {
 #endif
 
 #ifdef OUT_SHARDED
+    // Output is sharded in place; the wait is only a readiness handshake. Pop to
+    // leave the DFB balanced.
     dfb.wait_front(num_pages * onepage);
+    dfb.pop_front(num_pages * onepage);
 #else
 
     const auto s = TensorAccessor(tensor::dst);

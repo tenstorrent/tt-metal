@@ -128,8 +128,12 @@ void kernel_main() {
     constexpr uint32_t source_width_tiles = Cfg::w2_tiles_per_expert_w;
     const uint32_t output_width_tiles_core = w2_shard_tiles_lut[ring_core_id];
     const uint32_t width_tile_base = w2_offset_lut[ring_core_id];
-    constexpr uint32_t RING_CORES_PER_COMBINE_COL = num_cores / width_shard_dim;
-    const uint32_t combine_core_x = ring_core_id / RING_CORES_PER_COMBINE_COL;
+    // Combine columns this core's w2 width slice feeds; empty when the slice is (moe_ring_common.h).
+    // Must match the per-combine-core contributor lists built by the program factory.
+    const uint32_t combine_col_begin = moe_ring::w2_combine_col_begin(width_tile_base, combine_shard_width_tiles);
+    const uint32_t combine_col_end =
+        moe_ring::w2_combine_col_end(width_tile_base, output_width_tiles_core, combine_shard_width_tiles);
+    const uint32_t num_combine_cols = combine_col_end - combine_col_begin;
     Semaphore<> combine_sem(matmul_combine_sync_semaphore_id);
     // Device 2.0 migration: legacy primitive retained: raw L1 semaphore address used as the
     // base for multicast destination addresses (safe_get_noc_addr below)
@@ -216,15 +220,17 @@ void kernel_main() {
 
     // Signal to combine cores that chunk is available
     auto combine_semaphore_inc = [&](const uint32_t inc = 1) {
-        for (uint32_t y = 0; y < height_shard_dim; ++y) {
-            const uint32_t idx = combine_core_x + y * width_shard_dim;
-            const uint64_t dest_sem_noc_addr = safe_get_noc_addr(
-                output_shard_core_map[2 * idx],
-                output_shard_core_map[2 * idx + 1],
-                combine_semaphore_addr,
-                /*noc_id=*/1);
-            noc_semaphore_inc</*posted=*/true>(dest_sem_noc_addr, inc, /*noc_id=*/1, vchannel);
-        };
+        for (uint32_t x = combine_col_begin; x < combine_col_end; ++x) {
+            for (uint32_t y = 0; y < height_shard_dim; ++y) {
+                const uint32_t idx = x + y * width_shard_dim;
+                const uint64_t dest_sem_noc_addr = safe_get_noc_addr(
+                    output_shard_core_map[2 * idx],
+                    output_shard_core_map[2 * idx + 1],
+                    combine_semaphore_addr,
+                    /*noc_id=*/1);
+                noc_semaphore_inc</*posted=*/true>(dest_sem_noc_addr, inc, /*noc_id=*/1, vchannel);
+            }
+        }
         noc1_obj.async_writes_flushed<NocOptions::POSTED>();
     };
 
@@ -451,7 +457,8 @@ void kernel_main() {
         }
         if constexpr (!compute_only) {
             combine_semaphore_inc();
-            combine_semaphore_val += height_shard_dim;
+            // Every combine core we signalled releases us once per expert.
+            combine_semaphore_val += height_shard_dim * num_combine_cols;
         }
         // (compute_only branch: nothing to do -- the next expert's first chunk flushes any
         //  in-flight writes via the inter-chunk flush before its set_state. Output buffer

@@ -51,6 +51,7 @@ import pytest
 import torch
 
 import ttnn
+from models.common.utility_functions import is_wormhole_b0
 from tests.tt_eager.python_api_testing.sweep_tests.comparison_funcs import comp_pcc
 
 # One module-scoped device: the KV caches below are up to 32k tokens and every case
@@ -83,6 +84,14 @@ SPEC_CONFIG = {
     7: {"max_cores": 4, "k_chunk_size": 64},
     11: {"max_cores": 1, "k_chunk_size": 32},
 }
+
+# Wormhole has less CB space (1,393,440 B), so the T=11 point above does not fit there.
+WORMHOLE_MAX_T = 7
+
+
+def _skip_if_exceeds_l1(T):
+    if is_wormhole_b0() and T > WORMHOLE_MAX_T:
+        pytest.skip(f"T={T} spec config does not fit Wormhole L1")
 
 
 # ── Helpers ────────────────────────────────────────────────────────────────
@@ -284,6 +293,7 @@ def _check(device, T, p, seq_len, seed=0, program_config=None, pcc_ref_vs_spec=N
     ],
 )
 def test_spec_multi_pos_matches_batched(device, T, seq_len, p):
+    _skip_if_exceeds_l1(T)
     torch.manual_seed(0)
     assert p + T - 1 < seq_len
     _check(device, T, p, seq_len)
@@ -296,6 +306,7 @@ def test_spec_multi_pos_is_bit_exact(device, T, seq_len, p):
     T bounds inside a single k-chunk, folding the candidates onto one batch row is not merely
     numerically close to the B == T form — it produces the identical bits.
     """
+    _skip_if_exceeds_l1(T)
     torch.manual_seed(5)
     assert not _straddles_chunk_boundary(T, p)
     inp = _build_inputs(device, T, p, seq_len, seed=23)
@@ -325,8 +336,9 @@ def test_spec_multi_pos_long_context_single_core(device, p):
     config (8 cores/head, 128-wide chunks) reaches 0.9996. So the assertion here is the
     equivalence itself, checked against the batched reference rather than against torch.
     """
-    torch.manual_seed(2)
     T = 11
+    _skip_if_exceeds_l1(T)
+    torch.manual_seed(2)
     inp = _build_inputs(device, T, p, seq_len=32768, seed=17)
     pc = _config_for(device, T)
     ref = _run_reference(device, inp, T, pc)
