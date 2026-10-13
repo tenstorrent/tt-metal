@@ -121,16 +121,25 @@ def load_samples(source, positions=None):
     return load_gpu_samples(source, positions)
 
 
-def load_gpu_samples(trace_dir, positions):
-    """Read the GPU trace's final-layer (pre-norm) hidden states at ``positions``."""
+def gpu_final_layer_stream(trace_dir):
+    """The capture directory, metadata and final-layer stream index of a GPU trace.
+
+    A prepared KV-only copy names the full capture it came from, which holds the stream.
+    """
     trace_dir = Path(trace_dir)
     metadata = json.loads((trace_dir / "metadata.json").read_text())
     if not (trace_dir / "index.json").is_file() and "source_trace_dir" in metadata:
-        # A prepared KV-only copy names the full capture it came from.
-        return load_gpu_samples(metadata["source_trace_dir"], positions)
-    stream = json.loads((trace_dir / "index.json").read_text())["tensor_streams"][
-        f"decoder_output_layer_{metadata['n_layers'] - 1}"
-    ]
+        return gpu_final_layer_stream(metadata["source_trace_dir"])
+    name = f"decoder_output_layer_{metadata['n_layers'] - 1}"
+    streams = json.loads((trace_dir / "index.json").read_text())["tensor_streams"]
+    if name not in streams:
+        raise ValueError(f"{trace_dir} has no {name} stream for the likelihood check")
+    return trace_dir, metadata, streams[name]
+
+
+def load_gpu_samples(trace_dir, positions):
+    """Read the GPU trace's final-layer (pre-norm) hidden states at ``positions``."""
+    trace_dir, metadata, stream = gpu_final_layer_stream(trace_dir)
     positions = torch.as_tensor(positions, dtype=torch.int64)
     hidden = torch.empty((len(positions), stream["shape_tail"][0]), dtype=torch.bfloat16)
     loaded = torch.zeros(len(positions), dtype=torch.bool)
