@@ -1,0 +1,6 @@
+test_eltwise_unary_typecast.py::test_eltwise_unary_typecast[formats:Float16_b->Int32-dest_acc:Yes-approx_mode:No-input_dimensions:[32, 32]]
+test_eltwise_unary_typecast.py::test_eltwise_unary_typecast[formats:Float16_b->UInt16-dest_acc:No-approx_mode:No-input_dimensions:[32, 32]]
+test_eltwise_unary_typecast.py::test_eltwise_unary_typecast[formats:Float32->UInt16-dest_acc:Yes-approx_mode:No-input_dimensions:[32, 32]]
+test_eltwise_unary_typecast.py::test_eltwise_unary_typecast_float_to_int32_edges[formats:Float16_b->Int32-dest_acc:Yes-approx_mode:No-input_dimensions:[32, 64]]
+test_eltwise_unary_typecast.py::test_eltwise_unary_typecast_macro_pairs_edges[formats:Float16_b->UInt16-dest_acc:No-approx_mode:No-input_dimensions:[32, 64]]
+test_eltwise_unary_typecast.py::test_eltwise_unary_typecast_macro_pairs_edges[formats:Float32->UInt16-dest_acc:Yes-approx_mode:No-input_dimensions:[32, 64]]
