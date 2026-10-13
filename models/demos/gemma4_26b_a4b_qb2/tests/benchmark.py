@@ -20,6 +20,9 @@ DATASET_REVISION = "633f5ee89ab8ad4522a9f850766b73f62147ffdd"
 HARNESS_REVISION = "321e3bb68cb750a58c76606ab57832533302be73"
 GPQA_TOKENS = 32768
 GPQA_COUNT = 10
+# The fixed subset has two long generations. Serial requests match the validated
+# TTI protocol and avoid padding all ten requests to the 32-slot serving path.
+GPQA_CONCURRENCY = 1
 GPQA_THRESHOLD = 0.8
 
 
@@ -137,10 +140,12 @@ async def run_gpqa(client, output_dir, task, cases):
     for payload in payloads:
         await complete(client, {**payload, "max_tokens": 1}, chat=True)
     rows = []
+    semaphore = asyncio.Semaphore(GPQA_CONCURRENCY)
     with (output_dir / "gpqa-responses.jsonl").open("w") as log:
 
         async def generate(case, payload):
-            response = await complete(client, payload, chat=True)
+            async with semaphore:
+                response = await complete(client, payload, chat=True)
             score = task.process_results(case["doc"], [response["text"]])["exact_match"]
             row = {"id": case["id"], **response_metrics(response), "correct": int(score)}
             rows.append(row)
@@ -160,7 +165,7 @@ async def run_gpqa(client, output_dir, task, cases):
         "correct": sum(r["correct"] for r in rows),
         "completed_samples": GPQA_COUNT,
         "dataset_samples": 198,
-        "concurrency": GPQA_COUNT,
+        "concurrency": GPQA_CONCURRENCY,
         "max_output_tokens": GPQA_TOKENS,
         "passed": accuracy >= GPQA_THRESHOLD,
     }
@@ -259,7 +264,7 @@ async def main(args):
             "seed": 42,
             "thinking": True,
             "max_output_tokens": GPQA_TOKENS,
-            "concurrency": GPQA_COUNT,
+            "concurrency": GPQA_CONCURRENCY,
             "accuracy_threshold": GPQA_THRESHOLD,
         },
         "performance": {
@@ -321,6 +326,4 @@ if __name__ == "__main__":
     parser.add_argument("--performance-input-lengths", type=int, nargs="+", choices=(128, 1024), default=(128, 1024))
     parser.add_argument("--prepare-only", action="store_true")
     args = parser.parse_args()
-    if args.server_capacity == 1 and args.mode != "performance":
-        parser.error("The 10-question concurrent GPQA protocol requires --server-capacity 32")
     raise SystemExit(run(args))

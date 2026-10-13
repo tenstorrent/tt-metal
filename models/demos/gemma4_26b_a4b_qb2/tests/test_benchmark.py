@@ -120,6 +120,7 @@ def test_gpqa_artifacts_and_logs_contain_only_metadata(monkeypatch, tmp_path, ca
     prompt, answer, reasoning = "PRIVATE_PROMPT_SENTINEL", "PRIVATE_ANSWER_SENTINEL", "PRIVATE_REASONING_SENTINEL"
     cases = [{"id": i, "doc": {"question": prompt, "answer": answer}, "prompt": prompt} for i in range(10)]
     scored = []
+    active = max_active = 0
 
     def score(doc, responses):
         assert doc == {"question": prompt, "answer": answer}
@@ -128,7 +129,12 @@ def test_gpqa_artifacts_and_logs_contain_only_metadata(monkeypatch, tmp_path, ca
         return {"exact_match": 1}
 
     async def complete(client, payload, *, chat):
+        nonlocal active, max_active
         assert chat and payload["messages"][0]["content"] == prompt
+        active += 1
+        max_active = max(max_active, active)
+        await asyncio.sleep(0)
+        active -= 1
         return {
             "text": answer,
             "reasoning": reasoning,
@@ -150,11 +156,13 @@ def test_gpqa_artifacts_and_logs_contain_only_metadata(monkeypatch, tmp_path, ca
     ]
     assert benchmark.run(gpqa_args(tmp_path)) == 0
     assert len(scored) == 10
+    assert max_active == 1
     rows = [json.loads(line) for line in (tmp_path / "gpqa-responses.jsonl").read_text().splitlines()]
     assert len(rows) == 10 and all(row["correct"] == 1 for row in rows)
     assert all(row["usage"] == {"prompt_tokens": 20, "completion_tokens": 4} for row in rows)
     summary = json.loads((tmp_path / "summary.json").read_text())
     assert summary["gpqa_result"]["accuracy"] == 1
+    assert summary["gpqa_result"]["concurrency"] == 1
     assert summary["gpqa_result"]["mean_decode_tokens_per_s"] == 40
     capture = capsys.readouterr()
     public_output = capture.out + capture.err + "".join(p.read_text() for p in tmp_path.iterdir())
@@ -246,14 +254,14 @@ def test_report_preserves_run_start_and_every_shape(monkeypatch, tmp_path):
     report.report(summary)
     summary.update(
         server_capacity=32,
-        gpqa_result={**row, "concurrency": 10, "requests": 10, "accuracy": 0.9},
+        gpqa_result={**row, "concurrency": 1, "requests": 10, "accuracy": 0.9},
         performance_results=[row, {**row, "concurrency": 32, "requests": 64}],
     )
     report.report(summary)
     files = list((tmp_path / "generated/benchmark_data").glob("partial_run_*.pkl"))
     assert len(files) == 4, "Shapes sharing a run start must not overwrite each other"
     records = [PartialBenchmarkRun.model_validate_json(path.read_text()) for path in files]
-    assert {r.batch_size for r in records} == {1, 10, 32}
+    assert {r.batch_size for r in records} == {1, 32}
     for record in records:
         assert record.run_start_ts.isoformat() == summary["run_start"]
         assert record.run_end_ts.isoformat() == row["measurement_end"]
