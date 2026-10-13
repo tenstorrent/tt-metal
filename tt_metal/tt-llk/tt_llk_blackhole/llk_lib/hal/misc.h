@@ -258,7 +258,7 @@ inline __attribute__((always_inline)) void run()
 template <typename Operation>
 inline __attribute__((always_inline)) void run(const Operation descriptor)
 {
-    ckernel::instrn_buffer[0] = descriptor.operation();
+    TT_INSN(descriptor.operation());
 }
 
 } // namespace hal::misc
