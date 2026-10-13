@@ -36,7 +36,7 @@
 #include "api/core_local_mem.h"
 #include "tt_metal/fabric/hw/inc/noc_addr.h"
 #include "dit_rmsnorm_scalar_setup.hpp"
-#include "tools/profiler/kernel_profiler.hpp"
+#include "api/debug/kernel_profiler.hpp"
 
 constexpr uint32_t output_cb = get_compile_time_arg_val(0);
 constexpr uint32_t num_tile_cols = get_compile_time_arg_val(1);

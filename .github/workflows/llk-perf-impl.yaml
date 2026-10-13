@@ -242,7 +242,7 @@ jobs:
             exit 0
           fi
           if ! gh api --paginate "repos/${GITHUB_REPOSITORY}/actions/runs/${GITHUB_RUN_ID}/jobs?per_page=100" \
-              --jq '.jobs[] | {name, conclusion} | @json' > jobs.jsonl; then
+              --jq '.jobs[] | {name, conclusion, started_at, completed_at} | @json' > jobs.jsonl; then
             echo "::warning::Could not list this run's jobs, so the baseline uploads only if every leg passed."
             echo "any=$([ "$EXEC_RESULT" = success ] && echo true || echo false)" >> "$GITHUB_OUTPUT"
             exit 0

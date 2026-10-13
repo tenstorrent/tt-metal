@@ -62,10 +62,6 @@ class L1AccessMode(Enum):
     STRIDED = "ckernel::trisc::L1AccessMode::Strided"
 
 
-def bfd_current(engine: BfdResource) -> str:
-    return f"ckernel::trisc::bfd_current<{engine.value}>()"
-
-
 @dataclass
 class Operand:
     name: str
@@ -238,12 +234,20 @@ class Operand:
         self,
         engine: BfdResource,
         mode: L1AccessMode = L1AccessMode.CONTINUOUS,
+        *,
+        result_name: Optional[str] = None,
     ) -> str:
+        assignment = f"const auto {result_name} = " if result_name else ""
+        data_format = (
+            DataFormat.Int16
+            if self.data_format == DataFormat.UInt16
+            else self.data_format
+        )
         return (
-            f"ckernel::trisc::bfd_alloc_and_program<{engine.value}, {mode.value}>("
+            f"{assignment}ckernel::trisc::bfd_alloc_and_program<{engine.value}, {mode.value}>("
             f"{self.tile_shape.cpp_value}, "
             f"{hex(self.l1_address)} / 16, "
-            f"{self.data_format.cpp_underlying_value});\n"
+            f"{data_format.cpp_underlying_value});\n"
         )
 
 

@@ -168,7 +168,7 @@ of two modes skips device init in `pytest_configure`:
 - **Simulator mode** — needs both the `--run-simulator` flag and
   `TT_METAL_SIMULATOR`; without the variable, `pytest_configure` exits with an
   error. For an emulator path, `pytest_configure` only constructs the
-  `ExalensServer` and never starts or connects to it, so the path only has to
+  `SimulationServer` and never starts or connects to it, so the path only has to
   be set, not exist, and no device or running emulator is needed:
 
   ```bash

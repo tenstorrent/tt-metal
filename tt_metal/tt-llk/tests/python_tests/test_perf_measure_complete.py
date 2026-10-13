@@ -115,3 +115,20 @@ def test_main_prints_how_many_legs_it_found(tmp_path, capsys):
     jobs.write_text("".join(json.dumps(j) + "\n" for j in _NIGHT))
     main(["--arch", "blackhole", "--jobs", str(jobs)])
     assert "legs=5" in capsys.readouterr().out
+
+
+def test_the_reason_gives_the_leg_its_duration_and_a_likely_timeout():
+    jobs = [
+        {
+            "name": "LLK perf merge gate (measure) / llk_perf_merge_gate_blackhole group 1/3 [bh_p150b_civ2_viommu]",
+            "conclusion": "cancelled",
+            "started_at": "2026-10-07T07:35:00Z",
+            "completed_at": "2026-10-07T07:50:12Z",
+        }
+    ]
+    reason = measure_complete("failure", jobs, "blackhole")[1]
+    assert (
+        "llk_perf_merge_gate_blackhole group 1/3 [bh_p150b_civ2_viommu]: cancelled "
+        "after 15 min, most likely at its timeout" in reason
+    )
+    assert "(measure) /" not in reason

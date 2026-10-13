@@ -149,7 +149,7 @@ jobs:
           # This arch's own legs decide, so a leg lost on the other arch does not skip this one.
           JOBS_ARG=()
           if gh api --paginate "repos/${GITHUB_REPOSITORY}/actions/runs/${MEASURED_RUN}/jobs?per_page=100" \
-              --jq '.jobs[] | {name, conclusion} | @json' > measure_jobs.jsonl; then
+              --jq '.jobs[] | {name, conclusion, started_at, completed_at} | @json' > measure_jobs.jsonl; then
             JOBS_ARG=(--jobs measure_jobs.jsonl)
           else
             echo "::warning::Could not list the jobs of run ${MEASURED_RUN}; using the job results only."
@@ -157,9 +157,11 @@ jobs:
           python3 ${{ env.LLK_PATH }}/perf/measure_complete.py \
             --arch "$ARCH" --results "$MEASURE_RESULT" "${JOBS_ARG[@]}" > measured.txt
           cat measured.txt
-          grep '^complete=' measured.txt >> "$GITHUB_OUTPUT"
+          grep -E '^(complete|reason)=' measured.txt >> "$GITHUB_OUTPUT"
           if ! grep -qx 'complete=true' measured.txt; then
-            echo "::error::The measurement did not complete ($(sed -n 's/^reason=//p' measured.txt)), so the gate compares nothing."
+            echo "::error::The measurement did not complete ($(sed -n 's/^reason=//p' measured.txt)). The gate compares nothing."
+          elif [[ ",${MEASURE_RESULT// /}," =~ ,(failure|cancelled|timed_out), ]]; then
+            echo "::notice::Every ${ARCH} leg passed, so the gate compares ${ARCH}. A leg of another architecture did not (${MEASURE_RESULT})."
           fi
 
       - name: Read the baseline from the warehouse
@@ -515,12 +517,14 @@ jobs:
 
       - name: Gate verdict
         if: always()
+        env:
+          MEASURE_REASON: ${{ steps.measured.outputs.reason }}
         run: |
           HAVE_BASELINE=$(cat have_baseline.txt)
           EXIT_CODE=${{ steps.compare.outputs.gate_exit_code }}
 
           if [ "${{ steps.measured.outputs.complete }}" != "true" ]; then
-            echo "::error::The measurement did not complete, so the gate compared nothing."
+            echo "::error::The measurement did not complete${MEASURE_REASON:+ (${MEASURE_REASON})}. The gate compared nothing."
             echo "This is an infrastructure fault, not a performance result."
             exit 1
           fi

@@ -9,6 +9,7 @@ Run it by path: ``tt_metal/tt-llk`` is not an importable package.
 import argparse
 import json
 import re
+from datetime import datetime
 
 _OK = ("", "success", "skipped")
 
@@ -19,15 +20,36 @@ def legs_of(jobs, arch):
     return [j for j in jobs if leg.search(j.get("name") or "")]
 
 
+def _minutes(job):
+    """Whole minutes the job ran, or None when GitHub did not give both times."""
+    try:
+        start, end = (
+            datetime.fromisoformat(job[k].replace("Z", "+00:00"))
+            for k in ("started_at", "completed_at")
+        )
+    except (KeyError, AttributeError, TypeError, ValueError):
+        return None
+    return int((end - start).total_seconds() // 60)
+
+
+def _describe(job):
+    """``<leg>: <conclusion> after N min``, without the caller's ``... / `` prefix."""
+    conclusion = job.get("conclusion") or "in_progress"
+    line = f"{job['name'].rsplit(' / ', 1)[-1]}: {conclusion}"
+    minutes = _minutes(job)
+    if minutes is not None:
+        line += f" after {minutes} min"
+    # The gate does not run in a cancelled run, so a cancelled leg most likely ran out of time.
+    if conclusion == "cancelled":
+        line += ", most likely at its timeout"
+    return line
+
+
 def measure_complete(results, jobs, arch):
     """``(complete, reason)``: the arch's own legs decide; without legs, the job results."""
     legs = legs_of(jobs or [], arch)
     if legs:
-        failed = [
-            f"{j['name']} ({j.get('conclusion')})"
-            for j in legs
-            if j.get("conclusion") != "success"
-        ]
+        failed = [_describe(j) for j in legs if j.get("conclusion") != "success"]
         if failed:
             return (
                 False,
@@ -53,7 +75,8 @@ def main(argv=None):
         "--results", default="", help="measuring job results, comma-separated"
     )
     ap.add_argument(
-        "--jobs", help="JSON lines of {name, conclusion}; missing = unknown"
+        "--jobs",
+        help="JSON lines of {name, conclusion[, started_at, completed_at]}; missing = unknown",
     )
     a = ap.parse_args(argv)
     jobs = None
