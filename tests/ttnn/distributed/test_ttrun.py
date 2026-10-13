@@ -1271,6 +1271,7 @@ class TestLauncherSelection:
             assert launched[launched.index("--with-ft") + 1] == "ulfm"
 
 
+@pytest.mark.timeout(60)  # under the regression a surviving rank waits forever; each case normally takes ~1s
 @pytest.mark.skipif(
     shutil.which("mpirun-ulfm") is None and shutil.which("mpirun") is None,
     reason="requires an MPI launcher on PATH",
