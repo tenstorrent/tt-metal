@@ -236,3 +236,20 @@ I re-applied the attempt above unchanged; it had passed under an older framework
 - Not done (performance): no ring SDPA. All 8 rows compute the same chunk, as in sliding attention. Larger SDPA chunks
   were not tried.
 - Re-run: `bfw job check --task C.global.attention`
+
+## C.global.mlp (layer 5)
+
+- No new module: hooks.py's "mlp" branch already builds `TtMLP` for any layer. Global layers use the same dense GeGLU
+  MLP (intermediate 2112) as sliding layers.
+- First run: pcc 0.99998, but auto_margin_min was 0.44. Column 2573's rel L2 was 0.111 against a limit of 0.049.
+  - Cause: bfp8 weight layout. Weights were stored as [in, out], so each bfloat8_b block (16 values sharing one
+    exponent) ran along the output columns of down_proj.
+  - Layer 5 down_proj output row 2573 is small (max 0.152) next to row 2572 (max 0.408). It lost mantissa bits to its
+    block neighbour.
+  - Host reproduction: rounding down_proj through bfp8 in [I, H] layout gives column 2573 rel 0.112. In HF [H, I]
+    layout it gives 0.021. HF layout is what the precision model assumes.
+- Fix in `tt/mlp.py`: weights kept in HF layout ([out, in], padded per chip), all three matmuls use
+  `ttnn.linear(..., transpose_b=True)`. Sharding moved to dim -2 for gate/up and dim -1 for down.
+- Result: PASS. pcc 0.999979, auto_margin_min 1.86. Tightest check is column 867: 0.0314 vs golden (limit 0.0613).
+  vs CPU, rel is 0.0062 (limit 0.0122). 6 device ops, 0 host FLOPs. C.sliding.mlp regression PASS.
+- Re-run: `bfw job check --task C.global.mlp`

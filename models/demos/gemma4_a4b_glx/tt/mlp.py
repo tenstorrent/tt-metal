@@ -7,6 +7,11 @@ out = down(gelu_tanh(gate(x)) * up(x)). TP=4 over the mesh columns: gate/up are 
 row-parallel, then all_reduce over the columns (cluster_axis=1). The input is replicated within each row.
 2112 / 4 = 528 is not tile aligned, so each chip's slice is zero-padded to 544: the padded gate/up columns give
 gelu(0) * 0 = 0 and the padded down rows are zero, so the padding adds nothing.
+
+The weights stay in HF layout ([out, in]) and the matmuls use transpose_b: bfloat8_b shares one exponent per 16
+values along the last dim, so the stored layout decides which weights share it. Stored as [in, out], down_proj's
+blocks ran along the output columns, and a small column next to a large one (layer 5, column 2573 beside 2572) lost
+precision: column rel 0.11 against a limit of 0.05. In HF layout the blocks run along the reduction dim.
 """
 
 import torch
@@ -33,18 +38,19 @@ class TtMLP:
         per_pad = ((per + TILE - 1) // TILE) * TILE
         self.per_pad = per_pad
 
-        def pad_cols(w_t):  # [H, I] -> [H, tp * per_pad], chip c's columns in block c
-            out = torch.zeros(w_t.shape[0], tp * per_pad, dtype=torch.float32)
+        def pad_cols(w):  # [*, I] -> [*, tp * per_pad], chip c's columns in block c
+            out = torch.zeros(w.shape[0], tp * per_pad, dtype=torch.float32)
             for c in range(tp):
-                out[:, c * per_pad : c * per_pad + per] = w_t[:, c * per : (c + 1) * per].float()
+                out[:, c * per_pad : c * per_pad + per] = w[:, c * per : (c + 1) * per].float()
             return out
 
-        gate = pad_cols(w_gate.t())
-        up = pad_cols(w_up.t())
-        down = pad_cols(w_down).t().contiguous()  # [tp * per_pad, H]
-        self.w_gate = self._weight(gate, dim=-1)
-        self.w_up = self._weight(up, dim=-1)
-        self.w_down = self._weight(down, dim=-2)
+        # HF layout kept (see the module docstring): gate/up [tp * per_pad, H], down [H, tp * per_pad]
+        gate = pad_cols(w_gate.t()).t().contiguous()
+        up = pad_cols(w_up.t()).t().contiguous()
+        down = pad_cols(w_down)
+        self.w_gate = self._weight(gate, dim=-2)
+        self.w_up = self._weight(up, dim=-2)
+        self.w_down = self._weight(down, dim=-1)
 
         self.mm_cfg = ttnn.init_device_compute_kernel_config(
             mesh.arch(),
@@ -67,14 +73,14 @@ class TtMLP:
 
     def __call__(self, x):
         """x: [1, 1, S, H] bf16, replicated within each row. Returns [1, 1, S, H] bf16, replicated within each row."""
-        gate = ttnn.linear(x, self.w_gate, dtype=ttnn.bfloat16, compute_kernel_config=self.mm_cfg)
-        up = ttnn.linear(x, self.w_up, dtype=ttnn.bfloat16, compute_kernel_config=self.mm_cfg)
+        gate = ttnn.linear(x, self.w_gate, transpose_b=True, dtype=ttnn.bfloat16, compute_kernel_config=self.mm_cfg)
+        up = ttnn.linear(x, self.w_up, transpose_b=True, dtype=ttnn.bfloat16, compute_kernel_config=self.mm_cfg)
         act = ttnn.gelu(gate, variant=self.gelu)
         ttnn.deallocate(gate)
         h = ttnn.mul(act, up)
         ttnn.deallocate(act)
         ttnn.deallocate(up)
-        partial = ttnn.linear(h, self.w_down, dtype=ttnn.bfloat16, compute_kernel_config=self.mm_cfg)
+        partial = ttnn.linear(h, self.w_down, transpose_b=True, dtype=ttnn.bfloat16, compute_kernel_config=self.mm_cfg)
         ttnn.deallocate(h)
         out = ttnn.all_reduce(partial, cluster_axis=TP_AXIS, memory_config=ttnn.DRAM_MEMORY_CONFIG)
         ttnn.deallocate(partial)
