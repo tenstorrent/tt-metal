@@ -634,8 +634,7 @@ inline void init_typecast_fp32_to_fp16b() {
 
 template <bool APPROXIMATION_MODE>
 inline void init_typecast_fp32_to_int32() {
-    addr_mod_t{.srca = {.incr = 0}, .srcb = {.incr = 0}, .dest = {.incr = 2}}.set(ADDR_MOD_6);
-    math::reset_counters(p_setrwc::SET_ABD_F);
+    // The unary SFPU init before this one already sets ADDR_MOD_6 and resets the counters for typecast.
     sfpi::vConstIntPrgm0 = std::numeric_limits<std::int32_t>::max();
 }
 
