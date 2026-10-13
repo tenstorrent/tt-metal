@@ -74,6 +74,13 @@ std::vector<uint32_t> get_forwarding_link_indices_in_direction(
     const FabricNodeId& dst_fabric_node_id,
     RoutingDirection direction);
 
+// Wormhole only. Points UMD's host-to-remote (non-MMIO) gateway for each MMIO chip at the fabric dispatch link toward
+// its directly connected remote chips. That router polls for base firmware often enough to keep UMD's slow path
+// responsive. The other fabric routers can hold the core for tens of seconds per transfer while fabric is active.
+// Without the pin, UMD picks its gateway from a default list and rotates it on write back-pressure, so which core it
+// lands on depends on the write history. Must run before remote traffic starts (no other thread touching UMD).
+void pin_remote_transfer_cores_to_dispatch_links(const ControlPlane& control_plane, const tt::Cluster& cluster);
+
 // Helper: Build adjacency map and discover corners/edges using BFS
 using AdjacencyMap = std::unordered_map<ChipId, std::vector<ChipId>>;
 struct IntraMeshAdjacencyMap {

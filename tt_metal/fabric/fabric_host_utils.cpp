@@ -18,6 +18,7 @@
 #include <cstring>
 #include <stdexcept>
 #include <unordered_map>
+#include <unordered_set>
 #include <filesystem>
 #include <fstream>
 #include <fmt/format.h>
@@ -146,6 +147,58 @@ std::vector<uint32_t> get_forwarding_link_indices_in_direction(
     }
 
     return link_indices;
+}
+
+void pin_remote_transfer_cores_to_dispatch_links(const ControlPlane& control_plane, const tt::Cluster& cluster) {
+    if (cluster.arch() != tt::ARCH::WORMHOLE_B0 || cluster.is_galaxy_cluster()) {
+        return;
+    }
+    for (const auto mmio_chip : cluster.mmio_chip_ids()) {
+        const auto mmio_node = control_plane.get_fabric_node_id_from_physical_chip_id(mmio_chip);
+        std::unordered_set<tt::umd::CoreCoord> gateway_cores;
+        std::vector<chan_id_t> gateway_chans;
+        for (const auto remote_chip : cluster.get_devices_controlled_by_mmio_device(mmio_chip)) {
+            if (remote_chip == mmio_chip) {
+                continue;
+            }
+            const auto remote_node = control_plane.get_fabric_node_id_from_physical_chip_id(remote_chip);
+            const auto direction = control_plane.get_forwarding_direction(mmio_node, remote_node);
+            if (!direction.has_value()) {
+                continue;
+            }
+            const auto neighbors = control_plane.get_chip_neighbors(mmio_node, *direction);
+            const auto same_mesh = neighbors.find(remote_node.mesh_id);
+            if (same_mesh == neighbors.end() ||
+                std::find(same_mesh->second.begin(), same_mesh->second.end(), remote_node.chip_id) ==
+                    same_mesh->second.end()) {
+                continue;  // only remote chips one hop away
+            }
+            // Same choice as FabricBuilder::discover_channels / RelayMux::get_dispatch_link_index.
+            const auto link_indices =
+                get_forwarding_link_indices_in_direction(control_plane, mmio_node, remote_node, *direction);
+            if (link_indices.empty()) {
+                continue;
+            }
+            const auto dispatch_link_idx = link_indices.back();
+            for (const auto eth_chan :
+                 control_plane.get_active_fabric_eth_routing_planes_in_direction(mmio_node, *direction)) {
+                if (control_plane.get_routing_plane_id(mmio_node, eth_chan) == dispatch_link_idx) {
+                    gateway_chans.push_back(eth_chan);
+                    gateway_cores.insert(
+                        cluster.get_soc_desc(mmio_chip).get_eth_core_for_channel(eth_chan, CoordSystem::LOGICAL));
+                }
+            }
+        }
+        if (gateway_cores.empty()) {
+            continue;
+        }
+        log_debug(
+            tt::LogFabric,
+            "Pinning remote transfer cores of MMIO chip {} to fabric dispatch channel(s) {}",
+            mmio_chip,
+            gateway_chans);
+        cluster.get_driver()->configure_active_ethernet_cores_for_mmio_device(mmio_chip, gateway_cores);
+    }
 }
 
 void serialize_mesh_coordinates_to_file(
