@@ -1,0 +1,8 @@
+perf_sfpu_gaps_x.py::test_perf_sfpu_gaps_oc2_x[variant:('unary_lt_int32', 'I32', 0)]
+perf_sfpu_gaps_x.py::test_perf_sfpu_gaps_oc2_x[variant:('unary_gt_int32', 'I32', 0)]
+perf_sfpu_gaps_x.py::test_perf_sfpu_gaps_oc2_x[variant:('unary_le_int32', 'I32', 0)]
+perf_sfpu_gaps_x.py::test_perf_sfpu_gaps_oc2_x[variant:('unary_ge_int32', 'I32', 0)]
+perf_sfpu_gaps_x.py::test_perf_sfpu_gaps_oc2_x[variant:('unary_lt_int32_n', 'I32', 0)]
+perf_sfpu_gaps_x.py::test_perf_sfpu_gaps_oc2_x[variant:('unary_gt_int32_n', 'I32', 0)]
+perf_sfpu_gaps_x.py::test_perf_sfpu_gaps_oc2_x[variant:('unary_le_int32_n', 'I32', 0)]
+perf_sfpu_gaps_x.py::test_perf_sfpu_gaps_oc2_x[variant:('unary_ge_int32_n', 'I32', 0)]
