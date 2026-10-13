@@ -73,8 +73,8 @@ void PcieExchangeDeviceOperation::validate_on_program_cache_miss(
         "pcie_exchange: input must be TILE layout (ROW_MAJOR is allowed for ALL_GATHER only)");
     if (args.mode == PcieExchangeMode::ALL_REDUCE) {
         TT_FATAL(
-            in.dtype() == DataType::BFLOAT16 || in.dtype() == DataType::BFLOAT8_B,
-            "pcie_exchange: ALL_REDUCE input must be bf16 or bfp8 (the add runs on the FPU)");
+            in.dtype() == DataType::BFLOAT16 || in.dtype() == DataType::BFLOAT8_B || in.dtype() == DataType::FLOAT32,
+            "pcie_exchange: ALL_REDUCE input must be bf16, bfp8 or fp32 (the add runs on the FPU)");
         TT_FATAL(
             !args.bfp8_payload || (in.dtype() == DataType::BFLOAT16 && in.layout() == Layout::TILE),
             "pcie_exchange: bfp8_payload needs a bf16 TILE input");

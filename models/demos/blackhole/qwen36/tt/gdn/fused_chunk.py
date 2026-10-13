@@ -175,22 +175,59 @@ def chunk_gated_delta_rule_fused_adapter(
 
     # output_head_major=return_o_bh: skip token<->head permute when caller wants [BH,T,V].
     _eye, _tril, _ones, _masks = const_tiles if const_tiles is not None else (None, None, None, None)
-    o, final_state = ttnn.transformer.chunk_gated_delta_rule(
-        q,
-        k,
-        v,
-        g,
-        beta,
-        scale=scale,
-        initial_state=s0,
-        output_final_state=True,
-        chunk_size=_FUSED_CHUNK_SIZE,
-        output_head_major=return_o_bh,
-        eye=_eye,
-        tril=_tril,
-        ones=_ones,
-        masks=_masks,
-    )
+
+    def _scan(q_, k_, v_, g_, beta_, s0_):
+        return ttnn.transformer.chunk_gated_delta_rule(
+            q_,
+            k_,
+            v_,
+            g_,
+            beta_,
+            scale=scale,
+            initial_state=s0_,
+            output_final_state=True,
+            chunk_size=_FUSED_CHUNK_SIZE,
+            output_head_major=return_o_bh,
+            eye=_eye,
+            tril=_tril,
+            ones=_ones,
+            masks=_masks,
+        )
+
+    # The phased scan runs one (user, head) pair per core and requires B*Nv <= compute cores. Batched prefill at
+    # TP2 has twice the per-device heads of TP4 (e.g. 8 users x 24 heads = 192 > 110), so scan in user groups that
+    # fit; every (user, head) is independent, so the grouping does not change any result.
+    _dev = device if device is not None else q.device()
+    _grid = _dev.compute_with_storage_grid_size()
+    _ncores = _grid.x * _grid.y
+    _group = max(1, _ncores // Nv) if Nv <= _ncores else B
+    if B > 1 and B * Nv > _ncores and _group < B:
+
+        def _rows(t, b0, b1):
+            if t is None:
+                return None
+            starts = [b0] + [0] * (len(t.shape) - 1)
+            ends = [b1] + list(t.shape)[1:]
+            return ttnn.slice(t, starts, ends)
+
+        o_parts, s_parts = [], []
+        for b0 in range(0, B, _group):
+            b1 = min(B, b0 + _group)
+            o_b, s_b = _scan(
+                _rows(q, b0, b1),
+                _rows(k, b0, b1),
+                _rows(v, b0, b1),
+                _rows(g, b0, b1),
+                _rows(beta, b0, b1),
+                _rows(s0, b0, b1),
+            )
+            o_parts.append(o_b)
+            s_parts.append(s_b)
+        # head-major o is [B*Nv, T, V] (user-major rows), token-major is [B, T, Nv, V]: both concatenate on dim 0.
+        o = ttnn.concat(o_parts, dim=0)
+        final_state = ttnn.concat(s_parts, dim=0)
+    else:
+        o, final_state = _scan(q, k, v, g, beta, s0)
 
     if return_o_bh:
         # Op already returned head-major [B*Nv, T, Dv] in TILE — nothing to relayout.

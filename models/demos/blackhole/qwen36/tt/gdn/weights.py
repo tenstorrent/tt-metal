@@ -13,6 +13,7 @@ from dataclasses import dataclass
 import torch
 
 import ttnn
+from models.demos.blackhole.qwen36.tt.fast_transpose import fast_t
 from models.demos.blackhole.qwen36.tt.gdn.config import GDNConfig
 from models.experimental.gated_attention_gated_deltanet.tt.ttnn_delta_rule_seq import create_chunk_masks_seq
 
@@ -85,7 +86,7 @@ def load_gdn_weights(mesh_device, config: GDNConfig, state_dict, tensor_cache_pa
             device=mesh_device,
             memory_config=ttnn.DRAM_MEMORY_CONFIG,
             cache_file_name=(tensor_cache_path / f"linear_attn.{name}") if tensor_cache_path else None,
-            preprocess=lambda t: t.T.contiguous(),
+            preprocess=lambda t: fast_t(t),
         )
 
     def load_conv_weight(name):
@@ -119,7 +120,7 @@ def load_gdn_weights(mesh_device, config: GDNConfig, state_dict, tensor_cache_pa
         device=mesh_device,
         memory_config=ttnn.DRAM_MEMORY_CONFIG,
         cache_file_name=(tensor_cache_path / "linear_attn.qkv_proj.weight") if tensor_cache_path else None,
-        preprocess=lambda t: t.T.contiguous(),  # [4096, 8192]; cache-miss only
+        preprocess=lambda t: fast_t(t),  # [4096, 8192]; cache-miss only
     )
     # The split q/k/v_proj are dead (the op runs the fused QKV from the combined weight; it
     # reads the splits only in a fallback reached when qkv_proj_weight is None). Not created,

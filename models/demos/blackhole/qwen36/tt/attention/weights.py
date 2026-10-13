@@ -3,6 +3,7 @@
 from dataclasses import dataclass
 
 import ttnn
+from models.demos.blackhole.qwen36.tt.fast_transpose import fast_t
 
 
 @dataclass(frozen=True)
@@ -24,7 +25,7 @@ def load_attention_weights(mesh_device, state_dict, tensor_cache_path=None) -> A
             device=mesh_device,
             memory_config=ttnn.DRAM_MEMORY_CONFIG,
             cache_file_name=(tensor_cache_path / f"self_attn.{name}.weight") if tensor_cache_path else None,
-            preprocess=lambda t: t.T.contiguous(),  # [in, out] for ttnn.linear; cache-miss only
+            preprocess=lambda t: fast_t(t),  # [in, out] for ttnn.linear; cache-miss only
         )
 
     def load_norm(name):

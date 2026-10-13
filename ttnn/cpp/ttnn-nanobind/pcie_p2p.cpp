@@ -28,18 +28,21 @@ void bind_pcie_p2p_api(nb::module_& mod) {
            const std::vector<tt::tt_metal::CoreCoord>& cores,
            uint64_t noc_base,
            uint32_t first_iatu_region,
-           const std::string& ordering) {
+           const std::string& ordering,
+           uint32_t inbound_noc) {
             p2p::Config cfg;
             cfg.noc_base = noc_base;
             cfg.first_iatu_region = first_iatu_region;
             cfg.ordering = ordering;
+            cfg.inbound_noc = inbound_noc;
             p2p::setup(*mesh, cores, cfg);
         },
         nb::arg("mesh_device"),
         nb::arg("cores"),
         nb::arg("noc_base") = (32ull << 30),
         nb::arg("first_iatu_region") = 8,
-        nb::arg("ordering") = "relaxed",
+        nb::arg("ordering") = "posted",
+        nb::arg("inbound_noc") = 1,
         "Program outbound iATU regions and per-core inbound TLB windows for every device in the mesh.");
     mod.def("is_setup", &p2p::is_setup);
     mod.def("teardown", &p2p::teardown);

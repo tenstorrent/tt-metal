@@ -10,6 +10,7 @@ import os
 from dataclasses import dataclass
 
 import ttnn
+from models.demos.blackhole.qwen36.tt.fast_transpose import fast_t
 
 
 @dataclass(frozen=True)
@@ -30,8 +31,8 @@ def _build_gate_up(gate_w, up_w, mesh, tp, cache_path):
     def pack(gate):
         # Runs only on a tensor-cache miss (as_tensor preprocess), so a cached load never reads
         # the checkpoint tensors.
-        gk = gate.to(torch.bfloat16).T.contiguous()  # [K=dim, N=hidden]
-        uk = up_w.to(torch.bfloat16).T.contiguous()
+        gk = fast_t(gate.to(torch.bfloat16))  # [K=dim, N=hidden]
+        uk = fast_t(up_w.to(torch.bfloat16))
         packed = torch.cat([gk, uk], dim=-1)  # [dim, 2*hidden], gate first
         return prepare_for_fused_swiglu(packed, ndev=tp, gate_is_first=True)  # [dim, 2*hidden]
 
@@ -143,7 +144,7 @@ def load_mlp_weights(mesh_device, state_dict, tensor_cache_path=None, args=None,
     def load(name, dtype):
         return ttnn.as_tensor(
             state_dict[f"{name}.weight"],
-            preprocess=lambda t: t.T.contiguous(),  # [in, out] for ttnn.linear; cache-miss only
+            preprocess=lambda t: fast_t(t),  # [in, out] for ttnn.linear; cache-miss only
             dtype=dtype,
             layout=ttnn.TILE_LAYOUT,
             device=mesh_device,
@@ -180,7 +181,9 @@ class Qwen36MLP:
         # Prefill fused-swiglu AGMM (ff_norm skips its AG; layer.py sets _fuse_ff_agmm to match).
         from models.demos.blackhole.qwen36.tt import tp_common as tpc
 
-        self._fuse_gateup_agmm = tpc.mlp_gateup_agmm_enabled(self.num_devices) and use_gateup_agmm
+        self._fuse_gateup_agmm = (
+            tpc.mlp_gateup_agmm_enabled(self.num_devices) and use_gateup_agmm and tpc.fused_ccl_enabled(tt_ccl)
+        )
         self.weights = load_mlp_weights(
             mesh_device, state_dict, tensor_cache_path, args=args, use_gateup_agmm=use_gateup_agmm
         )
@@ -296,11 +299,23 @@ class Qwen36MLP:
             )
             # L1 output (gate/up outputs; down output via mc_out below): +FPU, avoids the DRAM round-trip
             # (test_mlp_matmul_sweep_prefill *_outL1). The [seq,N] tensors fit L1 at the prefill chunk.
-            w1_out = ttnn.linear(
-                x, w.w1, compute_kernel_config=ckc, program_config=pc_gate, memory_config=ttnn.L1_MEMORY_CONFIG
+            w1_out = tpc.prefill_linear(
+                x,
+                w.w1,
+                lambda m: tpc.create_prefill_mlp_matmul_program_config(
+                    m, args.dim, w.w1.shape[-1], fused_activation=ttnn.UnaryOpType.SILU, max_cols=_gw, tuning=_pt
+                ),
+                ckc,
+                ttnn.L1_MEMORY_CONFIG,
             )
-            w3_out = ttnn.linear(
-                x, w.w3, compute_kernel_config=ckc, program_config=pc_up, memory_config=ttnn.L1_MEMORY_CONFIG
+            w3_out = tpc.prefill_linear(
+                x,
+                w.w3,
+                lambda m: tpc.create_prefill_mlp_matmul_program_config(
+                    m, args.dim, w.w3.shape[-1], max_cols=_gw, tuning=_pt
+                ),
+                ckc,
+                ttnn.L1_MEMORY_CONFIG,
             )
             _silu_fused = True
         else:
@@ -343,7 +358,24 @@ class Qwen36MLP:
         # down-proj OUTPUT in L1 for the tuned prefill path (DRAM input `hidden` + L1 output = the
         # validated sweep outL1 config; tt_all_reduce already consumes an L1 partial).
         mc_w2_out = ttnn.L1_MEMORY_CONFIG if (x.shape[-2] <= ttnn.TILE_SIZE or _prefill_tuned) else mc
-        partial = ttnn.linear(hidden, w.w2, compute_kernel_config=ckc, memory_config=mc_w2_out, program_config=w2_pc)
+        if hidden.shape[-2] > ttnn.TILE_SIZE:
+            partial = tpc.prefill_linear(
+                hidden,
+                w.w2,
+                lambda m: tpc.create_prefill_mlp_matmul_program_config(
+                    m,
+                    hidden.shape[-1],
+                    w.w2.shape[-1],
+                    max_cols=getattr(args, "decode_grid_w", 8),
+                    tuning=getattr(args, "prefill_tuning", None),
+                ),
+                ckc,
+                mc_w2_out,
+            )
+        else:
+            partial = ttnn.linear(
+                hidden, w.w2, compute_kernel_config=ckc, memory_config=mc_w2_out, program_config=w2_pc
+            )
         ttnn.deallocate(hidden)
 
         # tt_all_reduce on (1,4) mesh reduce-scatters to hidden dim (dim=3).

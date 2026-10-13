@@ -141,7 +141,7 @@ PcieExchangeProgramFactory::cached_program_t PcieExchangeProgramFactory::create_
             all_cores,
             ComputeConfig{
                 .math_fidelity = MathFidelity::HiFi4,
-                .fp32_dest_acc_en = false,
+                .fp32_dest_acc_en = in.dtype() == DataType::FLOAT32,  // keep fp32 partial sums exact
                 .compile_args = {CB_IN, CB_LANDING, CB_OUT, CB_STAGE_DM, CB_STAGE_MATH, bfp8 ? 1u : 0u}});
     }
 

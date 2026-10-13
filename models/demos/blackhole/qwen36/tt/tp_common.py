@@ -11,6 +11,7 @@ import torch
 
 import ttnn
 from models.common.utility_functions import is_blackhole
+from models.demos.blackhole.qwen36.tt.fast_transpose import fast_t
 
 # Hardware constants
 TILE_SIZE = 32
@@ -309,8 +310,11 @@ def create_prefill_mlp_matmul_program_config(m, k, n, fused_activation=None, max
 
 
 # Mesh tensor helpers
-def shard_w(torch_tensor, mesh, dim, memory_config, cache_path, dtype=ttnn.bfloat8_b):
+def shard_w(torch_tensor, mesh, dim, memory_config, cache_path, dtype=ttnn.bfloat8_b, prep=None):
     """Torch weight [out,in] -> sharded mesh tensor. Transpose to [in,out]; dim=-1 column, dim=0 row.
+
+    `prep(torch_tensor)`, if given, builds the actual [out,in] weight (e.g. a tensor-parallel reorder/fusion of several
+    checkpoint tensors). It runs inside the as_tensor preprocess, so it is skipped on a tensor-cache hit.
 
     The bf16 cast + transpose runs as the as_tensor preprocess, so it only executes on a tensor-cache
     miss. On a hit the checkpoint tensor is never materialised (it may be a memory-mapped safetensor
@@ -318,7 +322,7 @@ def shard_w(torch_tensor, mesh, dim, memory_config, cache_path, dtype=ttnn.bfloa
     its 1200 s pytest timeout)."""
     return ttnn.as_tensor(
         torch_tensor,
-        preprocess=lambda t: t.to(torch.bfloat16).T.contiguous(),
+        preprocess=lambda t: fast_t((prep(t) if prep is not None else t).to(torch.bfloat16)),
         dtype=dtype,
         device=mesh,
         mesh_mapper=ttnn.ShardTensorToMesh(mesh, dim=dim),
@@ -415,6 +419,15 @@ def all_gather_matmul_prefill(
     )[0]
 
     return out
+
+
+def fused_ccl_enabled(tt_ccl):
+    """Fused all-gather-matmul / matmul-reduce-scatter prefill paths. Off on the PCIe P2P mesh (they assume the
+    hidden-fractured residual) and when QWEN36_NO_FUSED_CCL=1 (A/B runs, and TP=2 where their persistent L1
+    buffers clash with the GDN conv1d prefill CBs)."""
+    import os
+
+    return getattr(tt_ccl, "pcie", None) is None and os.environ.get("QWEN36_NO_FUSED_CCL", "0") != "1"
 
 
 def mlp_gateup_agmm_enabled(num_devices):
@@ -600,6 +613,47 @@ def matmul_reduce_scatter_prefill(x, weight, tt_ccl, compute_cfg, topology, nd, 
     return ttnn.clone(rs, memory_config=ttnn.DRAM_MEMORY_CONFIG)
 
 
+# 2D prefill matmul CBs must leave room for the rest of L1 (1.5 MB on BH). The estimate below under-counts the
+# kernel's real CB footprint by ~1.45x (measured: est 876 KB -> 1.27 MB allocated), hence the conservative budget.
+PREFILL_CB_BUDGET_BYTES = 640 * 1024
+
+
+def _prefill_pc_cb_bytes(pc, tile_bytes=2048):
+    """Rough L1 footprint of a MatmulMultiCoreReuseMultiCastProgramConfig: in0 + in1 (double-buffered) + out."""
+    return tile_bytes * (
+        2 * pc.per_core_M * pc.in0_block_w + 2 * pc.in0_block_w * pc.per_core_N + pc.per_core_M * pc.per_core_N
+    )
+
+
+def prefill_linear(x, weight, make_pc, compute_cfg, memory_config, budget=PREFILL_CB_BUDGET_BYTES):
+    """2D prefill matmul whose program config comes from make_pc(m). When the config's CBs would not fit L1
+    (per-device N doubles at TP=2 vs the TP=4 the configs were tuned for), split the activation along the
+    sequence dim into 2^k pieces so per_core_M shrinks, and concatenate the outputs. One matmul otherwise."""
+    m = x.shape[-2]
+    pieces = 1
+    pc = make_pc(m)
+    while _prefill_pc_cb_bytes(pc) > budget and (m // (pieces * 2)) % TILE_SIZE == 0 and m // (pieces * 2) >= TILE_SIZE:
+        pieces *= 2
+        pc = make_pc(m // pieces)
+    if pieces == 1:
+        return ttnn.linear(x, weight, compute_kernel_config=compute_cfg, program_config=pc, memory_config=memory_config)
+    rows = m // pieces
+    outs = []
+    for i in range(pieces):
+        begins = [0] * len(x.shape)
+        ends = list(x.shape)
+        begins[-2], ends[-2] = i * rows, (i + 1) * rows
+        xs = ttnn.slice(x, begins, ends)
+        outs.append(
+            ttnn.linear(xs, weight, compute_kernel_config=compute_cfg, program_config=pc, memory_config=memory_config)
+        )
+        ttnn.deallocate(xs)
+    out = ttnn.concat(outs, dim=-2, memory_config=memory_config)
+    for o in outs:
+        ttnn.deallocate(o)
+    return out
+
+
 def sharded_decode_matmul(
     x,
     weight,
@@ -631,9 +685,8 @@ def sharded_decode_matmul(
         if not already_sharded:
             ttnn.deallocate(x_sh)
         return ttnn.to_memory_config(out, decode_out_memory_config)
-    pc = prefill_progcfg_fn(seq, prefill_k, weight.shape[-1])
-    return ttnn.linear(
-        x, weight, compute_kernel_config=compute_cfg, program_config=pc, memory_config=ttnn.DRAM_MEMORY_CONFIG
+    return prefill_linear(
+        x, weight, lambda m: prefill_progcfg_fn(m, prefill_k, weight.shape[-1]), compute_cfg, ttnn.DRAM_MEMORY_CONFIG
     )
 
 

@@ -1,6 +1,9 @@
 # SPDX-FileCopyrightText: © 2023 Tenstorrent USA, Inc.
 
 # SPDX-License-Identifier: Apache-2.0
+import math
+import os
+
 import ttnn
 from models.common.lightweightmodule import LightweightModule
 from models.common.utility_functions import copy_to_buffer
@@ -151,6 +154,74 @@ class RMSNorm(LightweightModule):
             )
             copy_to_buffer(partitioned, self.weight_distributed, self.weight_distributed.dtype)
 
+    # Rows per chunk of the PCIe-mesh prefill norm (see _pcie_prefill_norm); fixes its per-core L1 footprint.
+    PCIE_PREFILL_NORM_ROWS = 512
+
+    def _pcie_prefill_norm(self, x, weight):
+        """Prefill RMSNorm on a PCIe P2P mesh with a bounded L1 footprint.
+
+        There the residual is replicated, so each device normalizes the full hidden width, and the interleaved norm
+        keeps whole rows in static circular buffers: ~1.4 MB per core at hidden 5120, which only fits while nothing
+        else holds L1 and clashes with PcieCCL's persistent decode landing buffers once a decode has run (any second
+        request). Here each chunk of <= 128 rows is width-sharded over a core rectangle that divides the width, so the
+        footprint is per-core slices only. Same accuracy as the interleaved norm (PCC vs fp32 reference 0.99999).
+        Returns None (caller falls back) for shapes it does not cover."""
+        w = x.padded_shape[-1]
+        rows = math.prod(x.padded_shape) // w
+        if x.layout != ttnn.TILE_LAYOUT or w % 32 or rows % 32:
+            return None
+        wt = w // 32
+        grid = self.device.compute_with_storage_grid_size()
+        best = None
+        for gy in range(1, grid.y + 1):
+            for gx in range(1, grid.x + 1):
+                n = gx * gy
+                if wt % n == 0 and (best is None or n > best[0] * best[1]) and n <= 64:
+                    best = (gx, gy)
+        if best is None:
+            return None
+        gx, gy = best
+        n = gx * gy
+        bw = wt // n
+        core_grid = ttnn.CoreRangeSet({ttnn.CoreRange(ttnn.CoreCoord(0, 0), ttnn.CoreCoord(gx - 1, gy - 1))})
+        out_mc = x.memory_config()
+        shape = list(x.shape)
+        x2 = ttnn.reshape(x, [1, 1, rows, w]) if list(x.padded_shape) != [1, 1, rows, w] else x
+        outs = []
+        for r0 in range(0, rows, self.PCIE_PREFILL_NORM_ROWS):
+            r1 = min(rows, r0 + self.PCIE_PREFILL_NORM_ROWS)
+            piece = ttnn.slice(x2, [0, 0, r0, 0], [1, 1, r1, w]) if (r0, r1) != (0, rows) else x2
+            sh = ttnn.MemoryConfig(
+                ttnn.TensorMemoryLayout.WIDTH_SHARDED,
+                ttnn.BufferType.L1,
+                ttnn.ShardSpec(core_grid, [r1 - r0, w // n], ttnn.ShardOrientation.ROW_MAJOR),
+            )
+            # Not deallocated: a row slice can share the caller's buffer (the residual is still in use).
+            xs = ttnn.to_memory_config(piece, sh)
+            pc = ttnn.LayerNormShardedMultiCoreProgramConfig(
+                compute_with_storage_grid_size=ttnn.CoreCoord(gx, gy),
+                subblock_w=bw,
+                block_h=(r1 - r0) // 32,
+                block_w=bw,
+                inplace=False,
+            )
+            ys = ttnn.rms_norm(
+                xs,
+                epsilon=self.eps,
+                weight=weight,
+                program_config=pc,
+                memory_config=sh,
+                compute_kernel_config=self.compute_kernel_config_hifi2,
+            )
+            ttnn.deallocate(xs)
+            outs.append(ttnn.to_memory_config(ys, out_mc))
+            ttnn.deallocate(ys)
+        y = outs[0] if len(outs) == 1 else ttnn.concat(outs, dim=2, memory_config=out_mc)
+        if len(outs) > 1:
+            for o in outs:
+                ttnn.deallocate(o)
+        return ttnn.reshape(y, shape) if list(y.shape) != shape else y
+
     def forward(
         self,
         x: ttnn.Tensor,
@@ -176,13 +247,28 @@ class RMSNorm(LightweightModule):
         # If input is sharded do sharded RMSNorm and optionally return sharded output
         program_config = sharded_program_config if in_sharded else None
         memory_config = sharded_output_config if out_sharded else None
-        distributed = self.is_distributed and self.is_distributed(mode)
+        # PCIe P2P mesh: the input is replicated (full hidden dim), so the plain norm with the full weight is the
+        # right one; the distributed variant all-gathers partial stats over the fabric, which does not exist there.
+        distributed = self.is_distributed and self.is_distributed(mode) and getattr(self.tt_ccl, "pcie", None) is None
         weight = self.weight_distributed if distributed else self.weight
 
         if in_sharded:
             assert not distributed, "Distributed RMSNorm does not support sharded inputs"
         else:
             assert not out_sharded, "Non-sharded version of RMSNorm cannot output a sharded tensor"
+
+        if (
+            not distributed
+            and not in_sharded
+            and mode == Mode.PREFILL
+            and getattr(self.tt_ccl, "pcie", None) is not None
+            and os.environ.get("TT_PCIE_PREFILL_NORM_SHARDED", "1") == "1"
+        ):
+            y = self._pcie_prefill_norm(x, weight)
+            if y is not None:
+                if output_mem_config is not None:
+                    y = ttnn.to_memory_config(y, output_mem_config)
+                return y
 
         if distributed:
             x = self._distributed_rmsnorm(

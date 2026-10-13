@@ -8,7 +8,8 @@
 //             0x1000, 16 regions); one region per peer maps a NoC range onto the peer's whole BAR0.
 //   inbound   the peer's BAR0 is 2 MiB TLB windows; one window per participating worker core points at that
 //             core's L1 (offset 0), so BAR0 + window*2MiB + l1_addr lands on the core.
-// Measured on this hardware: ~1 us one-way, 27.9 GB/s per direction on a Gen4 x16 pair.
+// Measured: ~1 us one-way, 27.9 GB/s per direction on a Gen4 x16 pair through the root complex; 495 ns and
+// 49 GB/s (posted, inbound NOC1) per direction on a Gen5 x16 pair behind a switch.
 #pragma once
 
 #include <cstdint>
@@ -31,8 +32,11 @@ struct Config {
     // First outbound iATU region to use (region 0 is tt-metal's hugepage; the pcie_p2p microbenchmarks use
     // 13..15). One region per peer.
     uint32_t first_iatu_region = 8;
-    // Inbound TLB ordering: "relaxed" (default, full rate), "posted", or "strict" (1.2 GB/s, do not use).
-    std::string ordering = "relaxed";
+    // Inbound TLB ordering: "posted" (default; 49 GB/s on Gen5 x16), "relaxed" (35.5 GB/s on Gen5, same as posted
+    // on Gen4), or "strict" (1.2 GB/s, do not use).
+    std::string ordering = "posted";
+    // NoC the inbound windows deliver on. With the writer on NOC0, NOC1 delivery is 42 ns faster one-way.
+    uint32_t inbound_noc = 1;
 };
 
 // Declare `chips` (physical chip ids) as a 1xN mesh with no Ethernet between them, so one process can open

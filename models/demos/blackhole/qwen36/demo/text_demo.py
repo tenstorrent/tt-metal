@@ -38,7 +38,9 @@ from models.perf.benchmarking_utils import BenchmarkProfiler
 from models.tt_transformers.tt.generator import Generator
 from models.tt_transformers.tt.model_config import determine_device_name
 
-_MESH_SHAPE = {"P150": (1, 1), "P150x4": (1, 4), "P150x8": (1, 8)}.get(os.environ.get("MESH_DEVICE"), (1, 4))
+_MESH_SHAPE = {"P150": (1, 1), "P300": (1, 2), "P150x2": (1, 2), "P150x4": (1, 4), "P150x8": (1, 8)}.get(
+    os.environ.get("MESH_DEVICE"), (1, 4)
+)
 _MULTI = _MESH_SHAPE != (1, 1)
 # Multi-device (TP) long-context prefill replays a captured per-chunk trace, so the mesh needs a
 # trace region (ttnn's DEFAULT_TRACE_REGION_SIZE is 0). 1 GiB is ample for every checkpoint,
@@ -181,7 +183,7 @@ def _warmup_prefill(model, device, token_ids):
 
 
 BLOCK_SIZE = 64
-PREFILL_CHUNK = 2048
+PREFILL_CHUNK = int(os.environ.get("QWEN36_PREFILL_CHUNK", "2048"))  # TP=2 needs 1024 (L1)
 # 256k ceiling (4096×64 tokens); _blocks_for sizes the cache per seqlen so short tests stay cheap.
 MAX_BLOCK_BUDGET = 4096
 
@@ -321,7 +323,7 @@ def test_demo_text(
         return
 
     # Skip legacy prefill warmup for short traced prompts (masked-bucket path compiles in capture)
-    PREFILL_CHUNK = 2048
+    PREFILL_CHUNK = int(os.environ.get("QWEN36_PREFILL_CHUNK", "2048"))
     t_compile = time.time()
     if not (use_trace and actual_len < PREFILL_CHUNK):
         _warmup_prefill(model, device, token_ids)
@@ -396,7 +398,7 @@ def _run_tp_generation(model, tokenizer, token_ids, max_generated_tokens, num_bl
     page_table = torch.arange(num_blocks, dtype=torch.int32).reshape(1, num_blocks)
 
     # Capture chunk prefill trace (warmup; also warms masked-bucket programs)
-    CHUNK = 2048
+    CHUNK = int(os.environ.get("QWEN36_PREFILL_CHUNK", "2048"))
     t_cap = time.time()
     signpost("compile_prefill")
     profiler.start("compile_prefill")

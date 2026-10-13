@@ -39,18 +39,19 @@ def load_attention_weights_tp(mesh, state_dict, args, cache_dir=None):
     k_proj, v_proj = kv_rep(state_dict["k_proj.weight"]), kv_rep(state_dict["v_proj.weight"])
 
     if fused_qkv:
-        if qg_deint:
-            fused = tpc.prepare_attn_qkv_deint(
-                state_dict["q_proj.weight"],
-                k_proj,
-                v_proj,
-                args.n_local_heads,
-                args.head_dim,
-                args.n_local_kv_heads * args.head_dim,
-                args.num_devices,
-            )
-        else:
-            fused = tpc.prepare_attn_qkv(
+        # The tensor-parallel [q|gate|k|v] reorder only feeds shard_w's preprocess (`prep=`): skipped on a cache hit.
+        def fused_prep(_):
+            if qg_deint:
+                return tpc.prepare_attn_qkv_deint(
+                    state_dict["q_proj.weight"],
+                    k_proj,
+                    v_proj,
+                    args.n_local_heads,
+                    args.head_dim,
+                    args.n_local_kv_heads * args.head_dim,
+                    args.num_devices,
+                )
+            return tpc.prepare_attn_qkv(
                 state_dict["q_proj.weight"],
                 k_proj,
                 v_proj,
@@ -58,17 +59,19 @@ def load_attention_weights_tp(mesh, state_dict, args, cache_dir=None):
                 args.n_local_kv_heads * args.head_dim,
                 args.num_devices,
             )
+
         # proj_1d_decode: interleaved weight (fast small-grid 1D decode matmul; prefill AGMM verified
         # bit-identical on interleaved — test_agmm_accepts_interleaved_weight). Distinct cache suffix.
         _proj1d = getattr(args, "proj_1d_decode", False)
         _base = "wqkv_fused_qkvg" if qg_deint else "wqkv_fused"
         tw["wqkv_fused"] = tpc.shard_w(
-            fused,
+            state_dict["q_proj.weight"],
             mesh,
             dim=-1,
             memory_config=ttnn.DRAM_MEMORY_CONFIG if _proj1d else args.attn_qkv_fused_weight_memcfg,
             cache_path=c(_base + (".il" if _proj1d else ".dramshard")),
             dtype=ttnn.bfloat8_b,
+            prep=fused_prep,
         )
     else:
         qkv_sharded = getattr(args, "attn_qg_weight_memcfg", None) is not None
@@ -143,7 +146,7 @@ class TPAttention:
         self._qg_deint = self._fused_qkv
         # Fuse prefill norm-allgather + fused-QKV in-proj (all_gather_minimal_matmul_async).
         # Norm's prefill post-AG disabled in layer.py; decode path unchanged.
-        self._fuse_agmm = self._fused_qkv
+        self._fuse_agmm = self._fused_qkv and tpc.fused_ccl_enabled(self.tt_ccl)  # PCIe / A-B knob: unfused
         # Decode head split/merge via nlp_create/concat_heads_decode (the batched-decode idiom).
         self._use_nlp_decode_heads = True
         self.k_caches = None
@@ -231,19 +234,18 @@ class TPAttention:
                 # Prefill: FPU-tuned 2D config beats ttnn-auto's 1x1 stall; L1 output (gated stays DRAM)
                 # feeds the separate RS. max_cols = device width (11 on BH): wide grid (~10-wide) + the
                 # existing L1-out. See test_mlp_matmul_sweep_prefill.
-                pc = tpc.create_prefill_mlp_matmul_program_config(
-                    x.shape[-2],
-                    weight.shape[-2],
-                    weight.shape[-1],
-                    max_cols=getattr(self.args, "decode_grid_w", 8),
-                    tuning=getattr(self.args, "prefill_tuning", None),
-                )
-                return ttnn.linear(
+                return tpc.prefill_linear(
                     x,
                     weight,
-                    compute_kernel_config=self.compute_cfg,
-                    program_config=pc,
-                    memory_config=ttnn.L1_MEMORY_CONFIG,
+                    lambda m: tpc.create_prefill_mlp_matmul_program_config(
+                        m,
+                        weight.shape[-2],
+                        weight.shape[-1],
+                        max_cols=getattr(self.args, "decode_grid_w", 8),
+                        tuning=getattr(self.args, "prefill_tuning", None),
+                    ),
+                    self.compute_cfg,
+                    ttnn.L1_MEMORY_CONFIG,
                 )
             return ttnn.linear(x, weight, compute_kernel_config=self.compute_cfg, memory_config=ttnn.DRAM_MEMORY_CONFIG)
         return tpc.sharded_decode_matmul(
@@ -627,9 +629,11 @@ class TPAttention:
             # Non-paged oracle path (test/generate_tp only): the full-cache SDPA-decode's static CBs
             # grow with max_seq_len and, unbounded (k_chunk_size=0), overrun into the persistent CCL
             # semaphore buffers at the top of L1. Bound the K-chunk to cap the CB footprint (the paged
-            # production path reads bounded blocks, so it keeps the auto config).
+            # production path reads bounded blocks, so it keeps the auto config). 64 rather than 128:
+            # on a PCIe P2P mesh the PcieCCL decode landing buffers (~22.5 KB/core on these cores) also
+            # live there, and k_chunk_size=128 overran them by ~23 KB.
             nonpaged_sdpa_cfg = ttnn.SDPAProgramConfig(
-                compute_with_storage_grid_size=(8, 8), exp_approx_mode=False, q_chunk_size=0, k_chunk_size=128
+                compute_with_storage_grid_size=(8, 8), exp_approx_mode=False, q_chunk_size=0, k_chunk_size=64
             )
             attn_out = ttnn.transformer.scaled_dot_product_attention_decode(
                 q,

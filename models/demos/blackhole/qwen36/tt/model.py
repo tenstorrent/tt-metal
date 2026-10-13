@@ -8,6 +8,7 @@ Hybrid state: KV cache (8 attn layers) + recurrent state (24 DeltaNet layers).
 
 import math
 import os
+from pathlib import Path
 
 import torch
 from loguru import logger
@@ -15,10 +16,25 @@ from tqdm import tqdm
 
 import ttnn
 from models.common.rmsnorm import RMSNorm
+from models.demos.blackhole.qwen36.tt.fast_transpose import fast_t
 from models.demos.blackhole.qwen36.tt.layer import Qwen36DecoderLayer
 from models.demos.blackhole.qwen36.tt.model_config import Qwen36ModelArgs
 from models.demos.blackhole.qwen36.tt.rope import Qwen36RoPESetup
 from models.tt_transformers.tt.common import Mode, get_block_size, num_blocks_in_seq
+
+
+class _PcieGatheredEmbedding:
+    """Wraps the framework Embedding so its hidden-fractured output comes back replicated over the PCIe mesh."""
+
+    def __init__(self, inner, pcie):
+        self._inner = inner
+        self._pcie = pcie
+
+    def __call__(self, x):
+        return self._pcie.all_gather(self._inner(x))
+
+    def __getattr__(self, name):
+        return getattr(self._inner, name)
 
 
 class Qwen36Model:
@@ -71,6 +87,11 @@ class Qwen36Model:
             state_dict=state_dict,
             dtype=ttnn.bfloat16,
         )
+        # PCIe P2P mesh (no fabric): the residual stream is replicated, not hidden-fractured, so gather the
+        # column-parallel embedding right away; every collective below then runs through PcieCCL.
+        pcie = getattr(self.tt_ccl, "pcie", None) if self.tt_ccl is not None else None
+        if pcie is not None:
+            self.embd = _PcieGatheredEmbedding(self.embd, pcie)
 
         # RoPE setup (for gated attention layers only)
         self.rope = Qwen36RoPESetup(mesh_device, args)
@@ -137,7 +158,7 @@ class Qwen36Model:
             lm_cache = tensor_cache_path / "output.weight" if tensor_cache_path else None
         self.lm_head_weight = ttnn.as_tensor(
             lm_head_weight,
-            preprocess=lambda t: t.T.contiguous(),  # [dim, vocab_size]
+            preprocess=lambda t: fast_t(t),  # [dim, vocab_size]
             dtype=ttnn.bfloat8_b,
             layout=ttnn.TILE_LAYOUT,
             device=mesh_device,
@@ -337,7 +358,9 @@ class Qwen36Model:
                 layout=ttnn.TILE_LAYOUT,
                 device=device,
                 memory_config=ttnn.DRAM_MEMORY_CONFIG,
-                mesh_mapper=shard,
+                mesh_mapper=(
+                    rep if getattr(self.tt_ccl, "pcie", None) is not None else shard
+                ),  # PCIe mesh: replicated hidden
             )
             self._vis_mask_buf = ttnn.from_torch(
                 torch.zeros(1, 1, chunk_size, 1, dtype=torch.bfloat16),
@@ -390,6 +413,11 @@ class Qwen36Model:
         for a full chunk, bucket for the masked path); the buffers slice down to it. No-op when the
         buffers are unallocated (text-only / non-traced deployment, which uses the device scatter)."""
         if self._vis_buf is None:
+            return x
+        buf_rows = self._vis_buf.shape[2] if self._vis_buf.shape.rank == 4 else self._vis_buf.shape[1]
+        if length > buf_rows:
+            # Buffers were sized for a smaller prefill chunk (QWEN36_PREFILL_CHUNK) than this masked bucket:
+            # text-only path, the splice is a no-op, so skip it rather than slice past the buffer.
             return x
         if self._vis_buf.shape.rank == 4:
             # TP: buffers are [1, 1, chunk_size, dim(/TP)], matching the 4D TP activations.
@@ -462,7 +490,13 @@ class Qwen36Model:
             mask = torch.zeros(1, 1, cs, 1, dtype=torch.bfloat16)
             mask[0, 0, pos, 0] = 1.0
             ttnn.copy_host_to_device_tensor(
-                ttnn.from_torch(vis_full, dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT, device=None, mesh_mapper=shard),
+                ttnn.from_torch(
+                    vis_full,
+                    dtype=ttnn.bfloat16,
+                    layout=ttnn.TILE_LAYOUT,
+                    device=None,
+                    mesh_mapper=(rep if getattr(self.tt_ccl, "pcie", None) is not None else shard),
+                ),
                 self._vis_buf,
             )
             ttnn.copy_host_to_device_tensor(
@@ -537,8 +571,6 @@ class Qwen36Model:
     ):
         # HF_MODEL env var (hub or local path) is canonical; hf_model sets it for back-compat.
         if hf_model is not None:
-            import os
-
             os.environ["HF_MODEL"] = hf_model
 
         args = Qwen36ModelArgs(
@@ -571,6 +603,15 @@ class Qwen36Model:
         cache_path = args.weight_cache_path()
         logger.info("Loading + remapping weights via Qwen36ModelArgs.load_state_dict()...")
         state_dict = args.load_state_dict()
+        # Cold build (no cached tensors yet): every checkpoint weight is about to be read and converted, so map its
+        # pages ahead of use in the background. A warm build never touches most of the checkpoint; skip it there.
+        prefetch = os.environ.get("QWEN36_PREFETCH_CHECKPOINT")
+        if prefetch == "1" or (
+            prefetch is None and (cache_path is None or next(Path(cache_path).rglob("*.tensorbin"), None) is None)
+        ):
+            from models.common.checkpoint_prefetch import prefetch_state_dict
+
+            prefetch_state_dict(state_dict)
 
         model = cls(device, args, state_dict, tensor_cache_path=cache_path)
         return model

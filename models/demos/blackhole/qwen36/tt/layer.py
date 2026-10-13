@@ -45,9 +45,18 @@ class Qwen36DecoderLayer:
         # Prefill fuses the norm all-gather into the in-proj matmul (all_gather_minimal_matmul_async):
         # GDN qkvzab and full-attn QKV. attention_norm then skips its post-norm AG (prefill only;
         # decode gathers pre-norm). Gates must match the module-side _fuse_agmm gates.
-        self._fuse_norm_agmm = self.num_devices > 1 and (
-            (not self.is_full_attention and getattr(args, "gdn_qkvz_weight_memcfg", None) is not None)
-            or (self.is_full_attention and getattr(args, "attn_qkv_fused_weight_memcfg", None) is not None)
+        # PCIe P2P mesh: residual replicated, collectives via PcieCCL; the fused all-gather-matmul /
+        # matmul-reduce-scatter prefill paths assume the fractured layout and are disabled.
+        from models.demos.blackhole.qwen36.tt import tp_common as _tpc
+
+        self._pcie = not _tpc.fused_ccl_enabled(tt_ccl)  # PCIe mesh or QWEN36_NO_FUSED_CCL=1: unfused collectives
+        self._fuse_norm_agmm = (
+            self.num_devices > 1
+            and not self._pcie
+            and (
+                (not self.is_full_attention and getattr(args, "gdn_qkvz_weight_memcfg", None) is not None)
+                or (self.is_full_attention and getattr(args, "attn_qkv_fused_weight_memcfg", None) is not None)
+            )
         )
         self.attention_norm = self._make_norm(
             mesh_device,
@@ -65,7 +74,9 @@ class Qwen36DecoderLayer:
 
         # MoE layers gather in the norm (the sparse MoE + shared expert need full/replicated
         # hidden and do NOT run the fused gate/up AGMM), so only fuse for the dense MLP.
-        self._fuse_ff_agmm = tpc.mlp_gateup_agmm_enabled(self.num_devices) and not args.is_moe_layer(layer_num)
+        self._fuse_ff_agmm = (
+            tpc.mlp_gateup_agmm_enabled(self.num_devices) and not args.is_moe_layer(layer_num) and not self._pcie
+        )
         self.ffn_norm = self._make_norm(
             mesh_device,
             args,

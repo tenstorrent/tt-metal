@@ -161,14 +161,14 @@ void init_chip(ChipState& c, IDevice* dev, uint32_t index) {
 }
 
 // One 2 MiB inbound window on `c` pointing at the L1 of logical worker `core` (offset 0). Returns BAR0 offset.
-uint64_t make_inbound_window(ChipState& c, const CoreCoord& core, uint64_t ordering) {
+uint64_t make_inbound_window(ChipState& c, const CoreCoord& core, uint64_t ordering, uint32_t noc_sel) {
     const CoreCoord v = c.dev->virtual_core_from_logical_core(core, CoreType::WORKER);
     auto tlb = c.pci->allocate_tlb(kTlb2M, tt::umd::TlbMapping::UC);
     tt::umd::tlb_data cfg{};
     cfg.local_offset = 0;
     cfg.x_end = v.x;
     cfg.y_end = v.y;
-    cfg.noc_sel = 0;
+    cfg.noc_sel = noc_sel;
     cfg.ordering = ordering;
     tlb->configure(cfg);
     const int id = tlb->get_tlb_id();
@@ -316,7 +316,7 @@ void setup(distributed::MeshDevice& mesh, const std::vector<CoreCoord>& logical_
         ChipState c;
         init_chip(c, devices[i], uint32_t(i));
         for (const auto& core : logical_cores) {
-            c.window_off.push_back(make_inbound_window(c, core, ord));
+            c.window_off.push_back(make_inbound_window(c, core, ord, cfg.inbound_noc));
         }
         st->order.push_back(c.id);
         st->chips.emplace(c.id, std::move(c));
@@ -343,11 +343,12 @@ void setup(distributed::MeshDevice& mesh, const std::vector<CoreCoord>& logical_
     }
     log_info(
         tt::LogMetal,
-        "pcie_p2p: windows ready for {} devices x {} cores (noc_base 0x{:x}, ordering {})",
+        "pcie_p2p: windows ready for {} devices x {} cores (noc_base 0x{:x}, ordering {}, inbound noc {})",
         devices.size(),
         logical_cores.size(),
         cfg.noc_base,
-        cfg.ordering);
+        cfg.ordering,
+        cfg.inbound_noc);
     g_state = std::move(st);
 }
 

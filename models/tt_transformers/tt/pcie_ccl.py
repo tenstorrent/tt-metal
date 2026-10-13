@@ -43,12 +43,17 @@ class PcieCCL:
         # Row-major first N cores of the compute grid: the residual / matmul-output layout and the core walk
         # the op's all-gather output uses.
         self.cores = [ttnn.CoreCoord(i % self.grid.x, i // self.grid.x) for i in range(num_window_cores)]
-        ttnn._ttnn.pcie_p2p.setup(mesh_device, self.cores)
+        ttnn._ttnn.pcie_p2p.setup(
+            mesh_device,
+            self.cores,
+            ordering=os.environ.get("TT_PCIE_P2P_ORDERING", "posted"),
+            inbound_noc=int(os.environ.get("TT_PCIE_P2P_INBOUND_NOC", "1")),
+        )
         self._exchange = {}
         # Persistent control tiles (flag / sequence / staging) for the per-call prefill landing buffers. They must
         # be zeroed exactly once, outside any trace: the peer may write its flag into them before this device's op
         # starts, so a per-call zero-fill races it (seen as watchdog timeouts under traced prefill).
-        self._ctrl = {n: self._make_ctrl(n) for n in (64, 32)}
+        self._ctrl = {n: self._make_ctrl(n) for n in (64, 32, 16, 8)}  # created eagerly, never inside a trace
         # Decode all-reduce payload in bfp8 (half the link bytes; both devices sum the same two rounded operands).
         self.bfp8_reduce = os.environ.get("TT_PCIE_BFP8_REDUCE", "1") == "1"  # PCC unchanged, 13.8 -> 8.8 us/op
         self.host_fallbacks = 0
@@ -101,15 +106,11 @@ class PcieCCL:
         behind, so even a device-side zero-fill right before the exchange races the peer (seen as wrong prefill
         results with traced prefill). A pure allocation has no device write and is legal inside trace capture."""
         ss = t.memory_config().shard_spec
-        tile_bytes = {
-            ttnn.bfloat16: 2048,
-            ttnn.bfloat8_b: 1088,
-            ttnn.bfloat4_b: 576,
-            ttnn.uint32: 4096,
-            ttnn.int32: 4096,
-            ttnn.float32: 4096,
-        }[t.dtype]
-        shard_bytes = (ss.shape[0] // 32) * (ss.shape[1] // 32) * tile_bytes
+        if t.layout == ttnn.TILE_LAYOUT:
+            shard_bytes = (ss.shape[0] // 32) * (ss.shape[1] // 32) * self._tile_bytes(t.dtype)
+        else:
+            elem = {ttnn.bfloat16: 2, ttnn.uint32: 4, ttnn.int32: 4, ttnn.float32: 4}[t.dtype]
+            shard_bytes = ss.shape[0] * ss.shape[1] * elem
         xb_tiles = -(-(2 * shard_bytes) // 2048)
         n = ss.grid.num_cores()
         mc = ttnn.MemoryConfig(
@@ -182,7 +183,9 @@ class PcieCCL:
         rows = _volume(t.padded_shape) // w
         x = ttnn.reshape(t, [1, 1, rows, w]) if list(t.padded_shape) != [1, 1, rows, w] else t
         assert w % (n_cores * 32) == 0, f"PcieCCL: width {w} does not split over {n_cores} cores"
-        step = self.PREFILL_ROWS_PER_PIECE
+        step = (
+            self.PREFILL_ROWS_PER_PIECE if t.dtype != ttnn.float32 else self.PREFILL_ROWS_PER_PIECE // 2
+        )  # fp32: 4 KiB tiles
         pieces = []
         for r0 in range(0, rows, step):
             r1 = min(rows, r0 + step)
@@ -203,11 +206,11 @@ class PcieCCL:
             out_sh = ttnn.experimental.pcie_exchange(ps, xb, mode, ctrl=self._ctrl[n_cores])
             ttnn.deallocate(ps)
             ttnn.deallocate(xb)
-            out = ttnn.to_memory_config(out_sh, ttnn.DRAM_MEMORY_CONFIG)
+            out = ttnn.to_memory_config(out_sh, t.memory_config())
             ttnn.deallocate(out_sh)
             pieces.append(out)
         # x is a reshape view sharing t's buffer: never deallocate it (that would free the caller's input).
-        res = pieces[0] if len(pieces) == 1 else ttnn.concat(pieces, dim=2, memory_config=ttnn.DRAM_MEMORY_CONFIG)
+        res = pieces[0] if len(pieces) == 1 else ttnn.concat(pieces, dim=2, memory_config=t.memory_config())
         if len(pieces) > 1:
             for pc in pieces:
                 ttnn.deallocate(pc)
@@ -217,23 +220,57 @@ class PcieCCL:
 
     @staticmethod
     def _dram_tile(t):
-        mc = t.memory_config()
+        """Interleaved (DRAM or L1) TILE tensor with whole tile rows: the chunked prefill exchange path."""
+        return t.layout == ttnn.TILE_LAYOUT and not t.is_sharded() and t.padded_shape[-2] % 32 == 0
+
+    MAX_L1_SHARD_BYTES = 64 * 1024  # largest per-core shard the L1 (decode) exchange path accepts
+
+    @staticmethod
+    def _cores_dividing(w, candidates, tile_bytes, max_shard_bytes):
+        """Largest core count in `candidates` whose shards are tile aligned and small enough."""
+        for n in candidates:
+            if w % (n * 32) == 0 and (w // n // 32) * tile_bytes <= max_shard_bytes:
+                return n
+        return None
+
+    @staticmethod
+    def _tile_bytes(dtype):
+        return {
+            ttnn.bfloat16: 2048,
+            ttnn.bfloat8_b: 1088,
+            ttnn.bfloat4_b: 576,
+            ttnn.uint32: 4096,
+            ttnn.int32: 4096,
+            ttnn.float32: 4096,
+        }[dtype]
+
+    def _is_one_tile_row(self, t):
         return (
             t.layout == ttnn.TILE_LAYOUT
-            and not t.is_sharded()
-            and mc.buffer_type == ttnn.BufferType.DRAM
-            and t.padded_shape[-2] % 32 == 0
+            and t.padded_shape[-2] == 32
+            and _volume(t.padded_shape) == 32 * t.padded_shape[-1]
         )
 
-    # ------------------------------------------------------------- collectives
     def all_reduce(self, t):
         """Sum over the two devices; output replicated with the input's layout."""
+        bfp8 = self.bfp8_reduce and t.dtype == ttnn.bfloat16
         if self._op_capable(t) and t.dtype in (ttnn.bfloat16, ttnn.bfloat8_b):
-            return ttnn.experimental.pcie_exchange(
-                t, self._exchange_for(t), ALL_REDUCE, bfp8_payload=self.bfp8_reduce and t.dtype == ttnn.bfloat16
-            )
-        if self._dram_tile(t) and t.dtype in (ttnn.bfloat16, ttnn.bfloat8_b) and t.padded_shape[-1] % (64 * 32) == 0:
-            return self._exchange_dram(t, ALL_REDUCE, 64)
+            return ttnn.experimental.pcie_exchange(t, self._exchange_for(t), ALL_REDUCE, bfp8_payload=bfp8)
+        if t.dtype in (ttnn.bfloat16, ttnn.bfloat8_b) and self._is_one_tile_row(t) and not t.is_sharded():
+            # Decode-sized interleaved activation (L1 or DRAM): reshard onto window cores, exchange, restore.
+            w = t.padded_shape[-1]
+            n = self._cores_dividing(w, (64, 32, 16, 8, 4, 2, 1), self._tile_bytes(t.dtype), self.MAX_L1_SHARD_BYTES)
+            if n:
+                ts = ttnn.to_memory_config(t, self.width_sharded(n, w // n))
+                out_sh = ttnn.experimental.pcie_exchange(ts, self._exchange_for(ts), ALL_REDUCE, bfp8_payload=bfp8)
+                ttnn.deallocate(ts)
+                out = ttnn.to_memory_config(out_sh, t.memory_config())
+                ttnn.deallocate(out_sh)
+                return out
+        if self._dram_tile(t) and t.dtype in (ttnn.bfloat16, ttnn.bfloat8_b, ttnn.float32):
+            n = self._cores_dividing(t.padded_shape[-1], (64, 32, 16, 8), self._tile_bytes(t.dtype), 1 << 30)
+            if n:
+                return self._exchange_dram(t, ALL_REDUCE, n)
         return self._host_all_reduce(t)
 
     def all_gather(self, t, dim=-1):
@@ -242,23 +279,98 @@ class PcieCCL:
             return self._host_all_gather(t, dim)
         if self._op_capable(t):
             return ttnn.experimental.pcie_exchange(t, self._exchange_for(t), ALL_GATHER)
-        # Prefill-sized DRAM tensors (e.g. the column-parallel embedding [1, S, dim/2]): 32 input cores -> 64 output.
-        if self._dram_tile(t) and t.padded_shape[-2] > 32 and t.padded_shape[-1] % (32 * 32) == 0:
-            return self._exchange_dram(t, ALL_GATHER, 32)
+        # Prefill-sized DRAM tensors (e.g. the column-parallel embedding [1, S, dim/2]): 32 or 16 input cores.
+        if self._dram_tile(t) and t.padded_shape[-2] > 32:
+            n = self._cores_dividing(t.padded_shape[-1], (32, 16, 8), self._tile_bytes(t.dtype), 1 << 30)
+            if n:
+                return self._exchange_dram(t, ALL_GATHER, n)
         # Decode-sized tensor not yet in an op layout: put it on the first 32 cores (or 1 core if narrow).
-        if (
-            t.layout == ttnn.TILE_LAYOUT
-            and t.padded_shape[-2] == 32
-            and _volume(t.padded_shape) == 32 * t.padded_shape[-1]
-        ):
+        if self._is_one_tile_row(t):
             w = t.padded_shape[-1]
-            for n in (32, 16, 8, 4, 2, 1):
-                if w % (n * 32) == 0:
-                    ts = ttnn.to_memory_config(t, self.width_sharded(n, w // n))
-                    out = ttnn.experimental.pcie_exchange(ts, self._exchange_for(ts), ALL_GATHER)
-                    ttnn.deallocate(ts)
-                    return out
+            n = self._cores_dividing(w, (32, 16, 8, 4, 2, 1), self._tile_bytes(t.dtype), self.MAX_L1_SHARD_BYTES)
+            if n:
+                ts = ttnn.to_memory_config(t, self.width_sharded(n, w // n))
+                out = ttnn.experimental.pcie_exchange(ts, self._exchange_for(ts), ALL_GATHER)
+                ttnn.deallocate(ts)
+                return out
+            if t.dtype == ttnn.bfloat16 and w % 32 == 0 and ((w // 32) * 2) % 16 == 0:
+                return self._gather_wide_rows(t, dim)
         return self._host_all_gather(t, dim)
+
+    # Per-core landing budget for _gather_wide_rows (two row-major shards of 32 rows). Wider rows are gathered in
+    # column pieces: at TP2 the vocab-sharded logits row (124160 wide) needs ~497 KB/core in one piece.
+    WIDE_GATHER_MAX_PIECE_COLS = 32768  # -> 128 KiB landing + 64 KiB exchange output per core
+
+    def _gather_wide_rows(self, t, dim):
+        """Gather of a wide 32-row tensor (e.g. vocab-sharded decode logits [32, V/2]) that does not split into
+        tile-aligned L1 shards, in column pieces small enough for L1. Returns [.., rows, 2 * W] = [dev0 | dev1]."""
+        w = t.padded_shape[-1]
+        if w <= self.WIDE_GATHER_MAX_PIECE_COLS or w % 256:
+            return self._gather_wide_rows_piece(t, dim)
+        shape = list(t.shape)
+        rows = t.shape[-2]
+        if t.shape.rank != 4 or list(t.shape) != [1, 1, rows, w]:
+            t = ttnn.reshape(t, [1, 1, rows, w])
+        # Pieces of whole 256-column units (keeps each core's row-major shard 16-byte aligned), sized evenly.
+        units = w // 256
+        n_pieces = -(-w // self.WIDE_GATHER_MAX_PIECE_COLS)
+        bounds = [256 * (units * i // n_pieces) for i in range(n_pieces + 1)]
+        dev0, dev1 = [], []
+        for c0, c1 in zip(bounds[:-1], bounds[1:]):
+            piece = ttnn.slice(t, [0, 0, 0, c0], [1, 1, rows, c1])
+            g = self._gather_wide_rows_piece(piece, dim)  # [1, 1, rows, 2 * (c1 - c0)] = [dev0 piece | dev1 piece]
+            p = c1 - c0
+            dev0.append(ttnn.slice(g, [0, 0, 0, 0], [1, 1, rows, p]))
+            dev1.append(ttnn.slice(g, [0, 0, 0, p], [1, 1, rows, 2 * p]))
+            ttnn.deallocate(g)
+        out = ttnn.concat(dev0 + dev1, dim=-1, memory_config=ttnn.DRAM_MEMORY_CONFIG)
+        for x in dev0 + dev1:
+            ttnn.deallocate(x)
+        shape[-1] = shape[-1] * self.num_devices
+        return ttnn.reshape(out, shape) if list(out.shape) != shape else out
+
+    def _gather_wide_rows_piece(self, t, dim):
+        """One piece of _gather_wide_rows: untilize, row-major width-shard over 32 cores, exchange (per-call landing,
+        no device write), return as DRAM TILE with the concatenated width."""
+        w = t.padded_shape[-1]
+        shape = list(t.shape)
+        rows = t.shape[-2]
+        if t.shape.rank != 4 or list(t.shape) != [1, 1, rows, w]:
+            t = ttnn.reshape(t, [1, 1, rows, w])
+        padded = None
+        if rows < 32:
+            # Row-major shards need the full 32-row tile height. Pad while still TILE (the rows already exist in
+            # the tile, so this is cheap); a row-major pad of a vocab-wide row needs ~860 KB of L1 circular
+            # buffers and does not fit next to a model's persistent L1 buffers.
+            padded = ttnn.pad(t, [(0, 0), (0, 0), (0, 32 - rows), (0, 0)], 0.0)
+            t = padded
+        rm = ttnn.untilize(t, use_multicore=True, memory_config=ttnn.DRAM_MEMORY_CONFIG)
+        if padded is not None:
+            ttnn.deallocate(padded)
+        x = rm
+        sh = ttnn.MemoryConfig(
+            ttnn.TensorMemoryLayout.WIDTH_SHARDED,
+            ttnn.BufferType.L1,
+            ttnn.ShardSpec(
+                ttnn.num_cores_to_corerangeset(32, self.grid, True), [32, w // 32], ttnn.ShardOrientation.ROW_MAJOR
+            ),
+        )
+        xs = ttnn.to_memory_config(x, sh)
+        ttnn.deallocate(rm)
+        xb = self._landing_for(xs)
+        g = ttnn.experimental.pcie_exchange(xs, xb, ALL_GATHER, ctrl=self._ctrl[32])
+        ttnn.deallocate(xs)
+        ttnn.deallocate(xb)
+        g_il = ttnn.to_memory_config(g, ttnn.DRAM_MEMORY_CONFIG)
+        ttnn.deallocate(g)
+        out = ttnn.tilize(g_il, use_multicore=True, memory_config=ttnn.DRAM_MEMORY_CONFIG)  # 32 rows, tile aligned
+        ttnn.deallocate(g_il)
+        if rows < 32:  # back to the caller's logical row count (tile slice keeps the padded 32-row tile)
+            out_cut = ttnn.slice(out, [0, 0, 0, 0], [1, 1, rows, 2 * w])
+            ttnn.deallocate(out)
+            out = out_cut
+        shape[-1] = shape[-1] * self.num_devices
+        return ttnn.reshape(out, shape) if list(out.shape) != shape else out
 
     def argmax_exchange(self, logits, tt_out_tok=None, valid_rows=None):
         """Greedy token over the column-parallel lm_head: local max/argmax, exchange 2 x [32,1], pick on device.

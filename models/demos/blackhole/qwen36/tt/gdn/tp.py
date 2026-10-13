@@ -70,7 +70,16 @@ def load_gdn_weights_tp(mesh, sd, args, cache_dir=None):
         conv1d_w = sd[P + "conv1d.weight"]
     else:  # bf16 remap: reassemble fused conv1d from q/k/v streams
         conv1d_w = torch.cat([sd[P + "q_conv.weight"], sd[P + "k_conv.weight"], sd[P + "v_conv.weight"]], dim=0)
-    qkv_re = tpc.prepare_gdn_qkv(qkv_w, key_dim, value_dim, nk, dk, nv, dv, tp)
+
+    # Tensor-parallel Q/K/V reorder and the qkvz/ab fusions below only feed shard_w's preprocess (`prep=`), so they run
+    # only on a weight-cache miss; a warm load never reads these checkpoint tensors.
+    _qkv_re = []
+
+    def qkv_re_fn():
+        if not _qkv_re:
+            _qkv_re.append(tpc.prepare_gdn_qkv(qkv_w, key_dim, value_dim, nk, dk, nv, dv, tp))
+        return _qkv_re[0]
+
     z_w = sd[P + "in_proj_z.weight"]
     a_w, b_w = sd[P + "in_proj_a.weight"], sd[P + "in_proj_b.weight"]
     tw = {}
@@ -79,59 +88,78 @@ def load_gdn_weights_tp(mesh, sd, args, cache_dir=None):
     # Fold a/b into qkvz → one matmul outputs [qkv|z|a|b] (default when DRAM-sharded)
     fuse_ab = qkvz_sharded
     if fuse_ab:
-        fused = torch.cat(
-            [
-                torch.cat(
-                    [
-                        qkv_re[d * qkv_per : (d + 1) * qkv_per],
-                        z_w[d * z_per : (d + 1) * z_per],
-                        a_w[d * nv_per : (d + 1) * nv_per],
-                        b_w[d * nv_per : (d + 1) * nv_per],
-                    ],
-                    dim=0,
-                )
-                for d in range(tp)
-            ],
-            dim=0,
-        )
+
+        def fused_prep(_):
+            qkv_re = qkv_re_fn()
+            return torch.cat(
+                [
+                    torch.cat(
+                        [
+                            qkv_re[d * qkv_per : (d + 1) * qkv_per],
+                            z_w[d * z_per : (d + 1) * z_per],
+                            a_w[d * nv_per : (d + 1) * nv_per],
+                            b_w[d * nv_per : (d + 1) * nv_per],
+                        ],
+                        dim=0,
+                    )
+                    for d in range(tp)
+                ],
+                dim=0,
+            )
+
         # proj_1d_decode: interleaved weight (fast small-grid 1D decode matmul; prefill AGMM verified
         # bit-identical on interleaved). Distinct cache suffix.
         _proj1d = getattr(args, "proj_1d_decode", False)
         tw["qkvz"] = tpc.shard_w(
-            fused,
+            qkv_w,
             mesh,
             dim=-1,
             memory_config=ttnn.DRAM_MEMORY_CONFIG if _proj1d else args.gdn_qkvzab_weight_memcfg,
             cache_path=c("qkvzab" + (".il" if _proj1d else ".dramshard")),
             dtype=ttnn.bfloat8_b,
+            prep=fused_prep,
         )
     else:
-        fused = torch.cat(
-            [
-                torch.cat([qkv_re[d * qkv_per : (d + 1) * qkv_per], z_w[d * z_per : (d + 1) * z_per]], dim=0)
-                for d in range(tp)
-            ],
-            dim=0,
-        )
+
+        def fused_prep(_):
+            qkv_re = qkv_re_fn()
+            return torch.cat(
+                [
+                    torch.cat([qkv_re[d * qkv_per : (d + 1) * qkv_per], z_w[d * z_per : (d + 1) * z_per]], dim=0)
+                    for d in range(tp)
+                ],
+                dim=0,
+            )
+
         qkvz_mc = args.gdn_qkvz_weight_memcfg if qkvz_sharded else ttnn.DRAM_MEMORY_CONFIG
         tw["qkvz"] = tpc.shard_w(
-            fused,
+            qkv_w,
             mesh,
             dim=-1,
             memory_config=qkvz_mc,
             cache_path=c("qkvz" + (".dramshard" if qkvz_sharded else "")),
             dtype=ttnn.bfloat8_b,
+            prep=fused_prep,
         )
+
         # Separate A+B projection (column-parallel fallback)
-        ab = torch.cat(
-            [
-                torch.cat([a_w[d * nv_per : (d + 1) * nv_per], b_w[d * nv_per : (d + 1) * nv_per]], dim=0)
-                for d in range(tp)
-            ],
-            dim=0,
-        )
+        def ab_prep(_):
+            return torch.cat(
+                [
+                    torch.cat([a_w[d * nv_per : (d + 1) * nv_per], b_w[d * nv_per : (d + 1) * nv_per]], dim=0)
+                    for d in range(tp)
+                ],
+                dim=0,
+            )
+
         tw["ab"] = tpc.shard_w(
-            ab, mesh, dim=-1, memory_config=ttnn.DRAM_MEMORY_CONFIG, cache_path=c("ab"), dtype=ttnn.bfloat8_b
+            a_w,
+            mesh,
+            dim=-1,
+            memory_config=ttnn.DRAM_MEMORY_CONFIG,
+            cache_path=c("ab"),
+            dtype=ttnn.bfloat8_b,
+            prep=ab_prep,
         )
     # Row-parallel out projection: DRAM-width-sharded (like the in-proj) — decode tput win.
     _out_sharded = getattr(args, "gdn_out_weight_memcfg", None) is not None
@@ -221,14 +249,18 @@ class TPGatedDeltaNet:
         self._fuse_ab = self._dram_sharded
         # Fuse prefill norm-allgather + qkvzab in-proj into all_gather_minimal_matmul_async.
         # Requires the folded qkvzab weight; norm's post-AG is disabled in layer.py (GDN, prefill).
-        self._fuse_agmm = self._fuse_ab
+        self._fuse_agmm = self._fuse_ab and tpc.fused_ccl_enabled(self.tt_ccl)  # PCIe / A-B knob: unfused
         # PREFILL out-proj fusion (matmul_reduce_scatter, (8,8) grid). Slight TTFT cost at small ISL
         # (~13k crossover from a fixed warmup/compile overhead) but a large win at long ISL (e.g.
         # 128k ~-2s); overlaps the fp32 GDN-out reduce-scatter with the matmul.
-        self._fuse_out_mmrs_prefill = not self._out_sharded and args.num_devices > 1
+        self._fuse_out_mmrs_prefill = (
+            not self._out_sharded and args.num_devices > 1 and tpc.fused_ccl_enabled(self.tt_ccl)
+        )
         # PREFILL out-proj as column-parallel AG+matmul (takes precedence over the MMRS arm when the
         # col-sharded weight was loaded).
-        self._out_colpar_prefill = "out_colpar" in tw
+        self._out_colpar_prefill = ("out_colpar" in tw) and tpc.fused_ccl_enabled(
+            self.tt_ccl
+        )  # PCIe / A-B knob: MMRS-free unfused path
         # Pre-build chunk masks once (trace-safe; avoids from_torch inside captured trace)
         self.chunk_seq_masks = create_chunk_masks_seq(args.gdn_chunk_size, mesh)
         # Prefill fused-op constant tiles, owned by this layer (avoids process-lifetime C++ cache vs device lifetime).
@@ -434,15 +466,18 @@ class TPGatedDeltaNet:
                 # Prefill non-fused arm (single device, or out-sharded): tuned 2D config vs ttnn-auto.
                 # fp32 [seq,dim] output too big for L1 (42MB) -> DRAM out; separate tt_all_reduce does the RS.
                 # max_cols = device width (11 on BH): wide grid (~10-wide), fp32-neutral.
-                pc = tpc.create_prefill_mlp_matmul_program_config(
-                    x.shape[-2],
-                    weight.shape[-2],
-                    weight.shape[-1],
-                    max_cols=getattr(self.args, "decode_grid_w", 8),
-                    tuning=getattr(self.args, "prefill_tuning", None),
-                )
-                return ttnn.linear(
-                    x, weight, compute_kernel_config=self.cfg, program_config=pc, memory_config=ttnn.DRAM_MEMORY_CONFIG
+                return tpc.prefill_linear(
+                    x,
+                    weight,
+                    lambda m: tpc.create_prefill_mlp_matmul_program_config(
+                        m,
+                        weight.shape[-2],
+                        weight.shape[-1],
+                        max_cols=getattr(self.args, "decode_grid_w", 8),
+                        tuning=getattr(self.args, "prefill_tuning", None),
+                    ),
+                    self.cfg,
+                    ttnn.DRAM_MEMORY_CONFIG,
                 )
             return ttnn.linear(x, weight, compute_kernel_config=self.cfg, memory_config=ttnn.DRAM_MEMORY_CONFIG)
         return tpc.sharded_decode_matmul(
@@ -460,6 +495,10 @@ class TPGatedDeltaNet:
         out_mc: placement of the qkvzab matmul + slices. None → DRAM; prefill+decode now pass L1 to
         keep qkvzab + q/k/v/z/a/b resident (was DRAM to spare NoC traffic — re-measure if reverting)."""
         Nv, qz, az = self.Nv, self.qkv_dim_tp, self.qkvz_dim_tp
+        if self.args.num_devices == 2 and S > tpc.TILE_SIZE:
+            # TP=2 prefill: the per-device qkvzab / qkv / z activations are twice the TP=4 width the L1 budget
+            # was tuned for; keep them in DRAM (decode, S <= 32, keeps the L1 placement).
+            out_mc = None
         _proj_mc = out_mc if out_mc is not None else ttnn.DRAM_MEMORY_CONFIG
         if self._fuse_ab:
             # Prefill: x is K-sharded (norm skipped its AG) -> fused all-gather + qkvzab matmul.
@@ -556,8 +595,10 @@ class TPGatedDeltaNet:
                 None,
                 self.K,
                 self.mesh,
-                # Conv in L1 (output freed before chunk kernel; new_state lands in DRAM internally)
-                memory_config=ttnn.L1_MEMORY_CONFIG,
+                # Conv in L1 (output freed before chunk kernel; new_state lands in DRAM internally). At TP=2 the
+                # per-device conv width is twice the TP=4 one and the bucket-2048 activation no longer fits
+                # beside the other L1-resident prefill tensors -> DRAM.
+                memory_config=ttnn.DRAM_MEMORY_CONFIG if self.args.num_devices == 2 else ttnn.L1_MEMORY_CONFIG,
                 conv_state=_cstate,
                 weight_taps=tw["conv_taps"],
                 bias_dev=None,
@@ -651,20 +692,23 @@ class TPGatedDeltaNet:
             ttnn.deallocate(conv_new_state)
         # Gated RMSNorm + SiLU(z); norm/flatten in L1, gated output in DRAM for out-proj
         _L1 = ttnn.L1_MEMORY_CONFIG
+        # TP=2 prefill: post-scan norm / head relayout outputs are twice the TP=4 width; keep them in DRAM so they
+        # do not collide with the next op's circular buffers (seen on the fabric path at bucket 2048).
+        _pf_mc = ttnn.DRAM_MEMORY_CONFIG if self.args.num_devices == 2 else _L1
         if self._gdn_fuse_out:
             # Fuse adapter relayout with per-head rms_norm + head-flatten.
             # TILE-native head->token relayout (transpose + fold), dropping the
             # TILE->ROW_MAJOR->TILE round-trip. o is head-major (1,Nv,T,Dv).
-            n = ttnn.rms_norm(o, weight=tw["norm_w"], epsilon=1e-6, memory_config=_L1)
+            n = ttnn.rms_norm(o, weight=tw["norm_w"], epsilon=1e-6, memory_config=_pf_mc)
             ttnn.deallocate(o)
             n = ttnn.reshape(n, (1, Nv, T, Dv))
             # Fused head->token relayout: [1,Nv,T,Dv] -> [1,1,T,Nv*Dv].
-            n = ttnn.experimental.nlp_concat_heads(n, memory_config=_L1)
+            n = ttnn.experimental.nlp_concat_heads(n, memory_config=_pf_mc)
             out_f = ttnn.reshape(n, (1, T, self.value_dim_tp))
         else:
-            out_n = ttnn.rms_norm(o, weight=tw["norm_w"], epsilon=1e-6, memory_config=_L1)
+            out_n = ttnn.rms_norm(o, weight=tw["norm_w"], epsilon=1e-6, memory_config=_pf_mc)
             ttnn.deallocate(o)
-            out_f = ttnn.reshape(out_n, (1, T, self.value_dim_tp), memory_config=_L1)
+            out_f = ttnn.reshape(out_n, (1, T, self.value_dim_tp), memory_config=_pf_mc)
             ttnn.deallocate(out_n)
         if self._out_colpar_prefill:
             # Column-parallel out-proj: the gate multiply emits the AGMM input directly as bf16 (the
