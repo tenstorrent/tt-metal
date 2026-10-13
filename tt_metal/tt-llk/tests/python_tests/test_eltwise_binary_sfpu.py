@@ -64,6 +64,7 @@ from helpers.test_variant_parameters import (
     NUM_FACES,
     NUM_TILES_IN_BLOCK,
     SFPU_BCAST_DIM,
+    SFPU_DST_ROUNDING_MODE,
     TILE_COUNT,
     generate_input_dim,
 )
@@ -476,10 +477,12 @@ def sfpu_binary(
     ):
         twos_complement = True
 
-    # SfpuElwpowTile is pow through the body power_binary_tile runs: pow's stimuli, golden and contract.
-    golden_op = (
-        MathOperation.SfpuElwpow if mathop == MathOperation.SfpuElwpowTile else mathop
-    )
+    # SfpuElwpowTile and SfpuElwmulTile are pow and mul through the bodies power_binary_tile and mul_binary_tile run:
+    # their ops' stimuli, golden and contract.
+    golden_op = {
+        MathOperation.SfpuElwpowTile: MathOperation.SfpuElwpow,
+        MathOperation.SfpuElwmulTile: MathOperation.SfpuElwmul,
+    }.get(mathop, mathop)
 
     # FP32 destination tiles occupy twice the register space. Keep four full destination
     # blocks for those formats and four blocks of eight tiles for the remaining formats.
@@ -609,6 +612,7 @@ def sfpu_binary(
             ITERATIONS(iterations),
             BROADCAST_TYPE(bcast),
             SFPU_BCAST_DIM(LlkBroadcastType.None_),
+            SFPU_DST_ROUNDING_MODE(),
         ],
         "runtimes": [
             TILE_COUNT(tile_cnt_A),
@@ -858,6 +862,27 @@ def test_eltwise_binary_sfpu_pow_tile(formats, dest_acc, **run_kwargs):
         formats,
         dest_acc,
         MathOperation.SfpuElwpowTile,
+        broadcast_type=LlkBroadcastType.None_,
+        **run_kwargs,
+    )
+
+
+# The body mul_binary_tile runs, apart from SfpuElwmul's generic loop arm in FLOAT_SWEEP.
+MUL_TILE_SWEEP = dict(
+    formats=input_output_formats([DataFormat.Float32, DataFormat.Float16_b], same=True),
+    dest_acc=[DestAccumulation.No, DestAccumulation.Yes],
+)
+
+
+@blackhole_only
+@parametrize(**MUL_TILE_SWEEP)
+def test_eltwise_binary_sfpu_mul_tile(formats, dest_acc, **run_kwargs):
+    _skip_fp32_no_dest_acc(formats, dest_acc)
+
+    sfpu_binary(
+        formats,
+        dest_acc,
+        MathOperation.SfpuElwmulTile,
         broadcast_type=LlkBroadcastType.None_,
         **run_kwargs,
     )
@@ -1694,6 +1719,7 @@ def _run_sfpu_add_top_row(
             ITERATIONS(iterations),
             BROADCAST_TYPE(LlkBroadcastType.None_),
             SFPU_BCAST_DIM(LlkBroadcastType.None_),
+            SFPU_DST_ROUNDING_MODE(),
         ],
         "runtimes": [
             TILE_COUNT(tile_cnt_A),

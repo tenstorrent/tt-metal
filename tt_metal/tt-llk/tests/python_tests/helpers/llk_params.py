@@ -81,6 +81,8 @@ class MathOperation(Enum):
     # tilized tensor rather than per datum.
     Cumsum = OpSpec("cumsum", MathOpType.SFPU_UNARY)
     Elu = OpSpec("elu", MathOpType.SFPU_UNARY)
+    # Whole-tile column-wise EMA; its golden works on the tilized tensor.
+    Ema = OpSpec("ema", MathOpType.SFPU_UNARY)
     Exp = OpSpec("exponential", MathOpType.SFPU_UNARY)
     Exp2 = OpSpec("exp2", MathOpType.SFPU_UNARY)
     # b^x via the SCALE_EN path of calculate_exponential; dispatched with a bf16
@@ -264,6 +266,7 @@ class MathOperation(Enum):
     SfpuElwpow = OpSpec("POW", MathOpType.SFPU_BINARY)
     # Blackhole only: the body power_binary_tile runs. SfpuElwpow runs the generic loop's POW arm.
     SfpuElwpowTile = OpSpec("POW_TILE", MathOpType.SFPU_BINARY)
+    SfpuElwmulTile = OpSpec("MUL_TILE", MathOpType.SFPU_BINARY)
     SfpuLogaddexp = OpSpec("LOGADDEXP", MathOpType.SFPU_BINARY)
     SfpuLogaddexp2 = OpSpec("LOGADDEXP2", MathOpType.SFPU_BINARY)
     SfpuElwmulInt = OpSpec("MUL", MathOpType.SFPU_BINARY_INT)

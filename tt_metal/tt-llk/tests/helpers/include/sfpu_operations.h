@@ -1692,6 +1692,10 @@ void call_binary_sfpu_operation_init()
     {
         SFPU_BINARY_INIT_FN(power, sfpu_binary_pow_init, (APPROXIMATION_MODE));
     }
+    else if constexpr (BINOP == BinaryOp::MUL_TILE)
+    {
+        SFPU_BINARY_INIT_FN(add1, sfpu_binary_init, (APPROXIMATION_MODE, BinaryOp::MUL));
+    }
 #endif
     else if constexpr (BINOP == BinaryOp::ADD_TOP_ROW)
     {
@@ -1884,8 +1888,18 @@ constexpr SfpuType get_binary_comp_sfpu_type()
  * DST_SYNC_MODE and DST_ACCUM_MODE are the first two template parameters (matching
  * the SFPU_BINARY_CALL / _sfpu_binary_check_ convention) so the dst-bound
  * LLK_ASSERTs run against the kernel's actual sync/accumulation mode.
+ *
+ * DST_ROUNDING_MODE: how a float ADD/SUB/RSUB result is narrowed into a bf16 Dest, as in
+ * add_binary_tile<DstRoundingMode::...>(). Ignored by other ops and with DST_ACCUM_MODE set.
  */
-template <DstSync DST_SYNC_MODE, bool DST_ACCUM_MODE, bool APPROXIMATION_MODE, BinaryOp BINOP, int ITERATIONS = 32, std::uint32_t MATH_FORMAT = 0>
+template <
+    DstSync DST_SYNC_MODE,
+    bool DST_ACCUM_MODE,
+    bool APPROXIMATION_MODE,
+    BinaryOp BINOP,
+    int ITERATIONS                             = 32,
+    std::uint32_t MATH_FORMAT                  = 0,
+    ckernel::DstRoundingMode DST_ROUNDING_MODE = ckernel::DstRoundingMode::Default>
 void call_binary_sfpu_operation(
     const std::uint32_t dst_index_in0 = 0,
     const std::uint32_t dst_index_in1 = 1,
@@ -1900,7 +1914,7 @@ void call_binary_sfpu_operation(
     // The int32 floor and trunc divisions stay per face: with the LLK asserts on, their 32-row form runs out of LREGs here.
     constexpr bool one_call =
         ITERATIONS == 32 &&
-        (BINOP == BinaryOp::DIV || BINOP == BinaryOp::RSUB || BINOP == BinaryOp::POW_TILE || BINOP == BinaryOp::XLOGY || BINOP == BinaryOp::ADD ||
+        (BINOP == BinaryOp::DIV || BINOP == BinaryOp::RSUB || BINOP == BinaryOp::POW_TILE || BINOP == BinaryOp::MUL_TILE || BINOP == BinaryOp::XLOGY || BINOP == BinaryOp::ADD ||
          BINOP == BinaryOp::SUB || (BINOP == BinaryOp::MUL && !is_int32) || BINOP == BinaryOp::LT || BINOP == BinaryOp::GT ||
          BINOP == BinaryOp::LE || BINOP == BinaryOp::GE || BINOP == BinaryOp::EQ || BINOP == BinaryOp::NE || BINOP == BinaryOp::MAX ||
          BINOP == BinaryOp::MIN || BINOP == BinaryOp::FMOD || BINOP == BinaryOp::REMAINDER || BINOP == BinaryOp::ATAN2 || BINOP == BinaryOp::ISCLOSE ||
@@ -1924,6 +1938,7 @@ void call_binary_sfpu_operation(
 #else
     constexpr int PER_FACE_ITERATIONS = 8;
 #endif
+    constexpr bool math_is_int32      = MATH_FORMAT == static_cast<std::uint32_t>(DataFormat::Int32);
     if constexpr (BINOP == BinaryOp::DIV)
     {
         // Route DIV to the dedicated production kernel (calculate_sfpu_binary_div),
@@ -1987,6 +2002,19 @@ void call_binary_sfpu_operation(
             dst_index_out,
             vector_mode);
     }
+    else if constexpr (BINOP == BinaryOp::MUL_TILE)
+    {
+        // The body mul_binary_tile runs; MUL keeps the generic loop's arm.
+        SFPU_BINARY_CALL(
+            DST_SYNC_MODE,
+            DST_ACCUM_MODE,
+            calculate_sfpu_binary_mul,
+            (APPROXIMATION_MODE, BinaryOp::MUL, PER_FACE_ITERATIONS, DST_ACCUM_MODE),
+            dst_index_in0,
+            dst_index_in1,
+            dst_index_out,
+            vector_mode);
+    }
 #endif
     else if constexpr (
         BINOP == BinaryOp::ADD || BINOP == BinaryOp::SUB || BINOP == BinaryOp::MUL || BINOP == BinaryOp::RSUB || BINOP == BinaryOp::XLOGY ||
@@ -2010,7 +2038,7 @@ void call_binary_sfpu_operation(
                 dst_index_out,
                 vector_mode);
         }
-        else if constexpr (BINOP == BinaryOp::SUB && MATH_FORMAT == static_cast<std::uint32_t>(DataFormat::Int32))
+        else if constexpr (BINOP == BinaryOp::SUB && math_is_int32)
         {
             // Int32 SUB must use the integer path (_sub_int_); otherwise it would
             // fall through to calculate_sfpu_binary and subtract the raw integer
@@ -2031,7 +2059,7 @@ void call_binary_sfpu_operation(
                 DST_SYNC_MODE,
                 DST_ACCUM_MODE,
                 calculate_sfpu_binary,
-                (APPROXIMATION_MODE, BINOP, PER_FACE_ITERATIONS, DST_ACCUM_MODE),
+                (APPROXIMATION_MODE, BINOP, PER_FACE_ITERATIONS, DST_ACCUM_MODE, DST_ROUNDING_MODE),
                 dst_index_in0,
                 dst_index_in1,
                 dst_index_out,
@@ -2101,7 +2129,7 @@ void call_binary_sfpu_operation(
         BINOP == BinaryOp::LT || BINOP == BinaryOp::GT || BINOP == BinaryOp::LE || BINOP == BinaryOp::GE || BINOP == BinaryOp::EQ || BINOP == BinaryOp::NE)
     {
         constexpr SfpuType comp_type = get_binary_comp_sfpu_type<BINOP>();
-        if constexpr (MATH_FORMAT == static_cast<std::uint32_t>(DataFormat::Int32))
+        if constexpr (math_is_int32)
         {
             SFPU_BINARY_CALL(
                 DST_SYNC_MODE,
