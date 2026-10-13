@@ -3,6 +3,7 @@
 
 import argparse
 import json
+import math
 import os
 import sys
 
@@ -33,23 +34,25 @@ def lookup(table, model, config, hosts):
 def check(rec, path, label, metric, expected, margin, fast_fails):
     name, unit, fmt, higher_is_better = METRICS[metric]
     value = (rec.get(metric) or {}).get(label)
-    if value is None:
-        print(f"{name} GATE FAIL: {path} has no {metric} at {label}", file=sys.stderr)
+    if not isinstance(value, (int, float)) or not math.isfinite(value):
+        print(f"{name} GATE FAIL: {path} has no finite {metric} at {label}: {value!r}", file=sys.stderr)
         return False
     lo, hi = expected * (1 - margin), expected * (1 + margin)
     print(
         f"{name} GATE {label}: {value:{fmt}} {unit} vs {expected:{fmt}} +/- {margin * 100:.0f}% "
         f"[{lo:{fmt}}, {hi:{fmt}}]"
     )
+    slow = value < lo if higher_is_better else value > hi
+    fast = value > hi if higher_is_better else value < lo
     if fast_fails:
-        if not lo <= value <= hi:
+        if slow or fast:
             print(f"{name} GATE FAIL: {value:{fmt}} outside [{lo:{fmt}}, {hi:{fmt}}]", file=sys.stderr)
             return False
-    elif value < lo if higher_is_better else value > hi:
+    elif slow:
         side, bound = ("below", lo) if higher_is_better else ("above", hi)
         print(f"{name} GATE FAIL: {value:{fmt}} {side} {bound:{fmt}}", file=sys.stderr)
         return False
-    elif value > hi if higher_is_better else value < lo:
+    elif fast:
         side, bound = ("above", hi) if higher_is_better else ("below", lo)
         print(f"{name} GATE WARN: {value:{fmt}} {side} {bound:{fmt}}; update the baseline if this holds")
     print(f"{name} GATE PASS")
@@ -64,7 +67,7 @@ def main():
     parser.add_argument("--config", default="")
     parser.add_argument("--hosts", default="", help="comma-separated hostnames")
     parser.add_argument("--expected-tps", default="", help="explicit tok/s target; overrides the table")
-    parser.add_argument("--margin", default="", help="overrides every metric's margin")
+    parser.add_argument("--margin", default="", help="margin for --expected-tps (default 0.15); the table carries its own")
     parser.add_argument("--require", default="0", help="1 fails the run if nothing was measured")
     args = parser.parse_args()
 
@@ -105,7 +108,7 @@ def main():
         return 1
 
     results = [
-        check(rec, args.perf_json, label, metric, expected, float(args.margin or margin), fast_fails)
+        check(rec, args.perf_json, label, metric, expected, margin, fast_fails)
         for metric, (expected, margin) in baseline.items()
     ]
     return 0 if all(results) else 1
