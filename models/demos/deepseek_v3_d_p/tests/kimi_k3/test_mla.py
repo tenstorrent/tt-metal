@@ -1,38 +1,30 @@
 # SPDX-FileCopyrightText: © 2026 Tenstorrent USA, Inc.
 # SPDX-License-Identifier: Apache-2.0
 
-"""Cold, warm, and long-context performance for one Kimi-K3 MLA layer.
+"""Kimi-K3 MLA correctness and performance for one attention layer.
 
-This is the dense-MLA counterpart of ``sparse_mla/test_sparse_mla_perf.py``.  The scenario
-contract is intentionally identical:
+Coverage:
+* ``test_mla_loudbox_correctness``: SP4 x TP2, full 96 heads, 5,120 fresh tokens
+  on a 51,200-token prefix. Uses Galaxy's CPU-reference output/KV PCC checks, with no timing gate.
+* ``test_mla_loudbox_compute_perf``: SP4 x TP2, 48 heads, 2,560 fresh tokens
+  on a 51,200-token prefix. Matches Galaxy's 640 queries, 24 heads, and prefix-attention arithmetic
+  per chip; gates device time. Four larger KV shards change ring communication and kernel shapes.
+* ``test_mla_chunked_perf``: existing cold/warm/long sweep on QuietBox, LoudBox, or Galaxy.
+  Chunk and prefix scale with SP/8 and global heads with TP/4, preserving per-ring-step shapes.
+  LoudBox uses SP4 x TP2, 48 heads, 2,560 fresh tokens, and a 25,600-token warm prefix.
 
-* ``warm`` profiles one chunk with a 50K-token Galaxy prefix;
-* ``cold`` profiles every chunk from an empty cache through that same warm step; and
-* ``long`` profiles one chunk with a 500K-token Galaxy prefix.
+Performance measures warmed trace replays. Host E2E includes device synchronization; device time
+sums each program's MAX duration across chips. Correctness uses the shared Galaxy test driver.
 
-On smaller boxes both the chunk and cache scale with SP/8.  A LoudBox therefore runs a 2,560-token
-chunk at 25.6K (warm/cold) or 256K (long) on SP=4 x TP=2; a QuietBox uses the same sequence geometry
-on SP=4 x TP=1.  The synthetic perf config also scales the global head count with TP, preserving the
-Galaxy shape of 24 attention heads per chip.  Each ring iteration therefore has the same query, KV,
-and head shapes per chip on every box.
+Run the fixed LoudBox cases::
 
-K3 is deliberately not another variant in the sparse harness.  It has no DSA indexer, uses the dense
-tiled BFP8 KV cache, has NoPE, and adds the output ``g_proj`` gate.  Keeping those facts structural
-avoids fake sparse-cache/indexer axes and makes an accidentally broadened K3 sweep impossible.
+    scripts/run_safe_pytest.sh models/demos/deepseek_v3_d_p/tests/kimi_k3/test_mla.py -k correctness -s
+    scripts/run_safe_pytest.sh models/demos/deepseek_v3_d_p/tests/kimi_k3/test_mla.py -m perf -k compute_perf -s
 
-The measured unit is a traced forward.  Each forward is compiled, captured, replay-warmed once, and
-then replayed under the realtime profiler.  Host E2E includes replay through device synchronization;
-device program durations collapse chips by MAX, matching the sparse-MLA realtime convention.
-
-Run all three cases on a supported Blackhole box::
-
-    scripts/run_safe_pytest.sh \
-      models/demos/deepseek_v3_d_p/tests/kimi_k3/test_mla_perf.py -m perf -s
-
-Narrow with ``-k warm``, ``-k cold``, or ``-k long``.  Outputs live under
-``generated/profiler/kimi_k3_dense_mla_perf``.  Sizes can be overridden with
-``K3_MLA_PERF_CACHE``, ``K3_MLA_PERF_CHUNK``, and ``K3_MLA_PERF_LONG_CACHE``; these are Galaxy-global
-sizes and retain the same SP scaling.
+Select the sweep with ``-m perf -k chunked_perf``; narrow further with ``warm``, ``cold``, or ``long``.
+Sweep sizes can be overridden with ``K3_MLA_PERF_CACHE``, ``K3_MLA_PERF_CHUNK``, and
+``K3_MLA_PERF_LONG_CACHE`` (Galaxy-global sizes, scaled by SP). Fixed LoudBox cases ignore these
+size overrides. Profiler outputs live under ``generated/profiler/kimi_k3_dense_mla_perf``.
 """
 
 import copy
@@ -45,6 +37,7 @@ import time
 from collections import OrderedDict
 from dataclasses import dataclass
 from pathlib import Path
+from statistics import median
 
 import pandas as pd
 import pytest
@@ -58,14 +51,35 @@ from models.demos.deepseek_v3_d_p.reference.kimi_k3_config import KimiK3Config
 from models.demos.deepseek_v3_d_p.tests.fabric_profiles import fabric2d_device_params, torus_xy_device_params
 from models.demos.deepseek_v3_d_p.tests.sparse_mla.sparse_mla_mesh import detect_num_devices
 from models.demos.deepseek_v3_d_p.tests.sparse_mla.sparse_mla_plugin import is_marker_explicitly_selected
+from models.demos.deepseek_v3_d_p.tests.test_mla import _run_chunked_prefill
 from models.demos.deepseek_v3_d_p.tt.mla import ttMLA
 from models.demos.deepseek_v3_d_p.tt.mla.rope import RotarySetup
 from models.demos.deepseek_v3_d_p.tt.tt_ccl import per_axis_topology
+from models.demos.deepseek_v3_d_p.utils.chunk_config import PREFILL_CHUNK_TOKENS, PREFILL_CHUNK_TOKENS_PER_CHIP
 from models.demos.deepseek_v3_d_p.utils.kv_cache_utils import MlaKvCacheFormat, init_mla_kv_cache
 from models.demos.deepseek_v3_d_p.utils.sub_device_trace import SubDeviceTraceController
 from tests.ttnn.profiling.realtime_profiler_utils import profile_realtime_program
 
-pytestmark = pytest.mark.perf
+pytestmark = [
+    pytest.mark.parametrize("variant", ["kimi_k3"], ids=["k3"], indirect=True),
+    pytest.mark.skipif(not is_blackhole(), reason="Kimi-K3 MLA tests require Blackhole"),
+    pytest.mark.timeout(0),
+]
+
+# Workload configuration
+
+LOUDBOX_PREFIX_TOKENS = 50 * 1024
+LOUDBOX_MESH_SHAPE = (4, 2)
+LOUDBOX_PERF_CHUNK_TOKENS = LOUDBOX_MESH_SHAPE[0] * PREFILL_CHUNK_TOKENS_PER_CHIP
+LOUDBOX_PERF_SAMPLES = 3
+# Blackhole LoudBox, FABRIC_2D, 2026-10-13: 10.018 / 10.067 / 10.082 ms traced samples.
+LOUDBOX_PERF_TARGET_NS = 10_100_000
+LOUDBOX_PERF_MARGIN = 0.03
+LOUDBOX_DEVICE_PARAMS = fabric2d_device_params(
+    fabric_payload_size=KimiK3Config.FABRIC_PAYLOAD_SIZE,
+    l1_small_size=KimiK3Config.L1_SMALL_SIZE,
+    trace_region_size=16 * 1024 * 1024,
+)
 
 GALAXY_SP = 8
 GALAXY_TP = 4
@@ -167,9 +181,9 @@ _REPO_ROOT = _THIS_DIR.parents[4]
 _OUTPUT_DIR = _REPO_ROOT / "generated" / "profiler" / "kimi_k3_dense_mla_perf"
 
 
-@pytest.fixture(autouse=True, scope="module")
+@pytest.fixture(autouse=True)
 def _require_perf(request):
-    if is_marker_explicitly_selected(request.config, "perf"):
+    if request.node.get_closest_marker("perf") is None or is_marker_explicitly_selected(request.config, "perf"):
         return
     pytest.skip("K3 MLA perf tests require explicit marker selection: pytest -m perf")
 
@@ -205,6 +219,8 @@ def _require_rt_profiler() -> None:
     if not ttnn.device.IsProgramRealtimeProfilerActive():
         pytest.fail("realtime profiler is inactive (K3 MLA perf requires eligible Blackhole hardware)")
 
+
+# Shared trace profiling and reports
 
 _OP_CODE_RULES = (
     ("/ring_joint_sdpa", "RingJointSDPA"),
@@ -397,7 +413,7 @@ def _write_manifest(*, scenario: str, cache: int, chunk: int, forwards: list[dic
         "created_at": datetime.datetime.now(datetime.timezone.utc).isoformat(),
         "command": (
             "scripts/run_safe_pytest.sh "
-            "models/demos/deepseek_v3_d_p/tests/kimi_k3/test_mla_perf.py "
+            "models/demos/deepseek_v3_d_p/tests/kimi_k3/test_mla.py "
             f"-m perf -k {scenario} -s"
         ),
     }
@@ -449,6 +465,10 @@ def _write_outputs(*, scenario: str, cache: int, chunk: int, forwards: list[dict
     _write_manifest(scenario=scenario, cache=cache, chunk=chunk, forwards=forwards)
 
 
+# Shape-normalized performance sweep
+
+
+@pytest.mark.perf
 @pytest.mark.parametrize("mesh_device", [PERF_WORKLOAD.mesh_shape], ids=[PERF_WORKLOAD.id], indirect=True)
 @pytest.mark.parametrize(
     "device_params",
@@ -457,12 +477,9 @@ def _write_outputs(*, scenario: str, cache: int, chunk: int, forwards: list[dict
     indirect=True,
 )
 @pytest.mark.parametrize("scenario", list(SCENARIOS), ids=list(SCENARIOS))
-@pytest.mark.parametrize("variant", ["kimi_k3"], ids=["k3"], indirect=True)
 @skip_with_llk_assert("LLK assertions perturb kernel timing; K3 MLA perf measurements require them disabled")
 @skip_with_watcher("Watcher perturbs kernel timing; K3 MLA perf measurements require it disabled")
 @pytest.mark.skipif(os.environ.get("CI") == "true", reason="K3 MLA perf requires dedicated Blackhole hardware")
-@pytest.mark.skipif(not is_blackhole(), reason="K3 MLA and the realtime profiler require Blackhole")
-@pytest.mark.timeout(0)
 def test_mla_chunked_perf(mesh_device, device_params, scenario, variant, random_weights):
     if PERF_SKIP_REASON:
         pytest.skip(PERF_SKIP_REASON)
@@ -565,3 +582,113 @@ def test_mla_chunked_perf(mesh_device, device_params, scenario, variant, random_
         logger.info("cold per-iteration traced host ms: " + " ".join(f"{value:.3f}" for value in per_iteration))
 
     _write_outputs(scenario=scenario, cache=cache, chunk=chunk, forwards=forwards, by_op=by_op)
+
+
+# LoudBox correctness and compute proxy
+
+
+@pytest.mark.parametrize("mesh_device", [LOUDBOX_MESH_SHAPE], ids=["sp4xtp2"], indirect=True)
+@pytest.mark.parametrize("device_params", [LOUDBOX_DEVICE_PARAMS], ids=["fabric2d"], indirect=True)
+@pytest.mark.skipif(detect_num_devices() != 8, reason="These workloads require an eight-device LoudBox")
+def test_mla_loudbox_correctness(request, mesh_device, device_params, variant):
+    """Full K3 dimensions and 50k+5k; Galaxy's reference/PCC checks, with no timing gate."""
+    _run_chunked_prefill(
+        request,
+        mesh_device,
+        reference="cpu",
+        use_pretrained=bool(os.environ.get(variant.env_var)),
+        topology=per_axis_topology(device_params["fabric_config"]),
+        chunk_size_global=PREFILL_CHUNK_TOKENS,
+        iters_isl=[PREFILL_CHUNK_TOKENS],
+        prefill_len=LOUDBOX_PREFIX_TOKENS,
+    )
+
+
+@pytest.mark.parametrize("mesh_device", [LOUDBOX_MESH_SHAPE], ids=["sp4xtp2"], indirect=True)
+@pytest.mark.parametrize("device_params", [LOUDBOX_DEVICE_PARAMS], ids=["fabric2d"], indirect=True)
+@pytest.mark.skipif(detect_num_devices() != 8, reason="These workloads require an eight-device LoudBox")
+@pytest.mark.perf
+@skip_with_llk_assert("LLK assertions perturb performance measurements")
+@skip_with_watcher("Watcher perturbs performance measurements")
+def test_mla_loudbox_compute_perf(mesh_device, device_params, random_weights):
+    """Gate the median sum of per-program MAX chip durations from three warmed trace replays."""
+    _require_rt_profiler()
+    config, weights = random_weights
+    assert tuple(mesh_device.shape) == LOUDBOX_MESH_SHAPE
+    config, weights = _shape_normalized_config_and_weights(config, weights, LOUDBOX_MESH_SHAPE[1])
+    assert config.num_attention_heads == 48
+    total = LOUDBOX_PREFIX_TOKENS + LOUDBOX_PERF_CHUNK_TOKENS
+    config.max_seq_len = config.max_position_embeddings = total
+
+    mla = ttMLA(
+        config,
+        weights,
+        mesh_device,
+        layer_idx=KimiK3Config.mla_layer_ids()[0],
+        seq_len=total,
+        sp_axis=0,
+        tp_axis=1,
+        topology=per_axis_topology(device_params["fabric_config"]),
+        is_chunked=True,
+        active_seq_len=LOUDBOX_PERF_CHUNK_TOKENS,
+        layer_num=1,
+        has_indexer=False,
+    )
+    kv_cache = init_mla_kv_cache(
+        cache_format=MlaKvCacheFormat.BFP8_TILE,
+        hf_config=config,
+        mesh_device=mesh_device,
+        seq_len=total,
+        mesh_shape=list(mesh_device.shape),
+        sp_axis=0,
+        num_kvpe_cache_layers=1,
+    )
+    hidden = torch.randn(
+        1,
+        1,
+        LOUDBOX_PERF_CHUNK_TOKENS,
+        config.hidden_size,
+        generator=torch.Generator().manual_seed(42),
+        dtype=torch.bfloat16,
+    )
+    tt_hidden = ttnn.from_torch(
+        hidden,
+        device=mesh_device,
+        dtype=ttnn.bfloat16,
+        layout=ttnn.TILE_LAYOUT,
+        memory_config=ttnn.DRAM_MEMORY_CONFIG,
+        mesh_mapper=ttnn.ShardTensor2dMesh(mesh_device, mesh_shape=LOUDBOX_MESH_SHAPE, dims=(-2, -1)),
+    )
+    samples = []
+    for sample in range(LOUDBOX_PERF_SAMPLES):
+        forward = _profile_traced_forward(
+            mesh_device, mla, lambda: mla.forward(tt_hidden, {}, kv_cache, actual_start=LOUDBOX_PREFIX_TOKENS)
+        )
+        ring_ns = sum(
+            program["duration_ns"]
+            for program in forward["programs"].values()
+            if _op_code(program["kernel_sources"]) == "RingJointSDPA"
+        )
+        assert ring_ns > 0, "realtime profiler returned no ring MLA program"
+        samples.append(
+            {
+                "sample": sample,
+                "device_ns": sum(program["duration_ns"] for program in forward["programs"].values()),
+                "ring_mla_ns": ring_ns,
+                "host_ns": forward["host_duration_ns"],
+            }
+        )
+    _OUTPUT_DIR.mkdir(parents=True, exist_ok=True)
+    pd.DataFrame(samples).to_csv(_OUTPUT_DIR / "loudbox_sp4xtp2_compute_samples.csv", index=False)
+    measured_ns = median(sample["device_ns"] for sample in samples)
+    limit_ns = LOUDBOX_PERF_TARGET_NS * (1 + LOUDBOX_PERF_MARGIN)
+    logger.info(
+        f"K3 LoudBox SP4xTP2: chunk={LOUDBOX_PERF_CHUNK_TOKENS}, prefix={LOUDBOX_PREFIX_TOKENS}, heads=48; "
+        f"device samples (ns)={[sample['device_ns'] for sample in samples]}, median={measured_ns:,.0f} ns; "
+        f"ring MLA samples (ns)={[sample['ring_mla_ns'] for sample in samples]}; "
+        f"target={LOUDBOX_PERF_TARGET_NS:,} ns, regression limit={limit_ns:,.0f} ns"
+    )
+    assert 0 < measured_ns <= limit_ns, (
+        f"K3 LoudBox device time {measured_ns:,.0f} ns exceeds {limit_ns:,.0f} ns "
+        f"(target {LOUDBOX_PERF_TARGET_NS:,} ns + {LOUDBOX_PERF_MARGIN:.0%})"
+    )
