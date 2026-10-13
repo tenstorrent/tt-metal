@@ -19,6 +19,7 @@ from helpers.matmul_sweep import (
     PERF_RING_TILES,
     generate_tile_dims,
     is_dest_half_bfp_pack_hang,
+    matmul_pack_block,
     mid_fill_rt_ct_pairs,
     unpack_matmul_fits_perf_ring,
 )
@@ -34,6 +35,7 @@ from helpers.test_variant_parameters import (
     DEST_SYNC,
     LOOP_FACTOR,
     MATH_FIDELITY,
+    MATMUL_PACK_BLOCK,
     NUM_FACES,
     THROTTLE_LEVEL,
     TILE_COUNT,
@@ -163,6 +165,16 @@ def test_perf_matmul(
             MATH_FIDELITY(math_fidelity),
             DEST_SYNC(dest_sync),
             THROTTLE_LEVEL(),
+            MATMUL_PACK_BLOCK(
+                matmul_pack_block(
+                    formats,
+                    dest_sync,
+                    math_fidelity,
+                    dims.rt_dim,
+                    dims.ct_dim,
+                    dims.kt_dim,
+                )
+            ),
         ],
         runtimes=[
             UNPACK_TRANS_FACES(Transpose.No),
