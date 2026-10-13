@@ -19,16 +19,8 @@ namespace ttnn::prim {
 // use_multicore and sub_core_grids are not part of the key: the codegen path always spreads work over the full
 // compute grid, and the routing gate declines any call that asks for anything else.
 struct PadCodegenParams {
-    // 4D logical output shape; N_out/C_out/H_out/W_out mirror it.
+    // 4D logical output shape. Padding is trailing only, so the input sits at the origin of the output.
     ttnn::Shape output_logical_shape;
-    uint32_t N_out{};
-    uint32_t C_out{};
-    uint32_t H_out{};
-    uint32_t W_out{};
-    uint32_t front_n{};
-    uint32_t front_c{};
-    uint32_t front_h{};
-    uint32_t front_w{};
     uint32_t packed_pad_value{};
     tt::tt_metal::MemoryConfig output_mem_config;
 };

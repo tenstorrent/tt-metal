@@ -47,16 +47,17 @@ bool composes_via_bf16(const Tensor& input, const ttnn::prim::PadCodegenParams& 
 // The 32-bit word the kernels replicate into pad regions.
 uint32_t pack_pad_value(tt::tt_metal::DataType dtype, float value);
 
-// Builds the attributes for padding a rank-4 tensor by `front`/`after` elements per dim.
+// Builds the attributes for padding a rank-4 tensor by `after` trailing elements per dim. The kernels pad only at
+// the end, so there is no leading padding to carry.
 ttnn::prim::PadCodegenParams make_codegen_params(
     const Tensor& input,
-    std::span<const uint32_t> front,
     std::span<const uint32_t> after,
     float value,
     const tt::tt_metal::MemoryConfig& output_mem_config);
 
 // Routing entry: the attributes when the codegen gate accepts the call, nullopt when it declines. Same decision as
-// make_codegen_params followed by supported_by_codegen, but declines before the L1 query when it can.
+// make_codegen_params followed by supported_by_codegen, but declines before the L1 query when it can. Nonzero
+// `front` padding is declined.
 std::optional<ttnn::prim::PadCodegenParams> plan_codegen(
     const Tensor& input,
     std::span<const uint32_t> front,

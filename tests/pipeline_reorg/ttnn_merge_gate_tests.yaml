@@ -20,23 +20,11 @@
   budget_type: merge_gate
   owner_id: U076Z1JJUQZ # Artem Yerofieiev
 
-# Codegen-path coverage for every op that has one (untilize, repeat, repeat_interleave, gather and
-# pad today). `-k codegen` selects each op's tests that pin the codegen kernels, so a newly covered op
-# joins this entry by appending its unit-test file rather than by adding another job. All five pin
-# them through the verification-only entries in ttnn._ttnn.operations.data_movement -- none of the
-# five public APIs takes an implementation argument.
-#
-# Those pinned tests are the ones worth gating a merge on: they run the codegen kernels and
-# compare against native on the same input. The generated routing matrices under
-# tests/ttnn/nightly only assert that out-of-scope shapes fall BACK to native, so nothing in
-# them fails when a codegen kernel itself breaks -- and they cost 1-5 minutes per op, which is
-# why they stay in nightly. This selection is 78 tests against the job's 5-minute budget. The last
-# recorded timing -- roughly 35s of wall-clock pytest on an N300, device bring-up and kernel
-# compiles included -- was taken over a smaller selection, so treat it as a floor.
-#
-# Hardware only, to keep the gate cheap. Codegen kernels are not blocked from ttsim -- untilize's
-# codegen tests pass on both sim SKUs and sanity runs them there -- but the simulator would
-# cost minutes here to cover a path hardware already covers in seconds.
+# Codegen-path coverage for every op that has one. `-k codegen` picks the tests that force the
+# codegen kernels and compare them with native; a new op joins by appending its unit-test file.
+# The nightly routing matrices under tests/ttnn/nightly only check fallback to native, and they
+# are too slow for the gate, so they stay in nightly.
+# Hardware only: the simulator would take minutes to cover what hardware covers in seconds.
 - name: "ttnn codegen ops"
   cmd: >-
     pytest --timeout 60 -xv

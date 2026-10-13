@@ -14,6 +14,7 @@
 #include "ttnn/operations/copy/typecast/typecast.hpp"
 #include "ttnn/operation.hpp"
 #include <algorithm>
+#include <array>
 #include <numeric>
 #include <ttnn/tensor/types.hpp>
 
@@ -320,6 +321,37 @@ ttnn::Tensor pad_impl(
         sub_core_grids);
 }
 
+ttnn::Tensor to_4d(const ttnn::Tensor& tensor) {
+    const auto rank = tensor.logical_shape().rank();
+    if (rank < 4) {
+        return ttnn::unsqueeze_to_4D(tensor);
+    }
+    if (rank > 4) {
+        return squeeze_from_ND_to_4D(tensor);
+    }
+    return tensor;
+}
+
+struct Padding4D {
+    std::array<uint32_t, 4> front{};
+    std::array<uint32_t, 4> after{};
+};
+
+// Padding of the trailing four dims of a rank-`rank` tensor, as the 4D tensor from to_4d sees it. `padding` is
+// right-aligned to the dims and may omit leading ones. Dims below rank - 4 are consumed before the squeeze, so they
+// have no slot here.
+Padding4D trailing_4d_padding(const ttsl::SmallVector<PadSpecDim>& padding, int rank) {
+    const int skipped = rank - static_cast<int>(padding.size());
+    Padding4D p;
+    for (int d = std::max(0, rank - 4); d < rank; ++d) {
+        if (d >= skipped) {
+            p.front[d + 4 - rank] = padding[d - skipped].before_elements;
+            p.after[d + 4 - rank] = padding[d - skipped].after_elements;
+        }
+    }
+    return p;
+}
+
 ttnn::Tensor pad_impl(
     const ttnn::Tensor& input_tensor,
     ttsl::SmallVector<PadSpecDim> padding,
@@ -337,15 +369,7 @@ ttnn::Tensor pad_impl(
 
     TT_FATAL(padding.size() == original_rank, "ttnn.pad: padding must be the same length as the input tensor rank");
 
-    // Unsqueeze Tensor to 4D if it is not already
-    ttnn::Tensor input_tensor_4D;
-    if (input_tensor.logical_shape().rank() < 4) {
-        input_tensor_4D = ttnn::unsqueeze_to_4D(input_tensor);
-    } else if (input_tensor.logical_shape().rank() > 4) {
-        input_tensor_4D = squeeze_from_ND_to_4D(input_tensor);
-    } else {
-        input_tensor_4D = input_tensor;
-    }
+    const ttnn::Tensor input_tensor_4D = to_4d(input_tensor);
     size_t padding_size = 4;
     size_t extra_index = input_tensor.logical_shape().rank() - 4;
     if (input_tensor.logical_shape().rank() < 4) {
@@ -454,17 +478,6 @@ ttnn::Tensor invoke_rm(
     return output_tensor;
 }
 
-ttnn::Tensor to_4d(const ttnn::Tensor& tensor) {
-    const auto rank = tensor.logical_shape().rank();
-    if (rank < 4) {
-        return ttnn::unsqueeze_to_4D(tensor);
-    }
-    if (rank > 4) {
-        return squeeze_from_ND_to_4D(tensor);
-    }
-    return tensor;
-}
-
 // Pads a TILE tensor through codegen; nullopt means the caller should take the native path.
 std::optional<ttnn::Tensor> pad_tile_codegen(
     const ttnn::Tensor& input_tensor,
@@ -479,13 +492,7 @@ std::optional<ttnn::Tensor> pad_tile_codegen(
     namespace pc = ttnn::operations::data_movement::pad_codegen;
     const auto rank = static_cast<int>(input_tensor.logical_shape().rank());
     const ttnn::Tensor input_4d = to_4d(input_tensor);
-
-    // Dims below rank - 4 were consumed before the squeeze, so only the trailing four reach the kernel.
-    std::array<uint32_t, 4> front{};
-    std::array<uint32_t, 4> after{};
-    for (int d = std::max(0, rank - 4); d < rank; ++d) {
-        after[d + 4 - rank] = padding_vec[d].after_elements;
-    }
+    const auto [front, after] = trailing_4d_padding(padding_vec, rank);
 
     if (route != PadRoute::Codegen && !pc::supported_execution_controls(use_multicore, sub_core_grids)) {
         return std::nullopt;
@@ -501,8 +508,8 @@ std::optional<ttnn::Tensor> pad_tile_codegen(
 
     if (pc::composes_via_bf16(input_4d, params)) {
         const ttnn::Tensor decoded = ttnn::typecast(input_4d, DataType::BFLOAT16);
-        const auto bf16_params = pc::make_codegen_params(
-            decoded, front, after, value, memory_config_arg.value_or(input_tensor.memory_config()));
+        const auto bf16_params =
+            pc::make_codegen_params(decoded, after, value, memory_config_arg.value_or(input_tensor.memory_config()));
         auto padded = ttnn::prim::pad_codegen(decoded, bf16_params);
         auto encoded = ttnn::typecast(padded, input_tensor.dtype());
         return ttnn::experimental::view(encoded, requested_logical_shape, requested_padded_shape);
@@ -717,15 +724,7 @@ void require_codegen_supported(
     if (rank <= 4) {
         return;
     }
-    const int skipped = rank - static_cast<int>(padding.size());
-    std::array<uint32_t, 4> front{};
-    std::array<uint32_t, 4> after{};
-    for (int d = std::max(0, rank - 4); d < rank; ++d) {
-        if (d >= skipped) {
-            front[d + 4 - rank] = padding[d - skipped][0];
-            after[d + 4 - rank] = padding[d - skipped][1];
-        }
-    }
+    const auto [front, after] = trailing_4d_padding(to_pad_spec(padding), rank);
     const ttnn::Tensor input_4d = to_4d(input_tensor);
     TT_FATAL(
         pc::plan_codegen(input_4d, front, after, value, memory_config_arg.value_or(input_tensor.memory_config()))

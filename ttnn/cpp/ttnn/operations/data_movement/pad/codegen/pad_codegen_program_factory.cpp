@@ -138,8 +138,11 @@ ProgramDescriptor build_pad_tiled(
 
     const auto& in_shape = input.logical_shape();
     const Coord4 in_tiles{in_shape[0], in_shape[1], tt::div_up(in_shape[2], tile_h), tt::div_up(in_shape[3], tile_w)};
-    const Coord4 out_tiles{attrs.N_out, attrs.C_out, tt::div_up(attrs.H_out, tile_h), tt::div_up(attrs.W_out, tile_w)};
-    const Coord4 front_tiles{attrs.front_n, attrs.front_c, attrs.front_h / tile_h, attrs.front_w / tile_w};
+    const auto& out_shape = attrs.output_logical_shape;
+    const Coord4 out_tiles{
+        out_shape[0], out_shape[1], tt::div_up(out_shape[2], tile_h), tt::div_up(out_shape[3], tile_w)};
+    // The gate declines leading padding, so the data window starts at the origin of every dim.
+    const Coord4 front_tiles{};
 
     const uint32_t total = out_tiles.n * out_tiles.c * out_tiles.h * out_tiles.w;
     const CoreSplit split = split_work(input, total);

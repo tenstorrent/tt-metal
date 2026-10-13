@@ -14,6 +14,7 @@ from tests.ttnn.unit_tests.operations.test_utils import (
     TILE_WIDTH,
 )
 from tests.ttnn.utils_for_testing import assert_with_pcc, assert_allclose
+from tests.ttnn.utils_for_testing import assert_equal as assert_tensors_equal
 import ttnn
 
 torch.manual_seed(0)
@@ -1798,8 +1799,7 @@ def _torch_pad(x, padding, value):
 
 
 def _assert_pad_matches(expected, output):
-    assert output.shape == expected.shape
-    assert torch.equal(expected.to(torch.float64), output.to(torch.float64))
+    assert_tensors_equal(expected.to(torch.float64), output.to(torch.float64))
 
 
 # A nonzero value is what exercises the partial-tile fill: from_torch already zeroes the unused lanes.
@@ -1951,8 +1951,7 @@ def test_pad_codegen_matches_native_bitwise_for_unrepresentable_value(device):
     codegen_input = ttnn.from_torch(x, dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT, device=device)
     native = ttnn.to_torch(_pad_force_native(native_input, padding, value))
     codegen = ttnn.to_torch(_pad_force_codegen(codegen_input, padding, value))
-    assert native.shape == codegen.shape
-    assert torch.equal(native.view(torch.int16), codegen.view(torch.int16))
+    assert_tensors_equal(native.view(torch.int16), codegen.view(torch.int16))
 
 
 def test_pad_codegen_declines_input_padded_past_tile_grid(device, expect_error):
@@ -1961,14 +1960,23 @@ def test_pad_codegen_declines_input_padded_past_tile_grid(device, expect_error):
     x = torch.rand([1, 1, 32, 32], dtype=torch.bfloat16)
     rm = ttnn.from_torch(x, dtype=ttnn.bfloat16, layout=ttnn.ROW_MAJOR_LAYOUT, device=device)
     xt = ttnn.tilize_with_val_padding(rm, [1, 1, 64, 64], 7.0)
-    assert list(xt.padded_shape) == [1, 1, 64, 64]
+    assert list(xt.padded_shape) == [1, 1, 64, 64], f"padded shape {list(xt.padded_shape)}, expected [1, 1, 64, 64]"
     padding = [[0, 0], [0, 0], [0, 0], [0, 32]]
     device.clear_program_cache()
     golden = ttnn.to_torch(_pad_force_native(xt, padding, 0.0))
     entries_before = device.num_program_cache_entries()
     output = ttnn.to_torch(ttnn.pad(xt, padding, 0.0))
-    assert torch.equal(golden, output)
+    assert_tensors_equal(golden, output)
     assert device.num_program_cache_entries() == entries_before, "auto routed the over-padded input to codegen"
+    with expect_error(RuntimeError, "does not support"):
+        _pad_force_codegen(xt, padding, 0.0)
+
+
+def test_pad_codegen_declines_zero_volume_input(device, expect_error):
+    # An empty input gives the codegen program no tiles to split over cores, so the gate must refuse it.
+    x = torch.rand([0, 1, 32, 32], dtype=torch.bfloat16)
+    xt = ttnn.from_torch(x, dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT, device=device)
+    padding = [[0, 0], [0, 0], [0, 0], [0, 32]]
     with expect_error(RuntimeError, "does not support"):
         _pad_force_codegen(xt, padding, 0.0)
 
