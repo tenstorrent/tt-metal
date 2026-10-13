@@ -818,3 +818,15 @@ first A/B then measured HiFi4 twice (the agent had put the default back on the o
   Kimi K2.7 4x4 layer plan (page + text version), which the repo map's sharding row now points at.
 - Still open: the staleness re-check after a rebase / fork sync (the anchors make it mechanical) belongs in a
   `/rebase-bringup` skill.
+
+## F60 (2026-10-13): /rebase-bringup skill; knowledge staleness lister and procedure
+
+- The rebase of 2026-10-12 (llk_helper_library 73027b6e6ff -> bdc576fa652) done by hand, written down as
+  `skill/rebase-bringup/SKILL.md`: baseline, rebase (blob prefetch in a partial clone, original-op conflict policy,
+  tree verification), fork syncs by 3-way merge of fork_op.py copies, API ports of source-less forks, fork test and
+  signature re-keys, fork_source re-records, per-model verification, publish with a backup.
+- Staleness, isolated as `skill/rebase-bringup/staleness.md` (self-contained, runnable by an agent on its own) on top
+  of `knowledge/stale.py`: per entry, `Seen at:` (else the blame commit; entries moved into a model's file keep the
+  shared file's age), `Applies to:` resolved to repo paths (paths, partial paths by suffix, op names through
+  `bind_function<"name">` and the fork folders), the commits since on them; status changed / anchor-missing /
+  unanchored / unchanged; repo-map rows naming missing paths. At a6b2f86ab9a: 211 entries, 42 changed, 18 unanchored.
