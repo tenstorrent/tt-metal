@@ -70,3 +70,32 @@ def test_changed_unchanged_unanchored_and_moved_entries(tmp_path):
     moved = check_entry(entries_of(model, repo)[0], res, head)
     assert moved["since"] == base  # its age is the shared file's, not the commit that moved it
     assert moved["status"] == "changed"
+
+
+def test_needs_probe_method_and_own_model_paths(tmp_path):
+    repo = tmp_path
+    _git(repo, "init", "-q")
+    for m in ("a", "b"):
+        f = repo / f"models/demos/{m}/tt/mhc.py"
+        f.parent.mkdir(parents=True)
+        f.write_text("x = 1\n")
+    (repo / "models/demos/a/bringup").mkdir(parents=True)
+    base = _commit(repo, "base")
+    model = repo / "models/demos/a/bringup/known_issues.md"
+    model.write_text(
+        "# Known issues: a\n\n"
+        + _entry("Own file", "tt/mhc.py", base)
+        + _entry("Method", "method (component tests)", base)
+        + f"- **Open.** Symptom: s. Cause: c. Fix: f. Applies to: tt/mhc.py. Seen at: {base}. Check: p. "
+        f"Unverified since: {base}. Found: a T.1.\n"
+    )
+    _commit(repo, "lessons")
+    (repo / "models/demos/b/tt/mhc.py").write_text("x = 2\n")  # another model's file of the same name
+    _commit(repo, "b: change mhc")
+    head = _git(repo, "rev-parse", "--short=11", "HEAD")
+    res = Resolver(repo, head)
+    got = {e["title"]: check_entry(e, res, head) for e in entries_of(model, repo)}
+    assert got["Own file."]["anchors"] == ["models/demos/a/tt/mhc.py"]  # this model's tt/mhc.py, not b's
+    assert got["Own file."]["status"] == "unchanged"
+    assert got["Method."]["status"] == "method"
+    assert got["Open."]["status"] == "needs-probe"
