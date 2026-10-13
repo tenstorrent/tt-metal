@@ -83,7 +83,8 @@ tt::DataFormat index_cb_data_format_for(
  *
  * 4. MEMORY AND CORE CONSTRAINTS: Pass verify_multi_core_cost() checks
  *    - Work must be divisible across available cores without remainder
- *    - Memory costs (gather + local per core) must fit within L1 cache limits
+ *    - Memory costs (gather + local per core, plus the landing tiles with the tree merge) must fit within L1
+ *    - With the tree merge each split must be wider than K
  *    - Contiguous rectangular core arrangement must be possible
  *    - Split size must meet minimum dimension per core requirements
  *    - Must be genuinely multi-core beneficial (require > 1 core)
@@ -148,6 +149,7 @@ TopKDeviceOperation::program_factory_t TopKDeviceOperation::select_program_facto
             device->l1_size_per_core(),               // L1 memory per core
             value_tile_size,                          // Value tile memory size
             index_tile_size,                          // Index tile memory size
+            device->arch() == tt::ARCH::BLACKHOLE,    // Tree merge of the local results
             input_tensor.tensor_spec().tile().get_width());
     }
 
@@ -354,8 +356,9 @@ void TopKDeviceOperation::validate_on_program_cache_miss(
             args.k,                                   // Top-K value
             core_range,                               // Available cores
             device->allocator()->get_statistics(tt::tt_metal::BufferType::L1).largest_free_block_bytes,  // L1 memory
-            value_tile_size,  // Value tile size
-            index_tile_size,  // Index tile size
+            value_tile_size,                        // Value tile size
+            index_tile_size,                        // Index tile size
+            device->arch() == tt::ARCH::BLACKHOLE,  // Tree merge of the local results
             input_tensor.tensor_spec().tile().get_width());
 
         // Fallback to single-core if multi-core is not feasible

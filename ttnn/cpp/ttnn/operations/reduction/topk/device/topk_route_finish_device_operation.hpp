@@ -48,6 +48,9 @@ using spec_return_value_t = std::tuple<tt::tt_metal::TensorSpec, tt::tt_metal::T
 
 namespace program {
 
+// 4 when the factory hands out single face units, 2 for half tile units.
+uint32_t finish_units_per_tile(const Tensor& input, const Tensor& indices, uint32_t num_cores);
+
 struct TopkRouteFinishSharedVariables {
     tt::tt_metal::KernelHandle reader_kernel_id{};
     tt::tt_metal::KernelHandle writer_kernel_id{};

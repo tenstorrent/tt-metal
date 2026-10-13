@@ -55,6 +55,8 @@ constexpr uint32_t shard_physical_sp = get_compile_time_arg_val(num_common_ct_ar
 // shard_key_stripes ahead of the physical SP size, so these moved from +10/+11 to +11/+12.
 constexpr bool chunk_start_from_metadata = get_compile_time_arg_val(num_common_ct_args + 11) != 0;
 constexpr uint32_t cb_meta_derived = get_compile_time_arg_val(num_common_ct_args + 12);
+// Heads the blocked gate multiply sums per DEST pass, the passes added in L1 by the packer (0 = one pass).
+constexpr uint32_t mul_heads_per_pass = get_compile_time_arg_val(num_common_ct_args + 13);
 
 // k-cols sharing ONE dest acquire in the blocked-custom mul (dest-bounded). One unpack context per head
 // (w[h] + ct_dim qk cols), so unpack-context sync is paid 1/ct_dim of the per-tile bcast-mul rate.
@@ -261,7 +263,9 @@ inline void matmul_phase(uint32_t r, uint32_t col_base, uint32_t cols, uint32_t 
 /** PHASE 2 -- gate-multiply the batch's cb_qk by w and head-reduce into cb_acc_strip via the blocked
  *  bcast-col MUL. Per ct_dim-col sub-batch, one dest acquire holds the col accumulators; each head is one
  *  unpack context (w[h] once + ct_dim cols) MAC'ing onto dest[0..n_cols), so unpack-context sync is per
- *  head, not per (col, head). cb_qk is head-major; whole batch shares one set_mul_mode (w col-independent). */
+ *  head, not per (col, head). With mul_heads_per_pass 0 or >= reduce_heads all heads share one acquire;
+ *  otherwise (above LoFi) each pass of mul_heads_per_pass heads is packed and the passes sum in L1.
+ *  cb_qk is head-major; whole batch shares one set_mul_mode (w col-independent). */
 inline void mul_phase(uint32_t r, uint32_t slot_base, uint32_t col_base, uint32_t cols, uint32_t head_base) {
     const uint32_t batch_tiles = cols * reduce_heads;
     // gate per (head, row); this group's heads are [head_base, +reduce_heads) of row r.
@@ -272,18 +276,39 @@ inline void mul_phase(uint32_t r, uint32_t slot_base, uint32_t col_base, uint32_
     CircularBuffer(cb_w).wait_front(w_group_tiles);  // gates popped in kernel_main
     set_mul_mode_custom<cb_qk, cb_w, cb_acc_strip>();
     qk.wait_front(batch_tiles);
-    for (uint32_t sub_base = 0; sub_base < cols; sub_base += mul_ct_dim) {
-        const uint32_t n_cols = (sub_base + mul_ct_dim <= cols) ? mul_ct_dim : (cols - sub_base);
-        tile_regs_acquire();
-        for (uint32_t hl = 0; hl < reduce_heads; ++hl) {
-            mul_tiles_bcast_cols_custom(cb_qk, cb_w, hl * cols + sub_base, w_base + hl, 0, n_cols);
+    if constexpr (mul_heads_per_pass == 0 || mul_heads_per_pass >= reduce_heads) {
+        for (uint32_t sub_base = 0; sub_base < cols; sub_base += mul_ct_dim) {
+            const uint32_t n_cols = (sub_base + mul_ct_dim <= cols) ? mul_ct_dim : (cols - sub_base);
+            tile_regs_acquire();
+            for (uint32_t hl = 0; hl < reduce_heads; ++hl) {
+                mul_tiles_bcast_cols_custom(cb_qk, cb_w, hl * cols + sub_base, w_base + hl, 0, n_cols);
+            }
+            tile_regs_commit();
+            tile_regs_wait();
+            for (uint32_t out_col = 0; out_col < n_cols; ++out_col) {
+                pack_tile(out_col, cb_acc_strip, slot_base + col_base + sub_base + out_col);
+            }
+            tile_regs_release();
         }
-        tile_regs_commit();
-        tile_regs_wait();
-        for (uint32_t out_col = 0; out_col < n_cols; ++out_col) {
-            pack_tile(out_col, cb_acc_strip, slot_base + col_base + sub_base + out_col);
+    } else {
+        for (uint32_t h0 = 0; h0 < reduce_heads; h0 += mul_heads_per_pass) {
+            const uint32_t h1 = (h0 + mul_heads_per_pass < reduce_heads) ? h0 + mul_heads_per_pass : reduce_heads;
+            pack_reconfig_l1_acc(h0 == 0 ? 0 : 1);
+            for (uint32_t sub_base = 0; sub_base < cols; sub_base += mul_ct_dim) {
+                const uint32_t n_cols = (sub_base + mul_ct_dim <= cols) ? mul_ct_dim : (cols - sub_base);
+                tile_regs_acquire();
+                for (uint32_t hl = h0; hl < h1; ++hl) {
+                    mul_tiles_bcast_cols_custom(cb_qk, cb_w, hl * cols + sub_base, w_base + hl, 0, n_cols);
+                }
+                tile_regs_commit();
+                tile_regs_wait();
+                for (uint32_t out_col = 0; out_col < n_cols; ++out_col) {
+                    pack_tile<true>(out_col, cb_acc_strip, slot_base + col_base + sub_base + out_col);
+                }
+                tile_regs_release();
+            }
         }
-        tile_regs_release();
+        pack_reconfig_l1_acc(0);
     }
     qk.pop_front(batch_tiles);
 }
