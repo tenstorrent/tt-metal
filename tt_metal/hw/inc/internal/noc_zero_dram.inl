@@ -42,7 +42,7 @@ inline void Noc::async_write_zeros(
     uint32_t remaining = size_bytes;
     while (remaining > 0) {
         uint32_t curr = (remaining > (uint32_t)NOC_MAX_BURST_SIZE) ? (uint32_t)NOC_MAX_BURST_SIZE : remaining;
-        noc_async_write(src_addr, dst, curr, noc_id_);
+        noc_async_write_impl(src_addr, dst, curr, noc_id_);
         dst += curr;
         remaining -= curr;
     }

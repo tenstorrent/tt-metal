@@ -598,11 +598,6 @@ TEST_F(UnitMeshCQSingleCardFixture, BufRwMultiTensorTracksCorrectObjects) {
     EXPECT_EQ(name_set(rw.writes), (std::set<std::string_view>{"out"}));
 }
 
-// Coverage of op-to-op R/W inference beyond plain Noc::async_read/async_write on a TensorAccessor
-// (hazard_buf_rw_paths.cpp): each binding is touched through one other transfer path or endpoint kind, and must
-// resolve as that path implies. A path the notes miss shows up as its binding missing from a set -- the unsafe
-// failure (a detector would see no access and relax a real hazard). Compile + one launch; no hazard is timed, so it
-// runs on any architecture and either dispatch mode.
 TEST_F(AnyDispatchMeshDeviceSingleCardFixture, BufRwCoversEveryTransferPathAndEndpoint) {
     auto md = devices_.at(0);
     IDevice* dev = md->get_devices()[0];
@@ -670,7 +665,8 @@ TEST_F(AnyDispatchMeshDeviceSingleCardFixture, BufRwCoversEveryTransferPathAndEn
         }
         return s;
     };
-    EXPECT_FALSE(rw.opaque);
+    // "escape" drops to a raw NoC call on an address pulled out of its accessor, which is conservatively OPAQUE.
+    EXPECT_TRUE(rw.opaque);
     // Typed endpoints and paths are exact; the binding-erasing / address-escaping ones are both read and written.
     EXPECT_EQ(
         names(rw.reads),
