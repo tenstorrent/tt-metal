@@ -1210,14 +1210,33 @@ void call_unary_sfpu_operation(std::uint32_t dst_index, std::uint32_t math_forma
 #else
         constexpr std::uint32_t RELU_MAX_THRESHOLD_BITS = 0x40A00000u; // 5.0f
 #endif
-        SFPU_UNARY_CALL(
-            DST_SYNC_MODE,
-            DST_ACCUM_MODE,
-            _relu_max_,
-            (sfpi::vFloat, APPROX_MODE, ITERATIONS, std::uint32_t),
-            dst_index,
-            vector_mode,
-            RELU_MAX_THRESHOLD_BITS);
+#ifdef SFPU_RELU_MAX_INT_THRESHOLD
+        // The vInt branch of _relu_max_, which no production caller reaches (relu_max_tile_int32
+        // uses the metal relu_clamp_int). Compiled only for the test that sets the threshold, as a
+        // two's-complement uint32, so every other relu_max ELF keeps the float branch alone.
+        if (math_format == ckernel::to_underlying(DataFormat::Int32))
+        {
+            SFPU_UNARY_CALL(
+                DST_SYNC_MODE,
+                DST_ACCUM_MODE,
+                _relu_max_,
+                (sfpi::vInt, APPROX_MODE, ITERATIONS, std::uint32_t),
+                dst_index,
+                vector_mode,
+                SFPU_RELU_MAX_INT_THRESHOLD);
+        }
+        else
+#endif
+        {
+            SFPU_UNARY_CALL(
+                DST_SYNC_MODE,
+                DST_ACCUM_MODE,
+                _relu_max_,
+                (sfpi::vFloat, APPROX_MODE, ITERATIONS, std::uint32_t),
+                dst_index,
+                vector_mode,
+                RELU_MAX_THRESHOLD_BITS);
+        }
     }
     else if constexpr (OPERATION == SfpuType::relu_min)
     {

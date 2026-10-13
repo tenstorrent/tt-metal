@@ -8,6 +8,7 @@ from itertools import chain, product
 
 import pytest
 import torch
+from conftest import blackhole_only
 from helpers.chip_architecture import ChipArchitecture
 from helpers.format_config import DataFormat, InputOutputFormat
 from helpers.golden_generators import (
@@ -54,6 +55,7 @@ from helpers.test_variant_parameters import (
     MATH_OP,
     NUM_BLOCKS,
     NUM_TILES_IN_BLOCK,
+    SFPU_RELU_MAX_INT_THRESHOLD,
     SFPU_RELU_MAX_THRESHOLD,
     SFPU_RELU_MIN_INT_THRESHOLD,
     SFPU_SHIFT_AMOUNT,
@@ -982,6 +984,119 @@ def test_eltwise_unary_sfpu_relu_max_threshold(
             f"[{i}] got {int(res_bits[i]) & mask:#x} want {int(golden_bits[i]) & mask:#x}"
             for i in mismatch[:8].tolist()
         )
+    )
+
+
+# relu_max's vInt branch, which SFPU_RELU_MAX_INT_THRESHOLD makes reachable. The threshold is
+# raw two's-complement int bits, as for _relu_min_. Thresholds of both signs plus the int32
+# extremes; inputs straddle the threshold and reach INT_MIN, which is 2^31 or more away from
+# every non-negative threshold -- where a plain signed compare (it subtracts) overflows.
+_INT32_MIN = -(2**31)
+_RELU_MAX_INT_THRESHOLDS = [_INT32_MIN, -5, -1, 0, 1, 5, 1000, 2**30, _INT32_MAX]
+
+
+def _relu_max_int_inputs(threshold: int) -> list[int]:
+    values = [
+        _INT32_MIN,
+        _INT32_MIN + 1,
+        _INT32_MIN + 5,
+        -(2**30),
+        -1000,
+        -6,
+        -5,
+        -1,
+        0,
+        1,
+        4,
+        5,
+        6,
+        1000,
+        2**30,
+        _INT32_MAX - 1,
+        _INT32_MAX,
+    ]
+    values += [threshold + d for d in (-1, 0, 1)]
+    return sorted({v for v in values if _INT32_MIN <= v <= _INT32_MAX})
+
+
+# Blackhole only: the Wormhole _relu_max_<vInt> still decodes its threshold as float bits
+# (https://github.com/tenstorrent/tt-llk/issues/1701 item 13).
+@blackhole_only
+# pytest's own parametrize: helpers' parametrize hands a single axis over as 1-tuples.
+@pytest.mark.parametrize(
+    "threshold", _RELU_MAX_INT_THRESHOLDS, ids=lambda t: f"threshold:{t}"
+)
+def test_eltwise_unary_sfpu_relu_max_int_threshold(threshold: int):
+    """_relu_max_<vInt, ..., std::uint32_t> on two's-complement Int32, exact golden
+    max(0, min(x, threshold)) over the full int32 range."""
+    formats = InputOutputFormat(DataFormat.Int32, DataFormat.Int32)
+    dest_acc = DestAccumulation.Yes
+    input_dimensions = [32, 32]
+
+    src_A, tile_cnt_A, src_B, tile_cnt_B = generate_stimuli(
+        stimuli_format_A=formats.input_format,
+        input_dimensions_A=input_dimensions,
+        stimuli_format_B=formats.input_format,
+        input_dimensions_B=input_dimensions,
+    )
+    # src_A is overridden rather than built from a StimuliSpec: CustomStrategy clamps signed
+    # ints at INT_MIN + 1 and zero-fills the rest of each face, so neither INT_MIN nor a full
+    # tile of probe values can come through a spec.
+    inputs = _relu_max_int_inputs(threshold)
+    src_A = torch.tensor(
+        [inputs[i % len(inputs)] for i in range(src_A.numel())], dtype=torch.int32
+    )
+    golden = [max(0, min(int(x), threshold)) for x in src_A.tolist()]
+
+    num_blocks, num_tiles_in_block = get_num_blocks_and_num_tiles_in_block(
+        DestSync.Half,
+        dest_acc,
+        formats,
+        input_dimensions,
+        TILE_DIMENSIONS,
+        BlocksCalculationAlgorithm.Standard,
+    )
+    configuration = TestConfig(
+        "sources/eltwise_unary_sfpu_test.cpp",
+        formats,
+        templates=[
+            generate_input_dim(input_dimensions, input_dimensions),
+            APPROX_MODE(ApproximationMode.No),
+            FAST_MODE(FastMode.No),
+            CLAMP_NEGATIVE(True),
+            MATH_OP(mathop=MathOperation.ReluMax),
+            SFPU_RELU_MAX_INT_THRESHOLD(threshold),
+        ],
+        runtimes=[
+            TILE_COUNT(tile_cnt_A),
+            NUM_BLOCKS(num_blocks),
+            NUM_TILES_IN_BLOCK(num_tiles_in_block),
+        ],
+        variant_stimuli=StimuliConfig(
+            src_A,
+            formats.input_format,
+            src_B,
+            formats.input_format,
+            formats.output_format,
+            tile_count_A=tile_cnt_A,
+            tile_count_B=tile_cnt_B,
+            tile_count_res=tile_cnt_A,
+            twos_complement=True,
+        ),
+        dest_acc=dest_acc,
+        unpack_to_dest=True,
+    )
+    result = [int(v) for v in configuration.run().result]
+    assert len(result) == len(
+        golden
+    ), f"threshold {threshold}: expected {len(golden)} result elements, got {len(result)}"
+
+    mismatches = sorted(
+        {(int(x), g, r) for x, g, r in zip(src_A.tolist(), golden, result) if g != r}
+    )
+    assert not mismatches, (
+        f"threshold {threshold}: {len(mismatches)} distinct input(s) wrong "
+        f"(input, expected, got): {mismatches[:16]}"
     )
 
 
