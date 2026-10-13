@@ -4,9 +4,14 @@
 
 """ttnn.transformer.fused_recurrent_gated_delta_rule against its registered golden on the served head counts, batch
 widths and token counts the op supports today: accuracy, multi-token versus chained single-token identity, run-to-run
-and trace-versus-eager determinism, and drift over a long chain against an fp64 reference."""
+and trace-versus-eager determinism, drift over a long chain against an fp64 reference, and the compatibility digests
+of its outputs on fixed inputs."""
 
+import datetime
+import json
 import os
+import pathlib
+import subprocess
 import zlib
 
 import pytest
@@ -20,6 +25,7 @@ from tests.ttnn.unit_tests.operations.transformers.gdn_decode_test_utils import 
     SHAPES,
     assert_accuracy,
     chained_decode,
+    golden_digest,
     make_inputs,
     metrics,
 )
@@ -226,4 +232,86 @@ def test_fp64_drift(device, shape):
     logger.info(
         f"{shape}: after 64 steps o pcc {curve[-1][0]:.7f}, state pcc {curve[-1][1]:.7f}; state max|d|/max|ref| at "
         f"steps 1/8/16/32/64: " + " ".join(f"{curve[i][2]:.1e}" for i in (0, 7, 15, 31, 63))
+    )
+
+
+# ---- compatibility goldens ------------------------------------------------------------------------------------------
+GOLDENS_PATH = pathlib.Path(__file__).with_name("fused_recurrent_gdn_goldens_v1.json")
+GOLDEN_CASES = [  # (shape, B, T); each with and without an initial state
+    ("qwen27b_tp4", 1, 1),
+    ("qwen27b_tp4", 8, 1),
+    ("qwen27b_tp4", 1, 8),
+    ("qwen27b_tp8", 1, 1),
+    ("qwen9b_tp1", 1, 1),
+    ("qwen35b_a3b_tp4", 4, 4),
+]
+
+
+def _golden_case_id(shape, B, T, with_state):
+    return f"{shape}/B{B}/T{T}/{'s0' if with_state else 'zero'}"
+
+
+def _tree_sha():
+    try:
+        return subprocess.run(
+            ["git", "rev-parse", "--short=11", "HEAD"],
+            cwd=GOLDENS_PATH.parent,
+            capture_output=True,
+            text=True,
+            check=True,
+        ).stdout.strip()
+    except Exception:
+        return "unknown"
+
+
+@_hw_only
+@pytest.mark.parametrize(
+    "shape, B, T, with_state",
+    [pytest.param(s, b, t, w, id=_golden_case_id(s, b, t, w)) for s, b, t in GOLDEN_CASES for w in (True, False)],
+)
+def test_compatibility_goldens(device, shape, B, T, with_state):
+    """The op's bits on fixed inputs against the digests stored next to this file: a change of the arithmetic anywhere
+    in the call shows here even when it stays within the accuracy gates. GDN_GOLDENS_UPDATE=1 rewrites the case's entry
+    (digests, the PCC of each output against the golden, the tree, the device and the date), so the diff of the JSON in
+    the PR that changes the bits is the review artefact. Hardware-only: the simulator's bits are not the silicon's."""
+    sh = SHAPES[shape]
+    _skip_unless_fits(device, B, sh.num_value_heads)
+    case = _golden_case_id(shape, B, T, with_state)
+    seed = zlib.crc32(f"golden-{case}".encode())
+    x = make_inputs(B, T, sh.num_key_heads, sh.num_value_heads, K, V, seed=seed, with_state=with_state)
+    per_token = T > 1
+    o, state = run_op(device, x, output_final_state=not per_token, output_per_token_state=per_token)
+    got = {"o": golden_digest(o), "state": golden_digest(state)}
+    if os.environ.get("GDN_GOLDENS_UPDATE"):
+        o_ref, state_ref = ttnn.get_golden_function(OP)(
+            x["q"],
+            x["k"],
+            x["v"],
+            x["g"],
+            x["beta"],
+            initial_state=x["initial_state"],
+            output_final_state=not per_token,
+            output_per_token_state=per_token,
+        )
+        entry = {
+            **got,
+            "pcc_o": round(metrics(o_ref, o)["pcc"], 7),
+            "pcc_state": round(metrics(state_ref, state)["pcc"], 7),
+            "tree": _tree_sha(),
+            "device": os.environ.get("GDN_GOLDENS_DEVICE", ttnn.get_arch_name()),
+            "date": datetime.date.today().isoformat(),
+        }
+        doc = (
+            json.loads(GOLDENS_PATH.read_text())
+            if GOLDENS_PATH.exists()
+            else {"version": 1, "op": "ttnn.transformer.fused_recurrent_gated_delta_rule", "cases": {}}
+        )
+        doc["cases"][case] = entry
+        GOLDENS_PATH.write_text(json.dumps(doc, indent=1) + "\n")
+        return
+    stored = json.loads(GOLDENS_PATH.read_text())["cases"].get(case)
+    assert stored is not None, f"{case}: no stored golden; GDN_GOLDENS_UPDATE=1 generates it"
+    assert got == {"o": stored["o"], "state": stored["state"]}, (
+        f"{case}: digests differ from the goldens taken at {stored['tree']} on {stored['device']} ({stored['date']}); "
+        "GDN_GOLDENS_UPDATE=1 regenerates them when the change of bits is intended"
     )
