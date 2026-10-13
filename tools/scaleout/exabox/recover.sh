@@ -53,6 +53,24 @@ Optional:
     --skip-version-check                     Skip the tt-smi/KMD/firmware version checks run on all hosts
                                             before recovery (see minimum versions in utils/host_utils.sh)
     --skip-mpi-stress-test                  Skip the MPI packet stress test run before recovery
+    --skip-sys-triage                       Skip the sys-triage bundle. By default, right after the version check
+                                            and before anything resets, every host runs sys-triage (the syseng
+                                            system and per-tray triage dump: FW stack, FRU, CPLD DIAG, lspci,
+                                            kernel logs, per-chip vuart) into <output>/sys_triage/<host>/, with
+                                            its log beside it as <output>/sys_triage/<host>.log. With --use-docker
+                                            it runs as root inside that image, which must ship sys-triage;
+                                            otherwise (or with --sys-triage-on-host) from the host. Each host
+                                            reads its own BMC address in-band (sudo -n ipmitool lan print). A host
+                                            without sys-triage is named and skipped. Never affects the outcome.
+    --sys-triage-on-host                    Run sys-triage from the host (the syseng .deb) via plain mpirun even
+                                            with --use-docker, which then still applies to everything else
+    --sys-triage-path <path>                The sys-triage executable; must be at the same path on every host, or
+                                            in the image when it runs there (default: the one on PATH)
+    --bmc-user <user>                       BMC user for sys-triage (default: \$BMC_USER). Without both the user
+                                            and the password, sys-triage is skipped.
+    --bmc-password <password>               BMC password for sys-triage (default: \$BMC_PASSWORD, which is
+                                            preferred: a flag value is visible in the process list). Reaches
+                                            the hosts through the environment only, never a command line.
     --skip-cross-host-port-down             Skip quiescing cross-host Ethernet ports before each reset
                                             (required for non-Blackhole systems)
     --no-send-traffic                       Disable --send-traffic in cluster validation
@@ -161,6 +179,14 @@ CLUSTER_DEBUG_TOOL=""
 CLUSTER_DEBUG_TOOL_NAME="tt-bh-glx-cluster-debug"
 CLUSTER_DEBUG_LOG_ROOT_DEFAULT="/data/dcamp/cluster-debug/logs"
 CLUSTER_DEBUG_LOG_ROOT="$CLUSTER_DEBUG_LOG_ROOT_DEFAULT"
+SKIP_SYS_TRIAGE=false
+SYS_TRIAGE_ON_HOST=false
+SYS_TRIAGE_PATH=""
+BMC_USER="${BMC_USER:-}"
+BMC_PASSWORD="${BMC_PASSWORD:-}"
+# A backstop per host, not the expected duration: CPLD DIAG self-bounds at 180 s and the
+# per-chip tt-fw-terminal drains run 8 at a time.
+SYS_TRIAGE_TIMEOUT_S=900
 
 # Minimum required tt-smi/KMD/firmware versions (TT_SMI_MIN_VERSION, KMD_MIN_VERSION,
 # FW_MIN_VERSION) and the check itself live in utils/host_utils.sh, shared with run_validation.sh.
@@ -294,6 +320,38 @@ while [[ $# -gt 0 ]]; do
         --skip-cross-host-port-down)
             SKIP_CROSS_HOST_PORT_DOWN=true
             shift
+            ;;
+        --skip-sys-triage)
+            SKIP_SYS_TRIAGE=true
+            shift
+            ;;
+        --sys-triage-on-host)
+            SYS_TRIAGE_ON_HOST=true
+            shift
+            ;;
+        --sys-triage-path)
+            if [[ -z "$2" ]] || [[ "$2" == --* ]]; then
+                echo "Error: --sys-triage-path requires a non-empty value"
+                exit 1
+            fi
+            SYS_TRIAGE_PATH="$2"
+            shift 2
+            ;;
+        --bmc-user)
+            if [[ -z "$2" ]] || [[ "$2" == --* ]]; then
+                echo "Error: --bmc-user requires a non-empty value"
+                exit 1
+            fi
+            BMC_USER="$2"
+            shift 2
+            ;;
+        --bmc-password)
+            if [[ -z "$2" ]]; then
+                echo "Error: --bmc-password requires a non-empty value"
+                exit 1
+            fi
+            BMC_PASSWORD="$2"
+            shift 2
             ;;
         --no-send-traffic)
             SEND_TRAFFIC=false
@@ -580,6 +638,10 @@ run_cross_host_port_down() {
     fi
 }
 
+# The image sys-triage runs in; empty means from the host via plain mpirun.
+SYS_TRIAGE_IMAGE="$DOCKER_IMAGE"
+[[ "$SYS_TRIAGE_ON_HOST" == true ]] && SYS_TRIAGE_IMAGE=""
+
 # Print summary
 echo "=========================================="
 echo "Cluster recovery"
@@ -610,6 +672,13 @@ echo "Skip reset: $SKIP_RESET"
 echo "Skip validation: $SKIP_VALIDATION"
 echo "Skip version check: $SKIP_VERSION_CHECK"
 echo "Skip MPI stress test: $SKIP_MPI_STRESS_TEST"
+if [[ "$SKIP_SYS_TRIAGE" == true ]]; then
+    echo "sys-triage: skipped"
+elif [[ -z "$BMC_USER" || -z "$BMC_PASSWORD" ]]; then
+    echo "sys-triage: skipped (BMC credentials incomplete; see --bmc-user / --bmc-password)"
+else
+    echo "sys-triage: every host before recovery, $([[ -n "$SYS_TRIAGE_IMAGE" ]] && echo "in $SYS_TRIAGE_IMAGE" || echo "from the host"), into $OUTPUT_DIR/sys_triage (BMC user $BMC_USER)"
+fi
 echo "Skip cross-host port down: $SKIP_CROSS_HOST_PORT_DOWN"
 echo "Output directory: $OUTPUT_DIR"
 echo "Log file: $LOG_FILE"
@@ -639,6 +708,173 @@ if [[ "$SKIP_VERSION_CHECK" == false ]]; then
     fi
 else
     echo "Skipping version check (--skip-version-check)"
+    echo ""
+fi
+
+# Step 0.2: the sys-triage bundle on every host, taken before anything resets so its vuart and
+# scratch reads still describe the state that sent the cluster to recovery. With --use-docker it
+# runs inside the image, which must ship sys-triage; otherwise, or with --sys-triage-on-host, it
+# runs from the syseng .deb on the host via plain mpirun. Every host has its own BMC, so each rank reads its address in-band; the
+# shared user and password reach the ranks through the environment only. Forensics for a person,
+# never a verdict: each host reports PASS, WARN (sections missing) or SKIP with the reason, and
+# only an interrupt stops recovery here.
+SYS_TRIAGE_DIR="$OUTPUT_DIR/sys_triage"
+
+# Args: <bundle root> <sys-triage path or ""> <budget s> <where, for messages> <uid:gid to hand
+# the bundle back to, or ""> <true if this rank tags its own lines with [host]>
+read -r -d '' SYS_TRIAGE_RANK_CMD <<'SYS_TRIAGE_CMD' || true
+h=$(hostname)
+root="$1"
+bin="$2"
+budget="$3"
+where="$4"
+owner="$5"
+if [[ "$6" == true ]]; then
+    say() { printf '[%s] sys-triage: %s\n' "$h" "$*"; }
+else
+    say() { printf 'sys-triage: %s\n' "$*"; }
+fi
+# sys-triage hands the password on to cpld-dump.sh as an argument, so an error from that
+# script could carry it. Nothing written or printed here may.
+scrub() {
+    local l
+    while IFS= read -r l || [[ -n "$l" ]]; do
+        printf '%s\n' "${l//"$BMC_PASSWORD"/***}"
+    done
+}
+
+if [[ -n "$bin" ]]; then
+    if [[ ! -f "$bin" || ! -x "$bin" ]]; then
+        say "SKIP: $bin is not an executable file in $where"
+        exit 0
+    fi
+elif ! bin=$(command -v sys-triage); then
+    say "SKIP: not installed in $where (it ships in the syseng .deb)"
+    exit 0
+fi
+
+BMC_IP=$(sudo -n ipmitool lan print 2>/dev/null | awk -F': *' '/^IP Address[[:space:]]*:/ { print $2; exit }')
+if [[ -z "$BMC_IP" || "$BMC_IP" == "0.0.0.0" ]]; then
+    say "SKIP: could not read this host's BMC address (sudo -n ipmitool lan print)"
+    exit 0
+fi
+export BMC_IP
+
+out="$root/$h"
+log="$root/$h.log"
+# A bundle left by an earlier run into the same output would be read as this run's state.
+rm -rf "$out"
+if ! mkdir -p "$out" 2>/dev/null; then
+    say "SKIP: cannot create $out on this host"
+    exit 0
+fi
+
+stdout_f=$(mktemp)
+stderr_f=$(mktemp)
+start=$SECONDS
+timeout --signal=TERM --kill-after=30s "$budget" "$bin" "$out" </dev/null >"$stdout_f" 2>"$stderr_f"
+rc=$?
+dur=$((SECONDS - start))
+{
+    printf '$ %s %s\nrc=%s  duration=%ss  bmc=%s@%s\n' "$bin" "$out" "$rc" "$dur" "$BMC_USER" "$BMC_IP"
+    printf '\n--- stdout ---\n'
+    scrub <"$stdout_f"
+    printf '\n--- stderr ---\n'
+    scrub <"$stderr_f"
+} >"$log" 2>/dev/null || say "could not write $log"
+# Written as root in a container; hand the bundle back to whoever ran recovery.
+[[ -n "$owner" ]] && chown -R "$owner" "$out" "$log" 2>/dev/null
+
+# sys-triage carries on past a section it cannot collect and says so on stderr, so its
+# warnings are the only record of what the bundle lacks.
+warnings=$(grep '^[[:space:]]*warning:' "$stderr_f" | scrub)
+last_err=$(grep -v '^[[:space:]]*$' "$stderr_f" | tail -n1 | scrub)
+rm -f "$stdout_f" "$stderr_f"
+files=$(( $(find "$out" -type f 2>/dev/null | wc -l) ))
+
+if [[ $rc -eq 124 || $rc -eq 137 ]]; then
+    say "SKIP: timed out after ${budget}s; $files partial file(s) kept in $out (log: $log)"
+elif [[ ! -f "$out/triage.txt" ]]; then
+    say "SKIP: rc=$rc but no triage.txt written${last_err:+: ${last_err:0:200}} (log: $log)"
+elif [[ -n "$warnings" ]]; then
+    say "WARN: $files file(s) in $out, $(grep -c . <<<"$warnings") section(s) incomplete (${dur}s, log: $log)"
+    while IFS= read -r w; do
+        say "  $w"
+    done <<<"$warnings"
+else
+    say "PASS: $files file(s) in $out (${dur}s, log: $log)"
+fi
+exit 0
+SYS_TRIAGE_CMD
+
+run_sys_triage() {
+    if [[ -n "$SYS_TRIAGE_IMAGE" ]]; then
+        # mpi-docker runs the image as the caller's uid over the host's /etc/passwd, where the
+        # image's passwordless sudo does not apply, and sys-triage needs root for ipmitool and
+        # the CPLD dump: root it is, with the bundle chowned back after. mpi-docker joins and
+        # re-parses the command once on each rank, hence the %q on every argument. /var/log,
+        # not /var/log/journal: a missing bind source is created on the host, and journald
+        # would start persisting into it.
+        local q=()
+        local a
+        for a in "$SYS_TRIAGE_RANK_CMD" "$SYS_TRIAGE_DIR" "$SYS_TRIAGE_PATH" "$SYS_TRIAGE_TIMEOUT_S" \
+            "image $SYS_TRIAGE_IMAGE" "$(id -u):$(id -g)" false; do
+            q+=("$(printf '%q' "$a")")
+        done
+        BMC_USER="$BMC_USER" BMC_PASSWORD="$BMC_PASSWORD" \
+            ./tools/scaleout/exabox/mpi-docker --image "$SYS_TRIAGE_IMAGE" \
+            --empty-entrypoint \
+            --tag-host \
+            --mpi-interface "$MPI_IF" \
+            --volume "$SYS_TRIAGE_DIR" \
+            --docker-arg --user=0:0 \
+            --docker-arg --volume=/var/log:/var/log:ro \
+            --docker-arg --volume=/etc/machine-id:/etc/machine-id:ro \
+            --docker-arg --volume=/lib/modules:/lib/modules:ro \
+            "${DOCKER_ARG_FLAGS[@]}" \
+            "${MPI_EXTRA_ARGS[@]}" \
+            --host "$HOSTS" \
+            -x BMC_USER -x BMC_PASSWORD \
+            --timeout "$((SYS_TRIAGE_TIMEOUT_S + 300))" \
+            bash -c "${q[0]}" _ "${q[@]:1}"
+    else
+        BMC_USER="$BMC_USER" BMC_PASSWORD="$BMC_PASSWORD" \
+            timeout --signal=TERM --kill-after=30s "$((SYS_TRIAGE_TIMEOUT_S + 120))" mpirun --host "$HOSTS" \
+            --mca btl_tcp_if_include "$MPI_IF" \
+            -x BMC_USER -x BMC_PASSWORD \
+            "${MPI_EXTRA_ARGS[@]}" \
+            bash -c "$SYS_TRIAGE_RANK_CMD" _ "$SYS_TRIAGE_DIR" "$SYS_TRIAGE_PATH" "$SYS_TRIAGE_TIMEOUT_S" \
+            "this host" "" true
+    fi
+}
+
+if [[ "$SKIP_SYS_TRIAGE" == true ]]; then
+    echo "Skipping sys-triage (--skip-sys-triage)"
+    echo ""
+elif [[ -z "$BMC_USER" || -z "$BMC_PASSWORD" ]]; then
+    _missing=()
+    [[ -z "$BMC_USER" ]] && _missing+=("--bmc-user/\$BMC_USER")
+    [[ -z "$BMC_PASSWORD" ]] && _missing+=("--bmc-password/\$BMC_PASSWORD")
+    echo "Skipping sys-triage: BMC credentials incomplete, which sys-triage refuses to run without; missing: ${_missing[*]}"
+    echo ""
+else
+    echo "Collecting the sys-triage bundle on every host into $SYS_TRIAGE_DIR (up to ${SYS_TRIAGE_TIMEOUT_S}s per host)..."
+    SYS_TRIAGE_EXIT=0
+    if ! mkdir -p "$SYS_TRIAGE_DIR"; then
+        echo "Warning: cannot create $SYS_TRIAGE_DIR; skipping sys-triage, recovery continues"
+    else
+        # Container root is squashed to nobody on an NFS output tree, so it needs write access as anyone.
+        if [[ -n "$SYS_TRIAGE_IMAGE" ]] && ! chmod 0777 "$SYS_TRIAGE_DIR"; then
+            echo "Warning: could not chmod 0777 $SYS_TRIAGE_DIR; the containers may not be able to write there"
+        fi
+        run_sys_triage || SYS_TRIAGE_EXIT=$?
+        if [[ $SYS_TRIAGE_EXIT -eq 130 || $SYS_TRIAGE_EXIT -eq 143 ]]; then
+            echo "sys-triage collection was interrupted; stopping recovery."
+            exit "$SYS_TRIAGE_EXIT"
+        elif [[ $SYS_TRIAGE_EXIT -ne 0 ]]; then
+            echo "Warning: sys-triage collection failed (exit code $SYS_TRIAGE_EXIT, see above); recovery continues"
+        fi
+    fi
     echo ""
 fi
 
