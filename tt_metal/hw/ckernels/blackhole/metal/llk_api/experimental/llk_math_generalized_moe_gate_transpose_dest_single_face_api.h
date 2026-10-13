@@ -88,10 +88,10 @@ inline void llk_math_generalized_moe_gate_copy4rows_direct() {
     _llk_math_generalized_moe_gate_copy4rows_direct_<is_fp32_dest_acc_en, src, dst, srcb, is_32bit>();
 }
 
-template <bool is_32bit = false, std::uint32_t num_tiles = 3>
+template <bool is_32bit = false, std::uint32_t num_tiles = 3, bool keep_zero_flag = false>
 inline void llk_math_generalized_moe_gate_transpose_dest_single_face_step2_init() {
     SAN_HOOK(unsupported());
-    _llk_math_generalized_moe_gate_transpose_dest_single_face_step2_init_<is_32bit, num_tiles>();
+    _llk_math_generalized_moe_gate_transpose_dest_single_face_step2_init_<is_32bit, num_tiles, keep_zero_flag>();
 }
 
 template <bool is_fp32_dest_acc_en, bool is_32bit = false>

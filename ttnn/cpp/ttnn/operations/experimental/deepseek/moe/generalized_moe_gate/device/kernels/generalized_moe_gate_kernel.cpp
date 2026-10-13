@@ -13,6 +13,7 @@
 //   = 1: true global top-8 over all 256 experts (ungrouped). The proven 4-group merge runs twice
 //        (topA=top8(groups 0-3) at cols {0,2}, topB=top8(groups 4-7) at {4,6}, with FPU copy4rows stashing
 //        the idle half in rows 8-15), then finalize fully bitonic-sorts the 16 candidates -> global top-8.
+//        On Blackhole one block (<= 256 experts) takes the SFPU-only generic sort instead (ComputeCTArgs::sfpu_sort).
 //   = 0: the DeepSeek grouped gate (8 groups × 32 -> top-2-sum -> top-4 groups -> top-8).
 // The descriptor builder sets it from operation_attrs.grouped (false -> 1, true -> 0); it flows to the
 // compute API as the defaultless `ungrouped_top8` template parameter of generalized_moe_gate<>.

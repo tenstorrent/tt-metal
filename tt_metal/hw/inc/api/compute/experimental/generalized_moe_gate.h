@@ -13,6 +13,9 @@
 #include "experimental/llk_sfpu/ckernel_sfpu_generalized_moe_gate_topk_single_face.h"
 #include "experimental/llk_math_generalized_moe_gate_eltwise_binary_api.h"
 #include "experimental/llk_math_generalized_moe_gate_transpose_dest_single_face_api.h"
+#if defined(ARCH_BLACKHOLE)
+#include "experimental/llk_sfpu/llk_math_generic_moe_gate_topk_api.h"
+#endif
 #endif
 // The gate's own SFPU passes; Blackhole's gate llk_sfpu header defines them without the SFPU drain.
 #ifndef GMG_SFPU_UNARY_CALL
@@ -170,6 +173,8 @@ ALWI void generalized_moe_gate_fpu_copy4rows() {
 // SFPU, and output_tiles=2 to transpose only scores/indices. The default still transposes bias
 // as well, which is required by the multi-block combine. Register setup and synchronization
 // remain those of the shared generalized gate.
+// sfpu_sort (Blackhole, ungrouped single block): the generic gate's SFPU-only sort replaces the merge tree and
+// finalize_sorted the finalize; the output keeps the layout above, and step2 transposes scores and indices only.
 template <
     bool ungrouped_top8,
     bool enable_sigmoid = false,
@@ -182,11 +187,13 @@ template <
     bool output_softmax = false,
     bool is_fp32_dest_acc_en = DST_ACCUM_MODE,
     bool do_extra_scale = false,
-    uint32_t output_tiles = 3>
+    uint32_t output_tiles = 3,
+    bool sfpu_sort = false>
 ALWI void generalized_moe_gate(
     uint32_t icb0, uint32_t icb1, uint32_t eps, uint32_t scale, uint32_t extra_scale = 0x3f800000) {
     static_assert(!do_extra_scale || !ungrouped_top8, "extra scaling is supported by the grouped gate");
     static_assert(output_tiles == 3 || (!ungrouped_top8 && output_tiles == 2), "only grouped output may omit bias");
+    static_assert(!sfpu_sort || (ungrouped_top8 && !produce_run), "sfpu_sort replaces the single-block ungrouped sort");
     if constexpr (enable_sigmoid) {
         // Transpose wh (FPU)
         transpose_tile<is_fp32_dest_acc_en>(icb0, 0, 0);
@@ -215,6 +222,26 @@ ALWI void generalized_moe_gate(
     }
     // Set srcb dummy valid for transpose wh (FPU)
     UNPACK((llk_unpack_set_srcb_dummy_valid()));
+#if defined(ARCH_BLACKHOLE)
+    if constexpr (sfpu_sort) {
+        // Full sort, no normalize: the descending top-8 lands down column 0 of rows 0-7 for finalize_sorted.
+        MATH((sfpu::llk_math_sfpu_generic_moe_gate_topk<false, 8, 256, false, true, false>(0, 0)));
+        MATH((SFPU_UNARY_CALL(
+            DST_SYNC_MODE,
+            is_fp32_dest_acc_en,
+            generalized_moe_gate_finalize_sorted,
+            (APPROX, is_fp32_dest_acc_en, topk, output_softmax),
+            0,
+            VectorMode::RC_custom,
+            eps,
+            scale)));
+        MATH((llk_math_generalized_moe_gate_transpose_dest_single_face_step2_init<is_32bit, 2, true>()));
+        MATH((llk_math_generalized_moe_gate_transpose_dest_single_face_step2<is_fp32_dest_acc_en, is_32bit>()));
+        return;
+    }
+#else
+    static_assert(!sfpu_sort, "sfpu_sort needs the Blackhole generic gate");
+#endif
     // Sum top2 (SFPU)
     MATH((GMG_SFPU_UNARY_CALL(
         DST_SYNC_MODE,

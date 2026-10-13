@@ -102,6 +102,12 @@ struct GeneralizedMoeGate {
         // before this kernel is ever compiled; this static_assert is the compile-time mirror, so a kernel
         // built with an unsupported topk fails to compile instead of silently mis-normalizing.
         static_assert(topk == 4 || topk == 6 || topk == 8, "generalized_moe_gate: topk must be one of {4, 6, 8}");
+#if defined(ARCH_BLACKHOLE)
+        // One ungrouped block sorts on the SFPU-only generic gate; same front end, finalize and output layout.
+        static constexpr bool sfpu_sort = ungrouped_top8 && num_blocks == 1;
+#else
+        static constexpr bool sfpu_sort = false;
+#endif
     };
 
     // ========================================================================
@@ -237,7 +243,11 @@ struct GeneralizedMoeGate {
                     2,
                     0,
                     CTArgs::topk,
-                    CTArgs::output_softmax>(CTArgs::input_cb, CTArgs::bias_cb, CTArgs::eps, CTArgs::scaling_factor);
+                    CTArgs::output_softmax,
+                    DST_ACCUM_MODE,
+                    false,
+                    3,
+                    CTArgs::sfpu_sort>(CTArgs::input_cb, CTArgs::bias_cb, CTArgs::eps, CTArgs::scaling_factor);
                 input_cb.pop_front(1);
                 tile_regs_commit();
 

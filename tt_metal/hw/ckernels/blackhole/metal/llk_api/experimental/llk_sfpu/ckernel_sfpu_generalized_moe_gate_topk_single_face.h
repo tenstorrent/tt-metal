@@ -81,6 +81,12 @@ inline void _generalized_moe_gate_sfpu_params_(
     _llk_math_eltwise_sfpu_done_();
 }
 
+template <bool APPROXIMATION_MODE, bool is_fp32_dest_acc_en, uint32_t topk = 8, bool output_softmax = false>
+inline void generalized_moe_gate_finalize_sorted(uint32_t eps, uint32_t scale) {
+    _generalized_moe_gate_finalize_ungrouped<APPROXIMATION_MODE, is_fp32_dest_acc_en, topk, output_softmax, true>(
+        eps, scale);
+}
+
 template <bool APPROXIMATION_MODE, bool is_fp32_dest_acc_en>
 inline void generalized_moe_gate_topk_init() {
     math::reset_counters(p_setrwc::SET_ABD_F);

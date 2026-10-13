@@ -719,6 +719,71 @@ def test_generalized_moe_gate_ties():
     ), f"weights {got_weights.tolist()} do not normalize {selected_payload.tolist()}"
 
 
+# The ttnn op's Blackhole route for one ungrouped block (generalized_moe_gate<..., sfpu_sort>): the SFPU-only generic
+# sort replaces the merge tree, and the finalize tail and step2 are shared. On distinct keys both sorts return the same
+# descending top-8, so the answer is the same bit for bit, through either front end.
+@parametrize(topk=[4, 6, 8], softmax=[False, True], sigmoid=[False, True])
+def test_generalized_moe_gate_sfpu_sort(topk, softmax, sigmoid):
+    ids = _ids_face()
+    if sigmoid:
+        payload, bias = _sigmoid_stimuli(seed=79, grouped=False)
+        tiles = [payload, _id_tile(ids), _zeros(), _zeros()]
+    else:
+        payload, bias, _ = _gate_stimuli(seed=31 + topk + int(softmax))
+        tiles = _gate_tiles(payload, ids)
+
+    def gate(sfpu_sort):
+        return _config(
+            GENERALIZED_MOE_GATE(
+                mode=MODE_GATE,
+                sigmoid=sigmoid,
+                topk=topk,
+                softmax=softmax,
+                eps=_bits(EPS),
+                scale=_bits(SCALE),
+                sfpu_sort=sfpu_sort,
+            ),
+            tiles,
+            src_b=bias,
+        )
+
+    tree, sort = _run(gate(False), gate(True))
+    for region in (SCORES, IDS):
+        assert torch.equal(
+            sort[region][0, :8], tree[region][0, :8]
+        ), f"region {region}: {sort[region][0, :8].tolist()} vs the merge tree's {tree[region][0, :8].tolist()}"
+
+
+# Ties: which tied expert wins is not in the contract (the two sorts break ties differently), the eight largest keys,
+# distinct ids and weights that normalize the selected payload are.
+def test_generalized_moe_gate_sfpu_sort_ties():
+    generator = torch.Generator().manual_seed(5)
+    key = torch.randint(0, 22, (256,), generator=generator).to(torch.float32) / 4.0
+    payload = torch.randint(1, 9, (256,), generator=generator).to(torch.float32) / 4.0
+    faces = _run(
+        _config(
+            GENERALIZED_MOE_GATE(
+                mode=MODE_GATE, eps=_bits(EPS), scale=_bits(SCALE), sfpu_sort=True
+            ),
+            _gate_tiles(payload.reshape(16, 16).to(torch.bfloat16), _ids_face()),
+            src_b=(key - payload).reshape(16, 16).to(torch.bfloat16),
+        )
+    )
+    got_weights, got_ids = _gate_output(faces)
+    assert (
+        len(set(got_ids.tolist())) == 8 and got_ids.max() < 256
+    ), f"bad ids: {got_ids.tolist()}"
+    selected = key[got_ids.to(torch.int64)].sort(descending=True).values
+    assert torch.equal(
+        selected, key.sort(descending=True).values[:8]
+    ), f"not the eight largest keys: {selected.tolist()}"
+    selected_payload = payload[got_ids.to(torch.int64)]
+    want = selected_payload * (SCALE / (selected_payload.sum() + EPS))
+    assert torch.allclose(
+        got_weights, want, rtol=2e-2, atol=1e-3
+    ), f"weights {got_weights.tolist()}"
+
+
 # The multi-block path stops at merge16_to_run, leaving a re-mergeable run and no normalize.
 # idx_offset is the block's expert-id base. The metal path leaves it 0 and carries global ids in the
 # id tile instead, so this is the only cover it has. 1792 is the largest legal value: the offset goes
