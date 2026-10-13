@@ -155,8 +155,11 @@ inline void _llk_init_packer_dest_offset_registers_(const std::uint32_t face_r_d
 /**
  * @brief Initialize packer destination state at the start of a kernel.
  *
- * Syncs Tensix, resets the dest-offset id, programs the packer dest-offset registers, initializes the
- * packer address counter, and resets the tile dest pointer.
+ * Resets the dest-offset id, programs the packer dest-offset registers, initializes the packer address
+ * counter, and resets the tile dest pointer. Everything it issues is a Tensix instruction ordered behind
+ * the packer by the in-stream wait in @ref _llk_init_packer_dest_offset_registers_; it does not drain the
+ * RISC (no tensix_sync), so a RISC MMIO config write that must follow an in-flight pack needs its own
+ * ordering.
  *
  * @tparam Dst: Destination sync mode, values = <SyncHalf/SyncFull>
  * @tparam is_fp32_dest_acc_en: True if the destination register accumulates in FP32.
@@ -170,7 +173,6 @@ inline void _llk_pack_dest_init_(const std::uint32_t face_r_dim = FACE_R_DIM, co
 {
     static_assert(
         pack_mode == PackMode::Default || pack_mode == PackMode::Untilize, "Wormhole B0 pack dest init supports only PackMode::Default and PackMode::Untilize");
-    tensix_sync();
     reset_dest_offset_id();
     _llk_init_packer_dest_offset_registers_<Dst, pack_mode>(face_r_dim, narrow_tile);
     packer_addr_counter_init();
