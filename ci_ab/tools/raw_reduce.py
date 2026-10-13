@@ -7,6 +7,7 @@ zone entries the patched profiler appends (RAW_ZONE_DIR). Per test node, medians
   d   pack TILE_LOOP end - unpack TILE_LOOP start (the TILE_LOOP L1_TO_L1 row)
   e   pack KERNEL end - pack TILE_LOOP end (TILE_LOOP exit rendezvous with the counter read, tensix_sync)
   p0  pack INIT start - pack KERNEL start, s0 pack KERNEL start - unpack KERNEL start
+  ute, mte, uke, mke  unpack and math TILE_LOOP and KERNEL ends, from the pack TILE_LOOP end
 usage: raw_reduce.py <run tag> <variant> <raw dir>"""
 import glob
 import statistics
@@ -29,9 +30,12 @@ for (node, seq), g in df.groupby(["node", "seq"]):
         uk, ui, ut = t[("unpack", "KERNEL", "ZONE_START")], t[("unpack", "INIT", "ZONE_START")], t[("unpack", "TILE_LOOP", "ZONE_START")]
         pk, pi = t[("pack", "KERNEL", "ZONE_START")], t[("pack", "INIT", "ZONE_START")]
         pie, pte, pke = t[("pack", "INIT", "ZONE_END")], t[("pack", "TILE_LOOP", "ZONE_END")], t[("pack", "KERNEL", "ZONE_END")]
+        ute, mte = t[("unpack", "TILE_LOOP", "ZONE_END")], t[("math", "TILE_LOOP", "ZONE_END")]
+        uke, mke = t[("unpack", "KERNEL", "ZONE_END")], t[("math", "KERNEL", "ZONE_END")]
     except KeyError:
         continue
-    row = dict(K=pke - uk, a=ui - uk, b=pie - ui, c=ut - pie, d=pte - ut, e=pke - pte, p0=pi - pk, s0=pk - uk)
+    row = dict(K=pke - uk, a=ui - uk, b=pie - ui, c=ut - pie, d=pte - ut, e=pke - pte, p0=pi - pk, s0=pk - uk,
+               ute=ute - pte, mte=mte - pte, uke=uke - pte, mke=mke - pte)
     out.setdefault(node.split("[", 1)[-1].rstrip("]"), []).append(row)
 for node in sorted(out):
     rows = out[node]
