@@ -269,15 +269,22 @@ tt_metal/tt-llk/tests/ @amokanTT @fvranicTT @ldjurovicTT @ndivnicTT @nvelickovic
 tt_metal/tt-llk/tests/python_tests/fuser/ @fvranicTT @markoradosavljevicTT @ndivnicTT
 tt_metal/tt-llk/docs/performance_counters/ @mvlahovicTT
 tt_metal/tt-llk/perf/ @rtawfik01 @nvelickovicTT @amahmudTT @lpremovicTT @ncvetkovicTT @ndivnicTT @fvranicTT @mvlahovicTT
-tt_metal/tt-llk/tests/helpers/include/counters.h @amokanTT @fvranicTT @ldjurovicTT @ndivnicTT @nvelickovicTT @rtawfik01 @skotaracTT @skrsmanovicTT @sstanisicTT @vkrsmanovicTT @atatuzunerTT @mvlahovicTT
-tt_metal/tt-llk/tests/helpers/include/perf.h @amokanTT @fvranicTT @ldjurovicTT @ndivnicTT @nvelickovicTT @rtawfik01 @skotaracTT @skrsmanovicTT @sstanisicTT @vkrsmanovicTT @atatuzunerTT @mvlahovicTT
-tt_metal/tt-llk/tests/python_tests/helpers/counters.py @amokanTT @fvranicTT @ldjurovicTT @ndivnicTT @nvelickovicTT @rtawfik01 @skotaracTT @skrsmanovicTT @sstanisicTT @vkrsmanovicTT @atatuzunerTT @mvlahovicTT
-tt_metal/tt-llk/tests/python_tests/helpers/metrics.py @amokanTT @fvranicTT @ldjurovicTT @ndivnicTT @nvelickovicTT @rtawfik01 @skotaracTT @skrsmanovicTT @sstanisicTT @vkrsmanovicTT @atatuzunerTT @mvlahovicTT
-tt_metal/tt-llk/tests/python_tests/helpers/profiler.py @amokanTT @fvranicTT @ldjurovicTT @ndivnicTT @nvelickovicTT @rtawfik01 @skotaracTT @skrsmanovicTT @sstanisicTT @vkrsmanovicTT @atatuzunerTT @mvlahovicTT
+tt_metal/tt-llk/tests/helpers/include/ @amokanTT @fvranicTT @ldjurovicTT @ndivnicTT @nvelickovicTT @rtawfik01 @skotaracTT @skrsmanovicTT @sstanisicTT @vkrsmanovicTT @atatuzunerTT @mvlahovicTT
+tt_metal/tt-llk/tests/python_tests/helpers/ @amokanTT @fvranicTT @ldjurovicTT @ndivnicTT @nvelickovicTT @rtawfik01 @skotaracTT @skrsmanovicTT @sstanisicTT @vkrsmanovicTT @atatuzunerTT @mvlahovicTT
 tt_metal/tt-llk/tests/run_llk_perf_*.sh @amokanTT @fvranicTT @ldjurovicTT @ndivnicTT @nvelickovicTT @rtawfik01 @skotaracTT @skrsmanovicTT @sstanisicTT @vkrsmanovicTT @atatuzunerTT @mvlahovicTT
 tt_metal/tt-llk/tests/sources/**/*_perf.cpp @amokanTT @fvranicTT @ldjurovicTT @ndivnicTT @nvelickovicTT @rtawfik01 @skotaracTT @skrsmanovicTT @sstanisicTT @vkrsmanovicTT @atatuzunerTT @mvlahovicTT
 tt_metal/tt-llk/tools/include/perf_counters/ @mvlahovicTT
 tt_metal/tt-llk/tools/python/tt_llk_perf/ @mvlahovicTT
+# ── LLK perf infrastructure: restricted ownership ──
+# Later than the broad tt_metal/tt-llk/tests/ and .github/ rules and the helpers/ line above, so these
+# win for perf paths only (CODEOWNERS = last match wins). Layout-agnostic:
+# helpers/perf* matches both today's flat modules and the future helpers/perf/
+# package.
+tt_metal/tt-llk/tests/python_tests/helpers/perf* @nstojicTT @ndivnicTT @sstanisicTT @mvlahovicTT @skrsmanovicTT
+tt_metal/tt-llk/tests/python_tests/**/perf_*.py @nstojicTT @ndivnicTT @sstanisicTT @mvlahovicTT @skrsmanovicTT
+tt_metal/tt-llk/tests/python_tests/**/test_perf_*.py @nstojicTT @ndivnicTT @sstanisicTT @mvlahovicTT @skrsmanovicTT
+tests/pipeline_reorg/llk_perf_merge_gate_tests.yaml @nstojicTT @ndivnicTT @sstanisicTT @mvlahovicTT @skrsmanovicTT
+tests/pipeline_reorg/llk_perf_tests.yaml @nstojicTT @ndivnicTT @sstanisicTT @mvlahovicTT @skrsmanovicTT
 tt_metal/tt-llk/tt_llk_blackhole/ @amahmudTT @fvranicTT @ldjurovicTT @lpremovicTT @ncvetkovicTT @ndivnicTT @nvelickovicTT @rtawfik01
 tt_metal/tt-llk/tt_llk_blackhole/common/inc/sfpu/experimental/ @amahmudTT @fvranicTT @ldjurovicTT @lpremovicTT @ncvetkovicTT @ndivnicTT @nvelickovicTT @rtawfik01 @atatuzunerTT
 tt_metal/tt-llk/tt_llk_blackhole/llk_lib/ @amahmudTT @fvranicTT @ldjurovicTT @lpremovicTT @ncvetkovicTT @ndivnicTT @nvelickovicTT @rtawfik01 @atatuzunerTT
@@ -697,16 +704,5 @@ tt-train/**/CMakeLists.txt @tenstorrent/tt-train @lgalasTT @abustamanteTT @tenst
 tech_reports/LLMs/vLLM_integration.md @viktorpusTT @tchedaTT
 tech_reports/AdvancedPerformanceOptimizationsForModels/TraceCorrectness.md @tchedaTT @uaydonat
 tech_reports/real_time_profiler/ @mo-tenstorrent @yusufbashiTT
-
-# ── LLK perf infrastructure: restricted ownership ──
-# Later than the broad tt_metal/tt-llk/tests/ and .github/ rules above, so these
-# win for perf paths only (CODEOWNERS = last match wins). Layout-agnostic:
-# helpers/perf* matches both today's flat modules and the future helpers/perf/
-# package.
-tt_metal/tt-llk/tests/python_tests/helpers/perf* @nstojicTT @ndivnicTT @sstanisicTT @mvlahovicTT @skrsmanovicTT
-tt_metal/tt-llk/tests/python_tests/**/perf_*.py @nstojicTT @ndivnicTT @sstanisicTT @mvlahovicTT @skrsmanovicTT
-tt_metal/tt-llk/tests/python_tests/**/test_perf_*.py @nstojicTT @ndivnicTT @sstanisicTT @mvlahovicTT @skrsmanovicTT
-tests/pipeline_reorg/llk_perf_merge_gate_tests.yaml @nstojicTT @ndivnicTT @sstanisicTT @mvlahovicTT @skrsmanovicTT
-tests/pipeline_reorg/llk_perf_tests.yaml @nstojicTT @ndivnicTT @sstanisicTT @mvlahovicTT @skrsmanovicTT
 
 /models/experimental/qwen_image_2_1/ @changh95 @uaydonat @mtairum
