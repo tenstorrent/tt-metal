@@ -108,8 +108,9 @@ compute level; they cut K/V bandwidth and L1 to about a half or a quarter.
 
 ## Support
 
-- Blackhole. Noncausal attention with an optional additive `attn_mask` of shape [1|B, 1|H, Sq, Sk] (BF16, BFP8,
-  BFP4, or FP32 for BALANCED/ACCURATE). Joint attention supports the `"rear"` strategy without a mask.
+- Blackhole and Wormhole B0 (exp ring recipes: Blackhole only). Noncausal attention with an optional additive
+  `attn_mask` of shape [1|B, 1|H, Sq, Sk] (BF16, BFP8, BFP4, or FP32 for BALANCED/ACCURATE). Joint attention supports
+  the `"rear"` strategy without a mask.
 - `is_causal`, `sliding_window_size` (causal or centred), windowed attention (`cu_window_seqlens` with
   `windowed_q_token_offset` or its tensor form) and chunked prefill (`chunk_start_idx` or `chunk_start_idx_tensor`)
   through the [K-range model](#causal-sliding-window-chunked-and-windowed-attention). Causal and sliding windows
@@ -220,10 +221,8 @@ the blocking above, the legacy column the same call before routing):
 
 The routed FP32-DEST calls are faster than the legacy FP32 loop, the small encoders included (nomic S512) or level
 with it (bge_m3 B8 S512: the same device time, 0.452 ms traced, bound by reading the head-broadcast mask once per
-head). Recipe calls are a cached device operation, about 0.02 ms of host time per call (the program hash
-counts the L1 the call's layout may use, its free L1 less its outputs capped at the layout's full size, so
-back-to-back calls holding L1 outputs share one program, inside a trace capture too, until L1 runs short); while every call rebuilt
-its program on the host these two rows ran 0.545 and 0.261 ms. For reference, the BF16-DEST streaming kernel
+head). Recipe calls are a cached device operation, about 0.02 ms of host time per call (0.545 / 0.261 ms when every
+call rebuilt its program). For reference, the BF16-DEST streaming kernel
 (unchanged) runs the tt_transformers rows in 2.28 / 8.72 ms.
 
 ## Causal, sliding-window, chunked and windowed attention
@@ -292,10 +291,7 @@ ACCURATE at D64 stays slower than the legacy FP32 kernel (its FP32 softmax costs
   dominant sink.
 - **`output_concat_heads`** writes [B, 1, Sq, H·Dv] from the writer (the same tiles at concatenated addresses).
 
-Each is a compile-time switch that is off unless the call uses it; builds without them are unchanged. The largest
-programs are STANDARD's fused ones with BFP8 K/V: Q256/K512 D128 with a sink takes 68,880 B of the 70,656 B kernel
-config buffer (plain 66,464 B), Q256/K256 D64 with a sink 70,368 B; see [Blocking](#blocking) for the geometries the
-chooser avoids.
+Each is a compile-time switch that is off unless the call uses it; builds without them are unchanged.
 
 ## Blocking
 
@@ -309,16 +305,10 @@ terms; sliding windows also consider 128-row K chunks. When nothing in the searc
 256 to 512 rows) fits L1, as for head dims of 512 and more, the search extends down to one-tile chunks. A chunked prefill whose start is a device tensor is costed at
 the latest start its K/V length allows (one program serves every start). With more batch/heads than cores, every Q
 chunk reads its head's K/V from DRAM (no forwarding chain), which a fitted term adds (bge_m3 B8 S512: Q256/K512
-0.455 ms, where the roofline alone picked Q128 at 0.488). The chooser never picks a geometry whose program is known
-to overflow the kernel config buffer (`recipe_program_fits`, measured over features and their combinations: STANDARD
-odd Q chunks of 7+ tiles with a joint segment, a sink or a K tail, or a head dim of odd tile count; packed K/V with a
-head dim of odd tile count and one of those features or a paged sliding window; a sink with a K tail at Q256+/K256
-for D64 packed or odd head-dim tiles; FAST odd Q chunks with some of those features; BALANCED Q chunks of 5+ tiles at
-D96 with any feature, and at D64 with a key range and a sink; measured program sizes are listed there). An excluded
-geometry always leaves a candidate (one-tile-subblock K chunks for STANDARD, even Q chunks for FAST, Q128 for
-BALANCED). Explicit chunk sizes are honored ([routed](#routing) calls choose
-theirs). Blocking never changes a recipe's arithmetic, only its rounding order. Without a recipe, chunk sizes must be
-explicit.
+0.455 ms, where the roofline alone picked Q128 at 0.488). The chooser never picks a geometry whose program is measured
+to overflow the kernel config buffer (`recipe_program_fits`); an exclusion always leaves a candidate. Explicit chunk
+sizes are honored ([routed](#routing) calls choose theirs). Blocking never changes a recipe's arithmetic, only its
+rounding order. Without a recipe, chunk sizes must be explicit.
 
 ## Ring and exp ring attention
 

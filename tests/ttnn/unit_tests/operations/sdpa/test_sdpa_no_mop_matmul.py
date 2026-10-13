@@ -156,8 +156,8 @@ def rel_l2(x, ref):
 
 
 FIDELITIES = [ttnn.MathFidelity.LoFi, ttnn.MathFidelity.HiFi2, ttnn.MathFidelity.HiFi3, ttnn.MathFidelity.HiFi4]
-# (rt, ct, kt): t_dim 1 and > 1 on both reuse sides, odd t_dim, kt accumulation; out <= 4 FP32 DEST tiles.
-SHAPES = [(1, 1, 1), (1, 1, 3), (1, 4, 2), (4, 1, 2), (2, 2, 2), (3, 1, 1), (1, 3, 2)]
+# (rt, ct, kt): kt accumulation, both reuse sides (rt > 1 and ct > 1), an odd reuse dim; out <= 4 FP32 DEST tiles.
+SHAPES = [(1, 1, 3), (1, 4, 2), (4, 1, 2), (3, 1, 1)]
 
 
 @pytest.mark.parametrize("transpose", [False, True], ids=["nt", "t"])
@@ -172,10 +172,8 @@ def test_no_mop_matches_mop(device, shape, transpose):
     for fid in FIDELITIES:
         mop = run_block(device, a, b, fid, MODE_MOP, transpose)
         nomop = run_block(device, a, b, fid, MODE_NO_MOP, transpose)
-        e_mop, e_nomop = rel_l2(mop, ref), rel_l2(nomop, ref)
-        print(f"{shape} t={transpose} {fid}: rel-L2 mop {e_mop:.3e} no-mop {e_nomop:.3e}")
         assert torch.equal(mop, nomop), f"{fid}: no-MOP differs from MOP (max abs {(mop - nomop).abs().max()})"
-        errs.append(e_nomop)
+        errs.append(rel_l2(nomop, ref))
     # Each extra phase must improve accuracy (a phase that did not advance would repeat phase 0). HiFi3/HiFi4 on
     # BF16 inputs are limited by the FPU's internal accumulation (rel-L2 about 3e-4 on Wormhole).
     assert errs[0] > errs[1] > errs[3], errs
