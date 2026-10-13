@@ -431,6 +431,16 @@ inline void _llk_unpack_A_(const std::uint32_t address, const std::uint32_t unpa
     // Run MOP
     ckernel::ckernel_template::run();
 
+    if constexpr (unpack_to_dest && (BType != BroadcastType::NONE))
+    {
+        if (is_32bit_input(unpack_src_format, unpack_dst_format))
+        {
+            // The math side broadcasts the tile in DEST through SrcB (MOVD2B/MOVB2D), so hand it a SrcB bank.
+            // SETDVALID from the math thread is unsupported on Blackhole.
+            TTI_UNPACR_NOP(SrcB, 0, 0, p_unpacr_nop::SET_DVALID, 0, p_unpacr_nop::WAIT_LIKE_UNPACR, 0, 0, p_unpacr_nop::UNP_ZEROSRC);
+        }
+    }
+
     // T6::SEMGET for context release
     t6_semaphore_get(semaphore::UNPACK_SYNC);
 
