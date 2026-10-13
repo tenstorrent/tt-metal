@@ -148,61 +148,6 @@ constexpr float GELU_HCORR_C3 = 7.5950479368e-04f;
 // -0.5 / ln(2): folds the -x²/2 of the exp region into the exp_21f scale.
 constexpr float GELU_NEG_HALF_ONE_LN2 = -0.72134752044f;
 
-// Forward GELU Evaluation with CDF Polynomial Approximation
-// GELU(x) = x * Phi(x) where Phi is approximated piecewise
-//
-// The loop-invariant constants the caller hoists are passed in (sfpi (through 7.84.0) never lifts a literal out of a
-// loop by itself, so each fp32 literal otherwise costs an SFPLOADI pair per row): exp_21f's c0 and c1 are
-// read from vConstFloatPrgm1/2/0 (programmed by calculate_gelu); -0.5/ln2 and the two highest CDF
-// coefficients are sfpi::vFloats the caller built once before its loop.
-template <typename K, typename C13, typename C11>
-sfpi_inline sfpi::vFloat calculate_gelu_piecewise(sfpi::vFloat x, K neg_half_one_ln2, C13 cdf13, C11 cdf11) {
-    sfpi::vFloat result = 0.0f;  // Default: 0 for x <= -5.54259443 (torch saturation)
-    sfpi::vFloat x2 = x * x;
-    // Every lane computes it, so the saturation test below covers its multiply-add's latency.
-    sfpi::vFloat xlog2 = x2 * neg_half_one_ln2 + 127.0f;
-
-    v_if(x > -5.54259443f) {
-        // Shared smooth H ≈ ½·erfc(|x|/√2) via Moroz exp_21f · corr_H.
-
-        sfpi::vInt z = _float_to_int32_for_exp_21f_(xlog2);
-        sfpi::vInt exponential_part = sfpi::exexp(sfpi::as<sfpi::vFloat>(z), sfpi::ExponentMode::Biased);
-        sfpi::vMag fractional_part = sfpi::exman(sfpi::as<sfpi::vFloat>(z));
-
-        sfpi::vFloat frac = sfpi::convert<sfpi::vFloat>(fractional_part, sfpi::RoundMode::Nearest);
-        frac = PolynomialEvaluator::eval(frac, sfpi::vConstFloatPrgm1, sfpi::vConstFloatPrgm2, sfpi::vConstFloatPrgm0);
-        sfpi::vFloat exp_val = sfpi::setexp(frac, exponential_part);
-
-        sfpi::vFloat H =
-            exp_val * PolynomialEvaluator::eval(x, GELU_HCORR_C0, GELU_HCORR_C1, GELU_HCORR_C2, GELU_HCORR_C3);
-
-        // Exp region (-5.54259443, -3.125]: GELU = x · round_to_grid(H).
-        // Round H to the nearest multiple of 2⁻²⁵: adding 0.375 = (2²³+2²²)·2⁻²⁵ shifts H's
-        // 2⁻²⁵ place to the FP32 round-to-nearest-even boundary (safe since H ∈ [3e-8, 9e-4] ≪ 0.25),
-        // so (H + 0.375) - 0.375 == round(H / 2⁻²⁵) · 2⁻²⁵. In the deep tail (-5.5426, -4.828]
-        // this reproduces torch's exact float32 ercc staircase (0 BF16 ULP); above -4.828 the
-        // 2⁻²⁵ grid is far finer than BF16 so rounding is lossless. One constant serves the
-        // whole exp region — no separate branch or multiply.
-        constexpr float ROUND_TO_GRID = 0.375f;
-        sfpi::vFloat Hs = (H + ROUND_TO_GRID) - ROUND_TO_GRID;
-        result = x * Hs;
-
-        // Core CDF region [-3.125, 2.78125): GELU = x · Phi_core(x).
-        v_and(x >= -3.125f);
-        sfpi::vFloat odd_poly = PolynomialEvaluator::eval(
-            x2, GELU_CDF_CORE_C1, GELU_CDF_CORE_C3, GELU_CDF_CORE_C5, GELU_CDF_CORE_C7, GELU_CDF_CORE_C9, cdf11, cdf13);
-        sfpi::vFloat phi = GELU_CDF_CORE_C0 + x * odd_poly;
-        result = x * phi;
-
-        // Identity region x >= 2.78125.
-        v_and(x >= 2.78125f);
-        result = x;
-    }
-    v_endif;
-
-    return result;
-}
-
 // FP32 erf: n16/d16 parity rational coefficients.
 // Split from ERF_LUT (ckernel_sfpu_erf.h INP_FLOAT32 branch) entries [2..18] (num) and [19..35] (den).
 constexpr float GELU_ERF_NUM[17] = {  // odd powers only (c0=0, c2=0, ..., c16=0)
@@ -241,6 +186,79 @@ constexpr float GELU_ERF_DEN[17] = {  // even powers only (c1=0, c3=0, ..., c15=
     -3.5153888689e-09f,
     0.0f,
     -6.7350725691e-12f};
+
+// The bf16 piecewise CDF row, scheduled so no instruction reads a multiply-add result on the next cycle. LREG3, 4 and 5
+// hold the CDF's C11 and C13 and -0.5/ln2, Prgm0-2 exp_21f's c2, c0 and c1. The exp region computes xlog2 = x^2 * -0.5/ln2
+// + 127 on every lane, H = exp_21f(xlog2) * corr_H(x) and x * ((H + 0.375) - 0.375), the deep-tail rounding of H to a
+// multiple of 2^-25; corr_H's C3 waits in LREG2 while the exp part runs, so x^2 is formed again for the CDF polynomial.
+constexpr std::uint32_t gelu_bits(const float f) { return __builtin_bit_cast(std::uint32_t, f); }
+
+#define GELU_LOADI32(lreg, f)                                                           \
+    TTI_SFPLOADI(lreg, sfpi::SFPLOADI_MOD0_USHORT, gelu_bits(f) & 0xffff);              \
+    TTI_SFPLOADI(lreg, sfpi::SFPLOADI_MOD0_UPPER, gelu_bits(f) >> 16)
+#define GELU_LOADI16(lreg, f) TTI_SFPLOADI(lreg, sfpi::SFPLOADI_MOD0_FLOATB, gelu_bits(f) >> 16)
+
+// The row's first 32 instructions, which the replay buffer holds.
+inline void gelu_bf16_row_head() {
+    TTI_SFPLOAD(p_sfpu::LREG1, InstrModLoadStore::DEFAULT, ADDR_MOD_7, 0);
+    TTI_SFPMUL(p_sfpu::LREG1, p_sfpu::LREG1, p_sfpu::LCONST_0, p_sfpu::LREG2, 0);
+    GELU_LOADI16(p_sfpu::LREG0, 127.0f);
+    TTI_SFPMAD(p_sfpu::LREG2, p_sfpu::LREG5, p_sfpu::LREG0, p_sfpu::LREG0, 0);
+    GELU_LOADI32(p_sfpu::LREG6, -5.54259443f);
+    TTI_SFPGT(0, p_sfpu::LREG6, p_sfpu::LREG1, 1);
+    TTI_SFPEXEXP(0, p_sfpu::LREG0, p_sfpu::LREG6, 0);
+    TTI_SFPEXMAN(0, p_sfpu::LREG0, p_sfpu::LREG0, 0);
+    TTI_SFPSHFT(0, p_sfpu::LREG6, p_sfpu::LREG0, 0);
+    TTI_SFPEXEXP(0, p_sfpu::LREG0, p_sfpu::LREG6, sfpi::SFPEXEXP_MOD1_NODEBIAS);
+    TTI_SFPEXMAN(0, p_sfpu::LREG0, p_sfpu::LREG0, sfpi::SFPEXMAN_MOD1_PAD9);
+    TTI_SFPCAST(p_sfpu::LREG0, p_sfpu::LREG0, 0);
+    TTI_SFPMAD(p_sfpu::LREG0, p_sfpu::LREG12, p_sfpu::LREG14, p_sfpu::LREG7, 0);
+    TTI_SFPLOADI(p_sfpu::LREG2, sfpi::SFPLOADI_MOD0_USHORT, gelu_bits(GELU_HCORR_C3) & 0xffff);
+    TTI_SFPMAD(p_sfpu::LREG0, p_sfpu::LREG7, p_sfpu::LREG13, p_sfpu::LREG0, 0);
+    TTI_SFPLOADI(p_sfpu::LREG2, sfpi::SFPLOADI_MOD0_UPPER, gelu_bits(GELU_HCORR_C3) >> 16);
+    TTI_SFPSETEXP(0, p_sfpu::LREG0, p_sfpu::LREG6, 0);
+    GELU_LOADI32(p_sfpu::LREG7, GELU_HCORR_C2);
+    TTI_SFPMAD(p_sfpu::LREG1, p_sfpu::LREG2, p_sfpu::LREG7, p_sfpu::LREG0, 0);
+    GELU_LOADI32(p_sfpu::LREG7, GELU_HCORR_C1);
+    TTI_SFPMAD(p_sfpu::LREG1, p_sfpu::LREG0, p_sfpu::LREG7, p_sfpu::LREG0, 0);
+    GELU_LOADI32(p_sfpu::LREG7, GELU_HCORR_C0);
+    TTI_SFPMAD(p_sfpu::LREG1, p_sfpu::LREG0, p_sfpu::LREG7, p_sfpu::LREG0, 0);
+    GELU_LOADI16(p_sfpu::LREG7, 0.375f);
+    TTI_SFPMAD(p_sfpu::LREG6, p_sfpu::LREG0, p_sfpu::LREG7, p_sfpu::LREG6, 0);
+    TTI_SFPMOV(0, p_sfpu::LCONST_0, p_sfpu::LREG0, 2);
+    TTI_SFPADDI(gelu_bits(-0.375f) >> 16, p_sfpu::LREG6, 0);
+    GELU_LOADI16(p_sfpu::LREG7, -3.125f);
+}
+
+// The rest of the row, issued from the RISC.
+inline void gelu_bf16_row_tail() {
+    TTI_SFPMUL(p_sfpu::LREG1, p_sfpu::LREG6, p_sfpu::LCONST_0, p_sfpu::LREG0, 0);
+    TTI_SFPMUL(p_sfpu::LREG1, p_sfpu::LREG1, p_sfpu::LCONST_0, p_sfpu::LREG2, 0);
+    TTI_SFPLE(0, p_sfpu::LREG1, p_sfpu::LREG7, 1);
+    TTI_SFPLOADI(p_sfpu::LREG7, sfpi::SFPLOADI_MOD0_USHORT, gelu_bits(GELU_CDF_CORE_C9) & 0xffff);
+    TTI_SFPMAD(p_sfpu::LREG2, p_sfpu::LREG4, p_sfpu::LREG3, p_sfpu::LREG6, 0);
+    TTI_SFPLOADI(p_sfpu::LREG7, sfpi::SFPLOADI_MOD0_UPPER, gelu_bits(GELU_CDF_CORE_C9) >> 16);
+    TTI_SFPMAD(p_sfpu::LREG2, p_sfpu::LREG6, p_sfpu::LREG7, p_sfpu::LREG6, 0);
+    GELU_LOADI32(p_sfpu::LREG7, GELU_CDF_CORE_C7);
+    TTI_SFPMAD(p_sfpu::LREG2, p_sfpu::LREG6, p_sfpu::LREG7, p_sfpu::LREG6, 0);
+    GELU_LOADI32(p_sfpu::LREG7, GELU_CDF_CORE_C5);
+    TTI_SFPMAD(p_sfpu::LREG2, p_sfpu::LREG6, p_sfpu::LREG7, p_sfpu::LREG6, 0);
+    GELU_LOADI32(p_sfpu::LREG7, GELU_CDF_CORE_C3);
+    TTI_SFPMAD(p_sfpu::LREG2, p_sfpu::LREG6, p_sfpu::LREG7, p_sfpu::LREG6, 0);
+    GELU_LOADI32(p_sfpu::LREG7, GELU_CDF_CORE_C1);
+    TTI_SFPMAD(p_sfpu::LREG2, p_sfpu::LREG6, p_sfpu::LREG7, p_sfpu::LREG2, 0);
+    GELU_LOADI16(p_sfpu::LREG6, GELU_CDF_CORE_C0);
+    TTI_SFPMAD(p_sfpu::LREG1, p_sfpu::LREG2, p_sfpu::LREG6, p_sfpu::LREG2, 0);
+    GELU_LOADI16(p_sfpu::LREG6, 2.78125f);
+    TTI_SFPMUL(p_sfpu::LREG1, p_sfpu::LREG2, p_sfpu::LCONST_0, p_sfpu::LREG0, 0);
+    TTI_SFPLE(0, p_sfpu::LREG1, p_sfpu::LREG6, 1);
+    TTI_SFPMOV(0, p_sfpu::LREG1, p_sfpu::LREG0, 0);
+    TTI_SFPENCC(0x003, p_sfpu::LREG0, p_sfpu::LREG0, sfpi::SFPENCC_MOD1_EI_RI);
+    TTI_SFP_STOCH_RND(0, 0, p_sfpu::LREG0, p_sfpu::LREG0, p_sfpu::LREG0, sfpi::SFPSTOCHRND_MOD1_FP32_TO_FP16B);
+    TTI_SFPSTORE(p_sfpu::LREG0, InstrModLoadStore::DEFAULT, ADDR_MOD_6, 0);
+}
+#undef GELU_LOADI16
+#undef GELU_LOADI32
 
 template <bool APPROXIMATION_MODE, bool is_fp32_dest_acc_en>
 void gelu_init() {
@@ -343,23 +361,32 @@ inline void calculate_gelu() {
             sfpi::dst_reg++;
         }
     } else {
-        // BF16 accurate mode: piecewise CDF with Max ULP=1 vs true GELU.
-        // unroll 8 fills the SFPU pipeline across 8 independent dst-tile chains.
-        // Six loop constants stay in registers for the whole call: exp_21f's c2, c0 and c1 in Prgm0-2, set here rather
-        // than in gelu_init so the init stays main's, and -0.5/ln2 and the two highest CDF coefficients in LRegs.
-        sfpi::vConstFloatPrgm0 = EXP_21F_C2;
-        sfpi::vConstFloatPrgm1 = EXP_21F_C0;
-        sfpi::vConstFloatPrgm2 = EXP_21F_C1;
-        sfpi::vFloat neg_half_one_ln2 = GELU_NEG_HALF_ONE_LN2;
-        sfpi::vFloat cdf13 = GELU_CDF_CORE_C13, cdf11 = GELU_CDF_CORE_C11;
+        // BF16 accurate mode: piecewise CDF with Max ULP=1 vs true GELU, its constants set per call so the init stays
+        // main's: exp_21f's c2, c0 and c1 in Prgm0-2, the CDF's C11 and C13 and -0.5/ln2 in LREG3-5.
+        TTI_SFPLOADI(p_sfpu::LREG0, sfpi::SFPLOADI_MOD0_USHORT, gelu_bits(EXP_21F_C2) & 0xffff);
+        TTI_SFPLOADI(p_sfpu::LREG0, sfpi::SFPLOADI_MOD0_UPPER, gelu_bits(EXP_21F_C2) >> 16);
+        TTI_SFPCONFIG(0, 12, 0);
+        TTI_SFPLOADI(p_sfpu::LREG0, sfpi::SFPLOADI_MOD0_USHORT, gelu_bits(EXP_21F_C0) & 0xffff);
+        TTI_SFPLOADI(p_sfpu::LREG0, sfpi::SFPLOADI_MOD0_UPPER, gelu_bits(EXP_21F_C0) >> 16);
+        TTI_SFPCONFIG(0, 13, 0);
+        TTI_SFPLOADI(p_sfpu::LREG0, sfpi::SFPLOADI_MOD0_USHORT, gelu_bits(EXP_21F_C1) & 0xffff);
+        TTI_SFPLOADI(p_sfpu::LREG0, sfpi::SFPLOADI_MOD0_UPPER, gelu_bits(EXP_21F_C1) >> 16);
+        TTI_SFPCONFIG(0, 14, 0);
+        TTI_SFPLOADI(p_sfpu::LREG5, sfpi::SFPLOADI_MOD0_USHORT, gelu_bits(GELU_NEG_HALF_ONE_LN2) & 0xffff);
+        TTI_SFPLOADI(p_sfpu::LREG5, sfpi::SFPLOADI_MOD0_UPPER, gelu_bits(GELU_NEG_HALF_ONE_LN2) >> 16);
+        TTI_SFPLOADI(p_sfpu::LREG4, sfpi::SFPLOADI_MOD0_USHORT, gelu_bits(GELU_CDF_CORE_C13) & 0xffff);
+        TTI_SFPLOADI(p_sfpu::LREG4, sfpi::SFPLOADI_MOD0_UPPER, gelu_bits(GELU_CDF_CORE_C13) >> 16);
+        TTI_SFPLOADI(p_sfpu::LREG3, sfpi::SFPLOADI_MOD0_USHORT, gelu_bits(GELU_CDF_CORE_C11) & 0xffff);
+        TTI_SFPLOADI(p_sfpu::LREG3, sfpi::SFPLOADI_MOD0_UPPER, gelu_bits(GELU_CDF_CORE_C11) >> 16);
         // The store steps Dest; an op that reads ADDR_MOD_6 after this one runs its own init first.
         addr_mod_t{.srca = {.incr = 0}, .srcb = {.incr = 0}, .dest = {.incr = 2}}.set(ADDR_MOD_6);
-#pragma GCC unroll 8
-        for (int d = 0; d < ITERATIONS; d++) {
-            sfpi::vFloat in = sfpi::dst_reg[0];
-            sfpi::vFloat result = calculate_gelu_piecewise(in, neg_half_one_ln2, cdf13, cdf11);
-            result = sfpi::convert<sfpi::vFloat16b>(result, sfpi::RoundMode::Nearest);
-            sfpi::dst_reg[0].mode(ADDR_MOD_6) = result;
+        constexpr std::uint32_t head_len = 32;
+        load_replay_buf<Exec>(0, head_len, gelu_bf16_row_head);
+        gelu_bf16_row_tail();
+#pragma GCC unroll 0
+        for (int d = 1; d < ITERATIONS; d++) {
+            lltt::replay(0, head_len);
+            gelu_bf16_row_tail();
         }
     }
 }
