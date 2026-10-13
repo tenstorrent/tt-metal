@@ -284,10 +284,6 @@ def test_eltwise_unary_datacopy_quasar(
         ),
         "unpack_to_dest": False,
         "dest_acc": dest_acc,
-        "disable_format_inference": (
-            implied_math_format == ImpliedMathFormat.Yes
-            and formats.input_format.is_mx_format()
-        ),
     }
 
     configuration = create_test_or_perf_config(

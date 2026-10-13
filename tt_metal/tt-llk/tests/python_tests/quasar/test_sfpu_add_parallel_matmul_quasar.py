@@ -342,7 +342,6 @@ def test_sfpu_add_parallel_matmul_quasar(
         "variant_stimuli": stimuli,
         "unpack_to_srcs": True,
         "dest_acc": dest_acc,
-        "disable_format_inference": formats.input_format.is_mx_format(),
     }
     configuration = create_test_or_perf_config(
         is_perf=is_perf,

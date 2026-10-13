@@ -150,7 +150,6 @@ def test_isolate_sfpu_add_quasar(formats_dest_acc_implied_math_input_dims):
         ),
         unpack_to_srcs=True,
         dest_acc=dest_acc,
-        disable_format_inference=formats.input_format.is_mx_format(),
     )
 
     res_from_L1 = configuration.run().result

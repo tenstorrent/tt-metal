@@ -276,10 +276,6 @@ def test_reduce_quasar(
             formats.input_format.is_32_bit() and dest_acc == DestAccumulation.Yes
         ),
         "dest_acc": dest_acc,
-        "disable_format_inference": (
-            implied_math_format == ImpliedMathFormat.Yes
-            and formats.input_format.is_mx_format()
-        ),
     }
 
     configuration = create_test_or_perf_config(
@@ -434,7 +430,6 @@ def test_reduce_quasar_mxfp4_2x_gapool(
         ),
         "unpack_to_dest": False,
         "dest_acc": dest_acc,
-        "disable_format_inference": False,
     }
 
     configuration = create_test_or_perf_config(

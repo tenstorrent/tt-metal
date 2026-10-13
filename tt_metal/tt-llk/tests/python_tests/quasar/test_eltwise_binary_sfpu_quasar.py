@@ -1145,7 +1145,6 @@ def _run_quant(
         ),
         "unpack_to_dest": True,
         "dest_acc": dest_acc,
-        "disable_format_inference": True,
     }
     configuration = create_test_or_perf_config(
         is_perf=is_perf,
@@ -1154,7 +1153,7 @@ def _run_quant(
     )
 
     # Packer reads the SFPU result tile from Dest. For dequant the result is fp32;
-    # for quant/requant it is int32. disable_format_inference ties pack_src to the
+    # for quant/requant it is int32. Format inference ties pack_src to the
     # (Int32) input format, so override it to match the actual output datum width.
     fc = configuration.formats_config[0]
     fc.pack_src = output_format

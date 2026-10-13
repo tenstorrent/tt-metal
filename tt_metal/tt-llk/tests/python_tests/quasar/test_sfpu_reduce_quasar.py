@@ -283,7 +283,6 @@ def _reduce_test_config_kwargs(
         ),
         "dest_acc": dest_acc,
         "unpack_to_dest": True,
-        "disable_format_inference": True,
         "compile_time_formats": True,
     }
 

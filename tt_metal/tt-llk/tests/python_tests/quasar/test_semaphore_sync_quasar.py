@@ -122,11 +122,6 @@ def test_semaphore_sync_quasar(
             formats.input_format.is_32_bit() and dest_acc == DestAccumulation.Yes
         ),
         dest_acc=dest_acc,
-        # MX formats require disable_format_inference to match C++ IMPLIED_MATH_FORMAT setting.
-        disable_format_inference=(
-            implied_math_format == ImpliedMathFormat.Yes
-            and formats.input_format.is_mx_format()
-        ),
     )
 
     res_from_L1 = configuration.run().result

@@ -109,7 +109,6 @@ def test_reduce_block_max_row_quasar(
         ),
         unpack_to_dest=False,
         dest_acc=DestAccumulation.No,
-        disable_format_inference=False,
     )
 
     res_from_L1 = configuration.run().result

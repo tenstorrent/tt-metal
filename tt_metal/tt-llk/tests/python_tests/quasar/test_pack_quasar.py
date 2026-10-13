@@ -353,7 +353,6 @@ def test_pack_quasar(
         ),
         "unpack_to_dest": unpack_to_dest,
         "dest_acc": dest_acc,
-        "disable_format_inference": (formats.input_format.is_mx_format()),
     }
 
     # Single output MX quantization, after relu — matches HW's pack-time

@@ -303,7 +303,6 @@ def test_eltwise_binary_broadcast_quasar(
         ),
         "unpack_to_dest": unpack_to_dest,
         "dest_acc": dest_acc,
-        "disable_format_inference": formats.input_format.is_mx_format(),
     }
 
     configuration = create_test_or_perf_config(
