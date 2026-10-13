@@ -201,7 +201,9 @@ inline void reblock_and_untilize(
 }
 
 void kernel_main() {
-    PACK((asm volatile(".rept 4\n nop\n .endr")));
+#ifdef TRISC_PACK
+    asm volatile(".rept 16\n nop\n .endr");
+#endif
     constexpr uint32_t in0_block_w = get_compile_time_arg_val(0);        // inner block size in tiles
     constexpr uint32_t in0_num_subblocks = get_compile_time_arg_val(1);  // outer row block size (in inner row blocks)
     constexpr uint32_t in0_block_num_tiles =
