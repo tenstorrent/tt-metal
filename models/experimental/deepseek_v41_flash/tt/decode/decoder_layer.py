@@ -42,7 +42,8 @@ class DeepSeekV41DecoderLayer(DeepSeekV4DecoderLayer):
 
     ``cache`` is the layer's namespace. Its sublayers sit under the checkpoint's names (``attn``,
     ``ffn``, ``engram``), the ones the module tests use, so they share converted weights. An
-    Engram layer's H2D sockets allocate L1, so build the layer before any trace capture.
+    Engram layer's H2D sockets allocate L1, so build the layer before any trace capture;
+    ``engram_sockets`` passes ones opened earlier (see :func:`~.engram.open_rows_sockets`).
 
     ``tp_size > 1`` needs ``device`` to be a 1xTP mesh with fabric, and ``experts`` built at the
     same ``tp_size``. The inputs and outputs of :meth:`decode` are replicated over it.
@@ -62,6 +63,7 @@ class DeepSeekV41DecoderLayer(DeepSeekV4DecoderLayer):
         tp_size: int = 1,
         use_prefetcher: bool = False,
         prefetch_buffers=None,
+        engram_sockets=None,
     ):
         cache = _as_cache(cache)
         self.config = config
@@ -77,6 +79,7 @@ class DeepSeekV41DecoderLayer(DeepSeekV4DecoderLayer):
                 device,
                 prefetch_buffers,
                 cache=cache.sub("engram"),
+                sockets=engram_sockets,
             )
             if layer_idx in config.engram_layer_ids
             else None

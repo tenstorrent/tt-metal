@@ -241,6 +241,13 @@ class DeepSeekV4PrefillAttention(DeepSeekV4Module):
     replicated, so read one rank's copy.
     """
 
+    # Whether each query head is RMS-normed after ``q_b`` (V4; a subclass for a checkpoint without that norm clears it).
+    q_head_norm = True
+
+    def compress_rate(self, config) -> Optional[int]:
+        """Tokens pooled into one compressed entry, or ``None`` for a layer without a compressor."""
+        return None if self.is_sliding else config.compress_rates[self.layer_type]
+
     def __init__(
         self,
         config,
@@ -316,7 +323,7 @@ class DeepSeekV4PrefillAttention(DeepSeekV4Module):
 
         self.is_sliding = self.layer_type == SLIDING_ATTENTION
         self.is_csa = self.layer_type == COMPRESSED_SPARSE_ATTENTION
-        self.rate = None if self.is_sliding else config.compress_rates[self.layer_type]
+        self.rate = self.compress_rate(config)
         if self.rate is not None and ALIGNMENT % self.rate:
             raise ValueError(f"compress rate {self.rate} must divide the chunk alignment {ALIGNMENT}")
         self.index_topk = config.index_topk
@@ -354,8 +361,9 @@ class DeepSeekV4PrefillAttention(DeepSeekV4Module):
         self.o_b_proj = linear("o_b_proj", shard_dim=-2)  # row-parallel: this rank's groups, then all-reduce
         self.q_a_norm_weight = norm_gamma("q_a_norm.weight")
         self.kv_norm_weight = norm_gamma("kv_norm.weight")
-        # The per-head Q norm has no weight in the reference; a ones gamma is the unweighted norm.
-        self.q_b_norm_weight = self._to_device(torch.ones(1, 1, 1, self.head_dim))
+        if self.q_head_norm:
+            # The per-head Q norm has no weight in the reference; a ones gamma is the unweighted norm.
+            self.q_b_norm_weight = self._to_device(torch.ones(1, 1, 1, self.head_dim))
 
         # Grouped output projection: block-diagonal over o_groups, run as one batched matmul.
         # The HF weight is [g * o_lora, in_per_group]; the batched matmul wants [1, g, K, N].
@@ -393,7 +401,7 @@ class DeepSeekV4PrefillAttention(DeepSeekV4Module):
 
         self.trans_mat = self._to_device(_rot_transformation_mat())
 
-        if not self.is_sliding:
+        if self.layer_type in (COMPRESSED_SPARSE_ATTENTION, HEAVILY_COMPRESSED_ATTENTION):
             # The compressor's projection width: Dh for HCA, 2*Dh (the Ca | Cb pair) for CSA.
             compressor_width = self.head_dim * (2 if self.is_csa else 1)
             self.c_kv_proj = linear("compressor.kv_proj", ttnn.bfloat16)
@@ -514,7 +522,8 @@ class DeepSeekV4PrefillAttention(DeepSeekV4Module):
             transpose_k_heads=False,
             memory_config=ttnn.DRAM_MEMORY_CONFIG,
         )
-        q = ttnn.rms_norm(q, weight=self.q_b_norm_weight, epsilon=self.eps)
+        if self.q_head_norm:
+            q = ttnn.rms_norm(q, weight=self.q_b_norm_weight, epsilon=self.eps)
         q = self._rope(q, cos, sin)
         return (q, latent) if return_latent else q
 

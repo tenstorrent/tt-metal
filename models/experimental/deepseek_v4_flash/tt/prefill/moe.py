@@ -91,6 +91,10 @@ class DeepSeekV4PrefillMoE(DeepSeekV4Module):
     ``[1, 1, T, D]`` TILE activations.
     """
 
+    # The learned router and the shared expert this block builds; a subclass for another checkpoint swaps them.
+    router_cls = DeepSeekV4TopKRouter
+    shared_expert_cls = DeepSeekV4MLP
+
     def __init__(
         self,
         config,
@@ -116,7 +120,7 @@ class DeepSeekV4PrefillMoE(DeepSeekV4Module):
         self.gate = (
             gate
             if gate is not None
-            else DeepSeekV4TopKRouter(config, weights, device, cache=cache, weight_dtype=weight_dtype)
+            else self.router_cls(config, weights, device, cache=cache, weight_dtype=weight_dtype)
         )
         self.is_hash = isinstance(self.gate, DeepSeekV4HashRouter)
         if self.gate.num_experts != len(experts.gate_up_weights):
@@ -128,7 +132,7 @@ class DeepSeekV4PrefillMoE(DeepSeekV4Module):
         # Hash layers select by table lookup and have no bias.
         self._bias_tile = None if self.is_hash else ttnn.to_layout(self.gate.e_score_correction_bias, ttnn.TILE_LAYOUT)
 
-        self.shared_experts = DeepSeekV4MLP(
+        self.shared_experts = self.shared_expert_cls(
             weights,
             "shared_experts",
             device,

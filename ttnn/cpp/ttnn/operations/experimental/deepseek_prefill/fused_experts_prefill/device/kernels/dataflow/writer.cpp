@@ -19,15 +19,16 @@
 //
 // For every owned expert with a non-zero count (same skip decision as reader and compute), per chunk of
 // m_chunk tile rows:
-//   1. wait for compute's SwiGLU block (cb_act_local, m_chunk * it_pc bf8 tiles, [r][jj]).
+//   1. wait for compute's SwiGLU block (cb_act_local, m_chunk * it_max bf8 tiles, [r][jj] at a stride of it_max;
+//      a core owning fewer than it_max I tiles leaves the tail of each row unused, and it is sent along).
 //   2. wait until every core of the group has released the previous chunk's gathered block
-//      (sem_act_free), then unicast the mc * it_pc valid tiles into slot `c` of cb_act_full on ALL 8
-//      cores of the group (itself included) and bump their sem_act_ready.
-//   3. wait for the 8 blocks to have landed here (sem_act_ready) and publish cb_act_full to compute.
+//      (sem_act_free), then unicast the mc * it_max valid tiles into slot `c` of cb_act_full on ALL
+//      group_cores cores of the group (itself included) and bump their sem_act_ready.
+//   3. wait for the group's blocks to have landed here (sem_act_ready) and publish cb_act_full to compute.
 //   4. drain compute's untilized down output: per tile row, 32 row-major rows of this core's
-//      out_seg_bytes slice (cb_outrm, nt_pc pages); every valid row (a token of the expert) goes to
-//      partials row (slot * T + token) at byte offset c * out_seg_bytes. Then release the gathered block
-//      to the group (sem_act_free).
+//      out_seg_bytes slice (cb_outrm, nt_max pages, the tail past this core's columns unused); every valid
+//      row (a token of the expert) goes to partials row (slot * T + token) at byte offset out_offset. Then
+//      release the gathered block to the group (sem_act_free).
 //
 // Both semaphores only ever count up (no resets), so a peer running ahead by one chunk is safe.
 // cb_act_full holds exactly one block, so its write pointer is at the base address on every core
@@ -35,20 +36,21 @@
 //
 // Compile-time args:
 //   0 cb_meta 1 cb_act_local 2 cb_act_full 3 cb_outrm
-//   4 num_groups 5 nt_pc 6 it_pc 7 m_chunk 8 m_block
+//   4 num_groups 5 nt_max (cb_outrm pages per tile row) 6 it_max 7 m_chunk 8 m_block
 //   9 act_tile_bytes 10 sem_act_ready 11 sem_act_free 12 act_local_tiles 13 act_full_tiles
-//   14 hdr_words 15 T 16 out_seg_bytes 17 bf16_tile_bytes 18 row_bytes
-//   19+ TensorAccessorArgs: partials output
+//   14 hdr_words 15 T 16 out_seg_bytes 17 bf16_tile_bytes 18 row_bytes 19 group_cores
+//   20+ TensorAccessorArgs: partials output
 // Runtime args:
 //   0 out (buffer address) 1 c (core index in group) 2 g (group) 3 n (experts owned by this group)
-//   4 .. 4+2*8-1: NoC (x, y) of the group's 8 cores, indexed by core-in-group
+//   4 out_offset (byte offset of this core's columns in a partials row)
+//   5 .. 5+2*group_cores-1: NoC (x, y) of the group's cores, indexed by core-in-group
 void kernel_main() {
     constexpr uint32_t cb_meta_id = get_compile_time_arg_val(0);
     constexpr uint32_t cb_act_local_id = get_compile_time_arg_val(1);
     constexpr uint32_t cb_act_full_id = get_compile_time_arg_val(2);
     constexpr uint32_t cb_outrm_id = get_compile_time_arg_val(3);
-    constexpr uint32_t nt_pc = get_compile_time_arg_val(5);
-    constexpr uint32_t it_pc = get_compile_time_arg_val(6);
+    constexpr uint32_t nt_max = get_compile_time_arg_val(5);
+    constexpr uint32_t it_max = get_compile_time_arg_val(6);
     constexpr uint32_t m_chunk = get_compile_time_arg_val(7);
     constexpr uint32_t act_tile_bytes = get_compile_time_arg_val(9);
     constexpr uint32_t sem_act_ready_id = get_compile_time_arg_val(10);
@@ -59,14 +61,15 @@ void kernel_main() {
     constexpr uint32_t T = get_compile_time_arg_val(15);
     constexpr uint32_t out_seg_bytes = get_compile_time_arg_val(16);
     constexpr uint32_t row_bytes = get_compile_time_arg_val(18);
-    constexpr auto out_args = TensorAccessorArgs<19>();
+    constexpr uint32_t kGroupCores = get_compile_time_arg_val(19);
+    constexpr auto out_args = TensorAccessorArgs<20>();
 
-    constexpr uint32_t kGroupCores = 8;
-    constexpr uint32_t kPeerRt = 4;
+    constexpr uint32_t kPeerRt = 5;
 
     const uint32_t out_addr = get_arg_val<uint32_t>(0);
     const uint32_t c = get_arg_val<uint32_t>(1);
     const uint32_t n_owned = get_arg_val<uint32_t>(3);
+    const uint32_t out_offset = get_arg_val<uint32_t>(4);
 
     Noc noc;
     CircularBuffer cb_meta(cb_meta_id);
@@ -117,8 +120,8 @@ void kernel_main() {
                 sem_act_free.wait_min(kGroupCores * round);
             }
             {
-                DeviceZoneScopedN("W_GATHER");  // unicast to the 8 cores + barrier + semaphore bumps
-                const uint32_t send_bytes = mc * it_pc * act_tile_bytes;
+                DeviceZoneScopedN("W_GATHER");  // unicast to the group + barrier + semaphore bumps
+                const uint32_t send_bytes = mc * it_max * act_tile_bytes;
                 for (uint32_t p = 0; p < kGroupCores; ++p) {
                     noc.async_write(
                         cb_act_local,
@@ -134,7 +137,7 @@ void kernel_main() {
                 cb_act_local.pop_front(act_local_tiles);
             }
 
-            // ---- 3: all 8 blocks landed -> publish the gathered activations to compute. ----
+            // ---- 3: all the group's blocks landed -> publish the gathered activations to compute. ----
             {
                 DeviceZoneScopedN("W_READY_WAIT");
                 sem_act_ready.wait_min(kGroupCores * (round + 1));
@@ -146,7 +149,7 @@ void kernel_main() {
             for (uint32_t r = 0; r < mc; ++r) {
                 {
                     DeviceZoneScopedN("W_OUT_WAIT");  // compute's untilized rows
-                    cb_outrm.wait_front(nt_pc);
+                    cb_outrm.wait_front(nt_max);
                 }
                 DeviceZoneScopedN("W_OUT_WRITE");
                 const uint32_t first = (r0 + r) * 32;
@@ -160,10 +163,10 @@ void kernel_main() {
                         out,
                         out_seg_bytes,
                         {.offset_bytes = rr * out_seg_bytes},
-                        {.page_id = slot * T + token, .offset_bytes = c * out_seg_bytes});
+                        {.page_id = slot * T + token, .offset_bytes = out_offset});
                 }
                 noc.async_write_barrier();
-                cb_outrm.pop_front(nt_pc);
+                cb_outrm.pop_front(nt_max);
             }
             for (uint32_t p = 0; p < kGroupCores; ++p) {
                 sem_act_free.up(noc, peer_x[p], peer_y[p], 1);

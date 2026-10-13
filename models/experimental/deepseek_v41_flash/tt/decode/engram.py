@@ -56,6 +56,33 @@ def _value(weight) -> torch.Tensor:
     return weight() if callable(weight) else weight
 
 
+def rows_page_bytes(config) -> int:
+    """One user's bf16 Engram rows ``[kin]``: the page of a rows socket."""
+    return (config.engram_max_ngram_size - 1) * config.engram_n_heads * config.engram_head_dim * 2
+
+
+def open_rows_sockets(device, page_bytes: int, fifo_pages: int = 2, socket_core: tuple = ROWS_SOCKET_CORE) -> list:
+    """One H2D socket per device of the ``device`` mesh, each a ``fifo_pages``-page L1 FIFO on ``socket_core``.
+
+    The FIFOs live as long as the layer. Open them before ``device``'s decode GCB rings are built: L1 is
+    allocated top-down, so FIFOs opened after the rings sit below them and, once the rings are released for
+    prefill, are left in the middle of L1, capping the circular buffers prefill can place.
+    """
+    sockets = [
+        ttnn.H2DSocket(
+            device,
+            ttnn.MeshCoreCoord(coord, ttnn.CoreCoord(*socket_core)),
+            ttnn.BufferType.L1,
+            fifo_pages * page_bytes,
+            ttnn.H2DMode.HOST_PUSH,
+        )
+        for coord in ttnn.MeshCoordinateRange(device.shape)
+    ]
+    for socket in sockets:
+        socket.set_page_size(page_bytes)
+    return sockets
+
+
 class DeepSeekV41Engram(DeepSeekV4Module):
     """One Engram layer's device half, with the H2D socket its host rows arrive on."""
 
@@ -71,12 +98,14 @@ class DeepSeekV41Engram(DeepSeekV4Module):
         weight_dtype: ttnn.DataType = ttnn.bfloat8_b,
         fifo_pages: int = 2,
         socket_core: tuple = ROWS_SOCKET_CORE,
+        sockets: Optional[list] = None,
     ):
         """``weights`` is :func:`~models.experimental.deepseek_v41_flash.tt.config.engram_weights` (tensors or
         thunks). One socket page is one user's rows, and a socket's L1 FIFO on ``socket_core`` holds
         ``fifo_pages`` of them. A socket feeds a single device, so each device of the ``device`` mesh gets its
         own and the layer runs replicated (a TP stage's streams are). The sockets allocate L1, so build the
-        layer before any trace capture on ``device``.
+        layer before any trace capture on ``device``. ``sockets`` takes ones already opened by
+        :func:`open_rows_sockets` (then ``fifo_pages`` / ``socket_core`` are unused) instead.
 
         ``wkv`` streams through the ``engram.wkv`` ring of ``prefetch_buffers``, the per-device mapping
         every other layer on ``device`` shares; call ``wkv.fetch_weights()`` ahead of each :meth:`forward`.
@@ -124,7 +153,7 @@ class DeepSeekV41Engram(DeepSeekV4Module):
             batch * hc, d, device, num_cores=_HC_COLLAPSE_CORES, tile_height=1
         )
 
-        self.page_bytes = self.kin * 2  # bf16
+        self.page_bytes = rows_page_bytes(config)
         alignment = active_system_config().pipeline.pcie_alignment
         if self.page_bytes % alignment:
             raise ValueError(f"a {self.page_bytes} B row page is not a multiple of the {alignment} B PCIe alignment")
@@ -136,18 +165,11 @@ class DeepSeekV41Engram(DeepSeekV4Module):
             device=device,
             memory_config=ttnn.DRAM_MEMORY_CONFIG,
         )
-        self.sockets = [
-            ttnn.H2DSocket(
-                device,
-                ttnn.MeshCoreCoord(coord, ttnn.CoreCoord(*socket_core)),
-                ttnn.BufferType.L1,
-                fifo_pages * self.page_bytes,
-                ttnn.H2DMode.HOST_PUSH,
-            )
-            for coord in ttnn.MeshCoordinateRange(device.shape)
-        ]
-        for socket in self.sockets:
-            socket.set_page_size(self.page_bytes)
+        if sockets is None:
+            sockets = open_rows_sockets(device, self.page_bytes, fifo_pages, socket_core)
+        if len(sockets) != device.get_num_devices():
+            raise ValueError(f"got {len(sockets)} rows sockets for a {device.get_num_devices()}-device mesh")
+        self.sockets = sockets
 
     def write_rows(self, rows: torch.Tensor) -> None:
         """Push one step's rows ``[B, kin]`` (or ``[B, 1, kin]``, bf16) into every device's socket.
