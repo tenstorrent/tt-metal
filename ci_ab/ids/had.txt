@@ -1,0 +1,3 @@
+perf_hadamard.py::test_perf_hadamard[variant:(1, <MathFidelity.LoFi: 0>, True)]
+perf_hadamard.py::test_perf_hadamard[variant:(1, <MathFidelity.HiFi4: 4>, True)]
+perf_hadamard.py::test_perf_hadamard[variant:(8, <MathFidelity.LoFi: 0>, True)]
